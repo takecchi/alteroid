@@ -593,6 +593,7 @@ export {
   tokenRestoreEntry,
   tokenRotationEntry,
   type TokenProbePort,
+  type TokenReconsiderReason,
   type TokenRestoreOutcome,
   type TokenRotationEntry,
   type TokenRotationOutcome,

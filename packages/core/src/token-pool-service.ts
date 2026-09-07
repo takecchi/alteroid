@@ -87,12 +87,56 @@ export interface TokenPoolServiceOptions {
   now?: () => Date;
   /** 新規行の id を作る。テストで固定するため。既定は `randomUUID()`。 */
   newId?: () => string;
+  /**
+   * **プールか設定が変わったことを知らせる口**（人間の決定 2026-09-07）。
+   *
+   * ## なぜ要るか —— 「鍵を足したのに何も起きない」を塞ぐ
+   *
+   * ここは記憶ストアを書くだけで、回し手（`token-rotator.ts`）を呼んでいなかった。
+   * ⟹ **全層が枠で止まっている器へ人間が新しい鍵を1本足しても、何も起きなかった。**
+   * 回すには誰かが**もう一度本番で失敗して観測を上げる**必要があり、そのとき全層は
+   * 止まっているので、観測を上げる主体が1つも居ない。
+   *
+   * **ここは `PUT /tokens` / `PUT /tokens/policy` の唯一の合流点である**（CLI の
+   * `alteroid token add` / `enable` / `policy` も HTTP を通ってここへ来る）⟹
+   * 契機を1つ置けば、人間のどの口からでも届く。
+   *
+   * **知らせるだけで、判断はしない。** 回すかどうかは回し手が決める
+   * （`TokenRotator.reconsider`）——ここが「回せ」と言う形にすると、**設定が
+   * `off` でも回る**経路が生まれる。
+   *
+   * **失敗させない・待たせない。** 呼び出しは同期で、投げても保存の結果を
+   * 巻き添えにしない（下の実装が `try` で包む）——鍵は保存できているのに
+   * 「保存できなかった」と返すのは、いちばん誤解を招く倒れ方である。
+   */
+  onChanged?: (change: 'pool' | 'settings') => void;
 }
 
 export function createTokenPoolService(options: TokenPoolServiceOptions): TokenPoolService {
   const { stores } = options;
   const now = options.now ?? (() => new Date());
   const newId = options.newId ?? (() => randomUUID());
+
+  /**
+   * 変わったことを知らせる。**保存の成否を巻き添えにしない。**
+   *
+   * 呼ぶのは**保存が成功した後**だけである（前に呼ぶと、検証で落ちた入力でも
+   * 「変わった」が飛ぶ）。跡は残す —— 黙って握り潰すと、契機が届いていない
+   * ことが誰からも見えない（`dropped-record.ts` の作法）。
+   */
+  function announceChange(change: 'pool' | 'settings'): void {
+    if (options.onChanged === undefined) return;
+    try {
+      options.onChanged(change);
+    } catch (error) {
+      // **本文を出さない。** ここへ来る例外は見張りの側のもので、トークンの値は
+      // 通っていないが、この関数は値を扱う経路の中に居る。
+      process.stderr.write(
+        `alteroidd: 認証トークンのプールの変更（${change}）を見張りへ知らせられなかった: ` +
+          `${error instanceof Error ? (error.message.split('\n')[0] ?? '理由不明') : '理由不明'}\n`,
+      );
+    }
+  }
 
   /**
    * 直列化の実体。`profile-service.ts` の `serial()` と同じ形——次の更新は
@@ -169,6 +213,8 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
         const normalized = normalizeTokenPool(inputs, existing, { now, newId });
         const stored = await stores.tokens.replace(normalized);
         const settings = await stores.tokens.readSettings();
+        // **保存できた後に知らせる**（`announceChange` の doc）。
+        announceChange('pool');
         return { tokens: stored.map(toAgentTokenView), settings };
       }),
 
@@ -202,7 +248,12 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
           cooldownMs: patch.cooldownMs ?? current.cooldownMs,
           updatedAt: now().toISOString(),
         };
-        return stores.tokens.writeSettings(next);
+        const written = await stores.tokens.writeSettings(next);
+        // **設定も契機である。** `off` → `free_exhausted` へ戻した瞬間に、
+        // 止まったまま溜まっていた状態を見直せなければ、人間は**設定を戻した後
+        // さらに待たされる**（次の観測が上がるまで）。
+        announceChange('settings');
+        return written;
       }),
   };
 }

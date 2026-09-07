@@ -472,7 +472,7 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     id: z.string(),
     at: isoDateTime,
     /**
-     * 何が起きたか。**6値を潰さないこと。**
+     * 何が起きたか。**7値を潰さないこと。**
      *
      * とくに `not_rotated`（契機ではなかった）と `exhausted`（回そうとしたが
      * 候補が無かった）は**別の事実**である。前者は正常で、後者は全層が止まる。
@@ -482,6 +482,21 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * 潰さないこと。** 潰すと**「候補が無い」と「まだ試していない候補が在る」が
      * 同じ顔になる** —— 読む側は前者だと思って待つが、実際には次の観測で回りうる。
      * これは「取れなかった」を「別の値だった」に変える形そのものである（#482）。
+     *
+     * **`parked`（いま通る候補は無いが、いちばん早く戻る鍵を撒いて待っている）を
+     * `exhausted` や `rotated` へ潰さないこと**（2026-09-07 に足した）。3つとも
+     * 「この後どうなるか」が違う:
+     *
+     * | `event` | 全コンテナが持っている鍵 | 次のセッションは |
+     * | --- | --- | --- |
+     * | `rotated` | **いま通る鍵** | 通る |
+     * | `parked` | **いちばん早く戻る鍵**（まだ通らない） | `earliestAt` まで通らない |
+     * | `exhausted` | **降りた鍵のまま**（撒いていない） | 通らない。誰かが観測を上げるまで動かない |
+     *
+     * **`recovered`（止まっていた現役が、また通ることを観測できた）も別立てで
+     * ある。** `not_rotated` へ潰すと、**「いつ開いたか」が日誌から消える** ——
+     * 止まった側（`exhausted` / `parked`）と対になる唯一の行がこれである。
+     * **回してはいない**ので `rotated` にも入れない（鍵は1文字も変わっていない）。
      */
     event: z.enum([
       'rotated',
@@ -490,8 +505,18 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
       'restored',
       'restore_failed',
       'sweep_stopped',
+      'parked',
+      'recovered',
     ]),
-    /** 契機（`TokenRotationSignal`）。起動時の撒き直しには無い。 */
+    /**
+     * 契機（`TokenRotationSignal`）。起動時の撒き直しには無い。
+     *
+     * **`stranded` だけ出所が違う。** 他の7値はセッション由来の観測（文言 /
+     * `rate_limit_event`）から出るが、`stranded` は**記録の上で「いまの現役は
+     * 通らないのに、通る候補が在る」**という状態そのものである
+     * （`TokenRotator.reconsider`）。⟹ **`stranded` の行は、セッションが1本も
+     * 走っていないあいだにも出る。**
+     */
     signal: z
       .enum([
         'reached',
@@ -501,6 +526,25 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
         'org_policy',
         'warning',
         'none',
+        'stranded',
+      ])
+      .optional(),
+    /**
+     * **状態から決めた判定を、どの契機で走らせたか**（`TokenReconsiderReason`）。
+     * 観測から来た判定（`observe`）には付かない。
+     *
+     * **`signal` と別の欄である。** `signal` は「何を見て決めたか」、こちらは
+     * 「なぜこの瞬間に見たか」——畳むと「冷却が明けたので見直した」と「記録の上で
+     * 現役が通らない」が同じ顔になる。
+     */
+    reason: z
+      .enum([
+        'pool_changed',
+        'settings_changed',
+        'tick',
+        'runner_connected',
+        'account_probe',
+        'startup',
       ])
       .optional(),
     /**

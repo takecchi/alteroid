@@ -300,8 +300,20 @@ describe('候補を試し切る', () => {
     expect(line).not.toContain('戻る見込みの立っている候補が1本も無い');
   });
 
-  it('試し切ったときは、いちばん早く戻る候補が出る', async () => {
+  it('試し切ったときは、いちばん早く戻る候補が出る（撒いて待つ）', async () => {
     // 1本しか候補が無く、それが冷却中 ⟹ `selectNextToken` の `none` へ合流する。
+    //
+    // **⚠️ 2026-09-07 に期待値を反転した（`exhausted` → `parked`）。**
+    // 元の期待値は `{ kind: 'exhausted', earliest: { tokenId: 'tok-b' } }` で、
+    // **何も撒かずに返るのが仕様だった。** それは「全コンテナが降りた鍵を持った
+    // まま待つ」ことなので、冷却が明けても**誰かがもう一度本番で失敗して観測を
+    // 上げるまで回らなかった**（人間の決定 2026-09-07: 最速回復の鍵を配って待つ）。
+    //
+    // **保証は弱くなっていない。** この歯が測っているのは受け入れ基準4
+    // 「先頭へ黙って戻らない」で、それは3つとも保たれている ——
+    // (1) 選んだのは先頭（order 0 = 降りた `tok-a`）ではなく**いちばん早く戻る
+    // `tok-b`** (2) その時刻が出力に在る (3) probe を1本も焼いていない。
+    // **足したのは「撒いた」ことの確認だけである。**
     const h = harness();
     await h.stores.tokens.replace([
       { id: 'tok-a', label: 'first', value: 'value-a', order: 0 },
@@ -320,8 +332,23 @@ describe('候補を試し切る', () => {
       observedBy: { tokenId: 'tok-a', generation: 1 },
     });
 
-    expect(outcome).toMatchObject({ kind: 'exhausted', earliest: { tokenId: 'tok-b' } });
+    expect(outcome).toMatchObject({
+      kind: 'parked',
+      tokenId: 'tok-b',
+      cooldownUntil: Date.parse(AT) + 60 * 60 * 1000,
+      // **降りた側も残す。** どこから来たかが消えると、日誌から辿れなくなる。
+      fromTokenId: 'tok-a',
+    });
+    // **先頭（降りた `tok-a`）へは戻っていない。** ここが受け入れ基準4の本体である。
     expect(h.probeCalls).toEqual([]);
+    // **撒いてある。** これが `exhausted` との唯一の実質的な違いで、
+    // 「冷却が明けた瞬間にそのまま通る」はここに乗っている。
+    expect(h.spreadCalls.map((call) => call.id)).toEqual(['tok-b']);
+    // **世代は増える。** 指名が変わったので、前の鍵で走っている観測は `stale` である。
+    expect(await h.stores.tokens.readActive()).toMatchObject({
+      tokenId: 'tok-b',
+      generation: 2,
+    });
   });
 });
 
@@ -498,7 +525,21 @@ describe('世代の照合（受け入れ基準: 同時に届いても回るの�
 });
 
 describe('受け入れ基準4: 全部冷却中なら先頭へ黙って戻らない', () => {
-  it('いちばん早く戻るものとその時刻を出す', async () => {
+  it('いちばん早く戻るものとその時刻を出す（そしてそれを撒いて待つ）', async () => {
+    // **⚠️ 2026-09-07 に期待値を反転した（`exhausted` → `parked`）。**
+    // 元はこう書いてあった —— 「先頭へ戻っていない（現役は変わらず、撒いても
+    // いない）」として `readActive()` が `tok-a` / `generation: 1` のままである
+    // ことと `spreadCalls` が空であることを固定していた。
+    //
+    // **その2つは「先頭へ戻らない」の証明にはなっていなかった。** 何も撒かない
+    // ことは、`tok-a`（先頭であり、いま止まっている鍵）を全コンテナが持ったまま
+    // 待つことでもある —— **冷却が明けても、いちばん早く戻る鍵はどこにも置かれて
+    // いない。** 人間の決定（2026-09-07）で、そこは撒いて待つ側へ倒した。
+    //
+    // **保証は弱くなっていない。強くなっている。** 反転した2行の代わりに、
+    // **選んだのが「いちばん早く戻る `tok-b`」であって「先頭の `tok-a`」ではない**
+    // ことを直接固定している（前の版は「何も選んでいない」ことしか言えなかった）。
+    // いちばん早く戻る時刻を出す、という元の主張はそのまま残してある。
     const h = harness();
     await h.stores.tokens.replace([
       { id: 'tok-a', label: 'first', value: 'value-a', order: 0 },
@@ -517,16 +558,20 @@ describe('受け入れ基準4: 全部冷却中なら先頭へ黙って戻らな�
       observedBy: { tokenId: 'tok-a', generation: 1 },
     });
 
-    expect(outcome.kind).toBe('exhausted');
-    if (outcome.kind !== 'exhausted') return;
-    expect(outcome.earliest).toEqual({
+    expect(outcome.kind).toBe('parked');
+    if (outcome.kind !== 'parked') return;
+    // いちばん早く戻るものとその時刻（元の主張）。
+    expect(outcome.tokenId).toBe('tok-b');
+    expect(outcome.label).toBe('second');
+    expect(outcome.cooldownUntil).toBe(Date.parse(AT) + 5_000);
+    // **先頭（`tok-a`）へは戻っていない。** 撒いた先も指名も `tok-b` である。
+    expect(h.spreadCalls.map((call) => call.id)).toEqual(['tok-b']);
+    expect(await h.stores.tokens.readActive()).toMatchObject({
       tokenId: 'tok-b',
-      label: 'second',
-      cooldownUntil: Date.parse(AT) + 5_000,
+      generation: 2,
     });
-    // 先頭へ戻っていない（現役は変わらず、撒いてもいない）。
-    expect(await h.stores.tokens.readActive()).toMatchObject({ tokenId: 'tok-a', generation: 1 });
-    expect(h.spreadCalls).toEqual([]);
+    // **「回った」と読ませない。** 撒いた鍵はまだ通らない。
+    expect(describeTokenRotation(outcome)).toContain('まで通らない');
   });
 
   it('1本しか無くてそれが現役なら、同じ出口へ倒れる（自分自身へ回さない）', async () => {
@@ -1450,5 +1495,371 @@ describe('tokenRotationEntry / tokenRestoreEntry', () => {
 
     expect(JSON.stringify(entry)).not.toContain('sk-ant');
     expect(Object.keys(entry ?? {})).not.toContain('value');
+  });
+});
+
+/**
+ * **観測を待たずに、記録の状態だけを見て回す**（`reconsider`。人間の決定 2026-09-07）。
+ *
+ * ## この歯の集合が固定している穴
+ *
+ * `observe` の6つの検知点は**すべてセッション由来**である ⟹ **全層が枠で止まった
+ * 状態は、観測を上げる主体が1つも居ない状態でもある。** そこから抜けるには誰かが
+ * もう一度本番で失敗して観測を上げるしかなく、**プールに通る鍵が残っていても
+ * 何も起きない**時間ができた（人間の報告: 「枠塞がってないトークンがあるのに
+ * 何故何もしてないことがある」）。
+ *
+ * **⚠️ ここは「回るようになった」を測る歯であって、「本番で通った」を測る歯では
+ * ない。** 本物のトークンを扱わない枷があるので、そちらは実装側からは測れない。
+ */
+describe('reconsider: 動く鍵が残っているのに諦めない', () => {
+  it('記録の上で現役が冷却中で、通る候補が在れば回す（観測は1つも無い）', async () => {
+    const h = harness();
+    await h.stores.tokens.replace([
+      {
+        id: 'tok-a',
+        label: 'first',
+        value: 'value-a',
+        order: 0,
+        // 既に冷却へ入っている＝「止まった」ことは記録済み。
+        cooldownUntil: Date.parse(AT) + 5 * 60 * 60 * 1000,
+        lastRejectedAt: AT,
+        lastRejectedReason: "You've hit your org's monthly spend limit",
+      },
+      { id: 'tok-b', label: 'second', value: 'value-b', order: 1 },
+    ]);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 3, rotatedAt: AT });
+
+    // **観測を1つも渡さない。** これが `observe` との違いそのものである。
+    const outcome = await h.rotator.reconsider({ reason: 'tick' });
+
+    expect(outcome.kind).toBe('rotated');
+    if (outcome.kind !== 'rotated') return;
+    expect(outcome.toTokenId).toBe('tok-b');
+    expect(outcome.fromTokenId).toBe('tok-a');
+    expect(outcome.generation).toBe(4);
+    // **印は `stranded`。** 枠の観測ではなく記録からそう言っている。
+    expect(outcome.signal).toBe('stranded');
+    expect(outcome.reason).toBe('tick');
+    // **`freshness` は付かない。** 照合する観測が無いので、`unknown` で埋めない。
+    expect(outcome.freshness).toBeUndefined();
+    expect(h.spreadCalls.map((call) => call.id)).toEqual(['tok-b']);
+  });
+
+  it('現役が記録の上で通るなら、健全な鍵から勝手に移らない', async () => {
+    const h = harness();
+    await seedTwo(h);
+
+    const outcome = await h.rotator.reconsider({ reason: 'tick' });
+
+    expect(outcome.kind).toBe('ignored');
+    expect(outcome.signal).toBe('none');
+    // **probe を1本も焼いていない。** ふつうの状態の目盛りが安いことの本体である。
+    expect(h.probeCalls).toEqual([]);
+    expect(h.spreadCalls).toEqual([]);
+  });
+
+  it('候補が全部冷却中なら probe を1本も焼かない（目盛りで回しても安い）', async () => {
+    const h = harness();
+    const cooling = Date.parse(AT) + 60 * 60 * 1000;
+    await h.stores.tokens.replace([
+      { id: 'tok-a', label: 'first', value: 'value-a', order: 0, cooldownUntil: cooling },
+      { id: 'tok-b', label: 'second', value: 'value-b', order: 1, cooldownUntil: cooling },
+    ]);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: AT });
+
+    const outcome = await h.rotator.reconsider({ reason: 'tick' });
+
+    // **これがこの歯の本体である。** 候補選び（`selectNextToken`）は記録だけを
+    // 見る純粋関数なので、`ready` な行が1本も無ければ probe の前に打ち切る ⟹
+    // 目盛りで何度呼んでもサブプロセスは起きない。
+    expect(h.probeCalls).toEqual([]);
+    // **同着なので撒き直さない**（`parkImprovesOn`。同じ時刻に戻る鍵へ移すのは
+    // 改善ではなく、増えた世代が走行中の観測を `stale` にするだけである）。
+    // 撒く側の判定そのものは下の describe（「park し直すのは…」）が測る。
+    expect(outcome.kind).toBe('exhausted');
+    expect(h.spreadCalls).toEqual([]);
+  });
+
+  it('プールが空なら1文字も変えない（受け入れ基準7）', async () => {
+    const h = harness();
+
+    const outcome = await h.rotator.reconsider({ reason: 'pool_changed' });
+
+    expect(outcome.kind).toBe('ignored');
+    expect(h.spreadCalls).toEqual([]);
+    expect(h.probeCalls).toEqual([]);
+    expect(await h.stores.tokens.readActive()).toBeNull();
+    // **日誌にも出さない。** 既定の構成で目盛りごとに1行増えると、意味のある行が埋もれる。
+    expect(tokenRotationEntry(outcome)).toBeNull();
+  });
+
+  it('設定が off なら回さない（記録はする）', async () => {
+    const h = harness();
+    await h.stores.tokens.replace([
+      {
+        id: 'tok-a',
+        label: 'first',
+        value: 'value-a',
+        order: 0,
+        cooldownUntil: Date.parse(AT) + 1,
+      },
+      { id: 'tok-b', label: 'second', value: 'value-b', order: 1 },
+    ]);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: AT });
+    await h.stores.tokens.writeSettings({
+      rotateOn: 'off',
+      cooldownMs: 18_000_000,
+      updatedAt: AT,
+    });
+
+    const outcome = await h.rotator.reconsider({ reason: 'pool_changed' });
+
+    expect(outcome.kind).toBe('ignored');
+    // **`none` へ潰さない。** 「止まっていることは分かっていた」が記録に残る。
+    expect(outcome.signal).toBe('stranded');
+    expect(h.spreadCalls).toEqual([]);
+    // `stranded` は日誌に出る（`signal: 'none'` の目盛りだけが黙る）。
+    expect(tokenRotationEntry(outcome)?.event).toBe('not_rotated');
+  });
+
+  it('指名の先の行が消えていたら（dangling）、通る候補へ移す', async () => {
+    const h = harness();
+    await h.stores.tokens.replace([{ id: 'tok-b', label: 'second', value: 'value-b', order: 1 }]);
+    // 人間が `tok-a` を消した後の状態。
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 2, rotatedAt: AT });
+
+    const outcome = await h.rotator.reconsider({ reason: 'pool_changed' });
+
+    expect(outcome.kind).toBe('rotated');
+    if (outcome.kind !== 'rotated') return;
+    expect(outcome.toTokenId).toBe('tok-b');
+    expect(outcome.why).toContain('プールに無い');
+  });
+
+  it('指名が無い器では、環境変数の行を現役として見る', async () => {
+    // **既定の構成から1度も回っていない器**（`active` が `null`）。ここを
+    // 「現役が居ない」と読むと、環境変数のトークンが冷却へ入っていても
+    // 永久に何も起きない。
+    const h = harness();
+    await h.stores.tokens.replace([
+      {
+        id: 'tok-env',
+        label: '器の環境変数',
+        source: 'env',
+        order: -1,
+        cooldownUntil: Date.parse(AT) + 60 * 60 * 1000,
+      },
+      { id: 'tok-b', label: 'second', value: 'value-b', order: 0 },
+    ]);
+
+    const outcome = await h.rotator.reconsider({ reason: 'account_probe' });
+
+    expect(outcome.kind).toBe('rotated');
+    if (outcome.kind !== 'rotated') return;
+    expect(outcome.toTokenId).toBe('tok-b');
+    // **`fromTokenId` を名乗らない。** 指名が無いので、回したことのある鍵が無い。
+    expect(outcome.fromTokenId).toBeUndefined();
+  });
+});
+
+/**
+ * **セッションを1本も使わない観測（`currentVerdict`）で回す / 戻す。**
+ *
+ * `apps/daemon/src/usage-poller.ts` が5分ごとに取っているものを
+ * `judgeTokenCandidate` へ通した値がここへ来る。**全層が止まっていても届く
+ * 唯一の観測である。**
+ */
+describe('reconsider: 現役の probe 結果を効かせる', () => {
+  it('記録が ready でも、probe が unusable なら冷却へ入れて回す', async () => {
+    const h = harness();
+    await seedTwo(h); // tok-a が現役、どちらも `ready`
+
+    const outcome = await h.rotator.reconsider({
+      reason: 'account_probe',
+      currentVerdict: {
+        verdict: 'unusable',
+        reason: '取れた枠がすべて使い切られており、課金枠も使えない',
+      },
+    });
+
+    expect(outcome.kind).toBe('rotated');
+    if (outcome.kind !== 'rotated') return;
+    expect(outcome.toTokenId).toBe('tok-b');
+    // **文言をそのまま残す**（言い換えない）。
+    const row = (await h.stores.tokens.list()).find((token) => token.id === 'tok-a');
+    expect(row?.lastRejectedReason).toBe('取れた枠がすべて使い切られており、課金枠も使えない');
+    expect(await isCooling(h, 'tok-a')).toBe(true);
+  });
+
+  it('probe が usable なら、止まった記録を消して「いつ開いたか」を残す', async () => {
+    // **冷却が既定の5時間で入っていて、実際には枠がもっと早く開いていた回。**
+    // 消さないと、その鍵は「使えるのに候補から外れている」状態で残り続ける。
+    const h = harness();
+    await h.stores.tokens.replace([
+      {
+        id: 'tok-a',
+        label: 'first',
+        value: 'value-a',
+        order: 0,
+        cooldownUntil: Date.parse(AT) + 4 * 60 * 60 * 1000,
+        lastRejectedAt: AT,
+        lastRejectedReason: "You've hit your usage limit",
+      },
+      { id: 'tok-b', label: 'second', value: 'value-b', order: 1 },
+    ]);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: AT });
+
+    const outcome = await h.rotator.reconsider({
+      reason: 'account_probe',
+      currentVerdict: { verdict: 'usable' },
+    });
+
+    expect(outcome.kind).toBe('ignored');
+    if (outcome.kind !== 'ignored') return;
+    // **回していない。** 鍵は1文字も変わっていない。
+    expect(h.spreadCalls).toEqual([]);
+    expect(await h.stores.tokens.readActive()).toMatchObject({ generation: 1 });
+    // **止まった記録は消えている。**
+    expect(await isCooling(h, 'tok-a')).toBe(false);
+    // **「いつ開いたか」を残す材料が返る**（受信箱へは入れない。理由は
+    // `settleTokenOutcome` の逐語）。
+    expect(outcome.recovered).toEqual({ tokenId: 'tok-a', label: 'first' });
+    // **日誌に出る（`signal: 'none'` でも黙らない）。** 止まった側と対になる唯一の行。
+    expect(tokenRotationEntry(outcome)?.event).toBe('recovered');
+  });
+
+  it('人間が外した行には触らない（probe が通っても戻さない）', async () => {
+    const h = harness();
+    await h.stores.tokens.replace([
+      {
+        id: 'tok-a',
+        label: 'first',
+        value: 'value-a',
+        order: 0,
+        disabledAt: AT,
+        lastRejectedAt: AT,
+        lastRejectedReason: '上限',
+      },
+      { id: 'tok-b', label: 'second', value: 'value-b', order: 1 },
+    ]);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: AT });
+
+    const outcome = await h.rotator.reconsider({
+      reason: 'account_probe',
+      currentVerdict: { verdict: 'usable' },
+    });
+
+    // 記録は消していない（人間の判断を実装が黙って覆さない）。
+    const row = (await h.stores.tokens.list()).find((token) => token.id === 'tok-a');
+    expect(row?.disabledAt).toBe(AT);
+    expect(row?.lastRejectedAt).toBe(AT);
+    expect(outcome.kind).toBe('ignored');
+    if (outcome.kind !== 'ignored') return;
+    expect(outcome.recovered).toBeUndefined();
+  });
+
+  it('probe が undecidable なら記録だけで判定する（unusable へ丸めない）', async () => {
+    const h = harness();
+    await seedTwo(h); // どちらも `ready`
+
+    const outcome = await h.rotator.reconsider({
+      reason: 'account_probe',
+      currentVerdict: { verdict: 'undecidable', reason: 'probe が失敗した' },
+    });
+
+    // 記録の上では現役が通るので、回さない。
+    expect(outcome.kind).toBe('ignored');
+    expect(outcome.signal).toBe('none');
+    expect(h.spreadCalls).toEqual([]);
+    expect(await isCooling(h, 'tok-a')).toBe(false);
+  });
+});
+
+/**
+ * **park し直すのは改善のときだけ**（`parkImprovesOn`）。
+ *
+ * ここが無いと、**待っているあいだに世代が延々と増える** —— 見張りは目盛り
+ * （60秒）ごとに同じ状態を見るので、現役（前に park した鍵）が冷却中である
+ * かぎり毎回「通らない」と判定され、候補の中でいちばん早いものがもっと遅い鍵
+ * でもそちらへ移してしまう。**増えた世代は走行中の観測を全部 `stale` にする** ⟹
+ * 待っているだけで、本物の当たりを飲み込む側が強くなる。
+ */
+describe('park し直すのは、より早く戻る鍵のときだけ', () => {
+  /** 現役 `tok-a` が `activeUntil` まで、候補 `tok-b` が `candidateUntil` まで冷却中。 */
+  async function parked(h: Harness, activeUntil: number, candidateUntil: number): Promise<void> {
+    await h.stores.tokens.replace([
+      { id: 'tok-a', label: 'parked-key', value: 'value-a', order: 0, cooldownUntil: activeUntil },
+      {
+        id: 'tok-b',
+        label: 'later-key',
+        value: 'value-b',
+        order: 1,
+        cooldownUntil: candidateUntil,
+      },
+    ]);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 7, rotatedAt: AT });
+  }
+
+  it('候補のほうが遅いなら撒き直さない（世代を増やさない）', async () => {
+    const h = harness();
+    await parked(h, Date.parse(AT) + 10 * 60_000, Date.parse(AT) + 60 * 60_000);
+
+    const outcome = await h.rotator.reconsider({ reason: 'tick' });
+
+    expect(outcome.kind).toBe('exhausted');
+    expect(h.spreadCalls).toEqual([]);
+    expect(await h.stores.tokens.readActive()).toMatchObject({
+      tokenId: 'tok-a',
+      generation: 7,
+    });
+    // **「候補が無い」と書かない。** 読む側が次に確かめるものが違う。
+    if (outcome.kind !== 'exhausted') return;
+    expect(outcome.why).toContain('遅い鍵へ移すのは改善ではない');
+  });
+
+  it('目盛りを何回回しても世代は動かない（延々と増える形が塞がっている）', async () => {
+    const h = harness();
+    await parked(h, Date.parse(AT) + 10 * 60_000, Date.parse(AT) + 60 * 60_000);
+
+    for (let i = 0; i < 5; i++) await h.rotator.reconsider({ reason: 'tick' });
+
+    expect(await h.stores.tokens.readActive()).toMatchObject({ generation: 7 });
+    expect(h.spreadCalls).toEqual([]);
+  });
+
+  it('候補のほうが早いなら撒き直す（改善なので移す）', async () => {
+    const h = harness();
+    await parked(h, Date.parse(AT) + 60 * 60_000, Date.parse(AT) + 10 * 60_000);
+
+    const outcome = await h.rotator.reconsider({ reason: 'tick' });
+
+    expect(outcome.kind).toBe('parked');
+    if (outcome.kind !== 'parked') return;
+    expect(outcome.tokenId).toBe('tok-b');
+    expect(outcome.generation).toBe(8);
+    expect(h.spreadCalls.map((call) => call.id)).toEqual(['tok-b']);
+  });
+
+  it('現役が冷却中ではない（人間が外した）なら、戻る見込みの立つ鍵へ移す', async () => {
+    // **待っても戻らない側に居る**ので、冷却中の候補でも改善である。
+    const h = harness();
+    await h.stores.tokens.replace([
+      { id: 'tok-a', label: 'disabled-key', value: 'value-a', order: 0, disabledAt: AT },
+      {
+        id: 'tok-b',
+        label: 'cooling-key',
+        value: 'value-b',
+        order: 1,
+        cooldownUntil: Date.parse(AT) + 60 * 60_000,
+      },
+    ]);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: AT });
+
+    const outcome = await h.rotator.reconsider({ reason: 'tick' });
+
+    expect(outcome.kind).toBe('parked');
+    if (outcome.kind !== 'parked') return;
+    expect(outcome.tokenId).toBe('tok-b');
   });
 });

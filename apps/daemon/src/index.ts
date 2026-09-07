@@ -41,9 +41,11 @@ import {
   type SelfFacts,
   type Stores,
   type TokenRotationEntry,
+  type TokenRotationOutcome,
 } from '@alteroid/core';
 
 import { createApp, parseAllowedOrigins } from './app.js';
+import { startTokenRotationWatch, type TokenRotationWatch } from './token-watch.js';
 import { startUsagePolling } from './usage-poller.js';
 import { startManagerPolling } from './manager-poller.js';
 import { planAuth } from './auth.js';
@@ -324,30 +326,79 @@ function describeRunner(): string {
  * 割り当てだけで、規則そのものを変える判断はここに持たせない——変えたくなったら
  * 実装せず人間に確認する。
  *
- * `rotated` / `not_rotated` / `restored` は正常（プールが仕事をした、または
- * 何もしないという判断が付いた）。`exhausted` / `sweep_stopped` / `restore_failed`
- * は異常（全層が止まる・候補を試し切れていない・起動時の撒き直しが失敗した）。
- * 詳細は `.claude/skills/token-pool/SKILL.md` の `event` の表。
+ * `rotated` / `not_rotated` / `restored` / `recovered` は正常（プールが仕事を
+ * した、何もしないという判断が付いた、または止まっていた鍵が開いた）。
+ * `exhausted` / `sweep_stopped` / `restore_failed` / `parked` は異常（全層が
+ * 止まる・候補を試し切れていない・起動時の撒き直しが失敗した）。詳細は
+ * `.claude/skills/token-pool/SKILL.md` の `event` の表。
  *
- * **6値に対して網羅的である。** `packages/core/src/schema.ts` の
- * `token_rotation.event` へ新しい値が足されたら、`default` の
- * `assertTokenRotationEventHandled` の引数が `never` を受けられなくなり、
- * `pnpm typecheck` がここで落ちる。**既定へは倒さない** — 倒すと新しい event が
- * 黙ってどちらかの標準ストリームへ流れてしまう。
+ * **⚠️ `parked` が異常側に居る理由を潰さないこと。** あれは撒けてはいるので
+ * `rotated` の側に見えるが、運ばれている事実は「**いま通る鍵が1本も無い**」で
+ * ある（`earliestAt` まで全層が止まる）。正常な行に混ぜると、いちばん重い状態が
+ * いちばん普通の状態と同じ場所へ出る（`schema.ts` の `token_rotation.event` の
+ * doc と同じ理由）。
+ *
+ * **全値に対して網羅的である。数をここに書かない**（数のほうが先に腐る。
+ * 数え上げの持ち主は `schema.ts` の `z.enum` である）。`token_rotation.event` へ
+ * 新しい値が足されたら、`default` の `assertTokenRotationEventHandled` の引数が
+ * `never` を受けられなくなり、`pnpm typecheck` がここで落ちる。**既定へは
+ * 倒さない** — 倒すと新しい event が黙ってどちらかの標準ストリームへ流れてしまう。
  */
 export function tokenRotationStream(event: TokenRotationEntry['event']): NodeJS.WritableStream {
   switch (event) {
     case 'rotated':
     case 'not_rotated':
     case 'restored':
+    case 'recovered':
       return process.stdout;
     case 'exhausted':
     case 'sweep_stopped':
     case 'restore_failed':
+    case 'parked':
       return process.stderr;
     default:
       return assertTokenRotationEventHandled(event);
   }
+}
+
+/**
+ * その結果は「**認証トークンが通る状態に戻った**」か。戻っていなければ `undefined`。
+ *
+ * ## なぜ切り出してあるか
+ *
+ * これは `main()` の中の3行だったが、**測れなかった** —— `main()` はデーモンを
+ * 丸ごと起こすので、「起こす / 起こさない」の判定だけを確かめる術が無い。
+ * **判定を間違えたときの壊れ方が非対称なので、ここは測れる形にしておく:**
+ *
+ * | 間違え方 | 何が起きるか | 見えるか |
+ * | --- | --- | --- |
+ * | 起こすべき回に起こさない | **止まったまま。**「復活したのに何もしない」 | **見えない**（何も起きないので） |
+ * | 起こすべきでない回に起こす | 保持していた合図を1件無駄に焼き、同じところで止まる | 見える（日誌に失敗が並ぶ） |
+ *
+ * **出力・挙動は1文字も変えていない**（同じ式をそのまま関数にした）。
+ *
+ * ## 判定
+ *
+ * | `outcome` | 戻ったか | なぜ |
+ * | --- | --- | --- |
+ * | `rotated` | **戻った** | いま通る鍵に移った |
+ * | `ignored` ＋ `recovered` | **戻った** | 止まっていた現役が、また通ることを観測できた |
+ * | `parked` | **まだ** | 撒いた鍵は `cooldownUntil` まで通らない |
+ * | それ以外 | **まだ** | 何も変わっていない |
+ */
+export function reopenedTokenOf(
+  outcome: TokenRotationOutcome,
+): { tokenId: string; label: string; how: '回した' | 'また通るようになった' } | undefined {
+  if (outcome.kind === 'rotated') {
+    return { tokenId: outcome.toTokenId, label: outcome.toLabel, how: '回した' };
+  }
+  // **`parked` をここへ入れないこと。** 撒けてはいるが、その鍵はまだ通らない
+  // ——起こしても同じところで止まり、保持していた合図を1件無駄に焼く。
+  // 冷却が明ければ枠の probe が `usable` を観測し、`recovered` として戻ってくる。
+  if (outcome.kind === 'ignored' && outcome.recovered !== undefined) {
+    return { ...outcome.recovered, how: 'また通るようになった' };
+  }
+  return undefined;
 }
 
 /**
@@ -708,7 +759,24 @@ export async function main(): Promise<void> {
    * クローンの道具（まだ無い。Issue #456）が別インスタンスを持つと、直列化の意味が
    * 消える。
    */
-  const tokenPoolService = createTokenPoolService({ stores });
+  const tokenPoolService = createTokenPoolService({
+    stores,
+    /**
+     * **人間が鍵を足した / 外した / 戻した / 並べ替えた瞬間を契機にする**
+     * （人間の決定 2026-09-07）。
+     *
+     * ここが無かったあいだ、`PUT /tokens` は記憶ストアを書くだけだった ⟹
+     * **全層が枠で止まっている器へ新しい鍵を1本足しても、何も起きなかった。**
+     * 回すには誰かがもう一度本番で失敗して観測を上げる必要があり、そのとき
+     * 全層は止まっているので観測を上げる主体が1つも居ない。
+     *
+     * **CLI もここへ来る**（`alteroid token add` / `enable` / `policy` は
+     * HTTP を通る）⟹ 人間のどの口からでも届く。
+     */
+    onChanged: (change) => {
+      tokenWatch?.poke(change === 'settings' ? 'settings_changed' : 'pool_changed');
+    },
+  });
 
   // 置いてあるものを起動時に1度効かせる。**器を作り直しても環境が痩せない**
   // ことが、この仕組みを環境変数と別に持つ理由そのものである。
@@ -762,6 +830,37 @@ export async function main(): Promise<void> {
   };
 
   /**
+   * 認証トークンの回し手（Issue #393 PR3）。**デーモンの中の1本。**
+   *
+   * ここで組み立てる部品は4つ——現役をクローンへ渡す箱、撒く口、回し手本体、
+   * そして見張り（`token-watch.ts`）。**判定も選択も回し手が持つ**ので、
+   * クローンとマネージャーと見張りは観測と契機を渡すだけになる。
+   *
+   * **箱（`agentTokenHolder`）を先に作る。** 枠の probe（下の `usagePoller`）が
+   * **現役の env でアカウントを測る**ために要る —— 渡さないと probe は器の
+   * 環境変数を継承し、**回した後は降りたトークンのアカウントを測り続ける。**
+   */
+  const agentTokenHolder = createAgentTokenHolder();
+
+  /**
+   * 認証トークンの見張り（`token-watch.ts`）。
+   *
+   * **前方参照である。** 見張りは回し手を要るが、回し手より先に契機を渡す側
+   * （`tokenPoolService` の `onChanged` / 下の `usagePoller` の `onState`）が
+   * 組み立てられる。closure は呼ばれた瞬間の束縛を見るので、**呼ばれるより先に
+   * 両方とも作られていれば壊れない**（同じ形の前方参照が `scheduler` と
+   * `clone` のあいだに既に在る）。
+   *
+   * **`undefined` のあいだの契機は落ちる。** それは起動の数十ミリ秒だけで、
+   * その直後に `reason: 'startup'` の見直しが1回走るので、落ちた契機の分も
+   * そこで拾える。
+   */
+  // **`= undefined` を明示する。** `let` の宣言だけだと `prefer-const` が
+  // 「一度も再代入されていない」と数えて `const` を勧めてくるが、`const` には
+  // できない（上の closure がこの束縛を参照する）。
+  let tokenWatch: TokenRotationWatch | undefined = undefined;
+
+  /**
    * アカウント全体の利用状況（claude.ai 側の値）。
    *
    * **使い捨ての probe で読む。実セッションに相乗りしない** — 実測で、ターンを
@@ -772,23 +871,27 @@ export async function main(): Promise<void> {
    *
    * **未ログインでも止めない。** alteroid は鍵を走行中に回せる設計なので、
    * 「まだログインしていない」は通常の状態であり、後から鍵が届いたら取れる。
+   *
+   * **⚠️ ここは「セッションを1本も使わずに枠を測れる」唯一の場所である**
+   * （人間の決定 2026-09-07）。回し手へ届く6つの検知点はどれもセッション由来
+   * なので、**全層が止まると観測を上げる主体が1つも居なくなる。** ここを
+   * 見張りへ繋いだのがその穴の塞ぎ方である（`token-watch.ts` の doc）。
    */
   const usagePoller = startUsagePolling({
     queryFn: query,
     cwd: paths.root,
+    // **現役のトークンで測る。** 呼ばれるたびに読み直す（回すのは走行中である）。
+    // 既定の構成では空を返すので、器の環境変数がそのまま効く（受け入れ基準7）。
+    env: () => agentTokenHolder.values(),
+    // **測った結果を見張りへ渡す。** 判定（`judgeTokenCandidate`）は見張りが通す。
+    onState: (state) => {
+      tokenWatch?.observeAccount(state);
+    },
     // **記憶ストアへ到達する鍵を probe の子プロセスへ渡さない（#431）。**
     // `Runner` / `createProfileVessel` へ渡しているのと同じ `storage.withheldEnvKeys`。
     withheldEnvKeys: storage.withheldEnvKeys,
   });
 
-  /**
-   * 認証トークンの回し手（Issue #393 PR3）。**デーモンの中の1本。**
-   *
-   * ここで組み立てる部品は3つ——現役をクローンへ渡す箱、撒く口、そして回し手
-   * 本体。**判定も選択も回し手が持つ**ので、クローンとマネージャーは観測を
-   * 渡すだけになる。
-   */
-  const agentTokenHolder = createAgentTokenHolder();
   const tokenRotator = createTokenRotator({
     stores,
     // **値ではなく「在るか」だけを渡す**（`TokenRotatorOptions.hasEnvToken` の doc）。
@@ -908,37 +1011,12 @@ export async function main(): Promise<void> {
     syncRunnerToken: createRunnerTokenSync(agentTokenHolder),
     onUsageObservation: async (observation) => {
       const outcome = await tokenRotator.observe(observation);
-      // **回した / 回さなかったを黙って捨てない。** 日誌へ載せるのは PR5 の
-      // 仕事だが、それまでのあいだも標準出力・標準エラーには出す——**回ったか
-      // どうかがどこからも見えない期間を作らない。**
       // **当たった文言をそのまま添える**（Issue #393「言い換えずそのまま残す」）。
       // 人間が claude.ai と突き合わせられることと、回復の見込みの分類が効くことの
       // 両方がこれに乗っている。
-      const entry = tokenRotationEntry(outcome, {
+      await settleTokenOutcome(outcome, {
         ...(observation.notice === undefined ? {} : { noticeText: observation.notice.text }),
       });
-      // **回ったらクローンのセッションを畳んで作り直す**（Issue #393 PR4）。
-      // env は起動時に凍るので、これをやらないとクローンは古いトークンのまま
-      // 再挑戦して、同じところで止まる。
-      //
-      // **印を立てるだけである** —— いま走っているターンは最後まで走る
-      // （`recycleSessionForToken` の doc）。
-      if (outcome.kind === 'rotated') clone.recycleSessionForToken();
-
-      if (entry !== null) {
-        // **`event` から行き先を決める**（Issue #420 の残件）。`rotated` /
-        // `not_rotated` は正常で stdout、`exhausted` / `sweep_stopped` は異常で
-        // stderr——`tokenRotationStream` に分類を1箇所へ閉じてある。
-        tokenRotationStream(entry.event).write(
-          `alteroidd: ${entry.text.split('\n')[0] ?? entry.text}\n`,
-        );
-        // **日誌への追記が落ちても回した事実は消えない**（正本は記憶ストアの
-        // `active` の側に在る）。ここで投げ直すと、回せたのに「回し手が落ちた」
-        // として報告されることになる。
-        await stores.journal.append(entry).catch((error: unknown) => {
-          noteDroppedRecord('認証トークンの切替', 'journal', error);
-        });
-      }
     },
     ...(storage.sessionStore === undefined ? {} : { sessionStore: storage.sessionStore }),
   });
@@ -952,6 +1030,148 @@ export async function main(): Promise<void> {
   const managerPoller = startManagerPolling({
     managers: clone.managers,
   });
+
+  /**
+   * 回し手が出した結果1件を片付ける。**観測から来た回と、状態から来た回で同じ
+   * ここを通る**（人間の決定 2026-09-07）。
+   *
+   * ## なぜ1本にするか
+   *
+   * 直す前は `onUsageObservation` の中だけに在った。見張り（`token-watch.ts`）を
+   * 足すときに同じ処理をもう1本書くと、**片方だけが `parked` を知らない・片方
+   * だけがセッションを作り直す**という食い違いが静かに生まれる —— そして
+   * 「出なかった」は出ていないので気づけない（`tokenRotationEntry` の doc が
+   * stderr と日誌について同じことを言っている）。
+   *
+   * ## 何をするか（4つ）
+   *
+   * 1. **指名が変わったらクローンのセッションを作り直す**（env は起動時に凍る）
+   * 2. **通る鍵になったら、止まっていた層を起こす**（クローンへ合図1つ＋
+   *    マネージャーの引き取り。人間の決定 2026-09-07。下に理由の全文が在る）
+   * 3. **標準出力・標準エラーへ1行**（`event` から行き先を決める。Issue #420）
+   * 4. **日誌へ1件**（落ちても回した事実は消さない。正本は `active` の側）
+   */
+  async function settleTokenOutcome(
+    outcome: TokenRotationOutcome,
+    observed?: { noticeText?: string },
+  ): Promise<void> {
+    const entry = tokenRotationEntry(outcome, observed);
+
+    // **指名が変わったらクローンのセッションを畳んで作り直す**（Issue #393 PR4）。
+    // env は起動時に凍るので、これをやらないとクローンは古いトークンのまま
+    // 再挑戦して、同じところで止まる。
+    //
+    // **`parked` も含む。** あちらも指名が変わっている（撒いた鍵はまだ通らないが、
+    // **冷却が明けた後に古い鍵のまま挑む**のが最悪の形である）。
+    //
+    // **印を立てるだけである** —— いま走っているターンは最後まで走る
+    // （`recycleSessionForToken` の doc）。
+    if (outcome.kind === 'rotated' || outcome.kind === 'parked') clone.recycleSessionForToken();
+
+    /*
+     * **通る鍵になったら、止まっていた層を起こす**（人間の決定 2026-09-07）。
+     *
+     * ## なぜ要るか —— 撒くだけでは、止まったものは止まったままである
+     *
+     * 枠に当たったクローンは `#usageBlocked` が立ってターンを回さず、**解除の
+     * 契機は新しい合図の到着だけである**（`clone.ts` の `#usageBlocked` の doc:
+     * タイマーを持たない）。マネージャーも同じで、枠で落ちたセッションは
+     * **引き取り（`restore()`）が走るまで**再開しない。
+     *
+     * ⟹ 撒いただけでは、**鍵が通るようになった瞬間に誰も動かない。** 人間の
+     * 逐語: 「limitが来て止まってトークン回して復活したら復活させたことを
+     * cloneやmanagerに通知する必要があるのでは？なぜならlimit来て止まっている
+     * のでセッションを再開する必要があるでしょ」
+     *
+     * ## ⚠️ 2026-08-25 の決定を、この場合について覆した
+     *
+     * あのとき「受信箱への通知は入れない」と決めた理由は**「回した事実を知らせる
+     * 価値が無い」**（`.claude/skills/token-pool/SKILL.md` の冒頭）。ここで入れて
+     * いるのは**知らせ**ではなく**再開の契機**である —— 止まっている層は、合図が
+     * 来ないかぎり自分では動けない。**知らせなら要らないが、契機は要る。**
+     *
+     * ## 通る鍵になった回だけである（`parked` では起こさない）
+     *
+     * | `outcome` | 起こすか | なぜ |
+     * | --- | --- | --- |
+     * | `rotated` | **起こす** | いま通る鍵に移った |
+     * | `recovered` | **起こす** | 止まっていた現役が、また通ることを観測できた |
+     * | `parked` | **起こさない** | 撒いた鍵は `cooldownUntil` まで通らない。起こしても同じところで止まり、**保持していた合図を1件無駄に焼く** |
+     *
+     * `parked` の側は放置ではない —— 冷却が明ければ枠の probe（5分ごと）が
+     * `usable` を観測し、`recovered` としてここへ戻ってくる。
+     *
+     * ## 起こし方は層で違う
+     *
+     * - **クローン**: 受信箱へ合図を1つ。これが `#releaseRequested` を立て、
+     *   保持していた合図が FIFO のまま配り直される。**高々1件である**（下の
+     *   `rotated` / `recovered` はどちらも「実際に状態が変わった回」にしか出ない）
+     * - **マネージャー**: `restore()`。台帳に `running` / `waiting_human` で
+     *   残っている委譲を、runner に居なければ resume する。**新しい経路は作らない**
+     *   —— runner の名乗りと器の入れ替えが既に通っている1本に乗るだけである
+     *   （二重に走らないことは `ManagerPool` 側が見ている）
+     */
+    const reopened = reopenedTokenOf(outcome);
+    if (reopened !== undefined) {
+      clone.post({
+        type: 'external',
+        id: randomUUID(),
+        at: new Date().toISOString(),
+        source: 'token-pool',
+        payload: {
+          text:
+            `認証トークンが通る状態に戻った（${reopened.how}）: ` +
+            `「${reopened.label}」（id ${reopened.tokenId}）。` +
+            '枠で止まっていた仕事は、ここから再開できる。',
+        },
+      });
+      // **待たない。** 引き取りは runner へ問い合わせる（落ちうる・遅い）ので、
+      // 回した結果の記録をそれに縛らない。**黙って落とさない**（跡を残す）。
+      void clone.managers.restore().catch((error: unknown) => {
+        process.stderr.write(
+          `alteroidd: 認証トークンが戻った後のマネージャーの引き継ぎに失敗しました: ${String(error)}\n`,
+        );
+      });
+    }
+
+    if (entry === null) return;
+    // **`event` から行き先を決める**（Issue #420 の残件）——`tokenRotationStream` に
+    // 分類を1箇所へ閉じてある。
+    tokenRotationStream(entry.event).write(
+      `alteroidd: ${entry.text.split('\n')[0] ?? entry.text}\n`,
+    );
+    // **日誌への追記が落ちても回した事実は消えない**（正本は記憶ストアの
+    // `active` の側に在る）。ここで投げ直すと、回せたのに「回し手が落ちた」
+    // として報告されることになる。
+    await stores.journal.append(entry).catch((error: unknown) => {
+      noteDroppedRecord('認証トークンの切替', 'journal', error);
+    });
+  }
+
+  /**
+   * 認証トークンの見張りを回し始める（`token-watch.ts`）。
+   *
+   * **`clone` の後に作る。** `settleTokenOutcome` が `clone` を要るので、
+   * 見張りが最初の見直しを走らせる前にクローンが在る必要がある。
+   */
+  tokenWatch = startTokenRotationWatch({
+    rotator: tokenRotator,
+    onOutcome: (outcome) => settleTokenOutcome(outcome),
+  });
+
+  /**
+   * **起動直後に1回見直す**（人間の決定 2026-09-07）。
+   *
+   * 引き取り（`restore()`、上）は「記憶ストアが言っている現役を、消えた撒き先へ
+   * もう一度置く」だけで、**選び直さない**（あちらの doc）。⟹ 記録の上で現役が
+   * 冷却中のまま起きた器では、**引き取りの直後は「通らない鍵が全コンテナに
+   * 撒かれている」状態である。** ここで見直すと、通る候補が在ればそちらへ移り、
+   * 無ければいちばん早く戻る鍵へ park する。
+   *
+   * **順序に意味がある** —— 先に記録どおりの状態を作り、そのうえで見直す。
+   * 逆にすると、撒き直せていない状態を見て判定することになる。
+   */
+  tokenWatch.poke('startup');
 
   // 起動ごとに作り直す。状態ファイルが残っていても、別プロセスを自分だと
   // 誤認させない（PID の再利用で無関係なプロセスを止めないため）。
@@ -1012,7 +1232,25 @@ export async function main(): Promise<void> {
       );
     }
   };
-  runners.subscribe(() => void takeOver());
+  runners.subscribe(() => {
+    void takeOver();
+    /*
+     * **runner が載ったことも、認証トークンを見直す契機にする**（人間の決定
+     * 2026-09-07）。
+     *
+     * **現役をその runner へ降ろすのは `ManagerPool` の側である**
+     * （`#connectTo` / `#reattach` の `#pushAgentToken`。runner の名乗り
+     * （`hello`）はストリームが繋がるたびに来るので、**繋ぎ直しの瞬間ごとに
+     * 降りる**）。ここが足すのはそれとは別の1つ ——
+     * **「撒く先が無かったせいで撒けていなかった回」を拾い直す。**
+     *
+     * `createTokenSpread` は runner が1台も繋がっていないとき
+     * `ok: false`（「繋がっている runner が1台も無い」）を返して終わる。
+     * デーモンが先に起きる構成ではこれが普通に起こる ⟹ その後で runner が
+     * 上がってきた瞬間に見直せば、**指名と実際が揃っているかを確かめ直せる。**
+     */
+    tokenWatch?.poke('runner_connected');
+  });
   /*
    * 器の入れ替えも契機にする（`onSwap`）。**2つとも起こす** — 走行中だった委譲は
    * `reattachRunner`、台帳にしか無い委譲は `restore()` が拾う（片方だけでは片側が
@@ -1031,6 +1269,11 @@ export async function main(): Promise<void> {
       });
     }
     void takeOver();
+    // **器が入れ替わったら、認証トークンも見直す。** 現役をその runner へ
+    // 降ろすのは `#reattach`（`#pushAgentToken`）だが、**指名そのものが古い
+    // ときはそれでは直らない** —— 入れ替えのあいだに冷却が明けていることが
+    // 普通に起こる（器の入れ替えは分単位で、枠は5時間単位である）。
+    tokenWatch?.poke('runner_connected');
   };
   /**
    * 宛先が黙ったので、いま開いている別の器へ移送を試みる（`onLost` の doc。
@@ -1128,6 +1371,9 @@ export async function main(): Promise<void> {
     scheduler.stop();
     usagePoller.stop();
     managerPoller.stop();
+    // **見張りも畳む。** 止めたはずのデーモンが背景で probe を焼き続けない
+    // （`usagePoller` と同じ理由。`token-watch.ts`）。
+    tokenWatch?.stop();
     server.close();
     // 名簿の挑み直しも畳む（止めたはずのデーモンが背景で runner を叩き続けない）。
     await runners.stop().catch(() => undefined);
