@@ -64,6 +64,7 @@ import {
   isKnownMemoryDocKind,
   lookupMemorySection,
   measureMemoryFloor,
+  MEMORY_OUTLINE_SIDES,
   parseMemoryFrontmatter,
   renderMemoryDocuments,
   renderMemoryListing,
@@ -2184,6 +2185,47 @@ export function createCloneTools(context: ToolContext) {
      * 理由が無い（能力を消さない側）。ただし `memory_section_move` はその
      * 文書を断るので、**そのことを応答に書く**——目次だけ読めて移動だけ
      * 断られると、呼び手には理由が見えない。
+     *
+     * ## `side` — 肥大化を防ぐ道具が、肥大化そのもので使えなくなる形を塞ぐ
+     *
+     * **予算（`MEMORY_OUTLINE_BUDGET`）は先頭から詰めるので、落ちるのは常に
+     * 末尾側である。** ⟹ 大きな文書では**新しく積んだ節（末尾側）が目次に
+     * 出てこない** ＝ `memory_section_move` の指し先が手に入らない。
+     * **その文書を割るための道具が、その文書が大きいことによって使えない。**
+     * 25万字級の `premise` が実際にこの形へ入っている（依頼として渡された前提である）。
+     *
+     * `side=tail` は `renderListingFromEnd`（`excerpt.ts`）を通す。**新しい
+     * 仕組みは足していない**——向きが違うだけの予算のループは既にあちらに在り、
+     * `conversation_read` の中身モードが同じものを通している。
+     *
+     * ### ⚠️ この引数が**言えないこと**
+     *
+     * | 言えること | **言えないこと** |
+     * | --- | --- |
+     * | 先頭から予算に入るところまで（既定） | **中央**——どちらの端からも予算の外に出る節は、`head` でも `tail` でも出ない |
+     * | 末尾から予算に入るところまで（`side=tail`） | **何節出るか**——予算は文字数なので見出しの長さで動く。呼ぶ前に件数は約束できない |
+     * | どちら側を何節省いたか（断り書き） | **どの節を省いたか**——省いた節の見出しも id も出さない（出せば予算の意味が消える） |
+     *
+     * **「末尾から出せる」を「全部見えるようになった」と読まないこと。** 中央へ
+     * 届く道は1つだけで、**端の節を `memory_section_move` で移して文書を縮める
+     * こと**である（縮めば次の目次の窓がそこへ伸びる）。⟹ 届くのは**縮めた後**
+     * であって、この引数を渡した瞬間ではない。
+     *
+     * ### 版の照合は1ミリも弱まらない
+     *
+     * 節id の材料は**その節の見出し行と中身だけ**である（`memorySectionId`）。
+     * **目次のどこを切って出したかは材料に入っていない** ⟹ `side` を足しても
+     * id は1文字も変わらず、「その id は古い」の判定も変わらない。
+     *
+     * ### ⚠️ 既定は変えていない。ただし断り書きの1行は変えた（正直に書く）
+     *
+     * `side` を渡さなければ、**出る節も向きも予算も今までと同じ**である。
+     * **変えたのは断り書きの1行だけ**——`ほか N 節は省略` が
+     * `末尾 N 節は省略` になり、続きの取り方が `side=tail` になった。
+     * `ListingBudget.omitted` の doc が逐語で「**「続きの取り方」を書けるのは、
+     * 呼び手の側に続きを取る口が実在するときだけである**」と言っており、
+     * **この版で初めてその口が実在する。** 旧い文面（`先に上の節を減らすか`）は
+     * 末尾を指せないまま末尾を減らせと言っていた ＝ 到達できない助言だった。
      */
     tool(
       'memory_outline',
@@ -2193,11 +2235,18 @@ export function createCloneTools(context: ToolContext) {
         '本文は1文字も返さない（本文が要るなら memory_read）。frontmatter の行も出ない。',
         '節id は memory_section_move の指し先であると同時に、その節の版の照合でもある——中身が変われば id も変わるので、目次を読んでから移すまでの間に誰かがその節を書き換えていたら断られる。移す直前に取り直すこと。',
         '中身まで同一の節が2つあると id が衝突する。その行には印が付き、その id では動かせない。',
+        '目次は文字数の予算で切る。既定（side を渡さない）では先頭から詰めるので、落ちるのは末尾側である——大きな文書では新しく積んだ節の節id が出てこない。side=tail を渡すと末尾から詰め、落ちるのは先頭側になる。⚠どちらの向きでも中央は出ない（端の節を memory_section_move で移して文書を縮めるまで、そこへは届かない）。',
       ].join(' '),
       {
         slug: z.string().describe('文書のスラッグ（拡張子なし）'),
+        side: z
+          .enum(MEMORY_OUTLINE_SIDES)
+          .optional()
+          .describe(
+            '予算に入りきらないとき、どちら側を出すか。head（既定。渡さなければ従来と同じ出力）は先頭から詰めて末尾側を落とす。tail は末尾から詰めて先頭側を落とす。⚠中央はどちらでも出ない',
+          ),
       },
-      async ({ slug }) => {
+      async ({ slug, side }) => {
         const doc = await stores.persona.read(slug);
         if (doc === null) return text(`記憶 ${slug} は存在しない。`);
         const { sections } = scanMemorySections(doc.content);
@@ -2208,7 +2257,7 @@ export function createCloneTools(context: ToolContext) {
             : '';
         return text(
           `記憶 ${slug} の目次（${sections.length} 節）。本文は含まない。\n\n` +
-            `${renderMemoryOutline(sections)}${malformedNote}`,
+            `${renderMemoryOutline(sections, side)}${malformedNote}`,
         );
       },
     ),

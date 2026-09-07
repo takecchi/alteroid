@@ -20,7 +20,7 @@
 
 import { createHash } from 'node:crypto';
 
-import { excerptLine, renderListing } from './excerpt.js';
+import { excerptLine, renderListing, renderListingFromEnd } from './excerpt.js';
 import type {
   MemoryCreatedAt,
   MemoryDescriptionFreshness,
@@ -2305,6 +2305,26 @@ export function cutMemorySection(
 export const MEMORY_OUTLINE_BUDGET = 8_000;
 
 /**
+ * 目次を文書の**どちら側**から詰めるか（`memory_outline` の `side`）。
+ *
+ * **落ちるのは常に反対側である。** `'head'`（既定）なら末尾側が落ち、
+ * `'tail'` なら先頭側が落ちる。**行の並びはどちらでも文書順のままで、この値が
+ * 変えるのは「予算に入らなかったときにどちらを捨てるか」だけである。**
+ *
+ * **これは窓（オフセット）ではない。** 予算は文字数なので何節入るかは見出しの
+ * 長さで動き、「末尾の N 節」を添字で当てる材料は呼び手の手元に無い。⟹ 渡すのは
+ * 向きだけにして、何節入るかは予算に決めさせる。
+ *
+ * **値の列挙をここ1箇所に置く。** `tools.ts` が `z.enum(MEMORY_OUTLINE_SIDES)` で
+ * 同じ配列を引くので、増やしても道具の側の書き換えが要らない
+ * （`z.enum(JOURNAL_ENTRY_TYPES)` と同じ形）。
+ */
+export const MEMORY_OUTLINE_SIDES = ['head', 'tail'] as const;
+
+/** 目次を出す向き（`MEMORY_OUTLINE_SIDES` の doc を読むこと）。 */
+export type MemoryOutlineSide = (typeof MEMORY_OUTLINE_SIDES)[number];
+
+/**
  * `memory_outline` の応答本体。
  *
  * **本文は1文字も出さない**（`memory_delete` が本文を日誌へ写さない線と
@@ -2318,8 +2338,27 @@ export const MEMORY_OUTLINE_BUDGET = 8_000;
  * **中身まで完全に同一の節が2つ在ると id が衝突する。** そのときはその id の
  * 行に印を出す——黙って並べると、呼び手はどちらか一方を指したつもりで
  * 断られる理由が分からない。
+ *
+ * ## `side` — 予算で落とす側を選ぶ
+ *
+ * **`'tail'` は `renderListingFromEnd`（`excerpt.ts`）を通すだけである。** 向きが
+ * 違うだけの予算のループは既にあちらに在り、断り書きを穴の空いた側（先頭）へ
+ * 置くところまで持っている。ここに同じループを書き直さない。
+ *
+ * **⚠️ この引数が言えないこと: 中央は、どちらの向きでも出ない。** 予算に入らない
+ * 中間の節は `'head'` でも `'tail'` でも落ちる。**「末尾から出せる」は「全部
+ * 見える」ではない。** 中間へ届く道は1つだけで、**端の節を
+ * `memory_section_move` で移して文書を縮めること**である（縮めば次の目次の窓が
+ * そこへ伸びる）。⟹ **届くのは縮めた後であって、この値を渡した瞬間ではない。**
+ *
+ * **節id は `side` に依存しない。** 材料はその節の見出し行と中身だけである
+ * （`memorySectionId`）ので、**どちら側を出したかで id は1文字も変わらない ＝
+ * 版の照合は弱まらない。**
  */
-export function renderMemoryOutline(sections: readonly MemorySection[]): string {
+export function renderMemoryOutline(
+  sections: readonly MemorySection[],
+  side: MemoryOutlineSide = 'head',
+): string {
   if (sections.length === 0) {
     return (
       '節が1つも無い（見出しが1つも無いか、最初の見出しより前の前書きしか無い）。' +
@@ -2336,10 +2375,23 @@ export function renderMemoryOutline(sections: readonly MemorySection[]): string 
         : '';
     return `${indent}[${section.id}] ${section.heading} — ${formatMemoryCharCount(section.chars)} 文字${ambiguous}`;
   });
-  return renderListing(items, {
+  // **どちら側を落としたかを言う。** 「N 節省略」だけだと続きの取り方を間違える
+  // （`conversation_read` の中身モードが同じ理由で同じことをしている）。そして
+  // **続きの取り方を書けるのは、呼び手の側にその口が実在するときだけである**
+  // （`excerpt.ts` の `ListingBudget.omitted` の doc）——`side` を足したこの版で
+  // 初めて、末尾側へ行く口が実在する。旧い文面の「先に上の節を減らす」は、
+  // **末尾を指せないまま末尾を減らせ**と言っていた ＝ 到達できない助言だった。
+  const render = side === 'tail' ? renderListingFromEnd : renderListing;
+  return render(items, {
     budget: MEMORY_OUTLINE_BUDGET,
     omitted: ({ rest, shown, total }) =>
-      `…ほか ${rest} 節は省略（節は全 ${total} 件あり、${shown} 件だけ出した）。` +
-      '省略された節を動かしたいなら、先に上の節を減らすか、memory_read で本文を読むこと。',
+      side === 'tail'
+        ? `…先頭 ${rest} 節は省略（節は全 ${total} 件あり、末尾から ${shown} 件だけ出した）。` +
+          '先頭側は side を渡さずに呼べば出る（既定）。' +
+          '⚠中央（どちらの端からも予算の外に出る節）は、どちらの向きでも出ない——' +
+          '端の節を memory_section_move で移して文書を縮めれば、次の目次がそこへ届く。'
+        : `…末尾 ${rest} 節は省略（節は全 ${total} 件あり、先頭から ${shown} 件だけ出した）。` +
+          '末尾側の節id が要るなら side=tail で呼ぶこと。' +
+          '⚠中央（どちらの端からも予算の外に出る節）は、どちらの向きでも出ない。',
   });
 }

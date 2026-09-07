@@ -271,4 +271,43 @@ describe('クローンの道具に渡した引数は、長さと位置によら�
       }
     }
   });
+
+  /**
+   * ⭐ **`memory_outline` の `side` が「モデルが渡せる値」として実在することを測る。**
+   *
+   * **`tools.test.ts` の足場ではこれが測れない** —— この文書の冒頭に書いてあるとおり、
+   * あちらの `harness.call()` は `handler` を直に叩くので zod の検査を通らない。
+   * ⟹ `z.enum(MEMORY_OUTLINE_SIDES)` から `'tail'` が消えても、`handler` は無傷なので
+   * あちらの歯は全部緑のままになる。**本番は逆で、口の検査が先に走る** ⟹ 呼び手に
+   * とっては「その値は渡せない」に変わる。
+   *
+   * **これは推測ではなく実測である。** `MEMORY_OUTLINE_SIDES` を `['head']` へ落とす
+   * 変異（`packages/core/src/memory.ts` の
+   * `grep -Fn -- "['head', 'tail'] as const"` が指す1行）を当てたところ、この歯を
+   * 足す前は**全スイートが緑のまま生き残った。** ⟹ **この改修の入口そのものが
+   * 消えても、1本も落ちなかった。**
+   *
+   * **弾く側（`'middle'`）まで測る**のは、`z.enum` が `z.string()` へすり替わっても
+   * 緑にならないようにするためである（受ける側だけを測ると、**何でも受ける形が
+   * 素通りする**）。
+   */
+  it("memory_outline の side は口の検査を通って 'tail' が渡る（列挙の外は弾かれる）", async () => {
+    const rpc = await connect(createMemoryStores());
+
+    // **「記憶が無い」という応答であって、引数が弾かれたのではない。** 測るのは
+    // 「口が side=tail を通したか」だけなので、文書を作る必要が無い。
+    const tail = await callTool(rpc, 'memory_outline', { slug: 'nope', side: 'tail' });
+    expect(tail.isError).toBe(false);
+    expect(tail.text).toContain('存在しない');
+
+    // 渡さない形（既定）も通る —— `side` を optional にした分である。
+    const bare = await callTool(rpc, 'memory_outline', { slug: 'nope' });
+    expect(bare.isError).toBe(false);
+    expect(bare.text).toContain('存在しない');
+
+    // 列挙の外は口で弾かれ、どの引数が悪いかを名指しする。
+    const bad = await callTool(rpc, 'memory_outline', { slug: 'nope', side: 'middle' });
+    expect(bad.isError).toBe(true);
+    expect(bad.text).toContain('side');
+  });
 });
