@@ -1720,9 +1720,14 @@ export function describeTokenRotation(
       `${from} → 「${outcome.label}」（id ${outcome.tokenId}）。${outcome.why}\n` +
       `${describeSpread(outcome.spread)}\n` +
       // **「回った」と読ませない。** 撒いた鍵はまだ通らない。
-      `**⚠️ この鍵は ${new Date(outcome.cooldownUntil).toISOString()}${describeCooldownSource(outcome.cooldownSource)} まで通らない** — ` +
+      //
+      // **出所は時刻の直後ではなく、文の後ろへ置く**（#683）。時刻と「まで通らない」
+      // の間に差し込むと `… 13:10:00.000Z。出所は枠の resetsAt まで通らない` という
+      // 文になり、**読める文でなくなる。**
+      `**⚠️ この鍵は ${new Date(outcome.cooldownUntil).toISOString()} まで通らない** — ` +
       'それまでのターンは失敗する。撒いてあるのは「開いた瞬間にそのまま通る」ため' +
-      `である（回し手をもう一度通らずに復帰する）${tail}`
+      `である（回し手をもう一度通らずに復帰する）` +
+      `${describeCooldownSource(outcome.cooldownSource)}${tail}`
     );
   }
 
