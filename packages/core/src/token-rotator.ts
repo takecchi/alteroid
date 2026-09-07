@@ -722,7 +722,8 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
   }
 
   /**
-   * **この1件が「枠から追い返された」と言っているなら覚える**（#680）。
+   * **この1件が「枠から追い返された」と言っているなら覚える。開いたと言っているなら
+   * 忘れる**（#680）。
    *
    * **`statusNow` を見る。`facts.status` を見ない。** あちらは重ねた形なので、
    * 一度書かれた `rejected` が上書きされるまで残り続ける（`token-rotation.ts` の
@@ -734,18 +735,42 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
    *
    * **まだ一度も指名していない回は覚えない。** 紐づける相手（トークンの id）が
    * 無く、`'none'` のような鍵を作ると**どの行のものでもない事実**が溜まる。
+   *
+   * ## ⚠️ 忘れる道を塞がないこと（レビューで見つかった穴）
+   *
+   * **`rejected` を覚えるだけで忘れなかったので、開いた枠の期限が居座った。**
+   * 冷却の期限に効くので、害は次の形で出る:
+   *
+   * 1. `seven_day` が拒否され、`resetsAt` は3日先 —— 覚える
+   * 2. その枠が**先に開く**（管理者が枠を足した・プランが変わった）。観測は
+   *    `statusNow: 'allowed'` で届く
+   * 3. その後、**文言だけの拒否**（例: 5時間の枠やセッション上限）が届く
+   * 4. 覚えていた3日先がまだ未来なので、そちらが採られる ⟹ **3日冷える**
+   *
+   * ⟹ **開いたと言っている観測が届いたら、その枠の記憶を消す。**
+   * `mergeRateLimitFacts` の doc が同じ規律を逐語で書いている（「記憶が消える道は
+   * 塞がない。`status` が `'allowed'` で届けば `rejected` の記憶はそこで上書き
+   * される」）—— **あちらと同じ側に倒す。**
+   *
+   * **⚠️ `undefined`（この1件が `status` を運んでいない）で消さないこと。** 省略は
+   * 「無くなった」ではなく「何も言っていない」である（同じ doc）。
    */
   function rememberRejection(
     active: ActiveAgentToken | null,
     observation: TokenRotatorObservation,
   ): void {
-    if (active === null || observation.statusNow !== 'rejected') return;
+    if (active === null) return;
     const facts = observation.facts;
-    if (facts === undefined || cooldownUntilFrom(facts) === undefined) return;
-    rememberedRejections.set(`${active.tokenId}#${facts.kind ?? ''}`, {
-      tokenId: active.tokenId,
-      facts,
-    });
+    if (facts === undefined) return;
+    const key = `${active.tokenId}#${facts.kind ?? ''}`;
+    if (observation.statusNow === 'allowed' || observation.statusNow === 'allowed_warning') {
+      // **開いた。** 覚えていた期限は、いまの拒否を説明しない。
+      rememberedRejections.delete(key);
+      return;
+    }
+    if (observation.statusNow !== 'rejected') return;
+    if (cooldownUntilFrom(facts) === undefined) return;
+    rememberedRejections.set(key, { tokenId: active.tokenId, facts });
   }
 
   /** そのトークンについて覚えている、拒否した枠の事実（#680）。 */
@@ -788,6 +813,24 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
    * **2 を 1 より前に置かないこと。** 覚えている事実は前のターンのもので、この回の
    * 観測のほうが新しい。**3 を 1・2 より前に置かないこと** —— 文字列から読んだ値が
    * 構造化された事実を上書きする形になる。
+   *
+   * ## ⚠️ 2 は既定より**後ろ**の期限を書きうる。3 は書きえない
+   *
+   * **意図してそうしてある。読み違えないこと**（レビューでここを聞かれた）。
+   *
+   * | 経路 | 期限の質 | 既定（`at + cooldownMs`）より後ろへ行くか |
+   * | --- | --- | --- |
+   * | 1・2（枠の事実） | **権威ある値** | **行く。** `nextCooldownUntil` の `min` を通らない |
+   * | 3（文言） | 推測 | **行かない。** 窓で挟んだうえ `min` も通る |
+   *
+   * **2 で3日先が書かれるのは正しい。** 覚えているのは**その枠自身が拒否した回**の
+   * 事実だけで、しかも**まだ先の期限しか使わない** ⟹ その窓はいまも閉じている。
+   * 週の枠が尽きているなら3日冷やすのが正しく、そこへ `min` を入れると
+   * **「もう開いた」と主張することになる**（#678 が `resets` に `min` を入れなかった
+   * のと同じ理由。あちらの doc に逐語で在る）。
+   *
+   * **開いたのに居座る形だけが穴である。** それは記憶を消す側で塞いだ
+   * （{@link rememberRejection} の「忘れる道を塞がないこと」）。
    */
   async function coolDown(
     tokens: readonly AgentToken[],

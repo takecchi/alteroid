@@ -342,6 +342,76 @@ describe('#680: 文言だけの拒否でも、覚えている枠の事実から�
     expect(await cooldownOf(h, 'tok-a')).toBe(GUESS);
   });
 
+  /**
+   * **⚠️ レビューで見つかった穴。** `rejected` を覚えるだけで**忘れる道が無かった**
+   * ので、**先に開いた枠の遠い期限が居座って、後から来た別の拒否を3日冷やした。**
+   *
+   * `mergeRateLimitFacts` の doc が同じ規律を逐語で書いている（「記憶が消える道は
+   * 塞がない。`status` が `'allowed'` で届けば `rejected` の記憶はそこで上書き
+   * される」）—— あちらと同じ側へ倒す。
+   */
+  it('⚠️ 開いたと言う観測が届いたら、その枠の記憶を消す', async () => {
+    const h = harness();
+    await seedTwo(h);
+    const threeDays = Date.parse(AT) + 72 * 60 * 60_000;
+    // 1. 週の枠が拒否された（3日先）。覚える。
+    await remember(h, { kind: 'seven_day', status: 'rejected', resetsAt: threeDays });
+    // 2. その枠が**先に開いた**（管理者が枠を足した等）。
+    await h.rotator.observe({
+      facts: { kind: 'seven_day', status: 'allowed', resetsAt: threeDays },
+      statusNow: 'allowed',
+    });
+
+    // 3. その後、文言だけの拒否が届く（5時間の枠 / セッション上限の側）。
+    await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    // **3日ではなく既定へ倒れる。** 開いた枠の期限は、いまの拒否を説明しない。
+    expect(await cooldownOf(h, 'tok-a')).toBe(GUESS);
+  });
+
+  it('status を運んでいない観測では記憶を消さない（省略は「何も言っていない」）', async () => {
+    // **`undefined` で消すと、`rate_limit_event` が `status` を省いた回に
+    // 覚えたものが全部落ちる**（あの欄は普通に省略される）。
+    const h = harness();
+    await seedTwo(h);
+    await remember(h, { kind: 'five_hour', status: 'rejected', resetsAt: RESETS_AT });
+    await h.rotator.observe({ facts: { kind: 'five_hour', utilization: 90 } });
+
+    await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(await cooldownOf(h, 'tok-a')).toBe(RESETS_AT);
+  });
+
+  /**
+   * **既定より後ろの期限を書くのは正しい**（レビューで聞かれた点）。
+   *
+   * 覚えているのは**その枠自身が拒否した回**の事実で、しかも**まだ先の期限しか
+   * 使わない** ⟹ その窓はいまも閉じている。週の枠が尽きているなら3日冷やすのが
+   * 正しく、`min` を入れると「もう開いた」と主張することになる（#678）。
+   */
+  it('週の枠が閉じたままなら、既定（5時間）より後ろの期限を書く', async () => {
+    const h = harness();
+    await seedTwo(h);
+    const threeDays = Date.parse(AT) + 72 * 60 * 60_000;
+    await remember(h, { kind: 'seven_day', status: 'rejected', resetsAt: threeDays });
+
+    await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(await cooldownOf(h, 'tok-a')).toBe(threeDays);
+    // **推測ではない**ので、出所も権威ある側を名乗る。
+    const row = (await h.stores.tokens.list()).find((token) => token.id === 'tok-a');
+    expect(row?.cooldownSource).toBe('quota_reset');
+  });
+
   it('⚠️ 覚えた事実を判定へ混ぜない（signal も倒れ先も動かさない）', async () => {
     // **混ぜると `overageClosed(facts)` が古い記憶で立つ** ⟹ `signal` が
     // `quota_rejected` → `overage_closed` に化け、設定が `overage_exhausted` の
