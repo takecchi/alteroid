@@ -93,6 +93,13 @@ import {
  * { "state": "unavailable", "reason": "この認証では claude.ai の枠が無い（apiProvider: firstParty）" }
  * ```
  *
+ * **⚠️ この文言は #681 で変わった（上の JSON は 2026-09-07 の実測そのままである）。**
+ * いまの同じ器が返すのは `cause: 'undetermined'` と
+ * `枠が効かない理由を言い分けられない…` で、**「サブスクが無い」とは言わなくなった**
+ * （`usage-snapshot.ts` の `LimitsUnavailableCause`）。**⟹ 直ったのは読み手の
+ * 誤読であって、下の表の帰結は1行も直っていない** —— 判定はいまも `undecidable`
+ * である。
+ *
  * `judgeTokenCandidate` は `unavailable` を `undecidable` にする（「迷ったら
  * `unusable` にしない」）⟹ **この器では `currentVerdict` が永久に `usable` も
  * `unusable` も返さない。** 帰結:

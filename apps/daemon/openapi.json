@@ -3437,6 +3437,10 @@
                             },
                             "reason": {
                               "type": "string"
+                            },
+                            "cause": {
+                              "type": "string",
+                              "enum": ["not_logged_in", "non_first_party", "undetermined"]
                             }
                           },
                           "required": ["state", "at", "reason"]

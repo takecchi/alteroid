@@ -142,11 +142,59 @@ export const accountUsageSchema = z.object({
 export type AccountUsage = z.infer<typeof accountUsageSchema>;
 
 /**
+ * 枠が返ってこないとき、**その理由**。**3値のまま持つ**（#681）。
+ *
+ * - `not_logged_in`: まだ鍵が届いていない（`tokenSource: 'none'`）。届けば取れる
+ * - `non_first_party`: claude.ai のサブスクの枠がそもそも効かないバックエンド
+ *   （API キー / Bedrock / Vertex / gateway など）
+ * - `undetermined`: **言い分けられない。**「サブスクが無い」ではない
+ *
+ * ## なぜ `undetermined` が要るのか（#681）
+ *
+ * ここはかつて2値（`isSubscriptionImpossible` が返す真偽。#681 で消した）で、
+ * **`false` の原因を1つに潰していた。** その結果、本番の probe は
+ * `この認証では claude.ai の枠が無い（apiProvider: firstParty）` を返し続けていた
+ * ——**読んだ人間は「このアカウントは Claude のサブスクを持っていない」と読み、
+ * 実際に読み違えた**（#678 の調査。判定そのものが `undecidable` へ倒れるので、
+ * 誰も止まらないまま `recovered` が一度も出なかった）。
+ *
+ * SDK の型定義は、その欄が `false` になる原因を**4つ**挙げている（逐語。
+ * `@anthropic-ai/claude-agent-sdk@0.3.263` 同梱の `sdk.d.ts`）。
+ *
+ * [sdk-verbatim SDKControlGetUsageResponse.rate_limits_available]
+ * > False when plan rate limits do not apply (API key, Bedrock, Vertex, or missing profile scope) — rate_limits will be null.
+ *
+ * **⟹ 3つは「サブスクの枠が効かない」だが、4つ目（`missing profile scope`）は
+ * 違う。** そして `apiProvider` が `firstParty` を名乗っているなら前3つは消える
+ * （逐語。`AccountInfo.apiProvider`）。
+ *
+ * [sdk-verbatim AccountInfo.apiProvider]
+ * > Active API backend. Anthropic OAuth login only applies when "firstParty"; for 3P providers the other fields are absent and auth is external (AWS creds, gcloud ADC, etc.). "gateway" means the CLI is authenticated against an enterprise gateway.
+ *
+ * **⚠️ それでも `missing profile scope` だと断定しない。** 消去法で1つに絞れた
+ * ことと、確かめたことは別である（#681 が逐語でそう書いている）。しかも同じ
+ * `sdk.d.ts` は `subscription_type` について別のことを言っており、**そちらは
+ * 「plan が無い」を 3P 側の合図として説明している** ——
+ *
+ * [sdk-verbatim SDKControlGetUsageResponse.subscription_type]
+ * > Claude.ai subscription type ('pro', 'max', 'team', 'enterprise') or null for API key / 3P provider sessions.
+ *
+ * ⟹ `apiProvider: firstParty` と `plan: 無し` は**互いに食い違う合図**である。
+ * 食い違いを片側へ倒すのが、直そうとしている嘘そのものである。**⟹ `undetermined`。**
+ */
+export const limitsUnavailableCauseSchema = z.enum([
+  'not_logged_in',
+  'non_first_party',
+  'undetermined',
+]);
+export type LimitsUnavailableCause = z.infer<typeof limitsUnavailableCauseSchema>;
+
+/**
  * スナップショットを取れなかったこと自体を持つ器。
  *
- * **「まだ取れていない」と「取ろうとして取れなかった」と「この構成では取れない」を
- * 区別する。** 全部 `null` にすると、画面は3つとも同じ顔で見せることになり、
- * 人間もクローンも「見えていない理由」を判断できない。
+ * **「まだ取れていない」と「取ろうとして取れなかった」と「枠が返ってこない構成
+ * である」を区別する。** 全部 `null` にすると、画面は3つとも同じ顔で見せることに
+ * なり、人間もクローンも「見えていない理由」を判断できない。
  */
 export const accountUsageStateSchema = z.discriminatedUnion('state', [
   /** 一度も取りに行っていない（起動直後）。 */
@@ -159,15 +207,38 @@ export const accountUsageStateSchema = z.discriminatedUnion('state', [
     reason: z.string(),
   }),
   /**
-   * この認証では原理的に取れない（API キー / Bedrock / Vertex / 未ログイン）。
+   * 枠が返ってこない構成である（API キー / Bedrock / Vertex / 未ログイン / **理由を
+   * 言い分けられない**）。
    *
    * `reason` に何が分かっているかを入れる。**「取れない」と「使っていない」を
    * 混ぜないため**に、状態として分けてある。
+   *
+   * **⚠️ この状態は「原理的に取れない」を意味しない**（#681 で直した）。かつて
+   * この doc は「この認証では原理的に取れない」と書いていたが、**倒れ込む道の1本
+   * （{@link LimitsUnavailableCause} の `undetermined`）は原理的な不可能では
+   * ない** —— 断定できるかどうかは {@link LimitsUnavailableCause} が持つ。
    */
   z.object({
     state: z.literal('unavailable'),
     at: z.string().datetime({ offset: true }),
     reason: z.string(),
+    /**
+     * なぜ枠が返ってこないのか（{@link LimitsUnavailableCause}）。
+     *
+     * **`reason`（人間が読む1行）と別の欄である。** 文言は整形の都合で変わるが、
+     * 判定に使うのはこちらである（`judgeTokenCandidate` が言葉を選ぶのに読む）。
+     *
+     * **⚠️ 省略可能にしてあるのは、版がずれるからである。** Web UI とデーモンは
+     * 別デプロイなので、**この欄を書かない版のデーモンが返す応答を新しい画面が
+     * 読む**組み合わせが実在する（`AGENTS.md`「型で塞いだ分岐にも、実行時の
+     * 倒れ先の歯を足す」）。必須にすると、その組み合わせで `GET /usage` の応答が
+     * まるごと parse に失敗する。⟹ **無いことは「その版が言えなかった」であって、
+     * 「理由が無い」ではない。既定値で埋めないこと。**
+     *
+     * **同じプロセスの中で作る限り、必ず付く**（{@link fetchAccountUsage} は
+     * {@link classifyLimitsUnavailable} の返り値をそのまま載せる）。
+     */
+    cause: limitsUnavailableCauseSchema.optional(),
   }),
 ]);
 
@@ -279,19 +350,64 @@ export function toAccountUsage(
 }
 
 /**
- * この認証では枠が原理的に取れないと**断定できる**か。
+ * 枠が返ってこない構成か。返ってくると読めるなら `undefined`。
  *
- * **`limitsAvailable === false` だけを根拠にしないこと。** 未ログイン
- * （`tokenSource: 'none'`）でも `false` が返る（実測）が、それは「サブスクが無い」
- * ではなく「まだログインしていない」である。alteroid は鍵を走行中に回せる設計
- * なので、鍵が後から届くのは通常の状態である。ここを混ぜると、鍵が届いた後も
- * 永久に「このアカウントにはサブスクが無い」と表示し続ける。
+ * **`limitsAvailable === false` を1つの理由に潰さないこと**（#681。値の一覧と
+ * 根拠は {@link LimitsUnavailableCause}）。未ログイン（`tokenSource: 'none'`）でも
+ * `false` が返る（実測）が、それは「サブスクが無い」ではなく「まだログインして
+ * いない」である。alteroid は鍵を走行中に回せる設計なので、鍵が後から届くのは
+ * 通常の状態である。ここを混ぜると、鍵が届いた後も永久に「このアカウントには
+ * サブスクが無い」と表示し続ける。
+ *
+ * ## 順序に意味がある
+ *
+ * 1. **未ログインを最初に見る**（`isNotLoggedIn` と同じ判定を、同じ順序で通す）。
+ *    後ろに置くと、鍵が届く前の状態が `non_first_party` や `undetermined` を
+ *    名乗る
+ * 2. **バックエンドが `firstParty` 以外だと名乗っている**なら断定できる
+ * 3. 残りは**言い分けられない** —— `undetermined`
+ *
+ * **⚠️ 2 で `provider === undefined` を `non_first_party` へ倒さないこと。**
+ * 名乗っていないものは「3P である」ではない（`accountInfo` の口が答えなかった
+ * 回もここへ来る）。倒すと、この関数が観測していないことを断定する。
  */
-export function isSubscriptionImpossible(usage: AccountUsage): boolean {
-  if (usage.tokenSource === 'none') return false; // まだログインしていないだけ
+export function classifyLimitsUnavailable(usage: AccountUsage): LimitsUnavailableCause | undefined {
+  if (isNotLoggedIn(usage)) return 'not_logged_in';
   const provider = usage.apiProvider;
-  if (provider !== undefined && provider !== 'firstParty') return true;
-  return usage.limitsAvailable === false && usage.plan === undefined;
+  if (provider !== undefined && provider !== 'firstParty') return 'non_first_party';
+  if (usage.limitsAvailable === false && usage.plan === undefined) return 'undetermined';
+  return undefined;
+}
+
+/**
+ * 上の理由を、人間が読む1行にする。**断定しない側の文言は、断定しない。**
+ *
+ * **`undetermined` の文言に「サブスクが無い」と書かないこと。** これがまさに
+ * #681 が直した嘘である —— 読んだ人間が「このアカウントは Claude のサブスクを
+ * 持っていない」と読み、実際に読み違えた。
+ */
+export function describeLimitsUnavailable(
+  usage: AccountUsage,
+  cause: LimitsUnavailableCause,
+): string {
+  switch (cause) {
+    case 'not_logged_in':
+      // **「取れない」ではない。** 鍵が届けば取れる。ローカル開発や鍵の配布前は
+      // ここへ落ちるのが正常であり、異常として扱わないこと。
+      return 'claude.ai にログインしていない（鍵が届けば取れる）';
+    case 'non_first_party':
+      return `この認証では claude.ai の枠が効かない（apiProvider: ${usage.apiProvider ?? '不明'}）`;
+    case 'undetermined':
+      // **数え上げをここへ書き写さない。** 4つの原因とその出所は
+      // `LimitsUnavailableCause` の doc が持ち、あちらは `check:sdk-quotes` が
+      // 毎回当て直している。ここに写すと、写しのほうが先に腐る。
+      return (
+        '枠が効かない理由を言い分けられない' +
+        `（rate_limits_available: ${String(usage.limitsAvailable)} / apiProvider: ${usage.apiProvider ?? '不明'} / plan: ${usage.plan ?? '不明'}）` +
+        '。**「サブスクが無い」と読まないこと** —— この欄が false になる原因には' +
+        '「profile スコープの不足」（鍵を取り直せば戻りうる）が含まれる（#681）'
+      );
+  }
 }
 
 /** まだログインしていないと読めるか（＝鍵が届けば取れるようになる）。 */
@@ -423,20 +539,16 @@ export async function fetchAccountUsage(
 
   const usage = toAccountUsage(at, read.usage, read.account);
 
-  if (isNotLoggedIn(usage)) {
-    // **「取れない」ではない。** 鍵が届けば取れる。ローカル開発や鍵の配布前は
-    // ここへ落ちるのが正常であり、異常として扱わないこと。
+  // **理由を1つに潰さない**（#681）。未ログイン・3P バックエンド・言い分けられない
+  // の3つは、**判定（`judgeTokenCandidate`）が同じ `undecidable` でも、人間が次に
+  // やることが違う** —— 鍵を待つ / 何もできない / 鍵を取り直してみる。
+  const unavailable = classifyLimitsUnavailable(usage);
+  if (unavailable !== undefined) {
     return {
       state: 'unavailable',
       at,
-      reason: 'claude.ai にログインしていない（鍵が届けば取れる）',
-    };
-  }
-  if (isSubscriptionImpossible(usage)) {
-    return {
-      state: 'unavailable',
-      at,
-      reason: `この認証では claude.ai の枠が無い（apiProvider: ${usage.apiProvider ?? '不明'}）`,
+      reason: describeLimitsUnavailable(usage, unavailable),
+      cause: unavailable,
     };
   }
   if (!hasAccountUsageDetail(usage)) {

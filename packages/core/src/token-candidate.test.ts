@@ -39,13 +39,46 @@ describe('judgeTokenCandidate — 規則の表を1行ずつ固定する', () => 
     expect(result.verdict).toBe('undecidable');
   });
 
-  it('unavailable は判定できない（原理的に取れない ≠ 使えない）', () => {
+  it('unavailable は判定できない（枠が返ってこない ≠ 使えない）', () => {
     const result = judgeTokenCandidate({
       state: 'unavailable',
       at: AT,
-      reason: 'この認証では claude.ai の枠が無い（apiProvider: bedrock）',
+      reason: 'この認証では claude.ai の枠が効かない（apiProvider: bedrock）',
+      cause: 'non_first_party',
     });
     expect(result.verdict).toBe('undecidable');
+  });
+
+  /**
+   * **#681。** 理由を言い分けられない回に「原理的に取れない」と書いていた。
+   *
+   * **判定は変えない**（`undecidable` のまま。#681 の地雷「`unavailable` を
+   * `unusable` へ倒さないこと」）。測るのは**言葉が断定していないこと**である。
+   */
+  it('undetermined の回に「原理的に取れない」と書かない（判定は undecidable のまま）', () => {
+    const result = judgeTokenCandidate({
+      state: 'unavailable',
+      at: AT,
+      reason: '枠が効かない理由を言い分けられない（…）',
+      cause: 'undetermined',
+    });
+    expect(result.verdict).toBe('undecidable');
+    if (result.verdict !== 'usable') {
+      expect(result.reason).not.toContain('原理的');
+      expect(result.reason).toContain('言い分けられない');
+    }
+  });
+
+  it('理由の欄が無い回（版がずれた応答）も断定しない', () => {
+    // **無いのは「その版が言えなかった」であって、原理的に取れないと観測したの
+    // ではない**（`AccountUsageState` の `cause` の doc）。
+    const result = judgeTokenCandidate({
+      state: 'unavailable',
+      at: AT,
+      reason: '古い版のデーモンが返した文言',
+    });
+    expect(result.verdict).toBe('undecidable');
+    if (result.verdict !== 'usable') expect(result.reason).not.toContain('原理的');
   });
 
   it('ok かつ windows が空は判定できない（空は 0% ではなく「取れなかった」）', () => {

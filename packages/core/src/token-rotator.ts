@@ -409,6 +409,12 @@ export interface TokenRotator {
    *   `undecidable` にする ⟹ **その器ではこの引数が永久に効かない。**
    *   `unusable` も `usable` も来ないので、**`recovered` も一度も出ない。**
    *   ⟹ **記録を `ready` から動かせるのは `observe` だけになる。**
+   *
+   *   **⚠️ この実測の文言は #681 で変わった。** いまの同じ器は
+   *   `cause: 'undetermined'` を付け、`枠が効かない理由を言い分けられない…` を返す
+   *   （`usage-snapshot.ts` の `LimitsUnavailableCause`）。**変わったのは文言と
+   *   構造だけで、判定は `undecidable` のままである** ⟹ **この項目が言っている
+   *   帰結は1つも直っていない。** 上の実測を残してあるのは、それが証拠だからである。
    */
   reconsider(input: {
     reason: TokenReconsiderReason;

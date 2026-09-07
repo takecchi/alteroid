@@ -2,12 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import { judgeTokenCandidate } from './token-candidate.js';
 import {
+  classifyLimitsUnavailable,
+  describeLimitsUnavailable,
   describeOuterFailure,
   describeSilentChannels,
   fetchAccountUsage,
   hasAccountUsageDetail,
   isNotLoggedIn,
-  isSubscriptionImpossible,
   toAccountUsage,
 } from './usage-snapshot.js';
 import type { UsageProbeHandle, UsageProbeQuery } from './usage-probe.js';
@@ -134,18 +135,71 @@ describe('「取れない」と「まだログインしていない」を混ぜ�
     // alteroid は鍵を走行中に回せる設計なので、鍵が後から来るのは通常の状態である。
     const usage = toAccountUsage(AT, NOT_LOGGED_IN.usage, NOT_LOGGED_IN.account);
     expect(isNotLoggedIn(usage)).toBe(true);
-    expect(isSubscriptionImpossible(usage)).toBe(false);
+    // **保証は弱めていない。** かつては「`isSubscriptionImpossible` が偽」で
+    // 測っていた（＝「サブスクが無いとは言わない」）。いまは**どの理由を名乗るか**
+    // まで測るので、`non_first_party` / `undetermined` へ倒れたら落ちる（#681）。
+    expect(classifyLimitsUnavailable(usage)).toBe('not_logged_in');
   });
 
   it('Bedrock / Vertex なら本当に取れない', () => {
     const usage = toAccountUsage(AT, {}, { apiProvider: 'bedrock' });
-    expect(isSubscriptionImpossible(usage)).toBe(true);
+    expect(classifyLimitsUnavailable(usage)).toBe('non_first_party');
   });
 
   it('プラン名が取れていれば「取れない」と決めない', () => {
     const usage = toAccountUsage(AT, TEAM_WITHOUT_WINDOWS.usage, TEAM_WITHOUT_WINDOWS.account);
-    expect(isSubscriptionImpossible(usage)).toBe(false);
+    expect(classifyLimitsUnavailable(usage)).toBeUndefined();
     expect(hasAccountUsageDetail(usage)).toBe(true);
+  });
+});
+
+describe('枠が効かない理由を言い分ける（#681）', () => {
+  /**
+   * 本番（Railway、2026-09-07）が返していた形。**`apiProvider` は `firstParty` を
+   * 名乗り、プランは取れず、`rate_limits_available` が false** ——
+   * この組み合わせが「サブスクが無い」に化けていた。
+   */
+  const FIRST_PARTY_NO_LIMITS = {
+    account: { apiProvider: 'firstParty', tokenSource: 'oauth' },
+    usage: { rate_limits_available: false, rate_limits: null, subscription_type: null },
+  };
+
+  it('firstParty で枠が効かないとき「サブスクが無い」と断定しない', () => {
+    const usage = toAccountUsage(AT, FIRST_PARTY_NO_LIMITS.usage, FIRST_PARTY_NO_LIMITS.account);
+    expect(classifyLimitsUnavailable(usage)).toBe('undetermined');
+  });
+
+  it('文言に「サブスクが無い」と読める言い方を残さない', () => {
+    const usage = toAccountUsage(AT, FIRST_PARTY_NO_LIMITS.usage, FIRST_PARTY_NO_LIMITS.account);
+    const reason = describeLimitsUnavailable(usage, 'undetermined');
+    // **これが直した嘘そのものである。** 読んだ人間が「このアカウントは Claude の
+    // サブスクを持っていない」と読み、実際に読み違えた（#678 の調査 → #681）。
+    expect(reason).not.toContain('枠が無い');
+    expect(reason).toContain('言い分けられない');
+    // 判定の材料を人間が突き合わせられる形で出す（観測できた3つ）。
+    expect(reason).toContain('rate_limits_available: false');
+    expect(reason).toContain('apiProvider: firstParty');
+  });
+
+  it('3P バックエンドの文言は断定してよい（こちらは消去法ではない）', () => {
+    const usage = toAccountUsage(AT, {}, { apiProvider: 'vertex' });
+    expect(describeLimitsUnavailable(usage, 'non_first_party')).toContain('apiProvider: vertex');
+  });
+
+  it('apiProvider を名乗っていない回を non_first_party へ倒さない', () => {
+    // **観測していないことを断定しない。** `accountInfo` の口が答えなかった回も
+    // ここへ来る（`describeSilentChannels` の doc の (1) / (2)）。
+    const usage = toAccountUsage(AT, { rate_limits_available: false }, {});
+    expect(classifyLimitsUnavailable(usage)).toBe('undetermined');
+  });
+
+  it('unavailable の状態に理由の欄が付く（判定は undecidable のまま）', async () => {
+    const state = await fetchAccountUsage(probe(FIRST_PARTY_NO_LIMITS), { cwd: '/work' });
+    expect(state.state).toBe('unavailable');
+    if (state.state === 'unavailable') {
+      expect(state.cause).toBe('undetermined');
+      expect(state.reason).toContain('言い分けられない');
+    }
   });
 });
 
