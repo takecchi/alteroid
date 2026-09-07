@@ -73,10 +73,17 @@ describe('countManagerSituation', () => {
   });
 
   /**
-   * **5つの区分は分割である**——どのマネージャーもちょうど1つに入り、足すと
+   * ⭐ **6つの区分は分割である**——どのマネージャーもちょうど1つに入り、足すと
    * `total` になる。`JobStatus` の6値すべてを1度に通して確かめる。
+   *
+   * **区分は 5 → 6 になった（#688 で `lost` を `other` から分けた）。** この歯の
+   * 本体は**合計が `total` に一致すること**で、区分を足すたびにここへ1項足す
+   * ——足し忘れると合計が合わなくなって赤くなる（＝新しい区分が `total` の
+   * どこから来たのか説明できない形で入るのを防ぐ）。
+   *
+   * **`reachable` はこの和に足さない**（横断する軸である。下の歯が持つ）。
    */
-  it('5つの区分は分割で、合計は total に一致する（JobStatus 6値すべてを通す）', () => {
+  it('⭐ 6つの区分は分割で、合計は total に一致する（JobStatus 6値すべてを通す）', () => {
     const statuses: JobStatus[] = ['running', 'waiting_human', 'done', 'failed', 'lost', 'stopped'];
     const managers = [
       ...statuses.map((status, index) => summary(`live-${index}`, status, true)),
@@ -86,15 +93,55 @@ describe('countManagerSituation', () => {
     const counts = countManagerSituation(managers);
     expect(counts.total).toBe(13);
     expect(
-      counts.running + counts.waitingHuman + counts.awaitingBackground + counts.idle + counts.other,
+      counts.running +
+        counts.waitingHuman +
+        counts.awaitingBackground +
+        counts.idle +
+        counts.lost +
+        counts.other,
     ).toBe(counts.total);
     // 内訳そのものも固定する（合計だけだと、区分どうしが入れ替わっても通る）。
     expect(counts.running).toBe(2);
     expect(counts.waitingHuman).toBe(2);
     expect(counts.awaitingBackground).toBe(1);
     expect(counts.idle).toBe(1);
-    // failed / lost / stopped が6本と、`done` かつ `live: false` の1本。
-    expect(counts.other).toBe(7);
+    // **`lost` は `live` の有無に関わらず `lost` である**（`live-4` と `dead-4`）。
+    expect(counts.lost).toBe(2);
+    // failed / stopped が4本と、`done` かつ `live: false` の1本。
+    // **`lost` の2本はもうここに入らない**（#688 で分けた。以前は 7 だった）。
+    expect(counts.other).toBe(5);
+  });
+
+  /**
+   * ⭐ **`lost` が `other` から分かれたこと**を、同じ入力の中で相補的に測る
+   * （#688）。`other` が減って `lost` が増える——**片方だけを見ると、`lost` を
+   * `other` に「足した」だけの実装でも通る。**
+   */
+  it('⭐ lost は other から分かれた（other が減り、lost が増える）', () => {
+    const withoutLost = countManagerSituation([summary('a', 'failed', false)]);
+    const withLost = countManagerSituation([
+      summary('a', 'failed', false),
+      summary('b', 'lost', false),
+    ]);
+    // 基準（`lost` が1本も無い入力）。
+    expect(withoutLost.lost).toBe(0);
+    expect(withoutLost.other).toBe(1);
+    // `lost` を1本足しても `other` は増えない（＝ `else other += 1` へ落ちていない）。
+    expect(withLost.other).toBe(1);
+    expect(withLost.lost).toBe(1);
+    expect(withLost.total).toBe(2);
+  });
+
+  /**
+   * **`lost` の判定は背景処理待ちより後ろである**（`countManagerSituation` の doc）。
+   * 握り潰しの印が立ったまま `lost` へ落ちた回で、握り潰しのほうが消えない。
+   */
+  it('背景処理待ちの印が立っていれば、lost でも「背景処理待ち」に数える', () => {
+    const counts = countManagerSituation([summary('a', 'lost', false, BG)]);
+    expect(counts.awaitingBackground).toBe(1);
+    expect(counts.lost).toBe(0);
+    // 分割の性質は崩れていない。
+    expect(counts.awaitingBackground + counts.lost + counts.other).toBe(counts.total);
   });
 
   /**
@@ -120,6 +167,7 @@ describe('countManagerSituation', () => {
       waitingHuman: 0,
       awaitingBackground: 0,
       idle: 0,
+      lost: 0,
       other: 0,
       reachable: 0,
     });
@@ -196,20 +244,105 @@ describe('describeSituation', () => {
         summary('h', 'done', true, BG),
         summary('i', 'done', true, BG),
         summary('j', 'done', true),
-        summary('k', 'lost', false),
-        summary('l', 'failed', false),
+        // **`lost` を5本、`other` を6本にしてある（#688）。** 以前はどちらも
+        // 1本で、上の「どの2つも同じ数にしない」を `lost` の追加で破っていた
+        // ——`counts.lost` と `counts.other` を入れ替える変異が緑のまま通る。
+        summary('k0', 'lost', false),
+        summary('k1', 'lost', false),
+        summary('k2', 'lost', false),
+        summary('k3', 'lost', false),
+        summary('k4', 'lost', false),
+        summary('l0', 'failed', false),
+        summary('l1', 'failed', false),
+        summary('l2', 'failed', false),
+        summary('l3', 'stopped', false),
+        summary('l4', 'stopped', false),
+        summary('l5', 'done', false),
       ],
       runners: [],
     });
-    expect(text).toContain('委譲 全 12 本');
-    // 走行中3 / 返事待ち4 / 背景処理待ち2 / 手が空いている1 / その他2 —— **どの2つも
-    // 同じ数にしない**（同じ数だと、その2つを入れ替える変異が捕まらない）。
+    expect(text).toContain('委譲 全 21 本');
+    // 走行中3 / 返事待ち4 / 背景処理待ち2 / 手が空いている1 / lost 5 / その他6
+    // —— **どの2つも同じ数にしない**（同じ数だと、その2つを入れ替える変異が
+    // 捕まらない）。
     expect(text).toContain('走行中 3');
     expect(text).toContain('返事待ち 4');
     expect(text).toContain('背景処理待ち 2');
     expect(text).toContain('手が空いている 1');
-    expect(text).toContain('その他 2');
+    expect(text).toContain('戻れなかった(lost) 5');
+    expect(text).toContain('その他 6');
     expect(text).toContain('話しかけられるのは 10 本');
+  });
+
+  /**
+   * ⭐ **`lost` の本数と、次に何を確かめるかが本文に出る**（#688）。
+   *
+   * **この節は `distill` 以外の全ターンの入口に載る**（`clone.ts` の
+   * `#situationNoticeFor`）。⟹ **いちばん確実に読まれる場所で、いちばん判断が
+   * 要る状態が畳まれていた**のが直した穴である。
+   *
+   * **到達口の綴りまで測る。** 本数だけ出ても名指しできない（一覧の本文は
+   * `LIST_BUDGET` で切られる）ので、`status: ["lost"]` を渡せることが本文から
+   * 読めなければ直っていない。
+   */
+  it('⭐ lost が在れば本数と、リモートを確かめる順序と、名指しの引き方が出る', () => {
+    const text = describeSituation({
+      managers: [summary('a', 'lost', false), summary('b', 'running', true)],
+      runners: [],
+    });
+    expect(text).toContain('戻れなかった(lost) 1');
+    // 「終わった」と読ませない（この行が在る理由そのもの）。
+    expect(text).toContain('成果の有無は1度も観測していない');
+    // 名指しで引く綴り（#689 で入った到達口）。
+    expect(text).toContain('status: ["lost"]');
+    // **確かめる前に起こし直させない**（同じ仕事が2本になる）。
+    expect(text).toContain('`manager_start` で起こし直さないこと');
+  });
+
+  /**
+   * ⭐ **`lost` が 0 のときは行が出ない**（#688。`describeManagerCounts` の作法）。
+   *
+   * **残りの5区分は 0 でも出る**——だから「行が無い」は「5つを足したら `total`
+   * だった」＝ `lost` は 0、と*算術で*確定する（`describeSituation` の doc）。
+   * ⟹ AGENTS.md の地雷「取れない軸に 0 の行を作る」を踏まない。
+   */
+  it('⭐ lost が 0 のときは行も断り書きも1文字も出ない（0 の行を作らない）', () => {
+    const text = describeSituation({
+      managers: [summary('a', 'running', true), summary('b', 'failed', false)],
+      runners: [],
+    });
+    // 見出しそのものが1度も出ない（本数の欄も、断り書きの1行も）。
+    expect(text).not.toContain('戻れなかった(lost)');
+    expect(text).not.toContain('成果の有無は1度も観測していない');
+    // **残りの5区分は 0 でも出ている**（この歯の前提。消えていたら
+    // 「行が無い＝0」の算術が成り立たない）。
+    expect(text).toContain('委譲 全 2 本');
+    expect(text).toContain('走行中 1');
+    expect(text).toContain('返事待ち 0');
+    expect(text).toContain('背景処理待ち 0');
+    expect(text).toContain('手が空いている 0');
+    expect(text).toContain('その他 1');
+  });
+
+  /**
+   * ⭐ **「その他」の説明文から `lost` を外した**（#688）。
+   *
+   * 畳んでいたあいだ、この一文が「`lost` は終端したものである」と読ませていた
+   * ——`lost` は終端の値だが、**成果の有無を観測していないのはこれだけ**で、
+   * `failed` / `stopped` と同じ袋に入れると「終わったもの」として読み飛ばされる。
+   */
+  it('⭐ 「その他」の説明文に lost が入っていない（failed / stopped だけを名指しする）', () => {
+    const text = describeSituation({
+      managers: [summary('a', 'failed', false)],
+      runners: [],
+    });
+    // **対象をスコープして測る**（AGENTS.md「対象をスコープして特定する」）——
+    // 全文で `not.toContain('lost')` を撃つと、`lost` の本数の行や器の state に
+    // 当たって、測りたいものと別のところで落ちる。
+    const note = text.split('\n').find((line) => line.includes('「その他」は終端したもの'));
+    expect(note, '「その他」の説明文が見つからない').toBeDefined();
+    expect(note).toContain('（failed / stopped）');
+    expect(note).not.toContain('lost');
   });
 
   /**

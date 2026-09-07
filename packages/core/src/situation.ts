@@ -1,3 +1,7 @@
+// **`lost` の判定はここで書き下ろさない**（#688）。`isManagerInFlight` の隣に
+// 置いた同じ形の述語から取る——`manager_list` の並び（`tools.ts`）も同じものを
+// 見るので、2箇所に `status === 'lost'` を書くと *分け方* が割れる（あちらの doc）。
+import { isManagerAwaitingJudgement } from './digest.js';
 import type { ManagerSummary } from './manager.js';
 import type { RunnerLiveness } from './runner-protocol.js';
 import type { CooldownSource } from './token-pool.js';
@@ -59,11 +63,57 @@ import type { CooldownSource } from './token-pool.js';
 const SITUATION_HEAD = '[system] いまの全体';
 
 /**
- * 委譲の数え上げ。**5つの区分は同じ1回の数え上げの「分割」である**——どの
+ * `lost` の区分の見出し（#688）。**`status` の綴りを括弧で添える。**
+ *
+ * ここを読んだクローンが次にやるのは `manager_list status:["lost"]` である
+ * （#689 で入った到達口）。**引数に渡す綴りが本数の隣に無いと、日本語の見出しから
+ * `status` の値を推測することになる。**
+ */
+const LOST_LABEL = '戻れなかった(lost)';
+
+/**
+ * `lost` が1本以上あるときだけ出す1行（#688）。**本数の直後に置く。**
+ *
+ * ## この行が答える問いは「終わったか」ではなく「確かめたか」である
+ *
+ * `lost` が観測したのは「前のセッションへ戻れなかった」の1点だけで、**成果が
+ * リモート（PR・ブランチ・コミット）まで届いていることがある**（`schema.ts` の
+ * `jobStatusSchema` の doc / `digest.ts` の `isManagerAwaitingJudgement` の doc に
+ * 出典。実際に、落ちる1分半前に PR をマージまで済ませていた1本が `lost` になった）。
+ * ⟹ **人間・クローンがリモートを確かめるまで終われない。**
+ *
+ * ## ⚠️ 「起こし直せ」と書かないこと
+ *
+ * 確かめる前に `manager_start` を撃つと**同じ仕事が2本になる**（`manager_list` の
+ * `lost` の行が同じ順序で言っている）。だからここが名指しするのは
+ * **確かめる順序**までで、その先の判断は書かない（このファイル冒頭「指図を書かない」）。
+ *
+ * ## なぜ本数ではなく到達口を書くのか
+ *
+ * 本数だけを出すと、**名指しできない**。`manager_report` は `managerId` を要求
+ * するが、`manager_list` の本文は文字数の予算（`LIST_BUDGET`）で切られるので、
+ * 古い `lost` の id は本文に出ないことがある（#688 の実測: 台帳 10,000 本で
+ * 本文に出たのは 12 件）。**`status` で絞れば予算より前に効く**（#689）ので、
+ * 絞りの綴りをここで渡す。
+ */
+const LOST_NOTICE =
+  `**${LOST_LABEL} は「終わった」ではない。** 見ているのは「前のセッションへ戻れたか」だけで、` +
+  '**成果の有無は1度も観測していない** — 落ちる前にリモート（PR・ブランチ・コミット）まで' +
+  '届いていた実例がある。⟹ 誰かがそこを確かめるまで終われない。' +
+  '名指しで引くなら `manager_list` に status: ["lost"] を渡す（絞りは文字数の予算より前に効くので、' +
+  '古いものも本文に出る）。中身は `manager_report <managerId>` で読める。' +
+  '**確かめる前に `manager_start` で起こし直さないこと** — 同じ仕事が2本になる。';
+
+/**
+ * 委譲の数え上げ。**6つの区分は同じ1回の数え上げの「分割」である**——どの
  * マネージャーもちょうど1つに入り、合計は `total` に一致する。
  *
+ * **区分は 5 → 6 になった（#688 で `lost` を `other` から分けた）。** 数を足す
+ * ときは、この doc の「6つ」と歯（`situation.test.ts` の合計の歯）も一緒に直す
+ * こと——**合計が `total` に一致するという性質そのものが、この型の契約である。**
+ *
  * `reachable`（話しかけられる）だけは**分割ではなく横断する軸**である。
- * 走行中でも返事待ちでも `live` は立ちうるので、他の5つと足し合わせないこと。
+ * 走行中でも返事待ちでも `live` は立ちうるので、他の6つと足し合わせないこと。
  */
 export interface ManagerSituationCounts {
   readonly total: number;
@@ -88,9 +138,29 @@ export interface ManagerSituationCounts {
    * （このファイル冒頭の「空き枠を作らない」）。
    */
   readonly idle: number;
-  /** 上の4つのどれでもないもの（終端したもの・`done` だが話しかけられないもの）。 */
+  /**
+   * **判断待ち**（`status === 'lost'`。#688）。`other` から分けてある。
+   *
+   * **これは「終わった」ではない。** `lost` が観測したのは「前のセッションへ
+   * 戻れなかった」の1点だけで、**成果の有無は1度も見ていない**——落ちる直前に
+   * PR をマージまで済ませていた実例が在る（`digest.ts` の
+   * `isManagerAwaitingJudgement` の doc に出典）。⟹ 人間・クローンがリモートを
+   * 確かめるまで終われない。
+   *
+   * **だから `failed` / `stopped` と同じ袋に入れない。** あの2つに「成果の有無を
+   * 観測していない」という記述は repo 内に0件で、`lost` だけが持つ。
+   */
+  readonly lost: number;
+  /**
+   * 上の5つのどれでもないもの（`failed` / `stopped` と、`done` だが
+   * 話しかけられないもの）。
+   *
+   * **`lost` はもうここに入らない**（#688 で分けた）。畳んでいたあいだ、
+   * `lost` の本数は**どの面からも読めなかった**——毎ターン載るこの節では
+   * `other` に潰れ、`describeManagerCounts`（`tools.ts`）は1度も数えていなかった。
+   */
   readonly other: number;
-  /** `live` が立っているもの（**上の5つと足し合わせない**。横断する軸である）。 */
+  /** `live` が立っているもの（**上の6つと足し合わせない**。横断する軸である）。 */
   readonly reachable: number;
 }
 
@@ -103,12 +173,23 @@ export interface ManagerSituationCounts {
  * 実行するので、握り潰された回の `status` は必ず `'done'` へ潰れている——
  * `status` を先に見ると、この区分が `idle`（手が空いている）へ吸い込まれて
  * **この節が答えようとしている問いそのものが消える。**
+ *
+ * **`lost`（判断待ち）は背景処理待ちより後ろで見る（#688）。** 理由は同じ
+ * 順序の話である——握り潰しの印が立っている委譲は、`status` が何であっても
+ * まず「背景処理待ち」として数える。`lost` を先に見ると、印が立ったまま
+ * `lost` へ落ちた回で握り潰しのほうが消える。
+ *
+ * **`other` の直前に置いてある**のは、`lost` が `other` から**切り出した**もの
+ * だと読める順にするためである（`idle` との前後は結果を変えない——`lost` は
+ * 定義上 `done` ではないので、どちらの順でも同じ数になる。**入れ替えても緑に
+ * なるので、この順序そのものは歯では測れていない**）。
  */
 export function countManagerSituation(managers: readonly ManagerSummary[]): ManagerSituationCounts {
   let running = 0;
   let waitingHuman = 0;
   let awaitingBackground = 0;
   let idle = 0;
+  let lost = 0;
   let other = 0;
   let reachable = 0;
   for (const manager of managers) {
@@ -117,6 +198,7 @@ export function countManagerSituation(managers: readonly ManagerSummary[]): Mana
     else if (manager.status === 'running') running += 1;
     else if (manager.status === 'waiting_human') waitingHuman += 1;
     else if (manager.status === 'done' && manager.live) idle += 1;
+    else if (isManagerAwaitingJudgement(manager.status)) lost += 1;
     else other += 1;
   }
   return {
@@ -125,6 +207,7 @@ export function countManagerSituation(managers: readonly ManagerSummary[]): Mana
     waitingHuman,
     awaitingBackground,
     idle,
+    lost,
     other,
     reachable,
   };
@@ -154,11 +237,29 @@ export function countRunnerStates(
  *
  * ## 0 を書く軸と、書かない軸（軸ごとに規則が違う）
  *
- * **委譲の行は 0 でも全部書く。** 5つの区分は同じ1回の数え上げの分割で、合計
- * （`全 N 本`）も並んでいるので、「0 と書いた」を「数えていない」と読む余地が
- * 無い。そして**「手が空いている」の行を消すと、この節が在る理由そのものが
- * 消える**——0件でも必ず1行出す `describeInboxBacklog`（`tools.ts`）が #562 で
- * 直したのと同じ形で、行が無いことは「機能が無い」と同じ顔になる。
+ * **委譲の5区分は 0 でも全部書く。** `走行中` / `返事待ち` / `背景処理待ち` /
+ * `手が空いている` / `その他` は同じ1回の数え上げの分割で、合計（`全 N 本`）も
+ * 並んでいるので、「0 と書いた」を「数えていない」と読む余地が無い。そして
+ * **「手が空いている」の行を消すと、この節が在る理由そのものが消える**——0件でも
+ * 必ず1行出す `describeInboxBacklog`（`tools.ts`）が #562 で直したのと同じ形で、
+ * 行が無いことは「機能が無い」と同じ顔になる。
+ *
+ * **`lost`（判断待ち）だけは、0 のときに書かない（#688）。** 同じ分割の6つ目
+ * なのに規則が違うので、理由を2つ置く:
+ *
+ * 1. **「行が無い」は「0 だった」と*算術で*確定する。** 残りの5区分は 0 でも
+ *    必ず出るので、その5つを足して `total` に一致すれば `lost` は 0 である。
+ *    ⟹ 器の行（合計しか出ないので内訳は導けない）と違い、ここでは
+ *    **「数えていない」と読む余地が構造的に無い。** これが `describeManagerCounts`
+ *    （`tools.ts`）の「0 の行は作らない」を、この節でも安全に採れる理由である
+ * 2. **この行は本数ではなく*次の一手*を伝える行である。** `lost` の 0 は
+ *    「確かめるものが1つも無い」＝ 判断が1つも変わらない。**毎ターン載る節に
+ *    変わらない行を足すと、変わる行が読まれなくなる**（器の行を 0 で並べない
+ *    のと同じ規則）
+ *
+ * **⚠️ この規則を残りの5区分へ広げないこと。** あちらは「いまの状態」の軸で、
+ * 0 そのものが判断材料である（「手が空いているのが 0 本」は読む価値がある）。
+ * こちらは「判断待ちの待ち行列の長さ」で、0 は空である。
  *
  * **器の行は、0 の state を書かない。** こちらは `RunnerLiveness` の6値ぜんぶを
  * 毎ターン並べると、行が「state の一覧」に化けて実際に居る state が読みにくく
@@ -358,16 +459,35 @@ export function describeSituation(input: {
     .join(' / ');
   return block([
     `${SITUATION_HEAD}（数えた材料だけ。ここから何をするかは決めない）。`,
+    // **`lost` の区分だけ 0 のとき出さない**（上の doc の2つの理由）。残りの5つは
+    // 0 でも出るので、5つを足して `total` に一致すれば `lost` は 0 だと*算術で*
+    // 読める——**「数えていない」と読む余地が構造的に無い。**
+    //
+    // **`その他` の直前に置く。** `lost` はそこから切り出したものなので、隣に
+    // 並んでいれば「その他が減って lost が増えた」と読める。
     `委譲 全 ${counts.total} 本: 走行中 ${counts.running} / 返事待ち ${counts.waitingHuman} / ` +
       `背景処理待ち ${counts.awaitingBackground} / 手が空いている ${counts.idle} / ` +
+      (counts.lost === 0 ? '' : `${LOST_LABEL} ${counts.lost} / `) +
       `その他 ${counts.other}。話しかけられるのは ${counts.reachable} 本。`,
+    // **本数の直後に置く（#688）。** この節は `distill` 以外の全ターンの入口に
+    // 載る（`clone.ts` の `#situationNoticeFor`）ので、**いちばん確実に読まれる
+    // 場所**である。数と、そこから何を確かめるかを離すと、数だけが読まれる。
+    //
+    // **0 のときは1文字も出さない**（行そのものが無い。上の doc の理由2）。
+    // **指図は書かない**（このファイル冒頭「指図を書かない」）——書いてあるのは
+    // 「この数が何を意味しないか」と、名指しで引く口の名前までである。
+    ...(counts.lost === 0 ? [] : [LOST_NOTICE]),
     `器 ${input.runners.length} 台${runnerBreakdown === '' ? '' : `: ${runnerBreakdown}`}。`,
     '**「手が空いている」は「空き枠」ではない** — この器に定員は無いので、' +
       '置けるかどうかはここでは答えていない。' +
       '**「背景処理待ち」は器が名乗った分だけである** — この印を送らない古い器では、' +
       '待っていても「手が空いている」側に数える。' +
       '**「走行中」は「進んでいる」ではない。**' +
-      '「その他」は終端したもの（failed / lost / stopped）と、done だが話しかけられないものである。' +
+      // **`lost` をここから外した（#688）。** 畳んでいたあいだ、この一文が
+      // 「lost は終端したものである」と読ませていた——`lost` は終端の値だが、
+      // **成果の有無を観測していない**のはこれだけで、`failed` / `stopped` と
+      // 同じ袋に入れると「終わったもの」として読み飛ばされる。
+      '「その他」は終端したもの（failed / stopped）と、done だが話しかけられないものである。' +
       '個別の状態は `manager_list` / `runner_list` で見る。',
     // **鍵の行は最後に置く。** 数えた材料（委譲・器）の後に、判断を縛る不変条件が
     // 来る順にしてある（{@link describeTokenSituation}）。**省略した呼びでは出ない。**

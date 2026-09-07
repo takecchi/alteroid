@@ -25,7 +25,12 @@ import { assertNeverRunnerLegStatus } from './runner-protocol.js';
 // doc に実害の詳細がある）。
 // **`isManagerInFlight` も同じ理由で同じ場所から取る**——あちらは字面ではなく
 // **群の分け方**（走行中・返事待ちを先に出す側か）の唯一の生成元である。
-import { describeManagerState, describeSessionMissingKind, isManagerInFlight } from './digest.js';
+import {
+  describeManagerState,
+  describeSessionMissingKind,
+  isManagerAwaitingJudgement,
+  isManagerInFlight,
+} from './digest.js';
 import {
   describeDroppedTraceEmpty,
   describeDroppedTraceOrigin,
@@ -97,6 +102,7 @@ import type {
   ChatStreamEvent,
   Commitment,
   CommitmentOrigin,
+  JobStatus,
   JournalEntry,
   MemoryDocumentMeta,
   MemoryProtectionStatus,
@@ -4269,7 +4275,9 @@ export function createCloneTools(context: ToolContext) {
           '（確認は届いていて、クローンがまだ答えていないだけの正常な状態である）。',
         // **並びを名乗る（#688 の3 を直した）。** ここに書いてある順序と実装が食い違うと、
         // クローンは「出ていない＝無い」と読む。実装が実際にやっていることだけを書く。
-        '走行中・返事待ち（running / waiting_human）を先に出し、そのあとに終端したもの（done / failed / lost / stopped）を出す。' +
+        '走行中・返事待ち（running / waiting_human）を先に出し、次に lost（前のセッションへ戻れなかったもの。' +
+          '成果がリモートに届いているかを誰も確かめていない＝判断待ちである）、' +
+          'そのあとに残りの終端（done / failed / stopped）を出す。' +
           '各群の中は startedAt の新しい順である。',
         'status で状態を絞れる（省略すると絞らない）。先頭の件数の行は**絞る前の全体**を出すので、絞っても全体の実像は消えない。',
         // **`[]` の倒し方はクローンが読む面にも書く。** JSDoc に書いてもクローンには
@@ -4323,7 +4331,8 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // **走行中・返事待ちを先に出す（#688 の3）。** `ManagerPool.list()` の並びは
+        // **走行中・返事待ち → lost → その他の3群で出す（#688）。**
+        // `ManagerPool.list()` の並びは
         // `startedAt` の降順で、**稼働状態を1度も見ていない**（逐語:
         // `grep -Fn -- 'return [...known.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt));' packages/core/src/manager.ts`）。
         // ⟹ 終端した委譲が溜まると、走行中・返事待ちが文字数の予算
@@ -4341,9 +4350,22 @@ export function createCloneTools(context: ToolContext) {
         // 窓から落ちない」ことだけで、押し出された終端の全件を辿る継続点は
         // **足さない**（#662 が持つ。あの Issue は「継続点を足す前に並びの向きを
         // 決めるのが先だ」と書いていて、これがその並びの側である）。
-        // **#688 の1（`lost` の知らせが1回しか出ない）と2（日報の期間フィルタから
-        // `lost` が消える）は、ここでは直していない。** `lost` は終端なので、
-        // この並べ替えでは前へ出ない —— **浮かび上がらせるのは別の直しである。**
+        //
+        // **`lost` は第2群として前へ出す（#688）。** かつてここには「`lost` は
+        // 終端なので、この並べ替えでは前へ出ない」と書いてあった——**それが穴の
+        // 本体だった。** `lost` は終端の値だが、成果の有無を1度も観測していない
+        // ので**確かめるまで終われない**（`digest.ts` の
+        // `isManagerAwaitingJudgement` の doc に出典）。⟹ 終端の袋に入れたまま
+        // だと、判断が要るものが古い側から窓の外へ落ちる。
+        //
+        // **#688 の1（知らせが1回しか出ない）は、ここでも直していない。**
+        // 再通知は作らない——`manager_message` は束ねられないので、`lost` の
+        // 本数がそのままクローンのターン数になる（`manager.ts` の
+        // 「きっかり7ターン」の実測）。代わりに**本数を必ず読める場所**
+        // （`describeManagerCounts` と `situation.ts` の節）へ置いた。
+        //
+        // **日報（#688 の2）は1バイトも変えていない。** `isManagerInFlight` へ
+        // `lost` を足すと `MAX_ITEMS` の枠を食う（同じ doc）。
         const attention = [...managers].sort(compareManagerAttention);
         // **絞りは文字数の予算より前に当てる。** 予算の後に当てると、絞りに
         // 当たらない行が窓を食い尽くし、狙った行が窓の外へ落ちる——#418 の穴の
@@ -4603,7 +4625,8 @@ export function createCloneTools(context: ToolContext) {
                     (filtering
                       ? `status: ${status.join(',')} に絞った ${total} 件のうち ${shown} 件を出した`
                       : `全 ${total} 件`) +
-                    '）。走行中・返事待ちを先に出し、各群の中は startedAt の新しい順である。' +
+                    '）。走行中・返事待ちを先に出し、次に lost（判断待ち）、そのあとに残りを出す。' +
+                    '各群の中は startedAt の新しい順である。' +
                     '**省略されたのは終端したもの（またはより古いもの）の側である。**',
                 }),
             '（依頼と報告は抜粋。全文は manager_report <managerId> で取れる）',
@@ -5360,8 +5383,44 @@ export function createCloneTools(context: ToolContext) {
 }
 
 /**
- * `manager_list` の並び。**走行中・返事待ちを先に、各群の中は `startedAt` の
- * 新しい順**（#688 の3）。
+ * `manager_list` の並びの群（#688）。**小さいほど先に出る。**
+ *
+ * **3群である** — 走行中・返事待ち（0）→ `lost`（1）→ その他（2）。各群の中は
+ * `startedAt` の新しい順（{@link compareManagerAttention}）。
+ *
+ * ## 群の判定を2つの述語から組み立てる（`status` を直に見ない）
+ *
+ * どちらも `digest.ts` の export である——`isManagerInFlight`（「いまの状態」）と
+ * `isManagerAwaitingJudgement`（「判断待ち」＝ `lost`）。**この関数の中に
+ * `status === 'lost'` を書かない**理由は後者の doc に在る（`situation.ts` の
+ * `countManagerSituation` も同じ分け方を使うので、書き下ろすと *分け方* が割れる）。
+ *
+ * ## ⚠️ 2つを1つの述語に畳まないこと
+ *
+ * `isManagerInFlight` へ `lost` を足せばこの関数は2群で済むが、**あれは日報が
+ * 共有する正本で、日報側は `MAX_ITEMS` で `slice` する**——`lost` が第1群へ
+ * 移ると枠を食って最近終わった委譲が押し出される（#689 が `manager_list` で
+ * 直した穴と同じ形を日報に作る）。**群の数はこの一覧の側の判断であって、
+ * 述語の側の判断ではない。**
+ *
+ * ## 数値を返すのは、群が3つになったからである
+ *
+ * 2群のときは `boolean` の比較で足りた。3つ以上を `if` の連鎖で比べると、
+ * **どの2つの比較が抜けても「並ばない」ではなく「たまたま並ぶ」になる**
+ * （入力の順序に依存する）。順位を数にすれば、比較は1回の引き算に閉じる。
+ */
+function managerAttentionRank(status: JobStatus): 0 | 1 | 2 {
+  if (isManagerInFlight(status)) return 0;
+  // **`lost` は終端だが、その他の終端より先に出す（#688）。** 成果の有無を
+  // 観測していないので、**確かめるまで終われない**——予算（`LIST_BUDGET`）で
+  // 切られる窓から落ちると、id が本文に出ず `manager_report` で名指しもできない。
+  if (isManagerAwaitingJudgement(status)) return 1;
+  return 2;
+}
+
+/**
+ * `manager_list` の並び。**走行中・返事待ち → `lost` → その他の3群で、各群の中は
+ * `startedAt` の新しい順**（#688）。
  *
  * **なぜ一覧の側で並べ直すのか。** `ManagerPool.list()` は `startedAt` の降順で、
  * 稼働状態を1度も見ていない（逐語:
@@ -5376,10 +5435,10 @@ export function createCloneTools(context: ToolContext) {
  * `compareManagerPagingKey`）と、`order` を足さないという判断（同じファイルの
  * `managersQuery` の doc）である。**直す場所はこの一覧の中だけである。**
  *
- * **群の判定は `isManagerInFlight`（`digest.ts`）から取る。** 日報の
- * 「マネージャー」節が同じ分け方を持っており、2箇所に書き下ろすと*分け方*が
- * 割れる（`describeManagerState` を1箇所に閉じたのと同じ理由。あちらの doc は
- * 字面が割れて実害が出た経緯を持つ）。
+ * **群の判定は `digest.ts` の述語から取る**（{@link managerAttentionRank}）。
+ * 日報の「マネージャー」節が第1群と同じ分け方を持っており、2箇所に書き下ろすと
+ * *分け方*が割れる（`describeManagerState` を1箇所に閉じたのと同じ理由。あちらの
+ * doc は字面が割れて実害が出た経緯を持つ）。
  *
  * **各群の中の `startedAt` 降順は明示する。** 入力（`list()` の並び）が既に
  * そうなっているので `0` を返しても現状では同じ結果になるが、その暗黙の依存を
@@ -5387,9 +5446,8 @@ export function createCloneTools(context: ToolContext) {
  * 判断——安全側の並べ替えを、読めば分かる場所に書いておく）。
  */
 function compareManagerAttention(a: ManagerSummary, b: ManagerSummary): number {
-  const aInFlight = isManagerInFlight(a.status);
-  const bInFlight = isManagerInFlight(b.status);
-  if (aInFlight !== bInFlight) return aInFlight ? -1 : 1;
+  const rank = managerAttentionRank(a.status) - managerAttentionRank(b.status);
+  if (rank !== 0) return rank;
   return b.startedAt.localeCompare(a.startedAt);
 }
 
@@ -5423,6 +5481,20 @@ function compareManagerAttention(a: ManagerSummary, b: ManagerSummary): number {
  * **0 の行は作らない**（AGENTS.md の地雷表）。無い区分は書かない——
  * 「切断 0本」と書くと、切断を観測して 0 だったのか、そもそも数えていない
  * のかが読めなくなる。
+ *
+ * ## `lost`（判断待ち）の本数をここで出す（#688）
+ *
+ * **ここは予算に切られない場所である**（上の「切られない場所に置くこと」）。
+ * ⟹ **一覧の本文から古い `lost` が落ちても、本数だけは必ず読める。** 畳んで
+ * いたあいだ、`lost` の本数は**どの面からも読めなかった**——この関数は1度も
+ * 数えておらず、毎ターン載る `situation.ts` の節では `other` に潰れていた。
+ *
+ * **本数の隣に `status: ["lost"]` の綴りを置く。** ここを読んだ次の一手は
+ * 「名指しで引く」なので、絞りの引数が本数から離れていると、日本語の見出しから
+ * `status` の値を推測することになる（`situation.ts` の `LOST_LABEL` と同じ理由）。
+ *
+ * **これも 0 の行は作らない。** `lost` が 0 本なのか数えていないのかは、
+ * 上の3区分と同じ規則で読ませる——**在るときだけ書く。**
  */
 function describeManagerCounts(managers: readonly ManagerSummary[]): string {
   const live = managers.filter((m) => m.live).length;
@@ -5443,12 +5515,28 @@ function describeManagerCounts(managers: readonly ManagerSummary[]): string {
   if (sessionMissing > 0) parts.push(`runner にセッションが無い ${sessionMissing} 本`);
   const waiting = managers.filter((m) => m.status === 'waiting_human').length;
   if (waiting > 0) parts.push(`返事待ち ${waiting} 本`);
+  // **判断待ち（`lost`）の本数（#688）。同上、0 の行は作らない。**
+  // 判定は `digest.ts` の述語から取る（`status === 'lost'` を書き下ろすと、
+  // `situation.ts` と *分け方* が割れる。あちらの doc を参照）。
+  const lost = managers.filter((m) => isManagerAwaitingJudgement(m.status)).length;
+  if (lost > 0) parts.push(`戻れなかった(lost) ${lost} 本`);
   return (
     `件数: ${parts.join(' / ')}。話しかけられる委譲は全体で ${live} 本である。` +
     '**「走行中」は「進んでいる」ではない** — 宛先の器が黙って消えても ' +
     'status は running のままで、それを終端へ動かす経路はデーモンに無い。' +
     'いま何本動いているかを数えるなら、走行中の本数ではなく' +
-    '「話しかけられる」ほうを見ること。'
+    '「話しかけられる」ほうを見ること。' +
+    // **`lost` が在るときだけ足す1文（#688）。** 本数だけを出すと、それが
+    // 「終わった本数」と読まれる——`lost` は成果の有無を観測していないので、
+    // **確かめるまで終われない側である。** 名指しで引く綴りも一緒に置く
+    // （絞りは文字数の予算より前に効く。#689）。
+    (lost === 0
+      ? ''
+      : ' **「戻れなかった(lost)」は「終わった」ではない** — 前のセッションへ戻れたかだけを' +
+        '見ていて、成果がリモート（PR・ブランチ・コミット）まで届いていることがある。' +
+        'この一覧の本文は文字数の予算で切れるので、名指しで引くなら status: ["lost"] を渡すこと' +
+        '（絞りは予算より前に効く）。**確かめる前に manager_start で起こし直さないこと** — ' +
+        '同じ仕事が2本になる。')
   );
 }
 
