@@ -6,6 +6,7 @@ import {
   commitmentUpdatedAt,
   describeManagerState,
   describeSessionMissingKind,
+  jobStatusSchema,
   usageLayerSchema,
   usageSiteSchema,
   type Commitment,
@@ -42,6 +43,7 @@ export async function chatCommand(): Promise<void> {
   // 直前に一覧したもの。番号で引けるようにするため覚えておく。
   const listed: Listed = {
     approvals: [],
+    managerAnchors: {},
     commitments: [],
     conversations: [],
     managers: [],
@@ -228,7 +230,10 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /journal [件数] [q=<語>]  日誌（新しい順）。q= はそれ以降の行末までを1つの語として扱う
 /conversations [limit=<N>] [scan=<N>]  会話の一覧（新しい順、番号付き）
 /conversation <番号|id> [scan=<N>]  その会話の中身（古い順。番号は /conversations の並び）
-/managers            マネージャーの一覧（番号付き）と状態
+/managers [status=<s1,s2>] [limit=<N>] [after=<番号|id>]  マネージャーの一覧（番号付き）と状態
+                     status= は ${jobStatusSchema.options.join(' / ')} のカンマ区切り。
+                     limit= と after= で古い側へ頁を辿る（after= は直前の /managers に
+                     出た番号か id）。何も付けなければ全件（従来どおり）
 /manager <番号|id>    そのマネージャーのセッション生ログ（番号は /managers の並び）
 /stop <番号|id> [理由]  その仕事だけをやめさせる（止めた事実は日誌に残る）
 /waiting             マネージャーの返事待ち一覧（番号付き）
@@ -274,8 +279,22 @@ export interface Listed {
   approvals: string[];
   commitments: string[];
   conversations: string[];
-  /** `/managers` の並び。`/manager` `/stop` `/msg` が引く。 */
+  /** `/managers` の並び。`/manager` `/stop` `/msg` `/managers after=` が引く。 */
   managers: string[];
+  /**
+   * `/managers` の直前の一覧に出た行の錨（`managerId` → `startedAt`）。
+   * `/managers after=<番号|id>` が引く（issue #670）。
+   *
+   * **`managers` へ相乗りさせず独立に持つ**（この interface の doc の規律）。
+   * あちらは `string[]`（`resolveListedId` が番号を引くための並び）で、
+   * ここは順序を要らない引き当てである——`GET /managers` の錨は
+   * `(afterId, afterStartedAt)` の**組**なので、`managerId` だけでは続きの
+   * 起点が決まらない（`apps/daemon/src/app.ts` の `ManagerPagingKey`）。
+   *
+   * **`startedAt` を人間に打たせない**ためにここが在る。ミリ秒精度の ISO を
+   * 手で写させる形は、CLI にだけ「打ち間違えると 400」という段差を作る。
+   */
+  managerAnchors: Record<string, string>;
   /** `/waiting` の並び。`/reply` `/allow` `/deny` が引く。 */
   waiting: { managerId: string; requestId: string }[];
 }
@@ -657,22 +676,64 @@ export async function runSlashCommand(
       return 'ok';
     }
 
+    /**
+     * マネージャーの一覧（issue #670）。
+     *
+     * **台帳（`jobs`）に行を消す口が無い**ので、ここは「その環境で今までに
+     * 起こした委譲の総数」を毎回出す口だった。**直し方は「消す」ではなく
+     * 絞り込みと窓である**——上限で古いものを刈る形は north_star 禁止2 に触れる
+     * （`packages/core/src/manager.ts` の `#retire` の doc が逐語で禁じている）。
+     *
+     * **`status=` / `limit=` / `after=` を1つも渡さなければ、応答は従来と
+     * 1バイト違わない**（あの口の opt-in は生のクエリで判定される）。既定を
+     * 絞らないのは Web と同じ判断で、**到達できない行を作らない**ためである。
+     */
     case '/managers': {
+      const parsed = parseManagerFilters(rest);
+      if (!parsed.ok) {
+        stdout.write(`${parsed.message}\n`);
+        return 'ok';
+      }
+      // **錨は組で渡す**（`afterId` だけでは 400）。`startedAt` は人間に打たせず
+      // 直前の一覧から引く（`Listed.managerAnchors` の doc）。
+      let anchor: { afterId: string; afterStartedAt: string } | undefined;
+      if (parsed.after !== undefined) {
+        const afterId = resolveListedId(parsed.after, listed.managers);
+        const afterStartedAt = afterId === null ? undefined : listed.managerAnchors[afterId];
+        if (afterId === null || afterStartedAt === undefined) {
+          // **「直前の一覧に無い」と言う。** id を直に書いても、その行が直前の
+          // 一覧に出ていなければ `startedAt` が手元に無く、錨を組めない。
+          stdout.write(
+            `[${parsed.after}] は直前の /managers の一覧にありません` +
+              '（after= には直前に出た番号か id を指してください）\n',
+          );
+          return 'ok';
+        }
+        anchor = { afterId, afterStartedAt };
+      }
+
       const response = await client.managers.$get({
-        // **窓は渡さない**（issue #670。渡さなければ応答は1バイトも変わらない
-        // ＝この呼びの挙動は何も変えていない。CLI へ窓を通すかは別 issue で、
-        // ここは 型の追随だけである。`ManagerListItem` の doc）。
-        query: {},
+        query: { ...parsed.query, ...(anchor ?? {}) },
       });
       if (!response.ok) {
-        stdout.write('マネージャーの一覧を読めませんでした\n');
+        // **400 の本文をそのまま出す。** この口は3つの理由で断る（知らない
+        // `status` / 錨の片割れ / 指す行が見当たらない）ので、ひとまとめの
+        // 一言に畳むとどれなのかが読めなくなる——次の一手が決まらない。
+        stdout.write(`マネージャーの一覧を読めませんでした — ${await errorDetail(response)}\n`);
         return 'ok';
       }
       const { managers } = await response.json();
       // **番号を振る。** `/manager` `/stop` `/msg` がこの並びを引く（#336）。
       listed.managers.length = 0;
       listed.managers.push(...managers.map((entry) => entry.managerId));
+      // **錨も同じ一覧から作り直す**（`after=` が引く）。前の一覧の分を残すと、
+      // いま画面に出ていない行を起点にできてしまい、番号と錨が食い違う。
+      for (const key of Object.keys(listed.managerAnchors)) delete listed.managerAnchors[key];
+      for (const entry of managers) listed.managerAnchors[entry.managerId] = entry.startedAt;
       stdout.write(`${renderManagerList(managers)}\n`);
+      // **切ったなら黙らない**（`renderManagersWindowNote` の doc）。
+      const note = renderManagersWindowNote(managers.length, parsed.query);
+      if (note !== null) stdout.write(note);
       return 'ok';
     }
 
@@ -685,9 +746,23 @@ export async function runSlashCommand(
      */
     case '/waiting': {
       const response = await client.managers.$get({
-        // **窓は渡さない**（issue #670。渡さなければ応答は1バイトも変わらない
-        // ＝この呼びの挙動は何も変えていない。CLI へ窓を通すかは別 issue で、
-        // ここは 型の追随だけである。`ManagerListItem` の doc）。
+        /**
+         * **ここは窓も絞りも渡さない（issue #670）。意図である。**
+         *
+         * この一覧が数えているのは「マネージャー」ではなく `waiting`（1件の
+         * 確認）で、**件数を決めるのは台帳に積まれた委譲の総数ではなく、いま
+         * 未回答の確認の数である**——`/managers` を膨らませていた「終端した
+         * 委譲も残る」がここには効かない（終端した行の `waiting` は空）。
+         *
+         * **`status=waiting_human` で絞らない。** 絞れば速くなるが、
+         * 「`waiting` が空でない行の `status` は必ず `waiting_human`」を
+         * **確かめていない**——`ask` は両方を立て（`record.job.status =
+         * 'waiting_human'`）、`settled` と `abort()` は両方を畳むが、
+         * `done` / `failed` / `lost` へ落ちる経路が `waiting` を空にしている
+         * かは追っていない。⟹ 絞ると、**人間が答えれば進む確認が黙って
+         * 一覧から消えうる**（north_star 禁止1）。「判定できない」を
+         * 「消してよい」へ倒さない側に置く。
+         */
         query: {},
       });
       if (!response.ok) {
@@ -1289,9 +1364,11 @@ const LIST_DENIED_TOOLS = 3;
  * `dist/types/client/types.d.ts`）の `U extends ClientResponse<infer O, ...>`
  * が union の上では解けなくなった。**200 を名指しすれば元の1本に戻る。**
  *
- * **これは型の追随であって、CLI に窓を足したのではない**（下の
- * `$get({ query: {} })` も同じ）。CLI とクローンの `manager_list` へ窓を通すかは
- * 別 issue である（#432 の受け入れ条件5の踏襲）。
+ * **`/managers` は窓を使う側になった**（issue #670 の続き。`status=` / `limit=` /
+ * `after=` を受ける。`parseManagerFilters`）。**`/waiting` は使わない**——理由は
+ * そちらの `query: {}` の doc に在る（絞ると答えれば進む確認が消えうる）。
+ * **クローンの `manager_list` はいまも窓を持たない**。あちらは並びの向きを
+ * 決めることが先なので #662 が持っている。
  */
 type ManagerListItem = InferResponseType<DaemonClient['managers']['$get'], 200>['managers'][number];
 type ManagerDenial = NonNullable<ManagerListItem['denials']>[number];
@@ -1712,6 +1789,130 @@ function parseUsageFilters(tokens: string[]): ParsedUsageFilters {
 function resolveListedId(reference: string, listed: string[]): string | null {
   if (/^\d+$/.test(reference)) return listed[Number(reference) - 1] ?? null;
   return reference;
+}
+
+/**
+ * 失敗した応答から、人間に見せる理由を1行取り出す（issue #670）。
+ *
+ * **デーモンが書いた文をそのまま使う。** `/managers` の 400 は3種類あり、
+ * どれも「次に何を打てばよいか」まで書いてある（`apps/daemon/src/app.ts` の
+ * `parseManagerStatuses` の呼び出し側と錨の実在検査）。CLI 側で言い換えると
+ * その案内が消えるうえ、断り方が増えたときにここだけ古くなる。
+ *
+ * **読めなければ状態コードだけを言う**——`access.ts` / `profile.ts` /
+ * `login.ts` が既に同じ倒し方をしている（`typeof body.error === 'string'`）。
+ * **黙って空文字を返さない**（理由が無いのと、理由が読めないのを混ぜない）。
+ */
+async function errorDetail(response: { status: number; json: () => Promise<unknown> }) {
+  try {
+    const body: unknown = await response.json();
+    if (typeof body === 'object' && body !== null && 'error' in body) {
+      const { error } = body as { error?: unknown };
+      if (typeof error === 'string' && error.length > 0) return error;
+    }
+  } catch {
+    // 本文が JSON でない（プロキシの HTML 等）。状態コードへ倒す。
+  }
+  return `HTTP ${response.status}（理由は読めませんでした）`;
+}
+
+/** `/managers [status=…] [limit=…] [after=…]` を解いた結果（issue #670）。 */
+export type ParsedManagerFilters =
+  | {
+      ok: true;
+      /**
+       * `GET /managers` へそのまま渡す絞り込みと窓の大きさ。**1つも無ければ
+       * `$get` へ渡るクエリは空になり、応答は従来と1バイト違わない**（あの口の
+       * opt-in は生のクエリで判定される。`apps/daemon/src/app.ts` の `optedIn`）。
+       */
+      query: { status?: string; limit?: string };
+      /**
+       * 錨の**参照**（番号か id）。`startedAt` はここには無い——組にするのは
+       * `Listed.managerAnchors` を引ける呼び出し側の仕事である（そちらの doc）。
+       */
+      after?: string;
+    }
+  | { ok: false; message: string };
+
+/**
+ * `/managers` の絞り込みと窓を解く（issue #670）。
+ *
+ * **`status=` の値の集合は core の schema だけが持つ**（`parseUsageFilters` の
+ * `narrowUsageAxis` と同じ理由——chat 側に書き写すと札が増えたときにここだけ
+ * 古くなる）。**読めない値は 400 を待たずにその場で「どれを指定すればよいか」を
+ * 返す。** デーモンも同じ検査を持っているので、これは二重の門であって唯一の
+ * 門ではない（`apps/daemon/src/app.ts` の `parseManagerStatuses`）。
+ *
+ * **`limit=` は検査しない。** 範囲（1〜1000）を持つのはデーモンの側で、ここに
+ * 数を書き写すと片方だけ動いたときに CLI が「通るはずの値」を拒む側になる。
+ * 落ちたら 400 の本文をそのまま出す（`/managers` のハンドラ）。
+ *
+ * **`after=` は錨の *片方* しか受け取らない。** 残りの `startedAt` は
+ * `Listed.managerAnchors` から引く（そちらの doc）ので、この関数は文字列を
+ * 解くだけで、引き当ての失敗は呼び出し側が言う。
+ */
+export function parseManagerFilters(tokens: string[]): ParsedManagerFilters {
+  const raw = parseKeyValueTokens(tokens);
+
+  if (raw.status !== undefined) {
+    // **空の要素（`status=a,,b`）は落とす。** デーモンの `parseManagerStatuses`
+    // が同じ落とし方をするので、ここで知らない値として数えると CLI だけが
+    // 断る形になる。
+    const unknown = raw.status
+      .split(',')
+      .filter((value) => value.length > 0)
+      .filter((value) => !jobStatusSchema.safeParse(value).success);
+    if (unknown.length > 0) {
+      return {
+        ok: false,
+        message:
+          `status= に知らない値が入っています: ${unknown.join(', ')}` +
+          `（使えるのは ${jobStatusSchema.options.join(' / ')}）`,
+      };
+    }
+  }
+
+  return {
+    ok: true,
+    query: {
+      ...(raw.status === undefined ? {} : { status: raw.status }),
+      ...(raw.limit === undefined ? {} : { limit: raw.limit }),
+    },
+    ...(raw.after === undefined ? {} : { after: raw.after }),
+  };
+}
+
+/**
+ * 窓がいっぱいだったことと、続きの打ち方を出す（issue #670）。
+ *
+ * **言えるのは「要求した上限とちょうど同じ件数が返った」という1つの事実だけ
+ * である**——`GET /managers` は封筒（`total` / `nextCursor`）を持たないので、
+ * 残りが何件かも、そもそも残っているかも言えない（`noteIfAtLimit` の doc が
+ * 同じ線を引いている）。**黙って切らないためだけに出す。**
+ *
+ * **`noteIfAtLimit` を使わずに別に持つ理由は、続きの打ち方まで出すことである。**
+ * 錨は「直前の一覧の最後の番号」なので、この一覧の件数がそのまま次の `after=`
+ * になる——`/conversation <番号|id> scan=<N>` と同じで、次の一手を人間に
+ * 組み立てさせない。**`status=` は打たれた字面をそのまま繰り返す**（絞りを
+ * 外した命令を案内すると、続きを読んだつもりで別の一覧へ移る）。
+ *
+ * `limit=` を渡していないときは `null`（窓を掛けていないので、切れていない）。
+ */
+export function renderManagersWindowNote(
+  count: number,
+  query: { status?: string; limit?: string },
+): string | null {
+  const { limit, status } = query;
+  if (limit === undefined) return null;
+  // **`Number(limit)` が NaN なら黙る。** 読めない値はデーモンが 400 で断る側
+  // なので、ここへ来たなら数として通っている——それでも `!==` は NaN で必ず
+  // 真になり、切れていない一覧に注記を付けてしまう。
+  if (!Number.isFinite(Number(limit)) || count !== Number(limit)) return null;
+  const statusPart = status === undefined ? '' : ` status=${status}`;
+  return (
+    `limit=${limit} 件ちょうど返った。これより古い委譲が残っているかもしれない（判定できない）。\n` +
+    `  続きは /managers${statusPart} limit=${limit} after=${count}\n`
+  );
 }
 
 /** `/reply` `/allow` `/deny` の宛先解決の結果。 */
