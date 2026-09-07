@@ -1,18 +1,33 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import type { Ctx, EmbeddingSpaceId, MemoryId, MemoryStatus, VectorStore } from "@mnemora/core";
+import type {
+  Ctx,
+  EmbeddingSpaceId,
+  MemoryId,
+  MemoryStatus,
+  ProvenanceKind,
+  VectorStore,
+} from "@mnemora/core";
 
 /**
  * `prepareMemoryId` が用意する Memory の属性。指定しなかった属性が何になるかは
  * adapter の裁量に委ねる（`packages/testkit` の `buildNewMemoryFixture` 相当の既定値、
  * 具体的には `status: "active"` / `subjectId: null` / `decayFloorAt` は
- * `defaultDecayStrategy.floorAt` の計算結果、を想定しているが、この適合テストの
- * `filter` の歯は指定した属性だけを見るため、他の既定値には依存しない）。
+ * `defaultDecayStrategy.floorAt` の計算結果、`provenance.kind` は `"imported"`、を
+ * 想定しているが、この適合テストの `filter` の歯は指定した属性だけを見るため、
+ * 他の既定値には依存しない）。
+ *
+ * **`provenanceKind` に `"stated"`/`"inferred"` を渡さないこと。** この2つは
+ * `memories` の CHECK 制約（`packages/postgres/migrations/0001_init.sql:68`）により
+ * `source_observation_id` を実在の Observation に向けなければならず、この適合テストの
+ * フィクスチャはそこまで用意していない（ADR 0056）。この適合テストが実際に使うのは
+ * その制約を要らない kind（`"imported"`/`"consolidated"` など）に限る。
  */
 export interface PrepareMemoryIdAttrs {
   status?: MemoryStatus;
   subjectId?: string;
   decayFloorAt?: Date;
+  provenanceKind?: ProvenanceKind;
 }
 
 export interface VectorStoreConformanceOptions {
@@ -50,8 +65,8 @@ const space: EmbeddingSpaceId = { provider: "test", model: "fixture-model", dime
  * `VectorStore` の適合テスト（docs/architecture.md §5.2）。
  *
  * ここで検査するのは `VectorStore` の基本契約——upsert/search/delete の往復、
- * テナント分離、limit の遵守、そして `filter`（`status`/`subjectId`/`decayFloorAtAfter`）が
- * 実際に効くこと（ADR 0034）——である。`EXPLAIN` で HNSW 索引が使われることの検査
+ * テナント分離、limit の遵守、そして `filter`（`status`/`subjectId`/`decayFloorAtAfter`/`excludeProvenanceKinds`）が
+ * 実際に効くこと（ADR 0034、`excludeProvenanceKinds` は ADR 0056）——である。`EXPLAIN` で HNSW 索引が使われることの検査
  * （roadmap.md 段階2の完了条件）は pgvector 固有の関心事であり、`packages/postgres` 側の
  * テスト（生 SQL・`EXPLAIN` を直接扱う）に置く。
  */
@@ -278,6 +293,85 @@ export function describeVectorStoreConformance(options: VectorStoreConformanceOp
 
       expect(ids).toContain(matchingId);
       expect(ids).not.toContain(otherId);
+    });
+
+    // -------------------------------------------------------------------
+    // filter.excludeProvenanceKinds（ADR 0056）: status とは向きが逆の「除外」の列挙。
+    // 使う kind は CHECK 制約を要らないもの（"imported"/"consolidated"）に限る
+    // （`PrepareMemoryIdAttrs` の doc コメント参照）。
+    // -------------------------------------------------------------------
+
+    it("filter.excludeProvenanceKinds: 配列に在る kind の Memory は返らず、無い kind の Memory は返る", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const excludedId = await prepareMemoryId(ctx, { provenanceKind: "consolidated" });
+      const keptId = await prepareMemoryId(ctx, { provenanceKind: "imported" });
+
+      await store.upsert(ctx, space, excludedId, [1, 0, 0]);
+      await store.upsert(ctx, space, keptId, [1, 0, 0]);
+
+      const hits = await store.search(ctx, space, [1, 0, 0], {
+        limit: 10,
+        filter: { tenantId: "tenant-1", excludeProvenanceKinds: ["consolidated"] },
+      });
+      const ids = hits.map((hit) => hit.memoryId);
+
+      expect(ids).not.toContain(excludedId);
+      expect(ids).toContain(keptId);
+    });
+
+    it("filter.excludeProvenanceKinds: [] は no-op（status: [] とは非対称——両方とも返る）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const idA = await prepareMemoryId(ctx, { provenanceKind: "consolidated" });
+      const idB = await prepareMemoryId(ctx, { provenanceKind: "imported" });
+
+      await store.upsert(ctx, space, idA, [1, 0, 0]);
+      await store.upsert(ctx, space, idB, [1, 0, 0]);
+
+      const hits = await store.search(ctx, space, [1, 0, 0], {
+        limit: 10,
+        filter: { tenantId: "tenant-1", excludeProvenanceKinds: [] },
+      });
+      const ids = hits.map((hit) => hit.memoryId);
+
+      expect(ids).toContain(idA);
+      expect(ids).toContain(idB);
+    });
+
+    it("filter.excludeProvenanceKinds は他の filter（status）と AND になる", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const passesBothId = await prepareMemoryId(ctx, {
+        status: "active",
+        provenanceKind: "imported",
+      });
+      const excludedByProvenanceId = await prepareMemoryId(ctx, {
+        status: "active",
+        provenanceKind: "consolidated",
+      });
+      const excludedByStatusId = await prepareMemoryId(ctx, {
+        status: "archived",
+        provenanceKind: "imported",
+      });
+
+      await store.upsert(ctx, space, passesBothId, [1, 0, 0]);
+      await store.upsert(ctx, space, excludedByProvenanceId, [1, 0, 0]);
+      await store.upsert(ctx, space, excludedByStatusId, [1, 0, 0]);
+
+      const hits = await store.search(ctx, space, [1, 0, 0], {
+        limit: 10,
+        filter: {
+          tenantId: "tenant-1",
+          status: ["active"],
+          excludeProvenanceKinds: ["consolidated"],
+        },
+      });
+      const ids = hits.map((hit) => hit.memoryId);
+
+      expect(ids).toContain(passesBothId);
+      expect(ids).not.toContain(excludedByProvenanceId);
+      expect(ids).not.toContain(excludedByStatusId);
     });
 
     it("filter.decayFloorAtAfter: 境界と*ちょうど同じ* decayFloorAt は除外され、境界より後は返る（狭義の `>`）", async () => {

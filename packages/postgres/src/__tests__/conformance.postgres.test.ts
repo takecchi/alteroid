@@ -8,7 +8,7 @@ import {
   describeTenantSettingsStoreConformance,
   describeVectorStoreConformance,
 } from "@mnemora/testkit";
-import { buildNewMemoryFixture } from "@mnemora/testkit";
+import { buildNewMemoryFixture, buildProvenanceFixture } from "@mnemora/testkit";
 import { PostgresMemoryStore } from "../memory-store.js";
 import { PostgresVectorStore } from "../vector-store.js";
 import { PostgresEventStore } from "../event-store.js";
@@ -86,6 +86,9 @@ describeVectorStoreConformance({
         ...(attrs?.status !== undefined ? { status: attrs.status } : {}),
         ...(attrs?.subjectId !== undefined ? { subjectId: attrs.subjectId } : {}),
         ...(attrs?.decayFloorAt !== undefined ? { decayFloorAt: attrs.decayFloorAt } : {}),
+        ...(attrs?.provenanceKind !== undefined
+          ? { provenance: buildProvenanceFixture(attrs.provenanceKind) }
+          : {}),
       }),
     );
     return memory.id;

@@ -69,6 +69,17 @@ export class PostgresVectorStore implements VectorStore {
     if (opts.filter.subjectId !== undefined) {
       conditions.push(sql`m.subject_id = ${opts.filter.subjectId}`);
     }
+    // ADR 0056: 空配列は no-op（`VectorFilter.excludeProvenanceKinds` の doc 参照）。
+    // `length > 0` で番わないと `<> ALL('{}')` という無駄な条件が出る——常に真になり実害は
+    // 無いが（`<> ALL` は空配列に対して真）、`EXPLAIN` を読みにくくするので出さない。
+    if (
+      opts.filter.excludeProvenanceKinds !== undefined &&
+      opts.filter.excludeProvenanceKinds.length > 0
+    ) {
+      conditions.push(
+        sql`m.provenance_kind <> ALL(${sql.param(opts.filter.excludeProvenanceKinds)}::text[])`,
+      );
+    }
     const whereClause = sql.join(conditions, sql` AND `);
 
     // ORDER BY には距離演算子の結果をそのまま昇順で置く（式にしない。docs/recall.md §3）。

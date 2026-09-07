@@ -2,6 +2,7 @@ import type { Ctx } from "../ctx.js";
 import type { EmbeddingSpaceId } from "../embedding.js";
 import type { MemoryId } from "../ids.js";
 import type { MemoryStatus } from "../memory.js";
+import type { ProvenanceKind } from "../provenance.js";
 
 /**
  * `search` の `filter` は索引で表現できる形（等値・単調な範囲比較）に限る
@@ -11,16 +12,20 @@ import type { MemoryStatus } from "../memory.js";
  * 「絞ってもよいが絞らなくてもよい」という緩い契約ではない——`packages/testkit` の
  * `vector-store-conformance.ts` がこれを adapter 非依存の歯として検査する
  * （`status` に無いものは返らない・一致しない `subjectId` は返らない・
- * `decayFloorAtAfter` 以前のものは返らない、を同一の適合テストで postgres / in-memory
- * 両方に対して走らせる）。
+ * `decayFloorAtAfter` 以前のものは返らない・`excludeProvenanceKinds` に在る kind は
+ * 返らない、を同一の適合テストで postgres / in-memory 両方に対して走らせる）。
  *
  * **⚠ 後段の多層防御は、ここの全フィールドを覆ってはいない。**
- * `packages/core/src/recall-runtime.ts` は段1のあとに `subjectId`（と period・
- * `excludeProvenanceKinds`）を改めて見るが、**`status` と `decayFloorAtAfter` は見ない**。
- * ⟹ `status` については、ここの契約を adapter が守ることが**唯一の防衛線**である
- * （実測: `FakeVectorStore` の `status` の絞りを落とす変異で、`recall-pipeline.test.ts` の
- * 既存の歯が実際に赤くなる。`subjectId` を落とす変異では赤くならない——後段が救うため）。
- * 後段フィルタが在ることは、どの場合も「filter を無視してよい」ことの根拠ではない。
+ * `packages/core/src/recall-runtime.ts` は段1のあとに `subjectId`・`excludeProvenanceKinds`
+ * （と、`VectorFilter` に無い period）を改めて見るが、**`status` と `decayFloorAtAfter` は
+ * 見ない**。⟹ `status` と `decayFloorAtAfter` については、ここの契約を adapter が守ることが
+ * **唯一の防衛線**である（実測: `FakeVectorStore` の `status` の絞りを落とす変異で、
+ * `recall-pipeline.test.ts` の既存の歯が実際に赤くなる。`subjectId` を落とす変異では
+ * 赤くならない——後段が救うため）。`subjectId` と `excludeProvenanceKinds` は後段にも
+ * 同じ絞りが残るので、adapter がこの契約を落としても後段が結果の正しさを救う
+ * （ADR 0056）——ただしこれは「段1で絞らなくてよい」ことの根拠ではない。段1の絞りは
+ * over-fetch の窓（k'）を無駄にしないための最適化であり、後段フィルタが在ることは、
+ * どの場合も「filter を無視してよい」ことの根拠ではない。
  */
 export interface VectorFilter {
   tenantId: string;
@@ -39,6 +44,25 @@ export interface VectorFilter {
    * 事情が異なる（`docs/recall.md` が指摘する partial index の離散値向き制約は period 側の話）。
    */
   subjectId?: string;
+  /**
+   * **除外**の列挙である（ADR 0056）。**上の `status` とは向きが逆**——`status` は
+   * 「この配列に*在る*ものだけ通す」包含の列挙だが、`excludeProvenanceKinds` は
+   * 「この配列に*在る*ものを落とす」除外の列挙。`RecallQuery.excludeProvenanceKinds`
+   * （`packages/core/src/recall.ts`）と同じ語彙・同じ向きに揃えてある。
+   *
+   * `ProvenanceKind` は5値の閉じた離散値であり、`provenance_kind` は独立の列
+   * （`packages/postgres/migrations/0001_init.sql`）なので等値比較で足りる——
+   * 上のクラス doc の「索引で表現できる形」にそのまま当たる。`period` のような
+   * 連続値の範囲比較とは事情が異なる（ADR 0023 が `period` を段1に降ろさなかった理由は
+   * ここには当たらない。詳細は ADR 0056）。
+   *
+   * **⚠ `undefined` と空配列 `[]` はどちらも no-op（何も除外しない）。** これは
+   * 上の `status` とは非対称である——`status: []` は SQL の `= ANY('{}')` に翻訳され
+   * *何にも一致しない*（全件を除外する）が、`excludeProvenanceKinds: []` は
+   * 「除外する kind が0個」という意味であり全件を通す。適合テストの歯
+   * （`vector-store-conformance.ts`）がこの非対称を固定している。
+   */
+  excludeProvenanceKinds?: ProvenanceKind[];
 }
 
 export interface VectorHit {

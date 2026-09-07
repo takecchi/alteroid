@@ -256,11 +256,14 @@ export async function runRecall(
         tenantId: ctx.tenantId,
         status: ["active", "contested"],
         subjectId: scope.subjectId,
+        excludeProvenanceKinds: validatedQuery.excludeProvenanceKinds,
       },
       // ADR 0011: decayFloorAtAfter は Phase 1 では読み取りフィルタに使わない。
-      // subjectId は等値一致なので段1に降ろす（マネージャー決定）。period は連続値の範囲比較
-      // であり partial index の離散値向き制約（docs/recall.md 133行目）に関わる設計判断が
-      // 要るため、今回は含めない——Phase 1 の scope に残したまま後段フィルタのみで扱う。
+      // subjectId は等値一致なので段1に降ろす（ADR 0023）。excludeProvenanceKinds も
+      // 離散5値の独立列への等値比較なので同じ理由で段1に降ろす（ADR 0056）。period は
+      // 連続値の範囲比較であり partial index の離散値向き制約（docs/recall.md 133行目）に
+      // 関わる設計判断が要るため、今回も含めない——Phase 1 の scope に残したまま
+      // 後段フィルタのみで扱う（ADR 0023 の却下理由がそのまま生きている）。
     });
     candidateGenerationExecuted = true;
   }
@@ -293,11 +296,16 @@ export async function runRecall(
   for (const hit of annHits) {
     const memory = memoriesById.get(hit.memoryId);
     if (!memory) continue; // getMany は存在しない/クロステナントの id を静かに落とす契約。
-    // subjectId は段1の filter にも渡している（上）が、ここでも改めて見る。二重に見えるが
-    // 意図的——`VectorStore` は「絞ってもよいが絞らなくてもよい」派生索引であり
-    // （interfaces/vector-store.ts の doc）、正しさの責任は常にこの後段にある。
-    // `InMemoryVectorStore`（testkit）は filter を無視するプレースホルダなので、
-    // ここを削ると core の契約そのものが壊れる。段1の絞りは正しさのためではなく、
+    // subjectId と excludeProvenanceKinds は段1の filter にも渡している（上）が、ここでも
+    // 改めて見る。二重に見えるが意図的——`VectorFilter` の各フィールドは adapter が
+    // 実際に適用しなければならない契約だが（ADR 0034）、正しさの責任は後段にも置く
+    // 多層防御として残す（ADR 0034 の「採らなかった案」節、ADR 0056）。
+    // ⚠ この段2のコメントは以前「InMemoryVectorStore は filter を無視するプレースホルダ
+    // なので、ここを削ると core の契約そのものが壊れる」と書いていたが、その根拠は
+    // ADR 0034 で `InMemoryVectorStore` が filter を実際に適用するよう直された時点で
+    // 事実でなくなった（ADR 0034 が「コメントの更新は別途必要」と書き残していた分。
+    // ADR 0056 で更新）。多層防御を残す理由そのものは変わっていない——上の
+    // 現在の根拠に差し替えただけである。段1の絞りは正しさのためではなく、
     // over-fetch の窓（k'）を無駄にしないための最適化に過ぎない。
     if (scope.subjectId !== undefined && memory.subjectId !== scope.subjectId) continue;
     const effectiveTime = memory.occurredAt ?? memory.recordedAt;

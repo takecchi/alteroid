@@ -8,7 +8,7 @@ import { describeMemoryStoreConformance } from "../memory-store-conformance.js";
 import { describeOutboxStoreConformance } from "../outbox-store-conformance.js";
 import { describeTenantSettingsStoreConformance } from "../tenant-settings-store-conformance.js";
 import { describeVectorStoreConformance } from "../vector-store-conformance.js";
-import { buildNewMemoryFixture } from "../test-data.js";
+import { buildNewMemoryFixture, buildProvenanceFixture } from "../test-data.js";
 import { InMemoryEventStore } from "../__fixtures__/in-memory-event-store.js";
 import { InMemoryMemoryStore } from "../__fixtures__/in-memory-memory-store.js";
 import { InMemoryOutboxStore } from "../__fixtures__/in-memory-outbox-store.js";
@@ -98,6 +98,9 @@ describeVectorStoreConformance({
         ...(attrs?.status !== undefined ? { status: attrs.status } : {}),
         ...(attrs?.subjectId !== undefined ? { subjectId: attrs.subjectId } : {}),
         ...(attrs?.decayFloorAt !== undefined ? { decayFloorAt: attrs.decayFloorAt } : {}),
+        ...(attrs?.provenanceKind !== undefined
+          ? { provenance: buildProvenanceFixture(attrs.provenanceKind) }
+          : {}),
       }),
     );
     return memory.id;

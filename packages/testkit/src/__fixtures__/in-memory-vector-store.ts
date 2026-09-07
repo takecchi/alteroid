@@ -156,6 +156,14 @@ export class InMemoryVectorStore implements VectorStore {
         // `m.decay_floor_at > ${decayFloorAtAfter}` と揃える。
         continue;
       }
+      // ADR 0056: 除外の列挙（status とは向きが逆）。`undefined`/空配列は no-op
+      // （`VectorFilter.excludeProvenanceKinds` の doc 参照）。
+      if (
+        opts.filter.excludeProvenanceKinds !== undefined &&
+        opts.filter.excludeProvenanceKinds.includes(memory.provenance.kind)
+      ) {
+        continue;
+      }
       hits.push({ memoryId: entry.memoryId, distance: cosineDistance(query, entry.vector) });
     }
     hits.sort((a, b) => a.distance - b.distance);

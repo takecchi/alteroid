@@ -1,5 +1,11 @@
 import { defaultDecayStrategy } from "@mnemora/core";
-import type { NewMemory, NewMemoryEvent, NewObservation } from "@mnemora/core";
+import type {
+  NewMemory,
+  NewMemoryEvent,
+  NewObservation,
+  Provenance,
+  ProvenanceKind,
+} from "@mnemora/core";
 
 /**
  * 適合テスト（および testkit 自身の自己テスト）で使う、妥当な `NewMemory` のひな型。
@@ -34,6 +40,34 @@ export function buildNewMemoryFixture(overrides: Partial<NewMemory> = {}): NewMe
     embeddingStatus: "pending",
   };
   return { ...base, ...overrides };
+}
+
+/**
+ * `ProvenanceKind` から、その kind に妥当な `Provenance` フィクスチャを組み立てる
+ * （ADR 0056）。`vector-store-conformance.ts` の `excludeProvenanceKinds` の歯が使う。
+ *
+ * **`"stated"`/`"inferred"` は意図的にサポートしない。** `memories` の CHECK 制約
+ * （`packages/postgres/migrations/0001_init.sql:68`、
+ * `CHECK (provenance_kind NOT IN ('stated','inferred') OR source_observation_id IS NOT NULL)`）
+ * により、この2つは実在する Observation を指す `source_observation_id` を要求する——
+ * このフィクスチャはそこまで用意しない（`buildNewMemoryFixture` の `sourceObservationId`
+ * 既定値は `null`）。実在の Observation を紐づけたいテストは、この関数を使わず個別に
+ * `Provenance` を組み立てること。
+ */
+export function buildProvenanceFixture(kind: ProvenanceKind): Provenance {
+  switch (kind) {
+    case "consolidated":
+      return { kind: "consolidated", sources: ["fixture-source-memory"] };
+    case "reflected":
+      return { kind: "reflected" };
+    case "imported":
+      return { kind: "imported", batchId: "fixture-batch" };
+    case "stated":
+    case "inferred":
+      throw new Error(
+        `buildProvenanceFixture: "${kind}" is not supported — it requires a real sourceObservationId (CHECK constraint). See the doc comment.`,
+      );
+  }
 }
 
 export function buildNewObservationFixture(

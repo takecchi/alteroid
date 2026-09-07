@@ -68,3 +68,4 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0053](./0053-set-embedding-status-does-not-roll-back-ready.md) | `setEmbeddingStatus` は `ready` を `failed` へ巻き戻さない（no-op。例外にしない） | 採用 (2026-09) |
 | [0054](./0054-idempotent-create-from-the-insert-decision.md) | 擬似実装の `created` は挿入の決定そのものから出す——判定と挿入の間に `await` を挟まない | 採用 (2026-09) |
 | [0055](./0055-extraction-prompt-subject-and-inference-not-added.md) | 抽出プロンプトに「主語を復元する1文」も「推論を生成する1文」も足さない——実 API 18 run で測った結果と、その代償 | 採用 (2026-09) |
+| [0056](./0056-exclude-provenance-kinds-in-ann-stage.md) | 段1の ANN クエリで `excludeProvenanceKinds` を絞る（`period` は今回も降ろさない） | 採用 (2026-09) |

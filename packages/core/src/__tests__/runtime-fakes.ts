@@ -686,6 +686,15 @@ export class FakeVectorStore implements VectorStore {
         // 狭義の `>`（境界とちょうど同じものは除外）。この意味論は変えていない。
         continue;
       }
+      // ADR 0056: 除外の列挙（status とは向きが逆）。`undefined`/空配列は no-op
+      // （`VectorFilter.excludeProvenanceKinds` の doc 参照。`InMemoryVectorStore` と
+      // 同じ意味論）。
+      if (
+        opts.filter.excludeProvenanceKinds !== undefined &&
+        opts.filter.excludeProvenanceKinds.includes(memory.provenance.kind)
+      ) {
+        continue;
+      }
       hits.push({ memoryId: entry.memoryId, distance: cosineDistance(query, entry.vector) });
     }
     hits.sort((a, b) => a.distance - b.distance);
