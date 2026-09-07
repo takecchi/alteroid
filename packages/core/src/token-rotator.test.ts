@@ -371,6 +371,111 @@ describe('#680: 文言だけの拒否でも、覚えている枠の事実から�
   });
 });
 
+/**
+ * **#682**: 覚えている事実も無い回に、文言に書かれている時刻を使う。
+ *
+ * **#680 の残りがここである** —— その鍵について `rate_limit_event` が1件も
+ * 届いていなければ覚えるものが無く、いまも既定へ倒れる。
+ */
+describe('#682: 文言に書かれている時刻を使う', () => {
+  /** 本番の実測の形（#682 の本文の逐語）。`10:10pm (Asia/Tokyo)` = `13:10Z`。 */
+  const OBSERVED = "You've hit your session limit · resets 10:10pm (Asia/Tokyo)";
+
+  /** 時計を本番の実測の瞬間に合わせた足場（`AT` は 03:00Z で、窓に入らない）。 */
+  function harnessAt(at: string): Harness {
+    const h = harness();
+    // `harness()` の時計は `AT` 固定なので、この試験だけ差し替える。
+    const stores = h.stores;
+    const rotator = createTokenRotator({
+      stores,
+      probe: { probe: async () => ({ verdict: 'usable' }) },
+      spread: { spread: async () => [{ target: 'runner-primary', ok: true }] },
+      now: () => new Date(Date.parse(at)),
+    });
+    return { ...h, rotator };
+  }
+
+  async function seedAt(h: Harness, at: string): Promise<void> {
+    await h.stores.tokens.replace([
+      { id: 'tok-a', label: 'first', value: 'value-a', order: 0 },
+      { id: 'tok-b', label: 'second', value: 'value-b', order: 1 },
+    ]);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: at });
+  }
+
+  async function cooldownOf(h: Harness, id: string) {
+    const row = (await h.stores.tokens.list()).find((token) => token.id === id);
+    return { until: row?.cooldownUntil, source: row?.cooldownSource };
+  }
+
+  it('文言の時刻を採り、出所を notice_text と記録する', async () => {
+    const at = '2026-09-07T11:42:22.701Z';
+    const h = harnessAt(at);
+    await seedAt(h, at);
+
+    const outcome = await h.rotator.observe({
+      notice: { kind: 'reached', text: OBSERVED },
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(outcome.kind).toBe('rotated');
+    expect(await cooldownOf(h, 'tok-a')).toEqual({
+      until: Date.parse('2026-09-07T13:10:00.000Z'),
+      source: 'notice_text',
+    });
+  });
+
+  it('文言に時刻が無ければ既定へ倒れる（今日の振る舞い）', async () => {
+    const at = '2026-09-07T11:42:22.701Z';
+    const h = harnessAt(at);
+    await seedAt(h, at);
+
+    await h.rotator.observe({
+      notice: { kind: 'reached', text: "You've hit your usage limit" },
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(await cooldownOf(h, 'tok-a')).toEqual({
+      until: Date.parse(at) + 5 * 60 * 60_000,
+      source: 'default',
+    });
+  });
+
+  it('覚えている枠の事実が在れば、そちらが勝つ（#680 が先）', async () => {
+    // **順序の固定である。** 文字列から読んだ値が構造化された事実を上書きしたら
+    // 逆転している。
+    const at = '2026-09-07T11:42:22.701Z';
+    const h = harnessAt(at);
+    await seedAt(h, at);
+    const remembered = Date.parse('2026-09-07T12:30:00.000Z');
+    await h.rotator.observe({
+      facts: { kind: 'five_hour', status: 'rejected', resetsAt: remembered },
+      statusNow: 'rejected',
+    });
+
+    await h.rotator.observe({
+      notice: { kind: 'reached', text: OBSERVED },
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(await cooldownOf(h, 'tok-a')).toEqual({ until: remembered, source: 'quota_reset' });
+  });
+
+  it('文言（原文）は1文字も書き換えない（受け入れ基準8）', async () => {
+    const at = '2026-09-07T11:42:22.701Z';
+    const h = harnessAt(at);
+    await seedAt(h, at);
+
+    await h.rotator.observe({
+      notice: { kind: 'reached', text: OBSERVED },
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    const row = (await h.stores.tokens.list()).find((token) => token.id === 'tok-a');
+    expect(row?.lastRejectedReason).toBe(OBSERVED);
+  });
+});
+
 describe('受け入れ基準1: 1本目が止まったら2本目へ回る', () => {
   it('回して、正本を書き換えて、撒く', async () => {
     const h = harness();

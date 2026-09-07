@@ -108,7 +108,19 @@ export const DEFAULT_TOKEN_ROTATION_SETTINGS: TokenRotationSettings = {
  * | --- | --- | --- |
  * | `quota_reset` | 枠の `resetsAt` | **権威ある値** |
  * | `overage_reset` | 課金枠の `overageResetsAt` | **権威ある値**（枠そのものではない） |
+ * | `notice_text` | 上限の**文言**に書かれていた時刻（#682） | **推測。ただし既定よりは良い** |
  * | `default` | 設定の `cooldownMs` を足しただけ | **ただの推測** |
+ *
+ * ## `notice_text` を権威ある値と同じ顔にしない（#682 の地雷）
+ *
+ * `resetsAt` は SDK が**構造化して**渡してきたもので、`notice_text` は
+ * **文字列から読んだ推測**である（`usage-reset-text.ts`）。混ぜると、
+ * **どちらから来たか分からない行が増える。**
+ *
+ * **⚠️ `default` へ潰さないのも同じ理由である。** あちらは「何も分からないので
+ * 5時間足した」で、こちらは「文言がそう書いていた」——**外し方が違う**（前者は
+ * 桁で外れ、後者は日付の取り違えで外れる）。潰すと、どちらの外し方だったのかを
+ * 後から誰も言えない。
  *
  * ## 3値を2値へ潰さないこと
  *
@@ -128,18 +140,28 @@ export const DEFAULT_TOKEN_ROTATION_SETTINGS: TokenRotationSettings = {
  * `quota_reset` と書いてあっても、その値が古くなっていることはある（枠は開いて
  * 閉じ直す）。答えているのは「どこから採ったか」だけである。
  */
-export const cooldownSourceSchema = z.enum(['quota_reset', 'overage_reset', 'default']);
+export const cooldownSourceSchema = z.enum([
+  'quota_reset',
+  'overage_reset',
+  'notice_text',
+  'default',
+]);
 export type CooldownSource = z.infer<typeof cooldownSourceSchema>;
 
 /**
- * 権威ある出所（枠 / 課金枠）だけを表す型。**`default` を含まない。**
+ * 権威ある出所（枠 / 課金枠）だけを表す型。**推測の2値を含まない。**
  *
  * {@link TokenFailureObservation.resets} が受けるのはこちらである ——
  * 「権威ある期限が届いた」と「届かなかったので推測した」を同じ入り口にすると、
- * `default` を `resets.source` として渡せる形が生まれる（＝推測を権威ある値の
- * 顔で書き込める）。
+ * `default` や `notice_text` を `resets.source` として渡せる形が生まれる
+ * （＝推測を権威ある値の顔で書き込める。あちらは `min` を通らない）。
+ *
+ * **⚠️ 数え上げで書かないこと**（`'quota_reset' | 'overage_reset'` と直に書く形）。
+ * `Exclude` にしてあるので、{@link CooldownSource} に**権威ある**値が増えたときは
+ * 自動で入り、**推測**が増えたときはここを1行直せば済む —— 直し忘れても
+ * `nextCooldownUntil` の側で型が落ちる。
  */
-export type AuthoritativeCooldownSource = Exclude<CooldownSource, 'default'>;
+export type AuthoritativeCooldownSource = Exclude<CooldownSource, 'default' | 'notice_text'>;
 
 // ---------------------------------------------------------------------------
 // トークン1本の正本（`value` を持つのはデーモンの中だけ）
@@ -595,6 +617,21 @@ export interface TokenFailureObservation {
    */
   resets?: { at: number; source: AuthoritativeCooldownSource };
   /**
+   * **文言から読んだリセット時刻**（epoch ミリ秒。#682。`usage-reset-text.ts` の
+   * `parseNoticeResetAt` の返り値を渡す）。読めなかったら省略する。
+   *
+   * ## 権威ある値（{@link TokenFailureObservation.resets}）と別の欄である
+   *
+   * こちらは**推測なので、記録との `min` を通る**（下の {@link nextCooldownUntil}）。
+   * 同じ欄で受けると、**文字列から読んだ値が記録された本物の期限を後ろへ押し
+   * 出せる** ——#678 で塞いだ穴をそのまま開け直すことになる。
+   *
+   * **⚠️ 窓の挟み（`(at, at + fallback]`）は渡す側の責任である**（あちらの doc）。
+   * ここは受けた値をそのまま候補に混ぜるだけで、**大きさを検査しない** ——
+   * 検査を2箇所に置くと、片方だけ直したときに静かにずれる。
+   */
+  noticeResetsAt?: number;
+  /**
    * `resetsAt` が取れなかったときに使う冷却（ミリ秒）。設定の既定
    * （`TokenRotationSettings.cooldownMs`）を渡す。
    *
@@ -615,7 +652,20 @@ export interface TokenFailureObservation {
  * | `resets` | 書く値 | 出所 |
  * | --- | --- | --- |
  * | 届いた | **そのまま採る。** 記録より後ろでも採る（権威ある値である） | 渡された `source` |
- * | 届かなかった | `at + fallback` の**推測**。ただし**記録されている未来の期限より後ろへは行かない**（早いほうを採る） | 採ったほう（下） |
+ * | 届かなかった | **推測どうしと記録の中で、いちばん早いもの**（下） | 採ったほう（下） |
+ *
+ * ## 推測は3つ在りうる（#682 で1つ増えた）
+ *
+ * 1. **記録**（`recorded`。前の回に書かれた期限。`at` より後のものだけ見る）
+ * 2. **文言から読んだ時刻**（{@link TokenFailureObservation.noticeResetsAt}）
+ * 3. **設定の既定**（`at + fallbackCooldownMs`）
+ *
+ * **どれも `min` で選ぶ。** 2 は「文字列から読んだ推測」なので、**権威ある値の
+ * 側（`resets`）へ混ぜない** —— 混ぜると記録された本物の期限を後ろへ押し出せる
+ * （#678 で塞いだ穴が開く）。
+ *
+ * **同じ値で並んだときは、上の並び順で先に来たほうの出所を採る。** 記録の側は
+ * 権威ある出所を持ちうるので、**そちらを残すほうが失う情報が少ない。**
  *
  * ## 早いほうを採ったとき、出所も一緒に動く（#683）
  *
@@ -675,19 +725,31 @@ function nextCooldownUntil(
     return { until: observation.resets.at, source: observation.resets.source };
   }
   const at = Date.parse(observation.at);
-  const guess = at + observation.fallbackCooldownMs;
-  if (recorded.until === undefined || recorded.until <= at) {
-    return { until: guess, source: 'default' };
-  }
-  if (recorded.until <= guess) {
-    // **記録が勝った。** 値は動かないので、出所も記録の側のままである
-    // ——**無ければ書かない**（`default` と書くと嘘になる）。
-    return {
-      until: recorded.until,
-      ...(recorded.source === undefined ? {} : { source: recorded.source }),
-    };
-  }
-  return { until: guess, source: 'default' };
+  /**
+   * 推測の候補たち。**並び順が同値のときの優先順である**（上の doc）。
+   *
+   * `source` が `undefined` の要素が在る —— 記録の出所が無い行（#683 より前）で、
+   * **`default` で埋めない**（「推測だと観測した」という嘘になる）。
+   */
+  const candidates: { until: number; source?: CooldownSource }[] = [
+    // **過ぎた記録は候補にしない**（下の「過去の記録は見ない」）。
+    ...(recorded.until !== undefined && recorded.until > at
+      ? [
+          {
+            until: recorded.until,
+            ...(recorded.source === undefined ? {} : { source: recorded.source }),
+          },
+        ]
+      : []),
+    // 文言から読んだ時刻（#682）。**窓の挟みは渡す側が済ませている。**
+    ...(observation.noticeResetsAt === undefined
+      ? []
+      : [{ until: observation.noticeResetsAt, source: 'notice_text' as const }]),
+    { until: at + observation.fallbackCooldownMs, source: 'default' as const },
+  ];
+  // **いちばん早いものを採る。** 同値なら先に並んでいるほう（`reduce` の初期値を
+  // 先頭にして、**厳密に小さいときだけ**入れ替える）。
+  return candidates.reduce((best, one) => (one.until < best.until ? one : best));
 }
 
 /**

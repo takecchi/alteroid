@@ -573,17 +573,21 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      *
      * ## なぜ要るか —— 時刻だけでは「本物か推測か」が言えない
      *
-     * `earliestAt` は3つの出所を持ちうる（枠の `resetsAt` / 課金枠の
-     * `overageResetsAt` / 設定の既定を足しただけの**推測**）。行を見ても
-     * どれから来たかが分からないので、**`2026-09-07T16:52:56.162Z` が本物なのか
-     * 5時間足しただけなのかを、後から誰も言えなかった。**
+     * `earliestAt` は出所を複数持ちうる（枠の `resetsAt` / 課金枠の
+     * `overageResetsAt` / **文言に書かれていた時刻**（#682）/ 設定の既定を
+     * 足しただけの**推測**）。行を見てもどれから来たかが分からないので、
+     * **`2026-09-07T16:52:56.162Z` が本物なのか5時間足しただけなのかを、後から
+     * 誰も言えなかった。**
+     *
+     * **⚠️ ここに数を書かないこと**（数え上げの持ち主は `token-pool.ts` の
+     * `cooldownSourceSchema` である）。実際に 3 → 4 と増えている。
      *
      * **⚠️ 無いことを「推測ではない」と読まないこと。** 無いのは
      * (a) 撒いた行が出所を持っていない（#683 より前に冷却が書かれた行）
      * (b) この欄を書かない版が書いた行、のどちらかである
      * （`AGENTS.md` の地雷「取れない軸に 0 の行を作る」の裏返し）。
      */
-    cooldownSource: z.enum(['quota_reset', 'overage_reset', 'default']).optional(),
+    cooldownSource: z.enum(['quota_reset', 'overage_reset', 'notice_text', 'default']).optional(),
     /** 当たった文言。**言い換えずそのまま**（受け入れ基準8）。 */
     noticeText: z.string().optional(),
     /** 人間が読む1行（整形済み）。 */

@@ -957,6 +957,7 @@ const TOKEN_REASON_EXCERPT = 200;
 const TOKEN_COOLDOWN_SOURCE_LABEL: Record<CooldownSource | 'unrecorded', string> = {
   quota_reset: '枠の resetsAt（権威ある値）',
   overage_reset: '課金枠の overageResetsAt（権威ある値。枠そのものではない）',
+  notice_text: '**上限の文言に書かれていた時刻（推測。ただし既定よりは良い）**',
   default: '**設定の既定（ただの推測）**',
   unrecorded: '記録が無い',
 };

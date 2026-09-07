@@ -164,10 +164,13 @@ describe('noteUnusable / noteUsable', () => {
     const noted = await service.noteUnusable({
       id: 'tok-a',
       message: MESSAGE,
-      resetsAt: 1_800_000_000_000,
+      resets: { at: 1_800_000_000_000, source: 'quota_reset' },
     });
 
     expect(noted?.cooldownUntil).toBe(1_800_000_000_000);
+    // **出所も外へ出る**（#683）。ここが `default` だと、権威ある値を推測だと
+    // 名乗ることになる。
+    expect(noted?.cooldownSource).toBe('quota_reset');
   });
 
   it('使えたことを確かめられたら記録を消す', async () => {

@@ -185,6 +185,8 @@ function describeCooldownSource(source: AgentTokenView['cooldownSource']): strin
       return '枠の resetsAt（権威ある値）';
     case 'overage_reset':
       return '課金枠の overageResetsAt（権威ある値。枠そのものではない）';
+    case 'notice_text':
+      return '上限の文言に書かれていた時刻（推測。ただし既定よりは良い）';
     case 'default':
       return '設定の既定（ただの推測である）';
     default:

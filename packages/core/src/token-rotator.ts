@@ -24,6 +24,7 @@ import {
   type TokenRotationSignal,
   type TokenSelection,
 } from './token-rotation.js';
+import { parseNoticeResetAt } from './usage-reset-text.js';
 import type { JournalEntryInput } from './schema.js';
 import type { RateLimitFacts, UsageLimitNotice } from './usage-limits.js';
 import type { TokenCandidateVerdict } from './token-candidate.js';
@@ -779,10 +780,14 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
    * 1. **この回の観測が運んできた事実**（`rate_limit_event` 由来）
    * 2. **いまの現役について覚えている、拒否した枠の事実**（{@link rememberedRejections}）
    *    —— 文言だけの回（`signal: 'reached'`）がここで救われる
-   * 3. 無ければ設定の既定（`markTokenUnusable` が `fallbackCooldownMs` から作る推測）
+   * 3. **文言に書かれていた時刻**（#682。`parseNoticeResetAt`）—— **1・2 と違って
+   *    権威ある値ではない**ので、`markTokenUnusable` の側で記録との `min` を通る
+   *    （`noticeResetsAt` の doc）
+   * 4. 無ければ設定の既定（`markTokenUnusable` が `fallbackCooldownMs` から作る推測）
    *
    * **2 を 1 より前に置かないこと。** 覚えている事実は前のターンのもので、この回の
-   * 観測のほうが新しい。
+   * 観測のほうが新しい。**3 を 1・2 より前に置かないこと** —— 文字列から読んだ値が
+   * 構造化された事実を上書きする形になる。
    */
   async function coolDown(
     tokens: readonly AgentToken[],
@@ -797,6 +802,23 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
       // 判定に混ぜないこと・鍵に世代を入れない理由は
       // {@link rememberedRejections} の doc。
       earliestRememberedCooldown(rememberedFactsFor(outgoingId), Date.parse(at));
+    /**
+     * **文言に書かれていた時刻**（#682）。権威ある期限が1つも無い回だけ読む。
+     *
+     * **窓は設定の既定（`cooldownMs`）である。** ⟹ ここが返す値は必ず既定より
+     * 早い ——**この経路のせいで長く寝る形は作れない**（`usage-reset-text.ts` の
+     * 「誤りは必ず今日より短い側にしか出ない」）。
+     *
+     * **`resets` が在る回は読まない。** 構造化された事実が在るのに文字列を読む
+     * 理由が無く、読めば「どちらを使ったか」の分岐が1つ増えるだけである。
+     */
+    const noticeResetsAt =
+      resets !== undefined || observation.notice === undefined
+        ? undefined
+        : parseNoticeResetAt(observation.notice.text, {
+            at: Date.parse(at),
+            withinMs: settings.cooldownMs,
+          });
     return stores.tokens.replace(
       tokens.map((token) =>
         token.id === outgoingId
@@ -809,6 +831,9 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
               // 2026-09-07）。ここは `describeCooldownFacts` が組み立てる。
               message: observation.notice?.text ?? describeCooldownFacts(observation.facts),
               ...(resets === undefined ? {} : { resets }),
+              // **`lastRejectedReason` は1文字も触らない**（#682 の地雷。受け入れ
+              // 基準8）—— 読むだけで、文言そのものは上の `message` がそのまま持つ。
+              ...(noticeResetsAt === undefined ? {} : { noticeResetsAt }),
               fallbackCooldownMs: settings.cooldownMs,
             })
           : token,
@@ -1625,6 +1650,8 @@ export function describeCooldownSource(source: CooldownSource | undefined): stri
       return '。出所は枠の resetsAt（権威ある値）';
     case 'overage_reset':
       return '。出所は課金枠の overageResetsAt（権威ある値。枠そのものではない）';
+    case 'notice_text':
+      return '。**出所は上限の文言に書かれていた時刻（推測。ただし既定よりは良い）**';
     case 'default':
       return '。**出所は設定の既定（ただの推測である）**';
     // **無いときは黙る。** 「言えなかった」を `default` として書くと、推測だと

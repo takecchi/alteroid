@@ -251,13 +251,7 @@ export function describeTokenSituation(input: {
           // **出所を添える（#683）。** ここは「冷却中でも1手も始まらないとは
           // 言えない」を言う行なので、**その期限が推測なのかどうかは判断に効く。**
           '（' +
-          (row.cooldownSource === undefined
-            ? '出所の記録が無い'
-            : row.cooldownSource === 'default'
-              ? '**出所は設定の既定。ただの推測である**'
-              : '出所は' +
-                (row.cooldownSource === 'quota_reset' ? '枠' : '課金枠') +
-                'のリセット時刻') +
+          (TOKEN_COOLDOWN_SOURCE_LABEL[row.cooldownSource ?? 'unrecorded'] ?? '出所の記録が無い') +
           '）'
         : '';
     return '現役は「' + row.label + '」（記録の上では ' + TOKEN_STATE_LABEL[state] + until + '）';
@@ -292,6 +286,25 @@ export interface TokenSituationRow {
    */
   readonly cooldownSource?: CooldownSource;
 }
+
+/**
+ * 冷却の期限の出所を、クローンへ出す1語にする（#683 / #682）。
+ *
+ * **入れ子の三項演算子で書かないこと。** ここは一度その形で書いていて、
+ * `notice_text`（#682）が増えた瞬間に**「課金枠のリセット時刻」と言う**形に
+ * なった —— 型でも歯でも捕まらず、**新しい値だけが静かに嘘を言う。**
+ * `Record` にしてあると、値が増えたときに `tsc` が落ちる。
+ *
+ * **`unrecorded` を鍵に持つ**（`tools.ts` の同じ表と同じ理由）。「出所が無い」は
+ * **取れなかったこと**であって `default`（推測だと観測した）ではない。
+ */
+const TOKEN_COOLDOWN_SOURCE_LABEL: Record<CooldownSource | 'unrecorded', string> = {
+  quota_reset: '出所は枠のリセット時刻（権威ある値）',
+  overage_reset: '出所は課金枠のリセット時刻（権威ある値）',
+  notice_text: '**出所は上限の文言に書かれていた時刻。推測である**',
+  default: '**出所は設定の既定。ただの推測である**',
+  unrecorded: '出所の記録が無い',
+};
 
 const TOKEN_STATE_LABEL: Record<'ready' | 'cooling' | 'disabled' | 'invalidated', string> = {
   ready: '使える',

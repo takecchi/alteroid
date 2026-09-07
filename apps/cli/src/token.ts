@@ -32,7 +32,7 @@ interface AgentTokenView {
    * **無いことがある。** #683 より前に冷却が書かれた行と、この欄を返さない版の
    * デーモンに繋がっているときである。**「権威ある値である」と読まないこと。**
    */
-  cooldownSource?: 'quota_reset' | 'overage_reset' | 'default';
+  cooldownSource?: 'quota_reset' | 'overage_reset' | 'notice_text' | 'default';
   lastRejectedAt?: string;
   lastRejectedReason?: string;
   invalidatedAt?: string;
@@ -157,6 +157,8 @@ function describeCooldownSource(token: AgentTokenView): string {
       return '出所は枠の resetsAt（権威ある値）';
     case 'overage_reset':
       return '出所は課金枠の overageResetsAt（権威ある値。枠そのものではない）';
+    case 'notice_text':
+      return '出所は上限の文言に書かれていた時刻（推測。ただし既定よりは良い）';
     case 'default':
       return '出所は設定の既定（ただの推測である）';
     // **実行時の倒れ先**（`AGENTS.md`「型で塞いだ分岐にも、実行時の倒れ先の歯を

@@ -128,6 +128,11 @@ export {
   type UsageLimitKind,
   type UsageLimitNotice,
 } from './usage-limits.js';
+/**
+ * 上限の文言に書かれているリセット時刻を読む（#682）。**検知には使わない** ——
+ * あちらは SDK の定数（`USAGE_LIMIT_ERROR_PREFIXES`）のままである。
+ */
+export { parseNoticeResetAt, type ParseNoticeResetOptions } from './usage-reset-text.js';
 export {
   assistantFailureOf,
   isAnsweredResult,

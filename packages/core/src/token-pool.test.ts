@@ -462,6 +462,58 @@ describe('markTokenUnusable / markTokenUsable', () => {
       expect(marked.cooldownSource).toBe('default');
     });
 
+    /**
+     * **#682**: 文言から読んだ時刻は**推測**なので、記録との `min` を通る。
+     *
+     * **権威ある値（`resets`）と同じ入り口にしないことが要点である** ——
+     * あちらは `min` を通らないので、混ぜると**文字列から読んだ値が記録された
+     * 本物の期限を後ろへ押し出せる**（#678 で塞いだ穴が開く）。
+     */
+    it('文言から読んだ時刻は既定より優先する（notice_text と名乗る）', () => {
+      const fromNotice = Date.parse(AT) + 90 * 60_000;
+      const marked = markTokenUnusable(base, {
+        at: AT,
+        message: "You've hit your session limit · resets 10:10pm (Asia/Tokyo)",
+        noticeResetsAt: fromNotice,
+        fallbackCooldownMs: FALLBACK,
+      });
+      expect(marked.cooldownUntil).toBe(fromNotice);
+      // **`quota_reset` と名乗らせない**（#682 の地雷「権威ある値と同じ顔に
+      // しないこと」）。混ぜると、どちらから来たか分からない行が増える。
+      expect(marked.cooldownSource).toBe('notice_text');
+    });
+
+    it('⚠️ 文言から読んだ時刻でも、記録されている未来の期限を後ろへ動かさない', () => {
+      // **`resets` の入り口を通していたら、ここは 13:10 → 12:00 の逆へ倒れる。**
+      const authoritative = Date.parse('2026-09-07T13:10:00.000Z');
+      const later = Date.parse('2026-09-07T14:00:00.000Z');
+      const marked = markTokenUnusable(
+        { ...base, cooldownUntil: authoritative, cooldownSource: 'quota_reset' },
+        {
+          at: '2026-09-07T11:42:22.701Z',
+          message: "You've hit your session limit · resets 11:00pm (Asia/Tokyo)",
+          noticeResetsAt: later,
+          fallbackCooldownMs: FALLBACK,
+        },
+      );
+      expect(marked.cooldownUntil).toBe(authoritative);
+      expect(marked.cooldownSource).toBe('quota_reset');
+    });
+
+    it('権威ある値が届いた回は、文言から読んだ値を見ない', () => {
+      const authoritative = Date.parse(AT) + 34 * 60 * 60 * 1000;
+      const marked = markTokenUnusable(base, {
+        at: AT,
+        message: MESSAGE,
+        resets: { at: authoritative, source: 'quota_reset' },
+        // 呼ぶ側はそもそも読まないが、渡っても勝てないことを固定する。
+        noticeResetsAt: Date.parse(AT) + 60_000,
+        fallbackCooldownMs: FALLBACK,
+      });
+      expect(marked.cooldownUntil).toBe(authoritative);
+      expect(marked.cooldownSource).toBe('quota_reset');
+    });
+
     it('使えることを確かめられたら、期限と組で消える', () => {
       // 期限が無い行に出所だけ残ると、**何の出所なのか指す先が無い。**
       const marked = markTokenUnusable(base, {

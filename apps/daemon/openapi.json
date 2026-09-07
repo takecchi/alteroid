@@ -748,7 +748,7 @@
                         },
                         "cooldownSource": {
                           "type": "string",
-                          "enum": ["quota_reset", "overage_reset", "default"]
+                          "enum": ["quota_reset", "overage_reset", "notice_text", "default"]
                         },
                         "noticeText": {
                           "type": "string"
@@ -2150,7 +2150,7 @@
                               },
                               "cooldownSource": {
                                 "type": "string",
-                                "enum": ["quota_reset", "overage_reset", "default"]
+                                "enum": ["quota_reset", "overage_reset", "notice_text", "default"]
                               },
                               "noticeText": {
                                 "type": "string"
@@ -6653,7 +6653,7 @@
                           },
                           "cooldownSource": {
                             "type": "string",
-                            "enum": ["quota_reset", "overage_reset", "default"]
+                            "enum": ["quota_reset", "overage_reset", "notice_text", "default"]
                           },
                           "lastRejectedAt": {
                             "type": "string"
@@ -6767,7 +6767,7 @@
                           },
                           "cooldownSource": {
                             "type": "string",
-                            "enum": ["quota_reset", "overage_reset", "default"]
+                            "enum": ["quota_reset", "overage_reset", "notice_text", "default"]
                           },
                           "lastRejectedAt": {
                             "type": "string"
