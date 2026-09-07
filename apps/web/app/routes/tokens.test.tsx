@@ -407,6 +407,48 @@ describe('/tokens 画面 — 冷却は原文と絶対時刻の両方を出す', 
     const expectedAbsolute = formatDateTime(new Date(cooldownUntil).toISOString());
     expect(screen.getByText(new RegExp(expectedAbsolute.replace(/[/:]/g, '\\$&')))).toBeTruthy();
     expect(screen.getByText('weekly limit resets 5pm')).toBeTruthy();
+    // **#683**: この fixture は出所を持っていない（デーモンが返さなかった）。
+    // **黙らない** —— 何も書かないと「権威ある値である」と読まれる。
+    expect(screen.getByText(/記録が無い（この期限が権威ある値かどうかは言えない）/)).toBeTruthy();
+  });
+
+  /**
+   * **#683**: 絶対時刻だけでは「本物か推測か」が言えなかった。
+   *
+   * #678 の調査は「文言が 22:10 と言っているのに 01:42 と出ている」を人間が目で
+   * 見つけたところから始まっている —— 行が出所を持てば、その1行で終わる。
+   */
+  it('冷却の期限の出所を3値で言い分ける（推測のときだけ言う形にしない）', async () => {
+    const cooldownUntil = Date.parse('2026-08-25T05:00:00.000Z');
+    const cases = [
+      { source: 'quota_reset' as const, text: /枠の resetsAt（権威ある値）/ },
+      { source: 'overage_reset' as const, text: /課金枠の overageResetsAt/ },
+      { source: 'default' as const, text: /設定の既定（ただの推測である）/ },
+    ];
+    for (const one of cases) {
+      stubScreen({
+        tokens: [
+          {
+            id: `t-${one.source}`,
+            label: one.source,
+            order: 0,
+            sha256: 'f'.repeat(12),
+            cooldownUntil,
+            cooldownSource: one.source,
+          },
+        ],
+      });
+
+      const view = render(
+        <Providers>
+          <Tokens />
+        </Providers>,
+      );
+
+      await waitForPoolLoaded();
+      expect(screen.getByText(one.text), one.source).toBeTruthy();
+      view.unmount();
+    }
   });
 });
 

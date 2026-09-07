@@ -3,6 +3,8 @@ import {
   tokenAvailabilityAt,
   type ActiveAgentToken,
   type AgentToken,
+  type AuthoritativeCooldownSource,
+  type CooldownSource,
   type TokenRotationPolicy,
 } from './token-pool.js';
 
@@ -341,8 +343,68 @@ function signalOf(
  * （`markTokenUnusable` の doc）。
  */
 export function cooldownUntilFrom(facts: RateLimitFacts | undefined): number | undefined {
+  return cooldownDeadlineFrom(facts)?.at;
+}
+
+/**
+ * 同じ判定に**出所を添えて**返す（#683）。
+ *
+ * **優先順の判定はここ1箇所である。** {@link cooldownUntilFrom} はこれを呼ぶだけの
+ * 包みで、`describeCooldownFacts`（`token-rotator.ts`）もここを通る ——**同じ順序を
+ * 3箇所に書くと、ずれたときに記録が実際と違う出所を主張する。**
+ */
+export function cooldownDeadlineFrom(
+  facts: RateLimitFacts | undefined,
+): { at: number; source: AuthoritativeCooldownSource } | undefined {
   if (facts === undefined) return undefined;
-  return facts.resetsAt ?? facts.overageResetsAt;
+  if (facts.resetsAt !== undefined) return { at: facts.resetsAt, source: 'quota_reset' };
+  if (facts.overageResetsAt !== undefined)
+    return { at: facts.overageResetsAt, source: 'overage_reset' };
+  return undefined;
+}
+
+/**
+ * **覚えている枠の事実**の中から、いま使える期限を1つ選ぶ（#680）。
+ *
+ * ## なぜ要るか —— 文言だけの拒否が、権威ある期限を捨てていた
+ *
+ * 枠の事実（{@link RateLimitFacts}）が届くのは `rate_limit_event` の経路だけで、
+ * **文言で検知した拒否（`signal: 'reached'`）は事実を1つも運んでこない。**
+ * ⟹ その回の冷却は設定の既定（5時間）へ倒れる。#678 が入って「記録より後ろへは
+ * 行かない」ようになったが、**その鍵の最初の拒否には比べる記録が無い**ので、
+ * いまも推測がそのまま入る（本番の実測は #680 の本文）。
+ *
+ * **事実そのものは同じプロセスに届いている** —— `rate_limit_event` は回し手まで
+ * 来ており（`signal: 'overage_closed'` の行がその証拠である）、覚えている側が
+ * 使われていないだけだった。⟹ **覚えておいて、文言だけの回に使う。**
+ *
+ * ## 選び方（3つの条件を全部満たすものだけ）
+ *
+ * 1. **その枠が実際に拒否した回のものだけ**を渡すこと（呼ぶ側の責任。#680 の地雷
+ *    「`kind` を見ずに `resetsAt` を採らないこと」——`five_hour` の拒否に
+ *    `seven_day` の `resetsAt` を当てると1日冷える）
+ * 2. **`at` より後のものだけ。** 既に過ぎた期限は「いま通らない」ことについて
+ *    1文字も言っていない（その窓はもう開いている）⟹ 使えば**過去の値を書いて
+ *    行を `ready` に見せる**
+ * 3. **いちばん早いものを採る。** 複数の枠が拒否しているとき、遅いほうを採ると
+ *    「早く開く枠のリセットを待たずに寝る」形になる。**早く起きすぎるほうが
+ *    安全側である**（{@link cooldownUntilFrom} と `DEFAULT_TOKEN_COOLDOWN_MS` の
+ *    doc と同じ判断）—— 早ければもう一度確かめて冷やし直すだけで済む
+ *
+ * **⚠️ 期限の採り方（枠 → 課金枠）は {@link cooldownUntilFrom} に任せる。**
+ * ここで `resetsAt` を直接読むと、優先順の判定が2箇所になる。
+ */
+export function earliestRememberedCooldown(
+  facts: Iterable<RateLimitFacts>,
+  at: number,
+): { at: number; source: AuthoritativeCooldownSource } | undefined {
+  let earliest: { at: number; source: AuthoritativeCooldownSource } | undefined;
+  for (const one of facts) {
+    const deadline = cooldownDeadlineFrom(one);
+    if (deadline === undefined || deadline.at <= at) continue;
+    if (earliest === undefined || deadline.at < earliest.at) earliest = deadline;
+  }
+  return earliest;
 }
 
 // ---------------------------------------------------------------------------
@@ -418,7 +480,16 @@ export type TokenSelection =
        * 無いことを `0` や `now` で埋めないこと（AGENTS.md 地雷「取れない軸に 0 の
        * 行を作る」）——埋めると「すぐ戻る」と読める。
        */
-      earliest?: { tokenId: string; label: string; cooldownUntil: number };
+      earliest?: {
+        tokenId: string;
+        label: string;
+        cooldownUntil: number;
+        /**
+         * その期限の出所（#683。{@link CooldownSource}）。**行が持っていなければ
+         * 無い** —— 埋めると「推測だと観測した」という嘘になる。
+         */
+        cooldownSource?: CooldownSource;
+      };
       /** 人間とクローンへ出す1行。**トークンの値を含まない。** */
       why: string;
     };
@@ -491,7 +562,13 @@ export function selectNextToken(
 
   return {
     kind: 'none',
-    earliest: { tokenId: first.id, label: first.label, cooldownUntil: first.cooldownUntil },
+    earliest: {
+      tokenId: first.id,
+      label: first.label,
+      cooldownUntil: first.cooldownUntil,
+      // **行が持っていなければ載せない**（#683。既定で埋めない）。
+      ...(first.cooldownSource === undefined ? {} : { cooldownSource: first.cooldownSource }),
+    },
     why: `候補が全部冷却中である。いちばん早く戻るのは「${first.label}」`,
   };
 }

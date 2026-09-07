@@ -137,8 +137,47 @@ describe('alteroid token list', () => {
     expect(text).toContain('失効: account_on_hold');
     expect(text).toContain('冷却中');
     expect(text).toContain('最後の拒否: rate_limit exceeded');
+    // **出所を返さないデーモンでは「記録されていない」と言う**（#683）。
+    // 黙ると「権威ある値である」と読まれる。
+    expect(text).toContain('出所は記録されていない');
     // 値はどこにも出ない（本文にトークン本体を書かないという約束の検算）。
     expect(text).not.toContain('tok-aaa');
+  });
+
+  /**
+   * **#683**: 冷却の期限の出所を行が覚える。
+   *
+   * ここはかつて `冷却中（あと約 N 分。resetsAt 由来か既定のフォールバック）` と
+   * 書いていた —— **どちらなのかを人間へ聞き返す形の表示である。**
+   */
+  it('冷却の期限の出所を3値で言い分ける（#683）', async () => {
+    const now = Date.now();
+    const rows = [
+      { source: 'quota_reset', expect: '出所は枠の resetsAt（権威ある値）' },
+      { source: 'overage_reset', expect: '出所は課金枠の overageResetsAt' },
+      { source: 'default', expect: '出所は設定の既定（ただの推測である）' },
+    ] as const;
+    for (const row of rows) {
+      setReply('GET', '/tokens', {
+        status: 200,
+        body: {
+          tokens: [
+            {
+              id: 'tok-a',
+              label: 'first',
+              order: 0,
+              sha256: 'aaaaaaaaaaaa',
+              cooldownUntil: now + 60_000,
+              cooldownSource: row.source,
+            },
+          ],
+          settings: { rotateOn: 'free_exhausted', cooldownMs: 1_000 },
+        },
+      });
+      const read = captureStdout();
+      await tokenListCommand();
+      expect(read(), row.source).toContain(row.expect);
+    }
   });
 
   it('置いた時刻・最後の更新・回復の見込みを出す。見込みには実測でない旨を同じ行に添える（Issue #393）', async () => {

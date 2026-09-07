@@ -32,7 +32,7 @@ import {
   RECENT_TRACE_LIMIT,
   recentDroppedTraces,
 } from './dropped-record.js';
-import { toAgentTokenView, tokenAvailabilityAt } from './token-pool.js';
+import { toAgentTokenView, tokenAvailabilityAt, type CooldownSource } from './token-pool.js';
 import {
   describePage,
   excerpt,
@@ -944,6 +944,23 @@ const TOKEN_LIST_BUDGET = 6_000;
  * `noticeText`）ので、ここは目で走らせるための厚みでよい。
  */
 const TOKEN_REASON_EXCERPT = 200;
+/**
+ * 冷却の期限の出所を、クローンへ出す1語にする（#683）。
+ *
+ * **`unrecorded` を鍵に持つ。** 「出所が無い」は**取れなかったこと**であって
+ * `default`（推測だと観測した）ではない —— 潰すと嘘になる
+ * （`token-pool.ts` の `AgentToken.cooldownSource` の doc）。
+ *
+ * **`?? '記録が無い'` を残すこと。** `CooldownSource` に値が増えたとき、
+ * この表を直し忘れても**未定義を描かない**（実行時の倒れ先。`AGENTS.md`）。
+ */
+const TOKEN_COOLDOWN_SOURCE_LABEL: Record<CooldownSource | 'unrecorded', string> = {
+  quota_reset: '枠の resetsAt（権威ある値）',
+  overage_reset: '課金枠の overageResetsAt（権威ある値。枠そのものではない）',
+  notice_text: '**上限の文言に書かれていた時刻（推測。ただし既定よりは良い）**',
+  default: '**設定の既定（ただの推測）**',
+  unrecorded: '記録が無い',
+};
 const APPROVAL_QUESTION_EXCERPT = 200;
 /** 承認待ち1件の全文を取りに来たときの1回分。続きは `offset` で取れる。 */
 const APPROVAL_PAGE = 8_000;
@@ -3597,7 +3614,12 @@ export function createCloneTools(context: ToolContext) {
               view.sha256 === undefined ? null : `  指紋 ${view.sha256}`,
               view.cooldownUntil === undefined
                 ? null
-                : `  冷却明け ${new Date(view.cooldownUntil).toISOString()}`,
+                : // **出所を添える（#683）。** 時刻だけだと、それが枠のリセット
+                  // 時刻なのか5時間足しただけなのかが**この一覧からは言えない。**
+                  // **無い回は「記録が無い」と書く** —— 黙ると「権威ある値」と
+                  // 読まれる（`AGENTS.md` の地雷「取れない軸に 0 の行を作る」）。
+                  `  冷却明け ${new Date(view.cooldownUntil).toISOString()}` +
+                  `（出所: ${TOKEN_COOLDOWN_SOURCE_LABEL[view.cooldownSource ?? 'unrecorded'] ?? '記録が無い'}）`,
               view.disabledAt === undefined ? null : `  人間が外した ${view.disabledAt}`,
               view.lastRejectedReason === undefined
                 ? null

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   cooldownUntilFrom,
   decideTokenRotation,
+  earliestRememberedCooldown,
   observationFreshness,
   selectNextToken,
 } from './token-rotation.js';
@@ -337,6 +338,70 @@ describe('冷却の期限を事実から取る', () => {
   it('過去の値を未来へ丸めない', () => {
     // 既に過ぎていれば「もう戻っている」が正しい（`markTokenUnusable` の doc）。
     expect(cooldownUntilFrom({ resetsAt: 1 })).toBe(1);
+  });
+});
+
+/**
+ * **#680**: 文言だけの拒否のために、覚えている事実から期限を1つ選ぶ。
+ *
+ * 選び方の3条件（拒否した枠だけ / `at` より後だけ / いちばん早いもの）は
+ * {@link earliestRememberedCooldown} の doc が持つ。ここはそれを1つずつ固定する。
+ */
+describe('#680: 覚えている事実から期限を選ぶ', () => {
+  const NOW = 1_000_000;
+
+  it('いちばん早い期限を採る（遅いほうを採ると早く開く枠を待たずに寝る）', () => {
+    const chosen = earliestRememberedCooldown(
+      [
+        { kind: 'seven_day', status: 'rejected', resetsAt: NOW + 90_000 },
+        { kind: 'five_hour', status: 'rejected', resetsAt: NOW + 10_000 },
+      ],
+      NOW,
+    );
+    expect(chosen).toEqual({ at: NOW + 10_000, source: 'quota_reset' });
+  });
+
+  it('過ぎた期限は使わない（その窓はもう開いている）', () => {
+    // **使うと「止まった」を記録しに来た呼びが、止まっていないことを記録する**
+    // ——過去の値を書くと `tokenAvailabilityAt` は `ready` を返す。
+    expect(
+      earliestRememberedCooldown([{ kind: 'five_hour', status: 'rejected', resetsAt: NOW }], NOW),
+    ).toBeUndefined();
+    expect(
+      earliestRememberedCooldown(
+        [{ kind: 'five_hour', status: 'rejected', resetsAt: NOW - 1 }],
+        NOW,
+      ),
+    ).toBeUndefined();
+  });
+
+  it('過ぎたものと先のものが混ざっていたら、先のものだけを見る', () => {
+    const chosen = earliestRememberedCooldown(
+      [
+        { kind: 'five_hour', status: 'rejected', resetsAt: NOW - 5_000 },
+        { kind: 'seven_day', status: 'rejected', resetsAt: NOW + 5_000 },
+      ],
+      NOW,
+    );
+    expect(chosen).toEqual({ at: NOW + 5_000, source: 'quota_reset' });
+  });
+
+  it('期限を運んでいない事実しか無ければ undefined（既定へ倒す side へ返す）', () => {
+    expect(
+      earliestRememberedCooldown([{ kind: 'five_hour', status: 'rejected' }], NOW),
+    ).toBeUndefined();
+    expect(earliestRememberedCooldown([], NOW)).toBeUndefined();
+  });
+
+  it('枠の resetsAt が無い事実では課金枠の側を使う（優先順は1箇所が持つ）', () => {
+    // **`cooldownUntilFrom` に任せている**ことを固定する。ここで `resetsAt` を
+    // 直接読む実装にすると、優先順の判定が2箇所になる。
+    expect(
+      earliestRememberedCooldown(
+        [{ kind: 'five_hour', status: 'rejected', overageResetsAt: NOW + 3_000 }],
+        NOW,
+      ),
+    ).toEqual({ at: NOW + 3_000, source: 'overage_reset' });
   });
 });
 

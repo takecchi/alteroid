@@ -1,4 +1,5 @@
 import {
+  cooldownSourceSchema,
   DEFAULT_TOKEN_ROTATION_SETTINGS,
   tokenRotationPolicySchema,
   type ActiveAgentToken,
@@ -30,6 +31,8 @@ function toRow(token: AgentToken) {
     order: token.order,
     disabledAt: token.disabledAt === undefined ? null : new Date(token.disabledAt),
     cooldownUntil: token.cooldownUntil ?? null,
+    // **null は「出所を言えない」である**（#683。`default` で埋めない）。
+    cooldownSource: token.cooldownSource ?? null,
     lastRejectedAt: token.lastRejectedAt === undefined ? null : new Date(token.lastRejectedAt),
     lastRejectedReason: token.lastRejectedReason ?? null,
     invalidatedAt: token.invalidatedAt === undefined ? null : new Date(token.invalidatedAt),
@@ -48,6 +51,14 @@ function fromRow(row: AgentTokenRow): AgentToken {
     order: row.order,
     ...(row.disabledAt === null ? {} : { disabledAt: row.disabledAt.toISOString() }),
     ...(row.cooldownUntil === null ? {} : { cooldownUntil: row.cooldownUntil }),
+    // **読めない語は落とす。** 列は `text` なので、この版が知らない語（版が
+    // 進んだ後に戻したとき）も入りうる —— そのまま持ち上げると `AgentToken`
+    // の型が嘘になる。**落ちた先は「出所を言えない」で、それは正しい。**
+    ...(row.cooldownSource === null
+      ? {}
+      : cooldownSourceSchema.safeParse(row.cooldownSource).success
+        ? { cooldownSource: cooldownSourceSchema.parse(row.cooldownSource) }
+        : {}),
     ...(row.lastRejectedAt === null ? {} : { lastRejectedAt: row.lastRejectedAt.toISOString() }),
     ...(row.lastRejectedReason === null ? {} : { lastRejectedReason: row.lastRejectedReason }),
     ...(row.invalidatedAt === null ? {} : { invalidatedAt: row.invalidatedAt.toISOString() }),

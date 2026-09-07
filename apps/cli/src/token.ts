@@ -26,6 +26,13 @@ interface AgentTokenView {
   source?: 'stored' | 'env';
   disabledAt?: string;
   cooldownUntil?: number;
+  /**
+   * 冷却の期限の出所（#683。`@alteroid/core` の `CooldownSource`）。
+   *
+   * **無いことがある。** #683 より前に冷却が書かれた行と、この欄を返さない版の
+   * デーモンに繋がっているときである。**「権威ある値である」と読まないこと。**
+   */
+  cooldownSource?: 'quota_reset' | 'overage_reset' | 'notice_text' | 'default';
   lastRejectedAt?: string;
   lastRejectedReason?: string;
   invalidatedAt?: string;
@@ -119,9 +126,9 @@ function describeStatus(token: AgentTokenView, now: number): string | null {
   }
   if (token.cooldownUntil !== undefined && token.cooldownUntil > now) {
     const remainingMinutes = Math.ceil((token.cooldownUntil - now) / 60_000);
-    parts.push(
-      `冷却中（あと約 ${String(remainingMinutes)} 分。resetsAt 由来か既定のフォールバック）`,
-    );
+    // **出所を言う（#683）。** ここはかつて「resetsAt 由来か既定のフォールバック」
+    // と書いていた —— **どちらなのかを人間へ聞き返す形の表示である。**
+    parts.push(`冷却中（あと約 ${String(remainingMinutes)} 分。${describeCooldownSource(token)}）`);
   }
   if (token.lastRejectedReason !== undefined) {
     parts.push(`最後の拒否: ${token.lastRejectedReason}（${token.lastRejectedAt ?? '?'}）`);
@@ -132,6 +139,33 @@ function describeStatus(token: AgentTokenView, now: number): string | null {
     parts.push(`見込み: ${describeRecovery(token.recovery)}（文言からの分類。実測ではない）`);
   }
   return parts.length === 0 ? null : parts.join(' / ');
+}
+
+/**
+ * 冷却の期限の出所を1語で言う（#683）。
+ *
+ * **権威ある値のときも言う。** 「推測のときだけ言う」形にすると、**何も書いて
+ * いないことが「推測ではない」と「まだ対応していない版である」の両方を意味する**
+ * （#683 の成果物）。
+ *
+ * **無い回は「記録されていない」と言う。** 空文字で黙ると、上の2つの意味に
+ * 「そもそも冷却の出所という概念を知らない」が混ざる。
+ */
+function describeCooldownSource(token: AgentTokenView): string {
+  switch (token.cooldownSource) {
+    case 'quota_reset':
+      return '出所は枠の resetsAt（権威ある値）';
+    case 'overage_reset':
+      return '出所は課金枠の overageResetsAt（権威ある値。枠そのものではない）';
+    case 'notice_text':
+      return '出所は上限の文言に書かれていた時刻（推測。ただし既定よりは良い）';
+    case 'default':
+      return '出所は設定の既定（ただの推測である）';
+    // **実行時の倒れ先**（`AGENTS.md`「型で塞いだ分岐にも、実行時の倒れ先の歯を
+    // 足す」）。CLI とデーモンは別に配られるので、こちらが知らない語が来うる。
+    default:
+      return '出所は記録されていない';
+  }
 }
 
 function describeRecovery(recovery: 'time' | 'action' | 'unknown'): string {

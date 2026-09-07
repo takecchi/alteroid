@@ -166,6 +166,35 @@ function describeAvailability(state: TokenAvailability): {
 }
 
 /**
+ * 冷却の期限の出所（#683）。
+ *
+ * **3値を2値へ潰さない**（枠と課金枠の食い違いが画面から消える）。
+ *
+ * **無い回は「記録が無い」と出す。** 無いのは
+ * (a) #683 より前に冷却が書かれた行 (b) この欄を返さない版のデーモンに
+ * 繋がっている、のどちらかで、**どちらも「権威ある値である」ではない。**
+ *
+ * **未知の語は `describeUnknown` へ落とす。** `apps/web` は Vercel、デーモンは
+ * Railway で別に配られるので、**サーバのほうが新しい窓が必ず在る**（あちらの doc）。
+ */
+function describeCooldownSource(source: AgentTokenView['cooldownSource']): string {
+  switch (source) {
+    case undefined:
+      return '記録が無い（この期限が権威ある値かどうかは言えない）';
+    case 'quota_reset':
+      return '枠の resetsAt（権威ある値）';
+    case 'overage_reset':
+      return '課金枠の overageResetsAt（権威ある値。枠そのものではない）';
+    case 'notice_text':
+      return '上限の文言に書かれていた時刻（推測。ただし既定よりは良い）';
+    case 'default':
+      return '設定の既定（ただの推測である）';
+    default:
+      return describeUnknown(source, '冷却の期限の出所');
+  }
+}
+
+/**
  * 指紋の欄。**「不明」で埋めない** —— `source: 'env'` の行はそもそも指紋を
  * 持たない（値を持たないので）。「取れなかった」ではなく「そもそも無い」と
  * 名指しする。
@@ -296,6 +325,20 @@ function TokenRow({ token }: { token: AgentTokenView }) {
             <dd>
               {formatEpochMs(token.cooldownUntil)}（{formatEpochMsRelative(token.cooldownUntil)}）
             </dd>
+            {/*
+              **出所を必ず出す（#683）。** 絶対時刻を出しても、**それが権威ある
+              値なのか5時間足しただけの推測なのかは書けていなかった** ——
+              #678 の調査は「文言が 22:10 と言っているのに 01:42 と出ている」を
+              人間が目で見つけたところから始まった。行が出所を持てば、その1行で
+              終わる。
+
+              **「推測のときだけ出す」形にしないこと。** 権威ある値のときも
+              出さないと、**何も書いていないことが「推測ではない」と「まだ
+              対応していない」の両方を意味する**（`AGENTS.md` の地雷
+              「取れない軸に 0 の行を作る」の裏返し）。
+            */}
+            <dt className="mt-2 text-muted sm:mt-0">期限の出所</dt>
+            <dd>{describeCooldownSource(token.cooldownSource)}</dd>
           </>
         )}
 

@@ -258,7 +258,11 @@ export function describeAccountUsage(
     return [plain(`取れなかった: ${state.reason}（${state.at}）。**0 ではなく、分からない。**`)];
   }
   if (state.state === 'unavailable') {
-    return [plain(`この構成では取れない: ${state.reason}（${state.at}）`)];
+    // **「この構成では取れない」と名乗らない**（#681）。倒れ込む道の1本
+    // （`cause: 'undetermined'`）は**断定できていない**ので、ここが断定すると
+    // `reason` の中の「言い分けられない」と食い違う。**断定は `reason` の側に
+    // 任せる** —— 理由ごとの言葉は1箇所（`describeLimitsUnavailable`）が持つ。
+    return [plain(`枠が返ってこない: ${state.reason}（${state.at}）`)];
   }
 
   const { usage } = state;

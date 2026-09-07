@@ -70,11 +70,13 @@ export {
   ACCOUNT_USAGE_READ_TIMEOUT_MS,
   accountUsageSchema,
   accountUsageStateSchema,
+  classifyLimitsUnavailable,
+  describeLimitsUnavailable,
   extraUsageSchema,
   fetchAccountUsage,
   hasAccountUsageDetail,
   isNotLoggedIn,
-  isSubscriptionImpossible,
+  limitsUnavailableCauseSchema,
   secondsToEpochMs,
   toAccountUsage,
   usageWindowKindSchema,
@@ -82,6 +84,7 @@ export {
   type AccountUsage,
   type AccountUsageState,
   type ExtraUsage,
+  type LimitsUnavailableCause,
   type UsageWindow,
   type UsageWindowKind,
 } from './usage-snapshot.js';
@@ -125,6 +128,11 @@ export {
   type UsageLimitKind,
   type UsageLimitNotice,
 } from './usage-limits.js';
+/**
+ * 上限の文言に書かれているリセット時刻を読む（#682）。**検知には使わない** ——
+ * あちらは SDK の定数（`USAGE_LIMIT_ERROR_PREFIXES`）のままである。
+ */
+export { parseNoticeResetAt, type ParseNoticeResetOptions } from './usage-reset-text.js';
 export {
   assistantFailureOf,
   isAnsweredResult,
@@ -539,6 +547,7 @@ export {
 export {
   agentTokenInputSchema,
   agentTokenViewSchema,
+  cooldownSourceSchema,
   DEFAULT_TOKEN_COOLDOWN_MS,
   DEFAULT_TOKEN_ROTATION_POLICY,
   DEFAULT_TOKEN_ROTATION_SETTINGS,
@@ -559,6 +568,8 @@ export {
   type AgentToken,
   type AgentTokenInput,
   type AgentTokenView,
+  type AuthoritativeCooldownSource,
+  type CooldownSource,
   type NormalizeTokenPoolOptions,
   type TokenCredential,
   type TokenFailureObservation,
@@ -566,8 +577,10 @@ export {
   type TokenRotationSettings,
 } from './token-pool.js';
 export {
+  cooldownDeadlineFrom,
   cooldownUntilFrom,
   decideTokenRotation,
+  earliestRememberedCooldown,
   observationFreshness,
   selectNextToken,
   type ObservationFreshness,

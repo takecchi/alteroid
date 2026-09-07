@@ -2,6 +2,7 @@ import {
   fetchAccountUsage,
   type AccountUsage,
   type AccountUsageState,
+  type LimitsUnavailableCause,
   type UsageWindow,
 } from './usage-snapshot.js';
 import type { UsageProbeQuery } from './usage-probe.js';
@@ -66,6 +67,38 @@ function extraUsageUsable(extra: NonNullable<AccountUsage['extraUsage']>): boole
 }
 
 /**
+ * `unavailable` の頭に付ける1行。**断定できない理由を断定して書かない**（#681）。
+ *
+ * ここはかつて理由を問わず `この認証では原理的に枠が取れない` と書いていた。
+ * ⟹ **`undetermined`（言い分けられない）の回に、原理的な不可能を主張していた。**
+ * 実際にその文言が本番で出続け、人間が「このアカウントはサブスクを持っていない」と
+ * 読み違えている（#678 の調査 → #681）。
+ *
+ * **判定（`undecidable`）は1文字も変えていない。** 変えたのは言葉だけである
+ * ——#681 の地雷「`unavailable` を `unusable` へ倒さないこと。直すのは**理由の
+ * 切り分け**であって、判定の倒れ先ではない」。
+ *
+ * **`cause` が無い回は断定しない側へ倒す。** 無いのは「この欄を書かない版の
+ * デーモンが返した」であって、原理的に取れないと観測したのではない
+ * （`AccountUsageState` の `cause` の doc）。
+ */
+function describeUnavailableHead(cause: LimitsUnavailableCause | undefined): string {
+  switch (cause) {
+    case 'not_logged_in':
+      return 'まだ鍵が届いていないので枠が取れない';
+    case 'non_first_party':
+      return 'この認証では原理的に枠が取れない';
+    case 'undetermined':
+      return '枠が返ってこないが、その理由を言い分けられない';
+    // **`undefined` はここへ落ちる。** 版のずれで欄が無い回で、`switch` の網羅性
+    // （型）とは別に**実行時の倒れ先**が要る（`AGENTS.md`「型で塞いだ分岐にも、
+    // 実行時の倒れ先の歯を足す」）。
+    default:
+      return '枠が返ってこない構成である（理由の欄が付いていない）';
+  }
+}
+
+/**
  * `AccountUsageState` から3値の判定を出す。
  *
  * **保守的に倒すこと。** 迷ったら `usable` か `undecidable` であって `unusable`
@@ -74,7 +107,9 @@ function extraUsageUsable(extra: NonNullable<AccountUsage['extraUsage']>): boole
  *
  * 1. `unknown` → `undecidable`（まだ聞いていない）
  * 2. `failed` → `undecidable`（認証失敗・通信断・締め切りが同じ形で混ざる。上の doc）
- * 3. `unavailable` → `undecidable`（この認証では原理的に枠が取れない。「使えない」ではない）
+ * 3. `unavailable` → `undecidable`（枠が返ってこない構成である。**「使えない」ではない**。
+ *    理由が断定できるかは `cause` で分かれるが、**判定はどの理由でも同じ**である —— 分けるのは
+ *    言葉だけで、倒れ先を動かさない（#681））
  * 4. `ok` かつ `windows` が空 → `undecidable`（空は 0% ではなく「取れなかった」）
  * 5. `ok` かつ取れた枠が全部使い切っている **かつ** 課金枠も使えない → `unusable`
  * 6. それ以外の `ok` → `usable`
@@ -92,7 +127,7 @@ export function judgeTokenCandidate(state: AccountUsageState): TokenCandidateVer
   if (state.state === 'unavailable') {
     return {
       verdict: 'undecidable',
-      reason: `この認証では原理的に枠が取れない（reason: ${state.reason}）`,
+      reason: `${describeUnavailableHead(state.cause)}（reason: ${state.reason}）`,
     };
   }
 

@@ -527,6 +527,15 @@ export const agentTokens = pgTable('agent_tokens', {
   disabledAt: timestamp('disabled_at', { withTimezone: true, mode: 'date' }),
   /** epoch ミリ秒（`AgentToken.cooldownUntil` と同じ単位）。 */
   cooldownUntil: bigint('cooldown_until', { mode: 'number' }),
+  /**
+   * 上の期限をどこから採ったか（#683。`@alteroid/core` の `CooldownSource`）。
+   *
+   * **null を `default` と読まないこと。** 後から足した列なので、既存の行は
+   * null である —— 「推測だった」ではなく「言えなかった」である
+   * （`created_at` / `updated_at` を `default now()` で埋めないのと同じ理由）。
+   * **`default` を DB の既定値にもしないこと。**
+   */
+  cooldownSource: text('cooldown_source'),
   lastRejectedAt: timestamp('last_rejected_at', { withTimezone: true, mode: 'date' }),
   lastRejectedReason: text('last_rejected_reason'),
   /**

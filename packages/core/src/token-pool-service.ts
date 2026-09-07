@@ -8,6 +8,7 @@ import {
   type AgentToken,
   type AgentTokenInput,
   type AgentTokenView,
+  type TokenFailureObservation,
   type TokenRotationPolicy,
   type TokenRotationSettings,
 } from './token-pool.js';
@@ -52,24 +53,26 @@ export interface TokenPoolService {
    * **回さない。** 記録するだけで、次の候補を選ぶことも撒くこともしない——
    * それは回し手（PR3）の領域である。
    *
-   * 冷却の期限は `resetsAt`（権威ある値）、取れなければ**この列の中で読んだ
-   * 設定の `cooldownMs`**。⚠️ 呼び出し側で設定を読んで渡す形にしないこと——
-   * 読んでから渡すまでの隙間に設定が変わると、古い既定で冷やすことになる。
+   * 冷却の期限は `resets`（権威ある値。#683 で出所と組にした）、取れなければ
+   * **この列の中で読んだ設定の `cooldownMs`**。⚠️ 呼び出し側で設定を読んで渡す
+   * 形にしないこと——読んでから渡すまでの隙間に設定が変わると、古い既定で
+   * 冷やすことになる。
+   *
+   * **⚠️ 引数の形を書き写さないこと**（#683 で踏んだ）。ここはかつて
+   * `resetsAt?: number` を自前で宣言していて、`TokenFailureObservation` 側を
+   * `resets: { at, source }` へ変えたときに**型検査を1つも落とさずに素通り
+   * した** —— 実装は `...(input.resetsAt === undefined ? {} : { resetsAt: … })`
+   * の形で渡していて、**オブジェクトリテラルへの spread は余分な欄を弾かない。**
+   * ⟹ 期限が黙って捨てられ、**歯が1本落ちるまで誰も気づかなかった。**
+   * だから {@link TokenFailureObservation} から `Pick` する形にしてある。
    *
    * **見つからなければ `undefined` を返す（投げない）。** 止まった通知が届く
    * までの間に人間がその行を消していることは普通に起こりうるので、これは
    * 異常系ではない。
    */
-  noteUnusable(input: {
-    id: string;
-    /**
-     * 止まったときの文言。**SDK が出したものをそのまま渡す**
-     * （`TokenFailureObservation.message` の doc）。
-     */
-    message: string;
-    /** 権威ある復帰時刻（epoch ミリ秒）。取れなければ省略——`0` で埋めない。 */
-    resetsAt?: number;
-  }): Promise<AgentTokenView | undefined>;
+  noteUnusable(
+    input: { id: string } & Pick<TokenFailureObservation, 'message' | 'resets'>,
+  ): Promise<AgentTokenView | undefined>;
   /**
    * 使えることを確かめられたので、止まっていた記録を消す（Issue #393）。
    *
@@ -218,7 +221,7 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
         return { tokens: stored.map(toAgentTokenView), settings };
       }),
 
-    noteUnusable: (input: { id: string; message: string; resetsAt?: number }) =>
+    noteUnusable: (input: { id: string } & Pick<TokenFailureObservation, 'message' | 'resets'>) =>
       serial(async () => {
         const [existing, settings] = await Promise.all([
           stores.tokens.list(),
@@ -228,7 +231,7 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
           markTokenUnusable(token, {
             at: now().toISOString(),
             message: input.message,
-            ...(input.resetsAt === undefined ? {} : { resetsAt: input.resetsAt }),
+            ...(input.resets === undefined ? {} : { resets: input.resets }),
             fallbackCooldownMs: settings.cooldownMs,
           }),
         );

@@ -419,6 +419,12 @@ export const STATEMENTS = [
   // **`value` の not null を外す。** `source = 'env'` の行は値を持たない。
   `alter table agent_tokens alter column value drop not null`,
 
+  // 冷却の期限の出所（#683）。**`default now()` のような既定値を付けない**
+  // ——既存の行は「出所を言えない」のであって「推測だった」のではない
+  // （`@alteroid/core` の `AgentToken.cooldownSource` の doc）。埋めると
+  // 「推測だと観測した」という嘘を全行へ書くことになる。
+  `alter table agent_tokens add column if not exists cooldown_source text`,
+
   // いま撒いてある現役の指名（Issue #393 PR3）。高々1行（id = 'default'）。
   // **`agent_tokens` の列にしない** — 2行が同時に現役だと主張する形を作らない。
   `create table if not exists agent_token_active (

@@ -95,6 +95,74 @@ export const DEFAULT_TOKEN_ROTATION_SETTINGS: TokenRotationSettings = {
   cooldownMs: DEFAULT_TOKEN_COOLDOWN_MS,
 };
 
+/**
+ * **冷却の期限をどこから採ったか**（#683）。
+ *
+ * ## なぜ要るか —— 行を見ても、本物か推測かが言えなかった
+ *
+ * {@link AgentToken.cooldownUntil} は出所を3つ持ちうるのに、**行はどれから来たかを
+ * 覚えていなかった** ⟹ `2026-09-07T16:52:56.162Z` という値を見ても、それが枠の
+ * リセット時刻なのか、5時間足しただけなのかが**誰にも言えない。**
+ *
+ * | 値 | 出所 | 質 |
+ * | --- | --- | --- |
+ * | `quota_reset` | 枠の `resetsAt` | **権威ある値** |
+ * | `overage_reset` | 課金枠の `overageResetsAt` | **権威ある値**（枠そのものではない） |
+ * | `notice_text` | 上限の**文言**に書かれていた時刻（#682） | **推測。ただし既定よりは良い** |
+ * | `default` | 設定の `cooldownMs` を足しただけ | **ただの推測** |
+ *
+ * ## `notice_text` を権威ある値と同じ顔にしない（#682 の地雷）
+ *
+ * `resetsAt` は SDK が**構造化して**渡してきたもので、`notice_text` は
+ * **文字列から読んだ推測**である（`usage-reset-text.ts`）。混ぜると、
+ * **どちらから来たか分からない行が増える。**
+ *
+ * **⚠️ `default` へ潰さないのも同じ理由である。** あちらは「何も分からないので
+ * 5時間足した」で、こちらは「文言がそう書いていた」——**外し方が違う**（前者は
+ * 桁で外れ、後者は日付の取り違えで外れる）。潰すと、どちらの外し方だったのかを
+ * 後から誰も言えない。
+ *
+ * ## 3値を2値へ潰さないこと
+ *
+ * 「権威ある / 推測」へ畳むと、**枠と課金枠の食い違いが記録から消える** ——
+ * `cooldownUntilFrom` が早いほうを採っている理由（無料枠が先に開くのに課金枠の
+ * リセットまで寝ない）が、後から検算できなくなる。
+ *
+ * ## ⚠️ 「取れなかった」を `default` で埋めないこと
+ *
+ * この欄が**無い**行が在る（#683 より前に置かれた行、および推測と記録の早いほうを
+ * 採った回に記録側の出所が分からなかった行）。**`default` で埋めると「推測だと
+ * 観測した」という嘘になる**（`AgentToken.createdAt` が無い行を `now()` で埋め直さ
+ * ないのと同じ理由）。
+ *
+ * ## ⚠️ これは「書いた時点の事実」であって、いまの正しさではない
+ *
+ * `quota_reset` と書いてあっても、その値が古くなっていることはある（枠は開いて
+ * 閉じ直す）。答えているのは「どこから採ったか」だけである。
+ */
+export const cooldownSourceSchema = z.enum([
+  'quota_reset',
+  'overage_reset',
+  'notice_text',
+  'default',
+]);
+export type CooldownSource = z.infer<typeof cooldownSourceSchema>;
+
+/**
+ * 権威ある出所（枠 / 課金枠）だけを表す型。**推測の2値を含まない。**
+ *
+ * {@link TokenFailureObservation.resets} が受けるのはこちらである ——
+ * 「権威ある期限が届いた」と「届かなかったので推測した」を同じ入り口にすると、
+ * `default` や `notice_text` を `resets.source` として渡せる形が生まれる
+ * （＝推測を権威ある値の顔で書き込める。あちらは `min` を通らない）。
+ *
+ * **⚠️ 数え上げで書かないこと**（`'quota_reset' | 'overage_reset'` と直に書く形）。
+ * `Exclude` にしてあるので、{@link CooldownSource} に**権威ある**値が増えたときは
+ * 自動で入り、**推測**が増えたときはここを1行直せば済む —— 直し忘れても
+ * `nextCooldownUntil` の側で型が落ちる。
+ */
+export type AuthoritativeCooldownSource = Exclude<CooldownSource, 'default' | 'notice_text'>;
+
 // ---------------------------------------------------------------------------
 // トークン1本の正本（`value` を持つのはデーモンの中だけ）
 // ---------------------------------------------------------------------------
@@ -147,6 +215,19 @@ export interface AgentToken {
   disabledAt?: string;
   /** epoch ミリ秒（**戻る側**。`resetsAt` 由来、取れなければ設定の既定）。 */
   cooldownUntil?: number;
+  /**
+   * 上の {@link AgentToken.cooldownUntil} を**どこから採ったか**（#683。値の一覧と
+   * 3値を潰さない理由は {@link CooldownSource}）。
+   *
+   * **無い行が在る。`default` で埋めないこと** —— #683 より前に置かれた行と、
+   * 記録側の出所が分からないまま早いほうを採った回がそれである（{@link
+   * nextCooldownUntil}）。**無いことが読めるのは「言えなかった」という事実だけ
+   * である。**
+   *
+   * **{@link AgentToken.cooldownUntil} と組で消える**（{@link markTokenUsable}）。
+   * 期限が無い行に出所だけ残ると、**何の出所なのか指す先が無い。**
+   */
+  cooldownSource?: CooldownSource;
   lastRejectedAt?: string;
   lastRejectedReason?: string;
   /**
@@ -237,6 +318,14 @@ export const agentTokenViewSchema = z.object({
   source: z.enum(['stored', 'env']).optional(),
   disabledAt: z.string().optional(),
   cooldownUntil: z.number().optional(),
+  /**
+   * 上の期限の出所（#683。{@link CooldownSource}）。
+   *
+   * **権威ある値のときも必ず出す。** 「推測のときだけ書く」形にすると、**欄が
+   * 無いことが「推測ではない」と「まだ対応していない版である」の両方を意味する**
+   * （`AGENTS.md` の地雷「取れない軸に 0 の行を作る」の裏返し）。
+   */
+  cooldownSource: cooldownSourceSchema.optional(),
   lastRejectedAt: z.string().optional(),
   lastRejectedReason: z.string().optional(),
   invalidatedAt: z.string().optional(),
@@ -269,6 +358,7 @@ export function toAgentTokenView(token: AgentToken): AgentTokenView {
     ...(token.source === undefined ? {} : { source: token.source }),
     ...(token.disabledAt === undefined ? {} : { disabledAt: token.disabledAt }),
     ...(token.cooldownUntil === undefined ? {} : { cooldownUntil: token.cooldownUntil }),
+    ...(token.cooldownSource === undefined ? {} : { cooldownSource: token.cooldownSource }),
     ...(token.lastRejectedAt === undefined ? {} : { lastRejectedAt: token.lastRejectedAt }),
     ...(token.lastRejectedReason === undefined
       ? {}
@@ -457,6 +547,7 @@ export function normalizeTokenPool(
       ...(disabledAt === undefined ? {} : { disabledAt }),
       // **`disabled` 以外の派生値は人間の入力からは触れない——常に引き継ぐ。**
       ...(current?.cooldownUntil === undefined ? {} : { cooldownUntil: current.cooldownUntil }),
+      ...(current?.cooldownSource === undefined ? {} : { cooldownSource: current.cooldownSource }),
       ...(current?.lastRejectedAt === undefined ? {} : { lastRejectedAt: current.lastRejectedAt }),
       ...(current?.lastRejectedReason === undefined
         ? {}
@@ -511,12 +602,35 @@ export interface TokenFailureObservation {
    */
   message: string;
   /**
-   * 権威ある復帰時刻（epoch ミリ秒）。`toRateLimitFacts` の `resetsAt` を渡す。
+   * 権威ある復帰時刻（epoch ミリ秒）と、**その出所**（#683）。
    *
    * **取れなかったら省略する。`0` や `now` で埋めないこと**——埋めた値は
    * 「そう観測した」と読める（AGENTS.md 地雷「取れない軸に 0 の行を作る」）。
+   *
+   * **時刻と出所を1つの組で受けるのは、片方だけ渡せる形を作らないためである。**
+   * 2つの欄に分けると「時刻は渡したが出所は書き忘れた」が型で通り、**行の側では
+   * 「出所が言えなかった回」と見分けが付かない**（そちらは #683 より前の行という
+   * 別の意味を持つ）。
+   *
+   * `source` に `default` を入れられないのも同じ理由である
+   * （{@link AuthoritativeCooldownSource}）。
    */
-  resetsAt?: number;
+  resets?: { at: number; source: AuthoritativeCooldownSource };
+  /**
+   * **文言から読んだリセット時刻**（epoch ミリ秒。#682。`usage-reset-text.ts` の
+   * `parseNoticeResetAt` の返り値を渡す）。読めなかったら省略する。
+   *
+   * ## 権威ある値（{@link TokenFailureObservation.resets}）と別の欄である
+   *
+   * こちらは**推測なので、記録との `min` を通る**（下の {@link nextCooldownUntil}）。
+   * 同じ欄で受けると、**文字列から読んだ値が記録された本物の期限を後ろへ押し
+   * 出せる** ——#678 で塞いだ穴をそのまま開け直すことになる。
+   *
+   * **⚠️ 窓の挟み（`(at, at + fallback]`）は渡す側の責任である**（あちらの doc）。
+   * ここは受けた値をそのまま候補に混ぜるだけで、**大きさを検査しない** ——
+   * 検査を2箇所に置くと、片方だけ直したときに静かにずれる。
+   */
+  noticeResetsAt?: number;
   /**
    * `resetsAt` が取れなかったときに使う冷却（ミリ秒）。設定の既定
    * （`TokenRotationSettings.cooldownMs`）を渡す。
@@ -533,12 +647,36 @@ export interface TokenFailureObservation {
 }
 
 /**
- * この観測で書く冷却の期限（epoch ミリ秒）を決める。
+ * この観測で書く冷却の期限（epoch ミリ秒）と、**その出所**（#683）を決める。
  *
- * | `resetsAt` | 書く値 |
- * | --- | --- |
- * | 届いた | **そのまま採る。** 記録より後ろでも採る（権威ある値である） |
- * | 届かなかった | `at + fallback` の**推測**。ただし**記録されている未来の期限より後ろへは行かない**（早いほうを採る） |
+ * | `resets` | 書く値 | 出所 |
+ * | --- | --- | --- |
+ * | 届いた | **そのまま採る。** 記録より後ろでも採る（権威ある値である） | 渡された `source` |
+ * | 届かなかった | **推測どうしと記録の中で、いちばん早いもの**（下） | 採ったほう（下） |
+ *
+ * ## 推測は3つ在りうる（#682 で1つ増えた）
+ *
+ * 1. **記録**（`recorded`。前の回に書かれた期限。`at` より後のものだけ見る）
+ * 2. **文言から読んだ時刻**（{@link TokenFailureObservation.noticeResetsAt}）
+ * 3. **設定の既定**（`at + fallbackCooldownMs`）
+ *
+ * **どれも `min` で選ぶ。** 2 は「文字列から読んだ推測」なので、**権威ある値の
+ * 側（`resets`）へ混ぜない** —— 混ぜると記録された本物の期限を後ろへ押し出せる
+ * （#678 で塞いだ穴が開く）。
+ *
+ * **同じ値で並んだときは、上の並び順で先に来たほうの出所を採る。** 記録の側は
+ * 権威ある出所を持ちうるので、**そちらを残すほうが失う情報が少ない。**
+ *
+ * ## 早いほうを採ったとき、出所も一緒に動く（#683）
+ *
+ * `min(記録, 推測)` で**記録が勝った**回は、書く値は記録のままである ⟹ 出所も
+ * 記録の側のものを引き継ぐ。**`default` と書かないこと** ——その値は推測では
+ * ないからである。
+ *
+ * **⚠️ そして記録側の出所が無い行が在る**（#683 より前に置かれた行）。そのときは
+ * **出所を書かない** —— `default` で埋めると「推測だと観測した」という嘘になる
+ * （{@link AgentToken.cooldownSource}）。⟹ この関数の返り値は `source` を
+ * **省略しうる。**
  *
  * ## なぜ「推測が記録を後ろへ動かさない」が要るのか
  *
@@ -577,24 +715,49 @@ export interface TokenFailureObservation {
  * のまま残る——**「止まった」を記録しに来た呼びが、止まっていないことを記録する。**
  */
 function nextCooldownUntil(
-  recorded: number | undefined,
+  recorded: { until: number | undefined; source: CooldownSource | undefined },
   observation: TokenFailureObservation,
-): number {
+): { until: number; source?: CooldownSource } {
   // **権威ある値はそのまま。** ここに `min` を入れないこと——入れると、いま
   // 効いている枠（週の枠など）が記録より後ろを指しているときに、その枠を
   // 「もう開いた」と主張することになる。
-  if (observation.resetsAt !== undefined) return observation.resetsAt;
+  if (observation.resets !== undefined) {
+    return { until: observation.resets.at, source: observation.resets.source };
+  }
   const at = Date.parse(observation.at);
-  const guess = at + observation.fallbackCooldownMs;
-  if (recorded === undefined || recorded <= at) return guess;
-  return Math.min(recorded, guess);
+  /**
+   * 推測の候補たち。**並び順が同値のときの優先順である**（上の doc）。
+   *
+   * `source` が `undefined` の要素が在る —— 記録の出所が無い行（#683 より前）で、
+   * **`default` で埋めない**（「推測だと観測した」という嘘になる）。
+   */
+  const candidates: { until: number; source?: CooldownSource }[] = [
+    // **過ぎた記録は候補にしない**（下の「過去の記録は見ない」）。
+    ...(recorded.until !== undefined && recorded.until > at
+      ? [
+          {
+            until: recorded.until,
+            ...(recorded.source === undefined ? {} : { source: recorded.source }),
+          },
+        ]
+      : []),
+    // 文言から読んだ時刻（#682）。**窓の挟みは渡す側が済ませている。**
+    ...(observation.noticeResetsAt === undefined
+      ? []
+      : [{ until: observation.noticeResetsAt, source: 'notice_text' as const }]),
+    { until: at + observation.fallbackCooldownMs, source: 'default' as const },
+  ];
+  // **いちばん早いものを採る。** 同値なら先に並んでいるほう（`reduce` の初期値を
+  // 先頭にして、**厳密に小さいときだけ**入れ替える）。
+  return candidates.reduce((best, one) => (one.until < best.until ? one : best));
 }
 
 /**
  * 止まった事実を1行へ書き込む（純粋関数。新しい行を返す）。
  *
- * 書くのは3つ——**いつ**（`lastRejectedAt`）・**何と言われたか**（`lastRejectedReason`）・
- * **いつ戻る見込みか**（`cooldownUntil`）。加えて `updatedAt`。
+ * 書くのは4つ——**いつ**（`lastRejectedAt`）・**何と言われたか**（`lastRejectedReason`）・
+ * **いつ戻る見込みか**（`cooldownUntil`）・**その期限をどこから採ったか**
+ * （`cooldownSource`。#683）。加えて `updatedAt`。
  *
  * **触らないもの:**
  *
@@ -616,21 +779,33 @@ export function markTokenUnusable(
   token: AgentToken,
   observation: TokenFailureObservation,
 ): AgentToken {
-  const cooldownUntil = nextCooldownUntil(token.cooldownUntil, observation);
-  return {
+  const cooldown = nextCooldownUntil(
+    { until: token.cooldownUntil, source: token.cooldownSource },
+    observation,
+  );
+  const next: AgentToken = {
     ...token,
     lastRejectedAt: observation.at,
     lastRejectedReason: observation.message,
-    cooldownUntil,
+    cooldownUntil: cooldown.until,
     updatedAt: observation.at,
   };
+  // **出所が言えない回は欄を消す。** 前の行の値が残ると、**いま書いた期限の
+  // 出所として読まれる**（`AgentToken.cooldownSource` の doc）。
+  if (cooldown.source === undefined) delete next.cooldownSource;
+  else next.cooldownSource = cooldown.source;
+  return next;
 }
 
 /**
  * 使えることを確かめられたので、止まっていた記録を**消す**（純粋関数）。
  *
- * 消すのは4つ+1——`lastRejectedAt` / `lastRejectedReason` / `cooldownUntil` /
- * `invalidatedAt` / `invalidatedReason`。**`disabledAt` は消さない**（人間の判断）。
+ * 消すのは5つ+1——`lastRejectedAt` / `lastRejectedReason` / `cooldownUntil` /
+ * `cooldownSource` / `invalidatedAt` / `invalidatedReason`。**`disabledAt` は
+ * 消さない**（人間の判断）。
+ *
+ * **`cooldownSource` は `cooldownUntil` と組で消す**（#683）。期限が無い行に出所
+ * だけ残ると、**何の出所なのか指す先が無い。**
  *
  * **なぜ `invalidatedAt` まで消すのか。** 成功は権威ある証拠である——`clone.ts` が
  * 成功した `result` で `#usageBlocked` を降ろしているのと同じ根拠（逐語は
@@ -651,6 +826,7 @@ export function markTokenUsable(token: AgentToken, at: string): AgentToken {
   delete next.lastRejectedAt;
   delete next.lastRejectedReason;
   delete next.cooldownUntil;
+  delete next.cooldownSource;
   delete next.invalidatedAt;
   delete next.invalidatedReason;
   return next;

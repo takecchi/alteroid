@@ -223,6 +223,361 @@ describe('#668 / #667: 状態だけを運ぶ観測', () => {
   });
 });
 
+/**
+ * **#680**: 文言で検知した拒否（`signal: 'reached'`）が枠の事実を1つも運ばないので、
+ * 冷却が設定の既定（5時間）へ倒れていた。
+ *
+ * **測るのは「どこから期限を採ったか」である** —— 冷却の期限が `resetsAt` と一致
+ * するか、`now + 既定` と一致するか。本番でこの2つを見分けたのも同じやり方だった
+ * （ミリ秒が `.000` で分も丸い ⟹ `resetsAt` / ミリ秒まで `last_rejected_at + 5h`
+ * と一致 ⟹ 既定）。
+ */
+describe('#680: 文言だけの拒否でも、覚えている枠の事実から期限を採る', () => {
+  /** 既定の冷却（5時間）を足しただけの期限。**これが倒れ先である。** */
+  const GUESS = Date.parse(AT) + 5 * 60 * 60_000;
+  /** 覚えさせる `resetsAt`（既定より早い、まだ先の時刻）。 */
+  const RESETS_AT = Date.parse(AT) + 90 * 60_000;
+
+  /**
+   * 事実を1件覚えさせる。**回らない形で渡す**（身元を運ばない観測は状態だけでは
+   * 回らない —— `decideTokenRotation` の doc）。⟹ 世代が上がらないので、この後の
+   * 文言だけの観測は同じ鍵についてのものになる。
+   */
+  async function remember(h: Harness, facts: Parameters<typeof h.rotator.observe>[0]['facts']) {
+    const outcome = await h.rotator.observe({ facts, statusNow: 'rejected' });
+    // **前提を固定する。** ここが `rotated` になっていたら、この後のテストは
+    // 「覚えた事実が効いた」ではなく別のものを測っている。
+    expect(outcome.kind).toBe('ignored');
+    expect(await isCooling(h, 'tok-a')).toBe(false);
+  }
+
+  async function cooldownOf(h: Harness, id: string): Promise<number | undefined> {
+    return (await h.stores.tokens.list()).find((token) => token.id === id)?.cooldownUntil;
+  }
+
+  it('覚えている resetsAt を使う（5時間の推測へ倒れない）', async () => {
+    const h = harness();
+    await seedTwo(h);
+    await remember(h, { kind: 'five_hour', status: 'rejected', resetsAt: RESETS_AT });
+
+    const outcome = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(outcome.kind).toBe('rotated');
+    // **これが直した穴そのものである。**
+    expect(await cooldownOf(h, 'tok-a')).toBe(RESETS_AT);
+    expect(await cooldownOf(h, 'tok-a')).not.toBe(GUESS);
+  });
+
+  it('この回の観測が事実を運んでいれば、そちらが勝つ（覚えている側は古い）', async () => {
+    const h = harness();
+    await seedTwo(h);
+    await remember(h, { kind: 'five_hour', status: 'rejected', resetsAt: RESETS_AT });
+
+    const fresh = Date.parse(AT) + 30 * 60_000;
+    const outcome = await h.rotator.observe({
+      notice: reached,
+      facts: { kind: 'five_hour', status: 'rejected', resetsAt: fresh },
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(outcome.kind).toBe('rotated');
+    expect(await cooldownOf(h, 'tok-a')).toBe(fresh);
+  });
+
+  it('別のトークンについて覚えた事実は使わない', async () => {
+    // **一致を見ないと、回した後の新しい鍵に前の鍵の枠のリセット時刻を当てる。**
+    const h = harness();
+    await seedTwo(h);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-b', generation: 1, rotatedAt: AT });
+    await h.rotator.observe({
+      facts: { kind: 'five_hour', status: 'rejected', resetsAt: RESETS_AT },
+      statusNow: 'rejected',
+    });
+    // 現役を tok-a へ戻す（tok-b について覚えた事実が残っている状態）。
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 2, rotatedAt: AT });
+
+    await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 2 },
+    });
+
+    expect(await cooldownOf(h, 'tok-a')).toBe(GUESS);
+  });
+
+  it('拒否を名乗っていない事実は覚えない（重ねた形の status を見ない）', async () => {
+    // `facts.status` は重ねた形なので、一度書かれた `rejected` が残り続ける。
+    // ⟹ 見るのは `statusNow`（この1件が運んできた生の観測）だけである。
+    const h = harness();
+    await seedTwo(h);
+    await h.rotator.observe({
+      facts: { kind: 'five_hour', status: 'rejected', resetsAt: RESETS_AT },
+      // **`statusNow` を渡さない** ＝ この1件は拒否を名乗っていない。
+    });
+
+    await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(await cooldownOf(h, 'tok-a')).toBe(GUESS);
+  });
+
+  it('覚えている期限が過ぎていたら使わない（既定へ倒れる）', async () => {
+    const h = harness();
+    await seedTwo(h);
+    await remember(h, {
+      kind: 'five_hour',
+      status: 'rejected',
+      resetsAt: Date.parse(AT) - 60_000,
+    });
+
+    await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(await cooldownOf(h, 'tok-a')).toBe(GUESS);
+  });
+
+  /**
+   * **⚠️ レビューで見つかった穴。** `rejected` を覚えるだけで**忘れる道が無かった**
+   * ので、**先に開いた枠の遠い期限が居座って、後から来た別の拒否を3日冷やした。**
+   *
+   * `mergeRateLimitFacts` の doc が同じ規律を逐語で書いている（「記憶が消える道は
+   * 塞がない。`status` が `'allowed'` で届けば `rejected` の記憶はそこで上書き
+   * される」）—— あちらと同じ側へ倒す。
+   */
+  it('⚠️ 開いたと言う観測が届いたら、その枠の記憶を消す', async () => {
+    const h = harness();
+    await seedTwo(h);
+    const threeDays = Date.parse(AT) + 72 * 60 * 60_000;
+    // 1. 週の枠が拒否された（3日先）。覚える。
+    await remember(h, { kind: 'seven_day', status: 'rejected', resetsAt: threeDays });
+    // 2. その枠が**先に開いた**（管理者が枠を足した等）。
+    await h.rotator.observe({
+      facts: { kind: 'seven_day', status: 'allowed', resetsAt: threeDays },
+      statusNow: 'allowed',
+    });
+
+    // 3. その後、文言だけの拒否が届く（5時間の枠 / セッション上限の側）。
+    await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    // **3日ではなく既定へ倒れる。** 開いた枠の期限は、いまの拒否を説明しない。
+    expect(await cooldownOf(h, 'tok-a')).toBe(GUESS);
+  });
+
+  /**
+   * **同じ穴の別の入口。** probe が「通る」と観測したら、覚えていた拒否も落とす
+   * —— `judgeTokenCandidate` の `usable` は「取れた枠のどれも使い切っていない」
+   * なので、**覚えていた「その枠は拒否した」はもう真ではない。**
+   */
+  it('⚠️ probe が通ると観測したら、覚えている拒否も忘れる', async () => {
+    const h = harness({ verdict: { verdict: 'usable' } });
+    await seedTwo(h);
+    const threeDays = Date.parse(AT) + 72 * 60 * 60_000;
+    await remember(h, { kind: 'seven_day', status: 'rejected', resetsAt: threeDays });
+    // 現役の行に止まった記録を入れて、`recovered` の道を通す。
+    const rows = await h.stores.tokens.list();
+    await h.stores.tokens.replace(
+      rows.map((token) =>
+        token.id === 'tok-a' ? { ...token, cooldownUntil: Date.parse(AT) + 60_000 } : token,
+      ),
+    );
+    const recovered = await h.rotator.reconsider({
+      reason: 'account_probe',
+      currentVerdict: { verdict: 'usable' },
+    });
+    expect(recovered.kind).toBe('ignored');
+
+    // その後の文言だけの拒否は、**3日ではなく既定へ倒れる。**
+    await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(await cooldownOf(h, 'tok-a')).toBe(GUESS);
+  });
+
+  it('status を運んでいない観測では記憶を消さない（省略は「何も言っていない」）', async () => {
+    // **`undefined` で消すと、`rate_limit_event` が `status` を省いた回に
+    // 覚えたものが全部落ちる**（あの欄は普通に省略される）。
+    const h = harness();
+    await seedTwo(h);
+    await remember(h, { kind: 'five_hour', status: 'rejected', resetsAt: RESETS_AT });
+    await h.rotator.observe({ facts: { kind: 'five_hour', utilization: 90 } });
+
+    await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(await cooldownOf(h, 'tok-a')).toBe(RESETS_AT);
+  });
+
+  /**
+   * **既定より後ろの期限を書くのは正しい**（レビューで聞かれた点）。
+   *
+   * 覚えているのは**その枠自身が拒否した回**の事実で、しかも**まだ先の期限しか
+   * 使わない** ⟹ その窓はいまも閉じている。週の枠が尽きているなら3日冷やすのが
+   * 正しく、`min` を入れると「もう開いた」と主張することになる（#678）。
+   */
+  it('週の枠が閉じたままなら、既定（5時間）より後ろの期限を書く', async () => {
+    const h = harness();
+    await seedTwo(h);
+    const threeDays = Date.parse(AT) + 72 * 60 * 60_000;
+    await remember(h, { kind: 'seven_day', status: 'rejected', resetsAt: threeDays });
+
+    await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(await cooldownOf(h, 'tok-a')).toBe(threeDays);
+    // **推測ではない**ので、出所も権威ある側を名乗る。
+    const row = (await h.stores.tokens.list()).find((token) => token.id === 'tok-a');
+    expect(row?.cooldownSource).toBe('quota_reset');
+  });
+
+  it('⚠️ 覚えた事実を判定へ混ぜない（signal も倒れ先も動かさない）', async () => {
+    // **混ぜると `overageClosed(facts)` が古い記憶で立つ** ⟹ `signal` が
+    // `quota_rejected` → `overage_closed` に化け、設定が `overage_exhausted` の
+    // 器では**回らないはずの回が回る。**
+    const h = harness();
+    await seedTwo(h);
+    await h.stores.tokens.writeSettings({ rotateOn: 'overage_exhausted', cooldownMs: 18_000_000 });
+    // 課金枠も閉じている事実を覚えさせる（身元を運ばないので回らない）。
+    await remember(h, {
+      kind: 'five_hour',
+      status: 'rejected',
+      overageStatus: 'rejected',
+      resetsAt: RESETS_AT,
+    });
+
+    // いまの世代を名乗るが、**この回は事実を運んでいない**観測。
+    const outcome = await h.rotator.observe({
+      statusNow: 'rejected',
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    // 混ざっていたら `overage_closed` で回る。混ざっていなければ回らない。
+    expect(outcome.kind).toBe('ignored');
+    expect(outcome.signal).not.toBe('overage_closed');
+    expect(await isCooling(h, 'tok-a')).toBe(false);
+    expect(h.spreadCalls).toEqual([]);
+  });
+});
+
+/**
+ * **#682**: 覚えている事実も無い回に、文言に書かれている時刻を使う。
+ *
+ * **#680 の残りがここである** —— その鍵について `rate_limit_event` が1件も
+ * 届いていなければ覚えるものが無く、いまも既定へ倒れる。
+ */
+describe('#682: 文言に書かれている時刻を使う', () => {
+  /** 本番の実測の形（#682 の本文の逐語）。`10:10pm (Asia/Tokyo)` = `13:10Z`。 */
+  const OBSERVED = "You've hit your session limit · resets 10:10pm (Asia/Tokyo)";
+
+  /** 時計を本番の実測の瞬間に合わせた足場（`AT` は 03:00Z で、窓に入らない）。 */
+  function harnessAt(at: string): Harness {
+    const h = harness();
+    // `harness()` の時計は `AT` 固定なので、この試験だけ差し替える。
+    const stores = h.stores;
+    const rotator = createTokenRotator({
+      stores,
+      probe: { probe: async () => ({ verdict: 'usable' }) },
+      spread: { spread: async () => [{ target: 'runner-primary', ok: true }] },
+      now: () => new Date(Date.parse(at)),
+    });
+    return { ...h, rotator };
+  }
+
+  async function seedAt(h: Harness, at: string): Promise<void> {
+    await h.stores.tokens.replace([
+      { id: 'tok-a', label: 'first', value: 'value-a', order: 0 },
+      { id: 'tok-b', label: 'second', value: 'value-b', order: 1 },
+    ]);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: at });
+  }
+
+  async function cooldownOf(h: Harness, id: string) {
+    const row = (await h.stores.tokens.list()).find((token) => token.id === id);
+    return { until: row?.cooldownUntil, source: row?.cooldownSource };
+  }
+
+  it('文言の時刻を採り、出所を notice_text と記録する', async () => {
+    const at = '2026-09-07T11:42:22.701Z';
+    const h = harnessAt(at);
+    await seedAt(h, at);
+
+    const outcome = await h.rotator.observe({
+      notice: { kind: 'reached', text: OBSERVED },
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(outcome.kind).toBe('rotated');
+    expect(await cooldownOf(h, 'tok-a')).toEqual({
+      until: Date.parse('2026-09-07T13:10:00.000Z'),
+      source: 'notice_text',
+    });
+  });
+
+  it('文言に時刻が無ければ既定へ倒れる（今日の振る舞い）', async () => {
+    const at = '2026-09-07T11:42:22.701Z';
+    const h = harnessAt(at);
+    await seedAt(h, at);
+
+    await h.rotator.observe({
+      notice: { kind: 'reached', text: "You've hit your usage limit" },
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(await cooldownOf(h, 'tok-a')).toEqual({
+      until: Date.parse(at) + 5 * 60 * 60_000,
+      source: 'default',
+    });
+  });
+
+  it('覚えている枠の事実が在れば、そちらが勝つ（#680 が先）', async () => {
+    // **順序の固定である。** 文字列から読んだ値が構造化された事実を上書きしたら
+    // 逆転している。
+    const at = '2026-09-07T11:42:22.701Z';
+    const h = harnessAt(at);
+    await seedAt(h, at);
+    const remembered = Date.parse('2026-09-07T12:30:00.000Z');
+    await h.rotator.observe({
+      facts: { kind: 'five_hour', status: 'rejected', resetsAt: remembered },
+      statusNow: 'rejected',
+    });
+
+    await h.rotator.observe({
+      notice: { kind: 'reached', text: OBSERVED },
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(await cooldownOf(h, 'tok-a')).toEqual({ until: remembered, source: 'quota_reset' });
+  });
+
+  it('文言（原文）は1文字も書き換えない（受け入れ基準8）', async () => {
+    const at = '2026-09-07T11:42:22.701Z';
+    const h = harnessAt(at);
+    await seedAt(h, at);
+
+    await h.rotator.observe({
+      notice: { kind: 'reached', text: OBSERVED },
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    const row = (await h.stores.tokens.list()).find((token) => token.id === 'tok-a');
+    expect(row?.lastRejectedReason).toBe(OBSERVED);
+  });
+});
+
 describe('受け入れ基準1: 1本目が止まったら2本目へ回る', () => {
   it('回して、正本を書き換えて、撒く', async () => {
     const h = harness();
@@ -1541,6 +1896,74 @@ describe('tokenRotationEntry / tokenRestoreEntry', () => {
     expect(notRotated?.event).toBe('not_rotated');
     expect(exhausted?.event).toBe('exhausted');
     expect(exhausted?.earliestAt).toBe(new Date(1_800_000_000_000).toISOString());
+  });
+
+  /**
+   * **#683**: `earliestAt` の出所を日誌が覚える。
+   *
+   * 日誌には既に `earliestAt` が在ったが**出所は無かった** ⟹ 行を見ても
+   * 「その時刻が本物か、5時間足しただけか」が言えなかった。
+   */
+  describe('#683: earliestAt の出所', () => {
+    it('parked の行に出所が載る', () => {
+      const entry = tokenRotationEntry({
+        kind: 'parked',
+        fromTokenId: 'tok-a',
+        tokenId: 'tok-b',
+        label: '予備1',
+        generation: 5,
+        cooldownUntil: 1_800_000_000_000,
+        cooldownSource: 'quota_reset',
+        signal: 'reached',
+        freshness: 'current',
+        spread: [{ target: 'runner-primary', ok: true }],
+        why: 'いま通る鍵が無い',
+      });
+
+      expect(entry?.event).toBe('parked');
+      expect(entry?.cooldownSource).toBe('quota_reset');
+      // **人間が読む1行にも出す**（構造だけだと画面と CLI で言い方が割れる）。
+      expect(entry?.text).toContain('出所は枠の resetsAt');
+    });
+
+    it('exhausted の earliest にも載る', () => {
+      const entry = tokenRotationEntry({
+        kind: 'exhausted',
+        earliest: {
+          tokenId: 'tok-a',
+          label: '予備1',
+          cooldownUntil: 1_800_000_000_000,
+          cooldownSource: 'default',
+        },
+        signal: 'reached',
+        freshness: 'current',
+        why: '全部冷却中',
+      });
+
+      expect(entry?.cooldownSource).toBe('default');
+      // **推測であることを、推測の回にだけ黙らない形で言う。**
+      expect(entry?.text).toContain('ただの推測');
+    });
+
+    it('⚠️ 出所を持たない行では欄を作らない（既定で埋めない）', () => {
+      // **無いのは「言えなかった」である。** `default` で埋めると「推測だと
+      // 観測した」という嘘になり、読む側は本物の値を推測として捨てうる。
+      const entry = tokenRotationEntry({
+        kind: 'parked',
+        tokenId: 'tok-b',
+        label: '予備1',
+        generation: 5,
+        cooldownUntil: 1_800_000_000_000,
+        signal: 'reached',
+        freshness: 'current',
+        spread: [{ target: 'runner-primary', ok: true }],
+        why: 'いま通る鍵が無い',
+      });
+
+      expect(entry?.event).toBe('parked');
+      expect(entry).not.toHaveProperty('cooldownSource');
+      expect(entry?.text).not.toContain('出所は');
+    });
   });
 
   it('戻る見込みの候補が1本も無いとき earliestAt を埋めない（「すぐ戻る」と混ぜない）', () => {
