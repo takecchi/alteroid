@@ -1138,6 +1138,43 @@ describe('器が入れ替わった後の manager_send（#669）', () => {
   });
 
   /**
+   * **`running` へ二重に告げない。**
+   *
+   * `#reattach` は入れ替えの時点で `restartNudge` を渡して resume を出し、その中の
+   * `#claimForResume` が貸し出しを新しい `instanceId` で貸し直している。だから
+   * その後に `send()` が resume から入り直しても、ここの判定は成り立たない。
+   *
+   * **これは `status` で分岐した結果ではない**（判定は `done` と同じ1つを通る）。
+   * 貸し直しが済んでいるという状態の帰結である——だから `#reattach` が断られた
+   * （`held-by-lease`）回は貸し直していない＝まだ誰も告げていないので、`send()` が
+   * 告げるのが正しい。
+   */
+  it('running は #reattach が既に告げているので、その後の send で二重に告げない', async () => {
+    const h = await harnessOf();
+    await h.stores.jobs.putJob(runningJob(leaseHeldBy('boot-1')));
+
+    await h.pool.list();
+    expect(h.runner.emit).toBeTypeOf('function');
+    // 猶予を過ぎてから取り直す（関門を通す）。
+    h.advance(LEASE_DRAIN_MS + LEASE_MARGIN_MS + 1_000);
+    h.runner.emit?.({ type: 'hello', runnerId: 'runner-primary' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // `#reattach` の側で既に告げている（この対照が空振りしていない証拠）。
+    expect(h.runner.resumes).toHaveLength(1);
+    expect(h.runner.resumes[0]?.message).toContain('runner の器が作り直された');
+
+    // そのうえで、resume から入り直す回（#563）をもう一度作る。
+    h.runner.sendFailure = new RunnerHttpError('そのセッションは無い', 404);
+    await h.pool.send('mgr-1', '追加の指示');
+
+    expect(h.runner.resumes).toHaveLength(2);
+    expect(h.runner.resumes[1]?.message).toBe('追加の指示');
+
+    await h.close();
+  });
+
+  /**
    * **`status` / `live` / `sessionMissingSince` を1バイトも動かしていない。**
    *
    * 入れ替えを告げるかどうかで、外から見える3つの欄が変わってはいけない
