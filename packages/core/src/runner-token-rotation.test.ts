@@ -1,0 +1,465 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { createCredentialStore } from './credentials.js';
+import { createRunnerHost, type RunnerHost } from './runner.js';
+import type { RunnerEvent } from './runner-protocol.js';
+
+/**
+ * **走行中のマネージャーのセッションに、回した認証トークンを届ける**
+ * （fix/recycle-manager-session-on-token-rotation）。
+ *
+ * 穴の形は PR #454（クローン側。`recycleSessionForToken`）とまったく同じ —— SDK
+ * 子プロセスの env は起動時に凍るので、回した鍵は「これから起こす」分にしか
+ * 届かない。クローンは #454 で塞いだが、**走行中のマネージャーは塞がれていなかった**
+ * （`Host#setCredentials` が `this.#credentials.set(entries)` を呼ぶだけで、
+ * どのセッションにも触っていなかった）。ここで固定するのはその直しである。
+ *
+ * ## ⚠️ 偽 SDK の作り
+ *
+ * PR #454 の本文（`git log -1 --format=%B d27a90f`）が「1回目は3本とも何も
+ * 測っていなかった」と書いている——共有の `fakeSdk`（`for await` で1件ずつ処理し、
+ * ターン中に入力ストリームへ次を要求しない）では、`#inputStream` の境界判定が
+ * 「ターンが走っている」状態で一度も発火しない。**ここでは `clone.ts` の
+ * `lookaheadSdk` / `abortOnStreamEndSdk` と同じ形**（出力側が `prompt` の
+ * イテレータを直接読み、結果を出す前に次の入力を読み先行しておく）を、
+ * RunnerSession が持つ追加の軸（確認待ち・背景処理・session_id の有無）を
+ * 制御できるように拡張して使う。
+ */
+
+interface FakeManagerSession {
+  inputs: readonly string[];
+  /** マネージャーが本文を1つ喋る（ターンの途中の逐次配信を模す）。 */
+  say(text: string): void;
+  /** 確認を1件開く（`waiting_human` を作る）。わざと答えない。 */
+  ask(toolName: string, input: Record<string, unknown>): void;
+  /** 背景タスクの在り高を通知する（REPLACE 意味論）。 */
+  backgroundTasksChanged(tasks: readonly { id: string; taskType: string }[]): void;
+  /** もう一度 init（`session_started`）を流す。`session_id` を明示させる。 */
+  restartInit(sessionId: string): void;
+  /** 1ターンを畳む（`result`）。既定は成功。 */
+  finish(text: string, options?: { subtype?: string; isError?: boolean }): void;
+}
+
+/**
+ * **読み先行し、必要なら入力の口が閉じたらターンを捨てる偽 SDK。**
+ *
+ * - `abortOnInputClose: false`（既定）—— `clone.ts` の `lookaheadSdk` と同じ。
+ *   入力が尽きても、そのターンの結果は必ず出す。
+ * - `abortOnInputClose: true` —— `clone.ts` の `abortOnStreamEndSdk` と同じ。
+ *   入力の口が閉じたら、そのとき組み立て中のターンを結果を出さずに捨てる。
+ *   「ターンの途中で畳んでいないか」を検出するのに使う——途中で畳んでいれば、
+ *   `finish()` が積んだ `result` がそもそも生成側へ届かない。
+ *
+ * `skipInit: true` の最初のセッションだけ、起動直後の `system/init` を出さない
+ * （`#sessionId` がまだ無い状態を作るための限定用途。`restartInit()` で後から
+ * 出せる）。
+ *
+ * **⚠️ 本物の SDK がどちらの側かは測っていない。** PR #454 の本文と同じ注記——
+ * この歯が守るのは「どちらでも壊れない」ことであって「本物がこう振る舞う」では
+ * ない。
+ */
+function fakeSdk(opts: { abortOnInputClose?: boolean; skipInit?: boolean } = {}): {
+  fn: typeof sdkQuery;
+  sessions: FakeManagerSession[];
+  startedOptions: Options[];
+} {
+  const abortOnInputClose = opts.abortOnInputClose ?? false;
+  const sessions: FakeManagerSession[] = [];
+  const startedOptions: Options[] = [];
+  let seq = 0;
+
+  const fn = ((params: { prompt: unknown; options?: Options }) => {
+    const isFirstSession = sessions.length === 0;
+    startedOptions.push(params.options as Options);
+    const label =
+      (params.options as Options | undefined)?.resume ?? `sess-${String(sessions.length + 1)}`;
+    const iterator = (params.prompt as AsyncIterable<{ message: { content: unknown } }>)[
+      Symbol.asyncIterator
+    ]();
+    const inputs: string[] = [];
+    const queued: SDKMessage[] = [];
+    let wake: (() => void) | null = null;
+    const notify = () => {
+      const w = wake;
+      wake = null;
+      w?.();
+    };
+    const push = (message: SDKMessage) => {
+      queued.push(message);
+      notify();
+    };
+
+    const session: FakeManagerSession = {
+      inputs,
+      say(text) {
+        push({
+          type: 'assistant',
+          message: { role: 'assistant', content: [{ type: 'text', text }] },
+          parent_tool_use_id: null,
+          session_id: label,
+          uuid: `uuid-say-${String(++seq)}`,
+        } as unknown as SDKMessage);
+      },
+      backgroundTasksChanged(tasks) {
+        push({
+          type: 'system',
+          subtype: 'background_tasks_changed',
+          tasks: tasks.map((task) => ({
+            task_id: task.id,
+            task_type: task.taskType,
+            description: '',
+          })),
+          session_id: label,
+          uuid: `uuid-bg-${String(++seq)}`,
+        } as unknown as SDKMessage);
+      },
+      ask(toolName, input) {
+        const canUseTool = params.options?.canUseTool;
+        if (canUseTool === undefined) throw new Error('canUseTool が配線されていない');
+        // わざと await しない（`#onPermission` は最初の await の手前で `#pending`
+        // へ同期的に積む。`runner-background-tasks.test.ts` の `ask()` と同じ形）。
+        void canUseTool(toolName, input, {
+          signal: new AbortController().signal,
+          toolUseID: `tool-${String(++seq)}`,
+          requestId: `req-${String(++seq)}`,
+        } as never);
+      },
+      restartInit(sessionId) {
+        push({
+          type: 'system',
+          subtype: 'init',
+          session_id: sessionId,
+          uuid: `uuid-init-restart-${String(++seq)}`,
+        } as unknown as SDKMessage);
+      },
+      finish(text, options = {}) {
+        push({
+          type: 'result',
+          subtype: options.subtype ?? 'success',
+          result: text,
+          session_id: label,
+          uuid: `uuid-result-${String(++seq)}`,
+          ...(options.isError === undefined ? {} : { is_error: options.isError }),
+        } as unknown as SDKMessage);
+      },
+    };
+    sessions.push(session);
+
+    async function* generate(): AsyncGenerator<SDKMessage, void> {
+      if (!(opts.skipInit === true && isFirstSession)) {
+        yield {
+          type: 'system',
+          subtype: 'init',
+          session_id: label,
+          uuid: `uuid-init-${String(sessions.length)}`,
+        } as unknown as SDKMessage;
+      }
+
+      let pendingInput = iterator.next();
+      for (;;) {
+        const current = await pendingInput;
+        if (current.done === true) return;
+        inputs.push(String(current.value.message.content));
+
+        // **読み先行。** このターンの結果を出す前に、次の入力を要求しておく
+        // （`clone.ts` の `lookaheadSdk` と同じ理由——`#inputStream` の境界判定が
+        // 「ターンが走っている」状態で実際に発火するのは、この形のときだけ）。
+        const lookahead = iterator.next();
+
+        let sawResult = false;
+        while (!sawResult) {
+          const queuedNext = queued.shift();
+          if (queuedNext !== undefined) {
+            if (queuedNext.type === 'result') sawResult = true;
+            yield queuedNext;
+            continue;
+          }
+          if (abortOnInputClose) {
+            const raced = await Promise.race([
+              lookahead.then(() => 'closed' as const),
+              new Promise<'wake'>((resolve) => {
+                wake = () => resolve('wake');
+              }),
+            ]);
+            if (raced === 'closed') return; // 入力の口が閉じたので、このターンを捨てる
+          } else {
+            await new Promise<void>((resolve) => {
+              wake = resolve;
+            });
+          }
+        }
+
+        pendingInput = lookahead;
+      }
+    }
+
+    const generator = generate();
+    return Object.assign(generator, {
+      close: () => undefined,
+      interrupt: async () => undefined,
+    }) as unknown as Query;
+  }) as unknown as typeof sdkQuery;
+
+  return { fn, sessions, startedOptions };
+}
+
+let dir: string;
+let hosts: RunnerHost[] = [];
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), 'alteroid-runner-token-rotation-'));
+});
+
+afterEach(async () => {
+  await Promise.all(hosts.map((host) => host.shutdown().catch(() => undefined)));
+  hosts = [];
+  rmSync(dir, { recursive: true, force: true });
+});
+
+/** 本物のトークンに似せない、明らかな作り物の値（AGENTS.md「秘密の扱い」）。 */
+const OLD_TOKEN = 'token-fake-old-000';
+
+function setup(fakeOpts?: Parameters<typeof fakeSdk>[0]) {
+  const events: RunnerEvent[] = [];
+  const { fn, sessions, startedOptions } = fakeSdk(fakeOpts);
+  const credentials = createCredentialStore({
+    dir: join(dir, 'creds'),
+    seed: { CLAUDE_CODE_OAUTH_TOKEN: OLD_TOKEN },
+    names: ['CLAUDE_CODE_OAUTH_TOKEN'],
+  });
+  const host = createRunnerHost({
+    runnerId: 'runner-test',
+    workspacePath: '/work/project',
+    emit: (event) => events.push(event),
+    queryFn: fn,
+    env: { PATH: '/usr/bin' },
+    credentials,
+  });
+  hosts.push(host);
+  return { host, events, sessions, startedOptions };
+}
+
+async function nthSession(
+  sessions: readonly FakeManagerSession[],
+  index: number,
+): Promise<FakeManagerSession> {
+  return vi.waitFor(() => {
+    const found = sessions[index];
+    if (!found) {
+      throw new Error(`${String(index + 1)}本目のセッションがまだ開いていない`);
+    }
+    return found;
+  });
+}
+
+type ReportEvent = Extract<RunnerEvent, { type: 'report' }>;
+type NoteEvent = Extract<RunnerEvent, { type: 'note' }>;
+
+async function reportEvents(
+  events: readonly RunnerEvent[],
+  expected: number,
+): Promise<ReportEvent[]> {
+  return vi.waitFor(() => {
+    const found = events.filter((event): event is ReportEvent => event.type === 'report');
+    if (found.length < expected) {
+      throw new Error(
+        `report が ${String(expected)} 本届いていない（いま ${String(found.length)} 本）`,
+      );
+    }
+    return found;
+  });
+}
+
+async function tick(ms = 20): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+describe('認証トークンを回した後、走行中のマネージャーのセッションを畳んで開き直す', () => {
+  it('⚠️ ターンの途中では畳まない。走っているターンは最後まで走る', async () => {
+    // **捨てる SDK で測る**（`abortOnInputClose: true`）。入力の口を途中で
+    // 閉じていれば、このターンは結果を出さずに捨てられ、下の `reportEvents` が
+    // 永久に届かずタイムアウトする——これが「途中で畳んだ」ことの検出器である。
+    const s = setup({ abortOnInputClose: true });
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const first = await nthSession(s.sessions, 0);
+    // 読み先行が発行され、ターンが「走っている」状態になるまで待つ。
+    await tick(10);
+
+    await s.host.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'token-fake-new-111' }]);
+    await tick();
+
+    // ターンの途中では、まだ畳まれていない（新しいセッションが開いていない）。
+    expect(s.sessions).toHaveLength(1);
+
+    first.say('わかった');
+    first.finish('わかった');
+
+    // ターンが最後まで走って report が届くこと（捨てられていないこと）。
+    const [report] = await reportEvents(s.events, 1);
+    expect(report?.text).toContain('わかった');
+  });
+
+  it('ターンの境界で、指紋が変わったときだけ畳んで開き直す（同じ指紋では開き直さない）', async () => {
+    const s = setup({ abortOnInputClose: true });
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const first = await nthSession(s.sessions, 0);
+    await tick(10);
+
+    // **同じ指紋**（再接続の追いつかせ = `createRunnerTokenSync` と同じ形）。
+    // 畳まれてはいけない。
+    await s.host.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: OLD_TOKEN }]);
+    await tick();
+    expect(s.sessions).toHaveLength(1);
+
+    // **指紋が変わる差し替え。** ただしターンはまだ走っているので、ここでも
+    // まだ畳まれない。
+    await s.host.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'token-fake-new-222' }]);
+    await tick();
+    expect(s.sessions).toHaveLength(1);
+
+    first.say('わかった');
+    first.finish('わかった');
+    await reportEvents(s.events, 1);
+
+    // ここでようやくターンの境界 ⟹ 開き直る。
+    await nthSession(s.sessions, 1);
+    expect(s.sessions).toHaveLength(2);
+    // 開き直した子プロセスの env に新しい値が載っている。
+    expect(s.startedOptions[1]?.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe('token-fake-new-222');
+    // 開き直しは resume（同じ sessionId）で行われる。
+    expect(s.startedOptions[1]?.resume).toBe('sess-1');
+    expect(s.startedOptions[0]?.resume).toBeUndefined();
+  });
+
+  it('同じ指紋を何度渡しても開き直さない（再接続の追いつかせが繰り返し呼んでも壊れない）', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const first = await nthSession(s.sessions, 0);
+    first.say('わかった');
+    first.finish('わかった');
+    await reportEvents(s.events, 1);
+
+    await s.host.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: OLD_TOKEN }]);
+    await s.host.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: OLD_TOKEN }]);
+    await s.host.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: OLD_TOKEN }]);
+    await tick(40);
+
+    expect(s.sessions).toHaveLength(1);
+  });
+
+  it('確認待ちが在るあいだは畳まない。答えて片付いた境界で畳む', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const first = await nthSession(s.sessions, 0);
+
+    first.ask('Bash', { command: 'echo hi' }); // わざと答えない
+    first.finish('確認をお願いします');
+    const [firstReport] = await reportEvents(s.events, 1);
+    expect(firstReport?.status).toBe('waiting_human');
+
+    await s.host.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'token-fake-new-333' }]);
+    await tick(30);
+    // 確認待ちが残っているので、まだ畳まれていない。印は落ちていない
+    // （後続で実際に畳まれることが、印が残っていたことの証拠になる）。
+    expect(s.sessions).toHaveLength(1);
+
+    const requestId = s.host.list()[0]?.waiting[0]?.requestId;
+    if (requestId === undefined) throw new Error('waiting が見つからない');
+    await s.host.answer('mgr-1', { requestId, decision: 'allow', message: 'どうぞ' });
+    await tick();
+    // 答えた直後は `running` に戻るだけで、まだ境界ではない。
+    expect(s.sessions).toHaveLength(1);
+
+    // **この偽 SDK は「1つの入力 ⟹ 1ターン」の形しか表せない**（`fakeSdk` の
+    // doc）ので、答えた後の続きは新しい入力として押し込む。
+    await s.host.send('mgr-1', '続けて');
+    await tick(10);
+    first.say('実行した');
+    first.finish('実行した');
+    await reportEvents(s.events, 2);
+
+    await nthSession(s.sessions, 1);
+    expect(s.startedOptions[1]?.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe('token-fake-new-333');
+  });
+
+  it('背景処理が生きているあいだは畳まない。片付いた境界で畳む', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const first = await nthSession(s.sessions, 0);
+
+    first.backgroundTasksChanged([{ id: 'bg-1', taskType: 'shell' }]);
+    first.say('完了を待つ');
+    first.finish('完了を待つ');
+    const [firstReport] = await reportEvents(s.events, 1);
+    expect(firstReport?.awaitingBackground).toBeDefined();
+
+    await s.host.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'token-fake-new-444' }]);
+    await tick(30);
+    // 背景処理が残っているので、まだ畳まれていない。
+    expect(s.sessions).toHaveLength(1);
+
+    await s.host.send('mgr-1', '続けて');
+    await tick(10);
+    first.backgroundTasksChanged([]);
+    first.say('続けました');
+    first.finish('続けました');
+    await reportEvents(s.events, 2);
+
+    await nthSession(s.sessions, 1);
+    expect(s.startedOptions[1]?.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe('token-fake-new-444');
+  });
+
+  it('#sessionId がまだ無ければ畳まない。session_started の後は畳む', async () => {
+    const s = setup({ skipInit: true });
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const first = await nthSession(s.sessions, 0);
+
+    first.say('init を一度も見ていない状態で終える');
+    first.finish('init を一度も見ていない状態で終える');
+    const [firstReport] = await reportEvents(s.events, 1);
+    expect(firstReport?.status).toBe('done');
+    expect(s.host.list()[0]?.sessionId).toBeUndefined();
+
+    await s.host.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'token-fake-new-555' }]);
+    await tick(30);
+    // `#sessionId` が無いので resume できない ⟹ 畳まない。
+    expect(s.sessions).toHaveLength(1);
+
+    // ここで初めて init が届く（同じ session のまま——現実の SDK も同一
+    // session_id で送ってくる想定に合わせる）。
+    first.restartInit('sess-late');
+    await s.host.send('mgr-1', 'つづき');
+    await tick(10);
+    first.say('つづきの結果');
+    first.finish('つづきの結果');
+    await reportEvents(s.events, 2);
+
+    await nthSession(s.sessions, 1);
+    expect(s.startedOptions[1]?.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe('token-fake-new-555');
+    expect(s.startedOptions[1]?.resume).toBe('sess-late');
+  });
+
+  it('跡（note）を1本出す。値も指紋の照合結果も書かない', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const first = await nthSession(s.sessions, 0);
+    first.say('わかった');
+    first.finish('わかった');
+    await reportEvents(s.events, 1);
+
+    await s.host.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'token-fake-new-666' }]);
+    await tick(30);
+    await nthSession(s.sessions, 1);
+
+    const notes = s.events.filter((event): event is NoteEvent => event.type === 'note');
+    expect(notes).toHaveLength(1);
+    expect(notes[0]?.text).toContain('認証トークン');
+    expect(notes[0]?.text).not.toContain('token-fake-new-666');
+    expect(notes[0]?.text).not.toContain(OLD_TOKEN);
+  });
+});

@@ -275,7 +275,16 @@ export interface RunnerHost {
   readonly workspacePath: string;
   /** いま配っている鍵の指紋。**値は出さない。** */
   credentials(): CredentialFingerprint[];
-  /** 鍵を差し替える。器を作り直さずに鍵を回すための唯一の口である。 */
+  /**
+   * 鍵を差し替える。器を作り直さずに鍵を回すための唯一の口である。
+   *
+   * **`CLAUDE_CODE_OAUTH_TOKEN` の指紋が変わったときだけ、生きている全
+   * セッションへ「ターンの境界で畳んで開き直せ」の印を立てる**（`#childEnv()`
+   * が起動時にしか読まれない穴の直し。詳しくは `AGENT_TOKEN_CREDENTIAL_NAME`
+   * の doc）。**指紋が同じなら何もしない** —— `#connectTo` / `#reattach`
+   * （再接続の追いつかせ）は繋ぎ直しのたびに同じ値を降ろすので、無条件に
+   * 畳むと再接続のたびにセッションが畳まれてしまう。
+   */
   setCredentials(entries: readonly CredentialEntry[]): Promise<CredentialFingerprint[]>;
   /** いま置いてある実行環境プロファイルの指紋。**本文は出さない。** */
   profile(): RunnerProfileFingerprint | undefined;
@@ -304,6 +313,27 @@ export interface RunnerHost {
    * （＝自己失効が機能しなくなる）。
    */
   noteDaemonContact(): void;
+}
+
+/**
+ * 回るとセッションの畳み直しの引き金になる鍵の名前。
+ *
+ * **`ROTATABLE_CREDENTIAL_KEYS`（`credentials.ts`）に載っている名前のうち、
+ * ここだけを見る。** `GH_TOKEN` / `GITHUB_TOKEN` が変わっても、走行中の
+ * マネージャーは次の呼び出し（`gh` シム経由）から新しい値を読むので（`git` /
+ * `gh` は呼ばれるたびに器のファイルを読み直す）、セッションを畳む必要が無い
+ * ——畳む理由になるのは「起動時にしか読まれない」鍵、すなわち SDK 子プロセスの
+ * env 経由でしか渡らない `CLAUDE_CODE_OAUTH_TOKEN` だけである
+ * （`credentials.ts` の同名エントリの doc「走っているセッションには届かない」）。
+ */
+const AGENT_TOKEN_CREDENTIAL_NAME = 'CLAUDE_CODE_OAUTH_TOKEN';
+
+/** `fingerprints()` の並びから名前で1件だけ引く。無ければ `undefined`。 */
+function fingerprintFor(
+  fingerprints: readonly CredentialFingerprint[],
+  name: string,
+): string | undefined {
+  return fingerprints.find((fingerprint) => fingerprint.name === name)?.sha256;
 }
 
 export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
@@ -435,7 +465,23 @@ class Host implements RunnerHost {
         '鍵の器が無い runner では差し替えられない（ALTEROID_CREDENTIAL_DIR を用意すること）',
       );
     }
-    return this.#credentials.set(entries);
+    // **差し替える前の指紋を控える。** `this.#credentials.set(...)` が投げたら
+    // ここで確定した `before` は使われないまま終わる —— 例外はそのまま呼び出し
+    // 元へ伝播させる（`POST /credentials` の応答を壊さない）。
+    const before = fingerprintFor(this.#credentials.fingerprints(), AGENT_TOKEN_CREDENTIAL_NAME);
+    const fingerprints = await this.#credentials.set(entries);
+    const after = fingerprintFor(fingerprints, AGENT_TOKEN_CREDENTIAL_NAME);
+    // **🔴 比べるのは指紋（sha256）だけ。値は一度も読まない。**
+    //
+    // **変わったときだけ畳む。** 在る→無い（`value: ''` で env 行へ戻す）・
+    // 無い→在るも「変わった」に含まれる —— `fingerprintFor` は無ければ
+    // `undefined` を返すので、`undefined !== 'hash'` はどちらの向きでも
+    // 真になる。**同じ指紋（再接続の追いつかせが同じ値を降ろした場合を含む）
+    // では何もしない**（`RunnerHost.setCredentials` の doc）。
+    if (before !== after) {
+      for (const session of this.#sessions.values()) session.recycleForToken();
+    }
+    return fingerprints;
   }
 
   profile(): RunnerProfileFingerprint | undefined {
@@ -1103,6 +1149,21 @@ class RunnerSession {
    */
   #leaseTtlMs: number | undefined;
 
+  /**
+   * 認証トークンが差し替わったので、次のターンの境界で SDK セッションを畳んで
+   * 開き直す（PR #454 がクローン側で塞いだのと同じ穴の、マネージャー側の直し）。
+   *
+   * **印だけを持つ。** 立てた時点ではセッションに触らない —— 触ると、そのとき
+   * 走っていたターンを殺すか、失敗として報告するかのどちらかになる
+   * （`clone.ts` の `#recycleForToken` の doc と同じ理由。あちらは
+   * `recycleSessionForToken()` が呼ぶ側で、こちらは `Host#setCredentials` が
+   * 呼ぶ側という違いだけで、印の意味は同じである）。
+   *
+   * **畳んでよいのは `#atTokenRecycleBoundary()` が真を返すときだけ。** 1つでも
+   * 条件が欠けていれば、この印を立てたまま次の境界まで待つ（下ろさない）。
+   */
+  #recycleForToken = false;
+
   constructor(options: RunnerSessionOptions) {
     this.#id = options.managerId;
     this.#request = options.request;
@@ -1354,6 +1415,22 @@ class RunnerSession {
     await this.#finish('lost', reason, { selfFenced: true });
   }
 
+  /**
+   * 認証トークンが差し替わったので、次のターンの境界でこのセッションを畳んで
+   * 開き直す（`Host#setCredentials` から呼ばれる。`clone.ts` の
+   * `recycleSessionForToken()` と同じ3段に相乗りする）。
+   *
+   * **印を立てるだけ。セッションには触らない。** `#query === null`（まだ
+   * セッションが無い）なら何もしない —— クローン側と同じ門である。次に
+   * `#open()` するのはもう新しい鍵のもとなので、そのために印を立てる必要は
+   * 無い（立てても、そのとき `#pending` 等はまだ存在しないので意味を持たない）。
+   */
+  recycleForToken(): void {
+    if (this.#query === null) return;
+    this.#recycleForToken = true;
+    this.#wakeInput();
+  }
+
   // -------------------------------------------------------------------------
   // SDK セッション
   // -------------------------------------------------------------------------
@@ -1514,10 +1591,47 @@ class RunnerSession {
         continue;
       }
       if (this.#stopped) return;
+      // **認証トークンを回したので、このセッションを畳んで作り直す**
+      // （`recycleForToken` の doc）。
+      //
+      // **ここが「ターンの境界」である** —— 積まれた入力が無く（上の `shift` が
+      // `undefined`）、かつ `#atTokenRecycleBoundary()` が見る残り4条件（ターンが
+      // 走っていない・確認待ちが無い・背景処理が生きていない・`#sessionId` が
+      // 在る）も揃ったときだけ。**1つでも欠けていれば `return` せず、印を
+      // 立てたまま待つ**（下ろさない）。
+      //
+      // **`#stopped` に相乗りしないこと。** あれは runner セッション全体の停止で、
+      // 混ぜると「トークンを回したらマネージャーが止まる」になる
+      // （`clone.ts` の同じ判断と同じ理由）。
+      if (this.#recycleForToken && this.#atTokenRecycleBoundary()) return;
       await new Promise<void>((resolve) => {
         this.#inputWaiters.add(resolve);
       });
     }
+  }
+
+  /**
+   * 認証トークンの畳み直しに要る境界条件が、いま全部揃っているか。
+   *
+   * **呼び出し側（`#inputStream`）は「積まれた入力が無い」ことを既に確認済み**
+   * なので、ここでは残り4つだけを見る:
+   *
+   * - `#status !== 'running'` —— ターンが走っていない
+   * - `#pending.length === 0` —— 確認待ちが無い（畳むと `canUseTool` が宙に浮く）
+   * - `#liveBackgroundTasks.length === 0` —— 起こしっぱなしの背景処理が無い
+   *   （畳むと道連れになる）
+   * - `#sessionId !== undefined` —— resume で開き直せる（無ければ会話が切れる）
+   *
+   * **1つでも欠けたら false。** 呼び出し側はそのとき `return` せず、印を
+   * 立てたまま次の境界まで待つ。
+   */
+  #atTokenRecycleBoundary(): boolean {
+    return (
+      this.#status !== 'running' &&
+      this.#pending.length === 0 &&
+      this.#liveBackgroundTasks.length === 0 &&
+      this.#sessionId !== undefined
+    );
   }
 
   /**
@@ -1536,6 +1650,28 @@ class RunnerSession {
         for (const event of foldClaudeMessage(message)) this.#apply(event);
       }
       if (this.#stopped || generation !== this.#generation) return;
+      // **認証トークンの畳み直しで、自分から入力ストリームを終えた回。**
+      // `#inputStream` が境界（`#atTokenRecycleBoundary()`）を認めて `return`
+      // したときだけここへ来る —— それ以外の「閉じた」は下の
+      // `#recoverFromFailedResume` の対象である。**この分岐を
+      // `#finish('done', …)` より前に置くこと。** 見ないと、畳み直しのつもりの
+      // 正常な閉じが「マネージャーのセッションが閉じた」という `done` の報告に
+      // 化けてしまう。
+      if (this.#recycleForToken) {
+        this.#recycleForToken = false;
+        const sessionId = this.#sessionId;
+        if (sessionId === undefined) {
+          // **境界検査（`#atTokenRecycleBoundary`）が `#sessionId !== undefined`
+          // を既に確認しているので、ここには来ないはずである。** 来た場合に
+          // 何もせず放置すると `#query` が死んだまま誰も開き直さないので、
+          // 安全側として通常の「セッションが閉じた」経路へ委ねる —— 資格情報の
+          // 畳み直しに特有の分岐をこの先まで引きずらない。
+          await this.#finish('done', 'マネージャーのセッションが閉じた。');
+          return;
+        }
+        this.#reopenForTokenRotation(sessionId);
+        return;
+      }
       // 一度も手が動かないまま閉じたのなら、resume は効かなかった。
       const closed = 'セッションが開かないまま閉じた';
       switch (this.#recoverFromFailedResume(closed)) {
@@ -1566,6 +1702,53 @@ class RunnerSession {
       }
       await this.#finish('failed', `マネージャーのセッションが落ちた: ${reason}`);
     }
+  }
+
+  /**
+   * 認証トークンの畳み直しが境界条件を満たしたので、SDK セッションを開き直す。
+   *
+   * **`#recoverFromFailedResume` の `recovered` 枝と同じ3段に相乗りする** ——
+   * 世代を進めてから `#query` / `#reader` を畳み、`resume` で開き直す。世代を
+   * 進めないと、畳まれた古い `#inputStream`（このセッションのものは既に
+   * `return` 済みだが、同じ形を崩さないために揃える）が新しいセッション宛の
+   * 入力を横取りする経路を残すことになる。
+   *
+   * **`#resumeAttempt` も立てる。** ほとんどの場合 `#progressed` が既に立って
+   * いる（このセッションで一度でも成功した result を受けている）ので、
+   * `#recoverFromFailedResume` は `this.#progressed` の時点で
+   * `not-a-resume-failure` を返すだけになる —— つまり以後は「普段の resume 失敗」
+   * と同じ扱いに合流する。**ただし、まだ一度も進んでいないセッション**
+   * （最初のターンが確認待ちのまま境界へ来た場合）で、この開き直し自体の
+   * resume が効かなかったときは、これが無いと「セッションが閉じた」という
+   * `done` に化ける（`#recoverFromFailedResume` の doc）。
+   *
+   * **会話は切らない。** `#recycleForContextWindow`（クローン側の対）と違い、
+   * こちらは `sessionId` をそのまま渡して resume で同じ会話を続ける ——
+   * 畳むのは SDK の子プロセスであって、会話でも記憶でもない。
+   *
+   * **跡を残す。** 値も指紋の照合結果の中身も書かず、日本語で経緯だけを言う
+   * （`note` は「runner が何かを落とすときの口」——`runner-protocol.ts` の
+   * doc）。旧いデーモンの zod も `note` は既に解釈できるので、プロトコルへ
+   * 新しい `type` を足さずに済む。
+   */
+  #reopenForTokenRotation(sessionId: string): void {
+    this.#generation += 1;
+    try {
+      this.#query?.close();
+    } catch {
+      // 既に閉じている
+    }
+    this.#query = null;
+    this.#reader = null;
+    this.#resumeAttempt = { sessionId };
+    this.#emit({
+      type: 'note',
+      managerId: this.#id,
+      text:
+        '認証トークンが差し替わったので、ターンの境界でセッションを畳んで' +
+        '開き直した（会話は resume で続く）。',
+    });
+    this.#open(sessionId);
   }
 
   /**
@@ -2006,6 +2189,16 @@ class RunnerSession {
                 contentless: false,
               };
         this.#status = this.#pending.length > 0 ? 'waiting_human' : 'done';
+        // **ここがターンの境界になった。** 認証トークンの畳み直しの印が立って
+        // いれば、入力待ちで止まっている `#inputStream` を起こす
+        // （`clone.ts` の `#finishTurn` と同じ理由 —— 起こさないと、次に
+        // 入力が届くまで古いトークンのまま走り続ける）。
+        //
+        // **無条件に起こしてよい。** 境界条件（`#atTokenRecycleBoundary()`）の
+        // 判定は `#inputStream` 側が持つので、ここで起こしても条件が揃って
+        // いなければ（確認待ちが残っている・背景処理が生きている等）そのまま
+        // 待ちへ戻るだけである。
+        if (this.#recycleForToken) this.#wakeInput();
         // **マネージャーがバックグラウンド実行の完了を待つためだけに畳んだ
         // ターンの報告に、その旨を載せる（`runner-protocol.ts` の
         // `report.awaitingBackground` の doc）。**
