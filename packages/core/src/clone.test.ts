@@ -10828,11 +10828,12 @@ describe('recycleSessionForToken（回した後のセッション作り直し）
     return { fn, sessions };
   }
 
-  function cloneWith(fn: typeof sdkQuery) {
+  function cloneWith(fn: typeof sdkQuery, onTokenSessionRecycled?: () => void) {
     return createClone({
       stores: createMemoryStores(),
       queryFn: fn,
       env: {},
+      ...(onTokenSessionRecycled === undefined ? {} : { onTokenSessionRecycled }),
       runners: createRunnerRegistry([
         createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
       ]),
@@ -10984,6 +10985,160 @@ describe('recycleSessionForToken（回した後のセッション作り直し）
     // 止まっていないので、次のターンが走る。
     await waitFor(() => calls.length > 1, '止まらずに次が走ること');
     clone.stop();
+  });
+
+  /**
+   * **「いつ効くか」を返す**（人間の決定 2026-09-07）。
+   *
+   * ここを捨てると、呼ぶ側は「再開の合図」を入れる時機を決められない ——
+   * そして手前で入れると**合図が古い鍵のターンに消費される**（実運用で26分の
+   * 沈黙になった形。`recycleSessionForToken` の doc に実測の表が在る）。
+   */
+  it("セッションが無ければ 'now'、走っていれば 'deferred' を返す", async () => {
+    const { fn, sessions } = lookaheadSdk(20);
+    const clone = cloneWith(fn);
+
+    // セッションが1本も無い ⟹ 次に起こす分がもう新しい鍵である。
+    expect(clone.recycleSessionForToken()).toBe('now');
+
+    say(clone);
+    await waitFor(() => sessions.length > 0, '1本目が開くこと');
+    // セッションが在る ⟹ 畳まれるのはターンの境界。
+    expect(clone.recycleSessionForToken()).toBe('deferred');
+    await clone.stop();
+  });
+
+  /**
+   * **⭐ 畳んだ後に1度だけ知らせる。**
+   *
+   * ## この歯が固定している事故
+   *
+   * 実運用（2026-09-07、Railway の本番）で観測した形:
+   *
+   * | 時刻 (UTC) | 何が起きたか |
+   * | --- | --- |
+   * | `07:33:12` | 回した（世代41 → 42）。**再開の合図もここで入れた** |
+   * | `07:33:18`〜`50` | ターンの最中だったので畳まれない |
+   * | `07:33:51` | そのターンが**古い鍵**で 429 ⟹ `#usageBlocked` が立ち直る |
+   * | 以降26分 | **沈黙**（合図はもう使われている。再投函する者が居ない） |
+   *
+   * ⟹ 知らせるのは**畳んだ後**でなければならない。ここが鳴った後に入れた合図は、
+   * 次の `#ensureQuery()` が起こす**新しい鍵のセッション**で受け取られる。
+   */
+  it('畳んだ後に onTokenSessionRecycled が1度だけ鳴る', async () => {
+    const { fn, sessions } = lookaheadSdk(20);
+    const recycled: number[] = [];
+    const clone = cloneWith(fn, () => recycled.push(sessions.length));
+
+    say(clone);
+    await waitFor(() => sessions.length > 0, '1本目が開くこと');
+    clone.recycleSessionForToken();
+
+    await waitFor(() => recycled.length > 0, '畳んだ知らせが鳴ること');
+    // **鳴った時点で、次のセッションはまだ開いていない**（＝畳んだ直後である）。
+    expect(recycled).toEqual([1]);
+
+    // 知らせの後に入れた合図は、新しいセッションで受け取られる。
+    say(clone);
+    await waitFor(() => sessions.length > 1, '2本目が開くこと');
+    await clone.stop();
+    // **1度だけ。** 畳むのは1回なので、鳴るのも1回である。
+    expect(recycled).toEqual([1]);
+  });
+
+  /**
+   * **ターンの最中に回しても、鳴るのはターンが終わってからである。**
+   *
+   * これが逆（走行中に鳴る）だと、呼ぶ側が入れた合図はそのターンに消費される
+   * ——上の実測の事故そのものになる。
+   */
+  it('ターンの最中に回しても、鳴るのは境界を越えてからである', async () => {
+    const { fn, sessions } = lookaheadSdk(60);
+    const recycled: string[] = [];
+    const events: string[] = [];
+    const clone = cloneWith(fn, () => recycled.push('rung'));
+    clone.subscribe('conv-1', (event) => events.push(event.type));
+
+    say(clone);
+    await waitFor(() => sessions.length > 0, '1本目が開くこと');
+    // ターンが走っている最中に回す。
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    clone.recycleSessionForToken();
+
+    // **まだ鳴っていない**（ターンが走っているので）。
+    expect(recycled).toEqual([]);
+
+    await waitFor(() => events.includes('done'), 'ターンが最後まで走ること');
+    await waitFor(() => recycled.length > 0, '境界を越えてから鳴ること');
+    await clone.stop();
+    expect(recycled).toEqual(['rung']);
+  });
+
+  /**
+   * **文脈窓で畳んだ回には鳴らさない。** あちらは鍵と無関係なので、鳴らすと
+   * 「トークンが戻った」という嘘の合図が入る（`#recycleForContextWindow` の doc）。
+   *
+   * **畳む印は2つ在って、同じ1箇所で消費される** —— そこで「どちらの印で畳んだ
+   * のか」を見分けないと、文脈窓で畳んだ回にも鍵の知らせが鳴る。
+   */
+  it('文脈窓で畳んだ回には鳴らない', async () => {
+    // 1本目を成功させてから2本目を長さで落とす（`setupFold` と同じ形。
+    // `#sessionAnswered` が立たないと暴走の止めに掛かって畳まれない）。
+    let failNext = false;
+    const { fn } = fakeSdk(undefined, {
+      resultFor: () =>
+        failNext ? { subtype: 'success', isError: true, text: 'Prompt is too long' } : undefined,
+    });
+    const recycled: string[] = [];
+    const stores = createMemoryStores();
+    const clone = createClone({
+      stores,
+      queryFn: fn,
+      env: {},
+      onTokenSessionRecycled: () => recycled.push('rung'),
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    const events: ChatStreamEvent[] = [];
+    clone.subscribe('conv-1', (event) => events.push(event));
+
+    say(clone);
+    await waitFor(() => events.some((e) => e.type === 'done'), '1本目が通ること');
+    failNext = true;
+    say(clone);
+    await waitFor(() => events.some((e) => e.type === 'error'), '2本目が長さで落ちること');
+    // **印と同時に resume 素材が捨てられている**（既存の歯と同じ待ち方）。
+    // ここが通れば、文脈窓の側の畳みが確かに起きている。
+    await waitFor(
+      async () => (await stores.sessions.getCloneSessionId()) === null,
+      'resume 素材が捨てられること',
+    );
+    await clone.stop();
+
+    // **畳まれてはいるが、トークンの知らせは鳴っていない。**
+    expect(recycled).toEqual([]);
+  });
+
+  /**
+   * 知らせが投げても、セッションの作り直しを巻き添えにしない
+   * （畳むことはもう決まっている）。
+   */
+  it('知らせが投げても畳むことは続く', async () => {
+    const { fn, sessions } = lookaheadSdk(20);
+    const clone = cloneWith(fn, () => {
+      throw new Error('聞き手が落ちた');
+    });
+
+    say(clone);
+    await waitFor(() => sessions.length > 0, '1本目が開くこと');
+    clone.recycleSessionForToken();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    say(clone);
+
+    await waitFor(() => sessions.length > 1, '畳まれて2本目が開くこと');
+    await clone.stop();
+    expect(sessions.length).toBeGreaterThan(1);
   });
 });
 

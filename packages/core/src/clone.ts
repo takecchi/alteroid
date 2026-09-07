@@ -510,6 +510,31 @@ export interface CloneOptions {
    */
   onUsageObservation?: (observation: TokenRotatorObservation) => Promise<void>;
   /**
+   * **認証トークンのために畳んだセッションが、実際に畳まれた瞬間**に呼ばれる
+   * （人間の決定 2026-09-07）。
+   *
+   * ## なぜ要るか —— 「撒いた」と「再開できる」のあいだに窓が在る
+   *
+   * {@link Clone.recycleSessionForToken} が `'deferred'` を返した回は、畳まれるのが
+   * **ターンの境界**である（走っているターンは最後まで走る）。⟹ その手前で
+   * 「再開の合図」を入れると、**合図は古い鍵のターンに消費されて、そのターンは
+   * 死ぬ。** 実運用で26分の沈黙になった（あちらの doc に実測の表が在る）。
+   *
+   * ここが鳴るのは**畳んだ後**なので、呼ぶ側が入れる合図は必ず**新しい鍵の
+   * セッション**で受け取られる。
+   *
+   * ## ⚠️ ここで状態を動かさないこと
+   *
+   * 呼ぶ側にできるのは `post()`（印を立てて受信箱へ積むだけ）である。
+   * `#usageBlocked` を降ろす・保持分を取り出すのは `#pump` の先頭だけという
+   * 規律を崩さない —— 崩すと、隙間に居た合図が1件必ず取り残される
+   * （`post()` の doc に実測の壊れ方が2つ在る）。
+   *
+   * **同期で呼ばれる。投げないこと**（呼ぶ側の失敗でセッションの作り直しを
+   * 巻き添えにしない）。
+   */
+  onTokenSessionRecycled?: () => void;
+  /**
    * 名乗ってきた runner へ、いま撒いてある認証トークンを降ろす口（Issue #393 PR3）。
    * **このクローンは使わない** — 作った `ManagerPool` へそのまま渡すだけである。
    */
@@ -1198,6 +1223,8 @@ class Clone implements CloneHost {
   readonly #tokenIdentity: (() => { tokenId: string; generation: number } | undefined) | undefined;
   readonly #onUsageObservation:
     ((observation: TokenRotatorObservation) => Promise<void>) | undefined;
+  /** {@link CloneOptions.onTokenSessionRecycled}。**畳んだ後**に1度だけ鳴らす。 */
+  readonly #onTokenSessionRecycled: (() => void) | undefined;
   /**
    * **このセッションが起きたときの**トークンの身元（Issue #393 PR3）。
    *
@@ -1231,6 +1258,7 @@ class Clone implements CloneHost {
       credentials,
       tokenIdentity,
       onUsageObservation,
+      onTokenSessionRecycled,
       syncRunnerToken,
       permissionMode,
       humanPriority,
@@ -1261,6 +1289,7 @@ class Clone implements CloneHost {
     this.#credentials = credentials;
     this.#tokenIdentity = tokenIdentity;
     this.#onUsageObservation = onUsageObservation;
+    this.#onTokenSessionRecycled = onTokenSessionRecycled;
     this.#profile = profile;
     this.#profileService = profileService;
     this.#accountUsage = accountUsage;
@@ -1326,12 +1355,33 @@ class Clone implements CloneHost {
    *
    * **セッションがまだ無ければ何もしない。** 印を立てると、次に作られる
    * セッション（＝もう新しい鍵で起きたもの）がいきなり畳まれる。
+   *
+   * ## ⚠️ 返り値を捨てないこと —— 「いつ効くか」で呼ぶ側の段取りが変わる
+   *
+   * **これが `'deferred'` を返した回に「再開の合図」を先に入れると、その合図は
+   * 古い鍵のターンに消費される。** 実運用で観測した形がそれである（2026-09-07）:
+   *
+   * | 時刻 (UTC) | 何が起きたか |
+   * | --- | --- |
+   * | `07:33:12` | 回した（世代41 → 42）。合図もここで入れた |
+   * | `07:33:18`〜`50` | **ターンの最中だった**（`tool_use` が続く）ので畳まれない |
+   * | `07:33:51` | そのターンが**古い鍵**で 429。`#usageBlocked` が立ち直る |
+   * | 以降26分 | **沈黙。** 合図はもう使われてしまっている |
+   *
+   * ⟹ 呼ぶ側は `'deferred'` のとき**合図を入れず**、
+   * {@link CloneOptions.onTokenSessionRecycled} が鳴ってから入れる。
+   *
+   * @returns
+   *   - `'now'` — セッションが無い。**次に起こす分がもう新しい鍵である** ⟹
+   *     呼ぶ側はすぐ合図を入れてよい
+   *   - `'deferred'` — 印を立てた。**畳まれるのはターンの境界**
    */
-  recycleSessionForToken(): void {
-    if (this.#query === null) return;
+  recycleSessionForToken(): 'now' | 'deferred' {
+    if (this.#query === null) return 'now';
     this.#recycleForToken = true;
     // 入力待ちで止まっているなら、そこから抜けさせる（ターンの境界に居る場合）。
     this.#wakeInput();
+    return 'deferred';
   }
 
   /** デーモンの HTTP 層から一覧・生ログへ降りるための口。 */
@@ -4257,7 +4307,29 @@ class Clone implements CloneHost {
       // （`#recycleForContextWindow` の doc）。**印を2つに分けているのは、
       // トークンを回すだけで会話が切れないようにするためである。**
       if ((this.#recycleForToken || this.#recycleForContextWindow) && this.#turn === null) {
+        /**
+         * **トークンのために畳んだのなら、畳んだことを知らせる**（人間の決定
+         * 2026-09-07。{@link CloneOptions.onTokenSessionRecycled}）。
+         *
+         * **ここが「畳んだ後」の唯一の地点である。** `return` で入力の流れが
+         * 終わり、次の `#ensureQuery()` が新しい鍵でセッションを起こす ⟹
+         * ここから先に届く合図は、必ず新しい鍵で受け取られる。
+         *
+         * **文脈窓のほう（`#recycleForContextWindow`）では鳴らさない。** あちらは
+         * 鍵と無関係で、鳴らすと「トークンが戻った」という嘘の合図が入る。
+         *
+         * **投げさせない。** 知らせの失敗でセッションの作り直しを巻き添えに
+         * しない —— 畳むことはもう決まっている。
+         */
+        const recycledForToken = this.#recycleForToken;
         this.#recycleForToken = false;
+        if (recycledForToken && this.#onTokenSessionRecycled !== undefined) {
+          try {
+            this.#onTokenSessionRecycled();
+          } catch (error) {
+            noteDroppedRecord('認証トークンのセッション作り直しの知らせ', 'clone', error);
+          }
+        }
         return;
       }
       await new Promise<void>((resolve) => {

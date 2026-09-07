@@ -861,6 +861,21 @@ export async function main(): Promise<void> {
   let tokenWatch: TokenRotationWatch | undefined = undefined;
 
   /**
+   * **畳まれるのを待っている「再開の合図」**（人間の決定 2026-09-07）。
+   *
+   * 認証トークンを回した瞬間にクローンがターンの最中だと、セッションが畳まれるのは
+   * **そのターンが終わってから**である。⟹ 合図をその手前で入れると、**古い鍵の
+   * ターンに消費されて、そのターンは死ぬ**（実運用で26分の沈黙になった形。
+   * `Clone.recycleSessionForToken` の doc に実測の表が在る）。
+   *
+   * だからここへ置いておき、`onTokenSessionRecycled` が鳴った瞬間に入れる。
+   *
+   * **高々1つしか持たない。** 畳むより先に2回回ったら、**後の1回だけが要る** ——
+   * 前の回の合図は「もう古い鍵の話」であり、入れても同じ結論を2回焼くだけである。
+   */
+  let pendingTokenWake: (() => void) | undefined = undefined;
+
+  /**
    * アカウント全体の利用状況（claude.ai 側の値）。
    *
    * **使い捨ての probe で読む。実セッションに相乗りしない** — 実測で、ターンを
@@ -1009,6 +1024,21 @@ export async function main(): Promise<void> {
     tokenIdentity: () => agentTokenHolder.identity(),
     // 後から上がってきた runner に追いつかせる（プロファイルの `syncRunner` と同じ位置）。
     syncRunnerToken: createRunnerTokenSync(agentTokenHolder),
+    /**
+     * **セッションが実際に畳まれた ⟹ 待たせていた再開の合図を、いま入れる**
+     * （人間の決定 2026-09-07。`pendingTokenWake` の doc）。
+     *
+     * ここから先に入れる合図は、**次の `#ensureQuery()` が起こす新しい鍵の
+     * セッション**で受け取られる。手前で入れると古い鍵のターンに消費される。
+     *
+     * **取り出してから呼ぶ。** 呼んだ後に消すと、合図の中で例外が出た回だけ
+     * 残り続け、次に畳まれたときにもう一度入る。
+     */
+    onTokenSessionRecycled: () => {
+      const wake = pendingTokenWake;
+      pendingTokenWake = undefined;
+      wake?.();
+    },
     onUsageObservation: async (observation) => {
       const outcome = await tokenRotator.observe(observation);
       // **当たった文言をそのまま添える**（Issue #393「言い換えずそのまま残す」）。
@@ -1066,7 +1096,15 @@ export async function main(): Promise<void> {
     //
     // **印を立てるだけである** —— いま走っているターンは最後まで走る
     // （`recycleSessionForToken` の doc）。
-    if (outcome.kind === 'rotated' || outcome.kind === 'parked') clone.recycleSessionForToken();
+    //
+    // **返り値を捨てないこと。** `'deferred'`（走行中のターンが終わってから畳む）
+    // のときに下の再開の合図を先に入れると、**その合図は古い鍵のターンに消費され、
+    // そのターンは死ぬ** —— 実運用で26分の沈黙になった形である
+    // （`recycleSessionForToken` の doc に実測の表が在る）。
+    const recycled =
+      outcome.kind === 'rotated' || outcome.kind === 'parked'
+        ? clone.recycleSessionForToken()
+        : 'now';
 
     /*
      * **通る鍵になったら、止まっていた層を起こす**（人間の決定 2026-09-07）。
@@ -1113,25 +1151,43 @@ export async function main(): Promise<void> {
      */
     const reopened = reopenedTokenOf(outcome);
     if (reopened !== undefined) {
-      clone.post({
-        type: 'external',
-        id: randomUUID(),
-        at: new Date().toISOString(),
-        source: 'token-pool',
-        payload: {
-          text:
-            `認証トークンが通る状態に戻った（${reopened.how}）: ` +
-            `「${reopened.label}」（id ${reopened.tokenId}）。` +
-            '枠で止まっていた仕事は、ここから再開できる。',
-        },
-      });
-      // **待たない。** 引き取りは runner へ問い合わせる（落ちうる・遅い）ので、
-      // 回した結果の記録をそれに縛らない。**黙って落とさない**（跡を残す）。
-      void clone.managers.restore().catch((error: unknown) => {
-        process.stderr.write(
-          `alteroidd: 認証トークンが戻った後のマネージャーの引き継ぎに失敗しました: ${String(error)}\n`,
-        );
-      });
+      /**
+       * **合図を入れるのは「新しい鍵で受け取れる」ようになってからである**
+       * （人間の決定 2026-09-07）。
+       *
+       * | `recycled` | いつ入れるか | なぜ |
+       * | --- | --- | --- |
+       * | `'now'` | **すぐ** | セッションが無い ⟹ 次に起こす分がもう新しい鍵である |
+       * | `'deferred'` | **畳まれた後**（`onTokenSessionRecycled`） | いま走っているターンは古い鍵のままで、そこへ入れると合図がそのターンに消費される |
+       *
+       * **⚠️ 走行中のターンが古い鍵で死ぬことは、これでも直らない。** env は
+       * プロセス起動時に凍るので、ターンを途中で殺さない限り避けられず、
+       * 途中で殺さないのは意図した設計である（`recycleSessionForToken` の doc）。
+       * **直せるのは「その後すぐ再開する」ところまでである。**
+       */
+      const wake = () => {
+        clone.post({
+          type: 'external',
+          id: randomUUID(),
+          at: new Date().toISOString(),
+          source: 'token-pool',
+          payload: {
+            text:
+              `認証トークンが通る状態に戻った（${reopened.how}）: ` +
+              `「${reopened.label}」（id ${reopened.tokenId}）。` +
+              '枠で止まっていた仕事は、ここから再開できる。',
+          },
+        });
+        // **待たない。** 引き取りは runner へ問い合わせる（落ちうる・遅い）ので、
+        // 回した結果の記録をそれに縛らない。**黙って落とさない**（跡を残す）。
+        void clone.managers.restore().catch((error: unknown) => {
+          process.stderr.write(
+            `alteroidd: 認証トークンが戻った後のマネージャーの引き継ぎに失敗しました: ${String(error)}\n`,
+          );
+        });
+      };
+      if (recycled === 'now') wake();
+      else pendingTokenWake = wake;
     }
 
     if (entry === null) return;
