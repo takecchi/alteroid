@@ -5293,8 +5293,27 @@ class Clone implements CloneHost {
         const transition = usageTransitionOf(previous, facts);
         const merged = mergeRateLimitFacts(previous, facts);
         this.#rateLimits.set(kind, merged);
-        if (transition !== undefined) {
-          await this.#observeForTokenRotation({ facts: merged, transition });
+        // **⚠️ 遷移が取れなかった回も渡す（#668）。** 遷移だけを渡していたので、
+        // 同じ `kind` の `rejected` が**別のトークンで**再発しても回し手へ1度も
+        // 届かなかった —— `#rateLimits` は**このインスタンスの寿命ぶん**残るので、
+        // `usageTransitionOf` は2度目以降 `undefined` を返す。⟹ 記録は `ready` の
+        // まま、実際は 429（実運用で観測済み。2026-09-07）。
+        //
+        // **`statusNow` は重ねる前の生の1件から取る**（`merged` からではない）。
+        // 重ねた形の `status` はアカウントを跨いで残るので、回す契機の材料にすると
+        // 回した直後の健全な鍵でもう一度回る（`token-rotation.ts` の
+        // `TokenRotationObservation.statusNow` の doc）。
+        //
+        // **これだけでは回らない。** 状態で回すには観測がいまの世代を名乗っている
+        // ことが要る（`decideTokenRotation` の `freshness`）。**知らせの側
+        // （`#noteUsageNotice`）は1文字も変えていない** —— あちらの畳みは
+        // 「同じ知らせを何度も配らない」ためのもので、回し手の契機とは別である。
+        if (transition !== undefined || facts.status === 'rejected') {
+          await this.#observeForTokenRotation({
+            facts: merged,
+            ...(transition === undefined ? {} : { transition }),
+            ...(facts.status === undefined ? {} : { statusNow: facts.status }),
+          });
         }
         if (facts.status === 'rejected') {
           await this.#noteUsageNotice(

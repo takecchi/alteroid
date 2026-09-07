@@ -6971,7 +6971,26 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
     expect(seen[0]?.facts?.status).toBe('rejected');
   });
 
-  it('同じ rejected が毎ターン来ても、渡すのは遷移した1回だけ', async () => {
+  /**
+   * **⚠️ この歯は #668 で期待値を反転した。消していない。**
+   *
+   * 反転前は `expect(seen).toHaveLength(1)` で「渡すのは遷移した1回だけ」を
+   * 固定していた。**それが固定していたのは欠陥のほうだった** —— 遷移の判定材料
+   * （`#rateLimits`）は**このインスタンスの寿命ぶん**残るので、同じ `kind` の
+   * `rejected` が**別のトークンで**再発しても回し手へ1度も届かない。実運用で
+   * 20分以上の停止として観測された（2026-09-07）。
+   *
+   * **保証は弱くなっていない。守る場所が2つに分かれただけである:**
+   *
+   * | 何を守るか | どこが守るか |
+   * | --- | --- |
+   * | クローンへ同じ知らせを何度も配らない | **ここ**（`inbox` の本数。下で測る） |
+   * | 1回の当たりでプールを食い潰さない | **世代**（`token-rotation.ts` の `freshness`、`token-rotator.test.ts` の「回した後は自動で黙る」） |
+   *
+   * 元のコメントの主旨（**本数で数える**）はそのまま効いている —— 下も
+   * `transition === 'rejected'` で絞らずに全件を数える。
+   */
+  it('同じ rejected が毎ターン来ても、知らせるのは1回だけ（回し手へは毎回渡す）', async () => {
     const seen: TokenRotatorObservation[] = [];
     const s = await startManager({
       onUsageObservation: async (o) => {
@@ -6986,11 +7005,22 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
     await s.sessions[0]!.rateLimit(info);
     await new Promise((resolve) => setTimeout(resolve, 30));
 
-    // **本数で数える。** `transition === 'rejected'` で絞ると、状態をそのまま
-    // 流す実装（`transition` が undefined で毎回渡る）を見逃す —— 実際、
-    // 絞る形で書いた歯はその変異を捕まえられなかった。
-    expect(seen).toHaveLength(1);
+    // **本数で数える。** `transition === 'rejected'` で絞ると、渡す側を丸ごと
+    // 落とす変異（回し手へ1本も渡さない実装）を見逃す —— 絞る形で書いた歯は
+    // 反転前もその変異を捕まえられなかった。
+    expect(seen).toHaveLength(3);
+    // 遷移が取れたのは初回だけ。**2回目以降は状態だけを運ぶ**（#668）。
+    expect(seen.filter((o) => o.transition === 'rejected')).toHaveLength(1);
     expect(seen[0]?.transition).toBe('rejected');
+    expect(seen[1]?.transition).toBeUndefined();
+    // **`statusNow` は3回とも付く。** これが状態で回すための材料である。
+    expect(seen.map((o) => o.statusNow)).toEqual(['rejected', 'rejected', 'rejected']);
+
+    // **知らせの側は1回だけ**（畳みは1文字も変えていない）。
+    const reports = s.inbox.filter(
+      (event) => event.type === 'manager_message' && event.kind === 'report',
+    );
+    expect(reports).toHaveLength(1);
   });
 
   /**

@@ -6083,19 +6083,44 @@ class Pool implements ManagerPool {
         // 置き換えると、`status` を運んでいない観測が「もう `rejected` を知らせた」
         // という記憶を消し、次の同じ `rejected` が新しい遷移として**一字一句同じ
         // 文言でもう一度配られる**（あちらの doc に理由がある）。
-        const previous = this.#rateLimits.get(event.facts.kind ?? '');
+        const factsKind = event.facts.kind ?? '';
+        const previous = this.#rateLimits.get(factsKind);
         const transition = usageTransitionOf(previous, event.facts);
-        this.#rateLimits.set(event.facts.kind ?? '', mergeRateLimitFacts(previous, event.facts));
-        if (transition === undefined) return;
+        const merged = mergeRateLimitFacts(previous, event.facts);
+        this.#rateLimits.set(factsKind, merged);
 
         // **回し手へは事実と遷移で渡す**（通知の形へ仕立て直さない）。`rejected` は
         // 「その枠が尽きた」であって「仕事が止まった」ではないので、`reached` の
         // 形にして渡すと `overage_exhausted` の設定でも課金枠を使わずに回る
         // （Issue #393 追記1 の訂正）。
-        await this.#observeForTokenRotation(event.managerId, {
-          facts: this.#rateLimits.get(event.facts.kind ?? '') ?? event.facts,
-          transition,
-        });
+        //
+        // **⚠️ 遷移の門（下の `if (transition === undefined) return;`）より手前で
+        // 渡す（#668）。** 門は「クローンへ同じ知らせを何度も配らない」ための
+        // ものであって、回し手の契機とは別の話である —— 直上の `usage_notice` が
+        // 畳みより先に回し手へ渡しているのと**同じ理由・同じ順序**である。
+        //
+        // **後ろに置くと2度目の当たりが1度も届かない。** `#rateLimits` は
+        // **このインスタンスの寿命ぶん**残るので、同じ `kind` の `rejected` が
+        // **別のトークンで**再発しても `usageTransitionOf` は `undefined` を返す。
+        // ⟹ 記録は `ready` のまま、実際は 429 —— 実運用で20分以上の停止として
+        // 観測された（2026-09-07。走行中の alteroid の日誌）。
+        //
+        // **`statusNow` は重ねる前の生の1件から取る**（`merged` からではない）。
+        // 重ねた形の `status` はアカウントを跨いで残るので、回す契機の材料にすると
+        // 回した直後の健全な鍵でもう一度回る（あちらの doc）。
+        //
+        // **これだけでは回らない。** 状態で回すには観測がいまの世代を名乗っている
+        // ことが要る（`decideTokenRotation` の `freshness`）。ここは材料を渡すだけで、
+        // 判断はしない（`#observeForTokenRotation` の doc）。
+        if (transition !== undefined || event.facts.status === 'rejected') {
+          await this.#observeForTokenRotation(event.managerId, {
+            facts: merged,
+            ...(transition === undefined ? {} : { transition }),
+            ...(event.facts.status === undefined ? {} : { statusNow: event.facts.status }),
+          });
+        }
+
+        if (transition === undefined) return;
 
         // 「移った」「追い返された」の**瞬間だけ**を知らせる（状態を毎回流さない）。
         //

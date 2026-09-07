@@ -10566,9 +10566,15 @@ describe('onUsageObservation（回し手へ渡す観測）', () => {
     expect(observation?.facts?.status).toBe('rejected');
   });
 
-  it('同じ rejected が毎ターン来ても、渡すのは遷移した1回だけ', async () => {
+  it('同じ rejected が毎ターン来ても、遷移として渡るのは1回だけ', async () => {
     // `rate_limit_event` はターンの頭ごとに来る。状態をそのまま流すと、1回の
     // 当たりでプールを何本も食う。
+    //
+    // **⚠️ #668 で「渡すのは1回だけ」ではなくなった。この歯は反転していない**
+    // —— もともと `transition === 'rejected'` で絞って数えていたので、測って
+    // いるのは「遷移として渡るのは1回」であり、それはいまも真である。
+    // **2回目以降は `statusNow` だけを運んで渡る**（下の「状態だけを運んで渡る」）。
+    // プールを食い潰さない保証は世代が持つ（`token-rotation.ts` の `freshness`）。
     const { clone, seen } = cloneObserving({
       sdkOptions: {
         rateLimitEventAt: () => ({ status: 'rejected', rateLimitType: 'five_hour' }),
@@ -10582,6 +10588,27 @@ describe('onUsageObservation（回し手へ渡す観測）', () => {
     clone.stop();
 
     expect(seen.filter((o) => o.transition === 'rejected')).toHaveLength(1);
+  });
+
+  it('#668: 2回目以降の rejected も、状態だけを運んで渡る', async () => {
+    // **遷移だけを渡していたので、同じ `kind` の `rejected` が別のトークンで
+    // 再発しても回し手へ1度も届かなかった**（`#rateLimits` はこのインスタンスの
+    // 寿命ぶん残る）。⟹ 記録は `ready` のまま、実際は 429。
+    const { clone, seen } = cloneObserving({
+      sdkOptions: {
+        rateLimitEventAt: () => ({ status: 'rejected', rateLimitType: 'five_hour' }),
+      },
+    });
+    say(clone);
+    await waitFor(() => seen.length > 0, '1回目の観測');
+    say(clone);
+    await waitFor(() => seen.length > 1, '2回目の観測');
+    clone.stop();
+
+    // **重ねる前の生の1件から取る。** 重ねた形の `status` はアカウントを跨いで
+    // 残るので、契機の材料にすると回した直後の健全な鍵でもう一度回る。
+    expect(seen[1]?.statusNow).toBe('rejected');
+    expect(seen[1]?.transition).toBeUndefined();
   });
 
   it('セッションが起きたときの身元を、その観測すべてに添える', async () => {

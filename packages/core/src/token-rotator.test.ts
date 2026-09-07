@@ -133,6 +133,96 @@ describe('受け入れ基準7: プールが空の既定の構成を1文字も変
   });
 });
 
+/**
+ * **#668 / #667**: 遷移の取れなかった `rejected` が回し手に届いたときの端から端まで。
+ *
+ * **測るのは2つの向きである** —— (a) いまの世代を名乗る観測なら**冷却が書かれて
+ * 回る**（#667 の「記録は `ready`、実際は 429」がここで閉じる） (b) 世代の合わない
+ * 観測は**1文字も書かない**（#667 の候補1を採らないという決定そのもの）。
+ */
+describe('#668 / #667: 状態だけを運ぶ観測', () => {
+  it('いまの世代を名乗る観測なら、遷移が無くても冷却を書いて回る', async () => {
+    const h = harness();
+    await seedTwo(h);
+
+    const outcome = await h.rotator.observe({
+      facts: { kind: 'five_hour', status: 'rejected', resetsAt: 1_800_000_000_000 },
+      statusNow: 'rejected',
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(outcome.kind).toBe('rotated');
+    // **記録が `ready` のまま残らない**（#667 が心配していた帰結）。
+    expect(await isCooling(h, 'tok-a')).toBe(true);
+    expect(await h.stores.tokens.readActive()).toEqual({
+      tokenId: 'tok-b',
+      generation: 2,
+      rotatedAt: AT,
+    });
+  });
+
+  it('回した後は自動で黙る（世代が上がるので、同じセッションの続きは stale になる）', async () => {
+    // **これが「毎ターン回さない」を保証している歯である**（遷移ではなく世代）。
+    // 同じ観測をもう一度渡しても、2本目のトークンは冷却へ入らない。
+    const h = harness();
+    await seedTwo(h);
+    const observation = {
+      facts: { kind: 'five_hour', status: 'rejected' },
+      statusNow: 'rejected',
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    } as const;
+
+    await h.rotator.observe(observation);
+    const again = await h.rotator.observe(observation);
+
+    expect(again.kind).toBe('ignored');
+    if (again.kind === 'ignored') expect(again.freshness).toBe('stale');
+    expect(await isCooling(h, 'tok-b')).toBe(false);
+    // 撒いたのは1回だけ（プールを食い潰していない）。
+    expect(h.spreadCalls).toHaveLength(1);
+  });
+
+  it('⚠️ 世代の合わない観測では、降りる鍵の冷却も書かない（#667 の候補1を採らない）', async () => {
+    // **`markTokenUnusable` は `cooldownUntil` を上書きする（延長しない）** ので、
+    // 遅れて届いた観測が `resetsAt` を運んでいなければ `now + 既定` が書かれ、
+    // **本物の期限が未来に在る鍵を早く `ready` に見せる。** 記録を腐らせない
+    // つもりの書き込みが、記録をもっと嘘にする側へ倒れる。
+    const h = harness();
+    await seedTwo(h);
+
+    const outcome = await h.rotator.observe({
+      facts: { kind: 'five_hour', status: 'rejected' },
+      statusNow: 'rejected',
+      // 現役は generation 1。これは前の世代の通知である。
+      observedBy: { tokenId: 'tok-a', generation: 0 },
+    });
+
+    expect(outcome.kind).toBe('ignored');
+    if (outcome.kind === 'ignored') expect(outcome.freshness).toBe('stale');
+    expect(await isCooling(h, 'tok-a')).toBe(false);
+    expect(h.spreadCalls).toEqual([]);
+    // **日誌には残る**（トークンの記録に残らないだけである）。
+    if (outcome.kind === 'ignored') expect(outcome.staleRun).toBe(1);
+  });
+
+  it('身元を運ばない観測では、状態だけでは回らない', async () => {
+    // 回し手は `unknown` を `current` として扱うが、**状態で回す判断はその規則を
+    // 使わない** —— 世代を照合できない器では「回した後は自動で黙る」が
+    // 成立しないので、毎ターン回してプールを食い潰す。
+    const h = harness();
+    await seedTwo(h);
+
+    const outcome = await h.rotator.observe({
+      facts: { kind: 'five_hour', status: 'rejected' },
+      statusNow: 'rejected',
+    });
+
+    expect(outcome.kind).toBe('ignored');
+    expect(await isCooling(h, 'tok-a')).toBe(false);
+    expect(h.spreadCalls).toEqual([]);
+  });
+});
+
 describe('受け入れ基準1: 1本目が止まったら2本目へ回る', () => {
   it('回して、正本を書き換えて、撒く', async () => {
     const h = harness();
