@@ -2562,6 +2562,11 @@ class Pool implements ManagerPool {
     // runner がセッションを載せてから返る。これより前の生存確認の観測は、この
     // 委譲について何も言っていない（`ManagerRecord.runnerSessionSince` の doc）。
     record.runnerSessionSince = new Date(this.#now()).toISOString();
+    // **セッションが実際にこの器へ載った**（#669。`Job.sessionInstanceId` の doc）。
+    // 写すのは、この回に貸し出しを立てた相手である——名簿を引き直さない。
+    // **名乗らない値では上書きしない**（`undefined` を書くと、一度名乗った器の
+    // 値まで消えて以後ずっと判定できなくなる）。
+    if (lease.instanceId !== undefined) record.job.sessionInstanceId = lease.instanceId;
 
     await this.#persist(record);
     await this.#journal({
@@ -2744,11 +2749,18 @@ class Pool implements ManagerPool {
        * `#reattach` が断られた（`held-by-lease`）回は貸し直していない＝まだ誰も
        * 告げていないので、ここで告げるのが正しい。
        *
-       * **判定より前に置く。** `#resumeOnce` の中の `#claimForResume` が貸し出しを
-       * 貸し直す（＝記録された持ち主が現在の器に上書きされる）ので、後では
+       * **判定は `#resumeOnce` より前に置く。** `#claimForResume` が貸し出しを
+       * 貸し直すので、この欄より前に作られたジョブ（貸し出しへ落ちる筋。
+       * `#runnerSwappedSinceSession` の「限界」）では、後で読むと
        * 「入れ替わっていない」としか見えなくなる。
+       *
+       * **⚠️ ここで告げたことを、この場で「告げた」として記録しない。**
+       * 記録が進むのは `#resume` が `runner.resume()` の戻りまで到達した回だけで
+       * ある（`Job.sessionInstanceId`）——**関門を通った後に resume が失敗した回に
+       * 記録だけ進めると、届いていない1行を「届いた」と数えて二度と告げられなく
+       * なる**（それがこの実装の1つ前の版の穴だった）。
        */
-      const swapped = this.#runnerSwappedSinceLease(record, runner);
+      const swapped = this.#runnerSwappedSinceSession(record, runner);
       const resumed = await this.#resumeOnce(
         record,
         runner,
@@ -4897,10 +4909,24 @@ class Pool implements ManagerPool {
   }
 
   /**
-   * **この委譲が最後に走っていた器と、いまこの宛先に応えている器が違うか**（#669）。
+   * **この委譲のセッションが最後に実際に載った器と、いまこの宛先に応えている器が
+   * 違うか**（#669）。
    *
-   * 判定材料は台帳の貸し出し（`job.lease.instanceId`）と名簿（`#sighting`）だけで、
+   * 判定材料は台帳（`job.sessionInstanceId`）と名簿（`#sighting`）だけで、
    * **どちらもプロセス内で読める** — 新しい往復は1つも足していない。
+   *
+   * ## 判定材料は貸し出しではない（ここが要点である）
+   *
+   * `job.lease.instanceId` を材料にしていた版には穴が在った。`#claimForResume` は
+   * **`runner.resume()` を出す前に**新しい `instanceId` を台帳へ書き込むので、
+   * **関門を通った後に resume が失敗した回**（`unreadable` / `runner.resume()` が
+   * 投げた）では「貸し出しは進んだが告げる1行は届いていない」状態になり、次に
+   * 話しかけたとき「もう告げた」と読めて**二度と告げられなくなる。**
+   *
+   * だから見るのは `job.sessionInstanceId`（**セッションが実際に載ったことを
+   * 確かめた回にだけ進む欄**。`Job.sessionInstanceId` の doc）である。
+   * **`#claimForResume` の書き込みの順序は動かしていない** — あれは「奪う操作だけは
+   * 書けたことを条件にする」という別の正しい理由でそうなっている。
    *
    * ## 作法は `RunnerBacklogSnapshot.instanceSwapped` の踏襲である
    *
@@ -4908,26 +4934,44 @@ class Pool implements ManagerPool {
    *   と貸した時刻の大小）は、初回観測を入れ替えと誤読する筋がある
    * - **どちらか一方でも取れなければ「判定できない」。** 取れないときに「入れ替わった」
    *   と言わない（AGENTS.md「判定できないという3つ目の状態を持つ」）。ここでは
-   *   3通りが同じ `false` へ落ちる: 台帳の貸し出しが無い／持ち主を名乗っていない／
+   *   3通りが同じ `false` へ落ちる: 記録が無い／セッションの器を名乗っていない／
    *   いま応えている側が名乗らない。**併存（同じ `runnerId` を名乗る器が2台以上）も
    *   自動でここへ落ちる** — `#sighting` はそのとき `instanceId` を返さない
    *   （どちらと突き合わせるか決める材料が無い。#200）
    *
-   * ## `lease.runnerId` は見ない
+   * ## 宛先の名前（`runnerId`）は見ない
    *
-   * 台帳の貸し出しが別の宛先を指していても（移送）、**`instanceId` が違えば別の
-   * プロセス＝別の `/workspace` である**ことは同じように言える。ここで宛先の名前を
-   * 条件に足すと、移送された委譲にだけ告げない穴ができる。
+   * 台帳が別の宛先を指していても（移送）、**`instanceId` が違えば別のプロセス＝別の
+   * `/workspace` である**ことは同じように言える。ここで宛先の名前を条件に足すと、
+   * 移送された委譲にだけ告げない穴ができる。
    *
-   * ## 記録した `instanceId` の更新はここでしない
+   * ## デーモンの再起動を跨ぐか — 跨ぐ（`Job` の欄なので台帳に残る）
    *
-   * 告げた回の `#resumeOnce` → `#claimForResume` が `grantLease` で貸し直すので、
-   * 記録された持ち主は自動でいまの器へ追いつく（返却済み＝`released` の判定を通るので
-   * `same-holder` にはならず、必ず貸し直しの側へ行く）。**ここで別に書き戻すと、
-   * 同じ値を2箇所が書くことになり、片方だけ直る形を自分で作る。**
+   * **像（`ManagerRecord`）ではなく `Job` に持たせたのは、跨がせるためである。**
+   * 像にだけ持たせると、デーモンの再起動で判定材料が消え、`done` の委譲は
+   * **告げる機会をそこでも失う** — `restore()`（`#restoreJobs`）も `#reattach` も
+   * `running` / `waiting_human` しか見ないので、`done` はどちらの経路でも
+   * 告げられない（3枚のホワイトリストはこの PR で1枚も動かしていない）。
+   * ＝ 器の入れ替えとデーモンの再起動が重なるたびに、いちばん静かな形で穴が開く。
+   * 保存は Job 丸ごとの JSON（pg は `jobs.job` 列、fs は JSON ファイル）なので、
+   * **移行は要らない。**
+   *
+   * ## ⚠️ 限界: この欄より前に作られたジョブでは、まだ貸し出しへ落ちる
+   *
+   * 古い行にこの欄は無い。そこで**この欄が無いときだけ** `lease.instanceId` を
+   * 使う。**新しい行では絶対にこちらへ来ない**（`start()` と `#resume()` の成功が
+   * 必ず書くので、セッションが1度でも載った委譲は欄を持つ）。⟹ 上の穴が残るのは
+   * 「この変更より前に `done` になっていた委譲の、最初の1回」だけである。
+   *
+   * **落とすほうを選んだ理由**: 落とさなければ、その古い行は
+   * `sessionInstanceId` が無いので「判定できない」＝**1回も告げない**。落とせば
+   * 1回は告げられて、成功すれば以後は新しい欄で回る。**失敗した回だけ、元の穴と
+   * 同じところへ落ちる** — つまり落とす側は、どの筋でも落とさない側より悪くならない。
    */
-  #runnerSwappedSinceLease(record: ManagerRecord, runner: RunnerClient): boolean {
-    const recorded = record.job.lease?.instanceId;
+  #runnerSwappedSinceSession(record: ManagerRecord, runner: RunnerClient): boolean {
+    // **`??` で書くこと。** `sessionInstanceId` が在ればそれだけを見る（貸し出しは
+    // 見ない）。無い＝この欄より前に作られたジョブのときだけ貸し出しへ落ちる。
+    const recorded = record.job.sessionInstanceId ?? record.job.lease?.instanceId;
     if (recorded === undefined) return false;
     const answering = this.#sighting(runner.runnerId).instanceId;
     if (answering === undefined) return false;
@@ -5203,6 +5247,22 @@ class Pool implements ManagerPool {
     // この器がこの委譲を持っている——生存確認の観測をここから数え直す
     // （`ManagerRecord.runnerSessionSince` の doc）。
     record.runnerSessionSince = new Date(this.#now()).toISOString();
+    /*
+     * **セッションが実際にこの器へ載った**（#669。`Job.sessionInstanceId` の doc）。
+     *
+     * **ここより後に `'resumed'` 以外へ落ちる枝は無い**（この関数はこの下で
+     * `return 'resumed'` するだけである）ので、この地点は「resume が成功した回」
+     * と一致する。**逆に、ここより前で返る枝（`held-by-lease` /
+     * `workspace-path-unknown` / `unreadable`、および `runner.resume()` が
+     * 投げた回）ではこの欄が動かない** — そこが要点で、**貸し出しだけが新しい器へ
+     * 進んで告げる1行が届かなかった回に、次の `send()` がもう一度告げられる。**
+     *
+     * 写すのは、この回に関門（`#claimForResume`）が判定した相手である
+     * （`grantLease` / `touchLease` が直前に置いた値）。**名簿を引き直さない** —
+     * 理由は `Job.sessionInstanceId` の doc「値の出どころは…」に在る。
+     */
+    const placed = record.job.lease?.instanceId;
+    if (placed !== undefined) record.job.sessionInstanceId = placed;
     // **resume も「セッションが起きる瞬間」である**（`#tokenIdentities` の doc）。
     //
     // ここが抜けていた。`start` と、引き取りで**既に生きていた**セッション

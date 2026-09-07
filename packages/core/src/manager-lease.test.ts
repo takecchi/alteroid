@@ -162,6 +162,17 @@ interface Harness {
   advance: (ms: number) => void;
   /** ここから先の台帳への書き込みを失敗させる（**読みは通る**）。 */
   breakWrites: (reason: string) => void;
+  /**
+   * 預かってある生ログの読み出しを失敗させる／直す（**#669**）。
+   *
+   * `#resume` の `#loadSession` を `unreadable` へ落とすための口である。**関門
+   * （`#claimForResume`）を通った後に失敗する枝を作れるのはここだけで**、
+   * 「貸し出しだけ新しい器へ進んで、告げる1行は届かない」状態はここからしか作れない。
+   * 効かせるにはジョブが `projectKey` を持っている必要がある（`#loadSession` は
+   * それが無いと store を触らずに `absent` を返す）。
+   */
+  breakSessionLog: (reason: string) => void;
+  healSessionLog: () => void;
   /** クローンの受信箱へ流れた分（黙って止めないことを確かめるため）。 */
   inbox: InboxEvent[];
   journal: () => Promise<JournalEntry[]>;
@@ -183,6 +194,15 @@ async function harnessOf(options: { silent?: boolean } = {}): Promise<Harness> {
    * 「走っていた委譲を台帳に置いてから壊す」を作れない（置く操作自体が失敗する）。
    */
   let writeFailure: string | undefined;
+  /**
+   * 生ログの読み出しを途中から壊せる足場（#669）。
+   *
+   * **既定では `null`（預かっていない）を返す。** `#loadSession` はそれを `absent`
+   * として扱い resume は通るので、**この store を挿しただけでは既存のテストの
+   * 期待値は1つも変わらない**（既存のジョブは `projectKey` を持たないので、
+   * そもそもここへ到達しない）。
+   */
+  let sessionLogFailure: string | undefined;
   const stores: Stores = {
     ...base,
     jobs: {
@@ -190,6 +210,13 @@ async function harnessOf(options: { silent?: boolean } = {}): Promise<Harness> {
       putJob: async (job) => {
         if (writeFailure !== undefined) throw new Error(writeFailure);
         await base.jobs.putJob(job);
+      },
+    },
+    sessionStore: {
+      append: async () => undefined,
+      load: async () => {
+        if (sessionLogFailure !== undefined) throw new Error(sessionLogFailure);
+        return null;
       },
     },
   };
@@ -216,6 +243,12 @@ async function harnessOf(options: { silent?: boolean } = {}): Promise<Harness> {
     },
     breakWrites: (reason) => {
       writeFailure = reason;
+    },
+    breakSessionLog: (reason) => {
+      sessionLogFailure = reason;
+    },
+    healSessionLog: () => {
+      sessionLogFailure = undefined;
     },
     inbox,
     journal: async () => base.journal.list({ limit: 100 }),
@@ -961,9 +994,23 @@ describe('引き取りの関門（貸し出し期限）', () => {
   });
 });
 
-/** 待機中（`done`）の委譲。**貸し出しは返されている**（`closed` が通った印）。 */
+/**
+ * 待機中（`done`）の委譲。**貸し出しは返されている**（`closed` が通った印）。
+ *
+ * **`sessionInstanceId`（セッションが実際に載った器）は、既定で貸し出しの持ち主と
+ * 同じ値にする。** 実機でそうなるからである——`start()` と `#resume()` の成功が
+ * どちらも「その回に claim した相手」を両方の欄へ同じ値で書く（#669）。
+ * **食い違わせたい試験は `overrides` で明示すること**（食い違いこそが、この PR が
+ * 差し戻された穴そのものである）。
+ */
 function doneJob(lease: JobLease | undefined, overrides: Partial<Job> = {}): Job {
-  return { ...runningJob(lease), status: 'done', ...overrides };
+  const sessionInstanceId = lease?.instanceId;
+  return {
+    ...runningJob(lease),
+    status: 'done',
+    ...(sessionInstanceId === undefined ? {} : { sessionInstanceId }),
+    ...overrides,
+  };
 }
 
 /** 返却済みの貸し出し（`releaseLease` は `releasedAt` を立てるだけで持ち主を残す）。 */
@@ -1061,7 +1108,7 @@ describe('器が入れ替わった後の manager_send（#669）', () => {
    * とも言えないので、告げない側へ倒す。
    */
   describe('判定できないときは告げない', () => {
-    it('台帳の貸し出しが持ち主を名乗っていないとき', async () => {
+    it('セッションが載った器も貸し出しの持ち主も、記録が無いとき', async () => {
       const h = await harnessOf();
       await h.stores.jobs.putJob(doneJob(leaseReleasedBy(undefined)));
 
@@ -1170,6 +1217,132 @@ describe('器が入れ替わった後の manager_send（#669）', () => {
 
     expect(h.runner.resumes).toHaveLength(2);
     expect(h.runner.resumes[1]?.message).toBe('追加の指示');
+
+    await h.close();
+  });
+
+  /**
+   * **関門を通った後に resume が失敗した回で、告げる機会を失わない。**
+   *
+   * ## なぜここが穴になるか（この PR が一度差し戻された理由）
+   *
+   * `#claimForResume` は `grantLease`（いまの `instanceId`）を **`putJob` で台帳へ
+   * 書き込んでから**返り、それが `runner.resume()` の**前**に走る。⟹ 関門を通った
+   * 後に resume が失敗すると:
+   *
+   * 1. 貸し出しは新しい器で**既に永続化されている**
+   * 2. 告げる1行は**届いていない**（resume 自体が失敗したので runner へ渡っていない）
+   * 3. 判定材料が貸し出しだと、次回は「もう告げた」と読めて**二度と告げられない**
+   *
+   * だから判定材料は `job.sessionInstanceId`（**セッションが実際に載ったことを
+   * 確かめた回にだけ進む欄**）である。ここではその区別が実際に効いていることを、
+   * **claim の後に失敗する枝2つの両方**で測る。
+   *
+   * **`#claimForResume` の書き込みの順序は動かしていない** — そちらは「奪う操作
+   * だけは書けたことを条件にする」という別の正しい理由でそうなっている。だから
+   * 「貸し出しが進んでいること」も一緒に押さえる（順序を直して塞いだのではない、
+   * という証拠になる）。
+   */
+  describe('関門を通った後に resume が失敗しても、告げる機会を失わない', () => {
+    it('生ログが読めなかった回（unreadable）', async () => {
+      const h = await harnessOf();
+      await h.stores.jobs.putJob(doneJob(leaseReleasedBy('boot-1'), { projectKey: 'proj-key' }));
+      h.breakSessionLog('台帳の生ログが一時的に読めない');
+
+      const failed = await h.pool.send('mgr-1', '続きをやって');
+
+      expect(failed.outcome).toBe('unknown');
+      expect(h.runner.resumes).toEqual([]);
+      // **貸し出しだけは新しい器へ進んでいる**（関門は resume より前に書くので）。
+      expect((await jobOf(h.stores))?.lease).toMatchObject({ instanceId: 'boot-2' });
+      // **セッションが載った器の記録は進んでいない。** ここが判定材料である。
+      expect((await jobOf(h.stores))?.sessionInstanceId).toBe('boot-1');
+
+      // 読めるようになったら、2回目でちゃんと告げる。
+      h.healSessionLog();
+      await h.pool.send('mgr-1', '続きをやって');
+
+      expect(h.runner.resumes).toHaveLength(1);
+      expect(h.runner.resumes[0]?.message).toContain('[system]');
+      expect(h.runner.resumes[0]?.message).toContain('続きをやって');
+      // 告げられた回で記録が追いつく（＝3回目には付かない）。
+      expect((await jobOf(h.stores))?.sessionInstanceId).toBe('boot-2');
+
+      await h.close();
+    });
+
+    it('runner.resume が投げた回（ネットワーク）', async () => {
+      const h = await harnessOf();
+      await h.stores.jobs.putJob(doneJob(leaseReleasedBy('boot-1')));
+      h.runner.resumeFailure = new Error('runner が応答しない');
+
+      // **`send()` はこの枝を例外として通す**（`#resumeOnce` の実 I/O の失敗）。
+      await expect(h.pool.send('mgr-1', '続きをやって')).rejects.toThrow('runner が応答しない');
+
+      expect(h.runner.resumes).toEqual([]);
+      expect((await jobOf(h.stores))?.lease).toMatchObject({ instanceId: 'boot-2' });
+      expect((await jobOf(h.stores))?.sessionInstanceId).toBe('boot-1');
+
+      h.runner.resumeFailure = undefined;
+      await h.pool.send('mgr-1', '続きをやって');
+
+      expect(h.runner.resumes).toHaveLength(1);
+      expect(h.runner.resumes[0]?.message).toContain('[system]');
+      expect((await jobOf(h.stores))?.sessionInstanceId).toBe('boot-2');
+
+      await h.close();
+    });
+  });
+
+  /**
+   * **判定材料は台帳に残る（デーモンの再起動を跨ぐ）。**
+   *
+   * 像（`ManagerRecord`）にだけ持たせると、再起動で材料が消えて `done` の委譲は
+   * **そこでも告げる機会を失う** — `restore()` も `#reattach` も
+   * `running` / `waiting_human` しか見ないので、`done` はどちらの経路でも告げられない。
+   *
+   * **この describe の全テストが、既に台帳から読み直した材料で判定している**
+   * （`putJob` で置いて、像を持たないプールが `#load` で拾う）。ここではそれを
+   * 名指しで押さえるとともに、**`start()` が実際にこの欄を書くこと**を測る
+   * ——書かないと、始まって `done` になった委譲は最初の入れ替えで告げられない。
+   */
+  it('start() がセッションの器を台帳へ書く（欄が無ければ最初の入れ替えで告げられない）', async () => {
+    const h = await harnessOf();
+
+    const { managerId } = await h.pool.start({ request: '調べて' });
+
+    const job = (await h.stores.jobs.listJobs()).find((entry) => entry.id === managerId);
+    expect(job?.sessionInstanceId).toBe('boot-2');
+    // 貸し出しの持ち主とは別の欄である（同じ値でも、進む条件が違う）。
+    expect(job?.lease).toMatchObject({ instanceId: 'boot-2' });
+
+    await h.close();
+  });
+
+  /**
+   * **この欄より前に作られたジョブ（限界つきで貸し出しへ落ちる）。**
+   *
+   * 落とさなければ、古い行は「判定できない」＝**1回も告げない**（#669 が名指しした
+   * 「5日前の `done`」がまさにそれである）。落とせば1回は告げられ、成功すれば以後は
+   * 新しい欄で回る。**失敗した回だけ元の穴と同じところへ落ちる**ので、落とす側は
+   * どの筋でも落とさない側より悪くならない。**ここで測るのは「1回は告げる」と
+   * 「一度で新しい欄へ乗り換わる」の2つである**（残る穴のほうは歯にしない——
+   * 欠陥を仕様として固定することになる。`#runnerSwappedSinceSession` の doc に
+   * 逐語で書いてある）。
+   */
+  it('この欄より前に作られたジョブでは貸し出しへ落ちる（1回は告げ、以後は新しい欄で回る）', async () => {
+    const h = await harnessOf();
+    const legacy = doneJob(leaseReleasedBy('boot-1'));
+    delete legacy.sessionInstanceId;
+    expect(legacy.sessionInstanceId).toBeUndefined();
+    await h.stores.jobs.putJob(legacy);
+
+    await h.pool.send('mgr-1', '続きをやって');
+
+    expect(h.runner.resumes).toHaveLength(1);
+    expect(h.runner.resumes[0]?.message).toContain('[system]');
+    // 成功したので、古い行が一度で新しい欄へ乗り換わる。
+    expect((await jobOf(h.stores))?.sessionInstanceId).toBe('boot-2');
 
     await h.close();
   });
