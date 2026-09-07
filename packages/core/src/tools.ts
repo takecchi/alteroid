@@ -25,11 +25,7 @@ import { assertNeverRunnerLegStatus } from './runner-protocol.js';
 // doc に実害の詳細がある）。
 // **`isManagerInFlight` も同じ理由で同じ場所から取る**——あちらは字面ではなく
 // **群の分け方**（走行中・返事待ちを先に出す側か）の唯一の生成元である。
-import {
-  describeManagerState,
-  describeSessionMissingKind,
-  isManagerInFlight,
-} from './digest.js';
+import { describeManagerState, describeSessionMissingKind, isManagerInFlight } from './digest.js';
 import {
   describeDroppedTraceEmpty,
   describeDroppedTraceOrigin,
