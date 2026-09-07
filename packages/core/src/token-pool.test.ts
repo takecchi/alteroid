@@ -415,6 +415,81 @@ describe('markTokenUnusable / markTokenUsable', () => {
     expect(marked.cooldownUntil).toBe(Date.parse(AT) + FALLBACK);
   });
 
+  /**
+   * **本番で権威ある期限が推測に上書きされて消えた形**（実測 2026-09-07、Railway）。
+   *
+   * 同じ鍵が2回止まり、1回目は `rate_limit_event` を伴っていて（`resetsAt` が
+   * 入った）2回目は文言だけだった。⟹ 2回目が `now + 5時間` を書いて、1回目の
+   * 本物の期限を捨てた。プールの3本すべてで同じことが起き、いちばん重い1本は
+   * **3時間32分**余分に寝ることになった（数と内訳は `nextCooldownUntil` の doc）。
+   *
+   * ここで使っている時刻は、その3本のうち staging の実測値そのままである。
+   */
+  it('⚠️ resetsAt が届かない回は、記録されている未来の期限を後ろへ動かさない', () => {
+    // 1回目（`rate_limit_event` が届いた回）に入っていた本物の期限。
+    const authoritative = Date.parse('2026-09-07T13:10:00.000Z');
+    const cooled: AgentToken = { ...base, cooldownUntil: authoritative };
+
+    // 2回目（文言だけの回）。`now + 5h` = 16:42:22.701Z で、本物より 3h32m 後ろである。
+    const marked = markTokenUnusable(cooled, {
+      at: '2026-09-07T11:42:22.701Z',
+      message: "You've hit your session limit · resets 10:10pm (Asia/Tokyo)",
+      fallbackCooldownMs: FALLBACK,
+    });
+
+    expect(marked.cooldownUntil).toBe(authoritative);
+    // **止まった事実そのものは書き替わる。** 動かさないのは期限だけである。
+    expect(marked.lastRejectedAt).toBe('2026-09-07T11:42:22.701Z');
+    expect(marked.lastRejectedReason).toContain('resets 10:10pm');
+    expect(tokenAvailabilityAt(marked, Date.parse('2026-09-07T11:42:22.701Z'))).toBe('cooling');
+  });
+
+  it('記録が既定より後ろなら既定へ縮める（min であって据え置きではない）', () => {
+    // **前へは動かしてよい**（早く起きて確かめ直すだけで済む側。`nextCooldownUntil`
+    // の doc）。据え置きにすると、遠い値を縮める経路が `markTokenUsable` だけに
+    // なり、probe が判定を返さない器では一度も通らない。
+    const faraway = Date.parse(AT) + 34 * 60 * 60 * 1000;
+    const marked = markTokenUnusable(
+      { ...base, cooldownUntil: faraway },
+      {
+        at: AT,
+        message: MESSAGE,
+        fallbackCooldownMs: FALLBACK,
+      },
+    );
+    expect(marked.cooldownUntil).toBe(Date.parse(AT) + FALLBACK);
+  });
+
+  it('記録が既に過ぎていれば見ない（止まった観測が ready を残さない）', () => {
+    const marked = markTokenUnusable(
+      { ...base, cooldownUntil: Date.parse(AT) - 1 },
+      {
+        at: AT,
+        message: MESSAGE,
+        fallbackCooldownMs: FALLBACK,
+      },
+    );
+    expect(marked.cooldownUntil).toBe(Date.parse(AT) + FALLBACK);
+    expect(tokenAvailabilityAt(marked, Date.parse(AT))).toBe('cooling');
+  });
+
+  it('resetsAt が届いた回は、記録より後ろでもそのまま採る（権威ある値である）', () => {
+    // **ここに `min` を入れないこと。** 入れると、いま効いている枠（週の枠など）が
+    // 記録より後ろを指しているときに「もう開いた」と主張することになる。
+    const recorded = Date.parse(AT) + 60 * 60 * 1000;
+    const later = Date.parse(AT) + 34 * 60 * 60 * 1000;
+    const marked = markTokenUnusable(
+      { ...base, cooldownUntil: recorded },
+      {
+        at: AT,
+        message: MESSAGE,
+        resetsAt: later,
+        fallbackCooldownMs: FALLBACK,
+      },
+    );
+    expect(marked.cooldownUntil).toBe(later);
+  });
+
   it('resetsAt が過去でも未来へ丸めない（「もう戻っている」を正しく表す）', () => {
     const past = Date.parse('2026-08-01T00:00:00.000Z');
     const marked = markTokenUnusable(base, {

@@ -524,8 +524,70 @@ export interface TokenFailureObservation {
    * **ここで既定値を持たない。** 持つと、設定を変えたのに片方の経路だけ古い値で
    * 動く形が作れる——`DEFAULT_TOKEN_COOLDOWN_MS` の doc が言うとおり、権威は
    * `resetsAt` で、その次が「設定として1か所に置いた既定」である。
+   *
+   * **これは推測である。** だから {@link nextCooldownUntil} は、この値から作った期限を
+   * **記録されている未来の期限より後ろへは置かない**（本番でそれが起きた実測は
+   * あちらの doc）。
    */
   fallbackCooldownMs: number;
+}
+
+/**
+ * この観測で書く冷却の期限（epoch ミリ秒）を決める。
+ *
+ * | `resetsAt` | 書く値 |
+ * | --- | --- |
+ * | 届いた | **そのまま採る。** 記録より後ろでも採る（権威ある値である） |
+ * | 届かなかった | `at + fallback` の**推測**。ただし**記録されている未来の期限より後ろへは行かない**（早いほうを採る） |
+ *
+ * ## なぜ「推測が記録を後ろへ動かさない」が要るのか
+ *
+ * **本番で、権威ある期限が推測に上書きされて消えた**（実測 2026-09-07、Railway）。
+ * 同じ鍵が2回止まり、1回目は `rate_limit_event` を伴っていて 2回目は文言だけ
+ * だった ⟹ 2回目の `markTokenUnusable` が `now + 5時間` を書き、**1回目に
+ * 入っていた本物の `resetsAt` を捨てた。** プールの3本すべてで同じことが起きた:
+ *
+ * | 鍵 | 1回目に入った `resetsAt` | 2回目が書いた値 | 余分に寝る時間 |
+ * | --- | --- | --- | --- |
+ * | staging | `2026-09-07T13:10:00.000Z` | `2026-09-07T16:42:22.701Z` | +3h32m |
+ * | dev | `2026-09-07T14:40:00.000Z` | `2026-09-07T16:42:44.816Z` | +2h02m |
+ * | production | `2026-09-07T15:40:00.000Z` | `2026-09-07T16:45:13.555Z` | +1h05m |
+ *
+ * 3本とも文言は `You've hit your session limit · resets <時刻> (Asia/Tokyo)` で、
+ * **その時刻は1回目に入った `resetsAt` と逐語で一致していた。** つまり値は
+ * 正しく取れていたうえで、あとから来た推測がそれを押し出した。
+ *
+ * ## なぜ「前へは動かしてよい」のか（`min` であって「据え置き」ではない）
+ *
+ * {@link DEFAULT_TOKEN_COOLDOWN_MS} の doc が言うとおり、**早く起きすぎるほうが
+ * 安全側**である——早ければ「候補をもう一度確かめて、まだ駄目なら冷やし直す」
+ * だけで済む。据え置き（記録が在れば一切動かさない）にすると、一度入った遠い
+ * 期限を**縮める経路が `markTokenUsable` だけ**になり、そこは probe が判定を
+ * 返さない器では一度も通らない（`token-watch.ts` の「probe が1つも判定を
+ * 返さない器が在る」）⟹ 遠い値が居座る。
+ *
+ * ⟹ **この関数が返す値は、直す前の振る舞いより後ろには行かない。** 直す前は
+ * 常に `at + fallback`（または `resetsAt`）だったので、`min` を採る限り
+ * 「この変更のせいで長く寝る」形は作れない。
+ *
+ * ## 過去の記録は見ない
+ *
+ * `at` の時点で既に過ぎている `cooldownUntil` は**候補にしない。** 採ると、
+ * いま止まったことを観測したのに行が {@link tokenAvailabilityAt} で `ready`
+ * のまま残る——**「止まった」を記録しに来た呼びが、止まっていないことを記録する。**
+ */
+function nextCooldownUntil(
+  recorded: number | undefined,
+  observation: TokenFailureObservation,
+): number {
+  // **権威ある値はそのまま。** ここに `min` を入れないこと——入れると、いま
+  // 効いている枠（週の枠など）が記録より後ろを指しているときに、その枠を
+  // 「もう開いた」と主張することになる。
+  if (observation.resetsAt !== undefined) return observation.resetsAt;
+  const at = Date.parse(observation.at);
+  const guess = at + observation.fallbackCooldownMs;
+  if (recorded === undefined || recorded <= at) return guess;
+  return Math.min(recorded, guess);
 }
 
 /**
@@ -546,13 +608,15 @@ export interface TokenFailureObservation {
  * **`cooldownUntil` に過去の時刻が入りうる。** `resetsAt` が既に過ぎていれば
  * そのまま過去になる——**丸めて未来へ押し出さない。** 選ぶ側（PR3）は「過ぎて
  * いれば候補」として読むので、過去の値は「もう戻っている」を正しく表す。
+ *
+ * **期限の決め方は {@link nextCooldownUntil} が持つ。** 既定へ倒した回が、
+ * 記録されている期限を**後ろへ**動かさないのはそちらの規律である。
  */
 export function markTokenUnusable(
   token: AgentToken,
   observation: TokenFailureObservation,
 ): AgentToken {
-  const cooldownUntil =
-    observation.resetsAt ?? Date.parse(observation.at) + observation.fallbackCooldownMs;
+  const cooldownUntil = nextCooldownUntil(token.cooldownUntil, observation);
   return {
     ...token,
     lastRejectedAt: observation.at,
