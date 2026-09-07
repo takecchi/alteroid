@@ -10696,6 +10696,15 @@ describe('onUsageObservation（回し手へ渡す観測）', () => {
     return { clone, calls, seen };
   }
 
+  /**
+   * **枠の観測だけを取り出す**（#681 (1)）。この口には `succeeded: true`
+   * ——ターンが実際に成功したという観測（`usable` の2本目の生産者）——も
+   * 流れる。**位置で取ると種類の違うものを掴む**ので、数える前に絞る。
+   */
+  function limitsOf(seen: readonly TokenRotatorObservation[]): TokenRotatorObservation[] {
+    return seen.filter((o) => o.succeeded !== true);
+  }
+
   function say(clone: ReturnType<typeof createClone>): void {
     clone.post({
       type: 'human_message',
@@ -10783,13 +10792,19 @@ describe('onUsageObservation（回し手へ渡す観測）', () => {
     say(clone);
     await waitFor(() => seen.length > 0, '1回目の観測');
     say(clone);
-    await waitFor(() => seen.length > 1, '2回目の観測');
+    await waitFor(() => limitsOf(seen).length > 1, '2回目の観測');
     clone.stop();
 
+    // **枠の観測だけを取り出してから数える**（#681 (1)）。この口には
+    // `succeeded: true`（ターンが成功したという観測。2本目の `usable` の
+    // 生産者）も流れるようになったので、**位置で取ると成功の観測を掴む。**
+    // 番号をずらして直すのではなく、種類で絞る —— 位置で合っていたのは
+    // たまたまであって、この歯が測りたいのは「2件目の枠の観測」である。
+    const limits = limitsOf(seen);
     // **重ねる前の生の1件から取る。** 重ねた形の `status` はアカウントを跨いで
     // 残るので、契機の材料にすると回した直後の健全な鍵でもう一度回る。
-    expect(seen[1]?.statusNow).toBe('rejected');
-    expect(seen[1]?.transition).toBeUndefined();
+    expect(limits[1]?.statusNow).toBe('rejected');
+    expect(limits[1]?.transition).toBeUndefined();
   });
 
   it('セッションが起きたときの身元を、その観測すべてに添える', async () => {
@@ -10832,6 +10847,28 @@ describe('onUsageObservation（回し手へ渡す観測）', () => {
     await waitFor(() => calls.length > 0, 'セッションが開くこと');
     clone.stop();
     expect(calls.length).toBeGreaterThan(0);
+  });
+
+  /**
+   * **`usable` の2本目の生産者（#681 (1)）。** ここは `markTokenUsable` の doc が
+   * 「`clone.ts` が成功した result で `#usageBlocked` を降ろしているのと同じ
+   * 根拠」と名指ししている場所そのもの——成功したターンは `#observeForTokenRotation`
+   * にも1本渡す。
+   */
+  it('⚠️ ターンが成功したら、成功の観測（succeeded: true）も回し手へ渡る', async () => {
+    // **既定（`resultSubtype` 省略）は成功である。** notice / rate_limit_event の
+    // どちらも設定していないので、`seen` に積まれるのはこの1本だけになる。
+    const { clone, seen } = cloneObserving({ identity: { tokenId: 'tok-a', generation: 3 } });
+    say(clone);
+    await waitFor(() => seen.length > 0, '観測が渡ること');
+    clone.stop();
+
+    // **成功だけを運ぶ。** 枠の観測（`notice` / `facts` / `transition`）は
+    // 1つも持たない。
+    expect(seen[0]).toEqual({
+      succeeded: true,
+      observedBy: { tokenId: 'tok-a', generation: 3 },
+    });
   });
 });
 

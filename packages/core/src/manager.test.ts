@@ -2534,6 +2534,44 @@ describe('消費を台帳へ積む', () => {
 
     await s.pool.stop();
   });
+
+  /**
+   * **`usable` の2本目の生産者（#681 (1)）。** この case へ来ること自体が
+   * `runner.ts` の `if (event.succeeded)` を通った証拠なので、
+   * `#observeForTokenRotation` を1本足した——`account_probe` が見ていない
+   * セッション単位の上限に、成功という直接の証拠で効かせるためである。
+   */
+  it('⚠️ usage が降りたら、成功の観測（succeeded: true）を回し手へも渡す', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner();
+    const seen: TokenRotatorObservation[] = [];
+    const s = setup(undefined, {
+      stores,
+      runner: fake.runner,
+      tokenIdentity: () => ({ tokenId: 'tok-a', generation: 5 }),
+      onUsageObservation: async (o) => {
+        seen.push(o);
+      },
+    });
+    await s.pool.restore();
+
+    fake.usage('mgr-spend', { opus: usage({ costUsd: 1 }) }, 'sess-1');
+    await expect.poll(() => seen.length, { timeout: 2000 }).toBeGreaterThan(0);
+
+    // **成功だけを運ぶ。** 枠の観測（`notice` / `facts` / `transition`）は
+    // 1つも持たない——`observe()` はこれを扱わないので、混ぜると `succeeded`
+    // の分岐が両方の意味を持つことになる。
+    expect(seen[0]).toEqual({
+      succeeded: true,
+      observedBy: { tokenId: 'tok-a', generation: 5 },
+    });
+
+    // **台帳への記録は1文字も変わっていない**（回帰。既存の歯が別に固定する）。
+    await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBe(1);
+
+    await s.pool.stop();
+  });
 });
 
 describe('worker_wait — 委譲1区間ぶんの集計を日誌に残す', () => {

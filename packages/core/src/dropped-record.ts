@@ -883,6 +883,12 @@ export function journalEntryShape(entry: JournalEntryInput): string {
         (entry.fromTokenId === undefined ? '' : ` fromTokenId=${tag(entry.fromTokenId)}`) +
         (entry.generation === undefined ? '' : ` generation=${entry.generation}`) +
         (entry.earliestAt === undefined ? '' : ` earliestAt=${tag(entry.earliestAt)}`) +
+        // **`recoveredSource` は列挙値である**（#681 (1)。誰が観測したかを
+        // 決めるのはこちら側の回し手であって外部入力ではないので、他の列挙値
+        // （`event` / `signal` / `freshness`）と同じ判定基準で `tag()` に載せる。
+        (entry.recoveredSource === undefined
+          ? ''
+          : ` recoveredSource=${tag(entry.recoveredSource)}`) +
         (entry.label === undefined ? '' : ` ${size(entry.label, 'label')}`) +
         (entry.noticeText === undefined ? '' : ` ${size(entry.noticeText, 'noticeText')}`) +
         ` ${size(entry.text)}`

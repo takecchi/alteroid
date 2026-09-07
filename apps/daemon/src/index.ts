@@ -396,7 +396,15 @@ export function reopenedTokenOf(
   // ——起こしても同じところで止まり、保持していた合図を1件無駄に焼く。
   // 冷却が明ければ枠の probe が `usable` を観測し、`recovered` として戻ってくる。
   if (outcome.kind === 'ignored' && outcome.recovered !== undefined) {
-    return { ...outcome.recovered, how: 'また通るようになった' };
+    // **`source` は拾わない。** ここが答えるのは「起こすべきか」だけで、
+    // どちらの生産者（`account_probe` / `turn_success`）が観測したかは
+    // 起こし方を分けない（#681 (1)）——宣言した戻り値の型に無い欄を
+    // spread で紛れ込ませない。
+    return {
+      tokenId: outcome.recovered.tokenId,
+      label: outcome.recovered.label,
+      how: 'また通るようになった',
+    };
   }
   return undefined;
 }
@@ -1040,6 +1048,17 @@ export async function main(): Promise<void> {
       wake?.();
     },
     onUsageObservation: async (observation) => {
+      // **成功の観測は `observe` へは1文字も渡さない**（#681 (1)。
+      // `TokenRotatorObservation.succeeded` の doc）。あちらは枠の観測しか
+      // 扱わないので、成功は別の生産者（`TokenRotator.reconsider` の
+      // `turn_success`）へ振る——`tokenWatch` が世代の門を掛けた上で
+      // `reconsider` を呼び、結果は `onOutcome`（下の `settleTokenOutcome` と
+      // 同じ1本）へ流れる。ここで `return` するのは、この observation を
+      // 二重に処理しないためである。
+      if (observation.succeeded === true) {
+        tokenWatch?.observeTurnSuccess(observation.observedBy);
+        return;
+      }
       const outcome = await tokenRotator.observe(observation);
       // **当たった文言をそのまま添える**（Issue #393「言い換えずそのまま残す」）。
       // 人間が claude.ai と突き合わせられることと、回復の見込みの分類が効くことの

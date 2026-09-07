@@ -61,7 +61,7 @@ describe('tokenRotationStream', () => {
  * **この歯が測らないもの**: 実際に引き取りが成功すること（`ManagerPool` の関門が
  * 持つ判断で、`packages/core` 側の歯が見ている）。ここが約束するのは配線だけである。
  */
-describe('onSwap から引き取りへの配線（index.ts の原文）', () => {
+describe('index.ts の原文で測る配線（onSwap の引き取り / 枠の観測の振り分け）', () => {
   const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
 
   /**
@@ -98,6 +98,27 @@ describe('onSwap から引き取りへの配線（index.ts の原文）', () => 
     // **宛先を落とさない。** 引数無しで呼ぶと、走行中だった委譲を拾う側
     // （`reattachRunner`）が下の `runnerId !== undefined` で素通りする。
     expect(calls.filter((line) => /takeOverOnSwap\(\s*\)/.test(line))).toEqual([]);
+  });
+
+  it('⚠️ 成功の観測は observe へ落ちない（#681 (1)。2本目の生産者へ振る）', () => {
+    // **`observe` は枠の観測しか扱わない。** 成功がそこへ落ちると、記録を
+    // `usable` へ戻す経路（`reconsider` の `turn_success`）が呼ばれないまま
+    // 「何も起きない」——#681 が直そうとしている症状そのものへ戻る。
+    // **見えない側の壊れ方なので、配線そのものを測る**（この describe の趣旨）。
+    const body = code(blockOf(/^\s*onUsageObservation:\s*async\s*\(/));
+
+    const branch = body.findIndex((line) => line.includes('observation.succeeded === true'));
+    const handoff = body.findIndex((line) => line.includes('observeTurnSuccess('));
+    const escape = body.findIndex((line) => /^\s*return;\s*$/.test(line));
+    const observe = body.findIndex((line) => line.includes('tokenRotator.observe('));
+
+    // 4つとも在ること。どれか1つでも消えると、成功が `observe` へ落ちる。
+    expect([branch, handoff, escape, observe].filter((i) => i < 0)).toEqual([]);
+    // **順番が意味を持つ。** 振り分け → 2本目の生産者 → 抜ける → その後で
+    // `observe`。`return` が `observe` より後ろへ回ると、成功が両方を通る。
+    expect(branch).toBeLessThan(handoff);
+    expect(handoff).toBeLessThan(escape);
+    expect(escape).toBeLessThan(observe);
   });
 
   it('その口は、走行中の委譲と台帳だけの委譲を両方とも起こす', () => {
@@ -148,7 +169,7 @@ describe('reopenedTokenOf', () => {
         kind: 'ignored',
         signal: 'none',
         reason: 'account_probe',
-        recovered: { tokenId: 'tok-a', label: '本命' },
+        recovered: { tokenId: 'tok-a', label: '本命', source: 'account_probe' },
         why: 'probe で通ることを観測できた',
       }),
     ).toEqual({ tokenId: 'tok-a', label: '本命', how: 'また通るようになった' });

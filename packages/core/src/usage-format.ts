@@ -281,6 +281,18 @@ export function describeAccountUsage(
       (usage.organization === undefined ? '' : ` / 組織: ${usage.organization}`),
   );
 
+  // **判定には使っていない観測である**（#681 (2)）。`classifyLimitsUnavailable`
+  // はこの欄を読まない。`'none'` は「**API キーを使っていない**」という意味で
+  // （claude.ai の OAuth ログイン等）、**「ログインしていない」ではない**——
+  // それを言うのは `tokenSource` の欄である（`describeLimitsUnavailable` の
+  // `not_logged_in` の doc と同じ注意）。取れなかったときは埋めない。
+  lines.push(
+    `認証の出所（apiKeySource。判定には使っていない観測）: ${usage.apiKeySource ?? '（取れなかった）'}` +
+      (usage.apiKeySource === 'none'
+        ? '（API キーを使っていないという意味。claude.ai の OAuth ログイン等。「ログインしていない」ではない）'
+        : ''),
+  );
+
   if (usage.windows.length === 0) {
     // **`limitsAvailable` が真でも枠が来ないことがある**（実測）。0% と描かない。
     lines.push(plain('枠: 取れなかった（向こうが枠を返さなかった。**0% ではない**）'));

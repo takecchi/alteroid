@@ -5676,12 +5676,17 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
             : entry.earliestAt === undefined
               ? '\n⚠ 戻る見込みの立っている候補が1本も無い（プールが空か、全部外されている）'
               : `\nいちばん早く戻るのは ${entry.earliestAt}`;
+      // **`recoveredSource` を潰さない**（#681 (1)）。`event: 'recovered'` の
+      // 行にだけ付く——どちらの生産者（`account_probe` / `turn_success`）が
+      // 「通る」と観測したかを、見出しから引ける形で出す。
+      const recoveredSource =
+        entry.recoveredSource === undefined ? '' : ` src=${entry.recoveredSource}`;
       return {
         head:
           `[token_rotation ${entry.event}` +
           (entry.signal === undefined ? '' : ` ${entry.signal}`) +
           (entry.freshness === undefined ? '' : `/${entry.freshness}`) +
-          `${gen}]${where}`,
+          `${gen}]${where}${recoveredSource}`,
         // **本文は整形済みの行をそのまま出す。** ここで組み直すと、人間が読む面
         // （stderr / Web）と言い方が分かれる（`text` の持ち主は `token-rotator.ts`
         // の `describeTokenRotation` 1つである）。

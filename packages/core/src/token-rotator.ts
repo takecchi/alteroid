@@ -120,7 +120,47 @@ export type TokenReconsiderReason =
   /** 現役を probe で観測した結果が届いた（セッションが1本も走っていなくても届く）。 */
   | 'account_probe'
   /** デーモンが起きた直後の1回。 */
-  | 'startup';
+  | 'startup'
+  /**
+   * **あるトークンで層のターンが実際に成功した**（#681 (1)。人間の決定
+   * 2026-09-08「usable の2本目の生産者」）。
+   *
+   * `account_probe` はアカウントの枠を読むだけで、セッション単位の上限
+   * （`You've hit your session limit`）には効かない（{@link TokenRotator.reconsider}
+   * の doc）。**成功はその穴を埋める** —— 枠の種類を問わず「いまの現役が
+   * 通った」という直接の証拠だからである。
+   *
+   * **⚠️ ただし「回す」側の契機ではない。** 成功は「いまの現役が通る」証拠で
+   * あって「回すべき」証拠ではないので、`reconsider` はこの契機で呼ばれたとき
+   * 通常の回転判定へは絶対に落とさない（下の {@link TokenRotator.reconsider}
+   * の実装注記）。回すのは `unusable`（probe が観測した失敗）か `stranded`
+   * （記録の上で通らない）だけである。
+   */
+  | 'turn_succeeded';
+
+/**
+ * {@link TokenRotator.reconsider} の `current` が運ぶ判定の**出所**（#681 (1)）。
+ *
+ * ## なぜ型で分けるか（#683 と同じ形）
+ *
+ * #683 は `resetsAt?: number` を `resets: { at, source }` へ変えて「出所だけ／
+ * 期限だけ」を渡せない形にした。ここも同じ理由で、`verdict` と `origin` を
+ * 組にして渡す（`reconsider` の入力に `currentVerdict?:` を単独で持たせない）。
+ *
+ * **`turn_success` は `observedBy` を必須にする**（両フィールドとも必須。
+ * 省略可にしない）。⟹ **世代を名乗らない成功は、この型では作れない** ——
+ * `reconsider` が世代の照合（{@link observationFreshness}）を素通りする経路を
+ * 型のレベルで塞ぐ。
+ *
+ * `account_probe` は逆に身元を持たない——**そのプローブが読むのはアカウント
+ * 全体の枠であって、特定のセッション（＝身元）の観測ではないから**である
+ * （`.claude/skills/token-pool/SKILL.md` の「身元を運ばない観測しか無い器では
+ * 復帰の下限がいまも probe の5分である」と同じ話）。だから世代の照合はしない
+ * ——照合する相手（「どのセッションの観測か」）がそもそも無い。
+ */
+export type TokenVerdictOrigin =
+  | { source: 'account_probe' }
+  | { source: 'turn_success'; observedBy: { tokenId: string; generation: number } };
 
 /** 回した / 回さなかった結果。**日誌へそのまま出せる形にしてある。** */
 export type TokenRotationOutcome =
@@ -167,8 +207,15 @@ export type TokenRotationOutcome =
        *
        * **`parked` では起こさない** —— 撒いた鍵は `cooldownUntil` まで通らないので、
        * 起こしても同じところで止まり、保持していた合図を1件無駄に焼く。
+       *
+       * ## `source`（#681 (1)）
+       *
+       * どちらの生産者がこの `usable` を観測したか（{@link TokenVerdictOrigin}）。
+       * **リテラルで書かず、呼ぶ側が受け取った `origin.source` をそのまま
+       * 引き継ぐ** —— ここで書き写すと、生産者を1つ足したときにこの分岐だけが
+       * 追随し忘れて嘘の値を書く経路になる。
        */
-      recovered?: { tokenId: string; label: string };
+      recovered?: { tokenId: string; label: string; source: TokenVerdictOrigin['source'] };
       /**
        * `freshness` が `stale` のとき、**いまの現役に対して何件目の取りこぼしか**
        * （この1件を含む）。それ以外では付かない。
@@ -313,6 +360,15 @@ export interface TokenRotatorObservation {
    * 倒した事実は `freshness` として結果に残る。
    */
   observedBy?: { tokenId?: string; generation?: number };
+  /**
+   * **ターンが成功したという観測**（#681 (1)）。**枠の観測ではない** —— `observe`
+   * はこれを扱わない。呼ぶ側（`manager.ts` の `case 'usage':` / `clone.ts` の
+   * `case 'turn_ended':` の成功枝）はこれが立った observation を渡してくるが、
+   * `apps/daemon/src/index.ts` の `onUsageObservation` がここで振り分けて
+   * `tokenWatch.observeTurnSuccess()`（`TokenRotator.reconsider` の2本目の
+   * 生産者）へ回す。`observe` へは1文字も届かせない。
+   */
+  succeeded?: true;
 }
 
 export interface TokenRotatorOptions {
@@ -397,10 +453,16 @@ export interface TokenRotator {
    * サブプロセスは1本も起きない。** 焼くのは「現役が通らないのに `ready` な候補が
    * 在る」＝まさに回したい瞬間だけである。
    *
-   * @param input.currentVerdict
-   *   **現役をこの回に probe して分かったこと**（セッションを1本も使わない観測。
-   *   `apps/daemon/src/usage-poller.ts` が5分ごとに取っているものを
-   *   `judgeTokenCandidate` へ通した値）。
+   * @param input.current
+   *   **現役についてこの回に分かったこと**と、**その出所**（#681 (1)。
+   *   {@link TokenVerdictOrigin}）。`verdict` と `origin` を組にして渡す
+   *   ——`currentVerdict?:` を単独で受ける形はもう無い（#683 と同じ理由。
+   *   {@link TokenVerdictOrigin} の doc）。
+   *
+   *   ### 出所1: `account_probe`
+   *
+   *   セッションを1本も使わない観測（`apps/daemon/src/usage-poller.ts` が
+   *   5分ごとに取っているものを `judgeTokenCandidate` へ通した値）。
    *
    *   - `unusable` → **記録が `ready` でも冷却へ入れて回す。** これが「観測が
    *     どこからも上がらないまま止まり続ける」を塞ぐ本体である
@@ -437,10 +499,33 @@ export interface TokenRotator {
    *   （`usage-snapshot.ts` の `LimitsUnavailableCause`）。**変わったのは文言と
    *   構造だけで、判定は `undecidable` のままである** ⟹ **この項目が言っている
    *   帰結は1つも直っていない。** 上の実測を残してあるのは、それが証拠だからである。
+   *
+   *   ### 出所2: `turn_success`（#681 (1)。2本目の生産者）
+   *
+   *   **あるトークンで層のターンが実際に成功した**という観測（`verdict` は
+   *   常に `usable`）。`account_probe` の穴（セッション単位の上限には効かない）
+   *   をここが埋める。
+   *
+   *   **⚠️ この生産者にだけ、世代の門がある。** `observe()` は
+   *   `observationFreshness()` で `stale` を捨てるが、この関数はもともと
+   *   `observedBy` を受け取らず、`stores.tokens.readActive()` の「記録上の
+   *   現役」へ無条件に判定を適用していた——`turn_success` はそこを初めて踏む
+   *   経路である。**回った後に届いた前の世代の成功が、まだ一度も試していない
+   *   新しい現役の記録を `usable` にしうる。** ⟹ `origin.source ===
+   *   'turn_success'` のときだけ、`observationFreshness(active,
+   *   origin.observedBy)` が `'current'` でなければ**回さず** `kind: 'ignored'`
+   *   で抜ける。`account_probe` は身元を運ばない観測なので、この門はかけない
+   *   （かけようがない——照合する身元がそもそも無い）。
+   *
+   *   **⚠️ そして `turn_success` はどんな結果でも通常の回転判定へは絶対に落ちない**
+   *   （成功は「いまの現役が通る」証拠であって「回すべき」証拠ではない）。
+   *   `usable` 分岐に入れなかった場合（現役の行が見つからない等）も、
+   *   `stranded` 経由の {@link sweepCandidates} へは進めず `kind: 'ignored'`
+   *   で抜ける。
    */
   reconsider(input: {
     reason: TokenReconsiderReason;
-    currentVerdict?: TokenCandidateVerdict;
+    current?: { verdict: TokenCandidateVerdict; origin: TokenVerdictOrigin };
   }): Promise<TokenRotationOutcome>;
   /**
    * **起動時に1度だけ**、記憶ストアが「現役」と言っているトークンを撒き直す。
@@ -1428,10 +1513,11 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
 
     reconsider: (input: {
       reason: TokenReconsiderReason;
-      currentVerdict?: TokenCandidateVerdict;
+      current?: { verdict: TokenCandidateVerdict; origin: TokenVerdictOrigin };
     }) =>
       serial(async () => {
-        const { reason, currentVerdict } = input;
+        const { reason, current } = input;
+        const currentVerdict = current?.verdict;
         const [tokens, settings, active] = await Promise.all([
           stores.tokens.list(),
           stores.tokens.readSettings(),
@@ -1476,7 +1562,40 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         }
 
         /**
-         * **現役を probe で観測できていて、それが「通る」だったとき。**
+         * **世代の門（#681 (1)。マネージャーの判断1）** ——
+         * `origin.source === 'turn_success'` のときだけ掛ける。
+         *
+         * `observe()` は `observationFreshness()` で `stale` を捨てるが、この
+         * 関数はもともと `observedBy` を受け取らず、`readActive()` の
+         * 「記録上の現役」へ無条件に判定を適用していた——`turn_success` は
+         * それが初めて踏む穴である。**回った後に届いた前の世代の成功が、まだ
+         * 一度も試していない新しい現役の記録を `usable` にしうる。**
+         *
+         * **`account_probe` にはこの門を掛けない。** あちらは身元を運ばない
+         * 観測なので、そもそも照合する相手が無い（probe はアカウントの枠を
+         * 測るので、名乗るべきセッションの身元を持たない——
+         * `.claude/skills/token-pool/SKILL.md` の「身元を運ばない観測しか無い
+         * 器では復帰の下限がいまも probe の5分」と同じ話）。
+         */
+        if (current !== undefined && current.origin.source === 'turn_success') {
+          const freshness = observationFreshness(active, current.origin.observedBy);
+          if (freshness !== 'current') {
+            return {
+              kind: 'ignored' as const,
+              signal: 'none' as const,
+              reason,
+              why:
+                'ターンの成功を観測したが、世代が合わない（もう回した後、' +
+                'あるいはまだ一度も試していない現役についての成功なので、捨てる）',
+            };
+          }
+        }
+
+        /**
+         * **現役が「通る」と分かったとき**（#681 (1) から2つの生産者を持つ）。
+         *
+         * - `account_probe`: セッションを1本も使わない probe が通ることを観測した
+         * - `turn_success`: 層のターンが実際に成功した（直上の世代の門を通った後）
          *
          * 止まった記録が残っていれば消す（`markTokenUsable`）。**冷却が既定の
          * 5時間で入っていて、実際には枠がもっと早く開いていた回がここで直る** ——
@@ -1484,10 +1603,14 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
          * **`selectNextToken` は在るのに見えない候補を数え落とす。**
          *
          * **人間が外した印（`disabledAt`）と失効（`invalidatedAt`）には触らない。**
-         * あれは枠の話ではなく人間の判断なので、probe が通ったことを理由に
-         * 覆すのは「実装が人間の判断を黙って戻す」ことである。
+         * あれは枠の話ではなく人間の判断なので、通ったことを理由に覆すのは
+         * 「実装が人間の判断を黙って戻す」ことである。
          */
-        if (currentVerdict?.verdict === 'usable' && currentRow !== undefined) {
+        if (
+          current !== undefined &&
+          current.verdict.verdict === 'usable' &&
+          currentRow !== undefined
+        ) {
           // **覚えている拒否も忘れる**（#680。上の `rememberRejection` の
           // 「忘れる道を塞がないこと」と**同じ穴の別の入口**である）。
           //
@@ -1503,6 +1626,12 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           const availability = tokenAvailabilityAt(currentRow, now().getTime());
           const hasRejection =
             currentRow.lastRejectedAt !== undefined || currentRow.cooldownUntil !== undefined;
+          // **観測できたことの言い方は出所で変える。** probe は「枠を測った」、
+          // 成功は「実際にターンが通った」——どちらも `usable` だが、根拠が違う。
+          const observedHow =
+            current.origin.source === 'turn_success'
+              ? 'ターンが実際に成功した'
+              : 'probe で通ることを観測した';
           if (hasRejection && availability !== 'disabled' && availability !== 'invalidated') {
             await stores.tokens.replace(
               tokens.map((token) =>
@@ -1514,15 +1643,47 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
               signal: 'none' as const,
               reason,
               // **「いつ開いたか」を記録に残す材料を返す**（`recovered` の doc）。
-              recovered: { tokenId: currentRow.id, label: currentRow.label },
-              why: `現役「${currentRow.label}」は probe で通ることを観測できた（止まった記録を消した。冷却の見込みが実際より長かった分がここで戻る）`,
+              // **`source` はリテラルで書かない。** `current.origin.source` を
+              // そのまま引き継ぐ（マネージャーの判断2の逐語）。
+              recovered: {
+                tokenId: currentRow.id,
+                label: currentRow.label,
+                source: current.origin.source,
+              },
+              why: `現役「${currentRow.label}」は${observedHow}（止まった記録を消した。冷却の見込みが実際より長かった分がここで戻る）`,
             };
           }
           return {
             kind: 'ignored' as const,
             signal: 'none' as const,
             reason,
-            why: `現役「${currentRow.label}」は probe で通ることを観測できた（回す契機が無い）`,
+            why: `現役「${currentRow.label}」は${observedHow}（回す契機が無い）`,
+          };
+        }
+
+        /**
+         * **成功は絶対に回さない（#681 (1)）** —— `usable` 分岐に入れなかった
+         * 場合（現役の行がプールに見つからない等）も、通常の回転判定へは絶対に
+         * 落とさない。成功は「いまの現役が通る」証拠であって「回すべき」証拠では
+         * ない——ここより下（`unusable` の記録・`stranded` 経由の
+         * {@link sweepCandidates}）は `account_probe` と、判定を伴わない
+         * `reconsider`（`tick` 等）だけの領域である。
+         *
+         * **⚠️ 見るのは `reason` であって `current` ではない。** `current` を
+         * 条件にすると、**判定を落とした状態でこの契機だけが届いた場合に素通り
+         * する** —— `apps/daemon/src/token-watch.ts` の `pending` は
+         * {@link TokenReconsiderReason} しか運べないので、そこへ溜めた瞬間に
+         * `current` の無い `'turn_succeeded'` が実在しうる形になる（実際に
+         * 一度そう書いてあった）。あちら側でも溜めないようにしてあるが、
+         * **この関数の側で `reason` を見ておけば、呼ぶ側が何をしても
+         * 「成功では回らない」が成り立つ。**
+         */
+        if (reason === 'turn_succeeded') {
+          return {
+            kind: 'ignored' as const,
+            signal: 'none' as const,
+            reason,
+            why: 'ターンの成功を観測したが、現役の記録に反映できなかった（行がプールに見つからない等）。成功は回す契機にしない',
           };
         }
 
@@ -1919,6 +2080,10 @@ export function tokenRotationEntry(
       event: 'recovered',
       tokenId: outcome.recovered.tokenId,
       label: outcome.recovered.label,
+      // **どちらの生産者が観測したか**（#681 (1)。`account_probe` /
+      // `turn_success`）。`outcome.recovered.source` をそのまま引き継ぐ
+      // ——ここで書き直さない（`TokenRotationOutcome` の `recovered` の doc）。
+      recoveredSource: outcome.recovered.source,
     };
   }
   return { ...common, event: 'not_rotated' };

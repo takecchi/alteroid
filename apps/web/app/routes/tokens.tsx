@@ -527,6 +527,25 @@ function describeFreshness(freshness: NonNullable<TokenRotationEntry['freshness'
   }
 }
 
+/**
+ * `event: 'recovered'` の行が持つ、**どちらの生産者が観測したか**（#681 (1)）。
+ *
+ * **送られてくる値である**（`describeFreshness` と同じ判定基準）。⟹ 投げない
+ * ——サーバのほうが新しい窓を先に持つ。
+ */
+function describeRecoveredSource(
+  source: NonNullable<TokenRotationEntry['recoveredSource']>,
+): string {
+  switch (source) {
+    case 'account_probe':
+      return 'セッションを使わない枠の probe が観測した';
+    case 'turn_success':
+      return 'ターンが実際に成功したので観測できた（session limit にも効く）';
+    default:
+      return describeUnknown(source, '回復の観測元');
+  }
+}
+
 function RotationHistory() {
   const { data, error, isLoading } = useJournal(JOURNAL_LIMIT, ['token_rotation']);
   // **`GET /journal` の型はサーバ側の絞り込みを反映しない**（応答の形は全種別の
@@ -600,6 +619,16 @@ function RotationRow({ entry }: { entry: TokenRotationEntry }) {
         */}
         {entry.reason !== undefined && (
           <span className="text-xs text-muted">見直しの契機: {entry.reason}</span>
+        )}
+        {/*
+          **`recovered` の行にだけ付く**（#681 (1)）。無い回は「観測していない」
+          であって「`account_probe` だった」ではない（`schema.ts` の
+          `recoveredSource` の doc。#683 の `cooldownSource` と同じ規律）。
+        */}
+        {entry.recoveredSource !== undefined && (
+          <span className="text-xs text-muted">
+            {describeRecoveredSource(entry.recoveredSource)}
+          </span>
         )}
       </div>
 

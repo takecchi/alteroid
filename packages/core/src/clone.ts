@@ -5713,6 +5713,15 @@ class Clone implements CloneHost {
         // 文言を二度書かない」ためのもので、枠が開いたかどうかとは別の関心
         // である。
         this.#usageBlocked = null;
+        // **`usable` の2本目の生産者へ1本渡す**（#681 (1)）。ここは
+        // `markTokenUsable` の doc が「`clone.ts` が成功した result で
+        // `#usageBlocked` を降ろしているのと同じ根拠」と名指ししている場所
+        // そのものである——成功は権威ある証拠なので、`TokenRotator.reconsider`
+        // 側の記録（止まった記録・世代の照合）も同じ根拠で動かしてよい。
+        // **`observedBy` はここでは付けない** —— `#observeForTokenRotation` が
+        // `#sessionTokenIdentity`（このセッションが起きた瞬間の身元）から
+        // 自動で付ける。
+        await this.#observeForTokenRotation({ succeeded: true });
         // **このセッションで1度でも答えが返ったことを控える**（#553 の暴走の止め）。
         // `#usageBlocked` では代用できない —— あれは初期値も `null` なので
         // 「まだ成功していない」と区別できない（`#sessionAnswered` の doc）。
