@@ -43,6 +43,16 @@ interface FakeManagerSession {
   restartInit(sessionId: string): void;
   /** 1ターンを畳む（`result`）。既定は成功。 */
   finish(text: string, options?: { subtype?: string; isError?: boolean }): void;
+  /**
+   * **SDK が自分の理由でストリームを閉じる**（クラッシュ・resume 不能など）。
+   *
+   * **`#inputStream` 側から入力を閉じる（`abortOnInputClose`）とは別物。**
+   * こちらは入力の状態に関係なく、出力側（`generate()`）が自分から
+   * `return` して `for await` を正常終了させる——「畳み直しの意図
+   * （`#recycleForToken`）が立っている最中に、SDK が自分の理由で閉じる」
+   * という (b) の形を再現するためだけに足した。
+   */
+  crash(): void;
 }
 
 /**
@@ -84,6 +94,7 @@ function fakeSdk(opts: { abortOnInputClose?: boolean; skipInit?: boolean } = {})
     const inputs: string[] = [];
     const queued: SDKMessage[] = [];
     let wake: (() => void) | null = null;
+    let crashed = false;
     const notify = () => {
       const w = wake;
       wake = null;
@@ -147,6 +158,10 @@ function fakeSdk(opts: { abortOnInputClose?: boolean; skipInit?: boolean } = {})
           ...(options.isError === undefined ? {} : { is_error: options.isError }),
         } as unknown as SDKMessage);
       },
+      crash() {
+        crashed = true;
+        notify();
+      },
     };
     sessions.push(session);
 
@@ -173,6 +188,11 @@ function fakeSdk(opts: { abortOnInputClose?: boolean; skipInit?: boolean } = {})
 
         let sawResult = false;
         while (!sawResult) {
+          // **SDK が自分の理由で閉じた（`crash()`）。** 入力の状態に関係なく
+          // 即座に `return` する——「畳み直しの意図が立っている最中に、SDK が
+          // 自分の理由でストリームを閉じた」という (b) の形を作るためだけの
+          // 分岐（`FakeManagerSession.crash` の doc）。
+          if (crashed) return;
           const queuedNext = queued.shift();
           if (queuedNext !== undefined) {
             if (queuedNext.type === 'result') sawResult = true;
@@ -461,5 +481,96 @@ describe('認証トークンを回した後、走行中のマネージャーの�
     expect(notes[0]?.text).toContain('認証トークン');
     expect(notes[0]?.text).not.toContain('token-fake-new-666');
     expect(notes[0]?.text).not.toContain(OLD_TOKEN);
+  });
+
+  /**
+   * **`for await` が正常終了する理由は2つある**——(a) `#inputStream` が境界を
+   * 認めて自分から `return` した（畳み直し）と、(b) SDK が自分の理由で
+   * ストリームを閉じた（クラッシュ・resume 不能など）。この2つを
+   * `#recycleForToken`（「畳みたい」という意図）という1つの計器だけで見分けると、
+   * 意図が立ったまま境界がまだ来ていない状態で (b) が起きたときに、(a) と
+   * 誤認して嘘の `note` を出し、答えていない確認を道連れにしたまま開き直る
+   * （レビュー指摘）。**印を2本に分けて（`#endedInputForTokenRotation` を
+   * 足して）直した——この歯はその分離を固定する。**
+   */
+  it('⚠️ 印が立っている最中に SDK が自分の理由で閉じても、畳み直しとして開き直さない（note も出ない）', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const first = await nthSession(s.sessions, 0);
+
+    // 確認を1件開く（わざと答えない）。`#onPermission` は最初の await の手前で
+    // `#pending` へ同期的に積み、`#status` を `waiting_human` にする——**まだ
+    // `result` を出していない、ターンの途中**である（`ask()` の doc）。
+    first.ask('Bash', { command: 'echo hi' });
+    await tick();
+    expect(s.host.list()[0]?.status).toBe('waiting_human');
+
+    // 畳みたいという意図を立てる。境界条件（確認待ちが無い・ターンが
+    // 走っていない）が揃わないので、`#inputStream` はまだ `return` しない
+    // （`#recycleForToken` は立つが `#endedInputForTokenRotation` は立たない）。
+    await s.host.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'token-fake-new-777' }]);
+    await tick();
+    // 境界条件が揃っていないので、まだ何も起きていない。
+    expect(s.sessions).toHaveLength(1);
+
+    // ここで SDK が自分の理由でストリームを閉じる（例: クラッシュ）。**まだ
+    // `result` を出していない＝ターンの途中**なので、この偽 SDK の実装上も
+    // まだ `finish()` を呼んでいない（＝ `crashed` の検査が効く場所に居る）。
+    // `#recycleForToken` は立ったままだが、`#endedInputForTokenRotation` は
+    // 立っていない——`#read` はこちらを見るので、畳み直しとしては扱わない。
+    first.crash();
+
+    // **従来どおりの経路（`#recoverFromFailedResume` → `#finish`）へ行き、
+    // `closed` が出る**（セッションは畳まれて終わる——`start()` で作った
+    // セッションには resume 素材が無いので `#recoverFromFailedResume` は
+    // `not-a-resume-failure` を返し、`#finish('done', …)` に落ちる）。
+    await vi.waitFor(() => {
+      const found = s.events.filter((event) => event.type === 'closed');
+      if (found.length === 0) throw new Error('closed がまだ届いていない');
+      return found;
+    });
+
+    // **開き直っていない**（2本目のセッションが無い）。
+    expect(s.sessions).toHaveLength(1);
+    // **嘘の note が出ていない。**
+    const notes = s.events.filter((event): event is NoteEvent => event.type === 'note');
+    expect(notes).toHaveLength(0);
+  });
+
+  /**
+   * 畳み直しの後もマネージャーが実際に使えること——「2本目が resume で開いた」
+   * だけでなく、(1) `closed` が出ていない（出れば台帳から消える）ことと、
+   * (2) 開き直した後に送った一言が新しいセッション側に実際に届くことを見る。
+   */
+  it('畳み直しの後もマネージャーは使える（closed が出ない・新しいセッションに入力が届く）', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const first = await nthSession(s.sessions, 0);
+    first.say('わかった');
+    first.finish('わかった');
+    await reportEvents(s.events, 1);
+
+    await s.host.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'token-fake-new-888' }]);
+    const second = await nthSession(s.sessions, 1);
+
+    // 畳み直しは runner の中でのプロセス入れ替えであって、デーモンから見た
+    // 「終了」ではない——`closed` は1本も出ない。
+    expect(s.events.some((event) => event.type === 'closed')).toBe(false);
+
+    // 開き直した後にもう一言送ると、新しいセッション側の入力に届く
+    // （＝マネージャーは引き続き使える）。
+    await s.host.send('mgr-1', 'つづけて');
+    await vi.waitFor(() => {
+      if (!second.inputs.includes('つづけて')) {
+        throw new Error('新しいセッションに入力が届いていない');
+      }
+    });
+
+    second.say('つづけました');
+    second.finish('つづけました');
+    const reports = await reportEvents(s.events, 2);
+    expect(reports[1]?.text).toContain('つづけました');
+    // 最後まで `closed` は出ていない。
+    expect(s.events.some((event) => event.type === 'closed')).toBe(false);
   });
 });

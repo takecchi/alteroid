@@ -30,6 +30,7 @@ import {
   noteUnclassifiedFailuresSummary,
   noteUnreadableRecord,
 } from './dropped-record.js';
+import { ROTATABLE_CREDENTIAL_KEYS } from './credentials.js';
 import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
 import { placedModelTier, resolveModelTier } from './model-tier.js';
 import {
@@ -324,9 +325,19 @@ export interface RunnerHost {
  * `gh` は呼ばれるたびに器のファイルを読み直す）、セッションを畳む必要が無い
  * ——畳む理由になるのは「起動時にしか読まれない」鍵、すなわち SDK 子プロセスの
  * env 経由でしか渡らない `CLAUDE_CODE_OAUTH_TOKEN` だけである
- * （`credentials.ts` の同名エントリの doc「走っているセッションには届かない」）。
+ * （`credentials.ts` の同名エントリの doc「いま走っているターンには届かない」）。
+ *
+ * **型で `ROTATABLE_CREDENTIAL_KEYS` に縛ってある。** 裸のリテラルのままだと、
+ * `credentials.ts` 側で名前が変わる／消えるときに、こちらは何も言わずに
+ * 古い名前のまま指紋を比べ続ける——比べる対象が実在しない名前になり、
+ * `fingerprintFor` は常に `undefined` を返すので `before === after` が恒真になり、
+ * **畳み直しが二度と起きなくなるのに、テストも typecheck も緑のまま**という
+ * いちばん静かな壊れ方をする。`(typeof ROTATABLE_CREDENTIAL_KEYS)[number]` を
+ * 型注釈に付けることで、名前が消えた瞬間にこの1行が typecheck で落ちるように
+ * してある。
  */
-const AGENT_TOKEN_CREDENTIAL_NAME = 'CLAUDE_CODE_OAUTH_TOKEN';
+const AGENT_TOKEN_CREDENTIAL_NAME: (typeof ROTATABLE_CREDENTIAL_KEYS)[number] =
+  'CLAUDE_CODE_OAUTH_TOKEN';
 
 /** `fingerprints()` の並びから名前で1件だけ引く。無ければ `undefined`。 */
 function fingerprintFor(
@@ -1161,8 +1172,34 @@ class RunnerSession {
    *
    * **畳んでよいのは `#atTokenRecycleBoundary()` が真を返すときだけ。** 1つでも
    * 条件が欠けていれば、この印を立てたまま次の境界まで待つ（下ろさない）。
+   *
+   * **これは「畳みたい」という意図であって、「いま自分から閉じた」という
+   * 事実ではない。** `#read` が「畳み直しのために閉じたのか」を判定する印は
+   * 別に持つ（`#endedInputForTokenRotation`）——2つを1つに潰すと、この印が
+   * 立ったままの状態で SDK が**自分の理由で**（クラッシュ・resume 不能など）
+   * ストリームを閉じたときに、`#read` がそれを「畳み直しが起きた」と誤認し、
+   * 嘘の `note`（「認証トークンが差し替わったので…」）を出したうえで、
+   * 実際には効いていない開き直りを行うことになる（レビュー指摘。種類の違う
+   * ものを1つの計器で見分けていた形）。
    */
   #recycleForToken = false;
+
+  /**
+   * **`#inputStream` が、まさにいま `recycleForToken` の意図に基づいて
+   * 自分から入力ストリームを終えた**、という事実の印。
+   *
+   * **`#recycleForToken`（「畳みたい」という意図）とは意味が違う。** `#read` は
+   * `for await` が正常終了した理由を、こちらの印**だけ**で判定する——
+   * 「自分から閉じた」(a) と「SDK が自分の理由で閉じた」(b) は、どちらも
+   * `for await` の正常終了として同じ形で観測されるが、(a) のときだけ
+   * `#reopenForTokenRotation` へ進んでよい。`#recycleForToken` を見て判定すると、
+   * 意図がまだ残っている（境界条件が揃わず `#inputStream` はまだ `return`
+   * していない）状態で (b) が起きたときに誤判定する。
+   *
+   * **`#inputStream` が立て、`#read` が読んで下ろす。** 立てるのは
+   * `#atTokenRecycleBoundary()` を認めて `return` する、まさにその1行のみ。
+   */
+  #endedInputForTokenRotation = false;
 
   constructor(options: RunnerSessionOptions) {
     this.#id = options.managerId;
@@ -1603,7 +1640,18 @@ class RunnerSession {
       // **`#stopped` に相乗りしないこと。** あれは runner セッション全体の停止で、
       // 混ぜると「トークンを回したらマネージャーが止まる」になる
       // （`clone.ts` の同じ判断と同じ理由）。
-      if (this.#recycleForToken && this.#atTokenRecycleBoundary()) return;
+      //
+      // **ここで `#endedInputForTokenRotation` を立てる。** `#read` はこの印
+      // だけを見て「自分から閉じた」を判定する（`#recycleForToken` を見ないこと
+      // ——あちらは「畳みたい」という意図で、意図が残ったまま SDK が自分の理由で
+      // ストリームを閉じる（b）ことがある。判定を1つの計器に潰すと、(b) を
+      // (a) と誤認して嘘の `note` を出すことになる。`#endedInputForTokenRotation`
+      // の doc を見よ）。
+      if (this.#recycleForToken && this.#atTokenRecycleBoundary()) {
+        this.#recycleForToken = false;
+        this.#endedInputForTokenRotation = true;
+        return;
+      }
       await new Promise<void>((resolve) => {
         this.#inputWaiters.add(resolve);
       });
@@ -1651,14 +1699,27 @@ class RunnerSession {
       }
       if (this.#stopped || generation !== this.#generation) return;
       // **認証トークンの畳み直しで、自分から入力ストリームを終えた回。**
-      // `#inputStream` が境界（`#atTokenRecycleBoundary()`）を認めて `return`
-      // したときだけここへ来る —— それ以外の「閉じた」は下の
-      // `#recoverFromFailedResume` の対象である。**この分岐を
-      // `#finish('done', …)` より前に置くこと。** 見ないと、畳み直しのつもりの
-      // 正常な閉じが「マネージャーのセッションが閉じた」という `done` の報告に
-      // 化けてしまう。
-      if (this.#recycleForToken) {
-        this.#recycleForToken = false;
+      // 判定は `#endedInputForTokenRotation` だけで行う（`#recycleForToken`
+      // ではない）。`#inputStream` が境界（`#atTokenRecycleBoundary()`）を
+      // 認めて `return` したときだけこの印が立つ —— それ以外の「閉じた」
+      // （SDK が自分の理由で閉じた・resume が効かなかった等）は下の
+      // `#recoverFromFailedResume` の対象である。
+      //
+      // **⚠️ ここを `#recycleForToken` で判定しないこと。** あれは「畳みたい」
+      // という意図でしかなく、境界条件が揃わず `#inputStream` がまだ `return`
+      // していない状態（例: 確認待ちが残っている・背景処理が生きている）でも
+      // 立ったままになりうる。その状態で SDK が自分の理由でストリームを
+      // 閉じたとき、意図の印だけを見ると「畳み直しが起きた」と誤認し、
+      // 実際には開き直っていないのに嘘の `note`（「認証トークンが差し替わった
+      // ので…」）を出し、しかも `#reopenForTokenRotation` を呼んで
+      // まだ答えていない確認（`#pending`）等を道連れにしたまま新しいセッションを
+      // 開いてしまう（レビュー指摘。種類の違うものを1つの計器で見分けていた形）。
+      //
+      // **この分岐を `#finish('done', …)` より前に置くこと。** 見ないと、
+      // 畳み直しのつもりの正常な閉じが「マネージャーのセッションが閉じた」
+      // という `done` の報告に化けてしまう。
+      if (this.#endedInputForTokenRotation) {
+        this.#endedInputForTokenRotation = false;
         const sessionId = this.#sessionId;
         if (sessionId === undefined) {
           // **境界検査（`#atTokenRecycleBoundary`）が `#sessionId !== undefined`
