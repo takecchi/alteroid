@@ -1,4 +1,4 @@
-import type { Commitment } from '@alteroid/core';
+import { jobStatusSchema, type Commitment } from '@alteroid/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -759,6 +759,16 @@ function stubClient(
     reports?: { date: string; at: string; body: string; unavailable?: string }[];
     /** `GET /managers` が返す一覧。既定は空（`/managers` `/waiting` `/reply` 等が使う）。 */
     managers?: ManagerListItem[];
+    /**
+     * `GET /managers` の応答コード。既定は 200。
+     *
+     * **issue #670 でこの口に 400 が生えた**（知らない `status` / 錨の片割れ /
+     * 錨が指す行が見当たらない）。既定を 200 のままにしてあるので、既存の
+     * 呼びは1本も影響を受けない。
+     */
+    managersStatus?: number;
+    /** `GET /managers` の失敗時の本体。既定は `{ error: … }`（デーモンと同じ形）。 */
+    managersBody?: unknown;
     /** `POST /managers/:id/messages` の応答コード。既定は 200。 */
     messagesStatus?: number;
     /** `POST /managers/:id/messages` の応答本体。既定は `delivered`。 */
@@ -780,7 +790,17 @@ function stubClient(
     managers: {
       $get: (args: unknown) => {
         calls.push({ route: 'GET /managers', args });
-        return Promise.resolve(reply(200, { managers: options.managers ?? [] }));
+        const status = options.managersStatus ?? 200;
+        // **失敗のときは一覧を返さない。** 200 以外で `{ managers: [] }` を
+        // 返すと、失敗の枝が「0件」として素通りしても緑になる。
+        return Promise.resolve(
+          reply(
+            status,
+            status === 200
+              ? { managers: options.managers ?? [] }
+              : (options.managersBody ?? { error: 'status に知らない値が入っている: runing' }),
+          ),
+        );
       },
       ':id': {
         $delete: (args: unknown) => {
@@ -915,7 +935,14 @@ function defaultAnswerResults(
 }
 
 function emptyListed(): Listed {
-  return { approvals: [], commitments: [], conversations: [], managers: [], waiting: [] };
+  return {
+    approvals: [],
+    commitments: [],
+    conversations: [],
+    managers: [],
+    managerAnchors: {},
+    waiting: [],
+  };
 }
 
 afterEach(() => {
@@ -1224,11 +1251,8 @@ describe('chat の台帳コマンド', () => {
     const read = captureStdout();
     const { calls, client } = stubClient();
     const listed: Listed = {
+      ...emptyListed(),
       approvals: ['approval-1'],
-      commitments: [],
-      conversations: [],
-      managers: [],
-      waiting: [],
     };
 
     await runSlashCommand('/done 1', client, listed);
@@ -1261,7 +1285,7 @@ describe('chat の台帳コマンド', () => {
  */
 describe('chat の /answers（まとめて答える）', () => {
   function listedApprovals(ids: string[]): Listed {
-    return { approvals: ids, commitments: [], conversations: [], managers: [], waiting: [] };
+    return { ...emptyListed(), approvals: ids };
   }
 
   it('複数件を1回の POST /approvals/answer にまとめて送る', async () => {
@@ -2012,11 +2036,9 @@ describe('chat の /conversations と /conversation', () => {
     const read = captureStdout();
     const { calls, client } = stubClient();
     const listed: Listed = {
+      ...emptyListed(),
       approvals: ['approval-1'],
       commitments: ['cmt-1'],
-      conversations: [],
-      managers: [],
-      waiting: [],
     };
 
     await runSlashCommand('/conversation 1', client, listed);
@@ -2176,6 +2198,308 @@ describe('chat の /managers（番号付き一覧）', () => {
     await runSlashCommand('/managers', client, listed);
 
     expect(listed.waiting).toEqual([]);
+  });
+});
+
+/**
+ * `/managers` の絞り込みと窓（issue #670）。
+ *
+ * **台帳（`jobs`）に行を消す口が無い**ので、この一覧は「その環境で今までに
+ * 起こした委譲の総数」を毎回返していた。直し方は「消す」ではなく絞り込みと窓
+ * である（上限で刈る形は north_star 禁止2。`ManagerPool#retire` の doc）。
+ *
+ * **ここで固定するのは5つ。**
+ *
+ * 1. **既定は現状維持** — 何も付けない `/managers` はクエリを1つも渡さない
+ *    （デーモンの opt-in は生のクエリで判定されるので、これが応答をバイト単位で
+ *    保つ唯一の条件である）
+ * 2. `status=` / `limit=` をそのままデーモンへ渡す
+ * 3. `after=` は**番号でも id でも**指せ、`startedAt` は直前の一覧から引いて
+ *    **組で**渡す（片方だけでは 400）
+ * 4. **切ったら黙らない** — `limit` 件ちょうど返ったら、その事実と続きの打ち方を出す
+ * 5. **400 の理由をそのまま出す** — 3種類の断り方を1つの一言に畳まない
+ */
+describe('chat の /managers の絞り込みと窓（#670）', () => {
+  /**
+   * **既定の呼びが1バイトも変わらないことの歯。**
+   *
+   * `GET /managers` は `limit` / `afterId` / `afterStartedAt` が**生のクエリに
+   * 在るか**で opt-in を判定し、opt-in のときだけ並べ直す（`apps/daemon/src/app.ts`
+   * の `optedIn`）。⟹ CLI が空のクエリを渡すことが、既定の応答を保つ条件その
+   * ものである。**`toEqual({})` で締める**——`{ status: undefined }` のような
+   * 形で渡すと、`$get` が URL へ載せた瞬間に opt-in へ倒れうる。
+   */
+  it('引数なしの /managers は、クエリを1つも渡さない（既定は現状維持）', async () => {
+    captureStdout();
+    const { calls, client } = stubClient({ managers: [manager()] });
+
+    await runSlashCommand('/managers', client, emptyListed());
+
+    expect(calls.filter((call) => call.route === 'GET /managers')).toEqual([
+      { route: 'GET /managers', args: { query: {} } },
+    ]);
+  });
+
+  it('status= と limit= をそのままデーモンへ渡す', async () => {
+    captureStdout();
+    const { calls, client } = stubClient({ managers: [manager()] });
+
+    await runSlashCommand('/managers status=running,waiting_human limit=20', client, emptyListed());
+
+    expect(calls.filter((call) => call.route === 'GET /managers')).toEqual([
+      {
+        route: 'GET /managers',
+        args: { query: { status: 'running,waiting_human', limit: '20' } },
+      },
+    ]);
+  });
+
+  /**
+   * **知らない `status` は 400 を待たずにその場で断り、どれを指定すればよいかを
+   * 出す**（`parseUsageFilters` の `layer=` / `site=` と同じ慣習）。
+   *
+   * **デーモンへ問い合わせないことまで確かめる**——投げてから断ると、CLI 側の
+   * 検査が死んでいても 400 の文言で緑になりうる。
+   */
+  it('知らない status= はデーモンへ投げず、使える値を並べて断る', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient({ managers: [manager()] });
+
+    await runSlashCommand('/managers status=runing', client, emptyListed());
+
+    expect(calls.filter((call) => call.route === 'GET /managers')).toEqual([]);
+    const text = read();
+    expect(text).toContain('runing');
+    // 使える値は core の schema から起こしている（字面の書き写しではない）
+    expect(text).toContain('waiting_human');
+    expect(text).toContain('stopped');
+  });
+
+  /**
+   * **錨は `(afterId, afterStartedAt)` の組である。** `startedAt` は人間に
+   * 打たせず、直前の一覧から引く（`Listed.managerAnchors`）。ミリ秒精度の ISO を
+   * 手で写させる形は、CLI にだけ「打ち間違えると 400」という段差を作る。
+   */
+  it('after=<番号> を、直前の一覧の startedAt と組にして渡す', async () => {
+    captureStdout();
+    const { calls, client } = stubClient({
+      managers: [
+        manager({ managerId: 'mgr-a', startedAt: '2026-09-01T00:00:00.000Z' }),
+        manager({ managerId: 'mgr-b', startedAt: '2026-08-31T00:00:00.000Z' }),
+      ],
+    });
+    const listed = emptyListed();
+
+    await runSlashCommand('/managers limit=2', client, listed);
+    await runSlashCommand('/managers limit=2 after=2', client, listed);
+
+    const gets = calls.filter((call) => call.route === 'GET /managers');
+    expect(gets[1]).toEqual({
+      route: 'GET /managers',
+      args: {
+        query: {
+          limit: '2',
+          afterId: 'mgr-b',
+          afterStartedAt: '2026-08-31T00:00:00.000Z',
+        },
+      },
+    });
+  });
+
+  it('after=<id> でも指せる（番号だけの口にしない）', async () => {
+    captureStdout();
+    const { calls, client } = stubClient({
+      managers: [manager({ managerId: 'mgr-a', startedAt: '2026-09-01T00:00:00.000Z' })],
+    });
+    const listed = emptyListed();
+
+    await runSlashCommand('/managers limit=1', client, listed);
+    await runSlashCommand('/managers limit=1 after=mgr-a', client, listed);
+
+    const gets = calls.filter((call) => call.route === 'GET /managers');
+    expect(gets[1]).toEqual({
+      route: 'GET /managers',
+      args: {
+        query: { limit: '1', afterId: 'mgr-a', afterStartedAt: '2026-09-01T00:00:00.000Z' },
+      },
+    });
+  });
+
+  /**
+   * **直前の一覧に無い錨は、投げる前に断る。** id を直に書けても `startedAt` は
+   * 手元に無く、組にできない——`afterId` だけ渡すとデーモンは 400 を返すので、
+   * 「片方だけ渡して 400 をもらう」形にしないこと自体が歯である。
+   */
+  it('直前の一覧に無い after= は、デーモンへ投げずに断る', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient({ managers: [manager({ managerId: 'mgr-a' })] });
+
+    await runSlashCommand('/managers after=mgr-zzz', client, emptyListed());
+
+    expect(calls.filter((call) => call.route === 'GET /managers')).toEqual([]);
+    expect(read()).toContain('直前の /managers の一覧にありません');
+  });
+
+  /**
+   * **錨は毎回の一覧で作り直す。** 前の一覧の分を残すと、いま画面に出ていない
+   * 行を起点にできてしまい、**番号（`listed.managers`）と錨（`managerAnchors`）が
+   * 食い違う**——`after=1` が画面の1行目ではない行を指す形になる。
+   */
+  it('錨は毎回の一覧で作り直す（前の一覧の行を起点にできない）', async () => {
+    const read = captureStdout();
+    const first = stubClient({ managers: [manager({ managerId: 'mgr-old' })] });
+    const listed = emptyListed();
+    await runSlashCommand('/managers', first.client, listed);
+    expect(listed.managerAnchors).toEqual({ 'mgr-old': '2026-08-16T10:00:00.000Z' });
+
+    const second = stubClient({ managers: [manager({ managerId: 'mgr-new' })] });
+    await runSlashCommand('/managers', second.client, listed);
+
+    expect(listed.managerAnchors).toEqual({ 'mgr-new': '2026-08-16T10:00:00.000Z' });
+    read();
+
+    // mgr-old はもう起点にできない（投げる前に断られる）
+    const third = stubClient({ managers: [manager()] });
+    await runSlashCommand('/managers after=mgr-old', third.client, listed);
+    expect(third.calls.filter((call) => call.route === 'GET /managers')).toEqual([]);
+  });
+
+  /**
+   * **切ったなら黙らない。** ただし言えるのは「要求した上限とちょうど同じ件数が
+   * 返った」という1つの事実だけである（`GET /managers` は封筒を持たないので、
+   * 残りが何件かも、そもそも残っているかも言えない）。
+   *
+   * **続きの打ち方まで出す**——`status=` は打たれた字面をそのまま繰り返す
+   * （絞りを外した命令を案内すると、続きを読んだつもりで別の一覧へ移る）。
+   */
+  it('limit 件ちょうど返ったら、その事実と続きの打ち方（status= 込み）を出す', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      managers: [manager({ managerId: 'mgr-a' }), manager({ managerId: 'mgr-b' })],
+    });
+
+    await runSlashCommand('/managers status=running limit=2', client, emptyListed());
+
+    const text = read();
+    expect(text).toContain('limit=2 件ちょうど返った');
+    expect(text).toContain('/managers status=running limit=2 after=2');
+  });
+
+  it('limit に届かなければ注記を出さない（終端を黙って作らない側の裏）', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({ managers: [manager()] });
+
+    await runSlashCommand('/managers limit=5', client, emptyListed());
+
+    expect(read()).not.toContain('ちょうど返った');
+  });
+
+  /**
+   * **limit= を渡していなければ、件数が何であれ注記は出ない。** 窓を掛けて
+   * いないので切れていない——ここで出すと「全件返っているのに続きが在る」と
+   * 読める嘘になる。
+   */
+  it('limit= 無しなら、件数が一致しても注記を出さない', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({ managers: [manager()] });
+
+    await runSlashCommand('/managers', client, emptyListed());
+
+    expect(read()).not.toContain('ちょうど返った');
+  });
+
+  /**
+   * **400 の理由をそのまま出す。** この口は3つの理由で断るので、ひとまとめの
+   * 一言に畳むとどれなのかが読めず、次の一手が決まらない。
+   */
+  it('デーモンの 400 の本文をそのまま出す', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      managersStatus: 400,
+      managersBody: {
+        error: 'afterId/afterStartedAt が指す行が見当たらない（mgr-x / 2026-09-01）',
+      },
+    });
+    const listed: Listed = {
+      ...emptyListed(),
+      managers: ['mgr-x'],
+      managerAnchors: { 'mgr-x': '2026-09-01T00:00:00.000Z' },
+    };
+
+    await runSlashCommand('/managers after=mgr-x', client, listed);
+
+    expect(read()).toContain('afterId/afterStartedAt が指す行が見当たらない');
+  });
+
+  /**
+   * **理由が読めないことと、理由が無いことを混ぜない。** 本文が `{error}` の
+   * 形でなければ状態コードを言う（黙って空文字にしない）。
+   */
+  it('本文が読めない失敗では、状態コードを言う', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({ managersStatus: 503, managersBody: { oops: true } });
+
+    await runSlashCommand('/managers', client, emptyListed());
+
+    expect(read()).toContain('HTTP 503');
+  });
+
+  /**
+   * **失敗しても直前の一覧を捨てない。** 捨てると、`/managers` を打ち間違えた
+   * だけで `/stop 1` `/msg 1` の宛先が消える（人間の手が減る＝ north_star 禁止1）。
+   */
+  it('失敗しても、直前の一覧の番号と錨を捨てない', async () => {
+    captureStdout();
+    const { client } = stubClient({ managersStatus: 400 });
+    const listed: Listed = {
+      ...emptyListed(),
+      managers: ['mgr-a'],
+      managerAnchors: { 'mgr-a': '2026-09-01T00:00:00.000Z' },
+    };
+
+    await runSlashCommand('/managers status=runing', client, listed);
+
+    expect(listed.managers).toEqual(['mgr-a']);
+    expect(listed.managerAnchors).toEqual({ 'mgr-a': '2026-09-01T00:00:00.000Z' });
+  });
+
+  /**
+   * **`/waiting` は絞らない（意図）。** 絞れば速くなるが、「`waiting` が空でない
+   * 行の `status` は必ず `waiting_human`」を確かめていないので、絞ると人間が
+   * 答えれば進む確認が黙って消えうる（north_star 禁止1）。**ここを歯にして
+   * おかないと、後から「速くするため」に `status=waiting_human` が入る。**
+   */
+  /**
+   * **隠れた口を作らない**（`/stop` `/conversations` と同じ慣習）。
+   *
+   * **使える `status` の値は core の schema から起こす**——HELP に6値を字面で
+   * 書き写すと、札が増えたときにここだけ古くなる。`jobStatusSchema.options` の
+   * 全要素が載っていることで測る（数を書かない）。
+   */
+  it('/help に status= / limit= / after= と、使える status の全値が載っている', async () => {
+    const read = captureStdout();
+    const { client } = stubClient();
+
+    await runSlashCommand('/help', client, emptyListed());
+
+    const text = read();
+    expect(text).toContain('/managers [status=');
+    expect(text).toContain('limit=<N>');
+    expect(text).toContain('after=<番号|id>');
+    for (const status of jobStatusSchema.options) expect(text).toContain(status);
+  });
+
+  it('/waiting は status も窓も渡さない', async () => {
+    captureStdout();
+    const { calls, client } = stubClient({
+      managers: [manager({ waiting: [waitingItem()] })],
+    });
+
+    await runSlashCommand('/waiting', client, emptyListed());
+
+    expect(calls.filter((call) => call.route === 'GET /managers')).toEqual([
+      { route: 'GET /managers', args: { query: {} } },
+    ]);
   });
 });
 
