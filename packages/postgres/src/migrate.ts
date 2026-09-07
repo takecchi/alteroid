@@ -7,8 +7,17 @@ import {
   AdvisoryLockUnavailableError,
   DEFAULT_LOCK_TIMEOUT_MS,
   acquireAdvisoryLock,
+  deriveAdvisoryLockKey,
   releaseAdvisoryLock,
 } from "./advisory-lock.js";
+import {
+  DEFAULT_EXTENSION_SCHEMA,
+  type SchemaNamespaceOptions,
+  assertSafeSchemaName,
+  qualifiedLiteral,
+  qualify,
+  searchPathFor,
+} from "./schema-namespace.js";
 
 /**
  * `packages/postgres` の唯一のマイグレーション実行口（ADR 0001・docs/memory-model.md §10「規約」）。
@@ -49,11 +58,50 @@ interface AppliedMigration {
  */
 export const MIGRATION_LOCK_KEY = 7190158676462701299n;
 
-export interface RunMigrationsOptions {
+/**
+ * `REQUIRED_EXTENSIONS` を要求する DDL は `migrations/0001_init.sql` にも
+ * `CREATE EXTENSION IF NOT EXISTS ...` として存在する（二重管理）。
+ *
+ * ⚠ **この二重管理は意図的に許してある。** `0001_init.sql` は「まっさらな DB へ
+ * 素の `search_path`（`public` 任せ）で流す」経路の一部としてすでに拡張を要求しており、
+ * ここでの `REQUIRED_EXTENSIONS` は「専用スキーマを指定したときだけ、拡張を
+ * `extensionSchema` へ事前に用意する」という**別の経路**のために存在する——どちらか
+ * 一方だけに統合すると、統合しなかった側の経路が壊れる。ずれたら検出できるよう、
+ * `schema-namespace.test.ts` に `migrations/*.sql` の `CREATE EXTENSION` 行の集合と
+ * この配列の集合が一致することを検査する歯を置いてある。
+ */
+export const REQUIRED_EXTENSIONS = ["vector", "btree_gin", "pgcrypto"] as const;
+
+export interface RunMigrationsOptions extends SchemaNamespaceOptions {
   /** advisory lock を待つ上限（ミリ秒）。既定は {@link DEFAULT_LOCK_TIMEOUT_MS}。 */
   lockTimeoutMs?: number;
   /** advisory lock のキー。テスト以外で既定の {@link MIGRATION_LOCK_KEY} を変える理由は無い。 */
   lockKey?: bigint;
+}
+
+/**
+ * `schema` から `runMigrations` の advisory lock キーを導く（feat/dedicated-schema）。
+ *
+ * `pg_advisory_lock` のキー空間は DB 全体で共有される。2つの mnemora が同じ DB の
+ * 別スキーマに同居すると、片方の migrate がもう片方を黙ってブロックしてしまう
+ * （エラーにならないので気付けない）——これを塞ぐため、`schema` ごとに別のキーを使う。
+ *
+ * - `schema === undefined` または `schema === "public"` → **既存の {@link MIGRATION_LOCK_KEY}
+ *   をそのまま返す。** 理由:
+ *   (a) ローリングデプロイ中、旧バージョンのプロセスは常に旧キー（`MIGRATION_LOCK_KEY`）を
+ *   使う。既定経路のキーを変えると新旧が別々のロックを取り、**排他が効かなくなる**。
+ *   (b) `schema` 未指定は実行時に `current_schema()`（＝接続の `search_path` 先頭）へ
+ *   落ちるので、この関数は静的には実際の対象スキーマを特定できない。
+ *   **ロックを取りすぎる方向の誤り（無関係な処理を待たせる）は無害だが、
+ *   取らなすぎる方向（排他が効かない）は壊す。** ⟹ 保守的な側へ倒し、`undefined` と
+ *   `"public"` は同じキーへ寄せる。
+ * - それ以外 → `deriveAdvisoryLockKey` で `schema` ごとに別のキーを導出する。
+ */
+export function migrationLockKeyFor(schema?: string): bigint {
+  if (schema === undefined || schema === "public") {
+    return MIGRATION_LOCK_KEY;
+  }
+  return deriveAdvisoryLockKey(`mnemora:runMigrations:advisory-lock:${schema}`);
 }
 
 export interface RunMigrationsResult {
@@ -145,23 +193,32 @@ async function releaseMigrationLock(client: PoolClient, lockKey: bigint): Promis
  *
  * **`ensureMigrationsTable` より前に呼ぶこと。**逆順にすると、先に空の
  * `_mnemora_migrations` が出来て「新旧どちらも在る」に落ち、引き継ぎが起きない。
+ *
+ * `schema` が未指定なら `qualify`/`qualifiedLiteral` はどちらも識別子を素通しするため、
+ * 発行される SQL は今日と1バイトも変わらない。**`ALTER TABLE ... RENAME TO` の新しい
+ * 名前は修飾しない**（PostgreSQL は `RENAME TO` に修飾名を受け付けない——RENAME は
+ * 常に同じスキーマ内での改名であり、`RENAME TO "<schema>"."_mnemora_migrations"` は
+ * 構文エラーになる）。
  */
-async function handOverLegacyMigrationsTable(pool: Pool): Promise<void> {
+async function handOverLegacyMigrationsTable(pool: Pool, schema?: string): Promise<void> {
+  const legacyTable = qualify(schema, "_mnemo_migrations");
+  const legacyLiteral = qualifiedLiteral(schema, "_mnemo_migrations");
+  const newLiteral = qualifiedLiteral(schema, "_mnemora_migrations");
   await pool.query(`
     DO $handover$
     BEGIN
-      IF to_regclass('_mnemo_migrations') IS NOT NULL
-         AND to_regclass('_mnemora_migrations') IS NULL THEN
-        ALTER TABLE _mnemo_migrations RENAME TO _mnemora_migrations;
+      IF to_regclass('${legacyLiteral}') IS NOT NULL
+         AND to_regclass('${newLiteral}') IS NULL THEN
+        ALTER TABLE ${legacyTable} RENAME TO _mnemora_migrations;
       END IF;
     END
     $handover$;
   `);
 }
 
-async function ensureMigrationsTable(pool: Pool): Promise<void> {
+async function ensureMigrationsTable(pool: Pool, schema?: string): Promise<void> {
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS _mnemora_migrations (
+    CREATE TABLE IF NOT EXISTS ${qualify(schema, "_mnemora_migrations")} (
       name         text        PRIMARY KEY,
       applied_at   timestamptz NOT NULL DEFAULT now()
     );
@@ -217,21 +274,59 @@ export function listMigrationFiles(migrationsDir: string): string[] {
  * - 待ったが時間切れ → {@link MigrationLockTimeoutError} を投げる（黙って続行しない）
  * - ロック取得の操作自体が失敗（権限不足・接続不可等） →
  *   {@link MigrationLockUnavailableError} を投げる（時間切れと取り違えない）
+ *
+ * ## `options.schema`（feat/dedicated-schema）
+ *
+ * **`schema` 未指定なら、このブロックの分岐は一切実行されない**——今日と同じ SQL が
+ * 同じ順番で発行される。`schema` を指定すると:
+ *
+ * 1. `assertSafeSchemaName` で `schema`（と、指定されていれば `extensionSchema`）を検証する。
+ *    **これはロック取得より前に行う**（`registerEmbeddingSpace` がバリデーションを
+ *    ロック取得より前に置く順序と揃える——不正な入力のためにロックを取って
+ *    他プロセスを待たせる意味が無いため）。
+ * 2. ロック取得後、`CREATE SCHEMA IF NOT EXISTS "<schema>"` と、`REQUIRED_EXTENSIONS`
+ *    各拡張の `CREATE EXTENSION IF NOT EXISTS <ext> WITH SCHEMA "<extensionSchema>"` を
+ *    実行する（`extensionSchema` 省略時は {@link DEFAULT_EXTENSION_SCHEMA}）。
+ * 3. 台帳の引き継ぎ・存在検査・作成・SELECT/INSERT はすべて `qualify` 経由でスキーマ修飾する。
+ * 4. 各マイグレーションのトランザクション内、`BEGIN` の直後に
+ *    `SET LOCAL search_path TO <schema>[,<extensionSchema>]` を発行する。**`SET LOCAL`**
+ *    なので `COMMIT`/`ROLLBACK` でトランザクションスコープを抜け、**pool のコネクションに
+ *    session 状態が漏れない**（このコネクションが後で別の呼び出しに再利用されても、
+ *    そちらの `search_path` に影響しない）。
  */
 export async function runMigrations(
   pool: Pool,
   migrationsDir: string = DEFAULT_MIGRATIONS_DIR,
   options: RunMigrationsOptions = {},
 ): Promise<RunMigrationsResult> {
+  const { schema } = options;
+  if (schema !== undefined) {
+    assertSafeSchemaName(schema);
+  }
+  const extensionSchema =
+    schema === undefined ? undefined : (options.extensionSchema ?? DEFAULT_EXTENSION_SCHEMA);
+  if (extensionSchema !== undefined) {
+    assertSafeSchemaName(extensionSchema);
+  }
+
   const lockTimeoutMs = options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
-  const lockKey = options.lockKey ?? MIGRATION_LOCK_KEY;
+  const lockKey = options.lockKey ?? migrationLockKeyFor(schema);
 
   const { client: lockClient, waitedMs } = await acquireMigrationLock(pool, lockKey, lockTimeoutMs);
   try {
-    await handOverLegacyMigrationsTable(pool);
-    await ensureMigrationsTable(pool);
+    if (schema !== undefined) {
+      await pool.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
+      for (const ext of REQUIRED_EXTENSIONS) {
+        await pool.query(`CREATE EXTENSION IF NOT EXISTS ${ext} WITH SCHEMA "${extensionSchema}"`);
+      }
+    }
 
-    const { rows } = await pool.query<AppliedMigration>("SELECT name FROM _mnemora_migrations");
+    await handOverLegacyMigrationsTable(pool, schema);
+    await ensureMigrationsTable(pool, schema);
+
+    const { rows } = await pool.query<AppliedMigration>(
+      `SELECT name FROM ${qualify(schema, "_mnemora_migrations")}`,
+    );
     const alreadyApplied = new Set(rows.map((row) => row.name));
 
     const applied: string[] = [];
@@ -243,8 +338,14 @@ export async function runMigrations(
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        if (schema !== undefined) {
+          await client.query(`SET LOCAL search_path TO ${searchPathFor(schema, extensionSchema!)}`);
+        }
         await client.query(sql);
-        await client.query("INSERT INTO _mnemora_migrations (name) VALUES ($1)", [file]);
+        await client.query(
+          `INSERT INTO ${qualify(schema, "_mnemora_migrations")} (name) VALUES ($1)`,
+          [file],
+        );
         await client.query("COMMIT");
         applied.push(file);
       } catch (err) {

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 
 /**
@@ -136,6 +137,27 @@ export async function acquireAdvisoryLock(
   }
 
   return { client, waitedMs: Date.now() - startedAt };
+}
+
+/**
+ * 固定文字列から advisory lock のキーを導出する（feat/dedicated-schema）。
+ *
+ * `MIGRATION_LOCK_KEY`（`./migrate.ts`）・`REGISTER_EMBEDDING_SPACE_LOCK_KEY`
+ * （`./vector-space.ts`）の doc に書いてある導出手順——固定文字列の SHA-256 先頭8バイトを
+ * 符号付き64bit整数として解釈する——と**同一**の計算をここへ切り出したもの。
+ * 両定数はこの関数を使わずハードコードされたままにしてある（既存の値を変えないため）。
+ * このリポジトリの規律の実測（`node -e 'const c=require("crypto");
+ * console.log(c.createHash("sha256").update("mnemora:runMigrations:advisory-lock")
+ * .digest().readBigInt64BE(0).toString())'` 等）で、この関数が両定数を再現することを
+ * 確認済み——`schema-namespace.test.ts` の歯がそれを固定する。
+ *
+ * スキーマごとに別のロックキーを導出する用途（`migrationLockKeyFor` /
+ * `registerEmbeddingSpaceLockKeyFor`、いずれも呼び出し元のファイルに置く）のために
+ * ここへ切り出した。`deriveAdvisoryLockKey` 自体は「seed 文字列 → キー」という
+ * 純粋な計算だけを担う——衝突回避のための値であり、値そのものに意味は無い。
+ */
+export function deriveAdvisoryLockKey(seed: string): bigint {
+  return createHash("sha256").update(seed).digest().readBigInt64BE(0);
 }
 
 /** advisory lock を解放し、`lock_timeout` を元に戻してからコネクションを pool へ返す。 */

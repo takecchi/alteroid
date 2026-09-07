@@ -11,3 +11,4 @@ export * from "./migrate.js";
 export * from "./vector-space.js";
 export * from "./embedding-space-table.js";
 export * from "./content-hash.js";
+export * from "./schema-namespace.js";
