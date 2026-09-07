@@ -656,8 +656,18 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
     // 閉じない（未了のまま次の器を起こす）。
 
     const reborn = bootClone(stores);
-    await waitFor(() => reborn.inputs.length > 0, '拾い直した合図が処理に入る');
+    // **待ちの形は畳む側の歯と同じにする**（両方の世界で必ず起きる消し込みを待つ）
+    // —— 「入力が来ること」を待つ形にすると、誤って畳んだ壊れ方が**待ちの時間切れ**
+    // （ヘルパの生の throw）として出て、赤の出どころが自分のアサーションでなくなる。
+    await waitForNoUnread(stores);
 
+    // **数えるのは `stop()` の前である。** `stop()` はセッションが在れば shutdown の
+    // 蒸留を投げる（`stop()` の doc）ので、後で数えると2本目が混じる。畳む側の歯が
+    // `stop()` の後で数えられるのは、ターンを1本も起こしていない＝セッションが無く、
+    // その蒸留自体が起きないからである。
+    //
+    // **未了はターンへ届く。1本きっかり起きている。**
+    expect(reborn.inputs).toHaveLength(1);
     const prompt = reborn.inputs[0] ?? '';
     expect(prompt).toContain('OPEN-REPORT 本文はこれだけ長くしておく');
     // 片付け済み側の断り書きは出ない。
