@@ -1,4 +1,4 @@
-import type { Runtime } from "@mnemora/core";
+import type { Clock, Runtime } from "@mnemora/core";
 import { createRuntime } from "@mnemora/core";
 import {
   PostgresEventStore,
@@ -48,11 +48,17 @@ export interface ExampleRuntimeHandle {
  *   `REGISTER_EMBEDDING_SPACE_LOCK_KEY`）ため、互いをブロックしない。
  * - `packages/testkit` の擬似 provider か、本物の `packages/openai` かは
  *   `createProviders`（`OPENAI_API_KEY` の有無）が決める。
+ * - `clock` は省略可能（既定は `packages/core` 側の `systemClock`、`RuntimeDeps.clock` が
+ *   `undefined` のときの既定動作）。既存の呼び出し（1〜3引数）はそのまま通る——
+ *   `decay` を `freshness` から分離して測る `time-term` arm（`mutable-clock.ts` の
+ *   `MutableClock`）だけがこの4番目の引数を渡す。**`packages/*` は変更していない**
+ *   （`RuntimeDeps.clock` は元から公開 interface の省略可能な欄である）。
  */
 export async function createExampleRuntime(
   databaseUrl: string,
   env: EnvLike = process.env,
   providerOptions: CreateProvidersOptions = {},
+  clock?: Clock,
 ): Promise<ExampleRuntimeHandle> {
   const client = createPostgresClient(databaseUrl);
   await runMigrations(client.pool);
@@ -71,6 +77,7 @@ export async function createExampleRuntime(
     llmProvider,
     embeddingProvider,
     hashContent: sha256Hex,
+    ...(clock !== undefined ? { clock } : {}),
   });
 
   return {

@@ -70,3 +70,4 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0055](./0055-extraction-prompt-subject-and-inference-not-added.md) | 抽出プロンプトに「主語を復元する1文」も「推論を生成する1文」も足さない——実 API 18 run で測った結果と、その代償 | 採用 (2026-09) |
 | [0056](./0056-exclude-provenance-kinds-in-ann-stage.md) | 段1の ANN クエリで `excludeProvenanceKinds` を絞る（`period` は今回も降ろさない） | 採用 (2026-09) |
 | [0057](./0057-dedicated-schema-namespace.md) | mnemora のオブジェクトを置くスキーマを、使う側が指定できるようにする — DML は `search_path`、DDL と存在検査は明示修飾 | 採用 (2026-09) |
+| [0058](./0058-measure-the-time-term-in-a-separate-arm.md) | 時間項（`freshness` / `decay`）は、既存の probe set を書き換えずに別 arm で分離して測る — `probe-set.ts` に `occurredAt` を書き込まない | 採用 (2026-09) |

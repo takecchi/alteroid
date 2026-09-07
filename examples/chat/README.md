@@ -660,9 +660,18 @@ arm B → arm C（LLM も本物に）の上積みは 0.714 → 0.743 と小さ�
    見ているのに、gold の主語がゼロ代名詞で落ちている**（gold に「私は」を戻すと勝つ）。
    diet はどちらでもなく、**記憶は症状（「牛乳を飲むとお腹を壊す」）、質問は帰結
    （「避けたほうがいい食べ物」）**という推論の飛躍である。
-3. **`occurredAt` はこの設計では原理的に常に null になる。**抽出スキーマに時刻の欄が無く、
-   `observe()` に `occurredAt` を渡している箇所はリポジトリ内に0件である。
+3. **`occurredAt` は、ADR 0033 を測った時点では全件 null だった。**抽出スキーマに時刻の欄が無く、
+   その時点では `observe()` に `occurredAt` を渡している箇所がリポジトリ内に0件だったためである。
    **`RecallQuery.occurredAfter`/`occurredBefore` はいま「いつ言われたか」を絞っている。**
+
+   **🔴 ここには当初、上の2つを現在形で（「原理的に常に null になる」「渡している箇所は
+   リポジトリ内に0件である」と）書いてあった。後半はもう偽である**——
+   [ADR 0037](../../docs/decisions/0037-callers-pass-occurred-at.md) が足した
+   `examples/chat/src/backfill.ts` は実際に `occurredAt` を渡しており、
+   [ADR 0058](../../docs/decisions/0058-measure-the-time-term-in-a-separate-arm.md) の
+   `time-term` arm も渡す。**前半（抽出スキーマに時刻の欄が無いこと）は変わっていない**——
+   `ExtractedMemoryCandidateSchema` の欄は `content` / `digest` / `tags` / `provenanceKind` /
+   `confidence` の5つで、時刻に相当する欄は無い。
 
 **⚠ 質問文を書き直して数字を上げることはしない。**それは
 [ADR 0022](../../docs/decisions/0022-fake-provider-compare-does-not-claim-recall-quality.md)

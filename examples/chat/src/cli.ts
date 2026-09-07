@@ -30,6 +30,8 @@ import { createExampleRuntime } from "./runtime-factory.js";
 import { buildConversation } from "./scenario.js";
 import { formatBackfillDemo, runBackfillDemo } from "./backfill.js";
 import { formatScopeDemo, runScopeDemo } from "./scope.js";
+import { createMutableClock } from "./mutable-clock.js";
+import { formatTimeTermReport, runTimeTermArm } from "./time-term-arm.js";
 import { formatNoApiCallsNotice } from "./usage-meter.js";
 
 /** `chat` サブコマンドで使う会話の長さ(filler 往復数)。サンプルアプリの裁量値。 */
@@ -601,6 +603,59 @@ async function runVerify(target: CassetteTarget): Promise<void> {
   }
 }
 
+/**
+ * `freshness`/`decay` を意味的類似度から分離して測る arm(PR 本文)。
+ *
+ * **provider は既定で `deterministic` に倒す。**理由: ペアの2件は本文が厳密に同一なので、
+ * `DeterministicEmbeddingProvider` を使う限り `similarity` は構成上定数になる
+ * (`time-term-probe-set.ts` の docstring 参照)。この測定は provider 層(擬似か本物か)に
+ * 依らない——⟹ カセットの再録も `OPENAI_API_KEY` も要らない。
+ * `MNEMORA_LLM`/`MNEMORA_EMBEDDING` が明示されていればそれを尊重する(既存の
+ * `retrieval`/`compare` と同じ、上書き優先の規約)。
+ *
+ * ⚠ **ただし「想起の質」は主張しない**(AGENTS.md「`deterministic` で測った想起の質は、
+ * 性能について何も言っていない」)。ここで測るのは「時間項が順位を決めているか」だけであり、
+ * 「正しい記憶を引けているか」ではない。
+ *
+ * **`MutableClock` を注入する。**`decay-*` probe が `recordedAt` を過去へ振るには、
+ * `createExampleRuntime` に渡した `Clock` と `runTimeTermArm` に渡す `clock` が
+ * **同じインスタンス**でなければならない(`time-term-arm.ts` の
+ * `RunTimeTermArmOptions.clock` の docstring 参照)。
+ */
+async function runTimeTerm(): Promise<void> {
+  const databaseUrl = requireDatabaseUrl();
+  const clock = createMutableClock();
+  const handle = await createExampleRuntime(
+    databaseUrl,
+    {
+      ...process.env,
+      MNEMORA_LLM: process.env.MNEMORA_LLM ?? "deterministic",
+      MNEMORA_EMBEDDING: process.env.MNEMORA_EMBEDDING ?? "deterministic",
+    },
+    {},
+    clock,
+  );
+  printProviderMode(handle.llmMode, handle.embeddingMode);
+  try {
+    console.log(
+      "\n「内容は同一・occurredAt/recordedAt だけ違う」ペアで、" +
+        "freshness/decay が順位をどう動かすかを測る。\n",
+    );
+    const report = await runTimeTermArm({
+      armLabel: "time-term",
+      tenantIdPrefix: "time-term",
+      runtime: handle.runtime,
+      memoryStore: handle.memoryStore,
+      llmMode: handle.llmMode,
+      embeddingMode: handle.embeddingMode,
+      clock,
+    });
+    console.log(formatTimeTermReport(report));
+  } finally {
+    await handle.close();
+  }
+}
+
 function printHelp(): void {
   console.log(
     [
@@ -612,6 +667,8 @@ function printHelp(): void {
       "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run backfill   # observe() の occurredAt が period の絞りに効くことを実演",
       "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run retrieval # 意味的関連性の probe set を3 arm(擬似/埋め込みのみ本物/フル本物)で比較",
       "                                                                      #   OPENAI_API_KEY があれば実 API、無ければ記録の再生(ADR 0051)",
+      "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run time-term # 時間項(freshness/decay)を意味的類似度から分離して測る",
+      "                                                                      #   既定は擬似 provider(similarity が構成上定数になるため provider に依らない)",
       "  DATABASE_URL=... OPENAI_API_KEY=... pnpm --filter @mnemora/example-chat run record",
       "                                                                      # retrieval の応答を記録する(ADR 0051)",
       "  DATABASE_URL=... OPENAI_API_KEY=... pnpm --filter @mnemora/example-chat run record:compare",
@@ -635,6 +692,8 @@ async function main(): Promise<void> {
     await runBackfill();
   } else if (command === "retrieval") {
     await runRetrieval();
+  } else if (command === "time-term") {
+    await runTimeTerm();
   } else if (command === "record") {
     await runRecord(parseCassetteTarget(process.argv[3]));
   } else if (command === "verify") {

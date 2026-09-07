@@ -13,6 +13,7 @@
     "scope": "tsx src/cli.ts scope",
     "backfill": "tsx src/cli.ts backfill",
     "retrieval": "tsx src/cli.ts retrieval",
+    "time-term": "tsx src/cli.ts time-term",
     "record": "tsx src/cli.ts record retrieval",
     "verify": "tsx src/cli.ts verify retrieval",
     "record:compare": "tsx src/cli.ts record compare",
