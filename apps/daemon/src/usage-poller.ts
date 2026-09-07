@@ -25,8 +25,75 @@ export const USAGE_POLL_INTERVAL_MS = 5 * 60_000;
  * その後ずっと「取れない」と表示し続ける。
  *
  * ただし毎回同じ間隔で叩くのも無駄なので、間隔だけ長くする。
+ *
+ * **⚠️ 使うのは「取れないと _分かった_」回だけである**（#681 の後始末）。
+ * 理由が**言い分けられない**回（`cause: 'undetermined'`）にこれを当てると、
+ * **「判定できない」を「取れない」へ倒したことになる** —— それは #681 が直した
+ * 誤りを、時間の軸でもう一度作ることである（下の {@link intervalForState}）。
  */
 export const USAGE_POLL_UNAVAILABLE_INTERVAL_MS = 30 * 60_000;
+
+/**
+ * 次に聞くまでの間隔を、**状態と理由から**決める（#681 の後始末）。
+ *
+ * ## 直す前は何が起きていたか
+ *
+ * `state === 'unavailable'` の器はすべて 30 分間隔だった。**そして本番はまさに
+ * その器である**（#681 の実測。`cause: 'undetermined'`）⟹ **probe の周期は
+ * 5分ではなく30分だった。**
+ *
+ * これは `.claude/skills/token-pool/SKILL.md` と `token-watch.ts` の doc が
+ * 「復帰の下限は probe の周期（5分）」と書いていたものと食い違う ——
+ * **判定が来ないこととは別に、聞く間隔そのものも違っていた**（#684 のレビューで
+ * 気づいた範囲外の事実）。
+ *
+ * ## 分ける線は「取れないと分かったか」である
+ *
+ * | 状態 / 理由 | 間隔 | なぜ |
+ * | --- | --- | --- |
+ * | `ok` / `unknown` / `failed` | 通常（5分） | 取れている、または取れなかっただけ |
+ * | `unavailable` + `not_logged_in` | **長い**（30分） | 鍵が届くまで答えは変わらない |
+ * | `unavailable` + `non_first_party` | **長い**（30分） | このバックエンドでは原理的に取れない |
+ * | `unavailable` + `undetermined` | **通常（5分）** | **取れないと分かっていない** |
+ * | `unavailable` + 欄が無い | **通常（5分）** | 断定できない側へ倒す（下） |
+ *
+ * ## なぜ `undetermined` を通常の間隔へ倒すのか
+ *
+ * **「取れない」と断定できていないからである。** `undetermined` は「4つの原因の
+ * うち3つは消えたが、残った1つ（profile スコープの不足）だと確かめてはいない」
+ * という状態で（`usage-snapshot.ts` の `LimitsUnavailableCause`）、**鍵を取り直せば
+ * 取れるようになりうる。** 鍵は走行中に回せる設計なので、それは*この器で普通に
+ * 起こる*ことである ⟹ 長い間隔を当てると、**取れるようになった瞬間を平均15分
+ * 見落とす。**
+ *
+ * **費用は「健全な器と同じ」までしか増えない。** probe は推論を1つも走らせない
+ * サブプロセス1本で（実測 300〜400ms）、`ok` の器は元から5分ごとに叩いている。
+ *
+ * **⚠️ 3つ目の間隔を作らないこと。** 「`undetermined` は中間だから15分」は
+ * **誰も正当化できない数**である（`AGENTS.md`「値が同じでも使い回さない」の裏面
+ * ——**根拠の無い新しい数を作らない**）。線は「取れないと分かったか」の2値で足りる。
+ *
+ * ## 欄が無い回も通常の間隔へ倒す
+ *
+ * `cause` は optional である（`AccountUsageState` の doc: 版がずれる）。**無いのは
+ * 「その版が言えなかった」であって「取れないと分かった」ではない** ⟹ 断定できない
+ * 側、つまり聞き続ける側へ倒す。**同じプロセスの中で作る限り必ず付く**ので、
+ * ここへ落ちるのは版が食い違ったときだけである。
+ */
+export function intervalForState(
+  state: AccountUsageState,
+  intervals: { normal: number; unavailable: number },
+): number {
+  if (state.state !== 'unavailable') return intervals.normal;
+  // **数え上げで書く**（`switch` ではなく明示の2値）。`LimitsUnavailableCause` に
+  // 値が増えたとき、**既定で「聞き続ける」側へ落ちる** —— 増えた値がどちらの意味
+  // なのかは、足した人が決めてここへ書くべきものである。**黙って諦める側へ倒す
+  // 形にしないこと**（それが #681 の誤りの形そのものである）。
+  if (state.cause === 'not_logged_in' || state.cause === 'non_first_party') {
+    return intervals.unavailable;
+  }
+  return intervals.normal;
+}
 
 export interface UsagePollerOptions {
   queryFn: UsageProbeQuery;
@@ -163,12 +230,21 @@ export function startUsagePolling(options: UsagePollerOptions): UsagePoller {
     return inFlight;
   };
 
+  /**
+   * 次の間隔を決める。**判定は {@link intervalForState} 1箇所に閉じてある** ——
+   * ここと起動直後の2箇所で同じ式を書いていたので、**片方だけ直す形が作れた**
+   * （実際、`state === 'unavailable'` の判定は2箇所に重複していた）。
+   */
+  const nextInterval = (state: AccountUsageState) =>
+    intervalForState(state, { normal: interval, unavailable: unavailableInterval });
+
   const schedule = (delay: number) => {
     if (stopped) return;
     timer = setTimeout(() => {
       void refresh().then((state) => {
-        // 取れない構成なら間隔だけ伸ばす（止めない — 鍵は後から届きうる）。
-        schedule(state.state === 'unavailable' ? unavailableInterval : interval);
+        // 取れないと**分かった**構成なら間隔だけ伸ばす（止めない — 鍵は後から
+        // 届きうる）。**言い分けられない回は伸ばさない**（#681 の後始末）。
+        schedule(nextInterval(state));
       });
     }, delay);
     // 観測が終了を引き止めないように。
@@ -176,9 +252,7 @@ export function startUsagePolling(options: UsagePollerOptions): UsagePoller {
   };
 
   // 起動直後に1回。**待たない** — デーモンの起動を probe の速さに縛らない。
-  void refresh().then((state) =>
-    schedule(state.state === 'unavailable' ? unavailableInterval : interval),
-  );
+  void refresh().then((state) => schedule(nextInterval(state)));
 
   return {
     state: () => current,
