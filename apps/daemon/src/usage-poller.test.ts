@@ -1,7 +1,7 @@
 import type { UsageProbeHandle, UsageProbeQuery } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
-import { startUsagePolling } from './usage-poller.js';
+import { intervalForState, startUsagePolling } from './usage-poller.js';
 
 /** control channel だけを持つ偽の probe。**推論は走らせない**（本物と同じ形）。 */
 function probe(answers: () => { account?: unknown; usage?: unknown }): {
@@ -36,6 +36,64 @@ const NOT_LOGGED_IN = {
   account: { tokenSource: 'none', apiProvider: 'firstParty' },
   usage: { rate_limits_available: false, rate_limits: null },
 };
+
+/**
+ * **#681 の後始末**（#684 のレビューで気づいた範囲外の事実）。
+ *
+ * `state === 'unavailable'` の器はすべて 30 分間隔だった。**本番はまさにその器
+ * である**（`cause: 'undetermined'`）⟹ **probe の周期は5分ではなく30分だった。**
+ * `.claude/skills/token-pool/SKILL.md` と `token-watch.ts` の doc が書いていた
+ * 「復帰の下限は probe の周期（5分）」と食い違う。
+ *
+ * **ここが固定するのは1つ: 「判定できない」を「取れない」へ倒さないこと。**
+ * 純粋関数で測るのは、**間隔を時計で測る歯にすると器の混み具合で揺れる**からで
+ * ある（`intervalForState` を export してあるのはこのためで、無駄な間接層ではない）。
+ */
+describe('#681: 聞く間隔は「取れないと分かったか」で決まる', () => {
+  const INTERVALS = { normal: 5 * 60_000, unavailable: 30 * 60_000 };
+  const at = '2026-09-07T11:42:22.701Z';
+
+  it('言い分けられない回は通常の間隔で聞き続ける（本番がこれである）', () => {
+    // **これが直した穴そのものである。** `undetermined` は「取れないと分かった」
+    // ではない —— 鍵を取り直せば取れるようになりうる。
+    expect(
+      intervalForState(
+        {
+          state: 'unavailable',
+          at,
+          reason: '枠が効かない理由を言い分けられない…',
+          cause: 'undetermined',
+        },
+        INTERVALS,
+      ),
+    ).toBe(INTERVALS.normal);
+  });
+
+  it('取れないと分かった2つの理由は、長い間隔へ落ちる（元の意図）', () => {
+    for (const cause of ['not_logged_in', 'non_first_party'] as const) {
+      expect(
+        intervalForState({ state: 'unavailable', at, reason: 'r', cause }, INTERVALS),
+        cause,
+      ).toBe(INTERVALS.unavailable);
+    }
+  });
+
+  it('理由の欄が無い回（版がずれた応答）は聞き続ける側へ倒す', () => {
+    // **無いのは「その版が言えなかった」であって「取れないと分かった」ではない。**
+    expect(intervalForState({ state: 'unavailable', at, reason: 'r' }, INTERVALS)).toBe(
+      INTERVALS.normal,
+    );
+  });
+
+  it('unavailable 以外はすべて通常の間隔（取れた / まだ / 失敗した）', () => {
+    for (const state of [
+      { state: 'unknown' } as const,
+      { state: 'failed', at, reason: 'probe が応答しなかった' } as const,
+    ]) {
+      expect(intervalForState(state, INTERVALS), state.state).toBe(INTERVALS.normal);
+    }
+  });
+});
 
 describe('アカウント全体の利用状況を取り直す', () => {
   it('立ち上げた直後は「まだ分からない」（0 ではない）', () => {
@@ -90,6 +148,41 @@ describe('アカウント全体の利用状況を取り直す', () => {
 
     // 鍵が届いた後、放っておいても取れるようになること。
     loggedIn = true;
+    await expect.poll(() => poller.state().state, { timeout: 2000 }).toBe('ok');
+
+    poller.stop();
+  });
+
+  /**
+   * **配線まで測る**（純粋関数の側は上の `intervalForState` の歯が持つ）。
+   *
+   * 直す前は `state === 'unavailable'` の判定が**2箇所に重複**していて（起動直後と
+   * 目盛りの中）、片方だけ直す形が作れた。⟹ ここは「決め方を1箇所に閉じたか」では
+   * なく「**実際に短い間隔で聞き直したか**」を測る。
+   */
+  it('言い分けられない器でも、通常の間隔で聞き直す（30分側へ落ちない）', async () => {
+    // 本番が返していた形（firstParty / プラン無し / 枠が効かない）。
+    const UNDETERMINED = {
+      account: { apiProvider: 'firstParty', tokenSource: 'oauth' },
+      usage: { rate_limits_available: false, rate_limits: null, subscription_type: null },
+    };
+    let recovered = false;
+    const { queryFn } = probe(() => (recovered ? LOGGED_IN : UNDETERMINED));
+    const poller = startUsagePolling({
+      queryFn,
+      cwd: '/work',
+      // **通常は短く、「取れないと分かった」側は現実的に届かない長さにする** ——
+      // 30分側へ落ちたら、この歯は時間切れで落ちる。
+      intervalMs: 5,
+      unavailableIntervalMs: 600_000,
+    });
+
+    const first = await poller.refresh();
+    expect(first.state).toBe('unavailable');
+    if (first.state === 'unavailable') expect(first.cause).toBe('undetermined');
+
+    // 鍵が取り直されて取れるようになった、を模す。
+    recovered = true;
     await expect.poll(() => poller.state().state, { timeout: 2000 }).toBe('ok');
 
     poller.stop();
