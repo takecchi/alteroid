@@ -4267,7 +4267,7 @@ export function createCloneTools(context: ToolContext) {
           'これは矛盾である）。この行に時刻の閾値は置いていない——何分経ったかは判定していないので、' +
           '行に出ている timestamp を読んで判断すること。返事待ちが在るものにはこの行を出さない' +
           '（確認は届いていて、クローンがまだ答えていないだけの正常な状態である）。',
-        // **並びを名乗る（#679 の直し）。** ここに書いてある順序と実装が食い違うと、
+        // **並びを名乗る（#688 の3 を直した）。** ここに書いてある順序と実装が食い違うと、
         // クローンは「出ていない＝無い」と読む。実装が実際にやっていることだけを書く。
         '走行中・返事待ち（running / waiting_human）を先に出し、そのあとに終端したもの（done / failed / lost / stopped）を出す。' +
           '各群の中は startedAt の新しい順である。',
@@ -4313,7 +4313,7 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // **走行中・返事待ちを先に出す（#679）。** `ManagerPool.list()` の並びは
+        // **走行中・返事待ちを先に出す（#688 の3）。** `ManagerPool.list()` の並びは
         // `startedAt` の降順で、**稼働状態を1度も見ていない**（逐語:
         // `grep -Fn -- 'return [...known.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt));' packages/core/src/manager.ts`）。
         // ⟹ 終端した委譲が溜まると、走行中・返事待ちが文字数の予算
@@ -4331,6 +4331,9 @@ export function createCloneTools(context: ToolContext) {
         // 窓から落ちない」ことだけで、押し出された終端の全件を辿る継続点は
         // **足さない**（#662 が持つ。あの Issue は「継続点を足す前に並びの向きを
         // 決めるのが先だ」と書いていて、これがその並びの側である）。
+        // **#688 の1（`lost` の知らせが1回しか出ない）と2（日報の期間フィルタから
+        // `lost` が消える）は、ここでは直していない。** `lost` は終端なので、
+        // この並べ替えでは前へ出ない —— **浮かび上がらせるのは別の直しである。**
         const attention = [...managers].sort(compareManagerAttention);
         // **絞りは文字数の予算より前に当てる。** 予算の後に当てると、絞りに
         // 当たらない行が窓を食い尽くし、狙った行が窓の外へ落ちる——#418 の穴の
@@ -4538,7 +4541,7 @@ export function createCloneTools(context: ToolContext) {
               ? '（この status の絞り込みに当たる委譲は無い。絞る前の件数は上の行に在る）'
               : renderListing(items, {
                   budget: LIST_BUDGET,
-                  // **並びを実装と一致させる（#679）。** ここは「走っているものから
+                  // **並びを実装と一致させる（#688 の3）。** ここは「走っているものから
                   // 順に出している」と書いてあったが、実装は稼働状態を1度も見て
                   // いなかった（`ManagerPool.list()` は `startedAt` 降順）。
                   // **絞ったときは「絞った後の件数」だと分かる形で言う**——
@@ -5307,7 +5310,7 @@ export function createCloneTools(context: ToolContext) {
 
 /**
  * `manager_list` の並び。**走行中・返事待ちを先に、各群の中は `startedAt` の
- * 新しい順**（#679）。
+ * 新しい順**（#688 の3）。
  *
  * **なぜ一覧の側で並べ直すのか。** `ManagerPool.list()` は `startedAt` の降順で、
  * 稼働状態を1度も見ていない（逐語:
