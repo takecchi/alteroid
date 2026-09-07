@@ -372,6 +372,38 @@ describe('#680: 文言だけの拒否でも、覚えている枠の事実から�
     expect(await cooldownOf(h, 'tok-a')).toBe(GUESS);
   });
 
+  /**
+   * **同じ穴の別の入口。** probe が「通る」と観測したら、覚えていた拒否も落とす
+   * —— `judgeTokenCandidate` の `usable` は「取れた枠のどれも使い切っていない」
+   * なので、**覚えていた「その枠は拒否した」はもう真ではない。**
+   */
+  it('⚠️ probe が通ると観測したら、覚えている拒否も忘れる', async () => {
+    const h = harness({ verdict: { verdict: 'usable' } });
+    await seedTwo(h);
+    const threeDays = Date.parse(AT) + 72 * 60 * 60_000;
+    await remember(h, { kind: 'seven_day', status: 'rejected', resetsAt: threeDays });
+    // 現役の行に止まった記録を入れて、`recovered` の道を通す。
+    const rows = await h.stores.tokens.list();
+    await h.stores.tokens.replace(
+      rows.map((token) =>
+        token.id === 'tok-a' ? { ...token, cooldownUntil: Date.parse(AT) + 60_000 } : token,
+      ),
+    );
+    const recovered = await h.rotator.reconsider({
+      reason: 'account_probe',
+      currentVerdict: { verdict: 'usable' },
+    });
+    expect(recovered.kind).toBe('ignored');
+
+    // その後の文言だけの拒否は、**3日ではなく既定へ倒れる。**
+    await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(await cooldownOf(h, 'tok-a')).toBe(GUESS);
+  });
+
   it('status を運んでいない観測では記憶を消さない（省略は「何も言っていない」）', async () => {
     // **`undefined` で消すと、`rate_limit_event` が `status` を省いた回に
     // 覚えたものが全部落ちる**（あの欄は普通に省略される）。

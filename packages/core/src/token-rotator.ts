@@ -773,6 +773,19 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
     rememberedRejections.set(key, { tokenId: active.tokenId, facts });
   }
 
+  /**
+   * そのトークンについて覚えている拒否を**全部忘れる**（#680）。
+   *
+   * 呼ぶのは「この鍵は通る」と観測できた回である（probe が `usable`）——
+   * 枠ごとの `allowed` を待たずに、まとめて落としてよい。**落としすぎても害は
+   * 無い**（次の拒否で覚え直すだけで、倒れ先は設定の既定である）。
+   */
+  function forgetRejections(tokenId: string): void {
+    for (const [key, entry] of rememberedRejections) {
+      if (entry.tokenId === tokenId) rememberedRejections.delete(key);
+    }
+  }
+
   /** そのトークンについて覚えている、拒否した枠の事実（#680）。 */
   function rememberedFactsFor(tokenId: string): RateLimitFacts[] {
     return [...rememberedRejections.values()]
@@ -1475,6 +1488,18 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
          * 覆すのは「実装が人間の判断を黙って戻す」ことである。
          */
         if (currentVerdict?.verdict === 'usable' && currentRow !== undefined) {
+          // **覚えている拒否も忘れる**（#680。上の `rememberRejection` の
+          // 「忘れる道を塞がないこと」と**同じ穴の別の入口**である）。
+          //
+          // probe が `usable` と言ったのは「取れた枠のどれも使い切っていない」で
+          // ある（`judgeTokenCandidate`）⟹ **覚えていた「その枠は拒否した」は
+          // もう真ではない。** 消さないと、次に来る文言だけの拒否が**開いた枠の
+          // 遠いリセット時刻**で冷やされる。
+          //
+          // **記録を消す条件（`hasRejection`）とは別に、無条件で忘れる。**
+          // 行に止まった記録が無い回（既に `markTokenUsable` が通った後など）でも、
+          // 記憶のほうは残っているからである。
+          forgetRejections(currentRow.id);
           const availability = tokenAvailabilityAt(currentRow, now().getTime());
           const hasRejection =
             currentRow.lastRejectedAt !== undefined || currentRow.cooldownUntil !== undefined;
