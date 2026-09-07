@@ -44,6 +44,7 @@ function fakeManagers(
       throw new Error('not implemented');
     },
     restore: () => Promise.resolve([]),
+    resumeStoppedByUsage: () => Promise.resolve([]),
     reattachRunner: () => Promise.resolve(),
     relocateFrom: () => {
       throw new Error('not implemented');

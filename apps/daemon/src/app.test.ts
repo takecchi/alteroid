@@ -131,6 +131,10 @@ function fakeClone() {
     async restore() {
       return [];
     },
+    // 同じく触らない（枠で止まった委譲の起こし直しも契機は回し手の側にある）。
+    async resumeStoppedByUsage() {
+      return [];
+    },
     // HTTP 境界の検証では触らない（引き取りの契機はデーモンの配線側にある）。
     async reattachRunner() {},
     // HTTP 境界の検証では触らない（移送の契機もデーモンの配線側、`onLost` にある）。

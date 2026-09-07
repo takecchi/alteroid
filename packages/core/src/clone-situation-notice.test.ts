@@ -130,6 +130,7 @@ function stubPool(input: {
           }),
     transcript: notImplemented,
     restore: () => Promise.resolve([]),
+    resumeStoppedByUsage: () => Promise.resolve([]),
     reattachRunner: () => Promise.resolve(),
     relocateFrom: notImplemented,
     vacate: notImplemented,

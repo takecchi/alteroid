@@ -213,7 +213,19 @@ describe('通る鍵に戻ったときに起こす配線', () => {
     expect(block).toContain('clone.post(');
     // マネージャー: 台帳に残っている委譲を resume する。**片方だけにすると、
     // 片側の層が丸ごと止まったまま残る。**
-    expect(block).toContain('clone.managers.restore(');
+    //
+    // **1行では見ない**（`clone.managers.restore(` の literal で見ていたが、
+    // 2本を繋いだ時点で prettier が `clone.managers` と `.restore()` を別の行へ
+    // 割った）。守りたいのは「どの口を呼ぶか」であって、書き方ではない
+    // ——すぐ下の `recycled` の歯が同じ理由で同じ形にしてある。
+    expect(block).toContain('clone.managers');
+    expect(block).toContain('.restore(');
+    // **枠で止まった委譲も起こす。** `restore()` はプロセス内の像に無い委譲しか
+    // 拾わず（`#restoreJobs` の先頭の `#records.has`）、resume するのも台帳が
+    // `running` / `waiting_human` の分だけである ⟹ 枠で終わったターン
+    // （`done` / `failed` / `lost`）は**どちらの条件からも外れる**。ここを外すと、
+    // 鍵が戻っても走っていた委譲が止まったまま残る。
+    expect(block).toContain('.resumeStoppedByUsage(');
   });
 
   it('指名が変わったらクローンのセッションを作り直す（parked も含む）', () => {

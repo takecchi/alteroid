@@ -1312,6 +1312,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     restore() {
       throw new Error('spec 生成専用のスタブ: 引き継ぎはしない');
     },
+    resumeStoppedByUsage() {
+      throw new Error('spec 生成専用のスタブ: 枠で止まった委譲は起こさない');
+    },
     reattachRunner() {
       throw new Error('spec 生成専用のスタブ: 取り直しはしない');
     },

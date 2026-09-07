@@ -163,6 +163,10 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     async restore() {
       return [];
     },
+    // 枠で止まった委譲の起こし直しも、契機はデーモン側（回し手）にある。
+    async resumeStoppedByUsage() {
+      return [];
+    },
     // クローンの道具はこの口を呼ばない（引き取りの契機はデーモン側にある）。
     async reattachRunner() {},
     // 移送の契機も同じくデーモン側（`onLost`）にある。
