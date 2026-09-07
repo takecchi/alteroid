@@ -1,4 +1,8 @@
-import { defaultDecayStrategy, MemoryStatusConflictError } from "@mnemora/core";
+import {
+  defaultDecayStrategy,
+  isEmbeddingStatusRollback,
+  MemoryStatusConflictError,
+} from "@mnemora/core";
 import type { NotIndexedReason } from "@mnemora/core";
 import type {
   Ctx,
@@ -315,10 +319,31 @@ export class InMemoryMemoryStore implements MemoryStore {
     return { memory, event: storedEvent };
   }
 
+  /**
+   * ADR 0053: `ready` を `failed` へ巻き戻さない。
+   *
+   * `PostgresMemoryStore.setEmbeddingStatus`（`packages/postgres/src/memory-store.ts`）の
+   * `WHERE ... AND embedding_status <> 'ready'`（`status` が `'failed'` のときだけ付く
+   * 条件片）と同じ意味論。**禁じる遷移そのものの判定は共有の
+   * {@link isEmbeddingStatusRollback} に固定する**——実装ごとに条件式を書き直すと、
+   * どの遷移を禁じるかが実装間でずれる余地を作る（Postgres 側だけは比較を SQL の1文の
+   * `WHERE` に置く必要があるためこの関数を呼べず、比較の形が2箇所に書かれる。
+   * ADR 0053「引き受けた負債」）。
+   *
+   * 巻き戻しを**例外にはしない**——唯一の `failed` の呼び出し口は `runtime.tick` の
+   * `catch` の中であり、そこで投げると元の埋め込みエラーが握り潰されて別の例外に
+   * すり替わる。呼び出し側の次の一手も無いので、no-op のまま現在の（更新されなかった）
+   * 行を返す（ADR 0048 の `reinforce` と同じ理由の形）。
+   * `failed → ready` は妨げない（片側だけの規則）。
+   */
   async setEmbeddingStatus(ctx: Ctx, id: MemoryId, status: EmbeddingStatus): Promise<Memory> {
     const memory = await this.get(ctx, id);
     if (!memory) {
       throw new Error(`InMemoryMemoryStore: memory not found for tenant: ${id}`);
+    }
+    if (isEmbeddingStatusRollback(memory.embeddingStatus, status)) {
+      // no-op: 何も書かない。返すのは現在の（更新されなかった）行そのもの。
+      return memory;
     }
     memory.embeddingStatus = status;
     memory.updatedAt = new Date();

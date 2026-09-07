@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { defaultDecayStrategy } from "@mnemora/core";
-import { MemoryStatusConflictError } from "@mnemora/core";
+import { EMBEDDING_STATUS_ROLLBACK, MemoryStatusConflictError } from "@mnemora/core";
 import type {
   Ctx,
   EmbeddingStatus,
@@ -485,11 +485,57 @@ export class PostgresMemoryStore implements MemoryStore {
     if (!isUuidLike(id)) {
       throw new Error(`PostgresMemoryStore: memory not found for tenant: ${id}`);
     }
+
+    // 🔴 `ready` を `failed` へ巻き戻さない（ADR 0053）。`ready` は VectorStore.upsert が
+    // 返った*後*にしか書かれない＝「ベクトル行が在る」の主張であり、リースを失った古い
+    // ワーカーの catch から来る `failed`（ADR 0032 の at-least-once）に負けてはならない。
+    //
+    // 書こうとしている値（引数 `status`）は*読んだ状態*ではないので JS 側で見てよい。
+    // WHERE に入れなければならないのは *読んだ状態* のほう（現在の embedding_status）だけ
+    // ——アプリ側で現在値を読んで比べてから書くと、読みと書きの間に入った別の書き込みを
+    // 上書きしうる（ADR 0048 の reinforce と同じ形。updateStatus の compare-and-swap
+    // （ADR 0030）と同じ条件片の組み立て方をここでも使う）。
+    //
+    // ⚠ **共有述語 `isEmbeddingStatusRollback` はここでは呼べない。**比較そのものを DB の
+    // 1文へ入れる必要があるため、値（`from`/`to`）だけを EMBEDDING_STATUS_ROLLBACK から
+    // 取り、比較の形は SQL 側にもう一度書かれる（ADR 0053「引き受けた負債」）。
+    const rollbackGuard =
+      status === EMBEDDING_STATUS_ROLLBACK.to
+        ? sql` AND embedding_status <> ${EMBEDDING_STATUS_ROLLBACK.from}`
+        : sql``;
+
+    // ⚠ **更新できなかったときに返す行も、同じ1文の中で読む。**1文なら、更新できた場合も
+    // できなかった場合も同じスナップショットを通る（`reinforce`（ADR 0048）と同じ形）。
+    //
+    // 🔴 **⚠ ただしこの選択は歯で守られていない——負債である。「歯で捕まる」と読まないこと。**
+    // **実測: この1文を「`UPDATE ... RETURNING *` → 0 行なら別の `SELECT`」の2文へ割る
+    // 変異を撃つと、`test:db` 182 件は1件も赤くならなかった**（ADR 0053 の変異 Mu5a が生存）。
+    // ⟹ **後から「2文のほうが読みやすい」で戻されても、門は気付かない。**
+    //
+    // ⚠ `reinforce` から借りた理由づけ（「上で読んだ古い値をそのまま返す」実装との差が
+    // 外から観測できなくなる）は、**そのままでは当たらない**——`reinforce` は本体の手前で
+    // `SELECT` を打つが、**`setEmbeddingStatus` には手前の `SELECT` が無い**（存在検査は
+    // `isUuidLike` だけ）ので、その取り違えは今日のコードからは書けない。
+    //
+    // **⚠ 歯が抜けているのは、置かないと決めたからではない。塞いでよい。**
+    // ただし実測した限りでは今の口では置けない: 1文と2文の差は**並行時にだけ**出る
+    // （2文のあいだに他の接続のコミットが landing すると、2文の側は新しいスナップショットの
+    // 行を返す——実測した）が、**ガードで弾かれる `UPDATE` は行ロックを取らない**
+    // （これも実測した。他の接続が未コミットで同じ行のロックを保持していても 0 行で即座に
+    // 返る）ので、外からこの実装をその窓で止める手段が無く、窓は sub-millisecond である。
+    // ⟹ **塞ぐには、この実装の中に待ちを差し込める口が要る。**ADR 0053「引き受けた負債」。
     const result = await this.db.execute(sql`
-      UPDATE memories
-      SET embedding_status = ${status}, updated_at = now()
+      WITH updated AS (
+        UPDATE memories
+        SET embedding_status = ${status}, updated_at = now()
+        WHERE tenant_id = ${ctx.tenantId} AND id = ${id}${rollbackGuard}
+        RETURNING *
+      )
+      SELECT * FROM updated
+      UNION ALL
+      SELECT * FROM memories
       WHERE tenant_id = ${ctx.tenantId} AND id = ${id}
-      RETURNING *
+        AND NOT EXISTS (SELECT 1 FROM updated)
     `);
     if (result.rows.length === 0) {
       throw new Error(`PostgresMemoryStore: memory not found for tenant: ${id}`);

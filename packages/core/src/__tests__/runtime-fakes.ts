@@ -16,7 +16,10 @@ import type { EmbeddingStatus, Memory, MemoryStatus, NewMemory } from "../memory
 import type { NewObservation, Observation } from "../observation.js";
 import type { MemoryEvent, NewMemoryEvent, EventFilter } from "../event.js";
 import type { EventId } from "../ids.js";
-import { MemoryStatusConflictError } from "../interfaces/memory-store.js";
+import {
+  isEmbeddingStatusRollback,
+  MemoryStatusConflictError,
+} from "../interfaces/memory-store.js";
 import type { MemoryStore } from "../interfaces/memory-store.js";
 import type { NewRecallRecord, RecallScope, ScopeAggregate } from "../recall.js";
 import type { EmbeddingSpaceId } from "../embedding.js";
@@ -350,10 +353,23 @@ export class FakeMemoryStore implements MemoryStore {
     return { memory, event: storedEvent };
   }
 
+  /**
+   * ADR 0053: `ready` を `failed` へ巻き戻さない。
+   * `InMemoryMemoryStore.setEmbeddingStatus`（`packages/testkit`）と同じ意味論・
+   * 同じ理由——禁じる遷移の判定は共有の {@link isEmbeddingStatusRollback} に固定し、
+   * 実装ごとに条件式を書き直さない。巻き戻しは**例外にせず** no-op のまま現在の行を返す
+   * （`runtime.tick` の `catch` の中が唯一の `failed` の呼び出し口であり、そこで投げると
+   * 元の埋め込みエラーが握り潰される。ADR 0048 の `reinforce` と同じ理由の形）。
+   * `failed → ready` は妨げない（片側だけの規則）。
+   */
   async setEmbeddingStatus(ctx: Ctx, id: MemoryId, status: EmbeddingStatus): Promise<Memory> {
     const memory = await this.get(ctx, id);
     if (!memory) {
       throw new Error(`FakeMemoryStore: memory not found for tenant: ${id}`);
+    }
+    if (isEmbeddingStatusRollback(memory.embeddingStatus, status)) {
+      // no-op: 何も書かない。返すのは現在の（更新されなかった）行そのもの。
+      return memory;
     }
     memory.embeddingStatus = status;
     memory.updatedAt = new Date();

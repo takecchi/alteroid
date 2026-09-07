@@ -645,6 +645,92 @@ export function describeMemoryStoreConformance(options: MemoryStoreConformanceOp
       );
     });
 
+    it("⚠ setEmbeddingStatus は 'ready' を 'failed' へ巻き戻さない（ADR 0053）", async () => {
+      // ⚠ `ready` は VectorStore.upsert が返った*後*にしか書かれない＝「ベクトル行が
+      // 在る」の主張である。`failed` はリースを失った古いワーカーの catch からも書かれうる
+      // （ADR 0032 の at-least-once）。上書きを許すと、ベクトル行が在るのに
+      // embedding_status = 'failed' になり、recall が notIndexed.failed に計上して
+      // 利用者に「埋め込みを疑え」と出す——それが塞ぐべき壊れ方である。
+      //
+      // ⚠ **例外を投げないことも歯の一部である。**唯一の `failed` の呼び出し口は
+      // runtime.tick の `catch (err) { ...; throw err }` の中であり、そこで投げると
+      // 元の埋め込みエラーが握り潰されて別の例外にすり替わる（ADR 0048 の reinforce と
+      // 同じ理由の形）。下の `await` がそのまま通ることが、それを固定している。
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const memory = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({ tenantId: "tenant-1", embeddingStatus: "pending" }),
+      );
+
+      const readied = await store.setEmbeddingStatus(ctx, memory.id, "ready");
+      // 前提: 'ready' への遷移は実際に効いている。
+      // ⚠ **この行はこの歯の捕獲力を増やしていない**（実測。PR 本文の変異 Mu4b）——
+      // 下の `expect(rolledBack.embeddingStatus).toBe("ready")` は*正の*等値比較なので、
+      // 実装が丸ごと壊れて何も書かなくなった場合（`pending` のまま）にも、この行が
+      // 無くてもそれだけで赤くなる。この行が足しているのは**赤くなる位置**であって、
+      // 赤くなるかどうかではない。⟹ 将来この歯を「巻き戻っていない」だけを見る形
+      // （`.not.toBe("failed")` など）へ弱めたときに、初めてこの行が唯一の捕獲点になる。
+      expect(readied.embeddingStatus).toBe("ready");
+
+      // ⚠ プリミティブへ即座に写し取る。in-memory 実装は Map に入れた行オブジェクトへの
+      // 参照をそのまま返すため、`readied`（＝行そのもの）を保持したまま後段で比べると
+      // 「別の読み取り」ではなく「同じオブジェクトを2回見ている」だけになり、比較が常に
+      // 真になって歯が死ぬ（reinforce の no-op の歯と同じ取り違え）。
+      // **実測: この写し取りを `const readyRow = readied` へ置き換えると、`updatedAt` を
+      // 触ってしまう変異が生き残る**（PR 本文の変異 Mu6''）。⟹ この行は効いている。
+      const readyUpdatedAtMs = readied.updatedAt.getTime();
+
+      // ⚠ `updatedAt` は壁時計（`new Date()`/`now()`）。2回の呼び出しは一瞬で終わるため、
+      // ガードが外れて書き込んでしまう実装でもミリ秒の解像度に収まって偶然同じ値に
+      // なりかねない。実際に時間を進め、「書けば必ず値が変わる」状況を作ってから
+      // 「変わっていない」を確かめる。
+      // **実測: この `await` を消すと、`updatedAt` を触ってしまう変異が生き残る**
+      // （PR 本文の変異 Mu7）。⟹ この行は効いている。
+      await new Promise((resolve) => setTimeout(resolve, 5));
+
+      const rolledBack = await store.setEmbeddingStatus(ctx, memory.id, "failed");
+      expect(rolledBack.embeddingStatus).toBe("ready");
+      // 行そのものを触っていないことは updatedAt で確かめる。
+      expect(rolledBack.updatedAt.getTime()).toBe(readyUpdatedAtMs);
+
+      // 読み直しても同じ（返り値だけを繕う実装を弾く）。
+      const reread = await store.get(ctx, memory.id);
+      expect(reread?.embeddingStatus).toBe("ready");
+      expect(reread?.updatedAt.getTime()).toBe(readyUpdatedAtMs);
+    });
+
+    it("setEmbeddingStatus は 'failed' を 'ready' へ進めることは妨げない（片側だけの規則、ADR 0053）", async () => {
+      // ⚠ この歯は、規則が**片側だけ**であることを固定するためにある。実装が
+      // 「pending 以外からは書かない」や「ready と failed を対称に禁じる」へずれても、
+      // 上の歯（'ready' を 'failed' で上書きしない）だけでは緑のままになる。
+      // B が後から成功した場合（failed → ready）は正しく反映されなければならない。
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const memory = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({ tenantId: "tenant-1", embeddingStatus: "pending" }),
+      );
+
+      const failed = await store.setEmbeddingStatus(ctx, memory.id, "failed");
+      // 前提: 'failed' への遷移は実際に効いている（上の歯と同じく、捕獲力ではなく
+      // 赤くなる位置を足す行である。実測は PR 本文の変異 Mu4b）。
+      expect(failed.embeddingStatus).toBe("failed");
+      // ⚠ 上の歯と同じ理由でプリミティブへ写し取る（参照を持ち回らない）。
+      const failedUpdatedAtMs = failed.updatedAt.getTime();
+
+      await new Promise((resolve) => setTimeout(resolve, 5));
+
+      const readied = await store.setEmbeddingStatus(ctx, memory.id, "ready");
+      expect(readied.embeddingStatus).toBe("ready");
+      // 行が実際に触られたこと（no-op ではないこと）を updatedAt で確かめる。
+      expect(readied.updatedAt.getTime()).toBeGreaterThan(failedUpdatedAtMs);
+
+      // 読み直しても同じ（返り値だけを繕う実装を弾く）。
+      const reread = await store.get(ctx, memory.id);
+      expect(reread?.embeddingStatus).toBe("ready");
+    });
+
     // -------------------------------------------------------------------
     // recordUsage（D9・docs/architecture.md §3.5「挿入の成否で数える」）
     // -------------------------------------------------------------------

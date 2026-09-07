@@ -35,6 +35,42 @@ export class MemoryStatusConflictError extends Error {
 }
 
 /**
+ * `setEmbeddingStatus` が**唯一禁じる遷移**
+ * （`docs/decisions/0053-set-embedding-status-does-not-roll-back-ready.md`）。
+ * `ready` は `VectorStore.upsert` が返った*後*にしか書かれない——すなわち
+ * 「ベクトル行が在る」という主張である。それを `failed` で上書きすると、ベクトル行が
+ * 在るのに `memories.embedding_status = 'failed'` になり、`recall` がその Memory を
+ * `notIndexed.failed` に計上して利用者に「埋め込みを疑え」と出す。
+ *
+ * ⚠ **禁じるのはこの1本だけである。**遷移表を全面的に固定したわけではない
+ * （`skipped` を含む他の遷移の意味を今日決める根拠が無い。ADR 0053「採らなかった案」参照）。
+ */
+export const EMBEDDING_STATUS_ROLLBACK = { from: "ready", to: "failed" } as const satisfies {
+  from: EmbeddingStatus;
+  to: EmbeddingStatus;
+};
+
+/**
+ * 現在の状態 `current` に `next` を書くことが {@link EMBEDDING_STATUS_ROLLBACK} の
+ * 巻き戻しに当たるかを判定する。`packages/testkit` の in-memory 実装と `packages/core` の
+ * Fake がこの関数を呼ぶことで、**禁じる遷移を1箇所に固定する**——実装ごとに条件式を
+ * 書き直すと、どの遷移を禁じるかが実装間でずれる余地を作る
+ * （`assertValidEventRetentionDays`（`./tenant-settings-store.js`）と同じ形）。
+ *
+ * ⚠ **`PostgresMemoryStore` はこの関数を呼べない。**比較を SQL の1文の `WHERE` の中に
+ * 置かないと、読みと書きの間が空く（ADR 0048 と同じ理由）。**そのため `from`/`to` の値だけを
+ * {@link EMBEDDING_STATUS_ROLLBACK} から取り、比較の形だけが SQL 側にもう一度書かれる。**
+ * この二重化は、適合スイート（`packages/testkit/src/memory-store-conformance.ts`）の歯が
+ * 両実装に走ることで押さえる。
+ */
+export function isEmbeddingStatusRollback(
+  current: EmbeddingStatus,
+  next: EmbeddingStatus,
+): boolean {
+  return current === EMBEDDING_STATUS_ROLLBACK.from && next === EMBEDDING_STATUS_ROLLBACK.to;
+}
+
+/**
  * MemoryStore — Phase 1（docs/architecture.md §5.1）。
  *
  * 実装は adapter 側（`packages/postgres` 等）に置く。ここは型のみ。
@@ -73,7 +109,9 @@ export class MemoryStatusConflictError extends Error {
  *   （PR 本文の「決めたこと」参照）。**新規に行を作成できたとき（`created: true`）だけ
  *   ジョブを積む**——冪等な再送（`created: false`）でジョブを重複させない。
  * - `setEmbeddingStatus` — `embeddingStatus` の `pending → ready | failed` 遷移
- *   （roadmap.md 段階3の完了条件）を書き込む。
+ *   （roadmap.md 段階3の完了条件）を書き込む。**ただし `ready → failed` の巻き戻しだけは
+ *   起きない**（現在が `ready` のとき `failed` を書く呼び出しは no-op。例外にはしない。
+ *   ADR 0053。下記 `setEmbeddingStatus` の doc 参照）。
  *
  * ADR 0028（`runtime.reextract`）で以下1メソッドを追加した:
  * - `listBySourceObservation` — ある Observation から、ある版の抽出器で作られた Memory を
@@ -243,6 +281,23 @@ export interface MemoryStore {
    * `string` であり形式を強制しないため、adapter が主キーに要求する形式に合わない `id`
    * は「存在しない」の一種として扱う（`packages/postgres/src/mapping.ts` の
    * `isUuidLike` の doc コメント参照）。
+   *
+   * 🔴 **`ready` を `failed` へ巻き戻さない**
+   * （[ADR 0053](../../../../docs/decisions/0053-set-embedding-status-does-not-roll-back-ready.md)。
+   * 判定は {@link isEmbeddingStatusRollback}）。現在の `embeddingStatus` が `ready` の
+   * ときに `failed` を書く呼び出しは **no-op** である:
+   *
+   * - **例外を投げない。**唯一の `failed` の呼び出し口は `runtime.tick` の
+   *   `catch (err) { await setEmbeddingStatus(..., "failed"); throw err; }` の中であり、
+   *   ここで投げると**元の埋め込みエラー `err` が握り潰されて別の例外にすり替わる**
+   *   （呼び出し側の次の一手も無い。ADR 0048 の `reinforce` と同じ理由の形）。
+   * - **返すのは、更新されなかった現在の行そのもの**である（`embeddingStatus` は
+   *   `ready` のまま）。
+   * - **`updatedAt` も動かない。**「べき等」を「同じ値になる」ではなく
+   *   **「行を触らない」**の意味で固定する。
+   *
+   * それ以外の遷移は今日どおり無条件である。**`failed → ready` は許す**——片側だけの
+   * 規則であり、後から成功した埋め込みは正しく反映される。
    */
   setEmbeddingStatus(ctx: Ctx, id: MemoryId, status: EmbeddingStatus): Promise<Memory>;
   /**
