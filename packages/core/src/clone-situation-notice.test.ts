@@ -310,3 +310,79 @@ describe('数えられなかったときは、行を消さず 0 でも埋めな�
     await s.clone.stop();
   });
 });
+
+/**
+ * **鍵の材料が毎ターンの状況へ載る配線**（人間の決定 2026-09-07）。
+ *
+ * `describeTokenSituation` 自体は `situation.test.ts` が測る。ここが測るのは
+ * **クローンが実際にそれを渡していること**と、**鍵が読めなくても状況ごと落ちない
+ * こと**である —— `catch` を外まで広げると、鍵の読みが落ちた回に**委譲の本数も器の
+ * 台数も消える。**
+ *
+ * ## 事故（これが無かったせいで起きた形）
+ *
+ * 巡回の番でクローンが**新しい委譲を1本も出さず**、こう書いた ——
+ * 「枠が JST 19:30 まで塞がっているので、出しても1手も始まらずに落ちます」。
+ * **その 19:30 は既に降りた鍵の reset で、現役は別の鍵で `ready` だった。**
+ */
+describe('状況の節に認証トークンの行が載る', () => {
+  it('プールに行が在れば、現役と「見送らない」の1行が状況に出る', async () => {
+    const stores = createMemoryStores();
+    await stores.tokens.replace([
+      { id: 'tok-a', label: 'first', value: 'v-a', order: 0 },
+      { id: 'tok-b', label: 'second', value: 'v-b', order: 1 },
+    ]);
+    await stores.tokens.writeActive({
+      tokenId: 'tok-b',
+      generation: 2,
+      rotatedAt: '2026-09-07T07:33:12.133Z',
+    });
+    const s = bootClone(stores, busyPool());
+
+    s.clone.post({
+      type: 'manager_message',
+      id: 'evt-token-line',
+      at: AT,
+      managerId: 'mgr-run',
+      kind: 'report',
+      text: '終わった',
+    });
+    await waitFor(() => s.inputs.length > 0, 'ターンが走ること');
+
+    const text = s.inputs.join('\n');
+    expect(text).toContain('認証トークン: 現役は「second」');
+    expect(text).toContain('枠を理由に仕事を見送らないこと');
+    // **値は一度も通らない。**
+    expect(text).not.toContain('v-a');
+    expect(text).not.toContain('v-b');
+
+    await s.clone.stop();
+  });
+
+  it('⭐ 鍵が読めなくても、委譲と器の数え上げは消えない', async () => {
+    const stores = createMemoryStores();
+    stores.tokens.list = () => Promise.reject(new Error('記憶ストアが落ちた'));
+    const s = bootClone(stores, busyPool());
+
+    s.clone.post({
+      type: 'manager_message',
+      id: 'evt-token-unreadable',
+      at: AT,
+      managerId: 'mgr-run',
+      kind: 'report',
+      text: '終わった',
+    });
+    await waitFor(() => s.inputs.length > 0, 'ターンが走ること');
+
+    const text = s.inputs.join('\n');
+    // 数え上げは残っている（ここが消えるのがいちばん悪い）。
+    expect(text).toContain('委譲 全 3 本');
+    expect(text).toContain('器 2 台');
+    // 鍵は「読めなかった」と出る（0 で埋めない）。
+    expect(text).toContain('プールを読めなかった');
+    // **不変条件は落ちない。**
+    expect(text).toContain('枠を理由に仕事を見送らないこと');
+
+    await s.clone.stop();
+  });
+});

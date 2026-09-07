@@ -170,9 +170,155 @@ export function countRunnerStates(
  * 行を出す（`runner-swap-notice.ts` の `affected: number | undefined` —— 数え
  * 切れたときだけ本数——と同じ向きの判断である）。
  */
+/**
+ * 認証トークンの1行（人間の決定 2026-09-07）。**数えた材料だけを書く。**
+ *
+ * ## なぜ毎ターン注入するのか —— クローンが「枠が塞がっている」を*記憶*から書いた
+ *
+ * 実運用の事故（2026-09-07）: 巡回の番でクローンが**新しい委譲を1本も出さず**、
+ * 理由をこう書いた ——
+ *
+ * > 枠が JST 19:30 まで塞がっているので、出しても1手も始まらずに落ちます。
+ *
+ * **その 19:30 は、既に降りた鍵（`production`）の reset である。** そのとき現役は
+ * `staging` で、記録の上では `ready` だった。⟹ **前提が事実と違っていた。**
+ *
+ * 前提が作られた機構は3つ重なっている:
+ *
+ * 1. **毎ターンの文脈に鍵の話が1文字も無かった**（この関数が無かった）⟹ 手元の
+ *    材料は自分が食らった 429 の文言だけになる
+ * 2. **その文言は「アカウントの枠」ではなく「そのとき走っていた鍵の枠」である。**
+ *    回っても文言は文脈に残るので、**降りた鍵の事実が現在形で読まれる**
+ * 3. 回転は受信箱へ入らない（人間の決定 2026-08-25。2026-09-07 に「通る鍵に
+ *    戻った」だけ覆した）⟹ 鍵が変わったことを否定する材料が文脈に来ない
+ *
+ * **⟹ 直すのは判断ではなく材料である。** 事実を隣に置けば、記憶から書けなくなる。
+ *
+ * ## ⭐ 「枠を理由に見送る」は、書ける状況では必ず偽である
+ *
+ * これは推論ではなく機構から出る**不変条件**である ——
+ * **枠が閉じているあいだ、クローンのターンは1つも走らない**
+ * （逐語は `grep -Fn -- '枠（利用上限）が閉じている間はターンを回さない' packages/core/src/clone.ts`）。
+ *
+ * ⟹ **クローンが何かを書けているなら、枠は全面的には閉じていない。**
+ * だから最後の行でそれを名指しする（{@link TOKEN_INVARIANT}）。
+ *
+ * ## ⚠️ 「だから必ず通る」とは書かない
+ *
+ * このターンが走っていることが証明するのは「**このセッションが持っている鍵**が
+ * いま受け入れられている」までで、これから起こす委譲が受け取る**現役の鍵**が通ると
+ * は言えない（世代がずれている状態が実際にあった）。⟹ 言えるのは
+ * **「1手も始まらない、とは言えない」**までである。**確実性を反転させないこと。**
+ */
+export function describeTokenSituation(input: {
+  /** プールの行（外向きの顔。**値は持たない**）。読めなかったときは `undefined`。 */
+  readonly tokens: readonly TokenSituationRow[] | undefined;
+  /** 現役の指名。まだ一度も回していなければ `null`。読めなかったときは `undefined`。 */
+  readonly active: { readonly tokenId: string } | null | undefined;
+  /** 判定の基準時刻（epoch ミリ秒）。 */
+  readonly at: number;
+}): string {
+  // **読めなかったことを 0 や「無し」で埋めない**（`AGENTS.md` の地雷
+  // 「取れない軸に 0 の行を作る」）。**それでも不変条件の行は落とさない** ——
+  // あれはプールの状態に依存しないので、読めなくても真である。
+  if (input.tokens === undefined || input.active === undefined) {
+    return (
+      '認証トークン: **プールを読めなかった**（塞がっているかどうかは、ここからは言えない）。' +
+      TOKEN_INVARIANT
+    );
+  }
+
+  const ready = input.tokens.filter((row) => tokenStateOf(row, input.at) === 'ready');
+  const cooling = input.tokens.filter((row) => tokenStateOf(row, input.at) === 'cooling');
+  const withheld = input.tokens.length - ready.length - cooling.length;
+  const active = input.active;
+
+  const current = ((): string => {
+    if (active === null) {
+      // **「1本目が現役」と書かない**（`TokenPoolStore.readActive` の doc）。
+      return '現役の指名は**まだ一度も無い**（器の環境変数のまま走っている）';
+    }
+    const row = input.tokens.find((token) => token.id === active.tokenId);
+    if (row === undefined) {
+      return '現役として記録された行がプールに無い（人間が消した）';
+    }
+    const state = tokenStateOf(row, input.at);
+    const until =
+      state === 'cooling' && row.cooldownUntil !== undefined
+        ? '。冷却明けは ' + new Date(row.cooldownUntil).toISOString()
+        : '';
+    return '現役は「' + row.label + '」（記録の上では ' + TOKEN_STATE_LABEL[state] + until + '）';
+  })();
+
+  return (
+    '認証トークン: ' +
+    current +
+    '。プール ' +
+    String(input.tokens.length) +
+    ' 本: いま使える ' +
+    String(ready.length) +
+    ' / 冷却中 ' +
+    String(cooling.length) +
+    ' / 外されている ' +
+    String(withheld) +
+    '。' +
+    TOKEN_INVARIANT
+  );
+}
+
+/** {@link describeTokenSituation} が見る列だけ。**値は受けない。** */
+export interface TokenSituationRow {
+  readonly id: string;
+  readonly label: string;
+  readonly disabledAt?: string;
+  readonly invalidatedAt?: string;
+  readonly cooldownUntil?: number;
+}
+
+const TOKEN_STATE_LABEL: Record<'ready' | 'cooling' | 'disabled' | 'invalidated', string> = {
+  ready: '使える',
+  cooling: '冷却中',
+  disabled: '人間が外している',
+  invalidated: '失効',
+};
+
+/**
+ * **枠を理由に見送らないための1行。** プールの状態に依存しないので、読めなかった
+ * 回でも落とさない（{@link describeTokenSituation} の doc「不変条件」）。
+ *
+ * **⚠️ 「必ず通る」へ反転させないこと。** 言えるのは「1手も始まらない、とは
+ * 言えない」までである（同じ doc の最後の節）。
+ */
+const TOKEN_INVARIANT =
+  '\n**⚠️ 枠を理由に仕事を見送らないこと。** 枠が閉じているあいだ、あなたのターンは' +
+  '1つも走らない（`#usageBlocked`）—— **いまあなたが書けているなら、枠は全面的には' +
+  '閉じていない。** ⟹「枠が塞がっているので何もしない」は、書ける状況では必ず偽である。' +
+  'そして**過去に受け取った上限の文言は、既に降りた鍵についての事実でありうる**' +
+  '（回っても文言は文脈に残る）—— 現役の状態は上の行か `token_list` で見る。' +
+  '**冷却中でも「1手も始まらない」とは言えない**（記録の冷却は観測から書いた見立てで、' +
+  '実際に通るかは試すまで分からない）。**心配なら本数を絞る。見送りは選ばない。**';
+
+/** {@link TokenSituationRow} から状態を出す。**判定順を崩さないこと。** */
+function tokenStateOf(
+  row: TokenSituationRow,
+  at: number,
+): 'ready' | 'cooling' | 'disabled' | 'invalidated' {
+  if (row.disabledAt !== undefined) return 'disabled';
+  if (row.invalidatedAt !== undefined) return 'invalidated';
+  if (row.cooldownUntil !== undefined && row.cooldownUntil > at) return 'cooling';
+  return 'ready';
+}
+
 export function describeSituation(input: {
   readonly managers: readonly ManagerSummary[];
   readonly runners: readonly { readonly state: RunnerLiveness }[];
+  /**
+   * 認証トークンの材料（人間の決定 2026-09-07）。**省略できる** ——
+   * 省略すると鍵の行が出ない（既存の呼び出しを1つも壊さない）。
+   */
+  readonly tokens?: readonly TokenSituationRow[] | undefined;
+  readonly active?: { readonly tokenId: string } | null | undefined;
+  readonly at?: number;
 }): string {
   const counts = countManagerSituation(input.managers);
   const byState = countRunnerStates(input.runners);
@@ -192,6 +338,17 @@ export function describeSituation(input: {
       '**「走行中」は「進んでいる」ではない。**' +
       '「その他」は終端したもの（failed / lost / stopped）と、done だが話しかけられないものである。' +
       '個別の状態は `manager_list` / `runner_list` で見る。',
+    // **鍵の行は最後に置く。** 数えた材料（委譲・器）の後に、判断を縛る不変条件が
+    // 来る順にしてある（{@link describeTokenSituation}）。**省略した呼びでは出ない。**
+    ...(input.tokens === undefined && input.active === undefined
+      ? []
+      : [
+          describeTokenSituation({
+            tokens: input.tokens,
+            active: input.active,
+            at: input.at ?? Date.now(),
+          }),
+        ]),
   ]);
 }
 

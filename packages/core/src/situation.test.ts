@@ -8,6 +8,7 @@ import {
   countRunnerStates,
   describeSituation,
   describeSituationUnavailable,
+  describeTokenSituation,
 } from './situation.js';
 
 /**
@@ -307,5 +308,149 @@ describe('describeSituationUnavailable', () => {
     expect(ng.startsWith('[system] いまの全体')).toBe(true);
     // それでも本文は見分けが付く。
     expect(ng).not.toBe(ok);
+  });
+});
+
+/**
+ * **枠を理由に仕事を見送らせないための機構**（人間の決定 2026-09-07）。
+ *
+ * ## 何を固定するのか
+ *
+ * 実運用の事故: 巡回の番でクローンが**新しい委譲を1本も出さず**、こう書いた ——
+ *
+ * > 枠が JST 19:30 まで塞がっているので、出しても1手も始まらずに落ちます。
+ *
+ * **その 19:30 は、既に降りた鍵（`production`）の reset だった。** そのとき現役は
+ * `staging` で、記録の上では `ready` だった。人間の逐語:
+ * 「**馬鹿じゃないの？自分が動いているのに？**」「**枠を理由に実施しないという選択を
+ * した clone がおろかです。仕組みとしてこれを防ぐ必要があります。**」
+ *
+ * ⟹ 直すのは判断ではなく**材料**である。この歯が測るのは「毎ターン、正しい材料が
+ * 隣に在る」ことと、「**書ける状況では必ず偽**という不変条件が落ちない」ことである。
+ */
+describe('枠を理由に見送らせない（describeTokenSituation）', () => {
+  const AT = Date.parse('2026-09-07T07:45:00.000Z');
+  const row = (
+    over: Partial<
+      Parameters<typeof describeTokenSituation>[0]['tokens'] extends
+        readonly (infer R)[] | undefined
+        ? R
+        : never
+    > = {},
+  ) => ({ id: 'tok-a', label: 'first', ...over });
+
+  it('現役と、その記録上の状態を出す', () => {
+    const line = describeTokenSituation({
+      tokens: [row({ id: 'tok-a', label: 'staging@example' })],
+      active: { tokenId: 'tok-a' },
+      at: AT,
+    });
+
+    expect(line).toContain('現役は「staging@example」');
+    expect(line).toContain('記録の上では 使える');
+  });
+
+  it('⭐ 冷却中でも「見送らない」の1行が付く（ここが事故の本体）', () => {
+    // **記録の冷却は観測から書いた見立てで、実際に通るかは試すまで分からない。**
+    const line = describeTokenSituation({
+      tokens: [row({ cooldownUntil: AT + 3 * 60 * 60 * 1000 })],
+      active: { tokenId: 'tok-a' },
+      at: AT,
+    });
+
+    expect(line).toContain('記録の上では 冷却中');
+    expect(line).toContain('冷却明けは 2026-09-07T10:45:00.000Z');
+    // **不変条件が落ちていない。**
+    expect(line).toContain('枠を理由に仕事を見送らないこと');
+    expect(line).toContain('書ける状況では必ず偽');
+    expect(line).toContain('見送りは選ばない');
+  });
+
+  it('過去の文言が降りた鍵のものでありうる、と名指しする', () => {
+    // これが事故の前提そのもの（19:30 は降りた鍵の reset だった）。
+    const line = describeTokenSituation({ tokens: [row()], active: null, at: AT });
+
+    expect(line).toContain('既に降りた鍵についての事実でありうる');
+  });
+
+  it('本数を「いま使える / 冷却中 / 外されている」で分けて数える', () => {
+    const line = describeTokenSituation({
+      tokens: [
+        row({ id: 'a', label: 'ready1' }),
+        row({ id: 'b', label: 'ready2' }),
+        row({ id: 'c', label: 'cool', cooldownUntil: AT + 1000 }),
+        row({ id: 'd', label: 'off', disabledAt: '2026-08-25T00:00:00.000Z' }),
+        row({ id: 'e', label: 'dead', invalidatedAt: '2026-08-25T00:00:00.000Z' }),
+      ],
+      active: { tokenId: 'a' },
+      at: AT,
+    });
+
+    expect(line).toContain('プール 5 本: いま使える 2 / 冷却中 1 / 外されている 2');
+  });
+
+  it('指名がまだ無い回を「1本目が現役」と書かない', () => {
+    const line = describeTokenSituation({ tokens: [row()], active: null, at: AT });
+
+    expect(line).toContain('現役の指名は**まだ一度も無い**');
+    expect(line).not.toContain('現役は「first」');
+  });
+
+  it('指名の先の行が消えていたら、そう書く', () => {
+    const line = describeTokenSituation({
+      tokens: [row({ id: 'tok-b', label: 'other' })],
+      active: { tokenId: 'tok-gone' },
+      at: AT,
+    });
+
+    expect(line).toContain('現役として記録された行がプールに無い');
+  });
+
+  it('⭐ プールを読めなかった回も、不変条件の行は落とさない', () => {
+    // **あれはプールの状態に依存しないので、読めなくても真である。**
+    // ここを落とすと、読めなかった回だけ事故が再発しうる。
+    for (const input of [
+      { tokens: undefined, active: { tokenId: 'tok-a' }, at: AT },
+      { tokens: [row()], active: undefined, at: AT },
+    ] as const) {
+      const line = describeTokenSituation(input);
+      expect(line).toContain('プールを読めなかった');
+      // **0 や「無し」で埋めていない。**
+      expect(line).not.toContain('いま使える 0');
+      expect(line).toContain('枠を理由に仕事を見送らないこと');
+    }
+  });
+
+  it('「必ず通る」へ反転していない（確実性を作らない）', () => {
+    const line = describeTokenSituation({ tokens: [row()], active: { tokenId: 'tok-a' }, at: AT });
+
+    expect(line).not.toContain('必ず通る');
+    expect(line).not.toContain('必ず始まる');
+  });
+});
+
+describe('状況の1行に鍵が載る（describeSituation への配線）', () => {
+  const AT = Date.parse('2026-09-07T07:45:00.000Z');
+
+  it('材料を渡せば鍵の行が出る', () => {
+    const out = describeSituation({
+      managers: [],
+      runners: [],
+      tokens: [{ id: 'tok-a', label: 'staging@example' }],
+      active: { tokenId: 'tok-a' },
+      at: AT,
+    });
+
+    expect(out).toContain('認証トークン: 現役は「staging@example」');
+    expect(out).toContain('枠を理由に仕事を見送らないこと');
+    // 既存の数え上げが消えていない。
+    expect(out).toContain('委譲 全 0 本');
+  });
+
+  it('省略した呼びでは鍵の行が出ない（既存の呼び出しを壊さない）', () => {
+    const out = describeSituation({ managers: [], runners: [] });
+
+    expect(out).toContain('委譲 全 0 本');
+    expect(out).not.toContain('認証トークン:');
   });
 });
