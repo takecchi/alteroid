@@ -283,7 +283,7 @@ describe('3軸の内訳', () => {
   ];
 
   it('日・マネージャー・モデルの3軸すべてで引ける', () => {
-    const summary = summarizeUsage(rows);
+    const summary = summarizeUsage(rows, []);
     expect(summary.total.costUsd).toBe(3.25);
     expect(summary.byDate).toEqual([
       { date: '2026-08-13', totals: totals({ costUsd: 1 }) },
@@ -297,7 +297,7 @@ describe('3軸の内訳', () => {
   });
 
   it('どの軸で足しても合計は同じ（口ごとに食い違わない）', () => {
-    const summary = summarizeUsage(rows);
+    const summary = summarizeUsage(rows, []);
     // **6軸すべてを通す。** ここは3軸しか見ていなかった — 軸を足すたびに
     // 「その軸だけ合計に足し合わない」形が入りうるのに、それを止める歯が
     // 足した軸には無かった。**トークンの軸はとくに落ちやすい**（帰属の無い
@@ -316,12 +316,15 @@ describe('3軸の内訳', () => {
   });
 
   it('トークンの軸は、帰属の無い分を null の要素として残す（落として合計から欠かせない）', () => {
-    const summary = summarizeUsage([
-      { ...rows[0]!, tokenId: 'tok-a' },
-      // 2件目は帰属が無い（プールを使っていない期間の行）。
-      rows[1]!,
-      { ...rows[2]!, tokenId: 'tok-a' },
-    ]);
+    const summary = summarizeUsage(
+      [
+        { ...rows[0]!, tokenId: 'tok-a' },
+        // 2件目は帰属が無い（プールを使っていない期間の行）。
+        rows[1]!,
+        { ...rows[2]!, tokenId: 'tok-a' },
+      ],
+      [],
+    );
 
     // **`null` が消えていない。** 消えると byToken の合計だけが 0.25 少なくなり、
     // しかも他の軸は「出てこない値を 0 で補わない」約束なので、読み手には
@@ -333,11 +336,10 @@ describe('3軸の内訳', () => {
   });
 
   it('トークンの軸は id の昇順で、帰属の無い分が最後に来る', () => {
-    const summary = summarizeUsage([
-      rows[0]!,
-      { ...rows[1]!, tokenId: 'tok-b' },
-      { ...rows[2]!, tokenId: 'tok-a' },
-    ]);
+    const summary = summarizeUsage(
+      [rows[0]!, { ...rows[1]!, tokenId: 'tok-b' }, { ...rows[2]!, tokenId: 'tok-a' }],
+      [],
+    );
 
     expect(summary.byToken.map((entry) => entry.tokenId)).toEqual(['tok-a', 'tok-b', null]);
   });
@@ -346,12 +348,12 @@ describe('3軸の内訳', () => {
     // **これを「1本のトークンで全部使った」と読ませないための形である。**
     // 要素が1つしか無いことは、`tokensSince` が null であることと合わせて
     // 初めて「取れていない」と読める（口の側がその2つを並べて出す）。
-    const summary = summarizeUsage(rows);
+    const summary = summarizeUsage(rows, []);
     expect(summary.byToken).toEqual([{ tokenId: null, totals: summary.total }]);
   });
 
   it('空なら全部空', () => {
-    const summary = summarizeUsage([]);
+    const summary = summarizeUsage([], []);
     expect(summary.total).toEqual(ZERO_USAGE);
     expect(summary.byDate).toEqual([]);
   });
@@ -391,7 +393,7 @@ describe('層と場所の内訳', () => {
   ];
 
   it('誰が（層）と どこで（場所）の2軸で引ける', () => {
-    const summary = summarizeUsage(rows);
+    const summary = summarizeUsage(rows, []);
     expect(summary.byLayer).toEqual([
       { layer: 'clone', totals: totals({ costUsd: 2 }) },
       { layer: 'manager', totals: totals({ costUsd: 2 }) },
@@ -405,23 +407,23 @@ describe('層と場所の内訳', () => {
   it('モデル名では層を見分けられない（だから層の軸が要る）', () => {
     // 3行とも `opus` である。`ALTEROID_CLONE_MODEL` を置けばクローンとマネージャーは
     // 同じモデル帯に並ぶので、モデル軸だけでは「誰が使ったか」に答えられない。
-    const summary = summarizeUsage(rows);
+    const summary = summarizeUsage(rows, []);
     expect(summary.byModel).toEqual([{ model: 'opus', totals: totals({ costUsd: 4 }) }]);
     expect(summary.byLayer.map((entry) => entry.layer)).toEqual(['clone', 'manager']);
   });
 
   it('記録の無い層・場所を 0 で補わない', () => {
     // 「使っていない」と「記録が無い」は別である。行に現れなかった値は一覧に出ない。
-    const summary = summarizeUsage(rows.filter((row) => row.layer === 'clone'));
+    const summary = summarizeUsage(rows.filter((row) => row.layer === 'clone'), []);
     expect(summary.byLayer).toEqual([{ layer: 'clone', totals: totals({ costUsd: 2 }) }]);
     expect(summary.bySite.map((entry) => entry.site)).toEqual(['distill', 'session']);
 
-    const onlySession = summarizeUsage(rows.filter((row) => row.site === 'session'));
+    const onlySession = summarizeUsage(rows.filter((row) => row.site === 'session'), []);
     expect(onlySession.bySite).toEqual([{ site: 'session', totals: totals({ costUsd: 3.5 }) }]);
   });
 
   it('層でも場所でも、足し上げれば合計に一致する（口ごとに食い違わない）', () => {
-    const summary = summarizeUsage(rows);
+    const summary = summarizeUsage(rows, []);
     for (const axis of [summary.byLayer, summary.bySite]) {
       const sum = axis.reduce((acc, entry) => acc + entry.totals.costUsd, 0);
       expect(sum).toBeCloseTo(summary.total.costUsd, 10);

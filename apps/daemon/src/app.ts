@@ -2003,7 +2003,7 @@ export function createApp(deps: AppDeps) {
         return c.json({
           ...aggregate,
           // 内訳は core の1つの実装で作る（口ごとに足し直すと食い違う）。
-          breakdown: summarizeUsage(aggregate.rows),
+          breakdown: summarizeUsage(aggregate.rows, aggregate.turnRows),
           // **配線されていなければ「まだ分からない」を返す。** 0 や null にすると
           // 「枠を使っていない」と読める（テストの HTTP 層検証では省略できる）。
           account: deps.accountUsage?.() ?? { state: 'unknown' as const },

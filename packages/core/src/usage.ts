@@ -679,6 +679,42 @@ export const usageRowSchema = z.object({
 
 export type UsageRow = z.infer<typeof usageRowSchema>;
 
+/**
+ * 台帳の「起きた回数」を数える別の行。**日 × actor × 層 × 場所 × 認証トークン**の
+ * 5軸で、増分を足し込んだ行（`usageRowSchema`）とは別会計である。
+ *
+ * ## なぜ `model` を鍵に持たないか
+ *
+ * `record()` は1回の呼び出し（＝1ターン）で `fold.delta` に載ったモデルの数だけ
+ * `usage_daily` の行を書く（`PgUsageStore.record` の「増分を日次へ足し込む」
+ * 直下の `for (const [model, totals] of Object.entries(fold.delta))`）。**回数を
+ * モデルの鍵で持つと、1ターンで2モデルが動いた回が「2ターン」に数えられる**
+ * ——合計が「ターン数」ではなく「ターン×モデル数」になる。モデル軸で max を
+ * 取っても直らない（ターンごとに動くモデルの組み合わせが違うので、どのモデル行を
+ * 「代表」にするかが決められない）。だから回数はモデルを持たない別の行として持つ。
+ *
+ * ## なぜ 0 の行を作らないか
+ *
+ * AGENTS.md 地雷表「取れない軸に 0 の行を作る」と同じ理由である。増分が空の
+ * `record`（`fold.delta` が空——同じ累積スナップショットの再送、失敗した result
+ * などで起こる）はそもそも「起きた」に数えない。0 の行を作ると、**取っていない
+ * 観測**（「その日その actor は0回だった」）を出力が語ることになる。だから
+ * `turns` は `positive()` — この行が存在すること自体が「1回以上起きた」の意味を
+ * 持ち、0 という値は最初から作らない。
+ */
+export const usageTurnRowSchema = z.object({
+  date: usageDateSchema,
+  managerId: z.string(),
+  layer: usageLayerSchema,
+  site: usageSiteSchema,
+  /** `usageRowSchema.tokenId` と同じ形・同じ理由（取れない構成では埋まらない）。 */
+  tokenId: z.string().min(1).optional(),
+  turns: z.number().int().positive(),
+  updatedAt: isoDateTime,
+});
+
+export type UsageTurnRow = z.infer<typeof usageTurnRowSchema>;
+
 export const usageQuerySchema = z.object({
   /** この日以降（含む）。 */
   from: usageDateSchema.optional(),
@@ -763,6 +799,28 @@ export const usageAggregateSchema = z.object({
    * 0 でも既定値でもなく、**取れていない**である。
    */
   beforeTokens: z.boolean(),
+  /**
+   * **「起きた回数」の軸**（{@link usageTurnRowSchema}）。増分を足し込んだ
+   * `rows` とは別会計——`model` を鍵に持たないので、`rows` の絞り込みと同じ
+   * 述語で引いた別の配列として持つ。
+   */
+  turnRows: z.array(usageTurnRowSchema),
+  /**
+   * **回数の軸**が記録を始めた時刻。まだ1件も数えていなければ null。
+   *
+   * `since` / `layersSince` / `tokensSince` と同じ形。回数は「台帳の行が動いた
+   * 回（`fold.delta` が空でない回）」でだけ数えるので、増分が空の record では
+   * 始まらない——「まだ1件も起きていない」ではなく「まだ1件も**数えられる形で**
+   * 起きていない」の意味である。
+   */
+  turnsSince: isoDateTime.nullable(),
+  /**
+   * 照会された範囲の一部（または全部）が**回数の軸**の始点より前だったか。
+   *
+   * **真なら「その範囲の回数は 0 ではなく取れていない」と言うこと。** 他の3つの
+   * `before*` と同じ形——数字が無いことを「0回だった」に見せない。
+   */
+  beforeTurns: z.boolean(),
   /** 数字に必ず添える但し書き。 */
   notice: z.literal(USAGE_ESTIMATE_NOTICE),
 });
@@ -775,11 +833,29 @@ export type UsageAggregate = z.infer<typeof usageAggregateSchema>;
  * 各口で足し直すと、どれか1つの丸め方や取りこぼしが他と食い違い、「CLI では
  * $3 なのに画面では $2.9」という形で信用を失う。算術はここに1つだけ置く。
  */
+/**
+ * `turns` は5軸（日 / actor / 層 / 場所 / トークン）の要素にだけ付く。
+ * **`byModel` には付けない** — {@link usageTurnRowSchema} が `model` を鍵に
+ * 持たない以上、モデル軸に回数を帰属させる方法が無い。欄そのものを持たせない
+ * ことで、型の上でも「モデル別の回数」を作れなくする。
+ *
+ * 該当する turnRow が無い要素は `turns` を持たない（`optional()`。`0` にしない
+ * ——AGENTS.md 地雷表「取れない軸に 0 の行を作る」と同じ理由）。
+ */
+const turnsField = z.number().int().positive().optional();
+
 export const usageBreakdownSchema = z.object({
   total: usageTotalsSchema,
-  byDate: z.array(z.object({ date: usageDateSchema, totals: usageTotalsSchema })),
-  byManager: z.array(z.object({ managerId: z.string(), totals: usageTotalsSchema })),
-  /** どのモデル帯（Fable / Opus / Sonnet）で使ったか。 */
+  /**
+   * 照会範囲の総ターン数。turnRows の総和。**0 なら欄そのものを出さない**
+   * （`turnsField` と同じ理由）。
+   */
+  turns: turnsField,
+  byDate: z.array(z.object({ date: usageDateSchema, totals: usageTotalsSchema, turns: turnsField })),
+  byManager: z.array(
+    z.object({ managerId: z.string(), totals: usageTotalsSchema, turns: turnsField }),
+  ),
+  /** どのモデル帯（Fable / Opus / Sonnet）で使ったか。**回数の欄は持たない**（上記）。 */
   byModel: z.array(z.object({ model: z.string(), totals: usageTotalsSchema })),
   /**
    * **誰が**使ったか。
@@ -787,14 +863,16 @@ export const usageBreakdownSchema = z.object({
    * **出てこない層を 0 で補わない。** 記録が1件も無い層はここに現れない
    * （`worker` はそもそも値として存在しない — {@link usageLayerSchema}）。
    */
-  byLayer: z.array(z.object({ layer: usageLayerSchema, totals: usageTotalsSchema })),
+  byLayer: z.array(
+    z.object({ layer: usageLayerSchema, totals: usageTotalsSchema, turns: turnsField }),
+  ),
   /**
    * **どこで**使ったか。
    *
    * **出てこない場所を 0 で補わない**（`compaction` はそもそも値として存在しない
    * — {@link usageSiteSchema}）。
    */
-  bySite: z.array(z.object({ site: usageSiteSchema, totals: usageTotalsSchema })),
+  bySite: z.array(z.object({ site: usageSiteSchema, totals: usageTotalsSchema, turns: turnsField })),
   /**
    * **どの認証トークンで**使ったか（Issue #393 受け入れ基準6）。
    *
@@ -807,8 +885,17 @@ export const usageBreakdownSchema = z.object({
    *
    * **出てこないトークンを 0 で補わないこと**は他の軸と同じ — プールに居るが
    * 使われていないトークンはここに現れない（現れたら「0 使った」に見える）。
+   *
+   * **`null` の要素にも `turns` が付く**（帰属の無い分の回数——`groupByToken` と
+   * 同じ向きで畳む）。
    */
-  byToken: z.array(z.object({ tokenId: z.string().min(1).nullable(), totals: usageTotalsSchema })),
+  byToken: z.array(
+    z.object({
+      tokenId: z.string().min(1).nullable(),
+      totals: usageTotalsSchema,
+      turns: turnsField,
+    }),
+  ),
 });
 
 export type UsageBreakdown = z.infer<typeof usageBreakdownSchema>;

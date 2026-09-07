@@ -376,7 +376,7 @@ describe('台帳まで届く', () => {
 
     const aggregate = await stores.usage.aggregate({});
     expect(aggregate.rows).toHaveLength(1);
-    expect(summarizeUsage(aggregate.rows).total.costUsd).toBe(0.93);
+    expect(summarizeUsage(aggregate.rows, aggregate.turnRows).total.costUsd).toBe(0.93);
     await pool.stop();
   });
 });

@@ -5751,6 +5751,13 @@ const USAGE_AXIS_TITLES: Record<UsageAxis, string> = {
 interface UsageAxisEntry {
   label: string;
   totals: UsageTotals;
+  /**
+   * その軸の要素が起きた回数。**`model` の枝（`usageAxisEntries` の `case 'model'`）
+   * は渡さない** — `UsageBreakdown.byModel` に欄が無いので、型の上でも渡せない
+   * （`usage.ts` の `usageBreakdownSchema` の doc）。無いときは欄そのものを持たない
+   * （`0` にしない）。
+   */
+  turns?: number;
 }
 
 /**
@@ -5771,16 +5778,23 @@ function usageAxisEntries(summary: UsageBreakdown, axis: UsageAxis): UsageAxisEn
     case 'date':
       // 日別は新しい順（古い日で上限を使い切らせない）。日付そのものが全順序である。
       return summary.byDate
-        .map((entry) => ({ label: entry.date, totals: entry.totals }))
+        .map((entry) => ({ label: entry.date, totals: entry.totals, turns: entry.turns }))
         .sort((a, b) => b.label.localeCompare(a.label));
     case 'manager':
-      return byCost(summary.byManager.map((e) => ({ label: e.managerId, totals: e.totals })));
+      return byCost(
+        summary.byManager.map((e) => ({ label: e.managerId, totals: e.totals, turns: e.turns })),
+      );
     case 'model':
+      // **回数は渡さない。** `byModel` に欄が無い（`UsageAxisEntry.turns` の doc）。
       return byCost(summary.byModel.map((e) => ({ label: e.model, totals: e.totals })));
     case 'layer':
-      return byCost(summary.byLayer.map((e) => ({ label: e.layer, totals: e.totals })));
+      return byCost(
+        summary.byLayer.map((e) => ({ label: e.layer, totals: e.totals, turns: e.turns })),
+      );
     case 'site':
-      return byCost(summary.bySite.map((e) => ({ label: e.site, totals: e.totals })));
+      return byCost(
+        summary.bySite.map((e) => ({ label: e.site, totals: e.totals, turns: e.turns })),
+      );
     case 'token':
       // **`null` を「記録が無い」と書く。id を捏造しない。** ここが空文字や
       // `'unknown'` になると、クローンからは1本のトークンとして見え、費用を
@@ -5789,9 +5803,20 @@ function usageAxisEntries(summary: UsageBreakdown, axis: UsageAxis): UsageAxisEn
         summary.byToken.map((e) => ({
           label: e.tokenId ?? '（トークンの帰属が無い分）',
           totals: e.totals,
+          turns: e.turns,
         })),
       );
   }
+}
+
+/**
+ * 軸の1要素を1行へ。**`turns` が在るときだけ**回数と1回あたりの費用を足す
+ * （無いときは何も足さない — `0回` とも `-` とも書かない）。
+ */
+function formatUsageAxisLine(entry: UsageAxisEntry): string {
+  const cost = formatUsd(entry.totals.costUsd);
+  if (entry.turns === undefined) return `  ${entry.label}: ${cost}`;
+  return `  ${entry.label}: ${cost} / ${entry.turns}回 / 1回 ${formatUsd(entry.totals.costUsd / entry.turns)}`;
 }
 
 /**
@@ -5858,12 +5883,15 @@ function renderUsage(
 ): string {
   const {
     rows,
+    turnRows,
     since,
     layersSince,
     tokensSince,
+    turnsSince,
     beforeLedger,
     beforeLayers,
     beforeTokens,
+    beforeTurns,
     notice,
   } = aggregate;
 
@@ -5875,7 +5903,7 @@ function renderUsage(
     ].join('\n');
   }
 
-  const summary = summarizeUsage(rows);
+  const summary = summarizeUsage(rows, turnRows);
   const lines: string[] = [];
 
   if (view.axis !== undefined) {
@@ -5893,7 +5921,7 @@ function renderUsage(
       lines.push(`  （その軸は全 ${entries.length} 件で、offset=${offset} 以降は無い）`);
     } else {
       for (const entry of page) {
-        lines.push(`  ${entry.label}: ${formatUsd(entry.totals.costUsd)}`);
+        lines.push(formatUsageAxisLine(entry));
       }
       const rest = entries.length - (offset + page.length);
       if (rest > 0) {
@@ -5909,7 +5937,12 @@ function renderUsage(
     // の doc）ので、この範囲に台帳の行が無くても出す。
     if (view.unrecordedManagers !== undefined) lines.push('', ...view.unrecordedManagers);
   } else {
-    lines.push(`合計 ${formatUsd(summary.total.costUsd)}`);
+    lines.push(
+      `合計 ${formatUsd(summary.total.costUsd)}` +
+        (summary.turns === undefined
+          ? ''
+          : ` / ${summary.turns}回 / 1回 ${formatUsd(summary.total.costUsd / summary.turns)}`),
+    );
     lines.push(
       `  入力 ${summary.total.inputTokens.toLocaleString('en-US')} / ` +
         `出力 ${summary.total.outputTokens.toLocaleString('en-US')} / ` +
@@ -5923,7 +5956,7 @@ function renderUsage(
       const entries = usageAxisEntries(summary, axis);
       lines.push('', `${USAGE_AXIS_TITLES[axis]}:`);
       for (const entry of entries.slice(0, USAGE_AXIS_LIMIT)) {
-        lines.push(`  ${entry.label}: ${formatUsd(entry.totals.costUsd)}`);
+        lines.push(formatUsageAxisLine(entry));
       }
       if (entries.length > USAGE_AXIS_LIMIT) {
         // **打ち切りの行がそのまま次に打つ手を書く。** 「残り N 件」だけでは、
@@ -5933,6 +5966,14 @@ function renderUsage(
             `axis="${axis}", offset=${USAGE_AXIS_LIMIT} で続きが出る）`,
         );
       }
+    }
+    // **回数が1つでも出ているときだけ、モデル別に出ない理由を書く。** 出さないと
+    // 「モデル別だけ0回」に読める（`usage.ts` の `usageTurnRowSchema` の doc）。
+    if (summary.turns !== undefined) {
+      lines.push(
+        '',
+        'モデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。',
+      );
     }
   }
 
@@ -5971,6 +6012,20 @@ function renderUsage(
     lines.push(
       '照会した範囲は認証トークンの軸の始点より前にかかっている。' +
         'その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。',
+    );
+  }
+  // **回数の軸の始点を、上の3つと混ぜない。** null は「まだ1件も**数えられる形で**
+  // 起きていない」であって「0回だった」ではない（`usage.ts` の
+  // `usageAggregateSchema` の `turnsSince`）。
+  lines.push(
+    turnsSince === null
+      ? '回数の軸はまだ1件も記録していない。'
+      : `回数の軸の始点: ${turnsSince}`,
+  );
+  if (beforeTurns) {
+    lines.push(
+      '照会した範囲は回数の軸の始点より前にかかっている。' +
+        'その分の回数は **0 ではなく「取れていない」**。',
     );
   }
   lines.push(notice);

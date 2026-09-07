@@ -360,12 +360,14 @@ export const authAccessTokens = pgTable(
 );
 
 /**
- * 利用状況の台帳（`usage.ts` の `UsageStore`）。3つに分けている。
+ * 利用状況の台帳（`usage.ts` の `UsageStore`）。4つに分けている。
  *
  * - `usageDaily`: 増分を「日 × マネージャー × モデル」で足し込んだ行。集計の主体
  * - `usageBaseline`: マネージャー1本ごとの前回累積（差分を取るための基準）
  * - `usageLedger`: 台帳が記録を始めた時刻。単一行（`id = 'default'`）で持つ —
  *   `aggregate` が返す `since` の元になる（1件も record していなければ行が無い）
+ * - `usageTurns`: 「起きた回数」を「日 × マネージャー × 層 × 場所 × トークン」で
+ *   足し込んだ行。`model` を鍵に持たない別会計（`usageTurns` 自身の doc参照）
  */
 export const usageDaily = pgTable(
   'usage_daily',
@@ -500,7 +502,51 @@ export const usageLedger = pgTable('usage_ledger', {
    * `null` の1件が「1本のトークンで全部使った」と読める。
    */
   tokensAt: timestamp('tokens_at', { withTimezone: true, mode: 'date' }),
+  /**
+   * **回数の軸**が記録を始めた時刻。まだ1件も数えていなければ null。
+   *
+   * `layered_at` と同じ時機（最初の record で入る）だが、**同じ record では
+   * 入らないことがある** — 増分が空の record（`fold.delta` が空）では回数を
+   * 数えないので、`layered_at` が先に入って `turns_at` が後から入る器がありうる
+   * （`usage.ts` の `usageAggregateSchema` の `turnsSince`）。
+   */
+  turnsAt: timestamp('turns_at', { withTimezone: true, mode: 'date' }),
 });
+
+/**
+ * 台帳の「起きた回数」（`usage.ts` の `usageTurnRowSchema`）。**`usage_daily` とは
+ * 別テーブル。** 鍵に `model` を持たない — 1回の `record` が `fold.delta` の
+ * モデルごとに `usage_daily` の行を複数書く（同ファイルの `usageDaily` の doc）
+ * ので、鍵にモデルを含めると合計が「ターン数」ではなく「ターン×モデル数」に
+ * なる。
+ */
+export const usageTurns = pgTable(
+  'usage_turns',
+  {
+    date: text('date').notNull(),
+    managerId: text('manager_id').notNull(),
+    layer: text('layer').notNull(),
+    site: text('site').notNull(),
+    // **`not null default ''` である理由は `usageDaily.tokenId` と同じ**
+    // （PostgreSQL の一意索引は既定で null を重複と見なさないので、null を
+    // 許すと帰属の無い行が積み上がらない）。
+    tokenId: text('token_id').notNull().default(''),
+    turns: bigint('turns', { mode: 'number' }).notNull().default(0),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    // **主キーではなく一意索引で持つ**（`usage_daily` と同じ判断。
+    // `migrate.ts` 冒頭「鍵を差し替える」参照——ただしこのテーブルは新規なので
+    // 差し替えは起こらない。最初から一意索引で持つだけである）。
+    uniqueIndex('usage_turns_key_idx').on(
+      table.date,
+      table.managerId,
+      table.layer,
+      table.site,
+      table.tokenId,
+    ),
+  ],
+);
 
 /**
  * 認証トークンのプール（Issue #393「PR1 プールの器」）。**回さない**——ここが
