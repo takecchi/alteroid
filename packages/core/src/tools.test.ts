@@ -5525,6 +5525,46 @@ describe('manager_list は走行中・返事待ちを窓から落とさない（
     expect(reply).not.toContain('mgr-done-');
   });
 
+  /**
+   * **`status: []` は「絞らない」へ倒す。この面の他の一覧とは逆である。**
+   *
+   * 人間の入口に揃えた（逐語:
+   * `grep -Fn -- '**`status=`（空）は絞らない。**' apps/daemon/src/app.ts` —
+   * 「0件へ倒すと、絞りを解除した画面が『マネージャーが消えた』ように見える」）。
+   *
+   * **⚠️ MCP 側の既存の契約は逆である** —— `journal_read` の `types` / `with`、
+   * `commitment_list` の `origin` は `[]` を0件として扱う（逐語:
+   * `grep -Fn -- '**`[]`（空配列）= 0件。** 「どれにも当たらない」という指定として扱う。' packages/core/src/store.ts`）。
+   * **どちらへ倒したかを歯で固定しておかないと、コードを読むまで分からない。**
+   * 倒した理由は `tools.ts` の `view` の doc が持つ（ストアの問い合わせではなく、
+   * `GET /managers?status=` との等価性がこの引数を足した理由そのものだから）。
+   *
+   * **黙って無視しないことも一緒に測る** —— 逆の契約に慣れた呼び手が「0件だ」と
+   * 読まないように、絞らなかったことを出力の側で言う。
+   */
+  it('status: [] は絞らない（0件へ倒さない）。ただし黙って無視せず、絞らなかったと言う', async () => {
+    const h = flooded({ terminal: 3, inFlight: ['running'] });
+
+    const empty = await h.call('manager_list', { status: [] });
+    const plain = await h.call('manager_list', {});
+
+    // 0件へ倒れていないこと（＝ `[].includes(...)` が常に false になる形が戻ったら赤くなる）
+    expect(empty).toContain('mgr-live-00');
+    expect(empty).toContain('mgr-done-0000');
+    expect(empty).not.toContain('絞り込みに当たる委譲は無い');
+    // 絞ったと嘘を言わないこと（母数は全体のまま）
+    expect(empty).not.toMatch(/status:\s*に絞った/);
+    // **黙って無視しない。**
+    expect(empty).toContain('絞り込み: status に空の配列が渡ったので、絞らずに全件を出した');
+    // **出る委譲そのものは、渡さなかった呼びと1バイトも違わない**（注記の行だけが増える）。
+    expect(
+      empty
+        .split('\n')
+        .filter((line) => !line.startsWith('絞り込み:'))
+        .join('\n'),
+    ).toBe(plain);
+  });
+
   it('絞った結果が0件なのと、委譲が1本も居ないのを混ぜない', async () => {
     const h = flooded({ terminal: 3, inFlight: [] });
 

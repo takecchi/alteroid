@@ -4272,6 +4272,15 @@ export function createCloneTools(context: ToolContext) {
         '走行中・返事待ち（running / waiting_human）を先に出し、そのあとに終端したもの（done / failed / lost / stopped）を出す。' +
           '各群の中は startedAt の新しい順である。',
         'status で状態を絞れる（省略すると絞らない）。先頭の件数の行は**絞る前の全体**を出すので、絞っても全体の実像は消えない。',
+        // **`[]` の倒し方はクローンが読む面にも書く。** JSDoc に書いてもクローンには
+        // 届かない（上の `resources: true` / #572 の行と同じ理由）。そして**この面の
+        // 他の一覧（journal_read の types / commitment_list の origin）は `[]` を
+        // 0件として扱う**ので、ここだけ違うことを黙っていると、その契約に慣れた
+        // 読み手が「0件だ」と読む。
+        'status に空の配列を渡した呼びは絞らない（渡さなかったのと同じ全件が出る。' +
+          'そのときは「絞らずに全件を出した」と応答に書く）。' +
+          '**journal_read の types / commitment_list の origin とは倒し方が違う** — ' +
+          'あちらは [] を「どれにも当たらない」＝0件として扱う。',
       ].join(' '),
       {
         // **人間の入口（`GET /managers`）にだけ在った絞りを、クローンにも渡す**
@@ -4286,6 +4295,7 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             '状態（running / waiting_human / done / failed / lost / stopped）で絞る。' +
               '省略すると絞らない。走っているものだけを見たいなら ["running","waiting_human"]。' +
+              '空の配列 [] も絞らない（渡さなかったのと同じ。0件にはならない）。' +
               '先頭の件数の行は絞る前の全体を出す',
           ),
       },
@@ -4341,10 +4351,38 @@ export function createCloneTools(context: ToolContext) {
         // （そちらの逐語:
         // `grep -Fn -- '`origin` は、`renderListing` が文字数の予算で切る前' packages/core/src/tools.ts`）。
         // **未指定＝絞らない**（同じ契約）。
-        const view =
-          status === undefined
-            ? attention
-            : attention.filter((manager) => status.includes(manager.status));
+        //
+        // ## `status: []`（空配列）は「絞らない」へ倒す。**この面の他の一覧とは逆である**
+        //
+        // **人間の入口（`GET /managers`）に揃えた。** あちらの逐語:
+        // `grep -Fn -- '**`status=`（空）は絞らない。**' apps/daemon/src/app.ts`
+        //
+        // > **`status=`（空）は絞らない。** 0件へ倒すと、絞りを解除した画面が
+        // > 「マネージャーが消えた」ように見える
+        //
+        // **⚠️ これは MCP 側の既存の契約とは逆の倒し方である。** `journal_read` の
+        // `types` / `with`、`limit: 0`、`commitment_list` の `origin` は
+        // **`[]` を「どれにも当たらない」＝0件**として扱い、3実装で測られた契約に
+        // なっている（逐語:
+        // `grep -Fn -- '**`[]`（空配列）= 0件。** 「どれにも当たらない」という指定として扱う。' packages/core/src/store.ts`）。
+        //
+        // **それでもこちらを採った理由は、この絞りの`双子`が誰かである。** あれらは
+        // **ストアの問い合わせ**の引数で、契約の持ち主は `JournalQuery` /
+        // `CommitmentStore` の側である。この `status` は**ストアを1文字も通らない**
+        // （`ManagerPool.list()` の結果をこの道具の中で絞るだけ）うえ、**足した理由
+        // そのものが `GET /managers?status=` との等価性**である（north_star 禁止1。
+        // 同じ資源・同じ引数名・同じ6値）。**同じ引数名が面によって逆の答えを返す
+        // ほうが、面の中で倒し方が揃わないことより重い。**
+        //
+        // **そして黙って無視しない。** `[]` を0件だと思って渡した呼び手には、
+        // 出力の側で「絞らずに全件を出した」と言う（下の `絞り込み:` の行）——
+        // ストア側の契約に慣れた読み手が、ここだけ違うことに出力から気づける形に
+        // しておく。**行が1本増えるのは `status` を渡した呼びだけで、渡さない呼びは
+        // 1文字も変わらない**（opt-in。歯が1バイト単位で突き合わせている）。
+        const filtering = status !== undefined && status.length > 0;
+        const view = filtering
+          ? attention.filter((manager) => status.includes(manager.status))
+          : attention;
         // **予算を先に決めて、入るところまで積む。** 件数から出力量を決めると、
         // 何件で壊れるかが運任せになる。切ったなら必ずそう言う。
         // 積む形そのものは `renderListing` が持つ（一覧ごとに手で書かない）。
@@ -4530,10 +4568,19 @@ export function createCloneTools(context: ToolContext) {
             // **絞ったことは、件数の行とは別の行で言う。** 件数の行に混ぜると
             // 「絞る前の全体」と「絞った後」が1行の中で並び、どちらの数なのかを
             // 読み分ける負担が読み手に移る。
+            // **⚠️ `status: []` は「絞らなかった」と言う。黙って無視しない**
+            // （上の `view` の doc — この面の他の一覧は `[]` を0件として扱うので、
+            // ここだけ倒し方が違うことを出力から気づける形にしておく）。
             status === undefined
               ? null
-              : `絞り込み: status: ${status.join(',')} に当たるのは ${view.length} 件で、` +
-                'この一覧はその中だけを出している（すぐ上の件数は絞る前の全体である）。',
+              : filtering
+                ? `絞り込み: status: ${status.join(',')} に当たるのは ${view.length} 件で、` +
+                  'この一覧はその中だけを出している（すぐ上の件数は絞る前の全体である）。'
+                : '絞り込み: status に空の配列が渡ったので、絞らずに全件を出した' +
+                  '（渡さなかったのと同じ結果である。人間の GET /managers に揃えてある——' +
+                  '0件へ倒すと絞りを解除した呼びが「マネージャーが消えた」ように見えるため）。' +
+                  '**journal_read の types / commitment_list の origin は [] を0件として扱うので、' +
+                  'この道具だけ倒し方が違う**（理由は tools.ts の doc に在る）。',
             // **絞った結果が0件なのと、委譲が1本も無いのを分ける。** 「無い」と
             // 読めると、絞りが厳しかっただけなのに台帳の側を疑うことになる
             // （`commitment_list` の `origin` が同じ分け方をしている）。
@@ -4547,11 +4594,15 @@ export function createCloneTools(context: ToolContext) {
                   // **絞ったときは「絞った後の件数」だと分かる形で言う**——
                   // `total` を絞る前の全体と読まれると、絞りの効き目が嘘になる
                   // （`commitment_list` の `origin` の断り書きと同じ約束）。
+                  // **`filtering` で分ける（`status === undefined` ではない）。**
+                  // `status: []` は絞っていないので、母数は全体である——ここを
+                  // `status` の有無で分けると `status:  に絞った` という空の
+                  // 絞りを名乗る（渡した文字が1つも無いのに絞ったと言う嘘）。
                   omitted: ({ rest, shown, total }) =>
                     `…ほか ${rest} 件は省略（` +
-                    (status === undefined
-                      ? `全 ${total} 件`
-                      : `status: ${status.join(',')} に絞った ${total} 件のうち ${shown} 件を出した`) +
+                    (filtering
+                      ? `status: ${status.join(',')} に絞った ${total} 件のうち ${shown} 件を出した`
+                      : `全 ${total} 件`) +
                     '）。走行中・返事待ちを先に出し、各群の中は startedAt の新しい順である。' +
                     '**省略されたのは終端したもの（またはより古いもの）の側である。**',
                 }),
