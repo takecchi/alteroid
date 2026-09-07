@@ -986,6 +986,41 @@ class Clone implements CloneHost {
    * しれず、`usage_limited` まで畳むとその送り主に何も見えなくなる。
    */
   readonly #usageNotices = new Map<string, string>();
+  /**
+   * 会話ごとに、**最後に人間へ返した1行**（`#reportFailure` の `with: 'human'`）と、
+   * そのあと同じ1行を何件畳んだか。
+   *
+   * ## 何が壊れていたか（人間の報告: 「定期的に積み上がり続ける」）
+   *
+   * 枠（利用上限）が閉じている間、**保持した発言は新しい合図が届くたびに試し直される**
+   * （`#usageBlocked` の doc。誰も話しかけなければ `self_initiative` が既定間隔ごとに
+   * 試す）。試し直しは毎回同じ理由で落ちるので、`#reportFailure` は同じ会話へ
+   * **一字一句同じ1行**を書き足す。⟹ 人間が何もしなくても、会話の画面が
+   * 「いま利用上限に当たっているので…」だけで埋まっていく。
+   *
+   * 実測の形（`clone.test.ts` の「枠が閉じている間に届いた2本目は…」）: 発言2本を
+   * 保持しているだけで、tick 1回につき2行増える。**枠が開くまで止まらない。**
+   *
+   * ## 畳む単位は「人間からの新しい発言」である
+   *
+   * 消してよいのは**繰り返し**だけで、**新しい発言への返事**は消してはいけない
+   * （#92 が塞いだ「自分の発言だけがあって返信が無い」へ戻る）。だから
+   * `post()` が人間の発言を受理した時点でこの記憶を落とす（その会話のぶんだけ）。
+   * ⟹ **人間の発言1件につき、必ず1行返る。試し直しでは増えない。**
+   *
+   * **判定は「最後に返した1行と文字列が同じか」だけである。** 文言が変わる
+   * （長さにも当たった・次の境界で畳む、などの断りが付く／消える）なら、それは
+   * 人間が知らない新しい事実なので畳まない。
+   *
+   * ## 畳んだことは日誌に残す（`with: 'self'`）
+   *
+   * 畳みすぎ＝黙って失う、はこのリポジトリが何度も踏んでいる型なので、
+   * **畳んだ回は1件ずつ日誌に残し、何件目かも書く**（`manager.ts` の
+   * `#usageNotices` と同じ形）。失敗そのものの記録（`with: 'self'` の
+   * `#reportFailure` 前半）は**畳まない** — あちらは全件そのまま残る。
+   * ⟹ 何回試して落ちたかは日誌から数えられる。
+   */
+  readonly #humanFailureNotices = new Map<string, { text: string; folded: number }>();
 
   /**
    * 未読として器に置いた合図。id → その書き込みの約束。
@@ -1448,6 +1483,19 @@ class Clone implements CloneHost {
     // 居た合図が必ず1件取り残される**（実測の壊れ方2つはあちらに書いた）。
     if (this.#usageBlocked !== null) this.#releaseRequested = true;
 
+    // **人間から新しい発言が来たら、失敗の1行の畳み込みを仕切り直す**
+    // （`#humanFailureNotices`）。畳んでよいのは「同じ発言を試し直して同じ理由で
+    // 落ちた」の繰り返しだけで、**新しい発言への返事は畳んではいけない**
+    // （#92 が塞いだ「自分の発言だけがあって返信が無い」へ戻る）。
+    //
+    // **ここ（受理の時点）に置くのが要点である。** ターンの中に置くと、枠が
+    // 閉じている間に届いた発言は短絡されてターンを回さないので（`#pump` の枠
+    // チェック）、いちばん返事が要る場面で仕切り直しが1度も走らない。
+    //
+    // **落とすのはその会話のぶんだけである。** 会話をまたいで消すと、別の会話で
+    // 既に返してある1行の記憶が消え、そちらの試し直しでまた1行増える。
+    if (event.type === 'human_message') this.#humanFailureNotices.delete(event.conversationId);
+
     // 同じ合図がまだ読まれないまま積み重なっても、読んだときに見る材料は同じなので
     // 畳む。**これは実行回数の制限ではない**（AGENTS.md 地雷2）— 発火を減らすのでも
     // 遅らせるのでもなく、「まだ読んでいない同じ合図」を二度読まないだけである。
@@ -1522,6 +1570,12 @@ class Clone implements CloneHost {
     );
     const set = this.#listeners.get(conversationId);
     if (set && set.size === 0) this.#listeners.delete(conversationId);
+    // **畳み込みの記憶も一緒に落とす**（`#humanFailureNotices`）。**振る舞いのため
+    // ではなく、上限を持たせるためである** —— 会話は無限に増えうるので、失敗した
+    // 会話のぶんが増え続ける形にはしない。落としても人間へ返る1行は減らない
+    // （終わった会話へこの1行が出る経路は、人間が新しく話しかけたときだけであり、
+    // そのときは `post()` が同じ記憶を落としている）。
+    this.#humanFailureNotices.delete(conversationId);
   }
 
   async answerApproval(approvalId: string, answer: string): Promise<void> {
@@ -2771,6 +2825,15 @@ class Clone implements CloneHost {
    * いる場合はそう言う** — 人間の要望は「あとで良いのでちゃんと返信してほしい」で
    * あって待つこと自体は受け入れられている。待てば返るのか、もう返らないのかが
    * 会話から読めなければ、その要望は満たせない。
+   *
+   * ## ただし、同じ1行を二度書かない
+   *
+   * その1行は**繰り返す**（枠が閉じている間、保持した発言は新しい合図が届くたびに
+   * 試し直され、毎回同じ理由で落ちる）。畳まないと会話がこの1行だけで埋まり、
+   * **人間が何もしていないのに増え続ける**（人間の報告「定期的に積み上がり続ける」）。
+   * ⟹ 会話ごとに最後に返した1行を覚えて、文字列が同じなら日誌の `self` 側へ畳む
+   * （`#humanFailureNotices`）。**人間から新しい発言が来れば `post()`
+   * が記憶を落とす**ので、発言1件につき1行は必ず返る。
    */
   async #reportFailure(conversationId: string | null, message: string): Promise<void> {
     // **走っているターンに失敗の印を残す。** `#runTurn` の戻り値をこれで分岐させる
@@ -2878,23 +2941,50 @@ class Clone implements CloneHost {
     // 実測ではそちらのほうが多い（24件中15件）が、依頼元の判定が「2×2 の右下1マス
     // だけ」であり、そこは範囲の外である。**⟹ 「長さで落ちる回は全部直った」と
     // 読まないこと。**
+    const humanText =
+      (this.#usageBlocked === null
+        ? 'この発言には返せなかった（ターンが失敗した）。失敗の理由は日誌に残してある。'
+        : 'いま利用上限に当たっているので、この発言にはまだ返せない。' +
+          '発言は捨てずに保持していて、枠が開いたら試し直して返信する。' +
+          (contextWindowFailure === undefined ? '' : CONTEXT_WINDOW_ALSO_NOTICE)) +
+      // **畳むかどうかは、枠の有無と独立である。⟹ 3軸目として1文足すだけにする**
+      // （2×2 の4マスをそれぞれ書き分けると、同じ内容を4回持つことになる）。
+      (foldingForContextWindow === 'folding'
+        ? CONTEXT_WINDOW_FOLD_NOTICE
+        : foldingForContextWindow === 'held'
+          ? CONTEXT_WINDOW_FOLD_HELD_NOTICE
+          : '');
+
+    // **同じ会話へ、同じ1行を二度書かない**（`#humanFailureNotices` の doc。人間の
+    // 報告「定期的に積み上がり続ける」）。枠が閉じている間、保持した発言は新しい
+    // 合図が届くたびに試し直され、そのたびに同じ理由で落ちる ⟹ 畳まないと会話が
+    // この1行で埋まる。**人間から新しい発言が来れば `post()` が記憶を落とす**ので、
+    // 発言1件につき1行は必ず返る。
+    const said = this.#humanFailureNotices.get(conversationId);
+    if (said !== undefined && said.text === humanText) {
+      const folded = said.folded + 1;
+      this.#humanFailureNotices.set(conversationId, { text: humanText, folded });
+      // **畳んだ回は1件ずつ残す。** 「畳んだ」だけでは何件ぶんが人間へ返らなかった
+      // のかを後から数えられない（`manager.ts` の `#usageNotices` と同じ形）。
+      // 本文も残す — 記録の側では1文字も失っていない。
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text:
+          `人間へ返す1行は畳んだ（最後に返した1行から数えて ${folded} 件目）。同じ1行を` +
+          `既に返してあり、そのあと人間からの新しい発言は届いていない: ${humanText}`,
+        conversationId,
+      });
+      return;
+    }
+
+    this.#humanFailureNotices.set(conversationId, { text: humanText, folded: 0 });
     await this.#journal({
       type: 'exchange',
       with: 'human',
       role: 'outbound',
-      text:
-        (this.#usageBlocked === null
-          ? 'この発言には返せなかった（ターンが失敗した）。失敗の理由は日誌に残してある。'
-          : 'いま利用上限に当たっているので、この発言にはまだ返せない。' +
-            '発言は捨てずに保持していて、枠が開いたら試し直して返信する。' +
-            (contextWindowFailure === undefined ? '' : CONTEXT_WINDOW_ALSO_NOTICE)) +
-        // **畳むかどうかは、枠の有無と独立である。⟹ 3軸目として1文足すだけにする**
-        // （2×2 の4マスをそれぞれ書き分けると、同じ内容を4回持つことになる）。
-        (foldingForContextWindow === 'folding'
-          ? CONTEXT_WINDOW_FOLD_NOTICE
-          : foldingForContextWindow === 'held'
-            ? CONTEXT_WINDOW_FOLD_HELD_NOTICE
-            : ''),
+      text: humanText,
       conversationId,
     });
   }

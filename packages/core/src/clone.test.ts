@@ -7412,6 +7412,171 @@ describe('クローン — 枠（利用上限）が閉じたら保持して次�
 });
 
 /**
+ * **枠（利用上限）で保持している間、人間へ返す1行を積み上げない**
+ * （`clone.ts` の `#humanFailureNotices`）。
+ *
+ * ## 人間の報告（2026-09-07）
+ *
+ * > トークンの上限にあたった状態で会話をすると、「いま利用上限に当たっているので、
+ * > この発言にはまだ返せない。発言は捨てずに保持していて、枠が開いたら試し直して
+ * > 返信する。」が定期的に積み上がり続ける。
+ *
+ * ## 機構（直す前）
+ *
+ * 保持した発言は**新しい合図が届くたびに**試し直される（`#usageBlocked` の doc。
+ * 誰も話しかけなければ `self_initiative` が既定間隔ごとに試す）。試し直しは毎回
+ * 同じ理由で落ち、`#reportFailure` はそのたびに `with: 'human'` の1行を書く。
+ * ⟹ **保持している発言の件数 × tick の回数**だけ、一字一句同じ行が増える。
+ * 人間は何もしていないのに増えるので「定期的に積み上がり続ける」に見える。
+ *
+ * ## 歯を3本に分ける（畳みすぎ＝黙って失う、を同時に測る）
+ *
+ * 1. **畳む** —— tick を何回受けても、人間へ返る行は増えない
+ * 2. **取りこぼさない** —— 人間から新しい発言が来たら、必ず1行返る
+ * 3. **畳んだことが記録に残る** —— 畳んだ回は日誌（`self`）に1件ずつ、何件目か
+ *    付きで残り、**失敗そのものの記録は1件も畳まれていない**
+ *
+ * ## 同期は「失敗の記録の件数」で取る（畳み込みの跡では待たない）
+ *
+ * 待ちの条件に「畳んだ」旨の日誌行を使うと、**直す前の世界ではその行が永久に
+ * 出ない** ＝ 落ち方がタイムアウトになる（AGENTS.md「タイムアウトは歯があった
+ * 証拠にならない」）。`#reportFailure` 前半の `with: 'self'` の失敗の記録は
+ * **畳まないので直す前と後で同じ件数だけ出る** ⟹ そこを barrier にすれば、
+ * 直っていない世界でも待ちは抜けて**アサーション不一致で落ちる。**
+ */
+describe('クローン — 枠で保持している間、人間へ返す1行を積み上げない', () => {
+  const spendLimit = "You've hit your individual spend limit for this account.";
+  /** 人間へ返る1行の頭（`#reportFailure`）。 */
+  const heldNotice = 'いま利用上限に当たっているので';
+  /** 畳んだ回の跡（`with: 'self'`）。 */
+  const foldedMark = '人間へ返す1行は畳んだ';
+  /** 失敗そのものの記録（畳まない側。barrier に使う）。 */
+  const failureMark = '人間との対話ターンが失敗した';
+
+  async function rows(stores: Stores): Promise<{ with: string; role: string; text: string }[]> {
+    return (await stores.journal.list({ types: ['exchange'] })) as {
+      with: string;
+      role: string;
+      text: string;
+    }[];
+  }
+  const count = (
+    entries: { with: string; role: string; text: string }[],
+    who: string,
+    fragment: string,
+  ): number =>
+    entries.filter(
+      (entry) => entry.with === who && entry.role === 'outbound' && entry.text.includes(fragment),
+    ).length;
+
+  /**
+   * 枠が閉じたまま、発言2本を保持している状態を作る。
+   *
+   * 返り値の `s` はそのまま使い回す（`stop()` は呼び出し側でする）。
+   */
+  async function setupHeld(): Promise<Setup> {
+    const s = setup(undefined, createMemoryStores(), {
+      // **固定値のスタブにしない**（何回目かで挙動を変える `resultFor`）。ここでは
+      // 全ターン枠で落とす —— 枠が開かないまま tick が来る、という筋書きそのもの。
+      resultFor: () => ({ subtype: 'error_during_execution', text: spendLimit }),
+    });
+
+    s.clone.post(humanMessage('一件目'));
+    await waitForTerminal(s.events);
+    // 一件目の初回失敗ぶんの記録（1件）が器へ届くまで待つ。
+    await waitFor(
+      async () => count(await rows(s.stores), 'self', failureMark) === 1,
+      '1件目の失敗',
+    );
+
+    // 二件目の到着が「保持していた一件目の再試行」を1回だけ誘発する。その再試行も
+    // 同じ理由で落ちるので枠は閉じたままで、二件目自身は短絡される（＝失敗の記録は
+    // 合計3件になる）。
+    s.clone.post(humanMessage('二件目'));
+    await waitFor(
+      async () => count(await rows(s.stores), 'self', failureMark) === 3,
+      '一件目の再試行と二件目の短絡',
+    );
+    return s;
+  }
+
+  /** 発意 tick を1本入れて、枠の解除（＝保持分の試し直し）を1周させる。 */
+  async function tick(s: Setup, id: string, expectedFailures: number): Promise<void> {
+    s.clone.post({
+      type: 'self_initiative',
+      id,
+      at: new Date().toISOString(),
+      reason: '定期 tick',
+    });
+    await waitFor(
+      async () => count(await rows(s.stores), 'self', failureMark) === expectedFailures,
+      `${id} で保持分が試し直される`,
+    );
+  }
+
+  it('歯1: tick を2回受けても、人間へ返る1行は増えない（発言2本ぶんの2行のまま）', async () => {
+    const s = await setupHeld();
+    // 保持しているのは2本。ここまでで人間へ返っているのは**発言1件につき1行**。
+    expect(count(await rows(s.stores), 'human', heldNotice)).toBe(2);
+
+    // tick 1周ごとに、保持している2本が試し直されて2件の失敗の記録が増える
+    // （3 → 5 → 7）。**直す前は、この2件ぶんがそのまま人間へ返る行になっていた。**
+    await tick(s, 'evt-tick-1', 5);
+    await tick(s, 'evt-tick-2', 7);
+
+    const entries = await rows(s.stores);
+    // 失敗そのものは7件起きている（畳んでいない）。
+    expect(count(entries, 'self', failureMark)).toBe(7);
+    // **人間へ返る行は2行のまま。** 直す前はここが 6 になる（2 + 2 + 2）。
+    expect(count(entries, 'human', heldNotice)).toBe(2);
+
+    await s.clone.stop();
+  });
+
+  it('歯2: 人間から新しい発言が来たら、保持中でも必ず1行返る（畳みすぎていない）', async () => {
+    const s = await setupHeld();
+    await tick(s, 'evt-tick-1', 5);
+    expect(count(await rows(s.stores), 'human', heldNotice)).toBe(2);
+
+    // 三件目。**これは新しい発言なので、返事が消えてはいけない**（#92 が塞いだ
+    // 「自分の発言だけがあって返信が無い」へ戻る）。到着は保持分（2本）の
+    // 試し直しも誘発するので、失敗の記録は 5 → 8 になる。
+    s.clone.post(humanMessage('三件目'));
+    await waitFor(
+      async () => count(await rows(s.stores), 'self', failureMark) === 8,
+      '三件目の到着で保持分が試し直される',
+    );
+
+    // **1行だけ増える。** 「何でも畳む」実装ならここが 2 のまま（＝人間の発言が
+    // 無視されたように見える）、畳まない実装なら 5 以上になる。
+    expect(count(await rows(s.stores), 'human', heldNotice)).toBe(3);
+
+    await s.clone.stop();
+  });
+
+  it('歯3: 畳んだ回は日誌（self）に1件ずつ、何件目か付きで残る', async () => {
+    const s = await setupHeld();
+    await tick(s, 'evt-tick-1', 5);
+
+    const entries = await rows(s.stores);
+    // 畳んだのは「二件目の短絡（1件）」＋「tick 1周ぶんの2件」＝3件。
+    expect(count(entries, 'self', foldedMark)).toBe(3);
+    const folded = entries
+      .filter((entry) => entry.with === 'self' && entry.text.includes(foldedMark))
+      .map((entry) => entry.text);
+    // **何件目かが行に入っている。** 「畳んだ」だけでは、何件ぶんが人間へ返らな
+    // かったのかを後から数えられない。**数え直しは「最後に返した1行」からである**
+    // （人間の新しい発言でこの記憶は落ちるので、会話の通算にはならない）。
+    expect(folded.some((text) => text.includes('最後に返した1行から数えて 1 件目'))).toBe(true);
+    expect(folded.some((text) => text.includes('最後に返した1行から数えて 2 件目'))).toBe(true);
+    // 畳んだ行にも本文が残っている —— 記録の側では1文字も失っていない。
+    expect(folded.every((text) => text.includes(heldNotice))).toBe(true);
+
+    await s.clone.stop();
+  });
+});
+
+/**
  * `#settleInboxEvent` に足した「枠で保持している間、中身を持たない合図
  * （`isTick`）で在庫を作らない」の3本（`clone.ts` の `#foldsIntoHeldTick` /
  * `#noteFoldedTick` / `#deferred` / `isTick` / `isSameTick`）。
@@ -7490,10 +7655,24 @@ describe('クローン — 枠で保持している間、中身を持たない�
     return { clone, stores, calls, events, waitForEvents };
   }
 
-  /** 「畳んだ」旨の日誌の行数。 */
+  /**
+   * **tick を畳んだ**旨の日誌の行数（`#noteFoldedTick`）。
+   *
+   * **`'畳んだ'` では絞らない。** 枠が閉じている間に畳むものは tick だけではなく、
+   * 人間へ返す1行も畳む（`#humanFailureNotices`。「枠で保持している間、人間へ返す
+   * 1行を積み上げない」の describe）。その跡も「畳んだ」と書くので、`'畳んだ'` で
+   * 数えるとこの歯は**別の機構の行まで数える** —— 実際に 2 を期待する行が 8 を
+   * 数えた。
+   *
+   * **絞り込みは `#noteFoldedTick` の逐語で行う**（`grep -Fn -- '枠で保持している
+   * 同じ合図' packages/core/src/clone.ts`）。**保証は弱くなっていない** —— 数える
+   * 対象を「畳んだと書いてある行すべて」から「tick を畳んだ行」へ特定しただけで、
+   * この歯が測りたかったもの（`#noteFoldedTick` が正しい場所で走るか）はそのまま
+   * である（AGENTS.md「対象をスコープして特定する ⟹ 保証が強くなる」）。
+   */
   async function foldedNoteCount(s: Setup): Promise<number> {
     const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[];
-    return exchanges.filter((entry) => entry.text.includes('畳んだ')).length;
+    return exchanges.filter((entry) => entry.text.includes('枠で保持している同じ合図')).length;
   }
 
   /**
