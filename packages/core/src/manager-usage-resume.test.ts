@@ -277,6 +277,104 @@ describe('枠で止まった委譲を、鍵が通る状態へ戻った時点で�
     ).toBe(true);
   });
 
+  /**
+   * **⭐ 鍵が戻った瞬間に、その委譲がまだ走っていることがある。**
+   *
+   * いちばん普通の順序がこれである —— 枠に当たったのはこの委譲自身なので、
+   * 回し手を起こすのもこの委譲の `usage_notice` である。回し手は撒いてから
+   * `resumeStoppedByUsage()` を呼ぶが、**そのとき `report`（ターンが終わった）は
+   * まだ届いていないことがある**（`#onEvent` は `void` で起こされるので並行に
+   * 走る）。
+   *
+   * **そこで印を捨てると、この委譲は永久に止まったままになる** —— 回転はもう
+   * 済んでいるので、次の契機が来ない（同じ鍵で回すことは #668 の門が止める）。
+   */
+  it('⭐ 起こしに行った時点でまだ走っていたら、そのターンが枠で終わった時点で起こす', async () => {
+    const s = await setup();
+    s.fake.push(reached());
+    await settle();
+
+    // まだ走っている（`report` が来ていない）⟹ この回では起こせない。
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([]);
+    expect(s.fake.sends).toHaveLength(0);
+
+    // ターンが枠で終わった。**ここで起こす。**
+    s.fake.push(failedReport());
+    await settle();
+
+    expect(s.fake.sends).toHaveLength(1);
+    expect(s.fake.sends[0]?.text).toContain('通る鍵に戻った');
+  });
+
+  /**
+   * **⭐ 回ったのが「この委譲が枠に当たる前」でも起こす。**
+   *
+   * 別のマネージャー（かクローン）が枠に当たって鍵が回った直後、まだ古い鍵で
+   * 走っていたこの委譲がそのターンで枠に落ちる形。**回転はもう済んでいるので、
+   * 鍵の側からの契機は二度と来ない。**
+   */
+  it('⭐ 走っている最中に鍵が回っていれば、その後で枠に落ちた時点で起こす', async () => {
+    const s = await setup();
+
+    // 鍵が回った。この委譲はまだ枠に当たっていない（印も立っていない）。
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([]);
+
+    // そのまま古い鍵で走り続け、このターンで枠に落ちた。
+    s.fake.push(reached());
+    s.fake.push(failedReport());
+    await settle();
+
+    expect(s.fake.sends).toHaveLength(1);
+  });
+
+  it('⚠️ 鍵が戻ったと誰も言っていないなら、枠で終わっても起こさない（勝手に挑み直さない）', async () => {
+    const s = await setup();
+    s.fake.push(reached());
+    s.fake.push(failedReport());
+    await settle();
+
+    // ここで起こすと、**同じ鍵でもう一度当たるだけ**である。
+    expect(s.fake.sends).toHaveLength(0);
+    // 鍵が戻ったと言われた時点で起きる。
+    expect(await s.pool.resumeStoppedByUsage()).toEqual(['mgr-usage']);
+    expect(s.fake.sends).toHaveLength(1);
+  });
+
+  it('⚠️ 鍵が回った時点で走っていても、そのターンが自力で終わったなら起こさない（1ターン焼かない）', async () => {
+    const s = await setup();
+
+    // 鍵が回った時点では走っていた（借りが立つ）。
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([]);
+
+    // そのターンは枠に当たらずに終わった ⟹ 起こす理由が無い。
+    s.fake.push(okReport());
+    await settle();
+
+    expect(s.fake.sends).toHaveLength(0);
+    expect(s.fake.resumes).toHaveLength(0);
+  });
+
+  it('⭐ 走っている最中に鍵が回り、その後セッションごと枠で落ちた回も起こす（report が出ない道）', async () => {
+    const s = await setup();
+
+    // 鍵が回った時点では走っていた。
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([]);
+
+    // **`report` は出ないまま `closed` だけが届く**（`runner.ts` の `#read` の
+    // catch 節を通った回）。ここで起こさないと、この委譲は誰にも拾われない。
+    s.fake.push(reached());
+    s.fake.push({
+      type: 'closed',
+      managerId: 'mgr-usage',
+      status: 'failed',
+      reason: 'マネージャーのセッションが落ちた: usage limit',
+    } as RunnerEvent);
+    await settle();
+
+    expect(s.fake.resumes).toHaveLength(1);
+    expect(s.fake.resumes[0]?.sessionId).toBe('sess-1');
+  });
+
   it('挑むのは1回きり。2度目の回転で同じ委譲へ二重に投げない', async () => {
     const s = await setup();
     s.fake.push(reached());

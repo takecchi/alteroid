@@ -2268,6 +2268,28 @@ class Pool implements ManagerPool {
    */
   readonly #usageStopped = new Set<string>();
   /**
+   * **「鍵が通る状態に戻った」と言われた時点でまだ走っていた委譲**の managerId。
+   * そのターンが枠で終わったら、**その時点で**起こす（借りである）。
+   *
+   * ## なぜ印（`#usageStopped`）だけでは足りないのか
+   *
+   * **鍵を回す契機は、たいていその委譲自身の `usage_notice` である。** ⟹
+   * 回し手が `resumeStoppedByUsage()` を呼ぶ瞬間には、まだ `report`
+   * （ターンが終わった）が届いていないことがある（`#onEvent` は
+   * `void this.#onEvent(event)` で起こされるので並行に走る）。そこで印を捨てると
+   * **回転はもう済んでいるので次の契機が来ず**、その委譲は永久に止まる。
+   *
+   * ## 走っている委譲は「まだ枠に当たっていない」ものも含めて全部借りにする
+   *
+   * 回った時点でまだ古い鍵で走っていた委譲は、**そのターンでこれから枠に落ちうる**
+   * （落ちるのは古い鍵のほうである）。そのときも鍵の側からの契機は来ない
+   * ——回転は既に終わっている。⟹ 走っているものは全部借りに載せ、**枠で終わった
+   * ものだけ**が実際に起こされる（`case 'report'` / `case 'closed'`）。
+   *
+   * **借りはターンが終われば必ず消える**（成功でも失敗でも下ろす）ので、溜まらない。
+   */
+  readonly #usageWakeOwed = new Set<string>();
+  /**
    * `runnerBacklog()` が読む2つの由来のうち、`resources()` 側（#358 案b）。
    * runnerId → 最後に観測できた値（`RunnerBacklogSnapshot` の doc）。
    *
@@ -3549,92 +3571,144 @@ class Pool implements ManagerPool {
   async resumeStoppedByUsage(): Promise<string[]> {
     if (this.#stopped) return [];
     /*
-     * **挑むのは1回きり。印は挑む前に全部下ろす。**
+     * **まだ走っている委譲は、いまは起こせない。借りとして控える**
+     * （`#usageWakeOwed`。あちらの doc に、なぜ印だけでは足りないかが在る）。
      *
-     * 残す形（成功した分だけ下ろす）にすると、戻れない委譲（`lost` で生ログも
-     * 無い等）が**回転のたびに一言を投げられ続ける**——鍵が回る頻度は枠の単位
-     * （5時間）で決まるので暴走はしないが、失敗が並ぶだけの行が増える。
+     * **印が立っていないものも載せる。** 回った時点で古い鍵で走っていた委譲は、
+     * そのターンでこれから枠に落ちうる——落ちるのは古い鍵のほうなので、**鍵の側
+     * からの契機は二度と来ない**（回転は既に終わっている）。
      *
-     * **落としているのではない。** 起こせなかったことは下で日誌に残り、枠に
-     * 当たった報告そのものはクローンの受信箱に残っている（`case 'usage_notice'`
-     * が `#emit` する）ので、判断はクローンの側に在る。
+     * **`#records` は走行中の像である。** ここで台帳まで降りないのは、台帳にしか
+     * 無い委譲＝このデーモンが動かしていないものだからで、そちらは `restore()`
+     * が拾う（呼び出し元がこの直前に通している）。
      */
-    const ids = [...this.#usageStopped];
-    this.#usageStopped.clear();
+    for (const [managerId, record] of this.#records) {
+      const status = record.job.status;
+      if (status === 'running' || status === 'waiting_human') this.#usageWakeOwed.add(managerId);
+    }
+
     const nudged: string[] = [];
-    for (const managerId of ids) {
+    for (const managerId of [...this.#usageStopped]) {
       // **止められたら残りは起こさない**（`#stopped` はプール全体の停止）。
       if (this.#stopped) break;
+      const outcome = await this.#nudgeForUsageRotation(managerId);
+      // まだ走っている ⟹ **印を残す。** 借りは上で控えたので、そのターンが枠で
+      // 終わった時点（`case 'report'` / `case 'closed'`）に起きる。
+      if (outcome === 'still-running') continue;
       /*
-       * **1本が落ちても残りを道連れにしない。** `send()` の先には実 I/O
-       * （runner への HTTP・ストアへの書き込み）が在り、投げうる——ここで
-       * 抜けると、後ろに並んだ委譲は誰にも起こされないまま枠で止まった状態で
-       * 残る（`#restoreJobs` のジョブループが同じ理由で同じ形にしてある）。
+       * **挑むのは1回きり。届かなくても印を下ろす。**
+       *
+       * 残す形にすると、戻れない委譲（`lost` で生ログも無い等）が**回転のたびに
+       * 一言を投げられ続ける**——鍵が回る頻度は枠の単位（5時間）で決まるので
+       * 暴走はしないが、失敗が並ぶだけの行が増える。
+       *
+       * **落としているのではない。** 起こせなかったことは日誌に残り、枠に当たった
+       * 報告そのものはクローンの受信箱に残っている（`case 'usage_notice'` が
+       * `#emit` する）ので、判断はクローンの側に在る。
        */
-      try {
-        const record = this.#records.get(managerId) ?? (await this.#load(managerId));
-        // 台帳から消えている（人間が消した等）。起こす相手が居ない。
-        if (record === null) continue;
-        const status = record.job.status;
-        /*
-         * **起こすのは「もう走っていない」委譲だけである。**
-         *
-         * | `status` | 起こすか | なぜ |
-         * | --- | --- | --- |
-         * | `done` | **起こす** | ターンが枠の失敗で終わって待機している。続きが在る |
-         * | `failed` / `lost` | **起こす** | 枠でセッションごと落ちた。`send()` が resume で戻す |
-         * | `running` | 起こさない | 走っている（畳み直しは runner 側が境界で行う） |
-         * | `waiting_human` | 起こさない | 待っているのは枠ではなく人間の回答である |
-         * | `stopped` | 起こさない | 人間・クローンが止めた委譲を甦らせない（R4） |
-         *
-         * **ホワイトリストで書く**（`!== 'running' && …` の形にしない）。状態が
-         * 増えたとき、既定が「起こす」＝1ターン焼く側へ倒れるのを避ける
-         * （`#restoreJobs` の `attached` 判定と同じ論法）。
-         */
-        if (status !== 'done' && status !== 'failed' && status !== 'lost') {
-          // **何もしなかったことを判断として残す。** 「起こさなかった」は日誌から
-          // 消えやすいが、これは欠落ではなく判断である（根拠も一緒に残す）。
-          await this.#journal({
-            type: 'decision',
-            decision:
-              `[${managerId}] 認証トークンが通る状態へ戻ったが、この委譲は起こし直さない` +
-              `（status=${status}）。`,
-            grounds:
-              '走っている・人間の回答を待っている・止めた委譲は、枠で止まっているのではない。',
-          });
-          continue;
-        }
-        /*
-         * **`send()` に相乗りする（新しい経路を作らない）。** 生きたセッションが
-         * 在れば push、無ければ同じ `sessionId` で resume まで、あちらが1本で
-         * 持っている——**どちらの道でも会話は続く**ので、最初からやり直しには
-         * ならない（AGENTS.md「新しい梯子は作らない」と同じ作法）。
-         */
-        const result = await this.send(managerId, usageRotationNudge());
-        if (result.outcome === 'delivered' || result.outcome === 'answered') {
-          nudged.push(managerId);
-          continue;
-        }
-        await this.#journal({
-          type: 'exchange',
-          with: 'manager',
-          role: 'outbound',
-          text:
-            `[${managerId}] 認証トークンが通る状態へ戻ったので続きを促したが、届かなかった` +
-            `（outcome=${result.outcome}）: ${result.detail}`,
-        });
-      } catch (error) {
-        await this.#journal({
-          type: 'exchange',
-          with: 'manager',
-          role: 'outbound',
-          text:
-            `[${managerId}] 認証トークンが通る状態へ戻ったので続きを促したが、落ちた: ` +
-            String(error),
-        });
-      }
+      this.#usageStopped.delete(managerId);
+      this.#usageWakeOwed.delete(managerId);
+      if (outcome === 'nudged') nudged.push(managerId);
     }
     return nudged;
+  }
+
+  /**
+   * 枠で止まっていた1本へ、続きを促す一言を投げる。**印と借りは呼び出し側が
+   * 下ろす**（呼び出し元によって下ろす条件が違う）。
+   *
+   * | 戻り値 | 意味 |
+   * | --- | --- |
+   * | `'nudged'` | 届いた（同じ会話の続きとして流れた） |
+   * | `'still-running'` | まだ走っている・人間の回答待ち ⟹ いまは起こせない |
+   * | `'skipped'` | 起こす相手が居ない・止められている・届かなかった |
+   *
+   * **起こすのは「もう走っていない」委譲だけである。**
+   *
+   * | `status` | 起こすか | なぜ |
+   * | --- | --- | --- |
+   * | `done` | **起こす** | ターンが枠の失敗で終わって待機している。続きが在る |
+   * | `failed` / `lost` | **起こす** | 枠でセッションごと落ちた。`send()` が resume で戻す |
+   * | `running` / `waiting_human` | まだ | 走っている／待っているのは枠ではなく人間の回答である |
+   * | `stopped` | 起こさない | 人間・クローンが止めた委譲を甦らせない（R4） |
+   *
+   * **ホワイトリストで書く**（`!== 'running' && …` の形にしない）。状態が増えた
+   * とき、既定が「起こす」＝1ターン焼く側へ倒れるのを避ける（`#restoreJobs` の
+   * `attached` 判定と同じ論法）。
+   *
+   * **投げない。** `send()` の先には実 I/O（runner への HTTP・ストアへの書き込み）が
+   * 在り、落ちうる——呼び出し元は走査の途中なので、ここで投げると後ろに並んだ
+   * 委譲が誰にも起こされないまま残る（`#restoreJobs` のジョブループが同じ理由で
+   * 同じ形にしてある）。
+   */
+  async #nudgeForUsageRotation(managerId: string): Promise<'nudged' | 'still-running' | 'skipped'> {
+    try {
+      const record = this.#records.get(managerId) ?? (await this.#load(managerId));
+      // 台帳から消えている（人間が消した等）。起こす相手が居ない。
+      if (record === null) return 'skipped';
+      const status = record.job.status;
+      if (status === 'running' || status === 'waiting_human') return 'still-running';
+      if (status !== 'done' && status !== 'failed' && status !== 'lost') {
+        // **何もしなかったことを判断として残す。** 「起こさなかった」は日誌から
+        // 消えやすいが、これは欠落ではなく判断である（根拠も一緒に残す）。
+        await this.#journal({
+          type: 'decision',
+          decision:
+            `[${managerId}] 認証トークンが通る状態へ戻ったが、この委譲は起こし直さない` +
+            `（status=${status}）。`,
+          grounds: '人間・クローンが止めた委譲を、鍵が戻ったことを理由に甦らせない。',
+        });
+        return 'skipped';
+      }
+      /*
+       * **`send()` に相乗りする（新しい経路を作らない）。** 生きたセッションが
+       * 在れば push、無ければ同じ `sessionId` で resume まで、あちらが1本で
+       * 持っている——**どちらの道でも会話は続く**ので、最初からやり直しには
+       * ならない（AGENTS.md「新しい梯子は作らない」と同じ作法）。
+       */
+      const result = await this.send(managerId, usageRotationNudge());
+      if (result.outcome === 'delivered' || result.outcome === 'answered') return 'nudged';
+      await this.#journal({
+        type: 'exchange',
+        with: 'manager',
+        role: 'outbound',
+        text:
+          `[${managerId}] 認証トークンが通る状態へ戻ったので続きを促したが、届かなかった` +
+          `（outcome=${result.outcome}）: ${result.detail}`,
+      });
+      return 'skipped';
+    } catch (error) {
+      await this.#journal({
+        type: 'exchange',
+        with: 'manager',
+        role: 'outbound',
+        text:
+          `[${managerId}] 認証トークンが通る状態へ戻ったので続きを促したが、落ちた: ` +
+          String(error),
+      });
+      return 'skipped';
+    }
+  }
+
+  /**
+   * **ターンが終わったので、借りていた「起こし直し」をここで返す**
+   * （`#usageWakeOwed`）。枠で終わった回だけが実際に起こされる。
+   *
+   * 呼ぶのは `case 'report'`（ターンが終わった）と `case 'closed'`
+   * （セッションごと畳まれた）の2箇所である。**どちらも「もう走っていない」ことが
+   * 確定した地点**で、それがこの起こし直しの前提そのものである。
+   */
+  async #settleUsageWake(managerId: string, stoppedByUsage: boolean): Promise<void> {
+    if (!this.#usageWakeOwed.has(managerId)) return;
+    // **枠で止まったのでなければ、借りだけ下ろして何もしない。** 自力で終えた
+    // ターンへ一言を投げると、1ターン焼いたうえに会話へ嘘の文脈が入る。
+    if (!stoppedByUsage) {
+      this.#usageWakeOwed.delete(managerId);
+      return;
+    }
+    this.#usageWakeOwed.delete(managerId);
+    this.#usageStopped.delete(managerId);
+    await this.#nudgeForUsageRotation(managerId);
   }
 
   async reattachRunner(runnerId: string): Promise<void> {
@@ -5575,6 +5649,33 @@ class Pool implements ManagerPool {
           role: 'inbound',
           text: `[${event.managerId}] ${event.text}`,
         });
+        /*
+         * **借りていた起こし直しを、ここで返す**（`#settleUsageWake`）。
+         *
+         * **鍵が戻ったと言われた時点でこの委譲がまだ走っていた**回がこれである
+         * （いちばん普通の順序——枠に当たったのはこの委譲自身なので、回し手を
+         * 起こしたのもこの委譲である）。ターンが終わったこの地点が、起こし直しの
+         * 前提（もう走っていない）が満たされる最初の瞬間である。
+         *
+         * **`contentless` / `awaitingBackground` の早い `return` より手前に置く。**
+         * あの2つは「クローンの受信箱へ回すか」の判断で、**この委譲が枠で止まって
+         * いるかとは無関係**である——後ろに置くと、中身の無い報告で終わった回だけ
+         * 起こされないまま残る。
+         *
+         * **投げさせない。** 起こし直しの失敗で報告の処理を巻き添えにしない
+         * （`#settleUsageWake` の先は日誌へ落ちる）。
+         */
+        /*
+         * **判定は印（`#usageStopped`）で行う。`event.failure` の有無では
+         * 行わない。** 失敗にはSDKのクラッシュや他の理由も混ざるので、そちらで
+         * 判定すると**枠と無関係に落ちたターンへ「通る鍵に戻った」と言うことに
+         * なる**（会話へ嘘の文脈が入り、1ターン焼く）。印が立つのは `reached` の
+         * 通知が届いた回だけである。
+         *
+         * **成功で終わった回はこの直前で印が下りている**（上の
+         * `failure === undefined` の枝）ので、ここでは借りだけが下りる。
+         */
+        await this.#settleUsageWake(event.managerId, this.#usageStopped.has(event.managerId));
         // **中身の無い報告は、記録は残すがクローンのターンを起こさない。**
         // `event.contentless` は `runner.ts` の `resultText()` / `reportText()`
         // が「SDK の `result` にも `said`（実際に喋った本文）にも文字が無かった」
@@ -6612,6 +6713,18 @@ class Pool implements ManagerPool {
         // いれば既に空、配っていなくても（＝上の分岐に来なかった、つまり
         // 元から積みが無い）ここでの delete は無害な no-op である。
         this.#retire(event.managerId);
+        /*
+         * **借りていた起こし直しを返す**（`#settleUsageWake`。`case 'report'` の
+         * 同じ呼びと対になっている）。**枠でセッションごと落ちた回はここしか通らない**
+         * ——`report` は出ないまま `closed` だけが届く（`runner.ts` の `#read` の
+         * catch 節）。
+         *
+         * **`#retire` の後で呼ぶ。** 起こし直しは `send()` に相乗りしており、
+         * あちらは像が無ければ台帳から読み直す（`#load`）ので、退役の後でも
+         * 同じ `sessionId` で resume できる。逆順にすると、`#retire` が
+         * `send()` が載せ直した像をそのまま消す。
+         */
+        await this.#settleUsageWake(event.managerId, this.#usageStopped.has(event.managerId));
         return;
       }
 
