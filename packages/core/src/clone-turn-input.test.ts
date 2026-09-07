@@ -354,7 +354,15 @@ describe('ターンの入力を日誌に残す（#243）— 人間の回答は�
     await s.clone.stop();
   });
 
-  it('片付け済みの配り直しでは、回答の代わりに配った断り書きの全文が残る', async () => {
+  /**
+   * **#243 が守っているのは「断り書きの全文が日誌に残ること」で、「`turn_input`
+   * として残ること」ではない。** 片付け済みの配り直しはターンを起こさなくなった
+   * （`clone.ts` の `#foldClosedRedelivery`）ので、残る先が `turn_input` から
+   * 畳んだ跡の `exchange` へ移った。**全文が残ることは1文字も緩めていない** ——
+   * この文字列はその場で組み立てたきりどこにも保存されないので、写さなければ
+   * 「何を根拠に畳んだのか」が永久に取れない（それが #243 の理由でもある）。
+   */
+  it('片付け済みの配り直しでは、ターンを起こさない代わりに、断り書きの全文が畳んだ跡へ残る', async () => {
     const stores = createMemoryStores();
     await seedApproval(stores);
 
@@ -367,15 +375,26 @@ describe('ターンの入力を日誌に残す（#243）— 人間の回答は�
     expect(await stores.commitments.close('evt-answer', AT, 'もう対応済み', 'clone')).toBe(true);
 
     const reborn = bootClone(stores);
-    const text = await turnInputAfterTurn(stores, reborn, '片付け済みの配り直し');
+    // **ターンの入力を待つ形にはできない**（起こさないことを測っている）。そして
+    // 「畳んだ跡」を待つ形にもしない —— 畳まない側の壊れ方が待ちの時間切れとして
+    // 出ると、赤の出どころが自分のアサーションでなくなる。**両方の世界で必ず
+    // 起きること**＝消し込みを待って、`stop()` で受信箱のループを読み切らせる。
+    await waitFor(async () => (await stores.inbox.claimPending()).length === 0, '未読の消し込み');
+    await reborn.clone.stop();
 
-    expect(text).toContain('approvalId=apr-243');
+    expect(reborn.inputs).toEqual([]);
+    const exchanges = (await stores.journal.list({ types: ['exchange'] })).flatMap((entry) =>
+      entry.type === 'exchange' ? [entry] : [],
+    );
+    const text =
+      exchanges.find((entry) => entry.text.includes('ターンを起こさずに畳んだ'))?.text ?? '';
+
+    expect(text).toContain('apr-243');
     // 断り書きは組み立てたきりどこにも保存されないので、全文で残す。
     expect(text).toContain('再起動後の配り直しである');
     expect(text).toContain('approvals_list');
-    // 配ったのは断り書きであって回答ではない（配ったものと残すものを一致させる）。
+    // 畳んだのは断り書きの側であって回答ではない（回答の全文は承認待ちの器に在る
+    // ——だから `retrievalHintFor` は `approvals_list` を案内する）。
     expect(text).not.toContain(ANSWER);
-
-    await reborn.clone.stop();
   });
 });
