@@ -857,3 +857,68 @@ describe("runtime.reextract（ADR 0028: 「やり直したら重複が残る」�
     });
   });
 });
+
+describe("observe の冪等な再送は、同時に別の観測が入っても抽出をやり直さない（ADR 0054）", () => {
+  /**
+   * `handleExtractableObservation` は `createObservationWithOutbox` の `created` だけを見て
+   * 「抽出をやり直すか」を決める。擬似実装が `created` を大域の件数差から導いていると、
+   * **同時に別の観測が作られただけで再送が「新規」に化け**、同じ observation に対して
+   * 抽出がもう一度走る——LLM がもう一度叩かれ、`extraction` が `"skipped"` ではなく
+   * 抽出結果になり、`memoryIds` が空でなくなる。ここで測っているのはその**値**である。
+   */
+  it("再送は extraction: 'skipped'・memoryIds: [] のままで、LLM は増えない", async () => {
+    let llmCalls = 0;
+    const countingLlm: LLMProvider = {
+      complete: async () => {
+        throw new Error("not used");
+      },
+      completeStructured: async <T>(_ctx: Ctx, req: StructuredRequest<T>): Promise<T> => {
+        llmCalls += 1;
+        return req.schema.parse({
+          memories: [{ content: "東京出張がある", digest: "東京出張", provenanceKind: "stated" }],
+        }) as T;
+      },
+    };
+    const { runtime } = buildRuntime(countingLlm);
+
+    const seed = await runtime.observe(ctx, {
+      kind: "utterance",
+      text: "明日東京に出張します",
+      externalId: "utt-adr54",
+    });
+    expect(seed.extraction).toBe("ok");
+    const llmCallsAfterSeed = llmCalls;
+
+    const [resend, fresh] = await Promise.all([
+      runtime.observe(ctx, {
+        kind: "utterance",
+        text: "明日東京に出張します",
+        externalId: "utt-adr54",
+      }),
+      runtime.observe(ctx, {
+        kind: "utterance",
+        text: "来週大阪に行きます",
+        externalId: "utt-adr54-other",
+      }),
+    ]);
+
+    expect({
+      resendExtraction: resend.extraction,
+      resendMemoryIds: resend.memoryIds,
+      resendIsSeedObservation: resend.observationId === seed.observationId,
+      freshExtraction: fresh.extraction,
+      freshMemoryCount: fresh.memoryIds.length,
+      freshIsDistinctObservation: fresh.observationId !== seed.observationId,
+      llmCallsAddedByResendAndFresh: llmCalls - llmCallsAfterSeed,
+    }).toEqual({
+      resendExtraction: "skipped",
+      resendMemoryIds: [],
+      resendIsSeedObservation: true,
+      freshExtraction: "ok",
+      freshMemoryCount: 1,
+      freshIsDistinctObservation: true,
+      // fresh のぶんの1回だけ。再送は抽出を走らせない。
+      llmCallsAddedByResendAndFresh: 1,
+    });
+  });
+});

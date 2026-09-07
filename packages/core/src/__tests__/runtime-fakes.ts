@@ -25,6 +25,8 @@ import type { NewRecallRecord, RecallScope, ScopeAggregate } from "../recall.js"
 import type { EmbeddingSpaceId } from "../embedding.js";
 import type { OutboxJobRecord } from "../outbox.js";
 import { defaultDecayStrategy } from "../strategies/decay.js";
+import { resolveIdempotentCreate } from "../idempotent-create.js";
+import type { IdempotentCreateResult } from "../idempotent-create.js";
 
 /**
  * `packages/core` 自身の runtime テスト用フェイク一式。
@@ -91,27 +93,37 @@ class FakeBackingStore {
 export class FakeMemoryStore implements MemoryStore {
   constructor(private readonly backing: FakeBackingStore) {}
 
+  /**
+   * ADR 0054: 判定と挿入を1つの同期区間に閉じ、`created` をその判定そのものから出す
+   * （`InMemoryMemoryStore.createObservationIdempotent` と同じ形・同じ理由）。
+   */
+  private createObservationIdempotent(
+    ctx: Ctx,
+    input: NewObservation,
+  ): IdempotentCreateResult<Observation> {
+    const existing = input.externalId
+      ? [...this.backing.observations.values()].find(
+          (o) => o.tenantId === ctx.tenantId && o.externalId === input.externalId,
+        )
+      : undefined;
+    return resolveIdempotentCreate(existing, () => {
+      const observation: Observation = {
+        id: nextId("obs"),
+        tenantId: ctx.tenantId,
+        subjectId: input.subjectId ?? null,
+        externalId: input.externalId ?? null,
+        kind: input.kind,
+        payload: input.payload,
+        occurredAt: input.occurredAt ?? null,
+        recordedAt: input.recordedAt ?? new Date(),
+      };
+      this.backing.observations.set(observation.id, observation);
+      return observation;
+    });
+  }
+
   async createObservation(ctx: Ctx, input: NewObservation): Promise<Observation> {
-    if (input.externalId) {
-      const existing = [...this.backing.observations.values()].find(
-        (o) => o.tenantId === ctx.tenantId && o.externalId === input.externalId,
-      );
-      if (existing) {
-        return existing;
-      }
-    }
-    const observation: Observation = {
-      id: nextId("obs"),
-      tenantId: ctx.tenantId,
-      subjectId: input.subjectId ?? null,
-      externalId: input.externalId ?? null,
-      kind: input.kind,
-      payload: input.payload,
-      occurredAt: input.occurredAt ?? null,
-      recordedAt: input.recordedAt ?? new Date(),
-    };
-    this.backing.observations.set(observation.id, observation);
-    return observation;
+    return this.createObservationIdempotent(ctx, input).value;
   }
 
   async getObservation(ctx: Ctx, id: ObservationId): Promise<Observation | null> {
@@ -127,9 +139,7 @@ export class FakeMemoryStore implements MemoryStore {
     input: NewObservation,
     jobKinds: OutboxJobKind[],
   ): Promise<{ observation: Observation; created: boolean; jobs: OutboxJobRecord[] }> {
-    const before = this.backing.observations.size;
-    const observation = await this.createObservation(ctx, input);
-    const created = this.backing.observations.size > before;
+    const { value: observation, created } = this.createObservationIdempotent(ctx, input);
     if (!created) {
       return { observation, created: false, jobs: [] };
     }
@@ -162,68 +172,76 @@ export class FakeMemoryStore implements MemoryStore {
     return job;
   }
 
-  async createMemory(ctx: Ctx, input: NewMemory): Promise<Memory> {
+  /**
+   * ADR 0054: 冪等キーの判定と挿入を1つの同期区間に閉じる
+   * （`InMemoryMemoryStore.createMemoryIdempotent` と同じ形・同じ理由）。
+   */
+  private createMemoryIdempotent(ctx: Ctx, input: NewMemory): IdempotentCreateResult<Memory> {
     const idemKey = this.backing.extractionKey(
       ctx.tenantId,
       input.sourceObservationId ?? null,
       input.extractorVersion ?? null,
       input.contentHash,
     );
-    if (input.sourceObservationId) {
-      const existingId = this.backing.extractionIndex.get(idemKey);
-      if (existingId) {
-        const existing = this.backing.memories.get(existingId);
-        if (existing) {
-          return existing;
-        }
+    const existingId = input.sourceObservationId
+      ? this.backing.extractionIndex.get(idemKey)
+      : undefined;
+    const existing = existingId !== undefined ? this.backing.memories.get(existingId) : undefined;
+
+    return resolveIdempotentCreate(existing, () => {
+      // 外部キー相当（ADR 0047、`packages/testkit` の `InMemoryMemoryStore.createMemory` と
+      // 同じ理由・同じ検査）: `sourceObservationId`/`supersededById`/`contestedWithId` は
+      // 非 null なら実在する行を指さなければならない。**「存在」だけを見る**——一対一等の
+      // 整合まではここでは踏み込まない。
+      if (input.sourceObservationId && !this.backing.observations.has(input.sourceObservationId)) {
+        throw new Error(
+          `FakeMemoryStore: source observation not found: ${input.sourceObservationId}`,
+        );
       }
-    }
-    // 外部キー相当（ADR 0047、`packages/testkit` の `InMemoryMemoryStore.createMemory` と
-    // 同じ理由・同じ検査）: `sourceObservationId`/`supersededById`/`contestedWithId` は
-    // 非 null なら実在する行を指さなければならない。**「存在」だけを見る**——一対一等の
-    // 整合まではここでは踏み込まない。
-    if (input.sourceObservationId && !this.backing.observations.has(input.sourceObservationId)) {
-      throw new Error(
-        `FakeMemoryStore: source observation not found: ${input.sourceObservationId}`,
-      );
-    }
-    if (input.supersededById && !this.backing.memories.has(input.supersededById)) {
-      throw new Error(`FakeMemoryStore: superseded-by memory not found: ${input.supersededById}`);
-    }
-    if (input.contestedWithId && !this.backing.memories.has(input.contestedWithId)) {
-      throw new Error(`FakeMemoryStore: contested-with memory not found: ${input.contestedWithId}`);
-    }
-    const now = new Date();
-    const memory: Memory = {
-      id: nextId("mem"),
-      tenantId: ctx.tenantId,
-      subjectId: input.subjectId ?? null,
-      sourceObservationId: input.sourceObservationId ?? null,
-      extractorVersion: input.extractorVersion ?? null,
-      content: input.content,
-      contentHash: input.contentHash,
-      digest: input.digest,
-      digestSource: input.digestSource,
-      provenance: input.provenance,
-      status: input.status ?? "active",
-      supersededById: input.supersededById ?? null,
-      contestedWithId: input.contestedWithId ?? null,
-      tags: input.tags,
-      occurredAt: input.occurredAt ?? null,
-      recordedAt: input.recordedAt,
-      lastReinforcedAt: input.lastReinforcedAt ?? null,
-      strength: input.strength,
-      halfLifeHours: input.halfLifeHours,
-      decayFloorAt: input.decayFloorAt,
-      embeddingStatus: input.embeddingStatus,
-      createdAt: now,
-      updatedAt: now,
-    };
-    this.backing.memories.set(memory.id, memory);
-    if (input.sourceObservationId) {
-      this.backing.extractionIndex.set(idemKey, memory.id);
-    }
-    return memory;
+      if (input.supersededById && !this.backing.memories.has(input.supersededById)) {
+        throw new Error(`FakeMemoryStore: superseded-by memory not found: ${input.supersededById}`);
+      }
+      if (input.contestedWithId && !this.backing.memories.has(input.contestedWithId)) {
+        throw new Error(
+          `FakeMemoryStore: contested-with memory not found: ${input.contestedWithId}`,
+        );
+      }
+      const now = new Date();
+      const memory: Memory = {
+        id: nextId("mem"),
+        tenantId: ctx.tenantId,
+        subjectId: input.subjectId ?? null,
+        sourceObservationId: input.sourceObservationId ?? null,
+        extractorVersion: input.extractorVersion ?? null,
+        content: input.content,
+        contentHash: input.contentHash,
+        digest: input.digest,
+        digestSource: input.digestSource,
+        provenance: input.provenance,
+        status: input.status ?? "active",
+        supersededById: input.supersededById ?? null,
+        contestedWithId: input.contestedWithId ?? null,
+        tags: input.tags,
+        occurredAt: input.occurredAt ?? null,
+        recordedAt: input.recordedAt,
+        lastReinforcedAt: input.lastReinforcedAt ?? null,
+        strength: input.strength,
+        halfLifeHours: input.halfLifeHours,
+        decayFloorAt: input.decayFloorAt,
+        embeddingStatus: input.embeddingStatus,
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.backing.memories.set(memory.id, memory);
+      if (input.sourceObservationId) {
+        this.backing.extractionIndex.set(idemKey, memory.id);
+      }
+      return memory;
+    });
+  }
+
+  async createMemory(ctx: Ctx, input: NewMemory): Promise<Memory> {
+    return this.createMemoryIdempotent(ctx, input).value;
   }
 
   async createMemoryWithOutbox(
@@ -231,9 +249,7 @@ export class FakeMemoryStore implements MemoryStore {
     input: NewMemory,
     jobKinds: OutboxJobKind[],
   ): Promise<{ memory: Memory; created: boolean; jobs: OutboxJobRecord[] }> {
-    const before = this.backing.memories.size;
-    const memory = await this.createMemory(ctx, input);
-    const created = this.backing.memories.size > before;
+    const { value: memory, created } = this.createMemoryIdempotent(ctx, input);
     if (!created) {
       return { memory, created: false, jobs: [] };
     }

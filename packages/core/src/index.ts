@@ -10,6 +10,7 @@ export * from "./recall.js";
 export * from "./event.js";
 export * from "./embedding.js";
 export * from "./outbox.js";
+export * from "./idempotent-create.js";
 
 export * from "./interfaces/memory-store.js";
 export * from "./interfaces/vector-store.js";
