@@ -1672,6 +1672,29 @@ class RunnerSession {
    *
    * **1つでも欠けたら false。** 呼び出し側はそのとき `return` せず、印を
    * 立てたまま次の境界まで待つ。
+   *
+   * **この判定自体は受動的で、誰かに起こされない限り評価し直されない。**
+   * `#inputStream` は `await new Promise(...)` で眠っているだけなので、
+   * 4条件のどれかが後から満たされても、それだけでは何も起きない —— 起こす
+   * 側（`#wakeInput()` を呼ぶ側）が要る。**再検査を起こす契機は3つ**:
+   *
+   * 1. `push()`（新しい入力）—— 常に `#wakeInput()` を呼ぶ。`#status` が
+   *    `running` へ変わるので、多くの場合はこの直後に条件が崩れる側だが、
+   *    `answer()` 経由で確認待ちが片付いた直後の再検査もここに乗る
+   * 2. `#apply` の `'result'` の枝 —— `#status` が `running` でなくなる
+   *    （このフィールドが変わる張本人）ので、ここで起こす
+   * 3. `#apply` の `'background_tasks'` の枝 —— `#liveBackgroundTasks` が
+   *    空へ戻る（このフィールドが変わる張本人）のは、ここで起こさなければ
+   *    誰も気づかない。背景処理の**完了**はターンが走っていない最中に
+   *    単独のイベントとして届きうる（`SDKBackgroundTasksChangedMessage` の
+   *    JSDoc が membership の変化として completion を明示的に挙げている
+   *    ——逐語は `case 'background_tasks'` の枝に置いた）ので、`'result'` の
+   *    枝だけでは足りない
+   *
+   * **`#pending` と `#sessionId` には専用の起こしを置いていない。** 前者は
+   * `answer()` が `#status` を `running` へ戻し、その後に必ず来る `'result'`
+   * が起こす。後者（`session_started`）はターンの頭に来るので、その入力の
+   * `push()` が既に起こしている——どちらも上の3契機のどれかに合流する。
    */
   #atTokenRecycleBoundary(): boolean {
     return (
@@ -2044,6 +2067,28 @@ class RunnerSession {
         // **REPLACE 意味論。加算・削除の差分計算はしない**
         // （`#liveBackgroundTasks` の doc）。読むのは `result` の枝だけ。
         this.#liveBackgroundTasks = event.tasks;
+        // **認証トークンの畳み直しの印が立っていれば、ここでも起こす**
+        // （`'result'` の枝と同じ形。理由は3点。
+        //
+        // 1. 境界条件（`#atTokenRecycleBoundary()`）の判定は `#inputStream`
+        //    側が持つので、ここで起こしても条件が揃っていなければ（確認待ちが
+        //    残っている・ターンがまだ走っている等）そのまま待ちへ戻るだけである
+        // 2. **畳んでよいのは `#liveBackgroundTasks` が空のときだけで、それは
+        //    境界検査（`#atTokenRecycleBoundary()` の3つ目の条件）が既に見て
+        //    いる。** 起こすだけで畳んで良いかの判定を重複させているのではない
+        //    ——残っている背景処理を道連れにする心配は境界検査の側が塞ぐ
+        // 3. **背景処理の「完了」は、新しい入力を伴わない単独のイベントとして
+        //    ターンの外で届きうる。** `SDKBackgroundTasksChangedMessage` の
+        //    JSDoc（逐語）が membership の変化を挙げている:
+        //
+        //    [sdk-verbatim SDKBackgroundTasksChangedMessage]
+        //    > emitted whenever membership changes (start, completion, kill, a foreground agent being backgrounded)
+        //
+        //    **＝ completion も membership の変化に含まれる。** 起こしを
+        //    `'result'` の枝1つに任せると、`awaitingBackground` で畳んだ後の
+        //    完了は誰も起こさず、次に届く入力（次のターン全体）が古いトークン
+        //    のまま走る——この枝が塞ぐのはその穴である
+        if (this.#recycleForToken) this.#wakeInput();
         return;
       }
 

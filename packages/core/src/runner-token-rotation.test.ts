@@ -228,6 +228,170 @@ function fakeSdk(opts: { abortOnInputClose?: boolean; skipInit?: boolean } = {})
   return { fn, sessions, startedOptions };
 }
 
+interface OutOfBandSession {
+  /** マネージャーが本文を1つ喋る。 */
+  say(text: string): void;
+  /** 背景タスクの在り高を通知する（REPLACE 意味論）。 */
+  backgroundTasksChanged(tasks: readonly { id: string; taskType: string }[]): void;
+  /** 1ターンを畳む（`result`）。既定は成功。 */
+  finish(text: string, options?: { subtype?: string; isError?: boolean }): void;
+}
+
+/**
+ * **入力の消費と対にならない偽 SDK。**
+ *
+ * 上の `fakeSdk`（「読み先行」モデル）は、SDK からのメッセージ（`queued`）を
+ * 「新しい入力を1つ読んだ直後」の内側 while ループでしか流さない —— ターンの
+ * 境界判定のタイミングを再現するために、わざとそう作ってある（doc 冒頭の
+ * 「⚠️ 偽 SDK の作り」）。**その形では、この歯（#apply の `'background_tasks'`
+ * 枝の起こし）が固定したい経路を再現できない** —— 固定したいのは「新しい
+ * 入力を1本も伴わない、背景処理の完了だけが単独でターンの外へ届く」形その
+ * ものであって、`fakeSdk` の「読み先行」モデルは入力を対にしない配送を
+ * 表現できない。
+ *
+ * だからここだけ別に持つ。`say` / `finish` / `backgroundTasksChanged` を呼んだ
+ * 瞬間にそのまま流す（入力を読んだかどうかを見ない）。入力側
+ * （`params.prompt` ＝ 本物の `#inputStream()`）は別に読み続けるだけで中身を
+ * 見ない —— ただし読み続けること自体は必須である。読まなければ本物の
+ * `#inputStream` が一度も駆動されず、`#wakeInput()` が起こす対象
+ * （`#inputWaiters`）が育たないので、境界判定そのものが走らない。
+ *
+ * **入力側が閉じたら出力側も閉じる。** 本物の SDK も、`#inputStream` が
+ * 境界を認めて閉じれば自分の出力ストリームを終える（そうでなければ
+ * `#reopenForTokenRotation` の引き金——「`q` が自然に終わったこと」——が
+ * 一生発火しない）。ここでは、入力側の読み取りが `done` を見た瞬間に、
+ * 出力側の待ち（`emit`）を `null` で解決して終わらせることでそれを再現する。
+ */
+function fakeSdkOutOfBand(): {
+  fn: typeof sdkQuery;
+  sessions: OutOfBandSession[];
+  startedOptions: Options[];
+} {
+  const sessions: OutOfBandSession[] = [];
+  const startedOptions: Options[] = [];
+  let seq = 0;
+
+  const fn = ((params: { prompt: unknown; options?: Options }) => {
+    startedOptions.push(params.options as Options);
+    const label =
+      (params.options as Options | undefined)?.resume ?? `sess-${String(sessions.length + 1)}`;
+
+    let emit: ((message: SDKMessage | null) => void) | null = null;
+    let outputEnded = false;
+    const buffered: SDKMessage[] = [];
+    const push = (message: SDKMessage) => {
+      if (emit) {
+        const resolve = emit;
+        emit = null;
+        resolve(message);
+      } else {
+        buffered.push(message);
+      }
+    };
+    // **`emit` を解決する口を1つにまとめる。** 複数の場所（入力側の読み切り・
+    // `close()`）でそれぞれ「在れば呼んで下ろす」を書くと、閉包を跨いだ
+    // `emit` の絞り込みが場所によって崩れる（TS の制御フロー解析が、閉包の
+    // 外で後から起きる代入をどこまで見るかは書いた位置に依存する）。
+    // 呼び出す側は全員この関数越しに触るだけにする。
+    const endOutput = () => {
+      if (emit) {
+        const resolve = emit;
+        emit = null;
+        resolve(null);
+      }
+    };
+
+    const session: OutOfBandSession = {
+      say(text) {
+        push({
+          type: 'assistant',
+          message: { role: 'assistant', content: [{ type: 'text', text }] },
+          parent_tool_use_id: null,
+          session_id: label,
+          uuid: `uuid-say-${String(++seq)}`,
+        } as unknown as SDKMessage);
+      },
+      backgroundTasksChanged(tasks) {
+        push({
+          type: 'system',
+          subtype: 'background_tasks_changed',
+          tasks: tasks.map((task) => ({
+            task_id: task.id,
+            task_type: task.taskType,
+            description: '',
+          })),
+          session_id: label,
+          uuid: `uuid-bg-${String(++seq)}`,
+        } as unknown as SDKMessage);
+      },
+      finish(text, options = {}) {
+        push({
+          type: 'result',
+          subtype: options.subtype ?? 'success',
+          result: text,
+          session_id: label,
+          uuid: `uuid-result-${String(++seq)}`,
+          ...(options.isError === undefined ? {} : { is_error: options.isError }),
+        } as unknown as SDKMessage);
+      },
+    };
+    sessions.push(session);
+
+    async function* generate(): AsyncGenerator<SDKMessage, void> {
+      yield {
+        type: 'system',
+        subtype: 'init',
+        session_id: label,
+        uuid: `uuid-init-${String(sessions.length)}`,
+      } as unknown as SDKMessage;
+
+      for (;;) {
+        const next = buffered.shift();
+        if (next !== undefined) {
+          yield next;
+          continue;
+        }
+        if (outputEnded) return;
+        const message = await new Promise<SDKMessage | null>((resolve) => {
+          // **競合の狭い窓を塞ぐ。** 直上の `outputEnded` 検査からここまでの
+          // 間に await は無いので、この Promise の実行関数が動いている最中に
+          // 入力側の読み取りが割り込むことは無い——それでも二重に検査する
+          // のは、読みやすさより安全側に倒すため。
+          if (outputEnded) {
+            resolve(null);
+            return;
+          }
+          emit = resolve;
+        });
+        if (message === null) return;
+        yield message;
+      }
+    }
+
+    // **入力側を読み続ける（中身は見ない）。** 読み切って `done` が出たら
+    // （＝本物の `#inputStream` が境界を認めて閉じた）、出力側も終わらせる。
+    void (async () => {
+      const iterator = (params.prompt as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+      for (;;) {
+        const next = await iterator.next();
+        if (next.done === true) {
+          outputEnded = true;
+          endOutput();
+          return;
+        }
+      }
+    })();
+
+    const generator = generate();
+    return Object.assign(generator, {
+      close: endOutput,
+      interrupt: async () => undefined,
+    }) as unknown as Query;
+  }) as unknown as typeof sdkQuery;
+
+  return { fn, sessions, startedOptions };
+}
+
 let dir: string;
 let hosts: RunnerHost[] = [];
 
@@ -268,6 +432,39 @@ async function nthSession(
   sessions: readonly FakeManagerSession[],
   index: number,
 ): Promise<FakeManagerSession> {
+  return vi.waitFor(() => {
+    const found = sessions[index];
+    if (!found) {
+      throw new Error(`${String(index + 1)}本目のセッションがまだ開いていない`);
+    }
+    return found;
+  });
+}
+
+function setupOutOfBand() {
+  const events: RunnerEvent[] = [];
+  const { fn, sessions, startedOptions } = fakeSdkOutOfBand();
+  const credentials = createCredentialStore({
+    dir: join(dir, 'creds-oob'),
+    seed: { CLAUDE_CODE_OAUTH_TOKEN: OLD_TOKEN },
+    names: ['CLAUDE_CODE_OAUTH_TOKEN'],
+  });
+  const host = createRunnerHost({
+    runnerId: 'runner-test',
+    workspacePath: '/work/project',
+    emit: (event) => events.push(event),
+    queryFn: fn,
+    env: { PATH: '/usr/bin' },
+    credentials,
+  });
+  hosts.push(host);
+  return { host, events, sessions, startedOptions };
+}
+
+async function nthOutOfBandSession(
+  sessions: readonly OutOfBandSession[],
+  index: number,
+): Promise<OutOfBandSession> {
   return vi.waitFor(() => {
     const found = sessions[index];
     if (!found) {
@@ -572,5 +769,49 @@ describe('認証トークンを回した後、走行中のマネージャーの�
     expect(reports[1]?.text).toContain('つづけました');
     // 最後まで `closed` は出ていない。
     expect(s.events.some((event) => event.type === 'closed')).toBe(false);
+  });
+
+  /**
+   * **`#atTokenRecycleBoundary()` の4条件のうち `#liveBackgroundTasks.length
+   * === 0` が「後から」満たされたときに、誰も `#inputStream` を起こさない穴**
+   * の直しを固定する（`#apply` の `'background_tasks'` の枝に足した起こし）。
+   *
+   * **既存の「背景処理が生きているあいだは畳まない」の歯（上）とは、通る経路
+   * が違う。** あちらは `host.send('mgr-1', '続けて')` を
+   * `backgroundTasksChanged([])` より**先に**打っている——新しい入力
+   * （`push()`）が起こし、その入力を消費したターンの `'result'` の枝の起こし
+   * で境界を満たしているだけで、この歯が固定したい経路（新しい入力を伴わない
+   * 単独の完了）を1本も通らない。**この歯は `host.send()` を1度も呼ばない。**
+   *
+   * 上の `fakeSdk`（読み先行モデル）ではこの経路を作れない——SDK からの
+   * メッセージは必ず新しい入力を読んだ直後にしか流れないためで、だから
+   * ここだけ `fakeSdkOutOfBand`（入力の消費と対にならない偽 SDK）を使う。
+   */
+  it('⚠️ 新しい入力を伴わない、背景処理の完了だけでも起こす（#apply の background_tasks 枝）', async () => {
+    const s = setupOutOfBand();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const first = await nthOutOfBandSession(s.sessions, 0);
+
+    first.backgroundTasksChanged([{ id: 'bg-1', taskType: 'shell' }]);
+    first.say('完了を待つ');
+    first.finish('完了を待つ');
+    const [firstReport] = await reportEvents(s.events, 1);
+    expect(firstReport?.awaitingBackground).toBeDefined();
+
+    await s.host.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'token-fake-new-999' }]);
+    await tick(30);
+    // 背景処理が残っているので、まだ畳まれていない。
+    expect(s.sessions).toHaveLength(1);
+
+    // **ここが直したい経路そのもの。** 新しい入力を1本も送らず、背景処理の
+    // 完了だけを流す（`host.send()` を呼んでいない）。
+    first.backgroundTasksChanged([]);
+
+    await nthOutOfBandSession(s.sessions, 1);
+    expect(s.sessions).toHaveLength(2);
+    // 開き直した子プロセスの env に新しい値が載っている。
+    expect(s.startedOptions[1]?.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe('token-fake-new-999');
+    // 開き直しは resume（同じ sessionId）で行われる。
+    expect(s.startedOptions[1]?.resume).toBe('sess-1');
   });
 });
