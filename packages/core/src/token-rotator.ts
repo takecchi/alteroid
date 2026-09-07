@@ -1106,12 +1106,16 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         // ## この `return` は残す（#667 の候補1・2 は両方とも採らない）
         //
         // **候補1「`stale` でも冷却は書く」を採らない理由 —— 冷却が縮む。**
-        // `markTokenUnusable` は `cooldownUntil` を**上書きする**（延長しない。
-        // 逐語は `grep -Fn -- '**`cooldownUntil` に過去の時刻が入りうる。**' packages/core/src/token-pool.ts`）
-        // ⟹ 遅れて届いた観測が `resetsAt` を運んでいなければ
-        // `now + fallbackCooldownMs` が書かれ、**本物の期限が未来に在る鍵を
-        // 早く `ready` に見せる。** 「記録を腐らせない」つもりの書き込みが、
-        // 記録をもっと嘘にする側へ倒れる。
+        // `resetsAt` を運んでいない観測が書く期限は `min(記録, now + fallbackCooldownMs)`
+        // である（逐語は `grep -Fn -- '推測が記録を後ろへ動かさない' packages/core/src/token-pool.ts`）
+        // ⟹ 遅れて届いた観測は、**本物の期限が未来に在る鍵を早く `ready` に見せる。**
+        // 「記録を腐らせない」つもりの書き込みが、記録をもっと嘘にする側へ倒れる。
+        //
+        // **⚠️ 2026-09-07 に `min` を入れたが、この候補の判断は1文字も動かない。**
+        // 入れたのは逆向き（推測が記録を**後ろ**へ動かす）を塞ぐためで、**前へ動かす
+        // 側は意図して残してある**（早く起きすぎるほうが安全側）。⟹ `stale` な観測
+        // から冷却を書けば、いまも本物の期限を縮めうる。**「min にしたから `stale`
+        // でも書いてよい」と読まないこと。**
         //
         // **候補2「世代は古いが `tokenId` は現役と同じ観測を `current` にする」を
         // 採らない理由 ——** {@link observationFreshness} の doc が `generation` を

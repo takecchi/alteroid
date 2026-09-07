@@ -283,6 +283,37 @@ describe('受け入れ基準1: 1本目が止まったら2本目へ回る', () =>
     expect(outgoing?.cooldownUntil).toBe(Date.parse(AT) + 60_000);
   });
 
+  it('⚠️ 既定へ倒した回が、前に入っていた権威ある期限を後ろへ動かさない', async () => {
+    // **本番で起きた形**（実測 2026-09-07、Railway）。同じ鍵が2回止まり、1回目は
+    // `rate_limit_event` を伴っていて（`resetsAt` が入った）2回目は文言だけだった
+    // ⟹ 2回目が `now + 5時間` を書いて1回目の本物の期限を捨て、プールの3本すべてが
+    // 余分に寝た（いちばん重い1本で3時間32分。数と内訳は `nextCooldownUntil` の doc）。
+    //
+    // **ここは回し手の側から測っている。** 期限を決める規律は `token-pool.ts` に
+    // 在るが、それを呼ぶ経路が3つあるので（`coolDown` / 飛ばした候補 / probe の
+    // `unusable`）、いちばんよく通る経路が実際にそう振る舞うことを別に固定する。
+    const h = harness();
+    // 1回目に入った本物の期限（`five_hour` の `resetsAt`）。既定の5時間より前である。
+    const authoritative = Date.parse(AT) + 90 * 60 * 1000;
+    await h.stores.tokens.replace([
+      { id: 'tok-a', label: 'first', value: 'value-a', order: 0, cooldownUntil: authoritative },
+      { id: 'tok-b', label: 'second', value: 'value-b', order: 1 },
+    ]);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: AT });
+
+    // 2回目（文言だけ。`facts` を運んでいないので `resetsAt` が無い）。
+    const outcome = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(outcome.kind).toBe('rotated');
+    const outgoing = (await h.stores.tokens.list()).find((t) => t.id === 'tok-a');
+    expect(outgoing?.cooldownUntil).toBe(authoritative);
+    // **止まった事実そのものは新しくなる。** 動かさないのは期限だけである。
+    expect(outgoing?.lastRejectedAt).toBe(AT);
+  });
+
   it('撒く前に正本を書く（保存が落ちたら撒かない）', async () => {
     // **撒いてから保存する順にすると、保存が落ちたときに「誰も成功と言っていない
     // 版を1層だけが使う」が残る。** 保存の失敗を注入して、撒いていないことを見る。
