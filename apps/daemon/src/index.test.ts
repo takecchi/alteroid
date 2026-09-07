@@ -219,9 +219,74 @@ describe('通る鍵に戻ったときに起こす配線', () => {
   it('指名が変わったらクローンのセッションを作り直す（parked も含む）', () => {
     // env は起動時に凍るので、作り直さないと古い鍵のまま再挑戦して同じところで
     // 止まる。**`parked` を外すと、冷却が明けた後に古い鍵のまま挑む形が残る。**
-    const line = source.split('\n').find((text) => text.includes('clone.recycleSessionForToken()'));
+    // **1行では見ない**（2026-09-07 に複数行の三項へ変わった）。守りたいのは
+    // 「どちらの `kind` でも作り直す」ことであって、書き方ではない。
+    const at = source.indexOf('const recycled =');
+    expect(at).toBeGreaterThan(-1);
+    const decl = source.slice(
+      at,
+      source.indexOf(';', source.indexOf('recycleSessionForToken()', at)),
+    );
 
-    expect(line).toContain("outcome.kind === 'rotated'");
-    expect(line).toContain("outcome.kind === 'parked'");
+    expect(decl).toContain("outcome.kind === 'rotated'");
+    expect(decl).toContain("outcome.kind === 'parked'");
+    expect(decl).toContain('clone.recycleSessionForToken()');
+  });
+});
+
+/**
+ * **再開の合図を入れる時機**（人間の決定 2026-09-07）。
+ *
+ * ## この歯が固定している事故
+ *
+ * 実運用（2026-09-07、Railway の本番。デプロイは `2fb8177a`）で観測した形:
+ *
+ * | 時刻 (UTC) | 何が起きたか |
+ * | --- | --- |
+ * | `07:33:12` | 回した（世代41 `production` → 世代42 `staging`）。**合図もここで入れた** |
+ * | `07:33:18`〜`50` | クローンはターンの最中（`tool_use` が続く）⟹ セッションは畳まれない |
+ * | `07:33:51` | そのターンが**古い鍵**で `success/429`（`You've hit your session limit`） |
+ * | `07:33:51.697`〜`.759` | 保持していた合図21件が**また保持へ戻った** |
+ * | 以降26分 | **沈黙。** 合図はもう使われていて、再投函する者が居ない |
+ *
+ * ⟹ **合図は「セッションが実際に畳まれた後」に入れなければならない。**
+ *
+ * `settleTokenOutcome` は `main()` の中に在って型でも実行時でも触れないので、
+ * **原文を読んで配線だけを固定する**（隣の `takeOverOnSwap` の歯と同じ理由）。
+ */
+describe('再開の合図は、セッションが畳まれた後に入れる', () => {
+  const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+  const body = source.slice(source.indexOf('const reopened = reopenedTokenOf(outcome);'));
+  const block = body.slice(0, body.indexOf('\n    if (entry === null) return;'));
+
+  it('recycleSessionForToken の返り値を捨てていない', () => {
+    // **捨てると時機を決められない。** `'deferred'` の回に先に入れると、合図は
+    // 古い鍵のターンに消費される（上の実測）。
+    expect(source).toContain('clone.recycleSessionForToken()');
+    expect(source).toMatch(/const recycled =[\s\S]*clone\.recycleSessionForToken\(\)/);
+  });
+
+  it("'now' のときだけ即座に入れ、'deferred' なら保留する", () => {
+    expect(block).toContain("if (recycled === 'now') wake();");
+    expect(block).toContain('else pendingTokenWake = wake;');
+  });
+
+  it('保留した合図は onTokenSessionRecycled で入る（取り出してから呼ぶ）', () => {
+    // **取り出してから呼ぶ。** 呼んだ後に消すと、合図の中で例外が出た回だけ
+    // 残り続け、次に畳まれたときにもう一度入る。
+    const hook = source.slice(source.indexOf('onTokenSessionRecycled: () => {'));
+    const hookBody = hook.slice(0, hook.indexOf('\n    },'));
+    expect(hookBody).toContain('const wake = pendingTokenWake;');
+    expect(hookBody).toContain('pendingTokenWake = undefined;');
+    expect(hookBody).toContain('wake?.();');
+    // 消す前に呼ぶ形になっていない。
+    expect(hookBody.indexOf('pendingTokenWake = undefined;')).toBeLessThan(
+      hookBody.indexOf('wake?.();'),
+    );
+  });
+
+  it('保留は高々1つしか持たない（後の1回だけが要る）', () => {
+    // 配列で溜めると、畳むより先に2回回った回に「もう古い鍵の話」の合図まで入る。
+    expect(source).toContain('let pendingTokenWake: (() => void) | undefined = undefined;');
   });
 });

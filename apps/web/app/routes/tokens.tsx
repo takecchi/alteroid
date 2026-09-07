@@ -399,8 +399,31 @@ const JOURNAL_LIMIT = 50;
  * `describeFreshness`）も同じ形にしてある。** `describeAvailability` だけは
  * `assertNever` のままで、**それが正しい** —— あの値は送られてこない
  * （{@link tokenAvailabilityAt} がこのファイルの中で作る）。
+ *
+ * ## ⚠️ `not_rotated` だけは `event` からは決まらない（`freshness` も見る）
+ *
+ * `not_rotated` は**2つの別の事実**に付く:
+ *
+ * | 実際に起きたこと | `signal` | `freshness` |
+ * | --- | --- | --- |
+ * | 契機に当たらなかった（`off` / `org_policy` / まだ課金枠が生きている） | その印 | `current` など |
+ * | **もう回した後の通知だったので捨てた** | **`reached` などの本物の印** | **`stale`** |
+ *
+ * **後者に「契機に当たらなかった」と書くと嘘になる** —— 契機には当たっている
+ * （`signal: reached`）。捨てた理由は世代が合わないことで、まったく別物である。
+ *
+ * **これは実際に人間を誤らせた**（2026-09-07）。`You've hit your session limit` の
+ * 行に「契機に当たらなかった。正常」と出ていたので、**その1行が嘘なのではないか**
+ * と読まれた。本文（`text`）は正しく「もう回した後の通知（世代が合わない）」と
+ * 書いており、**badge だけが別のことを言っていた。**
+ *
+ * ⟹ `freshness` を受けて言い分ける。**`event` を増やして分ける道は採らない** ——
+ * あれは外向きの面（`openapi.json`）が動くうえ、`freshness` に既に在る情報である。
  */
-function describeEvent(event: TokenRotationEntry['event']): {
+function describeEvent(
+  event: TokenRotationEntry['event'],
+  freshness?: TokenRotationEntry['freshness'],
+): {
   label: string;
   tone: 'ok' | 'warn' | 'neutral' | 'danger';
 } {
@@ -415,7 +438,15 @@ function describeEvent(event: TokenRotationEntry['event']): {
         tone: 'warn',
       };
     case 'not_rotated':
-      return { label: '回さなかった（契機に当たらなかった。正常）', tone: 'neutral' };
+      // **`event` だけでは決まらない**（{@link describeEvent} の doc の表）。
+      // `stale` の回は**契機に当たっている** —— 捨てた理由は世代が合わないこと
+      // なので、「契機に当たらなかった」と書くと嘘になる。
+      return freshness === 'stale'
+        ? {
+            label: '回さなかった（もう回した後の通知。契機には当たっている）',
+            tone: 'neutral',
+          }
+        : { label: '回さなかった（契機に当たらなかった。正常）', tone: 'neutral' };
     case 'parked':
       // **`rotated` と同じ `warn` にしない。** 撒けてはいるが、**いま通る鍵は
       // 1本も無い**（`earliestAt` まで全層が止まる）。そこは `exhausted` と同じ
@@ -467,7 +498,7 @@ function RotationHistory() {
     <Card>
       <CardHeader
         title="回転の履歴（エラー状況）"
-        subtitle="日誌の token_rotation を新しい順で表示。event の5値は潰さない"
+        subtitle="日誌の token_rotation を新しい順で表示。event は潰さない"
         action={<Badge>{entries.length}</Badge>}
       />
       <ErrorNote error={error} className="m-4" />
@@ -499,7 +530,9 @@ function RotationHistory() {
 }
 
 function RotationRow({ entry }: { entry: TokenRotationEntry }) {
-  const event = describeEvent(entry.event);
+  // **`freshness` も渡す。** `not_rotated` は `event` だけでは言い分けられない
+  // （{@link describeEvent} の doc）。
+  const event = describeEvent(entry.event, entry.freshness);
 
   return (
     <li className="border-b border-border px-4 py-3 last:border-b-0">

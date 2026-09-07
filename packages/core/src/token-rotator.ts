@@ -394,6 +394,13 @@ export interface TokenRotator {
    *   **⟹ `usable` は「アカウントの枠は空いている」であって「次のセッションが
    *   起きる」ではない。** 呼ぶ側の言葉での同じ注意は
    *   `apps/daemon/src/token-watch.ts` の doc に在る。
+   *
+   *   **🔴 そして「判定が1つも来ない器」が実在する。** 本番の実測（2026-09-07）で
+   *   `GET /usage` が `state: 'unavailable'`（`この認証では claude.ai の枠が無い
+   *   （apiProvider: firstParty）`）を返し、`judgeTokenCandidate` はそれを
+   *   `undecidable` にする ⟹ **その器ではこの引数が永久に効かない。**
+   *   `unusable` も `usable` も来ないので、**`recovered` も一度も出ない。**
+   *   ⟹ **記録を `ready` から動かせるのは `observe` だけになる。**
    */
   reconsider(input: {
     reason: TokenReconsiderReason;
@@ -548,6 +555,54 @@ function parkImprovesOn(
   return candidateCooldownUntil < current;
 }
 
+/**
+ * 文言が届かなかった回の、冷却の記録の本文。**観測できた事実だけを書く。**
+ *
+ * ## なぜ要るか —— 「なぜ1日冷えているのか」が誰にも言えなかった
+ *
+ * ここはかつて固定文言（`枠から追い返された（文言は届いていない）`）だった。
+ * ⟹ **どの枠で止まったのか・冷却の期限をどこから採ったのかが記録から消える。**
+ *
+ * 実運用で困った形（2026-09-07 の観測）: プールの4本すべてがこの固定文言を持ち、
+ * うち1本だけ冷却が **+34時間**（他は1〜3時間）だった。**長すぎるのか正しいのかを
+ * 判定する材料が、記録の側に1つも無い** —— `five_hour` で止まったのに長い枠の
+ * リセットを拾ったのか、本当に週の枠が尽きたのかが区別できない。
+ *
+ * ## ⚠️ 冷却の長さそのものは変えていない
+ *
+ * {@link cooldownUntilFrom} の優先順（枠の `resetsAt` → 課金枠の
+ * `overageResetsAt`）は1文字も触っていない。**変える根拠が無いからである** ——
+ * 週の枠が尽きているなら1日冷やすのは正しく、どちらだったかは記録に無かった。
+ * **⟹ 先に「言えるようにする」だけを入れる。** 判定の材料が溜まってから、
+ * 変えるかどうかを人間が決める。
+ *
+ * **⚠️ SDK の文言を作らないこと。** ここが書くのは**構造化された事実の写し**
+ * （`kind` と、期限をどの欄から採ったか）だけである。当たった文言が届いた回は
+ * この関数を通らない —— あちらは言い換えずそのまま残す。
+ */
+function describeCooldownFacts(facts: RateLimitFacts | undefined): string {
+  const head = '枠から追い返された（文言は届いていない）';
+  if (facts === undefined) return `${head}。枠の事実も届いていない`;
+  const parts: string[] = [];
+  // **取れなかった欄は書かない。** 「不明」で埋めると、取れなかったことと
+  // 「そういう値だった」が同じ顔になる（`AGENTS.md` の地雷「取れない軸に 0 の
+  // 行を作る」）。
+  if (facts.kind !== undefined) parts.push(`枠: ${facts.kind}`);
+  if (facts.status !== undefined) parts.push(`status: ${facts.status}`);
+  // **期限をどの欄から採ったかを書く。** {@link cooldownUntilFrom} と同じ順で
+  // 見る —— **判定を2回書かないこと**（ずれたら、記録が実際と違う出所を主張する）。
+  if (facts.resetsAt !== undefined) {
+    parts.push(`冷却の期限は枠の resetsAt から: ${new Date(facts.resetsAt).toISOString()}`);
+  } else if (facts.overageResetsAt !== undefined) {
+    parts.push(
+      `冷却の期限は課金枠の overageResetsAt から: ${new Date(facts.overageResetsAt).toISOString()}`,
+    );
+  } else {
+    parts.push('冷却の期限は設定の既定から（resetsAt も overageResetsAt も届いていない）');
+  }
+  return `${head}。${parts.join(' / ')}`;
+}
+
 export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
   const { stores, probe, spread } = options;
   const now = options.now ?? (() => new Date());
@@ -602,7 +657,10 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
               at,
               // **文言をそのまま残す。** 無いときは印を文言の代わりにしない
               // ——観測できたものだけを書く（`TokenFailureObservation.message`）。
-              message: observation.notice?.text ?? '枠から追い返された（文言は届いていない）',
+              //
+              // **文言が無いときは、観測できた事実のほうを書く**（人間の決定
+              // 2026-09-07）。ここは `describeCooldownFacts` が組み立てる。
+              message: observation.notice?.text ?? describeCooldownFacts(observation.facts),
               ...(resetsAt === undefined ? {} : { resetsAt }),
               fallbackCooldownMs: settings.cooldownMs,
             })

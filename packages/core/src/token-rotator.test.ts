@@ -1863,3 +1863,90 @@ describe('park し直すのは、より早く戻る鍵のときだけ', () => {
     expect(outcome.tokenId).toBe('tok-b');
   });
 });
+
+/**
+ * **文言が届かなかった回の冷却の記録に、観測できた事実を残す**
+ * （人間の決定 2026-09-07）。
+ *
+ * ## なぜ要るか —— 「なぜ1日冷えているのか」が誰にも言えなかった
+ *
+ * 本番のプール（2026-09-07 の実測）は4本すべてが固定文言
+ * `枠から追い返された（文言は届いていない）` を持ち、**うち1本だけ冷却が +34時間**
+ * だった（他は1〜3時間）。⟹ `five_hour` で止まったのに長い枠のリセットを拾ったのか、
+ * 本当に週の枠が尽きたのかを**判定する材料が記録の側に1つも無い。**
+ *
+ * **⚠️ 冷却の長さは変えていない。** `cooldownUntilFrom` の優先順は1文字も触って
+ * いない —— 週の枠が尽きているなら1日冷やすのは正しく、どちらだったかは記録に
+ * 無かった。**先に「言えるようにする」だけを入れる。**
+ */
+describe('冷却の記録に、期限の出所を残す', () => {
+  async function coolWith(facts: Record<string, unknown> | undefined) {
+    const h = harness();
+    await seedTwo(h);
+    await h.rotator.observe({
+      // **文言を渡さない。** 渡した回はこの経路を通らない（SDK の文言をそのまま残す）。
+      ...(facts === undefined ? {} : { facts: facts as never }),
+      transition: 'rejected',
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+    const row = (await h.stores.tokens.list()).find((token) => token.id === 'tok-a');
+    return { row, h };
+  }
+
+  it('枠の resetsAt から採ったなら、そう書く', async () => {
+    const at = Date.parse('2026-09-08T09:00:00.000Z');
+    const { row } = await coolWith({ kind: 'seven_day_opus', status: 'rejected', resetsAt: at });
+
+    expect(row?.cooldownUntil).toBe(at);
+    // **どの枠で止まったか。** これが無いと +34時間が長すぎるのか判定できない。
+    expect(row?.lastRejectedReason).toContain('枠: seven_day_opus');
+    expect(row?.lastRejectedReason).toContain('status: rejected');
+    expect(row?.lastRejectedReason).toContain('冷却の期限は枠の resetsAt から');
+    expect(row?.lastRejectedReason).toContain('2026-09-08T09:00:00.000Z');
+  });
+
+  it('課金枠の overageResetsAt から採ったなら、そう書く', async () => {
+    const at = Date.parse('2026-09-07T12:00:00.000Z');
+    const { row } = await coolWith({ kind: 'five_hour', overageResetsAt: at });
+
+    expect(row?.cooldownUntil).toBe(at);
+    expect(row?.lastRejectedReason).toContain('冷却の期限は課金枠の overageResetsAt から');
+  });
+
+  it('どちらも届いていないなら「設定の既定から」と書く', async () => {
+    // **「取れなかった」を値で埋めない。** 既定へ倒したこと自体を書く。
+    const { row } = await coolWith({ kind: 'five_hour', status: 'rejected' });
+
+    expect(row?.lastRejectedReason).toContain('冷却の期限は設定の既定から');
+    expect(row?.lastRejectedReason).not.toContain('resetsAt から');
+  });
+
+  it('事実そのものが届いていないなら、そう書く', async () => {
+    const { row } = await coolWith(undefined);
+
+    expect(row?.lastRejectedReason).toContain('枠の事実も届いていない');
+  });
+
+  it('取れなかった欄は書かない（「不明」で埋めない）', async () => {
+    // 埋めると、取れなかったことと「そういう値だった」が同じ顔になる。
+    const { row } = await coolWith({ status: 'rejected' });
+
+    expect(row?.lastRejectedReason).not.toContain('枠: ');
+    expect(row?.lastRejectedReason).toContain('status: rejected');
+  });
+
+  it('文言が届いた回は、この経路を通らない（言い換えない）', async () => {
+    const h = harness();
+    await seedTwo(h);
+    await h.rotator.observe({
+      notice: reached,
+      facts: { kind: 'five_hour', status: 'rejected' } as never,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+    const row = (await h.stores.tokens.list()).find((token) => token.id === 'tok-a');
+
+    // **SDK が出した文言そのまま。** 事実の写しを混ぜない。
+    expect(row?.lastRejectedReason).toBe(reached.text);
+    expect(row?.lastRejectedReason).not.toContain('枠: five_hour');
+  });
+});
