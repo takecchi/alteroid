@@ -171,6 +171,121 @@ describe('overage_exhausted（課金枠まで使ってから回す）', () => {
   });
 });
 
+/**
+ * **#668**: 遷移が取れなかった回の `rejected`。
+ *
+ * 遷移の判定材料（`manager.ts` / `clone.ts` の `#rateLimits`）は**そのインスタンスの
+ * 寿命ぶん**残るので、同じ `kind` の `rejected` が**別のトークンで**再発しても
+ * `usageTransitionOf` は `undefined` を返す ⟹ 回し手へ1度も届かなかった。
+ *
+ * **「毎ターン回さない」を保証する歯は、遷移から世代へ移った。** 直上の
+ * 「状態ではなく遷移で判定する」は**弱めていない** —— あちらは重ねた形の `facts`
+ * だけを渡す呼び方で、いまも回らない（下の「重ねた形の status では回らない」）。
+ */
+describe('#668: 状態でも回る（ただし観測がいまの世代を名乗ったときだけ）', () => {
+  /** 生の1件が `rejected` と言っている、遷移の取れなかった観測。 */
+  const restated = { facts: overageRejected, statusNow: 'rejected' } as const;
+
+  it('いまの世代を名乗る観測なら、遷移が無くても回る', () => {
+    const d = decideTokenRotation('free_exhausted', restated, 'current');
+    expect(d.rotate).toBe(true);
+    expect(d.signal).toBe('overage_closed');
+  });
+
+  it('遷移で回った回と、状態で回った回を日誌で見分けられる', () => {
+    // 同じ文言にすると「遷移の門を通れなかった観測が効いた」が記録から消える。
+    const byTransition = decideTokenRotation(
+      'free_exhausted',
+      { transition: 'rejected', facts: overageRejected },
+      'current',
+    );
+    const byState = decideTokenRotation('free_exhausted', restated, 'current');
+    expect(byState.why).not.toBe(byTransition.why);
+    expect(byState.why).toContain('いまの世代を名乗っている');
+  });
+
+  it('⚠️ 身元を運ばない観測（unknown）では状態で回さない', () => {
+    // **回し手は `unknown` を `current` として扱うが、その規則をここへ広げない。**
+    // 広げると世代を照合できないので「回した後は自動で黙る」が成立せず、
+    // `rejected` が続くあいだ毎ターン回してプールを食い潰す。
+    const d = decideTokenRotation('free_exhausted', restated, 'unknown');
+    expect(d.rotate).toBe(false);
+  });
+
+  it('世代が合わない観測（stale）でも回さない', () => {
+    expect(decideTokenRotation('free_exhausted', restated, 'stale').rotate).toBe(false);
+  });
+
+  it('freshness を渡さない呼び方では回らない（従来どおり遷移だけ）', () => {
+    expect(decideTokenRotation('free_exhausted', restated).rotate).toBe(false);
+  });
+
+  it('重ねた形の status では回らない（statusNow だけを見る）', () => {
+    // **`facts` は重ねた形で渡ってくる**（`mergeRateLimitFacts`）。あれは
+    // 省略を「何も言っていない」として扱うので `rejected` が残り続け、しかも
+    // 帳面はアカウントを跨いで生き残る ⟹ 契機の材料にすると、回した直後の
+    // 健全な鍵でもう一度回る。
+    const d = decideTokenRotation('free_exhausted', { facts: overageRejected }, 'current');
+    expect(d.rotate).toBe(false);
+  });
+
+  it('allowed を運ぶ観測では回らない', () => {
+    const d = decideTokenRotation(
+      'free_exhausted',
+      { facts: { kind: 'five_hour', status: 'allowed' }, statusNow: 'allowed' },
+      'current',
+    );
+    expect(d.rotate).toBe(false);
+  });
+
+  it('off なら状態でも回らない（人間が自動を切った意思）', () => {
+    expect(decideTokenRotation('off', restated, 'current').rotate).toBe(false);
+  });
+
+  it('org_policy なら状態でも回らない（受け入れ基準9）', () => {
+    const d = decideTokenRotation(
+      'free_exhausted',
+      { ...restated, notice: orgPolicy },
+      'current',
+    );
+    expect(d.rotate).toBe(false);
+    expect(d.signal).toBe('org_policy');
+  });
+
+  it('overage_exhausted では、課金枠が生きているかぎり状態でも回らない', () => {
+    const d = decideTokenRotation(
+      'overage_exhausted',
+      { facts: overageAlive, statusNow: 'rejected' },
+      'current',
+    );
+    expect(d.rotate).toBe(false);
+  });
+
+  it('overage_exhausted でも、課金枠まで閉じていれば状態で回る', () => {
+    const d = decideTokenRotation('overage_exhausted', restated, 'current');
+    expect(d.rotate).toBe(true);
+    expect(d.signal).toBe('overage_closed');
+  });
+
+  it('entered_overage は状態へ広げていない（意図した線）', () => {
+    // `usingOverage` は重ねた形に残りやすいので、状態で拾うと回した直後の
+    // 健全な鍵でもう一度回る形が作れる。**同じ穴だと言える線が引けないので
+    // 広げない。** 遷移では引き続き回る（直上の free_exhausted の項）。
+    const d = decideTokenRotation(
+      'free_exhausted',
+      { facts: { kind: 'five_hour', usingOverage: true } },
+      'current',
+    );
+    expect(d.rotate).toBe(false);
+  });
+
+  it('回さなかった回の signal は none のまま（毎ターン届く観測で日誌を埋めない）', () => {
+    // `describeTokenRotation` は `signal: 'none'` を日誌へ出さない。ここを
+    // `quota_rejected` へ上げると、飲まれた観測が毎ターン1行出る。
+    expect(decideTokenRotation('free_exhausted', restated, 'unknown').signal).toBe('none');
+  });
+});
+
 describe('reached は off 以外のどちらの設定でも回る', () => {
   /**
    * **これは実装側の推論である**（Issue の表には `free_exhausted` の側に
