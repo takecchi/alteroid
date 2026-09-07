@@ -2728,7 +2728,32 @@ class Pool implements ManagerPool {
           detail: sendFailureDetail(managerId, resumeFailureDetail(managerId, 'busy'), missing),
         };
       }
-      const resumed = await this.#resumeOnce(record, runner, message);
+      /*
+       * **器が入れ替わっていたら、人間・クローンの言葉の前に1行混ぜる（#669）。**
+       *
+       * `done` は3枚のホワイトリスト（`#reattach` / `#noteMissingSessions` /
+       * `decideRunnerSwapNotice`）すべてから外れるので、器の入れ替えが**誰からも
+       * 伝わらない**。3枚が揃っていること自体は意図（終わった委譲へ ⚠ を並べると
+       * 本当に困っている1本が埋もれる）なので境界は動かさず、**実際に話しかけた回
+       * にだけ**払う形にしてある。
+       *
+       * **`status` で分岐しない。** resume から入り直す委譲すべてに同じ判定を
+       * 当てる——`running` / `waiting_human` は `#reattach` が入れ替えの時点で
+       * 既に告げ、そのとき `#claimForResume` が貸し出しを新しい `instanceId` で
+       * 貸し直しているので、ここでは判定が成り立たず二重には告げない。
+       * `#reattach` が断られた（`held-by-lease`）回は貸し直していない＝まだ誰も
+       * 告げていないので、ここで告げるのが正しい。
+       *
+       * **判定より前に置く。** `#resumeOnce` の中の `#claimForResume` が貸し出しを
+       * 貸し直す（＝記録された持ち主が現在の器に上書きされる）ので、後では
+       * 「入れ替わっていない」としか見えなくなる。
+       */
+      const swapped = this.#runnerSwappedSinceLease(record, runner);
+      const resumed = await this.#resumeOnce(
+        record,
+        runner,
+        swapped ? `${runnerSwapNudge(record.job.workspace)}\n\n${message}` : message,
+      );
       if (resumed !== 'resumed') {
         /*
          * **言い方の持ち主は `resumeFailureDetail` 1つである。** 貸し出し期限で
@@ -4869,6 +4894,44 @@ class Pool implements ManagerPool {
       ...(only.instanceId === undefined ? {} : { instanceId: only.instanceId }),
       ...(Number.isNaN(since) ? {} : { instanceSince: since }),
     };
+  }
+
+  /**
+   * **この委譲が最後に走っていた器と、いまこの宛先に応えている器が違うか**（#669）。
+   *
+   * 判定材料は台帳の貸し出し（`job.lease.instanceId`）と名簿（`#sighting`）だけで、
+   * **どちらもプロセス内で読める** — 新しい往復は1つも足していない。
+   *
+   * ## 作法は `RunnerBacklogSnapshot.instanceSwapped` の踏襲である
+   *
+   * - **時刻ではなく `instanceId` 同士を直接比べる。** 時刻の比較（`instanceSince`
+   *   と貸した時刻の大小）は、初回観測を入れ替えと誤読する筋がある
+   * - **どちらか一方でも取れなければ「判定できない」。** 取れないときに「入れ替わった」
+   *   と言わない（AGENTS.md「判定できないという3つ目の状態を持つ」）。ここでは
+   *   3通りが同じ `false` へ落ちる: 台帳の貸し出しが無い／持ち主を名乗っていない／
+   *   いま応えている側が名乗らない。**併存（同じ `runnerId` を名乗る器が2台以上）も
+   *   自動でここへ落ちる** — `#sighting` はそのとき `instanceId` を返さない
+   *   （どちらと突き合わせるか決める材料が無い。#200）
+   *
+   * ## `lease.runnerId` は見ない
+   *
+   * 台帳の貸し出しが別の宛先を指していても（移送）、**`instanceId` が違えば別の
+   * プロセス＝別の `/workspace` である**ことは同じように言える。ここで宛先の名前を
+   * 条件に足すと、移送された委譲にだけ告げない穴ができる。
+   *
+   * ## 記録した `instanceId` の更新はここでしない
+   *
+   * 告げた回の `#resumeOnce` → `#claimForResume` が `grantLease` で貸し直すので、
+   * 記録された持ち主は自動でいまの器へ追いつく（返却済み＝`released` の判定を通るので
+   * `same-holder` にはならず、必ず貸し直しの側へ行く）。**ここで別に書き戻すと、
+   * 同じ値を2箇所が書くことになり、片方だけ直る形を自分で作る。**
+   */
+  #runnerSwappedSinceLease(record: ManagerRecord, runner: RunnerClient): boolean {
+    const recorded = record.job.lease?.instanceId;
+    if (recorded === undefined) return false;
+    const answering = this.#sighting(runner.runnerId).instanceId;
+    if (answering === undefined) return false;
+    return recorded !== answering;
   }
 
   /**
@@ -7117,6 +7180,31 @@ function cloneWorkspaceAfterSwapLine(after: WorkspaceAfterSwap): string {
         '作り直させること。コミットしていなかった変更は残っていない。'
       );
   }
+}
+
+/**
+ * **話しかけられた委譲へ、器の入れ替えを告げる1行**（#669）。人間・クローンの言葉の
+ * 前に混ぜる。
+ *
+ * ## なぜ `restartNudge` をそのまま呼ばないか
+ *
+ * あちらは**デーモン・器の側が起こし直した回**の一言なので、末尾が必ず
+ * 「中断していた作業の続きを進めよ」（`waiting_human` なら「聞き直し…」）になる。
+ * ここは**この直後に人間・クローンの指示が続く**ので、その句は次に何をするかを
+ * 二重に指図することになる（人間が別のことを頼んでいれば食い違う）。
+ *
+ * **`status` を見ないのも意図である。** 待っていた確認の扱い（`restartNudge` の
+ * `waiting_human` の枝）はこの経路の話ではない — 器が入れ替わっているなら、
+ * その確認は `#reattach` の側で既に落ちている。
+ *
+ * **判定は `workspaceAfterSwap` に委ねる**（`restartNudge` / `#notifyRestored` と
+ * 同じ1つ）。ここに別の判定を書くと、直したつもりが片方だけになる。
+ */
+function runnerSwapNudge(locator: WorkspaceLocator | undefined): string {
+  return (
+    '[system] この委譲を最後に走らせていた器は、もう居ない（別の器がこの宛先に応えている）。' +
+    workspaceAfterSwapClause(workspaceAfterSwap(locator))
+  );
 }
 
 /** 再起動後に流す一言。**開き直すだけでは仕事は進まない。** */
