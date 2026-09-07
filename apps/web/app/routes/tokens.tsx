@@ -129,8 +129,10 @@ function tokenAvailabilityAt(
  * 寄せると、読む側は**嘘の状態**を見る。
  *
  * **⚠️ これは実際に起きた形である。** `token_rotation` の `event` は「5値」として
- * 書かれていたが、2026-08-26 に6値目（`sweep_stopped`）が足された。**固定に見える
- * 数え上げでも増える。**
+ * 書かれていたが、2026-08-26 に6値目（`sweep_stopped`）が、2026-09-07 に7値目
+ * （`parked`）と8値目（`recovered`）が足された。**固定に見える数え上げでも増える。**
+ * ⟹ **ここに数を書かないこと**（数のほうが先に腐る。数え上げの持ち主は
+ * `packages/core/src/schema.ts` の `z.enum` である）。
  */
 function describeUnknown(value: never, label: string): string {
   return `未知の${label}（${String(value)}）。この画面より新しいデーモンが送った値である`;
@@ -414,6 +416,19 @@ function describeEvent(event: TokenRotationEntry['event']): {
       };
     case 'not_rotated':
       return { label: '回さなかった（契機に当たらなかった。正常）', tone: 'neutral' };
+    case 'parked':
+      // **`rotated` と同じ `warn` にしない。** 撒けてはいるが、**いま通る鍵は
+      // 1本も無い**（`earliestAt` まで全層が止まる）。そこは `exhausted` と同じ
+      // 重さなので `danger` である —— 違うのは「開いた瞬間にそのまま通る」ことで、
+      // それは `label` の側で言う。
+      return {
+        label: 'いま通る鍵が無い（いちばん早く戻る鍵を撒いて待っている）',
+        tone: 'danger',
+      };
+    case 'recovered':
+      // **止まっていた鍵が開いた。** 良い知らせなので `ok` である（他にここへ
+      // 来る `event` は無い）。
+      return { label: '止まっていた現役が、また通ることを観測できた', tone: 'ok' };
     case 'restored':
       return { label: '起動時に現役を撒き直した', tone: 'neutral' };
     case 'restore_failed':
@@ -497,6 +512,19 @@ function RotationRow({ entry }: { entry: TokenRotationEntry }) {
         {entry.freshness !== undefined && (
           <span className="text-xs text-muted">{describeFreshness(entry.freshness)}</span>
         )}
+        {/*
+          **`signal` とは別の欄である**（`schema.ts` の `reason` の doc）。
+          `signal` は「何を見て決めたか」、こちらは「なぜこの瞬間に見たか」——
+          畳むと「冷却が明けたので見直した」と「記録の上で現役が通らない」が
+          同じ顔になる。
+
+          **素の値をそのまま出す。** `signal` の隣が既にそうなっており、
+          **訳語を1つ置くと、増えた値だけが訳されないまま並ぶ**（この enum は
+          実際に増えている。{@link describeUnknown} の doc）。
+        */}
+        {entry.reason !== undefined && (
+          <span className="text-xs text-muted">見直しの契機: {entry.reason}</span>
+        )}
       </div>
 
       {/* 人間が読む1行（整形済み）。原文ではないので Markdown 扱いにはしないが、装飾もしない。 */}
@@ -529,6 +557,12 @@ function RotationRow({ entry }: { entry: TokenRotationEntry }) {
         )}
         {entry.earliestAt !== undefined && (
           <>
+            {/*
+              **`parked` の回はこれが「撒いた鍵が通るようになる時刻」である**
+              （`tokenRotationEntry` の doc: `exhausted` の同じ欄と意味は同じ ——
+              `parked` はまさにその候補を撒いた回だからである）。⟹ 見出しは
+              どちらでも読める言い方にしてある。
+            */}
             <dt className="mt-2 text-muted sm:mt-0">最速の復帰見込み</dt>
             <dd>{formatDateTime(entry.earliestAt)}</dd>
           </>

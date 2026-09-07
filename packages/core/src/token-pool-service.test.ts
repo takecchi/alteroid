@@ -223,3 +223,94 @@ describe('noteUnusable / noteUsable', () => {
     expect(tokens[0]?.lastRejectedReason).toBe(MESSAGE);
   });
 });
+
+/**
+ * **人間が鍵を足した瞬間を契機にする**（人間の決定 2026-09-07）。
+ *
+ * ここが無かったあいだ、`PUT /tokens` は記憶ストアを書くだけだった ⟹
+ * **全層が枠で止まっている器へ新しい鍵を1本足しても、何も起きなかった。**
+ * 回すには誰かがもう一度本番で失敗して観測を上げる必要があり、そのとき全層は
+ * 止まっているので観測を上げる主体が1つも居ない。
+ */
+describe('プールが変わったことを知らせる（onChanged）', () => {
+  it('全文置換が保存できたら pool として知らせる', async () => {
+    const stores = createMemoryStores();
+    const changes: string[] = [];
+    const service = createTokenPoolService({
+      stores,
+      onChanged: (change) => changes.push(change),
+    });
+
+    await service.replace([{ label: 'first', value: 'value-a' }]);
+
+    expect(changes).toEqual(['pool']);
+  });
+
+  it('設定を変えたら settings として知らせる', async () => {
+    // **`off` → `free_exhausted` へ戻した瞬間に見直せなければ、人間は設定を
+    // 戻した後さらに待たされる**（次の観測が上がるまで）。
+    const stores = createMemoryStores();
+    const changes: string[] = [];
+    const service = createTokenPoolService({
+      stores,
+      onChanged: (change) => changes.push(change),
+    });
+
+    await service.setSettings({ rotateOn: 'free_exhausted' });
+
+    expect(changes).toEqual(['settings']);
+  });
+
+  it('検証で落ちた入力では知らせない（保存できていないので）', async () => {
+    const stores = createMemoryStores();
+    const changes: string[] = [];
+    const service = createTokenPoolService({
+      stores,
+      onChanged: (change) => changes.push(change),
+    });
+
+    // 既存に無い id を指している＝`normalizeTokenPool` が投げる
+    // （「消えた行を静かに作り直さない」）。
+    await expect(
+      service.replace([{ id: 'tok-gone', label: 'first', value: 'value-a' }]),
+    ).rejects.toThrow();
+
+    expect(changes).toEqual([]);
+  });
+
+  it('聞き手が投げても保存の結果を巻き添えにしない', async () => {
+    // **鍵は保存できているのに「保存できなかった」と返すのは、いちばん誤解を
+    // 招く倒れ方である。**
+    const stores = createMemoryStores();
+    const service = createTokenPoolService({
+      stores,
+      onChanged: () => {
+        throw new Error('見張りが落ちた');
+      },
+    });
+
+    const { tokens } = await service.replace([{ label: 'first', value: 'value-a' }]);
+
+    expect(tokens).toHaveLength(1);
+    expect((await stores.tokens.list())[0]?.value).toBe('value-a');
+  });
+
+  it('記録の更新（noteUnusable / noteUsable）では知らせない', async () => {
+    // **あちらは回し手の側の書き込みである。** 契機にすると、回した直後に
+    // もう一度見直しが走る（同じ結論を2回出すだけ）。
+    const stores = createMemoryStores();
+    const changes: string[] = [];
+    const service = createTokenPoolService({
+      stores,
+      onChanged: (change) => changes.push(change),
+    });
+    const { tokens } = await service.replace([{ label: 'first', value: 'value-a' }]);
+    changes.length = 0;
+    const id = tokens[0]?.id ?? '';
+
+    await service.noteUnusable({ id, message: '上限' });
+    await service.noteUsable(id);
+
+    expect(changes).toEqual([]);
+  });
+});

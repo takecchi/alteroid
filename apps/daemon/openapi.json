@@ -694,7 +694,9 @@
                             "exhausted",
                             "restored",
                             "restore_failed",
-                            "sweep_stopped"
+                            "sweep_stopped",
+                            "parked",
+                            "recovered"
                           ]
                         },
                         "signal": {
@@ -706,7 +708,19 @@
                             "entered_overage",
                             "org_policy",
                             "warning",
-                            "none"
+                            "none",
+                            "stranded"
+                          ]
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": [
+                            "pool_changed",
+                            "settings_changed",
+                            "tick",
+                            "runner_connected",
+                            "account_probe",
+                            "startup"
                           ]
                         },
                         "freshness": {
@@ -2078,7 +2092,9 @@
                                   "exhausted",
                                   "restored",
                                   "restore_failed",
-                                  "sweep_stopped"
+                                  "sweep_stopped",
+                                  "parked",
+                                  "recovered"
                                 ]
                               },
                               "signal": {
@@ -2090,7 +2106,19 @@
                                   "entered_overage",
                                   "org_policy",
                                   "warning",
-                                  "none"
+                                  "none",
+                                  "stranded"
+                                ]
+                              },
+                              "reason": {
+                                "type": "string",
+                                "enum": [
+                                  "pool_changed",
+                                  "settings_changed",
+                                  "tick",
+                                  "runner_connected",
+                                  "account_probe",
+                                  "startup"
                                 ]
                               },
                               "freshness": {

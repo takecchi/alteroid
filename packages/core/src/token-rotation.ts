@@ -43,6 +43,19 @@ import {
  * - `org_policy`: 組織の方針で止められている。**枠ではない**
  * - `warning`: 近いだけ
  * - `none`: 回す材料が何も無い
+ * - `stranded`: **観測ではなく記録から決めた**（下）
+ *
+ * ## `stranded` は他の6値と出所が違う
+ *
+ * 他の6値はすべて**セッションが回っているあいだに届いた観測**から出る
+ * （`classifyUsageNotice` の文言 / `rate_limit_event` の事実）。`stranded` は
+ * そのどちらでもない —— **記録の上で「いまの現役は通らない」と分かっていて、
+ * 通る候補が在る**状態そのものが印である（`TokenRotator.reconsider`）。
+ *
+ * **なぜ別の値を足したか。** ここを `none`（回す材料が無い）で代用すると、
+ * **回った回の日誌に「回す材料が無い」と書く**ことになる。逆に `reached` を
+ * 借りると、**当たっていない文言が当たったことになる。** どちらも出力が嘘に
+ * なるので、出所の違う契機には別の値を与える。
  */
 export type TokenRotationSignal =
   | 'reached'
@@ -51,7 +64,8 @@ export type TokenRotationSignal =
   | 'entered_overage'
   | 'org_policy'
   | 'warning'
-  | 'none';
+  | 'none'
+  | 'stranded';
 
 /** 判定の結果。**`rotate` だけでなく、なぜそう決めたかを必ず持って返る。** */
 export interface TokenRotationDecision {

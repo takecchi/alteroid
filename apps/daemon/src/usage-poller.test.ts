@@ -174,3 +174,112 @@ describe('usage-poller — withheldEnvKeys を fetchAccountUsage まで届ける
     expect('env' in options).toBe(false);
   });
 });
+
+/**
+ * **現役のトークンで測る**（人間の決定 2026-09-07）。
+ *
+ * ここが無かったあいだ、probe は `process.env` をそのまま継承していた ⟹
+ * **回した後は「降りたトークンのアカウント」を測り続け、`GET /usage` の `account`
+ * とクローンが見る `accountUsage` は降りた鍵の枠を報告していた。**
+ */
+describe('usage-poller — 現役のトークンで測る', () => {
+  it('env を渡すと、probe へ渡す Options.env にその値が載る', async () => {
+    const { queryFn, captured } = capturingProbe();
+    const poller = startUsagePolling({
+      queryFn,
+      cwd: '/work',
+      intervalMs: 10_000,
+      env: () => ({ CLAUDE_CODE_OAUTH_TOKEN: 'active-key' }),
+    });
+    await poller.refresh();
+    poller.stop();
+
+    const options = captured[0] as { env?: Record<string, string | undefined> };
+    expect(options.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe('active-key');
+  });
+
+  it('env が空を返すなら Options.env 自体を作らない（既定の構成を1文字も変えない）', async () => {
+    // **空の `env` を渡すと `fetchAccountUsage` が `env` を組み立ててしまう。**
+    // 既定の構成（プールが空 ＝ 箱も空）の挙動が、それだけで変わりうる。
+    const { queryFn, captured } = capturingProbe();
+    const poller = startUsagePolling({
+      queryFn,
+      cwd: '/work',
+      intervalMs: 10_000,
+      env: () => ({}),
+    });
+    await poller.refresh();
+    poller.stop();
+
+    const options = captured[0] as Record<string, unknown>;
+    expect('env' in options).toBe(false);
+  });
+
+  it('env は呼ばれるたびに読み直す（構築時に凍らせない）', async () => {
+    // **回すのは走行中である。** 凍らせると、回した鍵が永久に届かない。
+    let key = 'first';
+    const { queryFn, captured } = capturingProbe();
+    const poller = startUsagePolling({
+      queryFn,
+      cwd: '/work',
+      intervalMs: 10_000,
+      env: () => ({ CLAUDE_CODE_OAUTH_TOKEN: key }),
+    });
+    await poller.refresh();
+    key = 'second';
+    await poller.refresh();
+    poller.stop();
+
+    const keys = captured.map(
+      (options) => (options as { env?: Record<string, string> }).env?.CLAUDE_CODE_OAUTH_TOKEN,
+    );
+    expect(keys).toEqual(['first', 'second']);
+  });
+
+  it('1回ぶんの観測が終わるたびに onState を呼ぶ（覚えている値ではなく、この回の値）', async () => {
+    // **回し手へ渡すのは「この回に取れたもの」である。** `state()` は「取れな
+    // かったことで取れていた値を捨てない」ために古い `ok` を保つので、そちらを
+    // 渡すと**同じ観測を何度も新しい観測として渡す**ことになる。
+    let ok = true;
+    const { queryFn } = probe(() => (ok ? LOGGED_IN : { account: undefined, usage: undefined }));
+    const seen: string[] = [];
+    const poller = startUsagePolling({
+      queryFn,
+      cwd: '/work',
+      intervalMs: 10_000,
+      onState: (state) => {
+        seen.push(state.state);
+      },
+    });
+
+    await poller.refresh();
+    ok = false;
+    await poller.refresh();
+    poller.stop();
+
+    // 切り離して呼ぶので、1 tick 待つ。
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(seen).toEqual(['ok', 'failed']);
+    // 覚えているほうは `ok` のまま（既存の約束）。
+    expect(poller.state().state).toBe('ok');
+  });
+
+  it('onState が投げてもポーリングを止めない', async () => {
+    const { queryFn, calls } = probe(() => LOGGED_IN);
+    const poller = startUsagePolling({
+      queryFn,
+      cwd: '/work',
+      intervalMs: 10_000,
+      onState: () => {
+        throw new Error('聞き手が落ちた');
+      },
+    });
+
+    await poller.refresh();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await poller.refresh();
+    poller.stop();
+
+    expect(calls()).toBe(2);
+  });
+});

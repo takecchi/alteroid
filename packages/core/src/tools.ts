@@ -5335,12 +5335,21 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
       const gen = entry.generation === undefined ? '' : ` 世代${String(entry.generation)}`;
       // **`earliestAt` が無いことを「すぐ戻る」と読ませない。** 無いのは
       // 「戻る見込みの立っている候補が1本も無い」ときである。
+      //
+      // **`parked` でも出す（言い方は変える）。** あちらの `earliestAt` は
+      // 「**撒いた鍵が通るようになる時刻**」で、クローンにとってはいちばん効く
+      // 一情報である —— それまでのターンは失敗するので、**その時刻より前に
+      // 重い委譲を起こす判断をしないため**に要る。
       const earliest =
-        entry.event !== 'exhausted'
-          ? ''
-          : entry.earliestAt === undefined
-            ? '\n⚠ 戻る見込みの立っている候補が1本も無い（プールが空か、全部外されている）'
-            : `\nいちばん早く戻るのは ${entry.earliestAt}`;
+        entry.event === 'parked'
+          ? entry.earliestAt === undefined
+            ? '\n⚠ 撒いた鍵が通るようになる時刻が取れていない'
+            : `\n⚠ 撒いた鍵は ${entry.earliestAt} まで通らない（それまでのターンは失敗する）`
+          : entry.event !== 'exhausted'
+            ? ''
+            : entry.earliestAt === undefined
+              ? '\n⚠ 戻る見込みの立っている候補が1本も無い（プールが空か、全部外されている）'
+              : `\nいちばん早く戻るのは ${entry.earliestAt}`;
       return {
         head:
           `[token_rotation ${entry.event}` +
