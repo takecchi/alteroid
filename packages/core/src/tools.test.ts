@@ -6460,6 +6460,104 @@ describe('usage_read（人間が見られるものはクローンからも見ら
 });
 
 /**
+ * `usage_read` の回数の軸（「起きた回数」＝ターン数。`tools.ts` の
+ * `formatUsageAxisLine` / `usageAxisEntries`）。
+ */
+describe('usage_read の回数の軸（起きた回数）', () => {
+  const models = {
+    'claude-opus-5': {
+      inputTokens: 10,
+      outputTokens: 100,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      webSearchRequests: 0,
+      costUsd: 2,
+    },
+  };
+
+  async function spentOnce(h: Harness) {
+    await h.stores.usage.record({
+      layer: 'manager',
+      site: 'session',
+      accumulation: 'cumulative',
+      managerId: 'mgr-1',
+      date: '2026-08-14',
+      at: '2026-08-14T10:00:00.000Z',
+      snapshot: { models },
+    });
+  }
+
+  it('日別の行に N回 と1回あたりの費用を出す', async () => {
+    const h = harness();
+    await spentOnce(h);
+
+    const reply = await h.call('usage_read', {});
+
+    expect(reply).toContain('2026-08-14: $2.00 / 1回 / 1回 $2.00');
+    expect(reply).toContain('合計 $2.00 / 1回 / 1回 $2.00');
+  });
+
+  it('モデル別の行には回数を出さない（1ターンが複数のモデル行を作るので帰属させられない）', async () => {
+    const h = harness();
+    await spentOnce(h);
+
+    const reply = await h.call('usage_read', {});
+
+    // モデル別の行そのものには回数の接尾辞が付かない。
+    expect(reply).toContain('  claude-opus-5: $2.00\n');
+    // 回数が1つでも出ているときは、モデル別に出ない理由を書く。
+    expect(reply).toContain(
+      'モデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。',
+    );
+  });
+
+  it('turnsSince が null のとき「まだ1件も記録していない」と言い、出力のどこにも 0回 が現れない', async () => {
+    const h = harness();
+    // **増分が空の record。** 台帳・層の軸は始まる（ledger が upsert される）が、
+    // 回数もモデル行も1つも増えない——`fold.delta` が空になる（全部ゼロの累積）。
+    await h.stores.usage.record({
+      layer: 'manager',
+      site: 'session',
+      accumulation: 'cumulative',
+      managerId: 'mgr-1',
+      date: '2026-08-14',
+      at: '2026-08-14T10:00:00.000Z',
+      snapshot: {
+        models: {
+          'claude-opus-5': {
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            webSearchRequests: 0,
+            costUsd: 0,
+          },
+        },
+      },
+    });
+
+    const reply = await h.call('usage_read', {});
+
+    expect(reply).toContain('その範囲には記録が無い');
+    expect(reply).toContain('回数の軸はまだ1件も記録していない。');
+    expect(reply).not.toContain('0回');
+  });
+
+  it('beforeTurns が真のとき「0 ではなく取れていない」の但し書きが出る', async () => {
+    const h = harness();
+    await spentOnce(h);
+
+    // `from` を省略した照会は回数の軸の始点より前を含みうるので、常に真になる
+    // （他の3つの `before*` と同じ形）。
+    const reply = await h.call('usage_read', {});
+
+    expect(reply).toContain(
+      '照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。',
+    );
+  });
+});
+
+/**
  * 台帳に1行も無い委譲（Issue #98「台帳が取りこぼした委譲」）。
  *
  * **判定は「台帳に1行も無いか」の1つだけ。** `status` では絞らない。

@@ -17,6 +17,7 @@ import {
   type UsageFold,
   type UsageRow,
   type UsageTotals,
+  type UsageTurnRow,
   ZERO_USAGE,
 } from './usage.js';
 
@@ -427,6 +428,91 @@ describe('層と場所の内訳', () => {
     for (const axis of [summary.byLayer, summary.bySite]) {
       const sum = axis.reduce((acc, entry) => acc + entry.totals.costUsd, 0);
       expect(sum).toBeCloseTo(summary.total.costUsd, 10);
+    }
+  });
+});
+
+describe('回数の内訳（turnRows。model を鍵に持たない別会計）', () => {
+  const rows: UsageRow[] = [
+    {
+      date: '2026-08-14',
+      managerId: 'clone',
+      model: 'opus',
+      layer: 'clone',
+      site: 'session',
+      totals: totals({ costUsd: 1.5 }),
+      updatedAt: AT,
+    },
+    // このモデル行には対応する turnRow を持たせない（distill 側）——
+    // 該当の無い要素が `0` ではなく欄そのものを持たないことを確かめるため。
+    {
+      date: '2026-08-14',
+      managerId: 'clone',
+      model: 'opus',
+      layer: 'clone',
+      site: 'distill',
+      totals: totals({ costUsd: 0.5 }),
+      updatedAt: AT,
+    },
+    {
+      date: '2026-08-14',
+      managerId: 'm1',
+      model: 'opus',
+      layer: 'manager',
+      site: 'session',
+      totals: totals({ costUsd: 2 }),
+      updatedAt: AT,
+    },
+  ];
+  const turnRows: UsageTurnRow[] = [
+    { date: '2026-08-14', managerId: 'clone', layer: 'clone', site: 'session', turns: 3, updatedAt: AT },
+    { date: '2026-08-14', managerId: 'm1', layer: 'manager', site: 'session', turns: 2, updatedAt: AT },
+  ];
+
+  it('5軸（日・actor・層・場所・トークン）に turns が付く', () => {
+    const summary = summarizeUsage(rows, turnRows);
+    expect(summary.byDate).toEqual([{ date: '2026-08-14', totals: totals({ costUsd: 4 }), turns: 5 }]);
+    expect(summary.byManager).toEqual([
+      { managerId: 'clone', totals: totals({ costUsd: 2 }), turns: 3 },
+      { managerId: 'm1', totals: totals({ costUsd: 2 }), turns: 2 },
+    ]);
+    expect(summary.byLayer).toEqual([
+      { layer: 'clone', totals: totals({ costUsd: 2 }), turns: 3 },
+      { layer: 'manager', totals: totals({ costUsd: 2 }), turns: 2 },
+    ]);
+    // トークンの帰属を1つも持たないので、byToken は null の1件に畳まれる
+    // ——回数もそこへ付く（`groupByToken` と同じ向き）。
+    expect(summary.byToken).toEqual([{ tokenId: null, totals: totals({ costUsd: 4 }), turns: 5 }]);
+  });
+
+  it('byModel の要素には turns の欄が無い（0 ではなく、欄そのものが無い）', () => {
+    const summary = summarizeUsage(rows, turnRows);
+    expect(summary.byModel).toEqual([{ model: 'opus', totals: totals({ costUsd: 4 }) }]);
+    for (const entry of summary.byModel) {
+      expect(entry).not.toHaveProperty('turns');
+    }
+  });
+
+  it('該当する turnRow が無い要素は turns を持たない（0 ではなく欄が無い）', () => {
+    const summary = summarizeUsage(rows, turnRows);
+    // `site: 'distill'` に対応する turnRow は無い。
+    const distill = summary.bySite.find((entry) => entry.site === 'distill');
+    expect(distill).toBeDefined();
+    expect(distill).not.toHaveProperty('turns');
+    // 対して `session` には turnRow がある。
+    const session = summary.bySite.find((entry) => entry.site === 'session');
+    expect(session?.turns).toBe(5);
+  });
+
+  it('ルートの turns は turnRows の総和', () => {
+    expect(summarizeUsage(rows, turnRows).turns).toBe(5);
+  });
+
+  it('turnRows が空ならルートの turns は欄そのものを持たない（0 ではない）', () => {
+    const summary = summarizeUsage(rows, []);
+    expect(summary).not.toHaveProperty('turns');
+    for (const entry of summary.byDate) {
+      expect(entry).not.toHaveProperty('turns');
     }
   });
 });

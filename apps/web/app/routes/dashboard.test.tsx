@@ -48,6 +48,7 @@ function renderDashboard(
     since: string | null;
     beforeLedger: boolean;
     notice?: string;
+    turnRows?: unknown[];
   },
   live: JournalLive = EMPTY_FEED,
   // 既定は空のまま（既存のテストは全部これで、最新の日報カードを一度も
@@ -79,6 +80,7 @@ function renderDashboard(
       return json({
         ...usageBody,
         notice: usageBody.notice ?? USAGE_ESTIMATE_NOTICE,
+        turnRows: usageBody.turnRows ?? [],
         breakdown: null,
       });
     }
