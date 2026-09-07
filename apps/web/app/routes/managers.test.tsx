@@ -707,9 +707,7 @@ describe('status の絞り込みと「もっと見る」（issue #670）', () =>
       // 同じ文字列になり、「前の頁が消えていない」を測れない。
       request: `req-mgr-${offset + index}`,
       status,
-      startedAt: new Date(
-        Date.UTC(2026, 7, 16, 3, 0, 0) - (offset + index) * 60_000,
-      ).toISOString(),
+      startedAt: new Date(Date.UTC(2026, 7, 16, 3, 0, 0) - (offset + index) * 60_000).toISOString(),
     }));
   }
 
@@ -749,7 +747,9 @@ describe('status の絞り込みと「もっと見る」（issue #670）', () =>
    */
   it('dashboard 相当の引数なしの呼びは、クエリ文字列を付けない', async () => {
     const { useManagers } = await import('~/hooks/queries');
-    const stub = stubFetch((url) => (url.includes('/managers') ? json({ managers: [] }) : undefined));
+    const stub = stubFetch((url) =>
+      url.includes('/managers') ? json({ managers: [] }) : undefined,
+    );
     function Probe() {
       useManagers();
       return null;
@@ -918,8 +918,7 @@ describe('status の絞り込みと「もっと見る」（issue #670）', () =>
           status: 400,
           headers: new Headers({ 'content-type': 'application/json' }),
           json: () => Promise.resolve({ error: 'afterId/afterStartedAt が指す行が見当たらない' }),
-          text: () =>
-            Promise.resolve('{"error":"afterId/afterStartedAt が指す行が見当たらない"}'),
+          text: () => Promise.resolve('{"error":"afterId/afterStartedAt が指す行が見当たらない"}'),
         } as unknown as Response;
       }
       return json({ managers: page(MANAGERS_PAGE) });
