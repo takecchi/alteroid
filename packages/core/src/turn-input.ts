@@ -138,8 +138,6 @@ export type TurnInput =
   | { type: 'pre_compact_distill'; transcriptTail: string }
   /** 人間が承認待ちへ答えた分を配ったターン。 */
   | { type: 'human_answer'; approvalId: string; text: string }
-  /** 片付け済みの配り直しで、本文の代わりに断り書きだけを配ったターン。 */
-  | { type: 'human_answer_closed'; approvalId: string; text: string }
   /**
    * 日報以外の定期ジョブ（`buildTimerPrompt`）。
    *
@@ -240,13 +238,6 @@ function describeTurnInput(input: TurnInput): string {
       return (
         `ターンの入力: human_answer approvalId=${tag(input.approvalId)}` +
         `（質問と人間の回答の全文。回答そのものは \`approvals_list\` でも取れる）\n\n${input.text}`
-      );
-    // 断り書きは `clone.ts` がその場で組み立てた文字列で、どこにも保存されない。
-    // だから全文を写す（`human_answer` と同じ理由）。
-    case 'human_answer_closed':
-      return (
-        `ターンの入力: human_answer approvalId=${tag(input.approvalId)}` +
-        `（片付け済みの配り直し。回答の全文は配らず、断り書きだけを配った）\n\n${input.text}`
       );
     // `kind` は `scheduleKindSchema` の値、`cause` と `target` は起こした側が
     // 決めて運んでくる値なので載せる（`inboxEventShape` の `timer` と同じ判断）。
