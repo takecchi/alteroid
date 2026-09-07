@@ -2896,6 +2896,43 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
   });
 
   /**
+   * **既定の呼びは並べ直しを1回も通らない。**
+   *
+   * 直上の歯では測れない——`startedAt` が降順に並んだ足場では、並べ直しても
+   * 同じ並びになる（**変異試験で実測した。`optedIn` を `true` に固定する変異が
+   * 生き残る**）。⟹ **`ManagerPool.list()` の並びと、実装の並べ直しの結果が
+   * 食い違う足場を作る必要がある。**
+   *
+   * `startedAt` が同着の2本を「b → a」の順で積む。`list()` の契約は `startedAt`
+   * だけで決まるので同着の相対順は積んだ順のまま（＝ b, a）だが、
+   * `compareManagerPagingKey` は補助キー（`managerId` の降順）まで見るので
+   * 並べ直すと「b, a」…ではなく `managerId` 降順の「mgr-tie-b, mgr-tie-a」に
+   * なる。**だから積む順を `managerId` 昇順（a → b）にしておく**——そうすれば
+   * `list()` の順（a, b）と並べ直しの順（b, a）が食い違い、既定の呼びが
+   * どちらを返したかが観測できる。
+   */
+  it('既定の呼びは並べ直しを通らない（list() の並びをそのまま返す）', async () => {
+    const at = '2026-01-01T00:00:00.000Z';
+    for (const managerId of ['mgr-tie-a', 'mgr-tie-b']) {
+      fake.managerList.push({
+        managerId,
+        status: 'running',
+        live: true,
+        cwd: '/w',
+        request: 'r',
+        startedAt: at,
+        updatedAt: at,
+        waiting: [],
+      });
+    }
+
+    // `list()` が返した順（積んだ順）そのまま。**並べ直すと逆になる。**
+    expect(await ids('/managers')).toEqual(['mgr-tie-a', 'mgr-tie-b']);
+    // 対照: opt-in すると並べ直しを通り、`managerId` の降順になる。
+    expect(await ids('/managers?limit=2')).toEqual(['mgr-tie-b', 'mgr-tie-a']);
+  });
+
+  /**
    * **窓を渡しても応答の封筒は増えない**（`managersQuery` の doc「応答に新しい
    * 欄を1つも足さなくてよい」）。続きが在るかは `limit` 件ちょうど返ったかで
    * 判る形なので、`total` / `nextCursor` は持たない。
