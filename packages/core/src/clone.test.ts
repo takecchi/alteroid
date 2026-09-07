@@ -10862,9 +10862,14 @@ describe('recycleSessionForToken（回した後のセッション作り直し）
    * 唯一の場面**である。
    */
   function lookaheadSdk(turnDelayMs = 20) {
-    const sessions: { inputs: string[] }[] = [];
+    // **`resume` も控える。** 畳み直しの後に**同じ会話へ戻っているか**は、
+    // 「セッションが2本になったか」では測れない（新しい会話を始めても2本になる）。
+    const sessions: { inputs: string[]; resume: string | undefined }[] = [];
     const fn = ((params: { prompt: unknown; options?: Options }) => {
-      const session = { inputs: [] as string[] };
+      const session = {
+        inputs: [] as string[],
+        resume: params.options?.resume,
+      };
       sessions.push(session);
       async function* generate(): AsyncGenerator<SDKMessage, void> {
         yield {
@@ -11095,6 +11100,43 @@ describe('recycleSessionForToken（回した後のセッション作り直し）
     await waitFor(() => sessions.length > 1, '2本目が開くこと');
     await clone.stop();
     expect(sessions.length).toBeGreaterThan(1);
+  });
+
+  /**
+   * **⭐ 畳んだ後は、同じ会話へ `resume` で戻る（人間の要件 2026-09-07）。**
+   *
+   * 人間の逐語: 「app(clone)もrunner(manager)もトークンが変更されたときに自動的に
+   * 同じセッションから再開される状態になってれば構いません」。
+   *
+   * ## なぜ「2本目が開いた」では足りないのか
+   *
+   * すぐ上の歯は `sessions.length > 1` を見ている ——**新しい会話を始めても同じ
+   * 数になる。** ⟹ あれが落ちない状態のまま、`#ensureQuery` が `resume` を
+   * 渡すのをやめる（＝毎回まっさらから始める）ことができる。**そのときに失う
+   * のは会話そのもの**で、枠で止まった仕事は最初からやり直しになる。
+   *
+   * マネージャー層の同じ保証は `runner-token-rotation.test.ts` が持っている
+   * （「開き直しは resume（同じ sessionId）で行われる」）。**層ごとに別の器で
+   * 走るので、片方の緑はもう片方を何も言わない。**
+   */
+  it('⭐ 畳んだ後は同じ会話へ resume で戻る（会話を捨てない）', async () => {
+    const { fn, sessions } = lookaheadSdk(20);
+    const clone = cloneWith(fn);
+
+    say(clone);
+    await waitFor(() => sessions.length > 0, '1本目が開くこと');
+    // 1本目は resume しない（記憶に session_id がまだ無い）。
+    expect(sessions[0]?.resume).toBeUndefined();
+
+    clone.recycleSessionForToken();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    say(clone);
+
+    await waitFor(() => sessions.length > 1, '2本目が開くこと');
+    await clone.stop();
+    // **1本目が名乗った session_id で戻っている**（`case 'session_started'` が
+    // `setCloneSessionId` で控え、`#ensureQuery` がそれを `resume` へ渡す）。
+    expect(sessions[1]?.resume).toBe('sess-lookahead-1');
   });
 
   /**
