@@ -3231,10 +3231,40 @@ function withDeadline<T>(
 /**
  * 資源から置き先を決める（roadmap M5 PR3）。**必ず1台返る。**
  *
- * 点数は「メモリの余り × 新しい1本が受け取る CPU」である。
+ * 点数は「メモリの余り × プロセス数の余り × 新しい1本が受け取る CPU」である。
  *
  * - メモリの余り = `(limitBytes - usedBytes) / limitBytes`（0〜1）
+ * - プロセス数の余り = `(max - current) / max`（0〜1。#712 で足した）
  * - 新しい1本が受け取る CPU = `cores / (managers + 1)`
+ *
+ * **プロセス数（pids）も同じ形で混ぜる（#712）。** `/health` は最初から
+ * `pids: { current, max }` を名乗っており、配置へ渡る型
+ * （`RunnerPlacementResources`）にも欄が在ったのに、点数はそれを**1ビットも
+ * 読んでいなかった** —— `runner_list` の表示にだけ出る軸になっていた。pids が
+ * 上限に張り付いた器では `fork` が通らないので `gh` も `git` も走らず、そこへ
+ * 置かれたマネージャーは起動直後に落ちる。
+ *
+ * **しかも落ちると、その器の点数は上がっていた。** `RunnerSession#finish()` の
+ * 末尾が `#onClosed()` を呼び、それが `Host` の `#sessions` から消し、`/health` の
+ * `managers: host.list().length` が1つ減る —— 途中にタイマーも TTL も
+ * `manager_stop` 待ちも無い、同じ `await` の鎖である。減った `managers` は下の
+ * `share` の**分母**なので、分母が縮んで点数が上がる。`chooseByResources` は
+ * 状態を持たない純関数で、同じ入力からは決定的に同じ器を返す ⟹ **落ちるたびに
+ * 同じ器が選ばれ続ける輪**になっていた。pids を点数へ入れると、その輪は「器の
+ * 外から見える現実」の側で切れる —— 枯れた器は `managers` が減っても勝てない。
+ *
+ * **メモリと同じ式にしてあるのは、同じ形の資源だからである。** どちらも cgroup の
+ * 「上限」と「現在値」の対で、余りは `(上限 - 現在値) / 上限` で言い切れる。
+ * **指数も係数も足していない** —— 「飽和に近いほど強く効かせたい」なら二乗などが
+ * 思い浮かぶが、その指数は**名前の付いていない重み**であり、すぐ下の「重みを
+ * 持たないのは意図である」を破る（そして次に触る者が動かせなくなる）。
+ * **掛け算の形そのものが、既に飽和で強く効く** —— 998/1000 の器はこの項が
+ * `0.002` になり、115/1000 の器の `0.885` に対して 442 倍の差が付く。
+ *
+ * **⛔ pids は「断る」材料ではない。** 余りが 0 でも項が 0 になるだけで、点数 0 の
+ * 器も置き先として返る（下の「**0点でも返る。**」は1文字も変えていない）。
+ * 「あと何本置けるか」をここで名乗らないのは、`runnerExecutionResourcesSchema` が
+ * `capacity` という語を避けたのと同じ理由である（north_star 禁止2）。
  *
  * **重みを持たないのは意図である。** 掛け算にしてあるので係数が要らず、したがって
  * 外に出す先も無い。重みを設定項目にすれば、そこが実質の定員つまみになる
@@ -3249,7 +3279,9 @@ function withDeadline<T>(
  * は古い器も名乗るので、資源を報告しない器も**自分の抱えている本数では競える。**
  *
  * 誰も何も報告しないときは全部の材料が平均に落ち、点数は `1 / (managers + 1)` —
- * つまり**抱えている本数の少ない方**になる。
+ * つまり**抱えている本数の少ない方**になる。**pids を1台も名乗らない構成では、
+ * この項は全台 1 で素通りする** ⟹ #712 の直しが入る前と点数が1ミリも変わらない
+ * （`runner-placement.test.ts` がその等価性を固定している）。
  *
  * 同点なら登録順の先（`>` で比べている）。**0点でも返る。** 資源を見るのは「どこに
  * 置くか」を決めるためで、「置けるか」を決めるためではない（north_star 禁止2）。
@@ -3264,18 +3296,26 @@ function chooseByResources(
   const held = reports.flatMap((r) =>
     r.resources?.managers === undefined ? [] : [r.resources.managers],
   );
+  // **pids も他の材料と同じ集め方をする（#712）。** 報告した器だけを平均へ入れ、
+  // 名乗らない器はその平均で埋める —— 除外（締め出し）にも最良扱い（見逃し）にも
+  // 倒さない、というこの関数の作法をここでも変えない。
+  const pidsRooms = reports.flatMap((r) =>
+    r.resources?.pids ? [pidsRoomOf(r.resources.pids)] : [],
+  );
   // 誰も報告しないときの 1 は「点数を素通りさせる値」であって、上限ではない。
   const meanRoom = mean(rooms) ?? 1;
   const meanCores = mean(cores) ?? 1;
   const meanHeld = mean(held) ?? 0;
+  const meanPidsRoom = mean(pidsRooms) ?? 1;
 
   let best: RunnerClient | undefined;
   let bestScore = -Infinity;
   for (const report of reports) {
     const room = report.resources?.memory ? memoryRoomOf(report.resources.memory) : meanRoom;
+    const pidsRoom = report.resources?.pids ? pidsRoomOf(report.resources.pids) : meanPidsRoom;
     const share =
       (report.resources?.cpu?.cores ?? meanCores) / ((report.resources?.managers ?? meanHeld) + 1);
-    const score = room * share;
+    const score = room * pidsRoom * share;
     if (score > bestScore) {
       bestScore = score;
       best = report.client;
@@ -3293,4 +3333,21 @@ function mean(values: readonly number[]): number | undefined {
 function memoryRoomOf(memory: { limitBytes: number; usedBytes: number }): number {
   if (!(memory.limitBytes > 0)) return 1;
   return Math.min(1, Math.max(0, (memory.limitBytes - memory.usedBytes) / memory.limitBytes));
+}
+
+/**
+ * プロセス数の余り（0〜1。#712）。**`memoryRoomOf` と同じ式である** —— どちらも
+ * cgroup の「上限」と「現在値」の対で、同じ形の資源に別々の式を当てる理由が無い。
+ *
+ * **使い切っていても 0 で、負にはしない**（`memoryRoomOf` と同じ理由 —— 0点でも
+ * 置き先になる。`chooseByResources` の「0点でも返る」）。上限を 0 以下と読んだ回に
+ * 1（素通り）へ倒すのも同じで、**壊れた観測でその器を沈めない。**
+ *
+ * **「あと何本置けるか」ではない。** 余りが 100 でも、`vitest` が1本立ち上がる
+ * だけで pids は +131 跳ねる（#315 の実測）—— これは収容能力ではなく、
+ * 「どちらがましか」を比べるための目盛りである。
+ */
+function pidsRoomOf(pids: { current: number; max: number }): number {
+  if (!(pids.max > 0)) return 1;
+  return Math.min(1, Math.max(0, (pids.max - pids.current) / pids.max));
 }
