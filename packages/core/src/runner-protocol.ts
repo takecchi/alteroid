@@ -626,6 +626,35 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     awaitingBackground: z
       .object({ count: z.number().int().positive(), breakdown: z.string() })
       .optional(),
+    /**
+     * **この報告の本文が、マネージャー自身の発話ではなく機構が合成したもので
+     * あること。**
+     *
+     * `failedReportText()`（`runner.ts`）が本文を作る経路——`failure` が付く回
+     * （枠の上限・課金エラー・SDK のクラッシュ等）——だけが立てる。
+     * `reportText()`（マネージャー自身の途中出力 `said` ＋ SDK の `result`）が
+     * 作る経路では立てない——**あちらは本人が書いた・喋った断片を含みうるので、
+     * 機構が合成したとは言えない。**
+     *
+     * **なぜ要るか。** 枠落ちが起きると、この `report`（本文は runner 自身の
+     * 定型文「（このターンは応答を返さずに終わった: …）」＋落ちる前の本文）に
+     * 加えて、`manager.ts` が組み立てる3種の合成文言（`case 'rate_limit'` の
+     * 「枠から追い返された」・`case 'usage_notice'` の「利用上限に当たった」・
+     * `case 'closed'` の「マネージャーのセッションが落ちた」）が数百ミリ秒〜
+     * 1秒未満の間隔でまとめて届く。これらは**同じ1つの出来事の別の顔**で、
+     * クローンの判断は4回とも同じだった（実測、台帳）。`manager.ts` は
+     * この欄の有無だけで「機構が合成したものだから、同じ managerId の他の
+     * 合成知らせと1件にまとめてよい」を判定する（`manager.ts` の
+     * `#queueSynthesizedNotice` を参照）。
+     *
+     * **`z.literal(true).optional()` にしてあるのは `contentless` と同じ
+     * 理由。** 無いことを「本人が書いた報告」の既定値にする——旧 runner
+     * （この欄を送らない版）はここを素通りし、**畳まれない**。デーモンと
+     * runner は別々にデプロイされるので、版がずれた窓では必ず「起こす側」へ
+     * 倒れる——これは `reportId` の doc「旧 runner はここを素通りする」と
+     * 同じ非対称であり、**無ければ畳まない＝安全側へ倒れる。**
+     */
+    synthesized: z.literal(true).optional(),
   }),
   /**
    * 委譲1区間ぶんの集計（マネージャーが作業者を投げてから、全員が完了通知を

@@ -2344,6 +2344,13 @@ class RunnerSession {
           ...(failure === undefined ? {} : { failure: { code: failure.code, via: failure.via } }),
           ...(outcome.contentless ? { contentless: true } : {}),
           ...(awaitingBackground === undefined ? {} : { awaitingBackground }),
+          // **`failedReportText` を使った経路だけが立てる**
+          // （`runnerEventSchema` の `report.synthesized` の doc）。この本文は
+          // runner 自身の定型文＋SDK の失敗文言の連結であり、マネージャー本人が
+          // 書いた・喋った断片を含まない——`failure !== undefined` の枝でしか
+          // `failedReportText` を呼んでいない（このすぐ上の `outcome` の分岐）
+          // ので、判定はそこにそのまま乗せる。
+          ...(failure === undefined ? {} : { synthesized: true }),
         });
         return;
       }

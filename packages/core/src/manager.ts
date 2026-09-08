@@ -2204,6 +2204,157 @@ export function withheldReportOverdue(lastAt: string, now: number, flushMs: numb
   return Number.isNaN(parsed) || now - parsed >= flushMs;
 }
 
+// ---------------------------------------------------------------------------
+// 「1枠落ち＝1合図」（機構が合成した知らせの合流窓）
+// ---------------------------------------------------------------------------
+
+/**
+ * `#queueSynthesizedNotice` が積む1件がどの経路から来たか。**日誌の内訳
+ * （どんな知らせを何件まとめたか）にだけ使う——分岐処理そのものはこの値では
+ * 行わない**（畳んでよいかどうかは呼び出し元がどの `case` かで既に決まって
+ * いるので、ここでの分岐は要らない）。
+ */
+type SynthesizedNoticeLabel = 'rate_limit' | 'usage_notice' | 'closed_failed' | 'report_failed';
+
+/** {@link SynthesizedNoticeLabel} を日誌・断片の見出しへ出す日本語へ。 */
+function describeSynthesizedNoticeLabel(label: SynthesizedNoticeLabel): string {
+  switch (label) {
+    case 'rate_limit':
+      return '枠の遷移（追い返された／課金枠へ入った）';
+    case 'usage_notice':
+      return '利用上限の通知';
+    case 'closed_failed':
+      return 'セッションが落ちた';
+    case 'report_failed':
+      return '応答を返さずに終わったターンの報告';
+    default: {
+      const exhaustive: never = label;
+      throw new Error(`未知の SynthesizedNoticeLabel: ${String(exhaustive)}`);
+    }
+  }
+}
+
+/** `#synthesizedNotices` に積む1件。 */
+interface SynthesizedNoticeFragment {
+  label: SynthesizedNoticeLabel;
+  text: string;
+}
+
+/** その managerId ぶんの合流窓（`#synthesizedNotices` の値）。 */
+interface SynthesizedNoticeWindow {
+  /** 積んだ断片。**到着順のまま持つ（並べ替えない）。** */
+  fragments: SynthesizedNoticeFragment[];
+  /** 窓を閉じるタイマー（flush で必ず `clearTimeout`）。 */
+  timer: ReturnType<typeof setTimeout>;
+}
+
+/**
+ * 機構が合成した知らせの合流窓の長さ（既定 1000ms）。
+ *
+ * **枠落ちが1回起きると受信箱イベントが3〜4件立ち、クローンのターンが3〜4回
+ * 焼ける、という実測（台帳）への直しである。** 4通は同じ1つの出来事の別の顔で、
+ * 到着間隔は実測でどれも1秒未満（1ms〜616ms）だった。窓を1000msにしておけば、
+ * 通常の枠落ちの4通は同じ窓に収まる。
+ *
+ * **これは `WITHHELD_REPORT_FLUSH_MS`（30分）とは別物である。** あちらは
+ * 「背景処理の完了待ちで畳んだ報告が、次のターンの完了を待っても届かない」
+ * ときの逃げ道（滅多に起きない・起きても急がない）で、こちらは「同じ出来事の
+ * 複数の顔を1件にまとめる」ための待ち時間（毎回の枠落ちで起きる・短く終わる
+ * 必要がある）——桁が3桁違うのは目的が違うからで、値を揃える理由が無い。
+ */
+const SYNTHESIZED_NOTICE_WINDOW_MS = 1_000;
+
+/**
+ * `SYNTHESIZED_NOTICE_WINDOW_MS` を人間が差し替えるための環境変数
+ * （north_star 禁止2「制限は方針で表し、方針は設定で開けられなければ
+ * ならない」）。**`WITHHELD_REPORT_FLUSH_MS_ENV_KEY` と同じ作法。**
+ */
+export const SYNTHESIZED_NOTICE_WINDOW_MS_ENV_KEY = 'ALTEROID_SYNTHESIZED_NOTICE_WINDOW_MS';
+
+/**
+ * 上の env が「非空だが読めない」ときに跡へ書く固定文言
+ * （`WITHHELD_FLUSH_MS_UNREADABLE_WHAT` と同じ作法——2箇所（数値として
+ * 読めない／0以下）から呼ぶので定数に寄せる）。
+ */
+const SYNTHESIZED_NOTICE_WINDOW_MS_UNREADABLE_WHAT = '機構合成の知らせをまとめる窓の長さの設定';
+
+/**
+ * 環境変数を見て合流窓の長さ（ms）を決める。`resolveWithheldReportFlushMs`と
+ * **全く同じ形**（early return・跡の出し方・値そのものを跡に載せないこと、
+ * すべて同じ理由でそのまま踏襲する——そちらの doc を参照）。
+ *
+ * | env の状態 | 返す値 | 跡 |
+ * | --- | --- | --- |
+ * | 未設定 / 空・空白のみ | 既定1000ms | 出さない |
+ * | 非空だが数値として読めない | 既定1000ms | 残す |
+ * | 非空で数値だが 0 以下 | 既定1000ms | 残す |
+ */
+export function resolveSynthesizedNoticeWindowMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[SYNTHESIZED_NOTICE_WINDOW_MS_ENV_KEY];
+  if (raw === undefined) return SYNTHESIZED_NOTICE_WINDOW_MS;
+  const trimmed = raw.trim();
+  if (trimmed === '') return SYNTHESIZED_NOTICE_WINDOW_MS;
+
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) {
+    noteUnreadableRecord(
+      SYNTHESIZED_NOTICE_WINDOW_MS_UNREADABLE_WHAT,
+      `${SYNTHESIZED_NOTICE_WINDOW_MS_ENV_KEY} chars=${String(trimmed.length)}`,
+      new Error(`数値として読めない。既定の ${String(SYNTHESIZED_NOTICE_WINDOW_MS)}ms で走る`),
+    );
+    return SYNTHESIZED_NOTICE_WINDOW_MS;
+  }
+  if (parsed <= 0) {
+    noteUnreadableRecord(
+      SYNTHESIZED_NOTICE_WINDOW_MS_UNREADABLE_WHAT,
+      `${SYNTHESIZED_NOTICE_WINDOW_MS_ENV_KEY} chars=${String(trimmed.length)}`,
+      new Error(`0 以下は期限にならない。既定の ${String(SYNTHESIZED_NOTICE_WINDOW_MS)}ms で走る`),
+    );
+    return SYNTHESIZED_NOTICE_WINDOW_MS;
+  }
+  return parsed;
+}
+
+/**
+ * 積んだ断片を1本の `text` へ連結する（純関数。`withheldReportOverdue` と
+ * 同じ理由でテスト可能性のために切り出してある）。
+ *
+ * **要約も間引きもしない。** 4種類はそれぞれ違うことを答えている
+ * （落ちる前に何を考えていたか／なぜ止まったか／いつ明けるか／セッションが
+ * 生きているか）ので、全文を届いた順（`fragments` の並び＝到着順。呼び出し元が
+ * 並べ替えない）のまま連結する。
+ *
+ * **1件のときは前置きを付けない。** `clone.ts` の `#mergedHumanBatch` が同じ
+ * 理由でそうしている——まとめる側へ寄せると、いちばん多い「1件だけ」の本文に
+ * 断り書きが載る形になってしまう。
+ *
+ * **断片ごとに区切りを入れる。** 実測の到着順では本文が添えられている
+ * `report_failed` が先頭に来ているが、それは実測であって保証ではない——
+ * 順番が変わっても読み手が境目を見つけられるように、`label` を見出しに出す。
+ */
+export function mergeSynthesizedNoticeFragments(fragments: readonly SynthesizedNoticeFragment[]): {
+  text: string;
+  /** 日誌の内訳（`label` を日本語にしてカンマで繋いだもの）。 */
+  breakdown: string;
+} {
+  const first = fragments[0];
+  if (fragments.length <= 1) {
+    return {
+      text: first?.text ?? '',
+      breakdown: first === undefined ? '' : describeSynthesizedNoticeLabel(first.label),
+    };
+  }
+  const breakdown = fragments.map((f) => describeSynthesizedNoticeLabel(f.label)).join('、');
+  const header = `（1つの出来事について ${String(fragments.length)} 件の知らせをまとめた）`;
+  const body = fragments
+    .map(
+      (f, i) =>
+        `--- ${String(i + 1)}/${String(fragments.length)}（${describeSynthesizedNoticeLabel(f.label)}） ---\n${f.text}`,
+    )
+    .join('\n\n');
+  return { text: `${header}\n\n${body}`, breakdown };
+}
+
 class Pool implements ManagerPool {
   readonly #stores: Stores;
   readonly #post: (event: InboxEvent) => void;
