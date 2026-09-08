@@ -16,16 +16,17 @@ import type { ProvenanceKind } from "../provenance.js";
  * 返らない、を同一の適合テストで postgres / in-memory 両方に対して走らせる）。
  *
  * **⚠ 後段の多層防御は、ここの全フィールドを覆ってはいない。**
- * `packages/core/src/recall-runtime.ts` は段1のあとに `subjectId`・`excludeProvenanceKinds`
- * （と、`VectorFilter` に無い period）を改めて見るが、**`status` と `decayFloorAtAfter` は
- * 見ない**。⟹ `status` と `decayFloorAtAfter` については、ここの契約を adapter が守ることが
- * **唯一の防衛線**である（実測: `FakeVectorStore` の `status` の絞りを落とす変異で、
- * `recall-pipeline.test.ts` の既存の歯が実際に赤くなる。`subjectId` を落とす変異では
- * 赤くならない——後段が救うため）。`subjectId` と `excludeProvenanceKinds` は後段にも
- * 同じ絞りが残るので、adapter がこの契約を落としても後段が結果の正しさを救う
- * （ADR 0056）——ただしこれは「段1で絞らなくてよい」ことの根拠ではない。段1の絞りは
- * over-fetch の窓（k'）を無駄にしないための最適化であり、後段フィルタが在ることは、
- * どの場合も「filter を無視してよい」ことの根拠ではない。
+ * `packages/core/src/recall-runtime.ts` は段1のあとに `subjectId`・`excludeProvenanceKinds`・
+ * `period`（`occurredAfter`/`occurredBefore`。ADR 0059 で本 interface に加わった）を
+ * 改めて見るが、**`status` と `decayFloorAtAfter` は見ない**。⟹ `status` と
+ * `decayFloorAtAfter` については、ここの契約を adapter が守ることが**唯一の防衛線**である
+ * （実測: `FakeVectorStore` の `status` の絞りを落とす変異で、`recall-pipeline.test.ts` の
+ * 既存の歯が実際に赤くなる。`subjectId` を落とす変異では赤くならない——後段が救うため）。
+ * `subjectId`・`excludeProvenanceKinds`・`period` は後段にも同じ絞りが残るので、adapter が
+ * この契約を落としても後段が結果の正しさを救う（`subjectId`/`excludeProvenanceKinds` は
+ * ADR 0056、`period` は ADR 0059）——ただしこれは「段1で絞らなくてよい」ことの根拠ではない。
+ * 段1の絞りは over-fetch の窓（k'）を無駄にしないための最適化であり、後段フィルタが
+ * 在ることは、どの場合も「filter を無視してよい」ことの根拠ではない。
  */
 export interface VectorFilter {
   tenantId: string;
@@ -40,8 +41,12 @@ export interface VectorFilter {
   /**
    * subject の等値一致（`docs/vision.md` の「Tenant と Subject を混同しない」区別における
    * テナント内の整理の単位）。等値比較なので上のクラス doc の「索引で表現できる形」に
-   * そのまま当たる——`period`（`occurredAfter`/`occurredBefore`）のような連続値の範囲比較とは
-   * 事情が異なる（`docs/recall.md` が指摘する partial index の離散値向き制約は period 側の話）。
+   * そのまま当たる——`period`（`occurredAfter`/`occurredBefore`、下記）のような連続値の
+   * 範囲比較とは性質が異なる。**`period` も ADR 0059 により同じ `VectorFilter` に加わって
+   * いるが、比較の形は等値ではなく単調な範囲比較（`>=`/`<=`）のままである**——
+   * `docs/recall.md` が指摘した partial index の離散値向き制約は、`period` 側では
+   * 式索引（`COALESCE(occurred_at, recorded_at)`）を1本追加することで受けた
+   * （ADR 0023 が「降ろすにはスキーマに踏み込む判断が要る」と書いた、その判断そのもの）。
    */
   subjectId?: string;
   /**
@@ -54,7 +59,9 @@ export interface VectorFilter {
    * （`packages/postgres/migrations/0001_init.sql`）なので等値比較で足りる——
    * 上のクラス doc の「索引で表現できる形」にそのまま当たる。`period` のような
    * 連続値の範囲比較とは事情が異なる（ADR 0023 が `period` を段1に降ろさなかった理由は
-   * ここには当たらない。詳細は ADR 0056）。
+   * この等値比較には当たらない、という判断は ADR 0056 のもの。**`period` 自体は
+   * その後 ADR 0059 で別途 `VectorFilter` に加わっている**——詳細は下記
+   * `occurredAfter`/`occurredBefore` の doc を参照）。
    *
    * **⚠ `undefined` と空配列 `[]` はどちらも no-op（何も除外しない）。** これは
    * 上の `status` とは非対称である——`status: []` は SQL の `= ANY('{}')` に翻訳され
@@ -63,6 +70,30 @@ export interface VectorFilter {
    * （`vector-store-conformance.ts`）がこの非対称を固定している。
    */
   excludeProvenanceKinds?: ProvenanceKind[];
+  /**
+   * **期間の下限。両端とも包含（`>=`）（ADR 0059）。** 比較対象は
+   * `COALESCE(occurredAt, recordedAt)`——「実効時刻」の定義（ADR 0039 が4箇所に在ると
+   * 数えた規則。本フィールドの追加でこれが5箇所目になる）。`RecallQuery.occurredAfter`
+   * （`packages/core/src/recall.ts`）・`packages/postgres/src/memory-store.ts` の
+   * `aggregateScope` が既に使っている厳密経路（`COALESCE(occurred_at, recorded_at) >=
+   * occurredAfter`）と同じ命名・同じ境界の含み方に揃えてある。
+   *
+   * **⚠ 同じ interface の `decayFloorAtAfter`（上）は狭義の `>`（非包含）である。**
+   * 「〜After」という名前を持つ2つのフィールドが、境界の扱いについて逆の意味論を持つ——
+   * `decayFloorAtAfter` は忘却の起点という別の概念（ADR 0004）であり、`period` の
+   * 判定規則（ADR 0039）とは出どころが異なる。**名前だけで意味論を推測しないこと。**
+   *
+   * `period` は連続値の範囲比較であり、`docs/recall.md` が指摘する partial index の
+   * 離散値向き制約に関わる——`subjectId`/`excludeProvenanceKinds` の等値比較とは
+   * 事情が異なる。ADR 0059 はこれを式索引（`COALESCE(occurred_at, recorded_at)` に対する
+   * 3列索引）で受けている。
+   */
+  occurredAfter?: Date;
+  /**
+   * 期間の上限。`occurredAfter` と対になる——同じ実効時刻の定義（`COALESCE(occurredAt,
+   * recordedAt)`）・同じ境界の含み方（**包含、`<=`**）。詳細は `occurredAfter` の doc を参照。
+   */
+  occurredBefore?: Date;
 }
 
 export interface VectorHit {

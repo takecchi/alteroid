@@ -164,6 +164,22 @@ export class InMemoryVectorStore implements VectorStore {
       ) {
         continue;
       }
+      // ADR 0059: period（両端とも包含、`>=`/`<=`）。比較対象は
+      // `occurredAt ?? recordedAt`——postgres 実装の
+      // `COALESCE(m.occurred_at, m.recorded_at)` に対応する一段（ADR 0039 の実効時刻）。
+      const effectiveTime = memory.occurredAt ?? memory.recordedAt;
+      if (
+        opts.filter.occurredAfter !== undefined &&
+        !(effectiveTime >= opts.filter.occurredAfter)
+      ) {
+        continue;
+      }
+      if (
+        opts.filter.occurredBefore !== undefined &&
+        !(effectiveTime <= opts.filter.occurredBefore)
+      ) {
+        continue;
+      }
       hits.push({ memoryId: entry.memoryId, distance: cosineDistance(query, entry.vector) });
     }
     hits.sort((a, b) => a.distance - b.distance);

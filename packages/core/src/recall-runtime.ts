@@ -257,13 +257,18 @@ export async function runRecall(
         status: ["active", "contested"],
         subjectId: scope.subjectId,
         excludeProvenanceKinds: validatedQuery.excludeProvenanceKinds,
+        occurredAfter: scope.occurredAfter,
+        occurredBefore: scope.occurredBefore,
       },
       // ADR 0011: decayFloorAtAfter は Phase 1 では読み取りフィルタに使わない。
       // subjectId は等値一致なので段1に降ろす（ADR 0023）。excludeProvenanceKinds も
       // 離散5値の独立列への等値比較なので同じ理由で段1に降ろす（ADR 0056）。period は
       // 連続値の範囲比較であり partial index の離散値向き制約（docs/recall.md 133行目）に
-      // 関わる設計判断が要るため、今回も含めない——Phase 1 の scope に残したまま
-      // 後段フィルタのみで扱う（ADR 0023 の却下理由がそのまま生きている）。
+      // 関わる設計判断だったが、ADR 0059 で式索引
+      // （`COALESCE(occurred_at, recorded_at)` の3列索引）を足して段1に降ろした——
+      // ADR 0023 の却下理由（「降ろすにはスキーマに踏み込む判断が要る」）は、その判断を
+      // 実際に行ったことで解消されている。狭い時間窓のとき over-fetch の窓（k'）が
+      // 期間外の候補で埋まる取りこぼしは、この押し下げで塞がれる。
     });
     candidateGenerationExecuted = true;
   }
@@ -296,10 +301,15 @@ export async function runRecall(
   for (const hit of annHits) {
     const memory = memoriesById.get(hit.memoryId);
     if (!memory) continue; // getMany は存在しない/クロステナントの id を静かに落とす契約。
-    // subjectId と excludeProvenanceKinds は段1の filter にも渡している（上）が、ここでも
-    // 改めて見る。二重に見えるが意図的——`VectorFilter` の各フィールドは adapter が
-    // 実際に適用しなければならない契約だが（ADR 0034）、正しさの責任は後段にも置く
-    // 多層防御として残す（ADR 0034 の「採らなかった案」節、ADR 0056）。
+    // subjectId・excludeProvenanceKinds・period（occurredAfter/occurredBefore）は
+    // 段1の filter にも渡している（上）が、ここでも改めて見る。二重に見えるが意図的
+    // ——`VectorFilter` の各フィールドは adapter が実際に適用しなければならない契約だが
+    // （ADR 0034）、正しさの責任は後段にも置く多層防御として残す（ADR 0034 の
+    // 「採らなかった案」節、ADR 0056、period は ADR 0059）。この境界判定
+    // （`>=`/`<=`、両端とも包含）は ADR 0039 が固定した規則そのものであり、
+    // 段1へ渡す `VectorFilter.occurredAfter`/`occurredBefore`（ADR 0059）と
+    // 同じ境界でなければならない——ここだけを変えると「何が返るか」と「omitted が
+    // 何と言うか」が食い違う（ADR 0039 の指摘）。
     // ⚠ この段2のコメントは以前「InMemoryVectorStore は filter を無視するプレースホルダ
     // なので、ここを削ると core の契約そのものが壊れる」と書いていたが、その根拠は
     // ADR 0034 で `InMemoryVectorStore` が filter を実際に適用するよう直された時点で

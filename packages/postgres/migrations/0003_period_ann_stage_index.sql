@@ -1,0 +1,33 @@
+-- 0003_period_ann_stage_index.sql
+--
+-- ADR 0059: 段1（ANN 検索、`PostgresVectorStore.search`）の WHERE 句に period
+-- （`occurredAfter`/`occurredBefore`）の述語を降ろした。比較対象は
+-- `COALESCE(occurred_at, recorded_at)`（ADR 0039 が定義した「実効時刻」）。
+--
+-- この式を実際に索引で支えるため、(tenant_id, status, COALESCE(occurred_at, recorded_at))
+-- の3列の式索引を1本、**追加だけで**足す——既存の idx_memories_recall_gate
+-- (tenant_id, status, decay_floor_at) は作り直さない（ADR 0059「採らなかった案」参照）。
+--
+-- 実測（前任者からの引き写し。ADR 0059 参照。**本 PR の作業者は測定用 Postgres を
+-- 立てておらず、この実測値を裏取りしていない**）: 100,000行・256次元・1点のみで、
+-- 2列 (tenant_id, COALESCE(...)) 索引との比較。返す件数は同じで、この3列索引は
+-- 狭い窓（0.1%/1%）で1.3〜2.1倍速い。広い窓（10%/50%）の絞りは効かないまま残る
+-- （この移行では塞がない）。段5（`aggregateScope`）はこの索引の恩恵を受けない
+-- （集約は `WHERE` 句ではなく `count(*) FILTER (WHERE ...)` の中で評価されるため）。
+--
+-- **⚠ この `CREATE INDEX` は素のまま（`CONCURRENTLY` を付けない）。見落としではない。**
+-- 素の `CREATE INDEX` は対象テーブルに `ACCESS EXCLUSIVE` ロックを取るため、**索引の
+-- 構築が終わるまで `memories` への書き込みが止まる**（読み取りも止まる）。行数が増えた
+-- 本番で適用するときは、この停止時間を見込むこと。
+--
+-- **それでも `CONCURRENTLY` は使えない**——移行の実行側
+-- （`packages/postgres/src/migrate.ts:340` の `BEGIN` と `:349` の `COMMIT`）が
+-- 各移行ファイルを1トランザクションで包んでおり、`CREATE INDEX CONCURRENTLY` は
+-- トランザクションブロックの中では実行できない。既存の索引の移行
+-- （`0002_outbox_claim_lease_index.sql`）も素の `CREATE INDEX` であり、整合している。
+--
+-- **⚠ 非トランザクションの移行経路を作るかどうかは、これより大きい別の判断である。**
+-- この移行では手を伸ばさない（ADR 0059「引き受けた負債」参照）。
+
+CREATE INDEX idx_memories_period_ann_stage
+  ON memories (tenant_id, status, COALESCE(occurred_at, recorded_at));

@@ -89,6 +89,8 @@ describeVectorStoreConformance({
         ...(attrs?.provenanceKind !== undefined
           ? { provenance: buildProvenanceFixture(attrs.provenanceKind) }
           : {}),
+        ...(attrs?.occurredAt !== undefined ? { occurredAt: attrs.occurredAt } : {}),
+        ...(attrs?.recordedAt !== undefined ? { recordedAt: attrs.recordedAt } : {}),
       }),
     );
     return memory.id;

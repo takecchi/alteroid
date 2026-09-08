@@ -28,6 +28,14 @@ export interface PrepareMemoryIdAttrs {
   subjectId?: string;
   decayFloorAt?: Date;
   provenanceKind?: ProvenanceKind;
+  /**
+   * ADR 0059: `filter.occurredAfter`/`occurredBefore` の歯が使う。指定しなければ
+   * `buildNewMemoryFixture` の既定（`null`）——`COALESCE(occurred_at, recorded_at)` の
+   * フォールバック（`recordedAt`）を検査する歯は、これを指定せず `recordedAt` だけ渡す。
+   */
+  occurredAt?: Date | null;
+  /** ADR 0059: `occurredAt` が `null`/未指定のときに実効時刻として使われる値。 */
+  recordedAt?: Date;
 }
 
 export interface VectorStoreConformanceOptions {
@@ -65,8 +73,10 @@ const space: EmbeddingSpaceId = { provider: "test", model: "fixture-model", dime
  * `VectorStore` の適合テスト（docs/architecture.md §5.2）。
  *
  * ここで検査するのは `VectorStore` の基本契約——upsert/search/delete の往復、
- * テナント分離、limit の遵守、そして `filter`（`status`/`subjectId`/`decayFloorAtAfter`/`excludeProvenanceKinds`）が
- * 実際に効くこと（ADR 0034、`excludeProvenanceKinds` は ADR 0056）——である。`EXPLAIN` で HNSW 索引が使われることの検査
+ * テナント分離、limit の遵守、そして `filter`（`status`/`subjectId`/`decayFloorAtAfter`/
+ * `excludeProvenanceKinds`/`occurredAfter`/`occurredBefore`）が実際に効くこと
+ * （ADR 0034、`excludeProvenanceKinds` は ADR 0056、`occurredAfter`/`occurredBefore` は
+ * ADR 0059）——である。`EXPLAIN` で HNSW 索引が使われることの検査
  * （roadmap.md 段階2の完了条件）は pgvector 固有の関心事であり、`packages/postgres` 側の
  * テスト（生 SQL・`EXPLAIN` を直接扱う）に置く。
  */
@@ -394,6 +404,86 @@ export function describeVectorStoreConformance(options: VectorStoreConformanceOp
 
       expect(ids).not.toContain(onBoundaryId);
       expect(ids).toContain(afterBoundaryId);
+    });
+
+    // -------------------------------------------------------------------
+    // filter.occurredAfter / occurredBefore（ADR 0059）: 両端とも包含（`>=`/`<=`）。
+    // ADR 0039 が固定した period の判定規則（境界を含む）を、段1（VectorStore）の
+    // 場所でも同じ境界で固定する——ここが5箇所目の判定箇所になる。
+    // -------------------------------------------------------------------
+
+    it("filter.occurredAfter: 境界と*ちょうど同じ* occurredAt は含まれ（`>=`）、境界より前は除外される", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const boundary = new Date("2026-01-01T00:00:00.000Z");
+      const onBoundaryId = await prepareMemoryId(ctx, { occurredAt: boundary });
+      const beforeBoundaryId = await prepareMemoryId(ctx, {
+        occurredAt: new Date(boundary.getTime() - 1000),
+      });
+
+      await store.upsert(ctx, space, onBoundaryId, [1, 0, 0]);
+      await store.upsert(ctx, space, beforeBoundaryId, [1, 0, 0]);
+
+      const hits = await store.search(ctx, space, [1, 0, 0], {
+        limit: 10,
+        filter: { tenantId: "tenant-1", occurredAfter: boundary },
+      });
+      const ids = hits.map((hit) => hit.memoryId);
+
+      expect(ids).toContain(onBoundaryId);
+      expect(ids).not.toContain(beforeBoundaryId);
+    });
+
+    it("filter.occurredBefore: 境界と*ちょうど同じ* occurredAt は含まれ（`<=`）、境界より後は除外される", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const boundary = new Date("2026-01-01T00:00:00.000Z");
+      const onBoundaryId = await prepareMemoryId(ctx, { occurredAt: boundary });
+      const afterBoundaryId = await prepareMemoryId(ctx, {
+        occurredAt: new Date(boundary.getTime() + 1000),
+      });
+
+      await store.upsert(ctx, space, onBoundaryId, [1, 0, 0]);
+      await store.upsert(ctx, space, afterBoundaryId, [1, 0, 0]);
+
+      const hits = await store.search(ctx, space, [1, 0, 0], {
+        limit: 10,
+        filter: { tenantId: "tenant-1", occurredBefore: boundary },
+      });
+      const ids = hits.map((hit) => hit.memoryId);
+
+      expect(ids).toContain(onBoundaryId);
+      expect(ids).not.toContain(afterBoundaryId);
+    });
+
+    it("filter.occurredAfter/occurredBefore は occurredAt が null のとき recordedAt を実効時刻として使う（COALESCE。ADR 0039）", async () => {
+      // occurredAt を渡さず recordedAt だけを渡す——`occurred_at IS NULL` の行で
+      // `COALESCE(occurred_at, recorded_at)` が実際に効いていることを見る。
+      // `COALESCE` を外して `occurred_at` 単独の比較に差し替える変異は、この歯を
+      // 落とす（occurredAt が null の候補は、その変異の下では常に条件不成立になる）。
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const boundary = new Date("2026-01-01T00:00:00.000Z");
+      const insideByRecordedAtId = await prepareMemoryId(ctx, {
+        occurredAt: null,
+        recordedAt: new Date(boundary.getTime() + 1000),
+      });
+      const outsideByRecordedAtId = await prepareMemoryId(ctx, {
+        occurredAt: null,
+        recordedAt: new Date(boundary.getTime() - 1000),
+      });
+
+      await store.upsert(ctx, space, insideByRecordedAtId, [1, 0, 0]);
+      await store.upsert(ctx, space, outsideByRecordedAtId, [1, 0, 0]);
+
+      const hits = await store.search(ctx, space, [1, 0, 0], {
+        limit: 10,
+        filter: { tenantId: "tenant-1", occurredAfter: boundary },
+      });
+      const ids = hits.map((hit) => hit.memoryId);
+
+      expect(ids).toContain(insideByRecordedAtId);
+      expect(ids).not.toContain(outsideByRecordedAtId);
     });
 
     it("filter は複数同時に渡すと AND になる（どれか1つが不一致なら返らない）", async () => {

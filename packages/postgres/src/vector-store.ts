@@ -69,6 +69,16 @@ export class PostgresVectorStore implements VectorStore {
     if (opts.filter.subjectId !== undefined) {
       conditions.push(sql`m.subject_id = ${opts.filter.subjectId}`);
     }
+    // ADR 0059: period の押し下げ。比較対象は COALESCE(occurred_at, recorded_at)
+    // （ADR 0039 が定義した「実効時刻」——4箇所あった判定規則の5箇所目)。両端とも包含
+    // （`>=`/`<=`）——`VectorFilter.occurredAfter`/`occurredBefore` の doc、および
+    // 既存の厳密経路（`memory-store.ts` の `aggregateScope`）と同じ境界の含み方に揃える。
+    if (opts.filter.occurredAfter !== undefined) {
+      conditions.push(sql`COALESCE(m.occurred_at, m.recorded_at) >= ${opts.filter.occurredAfter}`);
+    }
+    if (opts.filter.occurredBefore !== undefined) {
+      conditions.push(sql`COALESCE(m.occurred_at, m.recorded_at) <= ${opts.filter.occurredBefore}`);
+    }
     // ADR 0056: 空配列は no-op（`VectorFilter.excludeProvenanceKinds` の doc 参照）。
     // `length > 0` で番わないと `<> ALL('{}')` という無駄な条件が出る——常に真になり実害は
     // 無いが（`<> ALL` は空配列に対して真）、`EXPLAIN` を読みにくくするので出さない。

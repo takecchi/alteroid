@@ -695,6 +695,21 @@ export class FakeVectorStore implements VectorStore {
       ) {
         continue;
       }
+      // ADR 0059: period（両端とも包含、`>=`/`<=`）。比較対象は `occurredAt ?? recordedAt`
+      // （ADR 0039 の実効時刻）——`InMemoryVectorStore`（`packages/testkit`）と同じ意味論。
+      const effectiveTime = memory.occurredAt ?? memory.recordedAt;
+      if (
+        opts.filter.occurredAfter !== undefined &&
+        !(effectiveTime >= opts.filter.occurredAfter)
+      ) {
+        continue;
+      }
+      if (
+        opts.filter.occurredBefore !== undefined &&
+        !(effectiveTime <= opts.filter.occurredBefore)
+      ) {
+        continue;
+      }
       hits.push({ memoryId: entry.memoryId, distance: cosineDistance(query, entry.vector) });
     }
     hits.sort((a, b) => a.distance - b.distance);
