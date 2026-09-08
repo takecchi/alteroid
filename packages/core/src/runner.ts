@@ -3519,12 +3519,60 @@ function withAnswers(input: Record<string, unknown>, message: string): Record<st
   return { ...input, answers };
 }
 
+/**
+ * `AskUserQuestion` をクローンへ渡す1本の文章にする。
+ *
+ * **選択肢（`options`）まで載せる。** かつてここは `question` だけを
+ * `join(' / ')` で連ね、`options` の `label` / `description` を1文字も運んで
+ * いなかった。⟹ **クローンは「選べ」と言われながら、選択肢の中身を読めない。**
+ * 実測（2026-09-08、クローン自身の報告）: 2問・各3択の確認を送ったところ、
+ * クローンへ届いたのは質問文2つを `' / '` で繋いだ **117 文字だけ**で、
+ * 選択肢の本文は全部落ちていた。クローンは推測で答えることを拒み、
+ * 「選択肢の中身を見出しの中に入れて送り直せ」と返した ＝ **確認の往復が
+ * 1回まるごと無駄になり、その分だけターンが焼かれた。**
+ *
+ * **これは north_star の「デグレード禁止」に当たる。** 人間が PC の前で
+ * Claude Code から同じ確認を受け取れば、選択肢は画面に出る。この階層でだけ
+ * 見えないのは仕様ではなくバグである。
+ *
+ * **一覧が伸びる心配は要らない。** `manager_list` 側は `LIST_WAITING_EXCERPT`
+ * を通してから積むので（`tools.ts` の「待ちの要約も抜粋を通す」）、ここが
+ * 長くなっても一覧の予算は動かない。**受信箱へ配る本文だけが厚くなる**——
+ * そちらは1件ずつ配るもので、件数で溢れる側ではない。
+ *
+ * **選択肢が無い質問の見え方は変えていない**（`options` が空なら質問文そのもの）。
+ */
 function describeQuestions(input: Record<string, unknown>): string {
   const questions = Array.isArray(input.questions) ? input.questions : [];
-  const texts = questions
-    .map((question) => (question as { question?: unknown }).question)
-    .filter((text): text is string => typeof text === 'string');
-  return texts.length > 0 ? texts.join(' / ') : brief(input);
+  const blocks = questions
+    .map((question) => describeQuestion(question))
+    .filter((block): block is string => block !== undefined);
+  return blocks.length > 0 ? blocks.join('\n\n') : brief(input);
+}
+
+/**
+ * 質問1件を「質問文 ＋ 選択肢の箇条書き」にする。質問文が無ければ `undefined`
+ * （＝この1件は落とす。呼び出し側が全滅を `brief(input)` で受ける）。
+ *
+ * **`description` が空の選択肢でも `label` は必ず出す。** 説明が無いことと
+ * 選択肢が無いことは別で、潰すと「選べる数」そのものが読めなくなる。
+ */
+function describeQuestion(question: unknown): string | undefined {
+  const text = (question as { question?: unknown }).question;
+  if (typeof text !== 'string') return undefined;
+  const rawOptions = (question as { options?: unknown }).options;
+  const options = Array.isArray(rawOptions) ? rawOptions : [];
+  const lines = options
+    .map((option) => {
+      const label = (option as { label?: unknown }).label;
+      if (typeof label !== 'string') return undefined;
+      const description = (option as { description?: unknown }).description;
+      return typeof description === 'string' && description.length > 0
+        ? `- **${label}**: ${description}`
+        : `- **${label}**`;
+    })
+    .filter((line): line is string => line !== undefined);
+  return lines.length > 0 ? [text, ...lines].join('\n') : text;
 }
 
 /** 否定として読み取る語。日本語は語境界が無いので素直に部分一致で見る。 */
