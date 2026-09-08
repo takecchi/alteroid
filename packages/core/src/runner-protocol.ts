@@ -341,7 +341,10 @@ export const runnerExecutionResourcesSchema = z.object({
   /**
    * `pids` の内訳（#315 の可視化）。**`pids` の中には入れない——兄弟として置く**
    * （`select` が読んでいるのは `pids: { current, max }` の配置そのものなので、
-   * 中へ足すとそちらの形が壊れる）。
+   * 中へ足すとそちらの形が壊れる）。**#712 まで、この「`select` が読んでいる」は
+   * 実際には成り立っていなかった**（点数計算は pids を1ビットも読んでいなかった）——
+   * いまは `chooseByResources` が `pidsRoomOf` を通してこの形を読むので、
+   * この注意はそのまま効いている。
    *
    * 測るのは runner 自身（`apps/runner/src/tasks.ts` の `TaskBreakdownReader`）
    * が `/proc` を state 別に集計したもので、`pids.current` と**同じ軸**
