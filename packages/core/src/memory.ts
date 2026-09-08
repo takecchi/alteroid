@@ -2318,6 +2318,82 @@ export function describeMemoryPremiseRanking(documents: readonly MemoryPart[]): 
   return `premise の大きさの順位（大きい順、全 ${ranked.length} 件）:\n${listing}`;
 }
 
+/** 「棚卸しの的」の一覧の文字数の予算。件数ではない（`excerpt.ts` の約束）。 */
+export const MEMORY_TIDY_TARGETS_BUDGET = 3_000;
+
+/**
+ * **いま毎ターンの焼き込みに収まっていない文書を名指しする。**
+ *
+ * ## なぜ要るか — 印はカードの中にしか無かった
+ *
+ * `renderPremiseCard` は、要旨が `MEMORY_PROMPT_DESCRIPTION_BUDGET` を超えた
+ * ときと、節の目次が `MEMORY_PROMPT_OUTLINE_BUDGET` に入りきらなかったときに
+ * ⚠ の1行を出す。**しかしそれは「その文書のカードの中」にしか無い。**
+ *
+ * ⟹ クローンが「どの文書を割ればよいか」を知るには、焼き込みを自分で
+ * 読み返して ⚠ を探すしかなかった。tick の digest にも、書き込みの応答にも、
+ * `self_status` にも、`memory_list` にも、**予算に当たった文書を名指しする
+ * 情報は1つも無い**（実測 2026-09-08。全走査して確かめた）。
+ *
+ * **集計も無かった** ——「いま何件が当たっているか」を答える口が存在しない。
+ *
+ * ## 出すのは的と数だけである。「畳め」は言わない
+ *
+ * 判断（どれをどう割るか）はクローンが下す（`describeMemoryPremiseRanking` の
+ * doc と同じ線。**閾値を置かない**）。ここが返すのは「予算に当たっている」
+ * という**測れた事実**と、その文書の名前と数だけである。
+ *
+ * **⚠️ 当たっていないことは「小さい」ではない。** 予算は1文書ごとに掛かるので、
+ * 全部が予算の下でも合計は大きくなりうる——だから総量（`measureMemoryFloor`）と
+ * この一覧は**別に出す**（呼び手が両方を並べる）。
+ */
+export function describeMemoryTidyTargets(documents: readonly MemoryPart[]): string {
+  const { premiseParts } = buildMemoryDocumentSections(documents);
+
+  const targets: string[] = [];
+  for (const part of premiseParts) {
+    const frontmatter = parseMemoryFrontmatter(part.content);
+    const description =
+      (frontmatter.kind === 'parsed' ? frontmatter.description : undefined)?.trim() ?? '';
+    const { sections } = scanMemorySections(part.content);
+    const outlineChars = memorySectionLines(sections).join('\n').length;
+
+    const reasons: string[] = [];
+    if (outlineChars > MEMORY_PROMPT_OUTLINE_BUDGET) {
+      reasons.push(
+        `節の目次が ${formatMemoryCharCount(outlineChars)} 文字（予算 ${formatMemoryCharCount(MEMORY_PROMPT_OUTLINE_BUDGET)} 文字。全 ${formatMemoryCharCount(sections.length)} 節のうち末尾が焼き込みに載っていない）`,
+      );
+    }
+    if (description.length > MEMORY_PROMPT_DESCRIPTION_BUDGET) {
+      reasons.push(
+        `要旨が ${formatMemoryCharCount(description.length)} 文字（予算 ${formatMemoryCharCount(MEMORY_PROMPT_DESCRIPTION_BUDGET)} 文字）`,
+      );
+    }
+    if (reasons.length === 0) continue;
+    targets.push(`- ${part.slug}: ${reasons.join(' / ')}`);
+  }
+
+  if (targets.length === 0) {
+    return (
+      '棚卸しの的: 毎ターンの焼き込みに収まっていない文書は無い。' +
+      '**これは「記憶が小さい」ではない** —— 予算は1文書ごとに掛かるので、' +
+      '全部が予算の下でも合計は大きくなりうる（総量は別の行で出る）。'
+    );
+  }
+
+  const listing = renderListing(targets, {
+    budget: MEMORY_TIDY_TARGETS_BUDGET,
+    omitted: ({ rest, shown, total }) =>
+      `…ほか ${rest} 件は省略（全 ${total} 件のうち ${shown} 件だけ出した）。`,
+  });
+
+  return (
+    `棚卸しの的（毎ターンの焼き込みに収まっていない文書。全 ${targets.length} 件）:\n${listing}\n` +
+    '**ここに出た文書は、焼き込みで見えていない節が在る。** memory_outline' +
+    '（side=tail で末尾も見られる）で節を確かめ、memory_section_move で付録の文書へ移すこと。'
+  );
+}
+
 // ---------------------------------------------------------------------------
 // 節（section）— memory_outline / memory_section_move（#318 案 (b)）
 // ---------------------------------------------------------------------------

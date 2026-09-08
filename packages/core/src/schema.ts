@@ -300,7 +300,12 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
     type: z.literal('distill'),
     id: z.string(),
     at: isoDateTime,
-    reason: z.enum(['conversation_end', 'shutdown']),
+    /**
+     * どの契機の蒸留か。**3つを1つに潰さない**（`distill-gap.ts` の `DistillReason`）。
+     * `scheduled` は定期の棚卸しの刻み（`schedule.ts` の `memoryTidyEntry`）で、
+     * **会話が終わったからではなく、記憶が育ったから起こしている。**
+     */
+    reason: z.enum(['conversation_end', 'shutdown', 'scheduled']),
   }),
   z.object({
     type: z.literal('timer'),

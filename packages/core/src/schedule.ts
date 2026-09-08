@@ -814,8 +814,72 @@ export function selfInitiativeEntry(options: { everyMinutes: number }): Schedule
 // 継続中の依頼（クローンと人間が後から仕込む時間起点）
 // ---------------------------------------------------------------------------
 
+export const MEMORY_TIDY_KIND = 'memory_tidy';
+
+/**
+ * 記憶の棚卸しの刻み（人間の指示 2026-09-08「定期ジョブで棚卸しを回す」）。
+ *
+ * ## なぜ組み込みなのか — 蒸留の起点に時計が1つも無かった
+ *
+ * 蒸留（＝記憶を畳む唯一のターン）の契機は、実測で5つとも**時計由来ではない**
+ * （会話終了 / shutdown / PreCompact / 文脈窓で畳む直前 / 起動時の墓標拾い直し）。
+ * ⟹ **人間が話しかけないあいだ、記憶は育つのに畳まれない。** 本番の実測
+ * （2026-09-08）で `alteroid-work` は 306,402 文字・928 節まで育っており、
+ * その間 `cause:'distill'` の `move_out` は 640 件中 85 件しかなかった。
+ *
+ * **`schedule_create` に任せない。** クローンが自分で仕込めば済む話に見えるが、
+ * それは「仕込むことを思いつくかどうか」の賭けになる（`docs/PRD.md`「自律」の
+ * 「記憶に書くだけでは足りない」と同じ形）。**日報と発意 tick が組み込みである
+ * のと同じ理由で、これも組み込みにする。**
+ *
+ * ## 発火は `distill` の合図である（`timer` ではない）
+ *
+ * 受信箱へ積むのは `{ type: 'distill', reason: 'scheduled' }` である。
+ * **`timer` にしない理由は歯である** —— `clone.ts` の `#handle` は `'distill'`
+ * の分岐だけを `kind: 'distill'` のターンとして走らせ、それが
+ * `ToolContext.memoryCause` を `'distill'` にする。`timer` で起こすと
+ * `memoryCause` は `'clone'` になり、**`guardFullReplace` が1行目
+ * （`if (cause !== 'distill') return null;`）で全部素通りする** ＝ 人間が居ない
+ * 場で人間の記憶を無条件に壊せる状態になる。**この刻みは人間が居ない場なので、
+ * 歯が効く側で走らせなければならない。**
+ *
+ * ## 取りこぼしは拾わない
+ *
+ * `catchUpMissed: false`。掃除は「その時点の状態」に対して行う仕事なので、
+ * 落ちていた間の刻みを後から足しても同じ仕事を2回払うだけである
+ * （日報が `false` なのは別の理由——あちらは対象日ごとに内容が違う）。
+ */
+export function memoryTidyEntry(options: { at: TimeOfDay }): ScheduleEntry {
+  const { at } = options;
+  const label = `${`${at.hour}`.padStart(2, '0')}:${`${at.minute}`.padStart(2, '0')}`;
+
+  return {
+    kind: MEMORY_TIDY_KIND,
+    description: `毎日 ${label}（ローカル時刻）に記憶の棚卸しをする（大きい文書を割る・古い節を付録へ移す）`,
+    catchUpMissed: false,
+    nextAt(after) {
+      const today = atTimeOnDay(after, at);
+      if (today.getTime() > after.getTime()) return today;
+      const tomorrow = new Date(after.getFullYear(), after.getMonth(), after.getDate() + 1);
+      return atTimeOnDay(tomorrow, at);
+    },
+    event(firedAt) {
+      return {
+        type: 'distill',
+        id: randomUUID(),
+        at: firedAt.toISOString(),
+        reason: 'scheduled',
+      };
+    },
+  };
+}
+
 /** 既定の仕込みの名前。依頼で乗っ取らせない。 */
-export const RESERVED_SCHEDULE_KINDS: readonly string[] = [DAILY_REPORT_KIND, SELF_INITIATIVE_KIND];
+export const RESERVED_SCHEDULE_KINDS: readonly string[] = [
+  DAILY_REPORT_KIND,
+  SELF_INITIATIVE_KIND,
+  MEMORY_TIDY_KIND,
+];
 
 /** 読めない指定を落とす先（沈黙させないため）。 */
 const MIDNIGHT: TimeOfDay = { hour: 0, minute: 0 };

@@ -118,7 +118,7 @@ export type TurnInput =
    * **どちらで起きたかは日誌にしか残らない**（器の入れ替えで落ちたのか、会話が
    * 終わったのかは、後から見分けたい側である）。
    */
-  | { type: 'distill'; reason: 'conversation_end' | 'shutdown'; prompt: string }
+  | { type: 'distill'; reason: 'conversation_end' | 'shutdown' | 'scheduled'; prompt: string }
   /**
    * PreCompact のサイドセッション（`#distillFromTranscript`）が、要約に潰される
    * 直前の会話ログの末尾を渡して起こすターン（Issue #243 の7本目）。

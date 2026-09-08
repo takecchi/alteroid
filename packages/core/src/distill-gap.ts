@@ -76,7 +76,7 @@ export const DISTILL_SUCCEEDED_DECISION_PREFIX = '蒸留が成功で終わった
  * 終わったのか、要約に潰されかけたのか）。`turn-input.ts` の `distill` が
  * `reason` を落とさずに載せているのと同じ理由。
  */
-export type DistillReason = 'conversation_end' | 'shutdown' | 'pre_compact';
+export type DistillReason = 'conversation_end' | 'shutdown' | 'pre_compact' | 'scheduled';
 
 /**
  * 「蒸留が成功で終わった」を日誌へ残す1件を作る。

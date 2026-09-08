@@ -1,5 +1,6 @@
 import {
   dailyReportEntry,
+  memoryTidyEntry,
   parseTimeOfDay,
   selfInitiativeEntry,
   type ScheduleEntry,
@@ -21,6 +22,15 @@ export interface ScheduleConfig {
   dailyReportAt: TimeOfDay | null;
   /** 発意 tick の間隔（分）。null なら仕込まない。 */
   initiativeEveryMinutes: number | null;
+  /**
+   * 記憶の棚卸しの刻み（ローカル時刻）。null なら仕込まない。
+   *
+   * **日報とは別の時刻にしてある。** 同じ時刻に置くと、どちらかが先に走って
+   * もう片方が受信箱で待つ——待つこと自体は正しいが、**日報は「その日を人間へ
+   * 見せる」仕事で、棚卸しは「記憶を畳む」仕事**であり、混ぜると日報の中身が
+   * 棚卸しの報告で薄まる。
+   */
+  memoryTidyAt: TimeOfDay | null;
   /** 起動時に、取りこぼした日報を何日前まで遡って作るか。 */
   reportLookbackDays: number;
   /** 読めなかった設定値についての注意（呼び出し元が人間に見せる）。 */
@@ -28,6 +38,23 @@ export interface ScheduleConfig {
 }
 
 export const DEFAULT_DAILY_REPORT_AT = '22:00';
+/**
+ * 記憶の棚卸しの既定時刻（ローカル時刻）。
+ *
+ * **暫定値である。** 選び方は2つの制約だけで、`03:00` という数そのものに
+ * 根拠は無い:
+ *
+ * 1. **日報（既定 22:00）と重ねない** —— 別の仕事なので混ぜない（`ScheduleConfig.memoryTidyAt` の doc）
+ * 2. **人間が起きて話しかけてくる時間帯を避ける** —— 棚卸しは記憶を書き換える
+ *    ターンで、走っているあいだ受信箱の他の仕事は待つ（クローンは単一セッションを
+ *    直列に処理する）
+ *
+ * **1日1回で足りるかは測っていない。** 本番の実測（2026-09-08）で記憶の
+ * 書き換えは1日 244 回あり、その速さに対して掃除が1日1回で釣り合うかは
+ * **やってみないと分からない**。足りなければここを短くする（環境変数
+ * `ALTEROID_MEMORY_TIDY_AT` で人間が動かせる）。
+ */
+export const DEFAULT_MEMORY_TIDY_AT = '03:00';
 /**
  * 発意 tick の既定間隔（分）。
  *
@@ -98,6 +125,25 @@ export function readScheduleConfig(env: NodeJS.ProcessEnv = process.env): Schedu
     }
   }
 
+  // **日報とまったく同じ形で読む**（`OFF` で外せる／読めない値は `notes` へ落として
+  // 既定へ倒す）。形を揃えるのは、人間が片方の書き方を覚えれば両方に効くためである。
+  const rawTidyAt = value(env.ALTEROID_MEMORY_TIDY_AT);
+  let memoryTidyAt: TimeOfDay | null = parseTimeOfDay(DEFAULT_MEMORY_TIDY_AT);
+  if (rawTidyAt !== undefined) {
+    if (OFF.has(rawTidyAt.toLowerCase())) {
+      memoryTidyAt = null;
+    } else {
+      const parsed = parseTimeOfDay(rawTidyAt);
+      if (parsed === null) {
+        notes.push(
+          `ALTEROID_MEMORY_TIDY_AT="${rawTidyAt}" は HH:MM として読めないので既定 ${DEFAULT_MEMORY_TIDY_AT} を使う`,
+        );
+      } else {
+        memoryTidyAt = parsed;
+      }
+    }
+  }
+
   const rawEvery = value(env.ALTEROID_INITIATIVE_EVERY);
   let initiativeEveryMinutes: number | null = DEFAULT_INITIATIVE_EVERY_MINUTES;
   if (rawEvery !== undefined) {
@@ -128,7 +174,7 @@ export function readScheduleConfig(env: NodeJS.ProcessEnv = process.env): Schedu
     }
   }
 
-  return { dailyReportAt, initiativeEveryMinutes, reportLookbackDays, notes };
+  return { dailyReportAt, initiativeEveryMinutes, memoryTidyAt, reportLookbackDays, notes };
 }
 
 export function buildSchedule(config: ScheduleConfig): ScheduleEntry[] {
@@ -138,6 +184,9 @@ export function buildSchedule(config: ScheduleConfig): ScheduleEntry[] {
   }
   if (config.initiativeEveryMinutes !== null) {
     entries.push(selfInitiativeEntry({ everyMinutes: config.initiativeEveryMinutes }));
+  }
+  if (config.memoryTidyAt !== null) {
+    entries.push(memoryTidyEntry({ at: config.memoryTidyAt }));
   }
   return entries;
 }

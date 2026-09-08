@@ -16,6 +16,9 @@ import {
   parseTimeOfDay,
   scheduledRequestEntry,
   selfInitiativeEntry,
+  MEMORY_TIDY_KIND,
+  RESERVED_SCHEDULE_KINDS,
+  memoryTidyEntry,
 } from './schedule.js';
 
 const run = promisify(execFile);
@@ -1544,5 +1547,53 @@ describe('刻みの中で投げたとき（#438）', () => {
     // **握り潰していない** —— Node 既定のスタックがそのまま続く。
     expect(stderr).toContain('受信箱が投げた');
     expect(stderr).toMatch(/\n\s+at /u);
+  });
+});
+
+/**
+ * ⭐ 記憶の棚卸しの刻み（`memoryTidyEntry`。人間の指示 2026-09-08）。
+ *
+ * **いちばん重い歯は「どの合図を積むか」である。** `timer` で積むと
+ * `clone.ts` の `#handle` はこれを通常のターンとして走らせ、
+ * `ToolContext.memoryCause` が `'clone'` になる ⟹ `guardFullReplace` が
+ * 1行目（`if (cause !== 'distill') return null;`）で全部素通りし、
+ * **人間が居ない場で人間の記憶を無条件に壊せる状態になる。**
+ * だから積むのは `distill` でなければならない。
+ */
+describe('memoryTidyEntry — 記憶の棚卸しの刻み', () => {
+  const at = { hour: 3, minute: 0 };
+
+  it('⭐ 積む合図は distill（timer ではない）。reason は scheduled', () => {
+    const event = memoryTidyEntry({ at }).event(new Date('2026-09-08T03:00:00Z'));
+
+    // **ここが歯の本体。** `timer` に変えると memoryCause が 'clone' になり、
+    // 記憶の守り（guardFullReplace）が丸ごと効かなくなる。
+    expect(event.type).toBe('distill');
+    if (event.type !== 'distill') throw new Error('distill ではない（上の assert が守る）');
+    expect(event.reason).toBe('scheduled');
+    expect(event.at).toBe('2026-09-08T03:00:00.000Z');
+    expect(event.id.length).toBeGreaterThan(0);
+  });
+
+  it('名前は予約されている（schedule_create から乗っ取れない）', () => {
+    expect(RESERVED_SCHEDULE_KINDS).toContain(MEMORY_TIDY_KIND);
+    expect(memoryTidyEntry({ at }).kind).toBe(MEMORY_TIDY_KIND);
+  });
+
+  it('⭐ 取りこぼしは拾わない（同じ仕事を2回払わない）', () => {
+    expect(memoryTidyEntry({ at }).catchUpMissed).toBe(false);
+  });
+
+  it('次の発火は指定時刻。過ぎていれば翌日の同じ時刻', () => {
+    const entry = memoryTidyEntry({ at });
+    const before = new Date(2026, 8, 8, 1, 0, 0);
+    const after = new Date(2026, 8, 8, 5, 0, 0);
+
+    expect(entry.nextAt(before)).toEqual(new Date(2026, 8, 8, 3, 0, 0));
+    expect(entry.nextAt(after)).toEqual(new Date(2026, 8, 9, 3, 0, 0));
+  });
+
+  it('説明に時刻が入る（人間が schedule_list で読む唯一の手掛かり）', () => {
+    expect(memoryTidyEntry({ at: { hour: 5, minute: 7 } }).description).toContain('05:07');
   });
 });
