@@ -455,6 +455,24 @@
     publish を実行していないためである。**⟹ 通らなかった場合、workflow は最初の
     本番 tag で落ちる**（黙って壊れるのではなく落ちる形にはしてある）。
     段2 の予行（`--dry-run`）でどこまで検出できるかも**確かめていない。**
+
+  **追記（2026-09-09、[ADR 0067](./0067-dry-run-fail-open-and-does-not-verify-trusted-publisher.md)）**:
+  この空欄は埋まった。**答えは「信頼発行元（Trusted Publisher）の未設定は検出できない」である。**
+  `workflow_dispatch`（`dry_run=true`）の run `34262743432`（2026-09-08 18:23 UTC）は、
+  信頼発行元が未設定の状態で走ったにもかかわらず、`npm publish（依存の向きの順に、
+  tarball を上げる）`を含む全ステップが `success` で終わった。同じ commit・同じ
+  workflow の `release` 契機の run `34254090760`（同日 16:56 UTC）は、同じ publish 段で
+  `npm error 403 ... OIDC permission denied for this action` により `failure` に終わっている。
+  ⟹ **予行と本番のあいだで唯一違う `--dry-run` の有無が、この失敗の再現・非再現を分けた。**
+  段2 は段1 の検算になっていない。
+
+  **⚠ 出所の書き分け**: この2本の run の `conclusion` とステップ単位の成否、
+  および本番 run のログに出た `OIDC permission denied` の文面は、ADR 0067 を書いた
+  作業者が `gh run view <run-id> --json jobs` / `--log` で独立に確認した。**run
+  `34262743432` の時点で信頼発行元が未設定だったという状態そのものは、この修正を
+  依頼したクローン（当時オーナーへ設定を依頼中で返事待ちだった）の申告であり、
+  ADR 0067 の作業者は npmjs.com の設定画面を直接見ていない。**この区別は
+  ADR 0067 の本文にも明記してある。
   - **tag が `origin/main` の履歴上に在ることの検査は、「main へ入った時点で CI が緑だった」の検査ではない。**
     CI が赤いまま main へ入った commit に tag を打てば、DB を要する検査を通さずに publish できる。
     塞ぐなら publish 側に Postgres の service container を立てるか、

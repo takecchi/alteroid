@@ -146,6 +146,31 @@ jobs:
           node scripts/pack-publish-targets.mjs "${RUNNER_TEMP}/tarballs" \
             --expect-version "${{ steps.version.outputs.version }}"
 
+      - name: 予行か本番かを決める（fail-open にしない）
+        # ⚠ 直す前はここで shell の文字列比較を直接書いていた
+        # （`[ "${{ inputs.dry_run }}" = "true" ]`）。`dry_run` が `"true"` と一致しない
+        # *どんな値*でも本番 publish に倒れる fail-open だった——いま registry は
+        # 4パッケージとも 0.1.0 だけだが、main の package.json は既に 0.1.1 まで進んでおり、
+        # この欠陥はもはや無害ではない（発火すれば 0.1.1 が取り消せない形で本番公開される）。
+        #
+        # 判定は `scripts/publish-dry-run.mjs` の `decideDryRun()` に切り出し、
+        # `scripts/__tests__/publish-dry-run.test.mjs`（純関数）と
+        # `scripts/__tests__/decide-publish-dry-run.test.mjs`（この CLI 自体を子プロセスで
+        # 起動して検査）の歯を置いた。「安全と明示されたときだけ予行」から
+        # 「危険と明示されたときだけ本番」へ反転しており、workflow_dispatch で
+        # `dry_run` が `"true"`/`"false"` のどちらでもない値（空文字・未定義・`"TRUE"`・
+        # `"1"` 等）のときは、黙って安全側へ倒れるのではなく `::warning::` を出したうえで
+        # 予行にする。
+        #
+        # `dry_run` は利用者が渡す値なので `${{ }}` の直接展開ではなく `env:` 経由で渡す
+        # （shell への注入面を減らす、今回の変更のついでの副次的な硬化）。
+        # `github.event_name` は列挙値で安全だが、揃えて `env:` にしている。
+        id: dry-run
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DRY_RUN_INPUT: ${{ inputs.dry_run }}
+        run: node scripts/decide-publish-dry-run.mjs
+
       - name: npm publish（依存の向きの順に、tarball を上げる）
         # `npm publish <tarball>` は解決済みの manifest を持つ tarball を上げるだけなので、
         # workspace: プロトコルを見ることが無い——ADR 0060 が塞いだ穴は開かない。
@@ -165,10 +190,15 @@ jobs:
         # 404 を返すことがある（ADR 0066 測ったこと8 で実測）。だから「上がっているか」の
         # 事前判定に npm view を使うと、**上がっているのに再 publish を試みる**
         # ——それは E403 になるだけなので、下では「E403 なら上がっていたと見なす」形で受ける。
+        # `DRY_RUN` / `NPM_TAG` は上の step の出力なので `env:` 経由で受ける
+        # （直接展開に戻さない——今回の fail-open 修正のついでの副次的な硬化）。
+        env:
+          DRY_RUN: ${{ steps.dry-run.outputs.dry_run }}
+          NPM_TAG: ${{ steps.version.outputs.npm_tag }}
         run: |
           set -euo pipefail
           DRY=""
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" = "true" ]; then
+          if [ "${DRY_RUN}" = "true" ]; then
             DRY="--dry-run"
             echo "予行（--dry-run）です。registry へは何も上がりません。"
           fi
@@ -178,7 +208,7 @@ jobs:
             echo "::group::npm publish ${spec}"
             set +e
             OUT=$(npm publish "${tarball}" --access public --provenance \
-              --tag "${{ steps.version.outputs.npm_tag }}" ${DRY} 2>&1)
+              --tag "${NPM_TAG}" ${DRY} 2>&1)
             STATUS=$?
             set -e
             echo "${OUT}" | grep -v '^npm notice' || true

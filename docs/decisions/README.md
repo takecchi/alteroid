@@ -79,3 +79,4 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0064](./0064-exact-path-cost-vs-scale.md) | 厳密経路の費用倍率を規模で振って測った — ADR 0063 の「約2.5倍」の訂正と、`relaxed_order` の recall が規模とともに悪化するという発見 | 採用 (2026-09) |
 | [0065](./0065-vector-store-space-separation-conformance.md) | `VectorStore` の space 分離を適合テストの歯にする — `FakeVectorStore` に丸ごと空いていた一段と、監査の漏れの記録 | 採用 (2026-09) |
 | [0066](./0066-start-publishing-with-oidc.md) | **publish を始める**（対象4つの `private` を外す）— 梱包は pnpm・アップロードは npm（Trusted Publishing / OIDC）、引き金は GitHub Release。梱包の欠陥4件（`@types/pg` / `workspace:^` / `exports` / `vitest` の peer 化）を初版の前に直した。**`0.1.0` は publish 済み**（初版は OIDC で出せないため token 経路。provenance 無し） | 採用 (2026-09) |
+| [0067](./0067-dry-run-fail-open-and-does-not-verify-trusted-publisher.md) | 予行フラグ (`dry_run`) の fail-open を安全側へ反転する — `--dry-run` は信頼発行元 (Trusted Publisher) の未設定を検出できないと実測した記録 | 採用 (2026-09) |
