@@ -825,7 +825,10 @@ describe('回数の軸（起きた回数。model を鍵に持たない別会計�
   });
 
   it('日・actor・layer・site・tokenId のどれか1つが違えば別の turnRow になる（5軸それぞれを1つずつずらす）', async () => {
-    const base = { accumulation: 'oneshot' as const, snapshot: snapshot({ opus: totals({ costUsd: 1 }) }) };
+    const base = {
+      accumulation: 'oneshot' as const,
+      snapshot: snapshot({ opus: totals({ costUsd: 1 }) }),
+    };
     await store.record({
       ...base,
       layer: 'manager',

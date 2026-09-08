@@ -415,11 +415,17 @@ describe('層と場所の内訳', () => {
 
   it('記録の無い層・場所を 0 で補わない', () => {
     // 「使っていない」と「記録が無い」は別である。行に現れなかった値は一覧に出ない。
-    const summary = summarizeUsage(rows.filter((row) => row.layer === 'clone'), []);
+    const summary = summarizeUsage(
+      rows.filter((row) => row.layer === 'clone'),
+      [],
+    );
     expect(summary.byLayer).toEqual([{ layer: 'clone', totals: totals({ costUsd: 2 }) }]);
     expect(summary.bySite.map((entry) => entry.site)).toEqual(['distill', 'session']);
 
-    const onlySession = summarizeUsage(rows.filter((row) => row.site === 'session'), []);
+    const onlySession = summarizeUsage(
+      rows.filter((row) => row.site === 'session'),
+      [],
+    );
     expect(onlySession.bySite).toEqual([{ site: 'session', totals: totals({ costUsd: 3.5 }) }]);
   });
 
@@ -465,13 +471,29 @@ describe('回数の内訳（turnRows。model を鍵に持たない別会計）',
     },
   ];
   const turnRows: UsageTurnRow[] = [
-    { date: '2026-08-14', managerId: 'clone', layer: 'clone', site: 'session', turns: 3, updatedAt: AT },
-    { date: '2026-08-14', managerId: 'm1', layer: 'manager', site: 'session', turns: 2, updatedAt: AT },
+    {
+      date: '2026-08-14',
+      managerId: 'clone',
+      layer: 'clone',
+      site: 'session',
+      turns: 3,
+      updatedAt: AT,
+    },
+    {
+      date: '2026-08-14',
+      managerId: 'm1',
+      layer: 'manager',
+      site: 'session',
+      turns: 2,
+      updatedAt: AT,
+    },
   ];
 
   it('5軸（日・actor・層・場所・トークン）に turns が付く', () => {
     const summary = summarizeUsage(rows, turnRows);
-    expect(summary.byDate).toEqual([{ date: '2026-08-14', totals: totals({ costUsd: 4 }), turns: 5 }]);
+    expect(summary.byDate).toEqual([
+      { date: '2026-08-14', totals: totals({ costUsd: 4 }), turns: 5 },
+    ]);
     expect(summary.byManager).toEqual([
       { managerId: 'clone', totals: totals({ costUsd: 2 }), turns: 3 },
       { managerId: 'm1', totals: totals({ costUsd: 2 }), turns: 2 },

@@ -851,7 +851,9 @@ export const usageBreakdownSchema = z.object({
    * （`turnsField` と同じ理由）。
    */
   turns: turnsField,
-  byDate: z.array(z.object({ date: usageDateSchema, totals: usageTotalsSchema, turns: turnsField })),
+  byDate: z.array(
+    z.object({ date: usageDateSchema, totals: usageTotalsSchema, turns: turnsField }),
+  ),
   byManager: z.array(
     z.object({ managerId: z.string(), totals: usageTotalsSchema, turns: turnsField }),
   ),
@@ -872,7 +874,9 @@ export const usageBreakdownSchema = z.object({
    * **出てこない場所を 0 で補わない**（`compaction` はそもそも値として存在しない
    * — {@link usageSiteSchema}）。
    */
-  bySite: z.array(z.object({ site: usageSiteSchema, totals: usageTotalsSchema, turns: turnsField })),
+  bySite: z.array(
+    z.object({ site: usageSiteSchema, totals: usageTotalsSchema, turns: turnsField }),
+  ),
   /**
    * **どの認証トークンで**使ったか（Issue #393 受け入れ基準6）。
    *

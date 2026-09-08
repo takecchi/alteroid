@@ -127,7 +127,10 @@ function groupByToken(
  * ことを前提にできる。だから「その鍵が Map に無い」と「0回だった」を区別
  * できる形のまま呼び出し側へ渡せる）。
  */
-function groupTurnsBy<V>(rows: readonly UsageTurnRow[], key: (row: UsageTurnRow) => V): Map<V, number> {
+function groupTurnsBy<V>(
+  rows: readonly UsageTurnRow[],
+  key: (row: UsageTurnRow) => V,
+): Map<V, number> {
   const totals = new Map<V, number>();
   for (const row of rows) {
     totals.set(key(row), (totals.get(key(row)) ?? 0) + row.turns);

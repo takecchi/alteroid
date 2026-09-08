@@ -6018,9 +6018,7 @@ function renderUsage(
   // 起きていない」であって「0回だった」ではない（`usage.ts` の
   // `usageAggregateSchema` の `turnsSince`）。
   lines.push(
-    turnsSince === null
-      ? '回数の軸はまだ1件も記録していない。'
-      : `回数の軸の始点: ${turnsSince}`,
+    turnsSince === null ? '回数の軸はまだ1件も記録していない。' : `回数の軸の始点: ${turnsSince}`,
   );
   if (beforeTurns) {
     lines.push(
