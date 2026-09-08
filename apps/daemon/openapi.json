@@ -3435,7 +3435,18 @@
                                   "type": "string"
                                 },
                                 "apiProvider": {
-                                  "type": "string"
+                                  "type": "string",
+                                  "enum": [
+                                    "firstParty",
+                                    "bedrock",
+                                    "vertex",
+                                    "foundry",
+                                    "anthropicAws",
+                                    "anthropicGoogleCloud",
+                                    "mantle",
+                                    "gateway",
+                                    "unrecognized"
+                                  ]
                                 },
                                 "apiKeySource": {
                                   "type": "string",

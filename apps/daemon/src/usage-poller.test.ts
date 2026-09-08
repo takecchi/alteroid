@@ -1,3 +1,4 @@
+import { fetchAccountUsage } from '@alteroid/core';
 import type { UsageProbeHandle, UsageProbeQuery } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
@@ -92,6 +93,36 @@ describe('#681: 聞く間隔は「取れないと分かったか」で決まる'
     ]) {
       expect(intervalForState(state, INTERVALS), state.state).toBe(INTERVALS.normal);
     }
+  });
+
+  /**
+   * `apiProvider` が SDK の union（8値）に無い未知の値だったとき、probe 間隔が
+   * 通常（5分）のまま保たれることを、**`toAccountUsage` → `classifyLimitsUnavailable`
+   * → `AccountUsageState` → `intervalForState` の実物の経路を通して**測る。
+   *
+   * これがこの直しの本題である——直す前は `classifyLimitsUnavailable` が未知の
+   * 値を `'non_first_party'` と断定していたので、この経路は長い間隔（30分）へ
+   * 落ちていた（`intervalForState` の `cause === 'non_first_party'` の分岐）。
+   * **未知の値が来ると probe 間隔が 5分 → 30分 になり、枠が明けたことに気づくのが
+   * 平均15分遅れる**（`intervalForState` の doc）。
+   */
+  it('未知の apiProvider でも probe 間隔は通常のまま（本題）', async () => {
+    // 意味の無い短い文字列（前例: #704 の 'zz'）。鍵に見える値を作らない。
+    const { queryFn } = probe(() => ({
+      account: { apiProvider: 'zz' },
+      usage: { rate_limits_available: false, rate_limits: null },
+    }));
+    const state = await fetchAccountUsage(queryFn, { cwd: '/work' });
+
+    // 狙った状態まで届いていることを先に確かめる（偽陽性の緑を避ける）——
+    // `apiProvider: 'zz'` が `'non_first_party'` に断定されず、`undetermined`
+    // （言い分けられない）へ落ちていること。
+    expect(state.state).toBe('unavailable');
+    if (state.state !== 'unavailable') return;
+    expect(state.cause).toBe('undetermined');
+
+    // 本題: この状態での probe 間隔は通常（5分）である。
+    expect(intervalForState(state, INTERVALS)).toBe(INTERVALS.normal);
   });
 });
 

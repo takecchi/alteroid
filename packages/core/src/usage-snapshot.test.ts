@@ -12,6 +12,7 @@ import {
   hasAccountUsageDetail,
   isNotLoggedIn,
   toAccountApiKeySource,
+  toAccountApiProvider,
   toAccountUsage,
   toTokenSourcePresence,
 } from './usage-snapshot.js';
@@ -150,6 +151,20 @@ describe('「取れない」と「まだログインしていない」を混ぜ�
   it('Bedrock / Vertex なら本当に取れない', () => {
     const usage = toAccountUsage(AT, {}, { apiProvider: 'bedrock' });
     expect(classifyLimitsUnavailable(usage, undefined)).toBe('non_first_party');
+  });
+
+  /**
+   * `apiProvider` が SDK の8値に無い未知の値を「3P バックエンドだと名乗った」
+   * （`non_first_party`）と断定しないことを固定する。**本題は
+   * `apps/daemon/src/usage-poller.test.ts` の probe 間隔の歯にあるが、
+   * `classifyLimitsUnavailable` 自体の返り値もここで固定する。**
+   */
+  it('知らない apiProvider（unrecognized）を non_first_party に断定しない', () => {
+    // 意味の無い短い文字列（前例: #704 の 'zz'）。鍵に見える値を作らない。
+    const usage = toAccountUsage(AT, {}, { apiProvider: 'zz' });
+    // 狙った状態まで届いていることを先に確かめる（unrecognized に落ちているか）。
+    expect(usage.apiProvider).toBe('unrecognized');
+    expect(classifyLimitsUnavailable(usage, undefined)).not.toBe('non_first_party');
   });
 
   it('プラン名が取れていれば「取れない」と決めない', () => {
@@ -421,6 +436,47 @@ describe('toAccountApiKeySource（#681 (2)・単体）', () => {
     expect(toAccountApiKeySource(undefined)).not.toBe(toAccountApiKeySource('sk-ant-xxxxxxxx'));
     expect(toAccountApiKeySource(undefined)).toBeUndefined();
     expect(toAccountApiKeySource('sk-ant-xxxxxxxx')).toBe('unrecognized');
+  });
+});
+
+describe('toAccountApiProvider（apiProvider 許可リスト・単体）', () => {
+  it('文字列でない、または空文字・空白のみは undefined（「名乗っていない」）', () => {
+    for (const raw of [undefined, null, 42, {}, [], '', '   ']) {
+      expect(toAccountApiProvider(raw)).toBeUndefined();
+    }
+  });
+
+  it('SDK の8値はそのまま通す', () => {
+    // 逐語（union 宣言）は `SDK_API_PROVIDERS` の doc コメントが持つ。
+    const known = [
+      'firstParty',
+      'bedrock',
+      'vertex',
+      'foundry',
+      'anthropicAws',
+      'anthropicGoogleCloud',
+      'mantle',
+      'gateway',
+    ];
+    for (const value of known) {
+      expect(toAccountApiProvider(value)).toBe(value);
+    }
+  });
+
+  it('知らない非空文字列は unrecognized に落ち、元の文字は1文字も残らない', () => {
+    // 意味の無い短い文字列（前例: #704 の 'zz'）を使う。鍵に見える値を作らない。
+    const marker = 'zz';
+    const result = toAccountApiProvider(marker);
+    expect(result).toBe('unrecognized');
+    expect(JSON.stringify(result)).not.toContain(marker);
+  });
+
+  it('名乗っていない（undefined）と知らない値（unrecognized）は区別できる', () => {
+    // **どちらかへ畳んではいけない**——「名乗っていない」と「知らない値だった」は
+    // 別の観測である（`toAccountApiProvider` の doc）。
+    expect(toAccountApiProvider(undefined)).not.toBe(toAccountApiProvider('zz'));
+    expect(toAccountApiProvider(undefined)).toBeUndefined();
+    expect(toAccountApiProvider('zz')).toBe('unrecognized');
   });
 });
 
