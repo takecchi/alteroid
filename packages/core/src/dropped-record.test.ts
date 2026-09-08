@@ -194,7 +194,8 @@ describe('落とした記録の跡', () => {
     // 互いに違うときにしか測れない — 全部同じ値だと、結び付きを入れ替えても
     // 出力の文字列は1文字も変わらず、値を揃えるリファクタが将来入ったら
     // この歯が静かに抜ける。直下のアサーションで「互いに違うこと」自体を
-    // 固定する。
+    // 固定する。**そのうえで、値を揃えられても残る歯をこの it の末尾に
+    // 置いてある**（「3欄を単独で固定する」）。
     const byCause = { input: 1, notification: 3, continuation: 37 };
     expect(new Set(Object.values(byCause)).size).toBe(3);
 
@@ -240,6 +241,47 @@ describe('落とした記録の跡', () => {
     );
     expect(withSources).not.toContain('system');
     expect(withSources).not.toContain('user');
+
+    // ---- 3欄を単独で固定する ----
+    //
+    // **ここまでの期待値は `byCause` の3値が互いに違うことに支えられている。**
+    // 3値を揃えられると、キー↔値の結び付きを入れ替えても出力の文字列は1文字も
+    // 変わらないので、上の `toBe` は結び付きについて何も測らなくなる。
+    // 冒頭の注記とアサーションは「揃えるな」を守らせる側だが、**守らせるのでは
+    // なく要らなくする側の歯を、ここに置く。**
+    //
+    // **ある欄にだけ印の値を置き、残り2欄を 0 にする。** 印はこの3本が自分で
+    // 作るので、上のフィクスチャを将来どう揃えられても効き続ける。キー名と値の
+    // 結び付きが入れ替わった実装では、印が別の欄に出る（＝その欄が 0 になる）
+    // ので、3組とも落ちる。
+    const causes = ['input', 'notification', 'continuation'] as const;
+    const oneHotByCause = (marked: (typeof causes)[number], marker: number) => ({
+      input: marked === 'input' ? marker : 0,
+      notification: marked === 'notification' ? marker : 0,
+      continuation: marked === 'continuation' ? marker : 0,
+    });
+
+    for (const marked of causes) {
+      // 印は欄ごとに違う値にする（取り違えたまま偶然一致することが無いように）
+      const marker = 11 * (causes.indexOf(marked) + 1);
+      const oneHot = journalEntryShape({
+        type: 'worker_wait',
+        openedAt: '2026-08-20T00:00:00.000Z',
+        tasks: 5,
+        turns: 41,
+        byCause: oneHotByCause(marked, marker),
+        toolless: 38,
+        notifications: 3,
+        submits: 0,
+        settled: false,
+      });
+
+      expect(oneHot).toContain(`byCause.${marked}=${marker}`);
+      for (const other of causes) {
+        if (other === marked) continue;
+        expect(oneHot).toContain(`byCause.${other}=0`);
+      }
+    }
   });
 
   /**
