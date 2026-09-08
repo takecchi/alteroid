@@ -76,7 +76,7 @@ import {
 } from './prompt.js';
 import { DAILY_REPORT_KIND, localDate, localDayRange } from './schedule.js';
 import type { ScheduleStatus } from './schedule.js';
-import { isDailyReport, isWrittenDailyReport } from './schema.js';
+import { commitmentClosedBySchema, isDailyReport, isWrittenDailyReport } from './schema.js';
 import type {
   ChatStreamEvent,
   Commitment,
@@ -1139,8 +1139,11 @@ class Clone implements CloneHost {
    */
   #restoredCohort = 0;
   /**
-   * 拾い直した合図のうち、クローンが既に `commitment_close` で片付け済みのもの。
-   * id → 台帳の記録（`closedAt` が立っている）。
+   * 拾い直した合図のうち、台帳が既に片付いていると言っているもの
+   * （**閉じた主体は問わない** — クローンの `commitment_close` に限らず、
+   * 人間の `POST /commitments/:id/close` で閉じたものも同じくここに載る。
+   * `commitment.closedBy` を見て区別するのは `closedRedeliveryNotice` の側
+   * である）。id → 台帳の記録（`closedAt` が立っている）。
    *
    * **`#redelivered` と対で持つ。** あちらは「二度目だと分かる」ための印、
    * こちらは「本文を短くしてよい」ための印で、`#forget`（消し込み）で一緒に
@@ -1985,9 +1988,11 @@ class Clone implements CloneHost {
 
       // **片付け済みの配り直しは、ターンを起こさずに畳む（＝金を払わない）。**
       //
-      // ここへ来るのは、`#restoreUnread` が拾い直した合図のうち**クローン自身が
-      // `commitment_close` で閉じたと台帳が言っているもの**だけである（判定は
-      // `#restoreUnread` が済ませてある。`#closedRedeliveryNoticeFor` の doc）。
+      // ここへ来るのは、`#restoreUnread` が拾い直した合図のうち**台帳が既に
+      // 片付いていると言っているもの**だけである（閉じた主体は問わない
+      // ——クローンの `commitment_close` でも人間の
+      // `POST /commitments/:id/close` でもよい。判定は `#restoreUnread` が
+      // 済ませてある。`#closedRedeliveryNoticeFor` の doc）。
       //
       // **かつては断り書きを本文の代わりに渡して、ターンは1本まるごと回していた**
       // （issue #217。`#handle` の型ごとの分岐が断り書きを `#runInternal` /
@@ -2864,7 +2869,8 @@ class Clone implements CloneHost {
       // ので、積めなかったものは次の起動で拾い直せる。
       if (this.#stopped || this.#inbox.closed) return;
 
-      // **クローンが既に片付けているかを見る。** 台帳の id は合図の id その
+      // **台帳が既に片付いていると言っているかを見る（閉じた主体は問わない
+      // ——クローンでも人間でもよい）。** 台帳の id は合図の id その
       // ものである（`commitmentFor`）ので、`event.id` でそのまま引ける。
       // `commitmentFor` が `null` を返す型（`timer` / `self_initiative` /
       // `distill`）は台帳に載らない＝引く意味が無いので、そもそも呼ばない。
@@ -6389,6 +6395,111 @@ function managerReportBatchPrompt(
 }
 
 /**
+ * `commitment.closedBy` を実行時に区別する4状態。
+ *
+ * **`commitmentSchema.closedBy` は `z.string().optional()` で緩く持つ**
+ * （`schema.ts` の doc）。既知の値は `commitmentClosedBySchema`
+ * （`'clone' | 'human'`）の2つだが、**保存層はそれ以外の値も台帳の一覧を
+ * 壊さないために通す**ので、読み出す側は4状態を区別しなければならない
+ * ——表示側（`apps/web/app/routes/commitments.tsx` の `ClosedReasonBody`）が
+ * 既に同じ4分岐を持っており、語彙をそちらに合わせてある。
+ *
+ * **`'unknown'`（誰かが値を書いたが既知の2値ではない）と `'absent'`
+ * （そもそも欄が無い）を同じ扱いにしないこと。** 前者は書き込み側の想定外、
+ * 後者は「この欄が入る前に閉じられた行」——原因も対処も別である。
+ */
+type ClosedByState =
+  | { kind: 'clone' }
+  | { kind: 'human' }
+  | { kind: 'unknown'; raw: string }
+  | { kind: 'absent' };
+
+/** {@link ClosedByState} の doc を見よ。 */
+function closedByState(closedBy: string | undefined): ClosedByState {
+  if (closedBy === undefined) return { kind: 'absent' };
+  const parsed = commitmentClosedBySchema.safeParse(closedBy);
+  if (!parsed.success) return { kind: 'unknown', raw: closedBy };
+  return { kind: parsed.data };
+}
+
+/**
+ * 未知の `closedBy` の生値を断り書きへ載せるときの上限。
+ *
+ * **本番の書き込み経路は `'clone'`（`tools.ts` の `commitment_close`）と
+ * `'human'`（`app.ts` の `POST /commitments/:id/close`）のリテラル2つだけで、
+ * 自由記述が入る余地は無い。** それでも切り詰めるのは、台帳の行を（マイグレー
+ * ション・手動修正等で）直接書かれれば `closedBy` は任意長になりうるためで
+ * ある——`dropped-record.ts` の `TAG_LIMIT` と同じ根拠（列挙値・id を1行に
+ * 収める）で、値は 64 に揃えた。
+ */
+const CLOSED_BY_EXCERPT = 64;
+
+/** {@link closedRedeliveryNotice} の (1) 冒頭の断定行。状態ごとに全く別の文である。 */
+function closedRedeliveryHeadline(state: ClosedByState): string {
+  switch (state.kind) {
+    case 'clone':
+      return '**これは再起動後の配り直しである。クローンは既にこの合図を片付けている。**';
+    case 'human':
+      return '**これは再起動後の配り直しである。人間が既にこの合図を片付けている。**';
+    case 'unknown':
+      return (
+        '**これは再起動後の配り直しである。この合図は既に片付いている' +
+        `（閉じた主体として台帳に未知の値が入っている: 「${excerptLine(state.raw, CLOSED_BY_EXCERPT)}」）。**`
+      );
+    case 'absent':
+      return (
+        '**これは再起動後の配り直しである。この合図は既に片付いている' +
+        '（誰が閉じたかは台帳に無い ＝ この欄が入る前に閉じられた行である）。**'
+      );
+  }
+}
+
+/** {@link closedRedeliveryNotice} の (2) 片付けた時刻のラベル。 */
+function closedAtLabel(state: ClosedByState): string {
+  switch (state.kind) {
+    case 'clone':
+      return '片付けた時刻（commitment_close）';
+    case 'human':
+      return '片付けた時刻（POST /commitments/:id/close）';
+    case 'unknown':
+    case 'absent':
+      return '片付けた時刻';
+  }
+}
+
+/** {@link closedRedeliveryNotice} の末尾の一文。**`clone` を他へ流用しないこと**（下の doc）。 */
+function closedRedeliveryClosing(state: ClosedByState): string {
+  switch (state.kind) {
+    case 'clone':
+      // 閉じた判断を下したのはクローン自身なので、「思い出せなければ確かめよ」
+      // が的確に効く。**他の3状態にはこの文を流用しない** —— クローンが下して
+      // いない判断に「閉じた判断を思い出せず」は的外れである。
+      return (
+        '片付け済みなので、あらためて手を動かす必要は無い。閉じた判断を思い出せず、' +
+        '正しかったか確かめたいときだけ、上の手順で全文を読み直すこと。'
+      );
+    case 'human':
+      return (
+        '片付け済みなので、あらためて手を動かす必要は無い。**この判断はあなたが下したものではない**' +
+        '（人間が閉じた）ので、心当たりが無くても異常ではない。何が起きたか確かめたいときだけ、' +
+        '上の手順で全文を読み直すこと。'
+      );
+    case 'unknown':
+      return (
+        '片付け済みなので、あらためて手を動かす必要は無い。**この判断をあなたが下したとは限らない**' +
+        '（閉じた主体が台帳の既知の値ではない）ので、心当たりが無くても異常ではない。何が起きたか' +
+        '確かめたいときだけ、上の手順で全文を読み直すこと。'
+      );
+    case 'absent':
+      return (
+        '片付け済みなので、あらためて手を動かす必要は無い。**この判断をあなたが下したとは限らない**' +
+        '（誰が閉じたかは台帳に残っていない）ので、心当たりが無くても異常ではない。何が起きたか' +
+        '確かめたいときだけ、上の手順で全文を読み直すこと。'
+      );
+  }
+}
+
+/**
  * 片付け済みの合図が配り直されたときの断り書き。
  *
  * **宛先は日誌である（モデルではない）。** issue #217 ではこれを本文の代わりに
@@ -6401,30 +6512,35 @@ function managerReportBatchPrompt(
  * **依頼者の条件（1つでも欠けたら能力の欠落）を全部入れる**:
  * (1) 再起動後の配り直しであること (2) どの合図か（`inboxEventShape` を流用
  * — 既にこの用途で使われている本文を含まない見分け） (3) いつ受け取ったか
- * (4) クローンが既に閉じていること・閉じた時刻・`closedReason`（在れば）
+ * (4) **台帳が既に閉じていること・閉じた時刻・`closedReason`（在れば）** ——
+ * **閉じた主体（`commitment.closedBy`）は問わずに「片付いている」と言える**
+ * （{@link closedByState} の4状態）が、**誰が閉じたかは断り書きの文面に
+ * 反映する** —— クローンでもないのに「クローンが閉じた」と書けば、日誌を
+ * 後から追う人間に嘘を伝えることになる（見出し・時刻ラベル・末尾の一文の
+ * 3箇所が状態ごとに変わるのはそのため）。
  * (5) 全文の取り方 — 具体的な id か検索の手掛かり（`retrievalHintFor`）。
  *
  * **「全文は省略した」とだけ書かない。** 取り方が無い断り書きは、依頼者が
  * 明示的に禁止した形である。
  */
 export function closedRedeliveryNotice(event: InboxEvent, commitment: Commitment): string {
+  const state = closedByState(commitment.closedBy);
   const closedReason =
     commitment.closedReason === undefined || commitment.closedReason === ''
       ? ''
       : `\n閉じた理由: ${commitment.closedReason}`;
 
   return [
-    '**これは再起動後の配り直しである。クローンは既にこの合図を片付けている。**',
+    closedRedeliveryHeadline(state),
     `合図: ${inboxEventShape(event)}`,
     `受け取った時刻: ${event.at}`,
-    `片付けた時刻（commitment_close）: ${commitment.closedAt}${closedReason}`,
+    `${closedAtLabel(state)}: ${commitment.closedAt}${closedReason}`,
     '',
     '**この配り直しではターンを起こしていない。** 片付け済みだと分かっているものを、' +
       '再起動のたびに読み直してターンを1本焼く費用を払わないためである。',
     retrievalHintFor(event),
     '',
-    '片付け済みなので、あらためて手を動かす必要は無い。閉じた判断を思い出せず、' +
-      '正しかったか確かめたいときだけ、上の手順で全文を読み直すこと。',
+    closedRedeliveryClosing(state),
   ].join('\n');
 }
 

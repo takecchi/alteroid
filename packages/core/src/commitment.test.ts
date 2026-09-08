@@ -993,3 +993,157 @@ describe('closedRedeliveryNotice（片付け済みの配り直しの断り書き
     expect(notice).not.toMatch(/全文は省略した。?$/m);
   });
 });
+
+/**
+ * `commitment.closedBy` の4状態（`'clone'` / `'human'` / 未知 / `undefined`）で
+ * `closedRedeliveryNotice` の文面がどう変わるかの単体テスト。
+ *
+ * **背景（欠陥）**: `closedRedeliveryNotice` はかつて `commitment.closedBy` を
+ * 1文字も見ずに「クローンが既に片付けた」と決め打っていた。しかし commitment は
+ * 人間も `POST /commitments/:id/close` で閉じられる（`apps/daemon/src/app.ts`）
+ * ので、**人間が閉じた件でも「クローンが commitment_close で片付けた」と日誌に
+ * 書かれていた。** 日誌は人間がクローンの行いを後から追う唯一の面なので、これは
+ * 追跡可能性の欠陥だった。
+ *
+ * **`'clone'` の期待値は反転させない** —— 直した後も正しい（上の
+ * `closedRedeliveryNotice（片付け済みの配り直しの断り書き）` の5本がそれを
+ * 既に固定している。あちらは `closedBy` を一度も設定していないので、この
+ * 変更後は実質的に `'absent'` 状態を測っている。**文面に依存するアサーション
+ * は無かったので、その5本には変更を入れていない**（`片付けた時刻` 等の
+ * 部分一致は `absent` 状態のラベルでも変わらず真になる。実際に変更前後で
+ * 5本とも緑のままであることを確認した）。ここで足すのは `'human'` / 未知 /
+ * `undefined` の3状態である。
+ */
+describe('closedRedeliveryNotice の closedBy 4状態（人間が閉じた commitment でも「クローンが閉じた」と書かない）', () => {
+  const baseEvent: InboxEvent = {
+    type: 'manager_message',
+    id: 'e-closedby',
+    at: '2026-08-01T00:00:00.000Z',
+    managerId: 'mgr-9',
+    kind: 'report',
+    text: 'closedBy の4状態を確かめるための本文',
+  };
+  const baseCommitment: Commitment = {
+    id: 'e-closedby',
+    at: baseEvent.at,
+    origin: 'manager',
+    source: 'mgr-9',
+    body: '[report] closedBy の4状態を確かめるための本文',
+    closedAt: '2026-08-02T00:00:00.000Z',
+  };
+
+  const HUMAN_CLOSING =
+    '片付け済みなので、あらためて手を動かす必要は無い。**この判断はあなたが下したものではない**' +
+    '（人間が閉じた）ので、心当たりが無くても異常ではない。何が起きたか確かめたいときだけ、' +
+    '上の手順で全文を読み直すこと。';
+  const NOT_CLONE_CLOSING_TAIL =
+    '心当たりが無くても異常ではない。何が起きたか確かめたいときだけ、上の手順で全文を読み直すこと。';
+
+  const cases: readonly {
+    name: string;
+    closedBy: string | undefined;
+    headline: string;
+    label: string;
+    closing: string;
+  }[] = [
+    {
+      name: 'clone',
+      closedBy: 'clone',
+      headline: '**これは再起動後の配り直しである。クローンは既にこの合図を片付けている。**',
+      label: '片付けた時刻（commitment_close）',
+      closing:
+        '片付け済みなので、あらためて手を動かす必要は無い。閉じた判断を思い出せず、' +
+        '正しかったか確かめたいときだけ、上の手順で全文を読み直すこと。',
+    },
+    {
+      name: 'human',
+      closedBy: 'human',
+      headline: '**これは再起動後の配り直しである。人間が既にこの合図を片付けている。**',
+      label: '片付けた時刻（POST /commitments/:id/close）',
+      closing: HUMAN_CLOSING,
+    },
+    {
+      name: '未知（manager）',
+      closedBy: 'manager',
+      headline:
+        '**これは再起動後の配り直しである。この合図は既に片付いている' +
+        '（閉じた主体として台帳に未知の値が入っている: 「manager」）。**',
+      label: '片付けた時刻',
+      closing: `片付け済みなので、あらためて手を動かす必要は無い。**この判断をあなたが下したとは限らない**（閉じた主体が台帳の既知の値ではない）ので、${NOT_CLONE_CLOSING_TAIL}`,
+    },
+    {
+      name: 'undefined（absent）',
+      closedBy: undefined,
+      headline:
+        '**これは再起動後の配り直しである。この合図は既に片付いている' +
+        '（誰が閉じたかは台帳に無い ＝ この欄が入る前に閉じられた行である）。**',
+      label: '片付けた時刻',
+      closing: `片付け済みなので、あらためて手を動かす必要は無い。**この判断をあなたが下したとは限らない**（誰が閉じたかは台帳に残っていない）ので、${NOT_CLONE_CLOSING_TAIL}`,
+    },
+  ];
+
+  function commitmentWith(closedBy: string | undefined): Commitment {
+    return { ...baseCommitment, ...(closedBy === undefined ? {} : { closedBy }) };
+  }
+
+  it.each(cases)(
+    '$name: 冒頭の断定行・時刻ラベル・末尾の一文が仕様どおり',
+    ({ closedBy, headline, label, closing }) => {
+      const commitment = commitmentWith(closedBy);
+      const notice = closedRedeliveryNotice(baseEvent, commitment);
+      expect(notice.split('\n')[0]).toBe(headline);
+      expect(notice).toContain(`${label}: ${commitment.closedAt}`);
+      expect(notice.trimEnd().endsWith(closing)).toBe(true);
+    },
+  );
+
+  /**
+   * 🔴 畳みの再発を止める歯。4状態の断り書きは**互いに全部違う文字列**でなければ
+   * ならない —— どれか2つが同じ文面へ潰れれば、断り書きを読んでも「誰が閉じたか」
+   * を区別できなくなる（この PR が直そうとした形の再発）。
+   *
+   * **次の「嘘の再発を止める歯」とは別の性質を測る。** あちらは `clone` 以外に
+   * 「クローンが閉じた」という**特定の**断定が現れないかだけを見るので、例えば
+   * `human` と未知が互いに同じ文面へ潰れても（どちらも「クローンが閉じた」とは
+   * 言っていないので）拾えない。潰れ方は「クローンの文面へ潰れる」以外にも
+   * ありうるので、両方を別に置く。
+   */
+  it('4状態の断り書きは互いに全部違う（畳みの再発を止める）', () => {
+    const notices = cases.map(({ closedBy }) => closedRedeliveryNotice(baseEvent, commitmentWith(closedBy)));
+    const seen = new Map<string, string>();
+    const collisions: string[] = [];
+    notices.forEach((notice, index) => {
+      const prior = seen.get(notice);
+      if (prior !== undefined) collisions.push(`${prior} と ${cases[index]!.name} が同じ文面`);
+      else seen.set(notice, cases[index]!.name);
+    });
+    expect(collisions, collisions.join(' / ') || '衝突なし').toEqual([]);
+    expect(new Set(notices).size).toBe(cases.length);
+  });
+
+  /**
+   * 🔴 嘘の再発を止める歯。`'clone'` **以外の3状態**の本文に「クローンが閉じた」に
+   * 相当する断定が現れないこと —— この PR が直した欠陥（人間が閉じた commitment の
+   * 配り直しでも「クローンが commitment_close で片付けた」と日誌に書かれる）その
+   * ものの再発を止める。
+   *
+   * `'クローンは既に'` と `'commitment_close'` の2つの部分文字列で見る。`human` の
+   * ラベルは `POST /commitments/:id/close` であって、文字列として
+   * `commitment_close` を含まない（`commitments/:id/close` に「commitment_close」
+   * という連続した部分文字列は現れない）ことを実際の出力で確かめてある。
+   */
+  it('clone 以外の3状態には「クローンが閉じた」という断定が現れない', () => {
+    for (const { name, closedBy } of cases.filter((c) => c.name !== 'clone')) {
+      const notice = closedRedeliveryNotice(baseEvent, commitmentWith(closedBy));
+      expect(notice, `${name}: 「クローンは既に」を含んではいけない`).not.toContain('クローンは既に');
+      expect(notice, `${name}: 「commitment_close」を含んではいけない`).not.toContain('commitment_close');
+    }
+  });
+
+  it('未知の生値（64文字超）は本文に全部載らず、省略の合図が出る', () => {
+    const longRaw = 'x'.repeat(100);
+    const notice = closedRedeliveryNotice(baseEvent, commitmentWith(longRaw));
+    expect(notice).not.toContain(longRaw);
+    expect(notice).toMatch(/…（\d[\d,]* 文字省略/);
+  });
+});
