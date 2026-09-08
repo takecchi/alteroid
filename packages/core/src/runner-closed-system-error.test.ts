@@ -32,16 +32,24 @@ import { systemErrorFactsOf } from './system-error.js';
  * 届いた文言と、Node のシステムエラーが持つ3つの欄を合成したものである。
  */
 
-/** 反復した瞬間に投げる偽 SDK（起動そのものに失敗した回の形）。 */
+/**
+ * 最初の1件を読もうとした瞬間に投げる偽 SDK（起動そのものに失敗した回の形）。
+ *
+ * **1件も流さない。** 実際の spawn 失敗では、SDK の `readMessages()` が最初の1件を
+ * 出す前に例外を投げる（`init` すら来ない）。だから generator ではなく、`next()`
+ * が最初から reject する非同期イテレータを手で組む。
+ */
 function throwingSdk(error: unknown): typeof sdkQuery {
   return ((): Query => {
-    async function* generate(): AsyncGenerator<never, void> {
-      // **何も yield しない。** 実際の spawn 失敗では `readMessages()` が最初の
-      // 1件を出す前に投げる（`init` すら来ない）。
-      await Promise.resolve();
-      throw error;
-    }
-    return Object.assign(generate(), {
+    const stream = {
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+      next: (): Promise<IteratorResult<never>> => Promise.reject(error),
+      return: (): Promise<IteratorResult<never>> =>
+        Promise.resolve({ done: true, value: undefined }),
+    };
+    return Object.assign(stream, {
       close: () => undefined,
       interrupt: async () => undefined,
     }) as unknown as Query;
@@ -102,10 +110,11 @@ function throughDaemonBoundary(event: RunnerEvent): Extract<RunnerEvent, { type:
  * （元の spawn エラーがそのまま上がってくる回）を使い、欠ける側は別の歯で測る。
  */
 function eagainSpawnError(): Error {
-  return Object.assign(
-    new Error('spawn /app/node_modules/.bin/claude EAGAIN'),
-    { code: 'EAGAIN', errno: -11, syscall: 'spawn /app/node_modules/.bin/claude' },
-  );
+  return Object.assign(new Error('spawn /app/node_modules/.bin/claude EAGAIN'), {
+    code: 'EAGAIN',
+    errno: -11,
+    syscall: 'spawn /app/node_modules/.bin/claude',
+  });
 }
 
 describe('落ちた理由の分類が、判定できる形で closed に載る（#713 段1）', () => {
@@ -181,8 +190,8 @@ describe('systemErrorFactsOf は「取れなかった」を値で埋めない', 
       errno: -11,
       syscall: 'spawn /app/node_modules/.bin/claude',
     });
-    expect(
-      systemErrorFactsOf(Object.assign(new Error('code だけ'), { code: 'ENOENT' })),
-    ).toEqual({ code: 'ENOENT' });
+    expect(systemErrorFactsOf(Object.assign(new Error('code だけ'), { code: 'ENOENT' }))).toEqual({
+      code: 'ENOENT',
+    });
   });
 });
