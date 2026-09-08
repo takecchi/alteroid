@@ -227,125 +227,113 @@ describe('枠の知らせ — 二重に配らない歯', () => {
     await s.pool.stop();
   }, 12_000);
 
-  it(
-    '同じ種類で文言が交互に届いても、配るのは初めて見た文言のときだけ',
-    async () => {
-      const s = await setup();
+  it('同じ種類で文言が交互に届いても、配るのは初めて見た文言のときだけ', async () => {
+    const s = await setup();
 
-      // 分類はどちらも `reached`。**文字列は一致しない**（1通目と2通目が同じ事象
-      // なのに一致しない、という実測そのものの形）。**同じ族（`usage_notice`）が
-      // 同じ窓の中で2度目に届くので、1通目はここで flush され（`#queueSynthesizedNotice`
-      // の同族判定）、2通目は新しい窓で改めて待つ。**
-      await s.session.notify(SPEND_LIMIT);
-      await s.session.notify(FIVE_HOUR_LIMIT);
-      await vi.waitFor(
-        () => {
-          expect(countReports(s.inbox, '利用上限に当たった')).toBe(2);
-        },
-        { timeout: 8000 },
-      );
+    // 分類はどちらも `reached`。**文字列は一致しない**（1通目と2通目が同じ事象
+    // なのに一致しない、という実測そのものの形）。**同じ族（`usage_notice`）が
+    // 同じ窓の中で2度目に届くので、1通目はここで flush され（`#queueSynthesizedNotice`
+    // の同族判定）、2通目は新しい窓で改めて待つ。**
+    await s.session.notify(SPEND_LIMIT);
+    await s.session.notify(FIVE_HOUR_LIMIT);
+    await vi.waitFor(
+      () => {
+        expect(countReports(s.inbox, '利用上限に当たった')).toBe(2);
+      },
+      { timeout: 8000 },
+    );
 
-      // ここから先は全部「もう配った文言」である。直す前は `!==` が毎回真になり、
-      // この3件がそのまま3ターン焼いていた。
-      await s.session.notify(SPEND_LIMIT);
-      await s.session.notify(FIVE_HOUR_LIMIT);
-      await s.session.notify(SPEND_LIMIT);
+    // ここから先は全部「もう配った文言」である。直す前は `!==` が毎回真になり、
+    // この3件がそのまま3ターン焼いていた。
+    await s.session.notify(SPEND_LIMIT);
+    await s.session.notify(FIVE_HOUR_LIMIT);
+    await s.session.notify(SPEND_LIMIT);
 
-      // **「まだ届いていないだけ」と区別する。** 後から必ず配られるものを1本挟み、
-      // それが届いたことをもって「上の3件の判定は済んだ」とする。**日誌の行数を
-      // barrier に使わない** — 使うと、この歯が「畳んだことを記録に残す」歯
-      // （下の describe）と同じ行で落ちるようになり、2本に分けた意味が消える。
-      await s.session.rateLimit({ rateLimitType: 'five_hour', status: 'rejected' });
-      await vi.waitFor(
-        () => {
-          expect(countReports(s.inbox, '枠から追い返された')).toBe(1);
-        },
-        { timeout: 4000 },
-      );
-      expect(countReports(s.inbox, '利用上限に当たった')).toBe(2);
+    // **「まだ届いていないだけ」と区別する。** 後から必ず配られるものを1本挟み、
+    // それが届いたことをもって「上の3件の判定は済んだ」とする。**日誌の行数を
+    // barrier に使わない** — 使うと、この歯が「畳んだことを記録に残す」歯
+    // （下の describe）と同じ行で落ちるようになり、2本に分けた意味が消える。
+    await s.session.rateLimit({ rateLimitType: 'five_hour', status: 'rejected' });
+    await vi.waitFor(
+      () => {
+        expect(countReports(s.inbox, '枠から追い返された')).toBe(1);
+      },
+      { timeout: 4000 },
+    );
+    expect(countReports(s.inbox, '利用上限に当たった')).toBe(2);
 
-      await s.pool.stop();
-    },
-    16_000,
-  );
+    await s.pool.stop();
+  }, 16_000);
 });
 
 describe('枠の知らせ — 取りこぼさない歯', () => {
-  it(
-    '畳んだ分は1件ずつ日誌に残り、件数が次に配る1本の本文に載る',
-    async () => {
-      const s = await setup();
+  it('畳んだ分は1件ずつ日誌に残り、件数が次に配る1本の本文に載る', async () => {
+    const s = await setup();
 
-      await s.session.notify(SPEND_LIMIT);
-      await vi.waitFor(
-        () => {
-          expect(countReports(s.inbox, '利用上限に当たった')).toBe(1);
-        },
-        { timeout: 4000 },
-      );
+    await s.session.notify(SPEND_LIMIT);
+    await vi.waitFor(
+      () => {
+        expect(countReports(s.inbox, '利用上限に当たった')).toBe(1);
+      },
+      { timeout: 4000 },
+    );
 
-      await s.session.notify(SPEND_LIMIT);
-      await s.session.notify(SPEND_LIMIT);
-      const folded = await vi.waitFor(async () => {
-        const lines = await journalTexts(s.stores, '配達済みの知らせなので受信箱へは回さない');
-        expect(lines.length).toBe(2);
-        return lines;
-      });
-      // **何件目かが行に入っている。** 「畳んだ」だけでは、何件ぶんが受信箱へ
-      // 回らなかったのかが後から数えられない。
-      expect(folded[0]).toContain('この種類で 1 件目');
-      expect(folded[1]).toContain('この種類で 2 件目');
-      // 畳んだ行にも中身（SDK の原文）が残っている — 記録の側では失っていない。
-      expect(folded[1]).toContain(SPEND_LIMIT);
+    await s.session.notify(SPEND_LIMIT);
+    await s.session.notify(SPEND_LIMIT);
+    const folded = await vi.waitFor(async () => {
+      const lines = await journalTexts(s.stores, '配達済みの知らせなので受信箱へは回さない');
+      expect(lines.length).toBe(2);
+      return lines;
+    });
+    // **何件目かが行に入っている。** 「畳んだ」だけでは、何件ぶんが受信箱へ
+    // 回らなかったのかが後から数えられない。
+    expect(folded[0]).toContain('この種類で 1 件目');
+    expect(folded[1]).toContain('この種類で 2 件目');
+    // 畳んだ行にも中身（SDK の原文）が残っている — 記録の側では失っていない。
+    expect(folded[1]).toContain(SPEND_LIMIT);
 
-      // **受信箱しか見ていない読み手にも「畳んだ」が見える。** 次に配る1本へ
-      // 件数が載る。ここが無いと、畳んだことが受信箱側の観測から消える。
-      await s.session.notify(FIVE_HOUR_LIMIT);
-      const delivered = await vi.waitFor(
-        () => {
-          const found = reports(s.inbox).filter((text) => text.includes('利用上限に当たった'));
-          expect(found.length).toBe(2);
-          return found;
-        },
-        { timeout: 4000 },
-      );
-      expect(delivered[1]).toContain(FIVE_HOUR_LIMIT);
-      expect(delivered[1]).toContain('2 件畳んでいる');
+    // **受信箱しか見ていない読み手にも「畳んだ」が見える。** 次に配る1本へ
+    // 件数が載る。ここが無いと、畳んだことが受信箱側の観測から消える。
+    await s.session.notify(FIVE_HOUR_LIMIT);
+    const delivered = await vi.waitFor(
+      () => {
+        const found = reports(s.inbox).filter((text) => text.includes('利用上限に当たった'));
+        expect(found.length).toBe(2);
+        return found;
+      },
+      { timeout: 4000 },
+    );
+    expect(delivered[1]).toContain(FIVE_HOUR_LIMIT);
+    expect(delivered[1]).toContain('2 件畳んでいる');
 
-      await s.pool.stop();
-    },
-    12_000,
-  );
+    await s.pool.stop();
+  }, 12_000);
 
-  it(
-    '枠が開いたと観測できたら、次に追い返されたときはもう一度配る',
-    async () => {
-      const s = await setup();
-      const rejected = { rateLimitType: 'five_hour', status: 'rejected' };
+  it('枠が開いたと観測できたら、次に追い返されたときはもう一度配る', async () => {
+    const s = await setup();
+    const rejected = { rateLimitType: 'five_hour', status: 'rejected' };
 
-      await s.session.rateLimit(rejected);
-      await vi.waitFor(
-        () => {
-          expect(countReports(s.inbox, '枠から追い返された')).toBe(1);
-        },
-        { timeout: 4000 },
-      );
+    await s.session.rateLimit(rejected);
+    await vi.waitFor(
+      () => {
+        expect(countReports(s.inbox, '枠から追い返された')).toBe(1);
+      },
+      { timeout: 4000 },
+    );
 
-      // **これは「何も言っていない観測」ではなく「開いたという観測」である。**
-      // 記憶を重ねる形にしたせいで本物の再発が黙って消える、という裏返しを
-      // 作っていないことを、ここで固定する。
-      await s.session.rateLimit({ rateLimitType: 'five_hour', status: 'allowed' });
-      await s.session.rateLimit(rejected);
+    // **これは「何も言っていない観測」ではなく「開いたという観測」である。**
+    // 記憶を重ねる形にしたせいで本物の再発が黙って消える、という裏返しを
+    // 作っていないことを、ここで固定する。
+    await s.session.rateLimit({ rateLimitType: 'five_hour', status: 'allowed' });
+    await s.session.rateLimit(rejected);
 
-      await vi.waitFor(
-        () => {
-          expect(countReports(s.inbox, '枠から追い返された')).toBe(2);
-        },
-        { timeout: 4000 },
-      );
+    await vi.waitFor(
+      () => {
+        expect(countReports(s.inbox, '枠から追い返された')).toBe(2);
+      },
+      { timeout: 4000 },
+    );
 
-      await s.pool.stop();
-    },
-    12_000,
-  );
+    await s.pool.stop();
+  }, 12_000);
 });

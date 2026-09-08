@@ -88,9 +88,9 @@ describe('resolveSynthesizedNoticeWindowMs の跡（置いたのに読めなか�
   it('陰性対照: 未設定・空・空白のみでは跡を1行も出さない（正常な意思表示だから）', async () => {
     const lines = await captureStderr(() => {
       expect(resolveSynthesizedNoticeWindowMs({})).toBe(DEFAULT_MS);
-      expect(
-        resolveSynthesizedNoticeWindowMs({ [SYNTHESIZED_NOTICE_WINDOW_MS_ENV_KEY]: '' }),
-      ).toBe(DEFAULT_MS);
+      expect(resolveSynthesizedNoticeWindowMs({ [SYNTHESIZED_NOTICE_WINDOW_MS_ENV_KEY]: '' })).toBe(
+        DEFAULT_MS,
+      );
       expect(
         resolveSynthesizedNoticeWindowMs({ [SYNTHESIZED_NOTICE_WINDOW_MS_ENV_KEY]: '   ' }),
       ).toBe(DEFAULT_MS);

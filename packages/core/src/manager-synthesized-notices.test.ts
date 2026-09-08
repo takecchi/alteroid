@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import {
-  createManagerPool,
-  mergeSynthesizedNoticeFragments,
-  type ManagerPool,
-} from './manager.js';
+import { createManagerPool, mergeSynthesizedNoticeFragments, type ManagerPool } from './manager.js';
 import {
   createRunnerRegistry,
   type RunnerAnswerOutcome,
@@ -42,7 +38,12 @@ interface ManualRunner {
     status: JobStatus,
     fields?: { failure?: { code: string; via: string }; synthesized?: string },
   ): void;
-  ask(managerId: string, requestId: string, summary: string, kind?: 'question' | 'permission'): void;
+  ask(
+    managerId: string,
+    requestId: string,
+    summary: string,
+    kind?: 'question' | 'permission',
+  ): void;
   closed(managerId: string, status: 'done' | 'lost' | 'failed', reason: string): void;
   rateLimit(managerId: string, facts: RateLimitFacts): void;
   usageNotice(managerId: string, notice: UsageLimitNotice): void;
@@ -184,9 +185,9 @@ async function runningManualSetup(
 }
 
 function reportsOf(inbox: InboxEvent[]) {
-  return inbox.filter(
-    (event) => event.type === 'manager_message' && event.kind === 'report',
-  ) as { text: string }[];
+  return inbox.filter((event) => event.type === 'manager_message' && event.kind === 'report') as {
+    text: string;
+  }[];
 }
 
 describe('4通の機構合成の知らせが、合流窓の中で1件にまとまる', () => {
@@ -199,10 +200,15 @@ describe('4通の機構合成の知らせが、合流窓の中で1件にまと�
       kind: 'reached',
       text: "You've hit your individual spend limit for this account.",
     });
-    fake.report('mgr-quota', '（このターンは応答を返さずに終わった: 失敗した）失敗する前の本文', 'done', {
-      failure: { code: 'billing_error', via: 'result_is_error' },
-      synthesized: 'turn_failed',
-    });
+    fake.report(
+      'mgr-quota',
+      '（このターンは応答を返さずに終わった: 失敗した）失敗する前の本文',
+      'done',
+      {
+        failure: { code: 'billing_error', via: 'result_is_error' },
+        synthesized: 'turn_failed',
+      },
+    );
     fake.closed('mgr-quota', 'failed', 'マネージャーのセッションが落ちた: Error: 何か');
 
     // **`#onEvent` は fire-and-forget（`void`）で走るので、4通が実際に積みへ
@@ -238,9 +244,7 @@ describe('4通の機構合成の知らせが、合流窓の中で1件にまと�
     await pool.stop();
 
     const entries = await stores.journal.list({ types: ['exchange'] });
-    const merged = entries.find((entry) =>
-      JSON.stringify(entry).includes('1件にまとめて配った'),
-    );
+    const merged = entries.find((entry) => JSON.stringify(entry).includes('1件にまとめて配った'));
     expect(merged).toBeDefined();
     const joined = JSON.stringify(merged);
     expect(joined).toContain('mgr-quota');
@@ -251,7 +255,9 @@ describe('4通の機構合成の知らせが、合流窓の中で1件にまと�
     expect(joined).toContain('セッションが落ちた');
 
     // **既存の個別の exchange 行は消えていない**（rate_limit 自身の journal）。
-    const rateLimitLine = entries.find((entry) => JSON.stringify(entry).includes('枠から追い返された'));
+    const rateLimitLine = entries.find((entry) =>
+      JSON.stringify(entry).includes('枠から追い返された'),
+    );
     expect(rateLimitLine).toBeDefined();
   });
 });
@@ -344,9 +350,11 @@ describe('畳めない出来事が挟まると、先に積みが flush されて
       .filter((event) => event.type === 'manager_message')
       .map((event) => (event as { kind: string }).kind);
     expect(kinds).toEqual(['report', 'question']);
-    const reportText = (posted.find((e) => (e as { kind?: string }).kind === 'report') as {
-      text: string;
-    }).text;
+    const reportText = (
+      posted.find((e) => (e as { kind?: string }).kind === 'report') as {
+        text: string;
+      }
+    ).text;
     expect(reportText).toContain('枠から追い返された');
 
     await pool.stop();

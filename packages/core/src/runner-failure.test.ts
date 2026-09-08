@@ -212,69 +212,61 @@ describe('分類できなかった失敗の跡（回し手には届かない側�
     expect(lines.join('\n')).not.toContain('枠の文言として分類できなかった');
   });
 
-  it(
-    '分類できなかった回は初出で1行出し、同じ組の2回目は出さない',
-    async () => {
-      const lines = await captureStderr(async () => {
-        const s = setup();
-        await s.pool.start({ request: '調べて' });
-        const session = await vi.waitFor(() => {
-          const found = s.sessions[0];
-          if (!found) throw new Error('セッションがまだ開いていない');
-          return found;
-        });
-        // **本文が空**＝分類にかける材料が1文字も無い。資格ゼロの器で起こした
-        // ときと同じ形である（`is_error` は立つが、枠の文言はどこにも出ない）。
-        // **2回とも単独の断片**（伴走する `usage_notice` が無い）なので、
-        // それぞれ独立した合流窓として扱われ、`finish` を2回に分ければ
-        // 受信箱にも2件立つ——ただし窓（既定3000ms）を2回挟むぶん、
-        // このテスト自体の許容時間を伸ばす必要がある。
-        await session.finish('', { isError: true });
-        await reportTexts(s.inbox, 1);
-        await session.finish('', { isError: true });
-        await reportTexts(s.inbox, 2);
-        await s.pool.stop();
+  it('分類できなかった回は初出で1行出し、同じ組の2回目は出さない', async () => {
+    const lines = await captureStderr(async () => {
+      const s = setup();
+      await s.pool.start({ request: '調べて' });
+      const session = await vi.waitFor(() => {
+        const found = s.sessions[0];
+        if (!found) throw new Error('セッションがまだ開いていない');
+        return found;
       });
-      const first = lines.filter((line) => line.includes('（初出。**回し手には届かない**）'));
-      // **2回起きても初出は1行きり。** 全件出すと跡それ自体がログを埋める。
-      expect(first).toHaveLength(1);
-      expect(first[0]).toContain('via=result_is_error');
-      expect(first[0]).toContain('code=success');
-      // **本文を載せていない**（テスト出力に秘密が混ざった前例がある。
-      // railway/setup.test.ts の差分アサーション、#52）。
-      expect(first[0]).not.toContain(ORG_SPEND_LIMIT);
-    },
-    12_000,
-  );
+      // **本文が空**＝分類にかける材料が1文字も無い。資格ゼロの器で起こした
+      // ときと同じ形である（`is_error` は立つが、枠の文言はどこにも出ない）。
+      // **2回とも単独の断片**（伴走する `usage_notice` が無い）なので、
+      // それぞれ独立した合流窓として扱われ、`finish` を2回に分ければ
+      // 受信箱にも2件立つ——ただし窓（既定3000ms）を2回挟むぶん、
+      // このテスト自体の許容時間を伸ばす必要がある。
+      await session.finish('', { isError: true });
+      await reportTexts(s.inbox, 1);
+      await session.finish('', { isError: true });
+      await reportTexts(s.inbox, 2);
+      await s.pool.stop();
+    });
+    const first = lines.filter((line) => line.includes('（初出。**回し手には届かない**）'));
+    // **2回起きても初出は1行きり。** 全件出すと跡それ自体がログを埋める。
+    expect(first).toHaveLength(1);
+    expect(first[0]).toContain('via=result_is_error');
+    expect(first[0]).toContain('code=success');
+    // **本文を載せていない**（テスト出力に秘密が混ざった前例がある。
+    // railway/setup.test.ts の差分アサーション、#52）。
+    expect(first[0]).not.toContain(ORG_SPEND_LIMIT);
+  }, 12_000);
 
-  it(
-    'stop() で畳まれても件数が出る（この経路は #finish を通らない）',
-    async () => {
-      // **ここが要点である。** `pool.stop()`（器の入れ替えと `manager_stop` が通る道）は
-      // `RunnerSession#finish()` を通らない —— `stop()` の中に逐語で
-      // 「この経路は `#finish` を通らないので、ここで閉じないと開いたままの区間が
-      // 黙って消える」と書いてある。**合計を `#finish` にだけ置くと、この経路の
-      // 量だけが黙って失われる**（初出の1行は出ているので、失われたことに気づけない）。
-      const lines = await captureStderr(async () => {
-        const s = setup();
-        await s.pool.start({ request: '調べて' });
-        const session = await vi.waitFor(() => {
-          const found = s.sessions[0];
-          if (!found) throw new Error('セッションがまだ開いていない');
-          return found;
-        });
-        await session.finish('', { isError: true });
-        await reportTexts(s.inbox, 1);
-        await session.finish('', { isError: true });
-        await reportTexts(s.inbox, 2);
-        await s.pool.stop();
+  it('stop() で畳まれても件数が出る（この経路は #finish を通らない）', async () => {
+    // **ここが要点である。** `pool.stop()`（器の入れ替えと `manager_stop` が通る道）は
+    // `RunnerSession#finish()` を通らない —— `stop()` の中に逐語で
+    // 「この経路は `#finish` を通らないので、ここで閉じないと開いたままの区間が
+    // 黙って消える」と書いてある。**合計を `#finish` にだけ置くと、この経路の
+    // 量だけが黙って失われる**（初出の1行は出ているので、失われたことに気づけない）。
+    const lines = await captureStderr(async () => {
+      const s = setup();
+      await s.pool.start({ request: '調べて' });
+      const session = await vi.waitFor(() => {
+        const found = s.sessions[0];
+        if (!found) throw new Error('セッションがまだ開いていない');
+        return found;
       });
-      const summary = lines.filter((line) => line.includes('このセッションの合計'));
-      expect(summary).toHaveLength(1);
-      expect(summary[0]).toContain('result_is_error:success×2');
-    },
-    12_000,
-  );
+      await session.finish('', { isError: true });
+      await reportTexts(s.inbox, 1);
+      await session.finish('', { isError: true });
+      await reportTexts(s.inbox, 2);
+      await s.pool.stop();
+    });
+    const summary = lines.filter((line) => line.includes('このセッションの合計'));
+    expect(summary).toHaveLength(1);
+    expect(summary[0]).toContain('result_is_error:success×2');
+  }, 12_000);
 });
 
 describe('マネージャーの報告 — SDK のエラーを報告として扱わない', () => {
