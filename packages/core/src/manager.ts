@@ -59,8 +59,10 @@ import type {
 import type { Stores } from './store.js';
 import {
   describeUsageNotice,
+  limitRecoveryOf,
   mergeRateLimitFacts,
   usageTransitionOf,
+  withRecoveryNote,
   type RateLimitFacts,
 } from './usage-limits.js';
 import type { TokenRotatorObservation } from './token-rotator.js';
@@ -6630,7 +6632,16 @@ class Pool implements ManagerPool {
         // 自動リンクは発火しない（`http(s)://` / `www.` で始まらないため）。
         // **この実測は観測時点のものである。SDK が文言を変えたら測り直しが要る**
         // ——新しい接頭辞・記号を足す変更は SDK 側の変更履歴からは予告されない。
-        const text = describeUsageNotice(event.notice);
+        // **回復の見込み（`limitRecoveryOf`）を添える（Issue #393 段2）。**
+        // `event.notice.text` は SDK が出した文言そのままで、`limitRecoveryOf`
+        // の入力形とそのまま一致する（`usageLimitNoticeSchema` の `text` の
+        // doc）。**`describeUsageNotice()` が組み立てた定型文は1文字も
+        // 変えない**——`withRecoveryNote` は末尾に1行足すだけで、`time` /
+        // `action` が分かったときにしか足さない（同関数の doc）。
+        const text = withRecoveryNote(
+          describeUsageNotice(event.notice),
+          limitRecoveryOf(event.notice.text),
+        );
         const memory = this.#usageNoticeMemoryOf(event.notice.kind);
         if (memory.delivered.has(event.notice.text)) {
           // **畳んだことを記録に残す。** ここを `return` だけで済ませると、

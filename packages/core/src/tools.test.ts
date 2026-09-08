@@ -4483,6 +4483,118 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * **顔⑥（Issue #393 段2）: `describeManagerFailure` の ⚠ 行に回復の見込みを
+   * 添える。** 段1で確定した事実（`lastFailure` 自体は `{ code, via, at }` しか
+   * 持たないが、同じ `ManagerSummary.lastReport` に `failedReportText()` が
+   * 組み立てた SDK 逐語が埋まっている）を塞ぐ。
+   *
+   * `lastReport` は `runner.ts` の `failedReportText()` と同じ形
+   * （`（このターンは応答を返さずに終わった: <code> / <via>）\n<SDK 逐語>`）で
+   * 用意する——`limitRecoveryOf` が `startsWith` だけでなく `includes` も
+   * 見るので、この定型文が先頭に付いていても中の SDK 文言を正しく拾えることを
+   * 実測ではなくこの歯で固定する。
+   */
+  it('manager_list は失敗の⚠行に回復の見込み（time）を添える。既存の文言は変えない（#393）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.lastReport =
+      '（このターンは応答を返さずに終わった: billing_error / assistant_error）\n' +
+      "You've hit your org's monthly spend limit";
+    target.lastFailure = {
+      code: 'billing_error',
+      via: 'assistant_error',
+      at: '2026-09-09T01:23:45.000Z',
+    };
+
+    const reply = await h.call('manager_list', {});
+
+    // **既存の⚠行は1文字も変わらない。**
+    expect(reply).toContain(
+      '⚠ 直近のターンは報告ではなく失敗で終わっている: billing_error（assistant_error, 2026-09-09T01:23:45.000Z）。',
+    );
+    expect(reply).toContain('完遂して畳んだと読まないこと');
+    // **末尾に回復の見込みが添えられる。**
+    expect(reply).toContain('（回復の見込み: 時間で戻る（time））');
+  });
+
+  it('manager_list は失敗の⚠行に回復の見込み（action）を添える（#393）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.lastReport =
+      '（このターンは応答を返さずに終わった: billing_error / assistant_error）\n' +
+      'Your usage allocation has been disabled by your admin';
+    target.lastFailure = {
+      code: 'billing_error',
+      via: 'assistant_error',
+      at: '2026-09-09T01:23:45.000Z',
+    };
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('（回復の見込み: 人間が動かないと戻らない（action））');
+  });
+
+  /**
+   * **`unknown`（上限とは無関係な失敗。billing_error 以外の大半）では1文字も
+   * 足さない。** これが無いと「常に添える」実装でも time/action の歯は緑に
+   * なる——`manager_list` の既存の歯（lastFailure が無ければ1文字も足さない）
+   * と同じ理由の対になる歯。
+   */
+  it('manager_list は回復の見込みが unknown のとき1文字も足さない（#393）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.lastReport =
+      '（このターンは応答を返さずに終わった: exit_code / bash）\n' +
+      'Something unrelated went wrong';
+    target.lastFailure = {
+      code: 'exit_code',
+      via: 'bash',
+      at: '2026-09-09T01:23:45.000Z',
+    };
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('⚠ 直近のターンは報告ではなく失敗で終わっている');
+    expect(reply).not.toContain('回復の見込み');
+  });
+
+  it('manager_report は失敗の⚠行に回復の見込みを添える。既存の文言は変えない（#393）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '依頼の本文' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.lastReport =
+      '（このターンは応答を返さずに終わった: billing_error / assistant_error）\n' +
+      "You've hit your org's monthly spend limit";
+    target.lastFailure = {
+      code: 'billing_error',
+      via: 'assistant_error',
+      at: '2026-09-09T01:23:45.000Z',
+    };
+
+    const reply = await h.call('manager_report', { managerId: target.managerId });
+
+    expect(reply).toContain(
+      '⚠ 直近のターンは報告ではなく失敗で終わっている: billing_error（assistant_error, 2026-09-09T01:23:45.000Z）。',
+    );
+    expect(reply).toContain('（回復の見込み: 時間で戻る（time））');
+
+    // **依頼文は報告ではない。** 失敗が立っていても part: 'request' では
+    // 回復の見込みの行も出ない（#714 の同じ歯と同じ理由）。
+    const request = await h.call('manager_report', {
+      managerId: target.managerId,
+      part: 'request',
+    });
+    expect(request).not.toContain('回復の見込み');
+  });
+
+  /**
    * `turnEndedAt` / `turnEndReason` / `turnEndTail`（Issue #567、PR #588）を
    * `manager_list` で表示する `describeTurnEnd`（`tools.ts`）の歯。
    * 分岐の設計は同関数の doc を参照。

@@ -7273,6 +7273,85 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
     expect(entries.some((entry) => JSON.stringify(entry).includes("You've hit your"))).toBe(true);
   });
 
+  /**
+   * **顔④（Issue #393 段2）: `usage_notice` の受信箱・日誌に回復の見込みを
+   * 添える。** 段1で確定した事実（`manager.ts` は `limitRecoveryOf` /
+   * `LimitRecovery` を1つも import していなかった）を塞ぐ。
+   *
+   * `REACHED`（"You've hit your org's monthly spend limit"）は
+   * `usage-limits.test.ts` の「人間が実測した文言は『時間で戻る』側になる」で
+   * `time` と確認済みの文言——ここでは `describeUsageNotice()` が組み立てる
+   * 定型文が**1文字も変わらないこと**と、末尾に1行足されることの両方を、
+   * 受信箱（クローンへ push される合図）と日誌の両方で測る。
+   */
+  it('顔④: usage_notice（time）は既存の文言はそのまま、末尾に回復の見込みを添える', async () => {
+    const s = await startManager();
+
+    await s.sessions[0]!.noticeLimit(REACHED);
+
+    // **知らせは合流窓（既定3000ms）に積まれるので、`stop()` で flush してから
+    // 読む**（他の `rate_limit` の歯と同じ作法）。
+    await s.pool.stop();
+    const report = s.inbox.find(
+      (event) => event.type === 'manager_message' && event.kind === 'report',
+    ) as { text: string } | undefined;
+    if (report === undefined) throw new Error('報告が届いていない');
+
+    // **既存の文言は1文字も変わらない**（`describeUsageNotice` の定型文 + SDK
+    // の生 prose）。
+    expect(report.text).toContain('利用上限に当たった。この文言で仕事が止まっている');
+    expect(report.text).toContain(REACHED);
+    // **末尾に回復の見込みが添えられる。**
+    expect(report.text).toContain('（回復の見込み: 時間で戻る（time））');
+
+    // 日誌にも同じ添え方で残る（`describeManagerFailure` と揃えて、面をまたいで
+    // 読む人が詰まらない形）。
+    const entries = await s.stores.journal.list({});
+    const entry = entries.find((e) => JSON.stringify(e).includes(REACHED));
+    expect(entry).toBeDefined();
+    const journalText = (entry as { text?: string }).text ?? '';
+    expect(journalText).toContain('（回復の見込み: 時間で戻る（time））');
+  });
+
+  it('顔④: usage_notice（action）は「人間が動かないと戻らない」を添える', async () => {
+    const s = await startManager();
+    const ACTION_TEXT = 'Your usage allocation has been disabled by your admin';
+
+    await s.sessions[0]!.noticeLimit(ACTION_TEXT);
+    await s.pool.stop();
+
+    const report = s.inbox.find(
+      (event) => event.type === 'manager_message' && event.kind === 'report',
+    ) as { text: string } | undefined;
+    if (report === undefined) throw new Error('報告が届いていない');
+
+    expect(report.text).toContain(ACTION_TEXT);
+    expect(report.text).toContain('（回復の見込み: 人間が動かないと戻らない（action））');
+  });
+
+  /**
+   * **`unknown` のときは1文字も足さない（ノイズを作らない設計の回帰）。**
+   * `transition`（課金枠へ移った）は `limitRecoveryOf` の入力としては構造的に
+   * `unknown` になる（`limitRecoveryOf` の doc）——ここへ来ても「回復の見込み」
+   * の行が1文字も増えないことを、実際の配線（`manager.ts` の `case
+   * 'usage_notice'`）を通して測る。
+   */
+  it('顔④: usage_notice（unknown。transition）は回復の見込みの行を足さない', async () => {
+    const s = await startManager();
+    const TRANSITION_TEXT = "You're now using extra usage";
+
+    await s.sessions[0]!.noticeLimit(TRANSITION_TEXT);
+    await s.pool.stop();
+
+    const report = s.inbox.find(
+      (event) => event.type === 'manager_message' && event.kind === 'report',
+    ) as { text: string } | undefined;
+    if (report === undefined) throw new Error('報告が届いていない');
+
+    expect(report.text).toContain(TRANSITION_TEXT);
+    expect(report.text).not.toContain('回復の見込み');
+  });
+
   it('名乗ってきた runner へ鍵を降ろす（後から上がった runner に追いつかせる）', async () => {
     // これが無いと、起動時の撒き直しが「そのとき繋がっていた runner」にしか
     // 届かない。
