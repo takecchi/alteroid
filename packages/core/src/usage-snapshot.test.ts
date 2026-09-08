@@ -183,11 +183,7 @@ describe('plan / organization の「欄が無い」と「空」を畳まない',
   });
 
   it('両方とも非空なら、優先順位（account 側が先）は変えていない', () => {
-    const usage = toAccountUsage(
-      AT,
-      { subscription_type: 'yy' },
-      { subscriptionType: 'zz' },
-    );
+    const usage = toAccountUsage(AT, { subscription_type: 'yy' }, { subscriptionType: 'zz' });
     expect(usage.plan).toBe('zz');
   });
 
