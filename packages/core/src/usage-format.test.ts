@@ -194,3 +194,56 @@ describe('describeAccountUsage の apiKeySource 行（#681 (2)）', () => {
     expect(text).not.toContain('apiKeySource. none');
   });
 });
+
+/**
+ * `describeAccountUsage` の `unavailable` 枝の `apiKeySource` 行（#681 の続き）。
+ *
+ * ⚠️ 上の4本は全部 `okState(...)`（`state: 'ok'` 固定）を通り、`unavailable` の
+ * 状態は1つも作っていなかった——これが今回の欠陥を見逃していた理由そのもの。
+ * ここでは `unavailable` の状態だけを作るヘルパーを別に用意する（`okState` は
+ * 触らない）。
+ */
+describe('describeAccountUsage の unavailable 枝の apiKeySource 行', () => {
+  function unavailableState(
+    apiKeySource: Extract<AccountUsageState, { state: 'unavailable' }>['apiKeySource'],
+  ): AccountUsageState {
+    return {
+      state: 'unavailable',
+      at: '2026-08-14T10:00:00.000Z',
+      reason: '枠が効かない理由を言い分けられない（テスト用フィクスチャ）',
+      cause: 'undetermined',
+      apiKeySource,
+    };
+  }
+
+  it('apiKeySource: none のとき、none と「API キーを使っていない」の注記が出る', () => {
+    const text = describeAccountUsage(unavailableState('none')).join('\n');
+    expect(text).toContain('none');
+    expect(text).toContain('API キーを使っていない');
+  });
+
+  /**
+   * ⭐ この依頼の芯を測る歯。
+   *
+   * `apiKeySource` が無い（＝ SDK がこの欄を返さなかった）ときは「取れなかった」が
+   * 出て、かつ出力に `none` が1文字も含まれないことを固定する。ここが無いと、
+   * 変異試験(a)「取れなかったを none に畳む」が生き残る——`none` と「取れなかった」
+   * は意味が正反対（前者は積極的な事実、後者は欠落）なので、混同は許されない。
+   */
+  it('apiKeySource: undefined のとき「取れなかった」が出て、none は一切出ない', () => {
+    const text = describeAccountUsage(unavailableState(undefined)).join('\n');
+    expect(text).toContain('（取れなかった）');
+    expect(text).not.toContain('none');
+  });
+
+  it('apiKeySource: unrecognized のとき、unrecognized と出る（生の文字列は出ない）', () => {
+    const text = describeAccountUsage(unavailableState('unrecognized')).join('\n');
+    expect(text).toContain('unrecognized');
+  });
+
+  it('既存の「枠が返ってこない」の行は消えない', () => {
+    const text = describeAccountUsage(unavailableState('none')).join('\n');
+    expect(text).toContain('枠が返ってこない');
+    expect(text).toContain('枠が効かない理由を言い分けられない（テスト用フィクスチャ）');
+  });
+});

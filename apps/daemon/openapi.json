@@ -3557,6 +3557,21 @@
                             "cause": {
                               "type": "string",
                               "enum": ["not_logged_in", "non_first_party", "undetermined"]
+                            },
+                            "apiKeySource": {
+                              "type": "string",
+                              "enum": [
+                                "ANTHROPIC_API_KEY",
+                                "apiKeyHelper",
+                                "/login managed key",
+                                "none",
+                                "user",
+                                "project",
+                                "org",
+                                "temporary",
+                                "oauth",
+                                "unrecognized"
+                              ]
                             }
                           },
                           "required": ["state", "at", "reason"]

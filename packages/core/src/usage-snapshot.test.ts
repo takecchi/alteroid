@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { judgeTokenCandidate } from './token-candidate.js';
 import {
   accountUsageSchema,
+  accountUsageStateSchema,
   classifyLimitsUnavailable,
   describeLimitsUnavailable,
   describeOuterFailure,
@@ -467,5 +468,96 @@ describe('AccountUsage.apiKeySource（#681 (2)）', () => {
     expect(classifyLimitsUnavailable(withNone)).toBe(causeWithoutField);
     expect(classifyLimitsUnavailable(withOauth)).toBe(causeWithoutField);
     expect(classifyLimitsUnavailable(withUnrecognized)).toBe(causeWithoutField);
+  });
+});
+
+/**
+ * `accountUsageStateSchema` の `unavailable` 枝が持つ `apiKeySource`（#681 の続き）。
+ *
+ * これが無いと、`unavailable` の状態が `apiKeySource` を運んでも `GET /usage` の
+ * 応答スキーマが弾く（または黙って消す）ことになる。
+ */
+describe('accountUsageStateSchema: unavailable 枝の apiKeySource', () => {
+  it('apiKeySource が在る unavailable を通す', () => {
+    const state = {
+      state: 'unavailable' as const,
+      at: AT,
+      reason: 'テスト用の理由',
+      cause: 'undetermined' as const,
+      apiKeySource: 'none' as const,
+    };
+    expect(() => accountUsageStateSchema.parse(state)).not.toThrow();
+    expect(accountUsageStateSchema.parse(state).state).toBe('unavailable');
+  });
+
+  /**
+   * **`.optional()` の版ずれの保証。** `apiKeySource` を持たない unavailable
+   * （旧い版のデーモンが返す応答、または SDK がこの欄を返さなかった回）も
+   * 引き続き通ること——必須にすると、その組み合わせで `GET /usage` の応答が
+   * まるごと parse に失敗する。
+   */
+  it('apiKeySource が無い unavailable も通る', () => {
+    const state = {
+      state: 'unavailable' as const,
+      at: AT,
+      reason: 'テスト用の理由',
+      cause: 'undetermined' as const,
+    };
+    expect(() => accountUsageStateSchema.parse(state)).not.toThrow();
+  });
+});
+
+/**
+ * ⭐ `fetchAccountUsage` を通して、`undetermined` に落ちたときも `apiKeySource`
+ * が運ばれることを測る歯（#681 の続き）。
+ *
+ * この歯が実物の経路を通っていることは、変異試験(b)（`fetchAccountUsage` が
+ * `apiKeySource: usage.apiKeySource,` を運ぶ1行を消す）が赤くなることで示す
+ * ——足場（`probe()`）が固定値を返しているだけなら、この歯は緑のまま動かない。
+ */
+describe('fetchAccountUsage: undetermined でも apiKeySource が運ばれる（#681 の続き）', () => {
+  it('unrecognized な apiKeySource（zz）が unavailable の状態まで運ばれる', async () => {
+    const state = await fetchAccountUsage(
+      probe({
+        account: { apiProvider: 'firstParty', tokenSource: 'oauth', apiKeySource: 'zz' },
+        usage: { rate_limits_available: false, rate_limits: null, subscription_type: null },
+      }),
+      { cwd: '/work' },
+    );
+    expect(state.state).toBe('unavailable');
+    if (state.state === 'unavailable') {
+      expect(state.cause).toBe('undetermined');
+      // 意味の無い短い文字列（'zz'）は許可リスト（toAccountApiKeySource）を通って
+      // 'unrecognized' に畳まれる。生の 'zz' が1文字も残らないことも確かめる。
+      expect(state.apiKeySource).toBe('unrecognized');
+    }
+  });
+
+  it('none な apiKeySource がそのまま unavailable の状態まで運ばれる', async () => {
+    const state = await fetchAccountUsage(
+      probe({
+        account: { apiProvider: 'firstParty', tokenSource: 'oauth', apiKeySource: 'none' },
+        usage: { rate_limits_available: false, rate_limits: null, subscription_type: null },
+      }),
+      { cwd: '/work' },
+    );
+    expect(state.state).toBe('unavailable');
+    if (state.state === 'unavailable') {
+      expect(state.apiKeySource).toBe('none');
+    }
+  });
+
+  it('apiKeySource が欄ごと無いときは undefined のまま運ばれる（既定値で埋めない）', async () => {
+    const state = await fetchAccountUsage(
+      probe({
+        account: { apiProvider: 'firstParty', tokenSource: 'oauth' },
+        usage: { rate_limits_available: false, rate_limits: null, subscription_type: null },
+      }),
+      { cwd: '/work' },
+    );
+    expect(state.state).toBe('unavailable');
+    if (state.state === 'unavailable') {
+      expect(state.apiKeySource).toBeUndefined();
+    }
   });
 });
