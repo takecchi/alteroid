@@ -80,7 +80,7 @@ importers:
   packages/openai:
     dependencies:
       '@mnemora/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
       openai:
         specifier: 7.10.0
@@ -99,8 +99,11 @@ importers:
   packages/postgres:
     dependencies:
       '@mnemora/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
+      '@types/pg':
+        specifier: 8.23.1
+        version: 8.23.1
       drizzle-orm:
         specifier: 0.45.2
         version: 0.45.2(@types/pg@8.23.1)(pg@8.23.0)
@@ -111,9 +114,6 @@ importers:
       '@mnemora/testkit':
         specifier: workspace:*
         version: link:../testkit
-      '@types/pg':
-        specifier: 8.23.1
-        version: 8.23.1
       tsx:
         specifier: 4.23.13
         version: 4.23.13
@@ -127,15 +127,15 @@ importers:
   packages/testkit:
     dependencies:
       '@mnemora/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
-      vitest:
-        specifier: 5.0.0
-        version: 5.0.0(@types/node@22.20.1)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.28.2)(tsx@4.23.13))
     devDependencies:
       typescript:
         specifier: 5.9.3
         version: 5.9.3
+      vitest:
+        specifier: 5.0.0
+        version: 5.0.0(@types/node@22.20.1)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.28.2)(tsx@4.23.13))
       zod:
         specifier: 4.5.4
         version: 4.5.4

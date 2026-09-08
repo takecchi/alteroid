@@ -28,7 +28,18 @@ export function findWorkspaceProtocolViolations(manifest) {
   return violations;
 }
 
-/** `main` / `types` / `bin` が指すファイルのうち、tarball 内に実在しないものを集める。 */
+/**
+ * `main` / `types` / `bin` / `exports` が指すファイルのうち、tarball 内に実在しないものを集める。
+ *
+ * **`exports` を見る理由（ADR 0066）**: Node と TypeScript は `exports` が在れば
+ * `main` / `types` を**見ない**。つまり `exports` の指す先だけが欠けた tarball は、
+ * `main` / `types` が実在するかぎりこの門の旧版を素通りしたうえで、使う側では
+ * `ERR_PACKAGE_PATH_NOT_EXPORTED` や `ERR_MODULE_NOT_FOUND` で落ちる。
+ * **今の入口を測らずに、後退路だけを測っていることになる。**
+ *
+ * 条件付き exports（`{ types, default, import, ... }`）は入れ子になりうるので再帰で辿る。
+ * 値が `null`（意図的に塞いだ subpath）のものは指し先が無いのが正しいので飛ばす。
+ */
 export function findMissingEntryPoints(manifest, packageDir) {
   const missing = [];
   const check = (label, relPath) => {
@@ -51,7 +62,52 @@ export function findMissingEntryPoints(manifest, packageDir) {
       }
     }
   }
+  const walkExports = (label, node) => {
+    if (node === null || node === undefined) return;
+    if (typeof node === "string") {
+      check(label, node);
+      return;
+    }
+    if (Array.isArray(node)) {
+      // exports の配列形は「最初に解決できたものを使う」——全件の実在は要求できない。
+      // 1つも実在しなければ違反である。
+      const anyResolves = node.some((candidate) => {
+        if (typeof candidate !== "string") return false;
+        try {
+          statSync(resolve(packageDir, candidate));
+          return true;
+        } catch {
+          return false;
+        }
+      });
+      if (!anyResolves) {
+        missing.push(`${label} -> ${JSON.stringify(node)} のどれも実在しない`);
+      }
+      return;
+    }
+    for (const [key, value] of Object.entries(node)) {
+      walkExports(`${label}${key.startsWith(".") ? key : `[${key}]`}`, value);
+    }
+  };
+  if (manifest.exports !== undefined) {
+    walkExports("exports", manifest.exports);
+  }
   return missing;
+}
+
+/**
+ * tarball 内の manifest に `private` が立っていないか調べる（ADR 0066）。
+ *
+ * **なぜ tarball の側でも見るか**: `private: true` のままだと publish は
+ * `This package has been marked as private` で止まる——つまり事故にはならない。
+ * この歯が守っているのは publish の失敗ではなく、**`private` の状態と
+ * 「publish してよい」という明示的な決定が一致していること**である（ADR 0060 が
+ * ラッチとして置き、ADR 0066 が外した）。作業ツリー側の静的な歯と対にして、
+ * **使う人が受け取る実体の側からも**同じことを見る。
+ */
+export function findPrivateViolations(manifest) {
+  if (manifest.private === undefined || manifest.private === false) return [];
+  return [`private が立っています: ${JSON.stringify(manifest.private)}`];
 }
 
 /** `dir` 以下を再帰的に歩き、`predicate(fullPath)` が true のファイルパスを集める。 */

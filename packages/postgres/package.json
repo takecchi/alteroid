@@ -1,7 +1,6 @@
 {
   "name": "@mnemora/postgres",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "description": "MemoryStore / VectorStore / EventStore の Postgres + pgvector 実装（docs/memory-model.md §10）。",
   "license": "MIT",
@@ -19,6 +18,13 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -38,13 +44,13 @@
     "bench:scale": "tsx src/bench/scale-bench.ts"
   },
   "dependencies": {
-    "@mnemora/core": "workspace:*",
+    "@mnemora/core": "workspace:^",
+    "@types/pg": "8.23.1",
     "drizzle-orm": "0.45.2",
     "pg": "8.23.0"
   },
   "devDependencies": {
     "@mnemora/testkit": "workspace:*",
-    "@types/pg": "8.23.1",
     "tsx": "4.23.13",
     "typescript": "5.9.3",
     "vitest": "5.0.0"

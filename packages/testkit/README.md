@@ -4,11 +4,23 @@ adapter（`MemoryStore` / `VectorStore` / `EventStore` / `OutboxStore` /
 `TenantSettingsStore` の実装）が満たすべき適合テスト一式（conformance suite）と、
 決定的な擬似 `LLMProvider` / `EmbeddingProvider`。
 
-## ⚠ まだ npm へ publish していない
+## publish について
 
-`publish` の判断は別に行う（`packages/testkit/package.json` の `private: true` が
-立ったままである。[ADR 0060](../../docs/decisions/0060-publish-with-pnpm-four-packages-at-0-1-0.md)）。
-以下は publish 後の使い方である。
+**publish を始める判断は下った**（[ADR 0066](../../docs/decisions/0066-start-publishing-with-oidc.md)）。
+`private: true` は外れ、**GitHub Releases で `v<版>` の Release を publish すると**
+`.github/workflows/publish.yml` が npm の Trusted Publishing (OIDC) で上げる
+（pre-release にチェックを入れた Release は `latest` ではなく `next` に入る）。
+
+**⚠ registry に実際に上がっているかは、この文書ではなく registry に訊くこと。**
+
+```bash
+npm view @mnemora/testkit version
+```
+
+初回の `0.1.0` だけは手元から出す必要がある——npm の Trusted Publishing は
+**設定する時点でパッケージが registry に在ること**を前提にしており、初版を OIDC で
+出すことはできない（[npm/cli#8544](https://github.com/npm/cli/issues/8544)）。
+その手順は ADR 0066 の「publish の手順」にある。
 
 ## インストール
 
@@ -20,6 +32,11 @@ npm i -D @mnemora/testkit @mnemora/core vitest
 
 `@mnemora/testkit` は `vitest` に依存している（`describe`/`it`/`expect` を内部で呼ぶ）ため、
 **vitest から実行するコード**として使う。テスト対象の adapter を書く側の devDependency として入れる。
+
+**`vitest` は `peerDependencies` である**（ADR 0066）——このパッケージは vitest を同梱せず、
+**使う側が入れた vitest をそのまま使う。**そうしないと、使う側の vitest と
+このパッケージが引き込む vitest の2つが `node_modules` に並び、`describe` の実体が
+食い違って「テストが1本も見つからない」形の壊れ方をしうる。
 
 ## 前提
 

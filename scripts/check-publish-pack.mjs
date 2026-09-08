@@ -14,43 +14,54 @@
  *    （`prepack` が実際にビルドを再生成するかは、走らせてみないと分からない）。
  * 2. `workspace:*` は `npm pack` ではそのまま tarball に残り、素の consumer が
  *    `npm install` すると `npm error code EUNSUPPORTEDPROTOCOL` で落ちる。`pnpm pack` は
- *    実版へ置換して出す。**だからこの repo の publish の道具は pnpm に統一する**——
+ *    実版へ置換して出す。**だからこの repo の梱包の道具は pnpm である**——
  *    この門も `npm pack` ではなく `pnpm pack` だけを使う。
+ *
+ * **⚠ ADR 0060 は「publish の道具も pnpm に統一する」と書いたが、ADR 0066 がそこを狭めた。**
+ * 梱包（`pack`）は pnpm、**アップロード（`publish`）は npm** である
+ * ——npm の Trusted Publishing (OIDC) と provenance は npm CLI の側にあり、
+ * `pnpm publish` には `--provenance` フラグが無い。だから `.github/workflows/publish.yml` は
+ * `pnpm pack` の出した tarball を `npm publish <tarball>` へ渡す。
+ * **この門が測っているのは、その受け渡しの手前——tarball の中身までである。**
  *
  * **対象は固定リストである（動的に発見しない）。** `scripts/run-db-tests.mjs` は
  * `test:db` script の有無で対象を発見しているが、ここでは同じ手が使えない——
  * publish 対象と非対象（ルートの `mnemora` / `@mnemora/example-chat`）を分ける
- * 機械的な目印が今のところ無い（両方とも `private: true` のまま。publish 開始時に
- * 対象4つだけ `private` を外す判断は別途あるが、この時点ではまだ無い）。
- * 対象は上位で決定済みなので固定リストで持つ。**新しい publish 対象パッケージが
- * 増えたら、このリストにも手で足す必要がある**——見落としを機械的には検知できない。
+ * 機械的な目印が今のところ無い。**ADR 0066 で対象4つの `private: true` が外れ、
+ * 非対象2つには残った**ため「`private` の有無」が目印に見えるが、それは採らない
+ * ——publish 対象でないものが `private` を持たない形（版を持たない内部パッケージ等）は
+ * 普通に在りうるので、目印としては弱い。対象は上位で決定済みなので固定リストで持つ。
+ * **新しい publish 対象パッケージが増えたら、このリストにも手で足す必要がある**
+ * ——見落としを機械的には検知できない。
  */
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { PUBLISH_TARGETS } from "./publish-targets.mjs";
 import {
   findWorkspaceProtocolViolations,
   findMissingEntryPoints,
   findOrphanedSourceMaps,
   findLicenseViolations,
+  findPrivateViolations,
 } from "./publish-pack-checks.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const BANNER = "─".repeat(72);
 
-/** publish 対象4パッケージ。ディレクトリはリポジトリ直下からの相対パス。 */
-const PUBLISH_TARGETS = [
-  { name: "@mnemora/core", dir: "packages/core" },
-  { name: "@mnemora/testkit", dir: "packages/testkit" },
-  { name: "@mnemora/postgres", dir: "packages/postgres" },
-  { name: "@mnemora/openai", dir: "packages/openai" },
-];
+/**
+ * publish 対象4パッケージは `./publish-targets.mjs` が持つ（ADR 0066 で1箇所へ集めた）。
+ * それ以前はこのファイルと歯の2箇所に写しが在り、`.github/workflows/publish.yml` を足すと
+ * 3箇所目が生まれるところだった。**この門と workflow が同じリストを見ていることが、
+ * 「門を通ったものだけが publish される」の前提である。**
+ */
 
 /**
  * 判定関数（`findWorkspaceProtocolViolations` / `findMissingEntryPoints` /
- * `findOrphanedSourceMaps` / `findLicenseViolations`）の本体は `./publish-pack-checks.mjs` にある。
+ * `findOrphanedSourceMaps` / `findLicenseViolations` / `findPrivateViolations`）の本体は
+ * `./publish-pack-checks.mjs` にある。
  * ここに実装を持たないのは、`scripts/__tests__/check-publish-pack.test.mjs` が
  * `pnpm pack` を一切走らせずに合成フィクスチャへ直接それらを呼べるようにするため
  * （`publish-pack-checks.mjs` 冒頭のコメント参照）。
@@ -98,11 +109,12 @@ console.log(
     "  検査項目:",
     "    1. workspace: プロトコルが依存に残っていないこと",
     "    2. version が 0.0.0 でなく、4パッケージとも同じ版であること",
-    "    3. main / types / bin の指すファイルが tarball 内に実在すること",
+    "    3. main / types / bin / exports の指すファイルが tarball 内に実在すること",
     "    4. README.md が tarball に入っていること",
     '    5. publishConfig.access が "public" であること',
     "    6. 宙に浮いた source map（*.map の sources が tarball 内に無い）が無いこと",
     '    7. license が "MIT" であり、LICENSE ファイルが tarball に入っていること（ADR 0061）',
+    "    8. private が立っていないこと（ADR 0066 で publish を始める判断が下った）",
     BANNER,
     "",
   ].join("\n"),
@@ -159,7 +171,7 @@ try {
       versions.push({ name: target.name, version: manifest.version });
     }
 
-    // 3. main / types / bin の実在
+    // 3. main / types / bin / exports の実在
     const missingEntryPoints = findMissingEntryPoints(manifest, packageDir);
     for (const m of missingEntryPoints) {
       violations.push(`[${target.name}] tarball 内に実在しないエントリポイント: ${m}`);
@@ -189,6 +201,12 @@ try {
     const licenseViolations = findLicenseViolations(manifest, packageDir);
     for (const l of licenseViolations) {
       violations.push(`[${target.name}] ${l}`);
+    }
+
+    // 8. private（ADR 0066）
+    const privateViolations = findPrivateViolations(manifest);
+    for (const p of privateViolations) {
+      violations.push(`[${target.name}] ${p}`);
     }
   }
 

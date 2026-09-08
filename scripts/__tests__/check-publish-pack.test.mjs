@@ -9,6 +9,7 @@ import {
   findMissingEntryPoints,
   findOrphanedSourceMaps,
   findLicenseViolations,
+  findPrivateViolations,
 } from "../publish-pack-checks.mjs";
 
 /**
@@ -85,15 +86,38 @@ describe("publish 対象4パッケージの package.json（静的）", () => {
       });
 
       /**
-       * ⚠ これは「今のところそうなっている」を固定する歯であって、「そうあるべき」を
-       * 固定する歯ではない。`private: true` は、この PR の時点で唯一の誤 publish の
-       * ラッチである——publish を実際に始めるときには、対象4パッケージから
-       * `private` を外す判断が別途必要になる（この PR ではやらない。上位判断）。
-       * その判断が下って `private` が外れたら、この歯は目的通りに壊れて直され直す
-       * ——それはこの歯の失敗ではなく、意図した形での陳腐化である。
+       * ⭐ この歯は ADR 0060 の時点で `expect(manifest.private).toBe(true)` だった
+       * ——publish を止める唯一のラッチが `private: true` であり、それを外すのは
+       * 別の判断（オーナーの判断）だったためである。**その判断が下った**（ADR 0066）。
+       * ADR 0060 が予告した通り、この歯は目的通りに壊れ、向きを逆にして直された。
+       *
+       * 向きが逆になっても、この歯が押さえているものは同じである——
+       * **`private` フィールドの状態が、publish の可否についての明示的な決定と
+       * 一致していること。**`private: true` が誰かの手で戻されたら（あるいは
+       * 新しい publish 対象を `private` 付きで足したら）、publish は
+       * `npm ERR! This package has been marked as private` で黙って止まる。
+       * この歯はそれを CI の側で先に見つける。
        */
-      it("private: true のままである（publish を止める唯一のラッチ。外す判断はこの PR の範囲外）", () => {
-        expect(manifest.private).toBe(true);
+      it("private が立っていない（ADR 0066 で publish を始める判断が下った）", () => {
+        expect(manifest.private).toBeUndefined();
+      });
+
+      /**
+       * `exports` は ADR 0066 で足した。**初回 publish の前に入れる必要があった**
+       * ——`exports` を後から足すと、それまで解決できていた deep import
+       * （`@mnemora/core/dist/...`）が塞がるため、使う側から見れば破壊的変更になる。
+       *
+       * `main` / `types` は消さずに残してある（`exports` を見ない古い道具向けの後退路）。
+       * `exports` の指す先が tarball に実在するかどうかは、この静的な歯ではなく
+       * `findMissingEntryPoints` が tarball の側から測る。
+       */
+      it("exports の . が types と default を持ち、main / types と同じ先を指す", () => {
+        expect(manifest.exports?.["."]?.types).toBe(manifest.types);
+        expect(manifest.exports?.["."]?.default).toBe(manifest.main);
+      });
+
+      it("exports が ./package.json を通す（自分の manifest を読む道具のため）", () => {
+        expect(manifest.exports?.["./package.json"]).toBe("./package.json");
       });
     });
   }
@@ -199,6 +223,125 @@ describe("publish-pack-checks.mjs の判定関数（合成フィクスチャに�
       expect(missing).toHaveLength(1);
       expect(missing[0]).toContain("bin");
       expect(missing[0]).toContain("./missing-cli.js");
+    });
+
+    /**
+     * ⭐ ここから下は ADR 0066 で足した `exports` の歯。
+     *
+     * **なぜ `main` の歯では足りないか**: Node と TypeScript は `exports` が在れば
+     * `main` / `types` を見ない。`main` だけが実在して `exports` の指す先が欠けている
+     * tarball は、`main` を見る歯だけでは緑のまま通り、使う側で
+     * `ERR_MODULE_NOT_FOUND` になる。**今の入口を測る歯が別に必要である。**
+     */
+    it("exports の条件付き形（types / default）が実在すれば0件、片方を消せばその1件だけ検出する", () => {
+      fixtureDir = mkdtempSync(join(tmpdir(), "publish-pack-checks-exports-cond-"));
+      mkdirSync(join(fixtureDir, "dist"));
+      writeFileSync(join(fixtureDir, "dist", "index.js"), "export {};\n");
+      writeFileSync(join(fixtureDir, "dist", "index.d.ts"), "export {};\n");
+
+      const manifest = {
+        exports: {
+          ".": { types: "./dist/index.d.ts", default: "./dist/index.js" },
+          "./package.json": "./package.json",
+        },
+      };
+      writeFileSync(join(fixtureDir, "package.json"), "{}\n");
+      expect(findMissingEntryPoints(manifest, fixtureDir)).toEqual([]);
+
+      // default だけを欠けさせる——types 側は実在したままである
+      const brokenDefault = findMissingEntryPoints(
+        {
+          exports: {
+            ".": { types: "./dist/index.d.ts", default: "./dist/does-not-exist.js" },
+            "./package.json": "./package.json",
+          },
+        },
+        fixtureDir,
+      );
+      expect(brokenDefault).toHaveLength(1);
+      expect(brokenDefault[0]).toContain("exports.[default]");
+      expect(brokenDefault[0]).toContain("./dist/does-not-exist.js");
+    });
+
+    it("exports の subpath ごとにラベルが分かれる（どの口が欠けたか読める）", () => {
+      fixtureDir = mkdtempSync(join(tmpdir(), "publish-pack-checks-exports-subpath-"));
+      mkdirSync(join(fixtureDir, "dist"));
+      writeFileSync(join(fixtureDir, "dist", "index.js"), "export {};\n");
+
+      const missing = findMissingEntryPoints(
+        {
+          exports: {
+            ".": "./dist/index.js",
+            "./migrations": "./migrations/index.js",
+          },
+        },
+        fixtureDir,
+      );
+      expect(missing).toHaveLength(1);
+      expect(missing[0]).toContain("exports./migrations");
+      expect(missing[0]).not.toContain("exports.[");
+    });
+
+    it("exports の値が null（意図的に塞いだ subpath）なら検出しない", () => {
+      fixtureDir = mkdtempSync(join(tmpdir(), "publish-pack-checks-exports-null-"));
+      mkdirSync(join(fixtureDir, "dist"));
+      writeFileSync(join(fixtureDir, "dist", "index.js"), "export {};\n");
+
+      expect(
+        findMissingEntryPoints(
+          { exports: { ".": "./dist/index.js", "./internal": null } },
+          fixtureDir,
+        ),
+      ).toEqual([]);
+    });
+
+    it("exports の配列形は1つでも実在すれば検出せず、全滅なら1件検出する", () => {
+      fixtureDir = mkdtempSync(join(tmpdir(), "publish-pack-checks-exports-array-"));
+      mkdirSync(join(fixtureDir, "dist"));
+      writeFileSync(join(fixtureDir, "dist", "index.js"), "export {};\n");
+
+      expect(
+        findMissingEntryPoints(
+          { exports: { ".": ["./dist/nope.js", "./dist/index.js"] } },
+          fixtureDir,
+        ),
+      ).toEqual([]);
+
+      const allMissing = findMissingEntryPoints(
+        { exports: { ".": ["./dist/nope.js", "./dist/also-nope.js"] } },
+        fixtureDir,
+      );
+      expect(allMissing).toHaveLength(1);
+      expect(allMissing[0]).toContain("のどれも実在しない");
+    });
+
+    it("exports が無い manifest では exports について何も検出しない（後方互換）", () => {
+      fixtureDir = mkdtempSync(join(tmpdir(), "publish-pack-checks-exports-absent-"));
+      writeFileSync(join(fixtureDir, "index.js"), "export {};\n");
+
+      expect(findMissingEntryPoints({ main: "./index.js" }, fixtureDir)).toEqual([]);
+    });
+  });
+
+  describe("findPrivateViolations（ADR 0066）", () => {
+    /**
+     * ⚠ この対の歯が押さえているのは publish の失敗ではない——`private: true` のままなら
+     * publish は `This package has been marked as private` で**止まる**（事故にはならない）。
+     * 押さえているのは、**`private` の状態と「publish してよい」という明示的な決定が
+     * 一致していること**である（ADR 0060 がラッチとして置き、ADR 0066 が外した）。
+     */
+    it("private: true を検出する", () => {
+      const violations = findPrivateViolations({ private: true });
+      expect(violations).toHaveLength(1);
+      expect(violations[0]).toContain("private");
+    });
+
+    it("private が無ければ検出しない", () => {
+      expect(findPrivateViolations({ name: "@mnemora/core" })).toEqual([]);
+    });
+
+    it("private: false は検出しない（明示的に publish 可と書いた形）", () => {
+      expect(findPrivateViolations({ private: false })).toEqual([]);
     });
   });
 

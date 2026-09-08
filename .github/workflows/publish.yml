@@ -1,0 +1,194 @@
+name: Publish
+
+# ⚠ このファイル名（publish.yml）は npm 側の設定と結びついている。
+# Trusted Publishing の信頼発行元は「org / repo / **workflow のファイル名**」で指定するため、
+# **このファイルを改名すると publish が 403 で止まる**（npmjs.com 側も直す必要がある）。
+# 決定と手順は docs/decisions/0066-start-publishing-with-oidc.md。
+
+on:
+  # GitHub Release を publish した瞬間が引き金である。
+  # **Release を作る行為が「npm へ出してよい」の表明**であり、その表明が
+  # リリースノートと一緒に GitHub 上に残る。
+  #
+  # ⚠ `push: tags` は**わざと使っていない。**Releases の UI から Release を作ると
+  # tag も同時に作られるため、両方を引き金にすると**同じ版で2本走る**
+  # （後から走ったほうは下の「既に上がっている版を飛ばす」に落ちて緑になるので、
+  # 事故にはならないが、どちらが本物か読めなくなる）。
+  # ⟹ 素の `git push origin v0.1.1` では publish されない。Release を作ること。
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "npm publish を --dry-run で打つ（registry へ何も上げない予行）"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# 同じ版に対して2本が並走しないようにする（Release の編集で published が
+# 再発火する場合などに備える）。cancel-in-progress は false——publish の途中で
+# 殺すと「4本のうち2本だけ上がった」を作りうる。
+concurrency:
+  group: publish-${{ github.event.release.tag_name || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: npm publish（Trusted Publishing / OIDC）
+    runs-on: ubuntu-latest
+
+    # OIDC の id-token が無いと Trusted Publishing は使えない。
+    # これが無い状態では npm が長期トークンを探し、見つからず 401 で止まる。
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # 下の「tag が main の履歴上に在ること」の検査に全履歴が必要。
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          # registry-url を渡すと ~/.npmrc が registry.npmjs.org を向く。
+          # Trusted Publishing でもこの設定が要る（トークンは置かない）。
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Update npm CLI（Trusted Publishing は npm >= 11.5.1 が必要）
+        # Node 22 に同梱の npm は 10.x で、OIDC の交換を実装していない。
+        # ここを飛ばすと publish は「トークンが無い」の顔をして 401 で落ちる。
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Release の tag が main の履歴上に在ることを確かめる
+        # publish.yml は CI（ci.yml）を経由しない引き金で走る。ci.yml は
+        # `push: branches: [main]` と `pull_request` にしか反応しないため、
+        # **main を通っていない commit から Release を作れば、検査を1つも通らずに
+        # publish に到達できてしまう。**
+        # ここでは「Release の tag が指す commit が main の履歴上に在る」ことだけを確かめる
+        # ——つまり main の CI（本物の Postgres を含む3ジョブ）を通った commit である
+        # ことに依拠する。下の段で非 DB の門は改めて全部通す。
+        # ⚠ この依拠は「main へ入った時点で CI が緑だった」ことの検査ではない
+        # （引き受けた負債。ADR 0066）。
+        if: github.event_name == 'release'
+        run: |
+          set -euo pipefail
+          # actions/checkout の fetch-depth: 0 で全履歴と全ブランチが取れているが、
+          # origin/main が無い器でも動くように明示的に取り直す。
+          # ⚠ ここに --depth=0 を渡してはならない（git は "depth 0 is not a positive number" で
+          # fatal になる。実測して確認した）。
+          git fetch origin main
+          # release イベントでは checkout が tag を出しているので HEAD がその commit である
+          # （github.sha に頼らず、実際に checkout された物を見る）。
+          TAG_SHA="$(git rev-parse HEAD)"
+          if ! git merge-base --is-ancestor "${TAG_SHA}" origin/main; then
+            echo "Release の tag が指す commit (${TAG_SHA}) は origin/main の履歴上に在りません。" >&2
+            echo "main へ入った commit から Release を作ってください。" >&2
+            exit 1
+          fi
+          echo "OK: Release の tag は origin/main の履歴上に在ります（${TAG_SHA}）。"
+
+      - name: Release の tag から版と dist-tag を決める
+        id: version
+        run: |
+          set -euo pipefail
+          NPM_TAG="latest"
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+            VERSION="${TAG#v}"
+            # ⭐ pre-release として作られた Release を latest にしない。
+            # GitHub は pre-release でも published を発火させるため、ここで分けないと
+            # **beta が latest になり、`npm i @mnemora/core` が beta を掴む。**
+            if [ "${{ github.event.release.prerelease }}" = "true" ]; then
+              NPM_TAG="next"
+            fi
+          else
+            # workflow_dispatch（予行）のときは package.json の版をそのまま使う。
+            VERSION="$(node -p "require('./packages/core/package.json').version")"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "npm_tag=${NPM_TAG}" >> "$GITHUB_OUTPUT"
+          echo "版: ${VERSION} / dist-tag: ${NPM_TAG}"
+
+      - name: Typecheck / Lint / Format / Test / Build（非 DB の門を全部通す）
+        # DB を要する検査（packages/postgres と examples/chat の test:db）はここでは走らない
+        # ——service container を立てる必要があり、同じ commit に対して main の CI が
+        # すでに走っている（上の ancestor 検査がその前提を押さえている）。
+        # ルートの `pnpm run test` は DB 段について「実行していません」と明示的に告知する（ADR 0015）。
+        run: |
+          pnpm run typecheck
+          pnpm run lint
+          pnpm run format:check
+          pnpm run test
+          pnpm run build
+
+      - name: publish 梱包の門（tarball の中身を検査する）
+        run: pnpm run pack:check
+
+      - name: "pnpm pack（workspace: を実版へ置換できるのは pnpm だけ）"
+        # 梱包は pnpm、アップロードは npm に分ける（ADR 0066）。
+        # `npm pack` は `workspace:*` を tarball に残し、素の consumer の install が
+        # EUNSUPPORTEDPROTOCOL で落ちる（ADR 0060 の実測）。
+        run: |
+          node scripts/pack-publish-targets.mjs "${RUNNER_TEMP}/tarballs" \
+            --expect-version "${{ steps.version.outputs.version }}"
+
+      - name: npm publish（依存の向きの順に、tarball を上げる）
+        # `npm publish <tarball>` は解決済みの manifest を持つ tarball を上げるだけなので、
+        # workspace: プロトコルを見ることが無い——ADR 0060 が塞いだ穴は開かない。
+        #
+        # provenance: Trusted Publishing 経由なら npm が自動で付けるが、
+        # **意図を読める形で残すために明示する**。付けられない環境では
+        # 黙って落ちるのではなく、このフラグが原因を名指しして落ちる。
+        #
+        # **⭐ 既に上がっている版は飛ばす（冪等にする）。**
+        # 4本を順に上げる途中で1本落ちたとき、そのまま再実行すると
+        # 「1本目が既に在る」で E403 になって**再開できない**。飛ばす形にすれば
+        # 落ちた続きから再開できる。版そのものの取り違えは上の --expect-version が見ている
+        # （4パッケージとも tag の版であることを確かめてから、ここへ来る）。
+        #
+        # **⚠ publish の成否は npm publish の出力で判断し、npm view では判断しない。**
+        # registry の読み取り側は書き込みに数分遅れ、CDN を迂回する ?write=true でも
+        # 404 を返すことがある（ADR 0066 測ったこと8 で実測）。だから「上がっているか」の
+        # 事前判定に npm view を使うと、**上がっているのに再 publish を試みる**
+        # ——それは E403 になるだけなので、下では「E403 なら上がっていたと見なす」形で受ける。
+        run: |
+          set -euo pipefail
+          DRY=""
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" = "true" ]; then
+            DRY="--dry-run"
+            echo "予行（--dry-run）です。registry へは何も上がりません。"
+          fi
+          while IFS= read -r tarball; do
+            spec=$(tar xzOf "${tarball}" package/package.json \
+              | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const m=JSON.parse(s);console.log(m.name+"@"+m.version)})')
+            echo "::group::npm publish ${spec}"
+            set +e
+            OUT=$(npm publish "${tarball}" --access public --provenance \
+              --tag "${{ steps.version.outputs.npm_tag }}" ${DRY} 2>&1)
+            STATUS=$?
+            set -e
+            echo "${OUT}" | grep -v '^npm notice' || true
+            if [ "${STATUS}" -eq 0 ]; then
+              echo "✔ ${spec} を publish した"
+            elif echo "${OUT}" | grep -q "cannot publish over the previously published"; then
+              echo "✔ ${spec} は既に registry に在る（飛ばした）"
+            else
+              echo "✗ ${spec} の publish が失敗した（exit ${STATUS}）" >&2
+              exit "${STATUS}"
+            fi
+            echo "::endgroup::"
+          done < "${RUNNER_TEMP}/tarballs/publish-order.txt"

@@ -1,7 +1,6 @@
 {
   "name": "@mnemora/testkit",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "description": "adapter（MemoryStore/VectorStore/EventStore の実装）が満たすべき適合テスト一式（conformance suite）。",
   "license": "MIT",
@@ -20,6 +19,13 @@
   "publishConfig": {
     "access": "public"
   },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
@@ -32,11 +38,14 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@mnemora/core": "workspace:*",
-    "vitest": "5.0.0"
+    "@mnemora/core": "workspace:^"
+  },
+  "peerDependencies": {
+    "vitest": "^5.0.0"
   },
   "devDependencies": {
     "typescript": "5.9.3",
+    "vitest": "5.0.0",
     "zod": "4.5.4"
   }
 }

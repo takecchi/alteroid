@@ -3,11 +3,23 @@
 mnemora の core パッケージ。型・interface・`runtime.observe/tick/recall` の実装・
 純関数の既定戦略（減衰・スコアリング）を持つ。実行時依存は [zod](https://www.npmjs.com/package/zod) だけ。
 
-## ⚠ まだ npm へ publish していない
+## publish について
 
-`publish` の判断は別に行う（`packages/core/package.json` の `private: true` が
-立ったままである。[ADR 0060](../../docs/decisions/0060-publish-with-pnpm-four-packages-at-0-1-0.md)）。
-以下は publish 後の使い方である。
+**publish を始める判断は下った**（[ADR 0066](../../docs/decisions/0066-start-publishing-with-oidc.md)）。
+`private: true` は外れ、**GitHub Releases で `v<版>` の Release を publish すると**
+`.github/workflows/publish.yml` が npm の Trusted Publishing (OIDC) で上げる
+（pre-release にチェックを入れた Release は `latest` ではなく `next` に入る）。
+
+**⚠ registry に実際に上がっているかは、この文書ではなく registry に訊くこと。**
+
+```bash
+npm view @mnemora/core version
+```
+
+初回の `0.1.0` だけは手元から出す必要がある——npm の Trusted Publishing は
+**設定する時点でパッケージが registry に在ること**を前提にしており、初版を OIDC で
+出すことはできない（[npm/cli#8544](https://github.com/npm/cli/issues/8544)）。
+その手順は ADR 0066 の「publish の手順」にある。
 
 ## インストール
 
