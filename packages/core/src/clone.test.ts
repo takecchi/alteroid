@@ -426,6 +426,42 @@ async function waitForTerminal(events: ChatStreamEvent[]): Promise<void> {
   await expect.poll(() => events.some(isTerminal), { timeout: 3000 }).toBe(true);
 }
 
+/**
+ * premise の**節の目次の行**（`[節id] 見出し — N 文字`）を、いまストアに在る
+ * 本文から組み立てる。**焼き込み・載せ直しに実際に載る形そのものである。**
+ *
+ * ## なぜ本文ではなくこれで測るのか（人間の決定 2026-09-08）
+ *
+ * `premise` の焼き込みは**全文からカード（要旨＋節の目次）へ**変わり、本文は
+ * 1文字も載らなくなった（`memory.ts` の `renderPremiseCard`）。だから
+ * 「人間が書き換えたら次の会話に反映される」（受け入れ基準3）を**本文の文字列
+ * が載るか**で測っていた歯は、そのままでは測る対象を失う。
+ *
+ * **反映は消えていない。反映の現れ方が変わっただけである** —— 節id は
+ * `<見出しの8桁>-<sha256(見出し行 + 中身) の先頭8桁>` なので（`memory.ts` の
+ * `memorySectionId`）、**本文を1文字直せば節id が変わる。** 文字数も
+ * 一緒に載る。⟹ この行が変わったことは「人間の手編集が届いた」ことであり、
+ * この行が載っていないことは「その文書は載せ直されていない」ことである。
+ *
+ * **期待値を手で書き写さない。** 節id はハッシュなので写せば必ず腐る——
+ * 焼き込みと同じ関数（`renderMemoryDocuments`）に通した結果から取る。
+ *
+ * 見出し行（`<!-- memory: … -->`）と要旨の1行は文書によらず同じ形なので、
+ * **文書と版を見分けられる行だけ**を返す（入れ子の節はインデントが付くので
+ * 行頭の空白を許す）。
+ */
+async function memoryCardOutlineLines(stores: Stores, slug: string): Promise<string[]> {
+  const doc = (await stores.persona.documents()).find((entry) => entry.slug === slug);
+  if (doc === undefined) throw new Error(`記憶に ${slug} が無い`);
+  const outline = renderMemoryDocuments([doc])
+    .split('\n')
+    .filter((line) => /^\s*\[[0-9a-f]{8}-[0-9a-f]{8}\] /.test(line));
+  // 0 行のまま返すと、以降の `toContain` / `not.toContain` が1つも走らないまま
+  // 緑になる（測っていないのに測ったことになる形）。
+  if (outline.length === 0) throw new Error(`${slug} のカードに節の目次が無い`);
+  return outline;
+}
+
 describe('クローン', () => {
   it('人間の発言に応答し、往復が日誌に残る', async () => {
     const s = setup(() => 'こんにちは');
@@ -1051,17 +1087,51 @@ describe('クローン', () => {
     await s.clone.stop();
   });
 
+  /**
+   * **測る対象を「本文が載るか」から「カードが載るか」へ移した**（人間の決定
+   * 2026-09-08。`memory.ts` の `renderPremiseCard`）。かつてここは
+   * `systemPrompt` が本文の一節（`人間が手で書いた方針`）を含むことだけを見て
+   * いたが、`premise` の焼き込みは要旨と節の目次だけになり、本文はどの
+   * セッションにも載らない。
+   *
+   * **保証は弱まっていない。むしろ「次の会話に反映される」を初めて実際に測る
+   * 形になった** —— 元の歯は1度書いて1度読むだけで、題にある「人間が書き換え
+   * れば」の側（書き換えた後にもう一度セッションを組むと、新しい版が載り、
+   * 古い版は載っていない）を1つも確かめていなかった。節id は本文のハッシュ
+   * なので（`memoryCardOutlineLines` の doc）、本文が載らなくても手編集が
+   * 届いたことはこの行で測れる。
+   */
   it('記憶をシステムプロンプトに載せる。人間が書き換えれば次の会話に反映される（受け入れ基準3）', async () => {
     const stores = createMemoryStores();
-    await stores.persona.write('values', '# 価値観\n\n人間が手で書いた方針\n');
+    await stores.persona.write('values', '# 人間が手で書いた方針\n\n方針の中身\n');
 
     const s = setup(undefined, stores);
     s.clone.post(humanMessage('やあ'));
     await waitForDone(s.events);
 
-    expect(String((s.calls[0] as FakeCall).options.systemPrompt)).toContain('人間が手で書いた方針');
-
+    const before = await memoryCardOutlineLines(stores, 'values');
+    const firstPrompt = String((s.calls[0] as FakeCall).options.systemPrompt);
+    for (const line of before) expect(firstPrompt).toContain(line);
     await s.clone.stop();
+
+    // 人間がエディタで直接書き換える（節を1つ足す＝カードの目次が変わる）。
+    await stores.persona.write(
+      'values',
+      '# 人間が手で書いた方針\n\n方針の中身\n\n## あとから足した節\n\n追記\n',
+    );
+    const after = await memoryCardOutlineLines(stores, 'values');
+
+    const second = setup(undefined, stores);
+    second.clone.post(humanMessage('また来た'));
+    await waitForDone(second.events);
+
+    const secondPrompt = String((second.calls[0] as FakeCall).options.systemPrompt);
+    for (const line of after) expect(secondPrompt).toContain(line);
+    // **古い版が残っていない**（足されただけではなく、置き換わっている）。
+    // 節id は中身のハッシュなので、子を足した親の行も別の値になる。
+    for (const line of before) expect(secondPrompt).not.toContain(line);
+
+    await second.clone.stop();
   });
 
   it('セッション id を覚え、次の起動で resume に渡す（再起動しても同じ人格）', async () => {
@@ -2628,6 +2698,31 @@ describe('クローン — 自律（人間以外の起点）', () => {
    * その分岐を1つずつ確かめる。
    */
   describe('記憶の床（tick の digest 先頭、#553 F2）', () => {
+    /**
+     * 床を**指定した文字数ぶん**動かすための文書。
+     *
+     * ## なぜ本文を伸ばす形をやめたか（人間の決定 2026-09-08）
+     *
+     * ここから下の2本は、かつて本文（`'a'.repeat(N)`）を伸ばして床を動かして
+     * いた。`premise` が全文で焼かれていた頃は、本文を N 文字伸ばせば床も
+     * ちょうど N 文字増えたからである。
+     *
+     * **いまは本文が1文字も焼かれない**（`memory.ts` の `renderPremiseCard`）
+     * ので、本文をどれだけ伸ばしても床はほとんど動かない（カードに載る
+     * `全 N 文字` の**桁**が増えたぶんだけ動く）。実際、この変更の直後は
+     * 「+0 文字」のまま線を超えず、歯が落ちていた。
+     *
+     * **代わりに要旨（frontmatter の `description`）を伸ばす。** 要旨は予算
+     * （`memory.ts` の `MEMORY_PROMPT_DESCRIPTION_BUDGET` = 3,000 文字）までは
+     * そのままカードへ載るので、**1文字単位で床を動かせる唯一の口**である
+     * （節を足す形は、節の行と親の文字数が同時に動くので刻みを選べない）。
+     *
+     * **測っている対象は変えていない** —— どちらも「毎ターン焼かれる量が
+     * 増えたことを、床の行が差分と線の印で名乗るか」である。
+     */
+    const noteWithSummary = (summaryChars: number) =>
+      `---\ndescription: ${'a'.repeat(summaryChars)}\n---\n\n# Note\n\n本文\n`;
+
     it('発意 tick の digest の先頭に床の行が在り、基準未確立・前回tick無しを言う', async () => {
       const s = setup(() => '今回は動かない');
 
@@ -2704,7 +2799,9 @@ describe('クローン — 自律（人間以外の起点）', () => {
 
     it('2回目の tick で「前回の tick から ±N 文字」が出る（1回目では出ない）。線を超えたら印が出る', async () => {
       const stores = createMemoryStores();
-      await stores.persona.write('note', `# Note\n\n${'a'.repeat(200)}\n`);
+      // 床を動かす口は要旨である（`noteWithSummary` の doc）。
+      const summaryChars = 1_000;
+      await stores.persona.write('note', noteWithSummary(summaryChars));
       const s = setup(() => 'わかった', stores);
       const call = () => s.calls[0];
 
@@ -2729,9 +2826,13 @@ describe('クローン — 自律（人間以外の起点）', () => {
 
       // 基準から +20% 超の増分を作る（線 = +10% を確実に超える）。
       const extra = Math.ceil(baseline * 0.2) + 50;
-      await stores.persona.write('note', `# Note\n\n${'a'.repeat(200 + extra)}\n`);
+      await stores.persona.write('note', noteWithSummary(summaryChars + extra));
       const grownFloor = measureMemoryFloor(await stores.persona.documents()).totalChars;
       const expectedDiff = grownFloor - baseline;
+      // **床が本当に増えたことを先に確かめる。** 増えていなければ、この後の
+      // 「線に達している」は測れない（本文を伸ばしていた頃の形はここで 0 になり、
+      // それでも `+0 文字` の行だけは一致して緑に見えていた）。
+      expect(expectedDiff).toBeGreaterThan(baseline * 0.1);
 
       s.clone.post({
         type: 'self_initiative',
@@ -2749,9 +2850,18 @@ describe('クローン — 自律（人間以外の起点）', () => {
       await s.clone.stop();
     });
 
+    /**
+     * **この歯は落ちていなかったが、測る対象を失っていた（範囲外の発見を同じ
+     * 穴として直した）。** 本文を伸ばす形では床が 1 文字も動かず、それでも
+     * 「差分そのものは出る」の側は `+0 文字` が `/前回の tick から \+\d/` に
+     * 一致するので緑のままだった —— **増やしていないから印が出ない**状態を、
+     * 「増やしたが線に届かないから印が出ない」として読んでいたことになる。
+     * ⟹ 要旨で床を動かす形に揃え、**実際に増えたこと**を歯自身が先に確かめる。
+     */
     it('線（+10%）を超えないときは印が出ない', async () => {
       const stores = createMemoryStores();
-      await stores.persona.write('note', `# Note\n\n${'a'.repeat(400)}\n`);
+      const summaryChars = 1_000;
+      await stores.persona.write('note', noteWithSummary(summaryChars));
       const s = setup(() => 'わかった', stores);
       const call = () => s.calls[0];
 
@@ -2766,7 +2876,11 @@ describe('クローン — 自律（人間以外の起点）', () => {
       const baseline = measureMemoryFloor(await stores.persona.documents()).totalChars;
       // 基準から +5% ぶんだけ増やす（線 = +10% の半分。確実に超えない）。
       const smallExtra = Math.max(1, Math.floor(baseline * 0.05));
-      await stores.persona.write('note', `# Note\n\n${'a'.repeat(400 + smallExtra)}\n`);
+      await stores.persona.write('note', noteWithSummary(summaryChars + smallExtra));
+      // 増えたこと（0 ではない）と、線に届いていないことの両方を先に固定する。
+      const grownFloor = measureMemoryFloor(await stores.persona.documents()).totalChars;
+      expect(grownFloor - baseline).toBeGreaterThan(0);
+      expect(grownFloor - baseline).toBeLessThan(baseline * 0.1);
 
       s.clone.post({
         type: 'self_initiative',
@@ -2792,10 +2906,20 @@ describe('クローン — 自律（人間以外の起点）', () => {
      * の doc）。**境界そのものを測る歯なので、境界に居ることを歯自身が
      * 確かめる**——丸めた百分率がちょうど 10.0 でなければ、この歯は境界を
      * 測っていないことになるので落ちる。
+     *
+     * **境界へ寄せる口も本文から要旨へ移した**（`noteWithSummary` の doc）。
+     * 要旨は 1 文字がそのまま床の 1 文字になるので、`round(基準 × 0.1)` を
+     * 足せば床もちょうどその分だけ増える —— **ただし、それが成り立つのは
+     * カードの `全 N 文字` の桁が増えないあいだだけである。** 桁が増えると
+     * 区切りのコンマぶん床が余計に動くので、境界を跨がない大きさ（4 桁の
+     * 内側）に採ってある。**この見立てが外れたら、直後の丸めの確認が落ちる。**
      */
     it('線ちょうど（+10.0%）でも印が出る（線に達したら印、の側）', async () => {
       const stores = createMemoryStores();
-      await stores.persona.write('note', `# Note\n\n${'a'.repeat(5_000)}\n`);
+      // 基準を 2,000 文字台にする（丸めの窓 ±0.05% が ±1 文字より広くなる
+      // 大きさ。小さすぎると `round` の誤差だけで 10.0 から外れる）。
+      const summaryChars = 2_000;
+      await stores.persona.write('note', noteWithSummary(summaryChars));
       const s = setup(() => 'わかった', stores);
       const call = () => s.calls[0];
 
@@ -2811,7 +2935,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
       const baseline = measureMemoryFloor(await stores.persona.documents()).totalChars;
       await stores.persona.write(
         'note',
-        `# Note\n\n${'a'.repeat(5_000 + Math.round(baseline * 0.1))}\n`,
+        noteWithSummary(summaryChars + Math.round(baseline * 0.1)),
       );
 
       // **歯自身が境界に居ることを確かめる。** 実装と同じ丸め方
@@ -3786,9 +3910,20 @@ describe('クローン — 壊れ方の回帰', () => {
     await s.clone.stop();
   });
 
+  /**
+   * **測る対象を本文からカードへ移した**（人間の決定 2026-09-08。上の
+   * `memoryCardOutlineLines` の doc）。載せ直しに本文（`NEW-VALUE`）は
+   * もう現れない —— 現れるのは**変わったカードの行**で、節id が本文の
+   * ハッシュなので、本文だけを直しても行は必ず変わる。
+   *
+   * **保証は弱まっていない。** 「人間の手編集が次のターンへ届く」ことに加えて、
+   * **書き換え前の版が載っていない**（＝古い写しが混ざらない）ことまで見る
+   * ようになった。
+   */
   it('走行中に人間が記憶を書き換えたら、次のターンで載せ直す（受け入れ基準3）', async () => {
     const stores = createMemoryStores();
     await stores.persona.write('values', '# 価値観\n\nOLD-VALUE\n');
+    const before = await memoryCardOutlineLines(stores, 'values');
 
     const s = setup(undefined, stores);
     s.clone.post(humanMessage('1回目'));
@@ -3796,6 +3931,7 @@ describe('クローン — 壊れ方の回帰', () => {
 
     // 人間がエディタで直接書き換える
     await stores.persona.write('values', '# 価値観\n\nNEW-VALUE\n');
+    const after = await memoryCardOutlineLines(stores, 'values');
 
     const events: ChatStreamEvent[] = [];
     s.clone.subscribe('conv-2', (event) => events.push(event));
@@ -3803,7 +3939,8 @@ describe('クローン — 壊れ方の回帰', () => {
     await waitForDone(events);
 
     const second = (s.calls[0] as FakeCall).inputs[1] ?? '';
-    expect(second).toContain('NEW-VALUE');
+    for (const line of after) expect(second).toContain(line);
+    for (const line of before) expect(second).not.toContain(line);
     expect(second).toContain('2回目');
 
     await s.clone.stop();
@@ -3928,10 +4065,30 @@ describe('クローン — commitment_close と inbox.remove の消し込み（i
  *
  * **受け入れ基準3（人間の手編集が次の会話に反映される）を弱めていないこと**は、
  * 上の「走行中に人間が記憶を書き換えたら、次のターンで載せ直す」がそのまま
- * 見ている（あちらは触っていない）。
+ * 見ている（あちらも同じ日に、本文からカードへ測り方を移した）。
+ *
+ * ## ⚠️ 2026-09-08 以降、「本文が載っていない」だけでは 1 を測れない
+ *
+ * `premise` の焼き込みが全文からカードへ変わり（`memory.ts` の
+ * `renderPremiseCard`）、**本文はシステムプロンプトにも載せ直しにも1文字も
+ * 現れなくなった。** ⟹ `not.toContain(UNCHANGED_BODY)` は**どこでも真**に
+ * なり、そのままでは「変わっていない文書は二重に載らない」を1文字も測って
+ * いない状態になる（緑のまま歯が抜ける形）。
+ *
+ * **だから、載る側の単位（カード）で測り直す。** 本文の不在は
+ * 「本文はもう載らない」の回帰として残したうえで、**本題は「変わっていない
+ * 文書のカードが載せ直しに出ないこと」**に移してある
+ * （`memoryCardOutlineLines`）。**測る対象が実在する側へ移ったので、保証は
+ * 弱まっていない。**
  */
 describe('クローン — 記憶を二重に載せない', () => {
-  /** その名のとおり、載せ直しの中に本文が出てきてはいけない文書。 */
+  /**
+   * その名のとおり、載せ直しの中に本文が出てきてはいけない文書。
+   *
+   * **2026-09-08 以降、これは「本文はもう焼き込みに載らない」の回帰でしかない**
+   * （カードには本文が入らないので、どこにも現れない）。**本題のほうは
+   * `habitsCard`（この文書のカードの行）で測る。**
+   */
   const UNCHANGED_BODY = 'HABIT-BODY-MUST-NOT-BE-RESENT';
 
   async function twoDocumentStores(): Promise<Stores> {
@@ -3952,29 +4109,38 @@ describe('クローン — 記憶を二重に載せない', () => {
 
   it('1つの文書を直しても、変わっていない文書の本文は載せ直さない', async () => {
     const stores = await twoDocumentStores();
+    const habitsCard = await memoryCardOutlineLines(stores, 'habits');
     const s = setup(undefined, stores);
     s.clone.post(humanMessage('1回目'));
     await waitForDone(s.events);
 
     await stores.persona.write('values', '# 価値観\n\nNEW-VALUE\n');
+    const valuesCard = await memoryCardOutlineLines(stores, 'values');
     const second = await secondTurn(s);
 
-    // 直した文書は、どの文書かを指せる見出しつきで載る
-    expect(second).toContain('<!-- memory: values.md -->');
-    expect(second).toContain('NEW-VALUE');
-    // **これが本題。** 触っていない文書の本文は2つ目の写しにならない
+    // 直した文書は、どの文書かを指せる見出しつきで載る。**見出しの括弧の中は
+    // 見ない** —— カードの全体（`（premise・本文は載っていない…）`）と変わった
+    // 範囲だけ（`（カードの変わった範囲だけ）`）のどちらへ倒れるかは量で決まる
+    // ので、ここで固定すると分量の都合で歯が落ちる。名指しが在ることを見る。
+    expect(second).toContain('<!-- memory: values.md');
+    for (const line of valuesCard) expect(second).toContain(line);
+    // **これが本題。** 触っていない文書は2つ目の写しにならない —— カード
+    // （いま実際に載る単位）でも、本文（もうどこにも載らない）でも。
+    for (const line of habitsCard) expect(second).not.toContain(line);
     expect(second).not.toContain(UNCHANGED_BODY);
-    expect(second).not.toContain('<!-- memory: habits.md -->');
+    expect(second).not.toContain('<!-- memory: habits.md');
     // 絞ったのは載せ直しの側だけである。システムプロンプトには両方載ったまま
+    // （載っているのはカードで、本文ではない）。
     const systemPrompt = String((s.calls[0] as FakeCall).options.systemPrompt);
-    expect(systemPrompt).toContain(UNCHANGED_BODY);
-    expect(systemPrompt).toContain('<!-- memory: habits.md -->');
+    for (const line of habitsCard) expect(systemPrompt).toContain(line);
+    expect(systemPrompt).toContain('<!-- memory: habits.md');
 
     await s.clone.stop();
   });
 
   it('記憶が何も変わっていなければ、ターンの本文に何も足さない', async () => {
     const stores = await twoDocumentStores();
+    const valuesCard = await memoryCardOutlineLines(stores, 'values');
     const s = setup(undefined, stores);
     s.clone.post(humanMessage('1回目'));
     await waitForDone(s.events);
@@ -3983,7 +4149,14 @@ describe('クローン — 記憶を二重に載せない', () => {
 
     expect(second).not.toContain('記憶が更新された');
     expect(second).not.toContain('<!-- memory:');
+    // 本文（もう載らない）だけでなく、いま載る単位（カード）でも出てこない。
     expect(second).not.toContain('OLD-VALUE');
+    for (const line of valuesCard) expect(second).not.toContain(line);
+    // **「出てこない」が空振りでないことを、同じ文字列で確かめる。** この行は
+    // 焼き込みの側には実在する——だから2ターン目に無いことに意味がある。
+    for (const line of valuesCard) {
+      expect(String((s.calls[0] as FakeCall).options.systemPrompt)).toContain(line);
+    }
     // 本文そのものは削られていない（断り書きが前に付く経路があるので末尾で見る）
     expect(second.endsWith('2回目')).toBe(true);
 
@@ -3992,6 +4165,7 @@ describe('クローン — 記憶を二重に載せない', () => {
 
   it('セッションを組み立てた最初のターンでは、焼き込んだ記憶を載せ直さない', async () => {
     const stores = await twoDocumentStores();
+    const valuesCard = await memoryCardOutlineLines(stores, 'values');
     const s = setup(undefined, stores);
     s.clone.post(humanMessage('1回目'));
     await waitForDone(s.events);
@@ -4000,14 +4174,20 @@ describe('クローン — 記憶を二重に載せない', () => {
     expect(first).not.toContain('記憶が更新された');
     expect(first).not.toContain('OLD-VALUE');
     expect(first).not.toContain(UNCHANGED_BODY);
-    // 焼き込み自体は起きている（載せ直しが要らないのは、そちらに載っているから）
-    expect(String((s.calls[0] as FakeCall).options.systemPrompt)).toContain('OLD-VALUE');
+    for (const line of valuesCard) expect(first).not.toContain(line);
+    // 焼き込み自体は起きている（載せ直しが要らないのは、そちらに載っているから）。
+    // **焼き込みに在るのはカードで、本文ではない**（`renderPremiseCard`）ので、
+    // かつてここで見ていた本文（`OLD-VALUE`）ではなくカードの行で見る。
+    const systemPrompt = String((s.calls[0] as FakeCall).options.systemPrompt);
+    for (const line of valuesCard) expect(systemPrompt).toContain(line);
 
     await s.clone.stop();
   });
 
   it('記憶を消したら、消えたことを名前で伝える（本文を載せ直さない）', async () => {
     const stores = await twoDocumentStores();
+    const habitsCard = await memoryCardOutlineLines(stores, 'habits');
+    const valuesCard = await memoryCardOutlineLines(stores, 'values');
     const s = setup(undefined, stores);
     s.clone.post(humanMessage('1回目'));
     await waitForDone(s.events);
@@ -4016,10 +4196,18 @@ describe('クローン — 記憶を二重に載せない', () => {
     const second = await secondTurn(s);
 
     expect(second).toContain('削除された記憶: habits.md');
-    // 消した文書の本文を載せるのは「消したのに文脈には居る」という一番まぎらわしい状態
+    // 消した文書を載せるのは「消したのに文脈には居る」という一番まぎらわしい状態。
+    // 本文（もう載らない）とカード（いま載る単位）の両方で見る。
     expect(second).not.toContain(UNCHANGED_BODY);
+    for (const line of habitsCard) expect(second).not.toContain(line);
     // 残っている文書は変わっていないので、こちらも載せ直さない
     expect(second).not.toContain('OLD-VALUE');
+    for (const line of valuesCard) expect(second).not.toContain(line);
+    // **上の「出てこない」が空振りでないことを、同じ文字列で確かめる。**
+    // どちらの行も焼き込みの側には実在する（消す前に組んだセッションなので、
+    // 消した habits のカードもそこには在る）。
+    const systemPrompt = String((s.calls[0] as FakeCall).options.systemPrompt);
+    for (const line of [...habitsCard, ...valuesCard]) expect(systemPrompt).toContain(line);
 
     await s.clone.stop();
   });
@@ -4091,15 +4279,19 @@ describe('クローン — 記憶を二重に載せない', () => {
     await waitForDone(first.events);
     // 前のセッションで載せ直しが起きた状態を、実際に人間の手編集で作る
     await stores.persona.write('values', '# 価値観\n\nV2-MID\n');
+    // **版の見分けは本文ではなくカードの行で行う**（`memoryCardOutlineLines`）。
+    // 節id が中身のハッシュなので、V1 / V2 / V3 は別々の行になる。
+    const v2Card = await memoryCardOutlineLines(stores, 'values');
     const events: ChatStreamEvent[] = [];
     first.clone.subscribe('conv-2', (event) => events.push(event));
     first.clone.post(humanMessage('2回目', 'conv-2'));
     await waitForDone(events);
-    expect((first.calls[0] as FakeCall).inputs[1] ?? '').toContain('V2-MID');
+    for (const line of v2Card) expect((first.calls[0] as FakeCall).inputs[1] ?? '').toContain(line);
     await first.clone.stop();
 
     // デーモンが落ちている間に、人間がもう一度直す
     await stores.persona.write('values', '# 価値観\n\nV3-NEWEST\n');
+    const v3Card = await memoryCardOutlineLines(stores, 'values');
 
     const second = setup(undefined, stores);
     second.clone.post(humanMessage('また来た'));
@@ -4110,12 +4302,14 @@ describe('クローン — 記憶を二重に載せない', () => {
     const input = call.inputs[0] ?? '';
     expect(input).toContain('現在の記憶');
     expect(input).toContain('システムプロンプト');
-    // **全文を載せ直して上書きしない。** それはいま塞いでいる二重載せそのものである
+    // **載せ直して上書きしない。** それはいま塞いでいる二重載せそのものである
     expect(input).not.toContain('V3-NEWEST');
-    expect(input).not.toContain('<!-- memory: values.md -->');
-    // 正本の側には最新が載っている
-    expect(String(call.options.systemPrompt)).toContain('V3-NEWEST');
-    expect(String(call.options.systemPrompt)).not.toContain('V2-MID');
+    for (const line of v3Card) expect(input).not.toContain(line);
+    expect(input).not.toContain('<!-- memory: values.md');
+    // 正本の側には最新が載っていて、古い版は残っていない
+    const systemPrompt = String(call.options.systemPrompt);
+    for (const line of v3Card) expect(systemPrompt).toContain(line);
+    for (const line of v2Card) expect(systemPrompt).not.toContain(line);
 
     await second.clone.stop();
   });
@@ -4154,17 +4348,23 @@ describe('クローン — 記憶を二重に載せない', () => {
 
   it('内部ターン（蒸留）にも同じ絞り込みが効く（起点ごとに違う載せ方をしない）', async () => {
     const stores = await twoDocumentStores();
+    const habitsCard = await memoryCardOutlineLines(stores, 'habits');
     const s = setup(undefined, stores);
     s.clone.post(humanMessage('1回目'));
     await waitForDone(s.events);
 
     await stores.persona.write('values', '# 価値観\n\nNEW-VALUE\n');
+    const valuesCard = await memoryCardOutlineLines(stores, 'values');
     await s.clone.endConversation('conv-1');
 
     // 蒸留の内部ターンが同じセッションへ流れる（`#runInternal`）
     const distill = (s.calls[0] as FakeCall).inputs[1] ?? '';
     expect(distill).toContain('記憶へ移すべきものがあるか確認せよ');
-    expect(distill).toContain('NEW-VALUE');
+    // 変わった文書は載り（人間の会話の起点と同じ）、変わっていない文書は載らない。
+    // **どちらもカードの行で見る**（本文はもう載らないので、本文の不在は
+    // 「絞り込みが効いた」ことの証拠にならない）。
+    for (const line of valuesCard) expect(distill).toContain(line);
+    for (const line of habitsCard) expect(distill).not.toContain(line);
     expect(distill).not.toContain(UNCHANGED_BODY);
 
     await s.clone.stop();

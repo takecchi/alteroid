@@ -81,7 +81,7 @@ import {
   resolveMemoryDocKind,
   scanMemorySections,
 } from './memory.js';
-import type { MemoryPart, MemorySectionLookup } from './memory.js';
+import type { MemoryPart, MemorySection, MemorySectionLookup } from './memory.js';
 import type { ProfileService } from './profile-service.js';
 import {
   RESERVED_SCHEDULE_KINDS,
@@ -249,6 +249,7 @@ export const CLONE_TOOL_NAMES = [
   'memory_delete',
   'memory_frontmatter_set',
   'memory_outline',
+  'memory_section_read',
   'memory_section_move',
   'journal_write',
   'journal_read',
@@ -1842,9 +1843,10 @@ export function createCloneTools(context: ToolContext) {
         '記憶の文書を全文置換する（無ければ作る）。',
         '人間がこのファイルを直接開いて読むことを前提に、Markdown として読みやすく書くこと。',
         '人間が手で書いた記述を、整形の都合で消さないこと。',
-        '先頭に frontmatter を置ける（無くてもよい。無ければ premise として全文が焼かれる——安全側の既定）。',
+        '先頭に frontmatter を置ける（無くてもよい。無ければ premise として扱う——安全側の既定）。',
         '形は `---` で始まり `---` で閉じ、各行は `key: value`。使えるキーは description（要旨。目次の1行に載る）・',
-        'type（premise または fact。premise は全文が焼かれ、fact は目次の1行だけになる。判断の前提なら premise、',
+        'type（premise または fact。premise は「要旨＋節の目次」が焼かれ、fact は目次の1行だけになる。' +
+          'どちらも本文は焼かれない——premise の節の本文は memory_section_read で開く。判断の前提なら premise、',
         '事実の蓄積で毎回全文を読む必要が無いものなら fact）・parent（親文書の slug。階層を作る）の3つだけ。',
         'ネスト・複数行・引用符の解釈は無い（値は文字列としてそのまま読む）。狭い形から外れると malformed として',
         '扱われ、文書は消えずに premise（全文）のまま残る。',
@@ -2069,7 +2071,7 @@ export function createCloneTools(context: ToolContext) {
         'memory_write で全文を書き直すか、人間に確認を通すこと。',
         'description・type・parent のうち少なくとも1つを渡すこと（1つも渡さない呼びは断る。何も変わらない）。',
         'type に渡せるのは premise か fact のどちらかだけ（それ以外の値は断る。綴りを間違えたまま黙って書かない）。',
-        'premise は全文がプロンプトへ焼かれ、fact は目次の1行だけになる。区分が変わったときは、その変化が応答に出る。',
+        'premise は「要旨＋節の目次」がプロンプトへ焼かれ、fact は目次の1行だけになる（どちらも本文は焼かれない）。区分が変わったときは、その変化が応答に出る。',
         '**統合の走行（distill）からは、人間が一度でも書いた文書・履歴の無い文書には使えない**',
         '（断られる。ask_human で人間に確認を通せば次のターンで実行できる）。会話の中の書き込みは通る。',
       ].join(' '),
@@ -2182,14 +2184,14 @@ export function createCloneTools(context: ToolContext) {
 
         const diff = describeMemoryWriteDiff(existing.content, written.content);
         const kindLabel = (kind: 'premise' | 'fact'): string =>
-          kind === 'premise' ? 'premise（全文が載る）' : 'fact（目次の1行だけ載る）';
+          kind === 'premise' ? 'premise（要旨＋節の目次が載る）' : 'fact（目次の1行だけ載る）';
         const kindChangeNote =
           priorKind === nextKind
             ? ''
             : `\n\n区分が変わった: ${kindLabel(priorKind)} → ${kindLabel(nextKind)}。` +
               (nextKind === 'fact'
-                ? '次のターンから、この文書の本文はプロンプトの全文には載らない（目次の1行だけになる）。'
-                : '次のターンから、この文書の本文はプロンプトへ全文が載る。');
+                ? '次のターンから、この文書は目次の1行だけになる（節の目次も載らなくなる）。'
+                : '次のターンから、この文書は要旨と節の目次がプロンプトへ載る（本文は載らない。memory_section_read で開く）。');
         // `memory_frontmatter_set` は既存文書にしか使えない（上の `existing === null`
         // の断り）ので `created` は常に false。
         const floor = memoryFloorNote(memoryBefore, memoryAfter, slug, written.content, false);
@@ -2301,6 +2303,129 @@ export function createCloneTools(context: ToolContext) {
         return text(
           `記憶 ${slug} の目次（${sections.length} 節）。本文は含まない。\n\n` +
             `${renderMemoryOutline(sections, side)}${malformedNote}`,
+        );
+      },
+    ),
+
+    /**
+     * 節id で指した節の**本文**を開く口。**読むだけである。**
+     *
+     * ## なぜ要るか — 焼き込みが全文をやめたので、開く口が要る
+     *
+     * `premise` はプロンプトへ**要旨と節の目次だけ**が載るようになった
+     * （`memory.ts` の `renderPremiseCard`。人間の決定 2026-09-08）。
+     * ⟹ **本文を開く手段が「読みたいときに読める」ものでなければ、この変更は
+     * 能力の削除になる。**
+     *
+     * `memory_read` だけでは足りない。あれは**文書の先頭からの頁**（`offset` で
+     * 8,000 文字ずつ）なので、30万字級の文書の中ほどに在る1節へ届くのに
+     * **数十回の呼び出し ＝ 数十ターン**が要る。**クローンにとって1回のツール
+     * 呼び出しは1ターンであり、ターンがこの系のいちばん高い部品である**
+     * （`memory_section_move` が複数の節id を受ける理由と同じ）。
+     *
+     * ここは**目次に載っている節id をそのまま渡すだけで、その節に一発で届く。**
+     * 目次は毎ターン焼き込みに載っているので、**追加の呼び出しは0回である。**
+     *
+     * ## 複数の節id を1回で受ける
+     *
+     * `memory_section_move` と同じ理由（1つずつだと節の数だけターンを払う）。
+     * 順序は**渡された順ではなく文書に現れる順**に揃える——読み手が文書の
+     * 構造どおりに読めるようにするためで、`cutMemorySections` が
+     * `ordered` を返すのと同じ考え方である。
+     *
+     * ## 断りを畳まない（`lookupMemorySection` の4値をそのまま出す）
+     *
+     * `found` / `stale`（誰かが書き換えた。読み直せ） / `ambiguous`（同一の節が
+     * 複数） / `absent`（その id は無い）を**1つずつ、節id ごとに言う。**
+     * まとめて「読めなかった」にすると、**読み直せば済むのか、指し先そのものが
+     * 間違っているのかが区別できない。**
+     *
+     * **1つが読めなくても、読めた節は返す。** 全部を断ると、9個読めて1個古い
+     * ときに9個ぶんのターンが無駄になる。
+     *
+     * ## 予算
+     *
+     * 本文そのものを返すので、**文字数の予算で締める**（`MEMORY_PAGE` と同じ値を
+     * 使う——どちらも「1回のツール応答に何文字載せるか」で、切る理由が同じ
+     * である）。切ったら必ず言い、**続きの取り方（節id を分けて呼ぶ / その節を
+     * `memory_read` の offset で読む）を書く。**
+     */
+    tool(
+      'memory_section_read',
+      [
+        '記憶の文書の、節id で指した節の本文を開く（読むだけ。1文字も書き換えない）。',
+        '節id は毎ターンの焼き込み（premise のカード）と memory_outline に出ている——目次を取り直さなくてもそのまま渡せる。',
+        '複数の節id を1回で渡せる。返る順序は文書に現れる順である。',
+        '読めなかった節id は理由ごとに分けて言う（古い＝誰かが書き換えた／同一の節が複数／そもそも無い）。読めた節は返る。',
+        '入れ子の子は親に含まれる（親の節id を渡せば子も一緒に開く）。',
+        '応答は文字数の予算で切る。切ったらそう言う。',
+      ].join(' '),
+      {
+        slug: z.string().describe('文書のスラッグ（拡張子なし）'),
+        sections: z
+          .array(z.string())
+          .min(1)
+          .describe('開く節の節id（複数可）。焼き込みのカードか memory_outline に出ているもの'),
+      },
+      async ({ slug, sections: requested }) => {
+        const doc = await stores.persona.read(slug);
+        if (doc === null) return text(`記憶 ${slug} は存在しない。`);
+        const { sections } = scanMemorySections(doc.content);
+
+        const found: { id: string; section: MemorySection }[] = [];
+        const refusals: string[] = [];
+        for (const id of requested) {
+          const lookup = lookupMemorySection(sections, id);
+          switch (lookup.kind) {
+            case 'found':
+              found.push({ id, section: lookup.section });
+              break;
+            case 'stale':
+              refusals.push(
+                `- ${id}: **その id は古い**（見出しは一致するが中身が違う＝誰かが書き換えた）。` +
+                  'memory_outline で取り直すこと。',
+              );
+              break;
+            case 'ambiguous':
+              refusals.push(
+                `- ${id}: 中身まで同一の節が ${lookup.sections.length} 箇所に在り、1つに決まらない。` +
+                  '見出しを変えて区別を付けること。',
+              );
+              break;
+            case 'absent':
+              refusals.push(
+                `- ${id}: その節id はこの文書に無い（打ち間違いか、別の文書か、見出しごと書き換えられた）。`,
+              );
+              break;
+            default: {
+              const exhaustive: never = lookup;
+              throw new Error(`未知の節id の引き当て結果: ${JSON.stringify(exhaustive)}`);
+            }
+          }
+        }
+
+        // **文書に現れる順に揃える**（渡された順ではない。上の doc）。
+        found.sort((a, b) => a.section.start - b.section.start);
+        const bodies = found.map(
+          ({ id, section }) =>
+            `[${id}] ${section.heading}\n${doc.content.slice(section.start, section.end).trimEnd()}`,
+        );
+
+        const listing =
+          bodies.length === 0
+            ? '（1節も開けなかった）'
+            : renderListing(bodies, {
+                budget: MEMORY_PAGE,
+                omitted: ({ rest, shown, total }) =>
+                  `…ほか ${rest} 節は応答から省略（${total} 節のうち ${shown} 節だけ返した）。` +
+                  '残りは節id を分けて呼び直すこと（この道具は何も書き換えていないので、呼び直しは安全である）。',
+              });
+
+        const refusalNote =
+          refusals.length === 0 ? '' : `\n\n読めなかった節:\n${refusals.join('\n')}`;
+        return text(
+          `記憶 ${slug} の節を ${found.length} 件開いた（この文書は全 ${sections.length} 節）。\n\n` +
+            `${listing}${refusalNote}`,
         );
       },
     ),
@@ -2622,7 +2747,7 @@ export function createCloneTools(context: ToolContext) {
         const memoryAfter = await stores.persona.documents();
         // **床は「移した先」（`toSlug`）の視点で言う。** 移動で新しく生まれる
         // か太るのは移し先であり、`toSlug` が frontmatter を持たない新規文書
-        // なら premise として全文が焼かれる——`memory_write` で新規に premise
+        // なら premise として扱われる——`memory_write` で新規に premise
         // を作ったときと同じ枝を通す（依頼の重心。新規作成は稀なので声を
         // いちばん大きくする）。
         const floor = memoryFloorNote(
@@ -6344,7 +6469,7 @@ function renderMemorySize(
   // id + 名前 / 作成 + 更新 / 概要 を持たないこの2行が総当たり試験に
   // 「5項目を満たさない文書」として撃たれる（実測済み）。
   lines.push(
-    `- premise 合計: ${floor.premiseChars.toLocaleString('en-US')} 文字（${floor.premiseDocs} 文書。毎ターン全文が焼かれる）`,
+    `- premise 合計: ${floor.premiseChars.toLocaleString('en-US')} 文字（${floor.premiseDocs} 文書。毎ターン「要旨＋節の目次」が焼かれる）`,
     `- fact 目次合計: ${floor.tocChars.toLocaleString('en-US')} 文字（${floor.factDocs} 文書。目次の1行だけが焼かれる）`,
   );
   return lines.join('\n');
