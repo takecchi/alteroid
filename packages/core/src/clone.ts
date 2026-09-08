@@ -6409,10 +6409,7 @@ function managerReportBatchPrompt(
  * 後者は「この欄が入る前に閉じられた行」——原因も対処も別である。
  */
 type ClosedByState =
-  | { kind: 'clone' }
-  | { kind: 'human' }
-  | { kind: 'unknown'; raw: string }
-  | { kind: 'absent' };
+  { kind: 'clone' } | { kind: 'human' } | { kind: 'unknown'; raw: string } | { kind: 'absent' };
 
 /** {@link ClosedByState} の doc を見よ。 */
 function closedByState(closedBy: string | undefined): ClosedByState {

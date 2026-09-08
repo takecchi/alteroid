@@ -1109,7 +1109,9 @@ describe('closedRedeliveryNotice の closedBy 4状態（人間が閉じた commi
    * ありうるので、両方を別に置く。
    */
   it('4状態の断り書きは互いに全部違う（畳みの再発を止める）', () => {
-    const notices = cases.map(({ closedBy }) => closedRedeliveryNotice(baseEvent, commitmentWith(closedBy)));
+    const notices = cases.map(({ closedBy }) =>
+      closedRedeliveryNotice(baseEvent, commitmentWith(closedBy)),
+    );
     const seen = new Map<string, string>();
     const collisions: string[] = [];
     notices.forEach((notice, index) => {
@@ -1135,8 +1137,12 @@ describe('closedRedeliveryNotice の closedBy 4状態（人間が閉じた commi
   it('clone 以外の3状態には「クローンが閉じた」という断定が現れない', () => {
     for (const { name, closedBy } of cases.filter((c) => c.name !== 'clone')) {
       const notice = closedRedeliveryNotice(baseEvent, commitmentWith(closedBy));
-      expect(notice, `${name}: 「クローンは既に」を含んではいけない`).not.toContain('クローンは既に');
-      expect(notice, `${name}: 「commitment_close」を含んではいけない`).not.toContain('commitment_close');
+      expect(notice, `${name}: 「クローンは既に」を含んではいけない`).not.toContain(
+        'クローンは既に',
+      );
+      expect(notice, `${name}: 「commitment_close」を含んではいけない`).not.toContain(
+        'commitment_close',
+      );
     }
   });
 

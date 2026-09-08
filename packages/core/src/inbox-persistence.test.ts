@@ -644,7 +644,9 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
 
     const dying = bootClone(stores, 'hang');
     await idle();
-    dying.clone.post(report('CLOSED-BY-HUMAN-REPORT 本文はこれだけ長くしておく', 'evt-closed-human'));
+    dying.clone.post(
+      report('CLOSED-BY-HUMAN-REPORT 本文はこれだけ長くしておく', 'evt-closed-human'),
+    );
     await waitFor(() => dying.inputs.length > 0, '合図が処理に入る');
     await waitForCommitment(stores, 'evt-closed-human');
 
