@@ -1,5 +1,5 @@
 import type { JobStatus } from './schema.js';
-import type { AccountUsageState } from './usage-snapshot.js';
+import type { AccountApiKeySource, AccountUsageState } from './usage-snapshot.js';
 import type { UsageBreakdown, UsageRow, UsageTotals, UsageTurnRow } from './usage.js';
 
 /**
@@ -287,6 +287,29 @@ function untilReset(resetsAt: number, now: number): string {
 }
 
 /**
+ * `apiKeySource` の1行を作る。**`'ok'` と `unavailable` の両方の枝から呼ぶための
+ * 切り出しである**（`unavailable` でもこの欄だけは運ばれるようになった。#681）。
+ *
+ * **無駄な間接層に見えても戻さないこと**（AGENTS.md「テストを可能にする構造変更」）。
+ * この関数を切り出す前は `'ok'` の枝だけがこの行を書いており、`unavailable` の
+ * 枝は早期 return してこの行へ一度も到達していなかった——`apiKeySource` が
+ * `unavailable` の枝にも運ばれるようになった以上、**2箇所で同じ文言を手で
+ * 揃え続けるのは事故のもとである**（片方だけ直して片方が古くなる）。
+ *
+ * **`'ok'` の枝の出力は1文字も変えていない。** 既存の歯4本（`describeAccountUsage`
+ * の `apiKeySource` の歯。すべて `okState(...)` を通る）が、この切り出しの前後で
+ * 同じ文言を見ることを保証する。
+ */
+function describeApiKeySource(apiKeySource: AccountApiKeySource | undefined): string {
+  return (
+    `認証の出所（apiKeySource。判定には使っていない観測）: ${apiKeySource ?? '（取れなかった）'}` +
+    (apiKeySource === 'none'
+      ? '（API キーを使っていないという意味。claude.ai の OAuth ログイン等。「ログインしていない」ではない）'
+      : '')
+  );
+}
+
+/**
  * アカウント全体の残りを人間・クローンが読む行へ。**見出しは含めない。**
  *
  * **取れなかったことを 0 として出さない。** ここが一番嘘をつきやすい場所で、
@@ -339,7 +362,12 @@ export function describeAccountUsage(
     // （`cause: 'undetermined'`）は**断定できていない**ので、ここが断定すると
     // `reason` の中の「言い分けられない」と食い違う。**断定は `reason` の側に
     // 任せる** —— 理由ごとの言葉は1箇所（`describeLimitsUnavailable`）が持つ。
-    return [plain(`枠が返ってこない: ${state.reason}（${state.at}）`)];
+    return [
+      plain(`枠が返ってこない: ${state.reason}（${state.at}）`),
+      // **`unavailable` でもこの欄だけは運ばれる**（#681 の設計判断。`usage` は
+      // 積まない）。`plain` は通さない——`'ok'` の枝と同じ文言をそのまま出す。
+      describeApiKeySource(state.apiKeySource),
+    ];
   }
 
   const { usage } = state;
@@ -363,12 +391,7 @@ export function describeAccountUsage(
   // （claude.ai の OAuth ログイン等）、**「ログインしていない」ではない**——
   // それを言うのは `tokenSource` の欄である（`describeLimitsUnavailable` の
   // `not_logged_in` の doc と同じ注意）。取れなかったときは埋めない。
-  lines.push(
-    `認証の出所（apiKeySource。判定には使っていない観測）: ${usage.apiKeySource ?? '（取れなかった）'}` +
-      (usage.apiKeySource === 'none'
-        ? '（API キーを使っていないという意味。claude.ai の OAuth ログイン等。「ログインしていない」ではない）'
-        : ''),
-  );
+  lines.push(describeApiKeySource(usage.apiKeySource));
 
   if (usage.windows.length === 0) {
     // **`limitsAvailable` が真でも枠が来ないことがある**（実測）。0% と描かない。
