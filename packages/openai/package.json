@@ -1,10 +1,25 @@
 {
   "name": "@mnemora/openai",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "EmbeddingProvider / LLMProvider の OpenAI 実装。zod スキーマを OpenAI の Structured Output (response_format: json_schema) へ翻訳する（docs/architecture.md §3.8）。",
   "license": "UNLICENSED",
+  "homepage": "https://github.com/takecchi/mnemora/tree/main/packages/openai#readme",
+  "bugs": {
+    "url": "https://github.com/takecchi/mnemora/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/takecchi/mnemora.git",
+    "directory": "packages/openai"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
@@ -13,6 +28,7 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "build": "tsc -p tsconfig.build.json",
+    "prepack": "pnpm run build",
     "test": "vitest run"
   },
   "dependencies": {

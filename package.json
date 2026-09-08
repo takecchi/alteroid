@@ -14,7 +14,8 @@
     "format": "prettier --write \"**/*.{ts,tsx,mts,cts,js,mjs,cjs,json}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,mts,cts,js,mjs,cjs,json}\"",
     "test": "vitest run && pnpm -r --if-present run test && node scripts/run-db-tests.mjs",
-    "build": "pnpm -r --if-present run build"
+    "build": "pnpm -r --if-present run build",
+    "pack:check": "node scripts/check-publish-pack.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

@@ -1,10 +1,25 @@
 {
   "name": "@mnemora/testkit",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "adapter（MemoryStore/VectorStore/EventStore の実装）が満たすべき適合テスト一式（conformance suite）。",
   "license": "UNLICENSED",
+  "homepage": "https://github.com/takecchi/mnemora/tree/main/packages/testkit#readme",
+  "bugs": {
+    "url": "https://github.com/takecchi/mnemora/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/takecchi/mnemora.git",
+    "directory": "packages/testkit"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
@@ -13,6 +28,7 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "build": "tsc -p tsconfig.build.json",
+    "prepack": "pnpm run build",
     "test": "vitest run"
   },
   "dependencies": {

@@ -82,6 +82,28 @@ Phase 1 の範囲と、そこに入れなかったものは [docs/roadmap.md](./
 
 ---
 
+## インストール
+
+⚠ **まだ npm へ publish していない。**publish の判断は別に行う（4パッケージすべてに
+`private: true` が立ったままである。[ADR 0060](./docs/decisions/0060-publish-with-pnpm-four-packages-at-0-1-0.md)）。
+以下は publish 後の使い方である。
+
+```bash
+pnpm add @mnemora/core @mnemora/postgres @mnemora/openai
+# または
+npm i @mnemora/core @mnemora/postgres @mnemora/openai
+```
+
+adapter を自作してテストするなら `@mnemora/testkit` も devDependency として入れる。
+各パッケージの install コマンドと動く最小の例:
+
+- [packages/core/README.md](./packages/core/README.md)
+- [packages/postgres/README.md](./packages/postgres/README.md)
+- [packages/openai/README.md](./packages/openai/README.md)
+- [packages/testkit/README.md](./packages/testkit/README.md)
+
+---
+
 ## 外から見える API
 
 ```ts
