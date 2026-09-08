@@ -304,6 +304,38 @@ export const accountUsageStateSchema = z.discriminatedUnion('state', [
      * {@link classifyLimitsUnavailable} の返り値をそのまま載せる）。
      */
     cause: limitsUnavailableCauseSchema.optional(),
+    /**
+     * どこから来た資格情報か（{@link AccountApiKeySource}）。**`usage` ごとは
+     * 積まない**（#681 の設計判断）——`unavailable` の枝には `cause` のように
+     * 「読む理由を説明できる欄だけ」を1つずつ足す。`usage` を丸ごと積むと、
+     * いまは `'ok'` の枝にしか出ていない他の欄（`plan` / `organization` /
+     * `apiProvider` / 支出上限）が**まとめて** `GET /usage`（アクセストークンで
+     * 読める面）へ出てしまう。
+     *
+     * **なぜこの欄だけ `unavailable` でも運ぶのか** —— {@link
+     * classifyLimitsUnavailable} が `undetermined` を割る条件
+     * （`limitsAvailable === false && plan === undefined`）を満たす回は、
+     * 必ず `state: 'unavailable'` へ倒れる。この欄は `usage` の中にしか
+     * 無かったので、`undetermined` に割れた回だけこの欄が消えていた
+     * （#681 (2) が足した観測が、割りたい状態でだけ届かない、という欠陥）。
+     *
+     * **判定には使わない観測である。** {@link classifyLimitsUnavailable} は
+     * この欄を読まない——`cause` と違い、値が在っても `unavailable` という
+     * 状態の意味は変わらない。
+     *
+     * **⚠️ `.optional()` の意味は2つある。** (a) SDK がこの欄を返さなかった
+     * （`toAccountApiKeySource` が `undefined` を返した） (b) **この欄を書かない
+     * 版のデーモンだった**（Web UI とデーモンは別デプロイ。`cause` の doc と
+     * 同じ版ずれ）。**同じプロセスの中で作る限り (b) は起きない**——
+     * {@link fetchAccountUsage} は必ずこの欄を載せる。⟹ `usage_read` を含め、
+     * 同じデプロイの中から読む限り「取れなかった」は (a) である。
+     *
+     * **⛔ 既定値で埋めないこと。** `'none'` は「API キーを使っていない」と
+     * いう**積極的な事実**（claude.ai の OAuth ログイン等）で、「取れなかった」
+     * とは意味が正反対である。埋めれば、取れなかった回が「API キーを使って
+     * いない」という嘘の事実に化ける。
+     */
+    apiKeySource: accountApiKeySourceSchema.optional(),
   }),
 ]);
 
@@ -638,11 +670,16 @@ export async function fetchAccountUsage(
   // やることが違う** —— 鍵を待つ / 何もできない / 鍵を取り直してみる。
   const unavailable = classifyLimitsUnavailable(usage);
   if (unavailable !== undefined) {
+    // **`usage` ごと積まない。1欄だけ運ぶ**（#681 の設計判断。理由は
+    // `accountUsageStateSchema` の `unavailable` 枝の `apiKeySource` の doc）。
+    // 値は {@link toAccountUsage} が {@link toAccountApiKeySource}（許可リスト）を
+    // 通した後のものなので、ここで許可リストを迂回して生の値へ触ってはいない。
     return {
       state: 'unavailable',
       at,
       reason: describeLimitsUnavailable(usage, unavailable),
       cause: unavailable,
+      apiKeySource: usage.apiKeySource,
     };
   }
   if (!hasAccountUsageDetail(usage)) {
