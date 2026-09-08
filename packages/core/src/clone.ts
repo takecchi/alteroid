@@ -2848,6 +2848,13 @@ class Clone implements CloneHost {
     // `#redelivered` は1件ずつ積まれるので、後から見ても「同時だったか」は分からない。
     this.#restoredCohort = pending.length;
 
+    // **日誌の側も同じ材料で名乗り分ける**（判定は `#redeliveryNoticeFor` と同一）。
+    // #700 はモデルへ渡す側だけを直したので、クローンが `journal_read` で逐語に
+    // 読み返す側は修飾なしのまま残っていた。**渡す側で塞いだ嘘が、読み返す側から
+    // 入ってくる。** ここは `pending` を数えた直後で、以降 `#restoredCohort` は
+    // 動かないので、ループの外で1度だけ判定する。
+    const alone = this.#restoredCohort <= 1;
+
     for (const record of pending) {
       if (this.#stopped || this.#inbox.closed) return;
 
@@ -2860,8 +2867,12 @@ class Clone implements CloneHost {
         with: 'self',
         role: 'outbound',
         text:
-          `未読のまま残っていた合図を配り直した（${record.deliveries}回目の配達、` +
-          `${record.at} に受け取ったもの）: ${inboxEventShape(record.event)}`,
+          `未読のまま残っていた合図を配り直した（${record.deliveries}回目の配達` +
+          (alone
+            ? ''
+            : `＝器が入れ替わった回数。同じ起動で一緒に拾い直した未読が ${this.#restoredCohort} 件あり、` +
+              `配達回数は残っている未読の全行で一緒に進む — この合図の処理が落ちた回数ではない`) +
+          `、${record.at} に受け取ったもの）: ${inboxEventShape(record.event)}`,
       });
 
       // 日誌を書いているあいだに片付けが始まっていることがある。**積む直前に

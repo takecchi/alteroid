@@ -272,6 +272,74 @@ describe('未読の永続化', () => {
     await third.clone.stop();
   });
 
+  it('未読が1件だけなら、日誌の1行は回数をそのまま名乗る（journal_read で読み返す側に余計な修飾を足さない）', async () => {
+    const stores = createMemoryStores();
+
+    const dying = bootClone(stores, 'hang');
+    await idle();
+    dying.clone.post(report('たった1件の合図'));
+    await waitFor(() => dying.inputs.length > 0, '合図が処理に入る');
+
+    const reborn = bootClone(stores);
+    await waitFor(() => reborn.inputs.length > 0, '拾い直した合図が処理に入る');
+
+    // **先頭の1件で足りる。** `#restoreUnread` は `record` ごとに日誌を書いてから
+    // `#inbox.push` するので、`inputs.length > 0` が通った時点で先頭の日誌行は
+    // 必ず書かれている——全件を待つ必要はない。
+    const journal = await stores.journal.list({ types: ['exchange'] });
+    const matches = journal.filter(
+      (entry) =>
+        entry.type === 'exchange' && entry.text.includes('未読のまま残っていた合図を配り直した'),
+    );
+    const head = matches[0];
+    const line = head && head.type === 'exchange' ? head.text : '';
+
+    // 回数の直後が読点である＝修飾が無い。1件のときは嘘ではないので、直す対象では
+    // ない（#700 が渡す側でやったのと同じ判定を、読み返す側にも1件のときは足さない）。
+    expect(line).toContain('回目の配達、');
+    expect(line).not.toContain('器が入れ替わった回数');
+
+    await reborn.clone.stop();
+  });
+
+  /**
+   * **#700（c4713c0）はモデルへ渡す側（`#redeliveryNoticeFor`）だけを直した。**
+   * クローンが `journal_read` で1日に何十回も逐語に読み返す日誌の側は、修飾なしの
+   * まま残っていた——⟹ **渡す側で塞いだ嘘が、読み返す側から入ってくる。**
+   *
+   * ここは #700 の歯（`未読が複数あるときは、回数を「この合図で落ちた」の根拠に
+   * しない`）と同じ状況（未読3件、うち1件だけが処理に入り2件は居合わせただけ）を
+   * 作り、**モデルへ渡す本文ではなく日誌の1行**に対して同じ判定を要求する。
+   */
+  it('未読が複数あるときは、日誌の1行も「器が入れ替わった回数」だと名乗る（#700 が渡す側でやったことを、読み返す側にも及ぼす）', async () => {
+    const stores = createMemoryStores();
+
+    const first = bootClone(stores, 'hang');
+    await idle();
+    first.clone.post(report('先頭の合図', 'evt-a'));
+    first.clone.post(report('居合わせただけの合図 1', 'evt-b'));
+    first.clone.post(report('居合わせただけの合図 2', 'evt-c'));
+    await waitFor(() => first.inputs.length > 0, '先頭が処理に入る');
+
+    const reborn = bootClone(stores);
+    await waitFor(() => reborn.inputs.length > 0, '拾い直した合図が処理に入る');
+
+    // **先頭の1件で足りる**（理由は直上の歯と同じ）。
+    const journal = await stores.journal.list({ types: ['exchange'] });
+    const matches = journal.filter(
+      (entry) =>
+        entry.type === 'exchange' && entry.text.includes('未読のまま残っていた合図を配り直した'),
+    );
+    const head = matches[0];
+    const line = head && head.type === 'exchange' ? head.text : '';
+
+    expect(line).toContain('回目の配達＝器が入れ替わった回数');
+    expect(line).toContain('3 件');
+    expect(line).toContain('この合図の処理が落ちた回数ではない');
+
+    await reborn.clone.stop();
+  });
+
   it('例外で終わった合図も消える（記録は残っているので、永久に配り直さない）', async () => {
     // `#handle` を確実に落とす。承認の読み出しが失敗すると `human_answer` の
     // 処理は例外で終わり、失敗は `#reportFailure` 経由で日誌に残る。
