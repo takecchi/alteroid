@@ -1130,9 +1130,120 @@ function renderMemoryToc(
 const MALFORMED_FRONTMATTER_NOTE =
   '<!-- memory: frontmatter が壊れている（既知の形にならなかった。premise として全文を扱っている） -->';
 
-function renderPremisePart(part: MemoryPart): string {
-  const rendered = renderMemoryDocument(part);
+/**
+ * 「変わった範囲だけを描く」を選ぶ線。**変わった範囲が全文のこの割合より
+ * 大きければ、差分にせず全文を描く。**
+ *
+ * **暫定値である**（実測に基づく調整はまだ行っていない）。本番の実測
+ * （2026-09-07）では、記憶の書き換え 640 件の内訳が
+ * `append` 383 / `move_in` 85 / `move_out` 85 / `describe` 70 / `write` 17 で、
+ * 変わった量の平均は 3,283 バイト、対象文書の平均は 199,007 バイトだった
+ * ——**実運用で起きる書き換えは、どれもこの線の遥かに下に居る。**
+ * 線がどこにあっても実質同じ結果になる範囲で、
+ * 「半分より小さければ差分と呼んでよい」という語感の側へ倒してある。
+ */
+const MEMORY_DELTA_MAX_RATIO = 0.5;
+
+/**
+ * 差分の前後に置く、**省いた側を名乗る1行**。省くものが無ければ行を作らない
+ * （0 行の断りを出すと、読み手は「そこに何かある」と読む）。
+ */
+function unchangedSideLines(label: string, lines: number, chars: number): string[] {
+  if (lines === 0) return [];
+  return [
+    `（${label} ${formatMemoryCharCount(lines)} 行 / ${formatMemoryCharCount(chars)} 文字は変わっていない。全文は memory_read で開ける）`,
+  ];
+}
+
+/**
+ * premise 1文書ぶんの「変わった範囲だけ」を描く。差分にする価値が無ければ
+ * `null` を返す（呼び手は全文へ倒す）。
+ *
+ * ## なぜ要るのか — 小さな書き換えが文書1本ぶんの文脈を焼いていた
+ *
+ * `clone.ts` の `#withFreshMemory` は、変わった文書を**全文**で会話へ載せ直す。
+ * その塊は会話の履歴として残り続けるので、**1回の書き換えの費用は「変えた量」
+ * ではなく「文書の大きさ」で決まっていた。**
+ *
+ * 本番の実測（2026-09-07、Railway の PostgreSQL を直接引いた値）:
+ *
+ * - `alteroid-work`（305,536 文字）が **1日に 120 回**更新されていた
+ * - 1回の実際の変更量は平均 3,732 バイト ＝ **約 60 倍に増幅**していた
+ * - `describe`（frontmatter の要旨だけを直す）に至っては 520 バイトの変更に対して
+ *   310,325 バイトが載っていた ＝ **約 600 倍**
+ * - 結果、クローンのターン1回の文脈は 457k → 752k トークンへ育ち、
+ *   自動 compaction が 1日 33 回（9/2 は 0 回）走っていた
+ *
+ * **「載せ直す文書を絞る」ことは既に済んでいた**（変わった文書だけを載せる）。
+ * 残っていたのは**1文書の中での絞り込み**である。
+ *
+ * ## 行で切る（文字位置で切らない）
+ *
+ * 先頭から一致する行数と、末尾から一致する行数を数え、その間だけを描く。
+ * **文字位置で切らないのは、サロゲートペアを割らないためである**——記憶の
+ * 本文には絵文字（⚠️ / 🎯 など）が実際に含まれており、UTF-16 の code unit で
+ * 切ると壊れた文字を文脈へ載せうる。行なら境界が必ず文字の境界になる。
+ *
+ * Markdown として読めるままになる、という副次的な利点もある。
+ *
+ * ## 「載せていない」を「無くなった」と読ませない
+ *
+ * 省いた側は**必ず行数と文字数で名乗る**（`excerpt.ts` の「切ったら、切った
+ * ことを必ず言う」と同じ約束）。省略を黙って行うと、クローンは「その節は
+ * 消えた」と読みうる——それは記憶の破損として現れる。
+ */
+function renderPremiseDelta(part: MemoryPart, seen: string): string | null {
+  const after = part.content.trimEnd();
+  const before = seen.trimEnd();
+  if (after === before) return null;
+
+  const afterLines = after.split('\n');
+  const beforeLines = before.split('\n');
+
+  let head = 0;
+  while (
+    head < afterLines.length &&
+    head < beforeLines.length &&
+    afterLines[head] === beforeLines[head]
+  ) {
+    head += 1;
+  }
+  let tail = 0;
+  while (
+    tail < afterLines.length - head &&
+    tail < beforeLines.length - head &&
+    afterLines[afterLines.length - 1 - tail] === beforeLines[beforeLines.length - 1 - tail]
+  ) {
+    tail += 1;
+  }
+
+  const middle = afterLines.slice(head, afterLines.length - tail);
+  // `join('\n')` の長さで測る——実際に載る形そのもので判定する。
+  const middleChars = middle.join('\n').length;
+  if (middleChars > after.length * MEMORY_DELTA_MAX_RATIO) return null;
+
+  const headChars = afterLines.slice(0, head).join('\n').length;
+  const tailChars = afterLines.slice(afterLines.length - tail).join('\n').length;
+
+  return [
+    `<!-- memory: ${part.slug}.md（変わった範囲だけ。全文ではない） -->`,
+    ...unchangedSideLines('先頭', head, headChars),
+    ...middle,
+    ...unchangedSideLines('末尾', tail, tailChars),
+  ].join('\n');
+}
+
+/**
+ * premise 1文書ぶんの描画。`seen`（クローンが既に見ている版）が渡され、かつ
+ * 差分にする価値があるときだけ、**変わった範囲だけ**を描く。
+ *
+ * **`seen` を渡さない呼び手（システムプロンプトへの焼き込み・床の測定）の
+ * 出力は1バイトも変わらない。**
+ */
+function renderPremisePart(part: MemoryPart, seen?: string): string {
   const frontmatter = parseMemoryFrontmatter(part.content);
+  const delta = seen === undefined ? null : renderPremiseDelta(part, seen);
+  const rendered = delta ?? renderMemoryDocument(part);
   return frontmatter.kind === 'malformed' ? `${MALFORMED_FRONTMATTER_NOTE}\n${rendered}` : rendered;
 }
 
@@ -1148,6 +1259,7 @@ function renderPremisePart(part: MemoryPart): string {
 function buildMemoryDocumentSections(
   documents: readonly MemoryPart[],
   presentInMemory?: readonly MemoryPart[],
+  seenContent?: ReadonlyMap<string, string>,
 ): {
   premiseParts: MemoryPart[];
   premiseSection: string;
@@ -1174,7 +1286,11 @@ function buildMemoryDocumentSections(
   }
 
   const premiseSection =
-    premiseParts.length === 0 ? '' : premiseParts.map(renderPremisePart).join('\n\n');
+    premiseParts.length === 0
+      ? ''
+      : premiseParts
+          .map((part) => renderPremisePart(part, seenContent?.get(part.slug)))
+          .join('\n\n');
   // 目次の外にも実在する slug を、**在り処ごとに分けて**渡す——`documents` は
   // 「記憶の全部」とは限らないので、ここで畳むと実在するものが「見つからない」
   // として出る（`renderMemoryTocIssue` の 'parent-not-listed' と
@@ -1213,6 +1329,22 @@ export interface RenderMemoryDocumentsOptions {
    * 出る。**渡さなければ出力は1バイトも変わらない。**
    */
   presentInMemory?: readonly MemoryPart[];
+
+  /**
+   * **クローンが既に見ている版**（slug → その時点の `content`）。
+   * 載せ直す呼び手（`clone.ts` の `#withFreshMemory`）だけが渡す。
+   *
+   * 渡すと、premise は**全文ではなく変わった範囲だけ**が描かれる
+   * （差分にする価値があるときだけ。`renderPremiseDelta`）。
+   * **渡さなければ出力は1バイトも変わらない**——システムプロンプトへの
+   * 焼き込みと `measureMemoryFloor`（床の測定）はどちらも渡さないので、
+   * 「毎ターンの床」の値はこの引数の存在によって1文字も動かない。
+   *
+   * **`fact` には効かない。** fact はもともと目次の1行しか載らないので、
+   * 差分にする余地が無い（`buildMemoryDocumentSections` は premise の枝でしか
+   * これを見ない）。
+   */
+  seenContent?: ReadonlyMap<string, string>;
 }
 
 /** `premiseSection` と `tocSection` を、実際に焼き込む1本の文字列へ繋ぐ。 */
@@ -1245,6 +1377,17 @@ function joinMemorySections(premiseSection: string, tocSection: string): string 
  * 現れない。**その状態を「存在しない」と報告しないために、部分だけを渡す呼び手は
  * `options.presentInMemory` に記憶の全体の文書を渡すこと**（渡さないと、親が
  * 今回変わっていないだけで「親 X が見つからない」と出る）。
+ *
+ * ## ⚠️ `options.seenContent` を渡すと premise が全文でなくなる
+ *
+ * 上の「`premise` は全文。切り詰めない」は、**`seenContent` を渡さない呼び手に
+ * 対する約束である。** 渡した呼び手（載せ直し）には、変わった範囲だけが返る
+ * ——省いた側は必ず行数と文字数で名乗る（`renderPremiseDelta`）。
+ *
+ * **これは「切り詰め」ではない。** 切り詰めは「全体を渡すつもりで一部を落と
+ * す」ことで、落ちた分が読み手から見えなくなる。こちらは**渡す集合そのものが
+ * 「今回変わった範囲」**であり、変わっていない側は同じ文脈の別の場所
+ * （システムプロンプトの「現在の記憶」）に全文で載っている。
  */
 export function renderMemoryDocuments(
   documents: readonly MemoryPart[],
@@ -1253,6 +1396,7 @@ export function renderMemoryDocuments(
   const { premiseSection, tocSection } = buildMemoryDocumentSections(
     documents,
     options.presentInMemory,
+    options.seenContent,
   );
   return brandRenderedMemory(joinMemorySections(premiseSection, tocSection));
 }
@@ -1733,6 +1877,27 @@ export function describeMemoryFloor(input: {
  * `memoryAfter`）——**ここで改めてストアを読み直さない**（依頼者の門3
  * 「クローンの呼び出し回数に比例する費用を足さない」）。
  *
+ * ## 第3引数（`seenContent`）— 「クローンが既に見ている版」
+ *
+ * `#withFreshMemory` は**変わった範囲だけ**を載せるので、見込みも同じ計算に
+ * 揃える必要がある（`renderMemoryDocuments` の `options.seenContent`）。
+ * 呼び手4箇所は**この書き込みの直前の内容**をもう手元に持っている
+ * （`describeMemoryWriteDiff` へ渡している `before` と同じ値）ので、それを
+ * そのまま渡す。
+ *
+ * **⚠️ 「直前の内容」と「クローンが実際に見ている版」は、いつも同じではない。**
+ * クローンが見ているのは**前回の載せ直しの時点の内容**であり、同じターンの
+ * 中で同じ文書を2回書き換えれば、2回目の呼び出しが渡す `before` は1回目の
+ * 結果＝クローンがまだ見ていない版になる。そのとき実物（次のターンに載る量）
+ * のほうが**多い**。これは下の「他に何も変わらなければ」という既存の条件の
+ * 一形態であって、新しく生まれた限界ではない——**ただし向きは覚えておくこと。
+ * ずれるときは必ず「見込みのほうが小さい」側へずれる。**
+ *
+ * **`undefined` を許さず、空の `Map` を渡させる形にしていない**のは
+ * `memoryAfter` と同じ理由である（省略できる形にすると、渡し忘れが黙って
+ * 「全文」寄りの大きい数へ倒れる。そちらは安全側だが、**実物と食い違った
+ * まま気づけない**——見込みは実物と一致することにしか価値が無い）。
+ *
  * ## ⚠️ これは予測であって実測ではない（依頼者の明示条件）
  *
  * 1. **「他に何も変わらなければ」という条件付きである。** ここで返す数は
@@ -1814,17 +1979,31 @@ export function describeMemoryFloor(input: {
 export function describeMemoryReinjectionEstimate(
   parts: readonly [MemoryPart, ...MemoryPart[]],
   memoryAfter: readonly MemoryPart[],
+  seenContent: ReadonlyMap<string, string>,
 ): string {
   if (parts.length === 0) {
     throw new Error('describeMemoryReinjectionEstimate: parts が空（呼び手の実装誤り）');
   }
 
-  const chars = renderMemoryDocuments(parts, { presentInMemory: memoryAfter }).length;
+  const chars = renderMemoryDocuments(parts, {
+    presentInMemory: memoryAfter,
+    seenContent,
+  }).length;
   const kindOf = (part: MemoryPart): MemoryDocKind =>
     resolveMemoryDocKind(parseMemoryFrontmatter(part.content));
-  const kindLabel = (kind: MemoryDocKind): string =>
-    kind === 'premise' ? 'premise・全文' : 'fact・目次1行';
-  const breakdown = parts.map((part) => `${part.slug}（${kindLabel(kindOf(part))}）`).join(' + ');
+  // **「全文」か「変わった範囲だけ」かは、実際に描いてみて決まる**
+  // （`renderPremiseDelta` は差分にする価値が無ければ全文へ倒れる）。
+  // ラベルを別の判定で作らない——判定を2本に割ると、片方だけ直したときに
+  // 内訳が黙って嘘をつく（`measureMemoryFloor` と同じ形の前科）。
+  const labelOf = (part: MemoryPart): string => {
+    const kind = kindOf(part);
+    if (kind === 'fact') return 'fact・目次1行';
+    const seen = seenContent.get(part.slug);
+    return seen !== undefined && renderPremiseDelta(part, seen) !== null
+      ? 'premise・変わった範囲だけ'
+      : 'premise・全文';
+  };
+  const breakdown = parts.map((part) => `${part.slug}（${labelOf(part)}）`).join(' + ');
 
   const subjectLabel =
     parts.length === 1

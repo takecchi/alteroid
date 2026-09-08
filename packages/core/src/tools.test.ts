@@ -836,7 +836,12 @@ describe('クローンの道具', () => {
         summary: '要旨だけ',
       });
       expect(beforeReply).toContain('次のターンの会話へ載る見込み');
-      expect(beforeReply).toContain('premise・全文');
+      // **かつてここは `premise・全文` だった。** 載せ直しが「変わった範囲だけ」に
+      // なったので（`memory.ts` の `renderPremiseDelta`）、既存文書の frontmatter に
+      // 要旨を1行足しただけのこの呼び出しは、全文ではなく差分として載る。
+      // **保証は弱くなっていない**——測っているのは「内訳のラベルが、実際に載る形
+      // を言い当てているか」であり、そのラベルが指す事実のほうが変わった。
+      expect(beforeReply).toContain('premise・変わった範囲だけ');
 
       const afterReply = await h.call('memory_frontmatter_set', {
         slug: 'values',
@@ -863,10 +868,11 @@ describe('クローンの道具', () => {
      */
     it('⭐ memory_section_move は、移動元・移動先の両方ぶんの合計を1つの数で返す', async () => {
       const h = harness();
-      await h.stores.persona.write(
-        'about-me',
-        ['# 私について', '本文', '', '## 事例', '事例の本文'].join('\n'),
-      );
+      // **移動元の「移動前の内容」を控えておく。** 載せ直しは「クローンが既に
+      // 見ている版」との差分になったので（`memory.ts` の `renderPremiseDelta`）、
+      // 見込みの検算にも同じ材料が要る。
+      const fromBefore = ['# 私について', '本文', '', '## 事例', '事例の本文'].join('\n');
+      await h.stores.persona.write('about-me', fromBefore);
       const outline = await h.call('memory_outline', { slug: 'about-me' });
       const idMatch = /\[([0-9a-f]{8}-[0-9a-f]{8})\] ## 事例 — /.exec(outline);
       expect(idMatch).not.toBeNull();
@@ -885,7 +891,12 @@ describe('クローンの道具', () => {
 
       const from = await h.stores.persona.read('about-me');
       const to = await h.stores.persona.read('about-me-appendix');
-      const expectedChars = renderMemoryDocuments([to as never, from as never]).length;
+      // **移し先は新規（クローンは1度も見ていない）ので全文、移動元は差分。**
+      // 「合計を1つの数で返す」という約束はそのままで、合計の中身の数え方だけが
+      // 「変わった範囲」に揃った。
+      const expectedChars = renderMemoryDocuments([to as never, from as never], {
+        seenContent: new Map([['about-me', fromBefore]]),
+      }).length;
       const line = (reply.split('\n').find((row) => row.includes('次のターンの会話へ載る見込み')) ??
         '') as string;
       expect(line).toContain(`${expectedChars.toLocaleString('en-US')} 文字`);

@@ -2336,7 +2336,7 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
 describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ載る見込み」の一言', () => {
   it('⭐ premise の文書へ書くと、renderMemoryDocuments([文書]) の全文ぶんの文字数が出る（全文が載る）', () => {
     const doc = premise('about-me-core', 'あ'.repeat(500));
-    const reply = describeMemoryReinjectionEstimate([doc], [doc]);
+    const reply = describeMemoryReinjectionEstimate([doc], [doc], new Map());
     const expectedChars = renderMemoryDocuments([doc]).length;
 
     expect(reply).toContain(`${expectedChars.toLocaleString('en-US')} 文字`);
@@ -2352,7 +2352,7 @@ describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ�
     });
     // 本文が長くても、目次1行にしか影響しない（本文自体は载らない）。
     const longFactDoc: MemoryPart = { ...factDoc, content: factDoc.content + 'あ'.repeat(5000) };
-    const reply = describeMemoryReinjectionEstimate([longFactDoc], [longFactDoc]);
+    const reply = describeMemoryReinjectionEstimate([longFactDoc], [longFactDoc], new Map());
     const expectedChars = renderMemoryDocuments([longFactDoc]).length;
 
     expect(reply).toContain(`${expectedChars.toLocaleString('en-US')} 文字`);
@@ -2372,10 +2372,10 @@ describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ�
     const premiseChars = renderMemoryDocuments([premiseDoc]).length;
     const factChars = renderMemoryDocuments([factDoc]).length;
 
-    expect(describeMemoryReinjectionEstimate([premiseDoc], [premiseDoc])).toContain(
+    expect(describeMemoryReinjectionEstimate([premiseDoc], [premiseDoc], new Map())).toContain(
       `${premiseChars.toLocaleString('en-US')} 文字`,
     );
-    expect(describeMemoryReinjectionEstimate([factDoc], [factDoc])).toContain(
+    expect(describeMemoryReinjectionEstimate([factDoc], [factDoc], new Map())).toContain(
       `${factChars.toLocaleString('en-US')} 文字`,
     );
     expect(factChars).toBeLessThan(premiseChars);
@@ -2384,8 +2384,8 @@ describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ�
   it('⚠️「他に何も変わらなければ」という条件付きであることを明言する（単一文書でも複数文書でも）', () => {
     const singleParts: [MemoryPart] = [premise('a', '本文')];
     const multiParts: [MemoryPart, MemoryPart] = [premise('a', '本文'), premise('b', '本文')];
-    const single = describeMemoryReinjectionEstimate(singleParts, singleParts);
-    const multi = describeMemoryReinjectionEstimate(multiParts, multiParts);
+    const single = describeMemoryReinjectionEstimate(singleParts, singleParts, new Map());
+    const multi = describeMemoryReinjectionEstimate(multiParts, multiParts, new Map());
 
     for (const reply of [single, multi]) {
       expect(reply).toContain('予測であって実測ではない');
@@ -2398,7 +2398,7 @@ describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ�
     const fromDoc = premise('about-me', 'あ'.repeat(300));
     const toDoc = premise('about-me-appendix', 'い'.repeat(300));
 
-    const reply = describeMemoryReinjectionEstimate([toDoc, fromDoc], [toDoc, fromDoc]);
+    const reply = describeMemoryReinjectionEstimate([toDoc, fromDoc], [toDoc, fromDoc], new Map());
     const combinedChars = renderMemoryDocuments([toDoc, fromDoc]).length;
     const separateSum =
       renderMemoryDocuments([toDoc]).length + renderMemoryDocuments([fromDoc]).length;
@@ -2413,8 +2413,8 @@ describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ�
   it('⚠️ memory_section_move（2文書）だけに「両方の合計である」の注記が出る——1文書のときは出ない', () => {
     const singleParts: [MemoryPart] = [premise('a', '本文')];
     const multiParts: [MemoryPart, MemoryPart] = [premise('a', '本文'), premise('b', '本文')];
-    const single = describeMemoryReinjectionEstimate(singleParts, singleParts);
-    const multi = describeMemoryReinjectionEstimate(multiParts, multiParts);
+    const single = describeMemoryReinjectionEstimate(singleParts, singleParts, new Map());
+    const multi = describeMemoryReinjectionEstimate(multiParts, multiParts, new Map());
 
     expect(single).not.toContain('移動元と移動先の両方');
     expect(multi).toContain('移動元と移動先の両方');
@@ -2427,7 +2427,11 @@ describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ�
       ...fact('appendix', { description: '付録', freshness: { kind: 'fresh' } }),
     };
 
-    const reply = describeMemoryReinjectionEstimate([factDoc, premiseDoc], [factDoc, premiseDoc]);
+    const reply = describeMemoryReinjectionEstimate(
+      [factDoc, premiseDoc],
+      [factDoc, premiseDoc],
+      new Map(),
+    );
 
     expect(reply).toContain('appendix（fact・目次1行）');
     expect(reply).toContain('about-me（premise・全文）');
@@ -2440,7 +2444,7 @@ describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ�
     // `as unknown as` で型を迂回する（`describeMemoryReinjectionEstimate` の doc
     // 「引数を非空タプルにしてある理由」）。
     const empty = [] as unknown as [MemoryPart, ...MemoryPart[]];
-    expect(() => describeMemoryReinjectionEstimate(empty, [])).toThrow();
+    expect(() => describeMemoryReinjectionEstimate(empty, [], new Map())).toThrow();
   });
 
   /**
@@ -2452,7 +2456,7 @@ describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ�
    */
   it('memoryAfter に空配列を渡しても throw しない（presentInMemory 無しと同じ挙動になるだけ）', () => {
     const doc = fact('orphan', { description: '説明', freshness: { kind: 'fresh' } });
-    expect(() => describeMemoryReinjectionEstimate([doc], [])).not.toThrow();
+    expect(() => describeMemoryReinjectionEstimate([doc], [], new Map())).not.toThrow();
   });
 
   /**
@@ -2474,7 +2478,7 @@ describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ�
     });
     const memoryAfter = [core, child];
 
-    const reply = describeMemoryReinjectionEstimate([child], memoryAfter);
+    const reply = describeMemoryReinjectionEstimate([child], memoryAfter, new Map());
     const expectedChars = renderMemoryDocuments([child], { presentInMemory: memoryAfter }).length;
     // 直す前の数え方（presentInMemory を渡さない）と比べて、実際に文字数が
     // 増えていること（短い印のままではないこと）を対照として見る。
@@ -2686,5 +2690,168 @@ describe('describeMemoryPremiseRanking — 「premise の大きさの順位」�
     expect(reply).not.toContain('畳');
     expect(reply).not.toContain('危な');
     expect(reply).not.toContain('大きすぎ');
+  });
+});
+
+/**
+ * ⭐ 載せ直しの絞り込み（`RenderMemoryDocumentsOptions.seenContent`）。
+ *
+ * ## この歯が在る理由（本番の実測）
+ *
+ * 2026-09-08T00:15Z、Railway の PostgreSQL を直接引いた値:
+ *
+ * - `alteroid-work`（premise・305,536 文字）が 2026-09-07 の1日に **120 回**
+ *   更新されていた。1回の実際の変更量は平均 3,732 バイト
+ * - `#withFreshMemory` はそのたびに**全文**を会話へ載せ直していた ＝ 約 60 倍
+ * - `describe`（frontmatter の要旨だけ）に至っては 520 バイトの変更に対して
+ *   310,325 バイトが載っていた ＝ 約 600 倍
+ * - その結果、クローンのターン1回の文脈は 457k → 752k トークンへ育ち、
+ *   自動 compaction が 1日 0 回 → 33 回になっていた
+ *
+ * **測るのは「省いたか」ではなく「省いた側を名乗ったか」も含めてである**
+ * ——黙って省くと、読み手（クローン）はそれを記憶の破損として読む。
+ */
+describe('載せ直しの絞り込み（seenContent）— 変わった範囲だけを載せる', () => {
+  /** 追記の形（既存の末尾に足す）。実運用でいちばん多い（383/640 件）。 */
+  it('⭐ 末尾へ追記したときは、追記した行だけが載る（元の本文は1文字も載らない）', () => {
+    const bodyBefore = Array.from({ length: 200 }, (_, i) => `既存の行 ${i}`).join('\n');
+    const before = premise('alteroid-work', bodyBefore);
+    const after = premise('alteroid-work', `${bodyBefore}\n追記した行`);
+
+    const rendered = renderMemoryDocuments([after], {
+      seenContent: new Map([[after.slug, before.content]]),
+    });
+
+    expect(rendered).toContain('追記した行');
+    expect(rendered).not.toContain('既存の行 100');
+    // 省いた側を必ず名乗る（行数と文字数の両方）。
+    expect(rendered).toContain('先頭 201 行');
+    expect(rendered).toContain('は変わっていない');
+    expect(rendered).toContain('memory_read');
+    // 「全文ではない」と見出しで名乗る。
+    expect(rendered).toContain('alteroid-work.md（変わった範囲だけ。全文ではない）');
+    // 実際に小さくなっていること（この歯の目的そのもの）。
+    expect(rendered.length).toBeLessThan(renderMemoryDocuments([after]).length / 10);
+  });
+
+  /** frontmatter の1行だけを直す形（`memory_frontmatter_set`。増幅が最大だった）。 */
+  it('⭐ frontmatter の要旨だけを直したときは、その行だけが載る（前後は行数で名乗る）', () => {
+    const body = Array.from({ length: 300 }, (_, i) => `本文 ${i}`).join('\n');
+    const before: MemoryPart = {
+      slug: 'doc',
+      content: `---\ndescription: 古い要旨\ntype: premise\n---\n${body}`,
+    };
+    const after: MemoryPart = {
+      slug: 'doc',
+      content: `---\ndescription: 新しい要旨\ntype: premise\n---\n${body}`,
+    };
+
+    const rendered = renderMemoryDocuments([after], {
+      seenContent: new Map([[after.slug, before.content]]),
+    });
+
+    expect(rendered).toContain('description: 新しい要旨');
+    expect(rendered).not.toContain('本文 150');
+    expect(rendered).toContain('先頭 1 行');
+    expect(rendered).toContain('末尾 302 行');
+  });
+
+  /**
+   * ⭐ 差分にする価値が無ければ全文へ倒れる。**「常に差分」にしないのは、
+   * ほとんど全部が変わっているときに「変わっていない側」の断りだけが増えて
+   * 読みにくくなるからである**（節約にもならない）。
+   */
+  it('⭐ 大半が書き換わったときは差分にせず全文を載せる（見出しも「変わった範囲だけ」と名乗らない）', () => {
+    const before = premise('doc', Array.from({ length: 100 }, (_, i) => `旧 ${i}`).join('\n'));
+    const after = premise('doc', Array.from({ length: 100 }, (_, i) => `新 ${i}`).join('\n'));
+
+    const rendered = renderMemoryDocuments([after], {
+      seenContent: new Map([[after.slug, before.content]]),
+    });
+
+    expect(rendered).toBe(renderMemoryDocuments([after]));
+    expect(rendered).not.toContain('変わった範囲だけ');
+  });
+
+  /**
+   * ⭐ **渡さなければ1バイトも変わらない。** システムプロンプトへの焼き込みと
+   * 床の測定はどちらも渡さない側なので、この不変条件が破れると「毎ターンの床」
+   * が黙って動く。
+   */
+  it('⭐ seenContent を渡さなければ出力は1バイトも変わらない（システムプロンプト側の不変条件）', () => {
+    const docs = [premise('a', 'あ'.repeat(500)), premise('b', 'い'.repeat(500))];
+    expect(renderMemoryDocuments(docs, {})).toBe(renderMemoryDocuments(docs));
+    expect(renderMemoryDocuments(docs, { presentInMemory: docs })).toBe(
+      renderMemoryDocuments(docs),
+    );
+  });
+
+  it('⭐ 床（measureMemoryFloor）は seenContent の影響を受けない——毎ターン焼かれる量は全文のままである', () => {
+    const before = premise('doc', 'あ'.repeat(1000));
+    const after = premise('doc', `${'あ'.repeat(1000)}\n追記`);
+    // 差分として載る量は小さいが、床（毎ターン焼かれる量）は全文ぶんである。
+    const injected = renderMemoryDocuments([after], {
+      seenContent: new Map([[after.slug, before.content]]),
+    }).length;
+    const floor = measureMemoryFloor([after]).totalChars;
+
+    expect(injected).toBeLessThan(floor / 5);
+    expect(floor).toBe(renderMemoryDocuments([after]).length);
+  });
+
+  it('見ていない文書（新規作成）は全文が載る——空の Map と同じ扱い', () => {
+    const doc = premise('new-doc', 'あ'.repeat(300));
+    expect(renderMemoryDocuments([doc], { seenContent: new Map() })).toBe(
+      renderMemoryDocuments([doc]),
+    );
+  });
+
+  it('fact は seenContent を渡しても目次1行のまま（もともと本文が載らないので差分の余地が無い）', () => {
+    const before = fact('appendix', { description: '古い要旨', freshness: { kind: 'fresh' } });
+    const after = fact('appendix', { description: '新しい要旨', freshness: { kind: 'fresh' } });
+    expect(
+      renderMemoryDocuments([after], { seenContent: new Map([[after.slug, before.content]]) }),
+    ).toBe(renderMemoryDocuments([after]));
+  });
+
+  /**
+   * ⭐ 行で切る理由そのもの。記憶の本文には絵文字（⚠️ / 🎯）が実際に含まれて
+   * おり、UTF-16 の code unit で切るとサロゲートペアが割れて壊れた文字が文脈へ
+   * 載る。**行の境界は必ず文字の境界である。**
+   */
+  it('⭐ 絵文字（サロゲートペア）を含む行の境界で切っても、壊れた文字を作らない', () => {
+    const emojiBody = Array.from({ length: 50 }, (_, i) => `🎯 節 ${i} ⚠️`).join('\n');
+    const before = premise('doc', emojiBody);
+    const after = premise('doc', `${emojiBody}\n🎯 追記 ⚠️`);
+
+    const rendered = renderMemoryDocuments([after], {
+      seenContent: new Map([[after.slug, before.content]]),
+    });
+
+    expect(rendered).toContain('🎯 追記 ⚠️');
+    // 孤立サロゲート（U+D800–U+DFFF が対にならずに残った形）が1つも無いこと。
+    expect(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(rendered),
+    ).toBe(false);
+  });
+
+  /**
+   * ⭐ 見込み（書く側）と実物（載る側）が同じ計算に揃っていること。
+   * `describeMemoryReinjectionEstimate` は `renderMemoryDocuments` を
+   * 再実装せず、同じ `seenContent` をそのまま通す。
+   */
+  it('⭐ 見込みの文字数が、差分として実際に載る文字数と一致する', () => {
+    const bodyBefore = Array.from({ length: 200 }, (_, i) => `行 ${i}`).join('\n');
+    const before = premise('doc', bodyBefore);
+    const after = premise('doc', `${bodyBefore}\n追記`);
+    const seen = new Map([[after.slug, before.content]]);
+
+    const actual = renderMemoryDocuments([after], { presentInMemory: [after], seenContent: seen });
+    const reply = describeMemoryReinjectionEstimate([after], [after], seen);
+
+    expect(reply).toContain(`${actual.length.toLocaleString('en-US')} 文字`);
+    expect(reply).toContain('doc（premise・変わった範囲だけ）');
+    // 全文を載せていた頃の見込みより、はっきり小さいこと。
+    expect(actual.length).toBeLessThan(renderMemoryDocuments([after]).length / 10);
   });
 });

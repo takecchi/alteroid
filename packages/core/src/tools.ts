@@ -1551,6 +1551,26 @@ async function guardFullReplace(
  * 別の判断である）。**書いておかないと、次に読む人が「知らなかったのか、
  * 意図して残したのか」を区別できない。**
  */
+/**
+ * `describeMemoryReinjectionEstimate` の第3引数（クローンが既に見ている版）を、
+ * **この書き込みの直前の内容**から組み立てる。
+ *
+ * **新規作成（`before === null`）なら空を返す。** クローンはその文書を1度も
+ * 見ていないので、次のターンには全文が載る——空の `Map` はまさにそれを表す
+ * （`renderMemoryDocuments` は `seenContent` に無い slug を全文で描く）。
+ *
+ * **⚠️ 「直前の内容」は「クローンが実際に見ている版」より新しいことがある**
+ * （同じターンで同じ文書を2回書き換えたとき）。そのとき見込みは実物より
+ * **小さく**出る。向きと理由は `describeMemoryReinjectionEstimate` の doc
+ * 「第3引数」の節に書いてある——ここで握り潰さないこと。
+ */
+function seenBefore(
+  slug: string,
+  before: { readonly content: string } | null,
+): ReadonlyMap<string, string> {
+  return before === null ? new Map() : new Map([[slug, before.content]]);
+}
+
 function memoryFloorNote(
   memoryBefore: readonly MemoryPart[],
   memoryAfter: readonly MemoryPart[],
@@ -1869,7 +1889,11 @@ export function createCloneTools(context: ToolContext) {
           written.content,
           before === null,
         );
-        const reinjection = describeMemoryReinjectionEstimate([written], memoryAfter);
+        const reinjection = describeMemoryReinjectionEstimate(
+          [written],
+          memoryAfter,
+          seenBefore(slug, before),
+        );
         const growth = memorySessionGrowthNote(memoryAfter, context.runtime?.());
         return text(
           `記憶 ${slug} を更新した。\n\n${diff}\n\n${floor}\n\n${reinjection}\n\n${growth}`,
@@ -1916,7 +1940,11 @@ export function createCloneTools(context: ToolContext) {
           written.content,
           before === null,
         );
-        const reinjection = describeMemoryReinjectionEstimate([written], memoryAfter);
+        const reinjection = describeMemoryReinjectionEstimate(
+          [written],
+          memoryAfter,
+          seenBefore(slug, before),
+        );
         const growth = memorySessionGrowthNote(memoryAfter, context.runtime?.());
         return text(
           `記憶 ${slug} に追記した。\n\n${diff}\n\n${floor}\n\n${reinjection}\n\n${growth}`,
@@ -2165,7 +2193,11 @@ export function createCloneTools(context: ToolContext) {
         // `memory_frontmatter_set` は既存文書にしか使えない（上の `existing === null`
         // の断り）ので `created` は常に false。
         const floor = memoryFloorNote(memoryBefore, memoryAfter, slug, written.content, false);
-        const reinjection = describeMemoryReinjectionEstimate([written], memoryAfter);
+        const reinjection = describeMemoryReinjectionEstimate(
+          [written],
+          memoryAfter,
+          seenBefore(slug, existing),
+        );
         const growth = memorySessionGrowthNote(memoryAfter, context.runtime?.());
 
         return text(
@@ -2606,6 +2638,7 @@ export function createCloneTools(context: ToolContext) {
         const reinjection = describeMemoryReinjectionEstimate(
           [toWritten, fromWritten],
           memoryAfter,
+          new Map([...seenBefore(toSlug, toBefore), ...seenBefore(fromSlug, existing)]),
         );
         const growth = memorySessionGrowthNote(memoryAfter, context.runtime?.());
 
@@ -5790,11 +5823,45 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
           : `\n⚠ 数え直しを挟んだ回（${formatUsd(entry.reset.fromCostUsd)} → ` +
             `${formatUsd(entry.reset.toCostUsd)}）。models は差分ではなく新しい累積の先頭 — ` +
             '他の行と足し合わせると二重に数える。';
+      // **文脈の占有と compaction を出す。** ここは日誌に**在るのに、どの面にも
+      // 出ていなかった**欄である（`schema.ts` の `turn_usage.contextUsage`）。
+      //
+      // 2026-09-08、クローンの消費が増え続けている原因を人間から問われたとき、
+      // **答えを持っていたのはこの欄だけだった**——`models` は「いくら使ったか」
+      // しか言わず、「文脈が毎ターンどこまで積み上がっているか」は言わない。
+      // それでも `journal_read` も Web も出していなかったので、**調べるには
+      // PostgreSQL へ直接 SQL を投げるしかなかった。**
+      //
+      // **取れているのに読めない、は「取れていない」と同じである。**
+      const context = entry.contextUsage;
+      const contextLine =
+        context === undefined
+          ? ''
+          : context.error !== undefined
+            ? `\n文脈: 測れなかった（${context.error}）。`
+            : `\n文脈: ${context.totalTokens?.toLocaleString('en-US') ?? '不明'} トークン` +
+              (context.rawMaxTokens === undefined
+                ? ''
+                : ` / ${context.rawMaxTokens.toLocaleString('en-US')}`) +
+              (context.percentage === undefined ? '' : `（${context.percentage}%）`) +
+              '。';
+      const compactionLine =
+        entry.compactions === undefined || entry.compactions.length === 0
+          ? ''
+          : `\ncompaction ${entry.compactions.length} 回: ` +
+            entry.compactions
+              .map(
+                (compaction) =>
+                  `${compaction.trigger} ${compaction.preTokens.toLocaleString('en-US')} → ` +
+                  `${compaction.postTokens?.toLocaleString('en-US') ?? '不明'}`,
+              )
+              .join(' / ');
       return {
         head:
           `[turn_usage ${entry.layer}/${entry.site} ${entry.managerId}]` +
-          (entry.reset === undefined ? '' : ' ⚠reset'),
-        body: `${modelLines}${resetLine}`,
+          (entry.reset === undefined ? '' : ' ⚠reset') +
+          (context?.percentage === undefined ? '' : ` 文脈 ${context.percentage}%`),
+        body: `${modelLines}${resetLine}${contextLine}${compactionLine}`,
       };
     }
     case 'token_rotation': {
