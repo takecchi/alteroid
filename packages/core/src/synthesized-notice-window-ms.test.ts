@@ -11,12 +11,12 @@ import { captureStderr } from './testing.js';
  * 固定する。`resolveWithheldReportFlushMs`（`withheld-report-flush-ms.test.ts`）と
  * 同じ作法——env は必ず引数で渡し、`process.env` を書き換えない。
  *
- * **既定は動かさない。** `manager.ts` の `SYNTHESIZED_NOTICE_WINDOW_MS`（1000ms）
+ * **既定は動かさない。** `manager.ts` の `SYNTHESIZED_NOTICE_WINDOW_MS`（3000ms）
  * と同じ値をここでも直書きしている——エクスポートされていない内部定数なので、
  * 試験側で独立して値を持つ（`withheld-report-flush-ms.test.ts` の `DEFAULT_MS`
  * と同じ理由）。
  */
-const DEFAULT_MS = 1_000;
+const DEFAULT_MS = 3_000;
 
 describe('resolveSynthesizedNoticeWindowMs', () => {
   it('正常値: 数値文字列をそのまま ms として読む', () => {
@@ -25,23 +25,23 @@ describe('resolveSynthesizedNoticeWindowMs', () => {
     ).toBe(5000);
   });
 
-  it('陰性対照: 未設定なら既定1000ms', () => {
+  it('陰性対照: 未設定なら既定3000ms', () => {
     expect(resolveSynthesizedNoticeWindowMs({})).toBe(DEFAULT_MS);
   });
 
-  it('空文字は既定1000msへ倒す', () => {
+  it('空文字は既定3000msへ倒す', () => {
     expect(resolveSynthesizedNoticeWindowMs({ [SYNTHESIZED_NOTICE_WINDOW_MS_ENV_KEY]: '' })).toBe(
       DEFAULT_MS,
     );
   });
 
-  it('数値でない文字列は既定1000msへ倒す', () => {
+  it('数値でない文字列は既定3000msへ倒す', () => {
     expect(
       resolveSynthesizedNoticeWindowMs({ [SYNTHESIZED_NOTICE_WINDOW_MS_ENV_KEY]: 'abc' }),
     ).toBe(DEFAULT_MS);
   });
 
-  it('0以下（0・負数）は既定1000msへ倒す', () => {
+  it('0以下（0・負数）は既定3000msへ倒す', () => {
     expect(resolveSynthesizedNoticeWindowMs({ [SYNTHESIZED_NOTICE_WINDOW_MS_ENV_KEY]: '0' })).toBe(
       DEFAULT_MS,
     );

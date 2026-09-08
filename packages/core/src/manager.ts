@@ -1309,6 +1309,13 @@ export interface ManagerPoolOptions {
    * 理由で口を開けてある——試験と、明示的に配線したい呼び出し元のため。
    */
   withheldReportFlushMs?: number;
+  /**
+   * 機構が合成した知らせの合流窓の長さ（ms）。**省略時は
+   * `resolveSynthesizedNoticeWindowMs()`**（＝ この プロセスの環境変数
+   * `ALTEROID_SYNTHESIZED_NOTICE_WINDOW_MS`、既定1000ms）。`withheldReportFlushMs`
+   * と同じ理由で口を開けてある——試験と、明示的に配線したい呼び出し元のため。
+   */
+  synthesizedNoticeWindowMs?: number;
 }
 
 export function createManagerPool(options: ManagerPoolOptions): ManagerPool {
@@ -2209,29 +2216,49 @@ export function withheldReportOverdue(lastAt: string, now: number, flushMs: numb
 // ---------------------------------------------------------------------------
 
 /**
- * `#queueSynthesizedNotice` が積む1件がどの経路から来たか。**日誌の内訳
- * （どんな知らせを何件まとめたか）にだけ使う——分岐処理そのものはこの値では
- * 行わない**（畳んでよいかどうかは呼び出し元がどの `case` かで既に決まって
- * いるので、ここでの分岐は要らない）。
+ * `#queueSynthesizedNotice` が積む1件がどの族（family）から来たか。**日誌の
+ * 内訳（どんな知らせを何件まとめたか）と、まとめた本文の見出しにだけ使う
+ * ——畳んでよいかどうかの判定にはいまは使わない**（畳む判定は時刻の窓
+ * だけで行う。呼び出し元がどの `case` かで既に「畳める」と決まっている）。
+ *
+ * **`string` にしてあるのは、`runner-protocol.ts` の `report.synthesized`
+ * が運ぶ値と同じ語彙を共有するためである。** 旧デーモン・新 runner のような
+ * 版のずれで、ここが知らない族の名前が届くことがある——`string` にして
+ * おけば型では落ちず、{@link describeSynthesizedNoticeLabel} 側の未知語
+ * フォールバックだけで吸収できる（`z.string()` を境界に選んだ他の欄——
+ * `rateLimitFactsSchema.kind` 等——と同じ判断）。
+ *
+ * **いまは畳む判定に使っていないが、将来「時刻ではなく族で畳む」経路を
+ * 足すときの土台として残してある**（依頼者の提案）。
  */
-type SynthesizedNoticeLabel = 'rate_limit' | 'usage_notice' | 'closed_failed' | 'report_failed';
+type SynthesizedNoticeLabel = string;
 
-/** {@link SynthesizedNoticeLabel} を日誌・断片の見出しへ出す日本語へ。 */
+/**
+ * 既知の族の名前（`describeSynthesizedNoticeLabel` の対応表の鍵）。
+ * **これは網羅ではない** — `runner-protocol.ts` の `report.synthesized` は
+ * `z.string()` なので、ここに無い値が届くことがある（`describeSynthesizedNoticeLabel`
+ * の未知語フォールバックを参照）。
+ */
+const KNOWN_SYNTHESIZED_NOTICE_LABELS: Record<string, string> = {
+  rate_limit: '枠の遷移（追い返された／課金枠へ入った）',
+  usage_notice: '利用上限の通知',
+  closed_failed: 'セッションが落ちた',
+  turn_failed: '応答を返さずに終わったターンの報告',
+  resume_fallback: '器の入れ替えで前のセッションへ戻れず、生ログから作り直して続けた',
+  resume_failed: '器の入れ替えで前のセッションへ戻れず、再開そのものに失敗した',
+};
+
+/**
+ * {@link SynthesizedNoticeLabel} を日誌・断片の見出しへ出す日本語へ。
+ *
+ * **未知の族（上の対応表に無い文字列）は、素の値をそのまま返す。** 落とさず
+ * 表示すること自体が「版がずれている」という事実の唯一の跡になる——ここで
+ * 例外を投げる・既定の1語へ潰すと、まさにその跡が消える
+ * （`rateLimitFactsSchema` の `kind` を包む側と同じ「境界の値を信用しすぎない」
+ * 判断）。
+ */
 function describeSynthesizedNoticeLabel(label: SynthesizedNoticeLabel): string {
-  switch (label) {
-    case 'rate_limit':
-      return '枠の遷移（追い返された／課金枠へ入った）';
-    case 'usage_notice':
-      return '利用上限の通知';
-    case 'closed_failed':
-      return 'セッションが落ちた';
-    case 'report_failed':
-      return '応答を返さずに終わったターンの報告';
-    default: {
-      const exhaustive: never = label;
-      throw new Error(`未知の SynthesizedNoticeLabel: ${String(exhaustive)}`);
-    }
-  }
+  return KNOWN_SYNTHESIZED_NOTICE_LABELS[label] ?? label;
 }
 
 /** `#synthesizedNotices` に積む1件。 */
@@ -2249,20 +2276,37 @@ interface SynthesizedNoticeWindow {
 }
 
 /**
- * 機構が合成した知らせの合流窓の長さ（既定 1000ms）。
+ * 機構が合成した知らせの合流窓の長さ（既定 3000ms）。
  *
- * **枠落ちが1回起きると受信箱イベントが3〜4件立ち、クローンのターンが3〜4回
- * 焼ける、という実測（台帳）への直しである。** 4通は同じ1つの出来事の別の顔で、
- * 到着間隔は実測でどれも1秒未満（1ms〜616ms）だった。窓を1000msにしておけば、
- * 通常の枠落ちの4通は同じ窓に収まる。
+ * **1つの出来事が起きると受信箱イベントが複数件立ち、クローンのターンが
+ * その件数だけ焼ける、という実測（台帳）への直しである。** 族によって
+ * 列の間隔は違う——実測（依頼者が台帳と受信箱の時刻から数えた。この値
+ * 自体は自分で数え直していない）:
+ *
+ * - **枠落ちの族**（`rate_limit` / `usage_notice` / `closed_failed` /
+ *   `turn_failed` の4通）: 間隔はどれも1秒未満（1ms〜616ms）、全体で
+ *   最大 855ms。
+ * - **委譲が器と一緒に失われた族**（`resume_fallback` / `resume_failed` /
+ *   `closed_failed` の3通）: 間隔はもっと広く、`mgr-535826c7` は
+ *   1→2 が1,124ms、全体で1,682ms。
+ *
+ * **既定 3000ms は、実測の最大の列（1,682ms）に余裕を持たせた値であって、
+ * 原理から出た値ではない。** ⚠️ **「1,682ms より広いから安全」とは言えない**
+ * ——1→2 の間隔を作っているのは runner の再開の試行（SDK への往復）で、
+ * その所要には原理的な上限が無い。族によって列の幅も違う（上の2つがそれを
+ * 示している）ので、**時刻の窓はいつでも割れうる**。だから環境変数で
+ * 差し替えられるようにしてある（north_star 禁止2）。窓が割れれば、その分
+ * だけ畳める件数が減るが、それは「判定できないときは起こす側へ倒す」が
+ * 正しく働いている状態であって、データが失われるわけではない
+ * （`#queueSynthesizedNotice` / `stop()` の doc）。
  *
  * **これは `WITHHELD_REPORT_FLUSH_MS`（30分）とは別物である。** あちらは
  * 「背景処理の完了待ちで畳んだ報告が、次のターンの完了を待っても届かない」
  * ときの逃げ道（滅多に起きない・起きても急がない）で、こちらは「同じ出来事の
- * 複数の顔を1件にまとめる」ための待ち時間（毎回の枠落ちで起きる・短く終わる
- * 必要がある）——桁が3桁違うのは目的が違うからで、値を揃える理由が無い。
+ * 複数の顔を1件にまとめる」ための待ち時間（毎回の出来事で起きる・短く終わる
+ * 必要がある）——桁が違うのは目的が違うからで、値を揃える理由が無い。
  */
-const SYNTHESIZED_NOTICE_WINDOW_MS = 1_000;
+const SYNTHESIZED_NOTICE_WINDOW_MS = 3_000;
 
 /**
  * `SYNTHESIZED_NOTICE_WINDOW_MS` を人間が差し替えるための環境変数
@@ -2285,9 +2329,9 @@ const SYNTHESIZED_NOTICE_WINDOW_MS_UNREADABLE_WHAT = '機構合成の知らせ�
  *
  * | env の状態 | 返す値 | 跡 |
  * | --- | --- | --- |
- * | 未設定 / 空・空白のみ | 既定1000ms | 出さない |
- * | 非空だが数値として読めない | 既定1000ms | 残す |
- * | 非空で数値だが 0 以下 | 既定1000ms | 残す |
+ * | 未設定 / 空・空白のみ | 既定3000ms | 出さない |
+ * | 非空だが数値として読めない | 既定3000ms | 残す |
+ * | 非空で数値だが 0 以下 | 既定3000ms | 残す |
  */
 export function resolveSynthesizedNoticeWindowMs(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env[SYNTHESIZED_NOTICE_WINDOW_MS_ENV_KEY];
@@ -2319,17 +2363,17 @@ export function resolveSynthesizedNoticeWindowMs(env: NodeJS.ProcessEnv = proces
  * 積んだ断片を1本の `text` へ連結する（純関数。`withheldReportOverdue` と
  * 同じ理由でテスト可能性のために切り出してある）。
  *
- * **要約も間引きもしない。** 4種類はそれぞれ違うことを答えている
- * （落ちる前に何を考えていたか／なぜ止まったか／いつ明けるか／セッションが
- * 生きているか）ので、全文を届いた順（`fragments` の並び＝到着順。呼び出し元が
- * 並べ替えない）のまま連結する。
+ * **要約も間引きもしない。** 族ごとに断片は違うことを答えている（例:
+ * 枠落ちの族なら「落ちる前に何を考えていたか／なぜ止まったか／いつ明けるか
+ * ／セッションが生きているか」）ので、全文を届いた順（`fragments` の並び＝
+ * 到着順。呼び出し元が並べ替えない）のまま連結する。
  *
  * **1件のときは前置きを付けない。** `clone.ts` の `#mergedHumanBatch` が同じ
  * 理由でそうしている——まとめる側へ寄せると、いちばん多い「1件だけ」の本文に
  * 断り書きが載る形になってしまう。
  *
- * **断片ごとに区切りを入れる。** 実測の到着順では本文が添えられている
- * `report_failed` が先頭に来ているが、それは実測であって保証ではない——
+ * **断片ごとに区切りを入れる。** 枠落ちの族では実測の到着順で本文が添えられて
+ * いる `turn_failed` が先頭に来ているが、それは実測であって保証ではない——
  * 順番が変わっても読み手が境目を見つけられるように、`label` を見出しに出す。
  */
 export function mergeSynthesizedNoticeFragments(fragments: readonly SynthesizedNoticeFragment[]): {
@@ -2376,6 +2420,11 @@ class Pool implements ManagerPool {
    * 構築時に一度だけ確定し、以後 `process.env` を読み直さない。
    */
   readonly #withheldReportFlushMs: number;
+  /**
+   * 機構が合成した知らせの合流窓の長さ（ms）。**`#withheldReportFlushMs` と
+   * 同じ形**——構築時に一度だけ確定し、以後 `process.env` を読み直さない。
+   */
+  readonly #synthesizedNoticeWindowMs: number;
   /**
    * 新しい managerId を発行する。**器の乱数を直に読まない**（テストが衝突を
    * 再現できるようにする。`#now` と同じ理由）。
@@ -2508,6 +2557,26 @@ class Pool implements ManagerPool {
    * ないことが症状なので）。
    */
   readonly #withheldReports = new Map<string, WithheldReportMemory>();
+  /**
+   * 機構が合成した知らせの合流窓（managerId → いま積んでいる断片とタイマー）。
+   * doc は {@link SynthesizedNoticeWindow}。
+   *
+   * **`#withheldReports` とは別物である。** あちらは「背景処理の完了待ちで
+   * 畳んだ報告」を**時間の上限（既定30分）が来るまで**保持する在庫で、
+   * こちらは「同じ1つの枠落ちの別の顔」を**短い窓（既定1000ms）だけ**
+   * 保持してから必ず1本にまとめて配る——「委譲1本につき1本のタイマーを
+   * 増やさない」（`#persist` の doc）という原則の例外にはならない。積みが
+   * 在る managerId の数だけ、積みが在る数百ミリ秒〜1秒のあいだだけ生きる
+   * タイマーで、恒久的なタイマーではない（積みが空になれば消える。
+   * `#queueSynthesizedNotice` / `#flushSynthesizedNoticeFor` の doc）。
+   *
+   * **`#emit()` がその内側で、呼ばれるたびに必ず全 managerId ぶんを
+   * flush する** (`docs/architecture.md`「順序は並べ替えない」)。畳めない
+   * 出来事（本人が書いた報告・question・permission）が来たら、それより先に
+   * 積みを配り切ってから本題を配る——後から届いた「畳めない」ほうが先に
+   * 受信箱へ入って到着順が崩れるのを防ぐ。
+   */
+  readonly #synthesizedNotices = new Map<string, SynthesizedNoticeWindow>();
   /** 起動時の引き取りが走っている間だけ立つ。`#reattach` はこれを待つ。 */
   #restoring: Promise<void> | null = null;
   /**
@@ -2602,6 +2671,7 @@ class Pool implements ManagerPool {
     now,
     leaseTtlMs,
     withheldReportFlushMs,
+    synthesizedNoticeWindowMs,
     generateManagerId,
     tokenIdentity,
     onUsageObservation,
@@ -2615,6 +2685,8 @@ class Pool implements ManagerPool {
     this.#now = now ?? (() => Date.now());
     this.#leaseTtlMs = leaseTtlMs ?? LEASE_TTL_MS;
     this.#withheldReportFlushMs = withheldReportFlushMs ?? resolveWithheldReportFlushMs();
+    this.#synthesizedNoticeWindowMs =
+      synthesizedNoticeWindowMs ?? resolveSynthesizedNoticeWindowMs();
     this.#generateManagerId = generateManagerId ?? (() => `mgr-${randomUUID()}`);
     this.#workspace = workspace ?? resolveWorkspacePolicy();
     this.#tokenIdentity = tokenIdentity;
@@ -4504,6 +4576,12 @@ class Pool implements ManagerPool {
 
   async stop(): Promise<void> {
     this.#stopped = true;
+    // **窓の中でデーモンが落ちると、積んだ知らせが失われる。** ここで flush
+    // しないと `setTimeout` は二度と発火しない（プロセスが終わるので）——
+    // `#flushSynthesizedNotices` は全 managerId ぶんを同期的に配り切る
+    // （`#emit` を経由しない直接の `#deliver` 呼び出しなので、この後で
+    // `#unsubscribe` / `runner.close()` が何を壊しても post 自体はもう済んでいる）。
+    this.#flushSynthesizedNotices();
     // 名簿の購読も畳む（載り続ける runner に、止めたプールが繋ぎに行かない）。
     this.#unsubscribe();
     // 予約してあった取り直しは畳む（止めたはずのプールが後から動かない）。
@@ -5074,13 +5152,15 @@ class Pool implements ManagerPool {
           : 'runner の器が作り直されたが、前のセッションから戻せなかった。') +
         ` 理由: ${String(error)}`,
     });
-    this.#post({
-      type: 'manager_message',
-      id: randomUUID(),
-      at: new Date().toISOString(),
-      managerId: job.id,
-      kind: 'report',
-      text: [
+    // **即配らず合流窓へ積む（「一枠落ち一合図」の対象を広げた側。依頼者の
+    // 実測——委譲が器と一緒に失われた族は `resume_fallback` /
+    // `resume_failed` / `closed_failed` の3通で構成される）。** この文面は
+    // `manager.ts` 自身が組み立てたもの（`String(error)` の断片を含むが、
+    // 全体の構成はここで決めている）——`#queueSynthesizedNotice` の doc。
+    this.#queueSynthesizedNotice(
+      job.id,
+      'resume_failed',
+      [
         cause === 'session'
           ? 'この委譲を前のセッションから戻せなかった（SDK に会話が残っていない）。' +
             '生ログも預かっていないので、続きの材料が無い。'
@@ -5100,7 +5180,7 @@ class Pool implements ManagerPool {
       ]
         .filter((line) => line !== '')
         .join('\n'),
-    });
+    );
   }
 
   /**
@@ -5113,13 +5193,12 @@ class Pool implements ManagerPool {
    */
   #notifyResumeFallback(record: ManagerRecord, sessionId: string, reason: string): void {
     const { job } = record;
-    this.#post({
-      type: 'manager_message',
-      id: randomUUID(),
-      at: new Date().toISOString(),
-      managerId: job.id,
-      kind: 'report',
-      text: [
+    // **即配らず合流窓へ積む**（`#notifyUnresumable` と同じ理由・同じ族の
+    // クラスタ。「委譲が器と一緒に失われた族」の①に当たる）。
+    this.#queueSynthesizedNotice(
+      job.id,
+      'resume_fallback',
+      [
         `前のセッション（${sessionId}）へは戻れなかったので、預かってあった生ログから` +
           '新しいセッションを起こして続けさせた。',
         `理由: ${reason}`,
@@ -5131,7 +5210,7 @@ class Pool implements ManagerPool {
       ]
         .filter((line) => line !== '')
         .join('\n'),
-    });
+    );
   }
 
   /**
@@ -5898,7 +5977,21 @@ class Pool implements ManagerPool {
         // （`runner.ts` の `reportText()` / `failedReportText()`）で、SDK 由来の
         // 断片を先に `codeSpan()` へ通してから連結する形になる。`manager.ts` の
         // 中では覆らない。
-        this.#emit(event.managerId, 'report', event.text);
+        //
+        // **`event.synthesized` が立っていれば、即配らずに合流窓へ積む**
+        // （「一枠落ち一合図」——`runnerEventSchema` の `report.synthesized` の
+        // doc）。これが立つのは `runner.ts` が `failedReportText` を使った
+        // 経路（`failure` が付く回）だけで、`reportText()`（マネージャー本人の
+        // 途中出力を含みうる）の経路では立たない。**欄が無い（旧 runner）
+        // ときは常にこの `else` を通り、これまでどおり即配る**——版がずれた
+        // 窓では必ず「起こす側」へ倒れる（安全側）。値（族の名前）をそのまま
+        // `label` として使う——runner.ts と manager.ts は同じ語彙を共有する
+        // （`SynthesizedNoticeLabel` の doc）。
+        if (event.synthesized !== undefined) {
+          this.#queueSynthesizedNotice(event.managerId, event.synthesized, event.text);
+        } else {
+          this.#emit(event.managerId, 'report', event.text);
+        }
         return;
       }
 
@@ -6506,9 +6599,13 @@ class Pool implements ManagerPool {
         });
         // **畳んだ件数を配る1本に必ず載せる。** 受信箱しか見ていない読み手からは
         // 日誌の行が見えないので、ここに書かないと「畳んだ」が観測から消える。
-        this.#emit(
+        //
+        // **即配らず合流窓へ積む（「一枠落ち一合図」）。** この文言は
+        // `manager.ts` 自身が組み立てた機構の合成であり、マネージャー本人の
+        // 発話を含まない——`#queueSynthesizedNotice` の doc。
+        this.#queueSynthesizedNotice(
           event.managerId,
-          'report',
+          'usage_notice',
           folded === 0
             ? text
             : `${text}\n（前にこの種類を知らせてから、配達済みの同じ文言を ` +
@@ -6608,7 +6705,10 @@ class Pool implements ManagerPool {
           role: 'inbound',
           text: `[${event.managerId}] ${build((s) => s)}`,
         });
-        this.#emit(event.managerId, 'report', build(codeSpan));
+        // **即配らず合流窓へ積む（「一枠落ち一合図」）。** この文言は
+        // `manager.ts` 自身が組み立てた機構の合成であり、マネージャー本人の
+        // 発話を含まない——`#queueSynthesizedNotice` の doc。
+        this.#queueSynthesizedNotice(event.managerId, 'rate_limit', build(codeSpan));
         return;
       }
 
@@ -6848,7 +6948,12 @@ class Pool implements ManagerPool {
         // **別の層でなら在りうる。** 包むとすれば `runner.ts` の `#read()` で、
         // `String(error)` を先に `codeSpan()` へ通してから連結する形になる。
         // `manager.ts` の中では覆らない。
-        if (event.status === 'failed') this.#emit(event.managerId, 'report', event.reason);
+        // **即配らず合流窓へ積む（「一枠落ち一合図」）。** この本文は runner
+        // 自身の接頭辞＋例外文言（マネージャー本人の発話を含まない）——
+        // `#queueSynthesizedNotice` の doc。
+        if (event.status === 'failed') {
+          this.#queueSynthesizedNotice(event.managerId, 'closed_failed', event.reason);
+        }
         // **積みが在れば、それをクローンへ配ってから畳む。** 握り潰した
         // 「背景処理の完了待ちで畳んだ報告」は「後で必ず配る」約束であって
         // 「捨てる」ではない（`case 'report'` の `event.awaitingBackground`
@@ -7249,7 +7354,36 @@ class Pool implements ManagerPool {
     });
   }
 
+  /**
+   * `report` / `question` / `permission` の3種すべてが通る隘路。**外から
+   * 呼ばれる入口はここだけである**（旧`#emit`の呼び出し元は1つも変えて
+   * いない）。
+   *
+   * **中身は2段になっている。** (1) このプールに機構が合成した知らせの
+   * 積みが残っていれば、それを**全部**先に配り切る（`#flushSynthesizedNotices`
+   * ——`docs/architecture.md`「順序は並べ替えない」。畳めない出来事が来た
+   * ので、それより先に積みを吐き出してから本題を配る。積みが無ければ
+   * no-op）。(2) 実際に配るのは `#deliver`（旧`#emit`本体、1バイトも
+   * 変えていない）。
+   *
+   * **`#flushSynthesizedNoticeFor` 自身は、ここを経由せず直接 `#deliver` を
+   * 呼ぶ**（下のその関数の doc）。ここを経由させると、窓が閉じて配る
+   * その1回が「新しい畳めない出来事」として全 managerId の積みを巻き込んで
+   * 二重に flush してしまう。
+   */
   #emit(
+    managerId: string,
+    kind: 'report' | 'question' | 'permission',
+    text: string,
+    requestId?: string,
+    markup?: TextMarkup,
+    withheldSuffixDetail: 'full' | 'flush' = 'full',
+  ): void {
+    this.#flushSynthesizedNotices();
+    this.#deliver(managerId, kind, text, requestId, markup, withheldSuffixDetail);
+  }
+
+  #deliver(
     managerId: string,
     kind: 'report' | 'question' | 'permission',
     text: string,
@@ -7263,11 +7397,10 @@ class Pool implements ManagerPool {
     // 何も渡さないので字面は1バイトも変わらない（下の分岐の doc）。
     withheldSuffixDetail: 'full' | 'flush' = 'full',
   ): void {
-    // **`report` / `question` / `permission` の3種すべてが通る隘路。** その
-    // managerId に握り潰した「背景処理の完了待ちで畳んだ報告」（`#withheldReports`）
-    // が積んであれば、いま配るこの `text` の末尾へ1行足してから post し、
-    // 帳面を空にする——「後で必ず配る」を実現する唯一の場所である
-    // （`case 'report'` の `event.awaitingBackground` の doc）。
+    // **その managerId に握り潰した「背景処理の完了待ちで畳んだ報告」
+    // （`#withheldReports`）が積んであれば、いま配るこの `text` の末尾へ
+    // 1行足してから post し、帳面を空にする——「後で必ず配る」を実現する
+    // 唯一の場所である（`case 'report'` の `event.awaitingBackground` の doc）。
     //
     // **理由は依頼者（クローン）側の検算のため。** この直しが効きすぎて本物の
     // 報告まで消していないかを確かめる手段が要る。日誌（`type: 'decision'`）
@@ -7305,6 +7438,98 @@ class Pool implements ManagerPool {
       // （`abort()` の `markup` の扱いにも揃えてある）。
       ...(markup === undefined ? {} : { markup }),
     });
+  }
+
+  /**
+   * 機構が合成した知らせ（`case 'rate_limit'` / `case 'usage_notice'` /
+   * `case 'closed'` の `status === 'failed'` / `case 'report'` の
+   * `event.synthesized` / `#notifyResumeFallback` / `#notifyUnresumable`）を、
+   * すぐには post せずに積む。
+   *
+   * **窓は managerId ごとに独立し、その managerId に積みが在るあいだだけ
+   * 生きる1本の `setTimeout`。** 最初の1件で窓を開け（タイマーを立て）、
+   * 以後同じ managerId に積まれる分はタイマーを延長せずにそのまま追加する
+   * ——という前提のもと、最初の1件から `#synthesizedNoticeWindowMs` 経てば
+   * 通常は1つの出来事の別の顔が揃っている。延長する形にしないのは、届き続ける限り
+   * 窓が閉じない事態を避けるためである（north_star 禁止2「制限は方針で
+   * 表す」——期限を固定してあるからこそ、後から必ず配られることが保証できる）。
+   *
+   * **同じ族（`label`）が同じ窓の中で2度目に来たら、いまの積みを先に flush
+   * してから新しい窓を開く。** 1つの出来事は各族を高々1回しか持たない
+   * （枠落ちなら `rate_limit` 1回・`usage_notice` 1回・…）——**同じ族が
+   * 2度目に届いたということは、それは前の積みとは別の出来事である**と
+   * 判断する。この判定が無いと、内容の違う2件の `usage_notice`（実測:
+   * `usage-notice-redelivery.test.ts` — 同じ `reached` 分類でも文言が違う
+   * 2通が届く）が1件に潰れ、クローンから見て「2件目が来なかった」のと
+   * 区別が付かなくなる——`#usageNotices` / `#rateLimits` が「もう配った同じ
+   * 文言・同じ遷移」を先に弾いたあとに残る、**genuinely 別の観測**を潰さない
+   * ための関門である。
+   */
+  #queueSynthesizedNotice(managerId: string, label: SynthesizedNoticeLabel, text: string): void {
+    const existing = this.#synthesizedNotices.get(managerId);
+    if (existing !== undefined) {
+      if (existing.fragments.some((fragment) => fragment.label === label)) {
+        this.#flushSynthesizedNoticeFor(managerId);
+      } else {
+        existing.fragments.push({ label, text });
+        return;
+      }
+    }
+    const timer = setTimeout(() => {
+      this.#flushSynthesizedNoticeFor(managerId);
+    }, this.#synthesizedNoticeWindowMs);
+    // デーモンの停止をこのタイマーで引き延ばさない（`#scheduleReattach`と同じ形）。
+    timer.unref?.();
+    this.#synthesizedNotices.set(managerId, { fragments: [{ label, text }], timer });
+  }
+
+  /**
+   * ある managerId の合流窓を閉じ、積んだ断片を1本にまとめて配る。
+   *
+   * **窓のタイマーが自然に閉じた回（`#queueSynthesizedNotice` から）と、
+   * `stop()` / `#emit()` からの強制 flush の、どちらからも呼ばれる。**
+   * 積みが既に無ければ（二重の flush・タイマーと強制 flush が競った回）
+   * 何もしない——`clearTimeout` は在庫を消す側が必ず行うので、ここに
+   * 来た時点で在庫が無いのは「もう配った」ことの証拠であって異常ではない。
+   *
+   * **`#emit()` を経由せず直接 `#deliver` を呼ぶ。** ここを経由させると
+   * `#emit()` が持つ「全 managerId ぶん flush してから配る」が働き、
+   * 窓を1本ずつ閉じるたびに他の managerId の窓まで巻き込んで早期に
+   * 閉じてしまう（`#emit` の doc）。
+   *
+   * **post を先に、日誌はその後（fire-and-forget）。** `#journal` は
+   * 非同期で、この関数自体は同期のままにしておく必要がある——`#emit()` の
+   * 「全 managerId ぶん flush してから配る」は同期でなければ、flush の
+   * 完了を待たずに本題の `#deliver` が先に走ってしまい、まさに直そうとした
+   * 順序の崩れを自分で作ることになる（`#emit` のコメント）。日誌（内訳の
+   * 1行）は post の結果を左右しないので、待たずに書く。
+   */
+  #flushSynthesizedNoticeFor(managerId: string): void {
+    const entry = this.#synthesizedNotices.get(managerId);
+    if (entry === undefined) return;
+    this.#synthesizedNotices.delete(managerId);
+    clearTimeout(entry.timer);
+    const { text, breakdown } = mergeSynthesizedNoticeFragments(entry.fragments);
+    this.#deliver(managerId, 'report', text);
+    // **消えてよいのは「クローンを起こすこと」だけで、記録ではない。**
+    // 個々の知らせは積んだ時点で呼び出し元（`case 'rate_limit'` 等）が
+    // 既にそれぞれの `#journal` を書いている——ここで足すのは「まとめた」
+    // という1行だけで、既存の行を消したり減らしたりしない。
+    void this.#journal({
+      type: 'exchange',
+      with: 'manager',
+      role: 'inbound',
+      text:
+        `[${managerId}] 機構が合成した知らせを ${String(entry.fragments.length)} 件、` +
+        `1件にまとめて配った（内訳: ${breakdown}）。`,
+    });
+  }
+
+  /** 全 managerId ぶんの合流窓を、いま在る分だけ flush する。 */
+  #flushSynthesizedNotices(): void {
+    for (const managerId of [...this.#synthesizedNotices.keys()]) {
+      this.#flushSynthesizedNoticeFor(managerId);
+    }
   }
 
   async #persist(record: ManagerRecord): Promise<void> {

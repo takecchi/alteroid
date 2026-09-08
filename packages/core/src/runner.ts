@@ -2349,8 +2349,10 @@ class RunnerSession {
           // runner 自身の定型文＋SDK の失敗文言の連結であり、マネージャー本人が
           // 書いた・喋った断片を含まない——`failure !== undefined` の枝でしか
           // `failedReportText` を呼んでいない（このすぐ上の `outcome` の分岐）
-          // ので、判定はそこにそのまま乗せる。
-          ...(failure === undefined ? {} : { synthesized: true }),
+          // ので、判定はそこにそのまま乗せる。**値は族の名前**（`'turn_failed'`
+          // ＝「ターンが失敗して終わった」。`manager.ts` 側の
+          // `SynthesizedNoticeLabel` と同じ語彙を使う）。
+          ...(failure === undefined ? {} : { synthesized: 'turn_failed' }),
         });
         return;
       }
