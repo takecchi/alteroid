@@ -7,6 +7,7 @@ import type {
   Options,
   Query,
   SDKMessage,
+  SDKTaskUpdatedMessage,
   query as sdkQuery,
 } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -1038,5 +1039,224 @@ describe('note.stall のスキーマ（境界を越える形。Issue #357）', (
       ),
     );
     expect(parsed.success).toBe(false);
+  });
+});
+
+/**
+ * **`status` を読むこと**（#570 の追跡。この PR で足した歯）。
+ *
+ * `mine`（当人が起こしたもの）は「まだ走っているもの」ではない。`status` を
+ * 読まないと、SDK が畳み終えた背景処理を `background_tasks` に載せてくる回に、
+ * **もう終わっている門の完了を待たせる形で作業者を起こし直す**。
+ *
+ * ⚠️ **測ったこと（2026-09-09、直す前の版）:** `status` を
+ * `running`/`completed`/`failed`/`killed`/`done`/`succeeded` の6語で振っても、
+ * 在庫はどれも `1件`・起こし直しは `true` だった（＝判定が `status` を
+ * 見ていなかった）。下の歯はその6語のうち「終わった」側で分岐が変わることを
+ * 固定する。
+ *
+ * ⚠️ **この歯が言っていないこと。** 「SDK が `running` のまま腐った値を送る
+ * 経路が無い」ことは、ここでは測れない（送られた値をそのまま信じる側の歯で
+ * ある）。
+ */
+describe('status で「走っている／終わった／分からない」を分ける（#570 の追跡）', () => {
+  /** 当人のものが全部「終わった」側なら、起こし直さない。 */
+  it('status が終わった側の1件だけなら additionalContext を返さない', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+    await registerBackgroundTask(started.options, 'bg-1', 'agent-1');
+
+    const result = await fireSubagentStop(started.options, {
+      ...STOP_BASE,
+      agent_id: 'agent-1',
+      background_tasks: [
+        selfEntry('agent-1'),
+        {
+          id: 'bg-1',
+          type: 'shell',
+          status: 'completed',
+          description: '門',
+          command: 'pnpm verify',
+        },
+      ],
+    });
+
+    expect(result).toEqual({ continue: true });
+  });
+
+  /** 黙らない —— 起こし直さない代わりに、診断を1本だけ日誌へ出す。 */
+  it('起こし直さない代わりに診断を出す（黙って「きれいに畳んだ」に化けない）', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+    await registerBackgroundTask(started.options, 'bg-1', 'agent-1');
+
+    await fireSubagentStop(started.options, {
+      ...STOP_BASE,
+      agent_id: 'agent-1',
+      background_tasks: [
+        selfEntry('agent-1'),
+        { id: 'bg-1', type: 'shell', status: 'completed', description: '門' },
+      ],
+    });
+
+    const notes = noteEvents(s.events);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]?.text).toContain('status は全部「終わった」側だった');
+    expect(notes[0]?.text).toContain('status=completed');
+    // `stall` を載せない（`outcome` の2語のどちらでもないため）。
+    expect(notes[0]?.stall).toBeUndefined();
+  });
+
+  /** 診断は1セッションに1回だけ（`#noteOwnerLookupFailure` と同じ形）。 */
+  it('診断は1セッションに1回だけ出る', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+    await registerBackgroundTask(started.options, 'bg-1', 'agent-1');
+    await registerBackgroundTask(started.options, 'bg-2', 'agent-2');
+
+    for (const [agentId, taskId] of [
+      ['agent-1', 'bg-1'],
+      ['agent-2', 'bg-2'],
+    ] as const) {
+      await fireSubagentStop(started.options, {
+        ...STOP_BASE,
+        agent_id: agentId,
+        background_tasks: [
+          selfEntry(agentId),
+          { id: taskId, type: 'shell', status: 'killed', description: '門' },
+        ],
+      });
+    }
+
+    expect(noteEvents(s.events)).toHaveLength(1);
+  });
+
+  /** 終わった分は件数から外し、外したこと自体を書く（数を潰さない）。 */
+  it('走っているものと終わったものが混ざったら、終わった分を数に入れず、そう書く', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+    await registerBackgroundTask(started.options, 'bg-live', 'agent-1');
+    await registerBackgroundTask(started.options, 'bg-done', 'agent-1');
+
+    const result = await fireSubagentStop(started.options, {
+      ...STOP_BASE,
+      agent_id: 'agent-1',
+      background_tasks: [
+        selfEntry('agent-1'),
+        { id: 'bg-live', type: 'shell', status: 'running', description: '走っている門' },
+        { id: 'bg-done', type: 'shell', status: 'completed', description: '終わった門' },
+      ],
+    });
+
+    // 直上と同じ理由（キャストの前に欄の存在を断言する）。
+    expect(result).toMatchObject({
+      continue: true,
+      hookSpecificOutput: { hookEventName: 'SubagentStop' },
+    });
+    const additionalContext = (result as { hookSpecificOutput: { additionalContext: string } })
+      .hookSpecificOutput.additionalContext;
+    expect(additionalContext).toContain('背景処理が 1件');
+    expect(additionalContext).toContain('1件 は status が「終わった」側だった');
+    // 終わった側は一覧に載らない（残っているものだけを見せる）。
+    expect(additionalContext).toContain('走っている門');
+    expect(additionalContext).not.toContain('終わった門');
+
+    const notes = noteEvents(s.events);
+    expect(notes[0]?.text).toContain('背景処理が 1件 残ったまま');
+    expect(notes[0]?.stall?.ownedTaskCount).toBe(1);
+  });
+
+  /**
+   * **`'unknown'` は「走っている」へ倒す。** 倒す先を間違えると、SDK が
+   * 語彙を変えた瞬間に起こし直しが黙って効かなくなる（能力が消える）。
+   */
+  it('未知の status は「走っている」へ倒して起こし直し、分からなかったことを書く', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+    await registerBackgroundTask(started.options, 'bg-1', 'agent-1');
+
+    const result = await fireSubagentStop(started.options, {
+      ...STOP_BASE,
+      agent_id: 'agent-1',
+      background_tasks: [
+        selfEntry('agent-1'),
+        { id: 'bg-1', type: 'shell', status: 'とつぜんの新語', description: '門' },
+      ],
+    });
+
+    // **キャストの前に、欄が在ることを断言しておく。** 変異試験で m2
+    // （`'unknown'` を `'settled'` へ倒す）を撃ったとき、赤が
+    // `AssertionError` ではなく `TypeError`（`undefined` の
+    // `additionalContext` を読んだ）で出た —— **キャストが嘘をつく形**で、
+    // 赤の出どころが自分のアサーションではなくなっていた。
+    expect(result).toMatchObject({
+      continue: true,
+      hookSpecificOutput: { hookEventName: 'SubagentStop' },
+    });
+    const additionalContext = (result as { hookSpecificOutput: { additionalContext: string } })
+      .hookSpecificOutput.additionalContext;
+    expect(additionalContext).toContain('背景処理が 1件');
+    expect(additionalContext).toContain('status が既知の語彙のどちらでもない');
+    expect(noteEvents(s.events)[0]?.text).toContain('status が既知の語彙のどちらでもない');
+  });
+
+  /** `status` の欄そのものが無い（型が変わった）ときも「走っている」側へ倒す。 */
+  it('status の欄が無ければ「走っている」へ倒す', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+    await registerBackgroundTask(started.options, 'bg-1', 'agent-1');
+
+    const result = await fireSubagentStop(started.options, {
+      ...STOP_BASE,
+      agent_id: 'agent-1',
+      background_tasks: [selfEntry('agent-1'), { id: 'bg-1', type: 'shell', description: '門' }],
+    });
+
+    expect(result).toMatchObject({
+      continue: true,
+      hookSpecificOutput: { hookEventName: 'SubagentStop' },
+    });
+  });
+});
+
+/**
+ * **SDK の status の語彙が動いたら `pnpm typecheck` が落ちる歯。**
+ *
+ * `BackgroundTaskSummary.status` は `status: string`（自由文字列）で語彙を
+ * 名乗っていない。⟹ `runner.ts` の `SETTLED_BACKGROUND_TASK_STATUSES` /
+ * `LIVE_BACKGROUND_TASK_STATUSES` が置いている「6語で全部」という前提は、
+ * 同じ `TaskState` の status を運ぶ `SDKTaskUpdatedMessage.patch.status`
+ * の型から借りている。
+ *
+ * **逐語の印（`runner.ts` に付けた `check-sdk-quotes` の印）だけでは足りない** ——
+ * あれは文言が変わったときに落ちるが、**語彙が増えたことは文言の変化として
+ * 検出できるとは限らない**（`check-sdk-quotes-core.mjs` の「この検査が
+ * 言えないこと」）。だから型でも当てる。
+ *
+ * 語彙が増えたら `Extra` が `never` でなくなり、この行が型エラーになる。
+ */
+describe('SDK の status の語彙の前提（腐ったら typecheck が落ちる）', () => {
+  type TaskStatus = NonNullable<SDKTaskUpdatedMessage['patch']['status']>;
+  type Assumed = 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'killed';
+  type Extra = Exclude<TaskStatus, Assumed>;
+  type Missing = Exclude<Assumed, TaskStatus>;
+
+  it('想定した6語で全部である', () => {
+    const noExtra: Extra extends never ? true : false = true;
+    const noMissing: Missing extends never ? true : false = true;
+    expect(noExtra).toBe(true);
+    expect(noMissing).toBe(true);
   });
 });
