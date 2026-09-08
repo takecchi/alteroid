@@ -1207,17 +1207,35 @@ function denialLine(denials: ManagerDenial[]): string | null {
  * **健全なマネージャーでは `null` を返し、1文字も増えない**——一覧は文字数の
  * 予算（`LIST_BUDGET`）に張り付いていて、行を1本増やすと出る件数が減る
  * （`describeTurnEnd` / `runnerLostSince` の注記と同じ理由）。
+ *
+ * **字面の生成元はここ1箇所である。** クローンの面でこれを出すのは
+ * `manager_list` と `manager_report` の2つで、**後者は前者から掘りに行く先**
+ * である——同じ欄を2つの口が別の語で呼ぶと、`manager_list` で「失敗だ」と
+ * 読んだ直後に「直近の報告」という見出しの下で同じ本文を読むことになる
+ * （`describeManagerState` を1箇所に寄せてあるのと同じ理由）。
  */
-function failureLine(failure: ManagerSummary['lastFailure']): string | null {
+function describeManagerFailure(failure: ManagerSummary['lastFailure']): string | null {
   if (failure === undefined) return null;
   return (
-    `  ⚠ 直近のターンは報告ではなく失敗で終わっている: ${failure.code}（${failure.via}, ${failure.at}）。` +
+    `⚠ 直近のターンは報告ではなく失敗で終わっている: ${failure.code}（${failure.via}, ${failure.at}）。` +
     'この行の下に出る本文は runner が包んだエラー文（「このターンは応答を返さずに終わった: …」）で' +
     'あって報告ではない——**完遂して畳んだと読まないこと。** ' +
     'セッションは生きているので、原因が解ければ manager_send で続きから進む' +
     '（status が done のままなのはそのためで、この委譲が死んだという意味ではない）。' +
     '**先に manager_start で起こし直さないこと** — 同じ仕事が2本になる。'
   );
+}
+
+/**
+ * {@link describeManagerFailure} を `manager_list` の `extra` へ入れる形にする。
+ *
+ * `extra` の行は `  `（空白2つ）で始める約束である（`excerpt.ts` の
+ * `renderListingEntry` の doc）。**字面そのものはここで作らない**——作ると
+ * `manager_report` と割れる。
+ */
+function failureLine(failure: ManagerSummary['lastFailure']): string | null {
+  const note = describeManagerFailure(failure);
+  return note === null ? null : `  ${note}`;
 }
 
 /**
@@ -5089,9 +5107,23 @@ export function createCloneTools(context: ToolContext) {
           return text(await describeMissingReport(context.managers, managerId, found.status));
         }
 
-        const label = part === 'request' ? '依頼文' : '直近の報告';
+        // **失敗した回は「報告」と呼ばない（Issue #714）。** `manager_list` で
+        // 「失敗で終わった」と読んだクローンが全文を掘りに来る先がここである
+        // ——ここの見出しが「直近の報告」のままだと、**⚠ を見た直後に、包みの
+        // 内側だけを読んで報告として扱うことになる**（それが実際に起きた読み
+        // 違えである）。字面の生成元は `describeManagerFailure` 1箇所で、
+        // `manager_list` と割れない。
+        //
+        // **`part === 'request'` では何もしない。** 依頼文はそもそも報告では
+        // ないので、失敗の有無で呼び方が変わる欄ではない。
+        const failure = part === 'request' ? null : describeManagerFailure(found.lastFailure);
+        const label = part === 'request' ? '依頼文' : failure === null ? '直近の報告' : '直近のターンの中身';
         const part1 = page(body, offset, REPORT_PAGE);
         const head = `マネージャー ${managerId} の${label}（${describePage(part1)}）`;
+        // **失敗は本文の`上`に置く**（`manager_list` と同じ順。人間の CLI も
+        // 同じ順である）。下に置くと、包まれたエラー文を先に読んでから「実は
+        // 報告ではない」と分かる順になる。**失敗していない回は1文字も増えない。**
+        const failureNote = failure === null ? '' : `${failure}\n\n`;
         const tail = part1.more
           ? `\n\n…（ここで切れている。続きは manager_report managerId=${managerId}` +
             `${part === 'request' ? ' part=request' : ''} offset=${part1.to}）`
@@ -5102,7 +5134,7 @@ export function createCloneTools(context: ToolContext) {
         // それでも足りないときの次の一手を、切れていない場合にも常に添える。
         const footer =
           '\n\n（さらに掘るなら manager_transcript managerId=' + managerId + ' で生ログへ）';
-        return text(`${head}\n\n${part1.body}${tail}${footer}`);
+        return text(`${head}\n\n${failureNote}${part1.body}${tail}${footer}`);
       },
     ),
 
