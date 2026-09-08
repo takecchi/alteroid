@@ -1181,6 +1181,64 @@ function denialLine(denials: ManagerDenial[]): string | null {
 }
 
 /**
+ * 一覧に添える、「直近の1ターンが**報告ではなく失敗**で終わった」の一行
+ * （Issue #714）。
+ *
+ * **台帳には前から在った。渡していなかったのはこの面である。** `Job.lastFailure`
+ * （`schema.ts`）は `{ code, via, at }` を持ち、`ManagerSummary.lastFailure` として
+ * 外へも出ていて、**人間の CLI はこれを専用行として出している**（`apps/cli/src/chat.ts`
+ * の `failureLine`）。**クローンの面だけが読んでいなかった** —— 捕まえられて
+ * いないのではなく渡していない形なので、north_star 禁止1（人間にできることが
+ * この層でできないならバグ）に当たる。
+ *
+ * **`status` を置き換えない。** 支出上限に当たった回もセッションは生きているので
+ * 台帳の `status` は `done`（＝終えて待機中。話しかければ続く）のままである
+ * （`schema.ts` の `lastFailure` の doc）。札を `failed` へ倒すと嘘になり、
+ * 「もう続けられない」と読んで起こし直す判断を誤る。
+ *
+ * **SDK の語（`code` / `via`）をそのまま出す。** 言い換えると、SDK の型定義や
+ * 生ログで引ける手がかりが消える。`billing_error` と `rate_limit` は次の一手が
+ * 違う（前者は人間が枠を上げる話で、後者は待てば直る）。
+ *
+ * **次の一手の語はこの面のものを使う。** ここはクローンが読む面なので
+ * `manager_send` / `manager_start` を名指しする（CLI は `/msg`）——
+ * `runnerLostSince` の注記が同じ約束で書かれている。
+ *
+ * **健全なマネージャーでは `null` を返し、1文字も増えない**——一覧は文字数の
+ * 予算（`LIST_BUDGET`）に張り付いていて、行を1本増やすと出る件数が減る
+ * （`describeTurnEnd` / `runnerLostSince` の注記と同じ理由）。
+ *
+ * **字面の生成元はここ1箇所である。** クローンの面でこれを出すのは
+ * `manager_list` と `manager_report` の2つで、**後者は前者から掘りに行く先**
+ * である——同じ欄を2つの口が別の語で呼ぶと、`manager_list` で「失敗だ」と
+ * 読んだ直後に「直近の報告」という見出しの下で同じ本文を読むことになる
+ * （`describeManagerState` を1箇所に寄せてあるのと同じ理由）。
+ */
+function describeManagerFailure(failure: ManagerSummary['lastFailure']): string | null {
+  if (failure === undefined) return null;
+  return (
+    `⚠ 直近のターンは報告ではなく失敗で終わっている: ${failure.code}（${failure.via}, ${failure.at}）。` +
+    'この行の下に出る本文は runner が包んだエラー文（「このターンは応答を返さずに終わった: …」）で' +
+    'あって報告ではない——**完遂して畳んだと読まないこと。** ' +
+    'セッションは生きているので、原因が解ければ manager_send で続きから進む' +
+    '（status が done のままなのはそのためで、この委譲が死んだという意味ではない）。' +
+    '**先に manager_start で起こし直さないこと** — 同じ仕事が2本になる。'
+  );
+}
+
+/**
+ * {@link describeManagerFailure} を `manager_list` の `extra` へ入れる形にする。
+ *
+ * `extra` の行は `  `（空白2つ）で始める約束である（`excerpt.ts` の
+ * `renderListingEntry` の doc）。**字面そのものはここで作らない**——作ると
+ * `manager_report` と割れる。
+ */
+function failureLine(failure: ManagerSummary['lastFailure']): string | null {
+  const note = describeManagerFailure(failure);
+  return note === null ? null : `  ${note}`;
+}
+
+/**
  * `ManagerSummary` から {@link classifyManagerActivity} への入力を作る。
  *
  * **判定のコピーを2つ作らないための唯一の変換点。** `describeTurnEnd` /
@@ -4895,13 +4953,27 @@ export function createCloneTools(context: ToolContext) {
                 ? `  …ほか ${manager.waiting.length - MANAGER_WAITING_LIST_LIMIT} 件の返事待ちは省略` +
                   `（全 ${manager.waiting.length} 件。manager_send に requestId を渡せば個別に答えられる）。`
                 : null,
+              // **失敗は報告の`上`に置く（Issue #714）。** 下に置くと、包まれた
+              // エラー文（`lastReport`）を先に読んでから「実は報告ではない」と
+              // 分かる順になる。人間の CLI が同じ順で置いてある
+              // （`apps/cli/src/chat.ts` の「**失敗は報告の**上**に置く。**」）。
+              failureLine(manager.lastFailure),
               manager.lastReport === undefined
                 ? null
                 : // **時刻は既存の行に添えるだけ**（#358）。行を1本増やすと、
                   // 予算に張り付いている一覧では出る件数が減る（この道具の doc
                   // の実測を参照）。`lastReportAt` が無い行（古いデータ・版の
                   // ずれ）には何も足さない——「未受信」のような行は作らない。
-                  `  直近の報告${manager.lastReportAt === undefined ? '' : `（${manager.lastReportAt} 受信）`}: ${excerptLine(manager.lastReport, LIST_REPORT_EXCERPT)}`,
+                  //
+                  // **失敗した回は「報告」と呼ばない（Issue #714）。** 本文は
+                  // runner 側で「（このターンは応答を返さずに終わった: …）」と
+                  // 包まれているが、見出しが「直近の報告」のままだと、包みの
+                  // 内側だけを読んで報告として扱うことになる——**クローンが
+                  // 2026-09-08 に実際にそう読んでいる。** 字面は人間の CLI と
+                  // 揃えてある（`apps/cli/src/chat.ts` の `直近のターンの中身`）
+                  // ——同じ台帳の欄を2つの面が別の語で呼ぶと、面をまたいで
+                  // 読む人間がそこで詰まる。
+                  `  ${manager.lastFailure === undefined ? '直近の報告' : '直近のターンの中身'}${manager.lastReportAt === undefined ? '' : `（${manager.lastReportAt} 受信）`}: ${excerptLine(manager.lastReport, LIST_REPORT_EXCERPT)}`,
               // **Issue #567**: ターンが終わっているらしいのに報告が届いて
               // いない可能性を、条件つきで添える（`describeTurnEnd` の doc）。
               // **健全なマネージャーでは `null` を返し、1文字も増えない**——
@@ -5035,9 +5107,24 @@ export function createCloneTools(context: ToolContext) {
           return text(await describeMissingReport(context.managers, managerId, found.status));
         }
 
-        const label = part === 'request' ? '依頼文' : '直近の報告';
+        // **失敗した回は「報告」と呼ばない（Issue #714）。** `manager_list` で
+        // 「失敗で終わった」と読んだクローンが全文を掘りに来る先がここである
+        // ——ここの見出しが「直近の報告」のままだと、**⚠ を見た直後に、包みの
+        // 内側だけを読んで報告として扱うことになる**（それが実際に起きた読み
+        // 違えである）。字面の生成元は `describeManagerFailure` 1箇所で、
+        // `manager_list` と割れない。
+        //
+        // **`part === 'request'` では何もしない。** 依頼文はそもそも報告では
+        // ないので、失敗の有無で呼び方が変わる欄ではない。
+        const failure = part === 'request' ? null : describeManagerFailure(found.lastFailure);
+        const label =
+          part === 'request' ? '依頼文' : failure === null ? '直近の報告' : '直近のターンの中身';
         const part1 = page(body, offset, REPORT_PAGE);
         const head = `マネージャー ${managerId} の${label}（${describePage(part1)}）`;
+        // **失敗は本文の`上`に置く**（`manager_list` と同じ順。人間の CLI も
+        // 同じ順である）。下に置くと、包まれたエラー文を先に読んでから「実は
+        // 報告ではない」と分かる順になる。**失敗していない回は1文字も増えない。**
+        const failureNote = failure === null ? '' : `${failure}\n\n`;
         const tail = part1.more
           ? `\n\n…（ここで切れている。続きは manager_report managerId=${managerId}` +
             `${part === 'request' ? ' part=request' : ''} offset=${part1.to}）`
@@ -5048,7 +5135,7 @@ export function createCloneTools(context: ToolContext) {
         // それでも足りないときの次の一手を、切れていない場合にも常に添える。
         const footer =
           '\n\n（さらに掘るなら manager_transcript managerId=' + managerId + ' で生ログへ）';
-        return text(`${head}\n\n${part1.body}${tail}${footer}`);
+        return text(`${head}\n\n${failureNote}${part1.body}${tail}${footer}`);
       },
     ),
 
