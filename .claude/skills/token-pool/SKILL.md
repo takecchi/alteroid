@@ -1,6 +1,6 @@
 ---
 name: token-pool
-description: 認証トークンのプール（alteroid token、Issue #393、CLAUDE_CODE_OAUTH_TOKEN を複数本持って枠に当たったら回す仕組み）を触るときに読む。登録手順（CLI・HTTP 両方）、値を argv で渡さない理由、rotateOn の3値と既定、回す契機が2系統あること（セッション由来の観測と、記録から決める reconsider ＝ signal が stranded の側。契機は tick / startup / pool_changed / settings_changed / runner_connected / account_probe）、通る候補が無いとき最速回復の鍵を撒いて待つこと（event が parked）、セッションを1本も使わない枠の probe が現役を測って回す・戻す（recovered）こと、その probe はアカウントの枠しか見えないのでセッション上限には効かないこと、観測が飲まれる形が2つあって #668 で遷移の門を塞いだ（状態でも回るが観測がいまの世代を名乗ったときだけ）こと・#667 の stale の return は正しいので残したこと・身元を運ばない観測しか無い器では復帰の下限がいまも probe の5分であること、通る鍵に戻ったらクローンとマネージャーを起こすこと（2026-08-25 の「受信箱へ通知を入れない」を再開の契機の側だけ覆した。マネージャー側は restore() だけでは枠で止まった委譲に1本も届かないので resumeStoppedByUsage が要ること、鍵が戻った時点でまだ走っていた分は借りにして、そのターンが枠で終わった時点で起こすこと）、runner が再接続した瞬間に現役が降りる3経路、回った後に何が起きるか（撒く先2つ・走行中には届かない）、GET /tokens が値を返さないこと、止まった事実の記録と回復見込みの分類（time / action / unknown、扱いは当面一律）、失効しても回らないという非対称、台帳の tokenId 軸（4つの口の引き方と、tokensSince が null なのを「1本で全部使った」と読まないこと）、詰まったときの引き方（日誌は types=token_rotation で絞る。event を潰さない。プールは token_list）、最初に置いたときに見るべき3点。
+description: 認証トークンのプール（alteroid token、Issue #393、CLAUDE_CODE_OAUTH_TOKEN を複数本持って枠に当たったら回す仕組み）を触るときに読む。登録手順（CLI・HTTP 両方）、値を argv で渡さない理由、rotateOn の3値と既定、回す契機が2系統あること（セッション由来の観測と、記録から決める reconsider ＝ signal が stranded の側。契機は tick / startup / pool_changed / settings_changed / runner_connected / account_probe / turn_succeeded）、通る候補が無いとき最速回復の鍵を撒いて待つこと（event が parked）、セッションを1本も使わない枠の probe が現役を測って回す・戻す（recovered）こと、その probe はアカウントの枠しか見えないのでセッション上限には効かないこと、観測が飲まれる形が2つあって #668 で遷移の門を塞いだ（状態でも回るが観測がいまの世代を名乗ったときだけ）こと・#667 の stale の return は正しいので残したこと・身元を運ばない観測しか無い器では復帰の下限がいまも probe の5分であること、通る鍵に戻ったらクローンとマネージャーを起こすこと（2026-08-25 の「受信箱へ通知を入れない」を再開の契機の側だけ覆した。マネージャー側は restore() だけでは枠で止まった委譲に1本も届かないので resumeStoppedByUsage が要ること、鍵が戻った時点でまだ走っていた分は借りにして、そのターンが枠で終わった時点で起こすこと）、runner が再接続した瞬間に現役が降りる3経路、回った後に何が起きるか（撒く先2つ・走行中には届かない）、GET /tokens が値を返さないこと、止まった事実の記録と回復見込みの分類（time / action / unknown、扱いは当面一律）、失効しても回らないという非対称、台帳の tokenId 軸（4つの口の引き方と、tokensSince が null なのを「1本で全部使った」と読まないこと）、詰まったときの引き方（日誌は types=token_rotation で絞る。event を潰さない。プールは token_list）、最初に置いたときに見るべき3点。
 ---
 
 # 認証トークンのプール（枠に当たったら回す候補）
@@ -83,14 +83,15 @@ curl -X PUT http://127.0.0.1:4517/tokens \
 
 **契機（日誌の `reason`。数え上げの持ち主は `packages/core/src/schema.ts` の `token_rotation.reason` の `z.enum`）:**
 
-| `reason`           | 何で鳴るか                                                                                                                    |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
-| `tick`             | 見張りの目盛り（60秒）。**冷却明けもここで拾う**                                                                              |
-| `startup`          | デーモンが起きた直後の1回（引き取り＝`restore()` の**後**）                                                                   |
-| `pool_changed`     | `PUT /tokens`（＝ `alteroid token add` / `remove` / `disable` / `enable` / 並べ替え）                                         |
-| `settings_changed` | `PUT /tokens/policy`（＝ `alteroid token policy`）                                                                            |
-| `runner_connected` | runner が載った / 器が入れ替わった                                                                                            |
-| `account_probe`    | **枠の probe が現役を測った**（既定は5分ごと。`unavailable` の理由によっては30分。`apps/daemon/src/usage-poller.ts`）。下の節 |
+| `reason`           | 何で鳴るか                                                                                                                                                                                                                                             |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `tick`             | 見張りの目盛り（60秒）。**冷却明けもここで拾う**                                                                                                                                                                                                       |
+| `startup`          | デーモンが起きた直後の1回（引き取り＝`restore()` の**後**）                                                                                                                                                                                            |
+| `pool_changed`     | `PUT /tokens`（＝ `alteroid token add` / `remove` / `disable` / `enable` / 並べ替え）                                                                                                                                                                  |
+| `settings_changed` | `PUT /tokens/policy`（＝ `alteroid token policy`）                                                                                                                                                                                                     |
+| `runner_connected` | runner が載った / 器が入れ替わった                                                                                                                                                                                                                     |
+| `account_probe`    | **枠の probe が現役を測った**（既定は5分ごと。`unavailable` の理由によっては30分。`apps/daemon/src/usage-poller.ts`）。下の節                                                                                                                          |
+| `turn_succeeded`   | **層のターンがそのトークンで実際に成功した。** `account_probe` が見ていないセッション単位の上限を、成功という直接の証拠で埋める（`apps/daemon/src/token-watch.ts` の `observeTurnSuccess`。`tokenId` / `generation` の両方を名乗れた成功だけが上がる） |
 
 **⚠️ 「冷却が明けた」専用の値は持たせていない。** 見張りは記憶ストアを読まないので、目盛りが鳴った回が冷却明けだったのかどうかを**言えない** —— 言えないことを名前で主張する値を作ると、`AGENTS.md` の地雷「取れない軸に 0 の行を作る」と同じ形になる（**誰も出さない enum の値は、schema がついた嘘である**）。
 
