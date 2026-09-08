@@ -7023,6 +7023,40 @@ class Pool implements ManagerPool {
         // `#queueSynthesizedNotice` の doc。
         if (event.status === 'failed') {
           this.#queueSynthesizedNotice(event.managerId, 'closed_failed', event.reason);
+          /**
+           * **落ちたことを名簿へも知らせる（#712）。** これが無いと、落ちた1本
+           * ぶんだけ `/health` の `managers` が減り、配置の点数の分母が縮んで
+           * **落とした器がまた選ばれる**（`runner-protocol.ts` の
+           * `noteManagerFailed` の doc）。
+           *
+           * **`failed` だけを数える。**
+           *
+           * - `done` は正常終了なので、そもそも別のステータスである
+           *   （「正当に速く終わった委譲」がここへ混ざることは無い）
+           * - `lost` は数えない。**戻れなかったこと**は器の不調とは別の軸で、
+           *   実測では枠（429）が理由の回が並んでいた（クローンの観測、
+           *   2026-09-08。落ちる前に成果はリモートへ届いていた4/4）——器が
+           *   入れ替わった直後の resume 失敗をここで数えると、**戻ってきた
+           *   ばかりの器を二重に沈める**
+           * - `selfFenced` は上で早期 return しているのでここへ来ない
+           *   （そちらは「終わっていない」）
+           *
+           * **`event.systemError` では絞らない。** 分類（#713 / #718）が付くのは
+           * `code` を持つ例外だけで、**シグナルで畳まれた回には付かない** ——
+           * SDK は spawn 失敗には `code` を添えるが、signal 終了のほうへは
+           * `errorClass` と `signal` しか添えない（`@anthropic-ai/
+           * claude-agent-sdk@0.3.263` 同梱の `sdk.mjs`、`Claude Code process
+           * terminated by signal` を作っている箇所）。**同じ晩に `EAGAIN` と
+           * `SIGABRT` の両方が観測されている**ので、`systemError` で絞ると
+           * 後者を丸ごと取りこぼす。
+           *
+           * **`runnerId` が無い分は数えない。** どの器で落ちたか分からない1本を
+           * どこかの器へ計上すると、無実の器を沈める（`AGENTS.md`「取れない軸に
+           * 0 の行を作る」の同じ形——取れていないことを、作った値で消さない）。
+           */
+          if (record.job.runnerId !== undefined) {
+            this.#runners.noteManagerFailed(record.job.runnerId);
+          }
         }
         // **積みが在れば、それをクローンへ配ってから畳む。** 握り潰した
         // 「背景処理の完了待ちで畳んだ報告」は「後で必ず配る」約束であって

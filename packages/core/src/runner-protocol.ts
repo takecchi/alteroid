@@ -2025,6 +2025,37 @@ export interface RunnerRegistry {
    * （`unregister` と同じ作法）。
    */
   vacate(runnerId: string): void;
+  /**
+   * **その器で委譲が1本 `failed` で落ちた**ことを名簿へ知らせる（#712）。
+   *
+   * ## なぜこの口が要るのか
+   *
+   * 配置の点数は `cores / (managers + 1)` を含む。`managers` は runner 自身が
+   * `/health` で名乗る「いま抱えている本数」で、**セッションが落ちればその場で
+   * 減る**（`apps/runner/src/health-managers-on-failure.test.ts` が振る舞いで
+   * 固定している）。⟹ **落ちるほど分母が縮み、落とした器の点数が上がる。**
+   * そして `chooseByResources` は状態を持たない純関数なので、**同じ入力には
+   * 決定的に同じ答えを返す** ⟹ 壊れた器が磁石になる。これが #712 である。
+   *
+   * **点数計算の側だけでは塞げない。** `#place` が持っているのは、開けている
+   * `RunnerClient` と、その場でライブに叩いた `resources()` だけで、**そこには
+   * 「さっきここで何本落ちたか」がどこにも無い。** だから外から入れる。
+   *
+   * ## これは制限ではない
+   *
+   * 数えた失敗は**「いま抱えている本数」へ足し戻される**だけで、点数を負にも
+   * 0 にもしない。**置き先が返らなくなることは無い**（`chooseByResources` の
+   * 「**0点でも返る。**」）。⟹ 「この器はもう使わない」ではなく「他の器と
+   * 同じ土俵で比べる」ための材料である（north_star 禁止2）。
+   *
+   * **知らせない実装でも動く**（何も数えない ＝ #712 以前の点数）。だが口を
+   * 省略可能にしていないのは、**省略が静かに効く**からである——呼ばれない配線は
+   * 赤くならず、輪が戻ったことは点数からしか読めない。
+   *
+   * **同期で完結する**（`vacate` と同じ）。落ちた瞬間に手元の `runnerId` から
+   * 呼べる形にしてあり、往復（RPC）は起きない。
+   */
+  noteManagerFailed(runnerId: string): void;
   /** 登録されている全部。繋がっていないものも並ぶ（`GET /runners` の材料）。 */
   entries(): RunnerEntry[];
   /**
@@ -2100,6 +2131,19 @@ export interface RunnerRegistryOptions {
    * 起動直後の数秒をやり過ごすためだけの猶予で、運用でいじる値ではない。
    */
   selectWaitMs?: number;
+  /**
+   * いまの時刻（ミリ秒）。**主にテスト用で、既定は `Date.now` である。**
+   *
+   * **なぜ注入できる形にしたか。** 直近の失敗を覚えておく窓（#712 /
+   * `PLACEMENT_FAILURE_MEMORY_MS`）が時間で切れることを測るには、時計を進める
+   * 必要がある。`vi.useFakeTimers()` でも進められるが、あれは名乗りを聞きに行く
+   * `setInterval` と `withDeadline` の `setTimeout` まで同時に止める——**測りたい
+   * のは窓1つなのに、無関係な2つの時計が巻き込まれる。**
+   *
+   * **つまみではない。** 本番の起動経路（`apps/daemon/src/index.ts`）はこの引数を
+   * 渡さない。
+   */
+  now?: () => number;
 }
 
 /**
@@ -2121,6 +2165,30 @@ const REGISTRY_RETRY_MAX_MS = 30_000;
  * **環境変数に出さないこと。** つまみにすると、そこが実質の制限になる。
  */
 const SELECT_WAIT_MS = 3_000;
+
+/**
+ * 直近の起動失敗を、配置の材料として覚えておく長さ（#712）。
+ *
+ * **⚠️ この5分という長さは実測ではない。仮定である。** 根拠にしたのは #712 の
+ * 観測（14:20〜14:35 に3本まとめて置かれ、どれも数分で `failed`）と、同じ晩の
+ * 別の観測（20:01〜20:05 に起こした3本のうち2本が 20:02 に死亡）だけで、
+ * 「何分が正しいか」を測った回は1度も無い。**次に触る者は、この数字を
+ * 測られた値として扱わないこと。**
+ *
+ * **短いほうから始めてある。** 足りなければ伸ばせるが、長すぎる記憶は
+ * 「一時的な不調が過ぎた器を避け続ける」形になり、そちらは戻しにくい
+ * （north_star 禁止2 の側へ倒れる）。
+ *
+ * **取りこぼす形も分かっている**——「1本落ちて、5分空いて、また1本落ちる」は
+ * 数えられない。**連続して落ちるあいだは窓が更新され続ける**ので、#712 が
+ * 名指しした輪（落ちるたびに同じ器が選ばれ直す）には効く。
+ *
+ * **環境変数の設定項目にしないこと。** `SELECT_WAIT_MS` / `HEARTBEAT_*` と
+ * 同じ理由である。ただしここは**そもそも制限ではない**——この値を伸ばしても
+ * 縮めても、置き先が返らなくなることは無い（`chooseByResources` の
+ * 「**0点でも返る。**」）。
+ */
+const PLACEMENT_FAILURE_MEMORY_MS = 5 * 60_000;
 
 /**
  * 名乗りを聞きに行く間隔。**この3つの数値はコードに固定する。**
@@ -2373,6 +2441,12 @@ class Registry implements RunnerRegistry {
   readonly #retryBaseMs: number;
   readonly #retryMaxMs: number;
   readonly #selectWaitMs: number;
+  /**
+   * runnerId → その器で `failed` を観測した時刻（ミリ秒）。**窓の外は読むたびに
+   * 畳む**（`#freshFailuresOf`）ので、別のタイマーは持たない。
+   */
+  readonly #failures = new Map<string, number[]>();
+  readonly #now: () => number;
   /** 名乗りを聞きに行く1本。**`stop()` で必ず畳む**（残すとテストがハングする）。 */
   #heartbeat: ReturnType<typeof setInterval> | null = null;
   #stopped = false;
@@ -2384,6 +2458,7 @@ class Registry implements RunnerRegistry {
     this.#retryBaseMs = options.retryBaseMs ?? REGISTRY_RETRY_BASE_MS;
     this.#retryMaxMs = options.retryMaxMs ?? REGISTRY_RETRY_MAX_MS;
     this.#selectWaitMs = options.selectWaitMs ?? SELECT_WAIT_MS;
+    this.#now = options.now ?? Date.now;
 
     const heartbeat = setInterval(() => this.#beat(), HEARTBEAT_INTERVAL_MS);
     // 名乗りを聞くことでプロセスの終了を引き延ばさない。
@@ -2548,6 +2623,34 @@ class Registry implements RunnerRegistry {
   }
 
   /**
+   * インターフェース側の doc（`noteManagerFailed`）が持つ約束をそのまま実装する。
+   * **ここに追加の判断は無い**——数えるかどうかを決めるのは呼ぶ側である
+   * （`manager.ts` の `case 'closed'`）。
+   */
+  noteManagerFailed(runnerId: string): void {
+    const fresh = this.#freshFailuresOf(runnerId);
+    fresh.push(this.#now());
+    this.#failures.set(runnerId, fresh);
+  }
+
+  /**
+   * 窓（`PLACEMENT_FAILURE_MEMORY_MS`）の内側に残っている観測時刻。
+   *
+   * **読むついでに畳む。** 掃除のためだけのタイマーを足さないためで、**窓の
+   * 境目は `>` である**——ちょうど窓の長さだけ経った1件は、もう数えない
+   * （境目をどちらへ倒すかは `runner-placement.test.ts` が固定している）。
+   */
+  #freshFailuresOf(runnerId: string): number[] {
+    const seen = this.#failures.get(runnerId);
+    if (seen === undefined) return [];
+    const since = this.#now() - PLACEMENT_FAILURE_MEMORY_MS;
+    const fresh = seen.filter((at) => at > since);
+    if (fresh.length === 0) this.#failures.delete(runnerId);
+    else this.#failures.set(runnerId, fresh);
+    return fresh;
+  }
+
+  /**
    * **`cwd` は今も読まない。`runnerId` は読む。** `RunnerRegistry#select` は
    * `{ cwd?; runnerId? }` を渡せる形で宣言してあり、`ManagerPool#start` は `cwd` を
    * 実際に渡している（`manager.ts`）。だが下の仮引数の分解には `runnerId` しか
@@ -2701,9 +2804,16 @@ class Registry implements RunnerRegistry {
             PLACEMENT_PROBE_MS,
             '資源の報告',
           );
-          return { client, resources };
+          return { client, resources, recentFailures: this.#freshFailuresOf(client.runnerId).length };
         } catch {
-          return { client, resources: undefined };
+          // **資源を聞けなくても、失敗の記憶までは落とさない（#712）。** ここは
+          // 名簿が自分で持っている値で、器へ聞きに行った結果ではない——聞けな
+          // かったことを理由に捨てると、**答えない器ほど落とした事実が消える。**
+          return {
+            client,
+            resources: undefined,
+            recentFailures: this.#freshFailuresOf(client.runnerId).length,
+          };
         }
       }),
     );
@@ -3115,6 +3225,11 @@ class Registry implements RunnerRegistry {
       entry.instanceSince = new Date(at).toISOString();
     }
     if (before === undefined || before === instanceId) return;
+    // **器が入れ替わったら、前の器の失敗は忘れる（#712）。** `runnerId` は器を
+    // 作り直しても同じ値なので、消さないと**もう居ないプロセスの記録で、いま
+    // 応えているプロセスの健康を判定する**ことになる。
+    const swappedRunnerId = entry.client?.runnerId;
+    if (swappedRunnerId !== undefined) this.#failures.delete(swappedRunnerId);
     this.#onSwap?.({
       label: entry.source.label,
       // **書き換えていない値をそのまま渡す。** 台帳の鎖はこの名前で繋がっている。
@@ -3317,11 +3432,38 @@ function withDeadline<T>(
  * この項は全台 1 で素通りする** ⟹ #712 の直しが入る前と点数が1ミリも変わらない
  * （`runner-placement.test.ts` がその等価性を固定している）。
  *
- * 同点なら登録順の先（`>` で比べている）。**0点でも返る。** 資源を見るのは「どこに
- * 置くか」を決めるためで、「置けるか」を決めるためではない（north_star 禁止2）。
+ * **直近に落とした本数は、抱えている本数へ足し戻す（#712）。** `managers` は
+ * runner が `/health` で名乗る「いま抱えている本数」なので、**セッションが落ちれば
+ * その場で減る** ⟹ 分母が縮み、**落とした器の点数が上がる。** そしてこの関数は
+ * 状態を持たない純関数なので、上がった点数は**決定的に**同じ器を選び続ける。
+ * 足し戻すと、落ちる前に持っていた点数へ戻るだけになる ⟹ **失敗が点数を上げも
+ * 下げもしなくなる。**
+ *
+ * **これはペナルティではない。** `0.5` を掛けるような重みを足していないのは、
+ * すぐ上の「重みを持たないのは意図である」を破らないためである。**足し戻しは
+ * 「観測の補正」であって「罰」ではない**——落ちた1本は「さっきまでこの器が抱えて
+ * いた1本」なので、窓のあいだは抱えていたものとして数える。**点数は 0 未満に
+ * ならず、置き先は必ず返る。**
+ *
+ * 同点なら登録順の先（`>` で比べている）。**ただし直近に落とした器は、同点の
+ * ときだけ後ろへ回す（#712）。** 足し戻しだけだと、**登録順の先に居る壊れた器が
+ * 同点勝ちで磁石のまま残る**——落ちるたびに足し戻されて点数が動かないので、
+ * ずっと同じ器が返り続ける。**効くのは点数が同点のときだけで、点数が違えば
+ * 1文字も変わらない。** ここでも断らない（後ろへ回った器も、それしか無ければ返る）。
+ *
+ * **0点でも返る。** 資源を見るのは「どこに置くか」を決めるためで、「置けるか」を
+ * 決めるためではない（north_star 禁止2）。
  */
 function chooseByResources(
-  reports: readonly { client: RunnerClient; resources: RunnerPlacementResources | undefined }[],
+  reports: readonly {
+    client: RunnerClient;
+    resources: RunnerPlacementResources | undefined;
+    /**
+     * 窓の内側で、その器が `failed` で落とした本数（#712）。**渡さない呼び出しは
+     * 0 として扱う** ⟹ #712 の直しが入る前と点数が1ミリも変わらない。
+     */
+    recentFailures?: number;
+  }[],
 ): RunnerClient | undefined {
   const rooms = reports.flatMap((r) =>
     r.resources?.memory ? [memoryRoomOf(r.resources.memory)] : [],
@@ -3344,18 +3486,56 @@ function chooseByResources(
 
   let best: RunnerClient | undefined;
   let bestScore = -Infinity;
+  let bestFailures = Infinity;
   for (const report of reports) {
     const room = report.resources?.memory ? memoryRoomOf(report.resources.memory) : meanRoom;
     const pidsRoom = report.resources?.pids ? pidsRoomOf(report.resources.pids) : meanPidsRoom;
+    const failures = report.recentFailures ?? 0;
     const share =
-      (report.resources?.cpu?.cores ?? meanCores) / ((report.resources?.managers ?? meanHeld) + 1);
+      (report.resources?.cpu?.cores ?? meanCores) /
+      ((report.resources?.managers ?? meanHeld) + failures + 1);
     const score = room * pidsRoom * share;
+    // **同点かどうかを先に見る。** 後にすると、`0.8000000001` のように誤差ぶん
+    // だけ大きい点数が `score > bestScore` を通って勝ち、同点の判定まで届かない
+    // （＝艦隊の並び順で結果が変わる）。
+    if (scoresTie(score, bestScore)) {
+      if (failures < bestFailures) {
+        bestScore = score;
+        bestFailures = failures;
+        best = report.client;
+      }
+      continue;
+    }
     if (score > bestScore) {
       bestScore = score;
+      bestFailures = failures;
       best = report.client;
     }
   }
   return best;
+}
+
+/**
+ * 点数の同点をこれだけの相対誤差まで許す（#712）。
+ *
+ * **`===` で比べないための値である。** 点数は `memoryRoom × pidsRoom ×
+ * cores/(managers+1)` の浮動小数なので、**同じ諸元の器どうしでも `0.8` と
+ * `0.7999999999999999` に割れることがある。** 割れると「同点のときだけ効く」
+ * はずの分岐が、掛け算の順序という無関係な理由で効いたり効かなかったりする。
+ *
+ * **相対で見る。** 点数の桁は艦隊の諸元で変わる（コア数がそのまま掛かる）ので、
+ * 絶対値で線を引くと大きい器ほど同点になりやすい。
+ *
+ * **`1e-9` は「本当に違う点数」を同点に畳まない。** 実際に競る差
+ * （`managers` が1本違えば `0.8` と `1.0667`）とは8桁以上離れている。
+ */
+const SCORE_TIE_EPSILON = 1e-9;
+
+function scoresTie(a: number, b: number): boolean {
+  // **初回（`bestScore = -Infinity`）を同点にしない。** `NaN` も同じ側へ倒す。
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
+  const scale = Math.max(1, Math.abs(a), Math.abs(b));
+  return Math.abs(a - b) <= SCORE_TIE_EPSILON * scale;
 }
 
 function mean(values: readonly number[]): number | undefined {

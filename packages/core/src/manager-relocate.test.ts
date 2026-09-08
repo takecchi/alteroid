@@ -124,6 +124,9 @@ function createFakeRegistry(): {
       // 前提にしないためである。
       return entries.map((entry) => ({ ...entry }));
     },
+    noteManagerFailed() {
+      /* この試験群では使わない（配置は検証対象ではない）。 */
+    },
     subscribe() {
       return () => {};
     },
