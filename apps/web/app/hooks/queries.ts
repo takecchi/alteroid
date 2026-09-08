@@ -424,9 +424,27 @@ export function summarizeJournalEntry(entry: JournalEntry): string {
         0,
       );
       const cacheRead = models.reduce((sum, [, totals]) => sum + totals.cacheReadInputTokens, 0);
+      // **文脈の占有と compaction も1行に出す。** 日誌には在るのに、この画面も
+      // クローンの `journal_read` も出していなかった欄である（`schema.ts` の
+      // `turn_usage.contextUsage`）。「消費が増え続けている」の原因が
+      // 「毎ターンの文脈が育っている」なのかを、**この画面だけで見分けられる
+      // ようにする**——出さないでいると、答えるのに DB へ直接 SQL を投げる
+      // ことになる（2026-09-08 に実際にそうなった）。
+      const context = entry.contextUsage;
+      const contextNote =
+        context === undefined || context.percentage === undefined
+          ? ''
+          : ` 文脈 ${context.percentage}%` +
+            (context.totalTokens === undefined ? '' : `（${context.totalTokens} トークン）`);
+      const compactionNote =
+        entry.compactions === undefined || entry.compactions.length === 0
+          ? ''
+          : ` ⚠ compaction ${entry.compactions.length} 回`;
       return (
         `[${entry.layer}/${entry.site}] ${entry.managerId} 1ターン $${totalCost.toFixed(4)}` +
         `（cache read=${cacheRead} write=${cacheWrite}）` +
+        contextNote +
+        compactionNote +
         (entry.reset === undefined ? '' : ' ⚠ 数え直しを挟んだ回（models は差分ではない）')
       );
     }
