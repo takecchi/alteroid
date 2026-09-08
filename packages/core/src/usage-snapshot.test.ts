@@ -212,6 +212,27 @@ describe('plan / organization の「欄が無い」と「空」を畳まない',
     expect(usage.extraUsage).toBeUndefined();
     expect(hasAccountUsageDetail(usage)).toBe(false);
   });
+
+  it('理由文（GET /usage に載る reason）も plan の3状態を畳まない', () => {
+    // ⭐ `planForReason` の空の枝を `'不明'` へ畳む変異を赤にする歯。**変異試験で
+    // ここだけが生存した**（他の4本は既存の歯が捕まえた）。理由文は
+    // `accountUsageStateSchema` の `unavailable` 枝の `reason` としてそのまま
+    // `GET /usage` の応答に載るので、ここが畳むと「欄が無い」と「欄はあるが空」の
+    // 区別が**外から**消える。⚠️ `?? '不明'` では割れない（`''` は nullish で
+    // ないので既定値が出ず、空白が出る）。
+    const absent = toAccountUsage(AT, { rate_limits_available: false }, {});
+    const empty = toAccountUsage(AT, { rate_limits_available: false }, { subscriptionType: '' });
+    // 先に観測の側が分かれていることを確かめる——ここが同じなら、この歯は
+    // 理由文を測っていない。
+    expect(absent.plan).toBeUndefined();
+    expect(empty.plan).toBe('');
+    const reasons = [absent, empty].map((usage) =>
+      describeLimitsUnavailable(usage, 'undetermined'),
+    );
+    expect(reasons[0]).toContain('plan: 不明）');
+    expect(reasons[1]).toContain('plan: 不明（欄はあるが空）');
+    expect(new Set(reasons).size).toBe(2);
+  });
 });
 
 describe('「取れない」と「まだログインしていない」を混ぜない', () => {
