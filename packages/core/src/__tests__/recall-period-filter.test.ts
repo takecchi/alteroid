@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { Ctx } from "../ctx.js";
-import type { VectorFilter } from "../interfaces/vector-store.js";
+import type { EmbeddingSpaceId } from "../embedding.js";
+import type { VectorFilter, VectorHit, VectorStore } from "../interfaces/vector-store.js";
 import { defaultDecayStrategy } from "../strategies/decay.js";
 import type { Memory, NewMemory } from "../memory.js";
 import { createRuntime } from "../runtime.js";
 import { createFakeRuntimeStores } from "./runtime-fakes.js";
+import type { FakeVectorStore } from "./runtime-fakes.js";
 
 /**
  * ADR 0059: 段1（ANN 検索）へ period（`occurredAfter`/`occurredBefore`）を押し下げる。
@@ -20,12 +22,22 @@ import { createFakeRuntimeStores } from "./runtime-fakes.js";
 
 const NOW = new Date("2026-06-01T00:00:00.000Z");
 
-function buildRuntime() {
+/**
+ * `vectorStoreOverride` を渡さなければ従来どおり `stores.vectorStore`（FakeVectorStore 本体）を
+ * runtime に注入する。渡すと、その結果を注入する——下の「段2専用の歯」が
+ * `PeriodStrippingVectorStore` を挟むために使う。`stores` に載っている実体
+ * （`FakeBackingStore` 経由の memory / vector）は override の有無に関わらず同じものを指す
+ * ——`createEmbeddedMemory` はいつも `stores.vectorStore.upsert` を直接呼ぶ。
+ */
+function buildRuntime(vectorStoreOverride?: (fvs: FakeVectorStore) => VectorStore) {
   const stores = createFakeRuntimeStores();
+  const vectorStore = vectorStoreOverride
+    ? vectorStoreOverride(stores.vectorStore)
+    : stores.vectorStore;
   const runtime = createRuntime({
     memoryStore: stores.memoryStore,
     outboxStore: stores.outboxStore,
-    vectorStore: stores.vectorStore,
+    vectorStore,
     eventStore: stores.eventStore,
     tenantSettingsStore: stores.tenantSettingsStore,
     llmProvider: {
@@ -177,5 +189,114 @@ describe("recall() — period の押し下げが over-fetch の窓（k'）を無
     // target は一度も窓に入らない——結果は 0件になる。
     expect(result.memories).toHaveLength(3);
     expect(result.memories.map((m) => m.memoryId).sort()).toEqual([...targetIds].sort());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ⭐⭐ 段2（recall-runtime.ts の後段 period 再検査、`effectiveTime` による2つの
+// `continue`）専用の歯。ADR 0059 が変異試験の表に「🔴🔴 緑（生き残る）／歯 0本」と
+// 記録した2件目の生き残りを塞ぐ（1件目の `occurredBefore` 境界は PR #72 で塞いだ）。
+//
+// **上の2つの describe を含め、通常の歯は必ず段1（FakeVectorStore）と段2
+// （recall-runtime.ts）の両方を経由する。** 段1が `VectorFilter` の period を正しく
+// 適用している限り、段2の2行はコードとしては実行されても「落とす」役には立たない
+// （段1が既に落としているため）——ADR 0059 の変異試験が「段2を丸ごと消しても
+// フルスイートが1本も赤くならない」と記録した理由そのもの。
+//
+// ここでは `FakeVectorStore` を薄く包み、`search()` に渡ってきた `opts.filter` から
+// `occurredAfter`/`occurredBefore` **だけ**を剥がしてから委譲する
+// （`PeriodStrippingVectorStore`）。ADR 0056 が「段1がわざと絞らない adapter を使って
+// 段2だけを検査する歯が要る」と書き残していた処方をそのまま実装したもの
+// ——「`VectorFilter` の契約（ADR 0034）を守らない adapter」を歯の中だけで再現し、
+// 段2だけが period を落とす状況を作る。他のフィールド（tenantId/status/subjectId/
+// excludeProvenanceKinds/decayFloorAtAfter）はそのまま通す——period 以外まで段1で
+// ザルにすると、この歯が「period だけを測っている」ことが言えなくなる。
+//
+// ⛔ 本番コード（recall-runtime.ts / vector-store.ts）は1文字も変えない——
+// ラッパはこの test ファイルの中に閉じている。
+// ---------------------------------------------------------------------------
+
+class PeriodStrippingVectorStore implements VectorStore {
+  constructor(private readonly inner: VectorStore) {}
+
+  upsert(
+    ctx: Ctx,
+    space: EmbeddingSpaceId,
+    memoryId: Parameters<VectorStore["upsert"]>[2],
+    vector: number[],
+  ): ReturnType<VectorStore["upsert"]> {
+    return this.inner.upsert(ctx, space, memoryId, vector);
+  }
+
+  delete(
+    ctx: Ctx,
+    space: EmbeddingSpaceId,
+    memoryId: Parameters<VectorStore["delete"]>[2],
+  ): ReturnType<VectorStore["delete"]> {
+    return this.inner.delete(ctx, space, memoryId);
+  }
+
+  search(
+    ctx: Ctx,
+    space: EmbeddingSpaceId,
+    query: number[],
+    opts: { limit: number; filter: VectorFilter },
+  ): Promise<VectorHit[]> {
+    // 🔑 occurredAfter/occurredBefore「だけ」を剥がす。他は素通し。
+    const {
+      occurredAfter: _occurredAfter,
+      occurredBefore: _occurredBefore,
+      ...periodStripped
+    } = opts.filter;
+    return this.inner.search(ctx, space, query, { ...opts, filter: periodStripped });
+  }
+}
+
+describe("recall() — 段2（recall-runtime.ts の後段 period 再検査）専用の歯（ADR 0059、生き残り2件目）", () => {
+  it("段1が period を見ない adapter でも、段2の再検査だけで期間外の候補が落ちる", async () => {
+    const { runtime, stores } = buildRuntime((fvs) => new PeriodStrippingVectorStore(fvs));
+
+    const occurredAfter = new Date("2026-01-01T00:00:00.000Z");
+    const occurredBefore = new Date("2026-05-01T00:00:00.000Z");
+    const query = [1, 0];
+
+    // occurredAfter 側（期間より古い記憶）。段2の1行目
+    // （`effectiveTime < scope.occurredAfter` の continue）だけが落とせる。
+    await createEmbeddedMemory(stores, [1, 0], {
+      digest: "old-outside-period",
+      occurredAt: new Date("2025-01-01T00:00:00.000Z"),
+    });
+    // occurredBefore 側（期間より新しい記憶）。段2の2行目
+    // （`effectiveTime > scope.occurredBefore` の continue）だけが落とせる。
+    await createEmbeddedMemory(stores, [1, 0.02], {
+      digest: "future-outside-period",
+      occurredAt: new Date("2026-05-15T00:00:00.000Z"),
+    });
+    // 期間内。2件（複数にしておくと、たまたま1件だけ残る実装でも見分けが付く）。
+    await createEmbeddedMemory(stores, [1, 0.01], {
+      digest: "recent-inside-period-1",
+      occurredAt: new Date("2026-02-01T00:00:00.000Z"),
+    });
+    await createEmbeddedMemory(stores, [1, 0.015], {
+      digest: "recent-inside-period-2",
+      occurredAt: new Date("2026-03-01T00:00:00.000Z"),
+    });
+
+    const result = await runtime.recall(ctx, {
+      vector: query,
+      occurredAfter,
+      occurredBefore,
+      limit: 10,
+      overFetchFactor: 4,
+    });
+
+    const digests = result.memories.map((m) => m.digest);
+    // 順序に依存しない（distance の僅差でタイブレークしうるため toContain/not.toContain で見る。
+    // ADR 0040: ゼロベクトルは距離が NaN になるため、ここでは使わない）。limit=10 は
+    // 候補4件に対して十分な余裕を持たせてあり、ぎりぎりにしていない。
+    expect(digests).toContain("recent-inside-period-1");
+    expect(digests).toContain("recent-inside-period-2");
+    expect(digests).not.toContain("old-outside-period");
+    expect(digests).not.toContain("future-outside-period");
   });
 });
