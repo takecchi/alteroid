@@ -124,7 +124,7 @@ function controllableSdk(): {
  *
  * **`{ ...real }` のスプレッドでは包めない。** `real` はクラスのインスタンス
  * で、メソッドはプロトタイプに在るためスプレッドではコピーされない（実測して
- * 確かめた——スプレッドした版は9メンバとも `undefined` になる）。だから9つの
+ * 確かめた——スプレッドした版は10メンバとも `undefined` になる）。だから10個の
  * メンバを名前で明示的に委譲するオブジェクトリテラルを書く。
  */
 function watchNoteManagerFailed(real: RunnerRegistry): {

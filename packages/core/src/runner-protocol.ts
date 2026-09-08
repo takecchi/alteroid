@@ -2804,7 +2804,11 @@ class Registry implements RunnerRegistry {
             PLACEMENT_PROBE_MS,
             '資源の報告',
           );
-          return { client, resources, recentFailures: this.#freshFailuresOf(client.runnerId).length };
+          return {
+            client,
+            resources,
+            recentFailures: this.#freshFailuresOf(client.runnerId).length,
+          };
         } catch {
           // **資源を聞けなくても、失敗の記憶までは落とさない（#712）。** ここは
           // 名簿が自分で持っている値で、器へ聞きに行った結果ではない——聞けな
