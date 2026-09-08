@@ -74,3 +74,4 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0059](./0059-period-in-ann-stage.md) | 段1の ANN クエリで `period` を絞る（`COALESCE(occurred_at, recorded_at)` の式索引を1本足す） | 採用 (2026-09) |
 | [0060](./0060-publish-with-pnpm-four-packages-at-0-1-0.md) | npm へ出すのは4パッケージだけ・初回は `0.1.0`・梱包の道具は pnpm に統一する（ライセンスと `private` 解除は対象外） | 採用 (2026-09) |
 | [0061](./0061-license-mit.md) | ライセンスを MIT にする — オーナーの決定、6パッケージの `license` と LICENSE の配布、tarball の側から検査する門（`private` 解除は対象外） | 採用 (2026-09) |
+| [0063](./0063-hnsw-iterative-scan-not-adopted.md) | `hnsw.iterative_scan` は採らない — 件数は直るが正しさは直らない（`strict_order` は正しさを一切買わない）ことを3腕×4窓で測った記録 | 採用 (2026-09) |
