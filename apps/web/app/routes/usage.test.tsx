@@ -68,6 +68,13 @@ function stubUsage(body: {
    * 自分で渡す（他の軸と同じ形）。
    */
   unrecordedManagers?: unknown[];
+  /**
+   * 「起きた回数」の別会計。**既定は空配列**——`summarizeUsage` が無条件で
+   * `turnRows.reduce` を呼ぶので、`rows` と同じく必須の欄として渡す
+   * （`tokensSince` / `beforeTokens` と違い、省略すると画面側の分岐に入る前に
+   * 例外で落ちる）。
+   */
+  turnRows?: unknown[];
 }) {
   // **`account` は spread から外して組み立てる。** `...body` に混ぜると、
   // 「応答に無い」を作るために `null` を渡した場合、その `null` が応答へ残る
@@ -82,6 +89,7 @@ function stubUsage(body: {
           notice: body.notice ?? USAGE_ESTIMATE_NOTICE,
           breakdown: null,
           unrecordedManagers: body.unrecordedManagers ?? [],
+          turnRows: body.turnRows ?? [],
           ...(account === null ? {} : { account: account ?? { state: 'unknown' } }),
         })
       : undefined,
@@ -302,6 +310,7 @@ describe('/usage 画面', () => {
         notice: USAGE_ESTIMATE_NOTICE,
         breakdown: null,
         unrecordedManagers: [],
+        turnRows: [],
       });
     });
 

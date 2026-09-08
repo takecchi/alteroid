@@ -28,6 +28,7 @@ import type {
   UsageLayer,
   UsageRow,
   UsageSite,
+  UsageTurnRow,
 } from '~/lib/types';
 
 /**
@@ -188,6 +189,7 @@ export default function Usage() {
           ) : (
             <UsageBody
               rows={data.rows}
+              turnRows={data.turnRows}
               since={data.since}
               layersSince={data.layersSince}
               tokensSince={data.tokensSince}
@@ -289,6 +291,7 @@ function UnrecordedManagersCard({
 
 function UsageBody({
   rows,
+  turnRows,
   since,
   layersSince,
   tokensSince,
@@ -299,6 +302,7 @@ function UsageBody({
   unrecordedManagers,
 }: {
   rows: readonly UsageRow[];
+  turnRows: readonly UsageTurnRow[];
   since: string;
   layersSince: string | null;
   tokensSince: string | null;
@@ -308,7 +312,9 @@ function UsageBody({
   notice: string;
   unrecordedManagers: readonly UnrecordedManager[];
 }) {
-  const summary = summarizeUsage(rows);
+  // **回数（`turnRows`）を渡すだけで、画面の表示そのものは変えない**（core への
+  // 算術の集約を保つためだけの追随。CLI と同じ判断）。
+  const summary = summarizeUsage(rows, turnRows);
 
   return (
     <div className="flex flex-col gap-4">

@@ -75,6 +75,11 @@ export type Health = Ok<paths['/health']['get']>;
 export type UsageAggregate = Ok<paths['/usage']['get']>;
 export type UsageRow = UsageAggregate['rows'][number];
 /**
+ * 「起きた回数」の行。**`model` を鍵に持たない別会計**
+ * （`@alteroid/core` の `usageTurnRowSchema` の doc）。
+ */
+export type UsageTurnRow = UsageAggregate['turnRows'][number];
+/**
  * 層と場所の値。**API の型から導く**（画面に書き写さない）。
  * 選択肢の並びは `@alteroid/core/usage` の `USAGE_LAYERS` / `USAGE_SITES` が持つ。
  */

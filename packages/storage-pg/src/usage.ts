@@ -18,12 +18,13 @@ import type {
   UsageSnapshot,
   UsageStore,
   UsageTotals,
+  UsageTurnRow,
 } from '@alteroid/core';
 import { and, asc, eq, gte, lte, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { stripNulls, toIso, toNumber } from './db.js';
-import { usageBaseline, usageDaily, usageLedger } from './schema.js';
+import { usageBaseline, usageDaily, usageLedger, usageTurns } from './schema.js';
 
 /** `usage_ledger` は単一行。id はこの値に固定する。 */
 const LEDGER_ID = 'default';
@@ -75,6 +76,19 @@ function isBeforeTokens(tokensSince: string | null, from: string | undefined): b
 }
 
 /**
+ * 照会範囲の一部でも**回数の軸**の始点より前にかかっていたか。
+ *
+ * 上の3つと同じ形。回数の軸は台帳・層の軸と同じ「最初の record」で始まるのが
+ * 通常だが、増分が空の record では数えないので、`layersSince` より少し遅れて
+ * 始まることがありうる（`turnsSince` の doc）。
+ */
+function isBeforeTurns(turnsSince: string | null, from: string | undefined): boolean {
+  if (turnsSince === null) return true;
+  if (from === undefined) return true;
+  return from < usageDate(new Date(turnsSince));
+}
+
+/**
  * 利用状況の台帳（PostgreSQL）。fs ドライバ（`@alteroid/storage-fs`）と同じ IF を
  * 満たす別の器であって、能力の差を作らない（`store.ts`「省略可能にしないこと」）。
  *
@@ -101,33 +115,6 @@ export class PgUsageStore implements UsageStore {
     tokenId?: string;
   }): Promise<UsageFold> {
     return this.#db.transaction(async (tx) => {
-      // 台帳の開始時刻。**最初の record で1度だけ**入れる（衝突すれば何もしない
-      // ＝既にあれば上書きしない）。層の軸の始点は別に持つ — 台帳が先に始まって
-      // いる DB では別の時刻になるので、`coalesce` で「まだ無ければ入れる」にする。
-      //
-      // **トークンの軸は `token_id` が付いた1件目でだけ始まる。** ここを層と
-      // 揃えて毎回入れると、プールを1本も持っていない器が「トークン軸を観測
-      // している」と名乗る（`schema.ts` の `usageLedger.tokensAt`）。だから
-      // 値の側で null を渡し、`coalesce` は「まだ無ければ入れる」のまま使う
-      // （null を coalesce しても null なので、始点は動かない）。
-      const tokensAt = input.tokenId === undefined ? null : new Date(input.at);
-      await tx
-        .insert(usageLedger)
-        .values({
-          id: LEDGER_ID,
-          startedAt: new Date(input.at),
-          layeredAt: new Date(input.at),
-          tokensAt,
-        })
-        .onConflictDoUpdate({
-          target: usageLedger.id,
-          // **`startedAt` は触らない。** 触ると台帳の始点が毎回いまになる。
-          set: {
-            layeredAt: sql`coalesce(${usageLedger.layeredAt}, excluded.layered_at)`,
-            tokensAt: sql`coalesce(${usageLedger.tokensAt}, excluded.tokens_at)`,
-          },
-        });
-
       // **累積の器は `query()` 呼び出しの寿命で閉じる**（`usage.ts` の
       // `usageAccumulationSchema`）。1回で閉じる呼び出しに基準を持たせると、前回より
       // 高くついた回だけが差に縮んで黙って目減りする（`foldOneshotUsage`）。
@@ -160,6 +147,46 @@ export class PgUsageStore implements UsageStore {
         fold.baseline === null
           ? null
           : { ...fold.baseline, layer: input.layer, managerId: input.managerId };
+
+      // **「起きた（＝ターン1回）」の判定。** 台帳の行が動いた回（`fold.delta` が
+      // 空でない回）だけを1回と数える——増分が空の record（同じ累積スナップショット
+      // の再送、失敗した result の再取得など）はターンとして数えない。
+      const turned = Object.keys(fold.delta).length > 0;
+
+      // 台帳の開始時刻。**最初の record で1度だけ**入れる（衝突すれば何もしない
+      // ＝既にあれば上書きしない）。層の軸の始点は別に持つ — 台帳が先に始まって
+      // いる DB では別の時刻になるので、`coalesce` で「まだ無ければ入れる」にする。
+      //
+      // **トークンの軸は `token_id` が付いた1件目でだけ始まる。** ここを層と
+      // 揃えて毎回入れると、プールを1本も持っていない器が「トークン軸を観測
+      // している」と名乗る（`schema.ts` の `usageLedger.tokensAt`）。だから
+      // 値の側で null を渡し、`coalesce` は「まだ無ければ入れる」のまま使う
+      // （null を coalesce しても null なので、始点は動かない）。
+      //
+      // **回数の軸（`turnsAt`）も同じ形——`turned` のときだけ値を渡す。** ここで
+      // `fold` を先に計算する必要があるため、この upsert はかつて`fold` の前に
+      // 在ったものを後ろへ動かしてある。**同じトランザクションの中なので観測
+      // できる違いは無い**（`fold` が投げればトランザクションごと巻き戻る）。
+      const tokensAt = input.tokenId === undefined ? null : new Date(input.at);
+      const turnsAt = turned ? new Date(input.at) : null;
+      await tx
+        .insert(usageLedger)
+        .values({
+          id: LEDGER_ID,
+          startedAt: new Date(input.at),
+          layeredAt: new Date(input.at),
+          tokensAt,
+          turnsAt,
+        })
+        .onConflictDoUpdate({
+          target: usageLedger.id,
+          // **`startedAt` は触らない。** 触ると台帳の始点が毎回いまになる。
+          set: {
+            layeredAt: sql`coalesce(${usageLedger.layeredAt}, excluded.layered_at)`,
+            tokensAt: sql`coalesce(${usageLedger.tokensAt}, excluded.tokens_at)`,
+            turnsAt: sql`coalesce(${usageLedger.turnsAt}, excluded.turns_at)`,
+          },
+        });
 
       if (nextBaseline !== null) {
         const baselineSet = {
@@ -236,6 +263,38 @@ export class PgUsageStore implements UsageStore {
           });
       }
 
+      // **「起きた回数」を足し込む。`turned` のときだけ**（0 の行は作らない —
+      // `usageTurnRowSchema` の doc）。鍵は `usage_daily` から `model` を抜いた
+      // 4軸+トークンで、1ターンにつきちょうど1だけ足す（モデルが何本立っても
+      // ここは1のまま——だから `usage_daily` と同じループの中では回さない）。
+      if (turned) {
+        const updatedAt = new Date(input.at);
+        const values = stripNulls({
+          date: input.date,
+          managerId: input.managerId,
+          layer: input.layer,
+          site: input.site,
+          tokenId: input.tokenId ?? '',
+        });
+        await tx
+          .insert(usageTurns)
+          .values({ ...values, turns: 1, updatedAt })
+          .onConflictDoUpdate({
+            target: [
+              usageTurns.date,
+              usageTurns.managerId,
+              usageTurns.layer,
+              usageTurns.site,
+              usageTurns.tokenId,
+            ],
+            set: {
+              // **足し込む（上書きではない）。** `usage_daily` の各列と同じ理由。
+              turns: sql`${usageTurns.turns} + 1`,
+              updatedAt,
+            },
+          });
+      }
+
       return { delta: fold.delta, baseline: nextBaseline, reset: fold.reset };
     });
   }
@@ -271,6 +330,30 @@ export class PgUsageStore implements UsageStore {
         sql`nullif(${usageDaily.tokenId}, '') asc nulls last`,
       );
 
+    // **`usage_daily` と同じ述語で引く。** `UsageQuery` はモデルの絞りを持たない
+    // ので、この2つの照会は完全に同じ条件になる（`usageTurns` は `model` 列を
+    // そもそも持たない）。
+    const turnConditions = [
+      ...(query.from === undefined ? [] : [gte(usageTurns.date, query.from)]),
+      ...(query.to === undefined ? [] : [lte(usageTurns.date, query.to)]),
+      ...(query.managerId === undefined ? [] : [eq(usageTurns.managerId, query.managerId)]),
+      ...(query.layer === undefined ? [] : [eq(usageTurns.layer, query.layer)]),
+      ...(query.site === undefined ? [] : [eq(usageTurns.site, query.site)]),
+      ...(query.tokenId === undefined ? [] : [eq(usageTurns.tokenId, query.tokenId)]),
+    ];
+
+    const turnRows = await this.#db
+      .select()
+      .from(usageTurns)
+      .where(turnConditions.length === 0 ? undefined : and(...turnConditions))
+      .orderBy(
+        asc(usageTurns.date),
+        asc(usageTurns.managerId),
+        asc(usageTurns.layer),
+        asc(usageTurns.site),
+        sql`nullif(${usageTurns.tokenId}, '') asc nulls last`,
+      );
+
     const ledgerRows = await this.#db
       .select()
       .from(usageLedger)
@@ -282,6 +365,8 @@ export class PgUsageStore implements UsageStore {
       ledger === undefined || ledger.layeredAt === null ? null : toIso(ledger.layeredAt);
     const tokensSince =
       ledger === undefined || ledger.tokensAt === null ? null : toIso(ledger.tokensAt);
+    const turnsSince =
+      ledger === undefined || ledger.turnsAt === null ? null : toIso(ledger.turnsAt);
 
     return {
       rows: rows.map((row) => this.#toRow(row)),
@@ -291,6 +376,9 @@ export class PgUsageStore implements UsageStore {
       beforeLedger: isBeforeLedger(since, query.from),
       beforeLayers: isBeforeLayers(layersSince, query.from),
       beforeTokens: isBeforeTokens(tokensSince, query.from),
+      turnRows: turnRows.map((row) => this.#toTurnRow(row)),
+      turnsSince,
+      beforeTurns: isBeforeTurns(turnsSince, query.from),
       notice: USAGE_ESTIMATE_NOTICE,
     };
   }
@@ -345,6 +433,19 @@ export class PgUsageStore implements UsageStore {
         webSearchRequests: toNumber(row.webSearchRequests),
         costUsd: row.costUsd,
       },
+      updatedAt: toIso(row.updatedAt),
+    };
+  }
+
+  #toTurnRow(row: typeof usageTurns.$inferSelect): UsageTurnRow {
+    return {
+      date: row.date,
+      managerId: row.managerId,
+      layer: usageLayerSchema.parse(row.layer),
+      site: usageSiteSchema.parse(row.site),
+      // **空文字は `undefined` へ戻す。** `usageDaily` の `#toRow` と同じ理由。
+      ...(row.tokenId === '' ? {} : { tokenId: row.tokenId }),
+      turns: toNumber(row.turns),
       updatedAt: toIso(row.updatedAt),
     };
   }

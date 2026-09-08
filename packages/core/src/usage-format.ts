@@ -1,6 +1,6 @@
 import type { JobStatus } from './schema.js';
 import type { AccountUsageState } from './usage-snapshot.js';
-import type { UsageBreakdown, UsageRow, UsageTotals } from './usage.js';
+import type { UsageBreakdown, UsageRow, UsageTotals, UsageTurnRow } from './usage.js';
 
 /**
  * 層（**誰が**）と場所（**どこで**）の取りうる値。**この2本が唯一の一覧である。**
@@ -122,6 +122,48 @@ function groupByToken(
 }
 
 /**
+ * turnRow を軸ごとに畳んで、回数だけの合計を取る（`Map` の値は必ず正——
+ * {@link usageTurnRowSchema} の `turns` が `positive()` で、0 の行を作らない
+ * ことを前提にできる。だから「その鍵が Map に無い」と「0回だった」を区別
+ * できる形のまま呼び出し側へ渡せる）。
+ */
+function groupTurnsBy<V>(
+  rows: readonly UsageTurnRow[],
+  key: (row: UsageTurnRow) => V,
+): Map<V, number> {
+  const totals = new Map<V, number>();
+  for (const row of rows) {
+    totals.set(key(row), (totals.get(key(row)) ?? 0) + row.turns);
+  }
+  return totals;
+}
+
+/**
+ * トークンの軸だけ `groupTurnsBy` を使えない理由は `groupByToken` と同じ —
+ * `tokenId` が無い turnRow を `string | null` の鍵のまま持つためである。
+ */
+function groupTurnsByToken(rows: readonly UsageTurnRow[]): Map<string | null, number> {
+  return groupTurnsBy(rows, (row) => row.tokenId ?? null);
+}
+
+/**
+ * 費用側の要素（`groupBy` / `groupByToken` の1要素）に、対応する回数を足す。
+ *
+ * **鍵が turns 側に無ければ `turns` を付けない**（`0` を足さない——AGENTS.md
+ * 地雷表「取れない軸に 0 の行を作る」と同じ理由）。turnRow の鍵は必ず費用行の
+ * 鍵に射影されるので（{@link summarizeUsage} の doc）、ここで見つからないのは
+ * 「その組み合わせでは1件も数えられる形で起きていない」ときだけである。
+ */
+function withTurns<T extends { totals: UsageTotals }, K>(
+  entry: T,
+  key: K,
+  turnsByKey: Map<K, number>,
+): T & { turns?: number } {
+  const turns = turnsByKey.get(key);
+  return turns === undefined ? entry : { ...entry, turns };
+}
+
+/**
  * 行を6軸（日 / actor / モデル / 層 / 場所 / 認証トークン）へ畳む。
  *
  * **層と場所を「無い値は 0」で補わないこと。** `groupBy` は行に現れた値だけを
@@ -131,16 +173,51 @@ function groupByToken(
  * **トークンの軸だけは `null` の要素が出る**（`groupByToken`）。他の5軸は行が必ず
  * 値を持つが、この軸は**構成によってそもそも取れない**ので、「取れていない分」を
  * 落とすと合計に足し合わなくなる。落とさずに `null` として出す。
+ *
+ * ## `turnRows`（第2引数）は必須である
+ *
+ * 既定値を持たせない——呼ぶ側が毎回「回数をどう畳むか」を言う形にする
+ * （`PgUsageStore.record` の `accumulation` と同じ作法。AGENTS.md）。
+ *
+ * **不変条件: 数えられた turnRow の鍵（日・actor・層・場所・トークン）は必ず
+ * 費用行（`rows`）の鍵に射影される。** 回数は「台帳の行が動いた回
+ * （`fold.delta` が空でない回）」でだけ数えるので、回数が在って対応する費用行が
+ * 無い組み合わせは作られない。呼び出し側（`UsageStore.aggregate`）は `rows` と
+ * `turnRows` を同じ述語（`from` / `to` / `managerId` / `layer` / `site` /
+ * `tokenId`）で絞るので、照会後もこの関係は保たれる。
+ *
+ * **ルートの `turns` は turnRows の総和。0 なら欄を出さない**（他の軸と同じ理由）。
+ * **`byModel` には `turns` を付けない** — turnRow が `model` を鍵に持たないので、
+ * モデル軸へ回数を帰属させる先が無い（`usageTurnRowSchema` の doc）。
  */
-export function summarizeUsage(rows: readonly UsageRow[]): UsageBreakdown {
+export function summarizeUsage(
+  rows: readonly UsageRow[],
+  turnRows: readonly UsageTurnRow[],
+): UsageBreakdown {
+  const totalTurns = turnRows.reduce((sum, row) => sum + row.turns, 0);
+  const turnsByDate = groupTurnsBy(turnRows, (row) => row.date);
+  const turnsByManager = groupTurnsBy(turnRows, (row) => row.managerId);
+  const turnsByLayer = groupTurnsBy(turnRows, (row) => row.layer);
+  const turnsBySite = groupTurnsBy(turnRows, (row) => row.site);
+  const turnsByToken = groupTurnsByToken(turnRows);
+
   return {
     total: sumUsageRows(rows),
-    byDate: groupBy(rows, (row) => row.date, 'date'),
-    byManager: groupBy(rows, (row) => row.managerId, 'managerId'),
+    ...(totalTurns > 0 ? { turns: totalTurns } : {}),
+    byDate: groupBy(rows, (row) => row.date, 'date').map((entry) =>
+      withTurns(entry, entry.date, turnsByDate),
+    ),
+    byManager: groupBy(rows, (row) => row.managerId, 'managerId').map((entry) =>
+      withTurns(entry, entry.managerId, turnsByManager),
+    ),
     byModel: groupBy(rows, (row) => row.model, 'model'),
-    byLayer: groupBy(rows, (row) => row.layer, 'layer'),
-    bySite: groupBy(rows, (row) => row.site, 'site'),
-    byToken: groupByToken(rows),
+    byLayer: groupBy(rows, (row) => row.layer, 'layer').map((entry) =>
+      withTurns(entry, entry.layer, turnsByLayer),
+    ),
+    bySite: groupBy(rows, (row) => row.site, 'site').map((entry) =>
+      withTurns(entry, entry.site, turnsBySite),
+    ),
+    byToken: groupByToken(rows).map((entry) => withTurns(entry, entry.tokenId, turnsByToken)),
   };
 }
 

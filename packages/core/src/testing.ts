@@ -62,6 +62,7 @@ import {
   type UsageLayer,
   type UsageRow,
   type UsageSite,
+  type UsageTurnRow,
 } from './usage.js';
 
 /**
@@ -91,6 +92,20 @@ function usageRowKey(
 /** 累積の基準の鍵。**主体は「層 × actor」である**（`usage.ts` の `usageBaselineSchema`）。 */
 function usageBaselineKey(layer: UsageLayer, managerId: string): string {
   return `${layer}\u0000${managerId}`;
+}
+
+/**
+ * 「起きた回数」の鍵。**`model` を持たない4軸+トークン**（ドライバの `turnKey` /
+ * `usageTurns` の一意索引と同じ軸。`usage.ts` の `usageTurnRowSchema` の doc）。
+ */
+function usageTurnKey(
+  date: string,
+  managerId: string,
+  layer: UsageLayer,
+  site: UsageSite,
+  tokenId: string | undefined,
+): string {
+  return `${date}\u0000${managerId}\u0000${layer}\u0000${site}\u0000${tokenId ?? ''}`;
 }
 
 /**
@@ -645,12 +660,18 @@ export function createMemoryStores(): Stores {
    * ここが緩いと、テストは緑のまま「記録が無い」と言うべき場面で「0 だった」と
    * 言う実装を通す — #45 の要件そのものが黙って消える。実際に `from` 省略時の
    * `beforeLedger` がドライバ（真）と食い違って偽を返していた。
+   *
+   * **回数（`turnRows` / `turnsSince` / `beforeTurns`）も同じ形で持つ。** 鍵は
+   * `model` を抜いた4軸+トークンで、増分が空の record（`fold.delta` が空）は
+   * 数えない——ドライバ2つと同じ判定（`usage.ts` の `usageTurnRowSchema` の doc）。
    */
   const usageRows = new Map<string, UsageRow>();
   const usageBaselines = new Map<string, UsageBaseline>();
+  const usageTurns = new Map<string, UsageTurnRow>();
   let usageStartedAt: string | null = null;
   let usageLayeredAt: string | null = null;
   let usageTokensAt: string | null = null;
+  let usageTurnsAt: string | null = null;
 
   const usage: UsageStore = {
     async record({ layer, site, managerId, date, at, snapshot, accumulation, tokenId }) {
@@ -678,6 +699,13 @@ export function createMemoryStores(): Stores {
       // `??= at` だけにすると、この器はプールを持たない構成でも「トークン軸を
       // 観測している」と答え、`beforeTokens` が偽になる ＝ 本物より緩い。
       if (tokenId !== undefined) usageTokensAt ??= at;
+      // **「起きた（＝ターン1回）」の判定。** 台帳の行が動いた回（`fold.delta` が
+      // 空でない回）だけを1回と数える——ドライバ2つと同じ判定。
+      const turned = Object.keys(fold.delta).length > 0;
+      // 回数の軸は「起きた record」でだけ始まる。`usageLayeredAt` と揃えて
+      // `??= at` にすると、増分が空の record でも軸が始まったことになる
+      // ＝ 本物より緩い（ドライバ2つと同じ判断）。
+      if (turned) usageTurnsAt ??= at;
       for (const [model, delta] of Object.entries(fold.delta)) {
         const key = usageRowKey(date, managerId, model, layer, site, tokenId);
         const before = usageRows.get(key)?.totals ?? ZERO_USAGE;
@@ -697,6 +725,22 @@ export function createMemoryStores(): Stores {
             webSearchRequests: before.webSearchRequests + delta.webSearchRequests,
             costUsd: before.costUsd + delta.costUsd,
           },
+          updatedAt: at,
+        });
+      }
+      // **回数を足し込む。`turned` のときだけ**（0 の行は作らない）。鍵は
+      // `usage_daily` から `model` を抜いた4軸+トークン——1ターンにつき
+      // ちょうど1だけ足す（モデルが何本立ってもここは1のまま）。
+      if (turned) {
+        const key = usageTurnKey(date, managerId, layer, site, tokenId);
+        const before = usageTurns.get(key)?.turns ?? 0;
+        usageTurns.set(key, {
+          date,
+          managerId,
+          layer,
+          site,
+          ...(tokenId === undefined ? {} : { tokenId }),
+          turns: before + 1,
           updatedAt: at,
         });
       }
@@ -730,6 +774,32 @@ export function createMemoryStores(): Stores {
                   ? -1
                   : a.tokenId.localeCompare(b.tokenId)),
         );
+      // **`rows` と同じ述語で絞る**（ドライバ2つと同じ——`UsageQuery` はモデルの
+      // 絞りを持たないので、この2つの照会は完全に同じ条件になる）。
+      const turnRows = [...usageTurns.values()]
+        .filter((row) => {
+          if (query.from !== undefined && row.date < query.from) return false;
+          if (query.to !== undefined && row.date > query.to) return false;
+          if (query.managerId !== undefined && row.managerId !== query.managerId) return false;
+          if (query.layer !== undefined && row.layer !== query.layer) return false;
+          if (query.site !== undefined && row.site !== query.site) return false;
+          if (query.tokenId !== undefined && row.tokenId !== query.tokenId) return false;
+          return true;
+        })
+        .sort(
+          (a, b) =>
+            a.date.localeCompare(b.date) ||
+            a.managerId.localeCompare(b.managerId) ||
+            a.layer.localeCompare(b.layer) ||
+            a.site.localeCompare(b.site) ||
+            (a.tokenId === b.tokenId
+              ? 0
+              : a.tokenId === undefined
+                ? 1
+                : b.tokenId === undefined
+                  ? -1
+                  : a.tokenId.localeCompare(b.tokenId)),
+        );
       return {
         rows,
         since: usageStartedAt,
@@ -742,6 +812,11 @@ export function createMemoryStores(): Stores {
         // **トークンの軸は始まっていないことが正常でありうる**（プールを使って
         // いない構成）。ここが偽を返すと「帰属が取れている」と読める。
         beforeTokens: isBeforeUsageStart(usageTokensAt, query.from),
+        turnRows,
+        turnsSince: usageTurnsAt,
+        // **回数の軸も始まっていないことが正常でありうる**（増分が空の record
+        // しか無い期間）。ここが偽を返すと「回数が取れている」と読める。
+        beforeTurns: isBeforeUsageStart(usageTurnsAt, query.from),
         notice: USAGE_ESTIMATE_NOTICE,
       };
     },

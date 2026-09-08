@@ -250,7 +250,7 @@ export default function Dashboard() {
             ) : (
               <div className="px-4 py-3">
                 <p className="text-xl font-semibold">
-                  {formatUsd(summarizeUsage(usage.data.rows).total.costUsd)}
+                  {formatUsd(summarizeUsage(usage.data.rows, usage.data.turnRows).total.costUsd)}
                 </p>
                 {/* 省略・要約しない。数字を出すところには必ず添える。 */}
                 <p className="mt-1 text-[11px] text-muted">{usage.data.notice}</p>

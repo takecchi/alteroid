@@ -88,6 +88,11 @@ function aggregate(over: Partial<UsageView>): UsageView {
     // 全テストの出力に「まだ1件も記録していない」の行が入り、その行がある状態を
     // 正常として固定してしまう（この軸を測るテストは自分で null を渡す）。
     tokensSince: '2026-08-01T00:00:00.000Z',
+    // **回数の軸も同じ理由で「観測している」側にしてある。** CLI はこの値を
+    // 表示に使わない（`summarizeUsage` へ渡すだけ）ので、他の軸と揃えておく。
+    turnRows: [],
+    turnsSince: '2026-08-01T00:00:00.000Z',
+    beforeTurns: false,
     beforeLedger: false,
     beforeLayers: false,
     beforeTokens: false,

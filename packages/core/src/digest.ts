@@ -869,7 +869,7 @@ async function usageSection(stores: Stores, since: Date, until: Date): Promise<s
     return lines;
   }
 
-  const summary = summarizeUsage(aggregate.rows);
+  const summary = summarizeUsage(aggregate.rows, aggregate.turnRows);
   if (aggregate.rows.length === 0) {
     lines.push('この期間の記録は無い。');
   } else {

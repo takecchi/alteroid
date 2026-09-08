@@ -141,6 +141,7 @@ export interface UsageView extends UsageAggregate {
 export function renderUsage(view: UsageView): string {
   const {
     rows,
+    turnRows,
     since,
     layersSince,
     tokensSince,
@@ -185,7 +186,10 @@ export function renderUsage(view: UsageView): string {
     lines.push('', ...describeUnrecordedManagers(unrecordedManagers));
   } else {
     // **算術はここで足し直さない。** `summarizeUsage` の結果をそのまま出す。
-    const summary = summarizeUsage(rows);
+    // **回数（`turnRows`）を渡すだけで、CLI の表示そのものは変えない**
+    // （算術を core に寄せる約束を守るためだけの追随。回数の表示は
+    // `usage_read` 側で足りている）。
+    const summary = summarizeUsage(rows, turnRows);
 
     lines.push(`合計 ${formatUsd(summary.total.costUsd)}`);
     lines.push(

@@ -336,6 +336,25 @@ export const STATEMENTS = [
   // `record` は「`token_id` が付いた1件目」でだけここを埋める。揃えて埋めると、
   // トークンを1本も持っていない器が「トークン軸を観測している」と名乗る。
   `alter table usage_ledger add column if not exists tokens_at timestamptz`,
+  // 回数の軸が記録を始めた時刻。**null を許す。** `layered_at` と同じ時機
+  // （最初の record）で入るのが通常だが、増分が空の record では回数を数えない
+  // ので、`layered_at` だけが先に入って `turns_at` が後から入る状態がありうる。
+  `alter table usage_ledger add column if not exists turns_at timestamptz`,
+
+  // 「起きた回数」の別テーブル。**新規テーブルなので鍵の差し替えは無い** —
+  // `usage_daily` の索引名の教訓（上）はここには掛からない。最初から一意索引で
+  // 持つ（`schema.ts` の `usageTurns` の doc）。
+  `create table if not exists usage_turns (
+     date text not null,
+     manager_id text not null,
+     layer text not null,
+     site text not null,
+     token_id text not null default '',
+     turns bigint not null default 0,
+     updated_at timestamptz not null
+   )`,
+  `create unique index if not exists usage_turns_key_idx
+     on usage_turns (date, manager_id, layer, site, token_id)`,
 
   // --- 引き受けたまま終わっていない仕事（store.ts の CommitmentStore） --------
   // id が主キーなのは open の冪等性を SQL 側で強制するためである。「select して

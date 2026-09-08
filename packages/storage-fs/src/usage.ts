@@ -11,6 +11,7 @@ import {
   usageLayerSchema,
   usageRowSchema,
   usageSiteSchema,
+  usageTurnRowSchema,
 } from '@alteroid/core';
 import type {
   UsageAccumulation,
@@ -47,6 +48,14 @@ const storedBaselineSchema = usageBaselineSchema.extend({
   layer: usageLayerSchema.default('manager'),
 });
 
+/**
+ * turnRow は `rows` / `baselines` と違って**既定を入れる理由が無い**——この軸は
+ * `rows` より後から入るので、既にある `usage.json` に「層が無い turnRow」は
+ * 存在しない（そもそも turnRow を持たない古いファイルがあるだけで、それは
+ * `.default({})` で空として読める）。だから `usageTurnRowSchema` をそのまま使う。
+ */
+const storedTurnRowSchema = usageTurnRowSchema;
+
 const fileSchema = z.object({
   // 日 × actor × モデル × 層 × 場所の複合キーで持つ（rowKey）。配列を毎回全走査
   // せず、増分を足し込む先を鍵で直接引ける。
@@ -82,6 +91,18 @@ const fileSchema = z.object({
    * 「1本のトークンで全部使った」と読める）。
    */
   tokensAt: z.string().datetime({ offset: true }).nullable().default(null),
+  // 「起きた回数」の別会計（日 × actor × 層 × 場所 × トークンの複合キー。
+  // turnKey）。`model` を鍵に持たない——`usageTurnRowSchema` の doc参照。
+  turns: z.record(z.string(), storedTurnRowSchema).default({}),
+  /**
+   * **回数の軸**が記録を始めた時刻。まだ1件も数えていなければ null。
+   *
+   * `layeredAt` と同じ時機（最初の record）で入るのが通常だが、増分が空の
+   * record では回数を数えないので、`layeredAt` だけが先に入って `turnsAt` が
+   * 後から入る状態がありうる（`usage.ts` の `usageAggregateSchema` の
+   * `turnsSince`）。
+   */
+  turnsAt: z.string().datetime({ offset: true }).nullable().default(null),
 });
 
 type UsageFile = z.infer<typeof fileSchema>;
@@ -92,6 +113,8 @@ const EMPTY: UsageFile = {
   startedAt: null,
   layeredAt: null,
   tokensAt: null,
+  turns: {},
+  turnsAt: null,
 };
 
 function rowKey(
@@ -117,6 +140,20 @@ function rowKey(
   // 「トークンが無い」の印として使うのは鍵の中だけで、値には持ち込まない**
   // （`rows` の要素は `tokenId` を持たないままである）。
   return `${date}\u0000${managerId}\u0000${model}\u0000${layer}\u0000${site}\u0000${tokenId ?? ''}`;
+}
+
+/**
+ * 「起きた回数」の鍵。**`model` を持たない4軸+トークン**（日 / actor / 層 /
+ * 場所 / トークン）。`rowKey` と同じエスケープの形（区切りは同じ理由で揃える）。
+ */
+function turnKey(
+  date: string,
+  managerId: string,
+  layer: UsageLayer,
+  site: UsageSite,
+  tokenId: string | undefined,
+): string {
+  return `${date}\u0000${managerId}\u0000${layer}\u0000${site}\u0000${tokenId ?? ''}`;
 }
 
 /**
@@ -153,7 +190,12 @@ function normalizeKeys(file: UsageFile): UsageFile {
   for (const baseline of Object.values(file.baselines)) {
     baselines[baselineKey(baseline.layer, baseline.managerId)] = baseline;
   }
-  return { ...file, rows, baselines };
+  // turnRow も同じ理由で鍵を引き直す——`rows` / `baselines` と揃える。
+  const turns: UsageFile['turns'] = {};
+  for (const turn of Object.values(file.turns)) {
+    turns[turnKey(turn.date, turn.managerId, turn.layer, turn.site, turn.tokenId)] = turn;
+  }
+  return { ...file, rows, baselines, turns };
 }
 
 /**
@@ -228,6 +270,19 @@ function isBeforeTokens(tokensAt: string | null, from: string | undefined): bool
   if (tokensAt === null) return true;
   if (from === undefined) return true;
   return from < usageDate(new Date(tokensAt));
+}
+
+/**
+ * 照会範囲の一部でも**回数の軸**の始点より前にかかっていたか。
+ *
+ * 上の3つと同じ形。回数の軸は最初の record で始まるのが通常だが、増分が空の
+ * record では数えないので、`layeredAt` より少し遅れて始まることがありうる
+ * （`turnsAt` の doc）。
+ */
+function isBeforeTurns(turnsAt: string | null, from: string | undefined): boolean {
+  if (turnsAt === null) return true;
+  if (from === undefined) return true;
+  return from < usageDate(new Date(turnsAt));
 }
 
 /**
@@ -310,6 +365,24 @@ export class FsUsageStore implements UsageStore {
         };
       }
 
+      // **「起きた（＝ターン1回）」の判定。** 台帳の行が動いた回（`fold.delta` が
+      // 空でない回）だけを1回と数える——増分が空の record はターンとして数えない。
+      const turned = Object.keys(fold.delta).length > 0;
+      const turns = { ...file.turns };
+      if (turned) {
+        const key = turnKey(input.date, input.managerId, input.layer, input.site, input.tokenId);
+        const existing = turns[key];
+        turns[key] = {
+          date: input.date,
+          managerId: input.managerId,
+          layer: input.layer,
+          site: input.site,
+          ...(input.tokenId === undefined ? {} : { tokenId: input.tokenId }),
+          turns: (existing?.turns ?? 0) + 1,
+          updatedAt: input.at,
+        };
+      }
+
       return {
         next: {
           rows,
@@ -326,6 +399,10 @@ export class FsUsageStore implements UsageStore {
           // ここを `?? input.at` だけにすると、プールを1本も持っていない器が
           // 「トークン軸を観測している」と名乗る。
           tokensAt: file.tokensAt ?? (input.tokenId === undefined ? null : input.at),
+          turns,
+          // **回数の軸は「起きた record」でだけ始まる。** 揃えて `?? input.at` に
+          // すると、増分が空の record でも軸が始まったことになる。
+          turnsAt: file.turnsAt ?? (turned ? input.at : null),
         },
         result: { delta: fold.delta, baseline: nextBaseline, reset: fold.reset },
       };
@@ -354,6 +431,27 @@ export class FsUsageStore implements UsageStore {
           compareTokenId(a.tokenId, b.tokenId),
       );
 
+    // **`rows` と同じ述語で絞る。** `UsageQuery` はモデルの絞りを持たないので、
+    // この2つの照会は完全に同じ条件になる（turnRow はそもそも `model` を持たない）。
+    const turnRows = Object.values(file.turns)
+      .filter((row) => {
+        if (query.from !== undefined && row.date < query.from) return false;
+        if (query.to !== undefined && row.date > query.to) return false;
+        if (query.managerId !== undefined && row.managerId !== query.managerId) return false;
+        if (query.layer !== undefined && row.layer !== query.layer) return false;
+        if (query.site !== undefined && row.site !== query.site) return false;
+        if (query.tokenId !== undefined && row.tokenId !== query.tokenId) return false;
+        return true;
+      })
+      .sort(
+        (a, b) =>
+          a.date.localeCompare(b.date) ||
+          a.managerId.localeCompare(b.managerId) ||
+          a.layer.localeCompare(b.layer) ||
+          a.site.localeCompare(b.site) ||
+          compareTokenId(a.tokenId, b.tokenId),
+      );
+
     return usageAggregateSchema.parse({
       rows,
       since: file.startedAt,
@@ -362,6 +460,9 @@ export class FsUsageStore implements UsageStore {
       beforeLedger: isBeforeLedger(file.startedAt, query.from),
       beforeLayers: isBeforeLayers(file.layeredAt, query.from),
       beforeTokens: isBeforeTokens(file.tokensAt, query.from),
+      turnRows,
+      turnsSince: file.turnsAt,
+      beforeTurns: isBeforeTurns(file.turnsAt, query.from),
       notice: USAGE_ESTIMATE_NOTICE,
     });
   }

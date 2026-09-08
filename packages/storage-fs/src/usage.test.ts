@@ -765,6 +765,285 @@ describe('認証トークンの軸（どの区間がどのトークンだった�
 });
 
 /**
+ * 回数の軸（「起きた回数」＝ターン数。`usage.ts` の `usageTurnRowSchema`）。
+ *
+ * ⭐ いちばん大事な歯は最初の1本 — 「1ターンで2モデルが動くと `rows` は2件、
+ * 回数は1」。これが「ターン×モデル」への退行を捕まえる唯一の歯である。
+ */
+describe('回数の軸（起きた回数。model を鍵に持たない別会計）', () => {
+  it('⭐ 2つのモデルが増えた1回の record で、rows は2件・回数は1', async () => {
+    await record({
+      managerId: 'mgr-1',
+      date: '2026-08-25',
+      at: '2026-08-25T10:00:00.000Z',
+      snapshot: snapshot({
+        opus: totals({ costUsd: 1 }),
+        sonnet: totals({ costUsd: 0.1 }),
+      }),
+    });
+
+    const { rows, turnRows } = await store.aggregate({});
+    expect(rows).toHaveLength(2);
+    expect(turnRows).toHaveLength(1);
+    expect(turnRows[0]?.turns).toBe(1);
+  });
+
+  it('2回 record したら回数は2（足し込みであって上書きではない）', async () => {
+    await record({
+      managerId: 'mgr-1',
+      date: '2026-08-25',
+      at: '2026-08-25T10:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 1 }) }),
+    });
+    await record({
+      managerId: 'mgr-1',
+      date: '2026-08-25',
+      at: '2026-08-25T11:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 2 }) }),
+    });
+
+    const { turnRows } = await store.aggregate({});
+    expect(turnRows).toHaveLength(1);
+    expect(turnRows[0]?.turns).toBe(2);
+  });
+
+  it('増分が空の record（同じ累積スナップショットの再送）は数えない', async () => {
+    const input = {
+      managerId: 'mgr-1',
+      date: '2026-08-25',
+      snapshot: snapshot({ opus: totals({ costUsd: 1 }) }),
+    };
+    await record({ ...input, at: '2026-08-25T10:00:00.000Z' });
+    // 再送（同じ result がもう一度届いた、を模す）。
+    await record({ ...input, at: '2026-08-25T10:00:05.000Z' });
+
+    const { rows, turnRows } = await store.aggregate({});
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.totals.costUsd).toBe(1);
+    expect(turnRows).toHaveLength(1);
+    expect(turnRows[0]?.turns).toBe(1);
+  });
+
+  it('日・actor・layer・site・tokenId のどれか1つが違えば別の turnRow になる（5軸それぞれを1つずつずらす）', async () => {
+    const base = {
+      accumulation: 'oneshot' as const,
+      snapshot: snapshot({ opus: totals({ costUsd: 1 }) }),
+    };
+    await store.record({
+      ...base,
+      layer: 'manager',
+      site: 'session',
+      managerId: 'mgr-1',
+      date: '2026-08-25',
+      at: '2026-08-25T10:00:00.000Z',
+      tokenId: 'tok-a',
+    });
+    // 日だけ違う。
+    await store.record({
+      ...base,
+      layer: 'manager',
+      site: 'session',
+      managerId: 'mgr-1',
+      date: '2026-08-26',
+      at: '2026-08-26T10:00:00.000Z',
+      tokenId: 'tok-a',
+    });
+    // actor だけ違う。
+    await store.record({
+      ...base,
+      layer: 'manager',
+      site: 'session',
+      managerId: 'mgr-2',
+      date: '2026-08-25',
+      at: '2026-08-25T10:00:00.000Z',
+      tokenId: 'tok-a',
+    });
+    // layer だけ違う。
+    await store.record({
+      ...base,
+      layer: 'clone',
+      site: 'session',
+      managerId: 'mgr-1',
+      date: '2026-08-25',
+      at: '2026-08-25T10:00:00.000Z',
+      tokenId: 'tok-a',
+    });
+    // site だけ違う。
+    await store.record({
+      ...base,
+      layer: 'manager',
+      site: 'distill',
+      managerId: 'mgr-1',
+      date: '2026-08-25',
+      at: '2026-08-25T10:00:00.000Z',
+      tokenId: 'tok-a',
+    });
+    // tokenId だけ違う。
+    await store.record({
+      ...base,
+      layer: 'manager',
+      site: 'session',
+      managerId: 'mgr-1',
+      date: '2026-08-25',
+      at: '2026-08-25T10:00:00.000Z',
+      tokenId: 'tok-b',
+    });
+
+    const { turnRows } = await store.aggregate({});
+    expect(turnRows).toHaveLength(6);
+    expect(turnRows.every((row) => row.turns === 1)).toBe(true);
+  });
+
+  it('turnsSince は最初に数えた回で入り、以後の record で上書きされない。増分が空の回では始まらない', async () => {
+    // 増分が空の回（累積が全部ゼロ）では回数の軸は始まらない。台帳・層の軸は
+    // 最初の record で始まるので、ここで差が付く。
+    await record({
+      managerId: 'mgr-1',
+      date: '2026-08-25',
+      at: '2026-08-25T09:00:00.000Z',
+      snapshot: snapshot({ opus: totals({}) }),
+    });
+    const empty = await store.aggregate({});
+    expect(empty.since).toBe('2026-08-25T09:00:00.000Z');
+    expect(empty.layersSince).toBe('2026-08-25T09:00:00.000Z');
+    expect(empty.turnRows).toEqual([]);
+    expect(empty.turnsSince).toBeNull();
+
+    await record({
+      managerId: 'mgr-1',
+      date: '2026-08-25',
+      at: '2026-08-25T10:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 1 }) }),
+    });
+    const first = await store.aggregate({});
+    expect(first.turnsSince).toBe('2026-08-25T10:00:00.000Z');
+
+    await record({
+      managerId: 'mgr-1',
+      date: '2026-08-26',
+      at: '2026-08-26T10:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 2 }) }),
+    });
+    const second = await store.aggregate({});
+    // 以後の record では上書きされない。
+    expect(second.turnsSince).toBe('2026-08-25T10:00:00.000Z');
+  });
+
+  it('回数の軸の始点より前を照会したら beforeTurns: true になる', async () => {
+    await record({
+      managerId: 'mgr-1',
+      date: '2026-08-25',
+      at: '2026-08-25T10:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 1 }) }),
+    });
+
+    expect((await store.aggregate({ from: '2026-08-25' })).beforeTurns).toBe(false);
+    expect((await store.aggregate({ from: '2026-08-24' })).beforeTurns).toBe(true);
+    expect((await store.aggregate({})).beforeTurns).toBe(true);
+  });
+
+  it('照会の絞り（from/to/managerId/layer/site/tokenId）が turnRows にも同じく効く', async () => {
+    await store.record({
+      layer: 'manager',
+      site: 'session',
+      accumulation: 'oneshot',
+      managerId: 'mgr-1',
+      date: '2026-08-25',
+      at: '2026-08-25T10:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 1 }) }),
+      tokenId: 'tok-a',
+    });
+    await store.record({
+      layer: 'clone',
+      site: 'distill',
+      accumulation: 'oneshot',
+      managerId: 'mgr-2',
+      date: '2026-08-26',
+      at: '2026-08-26T10:00:00.000Z',
+      snapshot: snapshot({ sonnet: totals({ costUsd: 2 }) }),
+      tokenId: 'tok-b',
+    });
+
+    expect((await store.aggregate({ from: '2026-08-26' })).turnRows).toHaveLength(1);
+    expect((await store.aggregate({ to: '2026-08-25' })).turnRows).toHaveLength(1);
+    expect((await store.aggregate({ managerId: 'mgr-1' })).turnRows).toHaveLength(1);
+    expect((await store.aggregate({ layer: 'clone' })).turnRows).toHaveLength(1);
+    expect((await store.aggregate({ site: 'distill' })).turnRows).toHaveLength(1);
+    expect((await store.aggregate({ tokenId: 'tok-a' })).turnRows).toHaveLength(1);
+  });
+
+  it('不変条件: 数えられた turnRow の5軸の鍵は、必ず同じ照会結果の費用行のどれかに射影される', async () => {
+    await store.record({
+      layer: 'manager',
+      site: 'session',
+      accumulation: 'oneshot',
+      managerId: 'mgr-1',
+      date: '2026-08-25',
+      at: '2026-08-25T10:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 1 }), sonnet: totals({ costUsd: 0.1 }) }),
+      tokenId: 'tok-a',
+    });
+    await store.record({
+      layer: 'clone',
+      site: 'distill',
+      accumulation: 'oneshot',
+      managerId: 'mgr-2',
+      date: '2026-08-26',
+      at: '2026-08-26T10:00:00.000Z',
+      snapshot: snapshot({ sonnet: totals({ costUsd: 2 }) }),
+    });
+
+    const { rows, turnRows } = await store.aggregate({});
+    expect(turnRows.length).toBeGreaterThan(0);
+    for (const turn of turnRows) {
+      const projected = rows.some(
+        (row) =>
+          row.date === turn.date &&
+          row.managerId === turn.managerId &&
+          row.layer === turn.layer &&
+          row.site === turn.site &&
+          row.tokenId === turn.tokenId,
+      );
+      expect(projected).toBe(true);
+    }
+  });
+
+  it('費用の行が在って回数の記録が無い状態（既にある usage.json を模す）で、aggregate は turnRows: [] / turnsSince: null を返す（0の行を作らない）', async () => {
+    // この機能より前に書かれた usage.json を模す——`rows` はあるが `turns` /
+    // `turnsAt` を持たない（fileSchema の `.default({})` / `.default(null)` で
+    // 読める）。
+    const legacy = {
+      rows: {
+        [['2026-08-25', 'mgr-old', 'claude-opus-5', 'manager', 'session', ''].join(
+          String.fromCharCode(0),
+        )]: {
+          date: '2026-08-25',
+          managerId: 'mgr-old',
+          model: 'claude-opus-5',
+          layer: 'manager',
+          site: 'session',
+          totals: totals({ costUsd: 1 }),
+          updatedAt: '2026-08-25T10:00:00.000Z',
+        },
+      },
+      baselines: {},
+      startedAt: '2026-08-25T10:00:00.000Z',
+      layeredAt: '2026-08-25T10:00:00.000Z',
+      tokensAt: null,
+    };
+    const dir = await mkdtemp(join(tmpdir(), 'alteroid-usage-noturns-'));
+    await writeFile(join(dir, 'usage.json'), `${JSON.stringify(legacy, null, 2)}\n`, 'utf8');
+    const legacyStore = new FsUsageStore(dir);
+
+    const aggregate = await legacyStore.aggregate({});
+    expect(aggregate.rows).toHaveLength(1);
+    expect(aggregate.turnRows).toEqual([]);
+    expect(aggregate.turnsSince).toBeNull();
+    expect(aggregate.beforeTurns).toBe(true);
+  });
+});
+
+/**
  * `recordedManagerIds`（Issue #98「台帳が取りこぼした委譲」）。
  *
  * **引数を持たない。** `aggregate()` の `from` / `to` のような絞り込みを渡す口が
