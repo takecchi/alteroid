@@ -120,6 +120,34 @@ describe("FakeVectorStore — VectorFilter の契約（ADR 0034）", () => {
     expect(ids).toContain(afterBoundary.id);
   });
 
+  it("filter.occurredBefore: 境界と*ちょうど同じ* occurredAt は返り、境界より後は除外される（両端とも包含 `<=`。ADR 0059）", async () => {
+    const stores = createFakeRuntimeStores();
+    const boundary = new Date("2026-05-01T00:00:00.000Z");
+    const onBoundary = await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ occurredAt: new Date(boundary.getTime()) }),
+    );
+    const afterBoundary = await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ occurredAt: new Date(boundary.getTime() + 1000) }),
+    );
+    await stores.vectorStore.upsert(ctx, space, onBoundary.id, [1, 0, 0]);
+    await stores.vectorStore.upsert(ctx, space, afterBoundary.id, [1, 0, 0]);
+
+    const hits = await stores.vectorStore.search(ctx, space, [1, 0, 0], {
+      limit: 10,
+      // 🔑 occurredBefore だけを渡す。occurredAfter は渡さない
+      // ——下限側の変異に対してもこの歯が緑のままであるために必須。
+      filter: { tenantId: "tenant-1", occurredBefore: boundary },
+    });
+    const ids = hits.map((hit) => hit.memoryId);
+
+    // decayFloorAtAfter（狭義の `>`、上のテスト）とは含み方が逆――
+    // occurredBefore は境界ちょうどを含む（`<=`）。
+    expect(ids).toContain(onBoundary.id);
+    expect(ids).not.toContain(afterBoundary.id);
+  });
+
   it("filter は複数同時に渡すと AND になる（どれか1つが不一致なら返らない）", async () => {
     const stores = createFakeRuntimeStores();
     const bothMatch = await stores.memoryStore.createMemory(

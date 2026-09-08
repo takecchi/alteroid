@@ -246,4 +246,71 @@ describe("recall() の period は境界を含み、返り値と omitted が食�
       false,
     );
   });
+
+  /**
+   * 上限（`occurredBefore`）側。下限側（上の `ingestBoundaryPair`）は「境界ちょうど」と
+   * 「境界の1ミリ秒**前**」の対だが、上限側は向きが逆――「境界ちょうど」と「境界の1ミリ秒
+   * **後**」の対が要る。既存の `ingestBoundaryPair` はそのまま残し、隣に対になるヘルパを
+   * 足す（既存の歯の意味は変えない）。
+   */
+  async function ingestUpperBoundaryPair(
+    runtime: ReturnType<typeof buildRuntime>["runtime"],
+    cutoff: Date,
+  ): Promise<void> {
+    await runtime.observe(ctx, {
+      kind: "utterance",
+      text: BOUNDARY_TEXT,
+      externalId: "boundary",
+      occurredAt: cutoff,
+    });
+    await runtime.observe(ctx, {
+      kind: "utterance",
+      text: JUST_OUTSIDE_TEXT,
+      externalId: "just-outside",
+      // 境界の1ミリ秒だけ外。上限側なので「後」（下限側は「前」）。
+      occurredAt: new Date(cutoff.getTime() + 1),
+    });
+    await runtime.tick(ctx, { kinds: ["embed"], leaseMs: TEST_LEASE_MS });
+  }
+
+  it("occurredAt === occurredBefore ちょうどの記憶は返り、1ミリ秒だけ後のものは落ちる", async () => {
+    const { runtime } = buildRuntime();
+    const cutoff = new Date(Date.now() - RECENT_DAYS * DAY);
+    await ingestUpperBoundaryPair(runtime, cutoff);
+
+    // 🔑 occurredBefore だけを渡す。occurredAfter は渡さない
+    // ——下限側の変異に対してもこの歯が緑のままであるために必須。
+    const result = await runtime.recall(ctx, { vector: [1, 0], occurredBefore: cutoff });
+    const digests = result.memories.map((m) => m.digest);
+
+    // 候補フィルタ（recall-runtime.ts）の側: 境界は残り、1ミリ秒外（後）は落ちる。
+    expect(digests).toContain(BOUNDARY_TEXT);
+    expect(digests).not.toContain(JUST_OUTSIDE_TEXT);
+    // aggregateScope の側: 落ちたのはちょうど1件だと言っている。
+    expect(result.omitted).toContainEqual({
+      kind: "filtered",
+      condition: "period",
+      count: 1,
+      countKind: "exact",
+    });
+    // ⚠ 閾値で落ちたのではないことを名指しで確かめる。
+    expect(result.omitted.some((o) => o.kind === "below_threshold")).toBe(false);
+    // ⟹ 「返った件数」と「落ちたと言っている件数」の合計が、取り込んだ2件と一致する。
+    //    片方だけを直したときに、この等式が破れる。
+    expect(digests.length + 1).toBe(2);
+  });
+
+  it("⚠ 鳴ってはいけない側: occurredBefore を渡さなければ、両方とも返り period の omission は出ない", async () => {
+    const { runtime } = buildRuntime();
+    const cutoff = new Date(Date.now() - RECENT_DAYS * DAY);
+    await ingestUpperBoundaryPair(runtime, cutoff);
+
+    const result = await runtime.recall(ctx, { vector: [1, 0] });
+    const digests = result.memories.map((m) => m.digest);
+    expect(digests).toContain(BOUNDARY_TEXT);
+    expect(digests).toContain(JUST_OUTSIDE_TEXT);
+    expect(result.omitted.some((o) => o.kind === "filtered" && o.condition === "period")).toBe(
+      false,
+    );
+  });
 });
