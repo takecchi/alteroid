@@ -908,8 +908,10 @@ export function journalEntryShape(entry: JournalEntryInput): string {
     // - 長さだけ: `noticeText` と `text` も自由文（前者は provider の英文、後者は
     //   その両方を含む整形済みの行）
     //
-    // **⚠️ トークンの値はこのエントリに存在しない**（`schema.ts` の
-    // `token_rotation` の doc）。ここで落とす心配をする対象がそもそも無い。
+    // **⚠️ トークンの値はこのエントリに存在しない。** `schema.ts` の
+    // `token_rotation` の doc が「ここへ値を入れない」と決めている
+    // （逐語は `command grep -Fn -- 'ここへ値' packages/core/src/schema.ts`）。
+    // ここで落とす心配をする対象がそもそも無い。
     case 'token_rotation':
       return (
         `token_rotation event=${tag(entry.event)}` +
