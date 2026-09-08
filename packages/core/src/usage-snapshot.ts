@@ -150,6 +150,34 @@ export const accountApiKeySourceSchema = z.enum([
 export type AccountApiKeySource = z.infer<typeof accountApiKeySourceSchema>;
 
 /**
+ * SDK が返しうる8値（`AccountInfo.apiProvider`）＋ 9個目として足した `'unrecognized'`。
+ *
+ * **仕組みは {@link AccountApiKeySource} と同じ**（許可リストを通し、知らない値は
+ * `'unrecognized'` へ畳んで、`undefined`（欄が無い＝名乗っていない）とは区別して
+ * 持つ）。SDK 側の union の逐語と、`pnpm check:sdk-quotes` による同期の説明は
+ * {@link SDK_API_PROVIDERS} のほうに置いてある（許可リストの現物にいちばん近い
+ * 場所へ置くため）。
+ *
+ * **`classifyLimitsUnavailable` は `'unrecognized'` を `'non_first_party'` と
+ * 断定しない**——「知らない値だった」は「3P バックエンドだと名乗った」ではない
+ * （判定側の doc）。だが `undefined`（名乗っていない）とも別の観測なので、
+ * こちらへ畳むこともしない。
+ */
+export const accountApiProviderSchema = z.enum([
+  'firstParty',
+  'bedrock',
+  'vertex',
+  'foundry',
+  'anthropicAws',
+  'anthropicGoogleCloud',
+  'mantle',
+  'gateway',
+  'unrecognized',
+]);
+
+export type AccountApiProvider = z.infer<typeof accountApiProviderSchema>;
+
+/**
  * `tokenSource`（`AccountInfo.tokenSource`）の**状態だけ**。内容は1文字も運ばない。
  *
  * ## なぜ許可リストではなく「状態」なのか
@@ -204,10 +232,15 @@ export const accountUsageSchema = z.object({
   plan: z.string().optional(),
   organization: z.string().optional(),
   /**
-   * どのバックエンドで話しているか。`firstParty` のときだけ claude.ai の
-   * サブスク制限が効く（Bedrock / Vertex / API キーには無い）。
+   * どのバックエンドで話しているか（`AccountInfo.apiProvider`。値の一覧と根拠は
+   * {@link AccountApiProvider}）。`firstParty` のときだけ claude.ai のサブスク
+   * 制限が効く（Bedrock / Vertex / API キーには無い）。
+   *
+   * **知らない値は `'unrecognized'` に畳まれる**（元の文字は1文字も運ばない）。
+   * `GET /usage` はアクセストークンで読める面なので、ここも `apiKeySource` と
+   * 同じ理由で素通しにしない。
    */
-  apiProvider: z.string().optional(),
+  apiProvider: accountApiProviderSchema.optional(),
   /**
    * どこから来た資格情報か（`AccountInfo.apiKeySource`。値の一覧と根拠は
    * {@link AccountApiKeySource}）。
@@ -457,6 +490,54 @@ export function toAccountApiKeySource(raw: unknown): AccountApiKeySource | undef
   return 'unrecognized';
 }
 
+/**
+ * SDK が実際に出す8値だけの集合（{@link AccountApiProvider} の `'unrecognized'` は
+ * 含めない）。
+ *
+ * **この行が `pnpm check:sdk-quotes` の同期の門になる。** 直下の逐語は
+ * `AccountInfo.apiProvider` の union 宣言そのもの（`@anthropic-ai/claude-agent-sdk@0.3.263`
+ * 同梱の `sdk.d.ts`）で、SDK がこの union に9個目の値を足せば、当てている
+ * `sdk.d.ts` の部分文字列がずれて検査が赤くなる。
+ *
+ * [sdk-verbatim AccountInfo.apiProvider]
+ * > apiProvider?: 'firstParty' | 'bedrock' | 'vertex' | 'foundry' | 'anthropicAws' | 'anthropicGoogleCloud' | 'mantle' | 'gateway';
+ *
+ * **`SDK_API_KEY_SOURCES`（`apiKeySource` 側、直上）にはこの機構が無い。**
+ * `AccountInfo.apiKeySource` は SDK 上 `string` としか宣言されておらず（逐語は
+ * {@link AccountApiKeySource} の doc）、union ではないので同じ形の逐語では
+ * 守れない——素通しにしないための許可リストではあるが、SDK が値を増やしたことを
+ * 機械的に検出する手段は無いままである。**こちらは union なので、逐語がそのまま
+ * 同期の門になる。**
+ */
+const SDK_API_PROVIDERS: ReadonlySet<string> = new Set([
+  'firstParty',
+  'bedrock',
+  'vertex',
+  'foundry',
+  'anthropicAws',
+  'anthropicGoogleCloud',
+  'mantle',
+  'gateway',
+]);
+
+/**
+ * `AccountInfo.apiProvider`（生の値）を {@link AccountApiProvider} へ絞り込む。
+ * **`nonEmpty` の代わりにこれを通すこと。**
+ *
+ * - 文字列でない、または空文字・空白のみ → `undefined`（**名乗っていない**）。
+ *   ⚠️ `'unrecognized'` へ倒さないこと——空文字は「名乗ったが知らない値」ではなく
+ *   「何も名乗っていない」であり、倒すとこの関数が観測していないことを断定する
+ *   （{@link classifyLimitsUnavailable} の `provider === undefined` の警告と同じ形）
+ * - SDK の8値のどれか → その値
+ * - それ以外の非空文字列 → `'unrecognized'`（**名乗ったが知らない値**。元の文字は
+ *   1文字も返さない）
+ */
+export function toAccountApiProvider(raw: unknown): AccountApiProvider | undefined {
+  if (typeof raw !== 'string' || raw.trim().length === 0) return undefined;
+  if (SDK_API_PROVIDERS.has(raw)) return raw as AccountApiProvider;
+  return 'unrecognized';
+}
+
 /** ISO 8601 → epoch ミリ秒。読めなければ undefined（**NaN を下へ流さない**）。 */
 function isoToEpochMs(value: unknown): number | undefined {
   if (typeof value !== 'string') return undefined;
@@ -530,7 +611,7 @@ export function toAccountUsage(
     at,
     plan: nonEmpty(account.subscriptionType) ?? nonEmpty(usage.subscription_type),
     organization: nonEmpty(account.organization),
-    apiProvider: nonEmpty(account.apiProvider),
+    apiProvider: toAccountApiProvider(account.apiProvider),
     apiKeySource: toAccountApiKeySource(account.apiKeySource),
     // **生の `tokenSource` はここに載せない。** 判定（`isNotLoggedIn`）が要る
     // 生値は {@link fetchAccountUsage} が別に持つ（`rawTokenSourceOf`）——
@@ -565,6 +646,15 @@ export function toAccountUsage(
  * 名乗っていないものは「3P である」ではない（`accountInfo` の口が答えなかった
  * 回もここへ来る）。倒すと、この関数が観測していないことを断定する。
  *
+ * **🔑 2 で `provider === 'unrecognized'` も `non_first_party` へ倒さないこと。**
+ * 「知らない値」も「知らない」であって「3P である」の断定ではない——SDK の
+ * union（{@link AccountApiProvider}）に無い値が来た回は、この関数が観測して
+ * いないことを断定しないという同じ理由で `non_first_party` から外す。**だが
+ * `undefined`（名乗っていない）とも別の観測なので、そちらへ畳むこともしない**
+ * ——`'unrecognized'` は「名乗ったが、知っている8値のどれでもなかった」で、
+ * `undefined` の「そもそも名乗っていない」とは区別したまま3の `undetermined`
+ * （またはそれ以外の非 `unavailable` な状態）へ通す。
+ *
  * **`tokenSourceRaw` を別引数で受け取る（#706 の本題）。** `AccountUsage` は
  * `GET /usage` へそのまま載る型なので、もう生の `tokenSource` を持たない
  * （{@link accountUsageSchema} の `tokenSourcePresence` の doc）。判定に要る
@@ -576,7 +666,9 @@ export function classifyLimitsUnavailable(
 ): LimitsUnavailableCause | undefined {
   if (isNotLoggedIn(tokenSourceRaw)) return 'not_logged_in';
   const provider = usage.apiProvider;
-  if (provider !== undefined && provider !== 'firstParty') return 'non_first_party';
+  if (provider !== undefined && provider !== 'firstParty' && provider !== 'unrecognized') {
+    return 'non_first_party';
+  }
   if (usage.limitsAvailable === false && usage.plan === undefined) return 'undetermined';
   return undefined;
 }
