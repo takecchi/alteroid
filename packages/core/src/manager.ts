@@ -1320,8 +1320,8 @@ export interface ManagerPoolOptions {
   withheldReportFlushMs?: number;
   /**
    * 機構が合成した知らせの合流窓の長さ（ms）。**省略時は
-   * `resolveSynthesizedNoticeWindowMs()`**（＝ この プロセスの環境変数
-   * `ALTEROID_SYNTHESIZED_NOTICE_WINDOW_MS`、既定1000ms）。`withheldReportFlushMs`
+   * `resolveSynthesizedNoticeWindowMs()`**（＝ このプロセスの環境変数
+   * `ALTEROID_SYNTHESIZED_NOTICE_WINDOW_MS`、既定3000ms）。`withheldReportFlushMs`
    * と同じ理由で口を開けてある——試験と、明示的に配線したい呼び出し元のため。
    */
   synthesizedNoticeWindowMs?: number;
@@ -2572,7 +2572,7 @@ class Pool implements ManagerPool {
    *
    * **`#withheldReports` とは別物である。** あちらは「背景処理の完了待ちで
    * 畳んだ報告」を**時間の上限（既定30分）が来るまで**保持する在庫で、
-   * こちらは「同じ1つの枠落ちの別の顔」を**短い窓（既定1000ms）だけ**
+   * こちらは「同じ1つの枠落ちの別の顔」を**短い窓（既定3000ms）だけ**
    * 保持してから必ず1本にまとめて配る——「委譲1本につき1本のタイマーを
    * 増やさない」（`#persist` の doc）という原則の例外にはならない。積みが
    * 在る managerId の数だけ、積みが在る数百ミリ秒〜1秒のあいだだけ生きる
