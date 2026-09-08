@@ -247,3 +247,80 @@ describe('describeAccountUsage の unavailable 枝の apiKeySource 行', () => {
     expect(text).toContain('枠が効かない理由を言い分けられない（テスト用フィクスチャ）');
   });
 });
+
+/**
+ * `describeAccountUsage` の `tokenSourcePresence` 行（#706 の本題）。
+ *
+ * ⭐ この依頼の芯を測る歯。**4つの事実（取れなかった／値が在る／値が無い（空）／
+ * この版は送らない）が、互いに別の表示になること**を固定する。既存の
+ * `apiKeySource` の歯（`（取れなかった）` / `unrecognized` の書き分け）と
+ * 同じ役割を、こちらの4値でも果たす。
+ */
+describe('describeAccountUsage の tokenSourcePresence 行（#706）', () => {
+  function okState(
+    tokenSourcePresence: Extract<
+      AccountUsageState,
+      { state: 'ok' }
+    >['usage']['tokenSourcePresence'],
+  ): AccountUsageState {
+    return {
+      state: 'ok',
+      usage: {
+        at: '2026-08-14T10:00:00.000Z',
+        limitsAvailable: true,
+        windows: [],
+        tokenSourcePresence,
+      },
+    };
+  }
+
+  it('present のとき、値が届いていると言い、内容は出さない', () => {
+    const text = describeAccountUsage(okState('present')).join('\n');
+    expect(text).toContain('値が届いている');
+  });
+
+  it('empty のとき、欄はあるが空だと言う（not_returned とは違う文言）', () => {
+    const text = describeAccountUsage(okState('empty')).join('\n');
+    expect(text).toContain('欄はあるが空');
+  });
+
+  it('not_returned のとき、取得できずと言う（積極的な事実。version skew ではない）', () => {
+    const text = describeAccountUsage(okState('not_returned')).join('\n');
+    expect(text).toContain('取得できず');
+  });
+
+  /**
+   * **4つ目の状態: この版は送らない。** `tokenSourcePresence` が `undefined`
+   * （＝旧い daemon が返した応答にこの欄そのものが無い）のときは、
+   * 「取得できず」（試して駄目だった）とは別の文言にする——読み違えると
+   * 「対応している daemon へ繋ぎ直せば直る」と「鍵が届くのを待てばよい」を
+   * 取り違える。
+   */
+  it('欄が無い（version skew）のとき、「取得できず」とは別の文言（この版は出さない）', () => {
+    const text = describeAccountUsage(okState(undefined)).join('\n');
+    expect(text).toContain('この版はこの情報を出さない');
+    expect(text).not.toContain('取得できず');
+  });
+
+  /**
+   * 4状態が互いに別の文言であることを、まとめて固定する。**どの2つも同じ
+   * 表示へ倒れないこと**が受け入れ基準そのもの。
+   */
+  it('4つの状態はどの2つを取っても異なる行になる', () => {
+    const lines = (['present', 'empty', 'not_returned', undefined] as const).map((presence) =>
+      describeAccountUsage(okState(presence)).join('\n'),
+    );
+
+    expect(new Set(lines).size).toBe(lines.length);
+  });
+
+  it('内容（生の tokenSource）はどの状態でも出力に一切現れない', () => {
+    // 意味の無い短い文字列（前例: #704 の 'zz'）を使う。生値は AccountUsageState
+    // の型にもう存在しないので、これは「型で守られていることの再確認」である。
+    const marker = 'zz';
+    for (const presence of ['present', 'empty', 'not_returned'] as const) {
+      const text = describeAccountUsage(okState(presence)).join('\n');
+      expect(text).not.toContain(marker);
+    }
+  });
+});

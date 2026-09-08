@@ -3452,8 +3452,9 @@
                                     "unrecognized"
                                   ]
                                 },
-                                "tokenSource": {
-                                  "type": "string"
+                                "tokenSourcePresence": {
+                                  "type": "string",
+                                  "enum": ["not_returned", "present", "empty"]
                                 },
                                 "limitsAvailable": {
                                   "type": "boolean"

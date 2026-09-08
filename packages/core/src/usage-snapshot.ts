@@ -150,6 +150,48 @@ export const accountApiKeySourceSchema = z.enum([
 export type AccountApiKeySource = z.infer<typeof accountApiKeySourceSchema>;
 
 /**
+ * `tokenSource`（`AccountInfo.tokenSource`）の**状態だけ**。内容は1文字も運ばない。
+ *
+ * ## なぜ許可リストではなく「状態」なのか
+ *
+ * `apiKeySource` と違い、`AccountInfo.tokenSource` は SDK 側に値の一覧が無い
+ * （逐語。`@anthropic-ai/claude-agent-sdk@0.3.263` 同梱の `sdk.d.ts`）。
+ *
+ * [sdk-verbatim AccountInfo.tokenSource]
+ * > tokenSource?: string;
+ *
+ * doc も union も無い自由文字列なので、`toAccountApiKeySource` のような
+ * 「知っている値だけ通す」許可リストは作れない（`token-candidate.ts` が既に
+ * 同じ結論に達している——「数え上げになる」）。**⟹ 値そのものを一切運ばず、
+ * 「試してどうだったか」という状態だけを運ぶ。**
+ *
+ * ## 3つの事実を、3つの別の値で持つ
+ *
+ * - `'not_returned'`: 試したが SDK が欄を返さなかった（`raw` が文字列でない）
+ * - `'present'`: SDK が非空の文字列を返した（**その文字列自体は運ばない**）
+ * - `'empty'`: SDK は欄を返したが、空文字／空白だった
+ *
+ * **`nonEmpty()` はこの3つのうち後ろ2つを畳んでいた**（文字列でない場合も
+ * 空文字の場合も同じ `undefined` になる）。この畳みを割るのが
+ * {@link toTokenSourcePresence} の仕事である。
+ *
+ * ## 4つ目の状態は、この欄自体を optional にすることで持つ
+ *
+ * `accountUsageSchema` 側でこの欄を `.optional()` にしてあるのは、**旧い
+ * daemon / runner が返す応答にはこの欄そのものが無い**からである
+ * （`accountUsageStateSchema` の `cause` / `unavailable` 枝の `apiKeySource` と
+ * 同じ版ずれの理由）。**同じプロセスの中で作る限り、`toAccountUsage` は必ず
+ * 上の3値のどれかを入れる**（`undefined` を返さない）——⟹ 同じデプロイの中から
+ * 読む限り、この欄が無いのは「この版が送らない」の1通りだけである。
+ *
+ * ⛔ **既定値で埋めないこと。** 埋めれば「送らなかった」と「試して`not_returned`
+ * だった」が区別できなくなる。
+ */
+export const tokenSourcePresenceSchema = z.enum(['not_returned', 'present', 'empty']);
+
+export type TokenSourcePresence = z.infer<typeof tokenSourcePresenceSchema>;
+
+/**
  * アカウント全体のスナップショット1つ。
  *
  * **「取れなかった」を表現できる形にしてある。** `limitsAvailable` が真でも
@@ -170,7 +212,8 @@ export const accountUsageSchema = z.object({
    * どこから来た資格情報か（`AccountInfo.apiKeySource`。値の一覧と根拠は
    * {@link AccountApiKeySource}）。
    *
-   * **`tokenSource` とは別の欄である。** `tokenSource` は「鍵が届いているか」
+   * **`tokenSourcePresence` とは別の欄である。** `tokenSource`（生値。外へは
+   * 状態だけの {@link TokenSourcePresence} でしか出さない）は「鍵が届いているか」
    * （`none` なら「まだログインしていない」）を言う欄で、こちらは「届いている
    * 鍵がどこ由来か」（環境変数 / ヘルパー / `/login` が発行した鍵 / それ以外）を
    * 言う欄である。**混同すると、`apiKeySource: 'none'` を「鍵が無い」と読み
@@ -184,13 +227,18 @@ export const accountUsageSchema = z.object({
    */
   apiKeySource: accountApiKeySourceSchema.optional(),
   /**
-   * 認証の出所。**`none` は「サブスクが無い」ではなく「まだログインしていない」。**
+   * 認証の出所の**状態だけ**（{@link TokenSourcePresence}。内容は運ばない）。
    *
-   * この2つを混同すると、**鍵が後から届く構成で永久に「サブスクなし」と表示される。**
-   * alteroid は鍵を走行中に回せる設計（`credentials.ts` / `POST /runners/credentials`）
-   * なので、「トークンが後から来る」は異常ではなく通常の状態である。
+   * **生の `tokenSource` はここへ一切載らない。** `GET /usage` はアクセス
+   * トークンで読める面なので、鍵の届き方を語る自由文字列をそのまま外へ配る
+   * わけにはいかない（`apiKeySource` に許可リストを作った理由と同じだが、
+   * こちらは許可リストが作れないので「状態だけ」にしてある）。
+   *
+   * **未ログイン判定（`isNotLoggedIn`）はこの欄を読まない。** 判定は生値の
+   * まま daemon の内部（{@link fetchAccountUsage}）で完結させ、結論
+   * （`accountUsageStateSchema` の `cause: 'not_logged_in'`）だけを外へ出す。
    */
-  tokenSource: z.string().optional(),
+  tokenSourcePresence: tokenSourcePresenceSchema.optional(),
   /**
    * 向こうが「プランの枠が効く」と言っているか。
    *
@@ -365,6 +413,22 @@ function nonEmpty(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
 }
 
+/**
+ * `AccountInfo.tokenSource`（生値）を {@link TokenSourcePresence} へ畳む。
+ * **常に3値のどれかを返す（`undefined` を返さない）**——`nonEmpty()` と違い、
+ * 「試したが返らなかった」（`not_returned`）と「返ったが空だった」（`empty`）を
+ * 同じ `undefined` へ畳まない。
+ *
+ * - 文字列でない（`undefined` を含む） → `'not_returned'`（試したが SDK が
+ *   欄を返さなかった）
+ * - 空文字／空白のみ → `'empty'`（SDK は欄を返したが空だった）
+ * - それ以外の非空文字列 → `'present'`（**値そのものは返さない**）
+ */
+export function toTokenSourcePresence(raw: unknown): TokenSourcePresence {
+  if (typeof raw !== 'string') return 'not_returned';
+  return raw.trim().length > 0 ? 'present' : 'empty';
+}
+
 /** SDK が実際に出す9値だけの集合（{@link AccountApiKeySource} の `'unrecognized'` は含めない）。 */
 const SDK_API_KEY_SOURCES: ReadonlySet<string> = new Set([
   'ANTHROPIC_API_KEY',
@@ -468,7 +532,11 @@ export function toAccountUsage(
     organization: nonEmpty(account.organization),
     apiProvider: nonEmpty(account.apiProvider),
     apiKeySource: toAccountApiKeySource(account.apiKeySource),
-    tokenSource: nonEmpty(account.tokenSource),
+    // **生の `tokenSource` はここに載せない。** 判定（`isNotLoggedIn`）が要る
+    // 生値は {@link fetchAccountUsage} が別に持つ（`rawTokenSourceOf`）——
+    // `AccountUsage` はそのまま `GET /usage` へ載る型なので、ここには状態
+    // だけを入れる。
+    tokenSourcePresence: toTokenSourcePresence(account.tokenSource),
     limitsAvailable: usage.rate_limits_available === true,
     windows,
     extraUsage,
@@ -479,9 +547,9 @@ export function toAccountUsage(
  * 枠が返ってこない構成か。返ってくると読めるなら `undefined`。
  *
  * **`limitsAvailable === false` を1つの理由に潰さないこと**（#681。値の一覧と
- * 根拠は {@link LimitsUnavailableCause}）。未ログイン（`tokenSource: 'none'`）でも
- * `false` が返る（実測）が、それは「サブスクが無い」ではなく「まだログインして
- * いない」である。alteroid は鍵を走行中に回せる設計なので、鍵が後から届くのは
+ * 根拠は {@link LimitsUnavailableCause}）。未ログイン（生の `tokenSource: 'none'`）
+ * でも `false` が返る（実測）が、それは「サブスクが無い」ではなく「まだログイン
+ * していない」である。alteroid は鍵を走行中に回せる設計なので、鍵が後から届くのは
  * 通常の状態である。ここを混ぜると、鍵が届いた後も永久に「このアカウントには
  * サブスクが無い」と表示し続ける。
  *
@@ -496,9 +564,17 @@ export function toAccountUsage(
  * **⚠️ 2 で `provider === undefined` を `non_first_party` へ倒さないこと。**
  * 名乗っていないものは「3P である」ではない（`accountInfo` の口が答えなかった
  * 回もここへ来る）。倒すと、この関数が観測していないことを断定する。
+ *
+ * **`tokenSourceRaw` を別引数で受け取る（#706 の本題）。** `AccountUsage` は
+ * `GET /usage` へそのまま載る型なので、もう生の `tokenSource` を持たない
+ * （{@link accountUsageSchema} の `tokenSourcePresence` の doc）。判定に要る
+ * 生値だけを、外へ出る型の外側で受け渡す。
  */
-export function classifyLimitsUnavailable(usage: AccountUsage): LimitsUnavailableCause | undefined {
-  if (isNotLoggedIn(usage)) return 'not_logged_in';
+export function classifyLimitsUnavailable(
+  usage: AccountUsage,
+  tokenSourceRaw: string | undefined,
+): LimitsUnavailableCause | undefined {
+  if (isNotLoggedIn(tokenSourceRaw)) return 'not_logged_in';
   const provider = usage.apiProvider;
   if (provider !== undefined && provider !== 'firstParty') return 'non_first_party';
   if (usage.limitsAvailable === false && usage.plan === undefined) return 'undetermined';
@@ -536,9 +612,29 @@ export function describeLimitsUnavailable(
   }
 }
 
-/** まだログインしていないと読めるか（＝鍵が届けば取れるようになる）。 */
-export function isNotLoggedIn(usage: AccountUsage): boolean {
-  return usage.tokenSource === 'none';
+/**
+ * まだログインしていないと読めるか（＝鍵が届けば取れるようになる）。
+ *
+ * **生の `tokenSource` を直接受け取る。** `AccountUsage`（外へ出る型）は生値を
+ * 持たないので、この判定は daemon の内部（{@link fetchAccountUsage}）が生値の
+ * まま呼ぶ。外へ出るのは {@link classifyLimitsUnavailable} が返す `cause` の
+ * 結論だけである。
+ */
+export function isNotLoggedIn(tokenSourceRaw: string | undefined): boolean {
+  return tokenSourceRaw === 'none';
+}
+
+/**
+ * `AccountInfo.tokenSource` の生値を取り出す。**内部の判定専用**——
+ * この値を {@link AccountUsage} へ積まないこと（`toAccountUsage` は積まない）。
+ *
+ * `toAccountUsage` と同じ防御的な読み方（object でなければ空扱い）にしてある。
+ */
+function rawTokenSourceOf(accountJson: unknown): string | undefined {
+  const account = (
+    typeof accountJson === 'object' && accountJson !== null ? accountJson : {}
+  ) as Record<string, unknown>;
+  return nonEmpty(account.tokenSource);
 }
 
 /** 何か表示できるものが取れたか。 */
@@ -664,11 +760,14 @@ export async function fetchAccountUsage(
   }
 
   const usage = toAccountUsage(at, read.usage, read.account);
+  // **生値はここだけで持つ。** `usage`（外へ出る型）には積まない
+  // （`rawTokenSourceOf` の doc）。
+  const tokenSourceRaw = rawTokenSourceOf(read.account);
 
   // **理由を1つに潰さない**（#681）。未ログイン・3P バックエンド・言い分けられない
   // の3つは、**判定（`judgeTokenCandidate`）が同じ `undecidable` でも、人間が次に
   // やることが違う** —— 鍵を待つ / 何もできない / 鍵を取り直してみる。
-  const unavailable = classifyLimitsUnavailable(usage);
+  const unavailable = classifyLimitsUnavailable(usage, tokenSourceRaw);
   if (unavailable !== undefined) {
     // **`usage` ごと積まない。1欄だけ運ぶ**（#681 の設計判断。理由は
     // `accountUsageStateSchema` の `unavailable` 枝の `apiKeySource` の doc）。

@@ -21,6 +21,7 @@ import type { PermissionModeName } from './permission-mode.js';
 import { resultErrorLines, resultFailureOf } from './sdk-failure.js';
 import { CLONE_ALLOWED_TOOLS, MCP_SERVER_NAME } from './tools.js';
 import { classifyUsageNotice, toRateLimitFacts } from './usage-limits.js';
+import { toAccountApiKeySource } from './usage-snapshot.js';
 import { isSuccessResult, modelUsageOf } from './usage.js';
 
 /**
@@ -606,6 +607,21 @@ function foldSystemMessage(message: SDKMessage & { type: 'system' }): AgentEvent
  * 壊れる。読めなかったことは「まだ分からない」として出せば済む。**`mcp_servers`
  * も同じ扱いにする（#324）** —— 形が読めなかったときにまで「0本」と主張する
  * 根拠は無い。読めた配列だけが「0本」を名乗れる。
+ *
+ * **`apiKeySource` は許可リストを通す（#706 の裏側）。** ここが読む
+ * `SDKMessage.apiKeySource` は `SDKSystemMessage.apiKeySource`（`ApiKeySource`。
+ * SDK 側で9値の union として宣言されている）であって、`AccountInfo.apiKeySource`
+ * （型なしの `string`。`usage-snapshot.ts` の `accountApiKeySourceSchema` の doc）
+ * とは別の欄だが、**同じ族の値**なので既存の許可リスト（{@link
+ * toAccountApiKeySource}）をそのまま当てる。**新しい形を発明しない。** 以前は
+ * `typeof raw.apiKeySource === 'string' ? raw.apiKeySource : null` で素通しして
+ * おり、`self_status`（`self.ts` の `describeCloneRuntime`）が生の文字列を
+ * そのまま出していた——`toAccountApiKeySource()` は既に在ったのに、この経路
+ * だけがそれを通していなかった（#704 でこの関数を作ったときの積み残し）。
+ * **`AgentRuntimeFacts.apiKeySource` / `clone.ts` の型は `string | null` のまま
+ * 変えていない**（`AccountApiKeySource` は文字列リテラル union なので
+ * `string` に代入できる）——だから `clone.ts`（触ってはいけない3本の1つ）は
+ * 無改造で済む。
  */
 function runtimeFactsOf(message: SDKMessage): AgentRuntimeFacts {
   const raw = message as unknown as {
@@ -620,7 +636,10 @@ function runtimeFactsOf(message: SDKMessage): AgentRuntimeFacts {
     sessionId: typeof raw.session_id === 'string' ? raw.session_id : null,
     model: typeof raw.model === 'string' ? raw.model : null,
     agentVersion: typeof raw.claude_code_version === 'string' ? raw.claude_code_version : null,
-    apiKeySource: typeof raw.apiKeySource === 'string' ? raw.apiKeySource : null,
+    // **「知らない値」（unrecognized）と「欄が無かった」（null）を区別したまま
+    // 通す。** `toAccountApiKeySource` は文字列でない／空文字を `undefined` に
+    // する——`?? null` で `AgentRuntimeFacts` の型（`string | null`）に合わせる。
+    apiKeySource: toAccountApiKeySource(raw.apiKeySource) ?? null,
     permissionMode: typeof raw.permissionMode === 'string' ? raw.permissionMode : null,
     mcpServers: Array.isArray(raw.mcp_servers)
       ? raw.mcp_servers.filter(

@@ -13,6 +13,7 @@ import {
   isNotLoggedIn,
   toAccountApiKeySource,
   toAccountUsage,
+  toTokenSourcePresence,
 } from './usage-snapshot.js';
 import type { UsageProbeHandle, UsageProbeQuery } from './usage-probe.js';
 
@@ -137,21 +138,23 @@ describe('「取れない」と「まだログインしていない」を混ぜ�
     // **ここを混ぜると、鍵が後から届く構成で永久に「サブスクなし」と表示される。**
     // alteroid は鍵を走行中に回せる設計なので、鍵が後から来るのは通常の状態である。
     const usage = toAccountUsage(AT, NOT_LOGGED_IN.usage, NOT_LOGGED_IN.account);
-    expect(isNotLoggedIn(usage)).toBe(true);
+    expect(isNotLoggedIn(NOT_LOGGED_IN.account.tokenSource)).toBe(true);
     // **保証は弱めていない。** かつては「`isSubscriptionImpossible` が偽」で
     // 測っていた（＝「サブスクが無いとは言わない」）。いまは**どの理由を名乗るか**
     // まで測るので、`non_first_party` / `undetermined` へ倒れたら落ちる（#681）。
-    expect(classifyLimitsUnavailable(usage)).toBe('not_logged_in');
+    expect(classifyLimitsUnavailable(usage, NOT_LOGGED_IN.account.tokenSource)).toBe(
+      'not_logged_in',
+    );
   });
 
   it('Bedrock / Vertex なら本当に取れない', () => {
     const usage = toAccountUsage(AT, {}, { apiProvider: 'bedrock' });
-    expect(classifyLimitsUnavailable(usage)).toBe('non_first_party');
+    expect(classifyLimitsUnavailable(usage, undefined)).toBe('non_first_party');
   });
 
   it('プラン名が取れていれば「取れない」と決めない', () => {
     const usage = toAccountUsage(AT, TEAM_WITHOUT_WINDOWS.usage, TEAM_WITHOUT_WINDOWS.account);
-    expect(classifyLimitsUnavailable(usage)).toBeUndefined();
+    expect(classifyLimitsUnavailable(usage, undefined)).toBeUndefined();
     expect(hasAccountUsageDetail(usage)).toBe(true);
   });
 });
@@ -169,7 +172,9 @@ describe('枠が効かない理由を言い分ける（#681）', () => {
 
   it('firstParty で枠が効かないとき「サブスクが無い」と断定しない', () => {
     const usage = toAccountUsage(AT, FIRST_PARTY_NO_LIMITS.usage, FIRST_PARTY_NO_LIMITS.account);
-    expect(classifyLimitsUnavailable(usage)).toBe('undetermined');
+    expect(classifyLimitsUnavailable(usage, FIRST_PARTY_NO_LIMITS.account.tokenSource)).toBe(
+      'undetermined',
+    );
   });
 
   it('文言に「サブスクが無い」と読める言い方を残さない', () => {
@@ -193,7 +198,7 @@ describe('枠が効かない理由を言い分ける（#681）', () => {
     // **観測していないことを断定しない。** `accountInfo` の口が答えなかった回も
     // ここへ来る（`describeSilentChannels` の doc の (1) / (2)）。
     const usage = toAccountUsage(AT, { rate_limits_available: false }, {});
-    expect(classifyLimitsUnavailable(usage)).toBe('undetermined');
+    expect(classifyLimitsUnavailable(usage, undefined)).toBe('undetermined');
   });
 
   it('unavailable の状態に理由の欄が付く（判定は undecidable のまま）', async () => {
@@ -419,6 +424,134 @@ describe('toAccountApiKeySource（#681 (2)・単体）', () => {
   });
 });
 
+/**
+ * `toTokenSourcePresence`（#706 の本題・単体）。
+ *
+ * `tokenSource` には `apiKeySource` のような許可リストが作れない（SDK が
+ * 値の一覧を宣言していない）ので、値そのものではなく**3つの事実を3つの別の
+ * 値**で持つ。**`toAccountApiKeySource` と違い、この関数は `undefined` を
+ * 一度も返さない**——「試したが返らなかった」（`not_returned`）と「返ったが
+ * 空だった」（`empty`）を区別するのがこの関数の存在理由そのもので、両方を
+ * `undefined` に畳んだら `nonEmpty()` の欠陥（実測: `not.toContain` の対象に
+ * ならない、同じ表示への収束）を再現することになる。
+ */
+describe('toTokenSourcePresence（#706・単体）', () => {
+  it('文字列でない（欄そのものが無い場合を含む）は not_returned', () => {
+    for (const raw of [undefined, null, 42, {}, []]) {
+      expect(toTokenSourcePresence(raw)).toBe('not_returned');
+    }
+  });
+
+  it('空文字・空白のみは empty（not_returned とは別の値）', () => {
+    for (const raw of ['', '   ', '\t\n']) {
+      expect(toTokenSourcePresence(raw)).toBe('empty');
+    }
+    expect(toTokenSourcePresence('')).not.toBe(toTokenSourcePresence(undefined));
+  });
+
+  it('非空文字列は present（値そのものは返り値に出ない）', () => {
+    // 意味の無い短い文字列（前例: #704 の 'zz'）を使う。鍵に見える値を作らない。
+    const marker = 'zz';
+    const result = toTokenSourcePresence(marker);
+    expect(result).toBe('present');
+    expect(JSON.stringify(result)).not.toContain(marker);
+  });
+
+  it('3値は互いに別の値である（undefined を含めて4通りが全部区別できる）', () => {
+    const values = new Set([
+      toTokenSourcePresence(undefined),
+      toTokenSourcePresence(''),
+      toTokenSourcePresence('zz'),
+    ]);
+    expect(values.size).toBe(3);
+    expect(values).toEqual(new Set(['not_returned', 'empty', 'present']));
+  });
+});
+
+/**
+ * `AccountUsage.tokenSourcePresence`（#706 の本題）。
+ *
+ * `toAccountUsage` が組み立てる `AccountUsage` は `GET /usage` へそのまま載る
+ * 型である。**ここに生の `tokenSource` が1文字も残らないことが安全側の歯**
+ * （`toAccountApiKeySource` の「生の文字は1文字も残らない」歯と同じ形）。
+ */
+describe('AccountUsage.tokenSourcePresence（#706）', () => {
+  it('欄が無ければ not_returned（既定値で埋めない）', () => {
+    const usage = toAccountUsage(AT, {}, {});
+    expect(usage.tokenSourcePresence).toBe('not_returned');
+    expect(() => accountUsageSchema.parse(usage)).not.toThrow();
+  });
+
+  it('空文字なら empty', () => {
+    const usage = toAccountUsage(AT, {}, { tokenSource: '   ' });
+    expect(usage.tokenSourcePresence).toBe('empty');
+  });
+
+  it('非空文字列なら present。生の文字列は1文字も AccountUsage に残らない', () => {
+    // 意味の無い短い文字列（前例: #704 の 'zz'）を使う。
+    const marker = 'zz';
+    const usage = toAccountUsage(AT, {}, { tokenSource: marker });
+    expect(usage.tokenSourcePresence).toBe('present');
+    expect(JSON.stringify(usage)).not.toContain(marker);
+    // 生のキー名（tokenSource）自体ももう存在しない。
+    expect(usage).not.toHaveProperty('tokenSource');
+  });
+
+  it('classifyLimitsUnavailable は tokenSourcePresence を読まない（判定は別引数の生値で行う）', () => {
+    // `present` でも `empty` でも `not_returned` でも、判定は変わらない
+    // （apiProvider が firstParty 以外を名乗らず、plan も取れないので undetermined）。
+    const usageJson = { rate_limits_available: false, rate_limits: null, subscription_type: null };
+    const withPresent = toAccountUsage(AT, usageJson, {
+      apiProvider: 'firstParty',
+      tokenSource: 'zz',
+    });
+    const withEmpty = toAccountUsage(AT, usageJson, { apiProvider: 'firstParty', tokenSource: '' });
+    const withoutField = toAccountUsage(AT, usageJson, { apiProvider: 'firstParty' });
+
+    expect(withPresent.tokenSourcePresence).toBe('present');
+    expect(withEmpty.tokenSourcePresence).toBe('empty');
+    expect(withoutField.tokenSourcePresence).toBe('not_returned');
+
+    // 生値（'zz' / '' / undefined）を渡した判定はどれも同じ結論（undetermined）。
+    expect(classifyLimitsUnavailable(withPresent, 'zz')).toBe('undetermined');
+    expect(classifyLimitsUnavailable(withEmpty, '')).toBe('undetermined');
+    expect(classifyLimitsUnavailable(withoutField, undefined)).toBe('undetermined');
+  });
+});
+
+/**
+ * 版ずれ（この daemon がまだ `tokenSourcePresence` を送らない）。
+ *
+ * `.optional()` にしてあるのは、旧い daemon が返す `GET /usage` の応答にこの
+ * 欄そのものが無いことがあるからである（`accountUsageSchema` の doc）。
+ * **「欄が無い」（版ずれ）と `toTokenSourcePresence` が返す `'not_returned'`
+ * （試して駄目だった）は別の状態**——前者は zod のスキーマレベルで、後者は
+ * `toAccountUsage` が常に書き込む3値の1つで、`toAccountUsage` を通す限り
+ * この欄が省略されることは無い（`undefined` を返さない、という
+ * {@link toTokenSourcePresence} の契約そのもの）。
+ */
+describe('accountUsageSchema: tokenSourcePresence の版ずれ（欄が無い）', () => {
+  it('tokenSourcePresence を持たない応答も引き続き通る（旧い daemon）', () => {
+    const legacy = {
+      at: AT,
+      limitsAvailable: false,
+      windows: [],
+      // tokenSourcePresence は書かない——旧い daemon を模す。
+    };
+    expect(() => accountUsageSchema.parse(legacy)).not.toThrow();
+    expect(accountUsageSchema.parse(legacy).tokenSourcePresence).toBeUndefined();
+  });
+
+  it('toAccountUsage を通す限り、tokenSourcePresence は必ず3値のどれかになる（省略されない）', () => {
+    // 版ずれで欄が消えるのは「送っていない旧い daemon」の場合だけで、
+    // 同じプロセスの中で toAccountUsage を通す限り必ず値が付く
+    // （accountUsageStateSchema の cause / apiKeySource の doc と同じ理由）。
+    const usage = toAccountUsage(AT, {}, {});
+    expect(usage.tokenSourcePresence).not.toBeUndefined();
+    expect(['not_returned', 'present', 'empty']).toContain(usage.tokenSourcePresence);
+  });
+});
+
 describe('AccountUsage.apiKeySource（#681 (2)）', () => {
   it('apiKeySource: none が AccountUsage に載り、GET /usage の形（accountUsageSchema）を通る', () => {
     const usage = toAccountUsage(AT, {}, { apiKeySource: 'none' });
@@ -463,11 +596,13 @@ describe('AccountUsage.apiKeySource（#681 (2)）', () => {
       apiKeySource: 'sk-ant-xxxxxxxx',
     });
 
-    const causeWithoutField = classifyLimitsUnavailable(withoutField);
+    const causeWithoutField = classifyLimitsUnavailable(withoutField, accountBase.tokenSource);
     expect(causeWithoutField).toBe('undetermined');
-    expect(classifyLimitsUnavailable(withNone)).toBe(causeWithoutField);
-    expect(classifyLimitsUnavailable(withOauth)).toBe(causeWithoutField);
-    expect(classifyLimitsUnavailable(withUnrecognized)).toBe(causeWithoutField);
+    expect(classifyLimitsUnavailable(withNone, accountBase.tokenSource)).toBe(causeWithoutField);
+    expect(classifyLimitsUnavailable(withOauth, accountBase.tokenSource)).toBe(causeWithoutField);
+    expect(classifyLimitsUnavailable(withUnrecognized, accountBase.tokenSource)).toBe(
+      causeWithoutField,
+    );
   });
 });
 

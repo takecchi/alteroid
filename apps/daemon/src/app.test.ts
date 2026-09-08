@@ -14,6 +14,8 @@ import type {
   ScheduleStatus,
   Scheduler,
   Stores,
+  UsageProbeHandle,
+  UsageProbeQuery,
 } from '@alteroid/core';
 import {
   captureStderr,
@@ -39,6 +41,7 @@ import { encodeCursor } from './cursor.js';
 import type { AuthPlan } from './auth.js';
 import { createJournalBus, type JournalBus } from './journal-bus.js';
 import { scheduleStatusSchema } from './openapi.js';
+import { startUsagePolling } from './usage-poller.js';
 
 /** クローンの代わり。HTTP 層だけを検証する。 */
 function fakeClone() {
@@ -5982,5 +5985,107 @@ describe('runner の版（GET /runners revision）', () => {
     // 依存するので、期待するのは「known か unknown のどちらかであり、
     // プレースホルダではない」ことだけである。
     expect(['known', 'unknown']).toContain(body.daemonRevision.status);
+  });
+});
+
+/**
+ * ⭐⭐ GET /usage の応答本文そのものに対する通しの否定の歯（#706 の本題）。
+ *
+ * **欄単位ではなく、組み立て終わった応答全体を文字列にして撃つ。** `tokenSource`
+ * 以外の経路から生値が漏れても捕まるようにするためで、`packages/core` の単体
+ * テスト（`usage-snapshot.test.ts`）はここまで届かない——`AccountUsage` が
+ * 正しい形をしていることは確かめられても、`app.ts` がそれをそのまま
+ * `c.json()` に渡すところまでは通っていない。
+ *
+ * **実物の経路を通す。** `deps.accountUsage` に固定のオブジェクトを渡すのでは
+ * なく、`usage-poller.ts` の {@link startUsagePolling}（本番と同じ実装）に
+ * 偽の SDK probe（`queryFn`）を渡し、その `poller.state()` を `createApp` へ
+ * 渡す。**目印（マーカー）は SDK の `accountInfo().tokenSource` という、生の
+ * 値が入る最初の場所に置く**——`fetchAccountUsage` → `toAccountUsage` →
+ * `toTokenSourcePresence` → `app.ts` の `c.json()` まで、実装を1つも
+ * モックせずに通す。
+ */
+describe('GET /usage: 応答本文に tokenSource の生値が1文字も出ない（#706）', () => {
+  /** control channel だけを持つ偽の probe（`usage-poller.test.ts` と同じ形）。 */
+  function probe(answers: { account?: unknown; usage?: unknown }): UsageProbeQuery {
+    return () => {
+      const handle: UsageProbeHandle = {
+        async *[Symbol.asyncIterator]() {
+          /* probe は control channel しか読まない */
+        },
+        accountInfo: async () => answers.account,
+        usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => answers.usage,
+      };
+      return handle;
+    };
+  }
+
+  it('present（値が届いている）でも、応答本文のどこにも目印が現れない', async () => {
+    // 意味の無い短い文字列（前例: #704 の 'zz'）を使う。鍵に見える値は作らない。
+    const marker = 'zz';
+    const poller = startUsagePolling({
+      queryFn: probe({
+        account: { subscriptionType: 'Claude Max', apiProvider: 'firstParty', tokenSource: marker },
+        usage: {
+          rate_limits_available: true,
+          rate_limits: { five_hour: { utilization: 12, resets_at: '2026-08-14T15:00:00.000Z' } },
+        },
+      }),
+      cwd: '/work',
+    });
+    // 起動直後の1回ぶんの観測が終わるのを待つ（`startUsagePolling` の doc）。
+    await poller.refresh();
+
+    const withUsage = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      accountUsage: () => poller.state(),
+    });
+
+    const response = await withUsage.request('/usage');
+    const text = await response.text();
+
+    expect(response.status).toBe(200);
+    // 実際に 'ok' 状態（present）まで届いていることを先に確かめる——
+    // そうでなければ「目印が無い」が「そもそも tokenSource を読んでいない」の
+    // 誤検出になる（`mutation-testing` skill 「0件を先に確かめる」と対の校正）。
+    expect(text).toContain('"tokenSourcePresence":"present"');
+    expect(text).not.toContain(marker);
+
+    poller.stop();
+  });
+
+  it('empty / not_returned でも、応答本文のどこにも目印が現れない', async () => {
+    const marker = 'zz';
+    const poller = startUsagePolling({
+      // account 自体は marker を含まないが、usage 側に紛れ込んでも漏れないことも
+      // 併せて確かめる（tokenSource 以外の経路からの漏れも拾う、という通しの歯の趣旨）。
+      queryFn: probe({
+        account: { subscriptionType: 'Claude Max', apiProvider: 'firstParty', tokenSource: '   ' },
+        usage: {
+          rate_limits_available: true,
+          rate_limits: { five_hour: { utilization: 12, resets_at: '2026-08-14T15:00:00.000Z' } },
+        },
+      }),
+      cwd: '/work',
+    });
+    await poller.refresh();
+
+    const withUsage = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      accountUsage: () => poller.state(),
+    });
+
+    const text = await (await withUsage.request('/usage')).text();
+
+    expect(text).toContain('"tokenSourcePresence":"empty"');
+    expect(text).not.toContain(marker);
+
+    poller.stop();
   });
 });
