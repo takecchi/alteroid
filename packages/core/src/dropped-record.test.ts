@@ -78,6 +78,13 @@ describe('落とした記録の跡', () => {
       { type: 'memory_update', slug: 'values', cause: 'clone', summary: secret },
       { type: 'daily_report', date: '2026-08-16', body: secret },
       { type: 'external_event', source: 'github', summary: secret },
+      {
+        type: 'token_rotation',
+        event: 'not_rotated',
+        label: secret,
+        noticeText: secret,
+        text: secret,
+      },
     ];
 
     for (const entry of entries) {
@@ -233,6 +240,73 @@ describe('落とした記録の跡', () => {
       text: 'あ',
     });
     expect(withoutAgentType).not.toContain('agentType');
+  });
+
+  /**
+   * `token_rotation`（Issue #393）も `subagent_stall` と同じ形——列挙値・id・
+   * 数値は `tag()`/そのままで載せ、自由文（`label`/`noticeText`/`text`）だけを
+   * `size()` で長さに潰す。`recoveredSource` は「誰が観測したか」を決める
+   * のがこちら側の回し手であって外部入力ではないので、他の列挙値と同じ判定で
+   * `tag()` に載る（#681 (1) の doc）。11欄すべてが載る回を、跡が跡のままに
+   * 保たれることごと固定する。
+   */
+  it('token_rotation は tag 欄と size 欄が混在し、全欄が載ると跡もそれを反映する', () => {
+    const labelValue = 'ラベルてすと';
+    const noticeValue = '通知てすとぶんしょう';
+    const shape = journalEntryShape({
+      type: 'token_rotation',
+      event: 'recovered',
+      signal: 'reached',
+      freshness: 'current',
+      tokenId: 'ap-1',
+      fromTokenId: 'mgr-1',
+      generation: 3,
+      earliestAt: '2026-08-20T00:00:00.000Z',
+      recoveredSource: 'account_probe',
+      label: labelValue,
+      noticeText: noticeValue,
+      text: secret,
+    });
+
+    expect(shape).toBe(
+      'token_rotation event=recovered signal=reached freshness=current tokenId=ap-1 ' +
+        'fromTokenId=mgr-1 generation=3 earliestAt=2026-08-20T00:00:00.000Z ' +
+        `recoveredSource=account_probe label.chars=${labelValue.length} ` +
+        `noticeText.chars=${noticeValue.length} chars=${secret.length}`,
+    );
+    // 自由文欄に入れた値そのものは跡に現れない
+    expect(shape).not.toContain(labelValue);
+    expect(shape).not.toContain(noticeValue);
+    expect(shape).not.toContain(secret);
+  });
+
+  /**
+   * optional 欄（`signal`/`freshness`/`tokenId`/`fromTokenId`/`generation`/
+   * `earliestAt`/`recoveredSource`/`label`/`noticeText`）が1つも無い回は、
+   * 必須の `event`/`text` だけが載る——「取れない軸に0の行を作る」を跡でも
+   * 守る（`subagent_stall` の `agentType` 無し回と同じ判定基準）。
+   */
+  it('token_rotation は optional 欄が無ければ event と text だけを載せる', () => {
+    const shape = journalEntryShape({
+      type: 'token_rotation',
+      event: 'not_rotated',
+      text: 'あ',
+    });
+
+    expect(shape).toBe('token_rotation event=not_rotated chars=1');
+    for (const field of [
+      'signal',
+      'freshness',
+      'tokenId',
+      'fromTokenId',
+      'generation',
+      'earliestAt',
+      'recoveredSource',
+      'label',
+      'noticeText',
+    ]) {
+      expect(shape, field).not.toContain(field);
+    }
   });
 
   it('理由は1行に切る（ドライバが本文を添えて返してくることがある）', async () => {
