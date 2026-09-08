@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { excerptLine } from './excerpt.js';
 import { type RunnerRevisionReport } from './revision.js';
 import { jobStatusSchema } from './schema.js';
+import { systemErrorFactsSchema } from './system-error.js';
 import { rateLimitFactsSchema, usageLimitNoticeSchema } from './usage-limits.js';
 import { usageTotalsSchema } from './usage.js';
 
@@ -1183,6 +1184,36 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * へ落ちる経路には立たない**（`runner-fence.test.ts` が固定する）。
      */
     selfFenced: z.literal(true).optional(),
+    /**
+     * **なぜ落ちたかの、機械が判定できる分類**（Node の `code` / `errno` /
+     * `syscall`）。**`reason` の言い換えではなく、`reason` と並べて運ぶ別の欄で
+     * ある。**
+     *
+     * **語そのものは `reason` にも残る。** Node の `Error` は `message` に
+     * `syscall` と `code` を織り込むので、器の資源で起動に失敗した回に実際に
+     * 届いた一文は `マネージャーのセッションが落ちた: Error: Failed to spawn
+     * Claude Code process: spawn …/claude EAGAIN` の形で `EAGAIN` を含んでいた
+     * （クローンの受信箱での実測、2026-09-08）。**失われるのは語ではなく、判定
+     * できる形のほうである** —— 受け取る側に1本の文字列しか無いと、「枠（429）で
+     * 落ちた」と「器の資源で落ちた」を分けるには文字列を解釈するしかなくなる。
+     * それはこのファイルが `permission_denied` の `reason` / `reasonType` に
+     * ついて既に禁じている形である（`reasonType` の doc）。
+     *
+     * **`selfFenced` と同じ作法である** —— 文言では判定させず、構造化された印を
+     * 並べて置く。**`.optional()` にしてあるのも同じ理由で**、この欄を送らない
+     * 古い runner の `closed` を1つも壊さない。
+     *
+     * **無いことを値で埋めない。** `code` を持たない例外（素の `Error`、投げられた
+     * 文字列）ではこの欄ごと付かない —— `''` や `'unknown'` を入れると「取れ
+     * なかった」と「取れて空だった」が同じ形になる（`AGENTS.md`「取れない軸に
+     * 0 の行を作る」）。**読む側は「欄が無い＝分類が取れなかった」と読む。**
+     *
+     * 取り出しは `system-error.ts` の `systemErrorFactsOf` の1箇所だけで、立つ
+     * のは `RunnerSession#read()` の catch（セッションが落ちた／起動できなかった）
+     * を通った回である。**`status` は `failed` とは限らない** —— 同じ catch から
+     * `lost`（resume 不能）へ倒れる回にも、同じ例外の分類として付く。
+     */
+    systemError: systemErrorFactsSchema.optional(),
   }),
   /**
    * 前のセッションを開き直せなかった。

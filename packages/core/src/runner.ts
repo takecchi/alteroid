@@ -62,6 +62,7 @@ import type { JobStatus } from './schema.js';
 // **印そのものを読むのは provider の写しである**（`claude-provider.ts` の
 // `foldClaudeMessage`）。ここが受け取るのは、既に中立イベントへ載った印である。
 import { assistantFailureOf, type SdkFailure } from './sdk-failure.js';
+import { systemErrorFactsOf, type SystemErrorFacts } from './system-error.js';
 import { classifyUsageNotice } from './usage-limits.js';
 import { readSessionUsage } from './usage.js';
 
@@ -1770,6 +1771,16 @@ class RunnerSession {
       }
     } catch (error) {
       if (generation !== this.#generation) return;
+      // **`String(error)` の手前で分類を取る（#713）。** 語そのものは `reason` にも
+      // 残る（Node の `Error` は `message` に `syscall` と `code` を織り込む）が、
+      // **文字列になった時点で「機械が判定できる形」ではなくなる。** 受け取る側が
+      // 枠（429）と器の資源（`EAGAIN`）を分けるのに文字列を解釈し始めると、
+      // `runner-protocol.ts` が `reasonType` の doc で禁じている形になる。だから
+      // **発生点で分類を作り、`reason` とは別の欄で並べて運ぶ**（`system-error.ts`）。
+      //
+      // **`reason` は1文字も変えない。** ここを変えると、この一文を読んでいる
+      // 既存の受け手（受信箱・日誌・`closed_failed` の合成通知）が一斉に変わる。
+      const systemError = systemErrorFactsOf(error);
       const reason = String(error);
       if (!this.#stopped) {
         switch (this.#recoverFromFailedResume(reason)) {
@@ -1778,13 +1789,18 @@ class RunnerSession {
           // **`failed` にしない。** 「セッションが落ちた」は、話しかければ直るかも
           // しれない失敗に見える。戻れなかったことが確定しているなら、そう言う。
           case 'unresumable':
-            await this.#finish('lost', reason);
+            // **`lost` にも同じ分類を付ける。** 例外は同じ1つで、`status` が違うのは
+            // 「戻れるか」の軸である —— 分類の軸（何で落ちたか）とは別物なので、
+            // 片方にだけ付けると同じ例外が経路によって見えたり見えなかったりする。
+            await this.#finish('lost', reason, { systemError });
             return;
           default:
             break;
         }
       }
-      await this.#finish('failed', `マネージャーのセッションが落ちた: ${reason}`);
+      await this.#finish('failed', `マネージャーのセッションが落ちた: ${reason}`, {
+        systemError,
+      });
     }
   }
 
@@ -2685,7 +2701,7 @@ class RunnerSession {
   async #finish(
     status: JobStatus,
     reason: string,
-    options: { selfFenced?: true } = {},
+    options: { selfFenced?: true; systemError?: SystemErrorFacts } = {},
   ): Promise<void> {
     this.#stopped = true;
     // **量をここで1行にまとめる。終わり口はここだけではない（Issue #393）。**
@@ -2729,6 +2745,7 @@ class RunnerSession {
       status,
       reason,
       ...(options.selfFenced === undefined ? {} : { selfFenced: options.selfFenced }),
+      ...(options.systemError === undefined ? {} : { systemError: options.systemError }),
     });
     this.#onClosed();
   }
