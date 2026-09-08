@@ -4,6 +4,8 @@ import {
   MEMORY_LISTING_BUDGET,
   MEMORY_PREMISE_RANKING_BUDGET,
   MEMORY_PROMPT_DESCRIPTION_BUDGET,
+  MEMORY_TIDY_TARGETS_BUDGET,
+  describeMemoryTidyTargets,
   MEMORY_PROMPT_OUTLINE_BUDGET,
   MEMORY_TOC_ENTRY_LIMIT,
   applyMemoryFrontmatterPatch,
@@ -3040,5 +3042,94 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     expect(reply).toContain(`${actual.length.toLocaleString('en-US')} 文字`);
     expect(reply).toContain('doc（premise・カードの変わった範囲だけ）');
     expect(actual.length).toBeLessThan(renderMemoryDocuments([after]).length / 5);
+  });
+});
+
+/**
+ * ⭐ `describeMemoryTidyTargets` — 毎ターンの焼き込みに収まっていない文書を名指しする。
+ *
+ * ## この関数が在る理由（実測 2026-09-08）
+ *
+ * `renderPremiseCard` は予算に当たったとき ⚠ を出すが、**それはその文書の
+ * カードの中にしか無い。** tick の digest にも、書き込みの応答にも、
+ * `self_status` にも、`memory_list` にも、**予算に当たった文書を名指しする
+ * 情報は1つも無かった**（全走査して確かめた）。集計も無かった。
+ *
+ * ⟹ 定期の棚卸し（`schedule.ts` の `memoryTidyEntry`）へ「どれを割るか」を
+ * 渡す口が必要になった。
+ */
+describe('describeMemoryTidyTargets — 焼き込みに収まっていない文書を名指しする', () => {
+  /** 節の目次が予算を超える premise を作る（見出しを長くして数で押す）。 */
+  function fatOutline(slug: string): MemoryPart {
+    const body = Array.from(
+      { length: 300 },
+      (_, i) => `## これは十分に長い見出しであり予算を食い尽くす ${i}\n本文`,
+    ).join('\n');
+    return { slug, content: `---\ntype: premise\ndescription: 要旨\n---\n${body}` };
+  }
+
+  it('⭐ 目次が予算を超えた文書を、名前と数で名指しする', () => {
+    const reply = describeMemoryTidyTargets([fatOutline('alteroid-work')]);
+
+    expect(reply).toContain('棚卸しの的');
+    expect(reply).toContain('- alteroid-work:');
+    expect(reply).toContain('節の目次が');
+    // 予算そのものを書き写さず、定数から出す（腐らない）。
+    expect(reply).toContain(`予算 ${MEMORY_PROMPT_OUTLINE_BUDGET.toLocaleString('en-US')} 文字`);
+    // 何をすればよいかを言う（名指しだけで終わらせない）。
+    expect(reply).toContain('memory_section_move');
+  });
+
+  it('⭐ 要旨が予算を超えた文書も名指しする（別の理由として並ぶ）', () => {
+    const long = 'あ'.repeat(MEMORY_PROMPT_DESCRIPTION_BUDGET + 100);
+    const reply = describeMemoryTidyTargets([
+      { slug: 'about-me', content: `---\ntype: premise\ndescription: ${long}\n---\n## 節\n本文` },
+    ]);
+
+    expect(reply).toContain('- about-me:');
+    expect(reply).toContain('要旨が');
+    expect(reply).not.toContain('節の目次が');
+  });
+
+  it('2つとも超えていれば、1行に2つの理由が並ぶ', () => {
+    const long = 'あ'.repeat(MEMORY_PROMPT_DESCRIPTION_BUDGET + 100);
+    const fat = fatOutline('both');
+    const both: MemoryPart = {
+      slug: 'both',
+      content: fat.content.replace('description: 要旨', `description: ${long}`),
+    };
+
+    const reply = describeMemoryTidyTargets([both]);
+    const line = reply.split('\n').find((row) => row.startsWith('- both:')) ?? '';
+    expect(line).toContain('節の目次が');
+    expect(line).toContain('要旨が');
+  });
+
+  /**
+   * ⭐ **「的が無い」を「記憶が小さい」と読ませない。** 予算は1文書ごとに
+   * 掛かるので、全部が予算の下でも合計は大きくなりうる。
+   */
+  it('⭐ 的が1つも無いときは、それが「小さい」ではないと断る', () => {
+    const reply = describeMemoryTidyTargets([premise('small', '## 節\n本文')]);
+
+    expect(reply).toContain('収まっていない文書は無い');
+    expect(reply).toContain('「記憶が小さい」ではない');
+  });
+
+  it('fact は的にしない（もともと目次の1行しか焼かれない）', () => {
+    const fat = fatOutline('appendix');
+    const asFact: MemoryPart = {
+      slug: 'appendix',
+      content: fat.content.replace('type: premise', 'type: fact'),
+    };
+    expect(describeMemoryTidyTargets([asFact])).toContain('収まっていない文書は無い');
+  });
+
+  it('一覧は文字数の予算で切り、切ったら件数を言う', () => {
+    const many = Array.from({ length: 60 }, (_, i) => fatOutline(`doc-${i}`));
+    const reply = describeMemoryTidyTargets(many);
+
+    expect(reply).toContain('件は省略');
+    expect(reply.length).toBeLessThan(MEMORY_TIDY_TARGETS_BUDGET * 2);
   });
 });

@@ -2943,8 +2943,24 @@ describe('クローンの道具', () => {
       });
     });
 
-    describe('human guard — guardFullReplace をそのまま通す（出どころにだけ掛ける）', () => {
-      it('⭐ 蒸留の走行からは human 文書の節を移せない。from も to も1文字も変わらない', async () => {
+    /**
+     * **⚠️ この describe は 2026-09-08 に反転した。** かつては
+     * 「蒸留の走行からは human 文書の節を移せない」を固定していた
+     * （`guardFullReplace` を `fromSlug` に対してそのまま通す形）。
+     * **人間が実測を見たうえで、節の移動だけを歯から外した** ——
+     * 理由は `tools.ts` の `if (action === '節の移動') return null;` の
+     * コメントに在る（移動は先に足して後で切るので、どの瞬間にも本文が
+     * どこかに在る＝失われない）。
+     *
+     * **元のアサーションは1つも消していない。** 「断る」を「通る」へ反転させ、
+     * **そのうえで「何も失われていない」を測る側を足した** ——
+     * 出どころから抜けた節が、必ず移し先に在ることを本文の目印で確かめる。
+     * ⟹ **保証は弱くなっていない。** 弱くなったのは守りの範囲であり、それは
+     * 人間が選んだ。守りが残っている側（全文置換・削除・frontmatter の更新）は
+     * 下の3本がそのまま測っている。
+     */
+    describe('human guard — 節の移動だけは通す（失われない操作だから。2026-09-08 に反転）', () => {
+      it('⭐ 蒸留の走行から human 文書の節を移せる。抜けた節は必ず移し先に在る（失われない）', async () => {
         const h = harness();
         await markHuman(h, 'about-me', source);
         const id = await outlineId(h, 'about-me', '## 事例');
@@ -2954,13 +2970,21 @@ describe('クローンの道具', () => {
           fromSlug: 'about-me',
           sections: [id],
           toSlug: 'about-me-appendix',
-          summary: '移したつもり',
+          summary: '移した',
         });
 
-        expect(reply).toContain('断った');
-        // 断り文が出たことだけを測らない（断ってから書いてしまう実装が生存する）。
-        expect((await h.stores.persona.read('about-me'))?.content).toBe(source);
-        expect(await h.stores.persona.read('about-me-appendix')).toBeNull();
+        // かつてここは `toContain('断った')` だった。
+        expect(reply).not.toContain('断った');
+        expect(reply).toContain('移した');
+        // **失われていないことを直接測る。** 出どころからは抜け、移し先に在る。
+        const from = (await h.stores.persona.read('about-me'))?.content ?? '';
+        const to = (await h.stores.persona.read('about-me-appendix'))?.content ?? '';
+        expect(from).not.toBe(source);
+        expect(from).not.toContain('## 事例');
+        expect(to).toContain('## 事例');
+        // 移した節の本文そのものが移し先に在る（見出しだけが動いた形ではない）。
+        expect(to).toContain(SECRET);
+        expect(from).not.toContain(SECRET);
       });
 
       /**
@@ -2968,7 +2992,7 @@ describe('クローンの道具', () => {
        * 対して1回だけ呼ばれる（節ごとではない）ので、複数節でも人間の
        * 書き込みの履歴がある文書からは1節も動かせないはずである。
        */
-      it('⭐ 蒸留の走行からは、人間が書いた文書の複数節も移せない。from も to も1文字も変わらない', async () => {
+      it('⭐ 蒸留の走行から、人間が書いた文書の複数節もまとめて移せる（どれも失われない）', async () => {
         const h = harness();
         await markHuman(h, 'about-me', source);
         const eventId = await outlineId(h, 'about-me', '## 事例');
@@ -2979,33 +3003,48 @@ describe('クローンの道具', () => {
           fromSlug: 'about-me',
           sections: [eventId, nextId],
           toSlug: 'about-me-appendix',
-          summary: '移したつもり',
+          summary: '移した',
         });
 
-        expect(reply).toContain('断った');
-        expect((await h.stores.persona.read('about-me'))?.content).toBe(source);
-        expect(await h.stores.persona.read('about-me-appendix')).toBeNull();
+        expect(reply).not.toContain('断った');
+        const from = (await h.stores.persona.read('about-me'))?.content ?? '';
+        const to = (await h.stores.persona.read('about-me-appendix'))?.content ?? '';
+        // 2節とも移った（片方だけ動く形が生存しない）。
+        expect(from).not.toContain('## 事例');
+        expect(from).not.toContain('## 次');
+        expect(to).toContain('## 事例');
+        expect(to).toContain('## 次');
       });
 
-      it('断りの応答の4つ目は「追記なら移し先へ写せるが、出どころからは消せない」と言う', async () => {
+      /**
+       * **⚠️ かつてここは「節の移動の断り文が4つのことを言う」を測っていた。**
+       * 節の移動は断らなくなったので、その断り文はもう出ない。
+       *
+       * **測っていた4項目（なぜ断ったか／どうすれば通るか／何も失われていない／
+       * 代わり）は、まだ断る3口の側で生きている** —— だから**同じ4項目を
+       * `memory_write`（全文置換）の断り文で測る形へ移した。** アサーションは
+       * 1つも減っていない（「2箇所に残る」は節の移動の断り文だけの文言なので、
+       * 全文置換の断り文が言う代わり＝`memory_append` の側で測る）。
+       */
+      it('断る口（全文置換）の応答は4つのことを言う — なぜ／どうすれば通るか／失われていない／代わり', async () => {
         const h = harness();
         await markHuman(h, 'about-me', source);
-        const id = await outlineId(h, 'about-me', '## 事例');
         h.setMemoryCause('distill');
 
-        const reply = await h.call('memory_section_move', {
-          fromSlug: 'about-me',
-          sections: [id],
-          toSlug: 'about-me-appendix',
-          summary: '移したつもり',
+        const reply = await h.call('memory_write', {
+          slug: 'about-me',
+          content: '# 私について\n書き換えたつもり',
+          summary: '書き換えたつもり',
         });
 
         // (1) なぜ断ったか (2) どうすれば通るか (3) 何も失われていない (4) 代わり
+        expect(reply).toContain('断った');
         expect(reply).toContain('人間の書き込みの履歴が在る');
         expect(reply).toContain('ask_human');
         expect(reply).toMatch(/変わっていない|残っている/);
         expect(reply).toContain('memory_append');
-        expect(reply).toContain('2箇所に残る');
+        // 断ってから書いてしまう実装が生存しないこと。
+        expect((await h.stores.persona.read('about-me'))?.content).toBe(source);
       });
 
       it('対照 — clone-only の文書なら distill からも通る（検出器が非0を出せること）', async () => {

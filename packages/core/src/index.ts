@@ -225,6 +225,7 @@ export {
   deriveMemoryCreatedAtFromJournal,
   deriveMemoryFrontmatter,
   describeMemoryProtectionStatus,
+  describeMemoryTidyTargets,
   memoryProtectionAllowsFullReplace,
   memoryProtectionRebuildDecision,
   nextDescribedAt,
@@ -414,6 +415,7 @@ export {
 } from './sse-heartbeat.js';
 export {
   DAILY_REPORT_KIND,
+  MEMORY_TIDY_KIND,
   RESERVED_SCHEDULE_KINDS,
   SELF_INITIATIVE_KIND,
   createScheduler,
@@ -422,6 +424,7 @@ export {
   describeScheduleSpec,
   localDate,
   localDayRange,
+  memoryTidyEntry,
   missingDailyReportDates,
   parseTimeOfDay,
   scheduledRequestEntry,

@@ -48,7 +48,12 @@ import type { CloneHost } from './host.js';
 import { createRunnerRegistry, type RunnerClient } from './runner-protocol.js';
 import { Inbox } from './inbox.js';
 import { createManagerPool, type ManagerPool, type ManagerSummary } from './manager.js';
-import { describeMemorySessionDelta, measureMemoryFloor, renderMemoryDocuments } from './memory.js';
+import {
+  describeMemorySessionDelta,
+  describeMemoryTidyTargets,
+  measureMemoryFloor,
+  renderMemoryDocuments,
+} from './memory.js';
 import { placedModelTier, resolveModelTier } from './model-tier.js';
 import {
   placedPermissionMode,
@@ -3579,8 +3584,25 @@ class Clone implements CloneHost {
           });
           return;
         }
+        // **定期の棚卸しの刻みにだけ、いま測った的の一覧を添える**
+        // （`prompt.ts` の `DistillPromptOptions.tidyTargets`）。会話終了・
+        // shutdown の蒸留は「その会話を記憶へ移す」のが本題なので添えない。
+        //
+        // **測れなかったら添えない。ターンは止めない。** 記憶が読めない回に
+        // 棚卸しそのものを落とすと、いちばん畳みたい状態（ストアが不調で
+        // 溜まっている）で仕事が消える。`#memoryFloorDigestLine` の
+        // 「測れなかった」と同じ倒し方である。
+        let tidyTargets: string | undefined;
+        if (event.reason === 'scheduled') {
+          try {
+            tidyTargets = describeMemoryTidyTargets(await this.#stores.persona.documents());
+          } catch (error) {
+            tidyTargets = `棚卸しの的: 測れなかった（理由: ${String(error)}）。memory_list から自分で探すこと。`;
+          }
+        }
         const distillPrompt = buildDistillPrompt(
           event.reason === 'shutdown' ? 'conversation_end' : event.reason,
+          tidyTargets === undefined ? {} : { tidyTargets },
         );
         // **このターンへ何が入ったかを残す**（#243）。本文は定型文なので長さだけ
         // を書く（何を載せるかの判断は `turnInputEntry` に1本化してある）。

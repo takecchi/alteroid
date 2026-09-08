@@ -11928,3 +11928,104 @@ describe('クローン — 蒸留が間に合わなかった区間の検出', ()
     expect(describeDistillGap(gap)).not.toContain('区間の始まりが蒸留の時刻と同じに見えるのは');
   });
 });
+
+/**
+ * ⭐ 定期の棚卸し（`reason: 'scheduled'` の蒸留。人間の指示 2026-09-08）。
+ *
+ * **測るのは3つで、いちばん重いのは (3) である。**
+ *
+ * 1. 的の一覧が実際にターンの入力へ載ること
+ * 2. 会話終了の蒸留には載らないこと（本題を薄めない）
+ * 3. **このターンが `kind: 'distill'` として走ること**
+ *
+ * ## (3) をどう測るか — 直接は測れないので、同じ `kind` が決める別の跡で測る
+ *
+ * 守りたい性質は「`ToolContext.memoryCause` が `'distill'` になること」である
+ * （`'clone'` になると `guardFullReplace` が1行目で全部素通りし、人間が居ない
+ * 場で人間の記憶を無条件に壊せる）。**しかしこの足場の偽 SDK は道具を1つも
+ * 呼ばない**ので、`memoryCause` の値を実挙動から取り出せない。
+ *
+ * ⟹ **同じ `#turn.kind` が決めるもう1つの跡で測る。** 蒸留のターンには
+ * 未了の台帳の断り（`#commitmentNotice`）と「いまの全体」（`#situationNotice`）が
+ * 載らない。**両方とも `kind === 'distill'` かどうかだけで分岐する**ので、
+ * これが載っていなければそのターンは `distill` である。
+ *
+ * **空振りしないことを同じ歯の中で確かめる** —— 直前の人間のターンには
+ * 両方が載っていることを見る（載らない実装なら `not.toContain` は
+ * どこでも真になり、何も測らなくなる）。
+ */
+describe('クローン — 定期の棚卸し（scheduled な蒸留）', () => {
+  /** 節の目次が予算を超える premise（＝的になる文書）。 */
+  const FAT = `---\ntype: premise\ndescription: 要旨\n---\n${Array.from(
+    { length: 300 },
+    (_, i) => `## これは十分に長い見出しであり予算を食い尽くす ${i}\n本文`,
+  ).join('\n')}`;
+
+  const COMMITMENT_NOTICE = '[system] 引き受けたまま終わっていない仕事は';
+  const SITUATION_NOTICE = '[system] いまの全体';
+
+  function tidyEvent(): InboxEvent {
+    return { type: 'distill', id: 'evt-tidy', at: new Date().toISOString(), reason: 'scheduled' };
+  }
+
+  it('⭐ 棚卸しの刻みでは、いま測った的の一覧がターンの入力に載る', async () => {
+    const stores = createMemoryStores();
+    await stores.persona.write('alteroid-work', FAT);
+    const s = setup(undefined, stores);
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    s.clone.post(tidyEvent());
+    await waitFor(() => ((s.calls[0] as FakeCall).inputs.length ?? 0) >= 2, '棚卸しのターン');
+
+    const input = (s.calls[0] as FakeCall).inputs[1] ?? '';
+    expect(input).toContain('定期の棚卸しの刻みが来た');
+    expect(input).toContain('棚卸しの的');
+    expect(input).toContain('- alteroid-work:');
+    // 何をすればよいかまで載る（名指しだけで終わらせない）。
+    expect(input).toContain('memory_section_move');
+
+    await s.clone.stop();
+  });
+
+  it('会話終了の蒸留には的の一覧を載せない（本題を薄めない）', async () => {
+    const stores = createMemoryStores();
+    await stores.persona.write('alteroid-work', FAT);
+    const s = setup(undefined, stores);
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    await s.clone.endConversation('conv-1');
+
+    const distill = (s.calls[0] as FakeCall).inputs[1] ?? '';
+    expect(distill).toContain('記憶へ移すべきものがあるか確認せよ');
+    expect(distill).not.toContain('棚卸しの的');
+    expect(distill).not.toContain('定期の棚卸しの刻みが来た');
+
+    await s.clone.stop();
+  });
+
+  it('⭐⭐ 棚卸しのターンは distill として走る（記憶の守りが効く側）', async () => {
+    const stores = createMemoryStores();
+    await stores.persona.write('alteroid-work', FAT);
+    const s = setup(undefined, stores);
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    s.clone.post(tidyEvent());
+    await waitFor(() => ((s.calls[0] as FakeCall).inputs.length ?? 0) >= 2, '棚卸しのターン');
+
+    const human = (s.calls[0] as FakeCall).inputs[0] ?? '';
+    const tidy = (s.calls[0] as FakeCall).inputs[1] ?? '';
+
+    // 空振り防止: 通常のターンには両方載っている。
+    expect(human).toContain(COMMITMENT_NOTICE);
+    expect(human).toContain(SITUATION_NOTICE);
+    // 本体: 棚卸しのターンには載らない ＝ kind が 'distill' である
+    // ＝ memoryCause が 'distill' になり、guardFullReplace が効く。
+    expect(tidy).not.toContain(COMMITMENT_NOTICE);
+    expect(tidy).not.toContain(SITUATION_NOTICE);
+
+    await s.clone.stop();
+  });
+});

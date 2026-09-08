@@ -555,3 +555,62 @@ describe('branded type — RenderedMemory を経由しない記憶は buildClone
     expect(() => buildCloneSystemPrompt({ memory: renderMemoryDocuments([]) })).not.toThrow();
   });
 });
+
+/**
+ * ⭐ 定期の棚卸し（`reason: 'scheduled'`）と、2026-09-08 に人間が引き直した2つの線。
+ *
+ * 1. **区分は「費用」ではなく「毎回の判断に要るか」で決める**（かつては
+ *    「費用のために `fact` へ格下げしない」と禁じていた）
+ * 2. **`memory_section_move` は人間が書いた文書に対しても通る**（かつては
+ *    「全文置換・削除・節の移動ができない」と3つまとめて断っていた）
+ */
+describe('buildDistillPrompt — 定期の棚卸しと、引き直した2つの線', () => {
+  it('⭐ 的の一覧は渡したときだけ載る。渡さない呼び手の出力は1文字も変わらない', () => {
+    const withoutOptions = buildDistillPrompt('conversation_end');
+    expect(buildDistillPrompt('conversation_end', {})).toBe(withoutOptions);
+    expect(withoutOptions).not.toContain('棚卸しの的');
+
+    const withTargets = buildDistillPrompt('scheduled', { tidyTargets: 'TARGET-MARKER' });
+    expect(withTargets).toContain('棚卸しの的');
+    expect(withTargets).toContain('TARGET-MARKER');
+  });
+
+  it('⭐ scheduled は「会話が終わったからではない」と名乗る（起点を取り違えさせない）', () => {
+    const scheduled = buildDistillPrompt('scheduled');
+    expect(scheduled).toContain('定期の棚卸しの刻みが来た');
+    expect(scheduled).toContain('会話が終わったからではない');
+    // 会話終了の文面は出ない。
+    expect(scheduled).not.toContain('いまの会話が終わった');
+  });
+
+  it('⭐ 区分の線は「費用」ではなく「毎回の判断に要るか」になった', () => {
+    const prompt = buildDistillPrompt('conversation_end');
+    // **かつての禁止が「指示」として出ることはもう無い。** 本文には
+    // 「かつてここには『費用のために `fact` へ格下げしない』と書いてあった」と
+    // いう**経緯**として同じ語が残っているので、語そのものではなく
+    // **指示の形（箇条書きの先頭）**が消えたことを見る。
+    expect(prompt).not.toContain('- **判断の前提（`premise`）を、費用のために');
+    expect(prompt).toContain('かつてここには');
+    expect(prompt).toContain('毎回の判断に要るか');
+    // **前提そのものを削るな、は残っている**（緩めたのは区分の線であって、
+    // 「前提を切り詰めてよい」ではない）。
+    expect(prompt).toContain('判断の前提そのものを削るな');
+  });
+
+  it('⭐ 節の移動は人間が書いた文書に対しても通る、と明言する', () => {
+    const prompt = buildDistillPrompt('conversation_end');
+    expect(prompt).toContain(
+      '`memory_section_move`（節を別の文書へ移す）は、人間が書いた文書に対しても通る',
+    );
+    // 断る側は3口のまま名指しされている（全部が通るようになったのではない）。
+    expect(prompt).toContain('全文置換・削除・frontmatter の更新ができない');
+  });
+
+  it('⭐ 畳むもの（棚卸しの本題）が仕事として書かれている', () => {
+    const prompt = buildDistillPrompt('conversation_end');
+    expect(prompt).toContain('畳むもの');
+    expect(prompt).toContain('付録へ移せ');
+    expect(prompt).toContain('付録が育ったら、付録を割れ');
+    expect(prompt).toContain('主題が2つ以上在るなら割れ');
+  });
+});
