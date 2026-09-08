@@ -91,8 +91,9 @@ describe('foldClaudeMessage — system', () => {
    * 入口**なので、ここで畳めば下流（`clone.ts` / `self.ts`）は無改造で済む。
    */
   it('知らない apiKeySource は unrecognized に畳まれ、元の文字は1文字も残らない', () => {
-    // 鍵に見える文字列を通しても、runtime には1文字も現れないことが安全側の歯。
-    const secret = 'sk-ant-xxxxxxxx';
+    // 知らない値を通しても、runtime には1文字も現れないことが安全側の歯。**フィクスチャは
+    // 鍵に見えない短い文字列にしてある** — 鍵らしい形をリポジトリに増やさないため。
+    const secret = 'zz';
     const event = only(
       sdk({ type: 'system', subtype: 'init', session_id: 'sess-4', apiKeySource: secret }),
     );
@@ -122,7 +123,7 @@ describe('foldClaudeMessage — system', () => {
         type: 'system',
         subtype: 'init',
         session_id: 'sess-7',
-        apiKeySource: 'sk-ant-xxxxxxxx',
+        apiKeySource: 'zz',
       }),
     );
 
