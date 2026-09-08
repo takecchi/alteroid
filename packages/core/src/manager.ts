@@ -6134,6 +6134,18 @@ class Pool implements ManagerPool {
       }
 
       case 'usage': {
+        // **この case へ来ること自体が、ターンが成功したことの証拠である**
+        // （`runner.ts` の `if (event.succeeded)` の枝だけがこのイベントを
+        // emit する。あちらの doc「成功した result だけを通す」）。
+        //
+        // ⟹ **`usable` の2本目の生産者へ1本渡す**（#681 (1)）。`account_probe`
+        // はアカウントの枠しか見ないので `You've hit your session limit` の
+        // ような枠には効かないが、成功はどんな枠でも「いまの現役が通った」
+        // 直接の証拠になる。**`observedBy` はここでは付けない** ——
+        // `#observeForTokenRotation` が `#tokenIdentities` から自動で付ける
+        // （そのセッションが起きた瞬間の身元。上の `tokenIdentity` と同じ源）。
+        await this.#observeForTokenRotation(event.managerId, { succeeded: true });
+
         // 降りてくるのは累積という事実で、差分にして積むのはここ（runner は
         // 記憶ストアの鍵を持たないので書けない）。読む→畳む→書くはストアの
         // 1操作に閉じてある。

@@ -391,7 +391,7 @@ describe('#680: 文言だけの拒否でも、覚えている枠の事実から�
     );
     const recovered = await h.rotator.reconsider({
       reason: 'account_probe',
-      currentVerdict: { verdict: 'usable' },
+      current: { verdict: { verdict: 'usable' }, origin: { source: 'account_probe' } },
     });
     expect(recovered.kind).toBe('ignored');
 
@@ -2208,7 +2208,7 @@ describe('reconsider: 動く鍵が残っているのに諦めない', () => {
 });
 
 /**
- * **セッションを1本も使わない観測（`currentVerdict`）で回す / 戻す。**
+ * **セッションを1本も使わない観測（`current.verdict` / `origin: { source: 'account_probe' }`）で回す / 戻す。**
  *
  * `apps/daemon/src/usage-poller.ts` が5分ごとに取っているものを
  * `judgeTokenCandidate` へ通した値がここへ来る。**全層が止まっていても届く
@@ -2221,9 +2221,12 @@ describe('reconsider: 現役の probe 結果を効かせる', () => {
 
     const outcome = await h.rotator.reconsider({
       reason: 'account_probe',
-      currentVerdict: {
-        verdict: 'unusable',
-        reason: '取れた枠がすべて使い切られており、課金枠も使えない',
+      current: {
+        verdict: {
+          verdict: 'unusable',
+          reason: '取れた枠がすべて使い切られており、課金枠も使えない',
+        },
+        origin: { source: 'account_probe' },
       },
     });
 
@@ -2256,7 +2259,7 @@ describe('reconsider: 現役の probe 結果を効かせる', () => {
 
     const outcome = await h.rotator.reconsider({
       reason: 'account_probe',
-      currentVerdict: { verdict: 'usable' },
+      current: { verdict: { verdict: 'usable' }, origin: { source: 'account_probe' } },
     });
 
     expect(outcome.kind).toBe('ignored');
@@ -2267,10 +2270,16 @@ describe('reconsider: 現役の probe 結果を効かせる', () => {
     // **止まった記録は消えている。**
     expect(await isCooling(h, 'tok-a')).toBe(false);
     // **「いつ開いたか」を残す材料が返る**（受信箱へは入れない。理由は
-    // `settleTokenOutcome` の逐語）。
-    expect(outcome.recovered).toEqual({ tokenId: 'tok-a', label: 'first' });
+    // `settleTokenOutcome` の逐語）。**`source` は出所をそのまま引き継ぐ**（#681 (1)）。
+    expect(outcome.recovered).toEqual({
+      tokenId: 'tok-a',
+      label: 'first',
+      source: 'account_probe',
+    });
     // **日誌に出る（`signal: 'none'` でも黙らない）。** 止まった側と対になる唯一の行。
     expect(tokenRotationEntry(outcome)?.event).toBe('recovered');
+    // **`recoveredSource` も潰さず出る**（#681 (1)。`account_probe` と区別できる）。
+    expect(tokenRotationEntry(outcome)?.recoveredSource).toBe('account_probe');
   });
 
   it('人間が外した行には触らない（probe が通っても戻さない）', async () => {
@@ -2291,7 +2300,7 @@ describe('reconsider: 現役の probe 結果を効かせる', () => {
 
     const outcome = await h.rotator.reconsider({
       reason: 'account_probe',
-      currentVerdict: { verdict: 'usable' },
+      current: { verdict: { verdict: 'usable' }, origin: { source: 'account_probe' } },
     });
 
     // 記録は消していない（人間の判断を実装が黙って覆さない）。
@@ -2309,13 +2318,158 @@ describe('reconsider: 現役の probe 結果を効かせる', () => {
 
     const outcome = await h.rotator.reconsider({
       reason: 'account_probe',
-      currentVerdict: { verdict: 'undecidable', reason: 'probe が失敗した' },
+      current: {
+        verdict: { verdict: 'undecidable', reason: 'probe が失敗した' },
+        origin: { source: 'account_probe' },
+      },
     });
 
     // 記録の上では現役が通るので、回さない。
     expect(outcome.kind).toBe('ignored');
     expect(outcome.signal).toBe('none');
     expect(h.spreadCalls).toEqual([]);
+    expect(await isCooling(h, 'tok-a')).toBe(false);
+  });
+});
+
+/**
+ * **`usable` の2本目の生産者（#681 (1)）——あるトークンで層のターンが実際に
+ * 成功した、という観測。** `account_probe` が見ていないセッション単位の上限に
+ * 効く。マネージャーが下した3つの設計判断をそれぞれ固定する。
+ */
+describe('reconsider: ターンの成功（#681 (1)。usable の2本目の生産者）', () => {
+  it('冷却中の記録が、ターンの成功で消える（recovered が turn_success で出る。本筋）', async () => {
+    const h = harness();
+    await seedTwo(h); // tok-a が現役、generation 1
+    await h.stores.tokens.replace(
+      (await h.stores.tokens.list()).map((token) =>
+        token.id === 'tok-a'
+          ? {
+              ...token,
+              cooldownUntil: Date.parse(AT) + 60 * 60_000,
+              lastRejectedAt: AT,
+              lastRejectedReason: '上限',
+            }
+          : token,
+      ),
+    );
+
+    const outcome = await h.rotator.reconsider({
+      reason: 'turn_succeeded',
+      current: {
+        verdict: { verdict: 'usable' },
+        origin: { source: 'turn_success', observedBy: { tokenId: 'tok-a', generation: 1 } },
+      },
+    });
+
+    expect(outcome.kind).toBe('ignored');
+    if (outcome.kind !== 'ignored') return;
+    // **回していない。** 消したのは止まった記録だけである。
+    expect(h.spreadCalls).toEqual([]);
+    expect(await isCooling(h, 'tok-a')).toBe(false);
+    // **`account_probe` とは区別できる出所を持つ。**
+    expect(outcome.recovered).toEqual({ tokenId: 'tok-a', label: 'first', source: 'turn_success' });
+    expect(tokenRotationEntry(outcome)?.event).toBe('recovered');
+    expect(tokenRotationEntry(outcome)?.recoveredSource).toBe('turn_success');
+  });
+
+  it('⚠️ 判断1の歯: 世代がずれた成功は捨てる（markTokenUsable を呼ばない）', async () => {
+    const h = harness();
+    await seedTwo(h); // tok-a が現役、generation 1
+    await h.stores.tokens.replace(
+      (await h.stores.tokens.list()).map((token) =>
+        token.id === 'tok-a' ? { ...token, cooldownUntil: Date.parse(AT) + 60 * 60_000 } : token,
+      ),
+    );
+
+    // **現役の世代は 1 だが、観測は世代 2 を名乗る**（もう回した後、あるいは
+    // まだ試していない現役についての、遅れて届いた成功）。
+    const outcome = await h.rotator.reconsider({
+      reason: 'turn_succeeded',
+      current: {
+        verdict: { verdict: 'usable' },
+        origin: { source: 'turn_success', observedBy: { tokenId: 'tok-a', generation: 2 } },
+      },
+    });
+
+    expect(outcome.kind).toBe('ignored');
+    if (outcome.kind !== 'ignored') return;
+    expect(outcome.recovered).toBeUndefined();
+    // **記録は1文字も動いていない。** `markTokenUsable` は呼ばれていない。
+    expect(await isCooling(h, 'tok-a')).toBe(true);
+  });
+
+  it('⚠️ 判断3の歯: 通る候補が在ってもターンの成功では回さない（usable 分岐に入れなかった場合も含む）', async () => {
+    const h = harness();
+    // **`tok-b` は通る候補として存在する**（`ready`）。記録の上でも現役
+    // （`tok-missing`）はプールに行が無いので「通らない」——`account_probe` /
+    // `tick` ならここから `stranded` 経由で `tok-b` へ回りうる状態である。
+    await h.stores.tokens.replace([{ id: 'tok-b', label: 'second', value: 'value-b', order: 1 }]);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-missing', generation: 1, rotatedAt: AT });
+
+    const outcome = await h.rotator.reconsider({
+      reason: 'turn_succeeded',
+      current: {
+        verdict: { verdict: 'usable' },
+        origin: { source: 'turn_success', observedBy: { tokenId: 'tok-missing', generation: 1 } },
+      },
+    });
+
+    // **回っていない。** 成功は「いまの現役が通る」証拠であって「回すべき」
+    // 証拠ではないので、通常の回転判定（`stranded` 経由の `sweepCandidates`）
+    // へは絶対に落ちない。
+    expect(outcome.kind).toBe('ignored');
+    expect(h.spreadCalls).toEqual([]);
+    expect(await h.stores.tokens.readActive()).toMatchObject({
+      tokenId: 'tok-missing',
+      generation: 1,
+    });
+  });
+
+  it('⚠️ 判定の落ちた turn_succeeded（current 無し）でも回さない —— 見るのは reason である', async () => {
+    // **`apps/daemon/src/token-watch.ts` の `pending` は
+    // `TokenReconsiderReason` しか運べない。** ⟹ 契機だけを溜める形にすると、
+    // `current` の落ちた `'turn_succeeded'` が実在しうる（実際に一度そう
+    // 書いてあった）。あちら側でも溜めないようにしてあるが、**この関数が
+    // `reason` を見ておけば、呼ぶ側が何をしても「成功では回らない」が成り立つ。**
+    const h = harness();
+    await h.stores.tokens.replace([{ id: 'tok-b', label: 'second', value: 'value-b', order: 1 }]);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-missing', generation: 1, rotatedAt: AT });
+
+    const outcome = await h.rotator.reconsider({ reason: 'turn_succeeded' });
+
+    expect(outcome.kind).toBe('ignored');
+    expect(h.spreadCalls).toEqual([]);
+    expect(await h.stores.tokens.readActive()).toMatchObject({
+      tokenId: 'tok-missing',
+      generation: 1,
+    });
+  });
+
+  it('account_probe の既存の挙動は1ミリも変わっていない（回帰）', async () => {
+    // **世代の門は `turn_success` にだけ掛かる。** `account_probe` は身元を
+    // 運ばない観測なので、世代がずれていても（というより、そもそも
+    // `observedBy` を持たないので）従来どおり効く。
+    const h = harness();
+    await seedTwo(h);
+    await h.stores.tokens.replace(
+      (await h.stores.tokens.list()).map((token) =>
+        token.id === 'tok-a' ? { ...token, cooldownUntil: Date.parse(AT) + 60 * 60_000 } : token,
+      ),
+    );
+
+    const outcome = await h.rotator.reconsider({
+      reason: 'account_probe',
+      current: { verdict: { verdict: 'usable' }, origin: { source: 'account_probe' } },
+    });
+
+    expect(outcome.kind).toBe('ignored');
+    if (outcome.kind !== 'ignored') return;
+    expect(outcome.recovered).toEqual({
+      tokenId: 'tok-a',
+      label: 'first',
+      source: 'account_probe',
+    });
     expect(await isCooling(h, 'tok-a')).toBe(false);
   });
 });

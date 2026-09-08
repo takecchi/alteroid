@@ -102,6 +102,54 @@ export const extraUsageSchema = z.object({
 export type ExtraUsage = z.infer<typeof extraUsageSchema>;
 
 /**
+ * SDK が返しうる9値（`ApiKeySource`）＋ 10個目として足した `'unrecognized'`。
+ *
+ * ## なぜ値を絞るのか
+ *
+ * `AccountInfo.apiKeySource` は SDK 上 `string` としか宣言されておらず、doc
+ * コメントを持たない（逐語。`@anthropic-ai/claude-agent-sdk@0.3.263` 同梱の
+ * `sdk.d.ts`）。
+ *
+ * [sdk-verbatim AccountInfo.apiKeySource]
+ * > apiKeySource?: string;
+ *
+ * doc を持つのは別の宣言（`SDKSystemMessage.apiKeySource`）が使う `ApiKeySource`
+ * 型のほうである。
+ *
+ * [sdk-verbatim ApiKeySource]
+ * > Where the credential used for API requests came from: 'ANTHROPIC_API_KEY' (environment variable), 'apiKeyHelper' (the configured helper command), '/login managed key' (an API key created and stored by /login with an Anthropic Console account), or 'none' (no API key in use - e.g. claude.ai OAuth login, a bearer token, or a third-party cloud provider). 'user' | 'project' | 'org' | 'temporary' | 'oauth' are legacy members that current CLIs never emit; they remain only so the type stays backward compatible.
+ *
+ * **⟹ `AccountInfo.apiKeySource` 自体には形の保証が無い。** そして
+ * `AccountUsage` は `GET /usage` にそのまま載り、`GET /usage` は**アクセス
+ * トークンで読める面**である（`/profile` だけが実行環境の持ち主に閉じている）。
+ * ⟹ **素通しにすると、認証の出所の欄から鍵に関する自由文字列が外へ配られる側に
+ * 出うる。** 知っている名前だけを通す。
+ *
+ * ## なぜ `'unrecognized'` が要るのか
+ *
+ * 「知らない値だった」と「そもそも欄が無かった（`undefined`）」は**別の観測**
+ * である。素通しをやめた代償に前者を後者へ畳むと、**SDK が新しい値を出し始めた
+ * ことがこの面から永久に見えなくなる。** この repo の「取れなかったものを 0 に
+ * しない」「言い分けられないなら3つ目の状態を持つ」（{@link
+ * LimitsUnavailableCause} の `undetermined` と同じ形）——**`'unrecognized'` は
+ * SDK 由来の文字を1文字も運ばない**（だから安全側が壊れない）。
+ */
+export const accountApiKeySourceSchema = z.enum([
+  'ANTHROPIC_API_KEY',
+  'apiKeyHelper',
+  '/login managed key',
+  'none',
+  'user',
+  'project',
+  'org',
+  'temporary',
+  'oauth',
+  'unrecognized',
+]);
+
+export type AccountApiKeySource = z.infer<typeof accountApiKeySourceSchema>;
+
+/**
  * アカウント全体のスナップショット1つ。
  *
  * **「取れなかった」を表現できる形にしてある。** `limitsAvailable` が真でも
@@ -118,6 +166,23 @@ export const accountUsageSchema = z.object({
    * サブスク制限が効く（Bedrock / Vertex / API キーには無い）。
    */
   apiProvider: z.string().optional(),
+  /**
+   * どこから来た資格情報か（`AccountInfo.apiKeySource`。値の一覧と根拠は
+   * {@link AccountApiKeySource}）。
+   *
+   * **`tokenSource` とは別の欄である。** `tokenSource` は「鍵が届いているか」
+   * （`none` なら「まだログインしていない」）を言う欄で、こちらは「届いている
+   * 鍵がどこ由来か」（環境変数 / ヘルパー / `/login` が発行した鍵 / それ以外）を
+   * 言う欄である。**混同すると、`apiKeySource: 'none'` を「鍵が無い」と読み
+   * 違える** —— SDK の `ApiKeySource` の doc は `'none'` を「claude.ai OAuth
+   * ログイン・bearer token・3rd-party cloud provider のような、API キーを
+   * 使っていない構成」だと明言している（逐語は {@link AccountApiKeySource} の
+   * doc）。
+   *
+   * **判定には使っていない。** {@link classifyLimitsUnavailable} はこの欄を
+   * 読まない —— ここは観測を1本増やすだけで、分岐は増やさない（#681 (2)）。
+   */
+  apiKeySource: accountApiKeySourceSchema.optional(),
   /**
    * 認証の出所。**`none` は「サブスクが無い」ではなく「まだログインしていない」。**
    *
@@ -268,6 +333,34 @@ function nonEmpty(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
 }
 
+/** SDK が実際に出す9値だけの集合（{@link AccountApiKeySource} の `'unrecognized'` は含めない）。 */
+const SDK_API_KEY_SOURCES: ReadonlySet<string> = new Set([
+  'ANTHROPIC_API_KEY',
+  'apiKeyHelper',
+  '/login managed key',
+  'none',
+  'user',
+  'project',
+  'org',
+  'temporary',
+  'oauth',
+]);
+
+/**
+ * `AccountInfo.apiKeySource`（`string` としか宣言されていない、生の値）を
+ * {@link AccountApiKeySource} へ絞り込む。**`nonEmpty` の代わりにこれを通すこと**
+ * ——素通しにしないのが #681 (2) の要件そのものである。
+ *
+ * - 文字列でない、または空文字 → `undefined`（`nonEmpty` と同じ「取れなかった」）
+ * - 知っている9値のどれか → その値
+ * - それ以外の非空文字列 → `'unrecognized'`（**元の文字は1文字も返さない**）
+ */
+export function toAccountApiKeySource(raw: unknown): AccountApiKeySource | undefined {
+  if (typeof raw !== 'string' || raw.trim().length === 0) return undefined;
+  if (SDK_API_KEY_SOURCES.has(raw)) return raw as AccountApiKeySource;
+  return 'unrecognized';
+}
+
 /** ISO 8601 → epoch ミリ秒。読めなければ undefined（**NaN を下へ流さない**）。 */
 function isoToEpochMs(value: unknown): number | undefined {
   if (typeof value !== 'string') return undefined;
@@ -342,6 +435,7 @@ export function toAccountUsage(
     plan: nonEmpty(account.subscriptionType) ?? nonEmpty(usage.subscription_type),
     organization: nonEmpty(account.organization),
     apiProvider: nonEmpty(account.apiProvider),
+    apiKeySource: toAccountApiKeySource(account.apiKeySource),
     tokenSource: nonEmpty(account.tokenSource),
     limitsAvailable: usage.rate_limits_available === true,
     windows,

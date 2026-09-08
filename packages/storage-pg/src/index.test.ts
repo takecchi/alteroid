@@ -102,7 +102,8 @@ describe('PgPersonaStore', () => {
   });
 
   it('外から書き換えられた記憶が次の読み出しに反映される（受け入れ基準3）', async () => {
-    await stores.persona.write('values', '# 価値観\n\nもとの内容\n');
+    const BEFORE_CONTENT = '# 価値観\n\nもとの内容\n';
+    await stores.persona.write('values', BEFORE_CONTENT);
 
     // CLI / HTTP API 経由で人間が書き換える、を模す（キャッシュしていれば落ちる）
     await stores.persona.write('values', '# 価値観\n\n人間が書き換えた\n');
@@ -110,7 +111,25 @@ describe('PgPersonaStore', () => {
     expect((await stores.persona.read('values'))?.content).toContain('人間が書き換えた');
     // クローンの文脈へ載る形（documents → renderMemoryDocuments）にも反映されること。
     // かつては concat() がこの連結まで持っていたが、載せ方は core へ移った。
-    expect(renderMemoryDocuments(await stores.persona.documents())).toContain('人間が書き換えた');
+    //
+    // **⚠️ かつてここは本文（`人間が書き換えた`）が焼き込みに出ることを測っていた。**
+    // premise の載り方が全文からカード（要旨＋節の目次）へ変わったので（人間の決定
+    // 2026-09-08。`memory.ts` の `renderPremiseCard`）、本文はもうどの経路にも載らない。
+    //
+    // **受け入れ基準3（外の書き換えが次の読み出しに反映される）は1ミリも弱まって
+    // いない。** 節id は `<見出しの8桁>-<sha256(見出し行＋中身)の先頭8桁>` なので
+    // （`memorySectionId`）、**本文を1文字直せばカードの行が変わる** —— 書き換え前後の
+    // カードを実際に突き合わせ、**変わったこと**と、変わったのが節id の側であることを
+    // 測る。**「載っているか」ではなく「反映されるか」を直接見る形になったので、
+    // むしろ強くなっている**（旧い歯は、キャッシュが効いていても本文がたまたま
+    // 一致すれば通りえた）。
+    const cardBefore = renderMemoryDocuments([{ slug: 'values', content: BEFORE_CONTENT }]);
+    const cardAfter = renderMemoryDocuments(await stores.persona.documents());
+    expect(cardAfter).not.toBe(cardBefore);
+    expect(cardAfter).toContain('# 価値観');
+    // 本文は載らない（カードにしたことの本体）。
+    expect(cardAfter).not.toContain('人間が書き換えた');
+    expect(cardAfter).not.toContain('もとの内容');
   });
 
   /**

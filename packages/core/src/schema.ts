@@ -545,6 +545,12 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
         'runner_connected',
         'account_probe',
         'startup',
+        /**
+         * あるトークンで層のターンが実際に成功した（#681 (1)）。`account_probe`
+         * が見ていないセッション単位の上限を、成功という直接の証拠で埋める
+         * 2本目の生産者（`TokenRotator.reconsider` の doc）。
+         */
+        'turn_succeeded',
       ])
       .optional(),
     /**
@@ -588,6 +594,20 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * （`AGENTS.md` の地雷「取れない軸に 0 の行を作る」の裏返し）。
      */
     cooldownSource: z.enum(['quota_reset', 'overage_reset', 'notice_text', 'default']).optional(),
+    /**
+     * `event: 'recovered'` の行が、**どちらの生産者が「通る」と観測したか**
+     * （#681 (1)。`cooldownSource` と同じ形・同じ理由の doc）。
+     *
+     * - `account_probe`: セッションを1本も使わない枠の probe（既定5分ごと）
+     * - `turn_success`: あるトークンで層のターンが実際に成功した（2本目の
+     *   生産者。`account_probe` が見ていないセッション単位の上限をここが埋める）
+     *
+     * **⚠️ `recovered` 以外の行には無い。既存の行には無い。** `default` で
+     * 埋めない——#683 の逐語「既存の行には無い。`default` で埋めない」と同じ
+     * 規律である。無いことは「観測していない」であって「`account_probe` だった」
+     * ではない。
+     */
+    recoveredSource: z.enum(['account_probe', 'turn_success']).optional(),
     /** 当たった文言。**言い換えずそのまま**（受け入れ基準8）。 */
     noticeText: z.string().optional(),
     /** 人間が読む1行（整形済み）。 */

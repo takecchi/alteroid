@@ -720,7 +720,8 @@
                             "tick",
                             "runner_connected",
                             "account_probe",
-                            "startup"
+                            "startup",
+                            "turn_succeeded"
                           ]
                         },
                         "freshness": {
@@ -749,6 +750,10 @@
                         "cooldownSource": {
                           "type": "string",
                           "enum": ["quota_reset", "overage_reset", "notice_text", "default"]
+                        },
+                        "recoveredSource": {
+                          "type": "string",
+                          "enum": ["account_probe", "turn_success"]
                         },
                         "noticeText": {
                           "type": "string"
@@ -2122,7 +2127,8 @@
                                   "tick",
                                   "runner_connected",
                                   "account_probe",
-                                  "startup"
+                                  "startup",
+                                  "turn_succeeded"
                                 ]
                               },
                               "freshness": {
@@ -2151,6 +2157,10 @@
                               "cooldownSource": {
                                 "type": "string",
                                 "enum": ["quota_reset", "overage_reset", "notice_text", "default"]
+                              },
+                              "recoveredSource": {
+                                "type": "string",
+                                "enum": ["account_probe", "turn_success"]
                               },
                               "noticeText": {
                                 "type": "string"
@@ -3426,6 +3436,21 @@
                                 },
                                 "apiProvider": {
                                   "type": "string"
+                                },
+                                "apiKeySource": {
+                                  "type": "string",
+                                  "enum": [
+                                    "ANTHROPIC_API_KEY",
+                                    "apiKeyHelper",
+                                    "/login managed key",
+                                    "none",
+                                    "user",
+                                    "project",
+                                    "org",
+                                    "temporary",
+                                    "oauth",
+                                    "unrecognized"
+                                  ]
                                 },
                                 "tokenSource": {
                                   "type": "string"

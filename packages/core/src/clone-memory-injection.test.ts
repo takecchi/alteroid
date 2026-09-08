@@ -144,8 +144,13 @@ const ABOUT_ME_BODY = Array.from(
   { length: 40 },
   (_, i) => `about-me文書の本文${i}行目: 変わらないはずの長い自己紹介の一節である。`,
 ).join('\n');
-const NOTES_BODY_OLD = 'notes文書の本文（旧）: 短いメモである。';
-const NOTES_BODY_NEW = 'notes文書の本文（新）: 短いメモを書き換えた。';
+// **見出しを持たせてある。** premise の焼き込みは全文からカード（要旨＋節の
+// 目次）へ変わったので（`memory.ts` の `renderPremiseCard`）、**本文はどの
+// 経路にも載らない。** 載る／載らないを測るには、載る側（見出し行）に一意な
+// 語を置く必要がある。**本文（見出しの下）にも一意な語を残してある**——
+// 「本文は載らない」ほうも同時に測るためである。
+const NOTES_BODY_OLD = '## notes見出し（旧）\nnotes文書の本文（旧）: 短いメモである。';
+const NOTES_BODY_NEW = '## notes見出し（新）\nnotes文書の本文（新）: 短いメモを書き換えた。';
 
 describe('クローンの記憶注入（差分のみを載せるべき、という固定したい振る舞い）', () => {
   it('変わっていない文書の本文は、注入に含まれてはならない', async () => {
@@ -198,7 +203,13 @@ describe('クローンの記憶注入（差分のみを載せるべき、とい�
     // 可能性が残る（`not.toContain` は対象が空でも空振りで真になる）。この
     // テストは通らなければならない（AGENTS.md「テストの足場・スタブ・モックは、
     // 動くのに嘘をつく」）。
-    expect(secondInjectedInput).toContain(NOTES_BODY_NEW);
+    // **かつてここは本文（`NOTES_BODY_NEW`）が載ることを測っていた。** 焼き込みが
+    // カードになったので、載るのは**見出し行**である。**足場健全性チェックという
+    // この歯の役目は1ミリも変わっていない**——「上のテストが空振りで真になって
+    // いないこと」を、実際に載るはずのものが載っていることで確かめる。
+    expect(secondInjectedInput).toContain('## notes見出し（新）');
+    // そして本文のほうは載らない（カードにしたことの本体）。
+    expect(secondInjectedInput).not.toContain('短いメモを書き換えた。');
 
     await s.clone.stop();
   });
@@ -450,5 +461,142 @@ describe('通しの歯 — memory_write の見込み文字数と、次のター�
     expect(afterBoundary).not.toContain(marker);
 
     await s.clone.stop();
+  });
+});
+
+/**
+ * ⭐ 通しの歯（文書の中の絞り込み）— **既に見ている premise へ追記したとき、
+ * 会話へ載るのは追記した分だけである。**
+ *
+ * ## この歯が在る理由（本番の実測、2026-09-08T00:15Z）
+ *
+ * 上の歯（文書の単位の絞り込み）は既に在ったが、**1文書の中は全文のまま**
+ * だった。Railway の PostgreSQL を直接引いた値:
+ *
+ * - `alteroid-work`（premise・305,536 文字）が 2026-09-07 の1日に 120 回更新
+ * - 1回の実際の変更量は平均 3,732 バイト ＝ **約 60 倍の増幅**
+ * - 載せ直し1回が文脈を押し上げた量（実測の1ターン）: 507,081 → 745,129 トークン
+ * - クローンのターン1回の文脈は 457k（9/2）→ 752k（9/7）へ育ち、
+ *   自動 compaction が 1日 0 回 → 33 回になっていた
+ *
+ * **この歯は「差分になったこと」だけでなく「省いた側を名乗ったこと」と
+ * 「書く側の見込みと一致すること」も同時に見る**——3つのうち1つでも欠けると、
+ * クローンは省略を記憶の破損として読むか、見込みを信じられなくなる。
+ */
+describe('通しの歯 — 既に見ている premise への追記は、追記した分だけが載る', () => {
+  it('⭐ 元の本文は載らず、追記した行と「省いた側」の断りだけが載る。見込みとも一致する', async () => {
+    const stores = createMemoryStores();
+    // **節を持たせる。** 焼き込みはカード（要旨＋節の目次）なので、載る／載らない
+    // を測れるのは見出し行である（`memory.ts` の `renderPremiseCard`）。
+    const originalBody = Array.from(
+      { length: 60 },
+      (_, i) => `## 既存の節${i}\n${`ここは本文である。`.repeat(20)}`,
+    ).join('\n');
+    await stores.persona.write(
+      'alteroid-work',
+      `---\ntype: premise\ndescription: 既存の要旨\n---\n${originalBody}\n`,
+    );
+
+    // 1ターン目。ここでシステムプロンプトへ全文が焼かれ、`#memoryOnRecord` に
+    // 「クローンが見ている版」が控えられる。
+    const s = setup(stores);
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    // 書く側（道具）を直接叩く。`memory_append` は実運用でいちばん多い形
+    // （本番の実測で 640 件中 383 件）。
+    const tools = createCloneTools({
+      stores,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+    });
+    const memoryAppend = tools.find((entry) => entry.name === 'memory_append');
+    if (memoryAppend === undefined) throw new Error('memory_append が無い（足場の欠陥）');
+    const result = await memoryAppend.handler(
+      {
+        slug: 'alteroid-work',
+        content: '## 追記した節\n追記した本文である。',
+        summary: '追記',
+      } as never,
+      {},
+    );
+    const reply = (result.content ?? [])
+      .map((block) => (block.type === 'text' ? block.text : ''))
+      .join('');
+
+    const match = reply.match(/次のターンの会話へ載る見込み: ([\d,]+) 文字/);
+    const matchedDigits = match?.[1];
+    expect(matchedDigits).toBeDefined();
+    const estimatedChars = Number((matchedDigits ?? '').replaceAll(',', ''));
+    // 書く側の内訳も「全文」ではなく「変わった範囲だけ」と名乗る。
+    expect(reply).toContain('alteroid-work（premise・カードの変わった範囲だけ）');
+
+    // 読む側。次のターンに実際に載る塊を取り出す。
+    const events: ChatStreamEvent[] = [];
+    s.clone.subscribe('conv-2', (event) => events.push(event));
+    s.clone.post(humanMessage('2回目', 'conv-2'));
+    await waitForDone(events);
+    const secondTurnInput = (s.calls[0] as FakeCall).inputs[1] ?? '';
+
+    // **本体1: 変わっていない節の行も、本文も、1文字も載らない。**
+    expect(secondTurnInput).not.toContain('## 既存の節30');
+    expect(secondTurnInput).not.toContain('ここは本文である。');
+    expect(secondTurnInput).not.toContain('追記した本文である。');
+    // **本体2: 追記した節の見出しは載る（何が増えたか分かる）。**
+    expect(secondTurnInput).toContain('## 追記した節');
+    // **本体3: 省いた側を名乗る（黙って省かない）。**
+    expect(secondTurnInput).toContain('行は変わっていないので載せていない');
+
+    // 上の歯（`<!-- memory: index -->` を起点にする形）と同じやり方で塊を切り出す。
+    // premise の差分は専用の見出しで始まる——この印は入力全体で1回しか出ない。
+    const marker = '<!-- memory: alteroid-work.md（カードの変わった範囲だけ） -->';
+    const markerIndex = secondTurnInput.indexOf(marker);
+    expect(markerIndex).toBeGreaterThanOrEqual(0);
+    expect(secondTurnInput.split(marker).length - 1).toBe(1);
+    const boundary = '\n\n---\n\n';
+    const boundaryIndex = secondTurnInput.indexOf(boundary, markerIndex);
+    expect(boundaryIndex).toBeGreaterThan(markerIndex);
+    const chunk = secondTurnInput.slice(markerIndex, boundaryIndex);
+
+    // **本体4: 書く側の見込みと、読む側の実物が一致する。**
+    expect(chunk.length).toBe(estimatedChars);
+
+    // 切り出しの自己確認（上の歯と同じ基準）——塊は印だけを掴んでいない、
+    // 塊の外に在るはずのもの（head・元のターンの本文）を含まない。
+    expect(chunk.startsWith(marker)).toBe(true);
+    expect(chunk.length).toBeGreaterThan(marker.length + 20);
+    expect(chunk).not.toContain('[system] 記憶が更新された');
+    expect(chunk).not.toContain('2回目');
+
+    // **本体5: 全文を載せていた頃より、桁で小さい**（この改修の目的そのもの）。
+    // 全文の載せ直しは文書そのものの長さに比例していた。
+    const fullDocument = (await stores.persona.read('alteroid-work'))?.content ?? '';
+    expect(fullDocument.length).toBeGreaterThan(1_000);
+    expect(chunk.length).toBeLessThan(fullDocument.length / 10);
+  });
+
+  /**
+   * ⭐ 断り書きが正しいこと自体を見る。差分にした以上、
+   * 「システムプロンプトに載っているものが現在の内容である」は**嘘になる**
+   * （システムプロンプトはセッション構築時点で凍っている）。
+   */
+  it('⭐ 断り書きは「システムプロンプトはセッション構築時点の全文」だと言う（現在の内容だとは言わない）', async () => {
+    const stores = createMemoryStores();
+    await stores.persona.write('doc', '# doc\n\n本文\n');
+    const s = setup(stores);
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    await stores.persona.write('doc', '# doc\n\n本文\n足した行\n');
+
+    const events: ChatStreamEvent[] = [];
+    s.clone.subscribe('conv-2', (event) => events.push(event));
+    s.clone.post(humanMessage('2回目', 'conv-2'));
+    await waitForDone(events);
+    const secondTurnInput = (s.calls[0] as FakeCall).inputs[1] ?? '';
+
+    expect(secondTurnInput).toContain('このセッションを組んだ時点の索引');
+    expect(secondTurnInput).not.toContain('システムプロンプトに載っているものが現在の内容である');
+    expect(secondTurnInput).toContain('`memory_section_read` で開くこと');
   });
 });

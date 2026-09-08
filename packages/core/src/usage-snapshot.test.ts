@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { judgeTokenCandidate } from './token-candidate.js';
 import {
+  accountUsageSchema,
   classifyLimitsUnavailable,
   describeLimitsUnavailable,
   describeOuterFailure,
@@ -9,6 +10,7 @@ import {
   fetchAccountUsage,
   hasAccountUsageDetail,
   isNotLoggedIn,
+  toAccountApiKeySource,
   toAccountUsage,
 } from './usage-snapshot.js';
 import type { UsageProbeHandle, UsageProbeQuery } from './usage-probe.js';
@@ -373,5 +375,97 @@ describe('describeSilentChannels（#429・単体）', () => {
     expect(describeSilentChannels('Error: a', 'Error: b')).toBe(
       '2つの口のどちらも答えなかった（accountInfo: 例外: Error: a / usage: 例外: Error: b）',
     );
+  });
+});
+
+describe('toAccountApiKeySource（#681 (2)・単体）', () => {
+  it('文字列でない、または空文字は undefined（「取れなかった」）', () => {
+    for (const raw of [undefined, null, 42, {}, [], '', '   ']) {
+      expect(toAccountApiKeySource(raw)).toBeUndefined();
+    }
+  });
+
+  it('SDK の9値はそのまま通す', () => {
+    // 逐語（ApiKeySource の doc）は `AccountApiKeySource` の doc コメントが持つ。
+    const known = [
+      'ANTHROPIC_API_KEY',
+      'apiKeyHelper',
+      '/login managed key',
+      'none',
+      'user',
+      'project',
+      'org',
+      'temporary',
+      'oauth',
+    ];
+    for (const value of known) {
+      expect(toAccountApiKeySource(value)).toBe(value);
+    }
+  });
+
+  it('知らない非空文字列は unrecognized に落ち、元の文字は1文字も残らない', () => {
+    // 鍵に見える文字列を通しても、返り値には1文字も現れないことが安全側の歯である。
+    const secret = 'sk-ant-xxxxxxxx';
+    const result = toAccountApiKeySource(secret);
+    expect(result).toBe('unrecognized');
+    expect(JSON.stringify(result)).not.toContain(secret);
+  });
+
+  it('欄が無い（undefined）と知らない値（unrecognized）は区別できる', () => {
+    expect(toAccountApiKeySource(undefined)).not.toBe(toAccountApiKeySource('sk-ant-xxxxxxxx'));
+    expect(toAccountApiKeySource(undefined)).toBeUndefined();
+    expect(toAccountApiKeySource('sk-ant-xxxxxxxx')).toBe('unrecognized');
+  });
+});
+
+describe('AccountUsage.apiKeySource（#681 (2)）', () => {
+  it('apiKeySource: none が AccountUsage に載り、GET /usage の形（accountUsageSchema）を通る', () => {
+    const usage = toAccountUsage(AT, {}, { apiKeySource: 'none' });
+    expect(usage.apiKeySource).toBe('none');
+    expect(() => accountUsageSchema.parse(usage)).not.toThrow();
+  });
+
+  it('欄が無ければ undefined のまま（既定値で埋めない）', () => {
+    const usage = toAccountUsage(AT, {}, {});
+    expect(usage.apiKeySource).toBeUndefined();
+    expect(() => accountUsageSchema.parse(usage)).not.toThrow();
+  });
+
+  it('知らない自由文字列（鍵に見える文字列）は unrecognized に落ち、元の文字は1文字も残らない', () => {
+    // これが安全側の歯である。`AccountUsage` は `GET /usage` にそのまま載り、
+    // `GET /usage` はアクセストークンで読める面なので、鍵に関する自由文字列が
+    // そのまま外へ配られてはならない。
+    const secret = 'sk-ant-xxxxxxxx';
+    const usage = toAccountUsage(AT, {}, { apiKeySource: secret });
+    expect(usage.apiKeySource).toBe('unrecognized');
+    expect(JSON.stringify(usage)).not.toContain(secret);
+  });
+
+  /**
+   * ⭐ 分岐させていないことの歯（#681 (2) の核心）。
+   *
+   * `classifyLimitsUnavailable` は `apiKeySource` を読んではいけない——観測を
+   * 1本増やすだけで判定は増やさない、という仕様そのものを撃つ。同じ
+   * `usage`/`account` の他の欄を固定したまま `apiKeySource` だけを
+   * 変えても（無い／既知の値／unrecognized）、判定結果が1ミリも変わらないことを
+   * 確かめる。
+   */
+  it('classifyLimitsUnavailable の結果は apiKeySource の有無・値で変わらない', () => {
+    const usageJson = { rate_limits_available: false, rate_limits: null, subscription_type: null };
+    const accountBase = { apiProvider: 'firstParty', tokenSource: 'oauth' };
+
+    const withoutField = toAccountUsage(AT, usageJson, accountBase);
+    const withNone = toAccountUsage(AT, usageJson, { ...accountBase, apiKeySource: 'none' });
+    const withOauth = toAccountUsage(AT, usageJson, { ...accountBase, apiKeySource: 'oauth' });
+    const withUnrecognized = toAccountUsage(AT, usageJson, {
+      ...accountBase,
+      apiKeySource: 'sk-ant-xxxxxxxx',
+    });
+
+    const causeWithoutField = classifyLimitsUnavailable(withoutField);
+    expect(causeWithoutField).toBe('undetermined');
+    expect(classifyLimitsUnavailable(withNone)).toBe(causeWithoutField);
+    expect(classifyLimitsUnavailable(withOauth)).toBe(causeWithoutField);
+    expect(classifyLimitsUnavailable(withUnrecognized)).toBe(causeWithoutField);
   });
 });

@@ -604,6 +604,60 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
+  /**
+   * **選択肢の中身がクローンへ届くこと**（`describeQuestions` / `describeQuestion`）。
+   *
+   * かつて `describeQuestions` は `question` だけを `join(' / ')` で連ね、
+   * `options` を1文字も運んでいなかった。⟹ クローンは「選べ」と言われながら
+   * 選択肢を読めず、推測で答えるか聞き直すしかない（実測 2026-09-08: 2問・
+   * 各3択の確認が **117 文字の質問文だけ**になって届いた）。
+   *
+   * **測っているのは「受信箱へ入る本文」である。** 一覧（`manager_list`）側は
+   * 別に抜粋を掛けるので、そちらの長さはここでは見ない。
+   */
+  it('AskUserQuestion の選択肢（label と description）がクローンへ届く', async () => {
+    const s = setup();
+    const { managerId } = await s.pool.start({ request: '設計を相談したい' });
+    const session = s.sessions[0] as FakeSession;
+
+    const asked = session.ask(
+      'AskUserQuestion',
+      {
+        questions: [
+          {
+            question: 'DB はどちらにする？',
+            header: 'DB',
+            options: [
+              { label: 'PostgreSQL', description: '本番と同じ。移行は要らない' },
+              { label: 'SQLite', description: '手元だけで完結するが本番と違う' },
+            ],
+            multiSelect: false,
+          },
+        ],
+      },
+      undefined,
+      'req-db-options',
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const delivered = s.inbox.find((e) => e.type === 'manager_message') as
+      { text: string } | undefined;
+    expect(delivered).toBeDefined();
+    const text = delivered?.text ?? '';
+    // 質問文は今までどおり載る。
+    expect(text).toContain('DB はどちらにする？');
+    // **選択肢の label と description が両方載る。** どちらか片方だと、
+    // 「何が選べるか」か「選ぶと何が起きるか」のどちらかが読めない。
+    expect(text).toContain('PostgreSQL');
+    expect(text).toContain('本番と同じ。移行は要らない');
+    expect(text).toContain('SQLite');
+    expect(text).toContain('手元だけで完結するが本番と違う');
+
+    await s.pool.send(managerId, 'PostgreSQL で', { requestId: 'req-db-options' });
+    await asked;
+    await s.pool.stop();
+  });
+
   it('AskUserQuestion にはクローンの言葉がそのまま回答として入る', async () => {
     const s = setup();
     const { managerId } = await s.pool.start({ request: '設計を相談したい' });
@@ -2531,6 +2585,44 @@ describe('消費を台帳へ積む', () => {
 
     const turnUsage = await stores.journal.list({ types: ['turn_usage'] });
     expect(turnUsage).toHaveLength(0);
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **`usable` の2本目の生産者（#681 (1)）。** この case へ来ること自体が
+   * `runner.ts` の `if (event.succeeded)` を通った証拠なので、
+   * `#observeForTokenRotation` を1本足した——`account_probe` が見ていない
+   * セッション単位の上限に、成功という直接の証拠で効かせるためである。
+   */
+  it('⚠️ usage が降りたら、成功の観測（succeeded: true）を回し手へも渡す', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner();
+    const seen: TokenRotatorObservation[] = [];
+    const s = setup(undefined, {
+      stores,
+      runner: fake.runner,
+      tokenIdentity: () => ({ tokenId: 'tok-a', generation: 5 }),
+      onUsageObservation: async (o) => {
+        seen.push(o);
+      },
+    });
+    await s.pool.restore();
+
+    fake.usage('mgr-spend', { opus: usage({ costUsd: 1 }) }, 'sess-1');
+    await expect.poll(() => seen.length, { timeout: 2000 }).toBeGreaterThan(0);
+
+    // **成功だけを運ぶ。** 枠の観測（`notice` / `facts` / `transition`）は
+    // 1つも持たない——`observe()` はこれを扱わないので、混ぜると `succeeded`
+    // の分岐が両方の意味を持つことになる。
+    expect(seen[0]).toEqual({
+      succeeded: true,
+      observedBy: { tokenId: 'tok-a', generation: 5 },
+    });
+
+    // **台帳への記録は1文字も変わっていない**（回帰。既存の歯が別に固定する）。
+    await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBe(1);
 
     await s.pool.stop();
   });

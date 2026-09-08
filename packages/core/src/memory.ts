@@ -20,7 +20,7 @@
 
 import { createHash } from 'node:crypto';
 
-import { excerptLine, renderListing, renderListingFromEnd } from './excerpt.js';
+import { excerpt, excerptLine, renderListing, renderListingFromEnd } from './excerpt.js';
 import type {
   MemoryCreatedAt,
   MemoryDescriptionFreshness,
@@ -1128,11 +1128,224 @@ function renderMemoryToc(
 }
 
 const MALFORMED_FRONTMATTER_NOTE =
-  '<!-- memory: frontmatter が壊れている（既知の形にならなかった。premise として全文を扱っている） -->';
+  '<!-- memory: frontmatter が壊れている（既知の形にならなかった。premise として扱っている） -->';
 
-function renderPremisePart(part: MemoryPart): string {
-  const rendered = renderMemoryDocument(part);
+/**
+ * 「変わった範囲だけを描く」を選ぶ線。**変わった範囲が全文のこの割合より
+ * 大きければ、差分にせず全文を描く。**
+ *
+ * **暫定値である**（実測に基づく調整はまだ行っていない）。本番の実測
+ * （2026-09-07）では、記憶の書き換え 640 件の内訳が
+ * `append` 383 / `move_in` 85 / `move_out` 85 / `describe` 70 / `write` 17 で、
+ * 変わった量の平均は 3,283 バイト、対象文書の平均は 199,007 バイトだった
+ * ——**実運用で起きる書き換えは、どれもこの線の遥かに下に居る。**
+ * 線がどこにあっても実質同じ結果になる範囲で、
+ * 「半分より小さければ差分と呼んでよい」という語感の側へ倒してある。
+ */
+const MEMORY_DELTA_MAX_RATIO = 0.5;
+
+/**
+ * premise のカードに載せる要旨（frontmatter の `description`）の文字数の予算。
+ *
+ * **⚠️ これは「要旨を短くしろ」という目安であって、本文の上限ではない。**
+ * 本文はもう焼き込みに載らない（`renderPremiseCard`）ので、毎ターン全員が払う
+ * のは要旨と目次だけである。要旨だけが上限を持たないと、そこへ本文を書いて
+ * 同じ肥大が戻る——**逃げ道を塞ぐためにここにも予算を置く。**
+ *
+ * **暫定値である。** 本番の実測（2026-09-08T00:40Z）で premise 5本の要旨は
+ * 5,910 / 2,529 / 2,397 / 2,337 / 1,517 文字だった。**3,000 はこの分布の
+ * 「外れ値1本だけを名指しする」位置である**——線に意味を持たせるための選び方で
+ * あって、3,000 という数そのものに根拠は無い。
+ *
+ * **切っても失われない。** 切ったことは必ず名乗り、要旨の全文は
+ * `memory_list` / `memory_read` に在る。
+ */
+export const MEMORY_PROMPT_DESCRIPTION_BUDGET = 3_000;
+
+/**
+ * premise のカードに載せる**節の目次**の文字数の予算。
+ *
+ * **道具（`memory_outline`）の `MEMORY_OUTLINE_BUDGET` とは別物である。**
+ * あちらは「1回のツール応答に何文字載せるか」（MCP の出力上限）、こちらは
+ * 「**毎ターン全員が払う焼き込みに何文字載せるか**」で、切る理由が違う。
+ *
+ * **暫定値である。** 本番の実測（2026-09-08T00:40Z）で premise 5本の見出しの
+ * 総量は 34,823 / 8,474 / 7,393 / 4,934 / 2,971 文字だった。6,000 は
+ * **「大きい2本を名指しし、残り3本はそのまま載る」位置**である。
+ *
+ * **⚠️ 予算に当たったこと自体が、この文書を割れという合図である**——だから
+ * 省略の断りには件数だけでなく、割る手順（`memory_outline` → `memory_section_move`）
+ * を書く（`excerpt.ts` の「続きの取り方を書けるのは、呼び手の側にその口が
+ * 実在するときだけである」）。
+ */
+export const MEMORY_PROMPT_OUTLINE_BUDGET = 6_000;
+
+/**
+ * premise 1文書ぶんの**カード**（要旨 ＋ 節の目次）。**本文は1文字も載らない。**
+ *
+ * ## なぜ全文をやめたか（人間の決定 2026-09-08）
+ *
+ * かつてここは全文だった。`renderMemoryDocuments` の doc も「`premise` は全文。
+ * 切り詰めない（切り詰めた前提は『持っていない前提』と区別できない）」と
+ * 書いていた。**その判断を、持ち主が実測を見たうえで反転させた。**
+ *
+ * 実測（2026-09-08、Railway の PostgreSQL を直接引いた値）:
+ *
+ * | | 全文 | 要旨＋目次 |
+ * | --- | --- | --- |
+ * | premise 5本の合計 | 527,277 文字 | **73,285 文字（13.9%）** |
+ * | 毎ターンの焼き込み | ≒ 411,000 トークン | **≒ 57,000 トークン** |
+ *
+ * `alteroid-work` は 303,013 文字・**917 節**あり、1節あたり約 330 文字だった
+ * ——**判断の前提ではなく、追記され続けたログである**（書き換えの内訳も
+ * `append` 383 に対して `write` 17 で、足すだけで整理していない）。
+ *
+ * 人間の逐語: 「**読みたいときに読める仕組みは必要だが、毎回全行読ませるのは
+ * 無駄だと感じる。**」「そんなに毎回呼び出さなきゃいけない記憶って多くないと
+ * 思っていて。」
+ *
+ * ## ⚠️ これは「切り詰め」ではない。ただし能力の削減ではあり、それは人間が選んだ
+ *
+ * **黙って短くしているのではない**——載るのは要旨と、節id つきの目次と、
+ * 各節の文字数である。⟹ **クローンは「何が書いてあるか」を毎ターン知っており、
+ * 必要な節を `memory_section_read` で1回で開ける。**
+ *
+ * **それでも、開かなければ本文は文脈に無い。** 判断の前提が手元から消えている
+ * 状態は実在するので、**プロンプト側が「開かずに『記憶に根拠が無い』と結論
+ * するな」と明言する必要がある**（`prompt.ts`）。ここを書き忘れると、
+ * PRD「権限境界」（記憶に根拠があるかで判断する）が静かに壊れる——根拠が
+ * 「無い」のではなく「開いていない」だけの状態が、同じ顔で出る。
+ */
+function renderPremiseCard(part: MemoryPart): string {
   const frontmatter = parseMemoryFrontmatter(part.content);
+  const description = frontmatter.kind === 'parsed' ? frontmatter.description : undefined;
+  const { sections } = scanMemorySections(part.content);
+
+  const head =
+    `<!-- memory: ${part.slug}.md（premise・本文は載っていない。` +
+    `全 ${formatMemoryCharCount(part.content.length)} 文字 / ${formatMemoryCharCount(sections.length)} 節） -->`;
+
+  const trimmed = description?.trim() ?? '';
+  const summaryLine =
+    trimmed.length === 0
+      ? '要旨: （まだ書かれていない。memory_frontmatter_set の description で書くこと——' +
+        'ここが空だと、本文を開くまでこの文書が何なのか分からない）'
+      : trimmed.length <= MEMORY_PROMPT_DESCRIPTION_BUDGET
+        ? `要旨: ${trimmed}`
+        : `要旨: ${excerpt(trimmed, MEMORY_PROMPT_DESCRIPTION_BUDGET)}\n` +
+          `⚠ 要旨が長すぎて毎ターンの焼き込みに収まっていない（${formatMemoryCharCount(trimmed.length)} 文字 / ` +
+          `目安 ${formatMemoryCharCount(MEMORY_PROMPT_DESCRIPTION_BUDGET)} 文字）。全文は memory_list / memory_read に在る。` +
+          '要旨に本文を書かず、本文は節へ移して memory_frontmatter_set で要旨を短くすること。';
+
+  if (sections.length === 0) {
+    return [
+      head,
+      summaryLine,
+      '節: 1つも無い（見出しが無いか、前書きしか無い）。本文は memory_read で開く。' +
+        '**見出しを付けると節id で名指しして開けるようになる**（memory_section_read）。',
+    ].join('\n');
+  }
+
+  const listing = renderListing(memorySectionLines(sections), {
+    budget: MEMORY_PROMPT_OUTLINE_BUDGET,
+    omitted: ({ rest, shown, total }) =>
+      `…末尾 ${rest} 節は目次から省略（全 ${total} 節のうち先頭 ${shown} 節だけ載せた）。` +
+      '⚠ この文書は大きすぎて、目次すら毎ターンの焼き込みに収まっていない。' +
+      'memory_outline（side=tail で末尾も見られる）で残りを確かめ、' +
+      'memory_section_move で付録の文書へ割ること。',
+  });
+
+  return [
+    head,
+    summaryLine,
+    '節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:',
+    listing,
+  ].join('\n');
+}
+
+/**
+ * premise のカードの「変わった範囲だけ」を描く。差分にする価値が無ければ
+ * `null` を返す（呼び手はカード全体へ倒す）。
+ *
+ * ## なぜ要るのか — 小さな書き換えがカード1枚ぶんの文脈を積んでいた
+ *
+ * `clone.ts` の `#withFreshMemory` は、変わった文書を会話へ載せ直す。その塊は
+ * 会話の履歴として残り続けるので、**1回の書き換えの費用は「変えた量」ではなく
+ * 「載せ直す塊の大きさ」で決まる。**
+ *
+ * 本番の実測（2026-09-07、Railway の PostgreSQL を直接引いた値）: 記憶の
+ * 書き換えは1日 244 回あり、`alteroid-work` だけで 120 回だった。**カードに
+ * したあとでも、1枚が予算いっぱい（要旨 ＋ 目次）なら1日で数十万トークンが
+ * 会話へ積まれる。**
+ *
+ * ## 行の集合で差を取る（前後の一致で切らない）
+ *
+ * **カードは「見出し行 ＋ 要旨 ＋ 節の行」という索引であり、行が識別子である。**
+ * ⟹ 前の版に無い行だけを、文書に現れる順のまま並べればよい。
+ *
+ * **前後の一致（共通の接頭辞・接尾辞）で切る形にしないこと。** カードの1行目は
+ * 「全 N 文字 / M 節」を含むので**必ず変わる**——接頭辞が常に0行になり、
+ * 末尾の節を1つ足しただけでも「全部変わった」に落ちる（実際にそう実装して
+ * 落ちた）。
+ *
+ * **行の境界は必ず文字の境界である。** 記憶の見出しには絵文字（⚠️ / 🎯）が
+ * 実際に含まれており、UTF-16 の code unit で切るとサロゲートペアが割れて
+ * 壊れた文字を文脈へ載せうる。行で扱う限りそれが起こりえない。
+ *
+ * ## 「載せていない」を「無くなった」と読ませない
+ *
+ * 変わっていない行数と、**前の版に在って今は無い行数**を必ず名乗る
+ * （`excerpt.ts` の「切ったら、切ったことを必ず言う」と同じ約束）。黙って
+ * 省くと、クローンはそれを記憶の破損として読む。
+ *
+ * **⚠️ 行が移動しただけのときは「変わっていない」に数える。** カードは索引なので、
+ * 同じ行が別の位置に在っても持っている情報は同じである——ここで位置まで見ると、
+ * 節を1つ並べ替えただけで全体が差分に出る。
+ */
+function renderPremiseDelta(slug: string, seenCard: string, nextCard: string): string | null {
+  const nextLines = nextCard.trimEnd().split('\n');
+  const seenLines = seenCard.trimEnd().split('\n');
+  if (nextCard.trimEnd() === seenCard.trimEnd()) return null;
+
+  const seenSet = new Set(seenLines);
+  const nextSet = new Set(nextLines);
+  const added = nextLines.filter((line) => !seenSet.has(line));
+  const droppedCount = seenLines.filter((line) => !nextSet.has(line)).length;
+  const unchangedCount = nextLines.length - added.length;
+
+  // `join('\n')` の長さで測る——実際に載る形そのもので判定する。
+  if (added.join('\n').length > nextCard.length * MEMORY_DELTA_MAX_RATIO) return null;
+
+  return [
+    `<!-- memory: ${slug}.md（カードの変わった範囲だけ） -->`,
+    `（このカードは全 ${formatMemoryCharCount(nextLines.length)} 行。うち ` +
+      `${formatMemoryCharCount(unchangedCount)} 行は変わっていないので載せていない。` +
+      `カードの全体は memory_list、節の本文は memory_section_read で開ける）`,
+    ...added,
+    ...(droppedCount === 0
+      ? []
+      : [
+          `（前の版に在って、いまは無い行: ${formatMemoryCharCount(droppedCount)} 行。` +
+            '節が消えたか、書き換わって別の行になったかのどちらかである）',
+        ]),
+  ].join('\n');
+}
+
+/**
+ * premise 1文書ぶんの描画。`seen`（クローンが既に見ている版）が渡され、かつ
+ * 差分にする価値があるときだけ、**変わった範囲だけ**を描く。
+ *
+ * **`seen` を渡さない呼び手（システムプロンプトへの焼き込み・床の測定）は
+ * カードの全体を得る。**
+ */
+function renderPremisePart(part: MemoryPart, seen?: string): string {
+  const frontmatter = parseMemoryFrontmatter(part.content);
+  const card = renderPremiseCard(part);
+  const delta =
+    seen === undefined
+      ? null
+      : renderPremiseDelta(part.slug, renderPremiseCard({ slug: part.slug, content: seen }), card);
+  const rendered = delta ?? card;
   return frontmatter.kind === 'malformed' ? `${MALFORMED_FRONTMATTER_NOTE}\n${rendered}` : rendered;
 }
 
@@ -1148,6 +1361,7 @@ function renderPremisePart(part: MemoryPart): string {
 function buildMemoryDocumentSections(
   documents: readonly MemoryPart[],
   presentInMemory?: readonly MemoryPart[],
+  seenContent?: ReadonlyMap<string, string>,
 ): {
   premiseParts: MemoryPart[];
   premiseSection: string;
@@ -1174,7 +1388,11 @@ function buildMemoryDocumentSections(
   }
 
   const premiseSection =
-    premiseParts.length === 0 ? '' : premiseParts.map(renderPremisePart).join('\n\n');
+    premiseParts.length === 0
+      ? ''
+      : premiseParts
+          .map((part) => renderPremisePart(part, seenContent?.get(part.slug)))
+          .join('\n\n');
   // 目次の外にも実在する slug を、**在り処ごとに分けて**渡す——`documents` は
   // 「記憶の全部」とは限らないので、ここで畳むと実在するものが「見つからない」
   // として出る（`renderMemoryTocIssue` の 'parent-not-listed' と
@@ -1213,6 +1431,22 @@ export interface RenderMemoryDocumentsOptions {
    * 出る。**渡さなければ出力は1バイトも変わらない。**
    */
   presentInMemory?: readonly MemoryPart[];
+
+  /**
+   * **クローンが既に見ている版**（slug → その時点の `content`）。
+   * 載せ直す呼び手（`clone.ts` の `#withFreshMemory`）だけが渡す。
+   *
+   * 渡すと、premise は**全文ではなく変わった範囲だけ**が描かれる
+   * （差分にする価値があるときだけ。`renderPremiseDelta`）。
+   * **渡さなければ出力は1バイトも変わらない**——システムプロンプトへの
+   * 焼き込みと `measureMemoryFloor`（床の測定）はどちらも渡さないので、
+   * 「毎ターンの床」の値はこの引数の存在によって1文字も動かない。
+   *
+   * **`fact` には効かない。** fact はもともと目次の1行しか載らないので、
+   * 差分にする余地が無い（`buildMemoryDocumentSections` は premise の枝でしか
+   * これを見ない）。
+   */
+  seenContent?: ReadonlyMap<string, string>;
 }
 
 /** `premiseSection` と `tocSection` を、実際に焼き込む1本の文字列へ繋ぐ。 */
@@ -1224,18 +1458,27 @@ function joinMemorySections(premiseSection: string, tocSection: string): string 
  * 記憶をクローンの文脈へ載せる、唯一の入口。
  *
  * **区分ごとに載り方を変える**（4-1「B. 区分と載せ方」）:
- * - `premise`（判断の前提。既定でもある） — **全文**。切り詰めない
- *   （切り詰めた前提は「持っていない前提」と区別できない）
+ * - `premise`（判断の前提。既定でもある） — **要旨と節の目次**
+ *   （`renderPremiseCard`）。本文は `memory_section_read` で節id を指して開く
  * - `fact`（事実と蓄積） — **目次の1行だけ**。本文は `memory_read` で開く
  *
- * **どの文書も、全文か目次行かの「どちらか一方」に必ず現れる**（二重に
+ * **⚠️ かつてここは「`premise` は全文。切り詰めない（切り詰めた前提は『持って
+ * いない前提』と区別できない）」だった。人間が実測を見たうえで反転させた**
+ * （2026-09-08。経緯と数は `renderPremiseCard` の doc）。**本文が消えたのでは
+ * なく、開く口が別に在る**（`memory_section_read`）——「切り詰め」ではないと
+ * 言えるのはその口が在るからで、**口を消したらこの載せ方は能力の削除になる。**
+ *
+ * **どの文書も、カードか目次行かの「どちらか一方」に必ず現れる**（二重に
  * 載せない・取りこぼさない）。文書の順序は呼び手（ストア）が決めた順
  * そのまま（`premise` は slug 昇順のまま連結、`fact` は目次側で
  * 階層・slug 昇順に並べ直す）。
  *
  * frontmatter を1つも持たない文書の集合（`kind: 'none'` のみ）に対しては、
- * 全件が `premise` に分類されるため、出力は frontmatter 導入前の
- * `renderMemoryDocuments` と1バイトも変わらない（受け入れ基準の最上位）。
+ * 全件が `premise` に分類される——**区分の既定は変えていない。** ただし
+ * `premise` の載り方そのものが全文からカードへ変わったので、**「frontmatter
+ * 導入前と1バイトも変わらない」はもう成り立たない**（かつてここに在った
+ * 受け入れ基準は、人間が載せ方を反転させた時点で意味を失った。歯も同じ
+ * 理由で書き換えてある）。
  *
  * ## ⚠️ `documents` が「記憶の全部」でない呼び方がある
  *
@@ -1245,6 +1488,17 @@ function joinMemorySections(premiseSection: string, tocSection: string): string 
  * 現れない。**その状態を「存在しない」と報告しないために、部分だけを渡す呼び手は
  * `options.presentInMemory` に記憶の全体の文書を渡すこと**（渡さないと、親が
  * 今回変わっていないだけで「親 X が見つからない」と出る）。
+ *
+ * ## ⚠️ `options.seenContent` を渡すと premise が全文でなくなる
+ *
+ * 上の「`premise` は全文。切り詰めない」は、**`seenContent` を渡さない呼び手に
+ * 対する約束である。** 渡した呼び手（載せ直し）には、変わった範囲だけが返る
+ * ——省いた側は必ず行数と文字数で名乗る（`renderPremiseDelta`）。
+ *
+ * **これは「切り詰め」ではない。** 切り詰めは「全体を渡すつもりで一部を落と
+ * す」ことで、落ちた分が読み手から見えなくなる。こちらは**渡す集合そのものが
+ * 「今回変わった範囲」**であり、変わっていない側は同じ文脈の別の場所
+ * （システムプロンプトの「現在の記憶」）に全文で載っている。
  */
 export function renderMemoryDocuments(
   documents: readonly MemoryPart[],
@@ -1253,6 +1507,7 @@ export function renderMemoryDocuments(
   const { premiseSection, tocSection } = buildMemoryDocumentSections(
     documents,
     options.presentInMemory,
+    options.seenContent,
   );
   return brandRenderedMemory(joinMemorySections(premiseSection, tocSection));
 }
@@ -1618,7 +1873,7 @@ function formatMemoryFloorTransition(beforeChars: number, afterChars: number): s
  *    書き換える窓があり、ここに出る値と次のターンに実際に焼かれる量が
  *    一致しない可能性があるため。`self_status` が既に採っている形
  *    「記憶の大きさ（いま stores.persona を読み直した値）」に揃える）
- * 3. **`premise` を新規作成したときだけ**、それが「毎ターン全文が焼かれる」
+ * 3. **`premise` を新規作成したときだけ**、それが「毎ターン要旨と節の目次が焼かれる」
  *    ことを1行で言う——premise の新規作成は稀である（習慣化しない）ので、
  *    ここだけ他の枝より明確に強い言い方にしてある。**この枝にはさらに2つ
  *    足す**（依頼者の決裁。#318 の議論で「線が無くても、稀にしか出ない枝には
@@ -1665,7 +1920,8 @@ export function describeMemoryFloor(input: {
     const lines = [
       `⭐ 新規作成: ${slug}（区分: premise）。`,
       floorLine,
-      '⚠️ premise は毎ターン全文がそのままクローンの文脈へ焼かれる（切り詰めない）。',
+      '⚠️ premise は毎ターン「要旨＋節の目次」がクローンの文脈へ焼かれる（本文は載らない）。' +
+        '節の本文は memory_section_read で開く。要旨と見出しは短く保つこと。',
     ];
     const largest = after.largestPremise;
     if (largest !== null) {
@@ -1732,6 +1988,27 @@ export function describeMemoryFloor(input: {
  * （`memoryFloorNote` / `memorySessionGrowthNote` に渡しているのと同じ変数
  * `memoryAfter`）——**ここで改めてストアを読み直さない**（依頼者の門3
  * 「クローンの呼び出し回数に比例する費用を足さない」）。
+ *
+ * ## 第3引数（`seenContent`）— 「クローンが既に見ている版」
+ *
+ * `#withFreshMemory` は**変わった範囲だけ**を載せるので、見込みも同じ計算に
+ * 揃える必要がある（`renderMemoryDocuments` の `options.seenContent`）。
+ * 呼び手4箇所は**この書き込みの直前の内容**をもう手元に持っている
+ * （`describeMemoryWriteDiff` へ渡している `before` と同じ値）ので、それを
+ * そのまま渡す。
+ *
+ * **⚠️ 「直前の内容」と「クローンが実際に見ている版」は、いつも同じではない。**
+ * クローンが見ているのは**前回の載せ直しの時点の内容**であり、同じターンの
+ * 中で同じ文書を2回書き換えれば、2回目の呼び出しが渡す `before` は1回目の
+ * 結果＝クローンがまだ見ていない版になる。そのとき実物（次のターンに載る量）
+ * のほうが**多い**。これは下の「他に何も変わらなければ」という既存の条件の
+ * 一形態であって、新しく生まれた限界ではない——**ただし向きは覚えておくこと。
+ * ずれるときは必ず「見込みのほうが小さい」側へずれる。**
+ *
+ * **`undefined` を許さず、空の `Map` を渡させる形にしていない**のは
+ * `memoryAfter` と同じ理由である（省略できる形にすると、渡し忘れが黙って
+ * 「全文」寄りの大きい数へ倒れる。そちらは安全側だが、**実物と食い違った
+ * まま気づけない**——見込みは実物と一致することにしか価値が無い）。
  *
  * ## ⚠️ これは予測であって実測ではない（依頼者の明示条件）
  *
@@ -1814,17 +2091,36 @@ export function describeMemoryFloor(input: {
 export function describeMemoryReinjectionEstimate(
   parts: readonly [MemoryPart, ...MemoryPart[]],
   memoryAfter: readonly MemoryPart[],
+  seenContent: ReadonlyMap<string, string>,
 ): string {
   if (parts.length === 0) {
     throw new Error('describeMemoryReinjectionEstimate: parts が空（呼び手の実装誤り）');
   }
 
-  const chars = renderMemoryDocuments(parts, { presentInMemory: memoryAfter }).length;
+  const chars = renderMemoryDocuments(parts, {
+    presentInMemory: memoryAfter,
+    seenContent,
+  }).length;
   const kindOf = (part: MemoryPart): MemoryDocKind =>
     resolveMemoryDocKind(parseMemoryFrontmatter(part.content));
-  const kindLabel = (kind: MemoryDocKind): string =>
-    kind === 'premise' ? 'premise・全文' : 'fact・目次1行';
-  const breakdown = parts.map((part) => `${part.slug}（${kindLabel(kindOf(part))}）`).join(' + ');
+  // **「全文」か「変わった範囲だけ」かは、実際に描いてみて決まる**
+  // （`renderPremiseDelta` は差分にする価値が無ければ全文へ倒れる）。
+  // ラベルを別の判定で作らない——判定を2本に割ると、片方だけ直したときに
+  // 内訳が黙って嘘をつく（`measureMemoryFloor` と同じ形の前科）。
+  const labelOf = (part: MemoryPart): string => {
+    const kind = kindOf(part);
+    if (kind === 'fact') return 'fact・目次1行';
+    const seen = seenContent.get(part.slug);
+    return seen !== undefined &&
+      renderPremiseDelta(
+        part.slug,
+        renderPremiseCard({ slug: part.slug, content: seen }),
+        renderPremiseCard(part),
+      ) !== null
+      ? 'premise・カードの変わった範囲だけ'
+      : 'premise・カード（要旨＋節の目次）';
+  };
+  const breakdown = parts.map((part) => `${part.slug}（${labelOf(part)}）`).join(' + ');
 
   const subjectLabel =
     parts.length === 1
@@ -2279,27 +2575,121 @@ export function lookupMemorySection(
 }
 
 /**
- * 節を切り取った後の `content` と、切り取った文字列を返す。
+ * 複数の節をまとめて切り取った後の `content` と、切り取った文字列を返す
+ * （`memory_section_move` が1回で複数の節id を移せるようにするために足した。
+ * 節が1個のときも同じ関数を通す——単体版は残していない。1節しか渡されない
+ * 呼び出しは `sections` に1要素の配列を渡すだけでよく、実装を2本持つ理由が
+ * 無い）。
  *
- * **組み立ては継ぎ足しである。** `content.slice(0, section.start)` と
- * `content.slice(section.end)` を繋ぐだけなので、**frontmatter のバイト列は
- * 添字で運ばれるだけで一度も書き直されない**（`memoryBodyStart` の doc）。
- * `section.start` は必ず `memoryBodyStart(content)` 以上なので、frontmatter が
- * 切り取りの範囲に入ることは無い。
+ * ## 組み立て
  *
- * **それでも書き込み前に検査すること**——この関数が正しいことと、次にここを
- * 触る人が組み直す形に変えないことは別である（`memory_section_move` の
- * 第3層。`tools.ts` を読むこと）。
+ * 1. `sections` を **`start` の昇順に並べ替える**——呼び手が渡した順ではない
+ *    （`memory_section_move` の `sections` 引数の doc「渡す順ではなく文書に
+ *    現れる順」）。
+ * 2. `nextContent` は範囲の**間**の slice を繋いで作る（先頭の節の前・
+ *    節と節の間・末尾の節の後ろ）。
+ * 3. `cut` は範囲の中身を**文書に現れる順**で繋ぐ。呼び手が逆順（後ろの
+ *    節を先に）渡しても、移し先には元の文書に現れる順で並ぶ。
+ *
+ * **継ぎ足しであることは1節のときと変わらない。** `slice` を繋ぐだけで
+ * `serializeMemoryFrontmatter` を一度も通さない。`section.start` は必ず
+ * `memoryBodyStart(content)` 以上（`MemorySection` の doc）なので、
+ * frontmatter のバイト列がどの節の範囲にも入らないことも変わらない
+ * （`memoryBodyStart` の doc）。**それでも書き込み前に検査すること**——
+ * この関数が正しいことと、次にここを触る人が組み直す形に変えないことは
+ * 別である（`memory_section_move` の第3層。`tools.ts` を読むこと）。
+ *
+ * ## ⚠️ 並べ替えた列（`ordered`）も返す——並び順の所有権はここにある
+ *
+ * 呼び手（`memory_section_move`）は、移した節を応答の一覧に**文書順で**並べる
+ * ためにこの並びを要る。そこで呼び手が自分でもう一度並べ替えると、**同じ規則が
+ * 2箇所に立つ**——片方を壊しても、もう片方が結果を正しくしてしまうので、
+ * 「渡す順ではなく文書順で並ぶ」という保証を変異で撃っても歯が1本も赤く
+ * ならなくなる（実測 2026-09-08。変異試験で見つけた）。**規則を1箇所に置き、
+ * 並べ替えの結果そのものを返して呼び手に使わせる。**
+ *
+ * ## ⚠️ 範囲が重ならないことは呼び手の責任である
+ *
+ * ここには重なりを検出する分岐を置いていない。重なった範囲を渡すと、
+ * 昇順に並べた次の節の `start` が前の節の `end` より手前に来て、
+ * 「間」の slice が負の範囲になったり同じ文字列を2回運んだりする——
+ * その検出は `findOverlappingMemorySections` の仕事であり、
+ * `memory_section_move` はこの関数を呼ぶ前にそちらで断る
+ * （`tools.ts` を読むこと）。ここに同じ検査を重ねて置くと、片方を
+ * 直したときにもう片方が古いままになる経路ができるので、重ねない。
  */
-export function cutMemorySection(
+export function cutMemorySections(
   content: string,
-  section: MemorySection,
-): { nextContent: string; cut: string } {
-  return {
-    nextContent: content.slice(0, section.start) + content.slice(section.end),
-    cut: content.slice(section.start, section.end),
-  };
+  sections: readonly MemorySection[],
+): { nextContent: string; cut: string; ordered: readonly MemorySection[] } {
+  const ordered = [...sections].sort((a, b) => a.start - b.start);
+
+  let nextContent = '';
+  let cut = '';
+  let cursor = 0;
+  for (const section of ordered) {
+    nextContent += content.slice(cursor, section.start);
+    cut += content.slice(section.start, section.end);
+    cursor = section.end;
+  }
+  nextContent += content.slice(cursor);
+
+  return { nextContent, cut, ordered };
 }
+
+/**
+ * 複数の節id を渡されたとき、範囲が重なっている組が無いかを確かめる
+ * （`memory_section_move` が複数節を移す前の全件先出しの検査の一部）。
+ *
+ * `start` の昇順に並べ、**隣り合う組だけ**を見る。範囲が重ならないなら
+ * ソート後は隣り合う組ごとに `prev.end <= next.start` が成り立つはずなので、
+ * それが崩れた最初の組を返せば十分——3つ以上にまたがる重なりも、
+ * どこかの隣り合う組で必ず引っかかる。重なりが無ければ `null`。
+ *
+ * ## 捕まえるのは2つの形
+ *
+ * 1. **親と子を同時に指した。** `MemorySection.end` は子込み（同じ深さ
+ *    以下の次の見出しの直前まで）なので、親を切り取ると子も一緒に
+ *    消える——気づかずに子の節id も渡していると、同じ節を実質2回
+ *    動かす指示になる。
+ * 2. **同じ節id を2回渡した。** `lookupMemorySection` で同じ節を指す
+ *    id を2つ渡すと、範囲（`start` と `end`）が完全に一致するので、
+ *    これも重なりとして拾われる。
+ *
+ * ## ⚠️ 兄弟（隣り合う節）は重なりではない
+ *
+ * 兄弟どうしは前の節の `end` が次の節の `start` に一致する
+ * （`prev.end === next.start`）。ここでの判定は**厳密な** `next.start < prev.end`
+ * なので、これは重なりとして拾われない。`<=` にすると、1つの見出しの
+ * 下に並ぶ複数の兄弟節を一度に移すだけの正当な呼び出しまで断ることに
+ * なる——複数の兄弟をまとめて移すのは複数節対応そのものの使い道なので、
+ * ここを断る分岐は足さない。
+ */
+export function findOverlappingMemorySections(
+  sections: readonly MemorySection[],
+): { first: MemorySection; second: MemorySection } | null {
+  const sorted = [...sections].sort((a, b) => a.start - b.start);
+  for (let index = 1; index < sorted.length; index += 1) {
+    const prev = sorted[index - 1] as MemorySection;
+    const next = sorted[index] as MemorySection;
+    if (next.start < prev.end) return { first: prev, second: next };
+  }
+  return null;
+}
+
+/**
+ * `memory_section_move` が応答に並べる「移した節の一覧」の文字数予算。
+ *
+ * **件数ではなく文字数で切る**——`MEMORY_OUTLINE_BUDGET` と同じ思想
+ * （見出しの長さは節ごとにばらばらなので、件数で切ると出力量が見出しの
+ * 長さ次第で暴れる。AGENTS.md の地雷表）。渡された節id が90個でも応答が
+ * 際限なく伸びないための歯止めであり、ここで切れるのは**一覧の表示**
+ * だけである——移動そのものは、この一覧を組む前に全件先出しの検査
+ * （`findOverlappingMemorySections` を含む）を通って一括で終わっている
+ * ので、「一覧から省略」であって「移動していない」ではない
+ * （`tools.ts` の `memory_section_move` の doc）。
+ */
+export const MEMORY_SECTION_MOVE_LIST_BUDGET = 2_000;
 
 /** 目次の予算（文字数）。件数では切らない（AGENTS.md の地雷表）。 */
 export const MEMORY_OUTLINE_BUDGET = 8_000;
@@ -2355,6 +2745,29 @@ export type MemoryOutlineSide = (typeof MEMORY_OUTLINE_SIDES)[number];
  * （`memorySectionId`）ので、**どちら側を出したかで id は1文字も変わらない ＝
  * 版の照合は弱まらない。**
  */
+/**
+ * 節の一覧の**1行の形**。目次を出す場所が2つ（道具の `memory_outline` と、
+ * プロンプトへ焼く記憶のカード）あるので、**行の形の持ち主をここ1つにする。**
+ *
+ * **予算と省略の文言は共有しない。** どちらも「何文字まで載せてよいか」と
+ * 「省いたときに何をすればよいか」が違う（道具は `side` で反対側を出せるが、
+ * 焼き込みは1回しか描かない）。⟹ 共有するのは行の形だけで、切り方は呼び手が
+ * 持つ（`.claude/skills/listing-and-detail/SKILL.md` の「予算は件数ではなく
+ * 文字数で持つ」は呼び手ごとに効く）。
+ */
+function memorySectionLines(sections: readonly MemorySection[]): string[] {
+  const counts = new Map<string, number>();
+  for (const section of sections) counts.set(section.id, (counts.get(section.id) ?? 0) + 1);
+  return sections.map((section) => {
+    const indent = '  '.repeat(section.depth - 1);
+    const ambiguous =
+      (counts.get(section.id) ?? 0) > 1
+        ? ' ⚠この id は複数箇所に当たる。この id では動かせない（memory_section_move は断る）'
+        : '';
+    return `${indent}[${section.id}] ${section.heading} — ${formatMemoryCharCount(section.chars)} 文字${ambiguous}`;
+  });
+}
+
 export function renderMemoryOutline(
   sections: readonly MemorySection[],
   side: MemoryOutlineSide = 'head',
@@ -2365,16 +2778,7 @@ export function renderMemoryOutline(
       '前書きは節ではないので memory_section_move では動かせない。'
     );
   }
-  const counts = new Map<string, number>();
-  for (const section of sections) counts.set(section.id, (counts.get(section.id) ?? 0) + 1);
-  const items = sections.map((section) => {
-    const indent = '  '.repeat(section.depth - 1);
-    const ambiguous =
-      (counts.get(section.id) ?? 0) > 1
-        ? ' ⚠この id は複数箇所に当たる。この id では動かせない（memory_section_move は断る）'
-        : '';
-    return `${indent}[${section.id}] ${section.heading} — ${formatMemoryCharCount(section.chars)} 文字${ambiguous}`;
-  });
+  const items = memorySectionLines(sections);
   // **どちら側を落としたかを言う。** 「N 節省略」だけだと続きの取り方を間違える
   // （`conversation_read` の中身モードが同じ理由で同じことをしている）。そして
   // **続きの取り方を書けるのは、呼び手の側にその口が実在するときだけである**
