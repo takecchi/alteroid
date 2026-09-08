@@ -1,0 +1,55 @@
+-- 0005_analyze_memories.sql
+--
+-- 0004_contested_with_index.sql が `idx_memories_contested_with` を足したのに続けて、
+-- ここで `memories` の統計情報を更新する。**別ファイルに分けたのは、適用済みの
+-- マイグレーションを書き換えないという規約があるから、それだけではない**——
+-- `ANALYZE` は索引が既に在ることで初めて意味を持つ（索引の無い列を統計に足すことは
+-- できない）。ゆえに「索引を足す 0004」の直後に「その索引の統計を作る 0005」という
+-- 順序そのものが正しい形であり、0003 や 0004 に混ぜ込むことはできない。
+--
+-- **`ANALYZE` はこのマイグレーションの実行系（migrate.ts:340 `BEGIN` 〜 :349 `COMMIT`、
+-- 各ファイルを1トランザクションで包む）の中で実行できる。`VACUUM` はできない。**
+-- 実測: `BEGIN; ANALYZE memories; COMMIT;` は成功する。`BEGIN; ANALYZE; COMMIT;`
+-- （データベース全体）も成功する。一方 `BEGIN; VACUUM ANALYZE memories; COMMIT;` は
+--
+--   ERROR: VACUUM cannot run inside a transaction block
+--
+-- で失敗する——`VACUUM`（`VACUUM ANALYZE` を含む）はトランザクションブロックの外側
+-- でしか実行できないという PostgreSQL 自体の制約であり、`migrate.ts` を直しても
+-- 消えない。ゆえにこのファイルは `ANALYZE memories;` のみを持ち、`VACUUM` には
+-- 触れない。
+--
+-- 🔴 **正直な限界: 新規インストールでは、このマイグレーションは何もしない。**
+-- `0001`〜`0005` は新規インストールでは1つの `runMigrations()` 呼び出しの中で
+-- 順に適用される——つまりこの `ANALYZE memories;` が走る時点で `memories` は
+-- まだ空である。`ANALYZE` は空テーブルに対しても成功する（エラーにはならず
+-- `last_analyze` も更新される）が、**サンプルする行が無いので統計を何も集めない**
+-- （`pg_stats` の該当行数・式索引の統計行数・`reltuples`/`relpages` のいずれも 0）。
+-- 実測（0001〜0005 を空テーブルに適用してから100,000行を投入し、以降 `ANALYZE`
+-- を一切走らせない「新規インストール順」）: 段1の ANN クエリは **37.4 / 33.2 / 32.9 ms**
+-- ——本 PR の修正が何も無い場合と統計的に同じ遅さである。⟹ **このマイグレーションが
+-- 実際に効くのはアップグレード経路（既にデータの入ったテーブルへ後から索引を足す
+-- 場合）だけ**であり、新規デプロイでは、データを投入した**後**に運用側（デプロイの
+-- 手順書・cron・オペレータ操作のいずれか）が改めて `ANALYZE` を走らせて初めて
+-- 統計が生まれる。この運用手順の整備は本マイグレーションの範囲外——ここでは
+-- 「必要である」という事実だけを記録する。
+--
+-- アップグレード経路（0001〜0004 を空テーブルに適用 → 100,000行投入 → ここで
+-- 初めて0005を適用、という実際の `runMigrations()` 経由の実測）では効果がある:
+-- 0005適用前はプランナが誤った索引（`idx_memories_recall_gate` + 事後の `Filter`）
+-- を選び `reltuples|relpages` は `-1|0`（「一度も ANALYZE されていない」の意味であり、
+-- プランナは行数の見積もりを一切持たない）、段1の ANN クエリは **35.0 / 39.8 / 42.4 ms**。
+-- 0005適用後はプランナが `idx_memories_period_ann_stage` に切り替わり、見積もり
+-- **535** 行に対し実際 **491** 行、**4.6 / 4.5 / 5.6 ms**。詳細と一次資料は
+-- ADR 0062 参照。
+--
+-- **`ANALYZE memories;` であって `ANALYZE;`（データベース全体）ではない**:
+-- このスキーマ全体で式索引は `idx_memories_period_ann_stage` の1本だけであり
+-- （他の部分索引 `idx_memories_contested`・`idx_memories_contested_with`・
+-- `idx_memories_recall_gate`・`idx_memories_superseded_by`・
+-- `uq_memories_extraction`・`uq_observations_external_id`・`idx_outbox_claimable`・
+-- `idx_outbox_pending` はいずれも列の並びと `WHERE` 述語だけで式を持たない）、
+-- 式索引の統計が要る唯一のテーブルは `memories` である。他のテーブル
+-- （`observations`・`outbox` 等）の統計まで同じマイグレーションで更新する理由がない。
+
+ANALYZE memories;
