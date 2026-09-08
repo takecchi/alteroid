@@ -5117,7 +5117,8 @@ export function createCloneTools(context: ToolContext) {
         // **`part === 'request'` では何もしない。** 依頼文はそもそも報告では
         // ないので、失敗の有無で呼び方が変わる欄ではない。
         const failure = part === 'request' ? null : describeManagerFailure(found.lastFailure);
-        const label = part === 'request' ? '依頼文' : failure === null ? '直近の報告' : '直近のターンの中身';
+        const label =
+          part === 'request' ? '依頼文' : failure === null ? '直近の報告' : '直近のターンの中身';
         const part1 = page(body, offset, REPORT_PAGE);
         const head = `マネージャー ${managerId} の${label}（${describePage(part1)}）`;
         // **失敗は本文の`上`に置く**（`manager_list` と同じ順。人間の CLI も

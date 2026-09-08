@@ -4382,7 +4382,9 @@ describe('クローンの道具', () => {
     expect(reply).toContain('assistant_error');
     expect(reply).toContain('2026-09-09T01:23:45.000Z');
     // 3. 見出しが切り替わる。**「報告」という語を失敗した回に使わない。**
-    expect(reply).toContain('直近のターンの中身: （このターンは応答を返さずに終わった: billing_error）');
+    expect(reply).toContain(
+      '直近のターンの中身: （このターンは応答を返さずに終わった: billing_error）',
+    );
     expect(reply).not.toContain('直近の報告');
   });
 
