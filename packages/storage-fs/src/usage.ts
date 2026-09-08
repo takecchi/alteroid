@@ -24,7 +24,6 @@ import type {
   UsageSnapshot,
   UsageStore,
   UsageTotals,
-  UsageTurnRow,
 } from '@alteroid/core';
 import { z } from 'zod';
 
