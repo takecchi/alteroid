@@ -76,7 +76,7 @@ describe('落とした記録の跡', () => {
       },
       { type: 'tool_use', actor: 'manager:mgr-1', tool: 'Bash', input: { command: secret } },
       { type: 'memory_update', slug: 'values', cause: 'clone', summary: secret },
-      { type: 'daily_report', date: '2026-08-16', body: secret },
+      { type: 'daily_report', date: '2026-08-16', body: secret, unavailable: secret },
       { type: 'external_event', source: 'github', summary: secret },
       {
         type: 'token_rotation',
@@ -143,25 +143,103 @@ describe('落とした記録の跡', () => {
   });
 
   /**
+   * `unavailable` は自由文（「なぜ書けなかったか」）なので長さだけ出す。
+   * この欄の**有無**が跡から読めることそのものに意味がある——
+   * `isWrittenDailyReport`（`schema.ts`）がこの欄の有無で「本物の日報か」を
+   * 判定するため、印が無いと再試行が死ぬ（`schema.ts` の
+   * `daily_report.unavailable` の doc）。既存の `body` の出し方（無名）は
+   * 変えていない。
+   */
+  it('daily_report は unavailable があれば長さだけ載せ、無ければ欄ごと出ない', () => {
+    const unavailableValue = '上限に当たって日報を書けなかった';
+    const withUnavailable = journalEntryShape({
+      type: 'daily_report',
+      date: '2026-08-20',
+      body: '',
+      unavailable: unavailableValue,
+    });
+
+    expect(withUnavailable).toBe(
+      `daily_report date=2026-08-20 chars=0 unavailable.chars=${unavailableValue.length}`,
+    );
+    expect(withUnavailable).not.toContain(unavailableValue);
+
+    const withoutUnavailable = journalEntryShape({
+      type: 'daily_report',
+      date: '2026-08-20',
+      body: 'できた',
+    });
+    expect(withoutUnavailable).toBe('daily_report date=2026-08-20 chars=3');
+    expect(withoutUnavailable).not.toContain('unavailable');
+  });
+
+  /**
    * `worker_wait` は自由文を1つも持たない — 全フィールドが runner 自身の
    * 数え上げ（整数・真偽値）である。値を決めるのは runner であって外の世界
    * ではないので、`tool_use` の `actor`/`tool` と同じ判定で数値をそのまま
    * 載せてよい（`size()` へ逃がす必要が無い）。
+   *
+   * ⚠️ **かつてこのテストは `worker_wait tasks=5 turns=41 toolless=38
+   * settled=false` という4欄だけの期待値で、11欄中4欄しか出していなかった
+   * 実装の欠陥をそのまま仕様として固定していた。** `openedAt`/`byCause`3欄/
+   * `notifications`/`submits`/`sources` を実装へ足したのに合わせて、期待値を
+   * 全欄へ伸ばした（`AGENTS.md`「現行の欠陥を仕様として固定しているテストは
+   * 反転させてよい」— テストは消さず期待値だけ直し、経緯はこの追記で残す）。
+   * `sources` は record（optional）なので、キー数だけ出る回と、欄自体が
+   * 出ない回の両方を1本のテストで押さえる。
    */
   it('worker_wait は自由文が無いので数値をそのまま載せる', () => {
+    // `byCause` の3値は必ず互いに異なる値にすること。キー↔値の結び付き
+    // （`byCause.input` が本当に `input` の値を読んでいるか）は、3つの値が
+    // 互いに違うときにしか測れない — 全部同じ値だと、結び付きを入れ替えても
+    // 出力の文字列は1文字も変わらず、値を揃えるリファクタが将来入ったら
+    // この歯が静かに抜ける。直下のアサーションで「互いに違うこと」自体を
+    // 固定する。
+    const byCause = { input: 1, notification: 3, continuation: 37 };
+    expect(new Set(Object.values(byCause)).size).toBe(3);
+
     const shape = journalEntryShape({
       type: 'worker_wait',
       openedAt: '2026-08-20T00:00:00.000Z',
       tasks: 5,
       turns: 41,
-      byCause: { input: 1, notification: 3, continuation: 37 },
+      byCause,
       toolless: 38,
       notifications: 3,
       submits: 0,
       settled: false,
     });
 
-    expect(shape).toBe('worker_wait tasks=5 turns=41 toolless=38 settled=false');
+    expect(shape).toBe(
+      'worker_wait openedAt=2026-08-20T00:00:00.000Z tasks=5 turns=41 ' +
+        'byCause.input=1 byCause.notification=3 byCause.continuation=37 toolless=38 ' +
+        'notifications=3 submits=0 settled=false',
+    );
+    // `sources` を渡さない回では、欄自体が出ない
+    expect(shape).not.toContain('sources');
+
+    // `sources` は内訳ではなくキー数だけを出す（`turn_usage` の `models` と
+    // 同じ判定基準）。キー名（`system`/`user`）も値（3/1）も跡に出ないこと。
+    const withSources = journalEntryShape({
+      type: 'worker_wait',
+      openedAt: '2026-08-20T00:00:00.000Z',
+      tasks: 5,
+      turns: 41,
+      byCause,
+      toolless: 38,
+      notifications: 3,
+      submits: 0,
+      sources: { system: 3, user: 1 },
+      settled: false,
+    });
+
+    expect(withSources).toBe(
+      'worker_wait openedAt=2026-08-20T00:00:00.000Z tasks=5 turns=41 ' +
+        'byCause.input=1 byCause.notification=3 byCause.continuation=37 toolless=38 ' +
+        'notifications=3 submits=0 sources=2 settled=false',
+    );
+    expect(withSources).not.toContain('system');
+    expect(withSources).not.toContain('user');
   });
 
   /**
@@ -202,6 +280,35 @@ describe('落とした記録の跡', () => {
     expect(withReset).toBe(
       'turn_usage layer=manager site=session managerId=mgr-1 models=0 reset=yes',
     );
+  });
+
+  /**
+   * `sessionId` は SDK が決める値だが id である（`worker_wait` と同じ判定
+   * 基準）ので `tag()` に載る——生ログへ降りる鍵（`schema.ts` の
+   * `turn_usage.sessionId` の doc）。取れなかった回は欄ごと出ない。
+   */
+  it('turn_usage は sessionId を id として載せ、取れない回は欄ごと出ない', () => {
+    const withSessionId = journalEntryShape({
+      type: 'turn_usage',
+      layer: 'clone',
+      site: 'session',
+      managerId: 'clone',
+      sessionId: 'sess-abc123',
+      models: {},
+    });
+    expect(withSessionId).toBe(
+      'turn_usage layer=clone site=session managerId=clone sessionId=sess-abc123 models=0',
+    );
+
+    const withoutSessionId = journalEntryShape({
+      type: 'turn_usage',
+      layer: 'clone',
+      site: 'session',
+      managerId: 'clone',
+      models: {},
+    });
+    expect(withoutSessionId).toBe('turn_usage layer=clone site=session managerId=clone models=0');
+    expect(withoutSessionId).not.toContain('sessionId');
   });
 
   /**
@@ -247,8 +354,15 @@ describe('落とした記録の跡', () => {
    * 数値は `tag()`/そのままで載せ、自由文（`label`/`noticeText`/`text`）だけを
    * `size()` で長さに潰す。`recoveredSource` は「誰が観測したか」を決める
    * のがこちら側の回し手であって外部入力ではないので、他の列挙値と同じ判定で
-   * `tag()` に載る（#681 (1) の doc）。11欄すべてが載る回を、跡が跡のままに
-   * 保たれることごと固定する。
+   * `tag()` に載る（#681 (1) の doc）。**13欄すべてが載る回を、跡が跡のままに
+   * 保たれることごと固定する。**
+   *
+   * ⚠️ **この名前は元々「11欄すべてが載る」だったが、フィクスチャには
+   * `reason` と `cooldownSource` が抜けており、schema 上13欄あるところ11欄
+   * しか渡していなかった（名前と中身のずれ）。** 実装へ `reason`/
+   * `cooldownSource` を足したのに合わせてフィクスチャと期待値を13欄へ伸ばした
+   * ——既存のアサーションは1つも倒れず、覆う範囲が増えるだけなので反転では
+   * ない。
    */
   it('token_rotation は tag 欄と size 欄が混在し、全欄が載ると跡もそれを反映する', () => {
     const labelValue = 'ラベルてすと';
@@ -257,11 +371,13 @@ describe('落とした記録の跡', () => {
       type: 'token_rotation',
       event: 'recovered',
       signal: 'reached',
+      reason: 'turn_succeeded',
       freshness: 'current',
       tokenId: 'ap-1',
       fromTokenId: 'mgr-1',
       generation: 3,
       earliestAt: '2026-08-20T00:00:00.000Z',
+      cooldownSource: 'quota_reset',
       recoveredSource: 'account_probe',
       label: labelValue,
       noticeText: noticeValue,
@@ -269,8 +385,10 @@ describe('落とした記録の跡', () => {
     });
 
     expect(shape).toBe(
-      'token_rotation event=recovered signal=reached freshness=current tokenId=ap-1 ' +
+      'token_rotation event=recovered signal=reached reason=turn_succeeded ' +
+        'freshness=current tokenId=ap-1 ' +
         'fromTokenId=mgr-1 generation=3 earliestAt=2026-08-20T00:00:00.000Z ' +
+        'cooldownSource=quota_reset ' +
         `recoveredSource=account_probe label.chars=${labelValue.length} ` +
         `noticeText.chars=${noticeValue.length} chars=${secret.length}`,
     );
@@ -281,10 +399,11 @@ describe('落とした記録の跡', () => {
   });
 
   /**
-   * optional 欄（`signal`/`freshness`/`tokenId`/`fromTokenId`/`generation`/
-   * `earliestAt`/`recoveredSource`/`label`/`noticeText`）が1つも無い回は、
-   * 必須の `event`/`text` だけが載る——「取れない軸に0の行を作る」を跡でも
-   * 守る（`subagent_stall` の `agentType` 無し回と同じ判定基準）。
+   * optional 欄（`signal`/`reason`/`freshness`/`tokenId`/`fromTokenId`/
+   * `generation`/`earliestAt`/`cooldownSource`/`recoveredSource`/`label`/
+   * `noticeText`）が1つも無い回は、必須の `event`/`text` だけが載る——
+   * 「取れない軸に0の行を作る」を跡でも守る（`subagent_stall` の
+   * `agentType` 無し回と同じ判定基準）。
    */
   it('token_rotation は optional 欄が無ければ event と text だけを載せる', () => {
     const shape = journalEntryShape({
@@ -296,11 +415,13 @@ describe('落とした記録の跡', () => {
     expect(shape).toBe('token_rotation event=not_rotated chars=1');
     for (const field of [
       'signal',
+      'reason',
       'freshness',
       'tokenId',
       'fromTokenId',
       'generation',
       'earliestAt',
+      'cooldownSource',
       'recoveredSource',
       'label',
       'noticeText',
