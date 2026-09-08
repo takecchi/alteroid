@@ -1123,6 +1123,15 @@ export interface ManagerPool {
    * **1件の失敗で残りを止めない**（`probeTurnEnds` と同じ形）。
    */
   flushWithheldReports(): Promise<void>;
+  /**
+   * このプールを止める。
+   *
+   * **機構が合成した知らせの合流窓（`#synthesizedNotices`）に残っている積みを
+   * 必ず flush する。** 窓の中でデーモンが落ちる（＝このプールが止まる）と、
+   * 積んだ知らせは `setTimeout` が二度と発火しないので失われる——ここが
+   * その逃げ道である（`#queueSynthesizedNotice` / `#flushSynthesizedNotices`
+   * の doc）。
+   */
   stop(): Promise<void>;
 }
 
