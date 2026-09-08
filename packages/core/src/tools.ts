@@ -117,6 +117,7 @@ import { CANON_REVISION, canonDocument, canonNames, describeCloneRuntime } from 
 import type { CloneRuntimeFacts } from './self.js';
 import { EXCHANGE_WITH_VALUES, UnreadableCommitmentError } from './store.js';
 import type { Stores } from './store.js';
+import { limitRecoveryOf, withRecoveryNote } from './usage-limits.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 import {
   ACCOUNT_USAGE_TITLE,
@@ -1213,17 +1214,33 @@ function denialLine(denials: ManagerDenial[]): string | null {
  * である——同じ欄を2つの口が別の語で呼ぶと、`manager_list` で「失敗だ」と
  * 読んだ直後に「直近の報告」という見出しの下で同じ本文を読むことになる
  * （`describeManagerState` を1箇所に寄せてあるのと同じ理由）。
+ *
+ * **`lastReport` から回復の見込み（`limitRecoveryOf`）を添える（Issue #393
+ * 段2）。** `lastFailure` 自体は `{ code, via, at }` しか持たず SDK の文言を
+ * 持たないが、同じ `ManagerSummary` の `lastReport` には `runner.ts` の
+ * `failedReportText()` が組み立てた SDK 逐語（`failure.text`）が
+ * `（このターンは応答を返さずに終わった: <code> / <via>）\n<SDK の文言>` の
+ * 形で埋まっている。`limitRecoveryOf` は `longestMatchingPrefix` で
+ * `startsWith` **または** `includes` を見るので、この定型文の接頭辞が付いて
+ * いても中の SDK 文言を正しく拾える。**`⚠` の行そのもの（この関数が返す本文）
+ * は1文字も変えない**——`withRecoveryNote` が末尾に1行足すだけで、
+ * `unknown`（`lastFailure` の原因が上限とは無関係な回。billing_error 以外の
+ * 大半）のときは何も足さない。
  */
-function describeManagerFailure(failure: ManagerSummary['lastFailure']): string | null {
+function describeManagerFailure(
+  failure: ManagerSummary['lastFailure'],
+  lastReport: string | undefined,
+): string | null {
   if (failure === undefined) return null;
-  return (
+  const base =
     `⚠ 直近のターンは報告ではなく失敗で終わっている: ${failure.code}（${failure.via}, ${failure.at}）。` +
     'この行の下に出る本文は runner が包んだエラー文（「このターンは応答を返さずに終わった: …」）で' +
     'あって報告ではない——**完遂して畳んだと読まないこと。** ' +
     'セッションは生きているので、原因が解ければ manager_send で続きから進む' +
     '（status が done のままなのはそのためで、この委譲が死んだという意味ではない）。' +
-    '**先に manager_start で起こし直さないこと** — 同じ仕事が2本になる。'
-  );
+    '**先に manager_start で起こし直さないこと** — 同じ仕事が2本になる。';
+  if (lastReport === undefined) return base;
+  return withRecoveryNote(base, limitRecoveryOf(lastReport));
 }
 
 /**
@@ -1233,8 +1250,11 @@ function describeManagerFailure(failure: ManagerSummary['lastFailure']): string 
  * `renderListingEntry` の doc）。**字面そのものはここで作らない**——作ると
  * `manager_report` と割れる。
  */
-function failureLine(failure: ManagerSummary['lastFailure']): string | null {
-  const note = describeManagerFailure(failure);
+function failureLine(
+  failure: ManagerSummary['lastFailure'],
+  lastReport: string | undefined,
+): string | null {
+  const note = describeManagerFailure(failure, lastReport);
   return note === null ? null : `  ${note}`;
 }
 
@@ -4957,7 +4977,7 @@ export function createCloneTools(context: ToolContext) {
               // エラー文（`lastReport`）を先に読んでから「実は報告ではない」と
               // 分かる順になる。人間の CLI が同じ順で置いてある
               // （`apps/cli/src/chat.ts` の「**失敗は報告の**上**に置く。**」）。
-              failureLine(manager.lastFailure),
+              failureLine(manager.lastFailure, manager.lastReport),
               manager.lastReport === undefined
                 ? null
                 : // **時刻は既存の行に添えるだけ**（#358）。行を1本増やすと、
@@ -5116,7 +5136,8 @@ export function createCloneTools(context: ToolContext) {
         //
         // **`part === 'request'` では何もしない。** 依頼文はそもそも報告では
         // ないので、失敗の有無で呼び方が変わる欄ではない。
-        const failure = part === 'request' ? null : describeManagerFailure(found.lastFailure);
+        const failure =
+          part === 'request' ? null : describeManagerFailure(found.lastFailure, found.lastReport);
         const label =
           part === 'request' ? '依頼文' : failure === null ? '直近の報告' : '直近のターンの中身';
         const part1 = page(body, offset, REPORT_PAGE);

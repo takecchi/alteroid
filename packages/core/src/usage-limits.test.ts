@@ -11,6 +11,7 @@ import {
   mergeRateLimitFacts,
   toRateLimitFacts,
   usageTransitionOf,
+  withRecoveryNote,
 } from './usage-limits.js';
 
 describe('上限の文言を分類する', () => {
@@ -263,5 +264,37 @@ describe('回復の見込みを読む', () => {
     // 短い側を採っても同じ値が返る。⟹ どの鍵に当たったかを直接見る。
     expect(matchedUsageLimitPrefix(longer)).toBe(longer);
     expect(matchedUsageLimitPrefix(shorter)).toBe(shorter);
+  });
+});
+
+/**
+ * `withRecoveryNote`（Issue #393 段2）。判定結果を人が読む文言へ**添える**ための
+ * 唯一の関数——`manager.ts`（顔④ `usage_notice`）と `tools.ts`（顔⑥
+ * `describeManagerFailure`）の両方がこれを通す。
+ */
+describe('回復の見込みを添える（withRecoveryNote）', () => {
+  it('time のときは末尾に1行足す。既存の文言は1文字も変えない', () => {
+    const base = '利用上限に当たった。この文言で仕事が止まっている: SOME TEXT';
+    const decorated = withRecoveryNote(base, 'time');
+    // **既存の文言は先頭に無傷でそのまま残る**（`startsWith` で確かめる—
+    // 変異C「既存の文言のほうを変える」が来ると、ここが真っ先に赤くなる）。
+    expect(decorated.startsWith(base)).toBe(true);
+    expect(decorated).toContain('（回復の見込み: 時間で戻る（time））');
+  });
+
+  it('action のときは末尾に1行足す。既存の文言は1文字も変えない', () => {
+    const base =
+      '組織の方針で止められている（利用上限ではないので、待っても増やしても直らない）: SOME TEXT';
+    const decorated = withRecoveryNote(base, 'action');
+    expect(decorated.startsWith(base)).toBe(true);
+    expect(decorated).toContain('（回復の見込み: 人間が動かないと戻らない（action））');
+  });
+
+  it('unknown のときは1文字も足さない（ノイズを作らない）', () => {
+    const base = '利用上限に近づいている: SOME TEXT';
+    // **`unknown` は大半の合図で起きる**（`transition` / `warning` は構造的に
+    // ここへ来ても `unknown` になる）。毎回1行足すと大半にノイズが増えるので、
+    // 分かったときだけ出す設計にしてある（`withRecoveryNote` の doc）。
+    expect(withRecoveryNote(base, 'unknown')).toBe(base);
   });
 });

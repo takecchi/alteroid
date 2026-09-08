@@ -274,6 +274,32 @@ export function limitRecoveryOf(text: string): LimitRecovery {
   return LIMIT_RECOVERY_BY_PREFIX.get(prefix) ?? 'unknown';
 }
 
+/**
+ * {@link limitRecoveryOf} の判定を、人が読む文言へ**添える**（Issue #393 の
+ * 判定を、初めてクローンの受信箱・`manager_list` / `manager_report` の ⚠ 行へ
+ * 運ぶ経路。PR #718 の作法を踏襲する）。
+ *
+ * **`base` は1文字も変えない。** 末尾に改行1本と1行を足すだけで、既存の文言
+ * （`describeUsageNotice` の定型文・SDK の生 prose・`describeManagerFailure`
+ * の ⚠ 行）はそのまま残す——`runner-protocol.ts` の「`reason` の文字列を
+ * 解釈して分類し直さないこと」と同じ理由で、判定結果は元の文言を書き換える
+ * のではなく別の行として運ぶ。
+ *
+ * **`unknown` のときは何も足さない。** `limitRecoveryOf` が実際に `time` /
+ * `action` を返すのは `reached`（`kind`）系の文言と組織方針の一部だけで、
+ * `transition` / `warning` はここへ来ても構造的に `unknown` になる
+ * （{@link limitRecoveryOf} の doc）。⟹ 毎回「不明」の1行を足すと、
+ * 大半の合図に読む価値の無いノイズが増えるだけになる。**分かったときにだけ
+ * 出す**——このリポジトリが繰り返し選んでいる「取れない軸に0の行を作らない」
+ * （AGENTS.md 地雷表）と同じ向きの判断である。ここで書いているのは「どう
+ * 運ぶか」だけで、`LIMIT_RECOVERY_BY_PREFIX` の分類の正誤は扱わない。
+ */
+export function withRecoveryNote(base: string, recovery: LimitRecovery): string {
+  if (recovery === 'unknown') return base;
+  const label = recovery === 'time' ? '時間で戻る（time）' : '人間が動かないと戻らない（action）';
+  return `${base}\n（回復の見込み: ${label}）`;
+}
+
 // ---------------------------------------------------------------------------
 // rate_limit_event（枠の権威ある情報。ターン中だけ届く）
 // ---------------------------------------------------------------------------
