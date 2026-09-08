@@ -174,6 +174,15 @@ describe('plan / organization の「欄が無い」と「空」を畳まない',
     expect(usage.plan).toBe('');
   });
 
+  it("両方の出所が '' でも plan は ''（undefined へ畳まない）", () => {
+    // **4本目の境目。** 上の2本は「片方が '' で、もう片方は欄が無い」を測って
+    // いるので、**どちらの出所も欄を返したが両方空だった**回は測られていない。
+    // ここが抜けると「非空が1つも無かったとき」のフォールバックが
+    // `undefined` へ戻る変異を、片方だけの歯が拾えない形で通しうる。
+    const usage = toAccountUsage(AT, { subscription_type: '' }, { subscriptionType: '' });
+    expect(usage.plan).toBe('');
+  });
+
   it('空の第1候補は非空の第2候補を隠さない（優先順位はあっても、空が勝たない）', () => {
     // ⭐ 素朴な `a ?? b` への書き換えを赤にする歯。`''` は nullish ではないので、
     // `a ?? b` だと account 側の空文字がそのまま勝って usage 側の 'zz' を隠す。
