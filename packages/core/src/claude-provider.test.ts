@@ -81,6 +81,55 @@ describe('foldClaudeMessage — system', () => {
     });
   });
 
+  /**
+   * `apiKeySource` の許可リスト（#706 の裏側）。
+   *
+   * `runtimeFactsOf` が読む `SDKSystemMessage.apiKeySource` は SDK 側で9値の
+   * union として宣言されているので、`usage-snapshot.ts` の
+   * `toAccountApiKeySource`（`apiKeySource` の許可リスト）をそのまま当てられる。
+   * ここは **`self_status`（`self.ts` の `describeCloneRuntime`）が読む最初の
+   * 入口**なので、ここで畳めば下流（`clone.ts` / `self.ts`）は無改造で済む。
+   */
+  it('知らない apiKeySource は unrecognized に畳まれ、元の文字は1文字も残らない', () => {
+    // 鍵に見える文字列を通しても、runtime には1文字も現れないことが安全側の歯。
+    const secret = 'sk-ant-xxxxxxxx';
+    const event = only(
+      sdk({ type: 'system', subtype: 'init', session_id: 'sess-4', apiKeySource: secret }),
+    );
+
+    expect(event).toMatchObject({ runtime: { apiKeySource: 'unrecognized' } });
+    expect(JSON.stringify(event)).not.toContain(secret);
+  });
+
+  it('知っている9値はそのまま通す（既存の許可リストと同じ集合）', () => {
+    const event = only(
+      sdk({ type: 'system', subtype: 'init', session_id: 'sess-5', apiKeySource: 'oauth' }),
+    );
+
+    expect(event).toMatchObject({ runtime: { apiKeySource: 'oauth' } });
+  });
+
+  /**
+   * 「欄が無かった」（`null`）と「知らない値だった」（`unrecognized`）は別の観測
+   * である。素通しをやめた代償にこの2つを同じ表示へ畳むと、SDK が新しい値を
+   * 出し始めたことがこの面から見えなくなる（`accountApiKeySourceSchema` の doc
+   * と同じ理由）。
+   */
+  it('欄が無い（null）と知らない値（unrecognized）は別の表示になる', () => {
+    const withoutField = only(sdk({ type: 'system', subtype: 'init', session_id: 'sess-6' }));
+    const withUnknown = only(
+      sdk({
+        type: 'system',
+        subtype: 'init',
+        session_id: 'sess-7',
+        apiKeySource: 'sk-ant-xxxxxxxx',
+      }),
+    );
+
+    expect(withoutField).toMatchObject({ runtime: { apiKeySource: null } });
+    expect(withUnknown).toMatchObject({ runtime: { apiKeySource: 'unrecognized' } });
+  });
+
   it('mcp_servers の中の読めない要素だけを落とす（配列が読めれば 0本 を名乗れる）', () => {
     const event = only(
       sdk({
