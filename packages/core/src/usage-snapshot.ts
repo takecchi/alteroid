@@ -447,6 +447,25 @@ function nonEmpty(value: unknown): string | undefined {
 }
 
 /**
+ * 「欄が無い」（`undefined`）と「欄はあるが空」（`''`）を畳まずに、候補の中から
+ * 値を選ぶ。**`plan` / `organization` では `nonEmpty()` の代わりにこれを通すこと。**
+ *
+ * - 候補のどれも文字列でない → `undefined`（**欄が無い**）
+ * - 非空の候補が在る → 最初のそれ（**値が届いている**。引数の順序＝優先順位）
+ * - 文字列は在るが全部が空／空白のみ → 最初のその文字列（**欄はあるが空**）
+ *
+ * **値の選び方は `nonEmpty(a) ?? nonEmpty(b)` から変えていない** ——非空の候補が
+ * 在る限り必ずそれを採るので、**空の第1候補が非空の第2候補を隠さない。**
+ * ⚠️ ここを素朴に `a ?? b` へ書き換えると壊れる（`''` は nullish ではないので、
+ * 空の第1候補が第2候補の値を食う）。変えたのは「非空が1つも無かったとき」だけで、
+ * そこが畳まれていた3状態の境目である。
+ */
+function firstPresentString(...candidates: readonly unknown[]): string | undefined {
+  const strings = candidates.filter((value): value is string => typeof value === 'string');
+  return strings.find((value) => value.trim().length > 0) ?? strings[0];
+}
+
+/**
  * `AccountInfo.tokenSource`（生値）を {@link TokenSourcePresence} へ畳む。
  * **常に3値のどれかを返す（`undefined` を返さない）**——`nonEmpty()` と違い、
  * 「試したが返らなかった」（`not_returned`）と「返ったが空だった」（`empty`）を
@@ -609,8 +628,8 @@ export function toAccountUsage(
 
   return {
     at,
-    plan: nonEmpty(account.subscriptionType) ?? nonEmpty(usage.subscription_type),
-    organization: nonEmpty(account.organization),
+    plan: firstPresentString(account.subscriptionType, usage.subscription_type),
+    organization: firstPresentString(account.organization),
     apiProvider: toAccountApiProvider(account.apiProvider),
     apiKeySource: toAccountApiKeySource(account.apiKeySource),
     // **生の `tokenSource` はここに載せない。** 判定（`isNotLoggedIn`）が要る
@@ -622,6 +641,19 @@ export function toAccountUsage(
     windows,
     extraUsage,
   };
+}
+
+/**
+ * `plan` に**名前**が入っているか。`undefined`（欄が無い）と `''`（欄はあるが空）は
+ * どちらも「名前は無い」側である。
+ *
+ * **3状態を割ったのは観測（{@link toAccountUsage}）と表示（`usage-format.ts`）の側で、
+ * 判定はここで意図して2つに束ねる** ——`nonEmpty()` を外す前の挙動をこの2つの判定で
+ * 1ビットも変えないため（`hasAccountUsageDetail` は `'ok'` と `'failed'` の
+ * 分かれ目を握っている）。⛔ **観測や表示の側でこの束ね方を真似しないこと。**
+ */
+function hasPlanName(usage: AccountUsage): boolean {
+  return usage.plan !== undefined && usage.plan.trim().length > 0;
 }
 
 /**
@@ -669,8 +701,21 @@ export function classifyLimitsUnavailable(
   if (provider !== undefined && provider !== 'firstParty' && provider !== 'unrecognized') {
     return 'non_first_party';
   }
-  if (usage.limitsAvailable === false && usage.plan === undefined) return 'undetermined';
+  if (usage.limitsAvailable === false && !hasPlanName(usage)) return 'undetermined';
   return undefined;
+}
+
+/**
+ * 理由文の中で `plan` の3状態を畳まずに1語で言う。`undefined`（欄が無い）を
+ * `'不明'`、`''`（欄はあるが空）を別の語にする——**`??` の既定値では割れない**
+ * （`''` は nullish ではないので、既定値が出ずに空白が出る）。
+ *
+ * 表示の文言（4つの口が共有するもの）は `usage-format.ts` の
+ * `describeAccountText` が持つ。こちらは理由文専用の短い形である。
+ */
+function planForReason(plan: string | undefined): string {
+  if (plan === undefined) return '不明';
+  return plan.trim().length === 0 ? '不明（欄はあるが空）' : plan;
 }
 
 /**
@@ -697,7 +742,7 @@ export function describeLimitsUnavailable(
       // 毎回当て直している。ここに写すと、写しのほうが先に腐る。
       return (
         '枠が効かない理由を言い分けられない' +
-        `（rate_limits_available: ${String(usage.limitsAvailable)} / apiProvider: ${usage.apiProvider ?? '不明'} / plan: ${usage.plan ?? '不明'}）` +
+        `（rate_limits_available: ${String(usage.limitsAvailable)} / apiProvider: ${usage.apiProvider ?? '不明'} / plan: ${planForReason(usage.plan)}）` +
         '。**「サブスクが無い」と読まないこと** —— この欄が false になる原因には' +
         '「profile スコープの不足」（鍵を取り直せば戻りうる）が含まれる（#681）'
       );
@@ -731,7 +776,7 @@ function rawTokenSourceOf(accountJson: unknown): string | undefined {
 
 /** 何か表示できるものが取れたか。 */
 export function hasAccountUsageDetail(usage: AccountUsage): boolean {
-  return usage.plan !== undefined || usage.windows.length > 0 || usage.extraUsage !== undefined;
+  return hasPlanName(usage) || usage.windows.length > 0 || usage.extraUsage !== undefined;
 }
 
 // ---------------------------------------------------------------------------

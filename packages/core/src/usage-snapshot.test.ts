@@ -134,6 +134,81 @@ describe('/usage の応答を正規化する', () => {
   });
 });
 
+/**
+ * `plan` / `organization` の「欄が無い」（`undefined`）と「欄はあるが空」（`''`）を
+ * 畳まない（`nonEmpty()` を `firstPresentString()` へ差し替えた本題）。
+ *
+ * **`nonEmpty()` はこの2欄でも同じ畳みをしていた**（`tokenSourcePresence` の doc が
+ * 言う「後ろ2つを畳む」畳みと同じ形）。ここではその畳みが解けたことを固定する。
+ */
+describe('plan / organization の「欄が無い」と「空」を畳まない', () => {
+  it('organization が無ければ undefined（＝欄が無い）', () => {
+    const usage = toAccountUsage(AT, {}, {});
+    expect(usage.organization).toBeUndefined();
+  });
+
+  it("organization: '' は '' のまま（undefined に畳まない）", () => {
+    // **`toBeUndefined()` ではないことを明示的に固定する** ——ここが `nonEmpty()`
+    // が畳んでいた境目そのものである。
+    const usage = toAccountUsage(AT, {}, { organization: '' });
+    expect(usage.organization).toBe('');
+  });
+
+  it('organization が空白のみでも、値は加工せずそのまま運ぶ', () => {
+    const usage = toAccountUsage(AT, {}, { organization: '   ' });
+    expect(usage.organization).toBe('   ');
+  });
+
+  it('subscriptionType も subscription_type も無ければ plan は undefined', () => {
+    const usage = toAccountUsage(AT, {}, {});
+    expect(usage.plan).toBeUndefined();
+  });
+
+  it("subscriptionType: '' かつ subscription_type 無しなら plan は ''", () => {
+    const usage = toAccountUsage(AT, {}, { subscriptionType: '' });
+    expect(usage.plan).toBe('');
+  });
+
+  it("subscriptionType 無し かつ subscription_type: '' なら plan は ''", () => {
+    const usage = toAccountUsage(AT, { subscription_type: '' }, {});
+    expect(usage.plan).toBe('');
+  });
+
+  it('空の第1候補は非空の第2候補を隠さない（優先順位はあっても、空が勝たない）', () => {
+    // ⭐ 素朴な `a ?? b` への書き換えを赤にする歯。`''` は nullish ではないので、
+    // `a ?? b` だと account 側の空文字がそのまま勝って usage 側の 'zz' を隠す。
+    // 意味の無い短い文字列（前例: #704 の 'zz'）を使う。
+    const usage = toAccountUsage(AT, { subscription_type: 'zz' }, { subscriptionType: '' });
+    expect(usage.plan).toBe('zz');
+  });
+
+  it('両方とも非空なら、優先順位（account 側が先）は変えていない', () => {
+    const usage = toAccountUsage(
+      AT,
+      { subscription_type: 'yy' },
+      { subscriptionType: 'zz' },
+    );
+    expect(usage.plan).toBe('zz');
+  });
+
+  it('判定の保存: limitsAvailable: false かつ plan: "" でも classifyLimitsUnavailable は undetermined のまま', () => {
+    // **判定（hasPlanName）は plan の3状態を意図して2つへ束ねる。** '' も
+    // undefined も「名前は無い」側で、この境界は今日の挙動から1ビットも
+    // 変えていない。
+    const usage = toAccountUsage(AT, { rate_limits_available: false }, { subscriptionType: '' });
+    expect(usage.plan).toBe('');
+    expect(classifyLimitsUnavailable(usage, undefined)).toBe('undetermined');
+  });
+
+  it('判定の保存: plan: "" ・枠なし・extraUsage なしで hasAccountUsageDetail は false のまま', () => {
+    const usage = toAccountUsage(AT, {}, { subscriptionType: '' });
+    expect(usage.plan).toBe('');
+    expect(usage.windows).toEqual([]);
+    expect(usage.extraUsage).toBeUndefined();
+    expect(hasAccountUsageDetail(usage)).toBe(false);
+  });
+});
+
 describe('「取れない」と「まだログインしていない」を混ぜない', () => {
   it('tokenSource が none なら「ログインしていない」であって「サブスクが無い」ではない', () => {
     // **ここを混ぜると、鍵が後から届く構成で永久に「サブスクなし」と表示される。**
