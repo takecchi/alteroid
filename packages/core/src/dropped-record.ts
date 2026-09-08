@@ -802,6 +802,16 @@ export function setStderrSinkForTesting(sink: ((line: string) => void) | null): 
  * ついても出す**（「空だった」と「書けなかった」の区別が付く。型によって出したり
  * 出さなかったりすると、跡の読み方が型ごとに変わる）。
  *
+ * **⚠️ 唯一の例外は `tool_use` の `input` である。長さも出さない。** 理由は2つ
+ * とも `size()` を使わない側に倒す:
+ *
+ * 1. `input` は `z.unknown().optional()` で `.length` を持たない——長さを出す
+ *    には `JSON.stringify` が要る。この関数が走るのは**日誌への書き込みが
+ *    既に失敗した後**の例外経路であり、そこで循環参照や巨大構造の直列化を
+ *    新たに走らせるのは、跡を残す仕組み自身を落としに行く形になる。
+ * 2. `input` はツール引数そのもの（`{ command: <シェル行> }` 等）——この関数が
+ *    扱う自由文の中でもいちばん秘密が載りうる場所である。
+ *
  * **判定は「自由文かどうか」ではなく「値を誰が決めるか」で行うこと。**
  * `tool_use` の `actor` / `tool` は SDK と runner が確定する値なので載せてよい。
  * 対して `external_event` の `source` は、**`POST /events/:source` の URL
@@ -833,8 +843,19 @@ export function journalEntryShape(entry: JournalEntryInput): string {
         (entry.action === undefined ? '' : ` action=${tag(entry.action)}`) +
         ` ${size(entry.summary)}`
       );
+    // `unavailable` は自由文（「なぜ書けなかったか」）。この欄の**有無**そのもの
+    // に機構上の意味がある（`schema.ts` の `daily_report.unavailable` の doc —
+    // `isWrittenDailyReport` がこの欄の有無で「本物の日報か」を判定する。印が
+    // 無いと再試行が死ぬ）ので、有無が跡から読めないのは実害になる。だから
+    // 「空だった」と「書けなかった」の区別が付くよう、長さだけ載せる（この
+    // 関数の冒頭 doc「長さはどの自由文についても出す」）。既存の `body` の
+    // 出し方（無名）は変えない——`token_rotation` が主たる自由文 `text` を
+    // 無名のまま、副次の `label`/`noticeText` に名前を付けている先例と同じ形。
     case 'daily_report':
-      return `daily_report date=${tag(entry.date)} ${size(entry.body)}`;
+      return (
+        `daily_report date=${tag(entry.date)} ${size(entry.body)}` +
+        (entry.unavailable === undefined ? '' : ` ${size(entry.unavailable, 'unavailable')}`)
+      );
     // `source` は外から来る値なので、名前であっても長さだけにする（上の doc 参照）。
     case 'external_event':
       return `external_event ${size(entry.source, 'source')} ${size(entry.summary)}`;
@@ -842,10 +863,20 @@ export function journalEntryShape(entry: JournalEntryInput): string {
     // 無い。** 値を決めるのは runner であって外の世界ではないので、`size()` へ
     // 逃がさず数値をそのまま載せてよい（`tool_use` の `actor`/`tool` と同じ判定
     // 基準 — 「自由文かどうか」ではなく「値を誰が決めるか」）。
+    // ⚠️ **かつてはこの列挙のとおりに書けておらず、11欄中4欄（tasks/turns/
+    // toolless/settled）しか出していなかった。** `openedAt` はこちらが計算した
+    // 時刻（`token_rotation` の `earliestAt` と同じ扱い）なので `tag()`、
+    // `byCause` の3つ・`notifications`・`submits` は必須の整数なのでそのまま、
+    // `sources` は optional な `Record<string, number>` で、`turn_usage` の
+    // `models` と同じ理由（内訳ではなく件数だけ）でキー数のみ載せる。
     case 'worker_wait':
       return (
-        `worker_wait tasks=${entry.tasks} turns=${entry.turns} ` +
-        `toolless=${entry.toolless} settled=${entry.settled}`
+        `worker_wait openedAt=${tag(entry.openedAt)} tasks=${entry.tasks} turns=${entry.turns} ` +
+        `byCause.input=${entry.byCause.input} byCause.notification=${entry.byCause.notification} ` +
+        `byCause.continuation=${entry.byCause.continuation} toolless=${entry.toolless} ` +
+        `notifications=${entry.notifications} submits=${entry.submits}` +
+        (entry.sources === undefined ? '' : ` sources=${Object.keys(entry.sources).length}`) +
+        ` settled=${entry.settled}`
       );
     // `layer` / `site` は列挙値、`managerId` はこちらが発行した id、`sessionId`
     // は SDK が決める値だが id である（`worker_wait` と同じ判定基準）。
@@ -858,14 +889,19 @@ export function journalEntryShape(entry: JournalEntryInput): string {
     case 'turn_usage':
       return (
         `turn_usage layer=${tag(entry.layer)} site=${tag(entry.site)} ` +
-        `managerId=${tag(entry.managerId)} models=${Object.keys(entry.models).length}` +
+        `managerId=${tag(entry.managerId)}` +
+        (entry.sessionId === undefined ? '' : ` sessionId=${tag(entry.sessionId)}`) +
+        ` models=${Object.keys(entry.models).length}` +
         (entry.reset === undefined ? '' : ' reset=yes')
       );
     // **同じ判定基準（値を誰が決めるか）で3つに分かれる。**
     //
     // - 載せる: `event` / `signal` / `freshness` は列挙値、`generation` は整数、
     //   `tokenId` / `fromTokenId` は**こちらが発行した id**（`managerId` と同じ）、
-    //   `earliestAt` はこちらが計算した時刻
+    //   `earliestAt` はこちらが計算した時刻、`reason` は契機の列挙値（回し手
+    //   `TokenRotator.reconsider` が決める）、`cooldownSource` は冷却の期限の
+    //   出所の列挙値（`nextCooldownUntil` が決める）——どちらもこちら側が決める
+    //   値なので `tag()` に載せてよい
     // - 長さだけ: **`label` は人間が付けた自由文である**（`add --label` でそのまま
     //   入る）。id に見えるものと並んでいるが、決めるのは外側なので `external_event`
     //   の `source` と同じ扱いにする
@@ -878,11 +914,19 @@ export function journalEntryShape(entry: JournalEntryInput): string {
       return (
         `token_rotation event=${tag(entry.event)}` +
         (entry.signal === undefined ? '' : ` signal=${tag(entry.signal)}`) +
+        // `reason`（`TokenReconsiderReason`）は「なぜこの瞬間に見直したか」の
+        // 契機で、回し手（`TokenRotator.reconsider`）が決める列挙値なので
+        // `tag()` に載せてよい（`signal` と同じ判定基準）。
+        (entry.reason === undefined ? '' : ` reason=${tag(entry.reason)}`) +
         (entry.freshness === undefined ? '' : ` freshness=${tag(entry.freshness)}`) +
         (entry.tokenId === undefined ? '' : ` tokenId=${tag(entry.tokenId)}`) +
         (entry.fromTokenId === undefined ? '' : ` fromTokenId=${tag(entry.fromTokenId)}`) +
         (entry.generation === undefined ? '' : ` generation=${entry.generation}`) +
         (entry.earliestAt === undefined ? '' : ` earliestAt=${tag(entry.earliestAt)}`) +
+        // `cooldownSource`（`CooldownSource`）は直上の `earliestAt` を
+        // どこから採ったかの列挙値で、こちら側（`nextCooldownUntil`）が決める
+        // ので `tag()` に載せてよい（`earliestAt` 自体と同じ判定基準）。
+        (entry.cooldownSource === undefined ? '' : ` cooldownSource=${tag(entry.cooldownSource)}`) +
         // **`recoveredSource` は列挙値である**（#681 (1)。誰が観測したかを
         // 決めるのはこちら側の回し手であって外部入力ではないので、他の列挙値
         // （`event` / `signal` / `freshness`）と同じ判定基準で `tag()` に載せる。
