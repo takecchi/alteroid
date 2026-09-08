@@ -4348,6 +4348,72 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * `lastFailure`（`schema.ts` の `jobSchema`。`{ code, via, at }`）を
+   * `manager_list` が読む（Issue #714）。
+   *
+   * **台帳には前から在り、人間の CLI は出していた**（`apps/cli/src/chat.ts` の
+   * `failureLine`）。クローンの面だけが読んでいなかったので、**落ちた委譲の
+   * 包まれたエラー文が「直近の報告」という見出しの下に出ていた** —— 実際に
+   * クローンがそれを完遂の報告として読んでいる（Issue #714 の本文）。
+   *
+   * 測るのは3つ:
+   * 1. `lastFailure` が在る回には専用行が出る（`code` / `via` / `at`）
+   * 2. **`lastFailure` が無い回には1文字も足さない**（下の歯）。これが無いと
+   *    「常に出す」実装でも1つ目は緑になる
+   * 3. 見出しが `直近の報告` → `直近のターンの中身` へ切り替わる
+   */
+  it('manager_list は lastFailure を専用行で出し、見出しを「報告」から切り替える（#714）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.lastReport = '（このターンは応答を返さずに終わった: billing_error）';
+    target.lastFailure = {
+      code: 'billing_error',
+      via: 'assistant_error',
+      at: '2026-09-09T01:23:45.000Z',
+    };
+
+    const reply = await h.call('manager_list', {});
+
+    // 1. 専用行が出て、SDK の語と時刻がそのまま読める。
+    expect(reply).toContain('⚠ 直近のターンは報告ではなく失敗で終わっている');
+    expect(reply).toContain('billing_error');
+    expect(reply).toContain('assistant_error');
+    expect(reply).toContain('2026-09-09T01:23:45.000Z');
+    // 3. 見出しが切り替わる。**「報告」という語を失敗した回に使わない。**
+    expect(reply).toContain('直近のターンの中身: （このターンは応答を返さずに終わった: billing_error）');
+    expect(reply).not.toContain('直近の報告');
+  });
+
+  /**
+   * **⚠️ この行は一覧の予算（`LIST_BUDGET`）を食う。食ってよいのは異常時だけで
+   * ある**（`runnerLostSince` の注記と同じ形。`renderListing` は文字数で切るので、
+   * 1件あたりが伸びると出せる**件数**が黙って減る＝能力の削除になりうる）。
+   *
+   * ⟹ **`lastFailure` が立っていない委譲では、この行が1文字も足さないことを
+   * 測る。** これが無いと「条件を外して常に出す」実装でも上の歯は緑になる。
+   */
+  it('manager_list は lastFailure が無ければ1文字も足さない（#714。予算を食わない）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    // **失敗していない。** 報告はあるが `lastFailure` は立てない。
+    target.lastReport = '終わった';
+
+    const reply = await h.call('manager_list', {});
+
+    // 見出しは「報告」のままで、切り替わった側の語は1つも出ない。
+    expect(reply).toContain('直近の報告: 終わった');
+    expect(reply).not.toContain('直近のターンの中身');
+    // 行の語が1つも漏れていない（部分的に出るのが一番たちが悪い）。
+    expect(reply).not.toContain('⚠ 直近のターンは報告ではなく失敗で終わっている');
+    expect(reply).not.toContain('完遂して畳んだと読まないこと');
+    expect(reply).not.toContain('原因が解ければ manager_send で続きから進む');
+  });
+
+  /**
    * `turnEndedAt` / `turnEndReason` / `turnEndTail`（Issue #567、PR #588）を
    * `manager_list` で表示する `describeTurnEnd`（`tools.ts`）の歯。
    * 分岐の設計は同関数の doc を参照。
