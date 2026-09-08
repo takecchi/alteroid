@@ -520,22 +520,23 @@ describe('畳めない出来事が挟まると、先に積みが flush されて
 
     fake.rateLimit('mgr-quota', { status: 'rejected', kind: 'five_hour' });
     fake.ask('mgr-quota', 'req-1', 'これでよいか確認したい', 'question');
+    await new Promise((resolve) => setTimeout(resolve, 20));
 
-    const posted = await vi.waitFor(() => {
-      const found = inbox.slice(before);
-      if (found.length < 2) throw new Error('まだ2件届いていない');
-      return found;
-    });
+    // **到着を `vi.waitFor` で待たない。** flush が無いと question だけが先に
+    // 届いて `length < 2` のまま止まり、**赤の出どころがヘルパの time out に
+    // なる**——それは「順序が崩れた」を撃っていない。件数と並びをそのまま
+    // アサーションで撃つ。
+    const posted = inbox.slice(before);
     // **並べ替えない。** 積み（rate_limit）が先、question があと。
     const kinds = posted
       .filter((event) => event.type === 'manager_message')
       .map((event) => (event as { kind: string }).kind);
     expect(kinds).toEqual(['report', 'question']);
-    const reportText = (
-      posted.find((e) => (e as { kind?: string }).kind === 'report') as {
-        text: string;
-      }
-    ).text;
+    const reportText =
+      (
+        posted.find((e) => (e as { kind?: string }).kind === 'report') as
+          { text: string } | undefined
+      )?.text ?? '';
     expect(reportText).toContain('枠から追い返された');
 
     await pool.stop();
@@ -573,12 +574,11 @@ describe('畳めない出来事が挟まると、先に積みが flush されて
     // mgr-other には積みが無いが、mgr-quota の積みは mgr-other の question より
     // 先に flush されるべき（到着順）。
     fake.ask('mgr-other', 'req-2', '別件の確認', 'question');
+    await new Promise((resolve) => setTimeout(resolve, 20));
 
-    const posted = await vi.waitFor(() => {
-      const found = inbox.slice(before);
-      if (found.length < 2) throw new Error('まだ2件届いていない');
-      return found;
-    });
+    // 上の歯と同じ理由で `vi.waitFor` を使わない（赤の出どころをアサーションに置く）。
+    const posted = inbox.slice(before);
+    expect(posted).toHaveLength(2);
     expect(posted[0]).toMatchObject({ managerId: 'mgr-quota', kind: 'report' });
     expect(posted[1]).toMatchObject({ managerId: 'mgr-other', kind: 'question' });
 
