@@ -1,6 +1,6 @@
 {
   "name": "@mnemora/openai",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "EmbeddingProvider / LLMProvider の OpenAI 実装。zod スキーマを OpenAI の Structured Output (response_format: json_schema) へ翻訳する（docs/architecture.md §3.8）。",
   "license": "MIT",

@@ -1,6 +1,6 @@
 {
   "name": "@mnemora/testkit",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "adapter（MemoryStore/VectorStore/EventStore の実装）が満たすべき適合テスト一式（conformance suite）。",
   "license": "MIT",

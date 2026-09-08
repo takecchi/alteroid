@@ -1,6 +1,6 @@
 {
   "name": "@mnemora/postgres",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "MemoryStore / VectorStore / EventStore の Postgres + pgvector 実装（docs/memory-model.md §10）。",
   "license": "MIT",
