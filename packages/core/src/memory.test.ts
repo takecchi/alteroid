@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   MEMORY_LISTING_BUDGET,
   MEMORY_PREMISE_RANKING_BUDGET,
+  MEMORY_PROMPT_DESCRIPTION_BUDGET,
+  MEMORY_PROMPT_OUTLINE_BUDGET,
   MEMORY_TOC_ENTRY_LIMIT,
   applyMemoryFrontmatterPatch,
   assertNeverMemoryCreatedAt,
@@ -70,13 +72,27 @@ describe('記憶の載せ方', () => {
     expect(rendered.endsWith('先頭は残す')).toBe(true);
   });
 
+  /**
+   * **かつてここは本文（`に` / `い`）が並ぶことまで固定していた。** premise の
+   * 載り方が全文からカード（要旨＋節の目次）へ変わったので（`memory.ts` の
+   * `renderPremiseCard`）、本文は載らなくなった。
+   *
+   * **この歯が測っているのは本文ではなく「並び」である**——渡した順序のまま、
+   * 文書のあいだが空行1つで区切られること。**その保証は1ミリも弱まっていない**
+   * （むしろ、カードの見出しに slug が入るので並びの確認はより直接になった）。
+   */
   it('文書のあいだは空行1つで、渡された順序のまま並ぶ', () => {
-    expect(
-      renderMemoryDocuments([
-        { slug: 'b', content: 'に\n' },
-        { slug: 'a', content: 'い\n' },
-      ]),
-    ).toBe('<!-- memory: b.md -->\nに\n\n<!-- memory: a.md -->\nい');
+    const rendered = renderMemoryDocuments([
+      { slug: 'b', content: '# に\n' },
+      { slug: 'a', content: '# い\n' },
+    ]);
+    const heads = rendered.split('\n\n').map((block) => block.split('\n')[0]);
+
+    expect(heads[0]?.startsWith('<!-- memory: b.md（premise')).toBe(true);
+    expect(heads[1]?.startsWith('<!-- memory: a.md（premise')).toBe(true);
+    // 区切りは空行ちょうど1つ（2つ以上でも0でもない）。
+    expect(rendered.split('\n\n').length).toBe(2);
+    expect(rendered).not.toContain('\n\n\n');
   });
 
   it('記憶が1つも無ければ空文字（「空」を言うのは呼び手の仕事である）', () => {
@@ -656,17 +672,47 @@ describe('nextDescribedAt — 書き手は書けない。store が新旧の desc
  * 切る/切らない、載せる/載せない、それぞれを別の `it()` で測る。
  */
 describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳細の受け入れ基準', () => {
-  it('【受け入れ基準の最上位】frontmatter を1つも持たない文書の集合に対して、焼き込みが現行と完全に同じである', () => {
+  /**
+   * **⚠️ かつてここは「frontmatter を1つも持たない文書の集合に対して、焼き込みが
+   * frontmatter 導入前と1バイトも変わらない」という受け入れ基準だった。**
+   * 人間が 2026-09-08 に載せ方そのものを反転させた（premise は全文からカードへ）
+   * ので、**その基準は意味を失った**——旧実装（`renderMemoryDocument` の全文）と
+   * 一致しないことが正しい。
+   *
+   * **消さずに反転させる。** 測る対象は変えていない（frontmatter を1つも持たない
+   * 文書がどう扱われるか）。**変わったのは「premise として扱われた結果どう載るか」
+   * だけであり、区分の既定（frontmatter 無し ＝ premise）は1ミリも動いていない**
+   * ——それをここで固定する。
+   */
+  it('【区分の既定】frontmatter を1つも持たない文書は premise として扱われる（載り方はカード）', () => {
     const docs = [premise('b', 'に'), premise('a', 'い')];
     const rendered = renderMemoryDocuments(docs);
-    const legacy = docs.map(renderMemoryDocument).join('\n\n');
-    expect(rendered).toBe(legacy);
+
+    // premise の枝を通っている（fact の目次側には出ない）。
+    expect(rendered).toContain('<!-- memory: b.md（premise');
+    expect(rendered).toContain('<!-- memory: a.md（premise');
+    expect(rendered).not.toContain('## 記憶の目次');
+    // そして旧実装（全文）とは一致しない——これが反転そのものである。
+    expect(rendered).not.toBe(docs.map(renderMemoryDocument).join('\n\n'));
   });
 
-  it('premise（区分無し）は全文が載る', () => {
-    const rendered = renderMemoryDocuments([premise('values', '大事にしていること')]);
-    expect(rendered).toContain('<!-- memory: values.md -->');
-    expect(rendered).toContain('大事にしていること');
+  /**
+   * **⚠️ かつてここは「premise（区分無し）は全文が載る」だった。** 反転の本体で
+   * ある（人間の決定 2026-09-08）。**保証は弱くなっていない**——「本文が載る」を
+   * 「本文が載らず、代わりに要旨と節の目次が載る」へ言い換えたうえで、
+   * **本文が載っていないことを明示的に測る**（消していない）。
+   */
+  it('premise（区分無し）はカード（要旨＋節の目次）が載り、本文は1文字も載らない', () => {
+    const rendered = renderMemoryDocuments([
+      { slug: 'values', content: '# 価値観\n大事にしていること' },
+    ]);
+    expect(rendered).toContain('<!-- memory: values.md（premise');
+    // 見出しは載る（何が書いてあるかは分かる）。
+    expect(rendered).toContain('# 価値観');
+    // 本文は載らない。
+    expect(rendered).not.toContain('大事にしていること');
+    // 開く口を名指ししている（載せないことを能力の削除にしないための条件）。
+    expect(rendered).toContain('memory_section_read');
   });
 
   it('fact は目次の1行だけが載り、本文は載らない（memory_read で開く前提）', () => {
@@ -682,16 +728,18 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
     expect(rendered).not.toContain('本文の詳細（目次からは開けない）');
   });
 
-  it('二重に載せない: premise が全文で載っているとき、同じ文書の本文が目次側にも出ない', () => {
+  it('二重に載せない: premise がカードで載っているとき、同じ文書が目次側にも出ない', () => {
     const docs = [
       premise('p1', '前提の本文'),
       fact('f1', { title: 'F1', description: '要旨', freshness: { kind: 'fresh' } }),
     ];
     const rendered = renderMemoryDocuments(docs);
 
-    // premise は1回だけ全文で載る。
-    const occurrences = rendered.split('<!-- memory: p1.md -->').length - 1;
+    // premise のカードは1回だけ載る（載り方が全文からカードへ変わっただけで、
+    // 「どの文書もどちらか一方に必ず1回だけ現れる」という不変条件は同じ）。
+    const occurrences = rendered.split('<!-- memory: p1.md（premise').length - 1;
     expect(occurrences).toBe(1);
+    expect(rendered).not.toContain('- p1:');
     // fact の本文（見出し以降の詳細）はどこにも出ない。
     expect(rendered).not.toContain('本文の詳細（目次からは開けない）');
     expect(rendered).toContain('- f1: F1');
@@ -711,9 +759,11 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
     ];
     const rendered = renderMemoryDocuments(docs);
 
-    const fullTextCount = (rendered.match(/<!-- memory: [\w-]+\.md -->/g) ?? []).length;
+    // premise はカードの見出しで、fact は目次の1行で数える（載り方が変わっても
+    // 「どちらか一方に必ず1回だけ現れる」は同じ不変条件である）。
+    const cardCount = (rendered.match(/<!-- memory: [\w-]+\.md（premise/g) ?? []).length;
     const tocCount = docs.filter((doc) => rendered.includes(`- ${doc.slug}:`)).length;
-    expect(fullTextCount + tocCount).toBe(docs.length);
+    expect(cardCount + tocCount).toBe(docs.length);
   });
 
   it('切ったら言う: 目次を件数で切ったら、切った件数が出力に現れる', () => {
@@ -810,12 +860,24 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
     expect(absent).toContain('（要旨なし）');
   });
 
-  it('malformed の文書は消えず、premise として全文が残り、frontmatter が壊れている印が付く', () => {
+  /**
+   * **かつてここは「本文が残る」まで固定していた。** premise の載り方が全文から
+   * カードへ変わったので（`renderPremiseCard`）、本文は誰の枝でも載らない。
+   *
+   * **この歯が測っているのは「文書が消えないこと」と「壊れている印が付くこと」**
+   * であり、そこは1ミリも弱まっていない——`malformed` が黙って `fact` へ倒れて
+   * 目次1行になれば、この歯は落ちる。
+   */
+  it('malformed の文書は消えず、premise として扱われ、frontmatter が壊れている印が付く', () => {
     const rendered = renderMemoryDocuments([
       { slug: 'broken', content: '---\nauthor: 未知のキー\n---\n# Broken\n本文は残る' },
     ]);
-    expect(rendered).toContain('本文は残る');
     expect(rendered).toContain('frontmatter が壊れている');
+    // premise の枝を通っている（fact の目次側ではない）。
+    expect(rendered).toContain('<!-- memory: broken.md（premise');
+    expect(rendered).not.toContain('## 記憶の目次');
+    // 文書そのものは消えていない（見出しが載る）。
+    expect(rendered).toContain('# Broken');
   });
 
   it('存在しない親を指す parent を黙って落とさない', () => {
@@ -2070,7 +2132,15 @@ describe('measureMemoryFloor — 焼き込みの大きさを測る（記憶の�
     const docs = mixedDocs();
     const floor = measureMemoryFloor(docs);
     expect(floor.largestPremise?.slug).toBe('p-large');
-    expect(floor.largestPremise?.chars).toBeGreaterThan(500);
+    // **数を書き写さない。** かつてここは 500（＝全文が載っていた頃の本文量）を
+    // 直接書いていたが、載るのはカード（要旨＋節の目次）になったので、その数は
+    // もう何も意味しない。**測るべきは「実際に載る形の長さと一致すること」**で、
+    // それは器（`mixedDocs`）が変わっても腐らない。
+    const largeRendered = renderMemoryDocuments(docs.filter((doc) => doc.slug === 'p-large'));
+    expect(floor.largestPremise?.chars).toBe(largeRendered.length);
+    // そして他の premise より確かに大きい（「最も大きい」の側）。
+    const smallRendered = renderMemoryDocuments(docs.filter((doc) => doc.slug === 'p-small'));
+    expect(largeRendered.length).toBeGreaterThan(smallRendered.length);
   });
 
   it('premise が1件も無ければ largestPremise は null', () => {
@@ -2120,7 +2190,7 @@ describe('measureMemoryFloor — 焼き込みの大きさを測る（記憶の�
 describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作成の枝がいちばん声を大きい）', () => {
   const emptyFloor = measureMemoryFloor([]);
 
-  it('⭐ premise の新規作成では、区分・床の遷移（文字）・「毎ターン全文が焼かれる」の3つが出る', () => {
+  it('⭐ premise の新規作成では、区分・床の遷移（文字）・「毎ターン何が焼かれるか」の3つが出る', () => {
     const after = measureMemoryFloor([premise('new-doc', 'あ'.repeat(100))]);
     const reply = describeMemoryFloor({
       before: emptyFloor,
@@ -2134,7 +2204,13 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
     expect(reply).toContain(
       `${emptyFloor.totalChars.toLocaleString('en-US')} 文字から ${after.totalChars.toLocaleString('en-US')} 文字へ`,
     );
-    expect(reply).toContain('全文がそのままクローンの文脈へ焼かれる');
+    // **かつてここは「全文がそのままクローンの文脈へ焼かれる」だった。** 載り方が
+    // カード（要旨＋節の目次）へ変わったので文言も変わった。**測っているのは
+    // 「新規の premise にだけ、毎ターン何が焼かれるかを言う強い1行が出ること」**
+    // であって、その保証は弱まっていない（下の fact の枝で出ないことを別に測って
+    // いる歯が、この行の存在に依存している）。
+    expect(reply).toContain('毎ターン「要旨＋節の目次」がクローンの文脈へ焼かれる');
+    expect(reply).toContain('memory_section_read');
     // 他の枝より明確に強い言い方（依頼の重心）。
     expect(reply).toContain('⭐');
   });
@@ -2184,8 +2260,14 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
    * を見ているだけでは出てこない。だから本数まで数えて、ここへ足した。
    */
   it('⭐ 床が減ったときは増減が負で出る（増えたときは正。符号を単体で固定する）', () => {
-    const big = measureMemoryFloor([premise('doc', 'あ'.repeat(500))]);
-    const small = measureMemoryFloor([premise('doc', 'あ'.repeat(100))]);
+    // **本文の長さでは床が動かなくなった。** 焼き込みはカード（要旨＋節の目次）
+    // なので、本文を 500 字から 100 字へ減らしても載る量はほぼ変わらない
+    // （変わるのは「全 N 文字」の桁だけ）。**床を実際に動かすのは節の数である**
+    // ——だから器を「節が多い／少ない」で作る。測っている符号の話は同じ。
+    const big = measureMemoryFloor([
+      premise('doc', ['## 一', '本文', '## 二', '本文', '## 三', '本文'].join('\n')),
+    ]);
+    const small = measureMemoryFloor([premise('doc', '## 一\n本文')]);
 
     const shrunk = describeMemoryFloor({
       before: big,
@@ -2334,15 +2416,19 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
  * fact は目次1行ぶんしか返らない。
  */
 describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ載る見込み」の一言', () => {
-  it('⭐ premise の文書へ書くと、renderMemoryDocuments([文書]) の全文ぶんの文字数が出る（全文が載る）', () => {
+  it('⭐ premise の文書へ書くと、renderMemoryDocuments([文書]) と一致する文字数が出る（載るのはカード）', () => {
     const doc = premise('about-me-core', 'あ'.repeat(500));
     const reply = describeMemoryReinjectionEstimate([doc], [doc], new Map());
     const expectedChars = renderMemoryDocuments([doc]).length;
 
     expect(reply).toContain(`${expectedChars.toLocaleString('en-US')} 文字`);
-    expect(reply).toContain('premise・全文');
-    // 全文が実際に載っていること（目次1行だけではない）を、本文の一部で確かめる。
-    expect(renderMemoryDocuments([doc])).toContain('あ'.repeat(500));
+    // **かつてここは `premise・全文` を測り、本文が実際に載ることまで見ていた。**
+    // 載り方がカードへ変わったので（人間の決定 2026-09-08）、**本文が載らない
+    // ことのほうを測る**——アサーションは消していない。向きが反転しただけである。
+    expect(reply).toContain('premise・カード（要旨＋節の目次）');
+    expect(renderMemoryDocuments([doc])).not.toContain('あ'.repeat(500));
+    // 代わりに見出しは載る（何が書いてあるかは分かる）。
+    expect(renderMemoryDocuments([doc])).toContain('# about-me-core');
   });
 
   it('⭐ fact の文書へ書くと、目次1行ぶんしか出ない——同じ本文量でも premise よりずっと小さい', () => {
@@ -2421,7 +2507,7 @@ describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ�
     expect(multi).toContain('両方まとめて渡した結果');
   });
 
-  it('内訳に文書ごとの区分（premise・全文 / fact・目次1行）が並ぶ', () => {
+  it('内訳に文書ごとの区分（premise・カード / fact・目次1行）が並ぶ', () => {
     const premiseDoc = premise('about-me', '本文');
     const factDoc: MemoryPart = {
       ...fact('appendix', { description: '付録', freshness: { kind: 'fresh' } }),
@@ -2434,7 +2520,8 @@ describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ�
     );
 
     expect(reply).toContain('appendix（fact・目次1行）');
-    expect(reply).toContain('about-me（premise・全文）');
+    // ラベルは実際に載る形を言い当てる（`premise・全文` から言い換えた）。
+    expect(reply).toContain('about-me（premise・カード（要旨＋節の目次））');
   });
 
   it('parts が空なら呼び手の実装誤りとして例外を投げる（型を迂回した呼び手への最後の砦）', () => {
@@ -2694,113 +2781,211 @@ describe('describeMemoryPremiseRanking — 「premise の大きさの順位」�
 });
 
 /**
- * ⭐ 載せ直しの絞り込み（`RenderMemoryDocumentsOptions.seenContent`）。
+
+/**
+ * ⭐ premise の焼き込み（`renderPremiseCard`）と、載せ直しの絞り込み
+ * （`RenderMemoryDocumentsOptions.seenContent`）。
  *
- * ## この歯が在る理由（本番の実測）
+ * ## この2つが在る理由（本番の実測、2026-09-08T00:15Z〜00:40Z）
  *
- * 2026-09-08T00:15Z、Railway の PostgreSQL を直接引いた値:
+ * Railway の PostgreSQL を直接引いた値:
  *
- * - `alteroid-work`（premise・305,536 文字）が 2026-09-07 の1日に **120 回**
- *   更新されていた。1回の実際の変更量は平均 3,732 バイト
- * - `#withFreshMemory` はそのたびに**全文**を会話へ載せ直していた ＝ 約 60 倍
- * - `describe`（frontmatter の要旨だけ）に至っては 520 バイトの変更に対して
- *   310,325 バイトが載っていた ＝ 約 600 倍
- * - その結果、クローンのターン1回の文脈は 457k → 752k トークンへ育ち、
- *   自動 compaction が 1日 0 回 → 33 回になっていた
+ * | | 値 |
+ * | --- | --- |
+ * | premise 5本の合計 | 527,277 文字（≒ 411,000 トークン）を**毎ターン**焼いていた |
+ * | 要旨＋見出しだけなら | 73,285 文字（13.9%。≒ 57,000 トークン） |
+ * | `alteroid-work` | 303,013 文字・**917 節**（1節あたり約 330 文字＝ログである） |
+ * | 記憶の書き換え（2026-09-07） | 244 回。載せ直された総量 80 MB に対し、実際に変わったのは約 567 kB |
  *
- * **測るのは「省いたか」ではなく「省いた側を名乗ったか」も含めてである**
- * ——黙って省くと、読み手（クローン）はそれを記憶の破損として読む。
+ * 人間の決定（2026-09-08）: **「読みたいときに読める仕組みは必要だが、毎回
+ * 全行読ませるのは無駄だと感じる。」**
+ *
+ * **測るのは3つ**——(a) 本文が載らないこと (b) それでも「何が書いてあるか」と
+ * 「どう開くか」は載ること (c) 載せ直しが変わった範囲だけになること。
+ * **(b) が無いとこの変更は能力の削除である。**
  */
-describe('載せ直しの絞り込み（seenContent）— 変わった範囲だけを載せる', () => {
-  /** 追記の形（既存の末尾に足す）。実運用でいちばん多い（383/640 件）。 */
-  it('⭐ 末尾へ追記したときは、追記した行だけが載る（元の本文は1文字も載らない）', () => {
-    const bodyBefore = Array.from({ length: 200 }, (_, i) => `既存の行 ${i}`).join('\n');
-    const before = premise('alteroid-work', bodyBefore);
-    const after = premise('alteroid-work', `${bodyBefore}\n追記した行`);
+describe('premise の焼き込み（カード）と、載せ直しの絞り込み（seenContent）', () => {
+  /** 節が多い premise。**差分が意味を持つのは、カードが十分に大きいときだけである。** */
+  function manySections(count: number, extra = ''): string {
+    const body = Array.from({ length: count }, (_, i) => `## 節${i}\n節${i}の本文である。`).join(
+      '\n',
+    );
+    return `---\ntype: premise\ndescription: 前提の要旨\n---\n${body}${extra}`;
+  }
 
-    const rendered = renderMemoryDocuments([after], {
-      seenContent: new Map([[after.slug, before.content]]),
-    });
+  it('⭐ カードには本文が載らず、要旨・節の見出し・節id・文字数・開き方が載る', () => {
+    const rendered = renderMemoryDocuments([
+      {
+        slug: 'about-me',
+        content:
+          '---\ntype: premise\ndescription: 私の要旨\n---\n## 判断の基準\nここが本文である。',
+      },
+    ]);
 
-    expect(rendered).toContain('追記した行');
-    expect(rendered).not.toContain('既存の行 100');
-    // 省いた側を必ず名乗る（行数と文字数の両方）。
-    expect(rendered).toContain('先頭 201 行');
-    expect(rendered).toContain('は変わっていない');
-    expect(rendered).toContain('memory_read');
-    // 「全文ではない」と見出しで名乗る。
-    expect(rendered).toContain('alteroid-work.md（変わった範囲だけ。全文ではない）');
-    // 実際に小さくなっていること（この歯の目的そのもの）。
-    expect(rendered.length).toBeLessThan(renderMemoryDocuments([after]).length / 10);
+    // (a) 本文は1文字も載らない。
+    expect(rendered).not.toContain('ここが本文である');
+    // (b) 何が書いてあるかは分かる（要旨と見出し）。
+    expect(rendered).toContain('要旨: 私の要旨');
+    expect(rendered).toContain('## 判断の基準');
+    // (b) どう開くかも書いてある（これが無いと能力の削除になる）。
+    expect(rendered).toContain('memory_section_read');
+    // (b) 節id が実際に載っている（目次を取り直さずに開ける）。
+    expect(rendered).toMatch(/\[[0-9a-f]{8}-[0-9a-f]{8}\] ## 判断の基準 — /);
+    // 大きさが桁で違う（この変更の目的そのもの）。
+    expect(rendered.length).toBeLessThan(400);
   });
 
-  /** frontmatter の1行だけを直す形（`memory_frontmatter_set`。増幅が最大だった）。 */
-  it('⭐ frontmatter の要旨だけを直したときは、その行だけが載る（前後は行数で名乗る）', () => {
-    const body = Array.from({ length: 300 }, (_, i) => `本文 ${i}`).join('\n');
-    const before: MemoryPart = {
-      slug: 'doc',
-      content: `---\ndescription: 古い要旨\ntype: premise\n---\n${body}`,
-    };
-    const after: MemoryPart = {
-      slug: 'doc',
-      content: `---\ndescription: 新しい要旨\ntype: premise\n---\n${body}`,
-    };
+  it('要旨がまだ書かれていない premise では、書けと言う（黙って空欄にしない）', () => {
+    const rendered = renderMemoryDocuments([{ slug: 'doc', content: '## 節\n本文' }]);
+    expect(rendered).toContain('要旨: （まだ書かれていない');
+    expect(rendered).toContain('memory_frontmatter_set');
+  });
 
-    const rendered = renderMemoryDocuments([after], {
-      seenContent: new Map([[after.slug, before.content]]),
-    });
-
-    expect(rendered).toContain('description: 新しい要旨');
-    expect(rendered).not.toContain('本文 150');
-    expect(rendered).toContain('先頭 1 行');
-    expect(rendered).toContain('末尾 302 行');
+  it('見出しが1つも無い premise では、節が無いことと見出しを付ける利点を言う', () => {
+    const rendered = renderMemoryDocuments([{ slug: 'doc', content: '見出しの無い本文' }]);
+    expect(rendered).toContain('節: 1つも無い');
+    expect(rendered).not.toContain('見出しの無い本文');
+    expect(rendered).toContain('memory_read');
   });
 
   /**
-   * ⭐ 差分にする価値が無ければ全文へ倒れる。**「常に差分」にしないのは、
-   * ほとんど全部が変わっているときに「変わっていない側」の断りだけが増えて
-   * 読みにくくなるからである**（節約にもならない）。
+   * ⭐ 目安（線）。**門ではない**——書き込みは1つも止めない。
+   * 予算に当たったこと自体が「この文書を割れ」という合図であり、その手順を
+   * 断り書きに書く（`excerpt.ts` の「続きの取り方を書けるのは、呼び手の側に
+   * その口が実在するときだけである」）。
    */
-  it('⭐ 大半が書き換わったときは差分にせず全文を載せる（見出しも「変わった範囲だけ」と名乗らない）', () => {
-    const before = premise('doc', Array.from({ length: 100 }, (_, i) => `旧 ${i}`).join('\n'));
-    const after = premise('doc', Array.from({ length: 100 }, (_, i) => `新 ${i}`).join('\n'));
+  it('⭐ 目次が予算に収まらない文書は、省いた件数と「割る手順」を名乗る', () => {
+    const huge = Array.from(
+      { length: 400 },
+      (_, i) => `## これは十分に長い見出しであり予算を食い尽くす ${i}\n本文`,
+    ).join('\n');
+    const rendered = renderMemoryDocuments([
+      { slug: 'big', content: `---\ntype: premise\ndescription: 大きい\n---\n${huge}` },
+    ]);
+
+    expect(rendered).toContain('節は目次から省略');
+    expect(rendered).toContain('目次すら毎ターンの焼き込みに収まっていない');
+    expect(rendered).toContain('memory_section_move');
+    // 予算そのものは超えない（超えたら「予算」の意味が無い）。
+    expect(rendered.length).toBeLessThan(MEMORY_PROMPT_OUTLINE_BUDGET * 2);
+  });
+
+  it('⭐ 要旨が長すぎる文書は、切ったことと全文の在り処と直し方を名乗る', () => {
+    const longDescription = 'あ'.repeat(MEMORY_PROMPT_DESCRIPTION_BUDGET + 500);
+    const rendered = renderMemoryDocuments([
+      {
+        slug: 'doc',
+        content: `---\ntype: premise\ndescription: ${longDescription}\n---\n## 節\n本文`,
+      },
+    ]);
+
+    expect(rendered).toContain('要旨が長すぎて毎ターンの焼き込みに収まっていない');
+    expect(rendered).toContain('memory_list');
+    expect(rendered).toContain('要旨に本文を書かず');
+    // 切ってはいるが、切ったぶんだけであって文書は消えていない。
+    expect(rendered).toContain('## 節');
+  });
+
+  it('要旨が目安に収まっていれば、切らないし印も出さない（線の反対側）', () => {
+    const rendered = renderMemoryDocuments([
+      { slug: 'doc', content: '---\ntype: premise\ndescription: 短い要旨\n---\n## 節\n本文' },
+    ]);
+    expect(rendered).toContain('要旨: 短い要旨');
+    expect(rendered).not.toContain('要旨が長すぎて');
+  });
+
+  // -------------------------------------------------------------------------
+  // 載せ直しの絞り込み（seenContent）
+  // -------------------------------------------------------------------------
+
+  it('⭐ 節を1つ足しただけなら、カードの変わった範囲だけが載る', () => {
+    const before: MemoryPart = { slug: 'alteroid-work', content: manySections(60) };
+    const after: MemoryPart = {
+      slug: 'alteroid-work',
+      content: manySections(60, '\n## 新しい節\n追記した本文'),
+    };
+
+    const rendered = renderMemoryDocuments([after], {
+      seenContent: new Map([[after.slug, before.content]]),
+    });
+
+    // 変わった行（新しい見出し）は載る。
+    expect(rendered).toContain('## 新しい節');
+    // 変わっていない節の行は載らない。
+    expect(rendered).not.toContain('## 節30');
+    // 省いた側を必ず名乗る。
+    expect(rendered).toContain('は変わっていない');
+    expect(rendered).toContain('<!-- memory: alteroid-work.md（カードの変わった範囲だけ） -->');
+    // カード全体よりはっきり小さい（この絞り込みの目的そのもの）。
+    expect(rendered.length).toBeLessThan(renderMemoryDocuments([after]).length / 5);
+  });
+
+  it('⭐ 要旨だけを直したときも、変わった範囲だけが載る', () => {
+    const before: MemoryPart = { slug: 'doc', content: manySections(60) };
+    const after: MemoryPart = {
+      slug: 'doc',
+      content: manySections(60).replace('description: 前提の要旨', 'description: 直した要旨'),
+    };
+
+    const rendered = renderMemoryDocuments([after], {
+      seenContent: new Map([[after.slug, before.content]]),
+    });
+
+    expect(rendered).toContain('要旨: 直した要旨');
+    // 節の行は1つも変わっていないので載らない。
+    expect(rendered).not.toContain('## 節30');
+    // 変わっていない行数を名乗る（黙って省かない）。
+    expect(rendered).toContain('行は変わっていないので載せていない');
+    expect(rendered).toContain('<!-- memory: doc.md（カードの変わった範囲だけ） -->');
+    // 「前の版に在っていまは無い行」＝古い要旨の行が1行あることも名乗る。
+    expect(rendered).toContain('いまは無い行: 1 行');
+  });
+
+  it('⭐ 大半が変わったときは差分にせずカード全体を載せる（「変わった範囲だけ」と名乗らない）', () => {
+    const before: MemoryPart = { slug: 'doc', content: manySections(20) };
+    const after: MemoryPart = {
+      slug: 'doc',
+      content: `---\ntype: premise\ndescription: 前提の要旨\n---\n${Array.from(
+        { length: 20 },
+        (_, i) => `## まったく違う見出し${i}\n中身も違う。`,
+      ).join('\n')}`,
+    };
 
     const rendered = renderMemoryDocuments([after], {
       seenContent: new Map([[after.slug, before.content]]),
     });
 
     expect(rendered).toBe(renderMemoryDocuments([after]));
-    expect(rendered).not.toContain('変わった範囲だけ');
+    expect(rendered).not.toContain('カードの変わった範囲だけ');
   });
 
-  /**
-   * ⭐ **渡さなければ1バイトも変わらない。** システムプロンプトへの焼き込みと
-   * 床の測定はどちらも渡さない側なので、この不変条件が破れると「毎ターンの床」
-   * が黙って動く。
-   */
   it('⭐ seenContent を渡さなければ出力は1バイトも変わらない（システムプロンプト側の不変条件）', () => {
-    const docs = [premise('a', 'あ'.repeat(500)), premise('b', 'い'.repeat(500))];
+    const docs = [
+      { slug: 'a', content: manySections(5) },
+      { slug: 'b', content: manySections(3) },
+    ];
     expect(renderMemoryDocuments(docs, {})).toBe(renderMemoryDocuments(docs));
     expect(renderMemoryDocuments(docs, { presentInMemory: docs })).toBe(
       renderMemoryDocuments(docs),
     );
   });
 
-  it('⭐ 床（measureMemoryFloor）は seenContent の影響を受けない——毎ターン焼かれる量は全文のままである', () => {
-    const before = premise('doc', 'あ'.repeat(1000));
-    const after = premise('doc', `${'あ'.repeat(1000)}\n追記`);
-    // 差分として載る量は小さいが、床（毎ターン焼かれる量）は全文ぶんである。
+  it('⭐ 床（measureMemoryFloor）は seenContent の影響を受けない', () => {
+    const before: MemoryPart = { slug: 'doc', content: manySections(60) };
+    const after: MemoryPart = { slug: 'doc', content: manySections(60, '\n## 追記\n本文') };
+
     const injected = renderMemoryDocuments([after], {
       seenContent: new Map([[after.slug, before.content]]),
     }).length;
     const floor = measureMemoryFloor([after]).totalChars;
 
     expect(injected).toBeLessThan(floor / 5);
+    // 床は「渡さない呼び手」の値そのものである（差分の存在で1文字も動かない）。
     expect(floor).toBe(renderMemoryDocuments([after]).length);
   });
 
-  it('見ていない文書（新規作成）は全文が載る——空の Map と同じ扱い', () => {
-    const doc = premise('new-doc', 'あ'.repeat(300));
+  it('見ていない文書（新規作成）はカード全体が載る——空の Map と同じ扱い', () => {
+    const doc: MemoryPart = { slug: 'new-doc', content: manySections(5) };
     expect(renderMemoryDocuments([doc], { seenContent: new Map() })).toBe(
       renderMemoryDocuments([doc]),
     );
@@ -2819,16 +3004,20 @@ describe('載せ直しの絞り込み（seenContent）— 変わった範囲だ�
    * おり、UTF-16 の code unit で切るとサロゲートペアが割れて壊れた文字が文脈へ
    * 載る。**行の境界は必ず文字の境界である。**
    */
-  it('⭐ 絵文字（サロゲートペア）を含む行の境界で切っても、壊れた文字を作らない', () => {
-    const emojiBody = Array.from({ length: 50 }, (_, i) => `🎯 節 ${i} ⚠️`).join('\n');
-    const before = premise('doc', emojiBody);
-    const after = premise('doc', `${emojiBody}\n🎯 追記 ⚠️`);
+  it('⭐ 絵文字（サロゲートペア）を含む見出しの境界で切っても、壊れた文字を作らない', () => {
+    const body = (extra: string): string =>
+      `---\ntype: premise\ndescription: 🎯 要旨 ⚠️\n---\n${Array.from(
+        { length: 40 },
+        (_, i) => `## 🎯 節${i} ⚠️\n本文`,
+      ).join('\n')}${extra}`;
+    const rendered = renderMemoryDocuments(
+      [{ slug: 'doc', content: body('\n## 🎯 追記 ⚠️\n本文') }],
+      {
+        seenContent: new Map([['doc', body('')]]),
+      },
+    );
 
-    const rendered = renderMemoryDocuments([after], {
-      seenContent: new Map([[after.slug, before.content]]),
-    });
-
-    expect(rendered).toContain('🎯 追記 ⚠️');
+    expect(rendered).toContain('## 🎯 追記 ⚠️');
     // 孤立サロゲート（U+D800–U+DFFF が対にならずに残った形）が1つも無いこと。
     expect(
       /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(rendered),
@@ -2841,17 +3030,15 @@ describe('載せ直しの絞り込み（seenContent）— 変わった範囲だ�
    * 再実装せず、同じ `seenContent` をそのまま通す。
    */
   it('⭐ 見込みの文字数が、差分として実際に載る文字数と一致する', () => {
-    const bodyBefore = Array.from({ length: 200 }, (_, i) => `行 ${i}`).join('\n');
-    const before = premise('doc', bodyBefore);
-    const after = premise('doc', `${bodyBefore}\n追記`);
+    const before: MemoryPart = { slug: 'doc', content: manySections(60) };
+    const after: MemoryPart = { slug: 'doc', content: manySections(60, '\n## 追記\n本文') };
     const seen = new Map([[after.slug, before.content]]);
 
     const actual = renderMemoryDocuments([after], { presentInMemory: [after], seenContent: seen });
     const reply = describeMemoryReinjectionEstimate([after], [after], seen);
 
     expect(reply).toContain(`${actual.length.toLocaleString('en-US')} 文字`);
-    expect(reply).toContain('doc（premise・変わった範囲だけ）');
-    // 全文を載せていた頃の見込みより、はっきり小さいこと。
-    expect(actual.length).toBeLessThan(renderMemoryDocuments([after]).length / 10);
+    expect(reply).toContain('doc（premise・カードの変わった範囲だけ）');
+    expect(actual.length).toBeLessThan(renderMemoryDocuments([after]).length / 5);
   });
 });

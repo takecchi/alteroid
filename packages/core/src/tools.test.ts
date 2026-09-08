@@ -632,7 +632,21 @@ describe('クローンの道具', () => {
    * 追加行なので、ここでは新しく足した行だけを測る。**
    */
   describe('書く4口の応答に足す「毎ターンの床」（describeMemoryFloor、記憶の肥大への恒久対策）', () => {
-    it('⭐ premise を新規作成すると、区分・床の遷移（文字）・「毎ターン全文が焼かれる」の3つが出る', async () => {
+    /**
+     * **かつてこの歯は「毎ターン全文が焼かれる」の1行を測っていた。**
+     * `premise` の焼き込みが全文から**カード（要旨＋節の目次）**へ変わったので
+     * （`memory.ts` の `renderPremiseCard`。人間の決定 2026-09-08）、
+     * `describeMemoryFloor` が言う事実そのものが変わった。
+     *
+     * **保証は弱くなっていない。** 測っているのは前と同じ「premise の新規作成
+     * という稀な枝で、**毎ターン何が焼かれるのかを言い当てているか**」であり、
+     * 言い当てる対象のほうが変わった。むしろ2つ増えている——**本文は載らない**
+     * ことと、**本文を開く口の名前（`memory_section_read`）**である。後者が
+     * 応答に出ることは、この変更を能力の削除にしないための条件そのものなので
+     * （`renderPremiseCard` の doc「開かなければ本文は文脈に無い」）、
+     * ここで一緒に測る。
+     */
+    it('⭐ premise を新規作成すると、区分・床の遷移（文字）・「毎ターン要旨＋節の目次が焼かれる」の3つが出る', async () => {
       const h = harness();
 
       const reply = await h.call('memory_write', {
@@ -643,7 +657,10 @@ describe('クローンの道具', () => {
 
       expect(reply).toContain('premise');
       expect(reply).toContain('毎ターンの床');
-      expect(reply).toContain('全文がそのままクローンの文脈へ焼かれる');
+      expect(reply).toContain('「要旨＋節の目次」がクローンの文脈へ焼かれる');
+      // **本文が載らないことと、その本文を開く口を必ず名乗る。**
+      expect(reply).toContain('本文は載らない');
+      expect(reply).toContain('memory_section_read');
       // 床は 0 文字から動く（この器では他に記憶が無い）。
       expect(reply).toMatch(/0 文字から [\d,]+ 文字へ/);
       // 読み直した値であることを名乗る。
@@ -677,7 +694,14 @@ describe('クローンの道具', () => {
       expect(reply).toContain('memory_frontmatter_set');
     });
 
-    it('fact を新規作成しても「全文が焼かれる」の1行は出ない', async () => {
+    /**
+     * **否定側も新しい文言へ言い換える。** 旧文言（`全文がそのままクローンの
+     * 文脈へ焼かれる`）はもうどの枝からも出ないので、`not.toContain` を旧文言の
+     * まま残すと**何も測っていない歯**になる（緑のまま中身が消える）。
+     * ここで測りたいのは「premise の新規作成の枝**だけ**が強い言い方をする」で
+     * あって、文字列そのものではない。
+     */
+    it('fact を新規作成しても「要旨＋節の目次が焼かれる」の1行は出ない', async () => {
       const h = harness();
 
       const reply = await h.call('memory_write', {
@@ -688,7 +712,7 @@ describe('クローンの道具', () => {
 
       expect(reply).toContain('fact');
       expect(reply).toContain('毎ターンの床');
-      expect(reply).not.toContain('全文がそのままクローンの文脈へ焼かれる');
+      expect(reply).not.toContain('「要旨＋節の目次」がクローンの文脈へ焼かれる');
       // ⭐ 稀にしか出ない枝専用の要素（最大の premise の名指し・3手順）は、
       // fact の新規作成には出ない。
       expect(reply).not.toContain('いま最も大きい premise');
@@ -708,10 +732,13 @@ describe('クローンの道具', () => {
 
       expect(reply).toContain('premise');
       expect(reply).toContain('毎ターンの床');
-      expect(reply).toContain('全文がそのままクローンの文脈へ焼かれる');
+      // 直上の `memory_write` の歯と同じ理由で、旧文言（全文）から
+      // 新しい文言（要旨＋節の目次）へ言い換えている。
+      expect(reply).toContain('「要旨＋節の目次」がクローンの文脈へ焼かれる');
+      expect(reply).toContain('memory_section_read');
     });
 
-    it('memory_frontmatter_set（既存文書の更新）では「全文が焼かれる」は出ない（新規作成ではないため）', async () => {
+    it('memory_frontmatter_set（既存文書の更新）では「要旨＋節の目次が焼かれる」は出ない（新規作成ではないため）', async () => {
       const h = harness();
       await h.stores.persona.write('values', '---\ntype: premise\n---\n# 価値観\n本文');
 
@@ -722,7 +749,7 @@ describe('クローンの道具', () => {
       });
 
       expect(reply).toContain('毎ターンの床');
-      expect(reply).not.toContain('全文がそのままクローンの文脈へ焼かれる');
+      expect(reply).not.toContain('「要旨＋節の目次」がクローンの文脈へ焼かれる');
       expect(reply).not.toContain('いま最も大きい premise');
       expect(reply).not.toContain('memory_outline');
       expect(reply).not.toContain('memory_section_move');
@@ -792,7 +819,13 @@ describe('クローンの道具', () => {
 
       expect(reply).toContain('次のターンの会話へ載る見込み');
       expect(reply).toContain(`${expectedChars.toLocaleString('en-US')} 文字`);
-      expect(reply).toContain('premise・全文');
+      // **かつてここは `premise・全文` だった。** premise の焼き込みが
+      // カード（要旨＋節の目次）になったので（`memory.ts` の `renderPremiseCard`）、
+      // 内訳のラベルが指す事実のほうが変わった。**保証は弱くなっていない**——
+      // この歯が測っているのは「内訳のラベルが、実際に載る形を言い当てているか」
+      // であり、上の `expectedChars`（`renderMemoryDocuments` と一致するか）と
+      // 合わせて、数とラベルの両方が同じ現物を指していることを見ている。
+      expect(reply).toContain('premise・カード（要旨＋節の目次）');
     });
 
     it('⭐ memory_write（fact）は、目次1行ぶんの小さい文字数を返す（premise とは桁が違う）', async () => {
@@ -824,7 +857,8 @@ describe('クローンの道具', () => {
       });
 
       expect(reply).toContain('次のターンの会話へ載る見込み');
-      expect(reply).toContain('premise・全文');
+      // 直上の `memory_write` の歯と同じ言い換え（全文 → カード）。
+      expect(reply).toContain('premise・カード（要旨＋節の目次）');
     });
 
     it('memory_frontmatter_set にも同じ行が出て、type を fact に変えると数値が小さくなる', async () => {
@@ -841,7 +875,11 @@ describe('クローンの道具', () => {
       // 要旨を1行足しただけのこの呼び出しは、全文ではなく差分として載る。
       // **保証は弱くなっていない**——測っているのは「内訳のラベルが、実際に載る形
       // を言い当てているか」であり、そのラベルが指す事実のほうが変わった。
-      expect(beforeReply).toContain('premise・変わった範囲だけ');
+      //
+      // **そして差分を取る相手も変わった。** premise は全文ではなく
+      // **カード**（要旨＋節の目次）で焼かれるようになった（`renderPremiseCard`）
+      // ので、差分は「カードの変わった範囲だけ」である——ラベルもそう名乗る。
+      expect(beforeReply).toContain('premise・カードの変わった範囲だけ');
 
       const afterReply = await h.call('memory_frontmatter_set', {
         slug: 'values',
@@ -3061,6 +3099,272 @@ describe('クローンの道具', () => {
       // **そのことを名乗る。**「移した」とだけ返すと、呼び手は重複に気づけない。
       expect(reply).toContain('重複');
       expect(reply).toContain('失われてはいない');
+    });
+  });
+
+  /**
+   * ⭐⭐ `memory_section_read`（節id で指した節の**本文**を開く。読むだけ）。
+   *
+   * **この道具が在ることが、「premise の本文を毎ターン焼き込まない」を能力の
+   * 削除にしない唯一の根拠である。** `premise` はプロンプトへ要旨と節の目次
+   * （カード）だけが載るようになった（`memory.ts` の `renderPremiseCard`。
+   * 人間の決定 2026-09-08）——**開く口が実際に開かなければ、本文は取り戻せない。**
+   * だからここで測るのは文言ではなく、その口が持っていなければならない性質の
+   * ほうである:
+   *
+   * 1. 節id を渡すと**本文が返る**（目印の文字列が実際に応答へ出る）
+   * 2. **複数の節id を1回で受け、返る順は渡した順ではなく文書に現れる順**
+   *    （1つずつだと節の数だけターンを払う。`memory_section_move` と同じ理由）
+   * 3. 入れ子の子は親に含まれる
+   * 4. 読めなかった節id は**理由ごとに分けて**返る（古い / 1つに決まらない /
+   *    無い）。**⚠️「無い」と「古い」を畳まない**のはこのリポジトリの明示の
+   *    約束である（`memory.ts` の `MemorySectionLookup` の doc）
+   * 5. **1つが読めなくても、読めた節は返る**（全部を断らない）
+   * 6. 存在しない slug には、そう返す
+   * 7. **何も書き換えない**
+   *
+   * **節id の取り方は隣の `memory_outline` / `memory_section_move` の歯に倣い、
+   * 本物の経路（`memory_outline` の出力から拾う）を通す**——道具の出力が
+   * `memory_section_read` の入力としてそのまま通ることまで含めて測るためで
+   * ある（焼き込みのカードと `memory_outline` は同じ節id を出す）。
+   * ヘルパを隣の describe と共有していないのは、あちらの `outlineOf` が
+   * あちらの closure に閉じているためで、意図して同じ正規表現に揃えてある。
+   */
+  describe('memory_section_read（節id で本文を開く。読むだけ）', () => {
+    /**
+     * 目印。節ごとに変える（中身まで同一の節は節id が衝突する）。
+     *
+     * **⚠️ 接尾辞は互いの部分文字列にならないものを選ぶ。** 子の目印を
+     * `-CHILD` にすると `not.toContain('…-C')` が子の行に当たり、**開いていない
+     * 節の本文が出た**という嘘の赤が出る（実際に踏んだ）。
+     */
+    const MARK = 'MARK-SECTION-READ-777';
+
+    const doc = [
+      '---',
+      'description: 節を開く',
+      'type: premise',
+      '---',
+      '# 表紙',
+      '前書きである。',
+      '',
+      '## 節A',
+      `${MARK}-A を含む節Aの本文である。`,
+      '',
+      '### 節Aの子',
+      `${MARK}-KO を含む子の本文である。`,
+      '',
+      '## 節B',
+      `${MARK}-B を含む節Bの本文である。`,
+      '',
+      '## 節C',
+      `${MARK}-C を含む節Cの本文である。`,
+      '',
+    ].join('\n');
+
+    async function seed(h: Harness, slug = 'about-me', content = doc): Promise<void> {
+      await h.call('memory_write', { slug, content, summary: '作成' });
+    }
+
+    /**
+     * `memory_outline` の出力から節id を引く（本物の経路を通す）。見つからない
+     * ときは投げる——ここは「その節が目次に出るか」を測る歯ではないので、
+     * 足場の前提が崩れたことは例外で分かればよい。
+     */
+    async function sectionId(h: Harness, slug: string, heading: string): Promise<string> {
+      const outline = await h.call('memory_outline', { slug });
+      const hit = outline.split('\n').flatMap((line) => {
+        const match = /^\s*\[([0-9a-f]{8}-[0-9a-f]{8})\] (.+?) — /.exec(line);
+        return match !== null && match[2] === heading ? [match[1] as string] : [];
+      });
+      if (hit.length !== 1) throw new Error(`節 ${heading} が目次に1つだけ在るはず:\n${outline}`);
+      return hit[0] as string;
+    }
+
+    /** 「読めなかった節」の一覧から、その節id の行だけを取る。 */
+    function refusalFor(reply: string, id: string): string {
+      return reply.split('\n').find((line) => line.startsWith(`- ${id}:`)) ?? '';
+    }
+
+    it('節id を渡すと、その節の本文が返る', async () => {
+      const h = harness();
+      await seed(h);
+      const id = await sectionId(h, 'about-me', '## 節A');
+
+      const reply = await h.call('memory_section_read', { slug: 'about-me', sections: [id] });
+
+      // **本文が実際に開いている**（目印は本文にしか無い。目次には出ない）。
+      expect(reply).toContain(`${MARK}-A`);
+      expect(reply).toContain('## 節A');
+      // どの節id を開いたのかが応答から辿れる。
+      expect(reply).toContain(`[${id}]`);
+      // 開いていない節の本文は出ない（要求した節だけを返す）。
+      expect(reply).not.toContain(`${MARK}-B`);
+      expect(reply).not.toContain(`${MARK}-C`);
+      expect(reply).toContain('1 件開いた');
+    });
+
+    /**
+     * ⭐ 複数の節id を1回で受ける（1つずつだと節の数だけターンを払う。
+     * `memory_section_move` が複数を受けるのと同じ理由）。
+     *
+     * **返る順は渡した順ではなく文書に現れる順である**——だから**逆順で渡して**
+     * 確かめる。渡した順に返す実装はこの歯で落ちる。
+     */
+    it('⭐ 複数の節id を1回で渡せる。返る順序は渡した順ではなく文書に現れる順である', async () => {
+      const h = harness();
+      await seed(h);
+      const idA = await sectionId(h, 'about-me', '## 節A');
+      const idB = await sectionId(h, 'about-me', '## 節B');
+      const idC = await sectionId(h, 'about-me', '## 節C');
+
+      // 文書に現れる順は A → B → C。**逆順で渡す。**
+      const reply = await h.call('memory_section_read', {
+        slug: 'about-me',
+        sections: [idC, idB, idA],
+      });
+
+      expect(reply).toContain(`${MARK}-A`);
+      expect(reply).toContain(`${MARK}-B`);
+      expect(reply).toContain(`${MARK}-C`);
+      expect(reply).toContain('3 件開いた');
+      // 並びは文書順（渡した順＝C・B・A ではない）。
+      expect(reply.indexOf(`${MARK}-A`)).toBeLessThan(reply.indexOf(`${MARK}-B`));
+      expect(reply.indexOf(`${MARK}-B`)).toBeLessThan(reply.indexOf(`${MARK}-C`));
+    });
+
+    it('入れ子の子は親に含まれる（親の節id を渡すと子の本文も出る）', async () => {
+      const h = harness();
+      await seed(h);
+      const idA = await sectionId(h, 'about-me', '## 節A');
+
+      const reply = await h.call('memory_section_read', { slug: 'about-me', sections: [idA] });
+
+      expect(reply).toContain(`${MARK}-A`);
+      // 子（### 節Aの子）は親の範囲に入っているので、名指ししなくても開く。
+      expect(reply).toContain(`${MARK}-KO`);
+      expect(reply).toContain('### 節Aの子');
+      // 隣の兄弟（## 節B）までは含まれない。
+      expect(reply).not.toContain(`${MARK}-B`);
+    });
+
+    /**
+     * ⭐ **3つの断りを畳まない。** 疑う先が違う——「古い」は読み直せば済み、
+     * 「1つに決まらない」は見出しを変える必要があり、「無い」は指し先そのものが
+     * 間違っている。畳むと、読み直せば済むのか指し先が違うのかが区別できない
+     * （`memory.ts` の `MemorySectionLookup` の doc）。
+     */
+    it('⭐ 読めなかった節id は理由ごとに分けて返る（古い / 1つに決まらない / 無い）', async () => {
+      const h = harness();
+      await seed(h);
+      const idA = await sectionId(h, 'about-me', '## 節A');
+      // 見出しは一致するが中身のハッシュが違う＝「古い」（`lookupMemorySection`
+      // が見出し側の接頭辞で引き当てる形に合わせて作る）。
+      const staleId = `${idA.split('-')[0]}-00000000`;
+      const absentId = 'deadbeef-cafebabe';
+
+      const reply = await h.call('memory_section_read', {
+        slug: 'about-me',
+        sections: [staleId, absentId],
+      });
+
+      expect(reply).toContain('読めなかった節');
+      const stale = refusalFor(reply, staleId);
+      const absent = refusalFor(reply, absentId);
+      // 節id ごとに1行ずつ在る（まとめて「読めなかった」にしていない）。
+      expect(stale).not.toBe('');
+      expect(absent).not.toBe('');
+      expect(stale).not.toBe(absent);
+      // 「古い」側は読み直せと言い、取り直す道具の名前まで言う。
+      expect(stale).toContain('古い');
+      expect(stale).toContain('memory_outline');
+      // 「無い」側は「古い」と言わない（＝2つを畳んでいない）。
+      expect(absent).not.toContain('古い');
+      expect(absent).toContain('この文書に無い');
+      expect(absent).toContain('打ち間違い');
+
+      // 3つ目（1つに決まらない）は中身まで同一の節が2つ在る文書で測る。
+      await seed(h, 'dup', '# A\n本文\n\n# A\n本文\n\n# B\n終わり\n');
+      const outline = await h.call('memory_outline', { slug: 'dup' });
+      const dupId = (
+        /\[([0-9a-f]{8}-[0-9a-f]{8})\] # A/.exec(outline) as RegExpExecArray
+      )[1] as string;
+
+      const dupReply = await h.call('memory_section_read', { slug: 'dup', sections: [dupId] });
+      const ambiguous = refusalFor(dupReply, dupId);
+
+      expect(ambiguous).toContain('1つに決まらない');
+      expect(ambiguous).toContain('2 箇所');
+      // 上の2つのどちらとも違う理由として出る。
+      expect(ambiguous).not.toContain('古い');
+      expect(ambiguous).not.toContain('打ち間違い');
+      expect(dupReply).toContain('0 件開いた');
+    });
+
+    /**
+     * ⭐ **1つが読めなくても、読めた節は返す。** 全部を断ると、9個読めて1個
+     * 古いときに9個ぶんのターンが無駄になる（`tools.ts` の
+     * `memory_section_read` の doc）。
+     */
+    it('⭐ 1つが読めなくても、読めた節は返る（全部を断らない）', async () => {
+      const h = harness();
+      await seed(h);
+      const idA = await sectionId(h, 'about-me', '## 節A');
+      const idB = await sectionId(h, 'about-me', '## 節B');
+
+      const reply = await h.call('memory_section_read', {
+        slug: 'about-me',
+        sections: [idB, 'deadbeef-cafebabe', idA],
+      });
+
+      // 読めた2節はどちらも本文が返る。
+      expect(reply).toContain(`${MARK}-A`);
+      expect(reply).toContain(`${MARK}-B`);
+      expect(reply).toContain('2 件開いた');
+      // 読めなかった1つは、黙って落とさず理由付きで言う。
+      expect(refusalFor(reply, 'deadbeef-cafebabe')).toContain('この文書に無い');
+    });
+
+    it('存在しない slug には、そう返す（黙って空の結果を返さない）', async () => {
+      const h = harness();
+
+      const reply = await h.call('memory_section_read', {
+        slug: 'nope',
+        sections: ['deadbeef-cafebabe'],
+      });
+
+      expect(reply).toContain('存在しない');
+      // 「0 件開いた」で済ませない——文書が無いことと、節が開けないことは別である。
+      expect(reply).not.toContain('0 件開いた');
+    });
+
+    /**
+     * ⭐ **読むだけの口である。** 断る枝（古い・無い）を通しても書かない——
+     * 「断ってから書く」実装をここで落とす。**文言ではなく本文そのものを
+     * 突き合わせる**（`toBe` で丸ごと比べる。隣の `memory_section_move` の
+     * 歯と同じ形）。
+     */
+    it('⭐ 何も書き換えない（呼び出しの前後で本文が1バイトも変わらない）', async () => {
+      const h = harness();
+      await seed(h);
+      const idA = await sectionId(h, 'about-me', '## 節A');
+      const before = (await h.stores.persona.read('about-me'))?.content as string;
+
+      const writeSpy = vi.spyOn(h.stores.persona, 'write');
+      const appendSpy = vi.spyOn(h.stores.persona, 'append');
+      const removeSpy = vi.spyOn(h.stores.persona, 'remove');
+
+      // 読めた枝と、読めなかった枝の両方を通す。
+      await h.call('memory_section_read', { slug: 'about-me', sections: [idA] });
+      await h.call('memory_section_read', {
+        slug: 'about-me',
+        sections: ['deadbeef-cafebabe'],
+      });
+
+      expect((await h.stores.persona.read('about-me'))?.content).toBe(before);
+      expect(writeSpy).not.toHaveBeenCalled();
+      expect(appendSpy).not.toHaveBeenCalled();
+      expect(removeSpy).not.toHaveBeenCalled();
     });
   });
 
@@ -7320,7 +7624,7 @@ describe('self_status（いま自分がどう走っているか）', () => {
       const reply = await h.call('self_status', {});
 
       expect(reply).toContain(
-        `- premise 合計: ${floor.premiseChars.toLocaleString('en-US')} 文字（${floor.premiseDocs} 文書。毎ターン全文が焼かれる）`,
+        `- premise 合計: ${floor.premiseChars.toLocaleString('en-US')} 文字（${floor.premiseDocs} 文書。毎ターン「要旨＋節の目次」が焼かれる）`,
       );
       expect(reply).toContain(
         `- fact 目次合計: ${floor.tocChars.toLocaleString('en-US')} 文字（${floor.factDocs} 文書。目次の1行だけが焼かれる）`,
@@ -8838,14 +9142,67 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
    * 先頭に来る。ここへ、slug が明確に最後に来る（`zzz-` 接頭辞）巨大な
    * premise を1件足す——旧実装なら省略される側に確実に落ちるが、寄与の
    * 大きい順に並べ替えた新実装では必ず一覧に出る。
+   *
+   * ## ⚠️ 足場の作り方が変わった（premise の焼き込みがカードになったため）
+   *
+   * **かつてこの足場は「本文が 4,000 字の premise」だった。** premise が全文で
+   * 焼かれていたころは、本文が大きいことがそのまま寄与が大きいことだった。
+   * いま `premise` に載るのは**カード**（要旨＋節の目次）だけで、本文は1文字も
+   * 載らない（`memory.ts` の `renderPremiseCard`）——**本文を 4,000 字にしても
+   * 寄与は 250 字程度にしかならず、`flooded()` の fact（1件あたり 314 字）より
+   * 小さい。** つまり旧い足場は「最大の premise」を作れておらず、この歯は
+   * 「最大でないものが省略された」という**測りたいものと無関係な理由**で
+   * 落ちていた。
+   *
+   * **だから足場は「カードが大きい premise」——節の数と見出しの長さで作る。**
+   *
+   * **保証は弱くなっていない。むしろ強くなっている。** 旧版は「4,000 字なら
+   * 最大のはずだ」という**書き手の思い込み**の上に立っていた。ここでは
+   * `measureMemoryFloor`（実装が並べ替えに使っているのと同じ関数）で全文書の
+   * 寄与を実際に測り、**この文書が最大であることをアサーションで確かめてから**
+   * 一覧に出ることを見る。さらに「出る」だけでなく**先頭に出る**ことも測る
+   * （並びそのものが主題なので）。
    */
   it('⭐ 並びは寄与の大きい順で、予算で省略しても最大の premise は必ず出る', async () => {
     const h = await flooded(60);
-    await h.stores.persona.write('zzz-huge-premise', `# 巨大な前提\n${'あ'.repeat(4_000)}`);
+    // **カードが大きい premise。** 節ごとに見出しを変える（中身まで同一の節は
+    // 節id が衝突する）。40 節ぶんの目次は `MEMORY_PROMPT_OUTLINE_BUDGET`
+    // （6,000 字）に収まるので、目次が切られて寄与が頭打ちになることも無い。
+    const sections = Array.from({ length: 40 }, (_, index) => {
+      const pad = String(index).padStart(2, '0');
+      return `## 節${pad}: ${'あ'.repeat(30)}\n\n本文${pad}\n`;
+    }).join('\n');
+    await h.stores.persona.write(
+      'zzz-huge-premise',
+      `---\ndescription: 巨大な前提の要旨\ntype: premise\n---\n# 巨大な前提\n\n${sections}`,
+    );
+
+    // **「最大である」を思い込みではなく測る。** 実装が並べ替えに使っている
+    // のと同じ `measureMemoryFloor([その1文書]).totalChars` で全件を測り、
+    // この premise が単独で最大であることを先に確かめる（`renderMemorySize`
+    // の doc「文書ごとの文字数は measureMemoryFloor([その1文書]) で測る」）。
+    const contributions = await Promise.all(
+      (await h.stores.persona.list()).map(async (meta) => {
+        const doc = await h.stores.persona.read(meta.slug);
+        return { slug: meta.slug, chars: measureMemoryFloor([doc as never]).totalChars };
+      }),
+    );
+    const largest = contributions.reduce((best, entry) =>
+      entry.chars > best.chars ? entry : best,
+    );
+    expect(largest.slug).toBe('zzz-huge-premise');
+    // slug 昇順なら最後に来る（＝旧実装なら予算で黙って落ちていた側）。
+    expect([...contributions].sort((a, b) => a.slug.localeCompare(b.slug)).at(-1)?.slug).toBe(
+      'zzz-huge-premise',
+    );
 
     const reply = await h.call('self_status', {});
 
     expect(reply).toContain('[premise] zzz-huge-premise:');
+    // **出るだけでなく、寄与の大きい順の先頭に出る**（この歯の主題は並びである）。
+    expect(reply.indexOf('[premise] zzz-huge-premise:')).toBeLessThan(
+      reply.indexOf('[fact] doc-0000:'),
+    );
     // 予算に収まらない分は引き続き省略される（一覧そのものが無上限に
     // なったわけではない）。
     expect(reply).toContain('は省略');

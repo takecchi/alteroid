@@ -144,8 +144,13 @@ const ABOUT_ME_BODY = Array.from(
   { length: 40 },
   (_, i) => `about-me文書の本文${i}行目: 変わらないはずの長い自己紹介の一節である。`,
 ).join('\n');
-const NOTES_BODY_OLD = 'notes文書の本文（旧）: 短いメモである。';
-const NOTES_BODY_NEW = 'notes文書の本文（新）: 短いメモを書き換えた。';
+// **見出しを持たせてある。** premise の焼き込みは全文からカード（要旨＋節の
+// 目次）へ変わったので（`memory.ts` の `renderPremiseCard`）、**本文はどの
+// 経路にも載らない。** 載る／載らないを測るには、載る側（見出し行）に一意な
+// 語を置く必要がある。**本文（見出しの下）にも一意な語を残してある**——
+// 「本文は載らない」ほうも同時に測るためである。
+const NOTES_BODY_OLD = '## notes見出し（旧）\nnotes文書の本文（旧）: 短いメモである。';
+const NOTES_BODY_NEW = '## notes見出し（新）\nnotes文書の本文（新）: 短いメモを書き換えた。';
 
 describe('クローンの記憶注入（差分のみを載せるべき、という固定したい振る舞い）', () => {
   it('変わっていない文書の本文は、注入に含まれてはならない', async () => {
@@ -198,7 +203,13 @@ describe('クローンの記憶注入（差分のみを載せるべき、とい�
     // 可能性が残る（`not.toContain` は対象が空でも空振りで真になる）。この
     // テストは通らなければならない（AGENTS.md「テストの足場・スタブ・モックは、
     // 動くのに嘘をつく」）。
-    expect(secondInjectedInput).toContain(NOTES_BODY_NEW);
+    // **かつてここは本文（`NOTES_BODY_NEW`）が載ることを測っていた。** 焼き込みが
+    // カードになったので、載るのは**見出し行**である。**足場健全性チェックという
+    // この歯の役目は1ミリも変わっていない**——「上のテストが空振りで真になって
+    // いないこと」を、実際に載るはずのものが載っていることで確かめる。
+    expect(secondInjectedInput).toContain('## notes見出し（新）');
+    // そして本文のほうは載らない（カードにしたことの本体）。
+    expect(secondInjectedInput).not.toContain('短いメモを書き換えた。');
 
     await s.clone.stop();
   });
@@ -475,11 +486,16 @@ describe('通しの歯 — memory_write の見込み文字数と、次のター�
 describe('通しの歯 — 既に見ている premise への追記は、追記した分だけが載る', () => {
   it('⭐ 元の本文は載らず、追記した行と「省いた側」の断りだけが載る。見込みとも一致する', async () => {
     const stores = createMemoryStores();
+    // **節を持たせる。** 焼き込みはカード（要旨＋節の目次）なので、載る／載らない
+    // を測れるのは見出し行である（`memory.ts` の `renderPremiseCard`）。
     const originalBody = Array.from(
       { length: 60 },
-      (_, i) => `既存の段落${i}: これはセッション構築時点から変わっていない本文である。`,
+      (_, i) => `## 既存の節${i}\n${`ここは本文である。`.repeat(20)}`,
     ).join('\n');
-    await stores.persona.write('alteroid-work', `# alteroid-work\n\n${originalBody}\n`);
+    await stores.persona.write(
+      'alteroid-work',
+      `---\ntype: premise\ndescription: 既存の要旨\n---\n${originalBody}\n`,
+    );
 
     // 1ターン目。ここでシステムプロンプトへ全文が焼かれ、`#memoryOnRecord` に
     // 「クローンが見ている版」が控えられる。
@@ -499,7 +515,7 @@ describe('通しの歯 — 既に見ている premise への追記は、追記�
     const result = await memoryAppend.handler(
       {
         slug: 'alteroid-work',
-        content: '追記した一行だけの新しい事実。',
+        content: '## 追記した節\n追記した本文である。',
         summary: '追記',
       } as never,
       {},
@@ -513,7 +529,7 @@ describe('通しの歯 — 既に見ている premise への追記は、追記�
     expect(matchedDigits).toBeDefined();
     const estimatedChars = Number((matchedDigits ?? '').replaceAll(',', ''));
     // 書く側の内訳も「全文」ではなく「変わった範囲だけ」と名乗る。
-    expect(reply).toContain('alteroid-work（premise・変わった範囲だけ）');
+    expect(reply).toContain('alteroid-work（premise・カードの変わった範囲だけ）');
 
     // 読む側。次のターンに実際に載る塊を取り出す。
     const events: ChatStreamEvent[] = [];
@@ -522,16 +538,18 @@ describe('通しの歯 — 既に見ている premise への追記は、追記�
     await waitForDone(events);
     const secondTurnInput = (s.calls[0] as FakeCall).inputs[1] ?? '';
 
-    // **本体1: 元の本文は1文字も載らない。**
-    expect(secondTurnInput).not.toContain('既存の段落30');
-    // **本体2: 追記した分は載る。**
-    expect(secondTurnInput).toContain('追記した一行だけの新しい事実。');
+    // **本体1: 変わっていない節の行も、本文も、1文字も載らない。**
+    expect(secondTurnInput).not.toContain('## 既存の節30');
+    expect(secondTurnInput).not.toContain('ここは本文である。');
+    expect(secondTurnInput).not.toContain('追記した本文である。');
+    // **本体2: 追記した節の見出しは載る（何が増えたか分かる）。**
+    expect(secondTurnInput).toContain('## 追記した節');
     // **本体3: 省いた側を名乗る（黙って省かない）。**
-    expect(secondTurnInput).toContain('は変わっていない。全文は memory_read で開ける');
+    expect(secondTurnInput).toContain('行は変わっていないので載せていない');
 
     // 上の歯（`<!-- memory: index -->` を起点にする形）と同じやり方で塊を切り出す。
     // premise の差分は専用の見出しで始まる——この印は入力全体で1回しか出ない。
-    const marker = '<!-- memory: alteroid-work.md（変わった範囲だけ。全文ではない） -->';
+    const marker = '<!-- memory: alteroid-work.md（カードの変わった範囲だけ） -->';
     const markerIndex = secondTurnInput.indexOf(marker);
     expect(markerIndex).toBeGreaterThanOrEqual(0);
     expect(secondTurnInput.split(marker).length - 1).toBe(1);
@@ -550,10 +568,11 @@ describe('通しの歯 — 既に見ている premise への追記は、追記�
     expect(chunk).not.toContain('[system] 記憶が更新された');
     expect(chunk).not.toContain('2回目');
 
-    // **本体5: 全文を載せていた頃より、はっきり小さい**（この改修の目的そのもの）。
+    // **本体5: 全文を載せていた頃より、桁で小さい**（この改修の目的そのもの）。
     // 全文の載せ直しは文書そのものの長さに比例していた。
-    const full = `# alteroid-work\n\n${originalBody}\n追記した一行だけの新しい事実。`;
-    expect(chunk.length).toBeLessThan(full.length / 10);
+    const fullDocument = (await stores.persona.read('alteroid-work'))?.content ?? '';
+    expect(fullDocument.length).toBeGreaterThan(1_000);
+    expect(chunk.length).toBeLessThan(fullDocument.length / 10);
   });
 
   /**
@@ -576,8 +595,8 @@ describe('通しの歯 — 既に見ている premise への追記は、追記�
     await waitForDone(events);
     const secondTurnInput = (s.calls[0] as FakeCall).inputs[1] ?? '';
 
-    expect(secondTurnInput).toContain('このセッションを組んだ時点の全文');
+    expect(secondTurnInput).toContain('このセッションを組んだ時点の索引');
     expect(secondTurnInput).not.toContain('システムプロンプトに載っているものが現在の内容である');
-    expect(secondTurnInput).toContain('`memory_read` で開くこと');
+    expect(secondTurnInput).toContain('`memory_section_read` で開くこと');
   });
 });

@@ -20,7 +20,7 @@
 
 import { createHash } from 'node:crypto';
 
-import { excerptLine, renderListing, renderListingFromEnd } from './excerpt.js';
+import { excerpt, excerptLine, renderListing, renderListingFromEnd } from './excerpt.js';
 import type {
   MemoryCreatedAt,
   MemoryDescriptionFreshness,
@@ -1128,7 +1128,7 @@ function renderMemoryToc(
 }
 
 const MALFORMED_FRONTMATTER_NOTE =
-  '<!-- memory: frontmatter が壊れている（既知の形にならなかった。premise として全文を扱っている） -->';
+  '<!-- memory: frontmatter が壊れている（既知の形にならなかった。premise として扱っている） -->';
 
 /**
  * 「変わった範囲だけを描く」を選ぶ線。**変わった範囲が全文のこの割合より
@@ -1145,91 +1145,189 @@ const MALFORMED_FRONTMATTER_NOTE =
 const MEMORY_DELTA_MAX_RATIO = 0.5;
 
 /**
- * 差分の前後に置く、**省いた側を名乗る1行**。省くものが無ければ行を作らない
- * （0 行の断りを出すと、読み手は「そこに何かある」と読む）。
+ * premise のカードに載せる要旨（frontmatter の `description`）の文字数の予算。
+ *
+ * **⚠️ これは「要旨を短くしろ」という目安であって、本文の上限ではない。**
+ * 本文はもう焼き込みに載らない（`renderPremiseCard`）ので、毎ターン全員が払う
+ * のは要旨と目次だけである。要旨だけが上限を持たないと、そこへ本文を書いて
+ * 同じ肥大が戻る——**逃げ道を塞ぐためにここにも予算を置く。**
+ *
+ * **暫定値である。** 本番の実測（2026-09-08T00:40Z）で premise 5本の要旨は
+ * 5,910 / 2,529 / 2,397 / 2,337 / 1,517 文字だった。**3,000 はこの分布の
+ * 「外れ値1本だけを名指しする」位置である**——線に意味を持たせるための選び方で
+ * あって、3,000 という数そのものに根拠は無い。
+ *
+ * **切っても失われない。** 切ったことは必ず名乗り、要旨の全文は
+ * `memory_list` / `memory_read` に在る。
  */
-function unchangedSideLines(label: string, lines: number, chars: number): string[] {
-  if (lines === 0) return [];
+export const MEMORY_PROMPT_DESCRIPTION_BUDGET = 3_000;
+
+/**
+ * premise のカードに載せる**節の目次**の文字数の予算。
+ *
+ * **道具（`memory_outline`）の `MEMORY_OUTLINE_BUDGET` とは別物である。**
+ * あちらは「1回のツール応答に何文字載せるか」（MCP の出力上限）、こちらは
+ * 「**毎ターン全員が払う焼き込みに何文字載せるか**」で、切る理由が違う。
+ *
+ * **暫定値である。** 本番の実測（2026-09-08T00:40Z）で premise 5本の見出しの
+ * 総量は 34,823 / 8,474 / 7,393 / 4,934 / 2,971 文字だった。6,000 は
+ * **「大きい2本を名指しし、残り3本はそのまま載る」位置**である。
+ *
+ * **⚠️ 予算に当たったこと自体が、この文書を割れという合図である**——だから
+ * 省略の断りには件数だけでなく、割る手順（`memory_outline` → `memory_section_move`）
+ * を書く（`excerpt.ts` の「続きの取り方を書けるのは、呼び手の側にその口が
+ * 実在するときだけである」）。
+ */
+export const MEMORY_PROMPT_OUTLINE_BUDGET = 6_000;
+
+/**
+ * premise 1文書ぶんの**カード**（要旨 ＋ 節の目次）。**本文は1文字も載らない。**
+ *
+ * ## なぜ全文をやめたか（人間の決定 2026-09-08）
+ *
+ * かつてここは全文だった。`renderMemoryDocuments` の doc も「`premise` は全文。
+ * 切り詰めない（切り詰めた前提は『持っていない前提』と区別できない）」と
+ * 書いていた。**その判断を、持ち主が実測を見たうえで反転させた。**
+ *
+ * 実測（2026-09-08、Railway の PostgreSQL を直接引いた値）:
+ *
+ * | | 全文 | 要旨＋目次 |
+ * | --- | --- | --- |
+ * | premise 5本の合計 | 527,277 文字 | **73,285 文字（13.9%）** |
+ * | 毎ターンの焼き込み | ≒ 411,000 トークン | **≒ 57,000 トークン** |
+ *
+ * `alteroid-work` は 303,013 文字・**917 節**あり、1節あたり約 330 文字だった
+ * ——**判断の前提ではなく、追記され続けたログである**（書き換えの内訳も
+ * `append` 383 に対して `write` 17 で、足すだけで整理していない）。
+ *
+ * 人間の逐語: 「**読みたいときに読める仕組みは必要だが、毎回全行読ませるのは
+ * 無駄だと感じる。**」「そんなに毎回呼び出さなきゃいけない記憶って多くないと
+ * 思っていて。」
+ *
+ * ## ⚠️ これは「切り詰め」ではない。ただし能力の削減ではあり、それは人間が選んだ
+ *
+ * **黙って短くしているのではない**——載るのは要旨と、節id つきの目次と、
+ * 各節の文字数である。⟹ **クローンは「何が書いてあるか」を毎ターン知っており、
+ * 必要な節を `memory_section_read` で1回で開ける。**
+ *
+ * **それでも、開かなければ本文は文脈に無い。** 判断の前提が手元から消えている
+ * 状態は実在するので、**プロンプト側が「開かずに『記憶に根拠が無い』と結論
+ * するな」と明言する必要がある**（`prompt.ts`）。ここを書き忘れると、
+ * PRD「権限境界」（記憶に根拠があるかで判断する）が静かに壊れる——根拠が
+ * 「無い」のではなく「開いていない」だけの状態が、同じ顔で出る。
+ */
+function renderPremiseCard(part: MemoryPart): string {
+  const frontmatter = parseMemoryFrontmatter(part.content);
+  const description = frontmatter.kind === 'parsed' ? frontmatter.description : undefined;
+  const { sections } = scanMemorySections(part.content);
+
+  const head =
+    `<!-- memory: ${part.slug}.md（premise・本文は載っていない。` +
+    `全 ${formatMemoryCharCount(part.content.length)} 文字 / ${formatMemoryCharCount(sections.length)} 節） -->`;
+
+  const trimmed = description?.trim() ?? '';
+  const summaryLine =
+    trimmed.length === 0
+      ? '要旨: （まだ書かれていない。memory_frontmatter_set の description で書くこと——' +
+        'ここが空だと、本文を開くまでこの文書が何なのか分からない）'
+      : trimmed.length <= MEMORY_PROMPT_DESCRIPTION_BUDGET
+        ? `要旨: ${trimmed}`
+        : `要旨: ${excerpt(trimmed, MEMORY_PROMPT_DESCRIPTION_BUDGET)}\n` +
+          `⚠ 要旨が長すぎて毎ターンの焼き込みに収まっていない（${formatMemoryCharCount(trimmed.length)} 文字 / ` +
+          `目安 ${formatMemoryCharCount(MEMORY_PROMPT_DESCRIPTION_BUDGET)} 文字）。全文は memory_list / memory_read に在る。` +
+          '要旨に本文を書かず、本文は節へ移して memory_frontmatter_set で要旨を短くすること。';
+
+  if (sections.length === 0) {
+    return [
+      head,
+      summaryLine,
+      '節: 1つも無い（見出しが無いか、前書きしか無い）。本文は memory_read で開く。' +
+        '**見出しを付けると節id で名指しして開けるようになる**（memory_section_read）。',
+    ].join('\n');
+  }
+
+  const listing = renderListing(memorySectionLines(sections), {
+    budget: MEMORY_PROMPT_OUTLINE_BUDGET,
+    omitted: ({ rest, shown, total }) =>
+      `…末尾 ${rest} 節は目次から省略（全 ${total} 節のうち先頭 ${shown} 節だけ載せた）。` +
+      '⚠ この文書は大きすぎて、目次すら毎ターンの焼き込みに収まっていない。' +
+      'memory_outline（side=tail で末尾も見られる）で残りを確かめ、' +
+      'memory_section_move で付録の文書へ割ること。',
+  });
+
   return [
-    `（${label} ${formatMemoryCharCount(lines)} 行 / ${formatMemoryCharCount(chars)} 文字は変わっていない。全文は memory_read で開ける）`,
-  ];
+    head,
+    summaryLine,
+    '節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:',
+    listing,
+  ].join('\n');
 }
 
 /**
- * premise 1文書ぶんの「変わった範囲だけ」を描く。差分にする価値が無ければ
- * `null` を返す（呼び手は全文へ倒す）。
+ * premise のカードの「変わった範囲だけ」を描く。差分にする価値が無ければ
+ * `null` を返す（呼び手はカード全体へ倒す）。
  *
- * ## なぜ要るのか — 小さな書き換えが文書1本ぶんの文脈を焼いていた
+ * ## なぜ要るのか — 小さな書き換えがカード1枚ぶんの文脈を積んでいた
  *
- * `clone.ts` の `#withFreshMemory` は、変わった文書を**全文**で会話へ載せ直す。
- * その塊は会話の履歴として残り続けるので、**1回の書き換えの費用は「変えた量」
- * ではなく「文書の大きさ」で決まっていた。**
+ * `clone.ts` の `#withFreshMemory` は、変わった文書を会話へ載せ直す。その塊は
+ * 会話の履歴として残り続けるので、**1回の書き換えの費用は「変えた量」ではなく
+ * 「載せ直す塊の大きさ」で決まる。**
  *
- * 本番の実測（2026-09-07、Railway の PostgreSQL を直接引いた値）:
+ * 本番の実測（2026-09-07、Railway の PostgreSQL を直接引いた値）: 記憶の
+ * 書き換えは1日 244 回あり、`alteroid-work` だけで 120 回だった。**カードに
+ * したあとでも、1枚が予算いっぱい（要旨 ＋ 目次）なら1日で数十万トークンが
+ * 会話へ積まれる。**
  *
- * - `alteroid-work`（305,536 文字）が **1日に 120 回**更新されていた
- * - 1回の実際の変更量は平均 3,732 バイト ＝ **約 60 倍に増幅**していた
- * - `describe`（frontmatter の要旨だけを直す）に至っては 520 バイトの変更に対して
- *   310,325 バイトが載っていた ＝ **約 600 倍**
- * - 結果、クローンのターン1回の文脈は 457k → 752k トークンへ育ち、
- *   自動 compaction が 1日 33 回（9/2 は 0 回）走っていた
+ * ## 行の集合で差を取る（前後の一致で切らない）
  *
- * **「載せ直す文書を絞る」ことは既に済んでいた**（変わった文書だけを載せる）。
- * 残っていたのは**1文書の中での絞り込み**である。
+ * **カードは「見出し行 ＋ 要旨 ＋ 節の行」という索引であり、行が識別子である。**
+ * ⟹ 前の版に無い行だけを、文書に現れる順のまま並べればよい。
  *
- * ## 行で切る（文字位置で切らない）
+ * **前後の一致（共通の接頭辞・接尾辞）で切る形にしないこと。** カードの1行目は
+ * 「全 N 文字 / M 節」を含むので**必ず変わる**——接頭辞が常に0行になり、
+ * 末尾の節を1つ足しただけでも「全部変わった」に落ちる（実際にそう実装して
+ * 落ちた）。
  *
- * 先頭から一致する行数と、末尾から一致する行数を数え、その間だけを描く。
- * **文字位置で切らないのは、サロゲートペアを割らないためである**——記憶の
- * 本文には絵文字（⚠️ / 🎯 など）が実際に含まれており、UTF-16 の code unit で
- * 切ると壊れた文字を文脈へ載せうる。行なら境界が必ず文字の境界になる。
- *
- * Markdown として読めるままになる、という副次的な利点もある。
+ * **行の境界は必ず文字の境界である。** 記憶の見出しには絵文字（⚠️ / 🎯）が
+ * 実際に含まれており、UTF-16 の code unit で切るとサロゲートペアが割れて
+ * 壊れた文字を文脈へ載せうる。行で扱う限りそれが起こりえない。
  *
  * ## 「載せていない」を「無くなった」と読ませない
  *
- * 省いた側は**必ず行数と文字数で名乗る**（`excerpt.ts` の「切ったら、切った
- * ことを必ず言う」と同じ約束）。省略を黙って行うと、クローンは「その節は
- * 消えた」と読みうる——それは記憶の破損として現れる。
+ * 変わっていない行数と、**前の版に在って今は無い行数**を必ず名乗る
+ * （`excerpt.ts` の「切ったら、切ったことを必ず言う」と同じ約束）。黙って
+ * 省くと、クローンはそれを記憶の破損として読む。
+ *
+ * **⚠️ 行が移動しただけのときは「変わっていない」に数える。** カードは索引なので、
+ * 同じ行が別の位置に在っても持っている情報は同じである——ここで位置まで見ると、
+ * 節を1つ並べ替えただけで全体が差分に出る。
  */
-function renderPremiseDelta(part: MemoryPart, seen: string): string | null {
-  const after = part.content.trimEnd();
-  const before = seen.trimEnd();
-  if (after === before) return null;
+function renderPremiseDelta(slug: string, seenCard: string, nextCard: string): string | null {
+  const nextLines = nextCard.trimEnd().split('\n');
+  const seenLines = seenCard.trimEnd().split('\n');
+  if (nextCard.trimEnd() === seenCard.trimEnd()) return null;
 
-  const afterLines = after.split('\n');
-  const beforeLines = before.split('\n');
+  const seenSet = new Set(seenLines);
+  const nextSet = new Set(nextLines);
+  const added = nextLines.filter((line) => !seenSet.has(line));
+  const droppedCount = seenLines.filter((line) => !nextSet.has(line)).length;
+  const unchangedCount = nextLines.length - added.length;
 
-  let head = 0;
-  while (
-    head < afterLines.length &&
-    head < beforeLines.length &&
-    afterLines[head] === beforeLines[head]
-  ) {
-    head += 1;
-  }
-  let tail = 0;
-  while (
-    tail < afterLines.length - head &&
-    tail < beforeLines.length - head &&
-    afterLines[afterLines.length - 1 - tail] === beforeLines[beforeLines.length - 1 - tail]
-  ) {
-    tail += 1;
-  }
-
-  const middle = afterLines.slice(head, afterLines.length - tail);
   // `join('\n')` の長さで測る——実際に載る形そのもので判定する。
-  const middleChars = middle.join('\n').length;
-  if (middleChars > after.length * MEMORY_DELTA_MAX_RATIO) return null;
-
-  const headChars = afterLines.slice(0, head).join('\n').length;
-  const tailChars = afterLines.slice(afterLines.length - tail).join('\n').length;
+  if (added.join('\n').length > nextCard.length * MEMORY_DELTA_MAX_RATIO) return null;
 
   return [
-    `<!-- memory: ${part.slug}.md（変わった範囲だけ。全文ではない） -->`,
-    ...unchangedSideLines('先頭', head, headChars),
-    ...middle,
-    ...unchangedSideLines('末尾', tail, tailChars),
+    `<!-- memory: ${slug}.md（カードの変わった範囲だけ） -->`,
+    `（このカードは全 ${formatMemoryCharCount(nextLines.length)} 行。うち ` +
+      `${formatMemoryCharCount(unchangedCount)} 行は変わっていないので載せていない。` +
+      `カードの全体は memory_list、節の本文は memory_section_read で開ける）`,
+    ...added,
+    ...(droppedCount === 0
+      ? []
+      : [
+          `（前の版に在って、いまは無い行: ${formatMemoryCharCount(droppedCount)} 行。` +
+            '節が消えたか、書き換わって別の行になったかのどちらかである）',
+        ]),
   ].join('\n');
 }
 
@@ -1237,13 +1335,17 @@ function renderPremiseDelta(part: MemoryPart, seen: string): string | null {
  * premise 1文書ぶんの描画。`seen`（クローンが既に見ている版）が渡され、かつ
  * 差分にする価値があるときだけ、**変わった範囲だけ**を描く。
  *
- * **`seen` を渡さない呼び手（システムプロンプトへの焼き込み・床の測定）の
- * 出力は1バイトも変わらない。**
+ * **`seen` を渡さない呼び手（システムプロンプトへの焼き込み・床の測定）は
+ * カードの全体を得る。**
  */
 function renderPremisePart(part: MemoryPart, seen?: string): string {
   const frontmatter = parseMemoryFrontmatter(part.content);
-  const delta = seen === undefined ? null : renderPremiseDelta(part, seen);
-  const rendered = delta ?? renderMemoryDocument(part);
+  const card = renderPremiseCard(part);
+  const delta =
+    seen === undefined
+      ? null
+      : renderPremiseDelta(part.slug, renderPremiseCard({ slug: part.slug, content: seen }), card);
+  const rendered = delta ?? card;
   return frontmatter.kind === 'malformed' ? `${MALFORMED_FRONTMATTER_NOTE}\n${rendered}` : rendered;
 }
 
@@ -1356,18 +1458,27 @@ function joinMemorySections(premiseSection: string, tocSection: string): string 
  * 記憶をクローンの文脈へ載せる、唯一の入口。
  *
  * **区分ごとに載り方を変える**（4-1「B. 区分と載せ方」）:
- * - `premise`（判断の前提。既定でもある） — **全文**。切り詰めない
- *   （切り詰めた前提は「持っていない前提」と区別できない）
+ * - `premise`（判断の前提。既定でもある） — **要旨と節の目次**
+ *   （`renderPremiseCard`）。本文は `memory_section_read` で節id を指して開く
  * - `fact`（事実と蓄積） — **目次の1行だけ**。本文は `memory_read` で開く
  *
- * **どの文書も、全文か目次行かの「どちらか一方」に必ず現れる**（二重に
+ * **⚠️ かつてここは「`premise` は全文。切り詰めない（切り詰めた前提は『持って
+ * いない前提』と区別できない）」だった。人間が実測を見たうえで反転させた**
+ * （2026-09-08。経緯と数は `renderPremiseCard` の doc）。**本文が消えたのでは
+ * なく、開く口が別に在る**（`memory_section_read`）——「切り詰め」ではないと
+ * 言えるのはその口が在るからで、**口を消したらこの載せ方は能力の削除になる。**
+ *
+ * **どの文書も、カードか目次行かの「どちらか一方」に必ず現れる**（二重に
  * 載せない・取りこぼさない）。文書の順序は呼び手（ストア）が決めた順
  * そのまま（`premise` は slug 昇順のまま連結、`fact` は目次側で
  * 階層・slug 昇順に並べ直す）。
  *
  * frontmatter を1つも持たない文書の集合（`kind: 'none'` のみ）に対しては、
- * 全件が `premise` に分類されるため、出力は frontmatter 導入前の
- * `renderMemoryDocuments` と1バイトも変わらない（受け入れ基準の最上位）。
+ * 全件が `premise` に分類される——**区分の既定は変えていない。** ただし
+ * `premise` の載り方そのものが全文からカードへ変わったので、**「frontmatter
+ * 導入前と1バイトも変わらない」はもう成り立たない**（かつてここに在った
+ * 受け入れ基準は、人間が載せ方を反転させた時点で意味を失った。歯も同じ
+ * 理由で書き換えてある）。
  *
  * ## ⚠️ `documents` が「記憶の全部」でない呼び方がある
  *
@@ -1762,7 +1873,7 @@ function formatMemoryFloorTransition(beforeChars: number, afterChars: number): s
  *    書き換える窓があり、ここに出る値と次のターンに実際に焼かれる量が
  *    一致しない可能性があるため。`self_status` が既に採っている形
  *    「記憶の大きさ（いま stores.persona を読み直した値）」に揃える）
- * 3. **`premise` を新規作成したときだけ**、それが「毎ターン全文が焼かれる」
+ * 3. **`premise` を新規作成したときだけ**、それが「毎ターン要旨と節の目次が焼かれる」
  *    ことを1行で言う——premise の新規作成は稀である（習慣化しない）ので、
  *    ここだけ他の枝より明確に強い言い方にしてある。**この枝にはさらに2つ
  *    足す**（依頼者の決裁。#318 の議論で「線が無くても、稀にしか出ない枝には
@@ -1809,7 +1920,8 @@ export function describeMemoryFloor(input: {
     const lines = [
       `⭐ 新規作成: ${slug}（区分: premise）。`,
       floorLine,
-      '⚠️ premise は毎ターン全文がそのままクローンの文脈へ焼かれる（切り詰めない）。',
+      '⚠️ premise は毎ターン「要旨＋節の目次」がクローンの文脈へ焼かれる（本文は載らない）。' +
+        '節の本文は memory_section_read で開く。要旨と見出しは短く保つこと。',
     ];
     const largest = after.largestPremise;
     if (largest !== null) {
@@ -1999,9 +2111,14 @@ export function describeMemoryReinjectionEstimate(
     const kind = kindOf(part);
     if (kind === 'fact') return 'fact・目次1行';
     const seen = seenContent.get(part.slug);
-    return seen !== undefined && renderPremiseDelta(part, seen) !== null
-      ? 'premise・変わった範囲だけ'
-      : 'premise・全文';
+    return seen !== undefined &&
+      renderPremiseDelta(
+        part.slug,
+        renderPremiseCard({ slug: part.slug, content: seen }),
+        renderPremiseCard(part),
+      ) !== null
+      ? 'premise・カードの変わった範囲だけ'
+      : 'premise・カード（要旨＋節の目次）';
   };
   const breakdown = parts.map((part) => `${part.slug}（${labelOf(part)}）`).join(' + ');
 
@@ -2628,6 +2745,29 @@ export type MemoryOutlineSide = (typeof MEMORY_OUTLINE_SIDES)[number];
  * （`memorySectionId`）ので、**どちら側を出したかで id は1文字も変わらない ＝
  * 版の照合は弱まらない。**
  */
+/**
+ * 節の一覧の**1行の形**。目次を出す場所が2つ（道具の `memory_outline` と、
+ * プロンプトへ焼く記憶のカード）あるので、**行の形の持ち主をここ1つにする。**
+ *
+ * **予算と省略の文言は共有しない。** どちらも「何文字まで載せてよいか」と
+ * 「省いたときに何をすればよいか」が違う（道具は `side` で反対側を出せるが、
+ * 焼き込みは1回しか描かない）。⟹ 共有するのは行の形だけで、切り方は呼び手が
+ * 持つ（`.claude/skills/listing-and-detail/SKILL.md` の「予算は件数ではなく
+ * 文字数で持つ」は呼び手ごとに効く）。
+ */
+function memorySectionLines(sections: readonly MemorySection[]): string[] {
+  const counts = new Map<string, number>();
+  for (const section of sections) counts.set(section.id, (counts.get(section.id) ?? 0) + 1);
+  return sections.map((section) => {
+    const indent = '  '.repeat(section.depth - 1);
+    const ambiguous =
+      (counts.get(section.id) ?? 0) > 1
+        ? ' ⚠この id は複数箇所に当たる。この id では動かせない（memory_section_move は断る）'
+        : '';
+    return `${indent}[${section.id}] ${section.heading} — ${formatMemoryCharCount(section.chars)} 文字${ambiguous}`;
+  });
+}
+
 export function renderMemoryOutline(
   sections: readonly MemorySection[],
   side: MemoryOutlineSide = 'head',
@@ -2638,16 +2778,7 @@ export function renderMemoryOutline(
       '前書きは節ではないので memory_section_move では動かせない。'
     );
   }
-  const counts = new Map<string, number>();
-  for (const section of sections) counts.set(section.id, (counts.get(section.id) ?? 0) + 1);
-  const items = sections.map((section) => {
-    const indent = '  '.repeat(section.depth - 1);
-    const ambiguous =
-      (counts.get(section.id) ?? 0) > 1
-        ? ' ⚠この id は複数箇所に当たる。この id では動かせない（memory_section_move は断る）'
-        : '';
-    return `${indent}[${section.id}] ${section.heading} — ${formatMemoryCharCount(section.chars)} 文字${ambiguous}`;
-  });
+  const items = memorySectionLines(sections);
   // **どちら側を落としたかを言う。** 「N 節省略」だけだと続きの取り方を間違える
   // （`conversation_read` の中身モードが同じ理由で同じことをしている）。そして
   // **続きの取り方を書けるのは、呼び手の側にその口が実在するときだけである**
