@@ -6,7 +6,9 @@ import {
   findUnrecordedManagers,
   type UnrecordedManagerCandidate,
 } from './usage-format.js';
-import type { AccountUsageState } from './usage-snapshot.js';
+import { toAccountUsage, type AccountUsageState } from './usage-snapshot.js';
+
+const AT = '2026-08-14T10:00:00.000Z';
 
 /**
  * 「台帳が取りこぼした委譲」（Issue #98）の突き合わせと整形。
@@ -322,5 +324,106 @@ describe('describeAccountUsage の tokenSourcePresence 行（#706）', () => {
       const text = describeAccountUsage(okState(presence)).join('\n');
       expect(text).not.toContain(marker);
     }
+  });
+});
+
+/**
+ * `describeAccountUsage` の `プラン: ` / `組織: ` 行（plan / organization の
+ * 「欄が無い」と「欄はあるが空」の書き分け。この依頼の本命）。
+ *
+ * `apiKeySource` の歯（`（取れなかった）` / `unrecognized` の書き分け）と
+ * 同じ役割を、こちらの3状態（欄が無い／欄はあるが空／値がある）でも果たす。
+ */
+describe('describeAccountUsage のプラン / 組織 行（plan / organization の欄が無い vs 空）', () => {
+  function okState(over: Partial<Extract<AccountUsageState, { state: 'ok' }>['usage']>) {
+    return {
+      state: 'ok' as const,
+      usage: {
+        at: AT,
+        limitsAvailable: true,
+        windows: [],
+        ...over,
+      },
+    };
+  }
+
+  it('plan: undefined のとき「（取れなかった）」が出る', () => {
+    const text = describeAccountUsage(okState({})).join('\n');
+    expect(text).toContain('（取れなかった）');
+  });
+
+  it("plan: '' のとき「（欄はあるが空）」が出る", () => {
+    const text = describeAccountUsage(okState({ plan: '' })).join('\n');
+    expect(text).toContain('（欄はあるが空）');
+  });
+
+  it("plan: 'zz' のとき、そのまま 'zz' が出る", () => {
+    // 意味の無い短い文字列（前例: #704 の 'zz'）。
+    const text = describeAccountUsage(okState({ plan: 'zz' })).join('\n');
+    expect(text).toContain('zz');
+  });
+
+  it('plan の3状態はどの2つを取っても異なる行になる', () => {
+    // ⭐ 前例（tokenSourcePresence の4状態の歯）と同じ形。
+    const lines = ([undefined, '', 'zz'] as const).map((plan) =>
+      describeAccountUsage(okState({ plan })).join('\n'),
+    );
+    expect(new Set(lines).size).toBe(3);
+  });
+
+  it("organization: '' のとき「（欄はあるが空）」が出る", () => {
+    const text = describeAccountUsage(okState({ organization: '' })).join('\n');
+    expect(text).toContain('（欄はあるが空）');
+  });
+
+  it("organization: 'zz' のとき、そのまま 'zz' が出る", () => {
+    const text = describeAccountUsage(okState({ organization: 'zz' })).join('\n');
+    expect(text).toContain('zz');
+  });
+
+  it('organization: undefined のとき「組織」の語が出ない（今日の見え方を変えない）', () => {
+    const text = describeAccountUsage(okState({})).join('\n');
+    expect(text).not.toContain('組織');
+  });
+
+  it('organization の3状態はどの2つを取っても異なる行になる', () => {
+    // ⭐ Set の大きさを 3 に固定する。
+    const lines = ([undefined, '', 'zz'] as const).map((organization) =>
+      describeAccountUsage(okState({ organization })).join('\n'),
+    );
+    expect(new Set(lines).size).toBe(3);
+  });
+
+  it("plan が空白のみ（'   '）でも「（欄はあるが空）」が出る（空白がそのまま出て空行に見えない）", () => {
+    const text = describeAccountUsage(okState({ plan: '   ' })).join('\n');
+    expect(text).toContain('（欄はあるが空）');
+  });
+
+  /**
+   * ⭐⭐ 「状態は正しく分かれているのに、表示だけが畳んでいる」形を赤にする歯。
+   * `toAccountUsage` を通して観測の側を実物で作り、表示が割れることを固定する。
+   */
+  it('欄が無い回と欄が空の回で、観測が分かれていて、かつ表示も別の文字列になる（organization）', () => {
+    const absent = toAccountUsage(AT, {}, {});
+    const empty = toAccountUsage(AT, {}, { organization: '' });
+    // 先に観測の側が分かれていることを確かめる——ここが同じなら、この歯は
+    // 表示を測っていない（測っているのは観測になってしまう）。
+    expect(absent.organization).toBeUndefined();
+    expect(empty.organization).toBe('');
+    const rendered = [absent, empty].map((usage) =>
+      describeAccountUsage({ state: 'ok', usage }).join('\n'),
+    );
+    expect(new Set(rendered).size).toBe(2);
+  });
+
+  it('欄が無い回と欄が空の回で、観測が分かれていて、かつ表示も別の文字列になる（plan）', () => {
+    const absent = toAccountUsage(AT, {}, {});
+    const empty = toAccountUsage(AT, { subscription_type: '' }, {});
+    expect(absent.plan).toBeUndefined();
+    expect(empty.plan).toBe('');
+    const rendered = [absent, empty].map((usage) =>
+      describeAccountUsage({ state: 'ok', usage }).join('\n'),
+    );
+    expect(new Set(rendered).size).toBe(2);
   });
 });

@@ -340,6 +340,30 @@ function describeTokenSourcePresence(presence: TokenSourcePresence | undefined):
 }
 
 /**
+ * `plan` / `organization` の3状態を、3つの別の文字列にする。#706 で
+ * `tokenSourcePresence` の4状態を4つの文言へ割ったのと同じ形である。
+ *
+ * - `undefined` → 「（取れなかった）」（**欄が無い**）
+ * - `''`／空白のみ → 「（欄はあるが空）」（**欄はあるが空**）
+ * - それ以外 → その値
+ *
+ * ⛔ **どの2つも同じ文言へ倒さないこと。** 「向こうがこの欄を返さなかった」と
+ * 「返ってきたが空だった」は別の観測で、混同すると**向こうが何を答えたのかが
+ * 読む側から消える**（それを畳んでいたのが `usage-snapshot.ts` の `nonEmpty()`
+ * である）。⚠️ **`?? '（取れなかった）'` の形では割れない** ——`''` は nullish
+ * ではないので既定値が出ず、**空白が出る**。
+ *
+ * ⚠️ **`undefined` を「この版は出さない」と名乗らないこと。** この2欄には
+ * `tokenSourcePresence` のような版ずれ専用の状態が無いので、`undefined` は
+ * 「SDK が返さなかった」と「旧い daemon が送らなかった」の両方から来る。
+ * どちらだとも断定できないので、断定しない語（「取れなかった」）にしてある。
+ */
+function describeAccountText(value: string | undefined): string {
+  if (value === undefined) return '（取れなかった）';
+  return value.trim().length === 0 ? '（欄はあるが空）' : value;
+}
+
+/**
  * アカウント全体の残りを人間・クローンが読む行へ。**見出しは含めない。**
  *
  * **取れなかったことを 0 として出さない。** ここが一番嘘をつきやすい場所で、
@@ -412,8 +436,10 @@ export function describeAccountUsage(
   const lines: string[] = [];
 
   lines.push(
-    `プラン: ${usage.plan ?? '（取れなかった）'}` +
-      (usage.organization === undefined ? '' : ` / 組織: ${usage.organization}`),
+    `プラン: ${describeAccountText(usage.plan)}` +
+      (usage.organization === undefined
+        ? ''
+        : ` / 組織: ${describeAccountText(usage.organization)}`),
   );
 
   // **判定には使っていない観測である**（#681 (2)）。`classifyLimitsUnavailable`
