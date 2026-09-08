@@ -225,6 +225,53 @@ describe('未読の永続化', () => {
     await third.clone.stop();
   });
 
+  /**
+   * **(α)「積み直された回数」と (β)「処理を始めて終わらなかった回数」を、
+   * 断り書きが取り違えないこと。**
+   *
+   * `claimPending()` は残っている未読の**全行**の回数を1つ進めるので、**待ち行列に
+   * 居ただけで一度も処理されていない合図も、回数が同じだけ上がる。** 直上の歯
+   * （`配り直すたびに回数が上がる`）は**未読が1件だけ**のフィクスチャなので、この2つを
+   * 区別できない —— 1件しか無ければ「居合わせた合図」が存在しないためである。
+   *
+   * **ここは同じ回数（2 回目）を、未読が複数在る状態で作る。** 回数は直上の歯と
+   * 1つも変わらないのに、**言えることだけが変わる**。
+   *
+   * 実測（2026-09-08）: 未読 104 件が溜まった器で「4 回目の配達」と名乗る合図が届き、
+   * クローンは断り書きに従って「なぜ落ちたか」をターンを使って調べた。**答えは
+   * 「この合図は一度も処理されていなかった」だった。**
+   */
+  it('未読が複数あるときは、回数を「この合図で落ちた」の根拠にしない（(α) と (β) を分ける）', async () => {
+    const stores = createMemoryStores();
+
+    // **3件積む。** 先頭だけが処理に入り（`hang`）、残り2件は待ち行列に居るだけで
+    // 一度も処理されない —— それでも回数は3件とも同じだけ上がる。
+    const first = bootClone(stores, 'hang');
+    await idle();
+    first.clone.post(report('先頭の合図', 'evt-a'));
+    first.clone.post(report('居合わせただけの合図 1', 'evt-b'));
+    first.clone.post(report('居合わせただけの合図 2', 'evt-c'));
+    await waitFor(() => first.inputs.length > 0, '先頭が処理に入る');
+
+    const second = bootClone(stores, 'hang');
+    await waitFor(() => second.inputs.length > 0, '1 回目の配り直し');
+
+    const third = bootClone(stores);
+    await waitFor(() => third.inputs.length > 0, '2 回目の配り直し');
+    const prompt = third.inputs[0] ?? '';
+
+    // **回数そのものは消さない。** 「まだ読んでいない合図が在る」ことは伝える。
+    expect(prompt).toContain('2 回目の配達');
+    // **一緒に拾い直した件数を名乗る。** これが「回数が何を測っているか」の材料。
+    expect(prompt).toContain('3 件');
+    // **⭐ ここが直上の歯との違い。** 同じ「2 回目」でも、未読が複数あるときは
+    // この合図について語れない —— 毒の証拠として名乗ってはいけない。
+    expect(prompt).not.toContain('2 回以上配り直している');
+    expect(prompt).toContain('この合図の処理が落ちた回数ではない');
+
+    await third.clone.stop();
+  });
+
   it('例外で終わった合図も消える（記録は残っているので、永久に配り直さない）', async () => {
     // `#handle` を確実に落とす。承認の読み出しが失敗すると `human_answer` の
     // 処理は例外で終わり、失敗は `#reportFailure` 経由で日誌に残る。
