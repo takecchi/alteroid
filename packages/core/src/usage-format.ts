@@ -1,5 +1,9 @@
 import type { JobStatus } from './schema.js';
-import type { AccountApiKeySource, AccountUsageState } from './usage-snapshot.js';
+import type {
+  AccountApiKeySource,
+  AccountUsageState,
+  TokenSourcePresence,
+} from './usage-snapshot.js';
 import type { UsageBreakdown, UsageRow, UsageTotals, UsageTurnRow } from './usage.js';
 
 /**
@@ -310,6 +314,32 @@ function describeApiKeySource(apiKeySource: AccountApiKeySource | undefined): st
 }
 
 /**
+ * `tokenSourcePresence` の1行を作る（#706 の本題）。**内容は一切出さない**
+ * ——外へ渡ってくる時点で `TokenSourcePresence` はもう状態だけの3値
+ * （＋版ずれの `undefined`）で、生の `tokenSource` はここへ届かない。
+ *
+ * **4つの状態を、4つの別の文言にする。** どの2つも同じ文言へ倒さないこと
+ * ——「取れなかった」（試して駄目だった）と「この版は送らない」（誰も試して
+ * いない）は意味が正反対で、混同すると「対応している daemon へ繋ぎ直せば直る」
+ * のか「鍵が届くのを待てばよい」のかを読み違える。
+ */
+function describeTokenSourcePresence(presence: TokenSourcePresence | undefined): string {
+  switch (presence) {
+    case undefined:
+      // **version skew——この daemon がこの欄をまだ送らない。**「取れなかった」
+      // とは別の文言にすること（`accountUsageSchema` の `tokenSourcePresence`
+      // の doc）。
+      return '鍵の届き具合（tokenSource）: この版はこの情報を出さない（daemon が未対応）';
+    case 'not_returned':
+      return '鍵の届き具合（tokenSource）: 取得できず（SDK がこの欄を返さなかった）';
+    case 'empty':
+      return '鍵の届き具合（tokenSource）: 欄はあるが空（SDK が空文字を返した）';
+    case 'present':
+      return '鍵の届き具合（tokenSource）: 値が届いている（内容はここに出さない）';
+  }
+}
+
+/**
  * アカウント全体の残りを人間・クローンが読む行へ。**見出しは含めない。**
  *
  * **取れなかったことを 0 として出さない。** ここが一番嘘をつきやすい場所で、
@@ -392,6 +422,8 @@ export function describeAccountUsage(
   // それを言うのは `tokenSource` の欄である（`describeLimitsUnavailable` の
   // `not_logged_in` の doc と同じ注意）。取れなかったときは埋めない。
   lines.push(describeApiKeySource(usage.apiKeySource));
+  // **こちらも判定には使っていない観測。** 内容は運ばない（#706）。
+  lines.push(describeTokenSourcePresence(usage.tokenSourcePresence));
 
   if (usage.windows.length === 0) {
     // **`limitsAvailable` が真でも枠が来ないことがある**（実測）。0% と描かない。
