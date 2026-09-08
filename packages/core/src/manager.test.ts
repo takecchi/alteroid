@@ -7115,7 +7115,7 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
     // **`statusNow` は3回とも付く。** これが状態で回すための材料である。
     expect(seen.map((o) => o.statusNow)).toEqual(['rejected', 'rejected', 'rejected']);
 
-    // **知らせの側は機構が合成した知らせの合流窓（既定1000ms）に積まれるので、
+    // **知らせの側は機構が合成した知らせの合流窓（既定3000ms）に積まれるので、
     // `stop()` で flush してから数える**（「一枠落ち一合図」。`stop()` は
     // 残っている積みを必ず配り切る）。
     await s.pool.stop();
@@ -7149,7 +7149,7 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
       overageDisabledReason: 'out_of_credits `rm -rf /`',
     });
 
-    // **知らせは合流窓（既定1000ms）に積まれるので、`stop()` で flush してから
+    // **知らせは合流窓（既定3000ms）に積まれるので、`stop()` で flush してから
     // 読む**（「一枠落ち一合図」。`stop()` は残っている積みを必ず配り切る）。
     await s.pool.stop();
     const report = s.inbox.find(
@@ -7206,7 +7206,7 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
     // で `rejected` 遷移を起こす。
     await s.sessions[0]!.rateLimit({ status: 'rejected' });
 
-    // **知らせは合流窓（既定1000ms）に積まれるので、`stop()` で flush してから
+    // **知らせは合流窓（既定3000ms）に積まれるので、`stop()` で flush してから
     // 読む**（「一枠落ち一合図」。`stop()` は残っている積みを必ず配り切る）。
     await s.pool.stop();
     const report = s.inbox.find(
