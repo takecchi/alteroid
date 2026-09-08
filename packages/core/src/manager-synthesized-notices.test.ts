@@ -609,6 +609,141 @@ describe('窓の中で stop() を呼ぶと1件も失われない', () => {
   });
 });
 
+/**
+ * **「完全な重複」と「別の種類」は扱いが違う（依頼者の要件 2026-09-08）。**
+ *
+ * | | 例 | 扱い |
+ * | --- | --- | --- |
+ * | **別の種類**（言っていることが違う） | 「ターンの結末」と「枠の理由」 | ⛔ **1つも捨てない。全文を並べる** |
+ * | **完全な重複**（本文がバイト単位で同一） | 同文の `turn_failed` が3通 | ✅ **1つへ寄せて `×N` を添える** |
+ *
+ * **この2つを別々の歯で固定する。** 片方だけだと、いちばん危ない失敗——
+ * **別のことを言っている合図が「重複」と見なされて消える**——が測れない。
+ */
+describe('完全な重複は1つへ寄せ、別の種類は1つも捨てない', () => {
+  it('本文がバイト単位で同一の3通は1件へ寄り、通数（×3）が本文に残る', async () => {
+    const { pool, stores, inbox, fake } = await runningManualSetup();
+    const before = reportsOf(inbox).length;
+
+    // 依頼者の実測（`03:21:37.590Z` / `38.257Z` / `38.778Z`、幅1,188ms）と
+    // 同じ形——**本文が完全に同一のものが3通**、同じ窓の中で届く。
+    const same = '（このターンは応答を返さずに終わった: success/429 / result_is_error）';
+    for (let i = 0; i < 3; i += 1) {
+      fake.report('mgr-quota', same, 'done', {
+        failure: { code: 'rate_limit', via: 'result_is_error' },
+        synthesized: 'turn_failed',
+      });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await pool.stop();
+
+    const reports = reportsOf(inbox).slice(before);
+    // **3通が3件の受信箱イベントにならない**（同一判定が無いと、同族2度目の
+    // 枝へ落ちて3件になる）。
+    expect(reports).toHaveLength(1);
+    const text = reports[0]?.text ?? '';
+    // **本文は1度だけ現れる**（重複を並べ直さない）。
+    expect(text.split(same)).toHaveLength(2);
+    // **通数は捨てない。**
+    expect(text).toContain('×3');
+    // 日誌にも届いた通数が残る（条件4。断片の本数=1ではなく通数=3）。
+    const entries = await stores.journal.list({ types: ['exchange'] });
+    const merged = entries.find((entry) => JSON.stringify(entry).includes('1件にまとめて配った'));
+    expect(JSON.stringify(merged)).toContain('3 件');
+    expect(JSON.stringify(merged)).toContain('×3');
+  });
+
+  it('本文が1文字でも違えば寄せない——両方の全文が読める', async () => {
+    const { pool, inbox, fake } = await runningManualSetup();
+    const before = reportsOf(inbox).length;
+
+    // 同じ族（`turn_failed`）で本文が違う ⟹ 別の出来事として扱われ、
+    // 1本目は単独で flush される（寄せて片方を捨てることはしない）。
+    fake.report('mgr-quota', '本文A', 'done', {
+      failure: { code: 'rate_limit', via: 'result_is_error' },
+      synthesized: 'turn_failed',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    fake.report('mgr-quota', '本文B', 'done', {
+      failure: { code: 'rate_limit', via: 'result_is_error' },
+      synthesized: 'turn_failed',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await pool.stop();
+
+    const joined = reportsOf(inbox)
+      .slice(before)
+      .map((report) => report.text)
+      .join('\n');
+    // **どちらも消えていない。**
+    expect(joined).toContain('本文A');
+    expect(joined).toContain('本文B');
+    // **重複として数だけ残す形にはなっていない。**
+    expect(joined).not.toContain('×2');
+  });
+
+  it('mergeSynthesizedNoticeFragments（純関数）: 別の種類は全文が残り、重複は ×N になる', () => {
+    const result = mergeSynthesizedNoticeFragments([
+      { label: 'rate_limit', text: '枠の理由', count: 1 },
+      { label: 'turn_failed', text: 'ターンの結末', count: 3 },
+    ]);
+    // 別の種類は両方そのまま。
+    expect(result.text).toContain('枠の理由');
+    expect(result.text).toContain('ターンの結末');
+    // 重複は数だけ。届いた通数は 1 + 3 = 4。
+    expect(result.arrived).toBe(4);
+    expect(result.text).toContain('×3');
+    expect(result.breakdown).toContain('×3');
+    // 畳んだ重複の件数（4通 − 断片2本 = 2件）が前置きに出る。
+    expect(result.text).toContain('同文の重複 2 件');
+  });
+});
+
+/**
+ * **依頼者の実測の列B（`mgr-148a3894`）を丸ごと1本の歯にしたもの。**
+ * 出所はクローンの受信箱で、こちらで数え直したものではない:
+ *
+ * | | 受信時刻 | 中身 |
+ * | --- | --- | --- |
+ * | 1 | `03:20:57.530Z` | `枠から追い返された（five_hour）…`（reset 時刻なし） |
+ * | 2 | `03:21:37.020Z` | **本物の完了報告**（約1万8千字） |
+ * | 3 | `03:21:37.590Z` | `（このターンは応答を返さずに終わった…）` |
+ * | 4 | `03:21:38.257Z` | ↑と本文が完全に同一 |
+ * | 5 | `03:21:38.778Z` | ↑と本文が完全に同一 |
+ *
+ * **3つの規則が同時に働く列である**——(1) 本物の報告は畳めないので、届いた
+ * 時点で積み（1）を先に flush する (2) 本物の報告はそのまま単独で配る
+ * (3) 同文の3通（3・4・5）は1件へ寄せて `×3` を添える。
+ */
+describe('実測の列B: 枠の理由 → 本物の報告 → 同文3通', () => {
+  it('3件に落ち、どの本文も1つも消えない', async () => {
+    const { pool, stores, inbox, fake } = await runningManualSetup();
+    const before = reportsOf(inbox).length;
+
+    fake.rateLimit('mgr-quota', { status: 'rejected', kind: 'five_hour' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    fake.report('mgr-quota', '数えた結果と設計判断（本物の報告）', 'done');
+    await settledReport(stores, '数えた結果と設計判断（本物の報告）');
+    const same = '（このターンは応答を返さずに終わった: success/429 / result_is_error）';
+    for (let i = 0; i < 3; i += 1) {
+      fake.report('mgr-quota', same, 'done', {
+        failure: { code: 'rate_limit', via: 'result_is_error' },
+        synthesized: 'turn_failed',
+      });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await pool.stop();
+
+    const reports = reportsOf(inbox).slice(before);
+    // 5通が3件になる（畳めない本物の報告が境目を作る）。
+    expect(reports).toHaveLength(3);
+    expect(reports[0]?.text).toContain('枠から追い返された');
+    expect(reports[1]?.text).toBe('数えた結果と設計判断（本物の報告）');
+    expect(reports[2]?.text).toContain(same);
+    expect(reports[2]?.text).toContain('×3');
+  });
+});
+
 describe('1件だけのときは、まとめた前置きが1文字も載らない', () => {
   it('rate_limit が1件だけなら前置きが付かない', async () => {
     const { pool, inbox, fake } = await runningManualSetup();
@@ -625,16 +760,18 @@ describe('1件だけのときは、まとめた前置きが1文字も載らな�
   });
 
   it('mergeSynthesizedNoticeFragments（純関数）: 1件なら本文そのまま', () => {
-    const result = mergeSynthesizedNoticeFragments([{ label: 'rate_limit', text: '本文だけ' }]);
+    const result = mergeSynthesizedNoticeFragments([
+      { label: 'rate_limit', text: '本文だけ', count: 1 },
+    ]);
     expect(result.text).toBe('本文だけ');
     expect(result.text).not.toContain('まとめた');
   });
 
   it('mergeSynthesizedNoticeFragments（純関数）: 複数件なら前置きと区切りが付き、順序を保つ', () => {
     const fragments = [
-      { label: 'report_failed', text: '1つ目' },
-      { label: 'rate_limit', text: '2つ目' },
-      { label: 'usage_notice', text: '3つ目' },
+      { label: 'report_failed', text: '1つ目', count: 1 },
+      { label: 'rate_limit', text: '2つ目', count: 1 },
+      { label: 'usage_notice', text: '3つ目', count: 1 },
     ];
     const result = mergeSynthesizedNoticeFragments(fragments);
     // 数を直に書かず、渡した本数から作る（上の歯と同じ理由）。

@@ -2270,10 +2270,30 @@ function describeSynthesizedNoticeLabel(label: SynthesizedNoticeLabel): string {
   return KNOWN_SYNTHESIZED_NOTICE_LABELS[label] ?? label;
 }
 
-/** `#synthesizedNotices` に積む1件。 */
+/**
+ * `#synthesizedNotices` に積む1件。
+ *
+ * **`count` は「同じ族・同じ本文が何通届いたか」。** 完全な重複（族も本文も
+ * バイト単位で同一）は1件へ寄せて数だけ持つ——**情報が1つも失われないから
+ * 畳んでよい。** ⛔ **本文が1バイトでも違えば別の断片として残す**（言っている
+ * ことが違うので、代表を選べない）。
+ *
+ * **根拠は依頼者の実測**（2026-09-08。出所はクローンの受信箱で、こちらで数え
+ * 直したものではない）: `（このターンは応答を返さずに終わった: success/429 /
+ * result_is_error）` が**本文完全同一のまま3通**、1,188ms の幅で届いた列が在る
+ * （`03:21:37.590Z` / `38.257Z` / `38.778Z`）。**この経路には文言による
+ * 畳み込みが1つも無い**（`case 'report'` の冪等化の鍵は `reportId` であって
+ * 本文ではない）ので、同文はそのまま全通が届く。
+ *
+ * **通数そのものは捨てない。** 「1回の枠落ちで3通出た」は機構の健康について
+ * の情報であり、後から「4通が3通に減ったのか、1回が3回に増えたのか」を
+ * 区別する材料になる（依頼者の要件）。
+ */
 interface SynthesizedNoticeFragment {
   label: SynthesizedNoticeLabel;
   text: string;
+  /** 同じ族・同じ本文が届いた通数（1以上）。 */
+  count: number;
 }
 
 /** その managerId ぶんの合流窓（`#synthesizedNotices` の値）。 */
@@ -2384,7 +2404,10 @@ export function resolveSynthesizedNoticeWindowMs(env: NodeJS.ProcessEnv = proces
  * 積んだ断片を1本の `text` へ連結する（純関数。`withheldReportOverdue` と
  * 同じ理由でテスト可能性のために切り出してある）。
  *
- * **要約も間引きもしない。** 族ごとに断片は違うことを答えている（例:
+ * **要約も間引きもしない。⛔ ただ1つの例外は「完全な重複」である**——族も本文
+ * もバイト単位で同一の断片は1つへ寄せ、`×N` で通数だけを残す
+ * （{@link SynthesizedNoticeFragment} の `count`）。**本文が1バイトでも違えば
+ * 寄せない。** 族ごとに断片は違うことを答えている（例:
  * 枠落ちの族なら「落ちる前に何を考えていたか／なぜ止まったか／いつ明けるか
  * ／セッションが生きているか」）ので、全文を届いた順（`fragments` の並び＝
  * 到着順。呼び出し元が並べ替えない）のまま連結する。
@@ -2399,25 +2422,40 @@ export function resolveSynthesizedNoticeWindowMs(env: NodeJS.ProcessEnv = proces
  */
 export function mergeSynthesizedNoticeFragments(fragments: readonly SynthesizedNoticeFragment[]): {
   text: string;
-  /** 日誌の内訳（`label` を日本語にしてカンマで繋いだもの）。 */
+  /** 日誌の内訳（`label` を日本語にし、同文が複数なら `×N` を添えて繋いだもの）。 */
   breakdown: string;
+  /** **実際に届いた通数**（`count` の総和。断片の本数ではない）。 */
+  arrived: number;
 } {
+  const arrived = fragments.reduce((sum, fragment) => sum + fragment.count, 0);
+  const describe = (fragment: SynthesizedNoticeFragment): string =>
+    `${describeSynthesizedNoticeLabel(fragment.label)}${
+      fragment.count > 1 ? ` ×${String(fragment.count)}` : ''
+    }`;
   const first = fragments[0];
-  if (fragments.length <= 1) {
+  // **1通しか届いていないなら前置きを付けない**（断片の本数ではなく通数で見る
+  // ——同文が3通なら断片は1本だが、前置きは付ける。3通あったことは情報である）。
+  if (arrived <= 1) {
     return {
       text: first?.text ?? '',
-      breakdown: first === undefined ? '' : describeSynthesizedNoticeLabel(first.label),
+      breakdown: first === undefined ? '' : describe(first),
+      arrived,
     };
   }
-  const breakdown = fragments.map((f) => describeSynthesizedNoticeLabel(f.label)).join('、');
-  const header = `（1つの出来事について ${String(fragments.length)} 件の知らせをまとめた）`;
+  const breakdown = fragments.map(describe).join('、');
+  // 畳んだ重複の件数 ＝ 届いた通数 − 残っている断片の本数。
+  const folded = arrived - fragments.length;
+  const header =
+    `（1つの出来事について ${String(arrived)} 件の知らせをまとめた` +
+    (folded === 0 ? '' : `。うち同文の重複 ${String(folded)} 件は数だけ残して畳んだ`) +
+    '）';
   const body = fragments
     .map(
-      (f, i) =>
-        `--- ${String(i + 1)}/${String(fragments.length)}（${describeSynthesizedNoticeLabel(f.label)}） ---\n${f.text}`,
+      (fragment, i) =>
+        `--- ${String(i + 1)}/${String(fragments.length)}（${describe(fragment)}） ---\n${fragment.text}`,
     )
     .join('\n\n');
-  return { text: `${header}\n\n${body}`, breakdown };
+  return { text: `${header}\n\n${body}`, breakdown, arrived };
 }
 
 class Pool implements ManagerPool {
@@ -7498,11 +7536,18 @@ class Pool implements ManagerPool {
    * 窓が閉じない事態を避けるためである（north_star 禁止2「制限は方針で
    * 表す」——期限を固定してあるからこそ、後から必ず配られることが保証できる）。
    *
-   * **同じ族（`label`）が同じ窓の中で2度目に来たら、いまの積みを先に flush
-   * してから新しい窓を開く。** 1つの出来事は各族を高々1回しか持たない
-   * （枠落ちなら `rate_limit` 1回・`usage_notice` 1回・…）——**同じ族が
-   * 2度目に届いたということは、それは前の積みとは別の出来事である**と
-   * 判断する。この判定が無いと、内容の違う2件の `usage_notice`（実測:
+   * **同じ族（`label`）の2度目は、本文で2つに分ける。**
+   *
+   * - **族も本文も同一（完全な重複）** ⟹ 積みの中のその断片の `count` を
+   *   1つ増やすだけ。**flush しない・新しい窓も開かない。** 情報は1つも
+   *   失われず、通数は `×N` として本文と日誌の内訳に残る
+   *   （{@link SynthesizedNoticeFragment}）。**根拠は依頼者の実測**——同文が
+   *   3通、1,188ms の幅で届いた列が在る（この判定が無いと、その3通は
+   *   下の「別の出来事」の枝へ落ちて**3件の受信箱イベント**になる）。
+   * - **族は同じだが本文が違う** ⟹ いまの積みを先に flush してから新しい窓を
+   *   開く。**それは前の積みとは別の出来事である**と判断する。
+   *
+   * 後者の判定が無いと、内容の違う2件の `usage_notice`（実測:
    * `usage-notice-redelivery.test.ts` — 同じ `reached` 分類でも文言が違う
    * 2通が届く）が1件に潰れ、クローンから見て「2件目が来なかった」のと
    * 区別が付かなくなる——`#usageNotices` / `#rateLimits` が「もう配った同じ
@@ -7512,10 +7557,20 @@ class Pool implements ManagerPool {
   #queueSynthesizedNotice(managerId: string, label: SynthesizedNoticeLabel, text: string): void {
     const existing = this.#synthesizedNotices.get(managerId);
     if (existing !== undefined) {
+      // **完全な重複（族も本文も同一）は数を増やすだけ。** 本文の比較は
+      // `===`（バイト単位）で、正規化も切り詰めもしない——1バイトでも違えば
+      // 「別のことを言っている」側へ倒す（上の doc）。
+      const duplicate = existing.fragments.find(
+        (fragment) => fragment.label === label && fragment.text === text,
+      );
+      if (duplicate !== undefined) {
+        duplicate.count += 1;
+        return;
+      }
       if (existing.fragments.some((fragment) => fragment.label === label)) {
         this.#flushSynthesizedNoticeFor(managerId);
       } else {
-        existing.fragments.push({ label, text });
+        existing.fragments.push({ label, text, count: 1 });
         return;
       }
     }
@@ -7524,7 +7579,7 @@ class Pool implements ManagerPool {
     }, this.#synthesizedNoticeWindowMs);
     // デーモンの停止をこのタイマーで引き延ばさない（`#scheduleReattach`と同じ形）。
     timer.unref?.();
-    this.#synthesizedNotices.set(managerId, { fragments: [{ label, text }], timer });
+    this.#synthesizedNotices.set(managerId, { fragments: [{ label, text, count: 1 }], timer });
   }
 
   /**
@@ -7553,7 +7608,7 @@ class Pool implements ManagerPool {
     if (entry === undefined) return;
     this.#synthesizedNotices.delete(managerId);
     clearTimeout(entry.timer);
-    const { text, breakdown } = mergeSynthesizedNoticeFragments(entry.fragments);
+    const { text, breakdown, arrived } = mergeSynthesizedNoticeFragments(entry.fragments);
     this.#deliver(managerId, 'report', text);
     // **消えてよいのは「クローンを起こすこと」だけで、記録ではない。**
     // 個々の知らせは積んだ時点で呼び出し元（`case 'rate_limit'` 等）が
@@ -7564,7 +7619,7 @@ class Pool implements ManagerPool {
       with: 'manager',
       role: 'inbound',
       text:
-        `[${managerId}] 機構が合成した知らせを ${String(entry.fragments.length)} 件、` +
+        `[${managerId}] 機構が合成した知らせを ${String(arrived)} 件、` +
         `1件にまとめて配った（内訳: ${breakdown}）。`,
     });
   }
