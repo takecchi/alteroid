@@ -401,6 +401,79 @@ describe('同じ族が窓の中で2度目に来たら、前の積みを先に fl
  * 件数を撃ち、経路そのものは `mergedJournalCount()`（合流窓の日誌の行）で
  * もう一面から撃つ。
  */
+/**
+ * **印を持っていても、窓の外なら畳まない。** 依頼者の実測（2026-09-08。出所は
+ * クローンの受信箱）に、`枠から追い返された（five_hour）` と
+ * `（このターンは応答を返さずに終わった…）` が**40秒**離れて届いた列が在り、
+ * **同じ束なのか2つの出来事なのかは外から決められなかった。** 決められないなら
+ * 畳まない——畳めない損（ターンが焼ける）は、畳み間違いの損（無関係な出来事が
+ * 1件に混ざる）より軽い。
+ *
+ * **つまり窓は「同じ束か」の補助であって、主たる判定ではない**（主たる判定は
+ * `report.synthesized` の印のほう）。この歯はその補助が実際に効いていること
+ * ——窓が閉じたら次は新しい束になり、**タイマーは延長されない**こと——を撃つ。
+ */
+describe('印を持っていても、窓の外なら畳まない（別の束として扱う）', () => {
+  it('窓より離れて届いた2件の機構合成の知らせは、別々の manager_message になる', async () => {
+    // **窓を 30ms に絞る。** 既定3000msを実時間で待つと歯が遅くなるだけで、
+    // 測っているもの（窓の外か中か）は同じである。
+    const { pool, inbox, fake } = await runningManualSetup('mgr-quota', {
+      synthesizedNoticeWindowMs: 30,
+    });
+    const before = reportsOf(inbox).length;
+
+    fake.rateLimit('mgr-quota', { status: 'rejected', kind: 'five_hour' });
+    // 窓（30ms）が閉じ切るまで、十分に長く待つ。
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    fake.usageNotice('mgr-quota', { kind: 'reached', text: '上限に当たった' });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    await pool.stop();
+
+    const reports = reportsOf(inbox).slice(before);
+    // **族が違っても畳まれない**（族の違いではなく、窓の外であることが理由）。
+    // ここで数を撃つのは「届いた通数」ではなく「畳まれなかったこと」である。
+    expect(reports).toHaveLength(2);
+    expect(reports[0]?.text).toContain('枠から追い返された');
+    expect(reports[0]?.text).not.toContain('まとめた');
+    expect(reports[1]?.text).toContain('上限に当たった');
+    expect(reports[1]?.text).not.toContain('まとめた');
+  });
+});
+
+/**
+ * **本物の報告が同じ束に混ざりえる。** 依頼者の実測（2026-09-08。出所はクローンの
+ * 受信箱）の列B——`mgr-148a3894` の1つの列に、`03:20:57.530Z` の
+ * `枠から追い返された（five_hour）`、`03:21:37.020Z` の**中身の在る本物の報告**
+ * （約1万8千字。数えた結果と設計判断）、`03:21:37.590Z` の
+ * `（このターンは応答を返さずに終わった…）` が並んでいた。
+ *
+ * **本物の報告は畳めない**（本人が書いたものだから）。**だから積みが在るときに
+ * 本物の報告が来たら、積みを先に配り切ってから本物を配る**——そうしないと、
+ * 後から届いた本物のほうが先に受信箱へ入って**到着順が崩れる**
+ * （`docs/architecture.md`「順序は並べ替えない」）。この歯はその flush を固定する。
+ */
+describe('本物の報告が積みの後に届いたら、積みを先に flush してから配る', () => {
+  it('積み → 本物の報告 の順で届くと、受信箱もその順で並ぶ', async () => {
+    const { pool, stores, inbox, fake } = await runningManualSetup();
+    const before = reportsOf(inbox).length;
+
+    fake.rateLimit('mgr-quota', { status: 'rejected', kind: 'five_hour' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // **本物の報告（`synthesized` の欄が無い）。** 窓（既定3000ms）はまだ開いている。
+    fake.report('mgr-quota', '数えた結果と設計判断', 'done');
+    await settledReport(stores, '数えた結果と設計判断');
+
+    // **`stop()` より前に、既に2件が到着順で入っていること。** flush が無いと
+    // 本物だけが先に入り、積みは `stop()` まで残って順序が入れ替わる。
+    const reports = reportsOf(inbox).slice(before);
+    expect(reports).toHaveLength(2);
+    expect(reports[0]?.text).toContain('枠から追い返された');
+    expect(reports[1]?.text).toBe('数えた結果と設計判断');
+
+    await pool.stop();
+  });
+});
+
 describe('本人が書いた報告は畳まれない', () => {
   it('event.synthesized が無い（本人が書いた）report は即配られる', async () => {
     const { pool, stores, inbox, fake } = await runningManualSetup();
