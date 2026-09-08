@@ -181,21 +181,28 @@ describe('manager.ts → RunnerRegistry#noteManagerFailed の配線（#712）', 
 
     sdk.failNth(0, new Error('合成した起動失敗（本物の資源枯渇は再現しない）'));
 
-    // **呼ばれたこと自体を待つ。** 台帳の `status` 経由で間接的に確かめると、
-    // 「配線を消した」変更が `status: 'failed'` の代入だけ生き残らせて緑に
-    // なりうる——見たいのは `noteManagerFailed` が実際に呼ばれたかである。
-    await vi.waitFor(() => {
-      if (noted.length === 0) throw new Error('noteManagerFailed がまだ呼ばれていない');
+    // **先に「出来事が届いた」ことだけを待つ。** 台帳が `failed` になるのは
+    // 配線とは無関係に起きるので、ここは配線の有無に依存しない。
+    const job = await vi.waitFor(async () => {
+      const found = (await stores.jobs.listJobs()).find((j) => j.id === started.managerId);
+      if (found?.status !== 'failed') throw new Error('まだ closed(failed) が届いていない');
+      return found;
     });
-
-    // **渡された runnerId の値まで見る。** 呼ばれたことだけでは、無関係な
-    // runnerId を渡して素通りさせる直しも緑になる。
-    expect(noted).toEqual([RUNNER_ID]);
-
     // 前提の確認: 本当に `failed` の枝を通ったこと（`lost` や `done` ではない）。
-    const job = (await stores.jobs.listJobs()).find((j) => j.id === started.managerId);
-    expect(job?.status).toBe('failed');
-    expect(job?.runnerId).toBe(RUNNER_ID);
+    expect(job.runnerId).toBe(RUNNER_ID);
+
+    // **待つ中身を `expect` にする。** `if (…) throw new Error(…)` の形で待つと、
+    // 配線を消した回の赤が**時間切れ**になり、アサーションが1本も撃たれないまま
+    // 落ちる —— 出力に `AssertionError` が1件も出ないので、「何が違ったのか」が
+    // 読めない（変異試験では「赤の本数」と「撃たれたアサーションの本数」が
+    // 食い違う形になる）。`expect` を中に置けば、時間切れでも最後に投げられた
+    // `AssertionError` がそのまま出る。
+    //
+    // **渡された `runnerId` の値まで見る。** 呼ばれたことだけでは、無関係な
+    // `runnerId` を渡して素通りさせる直しも緑になる。
+    await vi.waitFor(() => {
+      expect(noted).toEqual([RUNNER_ID]);
+    });
 
     await pool.stop();
     await registry.stop();
