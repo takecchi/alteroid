@@ -77,3 +77,4 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0062](./0062-contested-with-id-fk-index.md) | `memories.contested_with_id` の自己参照 FK に索引を足す — `tenant_id` 先頭の複合索引は RI チェックを効率良く供給できないこと・索引名は中身を保証しないこと | 採用 (2026-09) |
 | [0063](./0063-hnsw-iterative-scan-not-adopted.md) | `hnsw.iterative_scan` は採らない — 件数は直るが正しさは直らない（`strict_order` は正しさを一切買わない）ことを3腕×4窓で測った記録 | 採用 (2026-09) |
 | [0064](./0064-exact-path-cost-vs-scale.md) | 厳密経路の費用倍率を規模で振って測った — ADR 0063 の「約2.5倍」の訂正と、`relaxed_order` の recall が規模とともに悪化するという発見 | 採用 (2026-09) |
+| [0065](./0065-vector-store-space-separation-conformance.md) | `VectorStore` の space 分離を適合テストの歯にする — `FakeVectorStore` に丸ごと空いていた一段と、監査の漏れの記録 | 採用 (2026-09) |

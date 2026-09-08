@@ -107,6 +107,11 @@ describeVectorStoreConformance({
     );
     return memory.id;
   },
+  // ADR 0065: `InMemoryVectorStore` はテーブルを持たず、`search` が呼ばれた時点の
+  // key prefix（provider:model:dimensions）一致で絞るだけ——`upsert`/`search` に
+  // 未知の space を渡しても事前登録は要らない（`registerEmbeddingSpace` に相当する
+  // ものが無い）。そのため no-op で足りる。
+  prepareEmbeddingSpace: () => {},
 });
 
 // ADR 0047: `memory_events.memory_id → memories(id)` の外部キーを `InMemoryEventStore`

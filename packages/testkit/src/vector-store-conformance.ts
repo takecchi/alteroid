@@ -65,23 +65,51 @@ export interface VectorStoreConformanceOptions {
    * 再現することになる。`listEventsForMemory` の doc コメントに同じ理由が書いてある。
    */
   prepareMemoryId: (ctx: Ctx, attrs?: PrepareMemoryIdAttrs) => Promise<MemoryId> | MemoryId;
+  /**
+   * ADR 0065: 「space 分離」の歯（下記 `spaceB` を使う `it()`）が使う、**2つ目の**
+   * embedding space を使える状態にするフック。
+   *
+   * `PostgresVectorStore` は `memory_embeddings_<space>` を `registerEmbeddingSpace`
+   * （`packages/postgres/src/vector-space.ts`）で事前に作られている前提で動く
+   * （`PostgresVectorStore` のクラス doc）——既定の `space` は各テストファイルの
+   * セットアップ（例: `packages/postgres/src/__tests__/test-db.ts` の
+   * `getTestClient()`）が登録済みだが、この適合テストが2つ目の space を使うには、
+   * その space のテーブルも同じ経路で作ってもらう必要がある。`InMemoryVectorStore` は
+   * テーブルを持たず、`search` が呼ばれた時点の prefix 一致で絞るだけなので、
+   * 事前登録は不要（no-op でよい——`in-memory-fixtures.conformance.test.ts` で確認済み）。
+   *
+   * **省略可のオプションにしないこと。** 理由は `prepareMemoryId` の doc と同じ——
+   * 省略できると「2つ目の space を実際に使える adapter」と「使えない adapter」が
+   * 同じ緑色の出力になる。`prepareMemoryId` が確立したこの適合テストの線を、
+   * 新しいフックでも繰り返す。
+   */
+  prepareEmbeddingSpace: (space: EmbeddingSpaceId) => Promise<void> | void;
 }
 
 const space: EmbeddingSpaceId = { provider: "test", model: "fixture-model", dimensions: 3 };
 
 /**
+ * ADR 0065: 「space 分離」の歯専用の、`space` とは別の embedding space。
+ * `provider`/`dimensions` は揃え、`model` だけを変えてある——テーブル名・prefix の
+ * 導出（`embeddingSpaceTableName`／`InMemoryVectorStore.key`）はこの3フィールドの
+ * 組から機械的に決まるため、`model` の違いだけで別の space として扱われることを
+ * 確認する意味も兼ねる。
+ */
+const spaceB: EmbeddingSpaceId = { provider: "test", model: "fixture-model-b", dimensions: 3 };
+
+/**
  * `VectorStore` の適合テスト（docs/architecture.md §5.2）。
  *
  * ここで検査するのは `VectorStore` の基本契約——upsert/search/delete の往復、
- * テナント分離、limit の遵守、そして `filter`（`status`/`subjectId`/`decayFloorAtAfter`/
- * `excludeProvenanceKinds`/`occurredAfter`/`occurredBefore`）が実際に効くこと
- * （ADR 0034、`excludeProvenanceKinds` は ADR 0056、`occurredAfter`/`occurredBefore` は
- * ADR 0059）——である。`EXPLAIN` で HNSW 索引が使われることの検査
- * （roadmap.md 段階2の完了条件）は pgvector 固有の関心事であり、`packages/postgres` 側の
- * テスト（生 SQL・`EXPLAIN` を直接扱う）に置く。
+ * テナント分離、**space 分離**（ADR 0065）、limit の遵守、そして `filter`
+ * （`status`/`subjectId`/`decayFloorAtAfter`/`excludeProvenanceKinds`/`occurredAfter`/
+ * `occurredBefore`）が実際に効くこと（ADR 0034、`excludeProvenanceKinds` は ADR 0056、
+ * `occurredAfter`/`occurredBefore` は ADR 0059）——である。`EXPLAIN` で HNSW 索引が
+ * 使われることの検査（roadmap.md 段階2の完了条件）は pgvector 固有の関心事であり、
+ * `packages/postgres` 側のテスト（生 SQL・`EXPLAIN` を直接扱う）に置く。
  */
 export function describeVectorStoreConformance(options: VectorStoreConformanceOptions): void {
-  const { name, createStore, prepareMemoryId } = options;
+  const { name, createStore, prepareMemoryId, prepareEmbeddingSpace } = options;
 
   describe(`VectorStore conformance (${name})`, () => {
     it("upsert した vector が search で見つかる", async () => {
@@ -207,6 +235,56 @@ export function describeVectorStoreConformance(options: VectorStoreConformanceOp
       });
 
       expect(hitsB).toEqual([]);
+    });
+
+    // -------------------------------------------------------------------
+    // space 分離（ADR 0065）: 同一 tenant で2つの embedding space を同時に使っても
+    // search が混同しないこと。`InMemoryVectorStore` は key の prefix
+    // （provider:model:dimensions）で、`PostgresVectorStore` は space ごとのテーブル
+    // 分割（ADR 0002）で、それぞれ既に実際に space を分けているが、この適合テストには
+    // それを検査する歯が1本も無かった（ADR 0065 が監査の漏れとして記録）。
+    //
+    // フィクスチャは非対称: space A に2件、space B に1件、ベクトルも別。件数が
+    // 一致しないようにしてある——両方とも同じ数・同じ形だと、取り違えが起きても
+    // 件数だけ見ると一致してしまう。
+    //
+    // 「変わらない」（B の search に A が出ない）だけでなく「変わる」（B の search で
+    // B 自身が返る）も同じ歯の中で固定する——そうしないと「search が常に空を返す」
+    // 実装でも緑になる（ADR 0040 の同種の歯と同じ理由）。
+    // -------------------------------------------------------------------
+
+    it("space が違う vector は同一 tenant の search でも混同されない（非対称フィクスチャ）", async () => {
+      const store = await createStore();
+      await prepareEmbeddingSpace(spaceB);
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const aId1 = await prepareMemoryId(ctx);
+      const aId2 = await prepareMemoryId(ctx);
+      const bId1 = await prepareMemoryId(ctx);
+
+      await store.upsert(ctx, space, aId1, [1, 0, 0]);
+      await store.upsert(ctx, space, aId2, [0, 1, 0]);
+      await store.upsert(ctx, spaceB, bId1, [0, 0, 1]);
+
+      // space A で search したら、space A の2件だけが返る（B は混ざらない）。
+      const hitsA = await store.search(ctx, space, [1, 0, 0], {
+        limit: 10,
+        filter: { tenantId: "tenant-1" },
+      });
+      const idsA = hitsA.map((hit) => hit.memoryId);
+      expect(idsA).toContain(aId1);
+      expect(idsA).toContain(aId2);
+      expect(idsA).not.toContain(bId1);
+
+      // 「変わる」側: space B で search したら、B 自身の1件が返る
+      // （A が2件とも返らないことも同時に見る——「常に空を返す」実装はここで落ちる）。
+      const hitsB = await store.search(ctx, spaceB, [0, 0, 1], {
+        limit: 10,
+        filter: { tenantId: "tenant-1" },
+      });
+      const idsB = hitsB.map((hit) => hit.memoryId);
+      expect(idsB).toContain(bId1);
+      expect(idsB).not.toContain(aId1);
+      expect(idsB).not.toContain(aId2);
     });
 
     it("delete した vector は search に現れなくなる", async () => {

@@ -15,6 +15,7 @@ import { PostgresEventStore } from "../event-store.js";
 import { PostgresOutboxStore } from "../outbox-store.js";
 import { PostgresTenantSettingsStore } from "../tenant-settings-store.js";
 import { rowToOutboxJob, type OutboxJobRow } from "../mapping.js";
+import { registerEmbeddingSpace } from "../vector-space.js";
 import { closeTestClient, getTestClient, resetTestDatabase } from "./test-db.js";
 
 /**
@@ -94,6 +95,19 @@ describeVectorStoreConformance({
       }),
     );
     return memory.id;
+  },
+  // ADR 0065: `PostgresVectorStore` は `memory_embeddings_<space>` が
+  // `registerEmbeddingSpace` で事前に作られている前提で動く（`PostgresVectorStore` の
+  // クラス doc）。既定の space（`TEST_EMBEDDING_SPACE`）は `getTestClient()` が登録済みだが、
+  // 「space 分離」の歯が使う2つ目の space はここで登録する。`registerEmbeddingSpace` は
+  // `CREATE TABLE IF NOT EXISTS`/`CREATE INDEX IF NOT EXISTS`（advisory lock で排他）なので
+  // 何度呼んでもべき等——毎 `it()` で呼んでも問題ない。テーブルの行は
+  // `resetTestDatabase()` の `TRUNCATE ... CASCADE` が `memories` への外部キー経由で
+  // 巻き込んで空にする（`DOMAIN_TABLES` に明示していなくても、CASCADE は FK 参照元を
+  // 自動的に含める）。
+  prepareEmbeddingSpace: async (space) => {
+    const { pool } = await getTestClient();
+    await registerEmbeddingSpace(pool, space);
   },
 });
 

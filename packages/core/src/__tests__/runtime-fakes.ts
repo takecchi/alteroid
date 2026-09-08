@@ -653,12 +653,19 @@ export class FakeVectorStore implements VectorStore {
 
   async search(
     ctx: Ctx,
-    _space: EmbeddingSpaceId,
+    space: EmbeddingSpaceId,
     query: number[],
     opts: { limit: number; filter: VectorFilter },
   ): Promise<VectorHit[]> {
+    // `InMemoryVectorStore`（packages/testkit）と同じ意味論に揃える（ADR 0065）:
+    // 索引を模す prefix は space（provider/model/dimensions）だけで絞る。以前はここで
+    // `space` を一度も参照しておらず（引数名も `_space` だった）、異なる space の vector を
+    // 混同して返していた——`key()` が space を含む prefix を作っているのに、`search` だけが
+    // それを見ていなかった。
+    const prefix = `${space.provider}:${space.model}:${space.dimensions}:`;
     const hits: VectorHit[] = [];
-    for (const entry of this.entries.values()) {
+    for (const [key, entry] of this.entries) {
+      if (!key.startsWith(prefix)) continue;
       if (entry.tenantId !== opts.filter.tenantId || entry.tenantId !== ctx.tenantId) continue;
       // status / subjectId / decayFloorAtAfter は Memory の属性であり、ベクトルの属性ではない
       // （ADR 0034）。`backing.memories` を真実の源として引く——`InMemoryVectorStore` の

@@ -27,6 +27,8 @@ import { createFakeRuntimeStores } from "./runtime-fakes.js";
 const ctx: Ctx = { tenantId: "tenant-1" };
 const NOW = new Date("2026-06-01T00:00:00.000Z");
 const space = { provider: "test", model: "fixture-model", dimensions: 3 };
+/** ADR 0065: 「space 分離」の歯専用の、`space` とは別の embedding space。 */
+const spaceB = { provider: "test", model: "fixture-model-b", dimensions: 3 };
 
 let contentHashCounter = 0;
 
@@ -175,6 +177,55 @@ describe("FakeVectorStore — VectorFilter の契約（ADR 0034）", () => {
     expect(ids).toContain(bothMatch.id);
     expect(ids).not.toContain(statusOnlyMatch.id);
     expect(ids).not.toContain(subjectOnlyMatch.id);
+  });
+});
+
+/**
+ * `FakeVectorStore.search` が space（`provider`/`model`/`dimensions`）で絞ることを
+ * 検査する歯（ADR 0065）。
+ *
+ * `packages/testkit` の `vector-store-conformance.ts` に足した同じ形の歯
+ * （「space が違う vector は同一 tenant の search でも混同されない」）の、`packages/core`
+ * 側の対応物——`FakeVectorStore` は adapter 適合テストが届かない別系統
+ * （`packages/core` は `@mnemora/testkit` を import できない、`dependency-boundary.test.ts`）
+ * なので、ここに自前で置く。
+ *
+ * フィクスチャは非対称: space A に2件、space B に1件、ベクトルも別。「変わらない」
+ * （B の search に A が出ない）だけでなく「変わる」（B の search で B 自身が返る）も
+ * 同じ歯の中で固定する——そうしないと「search が常に空を返す」実装でも緑になる
+ * （上の ADR 0040 の歯・`vector-store-conformance.ts` と同じ理由）。
+ */
+describe("FakeVectorStore.search — space 分離（ADR 0065）", () => {
+  it("space が違う vector は同一 tenant の search でも混同されない（非対称フィクスチャ）", async () => {
+    const stores = createFakeRuntimeStores();
+    const a1 = await stores.memoryStore.createMemory(ctx, newMemory());
+    const a2 = await stores.memoryStore.createMemory(ctx, newMemory());
+    const b1 = await stores.memoryStore.createMemory(ctx, newMemory());
+
+    await stores.vectorStore.upsert(ctx, space, a1.id, [1, 0, 0]);
+    await stores.vectorStore.upsert(ctx, space, a2.id, [0, 1, 0]);
+    await stores.vectorStore.upsert(ctx, spaceB, b1.id, [0, 0, 1]);
+
+    // space A で search したら、space A の2件だけが返る（B は混ざらない）。
+    const hitsA = await stores.vectorStore.search(ctx, space, [1, 0, 0], {
+      limit: 10,
+      filter: { tenantId: "tenant-1" },
+    });
+    const idsA = hitsA.map((hit) => hit.memoryId);
+    expect(idsA).toContain(a1.id);
+    expect(idsA).toContain(a2.id);
+    expect(idsA).not.toContain(b1.id);
+
+    // 「変わる」側: space B で search したら、B 自身の1件が返る
+    // （A が2件とも返らないことも同時に見る）。
+    const hitsB = await stores.vectorStore.search(ctx, spaceB, [0, 0, 1], {
+      limit: 10,
+      filter: { tenantId: "tenant-1" },
+    });
+    const idsB = hitsB.map((hit) => hit.memoryId);
+    expect(idsB).toContain(b1.id);
+    expect(idsB).not.toContain(a1.id);
+    expect(idsB).not.toContain(a2.id);
   });
 });
 
