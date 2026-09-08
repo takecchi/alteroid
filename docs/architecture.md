@@ -481,6 +481,14 @@ interface EmbeddingSpaceId {
 - **core は埋め込みの次元を知らない。** `EmbeddingSpaceId` は「(provider, モデル, 次元)」の組
   （D8）を単位にし、空間ごとにテーブル（`memory_embeddings_<space>`）を分ける設計を前提とする
   （[docs/decisions/](./decisions/)、pgvector の可変次元列は索引が張れないため）。
+- **`search` は、渡された `space` と一致しない vector を返してはならない。** 同一 tenant の中でも、
+  `EmbeddingSpaceId`（`provider` / `model` / `dimensions` の3つ組）が違えば別の空間であり、
+  混ぜない——ある空間で `upsert` した vector は、別の空間を指定した `search` には出てこない。
+  adapter がこれをどう実現するか（空間ごとのテーブル分割・key の prefix 一致など）は実装の自由だが、
+  **この振る舞い自体は契約である。**この契約は
+  [ADR 0065](./decisions/0065-vector-store-space-separation-conformance.md) で決定され、適合テスト
+  （`packages/testkit/src/vector-store-conformance.ts` の「space が違う vector は同一 tenant の
+  search でも混同されない」）で固定されている。
 
 ### 5.3 RelationStore — Phase 2（`status`/`superseded_by_id` 列のみ Phase 1）
 
