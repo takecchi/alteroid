@@ -17,10 +17,16 @@ import type { Stores } from './store.js';
  * 「一枠落ち一合図」（`fix/one-quota-drop-one-signal`）——枠落ちが起きると、
  * `manager.ts` が組み立てる3種の合成文言（`rate_limit` / `usage_notice` /
  * `closed` の `status === 'failed'`）と、runner 自身の `failedReportText`
- * 経由の `report`（`synthesized` に族の名前が入る）の計4通が、同じ1つの出来事の
+ * 経由の `report`（`synthesized` に族の名前が入る）が、同じ1つの出来事の
  * 別の顔として短い間隔（実測で1秒未満）でまとめて届き、クローンのターンを
- * 3〜4回焼く。この歯は、その4通が合流窓の中で1件の `manager_message` へ
+ * その通数だけ焼く。この歯は、それらが合流窓の中で1件の `manager_message` へ
  * まとまることを固定する。
+ *
+ * **⚠️ 通数を歯に焼き込まない（依頼者の訂正 2026-09-08）。** 同じ1つの枠落ちでも
+ * 届く種類は回によって違う——実測で**4通の回**（`rate_limit` を含む）と**3通の回**
+ * （`rate_limit` が来ない）の両方が在る。**固定するのは「届いた種類が1つも
+ * 失われないこと」であって、通数ではない。** 数を固定した歯は、種類が減った回に
+ * 赤くなり、しかもそれは欠陥ではない。件数を記録に残すのは日誌の側の役目である。
  *
  * `manager-withheld-reports.test.ts` の「足場1: manualRunner」と同じ作法——
  * `RunnerEvent` を直接組み立てて emit し、SDK 層を経由せずに `manager.ts` の
@@ -190,8 +196,44 @@ function reportsOf(inbox: InboxEvent[]) {
   }[];
 }
 
-describe('4通の機構合成の知らせが、合流窓の中で1件にまとまる', () => {
-  it('rate_limit / usage_notice / report(synthesized) / closed(failed) の4通が1件になり、全文がすべて入っている', async () => {
+/**
+ * `case 'report'` が「合流窓へ積む／即配る」を分ける**前**に必ず書く日誌の行
+ * （`role: 'inbound'` の exchange）が書かれるのを待つ。
+ *
+ * **固定の待ち時間で待たない。** `#onEvent` は fire-and-forget（`void`）なので
+ * 何かを待つ必要が在るが、時間で待つと器が混んだときに取りこぼす——そして
+ * その取りこぼしは「畳まれた」と同じ観測（受信箱が空）になるので、**歯の赤が
+ * 何を意味するのか分からなくなる。** この行は積む側・配る側のどちらへ倒れても
+ * 書かれるので、待つ条件として使える（待ち時間の差が測定に混ざらない）。
+ */
+async function settledReport(stores: Stores, needle: string): Promise<void> {
+  await vi.waitFor(async () => {
+    const entries = await stores.journal.list({ types: ['exchange'] });
+    if (!entries.some((entry) => JSON.stringify(entry).includes(needle))) {
+      throw new Error(`report の日誌の行がまだ書かれていない: ${needle}`);
+    }
+  });
+  // 日誌の `await` が解けた直後の継続（積む／配る）を走らせる。
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/**
+ * `#flushSynthesizedNoticeFor` が書く「まとめて配った」の日誌の行数。
+ *
+ * **1件だけを畳んだ場合、受信箱の本文では畳んだことが分からない**
+ * （`mergeSynthesizedNoticeFragments` は1件のとき前置きを1文字も付けない）。
+ * **合流窓を通ったかどうかを外から見分けられるのは、この日誌の行だけである。**
+ */
+async function mergedJournalCount(stores: Stores): Promise<number> {
+  // flush の日誌は `void this.#journal(...)`（fire-and-forget）なので、
+  // 書き込みの継続を1度走らせてから数える。
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const entries = await stores.journal.list({ types: ['exchange'] });
+  return entries.filter((entry) => JSON.stringify(entry).includes('1件にまとめて配った')).length;
+}
+
+describe('機構合成の知らせが、合流窓の中で1件にまとまる', () => {
+  it('rate_limit / usage_notice / report(synthesized) / closed(failed) が1件になり、全文がすべて入っている', async () => {
     const { pool, inbox, fake } = await runningManualSetup();
     const before = reportsOf(inbox).length;
 
@@ -224,21 +266,28 @@ describe('4通の機構合成の知らせが、合流窓の中で1件にまと�
     // **受信箱イベントは1件だけ立つ。**
     expect(reports).toHaveLength(1);
     const text = reports[0]?.text ?? '';
-    // **4つの本文がすべて入っている（要約も間引きもしない）。**
+    // **届いた本文がすべて入っている（要約も間引きもしない）。**
     expect(text).toContain('枠から追い返された');
     expect(text).toContain("You've hit your individual spend limit for this account.");
     expect(text).toContain('失敗する前の本文');
     expect(text).toContain('マネージャーのセッションが落ちた: Error: 何か');
-    // **複数件をまとめたことが分かる前置きが付く。**
-    expect(text).toContain('4 件');
+    // **複数件をまとめたことが分かる前置きが付く。件数そのものは撃たない**
+    // ——同じ1つの枠落ちでも届く種類は回によって違う（依頼者の実測: 4通の
+    // 回と3通の回が在る）。**数を固定した歯は、種類が減った回に赤くなり、
+    // しかもそれは欠陥ではない。**
   });
 
   it('日誌に、畳んだ件数と内訳が残る', async () => {
     const { pool, stores, fake } = await runningManualSetup();
 
+    // **この歯が注ぎ込む本数。** 期待値をこの値から作り、数を直に書かない
+    // ——固定したいのは「届いた分と同じ数が記録に残る」ことであって、その数
+    // がいくつかではない（依頼者の訂正 2026-09-08）。
+    const injected = ['rate_limit', 'usage_notice', 'closed_failed'];
     fake.rateLimit('mgr-quota', { status: 'rejected', kind: 'five_hour' });
     fake.usageNotice('mgr-quota', { kind: 'reached', text: '上限に当たった' });
     fake.closed('mgr-quota', 'failed', '落ちた');
+    expect(injected).toHaveLength(3);
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     await pool.stop();
@@ -248,8 +297,8 @@ describe('4通の機構合成の知らせが、合流窓の中で1件にまと�
     expect(merged).toBeDefined();
     const joined = JSON.stringify(merged);
     expect(joined).toContain('mgr-quota');
-    // 3件（rate_limit / usage_notice / closed_failed）まとめた内訳。
-    expect(joined).toContain('3 件');
+    // 注ぎ込んだ本数（rate_limit / usage_notice / closed_failed）と内訳。
+    expect(joined).toContain(`${String(injected.length)} 件`);
     expect(joined).toContain('枠の遷移');
     expect(joined).toContain('利用上限の通知');
     expect(joined).toContain('セッションが落ちた');
@@ -259,6 +308,55 @@ describe('4通の機構合成の知らせが、合流窓の中で1件にまと�
       JSON.stringify(entry).includes('枠から追い返された'),
     );
     expect(rateLimitLine).toBeDefined();
+  });
+});
+
+/**
+ * **依頼者（クローン）の受信箱に実際に届いた2通を、そのまま歯にしたもの。**
+ * 出所はクローンの受信箱で、こちらで数え直したものではない——
+ * `mgr-5370a90d-89cb-4259-b460-707d2afbffd1` の1回のセッション上限から
+ * `2026-09-08T03:21:16.926Z` と `…16.942Z`、**間隔16ms**。
+ *
+ * **この標本が撃っているのは「代表を選べない」ことである。** 両方に
+ * `resets 3:50pm (Asia/Tokyo)` が在って同じ出来事だと外から分かるのに、
+ * **本文は同じではない**——1通目は「ターンが応答を返さずに終わった」という
+ * *ターンの結末*、2通目は「仕事が止まっている」という*委譲の状態*である。
+ * どちらかを落とすと、クローンはその区別を失う。
+ *
+ * **同時に「鍵は本文ではない」ことの裏づけでもある。** この2通は本文が違うので、
+ * 文字列を鍵にした畳みでは畳まれない。畳む鍵は「同じ出来事から出たか」
+ * （`report.synthesized` の欄と合流窓）であって、同じ文字列かではない。
+ */
+describe('実測の標本: 1つのセッション上限から16ms差で届いた2通', () => {
+  it('2通が1件にまとまり、両方の本文が全文そのまま読める', async () => {
+    const { pool, inbox, fake } = await runningManualSetup();
+    const before = reportsOf(inbox).length;
+
+    const resets = "You've hit your session limit · resets 3:50pm (Asia/Tokyo)";
+    // 1通目（逐語）: runner の `failedReportText` 経由 ＝ `synthesized` が立つ。
+    fake.report(
+      'mgr-quota',
+      `（このターンは応答を返さずに終わった: success/429 / result_is_error）${resets}`,
+      'done',
+      { failure: { code: 'rate_limit', via: 'result_is_error' }, synthesized: 'turn_failed' },
+    );
+    // 2通目（逐語）: `describeUsageNotice` が組み立てる合成文言。
+    fake.usageNotice('mgr-quota', { kind: 'reached', text: resets });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await pool.stop();
+
+    const reports = reportsOf(inbox).slice(before);
+    // **受信箱イベントは1件だけ立つ**（実測では2件立って、ターンが2本焼けた）。
+    expect(reports).toHaveLength(1);
+    const text = reports[0]?.text ?? '';
+    // **2通は別のことを言っているので、どちらも捨てない。**
+    expect(text).toContain('このターンは応答を返さずに終わった: success/429 / result_is_error');
+    expect(text).toContain('利用上限に当たった。この文言で仕事が止まっている');
+    // 2通に共通して在る reset 時刻は、まとめた1件でも読める。
+    expect(text).toContain('resets 3:50pm (Asia/Tokyo)');
+    // **まとめたことが分かる前置きは在る。件数は撃たない**（上の歯と同じ理由
+    // ——この出来事で届いたのは実測3通で、`rate_limit` は来ていない）。
+    expect(text).toContain('件の知らせをまとめた');
   });
 });
 
@@ -293,40 +391,50 @@ describe('同じ族が窓の中で2度目に来たら、前の積みを先に fl
   });
 });
 
+/**
+ * **「欄が無ければ畳まない」を撃つ2本。** どちらも `stop()` より**前**に
+ * 受信箱の件数を数える。
+ *
+ * **`stop()` の後に数えてはいけない。** 積まれた1件も `stop()` の flush で
+ * 届くうえ、1件のときは前置きが付かないので本文も同じになる——**畳んだ／
+ * 畳まなかったの区別が、受信箱からは消える。** だから区別が生きているうちに
+ * 件数を撃ち、経路そのものは `mergedJournalCount()`（合流窓の日誌の行）で
+ * もう一面から撃つ。
+ */
 describe('本人が書いた報告は畳まれない', () => {
   it('event.synthesized が無い（本人が書いた）report は即配られる', async () => {
-    const { pool, inbox, fake } = await runningManualSetup();
+    const { pool, stores, inbox, fake } = await runningManualSetup();
     const before = reportsOf(inbox).length;
 
     fake.report('mgr-quota', '本人が書いた報告', 'done');
+    await settledReport(stores, '本人が書いた報告');
 
-    const delivered = await vi.waitFor(() => {
-      const found = reportsOf(inbox).slice(before)[0];
-      if (found === undefined) throw new Error('まだ届いていない');
-      return found;
-    });
-    expect(delivered.text).toBe('本人が書いた報告');
+    // **`stop()` より前に、既に受信箱へ入っていること。** 畳まれていたら0件。
+    const delivered = reportsOf(inbox).slice(before);
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]?.text).toBe('本人が書いた報告');
     // **前置きが付かない（1件だから、まとめてすらいない）。**
-    expect(delivered.text).not.toContain('まとめた');
+    expect(delivered[0]?.text).not.toContain('まとめた');
+    // **合流窓を1度も通っていない。**
+    expect(await mergedJournalCount(stores)).toBe(0);
 
     await pool.stop();
   });
 
   it('旧 runner の形（synthesized 欄が無い failure 付き report）でも畳まれない——安全側', async () => {
-    const { pool, inbox, fake } = await runningManualSetup();
+    const { pool, stores, inbox, fake } = await runningManualSetup();
     const before = reportsOf(inbox).length;
 
     // 欄が無ければ「本人が書いた」として扱う。旧 runner はこの形で送ってくる。
     fake.report('mgr-quota', '失敗したが欄の無い旧 runner の報告', 'done', {
       failure: { code: 'billing_error', via: 'result_is_error' },
     });
+    await settledReport(stores, '失敗したが欄の無い旧 runner の報告');
 
-    const delivered = await vi.waitFor(() => {
-      const found = reportsOf(inbox).slice(before)[0];
-      if (found === undefined) throw new Error('まだ届いていない');
-      return found;
-    });
-    expect(delivered.text).toBe('失敗したが欄の無い旧 runner の報告');
+    const delivered = reportsOf(inbox).slice(before);
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]?.text).toBe('失敗したが欄の無い旧 runner の報告');
+    expect(await mergedJournalCount(stores)).toBe(0);
 
     await pool.stop();
   });
@@ -450,12 +558,14 @@ describe('1件だけのときは、まとめた前置きが1文字も載らな�
   });
 
   it('mergeSynthesizedNoticeFragments（純関数）: 複数件なら前置きと区切りが付き、順序を保つ', () => {
-    const result = mergeSynthesizedNoticeFragments([
+    const fragments = [
       { label: 'report_failed', text: '1つ目' },
       { label: 'rate_limit', text: '2つ目' },
       { label: 'usage_notice', text: '3つ目' },
-    ]);
-    expect(result.text).toContain('3 件');
+    ];
+    const result = mergeSynthesizedNoticeFragments(fragments);
+    // 数を直に書かず、渡した本数から作る（上の歯と同じ理由）。
+    expect(result.text).toContain(`${String(fragments.length)} 件`);
     const indexOf1 = result.text.indexOf('1つ目');
     const indexOf2 = result.text.indexOf('2つ目');
     const indexOf3 = result.text.indexOf('3つ目');

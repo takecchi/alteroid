@@ -2293,8 +2293,12 @@ interface SynthesizedNoticeWindow {
  * 自体は自分で数え直していない）:
  *
  * - **枠落ちの族**（`rate_limit` / `usage_notice` / `closed_failed` /
- *   `turn_failed` の4通）: 間隔はどれも1秒未満（1ms〜616ms）、全体で
- *   最大 855ms。
+ *   `turn_failed`）: 間隔はどれも1秒未満（1ms〜616ms）、全体で最大 855ms。
+ *   **通数は回によって違う。** セッション上限の1回では `turn_failed` /
+ *   `usage_notice` / `closed_failed` の**3通**で、`rate_limit` は来ていない
+ *   （実測 2026-09-08T03:21:16.926Z / .942Z / 17.312Z ——間隔 16ms → 370ms、
+ *   全体 386ms）。**だから通数を前提にした判定は置いていない**——畳む判定は
+ *   時刻の窓だけで、通数は日誌の内訳に記録するだけである。
  * - **委譲が器と一緒に失われた族**（`resume_fallback` / `resume_failed` /
  *   `closed_failed` の3通）: 間隔はもっと広く、`mgr-535826c7` は
  *   1→2 が1,124ms、全体で1,682ms。
