@@ -189,12 +189,21 @@ describe('落とした記録の跡', () => {
    * 出ない回の両方を1本のテストで押さえる。
    */
   it('worker_wait は自由文が無いので数値をそのまま載せる', () => {
+    // `byCause` の3値は必ず互いに異なる値にすること。キー↔値の結び付き
+    // （`byCause.input` が本当に `input` の値を読んでいるか）は、3つの値が
+    // 互いに違うときにしか測れない — 全部同じ値だと、結び付きを入れ替えても
+    // 出力の文字列は1文字も変わらず、値を揃えるリファクタが将来入ったら
+    // この歯が静かに抜ける。直下のアサーションで「互いに違うこと」自体を
+    // 固定する。
+    const byCause = { input: 1, notification: 3, continuation: 37 };
+    expect(new Set(Object.values(byCause)).size).toBe(3);
+
     const shape = journalEntryShape({
       type: 'worker_wait',
       openedAt: '2026-08-20T00:00:00.000Z',
       tasks: 5,
       turns: 41,
-      byCause: { input: 1, notification: 3, continuation: 37 },
+      byCause,
       toolless: 38,
       notifications: 3,
       submits: 0,
@@ -216,7 +225,7 @@ describe('落とした記録の跡', () => {
       openedAt: '2026-08-20T00:00:00.000Z',
       tasks: 5,
       turns: 41,
-      byCause: { input: 1, notification: 3, continuation: 37 },
+      byCause,
       toolless: 38,
       notifications: 3,
       submits: 0,
