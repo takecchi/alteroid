@@ -5782,6 +5782,37 @@ export function createCloneTools(context: ToolContext) {
                     `    いちばん古いゾンビ: ${describeZombieAge(tasks.oldestZombieSeconds)}`,
                   );
                 }
+                /*
+                 * **孤児プロセス木（#315 段0）。** ゾンビと同じで、**欄が無い runner
+                 * （古い版）や、走査が「読めなかった」で欠けた回では行そのものを出さない**
+                 * ——「0本だった」と「数えられなかった」を、ここで新しく混ぜない
+                 * （`runnerExecutionResourcesSchema` の `tasks.reclaim` の doc）。
+                 *
+                 * **`pids` を同じ行に並べる。** 候補の本数だけでは「効いた」を測れない
+                 * ——返るはずの量と、返る先の空きは組で読むものである。走査したのと
+                 * 同じ瞬間の値なので、上の `pids:` の行とは別に置く。
+                 *
+                 * `describeZombieAge` を使い回しているのは、書式（秒/分/時間/日 + 「前」）
+                 * が同じものだからである（ゾンビ専用の判断は1つも入っていない）。
+                 */
+                const { reclaim } = tasks;
+                if (reclaim !== undefined) {
+                  const age =
+                    reclaim.oldestAgeSec === undefined
+                      ? ''
+                      : `（いちばん古い ${describeZombieAge(reclaim.oldestAgeSec)}）`;
+                  const atScan =
+                    reclaim.pidsAtScan === undefined
+                      ? ''
+                      : `、走査時 pids ${reclaim.pidsAtScan.current}/${reclaim.pidsAtScan.max}`;
+                  const mode = reclaim.mode === 'observe' ? '観測のみ。撃たない' : '回収';
+                  lines.push(
+                    `    孤児（${mode}）: 候補 ${reclaim.candidates} 本 / ` +
+                      `${reclaim.candidateThreads} threads${age}${atScan}` +
+                      `、送出 ${reclaim.signalled} / 畳み ${reclaim.killed} / ` +
+                      `返却 ${reclaim.freedThreads} threads`,
+                  );
+                }
               }
             }
           }
