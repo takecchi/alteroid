@@ -628,6 +628,60 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
   });
 
   /**
+   * **`'human'` で閉じた場合も同じく畳む（ターンを1本も起こさない）。** これが
+   * 「畳む挙動は1文字も変えていない」の証拠になる —— `closedBy` の4状態を区別
+   * するようにした変更（`closedRedeliveryNotice`）は、畳むかどうかの判定
+   * （`#restoreUnread` / `#pump`）には触れていない。先頭の歯（`既に
+   * commitment_close で片付けていたら…`）を写し、第4引数だけ `'human'` に
+   * 変えてある。
+   *
+   * 加えて、畳んだ跡の日誌に「人間が既にこの合図を片付けている」が載ること
+   * まで見る —— 日誌が「クローンが閉じた」と決め打っていた欠陥（この PR の
+   * 主題）の修正が、実際に配り直しの経路まで通っている証拠である。
+   */
+  it('human で閉じていても同じくターンを1本も起こさず畳み、日誌には「人間が既にこの合図を片付けている」と載る', async () => {
+    const stores = createMemoryStores();
+
+    const dying = bootClone(stores, 'hang');
+    await idle();
+    dying.clone.post(
+      report('CLOSED-BY-HUMAN-REPORT 本文はこれだけ長くしておく', 'evt-closed-human'),
+    );
+    await waitFor(() => dying.inputs.length > 0, '合図が処理に入る');
+    await waitForCommitment(stores, 'evt-closed-human');
+
+    expect(
+      await stores.commitments.close(
+        'evt-closed-human',
+        '2026-08-02T00:00:00.000Z',
+        '人間が対応済みと判断した',
+        'human',
+      ),
+    ).toBe(true);
+
+    const reborn = bootClone(stores);
+    // 待ちの形とその理由は1本目の歯と同じ（消し込みを待つ）。
+    await waitForNoUnread(stores);
+    await reborn.clone.stop();
+
+    // **ターンは1本も起きていない。** closedBy が 'human' でも畳む挙動は変わらない。
+    expect(reborn.inputs).toEqual([]);
+
+    const journal = await stores.journal.list({ types: ['exchange'] });
+    const exchanges = journal.flatMap((entry) => (entry.type === 'exchange' ? [entry] : []));
+    const folded = exchanges.find((entry) => entry.text.includes('ターンを起こさずに畳んだ'));
+    const foldedText = folded?.text ?? '';
+    // **「クローンが閉じた」ではなく「人間が閉じた」と正しく書かれている。**
+    expect(foldedText).toContain('人間が既にこの合図を片付けている');
+    expect(foldedText).toContain('片付けた時刻（POST /commitments/:id/close）');
+    expect(foldedText).not.toContain('クローンは既にこの合図を片付けている');
+    expect(foldedText).toContain('2026-08-02T00:00:00.000Z');
+    expect(foldedText).toContain('人間が対応済みと判断した');
+
+    expect(await stores.inbox.claimPending()).toEqual([]);
+  });
+
+  /**
    * **落としやすいのは本文追記の側である。** 畳む枝は `#pump` に在るが、
    * `manager_message` / `external` の本文追記は `#handle` の型ごとの分岐に在った
    * ——素朴に `continue` すると、その追記だけが静かに消える。消えると
