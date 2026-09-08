@@ -63,10 +63,11 @@ afterEach(async () => {
   hosts = [];
 });
 
-/** `error` を投げるセッションを1本起こし、降りてきた `closed` を返す。 */
-async function closedAfterThrowing(
-  error: unknown,
-): Promise<Extract<RunnerEvent, { type: 'closed' }>> {
+/** `error` を投げる偽 SDK で host を1つ起こし、`closed` を待つ土台。 */
+function hostThatThrows(error: unknown): {
+  host: RunnerHost;
+  waitForClosed: () => Promise<Extract<RunnerEvent, { type: 'closed' }>>;
+} {
   const events: RunnerEvent[] = [];
   const host = createRunnerHost({
     runnerId: 'runner-713',
@@ -76,17 +77,57 @@ async function closedAfterThrowing(
     env: { PATH: '/usr/bin' },
   });
   hosts.push(host);
-  await host.start({ managerId: 'mgr-1', request: '最初の依頼', cwd: '/work/project' });
-
-  let closed: Extract<RunnerEvent, { type: 'closed' }> | undefined;
-  await vi.waitFor(() => {
-    closed = events.find(
-      (event): event is Extract<RunnerEvent, { type: 'closed' }> => event.type === 'closed',
-    );
+  const waitForClosed = async (): Promise<Extract<RunnerEvent, { type: 'closed' }>> => {
+    let closed: Extract<RunnerEvent, { type: 'closed' }> | undefined;
+    await vi.waitFor(() => {
+      closed = events.find(
+        (event): event is Extract<RunnerEvent, { type: 'closed' }> => event.type === 'closed',
+      );
+      if (closed === undefined) throw new Error('closed がまだ降りてきていない');
+    });
     if (closed === undefined) throw new Error('closed がまだ降りてきていない');
+    return closed;
+  };
+  return { host, waitForClosed };
+}
+
+/**
+ * 新規に開いたセッションが落ちた回の `closed`（`status: 'failed'`）。
+ *
+ * `start` は `#resumeAttempt` を立てないので `#recoverFromFailedResume` は必ず
+ * `'not-a-resume-failure'` を返し、catch は `failed` の枝へ倒れる。
+ */
+async function closedAfterThrowing(
+  error: unknown,
+): Promise<Extract<RunnerEvent, { type: 'closed' }>> {
+  const { host, waitForClosed } = hostThatThrows(error);
+  await host.start({ managerId: 'mgr-1', request: '最初の依頼', cwd: '/work/project' });
+  return waitForClosed();
+}
+
+/**
+ * **戻れないと確定した回の `closed`（`status: 'lost'`）。**
+ *
+ * catch から出る枝は2つあり（`failed` と `lost`）、**分類を渡す口も2つある。**
+ * 片方だけを測ると、もう片方から `{ systemError }` を落とす変更が緑のまま通る。
+ *
+ * `lost` へ倒すには `#recoverFromFailedResume` に `'unresumable'` を返させる ——
+ * `resume` で `#resumeAttempt` を立て、一度も手が動かないうちに例外を出し、
+ * **引き継ぎ先を作る材料（`entries`）を渡さない**（`renderSessionLog` が `null` を
+ * 返す）。
+ */
+async function lostAfterThrowing(
+  error: unknown,
+): Promise<Extract<RunnerEvent, { type: 'closed' }>> {
+  const { host, waitForClosed } = hostThatThrows(error);
+  await host.resume({
+    managerId: 'mgr-1',
+    sessionId: 'sess-dead',
+    cwd: '/work/project',
+    request: '最初の依頼',
+    message: '続きの一言',
   });
-  if (closed === undefined) throw new Error('closed がまだ降りてきていない');
-  return closed;
+  return waitForClosed();
 }
 
 /**
@@ -153,6 +194,31 @@ describe('落ちた理由の分類が、判定できる形で closed に載る�
     // **daemon の境界を通した後も付いていない。** ここを見ないと、
     // スキーマの既定値や `catch` の埋め合わせで復活したことに気づけない。
     const delivered = throughDaemonBoundary(closed);
+    expect(Object.hasOwn(delivered, 'systemError')).toBe(false);
+    expect(delivered.systemError).toBeUndefined();
+  });
+
+  it('lost（戻れないと確定した回）にも同じ分類が乗る（枝を片方だけ測らない）', async () => {
+    const closed = await lostAfterThrowing(eagainSpawnError());
+    const delivered = throughDaemonBoundary(closed);
+
+    // **前提の確認。** ここが `failed` になっていたら、この歯は `lost` の枝を
+    // 一度も通っていない ＝ 何も測っていない。
+    expect(delivered.status).toBe('lost');
+    expect(delivered.systemError).toEqual({
+      code: 'EAGAIN',
+      errno: -11,
+      syscall: 'spawn /app/node_modules/.bin/claude',
+    });
+    // `lost` の `reason` は `String(error)` そのままで、`failed` の定型文で
+    // 包まれない。**こちらも1文字も変えていない。**
+    expect(delivered.reason).toBe('Error: spawn /app/node_modules/.bin/claude EAGAIN');
+  });
+
+  it('lost でも、code を持たない例外では欄そのものが付かない', async () => {
+    const delivered = throughDaemonBoundary(await lostAfterThrowing(new Error('何か')));
+
+    expect(delivered.status).toBe('lost');
     expect(Object.hasOwn(delivered, 'systemError')).toBe(false);
     expect(delivered.systemError).toBeUndefined();
   });
