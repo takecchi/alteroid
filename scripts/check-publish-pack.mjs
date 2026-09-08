@@ -34,6 +34,7 @@ import {
   findWorkspaceProtocolViolations,
   findMissingEntryPoints,
   findOrphanedSourceMaps,
+  findLicenseViolations,
 } from "./publish-pack-checks.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -49,7 +50,7 @@ const PUBLISH_TARGETS = [
 
 /**
  * 判定関数（`findWorkspaceProtocolViolations` / `findMissingEntryPoints` /
- * `findOrphanedSourceMaps`）の本体は `./publish-pack-checks.mjs` にある。
+ * `findOrphanedSourceMaps` / `findLicenseViolations`）の本体は `./publish-pack-checks.mjs` にある。
  * ここに実装を持たないのは、`scripts/__tests__/check-publish-pack.test.mjs` が
  * `pnpm pack` を一切走らせずに合成フィクスチャへ直接それらを呼べるようにするため
  * （`publish-pack-checks.mjs` 冒頭のコメント参照）。
@@ -101,6 +102,7 @@ console.log(
     "    4. README.md が tarball に入っていること",
     '    5. publishConfig.access が "public" であること',
     "    6. 宙に浮いた source map（*.map の sources が tarball 内に無い）が無いこと",
+    '    7. license が "MIT" であり、LICENSE ファイルが tarball に入っていること（ADR 0061）',
     BANNER,
     "",
   ].join("\n"),
@@ -181,6 +183,12 @@ try {
     const orphanedMaps = findOrphanedSourceMaps(packageDir);
     for (const o of orphanedMaps) {
       violations.push(`[${target.name}] 宙に浮いた source map: ${o}`);
+    }
+
+    // 7. license（ADR 0061）
+    const licenseViolations = findLicenseViolations(manifest, packageDir);
+    for (const l of licenseViolations) {
+      violations.push(`[${target.name}] ${l}`);
     }
   }
 

@@ -8,6 +8,7 @@ import {
   findWorkspaceProtocolViolations,
   findMissingEntryPoints,
   findOrphanedSourceMaps,
+  findLicenseViolations,
 } from "../publish-pack-checks.mjs";
 
 /**
@@ -50,6 +51,18 @@ describe("publish 対象4パッケージの package.json（静的）", () => {
 
       it("publishConfig.access が public", () => {
         expect(manifest.publishConfig?.access).toBe("public");
+      });
+
+      /**
+       * ⚠ これは作業ツリーの package.json を読むだけの静的な歯であり、
+       * 「使う人が受け取る tarball に MIT の LICENSE が実際に入っているか」までは
+       * 測っていない。それは下の「本物どおり起動すると EXIT=0 になる」歯
+       * （`findLicenseViolations` を tarball 展開後の manifest に対して呼ぶ経路）が測る。
+       * この歯はその代わりではなく、作業ツリー側の設定漏れを早く落とすための補助である
+       * （ADR 0061）。
+       */
+      it("license が MIT である（UNLICENSED 等の他の値ではない）", () => {
+        expect(manifest.license).toBe("MIT");
       });
 
       it("engines.node が設定されている", () => {
@@ -232,6 +245,65 @@ describe("publish-pack-checks.mjs の判定関数（合成フィクスチャに�
       expect(orphans).toHaveLength(1);
       expect(orphans[0]).toContain("index.d.ts.map");
       expect(orphans[0]).toContain("../src/index.ts");
+    });
+  });
+
+  describe("findLicenseViolations（ADR 0061）", () => {
+    /** @type {string | undefined} */
+    let fixtureDir;
+
+    afterEach(() => {
+      if (fixtureDir) {
+        rmSync(fixtureDir, { recursive: true, force: true });
+        fixtureDir = undefined;
+      }
+    });
+
+    it("license が MIT かつ LICENSE が実在すれば検出しない", () => {
+      fixtureDir = mkdtempSync(join(tmpdir(), "publish-pack-checks-license-ok-"));
+      writeFileSync(join(fixtureDir, "LICENSE"), "MIT License\n");
+
+      expect(findLicenseViolations({ license: "MIT" }, fixtureDir)).toEqual([]);
+    });
+
+    it("license が UNLICENSED なら検出する（LICENSE ファイルの有無に関わらず）", () => {
+      fixtureDir = mkdtempSync(join(tmpdir(), "publish-pack-checks-license-unlicensed-"));
+      writeFileSync(join(fixtureDir, "LICENSE"), "MIT License\n");
+
+      const violations = findLicenseViolations({ license: "UNLICENSED" }, fixtureDir);
+      expect(violations).toHaveLength(1);
+      expect(violations[0]).toContain("MIT");
+      expect(violations[0]).toContain("UNLICENSED");
+    });
+
+    /**
+     * 「`UNLICENSED` でないこと」だけを見る弱い歯だと、隣の値（`Apache-2.0` 等）を
+     * 通してしまう。オーナーが選んだのは MIT そのものである（ADR 0061）ため、
+     * `MIT` との等値で検査する——この歯はその等値検査が実際に隣の値を落とすことを測る。
+     */
+    it("license が Apache-2.0 なら検出する（隣の値を通さない）", () => {
+      fixtureDir = mkdtempSync(join(tmpdir(), "publish-pack-checks-license-apache-"));
+      writeFileSync(join(fixtureDir, "LICENSE"), "Apache License\n");
+
+      const violations = findLicenseViolations({ license: "Apache-2.0" }, fixtureDir);
+      expect(violations).toHaveLength(1);
+      expect(violations[0]).toContain("Apache-2.0");
+    });
+
+    it("LICENSE ファイルが無ければ検出する（license フィールドが MIT でも）", () => {
+      fixtureDir = mkdtempSync(join(tmpdir(), "publish-pack-checks-license-missing-file-"));
+      // LICENSE を意図して作らない。
+
+      const violations = findLicenseViolations({ license: "MIT" }, fixtureDir);
+      expect(violations).toHaveLength(1);
+      expect(violations[0]).toContain("LICENSE ファイルが tarball に入っていません");
+    });
+
+    it("license も LICENSE も両方欠けていれば2件検出する", () => {
+      fixtureDir = mkdtempSync(join(tmpdir(), "publish-pack-checks-license-both-missing-"));
+
+      const violations = findLicenseViolations({ license: "UNLICENSED" }, fixtureDir);
+      expect(violations).toHaveLength(2);
     });
   });
 });

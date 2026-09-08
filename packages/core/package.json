@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "description": "mnemora の core パッケージ。zod 以外の実行時依存を持たない。interface / 型 / 純関数の既定戦略。",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "homepage": "https://github.com/takecchi/mnemora/tree/main/packages/core#readme",
   "bugs": {
     "url": "https://github.com/takecchi/mnemora/issues"

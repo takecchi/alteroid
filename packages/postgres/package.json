@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "description": "MemoryStore / VectorStore / EventStore の Postgres + pgvector 実装（docs/memory-model.md §10）。",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "homepage": "https://github.com/takecchi/mnemora/tree/main/packages/postgres#readme",
   "bugs": {
     "url": "https://github.com/takecchi/mnemora/issues"

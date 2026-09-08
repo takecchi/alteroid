@@ -68,6 +68,34 @@ export function findFiles(dir, predicate, out = []) {
 }
 
 /**
+ * `license` が `MIT` であること、`LICENSE` ファイルが tarball 内（に相当するディレクトリ）に
+ * 実在することを調べる（ADR 0061）。
+ *
+ * **なぜ「`UNLICENSED` でないこと」ではなく「`MIT` と等しいこと」を見るか**: 前者は
+ * `Apache-2.0` のような隣の値もそのまま通してしまう弱い歯になる。オーナーは MIT を
+ * 名指しで選んでいる（ADR 0061 逐語）——ここで検査したいのは「publish 可能な何らかの値」
+ * ではなく「選んだ値そのもの」である。
+ *
+ * **なぜ作業ツリーの `package.json` ではなく `manifest`（呼び出し側が tarball を展開して
+ * 読んだもの）を受け取るか**: `license` フィールドが作業ツリーで `MIT` でも、`files` の
+ * 絞り込みや `.npmignore` 相当の設定次第では、使う人が実際に受け取る tarball の中身は
+ * 別物でありうる。**このモジュールの他の関数（`findMissingEntryPoints` 等）と同じく、
+ * 呼び出し側が「pack して展開した実体」を渡す前提に揃えている。**
+ */
+export function findLicenseViolations(manifest, packageDir) {
+  const violations = [];
+  if (manifest.license !== "MIT") {
+    violations.push(`license が "MIT" ではありません: ${JSON.stringify(manifest.license)}`);
+  }
+  try {
+    statSync(join(packageDir, "LICENSE"));
+  } catch {
+    violations.push("LICENSE ファイルが tarball に入っていません");
+  }
+  return violations;
+}
+
+/**
  * tarball 内（に相当するディレクトリ）の `*.map` のうち、`sources` がそのディレクトリ内に
  * 実在しない相対パスを指しているものを集める（「宙に浮いた source map」）。
  *

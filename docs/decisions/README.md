@@ -72,3 +72,4 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0057](./0057-dedicated-schema-namespace.md) | mnemora のオブジェクトを置くスキーマを、使う側が指定できるようにする — DML は `search_path`、DDL と存在検査は明示修飾 | 採用 (2026-09) |
 | [0058](./0058-measure-the-time-term-in-a-separate-arm.md) | 時間項（`freshness` / `decay`）は、既存の probe set を書き換えずに別 arm で分離して測る — `probe-set.ts` に `occurredAt` を書き込まない | 採用 (2026-09) |
 | [0060](./0060-publish-with-pnpm-four-packages-at-0-1-0.md) | npm へ出すのは4パッケージだけ・初回は `0.1.0`・梱包の道具は pnpm に統一する（ライセンスと `private` 解除は対象外） | 採用 (2026-09) |
+| [0061](./0061-license-mit.md) | ライセンスを MIT にする — オーナーの決定、6パッケージの `license` と LICENSE の配布、tarball の側から検査する門（`private` 解除は対象外） | 採用 (2026-09) |

@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "description": "roadmap.md 段階7「サンプル」。observe → recall の往復と、経路A（naive）/経路B（mnemora）の焼かれる量の比較を実演する CLI サンプル。",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "test:db": "vitest run",
