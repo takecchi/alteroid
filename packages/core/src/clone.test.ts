@@ -12029,3 +12029,127 @@ describe('クローン — 定期の棚卸し（scheduled な蒸留）', () => {
     await s.clone.stop();
   });
 });
+
+/**
+ * ⭐ 要約に潰された後、記憶の索引を丸ごと載せ直す（Issue #696）。
+ *
+ * ## 何が壊れていたか
+ *
+ * 記憶の焼き込みはセッションを組むときに1回だけ行われる。以後の変化は
+ * **差分**として会話へ載るので「構築時点の索引 ＋ 差分 ＝ 現在」で揃っている
+ * ——**compaction までは。** 要約に潰されると差分もその中へ畳まれ、確実に
+ * 残るのは構築時点の索引だけになる。本番のクローンは6日間1セッションのまま
+ * だったので、**6日前の索引を「現在の記憶」として読み続けていた。**
+ *
+ * ## 測るのは「潰された後に全体が載ること」と「その回だけであること」
+ *
+ * 全体が載るのは高い（索引は2万トークン級）ので、**毎ターン載ってはいけない。**
+ * だから3本で挟む —— 載ること／次のターンには載らないこと／潰されていない
+ * ときは差分のままであること。
+ */
+describe('クローン — 要約に潰された後の索引の載せ直し（#696）', () => {
+  /** 節を持つ premise 2本。索引に見出しが出るので「全体か差分か」が行で見分けられる。 */
+  async function twoPremises(): Promise<Stores> {
+    const stores = createMemoryStores();
+    await stores.persona.write(
+      'values',
+      '---\ntype: premise\ndescription: 価値観の要旨\n---\n## VALUES-HEAD\n本文\n',
+    );
+    await stores.persona.write(
+      'habits',
+      '---\ntype: premise\ndescription: 習慣の要旨\n---\n## HABITS-HEAD\n本文\n',
+    );
+    return stores;
+  }
+
+  async function firePreCompact(s: Setup): Promise<void> {
+    const main = s.calls[0] as FakeCall;
+    const dir = await mkdtemp(join(tmpdir(), 'alteroid-index-refresh-'));
+    const transcriptPath = join(dir, 'transcript.jsonl');
+    await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
+    const preCompact = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
+    if (preCompact === undefined) throw new Error('PreCompact フックが登録されていない');
+    await preCompact(
+      { session_id: 'sess-fake', transcript_path: transcriptPath } as never,
+      undefined,
+      { signal: new AbortController().signal } as never,
+    );
+  }
+
+  it('⭐ 潰された次のターンでは、変わっていない文書も含めて索引の全体が載る', async () => {
+    const s = setup(undefined, await twoPremises());
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    await firePreCompact(s);
+
+    const events: ChatStreamEvent[] = [];
+    s.clone.subscribe('conv-2', (event) => events.push(event));
+    s.clone.post(humanMessage('2回目', 'conv-2'));
+    await waitForDone(events);
+
+    const input = (s.calls[0] as FakeCall).inputs[1] ?? '';
+    // 潰されたことと、下が新しいことを言う。
+    expect(input).toContain('この会話の文脈が要約に潰された');
+    expect(input).toContain('いまの索引を丸ごと載せ直す');
+    // **1文字も記憶を触っていないのに、両方の索引が載る**（差分なら0件で何も載らない）。
+    expect(input).toContain('## VALUES-HEAD');
+    expect(input).toContain('## HABITS-HEAD');
+    // 本文は載らない（カードの約束は変わっていない）。
+    expect(input).toContain('memory_section_read');
+
+    await s.clone.stop();
+  });
+
+  it('⭐ 載せ直すのはその回だけ。次のターンには載らない（毎ターン2万トークンを払わない）', async () => {
+    const s = setup(undefined, await twoPremises());
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    await firePreCompact(s);
+
+    const second: ChatStreamEvent[] = [];
+    s.clone.subscribe('conv-2', (event) => second.push(event));
+    s.clone.post(humanMessage('2回目', 'conv-2'));
+    await waitForDone(second);
+
+    const third: ChatStreamEvent[] = [];
+    s.clone.subscribe('conv-3', (event) => third.push(event));
+    s.clone.post(humanMessage('3回目', 'conv-3'));
+    await waitForDone(third);
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    expect(inputs[1] ?? '').toContain('要約に潰された');
+    // 3ターン目には印が下りている。
+    expect(inputs[2] ?? '').not.toContain('要約に潰された');
+    expect(inputs[2] ?? '').not.toContain('## HABITS-HEAD');
+
+    await s.clone.stop();
+  });
+
+  it('⭐ 潰されていないときは差分のまま（空振りしていないことの対照）', async () => {
+    const stores = await twoPremises();
+    const s = setup(undefined, stores);
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    // values だけを直す。habits は1文字も触らない。
+    await stores.persona.write(
+      'values',
+      '---\ntype: premise\ndescription: 価値観の要旨\n---\n## VALUES-HEAD-NEW\n本文\n',
+    );
+
+    const events: ChatStreamEvent[] = [];
+    s.clone.subscribe('conv-2', (event) => events.push(event));
+    s.clone.post(humanMessage('2回目', 'conv-2'));
+    await waitForDone(events);
+
+    const input = (s.calls[0] as FakeCall).inputs[1] ?? '';
+    expect(input).not.toContain('要約に潰された');
+    expect(input).toContain('## VALUES-HEAD-NEW');
+    // 触っていない文書は載らない（＝全体を載せる枝へ落ちていない）。
+    expect(input).not.toContain('## HABITS-HEAD');
+
+    await s.clone.stop();
+  });
+});

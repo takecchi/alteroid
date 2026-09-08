@@ -903,6 +903,50 @@ class Clone implements CloneHost {
    */
   #contextWindowFoldNoticePending = false;
 
+  /**
+   * **要約に潰されたので、次のターンで記憶の索引を丸ごと載せ直す**（Issue #696）。
+   *
+   * ## なぜ要るのか — 差分は compaction を越えられない
+   *
+   * 記憶の焼き込みは `#buildOptions` が**セッションを組むときに1回だけ**行う。
+   * ⟹ システムプロンプトの「現在の記憶」は、そのセッションの構築時点の索引で
+   * 固定される。以後の変化は `#withFreshMemory` が**差分**として会話へ載せる
+   * ので、**構築時点の索引 ＋ その後の差分の積み重ね ＝ 現在**であり、そこまでは
+   * 揃っている。
+   *
+   * **揃っていないのは compaction の後である。** 会話が要約に潰されると、
+   * 載せた差分もその要約の中へ畳まれる（残っているとは限らない）。⟹ クローンの
+   * 手元に確実に残るのは**構築時点の索引だけ**になり、それはセッションが長く
+   * 走るほど古い。本番の実測（2026-09-08）では、クローンのセッションが
+   * 2026-09-02 から6日間1本のままで、**6日前の索引を「現在の記憶」として
+   * 読み続けていた。**
+   *
+   * ## ⚠️ セッションを組み直す形は採らなかった（費用で落ちる）
+   *
+   * Issue #696 に書いた当ては「ターンの境界でセッションを `resume` 付きで
+   * 組み直す」（`#recycleForToken` の3段に相乗りする）だった。**測ってやめた** ——
+   * システムプロンプトはプロンプトキャッシュの**接頭辞**なので、そこを差し替えると
+   * **その後ろの文脈が全部キャッシュから外れる。** 実測の文脈は 50〜95万トークン級
+   * なので、組み直し1回でキャッシュの書き直しが同じだけ発生する。いまの実測の
+   * 1ターンは約 $1.3 であり、**組み直しはその数倍を1回で払う。**
+   *
+   * ⟹ **索引を会話へ1回載せ直すほうが桁で安い**（索引は約3万文字 ＝ 2万トークン級で、
+   * しかも接頭辞を壊さないので後ろのキャッシュが生きたまま）。**そして直したい
+   * ものは同じである** —— クローンの手元にある索引が古いこと、そのものである。
+   *
+   * ## 立てるのは `#onPreCompact`、下ろすのは `#withFreshMemory` と `#buildOptions`
+   *
+   * - **立てる**: compaction が起きる直前（フックの入口。退避や蒸留が落ちても立つ）
+   * - **下ろす**: 次の `#withFreshMemory`（載せた回）。**載せるものが無くても
+   *   下ろす** —— 残すと、記憶が動くまで印が残って無関係な更新に相乗りする
+   * - **下ろす**: `#buildOptions`（セッションを組み直した回）。そこは焼き込みが
+   *   最新なので、載せ直す意味が無い
+   *
+   * **永続化しない。** 器が落ちれば失われるが、そのとき次の起動は
+   * `#buildOptions` が最新の索引を焼くので、**印が消えても困らない。**
+   */
+  #memoryIndexRefreshPending = false;
+
   readonly #inbox = new Inbox();
   readonly #listeners = new Map<string, Set<Listener>>();
   /** 受信箱に積んだイベントの処理完了を待つための約束。 */
@@ -4540,7 +4584,13 @@ class Clone implements CloneHost {
     const resumeNotice = this.#resumedHistoryHasMemory ? RESUMED_MEMORY_NOTICE : null;
     this.#resumedHistoryHasMemory = false;
 
-    if (changed.length === 0 && removed.length === 0) {
+    // **要約に潰された直後は、索引を丸ごと載せ直す**（`#memoryIndexRefreshPending`）。
+    // **印は載せ直すものが無くても下ろす** —— 下ろさないと、記憶が動くまで印が
+    // 残り続け、何ターンも先の無関係な更新に相乗りして載る。
+    const refreshIndex = this.#memoryIndexRefreshPending;
+    this.#memoryIndexRefreshPending = false;
+
+    if (!refreshIndex && changed.length === 0 && removed.length === 0) {
       return resumeNotice === null ? text : [resumeNotice, '', '---', '', text].join('\n');
     }
 
@@ -4554,21 +4604,30 @@ class Clone implements CloneHost {
     this.#memoryOnRecord.clear();
     for (const doc of documents) this.#memoryOnRecord.set(doc.slug, doc.content);
 
-    const head =
-      '[system] 記憶が更新された（人間が直接書き換えたか、あなた自身が更新した）。' +
-      '**変わった文書だけを載せる。ここに出ていない文書は変わっていない。**' +
-      '載っている文書も、大きく変わっていなければ**変わった範囲だけ**が載る' +
-      '（省いた側は行数と文字数で名乗ってある）。' +
-      'システムプロンプトの「現在の記憶」は**このセッションを組んだ時点の索引**（要旨と節の目次）であり、' +
-      'それに続けてこれらの差分を当てたものが現在の索引である。' +
-      '**節の本文はどこにも載っていない——要るなら `memory_section_read` で開くこと。**';
+    const head = refreshIndex
+      ? '[system] この会話の文脈が要約に潰された。**それまでに載せた記憶の差分も、その要約の中へ' +
+        '畳まれている**（残っているとは限らない）。だから**いまの索引を丸ごと載せ直す** —— ' +
+        '下に在るのが現在の記憶の全体（要旨と節の目次）であり、システムプロンプト側の' +
+        '「現在の記憶」より新しい。食い違ったら下を採ること。' +
+        '**節の本文はどこにも載っていない——要るなら `memory_section_read` で開くこと。**'
+      : '[system] 記憶が更新された（人間が直接書き換えたか、あなた自身が更新した）。' +
+        '**変わった文書だけを載せる。ここに出ていない文書は変わっていない。**' +
+        '載っている文書も、大きく変わっていなければ**変わった範囲だけ**が載る' +
+        '（省いた側は行数と文字数で名乗ってある）。' +
+        'システムプロンプトの「現在の記憶」は**このセッションを組んだ時点の索引**（要旨と節の目次）であり、' +
+        'それに続けてこれらの差分を当てたものが現在の索引である。' +
+        '**節の本文はどこにも載っていない——要るなら `memory_section_read` で開くこと。**';
 
     return [
       ...(resumeNotice === null ? [] : [resumeNotice, '']),
       head,
-      ...(changed.length === 0
-        ? []
-        : ['', renderMemoryDocuments(changed, { presentInMemory: documents, seenContent })]),
+      // **索引の載せ直しは `seenContent` を渡さない**（差分ではなく全体を描く）。
+      // 渡すと「変わった範囲だけ」に縮み、潰された分を埋める役に立たない。
+      ...(refreshIndex
+        ? ['', renderMemoryDocuments(documents)]
+        : changed.length === 0
+          ? []
+          : ['', renderMemoryDocuments(changed, { presentInMemory: documents, seenContent })]),
       ...(removed.length === 0
         ? []
         : [
@@ -4704,6 +4763,10 @@ class Clone implements CloneHost {
     for (const doc of documents) this.#memoryOnRecord.set(doc.slug, doc.content);
     // 履歴に前のセッションの載せ直しが残っているのは resume のときだけである。
     this.#resumedHistoryHasMemory = resume !== null;
+    // **セッションを組んだ回は、焼き込みが最新である。** 前のセッションで
+    // 立った印を持ち越すと、載せる必要が無い索引をもう一度会話へ積む
+    // （`#memoryIndexRefreshPending` の doc「下ろすのは …と `#buildOptions`」）。
+    this.#memoryIndexRefreshPending = false;
 
     const systemPrompt = buildCloneSystemPrompt({
       memory,
@@ -5102,6 +5165,12 @@ class Clone implements CloneHost {
       session_id?: string;
       transcript_path?: string;
     };
+
+    // **いちばん先に印を立てる**（`#memoryIndexRefreshPending`）。compaction は
+    // このフックが何を返しても起きるので、生ログのパスが取れない回でも
+    // 「潰された」ことは真である。**退避や蒸留の try より前に置く** ——
+    // あちらが落ちても、索引の載せ直しは行われなければならない。
+    this.#memoryIndexRefreshPending = true;
 
     if (typeof transcriptPath !== 'string' || transcriptPath.length === 0) {
       return { continue: true };
