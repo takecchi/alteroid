@@ -3247,7 +3247,7 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
           s.inbox
             .filter((event) => event.type === 'manager_message')
             .some((event) => (event as { text: string }).text.includes('戻せなかった')),
-        { timeout: 2000 },
+        { timeout: 4000 },
       )
       .toBe(true);
 
@@ -3505,11 +3505,18 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
       .toContain('スキーマまで書いた');
     expect((s.opened[1]?.inputs ?? []).join('\n')).toContain('DB の移行をやって');
 
-    // クローンは「前のセッションからは戻れなかった」ことを知る（黙って続けない）
-    const notice = s.inbox.find(
-      (event) => event.type === 'manager_message' && event.text.includes('生ログ'),
-    );
-    expect(notice).toBeDefined();
+    // クローンは「前のセッションからは戻れなかった」ことを知る（黙って続けない）。
+    // **`#notifyResumeFallback` は合流窓（既定3000ms）に積まれるので、
+    // 直接の `.find()` ではなく `expect.poll` で待つ**（「一枠落ち一合図」）。
+    await expect
+      .poll(
+        () =>
+          s.inbox.find(
+            (event) => event.type === 'manager_message' && event.text.includes('生ログ'),
+          ),
+        { timeout: 4000 },
+      )
+      .toBeDefined();
 
     await s.pool.stop();
   });
@@ -3536,7 +3543,7 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
           s.inbox.find(
             (event) => event.type === 'manager_message' && event.text.includes('生ログ'),
           ),
-        { timeout: 2000 },
+        { timeout: 4000 },
       )
       .toBeDefined();
     const notice = s.inbox.find(
@@ -3576,7 +3583,7 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
           s.inbox.find(
             (event) => event.type === 'manager_message' && event.text.includes('戻せなかった'),
           ),
-        { timeout: 2000 },
+        { timeout: 4000 },
       )
       .toBeDefined();
     const notice = s.inbox.find(
@@ -3616,7 +3623,7 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
           s.inbox.find(
             (event) => event.type === 'manager_message' && event.text.includes('戻せなかった'),
           ),
-        { timeout: 2000 },
+        { timeout: 4000 },
       )
       .toBeDefined();
     const notice = s.inbox.find(
@@ -3662,7 +3669,7 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
           s.inbox.find(
             (event) => event.type === 'manager_message' && event.text.includes('戻せなかった'),
           ),
-        { timeout: 2000 },
+        { timeout: 4000 },
       )
       .toBeDefined();
     const notice = s.inbox.find(
@@ -3711,7 +3718,7 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
           s.inbox.find(
             (event) => event.type === 'manager_message' && event.text.includes('落ちた'),
           ),
-        { timeout: 2000 },
+        { timeout: 4000 },
       )
       .toBeDefined();
     expect(s.opened.filter((entry) => entry.resume === undefined)).toHaveLength(0);
@@ -3739,7 +3746,7 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
           first.inbox.find(
             (event) => event.type === 'manager_message' && event.text.includes('戻せなかった'),
           ),
-        { timeout: 2000 },
+        { timeout: 4000 },
       )
       .toBeDefined();
     await first.pool.stop();
@@ -3814,7 +3821,7 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
           s.inbox.find(
             (event) => event.type === 'manager_message' && event.text.includes('戻せなかった'),
           ),
-        { timeout: 2000 },
+        { timeout: 4000 },
       )
       .toBeDefined();
 
@@ -7108,7 +7115,10 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
     // **`statusNow` は3回とも付く。** これが状態で回すための材料である。
     expect(seen.map((o) => o.statusNow)).toEqual(['rejected', 'rejected', 'rejected']);
 
-    // **知らせの側は1回だけ**（畳みは1文字も変えていない）。
+    // **知らせの側は機構が合成した知らせの合流窓（既定3000ms）に積まれるので、
+    // `stop()` で flush してから数える**（「一枠落ち一合図」。`stop()` は
+    // 残っている積みを必ず配り切る）。
+    await s.pool.stop();
     const reports = s.inbox.filter(
       (event) => event.type === 'manager_message' && event.kind === 'report',
     );
@@ -7139,13 +7149,13 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
       overageDisabledReason: 'out_of_credits `rm -rf /`',
     });
 
-    const report = await vi.waitFor(() => {
-      const found = s.inbox.find(
-        (event) => event.type === 'manager_message' && event.kind === 'report',
-      ) as { text: string } | undefined;
-      if (found === undefined) throw new Error('報告がまだ届いていない');
-      return found;
-    });
+    // **知らせは合流窓（既定3000ms）に積まれるので、`stop()` で flush してから
+    // 読む**（「一枠落ち一合図」。`stop()` は残っている積みを必ず配り切る）。
+    await s.pool.stop();
+    const report = s.inbox.find(
+      (event) => event.type === 'manager_message' && event.kind === 'report',
+    ) as { text: string } | undefined;
+    if (report === undefined) throw new Error('報告が届いていない');
 
     // 中身の最長のバッククォートの連なりは1本なので、包みは2本のはず。末尾が
     // バッククォートの値は、CommonMark に取り除かれないよう両端に空白も足される
@@ -7154,8 +7164,6 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
     expect(report.text).toContain('`` out_of_credits `rm -rf /` ``');
     // 定型文（デーモンの prose）はそのまま残っている。
     expect(report.text).toContain('**まだ動くが、この先で止まる。**');
-
-    await s.pool.stop();
   });
 
   /**
@@ -7198,18 +7206,16 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
     // で `rejected` 遷移を起こす。
     await s.sessions[0]!.rateLimit({ status: 'rejected' });
 
-    const report = await vi.waitFor(() => {
-      const found = s.inbox.find(
-        (event) => event.type === 'manager_message' && event.kind === 'report',
-      ) as { text: string } | undefined;
-      if (found === undefined) throw new Error('報告がまだ届いていない');
-      return found;
-    });
+    // **知らせは合流窓（既定3000ms）に積まれるので、`stop()` で flush してから
+    // 読む**（「一枠落ち一合図」。`stop()` は残っている積みを必ず配り切る）。
+    await s.pool.stop();
+    const report = s.inbox.find(
+      (event) => event.type === 'manager_message' && event.kind === 'report',
+    ) as { text: string } | undefined;
+    if (report === undefined) throw new Error('報告が届いていない');
 
     expect(report.text).toContain('（枠）');
     expect(report.text).not.toContain('（`枠`）');
-
-    await s.pool.stop();
   });
 
   it('⚠️ 身元は「セッションが起きたとき」のもの。観測のたびに読み直さない', async () => {
