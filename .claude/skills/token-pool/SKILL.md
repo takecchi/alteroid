@@ -83,14 +83,14 @@ curl -X PUT http://127.0.0.1:4517/tokens \
 
 **契機（日誌の `reason`。数え上げの持ち主は `packages/core/src/schema.ts` の `token_rotation.reason` の `z.enum`）:**
 
-| `reason`           | 何で鳴るか                                                                                                                    |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
-| `tick`             | 見張りの目盛り（60秒）。**冷却明けもここで拾う**                                                                              |
-| `startup`          | デーモンが起きた直後の1回（引き取り＝`restore()` の**後**）                                                                   |
-| `pool_changed`     | `PUT /tokens`（＝ `alteroid token add` / `remove` / `disable` / `enable` / 並べ替え）                                         |
-| `settings_changed` | `PUT /tokens/policy`（＝ `alteroid token policy`）                                                                            |
-| `runner_connected` | runner が載った / 器が入れ替わった                                                                                            |
-| `account_probe`    | **枠の probe が現役を測った**（既定は5分ごと。`unavailable` の理由によっては30分。`apps/daemon/src/usage-poller.ts`）。下の節 |
+| `reason`           | 何で鳴るか                                                                                                                                                                                                                                             |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `tick`             | 見張りの目盛り（60秒）。**冷却明けもここで拾う**                                                                                                                                                                                                       |
+| `startup`          | デーモンが起きた直後の1回（引き取り＝`restore()` の**後**）                                                                                                                                                                                            |
+| `pool_changed`     | `PUT /tokens`（＝ `alteroid token add` / `remove` / `disable` / `enable` / 並べ替え）                                                                                                                                                                  |
+| `settings_changed` | `PUT /tokens/policy`（＝ `alteroid token policy`）                                                                                                                                                                                                     |
+| `runner_connected` | runner が載った / 器が入れ替わった                                                                                                                                                                                                                     |
+| `account_probe`    | **枠の probe が現役を測った**（既定は5分ごと。`unavailable` の理由によっては30分。`apps/daemon/src/usage-poller.ts`）。下の節                                                                                                                          |
 | `turn_succeeded`   | **層のターンがそのトークンで実際に成功した。** `account_probe` が見ていないセッション単位の上限を、成功という直接の証拠で埋める（`apps/daemon/src/token-watch.ts` の `observeTurnSuccess`。`tokenId` / `generation` の両方を名乗れた成功だけが上がる） |
 
 **⚠️ 「冷却が明けた」専用の値は持たせていない。** 見張りは記憶ストアを読まないので、目盛りが鳴った回が冷却明けだったのかどうかを**言えない** —— 言えないことを名前で主張する値を作ると、`AGENTS.md` の地雷「取れない軸に 0 の行を作る」と同じ形になる（**誰も出さない enum の値は、schema がついた嘘である**）。
