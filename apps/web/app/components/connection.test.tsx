@@ -16,10 +16,10 @@
  *
  * この画面には、これまでテストが無かった。
  */
-import { cleanup, render, screen } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
+import { json, Providers, stubFetch, storeTestBaseUrl, TEST_BASE_URL } from '~/test-support';
 
 import { ConnectionCard } from './connection';
 
@@ -34,6 +34,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   globalThis.fetch = originalFetch;
+  vi.unstubAllEnvs();
 });
 
 function renderCard(health: { storage: string; pid: number }) {
@@ -127,5 +128,116 @@ describe('横並びの積み替え（本4）', () => {
     const tokens = wrapper!.className.split(/\s+/);
     expect(tokens).toContain('min-w-0');
     expect(tokens).toContain('flex-1');
+  });
+});
+
+/**
+ * PR 1 の本3: 3つの出どころ（`resolveApiBaseUrlOrigin` の 'stored' /
+ * 'buildTime' / 'sameOrigin'）を画面の文言で区別する——**これがこの PR で
+ * いちばん大事な歯である**（依頼文より）。文言はオーナーが読む画面の語なので、
+ * 「段」「解決」のような実装側の語ではなく、画面に出す逐語で照合する。
+ */
+describe('接続先の出どころを画面で区別する（本3）', () => {
+  it('保存済みの値があれば「このブラウザに保存した接続先」', async () => {
+    renderCard({ storage: '/data', pid: 1 });
+    expect(await screen.findByText('このブラウザに保存した接続先')).toBeTruthy();
+  });
+
+  it('保存済みが無く、ビルド時の値があれば「このアプリに組み込まれた既定の接続先」', async () => {
+    localStorage.clear();
+    vi.stubEnv('VITE_ALTEROID_API_URL', 'https://build-time.example.com');
+    stubFetch((url) => {
+      if (url.includes('/health')) {
+        return json({
+          ok: true,
+          pid: 1,
+          operator: false,
+          storage: '/data',
+          auth: { enabled: false, providers: [] },
+        });
+      }
+      return undefined;
+    });
+    render(
+      <Providers>
+        <ConnectionCard />
+      </Providers>,
+    );
+    expect(await screen.findByText('このアプリに組み込まれた既定の接続先')).toBeTruthy();
+  });
+
+  it('どちらも無ければ「この画面と同じ場所（既定）」', async () => {
+    localStorage.clear();
+    stubFetch(() => undefined);
+    render(
+      <Providers>
+        <ConnectionCard />
+      </Providers>,
+    );
+    expect(await screen.findByText('この画面と同じ場所（既定）')).toBeTruthy();
+  });
+});
+
+/**
+ * 本3の(3): 「既定に戻す」が嘘をつく件を直す。
+ *
+ * ビルド時の値（`VITE_ALTEROID_API_URL`）が在るとき、`storeApiBaseUrl(null)` の
+ * 後に実際に効く接続先はそちらである。以前は入力欄を無条件に `SAME_ORIGIN_BASE_URL`
+ * （`/api`）へ戻していたので、実際の接続先と表示が食い違っていた。
+ */
+describe('「既定に戻す」の表示（本3-3）', () => {
+  it('ビルド時の値が在るとき、入力欄は /api ではなく実際に効く値になる', async () => {
+    const BUILD_TIME_URL = 'https://build-time.example.com';
+    vi.stubEnv('VITE_ALTEROID_API_URL', BUILD_TIME_URL);
+    localStorage.setItem('alteroid.apiBaseUrl', TEST_BASE_URL);
+    stubFetch((url) => {
+      if (url.includes('/health')) {
+        return json({
+          ok: true,
+          pid: 1,
+          operator: false,
+          storage: '/data',
+          auth: { enabled: false, providers: [] },
+        });
+      }
+      return undefined;
+    });
+    render(
+      <Providers>
+        <ConnectionCard />
+      </Providers>,
+    );
+
+    const input = await screen.findByLabelText<HTMLInputElement>('接続先');
+    expect(input.value).toBe(TEST_BASE_URL);
+
+    fireEvent.click(screen.getByRole('button', { name: '既定に戻す' }));
+
+    await waitFor(() => {
+      expect(localStorage.getItem('alteroid.apiBaseUrl')).toBeNull();
+    });
+    // ここが本体: /api ではなく、ビルド時の値が入っていること。
+    expect(input.value).toBe(BUILD_TIME_URL);
+    expect(input.value).not.toBe('/api');
+  });
+
+  it('保存済みの値が無ければ「既定に戻す」は disabled（hasStoredApiBaseUrl の使い道）', async () => {
+    localStorage.clear();
+    stubFetch(() => undefined);
+    render(
+      <Providers>
+        <ConnectionCard />
+      </Providers>,
+    );
+
+    const button = await screen.findByRole<HTMLButtonElement>('button', { name: '既定に戻す' });
+    expect(button.disabled).toBe(true);
+  });
+
+  it('保存すると「既定に戻す」が有効になる', async () => {
+    renderCard({ storage: '/data', pid: 1 });
+
+    const button = await screen.findByRole<HTMLButtonElement>('button', { name: '既定に戻す' });
+    expect(button.disabled).toBe(false);
   });
 });

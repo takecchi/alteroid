@@ -5,10 +5,11 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
-import { SWRConfig } from 'swr';
+import { SWRConfig, useSWRConfig } from 'swr';
 
 import { readCredential, storeCredential, type Credential } from './auth.js';
 import { resolveApiBaseUrl, storeApiBaseUrl } from './config.js';
@@ -85,6 +86,33 @@ export function ApiProvider({ children }: { children: ReactNode }) {
   }, [baseUrl, token]);
 
   useEffect(() => () => generation.controller.abort(), [generation]);
+
+  /**
+   * 接続先を切り替えたら、画面に残っているキャッシュを引き直す。
+   *
+   * **`hooks/queries.ts` の SWR キーは接続先を含まない**（`useAuth` の
+   * `authState` キーだけが例外で `baseUrl` を持つ）。だから接続先を切り替えた
+   * だけでは、`useHealth` や `useRunners` などは**前の接続先で取れた応答を
+   * 表示し続ける** — 次にキーが変わる・フォーカスが戻る・30秒間隔の再検証が
+   * 来るまで、画面は「切り替わった」ふりだけをする。SSE（`use-journal-live.ts`）
+   * は `[client, baseUrl]` を依存に持つ effect で自分から張り直すが、SWR の
+   * 取得はそのしくみに乗らないので、ここで明示的に引き直す。
+   *
+   * **`useSWRConfig()` はここ（`ApiProvider` 自身の本体）で呼ぶ。** `ApiProvider`
+   * が返す `<SWRConfig value={{onError}}>` は `provider` を指定していないので
+   * 親のキャッシュをそのまま使う — つまりここで見えるキャッシュと、配下の
+   * `useSWR` が使うキャッシュは同じものである。
+   */
+  const { mutate } = useSWRConfig();
+  const previousBaseUrl = useRef(baseUrl);
+  useEffect(() => {
+    if (previousBaseUrl.current === baseUrl) return;
+    previousBaseUrl.current = baseUrl;
+    // 全キーを対象にする（`(key) => true`）。接続先を含まないキーが大半なので、
+    // 種別を選んで落とす形（`use-journal-live.ts` の `invalidate` と同じ形）は
+    // 取れない——選ぶ以上、選び漏れがそのまま「切り替わったふり」に戻る。
+    void mutate(() => true);
+  }, [baseUrl, mutate]);
 
   const setBaseUrl = useCallback((value: string | null) => {
     storeApiBaseUrl(value);

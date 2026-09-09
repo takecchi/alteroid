@@ -76,7 +76,33 @@ export function storeApiBaseUrl(value: string | null): void {
   else localStorage.setItem(STORAGE_KEY, normalized);
 }
 
-/** 人間が明示的に設定しているか（設定画面の表示に使う）。 */
+/**
+ * いまの接続先が、3段のどこから来たか。
+ *
+ * `resolveApiBaseUrl` が「どの値か」を答えるのに対し、こちらは「なぜその値か」を
+ * 答える。**両方要る** — 人間が値を消したとき、「既定に戻った」のか「消し損ねた」
+ * のかは値だけでは区別できない（消えた結果が `buildTime` でも `sameOrigin` でも、
+ * 見えている接続先の文字列だけでは同じに見えうる）。
+ *
+ * 引数を取る理由は `resolveApiBaseUrl` と同じ（ブラウザ無しで確かめられるように）。
+ */
+export type ApiBaseUrlOrigin = 'stored' | 'buildTime' | 'sameOrigin';
+
+export function resolveApiBaseUrlOrigin(
+  stored: string | null = readStored(),
+  buildTime: string | undefined = import.meta.env.VITE_ALTEROID_API_URL,
+): ApiBaseUrlOrigin {
+  if (normalize(stored) !== undefined) return 'stored';
+  if (normalize(buildTime) !== undefined) return 'buildTime';
+  return 'sameOrigin';
+}
+
+/**
+ * 人間が明示的に設定しているか（設定画面の表示に使う）。
+ *
+ * `resolveApiBaseUrlOrigin` の上に載せ直してある — 出所の判定を1本にするため
+ * （前は `normalize(readStored()) !== undefined` を別に計算していた）。
+ */
 export function hasStoredApiBaseUrl(): boolean {
-  return normalize(readStored()) !== undefined;
+  return resolveApiBaseUrlOrigin() === 'stored';
 }
