@@ -1248,9 +1248,9 @@ describe('クローンの道具', () => {
     });
 
     /**
-     * 歯 B。**説明文が実装と食い違っていないかを、同じ歯の中で突き合わせる。**
+     * 歯 B。**実装の値と説明文の主張を、それぞれ現在の正しい値へ釘で留める。**
      *
-     * - 実装の側の値（`bodyIsBaked`）: premise 文書を1つ `renderMemoryDocuments`
+     * - 実装の側の値（`bodyIsBaked`）: premise 文書を `renderMemoryDocuments`
      *   （システムプロンプトへの焼き込みそのものを作る、唯一の入口）に通し、
      *   本文の目印がその出力に含まれるかどうか
      * - 説明文の側の値（`claimsBodyBaked`）: `memory_list` の description が、
@@ -1258,32 +1258,59 @@ describe('クローンの道具', () => {
      *   主張しているか、の代理指標。この語はこの PR で見つかった嘘が全箇所で
      *   使っていた語である）
      *
-     * **この2つが一致することを測る。** いまは両方とも「否」（本文は焼かれず、
-     * 説明文もそう主張していない）で一致している。**片方だけが変わると
-     * 不一致になり、この歯が赤くなる**——実装を「全文を焼く」方向へ戻して
-     * 説明文が追いつかなくても、逆に説明文だけを「全文」の文言へ戻して
-     * 実装が追いつかなくても、どちらも検出する。
+     * **最初の2本がそれぞれ独立の釘である。** `expect(bodyIsBaked).toBe(false)`
+     * は実装側が「全文を焼く」方向へ戻ったら**単独で**落ちる。
+     * `expect(claimsBodyBaked).toBe(false)` は説明文側が「全文」の文言へ
+     * 戻ったら**単独で**落ちる。どちらが落ちたかで、実装側の逆行か説明文側の
+     * 逆行かを区別できる（変異試験の段1で、撃たれたのがどちらの行かを名指し
+     * できる）。
+     *
+     * **3本目（`toBe(claimsBodyBaked)`）は独立の検出力を持たない。** 上の
+     * 2本が両方とも「否」に釘で留まっている以上、この等値は上2本の言い換え
+     * でしかなく、これだけが単独で捕まえる変異は無い（実装と説明文が同時に
+     * 同じ側へ逆行しても、その場合は上2本がそれぞれ単独で落ちる）。
+     * **「突き合わせ」と呼ばず「釘」と呼ぶのはこのため**——名前が測っている
+     * ことと中身を合わせてある（AGENTS.md「テストを弱めずに直す」——
+     * 名前と中身がずれた歯は数え上げでは見つからない、という指摘への対応）。
+     * それでも消さずに残すのは、この等値が読み手に「実装と説明文は連動して
+     * いるべきだ」という不変条件そのものを明示するためである。
      *
      * ⚠️ **この歯が測っていないこと**: `claimsBodyBaked` は「全文」という
      * 特定の語だけを見る代理指標であり、説明文の言い回しそのものを機械的に
      * 理解しているわけではない。同じ主張を「まるごと」「すべて」「そのまま」
      * のような別の語で書き換えられたら、この判定はすり抜ける。
      */
-    it('説明文と実装が食い違っていない — premise の本文が焼かれるかどうかで両者を突き合わせる', () => {
+    it('実装の値（本文が焼かれるか）と説明文の主張を、それぞれ現在の正しい値へ釘で留める', () => {
       const stores = createMemoryStores();
       const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
       const description = tools.find((entry) => entry.name === 'memory_list')?.description ?? '';
 
       const marker = 'MARKER-BODY-7f3a2c';
-      const rendered = renderMemoryDocuments([{ slug: 'probe', content: `# 見出し\n${marker}\n` }]);
-      const bodyIsBaked = rendered.includes(marker);
+      // frontmatter 無し（既定で premise に解決される経路）。
+      const renderedByDefault = renderMemoryDocuments([
+        { slug: 'probe-default', content: `# 見出し\n${marker}\n` },
+      ]);
+      // `type: premise` を明示した経路（既定の解決ではなく、premise の描画
+      // そのものを通す）。両方が同じ答えであることも、ついでに確かめる。
+      const renderedExplicit = renderMemoryDocuments([
+        {
+          slug: 'probe-explicit',
+          content: `---\ntype: premise\n---\n# 見出し\n${marker}\n`,
+        },
+      ]);
+      const bodyIsBaked = renderedByDefault.includes(marker);
+      expect(renderedExplicit.includes(marker)).toBe(bodyIsBaked);
 
       const claimsBodyBaked = /premise[^。]*全文|全文[^。]*premise/.test(description);
 
-      expect(bodyIsBaked).toBe(claimsBodyBaked);
-      // いまの正しい状態: どちらも「焼かれない／主張しない」である。
+      // 実装側の釘: renderMemoryDocuments が本文を焼くように戻ったら、
+      // ここが単独で落ちる。
       expect(bodyIsBaked).toBe(false);
+      // 説明文側の釘: description が「全文」の文言へ戻ったら、ここが単独で
+      // 落ちる。
       expect(claimsBodyBaked).toBe(false);
+      // 参考（独立の検出力は持たない。doc 参照）: 上の2本が守る限り必ず一致する。
+      expect(bodyIsBaked).toBe(claimsBodyBaked);
     });
   });
 
