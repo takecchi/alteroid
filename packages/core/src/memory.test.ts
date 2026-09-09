@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -2220,6 +2223,93 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
 
         expect(outline).not.toContain('SECRET-XYZ-999');
         expect(outline).toContain('## 子');
+      });
+    });
+
+    /**
+     * 依頼者が実際に踏んだ取り違え——`memory_outline` の予算（8,000）を、
+     * 毎ターンの焼き込みの節目次の予算（`MEMORY_PROMPT_OUTLINE_BUDGET` = 6,000）
+     * だと思い込んで記憶に書いた——の再発防止。値・何を切るか・同じ数字を持つ
+     * 別の予算の名前の3つが**同時に**見えるかを測る。
+     *
+     * ⚠️ **期待値は逐語（`'8,000'`）で持つ。** `MEMORY_OUTLINE_BUDGET` を import
+     * して `toContain(String(MEMORY_OUTLINE_BUDGET))` と書くと、実装側の定数を
+     * 差し替える変異で比較の両側が一緒に動き、変異が素通りする
+     * （`.claude/skills/mutation-testing/` の「比較の両側が同じ経路で同じ値へ
+     * 強制されると、比較そのものが恒真になる」と同じ形）。
+     */
+    describe('省略の断り書きに足す予算の注記（3点が同時に見える）', () => {
+      const sections = () => scanMemorySections(flood(400)).sections;
+
+      it('値・何を切る予算か・別の予算の名前の3つが head 側の断り書きに見える', () => {
+        const outline = renderMemoryOutline(sections());
+
+        // 1. その値。定数を import せず、逐語で確かめる（上のコメントの理由）。
+        expect(outline).toContain('8,000');
+        // 2. 何を切る予算か（1回のツール応答であって、毎ターンの焼き込みではない）。
+        expect(outline).toContain('memory_outline の1回のツール応答');
+        expect(outline).toContain('毎ターン全員が払う焼き込み');
+        // 3. ⭐ 同じ数字を持つ別の記憶の予算の名前。
+        expect(outline).toContain('MEMORY_LISTING_BUDGET');
+      });
+
+      it('同じ3点が tail 側の断り書きにも見える（共有の1文字列を使っている）', () => {
+        const outline = renderMemoryOutline(sections(), 'tail');
+
+        expect(outline).toContain('8,000');
+        expect(outline).toContain('memory_outline の1回のツール応答');
+        expect(outline).toContain('毎ターン全員が払う焼き込み');
+        expect(outline).toContain('MEMORY_LISTING_BUDGET');
+      });
+
+      it('MEMORY_LISTING_BUDGET といまの値が一致しているので「別の予算である」と言う', () => {
+        // 対照: 現物で一致していることを先に確かめる（一致が崩れたら別の枝を通る
+        // ——`renderMemoryOutlineBudgetNote` の doc）。
+        expect(MEMORY_LISTING_BUDGET).toBe(8_000);
+
+        const outline = renderMemoryOutline(sections());
+
+        expect(outline).toContain('別の予算である');
+        expect(outline).not.toContain('値が一致しない');
+      });
+
+      it('自身を「目次」と呼ばない（取り違えの発端はこの語の重複だった）', () => {
+        const outline = renderMemoryOutline(sections());
+        const tailOutline = renderMemoryOutline(sections(), 'tail');
+
+        expect(outline).not.toContain('次の目次がそこへ届く');
+        expect(tailOutline).toContain('次に memory_outline を呼んだときの応答にそれが載る');
+      });
+
+      /**
+       * ⭐ 次に memory.ts へ 8,000 を持つ別の `MEMORY_*_BUDGET` 定数が増えたとき、
+       * この歯が気づけるようにする——依頼者の懸念そのもの（数字の帰属の取り違え）
+       * に対する予防線。ソースを自分で読み、`MEMORY_OUTLINE_BUDGET` と同じ値を
+       * 持つ定数名を全部拾って、断り書きがそれを名指ししているかを見る。
+       *
+       * 増えたときにどこが赤くなるか: 新しい定数の値が 8,000 なら `siblings` に
+       * 名前が加わり、下の `toEqual(['MEMORY_LISTING_BUDGET'])` がまず落ちる。
+       * `renderMemoryOutlineBudgetNote`（memory.ts）を直してその名を断り書きへ
+       * 足すまで、この歯は赤いままになる。
+       */
+      it('⭐ memory.ts の中で 8,000 を持つ MEMORY_*_BUDGET 定数を、断り書きが漏れなく名指しする', () => {
+        const source = readFileSync(fileURLToPath(new URL('./memory.ts', import.meta.url)), 'utf8');
+        const byName = new Map<string, number>();
+        for (const match of source.matchAll(/export const (MEMORY_\w*_BUDGET) = ([\d_]+);/g)) {
+          byName.set(match[1] as string, Number((match[2] as string).replace(/_/g, '')));
+        }
+
+        expect(byName.get('MEMORY_OUTLINE_BUDGET')).toBe(8_000);
+        const siblings = [...byName.entries()]
+          .filter(([name, value]) => name !== 'MEMORY_OUTLINE_BUDGET' && value === 8_000)
+          .map(([name]) => name)
+          .sort();
+
+        // いまの実測（memory.ts の10本中）: 同じ値を持つのは MEMORY_LISTING_BUDGET だけ。
+        expect(siblings).toEqual(['MEMORY_LISTING_BUDGET']);
+
+        const outline = renderMemoryOutline(sections());
+        for (const name of siblings) expect(outline).toContain(name);
       });
     });
   });

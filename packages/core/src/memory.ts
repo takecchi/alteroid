@@ -3162,6 +3162,54 @@ function memorySectionLines(sections: readonly MemorySection[]): string[] {
   });
 }
 
+/**
+ * `memory_outline` の省略の断り書きに足す、予算についての注記。
+ *
+ * **head/tail の2箇所で書き分けず、ここ1つに集約してある。** 依頼者が
+ * 実際にこの予算の値（8,000）を、別の予算（毎ターンの焼き込みの節目次、
+ * `MEMORY_PROMPT_OUTLINE_BUDGET` = 6,000）の値だと取り違えて自分の記憶に
+ * 書いた実例がある——**値も観測も正しく、誤っていたのは値の帰属だけ**
+ * だった。だから「値を見せる」だけでは再発する。次の3つを**同時に**
+ * 見せる。
+ *
+ * 1. **その値**（`MEMORY_OUTLINE_BUDGET`。定数から組み立てる——文字列へ
+ *    直書きすると、値が動いたときに断り書きのほうが嘘をつく）
+ * 2. **何を切る予算か**——「`memory_outline` の1回のツール応答」（MCP の
+ *    出力上限のため）であって、「毎ターンの焼き込み」ではない。焼き込み側
+ *    の予算は2つに分かれている——fact 全体を束ねた目次は
+ *    `MEMORY_TOC_CHAR_BUDGET`、premise 1文書ぶんの節目次は
+ *    `MEMORY_PROMPT_OUTLINE_BUDGET`（値も別なので、混同すると値まで違う）
+ * 3. ⭐ **同じ数字を持つ別の記憶の予算の名前**——`MEMORY_LISTING_BUDGET`
+ *    （`memory_list` の一覧の予算）。この2つは値がたまたま同じなだけで、
+ *    切っている対象が違う（`memory_outline` は1文書の節を、`memory_list`
+ *    は全文書を並べる）
+ *
+ * **3つ目は値が一致しているときにしか真ではない。** `MEMORY_LISTING_BUDGET`
+ * を直接比較して分岐する——将来どちらかの値だけが動いて一致が崩れても、
+ * この関数は「一致しない」と正直に書く（黙って嘘の一致を言い続けない）。
+ *
+ * `memory_outline` 自身の応答は、ここでは「目次」と呼ばない。「目次」は
+ * この repo で3つの別のものを指す（fact 全体の目次・premise の節目次・
+ * この `memory_outline` の応答）——**取り違えの発端がまさにここだった**ので、
+ * この注記の中でだけは道具名（`memory_outline`）または定数名で名指しする。
+ */
+function renderMemoryOutlineBudgetNote(): string {
+  const value = formatMemoryCharCount(MEMORY_OUTLINE_BUDGET);
+  const scope =
+    `この ${value} 文字は、memory_outline の1回のツール応答を切る予算である` +
+    '（MCP の出力上限のため）。毎ターン全員が払う焼き込みの予算——fact 全体の' +
+    '目次（MEMORY_TOC_CHAR_BUDGET）や premise 1文書ぶんの節目次' +
+    '（MEMORY_PROMPT_OUTLINE_BUDGET）——とは別の予算である。';
+  const sibling =
+    MEMORY_LISTING_BUDGET === MEMORY_OUTLINE_BUDGET
+      ? `⚠ memory_list の一覧の予算（MEMORY_LISTING_BUDGET）もいま同じ ${value} 文字だが、` +
+        '別の予算である（1文書の節を並べる予算と、全文書を並べる予算）。'
+      : 'memory_list の一覧の予算（MEMORY_LISTING_BUDGET、いま ' +
+        `${formatMemoryCharCount(MEMORY_LISTING_BUDGET)} 文字）とは値が一致しない` +
+        '——一致していた時期があっても、いまは別の値である。';
+  return `${scope} ${sibling}`;
+}
+
 export function renderMemoryOutline(
   sections: readonly MemorySection[],
   side: MemoryOutlineSide = 'head',
@@ -3180,6 +3228,7 @@ export function renderMemoryOutline(
   // 初めて、末尾側へ行く口が実在する。旧い文面の「先に上の節を減らす」は、
   // **末尾を指せないまま末尾を減らせ**と言っていた ＝ 到達できない助言だった。
   const render = side === 'tail' ? renderListingFromEnd : renderListing;
+  const budgetNote = renderMemoryOutlineBudgetNote();
   return render(items, {
     budget: MEMORY_OUTLINE_BUDGET,
     omitted: ({ rest, shown, total }) =>
@@ -3187,9 +3236,12 @@ export function renderMemoryOutline(
         ? `…先頭 ${rest} 節は省略（節は全 ${total} 件あり、末尾から ${shown} 件だけ出した）。` +
           '先頭側は side を渡さずに呼べば出る（既定）。' +
           '⚠中央（どちらの端からも予算の外に出る節）は、どちらの向きでも出ない——' +
-          '端の節を memory_section_move で移して文書を縮めれば、次の目次がそこへ届く。'
+          '端の節を memory_section_move で移して文書を縮めれば、次に memory_outline を' +
+          '呼んだときの応答にそれが載る。' +
+          ` ${budgetNote}`
         : `…末尾 ${rest} 節は省略（節は全 ${total} 件あり、先頭から ${shown} 件だけ出した）。` +
           '末尾側の節id が要るなら side=tail で呼ぶこと。' +
-          '⚠中央（どちらの端からも予算の外に出る節）は、どちらの向きでも出ない。',
+          '⚠中央（どちらの端からも予算の外に出る節）は、どちらの向きでも出ない。' +
+          ` ${budgetNote}`,
   });
 }
