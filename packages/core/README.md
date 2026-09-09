@@ -112,8 +112,10 @@ const score = defaultScoringStrategy({
   halfLifeHours: 720,
 });
 
-// 「4文字 ≈ 1トークン」の粗い推定。counter: "heuristic" を必ず返す
-// （推定値を実測値の顔で返さない、という契約そのもの）。
+// 文字種で重み付けした粗い推定（CJK 0.9トークン/字・非CJK 0.25トークン/字）。
+// counter: "heuristic" を必ず返す（推定値を実測値の顔で返さない、という契約そのもの）。
+// ⚠ CJK 以外の非ラテン文字（キリル・タイ・アラビア文字）は依然として過小評価する。
+// 厳密さが要るなら TokenCounter を差し替えること（docs/decisions/0083-*.md）。
 const { tokens, counter } = heuristicTokenCounter.count("hello world");
 
 console.log({ decayed, total: score.total, tokens, counter });

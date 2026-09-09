@@ -1,0 +1,998 @@
+{
+  "_readme": "これは実測の記録であり、js-tiktoken を再インストールしないと再生成できない（scripts/record-token-count-reference.mjs）。js-tiktoken は devDependency にも足していない（依存の追加方針の変更はオーナー専権。docs/autonomy.md）。",
+  "version": 1,
+  "recordedAt": "2026-09-09T22:08:47.119Z",
+  "tokenizer": {
+    "library": "js-tiktoken",
+    "version": "1.0.21",
+    "encodings": ["o200k_base", "cl100k_base"]
+  },
+  "verifiedAgainstApi": {
+    "cl100k_base": {
+      "model": "text-embedding-3-small",
+      "field": "usage.prompt_tokens",
+      "samples": 10,
+      "matched": 10
+    },
+    "o200k_base": {
+      "model": "gpt-4o-mini",
+      "field": "usage.prompt_tokens",
+      "messageOverheadTokens": 7,
+      "calibrationSamples": 6,
+      "samples": 10,
+      "matched": 10
+    },
+    "totalApiCalls": 26,
+    "estimatedCostUsd": 0.0000904
+  },
+  "samples": [
+    {
+      "id": "ja-01",
+      "class": "ja",
+      "source": "repo:examples/chat/src/scenario.ts",
+      "text": "ところで、わたしの好きな色を覚えていますか?",
+      "o200k_base": 16,
+      "cl100k_base": 21
+    },
+    {
+      "id": "ja-02",
+      "class": "ja",
+      "source": "repo:examples/chat/src/probe-set.ts",
+      "text": "私は猫を2匹飼っています。",
+      "o200k_base": 9,
+      "cl100k_base": 14
+    },
+    {
+      "id": "ja-03",
+      "class": "ja",
+      "source": "repo:examples/chat/src/probe-set.ts",
+      "text": "うちのペットについて何か知っていますか?",
+      "o200k_base": 12,
+      "cl100k_base": 16
+    },
+    {
+      "id": "ja-04",
+      "class": "ja",
+      "source": "repo:examples/chat/src/probe-set.ts",
+      "text": "毎朝5時に起きてジョギングをしています。",
+      "o200k_base": 14,
+      "cl100k_base": 19
+    },
+    {
+      "id": "ja-05",
+      "class": "ja",
+      "source": "repo:examples/chat/src/probe-set.ts",
+      "text": "私の運動の習慣はどんなものでしたか?",
+      "o200k_base": 16,
+      "cl100k_base": 22
+    },
+    {
+      "id": "ja-06",
+      "class": "ja",
+      "source": "repo:examples/chat/src/probe-set.ts",
+      "text": "父は毎晩ウォーキングをしています。",
+      "o200k_base": 11,
+      "cl100k_base": 17
+    },
+    {
+      "id": "ja-07",
+      "class": "ja",
+      "source": "repo:examples/chat/src/probe-set.ts",
+      "text": "私が避けたほうがいい食べ物はありますか?",
+      "o200k_base": 16,
+      "cl100k_base": 22
+    },
+    {
+      "id": "ja-08",
+      "class": "ja",
+      "source": "repo:examples/chat/src/probe-set.ts",
+      "text": "私の家族はどこで暮らしていますか?",
+      "o200k_base": 13,
+      "cl100k_base": 15
+    },
+    {
+      "id": "ja-09",
+      "class": "ja",
+      "source": "repo:examples/chat/src/probe-set.ts",
+      "text": "私が一番気に入っているプログラミング言語は何ですか?",
+      "o200k_base": 21,
+      "cl100k_base": 24
+    },
+    {
+      "id": "ja-10",
+      "class": "ja",
+      "source": "repo:examples/chat/src/probe-set.ts",
+      "text": "次の遠出の行き先はどこでしたか?",
+      "o200k_base": 14,
+      "cl100k_base": 16
+    },
+    {
+      "id": "ja-11",
+      "class": "ja",
+      "source": "repo:examples/chat/src/probe-set.ts (derived: buildHaystackUtterance の組み合わせ)",
+      "text": "今日、市役所での住民票の再発行を今日済ませました。",
+      "o200k_base": 19,
+      "cl100k_base": 27
+    },
+    {
+      "id": "ja-12",
+      "class": "ja",
+      "source": "repo:examples/chat/src/probe-set.ts (derived: buildHaystackUtterance の組み合わせ)",
+      "text": "先週、電子レンジの修理の見積もりを取りました。",
+      "o200k_base": 18,
+      "cl100k_base": 24
+    },
+    {
+      "id": "ja-13",
+      "class": "ja",
+      "source": "repo:examples/chat/src/probe-set.ts (derived: buildHaystackUtterance の組み合わせ)",
+      "text": "休憩時間に、本棚に並べる参考書の購入について調べているところです。",
+      "o200k_base": 23,
+      "cl100k_base": 41
+    },
+    {
+      "id": "ja-14",
+      "class": "ja",
+      "source": "repo:docs/north-star.md",
+      "text": "保存はすでに解けている。解けていないのは、大量に貯めたものの中から、いま必要な分だけを引き当てることである。",
+      "o200k_base": 44,
+      "cl100k_base": 53
+    },
+    {
+      "id": "ja-15",
+      "class": "ja",
+      "source": "repo:docs/north-star.md",
+      "text": "言ったことを、次の日も覚えている。",
+      "o200k_base": 12,
+      "cl100k_base": 18
+    },
+    {
+      "id": "ja-16",
+      "class": "ja",
+      "source": "repo:docs/north-star.md",
+      "text": "使われない記憶が、静かに遠ざかる。——消えるのではなく、遠ざかる。",
+      "o200k_base": 28,
+      "cl100k_base": 36
+    },
+    {
+      "id": "mixed-01",
+      "class": "mixed",
+      "source": "repo:examples/chat/src/probe-set.ts",
+      "text": "TypeScript より Rust のほうが好みです。",
+      "o200k_base": 13,
+      "cl100k_base": 15
+    },
+    {
+      "id": "mixed-02",
+      "class": "mixed",
+      "source": "repo:examples/chat/src/probe-set.ts",
+      "text": "同僚は Go を推しています。",
+      "o200k_base": 9,
+      "cl100k_base": 10
+    },
+    {
+      "id": "mixed-03",
+      "class": "mixed",
+      "source": "repo:AGENTS.md",
+      "text": "`packages/testkit` は adapter の適合テスト一式（conformance suite）とインメモリのプレースホルダ実装",
+      "o200k_base": 32,
+      "cl100k_base": 38
+    },
+    {
+      "id": "mixed-04",
+      "class": "mixed",
+      "source": "repo:docs/decisions/0019-real-openai-measurement-cost.md",
+      "text": "`recall()` が LLM を呼ばないことは、北極星の問い5（LLM を呼ばずに済ませられないか）が実装で守られていることの確認でもある。",
+      "o200k_base": 48,
+      "cl100k_base": 68
+    },
+    {
+      "id": "mixed-05",
+      "class": "mixed",
+      "source": "repo:docs/decisions/0019-real-openai-measurement-cost.md",
+      "text": "`text-embedding-3-small`（dimensions=256）1件: 22 tokens / 約 1.8 秒（初回）。",
+      "o200k_base": 30,
+      "cl100k_base": 33
+    },
+    {
+      "id": "mixed-06",
+      "class": "mixed",
+      "source": "repo:AGENTS.md (改行を1文にまとめた)",
+      "text": "⚠ `deterministic` で測った想起の質は、性能について何も言っていない——arm A の MRR は 0.018（実質ランダム）である。",
+      "o200k_base": 46,
+      "cl100k_base": 60
+    },
+    {
+      "id": "mixed-07",
+      "class": "mixed",
+      "source": "repo:examples/chat/src/naive-path.ts (文の途中で区切った抜粋)",
+      "text": "ここで作るのは「システムプロンプト無しの生の transcript」だけである。",
+      "o200k_base": 23,
+      "cl100k_base": 30
+    },
+    {
+      "id": "mixed-08",
+      "class": "mixed",
+      "source": "repo:docs/decisions/0019-real-openai-measurement-cost.md",
+      "text": "`PostgresMemoryStore.get` は不正な id で例外を投げる",
+      "o200k_base": 20,
+      "cl100k_base": 22
+    },
+    {
+      "id": "mixed-09",
+      "class": "mixed",
+      "source": "repo:examples/chat/README.md",
+      "text": "`observe()` で会話を取り込み、`recall()` が返した `memories`（の digest）と `index` だけを積む。",
+      "o200k_base": 36,
+      "cl100k_base": 43
+    },
+    {
+      "id": "mixed-10",
+      "class": "mixed",
+      "source": "authored",
+      "text": "API キーは `OPENAI_API_KEY` という環境変数で渡してください。",
+      "o200k_base": 20,
+      "cl100k_base": 28
+    },
+    {
+      "id": "mixed-11",
+      "class": "mixed",
+      "source": "authored (URL は repo:docs/decisions/ 内の実在リンクを使用)",
+      "text": "詳しい経緯は https://github.com/takecchi/mnemora/pull/80 を参照してください。",
+      "o200k_base": 26,
+      "cl100k_base": 33
+    },
+    {
+      "id": "mixed-12",
+      "class": "mixed",
+      "source": "authored (URL は repo:docs/decisions/ 内の実在リンクを使用)",
+      "text": "GitHub Actions のログは https://github.com/takecchi/mnemora/actions/runs/33968059262 で確認できます。",
+      "o200k_base": 30,
+      "cl100k_base": 35
+    },
+    {
+      "id": "mixed-13",
+      "class": "mixed",
+      "source": "repo:docs/decisions/0019-real-openai-measurement-cost.md",
+      "text": "`gpt-4o-mini`: input $0.15 / 1M tokens、output $0.60 / 1M tokens",
+      "o200k_base": 29,
+      "cl100k_base": 29
+    },
+    {
+      "id": "code-01",
+      "class": "code",
+      "source": "repo:packages/core/src/heuristic-token-counter.ts",
+      "text": "import type { TokenCounter } from \"./interfaces/token-counter.js\";\n\n/**\n * 既定の `TokenCounter` 実装（docs/architecture.md §5.9）。\n *\n * モデル固有のトークナイザに依存しない文字数ベースの推定。英語圏で経験的に使われる\n * 「4文字 ≈ 1トークン」という粗い目安を採用する。**常に `counter: 'heuristic'` を返す**\n * ——推定値を実測値の顔で返さない、という契約そのもの。\n */\nexport const heuristicTokenCounter: TokenCounter = {\n  count(text: string): { tokens: number; counter: \"heuristic\" } {\n    const tokens = Math.ceil(text.length / 4);\n    return { tokens, counter: \"heuristic\" };\n  },\n};",
+      "o200k_base": 188,
+      "cl100k_base": 221
+    },
+    {
+      "id": "code-02",
+      "class": "code",
+      "source": "repo:packages/core/src/interfaces/token-counter.ts",
+      "text": "/**\n * TokenCounter — Phase 1（docs/architecture.md §5.9・docs/recall.md §6）。\n *\n * 契約:\n * - 既定実装は文字数ベースの推定（`counter: 'heuristic'`）。\n * - 推定値を実測値の顔で返してはならない——`counter` フィールドは必須。\n */\nexport interface TokenCounter {\n  count(text: string): { tokens: number; counter: \"heuristic\" | \"exact\" };\n}",
+      "o200k_base": 114,
+      "cl100k_base": 132
+    },
+    {
+      "id": "code-03",
+      "class": "code",
+      "source": "repo:examples/chat/src/mutable-clock.ts",
+      "text": "import type { Clock } from \"@mnemora/core\";\n\n/**\n * `now()` が返す時刻を差し替えられる `Clock` 実装(`decay` を `freshness` から分離して測るために足す)。\n *\n * **`Clock` 型は `@mnemora/core` から公開されている**——`packages/core/src/index.ts` が\n * `export * from \"./interfaces/clock.js\"` しており、`interfaces/clock.ts` の\n * `export interface Clock { now(): Date }` がそのまま外へ出ている(`systemClock`/`fixedClock`\n * も同様に公開)。⟹ 構造的に満たす別形を用意する必要は無く、`@mnemora/core` の `Clock` を\n * そのまま実装する。\n */\nexport interface MutableClock extends Clock {\n  set(at: Date): void;\n}\n\n/** 既定の初期値は実時刻(`new Date()`)。 */\nexport function createMutableClock(initial: Date = new Date()): MutableClock {\n  let current = initial;\n  return {\n    now(): Date {\n      return current;\n    },\n    set(at: Date): void {\n      current = at;\n    },\n  };\n}",
+      "o200k_base": 285,
+      "cl100k_base": 311
+    },
+    {
+      "id": "code-04",
+      "class": "code",
+      "source": "repo:examples/chat/src/format.ts",
+      "text": "import type { RecallResult } from \"@mnemora/core\";\n\n/**\n * `recall()` の返り値のうち、roadmap.md 段階7の完了条件そのものである\n * `omitted` と `usage` を画面に可視化する（PR 本文「omitted と usage を可視化する」）。\n */\nexport function formatRecall(result: RecallResult, label: string): string {\n  const lines: string[] = [];\n  lines.push(`--- recall (${label}) ---`);\n  lines.push(`memories: ${result.memories.length} 件返却`);\n  for (const m of result.memories) {\n    lines.push(`  - [${m.retrievedVia}] score=${m.score.total.toFixed(3)} digest=\"${m.digest}\"`);\n  }\n  lines.push(`omitted (${result.omitted.length} 件):`);\n  return lines.join(\"\\n\");\n}",
+      "o200k_base": 195,
+      "cl100k_base": 209
+    },
+    {
+      "id": "code-05",
+      "class": "code",
+      "source": "repo:examples/chat/src/naive-path.ts",
+      "text": "import type { TokenCounter } from \"@mnemora/core\";\nimport type { Conversation } from \"./scenario.js\";\n\nexport interface PathMeasurement {\n  chars: number;\n  estimatedTokens: number;\n  counter: \"heuristic\" | \"exact\";\n}\n\n/**\n * 経路A（naive）: 会話ログを全部プロンプトへ積む、mnemora を使わない今の普通のやり方。\n */\nexport function naivePrompt(conversation: Conversation): string {\n  return conversation.turns.map((t) => `${t.role}: ${t.text}`).join(\"\\n\");\n}\n\nexport function measureNaive(\n  conversation: Conversation,\n  tokenCounter: TokenCounter,\n): PathMeasurement {\n  const text = naivePrompt(conversation);\n  const counted = tokenCounter.count(text);\n  return { chars: text.length, estimatedTokens: counted.tokens, counter: counted.counter };\n}",
+      "o200k_base": 184,
+      "cl100k_base": 194
+    },
+    {
+      "id": "code-06",
+      "class": "code",
+      "source": "repo:examples/chat/src/scenario.ts",
+      "text": "/**\n * `fillerPairs` 組の filler な user/assistant 往復を、冒頭の事実表明の後に積んだ会話を作る。\n *\n * @param fillerPairs filler の往復数。0以上の整数。\n */\nexport function buildConversation(fillerPairs: number): Conversation {\n  if (!Number.isInteger(fillerPairs) || fillerPairs < 0) {\n    throw new Error(\n      `buildConversation: fillerPairs は 0 以上の整数である必要がある（実際: ${fillerPairs}）`,\n    );\n  }\n\n  const turns: ConversationTurn[] = [];\n  let index = 0;\n  turns.push({ index: index++, role: \"user\", text: FACT_STATEMENT });\n  turns.push({ index: index++, role: \"assistant\", text: FACT_ACK });\n  return { turns, userUtterances: turns.filter((t) => t.role === \"user\"), query: QUERY_TEXT };\n}",
+      "o200k_base": 207,
+      "cl100k_base": 224
+    },
+    {
+      "id": "code-07",
+      "class": "code",
+      "source": "repo:examples/chat/src/probe-set.ts",
+      "text": "/**\n * `index` に対して一意な干し草文を返す(決定的、乱数無し)。\n * 3軸(時間文脈8 × 対象10 × 述語8 = 640通り)の直積で組み立てる——\n * `DEFAULT_HAYSTACK_SIZE` を大きく超えない限り、同じ組み合わせは出ない。\n */\nexport function buildHaystackUtterance(index: number): string {\n  if (!Number.isInteger(index) || index < 0) {\n    throw new Error(\n      `buildHaystackUtterance: index は 0 以上の整数である必要がある(実際: ${index})`,\n    );\n  }\n  const subject = HAYSTACK_SUBJECT[index % HAYSTACK_SUBJECT.length]!;\n  return `${subject}`;\n}",
+      "o200k_base": 187,
+      "cl100k_base": 210
+    },
+    {
+      "id": "code-08",
+      "class": "code",
+      "source": "repo:examples/chat/src/probe-set.ts",
+      "text": "/**\n * `gold-<id>` の externalId 規約。`retrieval-quality.ts` の系譜追跡がこれに依存する。\n */\nexport function goldExternalId(probeId: string): string {\n  return `gold-${probeId}`;\n}\n\n/** `distractor-<id>` の externalId 規約。 */\nexport function distractorExternalId(probeId: string): string {\n  return `distractor-${probeId}`;\n}\n\n/** `filler-NNNN`(4桁ゼロ埋め)の externalId 規約。 */\nexport function haystackExternalId(index: number): string {\n  return `filler-${String(index).padStart(4, \"0\")}`;\n}",
+      "o200k_base": 157,
+      "cl100k_base": 165
+    },
+    {
+      "id": "code-09",
+      "class": "code",
+      "source": "repo:examples/chat/src/providers.ts",
+      "text": "import type { EmbeddingProvider, LLMProvider } from \"@mnemora/core\";\nimport { OpenAIEmbeddingProvider, OpenAILLMProvider } from \"@mnemora/openai\";\nimport type { Cassette, CassetteRecorder } from \"@mnemora/testkit\";\n\n/**\n * サンプルアプリが実際に使う provider の切り替え（PR 本文「LLM/Embedding は実 API キーが\n * 無くても動く」）。\n *\n * **黙って擬似物へフォールバックしない**——`mode` を呼び出し側（cli.ts）に返し、\n * 画面に必ず表示させる。どちらで動いているかを隠さない、という原則の姿3の適用。\n */",
+      "o200k_base": 170,
+      "cl100k_base": 207
+    },
+    {
+      "id": "code-10",
+      "class": "code",
+      "source": "authored",
+      "text": "// ユーザーの表示設定を保存する\ninterface UserPrefs {\n  theme: \"light\" | \"dark\";\n  locale: string;\n  notificationsEnabled: boolean;\n}",
+      "o200k_base": 38,
+      "cl100k_base": 41
+    },
+    {
+      "id": "code-11",
+      "class": "code",
+      "source": "authored",
+      "text": "// ここでnullチェックが漏れている。fetchUser(id) が null を返すことがある\nconst user = await fetchUser(id);\nconsole.log(user.name);",
+      "o200k_base": 37,
+      "cl100k_base": 47
+    },
+    {
+      "id": "code-12",
+      "class": "code",
+      "source": "authored",
+      "text": "{\n  \"name\": \"@mnemora/core\",\n  \"version\": \"0.1.0\",\n  \"type\": \"module\",\n  \"exports\": { \".\": \"./dist/index.js\" }\n}",
+      "o200k_base": 43,
+      "cl100k_base": 43
+    },
+    {
+      "id": "short-ja-01",
+      "class": "short",
+      "source": "repo:examples/chat/src/scenario.ts",
+      "text": "覚えておきますね。",
+      "o200k_base": 7,
+      "cl100k_base": 10
+    },
+    {
+      "id": "short-ja-02",
+      "class": "short",
+      "source": "repo:examples/chat/src/scenario.ts",
+      "text": "今日はいい天気ですね。",
+      "o200k_base": 6,
+      "cl100k_base": 11
+    },
+    {
+      "id": "short-ja-03",
+      "class": "short",
+      "source": "repo:examples/chat/src/scenario.ts",
+      "text": "軽めのものはいかがでしょうか。",
+      "o200k_base": 10,
+      "cl100k_base": 18
+    },
+    {
+      "id": "short-ja-04",
+      "class": "short",
+      "source": "repo:examples/chat/src/scenario.ts",
+      "text": "ぜひ聞かせてください。",
+      "o200k_base": 7,
+      "cl100k_base": 11
+    },
+    {
+      "id": "short-ja-05",
+      "class": "short",
+      "source": "repo:examples/chat/src/scenario.ts",
+      "text": "楽しんできてくださいね。",
+      "o200k_base": 7,
+      "cl100k_base": 11
+    },
+    {
+      "id": "short-ja-06",
+      "class": "short",
+      "source": "repo:examples/chat/src/probe-set.ts",
+      "text": "妹の好きな色は緑です。",
+      "o200k_base": 10,
+      "cl100k_base": 14
+    },
+    {
+      "id": "short-ja-07",
+      "class": "short",
+      "source": "repo:examples/chat/src/probe-set.ts",
+      "text": "来月、京都へ出張します。",
+      "o200k_base": 9,
+      "cl100k_base": 12
+    },
+    {
+      "id": "short-ja-08",
+      "class": "short",
+      "source": "repo:examples/chat/src/probe-set.ts",
+      "text": "先月は大阪へ出張しました。",
+      "o200k_base": 9,
+      "cl100k_base": 14
+    },
+    {
+      "id": "short-ja-09",
+      "class": "short",
+      "source": "repo:examples/chat/src/probe-set.ts",
+      "text": "弟は札幌に住んでいます。",
+      "o200k_base": 11,
+      "cl100k_base": 14
+    },
+    {
+      "id": "short-ja-10",
+      "class": "short",
+      "source": "repo:examples/chat/src/probe-set.ts",
+      "text": "牛乳を飲むとお腹を壊します。",
+      "o200k_base": 13,
+      "cl100k_base": 19
+    },
+    {
+      "id": "short-ja-11",
+      "class": "short",
+      "source": "authored",
+      "text": "はい、大丈夫です。",
+      "o200k_base": 5,
+      "cl100k_base": 10
+    },
+    {
+      "id": "short-ja-12",
+      "class": "short",
+      "source": "authored",
+      "text": "了解です、ありがとう。",
+      "o200k_base": 5,
+      "cl100k_base": 6
+    },
+    {
+      "id": "short-en-01",
+      "class": "short",
+      "source": "authored",
+      "text": "Got it, thanks!",
+      "o200k_base": 5,
+      "cl100k_base": 5
+    },
+    {
+      "id": "short-en-02",
+      "class": "short",
+      "source": "authored",
+      "text": "Sure, no problem.",
+      "o200k_base": 5,
+      "cl100k_base": 5
+    },
+    {
+      "id": "short-en-03",
+      "class": "short",
+      "source": "authored",
+      "text": "I'll check that.",
+      "o200k_base": 4,
+      "cl100k_base": 5
+    },
+    {
+      "id": "short-en-04",
+      "class": "short",
+      "source": "authored",
+      "text": "Sounds good to me.",
+      "o200k_base": 5,
+      "cl100k_base": 5
+    },
+    {
+      "id": "short-en-05",
+      "class": "short",
+      "source": "authored",
+      "text": "See you soon.",
+      "o200k_base": 4,
+      "cl100k_base": 4
+    },
+    {
+      "id": "short-en-06",
+      "class": "short",
+      "source": "authored",
+      "text": "Noted, thank you.",
+      "o200k_base": 6,
+      "cl100k_base": 6
+    },
+    {
+      "id": "en-01",
+      "class": "en",
+      "source": "authored",
+      "text": "My favorite color is blue, and my birthday is April 3rd.",
+      "o200k_base": 15,
+      "cl100k_base": 15
+    },
+    {
+      "id": "en-02",
+      "class": "en",
+      "source": "authored",
+      "text": "I have two cats living with me at home.",
+      "o200k_base": 10,
+      "cl100k_base": 10
+    },
+    {
+      "id": "en-03",
+      "class": "en",
+      "source": "authored",
+      "text": "I go jogging every morning at five o'clock.",
+      "o200k_base": 10,
+      "cl100k_base": 10
+    },
+    {
+      "id": "en-04",
+      "class": "en",
+      "source": "authored",
+      "text": "Drinking milk always upsets my stomach.",
+      "o200k_base": 9,
+      "cl100k_base": 9
+    },
+    {
+      "id": "en-05",
+      "class": "en",
+      "source": "authored",
+      "text": "My younger brother lives in Sapporo.",
+      "o200k_base": 9,
+      "cl100k_base": 9
+    },
+    {
+      "id": "en-06",
+      "class": "en",
+      "source": "authored",
+      "text": "I prefer Rust over TypeScript for systems programming.",
+      "o200k_base": 10,
+      "cl100k_base": 9
+    },
+    {
+      "id": "en-07",
+      "class": "en",
+      "source": "authored",
+      "text": "I have a business trip to Kyoto next month.",
+      "o200k_base": 10,
+      "cl100k_base": 10
+    },
+    {
+      "id": "en-08",
+      "class": "en",
+      "source": "authored",
+      "text": "I went on a business trip to Osaka last month.",
+      "o200k_base": 11,
+      "cl100k_base": 11
+    },
+    {
+      "id": "en-09",
+      "class": "en",
+      "source": "authored",
+      "text": "I renewed my resident registration at the city hall today.",
+      "o200k_base": 11,
+      "cl100k_base": 11
+    },
+    {
+      "id": "en-10",
+      "class": "en",
+      "source": "authored",
+      "text": "I got a quote for repairing the microwave oven.",
+      "o200k_base": 10,
+      "cl100k_base": 10
+    },
+    {
+      "id": "en-11",
+      "class": "en",
+      "source": "authored",
+      "text": "I finally cleaned up the entryway this weekend.",
+      "o200k_base": 10,
+      "cl100k_base": 10
+    },
+    {
+      "id": "en-12",
+      "class": "en",
+      "source": "authored",
+      "text": "I sorted through the mail that had been piling up for weeks.",
+      "o200k_base": 13,
+      "cl100k_base": 14
+    },
+    {
+      "id": "en-13",
+      "class": "en",
+      "source": "authored",
+      "text": "I fixed a flat tire on my bicycle after work.",
+      "o200k_base": 11,
+      "cl100k_base": 11
+    },
+    {
+      "id": "en-14",
+      "class": "en",
+      "source": "authored",
+      "text": "I'm not sure what to have for lunch today.",
+      "o200k_base": 10,
+      "cl100k_base": 11
+    },
+    {
+      "id": "zh-01",
+      "class": "zh",
+      "source": "authored",
+      "text": "我最喜欢的颜色是蓝色,我的生日是四月三日。",
+      "o200k_base": 17,
+      "cl100k_base": 25
+    },
+    {
+      "id": "zh-02",
+      "class": "zh",
+      "source": "authored",
+      "text": "我家里养了两只猫。",
+      "o200k_base": 9,
+      "cl100k_base": 12
+    },
+    {
+      "id": "zh-03",
+      "class": "zh",
+      "source": "authored",
+      "text": "我每天早上五点起床去跑步。",
+      "o200k_base": 12,
+      "cl100k_base": 16
+    },
+    {
+      "id": "zh-04",
+      "class": "zh",
+      "source": "authored",
+      "text": "喝牛奶会让我肚子不舒服。",
+      "o200k_base": 11,
+      "cl100k_base": 18
+    },
+    {
+      "id": "zh-05",
+      "class": "zh",
+      "source": "authored",
+      "text": "我弟弟住在札幌。",
+      "o200k_base": 9,
+      "cl100k_base": 13
+    },
+    {
+      "id": "zh-06",
+      "class": "zh",
+      "source": "authored",
+      "text": "下个月我要去京都出差。",
+      "o200k_base": 8,
+      "cl100k_base": 12
+    },
+    {
+      "id": "zh-07",
+      "class": "zh",
+      "source": "authored",
+      "text": "上个月我去大阪出差了。",
+      "o200k_base": 9,
+      "cl100k_base": 13
+    },
+    {
+      "id": "zh-08",
+      "class": "zh",
+      "source": "authored",
+      "text": "今天我去市政府补办了户口本。",
+      "o200k_base": 12,
+      "cl100k_base": 17
+    },
+    {
+      "id": "zh-09",
+      "class": "zh",
+      "source": "authored",
+      "text": "上周我把微波炉的维修申请提交了。",
+      "o200k_base": 13,
+      "cl100k_base": 21
+    },
+    {
+      "id": "zh-10",
+      "class": "zh",
+      "source": "authored",
+      "text": "周末的时候我整理了玄关的鞋柜。",
+      "o200k_base": 12,
+      "cl100k_base": 20
+    },
+    {
+      "id": "zh-11",
+      "class": "zh",
+      "source": "authored (繁体字)",
+      "text": "我最喜歡的顏色是藍色,我的生日是四月三日。",
+      "o200k_base": 21,
+      "cl100k_base": 25
+    },
+    {
+      "id": "zh-12",
+      "class": "zh",
+      "source": "authored (繁体字)",
+      "text": "我家裡養了兩隻貓。",
+      "o200k_base": 12,
+      "cl100k_base": 15
+    },
+    {
+      "id": "zh-13",
+      "class": "zh",
+      "source": "authored (繁体字)",
+      "text": "我對運動很有興趣,每天都會去慢跑。",
+      "o200k_base": 16,
+      "cl100k_base": 26
+    },
+    {
+      "id": "zh-14",
+      "class": "zh",
+      "source": "authored (繁体字)",
+      "text": "他把腳踏車的爆胎修好了。",
+      "o200k_base": 11,
+      "cl100k_base": 21
+    },
+    {
+      "id": "ko-01",
+      "class": "ko",
+      "source": "authored",
+      "text": "제가 제일 좋아하는 색은 파란색이고 생일은 4월 3일이에요.",
+      "o200k_base": 23,
+      "cl100k_base": 32
+    },
+    {
+      "id": "ko-02",
+      "class": "ko",
+      "source": "authored",
+      "text": "저는 집에서 고양이 두 마리를 키우고 있어요.",
+      "o200k_base": 16,
+      "cl100k_base": 24
+    },
+    {
+      "id": "ko-03",
+      "class": "ko",
+      "source": "authored",
+      "text": "저는 매일 아침 5시에 일어나서 조깅을 해요.",
+      "o200k_base": 19,
+      "cl100k_base": 24
+    },
+    {
+      "id": "ko-04",
+      "class": "ko",
+      "source": "authored",
+      "text": "우유를 마시면 배가 아파요.",
+      "o200k_base": 11,
+      "cl100k_base": 14
+    },
+    {
+      "id": "ko-05",
+      "class": "ko",
+      "source": "authored",
+      "text": "제 남동생은 삿포로에 살아요.",
+      "o200k_base": 13,
+      "cl100k_base": 20
+    },
+    {
+      "id": "ko-06",
+      "class": "ko",
+      "source": "authored",
+      "text": "다음 달에 교토로 출장을 가요.",
+      "o200k_base": 12,
+      "cl100k_base": 19
+    },
+    {
+      "id": "ko-07",
+      "class": "ko",
+      "source": "authored",
+      "text": "지난달에 오사카로 출장을 다녀왔어요.",
+      "o200k_base": 14,
+      "cl100k_base": 23
+    },
+    {
+      "id": "ko-08",
+      "class": "ko",
+      "source": "authored",
+      "text": "오늘 시청에서 주민등록등본을 재발급받았어요.",
+      "o200k_base": 16,
+      "cl100k_base": 31
+    },
+    {
+      "id": "ko-09",
+      "class": "ko",
+      "source": "authored",
+      "text": "지난주에 전자레인지 수리 견적을 받았어요.",
+      "o200k_base": 16,
+      "cl100k_base": 23
+    },
+    {
+      "id": "ko-10",
+      "class": "ko",
+      "source": "authored",
+      "text": "주말에 현관 정리를 겨우 끝냈어요.",
+      "o200k_base": 13,
+      "cl100k_base": 23
+    },
+    {
+      "id": "ko-11",
+      "class": "ko",
+      "source": "authored",
+      "text": "밀려 있던 우편물을 정리했어요.",
+      "o200k_base": 12,
+      "cl100k_base": 24
+    },
+    {
+      "id": "ko-12",
+      "class": "ko",
+      "source": "authored",
+      "text": "퇴근 후에 자전거 펑크를 수리했어요.",
+      "o200k_base": 16,
+      "cl100k_base": 23
+    },
+    {
+      "id": "ko-13",
+      "class": "ko",
+      "source": "authored",
+      "text": "저는 자바스크립트보다 러스트를 더 좋아해요.",
+      "o200k_base": 16,
+      "cl100k_base": 27
+    },
+    {
+      "id": "ko-14",
+      "class": "ko",
+      "source": "authored",
+      "text": "냉장고 안을 깨끗하게 정리했어요.",
+      "o200k_base": 15,
+      "cl100k_base": 23
+    },
+    {
+      "id": "ru-01",
+      "class": "ru",
+      "source": "authored",
+      "text": "Мой любимый цвет — синий, а день рождения — третье апреля.",
+      "o200k_base": 17,
+      "cl100k_base": 30
+    },
+    {
+      "id": "ru-02",
+      "class": "ru",
+      "source": "authored",
+      "text": "У меня дома живут два кота.",
+      "o200k_base": 9,
+      "cl100k_base": 15
+    },
+    {
+      "id": "ru-03",
+      "class": "ru",
+      "source": "authored",
+      "text": "Я каждое утро бегаю в пять часов.",
+      "o200k_base": 11,
+      "cl100k_base": 18
+    },
+    {
+      "id": "ru-04",
+      "class": "ru",
+      "source": "authored",
+      "text": "От молока у меня болит живот.",
+      "o200k_base": 9,
+      "cl100k_base": 14
+    },
+    {
+      "id": "ru-05",
+      "class": "ru",
+      "source": "authored",
+      "text": "В следующем месяце у меня командировка в Киото.",
+      "o200k_base": 13,
+      "cl100k_base": 22
+    },
+    {
+      "id": "th-01",
+      "class": "th",
+      "source": "authored",
+      "text": "สีที่ฉันชอบที่สุดคือสีฟ้า และวันเกิดของฉันคือวันที่ 3 เมษายน",
+      "o200k_base": 22,
+      "cl100k_base": 53
+    },
+    {
+      "id": "th-02",
+      "class": "th",
+      "source": "authored",
+      "text": "ฉันเลี้ยงแมวสองตัวที่บ้าน",
+      "o200k_base": 11,
+      "cl100k_base": 23
+    },
+    {
+      "id": "th-03",
+      "class": "th",
+      "source": "authored",
+      "text": "ฉันวิ่งจ๊อกกิ้งทุกเช้าตอนตีห้า",
+      "o200k_base": 18,
+      "cl100k_base": 29
+    },
+    {
+      "id": "th-04",
+      "class": "th",
+      "source": "authored",
+      "text": "การดื่มนมทำให้ฉันปวดท้อง",
+      "o200k_base": 14,
+      "cl100k_base": 20
+    },
+    {
+      "id": "th-05",
+      "class": "th",
+      "source": "authored",
+      "text": "เดือนหน้าฉันจะไปทำงานที่เกียวโต",
+      "o200k_base": 13,
+      "cl100k_base": 28
+    },
+    {
+      "id": "ar-01",
+      "class": "ar",
+      "source": "authored",
+      "text": "لوني المفضل هو الأزرق وعيد ميلادي في الثالث من أبريل.",
+      "o200k_base": 16,
+      "cl100k_base": 33
+    },
+    {
+      "id": "ar-02",
+      "class": "ar",
+      "source": "authored",
+      "text": "لدي قطتان أعيش معهما في المنزل.",
+      "o200k_base": 11,
+      "cl100k_base": 21
+    },
+    {
+      "id": "ar-03",
+      "class": "ar",
+      "source": "authored",
+      "text": "أذهب للجري كل صباح في الساعة الخامسة.",
+      "o200k_base": 11,
+      "cl100k_base": 27
+    },
+    {
+      "id": "ar-04",
+      "class": "ar",
+      "source": "authored",
+      "text": "شرب الحليب يسبب لي ألمًا في المعدة.",
+      "o200k_base": 13,
+      "cl100k_base": 26
+    },
+    {
+      "id": "ar-05",
+      "class": "ar",
+      "source": "authored",
+      "text": "سأسافر إلى كيوتو في رحلة عمل الشهر المقبل.",
+      "o200k_base": 13,
+      "cl100k_base": 29
+    },
+    {
+      "id": "emoji-01",
+      "class": "emoji_ja",
+      "source": "authored",
+      "text": "今日はとても良い天気です☀️😊",
+      "o200k_base": 12,
+      "cl100k_base": 17
+    },
+    {
+      "id": "emoji-02",
+      "class": "emoji_ja",
+      "source": "authored",
+      "text": "誕生日おめでとう🎉🎂 とても嬉しいです!",
+      "o200k_base": 17,
+      "cl100k_base": 25
+    },
+    {
+      "id": "emoji-03",
+      "class": "emoji_ja",
+      "source": "authored",
+      "text": "猫を2匹飼っています🐱🐱 とても可愛いです。",
+      "o200k_base": 17,
+      "cl100k_base": 27
+    },
+    {
+      "id": "emoji-04",
+      "class": "emoji_ja",
+      "source": "authored",
+      "text": "運動不足なので今日から走ります🏃💦",
+      "o200k_base": 12,
+      "cl100k_base": 21
+    },
+    {
+      "id": "emoji-05",
+      "class": "emoji_ja",
+      "source": "authored",
+      "text": "旅行の計画を立てています✈️🗾 楽しみです!",
+      "o200k_base": 20,
+      "cl100k_base": 24
+    }
+  ]
+}

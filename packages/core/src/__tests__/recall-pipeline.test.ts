@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Ctx } from "../ctx.js";
 import type { VectorStore } from "../interfaces/vector-store.js";
 import { defaultDecayStrategy } from "../strategies/decay.js";
+import { heuristicTokenCounter } from "../heuristic-token-counter.js";
 import type { Memory, MemoryStatus, NewMemory } from "../memory.js";
 import { createRuntime } from "../runtime.js";
 import { createFakeRuntimeStores } from "./runtime-fakes.js";
@@ -797,6 +798,88 @@ describe("recall() — 段3: 矛盾の解決と必須の同伴取得（docs/reca
     expect(ids).toContain(a.id);
     expect(ids).toContain(b.id);
     expect(result.omitted.some((o) => o.kind === "budget_dropped")).toBe(false);
+  });
+});
+
+describe("recall() — 段4: トークン予算による切り詰め（Issue #108。maxMemoryChars 以外の経路に歯が無かった）", () => {
+  /**
+   * `maxMemoryTokens` / `promptBudgetTokens` を実際に行使する経路
+   * （`recall-runtime.ts` の `effectiveTokenBudget` / `unitTokens` / 段4）には、
+   * このテストを書く前はリポジトリ全体で歯が0本だった——既存の予算の歯は全部
+   * `maxMemoryChars` を使っている。Issue #108（既定 `TokenCounter` が日本語を
+   * 過小評価し、`maxMemoryTokens` の判定が静かに緩む）が壊れると言っている当の経路に
+   * 歯が無かった、という穴をここで塞ぐ。
+   *
+   * 3件の日本語 digest を用意し、ベクトルの向きで優先順位（rankScore の大小）を
+   * 明示的に制御する——`units.sort((a,b) => b.rankScore - a.rankScore)` が
+   * どちらを先に残すかは、テストが安定して同じ結果を出すために自分で決めておく必要がある。
+   * digest はどれも "あ" x10（CJK のみ）= `heuristicTokenCounter` で 9 トークン
+   * （ceil(10 * 18 / 20) = ceil(9) = 9）。3件合計 27 トークンは
+   * `maxMemoryTokens: 20` に収まらないので、スコアの高い2件（18トークン）だけが残り、
+   * 3件目（9トークン）が `budget_dropped` に回るはずである。
+   */
+  it("maxMemoryTokens は既定カウンタで数えた digest 合計を上限内に切り詰める", async () => {
+    const { runtime, stores } = buildRuntime();
+    const digest = "あ".repeat(10);
+    expect(heuristicTokenCounter.count(digest).tokens).toBe(9);
+
+    const top = await createEmbeddedMemory(stores, [1, 0], { digest });
+    const middle = await createEmbeddedMemory(stores, [0.99, 0.14], { digest });
+    const bottom = await createEmbeddedMemory(stores, [0.9, 0.44], { digest });
+
+    const result = await runtime.recall(ctx, {
+      vector: [1, 0],
+      limit: 10,
+      budget: { maxMemoryTokens: 20 },
+    });
+
+    const returnedIds = result.memories.map((m) => m.memoryId);
+    expect(returnedIds).toEqual([top.id, middle.id]);
+    expect(returnedIds).not.toContain(bottom.id);
+
+    const returnedTokenSum = result.memories.reduce(
+      (sum, m) => sum + heuristicTokenCounter.count(m.digest).tokens,
+      0,
+    );
+    expect(returnedTokenSum).toBeLessThanOrEqual(20);
+    expect(returnedTokenSum).toBe(18);
+
+    // 予算に入りきらなかった分は budget_dropped として出る（黙って消えない）。
+    expect(result.omitted).toContainEqual({
+      kind: "budget_dropped",
+      count: 1,
+      countKind: "exact",
+    });
+  });
+
+  /**
+   * `effectiveTokenBudget` は `maxMemoryTokens` と `promptBudgetTokens` のうち
+   * **小さいほう**を採る（`recall-runtime.ts` のコメント「最も厳しい(小さい)ものを1本にまとめる」）。
+   * `maxMemoryTokens` だけなら2件とも残る大きさ（100）にしておき、
+   * `promptBudgetTokens: 10` を同時に渡す——1件なら9トークンで収まるが2件では18トークンに
+   * なり10を超えるので、`promptBudgetTokens` のほうが効いて1件しか残らないはずである。
+   * これが緩いほう（100）を採っていたら2件とも残ってしまうので、区別できる歯になっている。
+   */
+  it("promptBudgetTokens は maxMemoryTokens より小さいほうが優先される", async () => {
+    const { runtime, stores } = buildRuntime();
+    const digest = "あ".repeat(10); // 9トークン/件
+    const top = await createEmbeddedMemory(stores, [1, 0], { digest });
+    const second = await createEmbeddedMemory(stores, [0.99, 0.14], { digest });
+
+    const result = await runtime.recall(ctx, {
+      vector: [1, 0],
+      limit: 10,
+      budget: { maxMemoryTokens: 100, promptBudgetTokens: 10 },
+    });
+
+    const returnedIds = result.memories.map((m) => m.memoryId);
+    expect(returnedIds).toEqual([top.id]);
+    expect(returnedIds).not.toContain(second.id);
+    expect(result.omitted).toContainEqual({
+      kind: "budget_dropped",
+      count: 1,
+      countKind: "exact",
+    });
   });
 });
 

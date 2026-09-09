@@ -221,7 +221,7 @@ DATABASE_URL=... pnpm --filter @mnemora/example-chat run backfill
 と変化させ、各長さについて独立のテナントで:
 
 - **経路A**: 全ターンを `role: text` 形式で連結した文字列の長さ（`chars`）と、
-  `heuristicTokenCounter`（core の既定の文字数ベース推定）によるトークン数。
+  `heuristicTokenCounter`（core の既定の推定。文字種で重み付けする——[ADR 0083](../../docs/decisions/0083-cjk-aware-heuristic-token-counter.md)）によるトークン数。
 - **経路B**: 同じ会話を `observe()` で取り込み、終盤の質問を `recall()`（**budget 無し**）
   した際の `usage.chars` / `usage.estimatedTokens`——`recall()` 自身が計測した値を
   そのまま使う（自前で数え直さない）。
@@ -234,6 +234,13 @@ DATABASE_URL=... pnpm --filter @mnemora/example-chat run backfill
 
 `pnpm --filter @mnemora/example-chat run compare` の実際の出力（再現可能。同じ環境・
 同じ会話生成関数であれば同じ数字になる——`buildConversation()` は乱数を使わない）。
+
+⚠ **この表の「tokens(概算)」の2列は、[ADR 0083](../../docs/decisions/0083-cjk-aware-heuristic-token-counter.md)
+以前の既定カウンタ（`Math.ceil(text.length / 4)`）で測った値である。測り直していない。**
+この会話コーパスは全文が日本語であり、ADR 0083 の係数では**同じ入力に対しておよそ 3.3 倍の値**
+になるはずである（実測: 日本語の合計比が 0.353 → 1.182）。**「はず」であって、実行して
+確かめてはいない**——測り直しには Postgres が要り、ADR 0083 の作業をした器に無かった。
+**`chars` の2列と `mnemora/naive (chars)` の列（＝北極星の主測定）はこの変更の影響を受けない。**
 
 | 会話ターン数 | naive chars | naive tokens(概算) | mnemora chars | mnemora tokens(概算) | mnemora/naive (chars) |
 |---|---|---|---|---|---|
