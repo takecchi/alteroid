@@ -3195,6 +3195,38 @@ export function createCloneTools(context: ToolContext) {
             (body === '' ? '' : `\n  ${excerptLine(body, JOURNAL_TEXT_EXCERPT)}`)
           );
         });
+
+        // **`tool_use` の混み具合を、この道具自身に名乗らせる（#730 の続き）。**
+        // PR #730 で「読む」道具19本の実行が `tool_use` として日誌に残るように
+        // なった分、既定の眺め（`limit` 既定20・`types` 省略で全種別）で
+        // `tool_use` が `decision` / `exchange` を新しい順20件の枠から
+        // 押し出す速さが上がった。習慣（「types で絞るのを忘れない」）に
+        // 預けず、この呼びで実際に数えた件数だけを言う。
+        //
+        // N = この呼びで日誌から取れた件数（entries.length。上の omitted が
+        // `total` として使っているのと同じ数——`limit` の要求値ではない）。
+        // M = そのうち type === 'tool_use' の件数。
+        const toolUseCount = entries.filter((entry) => entry.type === 'tool_use').length;
+        // **`types` が `tool_use` だけを名指しした呼びか。** 出す条件の
+        // 判定はここ（呼びが何を渡したか）に置く。`M === N`（たまたま
+        // 取れた分が全部 tool_use だった）には置かない——`types` を省略した
+        // 呼びでそれが起きたときは、外せばその先にある判断の記録が出てくる
+        // ので、出すのが正しい。
+        // **「だけを名指しした」は every で見る。** `length === 1` で見ると
+        // `types: ['tool_use', 'tool_use']` が「名指しではない」に化けて、
+        // 外す先が無い呼びで断り書きが出る（規則の言葉と食い違う）。
+        // `types: []` はここへ到達しない（0件の契約で上の早期 return に落ちる）。
+        const typesIsToolUseOnly =
+          types !== undefined && types.length > 0 && types.every((type) => type === 'tool_use');
+        // ⭐ 出す条件: M > 0 かつ「tool_use だけを名指しした呼びではない」とき。
+        const toolUseNotice =
+          toolUseCount > 0 && !typesIsToolUseOnly
+            ? [
+                `（tool_use が今回の ${entries.length} 件中 ${toolUseCount} 件。` +
+                  '判断の記録だけを見るなら types で外せる）',
+              ]
+            : [];
+
         return text(
           [
             renderListing(items, {
@@ -3204,6 +3236,7 @@ export function createCloneTools(context: ToolContext) {
                 'さらに遡るなら until を、狭めるなら since / types / with / q を指定すること。',
             }),
             '（本文は抜粋。全文は journal_read id=<id> で取れる）',
+            ...toolUseNotice,
           ].join('\n'),
         );
       },

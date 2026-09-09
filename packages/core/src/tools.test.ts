@@ -11181,6 +11181,126 @@ describe('journal_read で subagent_stall を絞れる（Issue #357）', () => {
 });
 
 /**
+ * PR #730 で「読む」道具19本の実行が `tool_use` として日誌に残るように
+ * なった分、既定の眺め（`limit` 既定20・`types` 省略で全種別）で `tool_use`
+ * が `decision` / `exchange` を新しい順20件の枠から押し出す速さが上がった。
+ * ここで測るのは、その混み具合を `journal_read` 自身に名乗らせる断り書き
+ * （`（tool_use が今回の N 件中 M 件。判断の記録だけを見るなら types で
+ * 外せる）`）が、決められた3分類どおりに出る／出ないことである。
+ *
+ * 出す条件は「M > 0 かつ tool_use だけを名指しした呼びではない」。
+ * 判定の根拠は呼び（`types` に何を渡したか）であって `M === N` ではない
+ * （後者で判定すると、`types` 省略で偶然全件 tool_use だった回に黙って
+ * しまう——そのときも外せばその先の判断の記録が出てくるので、出すのが
+ * 正しい）。
+ */
+describe('journal_read の tool_use 断り書き（M > 0 かつ tool_use だけを名指しした呼びではないとき）', () => {
+  async function appendToolUse(h: ReturnType<typeof harness>, count: number) {
+    for (let index = 0; index < count; index += 1) {
+      await h.stores.journal.append({
+        type: 'tool_use',
+        actor: 'clone',
+        tool: `Tool${index}`,
+        input: { index },
+      });
+    }
+  }
+
+  async function appendDecisions(h: ReturnType<typeof harness>, count: number) {
+    for (let index = 0; index < count; index += 1) {
+      await h.stores.journal.append({
+        type: 'decision',
+        decision: `判断${index}`,
+        grounds: '記憶',
+      });
+    }
+  }
+
+  it('types 省略で tool_use が混ざる呼び（5件中2件）→ 出る。件数が実数と一致する', async () => {
+    const h = harness();
+    await appendDecisions(h, 3);
+    await appendToolUse(h, 2);
+
+    const reply = await h.call('journal_read', {});
+
+    expect(reply).toContain(
+      '（tool_use が今回の 5 件中 2 件。判断の記録だけを見るなら types で外せる）',
+    );
+  });
+
+  it('types 省略で tool_use が混ざる呼び（3件中1件）→ 出る。件数が実数と一致する', async () => {
+    const h = harness();
+    await appendDecisions(h, 2);
+    await appendToolUse(h, 1);
+
+    const reply = await h.call('journal_read', {});
+
+    expect(reply).toContain(
+      '（tool_use が今回の 3 件中 1 件。判断の記録だけを見るなら types で外せる）',
+    );
+  });
+
+  it('tool_use が0件の呼び → 断り書きが出ない', async () => {
+    const h = harness();
+    await appendDecisions(h, 3);
+
+    const reply = await h.call('journal_read', {});
+
+    expect(reply).not.toContain('判断の記録だけを見るなら types で外せる');
+  });
+
+  it('types が tool_use だけの呼び → M > 0 でも出ない', async () => {
+    const h = harness();
+    await appendDecisions(h, 2);
+    await appendToolUse(h, 3);
+
+    const reply = await h.call('journal_read', { types: ['tool_use'] });
+
+    expect(reply).not.toContain('判断の記録だけを見るなら types で外せる');
+
+    // **重複して名指ししても「だけを名指しした呼び」である。** 外す先が
+    // 無いことは変わらないので、ここでも黙る。
+    const repeated = await h.call('journal_read', { types: ['tool_use', 'tool_use'] });
+
+    expect(repeated).not.toContain('判断の記録だけを見るなら types で外せる');
+  });
+
+  it('types に tool_use と他の種別が入る呼び → 出る', async () => {
+    const h = harness();
+    await appendDecisions(h, 2);
+    await appendToolUse(h, 2);
+
+    const reply = await h.call('journal_read', { types: ['tool_use', 'decision'] });
+
+    expect(reply).toContain(
+      '（tool_use が今回の 4 件中 2 件。判断の記録だけを見るなら types で外せる）',
+    );
+  });
+
+  it('types 省略で、取れた件が全部 tool_use（M === N）→ 出る（呼びで判定していることの歯。M === N で黙る実装ならここが赤くなる）', async () => {
+    const h = harness();
+    await appendToolUse(h, 3);
+
+    const reply = await h.call('journal_read', {});
+
+    expect(reply).toContain(
+      '（tool_use が今回の 3 件中 3 件。判断の記録だけを見るなら types で外せる）',
+    );
+  });
+
+  it('id 指定の全文モードでは出ない', async () => {
+    const h = harness();
+    await appendToolUse(h, 2);
+    const [entry] = await h.stores.journal.list({ types: ['tool_use'] });
+    if (entry === undefined) throw new Error('tool_use が日誌へ記録されていない');
+
+    const reply = await h.call('journal_read', { id: entry.id });
+
+    expect(reply).not.toContain('判断の記録だけを見るなら types で外せる');
+  });
+});
+
+/**
  * issue #426。`commitment_list` には出所（`origin`）で絞る手段が無く、
  * マネージャーからの一件（`origin: 'manager'`）と人間の依頼が同じ窓へ
  * 混ざって流れ込んでいた実害を塞ぐ。
