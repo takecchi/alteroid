@@ -20,9 +20,6 @@ export default function Login() {
       <Shell>
         <h1 className="text-sm font-semibold">デーモンに繋がらない</h1>
         <ErrorNote error={auth.error} className="mt-3" />
-        <div className="mt-4">
-          <ConnectionCard compact />
-        </div>
       </Shell>
     );
   }
@@ -44,6 +41,19 @@ export default function Login() {
   return <SignIn />;
 }
 
+/**
+ * ログイン画面のどの分岐からでも接続先を変えられるようにする。
+ *
+ * **かつては `auth.error !== undefined` のときだけ `ConnectionCard` を出していた。**
+ * これだと「デーモンが応答しているが認証を要求している」場合（= 大半の詰まり方）に
+ * 直す手段が出ない——応答はしているので `auth.error` は undefined のままだが、
+ * 繋いでいる先が「入りたいデーモン」ではないことがある（例: 開発用と本番用を
+ * 両方動かしていて、既定の `/api` が開発用を向いたまま本番へ繋ぎたい）。
+ *
+ * ここに1箇所だけ置き、全分岐（`SignIn` / `Ungranted` / `checking` / エラー）が
+ * 同じものを得る。**エラー分岐はこれまで直に `ConnectionCard` を出していたが、
+ * ここへ一本化したので削除した**（二重に出さないため）。
+ */
 function Shell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-dvh items-center justify-center p-6">
@@ -53,6 +63,9 @@ function Shell({ children }: { children: React.ReactNode }) {
           <p className="mt-1 text-xs text-muted">クローンの様子を見て、指示を出し、記憶を直す</p>
         </div>
         <Card className="p-5">{children}</Card>
+        <div className="mt-4">
+          <ConnectionCard compact />
+        </div>
       </div>
     </div>
   );

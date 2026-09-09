@@ -9,14 +9,34 @@ import { useState } from 'react';
 
 import { useHealth } from '~/hooks/queries';
 import { useApiContext } from '~/lib/api';
-import { SAME_ORIGIN_BASE_URL } from '~/lib/config';
+import {
+  hasStoredApiBaseUrl,
+  resolveApiBaseUrl,
+  resolveApiBaseUrlOrigin,
+  SAME_ORIGIN_BASE_URL,
+  type ApiBaseUrlOrigin,
+} from '~/lib/config';
 
 import { Badge, Button, Card, CardHeader, ErrorNote, Input } from './ui';
+
+/**
+ * 3段のどれから来たかを、人間が読む言葉にする。
+ *
+ * **「段」「解決」のような開発側の語を画面に出さない。** ここを読むのはオーナー
+ * であって実装者ではない。
+ */
+const ORIGIN_LABEL: Record<ApiBaseUrlOrigin, string> = {
+  stored: 'このブラウザに保存した接続先',
+  buildTime: 'このアプリに組み込まれた既定の接続先',
+  sameOrigin: 'この画面と同じ場所（既定）',
+};
 
 export function ConnectionCard({ compact = false }: { compact?: boolean }) {
   const { baseUrl, setBaseUrl } = useApiContext();
   const health = useHealth();
   const [draft, setDraft] = useState(baseUrl);
+  const origin = resolveApiBaseUrlOrigin();
+  const canResetToDefault = hasStoredApiBaseUrl();
 
   const normalized = draft.trim().replace(/\/+$/, '');
   const dirty = normalized !== baseUrl;
@@ -69,14 +89,27 @@ export function ConnectionCard({ compact = false }: { compact?: boolean }) {
             適用
           </Button>
           <Button
+            disabled={!canResetToDefault}
             onClick={() => {
               setBaseUrl(null);
-              setDraft(SAME_ORIGIN_BASE_URL);
+              // **`SAME_ORIGIN_BASE_URL` 固定で書かない。** `VITE_ALTEROID_API_URL`
+              // が設定されていれば、`storeApiBaseUrl(null)` の後に実際に効く値は
+              // そちらである——入力欄だけ `/api` を表示すると、本当の接続先と
+              // 食い違う（このカードの外から見えている「繋がった」「繋がらない」
+              // は実際の接続先に対する結果なので、入力欄の嘘に気づく手段が無い）。
+              // `resolveApiBaseUrl(null)` は「保存済みの値を消した後」の解決を
+              // ブラウザ無しで再現できる引数付き版（冒頭の doc）に、その状態を
+              // そのまま渡しているだけである。
+              setDraft(resolveApiBaseUrl(null));
             }}
           >
             既定に戻す
           </Button>
         </div>
+
+        {/* 3つの出どころを区別する（PR 1 の歯3）。値だけでは「既定に戻った」のか
+            「消し損ねた」のかが分からない——`hasStoredApiBaseUrl` の使い道。 */}
+        <p className="text-xs text-muted">{ORIGIN_LABEL[origin]}</p>
 
         <ErrorNote error={health.error} />
 
