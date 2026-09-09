@@ -83,6 +83,7 @@
 | [docs/recall.md](./docs/recall.md) | Recall pipeline / 「無い」の分類 / 目次帯 / 量の計測と予算 |
 | [docs/roadmap.md](./docs/roadmap.md) | Phase 1 実装計画 / リスク / **まだ判断が必要な点** |
 | [docs/alteroid-findings.md](./docs/alteroid-findings.md) | 設計の材料にした運用知見を、現物で検証した記録 |
+| [docs/autonomy.md](./docs/autonomy.md) | **自律作業の手引き** — 何を選ぶか / どこで止まるか / 何をしてはいけないか / 踏むと痛い穴 |
 | [docs/decisions/](./docs/decisions/) | ADR — 重大な設計判断と、その理由 |
 
 **`docs/vision.md` の「やらないこと」と `docs/north-star.md` の「やらないこと」は別物である。**
@@ -101,6 +102,11 @@
 - **オーナーの判断を待っている点は
   [docs/roadmap.md](./docs/roadmap.md) の「設計上まだ判断が必要な点」に集めてある。**
   勝手に決めない。逆に、そこに無いものは設計側で決めて理由を残す。
+- **オーナーに逐一確認せずに進めるなら、
+  [docs/autonomy.md](./docs/autonomy.md) を読むこと**（ADR 0071）。
+  **何を選ぶか / どこで止まるか / 何をしてはいけないか**と、
+  **実際に踏まれた穴**が書いてある。**ここには要約を置かない**——上の
+  「⚠ ここに北極星の要約を置かない」と同じ理由である。
 
 ---
 
