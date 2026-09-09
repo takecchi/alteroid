@@ -3026,6 +3026,77 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     expect(Math.min(...claims)).toBeGreaterThanOrEqual(3);
   });
 
+  /**
+   * ⭐ **左右を揃える。** 反転側（`⚠ 節id と文字数の固定費だけで…`）は以前から
+   * 予算値を出していたが、非反転側（`1行の平均は…`）は出していなかった——
+   * 同じ断り書きの中で片方だけ予算を名乗らない状態だった。両側とも
+   * `MEMORY_PROMPT_OUTLINE_BUDGET` の値を出すことを固定する。
+   */
+  it('⭐ 目次が予算で切れた断り書きは、反転側・非反転側のどちらでも予算値を名乗る', () => {
+    const budgetPhrase = `予算 ${MEMORY_PROMPT_OUTLINE_BUDGET.toLocaleString('en-US')} 文字`;
+
+    // 非反転側（「見出しを縮めれば載る」）——固定費が節数に比例して予算を
+    // 食い切る手前の点（既存の歯「名乗った目標まで見出しを縮めると…」と
+    // 同じ形の入力）。
+    const shrinkable = Array.from(
+      { length: 120 },
+      (_, i) => `## これは十分に長い見出しであり予算を食い尽くす ${i}\n本文`,
+    ).join('\n');
+    const nonInverted = renderMemoryDocuments([
+      {
+        slug: 'shrinkable',
+        content: `---\ntype: premise\ndescription: 大きい\n---\n${shrinkable}`,
+      },
+    ]);
+    // 前提: 本当に非反転側（「縮めれば載る」）に入っている。
+    expect(nonInverted).toMatch(/見出しを平均 \d+ 文字（いま \d+ 文字）まで縮める必要がある。/);
+    expect(nonInverted).toContain(budgetPhrase);
+
+    // 反転側（「縮めても載らない」）——見出しを最短近くまで削っても固定費
+    // だけで予算を超える節数（既存の歯「見出しを最短まで縮めても載らない
+    // 文書には…」と同じ形の入力）。
+    const unshrinkable = Array.from({ length: 400 }, (_, i) => `# ${i}\n本文`).join('\n');
+    const inverted = renderMemoryDocuments([
+      {
+        slug: 'unshrinkable',
+        content: `---\ntype: premise\ndescription: 追記だけの文書\n---\n${unshrinkable}`,
+      },
+    ]);
+    // 前提: 本当に反転側（「縮めても載らない」）に入っている。
+    expect(inverted).toContain('見出しを最短');
+    expect(inverted).not.toMatch(/まで縮める必要がある。/);
+    expect(inverted).toContain(budgetPhrase);
+  });
+
+  /**
+   * ⭐⭐ **断り書きの締めが「何を移すか」の基準を持つ。**
+   *
+   * 同じ断り書きの中で「足したばかりの節はここに出る」（直近の名指し）の
+   * すぐ後に `side=tail`（末尾を見る）→ `memory_section_move`（付録へ移す）が
+   * 隣接している。素直に読むと「末尾を見て、それを移す」に読めてしまい、
+   * いちばん新しい学びを `fact` へ追い出しかねない——しかも追い出した節は
+   * 目次から消えるので、読み手は何を失ったか気づけない。この誤読を、
+   * 断り書きの締めで名指しして塞ぐ。
+   */
+  it('⭐⭐ 断り書きの締めは、移す対象の基準と side=tail の誤読の両方を名乗る', () => {
+    const huge = Array.from(
+      { length: 200 },
+      (_, i) => `## これは十分に長い見出しであり予算を食い尽くす ${i}\n本文`,
+    ).join('\n');
+    const rendered = renderMemoryDocuments([
+      { slug: 'big', content: `---\ntype: premise\ndescription: 大きい\n---\n${huge}` },
+    ]);
+
+    // 1. 移す対象の基準——済んだ経緯・1回きりの実測・失効した手順であって、
+    //    末尾の新しい節ではない。
+    expect(rendered).toContain(
+      '移すのは済んだ経緯・1回きりの実測・失効した手順であって、末尾の新しい節ではない。',
+    );
+    // 2. side=tail の誤読を名指しで塞ぐ——読むためであって移すためではない。
+    expect(rendered).toContain('side=tail は末尾を**読む**ための向きであって');
+    expect(rendered).toContain('末尾を**移す**ための指示ではない');
+  });
+
   it('⭐ 要旨が長すぎる文書は、切ったことと全文の在り処と直し方を名乗る', () => {
     const longDescription = 'あ'.repeat(MEMORY_PROMPT_DESCRIPTION_BUDGET + 500);
     const rendered = renderMemoryDocuments([

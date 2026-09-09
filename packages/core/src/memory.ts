@@ -1175,8 +1175,17 @@ export const MEMORY_PROMPT_DESCRIPTION_BUDGET = 3_000;
  *
  * **⚠️ 予算に当たったこと自体が、この文書を割れという合図である**——だから
  * 省略の断りには件数だけでなく、割る手順（`memory_outline` → `memory_section_move`）
- * を書く（`excerpt.ts` の「続きの取り方を書けるのは、呼び手の側にその口が
- * 実在するときだけである」）。
+ * **だけでなく、何を移すかの基準**（済んだ経緯・1回きりの実測・失効した
+ * 手順であって、いま足したばかりの節ではない）も書く（`excerpt.ts` の
+ * 「続きの取り方を書けるのは、呼び手の側にその口が実在するときだけである」）。
+ *
+ * **基準を置く先は `prompt.ts`（毎ターンの床）ではなく、ここが生む断り書き
+ * 側にした。** 費用が発生する瞬間と、危険が発生する瞬間が一致するからである
+ * ——`prompt.ts` の床の案内はもともと「目次に『省略』と出ている文書」に
+ * しか触れておらず、その助言が要る場面と、この断り書きが出る場面は同じ。
+ * ⟹ 基準を断り書き側に置けば、**要るときに必ず在り、要らないときは1文字も
+ * 出ない**。オーナーの決定（永続的なトークン肥大化を避ける）に対して、
+ * 毎ターン払う床を増やさずに済む形である。
  */
 export const MEMORY_PROMPT_OUTLINE_BUDGET = 6_000;
 
@@ -1320,7 +1329,8 @@ function renderPremiseOutlineOmission(
         `この文書は縮めるのではなく memory_section_move で割るしかない。`
       : `1行の平均は ${formatMemoryCharCount(Math.round(outlineChars / total))} 文字` +
         `（うち節id と文字数の固定費が ${formatMemoryCharCount(Math.round(fixedChars / total))} 文字）。` +
-        `全 ${formatMemoryCharCount(total)} 節を載せるには、見出しを平均 ` +
+        `予算 ${formatMemoryCharCount(MEMORY_PROMPT_OUTLINE_BUDGET)} 文字に全 ` +
+        `${formatMemoryCharCount(total)} 節を載せるには、見出しを平均 ` +
         `${formatMemoryCharCount(Math.floor(room / total))} 文字（いま ` +
         `${formatMemoryCharCount(Math.round(headingChars / total))} 文字）まで縮める必要がある。`;
 
@@ -1333,7 +1343,10 @@ function renderPremiseOutlineOmission(
     tail,
     arithmetic,
     'memory_outline（side=tail で末尾も見られる）で残りを確かめ、' +
-      'memory_section_move で付録の文書へ割ること。',
+      'memory_section_move で付録の文書へ割ること。**移すのは済んだ経緯・' +
+      '1回きりの実測・失効した手順であって、末尾の新しい節ではない。** ' +
+      '⚠ side=tail は末尾を**読む**ための向きであって、末尾を**移す**ための指示ではない' +
+      '——読んで確かめた末尾をそのまま移すと、いちばん新しい学びを fact へ追い出すことになる。',
   ].join('\n');
 }
 
