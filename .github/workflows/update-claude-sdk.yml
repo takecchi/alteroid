@@ -128,6 +128,11 @@ jobs:
             fi
             echo '## 検証（このワークフローが実行した生の出力）'
             echo ''
+            echo '**`sdk-quotes` は `pnpm test` 経由でも走っている（＝この行は二重の1回目）。**'
+            echo '根拠: `scripts/check-sdk-quotes.test.ts:324` の「実物の検査」describe が、'
+            echo '同じ core を実物の SDK と実物の repo に当てている（`--reporter=verbose` で'
+            echo '実際に走ることを確認済み）。'
+            echo ''
             cat "${RUNNER_TEMP:-/tmp}/verify.md"
             echo ''
             printf '実行: %s\n' "$RUN_URL"
