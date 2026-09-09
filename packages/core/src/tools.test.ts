@@ -13270,7 +13270,10 @@ describe('journal.append 失敗時の応答本文: 16箇所すべてで道具名
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-07');
         const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
-        return callExpectingError(tools, 'journal_write', { decision: '判断した', grounds: '根拠' });
+        return callExpectingError(tools, 'journal_write', {
+          decision: '判断した',
+          grounds: '根拠',
+        });
       },
     },
     {
