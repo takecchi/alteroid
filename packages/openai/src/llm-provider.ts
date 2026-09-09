@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import type { Ctx, LLMProvider, LLMResponse, PromptSpec, StructuredRequest } from "@mnemora/core";
+import { OpenAILLMProviderError } from "./errors.js";
 import { translateForOpenAIStructuredOutput } from "./json-schema.js";
 
 /**
@@ -54,6 +55,54 @@ function stripNulls(value: unknown): unknown {
   return value;
 }
 
+/**
+ * ⭐ **`content` を読む前に、必ずこれを通す。**
+ *
+ * **拒否は HTTP 200 で返る。** `message.refusal` に拒否理由の文字列が入り、
+ * このとき `message.content` は `null` になる。SDK は例外を投げない。
+ * ⟹ **見ないと、拒否を「空の成功」として core へ渡す。**
+ *
+ * OpenAI は Anthropic の `stop_reason` 一本とは形が違い、**2つの独立した機構**を持つ
+ * ——`message.refusal` と `finish_reason`。両方をここで見る。
+ *
+ * - `message.refusal` が非 null かつ空文字でなければ `kind: "refusal"`。
+ * - `finish_reason === "content_filter"` も `kind: "refusal"` として扱う。
+ *   **判断**: コンテンツフィルタで出力が省かれたのはモデル自身の拒否とは別機構だが、
+ *   呼び出し側の次の一手は同じ（同じ入力で再試行しても意味が無い）。⟹ `kind` は
+ *   増やさず、生の `finishReason` をフィールドに残すことで情報は潰さない。
+ * - `finish_reason === "length"` は `kind: "truncated"`。**切り詰められた JSON は
+ *   `JSON.parse` で `SyntaxError` になり、「モデルが壊れた JSON を吐いた」と
+ *   区別が付かなくなる。** だから分ける。
+ * - それ以外（`stop` / `tool_calls` / `function_call` / 未設定 / null）は素通しする
+ *   ——「分からない」を「拒否された」と読まない（`@mnemora/anthropic` と同じ固定点）。
+ *
+ * **`choices` が空（choice 自体が無い）ときは、この門では投げない。** 既存の
+ * `no_content` の経路（`complete` の `?? ""` / `completeStructured` の `if (!raw)`）に任せる。
+ */
+function assertNotRefusedOrTruncated(choice?: {
+  finish_reason?: string | null;
+  message?: { refusal?: string | null } | null;
+}): void {
+  if (!choice) {
+    return;
+  }
+  const refusalMessage = choice.message?.refusal ?? null;
+  if (refusalMessage != null && refusalMessage !== "") {
+    throw new OpenAILLMProviderError({
+      kind: "refusal",
+      refusalMessage,
+      finishReason: choice.finish_reason ?? null,
+    });
+  }
+  const finishReason = choice.finish_reason ?? null;
+  if (finishReason === "content_filter") {
+    throw new OpenAILLMProviderError({ kind: "refusal", finishReason });
+  }
+  if (finishReason === "length") {
+    throw new OpenAILLMProviderError({ kind: "truncated", finishReason });
+  }
+}
+
 function toOpenAIMessages(
   prompt: PromptSpec,
 ): { role: "system" | "user" | "assistant"; content: string }[] {
@@ -81,6 +130,13 @@ export class OpenAILLMProvider implements LLMProvider {
       model: this.model,
       messages: toOpenAIMessages(req),
     });
+    assertNotRefusedOrTruncated(response.choices[0]);
+    // ⚠ **ここの `?? ""` は残した。** ADR 0072「引き受けた負債」2 の通り、
+    // `@mnemora/anthropic` も同じ形であり、片方だけ throw にすると差し替えられなくなる。
+    // **ただし上の門を通した後なので、意味が変わっている**——ここへ来る空文字は
+    // 「拒否された」でも「切り詰められた」でもなく、**モデルが本当に何も言わなかった**場合だけである。
+    // ⟹ **「空文字は安全だ」と主張しているのではない。**望ましい姿でもない。
+    // 直すなら両 provider 同時（＝公開 API の破壊的変更）なので、提起までにしてある。
     return { content: response.choices[0]?.message?.content ?? "" };
   }
 
@@ -91,9 +147,14 @@ export class OpenAILLMProvider implements LLMProvider {
       messages: toOpenAIMessages(req.prompt),
       response_format: { type: "json_schema", json_schema: format },
     });
+    // ⭐ **`content` を読む前に拒否・切り詰めを見る。**順序が本質である
+    // ——後ろに置くと、拒否が `no_content` に化けて種類が潰れる（拒否時は `content` が `null`）。
+    assertNotRefusedOrTruncated(response.choices[0]);
     const raw = response.choices[0]?.message?.content;
     if (!raw) {
-      throw new Error("OpenAILLMProvider: structured completion returned no content");
+      // メッセージは既存の文言のまま（差し替え可能性・provider-parity.test.ts を壊さない）。
+      // 種類は `kind` で足しただけである。
+      throw new OpenAILLMProviderError({ kind: "no_content" });
     }
     const parsedJson: unknown = JSON.parse(raw);
     // OpenAI の strict モードは JSON Schema としての形は保証するが、それが core の zod
