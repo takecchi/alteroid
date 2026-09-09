@@ -317,20 +317,83 @@ put_variables() { # <serviceId> <KEY> <VALUE> …
     --variables "@$file" --compact >/dev/null
 }
 
-# Config as Code のパスを指す。**ダッシュボードで人間が選ぶ唯一の設定**がこれで、
-# 忘れると `startCommand` が無いので役が決まらない（同じイメージから2役を出している）。
-# CLI に口が無いので GraphQL を直に叩く
-set_config_file() { # <serviceId> <パス>
+# 役の設定（`railway/*.json`）を Service へ写す。**忘れると `startCommand` が無いので
+# 役が決まらない**（同じイメージから2役を出している）。CLI に口が無いので GraphQL を直に叩く。
+#
+# **かつては「ファイルのパスを指す」だけで済んだ**（Config as Code）。Railway が
+# サーバ側で廃止したので、いまは**同じ JSON の中身をこちらで写す**。実測（2026-09-09、
+# `railway 5.49.5`）— `railwayConfigFile` を渡すと mutation ごと落ちる:
+#
+#   {"data":null,"errors":[{"extensions":{"code":"INTERNAL_SERVER_ERROR"},
+#    "message":"Config as Code (railway.json / railway.toml) is deprecated.
+#      Use Infrastructure as Code (.railway/railway.ts) instead.",
+#    "path":["serviceInstanceUpdate"],"traceId":"598585903328604836"}]}
+#
+# **IaC（`.railway/railway.ts`）へは移らない。** 移すと `railway/*.json` と二重の真実に
+# なる（`setup.sh` 冒頭の4）。**真実は `railway/*.json` のままで、写す先だけが変わった。**
+set_config_file() { # <serviceId> <リポジトリの根からのパス>
+  local file input
+  file="$REPO_ROOT/${2#/}"
+  [ -f "$file" ] || die "役の設定が無い: $file"
+  input="$(config_input "$file")" || die "$file を Service の設定へ写せない"
   # shellcheck disable=SC2016 # GraphQL の変数はシェルに展開させない
   railway api 'mutation($serviceId: String!, $environmentId: String, $input: ServiceInstanceUpdateInput!) {
                  serviceInstanceUpdate(serviceId: $serviceId, environmentId: $environmentId, input: $input)
                }' \
     --raw-var "serviceId=$1" \
     --raw-var "environmentId=$ENVIRONMENT_ID" \
-    --var "input=$(json_object railwayConfigFile "$2")" \
+    --var "input=$input" \
     --compact >/dev/null
 }
 
+# `railway/*.json` を `ServiceInstanceUpdateInput` へ写す。
+#
+# **知らない鍵は黙って落とさず die する。** 落とすと、json に足した設定が「書いたのに
+# 効かない」形で静かに消える（ダッシュボードは既定値のままなので、気づく場所が他に無い）。
+#
+# **`builder` だけは写さない。** `Builder` enum から `DOCKERFILE` が消えており（現在値は
+# HEROKU / NIXPACKS / PAKETO / RAILPACK。2026-09-09 実測）、Dockerfile で焼くかは
+# `dockerfilePath` が決める。**他の値なら die する** — 黙って捨てると、指定した builder と
+# 違うもので焼かれる
+config_input() { # <ファイル>
+  node -e '
+    const fs = require("node:fs");
+    const BUILD = new Set(["dockerfilePath", "watchPatterns"]);
+    const DEPLOY = new Set([
+      "startCommand", "restartPolicyType", "restartPolicyMaxRetries", "drainingSeconds",
+      "overlapSeconds", "healthcheckPath", "healthcheckTimeout", "preDeployCommand",
+      "preDeployTimeoutSeconds", "numReplicas", "region", "sleepApplication", "cronSchedule",
+      "multiRegionConfig",
+    ]);
+    const file = process.argv[1];
+    const fail = (m) => {
+      process.stderr.write(file + ": " + m + "\n");
+      process.exit(1);
+    };
+    let config;
+    try {
+      config = JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch (e) {
+      fail("読めない: " + e.message);
+    }
+    const input = {};
+    for (const [section, value] of Object.entries(config)) {
+      if (section === "$schema") continue;
+      if (section !== "build" && section !== "deploy") fail("知らない節: " + section);
+      for (const [key, v] of Object.entries(value)) {
+        if (section === "build" && key === "builder") {
+          if (v !== "DOCKERFILE") fail("builder に写せるのは DOCKERFILE だけである: " + v);
+          continue;
+        }
+        if (!(section === "build" ? BUILD : DEPLOY).has(key)) fail("知らない鍵: " + section + "." + key);
+        input[key] = v;
+      }
+    }
+    // 役が決まらないまま上げると、同じイメージから出た2役が見分けられない
+    if (input.startCommand == null) fail("startCommand が無い（役が決まらない）");
+    process.stdout.write(JSON.stringify(input));
+  ' -- "$1"
+}
 deployment_status() { # <Service名>
   local list
   list="$(railway deployment list --service "$1" --limit 1 --json 2>/dev/null || true)"
