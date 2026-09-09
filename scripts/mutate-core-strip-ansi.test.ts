@@ -252,6 +252,23 @@ describe('mutate-core: stripAnsi / parseAggregateLines (#372)', () => {
  * しない**（Issue #372 のコメント / `SKILL.md`「比較の両側が同じ経路で同じ
  * 値へ強制されると、比較そのものが恒真になる」。#301 の教訓）。**測っている
  * のは実装の文字列ではなく、同じ入力を3つ全部へ通したときの出力である。**
+ *
+ * **⚠️ 意図した範囲限定の差（複数集計ブロック入力）。** 「静かに間違った答えを
+ * 返す」欠陥（複合スクリプトで vitest の集計ブロックが複数出たとき、無関係な
+ * 最初のブロックだけを見て判定してしまう）を塞ぐ修正で、`mutate-core.mjs` の
+ * `parseAggregateLines` は「最初」ではなく「最後」のブロックを返す形に変え、
+ * さらに `assertAggregateBlocksUnambiguous`（同ファイル）が「複数ブロックが
+ * 在ったら判定そのものを拒む」を、`decideJudgementCategory` / `mutate.mjs` の
+ * `cmdBaseline` / `cmdRun` の3箇所（＝判定の入口の全部）に足した
+ * （`scripts/mutate-aggregate-blocks.test.ts`）。**この修正は `mutate-core.mjs`
+ * だけに入れてあり、`scripts/test-guard-core.mjs` と `scripts/verify-core.mjs`
+ * は今回の範囲外（意図して触っていない）。** ⟹ **複数ブロックを含む入力を
+ * 3箇所へ通すと、今後は結果が食い違う**（`mutate-core.mjs` は「最後のブロック」
+ * を返すが `test-guard-core.mjs` / `verify-core.mjs` は元の「最初のブロック」の
+ * ままであり、後者2つには複数ブロックを拒む仕組みも無い）。**だから下の
+ * `it.each` には複数ブロックの入力を足さない**——足せば3箇所の突き合わせが
+ * 意図どおり落ちる（この歯の役目は「3箇所が同じに壊れていないか」を見張る
+ * ことであって、複数ブロック入力はその前提が崩れた領域である）。
  */
 describe('集計行の判定: 3箇所の実装が食い違わないこと (#372 / #355 / #392)', () => {
   /** `parseAggregateLines` の結果を、`testRan` と同じ意味（集計行が見つかったか）

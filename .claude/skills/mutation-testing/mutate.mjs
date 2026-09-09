@@ -39,6 +39,7 @@ import {
   HarnessError,
   ROOT,
   applyMutation,
+  assertAggregateBlocksUnambiguous,
   buildAndCheckArtifact,
   checkJudgementVocabulary,
   judge,
@@ -155,6 +156,9 @@ function cmdBaseline(args) {
   // そのまま渡せば呼び出し元の既定が効く（`maxWorkers` で分岐する必要が無い）。
   const result = runTests([], maxWorkers);
   log(result.raw);
+  // 3つの入口のうちの1つ（他の2つは mutate-core.mjs の decideJudgementCategory /
+  // cmdRun の baseline 確認）。生ログは1行上で既に出ている。
+  assertAggregateBlocksUnambiguous(result.raw, 'baseline');
   if (!testsRanCleanly(result)) {
     log('');
     log(
@@ -278,6 +282,9 @@ function cmdRun(args) {
   section('run: baseline を先に確かめる');
   const baseline = runTests([], maxWorkers);
   log(baseline.raw);
+  // 3つの入口のうちの1つ（他の2つは mutate-core.mjs の decideJudgementCategory /
+  // cmdBaseline）。生ログは1行上で既に出ている。
+  assertAggregateBlocksUnambiguous(baseline.raw, 'run: baseline');
   if (!testsRanCleanly(baseline) || !testsAllPassed(baseline)) {
     log('ベースラインが緑ではない。run を中止する。');
     process.exit(1);
