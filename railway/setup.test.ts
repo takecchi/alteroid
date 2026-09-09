@@ -139,6 +139,40 @@ describe('setup.sh が置く変数の割り振り', () => {
     expect(r.vars('id-app')).not.toHaveProperty('RAILWAY_RUN_UID');
   });
 
+  it('ブラウザから叩いてよいオリジンは app にだけ渡る', () => {
+    // 読むのはデーモンだけである（apps/daemon/src/index.ts）。runner は1度も見ない。
+    // **デーモンのコードの既定は閉じたままで**（docs/architecture.md「CORS は既定で
+    // 閉じている」）、開けたことは Service 変数と .env の両方に残る
+    expect(r.vars('id-app').ALTEROID_ALLOWED_ORIGINS).toBe('https://alteroid.vercel.app');
+    expect(r.vars('id-runner')).not.toHaveProperty('ALTEROID_ALLOWED_ORIGINS');
+  });
+
+  it('答えは .env に書き留める（次の実行で尋ね直さない）', () => {
+    let written = '';
+    run(MINIMAL, { onEnvFile: (path) => (written = readFileSync(path, 'utf8')) });
+
+    expect(written).toContain('ALTEROID_ALLOWED_ORIGINS=https://alteroid.vercel.app');
+  });
+
+  it('.env に在ればそれを使う（既定で上書きしない）', () => {
+    const mine = run([MINIMAL, 'ALTEROID_ALLOWED_ORIGINS=https://mine.example', ''].join('\n'));
+
+    expect(mine.vars('id-app').ALTEROID_ALLOWED_ORIGINS).toBe('https://mine.example');
+    // 既定を足さない。足すと、置いた列挙から公式のオリジンを消せなくなる
+    expect(mine.vars('id-app').ALTEROID_ALLOWED_ORIGINS).not.toContain('vercel.app');
+  });
+
+  it('公式のオリジンを書き写さない（lib.sh の1か所だけが持つ）', () => {
+    // 書き写すと、ホスト名が変わったときに片方だけが古びる。**気づく場所が他に無い**
+    const holders = readdirSync(RAILWAY_DIR)
+      .filter((f) => f.endsWith('.sh'))
+      .filter((f) =>
+        readFileSync(join(RAILWAY_DIR, f), 'utf8').includes('https://alteroid.vercel.app'),
+      );
+
+    expect(holders).toEqual(['lib.sh']);
+  });
+
   it('合鍵は同じ値が両方へ渡り、sha256 は人間に置かせない', () => {
     const app = r.vars('id-app');
     const runner = r.vars('id-runner');

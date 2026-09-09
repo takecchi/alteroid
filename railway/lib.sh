@@ -27,6 +27,10 @@ readonly APP_SERVICE="${ALTEROID_APP_SERVICE:-app}"
 readonly RUNNER_SERVICE="${ALTEROID_RUNNER_SERVICE:-runner}"
 readonly APP_CONFIG='/railway/daemon.json'
 readonly RUNNER_CONFIG='/railway/runner.json'
+# 公式の Web UI（apps/web を Vercel に置いたもの）のオリジン。**ここ1か所で持つ。**
+# setup.sh が `ALTEROID_ALLOWED_ORIGINS` の既定として尋ねる相手であり、書き写すと
+# 片方だけが古びる（ホスト名が変わったときに気づく場所が無くなる）。
+readonly OFFICIAL_WEB_ORIGIN='https://alteroid.vercel.app'
 readonly RUNNER_PORT='4518'
 readonly DAEMON_PORT='4517'
 
