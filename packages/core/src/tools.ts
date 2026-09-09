@@ -6749,7 +6749,7 @@ const USAGE_AXIS_LIMIT = 14;
  * 「全部出す」は採らない — 出力が伸びるとクローンの入力を毎ターン食う。代わりに
  * **打ち切りの行がそのまま次に打つ手を書く。**
  */
-const USAGE_AXES = ['date', 'manager', 'model', 'layer', 'site', 'token'] as const;
+export const USAGE_AXES = ['date', 'manager', 'model', 'layer', 'site', 'token'] as const;
 type UsageAxis = (typeof USAGE_AXES)[number];
 
 /** `axis` を指定したときに1回で出す件数。 */
