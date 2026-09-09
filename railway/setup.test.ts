@@ -9,7 +9,9 @@
  * 拾って突き合わせる。ネットワークにも本物の Railway にも触らない
  * （偽 CLI と足場は `railway/cli-stub.ts`。**`scale-runners.sh` のテストと共有する**）。
  */
-import { readdirSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -278,9 +280,15 @@ describe('setup.sh の順番', () => {
 
   const index = (pred: (c: string) => boolean): number => r.calls.findIndex(pred);
 
-  it('Config as Code を役ごとに指す', () => {
-    expect(r.apiLog).toContain('/railway/daemon.json');
-    expect(r.apiLog).toContain('/railway/runner.json');
+  it('役の設定を役ごとに写す', () => {
+    // **かつては「ファイルのパスを指す」だけだった**（Config as Code）。Railway が
+    // サーバ側で廃止したので、いまは中身を写す（lib.sh の `set_config_file`）。
+    // だから固定するのも「daemon.json を指したか」ではなく「役が決まったか」である —
+    // 同じイメージから2役を出しているので、`startCommand` が役そのものである
+    expect(r.apiLog).toContain('"startCommand":"alteroidd"');
+    expect(r.apiLog).toContain('"startCommand":"alteroid-runner"');
+    // パスを渡すと mutation ごと落ちる（INTERNAL_SERVER_ERROR / deprecated）
+    expect(r.apiLog).not.toContain('railwayConfigFile');
   });
 
   it('変数と Config as Code は source を繋ぐ前に置く', () => {
@@ -520,5 +528,65 @@ describe('.env に持ち込みのドメインがあるとき', () => {
     );
     expect(r.exitCode).toBe(0);
     expect(r.vars('id-app').ALTEROID_PUBLIC_URL).toBe('https://alteroid.example');
+  });
+});
+
+describe('railway/*.json を Service の設定へ写す', () => {
+  // Config as Code（ファイルのパスを指す）を Railway がサーバ側で廃止したので、
+  // **中身をこちらで写す**ようになった（lib.sh の `config_input`）。ここで固定するのは
+  // 写し方ではなく**写せなかったときに止まること**である — 黙って落とすと、json に
+  // 足した設定が「書いたのに効かない」形で消え、ダッシュボードは既定値のままなので
+  // 気づく場所が他に無い
+  const configInput = (config: unknown): { status: number; stdout: string; stderr: string } => {
+    const file = join(mkdtempSync(join(tmpdir(), 'alteroid-config-')), 'config.json');
+    writeFileSync(file, JSON.stringify(config));
+    const r = spawnSync(
+      'bash',
+      ['-c', 'source "$0"; config_input "$1"', join(RAILWAY_DIR, 'lib.sh'), file],
+      { encoding: 'utf8' },
+    );
+    return { status: r.status ?? -1, stdout: r.stdout, stderr: r.stderr };
+  };
+
+  it('現物の2つを写せる（役が startCommand で決まる）', () => {
+    // **数え上げの持ち主は railway/ そのものである。** 名前を並べると、役を足した回だけ
+    // 静かに素通りする
+    const configs = readdirSync(RAILWAY_DIR).filter((f) => f.endsWith('.json'));
+    expect(configs.length).toBeGreaterThanOrEqual(2);
+    for (const name of configs) {
+      const r = configInput(JSON.parse(readFileSync(join(RAILWAY_DIR, name), 'utf8')));
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      const input = JSON.parse(r.stdout);
+      expect(typeof input.startCommand).toBe('string');
+      // Builder enum から DOCKERFILE が消えた（HEROKU / NIXPACKS / PAKETO / RAILPACK）。
+      // Dockerfile で焼くかを決めるのは dockerfilePath である
+      expect(input.builder).toBeUndefined();
+      expect(input.dockerfilePath).toBe('Dockerfile');
+    }
+  });
+
+  it('知らない鍵は黙って落とさず止まる', () => {
+    const r = configInput({ build: { zzz: 1 }, deploy: { startCommand: 'x' } });
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain('build.zzz');
+  });
+
+  it('知らない節も止まる', () => {
+    const r = configInput({ zzz: {}, deploy: { startCommand: 'x' } });
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain('zzz');
+  });
+
+  it('DOCKERFILE 以外の builder は止まる（黙って捨てると別のもので焼かれる）', () => {
+    const r = configInput({ build: { builder: 'NIXPACKS' }, deploy: { startCommand: 'x' } });
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain('NIXPACKS');
+  });
+
+  it('startCommand が無ければ止まる（役が決まらないまま上げない）', () => {
+    const r = configInput({ build: { dockerfilePath: 'Dockerfile' }, deploy: {} });
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain('startCommand');
   });
 });

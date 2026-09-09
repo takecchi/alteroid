@@ -172,10 +172,12 @@ describe('1台から3台へ増やすとき', () => {
     }
   });
 
-  it('新しい runner も Config as Code を指す（指さないと役が決まらない）', () => {
-    expect(r.apiLog.match(/\/railway\/runner\.json/g)).toHaveLength(2);
-    // app の Config as Code は触らない（既に指してある）
-    expect(r.apiLog).not.toContain('/railway/daemon.json');
+  it('新しい runner にも役の設定を写す（写さないと役が決まらない）', () => {
+    // Config as Code の廃止でファイルのパスではなく中身を写すようになったので、
+    // 数えるのも役そのもの（`startCommand`）である
+    expect(r.apiLog.match(/"startCommand":"alteroid-runner"/g)).toHaveLength(2);
+    // app の設定は触らない（既に写してある）
+    expect(r.apiLog).not.toContain('"startCommand":"alteroidd"');
   });
 
   it('繋ぐ枝は release/prod（1台だけ main を見ると、そこだけマージで畳まれる）', () => {
