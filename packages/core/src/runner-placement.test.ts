@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createRunnerRegistry } from './runner-protocol.js';
+import { createMemoryStores } from './testing.js';
+import { createCloneTools } from './tools.js';
 import type {
   RunnerAnswerOutcome,
   RunnerClient,
@@ -811,5 +813,78 @@ describe('器が入れ替わったら失敗の記憶を捨てる（#712）', () 
     expect((await registry.select({})).runnerId).toBe('runner-burned');
 
     await registry.stop();
+  });
+});
+
+/**
+ * ⭐ **C-3。`runner_list` の説明文が名乗る点数の式から、1項が落ちている。**
+ *
+ * 説明文の逐語:
+ * `点数は「メモリの余り × プロセス数の余り × 新しい1本が受け取る CPU」`
+ *
+ * 実装（このファイルの直上の歯が固定しているふるまい）の分母には `failures` が
+ * 在る（`runner-protocol.ts` の逐語 `const failures = report.recentFailures ?? 0;` と
+ * `const share = (report.resources?.cpu?.cores ?? meanCores) / ((report.resources?.managers ?? meanHeld) + failures + 1);`）。
+ * ⟹ **説明文に1文字も無い。** 足したのは同じ #712 である。
+ *
+ * ## 形は #739 の歯 B に倣う（実装側の釘と説明文側の釘を、それぞれ独立に打つ）
+ *
+ * - 実装側の釘: 諸元が1バイトも違わない2台で、**失敗を数えたかどうかだけ**で
+ *   勝者が変わる（＝失敗が点数に効いている）
+ * - 説明文側の釘: `runner_list` の `description` が、その項に触れている
+ *
+ * ## ⚠️ この歯が測っていないこと
+ *
+ * - **式の形そのものは測っていない。** 「分母に足す」のか「掛ける」のかを
+ *   説明文の字面から判定していない——測るのは「失敗が点数に効く」ことと
+ *   「説明文がその軸に触れている」ことの2つだけである
+ * - 説明文側は語（`失敗`）で当てる**代理指標**である。同じ主張を別の語で
+ *   書き換えられたらすり抜ける
+ */
+describe('runner_list の説明文が名乗る点数の式（#712 / C-3）', () => {
+  const MEMORY = { limitBytes: 8_000_000_000, usedBytes: 4_000_000_000, source: 'cgroup' } as const;
+  const CPU = { cores: 8, source: 'cgroup' } as const;
+  const PIDS = { current: 200, max: 1000 } as const;
+
+  /** 諸元が1バイトも違わない2台。**動かすのは「落としたか」だけである。** */
+  async function twinFleet() {
+    return registryOf(
+      new FakeRunner('runner-a', { memory: MEMORY, cpu: CPU, pids: PIDS, managers: 1 }),
+      new FakeRunner('runner-b', { memory: MEMORY, cpu: CPU, pids: PIDS, managers: 1 }),
+    );
+  }
+
+  it('実装側: 失敗を数えると勝者が変わる（＝ failures は点数の項である）', async () => {
+    // 正の対照: 何も知らせなければ、同点なので登録順の先（runner-a）が勝つ。
+    // ここが runner-a でなければ、下の「変わった」は別の理由による。
+    const control = await twinFleet();
+    expect((await control.select({})).runnerId).toBe('runner-a');
+    await control.stop();
+
+    // runner-a で2本落ちたことを知らせる。分母が 1+2+1 = 4 と 1+0+1 = 2 に割れ、
+    // **点数そのものが動く**（同点の分岐ではない）。
+    const counted = await twinFleet();
+    counted.noteManagerFailed('runner-a');
+    counted.noteManagerFailed('runner-a');
+    // `chooseByResources` は状態を持たない純関数なので3回続けて見る。
+    for (let i = 0; i < 3; i += 1) {
+      expect((await counted.select({})).runnerId).toBe('runner-b');
+    }
+    await counted.stop();
+  });
+
+  it('説明文側: runner_list の説明文が、起動失敗も点数に効くことを名乗る', () => {
+    const tools = createCloneTools({
+      stores: createMemoryStores(),
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+    });
+    const description = tools.find((entry) => entry.name === 'runner_list')?.description ?? '';
+    expect(
+      /点数[\s\S]{0,200}失敗/.test(description),
+      '【赤の意味】runner_list の説明文が名乗る点数の式に、起動失敗の項が無い。' +
+        '実装の分母には `failures`（recentFailures）が在り、直上の歯がそのふるまいを固定している——' +
+        'クローンは道具の説明しか読まないので、この式を読んで配置を予測すると外れる',
+    ).toBe(true);
   });
 });

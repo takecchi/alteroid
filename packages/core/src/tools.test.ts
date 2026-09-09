@@ -15,11 +15,18 @@ import type {
   RunnerBacklogSnapshot,
   RunnerFleetOverview,
 } from './manager.js';
+import { commitmentFor } from './clone.js';
+import { runnerLivenessSchema } from './runner-protocol.js';
 import { measureMemoryFloor, renderMemoryDocuments } from './memory.js';
 import { createProfileService } from './profile-service.js';
-import { journalEntrySchema, type ChatStreamEvent, type JobStatus } from './schema.js';
+import {
+  journalEntrySchema,
+  type ChatStreamEvent,
+  type InboxEvent,
+  type JobStatus,
+} from './schema.js';
 import type { ScheduleStatus } from './schedule.js';
-import type { CloneRuntimeFacts } from './self.js';
+import { describeCloneRuntime, type CloneRuntimeFacts } from './self.js';
 import type { Stores } from './store.js';
 import { captureStderr, createMemoryStores, failingJournalAppend } from './testing.js';
 import { buildCloneSystemPrompt } from './prompt.js';
@@ -5989,22 +5996,29 @@ describe('runner_list（器の一覧）', () => {
    * になる（`manager.ts` の `RunnerOverview.state` の doc は6値だと正しく
    * 言っていた）。
    */
-  it('説明文が state を6値で名乗り、vacating が何かを添える', () => {
+  it('説明文が state を実装と同じ値・同じ数で名乗り、vacating が何かを添える', () => {
     const stores = createMemoryStores();
     const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
     const description = tools.find((entry) => entry.name === 'runner_list')?.description ?? '';
-    for (const state of [
-      'connecting',
-      'connected',
-      'unreachable',
-      'unusable',
-      'lost',
-      'vacating',
-    ]) {
-      expect(description, `state（${state}）が説明文に無い`).toContain(state);
+    // **⭐ 出所から導出する（この歯自身が3枚目の写しにならないように）。**
+    // ここに6値を書き並べていた頃は、doc が「実装（`runnerLivenessSchema`）と
+    // 合わせる」と名乗っているのに**歯の側がその写しを持っていた**——
+    // 7値目が足されても緑のままだった。
+    const states = runnerLivenessSchema.options;
+    for (const state of states) {
+      expect(
+        description,
+        `【赤の意味】runnerLivenessSchema に在る state（${state}）が runner_list の説明文に無い。` +
+          '実装の enum に値を足したが、説明文がその値を含んでいない',
+      ).toContain(state);
     }
-    expect(description).toContain('state は6値');
-    expect(description).not.toContain('state は5値');
+    // **数の逐語も出所から導出する。** 「6値」という数え上げは説明文の中の
+    // 別の写しであって、値の並びが正しくても数だけが腐りうる。
+    expect(
+      description,
+      `【赤の意味】説明文が名乗る state の数が、runnerLivenessSchema の値の数（${states.length}）と` +
+        '違う。数を書くなら出所から導出すること',
+    ).toContain(`state は${states.length}値`);
     // 名前を並べるだけにしない——読んだ側が次の一手を決められる説明を添える。
     expect(description).toContain('意図して空けている最中');
   });
@@ -12558,5 +12572,437 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
     const traces = recentDroppedTraces();
     expect(traces.length).toBeGreaterThan(0);
     expect(traces.join('\n')).not.toContain(CANARY);
+  });
+});
+
+/**
+ * ⭐⭐ **説明文が実装のふるまいを数え直している箇所を、ふるまいの側から留める。**
+ *
+ * ## なぜ表駆動の歯（`tool-description-enumeration.test.ts`）と別に要るのか
+ *
+ * あちらが噛むのは「実装が**配列・enum として持っている一覧**」だけである。
+ * 下に並ぶのはどれも**一覧が実装側に存在しない**形——ハンドラの early return、
+ * `switch` の枝、整形関数の出力、ストアの並び順——なので、あちらでは1本も
+ * 赤くならない。**だから1件ずつ、ふるまいを実際に走らせて留める。**
+ *
+ * 形は #739 の歯 B（`実装の値（保護状態がいちばん堅い側でも節が移るか）と説明文の
+ * 主張を、それぞれ現在の正しい値へ釘で留める`）に倣っている——**実装側の釘と
+ * 説明文側の釘をそれぞれ独立に打ち、正の対照で空振りを塞ぐ。**
+ *
+ * ## ⚠️ この群が測っていないこと（全部に共通）
+ *
+ * - **説明文の日本語が読んで分かるかは測っていない。** 測るのは、実装が実際に
+ *   返す値・断り・並びと、説明文が主張している内容が食い違っていないことだけである
+ * - **説明文がクローンのシステムプロンプトへ実際に載る配線は測っていない**
+ *   （そちらは `prompt.test.ts` の側）。ここが読むのは `createCloneTools()` が
+ *   返す `description` である——**JSDoc はクローンに届かない**
+ * - 語で当てている判定（`includes` / 正規表現）は**代理指標**である。同じ主張を
+ *   別の語で書き換えられたらすり抜ける（#739 の歯 B が自分について書いているのと同じ）
+ */
+describe('説明文が実装のふるまいを数え直している箇所（#701 の族）', () => {
+  /**
+   * `describeCloneRuntime` へ渡す事実。**値そのものは何でもよい**——ここが取り出す
+   * のは行頭の項目名だけで、値は項目名の後ろにしか出ない。
+   */
+  const RUNTIME_FOR_DESCRIPTION_TEETH: CloneRuntimeFacts = {
+    revision: { commit: null, short: null, source: null },
+    declaredModel: 'fable',
+    modelOverridden: false,
+    modelEnvKey: 'ALTEROID_CLONE_MODEL',
+    sdkModel: null,
+    effort: null,
+    requestedEffort: null,
+    claudeCodeVersion: null,
+    apiKeySource: null,
+    permissionMode: null,
+    requestedPermissionMode: 'auto',
+    mcpServers: [],
+    sessionId: null,
+    resumedFrom: null,
+    injectedMemoryChars: 3,
+    systemPromptChars: 999,
+  };
+
+  function descriptionOf(tool: string): string {
+    const tools = createCloneTools({
+      stores: createMemoryStores(),
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+    });
+    return tools.find((entry) => entry.name === tool)?.description ?? '';
+  }
+
+  /**
+   * **B-3。`memory_section_move` の断りの列挙に、いちばん普通の断りが無い。**
+   *
+   * ハンドラが何も動かさずに返す経路のうち、**「出どころの文書がそもそも
+   * 存在しない」**（逐語 `記憶 ${fromSlug} は存在しない（節を移せない。何も
+   * 変わっていない）。`）が列挙から抜けている。**打ち間違い1つで踏める。**
+   *
+   * ⚠️ **数に入れない断りが2つある**（どちらも到達しない。#739 / #701 の決定）:
+   * - `guardFullReplace` の denial —— `if (action === '節の移動') return null;` が在る
+   * - `frontmatter の解釈が変わってしまう` —— 実装の JSDoc 自身が「この断りへ
+   *   到達する入力を1つも構成できなかった」と書いている
+   *
+   * ⟹ **だから「N つ」という数そのものを説明文に書かない側へ倒す。** 数は
+   * 「どれを数に入れるか」の判断を持ち込むが、その判断は説明文の側からは
+   * 確かめようが無い。
+   *
+   * ⚠️ **この歯が測っていないこと**: 列挙**されている**断りが全部実在するかは
+   * 測っていない（測るのは「実在する断りが1つ抜けている」側だけである）。
+   */
+  describe('memory_section_move の断りの列挙', () => {
+    const SOURCE = ['# 私について', '', '## 事例', '', '本文', ''].join('\n');
+
+    it('出どころの文書が存在しないときの断りが、実際に踏めて、説明文に在る', async () => {
+      const h = harness();
+      await h.stores.persona.write('about-me', SOURCE);
+
+      // 正の対照（この器で節の移動そのものは通る）。ここが通らなければ、
+      // 下の「断られた」は「そもそも何も動かない器だから」の空振りである。
+      const outline = await h.call('memory_outline', { slug: 'about-me' });
+      const id = /\[([^\]]+)\]/.exec(outline)?.[1];
+      if (id === undefined) throw new Error(`節id を取れない: ${outline}`);
+      const moved = await h.call('memory_section_move', {
+        fromSlug: 'about-me',
+        sections: [id],
+        toSlug: 'about-me-appendix',
+        summary: '移した',
+      });
+      expect(moved, '正の対照: ふつうの移動が通らない器では、下の断りを測れない').not.toContain(
+        '存在しない',
+      );
+
+      // 実装側の釘: 存在しない出どころは、何も動かさずに断られる。
+      const denied = await h.call('memory_section_move', {
+        fromSlug: 'about-me-typo',
+        sections: [id],
+        toSlug: 'about-me-appendix',
+        summary: '打ち間違えた',
+      });
+      expect(denied).toContain('存在しない');
+      expect(denied).toContain('何も変わっていない');
+
+      // 説明文側の釘: その断りが列挙に在る。
+      const description = descriptionOf('memory_section_move');
+      expect(
+        /断るのは[^。]*出どころの文書がそもそも無い/.test(description),
+        '【赤の意味】memory_section_move の説明文の列挙に「出どころの文書がそもそも無い」が無い。' +
+          '実装は `記憶 <slug> は存在しない` で断るのに、説明文がそれを予告していない——' +
+          '打ち間違い1つで踏める、いちばん普通の断りである',
+      ).toBe(true);
+    });
+
+    it('断りの本数を数で名乗らない（数に入れるかの判断が説明文から確かめられない）', () => {
+      const description = descriptionOf('memory_section_move');
+      expect(
+        /断るのは\d+つ/.test(description),
+        '【赤の意味】memory_section_move の説明文が断りの本数を数で名乗っている。' +
+          '到達しない断り（guardFullReplace の denial・frontmatter の解釈が変わる枝）を' +
+          '数に入れるかどうかは説明文の側から確かめようが無い。数を書かず、列挙だけにすること',
+      ).toBe(false);
+    });
+  });
+
+  /**
+   * **C-1。`approvals_list` は「答えの本文を持たない」と2箇所が言うが、持っている。**
+   *
+   * 真なのは**一覧モードだけ**である（`listApprovals({ pendingOnly: true })`）。
+   * `id` モードは `getApproval(id)` を呼び、`pendingOnly` を通さない——
+   * 実装の隣のコメント自身が逐語 `**答えが付いた件も読める。**` と書いている。
+   *
+   * ⚠️ **2箇所とも測る。** 片方だけ直すと、この族（同じ主張が2つの散文に
+   * 別々に写されている）をそのまま再生産する。
+   */
+  describe('approvals_list は答えの本文を持つ（id モード）', () => {
+    async function seedAnswered(h: Harness): Promise<void> {
+      await h.stores.jobs.putApproval({
+        id: 'apr-answered',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        question: '本番へ出してよいか',
+        answeredAt: '2026-01-01T01:00:00.000Z',
+        answer: 'いまは出さないでほしい',
+      });
+    }
+
+    it('実装側: 回答済みの1件を id で開くと、答えの本文が返る', async () => {
+      const h = harness();
+      await seedAnswered(h);
+
+      const reply = await h.call('approvals_list', { id: 'apr-answered' });
+
+      expect(reply).toContain('回答: いまは出さないでほしい');
+      expect(reply).toContain('に回答済み');
+
+      // 正の対照: 一覧モードの側は本当に未回答だけを出す（＝「一覧モードでは
+      // 未回答だけ」という主張のほうは真である、を同じ走行で確かめる）。
+      const listing = await h.call('approvals_list', {});
+      expect(listing).toContain('人間の回答待ちは無い');
+    });
+
+    it('説明文側: conversation_read の説明文が「答えの本文を持たない」と言っていない', () => {
+      const description = descriptionOf('conversation_read');
+      expect(
+        description,
+        '【赤の意味】conversation_read の説明文が「approvals_list は答えの本文を持たない」と' +
+          '言っている。実装の id モードは `回答: <本文>` を返すので、これは偽である',
+      ).not.toContain('答えの本文を持たない');
+    });
+
+    it('説明文側: システムプロンプトも「答えの本文を持たない」と言っていない', () => {
+      const prompt = buildCloneSystemPrompt({ memory: renderMemoryDocuments([]) });
+      expect(
+        prompt,
+        '【赤の意味】システムプロンプト（prompt.ts）が「approvals_list は答えの本文を持たない」と' +
+          '言っている。道具の説明文と同じ主張が2箇所に写されているので、片方だけ直すと族を再生産する',
+      ).not.toContain('答えの本文を持たない');
+    });
+  });
+
+  /**
+   * **C-2。`manager_list` の `done/背景処理待ち×N` の N の意味。**
+   *
+   * 説明文は逐語 `N はそのとき握り潰した報告の本数` と言うが、N を描くのは
+   * `digest.ts` の逐語 `` `${base}/背景処理待ち×${awaitingBackground.tasks}` ``
+   * ＝ **`tasks`** である。そして `manager.ts` の `ManagerAwaitingBackground` の
+   * doc は逐語 `**\`withheldReports\` と1つに畳まない。**` と名指しで禁じている。
+   * ⟹ **説明文が、実装の doc が禁じた畳み方をそのまま踏んでいる。**
+   */
+  describe('manager_list の「背景処理待ち×N」の N', () => {
+    it('N は tasks であって withheldReports ではない（2つが違う値のときに見分ける）', async () => {
+      const h = harness();
+      h.running.push({
+        managerId: 'mgr-bg',
+        status: 'done',
+        live: true,
+        cwd: '/work',
+        request: '委譲',
+        startedAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        waiting: [],
+        awaitingBackground: {
+          // **わざと違う値にする。** 同じ値だと、どちらを描いているか分からない。
+          tasks: 3,
+          withheldReports: 2,
+          breakdown: 'local_agent×3',
+          since: '2026-09-05T00:00:00.000Z',
+        },
+      });
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('背景処理待ち×3');
+      expect(reply, 'N が withheldReports（2）で描かれている').not.toContain('背景処理待ち×2');
+    });
+
+    it('説明文が N を「握り潰した報告の本数」と言っていない', () => {
+      const description = descriptionOf('manager_list');
+      expect(
+        description,
+        '【赤の意味】manager_list の説明文が「N はそのとき握り潰した報告の本数」と言っている。' +
+          '実際に描かれるのは awaitingBackground.tasks（背景タスクの在り高）で、' +
+          'ManagerAwaitingBackground の doc は逐語で「`withheldReports` と1つに畳まない。」と' +
+          '名指しで禁じている',
+      ).not.toContain('N はそのとき握り潰した報告の本数');
+    });
+  });
+
+  /**
+   * **C-4。`usage_read` の説明文がアカウント全体の残り枠に触れていない。**
+   *
+   * 実装（軸を渡さないモード）は `renderAccountUsage(...)` を**先頭に**置いてから
+   * 台帳の集計を出す。`prompt.ts` の側は正しく両方言っている（逐語
+   * `**アカウント全体の残り枠と支出上限**（claude.ai 側の値）と、**alteroid が使った分**`）
+   * ⟹ **腐っているのは説明文の側だと特定できる。**
+   *
+   * ⚠️ 同じ `tools.ts` の中の `axis` の引数説明が逐語
+   * `（まとめ表示・他の軸・アカウント全体の残りは出ない）` と言っているので、
+   * **軸モードでは出ない**ことも併せて測る。
+   */
+  describe('usage_read はアカウント全体の残り枠も返す', () => {
+    it('実装側: 軸を渡さなければ出て、軸を渡せば出ない', async () => {
+      const h = harness();
+
+      const whole = await h.call('usage_read', {});
+      expect(whole).toContain('アカウント全体');
+      // 正の対照: 台帳の側も同じ応答に出ている（＝2つを並べて返す口である）。
+      expect(whole).toContain('alteroid が使った分');
+
+      const axisOnly = await h.call('usage_read', { axis: 'date' });
+      expect(axisOnly, '軸モードでアカウント全体が出ている').not.toContain('アカウント全体');
+    });
+
+    it('説明文が、台帳とアカウント全体の残りの両方を名乗る', () => {
+      const description = descriptionOf('usage_read');
+      expect(
+        description.includes('アカウント全体'),
+        '【赤の意味】usage_read の説明文が、アカウント全体の残り枠・支出上限に1文字も触れていない。' +
+          '実装は軸を渡さないモードで renderAccountUsage を先頭に置いており、prompt.ts の側は' +
+          '正しく両方を言っている——腐っているのは説明文の側である',
+      ).toBe(true);
+    });
+  });
+
+  /**
+   * **C-5。`self_status` の項目列挙が実装と食い違う。**
+   *
+   * 出す項目を持っているのは `self.ts` の `describeCloneRuntime` である。
+   * **その整形の出力から項目名を取り出して、説明文と突き合わせる**——
+   * 実装側に項目名の配列が無いので、出所は整形そのものになる。
+   *
+   * ⚠️ **この歯が測っていないこと**: 説明文が**余分な**項目を名乗っていないかは
+   * 測っていない（測るのは「実際に出る項目が説明文から抜けている」側だけである）。
+   * また `self_status` の応答は `describeCloneRuntime` の他に記憶の大きさと
+   * 台帳との突き合わせも足すが、**それらはここでは数えない**（別の行として出る）。
+   */
+  describe('self_status の項目列挙', () => {
+    /** `describeCloneRuntime` の出力から、行頭の項目名だけを取り出す。 */
+    function runtimeItemLabels(): string[] {
+      return describeCloneRuntime(RUNTIME_FOR_DESCRIPTION_TEETH)
+        .split('\n')
+        .filter((line) => line.startsWith('- '))
+        .map((line) => line.slice(2).split(': ')[0] ?? '');
+    }
+
+    it('実装が実際に出す項目が、全部そろって取れている（この歯の空振り防止）', () => {
+      const labels = runtimeItemLabels();
+      expect(labels.length, 'describeCloneRuntime から項目名が1つも取れない').toBeGreaterThan(0);
+      expect(labels.every((label) => label.length > 0)).toBe(true);
+    });
+
+    it('実装が出す項目が全部、説明文に現れる', () => {
+      const description = descriptionOf('self_status');
+      const missing = runtimeItemLabels().filter((label) => !description.includes(label));
+      expect(
+        missing,
+        '【赤の意味】describeCloneRuntime（self.ts）が実際に出す項目が、self_status の説明文に' +
+          `無い: ${missing.join(' / ')}\n` +
+          '説明文が実装の項目を数え直していて、実装だけが増えた。説明文を出所から導出すること' +
+          '——具体を落とすと、クローンは「その値が取れる」と気づけなくなる（north_star 禁止1）。',
+      ).toEqual([]);
+    });
+  });
+
+  /**
+   * **C-6。`commitment_list` の出所が3つ（実装は4つ）。**
+   *
+   * 台帳へ自動で載る出所を持つのは `clone.ts` の `commitmentFor` である
+   * （`null` を返さない枝）。⛔ `clone.ts` は編集しない——読んで測るだけである。
+   *
+   * ⟹ **`ask_human` の回答が来ると台帳に1件開くのに、説明文がそれを予告していない。**
+   * `prompt.ts` の側は正しく4つ（逐語 `人間の依頼・人間の回答・`）である。
+   *
+   * ⚠️ **この歯が測っていないこと**: 出所の**日本語の呼び名**が実装の枝と1対1に
+   * 対応しているかは測れない（実装側に呼び名が無い）。測っているのは
+   * (a) `null` を返さない枝がいくつあるか (b) 説明文が「人間の回答」に触れているか
+   * の2つで、**(a) が動けば必ず赤くなる**——枝が増えたら、まずここで立ち止まる。
+   */
+  describe('commitment_list の「自動的にここへ載る」出所', () => {
+    /** `InboxEvent` の型ごとに、台帳を開くかどうか。**実装をそのまま走らせる。** */
+    function openingEventTypes(): string[] {
+      const at = '2026-01-01T00:00:00.000Z';
+      const events: InboxEvent[] = [
+        { type: 'human_message', id: 'e1', at, text: 'やって', conversationId: 'c1' },
+        { type: 'human_answer', id: 'e2', at, approvalId: 'apr-1', answer: 'よい' },
+        { type: 'manager_message', id: 'e3', at, managerId: 'm1', kind: 'report', text: '報告' },
+        { type: 'external', id: 'e4', at, source: 'github', payload: { n: 1 } },
+        { type: 'timer', id: 'e5', at, kind: 'daily_report' },
+        { type: 'self_initiative', id: 'e6', at, reason: 'tick' },
+        { type: 'distill', id: 'e7', at, reason: 'scheduled' },
+      ];
+      return events.filter((event) => commitmentFor(event) !== null).map((event) => event.type);
+    }
+
+    it('実装側: 台帳を開く出所は4つである', () => {
+      expect(openingEventTypes()).toEqual([
+        'human_message',
+        'human_answer',
+        'manager_message',
+        'external',
+      ]);
+    });
+
+    it('説明文が、人間の回答（ask_human の答え）も自動で載ると言っている', () => {
+      const description = descriptionOf('commitment_list');
+      expect(
+        /人間の回答|承認待ちへの回答/.test(description),
+        '【赤の意味】commitment_list の説明文が、台帳へ自動で載る出所を3つしか名乗っていない。' +
+          'clone.ts の commitmentFor は human_answer にも台帳を開く（＝ ask_human の答えが来ると' +
+          '1件開く）ので、説明文がそれを予告していない。prompt.ts の側は正しく4つ言っている',
+      ).toBe(true);
+    });
+  });
+
+  /**
+   * **C-7。`approvals_list` の「古い順に」。**
+   *
+   * ハンドラは並べ直しを**1行も持たない**（逐語
+   * `const pending = await stores.jobs.listApprovals({ pendingOnly: true });` の
+   * 直後に `sort` が無い）。⟹ **順序はストアの実装に依存する。**
+   *
+   * - `packages/storage-pg/src/jobs.ts`: `.orderBy(asc(approvals.createdAt))`
+   *   ⟹ 本番では作成時刻の昇順。**ただし同着（同じ `createdAt`）の順序は決まっていない**
+   * - `packages/storage-fs/src/jobs.ts` / `packages/core/src/testing.ts`:
+   *   `filter` だけで `sort` 無し ⟹ 挿入順
+   *
+   * ⛔ **並べ直しをこの PR で入れない**（ふるまいの変更）。⛔ **「古い順に」を単に
+   * 消さない**（本番で成立している性質まで捨てることになる）。⟹ 応答の文言を、
+   * **実装が実際に保証している通りに**精密化する。
+   *
+   * ⚠️ **この歯が測っていないこと**: 本番（pg）の並びは測っていない（ここが使う
+   * のはインメモリの器である）。測っているのは**アプリ側が並べ直していないこと**
+   * ——それが「順序はストアが持つ」という文言の根拠そのものである。
+   */
+  describe('approvals_list の並び順の名乗り', () => {
+    /** 予算を超えて省略の行を出させるだけの本数と長さ。 */
+    async function seedMany(h: Harness, order: string[]): Promise<void> {
+      for (const id of order) {
+        await h.stores.jobs.putApproval({
+          id,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          question: `${id} ${'あ'.repeat(400)}`,
+        });
+      }
+    }
+
+    it('実装側: アプリは並べ直さない（ストアが返した順のまま出る）', async () => {
+      const ascending = harness();
+      await seedMany(ascending, ['apr-a', 'apr-b', 'apr-c']);
+      const forward = await ascending.call('approvals_list', {});
+
+      const shuffled = harness();
+      await seedMany(shuffled, ['apr-c', 'apr-a', 'apr-b']);
+      const backward = await shuffled.call('approvals_list', {});
+
+      // 正の対照: どちらの器でも3件とも一覧に出ている（＝並びだけを見ている）。
+      for (const id of ['apr-a', 'apr-b', 'apr-c']) {
+        expect(forward).toContain(id);
+        expect(backward).toContain(id);
+      }
+      // **並べ直していれば、この2つは同じ並びになる。** 違うということは、
+      // 出ている順序を決めているのはストアであってこの口ではない。
+      expect(forward.indexOf('apr-a')).toBeLessThan(forward.indexOf('apr-c'));
+      expect(backward.indexOf('apr-c')).toBeLessThan(backward.indexOf('apr-a'));
+    });
+
+    it('省略の行が「古い順に」と断言していない（アプリは並べ直していない）', async () => {
+      const h = harness();
+      await seedMany(
+        h,
+        Array.from({ length: 40 }, (_, index) => `apr-${index}`),
+      );
+
+      const reply = await h.call('approvals_list', {});
+
+      // 正の対照: 予算で切れた行がそもそも出ていること。出ていなければ空振りである。
+      expect(reply, '正の対照: 省略の行が出ていない（本数か長さが足りない）').toContain('は省略');
+      expect(
+        reply,
+        '【赤の意味】approvals_list の省略の行が「古い順に」と断言している。' +
+          'ハンドラは並べ直しを1行も持たないので、並びを保証しているのはストアの実装である' +
+          '（pg は createdAt の昇順・fs とインメモリは挿入順）。' +
+          '実装が保証している通りに書くこと——並べ直しを足すのは別の変更である',
+      ).not.toContain('古い順に');
+    });
   });
 });
