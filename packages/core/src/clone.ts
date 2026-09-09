@@ -89,7 +89,7 @@ import type {
 import { resolveBuildRevision } from './revision.js';
 import type { CloneRuntimeFacts, SelfFacts } from './self.js';
 import type { CommitmentList, PendingInboxEvent, Stores } from './store.js';
-import { MCP_SERVER_NAME, createCloneMcpServer, type ToolContext } from './tools.js';
+import { cloneToolJournalsItself, createCloneMcpServer, type ToolContext } from './tools.js';
 import { turnInputEntry } from './turn-input.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 import {
@@ -4950,15 +4950,38 @@ class Clone implements CloneHost {
    * 無いと「委譲していない」が誰にも見えなくなり、方針が守られているかを見る手が
    * 禁止しか残らない。
    *
-   * ## なぜ自作ツールを除くのか
+   * ## なぜ*自前で日誌へ書く道具だけ*を除くのか
    *
-   * 自作ツール（`mcp__alteroid__*`）は**それ自身が跡を残す** — `memory_write` は
-   * `memory_update`、`journal_write` は本文、`manager_start` は台帳と `tool_use`
-   * （マネージャー側の記録）へ落ちる。ここで重ねて書くと、クローンは毎ターン
-   * 数本の道具を叩くので日誌が自分の記録で埋まり、**掘るための層が掘れなくなる**。
-   * 残すのは「委譲せずに自分で手を動かした」という、他のどこにも出ない事実だけで
-   * よい（人間の MCP 連携も preset の道具と同じくここに載る — あちらも
-   * 「自分でブラウザを開いた」側である）。
+   * 除くのは**重複を避けるため**であり、対象は**自前で跡を残す道具に限る** —
+   * `memory_write` は `memory_update`、`journal_write` は本文、`manager_start` は
+   * 台帳と `tool_use`（マネージャー側の記録）へ落ちる。`manager_send` /
+   * `manager_stop` は `tools.ts` の中では書かず、`ManagerPool`（`manager.ts` の
+   * `send` / `abort`）経由で `exchange` へ落ちる（`manager_send` が保留中の確認へ
+   * 答えた回は `escalation`）——**grep だけだと「書かない」に見える2本である。**ここで重ねて書くと、クローンは毎ターン数本の道具を叩くので日誌が
+   * 自分の記録で埋まり、**掘るための層が掘れなくなる**。
+   *
+   * **自作ツール全部を除いていたら、それはバグである。** 読む道具（`memory_read` /
+   * `journal_read` など）は自前では何も書かないので、除くと
+   * `docs/architecture.md`「非対称な可視性」が求める「どちらで見たかは日誌に残す」
+   * から静かに落ちる — **実際に 19 本がそうなっていた**（`tool.startsWith(...)`
+   * 1行が自作ツール全部を素通りにしていた期間。PR #94 以来）。この関数がいま
+   * 見るのは「委譲せずに自分で手を動かした」という事実全体であって、そこから
+   * 引くのは**自前で跡を残す分だけ**でなければならない（人間の MCP 連携も
+   * preset の道具と同じくここに残る — あちらも「自分でブラウザを開いた」側で
+   * ある）。
+   *
+   * **名簿は `tools.ts` に在り、36 本がどちらか一方に必ず属することを型で
+   * 強制している**（`SELF_JOURNALING_CLONE_TOOLS` / `TRACELESS_CLONE_TOOLS`。
+   * `CloneToolName` に対する網羅性・排他性のチェック）。道具を1本足す人は、
+   * その場でどちらかへ入れることになる — 入れなければ `typecheck` が落ちる。
+   *
+   * **名簿の間違いは向きで重さが違う。** 自前では書かない道具を誤って
+   * `SELF_JOURNALING_CLONE_TOOLS` へ入れると、その道具の使用はどこにも残らない
+   * （**監査の穴**）。逆に自前で書く道具を誤って `TRACELESS_CLONE_TOOLS` 側へ
+   * 残すと、同じ手を2つの記録で二重に見るだけ（**重複**）で済む。**だから
+   * 迷ったら「残す側」（`TRACELESS_CLONE_TOOLS` へ入れる＝除かない）へ倒す**
+   * ——`cloneToolJournalsItself` が未知の道具に対して `false`（＝残す）を返すのも
+   * 同じ理由である（下の判定を参照）。
    *
    * **例外を投げないこと。** 投げるとツール実行の後続に影響しうる。読めない形なら
    * 何もしないだけで、道具の実行そのものは常に続ける（日誌の失敗も `#journal` が
@@ -4993,17 +5016,18 @@ class Clone implements CloneHost {
     return { continue: true };
   }
 
-  /** `PostToolUse` の合図1件を日誌へ落とす（自作ツールは除く）。 */
+  /** `PostToolUse` の合図1件を日誌へ落とす（自前で日誌へ書く自作ツールは除く）。 */
   async #journalToolUse(
     raw: Partial<PostToolUseHookInput> | null | undefined,
     mainThreadActor: string,
   ): Promise<void> {
-    // 自作ツールは除く（上のコメント）。**`tool_name` が読めなかったときは
-    // 落とさずに `(不明な道具)` で残す** — 除外の判定に使う名前が読めないなら、それは
-    // 「自作ツールだった」ではなく「観測できなかった」である。黙って消すと、
-    // 監査の穴がいちばん静かな形（何も起きなかったように見える）で空く。
+    // 自前で日誌へ書く自作ツールだけを除く（上のコメント）。**`tool_name` が
+    // 読めなかったときは落とさずに `(不明な道具)` で残す** — 除外の判定に使う
+    // 名前が読めないなら、それは「自前で書く道具だった」ではなく「観測できな
+    // かった」である。黙って消すと、監査の穴がいちばん静かな形（何も起きな
+    // かったように見える）で空く。
     const tool = typeof raw?.tool_name === 'string' ? raw.tool_name : UNKNOWN_TOOL_NAME;
-    if (tool.startsWith(`mcp__${MCP_SERVER_NAME}__`)) return;
+    if (cloneToolJournalsItself(tool)) return;
     await this.#journal({
       type: 'tool_use',
       actor: cloneToolActor(raw, mainThreadActor),
