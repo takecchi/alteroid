@@ -44,7 +44,7 @@ import { createScheduler } from './schedule.js';
 import type { ChatStreamEvent, InboxEvent, InboxEventType, JournalEntryInput } from './schema.js';
 import type { Stores } from './store.js';
 import { CLONE_ACTOR_ID, isCloneActor } from './usage.js';
-import { createCloneMcpServer, createCloneTools } from './tools.js';
+import { createCloneMcpServer, createCloneTools, qualifiedToolName } from './tools.js';
 import type { ToolContext } from './tools.js';
 import {
   captureStderr,
@@ -613,6 +613,100 @@ describe('クローン', () => {
 
     const entries = await s.stores.journal.list({ types: ['tool_use'] });
     expect(entries.map((entry) => (entry as { tool: string }).tool)).toEqual(['(不明な道具)']);
+
+    await s.clone.stop();
+  });
+
+  it('自作ツールでも「読む」道具は日誌に残る（自前では跡を残さないので、重ねないと消える）', async () => {
+    // `docs/architecture.md`「非対称な可視性」の要求どおり——`memory_write` の
+    // ような書く道具は自分で `memory_update` 等を書くので重ねないが、`memory_read` /
+    // `journal_read` / `conversation_read` はハンドラが自前で日誌へ何も書かないので、
+    // ここで落とすと使ったことがどこにも残らなくなる（かつて `mcp__alteroid__*` を
+    // 一律で除いていた期間、19本がそうなっていた）。
+    //
+    // **1本だけでは済ませない** — 既存の歯（「自分の手で使った道具は日誌に残る」）が
+    // `memory_write` 1本しか測っていなかったことが、この穴を長く隠した。
+    const s = setup();
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUse?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
+
+    await hook(
+      {
+        tool_name: qualifiedToolName('memory_read'),
+        tool_input: { slug: 'values' },
+      } as never,
+      undefined,
+      {} as never,
+    );
+    await hook(
+      {
+        tool_name: qualifiedToolName('journal_read'),
+        tool_input: { limit: 10 },
+      } as never,
+      undefined,
+      {} as never,
+    );
+    await hook(
+      {
+        tool_name: qualifiedToolName('conversation_read'),
+        tool_input: { window: 5 },
+      } as never,
+      undefined,
+      {} as never,
+    );
+
+    const entries = await s.stores.journal.list({ types: ['tool_use'] });
+    const byTool = new Map(
+      entries.map((entry) => [
+        (entry as { tool: string }).tool,
+        (entry as { input: unknown }).input,
+      ]),
+    );
+    // **3本とも `tool_use` として残る** — 順序は `journal.list` の並びに依存
+    // するので、集合として測る（この道具が「読む」以外に見出しの見え方を
+    // 変える理由は無い）。
+    expect(new Set(byTool.keys())).toEqual(
+      new Set([
+        qualifiedToolName('memory_read'),
+        qualifiedToolName('journal_read'),
+        qualifiedToolName('conversation_read'),
+      ]),
+    );
+    expect(byTool.get(qualifiedToolName('memory_read'))).toEqual({ slug: 'values' });
+    expect(byTool.get(qualifiedToolName('journal_read'))).toEqual({ limit: 10 });
+    expect(byTool.get(qualifiedToolName('conversation_read'))).toEqual({ window: 5 });
+
+    await s.clone.stop();
+  });
+
+  it('名簿に無い未知の自作ツールは、安全側（残す側）へ倒れる', async () => {
+    // `cloneToolJournalsItself` は名簿に無い `mcp__alteroid__*` に `false` を
+    // 返す（`tools.ts` の doc）。これは「まだ分類していない自作ツール」を
+    // 誤って消さないための倒れ先——記録が重複するほうが、監査の穴が静かに
+    // 空くより軽い。
+    const s = setup();
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUse?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
+
+    await hook(
+      {
+        tool_name: qualifiedToolName('future_tool'),
+        tool_input: { any: 1 },
+      } as never,
+      undefined,
+      {} as never,
+    );
+
+    const entries = await s.stores.journal.list({ types: ['tool_use'] });
+    expect(entries.map((entry) => (entry as { tool: string }).tool)).toEqual([
+      qualifiedToolName('future_tool'),
+    ]);
 
     await s.clone.stop();
   });

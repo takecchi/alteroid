@@ -26,7 +26,10 @@ import {
   CLONE_ALLOWED_TOOLS,
   CLONE_TOOL_NAMES,
   createCloneTools,
+  cloneToolJournalsItself,
   qualifiedToolName,
+  SELF_JOURNALING_CLONE_TOOLS,
+  TRACELESS_CLONE_TOOLS,
   type ToolContext,
 } from './tools.js';
 import type { AccountUsageState } from './usage-snapshot.js';
@@ -8508,6 +8511,56 @@ describe('システムプロンプトの道具一覧', () => {
     expect(section).toBeDefined();
     const missing = CLONE_TOOL_NAMES.filter((name) => !(section ?? '').includes(`\`${name}\``));
     expect(missing).toEqual([]);
+  });
+});
+
+/**
+ * **道具を1本足したら、`SELF_JOURNALING_CLONE_TOOLS` か `TRACELESS_CLONE_TOOLS`
+ * のどちらか一方へ必ず入れる——両方に属する・どちらにも属さない道具を作らない。**
+ *
+ * `tools.ts` は同じ強制を**型でも**持っている（`_AssertCloneToolPartitionIsExhaustive` /
+ * `_AssertCloneToolPartitionIsExclusive`）。**ここが測るのは実行時の値であって、
+ * それは型の保証と同じではない**（`AGENTS.md`「型で塞いだ分岐にも、実行時の
+ * 倒れ先の歯を足す」）——`typecheck` は `tsc` を実行しないと確かめられないが、
+ * この歯は `test` だけで踏める。
+ */
+describe('自作ツールの日誌名簿（SELF_JOURNALING_CLONE_TOOLS / TRACELESS_CLONE_TOOLS）', () => {
+  it('CLONE_TOOL_NAMES の全36本が、2つの名簿のちょうど一方に属する', () => {
+    const selfJournaling = new Set<string>(SELF_JOURNALING_CLONE_TOOLS);
+    const traceless = new Set<string>(TRACELESS_CLONE_TOOLS);
+
+    const inNeither = CLONE_TOOL_NAMES.filter(
+      (name) => !selfJournaling.has(name) && !traceless.has(name),
+    );
+    expect(inNeither).toEqual([]);
+
+    const inBoth = CLONE_TOOL_NAMES.filter(
+      (name) => selfJournaling.has(name) && traceless.has(name),
+    );
+    expect(inBoth).toEqual([]);
+  });
+
+  it('2つの名簿に載っている名前は、全部 CLONE_TOOL_NAMES に在る（架空の名前が混ざっていない）', () => {
+    const known = new Set<string>(CLONE_TOOL_NAMES);
+
+    const unknownInSelfJournaling = SELF_JOURNALING_CLONE_TOOLS.filter((name) => !known.has(name));
+    expect(unknownInSelfJournaling).toEqual([]);
+
+    const unknownInTraceless = TRACELESS_CLONE_TOOLS.filter((name) => !known.has(name));
+    expect(unknownInTraceless).toEqual([]);
+  });
+
+  it('cloneToolJournalsItself は、名簿に無い未知の修飾名に false（＝残す側）を返す', () => {
+    // 倒れ先の歯（`clone.ts`「なぜ*自前で日誌へ書く道具だけ*を除くのか」）。
+    // 名簿に無い自作ツールを誤って重複除外しない——重複は監査の穴より軽い。
+    expect(cloneToolJournalsItself(qualifiedToolName('future_tool'))).toBe(false);
+    // 名簿に載っている道具は、修飾済みの名前で正しく true / false を返す。
+    for (const name of SELF_JOURNALING_CLONE_TOOLS) {
+      expect(cloneToolJournalsItself(qualifiedToolName(name))).toBe(true);
+    }
+    for (const name of TRACELESS_CLONE_TOOLS) {
+      expect(cloneToolJournalsItself(qualifiedToolName(name))).toBe(false);
+    }
   });
 });
 

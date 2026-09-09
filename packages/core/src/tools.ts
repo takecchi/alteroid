@@ -281,6 +281,123 @@ export const CLONE_TOOL_NAMES = [
   'runner_list',
 ] as const;
 
+export type CloneToolName = (typeof CLONE_TOOL_NAMES)[number];
+
+/**
+ * 自作ツール 36 本のうち、**ハンドラが自前で日誌へ書く 17 本**
+ * （`memory_write` は `memory_update`、`journal_write` は本文、`manager_start`
+ * は台帳と `tool_use`、という形で自分の跡を残す）。
+ *
+ * `clone.ts` の `#journalToolUse` は、この名簿に載る道具の `tool_use` を
+ * 重ねて書かない（`clone.ts`「なぜ*自前で日誌へ書く道具だけ*を除くのか」参照）。
+ *
+ * **道具を1本足すときは、ここか {@link TRACELESS_CLONE_TOOLS} のどちらかへ
+ * 必ず入れること。** 入れ忘れ・両方へ入れる・`CLONE_TOOL_NAMES` に無い名前を
+ * 書く、のどれも `typecheck` を落とす（下の型チェックが担保する）。
+ */
+export const SELF_JOURNALING_CLONE_TOOLS = [
+  'memory_write',
+  'memory_append',
+  'memory_delete',
+  'memory_frontmatter_set',
+  'memory_section_move',
+  'journal_write',
+  'ask_human',
+  'daily_report_write',
+  'schedule_create',
+  'schedule_remove',
+  'commitment_open',
+  'commitment_close',
+  'commitment_edit',
+  'profile_write',
+  'manager_start',
+  'manager_send',
+  'manager_stop',
+] as const satisfies readonly CloneToolName[];
+
+/**
+ * 自作ツール 36 本のうち、**ハンドラが自前では日誌へ書かない 19 本**（読む道具。
+ * `memory_list` / `journal_read` など）。
+ *
+ * `clone.ts` の `#journalToolUse` は、この名簿に載る道具の `tool_use` を残す
+ * ——除くと `docs/architecture.md`「非対称な可視性」が求める「どちらで見たかは
+ * 日誌に残す」を満たせなくなる（19 本が PR #94 以来そうなっていた、という
+ * 経過は `clone.ts` の doc 参照）。
+ */
+export const TRACELESS_CLONE_TOOLS = [
+  'memory_list',
+  'memory_read',
+  'memory_outline',
+  'memory_section_read',
+  'journal_read',
+  'conversation_read',
+  'approvals_list',
+  'usage_read',
+  'schedule_list',
+  'commitment_list',
+  'profile_read',
+  'token_list',
+  'self_read',
+  'self_status',
+  'self_dropped',
+  'manager_list',
+  'manager_report',
+  'manager_transcript',
+  'runner_list',
+] as const satisfies readonly CloneToolName[];
+
+type SelfJournalingCloneTool = (typeof SELF_JOURNALING_CLONE_TOOLS)[number];
+type TracelessCloneTool = (typeof TRACELESS_CLONE_TOOLS)[number];
+
+/** `T` が `true` でなければ、この型別名の定義そのものが `typecheck` を落とす。 */
+type AssertTrue<T extends true> = T;
+
+/**
+ * 型レベルの網羅性の強制 — `CLONE_TOOL_NAMES` の全部が、2つの名簿の
+ * **少なくとも一方**に属する。
+ *
+ * どちらにも属さない名前が1本でも在れば `Exclude<...>` がそれを残し、
+ * `[残り] extends [never]` が `false` になって `AssertTrue<false>` が
+ * `typecheck` を落とす（「'false' の型は 'true' 型のパラメーターに割り当てる
+ * ことができません」という生のエラーで気づける）。
+ */
+export type _AssertCloneToolPartitionIsExhaustive = AssertTrue<
+  [Exclude<CloneToolName, SelfJournalingCloneTool | TracelessCloneTool>] extends [never]
+    ? true
+    : false
+>;
+
+/**
+ * 型レベルの排他性の強制 — 2つの名簿は**重ならない**（同じ道具を両方へ
+ * 書いてしまう事故を防ぐ）。
+ *
+ * 重なる名前が1本でも在れば `Extract<...>` がそれを残し、上と同じ形で
+ * `typecheck` を落とす。
+ */
+export type _AssertCloneToolPartitionIsExclusive = AssertTrue<
+  [Extract<SelfJournalingCloneTool, TracelessCloneTool>] extends [never] ? true : false
+>;
+
+const SELF_JOURNALING_CLONE_TOOL_NAMES: ReadonlySet<string> = new Set(
+  SELF_JOURNALING_CLONE_TOOLS.map((name) => qualifiedToolName(name)),
+);
+
+/**
+ * その道具は、自分のハンドラで日誌へ跡を残すか（＝`clone.ts` の
+ * `#journalToolUse` が `tool_use` として重ねて書かなくてよいか）。
+ *
+ * 引数はフックから来る**修飾済みの名前**（`mcp__alteroid__memory_write` の形。
+ * `qualifiedToolName` が作る形と同じ）。
+ *
+ * **倒れ先は「残す側」——名簿に無い `mcp__alteroid__*`（まだ分類していない
+ * 未知の自作ツール）は `false` を返し、日誌に残る。** これは安全側への
+ * 倒し方である：記録が重複するほうが、静かに消えるより軽い
+ * （`clone.ts`「なぜ*自前で日誌へ書く道具だけ*を除くのか」参照）。
+ */
+export function cloneToolJournalsItself(tool: string): boolean {
+  return SELF_JOURNALING_CLONE_TOOL_NAMES.has(tool);
+}
+
 /**
  * 一覧の既定の大きさ。
  *
