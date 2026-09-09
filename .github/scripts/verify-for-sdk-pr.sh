@@ -75,8 +75,13 @@ GATE_COMMANDS=(
   'pnpm test'
 )
 
+# **落ちた門は名前と終了コードで残す。** `ok=false` という1つの値だけだと、PR が draft で
+# 届いたときに「9本のどれかが本当に落ちた」と「`openapi.json` が変わっただけ」が区別
+# できない（`open-claude-sdk-pr.sh` は `SDK_VERIFY_OK != 'true'` で draft にする）。
+# **数ではなく名前で書く** — 「1本落ちた」では、また種類が潰れる。
 ok=true
-: >"$dir/verify.md"
+failed_list=''
+: >"$dir/verify-body.md"
 for i in "${!GATE_NAMES[@]}"; do
   name="${GATE_NAMES[$i]}"
   cmdline="${GATE_COMMANDS[$i]}"
@@ -87,8 +92,28 @@ for i in "${!GATE_NAMES[@]}"; do
     status='OK'
     lines=10
   else
+    # 門自身の終了コードを取る。
+    #
+    # ⚠️ **`$?` でも同じ値になる。** `pipefail` が効いているので、`tee` が 0 を返しても
+    # パイプライン全体の終了コードは門自身のものになる。**変異試験で確かめた** — ここを
+    # `code="$?"` に変えても歯は1件も噛まなかった（2026-09-09）。**だからこの行は
+    # 「`$?` では取れない」を根拠にしていない。** `PIPESTATUS[0]` を使うのは
+    # `set -o pipefail` が外れたときに `tee` の 0 を拾わないためだけであり、
+    # **その保険自体は歯になっていない**（このスクリプトが自分で `pipefail` を立てるので、
+    # テストの側から外せない）。⟹ 主張はここまでに留める。
+    #
+    # `if` の条件のパイプラインの `PIPESTATUS` は else の最初のコマンドまで生きているので、
+    # ここで先に読む。
+    code="${PIPESTATUS[0]}"
     ok=false
-    status='**失敗**'
+    # **配列と `${arr[*]}` で繋がない** — bash が区切りに使うのは IFS の**先頭1文字**
+    # だけで、` / ` のような複数文字の区切りは黙って空白1文字に化ける。
+    if [ -z "$failed_list" ]; then
+      failed_list="\`$name\`（exit $code）"
+    else
+      failed_list="$failed_list / \`$name\`（exit $code）"
+    fi
+    status="**失敗**（exit $code）"
     lines=40
   fi
   # **成功した回も生の出力を載せる。** 「OK」の1行だけにすると、
@@ -112,7 +137,20 @@ for i in "${!GATE_NAMES[@]}"; do
     echo ''
     tail -"$lines" "$log" | sed 's/^/    /'
     echo ''
-  } >>"$dir/verify.md"
+  } >>"$dir/verify-body.md"
 done
+
+# **要約を先頭に置く。** 本文は上から読まれるので、落ちた門の名前が9本ぶんのログより
+# 後ろに在ると、読む人はそれを探しに行くことになる。
+{
+  if [ "$ok" = 'true' ]; then
+    printf '**%d本すべて通った。**\n' "${#GATE_NAMES[@]}"
+  else
+    printf '**落ちた門: %s**\n' "$failed_list"
+  fi
+  echo ''
+  cat "$dir/verify-body.md"
+} >"$dir/verify.md"
+
 echo "ok=$ok" >>"$output_file"
 cat "$dir/verify.md"

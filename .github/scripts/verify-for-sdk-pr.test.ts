@@ -7,8 +7,9 @@
  * 正しく判定できているか」が測れなくなる。実物の一時 repo で測る。
  *
  * **偽の pnpm は「呼ばれた引数を記録するだけ」の記録係。** どの gate を落とすかは
- * `FAKE_PNPM_FAIL_STEP`（サブコマンド名。例: `lint`）でテストが指定する。指定した
- * サブコマンドだけ非0行の出力を吐いて exit 1、それ以外は1行の成功出力を返す。
+ * `FAKE_PNPM_FAIL_STEP`（サブコマンド名。空白区切りで複数指定できる。例: `typecheck lint`）、
+ * 終了コードは `FAKE_PNPM_FAIL_CODE`（既定 1）でテストが指定する。指定したサブコマンド
+ * だけ非0行の出力を吐いてその code で落ち、それ以外は1行の成功出力を返す。
  * pnpm 自身の実際のビルド・lint・test ロジックは一切持たない。
  *
  * ## ⚠️ この歯が測っているものと、測っていないもの
@@ -100,13 +101,15 @@ function writeFakePnpm(path: string): void {
 set -euo pipefail
 sub="\${1:-}"
 printf '%s\\n' "$sub" >> "\${FAKE_PNPM_LOG:?FAKE_PNPM_LOG が要る}"
-if [ "$sub" = "\${FAKE_PNPM_FAIL_STEP:-}" ]; then
-  n="\${FAKE_PNPM_FAIL_LINES:-45}"
-  for i in $(seq 1 "$n"); do
-    echo "fail line $i for $sub"
-  done
-  exit 1
-fi
+for f in \${FAKE_PNPM_FAIL_STEP:-}; do
+  if [ "$sub" = "$f" ]; then
+    n="\${FAKE_PNPM_FAIL_LINES:-45}"
+    for i in $(seq 1 "$n"); do
+      echo "fail line $i for $sub"
+    done
+    exit "\${FAKE_PNPM_FAIL_CODE:-1}"
+  fi
+done
 echo "ok output for $sub"
 `,
   );
@@ -236,6 +239,53 @@ describe('verify-for-sdk-pr.sh', () => {
     const verifyMd = readVerifyMd(s);
     const okCount = verifyMd.split('\n').filter((l) => /^### `[^`]+` — OK$/.test(l)).length;
     expect(okCount).toBe(STEPS.length);
+  });
+
+  /**
+   * 落ちた門の名前を要約として先頭に出すこと。
+   *
+   * **なぜ数ではなく名前か。** `open-claude-sdk-pr.sh` は `SDK_VERIFY_OK != 'true'` の
+   * 一値で PR を draft にする。その1つの値は「9本のどれかが本当に落ちた」と
+   * 「`openapi.json` が変わっただけ」という**性質の違う状態を1つに潰している**。
+   * 本文に門の名前が出ていれば、draft を受け取った人がその場で見分けられる。
+   * **「1本落ちた」という数だけでは、また潰れる。**
+   */
+  describe('落ちた門の要約（draft の理由が本文から読めること）', () => {
+    it('落ちた門を、数ではなく名前と終了コードで先頭に出す', () => {
+      const s = setup();
+
+      run(s, { FAKE_PNPM_FAIL_STEP: 'lint', FAKE_PNPM_FAIL_CODE: '2' });
+
+      expect(readVerifyMd(s).split('\n')[0]).toBe('**落ちた門: `lint`（exit 2）**');
+    });
+
+    it('⚠️ 2本落ちれば2本とも名前が出る（「2本落ちた」に潰さない）', () => {
+      const s = setup();
+
+      run(s, { FAKE_PNPM_FAIL_STEP: 'typecheck lint', FAKE_PNPM_FAIL_CODE: '3' });
+
+      // 並びは STEPS の順（typecheck が先）。区切りは ` / `。
+      expect(readVerifyMd(s).split('\n')[0]).toBe(
+        '**落ちた門: `typecheck`（exit 3） / `lint`（exit 3）**',
+      );
+    });
+
+    it('git 門（openapi）が落ちたときも名前で出る（pnpm 門だけの仕掛けになっていない）', () => {
+      const s = setup();
+      writeFileSync(join(s.repoPath, 'apps', 'daemon', 'openapi.json'), '{"openapi":"3.1.1"}\n');
+
+      run(s);
+
+      expect(readVerifyMd(s).split('\n')[0]).toBe('**落ちた門: `openapi`（exit 1）**');
+    });
+
+    it('全部通れば本数を名乗る（STEPS の本数と一致すること）', () => {
+      const s = setup();
+
+      run(s);
+
+      expect(readVerifyMd(s).split('\n')[0]).toBe(`**${STEPS.length}本すべて通った。**`);
+    });
   });
 
   describe('openapi 門（本物の git で測る）', () => {
