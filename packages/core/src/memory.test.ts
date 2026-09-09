@@ -937,6 +937,50 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
         'fact 文書が存在することを毎ターンの焼き込みの中で名乗る唯一の場所',
       );
     });
+
+    /**
+     * ⭐⭐⭐⭐ 2つの蓋は「件数で切ってから、その残りに文字数の蓋を掛ける」
+     * 順でなければならない——逆（束ねた全体に先に文字数の蓋を掛けてから
+     * 件数で切る）だと、**表示される件数は変わらないのに、切った理由の
+     * 名乗りだけが誤る**（依頼者の求め。2つの蓋が独立に効いているかを、
+     * 順序を意識しない入力では測れない——上の3つの it() はどれも「先頭
+     * 300件だけで文字数の判定が決まる」形なので、この非自明な境界を通らない）。
+     *
+     * 入力: 先頭300件は要旨なし（束ねて 8,849字相当、予算に対して大きな
+     * 余裕を残す）。末尾20件は要旨が1行の上限いっぱい（長い）。**320件を
+     * 束ねた総量は予算を超えるが、件数で切った後の先頭300件だけなら予算に
+     * 大きく収まる。** ⟹ 正しい実装は「件数のみ」を名乗る（末尾20件は
+     * 件数の上限だけで丸ごと落ちるので、文字数の判定にすら入らない）。
+     * もし文字数の蓋を束ねた全体（320件）に対して先に評価する実装だと、
+     * 末尾の長い行の一部が「予算を圧迫した」と誤って判定し、**表示件数は
+     * 300件のまま変わらないのに**「両方」を誤って名乗る。
+     */
+    it('⭐ 順序が結果を変える境界（先頭300件は予算に大きな余裕、320件束ねると予算超過——正しくは「件数のみ」）', () => {
+      const shortDocs = Array.from({ length: MEMORY_TOC_ENTRY_LIMIT }, (_, i) =>
+        fact(`fact-${String(i).padStart(3, '0')}`, { freshness: { kind: 'absent' } }),
+      );
+      const longDocs = Array.from({ length: 20 }, (_, i) =>
+        fact(`zzz-${String(i).padStart(3, '0')}`, {
+          description: 'あ'.repeat(MEMORY_TOC_LINE_LIMIT),
+          freshness: { kind: 'fresh' },
+        }),
+      );
+      const rendered = renderMemoryDocuments([...shortDocs, ...longDocs]);
+
+      // 前提: 表示件数はちょうど300件（先頭の要旨なし文書だけ）で、末尾の
+      // 長い20件は1件も表示に混ざらない——文字数の判定が「先頭300件だけ」で
+      // 決まっていることの直接の確認。
+      const shownCount = rendered.match(/^- (fact|zzz)-/gm)?.length ?? 0;
+      expect(shownCount).toBe(MEMORY_TOC_ENTRY_LIMIT);
+      expect(rendered).not.toMatch(/^- zzz-/m);
+
+      expect(rendered).toContain(
+        `${MEMORY_TOC_ENTRY_LIMIT} 件の上限に当たって件数で切った（文字数の予算 ` +
+          `${MEMORY_TOC_CHAR_BUDGET.toLocaleString('en-US')} 文字にはまだ余裕がある）。`,
+      );
+      expect(rendered).not.toContain('の両方に当たって切った');
+      expect(rendered).not.toContain('文字に当たって文字数で切った');
+    });
   });
 
   /**
