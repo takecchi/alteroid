@@ -29,6 +29,27 @@
 // ある。読む実装は `mutate-core.mjs` の `readMaxWorkers`）。省略時は
 // `mutate-core.mjs` の `DEFAULT_MAX_WORKERS`（＝これまでどおり `4`）のまま。
 // `run` に渡すと、baseline の確認と各変異ごとのテスト実行の両方に効く。
+//
+// `--root <path>`: 対象ツリー（ROOT）を明示的に上書きする。全コマンド共通。
+// 省略時は `mutate-core.mjs` の `DEFAULT_ROOT`（＝これまでどおり、このスクリプト
+// 自身の位置から3階層上）のまま — 既定の挙動は変えていない。
+//
+// **なぜ足したか。** `ROOT` はこのスクリプト自身の位置から決まり、上書きする
+// 引数が無かった。別の repo（例: 他のチェックアウト）の中に立ってこの clone の
+// `mutate.mjs status` を呼ぶと、エラーにならず「このツリーに変異が当たった
+// ままの状態は無い」と答える——その「このツリー」が呼び出し元ではなくこの
+// clone であることが、出力からは分からなかった。`--root` を足しただけでは
+// 半分で、**どの ROOT について答えているかを毎回出力に出す**（下記）ことで、
+// 対象の取り違えを「そうと分かる形」にする。
+//
+// **環境変数ではなく引数にした理由**: `mutate-core.mjs` 冒頭に「ここに
+// テスト用の抜け道（環境変数で分岐する類）を作らない」とある。この CLI 層が
+// argv を読んで `mutate-core.mjs` の `setRootOverride` を呼ぶ——分岐は
+// argv 解析であって、環境変数による分岐ではない。
+//
+// 実効の ROOT（既定か上書きかを含む）は、コマンドの実行結果を出す前に必ず
+// 1行出す（`main()` の冒頭）。`status` が「無い」と答えるとき、それがどの
+// ツリーについてのことかを読めば分かるようにするためである。
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -36,6 +57,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import {
+  DEFAULT_ROOT,
   HarnessError,
   ROOT,
   applyMutation,
@@ -45,9 +67,11 @@ import {
   markerExists,
   readMarkerVerified,
   readMaxWorkers,
+  readRootArg,
   restoreMutation,
   runTests,
   section,
+  setRootOverride,
   testsAllPassed,
   testsRanCleanly,
   log,
@@ -307,9 +331,28 @@ function cmdSelftest(args) {
   for (const r of results) log(JSON.stringify(r));
 }
 
+/**
+ * `--root` を解釈し、実効の ROOT を出力へ1行出す。
+ *
+ * **対象の取り違えを「そうと分かる形」にする本体はここである。** `--root` の
+ * 上書きの有無に関わらず、どの ROOT について以降の出力が答えているのかを
+ * 先頭で明示する。`status` が「印は無い」と答えるとき、それが呼び出し元の
+ * ツリーではなくこの ROOT についてのことだと、ここを読めば分かる。
+ */
+function applyRootArgAndAnnounce(rest) {
+  const rootArg = readRootArg(rest);
+  if (rootArg !== undefined) {
+    setRootOverride(rootArg);
+    log(`ROOT: ${ROOT}（--root で上書き。既定は ${DEFAULT_ROOT}）`);
+  } else {
+    log(`ROOT: ${ROOT}（既定。--root は渡されていない）`);
+  }
+}
+
 function main() {
   const [, , cmd, ...rest] = process.argv;
   try {
+    applyRootArgAndAnnounce(rest);
     switch (cmd) {
       case 'status':
         cmdStatus();

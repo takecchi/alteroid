@@ -34,6 +34,16 @@ node .claude/skills/mutation-testing/mutate.mjs run --plan <plan.json>     # 本
 node .claude/skills/mutation-testing/mutate.mjs selftest --scenario <name>
 ```
 
+**全コマンド共通で `--root <path>` を受ける。** 省略時は既定（このスクリプト自身の
+位置から3階層上）のまま——`ROOT` はスクリプト自身の位置から決まり、上書きする
+引数が無かった。別の repo に立ってこの clone の `mutate.mjs status` を呼ぶと、
+エラーにならず「このツリーに変異が当たったままの状態は無い」と答える——その
+「このツリー」が呼び出し元ではなくこの clone であることが、出力からは分からな
+かった。**`--root` を渡したかどうかに関わらず、実効の ROOT を毎回出力の先頭へ
+出す**（`ROOT: <path>（既定 / --root で上書き）`）ことで、対象の取り違えを
+「そうと分かる形」にしてある。不正な `--root`（存在しない・ディレクトリでない）
+は fail-closed で拒否する。
+
 `baseline` / `run` は、印（`MUTATION-IN-PROGRESS.json`）が残っている状態では測定を始めずに落ちる
 （既定）。中断されたツリーで新しい測定を始めると、生存も検出も意味を失うため。逃げ道は
 `--allow-existing-marker` の1つに限ってある。
