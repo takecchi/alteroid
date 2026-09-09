@@ -742,11 +742,11 @@ export const SUBAGENT_WAKEUP_LIMIT_PER_TASK = 2;
  *
  * - `BackgroundTaskSummary.id` は SDK 0.3.263 の `sdk.d.ts` で
  *   `id: string;` と宣言されているだけで、**doc コメントが1行も付いて
- *   いない** ⟹ SDK は安定性にも一意性にも触れていない。**`[sdk-verbatim
- *   ...]` の印は付けない** —— 引用するのは doc コメントの無い `id: string;`
- *   だけなので印の意味が無く、しかも `check:sdk-quotes`
- *   （`scripts/check-sdk-quotes-core.mjs` の doc）は「不在の主張」を
- *   検査できない。
+ *   いない** ⟹ SDK は安定性にも一意性にも触れていない。**この事実には
+ *   sdk-verbatim の印（`pnpm check:sdk-quotes` が当て直す逐語引用の目印）を
+ *   付けない** —— 引用するのは doc コメントの無い `id: string;` だけなので
+ *   印の意味が無く、しかも `check:sdk-quotes`（`scripts/check-sdk-quotes-core.mjs`
+ *   の doc）は「不在の主張」を検査できない。
  * - 同梱の `claude` 実行バイナリを**静的に**読んだ範囲では、id は種別で
  *   2系統に分かれる —— `local_bash` 等は `'<種別1文字>' +
  *   crypto.randomBytes(8) を36進へ写した8文字`、`local_agent` は
