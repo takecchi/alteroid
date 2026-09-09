@@ -3537,6 +3537,14 @@ export function createCloneTools(context: ToolContext) {
         }
 
         // --- 一覧モード ---
+        //
+        // ⚠️ **ここに `sort` を足す前に Issue #757 を読むこと。** この口は並べ直しを
+        // 1行も持たない ——「古い順」を作っているのはストアの実装であって、
+        // 実装ごとに違う（pg は `orderBy(asc(approvals.createdAt))`、fs と
+        // インメモリは挿入順）。**この一覧は予算で切って一部しか出さない**ので、
+        // 並びが変わると「切り落とされる側」が変わる。⟹ 並べ直しは挙動の変更で
+        // あり、同着（同じ createdAt）をどう扱うかまで決めないと全順序にならない
+        // （#757 に、起きたときどう壊れるかを書いてある）。
         const pending = await stores.jobs.listApprovals({ pendingOnly: true });
         if (pending.length === 0) return text('（人間の回答待ちは無い）');
         const items = pending.map((approval) =>

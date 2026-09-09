@@ -26,11 +26,7 @@ import {
   type JobStatus,
 } from './schema.js';
 import type { ScheduleStatus } from './schedule.js';
-import {
-  CLONE_RUNTIME_ITEM_LABELS,
-  describeCloneRuntime,
-  type CloneRuntimeFacts,
-} from './self.js';
+import { CLONE_RUNTIME_ITEM_LABELS, describeCloneRuntime, type CloneRuntimeFacts } from './self.js';
 import type { Stores } from './store.js';
 import { captureStderr, createMemoryStores, failingJournalAppend } from './testing.js';
 import { buildCloneSystemPrompt } from './prompt.js';
@@ -12963,6 +12959,8 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
    * - `packages/storage-fs/src/jobs.ts` / `packages/core/src/testing.ts`:
    *   `filter` だけで `sort` 無し ⟹ 挿入順
    *
+   * ⟹ **並べ直しが要るという判断そのものは Issue #757 へ落とした**（起きたとき
+   * どう壊れるか＝予算で切ったときに落ちる側が構成によって変わる、まで書いてある）。
    * ⛔ **並べ直しをこの PR で入れない**（ふるまいの変更）。⛔ **「古い順に」を単に
    * 消さない**（本番で成立している性質まで捨てることになる）。⟹ 応答の文言を、
    * **実装が実際に保証している通りに**精密化する。

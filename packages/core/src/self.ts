@@ -246,7 +246,8 @@ const CLONE_RUNTIME_ITEMS = {
   sessionId:
     'SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）',
   resumedFrom: 'resume 元のセッション id',
-  injectedMemoryChars: 'システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）',
+  injectedMemoryChars:
+    'システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）',
   systemPromptChars: 'システムプロンプト全体の文字数（毎ターン払っている入力の土台）',
 } as const;
 
