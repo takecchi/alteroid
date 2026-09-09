@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { Ctx, LLMProvider, LLMResponse, PromptSpec, StructuredRequest } from "@mnemora/core";
+import { AnthropicLLMProviderError } from "./errors.js";
 import { translateForAnthropicStructuredOutput } from "./json-schema.js";
 
 /**
@@ -85,6 +86,42 @@ function firstTextBlock(content: Anthropic.Messages.ContentBlock[]): string | un
   return content.find((block) => block.type === "text")?.text;
 }
 
+/**
+ * ⭐ **`content` を読む前に、必ずこれを通す。**
+ *
+ * **拒否は HTTP 200 で返る。** `stop_reason: "refusal"` が付いた成功応答であり、
+ * SDK は例外を投げない。`content` には テキストブロックが1つも無いことがある。
+ * ⟹ **見ないと、拒否を「空の成功」として core へ渡す。**
+ *
+ * **`stop_reason` が無い/null のときは通す。** 非 streaming では常に非 null だと
+ * SDK の型コメントが述べているが、streaming の `message_start` では null になり、
+ * テストの偽 client も設定しない。**「分からない」を「拒否された」と読まない。**
+ *
+ * **⚠ `truncated` は依頼された範囲の外である**（依頼は「拒否と空応答を区別する」だった）。
+ * 同じ `stop_reason` を読む一手で分かり、**切り詰められた JSON は `SyntaxError` になって
+ * 「モデルが壊れた JSON を吐いた」と区別が付かなくなる**ため、同じ固定点
+ * （「無い」の種類を潰さない）に当たると判断して入れた。**要らなければ落とせる。**
+ */
+function assertNotRefusedOrTruncated(response: {
+  stop_reason?: string | null;
+  stop_details?: { category?: string | null } | null;
+}): void {
+  const stopReason = response.stop_reason ?? null;
+  if (stopReason === null) {
+    return;
+  }
+  if (stopReason === "refusal") {
+    throw new AnthropicLLMProviderError({
+      kind: "refusal",
+      stopReason,
+      refusalCategory: response.stop_details?.category ?? null,
+    });
+  }
+  if (stopReason === "max_tokens" || stopReason === "model_context_window_exceeded") {
+    throw new AnthropicLLMProviderError({ kind: "truncated", stopReason });
+  }
+}
+
 export class AnthropicLLMProvider implements LLMProvider {
   private readonly client: Pick<Anthropic, "messages">;
   private readonly model: string;
@@ -104,7 +141,13 @@ export class AnthropicLLMProvider implements LLMProvider {
       ...(system !== undefined ? { system } : {}),
       messages,
     });
-    // `@mnemora/openai` が `?? ""` としているのに揃える——テキストが取れなければ空文字。
+    assertNotRefusedOrTruncated(response);
+    // ⚠ **ここの `?? ""` は残した。** ADR 0072「引き受けた負債」2 の通り、
+    // `@mnemora/openai` も同じ形であり、片方だけ throw にすると差し替えられなくなる。
+    // **ただし上の門を通した後なので、意味が変わっている**——ここへ来る空文字は
+    // 「拒否された」でも「切り詰められた」でもなく、**モデルが本当に何も言わなかった**場合だけである。
+    // ⟹ **「空文字は安全だ」と主張しているのではない。**望ましい姿でもない。
+    // 直すなら両 provider 同時（＝公開 API の破壊的変更）なので、提起までにしてある。
     return { content: firstTextBlock(response.content) ?? "" };
   }
 
@@ -119,9 +162,14 @@ export class AnthropicLLMProvider implements LLMProvider {
       output_config: { format },
     });
 
+    // ⭐ **`content` を読む前に `stop_reason` を見る。**順序が本質である
+    // ——後ろに置くと、拒否が `no_content` に化けて種類が潰れる。
+    assertNotRefusedOrTruncated(response);
     const raw = firstTextBlock(response.content);
     if (!raw) {
-      throw new Error("AnthropicLLMProvider: structured completion returned no content");
+      // メッセージは `@mnemora/openai` と同じ形のまま（差し替え可能性を壊さない）。
+      // 種類は `kind` で足しただけである。
+      throw new AnthropicLLMProviderError({ kind: "no_content" });
     }
     // JSON.parse が失敗すれば SyntaxError をそのまま伝播させる（catch しない）。
     const parsedJson: unknown = JSON.parse(raw);

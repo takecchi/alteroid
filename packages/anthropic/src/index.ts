@@ -5,5 +5,6 @@
 // （docs/architecture.md §4「オーナー案から変えた3点」）。埋め込みが要る構成では
 // `@mnemora/openai` 等、別の provider を併用すること（README.md 参照）。
 
+export * from "./errors.js";
 export * from "./llm-provider.js";
 export * from "./json-schema.js";

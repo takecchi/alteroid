@@ -78,6 +78,40 @@ const structured = await llmProvider.completeStructured(ctx, {
 console.log(structured.summary);
 ```
 
+## ⚠ 失敗は種類として返る（拒否を「空の成功」にしない）
+
+**Anthropic の拒否は HTTP 200 で返る。**`stop_reason: "refusal"` が付いた成功応答であり、
+SDK は例外を投げず、`content` にはテキストブロックが1つも無いことがある。
+⟹ **このパッケージは `content` を読む前に `stop_reason` を見る。**
+
+失敗は `AnthropicLLMProviderError` として投げられ、**`kind` で区別できる**:
+
+| `kind` | 何が起きたか | 付いてくる情報 |
+|---|---|---|
+| `"refusal"` | 安全性の分類器が介入した | `refusalCategory`（`cyber` / `bio` / `frontier_llm` …。**開いた集合**） |
+| `"truncated"` | 応答が途中で切れた | `stopReason`（`max_tokens` / `model_context_window_exceeded`）。**`maxTokens` を上げるか、プロンプトを短くする** |
+| `"no_content"` | 上記のどれでもないのに、テキストブロックが無かった | — |
+
+```ts
+import { AnthropicLLMProviderError } from "@mnemora/anthropic";
+
+try {
+  await llmProvider.completeStructured(ctx, { prompt, schema });
+} catch (error) {
+  // ⚠ `instanceof` ではなく `kind` で分岐する
+  //（bundler が同じクラスを二重に読み込むと `instanceof` は落ちる）。
+  const kind = (error as AnthropicLLMProviderError).kind;
+  if (kind === "refusal") {
+    // 「モデルが答えなかった」ではなく「モデルが断った」。区別して扱えるようにしてある。
+  }
+}
+```
+
+**⚠ `complete()` は、拒否でも切り詰めでもない空応答に対しては、いまも空文字を返す。**
+望ましい姿ではない——`@mnemora/openai` も同じ形であり、直すなら両方同時
+（公開 API の破壊的変更）になるため、提起までにしてある
+（[ADR 0072](../../docs/decisions/0072-anthropic-llm-provider.md) の追記）。
+
 ## `@mnemora/openai` との違い
 
 | 観点 | `@mnemora/openai` | `@mnemora/anthropic` |

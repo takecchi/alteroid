@@ -250,6 +250,93 @@ publish 対象は固定リストであり「新しい publish 対象が増えた
 
 ---
 
+## ⚠ 追記（2026-09-09、PR #89 マージ後）— 初版に穴が1つ在った
+
+**状態: 初版の決定は覆っていない。契約を1つ足した。**
+
+### 何が抜けていたか
+
+**初版は `content` を読む前に `stop_reason` を見ていなかった。**
+`packages/anthropic/src/` にも `__tests__/` にも `stop_reason` / `refusal` は
+**1件も無かった**（実測。マージ後に grep した）。
+
+**⚠ Anthropic の拒否は HTTP 200 で返る。**`stop_reason: "refusal"` が付いた
+**成功応答**であり、SDK は例外を投げない。`content` にはテキストブロックが1つも
+無いことがある。**⟹ 見ないと、拒否を「空の成功」として扱う。**
+
+**実害は限定的だった**（マージ前に測り直した）:
+
+| | 実運用の呼び出し元 | 拒否されたときの初版の振る舞い |
+|---|---|---|
+| `complete()` | **無い**（`extraction.ts` は使っていない） | `?? ""` で**空文字を成功として返す** |
+| `completeStructured()` | `extraction.ts:163` が唯一 | `throw`（**黙っては通らない**） |
+
+**⟹ 静かに壊れる形にはなっていなかった。**決定3 の「構造化出力が返らなかったら例外を投げる」が
+効いていた。**しかし残る問題が在った——「拒否された」と「応答が空だった」が*同じ例外*になる。**
+
+**⟹ これはこのリポジトリの固定点「『無い』の種類を潰さない」に正面から当たる**
+（ADR 0008 / 0013 / 0026 / 0027 / 0044 が一貫して守ってきた線）。
+`extraction.ts` の `extractCandidates` はこの例外を飲んで
+`llm_failed_whole_observation` へ倒すので、**「モデルが拒否した」という情報はそこで消える。**
+
+### 決定6: `content` を読む前に `stop_reason` を見る。失敗は種類として区別する
+
+**出所: 私が `@anthropic-ai/sdk` 0.124.0 の `.d.ts` を読んで確認した。**
+`StopReason` は
+`'end_turn' | 'max_tokens' | 'stop_sequence' | 'tool_use' | 'pause_turn' | 'refusal' | 'model_context_window_exceeded'`
+であり、`'refusal'` は**実在する。**`Message.stop_details` は
+`RefusalStopDetails | null`（`category`: `cyber` / `bio` / `frontier_llm` /
+`reasoning_extraction` …**開いた集合**）で、「拒否についての構造化された情報」と型コメントに在る。
+
+`AnthropicLLMProviderError` を足し、**`kind` で3種を区別する**:
+
+| `kind` | 何が起きたか | `stop_reason` |
+|---|---|---|
+| `"refusal"` | 安全性の分類器が介入した。`refusalCategory` に分類が入る | `refusal` |
+| `"truncated"` | 応答が途中で切れた | `max_tokens` / `model_context_window_exceeded` |
+| `"no_content"` | 上記のどれでもないのに、テキストブロックが無かった | それ以外 |
+
+**⚠ `instanceof` ではなく `kind` で分岐させる形にした**——bundler が同じクラスを
+二重に読み込むと `instanceof` は落ちるが、`kind` は値なので影響を受けない。
+
+**`no_content` のメッセージは初版のまま**にした（`"…structured completion returned no content"`）。
+`provider-parity.test.ts` がこの文言に依存しており、**`@mnemora/openai` と揃えた契約を壊さない。
+種類は足しただけである。**
+
+**`stop_reason` が無い/null なら通す。**非 streaming では常に非 null だと型コメントが
+述べているが、streaming の `message_start` では null になり、偽 client も設定しない。
+**「分からない」を「拒否された」と読まない。**
+
+**⚠ `truncated` は依頼された範囲の外である。**依頼は「拒否と空応答を区別する」だった。
+同じ `stop_reason` を読む一手で分かり、**切り詰められた JSON は `SyntaxError` になって
+「モデルが壊れた JSON を吐いた」と区別が付かなくなる**——同じ固定点に当たると判断して入れた。
+**要らなければ落とせる**（歯ごと消せば済む）。
+
+### `complete()` の `?? ""` は残した
+
+**残した。**ただし**門を通した後**なので意味が変わっている——ここへ来る空文字は
+「拒否された」でも「切り詰められた」でもなく、**モデルが本当に何も言わなかった**場合だけである。
+
+**なぜ残したか**: `@mnemora/openai` も同じ形であり（負債2）、片方だけ throw にすると
+差し替えられなくなる。**直すなら両 provider 同時＝公開 API の破壊的変更**なので、
+`docs/autonomy.md` §3 に従って**提起までにした。**
+
+**⟹ この形を歯で固定した。ただし歯自身に「望ましい姿ではない」と名乗らせてある**
+（`refusal.test.ts` の当該 it のコメント）。**「安全である」という主張ではなく、
+「いまはこうだ」を書き留めた歯である**——直すときは歯ごと書き換えること。
+
+### ⚠ `@mnemora/openai` も同じ穴を持っている（この追記の範囲外）
+
+**実測: `packages/openai/src/` に `refusal` は0件。**OpenAI の chat completions にも
+`message.refusal` と `finish_reason` が在るはずだが、`@mnemora/openai` は
+どちらも見ていない。**⟹ 同じ形の穴が在る可能性が高い。**
+
+**この追記では直していない。**「揃える」ために Anthropic 側を弱くはしない
+（種類を足すだけにした）。**OpenAI 側を直すかはオーナーの判断であり、別の PR である。**
+**⚠ OpenAI 側の SDK 型は読んでいない**——「在るはず」は推測である。
+
+---
+
 ## 引き受けた負債
 
 1. **provider の適合テストは、今も存在しない。**`provider-parity.test.ts` は
@@ -272,7 +359,11 @@ publish 対象は固定リストであり「新しい publish 対象が増えた
    （決定3b）。`req.schema.parse` が最後に弾くので黙って通ることは無いが、
    **生成段で防げていない分、抽出の失敗として記録される経路を通る頻度が
    `@mnemora/openai` より高い可能性が在る。測っていない。**
-6. **npm への publish は行っていない。**`PUBLISH_TARGETS` に足しただけであり、
+6. **`@mnemora/openai` は `refusal` / `finish_reason` を見ていない**（実測: 0件）。
+   **同じ穴が在る可能性が高いが、この PR では直していない。**別の判断である。
+7. **`complete()` の `?? ""` は残っている**（上の追記）。門を通した後なので
+   拒否は握り潰さなくなったが、「本当に何も返らなかった」は依然として空文字になる。
+8. **npm への publish は行っていない。**`PUBLISH_TARGETS` に足しただけであり、
    `@mnemora/anthropic` は npm 上にまだ存在しない。
 
 ---
