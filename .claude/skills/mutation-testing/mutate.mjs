@@ -23,6 +23,15 @@
 // 中断されたツリーで新しい測定を始めると、生存も検出も意味を失うため。
 // 逃げ道は `--allow-existing-marker` の1つに限る。
 //
+// `run` は対照を**2種類**取る。混ぜないこと:
+//   1. **印なし・無変異の baseline**（先頭）。緑でなければ run を中止する。
+//   2. **印だけ・無変異の足場対照**（`makeScaffoldControlCache`。走行範囲ごとに
+//      1回）。**このハーネス自身が足場として置く印に反応して赤くなる歯が実在する**
+//      ので、その集合を測って判定から差し引く。差し引く集合の出所はこの実測だけ
+//      であり、CLI のフラグも plan / spec の項目も無い（人が「これは既知の失敗
+//      です」と宣言できる形を作らない）。詳細は `mutate-core.mjs` の
+//      `measureScaffoldControl` / `decideJudgementCategory` の doc。
+//
 // `--max-workers <n>` / `--max-workers=<n>`（#331）: 器が混んでいて並列度を
 // 下げるよう指示されている場面向け。**どちらの形も受け付ける**（vitest 本体の
 // フラグが `--maxWorkers=4` という `=` の形なので、その形で打っても届く必要が
@@ -60,12 +69,16 @@ import {
   DEFAULT_ROOT,
   HarnessError,
   ROOT,
+  SCAFFOLD_CONTROL_STAGE,
   applyMutation,
   assertAggregateBlocksUnambiguous,
   buildAndCheckArtifact,
   checkJudgementVocabulary,
+  describeRunScope,
+  formatScaffoldSubtractionReport,
   judge,
   markerExists,
+  measureScaffoldControl,
   readMarkerVerified,
   readMaxWorkers,
   readRootArg,
@@ -105,6 +118,33 @@ function cmdStatus() {
   // 次に来た人はソースの復元をやり直し、md5 が一致するのを見て「直った」と
   // 誤解する — 実際に残っているのは dist であって、cp では直らない。
   const stage = marker.stage ?? 'source-mutated';
+
+  // **足場対照の印は「変異が当たったまま」ではない。** 先に分岐する ——
+  // 下の共通の説明（`manualRestore.command` で cp して md5 を照合する）は
+  // 復元する対象が在る前提であり、この印には `manualRestore` が無い
+  // （読み取ると TypeError で落ちる）。そして何より、次に来た人へ
+  // 「ソースが変異したまま」と伝えると、**在りもしない変異を探すことになる。**
+  if (stage === SCAFFOLD_CONTROL_STAGE) {
+    log('⚠ このツリーには足場対照の印が残っている（変異は当たっていない）。');
+    log('');
+    log(`変異 id: ${marker.mutationId}`);
+    log(`いつ: ${marker.startedAt}`);
+    log(`セッション: ${marker.sessionId ?? '(不明)'} / pid=${marker.pid ?? '(不明)'}`);
+    log(`印内の原文の自己整合性: ${selfConsistent ? '一致（信頼できる）' : '不一致'}`);
+    log('');
+    log(`印が名乗っている内容: ${marker.note ?? '(無い)'}`);
+    log('');
+    log('段階: 足場対照（印だけ置いて、変異を当てずに1回走らせる）の途中で止まった。');
+    log('ソースは1バイトも変わっていない。復元すべきものは無い。');
+    log('');
+    log('次にやること:');
+    log(`  ${marker.howToClear ?? 'rm MUTATION-IN-PROGRESS.json'}`);
+    log(
+      '（`restore` は使わない —— 復元する対象が無いので拒否する。' +
+        'これは印を黙って消さないためである）',
+    );
+    process.exit(2);
+  }
 
   log('⚠ このツリーには変異が当たったままである。');
   log('');
@@ -237,10 +277,23 @@ function cmdRestore(args) {
   );
 }
 
-function runOneMutation(spec, maxWorkers) {
+function runOneMutation(spec, maxWorkers, scaffoldControlFor) {
   section(
     `変異 ${spec.id} (${spec.file}: ${JSON.stringify(spec.from)} → ${JSON.stringify(spec.to)})`,
   );
+
+  // **足場対照は変異を当てる前に取る。** 印だけが在る状態を作って測るもの
+  // なので、変異を当てた後では「印 + 変異」の結果になり対照にならない。
+  // **走行範囲はこの変異の走行と揃える**（`spec.testFilter`）。
+  const extraArgs = spec.testFilter ? [spec.testFilter] : [];
+  let scaffoldControl;
+  try {
+    scaffoldControl = scaffoldControlFor(extraArgs);
+  } catch (err) {
+    log(`足場対照を取れなかったので、この変異の判定は出せない: ${err.message}`);
+    return { id: spec.id, outcome: 'scaffold-control-failed', error: err.message };
+  }
+
   try {
     applyMutation(spec);
   } catch (err) {
@@ -254,13 +307,18 @@ function runOneMutation(spec, maxWorkers) {
   let judgeError = null;
   try {
     artifactResult = buildAndCheckArtifact(spec);
-    const extraArgs = spec.testFilter ? [spec.testFilter] : [];
     // `maxWorkers` が `undefined` でも `runTests` の既定引数がそのまま効く。
     testResult = runTests(extraArgs, maxWorkers);
     log('--- test 生ログ ここから ---');
     log(testResult.raw);
     log('--- test 生ログ ここまで ---');
-    judgement = judge(spec, artifactResult, testResult);
+    // **差し引いた名前は、判定より前に出す。** 判定が拒まれても証跡が残る
+    // （歯7「加工前の証跡」と同じ順序。`assertAggregateBlocksUnambiguous` の
+    // 生ログの扱いに揃えてある）。
+    log('--- 足場対照との差し引き ここから ---');
+    log(formatScaffoldSubtractionReport(testResult, scaffoldControl));
+    log('--- 足場対照との差し引き ここまで ---');
+    judgement = judge(spec, artifactResult, testResult, scaffoldControl);
   } catch (err) {
     judgeError = err.message;
   }
@@ -297,6 +355,45 @@ function runOneMutation(spec, maxWorkers) {
   };
 }
 
+/**
+ * 足場対照（印だけ・無変異の1回の走行）を、**走行範囲ごとに1回だけ**測る。
+ *
+ * **キーは `extraArgs`（＝`spec.testFilter`）である。** 絞り込んだ走行の対照を
+ * 全件で取ると、絞り込みでは走らない歯まで差し引いてしまう。逆に全件の走行の
+ * 対照を絞り込みで取ると、印に起因する赤を差し引き損ねる（＝偽の「検出」が
+ * 残る）。**測る側と揃えるのが唯一正しい取り方なので、範囲ごとに持つ。**
+ *
+ * **同じ範囲では測り直さない。** 全件の走行は1回で数分かかるので、plan の
+ * 変異の本数だけ測ると現実的な時間で終わらない。**その代わり、対照を取った
+ * 時刻から離れるほど「揺れの分布が変わった」可能性が上がる —— これは測って
+ * いない。** 差し引いた名前を毎回列挙することと、対照で赤かったのにその走行で
+ * 赤くならなかった歯を毎回出すこと（`formatScaffoldSubtractionReport`）で、
+ * 読む側が気づける形にしてある。
+ */
+function makeScaffoldControlCache(maxWorkers) {
+  const cache = new Map();
+  return function scaffoldControlFor(extraArgs) {
+    const key = JSON.stringify(extraArgs);
+    if (!cache.has(key)) {
+      section(`足場対照（${describeRunScope(extraArgs)}）: 印だけ置いて、変異を当てずに1回測る`);
+      log(
+        'なぜ取るか: このハーネスは足場として ROOT 直下へ印を置く。その印そのものに反応して' +
+          '赤くなる歯が実在するので、赤い歯が在るだけでは「変異が検出された」と言えない。' +
+          '差し引く集合をここで測る（人が宣言できる経路は無い）。',
+      );
+      const control = measureScaffoldControl({ extraArgs, maxWorkers });
+      log('--- 足場対照 生ログ ここから ---');
+      log(control.raw);
+      log('--- 足場対照 生ログ ここまで ---');
+      log(`抽出した行: ${control.filesLine} / ${control.testsLine}`);
+      log(control.reason);
+      for (const n of control.failedNames) log(`  [対照] ${n}`);
+      cache.set(key, control);
+    }
+    return cache.get(key);
+  };
+}
+
 function cmdRun(args) {
   checkJudgementVocabulary();
   assertNoBlockingMarker('run', args);
@@ -314,10 +411,16 @@ function cmdRun(args) {
     process.exit(1);
   }
   log(`抽出した行: ${baseline.filesLine} / ${baseline.testsLine}`);
+  log(
+    '（この対照は「印なし・無変異」である。緑でなければ run を中止する形は変えていない ——' +
+      '断続的な揺れがここで出れば fail-closed で止まる。印が在る状態の対照は、変異ごとに' +
+      '走行範囲を揃えて別に取る。下の「足場対照」）',
+  );
 
+  const scaffoldControlFor = makeScaffoldControlCache(maxWorkers);
   const results = [];
   for (const spec of plan) {
-    results.push(runOneMutation(spec, maxWorkers));
+    results.push(runOneMutation(spec, maxWorkers, scaffoldControlFor));
   }
 
   section('run: まとめ');

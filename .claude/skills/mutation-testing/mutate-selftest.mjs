@@ -25,6 +25,7 @@ import {
   log,
   markerExists,
   md5,
+  measureScaffoldControl,
   readMarkerVerified,
   readRepoFile,
   restoreMutation,
@@ -154,6 +155,20 @@ function scenarioBackupCorruption() {
 // import しており（`./conversations.js` → `conversations.ts`）、dist 境界を
 // 跨がない。だからこの demo では build/artifact 検査は「対象外」になる
 // （本番でパッケージ境界を跨ぐ変異には spec.target を必ず設定すること）。
+// **⚠️ このシナリオのフィクスチャが腐っていたのを、足場対照の導入が見つけた
+// （2026-09-09、実測）。** 「強い歯」の期待文字列の末尾は
+// `（日誌を 1 件遡り、…）` のままだったが、実装側の文言は #423 / #427 で
+// `（人間との往復を 1 件遡り、…）` に変わっていた。⟹ **この歯は変異の有無に
+// 関わらず赤く**、旧い判定（集計行の `failed` の文字だけを見る）はそれを
+// 「検出」と読んでいた —— このシナリオが実演するはずだった「弱い歯＝生存 /
+// 強い歯＝検出」の対比は、**強い歯の側が偽の「検出」で成立していた。**
+// 足場対照を取ると同じ赤が対照にも出るので差し引かれ、判定が `生存` に変わって
+// 露見した。逐語の証拠:
+//   $ npx vitest run apps/cli/src/conversations.selftest-strong.test --maxWorkers=2
+//   - （日誌を 1 件遡り、この会話の先頭まで届いた）
+//   + （人間との往復を 1 件遡り、この会話の先頭まで届いた）
+// **フィクスチャの側を現物へ合わせた**（歯を緩めたのではない —— 全文の
+// 突き合わせという主張はそのままで、比べる相手を正した）。
 function scenarioWeakTooth() {
   section('selftest: 2. 歯が弱い（apps/cli/src/conversations.ts の renderConversationDetail）');
   requireNoMarker('weak-tooth');
@@ -206,6 +221,9 @@ import { renderConversationDetail } from './conversations.js';
 
 // selftest 用の一時テスト（mutation-testing ハーネスの自己検証）。実行後に削除する。
 // 強い歯: 全文を1つの文字列として突き合わせる。継続行が消えれば必ず落ちる。
+// **⚠️ 末尾の1行は実装の文言そのものである。** 実装側の文言が変わるとこの歯は
+// 変異の有無に関わらず赤くなり、このシナリオは「強い歯が変異を捕まえた」ではなく
+// 「腐ったフィクスチャが落ちた」を見ることになる（実際に起きた。下の注記）。
 describe('強い歯（selftest）', () => {
   it('全文（継続行を含む）を突き合わせる', () => {
     const rendered = renderConversationDetail(
@@ -228,7 +246,7 @@ describe('強い歯（selftest）', () => {
         '2行目',
         '3行目',
         '',
-        '（日誌を 1 件遡り、この会話の先頭まで届いた）',
+        '（人間との往復を 1 件遡り、この会話の先頭まで届いた）',
       ].join('\\n'),
     );
   });
@@ -248,6 +266,11 @@ describe('強い歯（selftest）', () => {
         id: `${spec.id}-${label}`,
         testFilter: testRel.replace(/\.ts$/, ''),
       };
+      // **足場対照は変異を当てる前に取る**（走行範囲はこの変異の走行と揃える）。
+      // 赤い歯が在るときの判定は、対照が無いと拒まれる（`decideJudgementCategory`
+      // の門3）。ここは絞り込み走行なので、対照の走行も同じ1ファイルだけである。
+      const scaffoldControl = measureScaffoldControl({ extraArgs: [thisSpec.testFilter] });
+      log(`足場対照: ${scaffoldControl.reason}`);
       applyMutation(thisSpec);
       const artifactResult = buildAndCheckArtifact(thisSpec);
       const testResult = runTests([thisSpec.testFilter]);
@@ -257,7 +280,7 @@ describe('強い歯（selftest）', () => {
       let judgement;
       let judgementError = null;
       try {
-        judgement = judge(thisSpec, artifactResult, testResult);
+        judgement = judge(thisSpec, artifactResult, testResult, scaffoldControl);
       } catch (err) {
         judgementError = err.message;
       }
@@ -534,6 +557,9 @@ function scenarioJudgementIdIntegrity() {
   for (const spec of [survivingSpec, detectedSpec]) {
     log('');
     log(`== spec.id=${spec.id} を通す（testFilter=${spec.testFilter}） ==`);
+    // 足場対照を先に取る（`decideJudgementCategory` の門3。走行範囲を揃える）。
+    const scaffoldControl = measureScaffoldControl({ extraArgs: [spec.testFilter] });
+    log(`足場対照: ${scaffoldControl.reason}`);
     applyMutation(spec);
     // **投げる箇所が複数ある（判定失敗／spec.id の型検査／id 取り違え）。**
     // 復元せずに投げると、ソースが変異したまま・印も残ったまま次の spec・
@@ -553,7 +579,7 @@ function scenarioJudgementIdIntegrity() {
       log('--- test 生ログ ここまで ---');
       let judgement;
       try {
-        judgement = judge(spec, artifactResult, testResult);
+        judgement = judge(spec, artifactResult, testResult, scaffoldControl);
       } catch (err) {
         throw new HarnessError(`spec.id=${spec.id} の判定に失敗した: ${err.message}`);
       }
@@ -889,6 +915,9 @@ function scenarioJudgementForbiddenWordBoundary() {
     };
     log('');
     log(`== id="${id}" を通す ==`);
+    // 足場対照を先に取る（`decideJudgementCategory` の門3。走行範囲を揃える）。
+    const scaffoldControl = measureScaffoldControl({ extraArgs: [spec.testFilter] });
+    log(`足場対照: ${scaffoldControl.reason}`);
     applyMutation(spec);
     try {
       const artifactResult = buildAndCheckArtifact(spec);
@@ -897,7 +926,7 @@ function scenarioJudgementForbiddenWordBoundary() {
       log(testResult.raw);
       log('--- test 生ログ ここまで ---');
       try {
-        const judgement = judge(spec, artifactResult, testResult);
+        const judgement = judge(spec, artifactResult, testResult, scaffoldControl);
         log(`judge() が例外を投げずに終わった: ${judgement.text}`);
         return { threw: false, category: judgement.category, text: judgement.text };
       } catch (err) {
@@ -1153,11 +1182,33 @@ function scenarioRestoreStatusComparison() {
 // 表は全部通る。だから「gate を通った行で注記が実際に生成された」件数を別に
 // 数えて、0なら落とす。測った0は「入らない」を保証しない。
 
+// **⚠️ `raw` に失敗の見出しと `FAIL` 行を持たせてある（この PR で足した）。**
+// 判定は集計行の `failed` の文字だけでは出せなくなった（`decideJudgementCategory`
+// の門3 —— 落ちた歯の名前を判定に使えなければ拒む）ので、**集計行だけを持つ
+// 赤のフィクスチャは「判定を出せない」へ倒れる。** ここで測りたいのは #444 の
+// gate であって門3 ではないから、名前が取れる形の本物の出力に近づけた。
+// **弱めたのではなく、フィクスチャを現実の形へ寄せた** —— 逆に、名前が取れない
+// 赤（`GATE_TESTS_RED_NAMELESS`）は下で門3 が拒むことを別に測っている。
 const GATE_TESTS_RED = {
   exitCode: 1,
-  raw: 'Test Files  1 failed | 152 passed (153)\nTests  1 failed | 3094 passed (3095)\n',
+  raw:
+    '⎯⎯⎯ Failed Tests 1 ⎯⎯⎯\n\n' +
+    ' FAIL  packages/core/src/gate.test.ts > gate > 偽の歯が1本落ちた\n\n' +
+    'Test Files  1 failed | 152 passed (153)\nTests  1 failed | 3094 passed (3095)\n',
   filesLine: 'Test Files  1 failed | 152 passed (153)',
   testsLine: 'Tests  1 failed | 3094 passed (3095)',
+};
+
+/** 足場対照の代わり（このシナリオは `judge()` を純関数として測るので、
+ * 対照も合成する）。**差し引く集合は空**にしてある —— gate の分岐を測るのに
+ * 差し引きを混ぜない。 */
+const GATE_SCAFFOLD_CONTROL = {
+  measured: true,
+  failedNames: [],
+  namesTrustworthy: true,
+  scope: '全件',
+  extraArgs: [],
+  reason: '合成した対照（差し引く歯は0本）',
 };
 
 const GATE_TESTS_GREEN = {
@@ -1175,6 +1226,27 @@ const GATE_TESTS_UNREADABLE = {
   filesLine: null,
   testsLine: null,
 };
+
+// 足場対照の注記の**全文**（`describeScaffoldSubtraction` から実際の出力を
+// 取り出して置いたもの。GATE_NOTE_TEXT と同じ理由で、生成側の式を組み立て
+// 直してはいない）。フィクスチャごとに3通りある。
+const SCAFFOLD_TAIL_RED =
+  '走行範囲: 全件（足場対照も同じ範囲で取った） / 差し引いた足場の赤 0本 / 残った赤 1本\n' +
+  '名前は直前の区画「足場対照との差し引き」に列挙してある（黙って引かない）';
+const SCAFFOLD_TAIL_GREEN =
+  '走行範囲: 全件（足場対照も同じ範囲で取った） / この走行で赤くなった歯は0本';
+const SCAFFOLD_TAIL_UNREADABLE =
+  '走行範囲: 全件（足場対照も同じ範囲で取った） / ' +
+  'この走行の集計行が読めないので、赤くなった歯を数えていない';
+
+/** どのフィクスチャを渡したかから、期待する注記の全文を選ぶ。**選ぶだけで、
+ * 組み立て直してはいない**（上の3つは生成側の出力そのもの）。 */
+function scaffoldTailFor(testResult) {
+  if (testResult === GATE_TESTS_RED) return SCAFFOLD_TAIL_RED;
+  if (testResult === GATE_TESTS_GREEN) return SCAFFOLD_TAIL_GREEN;
+  if (testResult === GATE_TESTS_UNREADABLE) return SCAFFOLD_TAIL_UNREADABLE;
+  throw new HarnessError('未知の testResult フィクスチャ（足場対照の注記を選べない）');
+}
 
 // gate を通ったときに判定行の末尾へ付く注記の**全文**。
 // 生成側（`describeUndeliveredTestResultGate`）から実際の出力を取り出して
@@ -1304,7 +1376,7 @@ function scenarioJudgementUndeliveredGate() {
     let text = null;
     let error = null;
     try {
-      const judgement = judge({ id: c.id }, c.artifactResult, c.testResult);
+      const judgement = judge({ id: c.id }, c.artifactResult, c.testResult, GATE_SCAFFOLD_CONTROL);
       category = judgement.category;
       text = judgement.text;
     } catch (err) {
@@ -1313,9 +1385,13 @@ function scenarioJudgementUndeliveredGate() {
 
     // 判定行の**末尾**を固定する。`includes` ではなく `endsWith` なのは、
     // 追記部に余計なものが生えたことを見るため（上の doc）。
-    const expectedTail = c.expectGateNote
-      ? `artifactState: ${c.artifactResult.artifactState}\n${GATE_NOTE_TEXT}`
-      : `artifactState: ${c.artifactResult.artifactState}`;
+    // 足場対照の注記が最後に付く（`formatJudgement` の `scaffoldNote`）ので、
+    // それも末尾の固定に含める。
+    const expectedTail = [
+      `artifactState: ${c.artifactResult.artifactState}`,
+      ...(c.expectGateNote ? [GATE_NOTE_TEXT] : []),
+      scaffoldTailFor(c.testResult),
+    ].join('\n');
 
     const threw = error !== null;
     const errorOk = c.expectError === true ? threw && error.includes('テストの集計行') : !threw;
