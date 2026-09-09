@@ -363,8 +363,13 @@ const MULTI_BLOCK_FIRST_THEN_SECOND = [
  * **測った内容**: `test-guard-core.mjs` / `verify-core.mjs` の判定関数
  * （`parseAggregateLines` / `testRan` / `classifyTest`）へ、複数ブロックの入力が
  * **いまの HEAD の実装が持つ構造としては届かないことを測って確かめた**
- * （測定日 2026-09-09、`origin/main` = `a77562a`〔#742 直後の `1421398` から
- * #744・#741 の2本が積まれた版〕の木で当たり直した。潰した経路は7本）:
+ * （測定日 2026-09-09。潰した経路は7本。**出所を分ける**——1・2・3・5 は
+ * この PR の書き手が `origin/main` = `a77562a`〔#742 直後の `1421398` から
+ * #744・#741 の2本が積まれた版〕の木で自分の手で当たり直した。4・6・7 は
+ * 別の測定（`1421398` の木で取られたもの）から引用したもので、この PR の
+ * 書き手自身は当初これを転記しただけで自分では当たり直していなかった。
+ * その後 `a77562a` と `f20891d`（`a77562a` からさらに #739 が1本積まれた
+ * 版）の両方の木で当たり直し、成立を確認した——下の4・6・7に実測を添えた）:
  *
  * 1. `test-guard-core.mjs` の判定関数（`parseAggregateLines`）を import している
  *    非テストファイルは `scripts/test.mjs` の1本だけ
@@ -379,16 +384,23 @@ const MULTI_BLOCK_FIRST_THEN_SECOND = [
  *    1回だけ）。
  * 4. `verify.mjs` は9門のうち `isTest: true` の1本（`pnpm test`）だけを `runTest`
  *    で捕まえ、他8門は `stdio: 'inherit'` で出力を捨てる——門の出力が連結されて
- *    判定へ渡る経路は無い。
+ *    判定へ渡る経路は無い（`command grep -Fn -- "isTest: true" scripts/
+ *    verify-core.mjs` → 296行の test 門1本のみ。`command grep -c -- "isTest"
+ *    scripts/verify-core.mjs` → 1＝ファイル全体で1箇所。`command grep -Fn --
+ *    "stdio: 'inherit'" scripts/verify.mjs` → 185行、`run()` 側）。
  * 5. root + 8パッケージの `test` スクリプト9本は全部が単発の
  *    `node …/scripts/test.mjs …` で、`&&` も `;` も `pnpm -r` も1つも無い
  *    （`package.json` を9本全部当たった）。
  * 6. `vitest.config.ts` に `projects` は無く、`vitest.workspace.ts` も存在せず、
  *    `reporters` の指定も無い——1回の `vitest run` が集計ブロックを2つ出す形は
- *    この repo の設定では無い。
+ *    この repo の設定では無い（`ls vitest.workspace.*` → No such file、
+ *    `command grep -n -- 'projects\|reporters' vitest.config.ts` → 0件・exit 1）。
  * 7. `.github/scripts/verify-for-sdk-pr.sh` は9門を個別ログ・個別終了コードで
  *    判定し、`verify-core.mjs` / `test-guard-core.mjs` の判定関数を一度も
- *    呼んでいない（連結ログ `verify.md` は人間が読む PR 本文の材料）。
+ *    呼んでいない（連結ログ `verify.md` は人間が読む PR 本文の材料。
+ *    `command grep -n -- 'verify-core\|test-guard-core'
+ *    .github/scripts/verify-for-sdk-pr.sh` → 9行目・52行目の2件のみで、
+ *    どちらも `#` で始まるコメント。呼び出しは0件）。
  *
  * **⟹ だから `test-guard-core.mjs` / `verify-core.mjs` は「最初」を返す実装の
  * ままでよい。**
