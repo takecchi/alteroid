@@ -336,9 +336,7 @@ describe('SubagentStop の観測（#357 / #570）', () => {
     expect(text).toContain('在庫=2件');
     // **起こし直したことが note の字面からも分かる。**
     expect(text).toContain('起こし直した');
-    expect(text).toContain(
-      `この作業者の通算 1回目 / 通し上限 ${SUBAGENT_WAKEUP_LIMIT_PER_AGENT}`,
-    );
+    expect(text).toContain(`この作業者の通算 1回目 / 通し上限 ${SUBAGENT_WAKEUP_LIMIT_PER_AGENT}`);
     expect(text).toContain(
       `この背景処理では 1回目 / 1本あたりの上限 ${SUBAGENT_WAKEUP_LIMIT_PER_TASK}`,
     );
@@ -590,7 +588,10 @@ describe('SubagentStop の観測（#357 / #570）', () => {
       const result = await fireSubagentStop(started.options, {
         ...STOP_BASE,
         agent_id: 'agent-1',
-        background_tasks: [selfEntry('agent-1'), { id: 'bg-a', type: 'monitor', status: 'running' }],
+        background_tasks: [
+          selfEntry('agent-1'),
+          { id: 'bg-a', type: 'monitor', status: 'running' },
+        ],
       });
       expect(result).toHaveProperty('hookSpecificOutput');
     }
@@ -657,7 +658,10 @@ describe('SubagentStop の観測（#357 / #570）', () => {
         const result = await fireSubagentStop(started.options, {
           ...STOP_BASE,
           agent_id: 'agent-1',
-          background_tasks: [selfEntry('agent-1'), { id: 'bg-1', type: 'monitor', status: 'running' }],
+          background_tasks: [
+            selfEntry('agent-1'),
+            { id: 'bg-1', type: 'monitor', status: 'running' },
+          ],
         });
         expect(result).toHaveProperty('hookSpecificOutput');
       }
@@ -667,7 +671,10 @@ describe('SubagentStop の観測（#357 / #570）', () => {
       const overLimitResult = await fireSubagentStop(started.options, {
         ...STOP_BASE,
         agent_id: 'agent-1',
-        background_tasks: [selfEntry('agent-1'), { id: 'bg-1', type: 'monitor', status: 'running' }],
+        background_tasks: [
+          selfEntry('agent-1'),
+          { id: 'bg-1', type: 'monitor', status: 'running' },
+        ],
       });
 
       // **起こし直さない ⟹ `additionalContext` を返さない。**
@@ -785,7 +792,10 @@ describe('SubagentStop の観測（#357 / #570）', () => {
         const result = await fireSubagentStop(started.options, {
           ...STOP_BASE,
           agent_id: 'agent-1',
-          background_tasks: [selfEntry('agent-1'), { id: 'bg-1', type: 'monitor', status: 'running' }],
+          background_tasks: [
+            selfEntry('agent-1'),
+            { id: 'bg-1', type: 'monitor', status: 'running' },
+          ],
         });
         expect(result).toHaveProperty('hookSpecificOutput');
       }
@@ -802,7 +812,10 @@ describe('SubagentStop の観測（#357 / #570）', () => {
       const overLimitResult = await fireSubagentStop(started.options, {
         ...STOP_BASE,
         agent_id: 'agent-1',
-        background_tasks: [selfEntry('agent-1'), { id: 'bg-1', type: 'monitor', status: 'running' }],
+        background_tasks: [
+          selfEntry('agent-1'),
+          { id: 'bg-1', type: 'monitor', status: 'running' },
+        ],
       });
 
       // **もし `#subagentWakeups` がターンの頭でリセットされていたら、ここは
@@ -848,7 +861,10 @@ describe('SubagentStop の観測（#357 / #570）', () => {
       const overResult = await fireSubagentStop(started.options, {
         ...STOP_BASE,
         agent_id: 'agent-1',
-        background_tasks: [selfEntry('agent-1'), { id: overId, type: 'monitor', status: 'running' }],
+        background_tasks: [
+          selfEntry('agent-1'),
+          { id: overId, type: 'monitor', status: 'running' },
+        ],
       });
 
       expect(overResult).toEqual({ continue: true });
