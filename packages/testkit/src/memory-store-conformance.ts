@@ -1018,6 +1018,66 @@ export function describeMemoryStoreConformance(options: MemoryStoreConformanceOp
       expect(reloaded?.strength).toBeCloseTo(initialStrength, 6);
     });
 
+    it("⚠ createMemory は値域の外の strength を拒む（ADR 0078）", async () => {
+      // **`strength` は `total = similarity × decay × tagMatch × freshness × strength` に
+      // 掛かる係数であり、上限が無いと値を1つ大きく書いた Memory がそのテナントの想起を
+      // 支配する**（ADR 0036 が `freshness` で塞いだのと同じ穴）。値域は `(0, 1]`。
+      //
+      // ⚠ **強制の責任は store の層に在る。**`MemorySchema` / `NewMemorySchema`（zod）は
+      // `.parse()` される箇所が0件なので、型を締めても実行時には何も起きない。だから
+      // 「adapter が拒むこと」を契約としてここで固定する。
+      //
+      // ⚠ **境界に float64 の ε を使わない。**`packages/postgres` の `strength` は `real`
+      // （float4）で、`1 + Number.EPSILON` は格納時に `1.0` へ丸められて CHECK を通る
+      // （実測）。一方 in-memory 実装は float64 で判定するので弾く。**ε を書くと
+      // 2つの adapter が食い違い、この検査が「どちらかでしか成立しない」ものになる。**
+      // ⟹ 両者が一致する `1.0001` を上限側の境界に使う（float4 でも 1 より大きいまま）。
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+
+      const outOfRange: Array<[string, number]> = [
+        ["上限をわずかに超える", 1.0001],
+        ["1 より大きい", 2],
+        ["桁が違う", 1e6],
+        ["ちょうど 0", 0],
+        ["負", -1],
+        ["NaN", Number.NaN],
+        ["Infinity", Number.POSITIVE_INFINITY],
+      ];
+
+      // 🔴 **`decayFloorAt` を明示的に上書きする。**`buildNewMemoryFixture` は
+      // `defaultDecayStrategy.floorAt()` で `decayFloorAt` を計算するが、`strength` が
+      // `NaN` / `Infinity` のとき **`floorAt` は `Invalid Date` を返す**（`NaN` は
+      // `strength <= threshold` の比較を素通りするため。実測）。それをそのまま渡すと
+      // `packages/postgres` は **`timestamptz` 列のほうで**落ちる:
+      //
+      //   invalid input syntax for type timestamp with time zone: "0NaN-NaN-..."
+      //
+      // ⟹ **値域の歯が無くても赤くなる。**それでは「値域を検査した」ことにならないので、
+      // ここでは妥当な `decayFloorAt` を与え、**落ちる理由を `strength` だけに絞る。**
+      const validFloorAt = new Date("2026-06-01T00:00:00.000Z");
+
+      for (const [label, strength] of outOfRange) {
+        await expect(
+          store.createMemory(
+            ctx,
+            buildNewMemoryFixture({ tenantId: "tenant-1", strength, decayFloorAt: validFloorAt }),
+          ),
+          `strength=${strength}（${label}）は拒まれなければならない`,
+        ).rejects.toThrow();
+      }
+
+      // 前提: 値域の内側なら通る（「何を渡しても落ちる」実装を弾く）。
+      // **上限ちょうど（1）を含める**——`< 1` と書いた実装をここで落とす。
+      for (const strength of [1, 0.42, 1e-6]) {
+        const memory = await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({ tenantId: "tenant-1", strength }),
+        );
+        expect(memory.strength).toBeCloseTo(strength, 6);
+      }
+    });
+
     it("reinforce は存在しない Memory に対して失敗する", async () => {
       const store = await createStore();
       const ctx: Ctx = { tenantId: "tenant-1" };

@@ -1,6 +1,8 @@
 import {
   defaultDecayStrategy,
   isEmbeddingStatusRollback,
+  isStrengthInRange,
+  MAX_STRENGTH,
   MemoryStatusConflictError,
   resolveIdempotentCreate,
 } from "@mnemora/core";
@@ -174,6 +176,14 @@ export class InMemoryMemoryStore implements MemoryStore {
       if (input.contestedWithId && !this.memories.has(input.contestedWithId)) {
         throw new Error(
           `InMemoryMemoryStore: contested-with memory not found: ${input.contestedWithId}`,
+        );
+      }
+      // 値域（ADR 0078）: `packages/postgres` は `memories_strength_range` の CHECK 制約で
+      // これを強制する。外部キー相当を上で置いたのと同じ理由（ADR 0047）——ここで放置すると
+      // 「本番では落ちる書き込みが手元では黙って成功する」。
+      if (!isStrengthInRange(input.strength)) {
+        throw new Error(
+          `InMemoryMemoryStore: strength out of range (0, ${MAX_STRENGTH}]: ${input.strength}`,
         );
       }
 

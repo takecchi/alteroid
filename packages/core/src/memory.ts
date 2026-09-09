@@ -12,6 +12,43 @@ export const MemoryStatusSchema = z.enum([
   "forgotten",
 ]) satisfies z.ZodType<MemoryStatus>;
 
+/**
+ * `Memory.strength` の上限（ADR 0078）。
+ *
+ * `strength` は `total = similarity × decay × tagMatch × freshness × strength`
+ * （docs/recall.md §7）に掛かる係数であり、**1 は「素通り」を意味する唯一の値**である。
+ * 上限が無いと、値を1つ大きく書いた Memory がそのテナントの想起を支配する——
+ * [ADR 0036](../../../docs/decisions/0036-clamp-freshness-at-one.md) が `freshness` で
+ * 塞いだのと同じ穴である。
+ *
+ * `MAX_FRESHNESS`（`strategies/scoring.ts`）と同じ理由で export する:
+ * 呼び出し側が**上限の存在と値を読める**形にしておく。
+ */
+export const MAX_STRENGTH = 1;
+
+/**
+ * `Memory.strength` の値域は **`(0, MAX_STRENGTH]`**（ADR 0078）。
+ *
+ * **0 を含めないのは、`strength = 0` が `total` を恒久的に 0 にする＝「二度と引かれない」
+ * という意味になり、それは `status: 'forgotten'` が既に表しているからである。**
+ * 同じことを言う道が2つ在ると、どちらで表されているかを読む側が両方見る必要が出る。
+ *
+ * 🔴 **`NaN` と `Infinity` を弾いているのは、この比較の「向き」である。**
+ * `NaN` との比較は全部 false になるので `NaN > 0` が false になって落ちる。
+ * `Infinity` は `Infinity <= 1` が false で落ちる。
+ * **⚠ だから `value <= 0 || value > MAX_STRENGTH` のように否定で書き直してはならない**
+ * ——その形にすると `NaN` は「範囲外ではない」と判定されて素通りする。
+ *
+ * ⚠ **最初は `Number.isFinite(value) &&` を先頭に置いていたが、変異試験で外した。**
+ * それを落としても適合スイートは赤くならなかった——上のとおり冗長だからである。
+ * **歯の当たらない防御を「守っている」の顔で残すと、後から比較の向きを変える人が
+ * 「`isFinite` が見ているから大丈夫」と読む。**それがいちばん危ない。
+ * 経緯は ADR 0078 の「変異試験で分かったこと」に書いてある。
+ */
+export function isStrengthInRange(value: number): boolean {
+  return value > 0 && value <= MAX_STRENGTH;
+}
+
 export type EmbeddingStatus = "pending" | "ready" | "failed" | "skipped";
 
 export const EmbeddingStatusSchema = z.enum([
@@ -107,7 +144,13 @@ export const MemorySchema = z.object({
   recordedAt: z.date(),
   lastReinforcedAt: z.date().nullable().optional(),
 
-  strength: z.number(),
+  // ADR 0078: 値域は `(0, MAX_STRENGTH]`。
+  // ⚠ **この schema は書き込み経路では走らない**——`MemorySchema` / `NewMemorySchema` を
+  // `.parse()` している箇所はリポジトリに0件であり、型の導出元として使われている。
+  // 実際に値域を強制するのは store の層（`packages/postgres` の CHECK 制約と、
+  // in-memory 実装の検査）である。ここを締めるのは**公開された型の契約**としてであって、
+  // これが防波堤なのではない。
+  strength: z.number().gt(0).max(MAX_STRENGTH),
   halfLifeHours: z.number().positive(),
   decayFloorAt: z.date(),
 

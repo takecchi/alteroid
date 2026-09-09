@@ -1,0 +1,40 @@
+-- 0006_strength_value_range.sql
+--
+-- `memories.strength` に値域 `(0, 1]` を強制する（ADR 0078）。
+--
+-- **なぜ DB に置くか。**`strength` を書き込む経路は8本あり、そのうち
+-- `packages/postgres/src/bench/scale-bench.ts` の一括投入は `INSERT ... SELECT` の
+-- 生 SQL であって `MemoryStore.createMemory` も `NewMemory` 型も通らない。
+-- **アプリ側のどの層を締めても、この経路だけは素通りする。DB の CHECK は素通りしない。**
+-- そして `MemorySchema` / `NewMemorySchema`（zod）は `.parse()` している箇所が
+-- リポジトリに0件であり、型の導出元でしかない——**締めても実行時には何も起きない。**
+--
+-- **なぜ `NaN` と `Infinity` もこれで弾けるのか（実測）。**PostgreSQL の float 型は
+-- `NaN` を「他のすべての値より大きい」ものとして順序づけるため、`NaN > 0` は TRUE に
+-- なる。**しかし `NaN <= 1` は FALSE** なので、AND を取ったこの CHECK は落ちる。
+-- 実測（PostgreSQL 16.15、`CHECK (s > 0 AND s <= 1)` の一時表）:
+--
+--   0        -> ERROR: violates check constraint
+--   -1       -> ERROR: violates check constraint
+--   2        -> ERROR: violates check constraint
+--   NaN      -> ERROR: violates check constraint
+--   Infinity -> ERROR: violates check constraint
+--   1, 0.5   -> INSERT 0 1
+--
+-- **⚠ CHECK が無いと Postgres は `NaN` も `Infinity` も負値も 1e6 も、そのまま
+-- `real` 列へ格納する**（実測）。float 型の仕様どおりであり、列の型では防げない。
+--
+-- **⚠ このマイグレーションは検証つきで足す（`NOT VALID` にしない）。**
+-- 既存行が値域の外に在れば、ここで**失敗する**。それは意図した振る舞いである——
+-- `NOT VALID` にすると「新しい行は守られるが、古い行は範囲外のまま黙って残る」状態に
+-- なり、`decay_floor_at` の計算がすでに壊れている行を見逃す。
+-- 既存行はすべて `1.0` である（ADR 0069 が「`strength` に 1 以外を書く箇所は
+-- リポジトリに0件である」と現物で数えている）ため、このリポジトリの範囲では
+-- 走査は通る。**リポジトリ外の利用者の DB については確かめていない。**
+--
+-- ⚠ 検証つきの `ADD CONSTRAINT` は表を走査し、その間 ACCESS EXCLUSIVE ロックを取る。
+-- 行数の多い表では停止時間になりうる。採らなかった案（`NOT VALID` → 後で `VALIDATE`）
+-- とその理由は ADR 0078 に書いてある。
+
+ALTER TABLE memories
+  ADD CONSTRAINT memories_strength_range CHECK (strength > 0 AND strength <= 1);
