@@ -11441,6 +11441,7 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
       key: '2026-01-01T00:00:00.000Z',
       id: 'c-open',
       includeClosed: true,
+      order: 'oldest',
     });
 
     // includeClosed を渡さない（＝ false 相当）呼びへ、true で発行された cursor を渡す。
@@ -11463,6 +11464,7 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
     const cursor = encodeCommitmentCursor({
       ...commitmentPosition(only),
       includeClosed: false,
+      order: 'oldest',
     });
 
     const reply = await h.call('commitment_list', { cursor });
@@ -11569,4 +11571,298 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
     expect(second).not.toContain('c-open-only');
     expect(second).toContain('c-closed-000');
   });
+});
+
+/**
+ * `commitment_list` に `q`（語で探す）を足す。
+ *
+ * **台帳が260件まで膨らみ、未了を古い順にしか出せないと、今夜作られた行へ
+ * 予算の中で到達する手が無くなる——その穴のもう一面として、本文の語で探す
+ * 口も無かった（`journal_read` には `q` が在るのに台帳にだけ移植されて
+ * いない）。** 当てる先は `body` と `source` の両方（どちらかに当たれば
+ * 残す）——`origin: 'manager'` の行は `source` が managerId で、本文
+ * （`[report] …`）には managerId が入らないため、`body` だけに当てると
+ * 「あの委譲の行を探す」ができない。
+ */
+describe('commitment_list に q（語で探す）を足す', () => {
+  it('q は body に当たる（大文字小文字を区別しない部分一致）', async () => {
+    const h = harness();
+    await h.stores.commitments.open({
+      id: 'c-target',
+      at: '2026-01-01T00:00:00.000Z',
+      origin: 'self',
+      body: 'UNIQUEWORD を含む宿題',
+    });
+    await h.stores.commitments.open({
+      id: 'c-other',
+      at: '2026-01-01T00:00:01.000Z',
+      origin: 'self',
+      body: '関係ない宿題',
+    });
+
+    // 大文字小文字を区別しない——小文字で探しても当たる。
+    const reply = await h.call('commitment_list', { q: 'uniqueword' });
+
+    expect(reply).toContain('c-target');
+    expect(reply).not.toContain('c-other');
+  });
+
+  it(
+    'q は source に当たる（origin: manager の行は managerId が source に入り、' +
+      'body には入らないため——body だけでは探せない）',
+    async () => {
+      const h = harness();
+      await h.stores.commitments.open({
+        id: 'c-from-target-manager',
+        at: '2026-01-01T00:00:00.000Z',
+        origin: 'manager',
+        source: 'mgr-special-99',
+        body: '[report] 作業完了',
+      });
+      await h.stores.commitments.open({
+        id: 'c-from-other-manager',
+        at: '2026-01-01T00:00:01.000Z',
+        origin: 'manager',
+        source: 'mgr-other-1',
+        body: '[report] 別の作業完了',
+      });
+
+      // body には managerId が入っていないので、body 検索では絶対に
+      // 当たらない語（source だけが持つ語）で探す。
+      const reply = await h.call('commitment_list', { q: 'mgr-special-99' });
+
+      expect(reply).toContain('c-from-target-manager');
+      expect(reply).not.toContain('c-from-other-manager');
+    },
+  );
+
+  it('q と origin を併用できる', async () => {
+    const h = harness();
+    await h.stores.commitments.open({
+      id: 'c-match-both',
+      at: '2026-01-01T00:00:00.000Z',
+      origin: 'manager',
+      source: 'mgr-1',
+      body: 'MATCHME を含む報告',
+    });
+    await h.stores.commitments.open({
+      id: 'c-match-q-only',
+      at: '2026-01-01T00:00:01.000Z',
+      origin: 'self',
+      body: 'MATCHME を含む宿題（origin が違う）',
+    });
+    await h.stores.commitments.open({
+      id: 'c-match-origin-only',
+      at: '2026-01-01T00:00:02.000Z',
+      origin: 'manager',
+      source: 'mgr-1',
+      body: '関係ない報告（q には当たらない）',
+    });
+
+    const reply = await h.call('commitment_list', { q: 'MATCHME', origin: ['manager'] });
+
+    expect(reply).toContain('c-match-both');
+    expect(reply).not.toContain('c-match-q-only');
+    expect(reply).not.toContain('c-match-origin-only');
+  });
+
+  it('q の絞りは文字数の予算（COMMITMENT_LIST_BUDGET）より前に効く——#418 と同じ形の穴を作らない', async () => {
+    // **origin の回帰歯（上の describe）と同じ形。** q に当たらない行を
+    // 予算を超える量だけ先に積み、その後に少数の「当たる」行を積む——
+    // `q` を予算の後で掛けていれば、当たらない行が窓を食い尽くして
+    // 当たる行が落ちる。
+    const h = harness();
+    const long = 'あ'.repeat(500);
+    for (let index = 0; index < 25; index += 1) {
+      await h.stores.commitments.open({
+        id: `noise-${String(index).padStart(3, '0')}`,
+        at: `2026-01-01T00:00:${String(index).padStart(2, '0')}.000Z`,
+        origin: 'self',
+        body: `関係ない宿題${String(index).padStart(3, '0')}: ${long}`,
+      });
+    }
+    for (let index = 0; index < 3; index += 1) {
+      await h.stores.commitments.open({
+        id: `hit-${index}`,
+        at: `2026-01-02T00:00:0${index}.000Z`,
+        origin: 'self',
+        body: `NEEDLE を含む宿題${index}: ${long}`,
+      });
+    }
+
+    const reply = await h.call('commitment_list', { q: 'NEEDLE' });
+
+    for (let index = 0; index < 3; index += 1) {
+      expect(reply, `hit-${index} が窓の外へ落ちた`).toContain(`hit-${index}`);
+    }
+    expect(reply).not.toContain('noise-');
+    // 予算そのものは q で絞った後の3件だけなので切れないはず。
+    expect(reply).not.toMatch(/…ほか \d+ 件は省略/);
+  });
+
+  it('q は id を指定した全文モードでは無視される（id の doc のとおり）', async () => {
+    const h = harness();
+    await h.stores.commitments.open({
+      id: 'c-detail',
+      at: '2026-01-01T00:00:00.000Z',
+      origin: 'self',
+      body: 'この1件の全文',
+    });
+
+    // id があるので、他のどの条件にも当たらない q を渡しても無視されて
+    // そのまま全文が返る（cursor が無視される T7 と同じ規約）。
+    const reply = await h.call('commitment_list', {
+      id: 'c-detail',
+      q: 'この語には絶対に当たらないはずの文字列xyz',
+    });
+
+    expect(reply).toContain('この1件の全文');
+  });
+});
+
+/**
+ * `commitment_list` に `order`（並び順）を足す。
+ *
+ * **台帳が260件まで膨らみ、未了を古い順にしか出せないと、今夜作られた行へ
+ * 到達する手が無い。`order: 'newest'` はその端を反対から見る口である。**
+ * HTTP（`apps/daemon/src/app.ts` の `commitmentsQuery`）には足さない——
+ * 理由は `commitment_list` の `order` の doc コメント（`tools.ts`）のとおり。
+ */
+describe('commitment_list に order（並び順）を足す', () => {
+  it(
+    'order: newest は実際に新しい側から出る' +
+      '（並びそのものを測る——件数が同じだけでは既定でも通ってしまうので、出現位置を見る）',
+    async () => {
+      const h = harness();
+      await h.stores.commitments.open({
+        id: 'c-oldest',
+        at: '2026-01-01T00:00:00.000Z',
+        origin: 'self',
+        body: '最も古い宿題',
+      });
+      await h.stores.commitments.open({
+        id: 'c-middle',
+        at: '2026-01-02T00:00:00.000Z',
+        origin: 'self',
+        body: '中間の宿題',
+      });
+      await h.stores.commitments.open({
+        id: 'c-newest',
+        at: '2026-01-03T00:00:00.000Z',
+        origin: 'self',
+        body: '最も新しい宿題',
+      });
+
+      const oldestReply = await h.call('commitment_list', {});
+      // 既定（oldest）では古い順——c-oldest が c-newest より先に出る。
+      expect(oldestReply.indexOf('c-oldest')).toBeGreaterThanOrEqual(0);
+      expect(oldestReply.indexOf('c-newest')).toBeGreaterThan(oldestReply.indexOf('c-oldest'));
+
+      const newestReply = await h.call('commitment_list', { order: 'newest' });
+      // **向きが実際に反転していること。** c-newest が c-oldest より先に出る
+      // ——3件とも予算内に収まるので、件数はどちらの呼びでも3件のまま
+      // 変わらない（「件数が同じ」だけを測る歯ではないことの対照）。
+      expect(newestReply).toContain('c-oldest');
+      expect(newestReply).toContain('c-middle');
+      expect(newestReply).toContain('c-newest');
+      expect(newestReply.indexOf('c-newest')).toBeGreaterThanOrEqual(0);
+      expect(newestReply.indexOf('c-oldest')).toBeGreaterThan(newestReply.indexOf('c-newest'));
+    },
+  );
+
+  it('order: newest は予算で切る前に効く——台帳が膨らんでも直近の行へ届く（今回直した事故そのもの）', async () => {
+    const h = harness();
+    const long = 'あ'.repeat(500);
+    // 古い行を予算を超える量だけ積む（260件に膨らんだ台帳を模す）。
+    for (let index = 0; index < 25; index += 1) {
+      await h.stores.commitments.open({
+        id: `old-${String(index).padStart(3, '0')}`,
+        at: `2026-01-01T00:00:${String(index).padStart(2, '0')}.000Z`,
+        origin: 'self',
+        body: `古い宿題${String(index).padStart(3, '0')}: ${long}`,
+      });
+    }
+    // 今夜作られた、最新の1件。
+    await h.stores.commitments.open({
+      id: 'c-made-tonight',
+      at: '2026-01-02T00:00:00.000Z',
+      origin: 'self',
+      body: '今夜作られた行',
+    });
+
+    // **既定（oldest）では、旧い実装と同じく届かないはず。** 予算が25件の
+    // 古い行でほぼ食い尽くされ、末尾の最新行はこの窓には入らない
+    // （前提が崩れていないことを先に確かめる）。
+    const oldestReply = await h.call('commitment_list', {});
+    expect(oldestReply).not.toContain('c-made-tonight');
+
+    // order: newest なら、予算で切られても最新の1件に届く。
+    const newestReply = await h.call('commitment_list', { order: 'newest' });
+    expect(newestReply).toContain('c-made-tonight');
+  });
+
+  it('order を跨いだ cursor の食い違いは明示のエラーになる（includeClosed と同じ形）', async () => {
+    const h = harness();
+    await h.stores.commitments.open({
+      id: 'c-1',
+      at: '2026-01-01T00:00:00.000Z',
+      origin: 'self',
+      body: '何か',
+    });
+    const { encodeCommitmentCursor, commitmentPosition } = await import('./commitment-cursor.js');
+    const cursor = encodeCommitmentCursor({
+      ...commitmentPosition({ id: 'c-1', at: '2026-01-01T00:00:00.000Z' }),
+      includeClosed: false,
+      order: 'newest',
+    });
+
+    // order を渡さない（＝ oldest 相当）呼びへ、newest で発行された cursor を渡す。
+    const reply = await h.call('commitment_list', { cursor });
+
+    expect(reply).toContain('cursor は order=newest');
+    expect(reply).toContain('食い違う');
+    // **黙って先頭からへ倒していないこと。** 先頭からなら 'c-1' を含む
+    // 一覧の行が出るはずだが、出ない。
+    expect(reply).not.toContain('c-1 ');
+  });
+
+  it(
+    'order の欄を持たない（order を足す前に発行された）cursor は malformed にならず、' +
+      '既定（oldest）として続きが読める',
+    async () => {
+      const h = harness();
+      await h.stores.commitments.open({
+        id: 'c-1',
+        at: '2026-01-01T00:00:00.000Z',
+        origin: 'self',
+        body: '古い方',
+      });
+      await h.stores.commitments.open({
+        id: 'c-2',
+        at: '2026-01-02T00:00:00.000Z',
+        origin: 'self',
+        body: '新しい方',
+      });
+      // **`order` を足す前に発行された cursor を模す。** `encodeCommitmentCursor`
+      // は型上 `order` を要求するので、ここでは直接 JSON を組み立てて
+      // base64url にする——`commitment-cursor.test.ts` の decode レベルの歯
+      // （B13）と同じ模し方を、道具（`commitment_list`）を経由して確かめる。
+      const { commitmentPosition } = await import('./commitment-cursor.js');
+      const legacyCursor = Buffer.from(
+        JSON.stringify({
+          ...commitmentPosition({ id: 'c-1', at: '2026-01-01T00:00:00.000Z' }),
+          includeClosed: false,
+          // `order` を意図的に書かない。
+        }),
+        'utf8',
+      ).toString('base64url');
+
+      const reply = await h.call('commitment_list', { cursor: legacyCursor });
+
+      expect(reply).not.toContain('cursor が壊れている');
+      expect(reply).not.toContain('食い違う');
+      expect(reply).toContain('c-2');
+      expect(reply).not.toContain('c-1 ');
+    },
+  );
 });

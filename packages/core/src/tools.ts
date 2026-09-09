@@ -3527,12 +3527,14 @@ export function createCloneTools(context: ToolContext) {
     tool(
       'commitment_list',
       [
-        '引き受けたまま終わっていない仕事の一覧。古い順に出る。',
+        '引き受けたまま終わっていない仕事の一覧。既定は古い順に出る。',
         '人間の依頼・マネージャーからの一件・外部イベントは、届いた時点で自動的にここへ載る。',
         '**載っているものは、あなたが閉じるまで消えない。**',
         'どれを先にやるかの順序はここには無い。記憶にある目的と価値観に照らして毎回決め直すこと。',
         '1件の全文（依頼本文と、片付けたならその理由）が要るなら id を渡す。片付いた件も id で読める。',
         'origin で出所を絞れる（他の絞りと併用できる）。',
+        'q で本文・出所を語で探せる（他の絞りと併用できる）。',
+        'order で新しい順に変えられる（台帳が膨らんで予算で切れるとき、直近の行へ届くにはこちらを使う）。',
         '一覧が予算で切れたら、断り書きが次に打つ cursor を案内する。それを cursor へ渡すと続きから読める。',
       ].join(' '),
       {
@@ -3556,16 +3558,70 @@ export function createCloneTools(context: ToolContext) {
           .array(z.enum(commitmentOriginSchema.options))
           .optional()
           .describe('出所（human/manager/external/self）で絞る。省略すると絞らない'),
+        // **`journal_read` の `q` と同じ意味論（大文字小文字を区別しない部分
+        // 一致）。新しい検索の意味論を発明しない。**
+        //
+        // **当てる先は `body` と `source` の両方（どちらかに当たれば残す）。**
+        // `journal-search.ts` の `q` は識別子の欄（`source` を含む）を対象に
+        // 入れていないが、ここは逆向きに倒す——`origin: 'manager'` の行は
+        // `source` が managerId で、本文（`[report] …`）には managerId が
+        // 入らない。**`body` だけに当てると「あの委譲の行を探す」ができない。
+        // それがまさに今回クローンが出来なかったこと（台帳が260件に膨らみ、
+        // 今夜作られた行へ到達できない）の一部である。**
+        q: z
+          .string()
+          .optional()
+          .describe(
+            '語で探す（大文字小文字を区別しない部分一致）。当てる先は body と source の両方' +
+              '（どちらかに当たれば残す。origin: manager の行は managerId が source に入り、' +
+              'body には入らないため）。他の絞りと併用できる。' +
+              'id を指定した全文モードでは他の条件と同じく無視される。',
+          ),
+        // **HTTP（`apps/daemon/src/app.ts` の `commitmentsQuery`）には
+        // `order` を足さない。** あちらの doc は逐語で「`order` は足さない
+        // …順序は器の持ち物ではない」と書いている（理由: 判断がクローンから
+        // 器へ移る。`grep -Fn -- '順序は器の持ち物ではない' apps/daemon/src/app.ts`
+        // で当たる）。**ここではその理由が逆向きに働く。**
+        //
+        // `commitment_list` は文字数の予算（`COMMITMENT_LIST_BUDGET`）で切る
+        // 口なので、順序が固定だと「クローンがどちらの端を見るか」を
+        // 器（このツール）が決めてしまう——台帳が260件まで膨らむと、古い順
+        // 固定では最も古い十数件しか出ず、今夜作られた行へは予算のどこを
+        // 歩いても到達しない。`order` を足すのは、あの理由に反するのではなく
+        // **あの理由をこちら側で満たすためである**（どちらの端を見るかの
+        // 判断をクローンへ返す）。
+        //
+        // HTTP の口はこの予算を持たない——`commitmentsQuery` の doc が言う
+        // ように、人間がブラウザで扱う前提で既定は全件、`limit` に `max` も
+        // 付けていない。予算で切られない口では、固定順が人間から何かを
+        // 隠すことはないので、あちらの決定（足さない）はそのまま生かす。
+        //
+        // **この非対称は新しく作るものではない。** `origin` は既に MCP
+        // （このツール）にだけ在り、HTTP には無い——`order` もその形に揃える
+        // だけである。
+        order: z
+          .enum(['oldest', 'newest'])
+          .optional()
+          .describe(
+            '並び順（既定は oldest=古い順。newest=新しい順）。' +
+              'newest にすると、台帳が膨らんで予算で切れる場合でも直近の行へ届く。' +
+              'cursor の order はこの値と揃えること（食い違うと明示のエラーになる）',
+          ),
         cursor: z
           .string()
           .optional()
           .describe(
             '一覧モードの続きを読む位置。前回の応答の断り書きに出た cursor をそのまま渡す' +
-              '（自分で組み立てない）。省略すると先頭（古い方）から。' +
-              'includeClosed はカーソルを取った呼びと揃えること（食い違うと明示のエラーになる）',
+              '（自分で組み立てない）。省略すると先頭から（order が newest なら新しい方から）。' +
+              'includeClosed と order はカーソルを取った呼びと揃えること（食い違うと明示のエラーになる）',
           ),
       },
-      async ({ id, offset = 0, includeClosed, origin, cursor }) => {
+      async ({ id, offset = 0, includeClosed, origin, q, order, cursor }) => {
+        // **既定は oldest（いまの振る舞いを既定から変えない）。** `order` の
+        // zod フィールドは doc コメント（上）の理由で optional のまま——既定値
+        // を zod の `.default()` に持たせず、ここで明示するのは `effectiveOrder`
+        // をカーソルの発行・比較・文言の全箇所で同じ1つの値として使うため。
+        const effectiveOrder = order ?? 'oldest';
         // --- 全文モード（1件だけ） ---
         if (id !== undefined) {
           // **片付いた件も読める。`includeClosed` は要求しない。** id で名指し
@@ -3640,29 +3696,60 @@ export function createCloneTools(context: ToolContext) {
         if (allEntries.length === 0 && unreadable.length === 0 && trimmedClosed === 0) {
           return text('（引き受けたまま終わっていない仕事は無い）');
         }
-        // **`origin` は、`renderListing` が文字数の予算で切る前（ここ）で
-        // 効かせる。** #418 の穴の本体は「絞りを予算／`limit` より後で掛けた
-        // ため、絞りに当たらない行が窓を食い尽くした」ことである。ここでも
-        // 同じ順序で塞ぐ——`items` を組む前、`entries` そのものを絞る。
-        // **未指定 = 絞らない。** `[]`（空配列）は「どれにも当たらない」
-        // という指定として扱う——`journal_read` の `with` / `types` と同じ
-        // 契約（`store.ts` の `JournalQuery.with` の doc）に揃えた。
-        const entries =
+        // **`origin` / `q` は、`renderListing` が文字数の予算で切る前（ここ）
+        // で効かせる。** #418 の穴の本体は「絞りを予算／`limit` より後で
+        // 掛けたため、絞りに当たらない行が窓を食い尽くした」ことである。
+        // ここでも同じ順序で塞ぐ——`items` を組む前、`allEntries` そのものを
+        // 絞る。**未指定 = 絞らない。** `origin: []`（空配列）は「どれにも
+        // 当たらない」という指定として扱う——`journal_read` の `with` /
+        // `types` と同じ契約（`store.ts` の `JournalQuery.with` の doc）に
+        // 揃えた。
+        const originFiltered =
           origin === undefined
             ? allEntries
             : allEntries.filter((entry) => origin.includes(entry.origin));
-        // **`cursor` も `origin` と同じ側（予算で切る前）で効かせる。** #418 が
-        // 塞いだのと同じ形の穴——継続点を `renderListing` の後（予算で切った
-        // 後）で解決すると、次の頁の起点が「切った後に残った行」からずれる。
-        // ここで `entries`（origin 絞り後）に対して解決するので、`origin` →
-        // `cursor` → 予算、の順が保たれる。
+        // **`q` も `origin` と同じ側（予算で切る前）で効かせる。** 当てる先は
+        // `body` と `source` の両方（どちらかに当たれば残す。上の `q` の
+        // describe のとおり）。`journal_read` の `q` と同じ意味論
+        // （大文字小文字を区別しない部分一致）をここでも踏襲する——新しい
+        // 検索の意味論を発明しない。
+        const entries =
+          q === undefined
+            ? originFiltered
+            : originFiltered.filter((entry) => {
+                const needle = q.toLowerCase();
+                return (
+                  entry.body.toLowerCase().includes(needle) ||
+                  (entry.source !== undefined && entry.source.toLowerCase().includes(needle))
+                );
+              });
+        // **`order` も `origin` / `q` と同じ側（予算で切る前・`cursor` を
+        // 解決する前）で効かせる。** `origin` → `q` → `order` → `cursor` →
+        // 予算の順を保つ——どこかを後回しにすると、#418 とまったく同じ形の
+        // 穴（絞り／向きに当たらない行が窓を食い尽くす）が開く。
         //
-        // **判定できないカーソル（壊れている／`includeClosed` が食い違う）は
-        // 黙って先頭からへ倒さない。** `resolveCommitmentCursor` の doc、
-        // AGENTS.md「判定できないという3つ目の状態を持つ」と同じ理由——
-        // 黙って先頭へ戻すと、呼び手は「続きを読んだつもり」で同じ行を
+        // **`CommitmentStore.list` の契約は変えない。** ストアが返す順序
+        // （未了は `at` 昇順、片付きは `closedAt` 降順で未了の後ろに連結）
+        // はそのまま——この反転はツール層だけの見え方であって、ストアの契約
+        // ではない。`resolveCommitmentCursor` へは、この見た目どおりの配列を
+        // 渡す（比較の向きは `effectiveOrder` で関数の側が決める）。
+        const ordered = effectiveOrder === 'newest' ? [...entries].reverse() : entries;
+        // **`cursor` も同じ側（予算で切る前）で効かせる。** #418 が塞いだのと
+        // 同じ形の穴——継続点を `renderListing` の後（予算で切った後）で
+        // 解決すると、次の頁の起点が「切った後に残った行」からずれる。ここで
+        // `ordered`（origin → q → order 済み）に対して解決する。
+        //
+        // **判定できないカーソル（壊れている／`includeClosed` か `order` が
+        // 食い違う）は黙って先頭からへ倒さない。** `resolveCommitmentCursor`
+        // の doc、AGENTS.md「判定できないという3つ目の状態を持つ」と同じ
+        // 理由——黙って先頭へ戻すと、呼び手は「続きを読んだつもり」で同じ行を
         // 繰り返し読む（気づきようが無い）。
-        const cursorOutcome = resolveCommitmentCursor(entries, includeClosed === true, cursor);
+        const cursorOutcome = resolveCommitmentCursor(
+          ordered,
+          includeClosed === true,
+          cursor,
+          effectiveOrder,
+        );
         if (cursorOutcome.kind === 'malformed') {
           return text(
             'cursor が壊れている（この道具が返したものではないか、書き換えられている）。' +
@@ -3674,7 +3761,16 @@ export function createCloneTools(context: ToolContext) {
             `cursor は includeClosed=${cursorOutcome.cursorIncludeClosed} の一覧から出た続きの` +
               `位置で、いまの呼び（includeClosed=${includeClosed === true}）と食い違う。` +
               `commitment_list includeClosed=${cursorOutcome.cursorIncludeClosed} ` +
-              `cursor=${cursor} のように includeClosed を揃えて呼び直すか、` +
+              `order=${effectiveOrder} cursor=${cursor} のように includeClosed を揃えて呼び直すか、` +
+              'cursor を付けずに先頭から呼び直すこと。',
+          );
+        }
+        if (cursorOutcome.kind === 'order-mismatch') {
+          return text(
+            `cursor は order=${cursorOutcome.cursorOrder} の一覧から出た続きの位置で、` +
+              `いまの呼び（order=${effectiveOrder}）と食い違う。` +
+              `commitment_list order=${cursorOutcome.cursorOrder} includeClosed=${includeClosed === true} ` +
+              `cursor=${cursor} のように order を揃えて呼び直すか、` +
               'cursor を付けずに先頭から呼び直すこと。',
           );
         }
@@ -3700,16 +3796,24 @@ export function createCloneTools(context: ToolContext) {
             ],
           }),
         );
+        // **`entries.length === 0` のときの文言に使う——絞り込みのうちどれが
+        // 効いていたかを言うため。** `order` は件数を変えないので対象にしない
+        // （並べ替えただけで0件になることはない）。
+        const appliedFilters = [
+          ...(origin === undefined ? [] : ['origin']),
+          ...(q === undefined ? [] : ['q']),
+        ];
         const lines = [
           entries.length === 0
             ? // **原因を分ける。** `allEntries` が既に0件なら（読める行そのものが
               // 無い＝残りは全部読めない行）従来どおり。`allEntries` は在るのに
-              // `origin` で絞った結果0件になったのは別の理由なので、別の文にする
-              // ——「読める行が無い」と読めると、台帳の破損（`unreadable`）を疑う
-              // ことになるが、実際には絞り込みが厳しかっただけである。
+              // `origin` / `q` で絞った結果0件になったのは別の理由なので、
+              // 別の文にする——「読める行が無い」と読めると、台帳の破損
+              // （`unreadable`）を疑うことになるが、実際には絞り込みが
+              // 厳しかっただけである。
               allEntries.length === 0
               ? '（読める行は無い）'
-              : '（この origin の絞り込みに当たる行は無い）'
+              : `（この${appliedFilters.join('・')}の絞り込みに当たる行は無い）`
             : view.length === 0
               ? // **cursor が一覧の末尾を指していた（最後の頁）。** `entries` は
                 // 0件ではない（上の分岐を通らなかった）のに `view` が0件なので、
@@ -3725,10 +3829,11 @@ export function createCloneTools(context: ToolContext) {
                   // **`includeClosed` のときは「未了は」と言わないこと。** `total` には
                   // 片付いたものも含まれるので、そのまま「未了は N 件」と言うと片付いた
                   // 分まで未了として数えた嘘になる（数が大きく出る方向の嘘）。
-                  // **`origin` を指定したときも同じ理由で断る。** `total` は
+                  // **`origin` / `q` を指定したときも同じ理由で断る。** `total` は
                   // ここではあえて `renderListing` が渡す値（`view.length`
-                  // ——cursor 以降の残り）を使わず、`entries.length`（`origin`
-                  // で絞った後・cursor を当てる前の母数）を使う。HTTP の
+                  // ——cursor 以降の残り）を使わず、`entries.length`（`origin` /
+                  // `q` で絞った後・`order` を反転する前・cursor を当てる前の
+                  // 母数。`order` は件数を変えないのでどちらでも同じ値）を使う。HTTP の
                   // `GET /commitments` の `total` と同じ約束——「窓を当てる前の
                   // 件数」を毎頁で同じ意味のまま出す（`apps/daemon/src/app.ts`
                   // の `commitmentsQuery` 実装、逐語: 「`total` は窓を当てる前の
@@ -3744,27 +3849,40 @@ export function createCloneTools(context: ToolContext) {
                     const nextCursor = encodeCommitmentCursor({
                       ...commitmentPosition(lastShown!),
                       includeClosed: includeClosed === true,
+                      order: effectiveOrder,
                     });
+                    const scopeNoteParts = [
+                      ...(origin === undefined ? [] : [`origin: ${origin.join(', ')}`]),
+                      ...(q === undefined ? [] : [`q: "${q}"`]),
+                    ];
                     const scopeNote =
-                      origin === undefined ? '' : `origin: ${origin.join(', ')} に絞った、`;
+                      scopeNoteParts.length === 0 ? '' : `${scopeNoteParts.join(' / ')} に絞った、`;
                     const countNote =
                       includeClosed === true
                         ? `片付けた分を含めて ${total} 件あり`
                         : `未了は ${total} 件あり`;
-                    // **落ちているのが「新しい側」であることを明示する。** 未了
+                    // **落ちているのが「窓の向こう側」であることを明示する。**
+                    // `effectiveOrder` が `oldest`（既定）のときは、未了
                     // （open）は `at` 昇順＝古い順に並ぶので、予算で切って
                     // 落ちるのは末尾＝より新しい依頼である。`includeClosed` の
                     // ときは片付いた段（closed）が `closedAt` 降順＝新しい順
                     // なので、そちらの末尾で落ちるのはより古い記録になる——
-                    // 2段の向きが逆なので、両方を言う。
+                    // 2段の向きが逆なので、両方を言う。`effectiveOrder` が
+                    // `newest` のときは見た目の並びが反転しているので、この
+                    // 向きもそのまま反転する。
                     const directionNote =
-                      includeClosed === true
-                        ? '省いたのは、未了ならこれより新しい依頼、片付いた分ならこれより古い記録である。'
-                        : '省いたのは、これより新しい依頼である。';
+                      effectiveOrder === 'newest'
+                        ? includeClosed === true
+                          ? '省いたのは、未了ならこれより古い依頼、片付いた分ならこれより新しい記録である。'
+                          : '省いたのは、これより古い依頼である。'
+                        : includeClosed === true
+                          ? '省いたのは、未了ならこれより新しい依頼、片付いた分ならこれより古い記録である。'
+                          : '省いたのは、これより新しい依頼である。';
+                    const shownOrderNote = effectiveOrder === 'newest' ? '新しい順に' : '古い順に';
                     return (
-                      `…ほか ${rest} 件は省略（${scopeNote}${countNote}、古い順に ${shown} 件だけ` +
+                      `…ほか ${rest} 件は省略（${scopeNote}${countNote}、${shownOrderNote} ${shown} 件だけ` +
                       `出した。${directionNote}続きは commitment_list cursor=${nextCursor} で取れる` +
-                      `（includeClosed=${includeClosed === true} のまま呼ぶこと）。` +
+                      `（includeClosed=${includeClosed === true} / order=${effectiveOrder} のまま呼ぶこと）。` +
                       '1件の全文は commitment_list id=<id> で取れる）。'
                     );
                   },
