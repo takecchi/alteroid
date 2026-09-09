@@ -11,6 +11,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { clearRecentTracesForTesting, recentDroppedTraces } from './dropped-record.js';
 import {
   MANAGER_MODEL,
   WORKER_AGENT_NAME,
@@ -8662,5 +8663,44 @@ describe('sessionMissingKind: 由来を畳まない（#579）', () => {
     expect(found?.sessionMissingKind).toBeUndefined();
 
     await pool.stop();
+  });
+});
+
+/**
+ * **穴C: `#pushProfile` / `#pushAgentToken` が `this.#journal`（跡を残す既定の
+ * 経路）を迂回していた。**
+ *
+ * `Pool` にはガード付きの `#journal`（`noteDroppedRecord` を呼ぶ）が既に在るのに、
+ * この2箇所だけが直に `this.#stores.journal.append(...)` を呼び、失敗しても
+ * `self_dropped` の帳面に跡が残らなかった（`.catch(() => undefined)` で揉み消す
+ * 側は特に静か）。いまは両方 `this.#journal` を経由する形に直してある——ここは
+ * その回帰を1本だけ固定する（依頼者の指示: 「含めるなら実装したあとで1本でいい
+ * ので歯を通してください」）。
+ *
+ * **投げ直しはしない。** `tools.ts` の `appendJournalOrThrow` とは非対称——
+ * マネージャーの委譲経路にはその応答を読んで判断し直す相手がいない
+ * （`manager.ts` の `#pushProfile` の doc に理由を書いてある）。だからここで
+ * 測るのは「跡が残ること」だけで、「投げ直すこと」ではない。
+ */
+describe('穴C: #pushProfile が journal.append の失敗で跡を残す', () => {
+  it('プロファイル同期が失敗し、日誌への記録も失敗すると self_dropped の帳面に跡が残る', async () => {
+    clearRecentTracesForTesting();
+    const stores = failingJournalAppend(createMemoryStores(), 'journal down (test)');
+    // **ストアへ直接仕込む。** `profile_write`（クローンの道具）経由だと、
+    // その道具自身の `journal.append` も同じ壊れた stores を通るので、
+    // ここで確かめたい「#pushProfile 側の跡」に別の跡が混ざってしまう。
+    await stores.profile.write('export A=1');
+    const s = setup(undefined, { stores });
+    // **`syncRunner` の中身（`runner.setProfile`）だけを失敗させる。** 何も
+    // 置いていないと `syncRunner` は「同期の必要なし」で `null` を返し、
+    // `#pushProfile` は日誌へ触る前に return してしまう（上でプロファイルを
+    // 仕込んだのはこれを避けるため）。
+    s.runner.setProfile = async () => ({ ok: false, error: 'profile sync failed (test)' });
+
+    await s.pool.start({ request: '調べて' });
+    await s.pool.stop();
+
+    const traces = recentDroppedTraces();
+    expect(traces.some((line) => line.includes('日誌を記録できませんでした'))).toBe(true);
   });
 });

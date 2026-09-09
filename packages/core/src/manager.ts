@@ -4682,7 +4682,13 @@ class Pool implements ManagerPool {
       const result = await this.#profile.syncRunner(runner);
       if (result === null || result.ok) return;
 
-      await this.#stores.journal.append({
+      // **`this.#journal` を経由する（直に `this.#stores.journal.append` を
+      // 呼ばない）。** `#journal` は失敗を握り潰さず `noteDroppedRecord` で
+      // `self_dropped` の帳面へ跡を残す（穴C。日誌 append 自体が失敗しても
+      // ここが投げ直すことはしない——プロファイルを降ろす経路はクローンが
+      // 直接応答を受け取る口を持たないので、tools.ts 側の
+      // `appendJournalOrThrow` とは非対称にしてある。詳細は下の catch 節）。
+      await this.#journal({
         type: 'exchange',
         with: 'self',
         role: 'outbound',
@@ -4691,14 +4697,28 @@ class Pool implements ManagerPool {
           `${result.error ?? '理由不明'}${result.output === undefined || result.output.length === 0 ? '' : `\n${result.output}`}`,
       });
     } catch (error) {
-      await this.#stores.journal
-        .append({
-          type: 'exchange',
-          with: 'self',
-          role: 'outbound',
-          text: `${runnerId} へ実行環境プロファイルを降ろせなかった: ${String(error)}`,
-        })
-        .catch(() => undefined);
+      // **`this.#journal` を経由する。** ここが直に `this.#stores.journal.append`
+      // を呼んで自前の catch で `String(error)` を書いていたときは、日誌 append
+      // 自体が落ちるとこの catch へ落ち、`${runnerId} へ実行環境プロファイルを
+      // 降ろせなかった: ${String(error)}` という行を書こうとしていた——だが
+      // この `error` は「日誌に書けなかった」失敗であって「プロファイルを
+      // 降ろせなかった」失敗ではない。正しい観測（日誌 append の失敗）が、
+      // 間違った対象（プロファイル配布）の説明として残りかけていた。
+      // `#journal` へ寄せれば、ここが投げなくなる分だけこの catch は
+      // `syncRunner`（try の中の本来の処理）の失敗だけを捕まえる形になる。
+      //
+      // **ここでは投げ直さない（tools.ts の `appendJournalOrThrow` とは非対称）。**
+      // マネージャーの委譲経路（`start()` 等）を日誌の失敗で止めない、という
+      // `#pushProfile` の doc の判断をそのまま引き継ぐ。加えて、tools.ts 側は
+      // クローンが読んで書き直せる道具の応答という口を持つが、`#pushProfile` の
+      // 呼び出し元には誰も応答を受け取る者がいない——投げ直しても、それを
+      // 読んで判断し直す相手がここには存在しない。
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text: `${runnerId} へ実行環境プロファイルを降ろせなかった: ${String(error)}`,
+      });
     }
   }
 
@@ -7237,14 +7257,20 @@ class Pool implements ManagerPool {
     try {
       await this.#syncRunnerToken(runner);
     } catch (error) {
-      await this.#stores.journal
-        .append({
-          type: 'exchange',
-          with: 'self',
-          role: 'outbound',
-          text: `${runner.runnerId} に認証トークンを降ろせなかった（この runner で起こすマネージャーは、器の環境変数に認証トークンが入っていればそれで走り、入っていなければ資格を1つも持たずに走る——どちらになるかは器の env 次第で、ここからは分からない）: ${String(error)}`,
-        })
-        .catch(() => undefined);
+      // **`this.#journal` を経由する（`#pushProfile` と同じ理由・同じ非対称）。**
+      // 直に `this.#stores.journal.append(...).catch(() => undefined)` で
+      // 揉み消していたときは、日誌 append 自体が落ちても跡が一切残らなかった
+      // （穴C）。`#journal` は `noteDroppedRecord` で `self_dropped` へ跡を残す。
+      // ここでも投げ直さない——マネージャーの委譲経路には、投げ直した例外を
+      // 受け取って読み直す相手がいない（tools.ts 側の `appendJournalOrThrow`
+      // が投げ直すのは、クローンがその応答を読んで判断し直せる口を持つからで、
+      // ここにはその口が無い）。
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text: `${runner.runnerId} に認証トークンを降ろせなかった（この runner で起こすマネージャーは、器の環境変数に認証トークンが入っていればそれで走り、入っていなければ資格を1つも持たずに走る——どちらになるかは器の env 次第で、ここからは分からない）: ${String(error)}`,
+      });
     }
   }
 

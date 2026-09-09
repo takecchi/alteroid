@@ -5,6 +5,7 @@ import {
   journalEntryShape,
   noteDroppedRecord,
   noteManagerIdCollision,
+  recentDroppedTraces,
   setStderrSinkForTesting,
 } from './dropped-record.js';
 import type {
@@ -20,7 +21,7 @@ import { journalEntrySchema, type ChatStreamEvent, type JobStatus } from './sche
 import type { ScheduleStatus } from './schedule.js';
 import type { CloneRuntimeFacts } from './self.js';
 import type { Stores } from './store.js';
-import { createMemoryStores } from './testing.js';
+import { captureStderr, createMemoryStores, failingJournalAppend } from './testing.js';
 import { buildCloneSystemPrompt } from './prompt.js';
 import {
   CLONE_ALLOWED_TOOLS,
@@ -12267,4 +12268,282 @@ describe('commitment_list に order（並び順）を足す', () => {
       expect(reply).not.toContain('c-1 ');
     },
   );
+});
+
+/**
+ * **`journal.append` が落ちたときに跡が消える穴（`appendJournalOrThrow`）。**
+ *
+ * `tools.ts` の `stores.journal.append(` 呼び出しは全16箇所が try の外に
+ * 在り、投げると (1) 本来のエントリが残らない (2) `tool_use` のフォールバック
+ * も出ない (3) `self_dropped` にも跡が出ない (4) 道具の応答は `isError: true`
+ * ＋生のエラー文言だけ、という4つの穴が同時に開いていた。`appendJournalOrThrow`
+ * は (1)(2) はそのまま（直せない）、(3)(4) を埋める——ガードで飲むのではなく、
+ * 跡を残してから投げ直す。
+ *
+ * **⛔ ここでの `isError: true` は依頼者がその場で気づける唯一の合図であり、
+ * これを殺すこと（ガードで飲んで成功として返す）は明示的に却下されている。**
+ * 下の歯はそれを守る——(d) の項目がすべて「isError のまま」を測る。
+ */
+describe('journal.append が失敗したとき（跡が消えない・isError を殺さない）', () => {
+  /**
+   * `h.call` はハンドラを直接呼ぶだけで、本番の MCP サーバー
+   * （`@modelcontextprotocol/sdk` の `McpServer`）が例外を
+   * `{ content: [{ type: 'text', text: error.message }], isError: true }`
+   * へ変換する層を通らない（`node_modules/.../server/mcp.js` の
+   * `createToolError` で確認済み: `errorMessage = error instanceof Error ?
+   * error.message : String(error)`、`isError: true` を添えて返す）。
+   *
+   * **`isError: true` を確かめる歯には、この変換をここで模して使う。**
+   * `harness()` / `Harness` / 既存の `h.call` は1文字も変えない——これは
+   * 独立した新しい道具で、`createCloneTools` が返す配列を直接受け取る。
+   */
+  async function callExpectingError(
+    tools: ReturnType<typeof createCloneTools>,
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<{ isError: boolean; text: string }> {
+    const found = tools.find((entry) => entry.name === name);
+    if (!found) throw new Error(`ツール ${name} が無い`);
+    try {
+      const result = await found.handler(args as never, {});
+      const text = (result.content ?? [])
+        .map((block) => (block.type === 'text' ? block.text : ''))
+        .join('');
+      return { isError: result.isError === true, text };
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error);
+      return { isError: true, text };
+    }
+  }
+
+  /** 目次から最初の節idを拾う（`memory_outline` の出力形式に依存）。 */
+  function firstSectionId(outline: string): string {
+    const match = /^\s*\[([0-9a-f]{8}-[0-9a-f]{8})\]/m.exec(outline);
+    if (match === null) throw new Error(`節idが目次に無い:\n${outline}`);
+    return match[1] as string;
+  }
+
+  /**
+   * 必須の歯1: **正常系で、日誌に残るエントリの種類と件数を全数で固定する。**
+   *
+   * 依頼者がこの変更を怖がっている理由がここにある——「記録の経路を直す」
+   * 変更は、間違えると記録を減らす。既存のテストは個別のエントリを見るだけで、
+   * 総数を数えている歯が1本も無かった。ここでは `memory_delete` / `ask_human` /
+   * `profile_write` / `manager_start` / `journal_write` / `daily_report_write` /
+   * `memory_section_move`（move_in と move_out の2件）を1回ずつ呼び、
+   * `h.stores.journal.list({})` の全件を種類ごとに数える。
+   */
+  it('正常系: 日誌に残るエントリの種類と件数を全数で固定する（記録が減っていないことの歯）', async () => {
+    const h = harness();
+
+    // 削除対象は直接ストアへ仕込む——`memory_write` 経由だと、その道具自身の
+    // memory_update が1件混ざり、この歯が数えたい範囲がずれる。
+    await h.stores.persona.write('doc-to-delete', '消される文書\n');
+    await h.call('memory_delete', { slug: 'doc-to-delete', summary: '削除' });
+
+    await h.call('ask_human', { question: '質問' });
+
+    await h.call('profile_write', { script: 'export A=1', summary: 'プロファイル更新' });
+
+    await h.call('manager_start', { request: '調査' });
+
+    await h.call('journal_write', { decision: '判断した', grounds: '根拠' });
+
+    await h.call('daily_report_write', { body: '今日の報告' });
+
+    await h.stores.persona.write('from-doc', '# 表紙\n\n芯\n\n## 節A\n\n本文\n');
+    const outline = await h.call('memory_outline', { slug: 'from-doc' });
+    await h.call('memory_section_move', {
+      fromSlug: 'from-doc',
+      sections: [firstSectionId(outline)],
+      toSlug: 'to-doc',
+      summary: '移動',
+    });
+
+    const all = await h.stores.journal.list({});
+    const byType = new Map<string, number>();
+    for (const entry of all) byType.set(entry.type, (byType.get(entry.type) ?? 0) + 1);
+
+    // **「1件在る」ではなく「ちょうどこの種類がこれだけ」を測る。**
+    expect(all.length).toBe(8);
+    expect(byType.get('memory_update')).toBe(3); // delete(remove) + move_in + move_out
+    expect(byType.get('escalation')).toBe(1); // ask_human
+    expect(byType.get('decision')).toBe(3); // profile_write / manager_start / journal_write
+    expect(byType.get('daily_report')).toBe(1); // daily_report_write
+
+    // memory_section_move は move_in / move_out がちょうど1件ずつ出ること
+    // （件数で固定する。文言ではなく action フィールドで見る）。
+    const memoryUpdateActions = all
+      .filter((entry) => entry.type === 'memory_update')
+      .map((entry) => (entry as { action?: string }).action)
+      .sort();
+    expect(memoryUpdateActions).toEqual(['move_in', 'move_out', 'remove']);
+  });
+
+  /**
+   * 必須の歯2: **落ちたときに跡が残ること。** 3つの outcome それぞれについて、
+   * (c) `recentDroppedTraces()` に跡が実在すること、(d) 応答が `isError: true`
+   * のままであること・先頭行に完了状態/未記録/やり直しの可否が出ること・
+   * `journalEntryShape` 相当の住所が出ること、(e) 副作用の完了/未完了を測る。
+   */
+  describe('journal.append が例外を投げたとき（failingJournalAppend）', () => {
+    it('act-completed（memory_delete）: 副作用は完了している。跡が残り、isError のまま「やり直し禁止」が返る', async () => {
+      clearRecentTracesForTesting();
+      const stores = failingJournalAppend(createMemoryStores(), 'boom-act-completed');
+      await stores.persona.write('temp-note', '消される文書\n');
+      const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+
+      const { isError, text } = await callExpectingError(tools, 'memory_delete', {
+        slug: 'temp-note',
+        summary: '整理',
+      });
+
+      // (e) 副作用は実際に完了している——文書は消えている。
+      expect(await stores.persona.read('temp-note')).toBeNull();
+      // 日誌には何も残っていない（append は常に落ちる）。
+      expect(await stores.journal.list({})).toHaveLength(0);
+      // (c) self_dropped の帳面に跡が実在する。
+      const traces = recentDroppedTraces();
+      expect(traces.length).toBeGreaterThan(0);
+      expect(traces.some((line) => line.includes('日誌を記録できませんでした'))).toBe(true);
+      // (d) isError のまま。
+      expect(isError).toBe(true);
+      // (d) 先頭行だけで完了状態・未記録・やり直しの可否の3つが分かる。
+      expect(text.split('\n')[0]).toBe('⚠⚠ 完了済み・未記録・やり直し禁止');
+      expect(text).toContain('やり直さないこと');
+      // (d) journalEntryShape 相当の住所が本文に出る（本文そのものは出ない）。
+      expect(text).toContain('記録できなかったエントリ:');
+      expect(text).toContain('memory_update');
+      expect(text).toContain('boom-act-completed');
+    });
+
+    it('act-not-performed（journal_write）: 日誌への記録そのものが行為。副作用は無く「やり直してよい」と返る', async () => {
+      clearRecentTracesForTesting();
+      const stores = failingJournalAppend(createMemoryStores(), 'boom-act-not-performed');
+      const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+
+      const { isError, text } = await callExpectingError(tools, 'journal_write', {
+        decision: '判断した',
+        grounds: '根拠',
+      });
+
+      expect(await stores.journal.list({})).toHaveLength(0);
+      const traces = recentDroppedTraces();
+      expect(traces.length).toBeGreaterThan(0);
+      expect(traces.some((line) => line.includes('日誌を記録できませんでした'))).toBe(true);
+      expect(isError).toBe(true);
+      expect(text.split('\n')[0]).toBe('⚠⚠ 未記録・行為は起きていない・やり直してよい');
+      expect(text).toContain('やり直してよい');
+      expect(text).toContain('記録できなかったエントリ:');
+      expect(text).toContain('decision');
+      expect(text).toContain('boom-act-not-performed');
+    });
+
+    it('act-not-performed（daily_report_write）: こちらも記録そのものが行為で、副作用は無い', async () => {
+      clearRecentTracesForTesting();
+      const stores = failingJournalAppend(createMemoryStores(), 'boom-daily-report');
+      const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+
+      const { isError, text } = await callExpectingError(tools, 'daily_report_write', {
+        body: '今日の報告',
+      });
+
+      expect(await stores.journal.list({})).toHaveLength(0);
+      expect(recentDroppedTraces().length).toBeGreaterThan(0);
+      expect(isError).toBe(true);
+      expect(text.split('\n')[0]).toBe('⚠⚠ 未記録・行為は起きていない・やり直してよい');
+      expect(text).toContain('記録できなかったエントリ:');
+      expect(text).toContain('daily_report');
+      expect(text).toContain('boom-daily-report');
+    });
+
+    it('act-partially-completed（memory_section_move の move_in）: 移し先への追記だけが済んだ半完了として断られる', async () => {
+      clearRecentTracesForTesting();
+      const stores = failingJournalAppend(createMemoryStores(), 'boom-partial');
+      await stores.persona.write('from-doc', '# 表紙\n\n芯\n\n## 節A\n\n本文\n');
+      const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+
+      const outlineResult = await callExpectingError(tools, 'memory_outline', {
+        slug: 'from-doc',
+      });
+      expect(outlineResult.isError).toBe(false);
+      const sectionId = firstSectionId(outlineResult.text);
+
+      const { isError, text } = await callExpectingError(tools, 'memory_section_move', {
+        fromSlug: 'from-doc',
+        sections: [sectionId],
+        toSlug: 'to-doc',
+        summary: '移動',
+      });
+
+      // (e) 半完了: 移し先には追記されているが、出どころは1文字も変わっていない。
+      expect((await stores.persona.read('to-doc'))?.content).toContain('節A');
+      expect((await stores.persona.read('from-doc'))?.content).toContain('## 節A');
+      expect(await stores.journal.list({})).toHaveLength(0);
+
+      const traces = recentDroppedTraces();
+      expect(traces.length).toBeGreaterThan(0);
+      expect(isError).toBe(true);
+      expect(text.split('\n')[0]).toBe('⚠⚠ 一部完了・未記録・やり直し禁止');
+      // ⭐ 既存の move_out 失敗（persona.write が落ちた側）の言い回しと揃える。
+      expect(text).toContain('重複しているが、失われてはいない');
+      expect(text).toContain('やり直さないこと');
+      expect(text).toContain('記録できなかったエントリ:');
+      expect(text).toContain('boom-partial');
+    });
+  });
+
+  /**
+   * 🔴 必須の歯3: **秘密が漏れないこと。** `profile_write` が日誌の書き込みに
+   * 失敗しても、応答本文にも stderr 側（`recentDroppedTraces()` の行）にも
+   * プロファイル本文が現れないこと。印は明らかに人工の文字列にする。
+   */
+  it('🔴 秘密: profile_write の journal.append が失敗しても、応答にも stderr 側にもプロファイル本文が出ない', async () => {
+    const CANARY = 'FAKE-SECRET-CANARY-Q7mZbN3';
+    clearRecentTracesForTesting();
+    const stores = failingJournalAppend(createMemoryStores(), 'boom-secret');
+    const runners = {
+      async list() {
+        return [
+          {
+            runnerId: 'runner-test',
+            async setProfile() {
+              return { ok: true as const };
+            },
+          },
+        ];
+      },
+      async get() {
+        return null;
+      },
+      async select() {
+        throw new Error('この検証では使わない');
+      },
+    } as never;
+    const tools = createCloneTools({
+      stores,
+      emit: () => {},
+      profile: createProfileService({ stores, runners }),
+      memoryCause: () => 'clone',
+    });
+
+    let result: { isError: boolean; text: string } | undefined;
+    const stderrLines = await captureStderr(async () => {
+      result = await callExpectingError(tools, 'profile_write', {
+        script: `export SECRET=${CANARY}`,
+        summary: 'テスト用の秘密',
+      });
+    });
+
+    if (result === undefined) throw new Error('呼び出しが完了していない');
+    // (e) 副作用（保存・配布）は完了しているので act-completed。
+    expect(result.isError).toBe(true);
+    expect(result.text.split('\n')[0]).toBe('⚠⚠ 完了済み・未記録・やり直し禁止');
+    expect(result.text).not.toContain(CANARY);
+
+    expect(stderrLines.join('\n')).not.toContain(CANARY);
+    const traces = recentDroppedTraces();
+    expect(traces.length).toBeGreaterThan(0);
+    expect(traces.join('\n')).not.toContain(CANARY);
+  });
 });
