@@ -301,9 +301,16 @@ export function checkJudgementVocabulary() {
  * 外したのではなく、掛ける対象を「判定の語彙」と「id」に分けて、それぞれに
  * 合った基準（部分文字列 / 語の境界）を使うようにした。
  *
- * **`context.artifactState` / `context.gateNote`（#444）**: 判定行の末尾に
- * 追記する。`context` を渡さない既存の呼び方は、末尾に何も付かず元の文言と
- * 1文字も変わらない（後方互換）。
+ * **`context.artifactState` / `context.gateNote`（#444）/ `context.scaffoldNote`**:
+ * 判定行の末尾に追記する。`context` を渡さない既存の呼び方は、末尾に何も
+ * 付かず元の文言と1文字も変わらない（後方互換）。
+ *
+ * **⚠️ `scaffoldNote` にも同じ制約が掛かる。** 追記部は `suffixText` として
+ * 単独で禁止語検査を通すので、**落ちた歯の名前のような外から来た文字列を
+ * ここへ入れてはいけない**（`pass` / `ok` / `緑` を含む自然なテスト名で
+ * 判定が拒否される＝下に書いてある #348 の欠陥の再生産）。
+ * `describeScaffoldSubtraction` が件数と固定語彙だけを返すのはこのためで、
+ * 名前は証跡の区画（`formatScaffoldSubtractionReport`）へ出す。
  *
  * **⚠️ 追記部の禁止語検査は、`base`（id を差し込んだ後の完成文）を含めずに
  * `suffixText` 単独へ掛ける。** 最初の実装は `[base, ...suffixLines].join('\n')`
@@ -332,6 +339,9 @@ export function formatJudgement(category, mutationId, context = {}) {
   }
   if (context.gateNote) {
     suffixLines.push(context.gateNote);
+  }
+  if (context.scaffoldNote) {
+    suffixLines.push(context.scaffoldNote);
   }
   if (suffixLines.length === 0) return base;
 
@@ -387,7 +397,52 @@ function undeliveredGatePassed(artifactResult) {
 }
 
 /**
- * 生存/検出/不明のどれかを、成果物検査とテスト結果から決める（id とは無関係）。
+ * 生存/検出/不明のどれかを、成果物検査・テスト結果・**足場対照**から決める
+ * （id とは無関係）。
+ *
+ * ## 判定を出さない門が3つ在る。順序がそのまま設計である
+ *
+ * | 門 | 拒む条件 | 出所 |
+ * | --- | --- | --- |
+ * | 1 | 集計ブロックが複数在って選べない | `assertAggregateBlocksUnambiguous`（#742） |
+ * | 2 | 集計行そのものが無い（落ちたのか1本も走らなかったのか区別できない） | `HarnessError` |
+ * | 3 | ⭐ **落ちた歯が在るのに、その名前を判定に使えない** | 下記 |
+ *
+ * ## 門3（落ちた歯の名前）
+ *
+ * **なぜ名前が要るか。** ここより前の判定は集計行の `failed` の文字しか
+ * 見ていなかったので、**どこか1本でも赤ければ「検出」**になっていた。
+ * ハーネス自身が足場として ROOT 直下へ置く印（`MUTATION-IN-PROGRESS.json`）に
+ * 反応して赤くなる歯が実在するため、**変異を1文字も当てていなくても
+ * 「検出」が出た**（実測は `SKILL.md`「足場の印そのものが歯を赤くする
+ * （偽の『検出』）」）。実害の実例: `renderMemoryToc` の文字数の蓋に対する
+ * 3つの変異が、ハーネスでは「検出」と出たが、手で対照を取ると3本とも生存
+ * だった。**手で対照を取って差し引くまで、誰も気づけなかった。**
+ *
+ * **だから、赤い歯が在るときの判定には次の3つを全部要求する:**
+ * - `scaffoldControl` が `measureScaffoldControl` の測った対照であること
+ *   （`isMeasuredScaffoldControl`）。**取っていない対照は「空の対照」ではない**
+ *   —— 差し引く集合が*不明*なのであって、0本と分かったのではない
+ * - この走行の落ちた歯の**名前**が取れて、件数の照合が通ること
+ *   （`extractFailedTeeth().trustworthy`）
+ * - 上の2つが揃ったうえで、対照の名前を差し引いた残りが空かどうかで
+ *   `生存` / `検出` を決める
+ *
+ * **どれかが欠けたら `HarnessError`。**「検出」とも「生存」とも言わない。
+ *
+ * **⚠️ 何を測っていないか。**
+ * - **差し引いた歯の中に本物の検出が隠れている可能性**は残る（同じ歯が印にも
+ *   変異にも反応する場合）。門3 はそれを分離しない —— 代わりに差し引いた
+ *   名前を必ず列挙する（`formatScaffoldSubtractionReport`）
+ * - **対照に無かった揺れがこの走行で出た場合は `検出` に化ける。** 門3 が
+ *   変えたのは「その赤に名前が付く」ところまでで、揺れかどうかの判断は読む人に
+ *   残る（実測で断続的な揺れが実在するので、これは仮定ではない）
+ * - **絞り込んだ走行（`spec.testFilter`）は、走らなかった歯について何も
+ *   言っていない。** 対照も同じ絞り込みで取るので差し引きは整合するが、判定の
+ *   届く範囲は絞り込みの内側だけである（判定行が走行範囲を名乗る）
+ *
+ * **すべて緑のときは対照を要求しない。** 差し引く相手（赤い歯）が無いので
+ * 名前は判定に要らない。この経路は1文字も変えていない（回帰）。
  *
  * **#444: `undelivered` を無条件に `不明` へ倒さない。** `undeliveredGatePassed`
  * が真のときだけ（build が exit 0 で、狙った成果物ファイルも実在する場合だけ）、
@@ -404,23 +459,62 @@ function undeliveredGatePassed(artifactResult) {
  * という事実そのものを理由に拒む。詳細と理由は `assertAggregateBlocksUnambiguous`
  * の doc。
  */
-export function decideJudgementCategory(artifactResult, testResult) {
+export function decideJudgementCategory(artifactResult, testResult, scaffoldControl) {
   if (artifactResult.artifactState === 'undelivered' && !undeliveredGatePassed(artifactResult)) {
     return '不明';
   }
-  // ⭐ 集計行を1本に決められるかより先に、集計「ブロック」が複数無いかを見る
+  // ⭐ 門1。集計行を1本に決められるかより先に、集計「ブロック」が複数無いかを見る
   // （3つの入口のうちの1つ。他の2つは `mutate.mjs` の `cmdBaseline` / `cmdRun`）。
   // 呼び出し元（`runOneMutation`）は既に `testResult.raw` を先に log しているので、
   // ここで投げても生ログは判定より前に出ている（歯7の「加工前の証跡」を壊さない）。
   assertAggregateBlocksUnambiguous(testResult.raw, 'decideJudgementCategory');
+  // 門2。
   if (!testsRanCleanly(testResult)) {
     throw new HarnessError(
       'テストの集計行（Test Files / Tests）が見つからない。' +
         '「落ちた」のか「1本も走らなかった」のか区別できないので判定を出さない。',
     );
   }
-  const allPassed = testsAllPassed(testResult);
-  return allPassed ? '生存' : '検出';
+  if (testsAllPassed(testResult) === true) return '生存';
+
+  // ここから先は「集計行が緑ではない」側。**まず「落ちたと名乗っているか」を
+  // 見る** —— `testsAllPassed` は `passed` が無いだけでも false になるので、
+  // その状態をそのまま「検出」へ倒すと、1本も走らなかったことを歯が在ることと
+  // して数える（旧実装はここも「検出」に倒れていた）。
+  if (failureIndicated(testResult) !== true) {
+    throw new HarnessError(
+      '集計行が failed も passed も名乗っていない' +
+        `（Test Files: ${JSON.stringify(testResult.filesLine)} / ` +
+        `Tests: ${JSON.stringify(testResult.testsLine)}）。` +
+        '落ちたのか1本も走らなかったのか決められないので判定を出さない。',
+    );
+  }
+
+  // ⭐ 門3。落ちた歯が在る。名前と、差し引く対照が両方揃わない限り判定を出さない。
+  if (!isMeasuredScaffoldControl(scaffoldControl)) {
+    throw new HarnessError(
+      '落ちた歯が在るが、足場対照（印だけ・無変異の1回の走行）が取れていないので判定を出さない。\n' +
+        'なぜ拒むか: このハーネスは測定の足場として ROOT の直下へ印' +
+        '（MUTATION-IN-PROGRESS.json）を必ず置く。その印そのものに反応して赤くなる歯が' +
+        'この repo に実在するので、赤い歯が在るだけでは「変異が検出された」と言えない。' +
+        '差し引く集合が不明であることは、差し引く集合が0本であることとは違う。\n' +
+        '次にやること: `measureScaffoldControl` が測った対照を渡すこと' +
+        '（`mutate.mjs run` は撃つ前に走行範囲ごとに自動で取る）。対照の走行範囲は' +
+        '測る側と揃えること。',
+    );
+  }
+  const diff = diffScaffoldFailures(testResult, scaffoldControl);
+  if (!diff.failed.trustworthy) {
+    throw new HarnessError(
+      `落ちた歯の名前を判定に使えないので判定を出さない: ${diff.failed.reason}。\n` +
+        'なぜ拒むか: 足場（印）に起因する赤を差し引けるのは、落ちた歯を名前で数えられる' +
+        'ときだけである。名前が取れないまま集計行の failed だけで判定すると、変異を1文字も' +
+        '当てていない状態の赤が「検出」に化ける（門3 が塞いでいる欠陥そのもの）。\n' +
+        '次にやること: 生ログ（このメッセージの直前に出ているはず）を "Failed Tests" と ' +
+        '"FAIL" で検索し、落ちた歯の名前を目で数えること。',
+    );
+  }
+  return diff.surviving.length === 0 ? '生存' : '検出';
 }
 
 // ── 印 ──────────────────────────────────────────────────────────────
@@ -973,6 +1067,410 @@ export function testsAllPassed(testResult) {
   return noFailures && hasPassed;
 }
 
+// ── 落ちた歯の「名前」を判定に使う（足場の偽陽性。判定を拒む門その3） ──────
+//
+// **なぜこの節が在るか。** 直上の `testsAllPassed` は集計行の `failed` の文字
+// しか見ていない。**終了コードも、落ちた歯の名前も、判定に入らない。**
+// ⟹ **どこか1本でも赤ければ「検出」になる。**
+//
+// **そしてこのハーネスは、測定の足場として ROOT の直下へ印
+// （`MUTATION-IN-PROGRESS.json`）を必ず置く**（`applyMutation` の手順6。
+// 変異を置き忘れないための安全機構であって、外す経路は足さない）。
+// **その印そのものに反応して赤くなる歯が、この repo に実在する** ——
+// 実 ROOT で `mutate.mjs baseline` / `run` を起こす歯は
+// `assertNoBlockingMarker` に先に当たり、実 ROOT へ印が漏れていないことを
+// 逐語で要求する歯は印の存在そのものを見る。
+// ⟹ **変異を1文字も当てていない状態で「検出」が出る。** 実測（対照の組・
+// 集計行・赤くなった歯の名前）は `SKILL.md` の
+// 「足場の印そのものが歯を赤くする（偽の『検出』）」に在る。
+//
+// **直し方を doc にしなかった理由。** doc は検査されない。そしてこの穴は
+// 「doc に書いていなかったから起きた」のではなく、**判定機構が名前を
+// 見ていないから**起きている。doc に書いても、次に全件で撃つ人は同じ数字を
+// 得る（`cmdRun` の各変異の走行は `spec.testFilter` を書かなければ全件になる
+// ので、素直に使うほど踏む）。**代わりに、この repo に既に在る形 ——
+// 「判定を出さない」門 —— を当てた**（`decideJudgementCategory` の doc）。
+//
+// **差し引く集合は、ハーネス自身が測る**（`measureScaffoldControl`）。
+// **人が宣言できる形にしない** —— CLI のフラグも、plan / spec の項目も
+// 作らない。差し引く集合の出所は「印だけ置いて、変異を当てずに走らせた
+// 1回の実測」だけである。だから差し引きは判定を甘くしない（甘くなるのは
+// 人が「これは既知の失敗です」と宣言できるときである）。
+//
+// **⚠️ それでも差し引いた集合の中に本物の検出が隠れる可能性は残る。**
+// だから差し引いた名前は必ず出力へ列挙する（`formatScaffoldSubtractionReport`）。
+// 黙って引かない。
+
+/** 足場対照の印が名乗る段階。通常の変異の印（`source-mutated` /
+ * `dist-unverified`）とは別の値にしてある —— 復元すべきものが1つも無い
+ * 印であり、`restoreMutation` はこれを見て拒む。 */
+export const SCAFFOLD_CONTROL_STAGE = 'scaffold-control';
+
+/** 足場対照の印が名乗る変異 id。**変異ではない**ことが読めば分かる形にする。 */
+export const SCAFFOLD_CONTROL_MUTATION_ID = '(足場対照: 印だけ・無変異)';
+
+/**
+ * vitest の生出力から「落ちた歯の名前」を取り出す。
+ *
+ * **形（実測。vitest 4.1.10、2026-09-09 の全件走行の生バイトで確認）**:
+ * 失敗の見出し（`⎯⎯⎯ Failed Tests N ⎯⎯⎯`）の下に、1本ごとに
+ * `<空白>FAIL<空白2>{ファイル} > {describe} > {it}` の行が出る。ここが返すのは
+ * その `FAIL` に続く部分（ファイル名から it 名まで）そのものである。
+ *
+ * **ANSI を先に剥がす**（`stripAnsi`）。CI では集計行に ESC が入ることが
+ * 実測されている（`stripAnsi` の doc）ので、`FAIL` 行も同じ扱いにする。
+ *
+ * **⚠️ この関数だけでは名前を信用してよいか決まらない。** テスト自身の
+ * 標準出力に ` FAIL  ...` に見える行が混ざれば、ここは余分な名前を拾う。
+ * 件数の照合（`parseDeclaredFailureCount` と突き合わせる `extractFailedTeeth`）
+ * が要る理由がここである。
+ */
+export function parseFailedTestNames(rawOutput) {
+  const plain = stripAnsi(rawOutput);
+  const names = [];
+  for (const line of plain.split('\n')) {
+    const m = /^\s*FAIL\s+(\S.*?)\s*$/.exec(line);
+    if (m) names.push(m[1]);
+  }
+  return names;
+}
+
+/**
+ * vitest が見出しで宣言する失敗の件数（`Failed Tests N` / `Failed Suites N`
+ * の合計）。見出しが1つも無ければ `null`（＝件数を照合できない）。
+ *
+ * **これは `FAIL` 行の数え直しではない。** 別の出所（見出し）から同じ数を
+ * 取り、`extractFailedTeeth` が2つを突き合わせる —— 片方だけを信じると、
+ * テストの標準出力に紛れた偽の `FAIL` 行と、見出しの形が変わって名前を
+ * 1本も拾えていない状態を、どちらも黙って通す。
+ *
+ * **⚠️ 見出しの装飾文字（`⎯`）には依存していない**（vitest の版で変わりうる
+ * ため）。代わりに `Failed Tests <数>` / `Failed Suites <数>` という語だけを
+ * 見る。**その結果、テスト名にこの語が入っていれば誤って数える** —— そのときは
+ * 件数が食い違うので `extractFailedTeeth` が「名前を信用できない」へ倒れる
+ * （＝判定を出さない側。安全側）。
+ */
+export function parseDeclaredFailureCount(rawOutput) {
+  const plain = stripAnsi(rawOutput);
+  const matches = plain.match(/Failed (?:Tests|Suites)\s+(\d+)/g);
+  if (!matches) return null;
+  let total = 0;
+  for (const m of matches) {
+    total += Number(/(\d+)/.exec(m)[1]);
+  }
+  return total;
+}
+
+/**
+ * 集計行が「落ちたものが在る」と名乗っているかどうか。集計行が読めなければ
+ * `null`（＝判定できない。`testsRanCleanly` の側で先に拒む）。
+ *
+ * **`testsAllPassed` の否定ではない。** `testsAllPassed` は「`failed` が無く、
+ * かつ `passed` が在る」の合成なので、`failed` も `passed` も名乗らない集計行
+ * （どちらとも言えない状態）でも false になる。判定を分けるにはこの2つを
+ * 別々に見る必要がある —— 混ぜると「1本も走らなかった」が「検出」に化ける。
+ */
+export function failureIndicated(testResult) {
+  if (!testsRanCleanly(testResult)) return null;
+  return /failed/i.test(testResult.filesLine) || /failed/i.test(testResult.testsLine);
+}
+
+/**
+ * 落ちた歯の名前を取り出し、**それを判定に使ってよいかどうか**も一緒に返す。
+ *
+ * 返り値の `trustworthy` が false のとき、`reason` に「なぜ使えないか」が入る。
+ * 呼び出し側（`decideJudgementCategory`）はそれを理由に判定を拒む。
+ *
+ * 使えないと判断するのは3つの場合である:
+ * 1. 失敗の見出しが1つも無い（件数を照合する相手が無い）
+ * 2. `FAIL` 行の数と見出しの宣言する件数が食い違う（どちらかが嘘をついている）
+ * 3. 名前が0本（集計行は落ちたと言っているのに、落ちた歯を名指しできない）
+ *
+ * **`names` は `trustworthy` が false のときも返す。**「名前が取れなかった」と
+ * 「取れた名前を信用してよいか決められない」は別の状態であり、後者では
+ * 取れたものを証跡として出せる（読む人が目で数え直せる）。
+ */
+export function extractFailedTeeth(testResult) {
+  const rawNames = parseFailedTestNames(testResult.raw);
+  const names = [...new Set(rawNames)];
+  const declared = parseDeclaredFailureCount(testResult.raw);
+  if (declared === null) {
+    return {
+      names,
+      declared: null,
+      trustworthy: false,
+      reason:
+        '失敗の見出し（Failed Tests / Failed Suites）が生ログに1つも無く、' +
+        `取れた ${names.length}本の FAIL 行を照合する相手が無い`,
+    };
+  }
+  if (names.length !== declared) {
+    return {
+      names,
+      declared,
+      trustworthy: false,
+      reason:
+        `FAIL 行から取れた名前 ${names.length}本と、見出しが宣言する件数 ${declared}本が食い違う` +
+        '（テストの標準出力に FAIL に見える行が混ざった／出力の形が変わった、のどちらか）',
+    };
+  }
+  if (names.length === 0) {
+    return {
+      names,
+      declared,
+      trustworthy: false,
+      reason: '集計行は落ちたものが在ると名乗っているのに、落ちた歯を1本も名指しできない',
+    };
+  }
+  return { names, declared, trustworthy: true, reason: null };
+}
+
+/** `measureScaffoldControl` が測った対照の形をしているかどうか。
+ * **形だけを見る。** ここが緩むと、対照を取らずに判定へ進む経路が開く。 */
+export function isMeasuredScaffoldControl(control) {
+  return (
+    typeof control === 'object' &&
+    control !== null &&
+    control.measured === true &&
+    control.namesTrustworthy === true &&
+    Array.isArray(control.failedNames)
+  );
+}
+
+/**
+ * この走行で赤くなった歯を、足場対照で赤くなった歯で差し引く。
+ *
+ * - `subtracted`: 対照にも在った名前（＝足場に起因する疑いがある側）
+ * - `surviving`: 対照に無かった名前（＝この変異に起因する側）
+ * - `notReproduced`: 対照に在ったのに、この走行では赤くならなかった名前。
+ *   **これが「印と無関係な断続的な揺れ」の署名である** —— 印はこの走行でも
+ *   置かれているので、印に起因する赤は必ず再現する。再現しなかったものは
+ *   印ではない理由で対照が赤かったことになる。**追加の走行を1回も足さずに
+ *   取れる観測なので、毎回出す。**
+ */
+export function diffScaffoldFailures(testResult, scaffoldControl) {
+  const failed = extractFailedTeeth(testResult);
+  const scaffoldNames = scaffoldControl.failedNames;
+  const scaffoldSet = new Set(scaffoldNames);
+  const thisRunSet = new Set(failed.names);
+  return {
+    failed,
+    subtracted: failed.names.filter((n) => scaffoldSet.has(n)),
+    surviving: failed.names.filter((n) => !scaffoldSet.has(n)),
+    notReproduced: scaffoldNames.filter((n) => !thisRunSet.has(n)),
+  };
+}
+
+/** 走行範囲を固定語彙で名乗る。**`spec.testFilter` の中身は入れない**
+ * —— 判定行の禁止語検査へ外から来た文字列を混ぜると #348 の欠陥が戻る
+ * （`bypass` の中の `pass` で判定が拒否される）。 */
+export function describeRunScope(extraArgs) {
+  return extraArgs.length === 0 ? '全件' : '絞り込み';
+}
+
+/**
+ * 差し引きの内訳を、**名前ごと**出力へ出すための証跡。
+ *
+ * **判定行ではなく証跡である**（歯7の裏面。生ログと同じ区画の扱い）。
+ * 落ちた歯の名前には禁止語（`pass` / `ok` / `緑` 等）が自然に入りうるので、
+ * 判定行の語彙検査を通す側へは入れない —— 判定行へ載せるのは件数と
+ * 固定語彙だけ（`describeScaffoldSubtraction`）。
+ */
+export function formatScaffoldSubtractionReport(testResult, scaffoldControl) {
+  const lines = [];
+  lines.push(
+    `足場対照の走行範囲: ${scaffoldControl.scope} / 対照で赤くなった歯: ${scaffoldControl.failedNames.length}本`,
+  );
+  for (const n of scaffoldControl.failedNames) lines.push(`  [対照] ${n}`);
+
+  const diff = diffScaffoldFailures(testResult, scaffoldControl);
+  lines.push(
+    `この走行で赤くなった歯: ${diff.failed.names.length}本（見出しの宣言: ` +
+      `${diff.failed.declared ?? '(見出しが無い)'}本 / 名前を判定に使えるか: ${diff.failed.trustworthy}）`,
+  );
+  if (diff.failed.reason) lines.push(`  名前を判定に使えない理由: ${diff.failed.reason}`);
+  for (const n of diff.subtracted) lines.push(`  [差し引いた] ${n}`);
+  for (const n of diff.surviving) lines.push(`  [残った] ${n}`);
+  for (const n of diff.notReproduced) lines.push(`  [対照で赤かったがこの走行では赤くない] ${n}`);
+  lines.push(
+    '⚠️ 差し引いた歯の中に本物の検出が隠れている可能性は残る（同じ歯が、印にも変異にも' +
+      '反応する場合）。この差し引きはそれを分離しない。上の名前を読むこと。',
+  );
+  if (diff.notReproduced.length > 0) {
+    lines.push(
+      '⚠️ [対照で赤かったがこの走行では赤くない] が在る。印はこの走行でも置かれているので、' +
+        'それは印に起因しない断続的な揺れである。差し引きが広すぎた分がここに見えている。',
+    );
+  }
+  return lines.join('\n');
+}
+
+/**
+ * 判定行の末尾へ添える、差し引きの**件数と走行範囲**（固定語彙のみ）。
+ *
+ * **名前は載せない。** 落ちた歯の名前は外から来た文字列であり、判定行の
+ * 禁止語検査（`assertNoForbiddenWords`）へ通すと `pass` / `ok` / `緑` を
+ * 含む自然なテスト名で判定が拒否される —— #348 の欠陥の再生産になる。
+ * 名前は証跡の区画（`formatScaffoldSubtractionReport`）へ出す。
+ *
+ * **絞り込み走行のときは、判定の届く範囲を判定行自身に名乗らせる。**
+ * `cmdRun` の各変異の走行は `spec.testFilter` を書かなければ全件になるので、
+ * 「絞った走行と全件走行で判定の信頼性が違う」ことが出力から読めないと、
+ * 素直に使う人が上振れした数字を受け取る。
+ */
+export function describeScaffoldSubtraction(testResult, scaffoldControl) {
+  if (!isMeasuredScaffoldControl(scaffoldControl)) return null;
+  const head = [`走行範囲: ${scaffoldControl.scope}（足場対照も同じ範囲で取った）`];
+  const lines = [];
+  const indicated = failureIndicated(testResult);
+  if (indicated === true) {
+    const diff = diffScaffoldFailures(testResult, scaffoldControl);
+    head.push(`差し引いた足場の赤 ${diff.subtracted.length}本`);
+    head.push(`残った赤 ${diff.surviving.length}本`);
+    lines.push('名前は直前の区画「足場対照との差し引き」に列挙してある（黙って引かない）');
+    if (diff.notReproduced.length > 0) {
+      lines.push(
+        `⚠️ 対照で赤かったのにこの走行では赤くならなかった歯が ${diff.notReproduced.length}本 在る` +
+          '（印に起因しない断続的な揺れの署名）',
+      );
+    }
+  } else if (indicated === false) {
+    head.push('この走行で赤くなった歯は0本');
+  } else {
+    // **測れなかった軸に 0 を書かない。** 集計行が読めないとき「0本」と書くと、
+    // 測っていないことが出力から消える（`不明` を返す経路でもここは通る）。
+    head.push('この走行の集計行が読めないので、赤くなった歯を数えていない');
+  }
+  if (scaffoldControl.scope === '絞り込み') {
+    lines.push('⚠️ 絞り込み走行なので、この判定は走らなかった歯について何も言っていない');
+  }
+  return [head.join(' / '), ...lines].join('\n');
+}
+
+/** 足場対照の印。**自分が暫定物であること・消してよい条件**を中身に書く。 */
+export function buildScaffoldControlMarker() {
+  const empty = '';
+  return {
+    mutationId: SCAFFOLD_CONTROL_MUTATION_ID,
+    stage: SCAFFOLD_CONTROL_STAGE,
+    // `readMarkerVerified` の必須フィールドは全部埋める（`file` / `md5Pre` /
+    // `originalContent` / `backupPath` / `headBefore`）。中身は「変異していない」
+    // ことを名乗る値にする —— 埋めないと `status` が「印そのものが壊れている」
+    // と報告し、次に来た人が原因を取り違える。
+    file: '(なし。足場対照は変異を1文字も当てない)',
+    from: null,
+    to: null,
+    target: null,
+    artifact: null,
+    startedAt: nowIso(),
+    sessionId: process.env.CLAUDE_SESSION_ID ?? process.env.ALTEROID_SESSION_ID ?? null,
+    pid: process.pid,
+    headBefore: gitHead(),
+    statusBefore: null,
+    md5Pre: md5(empty),
+    originalContent: empty,
+    backupPath: '(なし。控えは作らない)',
+    note:
+      'これは足場対照（印だけ置いて、変異を当てずに1回走らせる）のための印である。' +
+      'ソースは1バイトも変わっていない。復元すべきものは無い。',
+    howToClear:
+      'この印が残っているのは、対照の走行中にハーネスが死んだからである。' +
+      '`rm MUTATION-IN-PROGRESS.json` で消してよい（`restore` は使わない —— ' +
+      '復元する対象が無いので拒否する）。消す前に `git status --porcelain` が' +
+      '想定どおりであることだけ見ること。',
+  };
+}
+
+/**
+ * ⭐ **足場対照を測る。** 印だけを置き、変異を当てずにテストを1回走らせて、
+ * 赤くなった歯の名前を集める。**差し引く集合の唯一の出所である。**
+ *
+ * **なぜハーネスがやるか。** 作業者が手で対照を取って差し引くことは実際に
+ * 行われていたが、機構の側に無い限り、次に素直に使う人は同じ偽の数字を得る。
+ * そして「人が宣言する」形にすると、そこが判定を甘くする境目になる。
+ * **測るのがハーネス自身なら、人が宣言する余地が無い。**
+ *
+ * **走行範囲は測る対象と揃える。** `extraArgs`（`spec.testFilter`）をそのまま
+ * 渡す —— 絞り込んだ走行の対照を全件で取ると、絞り込みで走らない歯まで
+ * 差し引いてしまう（差し引きが広すぎる側の誤り）。逆に全件の走行の対照を
+ * 絞り込みで取ると、印に起因する赤を差し引き損ねる（偽の「検出」が残る）。
+ *
+ * **⚠️ 対照は1回しか取らない。理由と、それで足りない部分:**
+ * - 「印なし・無変異」の対照は `cmdRun` が既に取っていて、**緑でなければ
+ *   run を中止する**（この修正で1文字も緩めていない）。だから断続的な揺れが
+ *   そこで出れば fail-closed で止まる。
+ * - **しかし「印だけ」の対照の中で揺れが出た場合、それを印に起因する赤と
+ *   分離することはできない。** 実測（2026-09-09、全件を5走行）でまさにそれが
+ *   起きた —— 印だけの対照で赤くなった4本のうち1本
+ *   （`packages/core/src/profile.test.ts`）は、印なしの対照でも赤くなる揺れ
+ *   だった。
+ * - **対照を N 回取っても「完全な集合」は示せない**（再現しなかったことは
+ *   起きないことではない）うえ、全件の走行は1回で数分かかる。
+ * - **代わりに、差し引いた名前を必ず列挙し、`notReproduced`（対照で赤かった
+ *   のにこの走行では赤くない歯）も毎回出す。** 後者は追加の走行を1回も
+ *   足さずに取れる「揺れの署名」である。
+ *
+ * **印を消すのは `finally` である** —— 対照の走行が例外で終わっても、対照の
+ * 印を残したままにしない（残すと次に来た人が「変異が当たったままのツリーだ」
+ * と読む方向の混乱が増える。`applyMutation` は印が在れば落ちるので安全側では
+ * あるが、原因の取り違えは減らせる）。
+ */
+export function measureScaffoldControl({ extraArgs = [], maxWorkers = DEFAULT_MAX_WORKERS } = {}) {
+  if (markerExists()) {
+    throw new HarnessError(
+      '足場対照: 印が既に在る。対照は「印だけが在る」状態を作って測るものなので、' +
+        '前の測定の印が残ったままでは何を測っているか分からない。`status` で確認すること。',
+    );
+  }
+  const marker = buildScaffoldControlMarker();
+  writeMarkerFile(marker);
+  let result;
+  try {
+    result = runTests(extraArgs, maxWorkers);
+  } finally {
+    clearMarker();
+  }
+
+  assertAggregateBlocksUnambiguous(result.raw, '足場対照');
+  if (!testsRanCleanly(result)) {
+    throw new HarnessError(
+      '足場対照: テストの集計行（Test Files / Tests）が見つからない。' +
+        '「落ちた」のか「1本も走らなかった」のか区別できない対照は、差し引く集合として' +
+        '使えない。判定を出さない。',
+    );
+  }
+
+  const scope = describeRunScope(extraArgs);
+  const base = {
+    measured: true,
+    extraArgs: [...extraArgs],
+    scope,
+    exitCode: result.exitCode,
+    raw: result.raw,
+    filesLine: result.filesLine,
+    testsLine: result.testsLine,
+  };
+
+  if (!failureIndicated(result)) {
+    return {
+      ...base,
+      failedNames: [],
+      namesTrustworthy: true,
+      reason: `足場対照（${scope}）で赤くなった歯は0本。差し引くものは無い`,
+    };
+  }
+
+  const teeth = extractFailedTeeth(result);
+  return {
+    ...base,
+    failedNames: teeth.names,
+    namesTrustworthy: teeth.trustworthy,
+    reason: teeth.trustworthy
+      ? `足場対照（${scope}）で赤くなった歯 ${teeth.names.length}本を差し引く集合とする`
+      : `足場対照（${scope}）で赤くなった歯の名前を判定に使えない: ${teeth.reason}`,
+  };
+}
+
 /**
  * 手順11: 判定を出す。生存を「合格」と読める語で書かない。
  *
@@ -989,12 +1487,19 @@ export function testsAllPassed(testResult) {
  * 非対称は直していない——`artifactState` を判定行から読み取れるようにして、
  * 非対称そのものを隠さないことだけをやっている。gate を通ってテスト結果に
  * 委ねた場合は、加えて `describeUndeliveredTestResultGate` の警告も添える。
+ *
+ * **`scaffoldControl`（足場対照）は、赤い歯が在るときは必須である。**
+ * 渡さないと `decideJudgementCategory` が判定を拒む（門3）。すべて緑のときは
+ * 差し引く相手が無いので要らない —— その経路は1文字も変えていない。
+ * 判定行には件数と走行範囲だけを添える（名前は証跡の区画へ。
+ * `describeScaffoldSubtraction` の doc）。
  */
-export function judge(spec, artifactResult, testResult) {
-  const category = decideJudgementCategory(artifactResult, testResult);
+export function judge(spec, artifactResult, testResult, scaffoldControl) {
+  const category = decideJudgementCategory(artifactResult, testResult, scaffoldControl);
   const text = formatJudgement(category, spec.id, {
     artifactState: artifactResult.artifactState,
     gateNote: describeUndeliveredTestResultGate(artifactResult),
+    scaffoldNote: describeScaffoldSubtraction(testResult, scaffoldControl),
   });
   return { category, text };
 }
@@ -1011,6 +1516,19 @@ export function judge(spec, artifactResult, testResult) {
 export function restoreMutation(opts = {}) {
   const fromMarker = opts.fromMarker === true;
   const { marker, originalContentMd5, selfConsistent: markerSelfConsistent } = readMarkerVerified();
+
+  // **足場対照の印は復元の対象ではない。** 変異を1文字も当てていないので
+  // 書き戻す原文が無く、`marker.file` は実在するパスではない（下の
+  // `writeRepoFile(marker.file, …)` へ落とすと、そのファイル名で空ファイルを
+  // 作ってツリーを汚す）。**印を黙って消さないのも意図である** —— 消えると
+  // 「片付いた」に見えるが、対照の走行が途中で死んだという事実が残らない。
+  if (marker.stage === SCAFFOLD_CONTROL_STAGE) {
+    throw new HarnessError(
+      'この印は足場対照（印だけ置いて、変異を当てずに1回走らせる）のものであって、' +
+        '変異は当たっていない。**復元する対象が無い**ので復元しない。印は残す。\n' +
+        `印が名乗っている片付け方: ${marker.howToClear ?? 'rm MUTATION-IN-PROGRESS.json'}`,
+    );
+  }
 
   const backupAbs = absPath(marker.backupPath);
   let backupContent = null;

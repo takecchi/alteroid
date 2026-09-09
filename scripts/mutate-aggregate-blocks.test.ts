@@ -57,14 +57,39 @@ const SINGLE_BLOCK_ALL_PASSED = [
   '   Duration  201ms',
 ].join('\n');
 
+/**
+ * **⚠️ 失敗の見出しと `FAIL` 行を持たせてある。** 判定は集計行の `failed` の
+ * 文字だけでは出せなくなった（`decideJudgementCategory` の門3 —— 落ちた歯の
+ * 名前を判定に使えなければ拒む。理由と実測は `SKILL.md`「足場の印そのものが
+ * 歯を赤くする（偽の『検出』）」）。**集計行だけを持つ赤のフィクスチャは
+ * 「判定を出せない」へ倒れる**ので、名前が取れる形（本物の vitest の出力と
+ * 同じ形）へ寄せた。**この歯の主張（単一ブロックなら判定できる）は1文字も
+ * 変えていない** —— 名前が取れない赤を門3 が拒むことは
+ * `scripts/mutate-scaffold-control.test.ts` が別に測る。
+ */
 const SINGLE_BLOCK_WITH_FAILURE = [
   ' RUN  v4.1.10 /tmp/probe',
+  '',
+  '⎯⎯⎯ Failed Tests 1 ⎯⎯⎯',
+  '',
+  ' FAIL  probe.test.ts > 単一ブロック > 1本だけ落ちた',
   '',
   ' Test Files  1 failed (1)',
   '      Tests  1 failed | 10 passed (11)',
   '   Start at  06:44:56',
   '   Duration  201ms',
 ].join('\n');
+
+/** 足場対照の代わり（この歯は `decideJudgementCategory` を純関数として測る）。
+ * **差し引く集合は空**にしてある —— 集計ブロックの数え方を測るのに差し引きを
+ * 混ぜない。 */
+const EMPTY_SCAFFOLD_CONTROL = {
+  measured: true,
+  failedNames: [] as string[],
+  namesTrustworthy: true,
+  scope: '全件',
+  extraArgs: [] as string[],
+};
 
 /** 紛らわしい行（`Files` / `Tests` を含むが集計行の形ではない）。
  * `scripts/mutate-core-strip-ansi.test.ts` の DECOY_OUTPUT と同じ狙い——
@@ -181,10 +206,16 @@ describe('mutate-core: decideJudgementCategory（判定の入口1/3）', () => {
   });
 
   it('⭐ 単一ブロックのときは、これまでどおり判定できる（検出）', () => {
-    const category = decideJudgementCategory(artifactResultNotChecked, {
-      raw: SINGLE_BLOCK_WITH_FAILURE,
-      ...parseAggregateLines(SINGLE_BLOCK_WITH_FAILURE),
-    });
+    const category = decideJudgementCategory(
+      artifactResultNotChecked,
+      {
+        raw: SINGLE_BLOCK_WITH_FAILURE,
+        ...parseAggregateLines(SINGLE_BLOCK_WITH_FAILURE),
+      },
+      // 赤い歯が在るときの判定には足場対照が要る（門3）。ここは差し引く
+      // 集合が空の対照を渡す——測っているのは集計ブロックの側である。
+      EMPTY_SCAFFOLD_CONTROL,
+    );
     expect(category).toBe('検出');
   });
 
