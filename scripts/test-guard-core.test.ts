@@ -742,4 +742,114 @@ describe('scripts/test.mjs は vitest を1回しか起こさない（test-guard-
 
     expect(matches.length, message).toBe(1);
   });
+
+  /**
+   * ⭐ ここまでの歯（直上）が数えているのは `spawn('vitest'` という**起動**の
+   * 記述の件数である。しかしその `spawn` は `runVitest` 関数の**本体の中**に
+   * ある。⟹ 誰かが `main()` の中へ `await runVitest(args)` の**呼び出し**を
+   * 2回書いても、`spawn('vitest'` の件数は 1 のままで直上の歯は緑のまま
+   * ——実行時には集計ブロックが2つ出て、`parseAggregateLines` は最初の1つ
+   * だけを読み、静かに間違った判定を返す。だから測る次元をもう1つ足す:
+   * 「`runVitest` の**呼び出し**箇所の件数がちょうど 1 であること」
+   * （**定義は数に入れない**）。
+   *
+   * ## 数え方: コメント・文字列リテラルを落としてから、呼び出し構文で数える
+   *
+   * 素朴に「`runVitest` という文字列の全出現 − 定義1件」で数えると、誰かが
+   * `scripts/test.mjs` へ
+   *
+   * ```
+   * // runVitest(args) は1回しか呼ばない（test-guard-core.mjs の前提）
+   * ```
+   *
+   * という**正しい注意書き**を1行足しただけで件数が2になり、**ふるまいが
+   * 1文字も変わっていないのに赤くなる**——前提を守ろうとした人が、前提を
+   * 守る歯を壊すことになる（`AGENTS.md`「テストを弱めずに直す」が嫌う形）。
+   * だから (a) ソースからコメント（`//` と `/* *​/`）と文字列リテラル
+   * （`'` / `"` / バッククォート）を落としてから、(b) 呼び出しの構文で数える。
+   *
+   * ### (a) の実装と限界（自分で `node -e` に実際に流して確認済み）
+   *
+   * `STRIP_COMMENTS_AND_STRINGS_RE` は「テンプレート文字列 / シングル
+   * クォート文字列 / ダブルクォート文字列 / 行コメント / ブロックコメント」の
+   * 5択を1本の正規表現にまとめ、ソースを左から1回のスキャンで置換する
+   * （コメントは空文字へ、文字列は `""` へ）。1回のスキャンで判定するので、
+   * 「コメントの中に引用符がある」「文字列の中に `//` がある」場合でも、
+   * 一方をもう一方として誤って剥がすことがない——これは JS のコメント/
+   * 文字列除去としてよく使われる標準的な形だが、**完全なパーサではない**。
+   * 正規表現リテラル（`/foo'bar/`）の中の引用符やスラッシュ、テンプレート
+   * リテラルの `${...}` の中身までは面倒を見ない。`scripts/test.mjs` は
+   * 素の JS で、いまのところどちらの形も出てこないので実害は無いが、
+   * 将来書かれたら誤爆しうる、という限界はここに明記しておく。
+   *
+   * ### (b) の実装と限界
+   *
+   * `RUN_VITEST_CALL_SITE_RE` = `/(?<!function\s+)\brunVitest\s*\(/g`。
+   * JS の正規表現は可変長の lookbehind をサポートする（`node -e` で
+   * `async function runVitest(x){}` にも当たらないことを実測して確認済み
+   * ——`function\s+` の直前にさらに `async` が在っても、lookbehind が見るのは
+   * 直前の部分だけなので問題ない）。
+   *
+   * 定義形の扱い（すべて `node -e` で実測して確認した）:
+   * - `function runVitest(` / `async function runVitest(` ——識別子の直後に
+   *   `(` が直接続くので、素の呼び出しパターンにも当たってしまう。
+   *   **だから lookbehind で明示的に除外する**
+   * - `const runVitest = function(args) {}` ——識別子の直後は
+   *   ` = function(` であって `(` が直接続かないので、呼び出しパターンには
+   *   そもそも当たらない（除外の実装は不要。実測: 0件）
+   * - `const runVitest = (args) => {}` ——同様に識別子の直後は ` = (` で、
+   *   `(` が直接続かないので当たらない（除外の実装は不要。実測: 0件）
+   *
+   * 呼び出し側の書き方（`await` の有無・引数名 `args`→`argv`・空白・改行）が
+   * 変わっても、`runVitest\s*\(` は識別子と開き括弧の並びだけを見るので
+   * 拾い続ける（逐語一致ではなく件数で測る、という直上の歯と同じ方針。
+   * `node -e` で `runVitest(args)` と `runVitest(argv)` の両方が1件として
+   * 数えられることを確認済み）。
+   */
+  it('runVitest の呼び出し箇所の件数はちょうど 1 である（定義は数えない。直上の「起動」件数の歯とは別の次元）', () => {
+    // eslint-disable-next-line no-useless-escape -- テンプレート文字列内で `*/` を
+    // そのまま書くと、このファイル自身の JSDoc ブロックコメントが早期終了する
+    // ため、コメント除去の説明中でも `*​/` と割ってある。ここは実装そのもの。
+    const STRIP_COMMENTS_AND_STRINGS_RE =
+      /(`(?:\\.|[^`\\])*`)|('(?:\\.|[^'\\])*')|("(?:\\.|[^"\\])*")|(\/\/[^\n]*)|(\/\*[\s\S]*?\*\/)/g;
+
+    function stripCommentsAndStringLiterals(source: string): string {
+      return source.replace(
+        STRIP_COMMENTS_AND_STRINGS_RE,
+        (_match, _template, _single, _double, lineComment, blockComment) =>
+          lineComment || blockComment ? '' : '""',
+      );
+    }
+
+    const RUN_VITEST_CALL_SITE_RE = /(?<!function\s+)\brunVitest\s*\(/g;
+
+    const stripped = stripCommentsAndStringLiterals(testMjsSource);
+    const matches = stripped.match(RUN_VITEST_CALL_SITE_RE) ?? [];
+
+    const message = [
+      '直上の歯が数えているのは `spawn(\'vitest\'` という**起動**の記述の件数',
+      'であって、`runVitest` の**呼び出し**ではない。`spawn` は `runVitest`',
+      '関数の本体の中に1つだけあるので、誰かが `main()` の中へ',
+      '`await runVitest(args)` をもう1回書いても、直上の歯の件数は1のままで',
+      '気づけない——だからこの歯を別に置く。',
+      '',
+      '件数が2以上なら: `runVitest` の呼び出しが増えている。実行時には',
+      '集計ブロックが複数出るようになる。この歯の数字（下の `toBe(1)`）を',
+      '直す前に、`scripts/mutate-core-strip-ansi.test.ts` に記録されている',
+      '7経路を当たり直して、複数ブロックが `test-guard-core.mjs` の',
+      '`parseAggregateLines` へ届くようになっていないかを測ること',
+      "（`command grep -Fn -- '潰した経路は7本' scripts/mutate-core-strip-ansi.test.ts`",
+      'で当たる）。届くようになっていたら、直す番なのは `test-guard-core.mjs`',
+      'の側である。',
+      '',
+      '件数が0なら: `runVitest` の呼び出しの書き方が変わって、この歯の',
+      '数え方では数えられなくなった。「名前が変わっただけなのに落ちた」では',
+      'なく、**この歯の観測手段そのものが壊れた＝測り直せ**という合図である。',
+      '',
+      `実測: \`scripts/test.mjs\` の中で \`runVitest\` を呼び出している箇所 = ${matches.length} 件`,
+      `（一致した文字列: ${JSON.stringify(matches)}）`,
+    ].join('\n');
+
+    expect(matches.length, message).toBe(1);
+  });
 });
