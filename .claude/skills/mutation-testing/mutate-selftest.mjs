@@ -155,6 +155,20 @@ function scenarioBackupCorruption() {
 // import しており（`./conversations.js` → `conversations.ts`）、dist 境界を
 // 跨がない。だからこの demo では build/artifact 検査は「対象外」になる
 // （本番でパッケージ境界を跨ぐ変異には spec.target を必ず設定すること）。
+// **⚠️ このシナリオのフィクスチャが腐っていたのを、足場対照の導入が見つけた
+// （2026-09-09、実測）。** 「強い歯」の期待文字列の末尾は
+// `（日誌を 1 件遡り、…）` のままだったが、実装側の文言は #423 / #427 で
+// `（人間との往復を 1 件遡り、…）` に変わっていた。⟹ **この歯は変異の有無に
+// 関わらず赤く**、旧い判定（集計行の `failed` の文字だけを見る）はそれを
+// 「検出」と読んでいた —— このシナリオが実演するはずだった「弱い歯＝生存 /
+// 強い歯＝検出」の対比は、**強い歯の側が偽の「検出」で成立していた。**
+// 足場対照を取ると同じ赤が対照にも出るので差し引かれ、判定が `生存` に変わって
+// 露見した。逐語の証拠:
+//   $ npx vitest run apps/cli/src/conversations.selftest-strong.test --maxWorkers=2
+//   - （日誌を 1 件遡り、この会話の先頭まで届いた）
+//   + （人間との往復を 1 件遡り、この会話の先頭まで届いた）
+// **フィクスチャの側を現物へ合わせた**（歯を緩めたのではない —— 全文の
+// 突き合わせという主張はそのままで、比べる相手を正した）。
 function scenarioWeakTooth() {
   section('selftest: 2. 歯が弱い（apps/cli/src/conversations.ts の renderConversationDetail）');
   requireNoMarker('weak-tooth');
@@ -207,6 +221,9 @@ import { renderConversationDetail } from './conversations.js';
 
 // selftest 用の一時テスト（mutation-testing ハーネスの自己検証）。実行後に削除する。
 // 強い歯: 全文を1つの文字列として突き合わせる。継続行が消えれば必ず落ちる。
+// **⚠️ 末尾の1行は実装の文言そのものである。** 実装側の文言が変わるとこの歯は
+// 変異の有無に関わらず赤くなり、このシナリオは「強い歯が変異を捕まえた」ではなく
+// 「腐ったフィクスチャが落ちた」を見ることになる（実際に起きた。下の注記）。
 describe('強い歯（selftest）', () => {
   it('全文（継続行を含む）を突き合わせる', () => {
     const rendered = renderConversationDetail(
@@ -229,7 +246,7 @@ describe('強い歯（selftest）', () => {
         '2行目',
         '3行目',
         '',
-        '（日誌を 1 件遡り、この会話の先頭まで届いた）',
+        '（人間との往復を 1 件遡り、この会話の先頭まで届いた）',
       ].join('\\n'),
     );
   });
