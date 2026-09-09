@@ -22,10 +22,88 @@ import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-export const ROOT = path.resolve(__dirname, '..', '..', '..');
 
-export const MARKER_PATH = path.join(ROOT, 'MUTATION-IN-PROGRESS.json');
-export const BACKUP_DIR = path.join(ROOT, '.mutation-testing', 'backups');
+// **既定の ROOT。** `--root` を渡さなければこれがそのまま使われる（後方互換）。
+// 上書きされても、この値自体は変えない — 「既定は何だったか」を後から
+// 言えるようにするため（`mutate.mjs` が「既定」か「上書き」かを出力に出すのに使う）。
+export const DEFAULT_ROOT = path.resolve(__dirname, '..', '..', '..');
+
+// `ROOT` / `MARKER_PATH` / `BACKUP_DIR` は `let` で持つ（`const` ではない）。
+// **これはテスト用の抜け道ではない。** 環境変数での分岐ではなく、CLI 層
+// （`mutate.mjs`）が `--root` を解釈したときにだけ `setRootOverride` を呼ぶ、
+// 呼び出し側から明示された経路である。ES module の `export let` は
+// 生きた束縛（live binding）を持つので、ここで再代入すれば、この2つを
+// 内部で使っている全関数（`absPath` / `gitHead` / `applyMutation` の
+// 控え書き込み等）にも、`import { ROOT } from './mutate-core.mjs'` する
+// 側（`mutate.mjs` / `mutate-selftest.mjs`）にも、再 export なしで反映される。
+//
+// **MARKER_PATH と BACKUP_DIR を ROOT から独立に持たないこと。** どちらも
+// `ROOT` から作られる値であり、`setRootOverride` の外で個別に書き換える
+// 経路を作ると、「ROOT は新しい値を見て、印や控えは古い ROOT のまま」という
+// 対象の取り違えより悪い形になる（この PR が塞ごうとしている欠陥そのもの）。
+export let ROOT = DEFAULT_ROOT;
+export let MARKER_PATH = path.join(ROOT, 'MUTATION-IN-PROGRESS.json');
+export let BACKUP_DIR = path.join(ROOT, '.mutation-testing', 'backups');
+
+/**
+ * `--root <path>` の値を検証し、通れば `ROOT` / `MARKER_PATH` / `BACKUP_DIR` を
+ * 3つまとめて差し替える。呼ぶのは CLI 層（`mutate.mjs`）だけである。
+ *
+ * **fail-closed。** 検証に落ちたら `HarnessError` を投げ、3つのどれも
+ * 書き換えない（既定のままにする）。
+ *
+ * **検証するもの**: (1) 非空文字列であること (2) 絶対パスへ解決した先が
+ * 実在すること (3) それがディレクトリであること。
+ *
+ * **あえて検証しないもの**: そのディレクトリが git 管理下か・`package.json`
+ * を持つか（＝「alteroid のツリーらしいか」）は見ない。理由は2つ —
+ * (a) このハーネス自身が「依存なし・ビルド不要」「壊れた/未セットアップの
+ * ツリーでも使える」ことを前提にしている（このファイル冒頭のコメント）。
+ * 「alteroid らしいか」を検査すると、その前提を自分で狭めることになる。
+ * (b) 変異試験の対象は alteroid そのものとは限らない — このハーネスを
+ * 別のチェックアウトへ向ける正当な使い方を、検査で塞ぎたくない。
+ * **ただし git リポジトリでない ROOT を渡すと、`applyMutation` 等が呼ぶ
+ * `gitHead()` / `gitStatusPorcelainFor()`（git コマンドの実行）はそこで
+ * 別途失敗する** — それは「ここでの検証漏れ」ではなく、対象そのものが
+ * git 管理下にないという別の事実である。
+ */
+export function setRootOverride(rawRoot) {
+  if (typeof rawRoot !== 'string' || rawRoot.length === 0) {
+    throw new HarnessError('--root には非空文字列を渡すこと。');
+  }
+  const resolved = path.resolve(rawRoot);
+  if (!fs.existsSync(resolved)) {
+    throw new HarnessError(`--root で指定されたパスが存在しない: ${resolved}`);
+  }
+  if (!fs.statSync(resolved).isDirectory()) {
+    throw new HarnessError(`--root で指定されたパスがディレクトリでない: ${resolved}`);
+  }
+  ROOT = resolved;
+  MARKER_PATH = path.join(ROOT, 'MUTATION-IN-PROGRESS.json');
+  BACKUP_DIR = path.join(ROOT, '.mutation-testing', 'backups');
+  return { root: ROOT, markerPath: MARKER_PATH, backupDir: BACKUP_DIR };
+}
+
+/**
+ * `--root <path>` を argv から読む。省略なら `undefined`（＝呼び出し側で
+ * override しない。既定の ROOT のまま）。
+ *
+ * **ここでは値の中身を検証しない**（存在確認・ディレクトリ確認は
+ * `setRootOverride` の責務）。parse と validate を分けてあるのは
+ * `readMaxWorkers` と同じ理由 — `mutate.mjs` はモジュール末尾で無条件に
+ * `main()` を呼ぶため、そこから関数だけを `import` すると `main()` が
+ * 副作用として実行される。ここ（純粋な層）に置けば、`import` するだけで
+ * 副作用なしにテストできる。
+ */
+export function readRootArg(args) {
+  const idx = args.indexOf('--root');
+  if (idx === -1) return undefined;
+  const raw = args[idx + 1];
+  if (raw === undefined) {
+    throw new HarnessError('--root には値が要る（--root <path> の形）。');
+  }
+  return raw;
+}
 
 // **印も控えディレクトリも .gitignore に入れない。** git status と ls の両方に
 // 出るのが狙いである。`git add -A` で誤って混入するリスクはあるが、混入は
