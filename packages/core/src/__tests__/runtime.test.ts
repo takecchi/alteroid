@@ -156,6 +156,52 @@ describe("runtime.observe — extract: 'sync'（既定, D2）", () => {
     expect((created!.meta as { reason?: string }).reason).toBe("extracted");
   });
 
+  /**
+   * `meta` は既存の jsonb NOT NULL 列（`memory_events.meta`）へのキー追加のみで、
+   * マイグレーションは不要（`packages/postgres/src/schema.ts` 参照）。書き手は
+   * `event-store.ts` の `append` と `memory-store.ts` の `updateStatusWithEvent` の2つだけで、
+   * どちらも `JSON.stringify(event.meta)` をそのまま書くだけ——キーの集合を検査する
+   * トリガー・列 default は無い。
+   */
+  it("LLM 失敗の kind が監査ログの meta.failureKind に残る", async () => {
+    const provider: LLMProvider = {
+      complete: async () => {
+        throw new Error("not used");
+      },
+      completeStructured: async () => {
+        const error = new Error("the model refused") as Error & { kind: string };
+        error.kind = "refusal";
+        throw error;
+      },
+    };
+    const { runtime, stores } = buildRuntime(provider);
+    const result = await runtime.observe(ctx, { kind: "utterance", text: "拒否される発話" });
+
+    const events = await stores.eventStore.list(ctx, { memoryId: result.memoryIds[0]! });
+    const created = events.find((event) => event.kind === "created");
+    expect((created!.meta as { failureKind?: string | null }).failureKind).toBe("refusal");
+  });
+
+  it("kind を名乗らない失敗（素の Error）は meta.failureKind が null になる（『分からない』を勝手な種類に読み替えない）", async () => {
+    const { runtime, stores } = buildRuntime(throwingLlm());
+    const result = await runtime.observe(ctx, { kind: "utterance", text: "種類不明の失敗" });
+
+    const events = await stores.eventStore.list(ctx, { memoryId: result.memoryIds[0]! });
+    const created = events.find((event) => event.kind === "created");
+    expect((created!.meta as { failureKind?: string | null }).failureKind).toBeNull();
+  });
+
+  it("成功経路の監査ログ meta には failureKind キー自体が無い", async () => {
+    const { runtime, stores } = buildRuntime(
+      llmReturning([{ content: "本文Z", digest: "要旨Z", provenanceKind: "stated" }]),
+    );
+    const result = await runtime.observe(ctx, { kind: "utterance", text: "本文Z" });
+
+    const events = await stores.eventStore.list(ctx, { memoryId: result.memoryIds[0]! });
+    const created = events.find((event) => event.kind === "created");
+    expect("failureKind" in (created!.meta as Record<string, unknown>)).toBe(false);
+  });
+
   it("createMemory の contentHash は注入された hashContent で計算される（core は計算しない, D16）", async () => {
     const { runtime, stores } = buildRuntime(
       llmReturning([{ content: "本文X", digest: "要旨X", provenanceKind: "stated" }]),
@@ -212,6 +258,130 @@ describe("runtime.observe — extract: 'sync'（既定, D2）", () => {
       leaseMs: TEST_LEASE_MS,
     });
     expect(pending).toHaveLength(1);
+  });
+});
+
+/**
+ * ⭐ オーナーが名指しで要求した通しの歯（ADR 0072 追記）:
+ * provider が `kind` 付きで投げる → `extraction` が飲む → *それでも* `ObserveResult` から
+ * `kind` が読める、を1本で通す。
+ *
+ * ⚠ 偽の `LLMProvider`（`completeStructured` が throw する）を `createRuntime` へ本物の
+ * 経路で注入し、`runtime.observe()` を実際に呼ぶ——`ObserveResult` を手で組み立てて
+ * `extractionFailure` を入れて assert する「皮で注入するだけの歯」にはしない。
+ */
+describe("runtime.observe — provider の kind が ObserveResult まで運ばれる（ADR 0072 追記）", () => {
+  function throwingLlmWithKind(kind: string, message: string): LLMProvider {
+    return {
+      complete: async () => {
+        throw new Error("not used");
+      },
+      completeStructured: async () => {
+        // `@mnemora/openai` / `@mnemora/anthropic` が投げる、`kind` を持つエラーの模倣。
+        // core は provider のクラスを知らない（instanceof は使えない）ので、
+        // ここでは値として `kind` を持つだけの素の Error を投げる（duck typing の対象）。
+        const error = new Error(message) as Error & { kind: string };
+        error.kind = kind;
+        throw error;
+      },
+    };
+  }
+
+  it("provider が kind: 'refusal' 付きで投げても observe() は throw せず、ExtractionOutcome は 'llm_failed_whole_observation' のまま、extractionFailure.kind に 'refusal' が読める", async () => {
+    const { runtime, stores } = buildRuntime(
+      throwingLlmWithKind("refusal", "the model refused to answer"),
+    );
+
+    // ADR 0013 の飲み込みが維持されていること: throw せずに resolve する。
+    const result = await runtime.observe(ctx, {
+      kind: "utterance",
+      text: "本物の経路を通す発話",
+    });
+
+    expect(result.extraction).toBe("llm_failed_whole_observation");
+    expect(result.extractionFailure).toEqual({
+      kind: "refusal",
+      message: "the model refused to answer",
+    });
+
+    // 全文フォールバックの Memory が実際に作られていること（ADR 0013 の安全弁そのもの）。
+    expect(result.memoryIds).toHaveLength(1);
+    const memory = await stores.memoryStore.get(ctx, result.memoryIds[0]!);
+    expect(memory?.content).toBe("本物の経路を通す発話");
+    expect(memory?.provenance.kind).toBe("stated");
+  });
+
+  it("成功経路では extractionFailure は必ず null（『間違った有る』の逆側）", async () => {
+    const { runtime } = buildRuntime(
+      llmReturning([{ content: "本文", digest: "要旨", provenanceKind: "stated" }]),
+    );
+    const result = await runtime.observe(ctx, { kind: "utterance", text: "本文" });
+    expect(result.extraction).toBe("ok");
+    expect(result.extractionFailure).toBeNull();
+  });
+
+  it("kind を名乗らない失敗（素の Error）は extractionFailure.kind が null になる", async () => {
+    const { runtime } = buildRuntime(throwingLlm());
+    const result = await runtime.observe(ctx, { kind: "utterance", text: "種類不明の失敗" });
+    expect(result.extraction).toBe("llm_failed_whole_observation");
+    expect(result.extractionFailure?.kind).toBeNull();
+    expect(result.extractionFailure?.message).toBe("simulated LLM outage");
+  });
+
+  it("memory_usage（extraction: 'skipped'）でも extractionFailure は null", async () => {
+    const { runtime, stores } = buildRuntime(llmReturning([]));
+    const memory = await stores.memoryStore.createMemory(ctx, {
+      tenantId: "tenant-1",
+      subjectId: null,
+      sourceObservationId: null,
+      extractorVersion: null,
+      content: "本文",
+      contentHash: "hash-extraction-failure-null",
+      digest: "要旨",
+      digestSource: "llm",
+      provenance: { kind: "imported", batchId: "batch-1" },
+      tags: [],
+      occurredAt: null,
+      recordedAt: new Date("2026-01-01T00:00:00.000Z"),
+      lastReinforcedAt: null,
+      strength: 1,
+      halfLifeHours: 720,
+      decayFloorAt: new Date("2026-06-01T00:00:00.000Z"),
+      embeddingStatus: "pending",
+    });
+    const recallId = await createRecallFixture(stores, ctx);
+    const result = await runtime.observe(ctx, {
+      kind: "memory_usage",
+      recallId,
+      usedMemoryIds: [memory.id],
+    });
+    expect(result.extraction).toBe("skipped");
+    expect(result.extractionFailure).toBeNull();
+  });
+
+  it("冪等な再送（extraction: 'skipped'）でも extractionFailure は null", async () => {
+    const { runtime } = buildRuntime(
+      llmReturning([{ content: "本文", digest: "要旨", provenanceKind: "stated" }]),
+    );
+    await runtime.observe(ctx, { kind: "utterance", text: "本文", externalId: "ext-failure-null" });
+    const second = await runtime.observe(ctx, {
+      kind: "utterance",
+      text: "本文",
+      externalId: "ext-failure-null",
+    });
+    expect(second.extraction).toBe("skipped");
+    expect(second.extractionFailure).toBeNull();
+  });
+
+  it("deferred（extraction: 'skipped'）でも extractionFailure は null", async () => {
+    const { runtime } = buildRuntime(llmReturning([]));
+    const result = await runtime.observe(ctx, {
+      kind: "utterance",
+      text: "本文",
+      extract: "deferred",
+    });
+    expect(result.extraction).toBe("skipped");
+    expect(result.extractionFailure).toBeNull();
   });
 });
 
@@ -694,6 +864,62 @@ describe("runtime.reextract（ADR 0028: 「やり直したら重複が残る」�
       expect(result.skipped).toEqual([
         { kind: "not_examined", reason: "llm_failed_whole_observation" },
       ]);
+      // ADR 0072 追記: `reextract` の `extractionFailure` も `observe()` と対称に運ばれる
+      // ——片方だけ種類が分かる非対称を作らない。
+      expect(result.extractionFailure).toEqual({
+        kind: null,
+        message: "simulated LLM outage",
+      });
+    });
+
+    it("⭐ reextract でも provider の kind が extractionFailure まで運ばれる（observe() との対称性）", async () => {
+      const kindThrowingLlm: LLMProvider = {
+        complete: async () => {
+          throw new Error("not used");
+        },
+        completeStructured: async () => {
+          const error = new Error("truncated response") as Error & { kind: string };
+          error.kind = "truncated";
+          throw error;
+        },
+      };
+      const stores = createFakeRuntimeStores();
+      const runtime1 = runtimeWithLlm(stores, throwingLlm());
+      const observeResult = await runtime1.observe(ctx, {
+        kind: "utterance",
+        text: "障害時に取り込まれた発話",
+      });
+
+      const runtime2 = runtimeWithLlm(stores, kindThrowingLlm);
+      const result = await runtime2.reextract(ctx, observeResult.observationId);
+
+      expect(result.extraction).toBe("llm_failed_whole_observation");
+      expect(result.extractionFailure).toEqual({
+        kind: "truncated",
+        message: "truncated response",
+      });
+    });
+
+    it("reextract が候補0件・成功のときは extractionFailure が null（片方だけ有るを作らない）", async () => {
+      const { runtime1, runtime2 } = buildReextractScenario([
+        { content: "新規", digest: "要旨", provenanceKind: "stated" },
+      ]);
+      const observeResult = await runtime1.observe(ctx, { kind: "utterance", text: "発話" });
+      const result = await runtime2.reextract(ctx, observeResult.observationId);
+      expect(result.extraction).toBe("ok");
+      expect(result.extractionFailure).toBeNull();
+
+      const zeroCandidatesScenario = buildReextractScenario([]);
+      const zeroObserve = await zeroCandidatesScenario.runtime1.observe(ctx, {
+        kind: "utterance",
+        text: "発話2",
+      });
+      const zeroResult = await zeroCandidatesScenario.runtime2.reextract(
+        ctx,
+        zeroObserve.observationId,
+      );
+      expect(zeroResult.extraction).toBe("ok");
+      expect(zeroResult.extractionFailure).toBeNull();
     });
 
     it("⭐ 「飛ばすものが無かった」・「候補0件」・「LLM失敗」の3つの顔が違う（オーナーの追加要求）", async () => {

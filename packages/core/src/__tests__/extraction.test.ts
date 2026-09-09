@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { Ctx } from "../ctx.js";
 import {
   buildNewMemoryFromCandidate,
+  describeExtractionFailure,
   extractCandidates,
   resolveDigest,
   truncateForFallbackDigest,
   type ExtractedMemoryCandidate,
 } from "../extraction.js";
+import { z } from "zod";
 import type { LLMProvider, StructuredRequest } from "../interfaces/llm-provider.js";
 import type { Observation } from "../observation.js";
 
@@ -49,6 +51,20 @@ function throwingLlmProvider(): LLMProvider {
   };
 }
 
+/** provider が `kind` 付きで投げる想定（`@mnemora/openai` / `@mnemora/anthropic` の模倣）。 */
+function throwingLlmProviderWithKind(kind: string, message: string): LLMProvider {
+  return {
+    complete: async () => {
+      throw new Error("not used in this test");
+    },
+    completeStructured: async () => {
+      const error = new Error(message) as Error & { kind: string };
+      error.kind = kind;
+      throw error;
+    },
+  };
+}
+
 describe("extractCandidates（roadmap.md 段階3の基本抽出）", () => {
   it("LLM が候補を返せば、そのまま candidates として返す（フォールバックしない）", async () => {
     const provider = llmProviderReturning([
@@ -58,6 +74,8 @@ describe("extractCandidates（roadmap.md 段階3の基本抽出）", () => {
     expect(result.usedWholeObservationFallback).toBe(false);
     expect(result.candidates).toHaveLength(1);
     expect(result.candidates[0]?.content).toBe("東京出張の予定がある");
+    // 成功経路（0件を含む）は必ず failure: null（「間違った有る」を作らない）。
+    expect(result.failure).toBeNull();
   });
 
   it("LLM が0件を返した場合はフォールバックしない（『何も無い』は正常系）", async () => {
@@ -65,6 +83,7 @@ describe("extractCandidates（roadmap.md 段階3の基本抽出）", () => {
     const result = await extractCandidates(provider, ctx, makeObservation());
     expect(result.usedWholeObservationFallback).toBe(false);
     expect(result.candidates).toEqual([]);
+    expect(result.failure).toBeNull();
   });
 
   it("LLM 呼び出し自体が失敗したら、全文をそのまま1件の stated Memory 候補として残す（安全弁）", async () => {
@@ -75,6 +94,18 @@ describe("extractCandidates（roadmap.md 段階3の基本抽出）", () => {
     expect(result.candidates).toHaveLength(1);
     expect(result.candidates[0]?.content).toBe("明日は東京に出張する予定です");
     expect(result.candidates[0]?.provenanceKind).toBe("stated");
+    // 失敗経路は必ず failure が非 null。kind を名乗らない Error は kind: null になる。
+    expect(result.failure).toEqual({
+      kind: null,
+      message: "simulated LLM failure (timeout/network)",
+    });
+  });
+
+  it("provider が kind 付きで投げたら、failure.kind にその値がそのまま運ばれる（中身を捨てない）", async () => {
+    const provider = throwingLlmProviderWithKind("refusal", "the model refused to answer");
+    const result = await extractCandidates(provider, ctx, makeObservation());
+    expect(result.usedWholeObservationFallback).toBe(true);
+    expect(result.failure).toEqual({ kind: "refusal", message: "the model refused to answer" });
   });
 
   it("フォールバック候補は payload.text が無い document/event でも空文字にならない", async () => {
@@ -201,5 +232,70 @@ describe("buildNewMemoryFromCandidate", () => {
     expect(memory.provenance.kind === "stated" && memory.provenance.at).toBe(
       observation.recordedAt.toISOString(),
     );
+  });
+});
+
+/**
+ * `describeExtractionFailure`（ADR 0072 追記）の単体の歯。
+ *
+ * ⚠ core は provider のクラスを知らない（`instanceof` は使えない）ので、`kind` を名乗らない
+ * エラーで `kind` を勝手な種類に読み替えないことを固定する。
+ */
+describe("describeExtractionFailure", () => {
+  it("kind: string を持つオブジェクトが投げられたら、その値をそのまま kind として運ぶ", () => {
+    const error = new Error("truncated") as Error & { kind: string };
+    error.kind = "truncated";
+    expect(describeExtractionFailure(error)).toEqual({ kind: "truncated", message: "truncated" });
+  });
+
+  it("素の Error（kind を持たない）は kind: null になる", () => {
+    const error = new Error("simulated LLM outage");
+    expect(describeExtractionFailure(error)).toEqual({
+      kind: null,
+      message: "simulated LLM outage",
+    });
+  });
+
+  it("ZodError（スキーマ不適合）は kind: null、message は Error のものになる", () => {
+    const schema = z.object({ memories: z.array(z.string()) });
+    const parseResult = schema.safeParse({ memories: [123] });
+    expect(parseResult.success).toBe(false);
+    const zodError = parseResult.success ? undefined : parseResult.error;
+    const result = describeExtractionFailure(zodError);
+    expect(result.kind).toBeNull();
+    expect(result.message).toBe(zodError!.message);
+  });
+
+  it("文字列がそのまま投げられても（非 Error）落ちず、message は String(error) 相当、kind は null", () => {
+    expect(describeExtractionFailure("plain string thrown")).toEqual({
+      kind: null,
+      message: "plain string thrown",
+    });
+  });
+
+  it("undefined が投げられても落ちず、kind は null", () => {
+    expect(describeExtractionFailure(undefined)).toEqual({ kind: null, message: "undefined" });
+  });
+
+  it("null が投げられても落ちない（オプショナルチェイニングで kind を安全に読む）", () => {
+    expect(describeExtractionFailure(null)).toEqual({ kind: null, message: "null" });
+  });
+
+  it("kind が空文字なら null 扱いにする（『分からない』を空文字という別の種類に読み替えない）", () => {
+    const error = new Error("empty kind") as Error & { kind: string };
+    error.kind = "";
+    expect(describeExtractionFailure(error).kind).toBeNull();
+  });
+
+  it("kind が数値など非文字列なら null 扱いにする", () => {
+    const error = new Error("numeric kind") as unknown as Error & { kind: number };
+    error.kind = 42;
+    expect(describeExtractionFailure(error).kind).toBeNull();
+  });
+
+  it("プレーンオブジェクト（Error ではない）が投げられても落ちず、message は String(error) 相当", () => {
+    const result = describeExtractionFailure({ someField: "value" });
+    expect(result.kind).toBeNull();
+    expect(result.message).toBe(String({ someField: "value" }));
   });
 });

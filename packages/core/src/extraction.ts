@@ -140,10 +140,53 @@ function fallbackWholeObservationCandidate(observation: Observation): ExtractedM
  */
 export type ExtractionOutcome = "ok" | "llm_failed_whole_observation" | "skipped";
 
+/**
+ * `extractCandidates` が LLM 呼び出しの例外を飲んだとき、**中身だけは捨てずに運ぶ**ための形。
+ *
+ * 背景: `ExtractionOutcome: "llm_failed_whole_observation"` という1つの値に、実測で
+ * 少なくとも6種の原因（拒否 / 切り詰め / 空応答 / `ZodError` / `SyntaxError` / 通信・認証
+ * エラー）が畳まれていた。「例外を上へ伝播させない」こと自体は ADR 0013 の意図的な決定
+ * （安全弁）であり維持するが、「中身まで捨てる」ことを決めた記述はどこにも無い。
+ */
+export interface ExtractionFailure {
+  /**
+   * provider が名乗った種類（`@mnemora/openai` / `@mnemora/anthropic` が投げるエラーの
+   * `kind`）。**名乗っていなければ `null`**——「分からない」を勝手な種類に読み替えない。
+   */
+  kind: string | null;
+  /** 例外のメッセージ（人が読むため）。 */
+  message: string;
+}
+
+/**
+ * 任意の `throw` された値から `ExtractionFailure` を組み立てる。
+ *
+ * ⚠ **core は provider のクラスを知らない**（`packages/core/package.json` の
+ * `dependencies` は `zod` だけ、`dependency-boundary.test.ts` が機械的に検査している）。
+ * そのため `instanceof AnthropicLLMProviderError` のような判定はできず、**値として
+ * `error.kind` を読む**（duck typing）。`kind` は `typeof === "string"` かつ空文字でない
+ * ときだけ採り、それ以外（無い・数値・空文字など）は `null` にする——「分からない」を
+ * 勝手な種類に読み替えないため。
+ *
+ * `message` は `error instanceof Error ? error.message : String(error)` に相当する。
+ * **非 `Error`（文字列・`undefined`・プレーンオブジェクト等）が投げられても落ちない。**
+ */
+export function describeExtractionFailure(error: unknown): ExtractionFailure {
+  const rawKind = (error as { kind?: unknown } | null | undefined)?.kind;
+  const kind = typeof rawKind === "string" && rawKind.length > 0 ? rawKind : null;
+  const message = error instanceof Error ? error.message : String(error);
+  return { kind, message };
+}
+
 export interface ExtractCandidatesResult {
   candidates: ExtractedMemoryCandidate[];
   /** LLM 呼び出し自体が失敗し、全文フォールバックへ倒れたかどうか。 */
   usedWholeObservationFallback: boolean;
+  /**
+   * LLM 呼び出しが失敗した理由。**成功経路（0件を含む）は必ず `null`。**
+   * 失敗経路（`usedWholeObservationFallback: true`）は必ず非 `null`。
+   */
+  failure: ExtractionFailure | null;
 }
 
 /**
@@ -164,11 +207,12 @@ export async function extractCandidates(
       prompt: buildExtractionPrompt(observation),
       schema: ExtractionResultSchema,
     });
-    return { candidates: result.memories, usedWholeObservationFallback: false };
-  } catch {
+    return { candidates: result.memories, usedWholeObservationFallback: false, failure: null };
+  } catch (error) {
     return {
       candidates: [fallbackWholeObservationCandidate(observation)],
       usedWholeObservationFallback: true,
+      failure: describeExtractionFailure(error),
     };
   }
 }

@@ -2,7 +2,11 @@ import { systemClock } from "./clock.js";
 import type { Clock } from "./interfaces/clock.js";
 import type { Ctx } from "./ctx.js";
 import { buildNewMemoryFromCandidate, extractCandidates } from "./extraction.js";
-import type { ExtractedMemoryCandidate, ExtractionOutcome } from "./extraction.js";
+import type {
+  ExtractedMemoryCandidate,
+  ExtractionFailure,
+  ExtractionOutcome,
+} from "./extraction.js";
 import { heuristicTokenCounter } from "./heuristic-token-counter.js";
 import type { EmbeddingProvider } from "./interfaces/embedding-provider.js";
 import type { EventStore } from "./interfaces/event-store.js";
@@ -101,6 +105,20 @@ export interface ObserveResult {
    * という一手がある。`ok` にはその一手が無い）。
    */
   extraction: ExtractionOutcome;
+  /**
+   * `extraction === "llm_failed_whole_observation"` のときに LLM 呼び出しが失敗した理由。
+   * **それ以外（`"ok"` / `"skipped"`）は必ず `null`。**
+   *
+   * `ExtractionOutcome` 自体は3値のまま変えない（値を足すと `extraction` を分岐する
+   * 網羅性チェックの無い箇所——本ファイルの三項演算子と
+   * `examples/chat/src/retrieval-quality.ts` の switch——が黙って既定側へ落ちるため）。
+   * その代わり、失敗の中身（provider が名乗った `kind` と人が読むメッセージ）はこの欄で運ぶ。
+   *
+   * **省略可能にしない。** 必須にすることで、`ObserveResult` を組み立てる全経路を
+   * TypeScript に列挙させ、「埋め忘れた経路が黙って `undefined`（＝間違った *有る*）になる」
+   * ことを防ぐ。
+   */
+  extractionFailure: ExtractionFailure | null;
 }
 
 /**
@@ -152,6 +170,14 @@ export interface ReextractResult {
    */
   skipped: ReextractSkip[];
   extraction: ExtractionOutcome;
+  /**
+   * `ObserveResult.extractionFailure` と同じ意味の欄（ADR 0076）。
+   * `reextract` も `extractCandidates` を呼び、`llm_failed_whole_observation` を返す
+   * 早期 return を持つ——`ObserveResult` にだけ運んで `ReextractResult` に運ばないと、
+   * 「片方は種類が分かるのにもう片方は分からない」という非対称ができるため、対称に足す。
+   * `extraction !== "llm_failed_whole_observation"` のときは必ず `null`。
+   */
+  extractionFailure: ExtractionFailure | null;
 }
 
 export interface TickOptions {
@@ -237,6 +263,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     observation: Observation,
     candidates: ExtractedMemoryCandidate[],
     outcome: ExtractionOutcome,
+    failure: ExtractionFailure | null,
   ): Promise<{ memoryIds: MemoryId[]; contentHashes: Set<string> }> {
     const halfLifeHours = await deps.tenantSettingsStore.getDefaultHalfLifeHours(ctx);
     const now = clock.now();
@@ -275,6 +302,12 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
                 : "extracted",
             sourceObservationId: observation.id,
             extractorVersion,
+            // `meta` は既存の jsonb NOT NULL 列へのキー追加のみ（マイグレーション不要）。
+            // 失敗経路（outcome: "llm_failed_whole_observation"）のときだけ足す——
+            // 成功経路の meta.reason: "extracted" の形は変えない。
+            ...(outcome === "llm_failed_whole_observation"
+              ? { failureKind: failure?.kind ?? null }
+              : {}),
           },
         });
       }
@@ -288,8 +321,12 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   async function runExtraction(
     ctx: Ctx,
     observation: Observation,
-  ): Promise<{ memoryIds: MemoryId[]; outcome: ExtractionOutcome }> {
-    const { candidates, usedWholeObservationFallback } = await extractCandidates(
+  ): Promise<{
+    memoryIds: MemoryId[];
+    outcome: ExtractionOutcome;
+    failure: ExtractionFailure | null;
+  }> {
+    const { candidates, usedWholeObservationFallback, failure } = await extractCandidates(
       deps.llmProvider,
       ctx,
       observation,
@@ -298,10 +335,16 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       ? "llm_failed_whole_observation"
       : "ok";
     if (candidates.length === 0) {
-      return { memoryIds: [], outcome };
+      return { memoryIds: [], outcome, failure };
     }
-    const { memoryIds } = await createMemoriesFromCandidates(ctx, observation, candidates, outcome);
-    return { memoryIds, outcome };
+    const { memoryIds } = await createMemoriesFromCandidates(
+      ctx,
+      observation,
+      candidates,
+      outcome,
+      failure,
+    );
+    return { memoryIds, outcome, failure };
   }
 
   /**
@@ -331,7 +374,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       throw new Error(`runtime.reextract: observation not found: ${observationId}`);
     }
 
-    const { candidates, usedWholeObservationFallback } = await extractCandidates(
+    const { candidates, usedWholeObservationFallback, failure } = await extractCandidates(
       deps.llmProvider,
       ctx,
       observation,
@@ -347,6 +390,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
         supersededMemoryIds: [],
         skipped: [{ kind: "not_examined", reason: "llm_failed_whole_observation" }],
         extraction: "llm_failed_whole_observation",
+        extractionFailure: failure,
       };
     }
     if (candidates.length === 0) {
@@ -357,6 +401,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
         supersededMemoryIds: [],
         skipped: [{ kind: "not_examined", reason: "no_candidates" }],
         extraction: "ok",
+        extractionFailure: null,
       };
     }
 
@@ -373,6 +418,9 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       observation,
       candidates,
       "ok",
+      // ここに来る時点で outcome は必ず "ok"（上の usedWholeObservationFallback 早期 return
+      // の後）——failure は常に null。
+      null,
     );
     // `candidates.length === 0` を上で早期リターンしている以上、`createMemoriesFromCandidates`
     // は候補ごとに必ず1件 push するため `memoryIds` は非空——ここは構造的に保証されている
@@ -435,7 +483,14 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       supersededMemoryIds.push(existing.id);
     }
 
-    return { observationId, memoryIds, supersededMemoryIds, skipped, extraction: "ok" };
+    return {
+      observationId,
+      memoryIds,
+      supersededMemoryIds,
+      skipped,
+      extraction: "ok",
+      extractionFailure: null,
+    };
   }
 
   async function handleMemoryUsage(
@@ -463,7 +518,12 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       await deps.memoryStore.reinforce(ctx, memoryId, reinforcedAt);
     }
 
-    return { observationId: observation.id, memoryIds: insertedMemoryIds, extraction: "skipped" };
+    return {
+      observationId: observation.id,
+      memoryIds: insertedMemoryIds,
+      extraction: "skipped",
+      extractionFailure: null,
+    };
   }
 
   async function handleExtractableObservation(
@@ -494,20 +554,35 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       // 冪等な再送（docs/architecture.md §3.5）。extract ジョブは積まれておらず、
       // sync/deferred のどちらであっても、ここで新たに抽出をやり直す必要はない
       // （最初の呼び出しで既に処理済みのはず）。
-      return { observationId: observation.id, memoryIds: [], extraction: "skipped" };
+      return {
+        observationId: observation.id,
+        memoryIds: [],
+        extraction: "skipped",
+        extractionFailure: null,
+      };
     }
 
     if (extractMode === "deferred") {
-      return { observationId: observation.id, memoryIds: [], extraction: "skipped" };
+      return {
+        observationId: observation.id,
+        memoryIds: [],
+        extraction: "skipped",
+        extractionFailure: null,
+      };
     }
 
     // extract: 'sync' — その場で抽出する（docs/architecture.md §3.2）。
-    const { memoryIds, outcome } = await runExtraction(ctx, observation);
+    const { memoryIds, outcome, failure } = await runExtraction(ctx, observation);
     const extractJob = jobs.find((job) => job.kind === "extract");
     if (extractJob) {
       await deps.outboxStore.complete(ctx, extractJob.id);
     }
-    return { observationId: observation.id, memoryIds, extraction: outcome };
+    return {
+      observationId: observation.id,
+      memoryIds,
+      extraction: outcome,
+      extractionFailure: failure,
+    };
   }
 
   async function observe(ctx: Ctx, input: ObserveInput): Promise<ObserveResult> {
