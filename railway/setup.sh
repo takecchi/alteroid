@@ -707,7 +707,7 @@ if [ "$EXPOSE_PUBLIC" = 1 ] && [ -n "$PUBLIC_URL" ]; then
 
       $PUBLIC_URL/auth/google/callback
 
-    **ログインしただけでは使えない。** 許可は人間が与える（高々1つ）:
+    **ログインしただけでは使えない。** 許可は人間が与える（数に上限は無い）:
 
       railway ssh --service $APP_SERVICE
       alteroid access list

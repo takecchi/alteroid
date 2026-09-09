@@ -195,21 +195,19 @@ export class FsAuthStore implements AuthStore {
   }
 
   /**
-   * 「他に持ち主が居なければ許可する」を**1つの排他区間の中で**行う。
+   * この account を許可する。**1つの排他区間の中で**行う。
    *
-   * 一覧を見てから書く形に分けると、owner が居ない状態で別々のアカウントへ同時に
-   * grant したとき両方が通り、「持ち主は高々1つ」が破れる（＝マルチユーザーになる）。
+   * ⚠️ **2026-09-09 のオーナー決定まで、ここは `grantExclusive` で「他に持ち主が
+   * 居なければ」という条件が付いていた。** 外したのは条件のほうで、排他区間は残す —
+   * 同じ account へ同時に grant が来たとき、先に書いた側を勝たせて `grantedBy` の
+   * 上書きを防ぐためである（理由は `AuthStore.grantAccess` の doc）。
    */
-  async grantExclusive(accountId: string, at: string, by: string): Promise<GrantOutcome> {
+  async grantAccess(accountId: string, at: string, by: string): Promise<GrantOutcome> {
     return this.#mutate<GrantOutcome>((file): { next: AuthFile | null; result: GrantOutcome } => {
       const account = file.accounts.find((it) => it.id === accountId);
       if (account === undefined) return { next: null, result: { status: 'not_found' as const } };
       if (account.grantedAt !== null) {
         return { next: null, result: { status: 'granted' as const, account } };
-      }
-      const owner = file.accounts.find((it) => it.grantedAt !== null);
-      if (owner !== undefined) {
-        return { next: null, result: { status: 'conflict' as const, owner } };
       }
       const granted = authAccountSchema.parse({ ...account, grantedAt: at, grantedBy: by });
       return {

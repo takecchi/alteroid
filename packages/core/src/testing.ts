@@ -586,12 +586,10 @@ export function createMemoryStores(): Stores {
       accessTokens.set(token.id, token);
       return { request: consumed, token };
     },
-    async grantExclusive(accountId, at, by) {
+    async grantAccess(accountId, at, by) {
       const account = accounts.get(accountId);
       if (account === undefined) return { status: 'not_found' };
       if (account.grantedAt !== null) return { status: 'granted', account };
-      const owner = [...accounts.values()].find((it) => it.grantedAt !== null);
-      if (owner !== undefined) return { status: 'conflict', owner };
       const granted = { ...account, grantedAt: at, grantedBy: by };
       accounts.set(accountId, granted);
       return { status: 'granted', account: granted };

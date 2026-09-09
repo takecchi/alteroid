@@ -17,9 +17,11 @@ import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from
  * **ただし「最初の1人」を通すのは必ず実行環境の持ち主である** — 誰も許可されて
  * いない状態では、許可されたアカウントという資格がそもそも存在しないからである。
  *
- * **許可できるアカウントは高々1つ。** alteroid は単一の持ち主のものであり、
- * マルチユーザー / チーム利用は非ゴールである（docs/PRD.md「スコープ外」）。
- * 持ち主を移すときは先に `revoke` する。
+ * **許可できるアカウントの数に上限は無い**（2026-09-09 のオーナー決定。それ以前は
+ * 高々1つで、2人目の grant は 409 だった）。同じ人間が複数の Google アカウントから
+ * 入れる。**それでもマルチユーザーではない** — 利用者ごとにデータを分けないことが
+ * 非ゴールの中身であり（docs/PRD.md「スコープ外」）、許可を持つ全員が同じ1組の
+ * 記憶・日誌・会話を見る。使わせたくなくなったら `revoke` する。
  */
 
 interface AccountView {
@@ -62,16 +64,13 @@ export async function accessListCommand(): Promise<void> {
     stdout.write('\n');
   }
 
-  const owner = accounts.find((account) => account.granted);
   const pending = accounts.filter((account) => !account.granted);
-  if (owner === undefined && pending.length > 0) {
+  if (pending.length > 0) {
+    // ⚠️ **既に許可済みのアカウントが在るかで分岐しない。** 2026-09-09 のオーナー
+    // 決定まで、ここは持ち主が居れば「許可できるアカウントは1つだけです。移すには
+    // 先に取り消します」と案内していた（叩いてから 409 で知るのは遅いため）。
+    // いまは何人でも通せるので、その案内は嘘になる。
     stdout.write(`許可するには: alteroid access grant ${pending[0]?.id ?? '<id>'}\n`);
-  } else if (owner !== undefined && pending.length > 0) {
-    // 「なぜ grant できないのか」を先に言う。叩いてから 409 で知るのは遅い。
-    stdout.write(
-      '許可できるアカウントは1つだけです（alteroid は単一の持ち主のもの）。\n' +
-        `移すには先に取り消します: alteroid access revoke ${owner.id}\n`,
-    );
   }
 }
 
@@ -137,7 +136,11 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
     if (described !== null) throw new Error(described);
     if (response.status === 404) throw new Error('該当するアカウントがありません');
     if (response.status === 409) {
-      // 単一の持ち主という不変条件。人間には「次に何をすればよいか」まで見せる。
+      // ⚠️ **いまのデーモンはここを返さない**（2026-09-09 のオーナー決定で、許可
+      // できるアカウントの上限が消えた）。**それでも残す** — `ALTEROID_URL` で
+      // 繋ぐ先が古いデーモンなら、2人目の grant はいまも 409 で返る。消すと
+      // その状況で「`/access/…/grant` が失敗しました (409)」という、原因も次の手も
+      // 言わない文言に落ちる。本文はサーバが書いたものをそのまま見せる。
       const body = (await response.json().catch(() => ({}))) as { error?: unknown };
       throw new Error(
         typeof body.error === 'string' ? body.error : '既に別のアカウントが許可されています',

@@ -66,6 +66,14 @@ describe('createAuthService', () => {
             emailVerified: true,
             displayName: 'Bob',
           },
+          // 3人目。上限が外れた 2026-09-09 以降、「2人が同じアカウントを同時に
+          // 通す」を測るのに、既に許可済みでないアカウントが1つ要る。
+          'code-carol': {
+            subject: 'sub-carol',
+            email: 'carol@example.test',
+            emailVerified: true,
+            displayName: 'Carol',
+          },
           // 別プロバイダで alice のメールを名乗る攻撃者を模す
           'code-impostor': {
             subject: 'sub-impostor',
@@ -125,42 +133,82 @@ describe('createAuthService', () => {
     expect(isAccountGranted((await service.authenticate(claimed.token))!)).toBe(false);
   });
 
-  it('許可できるアカウントは高々1つ（マルチユーザーは非ゴール）', async () => {
+  /**
+   * ⚠️ **このテストは 2026-09-09 に期待値を反転した。**
+   *
+   * 反転前は「許可できるアカウントは高々1つ（マルチユーザーは非ゴール）」で、
+   * 本文にはこう書いてあった —— *「2人目は通らない。ここを開けると、ログインした
+   * 人数だけ同じクローンの記憶・日誌・実行 API が開く＝そのままマルチユーザー利用に
+   * なる」*。**その帰結の記述は正しく、いまも起きる。** オーナーが変えたのは
+   * 「それを受け入れるか」のほうである（同じ人間が私用と仕事用の Google アカウントの
+   * 両方から入れないことのほうが、実際の使い方に対する欠落だった）。
+   *
+   * **保証は弱くなっていない。** 落ちたのは件数の上限で、代わりに
+   * 「revoke が**その1つだけ**を落とす」を測るようになった —— 上限が在った頃は
+   * 許可が1つしか無いので、この形は測りようがなかった。
+   */
+  it('複数のアカウントを許可できる（分けないのはデータの側）', async () => {
     const alice = await service.claim(await login('code-alice'));
     const bob = await service.claim(await login('code-bob'));
     if (alice.status !== 'ready' || bob.status !== 'ready') throw new Error('ログインできていない');
 
     expect(await service.grant(alice.account.id, 'operator')).toMatchObject({ status: 'granted' });
-
-    // 2人目は通らない。ここを開けると、ログインした人数だけ同じクローンの
-    // 記憶・日誌・実行 API が開く＝そのままマルチユーザー利用になる。
-    const second = await service.grant(bob.account.id, 'operator');
-    expect(second.status).toBe('conflict');
-    if (second.status === 'conflict') expect(second.owner.id).toBe(alice.account.id);
-    expect(isAccountGranted((await service.authenticate(bob.token))!)).toBe(false);
-
-    // 持ち主を移すときは先に取り消す。
-    await service.revoke(alice.account.id);
     expect(await service.grant(bob.account.id, 'operator')).toMatchObject({ status: 'granted' });
+    expect(isAccountGranted((await service.authenticate(alice.token))!)).toBe(true);
     expect(isAccountGranted((await service.authenticate(bob.token))!)).toBe(true);
+
+    // **revoke は名指しした1つだけを落とす。** ここが「全員まとめて落ちる」に
+    // なっていると、1つ取り消したつもりで自分も締め出される。
+    await service.revoke(alice.account.id);
     expect(isAccountGranted((await service.authenticate(alice.token))!)).toBe(false);
+    expect(isAccountGranted((await service.authenticate(bob.token))!)).toBe(true);
   });
 
-  it('別々のアカウントへ同時に grant しても、持ち主は1人しかできない', async () => {
+  /**
+   * ⚠️ **このテストも 2026-09-09 に反転した。** 反転前は「別々のアカウントへ同時に
+   * grant しても、持ち主は1人しかできない」で、*「一覧を見てから書く形だと、owner が
+   * 居ない状態の同時実行を両方すり抜ける」*ことを測っていた。**すり抜けてよくなった**
+   * ので、その形はもう欠陥ではない。
+   *
+   * **1操作である理由まで消えたわけではない。** 残っているのは*同じ*アカウントへの
+   * 同時 grant で、`grantedBy` が後から来た側で上書きされてはいけない —— 上限を外した
+   * いま、**誰が誰を通したかの記録が伝播を追える唯一の場所である**（`AuthStore.grantAccess`
+   * の doc）。だからここは「別々のアカウント」から「同じアカウント」へ測る先を移した。
+   */
+  it('同じアカウントへ同時に grant しても、grantedBy は先に書いた側のまま', async () => {
     const alice = await service.claim(await login('code-alice'));
     const bob = await service.claim(await login('code-bob'));
     if (alice.status !== 'ready' || bob.status !== 'ready') throw new Error('ログインできていない');
 
-    // 一覧を見てから書く形だと、owner が居ない状態の同時実行を両方すり抜ける。
-    const results = await Promise.all([
+    // 別々のアカウントは、いまは両方通る（上限が無い）。
+    const separate = await Promise.all([
       service.grant(alice.account.id, 'operator'),
       service.grant(bob.account.id, 'operator'),
     ]);
+    expect(separate.filter((result) => result.status === 'granted')).toHaveLength(2);
+    expect((await service.owners()).map((account) => account.id).sort()).toEqual(
+      [alice.account.id, bob.account.id].sort(),
+    );
 
-    expect(results.filter((result) => result.status === 'granted')).toHaveLength(1);
-    // 応答が1件でも、器に2人残っていたら両方が通ってしまう。
-    const granted = (await service.listAccounts()).filter((account) => account.grantedAt !== null);
-    expect(granted).toHaveLength(1);
+    // 同じアカウントへ2人が同時に grant を打つ。勝つのは先に書いた側で、
+    // 負けた側にも**その結果**が返る（自分が書いた値ではない）。
+    const carol = await service.claim(await login('code-carol'));
+    if (carol.status !== 'ready') throw new Error('ログインできていない');
+    const same = await Promise.all([
+      service.grant(carol.account.id, 'operator'),
+      service.grant(carol.account.id, alice.account.id),
+    ]);
+    expect(same.every((result) => result.status === 'granted')).toBe(true);
+
+    const stored = (await service.listAccounts()).find(
+      (account) => account.id === carol.account.id,
+    );
+    const reported = same.map((result) =>
+      result.status === 'granted' ? result.account.grantedBy : null,
+    );
+    // 応答が2つとも器の中身と一致していること。片方だけ自分の値を返していたら、
+    // 日誌には2人が別々の根拠で「通した」と残り、どちらが本当か分からなくなる。
+    expect(reported).toEqual([stored?.grantedBy, stored?.grantedBy]);
   });
 
   it('トークンの保存に失敗したら、同じログインをもう一度引き取れる', async () => {
@@ -190,16 +238,29 @@ describe('createAuthService', () => {
     expect(recovered.status).toBe('ready');
   });
 
-  it('owner() は許可されている唯一のアカウントを返す', async () => {
-    expect(await service.owner()).toBeNull();
+  /**
+   * ⚠️ **2026-09-09 に `owner(): AuthAccount | null` から
+   * `owners(): AuthAccount[]` へ変えた。** 上限を外した以上、単数の名前だと
+   * 2人目以降が呼び出し側から静かに消える（1件しか返さない実装でも型が通る）。
+   */
+  it('owners() は許可されているアカウントを全部返す', async () => {
+    expect(await service.owners()).toEqual([]);
     const alice = await service.claim(await login('code-alice'));
-    if (alice.status !== 'ready') throw new Error('ログインできていない');
+    const bob = await service.claim(await login('code-bob'));
+    if (alice.status !== 'ready' || bob.status !== 'ready') throw new Error('ログインできていない');
 
     await service.grant(alice.account.id, 'operator');
-    expect((await service.owner())?.id).toBe(alice.account.id);
+    expect((await service.owners()).map((account) => account.id)).toEqual([alice.account.id]);
+
+    // **2人目を落とさない。** ここが1件で止まる実装だと、画面にも CLI にも
+    // 「自分しか居ない」と見えたまま、実際には2人が入れる状態になる。
+    await service.grant(bob.account.id, 'operator');
+    expect((await service.owners()).map((account) => account.id).sort()).toEqual(
+      [alice.account.id, bob.account.id].sort(),
+    );
 
     await service.revoke(alice.account.id);
-    expect(await service.owner()).toBeNull();
+    expect((await service.owners()).map((account) => account.id)).toEqual([bob.account.id]);
   });
 
   it('検証済みメールが一致しても既存アカウントへ相乗りさせない', async () => {

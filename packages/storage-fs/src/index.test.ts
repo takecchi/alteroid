@@ -2758,21 +2758,48 @@ describe('AuthStore', () => {
     expect((await stores.auth.getLoginRequest('login-3'))?.status).toBe('pending');
     expect(await stores.auth.claimLoginRequest('居ない', () => neverIssued())).toBeNull();
   });
-  it('別々のアカウントへ同時に grant しても、持ち主は1人しかできない', async () => {
+  /**
+   * ⚠️ **2026-09-09 に期待値を反転した。** 反転前は「別々のアカウントへ同時に grant
+   * しても、持ち主は1人しかできない」で、*「器に2人残っていたら、応答が1件でも
+   * 両方が通ってしまう」*ことを測っていた。**2人残ってよくなった**（オーナー決定）。
+   *
+   * **測る先を「同じアカウントへの同時 grant」へ移した。** 排他区間が要る理由は
+   * 他の行との不変条件ではなく、`grantedBy` が後から来た側で上書きされないこと
+   * だからである（`AuthStore.grantAccess` の doc）。上書きされると、日誌に残した
+   * 「誰が通したか」と器の中身が食い違う。
+   */
+  it('別々のアカウントへ同時に grant すると、両方通る（上限が無い）', async () => {
     const other = { ...account, id: 'account-2', email: 'other@example.test' };
     await stores.auth.putAccount(account);
     await stores.auth.putAccount(other);
 
     const at = '2026-01-02T00:00:00.000Z';
     const results = await Promise.all([
-      stores.auth.grantExclusive('account-1', at, 'operator'),
-      stores.auth.grantExclusive('account-2', at, 'operator'),
+      stores.auth.grantAccess('account-1', at, 'operator'),
+      stores.auth.grantAccess('account-2', at, 'operator'),
     ]);
 
-    expect(results.filter((result) => result.status === 'granted')).toHaveLength(1);
-    // 器に2人残っていたら、応答が1件でも両方が通ってしまう。
+    expect(results.filter((result) => result.status === 'granted')).toHaveLength(2);
     const granted = (await stores.auth.listAccounts()).filter((it) => it.grantedAt !== null);
-    expect(granted).toHaveLength(1);
+    expect(granted).toHaveLength(2);
+  });
+
+  it('同じアカウントへ同時に grant しても、grantedBy は先に書いた側のまま', async () => {
+    await stores.auth.putAccount(account);
+
+    const at = '2026-01-02T00:00:00.000Z';
+    const results = await Promise.all([
+      stores.auth.grantAccess('account-1', at, 'operator'),
+      stores.auth.grantAccess('account-1', at, 'account-9'),
+    ]);
+
+    expect(results.every((result) => result.status === 'granted')).toBe(true);
+    const stored = (await stores.auth.listAccounts()).find((it) => it.id === 'account-1');
+    // 2つの応答が器の中身と一致すること。片方が自分の書いた値を返すと、
+    // 呼び出し側は「自分が通した」と読んで日誌にそう書く。
+    expect(
+      results.map((result) => (result.status === 'granted' ? result.account.grantedBy : null)),
+    ).toEqual([stored?.grantedBy, stored?.grantedBy]);
   });
 
   it('トークンの保存が落ちたら、ログイン要求は authenticated のまま残る', async () => {

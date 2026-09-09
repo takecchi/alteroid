@@ -4248,8 +4248,13 @@ export function createApp(deps: AppDeps) {
      * **資格は `authenticate` だけ（`requireOperator` は付けない）。** ⚠️ 2026-09-06
      * のオーナー決定——alteroid を使う許可（`access grant` 済み）があれば実行環境の
      * 持ち主と同格に扱う——により、以前ここに在った `requireOperator` を外した。
-     * 持ち主は依然として高々1人（下の `grantExclusive` の 409）——同格にしたのは
-     * 「誰が叩けるか」であって「何人まで許可できるか」ではない。
+     *
+     * ⚠️ **2026-09-09 のオーナー決定で「何人まで許可できるか」の上限も外れた。**
+     * ここに「持ち主は依然として高々1人（下の `grantExclusive` の 409）——同格に
+     * したのは『誰が叩けるか』であって『何人まで許可できるか』ではない」と書いて
+     * あったが、**その2つが同時に開いたので許可は伝播する**（A が B を、B が C を
+     * 通せる）。**同格化は戻さない**（オーナー決定である）。代わりに下の日誌が
+     * 「誰が誰を通したか」を毎回残す——それが伝播を事後に追える唯一の場所である。
      */
     .post(
       '/access/:accountId/grant',
@@ -4259,9 +4264,13 @@ export function createApp(deps: AppDeps) {
         description:
           'ログインしただけでは使えない。ここで初めて使えるようになる。運ぶ情報は無い' +
           '（`{}` を送る）。\n\n' +
-          '**許可できるアカウントは高々1つ。** alteroid は単一の持ち主のものであり、' +
-          'マルチユーザー / チーム利用は非ゴールである（docs/PRD.md「スコープ外」）。' +
-          '既に別のアカウントが許可されていれば 409 を返す — 持ち主を移すなら先に取り消す。',
+          '**許可できるアカウントの数に上限は無い**（2026-09-09 のオーナー決定。それ' +
+          '以前は高々1つで、2人目は 409 だった）。同じ人間が複数のログイン手段から' +
+          '入れる。**利用者ごとにデータは分けない** — 許可を持つ全員が同じ1組の記憶・' +
+          '日誌・会話を見る（マルチユーザー / チーム利用は docs/PRD.md「スコープ外」の' +
+          'ままである）。\n\n' +
+          '**この口は許可を持つアカウントからも叩ける**（2026-09-06 のオーナー決定で' +
+          '実行環境の持ち主と同格）。⟹ 許可は伝播する。誰が誰を通したかは日誌に残る。',
         requestBody: noBodyPostRequestBody(
           '**中身は読まないので `{}` を送ればよい。** 本文そのものではなく ' +
             '`content-type: application/json` が要る（ブラウザの単純リクエストで持ち主を' +
@@ -4282,10 +4291,6 @@ export function createApp(deps: AppDeps) {
             description: '該当するアカウントが無い。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
-          409: {
-            description: '既に別のアカウントが許可されている（先に revoke する）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
           ...noBodyPostResponses(),
         },
       }),
@@ -4296,19 +4301,10 @@ export function createApp(deps: AppDeps) {
           actorOf(c.get('principal')),
         );
         if (result.status === 'not_found') return c.json({ error: 'not found' as const }, 404);
-        if (result.status === 'conflict') {
-          return c.json(
-            {
-              error:
-                `既に ${describeAccount(result.owner)} が許可されている。` +
-                'alteroid は単一の持ち主のものなので、許可できるアカウントは1つだけ。' +
-                `移すなら先に取り消す: alteroid access revoke ${result.owner.id}`,
-            },
-            409,
-          );
-        }
         // 誰を通したかは必ず残す。事後に追えることが「最終承認」の実体である
-        // （PRD「可観測性」）。
+        // （PRD「可観測性」）。**上限を外した 2026-09-09 以降、ここが唯一の歯止め
+        // である** — 許可を持つ側も grant を叩けるので、許可は人間の手を経ずに
+        // 伝播しうる。`describeActor` を省いて `operator` 固定にしないこと。
         await stores.journal.append({
           type: 'decision',
           decision: `アクセス許可を付与: ${describeAccount(result.account)}`,

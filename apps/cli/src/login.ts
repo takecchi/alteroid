@@ -111,8 +111,8 @@ export async function loginCommand(options: { provider?: string }): Promise<void
         '\nただし、まだ alteroid を使う許可がありません。\n' +
           'デーモンが動いている環境で次を実行してください:\n' +
           `  alteroid access grant ${result.account.id}\n` +
-          '（許可できるアカウントは1つだけです。既に別のアカウントが許可されている\n' +
-          ' 場合は、先に alteroid access revoke で取り消してください）\n',
+          '（既に別のアカウントが許可されていても構いません。許可できるアカウントの\n' +
+          ' 数に上限はなく、同じ人が複数のログイン手段から入れます）\n',
       );
     }
     return;

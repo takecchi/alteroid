@@ -2589,21 +2589,88 @@ describe('AuthStore', () => {
     expect((await stores.auth.getLoginRequest('login-3'))?.status).toBe('pending');
     expect(await stores.auth.claimLoginRequest('居ない', () => neverIssued())).toBeNull();
   });
-  it('別々のアカウントへ同時に grant しても、持ち主は1人しかできない', async () => {
+  /**
+   * ⚠️ **2026-09-09 に期待値を反転した。** 反転前は「別々のアカウントへ同時に grant
+   * しても、持ち主は1人しかできない」で、最後の砦は部分一意索引
+   * `auth_accounts_single_owner_idx` だった。**索引ごと落としてある**
+   * （`migrate.ts` の末尾の `drop index`。create は配列から消した）。
+   *
+   * fs 側と同じ2本に分けてある —— 上限が無いことと、`grantedBy` が上書きされないこと。
+   */
+  it('別々のアカウントへ同時に grant すると、両方通る（上限が無い）', async () => {
     const other = { ...account, id: 'account-2', email: 'other@example.test' };
     await stores.auth.putAccount(account);
     await stores.auth.putAccount(other);
 
     const at = '2026-01-02T00:00:00.000Z';
     const results = await Promise.all([
-      stores.auth.grantExclusive('account-1', at, 'operator'),
-      stores.auth.grantExclusive('account-2', at, 'operator'),
+      stores.auth.grantAccess('account-1', at, 'operator'),
+      stores.auth.grantAccess('account-2', at, 'operator'),
     ]);
 
-    expect(results.filter((result) => result.status === 'granted')).toHaveLength(1);
-    // 器に2人残っていたら、応答が1件でも両方が通ってしまう。
+    expect(results.filter((result) => result.status === 'granted')).toHaveLength(2);
     const granted = (await stores.auth.listAccounts()).filter((it) => it.grantedAt !== null);
-    expect(granted).toHaveLength(1);
+    expect(granted).toHaveLength(2);
+  });
+
+  it('同じアカウントへ同時に grant しても、grantedBy は先に書いた側のまま', async () => {
+    await stores.auth.putAccount(account);
+
+    const at = '2026-01-02T00:00:00.000Z';
+    const results = await Promise.all([
+      stores.auth.grantAccess('account-1', at, 'operator'),
+      stores.auth.grantAccess('account-1', at, 'account-9'),
+    ]);
+
+    expect(results.every((result) => result.status === 'granted')).toBe(true);
+    const stored = (await stores.auth.listAccounts()).find((it) => it.id === 'account-1');
+    expect(
+      results.map((result) => (result.status === 'granted' ? result.account.grantedBy : null)),
+    ).toEqual([stored?.grantedBy, stored?.grantedBy]);
+  });
+
+  /**
+   * **⭐ 2周目でだけ壊れる状態を挟む歯。**
+   *
+   * `migrate` は起動のたびに `STATEMENTS` を頭から通す。単一持ち主の索引
+   * （`auth_accounts_single_owner_idx`）を落とすとき、**対になる `create unique index
+   * if not exists` を配列に残すと、2周目は名前で一致せず本当に作りに行く。** そのとき
+   * には2つ目の許可済みの行 —— 新しい規則が許し、古い索引が拒む行 —— が積まれていて、
+   * `could not create unique index … is duplicated` で落ちる。**デーモンが2度と起動
+   * できなくなる**（2026-08-25 に `usage_daily_key_idx` で実際に起きた形）。
+   *
+   * **「migrate を2回通す」だけでは1文字も測れない。** 許可済みの行が1つしか無ければ
+   * 古い索引でも一意なので、2周目の create は通ってしまう。**2人目を挟むところまでが
+   * 歯である。**
+   *
+   * `migrate.test.ts` の構造の歯（drop と create が同じ配列に並んでいないか）とは
+   * 別物である —— あちらは配列の形を、ここは実際の DB の振る舞いを見る。
+   */
+  it('許可を2つ積んでから起動し直しても migrate が落ちない（古い索引を作りに戻らない）', async () => {
+    // 2026-09-09 より前に作られた DB を模す —— そこには索引が在る。
+    await db.execute(
+      sql.raw(
+        `create unique index if not exists auth_accounts_single_owner_idx
+           on auth_accounts ((granted_at is not null)) where granted_at is not null`,
+      ),
+    );
+
+    // 起動（この周で索引が落ちる）。
+    await migrate(db);
+
+    const other = { ...account, id: 'account-2', email: 'other@example.test' };
+    await stores.auth.putAccount(account);
+    await stores.auth.putAccount(other);
+    const at = '2026-01-02T00:00:00.000Z';
+    await stores.auth.grantAccess('account-1', at, 'operator');
+    await stores.auth.grantAccess('account-2', at, 'operator');
+
+    // ⭐ ここが本体。create が配列に残っていれば、この2周目で落ちる。
+    await expect(migrate(db)).resolves.toBeUndefined();
+    await expect(migrate(db)).resolves.toBeUndefined();
+
+    const granted = (await stores.auth.listAccounts()).filter((it) => it.grantedAt !== null);
+    expect(granted).toHaveLength(2);
   });
 
   it('トークンの保存が落ちたら、ログイン要求は authenticated のまま残る', async () => {
