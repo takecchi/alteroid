@@ -1,6 +1,6 @@
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
@@ -35,6 +35,26 @@ import { afterEach, describe, expect, it } from "vitest";
  */
 
 const REAL_SCRIPT_PATH = fileURLToPath(new URL("../run-db-tests.mjs", import.meta.url));
+
+/**
+ * `sourcePath` と、それが相対 import している同ディレクトリの `.mjs` を、
+ * 辿れる限り `destDir` へ運ぶ。
+ *
+ * **なぜ「辿る」のか**: コピーする名前を手で並べると、依存が増えたときに
+ * 黙って漏れる。漏れたときこの歯は `ERR_MODULE_NOT_FOUND` で赤くなるが、
+ * それは**この歯が測るはずの「排他」とは無関係な赤**であり、
+ * 読んだ人を間違った場所へ連れて行く。
+ */
+function copyScriptWithLocalDeps(sourcePath, destDir, copied = new Set()) {
+  const name = basename(sourcePath);
+  if (copied.has(name)) return;
+  copied.add(name);
+  copyFileSync(sourcePath, join(destDir, name));
+  const source = readFileSync(sourcePath, "utf8");
+  for (const matched of source.matchAll(/from\s+"\.\/([^"]+\.mjs)"/g)) {
+    copyScriptWithLocalDeps(join(dirname(sourcePath), matched[1]), destDir, copied);
+  }
+}
 
 const tmpDirs = [];
 
@@ -90,7 +110,14 @@ function makeWorkspace(sleepMs) {
   mkdirSync(join(dir, "scripts"), { recursive: true });
   // シンボリックリンクではなくコピー(理由はファイル冒頭のコメント参照)。
   // 実行の都度コピーするので、本物のスクリプトの「今の中身」を検査する。
-  copyFileSync(REAL_SCRIPT_PATH, join(dir, "scripts", "run-db-tests.mjs"));
+  //
+  // **⚠ 1ファイルだけをコピーしない。** 本物のスクリプトが同じディレクトリの別の
+  // `.mjs` を import するようになった瞬間、擬似ワークスペース側では
+  // `ERR_MODULE_NOT_FOUND` になり、この歯は「排他が壊れた」のではなく
+  // 「モジュールが無い」で赤くなる——**実際に一度そうなった**
+  // (`scripts/db-server-description.mjs` を足したとき)。
+  // ⟹ import を辿って、必要なものを一緒に運ぶ。次に依存が増えても漏れない。
+  copyScriptWithLocalDeps(REAL_SCRIPT_PATH, join(dir, "scripts"));
 
   return dir;
 }

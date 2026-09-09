@@ -245,6 +245,16 @@ jobs:
           set -euo pipefail
           node scripts/run-db-tests.mjs 2>&1 | tee gate.log
           grep -F "DB テストを実行します" gate.log
+          # 接続先の Postgres が実際に読めていること。純関数の形は
+          # scripts/__tests__/db-server-description.test.mjs が測るが、
+          # 「本物の DB に繋いで版が取れる」ことを測れるのは、DB を持つこのジョブだけ。
+          grep -E "接続先: PostgreSQL [0-9]+" gate.log
+          # CI の service container は pgvector/pgvector:pg17 なので、検証済みの版であり
+          # 未検証の警告は出てはいけない。出るなら CI の版か検証済み一覧のどちらかがずれている。
+          if grep -F "検証されていない版です" gate.log; then
+            echo "CI の Postgres が検証済み一覧から外れている（VERIFIED_MAJOR_VERSIONS を見直すこと）" >&2
+            exit 1
+          fi
           grep -F "✔ DB テストも実行し、通りました。" gate.log
           if grep -F "DB テストは実行していません" gate.log; then
             echo "DB 段が未実行の側へ落ちた" >&2

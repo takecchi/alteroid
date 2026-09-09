@@ -73,6 +73,16 @@ describe("idx_memories_recall_gate (誤り1の修正)", () => {
     const plan = explainResult.rows
       .map((row: { "QUERY PLAN": string }) => row["QUERY PLAN"])
       .join("\n");
+    // ⚠ この2行はプランナの選択を assert している——版・統計・データ規模に依存する。
+    //  測った版: **分からない**（この歯を足した PR #3 の本文に、この assert を通した CI run 番号も
+    //    Postgres の版も記載が無い。PR #3 追記の PostgreSQL 18.6 + pgvector 0.8.6 での変異検査
+    //    ——述語を `status = 'active'` に戻すと赤くなる——は作業環境での実測であり、CI での実測ではない）。
+    //    言えるのは「CI（`pgvector/pgvector:pg17`）では通っている」までである（配線から読める事実）。
+    //  赤くなったら疑うもの: (1) 自分の変更 (2) 実行中の Postgres のメジャー版
+    //    (3) ANALYZE / 統計情報（上の seed のコメントに実測が在る: ANALYZE 無しでは
+    //    `idx_memories_provenance_kind` が選ばれることがあった）。⟹ まず `origin/main` で対照を取ること。
+    //  見直す合図: **当たる ADR は無い**（この索引は docs/memory-model.md §10 と docs/recall.md §5 に
+    //    直接書かれており、ADR を経ていない）。⟹ 崩れたら、まず見直す先を決める必要が在る。
     expect(plan).toContain("idx_memories_recall_gate");
     expect(plan).not.toMatch(/Seq Scan on memories/);
 

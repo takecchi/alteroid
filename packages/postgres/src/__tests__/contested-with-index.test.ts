@@ -199,6 +199,14 @@ describe("idx_memories_contested_with（memories.contested_with_id の自己参�
       `=== EXPLAIN（後: idx_memories_contested_with 有り・RI チェックの述語）===\n${plan}`,
     );
 
+    // ⚠ この3行はプランナの選択を assert している——版・統計・データ規模に依存する。
+    //  測った版: **PostgreSQL 17.11 + pgvector 0.8.6**（100,000行・ANALYZE 後、作業環境での実測。
+    //    PR #69 本文に EXPLAIN が cost の値ごと逐語で貼ってある）。加えて **CI run 34204550584** で
+    //    `packages/postgres` ジョブが緑になっている（CI は `pgvector/pgvector:pg17`）。
+    //  赤くなったら疑うもの: (1) 自分の変更 (2) 実行中の Postgres のメジャー版
+    //    (3) ANALYZE / 統計情報 (4) seed の分布——**この歯は 2% 選択性という閾値の上に立っており**、
+    //    コストモデルが版で変われば真っ先に転ぶ側である。⟹ まず `origin/main` で対照を取ること。
+    //  見直す合図: ADR 0062（`memories.contested_with_id` の自己参照 FK に索引を足す）。
     expect(plan).toContain("idx_memories_contested_with");
     expect(plan).toMatch(/Index Scan using idx_memories_contested_with on memories x/);
     expect(plan).not.toMatch(/Seq Scan on memories/);

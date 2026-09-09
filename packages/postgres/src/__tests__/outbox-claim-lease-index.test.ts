@@ -216,6 +216,15 @@ describe("outbox claim のリース化と索引（ADR 0032）", () => {
     const plan = planText(explainResult.rows as { "QUERY PLAN": string }[]);
     console.log(`=== EXPLAIN（後: リース条件付きの新しい述語）===\n${plan}`);
 
+    // ⚠ この2行はプランナの選択を assert している——版・統計・データ規模に依存する。
+    //  測った版: **番号としては分からない**。ただし PR #31 本文は「手元に PostgreSQL も Docker も
+    //    無いため、これは CI の `postgres` ジョブが出力したものをそのまま貼っている。推論ではない」と
+    //    明記した上で EXPLAIN を逐語掲載しており、⟹ **CI（`pgvector/pgvector:pg17`）の出力である**
+    //    ことは確定している（CI run 番号は本文に無い）。
+    //  赤くなったら疑うもの: (1) 自分の変更 (2) 実行中の Postgres のメジャー版
+    //    (3) ANALYZE / 統計情報 (4) seed の分布（冒頭 docstring の実測: claim 可能な行が全体の約50%を
+    //    占めていた当初の seed では、部分索引が Seq Scan に勝てなかった）。⟹ まず `origin/main` で対照を取ること。
+    //  見直す合図: ADR 0032（outbox の claim にリースを入れる）。
     expect(plan).toContain("idx_outbox_claimable");
     // 「索引が使われている」だけでは足りない——`Seq Scan on outbox` は外側の
     // `UPDATE ... FROM claimable c` 側（本 PR の論点ではない）にも出うるため、

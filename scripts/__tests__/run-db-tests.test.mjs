@@ -67,6 +67,12 @@ describe("scripts/run-db-tests.mjs（ルートの test 門の DB 段）", () => 
 
     // 未実行の告知と取り違えられないこと。
     expect(output).not.toContain("DB テストは実行していません");
+
+    // **接続先の告知が、この門に実際に配線されていること。**
+    // 単体の形は scripts/__tests__/db-server-description.test.mjs が測る。ここで見るのは
+    // 「門がそれを呼んでいるか」——呼び出しが外れれば、接続先は再び黙って出なくなる。
+    // 届かない DATABASE_URL なので、必ず「取れなかった」側の文言になる。
+    expect(output).toContain("版を取得できませんでした");
   });
 });
 

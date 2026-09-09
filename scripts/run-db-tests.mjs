@@ -76,6 +76,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { describeDatabaseServer, formatServerLines } from "./db-server-description.mjs";
 
 const DB_SCRIPT = "test:db";
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -175,11 +176,19 @@ if (!process.env.DATABASE_URL) {
   process.exit(0);
 }
 
+// 接続先が何であるかを必ず1行出す。**歯は1本も弱めない**——出すだけである。
+// 理由と、取れなかったときも黙らない理由は scripts/db-server-description.mjs の冒頭を見ること。
+const serverLines = formatServerLines(
+  describeDatabaseServer(process.env.DATABASE_URL, `${repoRoot}packages/postgres`),
+);
+
 console.log(
   [
     "",
     BANNER,
     "DATABASE_URL が設定されているため、DB テストを実行します",
+    "",
+    ...serverLines,
     "",
     "  対象:",
     listing,

@@ -158,6 +158,14 @@ describe("runtime.recall() — 本物の Postgres + pgvector（roadmap.md 段階
     const plan = explainResult.rows
       .map((row: { "QUERY PLAN": string }) => row["QUERY PLAN"])
       .join("\n");
+    // ⚠ この2行はプランナの選択を assert している——版・統計・データ規模に依存する。
+    //  測った版: **分からない**（この歯を足した PR #5 の本文は「PostgreSQL 18.6 + pgvector 0.8.6
+    //    *相当*の環境」と書くのみで、この assert を通した CI run 番号も確定した版も記載が無い）。
+    //    言えるのは「CI（`pgvector/pgvector:pg17`）では通っている」までである（配線から読める事実）。
+    //  赤くなったら疑うもの: (1) 自分の変更 (2) 実行中の Postgres のメジャー版
+    //    (3) ANALYZE / 統計情報。⟹ まず `origin/main` で対照を取ること。
+    //  見直す合図: **当たる ADR は無い**。この歯は roadmap.md 段階4/5 の線を守っているだけで、
+    //    崩れたときに見直すべき決定が特定されていない。⟹ 崩れたら、まずそれを決める必要が在る。
     expect(plan).toMatch(/Index Scan.*using idx_memory_embeddings_hnsw/);
     expect(plan).not.toMatch(/Seq Scan/);
   }, 60_000);

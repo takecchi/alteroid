@@ -78,6 +78,16 @@ describe("PostgresVectorStore.search と HNSW 索引", () => {
     const plan = explainResult.rows
       .map((row: { "QUERY PLAN": string }) => row["QUERY PLAN"])
       .join("\n");
+    // ⚠ この2行はプランナの選択を assert している——版・統計・データ規模に依存する。
+    //  測った版: **分からない**（この歯を足した PR #3 の本文に、この assert を通した
+    //    CI run 番号も Postgres の版も記載が無い。PR #3 の追記にある PostgreSQL 18.6 +
+    //    pgvector 0.8.6 の変異検査は作業環境での実測であり、CI での実測ではない）。
+    //    言えるのは「CI（`pgvector/pgvector:pg17`）では通っている」までである（配線から読める事実）。
+    //  赤くなったら疑うもの: (1) 自分の変更 (2) 実行中の Postgres のメジャー版
+    //    (3) ANALYZE / 統計情報（上の seed のコメント参照）。
+    //    ⟹ まず `origin/main` で対照を取ること（DB 段の出力が接続先の版を名指しで出す）。
+    //  見直す合図: ADR 0001（`ORDER BY` に距離演算子をそのまま書く規約）。この歯が赤いとき、
+    //    HNSW が使われない理由が版ではなくクエリの形なら、そこが崩れている。
     expect(plan).toMatch(/Index Scan.*using idx_memory_embeddings_hnsw/);
     expect(plan).not.toMatch(/Seq Scan/);
   }, 60_000);
@@ -122,6 +132,16 @@ describe("PostgresVectorStore.search と HNSW 索引", () => {
     const plan = explainResult.rows
       .map((row: { "QUERY PLAN": string }) => row["QUERY PLAN"])
       .join("\n");
+    // ⚠ この2行はプランナの選択を assert している——版・統計・データ規模に依存する。
+    //  測った版: **分からない**（この歯を足した PR #3 の本文に、この assert を通した
+    //    CI run 番号も Postgres の版も記載が無い。PR #3 の追記にある PostgreSQL 18.6 +
+    //    pgvector 0.8.6 の変異検査は作業環境での実測であり、CI での実測ではない）。
+    //    言えるのは「CI（`pgvector/pgvector:pg17`）では通っている」までである（配線から読める事実）。
+    //  赤くなったら疑うもの: (1) 自分の変更 (2) 実行中の Postgres のメジャー版
+    //    (3) ANALYZE / 統計情報（上の seed のコメント参照）。
+    //    ⟹ まず `origin/main` で対照を取ること（DB 段の出力が接続先の版を名指しで出す）。
+    //  見直す合図: ADR 0001（`ORDER BY` に距離演算子をそのまま書く規約）。この歯が赤いとき、
+    //    HNSW が使われない理由が版ではなくクエリの形なら、そこが崩れている。
     expect(plan).toMatch(/Index Scan.*using idx_memory_embeddings_hnsw/);
     expect(plan).not.toMatch(/Seq Scan/);
   }, 60_000);
