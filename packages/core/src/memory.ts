@@ -627,8 +627,15 @@ function brandRenderedMemory(text: string): RenderedMemory {
 // 目次（TOC）— 保存しない。毎回、文書そのものから組み立てる
 // ---------------------------------------------------------------------------
 
-/** 目次1行の長さの上限（1文書が目次を飲み込まないため。外部の値は持ち込まない。4-5）。 */
-const MEMORY_TOC_LINE_LIMIT = 200;
+/**
+ * 目次1行の長さの上限（1文書が目次を飲み込まないため。外部の値は持ち込まない。4-5）。
+ *
+ * **`export` してあるのはテストのため**（`memory.test.ts` が
+ * `MEMORY_TOC_ENTRY_LIMIT * MEMORY_TOC_LINE_LIMIT` で「蓋が無ければ束ねた
+ * 全体がどこまで伸びうるか」の下限を書き写さずに導くのに使う。値そのものは
+ * 変えていない）。
+ */
+export const MEMORY_TOC_LINE_LIMIT = 200;
 
 /**
  * 目次を件数で切るときの上限。**`self_status` の記憶内訳とは、もう同じ考え方
@@ -643,8 +650,79 @@ const MEMORY_TOC_LINE_LIMIT = 200;
  * （文字数）とは切る理由が違う。**`export` してあるのはテストのため**
  * （`memory.test.ts` が「切ったら言う」を確かめるのに、この値を書き写さず
  * 参照する）。
+ *
+ * **⚠️ ここで「件数のまま残す」と決めた理由（1行あたりの上限は運任せにならない
+ * こと）は、束ねた全体には及ばない。** `self_status` を移した理由の逐語
+ * 「1行の長さが可変になり、件数のままでは何件で壊れるかが運任せになる」は、
+ * まさにこの目次の1行（`renderMemoryTocLine`）にも当たる——`MEMORY_TOC_LINE_LIMIT`
+ * は1行あたりの**上限**であって固定幅ではなく、そこに階層のインデントと
+ * 鮮度の印（`memoryFreshnessMarker`）と `title` が乗るので、300件の総量は
+ * 数千字から6万字超まで動く（実測は `MEMORY_TOC_CHAR_BUDGET` の doc）。
+ * **だからこの件数の上限とは別に、束ねた全体の文字数にも蓋を持つ
+ * （`MEMORY_TOC_CHAR_BUDGET`）。両方が独立に効く**——件数の上限を外すのでは
+ * なく、「判断材料として何件が妥当か」という軸と「毎ターンの床に何文字まで
+ * 許すか」という軸を両方持つ。
  */
 export const MEMORY_TOC_ENTRY_LIMIT = 300;
+
+/**
+ * `fact` 目次（`renderMemoryToc`）全体を束ねた文字数の予算。**件数
+ * （`MEMORY_TOC_ENTRY_LIMIT`）とは別の軸で、両方が効く。**
+ *
+ * ## なぜ要るか — 件数の上限だけでは、束ねた総量が運任せになる
+ *
+ * `MEMORY_TOC_ENTRY_LIMIT` の doc に書いたとおり、この目次の1行は
+ * `MEMORY_TOC_LINE_LIMIT`（1行あたりの上限）・階層のインデント・鮮度の印・
+ * `title` を持つ可変長の行である。件数だけで切ると、`.claude/skills/
+ * listing-and-detail/SKILL.md`「予算は件数ではなく文字数で持つ」が名指しして
+ * いる形そのものになる——実際にそこは「#170 は記憶の目次に
+ * `MEMORY_TOC_ENTRY_LIMIT = 300`（件数）と `MEMORY_TOC_LINE_LIMIT = 200`
+ * （1行の長さ）を入れた。**300 × 200 = 60,000 文字**」と書き、道具側の統一
+ * とは分けて範囲外に残していた（同 SKILL.md「いま揃っていないもの」）。
+ *
+ * ## 実測（このリポジトリでの合成入力。2026-09-09）
+ *
+ * `renderMemoryDocuments` に `MEMORY_TOC_ENTRY_LIMIT`（300）件の `fact` を通した
+ * 実測値（本番の記憶ではなく、この PR の中で組んだ合成入力——本番の実体
+ * （PostgreSQL / `~/.alteroid/memory/*.md`）とデーモンの HTTP API には触れて
+ * いない）:
+ *
+ * | 入力 | 目次全体の文字数 |
+ * | --- | --- |
+ * | 300件、要旨なし（下限） | 8,849 |
+ * | 300件、要旨が `MEMORY_TOC_LINE_LIMIT` ちょうど（200字） | 67,049 |
+ * | 300件、要旨がそれより長い（300字。`excerptLine` が切って注記が乗る） | 73,049 |
+ *
+ * **理論値「約6万字」は控えめだった**——1行あたりの上限を使い切る現実的な
+ * 入力で 67,049 文字、超過分がある入力では 73,049 文字まで伸びる。
+ *
+ * **この表の数は、doc コメントの主張のままでは古くなっても気づけない。**
+ * `MEMORY_TOC_ENTRY_LIMIT * MEMORY_TOC_LINE_LIMIT`（60,000）という下限を
+ * 実際に超えることは `memory.test.ts` の「⭐⭐⭐ 穴の実在（蓋なしなら束ねた
+ * 総量は60,000字超）と修理の実在（いまは予算の桁に収まる）」が歯として
+ * 固定している——1行の形式を書き写さず、2件・1件の実レンダリングの差分
+ * から外挿した値で確かめる。
+ *
+ * ## 値の出し方（12,000。人間の決定）
+ *
+ * - **危険の大きさから逆算した。** 理論上の最悪（上の実測）はおよそ6〜7万字
+ *   （≒ 4〜5万トークンを毎ターン）。12,000 はそれを約1/5〜1/6に抑える。
+ * - **いま噛まない値にした。** `fact` が数本の現状では総量は1〜2千字の桁と
+ *   見込まれ（**本番を測った値ではない。依頼者の見立てであり、この PR は
+ *   記憶の実体・デーモンの HTTP API のどちらにも触れていないので検証できない**）、
+ *   12,000 は見立てどおりなら現状の数倍〜10倍の余裕がある——足した瞬間に
+ *   文書が隠れ始めることが無い、という設計上の狙いである。
+ * - **既存の値（`MEMORY_LISTING_BUDGET` / `MEMORY_OUTLINE_BUDGET` の 8,000、
+ *   `MEMORY_PROMPT_OUTLINE_BUDGET` の 6,000）をあえて写さなかった。** 8,000 は
+ *   道具側（1回のツール応答）の予算で、焼き込みと道具の予算を混同させない
+ *   ことは別の PR の主題そのものである。6,000 は premise **1文書あたり**の
+ *   節目次の予算で、こちらは **fact 全文書を束ねた**目次なので軸が違う。
+ *   別の数を置くことで「別の予算である」を値そのものに語らせる。
+ * - **既存の値（200 / 300 / 3,000 / 6,000 / 8,000）はどれも動かしていない。**
+ *
+ * **`export` してあるのはテストのため**（値を書き写さず参照する）。
+ */
+export const MEMORY_TOC_CHAR_BUDGET = 12_000;
 
 /**
  * `memory_list`（道具）の一覧の予算。**件数ではなく文字数である。**
@@ -1086,42 +1164,148 @@ function tocEntriesCoverWholeMemory(
 }
 
 /**
+ * 目次が予算で切れたときの断り書き。**「切った」だけでなく「何で切ったか」を
+ * 名乗る**——件数（`MEMORY_TOC_ENTRY_LIMIT`）・文字数（`MEMORY_TOC_CHAR_BUDGET`）・
+ * その両方、の3状態を別の文言で区別する（依頼者の明示の求め。`premise` 側の
+ * 断り書き `renderPremiseOutlineOmission` と同じ思想——予算値を名乗り、
+ * 実行できる直し方だけを出す）。
+ *
+ * ## なぜ3状態を区別するのか
+ *
+ * 件数と文字数は別の軸で、どちらが実際に効いたかを畳むと直し方を間違える。
+ * **件数で切れている**なら、それは #170 の設計判断（「何件までなら判断材料
+ * として妥当か」）が働いている状態で、実行できる直し方は無い——`fact` の
+ * 数そのものを減らす以外に手が無く、それを「直せ」と言うのは越権である。
+ * **文字数で切れている**なら、要旨（`description`）が長い・文書が多いことが
+ * 原因で、`memory_frontmatter_set` で要旨を短くするという実在する手がある
+ * （`renderPremiseCard` が要旨超過のときに出す助言と同じ形）。
+ *
+ * ## `tocEntriesCoverWholeMemory` の区別は壊さない
+ *
+ * 呼び手が渡す `wholeMemory` は既存の区別（#170）そのもので、切った理由の
+ * 文言とは独立に組み合わせる——3（切った理由）×2（被覆）を6本のテンプレート
+ * で書き並べるのではなく、`scope`（被覆）と `cause`（理由）を別々に組み立てて
+ * 連結する。
+ *
+ * ## fact の目次は、文書が存在することを名乗る唯一の場所
+ *
+ * `renderMemoryDocuments` の不変条件により、`fact` はカードではなく**この
+ * 目次の1行にしか現れない**。`premise` はカードが切られても文書の見出し
+ * （`<!-- memory: slug.md -->`）は必ず残るが、`fact` にはその残る側が無い
+ * ——切られた文書は、この焼き込みの中では存在しないのと見分けが付かなく
+ * なる。だから件数と「隠れている事実そのもの」を必ず両方言う。
+ */
+function renderMemoryTocOmission(input: {
+  omitted: number;
+  total: number;
+  wholeMemory: boolean;
+  countCut: boolean;
+  charCut: boolean;
+}): string {
+  const { omitted, total, wholeMemory, countCut, charCut } = input;
+
+  const scope = wholeMemory
+    ? `目次の対象は全 ${total} 件`
+    : `この目次に並べたのは全 ${total} 件。記憶の全体ではなく、今回載せた分だけである`;
+
+  const cause =
+    countCut && charCut
+      ? `件数（${formatMemoryCharCount(MEMORY_TOC_ENTRY_LIMIT)} 件の上限）と文字数（予算 ` +
+        `${formatMemoryCharCount(MEMORY_TOC_CHAR_BUDGET)} 文字）の両方に当たって切った。`
+      : countCut
+        ? `${formatMemoryCharCount(MEMORY_TOC_ENTRY_LIMIT)} 件の上限に当たって件数で切った` +
+          `（文字数の予算 ${formatMemoryCharCount(MEMORY_TOC_CHAR_BUDGET)} 文字にはまだ余裕がある）。`
+        : `文字数の予算 ${formatMemoryCharCount(MEMORY_TOC_CHAR_BUDGET)} 文字に当たって文字数で切った` +
+          `（件数は ${formatMemoryCharCount(MEMORY_TOC_ENTRY_LIMIT)} 件の上限の下——要旨が長い文書が多い）。`;
+
+  // **文字数で切れているときだけ、実行できる直し方を出す。** 件数のみで
+  // 切れているときは #170 の設計判断（「何件までなら判断材料として妥当か」）
+  // が働いているだけなので、直し方を出さない——実行できない助言（「fact を
+  // 減らせ」に類する越権の助言）を出さないための線引きである。
+  const remedy = charCut
+    ? ' 要旨（description）が長い文書は memory_frontmatter_set で短くすると、同じ件数でもここに多く載る。'
+    : '';
+
+  return [
+    `…ほか ${omitted} 件は目次から省略（${scope}）。${cause}`,
+    '⚠️ この目次は、fact 文書が存在することを毎ターンの焼き込みの中で名乗る唯一の場所である' +
+      '（premise はカードが切られても見出しは必ず残るが、fact はここでしか名乗らない）。' +
+      `省かれた ${formatMemoryCharCount(omitted)} 件は、この焼き込みの中では存在しないのと見分けが付かない。`,
+    `全件は memory_list、本文は memory_read slug=<slug> で取れる。${remedy}`,
+  ].join('\n');
+}
+
+/**
  * `fact` 文書の目次を組み立てる。**保存しない——毎回この関数が
  * 各文書の `description` から組み立て直す**ので、目次と実体が食い違う
  * ことは構造的に起こりえない（4-1）。
  *
- * **件数で切ったら、切った件数を必ず出す**（`excerpt.ts` と同じ約束）。
+ * **切ったら、何で切ったかを必ず出す**（`excerpt.ts` と同じ約束を、
+ * 件数・文字数の2軸へ広げたもの。文言は `renderMemoryTocOmission`）。
  *
  * `elsewhere` はそのまま `resolveMemoryHierarchy` へ渡す（`parent` がこの目次の
  * 外に実在するときの3つの状態を区別するため。呼び手
  * （`buildMemoryDocumentSections`）が premise の slug 集合と、記憶の全体の
  * `MemoryPresence` を渡す）。
  *
- * **省略行の文言は、この描画が記憶の全体を覆っているかで変える**
+ * **省略行の文言は、この描画が記憶の全体を覆っているかでも変える**
  * （`tocEntriesCoverWholeMemory`）。部分だけを描く呼び手（`clone.ts` の
  * `#withFreshMemory`）の下では「目次の対象は全 N 件」の N が「今回変わった
  * fact の数」を指してしまい、記憶全体の件数だと誤読される——**判定は省略が
  * 起きたとき（`omitted > 0`）だけ行う**（実運用では 300 件を超える差分は
  * まず起きないので、毎回この判定を評価する必要は無い）。
+ *
+ * ## 件数の蓋と文字数の蓋を両方掛ける（順番に注意）
+ *
+ * 1. まず件数（`MEMORY_TOC_ENTRY_LIMIT`）で切る——これは従来どおり。
+ * 2. その残り（最大300件）に対して、束ねた文字数（`MEMORY_TOC_CHAR_BUDGET`）
+ *    でさらに切る。**`renderListing` をそのまま使う**（`excerpt.ts`）——
+ *    ただし断り書きの文言はここでは作らせず、`omitted` コールバックには
+ *    内訳（`shown`/`rest`/`total`）だけを受け取らせて捨てる。最終的な文言は
+ *    件数側の情報と合わせてから `renderMemoryTocOmission` が1本で組み立てる
+ *    ——切り方を2本のテンプレート系列に割らないため（依頼者の求め）。
+ *    `renderListing` は先頭から詰め、1件目は予算超過でも必ず出す（`excerpt`
+ *    で切って出す）が、この目次の1行は `MEMORY_TOC_LINE_LIMIT`（1行あたり
+ *    200字）で頭打ちなので、`MEMORY_TOC_CHAR_BUDGET`（12,000）に対して1行が
+ *    単独で予算超過になることは実運用では起こらない。
  */
 function renderMemoryToc(
   entries: readonly MemoryTocEntry[],
   elsewhere: MemoryHierarchyElsewhere = {},
 ): string {
   const flat = flattenMemoryToc(resolveMemoryHierarchy(entries, elsewhere));
-  const shown = flat.slice(0, MEMORY_TOC_ENTRY_LIMIT);
-  const omitted = flat.length - shown.length;
+  const countShown = flat.slice(0, MEMORY_TOC_ENTRY_LIMIT);
+  const countCut = countShown.length < flat.length;
+
+  const candidateLines = countShown.map(renderMemoryTocLine);
+
+  let charBudgetInfo: { rest: number; shown: number; total: number } | undefined;
+  renderListing(candidateLines, {
+    budget: MEMORY_TOC_CHAR_BUDGET,
+    omitted: (info) => {
+      charBudgetInfo = info;
+      return ''; // 文言はここでは作らせない。内訳だけを受け取って捨てる。
+    },
+  });
+  const charCut = charBudgetInfo !== undefined;
+  const shownLines =
+    charBudgetInfo === undefined ? candidateLines : candidateLines.slice(0, charBudgetInfo.shown);
+  const omitted = flat.length - shownLines.length;
+
   const lines = [
     '<!-- memory: index -->',
     '## 記憶の目次（fact。本文は memory_read で開く。階層はインデントで表す）',
-    ...shown.map(renderMemoryTocLine),
+    ...shownLines,
   ];
   if (omitted > 0) {
     lines.push(
-      tocEntriesCoverWholeMemory(entries, elsewhere)
-        ? `…ほか ${omitted} 件は目次から省略（目次の対象は全 ${flat.length} 件）。`
-        : `…ほか ${omitted} 件は目次から省略（この目次に並べたのは全 ${flat.length} 件。` +
-            '記憶の全体ではなく、今回載せた分だけである）。',
+      renderMemoryTocOmission({
+        omitted,
+        total: flat.length,
+        wholeMemory: tocEntriesCoverWholeMemory(entries, elsewhere),
+        countCut,
+        charCut,
+      }),
     );
   }
   return lines.join('\n');

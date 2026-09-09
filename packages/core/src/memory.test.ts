@@ -8,7 +8,9 @@ import {
   describeMemoryTidyTargets,
   MEMORY_PROMPT_OUTLINE_BUDGET,
   MEMORY_PROMPT_OMITTED_TAIL_BUDGET,
+  MEMORY_TOC_CHAR_BUDGET,
   MEMORY_TOC_ENTRY_LIMIT,
+  MEMORY_TOC_LINE_LIMIT,
   applyMemoryFrontmatterPatch,
   assertNeverMemoryCreatedAt,
   assertNeverMemoryDescriptionFreshness,
@@ -824,6 +826,212 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
       `…ほか 5 件は目次から省略（目次の対象は全 ${MEMORY_TOC_ENTRY_LIMIT + 5} 件）。`,
     );
     expect(rendered).not.toContain('今回載せた分だけである');
+  });
+
+  /**
+   * ⭐⭐⭐ 目次の蓋は件数（`MEMORY_TOC_ENTRY_LIMIT`）と文字数
+   * （`MEMORY_TOC_CHAR_BUDGET`）の2軸を持つ——依頼者の求めで、**どちらで
+   * 切ったかを断り書きが名乗る**。3状態（件数のみ／文字数のみ／両方）を
+   * それぞれ非自明な入力で作り分ける（`.claude/skills/mutation-testing/`
+   * 「歯は非自明な状況で当てる」と同じ理由——余裕のある入力では分岐に
+   * 入らない）。
+   *
+   * `tocEntriesCoverWholeMemory` の既存の区別（「目次の対象は全 N 件」／
+   * 「この目次に並べたのは全 N 件…」）は、この節ではどちらも記憶の全体を
+   * 渡しているので前者のまま——**切った理由の文言と独立に組み合わさる**
+   * ことは、この3つの it() が同じ scope 文言を共有しつつ cause 文言だけが
+   * 変わることで示される。
+   */
+  describe('目次の蓋: 件数のみ／文字数のみ／両方を、非自明な入力で作り分ける', () => {
+    it('件数のみで切れる（305件・短い要旨——文字数の予算にはまだ余裕がある）', () => {
+      const docs = Array.from({ length: MEMORY_TOC_ENTRY_LIMIT + 5 }, (_, i) =>
+        fact(`fact-${String(i).padStart(3, '0')}`, {
+          description: 'x'.repeat(10),
+          freshness: { kind: 'fresh' },
+        }),
+      );
+      const rendered = renderMemoryDocuments(docs);
+
+      // 前提: 本当に「件数のみ」で切れている（300件ぶんの短い要旨は
+      // 文字数の予算に収まる）。前提が壊れていたらこの it() は違う分岐を
+      // 測ってしまう。
+      expect(rendered.match(/^- fact-/gm)?.length).toBe(MEMORY_TOC_ENTRY_LIMIT);
+      expect(rendered).toContain(
+        `…ほか 5 件は目次から省略（目次の対象は全 ${MEMORY_TOC_ENTRY_LIMIT + 5} 件）。`,
+      );
+      expect(rendered).toContain(
+        `${MEMORY_TOC_ENTRY_LIMIT} 件の上限に当たって件数で切った（文字数の予算 ` +
+          `${MEMORY_TOC_CHAR_BUDGET.toLocaleString('en-US')} 文字にはまだ余裕がある）。`,
+      );
+      // 3状態を混ぜない: 他の2状態の言い回しを含まない。
+      expect(rendered).not.toContain('文字に当たって文字数で切った');
+      expect(rendered).not.toContain('の両方に当たって切った');
+      // 件数のみで切れているときは、実行できない助言（fact を減らせ、に類する
+      // 越権の助言）を出さない。
+      expect(rendered).not.toContain('memory_frontmatter_set で短くする');
+      // 存在そのものが見えなくなる、という非対称は3状態どれでも必ず出る。
+      expect(rendered).toContain(
+        'fact 文書が存在することを毎ターンの焼き込みの中で名乗る唯一の場所',
+      );
+      expect(rendered).toContain(
+        '省かれた 5 件は、この焼き込みの中では存在しないのと見分けが付かない。',
+      );
+    });
+
+    it('文字数のみで切れる（100件・要旨が1行の上限いっぱい——件数は300件の上限の下）', () => {
+      const docs = Array.from({ length: 100 }, (_, i) =>
+        fact(`fact-${String(i).padStart(3, '0')}`, {
+          description: 'あ'.repeat(MEMORY_TOC_LINE_LIMIT),
+          freshness: { kind: 'fresh' },
+        }),
+      );
+      const rendered = renderMemoryDocuments(docs);
+
+      // 前提: 本当に「文字数のみ」で切れている（件数は100件で300件の上限の
+      // 遥か下だが、要旨が長いので束ねた総量が予算を超える）。
+      const shownCount = rendered.match(/^- fact-/gm)?.length ?? 0;
+      expect(shownCount).toBeGreaterThan(0);
+      expect(shownCount).toBeLessThan(100);
+      expect(rendered).toContain('…ほか');
+      expect(rendered).toContain('目次から省略（目次の対象は全 100 件）。');
+      expect(rendered).toContain(
+        `文字数の予算 ${MEMORY_TOC_CHAR_BUDGET.toLocaleString('en-US')} 文字に当たって文字数で切った` +
+          `（件数は ${MEMORY_TOC_ENTRY_LIMIT} 件の上限の下——要旨が長い文書が多い）。`,
+      );
+      expect(rendered).not.toContain('件の上限に当たって件数で切った');
+      expect(rendered).not.toContain('の両方に当たって切った');
+      // 文字数で切れているときは、実行できる直し方（要旨を短くする）を出す。
+      expect(rendered).toContain(
+        '要旨（description）が長い文書は memory_frontmatter_set で短くすると、同じ件数でもここに多く載る。',
+      );
+      expect(rendered).toContain(
+        'fact 文書が存在することを毎ターンの焼き込みの中で名乗る唯一の場所',
+      );
+    });
+
+    it('両方に当たる（320件・要旨が1行の上限いっぱい——件数の上限を超え、なお300件ぶんが文字数の予算も超える）', () => {
+      const docs = Array.from({ length: MEMORY_TOC_ENTRY_LIMIT + 20 }, (_, i) =>
+        fact(`fact-${String(i).padStart(3, '0')}`, {
+          description: 'あ'.repeat(MEMORY_TOC_LINE_LIMIT),
+          freshness: { kind: 'fresh' },
+        }),
+      );
+      const rendered = renderMemoryDocuments(docs);
+
+      // 前提: 本当に「両方」に当たっている——件数の上限（300）を超えており、
+      // かつ件数で切った後の300件ぶんの要旨だけでも文字数の予算を超えるので、
+      // 実際に載る件数は300件よりさらに少ない。
+      const shownCount = rendered.match(/^- fact-/gm)?.length ?? 0;
+      expect(shownCount).toBeGreaterThan(0);
+      expect(shownCount).toBeLessThan(MEMORY_TOC_ENTRY_LIMIT);
+      expect(rendered).toContain(
+        `目次から省略（目次の対象は全 ${MEMORY_TOC_ENTRY_LIMIT + 20} 件）。`,
+      );
+      expect(rendered).toContain(
+        `件数（${MEMORY_TOC_ENTRY_LIMIT} 件の上限）と文字数（予算 ` +
+          `${MEMORY_TOC_CHAR_BUDGET.toLocaleString('en-US')} 文字）の両方に当たって切った。`,
+      );
+      expect(rendered).not.toContain('件の上限に当たって件数で切った');
+      expect(rendered).not.toContain('文字に当たって文字数で切った');
+      expect(rendered).toContain(
+        'fact 文書が存在することを毎ターンの焼き込みの中で名乗る唯一の場所',
+      );
+    });
+
+    /**
+     * ⭐⭐⭐⭐ 2つの蓋は「件数で切ってから、その残りに文字数の蓋を掛ける」
+     * 順でなければならない——逆（束ねた全体に先に文字数の蓋を掛けてから
+     * 件数で切る）だと、**表示される件数は変わらないのに、切った理由の
+     * 名乗りだけが誤る**（依頼者の求め。2つの蓋が独立に効いているかを、
+     * 順序を意識しない入力では測れない——上の3つの it() はどれも「先頭
+     * 300件だけで文字数の判定が決まる」形なので、この非自明な境界を通らない）。
+     *
+     * 入力: 先頭300件は要旨なし（束ねて 8,849字相当、予算に対して大きな
+     * 余裕を残す）。末尾20件は要旨が1行の上限いっぱい（長い）。**320件を
+     * 束ねた総量は予算を超えるが、件数で切った後の先頭300件だけなら予算に
+     * 大きく収まる。** ⟹ 正しい実装は「件数のみ」を名乗る（末尾20件は
+     * 件数の上限だけで丸ごと落ちるので、文字数の判定にすら入らない）。
+     * もし文字数の蓋を束ねた全体（320件）に対して先に評価する実装だと、
+     * 末尾の長い行の一部が「予算を圧迫した」と誤って判定し、**表示件数は
+     * 300件のまま変わらないのに**「両方」を誤って名乗る。
+     */
+    it('⭐ 順序が結果を変える境界（先頭300件は予算に大きな余裕、320件束ねると予算超過——正しくは「件数のみ」）', () => {
+      const shortDocs = Array.from({ length: MEMORY_TOC_ENTRY_LIMIT }, (_, i) =>
+        fact(`fact-${String(i).padStart(3, '0')}`, { freshness: { kind: 'absent' } }),
+      );
+      const longDocs = Array.from({ length: 20 }, (_, i) =>
+        fact(`zzz-${String(i).padStart(3, '0')}`, {
+          description: 'あ'.repeat(MEMORY_TOC_LINE_LIMIT),
+          freshness: { kind: 'fresh' },
+        }),
+      );
+      const rendered = renderMemoryDocuments([...shortDocs, ...longDocs]);
+
+      // 前提: 表示件数はちょうど300件（先頭の要旨なし文書だけ）で、末尾の
+      // 長い20件は1件も表示に混ざらない——文字数の判定が「先頭300件だけ」で
+      // 決まっていることの直接の確認。
+      const shownCount = rendered.match(/^- (fact|zzz)-/gm)?.length ?? 0;
+      expect(shownCount).toBe(MEMORY_TOC_ENTRY_LIMIT);
+      expect(rendered).not.toMatch(/^- zzz-/m);
+
+      expect(rendered).toContain(
+        `${MEMORY_TOC_ENTRY_LIMIT} 件の上限に当たって件数で切った（文字数の予算 ` +
+          `${MEMORY_TOC_CHAR_BUDGET.toLocaleString('en-US')} 文字にはまだ余裕がある）。`,
+      );
+      expect(rendered).not.toContain('の両方に当たって切った');
+      expect(rendered).not.toContain('文字に当たって文字数で切った');
+    });
+  });
+
+  /**
+   * ⭐⭐⭐ 穴の実在（蓋が無ければ束ねた総量は
+   * `MEMORY_TOC_ENTRY_LIMIT × MEMORY_TOC_LINE_LIMIT` を超えていた）と、
+   * 修理の実在（いまは `MEMORY_TOC_CHAR_BUDGET` の桁に収まる）を1本で固定する。
+   *
+   * **`60_000` を直書きしない。** `MEMORY_TOC_ENTRY_LIMIT * MEMORY_TOC_LINE_LIMIT`
+   * から出す（依頼者の求め。既存の歯の作法——値を書き写さず参照する）。
+   *
+   * **候補行1本ぶんの長さは、手で書式を真似ずに実測する。** 同じ長さの要旨を
+   * 持つ2件・1件のレンダリング結果の差分から「1行＋区切りの改行」の限界費用
+   * を取り、299件ぶん外挿する——`renderMemoryTocLine` の内部の書式
+   * （インデント・鮮度の印・区切り文字）を書き写すと、書式が変わったときに
+   * ここだけが古くなる（テストの構造が実装の複製にならないようにする）。
+   */
+  it('⭐⭐⭐ 穴の実在（蓋なしなら束ねた総量は60,000字超）と修理の実在（いまは予算の桁に収まる）', () => {
+    const desc = 'あ'.repeat(MEMORY_TOC_LINE_LIMIT);
+    const one = renderMemoryDocuments([
+      fact('fact-000', { description: desc, freshness: { kind: 'fresh' } }),
+    ]);
+    const two = renderMemoryDocuments([
+      fact('fact-000', { description: desc, freshness: { kind: 'fresh' } }),
+      fact('fact-001', { description: desc, freshness: { kind: 'fresh' } }),
+    ]);
+    // 前提: この2件はどちらの蓋にも掛かっていない（2件だけなので省略が
+    // 出ない）——外挿の材料が「蓋が効く前」の値であることを確かめる。
+    expect(one).not.toContain('省略');
+    expect(two).not.toContain('省略');
+
+    const marginal = two.length - one.length; // 1行 + 区切りの改行、ぶんの限界費用
+    const extrapolatedCandidateTotal = one.length + (MEMORY_TOC_ENTRY_LIMIT - 1) * marginal;
+
+    // 穴の実在: 蓋が無ければ、300件ぶんの候補行はこの下限を超えて伸びる
+    // （実際の外挿値はこれよりさらに大きい——各行は要旨だけでなく slug・
+    // title・インデントも運ぶため）。
+    const preCapFloor = MEMORY_TOC_ENTRY_LIMIT * MEMORY_TOC_LINE_LIMIT;
+    expect(extrapolatedCandidateTotal).toBeGreaterThan(preCapFloor);
+
+    // 修理の実在: 同じ入力を実際に300件通しても、出力は予算の桁に収まる
+    // （断り書きぶんの余裕は持たせるが、外挿した候補総量とは桁が違う）。
+    const docs = Array.from({ length: MEMORY_TOC_ENTRY_LIMIT }, (_, i) =>
+      fact(`fact-${String(i).padStart(3, '0')}`, {
+        description: desc,
+        freshness: { kind: 'fresh' },
+      }),
+    );
+    const rendered = renderMemoryDocuments(docs);
+    expect(rendered).toContain('省略');
+    expect(rendered.length).toBeLessThan(MEMORY_TOC_CHAR_BUDGET + 1_000);
+    expect(rendered.length).toBeLessThan(extrapolatedCandidateTotal / 2);
   });
 
   it('切らないときは、切った件数の注記が出ない（切る/切らないは別の it() で測る）', () => {
