@@ -12,7 +12,12 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { createRunnerHost, type RunnerHost, SUBAGENT_WAKEUP_LIMIT } from './runner.js';
+import {
+  createRunnerHost,
+  type RunnerHost,
+  SUBAGENT_WAKEUP_LIMIT_PER_AGENT,
+  SUBAGENT_WAKEUP_LIMIT_PER_TASK,
+} from './runner.js';
 import { runnerEventSchema, type RunnerEvent } from './runner-protocol.js';
 
 /**
@@ -36,9 +41,8 @@ import { runnerEventSchema, type RunnerEvent } from './runner-protocol.js';
  * （挙動を変えない。`decision` も `additionalContext` も返さない）」を
  * 固定していた（PR #594。観測専用だった時期）。この PR はその固定を反転
  * させた** —— 当人が自分で起こした背景処理が残っているとき（`mine.length
- * > 0`）は、起こし直しの上限（`SUBAGENT_WAKEUP_LIMIT`）に達するまで
- * `hookSpecificOutput.additionalContext` を返し、作業者をその場で継続
- * させる。
+ * > 0`）は、起こし直しの上限に達するまで `hookSpecificOutput.additionalContext`
+ * を返し、作業者をその場で継続させる。
  *
  * **なぜ必要になったか。** #570 のクローズコメントに逐語で「この Issue が
  * 閉じたのは『ターンが閉じた瞬間の値が器から使えるようになったか』で
@@ -50,6 +54,21 @@ import { runnerEventSchema, type RunnerEvent } from './runner-protocol.js';
  * いない —— それらは今もそのまま `{ continue: true }` ちょうどを固定して
  * おり、**起こし直しの対象を広げていないこと**を検算する（下の各テストの
  * doc に経緯を追記した）。
+ *
+ * ## ⚠️ さらに反転させた事実（この PR。#570 の追跡の続き）
+ *
+ * **起こし直しの予算の単位が `agent_id` 単体から「作業者 × 背景処理」の
+ * 組へ変わった。** 以前は `SUBAGENT_WAKEUP_LIMIT`（作業者ぶん通算2回）
+ * だけで、複数の背景処理を順に起こす作業者は最初の1本にしか起こし直しを
+ * 受けられなかった（依頼者の日誌、2026-09-08 — 背景処理を4本
+ * A→B→D→C の順に起こした作業者のうち、起こし直しを受けたのは A だけ
+ * だった）。いまは `SUBAGENT_WAKEUP_LIMIT_PER_TASK`（背景処理1本あたり）
+ * と `SUBAGENT_WAKEUP_LIMIT_PER_AGENT`（作業者の通算。単位を背景処理にした
+ * ことで開く2つの穴の保険——詳細は `runner.ts` の同名の doc）の2段になった。
+ * `SUBAGENT_WAKEUP_LIMIT` という名前そのものは消してある——意味が変わった
+ * のに名前を残すと嘘になるためである。**下の「当人の背景処理が残るたびに
+ * note が出て起こし直す」「起こし直しが上限に達したら」の各テストの doc に
+ * この PR での変更点を追記した。**
  *
  * `agent-session-options.test.ts` の `fakeRunnerSdk`（`host.start` が同期に
  * `queryFn` を呼ぶことを利用して `options` を捕まえる形）と同じ足場を使う。
@@ -251,6 +270,11 @@ describe('SubagentStop の観測（#357 / #570）', () => {
    * なっていないか**はファイル冒頭の doc を見よ。`note` 側の主張（件数・
    * type/status/command・発火条件の断り）は反転させていない——起こし直しは
    * `note` を置き換えるのではなく足す側の変更である。
+   *
+   * ⚠️ **この PR で文言の形が変わった（`SUBAGENT_WAKEUP_LIMIT_PER_TASK` /
+   * `SUBAGENT_WAKEUP_LIMIT_PER_AGENT` の doc）。** 通算（この作業者の
+   * 通算 n回目 / 通し上限）と、1本あたり（この背景処理では n回目 / 1本
+   * あたりの上限）の**両方**を文言から読めることを、ここで確かめる。
    */
   it('当人が自分で起こした背景処理が残っていれば起こし直し、note にも type と status と command が載る', async () => {
     const s = setup();
@@ -286,7 +310,16 @@ describe('SubagentStop の観測（#357 / #570）', () => {
     expect(additionalContext).toContain('親のセッション');
     expect(additionalContext).toContain('自動では再開しない');
     expect(additionalContext).toContain('背景処理を残したまま終える');
-    expect(additionalContext).toContain(`1回目（上限 ${SUBAGENT_WAKEUP_LIMIT}）`);
+    // **通算（per-agent）の文言。** 単位が「作業者 × 背景処理」へ変わった
+    // ので、通算の1回目であることを名乗る形も変わった。
+    expect(additionalContext).toContain(
+      `これはこの作業者の通算 1回目（通し上限 ${SUBAGENT_WAKEUP_LIMIT_PER_AGENT}）`,
+    );
+    // **1本あたり（per-task）の文言も同じ additionalContext に載る**
+    // （`taskLines` を additionalContext にも足しているため）。
+    expect(additionalContext).toContain(
+      `この背景処理では 1回目 / 1本あたりの上限 ${SUBAGENT_WAKEUP_LIMIT_PER_TASK}`,
+    );
     // **短い本文は切られない。** 「上限以下なら早期 return する」側の歯
     // （変異試験 #570 で見つかった穴 — 早期 return を壊しても、この否定の
     // 断言が無いと `slice` がそのまま全文を返すぶん気づけなかった）。
@@ -303,7 +336,10 @@ describe('SubagentStop の観測（#357 / #570）', () => {
     expect(text).toContain('在庫=2件');
     // **起こし直したことが note の字面からも分かる。**
     expect(text).toContain('起こし直した');
-    expect(text).toContain(`1回目 / 上限 ${SUBAGENT_WAKEUP_LIMIT}`);
+    expect(text).toContain(`この作業者の通算 1回目 / 通し上限 ${SUBAGENT_WAKEUP_LIMIT_PER_AGENT}`);
+    expect(text).toContain(
+      `この背景処理では 1回目 / 1本あたりの上限 ${SUBAGENT_WAKEUP_LIMIT_PER_TASK}`,
+    );
     // 発火条件の断りを本文にも書く（doc だけに書くと、片方しか読まない人が誤る）。
     expect(text).toContain('空転が無かった');
     // escalate は立たない（上限に達していないので、あくまで起こし直し）。
@@ -464,19 +500,37 @@ describe('SubagentStop の観測（#357 / #570）', () => {
    * **この1本が無いと、条件1（当人の分が在れば毎回）が固定されない。**
    * 「最初の1回だけ出す」だけの実装でも上は緑になりうるので、ここで撃ち分ける。
    *
-   * ⚠️ **反転させた歯（この PR）。** `SUBAGENT_WAKEUP_LIMIT` 回まではどちらも
-   * 起こし直しの対象なので、この歯の回数（上限ちょうど）では両方とも
-   * `additionalContext` を返す側になる。上限を超えて起こし直さなくなる
-   * ケースは別の歯（下の「起こし直しが上限に達したら」describe）が持つ。
+   * ⚠️ **反転させた歯（PR #594 →この PR で二重に反転している）。** 元々は
+   * ここで「戻り値は必ず `{ continue: true }`」を固定していた（1回目の
+   * 反転で「`SUBAGENT_WAKEUP_LIMIT` 回まではどちらも起こし直しの対象」に
+   * 変わった——このときは毎回**別の**背景処理 id（`bg-1` / `bg-2` / …）を
+   * 使っていて、それでも通算2回で尽きる形を固定していた。**それ自体が
+   * 現行の欠陥を仕様として固定していた**（依頼者の日誌 2026-09-08 —— 1体の
+   * 作業者が背景処理を4本 A→B→D→C の順に起こしたが、起こし直しを受けた
+   * のは A だけで、B・D・C は20分にわたって一度も待たれなかった。予算が
+   * `agent_id` 単位の通算2回で、背景処理ごとには配られていなかったため）。
+   *
+   * **この PR での反転:** 期待値を「**通算は増えるが、各背景処理では
+   * 毎回1回目**」へ反転する。ループは `SUBAGENT_WAKEUP_LIMIT_PER_TASK`
+   * ではなく `SUBAGENT_WAKEUP_LIMIT_PER_AGENT` 回まわす——毎回**別の**
+   * 背景処理を使うので、per-task の上限には一度も触れず、通し上限
+   * ちょうどまでは毎回「起こし直される」側になる。**なぜ保証が弱くなって
+   * いないか**: 「当人の分が残っていれば毎回起こし直す」という主張
+   * そのものは維持したまま、単位を「背景処理ごとに独立している」ことを
+   * 明示する側へ強めている——以前の版は「別の背景処理でも回数が共有される」
+   * ことを検算していなかった。
    */
-  it('当人の背景処理が残るたびに note が出て起こし直す（最初の1回だけ、ではない）', async () => {
+  it('当人の背景処理が残るたびに note が出て起こし直す（最初の1回だけ、ではない。通算は増えるが各背景処理では毎回1回目）', async () => {
     const s = setup();
     await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
     const started = s.started[0];
     if (started === undefined) throw new Error('セッションが開いていない');
 
-    const attempts = Array.from({ length: SUBAGENT_WAKEUP_LIMIT }, (_unused, i) => i + 1);
+    const attempts = Array.from({ length: SUBAGENT_WAKEUP_LIMIT_PER_AGENT }, (_unused, i) => i + 1);
     for (const n of attempts) {
+      // **毎回別の背景処理**（`bg-${n}`）。これが本題——別々の背景処理には
+      // 別々の per-task 予算が配られるので、`n` が増えても per-task の
+      // カウントは常に「1回目」のままである。
       await registerBackgroundTask(started.options, `bg-${n}`, 'agent-1');
       const result = await fireSubagentStop(started.options, {
         ...STOP_BASE,
@@ -492,56 +546,188 @@ describe('SubagentStop の観測（#357 / #570）', () => {
       });
       const additionalContext = (result as { hookSpecificOutput: { additionalContext: string } })
         .hookSpecificOutput.additionalContext;
-      expect(additionalContext).toContain(`${String(n)}回目（上限 ${SUBAGENT_WAKEUP_LIMIT}）`);
+      // **通算（per-agent）は n 回目まで増える。**
+      expect(additionalContext).toContain(`これはこの作業者の通算 ${String(n)}回目`);
+      // **per-task は毎回「1回目」——別の背景処理だからである。**
+      expect(additionalContext).toContain('この背景処理では 1回目');
     }
 
     const notes = noteEvents(s.events);
     expect(notes).toHaveLength(attempts.length);
     expect(notes[0]?.text).toContain('type=monitor');
-    expect(notes[0]?.text).toContain(`1回目 / 上限 ${SUBAGENT_WAKEUP_LIMIT}`);
-    expect(notes.at(-1)?.text).toContain(`CI の見張り ${String(attempts.length)}`);
-    expect(notes.at(-1)?.text).toContain(
-      `${String(attempts.length)}回目 / 上限 ${SUBAGENT_WAKEUP_LIMIT}`,
+    expect(notes[0]?.text).toContain('この背景処理では 1回目');
+    expect(notes[0]?.text).toContain(
+      `この作業者の通算 1回目 / 通し上限 ${SUBAGENT_WAKEUP_LIMIT_PER_AGENT}`,
     );
-    // 上限ちょうどまではどの回も escalate しない。
+    expect(notes.at(-1)?.text).toContain(`CI の見張り ${String(attempts.length)}`);
+    // **最後の回でも per-task は「1回目」のまま**（別の背景処理なので）。
+    expect(notes.at(-1)?.text).toContain('この背景処理では 1回目');
+    expect(notes.at(-1)?.text).toContain(
+      `この作業者の通算 ${String(attempts.length)}回目 / 通し上限 ${SUBAGENT_WAKEUP_LIMIT_PER_AGENT}`,
+    );
+    expect(notes.at(-1)?.stall?.wakeupCount).toBe(attempts.length);
+    // 通し上限ちょうどまではどの回も escalate しない。
     for (const note of notes) expect(note.escalate).toBeUndefined();
   });
 
   /**
-   * **上限（`SUBAGENT_WAKEUP_LIMIT`）に達したら起こし直しをやめる。**
-   * `additionalContext` を返さず、`escalate: true` の `note` を出す
-   * （`manager.ts` の `case 'note'` がこれを見て受信箱へも1本上げる）。
+   * ⭐ **背景処理が違えば予算は別に配られる（この PR の本体）。**
+   * 直上の歯が「毎回別の背景処理」を通算の側から確かめるのに対し、
+   * こちらは「1本の背景処理を使い切っても、別の背景処理は影響を受けない」
+   * ことを、`escalate` の手前まで踏み込んで確かめる。
+   */
+  it('背景処理 A を1本あたりの上限まで使い切っても、新しい背景処理 B はまた起こし直される（B では「1回目」）', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    // 背景処理 A（`bg-a`）を1本あたりの上限まで使い切る。
+    await registerBackgroundTask(started.options, 'bg-a', 'agent-1');
+    for (let n = 1; n <= SUBAGENT_WAKEUP_LIMIT_PER_TASK; n += 1) {
+      const result = await fireSubagentStop(started.options, {
+        ...STOP_BASE,
+        agent_id: 'agent-1',
+        background_tasks: [
+          selfEntry('agent-1'),
+          { id: 'bg-a', type: 'monitor', status: 'running' },
+        ],
+      });
+      expect(result).toHaveProperty('hookSpecificOutput');
+    }
+    // A はもう1本あたりの上限に達している（escalate になることを前提として
+    // 確かめる——ここが崩れていたら下の B の検算そのものが無意味になる）。
+    const aOver = await fireSubagentStop(started.options, {
+      ...STOP_BASE,
+      agent_id: 'agent-1',
+      background_tasks: [selfEntry('agent-1'), { id: 'bg-a', type: 'monitor', status: 'running' }],
+    });
+    expect(aOver).toEqual({ continue: true });
+    expect(noteEvents(s.events).at(-1)?.escalate).toBe(true);
+
+    // **新しい背景処理 B が残って畳もうとしたら、また起こし直される
+    // （B では「1回目」）** —— A を使い切ったことは B の予算に影響しない。
+    await registerBackgroundTask(started.options, 'bg-b', 'agent-1');
+    const bFirst = await fireSubagentStop(started.options, {
+      ...STOP_BASE,
+      agent_id: 'agent-1',
+      background_tasks: [selfEntry('agent-1'), { id: 'bg-b', type: 'monitor', status: 'running' }],
+    });
+    expect(bFirst).toHaveProperty('hookSpecificOutput');
+    const notes = noteEvents(s.events);
+    expect(notes.at(-1)?.escalate).toBeUndefined();
+    expect(notes.at(-1)?.text).toContain('この背景処理では 1回目');
+  });
+
+  /**
+   * ⭐ **変異試験で開いた穴を塞いだ歯（この PR）。**
+   *
+   * **1回の `SubagentStop` に残っている背景処理が複数あるとき、加算は
+   * 「残っている全件」に効く**（`runner.ts` の `#onSubagentStop` —— 逐語は
+   * `grep -Fn -- '「全件」（`underPerTask` だけではない）なのは' packages/core/src/runner.ts`）。
+   * その回に「待たされた」のは残っている背景処理の全部だからである。
+   *
+   * **この歯は、変異試験で「生存」が出たあとに足した。** 加算を
+   * `remainingIds` から `remainingIds.slice(0, 1)`（＝先頭1件だけ）へ変える
+   * 変異が、**この歯を足す前は全 5,028 件を素通りした**（生存の4分類の
+   * 2「歯が無い」）。**残っている背景処理が複数ある回を撃つ歯が1本も
+   * 無かった** —— 他の歯はどれも「残り1件」の形でしか発火させていない。
+   *
+   * **測り方**: 1回目に2件（`bg-x` / `bg-y`）を同時に残して起こし直させ、
+   * 2回目は**2件目の `bg-y` だけ**を残して撃つ。全件を数えていれば
+   * `bg-y` は既に1回使っているので「2回目」になる。**先頭1件しか数えて
+   * いなければ `bg-y` は0のままなので「1回目」になる。**
+   * ⚠️ **確かめるのは2件目でなければならない** —— 先頭の `bg-x` は
+   * どちらの実装でも数えられるので、`bg-x` で見るとこの歯は何も測らない。
+   */
+  it('1回に複数の背景処理が残っていたら、その全部の回数が増える（先頭1件だけではない）', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    await registerBackgroundTask(started.options, 'bg-x', 'agent-1');
+    await registerBackgroundTask(started.options, 'bg-y', 'agent-1');
+
+    // 1回目 —— 2件とも残したまま畳もうとした。
+    const first = await fireSubagentStop(started.options, {
+      ...STOP_BASE,
+      agent_id: 'agent-1',
+      background_tasks: [
+        selfEntry('agent-1'),
+        { id: 'bg-x', type: 'monitor', status: 'running' },
+        { id: 'bg-y', type: 'monitor', status: 'running' },
+      ],
+    });
+    expect(first).toHaveProperty('hookSpecificOutput');
+
+    // 2回目 —— **2件目の `bg-y` だけ**を残して撃つ。
+    const second = await fireSubagentStop(started.options, {
+      ...STOP_BASE,
+      agent_id: 'agent-1',
+      background_tasks: [selfEntry('agent-1'), { id: 'bg-y', type: 'monitor', status: 'running' }],
+    });
+    expect(second).toHaveProperty('hookSpecificOutput');
+    const context = (second as { hookSpecificOutput: { additionalContext: string } })
+      .hookSpecificOutput.additionalContext;
+    expect(context).toContain('この背景処理では 2回目');
+  });
+
+  /**
+   * **上限に達したら起こし直しをやめる。** `additionalContext` は返さず、
+   * `escalate: true` の `note` を出す（`manager.ts` の `case 'note'` が
+   * これを見て受信箱へも1本上げる）。
+   *
+   * ⚠️ **単位が「作業者 × 背景処理」になったので、上限は2段になった**
+   * （`SUBAGENT_WAKEUP_LIMIT_PER_TASK` / `SUBAGENT_WAKEUP_LIMIT_PER_AGENT`
+   * の doc）。下の3本（既存の反転2本＋新規1本）は per-task 側を、
+   * 「通し上限（穴A）」「優先順位」の2本は per-agent 側を確かめる。
    */
   describe('起こし直しが上限に達したら', () => {
-    it('同じ agent_id で上限まで起こし直したあと、次の回は起こし直さず escalate な note が出る', async () => {
+    /**
+     * ⚠️ **反転させた歯（この PR）。** 以前は毎回**別の**背景処理 id
+     * （`bg-${n}`）を使っていて、それでも `agent_id` 単位の通算だけで
+     * 上限に到達する形を固定していた——**これが現行の欠陥そのものだった**
+     * （ファイル冒頭の doc の #570 続報。単位が `agent_id` 単体だと、
+     * 別の背景処理を起こしても予算が共有されてしまう）。
+     *
+     * **この PR での反転:** **同じ背景処理 id を使う形へ変える**（そうしない
+     * と per-task の上限に到達しない——`agent_id` 単体が単位だった以前とは
+     * 違い、いまは背景処理ごとに別の予算が要るので、上限へ到達させるには
+     * 同じ背景処理を繰り返し残す必要がある）。**これは緩めではなく「対象を
+     * スコープして特定する」側である**——以前は「`agent_id` の通算」を見て
+     * いたが、いまは「特定の1本の背景処理を使い切る」という、より狭く
+     * 具体的な状況を再現している。主張（上限に達したら起こし直さず
+     * escalate する）は変えていない。
+     */
+    it('同じ背景処理で1本あたりの上限まで起こし直したあと、次の回は起こし直さず escalate な note が出る（per-task）', async () => {
       const s = setup();
       await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
       const started = s.started[0];
       if (started === undefined) throw new Error('セッションが開いていない');
 
-      // 上限ちょうどまでは起こし直される（直上の歯と同じ回数）。
-      for (let n = 1; n <= SUBAGENT_WAKEUP_LIMIT; n += 1) {
-        await registerBackgroundTask(started.options, `bg-${n}`, 'agent-1');
+      // **同じ背景処理（bg-1）** を1本あたりの上限ちょうどまで残し続ける。
+      await registerBackgroundTask(started.options, 'bg-1', 'agent-1');
+      for (let n = 1; n <= SUBAGENT_WAKEUP_LIMIT_PER_TASK; n += 1) {
         const result = await fireSubagentStop(started.options, {
           ...STOP_BASE,
           agent_id: 'agent-1',
           background_tasks: [
             selfEntry('agent-1'),
-            { id: `bg-${n}`, type: 'monitor', status: 'running' },
+            { id: 'bg-1', type: 'monitor', status: 'running' },
           ],
         });
         expect(result).toHaveProperty('hookSpecificOutput');
       }
 
-      // 上限+1回目 —— 起こし直さない。
-      const overLimitId = `bg-${String(SUBAGENT_WAKEUP_LIMIT + 1)}`;
-      await registerBackgroundTask(started.options, overLimitId, 'agent-1');
+      // 上限+1回目 —— 同じ背景処理はもう1本あたりの上限に達しているので、
+      // 通し上限（M=8）にはまだ余裕があっても起こし直さない。
       const overLimitResult = await fireSubagentStop(started.options, {
         ...STOP_BASE,
         agent_id: 'agent-1',
         background_tasks: [
           selfEntry('agent-1'),
-          { id: overLimitId, type: 'monitor', status: 'running' },
+          { id: 'bg-1', type: 'monitor', status: 'running' },
         ],
       });
 
@@ -549,63 +735,78 @@ describe('SubagentStop の観測（#357 / #570）', () => {
       expect(overLimitResult).toEqual({ continue: true });
 
       const notes = noteEvents(s.events);
-      expect(notes).toHaveLength(SUBAGENT_WAKEUP_LIMIT + 1);
+      expect(notes).toHaveLength(SUBAGENT_WAKEUP_LIMIT_PER_TASK + 1);
       const escalated = notes.at(-1);
       expect(escalated?.escalate).toBe(true);
       expect(escalated?.text).toContain('起こし直さなかった');
-      expect(escalated?.text).toContain(`上限（${SUBAGENT_WAKEUP_LIMIT}回）`);
+      // **per-task の文言を名乗ること。** 通し上限（per-agent）にはまだ
+      // 達していない（total=2<8）ので、理由は「残っている背景処理はどれも
+      // 1本あたりの上限に達した」側になる。
+      expect(escalated?.text).toContain(
+        `残っている背景処理はどれも1本あたりの上限（${SUBAGENT_WAKEUP_LIMIT_PER_TASK}回）に達したため`,
+      );
+      expect(escalated?.text).not.toContain('この作業者の通し上限');
       // それより前の回は escalate していない。
       for (const note of notes.slice(0, -1)) expect(note.escalate).toBeUndefined();
 
       /**
        * **上限到達分岐の `stall`。** `outcome: 'limit_reached'` で、
-       * `wakeupCount` は「起こし直した回数」ではなく「既に起こし直し
-       * 済みの回数」（`SUBAGENT_WAKEUP_LIMIT` と同じ値）が載ることを見る
-       * —— 起こし直していないのでこの回のぶんは足されない。
+       * `wakeupCount` はスキーマの doc（「この `agent_id` を起こし直した
+       * 回数（今回を含む）」）どおり、この作業者の**通算**（今回は同じ
+       * 背景処理だけを使ったので `SUBAGENT_WAKEUP_LIMIT_PER_TASK` と
+       * 同じ値になる）——起こし直していないのでこの回のぶんは足されない。
        */
       expect(escalated?.stall).toEqual({
         agentId: 'agent-1',
         agentType: 'worker',
         ownedTaskCount: 1,
         sessionTaskCount: 2,
-        wakeupCount: SUBAGENT_WAKEUP_LIMIT,
+        wakeupCount: SUBAGENT_WAKEUP_LIMIT_PER_TASK,
         outcome: 'limit_reached',
       });
       // 上限未満の回（起こし直した側）は `outcome: 'woken'` のまま。
       for (const note of notes.slice(0, -1)) expect(note.stall?.outcome).toBe('woken');
     });
 
+    /**
+     * ⚠️ **反転させた歯（この PR）。** 以前は `agent-1` 側も毎回別の
+     * 背景処理 id（`a1-bg-${n}`）を使っていた。**この PR での反転:** 同じ
+     * 背景処理 id を使う形へ変える（同上の理由——per-task の上限に到達
+     * させるため）。**主張（上限は `agent_id` ごとに独立している）は
+     * 変えていない。**
+     */
     it('agent_id が違えば上限は独立している', async () => {
       const s = setup();
       await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
       const started = s.started[0];
       if (started === undefined) throw new Error('セッションが開いていない');
 
-      // `agent-1` を上限まで使い切る。
-      for (let n = 1; n <= SUBAGENT_WAKEUP_LIMIT; n += 1) {
-        await registerBackgroundTask(started.options, `a1-bg-${n}`, 'agent-1');
+      // `agent-1` は同じ背景処理を使い切る（per-task の上限に到達させる）。
+      await registerBackgroundTask(started.options, 'a1-bg-1', 'agent-1');
+      for (let n = 1; n <= SUBAGENT_WAKEUP_LIMIT_PER_TASK; n += 1) {
         await fireSubagentStop(started.options, {
           ...STOP_BASE,
           agent_id: 'agent-1',
           background_tasks: [
             selfEntry('agent-1'),
-            { id: `a1-bg-${n}`, type: 'monitor', status: 'running' },
+            { id: 'a1-bg-1', type: 'monitor', status: 'running' },
           ],
         });
       }
-      // `agent-1` はもう上限に達している（escalate になる）ことを前提として確かめる。
-      await registerBackgroundTask(started.options, 'a1-bg-over', 'agent-1');
+      // `agent-1` はもう a1-bg-1 について上限に達している（escalate になる）
+      // ことを前提として確かめる。
       const agent1Over = await fireSubagentStop(started.options, {
         ...STOP_BASE,
         agent_id: 'agent-1',
         background_tasks: [
           selfEntry('agent-1'),
-          { id: 'a1-bg-over', type: 'monitor', status: 'running' },
+          { id: 'a1-bg-1', type: 'monitor', status: 'running' },
         ],
       });
       expect(agent1Over).toEqual({ continue: true });
 
-      // 別の `agent-2` は、これが初回なので起こし直される。
+      // 別の `agent-2` は、これが初回なので起こし直される——`agent-1` の
+      // per-task 上限到達とは独立している。
       await registerBackgroundTask(started.options, 'a2-bg-1', 'agent-2');
       const agent2First = await fireSubagentStop(started.options, {
         ...STOP_BASE,
@@ -619,14 +820,20 @@ describe('SubagentStop の観測（#357 / #570）', () => {
       const additionalContext = (
         agent2First as { hookSpecificOutput: { additionalContext: string } }
       ).hookSpecificOutput.additionalContext;
-      expect(additionalContext).toContain(`1回目（上限 ${SUBAGENT_WAKEUP_LIMIT}）`);
+      expect(additionalContext).toContain('この作業者の通算 1回目');
     });
 
     /**
+     * ⚠️ **反転させた歯（この PR）。** 以前は毎回別の背景処理 id を使って
+     * いた。**この PR での反転:** 同じ背景処理 id を使う形へ変える（同上の
+     * 理由）。**主張（ターン境界を挟んでも上限は再装填されない）は変えて
+     * いない。**
+     *
      * **ターン境界（`session_started`。#643 の形）を挟んでも上限は再装填
-     * されない。** `#subagentWakeups` は `runner.ts` の doc に書いたとおり
-     * リセットしない設計——ここで実際に `init` をもう一度流し、それでも
-     * 「起こし直しても進まなかった」が正しく積み上がることを見る。
+     * されない。** `#subagentWakeups` / `#subagentWakeupTotals` は
+     * `runner.ts` の doc に書いたとおりリセットしない設計——ここで実際に
+     * `init` をもう一度流し、それでも「起こし直しても進まなかった」が
+     * 正しく積み上がることを見る。
      */
     it('ターン（session_started）をまたいでも起こし直しの上限は再装填されない', async () => {
       const s = setup();
@@ -634,14 +841,14 @@ describe('SubagentStop の観測（#357 / #570）', () => {
       const started = s.started[0];
       if (started === undefined) throw new Error('セッションが開いていない');
 
-      for (let n = 1; n <= SUBAGENT_WAKEUP_LIMIT; n += 1) {
-        await registerBackgroundTask(started.options, `bg-${n}`, 'agent-1');
+      await registerBackgroundTask(started.options, 'bg-1', 'agent-1');
+      for (let n = 1; n <= SUBAGENT_WAKEUP_LIMIT_PER_TASK; n += 1) {
         const result = await fireSubagentStop(started.options, {
           ...STOP_BASE,
           agent_id: 'agent-1',
           background_tasks: [
             selfEntry('agent-1'),
-            { id: `bg-${n}`, type: 'monitor', status: 'running' },
+            { id: 'bg-1', type: 'monitor', status: 'running' },
           ],
         });
         expect(result).toHaveProperty('hookSpecificOutput');
@@ -649,21 +856,19 @@ describe('SubagentStop の観測（#357 / #570）', () => {
 
       // **同じセッションのまま、次のターンの頭が来る**（`sess-1` を明示的に
       // 再送。`runner.ts` の `case 'session_started'` は同じ `sessionId` なら
-      // `#liveBackgroundTasks` すら空へ戻さない——`#subagentWakeups` は
-      // そもそもどの分岐からも触られない）。
+      // `#liveBackgroundTasks` すら空へ戻さない——`#subagentWakeups` /
+      // `#subagentWakeupTotals` はそもそもどの分岐からも触られない）。
       started.restart('sess-1');
       // フックへの直接呼び出しとは別径路（メッセージストリーム）なので、
       // 処理が飲み込まれるだけの猶予を与える。
       await new Promise((resolve) => setTimeout(resolve, 0));
 
-      const overLimitId = `bg-${String(SUBAGENT_WAKEUP_LIMIT + 1)}`;
-      await registerBackgroundTask(started.options, overLimitId, 'agent-1');
       const overLimitResult = await fireSubagentStop(started.options, {
         ...STOP_BASE,
         agent_id: 'agent-1',
         background_tasks: [
           selfEntry('agent-1'),
-          { id: overLimitId, type: 'monitor', status: 'running' },
+          { id: 'bg-1', type: 'monitor', status: 'running' },
         ],
       });
 
@@ -674,67 +879,272 @@ describe('SubagentStop の観測（#357 / #570）', () => {
       const notes = noteEvents(s.events);
       expect(notes.at(-1)?.escalate).toBe(true);
     });
+
+    /**
+     * ⭐ **新規（この PR で足した歯）。通し上限（`SUBAGENT_WAKEUP_LIMIT_PER_AGENT`）
+     * の歯 —— 穴A の検算。** 同じ作業者が**毎回違う**背景処理 id で通し
+     * 上限ちょうどまで起こし直された後、M+1回目は起こし直さない。**この
+     * とき使った背景処理はどれも per-task の上限（2回）に達していない**
+     * （全部「1回目」で終わっている）ので、`escalate` の理由は必ず
+     * `'per-agent'` でなければならない——per-task の文言が出たらこの歯が
+     * 間違った理由を検算していることになる。
+     */
+    it('通し上限（per-agent）に達したら、毎回違う背景処理でも起こし直さない（穴A）', async () => {
+      const s = setup();
+      await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+      const started = s.started[0];
+      if (started === undefined) throw new Error('セッションが開いていない');
+
+      for (let n = 1; n <= SUBAGENT_WAKEUP_LIMIT_PER_AGENT; n += 1) {
+        await registerBackgroundTask(started.options, `bg-hole-a-${n}`, 'agent-1');
+        const result = await fireSubagentStop(started.options, {
+          ...STOP_BASE,
+          agent_id: 'agent-1',
+          background_tasks: [
+            selfEntry('agent-1'),
+            { id: `bg-hole-a-${n}`, type: 'monitor', status: 'running' },
+          ],
+        });
+        expect(result).toHaveProperty('hookSpecificOutput');
+      }
+
+      // M+1回目 —— さらに新しい（まだ一度も使っていない）背景処理でも、
+      // 通し上限に達しているので起こし直さない。
+      const overId = `bg-hole-a-${String(SUBAGENT_WAKEUP_LIMIT_PER_AGENT + 1)}`;
+      await registerBackgroundTask(started.options, overId, 'agent-1');
+      const overResult = await fireSubagentStop(started.options, {
+        ...STOP_BASE,
+        agent_id: 'agent-1',
+        background_tasks: [
+          selfEntry('agent-1'),
+          { id: overId, type: 'monitor', status: 'running' },
+        ],
+      });
+
+      expect(overResult).toEqual({ continue: true });
+      const notes = noteEvents(s.events);
+      const escalated = notes.at(-1);
+      expect(escalated?.escalate).toBe(true);
+      // **per-agent の文言を名乗ること。**
+      expect(escalated?.text).toContain(
+        `この作業者の通し上限（${SUBAGENT_WAKEUP_LIMIT_PER_AGENT}回）に達したため`,
+      );
+      expect(escalated?.text).not.toContain('残っている背景処理はどれも1本あたりの上限');
+      expect(escalated?.stall?.outcome).toBe('limit_reached');
+      expect(escalated?.stall?.wakeupCount).toBe(SUBAGENT_WAKEUP_LIMIT_PER_AGENT);
+    });
+
+    /**
+     * ⭐ **新規（この PR で足した歯）。優先順位の歯。** 通し上限（M）と
+     * 1本あたりの上限（N）が**同時に**成り立つときは、`'per-agent'` を
+     * 名乗る（`SUBAGENT_WAKEUP_LIMIT_PER_AGENT` の doc「優先順位」）——
+     * 通し上限のほうが重い歯なので。
+     */
+    it('通し上限（M）と1本あたりの上限（N）が同時に成り立つときは per-agent を名乗る（優先順位）', async () => {
+      const s = setup();
+      await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+      const started = s.started[0];
+      if (started === undefined) throw new Error('セッションが開いていない');
+
+      // まず別々の背景処理で通算を M - N まで積む（それぞれ per-task は
+      // 1回しか使わないので、この段階では per-task の上限に触れない）。
+      const warmups = SUBAGENT_WAKEUP_LIMIT_PER_AGENT - SUBAGENT_WAKEUP_LIMIT_PER_TASK;
+      for (let n = 1; n <= warmups; n += 1) {
+        await registerBackgroundTask(started.options, `bg-warmup-${n}`, 'agent-1');
+        await fireSubagentStop(started.options, {
+          ...STOP_BASE,
+          agent_id: 'agent-1',
+          background_tasks: [
+            selfEntry('agent-1'),
+            { id: `bg-warmup-${n}`, type: 'monitor', status: 'running' },
+          ],
+        });
+      }
+
+      // 同じ背景処理（bg-priority）を per-task の上限ちょうどまで使う。
+      // これで通算も同時に M へ到達する。
+      await registerBackgroundTask(started.options, 'bg-priority', 'agent-1');
+      for (let n = 1; n <= SUBAGENT_WAKEUP_LIMIT_PER_TASK; n += 1) {
+        const result = await fireSubagentStop(started.options, {
+          ...STOP_BASE,
+          agent_id: 'agent-1',
+          background_tasks: [
+            selfEntry('agent-1'),
+            { id: 'bg-priority', type: 'monitor', status: 'running' },
+          ],
+        });
+        expect(result).toHaveProperty('hookSpecificOutput');
+      }
+
+      // ここで通算は M、bg-priority の per-task も N ちょうど —— 両方が
+      // 同時に上限へ達している。
+      const overResult = await fireSubagentStop(started.options, {
+        ...STOP_BASE,
+        agent_id: 'agent-1',
+        background_tasks: [
+          selfEntry('agent-1'),
+          { id: 'bg-priority', type: 'monitor', status: 'running' },
+        ],
+      });
+      expect(overResult).toEqual({ continue: true });
+
+      const notes = noteEvents(s.events);
+      const escalated = notes.at(-1);
+      expect(escalated?.escalate).toBe(true);
+      // **両方成り立つので `'per-agent'` を名乗る。**
+      expect(escalated?.text).toContain(
+        `この作業者の通し上限（${SUBAGENT_WAKEUP_LIMIT_PER_AGENT}回）に達したため`,
+      );
+      expect(escalated?.text).not.toContain('残っている背景処理はどれも1本あたりの上限');
+    });
   });
 
   /**
-   * **`#subagentWakeups` の LRU 上限**（`runner.ts` の `SUBAGENT_WAKEUP_TRACKING_LIMIT`。
-   * `BACKGROUND_TASK_OWNER_LIMIT` と同じ形——超えたら「いちばん古いもの」から
-   * 捨てる）。**この定数は `export` していない**（`export` を求められているのは
-   * `SUBAGENT_WAKEUP_LIMIT` だけ）ので、ここでは値を直書きする。ずれたら
-   * この歯が壊れる形自体が、直書きしたことの検算になる。
+   * ⭐ **書き直した歯（この PR）。** 鍵が `agent_id` 単体から「作業者 ×
+   * 背景処理」の組へ変わったので、以前の形（501番目で追い出し、**別の**
+   * 新しい背景処理 id で revisit して「1回目」を見る）はもう何も検算
+   * しない——revisit に使う id が最初から存在しない新しい鍵である以上、
+   * 枝刈りが1件も効いていなくても「1回目」になる（キーを1回も見た
+   * ことが無いのだから当然である）。**この PR ではこの穴を塞ぎ、
+   * revisit にも同じ鍵（同じ `agent_id` + 同じ背景処理 id）を使うことで、
+   * FIFO と LRU を実際に見分けられる形へ書き直した。**
    *
-   * 観測できるのは中身ではなく振る舞いだけなので、「捨てられた `agent_id` は
-   * カウント0から再スタートする」ことで間接的に確かめる —— 501番目の
-   * 別の agent を登録して1番目を押し出し、その後で1番目を改めて呼ぶと、
-   * 「2回目」ではなく「1回目」に戻っていることを見る。
+   * **`#subagentWakeups` の枝刈りは FIFO であって LRU ではない**
+   * （`runner.ts` の `pruneOldestEntries` の doc。`SUBAGENT_WAKEUP_TRACKING_LIMIT`
+   * = 500。**この定数は `export` していない**——`export` を求められている
+   * のは `SUBAGENT_WAKEUP_LIMIT_PER_TASK` / `SUBAGENT_WAKEUP_LIMIT_PER_AGENT`
+   * だけ——なので、ここでは値を直書きする。ずれたらこの歯が壊れる形自体が、
+   * 直書きしたことの検算になる）。
+   *
+   * **手順（この順序が歯の本体）:**
+   * 1. `(agent-1, bg-1)` を1回起こし直す（この鍵が Map の先頭に入る）
+   * 2. 別の499件（別々の agent。背景処理 id は使い回す——下の実装コメント
+   *    参照）を1回ずつ起こし直す（Map は500件でまだ枝刈りされない）
+   * 3. `(agent-1, bg-1)` をもう1回（count=2。`Map.set()` は既存鍵の順を
+   *    変えないので、FIFO なら位置は先頭のまま／LRU なら末尾へ動く）
+   * 4. さらに1件（501件目）入れて枝刈りを起こす
+   * 5. **併せて、2番目に入れた鍵**（この歯では `agent-fifo-2` /
+   *    `bg-shared`）**が落ちていないことを見る**（LRU ならそちらが落ちる
+   *    側なので、両側から挟める）。**⚠️ 実装ではこの確認を次の6より先に
+   *    行う**——6 は削られた鍵を新規挿入として復活させるので、それ自体が
+   *    もう一段の枝刈りを引き起こし、そのとき最も古い鍵（＝まだ確認前なら
+   *    ちょうどこの鍵）を道連れにしてしまう。先に読んでおけば、後で
+   *    壊れても確認そのものは汚染されない。
+   * 6. ⟹ **FIFO なら `(agent-1, bg-1)` が落ちる ⟹ もう一度撃つと「1回目」
+   *    に戻って起こし直される。LRU なら生き残っていて count=2 ＝ per-task
+   *    上限なので escalate になる。**
+   *
+   * **落ちるのはいちばん長く空転している鍵で、それはいちばん残したい
+   * ものである。落ちた鍵はカウント0から再スタートするので、その作業者の
+   * 予算だけが黙って再装填される。**
    */
-  it('#subagentWakeups は上限（500件）を超えたら、いちばん古い agent_id から捨てる', async () => {
+  it('#subagentWakeups の枝刈りは FIFO であって LRU ではない（Map.set() は既存鍵の順を変えない）', async () => {
     const s = setup();
     await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
     const started = s.started[0];
     if (started === undefined) throw new Error('セッションが開いていない');
 
     const trackingLimit = 500;
+    // **`#backgroundTaskOwners`（別の表。この PR では触っていない）も同じ
+    // 500件で自前の FIFO を持つ**——499件の filler がそれぞれ違う背景処理 id
+    // で所有者登録すると、その表自身が先に枝刈りされ、`bg-1` の所有権が
+    // （この歯が確かめたいものとは無関係な理由で）落ちてしまう。**それを
+    // 避けるため、filler は同じ背景処理 id（`bg-shared`）を使い回す**——
+    // `#backgroundTaskOwners` は id をキーにした表なので、同じ id を
+    // 使い回す限り何度登録してもその表は1件しか消費しない。一方
+    // `#subagentWakeups` の鍵は `agentId + taskId` の組なので、agent が
+    // 違えば同じ `bg-shared` でもちゃんと別々の鍵になる。
+    const sharedTaskId = 'bg-shared';
 
-    // `agent-1` を含む 501 件を登録する（1件ずつ「1回目」として起こし直させる）。
-    for (let n = 1; n <= trackingLimit + 1; n += 1) {
-      const agentId = `agent-lru-${n}`;
-      const taskId = `bg-lru-${n}`;
-      await registerBackgroundTask(started.options, taskId, agentId);
-      const result = await fireSubagentStop(started.options, {
+    // 1) (agent-1, bg-1) を1回起こし直す —— この鍵が Map の先頭に入る。
+    await registerBackgroundTask(started.options, 'bg-1', 'agent-1');
+    await fireSubagentStop(started.options, {
+      ...STOP_BASE,
+      agent_id: 'agent-1',
+      background_tasks: [selfEntry('agent-1'), { id: 'bg-1', type: 'monitor', status: 'running' }],
+    });
+
+    // 2) 別の499件（別々の agent。id は使い回し）を1回ずつ起こし直す。
+    //    `#subagentWakeups` は500件でまだ枝刈りされない。最初に入れる鍵
+    //    （agent-fifo-2, bg-shared）を後で確かめる。
+    for (let n = 2; n <= trackingLimit; n += 1) {
+      const agentId = `agent-fifo-${n}`;
+      await registerBackgroundTask(started.options, sharedTaskId, agentId);
+      await fireSubagentStop(started.options, {
         ...STOP_BASE,
         agent_id: agentId,
-        background_tasks: [selfEntry(agentId), { id: taskId, type: 'monitor', status: 'running' }],
+        background_tasks: [
+          selfEntry(agentId),
+          { id: sharedTaskId, type: 'monitor', status: 'running' },
+        ],
       });
-      expect(result).toHaveProperty('hookSpecificOutput');
     }
 
-    // **501件目を登録した時点で、いちばん古い `agent-lru-1` が表から捨てられて
-    // いるはず。** 改めて呼ぶと、カウントが残っていれば「2回目」になるが、
-    // 捨てられていれば0から再スタートして「1回目」になる。
-    const revisitTaskId = 'bg-lru-1-revisit';
-    await registerBackgroundTask(started.options, revisitTaskId, 'agent-lru-1');
-    const revisit = await fireSubagentStop(started.options, {
+    // 3) (agent-1, bg-1) をもう1回 —— count=2。FIFO ならこの鍵はまだ
+    //    先頭のまま（LRU なら末尾へ動く）。
+    await fireSubagentStop(started.options, {
       ...STOP_BASE,
-      agent_id: 'agent-lru-1',
+      agent_id: 'agent-1',
+      background_tasks: [selfEntry('agent-1'), { id: 'bg-1', type: 'monitor', status: 'running' }],
+    });
+
+    // 4) さらに1件（501件目。agent-fifo-over, bg-shared）入れて枝刈りを起こす。
+    await registerBackgroundTask(started.options, sharedTaskId, 'agent-fifo-over');
+    await fireSubagentStop(started.options, {
+      ...STOP_BASE,
+      agent_id: 'agent-fifo-over',
       background_tasks: [
-        selfEntry('agent-lru-1'),
-        { id: revisitTaskId, type: 'monitor', status: 'running' },
+        selfEntry('agent-fifo-over'),
+        { id: sharedTaskId, type: 'monitor', status: 'running' },
       ],
     });
 
+    // 5) **併せて、2番目に入れた鍵（agent-fifo-2, bg-shared）が落ちていない
+    //    ことを先に確かめる**（LRU ならそちらが落ちる側なので、両側から
+    //    挟める）。**⚠️ この確認は次の6)より先に行う必要がある** ——
+    //    6) は削られた `(agent-1, bg-1)` を**新しい鍵として**マップへ
+    //    再挿入するので、その時点でまた500件を超えて枝刈りが起こり、
+    //    今度は「そのとき最も古い鍵」（＝ちょうど agent-fifo-2、まだ更新して
+    //    いなければ）が落ちる。先に読んでおけば、その値を後から6)が壊しても
+    //    問題にならない。
+    //    `bg-shared` の所有権はステップ4で `agent-fifo-over` へ上書きされて
+    //    いるので、確かめる直前に `agent-fifo-2` へ登録し直す——これは
+    //    `#backgroundTaskOwners`（1件しか使っていない）を書き換えるだけで、
+    //    `#subagentWakeups` 側のカウントには一切触れない。生きていれば、
+    //    まだ1回しか使っていないのでこの呼び出しは「2回目」になる。
+    await registerBackgroundTask(started.options, sharedTaskId, 'agent-fifo-2');
+    await fireSubagentStop(started.options, {
+      ...STOP_BASE,
+      agent_id: 'agent-fifo-2',
+      background_tasks: [
+        selfEntry('agent-fifo-2'),
+        { id: sharedTaskId, type: 'monitor', status: 'running' },
+      ],
+    });
+    expect(noteEvents(s.events).at(-1)?.text).toContain('この背景処理では 2回目');
+
+    // 6) **FIFO なら (agent-1, bg-1) が落ちる ⟹ もう一度撃つと「1回目」に
+    //    戻って起こし直される。** `bg-1` は他の誰とも共有していないので、
+    //    その所有権（`#backgroundTaskOwners`）は最初の登録のまま生きている。
+    const revisit = await fireSubagentStop(started.options, {
+      ...STOP_BASE,
+      agent_id: 'agent-1',
+      background_tasks: [selfEntry('agent-1'), { id: 'bg-1', type: 'monitor', status: 'running' }],
+    });
     expect(revisit).toHaveProperty('hookSpecificOutput');
-    const additionalContext = (revisit as { hookSpecificOutput: { additionalContext: string } })
+    const revisitContext = (revisit as { hookSpecificOutput: { additionalContext: string } })
       .hookSpecificOutput.additionalContext;
-    expect(additionalContext).toContain(`1回目（上限 ${SUBAGENT_WAKEUP_LIMIT}）`);
+    expect(revisitContext).toContain('この背景処理では 1回目');
+    expect(noteEvents(s.events).at(-1)?.text).toContain('この背景処理では 1回目');
   });
 
   /**
    * **`#backgroundTaskOwners` の LRU 上限**（`runner.ts` の
    * `BACKGROUND_TASK_OWNER_LIMIT`。直上の歯と同じ形——超えたら「いちばん古い
    * もの」から捨てる）。**この定数も `export` していない**（`export` を求められて
-   * いるのは `SUBAGENT_WAKEUP_LIMIT` だけ）ので、直上の歯と同じ理由で値を
-   * 直書きする。ずれたらこの歯が壊れる形自体が、直書きしたことの検算になる。
+   * いるのは `SUBAGENT_WAKEUP_LIMIT_PER_TASK` / `SUBAGENT_WAKEUP_LIMIT_PER_AGENT`
+   * だけ）ので、直上の歯と同じ理由で値を直書きする。ずれたらこの歯が壊れる
+   * 形自体が、直書きしたことの検算になる。
    *
    * **`#backgroundTaskOwners` は private なので、中身は直接覗けない。**
    * 観測できるのは `#onSubagentStop` の振る舞いの変化だけである —— 所有者を

@@ -5488,8 +5488,9 @@ class FakePoolRunner implements RunnerClient {
  * **#570 の追跡 —— `note.escalate` の配り分け。**
  *
  * `runner.ts` の `#onSubagentStop` は、作業者が自分で起こした背景処理を
- * 残したまま畳もうとする回に、起こし直しの上限（`SUBAGENT_WAKEUP_LIMIT`）に
- * 達したら `escalate: true` を立てた `note` を出す。`manager.ts` の
+ * 残したまま畳もうとする回に、起こし直しの上限（`SUBAGENT_WAKEUP_LIMIT_PER_TASK`
+ * / `SUBAGENT_WAKEUP_LIMIT_PER_AGENT`）に達したら `escalate: true` を立てた
+ * `note` を出す。`manager.ts` の
  * `case 'note'` は、この欄が立っているときだけ、日誌に加えてクローンの
  * 受信箱へも1本上げる。
  *
