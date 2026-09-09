@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 // @ts-expect-error -- 素の .mjs（型宣言を持たない変異試験ハーネス）を読む
 import {
+  assertAggregateBlocksUnambiguous as harnessAssertAggregateBlocksUnambiguous,
+  HarnessError,
   parseAggregateLines as harnessParseAggregateLines,
   stripAnsi,
 } from '../.claude/skills/mutation-testing/mutate-core.mjs';
@@ -263,14 +265,18 @@ describe('mutate-core: stripAnsi / parseAggregateLines (#372)', () => {
  * （`scripts/mutate-aggregate-blocks.test.ts`）。**この修正は `mutate-core.mjs`
  * だけに入れてあり、`scripts/test-guard-core.mjs` と `scripts/verify-core.mjs`
  * は今回の範囲外（意図して触っていない）。** ⟹ **複数ブロックを含む入力を
- * 3箇所へ通すと、今後は結果が食い違う**（`mutate-core.mjs` は「最後のブロック」
- * を返すが `test-guard-core.mjs` / `verify-core.mjs` は元の「最初のブロック」の
- * ままであり、後者2つには複数ブロックを拒む仕組みも無い）。**だから下の
- * `it.each` には複数ブロックの入力を足さない**——足せば3箇所の突き合わせが
- * 意図どおり落ちる（この歯の役目は「3箇所が同じに壊れていないか」を見張る
- * ことであって、複数ブロック入力はその前提が崩れた領域である）。
+ * 3箇所へ通すと、結果が食い違う**（`mutate-core.mjs` は「最後のブロック」
+ * を返すが `test-guard-core.mjs` は元の「最初のブロック」のままで、
+ * `verify-core.mjs` の `testRan` は真偽値しか返さないのでブロック数に関わらず
+ * 答えが変わらない）。**だから下の `it.each` には複数ブロックの入力を足さない**
+ * ——足せば3箇所の突き合わせが意図どおり落ちる（この歯の役目は「3箇所が
+ * 同じに壊れていないか」を見張ることであって、複数ブロック入力はその前提が
+ * 崩れた領域である）。**⟹ この範囲限定を doc だけに書いても、doc は検査されない。
+ * だから下の `describe` の名前をその範囲まで狭め、隣にもう1つ `describe` を置いて
+ * 「3箇所がどう食い違うか」を歯として固定した**（`describe('複数の集計ブロックを
+ * 含む入力: …')`）。
  */
-describe('集計行の判定: 3箇所の実装が食い違わないこと (#372 / #355 / #392)', () => {
+describe('集計行の判定: 単一ブロック相当の入力では3箇所の実装が食い違わないこと (#372 / #355 / #392)', () => {
   /** `parseAggregateLines` の結果を、`testRan` と同じ意味（集計行が見つかったか）
    * に均す。3箇所を比べるための共通の物差しはこれだけである。 */
   const hasSummary = (result: { filesLine: string | null; testsLine: string | null }) =>
@@ -305,5 +311,140 @@ describe('集計行の判定: 3箇所の実装が食い違わないこと (#372 
     expect(harness.testsLine).toBe('Tests  2493 passed (2493)');
     expect(guard).toEqual(harness);
     expect(verifyTestRan(COLORED_OUTPUT)).toBe(true);
+  });
+});
+
+/** 複合スクリプト（`vitest run && pnpm -r --if-present run test && …`）が出す
+ * 2ブロックの生ログを模したもの。1本目と2本目で件数を変え、「最初」を読んだか
+ * 「最後」を読んだかが返り値そのものから分かるようにしてある（`scripts/
+ * mutate-aggregate-blocks.test.ts` の `MULTI_BLOCK_FIRST_RED_LAST_GREEN` と同じ
+ * 狙いだが、あちらは赤/緑の対比、こちらは最初/最後の対比が主題なのでフィクス
+ * チャは別に持つ）。 */
+const MULTI_BLOCK_FIRST_THEN_SECOND = [
+  ' RUN  v4.1.10 /tmp/probe (workspace package A)',
+  '',
+  ' Test Files  1 passed (1)',
+  '      Tests  3 passed (3)',
+  '   Start at  06:44:56',
+  '   Duration  50ms',
+  '',
+  ' RUN  v4.1.10 /tmp/probe (workspace package B)',
+  '',
+  ' Test Files  9 passed (9)',
+  '      Tests  99 passed (99)',
+  '   Start at  06:44:58',
+  '   Duration  120ms',
+].join('\n');
+
+/**
+ * **複数の集計ブロックを含む入力: 3箇所がどう食い違うかを名指しで固定する歯。**
+ *
+ * 直上の `describe` は名前を「単一ブロック相当の入力では」まで狭めた。狭めた
+ * だけでは、その doc が書いている「複数ブロックでは3箇所が食い違う」という
+ * 主張そのものは、doc の文章としてしか存在しないままになる——**doc は検査
+ * されない。** この `describe` は、その食い違いを実際に3箇所へ通した値として
+ * 固定する。
+ *
+ * **3通りの違いがある（形がそれぞれ別である。「3つが違う」と丸めない）:**
+ *
+ * | 実装 | 複数ブロック入力に対して |
+ * | --- | --- |
+ * | `mutate-core.mjs` の `parseAggregateLines` | **最後**のブロックを返す。加えて `assertAggregateBlocksUnambiguous` が判定そのものを拒む機構を持つ |
+ * | `test-guard-core.mjs` の `parseAggregateLines` | **最初**のブロックを返す（`/m` のみ、`/g` 無し）——中身が harness と食い違う |
+ * | `verify-core.mjs` の `testRan` | `.test()` で真偽値しか返さない——**ブロックが何個在っても答えが変わらない**。「最初/最後」の区別を持たないので、この欠陥に対して*形として*免疫が在る（到達可能性とは別の、より強い理由） |
+ *
+ * ## なぜ `test-guard-core.mjs` / `verify-core.mjs` を直さずに、この食い違いを固定するのか
+ *
+ * **この歯は「3箇所が違う」を固定する。何も書かなければ、次に読む人にはこれが
+ * 「食い違いを容認している歯」に見え、直そうとした人の前に立つ。** だから
+ * 「なぜ違ってよいか」をここに書く——「意図した仕様である」の一言だけでは、
+ * 前提が崩れたときに誰も気づけない。
+ *
+ * **測った内容**: `test-guard-core.mjs` / `verify-core.mjs` の判定関数
+ * （`parseAggregateLines` / `testRan` / `classifyTest`）へ、複数ブロックの入力が
+ * **いまの HEAD の実装が持つ構造としては届かないことを測って確かめた**
+ * （測定日 2026-09-09。潰した経路は7本。**出所を分ける**——1・2・3・5 は
+ * この PR の書き手が `origin/main` = `a77562a`〔#742 直後の `1421398` から
+ * #744・#741 の2本が積まれた版〕の木で自分の手で当たり直した。4・6・7 は
+ * 別の測定（`1421398` の木で取られたもの）から引用したもので、この PR の
+ * 書き手自身は当初これを転記しただけで自分では当たり直していなかった。
+ * その後 `a77562a` と `f20891d`（`a77562a` からさらに #739 が1本積まれた
+ * 版）の両方の木で当たり直し、成立を確認した——下の4・6・7に実測を添えた）:
+ *
+ * 1. `test-guard-core.mjs` の判定関数（`parseAggregateLines`）を import している
+ *    非テストファイルは `scripts/test.mjs` の1本だけ
+ *    （`command grep -rln --exclude-dir=node_modules --exclude-dir=.git --
+ *    "from './test-guard-core.mjs'" .` で3件——うち2件は `*.test.ts`）。
+ * 2. `verify-core.mjs` の判定関数（`testRan` / `classifyTest`）を import している
+ *    非テストファイルは `scripts/verify.mjs` の1本だけ（`.github/scripts/
+ *    verify-for-sdk-pr.test.ts` は `STEPS` 配列だけを import しており判定関数は
+ *    使っていない）。
+ * 3. `scripts/test.mjs` は `spawn('vitest', ['run', ...args], …)` をループの外に
+ *    1回だけ書いている（`function runVitest(args)` の中。呼び出しも `main()` から
+ *    1回だけ）。
+ * 4. `verify.mjs` は9門のうち `isTest: true` の1本（`pnpm test`）だけを `runTest`
+ *    で捕まえ、他8門は `stdio: 'inherit'` で出力を捨てる——門の出力が連結されて
+ *    判定へ渡る経路は無い（`command grep -Fn -- "isTest: true" scripts/
+ *    verify-core.mjs` → 296行の test 門1本のみ。`command grep -c -- "isTest"
+ *    scripts/verify-core.mjs` → 1＝ファイル全体で1箇所。`command grep -Fn --
+ *    "stdio: 'inherit'" scripts/verify.mjs` → 185行、`run()` 側）。
+ * 5. root + 8パッケージの `test` スクリプト9本は全部が単発の
+ *    `node …/scripts/test.mjs …` で、`&&` も `;` も `pnpm -r` も1つも無い
+ *    （`package.json` を9本全部当たった）。
+ * 6. `vitest.config.ts` に `projects` は無く、`vitest.workspace.ts` も存在せず、
+ *    `reporters` の指定も無い——1回の `vitest run` が集計ブロックを2つ出す形は
+ *    この repo の設定では無い（`ls vitest.workspace.*` → No such file、
+ *    `command grep -n -- 'projects\|reporters' vitest.config.ts` → 0件・exit 1）。
+ * 7. `.github/scripts/verify-for-sdk-pr.sh` は9門を個別ログ・個別終了コードで
+ *    判定し、`verify-core.mjs` / `test-guard-core.mjs` の判定関数を一度も
+ *    呼んでいない（連結ログ `verify.md` は人間が読む PR 本文の材料。
+ *    `command grep -n -- 'verify-core\|test-guard-core'
+ *    .github/scripts/verify-for-sdk-pr.sh` → 9行目・52行目の2件のみで、
+ *    どちらも `#` で始まるコメント。呼び出しは0件）。
+ *
+ * **⟹ だから `test-guard-core.mjs` / `verify-core.mjs` は「最初」を返す実装の
+ * ままでよい。**
+ *
+ * **⚠️ ただし「いまは来ない」であって「来えない」の証明ではない。** 上の7本は
+ * 「いまの HEAD の実装が持つ構造としては複数ブロックが来ない」までしか言って
+ * いない——恒久的な性質の証明ではない。**もし将来これらに複数ブロックが届く
+ * 経路ができたら、この歯はその時点で意味を失う。** そのときやることは、この
+ * 歯を消すことではなく、まず到達可能性を測り直すことである（上の7本を当たり
+ * 直し、経路が増えていないか確かめる）。測り直した結果いまも来ないなら歯は
+ * そのまま残ってよく、来るようになっていたら `test-guard-core.mjs` /
+ * `verify-core.mjs` 側を直す番になる。
+ */
+describe('複数の集計ブロックを含む入力: 3箇所がどう食い違うか（意図した範囲限定の差を歯で固定する）', () => {
+  it('mutate-core.mjs の parseAggregateLines は最後のブロックを返す', () => {
+    const { filesLine, testsLine } = harnessParseAggregateLines(MULTI_BLOCK_FIRST_THEN_SECOND);
+    // 最初のブロックの値ではないこと。
+    expect(filesLine).not.toBe('Test Files  1 passed (1)');
+    expect(testsLine).not.toBe('Tests  3 passed (3)');
+    // 最後のブロックの値であること。
+    expect(filesLine).toBe('Test Files  9 passed (9)');
+    expect(testsLine).toBe('Tests  99 passed (99)');
+  });
+
+  it('mutate-core.mjs は assertAggregateBlocksUnambiguous で複数ブロックの判定そのものを拒む', () => {
+    expect(() =>
+      harnessAssertAggregateBlocksUnambiguous(MULTI_BLOCK_FIRST_THEN_SECOND, 'test'),
+    ).toThrow(HarnessError);
+  });
+
+  it('test-guard-core.mjs の parseAggregateLines は最初のブロックを返す（harness の「最後」と食い違う）', () => {
+    const { filesLine, testsLine } = guardParseAggregateLines(MULTI_BLOCK_FIRST_THEN_SECOND);
+    expect(filesLine).toBe('Test Files  1 passed (1)');
+    expect(testsLine).toBe('Tests  3 passed (3)');
+    // harness（最後を返す）と guard（最初を返す）は、同じ入力で別の値を返す。
+    expect(guardParseAggregateLines(MULTI_BLOCK_FIRST_THEN_SECOND)).not.toEqual(
+      harnessParseAggregateLines(MULTI_BLOCK_FIRST_THEN_SECOND),
+    );
+  });
+
+  it('verify-core.mjs の testRan はブロックが何個あっても答えが変わらない（真偽値しか返さないので「最初/最後」の区別を持たない）', () => {
+    expect(verifyTestRan(MULTI_BLOCK_FIRST_THEN_SECOND)).toBe(true);
+    // 単一ブロック（PLAIN_OUTPUT）でも複数ブロックでも同じ true が返る
+    // ——ブロック数に対して形として免疫があることを、値の一致で示す。
+    expect(verifyTestRan(MULTI_BLOCK_FIRST_THEN_SECOND)).toBe(verifyTestRan(PLAIN_OUTPUT));
   });
 });
