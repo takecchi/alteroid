@@ -299,6 +299,22 @@ elif ask_yes_no '外から HTTP API を叩きますか？（Google ログイン�
   fi
 fi
 
+# ブラウザから叩いてよいオリジン。**デーモンの既定は閉じたままである**
+# （docs/architecture.md「CORS は既定で閉じている」。正典なのでコードの既定は変えない）。
+# ここが変えるのは「人間が1回答えれば置かれる」ところまでで、開けた事実は `.env` と
+# Service 変数の両方に残る — **コードの既定に焼くと、開いていることがどこにも現れない。**
+#
+# **置くのは app だけである。** これを読むのはデーモンで（apps/daemon/src/index.ts）、
+# runner は1度も見ない。
+ALLOWED_ORIGINS="$(printenv ALTEROID_ALLOWED_ORIGINS 2>/dev/null || true)"
+[ -n "$ALLOWED_ORIGINS" ] || ALLOWED_ORIGINS="$(env_file_get ALTEROID_ALLOWED_ORIGINS)"
+if [ -n "$ALLOWED_ORIGINS" ]; then
+  dim 'ALTEROID_ALLOWED_ORIGINS: 在るものを使う（ブラウザから叩けるオリジン）'
+elif ask_yes_no "公式の Web UI（${OFFICIAL_WEB_ORIGIN}）から叩けるようにしますか？" yes; then
+  ALLOWED_ORIGINS="$OFFICIAL_WEB_ORIGIN"
+  persist_env ALTEROID_ALLOWED_ORIGINS "$ALLOWED_ORIGINS"
+fi
+
 # --- 3. 確かめてから作る ----------------------------------------------------
 
 step '作るもの'
@@ -321,6 +337,11 @@ if [ "$EXPOSE_PUBLIC" = 1 ]; then
   info 'Google ログイン 有効（ドメインを生成する）'
 else
   info 'Google ログイン 無効（待ち受けは 127.0.0.1 のまま）'
+fi
+if [ -n "$ALLOWED_ORIGINS" ]; then
+  info "ブラウザ許可    ${ALLOWED_ORIGINS}（app にだけ置く）"
+else
+  info 'ブラウザ許可    無し（CORS ヘッダを返さない＝デーモンの既定のまま）'
 fi
 info 'ボリューム      作らない（記憶は PostgreSQL、workspace は Git 再構築）'
 
@@ -558,6 +579,13 @@ fi
 
 # app にだけ置くもの。**記憶ストアの鍵はここから外へ出さない**
 app_pairs=("${shared_pairs[@]}" ALTEROID_DATABASE_URL "\${{$PG_NAME.DATABASE_URL}}")
+
+# ブラウザから叩いてよいオリジン。**runner には置かない**（読むのはデーモンだけである）。
+# 答えが「いいえ」なら変数そのものを作らない — 空の変数を置くと、ダッシュボードに
+# 「開けたが空」と「そもそも開けていない」の区別が付かない行が残る
+if [ -n "$ALLOWED_ORIGINS" ]; then
+  app_pairs+=(ALTEROID_ALLOWED_ORIGINS "$ALLOWED_ORIGINS")
+fi
 
 # 委譲の宛先。**1台なら単数形のまま置く** — 既に動いている構成と同じ形にしておく
 # （デーモンは両方読み、空白と重複を落とす。`parseRunnerUrls`）。2台以上のときだけ
