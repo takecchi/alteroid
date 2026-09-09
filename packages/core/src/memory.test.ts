@@ -7,6 +7,7 @@ import {
   MEMORY_TIDY_TARGETS_BUDGET,
   describeMemoryTidyTargets,
   MEMORY_PROMPT_OUTLINE_BUDGET,
+  MEMORY_PROMPT_OMITTED_TAIL_BUDGET,
   MEMORY_TOC_ENTRY_LIMIT,
   applyMemoryFrontmatterPatch,
   assertNeverMemoryCreatedAt,
@@ -2870,6 +2871,159 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     expect(rendered).toContain('memory_section_move');
     // 予算そのものは超えない（超えたら「予算」の意味が無い）。
     expect(rendered.length).toBeLessThan(MEMORY_PROMPT_OUTLINE_BUDGET * 2);
+  });
+
+  /**
+   * ⭐⭐ **「切った」だけでは行動に繋がらない。落ちた側を名指しする。**
+   *
+   * 予算で落ちるのは常に末尾側なので、**追記で育つ文書では「いま足した節」が
+   * 落ちる**（`MEMORY_PROMPT_OMITTED_TAIL_BUDGET` の doc の観測）。⟹ 断り書きが
+   * 件数しか名乗らないと、読み手は「N 節省略」を「だから今日足したものが
+   * 見えない」へ繋げられない。**落ちているのは本文であって見出しではない**ので、
+   * 見出しは断り書きに入る。
+   */
+  it('⭐⭐ 目次が予算で切れた文書は、落ちた末尾の直近の節を節id つきで名指しする', () => {
+    // 末尾の節だけ見分けられる見出しにする（先頭側に紛れないこと）。
+    const filler = Array.from(
+      { length: 200 },
+      (_, i) => `## これは十分に長い見出しであり予算を食い尽くす ${i}\n本文`,
+    ).join('\n');
+    const content =
+      `---\ntype: premise\ndescription: 大きい\n---\n${filler}\n` +
+      '## 58. 今日足したばかりの規則\n本文';
+    const rendered = renderMemoryDocuments([{ slug: 'big', content }]);
+
+    // 前提: 末尾は本当に落ちている（落ちていなければこのテストは何も測らない）。
+    expect(rendered).toContain('節は目次から省略');
+    const omissionAt = rendered.indexOf('節は目次から省略');
+    const namedAt = rendered.indexOf('## 58. 今日足したばかりの規則');
+    expect(namedAt).toBeGreaterThan(omissionAt);
+
+    // 名指しは「節id つきの行そのまま」である ⟹ memory_section_read へ渡せる。
+    expect(rendered).toMatch(/\[[0-9a-f]{8}-[0-9a-f]{8}\] ## 58\. 今日足したばかりの規則 — /);
+    expect(rendered).toContain('節id はそのまま memory_section_read に渡せる');
+  });
+
+  /**
+   * ⚠️ **名指しの量は件数ではなく文字数で持つ。** 見出しの長さは節ごとに
+   * ばらばらなので、「直近3節」のように件数で決めると断り書きの長さが見出し
+   * 次第で暴れる（`excerpt.ts` の `ListingBudget`「件数から出力量を決めると、
+   * 何件で壊れるかが運任せになる」。`manager_list` で一覧が丸ごと落ちた形）。
+   */
+  it('⚠ 落ちた末尾の名指しは件数ではなく文字数で切る（長い見出し1本で暴れない）', () => {
+    const filler = Array.from(
+      { length: 200 },
+      (_, i) => `## これは十分に長い見出しであり予算を食い尽くす ${i}\n本文`,
+    ).join('\n');
+    const monster = `## ${'長'.repeat(4_000)}\n本文`;
+    const rendered = renderMemoryDocuments([
+      {
+        slug: 'big',
+        content: `---\ntype: premise\ndescription: 大きい\n---\n${filler}\n${monster}`,
+      },
+    ]);
+
+    // 4,000 文字の見出しが丸ごと断り書きへ出ることは無い。
+    expect(rendered).not.toContain('長'.repeat(4_000));
+    // 名指しのぶんは予算 ＋ 切った跡の合図ぶんに収まる。
+    const namedBlock = rendered.slice(rendered.indexOf('落ちた末尾のうち直近の節'));
+    expect(namedBlock.length).toBeLessThan(MEMORY_PROMPT_OMITTED_TAIL_BUDGET * 4);
+  });
+
+  /**
+   * ⭐ **「何をすれば直るか」まで出す。** 「N 節省略」は状態の報告であって、
+   * 次の一手にならない。1行の平均・そのうちの固定費・縮める目標を数字で出す。
+   */
+  it('⭐ 縮めれば載る文書には、見出しを平均いくつまで縮めればよいかを数字で出す', () => {
+    const huge = Array.from(
+      { length: 120 },
+      (_, i) => `## これは十分に長い見出しであり予算を食い尽くす ${i}\n本文`,
+    ).join('\n');
+    const rendered = renderMemoryDocuments([
+      { slug: 'big', content: `---\ntype: premise\ndescription: 大きい\n---\n${huge}` },
+    ]);
+
+    expect(rendered).toMatch(/1行の平均は \d+ 文字（うち節id と文字数の固定費が \d+ 文字）。/);
+    expect(rendered).toMatch(/見出しを平均 \d+ 文字（いま \d+ 文字）まで縮める必要がある。/);
+  });
+
+  /**
+   * 🔴 **達成不能な助言を出さない。** 1行の固定費（節id 17 文字 ＋ `— N 文字`）は
+   * **節数に比例する** ⟹ 節が増えると、見出しを最短（`# x`）まで縮めても予算に
+   * 入らない点を越える。**そこで「縮めれば載る」と出すのは嘘である**（縮める先が
+   * 無い）。⟹ そのときは「割るしかない」と名乗る。
+   *
+   * これは `excerpt.ts` の「続きの取り方を書けるのは、呼び手の側にその口が実在
+   * するときだけである」を助言の側へ当てた形である。
+   */
+  it('🔴 見出しを最短まで縮めても載らない文書には「縮めれば載る」と言わず、割れと言う', () => {
+    // 見出しは最短に近いのに、節数で固定費が予算を食い切る形（実運用の
+    // alteroid-work は 917 節ある）。
+    const many = Array.from({ length: 400 }, (_, i) => `# ${i}\n本文`).join('\n');
+    const rendered = renderMemoryDocuments([
+      { slug: 'log', content: `---\ntype: premise\ndescription: 追記だけの文書\n---\n${many}` },
+    ]);
+
+    expect(rendered).toContain('節は目次から省略');
+    expect(rendered).toContain('見出しを最短');
+    expect(rendered).toContain('割るしかない');
+    // 🔴 嘘を出さない: 縮める目標は1つも出さない。
+    expect(rendered).not.toMatch(/まで縮める必要がある/);
+  });
+
+  /**
+   * ⭐⭐⭐ **名乗った助言が実行可能であることを、助言のとおりにやって確かめる。**
+   *
+   * 断り書きは「見出しを平均 N 文字まで縮めれば全節が載る」と言う。⟹ **その N
+   * まで実際に縮めて描き直し、本当に省略が消えることを見る。** 数を書き写して
+   * 突き合わせるのではなく、**言ったことをやって結果を見る**形にしてある——
+   * こうすると N の丸め方（floor / ceil）を1つ間違えただけでここが落ちる。
+   *
+   * これは `excerpt.ts` の「続きの取り方を書けるのは、呼び手の側にその口が実在
+   * するときだけである」の、助言版の歯である。
+   */
+  it('⭐⭐⭐ 名乗った目標まで見出しを縮めると、本当に全節が載る（助言が実行できる）', () => {
+    // 番号を先頭に置く（縮めたあとも見出しが重複しない ⟹ 節id が衝突しない）。
+    const heading = (i: number) => `## ${i}. ${'あ'.repeat(60)}`;
+    const build = (make: (i: number) => string) =>
+      `---\ntype: premise\ndescription: 規則\n---\n` +
+      Array.from({ length: 106 }, (_, i) => `${make(i + 1)}\n${'本文'.repeat(60)}`).join('\n');
+
+    const before = renderMemoryDocuments([{ slug: 'rules', content: build(heading) }]);
+    const target = /見出しを平均 (\d+) 文字（いま \d+ 文字）まで縮める必要がある。/.exec(before);
+    expect(target).not.toBeNull();
+    const limit = Number((target as RegExpExecArray)[1]);
+
+    // 助言のとおり、全部の見出しをその長さまで縮める。
+    const after = renderMemoryDocuments([
+      { slug: 'rules', content: build((i) => heading(i).slice(0, limit)) },
+    ]);
+    expect(after).not.toContain('節は目次から省略');
+    // 縮める前は本当に切れていた（切れていなければこのテストは何も測らない）。
+    expect(before).toContain('節は目次から省略');
+  });
+
+  /**
+   * ⚠️ **「縮めろ」と言うときの目標は、縮められる下限（`# x` の3文字）を
+   * 下回ってはならない。** 下回った数を出すのは、達成不能な助言を「達成可能」の
+   * 顔で出すことである——`renderPremiseOutlineOmission` が反転を判定している線
+   * そのものを、**節数を振って総当たりで**見る（1点の実例では、線が1文字ずれても
+   * 気づかない）。
+   */
+  it('⚠ 縮めろと言うときの目標は、見出しの最短（3文字）を下回らない', () => {
+    const claims: number[] = [];
+    for (let n = 150; n <= 260; n += 1) {
+      const body = Array.from({ length: n }, (_, i) => `# ${i}\n本`).join('\n');
+      const rendered = renderMemoryDocuments([
+        { slug: 'log', content: `---\ntype: premise\ndescription: d\n---\n${body}` },
+      ]);
+      const hit = /見出しを平均 (\d+) 文字（いま \d+ 文字）まで縮める必要がある。/.exec(rendered);
+      if (hit !== null) claims.push(Number(hit[1]));
+    }
+    // この範囲には「縮めれば載る」と言う文書が実在する（0件ならこのテストは
+    // 何も測っていない）。
+    expect(claims.length).toBeGreaterThan(0);
+    expect(Math.min(...claims)).toBeGreaterThanOrEqual(3);
   });
 
   it('⭐ 要旨が長すぎる文書は、切ったことと全文の在り処と直し方を名乗る', () => {
