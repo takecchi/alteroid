@@ -180,12 +180,11 @@ export const STATEMENTS = [
   // email は null を許す（未検証・衝突時は入れない）。PostgreSQL の unique は
   // null を重複と見なさないので、これで「検証済みメールは高々1アカウント」になる。
   `create unique index if not exists auth_accounts_email_idx on auth_accounts (email)`,
-  // **持ち主は高々1人。** 定数式に対する部分一意索引なので、granted_at が入っている
-  // 行はテーブル全体で1行しか存在できない。並行 grant を「読んでから書く」で
-  // 防ごうとすると、owner が居ない状態の同時実行をすり抜ける — 器の側で構造的に
-  // 潰しておく（マルチユーザーは PRD 非ゴール）。
-  `create unique index if not exists auth_accounts_single_owner_idx
-     on auth_accounts ((granted_at is not null)) where granted_at is not null`,
+  // ⚠️ **ここに `auth_accounts_single_owner_idx`（持ち主を1行に絞る部分一意索引）を
+  // 作る文が在った。2026-09-09 のオーナー決定で落とし、この配列の末尾へ drop を
+  // 置いた。** 直上の「古い鍵の `create` は配列から消す」に従って**この create は
+  // 消してある** — 残すと、2人目を許可した後の次の起動で本当に作りに行き
+  // `could not create unique index … is duplicated` でデーモンが上がらなくなる。
 
   `create table if not exists auth_identities (
      provider text not null,
@@ -452,6 +451,12 @@ export const STATEMENTS = [
      generation bigint not null,
      rotated_at timestamptz not null
    )`,
+
+  // 持ち主を1行に絞っていた部分一意索引を落とす（2026-09-09 のオーナー決定。
+  // 許可は複数のアカウントへ出せるようになった）。**対になる create は上から
+  // 消してある** — 残すと2周目に作りに行って落ちる。既に索引の無い DB（新規）
+  // では `if exists` が効いて本当の no-op になる。
+  `drop index if exists auth_accounts_single_owner_idx`,
 ] as const;
 
 export async function migrate(db: Db): Promise<void> {

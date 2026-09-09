@@ -22,9 +22,12 @@ import { accountWithIdentitiesSchema } from './openapi.js';
  * ③**⚠️ 2026-09-06 のオーナー決定で変わった**——`/access/*` は `authenticate` だけに
  * なり、alteroid を使う許可（`access grant` 済み）があれば実行環境の持ち主と同格に
  * 叩ける。最初の1人（誰も許可されていない状態からの grant）は依然として実行環境の
- * 持ち主にしか通せない——ここを開けると「誰も許可されていない」状態そのものが
- * 突破できてしまう（`grantExclusive` が持ち主の不在を検査してから書く1操作で
- * あることの帰結）。この対比は下の describe が固定する。`/profile` は変えていない
+ * 持ち主にしか通せない——**許可されたアカウントという資格が、まだ1つも存在しない
+ * からである**（`isAccountGranted` が全員 false を返す。2026-09-09 に許可の上限を
+ * 外した後もここは変わらない。以前この括弧には「`grantExclusive` が持ち主の不在を
+ * 検査してから書く1操作であることの帰結」と書いてあったが、**それは理由ではなかった**
+ * ——検査を外したいまも同じ性質が残っている）。この対比は下の describe が固定する。
+ * `/profile` は変えていない
  * （鍵をまるごと運ぶ口。理由は `app.ts` の `requireOperator` 呼び出し箇所の doc）。
  */
 
@@ -88,7 +91,7 @@ let stores: Stores;
  *
  * **`listAccounts`（`/access` が読む）と `getAccount`（`authenticate` と `claim` が
  * ここを通ってアカウントを引く）の2つだけを包む。** `AuthStore` の他のメソッド
- * （`findAccountByEmail` / `grantExclusive` など）は今回の対象経路
+ * （`findAccountByEmail` / `grantAccess` など）は今回の対象経路
  * （`/auth/me` `/auth/login/:id/claim` `/access`）がアカウントを読むために通る道
  * ではないので、包んでも混ざらない。
  */
@@ -270,10 +273,14 @@ describe('認証が有効なとき', () => {
    * いまは alteroid を使う許可（`access grant` 済み）を実行環境の持ち主と同格に
    * 扱う（`apps/daemon/src/app.ts` の `requireOperator` の doc）ので、この2経路は
    * `authenticate` だけになった。**「自分で自分を通せる」ことは、もう境界の
-   * 崩壊ではない**——「持ち主は高々1つ」（`grantExclusive`）はここでは崩れておらず
-   * （同一アカウントへの再 grant は conflict ではなく idempotent な granted を
-   * 返すだけ）、別アカウントを追加で通せる訳ではないことは
-   * 「許可できるアカウントは高々1つ（2人目の grant は 409）」が別に固定している。
+   * 崩壊ではない**——同一アカウントへの再 grant は冪等な `granted` を返すだけである。
+   *
+   * ⚠️ **ここに「別アカウントを追加で通せる訳ではない」と書いてあった。2026-09-09 の
+   * オーナー決定で通せるようになった**（許可できるアカウントの上限が消えた）。
+   * ⟹ **同格化と上限の撤去が揃って、いま初めて許可が伝播する**（A が B を、B が C を）。
+   * どちらもオーナー決定なので戻さない。追える場所は日誌だけである
+   * （下の「許可の付与と取り消しは日誌に残る」）。
+   *
    * `/profile` はこの決定の対象外のままで、`403` を固定するテストは
    * 「実行環境プロファイルは持ち主だけ」に残る。
    */
@@ -285,7 +292,7 @@ describe('認証が有効なとき', () => {
     });
 
     // 既に許可済みの自分自身への grant は冪等に 200
-    // （`grantExclusive` は同一アカウントを conflict ではなく granted として返す）。
+    // （`grantAccess` は書き込まずに `granted` を返す）。
     const response = await app.request(`/access/${claimed.account.id}/grant`, {
       ...post,
       headers: { ...post.headers, authorization: `Bearer ${claimed.token}` },
@@ -345,42 +352,59 @@ describe('認証が有効なとき', () => {
     expect((await app.request('/profile', { headers: OPERATOR })).status).toBe(200);
   });
 
-  it('許可できるアカウントは高々1つ（2人目の grant は 409）', async () => {
+  /**
+   * ⚠️ **2026-09-09 に期待値を反転した。** 反転前は「許可できるアカウントは高々1つ
+   * （2人目の grant は 409）」で、本文にはこう書いてあった —— *「ここを 200 にすると、
+   * ログインした人数だけ同じクローンの記憶・日誌・実行 API が開く＝そのまま
+   * マルチユーザー利用になる（PRD 非ゴール）」*。
+   *
+   * **その帰結の記述は正しい。** オーナーが変えたのは、それを受け入れるかのほうである
+   * （同じ人間が私用と仕事用の Google アカウントの両方から入れないことのほうが、実際の
+   * 使い方に対する欠落だった）。PRD 側も同じ日に線を引き直してある —— 非ゴールが
+   * 禁じているのは**利用者ごとにデータを分けること**で、入口の数ではない
+   * （逐語は `grep -Fn -- '境界はデータの側に在る' docs/PRD.md`）。
+   *
+   * **保証は弱くなっていない。** 落ちたのは件数の上限で、代わりに
+   * 「revoke が**名指しした1つだけ**を落とす」を測るようになった —— 上限が在った頃は
+   * 許可が1つしか無いので、この形は測りようがなかった。
+   */
+  it('許可できるアカウントの数に上限は無い（2人目の grant も 200）', async () => {
     const first = await loginThrough(app);
     nextSubject = 'sub-2';
     const second = await loginThrough(app);
     expect(second.account.id).not.toBe(first.account.id);
 
-    const grantFirst = await app.request(`/access/${first.account.id}/grant`, {
-      ...post,
-      headers: { ...post.headers, ...OPERATOR },
-    });
-    expect(grantFirst.status).toBe(200);
+    for (const account of [first.account, second.account]) {
+      expect(
+        (
+          await app.request(`/access/${account.id}/grant`, {
+            ...post,
+            headers: { ...post.headers, ...OPERATOR },
+          })
+        ).status,
+      ).toBe(200);
+    }
 
-    // ここを 200 にすると、ログインした人数だけ同じクローンの記憶・日誌・実行 API が
-    // 開く＝そのままマルチユーザー利用になる（PRD 非ゴール）。
-    const grantSecond = await app.request(`/access/${second.account.id}/grant`, {
-      ...post,
-      headers: { ...post.headers, ...OPERATOR },
-    });
-    expect(grantSecond.status).toBe(409);
-    expect(
-      (await app.request('/memory', { headers: { authorization: `Bearer ${second.token}` } }))
-        .status,
-    ).toBe(403);
+    // 2人とも同じ1組のデータへ通る（分けていないのはここである）。
+    for (const token of [first.token, second.token]) {
+      expect(
+        (await app.request('/memory', { headers: { authorization: `Bearer ${token}` } })).status,
+      ).toBe(200);
+    }
 
-    // 先に取り消せば移せる（持ち主の付け替えはできる）。
+    // **revoke は名指しした1つだけを落とす。** ここが「全員落ちる」になっていると、
+    // 1つ取り消したつもりで自分も締め出される。
     await app.request(`/access/${first.account.id}/revoke`, {
       ...post,
       headers: { ...post.headers, ...OPERATOR },
     });
     expect(
-      (
-        await app.request(`/access/${second.account.id}/grant`, {
-          ...post,
-          headers: { ...post.headers, ...OPERATOR },
-        })
-      ).status,
+      (await app.request('/memory', { headers: { authorization: `Bearer ${first.token}` } }))
+        .status,
+    ).toBe(403);
+    expect(
+      (await app.request('/memory', { headers: { authorization: `Bearer ${second.token}` } }))
+        .status,
     ).toBe(200);
   });
 
@@ -473,17 +497,25 @@ describe('認証が有効なとき', () => {
     });
 
     /**
-     * **`grantedBy` の側は、①が書き換える経路がいまは無い。** その前提を測る。
+     * ⚠️ **この節の前提が 2026-09-09 に半分だけ崩れた。読み替えが要る。**
      *
-     * - 既に許可済みのアカウントへの再 grant は、`grantExclusive` が**書き込まずに**
-     *   既存の記録を返す（`packages/storage-fs/src/auth.ts` と `testing.ts` の
-     *   `grantExclusive` — `account.grantedAt !== null` なら `next: null`）
-     * - 別のアカウントを追加で通そうとすれば 409（持ち主は高々1つ）
+     * ここにはこう書いてあった —— *「`grantedBy` の側は、①が書き換える経路がいまは
+     * 無い」*。根拠は2つで、**片方はいまも成り立ち、片方は崩れた。**
      *
-     * ⟹ **①が `grantedBy` に値を書ける経路が存在しない。** だから `grantedBy` は
-     * いま嘘をついていない。**この歯は、その前提が崩れたら鳴る**——再 grant が
-     * 書き換える形に変わったら、`actorOf` の側の分岐が本番で効き始めるので、
-     * そのときここを読み直すこと。
+     * - **成り立つ**: 既に許可済みのアカウントへの再 grant は、`grantAccess` が
+     *   **書き込まずに**既存の記録を返す（`packages/storage-fs/src/auth.ts` と
+     *   `testing.ts` — `account.grantedAt !== null` なら `next: null`）
+     * - **⚠️ 崩れた**: *「別のアカウントを追加で通そうとすれば 409（持ち主は高々1つ）」*
+     *   —— 上限が消えたので、いまは通る
+     *
+     * ⟹ **①が `grantedBy` に値を書ける経路が生まれた**（許可されたアカウントが、
+     * まだ許可されていない別のアカウントを通す）。**そして `actorOf` の分岐は
+     * そのために在ったので、いま初めて本番で効き始めた。** ここの doc が
+     * 「そのときここを読み直すこと」と言っていた、そのときである。
+     *
+     * だから歯を2本にした —— 冪等な再 grant では書き換わらないこと（前と同じ）と、
+     * **伝播したときは通した側の id が残ること**（新しい形。日誌と `grantedBy` が
+     * 伝播を追える唯一の場所なので、ここが `operator` 固定に戻ると追跡ごと消える）。
      */
     it('①の再 grant では grantedBy が書き換わらない（前提の固定）', async () => {
       const claimed = await loginThrough(app);
@@ -498,6 +530,31 @@ describe('認証が有効なとき', () => {
       });
       const body = (await response.json()) as { account: { grantedBy: string | null } };
       expect(body.account.grantedBy).toBe('operator');
+    });
+
+    it('①が別のアカウントを通したら、grantedBy にそのアカウントの id が残る', async () => {
+      const first = await loginThrough(app);
+      await app.request(`/access/${first.account.id}/grant`, {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+      });
+
+      nextSubject = 'sub-2';
+      const second = await loginThrough(app);
+      const response = await app.request(`/access/${second.account.id}/grant`, {
+        ...post,
+        headers: { ...post.headers, authorization: `Bearer ${first.token}` },
+      });
+      expect(response.status).toBe(200);
+
+      const body = (await response.json()) as { account: { grantedBy: string | null } };
+      // **`operator` ではない。** ここが固定値なら、この欄は情報を運ばない
+      // （`AuthAccount.grantedBy` の doc）——誰が伝播させたのか分からなくなる。
+      expect(body.account.grantedBy).toBe(first.account.id);
+
+      const grounds = await lastGrounds();
+      expect(grounds).toContain(first.account.id);
+      expect(grounds).not.toContain('実行環境の持ち主');
     });
   });
 

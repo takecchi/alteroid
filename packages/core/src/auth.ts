@@ -16,6 +16,11 @@ import { z } from 'zod';
  *
  * マルチユーザーではない（PRD 非ゴール）。持ち主が複数の端末・複数のログイン手段
  * から入ってこられるようにするための層であって、利用者ごとにデータを分けない。
+ *
+ * ⚠️ **その非ゴールが禁じているのは「データを分けること」であって「入口の数」では
+ * ない。** 許可は複数のアカウントへ出せる（2026-09-09 のオーナー決定。それ以前は
+ * 高々1つだった）。許可を持つ全員が同じ1組の記憶・日誌・会話を見る — 分けたく
+ * なった時点で、それが非ゴールの境界である（`AuthStore.grantAccess` の doc）。
  */
 
 const isoDateTime = z.string().datetime({ offset: true });
@@ -192,27 +197,31 @@ export interface AuthStore {
   ): Promise<{ request: LoginRequest; token: AccessTokenRecord } | null>;
 
   /**
-   * 許可されたアカウントが他に居なければ、この account を許可する（1操作）。
+   * この account を許可する（1操作）。**既に許可済みなら何も書かずに `granted` を返す。**
    *
-   * **「許可されたアカウントは高々1つ」を強制するのはここである。** 呼び出し側で
-   * 「一覧を見る → 居なければ書く」に分けると、owner が居ない状態で別々の account へ
-   * 同時に grant したとき両方が通り、**PRD 非ゴール（マルチユーザー / チーム利用）を
-   * 守るための中心的な不変条件そのものが破れる。**
+   * ⚠️ **2026-09-09 のオーナー決定まで、ここは `grantExclusive` という名前で、
+   * 「許可されたアカウントが他に居なければ」という条件が付いていた**（`granted_at` が
+   * 入る行をテーブル全体で1行に絞り、2人目は `conflict` で弾いていた）。**その条件を
+   * 外した** — 同じ人間が複数の Google アカウントから入れないことのほうが、実際の
+   * 使い方に対する欠落だったためである。
    *
-   * ドライバはそれぞれの器で原子性を出す — fs は1つの排他区間で、pg は
-   * 部分一意索引（`granted_at is not null` の行はテーブル全体で1行まで）で。
+   * **外したのは入口の数であって、PRD 非ゴールそのものではない。** 非ゴールが禁じて
+   * いるのは**利用者ごとにデータを分けること**で、許可を持つ全員が同じ1組の記憶・
+   * 日誌・会話・実行 API を見る形は変わっていない（逐語は
+   * `grep -Fn -- '利用者ごとにデータを分けない' docs/PRD.md`）。**だから「アカウント
+   * ごとの記憶」「アカウントごとの日誌」を足したくなったら、そこが本当の境界である。**
+   *
+   * **原子性はいまも要る。** 消えたのは*他の行*との不変条件だけである。同じ account へ
+   * 同時に grant が来たとき「読む → 検査 → 書く」に割ると、`grantedAt` / `grantedBy` が
+   * 後から来た側で上書きされ、**日誌に残した「誰がいつ通したか」と食い違う**（日誌は
+   * 追記なので、後から書かれた account の側だけが静かに変わる）。先に書いた側を
+   * 勝たせ、後から来た側にはその結果を返す。
    */
-  grantExclusive(accountId: string, at: string, by: string): Promise<GrantOutcome>;
+  grantAccess(accountId: string, at: string, by: string): Promise<GrantOutcome>;
 }
 
-/**
- * 許可の付与の結果。`conflict` は「既に別のアカウントが持ち主である」。
- * 持ち主を移すときは先に取り消す。
- */
-export type GrantOutcome =
-  | { status: 'granted'; account: AuthAccount }
-  | { status: 'not_found' }
-  | { status: 'conflict'; owner: AuthAccount };
+/** 許可の付与の結果。 */
+export type GrantOutcome = { status: 'granted'; account: AuthAccount } | { status: 'not_found' };
 
 // ---------------------------------------------------------------------------
 // 乱数・ハッシュ

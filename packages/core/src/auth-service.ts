@@ -77,8 +77,14 @@ export interface AuthService {
   grant(accountId: string, by: string): Promise<GrantResult>;
   revoke(accountId: string): Promise<AuthAccount | null>;
   listAccounts(): Promise<AuthAccount[]>;
-  /** いま alteroid を使える唯一のアカウント（居なければ `null`）。 */
-  owner(): Promise<AuthAccount | null>;
+  /**
+   * いま alteroid を使える全アカウント（誰も居なければ空）。
+   *
+   * ⚠️ **2026-09-09 のオーナー決定まで `owner(): Promise<AuthAccount | null>` だった。**
+   * 上限を外した以上、単数の名前はここで嘘になる（1件しか返さない実装のままだと、
+   * 2人目以降が呼び出し側から静かに消える）。
+   */
+  owners(): Promise<AuthAccount[]>;
 }
 
 const DEFAULT_LOGIN_TTL_SECONDS = 600;
@@ -316,22 +322,25 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
 
     async grant(accountId, by) {
       /**
-       * **「許可されたアカウントは高々1つ」の強制はストア側に置く。**
+       * **許可できるアカウントの数に上限は無い**（2026-09-09 のオーナー決定）。
        *
-       * alteroid は単一の持ち主のものであり、マルチユーザー / チーム利用は
-       * 非ゴールである（PRD「スコープ外」）。ここを開けると、ログインした人数だけ
-       * 同じクローンの記憶・日誌・会話・実行 API が開く＝そのままマルチユーザーに
-       * なる。「データを分けない」ことは「複数人を受け入れない」ことではない。
+       * ⚠️ **それ以前は高々1つで、2人目は `conflict` だった。** 外した理由と、
+       * 「入口の数」と「利用者ごとにデータを分けること」の線は `AuthStore.grantAccess`
+       * の doc が持つ（逐語は `grep -Fn -- '外したのは入口の数であって' packages/core/src/auth.ts`）。
+       * **ここに書き写さないこと** — 2か所に置けば必ずずれる。
        *
-       * ここで一覧を見てから書くと、owner が居ない状態で別々のアカウントへ同時に
-       * grant したとき両方が通り、その不変条件そのものが破れる。だから
-       * 検査と書き込みを `grantExclusive` の1操作に閉じてある。
+       * **⚠️ この決定で、許可が伝播するようになった。** `/access/*` は 2026-09-06 から
+       * 「許可されたアカウント」も実行環境の持ち主と同格に叩けるが、それまでは2人目が
+       * 必ず 409 で弾かれていたので**伝播は起こりようがなかった。** いまは A が B を、
+       * B が C を通せる。同格化そのものはオーナー決定なので戻さない — 代わりに
+       * **誰が誰を通したかを日誌へ必ず残す**（`apps/daemon/src/app.ts` の grant 経路）。
+       * `grantedBy` に固定値を書かないことが、ここで初めて意味を持つ。
        *
-       * 持ち主を移すときは先に revoke する（同一人物が別のログイン手段へ移る場合も
-       * 同じ手順になる。identity を1つのアカウントへ束ねる仕組みは、必要になったら
-       * accountId を付け替える形で足せる）。
+       * 上限が消えても**書き込みはストアの1操作のままにする** — 理由は他の行との
+       * 不変条件ではなく、同じ account への同時 grant で `grantedBy` が上書きされると
+       * 日誌と食い違うことである（同じく `grantAccess` の doc）。
        */
-      return store.grantExclusive(accountId, now().toISOString(), by);
+      return store.grantAccess(accountId, now().toISOString(), by);
     },
 
     async revoke(accountId) {
@@ -344,14 +353,14 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
     },
 
     listAccounts: () => store.listAccounts(),
-    owner: () => findOwner(store),
+    owners: () => findOwners(store),
   };
 }
 
-/** 許可されているアカウント（不変条件として高々1つ）。 */
-async function findOwner(store: AuthStore): Promise<AuthAccount | null> {
+/** 許可されているアカウント（0件以上。上限は無い）。 */
+async function findOwners(store: AuthStore): Promise<AuthAccount[]> {
   const accounts = await store.listAccounts();
-  return accounts.find((account) => account.grantedAt !== null) ?? null;
+  return accounts.filter((account) => account.grantedAt !== null);
 }
 
 async function touch(store: AuthStore, record: AccessTokenRecord, at: Date): Promise<void> {

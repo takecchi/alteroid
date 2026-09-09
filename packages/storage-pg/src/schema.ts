@@ -295,6 +295,11 @@ export const sessions = pgTable(
  * ログインしたアカウント。**マルチユーザーのための表ではない**（PRD 非ゴール）。
  * 持ち主が複数の端末・複数のログイン手段から入れるようにするための層である。
  *
+ * ⚠️ **許可された行が複数在りうる**（2026-09-09 のオーナー決定。それ以前は
+ * 部分一意索引で1行に絞っていた）。**それでもこの表はマルチユーザーのためのもの
+ * ではない** — 分けていないのは*データ*のほうで、`account_id` で記憶や日誌を
+ * 引く列を足したくなったら、そこが PRD 非ゴールの境界である。
+ *
  * `granted_at` が許可の2値。行為ごとのスコープ列は**置かない** — 置いた瞬間に
  * 「確認が要る行為の一覧」に化け、PRD「権限境界」と衝突する。
  */
@@ -312,10 +317,10 @@ export const authAccounts = pgTable(
   },
   (table) => [
     uniqueIndex('auth_accounts_email_idx').on(table.email),
-    // 持ち主は高々1人（granted_at が入る行はテーブル全体で1行まで）。
-    uniqueIndex('auth_accounts_single_owner_idx')
-      .on(sql`(${table.grantedAt} is not null)`)
-      .where(sql`${table.grantedAt} is not null`),
+    // ⚠️ **`auth_accounts_single_owner_idx`（granted_at が入る行をテーブル全体で
+    // 1行に絞る部分一意索引）が在った。2026-09-09 のオーナー決定で落とした。**
+    // `migrate.ts` の側は create を消して drop を足してある（残すと次の起動で
+    // 索引を作りに行って落ちる）。
   ],
 );
 

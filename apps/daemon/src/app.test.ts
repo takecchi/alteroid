@@ -4516,8 +4516,11 @@ describe('認証トークンのプール', () => {
    * て、ここでは触らない）。この describe がいま測るのは次の4つである:
    * ①実行環境の持ち主は今日どおり6経路とも通る ②許可されたアカウントも同格に
    * 通る（新しく足したもの） ③境界そのもの（未ログイン＝401、ログイン済みだが
-   * 未 grant＝403）は変わっていない ④「持ち主は高々1つ」（`grantExclusive`）は
-   * 同格になった側から叩いても崩れない。
+   * 未 grant＝403）は変わっていない ④同格になった側から grant を叩くと、2人目も通る。
+   *
+   * **⚠️ ④は 2026-09-09 に反転した。** それまでは「『持ち主は高々1つ』
+   * （`grantExclusive`）は同格になった側から叩いても崩れない」で、2人目は 409 だった。
+   * 上限が消えたので、**同格化と揃って、いま初めて許可が伝播する。**
    */
   describe('alteroid を使う許可があれば実行環境の持ち主と同格（6経路）', () => {
     let nextSubject = 'sub-tokens-test';
@@ -4689,7 +4692,7 @@ describe('認証トークンのプール', () => {
       ).toBe(200);
       expect((await withAuth.request('/access', { headers: granted })).status).toBe(200);
       // 既に許可済みの自分自身への grant は冪等に 200
-      // （`grantExclusive` は同一アカウントを conflict ではなく granted として返す）。
+      // （`grantAccess` は書き込まずに `granted` を返す）。
       expect(
         (
           await withAuth.request(`/access/${accountId}/grant`, {
@@ -4753,7 +4756,21 @@ describe('認証トークンのプール', () => {
       ).toBe(200);
     });
 
-    it('④持ち主は高々1つのまま——同格になった側が grant を叩いても2人目は409', async () => {
+    /**
+     * ⚠️ **2026-09-09 に期待値を反転した（409 → 200）。** 反転前の名前は
+     * 「④持ち主は高々1つのまま——同格になった側が grant を叩いても2人目は409」で、
+     * 本文にはこう書いてあった —— *「ここが 409 のままであることが、『①を複数人に
+     * する話ではない』ことの証明になる」*。
+     *
+     * **その読みは 2026-09-06 の時点では正しかった。** 同格化が開いたのは
+     * 「誰が叩けるか」だけで、「何人まで通せるか」は別の錠が閉めていた。
+     * **2026-09-09 にオーナーがその錠を開けたので、2つが揃って許可が伝播する。**
+     *
+     * ⟹ **ここで測る先を変えた** —— 「通らないこと」ではなく、
+     * **「通って、誰が通したかが残ること」**である。伝播そのものは受け入れた以上、
+     * 弱くなってはいけないのは記録の側である。
+     */
+    it('④同格になった側が grant を叩くと2人目も通る（誰が通したかは残る）', async () => {
       const withAuth = buildAuthedApp();
       const first = await grantedAccountToken(withAuth);
       const granted = { authorization: `Bearer ${first.token}` };
@@ -4762,13 +4779,17 @@ describe('認証トークンのプール', () => {
       const second = await loginOnly(withAuth);
 
       // ⚠️ 叩いているのは OPERATOR ではなく、同格になった側（許可された
-      // アカウント自身のトークン）である。ここが 409 のままであることが、
-      // 「①を複数人にする話ではない」ことの証明になる。
+      // アカウント自身のトークン）である。
       const response = await withAuth.request(`/access/${second.accountId}/grant`, {
         ...post,
         headers: { ...post.headers, ...granted },
       });
-      expect(response.status).toBe(409);
+      expect(response.status).toBe(200);
+
+      const body = (await response.json()) as { account: { grantedBy: string | null } };
+      // **`operator` に化けていないこと。** 化けると、人間が通したのか
+      // アカウントが伝播させたのかが記録から消える。
+      expect(body.account.grantedBy).toBe(first.accountId);
     });
   });
 });
