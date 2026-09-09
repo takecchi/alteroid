@@ -22,6 +22,19 @@ export const PUBLISH_TARGETS = [
   { name: "@mnemora/core", dir: "packages/core" },
   { name: "@mnemora/testkit", dir: "packages/testkit" },
   { name: "@mnemora/openai", dir: "packages/openai" },
-  { name: "@mnemora/anthropic", dir: "packages/anthropic" },
   { name: "@mnemora/postgres", dir: "packages/postgres" },
+  // ⭐ registry にまだ存在しないパッケージは、最後に置く。
+  //
+  // **なぜ**: npm の Trusted Publishing は「設定する時点でパッケージが registry に在ること」を
+  // 前提にしており、**初版を OIDC で出すことはできない**（npm/cli#8544 は OPEN。ADR 0066）。
+  // ⟹ 未公開のパッケージは publish 段で 403 になりうる。
+  //
+  // このリストの順に publish するので、**未公開のものが途中に居ると、その後ろが publish されない。**
+  // `@mnemora/anthropic` を4番目に置いていた時点では、失敗したときに
+  // **`@mnemora/postgres` が取り残される**形だった（実際には未公開なのは anthropic だけなので、
+  // 後ろに置けば他の4つは完走できる）。
+  //
+  // 依存の向きとしては、`@mnemora/anthropic` は `@mnemora/core` にしか依存しないので
+  // 最後に置いても整合する（`scripts/__tests__/publish-targets.test.mjs` が機械的に検査する）。
+  { name: "@mnemora/anthropic", dir: "packages/anthropic" },
 ];
