@@ -11,13 +11,17 @@
  * サブコマンドだけ非0行の出力を吐いて exit 1、それ以外は1行の成功出力を返す。
  * pnpm 自身の実際のビルド・lint・test ロジックは一切持たない。
  *
- * ## ⚠️ この歯の限界
+ * ## ⚠️ この歯が測っているものと、測っていないもの
  *
- * **この歯は、スクリプトが `STEPS` の9本を回すことを測る。** ワークフローが
- * このスクリプトを呼ぶことは測っていない。`.github/workflows/update-claude-sdk.yml`
- * の `run: ./.github/scripts/verify-for-sdk-pr.sh` の1行が消えても（または別の
- * スクリプトに差し替えられても）、この歯は何も言わない — 測っているのはこの
- * スクリプト単体の振る舞いであって、ワークフローからの配線ではない。
+ * **本体は、スクリプトが `STEPS` の9本を回すことを、実際に走らせた出力
+ * （`verify.md`）から測る。** ソースを読んで数えてはいない。
+ *
+ * **それとは別に、末尾の `describe('ワークフローからの配線')` が
+ * `update-claude-sdk.yml` に `run:` の1行が在ることを見ている。⚠️ こちらは
+ * 「書いてある」を見ているだけで、「呼ばれた」は測っていない。**
+ * 固定文字列の有無を見るだけなので黙って壊れることはない（1行が消えても別の
+ * スクリプトへ差し替えられても落ちる）が、**ステップが `if:` の条件で実行され
+ * ない形に変わった場合は、この歯は何も言わない。** そこは測れていない。
  */
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
@@ -272,5 +276,35 @@ describe('verify-for-sdk-pr.sh', () => {
       // git diff の生出力（差分そのもの）が残っている
       expect(openapiSection).toContain('openapi.json');
     });
+  });
+});
+
+/**
+ * ワークフローからこのスクリプトへの配線。
+ *
+ * **⚠️ ここだけは「実行の出力」ではなく設定（YAML の文字列）を読んでいる。**
+ * 上の本体（`verify.md` を数える歯）とは種類が違うので、describe を分けてある。
+ *
+ * **それでも置くのは、穴が塞がるからではなく、穴が小さくなるからである。**
+ * `run:` の1行が消えるか別のスクリプトへ差し替えられれば、9本を回す本体の歯は
+ * 何も言わない（そちらはスクリプト単体を測っているので、呼ばれなくなっても緑）。
+ * ここで固定文字列の有無を見ておけば、その2つは落ちる。
+ *
+ * **⚠️ 残る穴を名乗っておく。** `if: steps.update.outputs.changed == 'true'` の
+ * 条件が変わってステップが実行されなくなった場合、`run:` の1行は在るままなので
+ * **この歯は何も言わない。** 正規表現で YAML を解釈しないのは意図である
+ * （書き方が変わったときに黙って壊れる測り方を、この repo は他所でも避けている）。
+ */
+describe('ワークフローからの配線', () => {
+  const WORKFLOW = join(SCRIPTS_DIR, '..', 'workflows', 'update-claude-sdk.yml');
+
+  it('update-claude-sdk.yml が verify-for-sdk-pr.sh を `run:` で呼んでいる', () => {
+    const yml = readFileSync(WORKFLOW, 'utf8');
+    expect(yml).toContain('run: ./.github/scripts/verify-for-sdk-pr.sh');
+  });
+
+  it('⚠️ 生 bash が戻っていない（`for cmd in …` を YAML へ書き戻すと、歯の届かない所へ判断が帰る）', () => {
+    const yml = readFileSync(WORKFLOW, 'utf8');
+    expect(yml).not.toContain('for cmd in');
   });
 });
