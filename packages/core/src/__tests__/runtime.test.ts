@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { Ctx } from "../ctx.js";
 import type { LLMProvider, StructuredRequest } from "../interfaces/llm-provider.js";
-import { createRuntime } from "../runtime.js";
+import {
+  TICK_SUPPORTED_JOB_KINDS,
+  UNSUPPORTED_KIND_ERROR_PREFIX,
+  createRuntime,
+} from "../runtime.js";
 import type { ReextractSkip } from "../strategies/reextract.js";
 import { createFakeRuntimeStores } from "./runtime-fakes.js";
 import type { FakeMemoryStore } from "./runtime-fakes.js";
@@ -421,7 +425,7 @@ describe("runtime.observe — extract: 'deferred'", () => {
     expect(result.memoryIds).toEqual([]);
 
     const tickResult = await runtime.tick(ctx, { kinds: ["extract"], leaseMs: TEST_LEASE_MS });
-    expect(tickResult).toEqual({ processed: 1, failed: 0 });
+    expect(tickResult).toEqual({ processed: 1, failed: 0, unsupported: [] });
 
     const aggregate = await stores.memoryStore.aggregateScope(ctx, {});
     expect(aggregate.totalInScope).toBe(1);
@@ -553,7 +557,7 @@ describe("runtime.tick — embed ジョブ（embeddingStatus の遷移）", () =
     const memoryId = observeResult.memoryIds[0]!;
 
     const tickResult = await runtime.tick(ctx, { kinds: ["embed"], leaseMs: TEST_LEASE_MS });
-    expect(tickResult).toEqual({ processed: 1, failed: 0 });
+    expect(tickResult).toEqual({ processed: 1, failed: 0, unsupported: [] });
 
     const memory = await stores.memoryStore.get(ctx, memoryId);
     expect(memory?.embeddingStatus).toBe("ready");
@@ -569,7 +573,7 @@ describe("runtime.tick — embed ジョブ（embeddingStatus の遷移）", () =
 
     stores.embeddingProvider.shouldFail = true;
     const tickResult = await runtime.tick(ctx, { kinds: ["embed"], leaseMs: TEST_LEASE_MS });
-    expect(tickResult).toEqual({ processed: 0, failed: 1 });
+    expect(tickResult).toEqual({ processed: 0, failed: 1, unsupported: [] });
 
     const memory = await stores.memoryStore.get(ctx, memoryId);
     expect(memory?.embeddingStatus).toBe("failed");
@@ -630,13 +634,13 @@ describe("runtime.reembed（ADR 0079: provider が直った後に、索引へ戻
       healed,
       vectorsAfterHealingTick: stores.vectorStore.entries.size,
     }).toEqual({
-      failedTick: { processed: 0, failed: 1 },
+      failedTick: { processed: 0, failed: 1, unsupported: [] },
       afterFailure: "failed",
-      uselessTick: { processed: 0, failed: 0 },
+      uselessTick: { processed: 0, failed: 0, unsupported: [] },
       stillFailed: "failed",
       reembedResult: { requeued: 1, memoryIds: [memoryId] },
       vectorsRightAfterReembed: 0,
-      healingTick: { processed: 1, failed: 0 },
+      healingTick: { processed: 1, failed: 0, unsupported: [] },
       healed: "ready",
       vectorsAfterHealingTick: 1,
     });
@@ -650,25 +654,171 @@ describe("runtime.reembed（ADR 0079: provider が直った後に、索引へ戻
 
     expect({ result, tickResult }).toEqual({
       result: { requeued: 0, memoryIds: [] },
-      tickResult: { processed: 0, failed: 0 },
+      tickResult: { processed: 0, failed: 0, unsupported: [] },
     });
   });
 });
 
-describe("runtime.tick — 未知の outbox job kind", () => {
-  it("未知の kind は無視して溜め込まず、失敗として扱う", async () => {
-    const { runtime, stores } = buildRuntime(llmReturning([]));
-    // observe を経由せず、直接 outbox に不正な kind のジョブを積む状況を再現する。
+/**
+ * ADR 0082 / issue #105（外部の採用検討者からの報告）。
+ *
+ * 報告の芯は2つあった。
+ * 1. `OutboxJobKind` に `"consolidate"` が**名指しで**在るので、呼び出し側は
+ *    「積めば `tick` が処理してくれる」と読む（実際に読み違えた利用者が居る）。
+ * 2. 推測として:「`kinds: ['consolidate']` を渡すと claim はできてしまうが処理する分岐が
+ *    無いので、何も起こらないまま lease が切れて、claim され続けるのに進まないのでは」。
+ *
+ * **2 は現物では起きていなかった**（PR 本文の実測を参照）。この節の歯は、
+ * **起きていないことが、これからも起き続けない**ように固定するために置いてある。
+ *
+ * ⚠ **この節の歯が守っているのは「`failed` という1つの数では足りない」ことである。**
+ * 「embed の provider が落ちて失敗した」と「`tick` がその kind を処理できない」は、
+ * どちらも終端の失敗だが**呼び出し側が次に取る手が違う**（前者は provider を直して
+ * `reembed`、後者はそもそも `tick` に頼む相手が違う）。`failed: 1` だけを返すと
+ * この2つが同じ顔になる——ADR 0029 が `ReextractResult.skipped` で塞いだのと同じ族。
+ */
+describe("runtime.tick — 対応していない outbox job kind（ADR 0082 / issue #105）", () => {
+  /** 利用者が独自に足した kind。`TICK_SUPPORTED_JOB_KINDS` に**永久に**入らない側の代表。 */
+  const CUSTOM_KIND = "gurumi-chan:notify-slack";
+
+  async function enqueueJobOfKind(
+    stores: ReturnType<typeof buildRuntime>["stores"],
+    kind: string,
+  ): Promise<string> {
     const { jobs } = await stores.memoryStore.createObservationWithOutbox(
       ctx,
       { tenantId: "tenant-1", subjectId: null, externalId: null, kind: "utterance", payload: {} },
-      ["mystery-kind"],
+      [kind],
     );
     expect(jobs).toHaveLength(1);
+    return jobs[0]!.id;
+  }
 
-    const tickResult = await runtime.tick(ctx, { kinds: ["mystery-kind"], leaseMs: TEST_LEASE_MS });
-    expect(tickResult).toEqual({ processed: 0, failed: 1 });
+  it("⭐ 呼び出し側が独自に足した kind を明示的に渡すと、TickResult.unsupported に名指しで出る", async () => {
+    const { runtime, stores } = buildRuntime(llmReturning([]));
+    const jobId = await enqueueJobOfKind(stores, CUSTOM_KIND);
+
+    const tickResult = await runtime.tick(ctx, { kinds: [CUSTOM_KIND], leaseMs: TEST_LEASE_MS });
+
+    expect(tickResult).toEqual({
+      processed: 0,
+      failed: 1,
+      unsupported: [{ jobId, kind: CUSTOM_KIND }],
+    });
   });
+
+  it("⭐ 芯: 「処理を試みて失敗した」と「対応していない kind だった」が、同じ tick の中で別の顔になる", async () => {
+    // 同じ1回の tick で2件を拾わせる:
+    //   - embed ジョブ 1件（provider が落ちていて失敗する ＝ 試して失敗した）
+    //   - 対応していない kind 1件（試すまでもなく処理できない）
+    // `failed: 2` は両者を足した数であり、**どちらがどちらか言わない**。
+    // `unsupported` だけが後者を名指しする。これが無いと呼び出し側は区別できない。
+    const { runtime, stores } = buildRuntime(
+      llmReturning([{ content: "本文", digest: "要旨", provenanceKind: "stated" }]),
+    );
+    await runtime.observe(ctx, { kind: "utterance", text: "本文" });
+    const unsupportedJobId = await enqueueJobOfKind(stores, CUSTOM_KIND);
+    stores.embeddingProvider.shouldFail = true;
+
+    const tickResult = await runtime.tick(ctx, {
+      kinds: ["embed", CUSTOM_KIND],
+      leaseMs: TEST_LEASE_MS,
+    });
+
+    expect(tickResult).toEqual({
+      processed: 0,
+      failed: 2,
+      unsupported: [{ jobId: unsupportedJobId, kind: CUSTOM_KIND }],
+    });
+  });
+
+  it("⭐ 黙って lease 切れを待たない: 対応していない kind は終端で落ち、2回目の tick では claim されない", async () => {
+    // 報告者が推測した「claim され続けるがいつまでも進まない」が起きないことを測る歯。
+    const { runtime, stores } = buildRuntime(llmReturning([]));
+    const jobId = await enqueueJobOfKind(stores, CUSTOM_KIND);
+
+    const first = await runtime.tick(ctx, { kinds: [CUSTOM_KIND], leaseMs: TEST_LEASE_MS });
+    expect(first.unsupported).toEqual([{ jobId, kind: CUSTOM_KIND }]);
+
+    // outbox 行は終端（failedAt が付く）。`last_error` にも kind が名指しで残る——
+    // `TickResult` を捨ててしまった後から DB だけを見た人にも同じ結論が届くように。
+    const rowAfterFirst = stores.outboxStore.listJobs(ctx).find((job) => job.id === jobId)!;
+    expect(rowAfterFirst.failedAt).not.toBeNull();
+    expect(rowAfterFirst.lastError).toBe(`${UNSUPPORTED_KIND_ERROR_PREFIX}${CUSTOM_KIND}`);
+
+    // 2回目は claim されない（`fail` は終端。ADR 0032）。lease が切れて再び拾われる形ではない。
+    const second = await runtime.tick(ctx, { kinds: [CUSTOM_KIND], leaseMs: TEST_LEASE_MS });
+    expect(second).toEqual({ processed: 0, failed: 0, unsupported: [] });
+    expect(stores.outboxStore.listJobs(ctx).find((job) => job.id === jobId)!.attempts).toBe(1);
+  });
+
+  /**
+   * 🔴 **報告に無い穴。実装を書いた後に自分で読み返して見つけたので、歯にした。**
+   *
+   * `kind` は DB の `text` 列から来る**任意の文字列**であり、`OutboxJobKind` は開いた
+   * ユニオンなので型でも止まらない。ハンドラの索引にプレーンなオブジェクトを使うと、
+   * `kind` が `"constructor"` / `"toString"` のときに `Object.prototype` 側の関数が
+   * 返ってしまい、**「対応している」と誤判定して呼ぶ**。そうなると、この節が守っている
+   * 「対応していない kind は unsupported に出る」が**この2語に対してだけ黙って破れる**。
+   */
+  it.each(["constructor", "toString", "__proto__", "hasOwnProperty"])(
+    "⭐ kind が '%s' でも prototype の関数をハンドラと取り違えず、unsupported に出る",
+    async (kind) => {
+      const { runtime, stores } = buildRuntime(llmReturning([]));
+      const jobId = await enqueueJobOfKind(stores, kind);
+
+      const tickResult = await runtime.tick(ctx, { kinds: [kind], leaseMs: TEST_LEASE_MS });
+
+      expect(tickResult).toEqual({ processed: 0, failed: 1, unsupported: [{ jobId, kind }] });
+    },
+  );
+
+  it("⭐ 頼まれていない kind は claim すらしない: 既定の kinds では、対応していない kind の行は無傷で残る", async () => {
+    // 「対応していないなら焼く」を claim の既定値まで広げると、呼び出し側が頼んでもいない
+    // ジョブ（本体がこれから入る kind・利用者が別経路で処理するつもりの kind）を
+    // 終端で焼くことになる。既定は `TICK_SUPPORTED_JOB_KINDS` だけを claim する。
+    const { runtime, stores } = buildRuntime(llmReturning([]));
+    const jobId = await enqueueJobOfKind(stores, CUSTOM_KIND);
+
+    const tickResult = await runtime.tick(ctx, { leaseMs: TEST_LEASE_MS });
+
+    expect(tickResult).toEqual({ processed: 0, failed: 0, unsupported: [] });
+    const row = stores.outboxStore.listJobs(ctx).find((job) => job.id === jobId)!;
+    expect({ claimedAt: row.claimedAt, failedAt: row.failedAt, attempts: row.attempts }).toEqual({
+      claimedAt: null,
+      failedAt: null,
+      attempts: 0,
+    });
+  });
+
+  /**
+   * 🔴 **この歯は時限式である。意図してそう置いてある。**
+   *
+   * `consolidate` / `reflect` は `OutboxJobKind` に名指しで在るが、いまは `tick` に分岐が無い
+   * ——これが issue #105 の報告者を読み違えさせたものそのものである。**その本体はこれから
+   * 実装される**（オーナーの決定、2026-09-09）。
+   *
+   * **本体が入ったら、この歯は赤くなる。それが正しい。**赤くなったら「壊れた」のではなく
+   * 「この歯が役目を終えた」合図であり、本体を足す側が**この歯を書き換えるところまでが
+   * その作業**である。散文のコメント（「Phase 1 では extract/embed だけ」等）で同じことを
+   * 書かなかったのは、**コメントは検査されず、黙って嘘になる**からである。
+   *
+   * ⚠ この節の他の4つの歯は時限式では**ない**——`CUSTOM_KIND` は利用者が足した kind であり、
+   * `TICK_SUPPORTED_JOB_KINDS` に入ることは無い。kind がいくつ増えても、それらは効き続ける。
+   */
+  it.each(["consolidate", "reflect"])(
+    "⏳時限式の歯: '%s' はいまは tick に分岐が無く unsupported に出る（本体が入ったらこの歯を書き換えること）",
+    async (kind) => {
+      expect(TICK_SUPPORTED_JOB_KINDS).not.toContain(kind);
+
+      const { runtime, stores } = buildRuntime(llmReturning([]));
+      const jobId = await enqueueJobOfKind(stores, kind);
+
+      const tickResult = await runtime.tick(ctx, { kinds: [kind], leaseMs: TEST_LEASE_MS });
+
+      expect(tickResult).toEqual({ processed: 0, failed: 1, unsupported: [{ jobId, kind }] });
+    },
+  );
 });
 
 describe("runtime.reextract（ADR 0028: 「やり直したら重複が残る」の掃除）", () => {

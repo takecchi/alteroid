@@ -94,7 +94,7 @@ describe("observe → recall 前段の往復（roadmap.md 段階3、本物の Po
     // このテストはリースの境界を検査しない(それは outbox-claim-lease-index.test.ts /
     // outbox-store-conformance.ts の役目)ので、十分に長く固定した値を使う。
     const tickResult = await runtime.tick(ctx, { kinds: ["embed"], leaseMs: 60_000 });
-    expect(tickResult).toEqual({ processed: 1, failed: 0 });
+    expect(tickResult).toEqual({ processed: 1, failed: 0, unsupported: [] });
 
     // 5. embeddingStatus が 'ready' に遷移している
     const memoryStore = new PostgresMemoryStore(db);

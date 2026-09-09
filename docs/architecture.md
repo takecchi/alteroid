@@ -117,6 +117,15 @@ CPU を出して溜まったジョブを消化する必要がある。この継�
 **2026-09 追記（ADR 0032）**: `opts.leaseMs` は必須で既定値を持たない——`tick(ctx)` を
 引数無しで呼ぶことはできない。理由は §5.11 の `ClaimOutboxJobsOptions.leaseMs` を参照。
 
+**2026-09 追記（ADR 0082、issue #105）**: `tick` が**実際に処理する分岐を持つ** kind は
+`packages/core/src/runtime.ts` の `TICK_SUPPORTED_JOB_KINDS` が**唯一の出所**である
+（`opts.kinds` の既定値もそこを指す）。**`OutboxJobKind` に名前が在ることは、`tick` が
+それを処理することを意味しない**——この文書でもその一覧を数え直さない（散文の写しは
+kind が増えた瞬間に黙って嘘になる）。そこに無い kind を `opts.kinds` に明示して渡した
+ジョブは、`fail()` で**終端に落ち**、`TickResult.unsupported` に**名指しで**出る。
+「黙って何も起きないまま lease が切れる」形にはしない——上の「キューが無ければ黙って
+何も起きない」を作らない、を outbox の側でも守るということである。
+
 ### 3.4 transactional outbox
 
 `observe()` の DB コミットと「抽出ジョブを積む」は同一トランザクションでなければならない。

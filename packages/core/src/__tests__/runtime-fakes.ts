@@ -599,6 +599,18 @@ export class FakeMemoryStore implements MemoryStore {
 export class FakeOutboxStore implements OutboxStore {
   constructor(private readonly backing: FakeBackingStore) {}
 
+  /**
+   * 歯が outbox 行の**終端状態**（`claimedAt` / `failedAt` / `lastError`）を直接測るための読み口。
+   * ADR 0082 の歯が「対応していない kind のジョブは黙って lease 切れを待つのではなく
+   * `fail()` で終端に落ちる」「頼まれていない kind は claim すらされない」を測るのに使う——
+   * `TickResult` だけでは outbox 行がどうなったかは見えない。
+   */
+  listJobs(ctx: Ctx): OutboxJobRecord[] {
+    return this.backing.outboxJobs
+      .filter((job) => job.tenantId === ctx.tenantId)
+      .map((job) => ({ ...job }));
+  }
+
   // リース意味論（ADR 0032）は `packages/testkit` の `InMemoryOutboxStore`/
   // `PostgresOutboxStore` と一致させてある——この fake だけ古い意味論のままだと
   // `runtime.test.ts` が「今日の姿」を検査しているつもりで、実は直った後の姿を

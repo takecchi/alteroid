@@ -69,6 +69,40 @@ const DEFAULT_DIGEST_FALLBACK_LENGTH = 200;
 const DEFAULT_CLAIMED_BY = "runtime.tick";
 const DEFAULT_TICK_LIMIT = 50;
 
+/**
+ * `tick` が**実際に処理する分岐を持つ** outbox job kind（ADR 0082）。
+ *
+ * ⚠ **ここに「いまは extract と embed だけ」と書かない。**この配列そのものが答えであり、
+ * 散文で数え直した瞬間に、次に kind が増えたとき（`consolidate` / `reflect` の本体、
+ * 利用者が足す第5・第6の kind）に黙って嘘になる。**コメントは検査されない。**
+ *
+ * 🔴 **これが「tick が何を処理するか」の唯一の出所である。**`claimBatch` の `kinds` の
+ * 既定値も、ジョブを配る先（`jobHandlers`）も、`OutboxJobKind` の JSDoc も、ここを指す。
+ * issue #105 の根は、この一覧が3か所（`OutboxJobKind` の名指しの列挙・`tick` の claim
+ * 既定値・`if (job.kind === ...)` の分岐）に別々に写されていて、独立にずれたことだった。
+ * `jobHandlers` は `Record<TickSupportedJobKind, JobHandler>` として書いてあるので、
+ * **この配列に kind を足してハンドラを足し忘れると型検査が落ちる**（逆も落ちる）。
+ *
+ * ⚠ `OutboxJobKind` は `(string & {})` を含む開いたユニオンであり、ここに無い kind を
+ * 積むこと自体は正しい使い方である（利用者が独自の種別を足して別経路で処理する）。
+ * ここに無い kind を **`tick` に渡した**ときの倒れ方は {@link TickResult.unsupported} を見ること。
+ */
+export const TICK_SUPPORTED_JOB_KINDS = ["extract", "embed"] as const;
+
+/** {@link TICK_SUPPORTED_JOB_KINDS} の要素型。 */
+export type TickSupportedJobKind = (typeof TICK_SUPPORTED_JOB_KINDS)[number];
+
+/**
+ * `tick` が `fail()` へ書き込む `last_error` の接頭辞。
+ * 「対応していない kind だった」ことは {@link TickResult.unsupported} が第一の伝達路であり、
+ * こちらは**後から outbox 行だけを見た人**（運用者・DB を覗いた人）が同じ結論に届くための
+ * 二の路である。定数にしてあるのは、歯がこの文字列を名指しで測るため。
+ */
+export const UNSUPPORTED_KIND_ERROR_PREFIX = "runtime.tick: unsupported outbox job kind: ";
+
+/** `tick` が1件の outbox ジョブを処理する関数の形。 */
+type JobHandler = (ctx: Ctx, job: OutboxJobRecord) => Promise<void>;
+
 export interface RuntimeDeps {
   memoryStore: MemoryStore;
   outboxStore: OutboxStore;
@@ -197,9 +231,42 @@ export interface TickOptions {
   claimedBy?: string;
 }
 
+/**
+ * `tick` が claim したものの、**処理する分岐を持たなかった**ジョブ（ADR 0082）。
+ * {@link TickResult.unsupported} の要素型。
+ *
+ * **件数の欄を持たない**（`ReextractSkip` / `StageSkippedOmission` に倣った形。ADR 0029）
+ * ——ここは配列そのものが件数を持っている。
+ */
+export interface UnsupportedOutboxJob {
+  /** `fail()` で終端に落とした outbox 行の id。どの行が焼かれたかを名指しできる。 */
+  jobId: string;
+  /** その行の `kind`。`TICK_SUPPORTED_JOB_KINDS` に無かったもの。 */
+  kind: OutboxJobKind;
+}
+
 export interface TickResult {
   processed: number;
   failed: number;
+  /**
+   * `failed` の**内訳**のうち、「処理を試みて失敗した」のではなく
+   * 「`tick` がその kind を処理する分岐を持っていなかった」もの（ADR 0082、issue #105）。
+   *
+   * 🔴 **この欄が在る理由は1つだけ**——これが無いと、
+   * 「embed の provider が落ちて失敗した」と「`kinds: ['consolidate']` を渡したが
+   * `tick` は consolidate を処理できない」が、どちらも `failed: 1` という**同じ顔**になる。
+   * それは ADR 0029 が `ReextractResult.skipped` で塞いだのと同じ族の欠落
+   * （「無い」の種類を潰す）である。**`unsupported` に入ったジョブは `failed` にも数える**
+   * ——`failed` の意味（この tick で終端の失敗になった件数）は変えていない。
+   *
+   * ⚠ **ここに出たジョブは `fail()` で終端に落ちている**（Phase 1 に自動リトライは無い。
+   * ADR 0032）。黙って lease 切れを待つ形にはしない——claim したまま何もしないと、
+   * 「claim され続けるがいつまでも進まない」という、まさに呼び出し側から見えない停止になる。
+   *
+   * 空配列が既定であり、`undefined` にはならない（「出なかった」と「見ていない」を
+   * 同じ顔にしないため）。
+   */
+  unsupported: UnsupportedOutboxJob[];
 }
 
 export interface Runtime {
@@ -213,6 +280,15 @@ export interface Runtime {
    * `opts.leaseMs` は必須（ADR 0032）。`tick(ctx)` を引数無しで呼ぶことはできない
    * ——`claimBatch` の claim リース長は運用方針であり、`packages/core` が既定値を
    * 発明せず呼び出し側に決めさせるための意図した破壊的変更。
+   *
+   * 🔴 **処理する kind は {@link TICK_SUPPORTED_JOB_KINDS} が唯一の出所である**
+   * （ADR 0082、issue #105）。`opts.kinds` の既定値もそこを指す。そこに無い kind を
+   * `opts.kinds` に明示して渡した場合、そのジョブは claim され、**終端で失敗し**
+   * （`fail()`。Phase 1 に自動リトライは無い）、{@link TickResult.unsupported} に
+   * **名指しで**出る。黙って何も起きないまま lease が切れる形にはしない。
+   *
+   * ⚠ `OutboxJobKind` に名前が在ることと `tick` が処理することは**別である**——
+   * その型の JSDoc も参照。
    */
   tick(ctx: Ctx, opts: TickOptions): Promise<TickResult>;
   /**
@@ -657,9 +733,33 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     }
   }
 
+  /**
+   * `tick` がジョブを配る先。**キーの集合は {@link TICK_SUPPORTED_JOB_KINDS} と型で結ばれている**
+   * ——`Record<TickSupportedJobKind, JobHandler>` なので、片方だけ足す/消すと型検査が落ちる。
+   * issue #105（型に `consolidate` が在るのに分岐が無い）と同じずれを、次からは
+   * コンパイル時に止めるための結び目である。
+   */
+  const jobHandlers: Record<TickSupportedJobKind, JobHandler> = {
+    extract: processExtractJob,
+    embed: processEmbedJob,
+  };
+  /**
+   * `job.kind`（開いたユニオン＝任意の文字列）で引くための索引。
+   *
+   * 🔴 **`Map` である理由は1つだけ**——プレーンなオブジェクトを索引にすると
+   * `job.kind` が `"constructor"` / `"toString"` のとき `Object.prototype` 側の関数が
+   * 返り、**「対応している」と誤判定して呼んでしまう**。`kind` は DB の `text` 列から
+   * 来る任意の文字列であり、この2語を弾く仕組みはどこにも無い（`OutboxJobKind` は
+   * 開いたユニオンなので型でも止まらない）。`Map` は prototype を持たない。
+   * `Object.entries(jobHandlers)` から作るので、出所は `TICK_SUPPORTED_JOB_KINDS` のままである。
+   */
+  const jobHandlerLookup = new Map<string, JobHandler>(Object.entries(jobHandlers));
+
   async function tick(ctx: Ctx, opts: TickOptions): Promise<TickResult> {
     const claimOpts: ClaimOutboxJobsOptions = {
-      kinds: opts.kinds ?? ["extract", "embed"],
+      // 既定は「tick が処理できる kind だけ」——ここを広げると、処理できない kind を
+      // 呼び出し側が頼んでもいないのに claim して終端で焼くことになる（ADR 0082）。
+      kinds: opts.kinds ?? [...TICK_SUPPORTED_JOB_KINDS],
       limit: opts.limit ?? DEFAULT_TICK_LIMIT,
       now: clock.now(),
       claimedBy: opts.claimedBy ?? defaultClaimedBy,
@@ -669,15 +769,22 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
 
     let processed = 0;
     let failed = 0;
+    const unsupported: UnsupportedOutboxJob[] = [];
     for (const job of jobs) {
+      const handler = jobHandlerLookup.get(job.kind);
+      if (handler === undefined) {
+        // 🔴 ADR 0082 / issue #105: 処理する分岐が無い kind。ここで2つのことを同時にやる。
+        // 1. `fail()` で**終端に落とす**。claim したまま何もしないと lease が切れて
+        //    再び claim され、「claim され続けるがいつまでも進まない」になる。
+        // 2. `unsupported` に**名指しで積む**。`failed` に数えるだけだと、
+        //    「試して失敗した」と同じ顔になって呼び出し側から区別が付かない。
+        await deps.outboxStore.fail(ctx, job.id, `${UNSUPPORTED_KIND_ERROR_PREFIX}${job.kind}`);
+        unsupported.push({ jobId: job.id, kind: job.kind });
+        failed += 1;
+        continue;
+      }
       try {
-        if (job.kind === "extract") {
-          await processExtractJob(ctx, job);
-        } else if (job.kind === "embed") {
-          await processEmbedJob(ctx, job);
-        } else {
-          throw new Error(`runtime.tick: unknown outbox job kind: ${job.kind}`);
-        }
+        await handler(ctx, job);
         await deps.outboxStore.complete(ctx, job.id);
         processed += 1;
       } catch (err) {
@@ -685,7 +792,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
         failed += 1;
       }
     }
-    return { processed, failed };
+    return { processed, failed, unsupported };
   }
 
   const tokenCounter = deps.tokenCounter ?? heuristicTokenCounter;
