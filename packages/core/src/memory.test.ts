@@ -987,54 +987,179 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
   });
 
   /**
-   * ⭐⭐⭐ 穴の実在（蓋が無ければ束ねた総量は
-   * `MEMORY_TOC_ENTRY_LIMIT × MEMORY_TOC_LINE_LIMIT` を超えていた）と、
-   * 修理の実在（いまは `MEMORY_TOC_CHAR_BUDGET` の桁に収まる）を1本で固定する。
+   * 目次の蓋（`MEMORY_TOC_CHAR_BUDGET`）を測るための1件。**要旨は1行の上限
+   * ちょうど**（`MEMORY_TOC_LINE_LIMIT`）——1行が運ぶ量を最大にした、蓋が
+   * 確実に噛む形である。
+   */
+  const tocCapFact = (index: number) =>
+    fact(`fact-${String(index).padStart(3, '0')}`, {
+      description: 'あ'.repeat(MEMORY_TOC_LINE_LIMIT),
+      freshness: { kind: 'fresh' },
+    });
+
+  /**
+   * 候補行1本ぶんの限界費用を、**手で書式を真似ずに実測する。** 同じ長さの
+   * 要旨を持つ2件・1件のレンダリング結果の差分が「1行＋区切りの改行」ぶんで
+   * ある——`renderMemoryTocLine` の内部の書式（インデント・鮮度の印・区切り
+   * 文字）を書き写すと、書式が変わったときにここだけが古くなる（テストの
+   * 構造が実装の複製にならないようにする）。
+   */
+  const measureTocMarginalCost = () => {
+    const one = renderMemoryDocuments([tocCapFact(0)]);
+    const two = renderMemoryDocuments([tocCapFact(0), tocCapFact(1)]);
+    return { one, two, marginal: two.length - one.length };
+  };
+
+  /**
+   * 目次の断り書き（`renderMemoryTocOmission`）の1行目の頭。**逐語で持つ**
+   * ——定数を import して両側を一緒に動かす形にしない（#747 の作法。同じ
+   * ファイルの `⭐ memory.ts の中で 8,000 を持つ MEMORY_*_BUDGET 定数を、
+   * 断り書きが漏れなく名指しする` の doc）。
+   */
+  const TOC_OMISSION_NOTE_HEAD = '…ほか ';
+
+  /**
+   * ⭐⭐⭐ 穴の実在。**緩くてよい歯である**——ここで測りたいのは「蓋が
+   * 無ければ束ねた総量が桁で溢れていた」という事実だけで、締めても意味が
+   * 増えない。
    *
    * **`60_000` を直書きしない。** `MEMORY_TOC_ENTRY_LIMIT * MEMORY_TOC_LINE_LIMIT`
    * から出す（依頼者の求め。既存の歯の作法——値を書き写さず参照する）。
    *
-   * **候補行1本ぶんの長さは、手で書式を真似ずに実測する。** 同じ長さの要旨を
-   * 持つ2件・1件のレンダリング結果の差分から「1行＋区切りの改行」の限界費用
-   * を取り、299件ぶん外挿する——`renderMemoryTocLine` の内部の書式
-   * （インデント・鮮度の印・区切り文字）を書き写すと、書式が変わったときに
-   * ここだけが古くなる（テストの構造が実装の複製にならないようにする）。
+   * **⚠️ この主張は、かつて次の it()（修理の実在）と1本の it() に同居して
+   * いた。** 同居させたせいで、緩くてよいこちら側に合わせた `+ 1_000` という
+   * 丸い遊びが、締まっていないと意味が無い側の上界に入り込んでいた——実測
+   * （base `139c7aa`）で1行の限界費用は 224 字なので、`1000 / 224 = 4.46`
+   * ⟹ **予算を3行ぶん（672字、予算の 5.6%）恒常的に超過しても、どの歯も
+   * 落ちなかった**（+1/+2/+3 が生存し、+4 で初めてこの歯が落ちた）。
+   * **だから2本に割ってある。** 割った理由そのものが、この doc の要点である
+   * ——1本の歯が「穴が在った」と「修理が効いている」を両方主張すると、遊びは
+   * 必ず緩い側に合わせられる。
    */
-  it('⭐⭐⭐ 穴の実在（蓋なしなら束ねた総量は60,000字超）と修理の実在（いまは予算の桁に収まる）', () => {
-    const desc = 'あ'.repeat(MEMORY_TOC_LINE_LIMIT);
-    const one = renderMemoryDocuments([
-      fact('fact-000', { description: desc, freshness: { kind: 'fresh' } }),
-    ]);
-    const two = renderMemoryDocuments([
-      fact('fact-000', { description: desc, freshness: { kind: 'fresh' } }),
-      fact('fact-001', { description: desc, freshness: { kind: 'fresh' } }),
-    ]);
+  it('⭐⭐⭐ 穴の実在: 蓋が無ければ、束ねた候補行は 300件 × 1行200字 の下限を超えて伸びる', () => {
+    const { one, two, marginal } = measureTocMarginalCost();
     // 前提: この2件はどちらの蓋にも掛かっていない（2件だけなので省略が
     // 出ない）——外挿の材料が「蓋が効く前」の値であることを確かめる。
     expect(one).not.toContain('省略');
     expect(two).not.toContain('省略');
 
-    const marginal = two.length - one.length; // 1行 + 区切りの改行、ぶんの限界費用
     const extrapolatedCandidateTotal = one.length + (MEMORY_TOC_ENTRY_LIMIT - 1) * marginal;
 
-    // 穴の実在: 蓋が無ければ、300件ぶんの候補行はこの下限を超えて伸びる
-    // （実際の外挿値はこれよりさらに大きい——各行は要旨だけでなく slug・
-    // title・インデントも運ぶため）。
+    // 蓋が無ければ、300件ぶんの候補行はこの下限を超えて伸びる（実際の外挿値は
+    // これよりさらに大きい——各行は要旨だけでなく slug・title・インデントも
+    // 運ぶため）。
     const preCapFloor = MEMORY_TOC_ENTRY_LIMIT * MEMORY_TOC_LINE_LIMIT;
     expect(extrapolatedCandidateTotal).toBeGreaterThan(preCapFloor);
+  });
 
-    // 修理の実在: 同じ入力を実際に300件通しても、出力は予算の桁に収まる
-    // （断り書きぶんの余裕は持たせるが、外挿した候補総量とは桁が違う）。
-    const docs = Array.from({ length: MEMORY_TOC_ENTRY_LIMIT }, (_, i) =>
-      fact(`fact-${String(i).padStart(3, '0')}`, {
-        description: desc,
-        freshness: { kind: 'fresh' },
-      }),
-    );
+  /**
+   * ⭐⭐⭐ 修理の実在。**こちらは締まっていないと意味が無い歯である。**
+   *
+   * ## 遊びの大きさを決めるのは断り書きであって、書き手ではない
+   *
+   * 出力が `MEMORY_TOC_CHAR_BUDGET` を超えてよい理由は1つしかない——
+   * `renderListing`（`excerpt.ts`）が予算で締めるのは**目次の項目行だけ**で、
+   * 切ったときの断り書き（`renderMemoryTocOmission`）はその上に載るからである。
+   * ⟹ **だから上界の第2項は、丸い数字ではなく「この出力に実際に載った断り
+   * 書きの長さ」である。** 断り書きの文言が伸び縮みすれば上界も同じだけ動く
+   * ので、遊びの大きさに書き手の裁量は1文字も残らない。
+   *
+   * ## 何を捕まえるか（実測。base `139c7aa`、合成入力のみ）
+   *
+   * `renderMemoryToc` の `candidateLines.slice(0, charBudgetInfo.shown)` を
+   * `… + N)` へ変異させる（＝予算より N 行多く出す）と、**N=1 で落ちる。**
+   * 1行の限界費用は 224 字、この上界の余裕は 58 字である。
+   *
+   * ## ⚠️ この歯が測っていないこと
+   *
+   * - **予算より少なく出す側（`… - 1`）は捕まえない。** これは上界であって、
+   *   「予算を使い切っている」ことは主張していない
+   * - **断り書きの*中身*は測っていない。** 長さしか見ないので、文言が別物へ
+   *   置き換わっても長さが同じならこの歯は緑のままである（中身は上の3状態の
+   *   it() が逐語で持つ）
+   * - **項目行のほかにも予算の上に載るものが在る**——見出し2行
+   *   （`<!-- memory: index -->` と `## 記憶の目次…`）と、行を繋ぐ改行である
+   *   （実測 123 字）。この上界がそれでも成り立つのは、`renderListing` が
+   *   予算を使い切らずに止まるため（実測 181 字を余らせる）であって、見出しが
+   *   予算の内側に在るからではない
+   */
+  it('⭐⭐⭐ 修理の実在: 予算を超えてよいのは断り書きぶんだけ（遊びは断り書きの実測長が決める）', () => {
+    const docs = Array.from({ length: MEMORY_TOC_ENTRY_LIMIT }, (_, i) => tocCapFact(i));
     const rendered = renderMemoryDocuments(docs);
     expect(rendered).toContain('省略');
-    expect(rendered.length).toBeLessThan(MEMORY_TOC_CHAR_BUDGET + 1_000);
+
+    // 上界の第2項は「この出力に実際に載った断り書き」から取る。
+    const noteStart = rendered.indexOf(TOC_OMISSION_NOTE_HEAD);
+    expect(noteStart).toBeGreaterThan(-1);
+    const omissionNote = rendered.slice(noteStart);
+    // 切り出した先に目次の項目行が混ざっていない（＝これは断り書きそのもので
+    // あって、目印が項目行の中に当たったのではない）。
+    expect(omissionNote).not.toMatch(/^- fact-/m);
+
+    expect(rendered.length).toBeLessThan(MEMORY_TOC_CHAR_BUDGET + omissionNote.length);
+
+    // 対照: この上界が「そもそも蓋が噛んでいない」ことで成り立っていない
+    // ——蓋が無いときの外挿値とは桁が違う。
+    const { one, marginal } = measureTocMarginalCost();
+    const extrapolatedCandidateTotal = one.length + (MEMORY_TOC_ENTRY_LIMIT - 1) * marginal;
     expect(rendered.length).toBeLessThan(extrapolatedCandidateTotal / 2);
+  });
+
+  /**
+   * ⭐ `MEMORY_TOC_CHAR_BUDGET` の値そのものは、どの歯にも固定されていない
+   * ——歯は定数を import して期待文言を組むので、**値を動かすと期待値も一緒に
+   * 動く**（自己整合）。実測（base `139c7aa`、全件）: `12_001` / `11_999` の
+   * どちらへ変異させても**生存**した。
+   *
+   * **だからといって `expect(MEMORY_TOC_CHAR_BUDGET).toBe(12_000)` は置かない。**
+   * それは実測に基づいて値を調整する正当な改善まで禁じる歯になる。**代わりに
+   * 「なぜ 12,000 なのか」＝ 値の帰属と関係のほうを固定する**（手本は #747 の
+   * 「8,000 を持つ別の予算が増えたら赤くなる」歯）。
+   *
+   * 固定するのは、`MEMORY_TOC_CHAR_BUDGET` の doc が逐語で主張している
+   * 「別の数を置くことで『別の予算である』を値そのものに語らせる」である。
+   * **この repo では値の共有そのものは禁じられていない**（実測: 8,000 は
+   * `MEMORY_LISTING_BUDGET` と `MEMORY_OUTLINE_BUDGET` が、3,000 は
+   * `MEMORY_PROMPT_DESCRIPTION_BUDGET` と `MEMORY_TIDY_TARGETS_BUDGET` が
+   * 分け合っている）ので、**この歯は「一般に値を共有するな」ではなく、
+   * この定数についての doc の主張だけを守っている。**
+   *
+   * 崩れたときにどこが赤くなるか: 誰かが 12,000 を別の `MEMORY_*_BUDGET` へ
+   * 写すか、この定数を既存の値（8,000 / 6,000 …）へ揃えると `sharing` に
+   * 名前が入り、`toEqual([])` が落ちる。doc の主張を書き換えるか、値を戻すまで
+   * 赤いままになる。
+   *
+   * **⚠️ この歯が測っていないこと: 値そのものは測らない。** 12,000 → 12,001 の
+   * ような、帰属も関係も壊さない変異はここでも生存する（それは意図であって
+   * 見落としではない）。
+   */
+  it('⭐ 焼き込みの予算（MEMORY_TOC_CHAR_BUDGET）は、他のどの記憶の予算とも値を分け合わない', () => {
+    const source = readFileSync(fileURLToPath(new URL('./memory.ts', import.meta.url)), 'utf8');
+    const byName = new Map<string, number>();
+    for (const match of source.matchAll(/export const (MEMORY_\w*_BUDGET) = ([\d_]+);/g)) {
+      byName.set(match[1] as string, Number((match[2] as string).replace(/_/g, '')));
+    }
+
+    // 対照: ソースから読んだ値と import した値が同じものを指している
+    // （正規表現が黙って外れていたら、下の `sharing` は常に空になる）。
+    expect(byName.get('MEMORY_TOC_CHAR_BUDGET')).toBe(MEMORY_TOC_CHAR_BUDGET);
+
+    const sharing = [...byName.entries()]
+      .filter(
+        ([name, value]) => name !== 'MEMORY_TOC_CHAR_BUDGET' && value === MEMORY_TOC_CHAR_BUDGET,
+      )
+      .map(([name]) => name)
+      .sort();
+    expect(sharing).toEqual([]);
+
+    // 関係の側。**毎ターン全員が払う焼き込み**の予算なので、1回のツール応答の
+    // 予算（`MEMORY_LISTING_BUDGET`）よりも、premise 1文書ぶんの節目次の予算
+    // （`MEMORY_PROMPT_OUTLINE_BUDGET`）よりも大きい——束ねる対象が広い。
+    expect(MEMORY_TOC_CHAR_BUDGET).toBeGreaterThan(MEMORY_LISTING_BUDGET);
+    expect(MEMORY_TOC_CHAR_BUDGET).toBeGreaterThan(MEMORY_PROMPT_OUTLINE_BUDGET);
+    // そして蓋が無いときの下限（300件 × 1行200字）よりは小さい——蓋として
+    // 実際に噛む側に居ること。
+    expect(MEMORY_TOC_CHAR_BUDGET).toBeLessThan(MEMORY_TOC_ENTRY_LIMIT * MEMORY_TOC_LINE_LIMIT);
   });
 
   it('切らないときは、切った件数の注記が出ない（切る/切らないは別の it() で測る）', () => {
