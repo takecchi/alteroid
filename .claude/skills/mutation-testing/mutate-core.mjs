@@ -319,11 +319,22 @@ function undeliveredGatePassed(artifactResult) {
  * `delivered`/`undelivered` そのものの決定方法は1文字も変えていない
  * （成果物の内容検査のみで決まる）。変えたのは、`undelivered` と決まった
  * *後*に、テスト結果を見てよいかどうかの判断だけである。
+ *
+ * **集計ブロックが複数在るときは `HarnessError` を投げて判定を出さない**
+ * （`assertAggregateBlocksUnambiguous`）。これは `testsRanCleanly` の検査より
+ * *前*に効く——「最後のブロックだけなら綺麗に読める」場合でも、複数在った
+ * という事実そのものを理由に拒む。詳細と理由は `assertAggregateBlocksUnambiguous`
+ * の doc。
  */
 export function decideJudgementCategory(artifactResult, testResult) {
   if (artifactResult.artifactState === 'undelivered' && !undeliveredGatePassed(artifactResult)) {
     return '不明';
   }
+  // ⭐ 集計行を1本に決められるかより先に、集計「ブロック」が複数無いかを見る
+  // （3つの入口のうちの1つ。他の2つは `mutate.mjs` の `cmdBaseline` / `cmdRun`）。
+  // 呼び出し元（`runOneMutation`）は既に `testResult.raw` を先に log しているので、
+  // ここで投げても生ログは判定より前に出ている（歯7の「加工前の証跡」を壊さない）。
+  assertAggregateBlocksUnambiguous(testResult.raw, 'decideJudgementCategory');
   if (!testsRanCleanly(testResult)) {
     throw new HarnessError(
       'テストの集計行（Test Files / Tests）が見つからない。' +
@@ -759,12 +770,98 @@ export function stripAnsi(s) {
  * 壊れる**（#311 の歯A・`AGENTS.md`「『判定できない』という3つ目の状態を持つ」）。
  * ANSI を剥がすのは行頭の空白判定を助けるためだけで、探す語（`Test Files` /
  * `Tests`）は1文字も緩めていない。
+ *
+ * **⚠️ ここが「最初の1件」ではなく「最後の1件」を返す（この修正で変えた）。**
+ * 元は `/m`（`/g` 無し）で `.match()` していたため、**必ず最初の集計ブロックを
+ * 返していた。** この repo の `test` スクリプト自身は vitest を1回しか起こさない
+ * ので単一ブロックしか出ないが（`grep -Fn -- "spawn('vitest'" scripts/test.mjs`）、
+ * 測定対象の repo の `test` スクリプトが `vitest run && pnpm -r --if-present run test
+ * && …` のような**複合スクリプト**だと、vitest の集計ブロックが複数出る。そのとき
+ * 「最初の1件」を返す旧実装は、**変異と無関係な最初のブロックを判定材料にしていた**
+ * （実測・別 repo・mnemora: 8アサーションが赤なのに「生存」と判定された）。「最後の
+ * ブロック」は複合スクリプトの最終集計が全体を代表するので、こちらを返す。
+ *
+ * **ただし「最後を採る」だけでは終わらせていない。** 複数ブロックが在ったという
+ * 事実そのものは、`/g` を足して最後を採るだけだと出力から消える——最初のブロックが
+ * 無関係な理由で赤ければ「検出」、緑なら「生存」と、**どちらの向きにも静かに嘘を
+ * つける**（歯が在るのに無いと言う／歯が無いのに在ると言う）。だからこの関数の
+ * 返り値の形（`{filesLine, testsLine}`）は変えず、「複数在ったか」は別の関数
+ * （`countAggregateBlocks` / `assertAggregateBlocksUnambiguous`）が持つ——
+ * `scripts/mutate-core-strip-ansi.test.ts` の「3箇所の実装が食い違わないこと」の
+ * 歯が、この関数の返り値の形が変わると落ちるため（トップレベルの doc に理由がある）。
  */
 export function parseAggregateLines(rawOutput) {
   const plain = stripAnsi(rawOutput);
-  const filesLine = plain.match(/^\s*Test Files\s+.+$/m)?.[0]?.trim() ?? null;
-  const testsLine = plain.match(/^\s*Tests\s+.+$/m)?.[0]?.trim() ?? null;
+  const filesMatches = plain.match(/^\s*Test Files\s+.+$/gm);
+  const testsMatches = plain.match(/^\s*Tests\s+.+$/gm);
+  const filesLine = filesMatches ? filesMatches[filesMatches.length - 1].trim() : null;
+  const testsLine = testsMatches ? testsMatches[testsMatches.length - 1].trim() : null;
   return { filesLine, testsLine };
+}
+
+/**
+ * `rawOutput` の中に vitest の集計ブロック（`Test Files` 行 / `Tests` 行）が
+ * 何回出現したかを数える。`parseAggregateLines` が返す「最後の1件」だけでは
+ * 「複数在った」という事実が消えるので、それを別に持ち回るための関数。
+ *
+ * 行そのもの（trim 済み）の配列も返す——`assertAggregateBlocksUnambiguous` が
+ * 拒否メッセージへ「最初のブロックの実値」「最後のブロックの実値」を埋め込むのに使う。
+ */
+export function countAggregateBlocks(rawOutput) {
+  const plain = stripAnsi(rawOutput);
+  const filesMatches = (plain.match(/^\s*Test Files\s+.+$/gm) ?? []).map((s) => s.trim());
+  const testsMatches = (plain.match(/^\s*Tests\s+.+$/gm) ?? []).map((s) => s.trim());
+  return { filesMatches, testsMatches };
+}
+
+/**
+ * ⭐ **設計の要**: 集計ブロックが複数在ったら、判定を出さずに拒む（`HarnessError`）。
+ *
+ * **なぜ「拒む」を選んだか。** 複合スクリプト（`vitest run && pnpm -r --if-present
+ * run test && …` の形）では、vitest の集計ブロックが複数出ることがある。どちらの
+ * ブロックが「いま当てている変異」と対応するかを、このハーネスは判別できない
+ * （raw の中に印は無い）。ここで黙って片方（最初でも最後でも）を採用すると、
+ * **無関係なブロックが緑のとき偽の「生存」を、赤のとき偽の「検出」を、どちらも
+ * 静かに作る。** 「判定できない」と言うほうが、間違った判定を出すより安全である
+ * ——`AGENTS.md`「判定できないという3つ目の状態を持つ」（逐語は
+ * `grep -Fn -- '判定できないという3つ目の状態を持つ' AGENTS.md`）、および
+ * `decideJudgementCategory` が既に「集計行そのものが無い」を同じ理由で拒んでいる
+ * のと同じ考え方——ここはその考え方を「複数在って選べない」という別の原因にも
+ * 適用しただけである。
+ *
+ * **`/g` を足して最後を採るだけで終わらせなかった理由がここにある。** 件数を
+ * 数えずに最後を採用するだけの実装は「複数在った」という事実自体を握り潰す
+ * ——それでは最初のブロックが偶然赤くても、判定は最後のブロックだけを見て
+ * 「生存」と言ってしまう。歯が在っても無いと嘘をつく、まさに直したかった欠陥の
+ * 別形である。
+ *
+ * @param {string} rawOutput テストの生出力（`runTests` の `raw`）。
+ * @param {string} contextLabel エラーメッセージへ差し込む呼び出し元の名前
+ *   （`decideJudgementCategory` / `baseline` / `run: baseline` のいずれか）。
+ */
+export function assertAggregateBlocksUnambiguous(rawOutput, contextLabel) {
+  const { filesMatches, testsMatches } = countAggregateBlocks(rawOutput);
+  const blockCount = Math.max(filesMatches.length, testsMatches.length);
+  if (blockCount <= 1) return;
+
+  throw new HarnessError(
+    `${contextLabel}: vitest の集計ブロックが複数(${blockCount}個。` +
+      `Test Files 行 ${filesMatches.length}個 / Tests 行 ${testsMatches.length}個)出力された。判定を拒む。\n` +
+      'なぜ拒むか: この repo の `test` スクリプトが複合コマンド（例 "vitest run && ' +
+      'pnpm -r --if-present run test && …"）だと、vitest の集計ブロックが複数出ることがある。' +
+      'どのブロックがいま当てている変異と対応するかをこのハーネスは判別できない。片方を' +
+      '無条件に採用すると、無関係なブロックが緑のとき偽の「生存」を、赤のとき偽の「検出」を、' +
+      'どちらも静かに作る（歯が在るのに無いと言う／歯が無いのに在ると言う）。だから判定しない。\n' +
+      `最初のブロック: Test Files=${JSON.stringify(filesMatches[0] ?? null)} / ` +
+      `Tests=${JSON.stringify(testsMatches[0] ?? null)}\n` +
+      `最後のブロック: Test Files=${JSON.stringify(filesMatches.at(-1) ?? null)} / ` +
+      `Tests=${JSON.stringify(testsMatches.at(-1) ?? null)}\n` +
+      '次にやること: (1) 生ログ（このメッセージの直前に出ているはず）を "Test Files" で ' +
+      `検索し、${blockCount} 組を目で確かめる。(2) この repo の \`test\` スクリプトが vitest を ` +
+      '1回だけ起こす形になっているか確認する（$ grep -Fn -- "spawn(\'vitest\'" scripts/test.mjs）。' +
+      '(3) 複合スクリプトが原因なら、変異と対応する1本だけを走らせるフィルタ（`spec.testFilter`）を' +
+      '使うか、複合スクリプトのうち測定したい1本だけを直接呼ぶ形に変える。',
+  );
 }
 
 /** 手順10: テストを走らせ、`Test Files ... passed` と `Tests ... passed` の
