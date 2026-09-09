@@ -620,6 +620,60 @@ describe('SubagentStop の観測（#357 / #570）', () => {
   });
 
   /**
+   * ⭐ **変異試験で開いた穴を塞いだ歯（この PR）。**
+   *
+   * **1回の `SubagentStop` に残っている背景処理が複数あるとき、加算は
+   * 「残っている全件」に効く**（`runner.ts` の `#onSubagentStop` —— 逐語は
+   * `grep -Fn -- '「全件」（`underPerTask` だけではない）なのは' packages/core/src/runner.ts`）。
+   * その回に「待たされた」のは残っている背景処理の全部だからである。
+   *
+   * **この歯は、変異試験で「生存」が出たあとに足した。** 加算を
+   * `remainingIds` から `remainingIds.slice(0, 1)`（＝先頭1件だけ）へ変える
+   * 変異が、**この歯を足す前は全 5,028 件を素通りした**（生存の4分類の
+   * 2「歯が無い」）。**残っている背景処理が複数ある回を撃つ歯が1本も
+   * 無かった** —— 他の歯はどれも「残り1件」の形でしか発火させていない。
+   *
+   * **測り方**: 1回目に2件（`bg-x` / `bg-y`）を同時に残して起こし直させ、
+   * 2回目は**2件目の `bg-y` だけ**を残して撃つ。全件を数えていれば
+   * `bg-y` は既に1回使っているので「2回目」になる。**先頭1件しか数えて
+   * いなければ `bg-y` は0のままなので「1回目」になる。**
+   * ⚠️ **確かめるのは2件目でなければならない** —— 先頭の `bg-x` は
+   * どちらの実装でも数えられるので、`bg-x` で見るとこの歯は何も測らない。
+   */
+  it('1回に複数の背景処理が残っていたら、その全部の回数が増える（先頭1件だけではない）', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    await registerBackgroundTask(started.options, 'bg-x', 'agent-1');
+    await registerBackgroundTask(started.options, 'bg-y', 'agent-1');
+
+    // 1回目 —— 2件とも残したまま畳もうとした。
+    const first = await fireSubagentStop(started.options, {
+      ...STOP_BASE,
+      agent_id: 'agent-1',
+      background_tasks: [
+        selfEntry('agent-1'),
+        { id: 'bg-x', type: 'monitor', status: 'running' },
+        { id: 'bg-y', type: 'monitor', status: 'running' },
+      ],
+    });
+    expect(first).toHaveProperty('hookSpecificOutput');
+
+    // 2回目 —— **2件目の `bg-y` だけ**を残して撃つ。
+    const second = await fireSubagentStop(started.options, {
+      ...STOP_BASE,
+      agent_id: 'agent-1',
+      background_tasks: [selfEntry('agent-1'), { id: 'bg-y', type: 'monitor', status: 'running' }],
+    });
+    expect(second).toHaveProperty('hookSpecificOutput');
+    const context = (second as { hookSpecificOutput: { additionalContext: string } })
+      .hookSpecificOutput.additionalContext;
+    expect(context).toContain('この背景処理では 2回目');
+  });
+
+  /**
    * **上限に達したら起こし直しをやめる。** `additionalContext` は返さず、
    * `escalate: true` の `note` を出す（`manager.ts` の `case 'note'` が
    * これを見て受信箱へも1本上げる）。
