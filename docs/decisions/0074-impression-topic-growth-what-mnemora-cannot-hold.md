@@ -3,6 +3,14 @@
 - **状態**: **提案（未採用）。オーナーの判断待ち。**
 - **日付**: 2026-09-09
 
+> **⚠ 2026-09-09 訂正あり。**この ADR がマージされた後、オーナーの差し戻しを受けて
+> `strength` と supersede の現物を読み直したところ、**4点の誤り・不正確が見つかった。**
+> 前例（`docs/memory-model.md:430` / `:681` の「⚠ 2026-09 訂正」）に倣い、
+> **元の記述は書き換えず、その場に ⚠ 訂正として追記してある。**
+> 場所は §2.3 の 🔴2・🔴3 と、§4 案1 の表の直後。**4点目（行番号の陳腐化）はここにまとめる:**
+> 本文が引く `packages/core/src/extraction.ts:215` / `:232` は現行 `main`（`9c79d88`）では `:259` / `:276`、
+> `packages/core/src/runtime.ts:241` は `:268` である。**内容は一致しており、後続コミットで行がずれただけである。**
+
 **⚠ この ADR は決定していない。** 3つの案を並べ、**選ばなかった**記録である。
 選ぶのはオーナーであり、この文書の末尾「オーナーへ差し戻す問い」がその入口である。
 実装は含まない（この PR はこの1ファイルだけである）。
@@ -239,6 +247,27 @@ mnemora の `subjectId` の **null / 非 null** に1対1で対応する
    **⟹ 同じ列に載せると「間違いだったから消えた」と「変わったから前の版になった」が区別できなくなる。**
    これは北極星の問い3（なぜ思い出したかを説明できるか）に直接効く。
 
+   **⚠ 2026-09-09 訂正: この項は、現在形で書いてよい事実ではなかった。**
+   **「同居する」ではなく「まだ同居していない」が正確である。**
+   現物を読み直した【現物】——**`status = 'superseded'` を書くコードは、いま
+   `packages/core/src/runtime.ts:451-470` の `reextract` の1本しかない。**
+   `MemoryStore` の契約コメント自身がそう名乗っている
+   （`packages/core/src/interfaces/memory-store.ts:260-262`、逐語）:
+
+   > `expectedStatus` を**単数**にしている理由: 現時点の**唯一の呼び出し元**（`runtime.ts` の `reextract`）が
+   > 要る条件は `"active"` の1つだけであり、集合（配列）にする理由が無い。
+
+   統合は `ProvenanceKind: "consolidated"` と `OutboxJobKind: "consolidate"` の**型だけ**が在り、
+   ジョブハンドラが無い。矛盾解決は `contested` を**作る主体**が未実装である
+   （`packages/core/src/recall-runtime.ts:531-533`）。
+   監査ログ側も同じで、`MemoryEvent.meta.reason` に実際に入る値は文字列リテラル
+   `"reextract_superseded"` の1種類だけである。
+   **⟹ いま `superseded` に流れているのは「訂正」1種類であり、`recall.ts:382` の
+   「機構の都合」という doc は、現時点では正確である。**
+   **⟹ この項は「いま壊れている」ではなく、「2つ目の書き手（統合か矛盾解決）が入ったときに壊れる」という予言である。**
+   **⟹ したがって `supersededReason` を*いま*足すと、値が1種類しかない判別子を足すことになる。**
+   足す時期は、2つ目の書き手が入る時期と結び付けて判断すべきである。
+
 3. **🔴 重要度に当たる列が、実質的に存在しない。**
    `PersonaGrowthEntity` は `importance Int @default(5) @db.SmallInt` を持ち、
    `reinforceCount` が 5 / 10 / 20 の節目で段階的に引き上げられる（`persona-growth.service.ts:453-458`）。
@@ -258,6 +287,25 @@ mnemora の `subjectId` の **null / 非 null** に1対1で対応する
    6軸のうち、意味（embedding）・時間（`occurredAt` / `freshness` / `period`）・
    利用頻度（`lastReinforcedAt`）・関連性（`tags` / `contested`）は形が在る。
    **いま値が入っていないのは「重要度」である。**
+
+   **⚠ 2026-09-09 訂正: 見出しの「実質的に存在しない」は過剰である。**
+   **「`Runtime` からは設定できない」が正確な言い方である。**
+   ADR 0041 の「引き受ける負債」節は、この ADR が引かなかった続きの1文を持つ（`0041:88`、逐語）:
+
+   > **⟹ `strength` が 1 以外になるのは、`MemoryStore.createMemory` を直接呼んだときだけである。**
+
+   現物でも裏が取れる【現物】——`createMemory` / `createMemoryWithOutbox` は `NewMemory` を丸ごと受け取り、
+   `packages/postgres/src/memory-store.ts:176-187` が `input.strength` をそのまま SQL に埋める。
+   型（`z.number()`、値域の制約なし）も DDL（`strength real NOT NULL DEFAULT 1.0`、CHECK なし）も
+   1 以外を受け付ける。
+   **⟹ 欄は在り、adapter を直接叩けば値は入る。塞がっているのは公開5動詞
+   （`observe` / `tick` / `recall` / `reextract`）の側だけである。**
+   **⟹ よって末尾の問い3 は「重要度の欄を新設するか」ではなく、
+   「既に在る欄を、ADR 0041 が想定した使い方（初期値の設定）で使うか」という形が正しい。**
+   ⚠ ただしその口を開けるなら、**先に `strength` の値域を塞ぐ必要が在る。**
+   ADR 0041:85 が逐語で「**`strength` の値域は依然として制約が無い**（`z.number()` / CHECK なし）。
+   塞いでいない。」と書いており、`strength` はスコアの掛け算
+   （`total = (similarity ?? 1) × decay × tagMatch × freshness × strength`）に直接入るためである。
 
 4. `trigger`（何がきっかけか）は `content` に混ぜるか `basis` に落とす。**落ちるのはきっかけの本文。**
    `keywords: String[]` は `tags` で表せる（(a)）。
@@ -321,6 +369,20 @@ mnemora の `subjectId` の **null / 非 null** に1対1で対応する
 | 成長 | `Memory { provenance: 'inferred' \| 'consolidated', subjectId: null（core）/ <user>（relationship）, tags: ['growth', <category>] }` |
 | 確信が上がった／言及が増えた | **新しい Memory を作り、古いほうを supersede する**（内容が同一なら `contentHash` 一致で冪等 create に落ちる、ADR 0054） |
 | 「前はこうだった」を出す | recall では出ない。呼び出し側が `RecallResult.omitted` の `filtered { condition: 'superseded' }` を見て、`MemoryStore.get(supersededById)` を辿る |
+
+**⚠ 2026-09-09 訂正: 上の表の最終行「`MemoryStore.get(supersededById)` を辿る」は、向きが逆で成立しない。**
+`supersededById` は**旧行が新行を指す前方ポインタ**である【現物】——
+`packages/core/src/runtime.ts:451-455` は、旧 Memory（`existing.id`）の側へ
+`supersededById = <新しい Memory の id>` を書く。
+**⟹ `recall()` が返す `active` な Memory は、前の版への矢印を持たない。**
+逆引き（`WHERE superseded_by_id = <活きている id>`）を行う口は `MemoryStore` の interface に無い。
+`get` / `getMany` は id 指定であり status で絞らないので、**`superseded` な Memory も id さえ分かれば引ける。
+引けないのは「その id を知る手段」のほうである。**
+部分索引 `idx_memories_superseded_by ON memories (tenant_id, superseded_by_id) WHERE superseded_by_id IS NOT NULL`
+は `packages/postgres/migrations/0001_init.sql:120-122` に**既に在る**が、それを叩く口が無い。
+**⟹ 案1 の逃げ道は成立していない。**
+**⟹ そして §4 案2 の (B) は「recall の外でもできることを recall へ移す」話ではなく、
+「いまどこからもできないことを可能にする」話である。**
 
 **引き受ける負債（この案を採る場合）:**
 
