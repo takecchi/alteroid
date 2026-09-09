@@ -52,7 +52,7 @@ jobs:
   update:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # PR 用ブランチに人間のコミットが積まれていないかを `--not origin/main` で
           # 見るので、履歴が要る（浅い clone だと祖先関係が引けない）。
@@ -62,7 +62,7 @@ jobs:
       - uses: jdx/mise-action@v4
       - id: pnpm-store
         run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: ${{ steps.pnpm-store.outputs.path }}
           key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}

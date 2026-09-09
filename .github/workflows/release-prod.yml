@@ -39,7 +39,7 @@ jobs:
       # `--force-with-lease` の期待値が手元に無いオブジェクトでも通ることは実測で確認済み。
       #
       # dispatch を別の枝から起こされても押すのは main である（正典は main）。
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: main
       - name: main を release/prod へ反映する
