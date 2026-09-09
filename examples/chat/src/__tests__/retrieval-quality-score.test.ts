@@ -257,6 +257,8 @@ function armReport(): ArmReport {
     ingest: {
       observationCount: 74,
       drain: { ticks: 3, totalProcessed: 75, totalFailed: 0, firstTickProcessed: 50 },
+      extractionCounts: { ok: 74, skipped: 0, llmFailedWholeObservation: 0 },
+      measurement: "measured",
       singleTickWouldHaveStalled: true,
     },
     probes: [probe()],

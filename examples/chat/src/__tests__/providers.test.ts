@@ -13,6 +13,8 @@ import {
 } from "@mnemora/testkit";
 import {
   createProviders,
+  decideProviderSource,
+  describeProviderSourceReason,
   selectEmbeddingMode,
   selectLLMMode,
   selectProviderMode,
@@ -226,5 +228,87 @@ describe("formatNoApiCallsNotice — モードを取り違えない（ADR 0051�
   it("記録の再生では「値の出所」と「費用」を別の話として明示する", () => {
     const notice = formatNoApiCallsNotice({ llmMode: "recorded", embeddingMode: "recorded" });
     expect(notice).toContain("この run 自体は API を叩いていない");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ADR 0068 ③: 「キーが在るだけで、カセット再生のつもりが実 API に倒れる」を塞ぐ
+//
+// **現物の欠陥**: 直していない旧 `resolveCassetteForRun`(`cli.ts`)は
+// `process.env.OPENAI_API_KEY` の有無だけを見ており、`MNEMORA_LLM=recorded` を
+// 渡しても救えなかった(`runRetrieval`/`runCompare` はどちらも `MNEMORA_LLM`/
+// `MNEMORA_EMBEDDING` を自分で明示的に上書きするため)。「キーが在るときにカセットを
+// 使う口」がどこにも無かった——`decideProviderSource` がその口を足す。
+//
+// **歯はキーが在る状態で測る**——キーが無い状態で緑にしても、この欠陥(キーが在ると
+// 強制指定が効かなくなる)は一生捕まらない。
+// ---------------------------------------------------------------------------
+
+describe("decideProviderSource — カセット再生か実 API かの判定（ADR 0068 ③）", () => {
+  const fakeKeyEnv = { OPENAI_API_KEY: "sk-test-dummy-not-real" };
+
+  it('③-1: キーが在っても MNEMORA_PROVIDER_SOURCE="recorded" を明示すれば recorded を強制する', () => {
+    expect(decideProviderSource({ ...fakeKeyEnv, MNEMORA_PROVIDER_SOURCE: "recorded" })).toEqual({
+      source: "recorded",
+      reason: "forced",
+    });
+  });
+
+  it('MNEMORA_PROVIDER_SOURCE="openai" は、キーが在れば openai を強制する', () => {
+    expect(decideProviderSource({ ...fakeKeyEnv, MNEMORA_PROVIDER_SOURCE: "openai" })).toEqual({
+      source: "openai",
+      reason: "forced",
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // ⚠ この歯は、本 PR の実装の途中で実際に踏んだ穴を殺すために足した。
+  //
+  // `MNEMORA_PROVIDER_SOURCE="openai"` をキー無しで指定できてしまうと、`cli.ts` の
+  // `runCompare` はカセットを読まずに `process.env` をそのまま `createProviders` へ
+  // 渡す——`selectProviderMode` が「キーが無い ⟹ deterministic」と判定するので、
+  // **画面には「実 API を叩く」と出しながら擬似 provider で走り、数字の表を出して
+  // EXIT=0 で終わる**。走らせて実際にこの出力を確認した。
+  //
+  // **⟹ ADR 0068 が塞ごうとしている「正直な顔をして違うことをする」形そのものを、
+  // ③ の実装が新しく作っていた。**「明示した source と、実際に使われる provider が
+  // 食い違う」経路は作らない。
+  // -------------------------------------------------------------------------
+  it('MNEMORA_PROVIDER_SOURCE="openai" をキー無しで指定したら例外（擬似 provider へ黙って倒れない）', () => {
+    expect(() => decideProviderSource({ MNEMORA_PROVIDER_SOURCE: "openai" })).toThrow(
+      /OPENAI_API_KEY/,
+    );
+    // 空文字のキーも「無い」側（`selectProviderMode` の falsy 判定と揃える）。
+    expect(() =>
+      decideProviderSource({ OPENAI_API_KEY: "", MNEMORA_PROVIDER_SOURCE: "openai" }),
+    ).toThrow(/OPENAI_API_KEY/);
+  });
+
+  it("③-2: 未指定なら、いままで通りキーの有無だけで決まる（既定の振る舞いは変えていない）", () => {
+    expect(decideProviderSource(fakeKeyEnv)).toEqual({ source: "openai", reason: "key-present" });
+    expect(decideProviderSource({})).toEqual({ source: "recorded", reason: "no-key" });
+    // 空文字は「未指定」として扱う（`parseModeOverride` と同じ作法）。
+    expect(decideProviderSource({ MNEMORA_PROVIDER_SOURCE: "" })).toEqual({
+      source: "recorded",
+      reason: "no-key",
+    });
+  });
+
+  it("③-3: 未知の値を渡すと例外を投げる（黙って既定へ倒れない）", () => {
+    expect(() => decideProviderSource({ MNEMORA_PROVIDER_SOURCE: "cassette" })).toThrow(
+      /MNEMORA_PROVIDER_SOURCE/,
+    );
+    expect(() =>
+      decideProviderSource({ ...fakeKeyEnv, MNEMORA_PROVIDER_SOURCE: "cassette" }),
+    ).toThrow(/MNEMORA_PROVIDER_SOURCE/);
+  });
+
+  it("describeProviderSourceReason は forced と自然に決まった場合を書き分ける", () => {
+    expect(describeProviderSourceReason({ source: "recorded", reason: "forced" })).toContain(
+      "明示指定",
+    );
+    expect(describeProviderSourceReason({ source: "recorded", reason: "no-key" })).not.toContain(
+      "明示指定",
+    );
   });
 });

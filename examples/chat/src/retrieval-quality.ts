@@ -200,6 +200,47 @@ function average(values: number[]): number {
 }
 
 // ---------------------------------------------------------------------------
+// 実行ごとに一意な tenantId を組む(ADR 0068)
+//
+// **背景**: `cli.ts` の `runRetrieval` は arm ごとに固定の `tenantId`
+// (`retrieval-quality-arm-a` 等)を使っていた。DB をリセットしないため、2回目の
+// 実行は `observe()` の externalId 冪等性に当たって新規 observation を1件も作らず、
+// `ingest` の欄が「1回で足りた」という**逆の結論**を印字する(1回目は実際に測って
+// 「足りなかった」、2回目は測っていないのに同じ判定式が `false` を返す)。
+// 順位(goldRank 等)は DB に前回の記憶が残っているため正しく出続けるので、
+// 数字を見ていても気付けない——`ingest` の欄だけが嘘をつく。
+//
+// **直し方はテナントを毎回変えること。**冪等性そのもの(externalId の重複排除)は
+// 製品として正しい挙動であり、崩さない。崩すべきは「同じテナントで2回測ってしまう」
+// ベンチ側の呼び出し方である。
+//
+// **引き受ける負債**: 実行のたびに DB へテナントが増える(memories/observations/
+// outbox 行が積み上がり、掃除しない)。掃除しない理由と実測件数は ADR 0068 に書く。
+// ---------------------------------------------------------------------------
+
+let runTokenCounter = 0;
+
+/**
+ * 実行ごとに一意な token。**2回呼べば必ず違う値を返す**——`Date.now()` 単体だと
+ * 同一ミリ秒内の2連続呼び出しで衝突しうるため、プロセス内カウンタを足して
+ * 「必ず違う」を実装で保証する(クロックの分解能に依存しない)。
+ */
+export function newRunToken(): string {
+  runTokenCounter += 1;
+  return `${Date.now().toString(36)}-${runTokenCounter}`;
+}
+
+/**
+ * arm の tenantId を組む。**同じ `runToken` なら同じ、違う `runToken` なら必ず違う**——
+ * `armKey` は arm を区別するための安定した鍵(`"a"`/`"b"`/`"c"` 等)であり、
+ * `armLabel`(画面の見出し文言)とは独立に保つ(見出し文言を変えても tenantId が
+ * 変わらないようにするため)。
+ */
+export function buildArmTenantId(armKey: string, runToken: string): string {
+  return `retrieval-quality-arm-${armKey}-${runToken}`;
+}
+
+// ---------------------------------------------------------------------------
 // arm 単位の実行
 // ---------------------------------------------------------------------------
 
@@ -216,12 +257,60 @@ export interface RunRetrievalQualityArmOptions {
   haystackSize?: number;
 }
 
+/**
+ * observe() が返した `ObserveResult.extraction` の内訳(ADR 0068)。
+ *
+ * **なぜ数えるか**: `handleExtractableObservation`(`packages/core/src/runtime.ts`)は、
+ * 冪等な再送(`created === false`)のとき `extraction: "skipped"` を返す——「今回は
+ * 何も取り込んでいない」という信号そのものである。それを `for (const utterance of
+ * utterances) { await options.runtime.observe(...) }` が丸ごと捨てていたのが、
+ * この ADR が塞ぐ欠陥の現物(ADR 0033 が塞いだのと同じ形——返り値の説明を捨てる)。
+ */
+export interface ExtractionOutcomeCounts {
+  ok: number;
+  skipped: number;
+  llmFailedWholeObservation: number;
+}
+
+/**
+ * この run が実際に ingest を測ったか(ADR 0008「無いには種類がある」の適用)。
+ *
+ * - `"measured"`: 全 utterance が新規 observation だった。`ingest` の数字はこの run のもの。
+ * - `"replayed"`: 新規が0件だった(＝このテナントは既に取り込み済み)。`ingest` の数字は
+ *   **この run のものではない**——前回以前に測った値がたまたま DB に残っているだけ。
+ * - `"partial"`: 新規と冪等な再送が混ざっていた。`drain` の数字は新規分だけを反映する。
+ *
+ * **`boolean` に潰さない。**「測った/測っていない」の2値では `"partial"` を表現できず、
+ * 表現しようとすると結局どちらかへ寄せて嘘になる。
+ */
+export type IngestMeasurement = "measured" | "replayed" | "partial";
+
+function classifyIngestMeasurement(counts: ExtractionOutcomeCounts): IngestMeasurement {
+  const created = counts.ok + counts.llmFailedWholeObservation;
+  if (counts.skipped === 0) {
+    return "measured";
+  }
+  return created === 0 ? "replayed" : "partial";
+}
+
 export interface ArmIngestSummary {
   observationCount: number;
   drain: DrainResult;
-  /** 既定の `tick()` を1回だけ呼ぶ実装(`ingestConversation`)だったら、
-   *  この arm では止まっていたはずか。 */
-  singleTickWouldHaveStalled: boolean;
+  /** observe() の `extraction` を捨てずに集計したもの。 */
+  extractionCounts: ExtractionOutcomeCounts;
+  /** この run が ingest を実際に測ったか。 */
+  measurement: IngestMeasurement;
+  /**
+   * 既定の `tick()` を1回だけ呼ぶ実装(`ingestConversation`)だったら、
+   * この arm では止まっていたはずか。
+   *
+   * **`measurement === "replayed"` のときは `null`。**このとき `drain` は
+   * 「今回 claim できた embed ジョブが0件だった」という空の測定であり、そこから
+   * 「1回で足りた」(`false`)を導くのは、**測っていないことを「足りた」と言い換える
+   * 誤りそのもの**(本 ADR の背景)。`boolean | null` にして、「測っていない」と
+   * 「足りた」が同じ顔にならないようにする。
+   */
+  singleTickWouldHaveStalled: boolean | null;
 }
 
 export interface ArmReport {
@@ -252,13 +341,32 @@ export async function runRetrievalQualityArm(
   const ctx: Ctx = { tenantId: options.tenantId };
   const utterances = buildProbeSetConversation(options.haystackSize ?? DEFAULT_HAYSTACK_SIZE);
 
+  // **`ObserveResult` を捨てない**(本 ADR の主題)。`extraction` の内訳を数えて、
+  // この run が実際に何を取り込んだか(measurement)を後で判定する材料にする。
+  const extractionCounts: ExtractionOutcomeCounts = {
+    ok: 0,
+    skipped: 0,
+    llmFailedWholeObservation: 0,
+  };
   for (const utterance of utterances) {
-    await options.runtime.observe(ctx, {
+    const observed = await options.runtime.observe(ctx, {
       kind: "utterance",
       text: utterance.text,
       externalId: utterance.externalId,
     });
+    switch (observed.extraction) {
+      case "ok":
+        extractionCounts.ok += 1;
+        break;
+      case "skipped":
+        extractionCounts.skipped += 1;
+        break;
+      case "llm_failed_whole_observation":
+        extractionCounts.llmFailedWholeObservation += 1;
+        break;
+    }
   }
+  const measurement = classifyIngestMeasurement(extractionCounts);
 
   const drain = await drainEmbedTicks(options.runtime, ctx);
 
@@ -302,7 +410,10 @@ export async function runRetrievalQualityArm(
     ingest: {
       observationCount: utterances.length,
       drain,
-      singleTickWouldHaveStalled: drain.firstTickProcessed < drain.totalProcessed,
+      extractionCounts,
+      measurement,
+      singleTickWouldHaveStalled:
+        measurement === "replayed" ? null : drain.firstTickProcessed < drain.totalProcessed,
     },
     probes,
     mrrOverall: average(probes.map((p) => p.reciprocalRank)),
@@ -361,6 +472,40 @@ export function formatScoreDetail(detail: ProbeScoreDetail): string {
   );
 }
 
+// ---------------------------------------------------------------------------
+// arm の見出し数字を1箇所で作る(ADR 0068 ②)
+//
+// **なぜ足すか**: `formatArmSummaryTable` は MRR しか持っていなかった。`hit@1`/
+// `hit@10` を知るには `formatProbeComparisonTable`(arm ごとに5列 × 3 arm = 17列の
+// 横長の表)へ行って行を横に数える必要があり、そこで arm を跨いで数字を拾える隙間が
+// できていた——実際に「arm B の MRR」と「arm C の hit@10」を束ねて読み違えた実例がある。
+//
+// **引数は `ArmReport` 1つだけ。**複数の arm を受け取らないので、構造上、別の arm の
+// 数字が混ざりようがない。
+// ---------------------------------------------------------------------------
+
+export interface ArmHeadline {
+  mrrOverall: number;
+  hit1Count: number;
+  hit10Count: number;
+  probeCount: number;
+}
+
+/** 1つの arm の見出し数字。`report.probes` からのみ導く。 */
+export function armHeadline(report: ArmReport): ArmHeadline {
+  return {
+    mrrOverall: report.mrrOverall,
+    hit1Count: report.probes.filter((p) => p.hit1).length,
+    hit10Count: report.probes.filter((p) => p.hit10).length,
+    probeCount: report.probes.length,
+  };
+}
+
+/** `4/7` のような `n/総数` の形。 */
+function formatFraction(count: number, total: number): string {
+  return `${count}/${total}`;
+}
+
 /** arm ごとの詳細(probe 単位の内訳・ingest の内訳・usage レポート)。 */
 export function formatArmDetail(report: ArmReport): string {
   const lines: string[] = [];
@@ -371,15 +516,31 @@ export function formatArmDetail(report: ArmReport): string {
       `ticks=${report.ingest.drain.ticks} ` +
       `firstTickProcessed=${report.ingest.drain.firstTickProcessed} ` +
       `totalProcessed=${report.ingest.drain.totalProcessed} ` +
-      `totalFailed=${report.ingest.drain.totalFailed}`,
+      `totalFailed=${report.ingest.drain.totalFailed} ` +
+      `measurement=${report.ingest.measurement}`,
   );
-  lines.push(
-    report.ingest.singleTickWouldHaveStalled
-      ? "  ⚠ 既定の tick() を1回だけ呼ぶ実装だったら、この arm では " +
-          `${report.ingest.drain.totalProcessed - report.ingest.drain.firstTickProcessed} 件が` +
-          "埋め込まれないまま残っていたはず(背景2)。"
-      : "  (この arm では既定の tick() 1回で全件処理できる件数だった)",
-  );
+  // **測っていない(`"replayed"`)ときは、測っていないと印字する**——これが本 ADR の
+  // 核心。かつてはここが `singleTickWouldHaveStalled` を単純な `? :` で読んでおり、
+  // 「測っていない」が `false`(足りた)と同じ文面に潰れていた。
+  if (report.ingest.measurement === "replayed") {
+    lines.push(
+      "  (このテナントは既に取り込み済みで、ingest の数字は今回の run のものではない" +
+        "——1回で足りたかどうかは測っていない)",
+    );
+  } else {
+    lines.push(
+      report.ingest.singleTickWouldHaveStalled === true
+        ? "  ⚠ 既定の tick() を1回だけ呼ぶ実装だったら、この arm では " +
+            `${report.ingest.drain.totalProcessed - report.ingest.drain.firstTickProcessed} 件が` +
+            "埋め込まれないまま残っていたはず(背景2)。"
+        : "  (この arm では既定の tick() 1回で全件処理できる件数だった)",
+    );
+    if (report.ingest.measurement === "partial") {
+      lines.push(
+        "  ⚠ 一部の observation は冪等な再送だった——上の ingest の数字は新規分だけを反映する。",
+      );
+    }
+  }
   for (const p of report.probes) {
     lines.push(
       `  - ${p.probeId}${p.lexicalControl ? "[lexicalControl]" : ""}: ` +
@@ -392,10 +553,16 @@ export function formatArmDetail(report: ArmReport): string {
       lines.push(`      ${formatScoreDetail(detail)}`);
     }
   }
+  // **`armHeadline()` から作る(ADR 0068 ②)。**`formatArmSummaryTable` の同じ数字と
+  // 別々に計算すると、2箇所が食い違うことがあり得る(そして実際に読み違いが起きた)。
+  // 同じ関数から作ることで、構造上食い違いようがなくする。
+  const headline = armHeadline(report);
   lines.push(
-    `MRR: 全体=${report.mrrOverall.toFixed(3)} ` +
+    `MRR: 全体=${headline.mrrOverall.toFixed(3)} ` +
       `lexicalControl=${report.mrrLexicalControl.toFixed(3)} ` +
-      `非語彙=${report.mrrNonLexical.toFixed(3)}`,
+      `非語彙=${report.mrrNonLexical.toFixed(3)} ` +
+      `hit@1=${formatFraction(headline.hit1Count, headline.probeCount)} ` +
+      `hit@10=${formatFraction(headline.hit10Count, headline.probeCount)}`,
   );
   lines.push(report.usageReport);
   return lines.join("\n");
@@ -438,19 +605,37 @@ export function formatProbeComparisonTable(reports: ArmReport[]): string {
   ].join("\n");
 }
 
-/** arm ごとの ingest・MRR のまとめ表。 */
+/**
+ * arm ごとの ingest・MRR・hit@1・hit@10 のまとめ表(ADR 0068 ②)。
+ *
+ * **`hit@1`/`hit@10` をここに足したのは、arm の見出し数字を知るために
+ * `formatProbeComparisonTable`(横長・arm を跨いで数える必要がある表)へ行く理由を
+ * 無くすため。**MRR と同じ行に並べる——別の表を経由すれば、その分だけ別の arm の
+ * 数字を拾い間違える隙間が増える。
+ */
 export function formatArmSummaryTable(reports: ArmReport[]): string {
   const header =
     "| arm | llmMode | embeddingMode | observations | ticks | 初回tick処理数 | 合計処理数 | " +
-    "既定tick1回なら止まっていたか | MRR(全体) | MRR(lexicalControl) | MRR(非語彙) |";
-  const sep = "|---|---|---|---|---|---|---|---|---|---|---|";
+    "ingest計測 | 既定tick1回なら止まっていたか | MRR(全体) | MRR(lexicalControl) | " +
+    "MRR(非語彙) | hit@1 | hit@10 |";
+  const sep = "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|";
   const rows = reports.map((r) => {
-    const stalled = r.ingest.singleTickWouldHaveStalled ? "はい" : "いいえ";
+    // `singleTickWouldHaveStalled` は測っていないとき `null`——それを "いいえ"(足りた)
+    // に潰すと、この ADR が塞いだはずの欠陥がこの表に戻ってきてしまう。
+    const stalled =
+      r.ingest.singleTickWouldHaveStalled === null
+        ? "(測っていない)"
+        : r.ingest.singleTickWouldHaveStalled
+          ? "はい"
+          : "いいえ";
+    const headline = armHeadline(r);
     return (
       `| ${r.armLabel} | ${r.llmMode} | ${r.embeddingMode} | ${r.ingest.observationCount} | ` +
       `${r.ingest.drain.ticks} | ${r.ingest.drain.firstTickProcessed} | ` +
-      `${r.ingest.drain.totalProcessed} | ${stalled} | ${r.mrrOverall.toFixed(3)} | ` +
-      `${r.mrrLexicalControl.toFixed(3)} | ${r.mrrNonLexical.toFixed(3)} |`
+      `${r.ingest.drain.totalProcessed} | ${r.ingest.measurement} | ${stalled} | ` +
+      `${headline.mrrOverall.toFixed(3)} | ${r.mrrLexicalControl.toFixed(3)} | ` +
+      `${r.mrrNonLexical.toFixed(3)} | ${formatFraction(headline.hit1Count, headline.probeCount)} | ` +
+      `${formatFraction(headline.hit10Count, headline.probeCount)} |`
     );
   });
   return [header, sep, ...rows].join("\n");

@@ -106,6 +106,94 @@ export function selectEmbeddingMode(env: EnvLike): ProviderMode {
   return parseModeOverride("MNEMORA_EMBEDDING", env.MNEMORA_EMBEDDING) ?? selectProviderMode(env);
 }
 
+// ---------------------------------------------------------------------------
+// カセット再生か実 API かを決める(ADR 0068 ③)
+//
+// **現物の欠陥**: `cli.ts` の `resolveCassetteForRun` は「`OPENAI_API_KEY` が在れば
+// 無条件に実 API」だった。カセット(`examples/chat/cassettes/*.json`)が在っても、
+// キーが環境にあるだけで再生のつもりが実 API に倒れる——「明示すればカセットを
+// 使える口」がどこにも無かった。
+//
+// **既定の振る舞いは変えない**（「キーが在れば実 API」は誰かが選んだ意図かもしれない）。
+// `MNEMORA_PROVIDER_SOURCE` で**明示したときだけ**、キーの有無を上書きできる能力を足す。
+// ---------------------------------------------------------------------------
+
+/**
+ * どちらを使うか と、なぜそう決まったか。**理由を捨てない**——`reason` が無いと
+ * 「たまたま recorded になった」のか「明示して recorded にした」のかを画面から
+ * 区別できず、ADR 0051 の「どちらで走ったかを隠さない」規律が骨抜きになる。
+ */
+export type ProviderSourceDecision =
+  | { source: "openai"; reason: "key-present" }
+  | { source: "recorded"; reason: "no-key" }
+  | { source: "recorded"; reason: "forced" }
+  | { source: "openai"; reason: "forced" };
+
+/**
+ * `MNEMORA_PROVIDER_SOURCE` が指定されていればそれを最優先する(カセット側はキーの有無に
+ * 関わらず強制できる)。未指定(未設定または空文字)なら、いままで通り `OPENAI_API_KEY` の
+ * 有無だけで決まる。
+ *
+ * **未知の値は例外**(`parseModeOverride` と同じ作法)——黙って既定へ倒れない。
+ * **`"openai"` をキー無しで強制された場合も例外**(下のコメント参照)。
+ */
+export function decideProviderSource(env: EnvLike): ProviderSourceDecision {
+  const forced = env.MNEMORA_PROVIDER_SOURCE;
+  if (forced === "recorded") {
+    return { source: "recorded", reason: "forced" };
+  }
+  if (forced === "openai") {
+    // **キーが無いのに `openai` を強制されたら落とす。**
+    //
+    // ⚠ ここを「そのまま返す」だけにすると、この ADR が塞ごうとしている欠陥が
+    // **新しい形で復活する**——呼び出し側(`cli.ts` の `runCompare`)は
+    // `source === "openai"` のときカセットを読まずに `process.env` をそのまま
+    // `createProviders` へ渡すので、`selectProviderMode` が「キーが無い ⟹
+    // deterministic」と判定する。結果、**画面には「実 API を叩く」と出しながら
+    // 意味を持たない擬似 provider で走り、数字の表を出して EXIT=0 で終わる**
+    // (実装の途中で実際にこの状態を踏み、走らせて確認した。ADR 0068 参照)。
+    //
+    // **⟹「明示した source と、実際に使われる provider が食い違う」経路を作らない。**
+    // これは ADR 0051 が `requireCassette` で引いたのと同じ線であり、
+    // 反対側(`recorded` を強制したのにカセットが無い)は既にそこで落ちている。
+    if (!env.OPENAI_API_KEY) {
+      throw new Error(
+        'MNEMORA_PROVIDER_SOURCE="openai" を指定したが、OPENAI_API_KEY が無い（ADR 0068）。' +
+          "キーを設定するか、指定を外すこと（未指定なら記録の再生になる）。" +
+          "黙って擬似 provider へは倒れない。",
+      );
+    }
+    return { source: "openai", reason: "forced" };
+  }
+  if (forced !== undefined && forced !== "") {
+    throw new Error(
+      `MNEMORA_PROVIDER_SOURCE には "openai" / "recorded" のいずれかを指定すること` +
+        `（実際: "${forced}"）。`,
+    );
+  }
+  return env.OPENAI_API_KEY
+    ? { source: "openai", reason: "key-present" }
+    : { source: "recorded", reason: "no-key" };
+}
+
+/** `decideProviderSource` の結果を、画面に出すための一文にする。 */
+export function describeProviderSourceReason(decision: ProviderSourceDecision): string {
+  switch (decision.reason) {
+    case "key-present":
+      return "OPENAI_API_KEY が在るため実 API";
+    case "no-key":
+      return "OPENAI_API_KEY が無いため記録を再生";
+    case "forced":
+      return decision.source === "recorded"
+        ? "MNEMORA_PROVIDER_SOURCE=recorded の明示指定（OPENAI_API_KEY の有無に関わらず再生する）"
+        : "MNEMORA_PROVIDER_SOURCE=openai の明示指定（実 API を叩く）";
+    default: {
+      const exhaustive: never = decision;
+      throw new Error(`describeProviderSourceReason: 未知の reason: ${JSON.stringify(exhaustive)}`);
+    }
+  }
+}
+
 export interface CreateProvidersOptions {
   /**
    * `"recorded"` モードで再生に使うカセット（ADR 0051）。`"recorded"` を選んだのに

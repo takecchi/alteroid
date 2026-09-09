@@ -119,20 +119,31 @@ observe する。取り違えたら一目で分かるようにしてある）、
 画面には各ケースの件数と、返ってきた記憶の digest（本文そのもの）をそのまま出す——
 「何が返って、何が返らなかったか」を文字列で確認できる。
 
-### 既存の固定 `tenantId` は「隔離の実演」ではない
+### 測定ごとに `tenantId` を分けているのは「隔離の実演」ではない
 
 `compare`（会話の長さ＝ filler 往復数ごと）・`retrieval`（arm A/B/C ごと）は、どちらも
-複数の固定 `tenantId` を使う。**これは `tenantId` の隔離を見せるためではない。**
+複数の `tenantId` を使う。**これは `tenantId` の隔離を見せるためではない。**
 
 - `compare`（`src/compare.ts` の `runComparison`）は会話の長さごとに新しい `tenantId`
   を使う。同じテナントに会話を積み増すと、後の計測が前の会話の記憶を引きずり、
   「その長さの会話単体で何文字になるか」を独立に測れなくなるため（同ファイルの
   コメント参照）——**測定同士を混ぜないため**の分離であり、隔離の実演ではない。
-- `retrieval`（`src/cli.ts` の `runRetrieval`）は arm（A/B/C）ごとに固定の `tenantId`
+- `retrieval`（`src/cli.ts` の `runRetrieval`）は arm（A/B/C）ごとに別の `tenantId`
   を使う。同じ probe set をそのまま arm ごとに観測し直すため、同じテナントを
   使い回すと前の arm の記憶が後の arm の recall に混ざってしまう——ここも
   **測定同士を混ぜないため**の分離であり、`tenantId` を分けること自体は
   「隔離が安全に効く」ことの実演を意図していない。
+
+  ⚠ **`retrieval` の `tenantId` は実行ごとにも変わる**（`newRunToken()` /
+  `buildArmTenantId()`。
+  [ADR 0068](../../docs/decisions/0068-the-bench-must-not-lie-about-what-it-measured.md)）。
+  かつては arm ごとの固定文字列（`retrieval-quality-arm-a` 等）だったが、この harness は
+  DB をリセットしないため、**2回目の実行が同じテナントへ同じ probe set を `observe()`
+  し直すことになり、`externalId` の冪等性に当たって新規 observation を1件も作らなかった**
+  ——`ingest` の欄が、今回は測っていないのに「1回で全件処理できる件数だった」という
+  **逆の結論**を印字する。順位のほうは DB に残った前回の記憶で正しく出続けるので、
+  **数字を見ていても気付けない。**
+  ⟹ **混ぜてはいけないのは arm 同士だけではなく、実行同士もである。**
 
 **`tenantId`/`subjectId` のスコープが実際にどう効くかを動く形で見せるのは、この
 `scope` サブコマンドが初めてである。**

@@ -20,10 +20,13 @@ import { formatRecall } from "./format.js";
 import { buildMnemoraPrompt, ingestConversation, queryRecall } from "./mnemora-path.js";
 import { measureNaive, naivePrompt } from "./naive-path.js";
 import type { ProviderMode } from "./providers.js";
+import { decideProviderSource, describeProviderSourceReason } from "./providers.js";
 import {
+  buildArmTenantId,
   formatArmDetail,
   formatArmSummaryTable,
   formatProbeComparisonTable,
+  newRunToken,
   runRetrievalQualityArm,
 } from "./retrieval-quality.js";
 import { createExampleRuntime } from "./runtime-factory.js";
@@ -93,23 +96,35 @@ function printProviderMode(llmMode: ProviderMode, embeddingMode: ProviderMode): 
 }
 
 /**
- * この実行が実 API を使うのか、記録の再生を使うのかを決める（ADR 0051 / 0052）。
+ * この実行が実 API を使うのか、記録の再生を使うのかを決める（ADR 0051 / 0052 / 0068 ③）。
  *
- * **キーがあれば実 API、無ければ記録。どちらでもなければ落ちる**——
- * 「記録が無いなら擬似物で」と読み替えない。擬似物は意味を持たない stub であり、
- * それで出た数字を物差しの表に載せると嘘になる（ADR 0051）。
+ * **判定そのものは `decideProviderSource`（`providers.ts`）に委ねる**——ここは
+ * その結果を画面へ出し、`"recorded"` ならカセットを読むだけの薄い配線に留める。
  *
- * 返り値が `undefined` なら実 API を使う、という意味である。
+ * ⚠ **かつては「キーが在れば無条件に実 API」だった**（`process.env.OPENAI_API_KEY` を
+ * 直接見ていた）。そのため `MNEMORA_PROVIDER_SOURCE=recorded` を指定しても、環境に
+ * キーが在るだけで意図せず実 API に倒れ、課金が発生し得た——「明示すればカセットを
+ * 使える口」がどこにも無かった(ADR 0068 の背景3)。`decideProviderSource` が
+ * `MNEMORA_PROVIDER_SOURCE` を最優先で見るようになったことで、この口が塞がる。
+ *
+ * 返り値が `undefined` なら実 API を使う、という意味である（挙動は変えていない）。
  */
 function resolveCassetteForRun(target: CassetteTarget) {
-  if (process.env.OPENAI_API_KEY) {
+  const decision = decideProviderSource(process.env);
+  console.log(
+    `[cassette] provider source: ${decision.source}(理由: ${describeProviderSourceReason(decision)})`,
+  );
+  if (decision.source === "openai") {
     return undefined;
   }
   const path = cassettePathFor(target);
   if (!cassetteExists(path)) {
     throw new Error(
-      `${target} を実キー無しで走らせるには記録が要る。OPENAI_API_KEY を設定するか、` +
-        `先に \`record ${target}\` でカセットを作ること（ADR 0052）。`,
+      `${target} をカセット再生で走らせるには記録が要る。` +
+        `先に \`record ${target}\` でカセットを作るか、` +
+        "OPENAI_API_KEY を設定して実 API で走らせること。" +
+        "（キーが在るのに再生したいときは MNEMORA_PROVIDER_SOURCE=recorded。" +
+        "ADR 0052 / 0068）",
     );
   }
   const cassette = loadCassette(path);
@@ -285,7 +300,16 @@ async function runCompare(): Promise<void> {
  * C(本物LLM+本物embedding)の3通りを順に走らせ、probe set の順位を比較する。
  *
  * **arm ごとに別のテナントを使う**(PR 本文「実行時の規律」)——`runRetrievalQualityArm`
- * 自体は tenantId を受け取るだけで固定しないため、ここで3つの固定 tenantId を渡す。
+ * 自体は tenantId を受け取るだけで固定しないため、ここで3つのテナントを渡す。
+ *
+ * ⚠ **`runToken` ごとに違うテナントになる（ADR 0068）。**かつては3つとも固定文字列
+ * （`retrieval-quality-arm-a` 等）だった。DB をリセットしないこの harness では、
+ * 2回目の実行が同じテナントへ同じ probe set を `observe()` し直すことになり、
+ * externalId の冪等性に当たって新規 observation を1件も作らない——`ingest` の欄が
+ * 「今回は測っていない」のに「1回で足りた」という**逆の結論**を印字してしまう
+ * （`ArmIngestSummary`/`IngestMeasurement` の docstring 参照）。`newRunToken()`/
+ * `buildArmTenantId()`（`retrieval-quality.ts`）を経由することで、通常利用では
+ * 毎回新しいテナントを使い、2回目も1回目と同じ結論を出す。
  *
  * B・C は本物の OpenAI(embedding、C はさらに LLM も)を叩く。**CI には載せていない**——
  * `.github/**` は変更していない。本物の API を叩く実行はこのコマンドを手動で叩いたときだけ。
@@ -298,7 +322,10 @@ async function runCompare(): Promise<void> {
  * 「擬似LLM＋本物由来の埋め込み」のままである。記録は本物の応答そのものなので、
  * ラベルの意味は保たれる。
  */
-function buildArmSpecs(source: "openai" | "recorded"): {
+function buildArmSpecs(
+  source: "openai" | "recorded",
+  runToken: string,
+): {
   armLabel: string;
   tenantId: string;
   llmOverride: ProviderMode;
@@ -312,21 +339,21 @@ function buildArmSpecs(source: "openai" | "recorded"): {
   return [
     {
       armLabel: "A: 擬似LLM+擬似埋め込み",
-      tenantId: "retrieval-quality-arm-a",
+      tenantId: buildArmTenantId("a", runToken),
       llmOverride: "deterministic",
       embeddingOverride: "deterministic",
       touchesApi: false,
     },
     {
       armLabel: "B: 擬似LLM+本物の埋め込み",
-      tenantId: "retrieval-quality-arm-b",
+      tenantId: buildArmTenantId("b", runToken),
       llmOverride: "deterministic",
       embeddingOverride: source,
       touchesApi: true,
     },
     {
       armLabel: "C: 本物LLM+本物の埋め込み",
-      tenantId: "retrieval-quality-arm-c",
+      tenantId: buildArmTenantId("c", runToken),
       llmOverride: source,
       embeddingOverride: source,
       touchesApi: true,
@@ -339,9 +366,14 @@ async function runRetrieval(): Promise<void> {
 
   // **キーがあれば本物、無ければ記録の再生。どちらで走ったかは必ず画面に出す**
   // （黙って別のものへ倒れない、という既存の規律の適用。ADR 0051）。
-  // 判定は `compare` と同じ `resolveCassetteForRun` に寄せてある（ADR 0052）。
+  // 判定は `compare` と同じ `resolveCassetteForRun` に寄せてある（ADR 0052 / 0068 ③）。
   const cassette = resolveCassetteForRun("retrieval");
-  const armSpecs = buildArmSpecs(cassette ? "recorded" : "openai");
+  // **実行ごとに新しい tenantId を使う（ADR 0068）。**通常利用で2回続けて走らせても、
+  // 2回目が DB に残った前回の記憶を「取り込み済み」として素通りし、`ingest` の欄が
+  // 逆の結論を印字しないようにするための唯一の直し方——冪等性(externalId の重複排除)
+  // 自体は製品として正しい挙動であり、崩さない。
+  const runToken = newRunToken();
+  const armSpecs = buildArmSpecs(cassette ? "recorded" : "openai", runToken);
 
   const reports = [];
   for (const arm of armSpecs) {
@@ -403,7 +435,9 @@ async function recordRetrieval(
   runId: number,
 ): Promise<void> {
   // **id の文字列一致ではなく、宣言された欄で選ぶ。**
-  const armSpecs = buildArmSpecs("openai").filter((a) => a.touchesApi);
+  // `runToken` には `runId` をそのまま使う——直後で `-record-${runId}` を
+  // さらに足すため衝突の心配は無く、記録に使ったテナントを runId から追跡できる。
+  const armSpecs = buildArmSpecs("openai", String(runId)).filter((a) => a.touchesApi);
   for (const arm of armSpecs) {
     console.log(`\n########## 記録中: arm ${arm.armLabel} ##########`);
     const handle = await createExampleRuntime(
@@ -676,6 +710,11 @@ function printHelp(): void {
       "  OPENAI_API_KEY=... pnpm --filter @mnemora/example-chat run verify   # retrieval の記録と実 API の乖離を測る",
       "  OPENAI_API_KEY=... pnpm --filter @mnemora/example-chat run verify:compare",
       "                                                                      # compare の記録と実 API の乖離を測る",
+      "",
+      "  MNEMORA_PROVIDER_SOURCE=recorded|openai  # retrieval/compare で「キーがあれば実API」を明示的に上書きする(ADR 0068)",
+      "                                                                      #   recorded: キーが在ってもカセットを再生する(誤って課金しない)",
+      "                                                                      #   openai  : カセットが在っても実 API を叩く(キーが無ければ落ちる。擬似物へは倒れない)",
+      "                                                                      #   未指定なら従来通りキーの有無だけで決まる",
     ].join("\n"),
   );
 }

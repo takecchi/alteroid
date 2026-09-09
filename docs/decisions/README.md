@@ -80,3 +80,4 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0065](./0065-vector-store-space-separation-conformance.md) | `VectorStore` の space 分離を適合テストの歯にする — `FakeVectorStore` に丸ごと空いていた一段と、監査の漏れの記録 | 採用 (2026-09) |
 | [0066](./0066-start-publishing-with-oidc.md) | **publish を始める**（対象4つの `private` を外す）— 梱包は pnpm・アップロードは npm（Trusted Publishing / OIDC）、引き金は GitHub Release。梱包の欠陥4件（`@types/pg` / `workspace:^` / `exports` / `vitest` の peer 化）を初版の前に直した。**`0.1.0` は publish 済み**（初版は OIDC で出せないため token 経路。provenance 無し） | 採用 (2026-09) |
 | [0067](./0067-dry-run-fail-open-and-does-not-verify-trusted-publisher.md) | 予行フラグ (`dry_run`) の fail-open を安全側へ反転する — `--dry-run` は信頼発行元 (Trusted Publisher) の未設定を検出できないと実測した記録 | 採用 (2026-09) |
+| [0068](./0068-the-bench-must-not-lie-about-what-it-measured.md) | `retrieval` ベンチが「測っていないこと」を測ったかのように印字するのをやめる — 2回目の実行で `ingest` が逆の結論を出すこと・出力から arm を跨いで数字を拾えること・`OPENAI_API_KEY` が在るだけでカセット再生が実 API へ倒れること | 採用 (2026-09) |
