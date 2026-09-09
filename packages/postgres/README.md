@@ -4,25 +4,6 @@
 Postgres + pgvector 実装（[docs/memory-model.md](../../docs/memory-model.md) §10）。
 マイグレーション実行用の CLI（`mnemora-postgres-migrate`）も含む。
 
-## publish について
-
-**publish を始める判断は下った**（[ADR 0066](../../docs/decisions/0066-start-publishing-with-oidc.md)）。
-`private: true` は外れ、**GitHub Releases で `v<版>` の Release を publish すると**
-`.github/workflows/publish.yml` が npm の Trusted Publishing (OIDC) で上げる
-（pre-release にチェックを入れた Release は `latest` ではなく `next` に入る）。
-
-**⚠ この package.json の `version` は権威ある値ではない**（[ADR 0070](../../docs/decisions/0070-version-comes-from-the-release-tag.md)）。
-版は Release の tag が決め、publish の直前に書き込まれる。**registry に訊くこと。**
-
-```bash
-npm view @mnemora/postgres version
-```
-
-初回の `0.1.0` だけは手元から出す必要がある——npm の Trusted Publishing は
-**設定する時点でパッケージが registry に在ること**を前提にしており、初版を OIDC で
-出すことはできない（[npm/cli#8544](https://github.com/npm/cli/issues/8544)）。
-その手順は ADR 0066 の「publish の手順」にある。
-
 ## インストール
 
 ```bash
@@ -34,7 +15,9 @@ npm i @mnemora/postgres @mnemora/core
 ## 前提
 
 - Node.js >= 22
-- ESM（`"type": "module"`）
+- **ESM のみ**（`"type": "module"`）。CommonJS からは Node 22.12 以降の
+  `require(esm)` で読み込める（TypeScript は `moduleResolution` が `node10` か
+  `nodenext` なら通る。`node16` は `TS1479` になるので `nodenext` にすること）
 - **本物の Postgres + pgvector が要る。**擬似物・インメモリでの代替は無い
   （このリポジトリの CI は [`pgvector/pgvector:pg17`](https://hub.docker.com/r/pgvector/pgvector) の
   Docker イメージに対して実行している。実物は

@@ -77,22 +77,18 @@ Phase 1 の範囲と、そこに入れなかったものは [docs/roadmap.md](./
 
 このリポジトリで作業する人・エージェント向けの手引きは [AGENTS.md](./AGENTS.md) にある。
 
-**設計が固まってから Phase 1（Observation / Memory / PostgreSQL + pgvector / `observe()` /
-`recall()` / スコアの内訳と説明）の実装に入る。**
-
 ---
 
 ## インストール
-
-⚠ **まだ npm へ publish していない。**publish の判断は別に行う（4パッケージすべてに
-`private: true` が立ったままである。[ADR 0060](./docs/decisions/0060-publish-with-pnpm-four-packages-at-0-1-0.md)）。
-以下は publish 後の使い方である。
 
 ```bash
 pnpm add @mnemora/core @mnemora/postgres @mnemora/openai
 # または
 npm i @mnemora/core @mnemora/postgres @mnemora/openai
 ```
+
+**Node.js >= 22 と ESM が要る**（CommonJS からは Node 22.12 以降の `require(esm)` で読める）。
+`@mnemora/postgres` は本物の Postgres + pgvector を要求する——擬似物での代替は無い。
 
 adapter を自作してテストするなら `@mnemora/testkit` も devDependency として入れる。
 各パッケージの install コマンドと動く最小の例:
