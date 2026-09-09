@@ -81,46 +81,7 @@ jobs:
       - id: verify
         if: steps.update.outputs.changed == 'true'
         continue-on-error: true
-        run: |
-          set -uo pipefail
-          # **errexit を明示で切る。** `run:` の既定 shell は `bash -e {0}` で、
-          # `set -uo pipefail` はオプションを足すだけなので `-e` は残る。残したままだと
-          # 集計の途中（`tail | sed`）で落ちた瞬間に `ok=` を書かずに死に、
-          # `continue-on-error` のせいでジョブは緑のまま「検証が薄かった」ように見える。
-          set +e
-          # **作業ツリーの外へ書く。** ここで作るのは検証の記録であって成果物では
-          # ないので、リポジトリの中に落とさない。
-          dir="${RUNNER_TEMP:-/tmp}"
-          ok=true
-          : >"$dir/verify.md"
-          for cmd in build typecheck lint format:check test; do
-            log="$dir/verify-${cmd/:/-}.log"
-            if pnpm "$cmd" 2>&1 | tee "$log"; then
-              status='OK'
-              lines=10
-            else
-              ok=false
-              status='**失敗**'
-              lines=40
-            fi
-            # **成功した回も生の出力を載せる。** 「OK」の1行だけにすると、
-            # *何本走ったか*が人間の読む唯一の記録から消える。`pnpm` は script を
-            # 持たないパッケージを黙って飛ばして exit 0 を返すので、「OK」は
-            # 「走った」を意味しない（AGENTS.md 変異試験の歯7と同じ理由）。
-            #
-            # コードブロックは ``` ではなく字下げで作る — ログ自身が ``` を
-            # 含むとフェンスが破れる。
-            {
-              echo "### \`pnpm $cmd\` — $status"
-              echo ''
-              echo "（末尾 $lines 行。先頭側は落としてある。全文は実行ログにある）"
-              echo ''
-              tail -"$lines" "$log" | sed 's/^/    /'
-              echo ''
-            } >>"$dir/verify.md"
-          done
-          echo "ok=$ok" >>"$GITHUB_OUTPUT"
-          cat "$dir/verify.md"
+        run: ./.github/scripts/verify-for-sdk-pr.sh
 
       # ここだけがトークンを持つ。**`${{ }}` を bash のソースへ直接展開しない** —
       # 展開されるのは実行前なので、値の中身がそのままコードになる（GitHub が
@@ -166,6 +127,11 @@ jobs:
               echo ''
             fi
             echo '## 検証（このワークフローが実行した生の出力）'
+            echo ''
+            echo '**`sdk-quotes` は `pnpm test` 経由でも走っている（＝この行は二重の1回目）。**'
+            echo '根拠: `scripts/check-sdk-quotes.test.ts:324` の「実物の検査」describe が、'
+            echo '同じ core を実物の SDK と実物の repo に当てている（`--reporter=verbose` で'
+            echo '実際に走ることを確認済み）。'
             echo ''
             cat "${RUNNER_TEMP:-/tmp}/verify.md"
             echo ''
