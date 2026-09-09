@@ -82,9 +82,40 @@ export interface NotIndexedOmission {
   countKind: CountKind;
 }
 
+/**
+ * この札が立っている理由（[ADR 0069](../../../docs/decisions/0069-ann-truncated-says-nothing-about-loss.md)）。
+ *
+ * **🔴 3つ目の状態「証明できたので立てない」は、この union に無い。**
+ * 証明できた場合、この omission は**そもそも積まれない**——**沈黙は「値」ではなく「不在」で表す。**
+ * こうしないと「安全だと分かった」と「判定できなかった」が同じ形（omission が在る）で返り、
+ * ADR 0069 が「沈黙と判定不能を別の顔で返す」と決めた意味が消える。
+ */
+export type AnnTruncationCertainty = "loss_possible" | "undecidable";
+
 export interface AnnTruncatedOmission {
   kind: "ann_truncated";
   countKind: "unknown";
+  /**
+   * **なぜこの札が立っているか**（ADR 0069）。
+   *
+   * - `loss_possible` — 窓の外の候補が top-k へ入りえた。`safetyRatio` が付く。
+   * - `undecidable` — 判定そのものができなかった（上界が宣言されていない等）。
+   *   **「損しなかった」ではない。**`undecidableReason` が付く。
+   */
+  certainty: AnnTruncationCertainty;
+  /**
+   * `R = bar / (sim_k' × M_max)`。**`certainty: 'loss_possible'` のときだけ在り、必ず 1 未満。**
+   * 1 以上なら窓の外は原理的に top-k へ入れず、この omission 自体が積まれない。
+   * **小さいほど危ない**（0.5 なら「窓の外の候補が非 similarity 項で2倍稼げば入れた」）。
+   */
+  safetyRatio?: number;
+  /**
+   * この判定が立っている**前提**（ADR 0069 §6・§8）。**歯にできていないものを含む。**
+   * 空配列は「前提なしの保証」を意味する——**コメントではなく、この配列自身に語らせる。**
+   */
+  assumptions?: readonly string[];
+  /** `certainty: 'undecidable'` のときだけ。**なぜ判定できなかったか。** */
+  undecidableReason?: string;
 }
 
 /**
@@ -210,6 +241,15 @@ const NotIndexedOmissionSchema = z.object({
 const AnnTruncatedOmissionSchema = z.object({
   kind: z.literal("ann_truncated"),
   countKind: z.literal("unknown"),
+  certainty: z.enum(["loss_possible", "undecidable"]),
+  // 3欄はどれも「その certainty のときだけ在る」ものだが、**zod では相関を強制していない。**
+  // 相関（loss_possible なら safetyRatio が在り 1 未満、undecidable なら undecidableReason が
+  // 在る）は `decideAnnTruncation` が構成するときに満たしており、そちらを歯で固定している——
+  // ここで `superRefine` を重ねると、**同じ規則が2箇所に載って食い違いうる**（ADR 0011 が
+  // 「複数の経路から同じ意味の件数を出すと食い違う」を避けたのと同じ理由）。
+  safetyRatio: z.number().optional(),
+  assumptions: z.array(z.string()).readonly().optional(),
+  undecidableReason: z.string().optional(),
 }) satisfies z.ZodType<AnnTruncatedOmission>;
 
 const AnnUnreachedOmissionSchema = z.object({

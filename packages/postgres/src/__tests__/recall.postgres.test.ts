@@ -407,15 +407,25 @@ describe("runtime.recall() — 本物の Postgres + pgvector（roadmap.md 段階
     await createEmbeddedMemory(memoryStore, vectorStore, ctx, [0.98, 0.02, 0]);
     await createEmbeddedMemory(memoryStore, vectorStore, ctx, [0.97, 0.03, 0]);
 
+    // **ADR 0069 以降、`ann_truncated` は「窓が埋まった」だけでは鳴らない**——
+    // 「窓の外が top-k へ入りえたか」まで判定してから鳴る。この歯の主題は
+    // **「2つの omission が同時に出うる」ことであって `ann_truncated` の鳴り方ではない**ので、
+    // 鳴る側になる形（どの候補も持たないタグをクエリへ足し、上界を 1.1 倍にする）で作る。
     const result = await runtime.recall(ctx, {
       vector: [1, 0, 0],
       limit: 1,
       overFetchFactor: 3,
+      tags: ["どの候補も持っていないタグ"],
     });
 
     expect(result.memories).toHaveLength(1);
     expect(result.omitted).toContainEqual({ kind: "over_limit", count: 2, countKind: "exact" });
-    expect(result.omitted).toContainEqual({ kind: "ann_truncated", countKind: "unknown" });
+    const truncated = result.omitted.find((o) => o.kind === "ann_truncated");
+    if (truncated === undefined || truncated.kind !== "ann_truncated") {
+      throw new Error("ann_truncated が積まれていない");
+    }
+    expect(truncated.certainty).toBe("loss_possible");
+    expect(truncated.countKind).toBe("unknown");
   });
 
   it("段3/段4: 矛盾の同伴取得は予算に収まらなければペアごと落とす", async () => {

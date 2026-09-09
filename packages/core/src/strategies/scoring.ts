@@ -68,7 +68,96 @@ function computeTagMatch(tags: string[], queryTags: string[]): number {
   return 1 + matchedCount * 0.1;
 }
 
-export const defaultScoringStrategy: ScoringStrategy = (input) => {
+// ---------------------------------------------------------------------------
+// 非 similarity 項の積の上界の宣言（ADR 0069 §5〜§7）
+// ---------------------------------------------------------------------------
+
+/**
+ * `nonSimilarityUpperBound` の入力。**クエリ側だけで決まる**部分がある——`tagMatch` の上界
+ * (`1 + 0.1 × queryTags.length`) はクエリのタグ数だけに依存し、候補側の情報を要らない
+ * （`computeTagMatch` そのものの形）。これが「上界をクエリだけから宣言できる」ことの根拠。
+ */
+export interface NonSimilarityBoundInput {
+  queryTags: readonly string[];
+}
+
+/**
+ * 段2のスコアのうち `similarity` 以外の項（`decay` × `tagMatch` × `freshness` × `strength`）の
+ * 積の上界（ADR 0069 §5）。
+ *
+ * **`number` ではなく判別可能な union にする**——宣言できたか / できなかったかを
+ * 潰さない（[ADR 0008](../../../../docs/decisions/0008-absence-taxonomy.md)「無いには
+ * 種類がある」を判定そのものへ適用する）。`kind: "declared"` を返す戦略でも、
+ * その上界が**保証**か**前提**かは `assumptions` の中身（歯で検査する）で読み分ける——
+ * この型自体は「宣言した」ことしか表さない。
+ */
+export type NonSimilarityUpperBound =
+  | {
+      kind: "declared";
+      value: number;
+      /**
+       * この上界が成り立つために立てた前提。**歯にできていないものを含む**
+       * （ADR 0069 §8。「厳密探索が前提」「decay ≤ 1 は起点が未来でないことが前提」等）。
+       * 空配列は「前提なしの保証」を意味する——コメントではなく、この配列自身に語らせる。
+       */
+      assumptions: readonly string[];
+    }
+  | {
+      kind: "undeclared";
+      /** なぜ宣言できないか（この戦略が上界の機構そのものを持たない、等）。 */
+      reason: string;
+    };
+
+/**
+ * 上界を宣言できる戦略。`ScoringStrategy` を拡張するのではなく**足す**——
+ * 呼び出し可能な関数はそのままに、そこへ `nonSimilarityUpperBound` メソッドを
+ * `Object.assign` で生やす形にする（下記 `defaultScoringStrategy` 参照）。
+ *
+ * **⭐ この形にする理由**: `ScoringStrategy` 型そのもの（`(input) => ScoreBreakdown`）は
+ * 変えられない——npm に `0.1.1` が既に出ており、型を破壊すると利用者を壊す。
+ * 「呼べるが宣言を持たない素の関数」もそのまま `ScoringStrategy` として通したいので、
+ * 宣言は本体の型に埋め込まず、後から生やせるプロパティとして表現する。
+ * **⟹ こうしておくと「宣言しない戦略」が型の上でもそのまま表現できる**
+ * （`isBoundedScoringStrategy` で判別不能を測るのに使う。ADR 0069 §7 の
+ * 「宣言を持たない戦略は判定不能に落ちるだけで、黙って誤った上界を使うことにはならない」）。
+ */
+export interface BoundedScoringStrategy extends ScoringStrategy {
+  nonSimilarityUpperBound(input: NonSimilarityBoundInput): NonSimilarityUpperBound;
+}
+
+/** 引数が `nonSimilarityUpperBound` を持つか（＝宣言できる戦略か）を実行時に見分ける。 */
+export function isBoundedScoringStrategy(s: ScoringStrategy): s is BoundedScoringStrategy {
+  return typeof (s as Partial<BoundedScoringStrategy>).nonSimilarityUpperBound === "function";
+}
+
+/**
+ * 既定戦略が宣言する、非 similarity 項の積の上界が立っている**前提**（ADR 0069 §6）。
+ *
+ * **🔴 なぜ文字列で持たせるか。**この2つは「保証」ではなく「前提」である——
+ * `freshness` と `tagMatch` は式の形そのものから上界が出る（`Math.min` が在る／
+ * `1 + 0.1 × n` の形）が、この2つは**そうではない**。
+ *
+ * - **`decay ≤ 1`** — `decay` に clamp は**無い**。上の `MAX_FRESHNESS` の doc が
+ *   「**上限を掛けるのは `freshness` だけで、`decay` には掛けない**」と明記している通りで、
+ *   `0.5 ** (elapsed / halfLife)` は `elapsed < 0`（起点が未来）なら 1 を超える。
+ * - **`strength ≤ 1`** — 型は `number`、DB 列は `real` である。
+ *   `buildNewMemoryFromCandidate` が無条件に `strength: 1` を書き、
+ *   [ADR 0041](../../../../docs/decisions/0041-reinforce-does-not-change-strength.md) が
+ *   「`reinforce` は `strength` を動かさない」と決めているだけであって、
+ *   **型が 1 以下を保証してはいない。**
+ *
+ * **⟹ コメントに書くだけでは検査されない。**だから戻り値に載せる——
+ * この配列は歯で中身を検査され、`recall()` の `omitted` にもそのまま出る。
+ * **「この判定はこの前提の上に立っている」を、結果自身に名乗らせる。**
+ */
+export const DEFAULT_STRATEGY_BOUND_ASSUMPTIONS: readonly string[] = [
+  "decay <= 1: 減衰の起点（lastReinforcedAt ?? recordedAt）が now より未来でないこと。" +
+    "freshness と違い decay に clamp は無い（ADR 0036 は freshness だけを頭打ちにした）。",
+  "strength <= 1: Memory.strength に 1 以外が書かれないこと。" +
+    "書き込み側が無条件に 1 を書いているだけで、型（number）も DB 列（real）も保証していない。",
+];
+
+const scoreWithDefaultStrategy: ScoringStrategy = (input) => {
   const decay = defaultDecayStrategy.strengthAt(input.now, {
     recordedAt: input.recordedAt,
     lastReinforcedAt: input.lastReinforcedAt,
@@ -102,3 +191,41 @@ export const defaultScoringStrategy: ScoringStrategy = (input) => {
   }
   return score;
 };
+
+/**
+ * 既定のスコアリング戦略。**上界の宣言を持つ**（ADR 0069 §6）。
+ *
+ * `Object.assign` で関数へメソッドを生やしているのは、`ScoringStrategy`
+ * （`(input) => ScoreBreakdown`）という**呼び出し可能な形をそのまま保つ**ためである——
+ * 型を `{ score, bound }` のようなオブジェクトへ変えると、npm に出ている `0.1.1` の
+ * 利用者を壊す。**能力を足すだけにする。**
+ *
+ * **上界の内訳**（`total` から `similarity` を除いた4項の積）:
+ *
+ * | 項 | 上界 | 保証か、前提か |
+ * |---|---|---|
+ * | `freshness` | `MAX_FRESHNESS`（= 1） | **保証** — `Math.min` が式の中に在る（ADR 0036） |
+ * | `tagMatch` | `1 + 0.1 × queryTags.length` | **保証** — `computeTagMatch` の形そのもの。**候補側を見ずにクエリだけで決まる** |
+ * | `decay` | 1 | **🔴 前提** — clamp が無い（`DEFAULT_STRATEGY_BOUND_ASSUMPTIONS`） |
+ * | `strength` | 1 | **🔴 前提** — 型も DB 列も保証していない（同上） |
+ *
+ * **⚠ `tagMatch` の上界に候補側の `tags` を使わない。**使えば上界は縮むが、
+ * それには「窓の外の候補の tags」を知る必要があり、**窓の外は見えないというのが前提そのもの**である。
+ * クエリタグ数だけで決まる形だからこそ、見えない候補にも当てられる。
+ */
+export const defaultScoringStrategy: BoundedScoringStrategy = Object.assign(
+  scoreWithDefaultStrategy,
+  {
+    nonSimilarityUpperBound(input: NonSimilarityBoundInput): NonSimilarityUpperBound {
+      const freshnessMax = MAX_FRESHNESS;
+      const tagMatchMax = 1 + input.queryTags.length * 0.1;
+      const decayMax = 1;
+      const strengthMax = 1;
+      return {
+        kind: "declared",
+        value: freshnessMax * tagMatchMax * decayMax * strengthMax,
+        assumptions: DEFAULT_STRATEGY_BOUND_ASSUMPTIONS,
+      };
+    },
+  },
+);

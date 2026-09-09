@@ -290,15 +290,55 @@ describe("recall() — omitted.kind = 'over_limit'（docs/recall.md §2 段2）"
   });
 });
 
-describe("recall() — omitted.kind = 'ann_truncated'（docs/recall.md §3）", () => {
-  it("ANN の返り件数が over-fetch 上限 k' に達したら ann_truncated が付く", async () => {
+describe("recall() — omitted.kind = 'ann_truncated'（docs/recall.md §3、ADR 0069）", () => {
+  // 🔴 **この describe の契約は ADR 0069 で変わった。**
+  //
+  // かつては「ANN の返り件数が k' に達したら ann_truncated が付く」だった。いまは
+  // **「k' に達し、かつ *損失が起こりえた* ときだけ付く」** である——窓が埋まったことは
+  // 「スコープが k' 以上ある」としか言っておらず、損したかどうかを一切言っていなかった
+  // （実測でスコープ 75件・k'=40 のとき 7 probe すべてが鳴り、実損は 0/7 だった）。
+  //
+  // **⚠ 下の1本目は、以前の歯と同じ状況をそのまま作って「鳴らなくなったこと」を測る。**
+  // 歯を消して逃げるのではなく、**契約が変わった向きをそのまま固定する。**
+  it("k' に達しても、窓の外が top-k へ入れないと証明できたら鳴らない（ADR 0069）", async () => {
     const { runtime, stores } = buildRuntime();
     await createEmbeddedMemory(stores, [1, 0]);
     await createEmbeddedMemory(stores, [1, 0.001]);
 
-    // limit=1, overFetchFactor=1 -> k'=1。候補が2件あるのに1件しか返らないので打ち切りが起きる。
+    // limit=1, overFetchFactor=1 -> k'=1。候補が2件あるのに1件しか返らない（＝窓は埋まった）。
+    // ただし返った1件は similarity=1.0 で、非 similarity 項は全部が上界に張り付いている
+    // （clock 固定なので decay=freshness=1、クエリタグ無しで tagMatch=1、strength=1）。
+    // ⟹ R = 1 / (1 × 1) = 1 ⟹ 窓の外は原理的に抜けない ⟹ 沈黙。
     const result = await runtime.recall(ctx, { vector: [1, 0], limit: 1, overFetchFactor: 1 });
-    expect(result.omitted).toContainEqual({ kind: "ann_truncated", countKind: "unknown" });
+    expect(result.omitted.some((o) => o.kind === "ann_truncated")).toBe(false);
+  });
+
+  it("窓の外が top-k へ入りえたら、safetyRatio と前提を付けて鳴る（ADR 0069）", async () => {
+    const { runtime, stores } = buildRuntime();
+    await createEmbeddedMemory(stores, [1, 0]);
+    await createEmbeddedMemory(stores, [1, 0.001]);
+
+    // 上とまったく同じ状況に、**どの候補も持っていないタグ**をクエリへ足すだけ。
+    // ⟹ 上界 M_max は 1 + 0.1 = 1.1 へ上がるが、返った1件の実際の tagMatch は 1.0 のまま。
+    // ⟹ R = 1.0 / (1.0 × 1.1) ≈ 0.909 < 1
+    // ⟹ **「窓の外にこのタグを持つ記憶が居たら、抜かれていた」**——これがこの札の意味である。
+    const result = await runtime.recall(ctx, {
+      vector: [1, 0],
+      limit: 1,
+      overFetchFactor: 1,
+      tags: ["どの候補も持っていないタグ"],
+    });
+    const found = result.omitted.find((o) => o.kind === "ann_truncated");
+    if (found === undefined || found.kind !== "ann_truncated") {
+      throw new Error("ann_truncated が積まれていない");
+    }
+    expect(found.certainty).toBe("loss_possible");
+    expect(found.countKind).toBe("unknown");
+    expect(found.safetyRatio).toBeLessThan(1);
+    expect(found.safetyRatio).toBeCloseTo(1 / 1.1, 6);
+    // **前提を名乗っていること。**コメントではなく戻り値で（ADR 0069 §6）。
+    expect(found.assumptions?.join(" ")).toContain("decay");
+    expect(found.assumptions?.join(" ")).toContain("strength");
   });
 
   it("候補が k' 未満ならフルスキャンと同精度になり ann_truncated は付かない", async () => {
@@ -341,9 +381,17 @@ describe("recall() — omitted.kind = 'ann_unreached'（ADR 0025 の実測、ADR
     await createEmbeddedMemory(stores, [1, 0]);
     await createEmbeddedMemory(stores, [1, 0.001]);
 
-    // limit=1, overFetchFactor=1 -> k'=1。候補2件のうち1件しか返らないので ann_truncated が鳴る。
-    const result = await runtime.recall(ctx, { vector: [1, 0], limit: 1, overFetchFactor: 1 });
-    expect(result.omitted).toContainEqual({ kind: "ann_truncated", countKind: "unknown" });
+    // limit=1, overFetchFactor=1 -> k'=1。候補2件のうち1件しか返らない（＝窓が埋まる）。
+    // **ADR 0069 以降、この状況で ann_truncated が鳴るかは「損しえたか」次第**なので、
+    // 鳴る側になる形（どの候補も持たないタグをクエリへ足す）で作る——
+    // **この歯の主題は「ann_unreached が同時に鳴らないこと」であって、ann_truncated の鳴り方ではない。**
+    const result = await runtime.recall(ctx, {
+      vector: [1, 0],
+      limit: 1,
+      overFetchFactor: 1,
+      tags: ["どの候補も持っていないタグ"],
+    });
+    expect(result.omitted.some((o) => o.kind === "ann_truncated")).toBe(true);
     expect(result.omitted.some((o) => o.kind === "ann_unreached")).toBe(false);
   });
 });

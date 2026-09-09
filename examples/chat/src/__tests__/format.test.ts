@@ -90,7 +90,15 @@ describe("formatRecallQualityTable", () => {
         totalInScope: 321,
         annCandidateCount: 50,
         omitted: [
-          { kind: "ann_truncated", countKind: "unknown" },
+          // ADR 0069: 札は certainty を持つようになった。**この歯の主題（件数を潰さない）は
+          // 変えていない** —— 固定値を新しい形に合わせただけで、期待値は緩めていない。
+          {
+            kind: "ann_truncated",
+            countKind: "unknown",
+            certainty: "loss_possible",
+            safetyRatio: 0.8,
+            assumptions: ["decay <= 1: ...", "strength <= 1: ..."],
+          },
           { kind: "over_limit", count: 30, countKind: "exact" },
           { kind: "not_indexed", reason: "pending", count: 271, countKind: "exact" },
         ],

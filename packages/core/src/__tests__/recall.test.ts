@@ -141,12 +141,40 @@ describe("OmissionSchema — 10 の kind すべて", () => {
   });
 
   it("accepts 'ann_truncated'（countKind は必ず 'unknown'）", () => {
-    const result = OmissionSchema.safeParse({ kind: "ann_truncated", countKind: "unknown" });
+    const result = OmissionSchema.safeParse({
+      kind: "ann_truncated",
+      countKind: "unknown",
+      certainty: "loss_possible",
+      safetyRatio: 0.5,
+      assumptions: ["decay <= 1: ...", "strength <= 1: ..."],
+    });
     expect(result.success).toBe(true);
   });
 
+  // ADR 0069: certainty は**必須**である。省略できると「損したかもしれない」と
+  // 「判定できなかった」が同じ形で通ってしまい、この決定の芯が消える。
+  it("rejects 'ann_truncated' の certainty 欠落（ADR 0069）", () => {
+    const result = OmissionSchema.safeParse({ kind: "ann_truncated", countKind: "unknown" });
+    expect(result.success).toBe(false);
+  });
+
+  // **'provably_safe' は omission としては存在しない**——証明できたら札は積まれない
+  // （沈黙は「値」ではなく「不在」で表す。ADR 0069）。
+  it("rejects 'ann_truncated' の certainty が 'provably_safe'（ADR 0069）", () => {
+    const result = OmissionSchema.safeParse({
+      kind: "ann_truncated",
+      countKind: "unknown",
+      certainty: "provably_safe",
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("rejects 'ann_truncated' の countKind が 'exact'（型で 'unknown' 固定のため）", () => {
-    const result = OmissionSchema.safeParse({ kind: "ann_truncated", countKind: "exact" });
+    const result = OmissionSchema.safeParse({
+      kind: "ann_truncated",
+      countKind: "exact",
+      certainty: "loss_possible",
+    });
     expect(result.success).toBe(false);
   });
 

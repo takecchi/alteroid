@@ -26,6 +26,7 @@ import type {
   StageTrace,
 } from "./recall.js";
 import { defaultScoringStrategy } from "./strategies/scoring.js";
+import { decideAnnTruncation } from "./ann-truncation.js";
 
 /**
  * `recall()` の実装（roadmap.md 段階4「想起」・段階5「説明」）。
@@ -281,9 +282,14 @@ export async function runRecall(
 
   // over-fetch の打ち切り（docs/recall.md §3「正直に書くべき限界」）: LIMIT に達したなら
   // その先に何件あるかは原理的に数えられない。
-  if (candidateGenerationExecuted && annHits.length >= kPrime && kPrime > 0) {
-    omitted.push({ kind: "ann_truncated", countKind: "unknown" });
-  }
+  //
+  // **⚠ ここでは「窓が埋まったか」を覚えるだけで、omitted へは積まない（ADR 0069）。**
+  // かつてはこの位置で無条件に積んでいたが、`annHits.length >= kPrime` は
+  // **「スコープが k' 以上ある」としか言っておらず、損したかどうかを一切言っていない**——
+  // 実測でスコープ 75件・k'=40 のとき 7 probe すべてで鳴り、実損は 0/7 だった。
+  // **⟹ 損失が起こりえたかは、段2〜段4 が終わって k 位の total が出るまで判定できない。**
+  // 判定は `withinLimit` を作った直後で行う（下方の `decideAnnTruncation` の呼び出し）。
+  const annWindowFilled = candidateGenerationExecuted && annHits.length >= kPrime && kPrime > 0;
 
   // 候補の実体を取得し、スコープ外（subject/period）・除外 provenance を落とす。
   // ここで落ちたものは「filtered」としては報告しない——subject は呼び出し側の境界
@@ -375,6 +381,50 @@ export async function runRecall(
   const overLimit = passed.slice(limit);
   if (overLimit.length > 0) {
     omitted.push({ kind: "over_limit", count: overLimit.length, countKind: rescoreCountKind });
+  }
+
+  // -------------------------------------------------------------------
+  // over-fetch の窓の外に、本来 top-k に入るべき候補が残っていたか（ADR 0069 案A）
+  //
+  // **段1ではなくここで判定する。**比較の基準になる「k 位の total」は、閾値と limit を
+  // 通したあとにしか存在しないからである。**⟹ `omitted` の並び順が変わった**——
+  // かつて `ann_truncated` は `below_threshold` / `over_limit` より前に積まれていた。
+  // **順序に意味は無い**（`omitted` は集合として読まれる。`docs/recall.md` §4 の表も
+  // kind ごとの説明であり順序を規定していない）が、**配列の完全一致で書かれた歯は影響を受ける**
+  // ので、そういう歯は `toContainEqual` 等へ直した（緩めたのではなく、順序に依存していた
+  // ことのほうが偶然だった）。
+  // -------------------------------------------------------------------
+  if (annWindowFilled) {
+    const lastAnnHit = annHits[annHits.length - 1];
+    const verdict = decideAnnTruncation({
+      strategy: defaultScoringStrategy,
+      queryTags,
+      // 段2が `1 - distance` で similarity を作っているのと同じ変換（ADR 0038: distance は
+      // コサイン距離）。ここで別の式を使うと、判定と実際のスコアが食い違う。
+      lastAnnSimilarity: lastAnnHit === undefined ? Number.NaN : 1 - lastAnnHit.distance,
+      lastReturnedTotal:
+        withinLimit.length >= limit ? (withinLimit[limit - 1]?.score.total ?? null) : null,
+      scoreThreshold,
+    });
+    // **`provably_safe` のときは何も積まない。**沈黙は「値」ではなく「不在」で表す——
+    // omission を「安全だった」という顔で積むと、`undecidable`（判定できなかった）と
+    // 同じ形になり、この決定の芯が消える。
+    if (verdict.kind === "loss_possible") {
+      omitted.push({
+        kind: "ann_truncated",
+        countKind: "unknown",
+        certainty: "loss_possible",
+        safetyRatio: verdict.safetyRatio,
+        assumptions: verdict.assumptions,
+      });
+    } else if (verdict.kind === "undecidable") {
+      omitted.push({
+        kind: "ann_truncated",
+        countKind: "unknown",
+        certainty: "undecidable",
+        undecidableReason: verdict.reason,
+      });
+    }
   }
 
   stages.push({
