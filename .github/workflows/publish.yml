@@ -101,27 +101,38 @@ jobs:
           fi
           echo "OK: Release の tag は origin/main の履歴上に在ります（${TAG_SHA}）。"
 
-      - name: Release の tag から版と dist-tag を決める
+      - name: Release の tag の版を package.json へ書き込む（ADR 0070）
+        # ⭐ **版の権威は Release の tag である。**`v0.1.2` の Release を作れば、
+        # この段が4つの package.json を 0.1.2 に書き換えてから梱包する。
+        # ⟹ **版上げのコミットは要らない。**
+        #
+        # ⚠ だから git に入っている `version` は権威ある値ではない
+        # （「最後に誰かが書いた値」であって、npm 上の最新版とは限らない）。
+        #
+        # 判定（tag → 版・dist-tag）は scripts/release-version.mjs の純関数が持ち、
+        # 歯がそれを直接測る（ADR 0067 と同じ形）。semver でない tag はここで落ちる
+        # ——`${TAG#v}` だけの実装だと `vfoo` が `foo` として書き込まれ、
+        # `mnemora-core-foo.tgz` が publish の直前まで誰にも気づかれずに作られる。
+        #
+        # ⚠ この段は install の**後**に置くこと。先に置くと `--frozen-lockfile` が
+        # 書き換え後の package.json を見ることになる。
         id: version
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          GITHUB_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: node scripts/apply-release-version.mjs
+
+      - name: 予行のときは package.json の版をそのまま使う
+        # workflow_dispatch（予行）には tag が無い。書き換えず、木に在る版で梱包する。
+        id: version_dry_run
+        if: github.event_name != 'release'
         run: |
           set -euo pipefail
-          NPM_TAG="latest"
-          if [ "${{ github.event_name }}" = "release" ]; then
-            TAG="${{ github.event.release.tag_name }}"
-            VERSION="${TAG#v}"
-            # ⭐ pre-release として作られた Release を latest にしない。
-            # GitHub は pre-release でも published を発火させるため、ここで分けないと
-            # **beta が latest になり、`npm i @mnemora/core` が beta を掴む。**
-            if [ "${{ github.event.release.prerelease }}" = "true" ]; then
-              NPM_TAG="next"
-            fi
-          else
-            # workflow_dispatch（予行）のときは package.json の版をそのまま使う。
-            VERSION="$(node -p "require('./packages/core/package.json').version")"
-          fi
+          VERSION="$(node -p "require('./packages/core/package.json').version")"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "npm_tag=${NPM_TAG}" >> "$GITHUB_OUTPUT"
-          echo "版: ${VERSION} / dist-tag: ${NPM_TAG}"
+          echo "npm_tag=latest" >> "$GITHUB_OUTPUT"
+          echo "版: ${VERSION}（予行。package.json の値をそのまま使う） / dist-tag: latest"
 
       - name: Typecheck / Lint / Format / Test / Build（非 DB の門を全部通す）
         # DB を要する検査（packages/postgres と examples/chat の test:db）はここでは走らない
@@ -144,7 +155,7 @@ jobs:
         # EUNSUPPORTEDPROTOCOL で落ちる（ADR 0060 の実測）。
         run: |
           node scripts/pack-publish-targets.mjs "${RUNNER_TEMP}/tarballs" \
-            --expect-version "${{ steps.version.outputs.version }}"
+            --expect-version "${{ steps.version.outputs.version || steps.version_dry_run.outputs.version }}"
 
       - name: 予行か本番かを決める（fail-open にしない）
         # ⚠ 直す前はここで shell の文字列比較を直接書いていた
@@ -194,9 +205,15 @@ jobs:
         # （直接展開に戻さない——今回の fail-open 修正のついでの副次的な硬化）。
         env:
           DRY_RUN: ${{ steps.dry-run.outputs.dry_run }}
-          NPM_TAG: ${{ steps.version.outputs.npm_tag }}
+          NPM_TAG: ${{ steps.version.outputs.npm_tag || steps.version_dry_run.outputs.npm_tag }}
         run: |
           set -euo pipefail
+          # ⚠ NPM_TAG が空のまま `--tag ""` を渡すと、npm がどう振る舞うかはこの器で
+          # 確かめていない。**確かめていないものを publish の経路に通さない**——ここで落とす。
+          if [ -z "${NPM_TAG}" ]; then
+            echo "::error::NPM_TAG が空です。版を決める段が走らなかった可能性があります。" >&2
+            exit 1
+          fi
           DRY=""
           if [ "${DRY_RUN}" = "true" ]; then
             DRY="--dry-run"

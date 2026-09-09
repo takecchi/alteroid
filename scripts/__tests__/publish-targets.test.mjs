@@ -139,10 +139,37 @@ describe(".github/workflows/publish.yml（ADR 0066）", () => {
    * GitHub は pre-release でも \`published\` を発火させる。ここで dist-tag を分けないと
    * **beta が \`latest\` になり、\`npm i @mnemora/core\` が beta を掴む。**
    */
-  it("pre-release を latest にしない（dist-tag を next に振る）", () => {
-    expect(workflow).toContain("github.event.release.prerelease");
-    expect(workflow).toContain('NPM_TAG="next"');
+  /**
+   * ⭐ この歯は ADR 0066 の時点で workflow の中の `NPM_TAG="next"` を直接見ていた。
+   * ADR 0070 で版と dist-tag の判定を `scripts/release-version.mjs` の純関数へ切り出したため、
+   * **その文字列は workflow から消え、この歯は目的通りに壊れた。**
+   *
+   * 判定そのもの（pre-release を `next` へ振ること、食い違ったときに `latest` を汚さない側へ
+   * 倒すこと）は `scripts/__tests__/release-version.test.mjs` が純関数を直接測っている。
+   * **ここで見るのは配線だけである**——ADR 0067 が負債として挙げ、PR #80 が
+   * `decideDryRun` について塞いだのと同じ形。切り出した判定は、
+   * **workflow がそれを呼んでいなければ何も守らない。**
+   */
+  it("版と dist-tag を決める段が apply-release-version.mjs を呼んでいる（配線）", () => {
+    expect(workflow).toContain("node scripts/apply-release-version.mjs");
+  });
+
+  it("その段へ tag と pre-release の別が env で渡っている", () => {
+    expect(workflow).toContain("RELEASE_TAG: ${{ github.event.release.tag_name }}");
+    expect(workflow).toContain("GITHUB_PRERELEASE: ${{ github.event.release.prerelease }}");
+  });
+
+  it("決まった dist-tag が npm publish の --tag へ渡っている", () => {
     expect(workflow).toContain("--tag");
+    expect(workflow).toContain("NPM_TAG:");
+  });
+
+  /**
+   * `NPM_TAG` が空のまま `--tag ""` を渡したとき npm がどう振る舞うかは、この器で
+   * 確かめていない。**確かめていないものを publish の経路に通さない**ための門。
+   */
+  it("NPM_TAG が空なら publish の前に落ちる", () => {
+    expect(workflow).toContain('if [ -z "${NPM_TAG}" ]; then');
   });
 
   /**

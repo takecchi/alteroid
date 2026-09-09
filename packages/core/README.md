@@ -10,7 +10,8 @@ mnemora の core パッケージ。型・interface・`runtime.observe/tick/recal
 `.github/workflows/publish.yml` が npm の Trusted Publishing (OIDC) で上げる
 （pre-release にチェックを入れた Release は `latest` ではなく `next` に入る）。
 
-**⚠ registry に実際に上がっているかは、この文書ではなく registry に訊くこと。**
+**⚠ この package.json の `version` は権威ある値ではない**（[ADR 0070](../../docs/decisions/0070-version-comes-from-the-release-tag.md)）。
+版は Release の tag が決め、publish の直前に書き込まれる。**registry に訊くこと。**
 
 ```bash
 npm view @mnemora/core version

@@ -82,3 +82,4 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0067](./0067-dry-run-fail-open-and-does-not-verify-trusted-publisher.md) | 予行フラグ (`dry_run`) の fail-open を安全側へ反転する — `--dry-run` は信頼発行元 (Trusted Publisher) の未設定を検出できないと実測した記録 | 採用 (2026-09) |
 | [0068](./0068-the-bench-must-not-lie-about-what-it-measured.md) | `retrieval` ベンチが「測っていないこと」を測ったかのように印字するのをやめる — 2回目の実行で `ingest` が逆の結論を出すこと・出力から arm を跨いで数字を拾えること・`OPENAI_API_KEY` が在るだけでカセット再生が実 API へ倒れること | 採用 (2026-09) |
 | [0069](./0069-ann-truncated-says-nothing-about-loss.md) | `ann_truncated` は「損したか」を一切言っていない（スコープが `k'` 以上なら必ず鳴る）— 読み手0件・書かれた一手は 100% 発火・`k'=40` の安全性は「4項が定数」に依存しており `occurredAt` を入れると割れることの実測と、案A（安全余裕を札に載せる）の採用 | 採用 (2026-09) |
+| [0070](./0070-version-comes-from-the-release-tag.md) | **版の権威を Release の tag に置く** — `vX.Y.Z` の Release が `package.json` の `version` を書き換えてから梱包する（版上げのコミットが要らなくなる）。`package.json` の値は権威ではなくなる。併せて OIDC と provenance が実際に通ったことの記録 | 採用 (2026-09) |
