@@ -825,7 +825,7 @@ describe('scripts/test.mjs は vitest を1回しか起こさない（test-guard-
     const matches = stripped.match(RUN_VITEST_CALL_SITE_RE) ?? [];
 
     const message = [
-      '直上の歯が数えているのは `spawn(\'vitest\'` という**起動**の記述の件数',
+      "直上の歯が数えているのは `spawn('vitest'` という**起動**の記述の件数",
       'であって、`runVitest` の**呼び出し**ではない。`spawn` は `runVitest`',
       '関数の本体の中に1つだけあるので、誰かが `main()` の中へ',
       '`await runVitest(args)` をもう1回書いても、直上の歯の件数は1のままで',
