@@ -7,6 +7,7 @@ export * from "./provenance.js";
 export * from "./observation.js";
 export * from "./memory.js";
 export * from "./recall.js";
+export * from "./digest-band.js";
 export * from "./ann-truncation.js";
 export * from "./event.js";
 export * from "./embedding.js";

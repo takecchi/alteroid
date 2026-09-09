@@ -39,6 +39,9 @@
 | `recall` の `omitted` と `usage` | 説明可能性は後付けできない。パイプラインの各段（フィルタ・閾値・予算）が「なぜ落としたか」を持ったまま返す設計になっていないと、後から理由だけを復元することはできない。 |
 | 目次帯（`index`）。ただし Phase 1 は第3階（群カウント）のみ、digest 帯は Phase 2 | digest 帯は taxonomy（ラベルの語彙管理）を要求するが、群カウントは subject 単位の集計だけで成立する。「recall が0件でも、何が在るかは言える」という最も価値の高い性質は、群カウントだけで既に得られる。 |
 
+**⚠ 2026-09 訂正（digest 帯の実装 PR、[ADR 0073](./decisions/0073-digest-band-bounded-without-taxonomy.md)）: 上の表の「digest 帯は taxonomy（ラベルの語彙管理）を要求する」は誤りだった。**要求しない。taxonomy を要するのは `taxonomy` 軸によるグルーピングのほうであり、帯そのものではない（[recall.md](./recall.md) §5 の訂正を見よ）。**digest 帯はオーナーの指示により前倒しで実装済みであり、schema / migration の変更を伴わなかった。**⛔ ただし前倒ししたのはこの1機能だけであり、Phase 1 / Phase 2 の線は動いていない。
+
+
 ### 1.3 Phase 1 から明示的に外すもの
 
 - 関係グラフ本体（`superseded_by_id` / `contradicts` を辿るグラフ探索）
@@ -134,6 +137,9 @@ Phase 1 で入れた土台が、後続フェーズをどう安くしているか
 | `purge()`（物理削除） | `memory_events` のイベント種別に `purged` を Phase 1 のスキーマから含めてあるため、監査ログのスキーマ変更なしに追加できる。 |
 | 忘却の実処理（`decay_floor_at` を使った検索時フィルタとアーカイブ掃引） | Phase 1 では `decay_floor_at` を書き込むだけで読み取りに使っていない。Phase 2 で `WHERE decay_floor_at > now()` を使い始めるだけで、列追加や既存行の再計算は不要。 |
 | `valid_from` / `valid_until`（時間的妥当性） | Phase 1 で `occurred_at` / `recorded_at` / `last_reinforced_at` の3つの時刻を混ぜずに区別してあるため、4本目・5本目の時計として自然に追加できる。 |
+
+**⚠ 2026-09 訂正（digest 帯の実装 PR、[ADR 0073](./decisions/0073-digest-band-bounded-without-taxonomy.md)）: 上の表の「目次帯の第2階（digest 帯）」は、オーナーの指示により前倒しで実装済みである。**同じ行に並記された **`taxonomy` の語彙登録・昇格フロー（`labels` / `memory_labels`）は Phase 2 のままである**——2つは同じ行に書かれているが、機構としては独立しており、帯のほうは taxonomy を要さなかった。**⛔ この表の他の項目も前倒しされていない。**
+
 
 ### Phase 3
 

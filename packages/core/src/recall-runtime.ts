@@ -8,11 +8,15 @@ import type { MemoryId } from "./ids.js";
 import { NOT_INDEXED_REASONS } from "./recall.js";
 import type { Memory } from "./memory.js";
 import {
+  DEFAULT_DIGEST_BAND_LIMIT,
   DEFAULT_OVER_FETCH_FACTOR,
   DEFAULT_RECALL_LIMIT,
   DEFAULT_SCORE_THRESHOLD,
+  DIGEST_BAND_MAX_CHARS,
+  DIGEST_BAND_MAX_ENTRY_CHARS,
   RecallQuerySchema,
 } from "./recall.js";
+import { packDigestBand } from "./digest-band.js";
 import type {
   CountKind,
   IndexBand,
@@ -598,16 +602,41 @@ export async function runRecall(
 
   // -------------------------------------------------------------------
   // 段5: 目次帯の構築（索引: 集約クエリ。docs/recall.md §2 段5・§5）
+  //
+  // digestBand が担うのは「スコープ内に在るが `memories` に返していないもの」の
+  // 1件1行の要旨である——`memories` に入った分の要旨は既に `RecalledMemory.digest` に
+  // 在るので、ここでは `finalMemories` の memoryId を明示的に除外して集約を取る。
   // -------------------------------------------------------------------
-  const aggregate = await deps.memoryStore.aggregateScope(ctx, scope);
+  const digestBandLimit = validatedQuery.digestBandLimit ?? DEFAULT_DIGEST_BAND_LIMIT;
+  const aggregate = await deps.memoryStore.aggregateScope(ctx, scope, {
+    digestBand: {
+      limit: digestBandLimit,
+      excludeMemoryIds: finalMemories.map((m) => m.memoryId),
+    },
+  });
+  const packedDigestBand = packDigestBand(aggregate.digests, aggregate.digestEligible.count, {
+    limit: digestBandLimit,
+    maxChars: DIGEST_BAND_MAX_CHARS,
+    maxEntryChars: DIGEST_BAND_MAX_ENTRY_CHARS,
+  });
   const indexBand: IndexBand = {
     groups: aggregate.groups,
     totalInScope: aggregate.totalInScope,
     countKind: aggregate.countKind,
-    // digestBand は Phase 2。Phase 1 では常に undefined（docs/recall.md §5）。
+    digestBand: packedDigestBand.band,
+    digestBandCoverage: {
+      shown: packedDigestBand.band.length,
+      eligible: aggregate.digestEligible.count,
+      countKind: aggregate.digestEligible.countKind,
+      ...(packedDigestBand.limitedBy !== undefined
+        ? { limitedBy: packedDigestBand.limitedBy }
+        : {}),
+    },
   };
   stages.push({
     stage: "index_band",
+    // ⚠ detail に件数を足さない（ADR 0011）。件数は digestBandCoverage が名乗る。
+    // detail は型無しの診断欄であり、同じ意味の件数を2箇所に置くと食い違いうる。
     executed: true,
     detail: { totalInScope: aggregate.totalInScope },
   });

@@ -287,7 +287,7 @@ describe("IndexBandSchema", () => {
     expect(result.success).toBe(true);
   });
 
-  it("accepts digestBand が指定された場合（Phase 2 向けの型だが受理はできる）", () => {
+  it("accepts digestBand が指定された場合", () => {
     const result = IndexBandSchema.safeParse({
       groups: [],
       totalInScope: 1,
@@ -295,6 +295,55 @@ describe("IndexBandSchema", () => {
       digestBand: [{ memoryId: "m1", digest: "d" }],
     });
     expect(result.success).toBe(true);
+  });
+
+  it("accepts digestBand の1件に truncated: true が付いた場合", () => {
+    const result = IndexBandSchema.safeParse({
+      groups: [],
+      totalInScope: 1,
+      countKind: "exact",
+      digestBand: [{ memoryId: "m1", digest: "d", truncated: true }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts digestBandCoverage が limitedBy 無しで指定された場合（＝どの上限にも当たらなかった）", () => {
+    const result = IndexBandSchema.safeParse({
+      groups: [],
+      totalInScope: 1,
+      countKind: "exact",
+      digestBand: [{ memoryId: "m1", digest: "d" }],
+      digestBandCoverage: { shown: 1, eligible: 1, countKind: "exact" },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts digestBandCoverage.limitedBy の3値すべて", () => {
+    for (const limitedBy of ["entry_limit", "char_budget", "both"] as const) {
+      const result = IndexBandSchema.safeParse({
+        groups: [],
+        totalInScope: 5,
+        countKind: "exact",
+        digestBand: [],
+        digestBandCoverage: { shown: 0, eligible: 5, countKind: "exact", limitedBy },
+      });
+      expect(result.success).toBe(true);
+    }
+  });
+
+  it("rejects digestBandCoverage.limitedBy が未知の値", () => {
+    const result = IndexBandSchema.safeParse({
+      groups: [],
+      totalInScope: 1,
+      countKind: "exact",
+      digestBandCoverage: {
+        shown: 0,
+        eligible: 1,
+        countKind: "exact",
+        limitedBy: "something_else",
+      },
+    });
+    expect(result.success).toBe(false);
   });
 });
 
@@ -316,6 +365,33 @@ describe("RecallQuerySchema — D5: excludeProvenanceKinds", () => {
     const result = RecallQuerySchema.safeParse({
       excludeProvenanceKinds: ["fabricated"],
     });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("RecallQuerySchema — digestBandLimit（目次帯の件数上限。本 PR）", () => {
+  it("accepts digestBandLimit を指定しない（既定 DEFAULT_DIGEST_BAND_LIMIT を使う）", () => {
+    const result = RecallQuerySchema.safeParse({});
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts digestBandLimit に正の整数", () => {
+    const result = RecallQuerySchema.safeParse({ digestBandLimit: 100 });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects digestBandLimit: 0 — 目次帯の保証を呼び出し側が消せないようにする（RecallQuery.limit と同じ作法）", () => {
+    const result = RecallQuerySchema.safeParse({ digestBandLimit: 0 });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects digestBandLimit に負の値", () => {
+    const result = RecallQuerySchema.safeParse({ digestBandLimit: -5 });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects digestBandLimit に非整数", () => {
+    const result = RecallQuerySchema.safeParse({ digestBandLimit: 1.5 });
     expect(result.success).toBe(false);
   });
 });

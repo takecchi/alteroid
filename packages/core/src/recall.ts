@@ -304,23 +304,76 @@ export const GroupCountSchema = z.object({
   countKind: CountKindSchema,
 }) satisfies z.ZodType<GroupCount>;
 
-/** Phase 2 の digest 帯（recall.md §5）。Phase 1 では型だけ持ち、常に undefined。 */
+/** 目次帯の1行（recall.md §5）。 */
 export interface DigestEntry {
   memoryId: MemoryId;
   digest: string;
+  /** 帯に載せる際に DIGEST_BAND_MAX_ENTRY_CHARS で切り詰めた場合のみ true。切っていなければ省略する。 */
+  truncated?: boolean;
 }
 
 export const DigestEntrySchema = z.object({
   memoryId: z.string().min(1),
   digest: z.string(),
+  truncated: z.boolean().optional(),
 }) satisfies z.ZodType<DigestEntry>;
+
+/**
+ * 目次帯がどの上限で切れたか。`entry_limit`（件数上限）・`char_budget`（文字数予算）・
+ * `both`（同じ件で両方に同時に当たった。`packDigestBand` の doc 参照）のいずれか。
+ */
+export type DigestBandLimitedBy = "entry_limit" | "char_budget" | "both";
+
+export const DigestBandLimitedBySchema = z.enum([
+  "entry_limit",
+  "char_budget",
+  "both",
+]) satisfies z.ZodType<DigestBandLimitedBy>;
+
+/**
+ * 目次帯の被覆度（recall.md §5、ADR 0008 の「『無い』の種類を潰さない」の適用）。
+ *
+ * **2階建てであることが設計の芯である**（`'none'` というリテラルを足して1つの値に潰さない）:
+ * - `IndexBand.digestBandCoverage` 自体が無い ＝ 帯を作っていない。
+ * - `digestBandCoverage` は在るが `limitedBy` が無い ＝ 帯を作ったが、どの上限にも
+ *   当たらなかった（＝候補が全件載った）。
+ *
+ * この2つを1つの `'none'` に潰すと、「帯を作らなかった（＝呼び出し側が造成すら
+ * 要求しなかった、または実装が対応していない）」と「帯を作ったうえで空だった／全部載った」
+ * が区別できなくなる——ADR 0008 が禁じている「別の理由を同じ顔にする」を、
+ * この欄自身がやることになる。
+ */
+export interface DigestBandCoverage {
+  /** 実際に帯へ載せた件数。 */
+  shown: number;
+  /** 帯に載せる資格があった件数（スコープ内 かつ `memories` に返していないもの）。 */
+  eligible: number;
+  /** `eligible` の信頼度。 */
+  countKind: CountKind;
+  /** どの上限で切れたか。切れていなければ省略する。 */
+  limitedBy?: DigestBandLimitedBy;
+}
+
+export const DigestBandCoverageSchema = z.object({
+  shown: z.number().int().nonnegative(),
+  eligible: z.number().int().nonnegative(),
+  countKind: CountKindSchema,
+  limitedBy: DigestBandLimitedBySchema.optional(),
+}) satisfies z.ZodType<DigestBandCoverage>;
 
 export interface IndexBand {
   groups: GroupCount[];
   totalInScope: number;
   countKind: CountKind;
-  /** Phase 2。Phase 1 では常に undefined。 */
+  /**
+   * `recall()` が返さなかった Memory（スコープ内だが `memories` に載っていないもの）の
+   * 1件1行の要旨。**`memories` に入った分の要旨は既に `RecalledMemory.digest` に在るので、
+   * この帯には載せない**（`packDigestBand` を呼ぶ側が `excludeMemoryIds` で除く）。
+   * 決定的な順序で、`digestBandCoverage` の被覆規則に従って切り詰めたもの。
+   */
   digestBand?: DigestEntry[];
+  /** `digestBand` の被覆度。`digestBand` を組んだときだけ在る（`DigestBandCoverage` の doc 参照）。 */
+  digestBandCoverage?: DigestBandCoverage;
 }
 
 export const IndexBandSchema = z.object({
@@ -328,7 +381,32 @@ export const IndexBandSchema = z.object({
   totalInScope: z.number().int().nonnegative(),
   countKind: CountKindSchema,
   digestBand: z.array(DigestEntrySchema).optional(),
+  digestBandCoverage: DigestBandCoverageSchema.optional(),
 }) satisfies z.ZodType<IndexBand>;
+
+// ---------------------------------------------------------------------------
+// 目次帯の定数（docs/recall.md §5、本 PR）
+// ---------------------------------------------------------------------------
+
+/** `RecallQuery.digestBandLimit` の既定値（帯に載せる件数の上限）。 */
+export const DEFAULT_DIGEST_BAND_LIMIT = 50;
+
+/**
+ * 帯全体の文字数予算。呼び出し側からは変えられない（`RecallQuery` に欄を持たない）。
+ * `digestBandLimit` にどれだけ大きい値を渡されても、帯全体はこれを超えない。
+ */
+export const DIGEST_BAND_MAX_CHARS = 4000;
+
+/**
+ * 帯に載せる1件の digest の文字数上限。呼び出し側からは変えられない。
+ *
+ * **⚠ 暫定値である。** 実 digest の長さの実測がリポジトリに2件しか無く
+ * （examples/chat の記録済みフィクスチャ程度）、この値を弁別できるだけのデータが無い。
+ * 実運用の digest 長が測れたら見直すこと——見直す根拠になるのは「多くの digest が
+ * この値の前後で切られている（＝短すぎて情報が削れすぎ、または長すぎて予算を圧迫する）」
+ * という実測であり、勘で変えない。
+ */
+export const DIGEST_BAND_MAX_ENTRY_CHARS = 120;
 
 // ---------------------------------------------------------------------------
 // スコープの外延（マネージャー決定。docs/recall.md §2 段0・§5 の欠けていた定義の補完）
@@ -395,6 +473,28 @@ export interface ScopeAggregate {
   filteredForgotten: { count: number; countKind: CountKind };
   /** 時間窓（period）の外にあるため落ちた件数。period 未指定なら常に0。 */
   filteredPeriod: { count: number; countKind: CountKind };
+  /**
+   * 目次帯（`IndexBand.digestBand`）に載せる候補（スコープ内 かつ
+   * `AggregateScopeOptions.digestBand.excludeMemoryIds` に含まれないもの）を、
+   * 決定的な順序で最大 `digestBand.limit` 件。`aggregateScope` の呼び出しで
+   * `opts.digestBand` が渡されなかった場合は空配列。
+   *
+   * **切り詰めない。** `DIGEST_BAND_MAX_ENTRY_CHARS` による1件の切り詰めと
+   * `DIGEST_BAND_MAX_CHARS` による帯全体の文字数予算は、ここではなく
+   * `packDigestBand`（`digest-band.ts`）が純関数として行う——ここは DB/実装から来た
+   * 生の digest をそのまま持つ。
+   *
+   * **件数はすべて `aggregateScope` の1回の呼び出しから取る**（この doc コメント冒頭の
+   * 「件数はすべてこの集約1本から取る」という既存の方針が、`digests`/`digestEligible` にも
+   * 及ぶ）。別クエリにすると、群カウントと帯が別スナップショットになり、並行する書き込みの
+   * もとで被覆不変条件が構造的に崩れる。
+   */
+  digests: DigestEntry[];
+  /**
+   * 帯に載せる資格があった総数（`digests` と同じ条件、`digestBand.limit` を掛ける前）。
+   * `opts.digestBand` が渡されなかった場合は `{ count: 0, countKind: 'exact' }`。
+   */
+  digestEligible: { count: number; countKind: CountKind };
 }
 
 // ---------------------------------------------------------------------------
@@ -610,6 +710,15 @@ export interface RecallQuery {
    * という最低限の閾値である。呼び出し側が上書きできる。
    */
   scoreThreshold?: number;
+  /**
+   * 帯に載せる件数の上限。既定 `DEFAULT_DIGEST_BAND_LIMIT`。
+   *
+   * **⚠ `0` は渡せない（`positive()`）。** 目次帯の存在理由は「recall が0件でも
+   * 何が在るかは言える」ことであり（`RecallBudget` の doc・docs/recall.md §6 参照）、
+   * 呼び出し側が渡した数字ひとつでその保証が消えてはならない。`RecallQuery.limit` と
+   * 同じ作法——上げ下げはできるが、0にして帯そのものを消すことはできない。
+   */
+  digestBandLimit?: number;
 }
 
 /** RecallQuery.scoreThreshold の既定値。強い根拠のない Phase 1 の裁量値（本ファイルの doc 参照）。 */
@@ -632,6 +741,7 @@ export const RecallQuerySchema = z.object({
   excludeProvenanceKinds: z.array(ProvenanceKindSchema).optional(),
   budget: RecallBudgetSchema.optional(),
   scoreThreshold: z.number().optional(),
+  digestBandLimit: z.number().int().positive().optional(),
 }) satisfies z.ZodType<RecallQuery>;
 
 /**

@@ -389,6 +389,15 @@ PostgreSQL 17 + pgvector、`packages/postgres/src/bench/scale-bench.ts`、擬似
 
 最も価値のある性質——「0件でも何が在るか言える」——は、digest を持たなくても群カウントだけで既に得られる。これが Phase 1 の範囲をこう切った理由である。
 
+**⚠ 2026-09 訂正（digest 帯の実装 PR、[ADR 0073](./decisions/0073-digest-band-bounded-without-taxonomy.md)）: 「digest 帯が taxonomy(分類語彙)を要する」という上の理由は誤りだった。**
+
+**digest 帯は taxonomy を要さない。**`DigestEntry` は `{ memoryId, digest }` だけで `axis` を持たない（`axis` を持つのは `GroupCount` のほうである）。`digest` は Phase 1 の `memories` 列であり `NOT NULL` である。taxonomy を要するのは、**同じ段落の後半が既に書いているとおり `taxonomy` 軸によるグルーピングのほう**であって、帯そのものではない。したがって帯は `labels` / `memory_labels` を待たずに実装できる——schema も migration も変更していない。
+
+**⛔ ただし Phase 1 / Phase 2 の線は動いていない。**オーナーの指示により**「1件1行の要旨を出す機能」1つだけを前倒しで実装した**。`taxonomy` 軸によるグルーピング・`labels` / `memory_labels`・その他の Phase 2 の項目は**前倒しされていない**。**1つの機能が前に出ただけであり、Phase 2 が始まったわけではない。**
+
+**⚠ そして帯には上限が要る。**上の「1テナントが100万件の Memory を持ちうる設計で、digest 1行ずつでもプロンプトに載せれば数十万文字になる」という段落が述べているとおり、**上限のない digest 帯はこの文書が明示的に落とした案である**。実装は**件数・帯全体の文字数・1件あたりの長さの3つ**の上限を持ち、どの上限で切れたかを `IndexBand.digestBandCoverage.limitedBy` で名乗る。**切り詰められたものは第3階の群カウントに乗り続けるため、被覆不変条件は壊れない**——三階建てはそのために在る。理由と採らなかった案は [ADR 0073](./decisions/0073-digest-band-bounded-without-taxonomy.md)。
+
+
 ---
 
 ## 6. 焼かれる量の計測と予算

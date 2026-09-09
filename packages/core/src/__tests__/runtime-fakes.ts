@@ -20,7 +20,7 @@ import {
   isEmbeddingStatusRollback,
   MemoryStatusConflictError,
 } from "../interfaces/memory-store.js";
-import type { MemoryStore } from "../interfaces/memory-store.js";
+import type { AggregateScopeOptions, MemoryStore } from "../interfaces/memory-store.js";
 import type { NewRecallRecord, RecallScope, ScopeAggregate } from "../recall.js";
 import type { EmbeddingSpaceId } from "../embedding.js";
 import type { OutboxJobRecord } from "../outbox.js";
@@ -454,7 +454,11 @@ export class FakeMemoryStore implements MemoryStore {
     return { insertedMemoryIds };
   }
 
-  async aggregateScope(ctx: Ctx, scope: RecallScope): Promise<ScopeAggregate> {
+  async aggregateScope(
+    ctx: Ctx,
+    scope: RecallScope,
+    opts?: AggregateScopeOptions,
+  ): Promise<ScopeAggregate> {
     const inScopeBySubject = new Map<string | null, number>();
     let totalInScope = 0;
     const notIndexed: Record<NotIndexedReason, number> = { pending: 0, failed: 0, skipped: 0 };
@@ -462,6 +466,9 @@ export class FakeMemoryStore implements MemoryStore {
     let filteredSuperseded = 0;
     let filteredForgotten = 0;
     let filteredPeriod = 0;
+    // 目次帯の候補（本 PR）: totalInScope に数える条件と**同じ条件**で in-scope の
+    // Memory を集める。`digestBand` が要求されなかった場合はこの配列を使わない。
+    const inScopeMemories: Memory[] = [];
 
     for (const memory of this.backing.memories.values()) {
       if (memory.tenantId !== ctx.tenantId) continue;
@@ -495,6 +502,7 @@ export class FakeMemoryStore implements MemoryStore {
       if (memory.embeddingStatus !== "ready") {
         notIndexed[memory.embeddingStatus] += 1;
       }
+      inScopeMemories.push(memory);
     }
 
     const groups: ScopeAggregate["groups"] = [...inScopeBySubject.entries()].map(
@@ -505,6 +513,25 @@ export class FakeMemoryStore implements MemoryStore {
         countKind: "exact" as const,
       }),
     );
+
+    let digests: ScopeAggregate["digests"] = [];
+    let digestEligible: ScopeAggregate["digestEligible"] = { count: 0, countKind: "exact" };
+    if (opts?.digestBand) {
+      const exclude = new Set(opts.digestBand.excludeMemoryIds);
+      const eligibleMemories = inScopeMemories.filter((m) => !exclude.has(m.id));
+      // 決定的な順序: (occurredAt ?? recordedAt) の降順、同値なら id の降順（本 PR）。
+      eligibleMemories.sort((a, b) => {
+        const aTime = (a.occurredAt ?? a.recordedAt).getTime();
+        const bTime = (b.occurredAt ?? b.recordedAt).getTime();
+        if (aTime !== bTime) return bTime - aTime;
+        return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+      });
+      digestEligible = { count: eligibleMemories.length, countKind: "exact" };
+      digests = eligibleMemories.slice(0, opts.digestBand.limit).map((m) => ({
+        memoryId: m.id,
+        digest: m.digest,
+      }));
+    }
 
     return {
       groups,
@@ -519,6 +546,8 @@ export class FakeMemoryStore implements MemoryStore {
       filteredSuperseded: { count: filteredSuperseded, countKind: "exact" },
       filteredForgotten: { count: filteredForgotten, countKind: "exact" },
       filteredPeriod: { count: filteredPeriod, countKind: "exact" },
+      digests,
+      digestEligible,
     };
   }
 

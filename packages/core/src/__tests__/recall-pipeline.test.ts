@@ -816,6 +816,111 @@ describe("recall() — 被覆不変条件（docs/recall.md §5）", () => {
   });
 });
 
+describe("recall() — digestBand（目次帯。docs/recall.md §5、本 PR）", () => {
+  it("『返さなかったもの』だけが帯に載る。memories に返ったものは帯に含まれない", async () => {
+    const { runtime, stores } = buildRuntime();
+    const returned = await createEmbeddedMemory(stores, [1, 0]);
+    const notReturned1 = await stores.memoryStore.createMemory(ctx, newMemory());
+    const notReturned2 = await stores.memoryStore.createMemory(ctx, newMemory());
+
+    const result = await runtime.recall(ctx, { vector: [1, 0] });
+
+    expect(result.memories.map((m) => m.memoryId)).toEqual([returned.id]);
+    const bandIds = (result.index.digestBand ?? []).map((e) => e.memoryId);
+    expect(bandIds).not.toContain(returned.id);
+    expect(bandIds.sort()).toEqual([notReturned1.id, notReturned2.id].sort());
+  });
+
+  it("digestBandCoverage.shown は digestBand.length と一致する", async () => {
+    const { runtime, stores } = buildRuntime();
+    await stores.memoryStore.createMemory(ctx, newMemory());
+    await stores.memoryStore.createMemory(ctx, newMemory());
+    await stores.memoryStore.createMemory(ctx, newMemory());
+
+    const result = await runtime.recall(ctx, {});
+    expect(result.index.digestBandCoverage).toBeDefined();
+    expect(result.index.digestBandCoverage?.shown).toBe((result.index.digestBand ?? []).length);
+  });
+
+  it("スコープ内が全部 memories に返っているとき（eligible=0）、帯は空で limitedBy は付かない", async () => {
+    const { runtime, stores } = buildRuntime();
+    await createEmbeddedMemory(stores, [1, 0]);
+
+    const result = await runtime.recall(ctx, { vector: [1, 0] });
+    expect(result.index.digestBand).toEqual([]);
+    expect(result.index.digestBandCoverage).toEqual({
+      shown: 0,
+      eligible: 0,
+      countKind: "exact",
+      // limitedBy は省略される（どの上限にも当たらなかった）。
+    });
+  });
+
+  it("digestBandLimit を小さく渡すと limitedBy === 'entry_limit' になる", async () => {
+    const { runtime, stores } = buildRuntime();
+    for (let i = 0; i < 5; i++) {
+      await stores.memoryStore.createMemory(ctx, newMemory());
+    }
+
+    const result = await runtime.recall(ctx, { digestBandLimit: 2 });
+    expect(result.index.digestBand).toHaveLength(2);
+    expect(result.index.digestBandCoverage?.eligible).toBe(5);
+    expect(result.index.digestBandCoverage?.limitedBy).toBe("entry_limit");
+  });
+
+  /**
+   * 変異試験で見つかった穴を埋める歯（本 PR）。
+   *
+   * `shown <= eligible` は「帯に載せた件数が、載せる資格のあった件数を超えない」という
+   * 被覆の基本条件である。変異試験の時点では、この条件を破る変異（`eligible` を `shown` で
+   * 上書きする／store が `digestEligible` を実際より小さく申告する）を捕まえていたのが
+   * 上の `entry_limit` の歯の `eligible` の主張1行だけだった——**その1行が書き換われば
+   * 2つの変異が同時に素通りする。**条件そのものを主張する歯をここに独立して置く。
+   *
+   * `digestBandLimit` に巨大な値を渡すのは、**上限を緩めても資格件数を超えないこと**を
+   * 見るためである（`packDigestBand` の同名の歯は純関数の層で同じ条件を見ているが、
+   * store から段5までを通した経路ではここが唯一の歯になる）。
+   */
+  it("digestBandLimit に巨大な値を渡しても shown は eligible を超えない", async () => {
+    const { runtime, stores } = buildRuntime();
+    for (let i = 0; i < 5; i++) {
+      await stores.memoryStore.createMemory(ctx, newMemory());
+    }
+
+    const result = await runtime.recall(ctx, { digestBandLimit: 10_000 });
+    const coverage = result.index.digestBandCoverage;
+    expect(coverage).toBeDefined();
+    expect(coverage!.eligible).toBe(5);
+    expect(coverage!.shown).toBeLessThanOrEqual(coverage!.eligible);
+    expect(coverage!.shown).toBe(5);
+    // 上限に当たっていないので limitedBy は付かない。
+    expect(coverage!.limitedBy).toBeUndefined();
+  });
+
+  /**
+   * 上と対になる歯（本 PR、変異試験で見つかった穴を埋めるもの）。
+   *
+   * 上の歯は「上限を緩めたとき `shown` が `eligible` を超えない」を見るが、そこでは
+   * 切り詰めが起きないため `eligible === shown` であり、**`eligible` を `shown` で
+   * 上書きしてしまう壊れ方は素通りする**（実際に変異で確かめた）。
+   * **切り詰めが起きている状態で `eligible` が `shown` より大きいこと**を、ここで独立に主張する。
+   * これが無いと「切ったのに、切っていない顔で報告する」が歯をすり抜ける——
+   * それは docs/recall.md §4 / ADR 0008 の「推定値を実測値の顔で出さない」の、この欄での破れである。
+   */
+  it("上限で切られたとき、eligible は shown より大きい（切ったことを隠さない）", async () => {
+    const { runtime, stores } = buildRuntime();
+    for (let i = 0; i < 5; i++) {
+      await stores.memoryStore.createMemory(ctx, newMemory());
+    }
+
+    const result = await runtime.recall(ctx, { digestBandLimit: 2 });
+    const coverage = result.index.digestBandCoverage;
+    expect(coverage).toBeDefined();
+    expect(coverage!.limitedBy).toBeDefined();
+    expect(coverage!.eligible).toBeGreaterThan(coverage!.shown);
+  });
+});
+
 describe("recall() — explain.stages（roadmap.md 段階5）", () => {
   it("happy path ではすべての段が executed:true になる", async () => {
     const { runtime, stores } = buildRuntime();

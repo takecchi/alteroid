@@ -6,6 +6,7 @@ import {
 } from "@mnemora/core";
 import type { IdempotentCreateResult, NotIndexedReason } from "@mnemora/core";
 import type {
+  AggregateScopeOptions,
   Ctx,
   EmbeddingStatus,
   Memory,
@@ -439,8 +440,18 @@ export class InMemoryMemoryStore implements MemoryStore {
    * インメモリ実装なので「単一クエリ」という概念自体は無いが、契約として重要なのは
    * 「groups の総和が totalInScope と一致すること」——ここでは同じ1回のループで
    * 両方を積み上げることでそれを保証する（postgres 実装は単一 SQL 文でこれを保証する）。
+   *
+   * `opts.digestBand`（ADR 0073 決定7）: `packages/core` の `FakeMemoryStore.aggregateScope`
+   * （`packages/core/src/__tests__/runtime-fakes.ts`、参照実装）と同じ意味論——
+   * 上のループで既に集めた in-scope の Memory から、`excludeMemoryIds` を除いて
+   * `(occurredAt ?? recordedAt)` の降順・同値なら `id` の降順に並べ、`limit` 件まで返す。
+   * `digestEligible.count` は `limit` を掛ける前（除外後）の総数。
    */
-  async aggregateScope(ctx: Ctx, scope: RecallScope): Promise<ScopeAggregate> {
+  async aggregateScope(
+    ctx: Ctx,
+    scope: RecallScope,
+    opts?: AggregateScopeOptions,
+  ): Promise<ScopeAggregate> {
     const inScopeBySubject = new Map<string | null, number>();
     let totalInScope = 0;
     const notIndexed: Record<NotIndexedReason, number> = { pending: 0, failed: 0, skipped: 0 };
@@ -448,6 +459,9 @@ export class InMemoryMemoryStore implements MemoryStore {
     let filteredSuperseded = 0;
     let filteredForgotten = 0;
     let filteredPeriod = 0;
+    // 目次帯の候補（ADR 0073）: totalInScope に数える条件と**同じ条件**で in-scope の
+    // Memory を集める。`digestBand` が要求されなかった場合はこの配列を使わない。
+    const inScopeMemories: Memory[] = [];
 
     for (const memory of this.memories.values()) {
       if (memory.tenantId !== ctx.tenantId) {
@@ -486,6 +500,7 @@ export class InMemoryMemoryStore implements MemoryStore {
       if (memory.embeddingStatus !== "ready") {
         notIndexed[memory.embeddingStatus] += 1;
       }
+      inScopeMemories.push(memory);
     }
 
     const groups: ScopeAggregate["groups"] = [...inScopeBySubject.entries()].map(
@@ -496,6 +511,26 @@ export class InMemoryMemoryStore implements MemoryStore {
         countKind: "exact" as const,
       }),
     );
+
+    let digests: ScopeAggregate["digests"] = [];
+    let digestEligible: ScopeAggregate["digestEligible"] = { count: 0, countKind: "exact" };
+    if (opts?.digestBand) {
+      const exclude = new Set(opts.digestBand.excludeMemoryIds);
+      const eligibleMemories = inScopeMemories.filter((m) => !exclude.has(m.id));
+      // 決定的な順序: (occurredAt ?? recordedAt) の降順、同値なら id の降順
+      // （ADR 0073、`FakeMemoryStore.aggregateScope` と同じ規則）。
+      eligibleMemories.sort((a, b) => {
+        const aTime = (a.occurredAt ?? a.recordedAt).getTime();
+        const bTime = (b.occurredAt ?? b.recordedAt).getTime();
+        if (aTime !== bTime) return bTime - aTime;
+        return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+      });
+      digestEligible = { count: eligibleMemories.length, countKind: "exact" };
+      digests = eligibleMemories.slice(0, opts.digestBand.limit).map((m) => ({
+        memoryId: m.id,
+        digest: m.digest,
+      }));
+    }
 
     return {
       groups,
@@ -510,6 +545,8 @@ export class InMemoryMemoryStore implements MemoryStore {
       filteredSuperseded: { count: filteredSuperseded, countKind: "exact" },
       filteredForgotten: { count: filteredForgotten, countKind: "exact" },
       filteredPeriod: { count: filteredPeriod, countKind: "exact" },
+      digests,
+      digestEligible,
     };
   }
 

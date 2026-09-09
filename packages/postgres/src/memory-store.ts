@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import { defaultDecayStrategy } from "@mnemora/core";
 import { EMBEDDING_STATUS_ROLLBACK, MemoryStatusConflictError } from "@mnemora/core";
 import type {
+  AggregateScopeOptions,
   Ctx,
   EmbeddingStatus,
   Memory,
@@ -626,13 +627,26 @@ export class PostgresMemoryStore implements MemoryStore {
    * ADR 0011 が段1から締め出した `count(*) OVER ()` と同じ理由——**別々のクエリから
    * 出すと、その間の書き込みで総和が一致しなくなる**——を、段5でも同じ形で守る。
    *
+   * **本 PR（ADR 0073 決定7）で目次帯（`digests`/`digestEligible`）を同じクエリに
+   * 相乗りさせた。** `opts.digestBand` を渡すと、`WITH scoped AS (...)` の同じ CTE から
+   * (a) 群カウント (b) 帯の候補（決定的な順序で `limit` 件） (c) 帯の資格件数、の3つを
+   * 追加のスカラーサブクエリとして取り、全体を1つの SQL 文・1回の往復で返す
+   * （`packages/postgres/src/__tests__/recall.postgres.test.ts` の
+   * 「aggregateScope は単一の SQL 往復で完結する」がこれを構造的に検査している）。
+   * 別クエリにすると群カウントと帯が別スナップショットになり、並行する書き込みの下で
+   * 被覆不変条件が構造的に崩れる。
+   *
    * `status` の4分岐（scope 内 / archived / superseded / forgotten）と period の内外は、
-   * すべて `FILTER (WHERE ...)` による条件付き集約として同じ `GROUP BY subject_id` の
-   * 1回のスキャンで計算する。**superseded と forgotten は別々の列として数える**
-   * （ADR 0027）——前者は機構の都合（より良い抽出に置き換えられた）、後者は製品の振る舞い
-   * （利用者が意図して忘れさせた）であり、束ねると呼び出し側がどちらだったか判定できない。
+   * すべて `FILTER (WHERE ...)` による条件付き集約として `scoped` CTE の1回のスキャンで
+   * 計算する。**superseded と forgotten は別々の列として数える**（ADR 0027）——前者は
+   * 機構の都合（より良い抽出に置き換えられた）、後者は製品の振る舞い（利用者が意図して
+   * 忘れさせた）であり、束ねると呼び出し側がどちらだったか判定できない。
    */
-  async aggregateScope(ctx: Ctx, scope: RecallScope): Promise<ScopeAggregate> {
+  async aggregateScope(
+    ctx: Ctx,
+    scope: RecallScope,
+    opts?: AggregateScopeOptions,
+  ): Promise<ScopeAggregate> {
     const subjectFilter =
       scope.subjectId !== undefined ? sql`AND subject_id = ${scope.subjectId}` : sql``;
     const occurredAfter = scope.occurredAfter ?? null;
@@ -647,9 +661,51 @@ export class PostgresMemoryStore implements MemoryStore {
       ${occurredBefore}::timestamptz IS NULL OR COALESCE(occurred_at, recorded_at) <= ${occurredBefore}::timestamptz
     )`;
 
+    const digestBand = opts?.digestBand;
+    // `digestBand` が無ければ余計な仕事をしない（doc コメント・PR 指示のとおり）——
+    // このサブクエリ群自体を SQL テキストに載せない。
+    const excludeFilter = digestBand
+      ? sql`AND NOT (id = ANY(${sql.param([...digestBand.excludeMemoryIds])}::uuid[]))`
+      : sql``;
+    const digestBandColumns = digestBand
+      ? sql`,
+        (
+          SELECT coalesce(
+            json_agg(
+              json_build_object('memoryId', id, 'digest', digest)
+              ORDER BY eff_time DESC, id DESC
+            ),
+            '[]'::json
+          )
+          FROM (
+            SELECT id, digest, COALESCE(occurred_at, recorded_at) AS eff_time
+            FROM scoped
+            WHERE status IN ('active', 'contested') AND ${inPeriod} ${excludeFilter}
+            ORDER BY COALESCE(occurred_at, recorded_at) DESC, id DESC
+            LIMIT ${digestBand.limit}
+          ) band
+        ) AS digests,
+        count(*) FILTER (
+          WHERE status IN ('active', 'contested') AND ${inPeriod} ${excludeFilter}
+        )::int AS digest_eligible_count`
+      : sql``;
+
     const result = await this.db.execute(sql`
+      WITH scoped AS (
+        SELECT id, subject_id, digest, occurred_at, recorded_at, embedding_status, status
+        FROM memories
+        WHERE tenant_id = ${ctx.tenantId} ${subjectFilter}
+      )
       SELECT
-        subject_id AS key,
+        (
+          SELECT coalesce(json_agg(json_build_object('key', key, 'count', cnt)), '[]'::json)
+          FROM (
+            SELECT subject_id AS key, count(*)::int AS cnt
+            FROM scoped
+            WHERE status IN ('active', 'contested') AND ${inPeriod}
+            GROUP BY subject_id
+          ) g
+        ) AS groups,
         count(*) FILTER (
           WHERE status IN ('active', 'contested') AND ${inPeriod}
         )::int AS in_scope,
@@ -668,60 +724,56 @@ export class PostgresMemoryStore implements MemoryStore {
         count(*) FILTER (
           WHERE status IN ('active', 'contested') AND NOT (${inPeriod})
         )::int AS period_filtered
-      FROM memories
-      WHERE tenant_id = ${ctx.tenantId} ${subjectFilter}
-      GROUP BY subject_id
+        ${digestBandColumns}
+      FROM scoped
     `);
 
-    const rows = result.rows.map(
-      (row) =>
-        row as unknown as {
-          key: string | null;
-          in_scope: number;
-          not_indexed_pending: number;
-          not_indexed_failed: number;
-          not_indexed_skipped: number;
-          archived: number;
-          superseded: number;
-          forgotten: number;
-          period_filtered: number;
-        },
-    );
+    const row = result.rows[0] as unknown as {
+      groups: { key: string | null; count: number }[];
+      in_scope: number;
+      not_indexed_pending: number;
+      not_indexed_failed: number;
+      not_indexed_skipped: number;
+      archived: number;
+      superseded: number;
+      forgotten: number;
+      period_filtered: number;
+      digests?: { memoryId: string; digest: string }[];
+      digest_eligible_count?: number;
+    };
 
-    const groups = rows
-      .filter((row) => row.in_scope > 0)
-      .map((row) => ({
-        axis: "subject" as const,
-        key: row.key,
-        count: row.in_scope,
-        countKind: "exact" as const,
-      }));
+    const groups: ScopeAggregate["groups"] = (row.groups ?? []).map((g) => ({
+      axis: "subject" as const,
+      key: g.key,
+      count: g.count,
+      countKind: "exact" as const,
+    }));
 
-    const sum = (
-      field:
-        | "in_scope"
-        | "not_indexed_pending"
-        | "not_indexed_failed"
-        | "not_indexed_skipped"
-        | "archived"
-        | "superseded"
-        | "forgotten"
-        | "period_filtered",
-    ) => rows.reduce((total, row) => total + row[field], 0);
+    const digests: ScopeAggregate["digests"] = digestBand
+      ? (row.digests ?? []).map((d) => ({
+          memoryId: d.memoryId as MemoryId,
+          digest: d.digest,
+        }))
+      : [];
+    const digestEligible: ScopeAggregate["digestEligible"] = digestBand
+      ? { count: row.digest_eligible_count ?? 0, countKind: "exact" }
+      : { count: 0, countKind: "exact" };
 
     return {
       groups,
-      totalInScope: sum("in_scope"),
+      totalInScope: row.in_scope,
       countKind: "exact",
       notIndexed: {
-        pending: { count: sum("not_indexed_pending"), countKind: "exact" },
-        failed: { count: sum("not_indexed_failed"), countKind: "exact" },
-        skipped: { count: sum("not_indexed_skipped"), countKind: "exact" },
+        pending: { count: row.not_indexed_pending, countKind: "exact" },
+        failed: { count: row.not_indexed_failed, countKind: "exact" },
+        skipped: { count: row.not_indexed_skipped, countKind: "exact" },
       },
-      filteredArchived: { count: sum("archived"), countKind: "exact" },
-      filteredSuperseded: { count: sum("superseded"), countKind: "exact" },
-      filteredForgotten: { count: sum("forgotten"), countKind: "exact" },
-      filteredPeriod: { count: sum("period_filtered"), countKind: "exact" },
+      filteredArchived: { count: row.archived, countKind: "exact" },
+      filteredSuperseded: { count: row.superseded, countKind: "exact" },
+      filteredForgotten: { count: row.forgotten, countKind: "exact" },
+      filteredPeriod: { count: row.period_filtered, countKind: "exact" },
+      digests,
+      digestEligible,
     };
   }
 

@@ -1715,6 +1715,338 @@ export function describeMemoryStoreConformance(options: MemoryStoreConformanceOp
     });
 
     // -------------------------------------------------------------------
+    // aggregateScope の digestBand（ADR 0073 決定7、目次帯・第2階）
+    //
+    // `opts.digestBand` を渡したときの `ScopeAggregate.digests`/`digestEligible` を検査する。
+    // `PostgresMemoryStore`・`InMemoryMemoryStore` の両方にこの歯が当たる（`packages/core` の
+    // `FakeMemoryStore` は `packages/testkit` に依存できないため、この適合テストは届かない
+    // ——別途 `packages/core/src/__tests__/*.ts` の歯で検査されているはず）。
+    // -------------------------------------------------------------------
+
+    it("aggregateScope の digestBand: excludeMemoryIds に渡した id は digests に含まれない", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const excluded = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({ tenantId: "tenant-1", contentHash: "digest-band-exclude-1" }),
+      );
+      const kept = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({ tenantId: "tenant-1", contentHash: "digest-band-exclude-2" }),
+      );
+
+      const aggregate = await store.aggregateScope(
+        ctx,
+        {},
+        {
+          digestBand: { limit: 10, excludeMemoryIds: [excluded.id] },
+        },
+      );
+      const ids = aggregate.digests.map((d) => d.memoryId);
+      expect(ids).not.toContain(excluded.id);
+      expect(ids).toContain(kept.id);
+    });
+
+    it("aggregateScope の digestBand: digestEligible.count はスコープ内かつ除外されていないものの総数と一致する（limit を小さくしても減らない）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const TOTAL = 5;
+      for (let i = 0; i < TOTAL; i += 1) {
+        await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({ tenantId: "tenant-1", contentHash: `digest-band-eligible-${i}` }),
+        );
+      }
+
+      const withHighLimit = await store.aggregateScope(
+        ctx,
+        {},
+        {
+          digestBand: { limit: 100, excludeMemoryIds: [] },
+        },
+      );
+      expect(withHighLimit.digestEligible.count).toBe(TOTAL);
+      expect(withHighLimit.digestEligible.countKind).toBe("exact");
+
+      const withLowLimit = await store.aggregateScope(
+        ctx,
+        {},
+        {
+          digestBand: { limit: 2, excludeMemoryIds: [] },
+        },
+      );
+      // limit を小さくしても digestEligible.count は減らない——limit を掛ける前の件数だから。
+      expect(withLowLimit.digestEligible.count).toBe(TOTAL);
+    });
+
+    it("aggregateScope の digestBand: digests.length は limit を超えない", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const LIMIT = 2;
+      for (let i = 0; i < 5; i += 1) {
+        await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({ tenantId: "tenant-1", contentHash: `digest-band-limit-${i}` }),
+        );
+      }
+
+      const aggregate = await store.aggregateScope(
+        ctx,
+        {},
+        {
+          digestBand: { limit: LIMIT, excludeMemoryIds: [] },
+        },
+      );
+      expect(aggregate.digests.length).toBeLessThanOrEqual(LIMIT);
+      expect(aggregate.digests).toHaveLength(LIMIT);
+    });
+
+    it("aggregateScope の digestBand: (occurredAt ?? recordedAt) の降順に並ぶ（occurredAt が null の行を含む）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const older = new Date("2020-01-01T00:00:00.000Z");
+      const middle = new Date("2026-01-01T00:00:00.000Z");
+      const newest = new Date("2026-06-01T00:00:00.000Z");
+
+      const mOld = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          occurredAt: older,
+          contentHash: "digest-band-order-old",
+        }),
+      );
+      // occurredAt が null の行——recordedAt (middle) が実効時刻として使われるはず。
+      const mNullOccurred = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          occurredAt: null,
+          recordedAt: middle,
+          contentHash: "digest-band-order-null-occurred",
+        }),
+      );
+      const mNewest = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          occurredAt: newest,
+          contentHash: "digest-band-order-newest",
+        }),
+      );
+
+      const aggregate = await store.aggregateScope(
+        ctx,
+        {},
+        {
+          digestBand: { limit: 10, excludeMemoryIds: [] },
+        },
+      );
+      expect(aggregate.digests.map((d) => d.memoryId)).toEqual([
+        mNewest.id,
+        mNullOccurred.id,
+        mOld.id,
+      ]);
+    });
+
+    it("aggregateScope の digestBand: 同値のときは id の降順で決定的に並ぶ", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const same = new Date("2026-03-01T00:00:00.000Z");
+      const m1 = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          occurredAt: same,
+          contentHash: "digest-band-tie-1",
+        }),
+      );
+      const m2 = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          occurredAt: same,
+          contentHash: "digest-band-tie-2",
+        }),
+      );
+
+      const expectedOrder = [m1.id, m2.id].sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+
+      const aggregate = await store.aggregateScope(
+        ctx,
+        {},
+        {
+          digestBand: { limit: 10, excludeMemoryIds: [] },
+        },
+      );
+      expect(aggregate.digests.map((d) => d.memoryId)).toEqual(expectedOrder);
+    });
+
+    it("aggregateScope の digestBand: archived/superseded/forgotten の Memory は digests にも digestEligible にも乗らない", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const active = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          status: "active",
+          contentHash: "digest-band-status-active",
+        }),
+      );
+      await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          status: "archived",
+          contentHash: "digest-band-status-archived",
+        }),
+      );
+      await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          status: "superseded",
+          contentHash: "digest-band-status-superseded",
+        }),
+      );
+      await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          status: "forgotten",
+          contentHash: "digest-band-status-forgotten",
+        }),
+      );
+
+      const aggregate = await store.aggregateScope(
+        ctx,
+        {},
+        {
+          digestBand: { limit: 10, excludeMemoryIds: [] },
+        },
+      );
+      expect(aggregate.digests.map((d) => d.memoryId)).toEqual([active.id]);
+      expect(aggregate.digestEligible.count).toBe(1);
+    });
+
+    it("aggregateScope の digestBand: period の外の Memory は digests にも digestEligible にも乗らない", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const inside = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          occurredAt: PERIOD_AFTER_CUTOFF,
+          contentHash: "digest-band-period-inside",
+        }),
+      );
+      await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          occurredAt: PERIOD_BEFORE_CUTOFF,
+          contentHash: "digest-band-period-outside",
+        }),
+      );
+
+      const aggregate = await store.aggregateScope(
+        ctx,
+        { occurredAfter: PERIOD_CUTOFF },
+        { digestBand: { limit: 10, excludeMemoryIds: [] } },
+      );
+      expect(aggregate.digests.map((d) => d.memoryId)).toEqual([inside.id]);
+      expect(aggregate.digestEligible.count).toBe(1);
+    });
+
+    it("aggregateScope の digestBand: opts を渡さなければ digests は空・digestEligible.count は0", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({ tenantId: "tenant-1", contentHash: "digest-band-no-opts" }),
+      );
+
+      const aggregate = await store.aggregateScope(ctx, {});
+      expect(aggregate.digests).toEqual([]);
+      expect(aggregate.digestEligible).toEqual({ count: 0, countKind: "exact" });
+    });
+
+    it("aggregateScope の digestBand: embedding_status が ready でない Memory も帯に乗る（スコープ内だから）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const pending = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          embeddingStatus: "pending",
+          contentHash: "digest-band-embed-pending",
+        }),
+      );
+      const failed = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          embeddingStatus: "failed",
+          contentHash: "digest-band-embed-failed",
+        }),
+      );
+      const skipped = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          embeddingStatus: "skipped",
+          contentHash: "digest-band-embed-skipped",
+        }),
+      );
+      const ready = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          embeddingStatus: "ready",
+          contentHash: "digest-band-embed-ready",
+        }),
+      );
+
+      const aggregate = await store.aggregateScope(
+        ctx,
+        {},
+        {
+          digestBand: { limit: 10, excludeMemoryIds: [] },
+        },
+      );
+      const ids = aggregate.digests.map((d) => d.memoryId);
+      expect(ids).toContain(pending.id);
+      expect(ids).toContain(failed.id);
+      expect(ids).toContain(skipped.id);
+      expect(ids).toContain(ready.id);
+      expect(aggregate.digestEligible.count).toBe(4);
+    });
+
+    it("aggregateScope の digestBand: 別テナントの Memory は乗らない", async () => {
+      const store = await createStore();
+      const ctxA: Ctx = { tenantId: "tenant-a" };
+      const ctxB: Ctx = { tenantId: "tenant-b" };
+      await store.createMemory(
+        ctxA,
+        buildNewMemoryFixture({ tenantId: "tenant-a", contentHash: "digest-band-tenant-a" }),
+      );
+      const memoryB = await store.createMemory(
+        ctxB,
+        buildNewMemoryFixture({ tenantId: "tenant-b", contentHash: "digest-band-tenant-b" }),
+      );
+
+      const aggregateB = await store.aggregateScope(
+        ctxB,
+        {},
+        {
+          digestBand: { limit: 10, excludeMemoryIds: [] },
+        },
+      );
+      expect(aggregateB.digests.map((d) => d.memoryId)).toEqual([memoryB.id]);
+      expect(aggregateB.digestEligible.count).toBe(1);
+    });
+
+    // -------------------------------------------------------------------
     // createRecall（recall 段6「記録」。docs/recall.md §2 段6、ADR 0008）
     // -------------------------------------------------------------------
 

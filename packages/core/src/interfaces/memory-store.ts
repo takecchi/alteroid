@@ -71,6 +71,25 @@ export function isEmbeddingStatusRollback(
 }
 
 /**
+ * `aggregateScope` の第3引数（任意）。目次帯（`IndexBand.digestBand`）を組むための
+ * 帯候補を、群カウント等と**同一の集約クエリから**取得したい場合に渡す（本 PR、
+ * docs/recall.md §5）。
+ *
+ * **任意引数にしてある**——既存の3実装（`packages/postgres`・`packages/testkit` の
+ * in-memory 実装・本 PR より前の呼び出し元）が第3引数を無視してもコンパイルが通る形にし、
+ * `digestBand` 対応を段階的に入れられるようにするため（`packages/postgres`/`packages/testkit`
+ * 側の実装は次段で別の作業者が行う）。
+ */
+export interface AggregateScopeOptions {
+  digestBand?: {
+    /** 取得する上限件数。 */
+    limit: number;
+    /** 帯から除外する memoryId（`memories` として返したもの）。 */
+    excludeMemoryIds: readonly MemoryId[];
+  };
+}
+
+/**
  * MemoryStore — Phase 1（docs/architecture.md §5.1）。
  *
  * 実装は adapter 側（`packages/postgres` 等）に置く。ここは型のみ。
@@ -322,8 +341,16 @@ export interface MemoryStore {
    * （`ScopeAggregate` の doc コメント、docs/recall.md §5 参照）。
    * 契約: 返り値の `groups` の総和は必ず `totalInScope` と一致する
    * （同一クエリから導出するため、並行する書き込みがあっても構造的に崩れない）。
+   *
+   * `opts.digestBand` を渡すと、`ScopeAggregate.digests`/`digestEligible` も
+   * **同じ集約クエリから**埋めて返す（`ScopeAggregate` の doc コメント参照）。
+   * 渡さない場合は `digests: []`・`digestEligible: { count: 0, countKind: 'exact' }`。
    */
-  aggregateScope(ctx: Ctx, scope: RecallScope): Promise<ScopeAggregate>;
+  aggregateScope(
+    ctx: Ctx,
+    scope: RecallScope,
+    opts?: AggregateScopeOptions,
+  ): Promise<ScopeAggregate>;
   /** roadmap.md 段階4/5: recall 段6（記録）。`recalls` へ1行書き込み、発行した recallId を返す。 */
   createRecall(ctx: Ctx, record: NewRecallRecord): Promise<RecallId>;
 }
