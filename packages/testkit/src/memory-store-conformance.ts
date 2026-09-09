@@ -1801,6 +1801,39 @@ export function describeMemoryStoreConformance(options: MemoryStoreConformanceOp
       expect(aggregate.digests).toHaveLength(LIMIT);
     });
 
+    it("aggregateScope の digestBand: digests.length は digestEligible.count を超えない（excludeMemoryIds で候補を絞り、limit では律速しない非自明な入力）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const TOTAL = 5;
+      const createdIds: MemoryId[] = [];
+      for (let i = 0; i < TOTAL; i += 1) {
+        const memory = await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({
+            tenantId: "tenant-1",
+            contentHash: `digest-band-eligible-vs-count-${i}`,
+          }),
+        );
+        createdIds.push(memory.id);
+      }
+      // 何件か除外することで digestEligible.count をスコープ内総数（TOTAL）より小さくする
+      // ——既存の歯（digestEligible.count === TOTAL）と重ならない、非自明な入力にするため。
+      const excluded = createdIds.slice(0, 2);
+
+      const aggregate = await store.aggregateScope(
+        ctx,
+        {},
+        {
+          // limit は候補数より大きく取る——digests.length <= limit（既存の歯）に寄りかからず、
+          // digests.length <= digestEligible.count を独立に検査するため。
+          digestBand: { limit: 100, excludeMemoryIds: excluded },
+        },
+      );
+
+      expect(aggregate.digestEligible.count).toBe(TOTAL - excluded.length);
+      expect(aggregate.digests.length).toBeLessThanOrEqual(aggregate.digestEligible.count);
+    });
+
     it("aggregateScope の digestBand: (occurredAt ?? recordedAt) の降順に並ぶ（occurredAt が null の行を含む）", async () => {
       const store = await createStore();
       const ctx: Ctx = { tenantId: "tenant-1" };

@@ -50,8 +50,20 @@ export const DIGEST_BAND_ENTRY_SEPARATOR_CHARS = 1;
  *   `limit` で切って渡してくることがある。`ScopeAggregate.digestEligible.count`）。
  * @param opts 上限3種（`PackDigestBandOptions`）。
  *
- * **不変条件: `band.length <= eligible` を常に守る。** `limit` にどれだけ大きい値を
- * 渡されても、`candidates` に無い件数までは返さない。
+ * **呼び出し側の義務: `candidates.length <= eligible` を満たして渡すこと。**これを満たす限り
+ * `band.length <= eligible` が成り立つ（`band` は `candidates` の部分列なので
+ * `band.length <= candidates.length <= eligible`）。
+ *
+ * ⚠ **この関数は `eligible` で打ち切らない。**`candidates.length > eligible` で呼ばれたら
+ * `band.length > eligible` になりうる。ここで握り潰さないのは、そうなるのは `MemoryStore` の
+ * 実装が契約（`digests` は `digestEligible.count` を超えない）を破ったときだけであり、
+ * **契約の側で捕まえるべきだから**である——`packages/testkit` の適合テストに
+ * `digests.length <= digestEligible.count` を直接主張する歯を置いてある。
+ * （かつてここには「不変条件: `band.length <= eligible` を常に守る」と書いてあったが、
+ * 実装にその歯止めは無く、誰も検査していなかった。）
+ *
+ * **この関数自身が保証するのは**「`limit` にどれだけ大きい値を渡されても `candidates` に
+ * 無い件数までは返さない」（`band.length <= candidates.length`）のほうである。
  *
  * **`limitedBy` の決め方**:
  * - 打ち切りが一度も起きず、`candidates` を全部載せ、かつ `band.length >= eligible` なら

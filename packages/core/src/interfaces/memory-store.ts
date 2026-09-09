@@ -72,13 +72,30 @@ export function isEmbeddingStatusRollback(
 
 /**
  * `aggregateScope` の第3引数（任意）。目次帯（`IndexBand.digestBand`）を組むための
- * 帯候補を、群カウント等と**同一の集約クエリから**取得したい場合に渡す（本 PR、
+ * 帯候補を、群カウント等と**同一の集約クエリから**取得したい場合に渡す
+ * （[ADR 0073](../../../../docs/decisions/0073-digest-band-bounded-without-taxonomy.md)、
  * docs/recall.md §5）。
  *
- * **任意引数にしてある**——既存の3実装（`packages/postgres`・`packages/testkit` の
- * in-memory 実装・本 PR より前の呼び出し元）が第3引数を無視してもコンパイルが通る形にし、
- * `digestBand` 対応を段階的に入れられるようにするため（`packages/postgres`/`packages/testkit`
- * 側の実装は次段で別の作業者が行う）。
+ * **任意引数にしてある理由は2つある。**
+ *
+ * 1. **渡さないことが「帯を組まない」という意味を持つ。**省略時は `digests: []`・
+ *    `digestEligible: { count: 0, countKind: 'exact' }` を返す契約であり、実装は帯のための
+ *    追加の仕事をしない（`packages/postgres` は CTE に帯用の列を足さない）。つまり任意性は
+ *    移行の都合ではなく、**呼び出し側が費用を選ぶための軸**である。
+ * 2. **`MemoryStore` は公開 API である**（`@mnemora/core` の `index.ts` から export され、
+ *    README は adapter の自作を前提に `@mnemora/testkit` の導入を案内している）。第3引数を
+ *    必須にすると、**この repo の外の呼び出し元**が `aggregateScope(ctx, scope)` と2引数で
+ *    呼べなくなり、`TS2554: Expected 3 arguments, but got 2` で全部コンパイルエラーになる。
+ *    ⚠ **壊れるのは呼び出し元であって、実装側ではない**——TypeScript は引数の少ない実装を
+ *    引数の多い署名へ代入できるため、必須にしても `aggregateScope(ctx, scope)` としか
+ *    書いていない外部実装は `implements` を通り続ける（tsc 5.9.3 / strict で実測した）。
+ *
+ * ⚠ **かつてここには「既存の3実装が第3引数を無視してもコンパイルが通る形にし、`digestBand`
+ * 対応を段階的に入れられるようにするため（`packages/postgres`/`packages/testkit` 側の実装は
+ * 次段で別の作業者が行う）」と書いてあったが、これは偽である。**同じ PR (#95) が
+ * `packages/postgres` と `packages/testkit` の両方を同じ diff で実装しており、
+ * 「段階導入の途中」という状態は存在しない。さらに上の 2 のとおり、段階導入を可能にするのは
+ * 任意引数ではない（実装側は必須引数でも壊れない）。
  */
 export interface AggregateScopeOptions {
   digestBand?: {
