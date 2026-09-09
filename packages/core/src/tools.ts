@@ -1288,27 +1288,35 @@ type JournalFailureOutcome = 'act-completed' | 'act-not-performed' | 'act-partia
  * 静かになる。ここは飲まず、**跡を残してから投げ直す**。
  */
 class JournalNotRecordedError extends Error {
-  constructor(entry: JournalEntryInput, outcome: JournalFailureOutcome, cause: unknown) {
-    super(formatJournalNotRecordedMessage(entry, outcome, cause));
+  constructor(
+    tool: CloneToolName,
+    entry: JournalEntryInput,
+    outcome: JournalFailureOutcome,
+    cause: unknown,
+  ) {
+    super(formatJournalNotRecordedMessage(tool, entry, outcome, cause));
     this.name = 'JournalNotRecordedError';
   }
 }
 
 function formatJournalNotRecordedMessage(
+  tool: CloneToolName,
   entry: JournalEntryInput,
   outcome: JournalFailureOutcome,
   cause: unknown,
 ): string {
-  // **秘密の扱い**: ここに載せてよいのは `journalEntryShape`（本文を出さない
-  // 見分け）と、元の例外の `message` だけ。道具の引数（`script` / `content` /
-  // `body` 等）を `journalEntryShape` の外から1文字も転記しないこと。
+  // **秘密の扱い**: ここに載せてよいのは `tool`（コード中の固定リテラルの
+  // 道具名。CloneToolName で縛ってあるので自由文が紛れ込む経路が無い）・
+  // `journalEntryShape`（本文を出さない見分け）・元の例外の `message` だけ。
+  // 道具の引数（`script` / `content` / `body` 等）を `journalEntryShape` の
+  // 外から1文字も転記しないこと。
   const shape = journalEntryShape(entry);
   const reason = cause instanceof Error ? cause.message : String(cause);
   switch (outcome) {
     case 'act-completed':
       return [
         '⚠⚠ 完了済み・未記録・やり直し禁止',
-        'この道具の呼び出しは完了した（副作用は済んでいる）が、日誌へ記録できなかった。',
+        `${tool} は完了した（副作用は済んでいる）が、日誌へ記録できなかった。`,
         `記録できなかったエントリ: ${shape}`,
         `理由: ${reason}`,
         'やり直さないこと（同じ副作用がもう一度起きる）。journal_write で記録を書き直すこと。',
@@ -1316,7 +1324,7 @@ function formatJournalNotRecordedMessage(
     case 'act-not-performed':
       return [
         '⚠⚠ 未記録・行為は起きていない・やり直してよい',
-        'この道具は日誌への記録そのものが行為であり、その記録に失敗した。副作用は1つも起きていない。',
+        `${tool} は日誌への記録そのものが行為であり、その記録に失敗した。副作用は1つも起きていない。`,
         `記録できなかったエントリ: ${shape}`,
         `理由: ${reason}`,
         'やり直してよい（同じ内容でもう一度呼べる。重複は起きない）。',
@@ -1324,7 +1332,7 @@ function formatJournalNotRecordedMessage(
     case 'act-partially-completed':
       return [
         '⚠⚠ 一部完了・未記録・やり直し禁止',
-        'memory_section_move は移し先への追記まで済んだが、出どころからの切り取りは行っていない。',
+        `${tool} は移し先への追記まで済んだが、出どころからの切り取りは行っていない。`,
         'いま同じ節が移し先と出どころの両方に在る——重複しているが、失われてはいない。',
         'そのうえで日誌へ記録できなかった。',
         `記録できなかったエントリ: ${shape}`,
@@ -1353,11 +1361,24 @@ function formatJournalNotRecordedMessage(
  * **戻り値を返す。** `journal_write` が `entry.id` を成功応答に使うため、
  * 失敗しなかったときは `journal.append` の戻り値をそのまま返す。
  *
+ * **道具名を断り書きへ入れる（差し戻し対応）。** `journalEntryShape` は型
+ * ごとに出すものが違い、`decision` 型は `decision.chars=N grounds.chars=N`
+ * だけで住所を1文字も持たない——`profile_write` / `manager_start` /
+ * `journal_write` / `schedule_create` 等、`decision` を書く道具が失敗すると、
+ * 依頼者は「`decision` 型の何かが記録できなかった」としか分からず、
+ * 書き直す先を選べない。**道具名は `CloneToolName` で縛った固定リテラルで、
+ * 呼び出し元のコードそのものが決める値**なので、`journalEntryShape` の外へ
+ * 秘密が漏れる経路にはならない（判定基準は `dropped-record.ts` と同じ
+ * 「値を誰が決めるか」）。
+ *
+ * @param tool 呼び出し元の道具名。文字列の直書きにしないこと——`CloneToolName`
+ *   で縛ることで、名簿に無い名前を書けば `typecheck` が落ちる。
  * @param outcome この日誌エントリが表す行為が、道具の呼び出し全体にとって
  *   何を意味するか（{@link JournalFailureOutcome}）。副作用がどこまで
  *   進んでいるかは呼び出し元にしか分からないので、呼び出し元が渡す。
  */
 async function appendJournalOrThrow(
+  tool: CloneToolName,
   journal: JournalStore,
   entry: JournalEntryInput,
   outcome: JournalFailureOutcome,
@@ -1366,7 +1387,7 @@ async function appendJournalOrThrow(
     return await journal.append(entry);
   } catch (error) {
     noteDroppedRecord('日誌', journalEntryShape(entry), error);
-    throw new JournalNotRecordedError(entry, outcome, error);
+    throw new JournalNotRecordedError(tool, entry, outcome, error);
   }
 }
 
@@ -2227,6 +2248,7 @@ export function createCloneTools(context: ToolContext) {
         const written = await stores.persona.write(slug, content);
         const memoryAfter = await stores.persona.documents();
         await appendJournalOrThrow(
+          'memory_write',
           stores.journal,
           {
             type: 'memory_update',
@@ -2282,6 +2304,7 @@ export function createCloneTools(context: ToolContext) {
         const written = await stores.persona.append(slug, content);
         const memoryAfter = await stores.persona.documents();
         await appendJournalOrThrow(
+          'memory_append',
           stores.journal,
           {
             type: 'memory_update',
@@ -2368,6 +2391,7 @@ export function createCloneTools(context: ToolContext) {
         if (denial !== null) return text(denial);
         await stores.persona.remove(slug);
         await appendJournalOrThrow(
+          'memory_delete',
           stores.journal,
           {
             type: 'memory_update',
@@ -2540,6 +2564,7 @@ export function createCloneTools(context: ToolContext) {
         const nextKind = resolveMemoryDocKind(parseMemoryFrontmatter(written.content));
 
         await appendJournalOrThrow(
+          'memory_frontmatter_set',
           stores.journal,
           {
             type: 'memory_update',
@@ -3080,6 +3105,7 @@ export function createCloneTools(context: ToolContext) {
         ]);
         const toWritten = await stores.persona.append(toSlug, cut);
         await appendJournalOrThrow(
+          'memory_section_move',
           stores.journal,
           {
             type: 'memory_update',
@@ -3109,6 +3135,7 @@ export function createCloneTools(context: ToolContext) {
           );
         }
         await appendJournalOrThrow(
+          'memory_section_move',
           stores.journal,
           {
             type: 'memory_update',
@@ -3196,6 +3223,7 @@ export function createCloneTools(context: ToolContext) {
       },
       async ({ decision, grounds }) => {
         const entry = await appendJournalOrThrow(
+          'journal_write',
           stores.journal,
           { type: 'decision', decision, grounds },
           'act-not-performed',
@@ -3437,6 +3465,7 @@ export function createCloneTools(context: ToolContext) {
         };
         await stores.jobs.putApproval(approval);
         await appendJournalOrThrow(
+          'ask_human',
           stores.journal,
           {
             type: 'escalation',
@@ -3553,6 +3582,7 @@ export function createCloneTools(context: ToolContext) {
         const target =
           date !== undefined && localDayRange(date) !== null ? date : localDate(new Date());
         await appendJournalOrThrow(
+          'daily_report_write',
           stores.journal,
           { type: 'daily_report', date: target, body },
           'act-not-performed',
@@ -3797,6 +3827,7 @@ export function createCloneTools(context: ToolContext) {
         };
         await stores.schedules.put(plan);
         await appendJournalOrThrow(
+          'schedule_create',
           stores.journal,
           {
             type: 'decision',
@@ -3822,6 +3853,7 @@ export function createCloneTools(context: ToolContext) {
         if (!existing) return text(`継続中の依頼 ${kind} は無い。`);
         await stores.schedules.remove(kind);
         await appendJournalOrThrow(
+          'schedule_remove',
           stores.journal,
           {
             type: 'decision',
@@ -4289,6 +4321,7 @@ export function createCloneTools(context: ToolContext) {
         // 否定できることが最終承認の実体である（north_star）。自動で開いたものは
         // 起点ごとに既に日誌へ載っているので、ここで残すのは `self` のぶんだけ。
         await appendJournalOrThrow(
+          'commitment_open',
           stores.journal,
           {
             type: 'decision',
@@ -4350,6 +4383,7 @@ export function createCloneTools(context: ToolContext) {
         // append を落とすと、その「唯一の手掛かり」に閉じた理由が最初から
         // 書かれていないことになる（issue #585）。
         await appendJournalOrThrow(
+          'commitment_close',
           stores.journal,
           {
             type: 'decision',
@@ -4416,6 +4450,7 @@ export function createCloneTools(context: ToolContext) {
         // `PATCH /commitments/:id` の doc が断っている「静かに書き換わる」に
         // なる。**
         await appendJournalOrThrow(
+          'commitment_edit',
           stores.journal,
           {
             type: 'decision',
@@ -4623,6 +4658,7 @@ export function createCloneTools(context: ToolContext) {
         }
 
         await appendJournalOrThrow(
+          'profile_write',
           stores.journal,
           {
             type: 'decision',
@@ -4850,6 +4886,7 @@ export function createCloneTools(context: ToolContext) {
           ...(runnerId === undefined ? {} : { runnerId }),
         });
         await appendJournalOrThrow(
+          'manager_start',
           stores.journal,
           {
             type: 'decision',

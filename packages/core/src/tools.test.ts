@@ -12415,6 +12415,8 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
       expect(text).toContain('記録できなかったエントリ:');
       expect(text).toContain('memory_update');
       expect(text).toContain('boom-act-completed');
+      // ⭐ 道具名が本文に出る（依頼者④: 書き直す対象を選べるだけの材料）。
+      expect(text).toContain('memory_delete');
     });
 
     it('act-not-performed（journal_write）: 日誌への記録そのものが行為。副作用は無く「やり直してよい」と返る', async () => {
@@ -12437,6 +12439,9 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
       expect(text).toContain('記録できなかったエントリ:');
       expect(text).toContain('decision');
       expect(text).toContain('boom-act-not-performed');
+      // ⭐ decision 型は journalEntryShape に住所が無い（decision.chars=N /
+      // grounds.chars=N だけ）——道具名がその唯一の住所になる。
+      expect(text).toContain('journal_write');
     });
 
     it('act-not-performed（daily_report_write）: こちらも記録そのものが行為で、副作用は無い', async () => {
@@ -12455,6 +12460,8 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
       expect(text).toContain('記録できなかったエントリ:');
       expect(text).toContain('daily_report');
       expect(text).toContain('boom-daily-report');
+      // ⭐ 道具名も出る（daily_report_write の日誌エントリの type と紛れないこと）。
+      expect(text).toContain('daily_report_write');
     });
 
     it('act-partially-completed（memory_section_move の move_in）: 移し先への追記だけが済んだ半完了として断られる', async () => {
@@ -12490,6 +12497,8 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
       expect(text).toContain('やり直さないこと');
       expect(text).toContain('記録できなかったエントリ:');
       expect(text).toContain('boom-partial');
+      // ⭐ 道具名も出る。
+      expect(text).toContain('memory_section_move');
     });
   });
 
@@ -12539,6 +12548,10 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
     // (e) 副作用（保存・配布）は完了しているので act-completed。
     expect(result.isError).toBe(true);
     expect(result.text.split('\n')[0]).toBe('⚠⚠ 完了済み・未記録・やり直し禁止');
+    // ⭐ profile_write は decision 型（journalEntryShape に住所が無い）なので、
+    // 道具名がいちばん住所の足りない箇所。ここに出ることを確かめたうえで、
+    // 秘密（CANARY）は出ないことも合わせて測る。
+    expect(result.text).toContain('profile_write');
     expect(result.text).not.toContain(CANARY);
 
     expect(stderrLines.join('\n')).not.toContain(CANARY);
