@@ -576,6 +576,85 @@ describe("runtime.tick — embed ジョブ（embeddingStatus の遷移）", () =
   });
 });
 
+describe("runtime.reembed（ADR 0079: provider が直った後に、索引へ戻す）", () => {
+  /**
+   * この ADR が塞ごうとしている穴を、端から端まで1本で通す:
+   *
+   * 1. 埋め込みの provider が落ちている間に `observe()` する
+   * 2. `tick()` が失敗し、`embeddingStatus` は `failed`・outbox 行は `failed_at`（終端）
+   * 3. **provider が直る**
+   * 4. `tick()` をもう一度呼んでも**何も起きない**（`fail` は終端で、`claimBatch` は
+   *    `failed_at IS NULL` を要求する。ADR 0032）——ここが穴だった
+   * 5. `reembed()` を呼ぶ ⟹ 次の `tick()` で `ready` になり、ベクトルが入る
+   *
+   * ⚠ **段4を落とすと、この歯は「そもそも直っていた」を検査したことになる。**
+   * 段4があることで初めて「`reembed` が効いた」と言える。
+   */
+  it("provider が落ちている間に入った Memory は、tick を繰り返しても索引へ戻らない。reembed してから tick すると ready になる", async () => {
+    const { runtime, stores } = buildRuntime(
+      llmReturning([{ content: "本文", digest: "要旨", provenanceKind: "stated" }]),
+    );
+    stores.embeddingProvider.shouldFail = true;
+    const observeResult = await runtime.observe(ctx, { kind: "utterance", text: "本文" });
+    const memoryId = observeResult.memoryIds[0]!;
+
+    const failedTick = await runtime.tick(ctx, { kinds: ["embed"], leaseMs: TEST_LEASE_MS });
+    // ⚠ 状態はその場で**文字列として**取り出す。`FakeMemoryStore.get` は可変な Memory
+    // オブジェクトへの参照をそのまま返すので、オブジェクトのまま持ち回ると後続の
+    // `tick` の書き込みで「過去の観測」まで書き換わる（実際にそれで一度赤くなった）。
+    const afterFailure = (await stores.memoryStore.get(ctx, memoryId))?.embeddingStatus;
+
+    // provider が直る。
+    stores.embeddingProvider.shouldFail = false;
+
+    // ⚠ ここが穴だった: 直った後に tick を呼んでも、失敗した行は二度と claim されない。
+    const uselessTick = await runtime.tick(ctx, { kinds: ["embed"], leaseMs: TEST_LEASE_MS });
+    const stillFailed = (await stores.memoryStore.get(ctx, memoryId))?.embeddingStatus;
+
+    const reembedResult = await runtime.reembed(ctx, { statuses: ["failed"], limit: 10 });
+    // ⚠ `reembed` は積み直すだけで、埋め込みそのものは行わない——**この時点ではまだ
+    // ベクトルは入っていない。**次の `tick()` が入れる。
+    const vectorsRightAfterReembed = stores.vectorStore.entries.size;
+
+    const healingTick = await runtime.tick(ctx, { kinds: ["embed"], leaseMs: TEST_LEASE_MS });
+    const healed = (await stores.memoryStore.get(ctx, memoryId))?.embeddingStatus;
+
+    expect({
+      failedTick,
+      afterFailure,
+      uselessTick,
+      stillFailed,
+      reembedResult,
+      vectorsRightAfterReembed,
+      healingTick,
+      healed,
+      vectorsAfterHealingTick: stores.vectorStore.entries.size,
+    }).toEqual({
+      failedTick: { processed: 0, failed: 1 },
+      afterFailure: "failed",
+      uselessTick: { processed: 0, failed: 0 },
+      stillFailed: "failed",
+      reembedResult: { requeued: 1, memoryIds: [memoryId] },
+      vectorsRightAfterReembed: 0,
+      healingTick: { processed: 1, failed: 0 },
+      healed: "ready",
+      vectorsAfterHealingTick: 1,
+    });
+  });
+
+  it("reembed は対象が0件でも例外を投げず、tick も何も拾わない", async () => {
+    const { runtime } = buildRuntime(llmReturning([]));
+
+    const result = await runtime.reembed(ctx, { statuses: ["failed", "pending"], limit: 10 });
+    const tickResult = await runtime.tick(ctx, { kinds: ["embed"], leaseMs: TEST_LEASE_MS });
+
+    expect({ result, tickResult }).toEqual({
+      result: { requeued: 0, memoryIds: [] },
+      tickResult: { processed: 0, failed: 0 },
+    });
+  });
+});
+
 describe("runtime.tick — 未知の outbox job kind", () => {
   it("未知の kind は無視して溜め込まず、失敗として扱う", async () => {
     const { runtime, stores } = buildRuntime(llmReturning([]));

@@ -20,7 +20,12 @@ import {
   isEmbeddingStatusRollback,
   MemoryStatusConflictError,
 } from "../interfaces/memory-store.js";
-import type { AggregateScopeOptions, MemoryStore } from "../interfaces/memory-store.js";
+import type {
+  AggregateScopeOptions,
+  MemoryStore,
+  RequeueEmbedJobsOptions,
+  RequeueEmbedJobsResult,
+} from "../interfaces/memory-store.js";
 import type { NewRecallRecord, RecallScope, ScopeAggregate } from "../recall.js";
 import type { EmbeddingSpaceId } from "../embedding.js";
 import type { OutboxJobRecord } from "../outbox.js";
@@ -555,6 +560,39 @@ export class FakeMemoryStore implements MemoryStore {
     const id = nextId("rcl");
     this.backing.recalls.set(id, { ...record, tenantId: ctx.tenantId });
     return id;
+  }
+
+  /**
+   * ADR 0079: 索引に載っていない Memory を `pending` へ戻し、`embed` の outbox 行を
+   * 積み直す。**更新と積み直しを `await` を挟まない同期区間で行う**ことで、
+   * Postgres 側の単一文（＝同一トランザクション）と同じく「片方だけ起きた中間状態」を
+   * 外から観測させない（ADR 0054 と同じ形）。
+   */
+  async requeueEmbedJobs(ctx: Ctx, opts: RequeueEmbedJobsOptions): Promise<RequeueEmbedJobsResult> {
+    const targetStatuses: readonly EmbeddingStatus[] = opts.statuses;
+    const idFilter = opts.memoryIds === undefined ? null : new Set<string>(opts.memoryIds);
+    const targets = [...this.backing.memories.values()]
+      .filter(
+        (m) =>
+          m.tenantId === ctx.tenantId &&
+          (m.status === "active" || m.status === "contested") &&
+          targetStatuses.includes(m.embeddingStatus) &&
+          (idFilter === null || idFilter.has(m.id)),
+      )
+      .sort(
+        (a, b) =>
+          a.updatedAt.getTime() - b.updatedAt.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+      )
+      .slice(0, Math.max(0, opts.limit));
+
+    const memoryIds: MemoryId[] = [];
+    for (const memory of targets) {
+      memory.embeddingStatus = "pending";
+      memory.updatedAt = new Date();
+      this.enqueueJob(ctx, "embed", { memoryId: memory.id });
+      memoryIds.push(memory.id);
+    }
+    return { requeued: memoryIds.length, memoryIds };
   }
 }
 

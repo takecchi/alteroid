@@ -53,6 +53,18 @@ describeMemoryStoreConformance({
     const { db } = await getTestClient();
     return new PostgresEventStore(db).list(ctx, { memoryId });
   },
+  // ADR 0079: 積み直した `embed` ジョブを、運搬役が実際に claim できるところまで見る。
+  // `leaseMs` はこの検査の中だけの値であり、実運用のリース長とは無関係（ADR 0032）。
+  claimEmbedJobs: async (ctx: Ctx, now: Date) => {
+    const { db } = await getTestClient();
+    return new PostgresOutboxStore(db).claimBatch(ctx, {
+      kinds: ["embed"],
+      limit: 100,
+      now,
+      claimedBy: "conformance-requeue",
+      leaseMs: 60_000,
+    });
+  },
 });
 
 describeEventStoreConformance({

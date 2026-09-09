@@ -1,4 +1,5 @@
 import { sql } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import { defaultDecayStrategy } from "@mnemora/core";
 import { EMBEDDING_STATUS_ROLLBACK, MemoryStatusConflictError } from "@mnemora/core";
 import type {
@@ -20,6 +21,8 @@ import type {
   OutboxJobRecord,
   RecallId,
   RecallScope,
+  RequeueEmbedJobsOptions,
+  RequeueEmbedJobsResult,
   ScopeAggregate,
 } from "@mnemora/core";
 import type { Db } from "./client.js";
@@ -797,4 +800,103 @@ export class PostgresMemoryStore implements MemoryStore {
     `);
     return (result.rows[0] as unknown as { id: string }).id;
   }
+
+  /**
+   * ADR 0079: 索引に載っていない Memory を選んで `pending` へ戻し、**同じ1文の中で**
+   * `embed` の outbox 行を積み直す。
+   *
+   * 🔴 **`memories` の更新と `outbox` の INSERT は、同一トランザクションでなければ
+   * ならない。**片方だけ起きると次のどちらかになる:
+   * - 更新だけ起きた: `pending` に戻ったのに運ぶジョブが無い。**その行は永久に
+   *   `pending` のまま**で、`recall` は「待て」と案内し続ける——直すつもりが、
+   *   直せない状態を一つ増やしたことになる。
+   * - INSERT だけ起きた: `failed` のまま `embed` ジョブが積まれる。処理そのものは
+   *   走るので致命的ではないが、`aggregateScope` の `notIndexed.failed` は
+   *   ジョブが成功するまで減らない。
+   *
+   * **ここでは単一の `WITH ... INSERT ... SELECT` 文にしてある**——1文なら、
+   * 明示的な `BEGIN`/`COMMIT` を書かなくても両方が同じトランザクションに入る
+   * （`createMemoryWithOutbox` は複数文なので `db.transaction` で包む必要がある。
+   * こちらは1文で済むので包まない）。**この選択には歯が在る**: 適合スイートの
+   * 「更新と INSERT は片方だけ起きない」の検査（`memory-store-conformance.ts`）。
+   *
+   * `FOR UPDATE SKIP LOCKED` は `claimBatch`（`./outbox-store.ts`）と同じ理由で使う——
+   * 2つの呼び出しが同時に走っても、同じ Memory を二重に積み直さない（取ろうとして
+   * いる行はスキップして次へ行く）。
+   */
+  async requeueEmbedJobs(ctx: Ctx, opts: RequeueEmbedJobsOptions): Promise<RequeueEmbedJobsResult> {
+    const target = buildRequeueEmbedTargetSelect(ctx, opts);
+    // `memoryIds` を渡されたのに well-formed な id が1つも残らなかった場合
+    // （空集合との積）。問い合わせる意味が無い。
+    if (target === null) {
+      return { requeued: 0, memoryIds: [] };
+    }
+
+    const result = await this.db.execute(sql`
+      WITH target AS (
+        ${target}
+      ),
+      requeued AS (
+        UPDATE memories m
+        SET embedding_status = 'pending', updated_at = now()
+        FROM target t
+        WHERE m.id = t.id
+        RETURNING m.id
+      )
+      INSERT INTO outbox (id, tenant_id, kind, payload, available_at, attempts, created_at)
+      SELECT
+        gen_random_uuid(), ${ctx.tenantId}, 'embed',
+        jsonb_build_object('memoryId', r.id), now(), 0, now()
+      FROM requeued r
+      RETURNING (payload->>'memoryId') AS memory_id
+    `);
+
+    const memoryIds = result.rows.map((row) => (row as unknown as { memory_id: string }).memory_id);
+    return { requeued: memoryIds.length, memoryIds };
+  }
+}
+
+/**
+ * ADR 0079: `requeueEmbedJobs` が「どの行を積み直すか」を選ぶ `SELECT`。
+ *
+ * **本体と `EXPLAIN` の歯が、同じものを使うために切り出してある。**
+ * `packages/postgres/src/__tests__/memories-requeue-embed-index.test.ts` がこの関数の
+ * 返り値をそのまま `EXPLAIN` する——**テスト側に SQL を書き写すと、本体の述語を
+ * 直したときに歯だけが古い述語を測り続ける**（`outbox-claim-lease-index.test.ts` が
+ * DDL をマイグレーションファイルから読むのと同じ理由。AGENTS.md が北極星の要約を
+ * 置かないのと同じ理由でもある）。
+ *
+ * `memoryIds` を渡されたのに well-formed な id が1つも残らなかったときは `null` を返す
+ * ——形式が壊れた id は `getMany` と同じく静かに落とす（uuid 列への cast で文全体が
+ * 例外になるのを避ける。`mapping.ts` の `isUuidLike` の doc 参照）が、**絞り込みを
+ * 渡されたのに残りが0件なら、それは空集合との積**であり、問い合わせる意味が無い。
+ */
+export function buildRequeueEmbedTargetSelect(ctx: Ctx, opts: RequeueEmbedJobsOptions): SQL | null {
+  let idFilter = sql``;
+  if (opts.memoryIds !== undefined) {
+    const wellFormedIds = opts.memoryIds.filter((id) => isUuidLike(id));
+    if (wellFormedIds.length === 0) {
+      return null;
+    }
+    idFilter = sql` AND id = ANY(${sql.param(wellFormedIds)}::uuid[])`;
+  }
+
+  return sql`
+    SELECT id FROM memories
+    WHERE tenant_id = ${ctx.tenantId}
+      AND status IN ('active', 'contested')
+      -- ⚠ **ここに "AND embedding_status <> 'ready'" を書き足さないこと。**
+      -- 部分索引 idx_memories_requeue_embed（migration 0007）の述語を WHERE へ写して
+      -- 含意を助ける必要がある、と当初は考えた。**CI の EXPLAIN で逆だと分かった**
+      -- （ADR 0079「測ったこと」に全文）: プランナは "= ANY($n)" の実引数を定数として
+      -- 見るので（node-postgres の unnamed statement は custom plan になる）、
+      -- 述語 "embedding_status <> 'ready'" は書かなくても含意される。
+      -- そして**書くと逆に遅くなる**——その条件片が Recheck Cond に回って Bitmap Heap
+      -- Scan が選ばれ、ORDER BY のために Sort が挟まる（cost 843、LIMIT の早期打ち切りが
+      -- 効かない）。書かなければ素の Index Scan で並びがそのまま供給される（cost 58）。
+      AND embedding_status = ANY(${sql.param(opts.statuses)}::text[])
+      ${idFilter}
+    ORDER BY updated_at ASC, id ASC
+    LIMIT ${opts.limit}
+    FOR UPDATE SKIP LOCKED`;
 }

@@ -64,6 +64,23 @@ describeMemoryStoreConformance({
       returnedMemoryIds: [],
     });
   },
+  // ADR 0079: 積み直した `embed` ジョブを、運搬役が実際に claim できるところまで見る。
+  // `InMemoryOutboxStore` は `InMemoryMemoryStore.outboxJobs` の配列を共有参照で受け取る
+  // ——`createStore()` が作った、まさにその instance のジョブを claim する必要がある
+  // （`listEventsForMemory` と同じ理由・同じ形）。
+  // `leaseMs` はこの検査の中だけの値であり、実運用のリース長とは無関係（ADR 0032）。
+  claimEmbedJobs: (ctx, now) => {
+    if (!latestMemoryStoreForEvents) {
+      throw new Error("claimEmbedJobs より先に createStore() を呼ぶ必要がある");
+    }
+    return new InMemoryOutboxStore(latestMemoryStoreForEvents.outboxJobs).claimBatch(ctx, {
+      kinds: ["embed"],
+      limit: 100,
+      now,
+      claimedBy: "conformance-requeue",
+      leaseMs: 60_000,
+    });
+  },
 });
 
 // `InMemoryVectorStore` は `status`/`subjectId`/`decayFloorAt`（Memory の属性であり

@@ -11,7 +11,11 @@ import { heuristicTokenCounter } from "./heuristic-token-counter.js";
 import type { EmbeddingProvider } from "./interfaces/embedding-provider.js";
 import type { EventStore } from "./interfaces/event-store.js";
 import type { LLMProvider } from "./interfaces/llm-provider.js";
-import type { MemoryStore } from "./interfaces/memory-store.js";
+import type {
+  MemoryStore,
+  RequeueEmbedJobsOptions,
+  RequeueEmbedJobsResult,
+} from "./interfaces/memory-store.js";
 import type { ClaimOutboxJobsOptions, OutboxStore } from "./interfaces/outbox-store.js";
 import type { OutboxJobKind } from "./interfaces/scheduler.js";
 import type { TenantSettingsStore } from "./interfaces/tenant-settings-store.js";
@@ -225,6 +229,31 @@ export interface Runtime {
    * TOCTOU の競合を検知する）は `ReextractResult` の doc コメントを参照。
    */
   reextract(ctx: Ctx, observationId: ObservationId): Promise<ReextractResult>;
+  /**
+   * ADR 0079: 索引に載っていない Memory を**もう一度索引へ載せに行く**。
+   *
+   * `recall` は `omitted` に `{ kind: 'not_indexed', reason }` を積んで
+   * 「索引されていない N 件がある」と正しく名乗る。docs/recall.md §4 はその `reason` に
+   * 応じた次の一手（`pending` は待つ・再試行する、`failed` は埋め込みパイプラインを疑う）
+   * まで案内している。**この口は、その案内どおりに動くための操作である**——
+   * 埋め込みの provider が落ちていた間に入った Memory は、provider が直っても
+   * 自力では索引へ戻らない（`fail` は終端であり、Phase 1 に自動リトライは無い。ADR 0032）。
+   *
+   * ⚠ **`reextract` とは別の操作である。**`reextract` は**抽出**をやり直す
+   * （Observation から Memory を作り直す）。こちらは既にある Memory の**埋め込み**を
+   * やり直す。
+   *
+   * **このメソッド自身は埋め込みを行わない。**`MemoryStore.requeueEmbedJobs` を呼んで
+   * `embed` ジョブを積み直すだけであり、実際に埋め込むのは次の `tick()` である
+   * ——「キューが無ければ黙って何も起きない」を作らない、という `tick` の設計方針
+   * （上の doc コメント）をここでも崩さない。**呼んだだけでは索引は埋まらない。**
+   *
+   * 引数と返り値は {@link RequeueEmbedJobsOptions} / {@link RequeueEmbedJobsResult} を
+   * **そのまま使う**（`TickOptions` のように別の型を立てない）。この口は store の同名
+   * メソッドへ素通しするだけで、runtime 側が足す選択肢が1つも無いためである——
+   * 同じ形の型を2つ置くと、片方だけ直したときに黙ってずれる。
+   */
+  reembed(ctx: Ctx, opts: RequeueEmbedJobsOptions): Promise<RequeueEmbedJobsResult>;
 }
 
 function extractObservationPayload(
@@ -671,5 +700,9 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     });
   }
 
-  return { observe, tick, recall, reextract };
+  async function reembed(ctx: Ctx, opts: RequeueEmbedJobsOptions): Promise<RequeueEmbedJobsResult> {
+    return deps.memoryStore.requeueEmbedJobs(ctx, opts);
+  }
+
+  return { observe, tick, recall, reextract, reembed };
 }

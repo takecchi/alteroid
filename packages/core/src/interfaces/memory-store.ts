@@ -4,7 +4,7 @@ import type { MemoryId, ObservationId, RecallId } from "../ids.js";
 import type { EmbeddingStatus, Memory, MemoryStatus, NewMemory } from "../memory.js";
 import type { NewObservation, Observation } from "../observation.js";
 import type { OutboxJobRecord } from "../outbox.js";
-import type { NewRecallRecord, RecallScope, ScopeAggregate } from "../recall.js";
+import type { NewRecallRecord, NotIndexedReason, RecallScope, ScopeAggregate } from "../recall.js";
 import type { OutboxJobKind } from "./scheduler.js";
 
 /**
@@ -370,4 +370,86 @@ export interface MemoryStore {
   ): Promise<ScopeAggregate>;
   /** roadmap.md 段階4/5: recall 段6（記録）。`recalls` へ1行書き込み、発行した recallId を返す。 */
   createRecall(ctx: Ctx, record: NewRecallRecord): Promise<RecallId>;
+  /**
+   * ADR 0079: 索引に載っていない Memory を**列挙して、同時に `embed` ジョブを積み直す**。
+   *
+   * `recall` は `not_indexed` として「索引されていない N 件」を既に正しく名乗っている
+   * （`packages/core/src/recall-runtime.ts` の `NOT_INDEXED_REASONS` ループ）。
+   * docs/recall.md §4 はその `reason` ごとに利用側の次の一手まで案内している——
+   * **`pending` は待つ・再試行する、`failed` は埋め込みパイプラインそのものを疑う。**
+   * **このメソッドが足すのは、その「次の一手」を実際に打つ口である。**
+   *
+   * 契約:
+   * - 対象は `status IN ('active','contested')` かつ `embeddingStatus` が
+   *   `opts.statuses` のいずれかである Memory に限る。**`aggregateScope` が
+   *   `notIndexed` に数える集合と同じ条件**であり、`recall` が「N 件ある」と言った
+   *   ものをそのままこの口へ渡せる。
+   * - `opts.memoryIds` を渡すと、その id の集合との積を取る（`opts.statuses` の条件は
+   *   外れない——`ready` の行を `memoryIds` で名指ししても対象にならない）。
+   * - 選ばれた行は `embeddingStatus` を `'pending'` へ戻し、**同一トランザクションで**
+   *   `kind: 'embed'`・`payload: { memoryId }` の outbox 行を1件ずつ新規に積む。
+   *   **片方だけ起きることはない。**
+   * - 返すのは実際に積み直した件数と、その `memoryId`（`opts.limit` で切られた後の集合）。
+   * - 対象が0件なら `{ requeued: 0, memoryIds: [] }` を返す（例外を投げない）。
+   * - **べき等ではない。**同じ Memory に対して2回呼べば outbox 行は2件積まれる。
+   *   処理そのものは at-least-once を前提に書かれている（ADR 0032）ので実害は無いが、
+   *   「呼んだ回数だけ積む」ことは契約である。
+   *
+   * 🔴 **既に `failed_at` が付いた古い outbox 行は触らない。**`fail` は終端のままであり、
+   * ADR 0032 の決定（Phase 1 では失敗したジョブの自動リトライを行わない）を覆さない。
+   * 積み直しは**新しい行**であり、古い行は失敗の履歴として残る。これにより新しい行の
+   * `attempts` は 0 から数え直される。
+   *
+   * ⚠ **`ready` は `opts.statuses` に指定できない**（型が `NotIndexedReason` であり
+   * `ready` を含まない）。`ready` は「ベクトル行が在る」という主張であり（ADR 0053）、
+   * それを `pending` へ戻すと `recall` が索引済みの Memory を `notIndexed.pending` に
+   * 数え始める。埋め込みモデルを替えたときの再埋め込みは `VectorStore` の space が
+   * 変わる別の問題であり、この口の主題ではない。
+   *
+   * 対象が `opts.limit` より多いときにどれが選ばれるかは
+   * **`updatedAt` の古い順、同着は `id` の昇順**とする。積み直した行は `updatedAt` が
+   * 動くので、繰り返し呼ぶと対象が一巡する（同じ行だけを取り続けて他が飢えることがない）。
+   */
+  requeueEmbedJobs(ctx: Ctx, opts: RequeueEmbedJobsOptions): Promise<RequeueEmbedJobsResult>;
+}
+
+/**
+ * {@link MemoryStore.requeueEmbedJobs} の引数（ADR 0079）。
+ *
+ * **`statuses` にも `limit` にも既定値を置かない。**`ClaimOutboxJobsOptions.leaseMs`
+ * （ADR 0032）と同じ理由である——「どの `not_indexed` を積み直すか」「一度にいくつ
+ * 積み直すか」は運用方針であり、`packages/core` が発明してよい値ではない。この口は
+ * 1回の呼び出しで `memories` と `outbox` の両方へ書くので、既定値を置くとその影響範囲を
+ * core が黙って決めることになる。
+ */
+export interface RequeueEmbedJobsOptions {
+  /**
+   * 対象にする現在の `embeddingStatus`。
+   *
+   * **型が `NotIndexedReason` なのは意図である**——`recall` が
+   * `{ kind: 'not_indexed', reason }` として名乗った値を、そのままここへ渡せる。
+   * 「見えているもの」と「積み直せるもの」を同じ語彙に固定する。
+   *
+   * ⚠ **`'pending'` も指定できる。**「待てば解ける」はずの `pending` に、
+   * **待っても解けない行が混ざりうる**ためである: `runtime.tick` の `processEmbedJob` は
+   * `memoryStore.get` を `try` の外で呼んでおり、また `catch` の中の
+   * `setEmbeddingStatus(..., 'failed')` 自体も例外を投げうる。どちらを通っても
+   * outbox 行だけが終端（`failed_at`）になり、Memory は `pending` のまま残る——
+   * その行は `recall` が `notIndexed.pending`（＝「待て」）として数え続ける。
+   * **⚠ これは構造から読める「起こりうる」であって、発生を観測したものではない**
+   * （ADR 0079「確かめていないこと」）。
+   */
+  statuses: NotIndexedReason[];
+  /** 対象をこの id の集合との積に絞る（任意）。省略時は `statuses` の条件だけで選ぶ。 */
+  memoryIds?: MemoryId[];
+  /** 1回の呼び出しで積み直す上限。**既定値なし**（上の doc コメント参照）。 */
+  limit: number;
+}
+
+/** {@link MemoryStore.requeueEmbedJobs} の返り値（ADR 0079）。 */
+export interface RequeueEmbedJobsResult {
+  /** 実際に積み直した件数。`memoryIds.length` と必ず一致する。 */
+  requeued: number;
+  /** 積み直した Memory の id。`opts.limit` で切られた後の集合。 */
+  memoryIds: MemoryId[];
 }

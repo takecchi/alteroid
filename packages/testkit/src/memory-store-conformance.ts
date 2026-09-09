@@ -7,6 +7,7 @@ import type {
   MemoryId,
   MemoryStore,
   NewMemoryEvent,
+  OutboxJobRecord,
   RecallId,
 } from "@mnemora/core";
 import { MemoryStatusConflictError } from "@mnemora/core";
@@ -81,6 +82,26 @@ export interface MemoryStoreConformanceOptions {
    * 族の失敗を、フックの省略という形で再現することになる。
    */
   listEventsForMemory: (ctx: Ctx, memoryId: MemoryId) => Promise<MemoryEvent[]> | MemoryEvent[];
+  /**
+   * ADR 0079: `requeueEmbedJobs` が積み直した `embed` ジョブを、**運搬役が実際に
+   * claim できるところまで**検査するためのフック。**必須。**
+   *
+   * `requeueEmbedJobs` の眼目は「`embeddingStatus` が `pending` に戻ること」ではなく
+   * **「もう一度処理されるようになること」**である。前者だけを見る歯は、outbox への
+   * INSERT を丸ごと落としても緑のままになる——`recall` から見た `notIndexed.pending` が
+   * 増えるだけで、**直すつもりが「待っても解けない `pending`」を増やす**という、
+   * この ADR がまさに塞ごうとしている状態そのものを作る。
+   *
+   * `MemoryStore` interface 自体には「積まれたジョブを claim する」操作が無い
+   * （それは `OutboxStore` の責務）ため、`prepareRecallId` / `listEventsForMemory` と
+   * 同じ理由で、adapter ごとの用意の仕方を呼び出し側に委ねる。**省略可のオプションに
+   * しないこと**——省略できると「積み直しが本当に運ばれる adapter」と「戻しただけの
+   * adapter」が同じ緑色の出力になる。
+   *
+   * 実装は `OutboxStore.claimBatch` を `kinds: ["embed"]` で呼んで返すこと
+   * （`now` は呼び出し側が渡す。`leaseMs` はこの検査の中だけの値でよい）。
+   */
+  claimEmbedJobs: (ctx: Ctx, now: Date) => Promise<OutboxJobRecord[]> | OutboxJobRecord[];
 }
 
 /**
@@ -103,7 +124,7 @@ export interface MemoryStoreConformanceOptions {
  * - `createRecall` が recallId を発行すること（段6、ADR 0008）
  */
 export function describeMemoryStoreConformance(options: MemoryStoreConformanceOptions): void {
-  const { name, createStore, listEventsForMemory, prepareRecallId } = options;
+  const { name, createStore, listEventsForMemory, prepareRecallId, claimEmbedJobs } = options;
 
   describe(`MemoryStore conformance (${name})`, () => {
     // -------------------------------------------------------------------
@@ -2365,6 +2386,262 @@ export function describeMemoryStoreConformance(options: MemoryStoreConformanceOp
 
       const result = await store.recordUsage(ctx, recallId, [memory.id]);
       expect(result.insertedMemoryIds).toEqual([memory.id]);
+    });
+
+    // -------------------------------------------------------------------
+    // requeueEmbedJobs（ADR 0079: 索引に載っていない Memory を積み直す）
+    //
+    // ここで検査するのは「`embeddingStatus` が `pending` に戻ったか」ではなく
+    // **「もう一度処理されるようになったか」**である——だから毎回
+    // `claimEmbedJobs` まで見る（`claimEmbedJobs` の doc コメント参照）。
+    // -------------------------------------------------------------------
+
+    /**
+     * 🔴 **`new Date()` をそのまま `now` に渡さないこと。**
+     *
+     * `claimBatch` は `available_at <= now` で絞る。`requeueEmbedJobs` が積んだ行の
+     * `available_at` は **DB 側の `now()`（マイクロ秒精度）**で書かれるのに対し、
+     * JavaScript の `Date` は**ミリ秒までしか持たない**——同じミリ秒の中で
+     * `available_at = 12:00:00.123456`、`new Date()` = `12:00:00.123`（切り捨て）に
+     * なると、**積んだばかりの行が `available_at <= now` を満たさず claim できない。**
+     *
+     * ⚠ **これは実際に CI で踏んだ。**同じ検査が `packages/postgres` のジョブでは緑、
+     * ルートの test 門の DB 段では赤という**割れ方**をした（ADR 0079「測ったこと」）。
+     * ミリ秒の端数次第で結果が変わるので、**再実行すれば直るように見える種類の赤**である。
+     *
+     * ⟹ 少しだけ未来を渡す。`leaseMs`（60秒）よりずっと小さいので、**既に claim 済みの
+     * 行がリース切れとして再取得されることはない**（`claimed_at <= now - leaseMs` は
+     * 成立しない）。
+     */
+    const CLAIM_NOW_SKEW_MS = 1_000;
+
+    async function claimedMemoryIds(ctx: Ctx): Promise<unknown[]> {
+      const jobs = await claimEmbedJobs(ctx, new Date(Date.now() + CLAIM_NOW_SKEW_MS));
+      return jobs.map((job) => job.payload.memoryId);
+    }
+
+    it("requeueEmbedJobs は failed の Memory を pending へ戻し、運搬役が claim できる embed ジョブを積む", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const memory = await store.createMemory(ctx, buildNewMemoryFixture({ tenantId: "tenant-1" }));
+      await store.setEmbeddingStatus(ctx, memory.id, "failed");
+
+      // 前提: この時点で claim できる embed ジョブは無い（`createMemory` は outbox に
+      // 積まない＝「失敗が終端に達し、運ぶものが何も残っていない」状態と同じ形）。
+      expect(await claimedMemoryIds(ctx)).toEqual([]);
+
+      const result = await store.requeueEmbedJobs(ctx, { statuses: ["failed"], limit: 10 });
+
+      // ⚠ 3つを1つの `toEqual` に並べる。分けて書くと、片方（outbox への INSERT）を
+      // 落とした変異が「pending には戻っている」だけで緑になりうる。
+      expect({
+        requeued: result.requeued,
+        requeuedIds: result.memoryIds,
+        embeddingStatus: (await store.get(ctx, memory.id))?.embeddingStatus,
+        claimable: await claimedMemoryIds(ctx),
+      }).toEqual({
+        requeued: 1,
+        requeuedIds: [memory.id],
+        embeddingStatus: "pending",
+        claimable: [memory.id],
+      });
+    });
+
+    it("requeueEmbedJobs は pending の Memory も積み直せる（待っても解けない pending が在りうるため、ADR 0079）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      // `runtime.tick` の `processEmbedJob` は `memoryStore.get` を `try` の外で呼び、
+      // `catch` の中の `setEmbeddingStatus(..., 'failed')` 自体も例外を投げうる。
+      // どちらを通っても **outbox 行だけが終端になり、Memory は `pending` のまま**
+      // 残る——`recall` はその行を `notIndexed.pending`（＝「待て」）として数え続ける。
+      // ⚠ この状況が実際に発生することは観測していない（ADR 0079「確かめていないこと」）。
+      // ここで作っているのは、その状態と**同じ形**（pending・claim できるジョブ無し）である。
+      const memory = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({ tenantId: "tenant-1", embeddingStatus: "pending" }),
+      );
+      expect(await claimedMemoryIds(ctx)).toEqual([]);
+
+      const result = await store.requeueEmbedJobs(ctx, { statuses: ["pending"], limit: 10 });
+
+      expect({
+        requeued: result.requeued,
+        embeddingStatus: (await store.get(ctx, memory.id))?.embeddingStatus,
+        claimable: await claimedMemoryIds(ctx),
+      }).toEqual({
+        requeued: 1,
+        embeddingStatus: "pending",
+        claimable: [memory.id],
+      });
+    });
+
+    it("requeueEmbedJobs は statuses に無い embeddingStatus を対象にしない", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const pendingMemory = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({ tenantId: "tenant-1", contentHash: "requeue-status-pending" }),
+      );
+      const readyMemory = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({ tenantId: "tenant-1", contentHash: "requeue-status-ready" }),
+      );
+      await store.setEmbeddingStatus(ctx, readyMemory.id, "ready");
+
+      // `failed` だけを対象にする。`pending` も `ready` も残る。
+      const result = await store.requeueEmbedJobs(ctx, { statuses: ["failed"], limit: 10 });
+
+      expect({
+        requeued: result.requeued,
+        pendingUntouched: (await store.get(ctx, pendingMemory.id))?.embeddingStatus,
+        readyUntouched: (await store.get(ctx, readyMemory.id))?.embeddingStatus,
+        claimable: await claimedMemoryIds(ctx),
+      }).toEqual({
+        requeued: 0,
+        pendingUntouched: "pending",
+        readyUntouched: "ready",
+        claimable: [],
+      });
+    });
+
+    it("requeueEmbedJobs は memoryIds で対象を絞れるが、statuses の条件は外れない", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const failedMemory = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({ tenantId: "tenant-1", contentHash: "requeue-ids-failed" }),
+      );
+      const readyMemory = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({ tenantId: "tenant-1", contentHash: "requeue-ids-ready" }),
+      );
+      await store.setEmbeddingStatus(ctx, failedMemory.id, "failed");
+      await store.setEmbeddingStatus(ctx, readyMemory.id, "ready");
+
+      // `ready` の行を名指ししても対象にならない（積は取るが `statuses` は外れない）。
+      const result = await store.requeueEmbedJobs(ctx, {
+        statuses: ["failed"],
+        memoryIds: [readyMemory.id],
+        limit: 10,
+      });
+
+      expect({
+        requeued: result.requeued,
+        readyUntouched: (await store.get(ctx, readyMemory.id))?.embeddingStatus,
+        claimable: await claimedMemoryIds(ctx),
+      }).toEqual({ requeued: 0, readyUntouched: "ready", claimable: [] });
+    });
+
+    it("requeueEmbedJobs は limit を超えて積み直さない", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      for (const suffix of ["a", "b", "c"]) {
+        const memory = await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({ tenantId: "tenant-1", contentHash: `requeue-limit-${suffix}` }),
+        );
+        await store.setEmbeddingStatus(ctx, memory.id, "failed");
+      }
+
+      const result = await store.requeueEmbedJobs(ctx, { statuses: ["failed"], limit: 2 });
+
+      // ⚠ `requeued` だけでなく「積まれたジョブの数」と「まだ failed のまま残った数」も
+      // 並べる——`limit` を無視する変異は、返り値だけを見る歯では捕まえられない
+      // （`requeued` を `Math.min(..., limit)` で作り直せば緑になりうる）。
+      const allMemories = await store.getMany(ctx, result.memoryIds);
+      const claimable = await claimedMemoryIds(ctx);
+      expect({
+        requeued: result.requeued,
+        requeuedIdCount: result.memoryIds.length,
+        claimableCount: claimable.length,
+        allRequeuedArePending: allMemories.every((m) => m.embeddingStatus === "pending"),
+        claimableMatchesRequeued: [...claimable].sort().join(","),
+        requeuedSorted: [...result.memoryIds].sort().join(","),
+      }).toEqual({
+        requeued: 2,
+        requeuedIdCount: 2,
+        claimableCount: 2,
+        allRequeuedArePending: true,
+        claimableMatchesRequeued: [...result.memoryIds].sort().join(","),
+        requeuedSorted: [...result.memoryIds].sort().join(","),
+      });
+    });
+
+    it("requeueEmbedJobs は archived / superseded / forgotten を対象にしない（aggregateScope の notIndexed と同じ集合）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const memory = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({ tenantId: "tenant-1", contentHash: "requeue-archived" }),
+      );
+      await store.setEmbeddingStatus(ctx, memory.id, "failed");
+      await store.updateStatus(ctx, memory.id, "archived");
+
+      const result = await store.requeueEmbedJobs(ctx, { statuses: ["failed"], limit: 10 });
+
+      expect({ requeued: result.requeued, claimable: await claimedMemoryIds(ctx) }).toEqual({
+        requeued: 0,
+        claimable: [],
+      });
+    });
+
+    it("requeueEmbedJobs は他テナントの Memory を積み直さない（docs/architecture.md §3.7）", async () => {
+      const store = await createStore();
+      const ctxA: Ctx = { tenantId: "tenant-a" };
+      const ctxB: Ctx = { tenantId: "tenant-b" };
+      const memoryA = await store.createMemory(
+        ctxA,
+        buildNewMemoryFixture({ tenantId: "tenant-a" }),
+      );
+      await store.setEmbeddingStatus(ctxA, memoryA.id, "failed");
+
+      const result = await store.requeueEmbedJobs(ctxB, { statuses: ["failed"], limit: 10 });
+
+      expect({
+        requeued: result.requeued,
+        stillFailed: (await store.get(ctxA, memoryA.id))?.embeddingStatus,
+        claimableInB: await claimedMemoryIds(ctxB),
+      }).toEqual({ requeued: 0, stillFailed: "failed", claimableInB: [] });
+    });
+
+    it("requeueEmbedJobs は対象が0件でも例外を投げない", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+
+      const result = await store.requeueEmbedJobs(ctx, { statuses: ["failed"], limit: 10 });
+      expect(result).toEqual({ requeued: 0, memoryIds: [] });
+    });
+
+    it("requeueEmbedJobs は形式不正な memoryId だけを渡されたら 0 件で返す（getMany と同じ「静かに落とす」）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const memory = await store.createMemory(ctx, buildNewMemoryFixture({ tenantId: "tenant-1" }));
+      await store.setEmbeddingStatus(ctx, memory.id, "failed");
+
+      const result = await store.requeueEmbedJobs(ctx, {
+        statuses: ["failed"],
+        memoryIds: ["does-not-exist"],
+        limit: 10,
+      });
+
+      expect({
+        requeued: result.requeued,
+        stillFailed: (await store.get(ctx, memory.id))?.embeddingStatus,
+      }).toEqual({ requeued: 0, stillFailed: "failed" });
+    });
+
+    it("requeueEmbedJobs はべき等ではない——2回呼べば embed ジョブは2件積まれる（ADR 0079 の契約）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const memory = await store.createMemory(ctx, buildNewMemoryFixture({ tenantId: "tenant-1" }));
+      await store.setEmbeddingStatus(ctx, memory.id, "failed");
+
+      await store.requeueEmbedJobs(ctx, { statuses: ["failed"], limit: 10 });
+      // 2回目は既に `pending` なので `statuses` に `pending` を含めて呼ぶ。
+      await store.requeueEmbedJobs(ctx, { statuses: ["pending"], limit: 10 });
+
+      const jobs = await claimEmbedJobs(ctx, new Date(Date.now() + CLAIM_NOW_SKEW_MS));
+      expect(jobs.map((job) => job.payload.memoryId)).toEqual([memory.id, memory.id]);
     });
   });
 }

@@ -26,6 +26,8 @@ import type {
   OutboxJobRecord,
   RecallId,
   RecallScope,
+  RequeueEmbedJobsOptions,
+  RequeueEmbedJobsResult,
   ScopeAggregate,
 } from "@mnemora/core";
 import { buildStoredMemoryEvent } from "./in-memory-event-store.js";
@@ -564,6 +566,48 @@ export class InMemoryMemoryStore implements MemoryStore {
     const id = nextId("rcl");
     this.recalls.set(id, { ...record, tenantId: ctx.tenantId });
     return id;
+  }
+
+  /**
+   * ADR 0079: 索引に載っていない Memory を選んで `pending` へ戻し、`embed` の outbox 行を
+   * 積み直す。
+   *
+   * `PostgresMemoryStore.requeueEmbedJobs` は単一の `WITH ... INSERT ... SELECT` 文で
+   * 更新と INSERT を同じトランザクションに入れる。**この実装が「同一トランザクション」を
+   * 模せるのは、途中に `await` を挟まない同期区間で両方を行うからである**
+   * （`createObservationIdempotent`（ADR 0054）と同じ形）——他の呼び出しの同期区間が
+   * 割り込む余地が無いので、「更新だけ起きて INSERT が起きない」中間状態が外から
+   * 観測されない。⚠ **`for` の中に `await` を入れないこと。**
+   *
+   * `statuses` を `readonly EmbeddingStatus[]` へ受け直しているのは、
+   * **`NotIndexedReason` が `EmbeddingStatus` の部分集合であることを型で確かめる**
+   * ためでもある（どちらかに値が増えてこの包含が崩れたら、ここが赤くなる）。
+   */
+  async requeueEmbedJobs(ctx: Ctx, opts: RequeueEmbedJobsOptions): Promise<RequeueEmbedJobsResult> {
+    const targetStatuses: readonly EmbeddingStatus[] = opts.statuses;
+    const idFilter = opts.memoryIds === undefined ? null : new Set<string>(opts.memoryIds);
+    const targets = [...this.memories.values()]
+      .filter(
+        (m) =>
+          m.tenantId === ctx.tenantId &&
+          (m.status === "active" || m.status === "contested") &&
+          targetStatuses.includes(m.embeddingStatus) &&
+          (idFilter === null || idFilter.has(m.id)),
+      )
+      .sort(
+        (a, b) =>
+          a.updatedAt.getTime() - b.updatedAt.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+      )
+      .slice(0, Math.max(0, opts.limit));
+
+    const memoryIds: MemoryId[] = [];
+    for (const memory of targets) {
+      memory.embeddingStatus = "pending";
+      memory.updatedAt = new Date();
+      this.enqueueOutboxJob(ctx, "embed", { memoryId: memory.id });
+      memoryIds.push(memory.id);
+    }
+    return { requeued: memoryIds.length, memoryIds };
   }
 
   private extractionKey(
