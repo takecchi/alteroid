@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import type { Pool, PoolClient } from "pg";
+import { DEFAULT_MIGRATIONS_DIR } from "./migrations-dir.cjs";
 import {
   AdvisoryLockTimeoutError,
   AdvisoryLockUnavailableError,
@@ -32,11 +32,16 @@ import {
  * 個別に、しかし同じ「手書きの DDL・drizzle-kit を使わない」という規約の下で作る。
  */
 
-export const DEFAULT_MIGRATIONS_DIR = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "migrations",
-);
+/**
+ * `migrations/*.sql` の既定のディレクトリ。
+ *
+ * **解決は `./migrations-dir.cts`（CommonJS）へ追い出してある**——ここで
+ * `import.meta.url` を使うと、CommonJS へ変換するテストランナーから
+ * `@mnemora/postgres` を読み込めなくなるため（Issue #110）。理由と、採らなかった案は
+ * `./migrations-dir.cts` の doc に書いてある。ここから再 export しているので、
+ * **使う側の import の書き方は1文字も変わらない。**
+ */
+export { DEFAULT_MIGRATIONS_DIR };
 
 interface AppliedMigration {
   name: string;

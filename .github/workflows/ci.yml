@@ -39,6 +39,9 @@ jobs:
       - name: Build
         run: pnpm run build
 
+      - name: 配布物（packages/*/dist）が CommonJS として構文解析できること（Issue #110）
+        run: pnpm run check:cjs-parse
+
   postgres:
     name: packages/postgres (本物の Postgres + pgvector)
     runs-on: ubuntu-latest
