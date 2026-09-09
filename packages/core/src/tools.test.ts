@@ -13080,3 +13080,391 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
     });
   });
 });
+
+/**
+ * `appendJournalOrThrow` の16箇所すべてについて、応答本文が
+ * **道具名**（どれが落ちたか）と**先頭行の outcome**（完了状態・未記録・
+ * やり直しの可否）の両方を持つことを、道具ごとに独立して測る。
+ *
+ * **なぜ道具名だけでなく先頭行も測るのか。** 上の
+ * `describe('journal.append が失敗したとき…')` の既存の歯は、13箇所の
+ * act-completed / 2箇所の act-not-performed / 1箇所の
+ * act-partially-completed という **outcome の3分類を網羅する**ために
+ * 選ばれた代表4件（memory_delete・journal_write・daily_report_write・
+ * memory_section_move の move_in）＋ profile_write の秘密の歯だけで、
+ * 道具名の `expect(text).toContain(tool)` はその代表の中に**相乗り**して
+ * 付いていただけだった。相乗りした確認は、母体（outcome の網羅）が
+ * 変わらない限り道具名だけを取り違えても落ちない——たとえば
+ * `memory_append` の呼び出しが誤って `'memory_write'` という道具名で
+ * `appendJournalOrThrow` を呼んでも、act-completed の代表4件には
+ * 元から `memory_append` が入っていないので、既存の歯は何も言わない。
+ * ここでは16箇所それぞれを独立したケースにして、この相乗りを解消する。
+ */
+describe('journal.append 失敗時の応答本文: 16箇所すべてで道具名と先頭行 outcome を測る', () => {
+  /** 上の describe の `callExpectingError` と同じもの（複製）。既存側は1文字も変えない。 */
+  async function callExpectingError(
+    tools: ReturnType<typeof createCloneTools>,
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<{ isError: boolean; text: string }> {
+    const found = tools.find((entry) => entry.name === name);
+    if (!found) throw new Error(`ツール ${name} が無い`);
+    try {
+      const result = await found.handler(args as never, {});
+      const text = (result.content ?? [])
+        .map((block) => (block.type === 'text' ? block.text : ''))
+        .join('');
+      return { isError: result.isError === true, text };
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error);
+      return { isError: true, text };
+    }
+  }
+
+  /** 上の describe の `firstSectionId` と同じもの（複製）。既存側は1文字も変えない。 */
+  function firstSectionId(outline: string): string {
+    const match = /^\s*\[([0-9a-f]{8}-[0-9a-f]{8})\]/m.exec(outline);
+    if (match === null) throw new Error(`節idが目次に無い:\n${outline}`);
+    return match[1] as string;
+  }
+
+  /**
+   * `journal.append` を、N回目の呼び出しだけ失敗させる（それ以外は本物へ委ねる）。
+   *
+   * **`memory_section_move` の move_out だけに要る。** move_in（1手目）が
+   * `appendJournalOrThrow` を先に呼ぶので、常に落ちるストア
+   * （`failingJournalAppend`）では move_in の時点で投げ直されて終わり、
+   * move_out（2手目）へは永久に届かない。move_out に届かせるには「1回目は
+   * 通す・2回目だけ落ちる」ストアが要る。
+   *
+   * ⚠️ **この describe の中に閉じて定義する。`testing.ts` へは足さない**
+   * （依頼者の指示）。共有の道具（`packages/core/src/testing.ts`）へ昇格
+   * させるかは、この PR では決めていない——`flakyInboxRemove`（同じ
+   * ファイルの「N回だけ失敗」パターン）とは「回数」と「境目」の向きが
+   * 逆（あちらは先頭N回を失敗、こちらは特定の1回だけを失敗）なので、
+   * そのまま同じ関数に寄せられるかも含めて未決のまま残す。
+   */
+  function failingJournalAppendAtCall(stores: Stores, failAt: number, reason: string): Stores {
+    let calls = 0;
+    return {
+      ...stores,
+      journal: {
+        ...stores.journal,
+        append: (entry) => {
+          calls += 1;
+          if (calls === failAt) return Promise.reject(new Error(reason));
+          return stores.journal.append(entry);
+        },
+      },
+    };
+  }
+
+  const ACT_COMPLETED = '⚠⚠ 完了済み・未記録・やり直し禁止';
+  const ACT_NOT_PERFORMED = '⚠⚠ 未記録・行為は起きていない・やり直してよい';
+  const ACT_PARTIALLY_COMPLETED = '⚠⚠ 一部完了・未記録・やり直し禁止';
+
+  interface Case {
+    /** どの道具の呼び出しか（`expect(text).toContain(tool)` の主題そのもの）。 */
+    tool: string;
+    /** 応答本文の1行目として出るべき outcome の文言。 */
+    firstLine: string;
+    run: () => Promise<{ isError: boolean; text: string }>;
+  }
+
+  const CASES: Case[] = [
+    {
+      tool: 'memory_write',
+      firstLine: ACT_COMPLETED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-memory_write');
+        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        return callExpectingError(tools, 'memory_write', {
+          slug: 'doc-write',
+          content: '本文',
+          summary: '要約',
+        });
+      },
+    },
+    {
+      tool: 'memory_append',
+      firstLine: ACT_COMPLETED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-memory_append');
+        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        return callExpectingError(tools, 'memory_append', {
+          slug: 'doc-append',
+          content: '追記',
+          summary: '要約',
+        });
+      },
+    },
+    {
+      tool: 'memory_delete',
+      firstLine: ACT_COMPLETED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-memory_delete');
+        await stores.persona.write('doc-to-delete', '消される文書\n');
+        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        return callExpectingError(tools, 'memory_delete', {
+          slug: 'doc-to-delete',
+          summary: '整理',
+        });
+      },
+    },
+    {
+      tool: 'memory_frontmatter_set',
+      firstLine: ACT_COMPLETED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-memory_frontmatter_set');
+        await stores.persona.write('doc-fm', '---\ntype: premise\n---\n# 表紙\n本文');
+        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        return callExpectingError(tools, 'memory_frontmatter_set', {
+          slug: 'doc-fm',
+          description: '新しい要旨',
+          summary: '要旨を直した',
+        });
+      },
+    },
+    {
+      // move_in: 移し先への追記だけが済み、出どころは1文字も動いていない半完了。
+      // 常に落ちるストアで届く（move_in が appendJournalOrThrow の1手目）。
+      tool: 'memory_section_move',
+      firstLine: ACT_PARTIALLY_COMPLETED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-move_in');
+        await stores.persona.write('from-doc-mi', '# 表紙\n\n芯\n\n## 節A\n\n本文\n');
+        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        const outline = await callExpectingError(tools, 'memory_outline', { slug: 'from-doc-mi' });
+        const sectionId = firstSectionId(outline.text);
+        return callExpectingError(tools, 'memory_section_move', {
+          fromSlug: 'from-doc-mi',
+          sections: [sectionId],
+          toSlug: 'to-doc-mi',
+          summary: '移動',
+        });
+      },
+    },
+    {
+      // move_out: 出どころからの切り取りまで済んだ完了。常に落ちるストアでは
+      // move_in で終わってしまい永久に届かないので、「1回目は通す・2回目だけ
+      // 落ちる」偽ストアを使う（failingJournalAppendAtCall の doc参照）。
+      tool: 'memory_section_move',
+      firstLine: ACT_COMPLETED,
+      async run() {
+        const stores = failingJournalAppendAtCall(createMemoryStores(), 2, 'boom-move_out');
+        await stores.persona.write('from-doc-mo', '# 表紙\n\n芯\n\n## 節A\n\n本文\n');
+        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        const outline = await callExpectingError(tools, 'memory_outline', { slug: 'from-doc-mo' });
+        const sectionId = firstSectionId(outline.text);
+        return callExpectingError(tools, 'memory_section_move', {
+          fromSlug: 'from-doc-mo',
+          sections: [sectionId],
+          toSlug: 'to-doc-mo',
+          summary: '移動',
+        });
+      },
+    },
+    {
+      tool: 'journal_write',
+      firstLine: ACT_NOT_PERFORMED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-journal_write');
+        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        return callExpectingError(tools, 'journal_write', { decision: '判断した', grounds: '根拠' });
+      },
+    },
+    {
+      tool: 'ask_human',
+      firstLine: ACT_COMPLETED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-ask_human');
+        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        return callExpectingError(tools, 'ask_human', { question: '質問' });
+      },
+    },
+    {
+      tool: 'daily_report_write',
+      firstLine: ACT_NOT_PERFORMED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-daily_report_write');
+        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        return callExpectingError(tools, 'daily_report_write', { body: '今日の報告' });
+      },
+    },
+    {
+      tool: 'schedule_create',
+      firstLine: ACT_COMPLETED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-schedule_create');
+        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        return callExpectingError(tools, 'schedule_create', {
+          kind: 'watch-test',
+          request: 'いつもの見回り',
+          dailyAt: '09:00',
+        });
+      },
+    },
+    {
+      tool: 'schedule_remove',
+      firstLine: ACT_COMPLETED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-schedule_remove');
+        await stores.schedules.put({
+          kind: 'watch-test',
+          spec: { type: 'daily', at: '09:00' },
+          request: 'いつもの見回り',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        });
+        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        return callExpectingError(tools, 'schedule_remove', { kind: 'watch-test' });
+      },
+    },
+    {
+      tool: 'commitment_open',
+      firstLine: ACT_COMPLETED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-commitment_open');
+        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        return callExpectingError(tools, 'commitment_open', { body: '宿題を引き受けた' });
+      },
+    },
+    {
+      tool: 'commitment_close',
+      firstLine: ACT_COMPLETED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-commitment_close');
+        await stores.commitments.open({
+          id: 'c-close-test',
+          at: '2026-01-01T00:00:00.000Z',
+          origin: 'self',
+          body: '片付ける件',
+        });
+        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        return callExpectingError(tools, 'commitment_close', {
+          id: 'c-close-test',
+          reason: '終わった',
+        });
+      },
+    },
+    {
+      tool: 'commitment_edit',
+      firstLine: ACT_COMPLETED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-commitment_edit');
+        await stores.commitments.open({
+          id: 'c-edit-test',
+          at: '2026-01-01T00:00:00.000Z',
+          origin: 'self',
+          body: '直す前の本文',
+        });
+        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        return callExpectingError(tools, 'commitment_edit', {
+          id: 'c-edit-test',
+          body: '直した後の本文',
+        });
+      },
+    },
+    {
+      tool: 'profile_write',
+      firstLine: ACT_COMPLETED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-profile_write');
+        // 既存の秘密の歯（`describe('journal.append が失敗したとき…')` の
+        // 「profile_write の journal.append が失敗しても…」）と同じ形の
+        // runners スタブ。
+        const runners = {
+          async list() {
+            return [
+              {
+                runnerId: 'runner-test',
+                async setProfile() {
+                  return { ok: true as const };
+                },
+              },
+            ];
+          },
+          async get() {
+            return null;
+          },
+          async select() {
+            throw new Error('この検証では使わない');
+          },
+        } as never;
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          profile: createProfileService({ stores, runners }),
+          memoryCause: () => 'clone',
+        });
+        return callExpectingError(tools, 'profile_write', {
+          script: 'export A=1',
+          summary: 'プロファイル更新',
+        });
+      },
+    },
+    {
+      tool: 'manager_start',
+      firstLine: ACT_COMPLETED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-manager_start');
+        // `start()` だけを持つ最小のスタブ（他の口はこの道具からは呼ばれない）。
+        const managers = {
+          async start(input: { request: string; cwd?: string; runnerId?: string }) {
+            return {
+              managerId: 'mgr-manager_start-test',
+              status: 'running',
+              live: true,
+              cwd: input.cwd ?? '/work',
+              request: input.request,
+              startedAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+              waiting: [],
+            };
+          },
+        } as unknown as ManagerPool;
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          managers,
+          memoryCause: () => 'clone',
+        });
+        return callExpectingError(tools, 'manager_start', { request: '調査' });
+      },
+    },
+  ];
+
+  it.each(CASES)(
+    '$tool ($firstLine): 応答本文が道具名と先頭行 outcome を持つ',
+    async ({ tool, firstLine, run }) => {
+      const { isError, text } = await run();
+      expect(isError).toBe(true);
+      // ⭐ 先頭行だけで outcome（完了状態・未記録・やり直しの可否）が分かる。
+      expect(text.split('\n')[0]).toBe(firstLine);
+      // ⭐ 道具名がこの歯の主題（相乗りではない）。
+      expect(text).toContain(tool);
+    },
+  );
+
+  /**
+   * ⭐⭐ 弱点の手当て: `CASES` の道具名の集合を、手で並べた一覧とではなく
+   * `SELF_JOURNALING_CLONE_TOOLS`（17本）から導いた期待値と突き合わせる。
+   *
+   * `manager_send` / `manager_stop` を除く理由: この2本は `ManagerPool` の
+   * ガード付き `#journal`（`clone.ts`）を通るので `appendJournalOrThrow` を
+   * 呼ばない——`SELF_JOURNALING_CLONE_TOOLS` に載っているのは「自前で日誌へ
+   * 書く」という性質の名簿であって、その書き方が `appendJournalOrThrow`
+   * 経由とは限らない。
+   *
+   * これにより、17本目の「自前で journal.append を呼ぶ道具」が
+   * `SELF_JOURNALING_CLONE_TOOLS` に足されたとき、`CASES` にケースを
+   * 足し忘れるとこの歯が「ケースが足りない」と言って赤くなる。
+   */
+  it('CASES の道具名の集合は、SELF_JOURNALING_CLONE_TOOLS から manager_send / manager_stop を除いたものと一致する', () => {
+    const EXPECTED_TOOLS = SELF_JOURNALING_CLONE_TOOLS.filter(
+      (name) => name !== 'manager_send' && name !== 'manager_stop',
+    );
+    const actualTools = [...new Set(CASES.map((c) => c.tool))];
+    expect(actualTools.sort()).toEqual([...EXPECTED_TOOLS].sort());
+  });
+});
