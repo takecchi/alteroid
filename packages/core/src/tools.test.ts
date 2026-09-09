@@ -3192,6 +3192,149 @@ describe('クローンの道具', () => {
         expect((await h.stores.persona.read('appendix'))?.content).toContain('人間が書いた');
         expect((await h.stores.persona.read('appendix'))?.content).toContain('## 事例');
       });
+
+      /**
+       * 歯 A（説明文そのものを釘で留める）。**クローンへ届くのは
+       * `createCloneTools` が返す `description` だけである**——この JSDoc も、
+       * 直上の describe の doc も、クローンは一度も読まない。だから測るのは
+       * 説明文の実物のほうである（#733 が `memory_list` に置いた歯と同じ形）。
+       *
+       * ⚠️ **これはドキュメントの誤字ではない。** 2026-09-08 に人間が歯を
+       * 反転させた（`tools.ts` の `if (action === '節の移動') return null;`）
+       * のに、この道具の説明文だけが「**統合の走行（distill）からは、人間が
+       * 一度でも書いた文書・履歴の無い文書からは節を移せない**（断られる…）」
+       * という反転前の文言のまま取り残されていた。**説明文は毎ターンの
+       * システムプロンプトに載る**ので、誤った説明文はクローンが毎ターン
+       * 誤った前提で判断することを意味する——「distill からは移せない」と
+       * 読んだクローンは、実際には通る整理を試さないまま `ask_human` へ
+       * 逃げるか、整理そのものを諦める。**同じセッションで `prompt.ts` の
+       * 側は正しく直っていた**ので、食い違っていたのは道具一覧だけである。
+       */
+      it('説明文は「distill からは節を移せない」と言わず、「この口だけは distill からも通る」と言う', () => {
+        const stores = createMemoryStores();
+        const tools = createCloneTools({
+          stores,
+          emit: () => undefined,
+          memoryCause: () => 'clone',
+        });
+        const description =
+          tools.find((entry) => entry.name === 'memory_section_move')?.description ?? '';
+
+        // 反転前の逐語。ここへ戻ったらこの1行が単独で落ちる。
+        expect(description).not.toContain(
+          '統合の走行（distill）からは、人間が一度でも書いた文書・履歴の無い文書からは節を移せない',
+        );
+        expect(description).toMatch(/統合の走行（distill）からでも[^。]*通る/);
+        // **緩めたのは「失わない操作」1つだけである**と言い続けること
+        // （説明文が逆側へ振り切れて「distill からは何でも通る」になったら落ちる）。
+        expect(description).toContain('全文置換・削除・frontmatter の更新はいまも断る');
+      });
+
+      /**
+       * 歯 B。**実装の実際の振る舞いと、説明文の主張を、それぞれ独立に釘で
+       * 留める。**
+       *
+       * - 実装の側の値（`movePasses`）: `createCloneTools` が返す
+       *   `memory_section_move` のハンドラを `memoryCause: 'distill'` で
+       *   実際に呼び、**保護状態がいちばん堅い側（`unknown`）の文書からでも
+       *   節が移る**か。`guardFullReplace` は非 export なので、本番と同じ
+       *   1本道（道具のハンドラ）を通して測る
+       * - 説明文の側の値（`claimsMoveDenied`）: `memory_section_move` の
+       *   description が「distill」と「移せない」を同じ文の中で言っているか
+       *   （＝この口が断られると主張しているか、の代理指標。反転前の文言が
+       *   使っていた語である）
+       *
+       * **2本がそれぞれ独立の釘である。** `expect(movePasses).toBe(true)` は
+       * 実装が「保護状態を見て断る」側へ戻ったら**単独で**落ち、
+       * `expect(claimsMoveDenied).toBe(false)` は説明文が反転前の文言へ
+       * 戻ったら**単独で**落ちる。3本目（`toBe(!claimsMoveDenied)`）は
+       * 独立の検出力を持たない——上2本が両方とも釘で留まっている以上、この
+       * 等値は言い換えでしかない。それでも残すのは「実装と説明文は連動して
+       * いるべきだ」という不変条件そのものを読み手に示すためである
+       * （`memory_list` の歯 B と同じ理由）。
+       *
+       * ## ⭐ `unknown` で測る理由 — 既存の歯が捕まえない変異が在るから
+       *
+       * 直上の `human` の歯2本は、`if (action === '節の移動') return null;`
+       * を**消す**変異なら捕まえる（実測: この歯を置く前に撃って、その2本
+       * だけが落ちた）。**だが「早期 return を消して、代わりに
+       * `const status = await stores.persona.protectionStatus(slug);` の後ろで
+       * `action === '節の移動' && status.kind === 'human'` のときだけ通す」変異は、
+       * この歯を置く前の `tools.test.ts` 518 本を1本も落とさずに生き残った**
+       * （実測 2026-09-09。この歯を足した後に全件（5099 本）で撃ち直すと、
+       * 落ちたのはこの歯1本だけである）。その形は `human` の文書では同じ挙動に
+       * なるが、
+       * `unknown`（索引が無い・外から書き換えられた）の文書では断る——
+       * **説明文が言う「保護状態を見ずに通す」が嘘に戻る。** ここで
+       * `protectionStatus` を `unknown` に固定するのはこの変異を殺すためで
+       * ある。
+       *
+       * ## ⭐ 正の対照 — 「守りが効いていないから通った」を空振りさせない
+       *
+       * `ALTEROID_MEMORY_GUARD=off` なら `guardFullReplace` は1文目の次で
+       * 素通りするので、**歯が「節の移動だから通った」ではなく「守りが無効
+       * だから通った」を測ってしまう。** それを塞ぐために、同じ器・同じ文書・
+       * 同じ `cause` のまま `memory_write`（全文置換）が**断られる**ことを
+       * 先に確かめる。ここが緑でなければ、この歯は空振りしている。
+       *
+       * ⚠️ **この歯が測っていないこと**:
+       * - `claimsMoveDenied` は「distill」と「移せない」という特定の語だけを
+       *   見る代理指標である。同じ主張を「通らない」「拒む」のような別の語で
+       *   書き換えられたら、この判定はすり抜ける（歯 A の逐語のほうも同じ）
+       * - `protectionStatus` を**読まない**ことそのものは測っていない。
+       *   読んだうえで結果を捨てる実装とはここでは区別できない（挙動が同じ
+       *   なので、区別する必要も無い）
+       * - 本物の fs / pg のストアが実際に `unknown` を返す条件は測っていない。
+       *   ここではインメモリの器の `protectionStatus` を差し替えている
+       * - この説明文がクローンのシステムプロンプトへ実際に載る配線は測って
+       *   いない（そちらは `prompt.test.ts` の側）
+       */
+      it('実装の値（保護状態がいちばん堅い側でも節が移るか）と説明文の主張を、それぞれ現在の正しい値へ釘で留める', async () => {
+        const h = harness();
+        await seed(h);
+        const id = await outlineId(h, 'about-me', '## 事例');
+
+        // 保護状態をいちばん堅い側（`unknown`）へ固定する。`human` と同じく
+        // `denialMessage` へ倒れる分岐であり、直上の歯2本が触っていない側である。
+        h.stores.persona.protectionStatus = async () => ({ kind: 'unknown' as const });
+        h.setMemoryCause('distill');
+
+        // 正の対照（この走行で守りが生きていること）。ここが断られなければ、
+        // 下の「移せた」は「守りが無効だから移せた」の空振りである。
+        const denied = await h.call('memory_write', {
+          slug: 'about-me',
+          content: '# 私について\n書き換えたつもり',
+          summary: '書き換えたつもり',
+        });
+        expect(denied).toContain('断った');
+        expect((await h.stores.persona.read('about-me'))?.content).toBe(source);
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'about-me',
+          sections: [id],
+          toSlug: 'about-me-appendix',
+          summary: '移した',
+        });
+        const movePasses =
+          !reply.includes('断った') &&
+          ((await h.stores.persona.read('about-me-appendix'))?.content ?? '').includes(SECRET);
+
+        const tools = createCloneTools({
+          stores: createMemoryStores(),
+          emit: () => undefined,
+          memoryCause: () => 'clone',
+        });
+        const description =
+          tools.find((entry) => entry.name === 'memory_section_move')?.description ?? '';
+        const claimsMoveDenied = /distill[^。]*移せない|移せない[^。]*distill/.test(description);
+
+        // 実装側の釘: 保護状態を見て断る側へ戻ったら、ここが単独で落ちる。
+        expect(movePasses).toBe(true);
+        // 説明文側の釘: description が反転前の文言へ戻ったら、ここが単独で落ちる。
+        expect(claimsMoveDenied).toBe(false);
+        // 参考（独立の検出力は持たない。doc 参照）: 上の2本が守る限り必ず一致する。
+        expect(movePasses).toBe(!claimsMoveDenied);
+      });
     });
 
     /**
