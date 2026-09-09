@@ -36,6 +36,8 @@ import {
   describeDroppedTraceOrigin,
   describeDroppedTraceRetention,
   droppedTraceLedgerSince,
+  journalEntryShape,
+  noteDroppedRecord,
   RECENT_TRACE_LIMIT,
   recentDroppedTraces,
 } from './dropped-record.js';
@@ -106,6 +108,7 @@ import type {
   CommitmentOrigin,
   JobStatus,
   JournalEntry,
+  JournalEntryInput,
   MemoryDocumentMeta,
   MemoryProtectionStatus,
   PendingApproval,
@@ -116,7 +119,7 @@ import { describeRevisionStatus } from './revision.js';
 import { CANON_REVISION, canonDocument, canonNames, describeCloneRuntime } from './self.js';
 import type { CloneRuntimeFacts } from './self.js';
 import { EXCHANGE_WITH_VALUES, UnreadableCommitmentError } from './store.js';
-import type { Stores } from './store.js';
+import type { JournalStore, Stores } from './store.js';
 import { limitRecoveryOf, withRecoveryNote } from './usage-limits.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 import {
@@ -1253,6 +1256,142 @@ function text(body: string) {
 }
 
 /**
+ * 日誌への追記の失敗が、呼び出し元の道具にとって何を意味するかの3分類
+ * （Issue「日誌が書けないと跡が消える」）。
+ *
+ * **一律に「完了した」とは書けない。** この道具ファイルには
+ * `appendJournalOrThrow` を経由する呼び出しが16箇所あり、そのうち13箇所は
+ * 副作用 → 日誌の順で、日誌が落ちた時点で副作用は
+ * 既に済んでいる（`act-completed`）。だが `journal_write` /
+ * `daily_report_write` の2箇所は「日誌へ記録すること」そのものが道具の
+ * 行為であり、他に副作用が無い——ここで「完了した・やり直すな」と書くと
+ * 嘘になるうえ、**やり直すべきときにやり直すなと言う**ことになる
+ * （`act-not-performed`）。`memory_section_move` の move_in の1箇所は
+ * さらに別の形で、移し先への追記だけが済み、出どころは1文字も動いていない
+ * ——重複しているが失われてはいない、という半完了である
+ * （`act-partially-completed`）。
+ */
+type JournalFailureOutcome = 'act-completed' | 'act-not-performed' | 'act-partially-completed';
+
+/**
+ * `stores.journal.append` が失敗したとき、道具の応答として投げ直すエラー。
+ *
+ * **`message` がそのまま道具の応答本文になる**（SDK の `tool()` はハンドラの
+ * 例外を `{ isError: true, content: [{ type: 'text', text: error.message }] }`
+ * へ変換する。実測で確認済み）。だから断り書きはここへ書く——**先頭行だけで
+ * 「完了状態・未記録・やり直しの可否」の3つが分かる形にする**（依頼者が
+ * 要約に潰れた文脈で1行しか見ないかもしれないため。文章の途中に埋めない）。
+ *
+ * **`isError: true` を殺さないための道具である。** ガードで握り潰して
+ * `text()` の成功として返す形は明示的に却下されている——`isError: true` は
+ * 依頼者がその場で気づける唯一の合図であり、これを飲むと記録の穴が
+ * 静かになる。ここは飲まず、**跡を残してから投げ直す**。
+ */
+class JournalNotRecordedError extends Error {
+  constructor(
+    tool: CloneToolName,
+    entry: JournalEntryInput,
+    outcome: JournalFailureOutcome,
+    cause: unknown,
+  ) {
+    super(formatJournalNotRecordedMessage(tool, entry, outcome, cause));
+    this.name = 'JournalNotRecordedError';
+  }
+}
+
+function formatJournalNotRecordedMessage(
+  tool: CloneToolName,
+  entry: JournalEntryInput,
+  outcome: JournalFailureOutcome,
+  cause: unknown,
+): string {
+  // **秘密の扱い**: ここに載せてよいのは `tool`（コード中の固定リテラルの
+  // 道具名。CloneToolName で縛ってあるので自由文が紛れ込む経路が無い）・
+  // `journalEntryShape`（本文を出さない見分け）・元の例外の `message` だけ。
+  // 道具の引数（`script` / `content` / `body` 等）を `journalEntryShape` の
+  // 外から1文字も転記しないこと。
+  const shape = journalEntryShape(entry);
+  const reason = cause instanceof Error ? cause.message : String(cause);
+  switch (outcome) {
+    case 'act-completed':
+      return [
+        '⚠⚠ 完了済み・未記録・やり直し禁止',
+        `${tool} は完了した（副作用は済んでいる）が、日誌へ記録できなかった。`,
+        `記録できなかったエントリ: ${shape}`,
+        `理由: ${reason}`,
+        'やり直さないこと（同じ副作用がもう一度起きる）。journal_write で記録を書き直すこと。',
+      ].join('\n');
+    case 'act-not-performed':
+      return [
+        '⚠⚠ 未記録・行為は起きていない・やり直してよい',
+        `${tool} は日誌への記録そのものが行為であり、その記録に失敗した。副作用は1つも起きていない。`,
+        `記録できなかったエントリ: ${shape}`,
+        `理由: ${reason}`,
+        'やり直してよい（同じ内容でもう一度呼べる。重複は起きない）。',
+      ].join('\n');
+    case 'act-partially-completed':
+      return [
+        '⚠⚠ 一部完了・未記録・やり直し禁止',
+        `${tool} は移し先への追記まで済んだが、出どころからの切り取りは行っていない。`,
+        'いま同じ節が移し先と出どころの両方に在る——重複しているが、失われてはいない。',
+        'そのうえで日誌へ記録できなかった。',
+        `記録できなかったエントリ: ${shape}`,
+        `理由: ${reason}`,
+        'やり直さないこと（重複がもう1つ増える）。memory_outline で現状を読み直してから決めること。',
+      ].join('\n');
+  }
+}
+
+/**
+ * `stores.journal.append` を、失敗したときに跡を残してから投げ直す形で呼ぶ。
+ *
+ * **ガードで飲むのではなく、跡を残して投げ直す。** `journal.append` が
+ * 落ちると (1) 本来のエントリが残らない (2) `tool_use` のフォールバックも
+ * 出ない（`SELF_JOURNALING_CLONE_TOOLS` に載る道具は `clone.ts` の
+ * `#journalToolUse` が早期 return する） (3) `self_dropped` にも跡が出ない
+ * (4) 道具の応答は `isError: true` ＋ 生のエラー文言だけになる、という4つの
+ * 穴が同時に開く。**このうち (1)(2) はここでは直せない**（落ちている
+ * `journal.append` 自体が直っていないので、記録そのものを別の場所へ足す
+ * ことはできない——`tool_use` のフォールバックを鳴らさないのも、この道具が
+ * 自前で日誌へ書くと申告している以上、変えると二重の判断になる）。**ここが
+ * 埋めるのは (3) と (4) だけである** —— `noteDroppedRecord` で `self_dropped`
+ * の帳面に跡を残し、`isError: true` はそのまま、本文だけを断り書きへ
+ * 差し替える。
+ *
+ * **戻り値を返す。** `journal_write` が `entry.id` を成功応答に使うため、
+ * 失敗しなかったときは `journal.append` の戻り値をそのまま返す。
+ *
+ * **道具名を断り書きへ入れる（差し戻し対応）。** `journalEntryShape` は型
+ * ごとに出すものが違い、`decision` 型は `decision.chars=N grounds.chars=N`
+ * だけで住所を1文字も持たない——`profile_write` / `manager_start` /
+ * `journal_write` / `schedule_create` 等、`decision` を書く道具が失敗すると、
+ * 依頼者は「`decision` 型の何かが記録できなかった」としか分からず、
+ * 書き直す先を選べない。**道具名は `CloneToolName` で縛った固定リテラルで、
+ * 呼び出し元のコードそのものが決める値**なので、`journalEntryShape` の外へ
+ * 秘密が漏れる経路にはならない（判定基準は `dropped-record.ts` と同じ
+ * 「値を誰が決めるか」）。
+ *
+ * @param tool 呼び出し元の道具名。文字列の直書きにしないこと——`CloneToolName`
+ *   で縛ることで、名簿に無い名前を書けば `typecheck` が落ちる。
+ * @param outcome この日誌エントリが表す行為が、道具の呼び出し全体にとって
+ *   何を意味するか（{@link JournalFailureOutcome}）。副作用がどこまで
+ *   進んでいるかは呼び出し元にしか分からないので、呼び出し元が渡す。
+ */
+async function appendJournalOrThrow(
+  tool: CloneToolName,
+  journal: JournalStore,
+  entry: JournalEntryInput,
+  outcome: JournalFailureOutcome,
+): Promise<JournalEntry> {
+  try {
+    return await journal.append(entry);
+  } catch (error) {
+    noteDroppedRecord('日誌', journalEntryShape(entry), error);
+    throw new JournalNotRecordedError(tool, entry, outcome, error);
+  }
+}
+
+/**
  * `ManagerDenial.actor` を一覧の1件に添える短い印にする。
  *
  * **3値が字面の上でも3値のまま出ること。** `undefined`（層が取れていない。
@@ -2108,15 +2247,20 @@ export function createCloneTools(context: ToolContext) {
         ]);
         const written = await stores.persona.write(slug, content);
         const memoryAfter = await stores.persona.documents();
-        await stores.journal.append({
-          type: 'memory_update',
-          slug,
-          cause,
-          action: 'write',
-          bytesBefore: before === null ? 0 : Buffer.byteLength(before.content, 'utf8'),
-          bytesAfter: Buffer.byteLength(written.content, 'utf8'),
-          summary,
-        });
+        await appendJournalOrThrow(
+          'memory_write',
+          stores.journal,
+          {
+            type: 'memory_update',
+            slug,
+            cause,
+            action: 'write',
+            bytesBefore: before === null ? 0 : Buffer.byteLength(before.content, 'utf8'),
+            bytesAfter: Buffer.byteLength(written.content, 'utf8'),
+            summary,
+          },
+          'act-completed',
+        );
         const diff = describeMemoryWriteDiff(
           before === null ? null : before.content,
           written.content,
@@ -2159,15 +2303,20 @@ export function createCloneTools(context: ToolContext) {
         ]);
         const written = await stores.persona.append(slug, content);
         const memoryAfter = await stores.persona.documents();
-        await stores.journal.append({
-          type: 'memory_update',
-          slug,
-          cause: memoryCause(),
-          action: 'append',
-          bytesBefore: before === null ? 0 : Buffer.byteLength(before.content, 'utf8'),
-          bytesAfter: Buffer.byteLength(written.content, 'utf8'),
-          summary,
-        });
+        await appendJournalOrThrow(
+          'memory_append',
+          stores.journal,
+          {
+            type: 'memory_update',
+            slug,
+            cause: memoryCause(),
+            action: 'append',
+            bytesBefore: before === null ? 0 : Buffer.byteLength(before.content, 'utf8'),
+            bytesAfter: Buffer.byteLength(written.content, 'utf8'),
+            summary,
+          },
+          'act-completed',
+        );
         const diff = describeMemoryWriteDiff(
           before === null ? null : before.content,
           written.content,
@@ -2241,18 +2390,23 @@ export function createCloneTools(context: ToolContext) {
         const denial = await guardFullReplace(stores, slug, cause, '削除');
         if (denial !== null) return text(denial);
         await stores.persona.remove(slug);
-        await stores.journal.append({
-          type: 'memory_update',
-          slug,
-          cause,
-          action: 'remove',
-          // バイト数は機械可読な面（下の bytesBefore/bytesAfter）に出す。
-          // summary の「（削除直前 N 文字）」は人が読む文字数で、別の軸として残す
-          // （両方を消さない——`action` の doc と同じ理由）。
-          bytesBefore: Buffer.byteLength(existing.content, 'utf8'),
-          bytesAfter: 0,
-          summary: `${summary}（削除直前 ${existing.content.length} 文字）`,
-        });
+        await appendJournalOrThrow(
+          'memory_delete',
+          stores.journal,
+          {
+            type: 'memory_update',
+            slug,
+            cause,
+            action: 'remove',
+            // バイト数は機械可読な面（下の bytesBefore/bytesAfter）に出す。
+            // summary の「（削除直前 N 文字）」は人が読む文字数で、別の軸として残す
+            // （両方を消さない——`action` の doc と同じ理由）。
+            bytesBefore: Buffer.byteLength(existing.content, 'utf8'),
+            bytesAfter: 0,
+            summary: `${summary}（削除直前 ${existing.content.length} 文字）`,
+          },
+          'act-completed',
+        );
         return text(`記憶 ${slug} を消した（削除直前 ${existing.content.length} 文字）。`);
       },
     ),
@@ -2409,15 +2563,20 @@ export function createCloneTools(context: ToolContext) {
         const memoryAfter = await stores.persona.documents();
         const nextKind = resolveMemoryDocKind(parseMemoryFrontmatter(written.content));
 
-        await stores.journal.append({
-          type: 'memory_update',
-          slug,
-          cause,
-          action: 'describe',
-          bytesBefore: Buffer.byteLength(existing.content, 'utf8'),
-          bytesAfter: Buffer.byteLength(written.content, 'utf8'),
-          summary,
-        });
+        await appendJournalOrThrow(
+          'memory_frontmatter_set',
+          stores.journal,
+          {
+            type: 'memory_update',
+            slug,
+            cause,
+            action: 'describe',
+            bytesBefore: Buffer.byteLength(existing.content, 'utf8'),
+            bytesAfter: Buffer.byteLength(written.content, 'utf8'),
+            summary,
+          },
+          'act-completed',
+        );
 
         const diff = describeMemoryWriteDiff(existing.content, written.content);
         const kindLabel = (kind: 'premise' | 'fact'): string =>
@@ -2945,15 +3104,20 @@ export function createCloneTools(context: ToolContext) {
           stores.persona.documents(),
         ]);
         const toWritten = await stores.persona.append(toSlug, cut);
-        await stores.journal.append({
-          type: 'memory_update',
-          slug: toSlug,
-          cause,
-          action: 'move_in',
-          bytesBefore: toBefore === null ? 0 : Buffer.byteLength(toBefore.content, 'utf8'),
-          bytesAfter: Buffer.byteLength(toWritten.content, 'utf8'),
-          summary,
-        });
+        await appendJournalOrThrow(
+          'memory_section_move',
+          stores.journal,
+          {
+            type: 'memory_update',
+            slug: toSlug,
+            cause,
+            action: 'move_in',
+            bytesBefore: toBefore === null ? 0 : Buffer.byteLength(toBefore.content, 'utf8'),
+            bytesAfter: Buffer.byteLength(toWritten.content, 'utf8'),
+            summary,
+          },
+          'act-partially-completed',
+        );
 
         let fromWritten;
         try {
@@ -2970,15 +3134,20 @@ export function createCloneTools(context: ToolContext) {
               '同じ操作をやり直すか、重複したままにするかを決めること。',
           );
         }
-        await stores.journal.append({
-          type: 'memory_update',
-          slug: fromSlug,
-          cause,
-          action: 'move_out',
-          bytesBefore: Buffer.byteLength(existing.content, 'utf8'),
-          bytesAfter: Buffer.byteLength(fromWritten.content, 'utf8'),
-          summary,
-        });
+        await appendJournalOrThrow(
+          'memory_section_move',
+          stores.journal,
+          {
+            type: 'memory_update',
+            slug: fromSlug,
+            cause,
+            action: 'move_out',
+            bytesBefore: Buffer.byteLength(existing.content, 'utf8'),
+            bytesAfter: Buffer.byteLength(fromWritten.content, 'utf8'),
+            summary,
+          },
+          'act-completed',
+        );
 
         // 両方の書き込みが終わった後の、記憶全体のスナップショット。
         const memoryAfter = await stores.persona.documents();
@@ -3053,7 +3222,12 @@ export function createCloneTools(context: ToolContext) {
         grounds: z.string().describe('記憶のどこに根拠があったか。無いなら「根拠なし」と書く'),
       },
       async ({ decision, grounds }) => {
-        const entry = await stores.journal.append({ type: 'decision', decision, grounds });
+        const entry = await appendJournalOrThrow(
+          'journal_write',
+          stores.journal,
+          { type: 'decision', decision, grounds },
+          'act-not-performed',
+        );
         return text(`日誌に記録した（${entry.id}）。`);
       },
     ),
@@ -3290,11 +3464,16 @@ export function createCloneTools(context: ToolContext) {
           ...(requestId === undefined ? {} : { requestId }),
         };
         await stores.jobs.putApproval(approval);
-        await stores.journal.append({
-          type: 'escalation',
-          question,
-          approvalId: approval.id,
-        });
+        await appendJournalOrThrow(
+          'ask_human',
+          stores.journal,
+          {
+            type: 'escalation',
+            question,
+            approvalId: approval.id,
+          },
+          'act-completed',
+        );
         context.emit({ type: 'ask_human', approvalId: approval.id, question });
         return text(`承認待ちキューに積んだ（${approval.id}）。回答は後から届く。`);
       },
@@ -3402,7 +3581,12 @@ export function createCloneTools(context: ToolContext) {
         // 形の検査だけでは通ってしまうので localDayRange に確かめさせる。
         const target =
           date !== undefined && localDayRange(date) !== null ? date : localDate(new Date());
-        await stores.journal.append({ type: 'daily_report', date: target, body });
+        await appendJournalOrThrow(
+          'daily_report_write',
+          stores.journal,
+          { type: 'daily_report', date: target, body },
+          'act-not-performed',
+        );
         return text(`${target} の日報を残した。`);
       },
     ),
@@ -3642,13 +3826,18 @@ export function createCloneTools(context: ToolContext) {
           ...(existing?.pendingRun === undefined ? {} : { pendingRun: existing.pendingRun }),
         };
         await stores.schedules.put(plan);
-        await stores.journal.append({
-          type: 'decision',
-          decision:
-            `${existing ? '定期の依頼を直した' : '定期の依頼を仕込んだ'}: ` +
-            `${plan.kind}（${describeScheduleSpec(plan.spec)}）: ${request}`,
-          grounds: '継続する依頼を時間起点として持つ判断',
-        });
+        await appendJournalOrThrow(
+          'schedule_create',
+          stores.journal,
+          {
+            type: 'decision',
+            decision:
+              `${existing ? '定期の依頼を直した' : '定期の依頼を仕込んだ'}: ` +
+              `${plan.kind}（${describeScheduleSpec(plan.spec)}）: ${request}`,
+            grounds: '継続する依頼を時間起点として持つ判断',
+          },
+          'act-completed',
+        );
         return text(
           `${plan.kind} を ${describeScheduleSpec(plan.spec)} で仕込んだ。時刻が来たら依頼の本文とともに届く。`,
         );
@@ -3663,11 +3852,16 @@ export function createCloneTools(context: ToolContext) {
         const existing = await stores.schedules.get(kind);
         if (!existing) return text(`継続中の依頼 ${kind} は無い。`);
         await stores.schedules.remove(kind);
-        await stores.journal.append({
-          type: 'decision',
-          decision: `定期の依頼を外した: ${kind}: ${existing.request}`,
-          grounds: 'この依頼はもう要らないという判断',
-        });
+        await appendJournalOrThrow(
+          'schedule_remove',
+          stores.journal,
+          {
+            type: 'decision',
+            decision: `定期の依頼を外した: ${kind}: ${existing.request}`,
+            grounds: 'この依頼はもう要らないという判断',
+          },
+          'act-completed',
+        );
         return text(`${kind} を外した。`);
       },
     ),
@@ -4126,11 +4320,16 @@ export function createCloneTools(context: ToolContext) {
         // **自分で決めて引き受けたことは日誌に残す。** 聞かずに動いた判断が後から
         // 否定できることが最終承認の実体である（north_star）。自動で開いたものは
         // 起点ごとに既に日誌へ載っているので、ここで残すのは `self` のぶんだけ。
-        await stores.journal.append({
-          type: 'decision',
-          decision: `引き受けた仕事として台帳に載せた（${entry.id}）: ${body}`,
-          grounds: '手を付ける前に忘れないため（記憶は時計を持たない）',
-        });
+        await appendJournalOrThrow(
+          'commitment_open',
+          stores.journal,
+          {
+            type: 'decision',
+            decision: `引き受けた仕事として台帳に載せた（${entry.id}）: ${body}`,
+            grounds: '手を付ける前に忘れないため（記憶は時計を持たない）',
+          },
+          'act-completed',
+        );
         return text(`台帳に載せた（${entry.id}）。片付いたら commitment_close で閉じること。`);
       },
     ),
@@ -4183,11 +4382,16 @@ export function createCloneTools(context: ToolContext) {
         // 読めない（日誌側の記録が唯一の手掛かりになる）」であり、この
         // append を落とすと、その「唯一の手掛かり」に閉じた理由が最初から
         // 書かれていないことになる（issue #585）。
-        await stores.journal.append({
-          type: 'decision',
-          decision: `引き受けた仕事を自分で片付けた（${id}）: ${reason}`,
-          grounds: 'クローン自身が commitment_close で閉じた（人間はこれを読んで後から否定する）',
-        });
+        await appendJournalOrThrow(
+          'commitment_close',
+          stores.journal,
+          {
+            type: 'decision',
+            decision: `引き受けた仕事を自分で片付けた（${id}）: ${reason}`,
+            grounds: 'クローン自身が commitment_close で閉じた（人間はこれを読んで後から否定する）',
+          },
+          'act-completed',
+        );
         return text(`${id} を片付けた。`);
       },
     ),
@@ -4245,12 +4449,17 @@ export function createCloneTools(context: ToolContext) {
         // 日誌から読み戻せることがその条件そのものである。**ここを落とすと、
         // `PATCH /commitments/:id` の doc が断っている「静かに書き換わる」に
         // なる。**
-        await stores.journal.append({
-          type: 'decision',
-          decision:
-            `引き受けた仕事の本文を直した（${id}）: ` + `編集前「${before}」→ 編集後「${body}」`,
-          grounds: '自分で載せた行の本文を自分で直した（原文は日誌に残す）',
-        });
+        await appendJournalOrThrow(
+          'commitment_edit',
+          stores.journal,
+          {
+            type: 'decision',
+            decision:
+              `引き受けた仕事の本文を直した（${id}）: ` + `編集前「${before}」→ 編集後「${body}」`,
+            grounds: '自分で載せた行の本文を自分で直した（原文は日誌に残す）',
+          },
+          'act-completed',
+        );
         return text(`${id} の本文を直した（元の本文は日誌に残してある）。`);
       },
     ),
@@ -4448,11 +4657,16 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        await stores.journal.append({
-          type: 'decision',
-          decision: `実行環境プロファイルを更新した: ${summary}`,
-          grounds: '人間から実行環境そのものを渡された（値は記録しない）',
-        });
+        await appendJournalOrThrow(
+          'profile_write',
+          stores.journal,
+          {
+            type: 'decision',
+            decision: `実行環境プロファイルを更新した: ${summary}`,
+            grounds: '人間から実行環境そのものを渡された（値は記録しない）',
+          },
+          'act-completed',
+        );
 
         const failed = result.runners.filter((runner) => !runner.ok);
         const delivered = result.runners.filter((runner) => runner.ok).map((r) => r.runnerId);
@@ -4671,13 +4885,18 @@ export function createCloneTools(context: ToolContext) {
           ...(cwd === undefined ? {} : { cwd }),
           ...(runnerId === undefined ? {} : { runnerId }),
         });
-        await stores.journal.append({
-          type: 'decision',
-          decision:
-            `マネージャー ${started.managerId} を起こした（cwd: ${started.cwd}` +
-            `${runnerId === undefined ? '' : `, 指名: runnerId=${runnerId}`}）: ${request}`,
-          grounds: '委譲の判断',
-        });
+        await appendJournalOrThrow(
+          'manager_start',
+          stores.journal,
+          {
+            type: 'decision',
+            decision:
+              `マネージャー ${started.managerId} を起こした（cwd: ${started.cwd}` +
+              `${runnerId === undefined ? '' : `, 指名: runnerId=${runnerId}`}）: ${request}`,
+            grounds: '委譲の判断',
+          },
+          'act-completed',
+        );
         return text(
           `マネージャー ${started.managerId} を起こした（cwd: ${started.cwd}、` +
             `runner: ${started.runnerId ?? '未記録'}）。` +
