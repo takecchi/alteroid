@@ -717,6 +717,60 @@ export const SUBAGENT_WAKEUP_LIMIT = 2;
  */
 const SUBAGENT_WAKEUP_TRACKING_LIMIT = 500;
 
+/**
+ * `BackgroundTaskSummary.status` のうち「**もう終わっている**」を表す語。
+ *
+ * **語彙の出所は SDK の型である。** `BackgroundTaskSummary.status` そのものは
+ * `status: string`（自由文字列）で語彙を名乗っていないが、同じ `TaskState` の
+ * status を運ぶ `SDKTaskUpdatedMessage.patch.status` は語彙を型で持っている
+ * （逐語。`patch` の doc が「Wire-safe subset of TaskState fields that changed」と
+ * 言っているとおり、こちらが `TaskState` 側の語彙である）:
+ *
+ * [sdk-verbatim SDKTaskUpdatedMessage.patch.status]
+ * > status?: 'pending' | 'running' | 'completed' | 'failed' | 'killed' | 'paused';
+ *
+ * ⟹ 6語を「終わった」（ここ）と「走っている」（`LIVE_BACKGROUND_TASK_STATUSES`）へ
+ * 割る。**語彙が増えたら `runner-subagent-stop.test.ts` の型の歯が `pnpm typecheck`
+ * を落とす** —— 逐語の印（上）は文言が変わったときにしか落ちないので、語彙が
+ * *増えた* ときに落ちる口を別に置いてある。
+ */
+const SETTLED_BACKGROUND_TASK_STATUSES: ReadonlySet<string> = new Set([
+  'completed',
+  'failed',
+  'killed',
+]);
+
+/**
+ * `BackgroundTaskSummary.status` のうち「**まだ終わっていない**」を表す語
+ * （出所は `SETTLED_BACKGROUND_TASK_STATUSES` の doc）。
+ *
+ * `paused` をこちら側へ置いてあるのは意図である —— 止まっているだけで、
+ * 畳めば置き去りになるほうだからである。
+ */
+const LIVE_BACKGROUND_TASK_STATUSES: ReadonlySet<string> = new Set([
+  'pending',
+  'running',
+  'paused',
+]);
+
+/**
+ * 背景タスク1件の `status` を「走っている／終わった／**分からない**」の3つへ
+ * 言い分ける（#570 の追跡）。
+ *
+ * **3つ目を潰さないことが本題である。** `BackgroundTaskSummary.status` は
+ * `string` なので、SDK が語彙を足した・改名した回にここへ落ちる。そのとき
+ * `'settled'` へ倒すと**起こし直しが黙って効かなくなる**（能力が消える）ので、
+ * `'unknown'` は呼び出し側で「走っている」と同じ扱いにし、**分からなかったこと
+ * 自体を `note` に書く**。この repo の門が「落ちた（exit 1）」と「走っていない
+ * （exit 3）」を別の数字で出すのと同じ作法である。
+ */
+function classifyBackgroundTaskStatus(status: unknown): 'live' | 'settled' | 'unknown' {
+  if (typeof status !== 'string') return 'unknown';
+  if (SETTLED_BACKGROUND_TASK_STATUSES.has(status)) return 'settled';
+  if (LIVE_BACKGROUND_TASK_STATUSES.has(status)) return 'live';
+  return 'unknown';
+}
+
 /** 返事を待って止まっている1件（許可確認 or 質問）。 */
 interface PendingRequest {
   id: string;
@@ -987,6 +1041,14 @@ class RunnerSession {
    * そのまま雑音になって読まれなくなる。
    */
   #ownerLookupFailureNoted = false;
+  /**
+   * 「当人が起こした背景処理は在ったが、**全部もう終わっていた**」診断を、この
+   * セッションで既に出したか（#570 の追跡）。
+   *
+   * `#ownerLookupFailureNoted` と同じ形・同じ理由で**1セッションに1回だけ**
+   * 出す。毎回出すと、背景処理を使う作業者が畳むたびに1行増えて雑音になる。
+   */
+  #settledOnlyNoted = false;
   /**
    * 作業者の `agent_id` → **その作業者を、自分で起こした背景処理が残った
    * まま畳もうとした回に対して起こし直した回数**（#570 の追跡。
@@ -3021,8 +3083,33 @@ class RunnerSession {
    * 無音）である。**ここを広げると、終わった作業者や兄弟だけの作業者まで
    * 無駄に起こすことになる。**
    *
-   * **`mine.length > 0` のとき（当人が自分で起こした背景処理が残っている）
-   * は、`#subagentWakeups`（`agent_id` → 起こし直した回数）を見て2つに割る:**
+   * ## ⚠️ `mine` は「当人が起こしたもの」であって「まだ走っているもの」ではない
+   *
+   * **ここが #570 の追跡で直した穴である。** 上の絞り込み（所有者で絞る）は
+   * 入っていたが、**`status` を1度も読んでいなかった。** ⟹ SDK が畳み終えた
+   * 背景処理を `background_tasks` に載せてくる回には、**もう終わっている門の
+   * 完了を待たせる形で作業者を起こし直し**、作業者は同じ結論（もう待つものは
+   * 無い）へ着いて畳み、起こし直しの上限に達して委譲がそこで止まる。
+   *
+   * **計測（`status` を6語で振った実測。2026-09-09）:** `completed` /
+   * `failed` / `killed` / `done` / `succeeded` / `running` の**どれを渡しても**
+   * 在庫は `1件`、起こし直しは `true` だった —— 判定は `status` を見ていない。
+   *
+   * ⟹ **`classifyBackgroundTaskStatus` で3つへ言い分ける**（走っている／
+   * 終わった／**分からない**）。`'unknown'` は「走っている」側へ倒し、分から
+   * なかったこと自体を `note` に書く（倒す先を間違えると起こし直しが黙って
+   * 効かなくなる）。**全部が「終わった」側だったときは起こし直さないが、
+   * 黙りもしない** —— `#noteSettledOnly` が1セッションに1回だけ日誌へ出す。
+   *
+   * **⚠️ この直しが説明しないもの（実測と仮定を混ぜないため明記する）。**
+   * 依頼の発端となった観測では、残っていた背景処理の `status` は `running`
+   * だった。⟹ **`status` が `running` のまま腐って届く経路が在るなら、この
+   * 直しはそれを直さない。** ここで直したのは「SDK が『終わった』と言って
+   * いるのに数えていた」ほうだけである。
+   *
+   * **`remaining.length > 0` のとき（当人が自分で起こした背景処理が、まだ
+   * 終わっていない形で残っている）は、`#subagentWakeups`（`agent_id` →
+   * 起こし直した回数）を見て2つに割る:**
    *
    * 1. **上限（`SUBAGENT_WAKEUP_LIMIT`）未満 —— 起こし直す。** カウントを
    *    +1 したうえで `note` を出し、`hookSpecificOutput.additionalContext`
@@ -3095,8 +3182,40 @@ class RunnerSession {
       // `agentId` が文字列であることを含意するので、実際にはここへは来ない。
       if (agentId === undefined) return { continue: true };
 
-      const taskLines: string[] = [];
+      // **`status` で言い分ける。** ここが無かったのが直した穴である ——
+      // `mine` は「**当人が起こしたもの**」であって「**まだ走っているもの**」では
+      // ない。判定が `status` を1度も読んでいなかったので、配列に畳み終えた分が
+      // 載る回には、**もう終わっている背景処理の完了を待たせる形で作業者を
+      // 起こし直し**、進まないまま上限へ達して委譲がそこで止まっていた。
+      //
+      // **`'unknown'` は「走っている」側へ倒す**（`classifyBackgroundTaskStatus`
+      // の doc）。倒す先を間違えると起こし直しが黙って効かなくなるので、
+      // 分からなかったことは下の `note` に書く。
+      const remaining: unknown[] = [];
+      const settled: unknown[] = [];
+      let unknownStatusCount = 0;
       for (const task of mine) {
+        const kind = classifyBackgroundTaskStatus((task as { status?: unknown }).status);
+        if (kind === 'settled') {
+          settled.push(task);
+          continue;
+        }
+        remaining.push(task);
+        if (kind === 'unknown') unknownStatusCount += 1;
+      }
+
+      // **当人のものが全部終わっていた —— 起こし直さない。**
+      // `mine.length === 0` と同じ「触らない」側だが、**同じ顔にはしない** ——
+      // SDK 自身が `background_tasks` を「in-flight background work」と言って
+      // いる以上、畳み終えた分がここへ載るのは計器側の話である。1セッションに
+      // 1回だけ日誌へ出す（`#noteSettledOnly`）。
+      if (remaining.length === 0) {
+        this.#noteSettledOnly(settled);
+        return { continue: true };
+      }
+
+      const taskLines: string[] = [];
+      for (const task of remaining) {
         const t = task as {
           type?: unknown;
           status?: unknown;
@@ -3120,6 +3239,19 @@ class RunnerSession {
         '⚠️ この行が出ないことは「空転が無かった」を意味しない — ' +
         'このフックは、作業者が畳んだ瞬間に親のターンが開いていたときにしか発火しない（#570）。';
 
+      // **数に入れなかったものを黙って落とさない**（AGENTS.md「静かに失敗する道具」）。
+      // 「残っている」の件数だけを出すと、`status` で言い分けたこと自体が消える。
+      const settledText =
+        settled.length === 0
+          ? ''
+          : `（当人が起こしたもののうち ${settled.length}件 は status が「終わった」側だったので数に入れていない）`;
+      const unknownText =
+        unknownStatusCount === 0
+          ? ''
+          : `⚠️ 上のうち ${unknownStatusCount}件 は status が既知の語彙のどちらでもない —— ` +
+            '「走っている」へ倒して数えた（分からないものを「終わった」へ倒さない）。' +
+            'この行が出たら計器のほうを疑う — SDK が status の語彙を変えた見込みが高い。';
+
       const wakeupCount = this.#subagentWakeups.get(agentId) ?? 0;
 
       if (wakeupCount < SUBAGENT_WAKEUP_LIMIT) {
@@ -3134,10 +3266,12 @@ class RunnerSession {
 
         const noteLines = [
           `SubagentStop（作業者: ${hook.agent_type ?? '(不明)'} / agent_id=${agentId}）: ` +
-            `**この作業者が自分で起こした背景処理が ${mine.length}件 残ったまま畳もうとした**` +
+            `**この作業者が自分で起こした背景処理が ${remaining.length}件 残ったまま畳もうとした**` +
+            settledText +
             `（この瞬間のセッション全体の在庫=${tasks.length}件、session_crons=${crons.length}件）。` +
             `**起こし直した**（${newCount}回目 / 上限 ${SUBAGENT_WAKEUP_LIMIT}）。${stopHookActiveText}`,
           ...taskLines,
+          ...(unknownText === '' ? [] : [unknownText]),
           disclaimer,
         ];
         this.#emit({
@@ -3150,7 +3284,7 @@ class RunnerSession {
             // 作る」。`hook.agent_type` は SDK 側の事情で無いことがある —
             // `runner-protocol.ts` の `note.stall.agentType` の doc）。
             ...(hook.agent_type === undefined ? {} : { agentType: hook.agent_type }),
-            ownedTaskCount: mine.length,
+            ownedTaskCount: remaining.length,
             sessionTaskCount: tasks.length,
             wakeupCount: newCount,
             outcome: 'woken',
@@ -3158,9 +3292,11 @@ class RunnerSession {
         });
 
         const contextLines = [
-          `あなたが自分で起こした背景処理が ${mine.length}件、残ったまま畳もうとした ` +
+          `あなたが自分で起こした背景処理が ${remaining.length}件、残ったまま畳もうとした ` +
+            settledText +
             `（この瞬間のセッション全体の在庫=${tasks.length}件、session_crons=${crons.length}件）。`,
           ...taskLines,
+          ...(unknownText === '' ? [] : [unknownText]),
           'この完了通知は**親のセッション**（マネージャー）へ届く。**あなたは自動では再開しない** — ' +
             'このまま黙って畳むと、委譲がここで止まる。',
           'どうすればよいか: 前景で待ち直す（出力ファイルの行数が増えるかを見る、等）。' +
@@ -3181,11 +3317,13 @@ class RunnerSession {
       // `manager.ts` の `case 'note'` が日誌とクローンの受信箱の両方へ上げる。
       const noteLines = [
         `SubagentStop（作業者: ${hook.agent_type ?? '(不明)'} / agent_id=${agentId}）: ` +
-          `**この作業者が自分で起こした背景処理が ${mine.length}件 残ったまま畳もうとした**` +
+          `**この作業者が自分で起こした背景処理が ${remaining.length}件 残ったまま畳もうとした**` +
+          settledText +
           `（この瞬間のセッション全体の在庫=${tasks.length}件、session_crons=${crons.length}件）。` +
           `**上限（${SUBAGENT_WAKEUP_LIMIT}回）に達したため、起こし直さなかった**` +
           `（既に ${wakeupCount}回 起こし直し済み）。${stopHookActiveText}`,
         ...taskLines,
+        ...(unknownText === '' ? [] : [unknownText]),
         disclaimer,
       ];
       this.#emit({
@@ -3197,7 +3335,7 @@ class RunnerSession {
           agentId,
           // 同上（「取れたときだけ載せる」）。
           ...(hook.agent_type === undefined ? {} : { agentType: hook.agent_type }),
-          ownedTaskCount: mine.length,
+          ownedTaskCount: remaining.length,
           sessionTaskCount: tasks.length,
           wakeupCount,
           outcome: 'limit_reached',
@@ -3237,6 +3375,54 @@ class RunnerSession {
       text.slice(0, SUBAGENT_STOP_NOTE_TEXT_LIMIT) +
       `…（上限 ${SUBAGENT_STOP_NOTE_TEXT_LIMIT} 文字で切った）`
     );
+  }
+
+  /**
+   * 「当人が起こした背景処理は在ったが、`status` は全部『終わった』側だった」
+   * ことを、1セッションに1回だけ日誌へ出す（#570 の追跡）。**観測専用。**
+   *
+   * **これが要る理由 —— この枝は「起こし直さない」側なので、黙ると計器が消える。**
+   * SDK 自身が `background_tasks` を次のように名乗っている（逐語）:
+   *
+   * [sdk-verbatim SubagentStopHookInput.background_tasks]
+   * > In-flight background work (running/pending + backgrounded) registered in this session. Lets hooks distinguish "session is done" from "session is paused waiting for background work to wake it". Empty array when nothing is in flight.
+   *
+   * ⟹ **畳み終えた分がここへ載るのは契約どおりではない。** だから起こし直しを
+   * やめるだけにして黙ると、「作業者はきれいに畳んだ」（`mine.length === 0`）と
+   * 日誌の上で同じ顔になる。その2つを分けるためだけの1行である。
+   *
+   * **`stall` は載せない。** `runner-protocol.ts` の `note.stall.outcome` は
+   * `'woken' | 'limit_reached'` の2語で、ここは**どちらでもない** —— 欄を
+   * 増やすとデーモンと runner が別々にデプロイされる窓で古い側が黙って落とすので、
+   * `#noteOwnerLookupFailure` と同じく `stall` 無しの素の `note` にする
+   * （`manager.ts` の `case 'note'` は `stall === undefined` を日誌の
+   * `exchange` として通す）。
+   */
+  #noteSettledOnly(settled: readonly unknown[]): void {
+    if (this.#settledOnlyNoted) return;
+    this.#settledOnlyNoted = true;
+
+    const listed = settled
+      .map((task) => {
+        const t = task as { type?: unknown; status?: unknown };
+        const type = typeof t.type === 'string' ? t.type : '(不明)';
+        const status = typeof t.status === 'string' ? t.status : '(不明)';
+        return `type=${type} status=${status}`;
+      })
+      .join(' / ');
+
+    this.#emit({
+      type: 'note',
+      managerId: this.#id,
+      text: this.#truncateSubagentStopText(
+        `SubagentStop: 当人が起こした背景処理が ${settled.length}件 配列に載っていたが、` +
+          `**status は全部「終わった」側だった**（${listed}）。起こし直していない。` +
+          'SDK は `background_tasks` を「in-flight」と名乗っているので、この行が出たら' +
+          '計器のほうを疑う — 畳み終えた分が配列に残っているか、status の語彙が変わった' +
+          'かである。⟹ この Issue（#570）へ、この行と SDK の版を添えて報告してほしい。' +
+          '（雑音にしないため、この診断はセッションに1回だけ出す。）',
+      ),
+    });
   }
 
   /**
