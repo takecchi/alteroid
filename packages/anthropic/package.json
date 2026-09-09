@@ -1,0 +1,50 @@
+{
+  "name": "@mnemora/anthropic",
+  "version": "0.1.1",
+  "type": "module",
+  "description": "LLMProvider の Anthropic 実装。zod スキーマを Anthropic のネイティブ構造化出力（output_config.format: json_schema）へ翻訳する。EmbeddingProvider は実装しない（Anthropic は埋め込み API を提供していないため。docs/architecture.md §4）。",
+  "license": "MIT",
+  "homepage": "https://github.com/takecchi/mnemora/tree/main/packages/anthropic#readme",
+  "bugs": {
+    "url": "https://github.com/takecchi/mnemora/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/takecchi/mnemora.git",
+    "directory": "packages/anthropic"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "pnpm run build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@mnemora/core": "workspace:^",
+    "@anthropic-ai/sdk": "0.124.0",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@mnemora/openai": "workspace:^",
+    "typescript": "5.9.3",
+    "vitest": "5.0.0"
+  }
+}

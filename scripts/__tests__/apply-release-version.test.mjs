@@ -70,16 +70,20 @@ function versionsIn(dir) {
 }
 
 describe("apply-release-version.mjs（ADR 0070）", () => {
-  it("4パッケージの version を tag の版へ書き換える", () => {
+  it("publish 対象すべての version を tag の版へ書き換える", () => {
     sandbox = makeSandbox();
     const before = versionsIn(sandbox);
 
     const r = run(sandbox, { RELEASE_TAG: "v9.9.9", GITHUB_PRERELEASE: "false" });
 
     expect(r.status, `EXIT=0 を期待した。stderr:\n${r.stderr}`).toBe(0);
-    expect(versionsIn(sandbox)).toEqual(["9.9.9", "9.9.9", "9.9.9", "9.9.9"]);
+    // ⚠ 期待値の長さを直書きしない——publish 対象が増えたときに、この歯が
+    // 「4つしか見ていない」まま緑で通り続けるのを防ぐ（`publish-targets.test.mjs` が
+    // 順序の歯について述べているのと同じ理由。現物から導く）。
+    const allNine = PUBLISH_TARGETS.map(() => "9.9.9");
+    expect(versionsIn(sandbox)).toEqual(allNine);
     // 「元から 9.9.9 だったから通った」ではないことを確かめる
-    expect(before).not.toEqual(["9.9.9", "9.9.9", "9.9.9", "9.9.9"]);
+    expect(before).not.toEqual(allNine);
   });
 
   it("$GITHUB_OUTPUT へ version と npm_tag を書く", () => {

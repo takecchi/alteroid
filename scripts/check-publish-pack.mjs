@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * publish 対象4パッケージ（`@mnemora/core` / `@mnemora/testkit` / `@mnemora/postgres` /
- * `@mnemora/openai`）を実際に `pnpm pack` し、**tarball の中身**を検査する門。
+ * publish 対象パッケージ（`./publish-targets.mjs` の `PUBLISH_TARGETS`。現在は
+ * `@mnemora/core` / `@mnemora/testkit` / `@mnemora/openai` / `@mnemora/anthropic` /
+ * `@mnemora/postgres` の5つ）を実際に `pnpm pack` し、**tarball の中身**を検査する門。
  *
  * **なぜ tarball の中身を見るか（作業ツリーの package.json を見るだけでは足りない理由）**
  *
@@ -27,7 +28,7 @@
  * **対象は固定リストである（動的に発見しない）。** `scripts/run-db-tests.mjs` は
  * `test:db` script の有無で対象を発見しているが、ここでは同じ手が使えない——
  * publish 対象と非対象（ルートの `mnemora` / `@mnemora/example-chat`）を分ける
- * 機械的な目印が今のところ無い。**ADR 0066 で対象4つの `private: true` が外れ、
+ * 機械的な目印が今のところ無い。**ADR 0066 で publish 対象の `private: true` が外れ、
  * 非対象2つには残った**ため「`private` の有無」が目印に見えるが、それは採らない
  * ——publish 対象でないものが `private` を持たない形（版を持たない内部パッケージ等）は
  * 普通に在りうるので、目印としては弱い。対象は上位で決定済みなので固定リストで持つ。
@@ -52,7 +53,7 @@ const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const BANNER = "─".repeat(72);
 
 /**
- * publish 対象4パッケージは `./publish-targets.mjs` が持つ（ADR 0066 で1箇所へ集めた）。
+ * publish 対象は `./publish-targets.mjs` が持つ（ADR 0066 で1箇所へ集めた）。
  * それ以前はこのファイルと歯の2箇所に写しが在り、`.github/workflows/publish.yml` を足すと
  * 3箇所目が生まれるところだった。**この門と workflow が同じリストを見ていることが、
  * 「門を通ったものだけが publish される」の前提である。**
@@ -101,14 +102,14 @@ console.log(
   [
     "",
     BANNER,
-    "publish 梱包の門: 対象4パッケージを pnpm pack し、tarball の中身を検査します",
+    `publish 梱包の門: 対象${PUBLISH_TARGETS.length}パッケージを pnpm pack し、tarball の中身を検査します`,
     "",
     "  対象:",
     ...PUBLISH_TARGETS.map((t) => `    - ${t.name} (${t.dir})`),
     "",
     "  検査項目:",
     "    1. workspace: プロトコルが依存に残っていないこと",
-    "    2. version が 0.0.0 でなく、4パッケージとも同じ版であること",
+    `    2. version が 0.0.0 でなく、${PUBLISH_TARGETS.length}パッケージとも同じ版であること`,
     "    3. main / types / bin / exports の指すファイルが tarball 内に実在すること",
     "    4. README.md が tarball に入っていること",
     '    5. publishConfig.access が "public" であること',
@@ -210,11 +211,11 @@ try {
     }
   }
 
-  // 4パッケージとも同じ版であること（version 自体が有効だったものだけを比較する）
+  // publish 対象すべてで同じ版であること（version 自体が有効だったものだけを比較する）
   const distinctVersions = new Set(versions.map((v) => v.version));
   if (versions.length === PUBLISH_TARGETS.length && distinctVersions.size > 1) {
     violations.push(
-      `version が4パッケージで揃っていません: ${versions.map((v) => `${v.name}@${v.version}`).join(", ")}`,
+      `version が publish 対象で揃っていません: ${versions.map((v) => `${v.name}@${v.version}`).join(", ")}`,
     );
   }
 } finally {

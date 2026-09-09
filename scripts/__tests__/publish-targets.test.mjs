@@ -19,8 +19,8 @@ function readManifest(dir) {
 }
 
 describe("PUBLISH_TARGETS（ADR 0066）", () => {
-  it("4パッケージである", () => {
-    expect(PUBLISH_TARGETS).toHaveLength(4);
+  it("5パッケージである", () => {
+    expect(PUBLISH_TARGETS).toHaveLength(5);
   });
 
   it("各 dir の package.json の name が、リストの name と一致する", () => {
@@ -64,11 +64,11 @@ describe("PUBLISH_TARGETS（ADR 0066）", () => {
   });
 
   /**
-   * `scripts/__tests__/check-publish-pack.test.mjs` は同じ4つを**独立に直書き**している
+   * `scripts/__tests__/check-publish-pack.test.mjs` は同じ5つを**独立に直書き**している
    * （そちらのファイル冒頭のコメント参照）。写しが2つ在ること自体は意図的だが、
    * **中身がずれたまま気づかない**のは意図ではない。ここで突き合わせる。
    */
-  it("check-publish-pack.test.mjs が直書きしている4つと、集合として一致する", () => {
+  it("check-publish-pack.test.mjs が直書きしている5つと、集合として一致する", () => {
     const source = readFileSync(
       fileURLToPath(new URL("./check-publish-pack.test.mjs", import.meta.url)),
       "utf8",
@@ -76,7 +76,7 @@ describe("PUBLISH_TARGETS（ADR 0066）", () => {
     const listed = [
       ...source.matchAll(/\{ name: "(@mnemora\/[a-z]+)", dir: "(packages\/[a-z]+)" \}/g),
     ];
-    expect(listed.length, "歯の側の直書きリストが読み取れなかった").toBe(4);
+    expect(listed.length, "歯の側の直書きリストが読み取れなかった").toBe(5);
     expect(new Set(listed.map((m) => m[1]))).toEqual(new Set(PUBLISH_TARGETS.map((t) => t.name)));
     expect(new Set(listed.map((m) => m[2]))).toEqual(new Set(PUBLISH_TARGETS.map((t) => t.dir)));
   });

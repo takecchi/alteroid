@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * publish 対象4パッケージを `pnpm pack` し、**publish 順序に並べた tarball の一覧**を出す段。
+ * publish 対象パッケージ（`PUBLISH_TARGETS`）を `pnpm pack` し、**publish 順序に並べた tarball の一覧**を出す段。
  *
  * **なぜ pack と publish を別の道具に分けるか（ADR 0066）**
  *
@@ -23,7 +23,7 @@
  * 使い方:
  *   node scripts/pack-publish-targets.mjs <出力先ディレクトリ> [--expect-version <版>]
  *
- * `--expect-version` を渡すと、4パッケージの版がそれと一致しない場合に落ちる
+ * `--expect-version` を渡すと、対象パッケージの版がそれと一致しない場合に落ちる
  * （workflow が tag `v0.1.0` と package.json の版のずれを掴むために使う）。
  */
 import { spawnSync } from "node:child_process";

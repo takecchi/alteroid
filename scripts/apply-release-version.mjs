@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Release の tag の版を、publish 対象4パッケージの `package.json` へ**書き込む**段（ADR 0070）。
+ * Release の tag の版を、publish 対象パッケージの `package.json` へ**書き込む**段（ADR 0070）。
  *
  * **これがこの repo の版の決め方である。**`v0.1.2` の Release を作れば、この段が
  * 4つの `package.json` を `0.1.2` に書き換えてから `pnpm pack` が走る。

@@ -90,12 +90,17 @@ npm i @mnemora/core @mnemora/postgres @mnemora/openai
 **Node.js >= 22 と ESM が要る**（CommonJS からは Node 22.12 以降の `require(esm)` で読める）。
 `@mnemora/postgres` は本物の Postgres + pgvector を要求する——擬似物での代替は無い。
 
+LLM を Anthropic で回すなら `@mnemora/anthropic` を足す。**ただし埋め込みは別の provider が要る**
+——Anthropic は埋め込み API を提供していないため、`@mnemora/anthropic` は `LLMProvider` だけを実装する
+（[ADR 0072](./docs/decisions/0072-anthropic-llm-provider.md)）。
+
 adapter を自作してテストするなら `@mnemora/testkit` も devDependency として入れる。
 各パッケージの install コマンドと動く最小の例:
 
 - [packages/core/README.md](./packages/core/README.md)
 - [packages/postgres/README.md](./packages/postgres/README.md)
 - [packages/openai/README.md](./packages/openai/README.md)
+- [packages/anthropic/README.md](./packages/anthropic/README.md)
 - [packages/testkit/README.md](./packages/testkit/README.md)
 
 ---

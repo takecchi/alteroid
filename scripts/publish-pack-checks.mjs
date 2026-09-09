@@ -2,7 +2,7 @@
  * `scripts/check-publish-pack.mjs` が使う純粋な判定関数だけを集めたモジュール。
  *
  * **なぜ分けたか**: `check-publish-pack.mjs` は import された瞬間に本物の `pnpm pack` を
- * 4パッケージぶん走らせる（トップレベルの実行部にガードが無い）。判定関数だけをここへ
+ * publish 対象ぶん走らせる（トップレベルの実行部にガードが無い）。判定関数だけをここへ
  * 切り出せば、`scripts/__tests__/check-publish-pack.test.mjs` は合成フィクスチャに対して
  * `pnpm pack` を一切走らせずに、各関数が実際に噛むか（違反を作ったら検出し、直したら
  * 検出しないか）を直接測れる。

@@ -200,9 +200,22 @@ interface LLMProvider {
 ```
 
 `packages/openai` と `packages/anthropic` はそれぞれ `LLMProvider` を実装し、内部で zod スキーマを
-各社の Structured Output 形式（OpenAI の `response_format: json_schema` 相当、Anthropic の強制
-tool use 相当）へ**翻訳**する。この翻訳は provider package の内側で完結し、core にも呼び出し側にも
-ベンダー固有の型は漏れない。
+各社の Structured Output 形式（OpenAI の `response_format: json_schema`、Anthropic の
+`output_config.format: json_schema`）へ**翻訳**する。この翻訳は provider package の内側で完結し、
+core にも呼び出し側にもベンダー固有の型は漏れない。
+
+**⚠ ここは当初「Anthropic の強制 tool use 相当」と書いていた。実測で訂正した**
+（[ADR 0072](./decisions/0072-anthropic-llm-provider.md)）。Anthropic には
+**ネイティブの構造化出力**（`messages.create()` の `output_config.format`）が在り、
+公式の zod ヘルパ `zodOutputFormat` もある。加えて `tool_choice` による強制 tool use は
+**Claude Fable 5.1 系のモデルで 400 になる**ため、強制 tool use に寄せた翻訳は
+モデルを新しくした日に壊れる。**⟹ 採るのはネイティブの構造化出力である。**
+
+**翻訳の形は両者で同じにならない。**Anthropic 側は `name` も `strict` も持たず、
+**`required` を元のまま通す**（`.optional()` が optional のまま残る）——そのため
+`packages/openai` が strict モードのために行っている「全キーを required にして省略可能を
+nullable へ倒し、返りで `null` を省略へ戻す」往復が、Anthropic 側では要らない。
+差分の一覧は ADR 0072 決定3 に在る。
 
 Structured Output は次の4箇所で強く使う方針とする:
 

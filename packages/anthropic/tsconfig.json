@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@mnemora/core": ["../core/src/index.ts"],
+      "@mnemora/openai": ["../openai/src/index.ts"]
+    }
+  },
+  "include": ["src"]
+}

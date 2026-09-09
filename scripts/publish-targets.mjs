@@ -1,5 +1,5 @@
 /**
- * npm へ出す4パッケージと、**その publish 順序**を持つ唯一の定義（ADR 0060 決定1・ADR 0066）。
+ * npm へ出す5パッケージと、**その publish 順序**を持つ唯一の定義（ADR 0060 決定1・ADR 0066）。
  *
  * **なぜ順序まで持つか**: ADR 0060 が「引き受けた負債」として
  * 「publish の順序は依存の向きで決まる（`core` → `testkit` / `openai` → `postgres`）。
@@ -22,5 +22,6 @@ export const PUBLISH_TARGETS = [
   { name: "@mnemora/core", dir: "packages/core" },
   { name: "@mnemora/testkit", dir: "packages/testkit" },
   { name: "@mnemora/openai", dir: "packages/openai" },
+  { name: "@mnemora/anthropic", dir: "packages/anthropic" },
   { name: "@mnemora/postgres", dir: "packages/postgres" },
 ];

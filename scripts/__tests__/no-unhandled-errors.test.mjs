@@ -46,8 +46,9 @@ function findFiles(dir, predicate, out = []) {
 describe("dangerouslyIgnoreUnhandledErrors を repo のどこにも設定していない（静的）", () => {
   it("vitest.config.mts のどれも dangerouslyIgnoreUnhandledErrors を設定していない", () => {
     const configFiles = findFiles(repoRoot, (name) => name === "vitest.config.mts");
-    // 少なくとも root + 4パッケージ分は在るはず（数え落とし自体を検知する）。
-    expect(configFiles.length).toBeGreaterThanOrEqual(5);
+    // 少なくとも root + vitest.config.mts を持つ5つ（openai / anthropic / postgres /
+    // testkit / examples/chat）は在るはず（数え落とし自体を検知する）。
+    expect(configFiles.length).toBeGreaterThanOrEqual(6);
 
     const offenders = configFiles.filter((file) =>
       readFileSync(file, "utf8").includes("dangerouslyIgnoreUnhandledErrors"),
