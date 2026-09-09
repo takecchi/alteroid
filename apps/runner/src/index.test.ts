@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { tokenSha256Of } from './index.js';
+import { RECLAIM_ENV_KEY, reclaimScanOf, tokenSha256Of } from './index.js';
 
 /**
  * **合鍵は「同じ値を両方に置くだけ」で済む。** そのうえで、走っている runner に
@@ -154,5 +154,50 @@ describe('器の起動スクリプト', () => {
     expect(out.split('\n')).not.toContain('HOME=/root');
     expect(out).toContain('USER=node');
     expect(out).toContain('LOGNAME=node');
+  });
+});
+
+/**
+ * 孤児の観測を切る口（#315 段0）。
+ *
+ * **切れる口が要るのは north_star 禁止2 のためである** —— 回収は「人間が PC で
+ * できること（長時間のバックグラウンドジョブ）」を器が奪いうる形なので、
+ * 開けられない実装にすると追加制限になる。**この段はまだ撃たないが、口は先に開けておく。**
+ */
+describe('reclaimScanOf（孤児の観測を切る口）', () => {
+  const CHILD = { uid: 1001, gid: 1001 };
+
+  it('未設定なら観測する（降ろす UID が候補の判定に使われる）', () => {
+    expect(reclaimScanOf({}, CHILD)).toEqual({ childUid: 1001 });
+  });
+
+  it('off なら欄ごと出さない（undefined）', () => {
+    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: 'off' }, CHILD)).toBeUndefined();
+  });
+
+  it('observe を明示しても観測する', () => {
+    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: 'observe' }, CHILD)).toEqual({ childUid: 1001 });
+  });
+
+  /**
+   * **黙って既定へ倒れない。** `off` のつもりで `Off` と書いた人が「切った」と
+   * 思っているのに観測が動き続ける、という食い違いを残さない
+   * （`tokenSha256Of` が食い違いで落とすのと同じ形）。
+   */
+  it('知らない値なら落とす（黙って既定へ倒れない）', () => {
+    expect(() => reclaimScanOf({ [RECLAIM_ENV_KEY]: 'Off' }, CHILD)).toThrow(/知らない値/);
+  });
+
+  /**
+   * **段1 の値は、この版ではまだ受け付けない。** 型（`ReclaimMode`）は先に
+   * `'reclaim'` を知っているが、撃つ経路がこの版に無い以上、受け取ったら落とす。
+   */
+  it('reclaim は、この版ではまだ受け付けない（撃つ経路が無いので）', () => {
+    expect(() => reclaimScanOf({ [RECLAIM_ENV_KEY]: 'reclaim' }, CHILD)).toThrow(/知らない値/);
+  });
+
+  /** 降ろす UID が分からない器では、器の常設物と区別できないので観測しない。 */
+  it('降ろす UID が無い器では観測しない（取れない軸に数を作らない）', () => {
+    expect(reclaimScanOf({}, undefined)).toBeUndefined();
   });
 });

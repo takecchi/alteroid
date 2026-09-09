@@ -6133,6 +6133,87 @@ describe('runner_list（器の一覧）', () => {
   });
 
   /**
+   * **孤児プロセス木（#315 段0）。** 候補の本数と threads に加えて、**走査したのと
+   * 同じ瞬間の pids を同じ行に並べる** ——候補の本数だけでは「効いた」を測れない。
+   * 撃った本数（段0 では常に0）も出す：段1 で欄が生えたように見せないため。
+   */
+  it('resources.tasks.reclaim が在れば、孤児の候補・走査時 pids・撃った本数が出る', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-a',
+          revision: { status: 'unheard' },
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-a',
+          managers: [],
+          resources: {
+            pids: { current: 999, max: 1000 },
+            tasks: {
+              threads: 999,
+              processes: 96,
+              zombies: 0,
+              reclaim: {
+                mode: 'observe',
+                candidates: 84,
+                candidateThreads: 961,
+                oldestAgeSec: 23_040, // 6時間24分
+                signalled: 0,
+                killed: 0,
+                freedThreads: 0,
+                lastRunAt: 1_767_225_600_000,
+                pidsAtScan: { current: 999, max: 1000 },
+              },
+            },
+          },
+        },
+      ],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', { resources: true });
+
+    expect(reply).toContain(
+      '孤児（観測のみ。撃たない）: 候補 84 本 / 961 threads（いちばん古い 6時間24分前）' +
+        '、走査時 pids 999/1000、送出 0 / 畳み 0 / 返却 0 threads',
+    );
+  });
+
+  /**
+   * **`reclaim` が無い回では、孤児の行そのものを出さない。** 欄が無いのは
+   * 「切ってある」か「走査が読めなかった」かのどちらかで、**どちらも「0本だった」
+   * ではない**（`tasks.reclaim` の doc）。ここで 0 に潰すと、その区別が消える。
+   */
+  it('resources.tasks.reclaim が無い回では、孤児の行そのものが出ない（0 本と書かない）', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-a',
+          revision: { status: 'unheard' },
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-a',
+          managers: [],
+          resources: {
+            pids: { current: 999, max: 1000 },
+            tasks: { threads: 999, processes: 96, zombies: 0 },
+          },
+        },
+      ],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', { resources: true });
+
+    expect(reply).toContain('pids: 999 / 1000');
+    expect(reply).not.toContain('孤児');
+  });
+
+  /**
    * **`tasks` が無い runner（古い版）では、内訳の行そのものを出さない。** 「0」
    * にも「unknown」にも潰さない——AGENTS.md「取れない軸に0の行を作る」。
    */
