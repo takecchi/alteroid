@@ -197,7 +197,7 @@ claude setup-token          # → CLAUDE_CODE_OAUTH_TOKEN（人間が一度だ�
 やることは下の「手で置くなら」と同じで、順番と役の割り振りだけが固定されている。
 
 - プロジェクトを**新しく作る**（既存には触らない）→ PostgreSQL → `app` / `runner`
-- **Config as Code のパスを指す**（CLI に口が無いので GraphQL を直に叩く。ここを忘れると `startCommand` が無く、役が決まらない）
+- **役の設定（`railway/*.json`）を Service へ写す**（CLI に口が無いので GraphQL を直に叩く。ここを忘れると `startCommand` が無く、役が決まらない）
 - 変数を**役ごとに**置く（記憶ストアの鍵は `app` だけ、`RAILWAY_RUN_UID=0` は `runner` だけ）
 - **`runner` を先に**上げ、上がってから `app` を繋ぐ
 - 上がらなかったら **0 を返さない**（器と変数だけ作って「できた」と名乗らない）
@@ -251,16 +251,22 @@ railway add --database postgres
 
 ### 2. Service を作る（同じリポジトリから）
 
-ダッシュボードで GitHub リポジトリを追加し、名前を **`app`** と **`runner`**（2台目以降は **`runner-2`** / **`runner-3`** …）にする（`ALTEROID_RUNNER_URL` / `_URLS` がこの名前を参照する）。それぞれ **Settings → Config as Code** に次を指定する。
+ダッシュボードで GitHub リポジトリを追加し、名前を **`app`** と **`runner`**（2台目以降は **`runner-2`** / **`runner-3`** …）にする（`ALTEROID_RUNNER_URL` / `_URLS` がこの名前を参照する）。
 
-| Service                 | Config as Code         |
-| ----------------------- | ---------------------- |
-| `app`                   | `/railway/daemon.json` |
-| `runner` / `runner-2` … | `/railway/runner.json` |
+**かつてはここで Settings → Config as Code に `/railway/daemon.json` を指すだけで済んだ。Railway が廃止した**（`railwayConfigFile` を渡すと mutation ごと落ち、`"Config as Code (railway.json / railway.toml) is deprecated. Use Infrastructure as Code (.railway/railway.ts) instead."` が返る。2026-09-09 実測）。**`railway/*.json` は捨てていない** — 中身は同じで、**写す先が Service の設定そのものへ変わった**だけである（`setup.sh` は `lib.sh` の `set_config_file` が GraphQL で写す）。
 
-**runner の Service はどれも同じ Config as Code を指す。** 役は `startCommand` で決まり、台を分けるのは変数（`ALTEROID_RUNNER_ID`）だけである。だから `railway/runner.json` を台数ぶん複製しない — 複製すると `drainingSeconds` を直す場所が台数ぶんに増える。
+手で置くなら、**その json の中身を Settings へ書き写す**。
 
-Config as Code のパスは Root Directory を見ないので、**リポジトリ先頭からの絶対パス**で書く。同じ `Dockerfile` から `startCommand` で役を選ぶ（compose の `command` と同じ考え方）。
+| Service                 | 写す元                | Start Command     |
+| ----------------------- | --------------------- | ----------------- |
+| `app`                   | `railway/daemon.json` | `alteroidd`       |
+| `runner` / `runner-2` … | `railway/runner.json` | `alteroid-runner` |
+
+`startCommand` のほかに `build.dockerfilePath` / `build.watchPatterns` / `deploy.restartPolicyType` / `deploy.restartPolicyMaxRetries` / `deploy.drainingSeconds` を同じ値で置く。**`builder` は写さない** — `Builder` enum から `DOCKERFILE` が消えており（現在値は `HEROKU` / `NIXPACKS` / `PAKETO` / `RAILPACK`。同日実測）、Dockerfile で焼くかは `dockerfilePath` が決める。
+
+**runner の Service はどれも同じものを写す。** 役は `startCommand` で決まり、台を分けるのは変数（`ALTEROID_RUNNER_ID`）だけである。だから `railway/runner.json` を台数ぶん複製しない — 複製すると `drainingSeconds` を直す場所が台数ぶんに増える。
+
+同じ `Dockerfile` から `startCommand` で役を選ぶ（compose の `command` と同じ考え方）。
 
 ### 3. 変数（1か所に書いて両方へ配る）
 
@@ -665,7 +671,7 @@ railway ssh --service Postgres 'psql -c "\dt"'        # 表が張り直ってい
 | `GET /runners` の `state` が `unreachable` のまま戻らない        | 器の入れ替え中ならそのうち収束する（名簿が背景で挑み直し続ける。**回数では諦めない**）。デーモン自体は上がっているので chat も日誌も承認も動き、止まるのは委譲だけである。収束しないなら runner のログを見る                                                                                     |
 | `alteroidd: runner (…) に鍵を拒まれた（401）`                    | 合鍵が食い違っている。**待っても直らないので挑み直さない**（`GET /runners` の `state` が `unusable` になり、クローンの受信箱にも届く）。 `ALTEROID_RUNNER_TOKEN` が Shared Variables にあり、app と runner の両方に紐づいているかを見る（片方だけに Service 変数で上書きが載っていると食い違う） |
 | 委譲だけが返ってこない（chat と日誌は動く）                      | daemon が runner の `/health` へ届いていない。**デーモンは runner を待たずに上がる**ので、これは起動の失敗ではない。runner のログを見る（大抵 runner が上がっていない）。次に `ALTEROID_RUNNER_URL` のサービス名と `ALTEROID_RUNNER_BIND=::` を確認する                                          |
-| 役が決まらない（`alteroidd` も `alteroid-runner` も走らない）    | その Service の **Config as Code のパスが未設定**。同じイメージから2役を出しているので、これが無いと `startCommand` が決まらない。Settings → Config as Code に `/railway/daemon.json` か `/railway/runner.json`（`setup.sh` はここを GraphQL で置く）                                            |
+| 役が決まらない（`alteroidd` も `alteroid-runner` も走らない）    | その Service に **Start Command が未設定**。同じイメージから2役を出しているので、これが無いと役が決まらない。Settings → Deploy → Start Command に `alteroidd` か `alteroid-runner`（`setup.sh` は `railway/*.json` の中身を GraphQL で写す）                                            |
 | コードを直したのに反映されない                                   | その Service の `watchPatterns` にパスが入っていない（`railway/*.json`）。新しいディレクトリを足したときに漏れやすい（`docker/**` のような、コードではないがイメージに焼かれるものがとくに危ない）                                                                                               |
 | `alteroid-runner: ALTEROID_RUNNER_CHILD_UID が指定されているが…` | runner が root で走っていない。`RAILWAY_RUN_UID=0` が無い／名前に空白が混ざっている。**これは異常ではなく設計**で、同じ UID のまま走ると子プロセスが制御面に手を届かせるので、runner は起動を拒む                                                                                                |
 | 変数を設定したのに効かない                                       | 名前の前後に空白。`railway variable list --json` で `repr` して検算する（上の「置いたら必ず名前を検算する」）                                                                                                                                                                                    |
