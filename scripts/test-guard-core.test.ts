@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 // @ts-expect-error -- 素の .mjs（型宣言を持たない test-guard の中核）を読む
@@ -649,5 +652,86 @@ describe('runObservationGuard（I/O込みの合成。実リポジトリに対し
   it('today を渡さなければ既定値（現在時刻）で回る——例外を投げず、実在の ROOT で合格になる', async () => {
     const result = await runObservationGuard(ROOT);
     expect(result.ok).toBe(true);
+  });
+});
+
+/**
+ * **`test-guard-core.mjs` の「最初の1件を返す」実装が安全である前提そのものの歯（PR 本文参照）。**
+ *
+ * `parseAggregateLines`（このファイルの直上）は `.match(/…/m)`（`/g` 無し）で
+ * **最初の集計ブロックしか読まない。** #742・#745 の測定は、それが「いまの HEAD の
+ * 構造では複数ブロックが届かないから安全」だと固定した——根拠の7本は
+ * `scripts/mutate-core-strip-ansi.test.ts` に逐語で在る（`潰した経路は7本` で当たる）。
+ *
+ * **その7本のうち経路3は「`scripts/test.mjs` は vitest の起動をループの外に1回だけ
+ * 書いている」という、この関数の唯一の入力源についての事実である。** 到達不能を
+ * 「測って確かめたので歯を置かない」理由にするなら、**その前提そのものを歯にする**
+ * ——誰かが2本目の vitest 起動を足した瞬間、あるいは起こし方の形が変わって
+ * 「1本しか無い」ことそのものが数えられなくなった瞬間に、ここが赤くなるようにする。
+ *
+ * ## 逐語一致ではなく「件数」で測る
+ *
+ * `grep -Fn -- "spawn('vitest'"` のような逐語一致は**変更検知器**になる——
+ * 引用符の種類（`'vitest'` / `"vitest"`）や空白・改行の入れ方が1文字変わっただけで
+ * 赤くなる。ふるまいが1文字も変わっていないのに落ちる歯はこの repo が嫌う形である
+ * （`AGENTS.md`「テストを弱めずに直す」）。だから**「vitest を子プロセスとして
+ * 起こす箇所の件数」**を測る。正規表現は `spawn` だけでなく `execFile` /
+ * `execFileSync` / `exec` / `execSync` / `spawnSync` も拾う——`spawn` を
+ * `execFile` へ書き換えて2本目を足す、という抜け道を塞ぐためである。
+ *
+ * ## `>= 1` ではなく `=== 1` で撃つ
+ *
+ * 2本目が足された（件数が2になった）ときだけでなく、**起こし方の形が根本的に
+ * 変わって、この正規表現では1本も数えられなくなった（件数が0になった）**ときも
+ * 赤くしたい。後者は「vitest を1回しか起こさない」という前提が壊れたのではなく、
+ * **この歯の観測手段そのものが壊れた**——どちらも「到達可能性を測り直すべき合図」
+ * である点は同じなので、`>= 1` ではなく `=== 1` で両方を撃つ。
+ *
+ * ## 実物のソースを読む（フィクスチャを持たない）
+ *
+ * `scripts/test.mjs` をディスクから直接 `readFileSync` する。フィクスチャ文字列を
+ * 持つと、実物がどう変わってもこの歯は緑のままになり——存在意義が消える。
+ * パスはこのテストファイルからの相対（`import.meta.dirname` 経由）で解決する
+ * （`scripts/check-sdk-quotes.test.ts` の `実物の検査` describe と同じ形。あちらは
+ * インストール済みの `sdk.d.ts` を実物として読み、フィクスチャは合成テストの側にだけ
+ * 持つ——この歯も同じ分担にした）。
+ */
+describe('scripts/test.mjs は vitest を1回しか起こさない（test-guard-core.mjs の「最初の1件」実装が安全である前提そのものの歯）', () => {
+  const TEST_MJS_PATH = join(import.meta.dirname, 'test.mjs');
+  const testMjsSource = readFileSync(TEST_MJS_PATH, 'utf8');
+
+  // spawn / execFile 系のどの形で vitest を起こしても拾う。長い名前を先に置く
+  // （`execFileSync` は `exec` を前方一致で含むため、`exec` を先に置くと
+  // `execFileSync(` の位置で `exec` にしかマッチせず `\(` の直前に `FileSync`
+  // が残って外れてしまう——マッチさせたいのは "識別子(" の形であることに注意）。
+  const VITEST_CHILD_PROCESS_INVOCATION =
+    /(spawnSync|spawn|execFileSync|execFile|execSync|exec)\(\s*['"]vitest['"]/g;
+
+  it('実物の scripts/test.mjs を読めている（空文字列や別ファイルを掴んでいない）', () => {
+    // パスを間違えて空文字列を読んでいても件数0で下のテストが赤くなるので致命的では
+    // ないが、「なぜ赤いか」が読めるよう、実物にしか無い印を別立てで確認しておく。
+    expect(testMjsSource.length).toBeGreaterThan(0);
+    expect(testMjsSource).toContain('function runVitest');
+  });
+
+  it('vitest を子プロセスとして起こす箇所の件数はちょうど 1 である（>= 1 ではない）', () => {
+    const matches = testMjsSource.match(VITEST_CHILD_PROCESS_INVOCATION) ?? [];
+
+    const message = [
+      '`scripts/test-guard-core.mjs` の `parseAggregateLines` は最初の集計ブロックしか',
+      '読まない。それが安全なのは、この関数の唯一の入力源である `scripts/test.mjs` が',
+      'vitest を1回しか起こさないからである。',
+      '',
+      'この歯が落ちたら、歯の数字（下の `toBe(1)`）を直す前に、',
+      '`scripts/mutate-core-strip-ansi.test.ts` に記録されている7経路を当たり直して、',
+      '複数ブロックが `test-guard-core.mjs` へ届くようになっていないかを測ること',
+      "（`command grep -Fn -- '潰した経路は7本' scripts/mutate-core-strip-ansi.test.ts`",
+      'で当たる）。届くようになっていたら、直す番なのは `test-guard-core.mjs` の側である。',
+      '',
+      `実測: \`scripts/test.mjs\` の中で vitest を子プロセスとして起こしている箇所 = ${matches.length} 件`,
+      `（一致した文字列: ${JSON.stringify(matches)}）`,
+    ].join('\n');
+
+    expect(matches.length, message).toBe(1);
   });
 });
