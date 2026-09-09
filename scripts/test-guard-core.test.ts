@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
@@ -715,11 +715,85 @@ describe('scripts/test.mjs は vitest を1回しか起こさない（test-guard-
   const VITEST_CHILD_PROCESS_INVOCATION =
     /(spawnSync|spawn|execFileSync|execFile|execSync|exec)\(\s*['"]vitest['"]/g;
 
-  it('実物の scripts/test.mjs を読めている（空文字列や別ファイルを掴んでいない）', () => {
-    // パスを間違えて空文字列を読んでいても件数0で下のテストが赤くなるので致命的では
-    // ないが、「なぜ赤いか」が読めるよう、実物にしか無い印を別立てで確認しておく。
-    expect(testMjsSource.length).toBeGreaterThan(0);
-    expect(testMjsSource).toContain('function runVitest');
+  /**
+   * この sanity は元は逐語一致だった（`expect(testMjsSource).toContain('function
+   * runVitest')` と `expect(testMjsSource.length).toBeGreaterThan(0)`）。
+   *
+   * **矛盾**: このファイルは同じ describe の直上（`## 逐語一致ではなく「件数」で測る`
+   * の節）で「逐語一致は**変更検知器**になる」と書き、さらに下（`### この歯が測って
+   * いないもの`の節）でも「逐語一致に揃えれば、ふるまいが変わらない書き換え（`runVitest`
+   * を アロー関数へ書き直す等）で落ちる歯になり」と**名指しで予告していた**。それでも
+   * この1本目だけは、その2箇所より前に逐語一致のまま残っていた
+   * （`command grep -Fn -- '逐語一致は**変更検知器**になる' scripts/test-guard-core.test.ts`
+   * と `command grep -Fn -- 'アロー関数へ書き直す等' scripts/test-guard-core.test.ts`
+   * で当たる）。
+   *
+   * **撃った変異と結果**:
+   * - `runVitest` を `function runVitest(args) { … }` から
+   *   `const runVitest = (args) => { … }` へ書き直す（ふるまい不変。実走で
+   *   `exit=0` / `Tests 23 passed (23)` の一致を確認済み）と、旧い逐語一致の
+   *   形（`toContain('function runVitest')`）**だけ**が赤くなり、件数で測る
+   *   直下の2本（起動件数の歯・呼び出し件数の歯）は緑のままだった。
+   * - 逆に、`function runVitest` と `spawn('vitest'` と `await runVitest(` を
+   *   1つずつ持つだけの無関係な偽ファイルへ `TEST_MJS_PATH` を向けると、
+   *   旧い逐語一致の形を含めて3本とも緑になった。⟹ 逐語一致は「別ファイルを
+   *   掴んでいない」ことを測っておらず、文字列の形だけを見て出所を見ていな
+   *   かった。
+   *
+   * **替えたあとが測っているもの**: この describe が `readFileSync` している
+   * ファイルが、`pnpm test` を打ったときに実際に起こされる入り口
+   * （`package.json` の `scripts.test`）と同一であること。`package.json` は
+   * `import.meta.dirname` とは独立した出所なので、そこと突き合わせることで
+   * 初めて「別ファイルを掴んでいない」を検査したことになる。
+   *
+   * ⚠️ **`expect(TEST_MJS_PATH).toBe(join(ROOT, 'scripts', 'test.mjs'))` の
+   * ような形にしてはいけない。** 左辺（`TEST_MJS_PATH`）も右辺
+   * （`join(ROOT, 'scripts', 'test.mjs')`）も、このテストファイル自身の位置
+   * から `import.meta.dirname` 経由で導かれる値であり、出所が同じである。
+   * `TEST_MJS_PATH` の定義を書き換えれば両辺が一緒に動くので、どう壊しても
+   * 赤くならない同語反復になる。**素直に見えても、これを作った時点で設計が
+   * 成立していない。**
+   *
+   * **落としたもの（2つ。もう測らない）**:
+   * - `expect(testMjsSource).toContain('function runVitest')` —
+   *   定義の構文の形はふるまいではない。呼び出しの側は直下の件数の歯
+   *   （`runVitest` の呼び出し箇所の件数）が別に測っている。
+   * - `expect(testMjsSource.length).toBeGreaterThan(0)` — 単独では何も
+   *   捕まえない。空文字列を読んでいれば、直下の2本（起動件数・呼び出し
+   *   件数）がどちらも件数0で先に赤くなる（実測済み）ので、この assert が
+   *   無くても「なぜ赤いか」は失われない。
+   */
+  it('この describe が読んでいるのは `pnpm test` が実際に起こす入り口そのものである（package.json の scripts.test と突き合わせる。パスの自己比較ではない）', () => {
+    const packageJsonPath = join(ROOT, 'package.json');
+    const testScript = JSON.parse(readFileSync(packageJsonPath, 'utf8'))?.scripts?.test;
+    // `node ./scripts/test.mjs` のように「引数のどこかに .mjs のパスが在る」形から
+    // 入り口を取り出す。
+    const entryToken = String(testScript ?? '')
+      .split(/\s+/)
+      .find((token) => token.endsWith('.mjs'));
+
+    const notFoundMessage = [
+      '`package.json` の `scripts.test` から `.mjs` で終わるトークンを',
+      '取り出せなかった。この describe が読んでいるファイル',
+      `（${TEST_MJS_PATH}）が \`pnpm test\` の入り口と同一かどうかを、`,
+      'そもそも突き合わせられない。',
+      '',
+      `実測: \`scripts.test\` = ${JSON.stringify(testScript)}`,
+    ].join('\n');
+    expect(entryToken, notFoundMessage).toBeDefined();
+
+    const mismatchMessage = [
+      'この describe（`scripts/test.mjs は vitest を1回しか起こさない…`）が',
+      '`readFileSync` で読んでいるファイルと、`pnpm test` が実際に起こす',
+      '入り口が食い違っている。⟹ 直下の2本（起動件数・呼び出し件数）が',
+      '緑でも、それは `pnpm test` が実際に走らせるファイルについて何も',
+      '言っていない——別ファイルを検査して「安全」と言っていたことになる。',
+      '',
+      `実測: \`scripts.test\` = ${JSON.stringify(testScript)}`,
+      `取り出した入り口 = ${JSON.stringify(entryToken)}`,
+      `この describe が読んでいるのは = ${TEST_MJS_PATH}`,
+    ].join('\n');
+    expect(resolve(ROOT, entryToken ?? ''), mismatchMessage).toBe(TEST_MJS_PATH);
   });
 
   it('vitest を子プロセスとして起こす箇所の件数はちょうど 1 である（>= 1 ではない）', () => {
