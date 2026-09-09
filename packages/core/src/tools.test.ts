@@ -1226,6 +1226,65 @@ describe('クローンの道具', () => {
       const h = harness();
       expect(await h.call('memory_list', {})).toContain('空');
     });
+
+    /**
+     * 歯 A（必須）。**説明文そのものが「本文が焼かれる」と言っていないこと**を、
+     * `createCloneTools` が返す実際の道具の説明文で固定する（JSDoc の doc
+     * コメントはクローンに届かない。届くのはここで測る `description` だけ）。
+     *
+     * ⚠️ `premise` の焼き込みを全文からカード（要旨＋節の目次）へ変えた
+     * 2026-09-08 の反転の後も、この道具の説明文だけが「premise はプロンプトへ
+     * 全文が焼き込まれている」という古い文言のまま取り残されていた
+     * （`grep -Fn -- 'premise はプロンプトへ全文が焼き込まれている' packages/core/src/tools.ts` で当たっていた）。
+     */
+    it('説明文は「premise は全文が焼き込まれる」と言わず、要旨＋節の目次と開く口（memory_section_read）を言う', () => {
+      const stores = createMemoryStores();
+      const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+      const description = tools.find((entry) => entry.name === 'memory_list')?.description ?? '';
+
+      expect(description).not.toContain('premise はプロンプトへ全文が焼き込まれている');
+      expect(description).toContain('memory_section_read');
+      expect(description).toMatch(/premise.{0,40}要旨.{0,10}節の目次/);
+    });
+
+    /**
+     * 歯 B。**説明文が実装と食い違っていないかを、同じ歯の中で突き合わせる。**
+     *
+     * - 実装の側の値（`bodyIsBaked`）: premise 文書を1つ `renderMemoryDocuments`
+     *   （システムプロンプトへの焼き込みそのものを作る、唯一の入口）に通し、
+     *   本文の目印がその出力に含まれるかどうか
+     * - 説明文の側の値（`claimsBodyBaked`）: `memory_list` の description が、
+     *   `premise` の文脈で「全文」という語を使っているか（＝本文が焼かれると
+     *   主張しているか、の代理指標。この語はこの PR で見つかった嘘が全箇所で
+     *   使っていた語である）
+     *
+     * **この2つが一致することを測る。** いまは両方とも「否」（本文は焼かれず、
+     * 説明文もそう主張していない）で一致している。**片方だけが変わると
+     * 不一致になり、この歯が赤くなる**——実装を「全文を焼く」方向へ戻して
+     * 説明文が追いつかなくても、逆に説明文だけを「全文」の文言へ戻して
+     * 実装が追いつかなくても、どちらも検出する。
+     *
+     * ⚠️ **この歯が測っていないこと**: `claimsBodyBaked` は「全文」という
+     * 特定の語だけを見る代理指標であり、説明文の言い回しそのものを機械的に
+     * 理解しているわけではない。同じ主張を「まるごと」「すべて」「そのまま」
+     * のような別の語で書き換えられたら、この判定はすり抜ける。
+     */
+    it('説明文と実装が食い違っていない — premise の本文が焼かれるかどうかで両者を突き合わせる', () => {
+      const stores = createMemoryStores();
+      const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+      const description = tools.find((entry) => entry.name === 'memory_list')?.description ?? '';
+
+      const marker = 'MARKER-BODY-7f3a2c';
+      const rendered = renderMemoryDocuments([{ slug: 'probe', content: `# 見出し\n${marker}\n` }]);
+      const bodyIsBaked = rendered.includes(marker);
+
+      const claimsBodyBaked = /premise[^。]*全文|全文[^。]*premise/.test(description);
+
+      expect(bodyIsBaked).toBe(claimsBodyBaked);
+      // いまの正しい状態: どちらも「焼かれない／主張しない」である。
+      expect(bodyIsBaked).toBe(false);
+      expect(claimsBodyBaked).toBe(false);
+    });
   });
 
   /**

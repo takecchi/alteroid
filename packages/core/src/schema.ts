@@ -38,15 +38,20 @@ export const memorySlugSchema = z
  *
  * - **`none`** — content の先頭が frontmatter の形をしていない（1行目が
  *   `---` ではない）。**これが移行直後の全文書の状態である。** 区分の既定
- *   （下の `memoryDocKindSchema` の doc）が `premise`（＝全文）なので、
- *   frontmatter を1つも持たない文書の集合に対しては焼き込みがこの改修の
- *   前後で完全に同じになる（受け入れ基準の最上位）。
+ *   （下の `memoryDocKindSchema` の doc）は `premise` である。**⚠️ かつては
+ *   ここで「premise の既定＝全文なので、frontmatter 導入前後で焼き込みが
+ *   1バイトも変わらない（受け入れ基準の最上位）」と言えたが、その前提は
+ *   2026-09-08 に人間の決定で反転した——`premise` は全文ではなくカード
+ *   （要旨＋節の目次）を焼く（`grep -Fn -- '受け入れ基準は、人間が載せ方を反転させた時点で意味を失った' packages/core/src/memory.ts`）。**
+ *   frontmatter を1つも持たない文書は、premise としてカードが焼かれ、本文は
+ *   `memory_section_read` で節id を渡して開く。
  * - **`malformed`** — 1行目は `---` だが、狭く固定した形（各行が
  *   `key: value`・キーは既知の集合のみ・ネスト無し・複数行無し・型推論を
  *   しない）から外れた。**`none` に畳まない** — 人間が textarea で編集する
  *   以上、frontmatter は壊れる。壊れたときに文書ごと記憶から消えるのが
  *   最悪の形なので、区分はここでも既定の `premise` に倒れ、文書自体は
- *   全文が載り続ける（消えない）。
+ *   消えずに残る（本文はプロンプトへは載らない。カードと
+ *   `memory_section_read` は通常の premise と同じ扱いを受ける）。
  * - **`parsed`** — 狭い形の範囲で読めた。**値は文字列としてのみ持つ**
  *   （`description: no` を `false` にするような YAML ライブラリの賢さは、
  *   この用途では「静かに別の値になる」リスクでしかないため、そもそも
@@ -68,15 +73,18 @@ export const memoryFrontmatterStateSchema = z.discriminatedUnion('kind', [
 export type MemoryFrontmatterState = z.infer<typeof memoryFrontmatterStateSchema>;
 
 /**
- * 区分。**判断の前提（`premise`）はプロンプトへ全文、事実と蓄積（`fact`）は
- * 目次の1行だけ**（本文は `memory_read` で開く）。
+ * 区分。**判断の前提（`premise`）はプロンプトへ要旨と節の目次（カード）、
+ * 事実と蓄積（`fact`）は目次の1行だけ**が焼かれる。**どちらも本文は焼かれ
+ * ない**——premise の本文は `memory_section_read`（節id を渡す）、fact の
+ * 本文は `memory_read` で開く（2026-09-08 の人間の決定で premise の焼き込みを
+ * 全文からカードへ反転させた。`grep -Fn -- 'renderPremiseCard' packages/core/src/memory.ts`）。
  *
  * frontmatter が無い（`none`）・読めない（`malformed`）・`type` が既知の
  * 集合に無い値のときは、**すべて `premise` として扱う**（移行の安全弁。
  * `memory.ts` の `resolveMemoryDocKind` の doc）。`fact` を既定にすると、
  * 区分の判定を誤ったとき（本来 `premise` であるべき文書が `fact` に
  * 分類される）に文書が黙って目次の1行へ縮み、クローンはそれに気づけない
- * — 反対に `premise` を既定にした誤りは「余分に全文を焼く」だけなので、
+ * — 反対に `premise` を既定にした誤りは「余分にカード（要旨＋節の目次）を焼く」だけなので、
  * `self_status` の総文字数で必ず気づける。
  */
 export const memoryDocKindSchema = z.enum(['premise', 'fact']);
