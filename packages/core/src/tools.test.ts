@@ -26,7 +26,11 @@ import {
   type JobStatus,
 } from './schema.js';
 import type { ScheduleStatus } from './schedule.js';
-import { describeCloneRuntime, type CloneRuntimeFacts } from './self.js';
+import {
+  CLONE_RUNTIME_ITEM_LABELS,
+  describeCloneRuntime,
+  type CloneRuntimeFacts,
+} from './self.js';
 import type { Stores } from './store.js';
 import { captureStderr, createMemoryStores, failingJournalAppend } from './testing.js';
 import { buildCloneSystemPrompt } from './prompt.js';
@@ -12868,6 +12872,20 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
       const labels = runtimeItemLabels();
       expect(labels.length, 'describeCloneRuntime から項目名が1つも取れない').toBeGreaterThan(0);
       expect(labels.every((label) => label.length > 0)).toBe(true);
+    });
+
+    /**
+     * **⭐ 輪を閉じる。** 説明文は `CLONE_RUNTIME_ITEM_LABELS` から導出しているので、
+     * **その定数と整形の出力がずれたら、説明文だけが静かに古くなる。**
+     * ここが数と名前の両方を突き合わせる ——
+     * `describeCloneRuntime` に行を1本足して定数へ足し忘れたら、ここで落ちる。
+     */
+    it('整形の出力と CLONE_RUNTIME_ITEM_LABELS が、数も名前も一致する', () => {
+      expect(
+        runtimeItemLabels(),
+        '【赤の意味】describeCloneRuntime が実際に出す行と CLONE_RUNTIME_ITEM_LABELS（self.ts）が' +
+          'ずれている。説明文はこの定数から導出しているので、ずれた分は説明文からも静かに落ちる',
+      ).toEqual([...CLONE_RUNTIME_ITEM_LABELS]);
     });
 
     it('実装が出す項目が全部、説明文に現れる', () => {

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { runnerLivenessSchema } from './runner-protocol.js';
-import { RESERVED_SCHEDULE_KINDS } from './schedule.js';
+import { RESERVED_SCHEDULE_KINDS, RESERVED_SCHEDULE_KIND_ENV_KEYS } from './schedule.js';
+import { CLONE_RUNTIME_ITEM_LABELS } from './self.js';
 import { createMemoryStores } from './testing.js';
 import { CLONE_TOOL_NAMES, USAGE_AXES, createCloneTools } from './tools.js';
 
@@ -75,6 +76,18 @@ const SUBJECTS: readonly EnumerationSubject[] = [
     label: 'USAGE_AXES（packages/core/src/tools.ts）',
     source: () => USAGE_AXES,
   },
+  {
+    // **断り文言が案内する環境変数の名前も、同じ族である。** #701 以前ここは
+    // `memory_tidy` を打ったクローンへ**実在しない対応**を案内していた。
+    tool: 'schedule_create',
+    label: 'RESERVED_SCHEDULE_KIND_ENV_KEYS の値（packages/core/src/schedule.ts）',
+    source: () => Object.values(RESERVED_SCHEDULE_KIND_ENV_KEYS),
+  },
+  {
+    tool: 'self_status',
+    label: 'CLONE_RUNTIME_ITEM_LABELS（packages/core/src/self.ts）',
+    source: () => CLONE_RUNTIME_ITEM_LABELS,
+  },
 ];
 
 /**
@@ -145,10 +158,6 @@ const EXEMPT: readonly Exemption[] = [
   {
     tool: 'self_read',
     why: '読める正典の名前は canonNames() から引数説明を組み立てており、既に導出されている',
-  },
-  {
-    tool: 'self_status',
-    why: '出す項目の出所は self.ts の describeCloneRuntime（配列ではなく整形そのもの）。整形の出力から項目名を取り出して説明文と突き合わせる歯を tools.test.ts に置いた',
   },
   { tool: 'self_dropped', why: '実装側に、説明文が数え直すような一覧が無い' },
   { tool: 'manager_start', why: '実装側に、説明文が数え直すような一覧が無い' },

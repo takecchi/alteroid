@@ -211,6 +211,48 @@ const INIT_NOT_OBSERVED = 'init 未観測';
  * **alteroid の説明文をここに書かない**（モジュール冒頭の約束）。判断や運用
  * スタイルも書かない。出すのは観測した値と、値が取れていないときの理由だけ。
  */
+/**
+ * `describeCloneRuntime` が出す**項目名**。
+ *
+ * ## なぜ在るか（#756）
+ *
+ * `self_status` の説明文（クローンへ渡る側）は、ここに在る項目を**別の散文で
+ * 数え直していた** —— 説明文は10項目・`prompt.ts` は9項目・実装が実際に出すのは
+ * 14行で、**どちらの散文にも無い実出力が5つ**あった（自分がいま走っているコード
+ * の版／effort（alteroid が明示的に渡したもの）／許可モード（alteroid が渡した
+ * もの）／resume 元のセッション id／システムプロンプト全体の文字数）。
+ * **クローンは道具の説明しか読まない**ので、説明文に無い項目は「取れない」と
+ * 読まれる ＝ 能力の欠落として観測される（north_star 禁止1）。
+ *
+ * ⟹ **説明文はここから導出する。項目を足したら説明文も自動で増える。**
+ *
+ * ## ⚠️ ここが持っているのは名前だけである
+ *
+ * 下の `describeCloneRuntime` が実際にその名前で行を出しているかは、
+ * この定数からは分からない。**`tools.test.ts` の歯が、整形の出力から行頭の項目名を
+ * 取り出してここと突き合わせる**（数と名前の両方）。
+ */
+const CLONE_RUNTIME_ITEMS = {
+  revision: '自分がいま走っているコードのリビジョン',
+  declaredModel: '宣言されたモデル帯',
+  sdkModel: 'SDK が実際に報告したモデル id',
+  effort: 'effort（実効値）',
+  requestedEffort: 'effort（alteroid が明示的に渡したもの）',
+  claudeCodeVersion: 'Claude Code の版',
+  apiKeySource: '認証の出所（値ではなく名前）',
+  permissionMode: '許可モード（SDK が報告した実効値）',
+  requestedPermissionMode: '許可モード（alteroid が渡したもの）',
+  mcpServers: 'MCP サーバ',
+  sessionId:
+    'SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）',
+  resumedFrom: 'resume 元のセッション id',
+  injectedMemoryChars: 'システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）',
+  systemPromptChars: 'システムプロンプト全体の文字数（毎ターン払っている入力の土台）',
+} as const;
+
+/** {@link CLONE_RUNTIME_ITEMS} を並び順のまま。**説明文の出所である。** */
+export const CLONE_RUNTIME_ITEM_LABELS: readonly string[] = Object.values(CLONE_RUNTIME_ITEMS);
+
 export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
   // **`null`（未観測）と `[]`（観測できた0本）を別文言にする（#324）。** どちらも
   // かつては同じ `unknownBecause(INIT_NOT_OBSERVED)` に畳まれていて、「MCP 連携が
@@ -234,30 +276,36 @@ export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
     // このプロセスの正体そのもの）。**「正典の写しの版」ではなく「このプロセスの
     // コードの版」であることを言葉で区別する** — 2つは食い違いうる
     // （`CloneRuntimeFacts.revision` の doc）。
+    //
+    // **ここだけ `CLONE_RUNTIME_ITEMS` を字面として使っていない** ——
+    // `describeBuildRevision` が `リビジョン: <値>` の1行を返すので、行そのものを
+    // 組み替えると既存の歯が測っている字面が動く。**代わりに歯で縛ってある**
+    // （`tools.test.ts` が、出力の行頭の項目名と `CLONE_RUNTIME_ITEM_LABELS` を
+    // 数も名前も突き合わせる）。
     `- 自分がいま走っているコードの${describeBuildRevision(facts.revision)}`,
     // **「既定と同じ値か」ではなく「置かれているか」を言う。** 人間が
     // \`ALTEROID_CLONE_MODEL=fable\` を明示的に置いた場合、前者では「既定のまま」と
     // 嘘になる（承認が置かれている事実が消える）。
-    `- 宣言されたモデル帯: ${facts.declaredModel}（` +
+    `- ${CLONE_RUNTIME_ITEMS.declaredModel}: ${facts.declaredModel}（` +
       (facts.modelOverridden
         ? `人間が \`${facts.modelEnvKey}\` に置いた値`
         : `既定。\`${facts.modelEnvKey}\` は置かれていない`) +
       '）',
-    `- SDK が実際に報告したモデル id: ${facts.sdkModel ?? unknownBecause(INIT_NOT_OBSERVED)}`,
-    `- effort（実効値）: ${
+    `- ${CLONE_RUNTIME_ITEMS.sdkModel}: ${facts.sdkModel ?? unknownBecause(INIT_NOT_OBSERVED)}`,
+    `- ${CLONE_RUNTIME_ITEMS.effort}: ${
       facts.effort ??
       unknownBecause('このセッションで最初の道具呼び出しか、モデルが effort に対応していない')
     }`,
-    `- effort（alteroid が明示的に渡したもの）: ${facts.requestedEffort ?? '渡していない（SDK の既定に任せている）'}`,
-    `- Claude Code の版: ${facts.claudeCodeVersion ?? unknownBecause(INIT_NOT_OBSERVED)}`,
-    `- 認証の出所（値ではなく名前）: ${facts.apiKeySource ?? unknownBecause(INIT_NOT_OBSERVED)}`,
-    `- 許可モード（SDK が報告した実効値）: ${facts.permissionMode ?? unknownBecause(INIT_NOT_OBSERVED)}`,
-    `- 許可モード（alteroid が渡したもの）: ${facts.requestedPermissionMode}`,
-    `- MCP サーバ: ${mcpServers}`,
-    `- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: ${facts.sessionId ?? unknownBecause(INIT_NOT_OBSERVED)}`,
-    `- resume 元のセッション id: ${facts.resumedFrom ?? '（新規に開いた。前のセッションを引き継いでいない）'}`,
-    `- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: ${facts.injectedMemoryChars.toLocaleString('en-US')} 文字`,
-    `- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: ${facts.systemPromptChars.toLocaleString('en-US')} 文字`,
+    `- ${CLONE_RUNTIME_ITEMS.requestedEffort}: ${facts.requestedEffort ?? '渡していない（SDK の既定に任せている）'}`,
+    `- ${CLONE_RUNTIME_ITEMS.claudeCodeVersion}: ${facts.claudeCodeVersion ?? unknownBecause(INIT_NOT_OBSERVED)}`,
+    `- ${CLONE_RUNTIME_ITEMS.apiKeySource}: ${facts.apiKeySource ?? unknownBecause(INIT_NOT_OBSERVED)}`,
+    `- ${CLONE_RUNTIME_ITEMS.permissionMode}: ${facts.permissionMode ?? unknownBecause(INIT_NOT_OBSERVED)}`,
+    `- ${CLONE_RUNTIME_ITEMS.requestedPermissionMode}: ${facts.requestedPermissionMode}`,
+    `- ${CLONE_RUNTIME_ITEMS.mcpServers}: ${mcpServers}`,
+    `- ${CLONE_RUNTIME_ITEMS.sessionId}: ${facts.sessionId ?? unknownBecause(INIT_NOT_OBSERVED)}`,
+    `- ${CLONE_RUNTIME_ITEMS.resumedFrom}: ${facts.resumedFrom ?? '（新規に開いた。前のセッションを引き継いでいない）'}`,
+    `- ${CLONE_RUNTIME_ITEMS.injectedMemoryChars}: ${facts.injectedMemoryChars.toLocaleString('en-US')} 文字`,
+    `- ${CLONE_RUNTIME_ITEMS.systemPromptChars}: ${facts.systemPromptChars.toLocaleString('en-US')} 文字`,
   ].join('\n');
 }
 

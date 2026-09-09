@@ -87,6 +87,7 @@ import type { MemoryPart, MemorySection, MemorySectionLookup } from './memory.js
 import type { ProfileService } from './profile-service.js';
 import {
   RESERVED_SCHEDULE_KINDS,
+  describeReservedScheduleKindEnvKeys,
   describeScheduleSpec,
   localDate,
   localDayRange,
@@ -116,7 +117,13 @@ import type {
   ScheduledRequest,
 } from './schema.js';
 import { describeRevisionStatus } from './revision.js';
-import { CANON_REVISION, canonDocument, canonNames, describeCloneRuntime } from './self.js';
+import {
+  CANON_REVISION,
+  CLONE_RUNTIME_ITEM_LABELS,
+  canonDocument,
+  canonNames,
+  describeCloneRuntime,
+} from './self.js';
 import type { CloneRuntimeFacts } from './self.js';
 import { EXCHANGE_WITH_VALUES, UnreadableCommitmentError } from './store.js';
 import type { JournalStore, Stores } from './store.js';
@@ -2966,7 +2973,12 @@ export function createCloneTools(context: ToolContext) {
         '本文はこの呼び出しにも応答にも一度も現れない（0文字）——これがこの道具の存在理由である。大きな文書を割るのに本文を作り直さなくてよい。',
         '節の範囲は見出し行から「同じ深さ以下の次の見出しの直前」までで、入れ子の子は一緒に動く。frontmatter は節ではないので指せない。',
         '先に移し先へ足し、後から出どころを消す——途中で落ちれば同じ節が両方に残る（重複するが、失われない）。そのときはそう返る。',
-        '断るのは6つ: from と to が同じ／その id の節が無い／その id は古い（中身が書き換えられた。memory_outline を取り直すこと）／中身まで同じ節が複数あって id が曖昧（どちらかを選ばずに断る）／指定した節どうしの範囲が重なっている（親子関係や同じ id の重複）／frontmatter が壊れている。',
+        // **数を書かない（#756）。** ここは「断るのは6つ」と数で名乗っていたが、
+        // (1) 実際に踏める断りが1つ抜けていた（出どころの文書がそもそも無い ——
+        // 打ち間違い1つで踏める、いちばん普通の断りである）(2) 到達しない断り
+        // （`guardFullReplace` の denial・frontmatter の解釈が変わる枝）を数に
+        // 入れるかどうかは、説明文の側からは確かめようが無い。⟹ **列挙だけにする。**
+        '断るのは: from と to が同じ／出どころの文書がそもそも無い（slug の打ち間違い）／出どころの frontmatter が壊れている／その id の節が無い／その id は古い（中身が書き換えられた。memory_outline を取り直すこと）／中身まで同じ節が複数あって id が曖昧（どちらかを選ばずに断る）／指定した節どうしの範囲が重なっている（親子関係や同じ id の重複）。',
         '⭐1つでも断りに当たれば、1節も動かさない——一部だけ動いて残りが断られる、ということは起きない。',
         '**⭐この口だけは、統合の走行（distill）からでも、人間が一度でも書いた文書・履歴の無い文書に対して通る**',
         '（2026-09-08 に緩めた。全文置換・削除・frontmatter の更新はいまも断る。移動は先に移し先へ足してから出どころを消すので、どの瞬間にも本文がどこかに在る＝失われない。だから保護状態を見ずに通す）。移し先には歯が掛からない（追記なので）。',
@@ -3553,10 +3565,18 @@ export function createCloneTools(context: ToolContext) {
             renderListing(items, {
               budget: APPROVAL_LIST_BUDGET,
               omitted: ({ rest, shown, total }) =>
-                `…ほか ${rest} 件は省略（回答待ちは ${total} 件あり、古い順に ${shown} 件だけ出した）。`,
+                // **#756 で精密化。** ここは「古い順に」と断言していたが、
+                // このハンドラは並べ直しを1行も持たない —— 並びを決めているのは
+                // ストアの実装である（pg は `orderBy(asc(approvals.createdAt))`、
+                // fs とインメモリは挿入順）。**並べ直しをここで足すのは別の変更
+                // なので、文言を実装が保証している通りへ寄せる。**
+                `…ほか ${rest} 件は省略（回答待ちは ${total} 件あり、先頭から ${shown} 件だけ出した）。`,
             }),
-            '（質問は抜粋。全文は approvals_list id=<id> で取れる）',
+            '（質問は抜粋。全文は approvals_list id=<id> で取れる。答えが付いた件も id で開けて、回答の本文もそこに出る）',
             '（更新＝この1件が最後に変わった時刻。回答待ちだけを出す一覧なので、常に作成と同じになる）',
+            // **並びを保証しているのはこの口ではない。** 並べ直しを1行も持たない
+            // ので、出る順は保存先が返した順である（#756）。
+            '（並び順はこの口では作っていない——保存先が返した順に出る。本番の台帳は作成時刻の昇順で返すが、同時刻どうしの順序は決まっていない）',
           ].join('\n'),
         );
       },
@@ -3606,8 +3626,15 @@ export function createCloneTools(context: ToolContext) {
     tool(
       'usage_read',
       [
-        'alteroid が使った分（トークンと費用）を台帳から読む。',
-        '軸は6つ — 日・マネージャー（誰の分か）・モデル・layer（誰が: clone / manager）・site（どこで: session / distill）・token（どの認証トークンで）。',
+        // **この口が返すのは2つである（#756）。** 説明文は台帳の側しか名乗って
+        // いなかったが、軸を渡さないモードの実装は `renderAccountUsage(...)` を
+        // **先頭に**置いてから台帳の集計を出す（`prompt.ts` の側は正しく両方
+        // 言っていた ⟹ 腐っていたのは説明文の側である）。
+        'アカウント全体の残り枠と支出上限（claude.ai 側の値）と、alteroid が使った分（トークンと費用）を台帳から読む。',
+        '軸（axis）を渡したときは、その軸だけを出す——アカウント全体の残りもまとめ表示も他の軸も出ない。',
+        // **軸の件数も名前も数え直さない（#756）。** 出所は `USAGE_AXES` と
+        // `USAGE_AXIS_NOTES` である。
+        `軸は${USAGE_AXES.length}つ — ${USAGE_AXES.map((axis) => `${axis}（${USAGE_AXIS_NOTES[axis]}）`).join('・')}。`,
         'token の軸に「（トークンの帰属が無い分）」が出るのは、プールを使っていない構成では正常である（0 でも既定値でもなく、取れていない）。',
         '**推定値であり請求明細ではない。**',
         '記録は台帳を置いた日から始まっているので、それより前は 0 ではなく「記録が無い」と出る。',
@@ -3673,7 +3700,10 @@ export function createCloneTools(context: ToolContext) {
       'schedule_list',
       [
         '仕込んである継続中の依頼の一覧。周期と、前回それで動いた時刻・次に動く時刻が分かる。',
-        '既定の日報・発意 tick はここには出ない（あれは設定で回っているもの）。',
+        // **一覧を数え直さない（#701 / #756）。** ここは `RESERVED_SCHEDULE_KINDS` から
+        // 導出する —— `memory_tidy` が足されたとき、ここは「日報・発意 tick」の2つの
+        // ままで取り残されていた。
+        `既定の定期ジョブ（${RESERVED_SCHEDULE_KINDS.join(' / ')}）はここには出ない（あれは設定で回っているもの）。`,
         '一覧の依頼本文は抜粋で、全文が要る1件は kind を渡して取る。',
       ].join(' '),
       {
@@ -3743,6 +3773,14 @@ export function createCloneTools(context: ToolContext) {
         '時刻が来れば必ずあなたの受信箱へ届き、そのとき依頼の本文と前回動いた時刻が一緒に渡る。',
         '記憶に書くのは判断の根拠であって、記憶は時計を持たない。継続する依頼はここにも置くこと。',
         '同じ kind で呼べば置き換わる（周期や本文の直しはこれで行う）。',
+        // **予約名をここで名乗る（#756）。** 呼んでから断られるより、呼ぶ前に
+        // 分かるほうがよい。**`RESERVED_SCHEDULE_KINDS` から導出する** —— 手で
+        // 書き写すと、次に既定の刻みが増えたときここだけ古くなる。
+        `既定の定期ジョブの名前（${RESERVED_SCHEDULE_KINDS.join(' / ')}）は使えない——別の名前を付けること。`,
+        // **刻みそのものを変える手段も、対応表から導出する。** #701 以前ここは
+        // `memory_tidy` に対して**実在しない対応**（日報と発意の環境変数2本）を
+        // 案内していた。
+        `既定の刻みそのもの（締め時刻・間隔）はデーモンの設定で決まる（${describeReservedScheduleKindEnvKeys()}）ので、変えたいなら人間に頼むこと。`,
       ].join(' '),
       {
         kind: z
@@ -3782,8 +3820,11 @@ export function createCloneTools(context: ToolContext) {
           // 別にあり（デーモンの設定）、それを人間に頼めることまで伝える。
           return text(
             `${parsedKind.data} は既定の定期ジョブの名前なので使えない（別の名前を付けること）。` +
-              '日報の締め時刻や発意 tick の間隔そのものを変えたいなら、それはデーモンの設定' +
-              '（`ALTEROID_DAILY_REPORT_AT` / `ALTEROID_INITIATIVE_EVERY`）なので人間に頼むこと。',
+              '既定の刻みそのもの（締め時刻・間隔）を変えたいなら、それはデーモンの設定' +
+              // **対応表から導出する（#756）。** ここは #701 以前、`memory_tidy` を
+              // 打ったクローンへ**実在しない対応の環境変数2本**を案内していた
+              // （3本目 `ALTEROID_MEMORY_TIDY_AT` は実在する）。
+              `（${describeReservedScheduleKindEnvKeys()}）なので人間に頼むこと。`,
           );
         }
         const given = [dailyAt, everyMinutes, cron].filter((value) => value !== undefined);
@@ -3876,7 +3917,11 @@ export function createCloneTools(context: ToolContext) {
       'commitment_list',
       [
         '引き受けたまま終わっていない仕事の一覧。既定は古い順に出る。',
-        '人間の依頼・マネージャーからの一件・外部イベントは、届いた時点で自動的にここへ載る。',
+        // **#756 で「人間の回答」を足した。** 台帳を開くのは `clone.ts` の
+        // `commitmentFor` が `null` を返さない4つ（human_message / human_answer /
+        // manager_message / external）で、ここは3つしか名乗っていなかった ——
+        // `ask_human` の答えが来ると台帳が1件開くのに、それを予告していなかった。
+        '人間の依頼・人間の回答（ask_human への答え）・マネージャーからの一件・外部イベントは、届いた時点で自動的にここへ載る。',
         '**載っているものは、あなたが閉じるまで消えない。**',
         'どれを先にやるかの順序はここには無い。記憶にある目的と価値観に照らして毎回決め直すこと。',
         '1件の全文（依頼本文と、片付けたならその理由）が要るなら id を渡す。片付いた件も id で読める。',
@@ -4734,9 +4779,17 @@ export function createCloneTools(context: ToolContext) {
     tool(
       'self_status',
       [
-        'いま自分が何で走っているかを返す（宣言されたモデル帯・SDK が実際に報告したモデル id・',
-        'effort・Claude Code の版・認証の出所（値ではなく名前）・許可モード・MCP サーバ・',
-        'セッション id・記憶の大きさ・台帳との突き合わせ）。',
+        // **項目を数え直さない（#756）。** 出所は `self.ts` の
+        // `CLONE_RUNTIME_ITEM_LABELS`（= `describeCloneRuntime` が実際に出す行）
+        // である。#756 以前ここは10項目・`prompt.ts` は9項目・実装は14行で、
+        // **どちらの散文にも無い実出力が5つ**あった。
+        //
+        // **列挙をやめる案は採らなかった。** 「`describeCloneRuntime` が出す全項目」
+        // とだけ書けば腐りようは無くなるが、**クローンは道具の説明しか読まない**ので、
+        // 具体を落とすと「その値が取れる」と気づけなくなる（north_star 禁止1）。
+        // ⟹ 列挙は残したまま、出所から導出する側へ倒す。
+        `いま自分が何で走っているかを返す（${CLONE_RUNTIME_ITEM_LABELS.join('・')}）。`,
+        'これに加えて、いまの記憶の大きさと、台帳との突き合わせも出る。',
         '**effort はこのセッションで最初の道具呼び出しでは取れない**（前の道具呼び出しの結果として',
         '観測するため）。モデルが effort に対応していない場合もずっと取れない。',
         '取れない値は「まだ分からない」と出る（既定値では埋めない）。',
@@ -5146,7 +5199,13 @@ export function createCloneTools(context: ToolContext) {
         // `resources: true` / #572 の行と同じ理由）。
         'done/背景処理待ち×N は、そのマネージャーが自分で起こした背景処理（run_in_background の子）や' +
           '作業者への委譲の完了を待って畳んだだけで、手が空いたのではないという意味である。' +
-          'N はそのとき握り潰した報告の本数で、内訳は manager_report と日誌（decision）に在る。' +
+          // **#756 で直した。** ここは「N はそのとき握り潰した報告の本数」と
+          // 言っていたが、N を描くのは `digest.ts` の `awaitingBackground.tasks`
+          // である。`ManagerAwaitingBackground` の doc は逐語で
+          // 「`withheldReports` と1つに畳まない。」と名指しで禁じている。
+          'N は器が名乗った背景タスクの在り高であって、握り潰した報告の本数ではない' +
+          '（同じ1本が3つのタスクを待ちながら2回畳めば、在り高3・握り潰し2になる）。' +
+          '握り潰した報告の中身は manager_report と日誌（decision）に在る。' +
           '**この印は器が名乗った分にだけ立つ** — この欄を送らない古い器では、背景処理を待っていても' +
           '立たない。だから **印が無いことを「手が空いている」と読まないこと。**',
         '依頼文と報告は抜粋なので、全文が要るなら manager_report で取ること。',
@@ -5679,7 +5738,12 @@ export function createCloneTools(context: ToolContext) {
         '**ここに出ないもの**（知らずに引くと「無かった」と読むので、先に言う）:',
         '① **ask_human への人間の回答は、この道具では出ない。**',
         '回答の本文は日誌の escalation にしか無いので journal_read types=["escalation"] で読むこと',
-        '（approvals_list では出ない。あれは**まだ答えが来ていない件**だけを出す口で、答えの本文を持たない）。',
+        // **#756 で反転。** ここは「approvals_list は答えの本文を持たない」と
+        // 言っていたが、それが真なのは**一覧モードだけ**である —— `id` を渡す
+        // 全文モードは `getApproval(id)` を呼び（`pendingOnly` を通さない）、
+        // `回答: <本文>` を返す。実装の隣のコメント自身が「**答えが付いた件も
+        // 読める。**」と書いていた。
+        '（approvals_list の一覧モードは**まだ答えが来ていない件**だけを出すが、id を渡す全文モードは答えが付いた件も開けて、回答の本文もそこに出る）。',
         '② 人間がマネージャーへ直接話しかけた発言も出ない',
         '（日誌には with:"manager" として載り、あなた自身の指示と見分けが付かない）。',
       ].join(' '),
@@ -6076,7 +6140,13 @@ export function createCloneTools(context: ToolContext) {
           '（器が開いていない・応答が無い）と「訊けたが pids が読めない」' +
           '（cgroup を持たない器）は別の文言で出る——どちらも数字が出ない点は' +
           '同じだが、疑う先が違う。**そしてこの pids は、いまは配置の材料でもある**' +
-          '（#712。点数は「メモリの余り × プロセス数の余り × 新しい1本が受け取る CPU」）——' +
+          // **#756 で1項を足した。** 実装の分母には `failures`（直近に起動が
+          // 失敗した本数）が在るのに、説明文はそれに1文字も触れていなかった——
+          // 同じ #712 が足したものである。クローンは道具の説明しか読まないので、
+          // この式を読んで配置を予測すると外れる。
+          '（#712。点数は「メモリの余り × プロセス数の余り × 新しい1本が受け取る CPU」で、' +
+          '最後の項の分母には抱えている本数に加えて直近に起動が失敗した本数も足す——' +
+          '落ちて空いた器が「空いている」ように見えて次も吸い込む輪を切るため）——' +
           'pids が枯れた器は自動配置で選ばれにくくなる。**ただし断る材料ではない**——' +
           '枯れていても置き先としては返るので、「置けない」と読まないこと。',
       ].join(' '),
@@ -6754,6 +6824,28 @@ type UsageAxis = (typeof USAGE_AXES)[number];
 
 /** `axis` を指定したときに1回で出す件数。 */
 const USAGE_AXIS_PAGE = 100;
+
+/**
+ * 軸ごとの短い注記。**説明文（`usage_read` の description）はここから導出する。**
+ *
+ * #756 以前、説明文は「軸は6つ — 日・マネージャー（誰の分か）・モデル・…」と
+ * **件数も6語も直書き**していた。⟹ `USAGE_AXES` に軸を1本足しても、説明文は
+ * 6つのまま緑で通る。**いまは件数も名前もここと `USAGE_AXES` から出る。**
+ *
+ * **`USAGE_AXIS_TITLES`（すぐ下）とは用途が違うので分けてある。** あちらは
+ * 出力の見出し（「日別」）で、こちらは**その軸が何で切っているかの注記**である
+ * （「誰が: clone / manager」のように、見出しには置けない補足を持つ）。
+ * どちらも `Record<UsageAxis, string>` なので、軸を足せば両方とも
+ * `typecheck` が落ちる。
+ */
+const USAGE_AXIS_NOTES: Record<UsageAxis, string> = {
+  date: '日',
+  manager: '誰の分か',
+  model: 'どのモデルで',
+  layer: '誰が: clone / manager',
+  site: 'どこで: session / distill',
+  token: 'どの認証トークンで',
+};
 
 const USAGE_AXIS_TITLES: Record<UsageAxis, string> = {
   date: '日別',

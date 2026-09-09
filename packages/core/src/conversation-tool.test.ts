@@ -467,6 +467,23 @@ describe('conversation_read — 会話の一覧', () => {
  * （`clone.ts` の `#record` が `human_answer` を素通りさせる）。**出ないことを
  * 知らずに引くと「無かった」と読む**ので、説明文に名指しで書いてある。ここは
  * 文面の細部ではなく「この2つが名指しされていること」だけを固定する。
+ *
+ * ## ⚠️ 2026-09-10（#756）に3本目の期待値を反転した
+ *
+ * ここは逐語 `approvals_list では出ない` を測っていた。**その主張は偽である。**
+ * `approvals_list` の `id` モードは `getApproval(id)` を呼び（`pendingOnly` を
+ * 通さない）、`回答: <本文>` を返す —— 実装の隣のコメント自身が「**答えが付いた件も
+ * 読める。**」と書いている。真なのは**一覧モードだけ**だった。
+ *
+ * **保証は弱くなっていない。** 測っている性質（「答えの行き先が説明文に名指しで
+ * 書いてある」）は1つも減らしていない ——
+ * - 元の3本目は「`approvals_list` を否定形で名指ししている」ことを測っていた
+ * - 反転後は「**その否定形が説明文から消えている**」ことと「`approvals_list` が
+ *   **肯定形で**（id を渡せば答えの本文が読める、として）名指しされている」ことを
+ *   2本で測る ⟹ **アサーションは1本増えている。**
+ *
+ * ふるまいの側（`id` モードが実際に `回答:` を返すこと）は
+ * `tools.test.ts` の「approvals_list は答えの本文を持つ（id モード）」が持つ。
  */
 describe('conversation_read — 出ないものを説明文が名指ししている', () => {
   it('ask_human の回答が出ないことと、その行き先が書いてある', () => {
@@ -478,9 +495,15 @@ describe('conversation_read — 出ないものを説明文が名指ししてい
     if (!found) throw new Error('道具 conversation_read が無い');
 
     expect(found.description).toContain('ask_human');
-    // 行き先は `escalation`。**`approvals_list` は未回答だけを出す口なので答えを持たない。**
+    // 行き先は `escalation`。
     expect(found.description).toContain('escalation');
-    expect(found.description).toContain('approvals_list では出ない');
+    // **反転（#756）。** 「approvals_list では出ない」は偽なので、戻ってきたら落ちる。
+    expect(found.description).not.toContain('approvals_list では出ない');
+    expect(found.description).not.toContain('答えの本文を持たない');
+    // **消しただけにしない。** approvals_list が答えを持つ口であることを、
+    // ここでも名指しさせる（この道具を引いた人が次に開く先である）。
+    expect(found.description).toContain('approvals_list');
+    expect(found.description).toMatch(/approvals_list[^。]*id[^。]*答え/);
   });
 });
 

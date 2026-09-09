@@ -2439,7 +2439,11 @@ export function createApp(deps: AppDeps) {
           '「定期的に〜しておいて」をクローンの記憶任せにせず、時刻が来れば必ず届く形で置く。' +
           '同じ kind なら置き換わる（前回動いた時刻は保つ）。真実はストア側にあり、' +
           'スケジューラはそれを読み直すだけなので、デーモンを作り直しても残る。' +
-          '既定の定期ジョブ（daily_report / self_initiative）の名前は奪えない（→ 409）。',
+          // **一覧を数え直さない（#701 / #756）。** ここは `RESERVED_SCHEDULE_KINDS` から
+          // 導出する —— `memory_tidy` が足された後も2つのまま取り残されていた
+          // （この description は `apps/daemon/openapi.json` へ焼かれるので、生成物の
+          // ほうも同じ嘘を持っていた）。
+          `既定の定期ジョブ（${RESERVED_SCHEDULE_KINDS.join(' / ')}）の名前は奪えない（→ 409）。`,
         responses: {
           200: {
             description: '仕込んだ。次の発火は `GET /schedule` で見える。',
