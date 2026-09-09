@@ -6239,7 +6239,8 @@ class Pool implements ManagerPool {
         // （`runner-protocol.ts` の `note` スキーマの doc）。`case
         // 'permission_denied'` の escalation と同じ口（`#emit(..., 'report',
         // …)`）でクローンの受信箱へ上げる —— 起こし直しの上限（#570 の
-        // 追跡。`runner.ts` の `SUBAGENT_WAKEUP_LIMIT`）に達し、この作業者を
+        // 追跡。`runner.ts` の `SUBAGENT_WAKEUP_LIMIT_PER_TASK` /
+        // `SUBAGENT_WAKEUP_LIMIT_PER_AGENT`）に達し、この作業者を
         // 自動では再開できなくなったことを、クローンが見に行かなくても
         // 気づける形にするためである。
         if (event.escalate === true) {
