@@ -1021,6 +1021,130 @@ describe('上限で切ったことを黙らない', () => {
   });
 });
 
+/**
+ * **未了の節が「古い順で先頭 `MAX_ITEMS` 件」だと、今夜作った行が digest に
+ * 1件も出ない。** 未了は `CommitmentStore.list()` の契約で `at` 昇順（古い順）
+ * に来るので、先頭から切ると新しい行は常に切られた側に落ちる。⟹ 古い側と
+ * 新しい側の**両端**を出すように直した——ただし合計は `MAX_ITEMS` のまま
+ * （件数の床を上げない）。
+ *
+ * **③の要件（依頼者の指定）: 「古い側だけを測る歯では直さなくても通る」** ので、
+ * ここは毎回「最古の行」と「最新の行」の**両方**が出ることを確かめる。加えて、
+ * 真ん中の行が出ないこと（＝件数の床が上がっていないこと）と、重なり
+ * （同じ id が2回出る）が無いことも測る。
+ */
+describe('引き受けたまま終わっていない仕事: 古い側と新しい側の両端を出す', () => {
+  const since = () => new Date(Date.now() - 60_000);
+
+  /** `at` を1件ずつ進め、古い→新しいの順を `i` の昇順に固定する。 */
+  const seedCommitments = async (stores: ReturnType<typeof createMemoryStores>, count: number) => {
+    const base = Date.parse('2026-01-01T00:00:00.000Z');
+    for (let i = 0; i < count; i += 1) {
+      await stores.commitments.open({
+        id: `cm-edge-${i}`,
+        at: new Date(base + i * 1000).toISOString(),
+        origin: 'human',
+        body: `未了 ${i}`,
+      });
+    }
+  };
+
+  /** digest の中に `cm-edge-${i}（` が出ている `i` の一覧（`（` の直前で境界を作り、
+   * `cm-edge-1` が `cm-edge-10` の部分文字列として誤って一致しないようにする）。 */
+  const shownIndices = (digest: string, total: number) =>
+    Array.from({ length: total }, (_, i) => i).filter((i) => digest.includes(`cm-edge-${i}（`));
+
+  it('未了が MAX_ITEMS より十分多いとき、最古の行と最新の行が両方出る', async () => {
+    const stores = createMemoryStores();
+    const total = MAX_ITEMS + 25; // 40件。
+    await seedCommitments(stores, total);
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    expect(digest).toContain('cm-edge-0（'); // 最古
+    expect(digest).toContain(`cm-edge-${total - 1}（`); // 最新
+  });
+
+  it('真ん中の行は出ない（両端に絞れている＝件数の床が上がっていない）', async () => {
+    const stores = createMemoryStores();
+    const total = MAX_ITEMS + 25; // 40件。真ん中は index 8〜32（25件）のはず。
+    await seedCommitments(stores, total);
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    expect(digest).not.toContain('cm-edge-20（');
+  });
+
+  it('出す件数は常に MAX_ITEMS のまま、かつ重なりが無い（同じ id が2回出ない）', async () => {
+    const stores = createMemoryStores();
+    const total = MAX_ITEMS + 25; // 40件。
+    await seedCommitments(stores, total);
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    const shown = shownIndices(digest, total);
+    expect(shown).toHaveLength(MAX_ITEMS);
+    for (const i of shown) {
+      const needle = `cm-edge-${i}（`;
+      expect(digest.split(needle).length - 1).toBe(1);
+    }
+  });
+
+  it('省略の断り書きが、省いた件数（真ん中の件数）を正しく言う', async () => {
+    const stores = createMemoryStores();
+    const total = MAX_ITEMS + 25; // 40件 − 15件 = 25件を省く。
+    await seedCommitments(stores, total);
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    expect(digest).toContain('…ほか 25 件');
+    // **省いたのは末尾（新しい側の続き）ではなく真ん中であること**を文言で言う。
+    expect(digest).toContain('真ん中を省いている');
+    expect(digest).toContain('commitment_list');
+  });
+
+  it('境界: ちょうど MAX_ITEMS 件なら全件が出て、省略は1件も出ない', async () => {
+    const stores = createMemoryStores();
+    const total = MAX_ITEMS;
+    await seedCommitments(stores, total);
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    expect(shownIndices(digest, total)).toHaveLength(total);
+    expect(digest).not.toContain('…ほか');
+  });
+
+  it('境界: MAX_ITEMS 未満なら全件が出て、省略は1件も出ない', async () => {
+    const stores = createMemoryStores();
+    const total = MAX_ITEMS - 3;
+    await seedCommitments(stores, total);
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    expect(shownIndices(digest, total)).toHaveLength(total);
+    expect(digest).not.toContain('…ほか');
+  });
+
+  it('境界: MAX_ITEMS + 1 件なら、両端は残り真ん中の1件だけが省かれる（重なりなし）', async () => {
+    const stores = createMemoryStores();
+    const total = MAX_ITEMS + 1;
+    await seedCommitments(stores, total);
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    const shown = shownIndices(digest, total);
+    expect(shown).toHaveLength(MAX_ITEMS);
+    expect(shown.length + 1).toBe(total);
+    expect(digest).toContain('cm-edge-0（');
+    expect(digest).toContain(`cm-edge-${total - 1}（`);
+    expect(digest).toContain('…ほか 1 件');
+    for (const i of shown) {
+      const needle = `cm-edge-${i}（`;
+      expect(digest.split(needle).length - 1).toBe(1);
+    }
+  });
+});
+
 describe('使った分', () => {
   const models = {
     'claude-opus-5': {
@@ -1396,7 +1520,9 @@ describe('digest 全体の大きさを測る歯（#414）', () => {
    * 予算を見直す動線に入る」ための唯一の仕掛けである。
    */
   const DECLARED_SECTIONS = [
-    '## 引き受けたまま終わっていない仕事（古い順。片付いたら `commitment_close` で閉じる）',
+    '## 引き受けたまま終わっていない仕事' +
+      '（古い側と新しい側の両端。入り切らない分は真ん中を省く。' +
+      '片付いたら `commitment_close` で閉じる）',
     '## 継続中の依頼（時刻が来れば届く。前回からの続きがあるか見ること）',
     '## この期間に片付けた仕事',
     '## マネージャー（走行中・返事待ちから先に出す）',

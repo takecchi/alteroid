@@ -648,7 +648,9 @@ export async function buildActivityDigest(
   if (commitments.length > 0 || unreadableCommitments.length > 0) {
     sections.push(
       '',
-      '## 引き受けたまま終わっていない仕事（古い順。片付いたら `commitment_close` で閉じる）',
+      '## 引き受けたまま終わっていない仕事' +
+        '（古い側と新しい側の両端。入り切らない分は真ん中を省く。' +
+        '片付いたら `commitment_close` で閉じる）',
       '**順序はここには無い。** どれを先にやるかは記憶にある目的と価値観に照らして決めること。',
     );
     if (unreadableCommitments.length > 0) {
@@ -683,23 +685,57 @@ export async function buildActivityDigest(
           '`commitment_list id=<id>` で状態は確かめられる（本文はここでは取れない）。',
       );
     }
-    const shownCommitments = commitments.slice(0, MAX_ITEMS);
-    for (const entry of shownCommitments) {
-      sections.push(
-        `- ${entry.id}（${entry.at} / ${entry.origin}${entry.source === undefined ? '' : ` / ${entry.source}`}）` +
-          `\n  ${brief(entry.body)}`,
-      );
+    // **両端を出す（古い側を捨てない。かつ合計は `MAX_ITEMS` のまま）。**
+    // 古い未了は「本当に放置されているもの」を見せる材料なので、件数が
+    // 増えても先頭から押し出して消してはいけない。一方で、今夜作られた
+    // 行が直後から1件も見えないのも困る——だから古い側と新しい側の両方を
+    // 少しずつ出す。**合計を増やさない**ために、片方を増やした分は必ず
+    // もう片方から削る（`oldestCount + newestCount` は常に
+    // `min(commitments.length, MAX_ITEMS)` に揃う。下の算出がそれを保証する）。
+    //
+    // 奇数分割は古い側へ1件多く渡す（`Math.ceil`）——「古い側を捨てない」を
+    // 量でも優先する判断。`commitments` は `CommitmentStore.list()` の契約に
+    // より `at` 昇順（古い順）で来るので、先頭が最古・末尾が最新である。
+    const oldestCount = Math.min(commitments.length, Math.ceil(MAX_ITEMS / 2));
+    const newestCount = Math.min(commitments.length - oldestCount, MAX_ITEMS - oldestCount);
+    const shownOldest = commitments.slice(0, oldestCount);
+    // `newestCount === 0` のとき（未了が `oldestCount` 件以下）は
+    // `slice(commitments.length, commitments.length)` と同値で空配列になるが、
+    // 意図を読み手に残すため明示の分岐にしておく。
+    const shownNewest =
+      newestCount === 0 ? [] : commitments.slice(commitments.length - newestCount);
+    const shownTotal = shownOldest.length + shownNewest.length;
+    // **重なりを作らない。** 上の算出で `oldestCount + newestCount` は
+    // `commitments.length` を超えないので、`shownOldest` と `shownNewest` の
+    // 範囲（`[0, oldestCount)` と `[length-newestCount, length)`）は
+    // 境界が一致するか離れるかのどちらかで、交差しない（同じ id が2回
+    // 出ない）。`commitments.length <= MAX_ITEMS` のときは2範囲が隙間なく
+    // 連続して全件を覆い、`commitments.length > MAX_ITEMS` のときだけ
+    // 真ん中に隙間ができる。
+    const renderCommitment = (entry: (typeof commitments)[number]) =>
+      `- ${entry.id}（${entry.at} / ${entry.origin}${entry.source === undefined ? '' : ` / ${entry.source}`}）` +
+      `\n  ${brief(entry.body)}`;
+    for (const entry of shownOldest) {
+      sections.push(renderCommitment(entry));
     }
-    // 継続中の依頼と同じ理由で、黙って切らない。
+    // **省いたのは古い側でも新しい側でもなく真ん中である。** 両端を出す形に
+    // 変える前は「先頭から `MAX_ITEMS` 件」だったので、省かれるのは常に
+    // 新しい側だった。両端を出す以上、省略の断り書きもそれに合わせて
+    // 「真ん中を省いた」と言う必要がある——末尾に1行付けるだけだと「新しい側
+    // の続きを省いた」に見えてしまうので、古い側の列と新しい側の列の**間**に
+    // 置く（AGENTS.md `.claude/skills/listing-and-detail/SKILL.md`——
+    // 「切ったなら必ず `omitted()` を通すこと」「続きの取り方を書く」）。
     sections.push(
-      // **`commitment_list` も件数で打ち切る**ので「全部見える」とは書けない
-      // （あちらは残り件数を本文に出す）。
       ...omitted(
         commitments.length,
-        shownCommitments.length,
-        '`commitment_list` で古い順に辿れる。あちらも入る分までで、残りの件数が本文に出る',
+        shownTotal,
+        '真ん中を省いている。`commitment_list`（古い順で辿れる）でその区間も見られる。' +
+          'あちらも入る分までで、残りの件数が本文に出る',
       ),
     );
+    for (const entry of shownNewest) {
+      sections.push(renderCommitment(entry));
+    }
   }
 
   if (standing.length > 0) {

@@ -85,12 +85,30 @@ export function compareCommitmentPosition(a: CommitmentPosition, b: CommitmentPo
  * `includeClosed` と食い違えば 400 にする」）。**MCP 側は 400 を返せない
  * ので text で明示のエラーを返す**（`resolveCommitmentCursor` の
  * `'includeClosed-mismatch'`）。
+ *
+ * **`order` も同じ理由で持つ（`commitment_list` に `order` を足した分。段0で
+ * 確認: 台帳が260件まで膨らみ、未了を古い順にしか出せないと、今夜作られた
+ * 行へ予算の中で到達する手が無くなる）。** 錨は「刷った一覧がどちらの向きに
+ * 辿っていたか」を持たないと、`oldest` の続きのつもりで `newest` の一覧へ
+ * 繋いでしまう（辿る方向が食い違えば、同じ行を繰り返し返すか、間の行を
+ * 飛ばす）。**`includeClosed` が食い違ったときとまったく同じ形の穴なので、
+ * 同じ場所に同じ形で持たせる。**
+ *
+ * **⚠️ `z.enum(['oldest', 'newest']).default('oldest')` にすること。**
+ * `order` を持たない欄を `z.enum(...)`（default 無し）にすると、`order` を
+ * 足す前に発行済みのカーソル（`order` の欄そのものが無い JSON）が
+ * `commitmentCursorSchema.safeParse` で落ち、`decodeCommitmentCursor` が
+ * `{ ok: false }`（malformed）を返す——**その時点でまだ使われていただけの
+ * カーソルが、この変更のせいで一斉に「壊れている」へ化ける。** `.default()`
+ * にすれば、欄が無い（＝旧いカーソル）ときは `'oldest'` として読め、かつ
+ * いまの振る舞い（既定は古い順）とも一致する。
  */
 const commitmentCursorSchema = z.object({
   segment: z.enum(['open', 'closed']),
   key: z.string().min(1),
   id: z.string().min(1),
   includeClosed: z.boolean(),
+  order: z.enum(['oldest', 'newest']).default('oldest'),
 });
 
 export type CommitmentCursor = z.infer<typeof commitmentCursorSchema>;
@@ -124,10 +142,19 @@ export function decodeCommitmentCursor(raw: string): DecodeCommitmentCursorResul
 
 /**
  * `cursor` を受け取り、`entries`（すでに固定順——`CommitmentStore.list` の
- * 契約に加え、呼び出し側で `origin` を絞った後のもの）から、その位置より
- * 後ろだけを残す。**純関数。I/O を持たない**（`Commitment[]` の配列を渡す
- * だけで呼べる——`commitment-cursor.test.ts` はストアを1つも作らずにこれを
- * 直接叩く）。
+ * 契約に加え、呼び出し側で `origin` / `q` を絞り、`order` に応じて並びを
+ * 反転させた後のもの）から、その位置より後ろだけを残す。**純関数。I/O を
+ * 持たない**（`Commitment[]` の配列を渡すだけで呼べる——
+ * `commitment-cursor.test.ts` はストアを1つも作らずにこれを直接叩く）。
+ *
+ * **`order` は比較の向きだけを決める。`entries` を並べ替えるのは呼び出し側
+ * （`tools.ts`）の仕事で、ここでは並べ替えない**（`CommitmentStore.list` の
+ * 契約そのものは変えない——反転はツール層の見え方であって、ストアの契約では
+ * ない）。`entries` が `order: 'newest'` 用にもう反転済みで渡ってくる前提で、
+ * `oldest` は「pivot より後ろ（`compareCommitmentPosition(...) > 0`）」、
+ * `newest` は「pivot より前（`compareCommitmentPosition(...) < 0`）」を残す
+ * ——`entries` の見た目の並びに対して常に「pivot の次から」が取れるよう、
+ * 比較の向きを逆にする。
  *
  * - `cursorRaw` が `undefined`: 絞らない（先頭から）。`{ kind: 'ok', view:
  *   [...entries] }`
@@ -135,6 +162,10 @@ export function decodeCommitmentCursor(raw: string): DecodeCommitmentCursorResul
  * - `includeClosed` が食い違う: `{ kind: 'includeClosed-mismatch',
  *   cursorIncludeClosed }`——**黙って先頭からへは倒さない**（AGENTS.md
  *   「判定できないという3つ目の状態を持つ」と同じ理由）
+ * - `order` が食い違う: `{ kind: 'order-mismatch', cursorOrder }`——
+ *   **`includeClosed` が食い違ったときとまったく同じ理由で、黙って
+ *   どちらか一方へは倒さない。** 辿る方向が食い違ったまま続きを解決すると、
+ *   同じ行を繰り返し返すか、間の行を黙って飛ばす
  * - それ以外: `{ kind: 'ok', view }`。`view` は0件のこともある（カーソルが
  *   一覧の末尾を指していた＝最後の頁）——これは呼び出し側が「もう続きは
  *   無い」として扱う、正常な終端であってエラーではない
@@ -143,19 +174,25 @@ export function resolveCommitmentCursor(
   entries: readonly Commitment[],
   includeClosed: boolean,
   cursorRaw: string | undefined,
+  order: 'oldest' | 'newest' = 'oldest',
 ):
   | { kind: 'ok'; view: Commitment[] }
   | { kind: 'malformed' }
-  | { kind: 'includeClosed-mismatch'; cursorIncludeClosed: boolean } {
+  | { kind: 'includeClosed-mismatch'; cursorIncludeClosed: boolean }
+  | { kind: 'order-mismatch'; cursorOrder: 'oldest' | 'newest' } {
   if (cursorRaw === undefined) return { kind: 'ok', view: [...entries] };
   const decoded = decodeCommitmentCursor(cursorRaw);
   if (!decoded.ok) return { kind: 'malformed' };
   if (decoded.cursor.includeClosed !== includeClosed) {
     return { kind: 'includeClosed-mismatch', cursorIncludeClosed: decoded.cursor.includeClosed };
   }
+  if (decoded.cursor.order !== order) {
+    return { kind: 'order-mismatch', cursorOrder: decoded.cursor.order };
+  }
   const pivot: CommitmentPosition = decoded.cursor;
-  const view = entries.filter(
-    (entry) => compareCommitmentPosition(commitmentPosition(entry), pivot) > 0,
-  );
+  const view = entries.filter((entry) => {
+    const cmp = compareCommitmentPosition(commitmentPosition(entry), pivot);
+    return order === 'newest' ? cmp < 0 : cmp > 0;
+  });
   return { kind: 'ok', view };
 }
