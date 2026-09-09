@@ -700,10 +700,18 @@ describe('scripts/test.mjs は vitest を1回しか起こさない（test-guard-
   const TEST_MJS_PATH = join(import.meta.dirname, 'test.mjs');
   const testMjsSource = readFileSync(TEST_MJS_PATH, 'utf8');
 
-  // spawn / execFile 系のどの形で vitest を起こしても拾う。長い名前を先に置く
-  // （`execFileSync` は `exec` を前方一致で含むため、`exec` を先に置くと
-  // `execFileSync(` の位置で `exec` にしかマッチせず `\(` の直前に `FileSync`
-  // が残って外れてしまう——マッチさせたいのは "識別子(" の形であることに注意）。
+  // spawn / execFile 系のどの形で vitest を起こしても拾う。
+  //
+  // 訂正（自分で実測して確認した。node -e で以下を走らせた）:
+  //   const bad  = /(exec|execSync|execFile|execFileSync)\(\s*['"]vitest['"]/g;
+  //   const good = /(spawnSync|spawn|execFileSync|execFile|execSync|exec)\(\s*['"]vitest['"]/g;
+  //   'execFileSync(\'vitest\''.match(bad)   // → ["execFileSync('vitest'"]（当たる）
+  //   'execFileSync(\'vitest\''.match(good)  // → ["execFileSync('vitest'"]（同じ）
+  // 選択肢の順序は結果に効かない——JS の正規表現は選択肢の中でバックトラック
+  // するため、`exec` を先に置いても `\(` の直前で外れた時点で同じ開始位置の
+  // 次の選択肢（`execFileSync` 等）を試し、結局は最長一致にたどり着く。
+  // それでも長い名前を先に書いているのは、読む人が上から読んで「どれに
+  // 当たるか」を追いやすくするためであって、正しさの条件ではない。
   const VITEST_CHILD_PROCESS_INVOCATION =
     /(spawnSync|spawn|execFileSync|execFile|execSync|exec)\(\s*['"]vitest['"]/g;
 
