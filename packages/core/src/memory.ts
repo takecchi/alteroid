@@ -1181,6 +1181,54 @@ export const MEMORY_PROMPT_DESCRIPTION_BUDGET = 3_000;
 export const MEMORY_PROMPT_OUTLINE_BUDGET = 6_000;
 
 /**
+ * 目次が予算で切れたときに、**落ちた末尾の側を名指しする**ぶんの文字数の予算。
+ *
+ * ## なぜ落ちた側の見出しを断り書きへ出すのか
+ *
+ * **`renderListing` が落とすのは常に並びの末尾側である。** ⟹ 追記で育つ文書
+ * （規則の一覧・学びの一覧）では、**新しく足した節だけが恒久的に窓の外へ出る。**
+ * これは `excerpt.ts` の `ListingBudget.omitted` が逐語で名指ししている形で、
+ * あちらは台帳（`tools.ts` の `commitment_list`）で実害が出て継続点で塞いだと
+ * 書き、そのうえで「**他の一覧が同じ形かどうかは数えていない**」と断っている。
+ * ⟹ **premise のカードが、その「数えていない一覧」だった。**
+ *
+ * **観測（2026-09-09、この器のクローンが自分の焼き込みを測った値）**: 規則の
+ * 文書は 106 節・37,056 文字あり、目次に載っていたのは先頭側だけだった。⟹
+ * その日に足した規則は目次に載らず、**「N 節省略」という断り書きは出ていたのに、
+ * クローンはそれを「だから今日足した規則が見えない」へ繋げられなかった。**
+ *
+ * ## 落ちているのは本文であって、見出しではない
+ *
+ * 節の1行は数十文字しかない。⟹ **落ちた末尾のうち直近のぶんだけなら断り書きへ
+ * 入る**し、そこには節id も出るので `memory_section_read` で直に開ける。
+ * 「N 節省略」だけだと、何が省略されたかを知る手は `memory_outline` の呼び直し
+ * にしか無く、**呼ぶ動機がその断り書きの中に無い。**
+ *
+ * ## ⚠️ 件数（「直近3節」）ではなく文字数で持つ
+ *
+ * 見出しの長さは節ごとにばらばらなので、**件数で決めると断り書きの長さが見出し
+ * 次第で暴れる**——`ListingBudget` の doc が「件数から出力量を決めると、何件で
+ * 壊れるかが運任せになる（それで一覧が丸ごと落ちた実績が `manager_list` に
+ * ある）」と書いている、その形そのものである。
+ *
+ * **300 の出し方。** `MEMORY_PROMPT_OUTLINE_BUDGET` の doc に載っている本番実測
+ * （2026-09-08）で、予算に当たっている premise の目次は1行あたり 80 文字前後で
+ * ある。⟹ 300 は**その3行ぶん**で、「最後に足した節が1つ2つなら必ず名指しされる」
+ * 位置である。**⭐ そして節数が増えても増えない**——1行の固定費（節id と
+ * `— N 文字`）が節数に比例して予算を食うのに対し、ここは食わない。それが
+ * この形を選んだ理由そのものである。
+ */
+export const MEMORY_PROMPT_OMITTED_TAIL_BUDGET = 300;
+
+/**
+ * ATX 見出しの最短の形（`# x`）の長さ。**見出しはこれ未満へは縮められない。**
+ *
+ * 「見出しを平均 N 文字まで縮めれば載る」と名乗るときの下限として使う——
+ * N がこれを下回るなら、その助言は**縮める先が無い**ので嘘である。
+ */
+const MEMORY_MIN_HEADING_CHARS = 3;
+
+/**
  * premise 1文書ぶんの**カード**（要旨 ＋ 節の目次）。**本文は1文字も載らない。**
  *
  * ## なぜ全文をやめたか（人間の決定 2026-09-08）
@@ -1216,6 +1264,79 @@ export const MEMORY_PROMPT_OUTLINE_BUDGET = 6_000;
  * PRD「権限境界」（記憶に根拠があるかで判断する）が静かに壊れる——根拠が
  * 「無い」のではなく「開いていない」だけの状態が、同じ顔で出る。
  */
+/**
+ * 節の目次が予算で切れたときの断り書き。**「切った」だけを名乗らない。**
+ *
+ * 出すのは3つである:
+ *
+ * 1. 省いた件数（従来どおり）。
+ * 2. ⭐ **落ちた末尾のうち直近の節を、節id つきの行そのままで名指しする**
+ *    （`MEMORY_PROMPT_OMITTED_TAIL_BUDGET` の doc に理由がある）。落ちるのは
+ *    常に末尾なので、**追記で育つ文書では「いま足したもの」がここに出る。**
+ * 3. ⭐ **何をすれば全部載るかを算術で出す**——1行の平均と、そのうち固定費
+ *    （節id と `— N 文字`）が何文字か、そして見出しを平均いくつまで縮めれば
+ *    予算に入るか。
+ *
+ * ## ⚠️ 3 は達成不能なことがある。そのときは「縮めれば載る」と言わない
+ *
+ * **1行の固定費は節数に比例する。** ⟹ 節が増えると、**見出しを最短
+ * （`# x` の3文字）まで縮めても予算に入らない点を必ず越える**——予算 6,000 では
+ * **167〜201 節あたりで反転する**（実測。見出しの深さと節の大きさで動く）。
+ * **実運用の `alteroid-work` は 917 節ある** ⟹ すでに反転側に居る。
+ *
+ * **そこで「平均 N 文字まで縮めれば載る」と出すのは嘘である**——縮める先が
+ * 無いのに縮めろと言うことになる。⟹ 反転している文書には**割るしかないと
+ * 名乗らせる。** これは `ListingBudget.omitted` の「続きの取り方を書けるのは、
+ * 呼び手の側にその口が実在するときだけである」を、助言の側へ当てた形である
+ * ——**実行できない助言を出さない。**
+ */
+function renderPremiseOutlineOmission(
+  items: readonly string[],
+  sections: readonly MemorySection[],
+  { rest, shown, total }: { rest: number; shown: number; total: number },
+): string {
+  // 落ちたのは常に末尾側である（`renderListing` は前から詰める）。
+  const dropped = items.slice(shown);
+  // **末尾を残す向きで切る。** 落ちた並びの中でも読み手が要るのは新しい側
+  // （末尾）で、穴が空くのは古い側（先頭）である（`renderListingFromEnd`）。
+  const tail = renderListingFromEnd(dropped, {
+    budget: MEMORY_PROMPT_OMITTED_TAIL_BUDGET,
+    omitted: ({ rest: above }) =>
+      `…（この上にさらに ${formatMemoryCharCount(above)} 節落ちている。全部は memory_outline の side=tail で見る）`,
+  });
+
+  const outlineChars = items.reduce((sum, item) => sum + item.length, 0);
+  const headingChars = sections.reduce((sum, section) => sum + section.heading.length, 0);
+  // 固定費 = 目次の1行の長さ − 見出しの長さ（インデント・節id・`— N 文字`）。
+  // **引き算で出す**——1行の形（`memorySectionLines`）が変わったときに、
+  // ここへ書き写した数だけが古くなるのを防ぐ。
+  const fixedChars = outlineChars - headingChars;
+  const room = MEMORY_PROMPT_OUTLINE_BUDGET - fixedChars;
+  const arithmetic =
+    room < total * MEMORY_MIN_HEADING_CHARS
+      ? `⚠ 節id と文字数の固定費だけで ${formatMemoryCharCount(fixedChars)} 文字を使う（予算 ` +
+        `${formatMemoryCharCount(MEMORY_PROMPT_OUTLINE_BUDGET)} 文字）。**見出しを最短（\`# x\`）まで` +
+        `縮めても全 ${formatMemoryCharCount(total)} 節は載らない**——固定費は節数に比例するので、` +
+        `この文書は縮めるのではなく memory_section_move で割るしかない。`
+      : `1行の平均は ${formatMemoryCharCount(Math.round(outlineChars / total))} 文字` +
+        `（うち節id と文字数の固定費が ${formatMemoryCharCount(Math.round(fixedChars / total))} 文字）。` +
+        `全 ${formatMemoryCharCount(total)} 節を載せるには、見出しを平均 ` +
+        `${formatMemoryCharCount(Math.floor(room / total))} 文字（いま ` +
+        `${formatMemoryCharCount(Math.round(headingChars / total))} 文字）まで縮める必要がある。`;
+
+  return [
+    `…末尾 ${formatMemoryCharCount(rest)} 節は目次から省略（全 ${formatMemoryCharCount(total)} 節のうち先頭 ` +
+      `${formatMemoryCharCount(shown)} 節だけ載せた）。` +
+      '⚠ この文書は大きすぎて、目次すら毎ターンの焼き込みに収まっていない。',
+    '落ちた末尾のうち直近の節（節id はそのまま memory_section_read に渡せる。' +
+      '**足したばかりの節はここに出る**）:',
+    tail,
+    arithmetic,
+    'memory_outline（side=tail で末尾も見られる）で残りを確かめ、' +
+      'memory_section_move で付録の文書へ割ること。',
+  ].join('\n');
+}
+
 function renderPremiseCard(part: MemoryPart): string {
   const frontmatter = parseMemoryFrontmatter(part.content);
   const description = frontmatter.kind === 'parsed' ? frontmatter.description : undefined;
@@ -1246,13 +1367,13 @@ function renderPremiseCard(part: MemoryPart): string {
     ].join('\n');
   }
 
-  const listing = renderListing(memorySectionLines(sections), {
+  // **1行の形は1回だけ組む。** 断り書きの側も同じ行を名指しに使うので、
+  // ここで2回組むと「目次に載っている行」と「落ちたと名乗る行」が別々の
+  // 計算になりうる（数え方を2本に割らない。`measureMemoryFloor` の doc）。
+  const items = memorySectionLines(sections);
+  const listing = renderListing(items, {
     budget: MEMORY_PROMPT_OUTLINE_BUDGET,
-    omitted: ({ rest, shown, total }) =>
-      `…末尾 ${rest} 節は目次から省略（全 ${total} 節のうち先頭 ${shown} 節だけ載せた）。` +
-      '⚠ この文書は大きすぎて、目次すら毎ターンの焼き込みに収まっていない。' +
-      'memory_outline（side=tail で末尾も見られる）で残りを確かめ、' +
-      'memory_section_move で付録の文書へ割ること。',
+    omitted: (part) => renderPremiseOutlineOmission(items, sections, part),
   });
 
   return [
