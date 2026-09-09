@@ -7677,6 +7677,9 @@ describe('宛先の器が黙ったことを live が見る', () => {
       register: (source) => registry.register(source),
       unregister: (label) => registry.unregister(label),
       vacate: (id) => registry.vacate(id),
+      // **素通しに1つ足す（#712）。** この包みは entries だけを差し替えるもので、
+      // ここで挙動を変える意図は無い —— 新しく増えた口も本物へそのまま渡す。
+      noteManagerFailed: (id) => registry.noteManagerFailed(id),
       subscribe: (onOpen) => registry.subscribe(onOpen),
       stop: () => registry.stop(),
       entries: () =>
@@ -8150,6 +8153,9 @@ describe('生存確認が観測した sessions から sessionMissingSince を立
       register: (source) => registry.register(source),
       unregister: (label) => registry.unregister(label),
       vacate: (id) => registry.vacate(id),
+      // **素通しに1つ足す（#712）。** この包みは entries だけを差し替えるもので、
+      // ここで挙動を変える意図は無い —— 新しく増えた口も本物へそのまま渡す。
+      noteManagerFailed: (id) => registry.noteManagerFailed(id),
       subscribe: (onOpen) => registry.subscribe(onOpen),
       stop: () => registry.stop(),
       entries: () =>
@@ -8468,6 +8474,9 @@ describe('sessionMissingKind: 由来を畳まない（#579）', () => {
       register: (source) => registry.register(source),
       unregister: (label) => registry.unregister(label),
       vacate: (id) => registry.vacate(id),
+      // **素通しに1つ足す（#712）。** この包みは entries だけを差し替えるもので、
+      // ここで挙動を変える意図は無い —— 新しく増えた口も本物へそのまま渡す。
+      noteManagerFailed: (id) => registry.noteManagerFailed(id),
       subscribe: (onOpen) => registry.subscribe(onOpen),
       stop: () => registry.stop(),
       entries: () =>
