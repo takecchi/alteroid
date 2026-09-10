@@ -15,9 +15,9 @@ import {
 /**
  * `scripts/check-publish-pack.mjs`（publish 梱包の門）の歯。
  *
- * publish 対象5パッケージは固定である（`docs/roadmap.md` 等で機械的に判別できる
+ * publish 対象6パッケージは固定である（`docs/roadmap.md` 等で機械的に判別できる
  * 目印は無く、上位で決定済みのリストを直書きしている——`check-publish-pack.mjs`
- * 冒頭のコメント参照）。この歯もその5つを直書きで持つ。
+ * 冒頭のコメント参照）。この歯もその6つを直書きで持つ。
  */
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
@@ -29,6 +29,7 @@ const PUBLISH_TARGETS = [
   { name: "@mnemora/postgres", dir: "packages/postgres" },
   { name: "@mnemora/openai", dir: "packages/openai" },
   { name: "@mnemora/anthropic", dir: "packages/anthropic" },
+  { name: "@mnemora/local-embedding", dir: "packages/local-embedding" },
 ];
 
 function readManifest(dir) {
@@ -37,7 +38,7 @@ function readManifest(dir) {
   );
 }
 
-describe("publish 対象5パッケージの package.json（静的）", () => {
+describe("publish 対象6パッケージの package.json（静的）", () => {
   for (const target of PUBLISH_TARGETS) {
     describe(target.name, () => {
       const manifest = readManifest(target.dir);

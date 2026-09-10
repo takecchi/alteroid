@@ -1,5 +1,5 @@
 /**
- * npm へ出す5パッケージと、**その publish 順序**を持つ唯一の定義（ADR 0060 決定1・ADR 0066）。
+ * npm へ出す6パッケージと、**その publish 順序**を持つ唯一の定義（ADR 0060 決定1・ADR 0066）。
  *
  * **なぜ順序まで持つか**: ADR 0060 が「引き受けた負債」として
  * 「publish の順序は依存の向きで決まる（`core` → `testkit` / `openai` → `postgres`）。
@@ -37,4 +37,12 @@ export const PUBLISH_TARGETS = [
   // 依存の向きとしては、`@mnemora/anthropic` は `@mnemora/core` にしか依存しないので
   // 最後に置いても整合する（`scripts/__tests__/publish-targets.test.mjs` が機械的に検査する）。
   { name: "@mnemora/anthropic", dir: "packages/anthropic" },
+  // `@mnemora/local-embedding` も registry に無い（新設）。⟹ 上の規律どおり末尾に置く。
+  //
+  // **`@mnemora/anthropic` との前後は、どちらでも規律に反しない。**規律が守ろうとしているのは
+  // 「**既に公開済みのものが、未公開のものの失敗で取り残されないこと**」であり、
+  // 未公開どうしの順序はその目的に関係しない（どちらが先でも、公開済みの4つは先に完走する）。
+  // 依存の向きとしても `@mnemora/core` にしか依存しないので、末尾で整合する
+  // （`scripts/__tests__/publish-targets.test.mjs` が機械的に検査する）。
+  { name: "@mnemora/local-embedding", dir: "packages/local-embedding" },
 ];

@@ -2,7 +2,8 @@
 /**
  * publish 対象パッケージ（`./publish-targets.mjs` の `PUBLISH_TARGETS`。現在は
  * `@mnemora/core` / `@mnemora/testkit` / `@mnemora/openai` / `@mnemora/postgres` /
- * `@mnemora/anthropic` の5つ、いずれも `"type": "module"`）の**ビルド後の配布物**
+ * `@mnemora/anthropic` / `@mnemora/local-embedding` の6つ、いずれも `"type": "module"`）の
+ * **ビルド後の配布物**
  * （`packages/<name>/dist` 配下の `.js` / `.cjs` / `.mjs`）を、ts-jest 相当の変換に通してから
  * CommonJS として構文解析できることを検査する門。
  *

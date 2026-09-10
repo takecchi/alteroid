@@ -3,5 +3,22 @@ packages:
   - "examples/*"
 allowBuilds:
   esbuild: true
+  # ⭐ @mnemora/local-embedding が持ち込む3つ。**どれも明示的に false で拒否する。**
+  #
+  # pnpm は allowBuilds に載っていないビルドスクリプトを ERR_PNPM_IGNORED_BUILDS で
+  # 落とす。⟹ 黙って無視されるのではなく、**「拒否した」と書いてあることが記録になる。**
+  #
+  # onnxruntime-node: **true にしないこと。**CPU 版のネイティブバイナリは tarball に
+  #   同梱済みで、postinstall がやるのは CUDA execution provider（302MB）の追加ダウンロード
+  #   だけであることを実測で確認した。プロセス内の CPU 推論しか使わないこの構成では、
+  #   302MB を落とす理由が無い。**拒否するほうが軽くて安全である。**
+  # sharp: transformers.js が画像入力のために持つ依存。テキスト埋め込みでは通らない。
+  #   0.34 系は prebuilt（@img/sharp-linux-x64 等）を optionalDependencies で配るので、
+  #   postinstall を拒否してもバイナリは揃う（この器で揃っていることを確認した）。
+  # protobufjs: onnxruntime-web の依存。postinstall は CLI 用の後処理であり、
+  #   ライブラリとして読むぶんには要らない。
+  onnxruntime-node: false
+  protobufjs: false
+  sharp: false
 minimumReleaseAgeExclude:
   - eslint@10.10.0

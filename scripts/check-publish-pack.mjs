@@ -2,7 +2,8 @@
 /**
  * publish 対象パッケージ（`./publish-targets.mjs` の `PUBLISH_TARGETS`。現在は
  * `@mnemora/core` / `@mnemora/testkit` / `@mnemora/openai` / `@mnemora/anthropic` /
- * `@mnemora/postgres` の5つ）を実際に `pnpm pack` し、**tarball の中身**を検査する門。
+ * `@mnemora/postgres` / `@mnemora/local-embedding` の6つ）を実際に `pnpm pack` し、
+ * **tarball の中身**を検査する門。
  *
  * **なぜ tarball の中身を見るか（作業ツリーの package.json を見るだけでは足りない理由）**
  *

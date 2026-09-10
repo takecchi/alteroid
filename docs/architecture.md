@@ -599,6 +599,17 @@ interface EmbeddingProvider {
 - 1つの `EmbeddingProvider` インスタンスは1つの `EmbeddingSpaceId` に固定される。次元をモデルに
   応じて動的に変える実装は許容しない（`VectorStore` 側がテーブルを空間ごとに分ける前提と対応する）。
 - `packages/anthropic` はこの interface を実装しない（§4）。
+- **実装は2つある**（[ADR 0085](./decisions/0085-local-embedding-provider.md)）。
+  `packages/openai` は実 API を叩き、**`packages/local-embedding` は外部サービスに繋がず、
+  ONNX のモデルをプロセス内・CPU で推論する**（既定 `{ provider: "local",
+  model: "ruri-v3-30m/sym", dimensions: 256 }`）。
+  ⚠ **`space.model` の `/sym` は prefix 方式である。**`embed(ctx, texts)` はクエリと文書を
+  区別できないので対称 prefix を使っており、将来 reranking で非対称へ移るときに
+  **既存ベクトルと混ざらないよう別空間になる**ことを、この名前が担保している。**消さないこと。**
+- ⚠ **この interface の適合テストは `packages/testkit` に存在しない**
+  （[ADR 0072](./decisions/0072-anthropic-llm-provider.md) の負債1。
+  [#116](https://github.com/takecchi/mnemora/issues/116)）。
+  実装が増えても、契約を機械的に検査する歯は今のところ無い。
 
 ### 5.6 Scheduler — interface は Phase 1（既定 `InlineScheduler`）、BullMQ 実装は後続フェーズ
 

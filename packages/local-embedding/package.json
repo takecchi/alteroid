@@ -1,0 +1,48 @@
+{
+  "name": "@mnemora/local-embedding",
+  "version": "0.1.1",
+  "type": "module",
+  "description": "EmbeddingProvider の、外部サービスへ繋がない実装。ruri v3 30m (ONNX/q8) を transformers.js でプロセス内推論する。256次元・対称 prefix（docs/architecture.md §5.5）。",
+  "license": "MIT",
+  "homepage": "https://github.com/takecchi/mnemora/tree/main/packages/local-embedding#readme",
+  "bugs": {
+    "url": "https://github.com/takecchi/mnemora/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/takecchi/mnemora.git",
+    "directory": "packages/local-embedding"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "pnpm run build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@mnemora/core": "workspace:^",
+    "@huggingface/transformers": "4.2.0"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vitest": "5.0.0"
+  }
+}
