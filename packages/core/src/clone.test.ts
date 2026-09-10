@@ -8867,6 +8867,61 @@ describe('クローン — 枠で保持している間、中身を持たない�
 });
 
 /**
+ * **`usageBlocked`（Issue #783）**: クローンがいま枠（利用上限）で止まっているかを
+ * 読む読み取り専用の窓（`CloneHost.usageBlocked`）。
+ *
+ * `apps/daemon/src/index.ts` の `wake()` はここを見て、「認証トークンが通る状態に
+ * 戻った」の合図をクローンへ配るか畳むかを決める（`CloneWakeGate`）。実装は
+ * `#usageBlocked !== null` を読むだけの薄い窓なので、既存の「枠に当たったら保持
+ * する」歯と同じ入り口（支出上限のエラー文言）を借りて確かめる。
+ */
+describe('usageBlocked（クローンがいま枠で止まっているかを読む窓。Issue #783）', () => {
+  const spendLimitMessage = "You've hit your individual spend limit for this account.";
+
+  it('枠に当たっていない間は false', () => {
+    const s = setup();
+    expect(s.clone.usageBlocked).toBe(false);
+  });
+
+  it('枠に当たって保持している間は true になり、解除されたら false へ戻る', async () => {
+    // 歯2（すぐ上のブロック）と同じ形の可変フラグ——枠を「合図で明示的に開ける
+    // まで開かない」ようにする。
+    let releaseGateOpen = false;
+    const { fn } = fakeSdk(undefined, {
+      resultFor: () =>
+        releaseGateOpen
+          ? undefined
+          : { subtype: 'error_during_execution', text: spendLimitMessage },
+    });
+    const clone = createClone({
+      stores: createMemoryStores(),
+      queryFn: fn,
+      env: {},
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    const { events } = wireEvents(clone, 'conv-1');
+
+    expect(clone.usageBlocked).toBe(false);
+
+    clone.post(humanMessage('やあ'));
+    await waitForTerminal(events);
+    await waitFor(() => clone.usageBlocked, '枠に当たって保持される');
+    expect(clone.usageBlocked).toBe(true);
+
+    // 枠を開けて、続きの合図（トリガー）を送る——保持していた分が配り直されて
+    // 成功する。`#usageBlocked` は成功したターンの `finally`（`#pump`）で降ろされる。
+    releaseGateOpen = true;
+    clone.post(humanMessage('トリガー', 'conv-2'));
+    await waitFor(() => !clone.usageBlocked, '枠が解除される');
+    expect(clone.usageBlocked).toBe(false);
+
+    await clone.stop();
+  });
+});
+
+/**
  * 症状B（人間の報告）: 「利用上限に当たった状態で話しかけると、枠が回復した
  * 後も、待たされていた発言への返信が届かない」を直接確かめる。
  *

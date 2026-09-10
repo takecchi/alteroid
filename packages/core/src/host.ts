@@ -30,6 +30,22 @@ export interface CloneHost {
   readonly managers: ManagerPool;
 
   /**
+   * クローンがいま枠（利用上限）で止まっているか（Issue #783）。
+   *
+   * **デーモンの回し手が「合図を配るか畳むか」を決めるための読み取り専用の窓。**
+   * 「認証トークンが通る状態に戻った」という合図は、クローンが枠で止まっていない
+   * 限りターンを1本焼くだけで何もしない（`clone.ts` の `post()` の中の
+   * `if (this.#usageBlocked !== null) this.#releaseRequested = true;` が
+   * 唯一の効果であり、止まっていなければそこは1文字も動かない）。⟹
+   * `apps/daemon/src/index.ts` の `wake()` はここを見て、止まっていないときは
+   * 配らずに畳む。
+   *
+   * **真偽だけを返す。** 保持している通知の中身（文言など）はデーモンの判断に
+   * 要らない——渡すと、渡した先が文言を読んで判定を重ねる経路を作りかねない。
+   */
+  readonly usageBlocked: boolean;
+
+  /**
    * 認証トークンを回したので、**次のターンの境界で** SDK セッションを畳んで
    * 作り直す（Issue #393 PR4）。
    *
