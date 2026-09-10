@@ -7569,6 +7569,79 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
   });
 
   /**
+   * ⭐ north_star 禁止2（追加制限禁止）——既定拒否は方針であり、方針は
+   * 設定で開けられなければならない。`overrideReason` が開ける口。**理由を
+   * 残さず黙って通る経路は無い**——override したら journal に事実と理由が
+   * 残ることを測る。
+   */
+  it('overrideReason を渡せば走行中でも消せる（理由が journal に残る）', async () => {
+    const h = harness();
+    const archiveId = await h.stores.archive.archive('sess-override', 'BODY\n');
+    h.setRunningManagerOwning(archiveId, 'mgr-running-2');
+
+    const reply = await h.call('archive_remove', {
+      archiveId,
+      summary: '掃除',
+      overrideReason: '本番障害の調査で緊急に消す必要があった',
+    });
+
+    expect(reply).toContain('消した');
+    expect(reply).toContain('override');
+    expect(reply).toContain('mgr-running-2');
+    // 本文は実際に落ちている（override が通った）。
+    expect(await h.stores.archive.read(archiveId)).toMatchObject({ kind: 'removed' });
+
+    const entries = await h.stores.journal.list({ types: ['decision'] });
+    const entry = entries.find(
+      (e) => e.type === 'decision' && e.decision.includes(archiveId),
+    ) as { type: 'decision'; decision: string; grounds: string } | undefined;
+    expect(entry?.decision).toContain('override');
+    expect(entry?.decision).toContain('mgr-running-2');
+    expect(entry?.decision).toContain('本番障害の調査で緊急に消す必要があった');
+  });
+
+  it('overrideReason が空文字だと拒否のまま（うっかり通らない）', async () => {
+    const h = harness();
+    const archiveId = await h.stores.archive.archive('sess-empty-override', 'BODY\n');
+    h.setRunningManagerOwning(archiveId, 'mgr-running-3');
+
+    const reply = await h.call('archive_remove', {
+      archiveId,
+      summary: '掃除',
+      overrideReason: '',
+    });
+
+    expect(reply).toContain('消せない');
+    expect(await h.stores.archive.read(archiveId)).toEqual({ kind: 'body', body: 'BODY\n' });
+  });
+
+  it('overrideReason が空白だけだと拒否のまま（trim して非空を要求する）', async () => {
+    const h = harness();
+    const archiveId = await h.stores.archive.archive('sess-blank-override', 'BODY\n');
+    h.setRunningManagerOwning(archiveId, 'mgr-running-4');
+
+    const reply = await h.call('archive_remove', {
+      archiveId,
+      summary: '掃除',
+      overrideReason: '   ',
+    });
+
+    expect(reply).toContain('消せない');
+    expect(await h.stores.archive.read(archiveId)).toEqual({ kind: 'body', body: 'BODY\n' });
+  });
+
+  it('走行中でなければ overrideReason を渡さなくても普通に消せる（override の有無で通常経路が変わらない）', async () => {
+    const h = harness();
+    const archiveId = await h.stores.archive.archive('sess-not-running', 'BODY\n');
+    // setRunningManagerOwning しない ＝ 誰も走行中に抱えていない。
+
+    const reply = await h.call('archive_remove', { archiveId, summary: '掃除' });
+
+    expect(reply).toContain('消した');
+    expect(reply).not.toContain('override');
+  });
+
+  /**
    * `context.managers` が無い場面（委譲の道具が配線されていない内部ターン）
    * では、走行中かどうかを確かめる材料が無い——安全側に倒して消させない。
    * `harness()` は常に `managers` を渡すので、ここだけは `createCloneTools`

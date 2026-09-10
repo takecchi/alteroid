@@ -967,6 +967,52 @@ describe('HTTP API', () => {
     expect(await read.text()).toBe('BODY\n');
   });
 
+  /**
+   * ⭐ north_star 禁止2（追加制限禁止）——既定拒否は方針であり、方針は
+   * 設定で開けられなければならない。`overrideReason` クエリ引数が開ける口。
+   * **理由を残さず黙って通る経路は無い**——override したら journal と
+   * 応答の両方にその事実と理由が載ることを測る。
+   */
+  it('DELETE /archive/:id は overrideReason を渡せば走行中でも消せる（理由が journal と応答に残る）', async () => {
+    const id = await stores.archive.archive('sess-override', 'BODY\n');
+    fake.runningOwners.set(id, 'mgr-running-2');
+
+    const response = await app.request(
+      `/archive/${id}?overrideReason=${encodeURIComponent('本番障害の調査で緊急に消す必要があった')}`,
+      { method: 'DELETE' },
+    );
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      ok: boolean;
+      override?: { managerId: string; reason: string };
+    };
+    expect(body.override).toEqual({
+      managerId: 'mgr-running-2',
+      reason: '本番障害の調査で緊急に消す必要があった',
+    });
+
+    // 本文は落ちている（override が実際に通った）。
+    const read = await app.request(`/archive/${id}`);
+    expect(read.status).toBe(410);
+
+    // journal に override の事実と理由が残る。
+    const journalEntries = await stores.journal.list({ types: ['decision'] });
+    const entry = journalEntries.find(
+      (e) => e.type === 'decision' && e.decision.includes(id),
+    ) as { type: 'decision'; decision: string; grounds: string } | undefined;
+    expect(entry?.decision).toContain('override');
+    expect(entry?.decision).toContain('mgr-running-2');
+    expect(entry?.decision).toContain('本番障害の調査で緊急に消す必要があった');
+  });
+
+  it('DELETE /archive/:id は overrideReason が空文字だと拒否のまま（うっかり通らない）', async () => {
+    const id = await stores.archive.archive('sess-empty-override', 'BODY\n');
+    fake.runningOwners.set(id, 'mgr-running-3');
+
+    const response = await app.request(`/archive/${id}?overrideReason=`, { method: 'DELETE' });
+    expect(response.status).toBe(409);
+  });
+
   it('manager_id から一覧・状態・生ログへ降りられる（可観測性の下2層）', async () => {
     fake.managerList.push({
       managerId: 'mgr-1234',

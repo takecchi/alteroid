@@ -472,6 +472,8 @@ export {
   type ManagerStopActor,
   type ManagerSummary,
   type ManagerTranscript,
+  guardArchiveRemoval,
+  type ArchiveRemovalGuard,
   type SessionMissingKind,
   type RunnerFleetOverview,
   type RunnerManagerEntry,

@@ -1172,6 +1172,12 @@ export const archiveRemoveResponseSchema = z.object({
   id: z.string(),
   bytes: z.number().int(),
   alreadyRemoved: z.boolean(),
+  /**
+   * 走行中のマネージャーの退避を override で消したときだけ載る（#698）。
+   * 既定拒否を開けた事実と理由を、応答からも追える形にする——`journal` にも
+   * 同じ内容を残す（`app.ts` の `DELETE /archive/:id` ハンドラの doc）。
+   */
+  override: z.object({ managerId: z.string(), reason: z.string() }).optional(),
 });
 
 /**

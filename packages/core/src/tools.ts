@@ -53,6 +53,7 @@ import {
 } from './excerpt.js';
 import { classifyManagerActivity } from './manager-activity.js';
 import type { ManagerActivityInput } from './manager-activity.js';
+import { guardArchiveRemoval } from './manager.js';
 import type {
   ManagerDenial,
   ManagerPool,
@@ -6168,12 +6169,14 @@ export function createCloneTools(context: ToolContext) {
      * 「この本文を読んだ archive id」が載る（`manager_transcript` tool の
      * `archiveNote`）ので、読んだ直後にここへ渡せる。
      *
-     * **走行中のマネージャーの退避は消せない。** 判定は
-     * `ManagerPool.runningManagerOwning()` 1箇所だけを通す——`app.ts` の
-     * `DELETE /archive/:id` ハンドラと同じ関数である（interface の doc。
-     * 2箇所に書くと片方だけ直る形になる）。**`context.managers` が無い場面
-     * （委譲の道具が配線されていない内部ターン）では、走行中かどうかを
-     * 確かめる材料が無いので、安全側に倒して消させない。**
+     * **走行中のマネージャーの退避は、既定では消せない。** 判定は
+     * `guardArchiveRemoval()` 1箇所だけを通す——`app.ts` の
+     * `DELETE /archive/:id` ハンドラと同じ関数である（`manager.ts` の doc。
+     * 2箇所に書くと片方だけ直る形になる）。**`overrideReason` を渡せば通せる**
+     * ——既定拒否は north_star 禁止2（追加制限禁止）の「方針は設定で開けられ
+     * なければならない」の実装であって、能力の一律な削除ではない
+     * （`guardArchiveRemoval` の doc）。override したときは、その理由と
+     * 走行中だったマネージャーの id を日誌へ残す（黙って通さない）。
      */
     tool(
       'archive_remove',
@@ -6181,7 +6184,9 @@ export function createCloneTools(context: ToolContext) {
         'アーカイブ済みセッション生ログの本文を1件消す（tombstone。行そのものは残る——',
         'archive の一覧には引き続き出る。DELETE ではない）。',
         '無い id を渡しても成功にはならず、そう返る。',
-        '走行中のマネージャーの退避は消せない（拒む。どのマネージャーが走行中かを言う）。',
+        '走行中のマネージャーの退避は既定では消せない（拒む。どのマネージャーが走行中かを言う）。',
+        'それでも消す必要があるなら overrideReason にその理由を書く——渡すと通り、',
+        '「override で消した」事実と理由が日誌に残る（黙って通る経路は無い）。',
         '消した事実は日誌に残る（archive id と直前のバイト数のみ。本文は残らない）。',
         'id は manager_transcript の応答に載る（「この本文を読んだ archive id」）——',
         '読んだ直後にそこから渡せる。',
@@ -6189,20 +6194,28 @@ export function createCloneTools(context: ToolContext) {
       {
         archiveId: z.string().describe('manager_transcript が出す archive id'),
         summary: z.string().describe('なぜ消したかの一行要約（日誌に残る。本文は残らない）'),
+        overrideReason: z
+          .string()
+          .optional()
+          .describe(
+            '走行中のマネージャーの退避を、それでも消す理由。渡さなければ拒否される' +
+              '（省略時は既定の拒否のまま）。渡すと「override で消した」として理由ごと日誌に残る。',
+          ),
       },
-      async ({ archiveId, summary }) => {
-        if (!context.managers) {
+      async ({ archiveId, summary, overrideReason }) => {
+        const guard = guardArchiveRemoval(context.managers, archiveId, overrideReason);
+        if (guard.kind === 'unknown') {
           return text(
             '消せない——いまは委譲の道具が配線されていない内部ターンで、走行中の' +
               'マネージャーがこの退避を使っているかどうかを確かめる材料が無い' +
               '（安全側に倒して拒む。#698）。',
           );
         }
-        const owner = context.managers.runningManagerOwning(archiveId);
-        if (owner !== undefined) {
+        if (guard.kind === 'denied') {
           return text(
-            `消せない——マネージャー ${owner} がいま走行中で、この退避を使っている` +
-              '（走行中の委譲を追う最後の手段が消えるため。#698）。',
+            `消せない——マネージャー ${guard.managerId} がいま走行中で、この退避を使っている` +
+              '（走行中の委譲を追う最後の手段が消えるため。それでも消すなら overrideReason に' +
+              '理由を書くこと。#698）。',
           );
         }
         const result = await stores.archive.remove(archiveId);
@@ -6215,19 +6228,26 @@ export function createCloneTools(context: ToolContext) {
               `${result.bytes.toLocaleString('ja-JP')} バイトを落とした）。何も変わっていない。`,
           );
         }
+        const overrideNote =
+          guard.kind === 'allowed-with-override'
+            ? `（⚠️ override — 走行中のマネージャー ${guard.managerId} の退避だったが、` +
+              `理由「${guard.reason}」により消した）`
+            : '';
         await appendJournalOrThrow(
           'archive_remove',
           stores.journal,
           {
             type: 'decision',
-            decision: `退避済み生ログの本文を消した: ${archiveId}（${result.bytes} バイト）: ${summary}`,
-            grounds: summary,
+            decision:
+              `退避済み生ログの本文を消した: ${archiveId}（${result.bytes} バイト）: ${summary}` +
+              overrideNote,
+            grounds: guard.kind === 'allowed-with-override' ? `${summary}／${overrideNote}` : summary,
           },
           'act-completed',
         );
         return text(
           `アーカイブ ${archiveId} の本文を消した（${result.bytes.toLocaleString('ja-JP')} バイト）。` +
-            '行そのものは残っている（list には引き続き出る）。',
+            `行そのものは残っている（list には引き続き出る）。${overrideNote}`,
         );
       },
     ),

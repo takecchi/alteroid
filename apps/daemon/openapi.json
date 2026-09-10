@@ -7274,7 +7274,7 @@
         "operationId": "deleteArchiveById",
         "tags": ["archive"],
         "summary": "アーカイブ済み生ログの本文を消す（行は残る）",
-        "description": "本文だけを落とす（tombstone）。行そのものは消えない——`/archive` の一覧には引き続き出る。存在しない id を渡しても成功にはならない。走行中のマネージャーの退避は消せない（拒む。どのマネージャーが走行中かを言う）。",
+        "description": "本文だけを落とす（tombstone）。行そのものは消えない——`/archive` の一覧には引き続き出る。存在しない id を渡しても成功にはならない。走行中のマネージャーの退避は既定では消せない（拒む。どのマネージャーが走行中かを言う）。クエリ引数 `overrideReason` にその理由を書けば通せる（north_star 禁止2「方針は設定で開けられなければならない」の実装——既定拒否は能力の一律な削除ではなく方針である）。override したときは理由と対象のマネージャー id を日誌に残す。",
         "responses": {
           "200": {
             "description": "消した（または前から消されていた）。",
@@ -7297,6 +7297,18 @@
                     },
                     "alreadyRemoved": {
                       "type": "boolean"
+                    },
+                    "override": {
+                      "type": "object",
+                      "properties": {
+                        "managerId": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["managerId", "reason"]
                     }
                   },
                   "required": ["ok", "id", "bytes", "alreadyRemoved"]
@@ -7321,7 +7333,7 @@
             }
           },
           "409": {
-            "description": "走行中のマネージャーの退避なので消せない。",
+            "description": "走行中のマネージャーの退避なので消せない。`overrideReason` クエリ引数で開ける。",
             "content": {
               "application/json": {
                 "schema": {

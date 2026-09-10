@@ -35,6 +35,7 @@ import {
   reachedStart,
   droppedTraceLedgerSince,
   findUnrecordedManagers,
+  guardArchiveRemoval,
   isAccountGranted,
   isDailyReport,
   jobStatusSchema,
@@ -3979,7 +3980,11 @@ export function createApp(deps: AppDeps) {
         description:
           '本文だけを落とす（tombstone）。行そのものは消えない——`/archive` の一覧には' +
           '引き続き出る。存在しない id を渡しても成功にはならない。走行中のマネージャーの' +
-          '退避は消せない（拒む。どのマネージャーが走行中かを言う）。',
+          '退避は既定では消せない（拒む。どのマネージャーが走行中かを言う）。' +
+          'クエリ引数 `overrideReason` にその理由を書けば通せる' +
+          '（north_star 禁止2「方針は設定で開けられなければならない」の実装——' +
+          '既定拒否は能力の一律な削除ではなく方針である）。override したときは' +
+          '理由と対象のマネージャー id を日誌に残す。',
         responses: {
           200: {
             description: '消した（または前から消されていた）。',
@@ -3990,28 +3995,43 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           409: {
-            description: '走行中のマネージャーの退避なので消せない。',
+            description:
+              '走行中のマネージャーの退避なので消せない。`overrideReason` クエリ引数で開ける。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
       }),
       async (c) => {
         const id = c.req.param('id');
-        const owner = clone.managers.runningManagerOwning(id);
-        if (owner !== undefined) {
+        const overrideReason = c.req.query('overrideReason');
+        const guard = guardArchiveRemoval(clone.managers, id, overrideReason);
+        if (guard.kind === 'denied') {
           return c.json(
-            { error: `走行中のマネージャー ${owner} の退避なので消せない` },
+            {
+              error:
+                `走行中のマネージャー ${guard.managerId} の退避なので消せない` +
+                '（overrideReason クエリ引数に理由を書けば通せる）',
+            },
             409,
           );
         }
         const result = await stores.archive.remove(id);
         if (result.kind === 'missing') return c.json({ error: 'not found' as const }, 404);
+        const overrideNote =
+          guard.kind === 'allowed-with-override'
+            ? `（⚠️ override — 走行中のマネージャー ${guard.managerId} の退避だったが、` +
+              `理由「${guard.reason}」により消した）`
+            : '';
         await stores.journal.append({
           type: 'decision',
           decision:
             `退避済み生ログの本文を消した: ${id}（${result.bytes} バイト。` +
-            `${result.kind === 'already' ? '前から消されていた' : 'いま消した'}）`,
-          grounds: '人間が API から直接操作した',
+            `${result.kind === 'already' ? '前から消されていた' : 'いま消した'}）` +
+            overrideNote,
+          grounds:
+            guard.kind === 'allowed-with-override'
+              ? `人間が API から直接操作した（override理由: ${guard.reason}）`
+              : '人間が API から直接操作した',
         });
         return c.json(
           archiveRemoveResponseSchema.parse({
@@ -4019,6 +4039,9 @@ export function createApp(deps: AppDeps) {
             id,
             bytes: result.bytes,
             alreadyRemoved: result.kind === 'already',
+            ...(guard.kind === 'allowed-with-override'
+              ? { override: { managerId: guard.managerId, reason: guard.reason } }
+              : {}),
           }),
         );
       },

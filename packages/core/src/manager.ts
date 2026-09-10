@@ -1191,6 +1191,57 @@ export interface ManagerPool {
 }
 
 /**
+ * `archive_remove` / `DELETE /archive/:id` が実際に消してよいかの、唯一の
+ * 判定所（#698）。
+ *
+ * **既定は拒否だが、override で開けられる。** これは追加の安全機構ではなく
+ * north_star の禁止2（追加制限禁止）の実装そのものである——逐語:
+ *
+ * > **追加制限禁止**……制限が必要なら、能力（ツール一覧）を削るのではなく、
+ * > 方針（何をさせないかの宣言）と実行環境の境界で表す。**方針は設定で
+ * > 開けられなければならない**
+ *
+ * 走行中のマネージャーの退避を守るのは方針（「いま困っている1本を追う手段を
+ * 黙って失わせない」）であって、能力の一律な削除ではない。**方針である以上、
+ * 開ける口が無ければ禁止2に反する**——だから override を持つ。
+ *
+ * **`overrideReason` は真偽値ではなく理由の文字列そのものが引き金である。**
+ * `override: boolean` と `reason?: string` の2枚に分けると、「override は
+ * true だが reason が空」といううっかりが型の上では成立してしまう
+ * （`reason?` を省略可のままにしない、という要求はここで満たす）。1本の
+ * 必須情報（理由）だけを受け取り、それが非空文字列で在ることそのものを
+ * 「override する」という意思表示として扱う——`reason` を渡さずに
+ * override だけを true にする経路が構造的に存在しない。
+ *
+ * **理由を記録に残すのはこの関数の外側（呼び出し側）の仕事である。** ここは
+ * 「通してよいか」だけを判定し、`allowed-with-override` を返すときに
+ * `managerId` と `reason` を運ぶ——呼び出し側（`tools.ts` の `archive_remove` /
+ * `app.ts` の `DELETE /archive/:id`）はこれを journal のエントリへそのまま
+ * 書く（「override で消した」という事実と理由を、追える形で残す）。
+ */
+export type ArchiveRemovalGuard =
+  | { readonly kind: 'allowed' }
+  | { readonly kind: 'allowed-with-override'; readonly managerId: string; readonly reason: string }
+  | { readonly kind: 'denied'; readonly managerId: string }
+  /** `managers` 自体が無い（配線されていない場面）。安全側に倒して拒否する。 */
+  | { readonly kind: 'unknown' };
+
+export function guardArchiveRemoval(
+  managers: Pick<ManagerPool, 'runningManagerOwning'> | undefined,
+  archiveId: string,
+  overrideReason: string | undefined,
+): ArchiveRemovalGuard {
+  if (managers === undefined) return { kind: 'unknown' };
+  const managerId = managers.runningManagerOwning(archiveId);
+  if (managerId === undefined) return { kind: 'allowed' };
+  const reason = overrideReason?.trim();
+  if (reason !== undefined && reason.length > 0) {
+    return { kind: 'allowed-with-override', managerId, reason };
+  }
+  return { kind: 'denied', managerId };
+}
+
+/**
  * workspace の運用選択（roadmap M5「workspace locator の運用選択」）。
  *
  * **方針であって能力の制限ではない**ので設定で切り替わる（north_star 禁止2と
