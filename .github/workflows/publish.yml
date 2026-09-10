@@ -47,13 +47,13 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # 下の「tag が main の履歴上に在ること」の検査に全履歴が必要。
           fetch-depth: 0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "22"
           # registry-url を渡すと ~/.npmrc が registry.npmjs.org を向く。
