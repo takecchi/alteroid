@@ -64,6 +64,7 @@ import type { ProfileApplier } from './profile.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap } from './recent.js';
 import { describeSituation, describeSituationUnavailable } from './situation.js';
+import { countSupersedingReports, describeSuperseded } from './superseded.js';
 import { toAgentTokenView } from './token-pool.js';
 import type { RunnerRegistry } from './runner-protocol.js';
 import {
@@ -1194,6 +1195,20 @@ class Clone implements CloneHost {
    * 同じ場所に置かない」）。
    */
   #situationNotice = '';
+  /**
+   * 「この委譲（マネージャー）から、いま配っているこの合図より後に報告が届いて
+   * いる」の断り書き。ターンの本文の先頭に載る（doc の本体は `superseded.ts`）。
+   *
+   * **`#situationNotice` の隣に置く理由も同じである。** プロンプトの組み立ては
+   * 起点の数だけ（7か所）散っていて、どれか1か所へ入れ忘れると、その起点に
+   * だけ「もう古いかもしれない」と気づけないターンが生まれる。ターンの入口
+   * （`#runTurn`）は1か所しかないので、そこに置けば起点を問わず必ず載る。
+   *
+   * **`#redeliveryNotice` とは別に持つ。** あちらは「この合図そのものが配り
+   * 直しか」、こちらは「同じ委譲から後続の報告が来ているか」で、判定の材料も
+   * 倒れ先も別物である（`superseded.ts` 冒頭）。
+   */
+  #supersededNotice = '';
 
   /** SDK へ流す入力の待ち行列。 */
   readonly #input: SDKUserMessage[] = [];
@@ -2076,6 +2091,16 @@ class Clone implements CloneHost {
         noteDroppedRecord('いまの全体の組み立て', inboxEventShape(event), error);
         return describeSituationUnavailable(error);
       });
+      // **ここも `try` の外である**（直上と同じ理由——投げれば受信箱のループごと
+      // 死ぬ）。倒れ先は空文字ではなく `describeSuperseded` の `uncountable` の文
+      // （`#situationNoticeFor` と同じ向き）——「数えられなかった」を 0 件と
+      // 混同しない、という `superseded.ts` の要である。
+      this.#supersededNotice = await this.#supersededNoticeFor(batch).catch((error: unknown) => {
+        noteDroppedRecord('後続の報告の組み立て', inboxEventShape(event), error);
+        return event.type === 'manager_message'
+          ? describeSuperseded({ kind: 'uncountable', detail: String(error) }, event.managerId)
+          : '';
+      });
       try {
         if (mergedHuman !== null) await this.#runHumanTurn(mergedHuman);
         else if (mergedReports !== null) await this.#runManagerReportBatch(mergedReports);
@@ -2087,6 +2112,7 @@ class Clone implements CloneHost {
         this.#redeliveryNotice = '';
         this.#commitmentNotice = '';
         this.#situationNotice = '';
+        this.#supersededNotice = '';
         // **枠のせいで処理できなかったかは、ここで初めて分かることがある。**
         // `#handle` の中（`#dispatch` の `result` / `rate_limit_event` /
         // `system` 通知）で今回の合図が枠に当たったと判明したなら、この時点で
@@ -2758,6 +2784,64 @@ class Clone implements CloneHost {
     } catch (error) {
       return describeSituationUnavailable(error);
     }
+  }
+
+  /**
+   * ターンの本文の先頭に載せる、「後続の報告」の断り書き（doc の本体は
+   * `superseded.ts`）。
+   *
+   * ## `kind` は絞らない
+   *
+   * `events[0].type !== 'manager_message'` だけを見て `report` / `question` /
+   * `permission` のどれが配られていても素通しにする——「後続の報告が在る」は
+   * どの `kind` が配られていても効く事実だからである。
+   *
+   * ## 基準時刻とまとめ読みの扱い
+   *
+   * `afterMs` は**この batch に含まれる `manager_message` の `at` のうち最大**
+   * にする（batch の中身自身を「後続」と数えないため）。`excludeIds` は
+   * batch 全部の id にする（同じミリ秒の同着を「後続」に含めて二重に数えない
+   * ため）。
+   *
+   * ## `list()` が投げたら、受信箱のループへは投げない
+   *
+   * ここでは `list()` の失敗を握り潰さず、そのまま呼び出し側（`#pump`）へ
+   * 返す。**投げっぱなしにする理由は、そこにこそ「投げれば `for await` ごと
+   * 抜けて受信箱のループが死ぬ」という代償が乗っているからで、その代償を
+   * 忘れないための唯一の場所が呼び出し側の `.catch()` である。** ここで
+   * 握り潰すと、その `.catch()` を外しても何も赤くならない——歯が守っている
+   * つもりの境界が実は歯に見えていない、という一番静かな壊れ方になる。
+   * `#situationNoticeFor` は自分の中で `catch` して `describeSituationUnavailable`
+   * を返すが、あちらは「読めなかった」を握った**内側**にもう1つの安全側の
+   * 意味（0 で埋めない）を持たせる必要があったからそうしてある——こちらは
+   * 安全側の文面を作る材料（`managerId`）を呼び出し側も同じく持っているので、
+   * 二重に握る理由が無い。
+   */
+  async #supersededNoticeFor(events: InboxEvent[]): Promise<string> {
+    const event = events[0];
+    if (event === undefined) return '';
+    if (event.type !== 'manager_message') return '';
+
+    // **`at` は畳まずにそのまま渡す。** 読めなかったときの倒れ先を決めるのは
+    // `countSupersedingReports` の側である（`afterAts` の doc）——ここで
+    // `Date.parse` して畳むと、読めなかった回の基準が `-Infinity` になり、
+    // この委譲の報告が全部「後続」に見える。
+    const afterAts: string[] = [];
+    const excludeIds = new Set<string>();
+    for (const item of events) {
+      excludeIds.add(item.id);
+      if (item.type !== 'manager_message') continue;
+      afterAts.push(item.at);
+    }
+
+    const list = await this.#stores.commitments.list({ includeClosed: true });
+    const decision = countSupersedingReports({
+      list,
+      managerId: event.managerId,
+      afterAts,
+      excludeIds,
+    });
+    return describeSuperseded(decision, event.managerId);
   }
 
   /**
@@ -3922,7 +4006,12 @@ class Clone implements CloneHost {
         await this.#withFreshMemory(
           (await this.#distillGapNotice(kind)) +
             this.#contextWindowFoldNotice(kind) +
+            // **`#redeliveryNotice` の直後に `#supersededNotice` を置く。**
+            // この2本は「いま配られているこの合図の鮮度」の話で、後ろ2本
+            // （`#commitmentNotice` / `#situationNotice`）は「全体の状態」の話
+            // ——規則が違うものを同じ場所に置かない（`turn-input.ts`）。
             this.#redeliveryNotice +
+            this.#supersededNotice +
             this.#commitmentNotice +
             this.#situationNotice +
             text,

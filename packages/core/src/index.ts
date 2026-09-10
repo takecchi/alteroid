@@ -400,6 +400,15 @@ export {
   describeSituationUnavailable,
   type ManagerSituationCounts,
 } from './situation.js';
+/**
+ * 「この委譲から、この合図より後に報告が届いている」の判定と文面
+ * （doc は `superseded.ts`）。**外へ出しているのは純関数だけである。**
+ */
+export {
+  countSupersedingReports,
+  describeSuperseded,
+  type SupersededDecision,
+} from './superseded.js';
 export { CRON_EXPRESSION_MAX, isCronExpression, parseCron, type CronSchedule } from './cron.js';
 /**
  * SSE のコメント行 heartbeat。**SSE を出す側が3経路（デーモンの `POST /chat` と
