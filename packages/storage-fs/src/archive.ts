@@ -45,7 +45,8 @@ export class FsTranscriptArchive implements TranscriptArchive {
   async read(id: string): Promise<ArchiveRead> {
     if (sanitize(id) !== id) return { kind: 'missing' };
     const marker = await this.#readMarker(id);
-    if (marker !== null) return { kind: 'removed', removedAt: marker.removedAt, bytes: marker.bytes };
+    if (marker !== null)
+      return { kind: 'removed', removedAt: marker.removedAt, bytes: marker.bytes };
     try {
       const body = await readFile(join(this.#dir, id), 'utf8');
       return { kind: 'body', body };
@@ -90,7 +91,8 @@ export class FsTranscriptArchive implements TranscriptArchive {
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
         // 競合: 別の呼び出しが先に印を置いた。その印を読み直して結果を合わせる。
         const marker = await this.#readMarker(id);
-        if (marker !== null) return { kind: 'already', removedAt: marker.removedAt, bytes: marker.bytes };
+        if (marker !== null)
+          return { kind: 'already', removedAt: marker.removedAt, bytes: marker.bytes };
       }
       throw error;
     }

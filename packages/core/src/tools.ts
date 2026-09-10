@@ -6241,7 +6241,8 @@ export function createCloneTools(context: ToolContext) {
             decision:
               `退避済み生ログの本文を消した: ${archiveId}（${result.bytes} バイト）: ${summary}` +
               overrideNote,
-            grounds: guard.kind === 'allowed-with-override' ? `${summary}／${overrideNote}` : summary,
+            grounds:
+              guard.kind === 'allowed-with-override' ? `${summary}／${overrideNote}` : summary,
           },
           'act-completed',
         );

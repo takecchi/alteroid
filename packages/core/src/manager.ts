@@ -3728,7 +3728,8 @@ class Pool implements ManagerPool {
     if (record) {
       const runner = await this.#runnerOf(record);
       const live = await runner?.transcript(managerId).catch(() => null);
-      if (live !== null && live !== undefined && live.length > 0) return { kind: 'body', body: live };
+      if (live !== null && live !== undefined && live.length > 0)
+        return { kind: 'body', body: live };
     }
 
     // 無ければ退避済みへ降りる。**「消された」を単に飛ばさない**（#698）——

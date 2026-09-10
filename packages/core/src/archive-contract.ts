@@ -27,9 +27,7 @@ import type { TranscriptArchive } from './store.js';
  */
 export async function verifyTranscriptArchiveContract(archive: TranscriptArchive): Promise<void> {
   function fail(label: string, detail: unknown): never {
-    throw new Error(
-      `TranscriptArchive contract violated: ${label} — ${JSON.stringify(detail)}`,
-    );
+    throw new Error(`TranscriptArchive contract violated: ${label} — ${JSON.stringify(detail)}`);
   }
 
   const missingId = 'archive-contract-never-archived-id';
@@ -53,7 +51,8 @@ export async function verifyTranscriptArchiveContract(archive: TranscriptArchive
   // 5. 空の生ログを退避しても removed にならない（判定に本文の中身を使わない）。
   const idEmpty = await archive.archive('archive-contract-session-empty', '');
   const bodyEmpty = await archive.read(idEmpty);
-  if (bodyEmpty.kind !== 'body' || bodyEmpty.body !== '') fail('空の生ログはremovedにならない', bodyEmpty);
+  if (bodyEmpty.kind !== 'body' || bodyEmpty.body !== '')
+    fail('空の生ログはremovedにならない', bodyEmpty);
 
   const listBefore = await archive.list();
   if (![idA, idB, idEmpty].every((id) => listBefore.includes(id))) {
@@ -95,6 +94,9 @@ export async function verifyTranscriptArchiveContract(archive: TranscriptArchive
   if (removedAgain.kind !== 'already') fail('二重remove()はalready', removedAgain);
   if (removedAgain.bytes !== expectedBytesA) fail('二重removeのバイト数', removedAgain);
   if (removedAgain.removedAt !== readA.removedAt) {
-    fail('二重removeのremovedAtは最初のままである', { first: readA.removedAt, second: removedAgain.removedAt });
+    fail('二重removeのremovedAtは最初のままである', {
+      first: readA.removedAt,
+      second: removedAgain.removedAt,
+    });
   }
 }

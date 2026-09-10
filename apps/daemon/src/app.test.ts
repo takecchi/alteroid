@@ -60,7 +60,10 @@ function fakeClone() {
   const managerDenials = new Map<string, ManagerDenial[]>();
   const transcripts = new Map<string, string>();
   /** `transcript()` を `kind: 'removed'` にする（#698）。 */
-  const removedTranscripts = new Map<string, { archiveId: string; removedAt: string; bytes: number }>();
+  const removedTranscripts = new Map<
+    string,
+    { archiveId: string; removedAt: string; bytes: number }
+  >();
   /** `ManagerPool.runningManagerOwning()` の返り値（#698）。 */
   const runningOwners = new Map<string, string>();
   const managerSends: { managerId: string; text: string; requestId?: string }[] = [];
@@ -997,9 +1000,8 @@ describe('HTTP API', () => {
 
     // journal に override の事実と理由が残る。
     const journalEntries = await stores.journal.list({ types: ['decision'] });
-    const entry = journalEntries.find(
-      (e) => e.type === 'decision' && e.decision.includes(id),
-    ) as { type: 'decision'; decision: string; grounds: string } | undefined;
+    const entry = journalEntries.find((e) => e.type === 'decision' && e.decision.includes(id)) as
+      { type: 'decision'; decision: string; grounds: string } | undefined;
     expect(entry?.decision).toContain('override');
     expect(entry?.decision).toContain('mgr-running-2');
     expect(entry?.decision).toContain('本番障害の調査で緊急に消す必要があった');

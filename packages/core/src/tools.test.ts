@@ -316,7 +316,12 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     },
     setTranscript(managerId, body, archiveId) {
       if (body === null) transcripts.delete(managerId);
-      else transcripts.set(managerId, { kind: 'body', body, ...(archiveId === undefined ? {} : { archiveId }) });
+      else
+        transcripts.set(managerId, {
+          kind: 'body',
+          body,
+          ...(archiveId === undefined ? {} : { archiveId }),
+        });
     },
     setTranscriptFailure(managerId, message) {
       transcriptErrors.set(managerId, message);
@@ -7535,9 +7540,8 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
     expect(await h.stores.archive.read(archiveId)).toMatchObject({ kind: 'removed' });
 
     const entries = await h.stores.journal.list({ types: ['decision'] });
-    const entry = entries.find(
-      (e) => e.type === 'decision' && e.decision.includes(archiveId),
-    ) as { type: 'decision'; decision: string; grounds: string } | undefined;
+    const entry = entries.find((e) => e.type === 'decision' && e.decision.includes(archiveId)) as
+      { type: 'decision'; decision: string; grounds: string } | undefined;
     expect(entry).toBeDefined();
     expect(entry?.grounds).toBe('もう要らないので消した');
     // **本文は日誌へ写さない**（`BODY` という語が journal に出ない）。
@@ -7592,9 +7596,8 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
     expect(await h.stores.archive.read(archiveId)).toMatchObject({ kind: 'removed' });
 
     const entries = await h.stores.journal.list({ types: ['decision'] });
-    const entry = entries.find(
-      (e) => e.type === 'decision' && e.decision.includes(archiveId),
-    ) as { type: 'decision'; decision: string; grounds: string } | undefined;
+    const entry = entries.find((e) => e.type === 'decision' && e.decision.includes(archiveId)) as
+      { type: 'decision'; decision: string; grounds: string } | undefined;
     expect(entry?.decision).toContain('override');
     expect(entry?.decision).toContain('mgr-running-2');
     expect(entry?.decision).toContain('本番障害の調査で緊急に消す必要があった');

@@ -42,7 +42,11 @@ export class PgTranscriptArchive implements TranscriptArchive {
 
   async read(id: string): Promise<ArchiveRead> {
     const rows = await this.#db
-      .select({ body: archive.body, removedAt: archive.removedAt, removedBytes: archive.removedBytes })
+      .select({
+        body: archive.body,
+        removedAt: archive.removedAt,
+        removedBytes: archive.removedBytes,
+      })
       .from(archive)
       .where(eq(archive.id, id))
       .limit(1);
@@ -52,7 +56,11 @@ export class PgTranscriptArchive implements TranscriptArchive {
     // 生ログ（PreCompact が呼ばれた時点で本文が空だった、等）を「消された」と
     // 誤判定しないため（`ArchiveRead` interface doc）。
     if (row.removedAt !== null) {
-      return { kind: 'removed', removedAt: row.removedAt.toISOString(), bytes: row.removedBytes ?? 0 };
+      return {
+        kind: 'removed',
+        removedAt: row.removedAt.toISOString(),
+        bytes: row.removedBytes ?? 0,
+      };
     }
     return { kind: 'body', body: row.body };
   }

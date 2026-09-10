@@ -6790,9 +6790,7 @@ describe('クローン — 起動時に墓標を拾い直す（#564 E1b）', () 
 
     const texts = await selfTexts(stores);
     // **missing の文言とは別物である**——同じ行が両方を名乗ることは無い。
-    expect(texts.some((text) => text.includes('退避が見つからないので、印を下ろした'))).toBe(
-      false,
-    );
+    expect(texts.some((text) => text.includes('退避が見つからないので、印を下ろした'))).toBe(false);
     // 蒸留は起こさない（渡す中身が無い）。
     expect(texts.some((text) => text.includes('前の器が記憶へ移せなかった区間を拾い直す'))).toBe(
       false,
