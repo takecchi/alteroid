@@ -564,6 +564,37 @@ export interface RecallUsage {
    * 後者は `chars` と `indexChars` を見れば分かる。
    */
   share?: number;
+  /**
+   * **申告された予算次元のうち、いずれか1つでも実際に超えたか**（Issue #108「案3」）。
+   *
+   * **3状態を区別する（additive。既存欄の意味は変えない）**:
+   * - 予算が1次元も申告されていない ⟹ この欄自体が無い（`undefined`）。
+   *   **存在条件は `share` と同じ**（`budget: {}` のように次元が1つも無い場合も無い）
+   *   ——`recall-runtime.ts` の `runRecall` が両欄を同じ条件式（`usageShareDenominator`）
+   *   から作る。
+   * - 申告されていて、どの次元も超えていない ⟹ `false`。
+   * - 申告されていて、どれか1次元でも超えた ⟹ `true`。
+   *
+   * ⛔ **`false` を「超えていない」と「測っていない」の両方の意味にしない**——
+   * だから「測っていない」は `false` ではなく欄そのものの不在（`undefined`）で表す。
+   *
+   * **`share` からは導出しない。** 理由（`recall-runtime.ts` の該当コメントを参照）:
+   * 1. 強制側（段4の `fits`/`unitTokens`）は digest ごとに `tokenCounter.count()` を呼ぶため
+   *    `heuristicTokenCounter` の `Math.ceil` が件数ぶん掛かる。`share` の分子
+   *    （連結した1本に対して `ceil` を1回）とは加法的に一致しない。
+   * 2. `share` の分母は `effectiveTokenBudget(budget) ?? budget?.maxMemoryChars` であり、
+   *    トークン予算が申告されると `maxMemoryChars` は分母から丸ごと消える。
+   *
+   * ⟹ 返した memories を、申告された全予算次元（`maxMemoryChars` / `maxMemoryTokens` /
+   * `promptBudgetTokens`）に対して個別に測り直し、どれか1つでも超えていれば `true` にする。
+   *
+   * **⚠ 引き受けた負債（Issue #108・本 PR の PR 本文に詳細）**:
+   * 1. これは真偽値なので、`heuristic` な推定が実態からどれだけ外れているかは分からない。
+   *    「推定である」こと自体の検知には別の口が要る。
+   * 2. 「強制と計測で数え方が違う」という `share` の穴（上記1）はここでも直していない
+   *    ——ADR 0083 が意図的に見送った範囲であり、見落としではない。
+   */
+  budgetExceeded?: boolean;
 }
 
 export const RecallUsageSchema = z.object({
@@ -577,6 +608,8 @@ export const RecallUsageSchema = z.object({
   }),
   indexChars: z.number().int().nonnegative(),
   share: z.number().nonnegative().max(1).optional(),
+  // additive: share の計算は変えない。既存欄の意味も変えない（doc 参照）。
+  budgetExceeded: z.boolean().optional(),
 }) satisfies z.ZodType<RecallUsage>;
 
 /**

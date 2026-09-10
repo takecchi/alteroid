@@ -490,3 +490,26 @@ describe("RecallUsageSchema — share は割合として成立する値しか受
     expect(RecallUsageSchema.safeParse({ ...base, share: 2.483 }).success).toBe(false);
   });
 });
+
+describe("RecallUsageSchema — budgetExceeded は additive（Issue #108「案3」）", () => {
+  const base = {
+    chars: 100,
+    estimatedTokens: 25,
+    counter: "heuristic" as const,
+    byTier: { full: 0, digest: 60, index: 40 },
+    indexChars: 40,
+  };
+
+  it("budgetExceeded を省略しても受け付ける（既存の呼び出しを壊さない）", () => {
+    expect(RecallUsageSchema.safeParse(base).success).toBe(true);
+  });
+
+  it("budgetExceeded: true / false のどちらも受け付ける", () => {
+    expect(RecallUsageSchema.safeParse({ ...base, budgetExceeded: true }).success).toBe(true);
+    expect(RecallUsageSchema.safeParse({ ...base, budgetExceeded: false }).success).toBe(true);
+  });
+
+  it("真偽値以外は弾く", () => {
+    expect(RecallUsageSchema.safeParse({ ...base, budgetExceeded: "true" }).success).toBe(false);
+  });
+});

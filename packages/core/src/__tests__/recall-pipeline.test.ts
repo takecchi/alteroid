@@ -1086,6 +1086,171 @@ describe("recall() — usage（docs/recall.md §6: 計測と強制を混同し�
   });
 });
 
+/**
+ * `usage.budgetExceeded`（Issue #108「案3」、PR #114/ADR 0083 が意図的に切り出した残件）。
+ *
+ * 3状態を区別する: 予算が1次元も申告されていない ⟹ 欄が無い（undefined）。
+ * 申告されていて超えていない ⟹ false。申告されていて超えた ⟹ true。
+ * 存在条件は `usage.share` と同じ（`recall-runtime.ts` の `usageShareDenominator`）。
+ *
+ * **`share` からは導出しない**——強制側（段4の `fits`/`unitTokens`）は digest ごとに
+ * `tokenCounter.count()` を呼ぶため `Math.ceil` が件数ぶん掛かるのに対し、`share` の分子は
+ * 連結した1本に対して `ceil` を1回だけ行う。両者は加法的に一致しない
+ * （このファイル内の「非CJK20字×2件」の歯が、その不一致を実測で示す）。
+ */
+describe("recall() — usage.budgetExceeded（Issue #108「案3」）", () => {
+  it("budget を渡さない場合は budgetExceeded が無い（欄そのものが存在しない）", async () => {
+    const { runtime, stores } = buildRuntime();
+    await createEmbeddedMemory(stores, [1, 0]);
+    const result = await runtime.recall(ctx, { vector: [1, 0] });
+    expect(result.usage.budgetExceeded).toBeUndefined();
+    // 存在条件が share と一致することの歯——`share` も無いはず。
+    expect(result.usage.share).toBeUndefined();
+  });
+
+  it("budget: {}（予算次元が1つも無い）でも budgetExceeded は無い（share と存在条件が一致する）", async () => {
+    const { runtime, stores } = buildRuntime();
+    await createEmbeddedMemory(stores, [1, 0]);
+    const result = await runtime.recall(ctx, { vector: [1, 0], budget: {} });
+    expect(result.usage.budgetExceeded).toBeUndefined();
+    expect(result.usage.share).toBeUndefined();
+  });
+
+  it("予算内に収まっていれば budgetExceeded は false（undefined ではなく明示的に false）", async () => {
+    const { runtime, stores } = buildRuntime();
+    await createEmbeddedMemory(stores, [1, 0], { digest: "short" });
+    const result = await runtime.recall(ctx, {
+      vector: [1, 0],
+      budget: { maxMemoryChars: 10_000, maxMemoryTokens: 10_000, promptBudgetTokens: 10_000 },
+    });
+    expect(result.usage.budgetExceeded).toBe(false);
+  });
+
+  /**
+   * 🔴🔴 実際に true になる入力（ADR 0083 / PR #114 が挙げている再現をここで作る）。
+   *
+   * 非CJK 20文字の digest を2件（各 `heuristicTokenCounter` で5トークン）用意し、
+   * `maxMemoryTokens: 10` を渡す。まず前提の数値そのものを自分で確かめる
+   * （書き写さない）: 段4の強制（`fits`/`unitTokens`）は digest ごとに ceil してから
+   * 合算するので `5+5=10 <= 10` となり両方残るが、実際に返した量（連結した41字）を
+   * 測り直すと `ceil(41/4) = 11 > 10` で超えている。
+   */
+  it("非CJK20字×2件・maxMemoryTokens:10 ⟹ 強制側は両方残すが、連結して測り直すと超えている", async () => {
+    const digestA = "01234567890123456789"; // 20 chars, 全て非CJK
+    const digestB = "abcdefghijklmnopqrst"; // 20 chars, 全て非CJK
+    expect(digestA).toHaveLength(20);
+    expect(digestB).toHaveLength(20);
+
+    // 前提1: 1件あたりのトークン数（段4の `unitTokens` と同じ計算: digest ごとに count()）。
+    expect(heuristicTokenCounter.count(digestA).tokens).toBe(5);
+    expect(heuristicTokenCounter.count(digestB).tokens).toBe(5);
+    expect(
+      heuristicTokenCounter.count(digestA).tokens + heuristicTokenCounter.count(digestB).tokens,
+    ).toBe(10);
+    // 前提2: 連結して測った場合（usage の `memoryTokens` と同じ計算）。
+    expect(heuristicTokenCounter.count(`${digestA}\n${digestB}`).tokens).toBe(11);
+
+    const { runtime, stores } = buildRuntime();
+    await createEmbeddedMemory(stores, [1, 0], { digest: digestA });
+    await createEmbeddedMemory(stores, [1, 0], { digest: digestB });
+
+    const result = await runtime.recall(ctx, {
+      vector: [1, 0],
+      budget: { maxMemoryTokens: 10 },
+    });
+
+    // 強制側は両方残す——budget_dropped は起きていない。この歯が「常に false を返す欄」
+    // ではないことの証明であり、budget_dropped が起きた入力からの true では意味が無い。
+    expect(result.memories).toHaveLength(2);
+    expect(result.omitted.some((o) => o.kind === "budget_dropped")).toBe(false);
+
+    expect(result.usage.budgetExceeded).toBe(true);
+  });
+
+  // `promptBudgetTokens` 単独でも同じ再現が起きることを確かめる（`effectiveTokenBudget` は
+  // `maxMemoryTokens` と `promptBudgetTokens` の最小値を1本にまとめて強制側へ渡すため、
+  // enforcement 側の挙動は同一である）。この歯が無いと、`promptTokensExceeded` の項を
+  // 判定から落とす変異が検出できない（他の歯はどれも `promptBudgetTokens` を使わない）。
+  it("promptBudgetTokens 単独でも、maxMemoryTokens と同じ再現で budgetExceeded が true になる", async () => {
+    const digestA = "01234567890123456789";
+    const digestB = "abcdefghijklmnopqrst";
+    const { runtime, stores } = buildRuntime();
+    await createEmbeddedMemory(stores, [1, 0], { digest: digestA });
+    await createEmbeddedMemory(stores, [1, 0], { digest: digestB });
+
+    const result = await runtime.recall(ctx, {
+      vector: [1, 0],
+      budget: { promptBudgetTokens: 10 },
+    });
+
+    expect(result.memories).toHaveLength(2);
+    expect(result.usage.budgetExceeded).toBe(true);
+  });
+
+  // 境界値（ちょうど予算どおり）では false のままである。`>` を `>=` に変える変異は
+  // ここで初めて検出できる——ここまでの「実際に true になる」歯は測定値が予算を
+  // 上回っているため、`>` でも `>=` でも同じ true を返してしまい、この変異を見抜けない。
+  //
+  // 単一の memory を使う（結合の "\n" が挟まらないため、連結して測っても
+  // digest 単体の ceil と完全に一致し、この境界を厳密に作れる）。
+  it("トークン予算にちょうど収まる境界値では budgetExceeded は false のまま（`>` と `>=` を区別する歯）", async () => {
+    const digest = "01234567890123456789"; // 20 chars, non-CJK ⟹ ceil(20/4) = 5 トークン
+    expect(heuristicTokenCounter.count(digest).tokens).toBe(5);
+
+    const { runtime, stores } = buildRuntime();
+    await createEmbeddedMemory(stores, [1, 0], { digest });
+
+    const result = await runtime.recall(ctx, {
+      vector: [1, 0],
+      budget: { maxMemoryTokens: 5 },
+    });
+
+    expect(result.memories).toHaveLength(1);
+    expect(result.usage.budgetExceeded).toBe(false);
+  });
+
+  it("chars 予算とトークン予算を両方申告しても、chars 次元が判定から落ちない（トークン超過は検知され続ける）", async () => {
+    const digestA = "01234567890123456789";
+    const digestB = "abcdefghijklmnopqrst";
+    const { runtime, stores } = buildRuntime();
+    await createEmbeddedMemory(stores, [1, 0], { digest: digestA });
+    await createEmbeddedMemory(stores, [1, 0], { digest: digestB });
+
+    const result = await runtime.recall(ctx, {
+      vector: [1, 0],
+      // maxMemoryChars は十分大きく、chars 次元では超えない。
+      // `share` の分母はトークン予算優先（`effectiveTokenBudget`）で maxMemoryChars を
+      // 無視するようになるが、budgetExceeded はそれとは独立に両方の次元を見ている。
+      budget: { maxMemoryChars: 10_000, maxMemoryTokens: 10 },
+    });
+
+    expect(result.usage.budgetExceeded).toBe(true);
+    expect(result.usage.share).toBeDefined();
+  });
+
+  /**
+   * `maxMemoryChars` は強制側（`unitChars`）と計測側（`digestChars`）が
+   * 「digest.length の単純な合計」という同じ式であり、連結の区切り文字も複数回の ceil も
+   * 無い。段4の `fits` は `maxMemoryChars` が申告されていれば必ずそれを満たしてから
+   * 候補を確定するので、切り詰め後に `digestChars > maxMemoryChars` になることは構造上
+   * 起こらない。**⟹ この経路では常に false のままである**（tokens の側と違って
+   * true になる入力は原理的に作れない——この非対称自体が本 PR の発見であり、
+   * PR 本文に明記する）。
+   */
+  it("maxMemoryChars のみの経路では budgetExceeded は false のままである", async () => {
+    const { runtime, stores } = buildRuntime();
+    await createEmbeddedMemory(stores, [1, 0], { digest: "0123456789" }); // 10 chars
+    const result = await runtime.recall(ctx, {
+      vector: [1, 0],
+      budget: { maxMemoryChars: 5 },
+    });
+    // 予算に収まらないので候補ごと落ちる（budget_dropped）が、budgetExceeded は
+    // 「予算内に収まっていない」ことを示す欄ではなく「返した量が超えている」ことを示す欄
+    // ——落ちた結果 digestChars=0 になり、超えようがない。
+    expect(result.usage.budgetExceeded).toBe(false);
+  });
+});
+
 describe("recall() — D5: 既定で provenance.kind='inferred' を含める。除外オプション", () => {
   it("既定では inferred な Memory も返る", async () => {
     const { runtime, stores } = buildRuntime();

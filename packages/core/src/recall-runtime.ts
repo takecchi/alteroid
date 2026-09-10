@@ -902,6 +902,53 @@ export async function runRecall(
   const tokenBudget = effectiveTokenBudget(budget);
   const usageShareDenominator = tokenBudget ?? budget?.maxMemoryChars;
   const usageShareNumerator = tokenBudget !== undefined ? memoryTokens.tokens : digestChars;
+
+  // budgetExceeded（Issue #108「案3」、ADR 0083 が型変更として意図的に切り出した残件）。
+  //
+  // **存在条件を `share` と歯で揃える。** 「予算が申告されている」の判定に
+  // `usageShareDenominator !== undefined` をそのまま再利用する——別の式で
+  // 「申告されている」を判定し直すと、2箇所の規則が将来食い違いうる
+  // （ADR 0011 が「同じ意味の件数を複数の経路から出すと食い違う」と言っているのと同じ理由）。
+  // `budget: {}`（次元が1つも無い）は `usageShareDenominator` も `undefined` になるので、
+  // この欄も無い。
+  //
+  // **`share` からは導出しない**（`RecallUsage.budgetExceeded` の doc、および
+  // ADR 0083 を参照）。理由は2つ:
+  // 1. 強制側（段4の `fits` が呼ぶ `unitTokens`）は digest ごとに `tokenCounter.count()` を
+  //    呼ぶため `heuristicTokenCounter` の `Math.ceil` が件数ぶん掛かる。`share` の分子
+  //    （`memoryTokens`。連結した1本に対して `ceil` を1回だけ、かつ連結で増えた `"\n"` の
+  //    ぶんは強制側の計算に入っていない）とは加法的に一致しない。
+  // 2. `share` の分母は `tokenBudget ?? budget?.maxMemoryChars` であり、トークン予算が
+  //    在ると `maxMemoryChars` は分母から丸ごと消える。両方申告された場合、chars 次元の
+  //    充足度は `share` からは読めない。
+  //
+  // ⟹ 返した memories を、申告された全次元に対して**個別に測り直す**。
+  //
+  // **トークン数に何を使うか**: 段4の `fits`（`unitTokens`。digest ごとに ceil）ではなく、
+  // 上で計算済みの `memoryTokens`（連結して ceil 1回）を使う。呼び出し側が実際に
+  // プロンプトへ積むのは「連結された1本」であり、`unitTokens` の合計はその連結後の量を
+  // 表さない（改行区切り文字の分だけ過小に出る上、ceil を複数回に分けて行うぶん丸めの向きも
+  // 変わる）。実測（歯: `recall-pipeline.test.ts` の budgetExceeded 節）: 非CJK20字の digest
+  // 2件（各5トークン）に `maxMemoryTokens: 10` を渡すと、段4の `fits` は
+  // `unitTokens` の合計 `5+5=10 <= 10` で両方残すが、`memoryTokens`（連結41字）は
+  // `ceil(41/4) = 11 > 10` になる——強制側は超えていないと判定して両方残したのに、
+  // 実際に返した量を測り直すと超えている。これが `budgetExceeded` の存在理由そのものである。
+  //
+  // **`maxMemoryChars` は例外的に、この不一致が起こらない**——`unitChars`（強制側）も
+  // `digestChars`（ここ）も同じ「digest.length の単純な合計」であり、連結の区切り文字も
+  // 複数回の ceil も無い。段4の `fits` は `maxMemoryChars` が申告されていれば必ずそれも
+  // 満たしてから候補を確定するので、切り詰め後に `digestChars > maxMemoryChars` になることは
+  // 構造上ない。⟹ `maxMemoryChars` だけを申告した経路では `budgetExceeded` は常に `false`
+  // になる（歯: "maxMemoryChars のみの経路では false のままである"）。**それでもこの次元を
+  // 判定に含めているのは**、他の次元（トークン）が同時に申告されたときに `budgetExceeded` の
+  // 判定からこの次元を丸ごと落とさないため——`share` の分母がトークン優先で
+  // `maxMemoryChars` を切り捨てるのと同じ落とし穴を、ここで繰り返さないためである。
+  const charsExceeded = budget?.maxMemoryChars !== undefined && digestChars > budget.maxMemoryChars;
+  const memoryTokensExceeded =
+    budget?.maxMemoryTokens !== undefined && memoryTokens.tokens > budget.maxMemoryTokens;
+  const promptTokensExceeded =
+    budget?.promptBudgetTokens !== undefined && memoryTokens.tokens > budget.promptBudgetTokens;
+
   const usage = {
     chars: totalChars,
     estimatedTokens: tokenCount.tokens,
@@ -909,7 +956,10 @@ export async function runRecall(
     byTier: { full: 0, digest: digestChars, index: indexChars },
     indexChars,
     ...(usageShareDenominator !== undefined
-      ? { share: usageShareNumerator / usageShareDenominator }
+      ? {
+          share: usageShareNumerator / usageShareDenominator,
+          budgetExceeded: charsExceeded || memoryTokensExceeded || promptTokensExceeded,
+        }
       : {}),
   };
 
