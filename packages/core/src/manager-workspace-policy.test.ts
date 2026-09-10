@@ -31,7 +31,7 @@ import { createMemoryStores } from './testing.js';
  * テストを汚さないためである（`resolveManagerModel` を試す既存の作法と同じ）。
  */
 
-/** `manager.ts:1926` 相当が書いていた既定の理由（1バイトも変えていない）。 */
+/** `manager.ts` の `UNVERIFIED_WORKSPACE_REASON` が書いていた既定の理由（1バイトも変えていない）。 */
 const UNVERIFIED_WORKSPACE_REASON =
   '器の workspace がボリュームかどうかを runner が名乗らないので、' +
   '入れ替えを跨いで残るかを確かめられない（roadmap M5「workspace locator の運用選択」）。';

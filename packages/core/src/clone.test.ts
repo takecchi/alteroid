@@ -8664,7 +8664,9 @@ describe('クローン — 枠が回復した後の返信は、人間の側か�
 
     // 枠が回復した後の「試す契機」は、人間が chat を開いていなくても来る
     // （自律 tick・マネージャーからの報告・外部イベントなど、`post()` を呼ぶ
-    // ものなら何でもよい — `clone.ts:505` の解除チェックは合図の種類を見ない）。
+    // ものなら何でもよい — `post()` の解除チェック（逐語は
+    // `grep -Fn -- 'if (this.#usageBlocked !== null) this.#releaseRequested = true;' packages/core/src/clone.ts`）
+    // は合図の種類を見ない）。
     // ここでは conv-1 に紐付かない `timer` 合図を使い、「1本目の接続がまだ
     // 生きている」という都合の良い前提を置かないことを明示する。
     clone.post({
@@ -8769,8 +8771,8 @@ describe('クローン — 枠が回復した後の返信は、人間の側か�
     });
 
     // 症状B(b): 再試行が成功すると、日誌には新しい outbound の記録が増える
-    // （`#emit` の購読者の有無とは無関係に、`clone.ts:2062` の journal 書き込みは
-    // 常に走る）。**これは実際にありうる真の観測**であって、(a) と対になる
+    // （`#emit` の購読者の有無とは無関係に、`#journal`（`packages/core/src/clone.ts`）
+    // の journal 書き込みは常に走る）。**これは実際にありうる真の観測**であって、(a) と対になる
     // 別の事実である。
     await waitFor(
       async () => (await matchingOutbound()).length > beforeCount,
@@ -9859,7 +9861,7 @@ describe('クローン — 人間が待っている合図を待ち行列の先�
    * 積まれていた非人間（`timer` / `manager_message` 等）を全部読み終えるまで
    * 人間が待たされていた。
    *
-   * **`isHumanOriginated`（`clone.ts:221`）は広げない。** 型を人間起点にすると
+   * **`isHumanOriginated` は広げない。** 型を人間起点にすると
    * `stop()` が投げる `reason: 'shutdown'`（プロセス終了時。誰も待っていない）
    * まで人間起点になり、有界性の根拠（`isHumanOriginated` の doc「割り込みは
    * 人間の速さでしか来ない」）が壊れる。直しは呼び出し側 —— `endConversation`
@@ -9969,9 +9971,9 @@ describe('クローン — 人間が待っている合図を待ち行列の先�
     //    —— 直したことで守られ続けている、という確認に留まる」と書いている。
     //    ⟹ ここが固定していたのは「旧実装がそうだった」であって、「そうあるべき」ではない
     // 2. **「誰も待っていない」は待ち時間の根拠であって、完了性の根拠ではない。**
-    //    `apps/daemon/src/index.ts:1049-1050` が
+    //    `apps/daemon/src/index.ts` が
     //    `setTimeout(() => process.exit(0), FORCED_EXIT_MS)`（`FORCED_EXIT_MS` は
-    //    55_000。`index.ts:141,152`）を張っているので、行列の後ろで待つ蒸留は
+    //    `SHUTDOWN_GRACE_MS - 5_000` = 55_000）を張っているので、行列の後ろで待つ蒸留は
     //    「順番が遅い」のではなく**切られる**（#564 の観測 —— 会話が1区間まるごと失われた）
     //
     // **この歯が本当に守っているものは反転していない。** 上の
@@ -10000,7 +10002,7 @@ describe('クローン — 人間が待っている合図を待ち行列の先�
    *
    * 旧挙動の根拠は「誰も画面の前で待っていない」だったが、#564 が現物で示した
    * とおり、それは**待ち時間**の根拠であって**完了性**の根拠ではない。強制終了の
-   * 期限（`apps/daemon/src/index.ts:1049-1050` の `setTimeout(() => process.exit(0),
+   * 期限（`apps/daemon/src/index.ts` の `setTimeout(() => process.exit(0),
    * FORCED_EXIT_MS)`）が在る以上、行列の後ろで待つ蒸留は「順番が遅い」ではなく
    * **切られる**。
    */

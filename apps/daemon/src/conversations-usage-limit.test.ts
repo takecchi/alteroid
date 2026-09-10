@@ -3,17 +3,18 @@
  * 後も、待たされていた発言への返信が届かない」。
  *
  * `clone.test.ts` の「症状B」ブロックは `packages/core` だけで確かめており、
- * `GET /conversations/:id`（`apps/daemon/src/app.ts:944-967`）が実際に何を
- * 返すかは見ていない。ここでは**本物の `createClone`（偽 SDK のみ差し替え）と
- * 本物の `createApp` を組み合わせ**、`/chat` → `/conversations/:id` を実際に
- * 叩いて確かめる。
+ * `GET /conversations/:id`（`apps/daemon/src/app.ts` の
+ * `'/conversations/:id'` ルート）が実際に何を返すかは見ていない。ここでは
+ * **本物の `createClone`（偽 SDK のみ差し替え）と本物の `createApp` を
+ * 組み合わせ**、`/chat` → `/conversations/:id` を実際に叩いて確かめる。
  *
  * マネージャーからの追加指示: 人間の要望は「あとで良いのでちゃんと返信して
  * ほしい」であって、リアルタイム性ではない。だから「会話に残って、開けば
  * 見える」で訴えは満たせるはずだが、**`clone.ts` の `#reportFailure`
- * （:1071-1095）は枠で落ちた1回目の失敗を `with: 'human'` / `role: 'outbound'`
- * で日誌へ書く** — これは `/conversations/:id` の絞り込み
- * （`entry.with === 'human'`、role は見ない）をそのまま通るので、**枠に当たった
+ * は枠で落ちた1回目の失敗を `with: 'human'` / `role: 'outbound'`
+ * で日誌へ書く** — これは `/conversations/:id` が使う
+ * `readConversationWindow`（`packages/core/src/conversation.ts`）の
+ * `with: ['human']` 絞り込み（role は見ない）をそのまま通るので、**枠に当たった
  * 英語の失敗理由が、あたかもクローンの返信であるかのように会話へ混ざる**。
  * これが人間の言う「英語の文言が返信として出る」の正体である可能性が高い。
  */
@@ -224,10 +225,11 @@ describe('/conversations/:id と枠（利用上限）の再試行 — 症状B', 
 
     // **求める結果（あるべき姿）**: 人間に見せる会話の「クローンの返信」欄には、
     // SDK の生の失敗理由（英語）がそのまま出てはいけない。しかし
-    // `clone.ts:1079-1094`（`#reportFailure`）は、枠で落ちた失敗を
+    // `clone.ts` の `#reportFailure` は、枠で落ちた失敗を
     // `with: 'human'` / `role: 'outbound'` の exchange として書いており、
     // `/conversations/:id` の絞り込みはこれを一切除外しない
-    // （`app.ts:948-963`。`with==='human'` しか見ておらず、内容や `role` の
+    // （`readConversationWindow`（`packages/core/src/conversation.ts`）の
+    // `with: ['human']` しか見ておらず、内容や `role` の
     // 中身では弾いていない）。だから今回は失敗する（赤で正しい）。
     const containsRawFailureText = outboundTexts.some((text) => text.includes(spendLimitMessage));
     expect(containsRawFailureText).toBe(false);

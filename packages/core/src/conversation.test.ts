@@ -18,8 +18,8 @@ import { createMemoryStores } from './testing.js';
  * `conversation.ts` — 日誌の並びを会話へ畳み直す規則の純粋関数。
  *
  * **`collectConversations` は `apps/daemon/src/app.ts` の `GET /conversations`
- * と同じ結果を出すことを固定する。** そちらは状態を持たない同じ規則を持っており
- * （`app.ts:884-916` あたり）、ここが違う結果を返すと、クローンの道具（同じ規則を
+ * （`'/conversations'` ルート）と同じ結果を出すことを固定する。** そちらは状態を
+ * 持たない同じ規則を持っており、ここが違う結果を返すと、クローンの道具（同じ規則を
  * 使う `conversation_read`）と人間の Web UI が別の会話一覧を見ることになる。
  */
 
