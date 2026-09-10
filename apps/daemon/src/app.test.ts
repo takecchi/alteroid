@@ -2422,6 +2422,16 @@ describe('GET /approvals の conversationId（issue #782 の2）', () => {
       answeredAt: '2026-01-02T01:00:00.000Z',
       answer: 'よい',
     });
+    // **別の会話の確認を混ぜる。** 混ぜないと、この歯は絞り込みが効いて
+    // いなくても緑になる（conv-a しか存在しないので、絞る前と後で件数が
+    // 同じになる）——`total` の期待値が「絞り込みを当てた後の件数」を
+    // 測っていることにならない。
+    await stores.jobs.putApproval({
+      id: 'ap-other-conv',
+      createdAt: '2026-01-03T00:00:00.000Z',
+      question: '別の会話の確認',
+      conversationId: 'conv-b',
+    });
 
     // 既定（pending=true）では回答済みが落ちる。
     const pendingOnly = (await (await app.request(`/approvals?conversationId=conv-a`)).json()) as {
@@ -2436,7 +2446,7 @@ describe('GET /approvals の conversationId（issue #782 の2）', () => {
     ).json()) as { approvals: { id: string }[]; total?: number };
     expect(both.approvals.map((a) => a.id)).toEqual(['ap-1', 'ap-2']);
     // order を明示した（opt-in した）ので total が乗り、絞り込み後の件数になる
-    // （絞る前の全4件ではなく、conv-a の2件）。
+    // （絞る前の3件ではなく、conv-a の2件）。
     expect(both.total).toBe(2);
   });
 
