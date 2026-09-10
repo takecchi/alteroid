@@ -158,6 +158,31 @@ postinstall を拒否しており、その状態で動いていることは測�
 つまり「CUDA EP 無しで動く」ことは押さえられているが、
 **npm 経路でその env を渡す形そのもの**は測っていない）。
 
+### ⚠ 依存に `npm audit` の high が5件在る（すべて推移的・上流に修正版が無い）
+
+**先に言う: 直せない。**`@huggingface/transformers` の下にあり、
+`fixAvailable: false` である。**隠さずに書くほうを選んでいる。**
+
+素の consumer で `@mnemora/local-embedding@0.1.4` を install して測った結果
+（`high: 5` / `critical: 0`）:
+
+| package | 経路 | 中身 |
+|---|---|---|
+| `adm-zip` | `onnxruntime-node` → | 細工した ZIP で 4GB 確保 / **展開時に destination symlink を辿り任意ファイルを上書き** |
+| `sharp` | `@huggingface/transformers` → | libvips（CVE-2026-33327 / -33328 / -35590 / -35591）と libheif（GHSA-g89c-p67h-r497 / GHSA-2jg2-4ch7-h545）の継承 |
+
+⭐ **脆弱な経路は、どちらもこのパッケージが通らない経路である**:
+
+- **`sharp` は画像入力用。**テキスト埋め込みでは通らない
+- **`adm-zip` は `onnxruntime-node` の postinstall がアーカイブを展開するところ**
+  ⟹ 🔴 **上の「postinstall を止めろ」は、302MB を節約するだけでなく、
+  この展開経路そのものを踏まないことでもある**
+
+⚠ **「通らない経路だから安全」は、この repo が読んだ限りの話である。**
+`@huggingface/transformers` が内部でどこから `sharp` を触りうるかを
+**網羅的に追ったわけではない。**気になるなら自分で `npm audit` を打つこと
+（版が進めば結果は変わる）。
+
 ## 使い方
 
 ```ts

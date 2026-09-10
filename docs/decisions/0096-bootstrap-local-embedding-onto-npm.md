@@ -7,7 +7,9 @@
   | | |
   |---|---|
   | **決めた** | `@mnemora/local-embedding` の初版を **`0.1.4`** とし、**`v0.1.4` の tag から梱包した中身**を手元から1回だけ publish する。以後は他5つと同じ OIDC 経路に合流させる |
-  | **決めた** | `v0.1.4` の Release を**先に**切る。CI が5つを OIDC + provenance で出し、`local-embedding` だけ 403 で落ちる——**この赤を受け入れ、段1・段2 の後に workflow を再実行して緑にする** |
+  | **決めた** | `v0.1.4` の Release を**先に**切る。CI が5つを OIDC + provenance で出し、`local-embedding` だけ落ちる——**この赤を受け入れ、段1・段2 の後に workflow を再実行して緑にする**（⚠ **落ち方の予測は外れた。**403 ではなく **E404** だった。測ったこと7） |
+  | **やった（この ADR の後）** | **`v0.1.4` を実際に出した。**5つは CI が OIDC + provenance で、`@mnemora/local-embedding@0.1.4` は段0 として手元から publish 済み。⟹ **6パッケージとも registry に `0.1.4` が在る**（測ったこと8）。**取り消せない** |
+  | **まだ済んでいない** | 🔴 **段1・段2（オーナーの 2FA / web UI）。**これが済むまで、次の Release でも `local-embedding` は publish されない |
   | **決めた** | 手元の梱包は `scripts/apply-release-version.mjs` を通す（CI と同じ経路。版の決め方を二重に持たない） |
   | **決めた** | 公開前に `packages/local-embedding/README.md` へ **利用者側の `onnxruntime-node` postinstall の止め方**を書く（下の測ったこと6） |
   | **決めていない** | 個別に版を進める運用。**6つ揃えて上げるまま**（ADR 0060 が残した負債を引き継ぐ） |
@@ -161,6 +163,107 @@
   手元の mac では起きないので、**気づくのは本番の image を焼くときになる。**
   ⟹ README に、npm / yarn / pnpm 別の止め方（`ONNXRUNTIME_NODE_INSTALL=skip` 等）を書いた。
 
+- **⭐ 測ったこと7 — 🔴 落ち方の予測が外れた。403 ではなく E404 だった**
+
+  **この ADR は「確かめていない」として「`local-embedding` だけ 403 で落ちる」と書き、
+  「ずれたらこの ADR を直すこと」と条件を付けていた。ずれたので直す。**
+
+  run [`34452890407`](https://github.com/takecchi/mnemora/actions/runs/34452890407) の実測:
+
+  ```
+  ✔ @mnemora/core@0.1.4 を publish した
+  ✔ @mnemora/testkit@0.1.4 を publish した
+  ✔ @mnemora/openai@0.1.4 を publish した
+  ✔ @mnemora/postgres@0.1.4 を publish した
+  ✔ @mnemora/anthropic@0.1.4 を publish した
+  npm error code E404
+  npm error 404 Not Found - PUT https://registry.npmjs.org/@mnemora%2flocal-embedding - Not found
+  ✗ @mnemora/local-embedding@0.1.4 の publish が失敗した（exit 1）
+  ```
+
+  **⭐ 順序の予測は当たり、落ち方の予測だけが外れた。**5つが完走してから末尾が落ちており、
+  `PUBLISH_TARGETS` の「未公開は末尾」の規律は**設計どおりに働いた。**
+
+  **なぜ 403 と予測したのが誤りだったか。**ADR 0070 測ったこと3 が
+  **403 と 404 の使い分けを既に測っていた**（逐語）:
+
+  > repo / workflow 名の不一致でもない（**不一致なら npm は 404 を返す**——
+  > registry は 403 を意図的に 404 で隠す。今回は `PUT` まで到達して
+  > **「this action」を名指しした 403** ⟹ **npm は身元を認識していた**）
+
+  ⟹ **403 は「身元は認識したが、その操作は許していない」**であり、
+  **404 は「そもそも身元を結び付ける先が無い」**である。
+  `v0.1.1` が 403 だったのは**パッケージが既に在り**、信頼発行元だけが未設定だったから。
+  今回は **パッケージ自体が存在しない**ので、npm には結び付ける先が無い ⟹ **404 が正しい。**
+
+  🔴 **この ADR は、参照した ADR 0070 に答えが書いてあったのに読み違えた。**
+  `v0.1.1` の事例（既存パッケージ）を、初版（不存在）へそのまま当てたのが誤りである。
+  ⟹ **教訓: 403 と 404 は「未設定」と「不存在」を区別する信号であって、
+  どちらも『権限が無い』ではない。**
+
+- **⭐ 測ったこと8 — 段0 を実行した（実行記録）**
+
+  | | |
+  |---|---|
+  | 梱包元 | **`v0.1.4` の tag を checkout**（`faa25c6`）。⭐ **`packages/` は手元のブランチと `git diff --name-only` で差分ゼロ**だったことも別途確認した |
+  | 版の書き込み | `RELEASE_TAG=v0.1.4 node scripts/apply-release-version.mjs`（**CI と同じ経路**）→ 6つとも `0.1.1 -> 0.1.4`、`npm_tag=latest` |
+  | 門 | **`pnpm run pack:check` を tag の上で通した**（6パッケージ、検査項目8つ） |
+  | tarball | `version: 0.1.4` / `@mnemora/core: ^0.1.4`（**`workspace:` は 0 件**）/ `license: MIT` / `access: public` / `dist` 8ファイル + `README.md` + `LICENSE` |
+  | publish | `npm publish <tarball> --access public --tag latest` → **`+ @mnemora/local-embedding@0.1.4`** |
+  | 依存の順序 | ⭐ tarball が `^0.1.4` を要求するので、**段0 は CI が `core@0.1.4` を出した後でなければならなかった**。「Release を先に切る」順序がこれも満たしていた（**この含意は決定時に見えていなかった。結果的に正しかっただけである**） |
+
+  **⭐ ADR 0066 測ったこと8 の「読み取りが書き込みに遅れる」を再確認した。**
+  `npm publish` が `+` を出した時刻は **08:05:57Z**（registry の `time` も同じ）だが、
+  その後**約4分間、読み取りは 404 を返し続けた**——`npm view`（未認証・認証つきの両方）と、
+  **CDN を迂回する `?write=true` も 404** だった。t+4min で HTTP 200 になった。
+
+  ⟹ **publish の成否は `npm publish` の出力で判断するのが正しい**（workflow の逐語コメントの
+  とおり）。**この4分間に「失敗した」と判断して再実行すると、E403 を見て混乱する。**
+
+  最終状態:
+
+  | package | npm |
+  |---|---|
+  | core / testkit / openai / postgres / anthropic | **0.1.4**（OIDC + provenance） |
+  | **local-embedding** | **0.1.4**（`dist-tags: { latest: "0.1.4" }` / `versions: ["0.1.4"]` / **provenance なし**） |
+
+- **⭐ 測ったこと9 — 素の consumer で往復した（公開物が実際に使える）**
+
+  ADR 0066 測ったこと1 と同じ検査を、**registry から取った実物**に対して行った:
+
+  | | 結果 |
+  |---|---|
+  | `npm install @mnemora/local-embedding@0.1.4`（素の npm、`--ignore-scripts`） | **成功**。`^0.1.4` が **`@mnemora/core@0.1.4` に解決された** |
+  | `import("@mnemora/local-embedding")` | **成功**。13 の export が読める |
+  | `new LocalEmbeddingProvider().space` | **`{ provider: "local", model: "ruri-v3-30m/sym", dimensions: 256 }`** |
+
+  ⭐ **`space` がモデルを読み込まずに確定していることも、ここで裏が取れた**
+  （README の主張どおり。`new` は 42MB を落とさない）。
+
+- **⭐ 測ったこと10 — ⚠ 公開物の依存に high が5件在る（すべて推移的・`fixAvailable: false`）**
+
+  素の consumer で `npm audit` を打った結果（`high: 5` / `critical: 0`）:
+
+  | package | 経路 | 中身 |
+  |---|---|---|
+  | `adm-zip` | `onnxruntime-node` → | 細工した ZIP で 4GB 確保 / **展開時に destination symlink を辿り任意ファイルを上書き** |
+  | `onnxruntime-node` | `@huggingface/transformers` → | 上の `adm-zip` |
+  | `sharp` | `@huggingface/transformers` → | libvips（CVE-2026-33327 / -33328 / -35590 / -35591）と libheif（GHSA-g89c-p67h-r497 / GHSA-2jg2-4ch7-h545）の継承 |
+  | `@huggingface/transformers` / `@mnemora/local-embedding` | — | 上2つの巻き上げ |
+
+  ⭐ **脆弱な経路は、どちらもこのパッケージが使わない経路である**——
+  `sharp` は**画像入力**用（`pnpm-workspace.yaml` の既存コメントが「テキスト埋め込みでは
+  通らない」と書いている）で、`adm-zip` は **`onnxruntime-node` の postinstall が
+  アーカイブを展開するところ**である。
+
+  🔴 **⟹ 測ったこと6 で README に書いた「postinstall を止めろ」は、302MB を節約する話だと
+  思って書いたが、`adm-zip` の展開経路そのものを踏まないことでもあった。**
+  **止める理由が1つ増えている**（この含意は README を書いた時点では見えていなかった）。
+
+  ⚠ **`fixAvailable: false`**——上流に修正版が無いので、この repo では直せない。
+  ⛔ **`@huggingface/transformers` を捨てる判断はしない**（ADR 0085 の土台であり、
+  この ADR の範囲外である）。**測って記録するところまでが、ここでできることである。**
+
 - **決定**:
 
   **1. bootstrap 版は `0.1.4`。中身は `v0.1.4` の tag から梱包する。**
@@ -172,7 +275,7 @@
   **2. `v0.1.4` の Release を先に切る。publish run が1回赤くなることを受け入れる。**
 
   Release → CI が `PUBLISH_TARGETS` の順に publish → **5つは OIDC + provenance で成功し、
-  末尾の `local-embedding` だけ 403 で落ちる。**
+  末尾の `local-embedding` だけ落ちる**（⚠ 落ち方は 403 と予測したが、実測は **E404**。測ったこと7）。
 
   ⭐ **この形は `scripts/publish-targets.mjs` が明示的に想定している**（逐語):
 
@@ -224,6 +327,19 @@
      pnpm が既定で postinstall を拒否している状態で動くことは測ってあるので
      「CUDA EP 無しで動く」は押さえられているが、**npm 経路でその env を渡す形そのもの**は
      未検証である（README にもそう書いた）。
+  7. 🔴 **`0.1.4` の README は、測ったこと10（依存の high 5件）を書いていない。**
+     **公開された版の README は、もう直せない。**測ったのが publish の後だったためである。
+     ⟹ **README への追記はこの ADR と同じ変更に含めた**ので `0.1.5` から載るが、
+     **`0.1.4` を install した人には届かない。**
+     ⚠ **順序を間違えたことが、この負債の本体である**——
+     測ったこと6（README を直す）と測ったこと10（audit）は**同じ検査で一緒に出るべきもの**
+     だった。**素の consumer での往復を publish の前に一度もやっていない**
+     （やれたはずである。`pnpm pack` の tarball を直接 install すればよかった）。
+     ⟹ **次に新しいパッケージを出すときは、往復を段0 の前に置くこと。**
+  8. 🔴 **段1・段2 が済んでいないので、`local-embedding` は次の Release でも publish されない。**
+     `v0.1.5` を切ると、**同じ 404 でまた赤くなる**（`0.1.4` が在るので今度は 403 になるはずだが、
+     **これも予測であって実測ではない**——測ったこと7 で一度外している）。
+     ⟹ **段1・段2 は次の Release より前に済ませる必要がある。**
 
 - **これが覆るとしたら**:
 
@@ -240,20 +356,28 @@
 
 - **確かめたこと / 確かめていないこと**:
 
-  - **確かめた（この器で実行）**: 測ったこと1〜6 のすべて。
+  - **確かめた（この器で実行）**: 測ったこと1〜10 のすべて。
     `npm whoami` が `takecchi` を返すこと。`npm trust list` が E403 になること。
     `npm trust github --help` に許可アクションのフラグが無いこと。
     既存版への publish が**版の衝突**で拒否され、`dist-tags` に副作用が無いこと。
     `git ls-tree -d v0.1.3 packages/` に `local-embedding` が無いこと。
     `core@0.1.3` の tarball を取得して `EmbeddingProvider` の `.d.ts` を main と突き合わせたこと。
     `onnxruntime-node@1.24.3` の `install-metadata.js` の `requirements`。
-    `pnpm run pack:check` が**6パッケージで通ること**。
-  - **確かめていない**: **`v0.1.4` の publish run が実際にどう落ちるか。**
-    「5つが成功して末尾だけ 403」は `publish-targets.mjs` の設計と ADR 0066 の
-    冪等分岐から導いた**予測であって、実測ではない。**
-    ⟹ **Release を切った時点で実測に置き換わる。ずれたらこの ADR を直すこと。**
+    `pnpm run pack:check` が**6パッケージで通ること**（手元のブランチと、`v0.1.4` の tag の上で2回）。
+  - **確かめた（段0 と Release を実行した）**: 測ったこと7〜10。
+    run `34452890407` の実測（5つ成功 → 末尾が **E404**）。
+    `@mnemora/local-embedding@0.1.4` が **`+` を出して publish されたこと**と、
+    その後**約4分間 読み取りが 404 だったこと**（`?write=true` を含む）。
+    6パッケージとも `0.1.4` であること。素の consumer での install → `import` →
+    `space` の確認。`npm audit` の high 5件。
+  - **⚠ 外した予測（記録として残す）**: **落ち方を 403 と書いたが E404 だった**（測ったこと7）。
+    **参照した ADR 0070 に答えが書いてあったのに読み違えた。**
   - **確かめていない**: **段1・段2 の後に workflow を再実行して緑になること。**
     冪等分岐は ADR 0066 が実測しているが、**6パッケージ全部が飛ばされる形**は走っていない。
+    ⟹ **段1・段2 が済んだら、この ADR を3度目に直すこと。**
+  - **確かめていない**: **`0.1.4` が実際にモデルを落として推論できること。**
+    測ったのは `import` と `space` までで、`embed()` は**一度も呼んでいない**
+    （42MB のダウンロードを伴うため）。live テストは repo 内では opt-in で在る。
   - **確かめていない**: `ONNXRUNTIME_NODE_INSTALL=skip` を渡した npm 経路（負債6）。
   - **確かめていない**: DB を要する経路（`DATABASE_URL` を立てていない。ADR 0015 と同じ非対称）。
     **梱包と publish の判断は DB に依存しない**と見た。
