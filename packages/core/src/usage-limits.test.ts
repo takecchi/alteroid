@@ -13,6 +13,7 @@ import {
   usageTransitionOf,
   withRecoveryNote,
 } from './usage-limits.js';
+import type { LimitRecovery } from './usage-limits.js';
 
 describe('上限の文言を分類する', () => {
   it('実際に当たった文言を「当たった」として拾う', () => {
@@ -207,11 +208,51 @@ describe('回復の見込みを読む', () => {
     expect(limitRecoveryOf(forAccount)).toBe('action');
   });
 
+  it('実物の逐語（今朝の実害そのもの）: individual spend limit と resets が同じ文言に同居しても action', () => {
+    // **この委譲を今朝殺した実物、一字一句そのまま**（2026-09-10 朝）。
+    //
+    //   You've hit your individual spend limit · ask your admin to raise it at
+    //   claude.ai/settings/usage?from=cc_cli_limit_message · your session limit
+    //   resets 11:40pm (Asia/Tokyo)
+    //
+    // **この文言は "individual spend limit" と "resets" の両方を同時に含む。**
+    // `refineHitYourFamilyRecovery` は "individual spend limit" を先に見るので
+    // `action` を返す（＝正しい——塞がれているのは支出上限のほうで、そちらは
+    // 管理者が上げるまで開かない。"resets" は別の枠——セッション上限——の話で、
+    // 支出上限には関係ない）。**この順序を測る歯は、この歯が置かれるまで
+    // 1本も無かった**（`individual spend limit` の行と `resets` の行を入れ替えても、
+    // 既存のどの歯も落ちない構成だった——変異試験で確かめてある。下の
+    // 「変異試験の結果」で赤くなることを示す）。
+    const real =
+      "You've hit your individual spend limit · ask your admin to raise it at " +
+      'claude.ai/settings/usage?from=cc_cli_limit_message · your session limit ' +
+      'resets 11:40pm (Asia/Tokyo)';
+    expect(real).toContain('individual spend limit');
+    expect(real).toContain('resets');
+    expect(classifyUsageNotice(real)?.kind).toBe('reached');
+    expect(limitRecoveryOf(real)).toBe('action');
+  });
+
   it('未知の "You\'ve hit your …" の変種は unknown へ倒す（time へ黙って落ちない）', () => {
     // これが今朝の実害の形そのもの——粗い接頭辞しか無いとき、いまの実装は
     // 分類していない変種まで一律 `time` に落としていた。**`action` の同義語にも
     // しない**（`unknown` を「捨てる」側へ倒さない）。
     const unclassified = "You've hit your weekly team allowance";
+    expect(limitRecoveryOf(unclassified)).toBe('unknown');
+  });
+
+  it('"You\'ve reached your …" の未分類の変種も unknown へ倒す（これは事故ではなく判断である）', () => {
+    // **これは前任者の意図した挙動で、事故の記録ではない。** 細分
+    // （`refineHitYourFamilyRecovery`）を "You've hit your" だけでなく
+    // "You've reached your" にも当てたことで、**これまで粗い接頭辞1本で
+    // 一律 `time` に落ちていた "You've reached your …" の未分類の変種が、
+    // いまは `unknown` へ変わっている**（`usage-limits.ts` の doc「"You've
+    // reached your" にも同じ細分を当てる理由」）。この歯が置かれるまで、
+    // この副作用そのものを検査する歯は1本も無かった——歯が無ければ、次に
+    // この関数を触った人はこれを「意図された変更」なのか「回帰」なのか
+    // 判断できない。
+    const unclassified = "You've reached your weekly team allowance";
+    expect(classifyUsageNotice(unclassified)?.kind).toBe('reached');
     expect(limitRecoveryOf(unclassified)).toBe('unknown');
   });
 
@@ -303,6 +344,129 @@ describe('回復の見込みを読む', () => {
     // 短い側を採っても同じ値が返る。⟹ どの鍵に当たったかを直接見る。
     expect(matchedUsageLimitPrefix(longer)).toBe(longer);
     expect(matchedUsageLimitPrefix(shorter)).toBe(shorter);
+  });
+});
+
+/**
+ * SDK の {@link USAGE_LIMIT_ERROR_PREFIXES}（12件）それぞれが、実際にどの
+ * {@link LimitRecovery} へ落ちるべきかを表にして、**表から歯を生成する**。
+ *
+ * 依頼の核心はここである——「既存の歯は org's monthly spend limit しか測って
+ * いない。1本の経路しか通さない歯は、残りが無修正でも緑になる」。⟹ 12件
+ * それぞれに代表の文言を1本ずつ割り当て、`it.each` で12本の歯を機械的に
+ * 生成する。**この describe が緑であることは「12件のうち1件が正しい」を
+ * 意味しない——12件全部が個別に検査されて初めて緑になる。**
+ *
+ * `"You've hit your"` / `"You've reached your"` の2つは値ではなく関数
+ * （{@link refineHitYourFamilyRecovery}）を持つので、代表1本では足りない
+ * （細分の4分岐を取り違えても、代表を1本しか通さない歯では検出できない）。
+ * ⟹ この2つだけは4分岐（action / time＝org's monthly spend limit /
+ * time＝resets / unknown）を全部通す。
+ */
+describe('回復の見込みの表（12件を機械的に生成する歯）', () => {
+  /**
+   * 直値を持つ10件（SDK の12件から、関数を持つ2件を除いた残り）。
+   * `[代表の文言, 期待する LimitRecovery]`。
+   */
+  const DIRECT_VALUE_CASES: ReadonlyArray<[prefix: string, expected: LimitRecovery]> = [
+    ["You're out of usage credits", 'unknown'],
+    ['Your org is out of usage · add funds to continue', 'action'],
+    ['Your org is out of usage · contact your admin', 'action'],
+    ["Your seat type doesn't include usage credits", 'action'],
+    ["Your seat type doesn't include usage", 'action'],
+    ['Your usage allocation has been disabled by your admin', 'action'],
+    ["Your group's usage limit is set to $0", 'action'],
+    ['Fable 5 requires usage credits', 'unknown'],
+    ["You're out of extra usage", 'unknown'],
+    ["Your seat type doesn't include extra usage", 'action'],
+  ];
+
+  it.each(DIRECT_VALUE_CASES)('%s → %s', (prefix, expected) => {
+    expect(limitRecoveryOf(prefix)).toBe(expected);
+  });
+
+  /**
+   * 細分が効く2つの鍵。それぞれ4分岐（action / time-org / time-resets /
+   * unknown）を全部通す——`[接頭辞, 代表の全文, 期待する LimitRecovery, 分岐名]`。
+   */
+  const REFINED_FAMILY_CASES: ReadonlyArray<
+    [prefix: string, text: string, expected: LimitRecovery, branch: string]
+  > = [
+    [
+      "You've hit your",
+      "You've hit your individual spend limit · ask your admin to raise it at claude.ai/settings/usage",
+      'action',
+      'individual spend limit',
+    ],
+    [
+      "You've hit your",
+      "You've hit your org's monthly spend limit",
+      'time',
+      "org's monthly spend limit",
+    ],
+    [
+      "You've hit your",
+      "You've hit your session limit · resets 3:50pm (Asia/Tokyo)",
+      'time',
+      'resets',
+    ],
+    ["You've hit your", "You've hit your weekly team allowance", 'unknown', '未分類'],
+    [
+      "You've reached your",
+      "You've reached your individual spend limit · ask your admin to raise it at claude.ai/settings/usage",
+      'action',
+      'individual spend limit',
+    ],
+    [
+      "You've reached your",
+      "You've reached your org's monthly spend limit",
+      'time',
+      "org's monthly spend limit",
+    ],
+    [
+      "You've reached your",
+      "You've reached your session limit · resets 3:50pm (Asia/Tokyo)",
+      'time',
+      'resets',
+    ],
+    ["You've reached your", "You've reached your weekly team allowance", 'unknown', '未分類'],
+  ];
+
+  it.each(REFINED_FAMILY_CASES)('%s / text=%s → %s（branch=%s）', (_prefix, text, expected) => {
+    expect(limitRecoveryOf(text)).toBe(expected);
+  });
+
+  /**
+   * **この歯が無いと、表そのものが SDK の12件を覆っていなくても緑になる。**
+   * SDK が接頭辞を1件足しても、この表を更新し忘れれば `it.each` は今までの
+   * 件数のまま緑を返し続ける——依頼の「1本の経路しか通さない歯は、残りが
+   * 無修正でも緑になる」を、この describe 自身にも適用する。
+   *
+   * `knownLimitRecoveryPrefixes()`（実装の表の鍵）と突き合わせる——SDK の
+   * 配列と直接ではない。実装の表と SDK の一致は既に別の歯
+   * （「分類の表は SDK の USAGE_LIMIT_ERROR_PREFIXES を1つ残さず覆う」）が
+   * 両方向で見ているので、ここで測るべきは「このテストの表が実装の表を
+   * 覆っているか」である。
+   */
+  it('この表（DIRECT_VALUE_CASES ＋ REFINED_FAMILY_CASES の接頭辞）は knownLimitRecoveryPrefixes() を1つ残さず覆う', () => {
+    const coveredPrefixes = new Set<string>([
+      ...DIRECT_VALUE_CASES.map(([prefix]) => prefix),
+      ...REFINED_FAMILY_CASES.map(([prefix]) => prefix),
+    ]);
+    const known = [...knownLimitRecoveryPrefixes()].sort();
+    expect([...coveredPrefixes].sort()).toEqual(known);
+  });
+
+  /**
+   * 直値10件 ＋ 関数2件 ＝ 12件（SDK の実測件数）。**この数そのものが
+   * 変わったら、この歯自身が先に落ちる**——ハードコードした `12` を信じる
+   * のではなく、SDK の配列から数える。
+   */
+  it('直値10件＋関数2件で SDK の全接頭辞（実測12件）を尽くす', () => {
+    const distinctRefinedPrefixes = new Set(REFINED_FAMILY_CASES.map(([prefix]) => prefix));
+    expect(DIRECT_VALUE_CASES.length + distinctRefinedPrefixes.size).toBe(
+      USAGE_LIMIT_ERROR_PREFIXES.length,
+    );
   });
 });
 

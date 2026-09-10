@@ -245,7 +245,9 @@ probe が読むのは**アカウントの枠**（`five_hour` / `seven_day` / …
 - **`unknown` を「捨てる」側へ倒さないこと。** `action` と読むことは候補を1本永久に降ろす判断になりうる。読み違えの代償が非対称である（`time` を `action` と読むと**まだ戻るトークンを捨てる**が、逆は「冷却が明けてもう一度試す」だけで済む）
 - **扱いは当面一律である**（人間の決定 2026-08-25）。`action` と判定される文言でも**冷却へ倒し、`invalidatedAt` は立てない**。⟹ **分類は記録されるが、いまも何も分岐させていない** —— 回し手は `action` の行も冷却へ倒す。**分類を扱いへ効かせるなら、そのときが人間の決定の出番である**
 - **分類の表（`LIMIT_RECOVERY_BY_PREFIX`）は SDK の文字列を鍵として書き写している。** 接頭辞ごとに違う注記を付けるには他に方法が無いためで、**腐ったら赤くなる形にしてある** — `usage-limits.test.ts` が表の鍵の集合と SDK の配列を**両方向で**突き合わせるので、SDK が1つ足しても1つ改名しても落ちる。実行時の倒れ先は `unknown`
-- **表の判定は書き手の判定であって Anthropic 側の仕様の主張ではない。** 例外は `"You've hit your"` の1行だけで、そこは人間の実測である（`You've hit your org's monthly spend limit` は無料枠を使い切って従量課金へ切り替わったときに組織の課金上限へ達して出るもので、請求期間が変われば戻る）
+- **⚠️ 2026-09-10 に、表の値の型が `LimitRecovery` 単独から `LimitRecovery | ((text) => LimitRecovery)` へ広がった。** いちばん粗い2つの鍵（`"You've hit your"` / `"You've reached your"`）は、もう1行1値では表現できない——当たった後に**全文**を見て `refineHitYourFamilyRecovery()` がさらに4分岐（`individual spend limit` → `action` / `org's monthly spend limit` → `time` / `resets` を含む → `time` / それ以外 → `unknown`）へ細分する。**表の鍵の集合は変わっていない**（依然として SDK の12件と一対一）——変わったのは、その2つの鍵が「値」ではなく「関数」を指す点だけである
+- **表の判定は書き手の判定であって Anthropic 側の仕様の主張ではない。** 人間の実測は3つ——`org's monthly spend limit` → `time`（2026-08-25 JST 報告。無料枠を使い切って従量課金へ切り替わったときに組織の課金上限へ達して出るもので、請求期間が変われば戻る）、`individual spend limit` → `action`（2026-09-10 朝の実害。逐語は `grep -Fn -- 'ask your admin to raise it' packages/core/src/usage-limits.ts`。人間が上限を上げるまで開かない壁で、`resets`（セッション上限のリセット時刻）が同じ文言に同居していても `action` が勝つ——これは順序に依存する挙動で、`usage-limits.test.ts` の「実物の逐語」の歯がその順序を測る）、`resets` を含む形 → `time`（戻る時刻が本文に書いてあること自体が直接の証拠、という書き手の推論）
+- **`"You've reached your"` にも同じ細分を当てている。** 副作用として、**これまで粗い接頭辞1本で一律 `time` に落ちていた `"You've reached your …"` の未分類の変種**（例: `"You've reached your weekly team allowance"`）は、いまは `unknown` へ変わっている。これは意図した判断であり、事故ではない（`usage-limits.test.ts` に専用の歯が在る）
 
 ## 置いたら何が変わるか
 
@@ -388,8 +390,11 @@ probe が読むのは**アカウントの枠**（`five_hour` / `seven_day` / …
 
 ## 回復の見込みの表を直すとき
 
-**分類（`time` / `action` / `unknown`）を1行変えるのは、`packages/core/src/usage-limits.ts` の `LIMIT_RECOVERY_BY_PREFIX` の1行を変えるだけである。**
+**分類（`time` / `action` / `unknown`）を1行変えるのは、多くの鍵では `packages/core/src/usage-limits.ts` の `LIMIT_RECOVERY_BY_PREFIX` の1行を変えるだけである。**
 
+- **⚠️ ただし `"You've hit your"` / `"You've reached your"` の2つは値ではなく `refineHitYourFamilyRecovery()` を指すので、直す先はその関数の中の分岐である。** 表の1行では表現できない粒度（同じ接頭辞に複数の意味の違う文言がまとめて落ちる）だからこの形にしてある——1行を書き換えるだけでは直らない
 - **扱いが一律のうちは、変えても挙動は変わらない**（記録と表示だけが変わる）。回し手が読み始めてから初めて挙動になる
 - **`action` へ倒すときはとくに慎重に。** 回し手が入った後は「候補を1本永久に降ろす」判断になりうる（上の非対称）
 - 表の鍵を消したり、SDK に無い文字列を足したりすると `usage-limits.test.ts` が落ちる。**それは正しい落ち方である** — 鍵は SDK の配列と1対1でなければならない
+- **`refineHitYourFamilyRecovery()` の分岐の順序を変えるときはとくに注意する。** 実物の文言（`individual spend limit` と `resets` が同じ文言に同居する形）が実在する（2026-09-10）ので、**どちらを先に見るかが結果を変える**。`usage-limits.test.ts` の「実物の逐語」の歯がこの順序を測っている——順序を変えたらこの歯が落ちることを確認すること
+- **`"You've hit your"` / `"You've reached your"` のどちらかだけを直して終わらせないこと。** 2つは同じ細分関数を共有している（SDK の doc が両方を「同じ族の文言」と言っているため）。片方だけ触ると、もう片方は追随せずに古い分岐のまま残る
