@@ -81,6 +81,8 @@ function fakeClone(stores: Stores) {
     managers,
     // 認証トークンの切替（#393 PR4）。この歯では触らない。
     recycleSessionForToken() {},
+    // クローンへ配るか畳むか（Issue #783）。この歯では触らない。
+    usageBlocked: false,
     post(event) {
       if (event.type !== 'human_message') return;
       const conversationId = event.conversationId;

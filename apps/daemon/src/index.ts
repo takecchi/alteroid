@@ -409,6 +409,138 @@ export function reopenedTokenOf(
   return undefined;
 }
 
+/** {@link reopenedTokenOf} が返す形。{@link describeReopenedTokenNotice} と共有する。 */
+type ReopenedToken = { tokenId: string; label: string; how: '回した' | 'また通るようになった' };
+
+/**
+ * **いま配る意味が在るか**（Issue #783）。
+ *
+ * ## なぜ名前を切り出してあるか —— いまは1つの呼び手だが、名前は先取りしておく
+ *
+ * いま呼ぶのはクローンの枠（`CloneHost.usageBlocked`）だけである。**引数を
+ * 増やして一般化はしない**（依頼者の決定 2026-09-10。呼び手を増やす設計は
+ * ここでは作らない）——`blocked` を渡す先が増えたときに、この名前をそのまま
+ * 再利用できれば足りる。
+ *
+ * 背景（判断材料としてのみ）: 台帳を一段割った結果、マネージャー側の枠の
+ * 断りも同じ形で説明できると分かった——「委譲 X の137回目のターンが枠で
+ * 断られた」は判断材料にならず、決められるのは「委譲 X は枠で止まっている」
+ * の一段だけである。**この PR ではマネージャー側は実装しない**（別の委譲に
+ * 出る）。
+ *
+ * ## 中身
+ *
+ * いまのところ `blocked` をそのまま返すだけである。**それでも独立した名前を
+ * 持たせる**——`CloneWakeGate.decide` の中に埋め込むと、次にここへ来る呼び手
+ * （まだ無い）がまた同じ1行を書き写すことになる。
+ */
+export function worthDeliveringNow(blocked: boolean): boolean {
+  return blocked;
+}
+
+/**
+ * **「認証トークンが通る状態に戻った」の合図を、クローンへ配るか畳むかの判定**
+ * （Issue #783）。
+ *
+ * ## なぜ要るか —— クローンが枠で止まっていなければ、配ってもターンを1本焼くだけ
+ *
+ * この合図がクローンに対して果たす機能上の効果は1つしかない —— `clone.ts` の
+ * `post()` の中の `if (this.#usageBlocked !== null) this.#releaseRequested =
+ * true;`。**クローンが枠で止まっていなければ（`CloneHost.usageBlocked ===
+ * false`）、この合図は1文字もそこを動かさない。** それでも配れば、受信箱を
+ * 通ってモデルへ1ターン渡る——同じトークン id が9秒に25本届いた実運用の
+ * 受信箱の詰まりは、ここを無条件に配っていたことが機能上の理由である。
+ *
+ * **合図そのものは本物の状態遷移である**（`token-rotator.ts` の `hasRejection`
+ * の門が既に在り、`recovered` は記録の上で実際に状態が動いた回にしか出ない）。
+ * ⟹ **減らすのは日誌でも母数でもなく、配る回数だけである。** 日誌
+ * （`token_rotation` の `recovered` 行）はこの判定と無関係に必ず出る——
+ * `tokenRotationEntry`（`token-rotator.ts`）は `settleTokenOutcome` の中で
+ * この判定より前に計算され、配ったかどうかを見ずに `stores.journal.append`
+ * まで届く（隣の describe「recovered の日誌行は、受信箱へ配ったかどうかと
+ * 無関係に必ず出る」がその配線を固定している）。
+ *
+ * ## なぜ切り出してあるか
+ *
+ * 同じ理由（`reopenedTokenOf` の doc）。`wake()` は `main()` の中の閉包で、
+ * 型でも実行時でも触れない。
+ *
+ * **「いま配る意味が在るか」の判定そのものは {@link worthDeliveringNow} が持つ。**
+ * ここ（`CloneWakeGate`）が持つのはトークンごとの畳み込みカウントの管理だけで、
+ * 判定を埋め込まない——理由は {@link worthDeliveringNow} の doc。
+ *
+ * ## `restore()` / `resumeStoppedByUsage()` はここを通らない
+ *
+ * **この門が絞るのはクローンへの合図だけである。** マネージャーはクローンと
+ * 独立に枠で止まりうるので（`ManagerPool` は自分の記録で止まる／再開を判断
+ * する）、ここへ巻き込むと「起こすべき委譲が起きない」壊し方になる。呼ぶ側
+ * （`wake()`）は `restore()` / `resumeStoppedByUsage()` をこの判定と無関係に
+ * 呼ぶこと。
+ *
+ * ## トークンごとに数え、配ったら 0 に戻す
+ *
+ * 畳んだ回数は {@link CloneWakeGate} がトークン id ごとに持つ。**実際に配った
+ * 回にその場でリセットする** —— 次に同じトークンで畳み始めたら 1 から
+ * 数え直す。この入れ物自体がリセットの起点になるので、呼ぶ側は消し忘れを
+ * 気にしなくてよい。
+ */
+export interface CloneWakeGate {
+  /**
+   * @param tokenId 起こす／畳む対象のトークン id（{@link ReopenedToken.tokenId}）。
+   * @param cloneBlocked いまのクローンの状態（`CloneHost.usageBlocked`）。
+   * @returns
+   *   - `{ kind: 'wake' }` —— 配る。`folded` はここまで畳んだ回数
+   *     （まだ0回なら0。この呼び出しでカウンタは0へ戻る）
+   *   - `{ kind: 'fold' }` —— 配らない。カウンタを1増やして畳む
+   */
+  decide(
+    tokenId: string,
+    cloneBlocked: boolean,
+  ): { kind: 'wake'; folded: number } | { kind: 'fold' };
+}
+
+/** {@link CloneWakeGate} を作る。呼び出しのたびに新しい状態を持つ。 */
+export function createCloneWakeGate(): CloneWakeGate {
+  const folded = new Map<string, number>();
+  return {
+    decide(tokenId, cloneBlocked) {
+      if (!worthDeliveringNow(cloneBlocked)) {
+        folded.set(tokenId, (folded.get(tokenId) ?? 0) + 1);
+        return { kind: 'fold' };
+      }
+      // **配る回で 0 へ戻す。** 消し忘れると、次に同じトークンで畳み始めたときに
+      // 前回の回のぶんを引き継いでしまう。
+      const count = folded.get(tokenId) ?? 0;
+      folded.delete(tokenId);
+      return { kind: 'wake', folded: count };
+    },
+  };
+}
+
+/**
+ * 「認証トークンが通る状態に戻った」の合図の本文（Issue #783）。
+ *
+ * **畳んだぶんが在れば一文を足す。** 文言は `manager.ts` の
+ * `mergeSynthesizedNoticeFragments` の見本に寄せてある——あちらは「1つの
+ * 出来事について N 件の知らせをまとめた」と、まとめて出す形。ここは出すのを
+ * 1件に絞って残りは配らない形なので、「N 件を1件にまとめた」と言い方を
+ * 変えている（母数は消していないことを本文からも読めるようにする）。
+ *
+ * **`folded` が0のときは何も足さない。** 畳んでいない回に断り書きを付けると、
+ * いちばん多い「畳んでいない」場合の本文に余計な一文が乗る
+ * （`mergeSynthesizedNoticeFragments` の「1件のときは前置きを付けない」と
+ * 同じ理由）。
+ */
+export function describeReopenedTokenNotice(reopened: ReopenedToken, folded: number): string {
+  const base =
+    `認証トークンが通る状態に戻った（${reopened.how}）: ` +
+    `「${reopened.label}」（id ${reopened.tokenId}）。` +
+    '枠で止まっていた仕事は、ここから再開できる。';
+  if (folded <= 0) return base;
+  // 配った1件に、畳んで届かなかった folded 件を足すと、この間に実際に届いた総数。
+  return `${base}（この間に同じ合図が ${String(folded + 1)} 件届き、1件にまとめた）`;
+}
+
 /**
  * `tokenRotationStream` の網羅性チェック専用。呼ばれること自体が保証で、
  * `event` の型が `never` でなくなった時点（＝ 未対応の値が足された時点）で
@@ -884,6 +1016,15 @@ export async function main(): Promise<void> {
   let pendingTokenWake: (() => void) | undefined = undefined;
 
   /**
+   * **「認証トークンが通る状態に戻った」の合図を、クローンへ配るか畳むか**
+   * （Issue #783。{@link CloneWakeGate} の doc）。
+   *
+   * デーモンの寿命ぶん1つだけ持つ——`wake()` は呼ばれるたびに新しい closure だが、
+   * トークンごとの畳み込みカウントは呼び出しをまたいで覚えている必要がある。
+   */
+  const cloneWakeGate = createCloneWakeGate();
+
+  /**
    * アカウント全体の利用状況（claude.ai 側の値）。
    *
    * **使い捨ての probe で読む。実セッションに相乗りしない** — 実測で、ターンを
@@ -1160,13 +1301,17 @@ export async function main(): Promise<void> {
      *
      * ## 起こし方は層で違う
      *
-     * - **クローン**: 受信箱へ合図を1つ。これが `#releaseRequested` を立て、
-     *   保持していた合図が FIFO のまま配り直される。**高々1件である**（下の
-     *   `rotated` / `recovered` はどちらも「実際に状態が変わった回」にしか出ない）
+     * - **クローン**: 受信箱へ合図を、**枠で止まっているときだけ**1つ入れる
+     *   （Issue #783。{@link CloneWakeGate}）。これが `#releaseRequested` を立て、
+     *   保持していた合図が FIFO のまま配り直される。止まっていない回は配っても
+     *   ターンを1本焼くだけで何もしないので畳む——畳んでも母数は消えない
+     *   （`recovered` の日誌行はこの判定と無関係に必ず出る。上の doc）
      * - **マネージャー**: `restore()`。台帳に `running` / `waiting_human` で
      *   残っている委譲を、runner に居なければ resume する。**新しい経路は作らない**
      *   —— runner の名乗りと器の入れ替えが既に通っている1本に乗るだけである
-     *   （二重に走らないことは `ManagerPool` 側が見ている）
+     *   （二重に走らないことは `ManagerPool` 側が見ている）。**クローンの門とは
+     *   無関係に呼ぶ** —— マネージャーはクローンと独立に枠で止まりうるので、
+     *   ここを一緒に絞ると「起こすべき委譲が起きない」壊し方になる
      */
     const reopened = reopenedTokenOf(outcome);
     if (reopened !== undefined) {
@@ -1185,18 +1330,36 @@ export async function main(): Promise<void> {
        * **直せるのは「その後すぐ再開する」ところまでである。**
        */
       const wake = () => {
-        clone.post({
-          type: 'external',
-          id: randomUUID(),
-          at: new Date().toISOString(),
-          source: 'token-pool',
-          payload: {
-            text:
-              `認証トークンが通る状態に戻った（${reopened.how}）: ` +
-              `「${reopened.label}」（id ${reopened.tokenId}）。` +
-              '枠で止まっていた仕事は、ここから再開できる。',
-          },
-        });
+        // **クローンの門（Issue #783。{@link CloneWakeGate}）。** クローンが
+        // いま枠で止まっていなければ、この合図は `clone.ts` の `post()` の中の
+        // `if (this.#usageBlocked !== null) this.#releaseRequested = true;` を
+        // 1文字も動かさない——ターンを1本焼くだけで何もしない。だから配らず畳む。
+        //
+        // **日誌は無関係に必ず出る。** `entry`（`tokenRotationEntry` の結果）は
+        // この判定より前に計算済みで、この後の日誌への追記はここで畳んでも
+        // 変わらず通る——母数は日誌の `recovered` 行に残る（隣の describe
+        // 「recovered の日誌行は、受信箱へ配ったかどうかと無関係に必ず出る」）。
+        const decision = cloneWakeGate.decide(reopened.tokenId, clone.usageBlocked);
+        if (decision.kind === 'fold') {
+          // **安く跡を残す**（Issue #783）。永続化はしない——`schema.ts` の
+          // enum を触る判断は人間が持つ。既存の口（標準出力）へ1行だけ足す。
+          process.stdout.write(
+            `alteroidd: 認証トークンが通る状態に戻った合図を畳んだ（クローンは枠で止まっていないので起こさない）: ` +
+              `「${reopened.label}」（id ${reopened.tokenId}）\n`,
+          );
+        } else {
+          clone.post({
+            type: 'external',
+            id: randomUUID(),
+            at: new Date().toISOString(),
+            source: 'token-pool',
+            payload: { text: describeReopenedTokenNotice(reopened, decision.folded) },
+          });
+        }
+        // **ここから下はクローンの門と無関係——常に呼ぶ。** マネージャーは
+        // クローンと独立に枠で止まりうるので、上の畳み込みに巻き込むと
+        // 「起こすべき委譲が起きない」壊し方になる。
+        //
         // **待たない。** 引き取りは runner へ問い合わせる（落ちうる・遅い）ので、
         // 回した結果の記録をそれに縛らない。**黙って落とさない**（跡を残す）。
         //

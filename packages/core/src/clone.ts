@@ -1516,6 +1516,20 @@ class Clone implements CloneHost {
     return this.#managers;
   }
 
+  /**
+   * クローンがいま枠（利用上限）で止まっているか（`#usageBlocked`。Issue #783）。
+   *
+   * **`CloneHost.usageBlocked` の実装。** doc は `host.ts` 側に在る——ここは
+   * `this.#usageBlocked !== null` を読むだけの薄い窓で、判定を持たない。
+   *
+   * **`#usageBlocked !== null` は他にも読まれている**（`#deliver` の
+   * `heldForUsage`）。**別の判定を書かない** —— ずれると「保持しているのに
+   * 呼び出し側は保持していないと思っている」がありうる。
+   */
+  get usageBlocked(): boolean {
+    return this.#usageBlocked !== null;
+  }
+
   // -------------------------------------------------------------------------
   // CloneHost
   // -------------------------------------------------------------------------

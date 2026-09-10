@@ -172,6 +172,9 @@ function fakeClone() {
     managers,
     // 認証トークンの切替（#393 PR4）。HTTP 境界の検証では触らない。
     recycleSessionForToken() {},
+    // クローンへ配るか畳むか（Issue #783）。HTTP 境界の検証では触らない
+    // （門の判定はデーモンの配線側 `wake()` にある）。
+    usageBlocked: false,
     post(event) {
       posted.push(event);
       if (event.type !== 'human_message') return;

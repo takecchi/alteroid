@@ -1373,6 +1373,10 @@ export async function buildOpenApiDocument(): Promise<unknown> {
 
   const stubClone: CloneHost = {
     managers: stubManagers,
+    // **`managers` と同じ扱い——読み取り専用のプロパティは throw できない**
+    // （関数と違い、参照した瞬間に値が要る）。spec 生成はこの値を1文字も見ないので、
+    // 中身に意味は無い。
+    usageBlocked: false,
     recycleSessionForToken() {
       throw new Error('spec 生成専用のスタブ: セッションは作らない');
     },

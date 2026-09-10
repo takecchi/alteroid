@@ -2,7 +2,12 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-import { reopenedTokenOf, tokenRotationStream } from './index.js';
+import {
+  createCloneWakeGate,
+  describeReopenedTokenNotice,
+  reopenedTokenOf,
+  tokenRotationStream,
+} from './index.js';
 
 /**
  * 認証トークン回りの日誌1行を stdout/stderr のどちらへ出すかの分類
@@ -321,5 +326,220 @@ describe('再開の合図は、セッションが畳まれた後に入れる', (
   it('保留は高々1つしか持たない（後の1回だけが要る）', () => {
     // 配列で溜めると、畳むより先に2回回った回に「もう古い鍵の話」の合図まで入る。
     expect(source).toContain('let pendingTokenWake: (() => void) | undefined = undefined;');
+  });
+});
+
+/**
+ * **クローンへ配るか畳むかの判定**（Issue #783。`CloneWakeGate` の doc）。
+ *
+ * ## なぜここを測るのか
+ *
+ * クローンが枠で止まっていなければ、「認証トークンが通る状態に戻った」の合図は
+ * `clone.ts` の `post()` の `if (this.#usageBlocked !== null) this.#releaseRequested
+ * = true;` を1文字も動かさない——ターンを1本焼くだけで何もしない。だから止まって
+ * いないときは配らず畳む。**⛔ 譲れない不変条件はこの逆**: クローンが止まって
+ * いるときは、畳んだ回数によらず必ず配る（`kind: 'wake'`）。
+ */
+describe('createCloneWakeGate', () => {
+  it('クローンが枠で止まっているなら配る（畳んでいなければ folded は0）', () => {
+    const gate = createCloneWakeGate();
+
+    expect(gate.decide('tok-a', true)).toEqual({ kind: 'wake', folded: 0 });
+  });
+
+  it('クローンが枠で止まっていないなら畳む（配らない）', () => {
+    const gate = createCloneWakeGate();
+
+    expect(gate.decide('tok-a', false)).toEqual({ kind: 'fold' });
+  });
+
+  it('畳んだ回数を数え、配る回にその数を渡す', () => {
+    const gate = createCloneWakeGate();
+
+    expect(gate.decide('tok-a', false)).toEqual({ kind: 'fold' });
+    expect(gate.decide('tok-a', false)).toEqual({ kind: 'fold' });
+    expect(gate.decide('tok-a', false)).toEqual({ kind: 'fold' });
+    // 3回畳んだ後に配ると、畳んだ数（3）を持って `wake` が返る。
+    expect(gate.decide('tok-a', true)).toEqual({ kind: 'wake', folded: 3 });
+  });
+
+  it('配ったら0へ戻る（次に畳み始めたら1から数え直す）', () => {
+    const gate = createCloneWakeGate();
+
+    gate.decide('tok-a', false);
+    gate.decide('tok-a', false);
+    expect(gate.decide('tok-a', true)).toEqual({ kind: 'wake', folded: 2 });
+
+    // リセット後、畳んでいない状態で配れば folded は0に戻っている。
+    expect(gate.decide('tok-a', true)).toEqual({ kind: 'wake', folded: 0 });
+    // 改めて1回畳めば1から数え直す。
+    gate.decide('tok-a', false);
+    expect(gate.decide('tok-a', true)).toEqual({ kind: 'wake', folded: 1 });
+  });
+
+  it('トークンごとに独立して数える', () => {
+    const gate = createCloneWakeGate();
+
+    gate.decide('tok-a', false);
+    gate.decide('tok-a', false);
+    // tok-b は tok-a の畳み込みに影響されない。
+    expect(gate.decide('tok-b', true)).toEqual({ kind: 'wake', folded: 0 });
+    // tok-a のカウントはそのまま残っている。
+    expect(gate.decide('tok-a', true)).toEqual({ kind: 'wake', folded: 2 });
+  });
+
+  /**
+   * **🔴 不変条件3（最重要）**: 「落ちる→戻る→また落ちる→また戻る」で、
+   * **2本目の「戻った」も必ず届く**。
+   *
+   * 畳み込みは「本当に新しい回復」を消してはいけない。1回目の `wake` で配った
+   * 直後にクローンがまた枠で止まり、再び通るようになった2回目の観測が届いた
+   * ときも、`cloneBlocked` がそのつど `true` である限り `decide` は必ず
+   * `kind: 'wake'` を返す——`folded` の値（内部状態）に依存して `wake` が
+   * `fold` に化けることは無い。
+   */
+  it('🔴 不変条件3: 落ちる→戻る→また落ちる→また戻る で2本目の「戻った」も必ず届く', () => {
+    const gate = createCloneWakeGate();
+
+    // 1回目: クローンは枠で止まっている（落ちている）→ 戻ったら配る。
+    expect(gate.decide('tok-a', true)).toEqual({ kind: 'wake', folded: 0 });
+
+    // 配った直後、クローンはまだ枠で止まっていない状態が続く（この間に届いた
+    // 「戻った」はすべて畳む——まだ本物の再起動が要る状態ではない）。
+    expect(gate.decide('tok-a', false)).toEqual({ kind: 'fold' });
+
+    // また枠に当たって落ちた。その後もう一度「戻った」が観測された
+    // ——ここが2本目の「戻った」である。畳み込みの結果として消えてはいけない。
+    expect(gate.decide('tok-a', true)).toEqual({ kind: 'wake', folded: 1 });
+
+    // 3本目も同様に届く（何回繰り返しても、止まっているときは必ず配る）。
+    expect(gate.decide('tok-a', false)).toEqual({ kind: 'fold' });
+    expect(gate.decide('tok-a', false)).toEqual({ kind: 'fold' });
+    expect(gate.decide('tok-a', true)).toEqual({ kind: 'wake', folded: 2 });
+  });
+});
+
+/**
+ * **配る合図の本文に、畳んだ件数が出ること**（Issue #783）。
+ *
+ * 不変条件2（母数を落とさない）の裏付け——受信箱には1件しか入らなくても、
+ * 本文を読めば何件を1件にまとめたかが分かる。
+ */
+describe('describeReopenedTokenNotice', () => {
+  const reopened = { tokenId: 'tok-a', label: '本命', how: 'また通るようになった' as const };
+
+  it('畳んでいなければ断り書きを付けない', () => {
+    const text = describeReopenedTokenNotice(reopened, 0);
+
+    expect(text).toContain('認証トークンが通る状態に戻った（また通るようになった）');
+    expect(text).toContain('「本命」（id tok-a）');
+    expect(text).not.toContain('まとめた');
+  });
+
+  it('畳んだ件数が本文に出る（届いた総数 ＝ 畳んだ数 + 配った1件）', () => {
+    const text = describeReopenedTokenNotice(reopened, 3);
+
+    // 3件畳んで1件配った ＝ この間に届いたのは4件。
+    expect(text).toContain('4 件届き、1件にまとめた');
+  });
+
+  it('how が「回した」でも同じ形で本文に出る', () => {
+    const text = describeReopenedTokenNotice({ ...reopened, how: '回した' }, 1);
+
+    expect(text).toContain('認証トークンが通る状態に戻った（回した）');
+    expect(text).toContain('2 件届き、1件にまとめた');
+  });
+});
+
+/**
+ * **クローンの門は `wake()` の中の `clone.post(...)` だけを絞る**（Issue #783）。
+ *
+ * `restore()` / `resumeStoppedByUsage()` はこの門と無関係に呼ぶ——マネージャーは
+ * クローンと独立に枠で止まりうるので、一緒に絞ると「起こすべき委譲が起きない」
+ * 壊し方になる。`wake()` は `main()` の中の閉包で型でも実行時でも触れないので、
+ * 原文を読んで配線を固定する（隣の describe と同じ理由）。
+ */
+describe('クローンの門は clone.post だけを絞る（restore / resumeStoppedByUsage は無条件）', () => {
+  const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+  const wakeStart = source.indexOf('const wake = () => {');
+  const wakeEnd = source.indexOf('\n      if (recycled === ', wakeStart);
+  const wakeBody = source.slice(wakeStart, wakeEnd);
+
+  it('clone.post は cloneWakeGate.decide の判定の中にある', () => {
+    const decideAt = wakeBody.indexOf('cloneWakeGate.decide(');
+    const postAt = wakeBody.indexOf('clone.post(');
+    const ifFoldAt = wakeBody.indexOf("decision.kind === 'fold'");
+
+    expect(decideAt).toBeGreaterThan(-1);
+    expect(postAt).toBeGreaterThan(-1);
+    expect(ifFoldAt).toBeGreaterThan(-1);
+    // 判定 → 畳む/配るの分岐 → clone.post の順で並んでいる
+    // ⟹ clone.post は判定より後ろの、分岐の中にある。
+    expect(decideAt).toBeLessThan(ifFoldAt);
+    expect(ifFoldAt).toBeLessThan(postAt);
+  });
+
+  it('restore() / resumeStoppedByUsage() は判定の分岐（if/else）の外にある', () => {
+    // 分岐（`if (decision.kind === 'fold') { ... } else { ... }`）の閉じを
+    // 探し、その後ろで呼ばれていることを確かめる。
+    const restoreAt = wakeBody.indexOf('clone.managers');
+    const resumeAt = wakeBody.indexOf('.resumeStoppedByUsage(');
+    const postAt = wakeBody.indexOf('clone.post(');
+
+    expect(restoreAt).toBeGreaterThan(-1);
+    expect(resumeAt).toBeGreaterThan(-1);
+    // clone.post（分岐の中）より後ろに在る ＝ 分岐を抜けてから呼んでいる。
+    expect(postAt).toBeLessThan(restoreAt);
+    expect(restoreAt).toBeLessThan(resumeAt);
+  });
+});
+
+/**
+ * **`recovered` の日誌行は、受信箱へ配ったかどうかと無関係に必ず出る**
+ * （依頼者の明示的な決定）。
+ *
+ * `journal_read types=["token_rotation"]` で全数を読み戻す運用がこれに
+ * 依存している——⛔ 日誌への記録を、配達（クローンの門）の条件の内側へ
+ * 移してはいけない。
+ *
+ * `tokenRotationEntry`（`token-rotator.ts`）自体はクローンの状態を1つも
+ * 受け取らない純関数なので、この性質は型のレベルで保たれている。ここで
+ * 固定するのは呼び出し側（`settleTokenOutcome`）の配線——`entry` の計算と
+ * `stores.journal.append` が、クローンの門（`reopened` ブロックの中の
+ * `wake()`）より前後の別の場所にあり、分岐に巻き込まれていないこと。
+ */
+describe('recovered の日誌行は、受信箱へ配ったかどうかと無関係に必ず出る', () => {
+  const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+  // **`settleTokenOutcome` の本体だけに絞る。** `stores.journal.append(` はこの
+  // 関数の外にも在る（起動時の撒き直し・その他の配線）——そこまで数えると
+  // 「1箇所だけ」が測れない。関数の始まりから、次の宣言（見張りを起こす配線）の
+  // 手前までを本体とみなす。
+  const fnStart = source.indexOf('async function settleTokenOutcome(');
+  const fnEnd = source.indexOf('tokenWatch = startTokenRotationWatch({', fnStart);
+  const fnBody = source.slice(fnStart, fnEnd);
+
+  it('entry の計算は、クローンの門（reopened のブロック）より前で行う', () => {
+    const entryAt = fnBody.indexOf('const entry = tokenRotationEntry(outcome, observed);');
+    const reopenedAt = fnBody.indexOf('const reopened = reopenedTokenOf(outcome);');
+
+    expect(entryAt).toBeGreaterThan(-1);
+    expect(reopenedAt).toBeGreaterThan(-1);
+    expect(entryAt).toBeLessThan(reopenedAt);
+  });
+
+  it('journal への追記は settleTokenOutcome の中に1箇所だけで、クローンの門の分岐に複製されていない', () => {
+    const occurrences = fnBody.split('stores.journal.append(entry)').length - 1;
+    expect(occurrences).toBe(1);
+
+    // その1箇所は `reopened` のブロック（`if (reopened !== undefined) { ... }`）
+    // を閉じた後に在る ⟹ 畳んだ（配らなかった）回でも実行される。
+    const reopenedBlockStart = fnBody.indexOf('if (reopened !== undefined) {');
+    const appendAt = fnBody.indexOf('stores.journal.append(entry)');
+    const closeAt = fnBody.indexOf('\n    }\n\n    if (entry === null) return;');
+
+    expect(reopenedBlockStart).toBeGreaterThan(-1);
+    expect(closeAt).toBeGreaterThan(-1);
+    expect(closeAt).toBeLessThan(appendAt);
+    expect(reopenedBlockStart).toBeLessThan(closeAt);
   });
 });
