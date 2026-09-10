@@ -16,7 +16,7 @@ catalog:
   # CI の実行系（Node 22）に合わせる
   '@types/node': ^22.20.1
   '@anthropic-ai/claude-agent-sdk': ^0.3.267
-  hono: ^4.13.1
+  hono: ^4.13.5
   '@hono/node-server': ^2.1.0
   '@hono/zod-validator': ^0.9.0
   zod: ^4.4.3
@@ -159,6 +159,48 @@ catalog:
 # 版そのものを上げるのは `.github/workflows/update-claude-sdk.yml`（毎日）。
 minimumReleaseAgeExclude:
   - '@anthropic-ai/claude-agent-sdk*'
+
+# Dependabot alert 対応（9件）。`fast-uri` と `qs` はどちらも直接依存ではなく、
+# 推移的依存としてしか入っていない —— 版を指定する場所が他に無いので `overrides`
+# を新設する。
+#
+# - `fast-uri`: `ajv` の推移的依存で、`ajv` 側の宣言は `^3.0.1`。3.1.6 はその範囲に
+#   入るので、上書きしても `ajv` は壊れない。**`ajv` を連れてくるのは
+#   `@modelcontextprotocol/sdk`**（`@anthropic-ai/claude-agent-sdk` 経由と `shadcn`
+#   経由の2本）**と `conf`**（`@dotenvx/dotenvx` ← `shadcn`）である。`pnpm why ajv -r`
+#   で引き直せる。
+# - `qs`: `express` / `body-parser` の推移的依存で、宣言はそれぞれ `^6.14.0` /
+#   `^6.15.2`。6.16.0 はどちらの範囲にも入る。**`express` を連れてくるのも
+#   `@modelcontextprotocol/sdk` である。**`hono` 側の経路ではない —— `hono` は自前の
+#   クエリパーサを持つので `qs` を使わない。`pnpm why qs -r` で引き直せる。
+#
+# **置き場所はここ（`pnpm-workspace.yaml` の `overrides`）であって、root の
+# `package.json` の `"pnpm": { "overrides": ... }` ではない。** pnpm 11 では後者は
+# 読まれない（配布コード `pnpm.mjs` の `MIGRATED_PNPM_FIELD_KEYS` に `"overrides"`
+# が入っており、書けば `The pnpm field in package.json is no longer read by pnpm`
+# の警告になるだけで何も上書きしない）。**移したくなっても移さないこと** —
+# `package.json` に `"pnpm"` フィールドは無いのが現状なので、新設もしないこと。
+#
+# **`js-yaml` と `esbuild` はここに足していない。** 漏れではない。
+# - `js-yaml`: 親が `@redocly/openapi-core` で、その宣言が `4.3.1` の厳密固定
+#   （範囲指定ではない）。上書きの影響が未検証なので、別 PR に分けてある。
+# - `esbuild`: 親の `tsup` の宣言が `^0.27.0` で、修正版（0.28.1）はその範囲に
+#   入らない。上流（`tsup`）が `^0.28` を宣言し直すまでは見送り。
+# **`hono` は `catalog:` と `overrides:` の両方に在る。重複ではない。** `catalog:` が
+# 決めるのは消費側の宣言（`apps/cli` / `apps/daemon` / `apps/runner` の
+# `"hono": "catalog:"`）だけで、**他人が自分で連れてくる `hono` には効かない。**
+# `@modelcontextprotocol/sdk` は `hono` を `^4.11.4` として自分で宣言するので、
+# catalog を上げても**そちら側は古い版のまま残る** —— 実測（catalog だけ上げた時点）:
+# `pnpm why hono` が `Found 2 versions of hono` を返し、lockfile に `hono@4.13.1` が
+# 5箇所残っていた。**そして残っていても `pnpm install` は成功し、CI も緑になる。**
+# 消えないのは Dependabot の alert だけである。⟹ 推移的依存の側を動かすのは
+# `overrides` である（4.13.5 は `^4.11.4` の内側なので、上書きしても SDK 側の宣言と
+# 矛盾しない）。**片方だけ消さないこと** —— `catalog` を消すと消費側の宣言が失われ、
+# `overrides` を消すと SDK 側が古い版へ戻る。
+overrides:
+  fast-uri: ^3.1.6
+  hono: ^4.13.5
+  qs: ^6.16.0
 
 # #246: `pnpm --filter <存在しないパッケージ名>` が黙って exit 0 を返す穴を塞ぐ。
 # `test` script の有無とは無関係の別穴（パッケージ名の誤字・コピペミス）で、

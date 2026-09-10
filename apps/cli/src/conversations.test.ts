@@ -78,9 +78,10 @@ describe('alteroid conversations list', () => {
 
     expect(sent).toHaveLength(1);
     expect(sent[0]?.method).toBe('GET');
-    // `query` は常に渡す（型が要求する）。中身が空だと `hono/client` は `?` だけ
-    // 付いた URL を作る — サーバ側には無害（クエリが無いのと同じに解釈される）。
-    expect(sent[0]?.url).toBe('http://127.0.0.1:4517/conversations?');
+    // `query` は常に渡す（型が要求する）。中身が空なら `hono/client`（4.13.5 以降。
+    // `appendQueryParams` が空の searchParams のときは `?` を付けない）はクエリ無しの
+    // URL をそのまま作る。
+    expect(sent[0]?.url).toBe('http://127.0.0.1:4517/conversations');
     const text = read();
     expect(text).toContain('conv-1');
     expect(text).toContain('設計の相談');
@@ -284,7 +285,7 @@ describe('alteroid conversations show', () => {
     await conversationsShowCommand('conv-1');
 
     expect(sent).toHaveLength(1);
-    expect(sent[0]?.url).toBe('http://127.0.0.1:4517/conversations/conv-1?');
+    expect(sent[0]?.url).toBe('http://127.0.0.1:4517/conversations/conv-1');
     const text = read();
     const human = text.indexOf('設計どうする？');
     const clone = text.indexOf('こう考えている');
