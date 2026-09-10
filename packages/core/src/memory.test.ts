@@ -2436,6 +2436,62 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
         const outline = renderMemoryOutline(sections());
         for (const name of siblings) expect(outline).toContain(name);
       });
+
+      /**
+       * ⭐ **族の名乗り（「他にもある」）を head/tail 両方で測る。**
+       *
+       * #747 は兄弟を `MEMORY_LISTING_BUDGET` の個体名で1本だけ名指しした。
+       * 依頼者は #747 の線引き（個体名で名指しし、範囲は記憶の予算に限る）を
+       * 採ると決めたが、それでも「これで全部」に見える誤読は残る——だから
+       * `renderMemoryOutlineBudgetNote` にもう1句、個体名を挙げずに
+       * 「同じ理由で同じ値を持つ予算が他にもある」とだけ言う文を足した
+       * （`family` 変数。`sibling` の2分岐のどちらの中にも書いていない
+       * ——書くとその分岐が選ばれたときにしか出ない非対称になる）。
+       *
+       * **「この数字だけではどの予算かは決まらない」と「他にもある」を別々に
+       * 測る**——文言のどちらか片方だけを削る変異でも落ちるようにするため。
+       *
+       * ⚠️ **「MCP の出力上限」という理由づけは、`scope` 側の文にも同じ語
+       * （「（MCP の出力上限のため）」）が既に出ている。** そのため
+       * `toContain('MCP の出力上限')` のような短い逐語だけで測ると、族の
+       * 名乗りの文を丸ごと消しても `scope` 側の出現で緑のままになる
+       * （実測で確認済み——下の報告参照）。ここでは族の名乗りの文だけに
+       * 現れる、より長い逐語（`scope` 側の言い回しとは地続きにならない形）
+       * で測る。
+       */
+      it('⭐ 族の名乗り（「他にもある」）が head 側の断り書きに見える（scope 側の「MCP の出力上限」とは別の逐語で測る）', () => {
+        const outline = renderMemoryOutline(sections());
+
+        expect(outline).toContain('この数字だけではどの予算かは決まらない');
+        expect(outline).toContain('同じ理由で同じ値を持つ予算が他にもある');
+        expect(outline).toContain(
+          '（MCP の出力上限）という理由で道具の応答を切る予算に共通して使われている値であり',
+        );
+      });
+
+      it('⭐ 同じ族の名乗りが tail 側の断り書きにも見える（共有の1文字列を使っている）', () => {
+        const outline = renderMemoryOutline(sections(), 'tail');
+
+        expect(outline).toContain('この数字だけではどの予算かは決まらない');
+        expect(outline).toContain('同じ理由で同じ値を持つ予算が他にもある');
+        expect(outline).toContain(
+          '（MCP の出力上限）という理由で道具の応答を切る予算に共通して使われている値であり',
+        );
+      });
+
+      it('⚠️ 族の名乗りは個体名（MEMORY_LISTING_BUDGET 以外の定数名・memory_list）を挙げない', () => {
+        const outline = renderMemoryOutline(sections());
+        // 族の名乗りの文そのもの（family）を、断り書き全体から抜き出して測る
+        // ——sibling が既に MEMORY_LISTING_BUDGET を名指ししているので、
+        // 断り書き全体に対して素朴に not.toContain すると sibling 側の
+        // 名指しごと壊れる歯になってしまう（#747 の既存の歯と衝突する）。
+        const familyStart = outline.indexOf('そして');
+        expect(familyStart).toBeGreaterThan(-1);
+        const family = outline.slice(familyStart);
+
+        expect(family).not.toContain('MEMORY_LISTING_BUDGET');
+        expect(family).not.toContain('memory_list');
+      });
     });
   });
 });

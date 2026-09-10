@@ -3197,7 +3197,7 @@ function memorySectionLines(sections: readonly MemorySection[]): string[] {
  * 実際にこの予算の値（8,000）を、別の予算（毎ターンの焼き込みの節目次、
  * `MEMORY_PROMPT_OUTLINE_BUDGET` = 6,000）の値だと取り違えて自分の記憶に
  * 書いた実例がある——**値も観測も正しく、誤っていたのは値の帰属だけ**
- * だった。だから「値を見せる」だけでは再発する。次の3つを**同時に**
+ * だった。だから「値を見せる」だけでは再発する。次の4つを**同時に**
  * 見せる。
  *
  * 1. **その値**（`MEMORY_OUTLINE_BUDGET`。定数から組み立てる——文字列へ
@@ -3211,10 +3211,22 @@ function memorySectionLines(sections: readonly MemorySection[]): string[] {
  *    （`memory_list` の一覧の予算）。この2つは値がたまたま同じなだけで、
  *    切っている対象が違う（`memory_outline` は1文書の節を、`memory_list`
  *    は全文書を並べる）
+ * 4. **族の名乗り**——この値は「1回のツール応答に何文字載せるか」
+ *    （MCP の出力上限）という理由で、道具の応答を切る予算に共通して
+ *    使われている値である。⟹ 3 で兄弟を1本（`MEMORY_LISTING_BUDGET`）
+ *    だけ名指ししても、読み手が「これで全部」と誤読する余地が残る——
+ *    同じ理由で同じ値を持つ予算は他にもある、という事実そのものを言う
+ *    （個体名までは列挙しない。名指しの範囲を「記憶の予算」に限ったのは
+ *    3 の判断のままで変えていない）
  *
  * **3つ目は値が一致しているときにしか真ではない。** `MEMORY_LISTING_BUDGET`
  * を直接比較して分岐する——将来どちらかの値だけが動いて一致が崩れても、
  * この関数は「一致しない」と正直に書く（黙って嘘の一致を言い続けない）。
+ *
+ * **4つ目は3つ目の分岐（値が一致するかどうか）と独立させ、必ず出す。**
+ * `sibling` の2分岐のどちらかの中に書くと、その分岐が選ばれたときにしか
+ * 出ない非対称が生まれる——`family` を別の変数として立て、`scope` /
+ * `sibling` と並べて連結する。
  *
  * `memory_outline` 自身の応答は、ここでは「目次」と呼ばない。「目次」は
  * この repo で3つの別のものを指す（fact 全体の目次・premise の節目次・
@@ -3235,7 +3247,11 @@ function renderMemoryOutlineBudgetNote(): string {
       : 'memory_list の一覧の予算（MEMORY_LISTING_BUDGET、いま ' +
         `${formatMemoryCharCount(MEMORY_LISTING_BUDGET)} 文字）とは値が一致しない` +
         '——一致していた時期があっても、いまは別の値である。';
-  return `${scope} ${sibling}`;
+  const family =
+    `そして ${value} は「1回のツール応答に何文字載せるか」（MCP の出力上限）という理由で` +
+    '道具の応答を切る予算に共通して使われている値であり、この数字だけではどの予算かは決まらない' +
+    '——同じ理由で同じ値を持つ予算が他にもある。';
+  return `${scope} ${sibling} ${family}`;
 }
 
 export function renderMemoryOutline(
