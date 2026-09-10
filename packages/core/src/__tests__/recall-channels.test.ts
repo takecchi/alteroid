@@ -7,7 +7,6 @@ import type { Memory, NewMemory } from "../memory.js";
 import { createRuntime } from "../runtime.js";
 import {
   ANN_TRUNCATION_UNDECIDABLE_LEXICAL_ACTIVE,
-  LEXICAL_MATCH_VALUE,
   LEXICAL_STORE_UNAVAILABLE_ERROR_PREFIX,
   RecallQuerySchema,
 } from "../recall.js";
@@ -212,12 +211,90 @@ describe("recall() — 歯①: 固有名詞・識別子は ann では引けず l
     // （recall-runtime.ts の ScoredCandidate.retrievedVia の doc: 単一の値でチャンネルの
     // 集合を表そうとしない、という契約の帰結）。
     expect(returnedGold?.retrievedVia).toBe("lexical");
-    expect(returnedGold?.score.lexicalMatch).toBe(LEXICAL_MATCH_VALUE);
+    // クエリは単一語("PROJ-1234")なので、一致すれば coverage は 1（= 一致語彙数1 ÷ クエリ語彙数1）。
+    // ⚠ 定数 LEXICAL_MATCH_VALUE は ADR 0092 で廃止された——ここでの 1 は
+    // 「常にそうなる値」ではなく、このクエリが単一語であることの帰結として書く。
+    expect(returnedGold?.score.lexicalMatch).toBe(1);
 
     // distractor は ann の窓（kPrime=1）に入っていたかもしれないが、gold は
     // クエリタグで底上げされているので総合スコアで gold が limit=1 の座を取る。
     // （scoring.ts: affinity は similarity と lexicalMatch のうち強い方。この歯は
     // どちらが窓に残るかという ANN 側の偶然ではなく、gold が実際に返ることだけを見る。）
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 歯⑨: 被覆率（ADR 0092）— score.lexicalMatch は adapter が返した coverage そのもの
+// ---------------------------------------------------------------------------
+
+describe("recall() — 歯⑨: score.lexicalMatch は adapter が返した coverage そのもの（ADR 0092）", () => {
+  it("2語のクエリのうち1語しか含まない記憶は、score.lexicalMatch が 0.5 になる（定数 1 ではない）", async () => {
+    const { runtime, stores } = buildRuntime();
+    await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ content: "alpha だけを含み、もう一方の語は現れない記録", digest: "half" }),
+    );
+
+    const result = await runtime.recall(ctx, {
+      text: "alpha beta",
+      channels: ["lexical"],
+      limit: 10,
+    });
+
+    expect(result.memories).toHaveLength(1);
+    // ⛔ 定数 1 を期待しない（旧 LEXICAL_MATCH_VALUE は ADR 0092 で廃止された）。
+    // 一致語彙数(1: alpha) ÷ クエリ語彙数(2: alpha, beta) = 0.5。
+    expect(result.memories[0]?.score.lexicalMatch).toBeCloseTo(0.5);
+  });
+
+  it("被覆率が高い候補ほど affinity が高く、上位に来る（同一 rank 変域では coverage が順序を決める）", async () => {
+    const { runtime, stores } = buildRuntime();
+    const full = await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ content: "alpha と beta の両方を含む記録", digest: "full" }),
+    );
+    const half = await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ content: "alpha だけを含み、もう一方の語は現れない記録", digest: "half" }),
+    );
+
+    const result = await runtime.recall(ctx, {
+      text: "alpha beta",
+      channels: ["lexical"],
+      limit: 10,
+    });
+
+    const ids = result.memories.map((m) => m.memoryId);
+    expect(ids).toEqual([full.id, half.id]);
+    expect(result.memories[0]?.score.lexicalMatch).toBe(1);
+    expect(result.memories[1]?.score.lexicalMatch).toBeCloseTo(0.5);
+    expect(result.memories[0]!.score.total).toBeGreaterThan(result.memories[1]!.score.total);
+  });
+
+  it("similarity との max の関係は変わっていない: coverage(0.5) < similarity(1) のとき similarity が勝つ", async () => {
+    const { runtime, stores } = buildRuntime();
+    // ANN と語彙の両方が同じ Memory を当てる: ANN は similarity=1（同一ベクタ）、
+    // 語彙は「alpha beta」のうち「alpha」だけを含むので coverage=0.5。
+    const memory = await createEmbeddedMemory(stores, [1, 0], {
+      content: "alpha だけを含み、もう一方の語は現れない記録",
+      digest: "both-channels",
+      tags: [],
+    });
+
+    const result = await runtime.recall(ctx, {
+      vector: [1, 0],
+      text: "alpha beta",
+      channels: ["ann", "lexical"],
+      limit: 10,
+    });
+
+    const hit = result.memories.find((m) => m.memoryId === memory.id);
+    expect(hit).toBeDefined();
+    expect(hit?.score.similarity).toBe(1);
+    expect(hit?.score.lexicalMatch).toBeCloseTo(0.5);
+    // affinity = max(1, 0.5) = 1 -> total は decay=freshness=tagMatch=strength=1 の
+    // フィクスチャなので 1 になる（similarity のみのときと1バイトも変わらない）。
+    expect(hit?.score.total).toBe(1);
   });
 });
 

@@ -17,11 +17,16 @@ import type { InMemoryMemoryStore } from "./in-memory-memory-store.js";
  * 同じだと確認したこと（このファイルの意図として揃えた点）:
  * - 語幹処理をしない（完全一致）。
  * - 大文字・小文字を区別しない。
- * - クエリの語をすべて含むか（AND）で絞る——`websearch_to_tsquery` の既定の空白区切りの意味論。
+ * - クエリの語のいずれか1つでも含むか（OR）で絞り、一致した語の割合（`coverage`）を返す
+ *   （[ADR 0092](../../../../docs/decisions/0092-lexical-or-coverage.md)。
+ *   postgres 実装の `mnemora_lexical_query_or` / `mnemora_lexical_coverage` と同じ向き）。
  *
  * **違う・確認していないこと**:
  * - `websearch_to_tsquery` の `"..."`（フレーズ）/ `OR` / `-`（NOT）はここでは一切解釈しない。
- *   空白区切りの AND としてしか読まない。
+ *   空白区切りの語の集合としてしか読まない（各語を独立に OR で見る）。
+ *   **⚠ ADR 0092 で postgres 側も各語を `"..."` で囲むようになり、生クエリ中の
+ *   websearch 演算子を解釈しなくなった**——この差はむしろ縮む方向である
+ *   （ADR 0092「採った副作用」）。
  * - CJK（分かち書きの無い日本語・中国語等）の扱いは確認していない。
  *   postgres 側の `regexp_replace(text, '([[:ascii:]]+)', ' \1 ', 'g')` は ascii の連続の前後に
  *   空白を挟むことで、CJK に埋め込まれた ascii の語（例: 日本語文中の英単語）を
@@ -65,7 +70,8 @@ function computeRank(contentTokens: string[], queryTerms: Set<string>): number {
 
 /**
  * `LexicalStore` のインメモリ・プレースホルダ実装（[ADR 0084](../../../../docs/decisions/0084-lexical-recall-channel.md)、
- * Issue #106）。索引・pg の text search 機構を模さない最小実装であり、
+ * [ADR 0092](../../../../docs/decisions/0092-lexical-or-coverage.md)、Issue #106）。
+ * 索引・pg の text search 機構を模さない最小実装であり、
  * `packages/testkit` の適合テストを実行できることを示すためだけのもの。
  *
  * **`memoryStore` を必須のコンストラクタ引数にしている（省略不可）。** `LexicalStore` は
@@ -81,8 +87,8 @@ function computeRank(contentTokens: string[], queryTerms: Set<string>): number {
  * `InMemoryVectorStore` のクラス doc が引いている ADR 0011/0025/0027/0028 の族の失敗を、
  * ここでも繰り返さない。
  *
- * **🔴 `search` が返す `LexicalHit` は毎回新しく組み立てる（`{ memoryId, rank }` の
- * オブジェクトリテラル）。**`memoryId`/`rank` は共にプリミティブなので Map の行を
+ * **🔴 `search` が返す `LexicalHit` は毎回新しく組み立てる（`{ memoryId, coverage, rank }` の
+ * オブジェクトリテラル）。**いずれもプリミティブなので Map の行を
  * そのまま返しても書き換えの経路自体は無いが、**内部表現（`Memory` 行やトークン配列）を
  * 返り値に混ぜないことを明示するためにここへ書いておく**——この repo では
  * 「Map の行の参照をそのまま返し、呼び出し側の書き換えが store の中身まで変えてしまい、
@@ -139,23 +145,29 @@ export class InMemoryLexicalStore implements LexicalStore {
       }
 
       const contentTokens = tokenize(memory.content);
-      // AND 意味論: クエリの語をすべて含むか（`websearch_to_tsquery` の既定と同じ向き。
-      // このファイル冒頭の tokenize の doc 参照）。
-      let matchesAll = true;
+      // OR 意味論（ADR 0092）: クエリの語のうち、content に含まれるものを数える。
+      // 1つも一致しなければ返さない——`matched === 0` は「一致した候補」ではない。
+      const contentTokenSet = new Set(contentTokens);
+      let matched = 0;
       for (const term of queryTerms) {
-        if (!contentTokens.includes(term)) {
-          matchesAll = false;
-          break;
+        if (contentTokenSet.has(term)) {
+          matched += 1;
         }
       }
-      if (!matchesAll) {
+      if (matched === 0) {
         continue;
       }
 
-      hits.push({ memoryId: memory.id, rank: computeRank(contentTokens, queryTerms) });
+      const coverage = matched / queryTerms.size;
+      hits.push({
+        memoryId: memory.id,
+        coverage,
+        rank: computeRank(contentTokens, queryTerms),
+      });
     }
 
-    hits.sort((a, b) => b.rank - a.rank);
+    // coverage 降順、同値なら rank 降順（ADR 0092: limit の窓は被覆率の高い候補から切る）。
+    hits.sort((a, b) => b.coverage - a.coverage || b.rank - a.rank);
     return hits.slice(0, opts.limit);
   }
 }

@@ -815,15 +815,17 @@ export class FakeVectorStore implements VectorStore {
  * （Issue #106 の歯だけを先に置く作業。他の作業者が同時に `packages/testkit` を触っている）
  * ため、それを import しない。
  *
- * **契約は `interfaces/lexical-store.ts` の `LexicalStore` doc に従う**:
- * - `query` の**語彙をすべて含む**候補だけを返す（`ScoreBreakdown.lexicalMatch` の doc —
- *   語彙一致は二値である、という前提そのもの）。全件を無条件で返す実装は、この契約と
- *   `recall-channels.test.ts` 歯①の偽陽性点検（無関係な記憶が混ざっても返らないこと）で落ちる。
+ * **契約は `interfaces/lexical-store.ts` の `LexicalStore` doc に従う**（ADR 0092）:
+ * - `query` の語彙の**いずれか1つでも**含む候補を返す（OR 意味論）。1つも含まない候補は
+ *   返さない——全件を無条件で返す実装は、この契約と `recall-channels.test.ts` 歯①の
+ *   偽陽性点検（無関係な記憶が混ざっても返らないこと）で落ちる。
+ * - `coverage`（一致した語彙数 ÷ クエリ語彙の総数）を返す。これがそのまま
+ *   `ScoreBreakdown.lexicalMatch` に入る（`recall-runtime.ts`）。
  * - `filter` の各フィールドを実際に適用する（`FakeVectorStore.search` と同じ多層防御の作法）。
- * - 返り値は `rank` の降順。`rank` はここでは「一致したトークンの出現回数の総和」という
- *   決定的で単調な値を使う——本物の `ts_rank_cd` を模す必要は無い。`LexicalHit.rank` の doc の
- *   通り、この値は `ScoreBreakdown` には一切入らない（`recall-runtime.ts` が
- *   `LEXICAL_MATCH_VALUE` に丸める）。
+ * - 返り値は `coverage` の降順、同値なら `rank` の降順。`rank` はここでは
+ *   「一致したトークンの出現回数の総和」という決定的で単調な値を使う——本物の
+ *   `ts_rank_cd` を模す必要は無い。`LexicalHit.rank` の doc の通り、この値は
+ *   `ScoreBreakdown` には一切入らない。
  *
  * `calls` / `shouldThrow` は `FakeEmbeddingProvider.shouldFail` と同じ形の診断・注入口——
  * 「一度も呼ばれていないこと」（既定チャンネルが語彙 store に触れない）と
@@ -846,7 +848,7 @@ export class FakeLexicalStore implements LexicalStore {
     if (this.shouldThrow) {
       throw new Error("FakeLexicalStore: simulated search failure");
     }
-    const tokens = query.split(/\s+/).filter((t) => t.length > 0);
+    const termSet = new Set(query.split(/\s+/).filter((t) => t.length > 0));
     const hits: LexicalHit[] = [];
     for (const memory of this.backing.memories.values()) {
       if (memory.tenantId !== opts.filter.tenantId || memory.tenantId !== ctx.tenantId) continue;
@@ -875,17 +877,21 @@ export class FakeLexicalStore implements LexicalStore {
       ) {
         continue;
       }
-      // 🔴 契約: クエリの語彙を**すべて**含む候補しか返さない（空クエリは何も返さない）。
-      if (tokens.length === 0) continue;
-      const matchesAll = tokens.every((t) => memory.content.includes(t));
-      if (!matchesAll) continue;
+      // 🔴 契約（ADR 0092）: クエリの語彙が0個なら何も返さない。1個以上一致すれば返す
+      // （OR 意味論）——AND（すべて含む候補しか返さない）ではない。
+      if (termSet.size === 0) continue;
+      const matchedTerms = [...termSet].filter((t) => memory.content.includes(t));
+      if (matchedTerms.length === 0) continue;
 
-      const rank = tokens.reduce((sum, t) => sum + (memory.content.split(t).length - 1), 0);
-      hits.push({ memoryId: memory.id, rank });
+      const coverage = matchedTerms.length / termSet.size;
+      const rank = matchedTerms.reduce((sum, t) => sum + (memory.content.split(t).length - 1), 0);
+      hits.push({ memoryId: memory.id, coverage, rank });
     }
-    // rank 降順。同率は memoryId 昇順で決定的にする（`FakeVectorStore` の distance 昇順ソートと
-    // 同じ「adapter は決定的な順序で返す」という作法）。
-    hits.sort((a, b) => b.rank - a.rank || (a.memoryId < b.memoryId ? -1 : 1));
+    // coverage 降順、同値なら rank 降順。さらに同率なら memoryId 昇順で決定的にする
+    // （`FakeVectorStore` の distance 昇順ソートと同じ「adapter は決定的な順序で返す」作法）。
+    hits.sort(
+      (a, b) => b.coverage - a.coverage || b.rank - a.rank || (a.memoryId < b.memoryId ? -1 : 1),
+    );
     return hits.slice(0, opts.limit);
   }
 }

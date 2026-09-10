@@ -657,23 +657,21 @@ export interface ScoreBreakdown {
    * **語彙チャンネルが引き当てた候補にのみ存在する**
    * （[ADR 0084](../../../docs/decisions/0084-lexical-recall-channel.md)、Issue #106）。
    *
-   * **🔴 この値は候補集合の上で1通りしか取らない。**語彙チャンネルが返した候補は
-   * **すべて 1** である——adapter は「クエリの語彙をすべて含む」候補しか返さない契約なので、
-   * **語彙一致は二値**だからである。
+   * **`LexicalHit.coverage`（一致したクエリ語彙数 ÷ クエリ語彙の総数）がそのまま入る**
+   * （[ADR 0092](../../../docs/decisions/0092-lexical-or-coverage.md)）。値域は `(0, 1]`。
    *
-   * **⚠ これを黙って書かないこと自体が欠陥である。**
-   * [ADR 0081](../../../docs/decisions/0081-similarity-is-the-only-term-that-ranks.md) は
-   * 「候補集合の上で1通りしか値を取らない項は、順位に構造上ゼロ寄与である」ことを実測した。
-   * **⟹ この項もその族に属する。**ただし ADR 0081 が測った項（`tagMatch` / `strength`）と
-   * 違い、**この項は候補が「どのチャンネルから来たか」で分かれる**——
-   * 語彙候補は 1、ANN だけで来た候補は不在（`undefined`）である。
-   * **⟹ チャンネル間では効く。語彙チャンネルの内側では効かない。**
+   * **⚠ 旧仕様（ADR 0084）はこの値が候補集合の上で常に `1` の二値だった**——
+   * adapter は「クエリの語彙をすべて含む」候補しか返さない契約（AND 意味論）だったため。
+   * ADR 0092 はクエリ語彙を OR で結ぶ契約に変え、一致の度合いを連続値として持つようにした。
+   * **⟹ ADR 0081 が測った「候補集合の上で1通りしか値を取らない項は、順位に構造上
+   * ゼロ寄与である」という指摘は、この項にはもう当たらない**——被覆率の高い候補ほど
+   * `affinity`（下記）が高くなり、部分一致の候補は自然に順位が下がる。
    *
-   * **⟹ 「語彙候補どうしの順位」は、この項が決めていない。**それを決めているのは
-   * `decay` / `freshness` であり、ADR 0081 の実測ではその変域は 1e-8 桁である。
-   * **⟹ 語彙候補どうしの順序は、事実上ほぼ任意である。**これは引き受けた負債であり、
-   * ADR 0084 §8 に書いてある。**adapter が返す `LexicalHit.rank` はこの項に入らない**
-   * （`interfaces/lexical-store.ts` 参照）。
+   * **⟹ ただし、語彙候補どうしの順序の任意さ（ADR 0084 §8）が完全に消えたわけではない。**
+   * 被覆率が同値の候補どうしの順序は、依然として `decay` / `freshness`
+   * （ADR 0081 の実測ではその変域は 1e-8 桁）が決める。低選択率のクエリ（ありふれた語1つ）
+   * では被覆率が大量の候補で `1` に揃うため、この負債は残る（ADR 0092 の「引き受けた負債」）。
+   * **adapter が返す `LexicalHit.rank` はこの項に入らない**（`interfaces/lexical-store.ts` 参照）。
    */
   lexicalMatch?: number;
   decay: number;
@@ -862,15 +860,6 @@ export type RecallChannel = (typeof RECALL_CHANNELS)[number];
  * 以前の挙動そのものであり、`channels` を渡さない既存の呼び出しは何も変わらない。
  */
 export const DEFAULT_RECALL_CHANNELS: readonly RecallChannel[] = ["ann"];
-
-/**
- * **語彙チャンネルが引き当てた候補の `ScoreBreakdown.lexicalMatch` に入る値。**
- *
- * `1` である理由は `ScoreBreakdown.lexicalMatch` の doc に書いてある（語彙一致は二値）。
- * **定数として出しているのは、歯がこの値を書き写さずに済ませるためである**——
- * 値そのものより「候補全件で同じ値になる」ことのほうが、この項の性質だからである。
- */
-export const LEXICAL_MATCH_VALUE = 1;
 
 /**
  * 語彙チャンネルが走った run で、`ann_truncated` が `undecidable` に落ちる理由

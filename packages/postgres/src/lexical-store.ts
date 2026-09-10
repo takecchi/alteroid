@@ -38,7 +38,8 @@ const TS_RANK_CD_NORMALIZATION = 32;
  * | クエリ | `mnemora_lexical_query_terms` | **非 ASCII の連なりを空白に落とす** |
  *
  * **非対称なのは意図である。**両方に同じ関数を通すと、日本語の残りが1つの語彙になって
- * AND で結ばれ、`'PROJ-1234について前に何か言ってたっけ？'` が**1件も引けない**
+ * `websearch_to_tsquery` の既定（AND）で結ばれ、
+ * `'PROJ-1234について前に何か言ってたっけ？'` が**1件も引けない**
  * （ADR 0084 §2.1 の実測。**変異試験で見つけた欠陥である**）。日本語の語は本文側でも
  * 文ごと1トークンになるので、**クエリに残しても真陽性を1件も生まない**——落として失うものが無い。
  *
@@ -46,14 +47,30 @@ const TS_RANK_CD_NORMALIZATION = 32;
  * 式索引が選ばれなくなる（静かに遅くなるだけで結果は変わらないため、
  * テストで検出しない限り気づけない）。
  *
+ * **🔴 クエリ語彙は OR で結ばれ、`coverage` を返す**
+ * （[ADR 0092](../../../docs/decisions/0092-lexical-or-coverage.md)、
+ * `migrations/0009_memories_lexical_or_coverage.sql`）。ADR 0084 はクエリ全体を
+ * 1つの `websearch_to_tsquery` に渡していた（既定は AND）——英語の自然文
+ * （`what did we say about PROJ-1234`）のような複数語クエリは全語を含む記憶しか
+ * 返らなかった。`mnemora_lexical_query_or` はクエリを語ごとに分解し、
+ * 語ごとの tsquery を `|`（OR）で結ぶ。`mnemora_lexical_coverage` は
+ * 一致した語彙数 ÷ クエリ語彙の総数を返す——これが `LexicalHit.coverage` になる。
+ * **`WHERE` の左辺（索引式）は0008 と1バイトも変えていない**——OR で結んだ
+ * tsquery も同じ GIN 式索引で引ける（`@@` の右辺が変わるだけで、左辺の式が
+ * 変わらなければ式索引は選ばれ続ける）。
+ *
  * `websearch_to_tsquery` が `query` から語彙を1つも作れない場合（例:
- * **日本語だけ**・空白だけの `query`）、返る `tsquery` は空になり、`@@` は常に `false`
- * を返す——`tenant_id`/`status` 等がどれだけ一致しても0件になる。これは
- * `LexicalStore.search` の契約に反しない（「引けなかった」であって「壊れた」ではない）。
+ * **日本語だけ**・空白だけの `query`）、`mnemora_lexical_query_or` は空の tsquery を
+ * 返し、`@@` は常に `false` を返す——`tenant_id`/`status` 等がどれだけ一致しても
+ * 0件になる。これは `LexicalStore.search` の契約に反しない
+ * （「引けなかった」であって「壊れた」ではない）。
  *
  * **⚠ `plainto_tsquery` に落とさないこと。**隣接を要求しない AND 意味論になるため、
  * 本文に `PROJ-1234 and TASK-5678` の2つが在ると `PROJ-5678` が偽陽性で一致する
  * （migrations/0008 のコメントに実測が在る）。歯: `lexical-store-identifier.test.ts`。
+ * `mnemora_lexical_query_tsqueries` が各語を `"..."` で囲んで
+ * `websearch_to_tsquery` へ渡すのは、この隣接要求を語ごとに保つためでもある
+ * （`migrations/0009_*.sql` の doc 参照）。
  */
 export function buildLexicalSearchSelect(
   query: string,
@@ -88,31 +105,37 @@ export function buildLexicalSearchSelect(
 
   // 🔴 本文側と query 側で、通す関数が違う（migrations/0008_*.sql に実測の根拠が在る）。
   // 本文側は mnemora_lexical_normalize（ASCII の連なりの前後に空白を入れる）、
-  // query 側は mnemora_lexical_query_terms（非 ASCII の連なりを空白に落とす）。
-  // 日本語を残すと、その全体が1語彙になって AND で結ばれ、
-  // 「PROJ-1234について前に何か言ってたっけ？」が1件も引けなくなる。
-  const tsQuery = sql`websearch_to_tsquery('simple', mnemora_lexical_query_terms(${query}))`;
-  conditions.push(sql`to_tsvector('simple', mnemora_lexical_normalize(content)) @@ ${tsQuery}`);
+  // query 側は mnemora_lexical_query_terms（非 ASCII の連なりを空白に落とす。
+  // mnemora_lexical_query_or の内部で呼ばれる）。日本語を残すと、その全体が1語彙に
+  // なって AND で結ばれ、「PROJ-1234について前に何か言ってたっけ？」が
+  // 1件も引けなくなる（ADR 0084 §2.1）。
+  //
+  // 🔴 ADR 0092: クエリ全体を1つの tsquery にするのではなく、語ごとに OR で結ぶ
+  // （mnemora_lexical_query_or）。`WHERE` の左辺（索引式）は 0008 と同じ式のまま——
+  // 変えているのは `@@` の右辺（tsquery そのものの組み立て方）だけである。
+  const tsQueryOr = sql`mnemora_lexical_query_or(${query})`;
+  conditions.push(sql`to_tsvector('simple', mnemora_lexical_normalize(content)) @@ ${tsQueryOr}`);
   const whereClause = sql.join(conditions, sql` AND `);
 
   return sql`
     SELECT
       id AS memory_id,
+      mnemora_lexical_coverage(content, ${query}) AS coverage,
       ts_rank_cd(
         to_tsvector('simple', mnemora_lexical_normalize(content)),
-        ${tsQuery},
+        ${tsQueryOr},
         ${TS_RANK_CD_NORMALIZATION}
       ) AS rank
     FROM memories
     WHERE ${whereClause}
-    ORDER BY rank DESC
+    ORDER BY coverage DESC, rank DESC
     LIMIT ${opts.limit}
   `;
 }
 
 /**
  * `LexicalStore` の Postgres 実装（`@mnemora/core` の `interfaces/lexical-store.ts`、
- * ADR 0084、Issue #106）。
+ * ADR 0084、[ADR 0092](../../../docs/decisions/0092-lexical-or-coverage.md)、Issue #106）。
  *
  * `MemoryStore` が真実の源であり、この語彙索引（`migrations/0008_memories_lexical_index.sql`
  * の式索引）は `memories.content` の上に張った再構築可能な派生索引に過ぎない
@@ -120,9 +143,17 @@ export function buildLexicalSearchSelect(
  * **書き込み口を持たない**——索引は `memories` への書き込みに自動で追随するため、
  * 同期の口が要らない（同 doc）。
  *
- * `search` の `ORDER BY` は `rank DESC`（`LexicalHit.rank` の doc: 大きいほど上位）。
- * `rank` の尺度は `ts_rank_cd` 固有であり、`VectorHit.distance`（コサイン距離）とは
- * 比較できない（ADR 0084 §5）。
+ * `search` の `ORDER BY` は `coverage DESC, rank DESC`（ADR 0092。`LexicalHit.coverage`/
+ * `rank` の doc: どちらも大きいほど上位）。`coverage` はそのまま
+ * `ScoreBreakdown.lexicalMatch` に入る値であり、`rank` は同値のときのタイブレークにしか
+ * 使わない。`rank` の尺度は `ts_rank_cd` 固有であり、`VectorHit.distance`
+ * （コサイン距離）とは比較できない（ADR 0084 §5）。
+ *
+ * **⚠ `mnemora_lexical_coverage`/`ts_rank_cd` はどちらも `float8`/`real` を返す。**
+ * `pg`（node-postgres）は float4/float8 を JS の `number` として返す型パーサを
+ * 標準搭載しているため（`numeric` とは違い文字列に落とさない）、`row.coverage`/
+ * `row.rank` は追加の変換なしに `number` として届く——`vector-store.ts` の
+ * `row.distance`（同じく `pg` 経由の `float8`）と同じ扱い。
  */
 export class PostgresLexicalStore implements LexicalStore {
   constructor(private readonly db: Db) {}
@@ -135,8 +166,8 @@ export class PostgresLexicalStore implements LexicalStore {
     const select = buildLexicalSearchSelect(query, opts);
     const result = await this.db.execute(select);
     return result.rows.map((row) => {
-      const r = row as unknown as { memory_id: string; rank: number };
-      return { memoryId: r.memory_id, rank: r.rank };
+      const r = row as unknown as { memory_id: string; coverage: number; rank: number };
+      return { memoryId: r.memory_id, coverage: r.coverage, rank: r.rank };
     });
   }
 }

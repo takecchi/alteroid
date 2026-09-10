@@ -15,7 +15,6 @@ import {
   DEFAULT_RECALL_CHANNELS,
   DEFAULT_RECALL_LIMIT,
   DEFAULT_SCORE_THRESHOLD,
-  LEXICAL_MATCH_VALUE,
   LEXICAL_STORE_UNAVAILABLE_ERROR_PREFIX,
   DIGEST_BAND_MAX_CHARS,
   DIGEST_BAND_MAX_ENTRY_CHARS,
@@ -406,7 +405,7 @@ export async function runRecall(
   // 語彙だけが返した順」。**⟹ 語彙チャンネルが走っていないとき、この配列は
   // `annHits.map(h => h.memoryId)` と完全に一致する**——既定の挙動が変わらないことの、
   // コードの側の根拠である。
-  const rawById = new Map<MemoryId, { distance?: number; lexicalRank?: number }>();
+  const rawById = new Map<MemoryId, { distance?: number; lexicalCoverage?: number }>();
   const candidateIds: MemoryId[] = [];
   for (const hit of annHits) {
     const found = rawById.get(hit.memoryId);
@@ -420,10 +419,10 @@ export async function runRecall(
   for (const hit of lexicalHits) {
     const found = rawById.get(hit.memoryId);
     if (found === undefined) {
-      rawById.set(hit.memoryId, { lexicalRank: hit.rank });
+      rawById.set(hit.memoryId, { lexicalCoverage: hit.coverage });
       candidateIds.push(hit.memoryId);
-    } else if (found.lexicalRank === undefined) {
-      found.lexicalRank = hit.rank;
+    } else if (found.lexicalCoverage === undefined) {
+      found.lexicalCoverage = hit.coverage;
     }
   }
 
@@ -432,7 +431,7 @@ export async function runRecall(
   const memoriesById = new Map(fetchedMemories.map((m) => [m.id, m]));
 
   const excludeKinds = new Set(validatedQuery.excludeProvenanceKinds ?? []);
-  const filteredCandidates: { memory: Memory; distance?: number; lexicalRank?: number }[] = [];
+  const filteredCandidates: { memory: Memory; distance?: number; lexicalCoverage?: number }[] = [];
   for (const memoryId of candidateIds) {
     const raw = rawById.get(memoryId);
     if (raw === undefined) continue; // 起こらない（candidateIds は rawById から作った）。
@@ -459,38 +458,44 @@ export async function runRecall(
     if (scope.occurredAfter && effectiveTime < scope.occurredAfter) continue;
     if (scope.occurredBefore && effectiveTime > scope.occurredBefore) continue;
     if (excludeKinds.has(memory.provenance.kind)) continue;
-    filteredCandidates.push({ memory, distance: raw.distance, lexicalRank: raw.lexicalRank });
+    filteredCandidates.push({
+      memory,
+      distance: raw.distance,
+      lexicalCoverage: raw.lexicalCoverage,
+    });
   }
 
   // -------------------------------------------------------------------
   // 段2: 再スコア（索引不要。docs/recall.md §2 段2・§7）
   // -------------------------------------------------------------------
   const queryTags = validatedQuery.tags ?? [];
-  const scored: ScoredCandidate[] = filteredCandidates.map(({ memory, distance, lexicalRank }) => {
-    // ADR 0038: distance はコサイン距離。ANN が当てていない候補には距離が無い。
-    const similarity = distance === undefined ? undefined : 1 - distance;
-    // 語彙一致は二値である（recall.ts の ScoreBreakdown.lexicalMatch の doc）。
-    // **⚠ adapter が返した rank をここへ流さない**——尺度が adapter ごとに違い、
-    // コサイン類似度と比較可能な量ではない（ADR 0084 §5）。
-    const lexicalMatch = lexicalRank === undefined ? undefined : LEXICAL_MATCH_VALUE;
-    const score = defaultScoringStrategy({
-      now,
-      similarity,
-      lexicalMatch,
-      tags: memory.tags,
-      queryTags,
-      occurredAt: memory.occurredAt,
-      recordedAt: memory.recordedAt,
-      lastReinforcedAt: memory.lastReinforcedAt,
-      strength: memory.strength,
-      halfLifeHours: memory.halfLifeHours,
-    });
-    return {
-      memory,
-      retrievedVia: distance === undefined ? ("lexical" as const) : ("ann" as const),
-      score,
-    };
-  });
+  const scored: ScoredCandidate[] = filteredCandidates.map(
+    ({ memory, distance, lexicalCoverage }) => {
+      // ADR 0038: distance はコサイン距離。ANN が当てていない候補には距離が無い。
+      const similarity = distance === undefined ? undefined : 1 - distance;
+      // `lexicalMatch` は adapter が返した coverage（一致した語彙数 ÷ クエリ語彙数）
+      // をそのまま使う（ADR 0092）。**⚠ adapter が返した rank をここへ流さない**
+      // ——尺度が adapter ごとに違い、コサイン類似度と比較可能な量ではない（ADR 0084 §5）。
+      const lexicalMatch = lexicalCoverage;
+      const score = defaultScoringStrategy({
+        now,
+        similarity,
+        lexicalMatch,
+        tags: memory.tags,
+        queryTags,
+        occurredAt: memory.occurredAt,
+        recordedAt: memory.recordedAt,
+        lastReinforcedAt: memory.lastReinforcedAt,
+        strength: memory.strength,
+        halfLifeHours: memory.halfLifeHours,
+      });
+      return {
+        memory,
+        retrievedVia: distance === undefined ? ("lexical" as const) : ("ann" as const),
+        score,
+      };
+    },
+  );
   scored.sort((a, b) => b.score.total - a.score.total);
 
   const scoreThreshold = validatedQuery.scoreThreshold ?? DEFAULT_SCORE_THRESHOLD;

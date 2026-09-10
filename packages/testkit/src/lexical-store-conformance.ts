@@ -50,22 +50,33 @@ export interface LexicalStoreConformanceOptions {
 
 /**
  * `LexicalStore` の適合テスト（[ADR 0084](../../../docs/decisions/0084-lexical-recall-channel.md)、
- * Issue #106）。
+ * [ADR 0092](../../../docs/decisions/0092-lexical-or-coverage.md)、Issue #106）。
  *
  * ここで検査するのは `interfaces/lexical-store.ts` の doc が定める契約——テナント分離、
  * `filter`（`status`/`subjectId`/`excludeProvenanceKinds`/`occurredAfter`/`occurredBefore`、
- * 境界は ADR 0039 と同じ両端包含）が実際に効くこと、**返り値が `rank` の降順であること**、
- * `limit` がその上位から切ること、語彙が1つも取れないクエリで0件が返ること、
- * 語彙的に一致しない Memory が返らないこと——である。
+ * 境界は ADR 0039 と同じ両端包含）が実際に効くこと、**クエリ語彙は OR で結ばれること**、
+ * **`coverage`（一致した語彙数 ÷ クエリ語彙の総数）が正しく計算されること**、
+ * **返り値が `coverage` の降順（同値なら `rank` の降順）であること**、
+ * `limit` がその上位（coverage の高いほう）から切ること、
+ * 語彙が1つも取れないクエリで0件が返ること、語彙的に一致しない Memory
+ * （クエリ語彙を1つも含まない Memory）が返らないこと——である。
+ *
+ * **🔴 ADR 0084 が定めた旧契約（AND：クエリの語彙をすべて含む候補しか返さない、
+ * 返り値は `rank` の降順）はここでは検査しない。**ADR 0092 がその契約を置き換えた。
  *
  * **`decayFloorAtAfter` は検査しない。**`LexicalFilter` はこの欄を持たない
  * （`interfaces/lexical-store.ts` の `LexicalFilter` doc、ADR 0011）。
  *
+ * **`coverage` の期待値は逐語で書く。**「一致数 ÷ クエリ語彙数」と同じ式を歯に書くと、
+ * 実装側の式（分母・分子）を差し替える変異が自己整合して素通りする——この repo で
+ * 実際に起きた失敗であり、繰り返さない。
+ *
  * **`rank` の具体的な値やアルゴリズムは検査しない。**`LexicalHit.rank` は
  * adapter ごとに尺度が違うと明記されている（同ファイルの doc）——この適合テストが固定するのは
- * 「降順に並んでいる」という構造だけであり、「どの Memory が何位になるか」を期待値として
- * 書き下ろすことはしない（書けば、それは特定の adapter のランキング関数を検査対象にしてしまう）。
- * 「rank の降順」の歯を意味のあるものにするため、フィクスチャは
+ * 「`coverage` 降順・同値なら `rank` 降順に並んでいる」という構造だけであり、
+ * 「どの Memory が何位になるか」を期待値として書き下ろすことはしない（書けば、それは
+ * 特定の adapter のランキング関数を検査対象にしてしまう）。「`rank` の降順」の歯を
+ * 意味のあるものにするため、フィクスチャは `coverage` が同値になるように語らせつつ、
  * クエリ語の出現頻度が Memory ごとに大きく異なるように作る——素朴な頻度ベースの rank
  * （`InMemoryLexicalStore` が採用する形。`in-memory-lexical-store.ts` 参照）でも
  * ts_rank_cd のような頻度に敏感な rank でも、順序が偶然一致してしまう可能性を下げるため。
@@ -107,11 +118,12 @@ export function describeLexicalStoreConformance(options: LexicalStoreConformance
       expect(ids).not.toContain(unrelatedId);
     });
 
-    it("クエリ語の一部しか含まない Memory は返らない（AND 意味論。websearch_to_tsquery の既定と同じ）", async () => {
+    it("クエリ語の一部しか含まない Memory も返る（OR 意味論。ADR 0092）", async () => {
       const store = await createStore();
       const ctx: Ctx = { tenantId: "tenant-1" };
       const bothId = await prepareMemory(ctx, { content: "obsidian shards glimmer" });
       const partialId = await prepareMemory(ctx, { content: "obsidian pillars stand" });
+      const unrelatedId = await prepareMemory(ctx, { content: "granite pillars stand quietly" });
 
       const hits = await store.search(ctx, "obsidian shards", {
         limit: 10,
@@ -120,7 +132,51 @@ export function describeLexicalStoreConformance(options: LexicalStoreConformance
       const ids = hits.map((hit) => hit.memoryId);
 
       expect(ids).toContain(bothId);
-      expect(ids).not.toContain(partialId);
+      // ⚠ 偽陽性の点検: OR 意味論だから何でも返る、ではないことを確かめる——
+      // "obsidian" にも "shards" にも一致しない Memory は依然として返らない。
+      expect(ids).not.toContain(unrelatedId);
+      // 🔴 ここが AND から OR への変更の核心: "obsidian" だけ含む partialId も返る。
+      expect(ids).toContain(partialId);
+    });
+
+    // -------------------------------------------------------------------
+    // coverage（ADR 0092）。
+    // -------------------------------------------------------------------
+
+    it("coverage は「一致した語彙数 ÷ クエリ語彙数」である（全語を含む Memory は coverage === 1）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const fullId = await prepareMemory(ctx, { content: "obsidian shards glimmer" });
+      const halfId = await prepareMemory(ctx, { content: "obsidian pillars stand" });
+
+      const hits = await store.search(ctx, "obsidian shards", {
+        limit: 10,
+        filter: { tenantId: "tenant-1" },
+      });
+
+      const fullHit = hits.find((h) => h.memoryId === fullId);
+      const halfHit = hits.find((h) => h.memoryId === halfId);
+      expect(fullHit).toBeDefined();
+      expect(halfHit).toBeDefined();
+      // ⛔ `matched / queryTerms.size` のような実装と同じ式を書かない——期待値は逐語で書く。
+      expect(fullHit?.coverage).toBe(1);
+      expect(halfHit?.coverage).toBeCloseTo(0.5);
+    });
+
+    it("limit は coverage の高いほうから切る（coverage 1 の Memory が coverage 0.5 の Memory より優先される）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const fullId = await prepareMemory(ctx, { content: "obsidian shards glimmer" });
+      await prepareMemory(ctx, { content: "obsidian pillars stand" }); // coverage 0.5
+
+      const hits = await store.search(ctx, "obsidian shards", {
+        limit: 1,
+        filter: { tenantId: "tenant-1" },
+      });
+
+      expect(hits).toHaveLength(1);
+      expect(hits[0]?.memoryId).toBe(fullId);
+      expect(hits[0]?.coverage).toBe(1);
     });
 
     it("語彙が1つも取れないクエリ（空白だけ）は0件を返す", async () => {
@@ -168,14 +224,16 @@ export function describeLexicalStoreConformance(options: LexicalStoreConformance
     });
 
     // -------------------------------------------------------------------
-    // rank の降順・limit の遵守。
+    // coverage の降順（同値なら rank の降順）・limit の遵守（ADR 0092）。
     //
     // フィクスチャは非対称: クエリ語の出現頻度を Memory ごとに変える
     // （1回 / 3回 / 6回）——頻度に敏感などんな rank 関数でも、3件が同じ順位に
-    // 並ぶ可能性を下げるため。
+    // 並ぶ可能性を下げるため。ここでの3件はいずれも "obsidian"/"cave" を両方含む
+    // ので coverage は同値（1）——つまりこの歯が実際に検査しているのは
+    // 「coverage が同値のときの rank タイブレーク」である。
     // -------------------------------------------------------------------
 
-    it("返り値は rank の降順である", async () => {
+    it("coverage が同値のとき、返り値は rank の降順である", async () => {
       const store = await createStore();
       const ctx: Ctx = { tenantId: "tenant-1" };
       await prepareMemory(ctx, { content: "obsidian cave" });
@@ -189,11 +247,31 @@ export function describeLexicalStoreConformance(options: LexicalStoreConformance
 
       expect(hits.length).toBeGreaterThanOrEqual(3);
       for (let i = 1; i < hits.length; i += 1) {
+        expect(hits[i - 1]!.coverage).toBe(hits[i]!.coverage); // 前提: 3件とも coverage 1
         expect(hits[i - 1]!.rank).toBeGreaterThanOrEqual(hits[i]!.rank);
       }
     });
 
-    it("limit はその上位（rank の降順の先頭）から切る", async () => {
+    it("返り値は coverage の降順である（coverage 1 の Memory が coverage 0.5 の Memory より先に来る）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const halfId = await prepareMemory(ctx, {
+        content: "obsidian obsidian obsidian obsidian obsidian pillars",
+      }); // coverage 0.5 だが rank（頻度）は高い
+      const fullId = await prepareMemory(ctx, { content: "obsidian cave" }); // coverage 1
+
+      const hits = await store.search(ctx, "obsidian cave", {
+        limit: 10,
+        filter: { tenantId: "tenant-1" },
+      });
+
+      const ids = hits.map((h) => h.memoryId);
+      // coverage が rank より優先される: rank だけを見れば halfId が勝ちうる頻度だが、
+      // fullId（coverage 1）が必ず先に来る。
+      expect(ids.indexOf(fullId)).toBeLessThan(ids.indexOf(halfId));
+    });
+
+    it("limit はその上位（coverage の降順の先頭）から切る", async () => {
       const store = await createStore();
       const ctx: Ctx = { tenantId: "tenant-1" };
       await prepareMemory(ctx, { content: "obsidian cave" });

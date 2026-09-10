@@ -538,9 +538,13 @@ interface LexicalStore {
 
 契約:
 - **`MemoryStore` が真実の源であり、語彙索引は再構築可能な派生索引である**（`VectorStore` と同じ非対称）。
-- **返り値は `LexicalHit.rank` の降順**であり、`limit` はその上位から切る。
-  **⚠ `rank` はスコアに入らない**——尺度が adapter ごとに違い、コサイン類似度と比較可能な量ではない
-  （ADR 0084 §5）。スコアに入るのは `ScoreBreakdown.lexicalMatch`（二値）である。
+- **クエリ語彙は OR で結ばれる**（[ADR 0092](./decisions/0092-lexical-or-coverage.md)。
+  ADR 0084 が定めた旧契約は AND だった）——クエリから作れる語彙のいずれか1つでも
+  一致すれば候補になる。
+- **返り値は `LexicalHit.coverage` の降順、同値なら `rank` の降順**であり、`limit` はその
+  上位から切る。**⚠ `rank` はスコアに入らない**——尺度が adapter ごとに違い、コサイン類似度と
+  比較可能な量ではない（ADR 0084 §5）。スコアに入るのは `ScoreBreakdown.lexicalMatch` であり、
+  `coverage`（一致した語彙数 ÷ クエリ語彙の総数）がそのまま入る（ADR 0092）。
 - `filter` の各フィールドを adapter が実際に適用する（`VectorFilter` と同じ契約、ADR 0034）。
   適合テストは `packages/testkit/src/lexical-store-conformance.ts`。
 - **`query` は正規化前の生の文字列であり、どう分かち書きするかは adapter の責務である。**

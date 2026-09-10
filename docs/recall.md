@@ -1,4 +1,4 @@
-| `not_indexed` | 記憶は存在するが埋め込みがまだ無いと分かる（`embeddingStatus`、`./memory-model.md` 参照）。記憶が失われたと誤認しない。**`reason` によって次の一手が分かれる**——`pending` は待つ・再試行する、`failed` は埋め込みパイプラインそのものを疑う、`skipped` は意図した除外なので何もしなくてよい。この3つを1つに潰すと、恒久的な失敗と一時的な遅延が同じ顔になる（2026-09 追記。当初案は `reason` を持たなかった）。 |# recall — 想起パイプラインと説明可能性
+# recall — 想起パイプラインと説明可能性
 
 `recall(ctx, query) -> RecallResult` は mnemora の中で最も説明責任が重い操作である。ここが返すものが、上位のアプリケーションが LLM に渡す文脈そのものになる。
 
@@ -83,7 +83,7 @@ recall は次の7段からなる。各段は「入力」「出力」「落ちる
 
 **Phase 1 の範囲(2026-09 追記、本 PR の決定)**: 上記は3チャンネル(ANN・タグ一致・直近取得)が並行して走る一般形を述べているが、roadmap.md 段階4の完了条件は「二段検索(段1: 索引が効く形のフィルタ + ANN、段2: over-fetch した候補への再スコア)」とのみ明記しており、タグ一致・直近取得を独立した候補生成チャンネルとして要求していない。**Phase 1 は ANN の1チャンネルのみを実装する。** タグは段2の再スコア(§7)における加点要素としてのみ参加し、それ自体で候補を拾い上げる経路にはしない。
 
-**⚠ この「1チャンネルのみ」は、2026-09-10 に改められた([ADR 0084](./decisions/0084-lexical-recall-channel.md)、Issue #106)。** 候補生成は `RecallQuery.channels` が指すチャンネルを並行して走らせる形になり、**語彙(lexical)チャンネル**が足された——PostgreSQL 組み込みの `to_tsvector('simple', …)` に ASCII 境界の正規化を掛けた式索引で、固有名詞・識別子を**文字列として**引く経路である(追加の PostgreSQL 拡張は要求しない)。**⚠ ただし既定は今も ANN 1本であり(`DEFAULT_RECALL_CHANNELS`)、`channels` を渡さない呼び出しの挙動は1バイトも変わっていない。**⛔ そして**「タグ一致」「直近取得」は、今も実装が無い**——ADR 0084 が足したのは語彙1本だけである。**⚠ 語彙チャンネルは日本語の文に埋もれた日本語の語(人名を含む)を引けない**(ADR 0084 §2 に実測がある)。走らせられるチャンネルの一覧を**ここに書き写さないこと**——唯一の出所は `packages/core/src/recall.ts` の `RECALL_CHANNELS` である。したがって、embeddable なクエリが無い場合(`text`/`vector` のいずれも無い場合)、Phase 1 の `memories` は実際に空になる——「タグ一致や直近取得が別途走っていれば空にならないこともある」という上記の記述は Phase 2 以降でチャンネルを追加した場合に成立する記述であり、Phase 1 の実装はこの緩和を持たない。この限定は、embeddable な内容が無いクエリでは `omitted` に `stage_skipped` が付き、`memories` が空でも `index`(§5)が「スコープ内に何が在るか」を独立に示し続けることで、原則3の要求(「無い」を分類して見せる)は満たされたままである。
+**⚠ この「1チャンネルのみ」は、2026-09-10 に改められた([ADR 0084](./decisions/0084-lexical-recall-channel.md)、Issue #106)。** 候補生成は `RecallQuery.channels` が指すチャンネルを並行して走らせる形になり、**語彙(lexical)チャンネル**が足された——PostgreSQL 組み込みの `to_tsvector('simple', …)` に ASCII 境界の正規化を掛けた式索引で、固有名詞・識別子を**文字列として**引く経路である(追加の PostgreSQL 拡張は要求しない)。**⚠ ただし既定は今も ANN 1本であり(`DEFAULT_RECALL_CHANNELS`)、`channels` を渡さない呼び出しの挙動は1バイトも変わっていない。**⛔ そして**「タグ一致」「直近取得」は、今も実装が無い**——ADR 0084 が足したのは語彙1本だけである。**⚠ 語彙チャンネルは日本語の文に埋もれた日本語の語(人名を含む)を引けない**(ADR 0084 §2 に実測がある)。**⚠ 2026-09 追記([ADR 0092](./decisions/0092-lexical-or-coverage.md))**: クエリ語彙は OR で結ばれ、`score.lexicalMatch` は「一致した語彙数 ÷ クエリ語彙数」(被覆率)になった——以前はクエリの ASCII の語どうしを AND で結んでおり、`what did we say about PROJ-1234` のような英語の自然文は全語を含む記憶しか返らなかった(ADR 0084 §2.1.1・§8 の負債)。この変更は「引ける」を広げるだけで、低選択率のクエリ(ありふれた語1つ)で語彙候補どうしの順序が事実上任意である、という ADR 0084 §8 の負債そのものは塞いでいない。走らせられるチャンネルの一覧を**ここに書き写さないこと**——唯一の出所は `packages/core/src/recall.ts` の `RECALL_CHANNELS` である。したがって、embeddable なクエリが無い場合(`text`/`vector` のいずれも無い場合)、Phase 1 の `memories` は実際に空になる——「タグ一致や直近取得が別途走っていれば空にならないこともある」という上記の記述は Phase 2 以降でチャンネルを追加した場合に成立する記述であり、Phase 1 の実装はこの緩和を持たない。この限定は、embeddable な内容が無いクエリでは `omitted` に `stage_skipped` が付き、`memories` が空でも `index`(§5)が「スコープ内に何が在るか」を独立に示し続けることで、原則3の要求(「無い」を分類して見せる)は満たされたままである。
 
 ### 段2: 再スコア（索引が要らない。O(k')）
 
@@ -212,6 +212,8 @@ type Omission =
       countKind: 'unknown' }
   | { kind: 'ann_unreached'
       countKind: 'unknown' }
+  | { kind: 'lexical_truncated'
+      countKind: 'unknown' }
   | { kind: 'score_not_comparable'
       count: number; countKind: CountKind }
   | { kind: 'unit_assembly_dropped'
@@ -234,7 +236,8 @@ type Omission =
 | `below_threshold` | 閾値を緩めて聞き直す判断ができる。`nearMisses` があれば「惜しかったものがどれくらい惜しかったか」まで見える。 |
 | `over_limit` | 閾値は超えている集合が k より大きいと分かる。k を増やす、あるいはページングする一手につながる。 |
 | `budget_dropped` | スコアの問題ではなく量の問題だと分かる。予算を緩めるか、`memories` を要約させる判断につながる。 |
-| `not_indexed` | 記憶は存在するが埋め込みがまだ無いと分かる（`embeddingStatus`、`./memory-model.md` 参照）。埋め込みジョブの遅延を疑う一手につながり、記憶が失われたと誤認しない。 |
+| `not_indexed` | 記憶は存在するが埋め込みがまだ無いと分かる（`embeddingStatus`、`./memory-model.md` 参照）。記憶が失われたと誤認しない。**`reason` によって次の一手が分かれる**——`pending` は待つ・再試行する、`failed` は埋め込みパイプラインそのものを疑う、`skipped` は意図した除外なので何もしなくてよい。この3つを1つに潰すと、恒久的な失敗と一時的な遅延が同じ顔になる（2026-09 追記。当初案は `reason` を持たなかった）。 |
+| `lexical_truncated` | 語彙チャンネルが窓（k'）を埋めたと分かる（[ADR 0084](./decisions/0084-lexical-recall-channel.md) §7.1）。`ann_truncated` とは別の札——語彙チャンネルは損失可能性を判定する機構を持たないため、`countKind` は常に `'unknown'` である。次の一手は「窓を広げる（`overFetchFactor`/`limit`）」であり、閾値やフィルタの調整では直らない。 |
 | `ann_truncated` | 「見えていない領域があるかもしれない」という不確実性そのものが一手になる——例えば厳密検索へのフォールバックを選べる。 |
 | `ann_unreached` | 近似索引がこの scope に届かなかった可能性がある、と分かる（ADR 0025・0026）。`ann_truncated`（打ち切り）とは別の出来事——こちらは k' に届く前に候補を取りこぼした疑いであり、厳密検索へのフォールバックや subject を絞り直す一手につながる。件数は原理的に分からない（`countKind` は常に `'unknown'`）。 |
 | `score_not_comparable` | **スコアが閾値と比較できなかった**と分かる（[ADR 0044](./decisions/0044-score-not-comparable-omission.md)）。閾値を緩めても直らない——`below_threshold` とは別の出来事である。実際に起きるのは埋め込みがゼロベクトルのとき（コサインが未定義になり距離が `NaN` になる。[ADR 0040](./decisions/0040-zero-vector-never-returned.md)）で、次の一手は「その記憶の埋め込みを作り直す」であって「閾値を下げる」ではない。**件数は数え上げられる**（段2が触った候補の三分割なので）——ただし `countKind` は三分割が網羅であることを確かめた結果から決まる。 |
