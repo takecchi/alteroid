@@ -7,7 +7,7 @@ import {
   resultErrorLines,
   resultFailureOf,
 } from './sdk-failure.js';
-import { classifyUsageNotice } from './usage-limits.js';
+import { classifyUsageNotice, limitRecoveryOf, withRecoveryNote } from './usage-limits.js';
 
 /**
  * 「SDK が『これは応答ではない』と言っている」印を読む部分。
@@ -67,6 +67,7 @@ const SDK_ASSISTANT_ERROR_CODES: SDK_の_error_の語が増えた_この表と_s
     server_error: true,
     unknown: true,
     max_output_tokens: true,
+    cloud_credential_error: true,
   };
 
 /**
@@ -209,5 +210,87 @@ describe('検知に文言を使っていない', () => {
     expect(resultFailureOf(result({ is_error: true, result: '普通の返事' }))?.via).toBe(
       'result_is_error',
     );
+  });
+});
+
+/**
+ * **`cloud_credential_error`（SDK 0.3.267 で増えた語）が、回復の見込みを名乗らないこと。**
+ *
+ * ## なぜ「入る箱」ではなく「名乗らないこと」を測るのか
+ *
+ * **この実装には「error の語 → 回復の見込み」の表が無い。** `limitRecoveryOf` が
+ * 見るのは SDK が出した**文言**であって `SDKAssistantMessageError` の語ではなく、
+ * `assistantFailureOf` は語を列挙せず素通しする（`sdk-failure.ts` の doc）。
+ * ⟹ 新しい語に割り当てる箱がそもそも無いので、**測れるのは「黙って何かを名乗って
+ * いないか」だけである。**
+ *
+ * **そしてそれが測る価値のある側である。** 2026-09-10 の実害（`individual spend
+ * limit` を `time` と読んで9時間待った。#774）は、**粗い既定値が黙って `time` を
+ * 名乗る**形で起きた。いまこの語が `'unknown'` になるのは「どの接頭辞にも当たら
+ * なかった」からであって、**誰かが決めたからではない。** 接頭辞が1本増えるだけで
+ * 黙って `time` へ倒れうる。⟹ ここで留める。
+ *
+ * **SDK 自身の印が割れているので、`time` にも `action` にも倒せない**
+ * （`sdk-failure.ts` の doc「`cloud_credential_error` を分類していない理由」に
+ * 3つの逐語を置いた）。`'unknown'` はここでは「読めなかった」を名乗る値であり、
+ * `action` の言い換えではない（`LimitRecovery` の doc）。
+ */
+describe('cloud_credential_error — 回復の見込みを名乗らない', () => {
+  /**
+   * `cloud_credential_error` と一緒に流れる文言。**組み立ての逐語**（実測
+   * 2026-09-10、`@anthropic-ai/claude-agent-sdk-linux-x64@0.3.267` の `claude`
+   * を `grep -a` して読んだ。npm パッケージ側の `.mjs` には0件で、組み立ては
+   * コンパイル済み CLI 本体にしか無い）:
+   *
+   * > `content:` + '`${Fl}: Could not load ${p} credentials \xB7 ${k}. Check or refresh your ${p} credentials and try again.`' + `,error:"cloud_credential_error",apiErrorIsTransient:!0`
+   *
+   * `Fl` は `"API Error"`（実測 `Fl="API Error"`）、`p` は `"AWS"` か
+   * `"Google Cloud"`（`eJ` の戻り値）。**`k`（原因の文言）は実測していない**ので
+   * 下では印を置いてある。この歯が見ているのは**定型の側**だけである。
+   */
+  const AWS_CREDENTIAL_ERROR =
+    'API Error: Could not load AWS credentials · （原因の文言。実測していない）. Check or refresh your AWS credentials and try again.';
+  const GOOGLE_CLOUD_CREDENTIAL_ERROR =
+    'API Error: Could not load Google Cloud credentials · Could not load the default credentials. Check or refresh your Google Cloud credentials and try again.';
+
+  it('文言は上限の合図ではない（上限のカードへ回さない）', () => {
+    expect(classifyUsageNotice(AWS_CREDENTIAL_ERROR)).toBeUndefined();
+    expect(classifyUsageNotice(GOOGLE_CLOUD_CREDENTIAL_ERROR)).toBeUndefined();
+  });
+
+  it('回復の見込みは `unknown`（**`time` を名乗らない**）', () => {
+    // **ここが `time` になったら、クローンは「待てば戻る」と読んで待つ。**
+    // 資格情報の失効は待っても開かないことがある（人が `aws sso login` を打つまで）。
+    expect(limitRecoveryOf(AWS_CREDENTIAL_ERROR)).toBe('unknown');
+    expect(limitRecoveryOf(GOOGLE_CLOUD_CREDENTIAL_ERROR)).toBe('unknown');
+  });
+
+  it('見込みの行を足さない（`unknown` のとき文言を1文字も変えない）', () => {
+    const base = `結果なしで終了: cloud_credential_error（assistant_error） / ${AWS_CREDENTIAL_ERROR}`;
+    expect(withRecoveryNote(base, limitRecoveryOf(AWS_CREDENTIAL_ERROR))).toBe(base);
+  });
+
+  it('語は言い換えずそのまま運ぶ（こちらの語彙へ畳まない）', () => {
+    // `token-pool.ts` の `invalidatedReason` の doc と同じ線 —— 向こうの語を
+    // こちらの enum へ畳むと、向こうが語を増やすたびに静かに腐る。
+    expect(assistantFailureOf('cloud_credential_error', AWS_CREDENTIAL_ERROR)).toEqual({
+      via: 'assistant_error',
+      code: 'cloud_credential_error',
+      text: AWS_CREDENTIAL_ERROR,
+    });
+  });
+
+  /**
+   * **陰性対照。** 上の4本だけだと「`limitRecoveryOf` が何にでも `unknown` を返す」
+   * 状態でも全部緑になる（＝ 何も測っていない歯と区別が付かない）。**分類が現に
+   * 効いていることを同じ歯の中で示す。**
+   */
+  it('陰性対照 — 分類できる文言では `unknown` を返さない', () => {
+    expect(limitRecoveryOf(ORG_SPEND_LIMIT)).toBe('time');
+    expect(
+      limitRecoveryOf(
+        "You've hit your individual spend limit · ask your admin to raise it at claude.ai/settings/usage",
+      ),
+    ).toBe('action');
   });
 });
