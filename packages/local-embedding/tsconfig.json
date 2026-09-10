@@ -4,7 +4,8 @@
     "noEmit": true,
     "baseUrl": ".",
     "paths": {
-      "@mnemora/core": ["../core/src/index.ts"]
+      "@mnemora/core": ["../core/src/index.ts"],
+      "@mnemora/postgres": ["../postgres/src/index.ts"]
     }
   },
   "include": ["src"]

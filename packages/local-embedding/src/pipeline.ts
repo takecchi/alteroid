@@ -8,10 +8,15 @@
  * 差せるようにしてあるおかげで、遅延ロードの共有・次元の検査・prefix の適用といった
  * 「このパッケージが本当に持っているロジック」は、ネットワーク無しで測れる。
  *
- * ⚠ **`createLocalEmbeddingPipeline`（既定の実装）自身は、ユニットテストで測っていない。**
- * ここだけは本物の onnxruntime を起動しないと意味が無いため、`src/__tests__/
- * live.local-embedding.test.ts`（opt-in）だけが通る。
+ * ⚠ **`createLocalEmbeddingPipeline`（既定の実装）のうち、`@huggingface/transformers` を
+ * 呼ぶ2行だけは、ユニットテストで測っていない。**ここだけは本物の onnxruntime を
+ * 起動しないと意味が無いため、`src/__tests__/live.local-embedding.test.ts`（opt-in）だけが通る。
+ * **それ以外（上限の読み取り・トークン数の検査・出力の形の検査）は
+ * {@link buildLocalEmbeddingPipeline} に切り出してあり、擬似の extractor で CI から測っている**
+ * （ADR 0090）。
  */
+
+import { LocalEmbeddingProviderError } from "./errors.js";
 
 /** dtype（量子化の別）。transformers.js が受け付ける値のうち、ここで意味があるものを並べる。 */
 export type LocalEmbeddingDtype = "fp32" | "fp16" | "q8" | "int8" | "uint8" | "q4" | "q4f16";
@@ -39,6 +44,91 @@ export type LocalEmbeddingPipeline = (texts: string[]) => Promise<number[][]>;
 export type CreateLocalEmbeddingPipeline = (
   spec: LocalEmbeddingModelSpec,
 ) => Promise<LocalEmbeddingPipeline>;
+
+/**
+ * トークナイザのうち、**上限を知り、切り詰めずに数えるために必要なぶんだけ**を写した形。
+ *
+ * ⚠ **`@huggingface/transformers` の型をそのまま公開の型に出さない**
+ * （`docs/architecture.md` §3.8——core にも呼び出し側にも transformers.js の型を漏らさない）。
+ * 構造だけを写すことで、擬似の extractor を注入して CI から測れるようにしてある。
+ */
+export interface LocalEmbeddingTokenizer {
+  /**
+   * `tokenizer_config.json` の `model_max_length`。
+   *
+   * ⚠ **宣言が無いとき、transformers.js はここに `Infinity` を返す**
+   * （`src/tokenization_utils.js` の `get model_max_length()` は
+   * `this._tokenizerConfig.model_max_length ?? Infinity`）。
+   * ⟹ **`Infinity` は「上限が無い」ではなく「宣言されていない」である。**
+   * その2つを潰さないために、{@link buildLocalEmbeddingPipeline} は
+   * 有限でない値を受け取ったら組み立て自体を失敗させる。
+   */
+  readonly model_max_length: number;
+  /** **切り詰めずに**、特殊トークンを含めて符号化する。 */
+  encode(text: string): number[];
+}
+
+/** transformers.js の feature-extraction pipeline のうち、ここで使うぶんだけを写した形。 */
+export interface LocalEmbeddingExtractor {
+  (texts: string[], options: { pooling: "mean"; normalize: boolean }): Promise<unknown>;
+  readonly tokenizer: LocalEmbeddingTokenizer;
+}
+
+/**
+ * extractor から `LocalEmbeddingPipeline` を組み立てる**純関数**（ADR 0090）。
+ *
+ * 🔴 **なぜここに切り出すか。**
+ *
+ * 上限の判定に必要な知識（`model_max_length` と、切り詰めない符号化）は
+ * **トークナイザだけが持っている。**そしてトークナイザは
+ * `createLocalEmbeddingPipeline` の中、つまり**本物のモデルを落とさないと触れない場所**に居る。
+ * ⟹ そこへ検査を書くと、**検査が CI から測れなくなり、歯にならない。**
+ *
+ * だから「extractor を受け取って pipeline を組み立てる」ところだけを純関数にし、
+ * **擬似の extractor を注入して CI から測る。**残る未測定は
+ * 「`pipeline("feature-extraction", ...)` が返すものが、本当にこの形をしているか」だけであり、
+ * それは live テスト（opt-in）が見る。
+ *
+ * 🔴 **上限の検査は推論の前に行う。**超過が確定している入力に、
+ * 36MB のモデルを回す費用を払わせない。
+ */
+export function buildLocalEmbeddingPipeline(
+  extractor: LocalEmbeddingExtractor,
+): LocalEmbeddingPipeline {
+  const maxInputTokens = extractor.tokenizer.model_max_length;
+
+  // ⚠ `Number.isInteger` は `Infinity` と `NaN` を弾く。**「宣言されていない」を
+  // 「上限が無い」として通さない**——通せば、切り捨ては再び黙る。
+  if (!Number.isInteger(maxInputTokens) || maxInputTokens <= 0) {
+    throw new LocalEmbeddingProviderError(
+      "unknown_input_limit",
+      `LocalEmbeddingProvider: モデルが入力トークン数の上限を宣言していない` +
+        `（tokenizer の model_max_length = ${String(maxInputTokens)}）。` +
+        `上限が分からないと、入力が黙って切り捨てられたことを検出できない。` +
+        `tokenizer_config.json に model_max_length を持つモデルを options.repo に指すか、` +
+        `options.createPipeline で pipeline を注入すること`,
+    );
+  }
+
+  return async (texts) => {
+    for (const [index, text] of texts.entries()) {
+      const tokens = extractor.tokenizer.encode(text).length;
+      if (tokens > maxInputTokens) {
+        throw new LocalEmbeddingProviderError(
+          "input_too_long",
+          `LocalEmbeddingProvider: ${index} 番目の入力が上限を超えている` +
+            `（${tokens} トークン > 上限 ${maxInputTokens} トークン、${text.length} 文字）。` +
+            `このまま埋め込むと、上限より後ろは黙って捨てられ、` +
+            `切り捨てられたことが分からないベクトルが返る` +
+            `（transformers.js は truncation: true で呼ぶため、例外もログも出ない）。` +
+            `入力を分割するか短くすること——同じ入力で再試行しても永久に失敗する`,
+          { index, tokens, maxInputTokens, characters: text.length },
+        );
+      }
+    }
+    return toVectors(await extractor(texts, { pooling: "mean", normalize: true }));
+  };
+}
 
 /**
  * transformers.js の feature-extraction が返すもの（`Tensor`）から `number[][]` を取り出す。
@@ -106,5 +196,9 @@ export const createLocalEmbeddingPipeline: CreateLocalEmbeddingPipeline = async 
     // スレッドを増やすほど速くなるわけではない——オーバーサブスクリプションのほうが高くつく。
     session_options: { intraOpNumThreads: spec.numThreads, interOpNumThreads: 1 },
   });
-  return async (texts) => toVectors(await extractor(texts, { pooling: "mean", normalize: true }));
+  // ⚠ **ここが、このパッケージで唯一ユニットテストに載らない場所である。**
+  // `pipeline()` が返すものが `LocalEmbeddingExtractor` の形（呼べて、`tokenizer` を持つ）を
+  // していることは、**型では確かめられない**（transformers.js の戻りは全 pipeline 種の union）。
+  // ⟹ 形が違えば live テストが落ちる。**cast はここ1箇所に閉じてある。**
+  return buildLocalEmbeddingPipeline(extractor as unknown as LocalEmbeddingExtractor);
 };

@@ -6,6 +6,7 @@ import type {
   LocalEmbeddingPipeline,
 } from "./pipeline.js";
 import { createLocalEmbeddingPipeline } from "./pipeline.js";
+import { isLocalEmbeddingProviderError } from "./errors.js";
 
 /**
  * `EmbeddingProvider` の**プロセス内**実装（外部サービスへ繋がない）。
@@ -262,6 +263,16 @@ export class LocalEmbeddingProvider implements EmbeddingProvider {
     try {
       return await this.#createPipeline(this.#spec);
     } catch (error) {
+      // 🔴 **種類の付いた失敗は包まない**（ADR 0090）。
+      //
+      // `describeLoadFailure` が足す文面は「**repo が消えたなら再変換できる**」という
+      // 助言である。**それは `unknown_input_limit` に対しては嘘の助言になる**
+      // ——repo は取得できているし、再変換しても上限は宣言されない。
+      // ⟹ 包むと、原因の種類が「モデルが落ちてこなかった」に潰れる。
+      // **包むのは、種類が分かっていない失敗だけにする。**
+      if (isLocalEmbeddingProviderError(error)) {
+        throw error;
+      }
       throw new Error(describeLoadFailure(this.#spec), { cause: error });
     }
   }

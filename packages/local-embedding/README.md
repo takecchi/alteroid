@@ -37,11 +37,48 @@ API キーは要らない。ネットワークが要るのは**初回のモデ�
 矛盾の検出・時系列の解決は、mnemora では埋め込みではなく別の層の仕事である
 （[docs/memory-model.md](../../docs/memory-model.md)）。
 
+### 🔴 入力は 8192 トークンまで。**超えると例外になる**（黙って切らない）
+
+**このモデルの上限は 8192 トークンである**（`tokenizer_config.json` の `model_max_length`、
+`config.json` の `max_position_embeddings`。日本語の自然文では**おおよそ 18,000 字**に相当したが、
+⚠ **トークン数と文字数の比は文章によって変わるので、字数は目安にしかならない**）。
+
+**上限を超えた入力を渡すと `embed()` は例外を投げる**（[ADR 0090](../../docs/decisions/0090-embedding-input-token-limit.md)）。
+
+```ts
+import { isLocalEmbeddingProviderError } from "@mnemora/local-embedding";
+
+try {
+  await provider.embed(ctx, [veryLongText]);
+} catch (error) {
+  if (isLocalEmbeddingProviderError(error) && error.kind === "input_too_long") {
+    // error.detail = { index, tokens, maxInputTokens, characters }
+    // ⚠ 同じ入力で再試行しても永久に失敗する。分割するか短くすること。
+  }
+}
+```
+
+⚠ **`instanceof` ではなく `kind` で分岐すること**（bundler がクラスを二重に読み込むと
+`instanceof` は落ちるが、`kind` は値なので影響を受けない）。
+
+**なぜ例外にするか。**transformers.js は `truncation: true` で呼ぶため、
+**上限を超えた入力は黙って切り捨てられ、正常な形のベクトルが返る。**
+⟹ **前 8192 トークンだけを表すベクトルが「成功」として DB に入り、
+悪くなったことが検索結果の質にしか現れず、原因を追えなくなる。**
+落とせば `runtime.tick()` が `embeddingStatus: 'failed'` を書くので、**問い合わせられる状態が残る。**
+
+⛔ **このパッケージは入力を自動で分割しない。**どう割るか（文境界・重ね幅・割った後の統合）は
+想起の質を直接動かす設計判断であり、**呼び出し側の判断として残してある**（ADR 0090 §3.5）。
+
 ### 確かめていないこと
 
 - **`@mnemora/openai` と比べて想起の質がどうなるか**は、このパッケージの作業では測っていない。
   上の「日本語」は**モデルカードの主張であって、この repo のゴールデンセットでの実測ではない。**
 - 実測してあるのは prefix 方式の比較だけである（次節）。
+- **`observe()` に渡した長いテキストが、この上限に当たる経路は開いたままである**
+  （LLM 抽出が失敗すると生の全文が `embed()` へ届く。ADR 0090 §1.5）。
+  **このパッケージが買ったのは「当たったことが分かる」までであり、
+  「当たらないようにする」ではない。**
 
 ---
 
@@ -269,6 +306,13 @@ const provider = new LocalEmbeddingProvider({ repo: "my-ruri", createPipeline })
   **`createPipeline` を注入して、本物のモデルを落とさずに走る。**CI で必ず走る。
   遅延ロードを1回に畳むこと・失敗後に再試行できること・次元と件数の検査・
   prefix の適用・`warmup()` を測る。
+- `src/__tests__/input-token-limit.test.ts` — **擬似の extractor を注入して、
+  上限の受け取りと超過の名乗り方を測る。**CI で必ず走る（ADR 0090）。
+  ⚠ **ここでは `8192` という数字は測っていない**——それはモデルが持つ事実であり、
+  下の live テストが固定する。
+- `src/__tests__/embedding-space-name-budget.test.ts` — **`EmbeddingSpaceId` から導かれる
+  Postgres のテーブル名・HNSW 索引名が、切り詰められずに 63 バイトに収まること**を、
+  `@mnemora/postgres` の導出関数を import して測る。CI で必ず走る（ADR 0090 §4）。
 - `src/__tests__/live.local-embedding.test.ts` — **本物のモデルを落として推論する。**
   `MNEMORA_LIVE_LOCAL_EMBEDDING` が空でない値のときだけ走る（既定では `skipped` と表示される）。
 

@@ -8,6 +8,10 @@ export default defineConfig({
   resolve: {
     alias: {
       "@mnemora/core": fileURLToPath(new URL("../core/src/index.ts", import.meta.url)),
+      // ADR 0090: テーブル名／索引名の導出関数（`embeddingSpaceTableName` /
+      // `embeddingSpaceIndexName`）を**本物を import して**使う歯のため。
+      // 名前をベタ書きすると、導出が変わったときに歯が嘘になる。
+      "@mnemora/postgres": fileURLToPath(new URL("../postgres/src/index.ts", import.meta.url)),
     },
   },
 });
