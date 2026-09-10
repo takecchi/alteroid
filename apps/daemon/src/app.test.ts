@@ -32,6 +32,7 @@ import {
   droppedTraceLedgerSince,
   noteDroppedRecord,
   RECENT_TRACE_LIMIT,
+  RESERVED_SCHEDULE_KINDS,
   recentDroppedTraces,
 } from '@alteroid/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -3389,6 +3390,44 @@ describe('GET /dropped（#242 の HTTP 面）', () => {
  * 自体が machine-generated で、`pnpm build` のたびに作り直される）。
  */
 describe('OpenAPI', () => {
+  /**
+   * ⭐ **HTTP の面の description も、同じ族である（#701 / #756）。**
+   *
+   * `POST /schedule` の description は「既定の定期ジョブの名前は奪えない」と言い、
+   * **その名前を数え直していた** —— `memory_tidy` が足された後も
+   * `daily_report / self_initiative` の2つのまま取り残されていた。
+   * **しかもこの description は `apps/daemon/openapi.json` へ焼かれる**ので、
+   * 生成物のほうも同じ嘘を持っていた（外から API を叩く人が読む面である）。
+   *
+   * ⟹ いまは `RESERVED_SCHEDULE_KINDS` から導出している。ここはそれを留める。
+   *
+   * ## ⚠️ この歯が測っていないこと
+   *
+   * - **description の日本語が実装のふるまいと合っているかは測っていない。**
+   *   測るのは予約 kind の名前が全部字面として現れることだけである
+   * - **409 を実際に返すかはここでは測っていない**（そちらは同じファイルの
+   *   `POST /schedule` のハンドラの歯が持つ）
+   * - `apps/daemon/openapi.json`（焼かれた生成物）そのものは見ていない。
+   *   生成物が最新であることは門の
+   *   `git diff --exit-code HEAD -- apps/daemon/openapi.json` が守る
+   */
+  it('POST /schedule の description が、予約 kind を実装と同じだけ名乗る', async () => {
+    const spec = (await (await app.request('/openapi.json')).json()) as {
+      paths: Record<string, { post?: { description?: string } }>;
+    };
+    const description = spec.paths['/schedule']?.post?.description ?? '';
+    expect(description, 'POST /schedule の description が取れない').not.toBe('');
+
+    const missing = RESERVED_SCHEDULE_KINDS.filter((kind) => !description.includes(kind));
+    expect(
+      missing,
+      `【赤の意味】RESERVED_SCHEDULE_KINDS に在る値が、POST /schedule の OpenAPI description に` +
+        `現れていない: ${missing.join(' / ')}\n` +
+        '予約 kind を足したが、HTTP の面の description がその値を含んでいない。' +
+        '説明文を出所から導出しているか確かめること（この description は openapi.json へ焼かれる）。',
+    ).toEqual([]);
+  });
+
   it('/openapi.json が OpenAPI 3.1 の spec を返す（SSE 経路も含めて全部載る）', async () => {
     const response = await app.request('/openapi.json');
     expect(response.status).toBe(200);

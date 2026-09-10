@@ -874,12 +874,67 @@ export function memoryTidyEntry(options: { at: TimeOfDay }): ScheduleEntry {
   };
 }
 
-/** 既定の仕込みの名前。依頼で乗っ取らせない。 */
-export const RESERVED_SCHEDULE_KINDS: readonly string[] = [
+/**
+ * 既定の仕込みの名前。**この配列リテラルが、この repo で唯一の数え上げである。**
+ *
+ * **散文で数え直さないこと。** 2026-09-08 の PR #701 が `memory_tidy` を足したとき、
+ * この一覧のことを別々に書いていた散文4箇所が2つのまま取り残された
+ * （`schedule_list` の説明文・`schedule_create` の断り文言・
+ * `apps/daemon/src/app.ts` の OpenAPI description・そこから焼かれる
+ * `apps/daemon/openapi.json`）。**いまはどれもここから導出している** ——
+ * 足すならこの配列だけを直せばよい。
+ */
+const RESERVED_SCHEDULE_KIND_TUPLE = [
   DAILY_REPORT_KIND,
   SELF_INITIATIVE_KIND,
   MEMORY_TIDY_KIND,
-];
+] as const;
+
+export const RESERVED_SCHEDULE_KINDS: readonly string[] = RESERVED_SCHEDULE_KIND_TUPLE;
+
+/** {@link RESERVED_SCHEDULE_KINDS} の1つ。 */
+export type ReservedScheduleKind = (typeof RESERVED_SCHEDULE_KIND_TUPLE)[number];
+
+/**
+ * 予約 kind → **人間がその刻みそのものを動かせる環境変数の名前。**
+ *
+ * ## なぜ `packages/core` 側に置くのか
+ *
+ * 値を読んでいるのは `apps/daemon/src/schedule.ts`（`readScheduleConfig`）だが、
+ * **この対応を要るのはクローンへ渡る断り文言（`packages/core/src/tools.ts` の
+ * `schedule_create`）である。** `packages/core` は `apps/daemon` に依存できない
+ * （依存の向きは daemon → core の一方向）ので、daemon 側に置くと core からは
+ * 引けず、断り文言はまた自分で名前を書き直すことになる。⟹ **予約 kind と
+ * 同じ場所に置く。**
+ *
+ * ## ここが嘘になる形と、その塞ぎ方
+ *
+ * ここは「名前の対応」しか持っていない。**その環境変数を daemon が本当に読んで
+ * いるかは、この定数からは分からない。** 実際 #701 以前の断り文言は、実在しない
+ * 対応（`memory_tidy` に対して `ALTEROID_DAILY_REPORT_AT` /
+ * `ALTEROID_INITIATIVE_EVERY` の2本）をクローンへ案内していた。
+ * ⟹ **`apps/daemon/src/schedule.test.ts` に、この表の各行について実際に
+ * その環境変数を置いて `readScheduleConfig` が反応することを確かめる歯が在る。**
+ *
+ * **型で塞いである分**: `RESERVED_SCHEDULE_KIND_TUPLE` に kind を足すと、
+ * ここへ行を足すまで `typecheck` が落ちる。
+ */
+export const RESERVED_SCHEDULE_KIND_ENV_KEYS: Readonly<Record<ReservedScheduleKind, string>> = {
+  [DAILY_REPORT_KIND]: 'ALTEROID_DAILY_REPORT_AT',
+  [SELF_INITIATIVE_KIND]: 'ALTEROID_INITIATIVE_EVERY',
+  [MEMORY_TIDY_KIND]: 'ALTEROID_MEMORY_TIDY_AT',
+};
+
+/**
+ * 断り文言のための1行。**`kind → 環境変数` の対応を散文で書き直さないための口である。**
+ *
+ * 例: `daily_report は \`ALTEROID_DAILY_REPORT_AT\` / …`
+ */
+export function describeReservedScheduleKindEnvKeys(): string {
+  return RESERVED_SCHEDULE_KIND_TUPLE.map(
+    (kind) => `${kind} は \`${RESERVED_SCHEDULE_KIND_ENV_KEYS[kind]}\``,
+  ).join(' / ');
+}
 
 /** 読めない指定を落とす先（沈黙させないため）。 */
 const MIDNIGHT: TimeOfDay = { hour: 0, minute: 0 };

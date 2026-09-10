@@ -1363,8 +1363,13 @@ export type ScheduledRequest = z.infer<typeof scheduledRequestSchema>;
  *
  * **同じ行として持たないのは、既定の仕込みがクローンから「継続中の依頼」に見えて
  * `schedule_remove` で消せてしまうからである。** `tools.ts` の `schedule_list` は
- * ストアの `list()` を直に読み、説明文で「既定の日報・発意 tick はここには出ない」と
+ * ストアの `list()` を直に読み、説明文で「既定の定期ジョブはここには出ない」と
  * 約束している。器を1つにまとめると、その約束が静かに破れる。
+ *
+ * ⚠️ **ここに既定の仕込みの名前を書き写さないこと（#756）。** 数え上げを持つのは
+ * `RESERVED_SCHEDULE_KINDS`（`schedule.ts`）だけで、`schedule_list` の説明文も
+ * そこから導出している。ここは #756 以前「日報・発意 tick」の2つを書き写していて、
+ * `memory_tidy` が足された後もそのまま取り残されていた。
  *
  * **これが無いと、器を作り直すたびに位相が捨てられる。** `schedule.ts` の `start()` は
  * 既定の仕込みへ `now + 周期` を置くだけなので、周期より短い間隔で再デプロイが続けば
