@@ -18,6 +18,14 @@ import {
   resolveCommitmentCursor,
 } from './commitment-cursor.js';
 import { isCronExpression } from './cron.js';
+import {
+  compareManagerPosition,
+  encodeManagerCursor,
+  normalizeManagerCursorStatus,
+  resolveManagerCursor,
+  type ManagerPosition,
+} from './manager-cursor.js';
+import { encodeScheduleCursor, resolveScheduleCursor } from './schedule-cursor.js';
 import { assertNeverRunnerLegStatus } from './runner-protocol.js';
 // **`manager_list` と digest の「マネージャー」節で同じ字面を出すための唯一の
 // 生成元。** 片方だけ変えられると区別が潰れる——実際にクローンがそれで誤り、
@@ -3223,6 +3231,23 @@ export function createCloneTools(context: ToolContext) {
         // **古い本文を1文字も出さない。** 出せば文脈に入る（この道具の
         // 存在理由が消える）。名指しするのは見出しと節id と文字数だけ——
         // 呼び手が「意図した節か」を確かめるのに要る最小限である。
+        //
+        // **`total`/`shown` を名乗る（#662 段1）。** 前置き
+        // （`${ordered.length} 節を移した`）から件数は復元できるが、読み手が
+        // その値とこの一覧の `rest` を自分で掛け算しないと「何節のうち何節を
+        // 出したか」が分からないなら、それは名乗ったことにならない
+        // （AGENTS.md「数字の帰属」——全体と部分で読み分けられる語を使う）。
+        //
+        // **`memory_outline slug=${toSlug}` を案内できる。** 移動は「先に
+        // 移し先へ足し、後から出どころを消す」順で行う（上の doc「順序」）
+        // ので、この応答を組み立てている時点で `toSlug` の目次には移した節が
+        // 必ず出ている——実測して確かめた経路である（`memory_section_move` で
+        // 30節を移し、直後に `memory_outline slug=<toSlug>` を呼んで、
+        // 一覧から省かれた節も含めて全節の見出しが出ることを歯
+        // （`packages/core/src/tools.test.ts`「省略の断り書きが total/shown を
+        // 名乗り…」）で確認済み）。**これは③（届かない範囲を名乗る）の実践
+        // である**——「この一覧では省いた」で終わらせず、省いた分にも届く道を
+        // 肯定形で言う。
         const listing = renderListing(
           ordered.map(
             (section) =>
@@ -3230,7 +3255,9 @@ export function createCloneTools(context: ToolContext) {
           ),
           {
             budget: MEMORY_SECTION_MOVE_LIST_BUDGET,
-            omitted: ({ rest }) => `…ほか ${rest} 節は一覧から省略（移動は済んでいる）。`,
+            omitted: ({ rest, shown, total }) =>
+              `…ほか ${rest} 節は一覧から省略（移した ${total} 節のうち ${shown} 節だけ出した。` +
+              `移動は済んでいる——省いた節も含めて、移った先の見出しは memory_outline slug=${toSlug} で見える）。`,
           },
         );
 
@@ -3754,6 +3781,10 @@ export function createCloneTools(context: ToolContext) {
         // ままで取り残されていた。
         `既定の定期ジョブ（${RESERVED_SCHEDULE_KINDS.join(' / ')}）はここには出ない（あれは設定で回っているもの）。`,
         '一覧の依頼本文は抜粋で、全文が要る1件は kind を渡して取る。',
+        // **#662 段1。** `commitment_list` の同じ行と同じ言い方に寄せた
+        // （道具の説明文はクローンが毎回読む面で、JSDoc とは別に要る——
+        // `manager_list` の `resources: true` の行と同じ理由）。
+        '一覧が予算で切れたら、断り書きが次に打つ cursor を案内する。それを cursor へ渡すと続きから読める。',
       ].join(' '),
       {
         kind: z
@@ -3766,8 +3797,20 @@ export function createCloneTools(context: ToolContext) {
           .min(0)
           .optional()
           .describe('kind で全文を読むとき、何文字目から読むか'),
+        // **#662 段1。** `commitment_list` の `cursor` と同じ契約（不透明な
+        // 文字列。自分で組み立てない）。この一覧には `includeClosed` /
+        // `order` に相当する引数が無いので、`schedule-cursor.ts` の doc
+        // 「持たせない状態」のとおり、食い違いの mismatch は持たない。
+        cursor: z
+          .string()
+          .optional()
+          .describe(
+            '一覧モードの続きを読む位置。前回の応答の断り書きに出た cursor をそのまま渡す' +
+              '（自分で組み立てない）。省略すると先頭から。' +
+              'kind を渡す全文モードでは他の条件と同じく無視される。',
+          ),
       },
-      async ({ kind, offset = 0 }) => {
+      async ({ kind, offset = 0, cursor }) => {
         // --- 全文モード（1件だけ） ---
         if (kind !== undefined) {
           const plan = await stores.schedules.get(kind);
@@ -3786,7 +3829,20 @@ export function createCloneTools(context: ToolContext) {
         // --- 一覧モード ---
         const plans = await stores.schedules.list();
         if (plans.length === 0) return text('（継続中の依頼は無い）');
-        const items = plans.map((plan) =>
+
+        // **cursor は `plans.length === 0` の早期リターンの後で解決する。**
+        // `commitment_list` と同じ順序（予算で切る前・絞りを当てた後）——
+        // ここは `origin`/`q` に相当する絞りを持たないので、`list()` の結果
+        // （既に kind 昇順）へ直接当てる。
+        const cursorOutcome = resolveScheduleCursor(plans, cursor);
+        if (cursorOutcome.kind === 'malformed') {
+          return text(
+            'cursor が壊れている（この道具が返したものではないか、書き換えられている）。' +
+              '一覧を先頭から読み直すには cursor を付けずに schedule_list を呼ぶこと。',
+          );
+        }
+        const view = cursorOutcome.view;
+        const items = view.map((plan) =>
           renderListingEntry({
             // **この一覧の id は `kind` である。** 継続中の依頼は kind ごとに
             // 高々1本なので、kind がそのまま鍵になる（`schedule_list kind=<kind>`
@@ -3802,16 +3858,51 @@ export function createCloneTools(context: ToolContext) {
             ],
           }),
         );
-        return text(
-          [
-            renderListing(items, {
-              budget: SCHEDULE_LIST_BUDGET,
-              omitted: ({ rest, shown, total }) =>
-                `…ほか ${rest} 件は省略（継続中の依頼は ${total} 件あり、${shown} 件だけ出した）。`,
-            }),
-            '（依頼本文は抜粋。全文は schedule_list kind=<kind> で取れる）',
-          ].join('\n'),
-        );
+        const lines = [
+          // **cursor が末尾を指していた（最後の頁）を、絞り込みの0件とは
+          // 別の文にする。** `commitment_list` の `view.length === 0` の
+          // 分岐と同じ区別（あちらは `entries.length === 0` と混同しない
+          // ために分けている）。ここは絞りが無いので0件になる理由は
+          // 「もう続きが無い」しか無いが、字面だけは揃えておく。
+          view.length === 0
+            ? '（cursor より後ろの継続中の依頼は無い。これが最後の頁）'
+            : renderListing(items, {
+                budget: SCHEDULE_LIST_BUDGET,
+                // **母数（`total`）は cursor を当てる前の `plans.length`。**
+                // `renderListing` が渡す `total`（`view.length`——cursor
+                // 以降の残り）は使わない。頁が進んでもこの数は変わらない
+                // （`commitment_list` が同じ理由で同じことをしている——
+                // 逐語で当たる:
+                // `grep -Fn -- 'ここではあえて \`renderListing\` が渡す値' packages/core/src/tools.ts`）。
+                //
+                // **`renderListing` は `items.length > 0`（＝ここに来る時点で
+                // `rest > 0` ゆえに `omitted` が呼ばれる分岐）のとき必ず最低
+                // 1件を先頭に出す。** `view.length === 0` は上で早期に別文へ
+                // 分けてあるので、`shown >= 1` は保証される
+                // （`lastShown` は必ず定義される）。
+                omitted: ({ rest, shown }) => {
+                  const total = plans.length;
+                  const lastShown = view[shown - 1]!;
+                  const nextCursor = encodeScheduleCursor({ kind: lastShown.kind });
+                  return (
+                    `…ほか ${rest} 件は省略（継続中の依頼は ${total} 件あり、${shown} 件だけ出した。` +
+                    // **落ちた側の向きを名乗る。** `kind` の昇順で並んでいる
+                    // ので、省かれたのはこの頁の最後より後ろ（`kind` の
+                    // 綴りが後）である。
+                    'kind の昇順で並んでいるので、省いたのはこれより後ろ（kind の綴りが後）の依頼である。' +
+                    `続きは schedule_list cursor=${nextCursor} で取れる）。`
+                  );
+                },
+              }),
+        ];
+        // **`view.length`（今回の応答に実際に載った件数）で見る。**
+        // `commitment_list` と同じ理由——cursor で最後の頁（`view.length
+        // === 0`）に到達したとき、1件も出していないのにこの行だけが付く
+        // 見た目を避ける。
+        if (view.length > 0) {
+          lines.push('（依頼本文は抜粋。全文は schedule_list kind=<kind> で取れる）');
+        }
+        return text(lines.join('\n'));
       },
     ),
 
@@ -5310,6 +5401,8 @@ export function createCloneTools(context: ToolContext) {
           'そのときは「絞らずに全件を出した」と応答に書く）。' +
           '**journal_read の types / commitment_list の origin とは倒し方が違う** — ' +
           'あちらは [] を「どれにも当たらない」＝0件として扱う。',
+        // **#662 段1。** `commitment_list` の同じ行に寄せた文言。
+        '絞った先が予算で切れたら、断り書きが次に打つ cursor を案内する。それを cursor へ渡すと続きから読める。',
       ].join(' '),
       {
         // **人間の入口（`GET /managers`）にだけ在った絞りを、クローンにも渡す**
@@ -5327,8 +5420,20 @@ export function createCloneTools(context: ToolContext) {
               '空の配列 [] も絞らない（渡さなかったのと同じ。0件にはならない）。' +
               '先頭の件数の行は絞る前の全体を出す',
           ),
+        // **#662 段1。** `commitment_list` の `cursor` と同じ契約（不透明な
+        // 文字列。自分で組み立てない）。cursor は「刷られた一覧の status」を
+        // 覚えているので、status を変えて渡すと明示のエラーになる
+        // （`manager-cursor.ts` の doc「cursor は status を持つ」）。
+        cursor: z
+          .string()
+          .optional()
+          .describe(
+            '一覧の続きを読む位置。前回の応答の断り書きに出た cursor をそのまま渡す' +
+              '（自分で組み立てない）。省略すると先頭から。' +
+              'status はカーソルを取った呼びと揃えること（食い違うと明示のエラーになる）。',
+          ),
       },
-      async ({ status }) => {
+      async ({ status, cursor }) => {
         if (!context.managers) return NO_POOL;
         const managers = await context.managers.list();
         // **デーモン→クローンの脚（受信箱）の滞留は、マネージャーの本数と無関係**
@@ -5367,10 +5472,15 @@ export function createCloneTools(context: ToolContext) {
         // 契約があの並びに依存している（`managersQuery` の doc の「`order` は
         // 足さない」）。**並べ直すのはこの一覧の中だけである。**
         //
-        // **この一覧の線はここまでである** —— 保証するのは「走行中・返事待ちが
-        // 窓から落ちない」ことだけで、押し出された終端の全件を辿る継続点は
-        // **足さない**（#662 が持つ。あの Issue は「継続点を足す前に並びの向きを
-        // 決めるのが先だ」と書いていて、これがその並びの側である）。
+        // **#662 は2段で進めた。並びの向きを先に決め（#688）、その並びの上へ
+        // 継続点を足すのを後にした——「継続点を足す前に並びの向きを決めるのが
+        // 先だ」という順序そのものである。** #688 でこの並び（3群・
+        // `startedAt` 降順）を決め、**#662 段1でこの一覧（絞った先）に継続点
+        // （`cursor`）を足した。** 群の順序は #688 のまま1バイトも変えていない
+        // ——変えたのは、同値（`rank`/`startedAt` が同じ）だったときの順序
+        // （`managerId` 昇順。keyset で頁を繋ぐために要る）と、`status` で
+        // 絞った先を cursor で辿れるようにしたことだけである
+        // （`manager-cursor.ts` の doc を参照）。
         //
         // **`lost` は第2群として前へ出す（#688）。** かつてここには「`lost` は
         // 終端なので、この並べ替えでは前へ出ない」と書いてあった——**それが穴の
@@ -5426,10 +5536,41 @@ export function createCloneTools(context: ToolContext) {
         const view = filtering
           ? attention.filter((manager) => status.includes(manager.status))
           : attention;
+        // **#662 段1: cursor は `status` で絞った後（＝ここ）・文字数の予算で
+        // 切る前で解決する。** `origin`/`q` を予算の前で効かせる
+        // `commitment_list` と同じ順序——順序を変えると #418 と同じ形の穴
+        // （絞りに当たらない行が窓を食い尽くす）が開く。
+        //
+        // cursor の `status` は「刷られた一覧の status」を正規化した形
+        // （`normalizeManagerCursorStatus`）で持つ——`manager_list` は
+        // `status: []` を「絞らない」へ倒す契約（上の doc）なので、cursor
+        // 側もそれに揃える。
+        const cursorStatus = normalizeManagerCursorStatus(status);
+        const cursorOutcome = resolveManagerCursor(view, managerPositionOf, cursorStatus, cursor);
+        if (cursorOutcome.kind === 'malformed') {
+          return text(
+            'cursor が壊れている（この道具が返したものではないか、書き換えられている）。' +
+              '一覧を先頭から読み直すには cursor を付けずに manager_list を呼ぶこと。',
+          );
+        }
+        if (cursorOutcome.kind === 'status-mismatch') {
+          const cursorStatusText =
+            cursorOutcome.cursorStatus === null
+              ? '絞っていない'
+              : cursorOutcome.cursorStatus.join(',');
+          return text(
+            `cursor は status: ${cursorStatusText} の一覧から出た続きの位置で、` +
+              `いまの呼び（status: ${status === undefined ? '未指定' : status.join(',')}）と食い違う。` +
+              'status を cursor を取ったときと揃えて呼び直すか（' +
+              `manager_list ${cursorOutcome.cursorStatus === null ? '' : `status=${JSON.stringify(cursorOutcome.cursorStatus)} `}cursor=${cursor}）、` +
+              'cursor を付けずに status だけで先頭から呼び直すこと。',
+          );
+        }
+        const paged = cursorOutcome.view;
         // **予算を先に決めて、入るところまで積む。** 件数から出力量を決めると、
         // 何件で壊れるかが運任せになる。切ったなら必ずそう言う。
         // 積む形そのものは `renderListing` が持つ（一覧ごとに手で書かない）。
-        const items = view.map((manager) =>
+        const items = paged.map((manager) =>
           renderListingEntry({
             id: manager.managerId,
             // **第3引数まで通す（#621 / #643）。** `status: 'done'` は
@@ -5643,27 +5784,70 @@ export function createCloneTools(context: ToolContext) {
             // （`commitment_list` の `origin` が同じ分け方をしている）。
             view.length === 0
               ? '（この status の絞り込みに当たる委譲は無い。絞る前の件数は上の行に在る）'
-              : renderListing(items, {
-                  budget: LIST_BUDGET,
-                  // **並びを実装と一致させる（#688 の3）。** ここは「走っているものから
-                  // 順に出している」と書いてあったが、実装は稼働状態を1度も見て
-                  // いなかった（`ManagerPool.list()` は `startedAt` 降順）。
-                  // **絞ったときは「絞った後の件数」だと分かる形で言う**——
-                  // `total` を絞る前の全体と読まれると、絞りの効き目が嘘になる
-                  // （`commitment_list` の `origin` の断り書きと同じ約束）。
-                  // **`filtering` で分ける（`status === undefined` ではない）。**
-                  // `status: []` は絞っていないので、母数は全体である——ここを
-                  // `status` の有無で分けると `status:  に絞った` という空の
-                  // 絞りを名乗る（渡した文字が1つも無いのに絞ったと言う嘘）。
-                  omitted: ({ rest, shown, total }) =>
-                    `…ほか ${rest} 件は省略（` +
-                    (filtering
-                      ? `status: ${status.join(',')} に絞った ${total} 件のうち ${shown} 件を出した`
-                      : `全 ${total} 件`) +
-                    '）。走行中・返事待ちを先に出し、次に lost（判断待ち）、そのあとに残りを出す。' +
-                    '各群の中は startedAt の新しい順である。' +
-                    '**省略されたのは終端したもの（またはより古いもの）の側である。**',
-                }),
+              : // **#662 段1: cursor で辿り切った（最後の頁）を、絞り込みの0件とは
+                // 別の文にする。** `commitment_list` の `view.length === 0` の
+                // 分岐と同じ区別——`view`（絞り込み後・cursor 適用前）は0件では
+                // なかったので、ここに来た0件は「もう続きが無い」ことを意味する。
+                paged.length === 0
+                ? '（cursor より後ろの、この絞り込みに当たる委譲は無い。これが最後の頁）'
+                : renderListing(items, {
+                    budget: LIST_BUDGET,
+                    // **並びを実装と一致させる（#688 の3）。** ここは「走っているものから
+                    // 順に出している」と書いてあったが、実装は稼働状態を1度も見て
+                    // いなかった（`ManagerPool.list()` は `startedAt` 降順）。
+                    // **絞ったときは「絞った後の件数」だと分かる形で言う**——
+                    // `total` を絞る前の全体と読まれると、絞りの効き目が嘘になる
+                    // （`commitment_list` の `origin` の断り書きと同じ約束）。
+                    // **`filtering` で分ける（`status === undefined` ではない）。**
+                    // `status: []` は絞っていないので、母数は全体である——ここを
+                    // `status` の有無で分けると `status:  に絞った` という空の
+                    // 絞りを名乗る（渡した文字が1つも無いのに絞ったと言う嘘）。
+                    //
+                    // **母数（`total`）は `view.length`（cursor を当てる前・
+                    // status で絞った後）を使う。** `renderListing` が渡す
+                    // `total`（＝ `items.length` ＝ `paged.length`——cursor
+                    // 以降の残り）は使わない。頁が進んでもこの数は変わらない
+                    // （`commitment_list` が同じ理由で同じことをしている。
+                    // 逐語で当たる:
+                    // `grep -Fn -- 'ここではあえて \`renderListing\` が渡す値' packages/core/src/tools.ts`）。
+                    //
+                    // **数字の帰属**: `total`＝絞った後の全体（変わらない母数）、
+                    // `shown`＝この頁で出した分、`rest`＝この頁より後ろで
+                    // まだ出していない分（全体のうち出ていない分ではない——
+                    // 頁が進むたびに減っていく数）。
+                    //
+                    // **⚠️ `renderListing` は `items.length > 0`（＝ここに来る
+                    // 時点で `rest > 0` ゆえに `omitted` が呼ばれる分岐）のとき
+                    // 必ず最低1件を先頭に出す。** `paged.length === 0` は上で
+                    // 早期に別文へ分けてあるので、`shown >= 1` は保証される
+                    // （`lastShown` は必ず定義される）。
+                    omitted: ({ rest, shown }) => {
+                      const total = view.length;
+                      const lastShown = paged[shown - 1]!;
+                      const nextCursor = encodeManagerCursor({
+                        ...managerPositionOf(lastShown),
+                        status: cursorStatus === null ? null : [...cursorStatus],
+                      });
+                      const statusArg = filtering ? ` status=${JSON.stringify(status)}` : '';
+                      return (
+                        `…ほか ${rest} 件は省略（` +
+                        (filtering
+                          ? `status: ${status.join(',')} に絞った ${total} 件のうち ${shown} 件を出した`
+                          : `全 ${total} 件`) +
+                        '）。走行中・返事待ちを先に出し、次に lost（判断待ち）、そのあとに残りを出す。' +
+                        '各群の中は startedAt の新しい順である。' +
+                        '**省略されたのは終端したもの（またはより古いもの）の側である。**' +
+                        `続きは manager_list cursor=${nextCursor}${statusArg} で取れる（status は同じまま呼ぶこと）。` +
+                        // **③（届かない範囲を名乗る）の実践。** cursor で辿れる
+                        // ようになった後もなお残る性質を約束にせず添える——
+                        // 台帳に保持期間も掃除の機構も無いことは事実だが、
+                        // それをどうするかは書かない（north_star 禁止2、
+                        // AGENTS.md「数を書かない」と同じ理由で言い切らない）。
+                        '委譲の台帳には保持期間も掃除の機構も無いので、辿る頁数は台帳の本数に比例して増える。' +
+                        'status で絞れば頁数を減らせる。'
+                      );
+                    },
+                  }),
             '（依頼と報告は抜粋。全文は manager_report <managerId> で取れる）',
             inboxBacklog,
             runnerBacklog,
@@ -6633,6 +6817,22 @@ function managerAttentionRank(status: JobStatus): 0 | 1 | 2 {
 }
 
 /**
+ * {@link ManagerSummary} を、並び替えと継続点（cursor）が共有する位置へ写す
+ * （#662 段1）。
+ *
+ * **並び替え（{@link compareManagerAttention}）と cursor（`manager-cursor.ts`）の
+ * 両方がここを通る。** 別々に書くと、片方だけがずれたときに黙って行が飛ぶ
+ * ——同じ錨を使うことを構造で保証するための1箇所である。
+ */
+function managerPositionOf(entry: ManagerSummary): ManagerPosition {
+  return {
+    rank: managerAttentionRank(entry.status),
+    startedAt: entry.startedAt,
+    managerId: entry.managerId,
+  };
+}
+
+/**
  * `manager_list` の並び。**走行中・返事待ち → `lost` → その他の3群で、各群の中は
  * `startedAt` の新しい順**（#688）。
  *
@@ -6658,11 +6858,18 @@ function managerAttentionRank(status: JobStatus): 0 | 1 | 2 {
  * そうなっているので `0` を返しても現状では同じ結果になるが、その暗黙の依存を
  * この関数の外へ置かない（`digest.ts` の `EscalationGroup.at` の doc と同じ
  * 判断——安全側の並べ替えを、読めば分かる場所に書いておく）。
+ *
+ * **#662 段1: `compareManagerPosition`（`manager-cursor.ts`）への薄い
+ * ラッパーになった。** 群の順序・`startedAt` 降順は1バイトも変えていない
+ * ——**同値だったときの順序（`managerId` 昇順）だけを新しく決めた**（絞った
+ * 先へ継続点（cursor）を足すために要る。`rank` と `startedAt` が同値の2本は
+ * 旧実装では順序が決まらず（`0` を返す）、keyset で頁を繋ぐと同じ行を
+ * 繰り返すか間を飛ばす）。**この書き換えの目的は、並び替えと cursor が
+ * 同じ比較を使うことを構造で保証すること**——別々に書くと、片方だけが
+ * ずれたときに黙って行が飛ぶ。`managerPositionOf` が両方の入口になる。
  */
 function compareManagerAttention(a: ManagerSummary, b: ManagerSummary): number {
-  const rank = managerAttentionRank(a.status) - managerAttentionRank(b.status);
-  if (rank !== 0) return rank;
-  return b.startedAt.localeCompare(a.startedAt);
+  return compareManagerPosition(managerPositionOf(a), managerPositionOf(b));
 }
 
 /**
