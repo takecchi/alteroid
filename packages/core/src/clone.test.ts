@@ -1881,6 +1881,7 @@ describe('クローン — マネージャーの確認がいまも待たれて�
       transcript: () => {
         throw new Error('not implemented');
       },
+      runningManagerOwning: () => undefined,
       restore: () => Promise.resolve([]),
       resumeStoppedByUsage: () => Promise.resolve([]),
       reattachRunner: () => Promise.resolve(),
@@ -2991,6 +2992,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
       transcript: () => {
         throw new Error('not implemented');
       },
+      runningManagerOwning: () => undefined,
       restore: () => Promise.resolve([]),
       resumeStoppedByUsage: () => Promise.resolve([]),
       reattachRunner: () => Promise.resolve(),
@@ -5139,7 +5141,10 @@ describe('クローン — ターンの失敗の跡', () => {
         // **退避されている。**
         await waitFor(async () => (await s.stores.archive.list()).length > 0, '退避されること');
         const ids = await s.stores.archive.list();
-        expect(await s.stores.archive.read(ids[0] as string)).toBe('畳む直前の生ログ');
+        expect(await s.stores.archive.read(ids[0] as string)).toEqual({
+          kind: 'body',
+          body: '畳む直前の生ログ',
+        });
       } finally {
         await s.clone.stop();
         await rm(dir, { recursive: true, force: true });
@@ -6658,6 +6663,7 @@ describe('クローン — 蒸留の末尾は全文を読まずに取る（渡�
         },
         list: () => stores.archive.list(),
         read: (id: string) => stores.archive.read(id),
+        remove: (id: string) => stores.archive.remove(id),
       },
     };
 
@@ -6758,6 +6764,39 @@ describe('クローン — 起動時に墓標を拾い直す（#564 E1b）', () 
         text.includes('前の器が記憶へ移せなかった区間を拾い直す'),
       ),
     ).toBe(false);
+
+    await s.clone.stop();
+  });
+
+  /**
+   * #698 — 退避そのものは在ったが本文が `remove()` で落とされている場合
+   * （tombstone）は、「見つからない」（missing）とは別の文言で印を下ろす。
+   * `missing` の文言（直上のテスト）と字面が混ざらないことを、両方の否定で
+   * 直接測る。
+   */
+  it('退避の本文が消されている（tombstone）ときは、missing とは別の文言で印を下ろす', async () => {
+    const stores = createMemoryStores();
+    const archiveId = await stores.archive.archive('sess-removed', '畳めなかった生ログ\n');
+    await stores.archive.remove(archiveId);
+    await stores.sessions.setTranscriptGrave({ archiveId });
+
+    const s = setup(undefined, stores);
+    await waitFor(
+      async () =>
+        (await selfTexts(stores)).some((text) => text.includes('退避の本文が消されている')),
+      '印を下ろした1行が残ること',
+    );
+    expect(await stores.sessions.getTranscriptGrave()).toBeNull();
+
+    const texts = await selfTexts(stores);
+    // **missing の文言とは別物である**——同じ行が両方を名乗ることは無い。
+    expect(texts.some((text) => text.includes('退避が見つからないので、印を下ろした'))).toBe(
+      false,
+    );
+    // 蒸留は起こさない（渡す中身が無い）。
+    expect(texts.some((text) => text.includes('前の器が記憶へ移せなかった区間を拾い直す'))).toBe(
+      false,
+    );
 
     await s.clone.stop();
   });

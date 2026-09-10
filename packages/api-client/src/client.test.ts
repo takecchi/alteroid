@@ -54,7 +54,10 @@ function fakeClone(stores: Stores) {
       return { runners: [], unassigned: [], daemonRevision: { status: 'unknown' } };
     },
     async transcript() {
-      return null;
+      return { kind: 'missing' as const };
+    },
+    runningManagerOwning() {
+      return undefined;
     },
     async restore() {
       return [];

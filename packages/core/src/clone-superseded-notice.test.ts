@@ -119,6 +119,7 @@ function stubPool(managers: ManagerSummary[]): ManagerPool {
         daemonRevision: { status: 'unknown' as const, reason: 'テスト' },
       }),
     transcript: notImplemented,
+    runningManagerOwning: () => undefined,
     restore: () => Promise.resolve([]),
     resumeStoppedByUsage: () => Promise.resolve([]),
     reattachRunner: () => Promise.resolve(),

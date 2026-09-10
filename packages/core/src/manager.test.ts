@@ -2091,7 +2091,10 @@ describe('デーモン再起動後（M4）', () => {
       .toBe('proj-key');
 
     // runner のファイルもアーカイブも無いが、預けた生ログから返せる
-    expect(await s.pool.transcript(managerId)).toBe('{"type":"user","uuid":"u1"}\n');
+    expect(await s.pool.transcript(managerId)).toEqual({
+      kind: 'body',
+      body: '{"type":"user","uuid":"u1"}\n',
+    });
 
     await s.pool.stop();
   });
@@ -5288,7 +5291,7 @@ describe('#records の寿命（終端で外れる）', () => {
       const transcript = await s.pool.transcript(id);
       // 生ログを預かっていない fake runner でも、`transcript()` は「無い」で
       // 応答できる（`#records` に無いことで例外にならない）ことだけを見る。
-      expect(transcript).toBeNull();
+      expect(transcript).toEqual({ kind: 'missing' });
 
       await s.pool.stop();
     });

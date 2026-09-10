@@ -314,9 +314,10 @@ export const CLONE_TOOL_NAMES = [
 export type CloneToolName = (typeof CLONE_TOOL_NAMES)[number];
 
 /**
- * 自作ツール 36 本のうち、**ハンドラが自前で日誌へ書く 17 本**
+ * 自作ツール 37 本のうち、**ハンドラが自前で日誌へ書く 18 本**
  * （`memory_write` は `memory_update`、`journal_write` は本文、`manager_start`
- * は台帳と `tool_use`、という形で自分の跡を残す）。
+ * は台帳と `tool_use`、という形で自分の跡を残す。`archive_remove` は #698 で
+ * 加わった）。
  *
  * `clone.ts` の `#journalToolUse` は、この名簿に載る道具の `tool_use` を
  * 重ねて書かない（`clone.ts`「なぜ*自前で日誌へ書く道具だけ*を除くのか」参照）。
@@ -347,7 +348,7 @@ export const SELF_JOURNALING_CLONE_TOOLS = [
 ] as const satisfies readonly CloneToolName[];
 
 /**
- * 自作ツール 36 本のうち、**ハンドラが自前では日誌へ書かない 19 本**（読む道具。
+ * 自作ツール 37 本のうち、**ハンドラが自前では日誌へ書かない 19 本**（読む道具。
  * `memory_list` / `journal_read` など）。
  *
  * `clone.ts` の `#journalToolUse` は、この名簿に載る道具の `tool_use` を残す

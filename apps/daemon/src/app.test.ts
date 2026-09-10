@@ -59,6 +59,10 @@ function fakeClone() {
   const managerList: ManagerSummary[] = [];
   const managerDenials = new Map<string, ManagerDenial[]>();
   const transcripts = new Map<string, string>();
+  /** `transcript()` を `kind: 'removed'` にする（#698）。 */
+  const removedTranscripts = new Map<string, { archiveId: string; removedAt: string; bytes: number }>();
+  /** `ManagerPool.runningManagerOwning()` の返り値（#698）。 */
+  const runningOwners = new Map<string, string>();
   const managerSends: { managerId: string; text: string; requestId?: string }[] = [];
   const managerAborts: { managerId: string; reason?: string }[] = [];
   // `POST /runners/vacate` が `ManagerPool.vacate()` へ渡した runnerId を記録する。
@@ -130,7 +134,13 @@ function fakeClone() {
       return { runners: [], unassigned: [], daemonRevision: { status: 'unknown' } };
     },
     async transcript(managerId) {
-      return transcripts.get(managerId) ?? null;
+      const removed = removedTranscripts.get(managerId);
+      if (removed !== undefined) return { kind: 'removed' as const, ...removed };
+      const body = transcripts.get(managerId);
+      return body === undefined ? { kind: 'missing' as const } : { kind: 'body' as const, body };
+    },
+    runningManagerOwning(archiveId) {
+      return runningOwners.get(archiveId);
     },
     async restore() {
       return [];
@@ -189,6 +199,8 @@ function fakeClone() {
     managerList,
     managerDenials,
     transcripts,
+    removedTranscripts,
+    runningOwners,
     managerSends,
     managerAborts,
     vacateCalls,

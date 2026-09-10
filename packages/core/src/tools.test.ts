@@ -79,14 +79,30 @@ interface Harness {
   setRunnerBacklog(snapshots: RunnerBacklogSnapshot[]): void;
   /**
    * `manager_transcript` が読む `ManagerPool.transcript()` の返り値を差し替える。
-   * 設定しなければ既定で `null`（3段のどこにも無い、を模している）。
+   * 設定しなければ既定で `{ kind: 'missing' }`（3段のどこにも無い、を模している）。
+   *
+   * `archiveId` を渡すと、その本文が退避から読めたことを模す
+   * （`manager_transcript` の応答に archive id の1行が添う——#698）。
    */
-  setTranscript(managerId: string, body: string | null): void;
+  setTranscript(managerId: string, body: string | null, archiveId?: string): void;
   /**
    * `managers.transcript()` を呼ぶと、代わりに例外を投げさせる（読めなかった、
    * を模す）。`setTranscript` と排他ではない——両方設定したら例外が勝つ。
    */
   setTranscriptFailure(managerId: string, message: string): void;
+  /**
+   * `manager_transcript` が読む `ManagerPool.transcript()` を `kind: 'removed'`
+   * にする（#698。tombstone された退避しか無い状態を模す）。
+   */
+  setTranscriptRemoved(
+    managerId: string,
+    detail: { archiveId: string; removedAt: string; bytes: number },
+  ): void;
+  /**
+   * `ManagerPool.runningManagerOwning()` の返り値を差し替える（#698）。
+   * 設定しなければその archiveId は誰も走行中に抱えていない（`undefined`）。
+   */
+  setRunningManagerOwning(archiveId: string, managerId: string | undefined): void;
   /**
    * `managers.transcript(managerId)` が呼ばれるたびに積む。**往復を無条件に
    * 増やしていないか**（#323。`part: 'request'` では呼ばれないはず）を数えるための
@@ -126,9 +142,13 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
   };
   const runnersCalls: { fingerprints?: boolean; resources?: boolean }[] = [];
   let runnerBacklog: RunnerBacklogSnapshot[] = [];
-  const transcripts = new Map<string, string>();
+  type TranscriptState =
+    | { kind: 'body'; body: string; archiveId?: string }
+    | { kind: 'removed'; archiveId: string; removedAt: string; bytes: number };
+  const transcripts = new Map<string, TranscriptState>();
   const transcriptErrors = new Map<string, string>();
   const transcriptCalls: string[] = [];
+  const runningOwners = new Map<string, string>();
   let memoryCause: 'distill' | 'clone' = 'clone';
 
   const managers: ManagerPool = {
@@ -169,7 +189,10 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
       transcriptCalls.push(managerId);
       const failure = transcriptErrors.get(managerId);
       if (failure !== undefined) throw new Error(failure);
-      return transcripts.get(managerId) ?? null;
+      return transcripts.get(managerId) ?? { kind: 'missing' as const };
+    },
+    runningManagerOwning(archiveId: string) {
+      return runningOwners.get(archiveId);
     },
     async restore() {
       return [];
@@ -291,12 +314,19 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     setRunnerBacklog(snapshots) {
       runnerBacklog = snapshots;
     },
-    setTranscript(managerId, body) {
+    setTranscript(managerId, body, archiveId) {
       if (body === null) transcripts.delete(managerId);
-      else transcripts.set(managerId, body);
+      else transcripts.set(managerId, { kind: 'body', body, ...(archiveId === undefined ? {} : { archiveId }) });
     },
     setTranscriptFailure(managerId, message) {
       transcriptErrors.set(managerId, message);
+    },
+    setTranscriptRemoved(managerId, detail) {
+      transcripts.set(managerId, { kind: 'removed', ...detail });
+    },
+    setRunningManagerOwning(archiveId, managerId) {
+      if (managerId === undefined) runningOwners.delete(archiveId);
+      else runningOwners.set(archiveId, managerId);
     },
     transcriptCalls,
     runnersCalls,
@@ -8769,7 +8799,7 @@ describe('システムプロンプトの道具一覧', () => {
  * この歯は `test` だけで踏める。
  */
 describe('自作ツールの日誌名簿（SELF_JOURNALING_CLONE_TOOLS / TRACELESS_CLONE_TOOLS）', () => {
-  it('CLONE_TOOL_NAMES の全36本が、2つの名簿のちょうど一方に属する', () => {
+  it('CLONE_TOOL_NAMES の全37本が、2つの名簿のちょうど一方に属する', () => {
     const selfJournaling = new Set<string>(SELF_JOURNALING_CLONE_TOOLS);
     const traceless = new Set<string>(TRACELESS_CLONE_TOOLS);
 
@@ -13082,12 +13112,12 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
 });
 
 /**
- * `appendJournalOrThrow` の16箇所すべてについて、応答本文が
+ * `appendJournalOrThrow` の17箇所すべてについて、応答本文が
  * **道具名**（どれが落ちたか）と**先頭行の outcome**（完了状態・未記録・
  * やり直しの可否）の両方を持つことを、道具ごとに独立して測る。
  *
  * **なぜ道具名だけでなく先頭行も測るのか。** 上の
- * `describe('journal.append が失敗したとき…')` の既存の歯は、13箇所の
+ * `describe('journal.append が失敗したとき…')` の既存の歯は、14箇所の
  * act-completed / 2箇所の act-not-performed / 1箇所の
  * act-partially-completed という **outcome の3分類を網羅する**ために
  * 選ばれた代表4件（memory_delete・journal_write・daily_report_write・
@@ -13098,9 +13128,10 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
  * `memory_append` の呼び出しが誤って `'memory_write'` という道具名で
  * `appendJournalOrThrow` を呼んでも、act-completed の代表4件には
  * 元から `memory_append` が入っていないので、既存の歯は何も言わない。
- * ここでは16箇所それぞれを独立したケースにして、この相乗りを解消する。
+ * ここでは17箇所それぞれを独立したケースにして、この相乗りを解消する
+ * （17箇所目は `archive_remove`。#698）。
  */
-describe('journal.append 失敗時の応答本文: 16箇所すべてで道具名と先頭行 outcome を測る', () => {
+describe('journal.append 失敗時の応答本文: 17箇所すべてで道具名と先頭行 outcome を測る', () => {
   /** 上の describe の `callExpectingError` と同じもの（複製）。既存側は1文字も変えない。 */
   async function callExpectingError(
     tools: ReturnType<typeof createCloneTools>,
@@ -13435,6 +13466,26 @@ describe('journal.append 失敗時の応答本文: 16箇所すべてで道具名
         return callExpectingError(tools, 'manager_start', { request: '調査' });
       },
     },
+    {
+      tool: 'archive_remove',
+      firstLine: ACT_COMPLETED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-17');
+        const archiveId = await stores.archive.archive('sess-case-17', 'BODY\n');
+        // `runningManagerOwning` だけを持つ最小のスタブ（この道具はそれ以外を呼ばない）。
+        const managers = { runningManagerOwning: () => undefined } as unknown as ManagerPool;
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          managers,
+          memoryCause: () => 'clone',
+        });
+        return callExpectingError(tools, 'archive_remove', {
+          archiveId,
+          summary: '不要になったので消す',
+        });
+      },
+    },
   ];
 
   it.each(CASES)(
@@ -13451,7 +13502,8 @@ describe('journal.append 失敗時の応答本文: 16箇所すべてで道具名
 
   /**
    * ⭐⭐ 弱点の手当て: `CASES` の道具名の集合を、手で並べた一覧とではなく
-   * `SELF_JOURNALING_CLONE_TOOLS`（17本）から導いた期待値と突き合わせる。
+   * `SELF_JOURNALING_CLONE_TOOLS`（18本。#698 で `archive_remove` が
+   * 加わった）から導いた期待値と突き合わせる。
    *
    * `manager_send` / `manager_stop` を除く理由: この2本は `ManagerPool` の
    * ガード付き `#journal`（`clone.ts`）を通るので `appendJournalOrThrow` を
@@ -13459,7 +13511,7 @@ describe('journal.append 失敗時の応答本文: 16箇所すべてで道具名
    * 書く」という性質の名簿であって、その書き方が `appendJournalOrThrow`
    * 経由とは限らない。
    *
-   * これにより、17本目の「自前で journal.append を呼ぶ道具」が
+   * これにより、19本目の「自前で journal.append を呼ぶ道具」が
    * `SELF_JOURNALING_CLONE_TOOLS` に足されたとき、`CASES` にケースを
    * 足し忘れるとこの歯が「ケースが足りない」と言って赤くなる。
    */

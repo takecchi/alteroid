@@ -3855,9 +3855,14 @@ class Pool implements ManagerPool {
    * そのまま使う。
    */
   async #probeTurnEndOf(record: ManagerRecord): Promise<void> {
+    // **`removed` / `missing` はどちらも「探る本文が無い」として扱う。** この
+    // 探り（#567 / #572）はターン終了の助言を作るための費用の門であって、
+    // 「tombstone された」ことそのものを助言に反映する意味は無い——`transcript`
+    // が `body` を持たない結果を、これまでどおり空扱いへ倒す。
     let transcript: string | null;
     try {
-      transcript = await this.transcript(record.job.id);
+      const result = await this.transcript(record.job.id);
+      transcript = result.kind === 'body' ? result.body : null;
     } catch {
       transcript = null;
     }

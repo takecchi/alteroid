@@ -6013,6 +6013,34 @@
                 }
               }
             }
+          },
+          "410": {
+            "description": "退避はあったが、本文は `DELETE /archive/:id` で消されている（#698）。いつ・何バイト落としたか、どの archive id だったかを返す。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "const": "removed"
+                    },
+                    "removedAt": {
+                      "type": "string"
+                    },
+                    "bytes": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "archiveId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error", "removedAt", "bytes"]
+                }
+              }
+            }
           }
         },
         "parameters": [
@@ -7188,6 +7216,112 @@
           },
           "404": {
             "description": "該当するアーカイブが無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "本文は `DELETE /archive/:id` で消されている（#698）。行そのものは残る——この id は `/archive` の一覧には引き続き出る。いつ・何バイト落としたかを返す。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "const": "removed"
+                    },
+                    "removedAt": {
+                      "type": "string"
+                    },
+                    "bytes": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "archiveId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error", "removedAt", "bytes"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "deleteArchiveById",
+        "tags": ["archive"],
+        "summary": "アーカイブ済み生ログの本文を消す（行は残る）",
+        "description": "本文だけを落とす（tombstone）。行そのものは消えない——`/archive` の一覧には引き続き出る。存在しない id を渡しても成功にはならない。走行中のマネージャーの退避は消せない（拒む。どのマネージャーが走行中かを言う）。",
+        "responses": {
+          "200": {
+            "description": "消した（または前から消されていた）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "bytes": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "alreadyRemoved": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["ok", "id", "bytes", "alreadyRemoved"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "該当するアーカイブが無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "走行中のマネージャーの退避なので消せない。",
             "content": {
               "application/json": {
                 "schema": {
