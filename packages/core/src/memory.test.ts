@@ -3548,6 +3548,107 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
   });
 
   /**
+   * ⭐⭐ **断り書きは節数だけでなく目次の総量（文字数）を出す。**
+   *
+   * 節数だけでは「この文書を割るべきか」の判断に文字数の推測が要る——
+   * 節を移しても目次に乗っている文字数（＝床）が減るとは限らないため
+   * （落ちるのは常に末尾なので、末尾を移しても先頭側の目次は動かない）。
+   * ⟹ 全体・載った分・省いた分の3つを出し、**足し算で整合すること**を
+   * 変異に強い形で測る（別の量を出す変異・内訳を壊す変異は、この足し算で
+   * 捕まる）。**そして「全 N 文字」の N が何の文字数かを名指しする**——
+   * 節の本文の総量ではなく、目次として毎ターンの焼き込みに載る量である。
+   *
+   * 反転側・非反転側の両方で測る（`renderPremiseOutlineOmission` の
+   * 冒頭1行は両分岐で共有されているので、非対称に足すとどちらかで
+   * 抜け落ちる）。
+   */
+  it('⭐⭐ 断り書きは目次の総量を「載った分＋省いた分」の内訳とともに出し、何の文字数かを名指しする', () => {
+    // 「全体」を指す節（`節の目次は全 T 節ぶんで X 文字（節の本文の総量ではない）`）は
+    // 「載る」/「載った」を1文字も使わない——「載った分」は shownChars 側にしか
+    // 付かない、という語の衝突回避そのものを固定する。
+    const totalNamingPhrase = '節の目次は全 ';
+    const notBodyPhrase = '（節の本文の総量ではない）';
+    const breakdown =
+      /節の目次は全 ([\d,]+) 節ぶんで ([\d,]+) 文字（節の本文の総量ではない）——うち焼き込みに載った分 ([\d,]+) 文字、予算に入らず省いた分 ([\d,]+) 文字。/;
+    const toNumber = (s: string) => Number(s.replace(/,/g, ''));
+
+    // 非反転側（「見出しを縮めれば載る」）。
+    const shrinkable = Array.from(
+      { length: 120 },
+      (_, i) => `## これは十分に長い見出しであり予算を食い尽くす ${i}\n本文`,
+    ).join('\n');
+    const nonInverted = renderMemoryDocuments([
+      {
+        slug: 'shrinkable-total',
+        content: `---\ntype: premise\ndescription: 大きい\n---\n${shrinkable}`,
+      },
+    ]);
+    expect(nonInverted).toMatch(/見出しを平均 \d+ 文字（いま \d+ 文字）まで縮める必要がある。/);
+    expect(nonInverted).toContain(totalNamingPhrase);
+    expect(nonInverted).toContain(notBodyPhrase);
+    const nonInvertedMatch = breakdown.exec(nonInverted);
+    expect(nonInvertedMatch).not.toBeNull();
+    const [, , nOutline = '', nShown = '', nDropped = ''] = nonInvertedMatch as RegExpExecArray;
+    expect(toNumber(nShown) + toNumber(nDropped)).toBe(toNumber(nOutline));
+    expect(toNumber(nShown)).toBeGreaterThan(0);
+    expect(toNumber(nDropped)).toBeGreaterThan(0);
+
+    // 反転側（「縮めても載らない」）。
+    const unshrinkable = Array.from({ length: 400 }, (_, i) => `# ${i}\n本文`).join('\n');
+    const inverted = renderMemoryDocuments([
+      {
+        slug: 'unshrinkable-total',
+        content: `---\ntype: premise\ndescription: 追記だけの文書\n---\n${unshrinkable}`,
+      },
+    ]);
+    expect(inverted).toContain('見出しを最短');
+    expect(inverted).not.toMatch(/まで縮める必要がある。/);
+    expect(inverted).toContain(totalNamingPhrase);
+    expect(inverted).toContain(notBodyPhrase);
+    const invertedMatch = breakdown.exec(inverted);
+    expect(invertedMatch).not.toBeNull();
+    const [, , iOutline = '', iShown = '', iDropped = ''] = invertedMatch as RegExpExecArray;
+    expect(toNumber(iShown) + toNumber(iDropped)).toBe(toNumber(iOutline));
+    expect(toNumber(iShown)).toBeGreaterThan(0);
+    expect(toNumber(iDropped)).toBeGreaterThan(0);
+  });
+
+  /**
+   * ⛔ **予算値を2回出さない。** `arithmetic`（同じ関数の両分岐）が既に
+   * `予算 ${MEMORY_PROMPT_OUTLINE_BUDGET} 文字` を名乗っている。総量の1句を
+   * 足したことで予算値がもう一度出てはならない——出現回数がちょうど1回で
+   * あることを、反転側・非反転側の両方で測る。
+   */
+  it('⛔ 目次の総量を足しても、予算値の出現は反転側・非反転側とも1回のままである', () => {
+    const budgetPhrase = `予算 ${MEMORY_PROMPT_OUTLINE_BUDGET.toLocaleString('en-US')} 文字`;
+    const countOccurrences = (text: string, needle: string) => text.split(needle).length - 1;
+
+    const shrinkable = Array.from(
+      { length: 120 },
+      (_, i) => `## これは十分に長い見出しであり予算を食い尽くす ${i}\n本文`,
+    ).join('\n');
+    const nonInverted = renderMemoryDocuments([
+      {
+        slug: 'shrinkable-budget-once',
+        content: `---\ntype: premise\ndescription: 大きい\n---\n${shrinkable}`,
+      },
+    ]);
+    expect(nonInverted).toMatch(/見出しを平均 \d+ 文字（いま \d+ 文字）まで縮める必要がある。/);
+    expect(countOccurrences(nonInverted, budgetPhrase)).toBe(1);
+
+    const unshrinkable = Array.from({ length: 400 }, (_, i) => `# ${i}\n本文`).join('\n');
+    const inverted = renderMemoryDocuments([
+      {
+        slug: 'unshrinkable-budget-once',
+        content: `---\ntype: premise\ndescription: 追記だけの文書\n---\n${unshrinkable}`,
+      },
+    ]);
+    expect(inverted).toContain('見出しを最短');
+    expect(inverted).not.toMatch(/まで縮める必要がある。/);
+    expect(countOccurrences(inverted, budgetPhrase)).toBe(1);
+  });
+
+  /**
    * ⭐⭐ **断り書きの締めが「何を移すか」の基準を持つ。**
    *
    * 同じ断り書きの中で「足したばかりの節はここに出る」（直近の名指し）の
