@@ -1737,8 +1737,11 @@ function renderIndexedCard(part: MemoryPart): string {
   const description = frontmatter.kind === 'parsed' ? frontmatter.description : undefined;
   const { sections } = scanMemorySections(part.content);
 
+  // ⚠️ 見出し（head）は premise と同じ形にする（「indexed」の語だけが違う）。
+  // ここへ premise には無い説明を足すと、それだけで premise より必ず大きく
+  // なる（節が0件のとき、他の行はどちらも同じ長さになるため）。
   const head =
-    `<!-- memory: ${part.slug}.md（indexed・本文は載っていない。節の目次も載らない。` +
+    `<!-- memory: ${part.slug}.md（indexed・本文は載っていない。` +
     `全 ${formatMemoryCharCount(part.content.length)} 文字 / ${formatMemoryCharCount(sections.length)} 節） -->`;
 
   const summaryLine = renderMemoryCardSummaryLine(
@@ -1746,13 +1749,17 @@ function renderIndexedCard(part: MemoryPart): string {
     MEMORY_PROMPT_INDEXED_DESCRIPTION_BUDGET,
   );
 
+  // ⚠️ 節が0件のときは premise と一字一句同じ文にする（節の目次を持たない点は
+  // premise の0節分岐と同じ状態なので、案内も同じでよい——ここで indexed 固有の
+  // 説明を足すと、それだけで premise より大きくなる）。
+  // 節が1件以上のときは、premise の最小1節ぶんの目次（見出し・節id・前置き込み）
+  // より必ず短くなるよう、短い1行に切り詰めてある。
   const sectionsLine =
     sections.length === 0
       ? '節: 1つも無い（見出しが無いか、前書きしか無い）。本文は memory_read で開く。' +
         '**見出しを付けると節id で名指しして開けるようになる**（memory_section_read）。'
-      : `節: 全 ${formatMemoryCharCount(sections.length)} 節。` +
-        '**indexed は節の目次を毎ターンの焼き込みに載せない**（節id はここには出ない）。' +
-        '節を確かめるには memory_outline を呼び、返ってきた節id を memory_section_read に渡して本文を開くこと。';
+      : `節: 全 ${formatMemoryCharCount(sections.length)} 節（目次は載らない。` +
+        'memory_outline → memory_section_read で開く）。';
 
   return [head, summaryLine, sectionsLine].join('\n');
 }
