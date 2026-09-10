@@ -4,12 +4,14 @@
 
 import type { Ctx } from "@mnemora/core";
 import { describeEventStoreConformance } from "../event-store-conformance.js";
+import { describeLexicalStoreConformance } from "../lexical-store-conformance.js";
 import { describeMemoryStoreConformance } from "../memory-store-conformance.js";
 import { describeOutboxStoreConformance } from "../outbox-store-conformance.js";
 import { describeTenantSettingsStoreConformance } from "../tenant-settings-store-conformance.js";
 import { describeVectorStoreConformance } from "../vector-store-conformance.js";
 import { buildNewMemoryFixture, buildProvenanceFixture } from "../test-data.js";
 import { InMemoryEventStore } from "../__fixtures__/in-memory-event-store.js";
+import { InMemoryLexicalStore } from "../__fixtures__/in-memory-lexical-store.js";
 import { InMemoryMemoryStore } from "../__fixtures__/in-memory-memory-store.js";
 import { InMemoryOutboxStore } from "../__fixtures__/in-memory-outbox-store.js";
 import { InMemoryTenantSettingsStore } from "../__fixtures__/in-memory-tenant-settings-store.js";
@@ -129,6 +131,45 @@ describeVectorStoreConformance({
   // 未知の space を渡しても事前登録は要らない（`registerEmbeddingSpace` に相当する
   // ものが無い）。そのため no-op で足りる。
   prepareEmbeddingSpace: () => {},
+});
+
+// ADR 0084 / Issue #106: `InMemoryLexicalStore` は自前の Map を持たず、`memoryStore` の
+// `listByTenant` を通じて Memory を直接読む（`in-memory-lexical-store.ts` のクラス doc）。
+// `prepareMemory` はこの「まさに同じ `InMemoryMemoryStore` インスタンス」に実在の Memory を
+// 作ることで辻褄を合わせる——`prepareMemoryId`（`describeVectorStoreConformance` 向け）と
+// 同じ理由・同じ形。
+let latestMemoryStoreForLexicalFixtures: InMemoryMemoryStore | undefined;
+let lexicalFixtureContentHashCounter = 0;
+
+describeLexicalStoreConformance({
+  name: "in-memory placeholder",
+  createStore: () => {
+    const memoryStore = new InMemoryMemoryStore();
+    latestMemoryStoreForLexicalFixtures = memoryStore;
+    return new InMemoryLexicalStore(memoryStore);
+  },
+  prepareMemory: async (ctx, attrs) => {
+    if (!latestMemoryStoreForLexicalFixtures) {
+      throw new Error("prepareMemory より先に createStore() を呼ぶ必要がある");
+    }
+    lexicalFixtureContentHashCounter += 1;
+    const memory = await latestMemoryStoreForLexicalFixtures.createMemory(
+      ctx,
+      buildNewMemoryFixture({
+        tenantId: ctx.tenantId,
+        content: attrs.content,
+        contentHash: `fixture-hash-lexical-${lexicalFixtureContentHashCounter}`,
+        ...(attrs.status !== undefined ? { status: attrs.status } : {}),
+        ...(attrs.subjectId !== undefined ? { subjectId: attrs.subjectId } : {}),
+        ...(attrs.provenanceKind !== undefined
+          ? { provenance: buildProvenanceFixture(attrs.provenanceKind) }
+          : {}),
+        ...(attrs.occurredAt !== undefined ? { occurredAt: attrs.occurredAt } : {}),
+        ...(attrs.recordedAt !== undefined ? { recordedAt: attrs.recordedAt } : {}),
+      }),
+    );
+    return memory.id;
+  },
 });
 
 // ADR 0047: `memory_events.memory_id → memories(id)` の外部キーを `InMemoryEventStore`

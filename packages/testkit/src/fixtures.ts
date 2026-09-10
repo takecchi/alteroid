@@ -23,6 +23,7 @@
 
 export { InMemoryMemoryStore } from "./__fixtures__/in-memory-memory-store.js";
 export { InMemoryVectorStore } from "./__fixtures__/in-memory-vector-store.js";
+export { InMemoryLexicalStore } from "./__fixtures__/in-memory-lexical-store.js";
 export { InMemoryEventStore } from "./__fixtures__/in-memory-event-store.js";
 export { InMemoryOutboxStore } from "./__fixtures__/in-memory-outbox-store.js";
 export { InMemoryTenantSettingsStore } from "./__fixtures__/in-memory-tenant-settings-store.js";

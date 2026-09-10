@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import type { Ctx } from "@mnemora/core";
 import {
   describeEventStoreConformance,
+  describeLexicalStoreConformance,
   describeMemoryStoreConformance,
   describeOutboxStoreConformance,
   describeTenantSettingsStoreConformance,
@@ -11,6 +12,7 @@ import {
 import { buildNewMemoryFixture, buildProvenanceFixture } from "@mnemora/testkit";
 import { PostgresMemoryStore } from "../memory-store.js";
 import { PostgresVectorStore } from "../vector-store.js";
+import { PostgresLexicalStore } from "../lexical-store.js";
 import { PostgresEventStore } from "../event-store.js";
 import { PostgresOutboxStore } from "../outbox-store.js";
 import { PostgresTenantSettingsStore } from "../tenant-settings-store.js";
@@ -120,6 +122,37 @@ describeVectorStoreConformance({
   prepareEmbeddingSpace: async (space) => {
     const { pool } = await getTestClient();
     await registerEmbeddingSpace(pool, space);
+  },
+});
+
+describeLexicalStoreConformance({
+  name: "postgres",
+  createStore: async () => {
+    await resetTestDatabase();
+    const { db } = await getTestClient();
+    return new PostgresLexicalStore(db);
+  },
+  // `LexicalStore` は upsert/delete を持たない（`interfaces/lexical-store.ts` のクラス doc）
+  // ——`memories.content` の上に張った式索引の上で `search` するだけなので、ここでの
+  // 書き込み口は `PostgresMemoryStore.createMemory` の一択（`prepareMemory` の doc 参照）。
+  prepareMemory: async (ctx: Ctx, attrs) => {
+    const { db } = await getTestClient();
+    const store = new PostgresMemoryStore(db);
+    const memory = await store.createMemory(
+      ctx,
+      buildNewMemoryFixture({
+        tenantId: ctx.tenantId,
+        content: attrs.content,
+        ...(attrs.status !== undefined ? { status: attrs.status } : {}),
+        ...(attrs.subjectId !== undefined ? { subjectId: attrs.subjectId } : {}),
+        ...(attrs.provenanceKind !== undefined
+          ? { provenance: buildProvenanceFixture(attrs.provenanceKind) }
+          : {}),
+        ...(attrs.occurredAt !== undefined ? { occurredAt: attrs.occurredAt } : {}),
+        ...(attrs.recordedAt !== undefined ? { recordedAt: attrs.recordedAt } : {}),
+      }),
+    );
+    return memory.id;
   },
 });
 

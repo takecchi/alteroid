@@ -4,14 +4,19 @@ import type { EmbeddingProvider } from "./interfaces/embedding-provider.js";
 import type { MemoryStore } from "./interfaces/memory-store.js";
 import type { TokenCounter } from "./interfaces/token-counter.js";
 import type { VectorStore, VectorHit } from "./interfaces/vector-store.js";
+import type { LexicalStore, LexicalHit } from "./interfaces/lexical-store.js";
 import type { MemoryId } from "./ids.js";
 import { NOT_INDEXED_REASONS } from "./recall.js";
 import type { Memory } from "./memory.js";
 import {
+  ANN_TRUNCATION_UNDECIDABLE_LEXICAL_ACTIVE,
   DEFAULT_DIGEST_BAND_LIMIT,
   DEFAULT_OVER_FETCH_FACTOR,
+  DEFAULT_RECALL_CHANNELS,
   DEFAULT_RECALL_LIMIT,
   DEFAULT_SCORE_THRESHOLD,
+  LEXICAL_MATCH_VALUE,
+  LEXICAL_STORE_UNAVAILABLE_ERROR_PREFIX,
   DIGEST_BAND_MAX_CHARS,
   DIGEST_BAND_MAX_ENTRY_CHARS,
   RecallQuerySchema,
@@ -40,16 +45,30 @@ import { decideAnnTruncation } from "./ann-truncation.js";
  * この関数の中の各ステップが、その契約を守る単位である——`omitted` に何かを push したら、
  * それ以降の段はその判断を覆さない。
  *
- * Phase 1 の候補生成（段1）は **ANN 経由の1チャンネルのみ**を実装する（本 PR の決定。
- * PR 本文参照）。docs/recall.md §2 が触れる「タグ一致・直近取得」の並行チャンネルは
- * roadmap.md 段階4の完了条件（「二段検索（段1: 索引が効く形のフィルタ + ANN、
- * 段2: over-fetch した候補への再スコア）」）には明記されておらず、Phase 1 の範囲外とする。
- * タグはスコアリング（段2の加点要素、`defaultScoringStrategy`）としてのみ参加する。
+ * 候補生成（段1）は **`RecallQuery.channels` が指すチャンネルを並行して走らせる**
+ * （[ADR 0084](../../../docs/decisions/0084-lexical-recall-channel.md)、Issue #106）。
+ * **走らせられるチャンネルの唯一の出所は `RECALL_CHANNELS`（`recall.ts`）である**——
+ * ここに散文で数え直さない（ADR 0082 が `TICK_SUPPORTED_JOB_KINDS` について引いた線）。
+ *
+ * **⚠ 既定は `DEFAULT_RECALL_CHANNELS`（= ANN 1本）であり、ADR 0084 以前と同じである。**
+ * `channels` を渡さない呼び出しは、候補も順位も `explain` も1バイト変わらない。
+ *
+ * **「タグ一致・直近取得」は、いまも実装していない。**docs/recall.md §2 が一般形として
+ * 触れているが、ADR 0084 が足したのは語彙チャンネル1本だけである。タグはこれまで通り
+ * スコアリング（段2の加点要素、`defaultScoringStrategy`）としてのみ参加する。
  */
 
 export interface RecallRuntimeDeps {
   memoryStore: MemoryStore;
   vectorStore: VectorStore;
+  /**
+   * 語彙チャンネル（ADR 0084）。**省略可能**——語彙チャンネルを無効にしたまま
+   * mnemora は成立する（北極星の問い2）。
+   *
+   * **🔴 省略したまま `channels` に `"lexical"` を渡すと `recall()` は投げる。**
+   * 黙って0件にしない理由は `RecallQuery.channels` の doc に書いてある。
+   */
+  lexicalStore?: LexicalStore;
   embeddingProvider: EmbeddingProvider;
   clock: Clock;
   tokenCounter: TokenCounter;
@@ -57,7 +76,16 @@ export interface RecallRuntimeDeps {
 
 type ScoredCandidate = {
   memory: Memory;
-  retrievedVia: "ann" | "mandatory_companion";
+  /**
+   * **この候補を候補集合へ入れた最初のチャンネル。**
+   *
+   * **⚠ 「このチャンネルだけが見つけた」ではない。**ANN と語彙の両方が同じ記憶を
+   * 引き当てた場合、ここは `"ann"` になる（ANN の窓に入っていたため）。
+   * **語彙チャンネルも当てたかどうかは `score.lexicalMatch` の有無が名乗る**——
+   * 2つを併せて読むと、どのチャンネルの集合に入っていたかが一意に決まる
+   * （ADR 0084 §6）。単一の値でチャンネルの集合を表そうとしないこと。
+   */
+  retrievedVia: "ann" | "lexical" | "mandatory_companion";
   companionOf?: MemoryId;
   score: ScoreBreakdown;
 };
@@ -228,12 +256,52 @@ export async function runRecall(
   const overFetchFactor = validatedQuery.overFetchFactor ?? DEFAULT_OVER_FETCH_FACTOR;
   const kPrime = Math.max(1, Math.round(limit * overFetchFactor));
 
+  // 走らせるチャンネル（ADR 0084）。唯一の出所は RECALL_CHANNELS（recall.ts）であり、
+  // ここで値を数え直さない——増えたときに黙って嘘になるのは散文のほうだからである。
+  const channels = validatedQuery.channels ?? DEFAULT_RECALL_CHANNELS;
+  const wantsAnn = channels.includes("ann");
+  const wantsLexical = channels.includes("lexical");
+
+  // 🔴 配線されていない語彙チャンネルを明示的に要求されたら、ここで投げる（ADR 0084 §4）。
+  // **黙って0件を返さない。**理由は RecallQuery.channels の doc に書いてある——
+  // これは「探したが無かった」ではなく「探せる状態になっていない」であり、
+  // 何度呼んでも成功しない。degrade させると、呼び出し側は「使っているつもりで
+  // 一度も使えていない」ことに気づけない。
+  const lexicalStore = deps.lexicalStore;
+  if (wantsLexical && lexicalStore === undefined) {
+    throw new Error(
+      LEXICAL_STORE_UNAVAILABLE_ERROR_PREFIX +
+        "pass RuntimeDeps.lexicalStore, or drop 'lexical' from RecallQuery.channels",
+    );
+  }
+
   const embeddableText = validatedQuery.text?.trim();
   let queryVector = validatedQuery.vector;
   let candidateGenerationExecuted = false;
   let annHits: VectorHit[] = [];
+  let lexicalHits: LexicalHit[] = [];
+  let lexicalExecuted = false;
 
-  if (queryVector === undefined) {
+  // 「クエリに引ける中身が無い」は**段の性質であってチャンネルの性質ではない**ので、
+  // チャンネルが2本走っても omission は1つしか積まない（ADR 0008: 同じ理由を
+  // 2つの顔で返さない）。どのチャンネルが実行されなかったかは stages が名乗る。
+  const pushEmptyQuerySkipOnce = (): void => {
+    const already = omitted.some(
+      (o) =>
+        o.kind === "stage_skipped" &&
+        o.stage === "candidate_generation" &&
+        o.reason === "empty_query_content",
+    );
+    if (!already) {
+      omitted.push({
+        kind: "stage_skipped",
+        stage: "candidate_generation",
+        reason: "empty_query_content",
+      });
+    }
+  };
+
+  if (wantsAnn && queryVector === undefined) {
     if (embeddableText) {
       try {
         const [vector] = await deps.embeddingProvider.embed(ctx, [embeddableText]);
@@ -246,15 +314,11 @@ export async function runRecall(
         });
       }
     } else {
-      omitted.push({
-        kind: "stage_skipped",
-        stage: "candidate_generation",
-        reason: "empty_query_content",
-      });
+      pushEmptyQuerySkipOnce();
     }
   }
 
-  if (queryVector !== undefined) {
+  if (wantsAnn && queryVector !== undefined) {
     annHits = await deps.vectorStore.search(ctx, deps.embeddingProvider.space, queryVector, {
       limit: kPrime,
       filter: {
@@ -278,11 +342,49 @@ export async function runRecall(
     candidateGenerationExecuted = true;
   }
 
-  stages.push({
-    stage: "candidate_generation",
-    executed: candidateGenerationExecuted,
-    detail: { channel: "ann", kPrime, hits: annHits.length },
-  });
+  // **チャンネル1本につき trace を1つ積む**（ADR 0084 §6）。
+  // ⟹ 既定（ANN 1本）のとき、この配列は ADR 0084 以前と1要素も1バイトも変わらない。
+  // 複数チャンネルを走らせたときだけ要素が増え、各要素の detail.channel が出所を名乗る。
+  if (wantsAnn) {
+    stages.push({
+      stage: "candidate_generation",
+      executed: candidateGenerationExecuted,
+      detail: { channel: "ann", kPrime, hits: annHits.length },
+    });
+  }
+
+  // -------------------------------------------------------------------
+  // 段1・語彙チャンネル（ADR 0084、Issue #106）
+  // -------------------------------------------------------------------
+  // **埋め込みを作らない。**語彙チャンネルはクエリの**文字列そのもの**を引く経路であり、
+  // ここが「LLM を呼ばずに済ませられないか」（北極星の問い5）に素直に答える部分である。
+  // ⟹ channels が ["lexical"] だけなら、この recall は埋め込み provider を一度も呼ばない。
+  // `lexicalStore !== undefined` は上の throw が保証している。ここで改めて見ているのは
+  // 型の narrowing のためだけであり、条件が増えたわけではない。
+  if (wantsLexical && lexicalStore !== undefined) {
+    if (embeddableText) {
+      lexicalHits = await lexicalStore.search(ctx, embeddableText, {
+        limit: kPrime,
+        filter: {
+          tenantId: ctx.tenantId,
+          status: ["active", "contested"],
+          subjectId: scope.subjectId,
+          excludeProvenanceKinds: validatedQuery.excludeProvenanceKinds,
+          occurredAfter: scope.occurredAfter,
+          occurredBefore: scope.occurredBefore,
+        },
+      });
+      lexicalExecuted = true;
+    } else {
+      // vector だけを渡された場合もここへ来る——**ベクタは語彙チャンネルに渡せない。**
+      pushEmptyQuerySkipOnce();
+    }
+    stages.push({
+      stage: "candidate_generation",
+      executed: lexicalExecuted,
+      detail: { channel: "lexical", kPrime, hits: lexicalHits.length },
+    });
+  }
 
   // over-fetch の打ち切り（docs/recall.md §3「正直に書くべき限界」）: LIMIT に達したなら
   // その先に何件あるかは原理的に数えられない。
@@ -300,16 +402,41 @@ export async function runRecall(
   // （tenant と同格。recall.ts の RecallScope doc 参照）、period はスコープを定義する
   // フィルタであり、その件数は段5の集約から報告する（ここで個別に数え直さない。
   // ADR 0011 と同じ理由——複数の経路から同じ意味の件数を出すと食い違いうる）。
-  const candidateIds = annHits.map((h) => h.memoryId);
+  // チャンネルの候補を和集合にする（ADR 0084 §6）。順序は「ANN が返した順 →
+  // 語彙だけが返した順」。**⟹ 語彙チャンネルが走っていないとき、この配列は
+  // `annHits.map(h => h.memoryId)` と完全に一致する**——既定の挙動が変わらないことの、
+  // コードの側の根拠である。
+  const rawById = new Map<MemoryId, { distance?: number; lexicalRank?: number }>();
+  const candidateIds: MemoryId[] = [];
+  for (const hit of annHits) {
+    const found = rawById.get(hit.memoryId);
+    if (found === undefined) {
+      rawById.set(hit.memoryId, { distance: hit.distance });
+      candidateIds.push(hit.memoryId);
+    } else if (found.distance === undefined) {
+      found.distance = hit.distance;
+    }
+  }
+  for (const hit of lexicalHits) {
+    const found = rawById.get(hit.memoryId);
+    if (found === undefined) {
+      rawById.set(hit.memoryId, { lexicalRank: hit.rank });
+      candidateIds.push(hit.memoryId);
+    } else if (found.lexicalRank === undefined) {
+      found.lexicalRank = hit.rank;
+    }
+  }
+
   const fetchedMemories =
     candidateIds.length > 0 ? await deps.memoryStore.getMany(ctx, candidateIds) : [];
   const memoriesById = new Map(fetchedMemories.map((m) => [m.id, m]));
-  const distanceById = new Map(annHits.map((h) => [h.memoryId, h.distance]));
 
   const excludeKinds = new Set(validatedQuery.excludeProvenanceKinds ?? []);
-  const filteredCandidates: { memory: Memory; distance: number }[] = [];
-  for (const hit of annHits) {
-    const memory = memoriesById.get(hit.memoryId);
+  const filteredCandidates: { memory: Memory; distance?: number; lexicalRank?: number }[] = [];
+  for (const memoryId of candidateIds) {
+    const raw = rawById.get(memoryId);
+    if (raw === undefined) continue; // 起こらない（candidateIds は rawById から作った）。
+    const memory = memoriesById.get(memoryId);
     if (!memory) continue; // getMany は存在しない/クロステナントの id を静かに落とす契約。
     // subjectId・excludeProvenanceKinds・period（occurredAfter/occurredBefore）は
     // 段1の filter にも渡している（上）が、ここでも改めて見る。二重に見えるが意図的
@@ -332,18 +459,24 @@ export async function runRecall(
     if (scope.occurredAfter && effectiveTime < scope.occurredAfter) continue;
     if (scope.occurredBefore && effectiveTime > scope.occurredBefore) continue;
     if (excludeKinds.has(memory.provenance.kind)) continue;
-    filteredCandidates.push({ memory, distance: distanceById.get(hit.memoryId) ?? hit.distance });
+    filteredCandidates.push({ memory, distance: raw.distance, lexicalRank: raw.lexicalRank });
   }
 
   // -------------------------------------------------------------------
   // 段2: 再スコア（索引不要。docs/recall.md §2 段2・§7）
   // -------------------------------------------------------------------
   const queryTags = validatedQuery.tags ?? [];
-  const scored: ScoredCandidate[] = filteredCandidates.map(({ memory, distance }) => {
-    const similarity = 1 - distance;
+  const scored: ScoredCandidate[] = filteredCandidates.map(({ memory, distance, lexicalRank }) => {
+    // ADR 0038: distance はコサイン距離。ANN が当てていない候補には距離が無い。
+    const similarity = distance === undefined ? undefined : 1 - distance;
+    // 語彙一致は二値である（recall.ts の ScoreBreakdown.lexicalMatch の doc）。
+    // **⚠ adapter が返した rank をここへ流さない**——尺度が adapter ごとに違い、
+    // コサイン類似度と比較可能な量ではない（ADR 0084 §5）。
+    const lexicalMatch = lexicalRank === undefined ? undefined : LEXICAL_MATCH_VALUE;
     const score = defaultScoringStrategy({
       now,
       similarity,
+      lexicalMatch,
       tags: memory.tags,
       queryTags,
       occurredAt: memory.occurredAt,
@@ -352,7 +485,11 @@ export async function runRecall(
       strength: memory.strength,
       halfLifeHours: memory.halfLifeHours,
     });
-    return { memory, retrievedVia: "ann" as const, score };
+    return {
+      memory,
+      retrievedVia: distance === undefined ? ("lexical" as const) : ("ann" as const),
+      score,
+    };
   });
   scored.sort((a, b) => b.score.total - a.score.total);
 
@@ -398,7 +535,18 @@ export async function runRecall(
   // ので、そういう歯は `toContainEqual` 等へ直した（緩めたのではなく、順序に依存していた
   // ことのほうが偶然だった）。
   // -------------------------------------------------------------------
-  if (annWindowFilled) {
+  if (annWindowFilled && lexicalExecuted) {
+    // 🔴 語彙チャンネルが走った run では、ADR 0069 の上界が前提として成り立たない
+    // （ANN_TRUNCATION_UNDECIDABLE_LEXICAL_ACTIVE の doc）。**判定を試みずに、
+    // 判定不能だと名乗る。**試みて `provably_safe` が返ると、成り立っていない前提の上で
+    // 沈黙することになる——ADR 0069 が塞いだ穴を、こちらから開け直すことになる。
+    omitted.push({
+      kind: "ann_truncated",
+      countKind: "unknown",
+      certainty: "undecidable",
+      undecidableReason: ANN_TRUNCATION_UNDECIDABLE_LEXICAL_ACTIVE,
+    });
+  } else if (annWindowFilled) {
     const lastAnnHit = annHits[annHits.length - 1];
     const verdict = decideAnnTruncation({
       strategy: defaultScoringStrategy,
@@ -429,6 +577,12 @@ export async function runRecall(
         undecidableReason: verdict.reason,
       });
     }
+  }
+
+  // 語彙チャンネルの打ち切り（ADR 0084 §7）。**ANN と同じ札に潰さない**——
+  // `ann_truncated` は損失可能性の判定まで作り込んだ札であり、こちらにその機構は無い。
+  if (lexicalExecuted && kPrime > 0 && lexicalHits.length >= kPrime) {
+    omitted.push({ kind: "lexical_truncated", countKind: "unknown" });
   }
 
   stages.push({

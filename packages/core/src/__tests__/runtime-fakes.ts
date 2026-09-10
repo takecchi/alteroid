@@ -10,6 +10,7 @@ import type {
   TenantSettingsStore,
 } from "../interfaces/tenant-settings-store.js";
 import type { VectorStore, VectorFilter, VectorHit } from "../interfaces/vector-store.js";
+import type { LexicalStore, LexicalFilter, LexicalHit } from "../interfaces/lexical-store.js";
 import type { NotIndexedReason } from "../recall.js";
 import type { MemoryId, ObservationId, RecallId } from "../ids.js";
 import type { EmbeddingStatus, Memory, MemoryStatus, NewMemory } from "../memory.js";
@@ -807,6 +808,88 @@ export class FakeVectorStore implements VectorStore {
   }
 }
 
+/**
+ * `FakeLexicalStore` は `packages/core` 自身のテスト用であり `@mnemora/testkit` に依存しない
+ * （このファイル冒頭のコメント参照）。`packages/testkit` の `InMemoryLexicalStore` とは
+ * **意図的に独立している**——本 PR の時点で `InMemoryLexicalStore` はまだ書かれている最中
+ * （Issue #106 の歯だけを先に置く作業。他の作業者が同時に `packages/testkit` を触っている）
+ * ため、それを import しない。
+ *
+ * **契約は `interfaces/lexical-store.ts` の `LexicalStore` doc に従う**:
+ * - `query` の**語彙をすべて含む**候補だけを返す（`ScoreBreakdown.lexicalMatch` の doc —
+ *   語彙一致は二値である、という前提そのもの）。全件を無条件で返す実装は、この契約と
+ *   `recall-channels.test.ts` 歯①の偽陽性点検（無関係な記憶が混ざっても返らないこと）で落ちる。
+ * - `filter` の各フィールドを実際に適用する（`FakeVectorStore.search` と同じ多層防御の作法）。
+ * - 返り値は `rank` の降順。`rank` はここでは「一致したトークンの出現回数の総和」という
+ *   決定的で単調な値を使う——本物の `ts_rank_cd` を模す必要は無い。`LexicalHit.rank` の doc の
+ *   通り、この値は `ScoreBreakdown` には一切入らない（`recall-runtime.ts` が
+ *   `LEXICAL_MATCH_VALUE` に丸める）。
+ *
+ * `calls` / `shouldThrow` は `FakeEmbeddingProvider.shouldFail` と同じ形の診断・注入口——
+ * 「一度も呼ばれていないこと」（既定チャンネルが語彙 store に触れない）と
+ * 「配線されているが落ちる adapter」の両方を、歯から直接組み立てられるようにするため。
+ */
+export class FakeLexicalStore implements LexicalStore {
+  /** `search` が呼ばれるたびに積む診断ログ。「一度も呼ばれていないこと」を歯が直接検査できる。 */
+  calls: { ctx: Ctx; query: string; opts: { limit: number; filter: LexicalFilter } }[] = [];
+  /** true にすると `search` は例外を投げる（配線されているが壊れている adapter を模す）。 */
+  shouldThrow = false;
+
+  constructor(private readonly backing: FakeBackingStore) {}
+
+  async search(
+    ctx: Ctx,
+    query: string,
+    opts: { limit: number; filter: LexicalFilter },
+  ): Promise<LexicalHit[]> {
+    this.calls.push({ ctx, query, opts });
+    if (this.shouldThrow) {
+      throw new Error("FakeLexicalStore: simulated search failure");
+    }
+    const tokens = query.split(/\s+/).filter((t) => t.length > 0);
+    const hits: LexicalHit[] = [];
+    for (const memory of this.backing.memories.values()) {
+      if (memory.tenantId !== opts.filter.tenantId || memory.tenantId !== ctx.tenantId) continue;
+      if (opts.filter.status !== undefined && !opts.filter.status.includes(memory.status)) {
+        continue;
+      }
+      if (opts.filter.subjectId !== undefined && memory.subjectId !== opts.filter.subjectId) {
+        continue;
+      }
+      if (
+        opts.filter.excludeProvenanceKinds !== undefined &&
+        opts.filter.excludeProvenanceKinds.includes(memory.provenance.kind)
+      ) {
+        continue;
+      }
+      const effectiveTime = memory.occurredAt ?? memory.recordedAt;
+      if (
+        opts.filter.occurredAfter !== undefined &&
+        !(effectiveTime >= opts.filter.occurredAfter)
+      ) {
+        continue;
+      }
+      if (
+        opts.filter.occurredBefore !== undefined &&
+        !(effectiveTime <= opts.filter.occurredBefore)
+      ) {
+        continue;
+      }
+      // 🔴 契約: クエリの語彙を**すべて**含む候補しか返さない（空クエリは何も返さない）。
+      if (tokens.length === 0) continue;
+      const matchesAll = tokens.every((t) => memory.content.includes(t));
+      if (!matchesAll) continue;
+
+      const rank = tokens.reduce((sum, t) => sum + (memory.content.split(t).length - 1), 0);
+      hits.push({ memoryId: memory.id, rank });
+    }
+    // rank 降順。同率は memoryId 昇順で決定的にする（`FakeVectorStore` の distance 昇順ソートと
+    // 同じ「adapter は決定的な順序で返す」という作法）。
+    hits.sort((a, b) => b.rank - a.rank || (a.memoryId < b.memoryId ? -1 : 1));
+    return hits.slice(0, opts.limit);
+  }
+}
+
 export class FakeEventStore implements EventStore {
   /**
    * ADR 0031: `backing.events` を共有する（`FakeMemoryStore.updateStatusWithEvent` が
@@ -901,6 +984,12 @@ export function createFakeRuntimeStores(): {
   memoryStore: FakeMemoryStore;
   outboxStore: FakeOutboxStore;
   vectorStore: FakeVectorStore;
+  /**
+   * 語彙チャンネル（ADR 0084、Issue #106）。**常に生成する**が、`RuntimeDeps.lexicalStore` へ
+   * 配線するかどうかは呼び出し側（各テストの `createRuntime` 呼び出し）の裁量——
+   * 配線しない歯（`recall-channels.test.ts` 歯④）は、この値を単に渡さないだけでよい。
+   */
+  lexicalStore: FakeLexicalStore;
   eventStore: FakeEventStore;
   tenantSettingsStore: FakeTenantSettingsStore;
   embeddingProvider: FakeEmbeddingProvider;
@@ -910,6 +999,7 @@ export function createFakeRuntimeStores(): {
     memoryStore: new FakeMemoryStore(backing),
     outboxStore: new FakeOutboxStore(backing),
     vectorStore: new FakeVectorStore(backing),
+    lexicalStore: new FakeLexicalStore(backing),
     eventStore: new FakeEventStore(backing),
     tenantSettingsStore: new FakeTenantSettingsStore(),
     embeddingProvider: new FakeEmbeddingProvider(),

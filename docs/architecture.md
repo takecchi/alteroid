@@ -69,7 +69,8 @@ observe
 ```
 recall
   → EmbeddingProvider.embed(query)
-  → VectorStore.search()      ── 段1: ANN + 索引が効くフィルタのみ（tenant/subject/status/decay_floor_at）
+  → VectorStore.search()      ── 段1・ann チャンネル: ANN + 索引が効くフィルタのみ（tenant/subject/status/decay_floor_at）
+  → LexicalStore.search()     ── 段1・lexical チャンネル: 全文索引 + 同じフィルタ（既定では走らない。ADR 0084）
   → ScoringStrategy(...)      ── 段2: 純関数で over-fetch 分を再スコア
   → MemoryStore                ── contested の対向を mandatory companion retrieval
   → recalls / recall_usages を記録（後述 §3.5・[docs/recall.md](./recall.md)）
@@ -511,6 +512,37 @@ interface EmbeddingSpaceId {
   [ADR 0065](./decisions/0065-vector-store-space-separation-conformance.md) で決定され、適合テスト
   （`packages/testkit/src/vector-store-conformance.ts` の「space が違う vector は同一 tenant の
   search でも混同されない」）で固定されている。
+
+### 5.2.1 LexicalStore — Phase 1（[ADR 0084](./decisions/0084-lexical-recall-channel.md) で追加、Issue #106）
+
+```ts
+interface LexicalStore {
+  search(
+    ctx: Ctx,
+    query: string,
+    opts: { limit: number; filter: LexicalFilter }
+  ): Promise<LexicalHit[]>;
+}
+```
+
+**⚠ 節番号を `5.2.1` にしてあるのは、以降の節（5.3〜5.13）の番号を動かさないためである。**
+番号を繰り下げると、この interface と無関係な節への参照が repo 中で一斉に古くなる。
+
+契約:
+- **`MemoryStore` が真実の源であり、語彙索引は再構築可能な派生索引である**（`VectorStore` と同じ非対称）。
+- **返り値は `LexicalHit.rank` の降順**であり、`limit` はその上位から切る。
+  **⚠ `rank` はスコアに入らない**——尺度が adapter ごとに違い、コサイン類似度と比較可能な量ではない
+  （ADR 0084 §5）。スコアに入るのは `ScoreBreakdown.lexicalMatch`（二値）である。
+- `filter` の各フィールドを adapter が実際に適用する（`VectorFilter` と同じ契約、ADR 0034）。
+  適合テストは `packages/testkit/src/lexical-store-conformance.ts`。
+- **`query` は正規化前の生の文字列であり、どう分かち書きするかは adapter の責務である。**
+  core は「語彙的に引く」としか言っていない。
+- **🔴 書き込み口（`upsert`/`delete`）を持たない。**`VectorStore` との最大の違いである。
+  Phase 1 の postgres 実装は `memories.content` の上の式索引なので、索引は本体の書き込みに自動で追随する。
+  **⟹ `memories` の外に索引を持つ実装は、この interface だけでは同期できない**（ADR 0084 §8 の負債）。
+- **省略可能な依存である**（`RuntimeDeps.lexicalStore?`）。無くても mnemora は成立する。
+  **ただし `RecallQuery.channels` に `"lexical"` を明示したのに配線が無ければ `recall()` は投げる**
+  ——黙って0件を返すと「探したが無かった」と「探していない」が同じ顔になる（ADR 0084 §4.2）。
 
 ### 5.3 RelationStore — Phase 2（`status`/`superseded_by_id` 列のみ Phase 1）
 

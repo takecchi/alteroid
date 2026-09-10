@@ -173,6 +173,9 @@ function formatOmittedSummary(omitted: Omission[]): string {
           return "ann_truncated";
         case "ann_unreached":
           return "ann_unreached";
+        // ADR 0084。件数を持たない札なので、ann_truncated / ann_unreached と同じ形で名前だけ出す。
+        case "lexical_truncated":
+          return "lexical_truncated";
         case "unit_assembly_dropped":
           return `unit_assembly_dropped:${o.count}`;
         case "score_not_comparable":

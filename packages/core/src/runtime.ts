@@ -21,6 +21,7 @@ import type { OutboxJobKind } from "./interfaces/scheduler.js";
 import type { TenantSettingsStore } from "./interfaces/tenant-settings-store.js";
 import type { TokenCounter } from "./interfaces/token-counter.js";
 import type { VectorStore } from "./interfaces/vector-store.js";
+import type { LexicalStore } from "./interfaces/lexical-store.js";
 import type { MemoryId, ObservationId } from "./ids.js";
 import type {
   ObserveDocumentInput,
@@ -107,6 +108,17 @@ export interface RuntimeDeps {
   memoryStore: MemoryStore;
   outboxStore: OutboxStore;
   vectorStore: VectorStore;
+  /**
+   * 語彙候補生成チャンネル（[ADR 0084](../../../docs/decisions/0084-lexical-recall-channel.md)、Issue #106）。
+   *
+   * **省略可能である。**省略しても mnemora は成立する（北極星の問い2）——
+   * `recall()` の既定は ANN 1本のままで、何も変わらない。
+   *
+   * **🔴 省略したまま `RecallQuery.channels` に `"lexical"` を渡すと `recall()` は投げる**
+   * （`recall.ts` の `LEXICAL_STORE_UNAVAILABLE_ERROR_PREFIX`）。**黙って0件を返さない**——
+   * 理由は `RecallQuery.channels` の doc に書いてある。
+   */
+  lexicalStore?: LexicalStore;
   eventStore: EventStore;
   tenantSettingsStore: TenantSettingsStore;
   llmProvider: LLMProvider;
@@ -801,6 +813,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     return runRecall(ctx, query, {
       memoryStore: deps.memoryStore,
       vectorStore: deps.vectorStore,
+      lexicalStore: deps.lexicalStore,
       embeddingProvider: deps.embeddingProvider,
       clock,
       tokenCounter,

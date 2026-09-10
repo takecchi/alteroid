@@ -260,6 +260,29 @@ export class InMemoryMemoryStore implements MemoryStore {
   }
 
   /**
+   * ADR 0084 / Issue #106: `InMemoryLexicalStore`（`in-memory-lexical-store.ts`）がテナント内の
+   * 全 Memory を舐めて `content` の語彙一致を見るための反復子。
+   *
+   * `LexicalStore` は `upsert`/`delete` を持たない（`interfaces/lexical-store.ts` のクラス doc）
+   * ——postgres 実装は `memories.content` の上に式索引を張るので、索引は本体の書き込みに
+   * 自動で追随する。`InMemoryVectorStore` が `entries`（自前の Map）を舐めて `this.memoryStore.get`
+   * で属性だけを引くのに対し、`InMemoryLexicalStore` には自前の Map が無い——**この store の
+   * `memories` そのものが索引**であり、その非対称をここで反復子として表す。
+   *
+   * `get`/`getMany` と同じく、返すのは `Map` の行そのもの（複製しない）。呼び出し側
+   * （`InMemoryLexicalStore.search`）はここから読むだけで書き換えないことを前提にしている。
+   */
+  listByTenant(ctx: Ctx): Memory[] {
+    const results: Memory[] = [];
+    for (const memory of this.memories.values()) {
+      if (memory.tenantId === ctx.tenantId) {
+        results.push(memory);
+      }
+    }
+    return results;
+  }
+
+  /**
    * ADR 0028: `reextract` が既存 Memory のうち今回作られなかったものを判定するための列挙
    * （**SELECT のみ**）。`extractorVersion: null` は `extractor_version IS NULL`
    * （postgres 実装の `IS NOT DISTINCT FROM` と同じ規約）を意味する。

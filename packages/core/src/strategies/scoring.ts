@@ -21,11 +21,31 @@ import type { ScoreBreakdown } from "../recall.js";
  *   ない、という recall.md §2 の位置づけ——段1のフィルタではなく段2の再スコアである
  *   ことに合わせた）。
  * - `similarity` は ANN 経由でない候補では存在しないため、中立の 1 として扱う。
+ * - `lexicalMatch` は**語彙チャンネルが引き当てた候補にのみ**在る
+ *   （[ADR 0084](../../../../docs/decisions/0084-lexical-recall-channel.md)、Issue #106）。
+ *   **⚠ 第6の項として掛けるのではなく、`similarity` と同じ枠（`affinity`）を争う。**
+ *   掛ける形にすると、語彙一致が無い ANN 候補の `total` が 0 に落ちる（あるいは
+ *   中立の 1 を掛けるだけの死んだ項になる）。**どちらも「掛ける」を選んだ時点で決まってしまう。**
+ *   ⟹ `affinity = max(similarity, lexicalMatch)` とし、
+ *   **「この候補がクエリにどれだけ近いか」を、それを見つけたチャンネルのうち最も強いものが名乗る**形にした。
+ *
+ * **🔴 `lexicalMatch` が `undefined` のとき、式は ADR 0084 以前と1演算も変わらない。**
+ * `affinity` は `similarity ?? 1` にそのまま退化する——`Math.max` を通さないのは意図的で、
+ * **`similarity` は負になりうる**（コサイン距離は最大 2 まで出るので `1 - distance` は −1 まで下がる。
+ * `interfaces/vector-store.ts` の `VectorHit.distance` の doc）。
+ * `Math.max(similarity, 0)` のような形にすると、**負の類似度の候補の `total` が
+ * 静かに変わる。**⟹ 既定の挙動を1バイトも変えないために、分岐で書いてある。
  */
 export interface ScoringInput {
   now: Date;
   /** ANN 経由の場合のみ渡す。0〜1 の類似度（距離から変換済み）。 */
   similarity?: number;
+  /**
+   * 語彙チャンネルが引き当てた場合のみ渡す（ADR 0084）。
+   * **現在の実装では常に 1 である**——理由と、それが順位に何を意味するかは
+   * `ScoreBreakdown.lexicalMatch`（`recall.ts`）の doc に書いてある。
+   */
+  lexicalMatch?: number;
   tags: string[];
   queryTags: string[];
   occurredAt?: Date | null;
@@ -177,7 +197,18 @@ const scoreWithDefaultStrategy: ScoringStrategy = (input) => {
 
   const tagMatch = computeTagMatch(input.tags, input.queryTags);
   const similarity = input.similarity;
-  const total = (similarity ?? 1) * decay * tagMatch * freshness * input.strength;
+  const lexicalMatch = input.lexicalMatch;
+
+  // affinity — 「この候補はクエリにどれだけ近いか」を1つの数にしたもの（ADR 0084 §5）。
+  // lexicalMatch が無いときは similarity ?? 1 にそのまま退化する（本ファイル冒頭の doc）。
+  const affinity =
+    lexicalMatch === undefined
+      ? (similarity ?? 1)
+      : similarity === undefined
+        ? lexicalMatch
+        : Math.max(similarity, lexicalMatch);
+
+  const total = affinity * decay * tagMatch * freshness * input.strength;
 
   const score: ScoreBreakdown = {
     decay,
@@ -188,6 +219,9 @@ const scoreWithDefaultStrategy: ScoringStrategy = (input) => {
   };
   if (similarity !== undefined) {
     score.similarity = similarity;
+  }
+  if (lexicalMatch !== undefined) {
+    score.lexicalMatch = lexicalMatch;
   }
   return score;
 };
@@ -212,6 +246,17 @@ const scoreWithDefaultStrategy: ScoringStrategy = (input) => {
  * **⚠ `tagMatch` の上界に候補側の `tags` を使わない。**使えば上界は縮むが、
  * それには「窓の外の候補の tags」を知る必要があり、**窓の外は見えないというのが前提そのもの**である。
  * クエリタグ数だけで決まる形だからこそ、見えない候補にも当てられる。
+ *
+ * **🔴 `lexicalMatch` はこの上界に入らない。入れてはならない**（ADR 0084 §7）。
+ * この上界は **`total` から similarity の枠を除いた積**の上界であり、
+ * `lexicalMatch` は `affinity` としてその枠**の中**に居る（本ファイル冒頭の doc）。
+ * ⟹ 4項の積という形も値も、ADR 0084 で変わっていない。
+ *
+ * **⚠ ただし、この上界を使う判定のほう（`decideAnnTruncation`）は変わる。**
+ * 語彙チャンネルが走っているとき、**ANN の窓の外の候補が `affinity = 1` を名乗りうる**
+ * ——「窓の外の similarity は `sim_k'` 以下」という前提が成り立たなくなる。
+ * ⟹ `recall-runtime.ts` は、語彙チャンネルが走った run では
+ * `ann_truncated` を `certainty: 'undecidable'` に落とす（ADR 0084 §7）。
  */
 export const defaultScoringStrategy: BoundedScoringStrategy = Object.assign(
   scoreWithDefaultStrategy,

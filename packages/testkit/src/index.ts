@@ -4,6 +4,7 @@
 
 export * from "./memory-store-conformance.js";
 export * from "./vector-store-conformance.js";
+export * from "./lexical-store-conformance.js";
 export * from "./event-store-conformance.js";
 export * from "./outbox-store-conformance.js";
 export * from "./tenant-settings-store-conformance.js";

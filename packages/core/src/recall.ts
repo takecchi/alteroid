@@ -187,6 +187,29 @@ export interface UnitAssemblyDroppedOmission {
   countKind: CountKind;
 }
 
+/**
+ * **語彙チャンネルが窓（k'）を埋めたまま打ち切ったことの報告**
+ * （[ADR 0084](../../../docs/decisions/0084-lexical-recall-channel.md) §7、Issue #106）。
+ *
+ * **`ann_truncated` に相乗りさせない。**あちらは
+ * [ADR 0069](../../../docs/decisions/0069-ann-truncated-says-nothing-about-loss.md) が
+ * `safetyRatio` による損失可能性の判定まで作り込んだ札であり、
+ * **語彙チャンネルにはその判定機構が無い。**同じ札に潰すと、
+ * 「証明を試みた結果」と「証明の機構をそもそも持たない」が同じ顔で返る。
+ *
+ * **🔴 件数を持たない。`countKind` は常に `'unknown'` である。**
+ * 窓の外に何件あるかを言うには全件を数え直す必要があり、
+ * [ADR 0011](../../../docs/decisions/0011-no-window-count-in-ann-stage.md) /
+ * [ADR 0024](../../../docs/decisions/0024-remove-exact-counts-option.md) が
+ * ANN 段について閉じた道と同じ理由で、ここでも採らない。
+ * 形は [ADR 0026](../../../docs/decisions/0026-ann-unreached-omission.md) の
+ * `ann_unreached` に倣う——**「取りこぼしたのは確かだが、何件かは分からない」**とだけ言う。
+ */
+export interface LexicalTruncatedOmission {
+  kind: "lexical_truncated";
+  countKind: "unknown";
+}
+
 export type Omission =
   | StageSkippedOmission
   | FilteredOmission
@@ -196,6 +219,7 @@ export type Omission =
   | NotIndexedOmission
   | AnnTruncatedOmission
   | AnnUnreachedOmission
+  | LexicalTruncatedOmission
   | ScoreNotComparableOmission
   | UnitAssemblyDroppedOmission;
 
@@ -257,6 +281,11 @@ const AnnUnreachedOmissionSchema = z.object({
   countKind: z.literal("unknown"),
 }) satisfies z.ZodType<AnnUnreachedOmission>;
 
+const LexicalTruncatedOmissionSchema = z.object({
+  kind: z.literal("lexical_truncated"),
+  countKind: z.literal("unknown"),
+}) satisfies z.ZodType<LexicalTruncatedOmission>;
+
 const ScoreNotComparableOmissionSchema = z.object({
   kind: z.literal("score_not_comparable"),
   count: z.number().int().nonnegative(),
@@ -278,6 +307,7 @@ export const OmissionSchema = z.discriminatedUnion("kind", [
   NotIndexedOmissionSchema,
   AnnTruncatedOmissionSchema,
   AnnUnreachedOmissionSchema,
+  LexicalTruncatedOmissionSchema,
   ScoreNotComparableOmissionSchema,
   UnitAssemblyDroppedOmissionSchema,
 ]);
@@ -590,6 +620,29 @@ export const RecallBudgetSchema = z.object({
 export interface ScoreBreakdown {
   /** ANN 経由でのみ存在。距離から変換した類似度。 */
   similarity?: number;
+  /**
+   * **語彙チャンネルが引き当てた候補にのみ存在する**
+   * （[ADR 0084](../../../docs/decisions/0084-lexical-recall-channel.md)、Issue #106）。
+   *
+   * **🔴 この値は候補集合の上で1通りしか取らない。**語彙チャンネルが返した候補は
+   * **すべて 1** である——adapter は「クエリの語彙をすべて含む」候補しか返さない契約なので、
+   * **語彙一致は二値**だからである。
+   *
+   * **⚠ これを黙って書かないこと自体が欠陥である。**
+   * [ADR 0081](../../../docs/decisions/0081-similarity-is-the-only-term-that-ranks.md) は
+   * 「候補集合の上で1通りしか値を取らない項は、順位に構造上ゼロ寄与である」ことを実測した。
+   * **⟹ この項もその族に属する。**ただし ADR 0081 が測った項（`tagMatch` / `strength`）と
+   * 違い、**この項は候補が「どのチャンネルから来たか」で分かれる**——
+   * 語彙候補は 1、ANN だけで来た候補は不在（`undefined`）である。
+   * **⟹ チャンネル間では効く。語彙チャンネルの内側では効かない。**
+   *
+   * **⟹ 「語彙候補どうしの順位」は、この項が決めていない。**それを決めているのは
+   * `decay` / `freshness` であり、ADR 0081 の実測ではその変域は 1e-8 桁である。
+   * **⟹ 語彙候補どうしの順序は、事実上ほぼ任意である。**これは引き受けた負債であり、
+   * ADR 0084 §8 に書いてある。**adapter が返す `LexicalHit.rank` はこの項に入らない**
+   * （`interfaces/lexical-store.ts` 参照）。
+   */
+  lexicalMatch?: number;
   decay: number;
   tagMatch: number;
   freshness: number;
@@ -599,6 +652,7 @@ export interface ScoreBreakdown {
 
 export const ScoreBreakdownSchema = z.object({
   similarity: z.number().optional(),
+  lexicalMatch: z.number().optional(),
   decay: z.number(),
   tagMatch: z.number(),
   freshness: z.number(),
@@ -609,7 +663,17 @@ export const ScoreBreakdownSchema = z.object({
 export interface RecalledMemory {
   memoryId: MemoryId;
   digest: string;
-  retrievedVia: "ann" | "tag_match" | "recency" | "mandatory_companion";
+  /**
+   * どの経路でこの記憶が候補に入ったか。
+   *
+   * **⚠ `"tag_match"` と `"recency"` は、この union に在るが実装が無い**——
+   * `recall-runtime.ts` はこの2値を一度も書かない。**新しく足す値を、同じ形にしないこと**
+   * （[ADR 0084](../../../docs/decisions/0084-lexical-recall-channel.md) の決定）。
+   * **これが Issue #106 の報告者が踏んだ罠そのものである**——型に名前が在るので
+   * 呼び出し側は「使える」と読むが、実装が無いので黙って何も起きない。
+   * `"lexical"` は実装を伴って足した値である。
+   */
+  retrievedVia: "ann" | "lexical" | "tag_match" | "recency" | "mandatory_companion";
   /** 矛盾の相手として同伴取得された場合、その相手の memoryId。 */
   companionOf?: MemoryId;
   /**
@@ -634,7 +698,7 @@ export interface RecalledMemory {
 export const RecalledMemorySchema = z.object({
   memoryId: z.string().min(1),
   digest: z.string(),
-  retrievedVia: z.enum(["ann", "tag_match", "recency", "mandatory_companion"]),
+  retrievedVia: z.enum(["ann", "lexical", "tag_match", "recency", "mandatory_companion"]),
   companionOf: z.string().min(1).optional(),
   provenanceKind: ProvenanceKindSchema,
   score: ScoreBreakdownSchema,
@@ -698,6 +762,29 @@ export interface RecallQuery {
   overFetchFactor?: number;
   /** D5: recall は既定で inferred を含める。除外したい provenance.kind を明示する。 */
   excludeProvenanceKinds?: ProvenanceKind[];
+  /**
+   * **段1（候補生成）で走らせるチャンネル**
+   * （[ADR 0084](../../../docs/decisions/0084-lexical-recall-channel.md)、Issue #106）。
+   *
+   * **省略時は {@link DEFAULT_RECALL_CHANNELS}。**⟹ 既定の挙動は ANN 1本のままであり、
+   * **この欄を渡さない呼び出しの結果は1バイトも変わらない**（歯:
+   * `packages/core/src/__tests__/recall-channels.test.ts`）。
+   *
+   * **🔴 `"lexical"` を渡したのに `RuntimeDeps.lexicalStore` が配線されていないとき、
+   * `recall()` は投げる**（{@link LEXICAL_STORE_UNAVAILABLE_ERROR_PREFIX}）。
+   * **黙って0件を返さない**——「語彙で探したが1件も無かった」と
+   * 「語彙で探していない」が同じ顔になるからである。
+   * **⚠ これは `embedding_provider_unavailable` とは別の族である。**
+   * あちらは実行時の失敗（次に呼べば成功しうる）なので `omitted` に落ちるが、
+   * こちらは**配線の誤りであり、何度呼んでも成功しない。**
+   * ⟹ degrade させると、呼び出し側は「使っているつもりで一度も使えていない」製品を出荷する。
+   *
+   * **⚠ 値の一覧をここに散文で書かない。**唯一の出所は {@link RECALL_CHANNELS} である
+   * （[ADR 0082](../../../docs/decisions/0082-tick-names-unsupported-job-kinds.md) が
+   * `TICK_SUPPORTED_JOB_KINDS` について引いた線と同じ——**散文で数え直した瞬間に、
+   * 次に値が増えたとき黙って嘘になる。コメントは検査されない。**）
+   */
+  channels?: RecallChannel[];
   budget?: RecallBudget;
   /**
    * 段2（再スコア）で候補を残すか捨てるかの閾値（docs/recall.md §2 段2）。
@@ -721,6 +808,62 @@ export interface RecallQuery {
   digestBandLimit?: number;
 }
 
+/**
+ * **段1で走らせられるチャンネルの、唯一の出所**
+ * （[ADR 0084](../../../docs/decisions/0084-lexical-recall-channel.md)）。
+ *
+ * **⚠ ここに `"recent"` は無い。**Issue #106 の提案は
+ * `Array<"ann" | "lexical" | "recent">` だったが、**実装を伴わない値をユニオンに置かない**
+ * ——それは `RecalledMemory.retrievedVia` の `"tag_match"` / `"recency"` が既に作っている
+ * 欠陥（型に名前が在るのに何も起きない）を、新規に1つ増やすことになる。
+ * **⟹ 必要になったときに、実装と一緒に足す。**リクエスト側のユニオンを広げても
+ * 既存の呼び出し側は壊れない。
+ */
+export const RECALL_CHANNELS = ["ann", "lexical"] as const;
+
+/** {@link RECALL_CHANNELS} の要素型。 */
+export type RecallChannel = (typeof RECALL_CHANNELS)[number];
+
+/**
+ * `RecallQuery.channels` の既定値。**ANN 1本**——[ADR 0084](../../../docs/decisions/0084-lexical-recall-channel.md)
+ * 以前の挙動そのものであり、`channels` を渡さない既存の呼び出しは何も変わらない。
+ */
+export const DEFAULT_RECALL_CHANNELS: readonly RecallChannel[] = ["ann"];
+
+/**
+ * **語彙チャンネルが引き当てた候補の `ScoreBreakdown.lexicalMatch` に入る値。**
+ *
+ * `1` である理由は `ScoreBreakdown.lexicalMatch` の doc に書いてある（語彙一致は二値）。
+ * **定数として出しているのは、歯がこの値を書き写さずに済ませるためである**——
+ * 値そのものより「候補全件で同じ値になる」ことのほうが、この項の性質だからである。
+ */
+export const LEXICAL_MATCH_VALUE = 1;
+
+/**
+ * 語彙チャンネルが走った run で、`ann_truncated` が `undecidable` に落ちる理由
+ * （[ADR 0084](../../../docs/decisions/0084-lexical-recall-channel.md) §7）。
+ *
+ * [ADR 0069](../../../docs/decisions/0069-ann-truncated-says-nothing-about-loss.md) の
+ * 損失可能性の判定は「**ANN の窓の外の候補の similarity は `sim_k'` 以下**」を前提に
+ * `R = bar / (sim_k' × M_max)` を組み立てている。**語彙チャンネルが走ると、その前提が崩れる**
+ * ——窓の外の候補が `lexicalMatch` で `affinity = 1` を名乗りうるからである。
+ * **⟹ 「安全だと分かった」とは言えなくなる。だから沈黙せず、判定不能だと名乗る。**
+ */
+export const ANN_TRUNCATION_UNDECIDABLE_LEXICAL_ACTIVE =
+  "語彙チャンネルが走ったため、ANN の窓の外の候補が lexicalMatch で affinity を稼ぎうる。" +
+  "ADR 0069 の上界（窓の外の similarity <= sim_k'）が前提として成り立たない。";
+
+/**
+ * `channels` に `"lexical"` が在るのに `LexicalStore` が配線されていないときに
+ * `recall()` が投げる例外の、メッセージの接頭辞
+ * （[ADR 0084](../../../docs/decisions/0084-lexical-recall-channel.md) §4）。
+ *
+ * 定数として出しているのは `UNSUPPORTED_KIND_ERROR_PREFIX`（`runtime.ts`、ADR 0082）と
+ * 同じ理由——**呼び出し側と歯が、メッセージ文字列を書き写さずに識別できるようにするため。**
+ */
+export const LEXICAL_STORE_UNAVAILABLE_ERROR_PREFIX =
+  "recall: channels included 'lexical' but no LexicalStore is wired: ";
+
 /** RecallQuery.scoreThreshold の既定値。強い根拠のない Phase 1 の裁量値（本ファイルの doc 参照）。 */
 export const DEFAULT_SCORE_THRESHOLD = 0.1;
 
@@ -739,6 +882,8 @@ export const RecallQuerySchema = z.object({
   limit: z.number().int().positive().optional(),
   overFetchFactor: z.number().positive().optional(),
   excludeProvenanceKinds: z.array(ProvenanceKindSchema).optional(),
+  // 一覧を書き写さない——RECALL_CHANNELS から導く（ADR 0084 / ADR 0082）。
+  channels: z.array(z.enum(RECALL_CHANNELS)).min(1).optional(),
   budget: RecallBudgetSchema.optional(),
   scoreThreshold: z.number().optional(),
   digestBandLimit: z.number().int().positive().optional(),

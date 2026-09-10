@@ -1,0 +1,142 @@
+-- 0008_memories_lexical_index.sql
+--
+-- ADR 0084（recall の語彙候補生成チャンネル、Issue #106）:
+-- `PostgresLexicalStore.search`（`packages/postgres/src/lexical-store.ts`）が使う
+-- 正規化関数 `mnemora_lexical_normalize` と、それを式に使った GIN 式索引。
+--
+-- ## なぜ正規化するか
+--
+-- 素の `to_tsvector('simple', 'PROJ-1234の納期が来週まで延びました')` は
+--   'proj-1234の納期が来週まで延びました':1 'proj':2 '1234の納期が来週まで延びました':3
+-- になる。`simple` 辞書はトークナイザが ASCII と非ASCII の混在した塊を1つの語として
+-- 拾ってしまい、'PROJ-1234' というクエリでは引けない（本 PR の作業者が本物の
+-- PostgreSQL 17.11 で実測: `@@` は `f`）。
+--
+-- ASCII の連なり（`[[:ascii:]]+`）の前後に空白を1つ挟む正規化を先に掛けると、
+-- トークナイザが ASCII の塊と非ASCII の塊を別の語として分けるようになり、引ける
+-- （実測: `t`）。この形なら 'PROJ-1234' は 'PROJ-5678' にも 'TASK-1234' にも誤爆しない
+-- ——ただし誤爆を防いでいるのは正規化ではなく、検索側が `websearch_to_tsquery` の
+-- フレーズ演算子（`<->`）を使っていること（`lexical-store.ts` 参照）。実測:
+-- 本文に「PROJ-1234 and TASK-5678」のように2つの識別子が両方含まれる場合、
+-- `plainto_tsquery('PROJ-5678')`（AND 意味論: 'proj' と '-5678' が**どこかにあれば**
+-- 一致）は偽陽性で一致してしまう（実測: `t`）。`websearch_to_tsquery` は同じ入力を
+-- `'proj' <-> '-5678'`（隣接必須）に変換するため一致しない（実測: `f`）。
+-- ⟹ **`plainto_tsquery` は使わない。**
+--
+-- ## なぜ SQL 関数として切り出すか
+--
+-- 索引式（下）とクエリ側（`lexical-store.ts` の `search`）の両方が、この関数**1つ**を
+-- 通る。正規表現を2箇所に書き写すと、直すときに片方だけ直してずれる
+-- （AGENTS.md「正典と実装が食い違ったら」と同じ理由。式索引に使う式とクエリの述語が
+-- 一致していないと、そもそも索引が選ばれない——ずれは静かに遅くなる形でしか現れない）。
+--
+-- IMMUTABLE: 同じ入力に対して常に同じ出力を返す（テーブル参照・現在時刻参照・
+-- 設定参照のいずれも無く、正規表現の書き換えのみ）——式索引に使うための必須条件
+-- （IMMUTABLE でない関数を式索引に使おうとすると PostgreSQL がエラーを返す）。
+-- STRICT は付けない: `memories.content` は NOT NULL なので NULL 入力は実際には
+-- 起きないが、そもそも `regexp_replace` 自身が NULL 入力に対して NULL を返すため、
+-- STRICT の有無で挙動は変わらない（無くても安全）。
+-- PARALLEL SAFE: 副作用・共有状態の参照が無い。
+CREATE FUNCTION mnemora_lexical_normalize(text) RETURNS text AS $$
+  SELECT regexp_replace($1, '([[:ascii:]]+)', ' \1 ', 'g');
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+-- ## クエリ側は、本文側と同じ正規化では足りない（変異試験で発見した欠陥）
+--
+-- 🔴 本文側と同じ mnemora_lexical_normalize をクエリにも通すと、報告者が実際に投げる
+-- 形の問いが1件も引けない。実測（PostgreSQL 17.11）:
+--
+--   websearch_to_tsquery('simple', mnemora_lexical_normalize('PROJ-1234について前に何か言ってたっけ？'))
+--     --> 'proj' <-> '-1234' & 'について前に何か言ってたっけ'
+--   ... これを 'PROJ-1234の納期が来週まで延びました。' に @@ で当てる --> f
+--
+-- 日本語の残り全体が **1つの語彙**になり、それが AND で結ばれるためである。その語彙は
+-- どの本文にも現れないので、識別子が一致していても常に false になる。
+-- ⚠ Issue #106 の報告者が書いた問いの形（「PROJ-1234 について前に何か言ってたはず」）が、
+-- まさにこれに当たる。⟹ 識別子だけを渡す呼び出ししか通らない実装になっていた。
+--
+-- ⟹ クエリ側は、非 ASCII の連なりを空白に落としてから tsquery を作る。
+-- 根拠: **日本語の語は本文側でも文ごと1トークンになるため、そもそも引けない**
+-- （ADR 0084 §2 の実測）。⟹ クエリに残しても真陽性を1件も生まず、AND で偽陰性だけを作る。
+-- **落とすことで失うものが無い。**
+--
+-- ⚠ これは本文側の索引式には影響しない（この関数は WHERE の右辺にしか現れない）。
+CREATE FUNCTION mnemora_lexical_query_terms(text) RETURNS text AS $$
+  SELECT regexp_replace($1, '[^[:ascii:]]+', ' ', 'g');
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
+
+-- ## 式索引 idx_memories_lexical
+--
+-- `PostgresLexicalStore.search`（`packages/postgres/src/lexical-store.ts` の
+-- `buildLexicalSearchSelect`）が実際に打つ `SELECT` の形（filter を何も渡さない
+-- 最小形。実際にはこれに `subject_id` / `occurred_at` 等の追加条件が乗ることがある
+-- ——`lexical-store.ts` 参照）:
+--
+--   SELECT id, ts_rank_cd(to_tsvector('simple', mnemora_lexical_normalize(content)),
+--                         websearch_to_tsquery('simple', mnemora_lexical_normalize($2)), 32) AS rank
+--   FROM memories
+--   WHERE tenant_id = $1
+--     AND status IN ('active', 'contested')
+--     AND to_tsvector('simple', mnemora_lexical_normalize(content))
+--         @@ websearch_to_tsquery('simple', mnemora_lexical_normalize($2))
+--   ORDER BY rank DESC
+--   LIMIT $3
+--
+-- 列は増やさない（**生成列は採らない**）。既存の `memories` は行数が大きく、
+-- `ALTER TABLE memories ADD COLUMN ... GENERATED ALWAYS AS (...) STORED` はテーブル
+-- 全体を書き換える。`packages/postgres/src/migrate.ts` の `runMigrations` は各移行
+-- ファイルを1トランザクションで包んでおり、全表書き換えの間 `memories` への
+-- 読み書きを止めるロック（`ACCESS EXCLUSIVE`、書き換え中はずっと）を長時間持ち続ける
+-- ことになる。式索引はテーブル自体には列を足さない——索引の構築そのものは
+-- `memories` を読むため軽くはないが（下の「⚠」参照）、列追加より軽い。
+--
+-- `tenant_id` は `text` 型で、GIN 索引はネイティブには等価演算子の opclass を持たない
+-- （GIN は本来「含む/交差する」ような演算子向け）。`btree_gin` 拡張が `text` に
+-- `btree` 相当の opclass を GIN 向けに提供しており、これにより
+-- `(tenant_id, to_tsvector(...))` という異種混合の複合 GIN 索引が作れる。
+-- `btree_gin` は既に `REQUIRED_EXTENSIONS`（`packages/postgres/src/migrate.ts`）に
+-- 入っている——**本移行はこの拡張を新規に要求しない**（増やさない、という決定を守る）。
+--
+-- `WHERE status IN ('active', 'contested')` の部分索引にしているのは、
+-- `idx_memories_recall_gate`（`migrations/0001_init.sql`）/
+-- `idx_memories_requeue_embed`（`migrations/0007_*.sql`）と同じ理由——recall が
+-- 実際に読むのはこの2状態だけであり、他の状態（superseded/archived/forgotten）の行は
+-- 索引の母数から最初から外してよい。
+--
+-- ⚠ この `CREATE INDEX` は素のまま（`CONCURRENTLY` を付けない）。見落としではない。
+-- `0003_period_ann_stage_index.sql` / `0007_memories_requeue_embed_index.sql` と同じ
+-- 理由: `packages/postgres/src/migrate.ts` の `runMigrations`（`BEGIN` 〜 `COMMIT` で
+-- 各移行ファイルを1トランザクションとして包む設計）があり、
+-- `CREATE INDEX CONCURRENTLY` はトランザクションブロックの中では実行できない。
+-- 素の `CREATE INDEX` は対象テーブルに `ACCESS EXCLUSIVE` ロックを取るため、索引の
+-- 構築が終わるまで `memories` への読み書きが止まる。行数が増えた本番へ適用するときは
+-- この停止時間を見込むこと（非トランザクションの移行経路を作るかどうかは、これより
+-- 大きい別の判断であり、本移行では手を伸ばさない——`0003_*.sql` と同じ立場）。
+--
+-- 実測（本 PR の作業者が本物の PostgreSQL 17.11 + pgvector 0.8.0 で計測。行数・手順は
+-- `packages/postgres/src/__tests__/lexical-store-index.test.ts` の歯と同じ。20,000行、
+-- クエリ語を含む行は2%、`ANALYZE` 済み）。上の述語を `EXPLAIN (FORMAT TEXT)` すると:
+--
+--   Limit
+--     ->  Sort
+--           Sort Key: (ts_rank_cd(to_tsvector('simple'::regconfig,
+--                      regexp_replace(content, '([[:ascii:]]+)'::text, ' \1 '::text, 'g'::text)),
+--                      '''obsidian'' & ''shards'''::tsquery, 32)) DESC
+--           ->  Bitmap Heap Scan on memories
+--                 Recheck Cond: ((tenant_id = 'lexical-index-tenant'::text)
+--                   AND (to_tsvector(...) @@ '''obsidian'' & ''shards'''::tsquery)
+--                   AND (status = ANY ('{active,contested}'::text[])))
+--                 ->  Bitmap Index Scan on idx_memories_lexical
+--                       Index Cond: ((tenant_id = 'lexical-index-tenant'::text)
+--                         AND (to_tsvector(...) @@ '''obsidian'' & ''shards'''::tsquery))
+--
+-- `idx_memories_lexical` を落として同じクエリを測った対照では `Seq Scan on memories`
+-- （cost 0.00..6128.26）になる——索引がある場合の `Bitmap Heap Scan`（cost 1164.87..1169.40）
+-- より確かに選ばれている。全文は `lexical-store-index.test.ts` の `console.log` 出力、
+-- および本 PR の報告にある。
+-- ⚠ これはプランナの選択であり、統計・行数・PostgreSQL のメジャー版に依存する
+-- （`recall-gate-index.test.ts` / `memories-requeue-embed-index.test.ts` の
+-- 既存の注意書きと同じ留保）。
+CREATE INDEX idx_memories_lexical
+  ON memories USING gin (tenant_id, to_tsvector('simple', mnemora_lexical_normalize(content)))
+  WHERE status IN ('active', 'contested');
