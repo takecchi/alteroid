@@ -555,13 +555,29 @@ export interface RecallUsage {
    * `budget` が申告されている場合のみ。**予算の対象（`memories` tier）が、
    * 申告された予算のどれだけを使ったか。**
    *
-   * **⚠ 分子は `memories` tier だけであり、目次帯を含まない。したがって
-   * この値は 1 を超えない**（段4の切り詰めが予算を守ることを保証しているため）。
-   *
-   * 以前は分子に目次帯を含めていたため 248% のような「割合として成立しない値」が出ていた。
+   * **分子を `memories` tier だけに絞ったこと自体は正しい**——以前は分子に目次帯を
+   * 含めていたため 248% のような「割合として成立しない値」が出ていたが、目次帯を
+   * 予算の対象外として外したことでその不具合は直っている。
    * 「私が渡した予算のうち記憶がどれだけ使ったか」と「この応答は全体でいくらかかったか」は
-   * **別の問い**であり、1つの数で両方に答えようとするとどちらかが嘘になる。
-   * 後者は `chars` と `indexChars` を見れば分かる。
+   * **別の問い**であり、後者は `chars` と `indexChars` を見れば分かる。
+   *
+   * **⚠ ただし、目次帯を外したことだけでは「この値は 1 を超えない」の根拠として足りない。**
+   * **この値は 1 を超えうる。超えたときは `budgetExceeded` が `true` になる。**
+   *
+   * 超える理由は、段4の切り詰め（強制）と、この値の計測が**別の数え方**をしているから
+   * である:
+   * - 強制側（段4の `fits`/`unitTokens`）は **digest ごとに** `tokenCounter.count()` を呼び、
+   *   その合計で判定する（`heuristicTokenCounter` の `Math.ceil` が digest の件数ぶん掛かる）。
+   * - この値の分子は **`digests.join("\n")` を1回だけ** `count()` する（連結後の量。
+   *   呼び出し側が実際にプロンプトへ積むのはこちらである）。
+   *
+   * 改行区切り文字の分だけ後者が前者を上回ることがあり、そのとき段4は「予算内」と
+   * 判定して両方残すのに、実際に返した量を測り直すと予算を超えている
+   * （実測: `recall-pipeline.test.ts` の `usage.budgetExceeded` 節。非CJK20字の digest
+   * 2件・`maxMemoryTokens: 10` で `share = 1.1` が再現する）。
+   *
+   * **この不一致自体は、ここでは直していない**（ADR 0083 が「どちらの数え方を正とするかは
+   * 別の判断」として意図的に見送った範囲。[ADR 0097](../../../docs/decisions/0097-recall-usage-share-may-exceed-1.md) 参照）。
    */
   share?: number;
   /**
@@ -607,7 +623,10 @@ export const RecallUsageSchema = z.object({
     index: z.number().int().nonnegative(),
   }),
   indexChars: z.number().int().nonnegative(),
-  share: z.number().nonnegative().max(1).optional(),
+  // ⚠ `.max(1)` を外してある（ADR 0097）。`share` は 1 を超えうる——超えたときは
+  // `budgetExceeded` が `true` になる（doc 参照）。`.max(1)` は保証ではなく、
+  // 守られていない宣言だった。
+  share: z.number().nonnegative().optional(),
   // additive: share の計算は変えない。既存欄の意味も変えない（doc 参照）。
   budgetExceeded: z.boolean().optional(),
 }) satisfies z.ZodType<RecallUsage>;

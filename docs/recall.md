@@ -414,7 +414,7 @@ type RecallUsage = {
   counter: 'heuristic' | 'exact'
   byTier: { full: number; digest: number; index: number }
   indexChars: number         // 目次帯の実費。budget の対象外（下記）
-  share?: number             // budget 申告時のみ: memories tier / budget。1 を超えない
+  share?: number             // budget 申告時のみ: memories tier / budget。1 を超えうる（超えたら budgetExceeded が true）
 }
 
 type RecallBudget = {
@@ -453,12 +453,23 @@ interface TokenCounter {
 
 | 問い | 答える値 |
 |---|---|
-| 私が渡した予算のうち、記憶がどれだけ使ったか | `share`（**1 を超えない**） |
+| 私が渡した予算のうち、記憶がどれだけ使ったか | `share`（**1 を超えうる**。超えたら `budgetExceeded` が `true`） |
 | この応答は全体でいくらかかったか | `chars`（= `memories` tier + `indexChars`） |
 
-⟹ **`share` の分子は `memories` tier だけとする。**段4の切り詰めが `memories` tier を
-予算内に収めることを保証しているので、この定義なら `share` は 1 を超えない
-（`RecallUsageSchema` が型としても 1 以下しか受け付けない）。
+⟹ **`share` の分子は `memories` tier だけとする。**この絞り込み自体は 248% 問題（目次帯混入）
+を直した点で正しい。**しかし、それだけでは「`share` は 1 を超えない」の根拠として足りない**
+（2026-09 再訂正、[ADR 0097](./decisions/0097-recall-usage-share-may-exceed-1.md)）。
+
+段4の切り詰め（強制）は `memories` tier を **予算内に収めることを保証する**が、それは
+「強制側が数える量」の話であって、「`share` の分子が数える量」とは**別の数え方**である。
+強制側は digest ごとに `TokenCounter.count()` を呼んで合算する（`unitTokens` の合計）が、
+`share` の分子は `digests.join("\n")` を**1回だけ** `count()` する。改行区切り文字の分だけ
+後者が前者を上回ることがあり、そのとき段4は「予算内」と判定して両方残すのに、実際に返した量
+（`share` の分子）を測り直すと予算を超える。**実測**（非CJK20字の digest2件・
+`maxMemoryTokens: 10`）: 強制側 `5+5=10 ≤ 10`（両方残す）、`share` の分子は
+`ceil(41/4)=11`、`share = 11/10 = 1.1`。**`RecallUsageSchema` は現在この値を型としても
+そのまま受け付ける**（`.max(1)` は ADR 0097 で外した——守られていない保証を宣言し続ける
+ほうが実害が大きいため）。
 全体量を知りたい呼び出し側は `chars` を見るか、`chars - indexChars` で予算対象分を取れる。
 
 **これは「無い」の種類を潰さない、という規律を*数*に当てたものである**——
@@ -511,7 +522,10 @@ type RecallUsage = {
    のほうがこの問いに答えていたが、本 PR ではそこまでは実装していない。
 2. 「強制と計測で数え方が違う」という `share` の穴（上記1）は、ここでも直していない。
    **これは見落としではなく、ADR 0083 が型変更の影響範囲の広さを理由に意図的に見送った
-   範囲である。**
+   範囲である。**[ADR 0097](./decisions/0097-recall-usage-share-may-exceed-1.md) が回収したのは
+   **この不一致そのものではなく**、「`share` は 1 を超えない」という `RecallUsageSchema` /
+   JSDoc の**誤った保証の宣言**のほうである——`.max(1)` を外し、超えうることと理由を明記した。
+   **強制側と計測側の数え方をどちらに統一するかは、依然として別の判断として残っている。**
 
 ### 正直に書くべき限界: mnemora はプロンプトを組み立てない
 

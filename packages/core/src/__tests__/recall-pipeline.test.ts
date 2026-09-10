@@ -1134,8 +1134,12 @@ describe("recall() — usage.budgetExceeded（Issue #108「案3」）", () => {
    * （書き写さない）: 段4の強制（`fits`/`unitTokens`）は digest ごとに ceil してから
    * 合算するので `5+5=10 <= 10` となり両方残るが、実際に返した量（連結した41字）を
    * 測り直すと `ceil(41/4) = 11 > 10` で超えている。
+   *
+   * 🔑 **歯1（ADR 0097）: `share` が 1 を超えることと `budgetExceeded` が `true` であることを、
+   * 同じケースで両方測る。**「`budgetExceeded` を見るだけ」の歯だと、分子の数え方が
+   * 変わって `share <= 1` に収まるようになっても気づけない——`share` 自体の値も固定する。
    */
-  it("非CJK20字×2件・maxMemoryTokens:10 ⟹ 強制側は両方残すが、連結して測り直すと超えている", async () => {
+  it("非CJK20字×2件・maxMemoryTokens:10 ⟹ 強制側は両方残すが、連結して測り直すと超えている（share>1 かつ budgetExceeded=true）", async () => {
     const digestA = "01234567890123456789"; // 20 chars, 全て非CJK
     const digestB = "abcdefghijklmnopqrst"; // 20 chars, 全て非CJK
     expect(digestA).toHaveLength(20);
@@ -1164,8 +1168,86 @@ describe("recall() — usage.budgetExceeded（Issue #108「案3」）", () => {
     expect(result.memories).toHaveLength(2);
     expect(result.omitted.some((o) => o.kind === "budget_dropped")).toBe(false);
 
+    // share = memoryTokens(11) / maxMemoryTokens(10) = 1.1 > 1。
+    expect(result.usage.share).toBeCloseTo(1.1, 10);
+    expect(result.usage.share).toBeGreaterThan(1);
     expect(result.usage.budgetExceeded).toBe(true);
   });
+
+  /**
+   * ⭐ 歯2（ADR 0097。対照・偽陽性を潰すため）: 歯1 と**まったく同じ digest 2件**を使い、
+   * `maxMemoryTokens` だけを 11（＝連結して測った量そのもの）に変える。
+   *
+   * これは歯3（境界の実測）で見つけた境界そのもの——`maxMemoryTokens` を 10→11 に
+   * 1つ動かすだけで `share` が 1.1 → 1.0 に落ち、`budgetExceeded` が true → false に
+   * 反転する。この歯が無いと、歯1 は「`budgetExceeded` を常に `true` と主張しているだけ」
+   * でも緑になってしまう——同じ入力・同じ2件の digest で `false` になる経路を
+   * 実際に踏んでおくことで、歯1 の `true` が「本当に超えたときだけ true」であることを保証する。
+   */
+  it("同じ2件の digest でも maxMemoryTokens:11（＝連結した量ちょうど）なら share は1、budgetExceeded は false（対照）", async () => {
+    const digestA = "01234567890123456789";
+    const digestB = "abcdefghijklmnopqrst";
+
+    // 前提: 連結して測った量（11）そのものを予算にする——強制側（unitTokens 合計10）は
+    // 当然 11 以内で両方残る。
+    expect(heuristicTokenCounter.count(`${digestA}\n${digestB}`).tokens).toBe(11);
+
+    const { runtime, stores } = buildRuntime();
+    await createEmbeddedMemory(stores, [1, 0], { digest: digestA });
+    await createEmbeddedMemory(stores, [1, 0], { digest: digestB });
+
+    const result = await runtime.recall(ctx, {
+      vector: [1, 0],
+      budget: { maxMemoryTokens: 11 },
+    });
+
+    expect(result.memories).toHaveLength(2);
+    expect(result.omitted.some((o) => o.kind === "budget_dropped")).toBe(false);
+
+    expect(result.usage.share).toBe(1);
+    expect(result.usage.budgetExceeded).toBe(false);
+  });
+
+  /**
+   * 歯3（ADR 0097。境界の実測。オーナー名指し）: 歯1・歯2 と同じ2件の digest を固定し、
+   * `maxMemoryTokens` だけを 10 / 11 / 12 と動かして、`share` が 1 をまたぐ境界を
+   * 数字で固定する。
+   *
+   * - `maxMemoryTokens: 10` → `share = 11/10 = 1.1`（>1） → `budgetExceeded = true`
+   * - `maxMemoryTokens: 11` → `share = 11/11 = 1`（境界ちょうど） → `budgetExceeded = false`
+   * - `maxMemoryTokens: 12` → `share = 11/12 ≈ 0.9167`（<1） → `budgetExceeded = false`
+   *
+   * 期待値（1.1 / 1 / 11/12）は実装のコードを読んで書き写したものではなく、
+   * `heuristicTokenCounter` を直接呼んで独立に導いた値（前提の expect を参照）。
+   * ⟹ `share` の計算式そのものが変わらない限り、この3点で境界は必ずここに在る。
+   */
+  it.each([
+    { maxMemoryTokens: 10, expectedShare: 1.1, expectedExceeded: true },
+    { maxMemoryTokens: 11, expectedShare: 1, expectedExceeded: false },
+    { maxMemoryTokens: 12, expectedShare: 11 / 12, expectedExceeded: false },
+  ])(
+    "境界の実測: maxMemoryTokens=$maxMemoryTokens ⟹ share≈$expectedShare, budgetExceeded=$expectedExceeded",
+    async ({ maxMemoryTokens, expectedShare, expectedExceeded }) => {
+      const digestA = "01234567890123456789";
+      const digestB = "abcdefghijklmnopqrst";
+
+      const { runtime, stores } = buildRuntime();
+      await createEmbeddedMemory(stores, [1, 0], { digest: digestA });
+      await createEmbeddedMemory(stores, [1, 0], { digest: digestB });
+
+      const result = await runtime.recall(ctx, {
+        vector: [1, 0],
+        budget: { maxMemoryTokens },
+      });
+
+      // 強制側は3点すべてで両方残す（unitTokens 合計は常に10で、10/11/12すべて以内）。
+      // 境界を作っているのは分子（連結して測った11）の側であり、強制側の落ちではない。
+      expect(result.memories).toHaveLength(2);
+
+      expect(result.usage.share).toBeCloseTo(expectedShare, 10);
+      expect(result.usage.budgetExceeded).toBe(expectedExceeded);
+    },
+  );
 
   // `promptBudgetTokens` 単独でも同じ再現が起きることを確かめる（`effectiveTokenBudget` は
   // `maxMemoryTokens` と `promptBudgetTokens` の最小値を1本にまとめて強制側へ渡すため、

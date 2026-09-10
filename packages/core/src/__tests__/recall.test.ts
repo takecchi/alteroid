@@ -468,7 +468,7 @@ describe("RecallResultSchema", () => {
   });
 });
 
-describe("RecallUsageSchema — share は割合として成立する値しか受け付けない", () => {
+describe("RecallUsageSchema — share は非負の値だけを受け付ける（ADR 0097）", () => {
   const base = {
     chars: 100,
     estimatedTokens: 25,
@@ -483,11 +483,23 @@ describe("RecallUsageSchema — share は割合として成立する値しか受
   });
 
   /**
-   * 以前は目次帯を分子に含めていたため 248% のような値が出ていた。
-   * 「割合として成立しない値」を型で弾く——推定値を実測値の顔で出さない、の数への適用。
+   * **⚠ 以前はここで `.max(1)` により弾いていたが、ADR 0097 で外した。**
+   * 「割合として成立しない値」を型で弾く、という以前の意図は誠実だったが、
+   * 前提（段4の切り詰めが `share` の分子の予算内を保証する）が現物では成り立っていなかった
+   * ——強制側（段4の `unitTokens`。digest ごとに ceil）と `share` の分子
+   * （連結して ceil 1回）は数え方が違うため、`share` は実際に 1 を超える
+   * （`recall-pipeline.test.ts` の `usage.budgetExceeded` 節で実測。非CJK20字の digest2件・
+   * `maxMemoryTokens: 10` で `share = 1.1`）。
+   * ⟹ **1 を超える値を弾くのは、実在する正しい値を「不正」と誤診断することになる。**
+   * 弾くのをやめ、`share > 1` のときは `budgetExceeded: true` が伴うことを別の歯
+   * （`recall-pipeline.test.ts`）で保証する形に変えた。
    */
-  it("share が 1 を超える形は弾く", () => {
-    expect(RecallUsageSchema.safeParse({ ...base, share: 2.483 }).success).toBe(false);
+  it("share が 1 を超える形も、いまは受け付ける（超過は budgetExceeded が示す）", () => {
+    expect(RecallUsageSchema.safeParse({ ...base, share: 2.483 }).success).toBe(true);
+  });
+
+  it("share が負の値は弾く（nonnegative は残している）", () => {
+    expect(RecallUsageSchema.safeParse({ ...base, share: -0.1 }).success).toBe(false);
   });
 });
 
