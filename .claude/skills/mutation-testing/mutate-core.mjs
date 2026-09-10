@@ -405,7 +405,7 @@ function undeliveredGatePassed(artifactResult) {
  * | 門 | 拒む条件 | 出所 |
  * | --- | --- | --- |
  * | 1 | 集計ブロックが複数在って選べない | `assertAggregateBlocksUnambiguous`（#742） |
- * | 2 | ⭐ **集計行は緑なのに `Errors` 行が出ている（未処理の例外/rejection）** | `assertNoUnhandledErrorsLine` |
+ * | 2 | ⭐ **`Errors` 行が出ている（未処理の例外/rejection。集計行が緑でも赤でも拒む）** | `assertNoUnhandledErrorsLine` |
  * | 3 | 集計行そのものが無い（落ちたのか1本も走らなかったのか区別できない） | `HarnessError` |
  * | 4 | ⭐ **落ちた歯が在るのに、その名前を判定に使えない** | 下記 |
  *
@@ -1100,6 +1100,16 @@ export function parseErrorsLine(rawOutput) {
  * `testsAllPassed=true` として通り抜け、`生存`（あるいは他の変異と重なれば
  * 偽の `検出`）を返す。** `Errors` 行の存在そのものを理由に拒む——「なぜ壊れて
  * いるか」の分類（microtask か setTimeout か）はしない。
+ *
+ * **⚠️ 集計行が緑か赤かに関わらず、`Errors` 行が在れば無条件に拒む。**
+ * `parseErrorsLine` が `null` でなければ即座に投げる——`testsAllPassed` や
+ * `failureIndicated` を先に見て「緑のときだけ」に絞る形にはしていない。
+ * **なぜ赤のときも拒むか**: 変異が本物のテスト失敗と未処理エラーを同時に
+ * 起こした場合、その赤が「変異を検出した」のか「未処理エラーに巻き込まれた
+ * ノイズ」なのかを、このハーネスは判別できない。ここで判別できたことに
+ * せず、集計行が「緑に読める」かどうかを見るより*前*に置いて無条件に拒む
+ * のは、門1・門3・門4 と同じ考え方——「判定できない」を「たぶんこちら」に
+ * 倒さない。
  *
  * **門1（集計ブロックの複数性）の直後・門3（`testsRanCleanly`）より前に置く。**
  * 集計行が「緑に読める」かどうかを見るより先に、その集計ブロックが信用できるかを
