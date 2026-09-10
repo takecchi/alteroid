@@ -6,7 +6,7 @@
 # だけが従っていなかった。ここへ切り出すことで vitest から本物の git と偽の
 # `pnpm` で回せるようになる（`verify-for-sdk-pr.test.ts`）。
 #
-# **ここで回す9本は `scripts/verify-core.mjs` の `STEPS` と同じ名前・同じ順序。**
+# **ここで回す本数は `scripts/verify-core.mjs` の `STEPS` と同じ名前・同じ順序。**
 # 元々ここは `build` / `typecheck` / `lint` / `format:check` / `test` の5本しか
 # 回していなかった（このスクリプトへ切り出した最初のコミット）。`pnpm verify` の
 # 一式は9本あり、`web-bundle-node-traces` / `web-bundle-size` / `openapi` /
@@ -56,6 +56,7 @@ GATE_NAMES=(
   build
   web-bundle-node-traces
   web-bundle-size
+  web-css-comment-classnames
   openapi
   sdk-quotes
   typecheck
@@ -67,6 +68,7 @@ GATE_COMMANDS=(
   'pnpm build'
   'pnpm check:web-bundle-node-traces'
   'pnpm check:web-bundle-size'
+  'pnpm check:web-css-comment-classnames'
   'git diff --exit-code HEAD -- apps/daemon/openapi.json'
   'pnpm check:sdk-quotes'
   'pnpm typecheck'
@@ -76,7 +78,7 @@ GATE_COMMANDS=(
 )
 
 # **落ちた門は名前と終了コードで残す。** `ok=false` という1つの値だけだと、PR が draft で
-# 届いたときに「9本のどれかが本当に落ちた」と「`openapi.json` が変わっただけ」が区別
+# 届いたときに「どれかが本当に落ちた」と「`openapi.json` が変わっただけ」が区別
 # できない（`open-claude-sdk-pr.sh` は `SDK_VERIFY_OK != 'true'` で draft にする）。
 # **数ではなく名前で書く** — 「1本落ちた」では、また種類が潰れる。
 ok=true
@@ -140,7 +142,7 @@ for i in "${!GATE_NAMES[@]}"; do
   } >>"$dir/verify-body.md"
 done
 
-# **要約を先頭に置く。** 本文は上から読まれるので、落ちた門の名前が9本ぶんのログより
+# **要約を先頭に置く。** 本文は上から読まれるので、落ちた門の名前が全本ぶんのログより
 # 後ろに在ると、読む人はそれを探しに行くことになる。
 {
   if [ "$ok" = 'true' ]; then

@@ -276,6 +276,15 @@ export const STEPS = [
       'https://github.com/takecchi/alteroid/issues/335）',
   },
   {
+    name: 'web-css-comment-classnames',
+    cmd: 'pnpm',
+    args: ['check:web-css-comment-classnames'],
+    hint:
+      'apps/web の生成物の CSS に、コメント中のプレースホルダ記法（`...` / `…`）がクラス名として' +
+      '拾われて生まれた不正な宣言が入っている。プレースホルダを含む例をコメントへ書いていないか' +
+      '確認すること（scripts/check-web-css-comment-classnames-core.mjs の doc、#317）',
+  },
+  {
     name: 'openapi',
     cmd: 'git',
     args: ['diff', '--exit-code', 'HEAD', '--', 'apps/daemon/openapi.json'],
