@@ -72,6 +72,7 @@ import {
   SCAFFOLD_CONTROL_STAGE,
   applyMutation,
   assertAggregateBlocksUnambiguous,
+  assertNoUnhandledErrorsLine,
   buildAndCheckArtifact,
   checkJudgementVocabulary,
   describeRunScope,
@@ -220,9 +221,16 @@ function cmdBaseline(args) {
   // そのまま渡せば呼び出し元の既定が効く（`maxWorkers` で分岐する必要が無い）。
   const result = runTests([], maxWorkers);
   log(result.raw);
-  // 3つの入口のうちの1つ（他の2つは mutate-core.mjs の decideJudgementCategory /
-  // cmdRun の baseline 確認）。生ログは1行上で既に出ている。
+  // 判定の入口3箇所のうちの1つ（他の2つは mutate-core.mjs の
+  // decideJudgementCategory / cmdRun の baseline 確認）。生ログは1行上で既に
+  // 出ている。
   assertAggregateBlocksUnambiguous(result.raw, 'baseline');
+  // 門2 相当（4つの呼び出し元のうちの1つ。他の3つは decideJudgementCategory /
+  // 足場対照 / cmdRun の baseline 確認——assertAggregateBlocksUnambiguous と同じ
+  // 4箇所）。集計行が緑のままでも `Errors` 行（未処理の例外/rejection）が
+  // 出ていれば、ここで「ベースライン成立。」と名乗る前に止める——exitCode を
+  // 見ない設計なので、ここで拒まないと壊れた走行の上に以降の段が全部載る。
+  assertNoUnhandledErrorsLine(result.raw, 'baseline');
   if (!testsRanCleanly(result)) {
     log('');
     log(
@@ -403,9 +411,13 @@ function cmdRun(args) {
   section('run: baseline を先に確かめる');
   const baseline = runTests([], maxWorkers);
   log(baseline.raw);
-  // 3つの入口のうちの1つ（他の2つは mutate-core.mjs の decideJudgementCategory /
-  // cmdBaseline）。生ログは1行上で既に出ている。
+  // 判定の入口3箇所のうちの1つ（他の2つは mutate-core.mjs の
+  // decideJudgementCategory / cmdBaseline）。生ログは1行上で既に出ている。
   assertAggregateBlocksUnambiguous(baseline.raw, 'run: baseline');
+  // 門2 相当（4つの呼び出し元のうちの1つ。他の3つは decideJudgementCategory /
+  // 足場対照 / cmdBaseline）。`testsAllPassed` は集計行の文字列しか見ないので、
+  // `Errors` 行が出ていても素通りしてしまう——ここで先に拒む。
+  assertNoUnhandledErrorsLine(baseline.raw, 'run: baseline');
   if (!testsRanCleanly(baseline) || !testsAllPassed(baseline)) {
     log('ベースラインが緑ではない。run を中止する。');
     process.exit(1);

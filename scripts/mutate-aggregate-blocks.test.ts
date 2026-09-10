@@ -59,12 +59,13 @@ const SINGLE_BLOCK_ALL_PASSED = [
 
 /**
  * **⚠️ 失敗の見出しと `FAIL` 行を持たせてある。** 判定は集計行の `failed` の
- * 文字だけでは出せなくなった（`decideJudgementCategory` の門3 —— 落ちた歯の
+ * 文字だけでは出せなくなった（`decideJudgementCategory` の門4。いまの門番号
+ * では、後から挟んだ「Errors 行」の門2で繰り下がった —— 落ちた歯の
  * 名前を判定に使えなければ拒む。理由と実測は `SKILL.md`「足場の印そのものが
  * 歯を赤くする（偽の『検出』）」）。**集計行だけを持つ赤のフィクスチャは
  * 「判定を出せない」へ倒れる**ので、名前が取れる形（本物の vitest の出力と
  * 同じ形）へ寄せた。**この歯の主張（単一ブロックなら判定できる）は1文字も
- * 変えていない** —— 名前が取れない赤を門3 が拒むことは
+ * 変えていない** —— 名前が取れない赤を門4 が拒むことは
  * `scripts/mutate-scaffold-control.test.ts` が別に測る。
  */
 const SINGLE_BLOCK_WITH_FAILURE = [
@@ -121,6 +122,77 @@ const MULTI_BLOCK_FIRST_RED_LAST_GREEN = [
   '   Duration  300ms',
 ].join('\n');
 
+/**
+ * **出所**: 本物の vitest 5.0.0 を複合スクリプト（`vitest run tests-a && vitest run
+ * tests-b --maxWorkers=4`）で走らせ、`tests-b/mul.test.js` に本物の変異（`mul.js` の
+ * `*` → `+`）を当てて採取した生ログの vitest 出力部分（harness 自身の拒否メッセージは
+ * 含めない——`SINGLE_BLOCK_ALL_PASSED` 等の既存フィクスチャと同じ選び方に揃えた）。
+ *
+ * **なぜこのフィクスチャが要るか。** 上の `MULTI_BLOCK_FIRST_RED_LAST_GREEN` は
+ * 「最初が赤・最後が緑」の1方向しか持たない。`assertAggregateBlocksUnambiguous` は
+ * ブロックの**件数**だけで拒否を決め、中身（どちらが赤でどちらが緑か）を見ないので、
+ * 現状の実装ではどちらの向きでも同じ分岐（拒否）を通る。**だから1方向しか無いこと自体は
+ * 直ちに穴ではない。** ただし「最後のブロックが `failed` を名乗るときは、どうせ判定は
+ * 『検出』になるのだから拒まなくてよい」という、もっともらしい劣化（`blockCount <= 1`
+ * の判定に「最後が failed なら return」を足す形）を手で当てて確かめたところ、
+ * 既存の5ファイルは1つも赤くならなかった（段0の実測）。この劣化は「最初が緑・最後が
+ * 赤」のときにだけ黙って通る——既存フィクスチャの唯一の方向（最初が赤・最後が緑）は
+ * この劣化を一度も踏まない。**⟹ 逆方向の固定入力が無いことは実在する穴だった。**
+ * このフィクスチャはその逆方向を埋める。
+ *
+ * **変えた場所は1箇所だけ——2本の `RUN` 行にある絶対パスを `/tmp/probe` に置換した**
+ * （元は `/home/worker/mgr-f9b32deb/w1/scratch`。既存フィクスチャの `/tmp/probe` という
+ * 流儀に揃えた）。**それ以外は1文字も変えていない** — 2ブロックの並び、`Test Files` /
+ * `Tests` 行の値、`Failed Tests` の見出し、スタックトレース、`[ELIFECYCLE]` 行を含め、
+ * 採取した生ログのままである。
+ */
+const MULTI_BLOCK_FIRST_GREEN_LAST_RED = [
+  ' RUN  v5.0.0 /tmp/probe',
+  '',
+  '',
+  ' Test Files  1 passed (1)',
+  '      Tests  1 passed (1)',
+  '   Start at  08:24:19',
+  '   Duration  182ms (transform 64%, import 22%, worker 8%, tests 5%)',
+  '',
+  '',
+  ' RUN  v5.0.0 /tmp/probe',
+  '',
+  ' ❯ tests-b/mul.test.js (1 test | 1 failed) 9ms',
+  '   ❯ mul (1)',
+  '     × multiplies two numbers 7ms',
+  '',
+  ' Test Files  1 failed (1)',
+  '      Tests  1 failed (1)',
+  '   Start at  08:24:20',
+  '   Duration  202ms (transform 69%, import 16%, tests 10%, worker 5%)',
+  '',
+  '$ vitest run tests-a && vitest run tests-b --maxWorkers=4',
+  '',
+  '⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯',
+  '',
+  ' FAIL  tests-b/mul.test.js > mul > multiplies two numbers',
+  'AssertionError: expected 5 to be 6 // Object.is equality',
+  '',
+  '- Expected',
+  '+ Received',
+  '',
+  '- 6',
+  '+ 5',
+  '',
+  ' ❯ tests-b/mul.test.js:6:23',
+  "      4| describe('mul', () => {",
+  "      5|   it('multiplies two numbers', () => {",
+  '      6|     expect(mul(2, 3)).toBe(6);',
+  '       |                       ^',
+  '      7|   });',
+  '      8| });',
+  '',
+  '⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯',
+  '',
+  '[ELIFECYCLE] Test failed. See above for more details.',
+].join('\n');
+
 describe('mutate-core: parseAggregateLines は複数ブロックで「最後」を返す', () => {
   it('単一ブロックはこれまでどおり読める（回帰）', () => {
     const { filesLine, testsLine } = parseAggregateLines(SINGLE_BLOCK_ALL_PASSED);
@@ -136,6 +208,22 @@ describe('mutate-core: parseAggregateLines は複数ブロックで「最後」�
     // 最後のブロック（緑）の値であること。
     expect(filesLine).toBe('Test Files  5 passed (5)');
     expect(testsLine).toBe('Tests  42 passed (42)');
+  });
+
+  /**
+   * 逆向き（最初が緑・最後が赤）。本物の vitest ログ（`MULTI_BLOCK_FIRST_GREEN_LAST_RED`
+   * の doc に出所がある）を使う。`MULTI_BLOCK_FIRST_RED_LAST_GREEN` の歯と対にして、
+   * どちらの向きでも「最初ではなく最後」が返ることを確かめる——向きが逆なら値も逆に
+   * 検算されるので、この歯だけが「たまたま最後が来た」を見逃さない。
+   */
+  it('複数ブロックのとき、向きが逆（最初が緑・最後が赤）でも最後のブロックを返す', () => {
+    const { filesLine, testsLine } = parseAggregateLines(MULTI_BLOCK_FIRST_GREEN_LAST_RED);
+    // 最初のブロック（緑）の値ではないことを明示的に確かめる。
+    expect(filesLine).not.toBe('Test Files  1 passed (1)');
+    expect(testsLine).not.toBe('Tests  1 passed (1)');
+    // 最後のブロック（赤）の値であること。
+    expect(filesLine).toBe('Test Files  1 failed (1)');
+    expect(testsLine).toBe('Tests  1 failed (1)');
   });
 });
 
@@ -154,6 +242,15 @@ describe('mutate-core: countAggregateBlocks の件数の数え方', () => {
     // 実値も持ち回っていること（拒否メッセージが最初/最後の実値を引用するため）。
     expect(filesMatches[0]).toBe('Test Files  1 failed (1)');
     expect(filesMatches.at(-1)).toBe('Test Files  5 passed (5)');
+  });
+
+  /** 逆向き（最初が緑・最後が赤、本物の vitest ログ）でも件数と実値の数え方が同じであること。 */
+  it('2ブロックは向きが逆でも2個と数える（本物の vitest ログ）', () => {
+    const { filesMatches, testsMatches } = countAggregateBlocks(MULTI_BLOCK_FIRST_GREEN_LAST_RED);
+    expect(filesMatches).toHaveLength(2);
+    expect(testsMatches).toHaveLength(2);
+    expect(filesMatches[0]).toBe('Test Files  1 passed (1)');
+    expect(filesMatches.at(-1)).toBe('Test Files  1 failed (1)');
   });
 
   it('集計行が1つも無ければ0個', () => {
@@ -192,6 +289,21 @@ describe('mutate-core: assertAggregateBlocksUnambiguous', () => {
     expect(message).toContain('decideJudgementCategory');
     expect(message).toContain('2個');
   });
+
+  /**
+   * 逆向き（最初が緑・最後が赤、本物の vitest ログ）でも拒む。
+   *
+   * **この歯が塞ぐ具体的な劣化**: 「最後のブロックが `failed` を名乗るなら、どうせ
+   * 判定は『検出』になるのだから拒まなくてよい」——`if (blockCount <= 1) return;` を
+   * 「最後が failed でも return」へ緩める形。この劣化は `MULTI_BLOCK_FIRST_RED_LAST_GREEN`
+   * （最後は緑）では一度も分岐に入らないので、あの歯だけでは検出できない（段0で実測
+   * 済み）。最後が赤いこのフィクスチャでだけ、緩めた分岐が発火して黙って通ってしまう。
+   */
+  it('複数ブロックでは、向きが逆（最初が緑・最後が赤）でも HarnessError を投げる（本物の vitest ログ）', () => {
+    expect(() =>
+      assertAggregateBlocksUnambiguous(MULTI_BLOCK_FIRST_GREEN_LAST_RED, 'decideJudgementCategory'),
+    ).toThrow(HarnessError);
+  });
 });
 
 describe('mutate-core: decideJudgementCategory（判定の入口1/3）', () => {
@@ -212,7 +324,7 @@ describe('mutate-core: decideJudgementCategory（判定の入口1/3）', () => {
         raw: SINGLE_BLOCK_WITH_FAILURE,
         ...parseAggregateLines(SINGLE_BLOCK_WITH_FAILURE),
       },
-      // 赤い歯が在るときの判定には足場対照が要る（門3）。ここは差し引く
+      // 赤い歯が在るときの判定には足場対照が要る（門4）。ここは差し引く
       // 集合が空の対照を渡す——測っているのは集計ブロックの側である。
       EMPTY_SCAFFOLD_CONTROL,
     );
@@ -226,6 +338,42 @@ describe('mutate-core: decideJudgementCategory（判定の入口1/3）', () => {
         ...parseAggregateLines(MULTI_BLOCK_FIRST_RED_LAST_GREEN),
       }),
     ).toThrow(HarnessError);
+  });
+
+  /**
+   * 逆向き（最初が緑・最後が赤、本物の vitest ログ）でも判定を拒む。
+   *
+   * **これが本題である。** もし `assertAggregateBlocksUnambiguous` が「最後が failed
+   * なら拒まない」へ緩んでいたら、この呼び出しは `testsAllPassed=false` のまま門4
+   * （足場対照。いまの門番号——後から挟んだ「Errors 行」の門2で繰り下がった）へ進み、`artifactResultNotChecked` と合わせて**偽の「検出」**を返す
+   * ——変異と無関係な後続ブロックの赤を、あたかも歯が変異を捕まえたかのように報告する。
+   * `MULTI_BLOCK_FIRST_RED_LAST_GREEN` を使う直上の歯は、最後が緑なのでこの劣化の
+   * 分岐を一度も踏まない（段0で実測済み）。
+   */
+  it('複数ブロックのときは、向きが逆（最初が緑・最後が赤）でも判定を拒む（本物の vitest ログ）', () => {
+    // ⚠️ EMPTY_SCAFFOLD_CONTROL を渡し、門4（足場対照が無い）を先に踏まないように
+    // する。渡さないと「足場対照が取れていない」という無関係な理由で必ず HarnessError
+    // になり、この歯は門1（集計ブロックの複数性）を1文字も検証しないまま緑になる
+    // ——実際、最初にこの歯を scaffoldControl 無しで書いたところ、劣化を当てても
+    // 門4 のおかげで緑のまま落ちず、この歯自体が穴だった（自己検証で発見）。
+    let caught: unknown;
+    try {
+      decideJudgementCategory(
+        artifactResultNotChecked,
+        {
+          raw: MULTI_BLOCK_FIRST_GREEN_LAST_RED,
+          ...parseAggregateLines(MULTI_BLOCK_FIRST_GREEN_LAST_RED),
+        },
+        EMPTY_SCAFFOLD_CONTROL,
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(HarnessError);
+    // 門1（集計ブロックの複数性）で拒んだことを、メッセージで確かめる
+    // ——門4（足場対照）の拒否メッセージと取り違えないため。
+    expect((caught as Error).message).toContain('複数');
+    expect((caught as Error).message).toContain('decideJudgementCategory');
   });
 
   it('複数ブロックのとき、拒否は「集計行が見つからない」エラーとは別のメッセージである', () => {

@@ -400,15 +400,26 @@ function undeliveredGatePassed(artifactResult) {
  * 生存/検出/不明のどれかを、成果物検査・テスト結果・**足場対照**から決める
  * （id とは無関係）。
  *
- * ## 判定を出さない門が3つ在る。順序がそのまま設計である
+ * ## 判定を出さない門が4つ在る。順序がそのまま設計である
  *
  * | 門 | 拒む条件 | 出所 |
  * | --- | --- | --- |
  * | 1 | 集計ブロックが複数在って選べない | `assertAggregateBlocksUnambiguous`（#742） |
- * | 2 | 集計行そのものが無い（落ちたのか1本も走らなかったのか区別できない） | `HarnessError` |
- * | 3 | ⭐ **落ちた歯が在るのに、その名前を判定に使えない** | 下記 |
+ * | 2 | ⭐ **集計行は緑なのに `Errors` 行が出ている（未処理の例外/rejection）** | `assertNoUnhandledErrorsLine` |
+ * | 3 | 集計行そのものが無い（落ちたのか1本も走らなかったのか区別できない） | `HarnessError` |
+ * | 4 | ⭐ **落ちた歯が在るのに、その名前を判定に使えない** | 下記 |
  *
- * ## 門3（落ちた歯の名前）
+ * ## 門2（`Errors` 行——集計行の緑を疑う）
+ *
+ * **なぜ門1の直後・門3（`testsRanCleanly`）より前か。** 門1 は「複数ブロックの
+ * うちどれを見るか」という*選び方*を疑う。門2 は「選んだブロックの中身は
+ * 本当に信用できるか」を疑う——同じ理由の延長として、集計行が「緑に読める」
+ * かどうかを見る門3 より前に置く。門3 の外側（`decideJudgementCategory` の
+ * 「すべて緑なら `生存`」という早期リターン）より前でなければ、緑に見える
+ * 壊れた走行を素通しすることになる。詳細と実測は `assertNoUnhandledErrorsLine`
+ * の doc。
+ *
+ * ## 門4（落ちた歯の名前）
  *
  * **なぜ名前が要るか。** ここより前の判定は集計行の `failed` の文字しか
  * 見ていなかったので、**どこか1本でも赤ければ「検出」**になっていた。
@@ -432,9 +443,9 @@ function undeliveredGatePassed(artifactResult) {
  *
  * **⚠️ 何を測っていないか。**
  * - **差し引いた歯の中に本物の検出が隠れている可能性**は残る（同じ歯が印にも
- *   変異にも反応する場合）。門3 はそれを分離しない —— 代わりに差し引いた
+ *   変異にも反応する場合）。門4 はそれを分離しない —— 代わりに差し引いた
  *   名前を必ず列挙する（`formatScaffoldSubtractionReport`）
- * - **対照に無かった揺れがこの走行で出た場合は `検出` に化ける。** 門3 が
+ * - **対照に無かった揺れがこの走行で出た場合は `検出` に化ける。** 門4 が
  *   変えたのは「その赤に名前が付く」ところまでで、揺れかどうかの判断は読む人に
  *   残る（実測で断続的な揺れが実在するので、これは仮定ではない）
  * - **絞り込んだ走行（`spec.testFilter`）は、走らなかった歯について何も
@@ -464,11 +475,17 @@ export function decideJudgementCategory(artifactResult, testResult, scaffoldCont
     return '不明';
   }
   // ⭐ 門1。集計行を1本に決められるかより先に、集計「ブロック」が複数無いかを見る
-  // （3つの入口のうちの1つ。他の2つは `mutate.mjs` の `cmdBaseline` / `cmdRun`）。
-  // 呼び出し元（`runOneMutation`）は既に `testResult.raw` を先に log しているので、
-  // ここで投げても生ログは判定より前に出ている（歯7の「加工前の証跡」を壊さない）。
+  // （判定の入口3箇所のうちの1つ。他の2つは `mutate.mjs` の `cmdBaseline` /
+  // `cmdRun`。`足場対照` は判定そのものを出さない防御的な4つ目の呼び出し元
+  // ——`assertNoUnhandledErrorsLine` と同じ数え方はしない）。呼び出し元
+  // （`runOneMutation`）は既に `testResult.raw` を先に log しているので、ここで
+  // 投げても生ログは判定より前に出ている（歯7の「加工前の証跡」を壊さない）。
   assertAggregateBlocksUnambiguous(testResult.raw, 'decideJudgementCategory');
-  // 門2。
+  // ⭐ 門2（新設）。集計行が緑でも `Errors` 行（未処理の例外/rejection）が
+  // 出ていれば拒む。門3（`testsRanCleanly`）や直下の「すべて緑なら生存」より
+  // 前に置く——緑に見える集計行を信用してよいかを、信用する前に確かめる。
+  assertNoUnhandledErrorsLine(testResult.raw, 'decideJudgementCategory');
+  // 門3。
   if (!testsRanCleanly(testResult)) {
     throw new HarnessError(
       'テストの集計行（Test Files / Tests）が見つからない。' +
@@ -490,7 +507,7 @@ export function decideJudgementCategory(artifactResult, testResult, scaffoldCont
     );
   }
 
-  // ⭐ 門3。落ちた歯が在る。名前と、差し引く対照が両方揃わない限り判定を出さない。
+  // ⭐ 門4。落ちた歯が在る。名前と、差し引く対照が両方揃わない限り判定を出さない。
   if (!isMeasuredScaffoldControl(scaffoldControl)) {
     throw new HarnessError(
       '落ちた歯が在るが、足場対照（印だけ・無変異の1回の走行）が取れていないので判定を出さない。\n' +
@@ -509,7 +526,7 @@ export function decideJudgementCategory(artifactResult, testResult, scaffoldCont
       `落ちた歯の名前を判定に使えないので判定を出さない: ${diff.failed.reason}。\n` +
         'なぜ拒むか: 足場（印）に起因する赤を差し引けるのは、落ちた歯を名前で数えられる' +
         'ときだけである。名前が取れないまま集計行の failed だけで判定すると、変異を1文字も' +
-        '当てていない状態の赤が「検出」に化ける（門3 が塞いでいる欠陥そのもの）。\n' +
+        '当てていない状態の赤が「検出」に化ける（門4 が塞いでいる欠陥そのもの）。\n' +
         '次にやること: 生ログ（このメッセージの直前に出ているはず）を "Failed Tests" と ' +
         '"FAIL" で検索し、落ちた歯の名前を目で数えること。',
     );
@@ -1036,6 +1053,99 @@ export function assertAggregateBlocksUnambiguous(rawOutput, contextLabel) {
   );
 }
 
+/**
+ * vitest の生出力から `Errors` の集計行（例 `Errors  1 error` / `Errors  2 errors`）を
+ * 取り出す。`parseAggregateLines` / `countAggregateBlocks` と同じ形——`stripAnsi` を
+ * 通してから、行頭（先頭の空白は許す）が `Errors` で始まり、直後に空白と桁数字が
+ * 続く行だけを探す。複数回出ることは無い想定だが、`/g` で全件取って最後を採る形は
+ * 門1 と揃えた（`Test Files` / `Tests` と同じ理由——複合スクリプトで2ブロック出た
+ * ときに最初だけを見て取りこぼさないため）。
+ *
+ * **なぜ `\d+\s+errors?` まで要求するか（`Errors\s+.+$` で緩めない理由）。**
+ * vitest 自身のフォーマッタ（`reportTestSummary`）は
+ * `` `${errors.length} error${errors.length > 1 ? 's' : ''}` `` という形でしか
+ * この行を出さない（`node_modules/vitest/dist/chunks/index.*.js` の
+ * `reportTestSummary` を実際に読んで確認した）ので、桁数字まで絞っても実物を
+ * 取りこぼさない。逆に緩めると `Errors: none`（プロースの紛らわしい行。
+ * `DECOY_LINES` と同じ狙い）まで拾ってしまう——`Errors` の直後が `:` で
+ * `\s+` に一致しないので実際には弾けるが、桁数字まで見ることで「たまたま
+ * 弾けている」から「意図して絞っている」へ変える。**`Type Errors` 行
+ * （typecheck が有効なときに出る別の集計行）とも混同しない**——行頭直後が
+ * `Type` であって `Errors` ではないので、`^\s*Errors` に一致しない。
+ */
+export function parseErrorsLine(rawOutput) {
+  const plain = stripAnsi(rawOutput);
+  const matches = plain.match(/^\s*Errors\s+\d+\s+errors?\b.*$/gm);
+  return matches ? matches[matches.length - 1].trim() : null;
+}
+
+/**
+ * ⭐ **門2（新設）**: vitest が「テストは全部通った後に、未処理の例外/rejection が
+ * 起きた」場合を拒む。
+ *
+ * **なぜこの門が要るか。** vitest は `queueMicrotask` / `setTimeout` の中で投げられた
+ * 例外や、拾われなかった Promise の reject を「テストの合否」とは別枠
+ * （`⎯⎯⎯ Unhandled Errors ⎯⎯⎯` の節、`Uncaught Exception` / `Unhandled Rejection`）
+ * で報告する。**このとき `Test Files` / `Tests` の集計行は完全に緑のまま**で、
+ * `Errors  N error(s)` という3本目の集計行が足されるだけである（実測は
+ * `/home/worker/mgr-f9b32deb/w3/logs/case1-microtask-throw.raw.log` /
+ * `case1b-settimeout-reject.raw.log`。別の作業者が本物の vitest 5.0.0 で採取した
+ * もので、`Test Files 1 passed (1)` / `Tests 1 passed (1)` の直後に
+ * `Errors  1 error` が続く）。vitest 自身は exit 1 で終えるが、
+ * `decideJudgementCategory` は `testResult.exitCode` を1文字も見ない設計
+ * （`grep -Fn -- '変異試験ハーネスとの関係' scripts/test-guard-core.mjs` の doc に
+ * 明記——この非対称性は意図的で、`scripts/test-guard-core.mjs` の歯A/B/C が
+ * 付ける専用の exit コードを「検出」に化けさせないためである）。**だから
+ * `exitCode` を見ずに集計行だけで判定すると、この壊れた走行が緑の
+ * `testsAllPassed=true` として通り抜け、`生存`（あるいは他の変異と重なれば
+ * 偽の `検出`）を返す。** `Errors` 行の存在そのものを理由に拒む——「なぜ壊れて
+ * いるか」の分類（microtask か setTimeout か）はしない。
+ *
+ * **門1（集計ブロックの複数性）の直後・門3（`testsRanCleanly`）より前に置く。**
+ * 集計行が「緑に読める」かどうかを見るより先に、その集計ブロックが信用できるかを
+ * 見るという、門1 と同じ考え方の延長である。
+ *
+ * **`exitCode` ではなく `Errors` 行を見る理由は独立に2つある。**
+ * 1. **害の非対称性が意味を失う。** `exitCode` を見ないことの害は「偽の生存」
+ *    （安全側）だけのはずだったが、`cmdBaseline` はこの状態でも
+ *    「ベースライン成立。」と exit 0 で*名乗ってしまう*——後続の全工程が、
+ *    成立していない土台の上に載る。安全側に倒れているはずの非対称性が、
+ *    ここでは意味を持たない。
+ * 2. **形の独立性。** `exitCode` を判定に使う形にすると、ハーネスが
+ *    `scripts/test-guard-core.mjs` の終了コード割り当て（歯A/B/C の専用コード）
+ *    に結合し、他 repo へ持ち出すたびに除外リストを持つ必要が出る。`Errors`
+ *    行は vitest 自身の出力なので、`exitCode` を1文字も見ないという既存の
+ *    性質（歯の専用終了コードを巻き込まない）を壊さずに済む。
+ *
+ * **意図的な赤（`scripts/test-guard-core.mjs` の歯A/B/C）を巻き込まないことの
+ * 対照**: `/home/worker/mgr-f9b32deb/w3/logs/case-guard-B-skip.raw.log`
+ * （歯Bが無条件の `it.skip` を検出して exit 4 で落ちる本物のログ）には
+ * `Errors` 行が無い——歯A/B/Cは `test.mjs` が vitest の外側（素の node
+ * プロセス）で追加のメッセージと専用 exit を出す形であって、vitest 自身の
+ * 集計ブロックへは1行も足さない。だからこの門は歯A/B/Cの赤を誤って拒まない
+ * （`scripts/mutate-aggregate-blocks.test.ts` の固定入力で確認する）。
+ *
+ * @param {string} rawOutput テストの生出力。
+ * @param {string} contextLabel エラーメッセージへ差し込む呼び出し元の名前。
+ */
+export function assertNoUnhandledErrorsLine(rawOutput, contextLabel) {
+  const errorsLine = parseErrorsLine(rawOutput);
+  if (errorsLine === null) return;
+
+  throw new HarnessError(
+    `${contextLabel}: vitest の集計行に \`Errors\` 行が出ている（${JSON.stringify(errorsLine)}）。` +
+      '判定を拒む。\n' +
+      'なぜ拒むか: vitest は「テストは全部通った後に、未処理の例外/rejection（Uncaught ' +
+      'Exception / Unhandled Rejection）が起きた」場合、`Test Files` / `Tests` の集計行を緑の' +
+      'ままにして `Errors` 行だけを足し、exit 1 で終える。このハーネスの判定（`decideJudgementCategory`）' +
+      'は `exitCode` を1文字も見ない設計なので、`Errors` 行を無視すると集計行の緑だけで' +
+      '「生存」と静かに判定してしまう——実際には走行そのものが壊れている。\n' +
+      '次にやること: 生ログ（このメッセージの直前に出ているはず）を "Unhandled Errors" で検索し、' +
+      '"Uncaught Exception" / "Unhandled Rejection" の節を目で確かめる。テストコード側で未処理の' +
+      '例外・rejection を無くしてから、ベースラインを取り直すこと。',
+  );
+}
+
 /** 手順10: テストを走らせ、`Test Files ... passed` と `Tests ... passed` の
  * 両方の行を読む。行の不在は「走っていない」であって「通った/落ちた」ではない。
  * `maxWorkers` を渡さなければ `DEFAULT_MAX_WORKERS`（＝これまでどおり `4`）で走る。
@@ -1067,7 +1177,8 @@ export function testsAllPassed(testResult) {
   return noFailures && hasPassed;
 }
 
-// ── 落ちた歯の「名前」を判定に使う（足場の偽陽性。判定を拒む門その3） ──────
+// ── 落ちた歯の「名前」を判定に使う（足場の偽陽性。判定を拒む門その4。
+//    いまの門番号では、後から挟んだ「Errors 行」の門2で繰り下がった） ──────
 //
 // **なぜこの節が在るか。** 直上の `testsAllPassed` は集計行の `failed` の文字
 // しか見ていない。**終了コードも、落ちた歯の名前も、判定に入らない。**
@@ -1432,6 +1543,9 @@ export function measureScaffoldControl({ extraArgs = [], maxWorkers = DEFAULT_MA
   }
 
   assertAggregateBlocksUnambiguous(result.raw, '足場対照');
+  // 門2 相当。対照の走行自体が「緑だが Errors 行が出ている」壊れた形だと、
+  // 差し引く集合そのものが信用できない。
+  assertNoUnhandledErrorsLine(result.raw, '足場対照');
   if (!testsRanCleanly(result)) {
     throw new HarnessError(
       '足場対照: テストの集計行（Test Files / Tests）が見つからない。' +
@@ -1489,7 +1603,7 @@ export function measureScaffoldControl({ extraArgs = [], maxWorkers = DEFAULT_MA
  * 委ねた場合は、加えて `describeUndeliveredTestResultGate` の警告も添える。
  *
  * **`scaffoldControl`（足場対照）は、赤い歯が在るときは必須である。**
- * 渡さないと `decideJudgementCategory` が判定を拒む（門3）。すべて緑のときは
+ * 渡さないと `decideJudgementCategory` が判定を拒む（門4）。すべて緑のときは
  * 差し引く相手が無いので要らない —— その経路は1文字も変えていない。
  * 判定行には件数と走行範囲だけを添える（名前は証跡の区画へ。
  * `describeScaffoldSubtraction` の doc）。
