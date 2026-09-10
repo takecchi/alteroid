@@ -345,9 +345,11 @@ export function useCreateSchedule() {
 /**
  * 継続中の依頼を外す。
  *
- * **既定の定期ジョブ（日報・発意 tick）は外せない**（デーモンが `RESERVED_SCHEDULE_KINDS`
- * で守っている）。画面側でボタンを隠して表現しないこと — 隠すと「なぜ押せないか」が
- * 消える。押せて、断られた理由がその場に出るほうが読める。
+ * **既定の定期ジョブ（`RESERVED_SCHEDULE_KINDS`。packages/core/src/schedule.ts）は
+ * 外せない**（デーモンが同じ名前で守っている）。画面側でボタンを隠して表現しないこと
+ * — 隠すと「なぜ押せないか」が消える。押せて、断られた理由がその場に出るほうが読める。
+ * ここに名前を書き写さないこと — 数え上げを持つのは `RESERVED_SCHEDULE_KINDS` だけ
+ * である（#701 / #756 と同じ理由。増えても直すのはあちらだけでよい）。
  */
 export function useRemoveSchedule() {
   const api = useApi();

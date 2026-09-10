@@ -205,7 +205,8 @@ describe('継続中の依頼を外す', () => {
   });
 
   /**
-   * 既定の仕込み（日報・発意 tick）はデーモンが名前を守っているので外せない。
+   * 既定の仕込み（`RESERVED_SCHEDULE_KINDS`。packages/core/src/schedule.ts）は
+   * デーモンが名前を守っているので外せない。
    * **ボタンだけ消すと、押せない理由が画面から消える**ので、代わりに書く。
    */
   it('既定の仕込みには「外す」を出さず、外せない理由を書く', async () => {
@@ -293,7 +294,7 @@ describe('横並びの積み替え（本4-B）: flex-wrap と break-words', () =
  * いまの周期・本文が入っている (3) 保存すると同じ kind へ直した値が飛ぶ。
  */
 describe('仕込まれた依頼を編集できる（#496）', () => {
-  it('仕込まれた依頼には「編集」が在り、既定の日報・発意には無い', async () => {
+  it('仕込まれた依頼には「編集」が在り、既定の仕込み（RESERVED_SCHEDULE_KINDS）には無い', async () => {
     stubSchedule([DEFAULT_ENTRY, SPEC_ENTRY]);
     renderSchedule();
 

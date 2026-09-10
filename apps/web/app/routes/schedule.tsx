@@ -92,8 +92,11 @@ export default function Schedule() {
                   </p>
                   {/*
                     **継続中の依頼だけが持つもの。** `request` があるかどうかが
-                    「人間かクローンが仕込んだ依頼」と「既定の仕込み（日報・発意
-                    tick）」の境目である（既定のほうは本文も周期も持たない）。
+                    「人間かクローンが仕込んだ依頼」と「既定の仕込み
+                    （`RESERVED_SCHEDULE_KINDS`。packages/core/src/schedule.ts）」
+                    の境目である（既定のほうは本文も周期も持たない）。ここで名前を
+                    書き写さないこと — 数え上げを持つのは `RESERVED_SCHEDULE_KINDS`
+                    だけである（#701 / #756 と同じ理由）。
 
                     `lastRunAt` を出すのは、**仕込んだのに発火していないことに
                     気づけるようにする**ためである。次回時刻だけを見せると、
@@ -147,10 +150,10 @@ export default function Schedule() {
                   ボタンだけ消すと、押せない理由が画面から消える。
 
                   **「編集」も同じ条件で出す。** `request` を持つもの＝人間か
-                  クローンが仕込んだ依頼だけが編集の対象になる（既定の日報・
-                  発意 tick は `spec` も `request` も持たないので、直しようが
-                  無い——`ScheduleStatus.spec` の doc「コードに書かれた既定で
-                  値そのものが存在しない」）。
+                  クローンが仕込んだ依頼だけが編集の対象になる（既定の仕込み
+                  ＝ `RESERVED_SCHEDULE_KINDS` は `spec` も `request` も持たない
+                  ので、直しようが無い——`ScheduleStatus.spec` の doc「コードに
+                  書かれた既定で値そのものが存在しない」）。
                 */}
                 {entry.request === undefined ? (
                   <span className="shrink-0 text-[11px] text-muted">既定（外せない）</span>
