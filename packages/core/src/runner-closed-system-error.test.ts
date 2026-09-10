@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runnerEventSchema } from './runner-protocol.js';
 import type { RunnerEvent } from './runner-protocol.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
-import { systemErrorFactsOf } from './system-error.js';
+import { systemErrorFactsOf, withSystemErrorNote } from './system-error.js';
 
 /**
  * **落ちた理由の分類が、判定できる形で `closed` に載ること**（#713 段1）。
@@ -260,4 +260,88 @@ describe('systemErrorFactsOf は「取れなかった」を値で埋めない', 
       code: 'ENOENT',
     });
   });
+});
+
+/**
+ * `withSystemErrorNote`（#713 段2）——`closed_failed` の受信箱本文へ
+ * `event.systemError` を運ぶ。`withRecoveryNote`（`usage-limits.ts`）と同じ形
+ * （base を1文字も変えず、末尾に改行1本と1行を足す）だが、**`systemError` が
+ * 無いときも行を省かない**（`withRecoveryNote` は `recovery === 'unknown'` で
+ * 何も足さない。ここでは真似ない——理由は `system-error.ts` の doc）。
+ */
+describe('withSystemErrorNote は base を変えず、末尾に分類の1行を足す（#713 段2）', () => {
+  const base = 'マネージャーのセッションが落ちた: Error: 何か';
+
+  it('base（event.reason）は1文字も変わらない——先頭が base + 改行のまま', () => {
+    const withFacts = withSystemErrorNote(base, { code: 'EAGAIN' });
+    const withoutFacts = withSystemErrorNote(base, undefined);
+    expect(withFacts.startsWith(`${base}\n`)).toBe(true);
+    expect(withoutFacts.startsWith(`${base}\n`)).toBe(true);
+  });
+
+  it('B: systemError が在るとき、code / errno / syscall を言い換えずにそのまま連ねる', () => {
+    const decorated = withSystemErrorNote(base, {
+      code: 'EAGAIN',
+      errno: -11,
+      syscall: 'spawn /app/node_modules/.bin/claude',
+    });
+    expect(decorated).toContain('code=EAGAIN');
+    expect(decorated).toContain('errno=-11');
+    expect(decorated).toContain('syscall=spawn /app/node_modules/.bin/claude');
+  });
+
+  it('B: errno / syscall が無い回（SDK が包み直した回の形）は、その欄を書かない', () => {
+    const decorated = withSystemErrorNote(base, { code: 'EAGAIN' });
+    expect(decorated).toContain('code=EAGAIN');
+    expect(decorated).not.toContain('errno=');
+    expect(decorated).not.toContain('syscall=');
+  });
+
+  it(
+    'D: systemError が無いとき、withRecoveryNote と違って行を省略しない。' +
+      '「取れなかった」を明示的な1行として書く',
+    () => {
+      const decorated = withSystemErrorNote(base, undefined);
+      // withRecoveryNote の unknown 側は `return base;`（1文字も足さない）。
+      // ここではそれをしない——長さが base より必ず伸びる。
+      expect(decorated.length).toBeGreaterThan(base.length);
+      expect(decorated).toContain('器の資源');
+    },
+  );
+
+  it(
+    'D の行は「器の資源の軸」に限定して名乗り、他の軸（枠・セッション切断）は' +
+      'この欄の対象外だと明示する——A（枠）を D に飲み込ませない',
+    () => {
+      const decorated = withSystemErrorNote(base, undefined);
+      // **A（枠）や C（セッション切断）を「分からない」へ一括りにしない。**
+      // 読む側が「本文と lastFailure を見ればよい」と分かる形で書く。
+      expect(decorated).toContain('枠');
+      expect(decorated).toContain('lastFailure');
+      // **「分類が取れなかった」という無限定な言い方だけで終わらせない。**
+      // 無限定な文言では、A で落ちた回（`systemError` も無い）にも同じ行が出て、
+      // 「何も分からない」と読める——次のテストがこの区別を実際の2文言で測る。
+    },
+  );
+
+  it(
+    'D の行は、枠（A）で落ちた回の本文（reason）を上書きしない——' +
+      '合成した最終本文には枠の文言と D の行が両方残る',
+    () => {
+      // A: 枠で落ちた回は systemError が付かない。reason 本文に枠の文言が
+      // そのまま入っている（`manager-synthesized-notices.test.ts` の実測と
+      // 同じ文言）。
+      const quotaReason =
+        'マネージャーのセッションが落ちた: Error: ' +
+        "You've hit your individual spend limit for this account.";
+      const decorated = withSystemErrorNote(quotaReason, undefined);
+      // **枠の文言はそのまま残る**（base を変えていない）。
+      expect(decorated).toContain("You've hit your individual spend limit for this account.");
+      // **D の行も付くが、「器の資源」の軸に限定されている**——
+      // 「分類できない」という無限定な文言なら、枠の文言と組み合わさったときに
+      // 読み手が「枠かどうかも分からない」と誤読しうる。実際には reason 本文に
+      // 枠の事実がそのまま書いてあるので、誤読ではないことを行の中で示す。
+      expect(decorated).toContain('器の資源による落ち方かどうかは');
+    },
+  );
 });

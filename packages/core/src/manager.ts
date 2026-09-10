@@ -57,6 +57,7 @@ import type {
   WorkspaceLocator,
 } from './schema.js';
 import type { Stores } from './store.js';
+import { withSystemErrorNote } from './system-error.js';
 import {
   describeUsageNotice,
   limitRecoveryOf,
@@ -7042,8 +7043,18 @@ class Pool implements ManagerPool {
         // **即配らず合流窓へ積む（「一枠落ち一合図」）。** この本文は runner
         // 自身の接頭辞＋例外文言（マネージャー本人の発話を含まない）——
         // `#queueSynthesizedNotice` の doc。
+        //
+        // **`event.reason` はそのまま渡し、`event.systemError`（#713 / #718）は
+        // 末尾の1行として運ぶ（#713 段2）。** `event.reason` を1文字も変えない
+        // ——`withSystemErrorNote` は `usage-limits.ts` の `withRecoveryNote` と
+        // 同じ形（base を変えず末尾に足すだけ）。系統立った説明は
+        // `system-error.ts` の `withSystemErrorNote` の doc。
         if (event.status === 'failed') {
-          this.#queueSynthesizedNotice(event.managerId, 'closed_failed', event.reason);
+          this.#queueSynthesizedNotice(
+            event.managerId,
+            'closed_failed',
+            withSystemErrorNote(event.reason, event.systemError),
+          );
           /**
            * **落ちたことを名簿へも知らせる（#712）。** これが無いと、落ちた1本
            * ぶんだけ `/health` の `managers` が減り、配置の点数の分母が縮んで
