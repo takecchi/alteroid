@@ -5414,24 +5414,39 @@ class Pool implements ManagerPool {
    */
   #notifyResumeFallback(record: ManagerRecord, sessionId: string, reason: string): void {
     const { job } = record;
+    const body = [
+      `前のセッション（${sessionId}）へは戻れなかったので、預かってあった生ログから` +
+        '新しいセッションを起こして続けさせた。',
+      `理由: ${reason}`,
+      ...this.#notifyExcerptLines(job),
+      '',
+      'マネージャーが持っているのは記録から読み取れる範囲だけである。' +
+        '前のセッションで口頭で足した細かい指示は効いていないと考えて、' +
+        '必要なら `manager_send` で言い直すこと。',
+    ]
+      .filter((line) => line !== '')
+      .join('\n');
+    // **日誌は呼び出し元に委ねない（#240 と同じ理由。issue #799）。** 唯一の
+    // 呼び出し元（`case 'resume_failed'` の `event.recovered` 枝）は
+    // 「前のセッション（…）を開き直せなかった: 理由」までしか書かないので、
+    // **ここで組み立てた拡張文言（作業ディレクトリ・直近報告の抜粋・言い直しの
+    // 案内）はどこにも残らない。** 合流窓の flush に委ねることもできない——
+    // `#flushSynthesizedNoticeFor` が書く1行は内訳（族と通数）だけで本文を
+    // 含まないので、**flush が走っても走らなくても本文は日誌に入らない。**
+    // `#queueSynthesizedNotice` する側が経路によらず必ず1本書くことで、
+    // 日誌に無いことを「この経路を通っていない」の判別器として使えるようにする
+    // ——`#notifyUnresumable`（族 `resume_failed`）と同じ形に揃えてある。
+    void this.#journal({
+      type: 'exchange',
+      with: 'manager',
+      role: 'outbound',
+      text: `[${job.id}] （生ログから作り直して続けた）${body}`,
+    });
     // **即配らず合流窓へ積む**（`#notifyUnresumable` と同じ理由・同じ族の
-    // クラスタ。「委譲が器と一緒に失われた族」の①に当たる）。
-    this.#queueSynthesizedNotice(
-      job.id,
-      'resume_fallback',
-      [
-        `前のセッション（${sessionId}）へは戻れなかったので、預かってあった生ログから` +
-          '新しいセッションを起こして続けさせた。',
-        `理由: ${reason}`,
-        ...this.#notifyExcerptLines(job),
-        '',
-        'マネージャーが持っているのは記録から読み取れる範囲だけである。' +
-          '前のセッションで口頭で足した細かい指示は効いていないと考えて、' +
-          '必要なら `manager_send` で言い直すこと。',
-      ]
-        .filter((line) => line !== '')
-        .join('\n'),
-    );
+    // クラスタ。「委譲が器と一緒に失われた族」の①に当たる）。**上の
+    // `#journal` と同じ `body` を渡す**（同じ文字列を2回組み立てると、
+    // 片方だけ直る事故が起きる——`case 'rate_limit'` の `build` と同じ理由）。
+    this.#queueSynthesizedNotice(job.id, 'resume_fallback', body);
   }
 
   /**
@@ -7189,11 +7204,23 @@ class Pool implements ManagerPool {
         // 同じ形（base を変えず末尾に足すだけ）。系統立った説明は
         // `system-error.ts` の `withSystemErrorNote` の doc。
         if (event.status === 'failed') {
-          this.#queueSynthesizedNotice(
-            event.managerId,
-            'closed_failed',
-            withSystemErrorNote(event.reason, event.systemError),
-          );
+          // **本文を日誌へ先に書く（issue #799）。** `#flushSynthesizedNoticeFor`
+          // が書く日誌は「機構が合成した知らせを N 件、1件にまとめて配った
+          // （内訳: …）」の1行だけで、個々の本文は含まない——`case 'rate_limit'`
+          // が既に `#journal` してから `#queueSynthesizedNotice` するのと同じ
+          // 理由で、ここも合流窓の flush に本文の記録を委ねない。**合流窓が
+          // flush される前にプロセスが落ちると、この本文はどこにも残らない**
+          // （flush が走っても、flush 側の1行は内訳だけなので変わらない）。
+          // 同じ文字列を2回組み立てず、journal と queue の両方へ同じ `const`
+          // を渡す。
+          const body = withSystemErrorNote(event.reason, event.systemError);
+          await this.#journal({
+            type: 'exchange',
+            with: 'manager',
+            role: 'inbound',
+            text: `[${event.managerId}] ${body}`,
+          });
+          this.#queueSynthesizedNotice(event.managerId, 'closed_failed', body);
           /**
            * **落ちたことを名簿へも知らせる（#712）。** これが無いと、落ちた1本
            * ぶんだけ `/health` の `managers` が減り、配置の点数の分母が縮んで
