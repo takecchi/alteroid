@@ -78,33 +78,102 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 export type ProseLine = { line: number; text: string };
 
 /**
- * 本文（フェンスの中を落としたもの）を行番号つきで返す。
+ * フェンス（```` ``` ```` / `~~~`）の状態機械そのもの。`proseLines`（下）はこれの
+ * 薄いラッパで、戻り値から `lines` だけを取り出す——`proseLines` は既存の呼び出し
+ * 元を持つ公開シグネチャなので戻り値の形は変えず、フェンスが閉じずに末尾へ
+ * 達したこと（`unterminated`）だけを新しく外へ出す口をここに足した（#786）。
+ *
+ * 判定は CommonMark のフェンス付きコードブロックの規則
+ * （https://spec.commonmark.org/0.31.2/#fenced-code-blocks）に合わせてある：
+ *
+ * 1. **開き**: 接頭辞（`//+` または `*`。前後の空白は無制限、上限は入れない）を
+ *    剥がした残りの先頭が、同じ文字（`` ` `` または `~`）の3個以上の連続。
+ *    **バックティックの連続に限り、その直後（同じ行の残り）にバックティックが
+ *    1個でも在れば開きフェンスとして扱わない**——CommonMark はバックティックの
+ *    フェンスの info string がバックティックを含むことを禁じており、含む行は
+ *    「フェンスの開き」ではなく単なるインラインのコードスパン
+ *    （``` `...` ```）だからである。この追加条件はバックティックにだけ掛かる。
+ *    `~` の info string はチルダを含んでよい（CommonMark 上の非対称性）。
+ * 2. **閉じ**: 開いたときと**同じ文字**で、開いたときの**連続の長さ以上**、
+ *    後ろは空白のみ（info string を持たない）。文字が違う・長さが足りない
+ *    行はトグルせず、フェンスの中のまま扱う。
+ * 3. フェンスの中で2を満たさない行はプローズに数えない（生の出力として捨てる。
+ *    閉じた行自身もプローズには数えない）。
+ * 4. 末尾に達してもフェンスが閉じていなければ `unterminated: true` を返す——
+ *    「フェンスの中（意図して無検査）」と「フェンス判定がずれた結果の無検査」を
+ *    区別できないままにしないための口である。呼び出し側（下の歯）がこれを見て
+ *    赤くする。
+ *
+ * **先頭空白に上限（3個など）を入れないこと。** 入れると、JSDoc の意図した
+ * 字下げ（4+スペースの揃え）が開きフェンスとして認識されなくなる回帰を起こす
+ * （`packages/core/src/runner.ts` の JSDoc コメントで一度この回帰が起きた）。
+ */
+export function proseLinesWithFenceState(markdown: string): {
+  lines: ProseLine[];
+  unterminated: boolean;
+} {
+  const out: ProseLine[] = [];
+  let inFence = false;
+  let fenceChar: '`' | '~' | null = null;
+  let fenceLen = 0;
+  const lines = markdown.split('\n');
+
+  const prefixRe = /^\s*(?:\/\/+|\*)?\s*/;
+  const openRe = /^(`{3,}|~{3,})(.*)$/;
+
+  for (let i = 0; i < lines.length; i++) {
+    const text = lines[i] ?? '';
+    const prefixMatch = prefixRe.exec(text);
+    const content = text.slice(prefixMatch ? prefixMatch[0].length : 0);
+
+    if (!inFence) {
+      const m = openRe.exec(content);
+      if (!m) {
+        out.push({ line: i + 1, text });
+        continue;
+      }
+      const marker = m[1];
+      const markerChar = marker[0] as '`' | '~';
+      const rest = m[2];
+      if (markerChar === '`' && rest.includes('`')) {
+        // info string にバックティックを含む ⟹ フェンスの開きではなく
+        // インラインのコードスパン（#786 の欠陥A: 1行に開閉が両方在る行）。
+        out.push({ line: i + 1, text });
+        continue;
+      }
+      inFence = true;
+      fenceChar = markerChar;
+      fenceLen = marker.length;
+      continue;
+    }
+
+    // フェンスの中。同じ文字・長さ以上・後ろ空白のみの行だけが閉じる。
+    if (fenceChar !== null && new RegExp(`^${fenceChar}{${fenceLen},}\\s*$`).test(content)) {
+      inFence = false;
+      fenceChar = null;
+      fenceLen = 0;
+    }
+    // 閉じなかった行も、閉じた行自身も、プローズには数えない。
+  }
+
+  return { lines: out, unterminated: inFence };
+}
+
+/**
+ * 本文（フェンスの中を落としたもの）を行番号つきで返す。`proseLinesWithFenceState`
+ * （上）の薄いラッパ——既存の呼び出し元が多数在るため戻り値の形（`ProseLine[]`）は
+ * 変えていない。`unterminated`（フェンスが閉じずに末尾へ達したか）を見る必要が
+ * ある呼び出し元は `proseLinesWithFenceState` を直接呼ぶこと。
  *
  * 元々は `AGENTS.md`（生の Markdown）専用だったが、`.claude/**` とどの階層かの
  * `src/**` にも同じ考え方（フェンス＝出典ではなく生の出力なので見ない）を適用するために
  * ここで汎用化した。`.ts` のコメントの中のフェンスは行頭がそのまま
  * ` ``` ` にならず、コメント記号（`//` または JSDoc の `*`）が前に付く
  * （実例: `packages/core/src/inbox.ts` の JSDoc 内 ` * \`\`\` `、
- * `packages/core/src/clone.ts` の行コメント内 `// \`\`\` `）。**この形も
- * フェンスとして認識できないと、コード中の実測ブロックが「フェンスの外」
- * として誤って歯の対象に入ってしまう**（今回は該当する実測ブロックの中身に
- * `path:行番号` は無かったが、それは実測がたまたまそうだっただけで、
- * この関数自身の正しさではない——だから正しく直した）。
+ * `packages/core/src/clone.ts` の行コメント内 `// \`\`\` `）。
  */
 export function proseLines(markdown: string): ProseLine[] {
-  const out: ProseLine[] = [];
-  let inFence = false;
-  const lines = markdown.split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    const text = lines[i] ?? '';
-    if (/^\s*(?:\/\/+|\*)?\s*(```|~~~)/.test(text)) {
-      inFence = !inFence;
-      continue;
-    }
-    if (inFence) continue;
-    out.push({ line: i + 1, text });
-  }
-  return out;
+  return proseLinesWithFenceState(markdown).lines;
 }
 
 export type LineNumberCitation = { line: number; token: string; target: string };
@@ -391,6 +460,14 @@ describe('AGENTS.md の参照の形（#369）', () => {
     expect(prose.length).toBeGreaterThan(100);
   });
 
+  it('フェンスが最後まで閉じている（#786: 判定がずれた無検査を緑にしない）', () => {
+    // 「フェンスの中（意図して無検査）」と「フェンス判定がずれた結果の無検査」を
+    // 同じ状態にしないための歯。AGENTS.md が末尾までにフェンスを閉じていなければ、
+    // それ以降が丸ごと「フェンスの中」として無検査になっているのに、それを
+    // 読む側から見分けられない——ここで赤くする。
+    expect(proseLinesWithFenceState(agentsMd).unterminated).toBe(false);
+  });
+
   it('リポジトリ内のファイルを `path:行番号` で指さない', () => {
     const found = findLineNumberCitations(prose, isRepoFile);
     expect(
@@ -532,6 +609,80 @@ describe('.claude/** と */src/** と apps/web/app/** の path:行番号 出典�
         '直せない理由があるなら WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS へ理由つきで足すこと' +
         '（scripts/agents-md-references.test.ts）。',
     ).toEqual([]);
+  });
+
+  it('広げた対象範囲でフェンスが最後まで閉じている（#786）', () => {
+    // AGENTS.md と同じ不変条件を、広げた対象範囲（407ファイル）にも適用する。
+    // ここで実測すると0件——だから赤にできる（見つかったら実際に踏んでいる証拠）。
+    const unterminated: string[] = [];
+    for (const file of WIDENED_SCOPE_FILES) {
+      const text = readRepoFile(file);
+      if (proseLinesWithFenceState(text).unterminated) unterminated.push(file);
+    }
+    expect(
+      unterminated,
+      '末尾に達してもフェンスが閉じていない。これ以降の行が丸ごと' +
+        '「フェンスの中」として無検査になっている——フェンス記号の対応' +
+        '（開いた文字・長さと同じもので閉じる）を直すこと。',
+    ).toEqual([]);
+  });
+});
+
+describe('proseLines のフェンス判定（#786 の欠陥そのものを再現する合成 fixture）', () => {
+  // ⚠️ ここは「この歯が緑になる経路が測りたい経路だけか」を確認済み
+  // （実装をそれぞれ意図的に壊して、対応する it が個別に赤くなることを
+  // 1本ずつ確認してから戻した。壊し方と結果は PR の報告に書く）。
+
+  it('A: 1行に開閉が両方在る行（JSDoc の `* ` 接頭辞つき。歯自身の実例と同じ形）はトグルせずプローズのまま', () => {
+    // この歯自身の doc（`proseLinesWithFenceState` の直上、` * ``` \`grep ...\` ``` `
+    // の行）が実際にこの形である。旧実装はここでトグルし、ファイルの残り
+    // （このケースでは5行目）を無検査にしていた。
+    const fixture = [
+      ' * ```code``` の続き',
+      '```',
+      'real fence content (must stay hidden)',
+      '```',
+      'after the real fence, this line is prose again',
+    ].join('\n');
+    const { lines, unterminated } = proseLinesWithFenceState(fixture);
+    expect(lines.map((l) => l.line)).toEqual([1, 5]);
+    expect(lines.map((l) => l.text)).not.toContain('real fence content (must stay hidden)');
+    expect(unterminated).toBe(false);
+  });
+
+  it('B: `~~~` と ``` の混在は閉じない（開いた文字でしか閉じられない）', () => {
+    const fixture = [
+      '~~~',
+      'hidden line 1',
+      '```',
+      'still hidden: a different fence character does not close ~~~',
+      '~~~',
+      'now closed, prose again',
+    ].join('\n');
+    const { lines, unterminated } = proseLinesWithFenceState(fixture);
+    expect(lines.map((l) => l.line)).toEqual([6]);
+    expect(unterminated).toBe(false);
+  });
+
+  it('C: フェンス長の不一致は閉じない（閉じは開いた長さ以上が必要）', () => {
+    const fixture = [
+      '````',
+      'hidden inside a 4-backtick fence',
+      '```',
+      'still hidden: 3 backticks cannot close a 4-backtick fence',
+      '````',
+      'now closed by a matching (>=4) length, prose again',
+    ].join('\n');
+    const { lines, unterminated } = proseLinesWithFenceState(fixture);
+    expect(lines.map((l) => l.line)).toEqual([6]);
+    expect(unterminated).toBe(false);
+  });
+
+  it('D: 末尾まで閉じられていないフェンスは unterminated: true を返す', () => {
+    const fixture = ['prose before', '```', 'hidden, the fence never closes'].join('\n');
+    const { lines, unterminated } = proseLinesWithFenceState(fixture);
+    expect(lines.map((l) => l.line)).toEqual([1]);
+    expect(unterminated).toBe(true);
   });
 });
 
