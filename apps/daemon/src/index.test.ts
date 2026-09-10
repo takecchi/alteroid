@@ -459,6 +459,21 @@ describe('describeReopenedTokenNotice', () => {
  * 壊し方になる。`wake()` は `main()` の中の閉包で型でも実行時でも触れないので、
  * 原文を読んで配線を固定する（隣の describe と同じ理由）。
  */
+/**
+ * 字面を見る歯（`wake()` が `main()` の中の閉包で実行時に触れないため）の
+ * **失敗を読める形にするための小道具**（Issue #783）。
+ *
+ * `indexOf` の生の値を `toBeGreaterThan(-1)` で見ると、失敗が
+ * `expected -1 to be greater than -1` になり、**どの目印が消えたのかが
+ * 出力から読めない。** いちばん起きやすい壊れ方が「目印の字面を変えた／
+ * 整形が入った」なので、そこを名指しできないと歯の値が半分になる。
+ *
+ * @returns `body` に見つからなかった目印だけを並べた配列（全部在れば空）。
+ */
+function missingAnchors(body: string, anchors: readonly string[]): string[] {
+  return anchors.filter((anchor) => !body.includes(anchor));
+}
+
 describe('クローンの門は clone.post だけを絞る（restore / resumeStoppedByUsage は無条件）', () => {
   const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
   const wakeStart = source.indexOf('const wake = () => {');
@@ -470,9 +485,14 @@ describe('クローンの門は clone.post だけを絞る（restore / resumeSto
     const postAt = wakeBody.indexOf('clone.post(');
     const ifFoldAt = wakeBody.indexOf("decision.kind === 'fold'");
 
-    expect(decideAt).toBeGreaterThan(-1);
-    expect(postAt).toBeGreaterThan(-1);
-    expect(ifFoldAt).toBeGreaterThan(-1);
+    // 目印が消えていたら、消えた目印そのものを出す（`missingAnchors` の doc）。
+    expect(
+      missingAnchors(wakeBody, [
+        'cloneWakeGate.decide(',
+        'clone.post(',
+        "decision.kind === 'fold'",
+      ]),
+    ).toEqual([]);
     // 判定 → 畳む/配るの分岐 → clone.post の順で並んでいる
     // ⟹ clone.post は判定より後ろの、分岐の中にある。
     expect(decideAt).toBeLessThan(ifFoldAt);
@@ -486,8 +506,9 @@ describe('クローンの門は clone.post だけを絞る（restore / resumeSto
     const resumeAt = wakeBody.indexOf('.resumeStoppedByUsage(');
     const postAt = wakeBody.indexOf('clone.post(');
 
-    expect(restoreAt).toBeGreaterThan(-1);
-    expect(resumeAt).toBeGreaterThan(-1);
+    expect(
+      missingAnchors(wakeBody, ['clone.managers', '.resumeStoppedByUsage(', 'clone.post(']),
+    ).toEqual([]);
     // clone.post（分岐の中）より後ろに在る ＝ 分岐を抜けてから呼んでいる。
     expect(postAt).toBeLessThan(restoreAt);
     expect(restoreAt).toBeLessThan(resumeAt);
@@ -522,14 +543,22 @@ describe('recovered の日誌行は、受信箱へ配ったかどうかと無関
     const entryAt = fnBody.indexOf('const entry = tokenRotationEntry(outcome, observed);');
     const reopenedAt = fnBody.indexOf('const reopened = reopenedTokenOf(outcome);');
 
-    expect(entryAt).toBeGreaterThan(-1);
-    expect(reopenedAt).toBeGreaterThan(-1);
+    expect(
+      missingAnchors(fnBody, [
+        'const entry = tokenRotationEntry(outcome, observed);',
+        'const reopened = reopenedTokenOf(outcome);',
+      ]),
+    ).toEqual([]);
     expect(entryAt).toBeLessThan(reopenedAt);
   });
 
   it('journal への追記は settleTokenOutcome の中に1箇所だけで、クローンの門の分岐に複製されていない', () => {
+    // **件数そのものではなく「何を数えたか」を出す。** `expected 2 to be 1` では
+    // 「門の分岐へ複製された」のか「別の追記が増えた」のかが読めない。
     const occurrences = fnBody.split('stores.journal.append(entry)').length - 1;
-    expect(occurrences).toBe(1);
+    expect({ 'settleTokenOutcome の中の stores.journal.append(entry) の数': occurrences }).toEqual({
+      'settleTokenOutcome の中の stores.journal.append(entry) の数': 1,
+    });
 
     // その1箇所は `reopened` のブロック（`if (reopened !== undefined) { ... }`）
     // を閉じた後に在る ⟹ 畳んだ（配らなかった）回でも実行される。
@@ -537,8 +566,12 @@ describe('recovered の日誌行は、受信箱へ配ったかどうかと無関
     const appendAt = fnBody.indexOf('stores.journal.append(entry)');
     const closeAt = fnBody.indexOf('\n    }\n\n    if (entry === null) return;');
 
-    expect(reopenedBlockStart).toBeGreaterThan(-1);
-    expect(closeAt).toBeGreaterThan(-1);
+    expect(
+      missingAnchors(fnBody, [
+        'if (reopened !== undefined) {',
+        '\n    }\n\n    if (entry === null) return;',
+      ]),
+    ).toEqual([]);
     expect(closeAt).toBeLessThan(appendAt);
     expect(reopenedBlockStart).toBeLessThan(closeAt);
   });
