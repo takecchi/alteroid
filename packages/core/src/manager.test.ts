@@ -8828,3 +8828,67 @@ describe('穴C: #pushProfile が journal.append の失敗で跡を残す', () =>
     expect(traces.some((line) => line.includes('日誌を記録できませんでした'))).toBe(true);
   });
 });
+
+/**
+ * **穴C（今回追加分）: `#pushAgentToken` 単体の回帰を固定する。**
+ *
+ * 直上の describe は `#pushProfile` しか起こしていない。`#pushAgentToken` は
+ * 同じ穴C の修正を受けた非対称なもう一方の経路（`#connectTo` が `#pushProfile`
+ * の直後に呼ぶ）だが、そちらを直接壊す歯が無かった——実測（変異試験）で、
+ * `#pushAgentToken` の catch 節を旧・穴C の形
+ * （`this.#stores.journal.append({...}).catch(() => undefined)`。跡を残さず
+ * 揉み消す）へ戻しても、この歯を除いた既存スイート全体（`tools.test.ts` +
+ * `manager.test.ts`）は緑のままだった。この it はその生存を止めるために足した。
+ *
+ * ⭐ **この歯が緑であることが意味するのは「日誌が落ちない」ではなく「落ちた
+ * ときに跡が残る」である。** 本番で `#syncRunnerToken` や `journal.append` が
+ * 落ちないことをこの歯は何も保証しない——保証しているのは、落ちたときに
+ * `self_dropped` の帳面（`recentDroppedTraces()`）に跡が残ることだけである。
+ *
+ * 投げ直しはしないのは `#pushProfile` と同じ（`#pushAgentToken` の doc の
+ * 理由をそのまま引き継ぐ）。ここで測るのも「跡が残ること」だけである。
+ */
+describe('穴C: #pushAgentToken が journal.append の失敗で跡を残す', () => {
+  it('認証トークンの同期が失敗し、日誌への記録も失敗すると self_dropped の帳面に跡が残る', async () => {
+    clearRecentTracesForTesting();
+    const stores = failingJournalAppend(
+      createMemoryStores(),
+      'journal down (test, pushAgentToken)',
+    );
+    // **`syncRunnerToken` を注入して失敗させる。** `#pushAgentToken` は
+    // `this.#syncRunnerToken === undefined` なら日誌へ触る前に return する
+    // （`#pushProfile` がプロファイル未設定で return するのと同じ形）ので、
+    // ガードを越えさせるために必ず関数を渡し、その中で投げる。
+    const s = setup(undefined, {
+      stores,
+      syncRunnerToken: async () => {
+        throw new Error('token sync failed (test)');
+      },
+    });
+
+    await s.pool.start({ request: '調べて' });
+    await s.pool.stop();
+
+    const traces = recentDroppedTraces();
+    // **`with=self role=outbound` まで見る（`日誌を記録できませんでした` だけでは
+    // 足りない）。** `pool.start()`/`stop()` の一連は、この壊れた stores を通る限り
+    // #pushAgentToken 以外の `#journal` 呼び出し（`with: 'manager'` 側。委譲の
+    // ライフサイクルが持つ）も失敗し、同じ「日誌を記録できませんでした」を名乗る
+    // 跡を残す。**実測（変異試験・M1）** — この歯を「日誌を記録できませんでした」
+    // だけで判定していたときは、#pushAgentToken の catch を旧・穴C の形
+    // （`.catch(() => undefined)`）へ戻しても緑のままだった——#pushAgentToken 由来の
+    // `with=self role=outbound chars=161` の跡が消えても、無関係な `with=manager
+    // role=outbound chars=46` の跡が生き残って判定を満たしていたため。`with: 'self'`
+    // は manager.ts 全体で `#pushProfile`（2箇所）と `#pushAgentToken`（1箇所）しか
+    // 使わず、この it は profile を未設定のまま起こすので `#pushProfile` は日誌へ
+    // 触る前に return する（直上の穴C の it のコメントと同じ理由）——⟹ この it が
+    // `clearRecentTracesForTesting()` の後に残す `with=self role=outbound` は
+    // `#pushAgentToken` 由来だけである。
+    expect(
+      traces.some(
+        (line) =>
+          line.includes('日誌を記録できませんでした') && line.includes('with=self role=outbound'),
+      ),
+    ).toBe(true);
+  });
+});
