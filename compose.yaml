@@ -127,8 +127,15 @@ x-shared-env: &shared-env
   ALTEROID_CLONE_MODEL: ${ALTEROID_CLONE_MODEL:-}
   ALTEROID_MANAGER_MODEL: ${ALTEROID_MANAGER_MODEL:-}
   ALTEROID_WORKER_MODEL: ${ALTEROID_WORKER_MODEL:-}
-  # 自律の既定（日報・発意）は環境変数で開け閉めできる。これは方針であって
+  # 予約された定期ジョブの既定は環境変数で開け閉めできる。これは方針であって
   # 実行回数の制限ではない（north_star 禁止2）。
+  #
+  # **ここに kind の名前を書き写さないこと。** 数え上げを持つのは
+  # `packages/core/src/schedule.ts` の `RESERVED_SCHEDULE_KINDS` だけで、
+  # kind → 環境変数の対応は同じファイルの `RESERVED_SCHEDULE_KIND_ENV_KEYS` が持つ
+  # （その doc「型で塞いである分」）。**この対応表の環境変数が全部ここに在ることは
+  # 歯が測っている**（`scripts/reserved-schedule-kinds-follow-source.test.ts`）——
+  # 予約 kind が増えたら、ここへ行を足すまで CI が赤い。
   # **フォールバック値はコード側の既定（`apps/daemon/src/schedule.ts` の
   # `DEFAULT_INITIATIVE_EVERY_MINUTES`。理由はそちらの JSDoc）と必ず揃えること** —
   # ここで別の値に固定すると、このデーモンは常に環境変数を受け取る形になるので、
@@ -136,6 +143,13 @@ x-shared-env: &shared-env
   # 静かに無効になる。
   ALTEROID_DAILY_REPORT_AT: ${ALTEROID_DAILY_REPORT_AT:-22:00}
   ALTEROID_INITIATIVE_EVERY: ${ALTEROID_INITIATIVE_EVERY:-55}
+  # **ここだけフォールバック値を書かない。** 空・空白のみは「未設定」として
+  # コード側の既定へ落ちる（`apps/daemon/src/schedule.ts` の `value()` が
+  # `raw.trim().length > 0` で切る）ので、既定の時刻をここへ書き写す必要が無い
+  # ＝ 上2つが負っている「揃え続ける義務」がここには生まれない。**空で渡して
+  # 安全なのは `ALTEROID_CLONE_MODEL` と同じ理由**で、空が未設定より悪くなる
+  # `GIT_*` とは事情が違う。
+  ALTEROID_MEMORY_TIDY_AT: ${ALTEROID_MEMORY_TIDY_AT:-}
   TZ: ${TZ:-Asia/Tokyo}
   # 入口の認証（誰がこの HTTP API を叩いてよいか）。**人間が置くのはここ1か所**で、
   # **走っている runner には残らない** — `docker/alteroid-runner` が `exec` の前に
