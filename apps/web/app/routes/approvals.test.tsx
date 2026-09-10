@@ -59,7 +59,15 @@ interface ApprovalsStub {
  */
 function stubApprovals(
   approvals: PendingApproval[],
-  options: { bulkResults?: (answers: { id: string; answer: string }[]) => BulkResult[] } = {},
+  options: {
+    bulkResults?: (answers: { id: string; answer: string }[]) => BulkResult[];
+    /**
+     * `GET /conversations/:id` の応答（issue #782 の3。`ConversationPanel` の
+     * 4状態を測るために足した）。**渡さなければ以前と同じ挙動**——`/conversations/`
+     * を叩く経路が無ければこの分岐には一度も入らない。
+     */
+    conversation?: (id: string) => Response | Promise<Response>;
+  } = {},
 ): ApprovalsStub {
   const calls: string[] = [];
   const bulkRequests: { id: string; answer: string }[][] = [];
@@ -83,6 +91,10 @@ function stubApprovals(
     }
 
     if (/^\/approvals\/[^/]+\/answer$/.test(path)) return json({ ok: true });
+
+    if (path.startsWith('/conversations/') && options.conversation !== undefined) {
+      return options.conversation(decodeURIComponent(path.slice('/conversations/'.length)));
+    }
 
     // 知らない URL は「繋がらない」（`test-support` の `stubFetch` と同じ方針）。
     return Promise.reject(new TypeError(`Failed to fetch: ${url}`));
@@ -421,5 +433,92 @@ describe('横並びの積み替え（本4-B）: flex-wrap の付け忘れ', () =
     expect(row).not.toBeNull();
     const tokens = row!.className.split(/\s+/);
     expect(tokens).toContain('flex-wrap');
+  });
+});
+
+/**
+ * 承認カードに、その確認が上がった会話を出す（issue #782 の3）。
+ *
+ * **不変条件A（「無い」の種類を潰さない）を4状態それぞれで別々に測る。**
+ * どれか2つが同じ表示に潰れていないか——特に「読み込み中」「失敗」が
+ * 「まだ返答が無い」の文言に化けていないことを、各テストが**他の状態の
+ * 文言が出ていないこと**まで含めて押さえる。
+ */
+describe('承認カードに、確認が上がった会話を出す（issue #782 の3）', () => {
+  it('① 機構が無い: conversationId が無ければ「会話に紐づいていない」と出し、/conversations は叩かない', async () => {
+    const { calls } = stubApprovals([approval({ id: 'a-1', question: '質問1' })]);
+    renderPage();
+
+    expect(await screen.findByText(/この確認は会話に紐づいていない/)).toBeTruthy();
+    expect(calls.some((url) => url.includes('/conversations/'))).toBe(false);
+  });
+
+  it('② 読み出せなかった（読み込み中）: 会話を読み込むあいだはスピナーを出し、「まだ返答が無い」に潰さない', async () => {
+    // わざと解決しない Promise を返し、「読み込み中」のまま留める。
+    stubApprovals([approval({ id: 'a-1', question: '質問1', conversationId: 'conv-x' })], {
+      conversation: () => new Promise<Response>(() => {}),
+    });
+    renderPage();
+
+    expect(await screen.findByText('この確認が上がった会話を読み込み中')).toBeTruthy();
+    expect(screen.queryByText('この会話にはまだクローンの発言が無い')).toBeNull();
+    expect(screen.queryByText('この確認が上がった会話')).toBeNull();
+  });
+
+  it('② 読み出せなかった（失敗）: 会話の取得が失敗したら理由をそのまま出し、「まだ返答が無い」に潰さない', async () => {
+    stubApprovals([approval({ id: 'a-1', question: '質問1', conversationId: 'conv-x' })], {
+      conversation: () => json({ error: '会話 conv-x は存在しない' }, 404),
+    });
+    renderPage();
+
+    expect(await screen.findByText(/会話 conv-x は存在しない/)).toBeTruthy();
+    expect(screen.queryByText('この会話にはまだクローンの発言が無い')).toBeNull();
+    expect(screen.queryByText('この確認が上がった会話')).toBeNull();
+  });
+
+  it('③ まだ返答が無い: 会話は取れたが、クローンの発言が0件なら「まだクローンの発言が無い」と出す', async () => {
+    stubApprovals([approval({ id: 'a-1', question: '質問1', conversationId: 'conv-x' })], {
+      conversation: () =>
+        json({
+          conversationId: 'conv-x',
+          messages: [{ id: 'm1', at: '2026-08-19T09:00:00.000Z', role: 'inbound', text: '人間の発言だけ' }],
+          scanned: 1,
+          reachedStart: true,
+        }),
+    });
+    renderPage();
+
+    expect(await screen.findByText('この会話にはまだクローンの発言が無い')).toBeTruthy();
+    // ④ の見出しは出ない。
+    expect(screen.queryByText('この確認が上がった会話')).toBeNull();
+  });
+
+  /**
+   * ⚠️ **見出しは「この確認が上がった会話」であって「この確認への返答」では
+   * ない**（不変条件D）。承認と会話を `approvalId` で結ぶ機構は無い（issue
+   * #782 の1。範囲外）ので、この画面はどの発言が回答なのかを名指ししない。
+   */
+  it('④ 在る: 会話の発言を出す。見出しは「この確認が上がった会話」であって「この確認への返答」ではない', async () => {
+    stubApprovals([approval({ id: 'a-1', question: '質問1', conversationId: 'conv-x' })], {
+      conversation: () =>
+        json({
+          conversationId: 'conv-x',
+          messages: [
+            { id: 'm1', at: '2026-08-19T09:00:00.000Z', role: 'inbound', text: '本番に出してよいか?' },
+            { id: 'm2', at: '2026-08-19T09:05:00.000Z', role: 'outbound', text: 'はい、進めます' },
+          ],
+          scanned: 2,
+          reachedStart: true,
+        }),
+    });
+    renderPage();
+
+    expect(await screen.findByText('この確認が上がった会話')).toBeTruthy();
+    expect(screen.getByText('本番に出してよいか?')).toBeTruthy();
+    expect(screen.getByText('はい、進めます')).toBeTruthy();
+    // 「への返答」という言い回しは画面のどこにも無い。
+    expect(screen.queryByText(/への返答/)).toBeNull();
+    // 「まだクローンの発言が無い」（③）とは出ない。
+    expect(screen.queryByText('この会話にはまだクローンの発言が無い')).toBeNull();
   });
 });
