@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { writeFileSync } from "node:fs";
 import { heuristicTokenCounter } from "@mnemora/core";
 import { CassetteRecorder } from "@mnemora/testkit";
 import type { CassetteTarget } from "./cassette-io.js";
@@ -17,10 +18,12 @@ import {
   runComparison,
 } from "./compare.js";
 import { formatRecall } from "./format.js";
+import { tryGitRevParseHead } from "./git-info.js";
 import { buildMnemoraPrompt, ingestConversation, queryRecall } from "./mnemora-path.js";
 import { measureNaive, naivePrompt } from "./naive-path.js";
 import type { ProviderMode } from "./providers.js";
 import { decideProviderSource, describeProviderSourceReason } from "./providers.js";
+import { buildRetrievalQualityJson } from "./retrieval-json.js";
 import {
   buildArmTenantId,
   formatArmDetail,
@@ -409,6 +412,30 @@ async function runRetrieval(): Promise<void> {
   console.log(formatProbeComparisonTable(reports));
   console.log("\n=== arm ごとのまとめ ===");
   console.log(formatArmSummaryTable(reports));
+
+  // ---------------------------------------------------------------------------
+  // 機械可読な出力口（PR「retrieval を CI に載せる」）
+  //
+  // **`MNEMORA_RETRIEVAL_JSON` が設定されたときだけ書く。未設定なら1バイトも
+  // 挙動を変えない**——既存の `MNEMORA_PROVIDER_SOURCE`/`MNEMORA_LLM`/`MNEMORA_EMBEDDING`
+  // と同じ層の env 規約（cli.ts 冒頭の各関数のコメント参照）。
+  //
+  // 組み立ては `retrieval-json.ts` の純関数 `buildRetrievalQualityJson` に委ねる——
+  // ここでの役割は「どこに書くか」だけであり、「何を書くか」は DB を要求せずに
+  // 検査できる形で別ファイルに置く。
+  // ---------------------------------------------------------------------------
+  const retrievalJsonPath = process.env.MNEMORA_RETRIEVAL_JSON;
+  if (retrievalJsonPath) {
+    const json = buildRetrievalQualityJson({
+      reports,
+      providerSource: cassette ? "recorded" : "openai",
+      cassette,
+      measuredAt: new Date(),
+      commit: tryGitRevParseHead(process.cwd()),
+    });
+    writeFileSync(retrievalJsonPath, `${JSON.stringify(json, null, 2)}\n`, "utf-8");
+    console.log(`\n[retrieval] 機械可読な結果を書き出した: ${retrievalJsonPath}`);
+  }
 }
 
 /**

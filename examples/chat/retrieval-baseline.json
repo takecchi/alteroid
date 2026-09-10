@@ -1,0 +1,55 @@
+{
+  "_readme": "retrieval ベンチ（examples/chat の `retrieval` サブコマンド、カセット再生）の基準値。scripts/retrieval-quality-summary.mjs --baseline がこれを読む。packages/core/src/__tests__/fixtures/token-count-reference.json と同じ考え方（『基準値を repo にコミットし出所を添える』）を踏襲している——生成し直す手段は record-token-count-reference.mjs のような専用スクリプトではなく、下の provenance に書いた通りの手順を再実行することである。⚠ CI のジョブがこのファイルを更新することはない（意図的な手作業のみ。ADR 0088 参照）。",
+  "schemaVersion": 1,
+  "provenance": {
+    "commit": "0a71a572d57049384d771c2fb6507f5b5046790b",
+    "measuredAt": "2026-09-10T00:46:07.363Z",
+    "how": "env -u OPENAI_API_KEY MNEMORA_PROVIDER_SOURCE=recorded DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5544/mnemora_ci MNEMORA_RETRIEVAL_JSON=<path> pnpm --filter @mnemora/example-chat run retrieval",
+    "database": "PostgreSQL 17.11 + pgvector 0.8.6（ローカル、非本番）",
+    "cassette": {
+      "recordedAt": "2026-09-06T21:35:13.480Z",
+      "embedding": {
+        "provider": "openai",
+        "model": "text-embedding-3-small",
+        "dimensions": 256
+      }
+    },
+    "repeatRuns": 2,
+    "note": "2回実行し、arms・probeCount・haystackSize・cassette は measuredAt/commit を除いて完全一致した（実際に diff を取って確認済み）。⚠ ただし「2回一致した」は「決定的である」の証明ではない——decay/freshness は時刻に依存して実行ごとに揺れており（ADR 0088 §2 で total の6桁目が動くことを実測）、similarity が約 10^6 倍の変域で押し切っているために MRR/hit@1/hit@10 が動かないだけである。⟹ だから CI はこの基準値との相違で落とさない。⚠ OPENAI_API_KEY はこの測定に一切使っていない（実 API を1回も叩いていない）。"
+  },
+  "arms": [
+    {
+      "armLabel": "A: 擬似LLM+擬似埋め込み",
+      "llmMode": "deterministic",
+      "embeddingMode": "deterministic",
+      "mrrOverall": 0.017857142857142856,
+      "mrrLexicalControl": 0,
+      "mrrNonLexical": 0.020833333333333332,
+      "hit1Count": 0,
+      "hit10Count": 1,
+      "probeCount": 7
+    },
+    {
+      "armLabel": "B: 擬似LLM+本物の埋め込み",
+      "llmMode": "deterministic",
+      "embeddingMode": "recorded",
+      "mrrOverall": 0.7142857142857143,
+      "mrrLexicalControl": 1,
+      "mrrNonLexical": 0.6666666666666666,
+      "hit1Count": 4,
+      "hit10Count": 6,
+      "probeCount": 7
+    },
+    {
+      "armLabel": "C: 本物LLM+本物の埋め込み",
+      "llmMode": "recorded",
+      "embeddingMode": "recorded",
+      "mrrOverall": 0.738095238095238,
+      "mrrLexicalControl": 1,
+      "mrrNonLexical": 0.6944444444444445,
+      "hit1Count": 4,
+      "hit10Count": 7,
+      "probeCount": 7
+    }
+  ]
+}

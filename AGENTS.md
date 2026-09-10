@@ -49,9 +49,15 @@
 
 **テストは本物の Postgres + pgvector に対して走る。**`packages/postgres` と `examples/chat` の
 検査は `DATABASE_URL` が無いと失敗する——**擬似物へ黙ってフォールバックしない。**
-ただし LLM と埋め込みは CI に API キーが無いため決定的な擬似 provider を使う
+ただし LLM と埋め込みは CI に API キーが無いため実 API を叩かない
 （`OPENAI_API_KEY` があれば本物に切り替わる）。この非対称は
 [examples/chat/README.md](./examples/chat/README.md) に明記してある。
+
+**⚠ 「実 API を叩かない」は「擬似物で走る」と同じではない。CI のジョブごとに層が違う**
+（[ADR 0088](./docs/decisions/0088-retrieval-quality-measured-in-ci.md)）。
+`example-chat` ジョブの `compare` は `deterministic`（意味を持たない stub）で走るが、
+`retrieval-quality` ジョブは **`recorded`（記録した実 API の応答の再生）**で走る——
+**鍵は要らないが、擬似物でもない。**下の3層の表で、どのジョブがどの層かを見分けること。
 
 **provider は3層ある**（[ADR 0051](./docs/decisions/0051-recorded-provider-cassette.md)）。
 **用途で使い分けること。**

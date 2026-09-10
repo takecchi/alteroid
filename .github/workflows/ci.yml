@@ -263,3 +263,108 @@ jobs:
             echo "DB 段が未実行の側へ落ちた" >&2
             exit 1
           fi
+
+  retrieval-quality:
+    name: 想起の質を実 embedding（記録の再生）で実測し、値を残す（ADR 0088）
+    runs-on: ubuntu-latest
+    # ADR 0088。**ADR 0022 の「これが覆るとしたら」第1項が名指しした負債を返すジョブ。**
+    #
+    # ADR 0022 は「`retrieval` は本物の API キーが要るため CI には載っていない
+    # （手動実行のみ）」を前提に、「想起の質の回帰を検知する歯が無い」を負債として
+    # 引き受けていた。**その前提はもう成り立たない。**ADR 0051 のカセット
+    # （examples/chat/cassettes/retrieval.json — 実 API の埋め込み 152 件、
+    # text-embedding-3-small / 256 次元）を再生すれば、鍵なしに実 embedding の
+    # 想起の質を測れる。追加コストは 0 であり、ADR 0022 が言う「安価な embedding
+    # provider」に文言どおり一致する。
+    #
+    # ⛔ **このジョブは門ではない。**基準値と違っても落ちない。
+    # 落ちるのは bench そのものが壊れたときだけ（カセットに無い入力・DB エラー・
+    # 出力が壊れている）。理由は ADR 0088 §2:
+    #   - decay/freshness は時刻に依存し、実行ごとに実際に揺れる（total の6桁目が動く）。
+    #     見出しの数字が安定するのは similarity の変域が decay の約 10^6 倍だからで、
+    #     「2 回一致した」は決定性の証明ではない。偽陽性率に上限を置けない。
+    #   - 標本は probe 7 件しかない（ADR 0033 §3）。閾値の門は偽陽性を出す。
+    #
+    # ⚠ **`compare` ステップ（example-chat ジョブ）と同じ轍を踏まないこと。**
+    # あちらは「回帰をログから読めるようにする」と約束したきり、表の中身に対する
+    # assertion を1つも持たない——気づくかどうかが生ログを開くかどうかに委ねられている。
+    # このジョブは値を生ログではなく **Job Summary**（PR の Checks から
+    # ダウンロードなしで読める場所）へ出し、**基準値と一致していれば1行で黙り、
+    # 違うときだけ展開する**。git に残るのは基準値ファイルの diff のほうである。
+    timeout-minutes: 20
+    # ⚠ この repo は timeout-minutes を1箇所も設定しておらず、既定は 360 分である。
+    # bench 自体は数秒で終わる（手元の実測で 4.9 秒）。刺さったときに6時間燃やさない
+    # ためだけの上限であり、**この1ジョブにだけ付けている**（既存ジョブへ一斉に
+    # 付けるのは ADR 0088 の範囲外）。
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: mnemora_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/mnemora_ci
+      # ⭐ **明示する。**CI には OPENAI_API_KEY が無いので既定でも recorded に落ちるが、
+      # 既定に頼ると「いつか鍵が入った日」に、このジョブが黙って実 API を叩き始める
+      # （decideProviderSource の既定は「キーが在れば実 API」）。ADR 0068 が
+      # この明示指定を足したのは、まさにその口を塞ぐためである。
+      MNEMORA_PROVIDER_SOURCE: recorded
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Enable required extensions (vector / btree_gin / pgcrypto)
+        run: |
+          PGPASSWORD=postgres psql -h localhost -U postgres -d mnemora_ci -c "select 1;" \
+            && PGPASSWORD=postgres psql -h localhost -U postgres -d mnemora_ci \
+              -c "CREATE EXTENSION IF NOT EXISTS vector;" \
+              -c "CREATE EXTENSION IF NOT EXISTS btree_gin;" \
+              -c "CREATE EXTENSION IF NOT EXISTS pgcrypto;"
+
+      - name: Run migrations (packages/postgres の唯一のマイグレーション実行口)
+        run: pnpm --filter @mnemora/postgres run migrate
+
+      - name: 想起の質を実 embedding（記録の再生）で実測する
+        # `retrieval` は DATABASE_URL を要求し、擬似物へ黙ってフォールバックしない
+        # （requireDatabaseUrl）。arm を選ぶ口は無いので A/B/C の3本すべてが走る——
+        # ⚠ arm A（擬似LLM+擬似埋め込み）の MRR 0.018 は実質ランダムであり、
+        # これを「引けた」と読んではいけない（ADR 0022 / AGENTS.md）。
+        env:
+          MNEMORA_RETRIEVAL_JSON: ${{ github.workspace }}/retrieval-quality.json
+        run: pnpm --filter @mnemora/example-chat run retrieval
+
+      - name: 実測値と基準値の差分を Job Summary に残す（⛔ 門ではない）
+        # このステップは基準値との相違では落ちない（exit 0）。入力そのものが
+        # 壊れているときだけ非0で落ちる。ADR 0088 §2.1。
+        run: |
+          node scripts/retrieval-quality-summary.mjs \
+            --measured "${{ github.workspace }}/retrieval-quality.json" \
+            --baseline examples/chat/retrieval-baseline.json \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 実測値そのもの（機械可読）を成果物として残す
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: retrieval-quality
+          path: retrieval-quality.json
+          if-no-files-found: ignore

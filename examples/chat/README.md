@@ -471,9 +471,14 @@ decay/freshness/strength の再スコアは考慮していない）。
   **322/642ターンでは、この決定的なシナリオでも目的の記憶が実際に落ちた**
   （「⭐ 削減率だけでは意味を持たない」節・[ADR 0022](../../docs/decisions/0022-fake-provider-compare-does-not-claim-recall-quality.md)
   参照）。**一般に意味的な関連度で正しく順位付けできるかは確認していない。**この2つを
-  混同しないこと。後者を測るには
-  `OPENAI_API_KEY` を使った実行が必要だが、このリポジトリの CI・この実測環境には
-  実 API キーが無いため、**確認していない。**
+  混同しないこと。**⚠ この「確認していない」は 2026-09-10 に改められた**
+  （[ADR 0088](../../docs/decisions/0088-retrieval-quality-measured-in-ci.md)）——
+  後者は `retrieval` が測っており、**それが CI で毎 PR 実測されるようになった。**
+  実 API キーは要らない（[ADR 0051](../../docs/decisions/0051-recorded-provider-cassette.md)
+  のカセットを `MNEMORA_PROVIDER_SOURCE=recorded` で再生する）。
+  **⚠ ただし `compare` 自身は依然として `deterministic` で走る**——
+  この項が言う「この実測では検証していない」は、**`compare` については今も真である。**
+  **⚠ そして `retrieval` の標本は probe 7 件である**（ADR 0033 §3）。
 - **naive path はシステムプロンプト・ツール定義を含まない生の transcript だけを測る。**
   実際のアプリケーションはこれらが上乗せされる分、絶対値としての削減幅はさらに
   大きくなりうる（逆に mnemora 側の固定費の比率は相対的に小さくなる）。
@@ -510,8 +515,23 @@ OpenAI（LLM・embedding）を使って測るためのものである。
 DATABASE_URL=... OPENAI_API_KEY=... pnpm --filter @mnemora/example-chat run retrieval
 ```
 
-**本物の API を叩く。CI には載せていない**（`.github/**` は変更していない）。手動で
-`OPENAI_API_KEY` を指定して実行したときだけ動く。
+**⚠ この記述は 2026-09-10 に改められた**
+（[ADR 0088](../../docs/decisions/0088-retrieval-quality-measured-in-ci.md)）。
+**上のコマンドの形——`OPENAI_API_KEY` を渡して実 API を叩く実行——は、いまも CI に無い。**
+実 API は記録を録るとき（`record`）と乖離を測るとき（`verify`）のためのものである。
+
+**⟹ 一方 `retrieval` サブコマンド自体は、CI の `retrieval-quality` ジョブに載っている。**
+[ADR 0051](../../docs/decisions/0051-recorded-provider-cassette.md) のカセット
+（実 API の埋め込み 152 件・`text-embedding-3-small`/256 次元）を
+`MNEMORA_PROVIDER_SOURCE=recorded` で再生するので、**鍵なしに毎 PR 走る。**
+手元で同じものを鍵なしに走らせるには:
+
+```bash
+DATABASE_URL=... MNEMORA_PROVIDER_SOURCE=recorded pnpm --filter @mnemora/example-chat run retrieval
+```
+
+**⛔ CI は値を出すだけで、門にはしていない**——基準値と違っても落ちない
+（`decay` が実行ごとに揺れ、標本も probe 7 件しかないため。ADR 0088 §2）。
 
 ### 何を測るか(`src/probe-set.ts`・`src/retrieval-quality.ts`)
 
