@@ -402,12 +402,19 @@ const journalQuery = z.object({
  *
  * **`cursor` の中身と検査は `apps/daemon/src/cursor.ts` を見ること。** ここでは
  * 「decode できる文字列か」までしか見ない。
+ *
+ * **`conversationId` は `pending` と同じ側（絞り込み）である。** opt-in の
+ * 対象（`order`/`limit`/`cursor`）ではない——渡しても頁の封筒（`total`/
+ * `nextCursor`）は増えない。渡した場合、`total` はこの絞り込みを当てた
+ * *後*の件数になる（`pending` の絞り込みと同じ順序。issue #782 の2・3 —
+ * チャット画面が「表示中の会話に上がった確認」だけを読むための口）。
  */
 const approvalsQuery = z.object({
   pending: z.enum(['true', 'false']).default('true'),
   order: z.enum(['asc', 'desc']).default('asc'),
   limit: z.coerce.number().int().min(1).optional(),
   cursor: z.string().optional(),
+  conversationId: z.string().optional(),
 });
 
 /**
@@ -2145,7 +2152,8 @@ export function createApp(deps: AppDeps) {
           'の考え方と同じ——足すのは能力であって、既存の呼び手に新しい欄を押し付け' +
           'ない）。並びは `order`（既定 `asc`）で、`(createdAt, id)` の比較で決める' +
           '（ストアの生の並びには乗らない。理由は `apps/daemon/src/app.ts` の' +
-          '`approvalsCursorSchema` の doc）。',
+          '`approvalsCursorSchema` の doc）。`conversationId` を渡すと、その会話で' +
+          '上がった確認だけに絞る（`pending`/`order`/`limit`/`cursor` と併用できる）。',
         responses: {
           200: {
             description: '承認待ちの一覧。',
@@ -2163,17 +2171,27 @@ export function createApp(deps: AppDeps) {
       }),
       validator('query', approvalsQuery),
       async (c) => {
-        const { pending, order, limit, cursor } = c.req.valid('query');
+        const { pending, order, limit, cursor, conversationId } = c.req.valid('query');
         // **opt-in の判定は生のクエリで行う。** `order` は既定値を持つので
         // `c.req.valid('query')` だけでは「渡されたか」が分からない
         // （`grep -Fn -- '取れない軸に 0 の行を作る' AGENTS.md` の地雷と同じ形——
         // 「渡されなかった」を「既定値と同じ値が渡された」と混同しないこと）。
+        // **`conversationId` は opt-in の対象ではない**（`pending` と同じ側。
+        // `approvalsQuery` の doc）——渡しても頁の封筒は増えない。
         const optedIn =
           c.req.query('order') !== undefined ||
           c.req.query('limit') !== undefined ||
           c.req.query('cursor') !== undefined;
 
-        const approvals = await stores.jobs.listApprovals({ pendingOnly: pending !== 'false' });
+        const byPending = await stores.jobs.listApprovals({ pendingOnly: pending !== 'false' });
+        // **`conversationId` は `pending` の直後、`total` を数える前に当てる。**
+        // `total` は「この呼びが対象にしている集合」の件数であって、絞り込みを
+        // 当てる前の全件ではない——`pending` が既にそうしている（未回答のみに
+        // 絞ってから数える）のと同じ順序に揃える。
+        const approvals =
+          conversationId === undefined
+            ? byPending
+            : byPending.filter((approval) => approval.conversationId === conversationId);
         // **`total` は `limit` / `cursor` を当てる前の件数。** opt-in していない
         // ときは応答に載せないので、ここで数えておくだけで並べ替えは行わない。
         const total = approvals.length;

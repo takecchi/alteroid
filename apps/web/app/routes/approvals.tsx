@@ -4,7 +4,8 @@ import { Markdown } from '~/components/markdown';
 import { Page } from '~/components/page';
 import { Badge, Button, Card, Empty, ErrorNote, Spinner, Textarea } from '~/components/ui';
 import { useAnswerApproval, useAnswerApprovals } from '~/hooks/mutations';
-import { useApprovals } from '~/hooks/queries';
+import { useApprovals, useConversation } from '~/hooks/queries';
+import { cn } from '~/lib/cn';
 import { formatDateTime, formatRelative } from '~/lib/format';
 import type { PendingApproval } from '~/lib/types';
 
@@ -296,6 +297,81 @@ function ApprovalCard({
       {bulkError !== undefined && (
         <ErrorNote error={`まとめて送った回答は通らなかった: ${bulkError}`} className="mt-2" />
       )}
+
+      {/*
+        **この確認が上がった会話（issue #782 の3）。** 承認だけを見ていると、
+        クローンが実際にこの人間と何を話していたかが分からない。4状態を
+        別々に出す（`ConversationPanel` の doc）。
+      */}
+      <div className="mt-3 border-t border-border pt-3">
+        {approval.conversationId === undefined || approval.conversationId === null ? (
+          <p className="text-[11px] text-muted italic">
+            この確認は会話に紐づいていない（マネージャー発・内部ターンには紐づけられる会話が存在しない）
+          </p>
+        ) : (
+          <ConversationPanel conversationId={approval.conversationId} />
+        )}
+      </div>
     </Card>
+  );
+}
+
+/**
+ * 承認カードに、その確認が上がった会話を出す（issue #782 の3）。
+ *
+ * **4状態を別々に出す（不変条件A）。** 「機構が無い」（呼び出し元。
+ * `approval.conversationId` が無い場合）「読み出せなかった」「まだ返答が
+ * 無い」「在る」を同じ表示に潰さない——潰すと、たとえば「読み込み中」が
+ * 「まだ返答が無い」に見え、届くはずの発言がまだ届いていないだけなのに
+ * 「クローンは黙ったままだ」と誤解される。
+ *
+ * ⚠️ **見出しは「この確認が上がった会話」であって「この確認への返答」では
+ * ない**（不変条件D）。`approvalId` で人間の返答と承認を結ぶ機構はまだ
+ * 無い（issue #782 の1。範囲外）——ここは会話全体を古い順に出すだけで、
+ * どの発言がこの確認への回答かは特定しない。時刻の近さで「この返答は
+ * この確認への返答だ」と決めつけない。
+ */
+function ConversationPanel({ conversationId }: { conversationId: string }) {
+  const conversation = useConversation(conversationId);
+
+  // ② 読み出せなかった（読み込み中）。「まだ返答が無い」に潰さない。
+  if (conversation.isLoading) {
+    return <Spinner label="この確認が上がった会話を読み込み中" />;
+  }
+  // ② 読み出せなかった（失敗）。理由をそのまま出す。
+  if (conversation.error !== undefined) {
+    return <ErrorNote error={conversation.error} />;
+  }
+
+  const messages = conversation.data?.messages ?? [];
+  const hasCloneReply = messages.some((message) => message.role === 'outbound');
+
+  // ③ まだ返答が無い。会話は取れたが、クローンの発言が0件（人間の発言しか
+  // 無い場合も含む——「クローンが黙ったまま」という事実そのものを出す）。
+  if (!hasCloneReply) {
+    return <p className="text-[11px] text-muted italic">この会話にはまだクローンの発言が無い</p>;
+  }
+
+  // ④ 在る。
+  return (
+    <div>
+      <p className="mb-2 text-[11px] font-semibold text-muted">この確認が上がった会話</p>
+      <ul className="flex flex-col gap-2">
+        {messages.map((message) => (
+          <li
+            key={message.id}
+            className={cn(
+              'rounded border border-border p-2 text-xs break-words whitespace-pre-wrap',
+              message.role === 'inbound' ? 'bg-bg' : 'bg-surface-2',
+            )}
+          >
+            <span className="mr-1 text-[10px] text-muted">
+              {message.role === 'inbound' ? '人間' : 'クローン'}
+            </span>
+            {message.text}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
