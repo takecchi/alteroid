@@ -1527,6 +1527,8 @@ function renderPremiseOutlineOmission(
   });
 
   const outlineChars = items.reduce((sum, item) => sum + item.length, 0);
+  const shownChars = items.slice(0, shown).reduce((sum, item) => sum + item.length, 0);
+  const droppedChars = dropped.reduce((sum, item) => sum + item.length, 0);
   const headingChars = sections.reduce((sum, section) => sum + section.heading.length, 0);
   // 固定費 = 目次の1行の長さ − 見出しの長さ（インデント・節id・`— N 文字`）。
   // **引き算で出す**——1行の形（`memorySectionLines`）が変わったときに、
@@ -1549,7 +1551,10 @@ function renderPremiseOutlineOmission(
   return [
     `…末尾 ${formatMemoryCharCount(rest)} 節は目次から省略（全 ${formatMemoryCharCount(total)} 節のうち先頭 ` +
       `${formatMemoryCharCount(shown)} 節だけ載せた）。` +
-      '⚠ この文書は大きすぎて、目次すら毎ターンの焼き込みに収まっていない。',
+      '⚠ この文書は大きすぎて、目次すら毎ターンの焼き込みに収まっていない。' +
+      `節の目次は全 ${formatMemoryCharCount(total)} 節ぶんで ${formatMemoryCharCount(outlineChars)} 文字` +
+      `（節の本文の総量ではない）——うち焼き込みに載った分 ${formatMemoryCharCount(shownChars)} 文字、` +
+      `予算に入らず省いた分 ${formatMemoryCharCount(droppedChars)} 文字。`,
     '落ちた末尾のうち直近の節（節id はそのまま memory_section_read に渡せる。' +
       '**足したばかりの節はここに出る**）:',
     tail,
