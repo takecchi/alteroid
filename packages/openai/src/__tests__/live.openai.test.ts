@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
+import { describeEmbeddingProviderConformance } from "@mnemora/testkit";
 import { OpenAIEmbeddingProvider } from "../embedding-provider.js";
 import { OpenAILLMProvider } from "../llm-provider.js";
 
@@ -72,3 +73,50 @@ describe("live: OpenAI (OPENAI_API_KEY と MNEMORA_LIVE_OPENAI の両方が無�
     },
   );
 });
+
+/**
+ * live: **実 API そのもの**に、ADR 0095 の適合テスト9本を当てる（Issue #116 の残債）。
+ *
+ * `./embedding-provider.conformance.test.ts` は同じ9本を、**記録した実応答を再生する
+ * client** に対して当てている。そちらが測れないのは「実 API 自身の振る舞い」——
+ * ここがそこを埋める唯一の経路である。
+ *
+ * 🔴 **`deterministic: false` を宣言する。**
+ * 私たちは**実 API が同じ入力に同じベクトルを返すという保証を持っていない。**
+ * ADR 0095 が「決定性を無条件に要求する案」を却下したのは、まさにこの理由である
+ * （適合テストが「実装が守れない契約」を主張することになる）。
+ * ⟹ 決定性に依存する2本は `it.skip` として**名前が残る**——「そもそも歯が無い」と
+ * 「走って通った」を、ログ上で区別できる形を保つ（ADR 0095 決定3）。
+ * ⚠ **もし将来、実 API の再現性を実測したのなら、そのときは測定の記録と一緒に
+ * `true` へ変えること。⛔ 「たぶん決定的だから」で変えないこと。**
+ *
+ * ⚠ **課金が増えることを名乗る（ADR 0019 §5c）。**この追加で、live を1回走らせるごとに
+ * `embeddings.create` の呼び出しが **5回**増える（`space` の不変・件数・次元・有限性・1件——
+ * `embed(ctx, [])` は client を呼ばない）。入力はどれも短い1〜3件なので実費はごく小さいが、
+ * **「小さいから黙って足してよい」ではない。**二重の opt-in の内側であることが前提である。
+ *
+ * ⚠ **この節は一度も走らせていない。**この変更を書いた器に `OPENAI_API_KEY` が無いためで、
+ * CI にも鍵は無い（`.github/workflows/ci.yml` に `OPENAI_API_KEY` は出てこない）。
+ * ⟹ **「実 API が9本を満たすか」は、いまだ誰も測っていない。**この節は、鍵を持つ人が
+ * それを1コマンドで測れるようにするために置いてある。
+ */
+describe.skipIf(!live)(
+  "live: 実 API に対する EmbeddingProvider 適合テスト（ADR 0095 / Issue #116）",
+  () => {
+    describeEmbeddingProviderConformance({
+      name: "OpenAIEmbeddingProvider（実 API）",
+      createProvider: () =>
+        new OpenAIEmbeddingProvider({
+          apiKey,
+          model: "text-embedding-3-small",
+          dimensions: 256,
+        }),
+      deterministic: false,
+      // ⚠ 互いに違う短い文字列にする。順序の歯は `deterministic: false` で skip されるが、
+      // 「3件渡して3件返る」を測る以上、同じ文字列を並べる意味は無い。
+      texts: { a: "mnemora conformance a", b: "mnemora conformance b", c: "mnemora conformance c" },
+      // ネットワーク往復は vitest の既定（5秒）に収まらないことがある。
+      timeout: 60_000,
+    });
+  },
+);

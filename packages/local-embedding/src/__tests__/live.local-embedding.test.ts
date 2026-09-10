@@ -11,6 +11,7 @@ import type {
   LocalEmbeddingModelSpec,
   LocalEmbeddingTokenizer,
 } from "../pipeline.js";
+import { describeEmbeddingProviderConformance } from "@mnemora/testkit";
 import { isLocalEmbeddingProviderError } from "../errors.js";
 import type { LocalEmbeddingProviderError } from "../errors.js";
 
@@ -345,3 +346,49 @@ describe("live: 8192トークンの壁 (MNEMORA_LIVE_LOCAL_EMBEDDING が無け�
     300_000,
   );
 });
+
+/**
+ * live: **本物のモデル**に、ADR 0095 の適合テスト9本を当てる（Issue #116 の残債）。
+ *
+ * `./local-embedding-provider.conformance.test.ts` は同じ9本を、**本物のモデルの出力を
+ * 写した pipeline の再生**に対して当てている。そちらが測れないのは
+ * 「onnxruntime の推論そのもの」と「バッチの組み方に依らないか」——
+ * ここがその2つを埋める唯一の経路である。
+ *
+ * ⭐ **`deterministic: true` の根拠は実測である（推測ではない）。**
+ * 同じ extractor に同じ3本を2回渡し、**768 成分を要素ごとに比較して不一致 0 件・
+ * 最大絶対差 0**（`./fixtures/real-ruri-embeddings.json` の `provenance.determinismCheck`
+ * にも同じ測定が残してある）。⟹ 決定性依存の2本も本物に対して走る。
+ * ⚠ **これは「この器のこの版で測ったら一致した」であって、仕様の保証ではない。**
+ * 別のハードウェア・別の dtype・別の onnxruntime で崩れたら、**崩れたことを報告すること
+ * ——⛔ 契約を緩めて通さないこと**（ADR 0095 決定1 の規律）。
+ *
+ * ⚠ **順序の歯は、ここで初めて本物のバッチ処理に当たる。**
+ * `embed([a,b])` と `embed([b,a])` は**別々のバッチ**であり、本物のモデルは padding を
+ * 伴うバッチ処理をする（ADR 0090 §1.4）。⟹ 成立するかどうかは、走らせるまで分からない
+ * ——だからここで走らせる。
+ *
+ * **CI では走らない。**`MNEMORA_LIVE_LOCAL_EMBEDDING` は `.github/workflows/ci.yml` の
+ * どのジョブにも設定されていない。⟹ **CI の費用も、CI が落ちる回数も増えない。**
+ * （`identifier-probes` ジョブが重みを落とすのとは別の話である。あちらは
+ * `actions/cache@v6` でキャッシュされている。）
+ */
+describe.skipIf(!live)(
+  "live: 本物のモデルに対する EmbeddingProvider 適合テスト（ADR 0095 / Issue #116）",
+  () => {
+    describeEmbeddingProviderConformance({
+      name: "LocalEmbeddingProvider（本物のモデル）",
+      // ⚠ 既定のまま。**本物の重みを落として、プロセス内で推論する。**
+      // suite は `createProvider` を `it` ごとに呼ぶ契約なので、モデルのロードも `it` ごとに走る。
+      createProvider: () => new LocalEmbeddingProvider(),
+      deterministic: true,
+      texts: {
+        a: "図書館は月曜日が休館日だ",
+        b: "去年の夏は記録的な猛暑だった",
+        c: "この味噌汁には出汁が効いている",
+      },
+      // モデルのロード（初回は取得も）が入るため、vitest の既定 5 秒ではまったく足りない。
+      timeout: 300_000,
+    });
+  },
+);

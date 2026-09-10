@@ -114,6 +114,9 @@ importers:
       '@mnemora/postgres':
         specifier: workspace:*
         version: link:../postgres
+      '@mnemora/testkit':
+        specifier: workspace:^
+        version: link:../testkit
       typescript:
         specifier: 5.9.3
         version: 5.9.3

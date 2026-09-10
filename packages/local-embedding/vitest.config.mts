@@ -12,6 +12,10 @@ export default defineConfig({
       // `embeddingSpaceIndexName`）を**本物を import して**使う歯のため。
       // 名前をベタ書きすると、導出が変わったときに歯が嘘になる。
       "@mnemora/postgres": fileURLToPath(new URL("../postgres/src/index.ts", import.meta.url)),
+      // Issue #116 の残債: ADR 0095 の適合テストを本物の LocalEmbeddingProvider に当てるため。
+      // ⚠ `@mnemora/testkit/fixtures` は使わない——使うなら base より前に書く必要がある
+      // （packages/openai/vitest.config.mts のコメント参照）。使わないので base だけを置く。
+      "@mnemora/testkit": fileURLToPath(new URL("../testkit/src/index.ts", import.meta.url)),
     },
   },
 });
