@@ -180,11 +180,67 @@ export const limitRecoverySchema = z.enum(['time', 'action', 'unknown']);
 export type LimitRecovery = z.infer<typeof limitRecoverySchema>;
 
 /**
+ * `"You've hit your"` / `"You've reached your"` に当たったときだけ、続けて
+ * **全文**を見て細分する（{@link LIMIT_RECOVERY_BY_PREFIX} のこの2つの鍵から
+ * 呼ばれる）。
+ *
+ * ## なぜ表の1行では足りないのか
+ *
+ * この2つは SDK の {@link USAGE_LIMIT_ERROR_PREFIXES} の中でいちばん粗い
+ * 接頭辞で、**中身の違う文言がまとめて1つの鍵に落ちる**。実際に当たった実害
+ * （2026-09-10 朝）がそれである——`You've hit your individual spend limit ·
+ * ask your admin to raise it` は「人間が上限を上げるまで開かない壁」なのに、
+ * 表がこの接頭辞1本を `time` に固定していたせいで「待てば戻る」と読み違えられ、
+ * 9時間が失われた。**この関数は、表の鍵1本の粒度では表現できない分岐を
+ * 鍵の中でもう一段見るために在る。**
+ *
+ * ## ⚠️ この判定も書き手の判定であって、Anthropic 側の仕様の主張ではない
+ *
+ * 例外は次の2つで、どちらも人間の実測である。
+ *
+ * - `individual spend limit` → `action`: **今回の実害の実測**（2026-09-10）。
+ *   文言自身が「管理者に上げてもらえ」と言っており、`action` の定義
+ *   （入金・管理者の設定・座席種別の変更が要る）に一致する
+ * - `org's monthly spend limit` → `time`: **人間の実測**（2026-08-25 JST 報告）。
+ *   無料枠を使い切って従量課金へ切り替わったときに組織の課金上限へ達して
+ *   出るもので、請求期間が変われば戻る。**これは陰性対照でもある**——下の
+ *   individual spend limit の分岐がこの文言を巻き込んで動かしていないことを
+ *   変異試験で確かめる
+ *
+ * `resets` を含む形（`· resets 3:50pm (Asia/Tokyo)` / `· resets at 5pm`）は
+ * **戻る時刻が本文に書いてあることそのものが `time` の直接の証拠**なので
+ * `time` にする。**時刻の抽出は `usage-reset-text.ts` が既に持っている
+ * （`parseNoticeResetAt`）ので、ここでは新設しない**——ただしここが要るのは
+ * 「時刻が書いてあるか」の存在確認だけで、`parseNoticeResetAt` は
+ * 「読める形か」（帯が要る）まで求めるので流用できない。`resets at 5pm`
+ * （帯が無い）は `parseNoticeResetAt` では読めないが、それでも「戻る時刻が
+ * 書いてある」という証拠としての価値は帯の有無で変わらない。
+ *
+ * **それ以外（誰も分類していない変種）は `unknown` へ倒す。** 今朝の実害は
+ * まさに「粗い既定値が黙って `time` を名乗る」形だったので、ここでも同じ形を
+ * 繰り返さない。`unknown` を `action` の同義語にもしない
+ * （{@link LimitRecovery} の doc「読み違えの代償が非対称」）。
+ *
+ * ## `"You've reached your"` にも同じ細分を当てる理由
+ *
+ * SDK の doc コメントは2つを「同じ族の文言（`getLimitReachedText` の出力）」
+ * と言っている。**`individual spend limit` 相当の言い回しが `reached` 側にも
+ * 将来現れないという保証は無い**——現れたときに `time` へ黙って落ちる同じ
+ * 欠陥を残さないため、細分は両方の鍵で共有する。
+ */
+function refineHitYourFamilyRecovery(text: string): LimitRecovery {
+  if (text.includes('individual spend limit')) return 'action';
+  if (text.includes("org's monthly spend limit")) return 'time';
+  if (/\bresets\b/i.test(text)) return 'time';
+  return 'unknown';
+}
+
+/**
  * {@link USAGE_LIMIT_ERROR_PREFIXES} の1本ごとの見込み。
  *
  * **⚠️ この表の判定は書き手の判定であって、Anthropic 側の仕様の主張ではない。**
- * 唯一の例外は最初の1行で、それは人間の実測である（下）。他の11行は文言の
- * 読みから当てたもので、**確認していない。**
+ * 例外は {@link refineHitYourFamilyRecovery} の doc に書いた2件で、それは
+ * 人間の実測である。他の10行は文言の読みから当てたもので、**確認していない。**
  *
  * ## なぜ SDK の文字列をここへ書き写しているのか
  *
@@ -197,14 +253,13 @@ export type LimitRecovery = z.infer<typeof limitRecoverySchema>;
  * **実行時の倒れ先は `unknown`** である（{@link limitRecoveryOf}）。型でもテストでも
  * 捕まえるが、それでも本番で当たったときに候補を捨てない側へ倒す。
  *
- * ## `time` と判定した根拠
+ * ## `"You've hit your"` / `"You've reached your"` は値ではなく関数を持つ
  *
- * - `"You've hit your"` — **人間の実測（2026-08-25 JST 報告）**:
- *   `You've hit your org's monthly spend limit` は、無料枠を使い切って従量課金へ
- *   切り替わったときに組織の課金上限へ達して出るもので、**請求期間が変われば戻る。**
- *   この接頭辞は支出上限と時間枠の両方を含む族で、どちらもリセットで戻る
- * - `"You've reached your"` — 上と同じ族の文言（`getLimitReachedText` の出力）。
- *   **これは判定であって実測ではない**
+ * **この2つは SDK でいちばん粗い接頭辞**で、1つの鍵に中身の違う文言がまとめて
+ * 落ちる（今回の実害がそれ）。⟹ 値の代わりに {@link refineHitYourFamilyRecovery}
+ * を置き、当たった鍵がこの2つのときだけ全文を見て細分する。**表の鍵の集合は
+ * 依然として SDK の12件と一致する**——変えたのは値の型（`LimitRecovery` →
+ * `LimitRecovery | (text) => LimitRecovery`）であって、鍵ではない。
  *
  * ## `unknown` にした3本
  *
@@ -212,10 +267,12 @@ export type LimitRecovery = z.infer<typeof limitRecoverySchema>;
  * こちらは知らない。**プランによって両方ありうる**と読んでいるので、当てずに
  * `unknown` にしてある——`action` と書けば、実際には月初に戻るトークンを捨てる。
  */
-const LIMIT_RECOVERY_BY_PREFIX = new Map<string, LimitRecovery>([
-  // 時間で戻る
-  ["You've hit your", 'time'],
-  ["You've reached your", 'time'],
+type RecoveryRule = LimitRecovery | ((text: string) => LimitRecovery);
+
+const LIMIT_RECOVERY_BY_PREFIX = new Map<string, RecoveryRule>([
+  // 粗すぎる接頭辞——全文を見て細分する（上の doc）。
+  ["You've hit your", refineHitYourFamilyRecovery],
+  ["You've reached your", refineHitYourFamilyRecovery],
   // 人間が動かないと戻らない（入金 / 管理者 / 座席種別）
   ['Your org is out of usage · add funds to continue', 'action'],
   ['Your org is out of usage · contact your admin', 'action'],
@@ -271,7 +328,13 @@ export function limitRecoveryOf(text: string): LimitRecovery {
   if (longestMatchingPrefix(text, ORG_POLICY_LIMIT_PREFIXES) !== undefined) return 'action';
   const prefix = matchedUsageLimitPrefix(text);
   if (prefix === undefined) return 'unknown';
-  return LIMIT_RECOVERY_BY_PREFIX.get(prefix) ?? 'unknown';
+  const rule = LIMIT_RECOVERY_BY_PREFIX.get(prefix);
+  if (rule === undefined) return 'unknown';
+  // 表の値は `LimitRecovery` そのものか、全文を見て細分する関数かのどちらか
+  // （上の {@link LIMIT_RECOVERY_BY_PREFIX} の doc）。**渡すのは matched した
+  // 接頭辞ではなく、元の `text` である**——細分が見るのは接頭辞より後ろの
+  // 部分（`individual spend limit` 等）だからである。
+  return typeof rule === 'function' ? rule(text) : rule;
 }
 
 /**

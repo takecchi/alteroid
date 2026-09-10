@@ -183,8 +183,47 @@ describe('回復の見込みを読む', () => {
     const real = "You've hit your org's monthly spend limit";
     // まず `reached` として拾えていること（回す契機そのもの）。
     expect(classifyUsageNotice(real)?.kind).toBe('reached');
-    // そのうえで「待てば戻る」側であること。
+    // そのうえで「待てば戻る」側であること。**これは陰性対照でもある** ——
+    // 下の individual spend limit の細分が、この文言を巻き込んで動かしていない
+    // ことを確かめる（変異試験の陰性対照はこの1行）。
     expect(limitRecoveryOf(real)).toBe('time');
+  });
+
+  it('individual spend limit は action（今朝の実害。人間が9時間を失った）', () => {
+    // **実測（2026-09-10 朝）**: 委譲が枠で落ちたとき、機械が
+    // `（回復の見込み: 時間で戻る（time）` を手渡し、「待てば開く」と読み違えて
+    // 9時間を失った。実際の文言は「人間が上限を上げるまで開かない壁」——
+    // SDK の USAGE_LIMIT_ERROR_PREFIXES には "individual spend limit" 専用の
+    // より長い鍵が無いため、`matchedUsageLimitPrefix` は粗い "You've hit your"
+    // までしか返せず、表がそれを一律 `time` に落としていた。
+    //
+    // 直った後は、この2つの実際の文言（`ask your admin` 版 / `for this
+    // account.` 版）の両方が `action` になる。
+    const askAdmin =
+      "You've hit your individual spend limit · ask your admin to raise it at claude.ai/settings/usage";
+    const forAccount = "You've hit your individual spend limit for this account.";
+    expect(classifyUsageNotice(askAdmin)?.kind).toBe('reached');
+    expect(limitRecoveryOf(askAdmin)).toBe('action');
+    expect(limitRecoveryOf(forAccount)).toBe('action');
+  });
+
+  it('未知の "You\'ve hit your …" の変種は unknown へ倒す（time へ黙って落ちない）', () => {
+    // これが今朝の実害の形そのもの——粗い接頭辞しか無いとき、いまの実装は
+    // 分類していない変種まで一律 `time` に落としていた。**`action` の同義語にも
+    // しない**（`unknown` を「捨てる」側へ倒さない）。
+    const unclassified = "You've hit your weekly team allowance";
+    expect(limitRecoveryOf(unclassified)).toBe('unknown');
+  });
+
+  it('戻る時刻が本文に書いてある形（帯の有無どちらも）は time のまま', () => {
+    // 帯（timezone）付きの形。
+    const withZone = "You've hit your session limit · resets 3:50pm (Asia/Tokyo)";
+    // 帯が無い形（`usage-reset-text.ts` は帯が無いと「読めない」へ落とすが、
+    // ここは *抽出* ではなく *存在の確認* なので、帯の有無を問わず time でよい
+    // ——戻る時刻が書いてあること自体が time の直接の証拠である）。
+    const withoutZone = "You've hit your usage limit · resets at 5pm";
+    expect(limitRecoveryOf(withZone)).toBe('time');
+    expect(limitRecoveryOf(withoutZone)).toBe('time');
   });
 
   it('組織の方針は「人間が動かないと戻らない」側（待っても直らない）', () => {
