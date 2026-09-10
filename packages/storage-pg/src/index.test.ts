@@ -5,6 +5,7 @@ import {
   verifyJournalStoreQueryEdgeContract,
   verifyJournalStoreSearchContract,
   verifyJournalStoreWithContract,
+  verifyTranscriptArchiveContract,
 } from '@alteroid/core';
 import type { Commitment, InboxEvent, Job, JournalEntry } from '@alteroid/core';
 import { PGlite } from '@electric-sql/pglite';
@@ -14,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb, migrate, seedPgWorkspace, type PgStores } from './index.js';
-import { memory } from './schema.js';
+import { archive, memory } from './schema.js';
 
 /**
  * pg ドライバの受け入れ確認。
@@ -73,6 +74,32 @@ describe('migrate', () => {
       kind: 'known',
       at: '2026-01-02T03:04:05.000Z',
     });
+  });
+
+  /**
+   * archive の tombstone 列（`removed_at` / `removed_bytes`。#698）の追加は
+   * 2回通しても壊れない。
+   *
+   * **⚠️ 同じ入り口を2回呼ぶだけでは測ったことにならない**（AGENTS.md
+   * 「2回通しても壊れないを測るテストは…『2周目でだけ壊れる状態』を挟む
+   * こと」）——1周目（`beforeEach` の `migrate(db)`）の後に**実際に行を積み、
+   * `remove()` を呼んでから**2周目を当てる。tombstone された行・していない
+   * 行の両方が、2周目のあとも壊れていないことを見る。
+   */
+  it('archive の tombstone 列の追加は2回通しても壊れない（1周目の後に remove() してから2周目を当てる）', async () => {
+    const removedId = await stores.archive.archive('session-migrate-twice-removed', 'BODY\n');
+    const removed = await stores.archive.remove(removedId);
+    expect(removed.kind).toBe('removed');
+
+    // 2周目——tombstone された行が実在する状態で当てる。
+    await migrate(db);
+
+    // 消した行の状態が壊れていない。
+    expect(await stores.archive.read(removedId)).toMatchObject({ kind: 'removed' });
+
+    // 消していない行も、2周目のあとに積んでも壊れていない。
+    const untouchedId = await stores.archive.archive('session-migrate-twice-untouched', 'OTHER\n');
+    expect(await stores.archive.read(untouchedId)).toEqual({ kind: 'body', body: 'OTHER\n' });
   });
 });
 
@@ -2038,11 +2065,79 @@ describe('PgTranscriptArchive', () => {
     const id = await stores.archive.archive('session-1', '{"a":1}\n');
 
     expect(await stores.archive.list()).toContain(id);
-    expect(await stores.archive.read(id)).toBe('{"a":1}\n');
+    expect(await stores.archive.read(id)).toEqual({ kind: 'body', body: '{"a":1}\n' });
   });
 
-  it('無い id は null', async () => {
-    expect(await stores.archive.read('居ない')).toBeNull();
+  it('無い id は missing（removed とは別物）', async () => {
+    expect(await stores.archive.read('居ない')).toEqual({ kind: 'missing' });
+  });
+
+  /** 契約（#698）を3実装ぶんの1つとして測る。他は testing.ts / storage-fs。 */
+  it('TranscriptArchive の契約を満たす', async () => {
+    await verifyTranscriptArchiveContract(stores.archive);
+  });
+
+  it('remove() は行を消さない（本文だけを落とす。list() に出続ける）', async () => {
+    const id = await stores.archive.archive('session-remove', 'BODY\n');
+
+    const removed = await stores.archive.remove(id);
+    expect(removed).toEqual({ kind: 'removed', bytes: Buffer.byteLength('BODY\n', 'utf8') });
+
+    // ⭐ 行は在る（list() に出る）。本文だけが落ちている。
+    expect(await stores.archive.list()).toContain(id);
+    expect(await stores.archive.read(id)).toMatchObject({ kind: 'removed' });
+
+    // 実際の行に body='' が入っており、DELETE していないことを直接見る。
+    const rows = await db.select().from(archive).where(eq(archive.id, id));
+    expect(rows[0]?.body).toBe('');
+    expect(rows[0]?.removedAt).not.toBeNull();
+  });
+
+  it('存在しない id への remove() は黙って成功しない（missing）', async () => {
+    expect(await stores.archive.remove('居ない')).toEqual({ kind: 'missing' });
+  });
+
+  it('id A を消しても id B は読める（巻き添えが無い）', async () => {
+    const idA = await stores.archive.archive('session-a', 'A\n');
+    const idB = await stores.archive.archive('session-b', 'B\n');
+
+    await stores.archive.remove(idA);
+
+    expect(await stores.archive.read(idA)).toMatchObject({ kind: 'removed' });
+    expect(await stores.archive.read(idB)).toEqual({ kind: 'body', body: 'B\n' });
+  });
+
+  /**
+   * ⭐ 判定は `removed_at` だけで行う。**`body === ''` を判定に使っていないか
+   * を直接測る**（#698）——空の生ログを退避しただけの行（`remove()` を
+   * 一度も呼んでいない）が `removed` に化けないことを、DB の行を直接見て
+   * 確かめる。
+   */
+  it('空の生ログを退避しただけの行は removed にならない（body の空文字を判定に使わない）', async () => {
+    const id = await stores.archive.archive('session-empty', '');
+
+    const rows = await db.select().from(archive).where(eq(archive.id, id));
+    expect(rows[0]?.body).toBe('');
+    expect(rows[0]?.removedAt).toBeNull();
+
+    expect(await stores.archive.read(id)).toEqual({ kind: 'body', body: '' });
+  });
+
+  it('二重の remove() は冪等（removed → already。バイト数・removedAt は変わらない）', async () => {
+    const id = await stores.archive.archive('session-twice', 'TWICE\n');
+
+    const first = await stores.archive.remove(id);
+    expect(first).toEqual({ kind: 'removed', bytes: Buffer.byteLength('TWICE\n', 'utf8') });
+
+    const readAfterFirst = await stores.archive.read(id);
+    if (readAfterFirst.kind !== 'removed') throw new Error('removed のはず');
+
+    const second = await stores.archive.remove(id);
+    expect(second).toEqual({
+      kind: 'already',
+      removedAt: readAfterFirst.removedAt,
+      bytes: Buffer.byteLength('TWICE\n', 'utf8'),
+    });
   });
 });
 

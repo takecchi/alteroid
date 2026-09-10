@@ -79,14 +79,30 @@ interface Harness {
   setRunnerBacklog(snapshots: RunnerBacklogSnapshot[]): void;
   /**
    * `manager_transcript` が読む `ManagerPool.transcript()` の返り値を差し替える。
-   * 設定しなければ既定で `null`（3段のどこにも無い、を模している）。
+   * 設定しなければ既定で `{ kind: 'missing' }`（3段のどこにも無い、を模している）。
+   *
+   * `archiveId` を渡すと、その本文が退避から読めたことを模す
+   * （`manager_transcript` の応答に archive id の1行が添う——#698）。
    */
-  setTranscript(managerId: string, body: string | null): void;
+  setTranscript(managerId: string, body: string | null, archiveId?: string): void;
   /**
    * `managers.transcript()` を呼ぶと、代わりに例外を投げさせる（読めなかった、
    * を模す）。`setTranscript` と排他ではない——両方設定したら例外が勝つ。
    */
   setTranscriptFailure(managerId: string, message: string): void;
+  /**
+   * `manager_transcript` が読む `ManagerPool.transcript()` を `kind: 'removed'`
+   * にする（#698。tombstone された退避しか無い状態を模す）。
+   */
+  setTranscriptRemoved(
+    managerId: string,
+    detail: { archiveId: string; removedAt: string; bytes: number },
+  ): void;
+  /**
+   * `ManagerPool.runningManagerOwning()` の返り値を差し替える（#698）。
+   * 設定しなければその archiveId は誰も走行中に抱えていない（`undefined`）。
+   */
+  setRunningManagerOwning(archiveId: string, managerId: string | undefined): void;
   /**
    * `managers.transcript(managerId)` が呼ばれるたびに積む。**往復を無条件に
    * 増やしていないか**（#323。`part: 'request'` では呼ばれないはず）を数えるための
@@ -126,9 +142,13 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
   };
   const runnersCalls: { fingerprints?: boolean; resources?: boolean }[] = [];
   let runnerBacklog: RunnerBacklogSnapshot[] = [];
-  const transcripts = new Map<string, string>();
+  type TranscriptState =
+    | { kind: 'body'; body: string; archiveId?: string }
+    | { kind: 'removed'; archiveId: string; removedAt: string; bytes: number };
+  const transcripts = new Map<string, TranscriptState>();
   const transcriptErrors = new Map<string, string>();
   const transcriptCalls: string[] = [];
+  const runningOwners = new Map<string, string>();
   let memoryCause: 'distill' | 'clone' = 'clone';
 
   const managers: ManagerPool = {
@@ -169,7 +189,10 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
       transcriptCalls.push(managerId);
       const failure = transcriptErrors.get(managerId);
       if (failure !== undefined) throw new Error(failure);
-      return transcripts.get(managerId) ?? null;
+      return transcripts.get(managerId) ?? { kind: 'missing' as const };
+    },
+    runningManagerOwning(archiveId: string) {
+      return runningOwners.get(archiveId);
     },
     async restore() {
       return [];
@@ -291,12 +314,24 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     setRunnerBacklog(snapshots) {
       runnerBacklog = snapshots;
     },
-    setTranscript(managerId, body) {
+    setTranscript(managerId, body, archiveId) {
       if (body === null) transcripts.delete(managerId);
-      else transcripts.set(managerId, body);
+      else
+        transcripts.set(managerId, {
+          kind: 'body',
+          body,
+          ...(archiveId === undefined ? {} : { archiveId }),
+        });
     },
     setTranscriptFailure(managerId, message) {
       transcriptErrors.set(managerId, message);
+    },
+    setTranscriptRemoved(managerId, detail) {
+      transcripts.set(managerId, { kind: 'removed', ...detail });
+    },
+    setRunningManagerOwning(archiveId, managerId) {
+      if (managerId === undefined) runningOwners.delete(archiveId);
+      else runningOwners.set(archiveId, managerId);
     },
     transcriptCalls,
     runnersCalls,
@@ -7295,6 +7330,55 @@ describe('manager_transcript（生ログへ降りる）', () => {
     expect(reply).toMatch(/アーカイブ/);
   });
 
+  /**
+   * #698 — 本文が退避から読めたときは archive id を出力へ添える。**これで
+   * 読んだ直後に `archive_remove` で消せる**（id を手に入れる唯一の経路）。
+   */
+  it('退避から読めた本文には archive id が添う（archive_remove で消せるように）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    h.setTranscript('mgr-1', '退避から読んだ本文', 'mgr-1-archived-0001.jsonl');
+
+    const reply = await h.call('manager_transcript', { managerId: 'mgr-1' });
+
+    expect(reply).toContain('退避から読んだ本文');
+    expect(reply).toContain('mgr-1-archived-0001.jsonl');
+    expect(reply).toContain('archive_remove');
+  });
+
+  it('archive id が無い（走行中の runner 等から読めた）ときは archive_remove の案内を出さない', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    h.setTranscript('mgr-1', '走行中の runner から読んだ本文');
+
+    const reply = await h.call('manager_transcript', { managerId: 'mgr-1' });
+
+    expect(reply).toContain('走行中の runner から読んだ本文');
+    expect(reply).not.toContain('archive_remove');
+  });
+
+  /**
+   * #698 — 退避はあったが本文が消されている（tombstone）ときは、`missing`
+   * （3段のどこにも無い）とは別の文言になる。「無い」と同じ字面に畳まない。
+   */
+  it('本文が消されている（tombstone）ときは、missing とは別の文言で言う', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    h.setTranscriptRemoved('mgr-1', {
+      archiveId: 'mgr-1-removed-0001.jsonl',
+      removedAt: '2026-01-02T00:00:00.000Z',
+      bytes: 123,
+    });
+
+    const reply = await h.call('manager_transcript', { managerId: 'mgr-1' });
+
+    expect(reply).toContain('消されている');
+    expect(reply).toContain('mgr-1-removed-0001.jsonl');
+    expect(reply).toContain('123');
+    // **missing の文言（直上の歯）と混ざらない。**
+    expect(reply).not.toContain('3段のどこにも見当たらなかった');
+  });
+
   it('manager_report の出力から生ログへの降り方が読める', async () => {
     const h = harness();
     await h.call('manager_start', { request: '調べて' });
@@ -7417,6 +7501,170 @@ describe('manager_transcript（生ログへ降りる）', () => {
 
       expect(reply).toContain('判定できない');
     });
+  });
+});
+
+/**
+ * `archive_remove` — アーカイブ済みセッション生ログの本文を1件消す（#698）。
+ *
+ * **雛形は `memory_delete`。** 同じ作法（存在しない id を黙って成功にしない・
+ * `summary` を必須にする）を測る。**走行中のマネージャーの退避は、HTTP の口
+ * （`app.test.ts`）とここ（クローンの道具）の両方で拒めることを別々に測る**
+ * ——判定所は `ManagerPool.runningManagerOwning()` 1箇所で、2箇所に書くと
+ * 片方だけ直る形になる。
+ */
+describe('archive_remove（退避済み生ログの本文を消す）', () => {
+  it('存在しない id は黙って成功にしない', async () => {
+    const h = harness();
+
+    const reply = await h.call('archive_remove', {
+      archiveId: '居ない.jsonl',
+      summary: '掃除',
+    });
+
+    expect(reply).toContain('存在しない');
+    expect(reply).toContain('居ない.jsonl');
+  });
+
+  it('消せる（行は list に残る。日誌に決定として残る）', async () => {
+    const h = harness();
+    const archiveId = await h.stores.archive.archive('sess-x', 'BODY\n');
+
+    const reply = await h.call('archive_remove', {
+      archiveId,
+      summary: 'もう要らないので消した',
+    });
+
+    expect(reply).toContain('消した');
+    expect(await h.stores.archive.list()).toContain(archiveId);
+    expect(await h.stores.archive.read(archiveId)).toMatchObject({ kind: 'removed' });
+
+    const entries = await h.stores.journal.list({ types: ['decision'] });
+    const entry = entries.find((e) => e.type === 'decision' && e.decision.includes(archiveId)) as
+      { type: 'decision'; decision: string; grounds: string } | undefined;
+    expect(entry).toBeDefined();
+    expect(entry?.grounds).toBe('もう要らないので消した');
+    // **本文は日誌へ写さない**（`BODY` という語が journal に出ない）。
+    expect(entries.some((e) => e.type === 'decision' && e.decision.includes('BODY'))).toBe(false);
+  });
+
+  it('二重に呼んでも「前から消されている」と言い、何も変えない', async () => {
+    const h = harness();
+    const archiveId = await h.stores.archive.archive('sess-y', 'BODY\n');
+    await h.call('archive_remove', { archiveId, summary: '1回目' });
+
+    const reply = await h.call('archive_remove', { archiveId, summary: '2回目' });
+
+    expect(reply).toContain('前から消されている');
+  });
+
+  /** ⭐ 走行中のマネージャーの退避は、クローンの道具からも消せない（#698）。 */
+  it('走行中のマネージャーの退避は消せない（どのマネージャーが走行中かを言う）', async () => {
+    const h = harness();
+    const archiveId = await h.stores.archive.archive('sess-running', 'BODY\n');
+    h.setRunningManagerOwning(archiveId, 'mgr-running-1');
+
+    const reply = await h.call('archive_remove', { archiveId, summary: '掃除' });
+
+    expect(reply).toContain('消せない');
+    expect(reply).toContain('mgr-running-1');
+    // 拒んだので何も変わっていない。
+    expect(await h.stores.archive.read(archiveId)).toEqual({ kind: 'body', body: 'BODY\n' });
+  });
+
+  /**
+   * ⭐ north_star 禁止2（追加制限禁止）——既定拒否は方針であり、方針は
+   * 設定で開けられなければならない。`overrideReason` が開ける口。**理由を
+   * 残さず黙って通る経路は無い**——override したら journal に事実と理由が
+   * 残ることを測る。
+   */
+  it('overrideReason を渡せば走行中でも消せる（理由が journal に残る）', async () => {
+    const h = harness();
+    const archiveId = await h.stores.archive.archive('sess-override', 'BODY\n');
+    h.setRunningManagerOwning(archiveId, 'mgr-running-2');
+
+    const reply = await h.call('archive_remove', {
+      archiveId,
+      summary: '掃除',
+      overrideReason: '本番障害の調査で緊急に消す必要があった',
+    });
+
+    expect(reply).toContain('消した');
+    expect(reply).toContain('override');
+    expect(reply).toContain('mgr-running-2');
+    // 本文は実際に落ちている（override が通った）。
+    expect(await h.stores.archive.read(archiveId)).toMatchObject({ kind: 'removed' });
+
+    const entries = await h.stores.journal.list({ types: ['decision'] });
+    const entry = entries.find((e) => e.type === 'decision' && e.decision.includes(archiveId)) as
+      { type: 'decision'; decision: string; grounds: string } | undefined;
+    expect(entry?.decision).toContain('override');
+    expect(entry?.decision).toContain('mgr-running-2');
+    expect(entry?.decision).toContain('本番障害の調査で緊急に消す必要があった');
+  });
+
+  it('overrideReason が空文字だと拒否のまま（うっかり通らない）', async () => {
+    const h = harness();
+    const archiveId = await h.stores.archive.archive('sess-empty-override', 'BODY\n');
+    h.setRunningManagerOwning(archiveId, 'mgr-running-3');
+
+    const reply = await h.call('archive_remove', {
+      archiveId,
+      summary: '掃除',
+      overrideReason: '',
+    });
+
+    expect(reply).toContain('消せない');
+    expect(await h.stores.archive.read(archiveId)).toEqual({ kind: 'body', body: 'BODY\n' });
+  });
+
+  it('overrideReason が空白だけだと拒否のまま（trim して非空を要求する）', async () => {
+    const h = harness();
+    const archiveId = await h.stores.archive.archive('sess-blank-override', 'BODY\n');
+    h.setRunningManagerOwning(archiveId, 'mgr-running-4');
+
+    const reply = await h.call('archive_remove', {
+      archiveId,
+      summary: '掃除',
+      overrideReason: '   ',
+    });
+
+    expect(reply).toContain('消せない');
+    expect(await h.stores.archive.read(archiveId)).toEqual({ kind: 'body', body: 'BODY\n' });
+  });
+
+  it('走行中でなければ overrideReason を渡さなくても普通に消せる（override の有無で通常経路が変わらない）', async () => {
+    const h = harness();
+    const archiveId = await h.stores.archive.archive('sess-not-running', 'BODY\n');
+    // setRunningManagerOwning しない ＝ 誰も走行中に抱えていない。
+
+    const reply = await h.call('archive_remove', { archiveId, summary: '掃除' });
+
+    expect(reply).toContain('消した');
+    expect(reply).not.toContain('override');
+  });
+
+  /**
+   * `context.managers` が無い場面（委譲の道具が配線されていない内部ターン）
+   * では、走行中かどうかを確かめる材料が無い——安全側に倒して消させない。
+   * `harness()` は常に `managers` を渡すので、ここだけは `createCloneTools`
+   * を直接呼ぶ。
+   */
+  it('managers が配線されていない場面では、安全側に倒して消させない', async () => {
+    const stores = createMemoryStores();
+    const archiveId = await stores.archive.archive('sess-no-pool', 'BODY\n');
+    const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+    const found = tools.find((entry) => entry.name === 'archive_remove');
+    if (!found) throw new Error('archive_remove が無い');
+
+    const result = await found.handler({ archiveId, summary: '掃除' } as never, {});
+    const text = (result.content ?? [])
+      .map((block) => (block.type === 'text' ? block.text : ''))
+      .join('');
+
+    expect(text).toContain('消せない');
+    // 拒んだので何も変わっていない。
+    expect(await stores.archive.read(archiveId)).toEqual({ kind: 'body', body: 'BODY\n' });
   });
 });
 
@@ -8769,7 +9017,7 @@ describe('システムプロンプトの道具一覧', () => {
  * この歯は `test` だけで踏める。
  */
 describe('自作ツールの日誌名簿（SELF_JOURNALING_CLONE_TOOLS / TRACELESS_CLONE_TOOLS）', () => {
-  it('CLONE_TOOL_NAMES の全36本が、2つの名簿のちょうど一方に属する', () => {
+  it('CLONE_TOOL_NAMES の全37本が、2つの名簿のちょうど一方に属する', () => {
     const selfJournaling = new Set<string>(SELF_JOURNALING_CLONE_TOOLS);
     const traceless = new Set<string>(TRACELESS_CLONE_TOOLS);
 
@@ -13082,12 +13330,12 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
 });
 
 /**
- * `appendJournalOrThrow` の16箇所すべてについて、応答本文が
+ * `appendJournalOrThrow` の17箇所すべてについて、応答本文が
  * **道具名**（どれが落ちたか）と**先頭行の outcome**（完了状態・未記録・
  * やり直しの可否）の両方を持つことを、道具ごとに独立して測る。
  *
  * **なぜ道具名だけでなく先頭行も測るのか。** 上の
- * `describe('journal.append が失敗したとき…')` の既存の歯は、13箇所の
+ * `describe('journal.append が失敗したとき…')` の既存の歯は、14箇所の
  * act-completed / 2箇所の act-not-performed / 1箇所の
  * act-partially-completed という **outcome の3分類を網羅する**ために
  * 選ばれた代表4件（memory_delete・journal_write・daily_report_write・
@@ -13098,9 +13346,10 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
  * `memory_append` の呼び出しが誤って `'memory_write'` という道具名で
  * `appendJournalOrThrow` を呼んでも、act-completed の代表4件には
  * 元から `memory_append` が入っていないので、既存の歯は何も言わない。
- * ここでは16箇所それぞれを独立したケースにして、この相乗りを解消する。
+ * ここでは17箇所それぞれを独立したケースにして、この相乗りを解消する
+ * （17箇所目は `archive_remove`。#698）。
  */
-describe('journal.append 失敗時の応答本文: 16箇所すべてで道具名と先頭行 outcome を測る', () => {
+describe('journal.append 失敗時の応答本文: 17箇所すべてで道具名と先頭行 outcome を測る', () => {
   /** 上の describe の `callExpectingError` と同じもの（複製）。既存側は1文字も変えない。 */
   async function callExpectingError(
     tools: ReturnType<typeof createCloneTools>,
@@ -13435,6 +13684,26 @@ describe('journal.append 失敗時の応答本文: 16箇所すべてで道具名
         return callExpectingError(tools, 'manager_start', { request: '調査' });
       },
     },
+    {
+      tool: 'archive_remove',
+      firstLine: ACT_COMPLETED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-17');
+        const archiveId = await stores.archive.archive('sess-case-17', 'BODY\n');
+        // `runningManagerOwning` だけを持つ最小のスタブ（この道具はそれ以外を呼ばない）。
+        const managers = { runningManagerOwning: () => undefined } as unknown as ManagerPool;
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          managers,
+          memoryCause: () => 'clone',
+        });
+        return callExpectingError(tools, 'archive_remove', {
+          archiveId,
+          summary: '不要になったので消す',
+        });
+      },
+    },
   ];
 
   it.each(CASES)(
@@ -13451,7 +13720,8 @@ describe('journal.append 失敗時の応答本文: 16箇所すべてで道具名
 
   /**
    * ⭐⭐ 弱点の手当て: `CASES` の道具名の集合を、手で並べた一覧とではなく
-   * `SELF_JOURNALING_CLONE_TOOLS`（17本）から導いた期待値と突き合わせる。
+   * `SELF_JOURNALING_CLONE_TOOLS`（18本。#698 で `archive_remove` が
+   * 加わった）から導いた期待値と突き合わせる。
    *
    * `manager_send` / `manager_stop` を除く理由: この2本は `ManagerPool` の
    * ガード付き `#journal`（`clone.ts`）を通るので `appendJournalOrThrow` を
@@ -13459,7 +13729,7 @@ describe('journal.append 失敗時の応答本文: 16箇所すべてで道具名
    * 書く」という性質の名簿であって、その書き方が `appendJournalOrThrow`
    * 経由とは限らない。
    *
-   * これにより、17本目の「自前で journal.append を呼ぶ道具」が
+   * これにより、19本目の「自前で journal.append を呼ぶ道具」が
    * `SELF_JOURNALING_CLONE_TOOLS` に足されたとき、`CASES` にケースを
    * 足し忘れるとこの歯が「ケースが足りない」と言って赤くなる。
    */

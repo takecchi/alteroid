@@ -53,10 +53,12 @@ import {
 } from './excerpt.js';
 import { classifyManagerActivity } from './manager-activity.js';
 import type { ManagerActivityInput } from './manager-activity.js';
+import { guardArchiveRemoval } from './manager.js';
 import type {
   ManagerDenial,
   ManagerPool,
   ManagerSummary,
+  ManagerTranscript,
   RunnerBacklogSnapshot,
 } from './manager.js';
 import {
@@ -306,15 +308,17 @@ export const CLONE_TOOL_NAMES = [
   'manager_list',
   'manager_report',
   'manager_transcript',
+  'archive_remove',
   'runner_list',
 ] as const;
 
 export type CloneToolName = (typeof CLONE_TOOL_NAMES)[number];
 
 /**
- * 自作ツール 36 本のうち、**ハンドラが自前で日誌へ書く 17 本**
+ * 自作ツール 37 本のうち、**ハンドラが自前で日誌へ書く 18 本**
  * （`memory_write` は `memory_update`、`journal_write` は本文、`manager_start`
- * は台帳と `tool_use`、という形で自分の跡を残す）。
+ * は台帳と `tool_use`、という形で自分の跡を残す。`archive_remove` は #698 で
+ * 加わった）。
  *
  * `clone.ts` の `#journalToolUse` は、この名簿に載る道具の `tool_use` を
  * 重ねて書かない（`clone.ts`「なぜ*自前で日誌へ書く道具だけ*を除くのか」参照）。
@@ -341,10 +345,11 @@ export const SELF_JOURNALING_CLONE_TOOLS = [
   'manager_start',
   'manager_send',
   'manager_stop',
+  'archive_remove',
 ] as const satisfies readonly CloneToolName[];
 
 /**
- * 自作ツール 36 本のうち、**ハンドラが自前では日誌へ書かない 19 本**（読む道具。
+ * 自作ツール 37 本のうち、**ハンドラが自前では日誌へ書かない 19 本**（読む道具。
  * `memory_list` / `journal_read` など）。
  *
  * `clone.ts` の `#journalToolUse` は、この名簿に載る道具の `tool_use` を残す
@@ -909,9 +914,9 @@ async function describeMissingReport(
   status: ManagerSummary['status'],
 ): Promise<string> {
   const base = `マネージャー ${managerId} からの報告はまだ無い（状態: ${status}）。`;
-  let transcript: string | null;
+  let result: ManagerTranscript;
   try {
-    transcript = await managers.transcript(managerId);
+    result = await managers.transcript(managerId);
   } catch (error) {
     return (
       `${base} 生ログは読めなかった（` +
@@ -919,12 +924,24 @@ async function describeMissingReport(
       '）。「まだ書いていない」か「書いたのに届いていない」かは、これだけでは判定できない。'
     );
   }
-  if (transcript === null || transcript.length === 0) {
+  if (result.kind === 'removed') {
+    // **`missing` に畳まない**（#698）——退避はあったが、本文は
+    // `archive_remove` / `DELETE /archive/:id` で落とされている。「まだ書いて
+    // いない」でも「読めなかった」でもなく、現物を確かめる手段そのものが
+    // 消されている、という3つ目の状態。
+    return (
+      `${base} 生ログは退避されていたが本文が消されている` +
+      `（${result.removedAt} に ${result.bytes.toLocaleString('ja-JP')} バイトを落とした。` +
+      `archive id: ${result.archiveId}）。現物は確かめられない。`
+    );
+  }
+  if (result.kind === 'missing' || result.body.length === 0) {
     return (
       `${base} 生ログにも本文は無い` +
       '（走行中の runner のディスク・退避済みアーカイブ・預かった生ログ、3段のどこにも見当たらなかった）。'
     );
   }
+  const transcript = result.body;
 
   const outcome = probeLastAssistantUtterance(transcript);
   if (outcome.kind === 'empty') {
@@ -6087,13 +6104,12 @@ export function createCloneTools(context: ToolContext) {
       },
       async ({ managerId, offset = 0 }) => {
         if (!context.managers) return NO_POOL;
-        const body = await context.managers.transcript(managerId);
-        if (body === null) {
-          // **`transcript()` の `null` は2つの意味を畳んでいる** — 「そのマネージャー
-          // 自体が台帳に居ない」か、「居るが3段のどこにも生ログが無い」か。
-          // `ManagerPool.transcript()` の実装（`manager.ts`）はこの2つを区別する
-          // 値を返してこないので、ここでも区別できない。**畳んでいることを隠さず、
-          // そう書く。**
+        const result = await context.managers.transcript(managerId);
+        if (result.kind === 'missing') {
+          // **`missing` は2つの意味を畳んでいる** — 「そのマネージャー自体が
+          // 台帳に居ない」か、「居るが3段のどこにも生ログが無い」か。
+          // `ManagerPool.transcript()` はこの2つを区別する値を返してこないので、
+          // ここでも区別できない。**畳んでいることを隠さず、そう書く。**
           //
           // **その先で、「まだ引き渡していない」と「引き渡せずに消えた」は
           // 言い分ける（#634）。** 上の断り（id 自体が無い場合との区別が
@@ -6108,13 +6124,132 @@ export function createCloneTools(context: ToolContext) {
               (await describeTranscriptMissingLeg(context.managers, managerId)),
           );
         }
+        if (result.kind === 'removed') {
+          // **`missing` と同じ文面へ畳まない**（#698）——退避そのものは在った
+          // （id は実在した）が、本文は `archive_remove` / `DELETE /archive/:id`
+          // で落とされている。「どこにも無かった」ではなく「消された」である。
+          return text(
+            `マネージャー ${managerId} の生ログは退避されていたが、本文は消されている` +
+              `（${result.removedAt} に ${result.bytes.toLocaleString('ja-JP')} バイトを落とした。` +
+              `archive id: ${result.archiveId}）。` +
+              '走行中の runner のディスク・預かったセッションの生ログにも見当たらなかった。',
+          );
+        }
 
+        const { body, archiveId } = result;
         const part1 = page(body, offset, TRANSCRIPT_PAGE);
-        const head = `マネージャー ${managerId} の生ログ（${describePage(part1)}）`;
+        // **この本文がどの archive id から読めたかを添える**（#698）——
+        // クローンが読んだ直後に `archive_remove archiveId=<id>` で消せるように
+        // するため。走行中の runner のディスク・預かったセッションの生ログから
+        // 読めたときは archive id が無い（`archiveId` が `undefined`）ので出さない。
+        const archiveNote =
+          archiveId === undefined
+            ? ''
+            : `（archive id: ${archiveId}。archive_remove archiveId=${archiveId} で消せる）`;
+        const head = `マネージャー ${managerId} の生ログ（${describePage(part1)}）${archiveNote}`;
         const tail = part1.more
           ? `\n\n…（ここで切れている。続きは manager_transcript managerId=${managerId} offset=${part1.to}）`
           : '';
         return text(`${head}\n\n${part1.body}${tail}`);
+      },
+    ),
+
+    /**
+     * アーカイブ済みセッション生ログの本文を1件消す（#698）。
+     *
+     * **人間には `DELETE /archive/:id` が既に在る。** 人間にできることが
+     * クローンにできないのは north_star 禁止1 に反するので、こちらにも
+     * 同じ口を渡す。
+     *
+     * **雛形は `memory_delete` である。** 同じ作法を踏襲する——存在しない id
+     * を黙って成功にしない（`ArchiveRemoval` の `kind: 'missing'`）／`summary`
+     * を必須引数にして消す理由を残す／本文は日誌へ写さない。
+     *
+     * **id を手に入れる経路は `manager_transcript` である。** その応答に
+     * 「この本文を読んだ archive id」が載る（`manager_transcript` tool の
+     * `archiveNote`）ので、読んだ直後にここへ渡せる。
+     *
+     * **走行中のマネージャーの退避は、既定では消せない。** 判定は
+     * `guardArchiveRemoval()` 1箇所だけを通す——`app.ts` の
+     * `DELETE /archive/:id` ハンドラと同じ関数である（`manager.ts` の doc。
+     * 2箇所に書くと片方だけ直る形になる）。**`overrideReason` を渡せば通せる**
+     * ——既定拒否は north_star 禁止2（追加制限禁止）の「方針は設定で開けられ
+     * なければならない」の実装であって、能力の一律な削除ではない
+     * （`guardArchiveRemoval` の doc）。override したときは、その理由と
+     * 走行中だったマネージャーの id を日誌へ残す（黙って通さない）。
+     */
+    tool(
+      'archive_remove',
+      [
+        'アーカイブ済みセッション生ログの本文を1件消す（tombstone。行そのものは残る——',
+        'archive の一覧には引き続き出る。DELETE ではない）。',
+        '無い id を渡しても成功にはならず、そう返る。',
+        '走行中のマネージャーの退避は既定では消せない（拒む。どのマネージャーが走行中かを言う）。',
+        'それでも消す必要があるなら overrideReason にその理由を書く——渡すと通り、',
+        '「override で消した」事実と理由が日誌に残る（黙って通る経路は無い）。',
+        '消した事実は日誌に残る（archive id と直前のバイト数のみ。本文は残らない）。',
+        'id は manager_transcript の応答に載る（「この本文を読んだ archive id」）——',
+        '読んだ直後にそこから渡せる。',
+      ].join(' '),
+      {
+        archiveId: z.string().describe('manager_transcript が出す archive id'),
+        summary: z.string().describe('なぜ消したかの一行要約（日誌に残る。本文は残らない）'),
+        overrideReason: z
+          .string()
+          .optional()
+          .describe(
+            '走行中のマネージャーの退避を、それでも消す理由。渡さなければ拒否される' +
+              '（省略時は既定の拒否のまま）。渡すと「override で消した」として理由ごと日誌に残る。',
+          ),
+      },
+      async ({ archiveId, summary, overrideReason }) => {
+        const guard = guardArchiveRemoval(context.managers, archiveId, overrideReason);
+        if (guard.kind === 'unknown') {
+          return text(
+            '消せない——いまは委譲の道具が配線されていない内部ターンで、走行中の' +
+              'マネージャーがこの退避を使っているかどうかを確かめる材料が無い' +
+              '（安全側に倒して拒む。#698）。',
+          );
+        }
+        if (guard.kind === 'denied') {
+          return text(
+            `消せない——マネージャー ${guard.managerId} がいま走行中で、この退避を使っている` +
+              '（走行中の委譲を追う最後の手段が消えるため。それでも消すなら overrideReason に' +
+              '理由を書くこと。#698）。',
+          );
+        }
+        const result = await stores.archive.remove(archiveId);
+        if (result.kind === 'missing') {
+          return text(`アーカイブ ${archiveId} は存在しない（消せない。何も変わっていない）。`);
+        }
+        if (result.kind === 'already') {
+          return text(
+            `アーカイブ ${archiveId} は前から消されている（${result.removedAt} に ` +
+              `${result.bytes.toLocaleString('ja-JP')} バイトを落とした）。何も変わっていない。`,
+          );
+        }
+        const overrideNote =
+          guard.kind === 'allowed-with-override'
+            ? `（⚠️ override — 走行中のマネージャー ${guard.managerId} の退避だったが、` +
+              `理由「${guard.reason}」により消した）`
+            : '';
+        await appendJournalOrThrow(
+          'archive_remove',
+          stores.journal,
+          {
+            type: 'decision',
+            decision:
+              `退避済み生ログの本文を消した: ${archiveId}（${result.bytes} バイト）: ${summary}` +
+              overrideNote,
+            grounds:
+              guard.kind === 'allowed-with-override' ? `${summary}／${overrideNote}` : summary,
+          },
+          'act-completed',
+        );
+        return text(
+          `アーカイブ ${archiveId} の本文を消した（${result.bytes.toLocaleString('ja-JP')} バイト）。` +
+            `行そのものは残っている（list には引き続き出る）。${overrideNote}`,
+        );
       },
     ),
 

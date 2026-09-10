@@ -3504,21 +3504,34 @@ class Clone implements CloneHost {
     const grave = await this.#stores.sessions.getTranscriptGrave();
     if (grave === null) return;
 
-    const transcript = await this.#stores.archive.read(grave.archiveId);
-    if (transcript === null) {
-      // 退避が消えている（器を作り直した／人が消した）。**印だけを残さない** —
-      // 残すと、拾えないものを起動のたびに引きに行くことになる。
+    const result = await this.#stores.archive.read(grave.archiveId);
+    if (result.kind !== 'body') {
+      // 退避が無い。**理由は2つに分かれ、同じ文面へ畳まない**（#698 — tombstone
+      // を足した目的そのもの）——`missing`（器を作り直した／そもそも一度も
+      // 積まれなかった）と `removed`（`archive_remove` / `DELETE /archive/:id`
+      // で人が意図して本文を落とした）は別の出来事である。**どちらにせよ印だけを
+      // 残さない** — 残すと、拾えないものを起動のたびに引きに行くことになる。
+      // **`missing` の文面は既存のまま1文字も変えない**（「退避が見つからない
+      // ので、印を下ろした」— この文言を保証しているテストがある）。`removed`
+      // は別の文にする——同じ穴埋め型の文にすると「退避が本文が消されている」
+      // のような重複した「が」が生まれるためでもある。
+      const text =
+        result.kind === 'removed'
+          ? `記憶へ移せていない区間の退避の本文が消されているので、印を下ろした: ${grave.archiveId}` +
+            `（${result.removedAt} に ${result.bytes} バイトを落とした。` +
+            '⚠️ この区間は記憶へ移せていない）'
+          : `記憶へ移せていない区間の退避が見つからないので、印を下ろした: ${grave.archiveId}` +
+            '（器を作り直した、あるいはそもそも積まれなかった。⚠️ この区間は記憶へ移せていない）';
       await this.#journal({
         type: 'exchange',
         with: 'self',
         role: 'outbound',
-        text:
-          `記憶へ移せていない区間の退避が見つからないので、印を下ろした: ${grave.archiveId}` +
-          '（⚠️ この区間は記憶へ移せていない）',
+        text,
       });
       await this.#stores.sessions.setTranscriptGrave(null);
       return;
     }
+    const transcript = result.body;
 
     // **拾い直したことを日誌へ1行残す。** `#distillFromTranscript` が書く
     // 「ターンの入力: pre_compact_distill」だけだと、**compaction の蒸留と区別が
@@ -5088,7 +5101,7 @@ class Clone implements CloneHost {
    * preset の道具と同じくここに残る — あちらも「自分でブラウザを開いた」側で
    * ある）。
    *
-   * **名簿は `tools.ts` に在り、36 本がどちらか一方に必ず属することを型で
+   * **名簿は `tools.ts` に在り、37 本がどちらか一方に必ず属することを型で
    * 強制している**（`SELF_JOURNALING_CLONE_TOOLS` / `TRACELESS_CLONE_TOOLS`。
    * `CloneToolName` に対する網羅性・排他性のチェック）。道具を1本足す人は、
    * その場でどちらかへ入れることになる — 入れなければ `typecheck` が落ちる。

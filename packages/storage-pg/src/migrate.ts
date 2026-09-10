@@ -457,6 +457,14 @@ export const STATEMENTS = [
   // 消してある** — 残すと2周目に作りに行って落ちる。既に索引の無い DB（新規）
   // では `if exists` が効いて本当の no-op になる。
   `drop index if exists auth_accounts_single_owner_idx`,
+
+  // --- archive の tombstone（#698） ----------------------------------------
+  // **消す口（`remove()`）を足すための列。行は消さない——本文だけを落とす。**
+  // `body` の not null は外さない（空文字を入れる）。判定は `removed_at` が
+  // null かどうかだけで行う（`body` が空文字であることを根拠にしない——空の
+  // 生ログは正当にありえる）。
+  `alter table archive add column if not exists removed_at timestamptz`,
+  `alter table archive add column if not exists removed_bytes integer`,
 ] as const;
 
 export async function migrate(db: Db): Promise<void> {

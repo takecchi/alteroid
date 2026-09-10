@@ -44,7 +44,8 @@ function stubClone(): CloneHost {
     // ここは経由しない）。型を満たすだけの空スタブで足りる。
     runners: () =>
       Promise.resolve({ runners: [], unassigned: [], daemonRevision: { status: 'unknown' } }),
-    transcript: () => Promise.resolve(null),
+    transcript: () => Promise.resolve({ kind: 'missing' as const }),
+    runningManagerOwning: () => undefined,
     restore: () => Promise.resolve([]),
     resumeStoppedByUsage: () => Promise.resolve([]),
     reattachRunner: () => Promise.resolve(),

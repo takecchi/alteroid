@@ -149,6 +149,8 @@ export function createMemoryStores(): Stores {
   const schedulePhases = new Map<string, SchedulePhase>();
   const commitments = new Map<string, Commitment>();
   const archives = new Map<string, string>();
+  /** tombstone（#698）。行（`archives` のキー）は消さず、ここへ印だけを持つ。 */
+  const archiveRemovals = new Map<string, { removedAt: string; bytes: number }>();
   const inboxStore = createMemoryInboxStore();
   let cloneSessionId: string | null = null;
   let transcriptGrave: TranscriptGrave | null = null;
@@ -494,7 +496,26 @@ export function createMemoryStores(): Stores {
       return [...archives.keys()];
     },
     async read(id) {
-      return archives.get(id) ?? null;
+      // **印（`archiveRemovals`）を先に見る。** `archives.get(id)` が `''`
+      // （空の生ログ）を返す場合と「消された」を区別するのはこの順序である
+      // ——本文の中身では判定しない（`ArchiveRead` interface doc）。
+      const removal = archiveRemovals.get(id);
+      if (removal !== undefined) return { kind: 'removed', ...removal };
+      const body = archives.get(id);
+      if (body === undefined) return { kind: 'missing' };
+      return { kind: 'body', body };
+    },
+    async remove(id) {
+      const removal = archiveRemovals.get(id);
+      if (removal !== undefined) return { kind: 'already', ...removal };
+      const body = archives.get(id);
+      if (body === undefined) return { kind: 'missing' };
+      const bytes = Buffer.byteLength(body, 'utf8');
+      const removedAt = new Date().toISOString();
+      // **行は残す**（`archives` から消さない）。本文だけを落とす。
+      archives.set(id, '');
+      archiveRemovals.set(id, { removedAt, bytes });
+      return { kind: 'removed', bytes };
     },
   };
 

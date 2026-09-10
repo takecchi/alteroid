@@ -339,11 +339,11 @@ describe('manager_id → runner_id の貼り付き（M5 受け入れ基準2 / 3�
     const fleet = await attachedFleet();
     const [a, b, c] = fleet.runners as [StickyRunner, StickyRunner, StickyRunner];
 
-    const body = await fleet.pool.transcript('mgr-on-runner-a');
+    const result = await fleet.pool.transcript('mgr-on-runner-a');
 
     // **本文でどの器から来たかを判定する。** 「非 null が返った」だけだと、別の器の
     // 生ログを掴んできても緑になる（クローンが別の仕事のログを読んで判断する形）。
-    expect(body).toBe('[生ログ] runner-a / mgr-on-runner-a\n');
+    expect(result).toEqual({ kind: 'body', body: '[生ログ] runner-a / mgr-on-runner-a\n' });
     expect(a.transcripts).toEqual(['mgr-on-runner-a']);
     expect(b.transcripts).toEqual([]);
     expect(c.transcripts).toEqual([]);

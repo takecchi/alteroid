@@ -735,12 +735,70 @@ export interface PendingInboxEvent {
   deliveries: number;
 }
 
-/** セッションの生ログ退避先（PreCompact フックで落とす）。 */
+/**
+ * `TranscriptArchive.read()` が返す3つの顔（#698）。
+ *
+ * **`null` へ畳まない。** 消す口（`remove()`）が無かった頃は「無い」の意味は
+ * 1つ（そもそも積まれていない）しかなく、`string | null` で十分だった。
+ * `remove()` を足すと「積まれたが本文を落とした」という**2つ目の『無い』**が
+ * 生まれる——同じ `null` へ両方を畳むと、消す口を足したことで逆に
+ * `manager_transcript` / `GET /archive/:id` の呼び出し元は「どこにも無かった」
+ * としか言えなくなり、この PR の主目的（`null` の畳み込みを解くこと）が
+ * 消す口を足した瞬間に自分自身で壊れる。
+ *
+ * - **`body`** — 本文がある（消されていない）。
+ * - **`removed`** — 退避そのものは在った（id は実在した）が、`remove()` で
+ *   本文だけを落とした。**行は残る**（`list()` に出続ける）——`kind: 'removed'`
+ *   は「本文を落とした」であって「行が消えた」ではない。
+ * - **`missing`** — id 自体が存在しない（一度も積まれていない、あるいは
+ *   器の外で失われた）。
+ */
+export type ArchiveRead =
+  | { readonly kind: 'body'; readonly body: string }
+  | { readonly kind: 'removed'; readonly removedAt: string; readonly bytes: number }
+  | { readonly kind: 'missing' };
+
+/**
+ * `TranscriptArchive.remove()` の結果（#698）。
+ *
+ * **存在しない id を黙って成功にしない。** `memory_delete` / `DELETE /memory/:slug`
+ * と同じ作法——消せなかったことと消せたことを同じ応答に畳むと、呼び出し側は
+ * 「消したつもりで何も変わっていない」を検出できなくなる。
+ *
+ * - **`removed`** — いま消した（本文を落とした）。落とす直前のバイト数を返す。
+ * - **`already`** — 前から消されていた（冪等な再実行）。前に消した時刻と
+ *   バイト数を返す——「いま消した」と「前から消えていた」を同じ応答に畳むと、
+ *   `remove()` を呼んだ側は自分の呼び出しが実際に何をしたのかを見失う。
+ * - **`missing`** — id 自体が存在しない。**これだけが失敗である**
+ *   （`removed` / `already` はどちらも「その id はいま本文を持たない」という
+ *   同じ状態への到達を表す、成功側の2つの経路）。
+ */
+export type ArchiveRemoval =
+  | { readonly kind: 'removed'; readonly bytes: number }
+  | { readonly kind: 'already'; readonly removedAt: string; readonly bytes: number }
+  | { readonly kind: 'missing' };
+
+/**
+ * セッションの生ログ退避先（PreCompact フックで落とす）。
+ *
+ * **⛔ `remove()` は行を消さない。** 本文だけを落とす（tombstone）——`archive`
+ * テーブル／ファイルの行そのものは残る。走行中の委譲の生ログを消せない守りは
+ * ここ（インターフェース）ではなく `ManagerPool.runningManagerOwning()` が持つ
+ * （HTTP の口とクローンの道具の両方がそこを通ることで、守りを1箇所に保つ）。
+ */
 export interface TranscriptArchive {
   /** 退避したアーカイブのパス（または識別子）を返す。 */
   archive(sessionId: string, transcript: string): Promise<string>;
   list(): Promise<string[]>;
-  read(id: string): Promise<string | null>;
+  read(id: string): Promise<ArchiveRead>;
+  /**
+   * 本文だけを落とす（tombstone。`DELETE` ではない）。
+   *
+   * **`body` の「空である」ことを判定に使わない。** 空の生ログは正当にありえる
+   * ——実装（`storage-pg` の `removed_at is not null`／`storage-fs` の脇の印
+   * ファイル）は、本文の中身を一切見ずに判定する。
+   */
+  remove(id: string): Promise<ArchiveRemoval>;
 }
 
 /**

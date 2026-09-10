@@ -35,6 +35,7 @@ import {
   reachedStart,
   droppedTraceLedgerSince,
   findUnrecordedManagers,
+  guardArchiveRemoval,
   isAccountGranted,
   isDailyReport,
   jobStatusSchema,
@@ -79,6 +80,8 @@ import {
   approvalsAnswerResponseSchema,
   approvalsResponseSchema,
   archiveListResponseSchema,
+  archiveRemovedResponseSchema,
+  archiveRemoveResponseSchema,
   authProvidersResponseSchema,
   commitmentListResponseSchema,
   commitmentOpenedResponseSchema,
@@ -3203,12 +3206,29 @@ export function createApp(deps: AppDeps) {
             description: '該当するマネージャーの生ログが無い。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          410: {
+            description:
+              '退避はあったが、本文は `DELETE /archive/:id` で消されている（#698）。' +
+              'いつ・何バイト落としたか、どの archive id だったかを返す。',
+            content: { 'application/json': { schema: resolver(archiveRemovedResponseSchema) } },
+          },
         },
       }),
       async (c) => {
-        const body = await clone.managers.transcript(c.req.param('id'));
-        if (body === null) return c.json({ error: 'not found' as const }, 404);
-        return c.text(body);
+        const result = await clone.managers.transcript(c.req.param('id'));
+        if (result.kind === 'missing') return c.json({ error: 'not found' as const }, 404);
+        if (result.kind === 'removed') {
+          return c.json(
+            archiveRemovedResponseSchema.parse({
+              error: 'removed',
+              removedAt: result.removedAt,
+              bytes: result.bytes,
+              archiveId: result.archiveId,
+            }),
+            410,
+          );
+        }
+        return c.text(result.body);
       },
     )
 
@@ -3916,12 +3936,114 @@ export function createApp(deps: AppDeps) {
             description: '該当するアーカイブが無い。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          410: {
+            description:
+              '本文は `DELETE /archive/:id` で消されている（#698）。行そのものは残る——' +
+              'この id は `/archive` の一覧には引き続き出る。いつ・何バイト落としたかを返す。',
+            content: { 'application/json': { schema: resolver(archiveRemovedResponseSchema) } },
+          },
         },
       }),
       async (c) => {
-        const body = await stores.archive.read(c.req.param('id'));
-        if (body === null) return c.json({ error: 'not found' as const }, 404);
-        return c.text(body);
+        const result = await stores.archive.read(c.req.param('id'));
+        if (result.kind === 'missing') return c.json({ error: 'not found' as const }, 404);
+        if (result.kind === 'removed') {
+          return c.json(
+            archiveRemovedResponseSchema.parse({
+              error: 'removed',
+              removedAt: result.removedAt,
+              bytes: result.bytes,
+            }),
+            410,
+          );
+        }
+        return c.text(result.body);
+      },
+    )
+
+    /**
+     * アーカイブ済み生ログの本文を1件消す（#698）。**`DELETE` という名前だが
+     * 行は消えない**——本文だけを落とす tombstone である（`TranscriptArchive.remove`
+     * の doc）。存在しない id を渡しても成功にはならない。
+     *
+     * **走行中のマネージャーの退避は消せない。** 判定は
+     * `ManagerPool.runningManagerOwning()` 1箇所だけを通す——クローンの道具
+     * `archive_remove`（`tools.ts`）と同じ関数である。2箇所に書くと片方だけ
+     * 直る形になる（AGENTS.md「リポジトリの約束」の数え上げの持ち主を1か所に
+     * する、と同じ理由）。
+     */
+    .delete(
+      '/archive/:id',
+      describeRoute({
+        tags: ['archive'],
+        summary: 'アーカイブ済み生ログの本文を消す（行は残る）',
+        description:
+          '本文だけを落とす（tombstone）。行そのものは消えない——`/archive` の一覧には' +
+          '引き続き出る。存在しない id を渡しても成功にはならない。走行中のマネージャーの' +
+          '退避は既定では消せない（拒む。どのマネージャーが走行中かを言う）。' +
+          'クエリ引数 `overrideReason` にその理由を書けば通せる' +
+          '（north_star 禁止2「方針は設定で開けられなければならない」の実装——' +
+          '既定拒否は能力の一律な削除ではなく方針である）。override したときは' +
+          '理由と対象のマネージャー id を日誌に残す。',
+        responses: {
+          200: {
+            description: '消した（または前から消されていた）。',
+            content: { 'application/json': { schema: resolver(archiveRemoveResponseSchema) } },
+          },
+          404: {
+            description: '該当するアーカイブが無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          409: {
+            description:
+              '走行中のマネージャーの退避なので消せない。`overrideReason` クエリ引数で開ける。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        const id = c.req.param('id');
+        const overrideReason = c.req.query('overrideReason');
+        const guard = guardArchiveRemoval(clone.managers, id, overrideReason);
+        if (guard.kind === 'denied') {
+          return c.json(
+            {
+              error:
+                `走行中のマネージャー ${guard.managerId} の退避なので消せない` +
+                '（overrideReason クエリ引数に理由を書けば通せる）',
+            },
+            409,
+          );
+        }
+        const result = await stores.archive.remove(id);
+        if (result.kind === 'missing') return c.json({ error: 'not found' as const }, 404);
+        const overrideNote =
+          guard.kind === 'allowed-with-override'
+            ? `（⚠️ override — 走行中のマネージャー ${guard.managerId} の退避だったが、` +
+              `理由「${guard.reason}」により消した）`
+            : '';
+        await stores.journal.append({
+          type: 'decision',
+          decision:
+            `退避済み生ログの本文を消した: ${id}（${result.bytes} バイト。` +
+            `${result.kind === 'already' ? '前から消されていた' : 'いま消した'}）` +
+            overrideNote,
+          grounds:
+            guard.kind === 'allowed-with-override'
+              ? `人間が API から直接操作した（override理由: ${guard.reason}）`
+              : '人間が API から直接操作した',
+        });
+        return c.json(
+          archiveRemoveResponseSchema.parse({
+            ok: true,
+            id,
+            bytes: result.bytes,
+            alreadyRemoved: result.kind === 'already',
+            ...(guard.kind === 'allowed-with-override'
+              ? { override: { managerId: guard.managerId, reason: guard.reason } }
+              : {}),
+          }),
+        );
       },
     )
 

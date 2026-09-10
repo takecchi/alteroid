@@ -172,6 +172,7 @@ const EXEMPT: readonly Exemption[] = [
   },
   { tool: 'manager_report', why: '実装側に、説明文が数え直すような一覧が無い' },
   { tool: 'manager_transcript', why: '実装側に、説明文が数え直すような一覧が無い' },
+  { tool: 'archive_remove', why: '実装側に、説明文が数え直すような一覧が無い' },
 ];
 
 function descriptionOf(tool: string): string {

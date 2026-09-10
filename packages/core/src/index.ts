@@ -357,6 +357,12 @@ export {
   type JournalStoreSearchContractSubject,
 } from './journal-search-contract.js';
 /**
+ * `TranscriptArchive` の契約（#698）。3実装（インメモリ / `storage-fs` /
+ * `storage-pg`）それぞれの歯がこれを呼んで揃っていることを測る — 1つで測って
+ * 3つとも測ったことにしない（`verifyJournalStoreSearchContract` と同じ作法）。
+ */
+export { verifyTranscriptArchiveContract } from './archive-contract.js';
+/**
  * クローンの自己認識。正典（`docs/*.md`）の全文はビルド時に焼き込まれる
  * （`scripts/write-canon.mjs`）。要約を手書きしないこと — docs と二重管理になる。
  */
@@ -465,6 +471,9 @@ export {
   type ManagerStartInput,
   type ManagerStopActor,
   type ManagerSummary,
+  type ManagerTranscript,
+  guardArchiveRemoval,
+  type ArchiveRemovalGuard,
   type SessionMissingKind,
   type RunnerFleetOverview,
   type RunnerManagerEntry,

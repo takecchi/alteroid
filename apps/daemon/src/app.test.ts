@@ -59,6 +59,13 @@ function fakeClone() {
   const managerList: ManagerSummary[] = [];
   const managerDenials = new Map<string, ManagerDenial[]>();
   const transcripts = new Map<string, string>();
+  /** `transcript()` を `kind: 'removed'` にする（#698）。 */
+  const removedTranscripts = new Map<
+    string,
+    { archiveId: string; removedAt: string; bytes: number }
+  >();
+  /** `ManagerPool.runningManagerOwning()` の返り値（#698）。 */
+  const runningOwners = new Map<string, string>();
   const managerSends: { managerId: string; text: string; requestId?: string }[] = [];
   const managerAborts: { managerId: string; reason?: string }[] = [];
   // `POST /runners/vacate` が `ManagerPool.vacate()` へ渡した runnerId を記録する。
@@ -130,7 +137,13 @@ function fakeClone() {
       return { runners: [], unassigned: [], daemonRevision: { status: 'unknown' } };
     },
     async transcript(managerId) {
-      return transcripts.get(managerId) ?? null;
+      const removed = removedTranscripts.get(managerId);
+      if (removed !== undefined) return { kind: 'removed' as const, ...removed };
+      const body = transcripts.get(managerId);
+      return body === undefined ? { kind: 'missing' as const } : { kind: 'body' as const, body };
+    },
+    runningManagerOwning(archiveId) {
+      return runningOwners.get(archiveId);
     },
     async restore() {
       return [];
@@ -189,6 +202,8 @@ function fakeClone() {
     managerList,
     managerDenials,
     transcripts,
+    removedTranscripts,
+    runningOwners,
     managerSends,
     managerAborts,
     vacateCalls,
@@ -893,6 +908,113 @@ describe('HTTP API', () => {
     expect(await read.text()).toBe('{"a":1}\n');
   });
 
+  /**
+   * `DELETE /archive/:id`（#698）。**行は消えない**——`GET /archive` の一覧には
+   * 引き続き出る。存在しない id は 404、走行中のマネージャーの退避は 409。
+   */
+  it('DELETE /archive/:id は本文だけを落とす（行は list に残る）', async () => {
+    const id = await stores.archive.archive('sess-remove', 'BODY\n');
+
+    const response = await app.request(`/archive/${id}`, { method: 'DELETE' });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      id,
+      bytes: Buffer.byteLength('BODY\n', 'utf8'),
+      alreadyRemoved: false,
+    });
+
+    // 行は list に残る。
+    const list = await app.request('/archive');
+    expect(await list.json()).toMatchObject({ entries: [id] });
+
+    // GET は 410（missing の 404 とは別のステータス）で詳細を返す。
+    const read = await app.request(`/archive/${id}`);
+    expect(read.status).toBe(410);
+    expect(await read.json()).toMatchObject({
+      error: 'removed',
+      bytes: Buffer.byteLength('BODY\n', 'utf8'),
+    });
+  });
+
+  it('DELETE /archive/:id は無い id を黙って成功にしない（404）', async () => {
+    const response = await app.request('/archive/居ない', { method: 'DELETE' });
+    expect(response.status).toBe(404);
+  });
+
+  it('DELETE /archive/:id は二重に呼んでも冪等（2回目は alreadyRemoved: true）', async () => {
+    const id = await stores.archive.archive('sess-twice', 'BODY\n');
+    await app.request(`/archive/${id}`, { method: 'DELETE' });
+
+    const second = await app.request(`/archive/${id}`, { method: 'DELETE' });
+    expect(second.status).toBe(200);
+    expect(await second.json()).toMatchObject({ ok: true, id, alreadyRemoved: true });
+  });
+
+  /**
+   * ⭐ 走行中のマネージャーの退避は、HTTP の口からは消せない（#698）。
+   * クローンの道具（`archive_remove`）側の同じ守りは `tools.test.ts` が測る——
+   * 判定所は `ManagerPool.runningManagerOwning()` 1箇所である。
+   */
+  it('DELETE /archive/:id は走行中のマネージャーの退避を拒む（409。どのマネージャーかを言う）', async () => {
+    const id = await stores.archive.archive('sess-running', 'BODY\n');
+    fake.runningOwners.set(id, 'mgr-running-1');
+
+    const response = await app.request(`/archive/${id}`, { method: 'DELETE' });
+    expect(response.status).toBe(409);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('mgr-running-1');
+
+    // 本文は落ちていない（拒んだので何も変わっていない）。
+    const read = await app.request(`/archive/${id}`);
+    expect(await read.text()).toBe('BODY\n');
+  });
+
+  /**
+   * ⭐ north_star 禁止2（追加制限禁止）——既定拒否は方針であり、方針は
+   * 設定で開けられなければならない。`overrideReason` クエリ引数が開ける口。
+   * **理由を残さず黙って通る経路は無い**——override したら journal と
+   * 応答の両方にその事実と理由が載ることを測る。
+   */
+  it('DELETE /archive/:id は overrideReason を渡せば走行中でも消せる（理由が journal と応答に残る）', async () => {
+    const id = await stores.archive.archive('sess-override', 'BODY\n');
+    fake.runningOwners.set(id, 'mgr-running-2');
+
+    const response = await app.request(
+      `/archive/${id}?overrideReason=${encodeURIComponent('本番障害の調査で緊急に消す必要があった')}`,
+      { method: 'DELETE' },
+    );
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      ok: boolean;
+      override?: { managerId: string; reason: string };
+    };
+    expect(body.override).toEqual({
+      managerId: 'mgr-running-2',
+      reason: '本番障害の調査で緊急に消す必要があった',
+    });
+
+    // 本文は落ちている（override が実際に通った）。
+    const read = await app.request(`/archive/${id}`);
+    expect(read.status).toBe(410);
+
+    // journal に override の事実と理由が残る。
+    const journalEntries = await stores.journal.list({ types: ['decision'] });
+    const entry = journalEntries.find((e) => e.type === 'decision' && e.decision.includes(id)) as
+      { type: 'decision'; decision: string; grounds: string } | undefined;
+    expect(entry?.decision).toContain('override');
+    expect(entry?.decision).toContain('mgr-running-2');
+    expect(entry?.decision).toContain('本番障害の調査で緊急に消す必要があった');
+  });
+
+  it('DELETE /archive/:id は overrideReason が空文字だと拒否のまま（うっかり通らない）', async () => {
+    const id = await stores.archive.archive('sess-empty-override', 'BODY\n');
+    fake.runningOwners.set(id, 'mgr-running-3');
+
+    const response = await app.request(`/archive/${id}?overrideReason=`, { method: 'DELETE' });
+    expect(response.status).toBe(409);
+  });
+
   it('manager_id から一覧・状態・生ログへ降りられる（可観測性の下2層）', async () => {
     fake.managerList.push({
       managerId: 'mgr-1234',
@@ -924,6 +1046,37 @@ describe('HTTP API', () => {
 
     expect((await app.request('/managers/nope')).status).toBe(404);
     expect((await app.request('/managers/nope/transcript')).status).toBe(404);
+  });
+
+  /**
+   * `GET /managers/:id/transcript` は、生ログが「無い」(404) と「退避された
+   * あと本文を消された」(410) を区別する（#698）。
+   */
+  it('GET /managers/:id/transcript は本文が消されていると410で詳細を返す', async () => {
+    fake.managerList.push({
+      managerId: 'mgr-removed',
+      status: 'done',
+      live: false,
+      cwd: '/work/project',
+      request: '調査',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+      waiting: [],
+    });
+    fake.removedTranscripts.set('mgr-removed', {
+      archiveId: 'mgr-removed-2026-01-01.jsonl',
+      removedAt: '2026-01-02T00:00:00.000Z',
+      bytes: 42,
+    });
+
+    const response = await app.request('/managers/mgr-removed/transcript');
+    expect(response.status).toBe(410);
+    expect(await response.json()).toMatchObject({
+      error: 'removed',
+      removedAt: '2026-01-02T00:00:00.000Z',
+      bytes: 42,
+      archiveId: 'mgr-removed-2026-01-01.jsonl',
+    });
   });
 
   /**

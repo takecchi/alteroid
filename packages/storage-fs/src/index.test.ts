@@ -9,6 +9,7 @@ import {
   verifyJournalStoreQueryEdgeContract,
   verifyJournalStoreSearchContract,
   verifyJournalStoreWithContract,
+  verifyTranscriptArchiveContract,
 } from '@alteroid/core';
 import type { Commitment, InboxEvent, JournalEntry } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -2333,11 +2334,90 @@ describe('FsTranscriptArchive', () => {
     const id = await stores.archive.archive('session-1', '{"a":1}\n');
 
     expect(await stores.archive.list()).toContain(id);
-    expect(await stores.archive.read(id)).toBe('{"a":1}\n');
+    expect(await stores.archive.read(id)).toEqual({ kind: 'body', body: '{"a":1}\n' });
   });
 
-  it('ディレクトリ外は読ませない', async () => {
-    expect(await stores.archive.read('../../etc/passwd')).toBeNull();
+  it('ディレクトリ外は読ませない（missing）', async () => {
+    expect(await stores.archive.read('../../etc/passwd')).toEqual({ kind: 'missing' });
+  });
+
+  it('ディレクトリ外への remove() も missing', async () => {
+    expect(await stores.archive.remove('../../etc/passwd')).toEqual({ kind: 'missing' });
+  });
+
+  /** 契約（#698）を3実装ぶんの1つとして測る。他は testing.ts / storage-pg。 */
+  it('TranscriptArchive の契約を満たす', async () => {
+    await verifyTranscriptArchiveContract(stores.archive);
+  });
+
+  it('remove() は本体の .jsonl を消さない（空へ切り詰め、脇に印を置く）', async () => {
+    const id = await stores.archive.archive('session-remove', 'BODY\n');
+
+    const removed = await stores.archive.remove(id);
+    expect(removed).toEqual({ kind: 'removed', bytes: Buffer.byteLength('BODY\n', 'utf8') });
+
+    // 本体は空文字へ切り詰められている（消えていない）。
+    expect(await readFile(join(root, 'archive', id), 'utf8')).toBe('');
+    // 脇の印ファイルが在る。
+    const marker = JSON.parse(await readFile(join(root, 'archive', `${id}.removed`), 'utf8')) as {
+      removedAt: string;
+      bytes: number;
+    };
+    expect(marker.bytes).toBe(Buffer.byteLength('BODY\n', 'utf8'));
+
+    // list() は .jsonl で絞っているので、印ファイル自身は一覧へ混ざらない。
+    const listed = await stores.archive.list();
+    expect(listed).toContain(id);
+    expect(listed).not.toContain(`${id}.removed`);
+  });
+
+  it('存在しない id への remove() は黙って成功しない（missing）', async () => {
+    expect(await stores.archive.remove('居ない')).toEqual({ kind: 'missing' });
+  });
+
+  it('id A を消しても id B は読める（巻き添えが無い）', async () => {
+    const idA = await stores.archive.archive('session-a', 'A\n');
+    const idB = await stores.archive.archive('session-b', 'B\n');
+
+    await stores.archive.remove(idA);
+
+    expect(await stores.archive.read(idA)).toMatchObject({ kind: 'removed' });
+    expect(await stores.archive.read(idB)).toEqual({ kind: 'body', body: 'B\n' });
+  });
+
+  /**
+   * ⭐ 判定は印（マーカーファイル）の有無だけで行う。**本体が空文字である
+   * ことを判定に使っていないか**を直接測る（#698）——空の生ログを退避した
+   * だけの行（`remove()` を一度も呼んでいない）には印ファイルが無く、
+   * `read()` は `body`（空文字）を返す。
+   */
+  it('空の生ログを退避しただけの行は removed にならない（本体が空文字であることを判定に使わない）', async () => {
+    const id = await stores.archive.archive('session-empty', '');
+
+    await expect(
+      stat(join(root, 'archive', `${id}.removed`)).then(
+        () => true,
+        () => false,
+      ),
+    ).resolves.toBe(false);
+    expect(await stores.archive.read(id)).toEqual({ kind: 'body', body: '' });
+  });
+
+  it('二重の remove() は冪等（removed → already。バイト数・removedAt は変わらない）', async () => {
+    const id = await stores.archive.archive('session-twice', 'TWICE\n');
+
+    const first = await stores.archive.remove(id);
+    expect(first).toEqual({ kind: 'removed', bytes: Buffer.byteLength('TWICE\n', 'utf8') });
+
+    const readAfterFirst = await stores.archive.read(id);
+    if (readAfterFirst.kind !== 'removed') throw new Error('removed のはず');
+
+    const second = await stores.archive.remove(id);
+    expect(second).toEqual({
+      kind: 'already',
+      removedAt: readAfterFirst.removedAt,
+      bytes: Buffer.byteLength('TWICE\n', 'utf8'),
+    });
   });
 });
 
