@@ -57,6 +57,7 @@ import type {
   ManagerDenial,
   ManagerPool,
   ManagerSummary,
+  ManagerTranscript,
   RunnerBacklogSnapshot,
 } from './manager.js';
 import {
@@ -306,6 +307,7 @@ export const CLONE_TOOL_NAMES = [
   'manager_list',
   'manager_report',
   'manager_transcript',
+  'archive_remove',
   'runner_list',
 ] as const;
 
@@ -341,6 +343,7 @@ export const SELF_JOURNALING_CLONE_TOOLS = [
   'manager_start',
   'manager_send',
   'manager_stop',
+  'archive_remove',
 ] as const satisfies readonly CloneToolName[];
 
 /**
@@ -909,9 +912,9 @@ async function describeMissingReport(
   status: ManagerSummary['status'],
 ): Promise<string> {
   const base = `マネージャー ${managerId} からの報告はまだ無い（状態: ${status}）。`;
-  let transcript: string | null;
+  let result: ManagerTranscript;
   try {
-    transcript = await managers.transcript(managerId);
+    result = await managers.transcript(managerId);
   } catch (error) {
     return (
       `${base} 生ログは読めなかった（` +
@@ -919,12 +922,24 @@ async function describeMissingReport(
       '）。「まだ書いていない」か「書いたのに届いていない」かは、これだけでは判定できない。'
     );
   }
-  if (transcript === null || transcript.length === 0) {
+  if (result.kind === 'removed') {
+    // **`missing` に畳まない**（#698）——退避はあったが、本文は
+    // `archive_remove` / `DELETE /archive/:id` で落とされている。「まだ書いて
+    // いない」でも「読めなかった」でもなく、現物を確かめる手段そのものが
+    // 消されている、という3つ目の状態。
+    return (
+      `${base} 生ログは退避されていたが本文が消されている` +
+      `（${result.removedAt} に ${result.bytes.toLocaleString('ja-JP')} バイトを落とした。` +
+      `archive id: ${result.archiveId}）。現物は確かめられない。`
+    );
+  }
+  if (result.kind === 'missing' || result.body.length === 0) {
     return (
       `${base} 生ログにも本文は無い` +
       '（走行中の runner のディスク・退避済みアーカイブ・預かった生ログ、3段のどこにも見当たらなかった）。'
     );
   }
+  const transcript = result.body;
 
   const outcome = probeLastAssistantUtterance(transcript);
   if (outcome.kind === 'empty') {
@@ -6087,13 +6102,12 @@ export function createCloneTools(context: ToolContext) {
       },
       async ({ managerId, offset = 0 }) => {
         if (!context.managers) return NO_POOL;
-        const body = await context.managers.transcript(managerId);
-        if (body === null) {
-          // **`transcript()` の `null` は2つの意味を畳んでいる** — 「そのマネージャー
-          // 自体が台帳に居ない」か、「居るが3段のどこにも生ログが無い」か。
-          // `ManagerPool.transcript()` の実装（`manager.ts`）はこの2つを区別する
-          // 値を返してこないので、ここでも区別できない。**畳んでいることを隠さず、
-          // そう書く。**
+        const result = await context.managers.transcript(managerId);
+        if (result.kind === 'missing') {
+          // **`missing` は2つの意味を畳んでいる** — 「そのマネージャー自体が
+          // 台帳に居ない」か、「居るが3段のどこにも生ログが無い」か。
+          // `ManagerPool.transcript()` はこの2つを区別する値を返してこないので、
+          // ここでも区別できない。**畳んでいることを隠さず、そう書く。**
           //
           // **その先で、「まだ引き渡していない」と「引き渡せずに消えた」は
           // 言い分ける（#634）。** 上の断り（id 自体が無い場合との区別が
@@ -6108,13 +6122,112 @@ export function createCloneTools(context: ToolContext) {
               (await describeTranscriptMissingLeg(context.managers, managerId)),
           );
         }
+        if (result.kind === 'removed') {
+          // **`missing` と同じ文面へ畳まない**（#698）——退避そのものは在った
+          // （id は実在した）が、本文は `archive_remove` / `DELETE /archive/:id`
+          // で落とされている。「どこにも無かった」ではなく「消された」である。
+          return text(
+            `マネージャー ${managerId} の生ログは退避されていたが、本文は消されている` +
+              `（${result.removedAt} に ${result.bytes.toLocaleString('ja-JP')} バイトを落とした。` +
+              `archive id: ${result.archiveId}）。` +
+              '走行中の runner のディスク・預かったセッションの生ログにも見当たらなかった。',
+          );
+        }
 
+        const { body, archiveId } = result;
         const part1 = page(body, offset, TRANSCRIPT_PAGE);
-        const head = `マネージャー ${managerId} の生ログ（${describePage(part1)}）`;
+        // **この本文がどの archive id から読めたかを添える**（#698）——
+        // クローンが読んだ直後に `archive_remove archiveId=<id>` で消せるように
+        // するため。走行中の runner のディスク・預かったセッションの生ログから
+        // 読めたときは archive id が無い（`archiveId` が `undefined`）ので出さない。
+        const archiveNote =
+          archiveId === undefined
+            ? ''
+            : `（archive id: ${archiveId}。archive_remove archiveId=${archiveId} で消せる）`;
+        const head = `マネージャー ${managerId} の生ログ（${describePage(part1)}）${archiveNote}`;
         const tail = part1.more
           ? `\n\n…（ここで切れている。続きは manager_transcript managerId=${managerId} offset=${part1.to}）`
           : '';
         return text(`${head}\n\n${part1.body}${tail}`);
+      },
+    ),
+
+    /**
+     * アーカイブ済みセッション生ログの本文を1件消す（#698）。
+     *
+     * **人間には `DELETE /archive/:id` が既に在る。** 人間にできることが
+     * クローンにできないのは north_star 禁止1 に反するので、こちらにも
+     * 同じ口を渡す。
+     *
+     * **雛形は `memory_delete` である。** 同じ作法を踏襲する——存在しない id
+     * を黙って成功にしない（`ArchiveRemoval` の `kind: 'missing'`）／`summary`
+     * を必須引数にして消す理由を残す／本文は日誌へ写さない。
+     *
+     * **id を手に入れる経路は `manager_transcript` である。** その応答に
+     * 「この本文を読んだ archive id」が載る（`manager_transcript` tool の
+     * `archiveNote`）ので、読んだ直後にここへ渡せる。
+     *
+     * **走行中のマネージャーの退避は消せない。** 判定は
+     * `ManagerPool.runningManagerOwning()` 1箇所だけを通す——`app.ts` の
+     * `DELETE /archive/:id` ハンドラと同じ関数である（interface の doc。
+     * 2箇所に書くと片方だけ直る形になる）。**`context.managers` が無い場面
+     * （委譲の道具が配線されていない内部ターン）では、走行中かどうかを
+     * 確かめる材料が無いので、安全側に倒して消させない。**
+     */
+    tool(
+      'archive_remove',
+      [
+        'アーカイブ済みセッション生ログの本文を1件消す（tombstone。行そのものは残る——',
+        'archive の一覧には引き続き出る。DELETE ではない）。',
+        '無い id を渡しても成功にはならず、そう返る。',
+        '走行中のマネージャーの退避は消せない（拒む。どのマネージャーが走行中かを言う）。',
+        '消した事実は日誌に残る（archive id と直前のバイト数のみ。本文は残らない）。',
+        'id は manager_transcript の応答に載る（「この本文を読んだ archive id」）——',
+        '読んだ直後にそこから渡せる。',
+      ].join(' '),
+      {
+        archiveId: z.string().describe('manager_transcript が出す archive id'),
+        summary: z.string().describe('なぜ消したかの一行要約（日誌に残る。本文は残らない）'),
+      },
+      async ({ archiveId, summary }) => {
+        if (!context.managers) {
+          return text(
+            '消せない——いまは委譲の道具が配線されていない内部ターンで、走行中の' +
+              'マネージャーがこの退避を使っているかどうかを確かめる材料が無い' +
+              '（安全側に倒して拒む。#698）。',
+          );
+        }
+        const owner = context.managers.runningManagerOwning(archiveId);
+        if (owner !== undefined) {
+          return text(
+            `消せない——マネージャー ${owner} がいま走行中で、この退避を使っている` +
+              '（走行中の委譲を追う最後の手段が消えるため。#698）。',
+          );
+        }
+        const result = await stores.archive.remove(archiveId);
+        if (result.kind === 'missing') {
+          return text(`アーカイブ ${archiveId} は存在しない（消せない。何も変わっていない）。`);
+        }
+        if (result.kind === 'already') {
+          return text(
+            `アーカイブ ${archiveId} は前から消されている（${result.removedAt} に ` +
+              `${result.bytes.toLocaleString('ja-JP')} バイトを落とした）。何も変わっていない。`,
+          );
+        }
+        await appendJournalOrThrow(
+          'archive_remove',
+          stores.journal,
+          {
+            type: 'decision',
+            decision: `退避済み生ログの本文を消した: ${archiveId}（${result.bytes} バイト）: ${summary}`,
+            grounds: summary,
+          },
+          'act-completed',
+        );
+        return text(
+          `アーカイブ ${archiveId} の本文を消した（${result.bytes.toLocaleString('ja-JP')} バイト）。` +
+            '行そのものは残っている（list には引き続き出る）。',
+        );
       },
     ),
 

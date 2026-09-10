@@ -219,12 +219,24 @@ export const inboxEvents = pgTable(
   (table) => [index('inbox_events_at_idx').on(table.at)],
 );
 
-/** セッション生ログの退避先（PreCompact で落とした全文）。 */
+/**
+ * セッション生ログの退避先（PreCompact で落とした全文）。
+ *
+ * `removedAt` / `removedBytes`（#698）は tombstone 用——`remove()` が本文を
+ * 落としたときだけ埋まる。**`body` の `not null` は外していない**（空文字を
+ * 入れる。列の削除・型変更・RENAME は一切しない）。判定は `removedAt` が
+ * `null` かどうかだけで行う——`body` が空文字であることを「消された」の根拠に
+ * 使わない（空の生ログは正当にありえる）。
+ */
 export const archive = pgTable('archive', {
   id: text('id').primaryKey(),
   sessionId: text('session_id').notNull(),
   at: timestamp('at', { withTimezone: true, mode: 'date' }).notNull(),
   body: text('body').notNull(),
+  /** 本文を落とした時刻。**これだけが「消された」の判定材料である。** */
+  removedAt: timestamp('removed_at', { withTimezone: true, mode: 'date' }),
+  /** 落とす直前のバイト数（`octet_length(body)`）。 */
+  removedBytes: integer('removed_bytes'),
 });
 
 /** デーモンの内部状態（クローンの session id など）。消えても記憶から戻る。 */

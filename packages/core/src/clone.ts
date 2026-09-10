@@ -3504,21 +3504,29 @@ class Clone implements CloneHost {
     const grave = await this.#stores.sessions.getTranscriptGrave();
     if (grave === null) return;
 
-    const transcript = await this.#stores.archive.read(grave.archiveId);
-    if (transcript === null) {
-      // 退避が消えている（器を作り直した／人が消した）。**印だけを残さない** —
-      // 残すと、拾えないものを起動のたびに引きに行くことになる。
+    const result = await this.#stores.archive.read(grave.archiveId);
+    if (result.kind !== 'body') {
+      // 退避が無い。**理由は2つに分かれ、同じ文面へ畳まない**（#698 — tombstone
+      // を足した目的そのもの）——`missing`（器を作り直した／そもそも一度も
+      // 積まれなかった）と `removed`（`archive_remove` / `DELETE /archive/:id`
+      // で人が意図して本文を落とした）は別の出来事である。**どちらにせよ印だけを
+      // 残さない** — 残すと、拾えないものを起動のたびに引きに行くことになる。
+      const detail =
+        result.kind === 'removed'
+          ? `本文が消されている（${result.removedAt} に ${result.bytes} バイトを落とした）`
+          : '見つからない（器を作り直した、あるいはそもそも積まれなかった）';
       await this.#journal({
         type: 'exchange',
         with: 'self',
         role: 'outbound',
         text:
-          `記憶へ移せていない区間の退避が見つからないので、印を下ろした: ${grave.archiveId}` +
+          `記憶へ移せていない区間の退避が${detail}ので、印を下ろした: ${grave.archiveId}` +
           '（⚠️ この区間は記憶へ移せていない）',
       });
       await this.#stores.sessions.setTranscriptGrave(null);
       return;
     }
+    const transcript = result.body;
 
     // **拾い直したことを日誌へ1行残す。** `#distillFromTranscript` が書く
     // 「ターンの入力: pre_compact_distill」だけだと、**compaction の蒸留と区別が

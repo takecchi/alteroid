@@ -465,6 +465,7 @@ export {
   type ManagerStartInput,
   type ManagerStopActor,
   type ManagerSummary,
+  type ManagerTranscript,
   type SessionMissingKind,
   type RunnerFleetOverview,
   type RunnerManagerEntry,

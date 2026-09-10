@@ -445,6 +445,36 @@ export interface ManagerSummary {
 }
 
 /**
+ * `ManagerPool.transcript()` の戻り値（#698）。
+ *
+ * **`null` へ畳まない。** 旧実装は「走行中の runner のディスク・退避済み
+ * アーカイブ・預かったセッション、3段のどこにも無かった」（`missing`）と
+ * 「退避はあったが `archive_remove` / `DELETE /archive/:id` で本文を落とした」
+ * （`removed`）を同じ `null` に潰していた——tombstone を足した意味がここで
+ * 消えては、この PR の主目的（`null` の畳み込みを解くこと）が壊れる。
+ *
+ * - **`body`** — 本文が取れた。`archiveId` は、その本文が**退避から**読めた
+ *   ときだけ載る（走行中の runner のディスク・預かったセッションの生ログ
+ *   から取れたときは載らない——archive の外から来た本文に無い id を作らない）。
+ *   `manager_transcript` はこれを出力へ足す——読んだ直後に
+ *   `archive_remove archiveId=<id>` で消せるようにするため。
+ * - **`removed`** — 退避に本文が無い。**ただし他の archiveId・runner の
+ *   ディスク・預かったセッションのどれにも本文が無かったときに限る**
+ *   （`transcript()` の doc）——tombstone された archiveId が在っても、
+ *   他の経路に本文が見つかればそちらを `body` として返す。
+ * - **`missing`** — id 自体が存在しない、あるいは3段のどこにも痕跡が無い。
+ */
+export type ManagerTranscript =
+  | { readonly kind: 'body'; readonly body: string; readonly archiveId?: string }
+  | {
+      readonly kind: 'removed';
+      readonly archiveId: string;
+      readonly removedAt: string;
+      readonly bytes: number;
+    }
+  | { readonly kind: 'missing' };
+
+/**
  * 「確認へ上がらずに止められた」件数（道具・層ごと）。
  *
  * **`status` では表せない。** 分類器か deny 規則がその場で拒否したとき、その仕事は
@@ -998,7 +1028,30 @@ export interface ManagerPool {
    */
   runnerIdOf(managerId: string): Promise<string | undefined>;
   /** manager_id からセッションの生ログへ降りる（可観測性の最下段）。 */
-  transcript(managerId: string): Promise<string | null>;
+  transcript(managerId: string): Promise<ManagerTranscript>;
+  /**
+   * この archive id が、いまデーモンが走行中として抱えている（`#records` に
+   * 居る）マネージャーのどれかの退避なら、その managerId を返す（#698）。
+   *
+   * **走行中の委譲の生ログを消せないようにする、唯一の判定所である。** HTTP
+   * の `DELETE /archive/:id` とクローンの道具 `archive_remove` の両方がここを
+   * 通ること——2箇所に同じ判定を書くと、片方だけ直る形になる
+   * （AGENTS.md「リポジトリの約束」の数え上げの持ち主を1か所にする、と同じ
+   * 理由）。
+   *
+   * **`done` を「終わった」の判定に使わない。** `'done'` は `#finish('done',
+   * ...)`（＝畳まれた）と、`#finish` を通らずに `#status` だけを `'done'` に
+   * して `#sessions`（ここでは `#records`）に生き残る経路の**両方**から付き、
+   * この一覧はどちらの `done` かを区別する材料を持たない（逐語は
+   * `grep -Fn -- 'どちらの `done` かを区別する材料を持たない' packages/core/src/manager.ts`）。
+   * だからこのメソッドは `#status` を一切見ず、**`#records` に居るかどうか
+   * だけ**で決める。
+   *
+   * **ネットワークは叩かない。** プロセス内の像（`#records`）の
+   * `job.archiveIds` を読むだけ——`transcript()` が退避済みへ降りるときに
+   * 読んでいるのと同じ欄である。
+   */
+  runningManagerOwning(archiveId: string): string | undefined;
   /**
    * デーモン起動時に、走行中だったマネージャーを台帳と runner から拾い直す。
    * 戻り値は「中断されていて実際に resume した」分。
@@ -3615,26 +3668,52 @@ class Pool implements ManagerPool {
     return job?.runnerId;
   }
 
-  async transcript(managerId: string): Promise<string | null> {
+  async transcript(managerId: string): Promise<ManagerTranscript> {
     const job = (await this.#stores.jobs.listJobs()).find((entry) => entry.id === managerId);
-    if (!job) return null;
+    if (!job) return { kind: 'missing' };
 
     // 走行中なら runner のディスクの上にある。
     const record = this.#records.get(managerId);
     if (record) {
       const runner = await this.#runnerOf(record);
       const live = await runner?.transcript(managerId).catch(() => null);
-      if (live !== null && live !== undefined && live.length > 0) return live;
+      if (live !== null && live !== undefined && live.length > 0) return { kind: 'body', body: live };
     }
 
-    // 無ければ退避済みへ降りる。
+    // 無ければ退避済みへ降りる。**「消された」を単に飛ばさない**（#698）——
+    // ある archiveId が tombstone されていても、他の archiveId にまだ本文が
+    // 残っていればそちらを優先して返す（従来どおり「最初に見つかった本文」を
+    // 返す）。**見つかった `removed` は最新のものを覚えておく**——最終的に
+    // どこにも本文が無かったときに、`null`（＝ missing と見分けが付かない）
+    // へ畳まず、この詳細を返すため。
+    let removed: { archiveId: string; removedAt: string; bytes: number } | undefined;
     for (const id of [...(job.archiveIds ?? [])].reverse()) {
-      const body = await this.#stores.archive.read(id);
-      if (body !== null) return body;
+      const result = await this.#stores.archive.read(id);
+      if (result.kind === 'body') return { kind: 'body', body: result.body, archiveId: id };
+      if (result.kind === 'removed' && removed === undefined) {
+        removed = { archiveId: id, removedAt: result.removedAt, bytes: result.bytes };
+      }
     }
 
     // 最後の砦。runner が強制終了されても、生ログ自体は預かってある。
-    return this.#fromSessionStore(job);
+    const fromSessionStore = await this.#fromSessionStore(job);
+    if (fromSessionStore !== null) return { kind: 'body', body: fromSessionStore };
+
+    // **ここまで来て初めて `removed` を返す。** 退避以外の経路（預かった
+    // セッション等）に本文が残っていれば、そちらのほうが有用なので優先する
+    // ——tombstone の事実は「他のどこにも無かったとき」の最後の説明である。
+    return removed !== undefined ? { kind: 'removed', ...removed } : { kind: 'missing' };
+  }
+
+  runningManagerOwning(archiveId: string): string | undefined {
+    // **`#records` に居るかどうかだけで判定する。** 台帳（job store）へは
+    // 降りない——`#retire()` 済みの委譲（`#records` から消えている）は
+    // 「もう走っていない」であって、`done` の2つの経路のどちらであっても
+    // 保護は要らない（interface の doc）。
+    for (const record of this.#records.values()) {
+      if ((record.job.archiveIds ?? []).includes(archiveId)) return record.job.id;
+    }
+    return undefined;
   }
 
   /**

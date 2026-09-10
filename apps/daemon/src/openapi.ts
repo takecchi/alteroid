@@ -1161,6 +1161,33 @@ export const droppedResponseSchema = z.object({
 
 export const archiveListResponseSchema = z.object({ entries: z.array(z.string()) });
 
+/**
+ * `DELETE /archive/:id` が消せた（あるいは前から消されていた）ことを言う
+ * （#698）。**`alreadyRemoved` を隠さない**——「いま消した」と「前から消えて
+ * いた」を同じ応答へ畳むと、呼び出し側は自分の呼び出しが実際に何をしたのかを
+ * 見失う（`ArchiveRemoval` の doc と同じ理由）。
+ */
+export const archiveRemoveResponseSchema = z.object({
+  ok: z.literal(true),
+  id: z.string(),
+  bytes: z.number().int(),
+  alreadyRemoved: z.boolean(),
+});
+
+/**
+ * `GET /archive/:id` / `GET /managers/:id/transcript` が 410 で返す本文
+ * （tombstone。本文は落ちているが行は残っている、の詳細。#698）。
+ *
+ * `archiveId` は `GET /managers/:id/transcript` のときだけ載る——`/archive/:id`
+ * は URL 自体が id を持つので冗長になる。
+ */
+export const archiveRemovedResponseSchema = z.object({
+  error: z.literal('removed'),
+  removedAt: z.string(),
+  bytes: z.number().int(),
+  archiveId: z.string().optional(),
+});
+
 // ---------------------------------------------------------------------------
 // documentation（`GET /openapi.json` の骨格）
 // ---------------------------------------------------------------------------
@@ -1308,6 +1335,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     },
     transcript() {
       throw new Error('spec 生成専用のスタブ: 生ログは持たない');
+    },
+    runningManagerOwning() {
+      throw new Error('spec 生成専用のスタブ: 走行中の像は持たない');
     },
     restore() {
       throw new Error('spec 生成専用のスタブ: 引き継ぎはしない');
