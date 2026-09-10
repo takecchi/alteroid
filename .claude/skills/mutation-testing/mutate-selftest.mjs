@@ -268,7 +268,8 @@ describe('強い歯（selftest）', () => {
       };
       // **足場対照は変異を当てる前に取る**（走行範囲はこの変異の走行と揃える）。
       // 赤い歯が在るときの判定は、対照が無いと拒まれる（`decideJudgementCategory`
-      // の門3）。ここは絞り込み走行なので、対照の走行も同じ1ファイルだけである。
+      // の門4。いまの門番号では、後から挟んだ「Errors 行」の門2で繰り下がった）。
+      // ここは絞り込み走行なので、対照の走行も同じ1ファイルだけである。
       const scaffoldControl = measureScaffoldControl({ extraArgs: [thisSpec.testFilter] });
       log(`足場対照: ${scaffoldControl.reason}`);
       applyMutation(thisSpec);
@@ -557,7 +558,7 @@ function scenarioJudgementIdIntegrity() {
   for (const spec of [survivingSpec, detectedSpec]) {
     log('');
     log(`== spec.id=${spec.id} を通す（testFilter=${spec.testFilter}） ==`);
-    // 足場対照を先に取る（`decideJudgementCategory` の門3。走行範囲を揃える）。
+    // 足場対照を先に取る（`decideJudgementCategory` の門4。走行範囲を揃える）。
     const scaffoldControl = measureScaffoldControl({ extraArgs: [spec.testFilter] });
     log(`足場対照: ${scaffoldControl.reason}`);
     applyMutation(spec);
@@ -915,7 +916,7 @@ function scenarioJudgementForbiddenWordBoundary() {
     };
     log('');
     log(`== id="${id}" を通す ==`);
-    // 足場対照を先に取る（`decideJudgementCategory` の門3。走行範囲を揃える）。
+    // 足場対照を先に取る（`decideJudgementCategory` の門4。走行範囲を揃える）。
     const scaffoldControl = measureScaffoldControl({ extraArgs: [spec.testFilter] });
     log(`足場対照: ${scaffoldControl.reason}`);
     applyMutation(spec);
@@ -1184,11 +1185,12 @@ function scenarioRestoreStatusComparison() {
 
 // **⚠️ `raw` に失敗の見出しと `FAIL` 行を持たせてある（この PR で足した）。**
 // 判定は集計行の `failed` の文字だけでは出せなくなった（`decideJudgementCategory`
-// の門3 —— 落ちた歯の名前を判定に使えなければ拒む）ので、**集計行だけを持つ
+// の門4。いまの門番号では、後から挟んだ「Errors 行」の門2で繰り下がった——
+// 落ちた歯の名前を判定に使えなければ拒む）ので、**集計行だけを持つ
 // 赤のフィクスチャは「判定を出せない」へ倒れる。** ここで測りたいのは #444 の
-// gate であって門3 ではないから、名前が取れる形の本物の出力に近づけた。
+// gate であって門4 ではないから、名前が取れる形の本物の出力に近づけた。
 // **弱めたのではなく、フィクスチャを現実の形へ寄せた** —— 逆に、名前が取れない
-// 赤（`GATE_TESTS_RED_NAMELESS`）は下で門3 が拒むことを別に測っている。
+// 赤（`GATE_TESTS_RED_NAMELESS`）は下で門4 が拒むことを別に測っている。
 const GATE_TESTS_RED = {
   exitCode: 1,
   raw:

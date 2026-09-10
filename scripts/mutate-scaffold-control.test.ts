@@ -40,7 +40,8 @@ import {
  * **直し方**: 撃つ前にハーネス自身が「印だけ・無変異」の対照を1回取り、落ちた
  * 歯の**名前**を捕まえて、対照で落ちた名前を除いた集合が空かどうかで判定する。
  * 名前が取れなければ「検出」とも「生存」とも言わずに拒む
- * （`decideJudgementCategory` の門3）。
+ * （`decideJudgementCategory` の門4。いまの門番号では、後から
+ * 挟んだ「Errors 行」の門2で繰り下がった）。
  *
  * **ここに置く理由（CI で走らせるため）**: `mutate-selftest.mjs` の
  * `SELFTEST_SCENARIOS` を CI から呼ぶ箇所は無い。`scripts/mutate-*.test.ts` が
@@ -258,9 +259,9 @@ describe('mutate-core: failureIndicated（testsAllPassed の否定ではない�
   });
 });
 
-// ── 判定を拒む門その3 ───────────────────────────────────────────────
+// ── 判定を拒む門その4（当時の呼び名は「門その3」——後述の門2を間へ足したので繰り下がった） ──
 
-describe('mutate-core: decideJudgementCategory の門3（落ちた歯の名前を判定に使えないなら判定を出さない）', () => {
+describe('mutate-core: decideJudgementCategory の門4（落ちた歯の名前を判定に使えないなら判定を出さない）', () => {
   it('⭐ 足場対照で落ちた歯しか落ちていなければ「生存」（この修正が塞いだ偽の「検出」）', () => {
     const testResult = testResultFrom(makeRawWithFailures(SCAFFOLD_NAMES));
     expect(decideJudgementCategory(NOT_CHECKED, testResult, measuredControl(SCAFFOLD_NAMES))).toBe(
@@ -344,7 +345,7 @@ describe('mutate-core: decideJudgementCategory の門3（落ちた歯の名前�
     expect(decideJudgementCategory(NOT_CHECKED, testResult, measuredControl([]))).toBe('検出');
   });
 
-  it('回帰: 門1（集計ブロックが複数）は門3より先に効く', () => {
+  it('回帰: 門1（集計ブロックが複数）は門4より先に効く', () => {
     const raw = [
       ' Test Files  1 failed (1)',
       '      Tests  1 failed (1)',
