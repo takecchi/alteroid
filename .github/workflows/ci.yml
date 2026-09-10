@@ -25,6 +25,12 @@ on:
 # 走行中を切るのは PR の CI だけである。release/prod（`cancel-in-progress: false`）と
 # 逆にしてあるのは、あちらが途中で切れると push の途中で終わるからで、こちらは
 # 読み取りと検査しかしないので途中で切れても外に影響が残らない。
+# 【計測。この PR はマージしない】上流ドリフトを見に行く回か。
+# 本番の形では schedule / workflow_dispatch だけを true にするが、ここでは PR で
+# 経路を1回通すために pull_request を true にしてある。
+env:
+  DRIFT: ${{ github.event_name == 'pull_request' }}
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
@@ -152,6 +158,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: docker/setup-buildx-action@v4
+      - name: 計測0 式が解決するか
+        run: |
+          echo "github.event_name = ${{ github.event_name }}"
+          echo "env.DRIFT       = ${{ env.DRIFT }}"
+          echo "no-cache へ渡る値 = ${{ env.DRIFT == 'true' }}"
+          echo "cache-to へ渡る値 = [${{ env.DRIFT != 'true' && 'type=gha' || '' }}]"
       - uses: docker/build-push-action@v7
         with:
           context: .
@@ -164,7 +176,8 @@ jobs:
           build-args: |
             ALTEROID_BUILD_REV=${{ github.sha }}
           cache-from: type=gha
-          cache-to: type=gha
+          cache-to: ${{ env.DRIFT != 'true' && 'type=gha' || '' }}
+          no-cache: ${{ env.DRIFT == 'true' }}
 
       # **マネージャーが実際に走る主体（uid 1001）で見る。** root で揃っていても、
       # 降りた先で欠けていれば「コンテナだからできない」が生まれる（north_star 禁止1）。
