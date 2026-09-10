@@ -738,6 +738,179 @@ arm B → arm C（LLM も本物に）の上積みは 0.714 → 0.743 と小さ�
 
 ---
 
+## `identifier-probes`: 識別子・固有名詞を含む query の測定（Issue #109）
+
+`retrieval` の probe 7件（`src/probe-set.ts`）は**すべて日本語の query**であり、
+ASCII の識別子・固有名詞を含む query が0件だった——Issue #106 の報告者の用途
+（人名・チャンネル名・社内システム名・案件コード・チケット番号。例:
+`PROJ-1234` と `PROJ-5678` の取り違え）を、既存ベンチは1件も測っていなかった。
+
+```bash
+DATABASE_URL=... pnpm --filter @mnemora/example-chat run identifier-probes
+```
+
+`retrieval` のカセット（`cassettes/retrieval.json`）は入力文字列の SHA-256 を鍵にしており、
+記録に無い入力は例外になる——probe を1件足すたびに録り直しが要る。この制約を避けるため、
+`identifier-probes` は `@mnemora/openai` ではなく **`@mnemora/local-embedding`**
+（外部サービスへ繋がないプロセス内推論、[ADR 0085](../../docs/decisions/0085-local-embedding-provider.md)）
+を使う——**鍵もカセットも要らない**ので probe を自由に増やせる。
+
+### 何を測るか(`src/identifier-probe-set.ts`・`src/identifier-arm.ts`)
+
+- Issue #106 が名指しした5領域（人名・チャンネル名・社内システム名・案件コード・
+  チケット番号）を、まず**12件**（領域あたり2〜3件）で覆う。
+- **既存 `probe-set.ts` と probe の設計が「逆」である。**既存は gold の質問が
+  gold の事実と内容語を共有しない（本物の埋め込みでしか引けないことを確かめるため）。
+  `identifier-probes` は**query に識別子そのものを含める**——「その文字列を含むか」で
+  引けることが Issue #106 の報告者の要求そのものだからである。distractor は
+  **「同じ書式・違う識別子」**（例: `PROJ-1234` に対する `PROJ-5678`）。これが gold より
+  上に来たら「書式は合っているが対象が違う」ものを返しているということであり、
+  まさに #106 が報告した失敗である。
+- **haystack を2条件用意する**（`src/identifier-probe-set.ts` の `buildIdentifierProbeSetConversation`
+  の第2引数 `haystackKind`）。
+  - `sparse`（既定）: `probe-set.ts` の既定 haystack をそのまま使う。識別子を1件も含まない。
+  - `dense`: probe と**同じ書式ファミリー**（`PROJ-`/`TICKET-`/`INC-`/`SYS-`/`EMP-`/
+    `#proj-`/`#team-`/`#incident-2024-`/`@<surname>.<given>`）の識別子を計60件含む
+    haystack。Issue #106 の逐語「ベクタ検索だと、同じ形式の別の識別子（`PROJ-5678`）が
+    近傍に来て、欲しいものが埋もれます」を表す条件——`sparse` は probe ごとに
+    distractor 1件しか同じ書式の競合を置かないため、この状況を表していない。
+  - どちらの haystack も、probe の識別子と1件も重ならないことを構築時に機械的検査する
+    （`findIdentifierTopicKeywordViolations`。違反があれば例外——`probe-set.ts` の
+    `findTopicKeywordViolations` と同じ作法）。
+
+### 3群を別々に集計する（⛔ 混ぜた単一の MRR にしない）
+
+`identifier-probes` は擬似LLM（`DeterministicLLMProvider`）＋ローカル埋め込みで、
+3群を走らせる。LLM 層は `retrieval` の arm B と同一——差は埋め込みだけであり、
+`@mnemora/local-embedding` の README が「確かめていないこと」として名指しした
+「`@mnemora/openai` と比べて想起の質がどうなるか」を、ここで初めて測る。
+
+| 群 | probe | haystack | 直接比較できる相手 |
+|---|---|---|---|
+| `japanese` | 既存の日本語意味 probe 7件（`probe-set.ts`、変更していない） | sparse | `retrieval` の arm B（embedding=recorded、実質 `text-embedding-3-small`/256次元） |
+| `identifiersSparse` | ASCII 識別子 probe 12件 | sparse（識別子0件） | `identifiersDense`（同じ12 probe、haystack だけが違う） |
+| `identifiersDense` | 同じ12 probe | dense（識別子60件） | `identifiersSparse` |
+
+### 実測結果（2026-09-10、`ruri-v3-30m/sym`・256次元、`DeterministicLLMProvider`）
+
+🔴 **数字には必ず arm 名・`(provider, model, dimensions)`・haystack 条件を添える**
+（この repo で「条件を落とした数字」が実際に3度壊れているため。ADR 0068・ADR 0081 §3.2）。
+
+| 群 | `(provider, model, dimensions)` | haystack | MRR | hit@1 | hit@10 |
+|---|---|---|---|---|---|
+| `japanese`(7件) | `local`/`ruri-v3-30m/sym`/256次元 | sparse | **0.810** | 5/7 | 7/7 |
+| `identifiersSparse`(12件) | `local`/`ruri-v3-30m/sym`/256次元 | sparse | **1.000** | 12/12 | 12/12 |
+| `identifiersDense`(12件) | `local`/`ruri-v3-30m/sym`/256次元 | dense | **1.000** | 12/12 | 12/12 |
+
+比較のため、既存 `retrieval` の基準値（[retrieval-baseline.json](./retrieval-baseline.json)、
+再掲）:
+
+| arm | `(provider, model, dimensions)` | MRR | hit@1 | hit@10 |
+|---|---|---|---|---|
+| B: 擬似LLM+本物の埋め込み | `openai`/`text-embedding-3-small`/256次元(recorded再生) | 0.714 | 4/7 | 6/7 |
+| C: 本物LLM+本物の埋め込み | `openai`/`text-embedding-3-small`/256次元(recorded再生) | 0.738 | 4/7 | 7/7 |
+
+生の実測値は[identifier-probe-baseline.json](./identifier-probe-baseline.json)に置いてある
+（2回実行し、`measuredAt` を除いて完全一致した——ただし ADR 0088 §2 と同じ理由で
+「決定的である」の証明ではない）。
+
+#### 読み方: `identifiersSparse` の hit@1=12/12 を「易しすぎた」と即断しない
+
+`TICKET-48213`/`TICKET-48214` は1文字違いで、query は両者と「不具合の報告」という
+語彙を共有しており、識別子だけが弁別子である——それを正しく1位にできたのは実際の発見。
+一方で `sparse` は probe ごとに同じ書式の競合を1件しか置かず、Issue #106 が
+報告した「同じ形式の識別子が多数居て埋もれる」状況を表していない。**`dense` 条件は、
+易しくした/難しくした値を見てから作ったものではない**——`identifiersSparse` の実測後に
+1度だけ設計し、1度だけ測った（識別子は既存24件と衝突しない値を選び、構築時の
+機械的検査で衝突が無いことを確認済み）。結果は `identifiersSparse` と同じく
+hit@1=12/12・`distractorBeatsGold` 0件——**密な haystack でも gold は常に1位のままだった。**
+distractor の順位そのものは密度の影響を受けている（例:
+`channel-c` の `distractorRank` は sparse で2位、dense で8位）。
+
+### 🔴 このベンチが測れないこと（正直に書く）
+
+- **`(provider, model, dimensions)` が違う arm どうしの数字は比較できない**——
+  埋め込み空間が違えば、同じ MRR の値でも意味が違う（`local`/`ruri-v3-30m/sym`/256次元 と
+  `openai`/`text-embedding-3-small`/256次元は、次元数が同じでも別の空間である）。
+- **`identifiersSparse`/`identifiersDense` の probe は `openai`/`text-embedding-3-small`
+  では測れない。**`retrieval` のカセット（`cassettes/retrieval.json`）にこの12 probe の
+  記録が無いため、`RecordedEmbeddingProvider` は例外を投げる。**⟹「OpenAI の埋め込みなら
+  失敗する／成功する」はこのベンチからは一切言えない。**
+- **標本は7件・12件である**（[ADR 0033](../../docs/decisions/0033-what-decided-the-rank-in-the-retrieval-bench.md) §3）。
+  ここから失敗率・成功率を統計的に主張しない——言えるのは「今回、この母数のうち
+  何件引けたか」までである。
+- **埋め込みは否定・時制・矛盾を解かない**
+  （`@mnemora/local-embedding` の README。実測: 「コーヒーより紅茶が好き」と
+  「紅茶よりコーヒーが好き」の cos は 0.996 である）。この bench の probe は
+  否定・時制・矛盾を突く形にしていない——識別子の弁別だけを見ている。
+- **順位を決めているのはほぼ `similarity` の1項である**
+  （[ADR 0081](../../docs/decisions/0081-similarity-is-the-only-term-that-ranks.md)。
+  `occurredAt`/`recordedAt` を渡していないため `decay`/`freshness` は候補間でほぼ同値
+  ——`identifier-probes` の実測でも幅は 10⁻⁷〜10⁻⁸ の桁である）。**`tagMatch`/`strength`
+  が効く状況はこのベンチでは検査していない。**
+- **CI ジョブ（`identifier-probes`）はこのベンチを門にしていない。**基準値と違っても
+  落ちない——落ちるのは「重みを取得できなかった」ときだけであり、それは意図した
+  仕様である（下記）。⚠ **「門にしない」は「基準値と比べない」ではない**——
+  CI は毎回 `identifier-probe-baseline.json` と突き合わせ、
+  **一致していれば1行、違うときだけ内訳を** Job Summary に出す（下記）。
+
+🔑 **probe 集合そのものが「何を測れるか」を決めている。**
+probe を増やす・haystack を変える判断をするときは、必ずこの節を更新すること——
+更新を忘れると、次に読む人が同じ壁に当たる。
+
+### 「重みを取得できなかった」と「測ったが値が悪かった」を区別する
+
+`@mnemora/local-embedding` はモデルの重み（初回のみ、約42MB）を Hugging Face から
+取得する。取得に失敗した状態と、取得できて測った値が悪い状態を同じ顔で返すと、
+「HF から取れなかった」が「想起の質が下がった」に見えてしまう。
+
+`identifier-probes` は arm を走らせる前に必ず `embeddingProvider.warmup()` を呼ぶ
+（`src/local-embedding-warmup.ts`）。取得に失敗したら、**メトリクスを1件も出さずに**
+`process.exitCode = 1` で終わる（前回の値・既定値・`0` のいずれへも倒さない）。
+機械可読な出力（`MNEMORA_IDENTIFIER_PROBE_JSON`）も、この2状態を型で区別する
+（`status: "measured" | "weights_unavailable"`）——`weights_unavailable` のときは
+`japanese`/`identifiersSparse`/`identifiersDense` の欄が**存在しない**。
+
+CI（`.github/workflows/ci.yml` の `identifier-probes` ジョブ）は、モデル重みの
+置き場所を `MNEMORA_LOCAL_EMBEDDING_CACHE_DIR`（`LocalEmbeddingProvider` の
+`cacheDir` オプションへそのまま渡す）で固定し、`actions/cache` でキャッシュする——
+transformers.js の既定キャッシュ場所は環境によって変わりうるため。
+
+### 基準値との差分を Job Summary に出す（⛔ 門ではない）
+
+⚠ **「⛔ 門にしない」と「⛔ 基準値と比べない」は別のことである**
+（[ADR 0094](../../docs/decisions/0094-identifier-probes-local-embedding.md) §8。
+[ADR 0088](../../docs/decisions/0088-retrieval-quality-measured-in-ci.md) §3 は
+**両方を同時にやっている**）。基準値ファイルがコミットされているのに誰もそれと
+比べないなら、値が動いても誰も気づかず、誰も基準値を更新せず、**新しい値が PR の
+diff に現れる輪が閉じない。**
+
+CI は毎回こう打つ:
+
+```bash
+node scripts/identifier-probe-summary.mjs \
+  --measured <MNEMORA_IDENTIFIER_PROBE_JSON の書き先> \
+  --baseline examples/chat/identifier-probe-baseline.json \
+  >> "$GITHUB_STEP_SUMMARY"
+```
+
+- **一致していれば1行で黙る。違うときだけ内訳（群・項目・基準値・実測）を展開する**
+  ——⭐ 常に同じ量を出す観測口は読まれない（ADR 0088 §3-3）。
+- 🔴 **比べるのは数字だけではない。**`embeddingSpace`（`provider`/`model`/`dimensions`）・
+  `haystackKind`・`label` も比べる——**256次元は両方の空間で同じ**なので、
+  数字だけを比べると「空間が変わったのに数字が同じ」を「一致」と出してしまう。
+- ⛔ **相違では落ちない（`exit 0`）。**非0になるのは**入力そのものが壊れているとき**だけ
+  （JSON が読めない・`status` が未知・`measured` なのに必須項目が無い・基準値が壊れている）。
+- 🔴 **`status: "weights_unavailable"` のときは、`--baseline` を渡していても比較を
+  1つも出さない**——⛔ 「測れなかった」を「基準値と違う」に化けさせない。
+
+**値が意図して動いたときは、基準値ファイルを手で更新すること**（CI は自動更新しない）。
+⭐ **その手間は目的である**——更新しないと差分が Job Summary に出続け、
+更新すれば新しい値が PR の diff に必ず現れる。
+
+
+---
+
 ## この会話生成（`src/scenario.ts`）について
 
 `buildConversation(fillerPairs)` は乱数を使わない決定的な関数——同じ `fillerPairs` を

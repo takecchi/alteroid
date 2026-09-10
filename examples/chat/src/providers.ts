@@ -1,4 +1,5 @@
 import type { EmbeddingProvider, LLMProvider } from "@mnemora/core";
+import { LocalEmbeddingProvider } from "@mnemora/local-embedding";
 import { OpenAIEmbeddingProvider, OpenAILLMProvider } from "@mnemora/openai";
 import type { Cassette, CassetteRecorder } from "@mnemora/testkit";
 import {
@@ -33,7 +34,16 @@ import { createUsageMeter } from "./usage-meter.js";
  * 記録済みの入力に対しては `"openai"` と同じベクトル・同じ抽出結果を返し、
  * 記録に無い入力に対しては例外を投げる（黙って stub へ倒れない）。
  */
-export type ProviderMode = "openai" | "deterministic" | "recorded";
+/**
+ * `"local"` は Issue #109 で足した第4のモード——**`@mnemora/local-embedding`
+ *（外部サービスへ繋がない、プロセス内 ONNX 推論、ADR 0085）を使う**。
+ *
+ * ⚠ **embedding 専用である。LLM 側に `"local"` は無い。** `@mnemora/local-embedding` は
+ * `EmbeddingProvider` しか実装していない——LLM の代替は無い。`MNEMORA_LLM=local` は
+ * 他の未知の値と同じく例外になる（`parseModeOverride` 参照）。`MNEMORA_EMBEDDING=local`
+ * だけが有効。
+ */
+export type ProviderMode = "openai" | "deterministic" | "recorded" | "local";
 
 export interface Providers {
   /**
@@ -79,31 +89,53 @@ export function selectProviderMode(env: EnvLike): ProviderMode {
   return env.OPENAI_API_KEY ? "openai" : "deterministic";
 }
 
-/** `MNEMORA_LLM`/`MNEMORA_EMBEDDING` の値を検証する。空文字は「未指定」として扱う。 */
+/**
+ * `MNEMORA_LLM` が受け付ける値。**`"local"` を含まない**——LLM 側に local 実装は無い
+ * （`ProviderMode` の docstring 参照）。
+ */
+const LLM_MODES = ["openai", "deterministic", "recorded"] as const;
+
+/**
+ * `MNEMORA_EMBEDDING` が受け付ける値。`LLM_MODES` に `"local"` を足した形
+ * （Issue #109、`@mnemora/local-embedding`）。
+ */
+const EMBEDDING_MODES = ["openai", "deterministic", "recorded", "local"] as const;
+
+/**
+ * `MNEMORA_LLM`/`MNEMORA_EMBEDDING` の値を検証する。空文字は「未指定」として扱う。
+ *
+ * **許可する値の集合を呼び出し側から渡す**（`LLM_MODES`/`EMBEDDING_MODES`）——
+ * LLM と embedding で受け付ける `ProviderMode` の集合が違う（`"local"` は embedding だけ）
+ * ため、1つの固定リストでは表現できない。**未知の値は例外**という既存の作法は変えない。
+ */
 function parseModeOverride(
   varName: "MNEMORA_LLM" | "MNEMORA_EMBEDDING",
   value: string | undefined,
+  allowed: readonly ProviderMode[],
 ): ProviderMode | undefined {
   if (value === undefined || value === "") {
     return undefined;
   }
-  if (value === "openai" || value === "deterministic" || value === "recorded") {
-    return value;
+  if ((allowed as readonly string[]).includes(value)) {
+    return value as ProviderMode;
   }
   throw new Error(
-    `${varName} には "openai" / "deterministic" / "recorded" のいずれかを指定すること` +
+    `${varName} には ${allowed.map((m) => `"${m}"`).join(" / ")} のいずれかを指定すること` +
       `（実際: "${value}"）。`,
   );
 }
 
 /** `MNEMORA_LLM` が指定されていればそれを、無ければ `selectProviderMode` の結果を使う。 */
 export function selectLLMMode(env: EnvLike): ProviderMode {
-  return parseModeOverride("MNEMORA_LLM", env.MNEMORA_LLM) ?? selectProviderMode(env);
+  return parseModeOverride("MNEMORA_LLM", env.MNEMORA_LLM, LLM_MODES) ?? selectProviderMode(env);
 }
 
 /** `MNEMORA_EMBEDDING` が指定されていればそれを、無ければ `selectProviderMode` の結果を使う。 */
 export function selectEmbeddingMode(env: EnvLike): ProviderMode {
-  return parseModeOverride("MNEMORA_EMBEDDING", env.MNEMORA_EMBEDDING) ?? selectProviderMode(env);
+  return (
+    parseModeOverride("MNEMORA_EMBEDDING", env.MNEMORA_EMBEDDING, EMBEDDING_MODES) ??
+    selectProviderMode(env)
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -266,6 +298,19 @@ export function createProviders(
           dimensions: OPENAI_EMBEDDING_DIMENSIONS,
         },
       });
+    }
+    // Issue #109: 外部サービスへ繋がない埋め込み（ADR 0085）。鍵もカセットも要らない
+    // ——`recorded`/`openai` より先に見る必要は無いが、`!== "openai"` の擬似物 fallback
+    // より先に見ないと `local` が誤って `DeterministicEmbeddingProvider` に落ちてしまう。
+    if (embeddingMode === "local") {
+      // `MNEMORA_LOCAL_EMBEDDING_CACHE_DIR` が指定されていれば `cacheDir` として渡す
+      // （`LocalEmbeddingProvider` のコンストラクタが元から持つオプション——**使うだけで
+      // このパッケージ自体は変更していない**）。CI の `identifier-probes` ジョブが
+      // `actions/cache` でモデル重みをキャッシュする場所を固定するために使う——
+      // transformers.js の既定（`~/.cache/huggingface`）は環境によって場所が変わりうる
+      // ため、明示したパスのほうが「次の実行でも同じ場所を見る」ことを保証しやすい。
+      const cacheDir = env.MNEMORA_LOCAL_EMBEDDING_CACHE_DIR;
+      return new LocalEmbeddingProvider(cacheDir ? { cacheDir } : {});
     }
     if (embeddingMode !== "openai") {
       return new DeterministicEmbeddingProvider(DETERMINISTIC_EMBEDDING_SPACE);

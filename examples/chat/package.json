@@ -14,6 +14,7 @@
     "backfill": "tsx src/cli.ts backfill",
     "retrieval": "tsx src/cli.ts retrieval",
     "time-term": "tsx src/cli.ts time-term",
+    "identifier-probes": "tsx src/cli.ts identifier-probes",
     "record": "tsx src/cli.ts record retrieval",
     "verify": "tsx src/cli.ts verify retrieval",
     "record:compare": "tsx src/cli.ts record compare",
@@ -21,6 +22,7 @@
   },
   "dependencies": {
     "@mnemora/core": "workspace:*",
+    "@mnemora/local-embedding": "workspace:*",
     "@mnemora/openai": "workspace:*",
     "@mnemora/postgres": "workspace:*",
     "@mnemora/testkit": "workspace:*",

@@ -368,3 +368,121 @@ jobs:
           name: retrieval-quality
           path: retrieval-quality.json
           if-no-files-found: ignore
+
+  identifier-probes:
+    name: 識別子・固有名詞 probe（#106）を @mnemora/local-embedding で実測し、値を残す
+    runs-on: ubuntu-latest
+    # Issue #109（#106 由来）。`retrieval-quality` ジョブと同じく「実測値を Job Summary
+    # へ残す・落とすのは bench 自体が壊れたときだけ」という形を踏襲するが、
+    # **このジョブが想定する主な失敗は基準値との相違ではなく「HF からモデル重みを
+    # 取得できないこと」である**。
+    #
+    # ⚠ **なぜ閾値の門にしないか**: ADR 0088 が `retrieval-quality` について
+    # 「標本7件では偽陽性を出す」として明示的に採らなかったのと同じ理由——この bench の
+    # probe は12件(識別子)・7件(日本語)であり、ADR 0033 §3 の規律に照らして統計的な
+    # 閾値判定に足る母数ではない。probe を増やした後、別途測ってから決める段取りである。
+    #
+    # 🔴 **ただし「重みを取得できなかった」ときは、このジョブ自体を意図して失敗させる**
+    # ——`identifier-probes` サブコマンドは `warmup()` が失敗したらメトリクスを1件も
+    # 出さずに `process.exitCode = 1` で終わる仕様であり(`local-embedding-warmup.ts`)、
+    # それをこのジョブでも尊重する(揉み消さない)。measure ステップが失敗しても、
+    # 後続の summary/artifact ステップは `if: always()` で必ず走り、「重みが取得
+    # できなかった」ことを Job Summary に明示する(`buildSummaryMarkdown` の
+    # `weights_unavailable` 分岐)。
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: mnemora_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/mnemora_ci
+      # `LocalEmbeddingProvider` はモデル重みの取得先を選ぶ鍵を要求しない
+      # (`@mnemora/local-embedding` は外部サービスへ繋がない、ADR 0085)——
+      # `MNEMORA_PROVIDER_SOURCE`/`OPENAI_API_KEY` はこのジョブに関係が無い。
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Enable required extensions (vector / btree_gin / pgcrypto)
+        run: |
+          PGPASSWORD=postgres psql -h localhost -U postgres -d mnemora_ci -c "select 1;" \
+            && PGPASSWORD=postgres psql -h localhost -U postgres -d mnemora_ci \
+              -c "CREATE EXTENSION IF NOT EXISTS vector;" \
+              -c "CREATE EXTENSION IF NOT EXISTS btree_gin;" \
+              -c "CREATE EXTENSION IF NOT EXISTS pgcrypto;"
+
+      - name: Run migrations (packages/postgres の唯一のマイグレーション実行口)
+        run: pnpm --filter @mnemora/postgres run migrate
+
+      - name: モデル重みをキャッシュする（actions/cache。cacheDir を明示して場所を固定する）
+        # 実測（この作業を行った器）では transformers.js の既定キャッシュは
+        # `node_modules/.pnpm/@huggingface+transformers@4.2.0/.../.cache/` に落ちた。
+        # ⚠ CI ランナーでは同じ場所とは限らない（pnpm のバージョン・store の位置に依存する）
+        # ため、`MNEMORA_LOCAL_EMBEDDING_CACHE_DIR`（`examples/chat/src/providers.ts` が
+        # `LocalEmbeddingProvider` の `cacheDir` オプションへそのまま渡す——**使うだけで
+        # `@mnemora/local-embedding` 自体は変更していない**）で場所を明示的に固定する。
+        uses: actions/cache@v6
+        with:
+          path: ${{ github.workspace }}/.cache/local-embedding
+          key: local-embedding-ruri-v3-30m-q8-v1
+
+      - name: 識別子・固有名詞 probe（#106）を @mnemora/local-embedding で実測する
+        # ⚠ **`continue-on-error: true` にしない。**重みを取得できなかった run は
+        # このジョブが赤くなること自体が仕様である（メトリクスを出さずに落ちる）。
+        # 後続の summary/artifact ステップだけを `if: always()` で必ず走らせる。
+        env:
+          MNEMORA_IDENTIFIER_PROBE_JSON: ${{ github.workspace }}/identifier-probe.json
+          MNEMORA_LOCAL_EMBEDDING_CACHE_DIR: ${{ github.workspace }}/.cache/local-embedding
+        run: pnpm --filter @mnemora/example-chat run identifier-probes
+
+      - name: 実測値と基準値の差分、または「重みが取得できなかった」ことを Job Summary に残す（⛔ 門ではない）
+        # このステップは常に走る（`if: always()`）——measure ステップが重み取得失敗で
+        # 落ちても、その理由を Job Summary へ出すのはこのステップの役目である。
+        # `identifier-probe-summary.mjs` 自体は「入力そのものが壊れている」ときだけ
+        # 非0で終わる(JSON が読めない/parse できない/形が想定と違う。--baseline を
+        # 渡していて、それが読めない/壊れている場合も含む)。
+        #
+        # 🔴 **`--baseline` を渡す。**「⛔ 門にしない」と「⛔ 基準値と比べない」は
+        # 別のことである——ADR 0088 §3 は両方を同時にやっている（差分を Job Summary に
+        # 出し、かつ相違では落とさない）。基準値がコミットされているのに誰も比べないなら、
+        # 値が動いても誰も気づかず、誰も基準値を更新せず、⟹ 新しい値が PR の diff に
+        # 現れる輪が閉じない（ADR 0094 §8 / ADR 0088 §3 が名指しした形の再発）。
+        # 一致していれば1行で黙り、違うときだけ展開する。
+        #
+        # ⚠ `status: "weights_unavailable"` のときは、--baseline を渡していても
+        # 比較を1つも出さない——⛔ 「測れなかった」を「基準値と違う」に化けさせない。
+        if: always()
+        run: |
+          node scripts/identifier-probe-summary.mjs \
+            --measured "${{ github.workspace }}/identifier-probe.json" \
+            --baseline examples/chat/identifier-probe-baseline.json \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 実測値そのもの（機械可読）を成果物として残す
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: identifier-probe
+          path: ${{ github.workspace }}/identifier-probe.json
+          if-no-files-found: ignore

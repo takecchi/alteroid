@@ -41,6 +41,9 @@ importers:
       '@mnemora/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@mnemora/local-embedding':
+        specifier: workspace:*
+        version: link:../../packages/local-embedding
       '@mnemora/openai':
         specifier: workspace:*
         version: link:../../packages/openai

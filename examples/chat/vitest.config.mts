@@ -12,6 +12,9 @@ export default defineConfig({
   resolve: {
     alias: {
       "@mnemora/core": fileURLToPath(new URL("../../packages/core/src/index.ts", import.meta.url)),
+      "@mnemora/local-embedding": fileURLToPath(
+        new URL("../../packages/local-embedding/src/index.ts", import.meta.url),
+      ),
       "@mnemora/openai": fileURLToPath(
         new URL("../../packages/openai/src/index.ts", import.meta.url),
       ),

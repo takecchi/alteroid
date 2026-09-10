@@ -220,13 +220,35 @@ export function createUsageMeter(options: UsageMeterOptions): UsageMeter {
  * `"recorded"`（記録の再生）が入ったことで**その決め打ちは嘘になった**——記録の再生は
  * 本物の応答に由来する値であり、意味を持たない stub とは別物である。
  * **呼び出し側に真実を言わせるため、引数は省略可能にしていない。**
+ *
+ * ⚠ **Issue #109 で見つけた実測の穴**: `"local"`（`@mnemora/local-embedding`、ADR
+ * 0085）を足す前、この関数の `label` は `mode === "recorded" ? ... : mode ===
+ * "deterministic" ? ... : "本物の OpenAI"` という2択のternaryだった。`"local"` は
+ * どちらにも一致しないため**このelse節に落ち、実際にはローカル推論なのに「本物の
+ * OpenAI」と印字されるところだった**——課金も外部通信も無いモードを「本物の
+ * OpenAI」と表示する、まさにこの repo が繰り返し警告している「条件を落とした数字」
+ * の一種。`switch` に直し、網羅性チェック（`never`）で同じ抜けが今後増えないようにする。
  */
 export function formatNoApiCallsNotice(modes: {
   llmMode: ProviderMode;
   embeddingMode: ProviderMode;
 }): string {
-  const label = (mode: ProviderMode): string =>
-    mode === "recorded" ? "記録の再生" : mode === "deterministic" ? "擬似 stub" : "本物の OpenAI";
+  const label = (mode: ProviderMode): string => {
+    switch (mode) {
+      case "recorded":
+        return "記録の再生";
+      case "deterministic":
+        return "擬似 stub";
+      case "local":
+        return "ローカル推論（@mnemora/local-embedding、外部サービスに繋がない）";
+      case "openai":
+        return "本物の OpenAI";
+      default: {
+        const exhaustive: never = mode;
+        throw new Error(`formatNoApiCallsNotice: 未知の ProviderMode: ${String(exhaustive)}`);
+      }
+    }
+  };
   const usesRecorded = modes.llmMode === "recorded" || modes.embeddingMode === "recorded";
   return (
     "--- OpenAI API 実測（usage-meter） ---\n" +

@@ -5,6 +5,7 @@
     "baseUrl": ".",
     "paths": {
       "@mnemora/core": ["../../packages/core/src/index.ts"],
+      "@mnemora/local-embedding": ["../../packages/local-embedding/src/index.ts"],
       "@mnemora/openai": ["../../packages/openai/src/index.ts"],
       "@mnemora/postgres": ["../../packages/postgres/src/index.ts"],
       "@mnemora/testkit": ["../../packages/testkit/src/index.ts"]

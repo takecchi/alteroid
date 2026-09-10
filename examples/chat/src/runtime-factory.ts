@@ -1,4 +1,4 @@
-import type { Clock, Runtime } from "@mnemora/core";
+import type { Clock, EmbeddingProvider, Runtime } from "@mnemora/core";
 import { createRuntime } from "@mnemora/core";
 import {
   PostgresEventStore,
@@ -31,6 +31,17 @@ export interface ExampleRuntimeHandle {
    * これまで `createExampleRuntime` の返り値に含めていなかっただけ。
    */
   memoryStore: PostgresMemoryStore;
+  /**
+   * Issue #109 が公開する。`@mnemora/local-embedding` は `embed()` を初回まで遅延ロードする
+   * （README「モデルは最初の `embed()` まで読み込まれない」）ため、「重みを取得できなかった」
+   * と「測ったが値が悪かった」を区別したい呼び出し側（`identifier-probes` サブコマンド、
+   * `local-embedding-warmup.ts`）は、`recall()`/`observe()` を呼ぶ前に明示的に
+   * `embeddingProvider.warmup()` を呼んで先に失敗させる必要がある。**`packages/core`/
+   * `packages/postgres` は変更していない**——`EmbeddingProvider` は元から
+   * `createProviders` が返す公開の値であり、これまで `createExampleRuntime` の
+   * 返り値に含めていなかっただけ（`memoryStore` を足したときと同じ理由）。
+   */
+  embeddingProvider: EmbeddingProvider;
   close(): Promise<void>;
 }
 
@@ -87,6 +98,7 @@ export async function createExampleRuntime(
     embeddingMode,
     ...(usageMeter !== undefined ? { usageMeter } : {}),
     memoryStore,
+    embeddingProvider,
     close: () => closePostgresClient(client),
   };
 }

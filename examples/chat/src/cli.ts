@@ -19,12 +19,19 @@ import {
 } from "./compare.js";
 import { formatRecall } from "./format.js";
 import { tryGitRevParseHead } from "./git-info.js";
+import { formatIdentifierArmReport, runIdentifierProbeArm } from "./identifier-arm.js";
+import {
+  buildMeasuredIdentifierProbeJson,
+  buildWeightsUnavailableIdentifierProbeJson,
+} from "./identifier-json.js";
+import { warmupLocalEmbedding } from "./local-embedding-warmup.js";
 import { buildMnemoraPrompt, ingestConversation, queryRecall } from "./mnemora-path.js";
 import { measureNaive, naivePrompt } from "./naive-path.js";
 import type { ProviderMode } from "./providers.js";
 import { decideProviderSource, describeProviderSourceReason } from "./providers.js";
 import { buildRetrievalQualityJson } from "./retrieval-json.js";
 import {
+  armHeadline,
   buildArmTenantId,
   formatArmDetail,
   formatArmSummaryTable,
@@ -74,6 +81,8 @@ function describeMode(mode: ProviderMode): string {
       return "記録した実 API 応答の再生（ADR 0051）";
     case "deterministic":
       return "@mnemora/testkit の決定的な擬似 provider";
+    case "local":
+      return "@mnemora/local-embedding によるプロセス内推論（外部サービスに繋がない。ADR 0085 / Issue #109）";
     default: {
       const exhaustive: never = mode;
       throw new Error(`describeMode: 未知の ProviderMode: ${String(exhaustive)}`);
@@ -717,6 +726,169 @@ async function runTimeTerm(): Promise<void> {
   }
 }
 
+/**
+ * Issue #109(#106 由来): `retrieval` の probe 7件は**すべて日本語の query**で、
+ * ASCII の識別子・固有名詞を含む query が0件だった——#106 の報告者の用途
+ * (人名・チャンネル名・社内システム名・案件コード・チケット番号)を、
+ * 既存ベンチは1件も測っていなかった。
+ *
+ * **擬似LLM + ローカル埋め込み(`@mnemora/local-embedding`、鍵もカセットも要らない)。**
+ * LLM 層は `retrieval` の arm B(擬似LLM+本物の埋め込み)と同一
+ * (`DeterministicLLMProvider`)——差は埋め込みだけであり、
+ * `@mnemora/local-embedding` の README が「確かめていないこと」として名指しした
+ * 「`@mnemora/openai` と比べて想起の質がどうなるか」を、ここで初めて測る。
+ *
+ * **3群を別々に集計する。**⛔ 混ぜた単一の MRR を主たる数字にしない。
+ *   1. 既存の日本語意味 probe 7件(`./probe-set.js`、変更していない)を、この arm の
+ *      embedding(local)で走らせた結果——arm B(embedding=recorded、実質 openai 由来)
+ *      との直接比較になる。
+ *   2. ASCII 識別子 probe 12件(`./identifier-probe-set.js`)・**識別子が薄い haystack**
+ *      (`sparse`。識別子を1件も含まない既定 haystack)。
+ *   3. 同じ12 probe を、**識別子が密な haystack**(`dense`。probe と同じ書式ファミリーの
+ *      識別子を計60件含む)で走らせた結果——マネージャー指示(#106 の逐語「同じ形式の
+ *      別の識別子が近傍に来て埋もれる」の再点検)。
+ *
+ * ⛔ **群2(sparse)は消さない。**全12 probe が hit@1 だった実測(`identifier-probe-
+ * baseline.json`)自体が発見であり、群3(dense)は「難しくして失敗させる」ためではなく
+ * 「#106 が報告した状況(同じ書式の識別子が"多数"居る)を表す」ために足す
+ * (`./identifier-probe-set.js` の `DENSE_IDENTIFIER_FAMILIES` の docstring 参照)。
+ *
+ * **`warmup()` を明示的に呼び、失敗を区別する。**「HF から取得できなかった」が
+ * 「想起の質が下がった」に見えてはならない(オーナー代理の懸念)——`warmup()` が
+ * 失敗したら、メトリクスを1つも出さずに打ち切る(`local-embedding-warmup.ts` 参照)。
+ */
+async function runIdentifierProbes(): Promise<void> {
+  const databaseUrl = requireDatabaseUrl();
+  const runToken = newRunToken();
+  const measuredAt = new Date();
+  const commit = tryGitRevParseHead(process.cwd());
+
+  const handle = await createExampleRuntime(databaseUrl, {
+    ...process.env,
+    MNEMORA_LLM: "deterministic",
+    MNEMORA_EMBEDDING: "local",
+  });
+  printProviderMode(handle.llmMode, handle.embeddingMode);
+
+  try {
+    console.log(
+      "\n[identifier-probes] warmup() でモデルの読み込みを先に済ませる" +
+        "(取得に失敗したら、ここでメトリクスを出さずに打ち切る)…",
+    );
+    const warmup = await warmupLocalEmbedding(handle.embeddingProvider);
+    const jsonPath = process.env.MNEMORA_IDENTIFIER_PROBE_JSON;
+    if (!warmup.ok) {
+      console.error(`\n🔴 ${warmup.detail}`);
+      console.error(
+        "  メトリクスは1件も測っていない(前回の値・既定値・0 へは倒さない)。" +
+          "ネットワーク・Hugging Face repo の状態を確認し、再実行すること。",
+      );
+      process.exitCode = 1;
+      if (jsonPath) {
+        const json = buildWeightsUnavailableIdentifierProbeJson({
+          measuredAt,
+          commit,
+          detail: warmup.detail,
+        });
+        writeFileSync(jsonPath, `${JSON.stringify(json, null, 2)}\n`, "utf-8");
+        console.log(`\n[identifier-probes] 機械可読な結果(取得失敗)を書き出した: ${jsonPath}`);
+      }
+      return;
+    }
+    console.log(`  ${warmup.detail}`);
+
+    const embeddingSpace = handle.embeddingProvider.space;
+    console.log(
+      `[identifier-probes] embedding space: provider=${embeddingSpace.provider} ` +
+        `model=${embeddingSpace.model} dimensions=${embeddingSpace.dimensions}`,
+    );
+
+    console.log("\n=== 群1: 既存の日本語意味 probe 7件(./probe-set.js、変更していない) ===");
+    const japaneseReport = await runRetrievalQualityArm({
+      // ⚠ **`haystack=sparse` を label に含める**（他の2群と同じ書式にする）。
+      // この群は識別子密度という軸を持たないが、JSON の `haystackKind` は
+      // `"sparse"` を名乗り（`identifier-json.ts`）、Job Summary の表にも
+      // `sparse` の列が出る。**label だけがその条件を落としていると、
+      // 「条件を落とした数字」を label の側で作ることになる。**
+      armLabel: `identifier-probes/japanese(llm=${handle.llmMode}, embedding=${handle.embeddingMode}/${embeddingSpace.model}/${embeddingSpace.dimensions}次元, haystack=sparse)`,
+      tenantId: `identifier-probes-jp-${runToken}`,
+      runtime: handle.runtime,
+      memoryStore: handle.memoryStore,
+      llmMode: handle.llmMode,
+      embeddingMode: handle.embeddingMode,
+      ...(handle.usageMeter !== undefined ? { usageMeter: handle.usageMeter } : {}),
+    });
+    console.log(formatArmDetail(japaneseReport));
+
+    console.log(
+      "\n=== 群2: ASCII 識別子 probe 12件(./identifier-probe-set.js、haystack=sparse) ===",
+    );
+    const identifierSparseReport = await runIdentifierProbeArm({
+      armLabel: `identifier-probes/identifiers-sparse(llm=${handle.llmMode}, embedding=${handle.embeddingMode}/${embeddingSpace.model}/${embeddingSpace.dimensions}次元, haystack=sparse)`,
+      tenantId: `identifier-probes-id-sparse-${runToken}`,
+      runtime: handle.runtime,
+      memoryStore: handle.memoryStore,
+      llmMode: handle.llmMode,
+      embeddingMode: handle.embeddingMode,
+      haystackKind: "sparse",
+    });
+    console.log(formatIdentifierArmReport(identifierSparseReport));
+
+    console.log(
+      "\n=== 群3: ASCII 識別子 probe 12件(./identifier-probe-set.js、haystack=dense) ===",
+    );
+    const identifierDenseReport = await runIdentifierProbeArm({
+      armLabel: `identifier-probes/identifiers-dense(llm=${handle.llmMode}, embedding=${handle.embeddingMode}/${embeddingSpace.model}/${embeddingSpace.dimensions}次元, haystack=dense)`,
+      tenantId: `identifier-probes-id-dense-${runToken}`,
+      runtime: handle.runtime,
+      memoryStore: handle.memoryStore,
+      llmMode: handle.llmMode,
+      embeddingMode: handle.embeddingMode,
+      haystackKind: "dense",
+    });
+    console.log(formatIdentifierArmReport(identifierDenseReport));
+
+    const jpHeadline = armHeadline(japaneseReport);
+    console.log(
+      "\n=== まとめ(3群は別々——混ぜた単一の MRR は作らない) ===\n" +
+        `  日本語意味probe(${jpHeadline.probeCount}件, llm=${handle.llmMode}, ` +
+        `embedding=${handle.embeddingMode}/${embeddingSpace.model}/${embeddingSpace.dimensions}次元, ` +
+        `haystack=sparse): MRR=${jpHeadline.mrrOverall.toFixed(3)} ` +
+        `hit@1=${jpHeadline.hit1Count}/${jpHeadline.probeCount} ` +
+        `hit@10=${jpHeadline.hit10Count}/${jpHeadline.probeCount}\n` +
+        `  ASCII識別子probe(${identifierSparseReport.probeCount}件, llm=${handle.llmMode}, ` +
+        `embedding=${handle.embeddingMode}/${embeddingSpace.model}/${embeddingSpace.dimensions}次元, ` +
+        `haystack=sparse): MRR=${identifierSparseReport.mrrOverall.toFixed(3)} ` +
+        `hit@1=${identifierSparseReport.hit1Count}/${identifierSparseReport.probeCount} ` +
+        `hit@10=${identifierSparseReport.hit10Count}/${identifierSparseReport.probeCount}\n` +
+        `  ASCII識別子probe(${identifierDenseReport.probeCount}件, llm=${handle.llmMode}, ` +
+        `embedding=${handle.embeddingMode}/${embeddingSpace.model}/${embeddingSpace.dimensions}次元, ` +
+        `haystack=dense): MRR=${identifierDenseReport.mrrOverall.toFixed(3)} ` +
+        `hit@1=${identifierDenseReport.hit1Count}/${identifierDenseReport.probeCount} ` +
+        `hit@10=${identifierDenseReport.hit10Count}/${identifierDenseReport.probeCount}`,
+    );
+    console.log(
+      "\n(注) ADR 0033 §3: 標本7件・12件からは失敗率も成功率も統計的に主張しない。" +
+        "ここで言えるのは「今回、この母数のうち何件引けたか」までである。",
+    );
+
+    if (jsonPath) {
+      const json = buildMeasuredIdentifierProbeJson({
+        japaneseReport,
+        identifierSparseReport,
+        identifierDenseReport,
+        embeddingSpace,
+        measuredAt,
+        commit,
+      });
+      writeFileSync(jsonPath, `${JSON.stringify(json, null, 2)}\n`, "utf-8");
+      console.log(`\n[identifier-probes] 機械可読な結果を書き出した: ${jsonPath}`);
+    }
+  } finally {
+    await handle.close();
+  }
+}
+
 function printHelp(): void {
   console.log(
     [
@@ -730,6 +902,9 @@ function printHelp(): void {
       "                                                                      #   OPENAI_API_KEY があれば実 API、無ければ記録の再生(ADR 0051)",
       "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run time-term # 時間項(freshness/decay)を意味的類似度から分離して測る",
       "                                                                      #   既定は擬似 provider(similarity が構成上定数になるため provider に依らない)",
+      "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run identifier-probes",
+      "                                                                      # ASCII識別子・固有名詞を含む probe(Issue #109)を@mnemora/local-embeddingで測る",
+      "                                                                      #   鍵・カセット不要。日本語意味probe7件・識別子probe12件(sparse/dense haystack)を別々に集計する",
       "  DATABASE_URL=... OPENAI_API_KEY=... pnpm --filter @mnemora/example-chat run record",
       "                                                                      # retrieval の応答を記録する(ADR 0051)",
       "  DATABASE_URL=... OPENAI_API_KEY=... pnpm --filter @mnemora/example-chat run record:compare",
@@ -760,6 +935,8 @@ async function main(): Promise<void> {
     await runRetrieval();
   } else if (command === "time-term") {
     await runTimeTerm();
+  } else if (command === "identifier-probes") {
+    await runIdentifierProbes();
   } else if (command === "record") {
     await runRecord(parseCassetteTarget(process.argv[3]));
   } else if (command === "verify") {

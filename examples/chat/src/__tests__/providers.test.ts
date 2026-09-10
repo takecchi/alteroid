@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { LocalEmbeddingProvider } from "@mnemora/local-embedding";
 import { OpenAIEmbeddingProvider, OpenAILLMProvider } from "@mnemora/openai";
 import type { Cassette } from "@mnemora/testkit";
 import {
@@ -310,5 +311,80 @@ describe("decideProviderSource — カセット再生か実 API かの判定（A
     expect(describeProviderSourceReason({ source: "recorded", reason: "no-key" })).not.toContain(
       "明示指定",
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #109: 第4のモード `"local"`(`@mnemora/local-embedding`、ADR 0085)
+//
+// **embedding 専用である。** `selectProviderMode` の契約(既存テスト、本ファイル冒頭)は
+// 変えていない——`MNEMORA_LLM`/`MNEMORA_EMBEDDING` を設定しない呼び出しは、この節を
+// 足す前とまったく同じ結果になる(上の `describe("selectProviderMode", ...)` が
+// そのまま緑であることが、その一次的な証拠でもある)。
+// ---------------------------------------------------------------------------
+
+describe("selectEmbeddingMode / selectLLMMode — 第4のモード local（Issue #109）", () => {
+  it('MNEMORA_EMBEDDING="local" を受け付ける', () => {
+    expect(selectEmbeddingMode({ MNEMORA_EMBEDDING: "local" })).toBe("local");
+  });
+
+  it('MNEMORA_LLM="local" は例外になる（LLM 側に local 実装は無い）', () => {
+    expect(() => selectLLMMode({ MNEMORA_LLM: "local" })).toThrow(/MNEMORA_LLM/);
+  });
+
+  it("鍵の有無に関わらず MNEMORA_EMBEDDING=local を上書きできる", () => {
+    expect(selectEmbeddingMode({ MNEMORA_EMBEDDING: "local" })).toBe("local");
+    expect(
+      selectEmbeddingMode({ OPENAI_API_KEY: "sk-fake-for-test", MNEMORA_EMBEDDING: "local" }),
+    ).toBe("local");
+  });
+});
+
+describe("createProviders — local モード（Issue #109、@mnemora/local-embedding）", () => {
+  it("MNEMORA_EMBEDDING=local で LocalEmbeddingProvider を返す（カセット・鍵は不要）", () => {
+    const providers = createProviders({ MNEMORA_EMBEDDING: "local" });
+    expect(providers.embeddingMode).toBe("local");
+    expect(providers.embeddingProvider).toBeInstanceOf(LocalEmbeddingProvider);
+  });
+
+  it("space は (provider, model, dimensions) が仕様通りである", () => {
+    const providers = createProviders({ MNEMORA_EMBEDDING: "local" });
+    expect(providers.embeddingProvider.space).toEqual({
+      provider: "local",
+      model: "ruri-v3-30m/sym",
+      dimensions: 256,
+    });
+  });
+
+  it("local は API を叩かないので usageMeter を作らない", () => {
+    const providers = createProviders({ MNEMORA_EMBEDDING: "local" });
+    expect(providers.usageMeter).toBeUndefined();
+  });
+
+  it("LLM は deterministic のまま個別に上書きできる（local は embedding だけを差し替える）", () => {
+    const providers = createProviders({
+      MNEMORA_LLM: "deterministic",
+      MNEMORA_EMBEDDING: "local",
+    });
+    expect(providers.llmMode).toBe("deterministic");
+    expect(providers.llmProvider).toBeInstanceOf(DeterministicLLMProvider);
+    expect(providers.embeddingProvider).toBeInstanceOf(LocalEmbeddingProvider);
+  });
+
+  it('MNEMORA_LLM="local" は createProviders でも例外になる', () => {
+    expect(() => createProviders({ MNEMORA_LLM: "local" })).toThrow(/MNEMORA_LLM/);
+  });
+});
+
+describe("formatNoApiCallsNotice — local モードを「本物の OpenAI」と言わない（Issue #109）", () => {
+  // 🔴 この歯が無かったら、Issue #109 の実装は
+  // `formatNoApiCallsNotice` の `label` の非網羅な ternary(recorded/deterministic 以外は
+  // 一律「本物の OpenAI」)にそのまま引っかかっていた——ローカル推論で課金も外部通信も
+  // 無いのに「本物の OpenAI」と表示される、まさにこの repo が繰り返し警告している
+  // 「条件を落とした数字」を新しく作るところだった(usage-meter.ts の docstring 参照)。
+  it("擬似LLM + ローカル埋め込みの run を「本物の OpenAI」と言わない", () => {
+    const notice = formatNoApiCallsNotice({ llmMode: "deterministic", embeddingMode: "local" });
+    expect(notice).toContain("ローカル推論");
+    expect(notice).not.toContain("本物の OpenAI");
   });
 });
