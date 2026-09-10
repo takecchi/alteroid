@@ -1,6 +1,7 @@
 import { systemClock } from "./clock.js";
 import type { Clock } from "./interfaces/clock.js";
 import type { Ctx } from "./ctx.js";
+import type { EventActor } from "./event.js";
 import { buildNewMemoryFromCandidate, extractCandidates } from "./extraction.js";
 import type {
   ExtractedMemoryCandidate,
@@ -11,6 +12,7 @@ import { heuristicTokenCounter } from "./heuristic-token-counter.js";
 import type { EmbeddingProvider } from "./interfaces/embedding-provider.js";
 import type { EventStore } from "./interfaces/event-store.js";
 import type { LLMProvider } from "./interfaces/llm-provider.js";
+import { MemoryStatusConflictError } from "./interfaces/memory-store.js";
 import type {
   MemoryStore,
   RequeueEmbedJobsOptions,
@@ -23,6 +25,7 @@ import type { TokenCounter } from "./interfaces/token-counter.js";
 import type { VectorStore } from "./interfaces/vector-store.js";
 import type { LexicalStore } from "./interfaces/lexical-store.js";
 import type { MemoryId, ObservationId } from "./ids.js";
+import type { Memory, MemoryStatus } from "./memory.js";
 import type {
   ObserveDocumentInput,
   ObserveEventInput,
@@ -230,6 +233,89 @@ export interface ReextractResult {
   extractionFailure: ExtractionFailure | null;
 }
 
+/**
+ * `runtime.forget` の対象（Issue #102）。
+ *
+ * `{ memoryId }`（単数）と `{ memoryIds }`（複数）のどちらでも同じ意味論——
+ * `forget` 自身は内部でこれを `MemoryId[]` に正規化してから処理する
+ * （`{ memoryId }` は1要素の配列と同じ扱い）。単数形をわざわざ用意するのは、
+ * 呼び出し側の大多数が1件だけを忘れさせたい場合に `{ memoryIds: [id] }` と
+ * 書かせないため。
+ */
+export type ForgetTarget = { memoryId: MemoryId } | { memoryIds: MemoryId[] };
+
+/**
+ * `runtime.forget` が対象1件ごとに返す結果（Issue #102）。
+ *
+ * **6つの `kind` はそれぞれ呼び出し側の次の一手が違う**——`ReextractSkip` や
+ * `UnsupportedOutboxJob` と同じ「無いの分類」（ADR 0008）の適用:
+ *
+ * - `"forgotten"`: 今回の呼び出しで実際に `status` を `forgotten` へ動かし、
+ *   `memory_events` にも `kind: 'forgotten'` を積んだ。`previousStatus` は
+ *   動かす直前に観測した status。
+ * - `"already_forgotten"`: 対象は最初から（または同じ呼び出し内の先行する
+ *   要素の処理によって）`forgotten` だった。**書き込みは一切起きていない**
+ *   ——`status` を「動かして `forgotten` になった」のではなく「既に
+ *   `forgotten` だった」の区別を、呼び出し側が監査ログの読み方を誤らないよう
+ *   に残す（同じ Memory を2回 forget しても `memory_events` は1件のまま、
+ *   という冪等性がこの kind の存在理由そのもの）。
+ * - `"not_found"`: そのテナントにその id の Memory がそもそも無い（一度も
+ *   存在しなかった、または他テナントの id）。`"already_forgotten"` と混同しない
+ *   ——「もう忘れている」と「そもそも知らない」は呼び出し側にとって別の状況
+ *   （前者は監査ログを遡れる、後者は遡れるものが無い）。
+ * - `"conflicted"`: compare-and-swap が破れた——`getMany` で読んだ時点の
+ *   status と、実際に書きに行った時点の status が一致しなかった（並行して
+ *   別の書き込みが割り込んだ）。**このメソッドは自動で再試行しない**
+ *   （上限の無い再試行ループを作らない）。呼び出し側は `observedStatus` を見て
+ *   必要なら自分でもう一度 `forget` を呼び直す。
+ * - `"failed"`: 競合以外の例外（DB 接続断等）で書き込みそのものが失敗した。
+ *   `error` に例外のメッセージを運ぶ。**この時点で処理を打ち切る**
+ *   （下の `"not_attempted"` 参照）。
+ * - `"not_attempted"`: 同じ呼び出しの中で、**それより前の要素が `"failed"`
+ *   になったため、この要素はまだ見ていない。** `"not_found"` や
+ *   `"already_forgotten"` に潰さない——それらは「見た上でそう判定した」だが
+ *   こちらは「見ていない」であり、意味が違う（`ReextractSkip` の
+ *   `not_examined` と同じ区別）。呼び出し側は `"failed"` の原因を解消してから
+ *   `"not_attempted"` になった id だけを含めて `forget` を呼び直せる。
+ */
+export type ForgetOutcome =
+  | { memoryId: MemoryId; kind: "forgotten"; previousStatus: MemoryStatus }
+  | { memoryId: MemoryId; kind: "already_forgotten" }
+  | { memoryId: MemoryId; kind: "not_found" }
+  | { memoryId: MemoryId; kind: "conflicted"; observedStatus: MemoryStatus | null }
+  | { memoryId: MemoryId; kind: "failed"; error: string }
+  | { memoryId: MemoryId; kind: "not_attempted" };
+
+/** `runtime.forget` の任意オプション（Issue #102）。 */
+export interface ForgetOptions {
+  /**
+   * 監査ログ（`memory_events.meta.reason`）に残る自由文。「ユーザーの訂正で
+   * 落ちた」と「運用の都合で落とした」を後から区別するためにある。省略時、
+   * `meta` に `reason` キー自体を持たせない（`""` と「省略」を区別する）。
+   */
+  reason?: string;
+  /** イベントの `actor`。省略時 `{ type: "system" }`。 */
+  actor?: EventActor;
+}
+
+/**
+ * `runtime.forget` の結果（Issue #102）。
+ *
+ * **`forgottenCount` のような派生値を持たない。**`outcomes` を数えれば得られる
+ * 値を欄として複製すると、「同じことを言う道が2つ在り、どちらか一方だけ直して
+ * ずれる」というこのリポジトリが繰り返し踏んできた欠陥（`TICK_SUPPORTED_JOB_KINDS`・
+ * `MAX_STRENGTH` の JSDoc 参照）を新しく作ることになる。
+ */
+export interface ForgetResult {
+  /**
+   * 入力（`ForgetTarget` を正規化した `MemoryId[]`）と**同じ順序・同じ長さ**。
+   * 入力に同じ id が2回現れたら、結果にも2回現れる——1回目の処理結果が
+   * 2回目の判定に反映される（例: 1回目が `"forgotten"` なら2回目は
+   * `"already_forgotten"` になる）。
+   */
+  outcomes: ForgetOutcome[];
+}
+
 export interface TickOptions {
   /**
    * claim のリース長（ミリ秒）。`ClaimOutboxJobsOptions.leaseMs`（ADR 0032）へそのまま渡す。
@@ -342,6 +428,48 @@ export interface Runtime {
    * 同じ形の型を2つ置くと、片方だけ直したときに黙ってずれる。
    */
   reembed(ctx: Ctx, opts: RequeueEmbedJobsOptions): Promise<RequeueEmbedJobsResult>;
+  /**
+   * Issue #102: Memory を**論理的に**忘れさせる。
+   *
+   * **行も `content` も消さない。**`status` を `'forgotten'` へ動かすだけで、
+   * 物理削除（`purge()`）は Phase 2 の別操作である（docs/memory-model.md
+   * 「forget() と purge() を分ける」）。`status` の更新と `memory_events` への
+   * `kind: 'forgotten'` の追記は `MemoryStore.updateStatusWithEvent`
+   * （ADR 0031）で**同一トランザクション**として行う——片方だけ起きることはない。
+   *
+   * `memory_events` の `digestSnapshot` にはその Memory の `digest` を入れる。
+   * **`content`（本文）は運ばない**（docs/memory-model.md §9: 監査ログに残す
+   * 記録項目は digest のスナップショットに限る）。
+   *
+   * `forgotten` は `recall()` の候補生成の status ゲート（`['active','contested']`）
+   * に含まれないため、このメソッドを呼んだ後の `recall()` には対象の Memory が
+   * 一切出てこなくなる（`omitted` に `{ kind: 'filtered', condition: 'forgotten' }`
+   * として計上される。ADR 0027）。**`recall` 側のコードはこの機能のために
+   * 一切変更していない**——ゲートも `omitted` の分類も既に在ったものをそのまま使う。
+   *
+   * **冪等である。**既に `forgotten` な Memory を対象に含めても書き込みは起きず
+   * `{ kind: 'already_forgotten' }` を返す。同じ id を同じ呼び出しの中に複数回
+   * 渡しても、`memory_events` に積まれるのは高々1件——1回目の結果を2回目が見る。
+   *
+   * 対象は `target` を `MemoryId[]` に正規化した上で**入力順に**処理する:
+   * - 対象が存在しない、または compare-and-swap の再読で `null` になった場合は
+   *   `{ kind: 'not_found' }`。
+   * - 既に `forgotten` の場合は `{ kind: 'already_forgotten' }`（書き込み無し）。
+   * - それ以外は観測した現在の status を `expectedStatus` にした
+   *   compare-and-swap で `forgotten` へ更新する。{@link MemoryStatusConflictError}
+   *   が投げられたら**1回だけ**再読し、再読の結果に応じて `not_found` /
+   *   `already_forgotten` / `{ kind: 'conflicted', observedStatus }` のいずれかを
+   *   返す——**上限の無い再試行ループにはしない。**
+   * - それ以外の例外（DB 接続断等）は `{ kind: 'failed', error }` を積んだ上で
+   *   **その場で処理を打ち切り**、残りの対象は一切試みずに
+   *   `{ kind: 'not_attempted' }` として返す。例外はこのメソッドの外へは
+   *   投げない。
+   *
+   * `kind` の意味と呼び出し側の次の一手は {@link ForgetOutcome} の doc コメントに
+   * 詳しい。`target` が空配列（`{ memoryIds: [] }`）なら、store に一切触れずに
+   * `{ outcomes: [] }` を返す。
+   */
+  forget(ctx: Ctx, target: ForgetTarget, opts?: ForgetOptions): Promise<ForgetResult>;
 }
 
 function extractObservationPayload(
@@ -824,5 +952,105 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     return deps.memoryStore.requeueEmbedJobs(ctx, opts);
   }
 
-  return { observe, tick, recall, reextract, reembed };
+  /**
+   * `Runtime.forget` の実装（Issue #102）。doc コメントは interface 側
+   * （`forget` の JSDoc）にある——ここはアルゴリズムそのものだけ。
+   */
+  async function forget(
+    ctx: Ctx,
+    target: ForgetTarget,
+    opts?: ForgetOptions,
+  ): Promise<ForgetResult> {
+    const ids: MemoryId[] = "memoryId" in target ? [target.memoryId] : target.memoryIds;
+    if (ids.length === 0) {
+      return { outcomes: [] };
+    }
+
+    const found = await deps.memoryStore.getMany(ctx, ids);
+    // 呼び出しの中で同じ id が複数回現れたとき、1回目の書き込み結果を2回目が見るための
+    // ローカルの写し。書き込みが成功するたびに更新する。
+    //
+    // ⚠ **これは正しさのためではない。**この更新を消しても `outcomes` は変わらない
+    // ——2回目は「書き込み前」の status で CAS を撃ち、それが弾かれ、読み直して
+    // `already_forgotten` に落ち着くからである（変異試験で確認した。ADR 0087）。
+    // **買っているのは往復である**: この写しが無いと、重複した id 1つにつき
+    // 「必ず失敗する UPDATE」1回と「読み直しの SELECT」1回が余分に DB へ飛ぶ。
+    // 🔴 効果が `outcomes` に出ない以上、歯は**呼び出し回数のほうを数える**
+    // （`forget.test.ts` の「重複した id は…往復を増やさない」）。
+    const byId = new Map<MemoryId, Memory>();
+    for (const memory of found) {
+      byId.set(memory.id, memory);
+    }
+
+    const actor = opts?.actor ?? { type: "system" };
+    const outcomes: ForgetOutcome[] = [];
+
+    for (let i = 0; i < ids.length; i += 1) {
+      const id = ids[i]!;
+      const current = byId.get(id);
+      if (current === undefined) {
+        outcomes.push({ memoryId: id, kind: "not_found" });
+        continue;
+      }
+      if (current.status === "forgotten") {
+        outcomes.push({ memoryId: id, kind: "already_forgotten" });
+        continue;
+      }
+
+      const observedStatus = current.status;
+      try {
+        const { memory } = await deps.memoryStore.updateStatusWithEvent(
+          ctx,
+          id,
+          "forgotten",
+          { expectedStatus: observedStatus },
+          {
+            tenantId: ctx.tenantId,
+            memoryId: id,
+            kind: "forgotten",
+            actor,
+            digestSnapshot: current.digest,
+            meta: opts?.reason === undefined ? {} : { reason: opts.reason },
+          },
+        );
+        byId.set(id, memory);
+        outcomes.push({ memoryId: id, kind: "forgotten", previousStatus: observedStatus });
+      } catch (error) {
+        if (error instanceof MemoryStatusConflictError) {
+          // 安全弁（ADR 0030 と同じ形。ただし `reextract` と違い、ここは1回だけ
+          // 再読して打ち切る——上限の無い再試行ループを作らない、という明示の決定）。
+          const refetched = await deps.memoryStore.get(ctx, id);
+          if (refetched === null) {
+            outcomes.push({ memoryId: id, kind: "not_found" });
+          } else if (refetched.status === "forgotten") {
+            byId.set(id, refetched);
+            outcomes.push({ memoryId: id, kind: "already_forgotten" });
+          } else {
+            byId.set(id, refetched);
+            outcomes.push({
+              memoryId: id,
+              kind: "conflicted",
+              observedStatus: refetched.status,
+            });
+          }
+          continue;
+        }
+        // 競合以外の例外——打ち切って、残りは「見ていない」として返す（interface の
+        // doc コメント参照）。例外をここより外へは投げない。
+        outcomes.push({
+          memoryId: id,
+          kind: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        });
+        for (let j = i + 1; j < ids.length; j += 1) {
+          outcomes.push({ memoryId: ids[j]!, kind: "not_attempted" });
+        }
+        return { outcomes };
+      }
+    }
+
+    return { outcomes };
+  }
+
+  return { observe, tick, recall, reextract, reembed, forget };
 }

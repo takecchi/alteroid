@@ -94,11 +94,19 @@ reflect / consolidate
 
 ```
 forget
-  → MemoryStore.updateStatus(status: 'forgotten')  ── 同一トランザクションで
-  → EventStore.append                               ── │ 同一トランザクションで（「必ず残る」の強制）
+  → MemoryStore.updateStatusWithEvent(status: 'forgotten', event: kind='forgotten')
+      ── status 更新とイベント追記を 1呼び出し・1トランザクションで（「必ず残る」の強制。ADR 0031）
 ```
 
 `purge()`（物理削除）は Phase 2 以降。イベント種別だけは Phase 1 のスキーマに含める。
+
+**実装済み**（[ADR 0087](./decisions/0087-runtime-forget-shape.md)、Issue #102）。
+`Runtime.forget(ctx, target, opts?)` は対象ごとに `ForgetOutcome` を返す——
+`forgotten` / `already_forgotten` / `not_found` / `conflicted` / `failed` / `not_attempted` の6値で、
+**「忘れた」「もともと無かった」「見ていない」を潰さない。**冪等性は
+`expectedStatus` による compare-and-swap（ADR 0030 と同じ道具）で買う。
+⚠ **`forget()` は論理削除のみである**——行も `content` も消さない
+（[docs/memory-model.md](./memory-model.md)「forget() と purge() を分ける」と対）。
 
 ### 3.3 Background Cognition を切っても成立する
 
@@ -651,7 +659,10 @@ interface EventStore {
   （[docs/memory-model.md](./memory-model.md) の監査ログの節）。
 - 本文は記録しない。記録するのは tenant_id・memory_id・kind・at・actor・digest のスナップショット・
   直前のサイズのみ。
-- `forget()` は `MemoryStore.updateStatus` と `EventStore.append` を同一トランザクションで行う。
+- `forget()` は status の更新とイベントの追記を同一トランザクションで行う。**その2つを1呼び出しに
+  まとめた口が `MemoryStore.updateStatusWithEvent`**（ADR 0031）であり、`Runtime.forget()` は
+  これを使う（[ADR 0087](./decisions/0087-runtime-forget-shape.md)）。`updateStatus` と
+  `EventStore.append` を別々に呼ぶと、前者だけが永続化される不整合が残りうる。
   リポジトリ層を通らない削除経路を作らない（§3.2。「必ず残る」の強制）。
 - 保持期間はテナント単位で設定可能。期限切れの削除自体も `purged` イベントとして残す（件数と
   期間のみ、対象の詳細は残さない）。alteroid の JournalStore には保持期間の概念が無く、mnemora は

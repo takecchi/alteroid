@@ -220,6 +220,14 @@ mnemora はこの前提を採用しない。mnemora は計測（`usage`）を提
 
 **⚠ 決定を記録しただけであり、決定どおりに動いているという意味ではない。**現物を読んで確かめた実装状況（2026-09-06 時点）: `MemoryStatus` に `'forgotten'` は在る（`packages/core/src/memory.ts`）が、**`forget()` / `purge()` に当たる公開操作は `packages/core` に存在しない**（`runtime.ts` と `interfaces/memory-store.ts` を検索して0件）。`decay_floor_at` も書き込むだけで読み取りには使っていない（§3 Phase 2 の表のとおり）。**つまり「落とさない」側は既定として成立しているが、「明示操作としての物理削除」はまだ入口が無い。**
 
+**2026-09-10 追記（Issue #102、[ADR 0087](./decisions/0087-runtime-forget-shape.md)）**:
+上の ⚠ のうち **`forget()` の側は解消した**——`Runtime.forget(ctx, target, opts?)` を実装し、
+`status='forgotten'` への論理削除と `memory_events` への `forgotten` イベント追記を
+`MemoryStore.updateStatusWithEvent`（ADR 0031）で同一トランザクションに閉じた。
+⚠ **`purge()`（物理削除）の入口は依然として無い**（`docs/memory-model.md`「forget() と purge() を
+分ける」のとおり Phase 2 以降）。⚠ **`decay_floor_at` を読み取りに使っていない点も変わっていない**
+——`forget()` は明示操作であり、§5.3 が言う「既定の忘却」（減衰による自然な弱化）とは別の話である。
+
 ### 5.4 監査ログの既定保持期間
 
 **なぜオーナーが決めるべきか**: 適正な保持期間はコンプライアンス要件（法域・業種）によって変わり、技術だけでは決まらない。
