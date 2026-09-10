@@ -164,6 +164,24 @@ export interface ToolContext {
   /** いま人間と繋がっている会話へイベントを流す（繋がっていなければ捨てる）。 */
   emit(event: ChatStreamEvent): void;
   /**
+   * いまのターンの会話 id（#768）。`ask_human` が `PendingApproval.conversationId`
+   * を埋めるために読む。マネージャー発の確認・蒸留・timer など内部ターンでは
+   * 会話へ紐づいていないので `undefined` を返す。
+   *
+   * ## なぜ optional か（`memoryCause` とは違う判断）
+   *
+   * `ToolContext.memoryCause` は「⛔ 必須である。省略できない」と書いてある
+   * ——渡し忘れが静かに落ちる（記録される `cause` が嘘になる）のを防ぐためで、
+   * 同じ理由はここにも効く（渡し忘れれば承認は会話 id を持てず、この Issue が
+   * 直そうとしている穴そのものが再発する）。**それでも必須にしなかった** ——
+   * 必須化すると `packages/core/src/tools.test.ts` の `ToolContext` 組み立て
+   * 55 箇所（`memoryCause` を書く行は 66 箇所）が typecheck で落ち、そのファイルは
+   * この変更のスコープ外（別の委譲が同日に触っている）。**これは設計上の妥協で
+   * ある** ——「たまたま塞げていない側」として扱うこと。本番の構築点は
+   * `clone.ts` の `#toolContext()` の1箇所だけで、そこでは明示している。
+   */
+  conversationId?: () => string | undefined;
+  /**
    * 委譲先。省略できるのは蒸留用の短命セッションのためで、そこでは
    * マネージャーを起こさない（記憶へ移すだけの内部ターン）。
    */
@@ -3467,6 +3485,11 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ question, context: background, managerId, requestId }) => {
+        // **いまのターンの会話 id を積む（#768）。** マネージャー発の確認・蒸留・
+        // timer など内部ターンでは `context.conversationId` 自体が省略されている
+        // か `undefined` を返すので、その場合はここも undefined のままになる
+        // （= 今までどおり `self` へ積まれる。挙動を変えない）。
+        const conversationId = context.conversationId?.();
         const approval: PendingApproval = {
           id: randomUUID(),
           createdAt: new Date().toISOString(),
@@ -3474,6 +3497,7 @@ export function createCloneTools(context: ToolContext) {
           ...(background === undefined ? {} : { context: background }),
           ...(managerId === undefined ? {} : { jobId: managerId }),
           ...(requestId === undefined ? {} : { requestId }),
+          ...(conversationId === undefined ? {} : { conversationId }),
         };
         await stores.jobs.putApproval(approval);
         await appendJournalOrThrow(

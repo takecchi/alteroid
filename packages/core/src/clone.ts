@@ -1686,12 +1686,15 @@ class Clone implements CloneHost {
     });
 
     // 回答は受信箱へ。止まっていたその仕事だけが再開する。
+    // **承認が会話 id を持っていれば、その写しを運ぶ（#768）。** 持っていなければ
+    // undefined のままで、今までどおり内部ターン（`self`）として扱われる。
     this.post({
       type: 'human_answer',
       id: randomUUID(),
       at: answeredAt,
       approvalId,
       answer,
+      ...(approval.conversationId === undefined ? {} : { conversationId: approval.conversationId }),
     });
   }
 
@@ -2509,7 +2512,17 @@ class Clone implements CloneHost {
   }
 
   #conversationOf(event: InboxEvent): string | null {
-    return event.type === 'human_message' ? event.conversationId : null;
+    if (event.type === 'human_message') return event.conversationId;
+    // **#768: `human_answer` も会話 id を持ちうる。** 元の承認
+    // （`PendingApproval.conversationId`）が会話へ紐づいていた場合だけ
+    // `answerApproval` がここへ写しており、無ければ undefined のままで
+    // `null`（= 内部ターン `self`）に倒れる。**この関数は `#pump` の
+    // `usage_limited` の emit と `#reportFailure` にも使われている** ——
+    // つまり、会話 id を持つ承認への回答ターンが失敗したときの断り書きも
+    // 会話へ流れるようになる。これは新しい穴ではなく、承認回答のターンが
+    // 会話に載る、という同じ直しの一部である。
+    if (event.type === 'human_answer') return event.conversationId ?? null;
+    return null;
   }
 
   // -------------------------------------------------------------------------
@@ -3804,7 +3817,12 @@ class Clone implements CloneHost {
             text: answerPrompt,
           }),
         );
-        await this.#runInternal(answerPrompt);
+        // **`#runInternal`（常に `null`）ではなく `#runTurn` を直接呼ぶ（#768）。**
+        // `#conversationOf(event)` は、元の承認が会話 id を持っていればそれを
+        // 返し、持っていなければ `null` を返す —— 会話 id が無ければこれまでと
+        // 1文字も変わらない（`#runInternal` は `#runTurn(null, text, kind)` の
+        // 薄いラッパーでしかない）。
+        await this.#runTurn(this.#conversationOf(event), answerPrompt);
         return;
       }
 
@@ -4046,10 +4064,17 @@ class Clone implements CloneHost {
   }
 
   /**
-   * 人間に見せない内部ターン（蒸留・承認回答の反映・人間以外の起点）。
+   * 人間に見せない内部ターン（蒸留・人間以外の起点）。
    *
    * `kind` は `#runTurn` へそのまま渡す。蒸留の呼び出し元だけが `'distill'` を
    * 渡し、それ以外は省略して既定（`'normal'`）のままにする。
+   *
+   * **承認回答の反映（`human_answer`）はここを通らない（#768 で外した）。**
+   * かつては常に `#runTurn(null, …)` を呼ぶこの関数を経由していたので、元の
+   * 承認がどの会話で上がったかに関わらず一律で内部ターン扱いになっていた
+   * （＝チャットに生配信も履歴も出ない、という穴の本体）。いまは `#handle` の
+   * `case 'human_answer'` が `#runTurn(this.#conversationOf(event), …)` を
+   * 直接呼び、会話 id を持つ承認への回答だけ人間の会話へ載る。
    */
   async #runInternal(text: string, kind: 'normal' | 'distill' = 'normal'): Promise<TurnOutcome> {
     return this.#runTurn(null, text, kind);
@@ -4957,6 +4982,10 @@ class Clone implements CloneHost {
       ...(this.#scheduler === undefined ? {} : { scheduler: this.#scheduler }),
       runtime: () => this.#runtimeFacts(),
       memoryCause: () => (this.#turn?.kind === 'distill' ? 'distill' : 'clone'),
+      // **`ask_human` が `PendingApproval.conversationId` を埋めるための口（#768）。**
+      // `emit` の1行上と同じ薄い closure —— `#turn?.conversationId` が無ければ
+      // （マネージャー発の確認・蒸留・timer など内部ターン）undefined を返す。
+      conversationId: () => this.#turn?.conversationId ?? undefined,
     };
   }
 
@@ -5389,6 +5418,10 @@ class Clone implements CloneHost {
           // 既定の `'clone'` に落ち、蒸留が書いた記憶なのに `cause: 'clone'`
           // と名乗る**（`ToolContext.memoryCause` の doc の「渡し忘れ」）。
           memoryCause: () => 'distill',
+          // **`conversationId` は渡さない（#768）。** `emit` を `() => undefined`
+          // にしているのと同じ判断 —— サイドクエリは常に内部ターンで、
+          // 人間の会話には紐づいていない。渡さなければ `ask_human` 側の
+          // `context.conversationId?.()` は呼ばれず undefined 扱いになる。
         }),
         systemPrompt: buildCloneSystemPrompt({
           memory,

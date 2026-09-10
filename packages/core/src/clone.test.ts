@@ -35,6 +35,7 @@ import {
   distillSucceededEntry,
 } from './distill-gap.js';
 import type { DistillGap } from './distill-gap.js';
+import { conversationMessages, readConversationWindow } from './conversation.js';
 import type { CloneHost } from './host.js';
 import type { ManagerPool, ManagerSummary } from './manager.js';
 import { measureMemoryFloor, renderMemoryDocuments } from './memory.js';
@@ -1266,15 +1267,27 @@ describe('クローン', () => {
   });
 
   it('承認待ちへの回答は受信箱を通ってクローンに届く', async () => {
-    const s = setup();
+    // **返答の文言をターンごとに分ける。** 既定の偽 SDK は入力に関わらず同じ
+    // 文言を返すので、人間の発言のターンの返答と、承認への回答のターンの返答が
+    // 日誌の中で見分けられない ——どちらを掴んだのか分からないまま `with` を
+    // 測ることになる（実際、分ける前のこの歯は人間のターンの返答のほうを掴んで
+    // `with: 'human'` で落ちていた。測りたい経路を測っていなかった）。
+    const s = setup((input) =>
+      input.includes('承認待ちにしていた質問に人間が答えた') ? '承認への返答' : 'わかった',
+    );
     await s.stores.jobs.putApproval({
       id: 'ap-1',
       createdAt: new Date().toISOString(),
       question: 'これを送ってよいか',
+      // **conversationId を持たせていない。** #768 以前はこの承認が唯一の
+      // 形だった（`ask_human` が会話 id を記録していなかった）。以後もこの
+      // 形自体は残る ——`ask_human` がマネージャー発の確認・蒸留・timer など
+      // 内部ターンから呼ばれたときは、いまも conversationId を持たない。
     });
 
     s.clone.post(humanMessage('やあ'));
     await waitForDone(s.events);
+    const eventsBeforeAnswer = s.events.length;
     await s.clone.answerApproval('ap-1', 'よい');
 
     // 回答済みになる
@@ -1287,8 +1300,241 @@ describe('クローン', () => {
       })
       .toBe(true);
 
+    // **#768 の下読み: この歯はもともと「chat に出さない」を測っていなかった**
+    // （コメントだけで、`inputs` に回答が届くことしか見ていない）。この承認は
+    // `putApproval` で直接積まれ conversationId を持たないので、#768 の直しの
+    // 後もこの経路は `self` のままが正しい ——反転すべき期待値は無い。
+    // **だから反転はせず、ここに「会話 id を持たない承認は self のまま・
+    // SSE も流れない」を測るアサーションを足して歯を強くする**
+    // （AGENTS.md「対象をスコープして特定する＝保証が強くなる」）。
+    await expect
+      .poll(
+        async () => {
+          const entries = await s.stores.journal.list({ types: ['exchange'], limit: 100 });
+          return entries.some(
+            (entry) =>
+              entry.type === 'exchange' &&
+              entry.role === 'outbound' &&
+              entry.text === '承認への返答',
+          );
+        },
+        { timeout: 3000 },
+      )
+      .toBe(true);
+    const entries = await s.stores.journal.list({ types: ['exchange'], limit: 100 });
+    const reply = entries.find(
+      (entry) =>
+        entry.type === 'exchange' && entry.role === 'outbound' && entry.text === '承認への返答',
+    );
+    if (reply === undefined || reply.type !== 'exchange') {
+      throw new Error('回答ターンの返答が日誌に見つからない');
+    }
+    expect(reply.with).toBe('self');
+    expect(reply.conversationId).toBeUndefined();
+    // 会話 id が無いので #emit は先頭で return する ⟹ conv-1 へ SSE は増えない。
+    expect(s.events.length).toBe(eventsBeforeAnswer);
+
     await s.clone.stop();
   });
+
+  it(
+    '会話 id を持つ承認に答えると、返答が with: "human" としてその会話 id と共に' +
+      '日誌へ積まれ、会話の窓（readConversationWindow）からも読める（#768）',
+    async () => {
+      const s = setup((input) =>
+        input.includes('承認待ちにしていた質問に人間が答えた') ? '(a) で進めます' : 'やあの返事',
+      );
+
+      // 1. 人間の発言で会話 conv-1 を立てる（`humanMessage` の既定 conversationId）。
+      s.clone.post(humanMessage('本番 DB へ打ってよいか判断してくれ'));
+      await waitForDone(s.events);
+
+      // 2. `ask_human` が会話 id を埋めるのと同じ形で、承認へ conversationId を持たせる。
+      await s.stores.jobs.putApproval({
+        id: 'ap-1',
+        createdAt: new Date().toISOString(),
+        question: '本番 DB へ2文だけ打ってよいか',
+        conversationId: 'conv-1',
+      });
+
+      // 3. 人間が承認画面で答える。
+      await s.clone.answerApproval('ap-1', '(a) でよい');
+
+      // 4. 返答が日誌へ積まれるまで待つ。
+      await expect
+        .poll(
+          async () => {
+            const found = await s.stores.journal.list({ types: ['exchange'], limit: 100 });
+            return found.some(
+              (entry) =>
+                entry.type === 'exchange' &&
+                entry.role === 'outbound' &&
+                entry.text.includes('(a) で進めます'),
+            );
+          },
+          { timeout: 3000 },
+        )
+        .toBe(true);
+
+      const found = await s.stores.journal.list({ types: ['exchange'], limit: 100 });
+      const reply = found.find(
+        (entry) =>
+          entry.type === 'exchange' &&
+          entry.role === 'outbound' &&
+          entry.text.includes('(a) で進めます'),
+      );
+      if (reply === undefined || reply.type !== 'exchange') {
+        throw new Error('回答ターンの返答が日誌に見つからない');
+      }
+      expect(reply.with).toBe('human');
+      expect(reply.conversationId).toBe('conv-1');
+
+      // 5. チャットが読む会話 conv-1 の中身にも、この返答が現れる
+      //    （`readConversationWindow` + `conversationMessages` — 本番の読み口そのもの。
+      //    `apps/daemon/src/app.ts` の `GET /conversations/:id` と同じ組み立て）。
+      const window = await readConversationWindow(s.stores.journal, { scan: 100 });
+      const messages = conversationMessages(window, 'conv-1');
+      expect(messages.some((m) => m.role === 'outbound' && m.text.includes('(a) で進めます'))).toBe(
+        true,
+      );
+
+      await s.clone.stop();
+    },
+  );
+
+  it(
+    '会話 id を持つ承認に答えると、その会話へ SSE が流れる' +
+      '（Issue の実測は回答後の SSE が0件だった。ここが変わるのが直った証拠）（#768）',
+    async () => {
+      const s = setup((input) =>
+        input.includes('承認待ちにしていた質問に人間が答えた') ? '(a) で進めます' : 'やあの返事',
+      );
+
+      s.clone.post(humanMessage('本番 DB へ打ってよいか判断してくれ'));
+      await waitForDone(s.events);
+      const afterFirstTurn = s.events.length;
+
+      await s.stores.jobs.putApproval({
+        id: 'ap-1',
+        createdAt: new Date().toISOString(),
+        question: '本番 DB へ2文だけ打ってよいか',
+        conversationId: 'conv-1',
+      });
+
+      // 承認を積むだけでは SSE は増えない（回答前の基準線）。
+      expect(s.events.length).toBe(afterFirstTurn);
+
+      await s.clone.answerApproval('ap-1', '(a) でよい');
+
+      // 回答を受けたターンが終わる（done）まで待つ。
+      // **終端は `afterFirstTurn` から後ろだけで見る。** 配列全体を `some` で
+      // 見ると1つ前のターン（人間の発言）の `done` に当たってしまい、この回答の
+      // ターンでは最初の1件（`thinking`）が届いた時点で待ちが解ける ——本文が
+      // 届く前に測ることになり、**直っていても赤くなる**（実際に落ちた）。
+      await s.waitForEvents((events) => events.slice(afterFirstTurn).some(isTerminal));
+
+      const after = s.events.slice(afterFirstTurn);
+      // Issue の実測（2026-09-10T08:19Z、ローカル再現）: 「回答後にチャットへ
+      // 流れた SSE は0件」。ここでは0件ではないことと、その中身まで測る。
+      expect(after.length).toBeGreaterThan(0);
+      expect(after.some((e) => e.type === 'text' && e.text.includes('(a) で進めます'))).toBe(true);
+      expect(after.some((e) => e.type === 'done')).toBe(true);
+
+      await s.clone.stop();
+    },
+  );
+
+  it(
+    'ask_human は人間の発言のターン中に呼ばれると承認に conversationId を積み、' +
+      '内部ターン（会話 id を持たない承認への回答）では積まない（#768）',
+    async () => {
+      const stores = createMemoryStores();
+      let captured: ToolContext | undefined;
+      const { fn, calls } = fakeSdk(undefined, { delayMs: 200 });
+      const clone = createClone({
+        stores,
+        queryFn: fn,
+        env: {},
+        runners: createRunnerRegistry([
+          createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+        ]),
+        mcpServerFactory: (context) => {
+          captured = context;
+          return createCloneMcpServer(context);
+        },
+      });
+      const { events } = wireEvents(clone, 'conv-1');
+
+      async function askHuman(question: string): Promise<void> {
+        if (captured === undefined) throw new Error('ToolContext がまだ捕まっていない');
+        const tools = createCloneTools(captured);
+        const found = tools.find((entry) => entry.name === 'ask_human');
+        if (!found) throw new Error('ask_human という道具が無い');
+        await found.handler({ question } as never, {});
+      }
+
+      // 1. 人間の発言のターンが走っている間に呼ぶ。
+      clone.post(humanMessage('本番 DB へ打ってよいか判断してくれ'));
+      await expect
+        .poll(() => calls[0]?.inputs.some((input) => input.includes('本番 DB')) ?? false, {
+          timeout: 3000,
+        })
+        .toBe(true);
+      await askHuman('人間のターン中の質問');
+      await waitForDone(events);
+
+      const duringHuman = (await stores.jobs.listApprovals({ pendingOnly: true })).find(
+        (approval) => approval.question === '人間のターン中の質問',
+      );
+      expect(duringHuman?.conversationId).toBe('conv-1');
+
+      // 2. 内部ターン（会話 id を持たない承認への回答）が走っている間に呼ぶ。
+      await stores.jobs.putApproval({
+        id: 'ap-internal',
+        createdAt: new Date().toISOString(),
+        question: '内部ターンの引き金',
+      });
+      await clone.answerApproval('ap-internal', 'よい');
+      await expect
+        .poll(
+          () =>
+            calls[0]?.inputs.some(
+              (input) =>
+                input.includes('承認待ちにしていた質問に人間が答えた') &&
+                input.includes('内部ターンの引き金'),
+            ) ?? false,
+          { timeout: 3000 },
+        )
+        .toBe(true);
+      await askHuman('内部ターン中の質問');
+
+      const duringInternal = (await stores.jobs.listApprovals({ pendingOnly: true })).find(
+        (approval) => approval.question === '内部ターン中の質問',
+      );
+      expect(duringInternal?.conversationId).toBeUndefined();
+
+      // **`waitForDone(events)` は使わない。** この内部ターンは会話 id を
+      // 持たないので `#emit(null, …)` が先頭で return し、`conv-1` へ `done`
+      // は届かない（それ自体がこのテストの検証対象の一部である）。ここでは
+      // 代わりに日誌側で両方のターンの返答（outbound 2件）が積まれたことを
+      // 見てから `stop()` する——in-flight のまま呼んでも `stop()` 自体は
+      // 安全だが、検証を確実にするための待ちである。
+      await expect
+        .poll(
+          async () => {
+            const entries = await stores.journal.list({ types: ['exchange'], limit: 100 });
+            return (
+              entries.filter((entry) => entry.type === 'exchange' && entry.role === 'outbound')
+                .length >= 2
+            );
+          },
+          { timeout: 3000 },
+        )
+        .toBe(true);
+
+      await clone.stop();
+    },
+  );
 
   it('マネージャーの報告と確認は受信箱を通ってクローンに届く（配線）', async () => {
     const s = setup();

@@ -303,6 +303,12 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
     /** 承認待ちキューの項目 id */
     approvalId: z.string(),
     answer: z.string(),
+    /**
+     * 元の承認（`PendingApproval.conversationId`）が持っていた会話 id の
+     * 写し（#768）。承認が会話 id を持たなければ undefined のままで、
+     * その場合は今までどおり `self` の内部ターンとして扱われる。
+     */
+    conversationId: z.string().optional(),
   }),
   z.object({
     type: z.literal('distill'),
@@ -2065,6 +2071,17 @@ export const pendingApprovalSchema = z.object({
   requestId: z.string().optional(),
   answeredAt: isoDateTime.optional(),
   answer: z.string().optional(),
+  /**
+   * どの会話で上がった確認か（#768）。
+   *
+   * `ask_human` を叩いた時点の「いまのターンの会話 id」から埋める。
+   * **マネージャー発の確認・蒸留・timer など内部ターンで上がった分は
+   * undefined のままである** —— そこには紐づけられる会話が無い。
+   * 回答（`human_answer`）へこの id を運び直すことで、人間への返答が
+   * その会話へ載る（SSE も履歴も）。会話 id を持たない確認は今までどおり
+   * `self` へ積まれ、挙動は変わらない。
+   */
+  conversationId: z.string().optional(),
 });
 
 export type PendingApproval = z.infer<typeof pendingApprovalSchema>;
