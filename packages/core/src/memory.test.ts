@@ -1598,13 +1598,15 @@ const INVARIANT2_CORPUS: MemoryPart[] = [
   { slug: 'no-frontmatter', content: '# no-frontmatter\n本文A\n## 節A1\n中身A1' },
   {
     slug: 'explicit-premise',
-    content: '---\ntype: premise\ndescription: 要旨B\n---\n# explicit-premise\n本文B\n## 節B1\n中身B1\n## 節B2\n中身B2',
+    content:
+      '---\ntype: premise\ndescription: 要旨B\n---\n# explicit-premise\n本文B\n## 節B1\n中身B1\n## 節B2\n中身B2',
   },
   { slug: 'fact-doc', content: '---\ntype: fact\ndescription: 要旨C\n---\n# fact-doc\n本文C' },
   { slug: 'broken', content: '---\nno colon here\n---\n# broken\n本文D' },
   {
     slug: 'unknown-type',
-    content: '---\ntype: something-else\ndescription: 要旨E\n---\n# unknown-type\n本文E\n## 節E1\n中身E1',
+    content:
+      '---\ntype: something-else\ndescription: 要旨E\n---\n# unknown-type\n本文E\n## 節E1\n中身E1',
   },
 ];
 
@@ -1617,7 +1619,8 @@ const INVARIANT2_CORPUS: MemoryPart[] = [
  * `@alteroid/core` の `renderMemoryDocuments` へ通した出力と1文字も違わず
  * 一致することを、node スクリプトで確認済み（報告に生出力を記載）。
  */
-const INVARIANT2_GOLDEN = "<!-- memory: no-frontmatter.md（premise・本文は載っていない。全 32 文字 / 2 節） -->\n要旨: （まだ書かれていない。memory_frontmatter_set の description で書くこと——ここが空だと、本文を開くまでこの文書が何なのか分からない）\n節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:\n[5f35fd4b-d02c5e61] # no-frontmatter — 32 文字\n  [a200735a-6700831a] ## 節A1 — 11 文字\n\n<!-- memory: explicit-premise.md（premise・本文は載っていない。全 85 文字 / 3 節） -->\n要旨: 要旨B\n節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:\n[d261b61a-c981527a] # explicit-premise — 46 文字\n  [0ca6eb3f-52241122] ## 節B1 — 12 文字\n  [e2d59aaf-2a39d6bb] ## 節B2 — 11 文字\n\n<!-- memory: frontmatter が壊れている（既知の形にならなかった。premise として扱っている） -->\n<!-- memory: broken.md（premise・本文は載っていない。全 34 文字 / 1 節） -->\n要旨: （まだ書かれていない。memory_frontmatter_set の description で書くこと——ここが空だと、本文を開くまでこの文書が何なのか分からない）\n節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:\n[489e4048-1b0e31ad] # broken — 12 文字\n\n<!-- memory: unknown-type.md（premise・本文は載っていない。全 76 文字 / 2 節） -->\n要旨: 要旨E\n節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:\n[9f0ec3f9-96417823] # unknown-type — 30 文字\n  [d6a625f1-9195a16d] ## 節E1 — 11 文字\n\n<!-- memory: index -->\n## 記憶の目次（fact。本文は memory_read で開く。階層はインデントで表す）\n- fact-doc: fact-doc — ？要旨の鮮度不明: 要旨C";
+const INVARIANT2_GOLDEN =
+  '<!-- memory: no-frontmatter.md（premise・本文は載っていない。全 32 文字 / 2 節） -->\n要旨: （まだ書かれていない。memory_frontmatter_set の description で書くこと——ここが空だと、本文を開くまでこの文書が何なのか分からない）\n節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:\n[5f35fd4b-d02c5e61] # no-frontmatter — 32 文字\n  [a200735a-6700831a] ## 節A1 — 11 文字\n\n<!-- memory: explicit-premise.md（premise・本文は載っていない。全 85 文字 / 3 節） -->\n要旨: 要旨B\n節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:\n[d261b61a-c981527a] # explicit-premise — 46 文字\n  [0ca6eb3f-52241122] ## 節B1 — 12 文字\n  [e2d59aaf-2a39d6bb] ## 節B2 — 11 文字\n\n<!-- memory: frontmatter が壊れている（既知の形にならなかった。premise として扱っている） -->\n<!-- memory: broken.md（premise・本文は載っていない。全 34 文字 / 1 節） -->\n要旨: （まだ書かれていない。memory_frontmatter_set の description で書くこと——ここが空だと、本文を開くまでこの文書が何なのか分からない）\n節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:\n[489e4048-1b0e31ad] # broken — 12 文字\n\n<!-- memory: unknown-type.md（premise・本文は載っていない。全 76 文字 / 2 節） -->\n要旨: 要旨E\n節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:\n[9f0ec3f9-96417823] # unknown-type — 30 文字\n  [d6a625f1-9195a16d] ## 節E1 — 11 文字\n\n<!-- memory: index -->\n## 記憶の目次（fact。本文は memory_read で開く。階層はインデントで表す）\n- fact-doc: fact-doc — ？要旨の鮮度不明: 要旨C';
 
 /**
  * `indexed` — 第3の区分（2026-09-11 追加）。要旨だけが焼かれ、節の目次は
@@ -1644,24 +1647,21 @@ describe('indexed — 第3の区分（要旨だけ。節の目次は焼かれな
     expect(MEMORY_PROMPT_INDEXED_DESCRIPTION_BUDGET).toBe(6_000);
   });
 
-  it('indexed のカードには「本文は載っていない。節の目次も載らない」と、節数・全体の文字数が出る', () => {
-    const doc = fact('proj-only', {
-      type: 'indexed',
-      description: '特定のプロジェクトでしか使わない記憶',
-    });
-    // `fact()` ヘルパーは本文に見出しを1つ足すだけなので、節を複数持たせて
-    // 節数を確かめられるようにする。
+  it('indexed のカードには「本文は載っていない」（head）と「目次は載らない」（節の行）、節数・全体の文字数が出る', () => {
+    // 節を複数持たせて、節数を確かめられるようにする。
     const withSections: MemoryPart = {
       slug: 'proj-only',
       content:
         '---\ndescription: 特定のプロジェクトでしか使わない記憶\ntype: indexed\n---\n' +
         '## 一\n本文1\n## 二\n本文2\n## 三\n本文3',
     };
-    void doc;
     const rendered = renderMemoryDocuments([withSections]);
 
-    expect(rendered).toContain('<!-- memory: proj-only.md（indexed');
-    expect(rendered).toContain('節の目次も載らない');
+    expect(rendered).toContain('<!-- memory: proj-only.md（indexed・本文は載っていない。');
+    // head は premise と同じ形（不変条件1 — 節0件のとき indexed と premise の
+    // 床が一致してしまうのを避けるため、head に indexed 固有の説明は足さない。
+    // `renderIndexedCard` の doc を見よ）。目次を焼かない旨は節の行に出る。
+    expect(rendered).toContain('目次は載らない');
     // 「そこに何が在るか」——節数と全体の文字数（不変条件3）。
     expect(rendered).toContain(`全 ${withSections.content.length} 文字`);
     expect(rendered).toContain('/ 3 節');
@@ -1669,8 +1669,7 @@ describe('indexed — 第3の区分（要旨だけ。節の目次は焼かれな
   });
 
   it('indexed は節の目次（節idの行）を1文字も焼かない（unlike premise）', () => {
-    const content =
-      '---\ntype: indexed\ndescription: 要旨\n---\n## 一\n本文1\n## 二\n本文2';
+    const content = '---\ntype: indexed\ndescription: 要旨\n---\n## 一\n本文1\n## 二\n本文2';
     const indexedRendered = renderMemoryDocuments([{ slug: 'doc', content }]);
     const premiseRendered = renderMemoryDocuments([
       { slug: 'doc', content: content.replace('type: indexed', 'type: premise') },

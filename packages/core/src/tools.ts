@@ -2215,11 +2215,12 @@ export function createCloneTools(context: ToolContext) {
       'memory_list',
       [
         '記憶の文書一覧を返す。中身は返さない。',
-        '各行は `[premise|fact] slug: title (作成: createdAt / 更新: updatedAt) — 要旨` の形。',
+        '各行は `[premise|fact|indexed] slug: title (作成: createdAt / 更新: updatedAt) — 要旨` の形。',
         '作成は書き込まれた瞬間にその場で分かる。「不明」と出るのは、この配線より前に作られ、',
         '日誌にも根拠（最初の書き込み）が無い古い記憶だけである（ファイルの mtime は使わない）。',
         'premise はプロンプトへ要旨と節の目次（節id・見出し・文字数）だけが焼かれ、本文は載らない',
-        '（節id を memory_section_read に渡せば開ける）。fact は目次の1行だけがプロンプトに載るので、',
+        '（節id を memory_section_read に渡せば開ける）。indexed は要旨だけが焼かれ、節の目次は焼かれない',
+        '（節id を確かめるにはまず memory_outline を呼ぶこと）。fact は目次の1行だけがプロンプトに載るので、',
         '中身が要るなら memory_read で開くこと。要旨の前に付く印（⚠古い要旨 / ？鮮度不明）は',
         'description が最後の本文変更より前に書かれた可能性があることを示す（本文と合っている保証ではない）。',
         '階層は frontmatter の parent から組み立てた木で、インデントで表す。',
@@ -2273,8 +2274,10 @@ export function createCloneTools(context: ToolContext) {
         '人間が手で書いた記述を、整形の都合で消さないこと。',
         '先頭に frontmatter を置ける（無くてもよい。無ければ premise として扱う——安全側の既定）。',
         '形は `---` で始まり `---` で閉じ、各行は `key: value`。使えるキーは description（要旨。目次の1行に載る）・',
-        'type（premise または fact。premise は「要旨＋節の目次」が焼かれ、fact は目次の1行だけになる。' +
-          'どちらも本文は焼かれない——premise の節の本文は memory_section_read で開く。判断の前提なら premise、',
+        'type（premise・indexed・fact のいずれか。premise は「要旨＋節の目次」が焼かれ、' +
+          'indexed は要旨だけが焼かれて節の目次は焼かれない（特定の作業でしか使わない記憶向け。' +
+          '節を確かめるにはまず memory_outline を呼ぶこと）、fact は目次の1行だけになる。',
+        'どれも本文は焼かれない——premise / indexed の節の本文は memory_section_read で開く。判断の前提なら premise、',
         '事実の蓄積で毎回全文を読む必要が無いものなら fact）・parent（親文書の slug。階層を作る）の3つだけ。',
         'ネスト・複数行・引用符の解釈は無い（値は文字列としてそのまま読む）。狭い形から外れると malformed として',
         '扱われ、文書は消えずに premise のまま残る（本文はプロンプトには載らず、memory_section_read で開く）。',
@@ -2648,8 +2651,10 @@ export function createCloneTools(context: ToolContext) {
             case 'fact':
               return '次のターンから、この文書は目次の1行だけになる（節の目次も載らなくなる）。';
             case 'indexed':
-              return '次のターンから、この文書は要旨だけがプロンプトへ載る（節の目次は載らない。' +
-                '節を確かめるには memory_outline を呼び、memory_section_read で開くこと）。';
+              return (
+                '次のターンから、この文書は要旨だけがプロンプトへ載る（節の目次は載らない。' +
+                '節を確かめるには memory_outline を呼び、memory_section_read で開くこと）。'
+              );
             case 'premise':
               return '次のターンから、この文書は要旨と節の目次がプロンプトへ載る（本文は載らない。memory_section_read で開く）。';
             default:

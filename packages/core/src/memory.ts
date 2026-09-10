@@ -1749,15 +1749,19 @@ function renderIndexedCard(part: MemoryPart): string {
     MEMORY_PROMPT_INDEXED_DESCRIPTION_BUDGET,
   );
 
-  // ⚠️ 節が0件のときは premise と一字一句同じ文にする（節の目次を持たない点は
-  // premise の0節分岐と同じ状態なので、案内も同じでよい——ここで indexed 固有の
-  // 説明を足すと、それだけで premise より大きくなる）。
+  // ⚠️ 節が0件のときも premise と一字一句同じ文にしない——head も summaryLine も
+  // premise と同じ形になりうる（説明が予算内に収まる短い要旨のとき）ので、
+  // ここが同じ文言だと indexed の床が premise と完全に一致してしまい、
+  // 不変条件1（indexed の床は premise の床を必ず下回る）が節0件のときだけ
+  // 破れる（実測で見つかった。`memory.test.ts` の「節 +0・要旨 10 文字」）。
+  // だから premise の0節分岐より必ず短い文にする——「見出しを付けると節id で
+  // 開けるようになる」という追加の案内は落とし、内容は変えず短くするだけに
+  // とどめる。
   // 節が1件以上のときは、premise の最小1節ぶんの目次（見出し・節id・前置き込み）
   // より必ず短くなるよう、短い1行に切り詰めてある。
   const sectionsLine =
     sections.length === 0
-      ? '節: 1つも無い（見出しが無いか、前書きしか無い）。本文は memory_read で開く。' +
-        '**見出しを付けると節id で名指しして開けるようになる**（memory_section_read）。'
+      ? '節: 1つも無い（見出しが無いか、前書きしか無い）。本文は memory_read で開く。'
       : `節: 全 ${formatMemoryCharCount(sections.length)} 節（目次は載らない。` +
         'memory_outline → memory_section_read で開く）。';
 
