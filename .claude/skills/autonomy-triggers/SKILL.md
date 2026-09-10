@@ -5,10 +5,10 @@ description: 自律の起点4つ（日報・発意 tick・スケジュール・�
 
 # 自律まわりの動かし方（起点4つ）
 
-<!-- AGENTS.md から移設。本文は1文字も変えていない。パスはリポジトリの根からの相対である。 -->
+<!-- AGENTS.md から移設。パスはリポジトリの根からの相対である。移設の時点では本文を1文字も変えていなかったが、その後この場所で `memory_tidy`（既定で回る3つ目の刻み）の抜けを直した。以後この場所で足したものは git の差分で追える。 -->
 
-- **既定で動く。** 日報（既定 22:00）と発意 tick（既定 55 分。理由は `apps/daemon/src/schedule.ts` の `DEFAULT_INITIATIVE_EVERY_MINUTES` の JSDoc）は何も設定しなくても回る。常駐と自律は後から足す機能ではないので、既定を「止まっている」にしないこと
-  - `ALTEROID_DAILY_REPORT_AT`（`HH:MM` / `off`）、`ALTEROID_INITIATIVE_EVERY`（分 / `off`）、`ALTEROID_REPORT_LOOKBACK_DAYS`（起動時に遡って日報を作る日数、既定 3）
+- **既定で動く。** 日報（既定 22:00）・発意 tick（既定 55 分。理由は `apps/daemon/src/schedule.ts` の `DEFAULT_INITIATIVE_EVERY_MINUTES` の JSDoc）・記憶の整理（`memory_tidy`。既定 03:00、`DEFAULT_MEMORY_TIDY_AT`）は何も設定しなくても回る。常駐と自律は後から足す機能ではないので、既定を「止まっている」にしないこと
+  - `ALTEROID_DAILY_REPORT_AT`（`HH:MM` / `off`）、`ALTEROID_INITIATIVE_EVERY`（分 / `off`）、`ALTEROID_MEMORY_TIDY_AT`（`HH:MM` / `off`）、`ALTEROID_REPORT_LOOKBACK_DAYS`（起動時に遡って日報を作る日数、既定 3）
   - これらは**方針**の設定であって、暴走を止めるための回数制限ではない。抑止は実行環境の境界で行う（north_star 禁止2）
 - 待たずに確かめるなら `POST /schedule/:kind/run`（chat では `/run daily_report` / `/run self_initiative`）。`GET /schedule` で次の発火が見える
 - **「定期的に〜しておいて」は記憶だけに書かせない。** 記憶は根拠を置く場所で時計を持たないので、そこにだけ書いた依頼は「発意 tick のときに思い出せるかどうか」の賭けになる。継続する依頼はクローンが `schedule_create`（`kind` ＋ `dailyAt` / `everyMinutes` / `cron` のどれか1つ ＋ 依頼の本文）で仕込み、時刻が来れば必ず受信箱へ届く形にする（`schedule_list` / `schedule_remove` で読む・外す）
@@ -20,7 +20,7 @@ description: 自律の起点4つ（日報・発意 tick・スケジュール・�
   - **手で起こした1回（`POST /schedule/:kind/run`）で定期の予定をずらさない。** 発火の合図の `cause` で区別し、`manual` では観測用の `lastRunAt` だけを動かす。ここを混ぜると、手動実行のたびに位相が動く（再起動後に露呈する）
   - 依頼を直す経路（`schedule_create` / `POST /schedule`）では `lastScheduledRunAt` と `pendingRun` を**引き継ぐ**こと。落とすと、直した瞬間に位相が `createdAt` から引き直され、引き受けたまま終わっていない回も消える
   - 発火のたびに `lastRunAt` が付き、依頼の一覧と前回時刻は digest（`digest.ts`）にも常に載る。同じ issue に何本もマネージャーが立つのを止めるのはこの材料と `manager_list` であって、**同時数の上限ではない**（north_star 禁止2）
-  - 人間側の口は `GET /schedule`（`request` / `lastRunAt` 付き）・`POST /schedule`・`DELETE /schedule/:kind`、chat では `/schedule` と `/unschedule <kind>`。`daily_report` / `self_initiative` の名前は奪えない（`RESERVED_SCHEDULE_KINDS`）
+  - 人間側の口は `GET /schedule`（`request` / `lastRunAt` 付き）・`POST /schedule`・`DELETE /schedule/:kind`、chat では `/schedule` と `/unschedule <kind>`。`daily_report` / `self_initiative` / `memory_tidy` の名前は奪えない（`RESERVED_SCHEDULE_KINDS`）
 - **外部イベントの入口は HTTP の `POST /events`**（`{source, payload}`）。送り元の形を変えられない webhook 用に `POST /events/:source`（本文まるごとが payload）もある。chat からは `/event <source> <本文>`
   - 開いているのは 127.0.0.1 だけ。外から叩かせるならトンネル・リバースプロキシ側に境界を置く（ここで認証を足す前に、それが方針か境界かを考える）
   - **127.0.0.1 で待つことはブラウザからの保護にならない。** 人間が開いた任意のページが単純リクエスト（`text/plain` や form の POST）を投げられ、応答が読めなくても送信は成立する。状態を変える POST を足すときは、`validator('json', ...)`（`hono-openapi` の validator。#22 で `@hono/zod-validator` の `zValidator` から差し替えた）を付けるか、本文の無い経路なら `deliberateClient`（`apps/daemon/src/app.ts`）を必ず通すこと — でないと他人がクローンのターンを起こせる。塞ぐのは能力側ではなく実行環境の境界である
