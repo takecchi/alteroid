@@ -35,6 +35,11 @@ import type {
 } from "./recall.js";
 import { defaultScoringStrategy } from "./strategies/scoring.js";
 import { decideAnnTruncation } from "./ann-truncation.js";
+import {
+  DEFAULT_RECALL_OUTPUT_VALIDATION,
+  validateRecallOutput,
+} from "./recall-output-validation.js";
+import type { RecallOutputValidationMode } from "./recall-output-validation.js";
 
 /**
  * `recall()` の実装（roadmap.md 段階4「想起」・段階5「説明」）。
@@ -71,6 +76,11 @@ export interface RecallRuntimeDeps {
   embeddingProvider: EmbeddingProvider;
   clock: Clock;
   tokenCounter: TokenCounter;
+  /**
+   * `recall()` の戻り値を zod で検証するときの倒れ方（Issue #131、ADR 0098）。
+   * 省略時は {@link DEFAULT_RECALL_OUTPUT_VALIDATION}（`"report"`）——既定では投げない。
+   */
+  outputValidation?: RecallOutputValidationMode;
 }
 
 type ScoredCandidate = {
@@ -899,9 +909,20 @@ export async function runRecall(
   //
   // 目次帯は budget の対象外なので（RecallBudget の doc 参照）、分子に含めると
   // 「予算の何割を使ったか」という問いに対して、予算が縛っていない量まで数えることになり、
-  // 100% を超える——実際に 248% という「割合として成立しない値」が出ていた。
-  // 段4の切り詰めが memories tier を予算内に収めることを保証しているので、
-  // 分子を memories tier に限れば share は 1 を超えない。
+  // 100% を超える——実際に 248% という「割合として成立しない値」が出ていた。目次帯を
+  // 分子から外したことで、その問題（248%）自体は直っている。
+  //
+  // ⚠ ただし「だから share は 1 を超えない」は偽である（ADR 0097。この段落は
+  // ADR 0097 が拾い残していたコメントで、以前は「段4の切り詰めが memories tier を
+  // 予算内に収めることを保証しているので、分子を memories tier に限れば share は
+  // 1 を超えない」と書いていたが、これは実際には成り立たない——**`share` は 1 を
+  // 超えうる。超えたときは `budgetExceeded` が `true` になる。**
+  // 理由は、段4の切り詰め（強制）と `share` の計測が**別の数え方**をしているから
+  // である: 強制側（段4の `fits`/`unitTokens`）は digest ごとに `tokenCounter.count()`
+  // を呼びその合計で判定するが、`share` の分子は `digests.join("\n")` を1回だけ
+  // `count()` する（連結後の量）。改行区切り文字の分だけ後者が前者を上回ることがあり、
+  // 非CJK20字の digest 2件・`maxMemoryTokens: 10` で `share = 1.1` が実測されている
+  // （`recall-pipeline.test.ts` の `usage.budgetExceeded` 節）。ADR 0098 参照。
   //
   // 「この応答は全体でいくらかかったか」は別の問いであり、`chars` と `indexChars` が答える。
   const tokenBudget = effectiveTokenBudget(budget);
@@ -989,7 +1010,14 @@ export async function runRecall(
     returnedMemoryIds: finalMemories.map((m) => m.memoryId),
   });
 
-  return {
+  // -------------------------------------------------------------------
+  // 出力検証（Issue #131、ADR 0098）: `recall()` の戻り値は、これまで一度も zod で
+  // 検証されていなかった（fail-open）。段6（記録）は既に書き込み終えている——検証は
+  // それより後に行う純関数の口（`validateRecallOutput`）に通すだけで、`draft` の値は
+  // 一切書き換えない（`usage.share` が 1 を超えていても丸めない。ADR 0097 が記録した
+  // 欠陥を、検証を足したことで隠さないため）。
+  // -------------------------------------------------------------------
+  const draft: RecallResult = {
     recallId,
     memories: finalMemories,
     omitted,
@@ -997,4 +1025,9 @@ export async function runRecall(
     usage,
     explain: { stages },
   };
+  const outputValidationMode = deps.outputValidation ?? DEFAULT_RECALL_OUTPUT_VALIDATION;
+  const outputValidationReport = validateRecallOutput(draft, outputValidationMode, recallId);
+  return outputValidationReport === undefined
+    ? draft
+    : { ...draft, outputValidation: outputValidationReport };
 }

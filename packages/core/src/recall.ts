@@ -953,6 +953,52 @@ export const RecallScopeSchema = z.object({
   occurredBefore: z.date().optional(),
 }) satisfies z.ZodType<RecallScope>;
 
+/**
+ * `recall()` の戻り値そのものを zod で検証した結果の1項目（Issue #131、ADR 0098）。
+ *
+ * `path` は不正だったフィールドをドット連結で示す（例: `"usage.estimatedTokens"`）。
+ * `code` / `message` は zod の `safeParse` が返す `error.issues` の対応する欄をそのまま写す。
+ */
+export interface RecallOutputValidationIssue {
+  path: string;
+  code: string;
+  message: string;
+}
+
+export const RecallOutputValidationIssueSchema = z.object({
+  path: z.string(),
+  code: z.string(),
+  message: z.string(),
+}) satisfies z.ZodType<RecallOutputValidationIssue>;
+
+/**
+ * `recall()` の戻り値を zod で検証した結果（Issue #131、ADR 0098）。
+ *
+ * **この欄の「無い」は3種類ある（ADR 0008 の「無い」の分類の適用。潰さない）:**
+ * - **`RecallResult.outputValidation` 自体が無い（`undefined`）** — 検証していない
+ *   （`RecallRuntimeDeps.outputValidation: "off"`）。
+ * - `{ ok: true, issues: [] }` — 検証して通った。
+ * - `{ ok: false, issues: [...] }` — 検証して落ちた。`issues` は `ok: false` のときだけ
+ *   非空（`ok: true` のときは必ず空配列）。
+ *
+ * **⚠ `share > 1`（`usage.share`）はこの検証が弾く対象ではない。** ADR 0097 が
+ * `RecallUsageSchema.share` から `.max(1)` を意図的に外している——`share` が 1 を超えるのは
+ * 契約違反ではなく、実在する正しい値である（強制側と計測側で数え方が違うため）。
+ * `RecallResultSchema`（この検証が使うスキーマ）は `.max(1)` を持たないので、
+ * `share: 1.1` のような値は `ok: true` として通る。**この検証は「壊れた値を隠す」ためではなく
+ * 「壊れた値を見えるようにする」ためにある**——`usage` の値そのものを丸めたり書き換えたりは
+ * 一切しない。
+ */
+export interface RecallOutputValidation {
+  ok: boolean;
+  issues: RecallOutputValidationIssue[];
+}
+
+export const RecallOutputValidationSchema = z.object({
+  ok: z.boolean(),
+  issues: z.array(RecallOutputValidationIssueSchema),
+}) satisfies z.ZodType<RecallOutputValidation>;
+
 export interface RecallResult {
   /** 記録された recall の識別子。observe() の usage 報告で使う。 */
   recallId: RecallId;
@@ -961,6 +1007,19 @@ export interface RecallResult {
   index: IndexBand;
   usage: RecallUsage;
   explain: { stages: StageTrace[] };
+  /**
+   * `recall()` の戻り値（この欄自身を除く）を zod で検証した結果（Issue #131、ADR 0098）。
+   *
+   * **additive。既存欄の意味は変えない。** 省略時（`undefined`）は「検証していない」
+   * （`RecallRuntimeDeps.outputValidation: "off"`）であり、「検証して通った」とは違う——
+   * {@link RecallOutputValidation} の doc の3状態を見ること。
+   *
+   * **既定（`RecallRuntimeDeps.outputValidation` を省略したとき）は `"report"` であり、
+   * 検証に落ちても `recall()` は例外を投げない。** 落ちたことは `outputValidation.ok`
+   * を見た呼び出し側が判断する。投げさせたい場合は `RecallRuntimeDeps.outputValidation`
+   * に `"throw"` を渡す（`RecallOutputValidationError` を参照）。
+   */
+  outputValidation?: RecallOutputValidation;
 }
 
 export const RecallResultSchema = z.object({
@@ -970,6 +1029,7 @@ export const RecallResultSchema = z.object({
   index: IndexBandSchema,
   usage: RecallUsageSchema,
   explain: z.object({ stages: z.array(StageTraceSchema) }),
+  outputValidation: RecallOutputValidationSchema.optional(),
 }) satisfies z.ZodType<RecallResult>;
 
 // ---------------------------------------------------------------------------

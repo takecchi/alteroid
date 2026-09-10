@@ -411,6 +411,13 @@ describe("recall() — 歯②: 既定(channels 未指定)は ADR 0084 以前と1
           { stage: "record", executed: true },
         ],
       },
+      // ⚠ ADR 0098（Issue #131）で足した欄。**この歯が実際に拾ったのがこの変化である**
+      // ——出力検証の報告を戻り値に載せたことで、`RecallResult` を JSON 直列化した姿は
+      // もう「ADR 0084 以前と1バイトも同じ」ではない（既存欄はどれも変わっていないが、
+      // 欄が1つ増えた）。⛔ 期待値を黙って緩めるのではなく、**増えたのがこの1欄だけで
+      // あることをリテラルで固定し直す。** 既定モードは `"report"` なので、正しい出力に
+      // 対しては必ず `{ ok: true, issues: [] }` になる。
+      outputValidation: { ok: true, issues: [] },
     };
 
     // JSON 往復で Date 等を安定した plain data に落とし、`result` 自体への生きた参照も断つ。

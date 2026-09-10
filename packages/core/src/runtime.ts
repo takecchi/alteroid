@@ -42,6 +42,7 @@ import type { NewObservation, Observation } from "./observation.js";
 import type { OutboxJobRecord } from "./outbox.js";
 import { runRecall } from "./recall-runtime.js";
 import type { RecallQuery, RecallResult } from "./recall.js";
+import type { RecallOutputValidationMode } from "./recall-output-validation.js";
 import { classifyReextractTargets, classifySupersedeFailure } from "./strategies/reextract.js";
 import type { ReextractSkip } from "./strategies/reextract.js";
 import {
@@ -152,6 +153,12 @@ export interface RuntimeDeps {
    * `heuristicTokenCounter`（文字数ベースの推定、`counter: 'heuristic'`）。
    */
   tokenCounter?: TokenCounter;
+  /**
+   * `recall()` の戻り値を zod で検証するときの倒れ方（Issue #131、ADR 0098）。
+   * 省略時は `"report"`（{@link DEFAULT_RECALL_OUTPUT_VALIDATION}）——既定では投げない。
+   * `recall-runtime.js` の `RecallRuntimeDeps.outputValidation` へそのまま渡る。
+   */
+  outputValidation?: RecallOutputValidationMode;
 }
 
 export interface ObserveResult {
@@ -1255,6 +1262,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       embeddingProvider: deps.embeddingProvider,
       clock,
       tokenCounter,
+      outputValidation: deps.outputValidation,
     });
   }
 

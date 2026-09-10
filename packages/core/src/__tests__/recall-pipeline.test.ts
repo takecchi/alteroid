@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { Ctx } from "../ctx.js";
+import type { TokenCounter } from "../interfaces/token-counter.js";
 import type { VectorStore } from "../interfaces/vector-store.js";
 import { defaultDecayStrategy } from "../strategies/decay.js";
 import { heuristicTokenCounter } from "../heuristic-token-counter.js";
 import type { Memory, MemoryStatus, NewMemory } from "../memory.js";
 import { createRuntime } from "../runtime.js";
+import { RecallOutputValidationError } from "../recall-output-validation.js";
+import type { RecallOutputValidationMode } from "../recall-output-validation.js";
 import { createFakeRuntimeStores } from "./runtime-fakes.js";
 
 /**
@@ -54,7 +57,13 @@ function newMemory(overrides: Partial<NewMemory> = {}): NewMemory {
   };
 }
 
-function buildRuntime() {
+/**
+ * `overrides.tokenCounter` / `overrides.outputValidation` は Issue #131（ADR 0098）の歯のため
+ * に足した——既存の呼び出し（引数無しの `buildRuntime()`）は1バイトも変わらない。
+ */
+function buildRuntime(
+  overrides: { tokenCounter?: TokenCounter; outputValidation?: RecallOutputValidationMode } = {},
+) {
   const stores = createFakeRuntimeStores();
   const runtime = createRuntime({
     memoryStore: stores.memoryStore,
@@ -73,6 +82,8 @@ function buildRuntime() {
     embeddingProvider: stores.embeddingProvider,
     hashContent: (content: string) => `sha256(${content})`,
     clock: { now: () => NOW },
+    tokenCounter: overrides.tokenCounter,
+    outputValidation: overrides.outputValidation,
   });
   return { runtime, stores };
 }
@@ -1175,6 +1186,39 @@ describe("recall() — usage.budgetExceeded（Issue #108「案3」）", () => {
   });
 
   /**
+   * 🔑 T3（Issue #131、ADR 0098。⭐最重要）: ADR 0097 が記録した欠陥（`share` が 1 を
+   * 超えうる）を、出力検証が**隠さない**ことを確かめる。
+   *
+   * 上の歯（歯1）と**まったく同じ入力**（非CJK20字の digest 2件・`maxMemoryTokens: 10`）で、
+   * 出力検証（既定 `"report"`）を通した後も `usage.share` が `1.1` のまま・`budgetExceeded` が
+   * `true` のまま・かつ `outputValidation.ok === true` であることを測る。
+   *
+   * **`ok === true` が肝である**——`share > 1` は ADR 0097 により合法な値であり、
+   * `RecallResultSchema`（`RecallUsageSchema.share` は `.max(1)` を持たない）はこれを
+   * 弾かない。この歯が無いと、「`share > 1` を誤って不正と判定する」実装（`.max(1)` を
+   * 戻す変異など）が緑のまま入り込む——ADR 0097 が直したはずの欠陥を、出力検証が
+   * こっそり再導入することになる。
+   */
+  it("T3: ADR 0097 の share>1（非CJK20字の digest 2件・maxMemoryTokens:10）は出力検証でも弾かれない", async () => {
+    const digestA = "01234567890123456789";
+    const digestB = "abcdefghijklmnopqrst";
+
+    const { runtime, stores } = buildRuntime();
+    await createEmbeddedMemory(stores, [1, 0], { digest: digestA });
+    await createEmbeddedMemory(stores, [1, 0], { digest: digestB });
+
+    const result = await runtime.recall(ctx, {
+      vector: [1, 0],
+      budget: { maxMemoryTokens: 10 },
+    });
+
+    expect(result.usage.share).toBeCloseTo(1.1, 10);
+    expect(result.usage.budgetExceeded).toBe(true);
+    // 出力検証は既定 "report" で走っている——値は丸められていない。
+    expect(result.outputValidation).toEqual({ ok: true, issues: [] });
+  });
+
+  /**
    * ⭐ 歯2（ADR 0097。対照・偽陽性を潰すため）: 歯1 と**まったく同じ digest 2件**を使い、
    * `maxMemoryTokens` だけを 11（＝連結して測った量そのもの）に変える。
    *
@@ -1392,5 +1436,109 @@ describe("recall() — RecallQuerySchema による入力検証", () => {
       // @ts-expect-error 意図的に不正な値を渡す
       runtime.recall(ctx, { excludeProvenanceKinds: ["fabricated"] }),
     ).rejects.toThrow();
+  });
+});
+
+/**
+ * `recall()` の**出力**検証（Issue #131、ADR 0098）。
+ *
+ * ここまでこのファイルが測ってきたのは入力側（`RecallQuerySchema`）だけだった——
+ * `recall()` が返す `RecallResult` は、実行時には一度も自分自身のスキーマで検証されて
+ * いなかった（fail-open）。ADR 0098 でその経路を足した。
+ *
+ * **🔴 壊れた出力の作り方に「実在する拡張点」を使う。** モンキーパッチではなく、
+ * 呼び出し側が本当に差せる `RuntimeDeps.tokenCounter` に**非整数を返す実装**を渡す
+ * ——`usage.estimatedTokens` は `z.number().int()` なので、これは呼び出し側が実際に
+ * 踏める契約違反である（`TokenCounter` の戻り値が整数であることを強制する仕組みは
+ * 実行時には無い。型はコンパイル時にしか効かない）。
+ *
+ * **⚠ `share > 1` はここでの「契約違反」ではない**——ADR 0097 が `.max(1)` を意図的に
+ * 外している。そちらは上の `T3` が「弾かれないこと」の側で測っている。
+ */
+describe("recall() — 出力検証（Issue #131、ADR 0098）", () => {
+  /** 非整数のトークン数を返す `TokenCounter`。`usage.estimatedTokens` の `int()` を破る。 */
+  const fractionalTokenCounter: TokenCounter = {
+    count: () => ({ tokens: 2.5, counter: "heuristic" }),
+  };
+
+  it("T1: 契約を破った出力（usage.estimatedTokens が非整数）を検出する", async () => {
+    const { runtime, stores } = buildRuntime({ tokenCounter: fractionalTokenCounter });
+    await createEmbeddedMemory(stores, [1, 0]);
+
+    const result = await runtime.recall(ctx, { vector: [1, 0] });
+
+    // 値は書き換えられていない——検証は読むだけである（丸めない・捨てない）。
+    expect(result.usage.estimatedTokens).toBe(2.5);
+    expect(result.outputValidation?.ok).toBe(false);
+    expect(result.outputValidation?.issues.map((issue) => issue.path)).toContain(
+      "usage.estimatedTokens",
+    );
+  });
+
+  /**
+   * ⭐ T2（対照。これが無いと「何でも弾く」実装が T1 だけで緑になる）。
+   */
+  it("T2: 正しい出力は素通りする（ok: true・issues は空）", async () => {
+    const { runtime, stores } = buildRuntime();
+    await createEmbeddedMemory(stores, [1, 0]);
+
+    const result = await runtime.recall(ctx, { vector: [1, 0] });
+
+    expect(result.outputValidation).toEqual({ ok: true, issues: [] });
+  });
+
+  /**
+   * 「検証していない」と「検証して通った」を潰さない（ADR 0008 の「無い」の分類の適用）。
+   * `"off"` では欄そのものが無い——`{ ok: true }` にはならない。
+   */
+  it('T4: "off" では欄そのものが無い（未検証と通過を潰さない）。値は素通りする', async () => {
+    const { runtime, stores } = buildRuntime({
+      tokenCounter: fractionalTokenCounter,
+      outputValidation: "off",
+    });
+    await createEmbeddedMemory(stores, [1, 0]);
+
+    const result = await runtime.recall(ctx, { vector: [1, 0] });
+
+    expect(result.outputValidation).toBeUndefined();
+    // 「検証していない」だけであって、壊れた値は依然としてそのまま返っている。
+    expect(result.usage.estimatedTokens).toBe(2.5);
+  });
+
+  it('T5: "throw" では RecallOutputValidationError を投げ、issues と recallId を載せる', async () => {
+    const { runtime, stores } = buildRuntime({
+      tokenCounter: fractionalTokenCounter,
+      outputValidation: "throw",
+    });
+    await createEmbeddedMemory(stores, [1, 0]);
+
+    const err = await runtime.recall(ctx, { vector: [1, 0] }).then(
+      () => {
+        throw new Error("recall() が resolve した——投げるはずだった");
+      },
+      (caught: unknown) => caught,
+    );
+
+    expect(err).toBeInstanceOf(RecallOutputValidationError);
+    const validationError = err as RecallOutputValidationError;
+    expect(validationError.issues.length).toBeGreaterThan(0);
+    // 段6（記録）は検証より前に走っている——呼び出し側が相関を取れるように id を載せる。
+    expect(validationError.recallId).toBeTruthy();
+  });
+
+  /**
+   * 🔴 倒れ方の決定そのものの歯（ADR 0098）: **既定は `"throw"` ではない。**
+   * `recall()` は使う側の主経路であり、既定を投げる形にすると
+   * 「いままで（誤った値のまま）動いていた呼び出しが例外になる」破壊的変更になる。
+   */
+  it("T6: モードを渡さないとき、検証に落ちても recall() は投げない（既定は report）", async () => {
+    const { runtime, stores } = buildRuntime({ tokenCounter: fractionalTokenCounter });
+    await createEmbeddedMemory(stores, [1, 0]);
+
+    const result = await runtime.recall(ctx, { vector: [1, 0] });
+
+    expect(result.outputValidation?.ok).toBe(false);
+    // 「投げなかった」ことそのもの——ここへ到達している時点で resolve している。
+    expect(result.memories).toHaveLength(1);
   });
 });
