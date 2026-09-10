@@ -212,7 +212,12 @@ describe('countSupersedingReports', () => {
       // 「あなたが読んでいるものは古い」を、いちばん強い向きで嘘として出す。
       list: list([report('c-1', '2026-09-09T12:00:00Z')]),
       managerId: MANAGER,
-      afterAts: ['まったく時刻ではない'],
+      // **読める `at` を1つ混ぜてある。** 壊れた1件だけを渡すと `afterMs` は
+      // `-Infinity` のままで、`at` が1つも無いときの門のほうで `uncountable`
+      // になる ⟹ **測りたい門（壊れた `at` を見つける側）を通らずに緑になる。**
+      // 変異試験で実際にこの形の偽陽性を踏んだので、読める1件を足して
+      // 「`-Infinity` では説明できない」形にしてある。
+      afterAts: ['2026-09-09T11:00:00Z', 'まったく時刻ではない'],
       excludeIds: new Set(),
     });
     const message = [

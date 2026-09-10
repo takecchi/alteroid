@@ -192,7 +192,7 @@ describe('後続の報告が台帳に在るとき、プロンプトに件数の�
  * ならない。
  */
 describe('後続が0件で数え切れたときは、プロンプトを1文字も変えない', () => {
-  it('台帳に他の行が無ければ、超過報告の断り書きが1文字も足されない', async () => {
+  it('台帳に他の行が無ければ、この節の語彙がプロンプトに1つも現れない', async () => {
     const s = bootClone(createMemoryStores(), pool());
 
     s.clone.post({
@@ -206,8 +206,18 @@ describe('後続が0件で数え切れたときは、プロンプトを1文字�
     await waitFor(() => s.inputs.length > 0, 'ターン');
 
     const text = s.inputs.join('\n');
-    // superseded / uncountable のどちらの文面にも共通して現れる断片で、
-    // これが無ければこの節は1文字も足されていない。
+    // **番兵はこの節の主題語（`後続`）にしてある。** 最初は
+    // `'この合図より後'` を見ていたが、**変異試験で通り抜けた** ——
+    // `describeSuperseded` が `'none'` でも別の文言を返すように壊すと、
+    // その断片を含まないので緑のままになる。⟹ 「文面のどれか1つが出ない」
+    // ではなく「この節の語彙が1つも出ない」を測る。
+    //
+    // **バイト単位の「1文字も足さない」を持つのはこの歯ではない。**
+    // `superseded.test.ts` の
+    // `0件・障害なし ⟹ none で、describeSuperseded は空文字を返す`
+    // が `toBe('')` で押さえており、こちらはその値が配線を素通りして
+    // ターンの入口まで来ることだけを測る。
+    expect(text).not.toContain('後続');
     expect(text).not.toContain('この合図より後');
     // それでも本文そのものは変わらず届く。
     expect(text).toContain('終わった');
