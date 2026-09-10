@@ -3967,6 +3967,9 @@
                           "answer": {
                             "type": "string"
                           },
+                          "conversationId": {
+                            "type": "string"
+                          },
                           "updatedAt": {
                             "type": "string",
                             "format": "date-time",
