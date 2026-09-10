@@ -71,6 +71,24 @@ jobs:
       # 閾値の根拠・言えないことは `scripts/check-web-bundle-size.mjs` の doc を見よ。
       - run: pnpm check:web-bundle-size
 
+      # **`apps/web` の生成物の CSS に、コメントの誤拾いで生まれた不正な宣言が
+      # 入っていないことを見る（もう1つの結果側の歯）。**
+      #
+      # Tailwind のスキャナはソースコードの「コメントの中」に書かれたクラス名も
+      # 拾う。省略記号などのプレースホルダを混ぜたコメント（`pr-[calc(...+
+      # var(--safe-right))]` など）を書くと、コンパイル後の CSS に
+      # `padding-right:calc(...+var(--safe-right))` という不正な宣言がそのまま
+      # 出る事故が実際に起きた（#317）。不正な宣言はブラウザが黙って捨てるので、
+      # 画面には何も起きない。検査語の選び方・言えないことは
+      # `scripts/check-web-css-comment-classnames-core.mjs` の doc を見よ。
+      #
+      # **この検査は #317 で入ったが、`check:web-css-comment-classnames` は
+      # package.json にしかなく、`scripts/verify.mjs`（実体は `verify-core.mjs`
+      # の STEPS）にも ci.yml にも呼ばれていなかった。在るのに効いていない道具は、
+      # 静かに失敗する（`AGENTS.md`「静かに失敗する道具」— #646 の
+      # `check:sdk-quotes` と同じ形の穴だった）。**
+      - run: pnpm check:web-css-comment-classnames
+
       # **コードと OpenAPI spec がずれたまま気づかない状態を作らない。**
       # spec は経路の zod スキーマから機械生成され、`pnpm build` が毎回書き直す。
       # つまりここに差分が出るのは「コードを変えたのに commit した spec が古い」

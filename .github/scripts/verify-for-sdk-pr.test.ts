@@ -14,7 +14,7 @@
  *
  * ## ⚠️ この歯が測っているものと、測っていないもの
  *
- * **本体は、スクリプトが `STEPS` の9本を回すことを、実際に走らせた出力
+ * **本体は、スクリプトが `STEPS` の本数ぶんを回すことを、実際に走らせた出力
  * （`verify.md`）から測る。** ソースを読んで数えてはいない。
  *
  * **それとは別に、末尾の `describe('ワークフローからの配線')` が
@@ -235,7 +235,7 @@ describe('verify-for-sdk-pr.sh', () => {
     expect(result.exitCode).toBe(0);
     const out = parseGithubOutput(s.outputFile);
     expect(out.ok).toBe('true');
-    // 9本すべてが「OK」の見出しになっている
+    // STEPS の本数ぶんすべてが「OK」の見出しになっている
     const verifyMd = readVerifyMd(s);
     const okCount = verifyMd.split('\n').filter((l) => /^### `[^`]+` — OK$/.test(l)).length;
     expect(okCount).toBe(STEPS.length);
@@ -245,7 +245,7 @@ describe('verify-for-sdk-pr.sh', () => {
    * 落ちた門の名前を要約として先頭に出すこと。
    *
    * **なぜ数ではなく名前か。** `open-claude-sdk-pr.sh` は `SDK_VERIFY_OK != 'true'` の
-   * 一値で PR を draft にする。その1つの値は「9本のどれかが本当に落ちた」と
+   * 一値で PR を draft にする。その1つの値は「どれかが本当に落ちた」と
    * 「`openapi.json` が変わっただけ」という**性質の違う状態を1つに潰している**。
    * 本文に門の名前が出ていれば、draft を受け取った人がその場で見分けられる。
    * **「1本落ちた」という数だけでは、また潰れる。**
@@ -336,7 +336,7 @@ describe('verify-for-sdk-pr.sh', () => {
  * 上の本体（`verify.md` を数える歯）とは種類が違うので、describe を分けてある。
  *
  * **それでも置くのは、穴が塞がるからではなく、穴が小さくなるからである。**
- * `run:` の1行が消えるか別のスクリプトへ差し替えられれば、9本を回す本体の歯は
+ * `run:` の1行が消えるか別のスクリプトへ差し替えられれば、STEPS を回す本体の歯は
  * 何も言わない（そちらはスクリプト単体を測っているので、呼ばれなくなっても緑）。
  * ここで固定文字列の有無を見ておけば、その2つは落ちる。
  *
