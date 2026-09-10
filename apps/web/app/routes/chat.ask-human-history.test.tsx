@@ -93,7 +93,12 @@ describe('リロード後（＝手元の lines を経由しない状態）でも
         return json({
           conversationId: CONVERSATION_ID,
           messages: [
-            { id: 'm1', at: '2026-08-20T00:00:00.000Z', role: 'inbound', text: '進めてよいか確認して' },
+            {
+              id: 'm1',
+              at: '2026-08-20T00:00:00.000Z',
+              role: 'inbound',
+              text: '進めてよいか確認して',
+            },
           ],
           scanned: 1,
           reachedStart: true,
@@ -135,7 +140,12 @@ describe('リロード後（＝手元の lines を経由しない状態）でも
   it('回答済みの確認は、質問と回答の両方が時刻順に出る', async () => {
     const route: Route = (url) => {
       if (url.includes(`/conversations/${CONVERSATION_ID}`)) {
-        return json({ conversationId: CONVERSATION_ID, messages: [], scanned: 0, reachedStart: true });
+        return json({
+          conversationId: CONVERSATION_ID,
+          messages: [],
+          scanned: 0,
+          reachedStart: true,
+        });
       }
       if (url.includes('/approvals')) {
         return json({
@@ -221,7 +231,12 @@ describe('二重表示を防ぐ（生配信 → 承認の台帳、の順で同�
         );
       }
       if (url.includes(`/conversations/${CONVERSATION_ID}`)) {
-        return json({ conversationId: CONVERSATION_ID, messages: [], scanned: 0, reachedStart: true });
+        return json({
+          conversationId: CONVERSATION_ID,
+          messages: [],
+          scanned: 0,
+          reachedStart: true,
+        });
       }
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       if (url.includes('/approvals')) {
@@ -240,8 +255,7 @@ describe('二重表示を防ぐ（生配信 → 承認の台帳、の順で同�
       return undefined;
     };
     const stub = stubFetch(route);
-    const approvalsFetchCount = () =>
-      stub.calls.filter((url) => url.includes('/approvals')).length;
+    const approvalsFetchCount = () => stub.calls.filter((url) => url.includes('/approvals')).length;
 
     renderChat(`/chat/${CONVERSATION_ID}`);
 

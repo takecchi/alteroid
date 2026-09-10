@@ -481,7 +481,9 @@ describe('承認カードに、確認が上がった会話を出す（issue #782
       conversation: () =>
         json({
           conversationId: 'conv-x',
-          messages: [{ id: 'm1', at: '2026-08-19T09:00:00.000Z', role: 'inbound', text: '人間の発言だけ' }],
+          messages: [
+            { id: 'm1', at: '2026-08-19T09:00:00.000Z', role: 'inbound', text: '人間の発言だけ' },
+          ],
           scanned: 1,
           reachedStart: true,
         }),
@@ -504,7 +506,12 @@ describe('承認カードに、確認が上がった会話を出す（issue #782
         json({
           conversationId: 'conv-x',
           messages: [
-            { id: 'm1', at: '2026-08-19T09:00:00.000Z', role: 'inbound', text: '本番に出してよいか?' },
+            {
+              id: 'm1',
+              at: '2026-08-19T09:00:00.000Z',
+              role: 'inbound',
+              text: '本番に出してよいか?',
+            },
             { id: 'm2', at: '2026-08-19T09:05:00.000Z', role: 'outbound', text: 'はい、進めます' },
           ],
           scanned: 2,

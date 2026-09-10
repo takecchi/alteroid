@@ -2424,9 +2424,9 @@ describe('GET /approvals の conversationId（issue #782 の2）', () => {
     });
 
     // 既定（pending=true）では回答済みが落ちる。
-    const pendingOnly = (await (
-      await app.request(`/approvals?conversationId=conv-a`)
-    ).json()) as { approvals: { id: string }[] };
+    const pendingOnly = (await (await app.request(`/approvals?conversationId=conv-a`)).json()) as {
+      approvals: { id: string }[];
+    };
     expect(pendingOnly.approvals.map((a) => a.id)).toEqual(['ap-1']);
 
     // pending=false で両方——チャット画面が質問と回答の両方を復元するために
