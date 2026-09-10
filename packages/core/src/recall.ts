@@ -29,8 +29,8 @@ export interface FilteredOmission {
   kind: "filtered";
   /**
    * `"superseded"` と `"forgotten"` を分けて持つ（ADR 0027）。両方とも status ゲートで
-   * 落ちる点は同じだが、次の一手が違う——`superseded` はより良い抽出に置き換えられた
-   * という**機構の都合**（`superseded_by_id` で置き換え先を辿れる）、`forgotten` は
+   * 落ちる点は同じだが、次の一手が違う——`superseded` はより良い抽出への置き換え、
+   * または統合という**機構の都合**（`superseded_by_id` で置き換え先を辿れる）、`forgotten` は
    * 利用者が明示的に忘れさせたという**製品の振る舞い**（指す先を持たない）。1つの
    * `"status"` に束ねると、「利用者が忘れてほしいと言ったのか、こちらが作り直したのか」を
    * 呼び出し側が判定できなくなる。`"archived"` が既に別条件として独立している先例に倣う。
@@ -487,7 +487,7 @@ export interface ScopeAggregate {
   /** status = 'archived' で「スコープを定義するフィルタ」により落ちた件数。 */
   filteredArchived: { count: number; countKind: CountKind };
   /**
-   * status = 'superseded' で落ちた件数——**機構の都合**（より良い抽出に置き換えられた）。
+   * status = 'superseded' で落ちた件数——**機構の都合**（より良い抽出への置き換え、または統合）。
    * `filteredForgotten` とは分けて持つ（ADR 0027）。ADR 0008 の判定基準（区別があると
    * 呼び出し側の次の一手が変わるか）に照らすと変わる——`superseded` は置き換え先
    * （`superseded_by_id`）を辿れば「なぜ無いのか」の説明が付くのに対し、`forgotten` は

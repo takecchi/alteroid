@@ -9,9 +9,15 @@ import type { Ctx, LLMProvider, LLMResponse, PromptSpec, StructuredRequest } fro
  * 差し替えて検査する。**同じ入力には常に同じ出力を返す**（LLM 呼び出しの非決定性を
  * テストに持ち込まない）。
  *
- * この実装は `extraction.ts` の `ExtractionResultSchema`（`{ memories: [...] }`）の形しか
- * 知らない。それ以外のスキーマを渡された場合は例外を投げる——「知らない形に遭遇したら
- * 黙って何か返す」ことをしない（原則の姿3の適用）。
+ * この実装は `extraction.ts` の `ExtractionResultSchema`（`{ memories: [...] }`）と
+ * `runtime.consolidate`（Issue #103、ADR 0089）の統合スキーマ（`{ content, digest?, tags? }`、
+ * `strategies/consolidate.ts` の `ConsolidationLLMResultSchema`）の2つの形だけを知っている。
+ * それ以外のスキーマを渡された場合は例外を投げる——「知らない形に遭遇したら黙って何か返す」
+ * ことをしない（原則の姿3の適用）。
+ *
+ * ⚠ **既存の extraction 経路のふるまいは1ミリも変えていない**——下の分岐は「まず extraction の
+ * 形を試し、通ればそのまま返る」という元のコードパスをそのまま保ち、通らなかった場合にだけ
+ * 統合の形を試す**新しい分岐を足しただけ**である（ADR 0089 §9.3）。
  */
 export class DeterministicLLMProvider implements LLMProvider {
   async complete(_ctx: Ctx, req: PromptSpec): Promise<LLMResponse> {
@@ -22,7 +28,8 @@ export class DeterministicLLMProvider implements LLMProvider {
   async completeStructured<T>(_ctx: Ctx, req: StructuredRequest<T>): Promise<T> {
     const userText = req.prompt.messages.find((m) => m.role === "user")?.content ?? "";
     const digest = userText.length > 40 ? `${userText.slice(0, 40)}…` : userText;
-    const candidate = {
+
+    const extractionCandidate = {
       memories: [
         {
           content: userText,
@@ -32,14 +39,26 @@ export class DeterministicLLMProvider implements LLMProvider {
         },
       ],
     };
-    const parsed = req.schema.safeParse(candidate);
-    if (!parsed.success) {
-      throw new Error(
-        "DeterministicLLMProvider: 未対応のスキーマが渡された（extraction.ts の " +
-          "ExtractionResultSchema 以外の形には対応していない）: " +
-          parsed.error.message,
-      );
+    const extractionParsed = req.schema.safeParse(extractionCandidate);
+    if (extractionParsed.success) {
+      return extractionParsed.data;
     }
-    return parsed.data;
+
+    // ADR 0089 §9.3: extraction の形にマッチしなかった場合だけ、統合の形を決定的に試す。
+    // 渡された Memory の content を連結した userText を、そのまま統合結果の content として
+    // 返す——意味を持たせない決定的な stub である（`deterministic` 層の役割はあくまで
+    // 配線・契約の検査。AGENTS.md「provider は3層ある」参照）。
+    const consolidationCandidate = { content: userText, digest, tags: [] };
+    const consolidationParsed = req.schema.safeParse(consolidationCandidate);
+    if (consolidationParsed.success) {
+      return consolidationParsed.data;
+    }
+
+    throw new Error(
+      "DeterministicLLMProvider: 未対応のスキーマが渡された（extraction.ts の " +
+        "ExtractionResultSchema / runtime.consolidate の統合スキーマ以外の形には " +
+        "対応していない）: " +
+        consolidationParsed.error.message,
+    );
   }
 }

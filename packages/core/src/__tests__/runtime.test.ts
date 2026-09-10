@@ -805,6 +805,14 @@ describe("runtime.tick — 対応していない outbox job kind（ADR 0082 / is
    *
    * ⚠ この節の他の4つの歯は時限式では**ない**——`CUSTOM_KIND` は利用者が足した kind であり、
    * `TICK_SUPPORTED_JOB_KINDS` に入ることは無い。kind がいくつ増えても、それらは効き続ける。
+   *
+   * ⚠ 追記（Issue #103、ADR 0089）: **動詞の本体（`Runtime.consolidate`）はこの PR で入った。**
+   * ただし入ったのは `consolidate` という**動詞**の実装だけであり、`tick` にその分岐を足す
+   * 作業（`TICK_SUPPORTED_JOB_KINDS` へ `"consolidate"` を足し、ハンドラを配線すること）は
+   * **含まれていない**——Issue #103 本文が「tick のジョブとして回せる形は別途 issue を立てる」
+   * と明示しているため（ADR 0089 §4）。**この歯が測っているのは *tick の分岐* であり、
+   * それはまだ無い。**下のアサーションは1文字も変えていない——この段落は、次にこの歯を
+   * 読む人が「時限式が（本体が入ったのに）不発だった」と誤読しないための追記に過ぎない。
    */
   it.each(["consolidate", "reflect"])(
     "⏳時限式の歯: '%s' はいまは tick に分岐が無く unsupported に出る（本体が入ったらこの歯を書き換えること）",

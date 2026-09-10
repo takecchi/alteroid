@@ -2,7 +2,11 @@ import { systemClock } from "./clock.js";
 import type { Clock } from "./interfaces/clock.js";
 import type { Ctx } from "./ctx.js";
 import type { EventActor } from "./event.js";
-import { buildNewMemoryFromCandidate, extractCandidates } from "./extraction.js";
+import {
+  buildNewMemoryFromCandidate,
+  describeExtractionFailure,
+  extractCandidates,
+} from "./extraction.js";
 import type {
   ExtractedMemoryCandidate,
   ExtractionFailure,
@@ -40,6 +44,12 @@ import { runRecall } from "./recall-runtime.js";
 import type { RecallQuery, RecallResult } from "./recall.js";
 import { classifyReextractTargets, classifySupersedeFailure } from "./strategies/reextract.js";
 import type { ReextractSkip } from "./strategies/reextract.js";
+import {
+  buildConsolidatedMemory,
+  buildConsolidationPrompt,
+  ConsolidationLLMResultSchema,
+} from "./strategies/consolidate.js";
+import type { ConsolidationLLMResult } from "./strategies/consolidate.js";
 
 /**
  * `runtime.observe` / `runtime.tick` の実装（roadmap.md 段階3、docs/architecture.md §3.2・§3.3）。
@@ -316,6 +326,104 @@ export interface ForgetResult {
   outcomes: ForgetOutcome[];
 }
 
+/**
+ * `runtime.consolidate` の対象（Issue #103、ADR 0089）。
+ *
+ * `{ memoryIds }` は `forget` の `ForgetTarget` と同じ規律——正規化せず、**重複も入力順も
+ * そのまま保つ**。`{ query, maxCandidates }` は `recall(ctx, query)` を1回呼んで得られた
+ * `memories` の id を順に採る（`maxCandidates` があれば先頭からその件数で切る）。
+ */
+export type ConsolidateTarget =
+  { memoryIds: MemoryId[] } | { query: RecallQuery; maxCandidates?: number };
+
+/**
+ * `runtime.consolidate` の任意オプション（Issue #103、ADR 0089）。
+ */
+export interface ConsolidateOptions {
+  target: ConsolidateTarget;
+  /**
+   * `true` なら **LLM を呼ばず・1件も書かず**、束ねられる対象だけを見て返す
+   * （{@link ConsolidateSourceOutcome} の `"eligible"` を参照）。
+   */
+  dryRun?: boolean;
+  /** `memory_events.actor`。省略時 `{ type: "system" }`。 */
+  actor?: EventActor;
+  /** `memory_events.meta.reason` へ足す補足。省略時は積まない（`ForgetOptions.reason` と同じ形）。 */
+  reason?: string;
+}
+
+/**
+ * `runtime.consolidate` 全体の結末（Issue #103、ADR 0089）。ADR 0008 の「無い」の分類の適用——
+ * 「束ねるものが無かった」「そもそも見ていない」「LLM が落ちた」「下見だけ」を1つの `false` に
+ * 潰さない。
+ *
+ * - `"consolidated"` — 統合先を1件作り、少なくとも1件を `superseded` へ動かした。
+ * - `"nothing_to_consolidate"` — 対象を見た上で、束ねるものが無かった
+ *   （{@link ConsolidateNothingReason} で細分）。
+ * - `"not_examined"` — 対象そのものが空（`memoryIds: []`）、または `query` が0件だった
+ *   ——store の Memory を1件も見ていない。
+ * - `"llm_failed"` — LLM 呼び出しが失敗した。**1件も書いていない。**
+ * - `"dry_run"` — 下見だけを行った。**1件も書いていない。**
+ */
+export type ConsolidateOutcome =
+  "consolidated" | "nothing_to_consolidate" | "not_examined" | "llm_failed" | "dry_run";
+
+/**
+ * `ConsolidateOutcome: "nothing_to_consolidate"` の理由（Issue #103、ADR 0089）。
+ *
+ * - `"no_eligible_sources"` — 渡された/引けた対象のうち `status: 'active'` が0件。
+ * - `"single_eligible_source"` — `active` が1件だけ。1件を1件に「統合」しない。
+ */
+export type ConsolidateNothingReason = "no_eligible_sources" | "single_eligible_source";
+
+/**
+ * `runtime.consolidate` が対象1件ごとに返す結末（Issue #103、ADR 0089）。
+ * `ForgetOutcome` / `ReextractSkip` の語彙にできるだけ揃える——新しい `kind` を作らない。
+ *
+ * - `"superseded"` — この呼び出しで実際に `status` を `superseded` へ動かした。
+ * - `"not_found"` — その id の Memory がそもそも無い（`ForgetOutcome` と同じ意味）。
+ * - `"status_not_active"` — `status !== 'active'`（`forgotten` はここで確実に弾かれる。
+ *   ADR 0089 §1）。
+ * - `"status_changed_concurrently"` — compare-and-swap が破れた（TOCTOU。`reextract` の
+ *   `status_changed_concurrently` と同じ意味）。
+ * - `"failed"` — 競合以外の例外で書き込みが失敗した。**この時点で処理を打ち切る**
+ *   （下の `"not_attempted"` 参照）。
+ * - `"not_attempted"` — それより前の要素が `"failed"` になったため、まだ見ていない。
+ * - `"eligible"` — `dryRun: true` のときだけ出る。`status === 'active'` で、実際に統合される
+ *   側になったであろう対象。
+ */
+export type ConsolidateSourceOutcome =
+  | { memoryId: MemoryId; kind: "superseded"; previousStatus: "active" }
+  | { memoryId: MemoryId; kind: "not_found" }
+  | { memoryId: MemoryId; kind: "status_not_active"; status: Exclude<MemoryStatus, "active"> }
+  | { memoryId: MemoryId; kind: "status_changed_concurrently"; observedStatus: MemoryStatus | null }
+  | { memoryId: MemoryId; kind: "failed"; error: string }
+  | { memoryId: MemoryId; kind: "not_attempted" }
+  | { memoryId: MemoryId; kind: "eligible" };
+
+/**
+ * `runtime.consolidate` の結果（Issue #103、ADR 0089）。
+ *
+ * ⛔ `consolidatedCount` のような派生値を持たない——`ForgetResult` と同じ理由
+ * （`sources` を数えれば得られる）。
+ */
+export interface ConsolidationResult {
+  outcome: ConsolidateOutcome;
+  /** `outcome === "nothing_to_consolidate"` のときだけ非 `null`。それ以外は必ず `null`。 */
+  nothingReason: ConsolidateNothingReason | null;
+  /** 作られた統合先の id。`outcome !== "consolidated"` のときは必ず `null`。 */
+  consolidatedMemoryId: MemoryId | null;
+  /**
+   * 対象1件ごとの結末。**入力と同じ順序・同じ長さ**（`{ memoryIds }` のとき）。
+   * 対象そのものを見ていない（`outcome === "not_examined"`）場合は空配列。
+   */
+  sources: ConsolidateSourceOutcome[];
+  /** LLM を実際に呼んだ回数。`dryRun`・`not_examined`・`nothing_to_consolidate` は必ず `0`。 */
+  llmCalls: number;
+  /** `outcome !== "llm_failed"` のときは必ず `null`（`ReextractResult.extractionFailure` と同じ規律）。 */
+  llmFailure: ExtractionFailure | null;
+}
+
 export interface TickOptions {
   /**
    * claim のリース長（ミリ秒）。`ClaimOutboxJobsOptions.leaseMs`（ADR 0032）へそのまま渡す。
@@ -470,6 +578,46 @@ export interface Runtime {
    * `{ outcomes: [] }` を返す。
    */
   forget(ctx: Ctx, target: ForgetTarget, opts?: ForgetOptions): Promise<ForgetResult>;
+  /**
+   * Issue #103（ADR 0089）: 複数の Memory を1件に統合する（docs/vision.md「5動詞」の1つ）。
+   *
+   * **`forget`/`purge`/減衰のどれでもない、第4の位置——`status: 'superseded'`
+   * （機構の都合）を使う。** 統合元は `status: 'superseded'` + `supersededById: <統合先>` へ
+   * 動き、行も `content` も消えない（`superseded_by_id` で統合先を辿れる。docs/north-star.md
+   * 表4「元を消さない」）。**`forgotten` は絶対に統合元にしない**——利用者が意図して
+   * 忘れさせたものを、機構の都合（統合）で上書きしない（`runtime.forget` の先例と同じ理由）。
+   *
+   * 手順（ADR 0089 §3。**この順序が冪等性と安全性を買っている**）:
+   * 1. `target` を正規化する。`{ memoryIds }` はそのまま（重複・入力順を保つ）。空配列は
+   *    store に一切触れず `outcome: 'not_examined'`。`{ query, maxCandidates }` は
+   *    `recall(ctx, query)` を1回呼び、返った `memories` の id を順に採る
+   *    （`maxCandidates` があれば先頭からその件数で切る）。0件も `not_examined`。
+   * 2. `getMany` で一括読み。無ければ `not_found`、`status !== 'active'` なら
+   *    `status_not_active`、`active` なら eligible。
+   * 3. eligible が0件なら `nothing_to_consolidate`/`no_eligible_sources`、1件だけなら
+   *    `nothing_to_consolidate`/`single_eligible_source`——どちらも `llmCalls: 0`・書き込み無し。
+   *    **これが冪等性の芯**——同じ id 集合で2回目を呼ぶと eligible が0件になり、LLM も
+   *    呼ばず何も書かずに終わる。
+   * 4. `dryRun: true` ならここで打ち切る。eligible は `{ kind: 'eligible' }`、他は2の判定の
+   *    まま。`outcome: 'dry_run'`、`llmCalls: 0`、書き込みゼロ。
+   * 5. LLM を1回呼ぶ（`completeStructured`）。失敗したら `outcome: 'llm_failed'`・
+   *    `llmFailure`・`llmCalls: 1`・書き込みゼロ（失敗を根拠に既存の記憶を置き換えない。
+   *    `ReextractResult.supersededMemoryIds` の doc と同じ規律）。
+   * 6. 統合先を1件作る（`createMemoryWithOutbox`。`buildConsolidatedMemory` 参照）。
+   * 7. eligible を1件ずつ `updateStatusWithEvent` で `superseded` へ CAS する（`reextract` の
+   *    ループと同じ形）。`MemoryStatusConflictError` はその1件だけ `status_changed_concurrently`
+   *    として飛ばして続行、それ以外の例外は `failed` を積んでその場で打ち切り、残りを
+   *    `not_attempted` として返す（投げない。`forget`/ADR 0087 決定5 と同じ）。
+   * 8. `outcome: 'consolidated'`、`consolidatedMemoryId`、`llmCalls: 1`。
+   *
+   * `memory_events.meta.reason` は `superseded` イベントに `'consolidated'` を積む
+   * （`reextract_superseded` に次ぐ2つ目の値、ADR 0074 が予言した形）。`digestSnapshot` は
+   * 積むが **`content` は積まない**（`forget`/`reextract` と同じ規律）。
+   *
+   * ⚠ **`tick()` はこの操作を駆動しない。**`TICK_SUPPORTED_JOB_KINDS` に `'consolidate'` は
+   * 足していない（Issue #103 本文「tick のジョブとして回せる形は別 issue」。ADR 0089 §4）。
+   */
+  consolidate(ctx: Ctx, opts: ConsolidateOptions): Promise<ConsolidationResult>;
 }
 
 function extractObservationPayload(
@@ -1052,5 +1200,242 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     return { outcomes };
   }
 
-  return { observe, tick, recall, reextract, reembed, forget };
+  /**
+   * `Runtime.consolidate` の実装（Issue #103、ADR 0089）。doc コメントは interface 側
+   * （`consolidate` の JSDoc）にある——ここはアルゴリズムそのものだけ。
+   */
+  async function consolidate(ctx: Ctx, opts: ConsolidateOptions): Promise<ConsolidationResult> {
+    const target = opts.target;
+
+    // 1. 対象の正規化。
+    let ids: MemoryId[];
+    if ("memoryIds" in target) {
+      ids = target.memoryIds;
+    } else {
+      const recallResult = await recall(ctx, target.query);
+      const recalledIds = recallResult.memories.map((m) => m.memoryId);
+      ids =
+        target.maxCandidates === undefined
+          ? recalledIds
+          : recalledIds.slice(0, target.maxCandidates);
+    }
+    if (ids.length === 0) {
+      // store に一切触れない——「見ていない」。
+      return {
+        outcome: "not_examined",
+        nothingReason: null,
+        consolidatedMemoryId: null,
+        sources: [],
+        llmCalls: 0,
+        llmFailure: null,
+      };
+    }
+
+    // 2. `getMany` で一括読み、id ごとに「まだ何も書いていない時点」の分類を固定する。
+    type InitialClassification =
+      | { kind: "not_found" }
+      | { kind: "status_not_active"; status: Exclude<MemoryStatus, "active"> }
+      | { kind: "active" };
+
+    const uniqueIds = Array.from(new Set(ids));
+    const found = await deps.memoryStore.getMany(ctx, uniqueIds);
+    const byId = new Map<MemoryId, Memory>();
+    for (const memory of found) {
+      byId.set(memory.id, memory);
+    }
+    const initialById = new Map<MemoryId, InitialClassification>();
+    for (const id of uniqueIds) {
+      const memory = byId.get(id);
+      if (memory === undefined) {
+        initialById.set(id, { kind: "not_found" });
+      } else if (memory.status !== "active") {
+        initialById.set(id, {
+          kind: "status_not_active",
+          status: memory.status as Exclude<MemoryStatus, "active">,
+        });
+      } else {
+        initialById.set(id, { kind: "active" });
+      }
+    }
+
+    /**
+     * `ids`（入力順・重複を保つ）を `ConsolidateSourceOutcome[]` へ写す。`active` と分類された
+     * id だけ `activeOutcome` に委ねる——`not_found`/`status_not_active` はどの分岐でも同じ顔。
+     */
+    function mapSources(
+      activeOutcome: (id: MemoryId) => ConsolidateSourceOutcome,
+    ): ConsolidateSourceOutcome[] {
+      return ids.map((id) => {
+        const cls = initialById.get(id)!;
+        if (cls.kind === "not_found") {
+          return { memoryId: id, kind: "not_found" };
+        }
+        if (cls.kind === "status_not_active") {
+          return { memoryId: id, kind: "status_not_active", status: cls.status };
+        }
+        return activeOutcome(id);
+      });
+    }
+
+    // eligible: 重複を除いた active id を、`ids` の中で最初に現れた順に並べる。
+    const eligibleIds: MemoryId[] = [];
+    const seenEligible = new Set<MemoryId>();
+    for (const id of ids) {
+      if (initialById.get(id)!.kind === "active" && !seenEligible.has(id)) {
+        seenEligible.add(id);
+        eligibleIds.push(id);
+      }
+    }
+
+    // 3. eligible が0件・1件なら、ここで打ち切る（冪等性の芯）。
+    if (eligibleIds.length === 0) {
+      return {
+        outcome: "nothing_to_consolidate",
+        nothingReason: "no_eligible_sources",
+        consolidatedMemoryId: null,
+        sources: mapSources((id) => ({ memoryId: id, kind: "not_attempted" })),
+        llmCalls: 0,
+        llmFailure: null,
+      };
+    }
+    if (eligibleIds.length === 1) {
+      return {
+        outcome: "nothing_to_consolidate",
+        nothingReason: "single_eligible_source",
+        consolidatedMemoryId: null,
+        sources: mapSources((id) => ({ memoryId: id, kind: "not_attempted" })),
+        llmCalls: 0,
+        llmFailure: null,
+      };
+    }
+
+    // 4. dryRun はここで打ち切る。1件も書かない。
+    if (opts.dryRun === true) {
+      return {
+        outcome: "dry_run",
+        nothingReason: null,
+        consolidatedMemoryId: null,
+        sources: mapSources((id) => ({ memoryId: id, kind: "eligible" })),
+        llmCalls: 0,
+        llmFailure: null,
+      };
+    }
+
+    const eligibleMemories = eligibleIds.map((id) => byId.get(id)!);
+
+    // 5. LLM を1回呼ぶ。失敗したら1件も書かず、eligible だったものは not_attempted に落とす。
+    let llmResult: ConsolidationLLMResult;
+    try {
+      llmResult = await deps.llmProvider.completeStructured(ctx, {
+        prompt: buildConsolidationPrompt(eligibleMemories),
+        schema: ConsolidationLLMResultSchema,
+      });
+    } catch (error) {
+      return {
+        outcome: "llm_failed",
+        nothingReason: null,
+        consolidatedMemoryId: null,
+        sources: mapSources((id) => ({ memoryId: id, kind: "not_attempted" })),
+        llmCalls: 1,
+        llmFailure: describeExtractionFailure(error),
+      };
+    }
+
+    // 6. 統合先を作る。
+    const halfLifeHours = await deps.tenantSettingsStore.getDefaultHalfLifeHours(ctx);
+    const now = clock.now();
+    const newMemory = buildConsolidatedMemory({
+      ctx,
+      eligible: eligibleMemories,
+      llmResult,
+      hashContent: deps.hashContent,
+      digestFallbackLength,
+      halfLifeHours,
+      now,
+    });
+    const { memory: consolidatedMemory, created } = await deps.memoryStore.createMemoryWithOutbox(
+      ctx,
+      newMemory,
+      ["embed"],
+    );
+    if (created) {
+      await deps.eventStore.append(ctx, {
+        tenantId: ctx.tenantId,
+        memoryId: consolidatedMemory.id,
+        kind: "created",
+        actor: { type: "system" },
+        digestSnapshot: consolidatedMemory.digest,
+        sizeBeforeBytes: null,
+        meta: { reason: "consolidated", sources: eligibleIds },
+      });
+    }
+    // embed ジョブは常に outbox 経由（`createMemoryWithOutbox` が積む）。ここでは何もしない
+    // — tick() の processEmbedJob が処理する。
+
+    // 7. eligible を1件ずつ superseded へ CAS する（`reextract` のループと同じ形）。
+    const actor = opts.actor ?? { type: "system" };
+    const finalOutcomeById = new Map<MemoryId, ConsolidateSourceOutcome>();
+    for (let i = 0; i < eligibleIds.length; i += 1) {
+      const id = eligibleIds[i]!;
+      const source = byId.get(id)!;
+      try {
+        await deps.memoryStore.updateStatusWithEvent(
+          ctx,
+          id,
+          "superseded",
+          { supersededById: consolidatedMemory.id, expectedStatus: "active" },
+          {
+            tenantId: ctx.tenantId,
+            memoryId: id,
+            kind: "superseded",
+            actor,
+            digestSnapshot: source.digest,
+            sizeBeforeBytes: null,
+            meta: {
+              reason: "consolidated",
+              supersededById: consolidatedMemory.id,
+              ...(opts.reason !== undefined ? { note: opts.reason } : {}),
+            },
+          },
+        );
+        finalOutcomeById.set(id, { memoryId: id, kind: "superseded", previousStatus: "active" });
+      } catch (error) {
+        if (error instanceof MemoryStatusConflictError) {
+          // CAS が破れた——この1件だけ飛ばして続行する（`reextract` と同じ）。
+          finalOutcomeById.set(id, {
+            memoryId: id,
+            kind: "status_changed_concurrently",
+            observedStatus: error.observedStatus,
+          });
+          continue;
+        }
+        // 競合以外の例外——ここで打ち切り、残りは「見ていない」として返す。例外は外へ投げない。
+        finalOutcomeById.set(id, {
+          memoryId: id,
+          kind: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        });
+        for (let j = i + 1; j < eligibleIds.length; j += 1) {
+          finalOutcomeById.set(eligibleIds[j]!, {
+            memoryId: eligibleIds[j]!,
+            kind: "not_attempted",
+          });
+        }
+        break;
+      }
+    }
+
+    // 8. 統合先は既に作られている——途中で supersede が打ち切られても outcome は変わらない
+    // （ADR 0089 §3 手順8）。
+    return {
+      outcome: "consolidated",
+      nothingReason: null,
+      consolidatedMemoryId: consolidatedMemory.id,
+      sources: mapSources((id) => finalOutcomeById.get(id)!),
+      llmCalls: 1,
+      llmFailure: null,
+    };
+  }
+
+  return { observe, tick, recall, reextract, reembed, forget, consolidate };
 }

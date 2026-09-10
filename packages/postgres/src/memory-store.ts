@@ -642,7 +642,7 @@ export class PostgresMemoryStore implements MemoryStore {
    * `status` の4分岐（scope 内 / archived / superseded / forgotten）と period の内外は、
    * すべて `FILTER (WHERE ...)` による条件付き集約として `scoped` CTE の1回のスキャンで
    * 計算する。**superseded と forgotten は別々の列として数える**（ADR 0027）——前者は
-   * 機構の都合（より良い抽出に置き換えられた）、後者は製品の振る舞い（利用者が意図して
+   * 機構の都合（より良い抽出への置き換え、または統合）、後者は製品の振る舞い（利用者が意図して
    * 忘れさせた）であり、束ねると呼び出し側がどちらだったか判定できない。
    */
   async aggregateScope(
