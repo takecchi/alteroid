@@ -7,7 +7,8 @@
  * には効かない**。そのとき `historyLines` は `useConversation(shownId)`
  * （SWR）から来ており、`use-journal-live.ts` は `exchange(with: 'human')` が
  * 届くたびに `conversation` バケットを無効化して再取得させる
- * （`use-journal-live.ts:118-128`）。
+ * （`apps/web/app/hooks/use-journal-live.ts` の `invalidate` 関数、
+ * `case 'exchange'` の分岐）。
  *
  * 一方、送った自分の発言・受け取った返信は `lines`（ローカル state）にも
  * 積まれ続け、**`send()` のどこにも `lines` から取り除く処理が無い**

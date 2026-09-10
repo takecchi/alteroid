@@ -340,12 +340,15 @@ describe('クローンが書いた文だけを Markdown で描く', () => {
    * **⭐ 設計判断を守る歯。**
    *
    * `answer` は人間が打った文なので Markdown にしない。repo の既存方針が
-   * `apps/web/app/routes/chat.tsx:710` に逐語で在る — 「**クローンの行だけを
+   * `apps/web/app/routes/chat.tsx`
+   * （`grep -Fn -- 'クローンの行だけを Markdown にする' apps/web/app/routes/chat.tsx`）
+   * に逐語で在る — 「**クローンの行だけを
    * Markdown にする。** 人間が打った本文（`role === 'human'`）は素のテキストの
    * ままにする — 自分が書いた文字が勝手に化けないため」。
    *
    * このテストは逆向きの変更（`answer` も `<Markdown>` で描く）が黙って通らない
-   * ようにするために在る。落ちたら、まず `chat.tsx:710` を読むこと。
+   * ようにするために在る。落ちたら、まず `chat.tsx`（上記の grep が指す箇所）を
+   * 読むこと。
    */
   it('回答（answer）は Markdown の描画経路を通らない（人間が書いた文字を化けさせない）', async () => {
     stubApprovals([

@@ -214,7 +214,8 @@ function ApprovalCard({
           `context` もクローンが書いた文字列なので Markdown で描く。
 
           **スクロールの箱（`max-h-48 overflow-y-auto`）は残す。** 外すと長い背景が
-          回答欄を画面外へ押し出す。`apps/web/app/components/page.tsx:55` と
+          回答欄を画面外へ押し出す。`apps/web/app/components/page.tsx`
+          （`grep -Fn -- 'スクロールへ閉じ込める' apps/web/app/components/page.tsx`）と
           `apps/web/app/routes/manager-detail.tsx` の `RequestCard` が同じ流儀 —
           **文字は1つも捨てず、スクロールへ閉じ込める。**
 
@@ -230,7 +231,9 @@ function ApprovalCard({
       {answered ? (
         /*
           **`answer` は Markdown にしない。** これは人間が打った文だからである。
-          repo の既存方針が `apps/web/app/routes/chat.tsx:710` に逐語で在る —
+          repo の既存方針が `apps/web/app/routes/chat.tsx`
+          （`grep -Fn -- 'クローンの行だけを Markdown にする' apps/web/app/routes/chat.tsx`）
+          に逐語で在る —
           「**クローンの行だけを Markdown にする。** 人間が打った本文
           （`role === 'human'`）は素のテキストのままにする — 自分が書いた文字が
           勝手に化けないため」。`question` / `context` はクローンが書いた文字列

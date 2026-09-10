@@ -100,8 +100,8 @@ describe('/commitments 画面', () => {
    * **バッジの実行時の倒れ先を固定する歯（issue #288）。**
    *
    * `ORIGIN_LABEL`（`commitments.tsx`）は `Record<CommitmentOrigin, string>`
-   * のまま網羅性を保っているので、`commitmentOriginSchema`
-   * （`packages/core/src/schema.ts:892`）に無い値がビルド時に来ることは無い
+   * のまま網羅性を保っているので、`packages/core/src/schema.ts` の
+   * `commitmentOriginSchema` に無い値がビルド時に来ることは無い
    * （変異試験で確認済み、PR 本文）。
    *
    * **ただし実行時はビルド時の型を追い越しうる。** デーモンが先に新しい
@@ -419,7 +419,8 @@ describe('本文を origin で Markdown / 素のテキストへ切り分ける',
   /**
    * **⭐ issue #287 で名指しされた歯。** 人間が `manager_stop` /
    * `DELETE /managers/:id` の停止理由へ自由記述で `*` や `#` を打った回
-   * （`packages/core/src/manager.ts:1333`）が化けないことを固定する。
+   * （`packages/core/src/manager.ts` の `abort` メソッド、`markup: 'none'`
+   * を立てる分岐）が化けないことを固定する。
    * `bodyMarkup === 'none'` は `commitmentFor`（`packages/core/src/clone.ts`）
    * が `manager_message.markup` をそのまま持ち越した印である。
    */
@@ -482,7 +483,9 @@ describe('本文を origin で Markdown / 素のテキストへ切り分ける',
   /**
    * **⭐ 人間の指示で名指しされた歯。** 「AIが書いたものはマークダウンで
    * 表示する」の裏返しとして、人間が書いた本文は化けさせない
-   * （`apps/web/app/routes/chat.tsx:710` と同じ線）。
+   * （`apps/web/app/routes/chat.tsx`
+   * （`grep -Fn -- 'クローンの行だけを Markdown にする' apps/web/app/routes/chat.tsx`）
+   * と同じ線）。
    */
   it('起点が人間（human）の本文は Markdown の描画経路を通らない', async () => {
     stubCommitments([commitment({ origin: 'human', body: '## これは見出しではない' })]);
@@ -619,8 +622,9 @@ describe('本文を origin で Markdown / 素のテキストへ切り分ける',
   });
 
   /**
-   * `closedBy: 'human'` は素のテキストのまま（`chat.tsx:710` と同じ線 —
-   * 人間が打った文字を化けさせない）。`whitespace-pre-wrap` も保つ。
+   * `closedBy: 'human'` は素のテキストのまま
+   * （`grep -Fn -- 'クローンの行だけを Markdown にする' apps/web/app/routes/chat.tsx`
+   * と同じ線 — 人間が打った文字を化けさせない）。`whitespace-pre-wrap` も保つ。
    */
   it('closedReason は closedBy が human のとき素のテキストのまま（whitespace-pre-wrap を保つ）', async () => {
     stubCommitments(
@@ -685,7 +689,7 @@ describe('本文を origin で Markdown / 素のテキストへ切り分ける',
   /**
    * **実行時の網羅性の倒れ先を固定する歯。**
    *
-   * `commitmentOriginSchema`（`packages/core/src/schema.ts:892`）に無い値が
+   * `packages/core/src/schema.ts` の `commitmentOriginSchema` に無い値が
    * 来ることは、ビルド時には起こらない（`pnpm typecheck` が塞ぐ。
    * `CommitmentBody` の `switch` の `default` に置いた
    * `const unhandled: never = commitment.origin;` が、その塞ぎ方の実体である
