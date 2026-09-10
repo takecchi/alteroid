@@ -1,3 +1,4 @@
+import type { ExtensionMode } from "../migrate.js";
 import { assertSafeSchemaName } from "../schema-namespace.js";
 
 /**
@@ -60,6 +61,13 @@ export interface ParsedMigrateCliOptions {
    * `schema` が未指定のまま値を持つことは無い（そのケースはエラーとして弾く）。
    */
   extensionSchema?: string;
+  /**
+   * 拡張の用意のしかた（ADR 0093）。`--extension-mode` > `MNEMORA_EXTENSION_MODE` > 未指定
+   * の優先順位。`undefined` は「今日と同じ振る舞い」（`runMigrations` の既定 `"create"`
+   * 相当）を表す——`schema` / `extensionSchema` と同じく、CLI 側は `runMigrations` の
+   * 既定値をここで決め打ちしない（`../migrate.ts` が唯一の既定値の置き場所）。
+   */
+  extensionMode?: ExtensionMode;
 }
 
 /** 解釈に失敗したことを表す。`message` はそのまま `console.error` に渡せる説明文。 */
@@ -72,6 +80,8 @@ export type MigrateCliParseResult =
 
 const SCHEMA_FLAG = "--schema";
 const EXTENSION_SCHEMA_FLAG = "--extension-schema";
+const EXTENSION_MODE_FLAG = "--extension-mode";
+const EXTENSION_MODES: readonly ExtensionMode[] = ["create", "verify"];
 
 /**
  * `argv`（`process.argv.slice(2)` を渡す想定。`node` 本体・スクリプトパスは含めない）と
@@ -80,6 +90,7 @@ const EXTENSION_SCHEMA_FLAG = "--extension-schema";
  * 受け付ける形:
  * - `--schema <name>` / `--schema=<name>`
  * - `--extension-schema <name>` / `--extension-schema=<name>`
+ * - `--extension-mode <create|verify>` / `--extension-mode=<create|verify>`（ADR 0093）
  * - `--help` / `-h`
  *
  * 弾く形（`ok: false` を返す）:
@@ -88,6 +99,11 @@ const EXTENSION_SCHEMA_FLAG = "--extension-schema";
  * - `assertSafeSchemaName` が落とす名前
  * - `--schema`（`MNEMORA_SCHEMA` も含め）を伴わない `--extension-schema`
  *   （`MNEMORA_EXTENSION_SCHEMA` も含め）
+ * - `--extension-mode`（`MNEMORA_EXTENSION_MODE` も含め）に `"create"` / `"verify"` 以外の値
+ *
+ * ⚠ `--extension-mode` は `--schema` の有無に関わらず指定できる（`--extension-schema` とは
+ * 独立）。`extensionMode: "verify"` は経路2（`migrations/*.sql` 本文の `CREATE EXTENSION`）
+ * にも効くため、`schema` 未指定でも意味を持つ（`../migrate.ts` の doc 参照）。
  */
 export function parseMigrateCliOptions(
   argv: readonly string[],
@@ -95,6 +111,7 @@ export function parseMigrateCliOptions(
 ): MigrateCliParseResult {
   let schemaArg: string | undefined;
   let extensionSchemaArg: string | undefined;
+  let extensionModeArg: string | undefined;
   let help = false;
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -108,7 +125,7 @@ export function parseMigrateCliOptions(
     const eqIndex = arg.startsWith("--") ? arg.indexOf("=") : -1;
     const flag = eqIndex === -1 ? arg : arg.slice(0, eqIndex);
 
-    if (flag !== SCHEMA_FLAG && flag !== EXTENSION_SCHEMA_FLAG) {
+    if (flag !== SCHEMA_FLAG && flag !== EXTENSION_SCHEMA_FLAG && flag !== EXTENSION_MODE_FLAG) {
       return { ok: false, error: { message: `unknown option: ${arg}` } };
     }
 
@@ -126,8 +143,10 @@ export function parseMigrateCliOptions(
 
     if (flag === SCHEMA_FLAG) {
       schemaArg = value;
-    } else {
+    } else if (flag === EXTENSION_SCHEMA_FLAG) {
       extensionSchemaArg = value;
+    } else {
+      extensionModeArg = value;
     }
   }
 
@@ -138,6 +157,7 @@ export function parseMigrateCliOptions(
 
   const schema = schemaArg ?? env.MNEMORA_SCHEMA;
   const extensionSchema = extensionSchemaArg ?? env.MNEMORA_EXTENSION_SCHEMA;
+  const extensionModeRaw = extensionModeArg ?? env.MNEMORA_EXTENSION_MODE;
 
   if (schema === undefined && extensionSchema !== undefined) {
     return {
@@ -151,6 +171,21 @@ export function parseMigrateCliOptions(
     };
   }
 
+  if (
+    extensionModeRaw !== undefined &&
+    !EXTENSION_MODES.includes(extensionModeRaw as ExtensionMode)
+  ) {
+    return {
+      ok: false,
+      error: {
+        message:
+          `--extension-mode (MNEMORA_EXTENSION_MODE) には ${EXTENSION_MODES.join(" / ")} ` +
+          `のいずれかを指定してください（渡された値: ${extensionModeRaw}）。`,
+      },
+    };
+  }
+  const extensionMode = extensionModeRaw as ExtensionMode | undefined;
+
   try {
     if (schema !== undefined) {
       assertSafeSchemaName(schema);
@@ -162,7 +197,7 @@ export function parseMigrateCliOptions(
     return { ok: false, error: { message: (err as Error).message } };
   }
 
-  return { ok: true, options: { help: false, schema, extensionSchema } };
+  return { ok: true, options: { help: false, schema, extensionSchema, extensionMode } };
 }
 
 /**
@@ -171,7 +206,7 @@ export function parseMigrateCliOptions(
  * README を読めない状況でも使えることに意味があるため、意図的に持たせてある）。
  */
 export function formatMigrateCliUsage(): string {
-  return `使い方: mnemora-postgres-migrate [--schema <name>] [--extension-schema <name>]
+  return `使い方: mnemora-postgres-migrate [--schema <name>] [--extension-schema <name>] [--extension-mode <create|verify>]
 
 保留中の migrations/*.sql をファイル名の昇順で適用する。DATABASE_URL は必須（環境変数）。
 
@@ -182,13 +217,21 @@ export function formatMigrateCliUsage(): string {
   --extension-schema <name>  vector / btree_gin / pgcrypto を置くスキーマ。
                               --schema を指定したときだけ効く（--schema 無しで
                               これだけ指定するとエラーになる）。省略時は "public"。
+  --extension-mode <create|verify>
+                              vector / btree_gin / pgcrypto の用意のしかた（ADR 0093）。
+                              create（既定）: CREATE EXTENSION IF NOT EXISTS を発行する
+                              （今日どおり）。verify: 何も発行せず、pg_extension を読んで
+                              既に在ることだけを確認する。無ければ足りない拡張名と
+                              実行すべき SQL を示して失敗する
+                              （CREATE EXTENSION 権限を持たないロール向け）。
   -h, --help                  このヘルプを表示して終了する（終了コード 0）。
 
 環境変数:
   MNEMORA_SCHEMA              --schema の環境変数版。
   MNEMORA_EXTENSION_SCHEMA     --extension-schema の環境変数版。
+  MNEMORA_EXTENSION_MODE       --extension-mode の環境変数版。
 
 優先順位: コマンドライン引数 > 環境変数 > 未指定。
-どちらも指定しなければ、今日と1バイトも変わらない振る舞いになる。
+どれも指定しなければ、今日と1バイトも変わらない振る舞いになる。
 `;
 }

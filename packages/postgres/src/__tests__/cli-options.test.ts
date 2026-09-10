@@ -4,6 +4,7 @@ import {
   parseMigrateCliOptions,
   type MigrateCliParseResult,
 } from "../bin/cli-options.js";
+import type { ExtensionMode } from "../migrate.js";
 
 /**
  * `mnemora-postgres-migrate` の引数・環境変数解釈（Issue #107）を、**DB 無しで**検査する歯。
@@ -20,7 +21,12 @@ import {
 
 function expectOk(result: MigrateCliParseResult): asserts result is {
   ok: true;
-  options: { help: boolean; schema?: string; extensionSchema?: string };
+  options: {
+    help: boolean;
+    schema?: string;
+    extensionSchema?: string;
+    extensionMode?: ExtensionMode;
+  };
 } {
   expect(result.ok).toBe(true);
 }
@@ -32,12 +38,66 @@ function expectErr(
 }
 
 describe("parseMigrateCliOptions: 未指定時の既定", () => {
-  it("引数も環境変数も無ければ schema / extensionSchema はどちらも undefined（今日と同じ振る舞い）", () => {
+  it("引数も環境変数も無ければ schema / extensionSchema / extensionMode はどれも undefined（今日と同じ振る舞い）", () => {
     const result = parseMigrateCliOptions([], {});
     expectOk(result);
     expect(result.options.help).toBe(false);
     expect(result.options.schema).toBeUndefined();
     expect(result.options.extensionSchema).toBeUndefined();
+    expect(result.options.extensionMode).toBeUndefined();
+  });
+});
+
+describe("parseMigrateCliOptions: --extension-mode（ADR 0093）", () => {
+  it("--extension-mode verify を空白区切りで指定できる（--schema 無しでも良い）", () => {
+    const result = parseMigrateCliOptions(["--extension-mode", "verify"], {});
+    expectOk(result);
+    expect(result.options.extensionMode).toBe("verify");
+    expect(result.options.schema).toBeUndefined();
+  });
+
+  it("--extension-mode=create の = 区切りでも指定できる", () => {
+    const result = parseMigrateCliOptions(["--extension-mode=create"], {});
+    expectOk(result);
+    expect(result.options.extensionMode).toBe("create");
+  });
+
+  it("MNEMORA_EXTENSION_MODE を読む", () => {
+    const result = parseMigrateCliOptions([], { MNEMORA_EXTENSION_MODE: "verify" });
+    expectOk(result);
+    expect(result.options.extensionMode).toBe("verify");
+  });
+
+  it("--extension-mode と MNEMORA_EXTENSION_MODE が両方あれば引数が勝つ", () => {
+    const result = parseMigrateCliOptions(["--extension-mode", "verify"], {
+      MNEMORA_EXTENSION_MODE: "create",
+    });
+    expectOk(result);
+    expect(result.options.extensionMode).toBe("verify");
+  });
+
+  it("create / verify 以外の値はエラーになる", () => {
+    const result = parseMigrateCliOptions(["--extension-mode", "skip"], {});
+    expectErr(result);
+    expect(result.error.message).toMatch(/extension-mode/i);
+  });
+
+  it("環境変数経由の不正な値もエラーになる", () => {
+    const result = parseMigrateCliOptions([], { MNEMORA_EXTENSION_MODE: "skip" });
+    expectErr(result);
+    expect(result.error.message).toMatch(/extension-mode/i);
+  });
+
+  it("--schema と組み合わせても解決できる（extensionSchema とは独立）", () => {
+    const result = parseMigrateCliOptions(["--schema", "s", "--extension-mode", "verify"], {});
+    expectOk(result);
+    expect(result.options.schema).toBe("s");
+    expect(result.options.extensionMode).toBe("verify");
+  });
+
+  it("--extension-mode の値が無い（末尾）とエラーになる", () => {
+    const result = parseMigrateCliOptions(["--extension-mode"], {});
+    expectErr(result);
   });
 });
 
@@ -183,8 +243,10 @@ describe("formatMigrateCliUsage", () => {
     const usage = formatMigrateCliUsage();
     expect(usage).toMatch(/--schema/);
     expect(usage).toMatch(/--extension-schema/);
+    expect(usage).toMatch(/--extension-mode/);
     expect(usage).toMatch(/MNEMORA_SCHEMA/);
     expect(usage).toMatch(/MNEMORA_EXTENSION_SCHEMA/);
+    expect(usage).toMatch(/MNEMORA_EXTENSION_MODE/);
     expect(usage).toMatch(/優先/);
   });
 });

@@ -7,6 +7,7 @@ import {
   DEFAULT_MIGRATIONS_DIR,
   MIGRATION_LOCK_KEY,
   REQUIRED_EXTENSIONS,
+  matchCreateExtensionLines,
   migrationLockKeyFor,
 } from "../migrate.js";
 import {
@@ -133,12 +134,17 @@ describe("deriveAdvisoryLockKey", () => {
 describe("REQUIRED_EXTENSIONS と migrations/*.sql の突き合わせ", () => {
   it("REQUIRED_EXTENSIONS の集合は migrations/*.sql の CREATE EXTENSION 行の集合と一致する", () => {
     // フィクスチャを手作りしない——実ファイルを読む（架空の世界を測らないため）。
+    // 抽出規則（正規表現）は `../migrate.js` の `matchCreateExtensionLines` を呼ぶ
+    // ——ここで独自の正規表現を書き写さない。`extensionMode: "verify"`
+    // （`stripCreateExtensionStatements`、ADR 0093）も同じ関数を土台にしており、
+    // 書き写すと片方だけ直して他方を直し忘れるということが起き得るため
+    // （`assertSafeSchemaName` の doc と同じ理由）。
     const files = readdirSync(DEFAULT_MIGRATIONS_DIR).filter((name) => name.endsWith(".sql"));
     const found = new Set<string>();
     for (const file of files) {
       const sql = readFileSync(join(DEFAULT_MIGRATIONS_DIR, file), "utf8");
-      for (const match of sql.matchAll(/CREATE EXTENSION IF NOT EXISTS\s+(\S+?);/gi)) {
-        found.add(match[1]!);
+      for (const { name } of matchCreateExtensionLines(sql)) {
+        found.add(name);
       }
     }
     expect(new Set(REQUIRED_EXTENSIONS)).toEqual(found);

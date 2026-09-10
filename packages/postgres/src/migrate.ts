@@ -77,11 +77,139 @@ export const MIGRATION_LOCK_KEY = 7190158676462701299n;
  */
 export const REQUIRED_EXTENSIONS = ["vector", "btree_gin", "pgcrypto"] as const;
 
+/**
+ * `migrations/*.sql` 本文の中の「`CREATE EXTENSION IF NOT EXISTS <name>;` だけの行」に
+ * 一致する正規表現のパターン文字列（フラグは付けない。使う側で毎回 `new RegExp(...)` する）。
+ *
+ * `schema-namespace.test.ts`「`REQUIRED_EXTENSIONS` と `migrations/*.sql` の突き合わせ」の歯と、
+ * 下の {@link matchCreateExtensionLines} / {@link stripCreateExtensionStatements}
+ * （`extensionMode: "verify"` 用、ADR 0093）が、この1つの抽出規則を共有する。
+ * 正規表現を書き写すと片方だけ直して他方を直し忘れるということが起き得るため
+ * （`schema-namespace.ts` の `assertSafeSchemaName` の doc と同じ理由）。
+ *
+ * `g` フラグ付きの `RegExp` インスタンスは呼ぶたびに `new RegExp(...)` で作り直すこと
+ * ——`lastIndex` を共有すると呼び出し順序に結果が依存する壊れ方をする。
+ */
+const CREATE_EXTENSION_LINE_PATTERN =
+  "^[ \\t]*CREATE EXTENSION IF NOT EXISTS[ \\t]+(\\S+?);[ \\t]*\\r?\\n?";
+
+/**
+ * `migrations/*.sql` 本文から `CREATE EXTENSION IF NOT EXISTS <name>;` 単体行をすべて抽出する。
+ * 一致条件は「行頭（前後の空白は許す）から始まり `;` で終わるその行そのもの」。
+ * 現状の `migrations/*.sql`（`0001_init.sql` の3行のみ）の書き方に厳密に合わせてある
+ * ——複数の `CREATE EXTENSION` を1行にまとめる、コメントと同居させる、といった書き方は
+ * 対象外（そのような行は今のところ存在しない。増えたらこの関数もそのぶん拡張すること）。
+ */
+export function matchCreateExtensionLines(
+  sql: string,
+): Array<{ readonly line: string; readonly name: string }> {
+  const re = new RegExp(CREATE_EXTENSION_LINE_PATTERN, "gim");
+  return Array.from(sql.matchAll(re), (m) => ({ line: m[0], name: m[1]! }));
+}
+
+/**
+ * `extensionMode: "verify"`（ADR 0093）専用。`sql` から `CREATE EXTENSION` の行を取り除いた
+ * 本文を返す。
+ *
+ * **`migrations/*.sql` のファイル自体は書き換えない。** 出荷済みマイグレーションの本文を
+ * 編集することは ADR 0057「採らなかった案」・ADR 0001 の規約（手書き SQL を正本にする）に
+ * 触れる——`_mnemora_migrations` 台帳はファイル名だけで適用済みを判定するため、内容を
+ * 書き換えても既適用の DB では再実行されず、実行済み内容と正本がずれるだけになる。
+ * ここでは**実行時にだけ**、この関数を通した後の文字列を流す。ファイルは1バイトも変わらない。
+ */
+export function stripCreateExtensionStatements(sql: string): {
+  readonly sql: string;
+  readonly removed: readonly string[];
+} {
+  const removed = matchCreateExtensionLines(sql).map((m) => m.name);
+  const stripped = sql.replace(new RegExp(CREATE_EXTENSION_LINE_PATTERN, "gim"), "");
+  return { sql: stripped, removed };
+}
+
+/**
+ * 拡張（`REQUIRED_EXTENSIONS`）の用意のしかた（ADR 0093）。
+ *
+ * - `"create"`（既定）: 今日どおり `CREATE EXTENSION IF NOT EXISTS` を発行する。
+ *   `extensionMode` を一切指定しない呼び出しと1バイトも変わらない。
+ * - `"verify"`: `CREATE EXTENSION` を一切発行しない。代わりに `pg_extension` を読み、
+ *   `REQUIRED_EXTENSIONS` がすべて既に存在することだけを確認する。1つでも無ければ
+ *   {@link MissingExtensionsError} を投げる（黙って先へ進み、後段で意味の分からない
+ *   エラーになることを避ける——`CREATE EXTENSION` 権限を持たないロールで接続する
+ *   導入者のための口。動機は ADR 0093）。
+ */
+export type ExtensionMode = "create" | "verify";
+
+/**
+ * `extensionMode: "verify"` で、`REQUIRED_EXTENSIONS` のいずれかが `pg_extension` に
+ * 見当たらなかったことを表す。
+ *
+ * **「検査していない」（`extensionMode` 省略 = `"create"`）・「検査したが無かった」
+ * （このエラー）・「在った」（例外を投げずに完了する）の3状態を呼び出し側が区別できること**
+ * が ADR 0093 の要求。メッセージには足りない拡張の名前と、呼び出し側の DBA がそのまま
+ * 実行できる `CREATE EXTENSION` 文を具体的に書く。
+ */
+export class MissingExtensionsError extends Error {
+  /** `pg_extension` に見当たらなかった拡張名（`REQUIRED_EXTENSIONS` の部分集合）。 */
+  readonly missing: readonly string[];
+
+  constructor(missing: readonly string[], extensionSchema: string | undefined) {
+    const withSchema = extensionSchema !== undefined ? ` WITH SCHEMA "${extensionSchema}"` : "";
+    const suggestions = missing
+      .map((ext) => `  CREATE EXTENSION IF NOT EXISTS ${ext}${withSchema};`)
+      .join("\n");
+    super(
+      `runMigrations: extensionMode: "verify" — 必要な拡張が見当たりません: ` +
+        `${missing.join(", ")}。\n` +
+        `CREATE EXTENSION 権限を持つロールで、以下を実行してください:\n${suggestions}`,
+    );
+    this.name = "MissingExtensionsError";
+    this.missing = missing;
+  }
+}
+
+/**
+ * `REQUIRED_EXTENSIONS` のうち `pg_extension` に実在するものの集合を返す。
+ *
+ * 拡張は**スキーマではなくデータベースに属する**（ADR 0057 の測定表）ため、`schema` /
+ * `extensionSchema` の値に関わらず DB 全体を対象に1回だけ確認すれば足りる。
+ * `REQUIRED_EXTENSIONS` はモジュール内で固定された定数配列（利用者からの入力を含まない）
+ * なので、リテラルとして埋め込んでも injection の懸念は無い。
+ */
+async function fetchInstalledExtensions(pool: Pool): Promise<Set<string>> {
+  const literals = REQUIRED_EXTENSIONS.map((ext) => `'${ext}'`).join(", ");
+  const { rows } = await pool.query<{ extname: string }>(
+    `SELECT extname FROM pg_extension WHERE extname = ANY(ARRAY[${literals}])`,
+  );
+  return new Set(rows.map((row) => row.extname));
+}
+
+/**
+ * `extensionMode: "verify"` の中心処理。足りない拡張が無ければ何もせず正常に戻る
+ * （呼び出し側からは「例外を投げずに完了した」＝「在った」として観測できる）。
+ * 1つでも足りなければ {@link MissingExtensionsError} を投げる。
+ */
+async function verifyRequiredExtensions(
+  pool: Pool,
+  extensionSchema: string | undefined,
+): Promise<void> {
+  const installed = await fetchInstalledExtensions(pool);
+  const missing = REQUIRED_EXTENSIONS.filter((ext) => !installed.has(ext));
+  if (missing.length > 0) {
+    throw new MissingExtensionsError(missing, extensionSchema);
+  }
+}
+
 export interface RunMigrationsOptions extends SchemaNamespaceOptions {
   /** advisory lock を待つ上限（ミリ秒）。既定は {@link DEFAULT_LOCK_TIMEOUT_MS}。 */
   lockTimeoutMs?: number;
   /** advisory lock のキー。テスト以外で既定の {@link MIGRATION_LOCK_KEY} を変える理由は無い。 */
   lockKey?: bigint;
+  /**
+   * 拡張（`REQUIRED_EXTENSIONS`）の用意のしかた。既定は `"create"`
+   * （今日どおり。**指定しなければ発行される SQL は1バイトも変わらない**）。
+   * `"verify"` の詳細は {@link ExtensionMode} の doc（ADR 0093）参照。
+   */
+  extensionMode?: ExtensionMode;
 }
 
 /**
@@ -116,6 +244,19 @@ export interface RunMigrationsResult {
    * 他プロセスが同時にマイグレーションを行っていなければ 0 に近い値になる。
    */
   lock: { waitedMs: number };
+  /**
+   * `extensionMode: "verify"`（ADR 0093）のときだけ載る、拡張検査の観測値。
+   *
+   * - `extensionMode` 省略（既定 `"create"`）→ `extensionCheck` は `undefined`
+   *   （＝「検査していない」）。
+   * - `extensionMode: "verify"` で1つでも足りなければ、この値は載らず
+   *   {@link MissingExtensionsError} を投げて終わる（＝「検査したが無かった」）。
+   * - `extensionMode: "verify"` で全て揃っていれば、`verified` に確認できた拡張名が載る
+   *   （＝「在った」）。
+   *
+   * この3値を同じ顔（`undefined` や空配列に潰す）にしないこと。
+   */
+  extensionCheck?: { verified: readonly string[] };
 }
 
 /**
@@ -298,6 +439,25 @@ export function listMigrationFiles(migrationsDir: string): string[] {
  *    なので `COMMIT`/`ROLLBACK` でトランザクションスコープを抜け、**pool のコネクションに
  *    session 状態が漏れない**（このコネクションが後で別の呼び出しに再利用されても、
  *    そちらの `search_path` に影響しない）。
+ *
+ * ## `options.extensionMode`（ADR 0093）
+ *
+ * **`extensionMode` 未指定（既定 `"create"`）なら、この段落は一切関係ない**——今日と
+ * 同じ SQL が同じ順番で発行される。`extensionMode: "verify"` を指定すると:
+ *
+ * 1. ロック取得より前に `pg_extension` を読み、`REQUIRED_EXTENSIONS` が全て存在するかを
+ *    確認する。1つでも無ければ {@link MissingExtensionsError} を投げ、ロックの取得も
+ *    マイグレーションの適用も一切行わない。
+ * 2. `schema` を指定していても、上の「2.」の `CREATE EXTENSION ... WITH SCHEMA` は
+ *    発行しない（1. で存在を確認済みのため）。
+ * 3. `migrations/*.sql` 本文に含まれる `CREATE EXTENSION IF NOT EXISTS ...;` 行
+ *    （経路2、今のところ `0001_init.sql` の3行）は、送信前に取り除く
+ *    （{@link stripCreateExtensionStatements}）。**ファイルそのものは変えない**——実行時に
+ *    流す文字列だけを変える。
+ *
+ * つまり `extensionMode: "verify"` は、経路1・経路2のどちらからも `CREATE EXTENSION` を
+ * 一切発行させない。`CREATE EXTENSION` の実行権限を持たないロールで接続する導入者
+ * （動機の実例: virchamate、ADR 0093）のための口。
  */
 export async function runMigrations(
   pool: Pool,
@@ -313,6 +473,19 @@ export async function runMigrations(
   if (extensionSchema !== undefined) {
     assertSafeSchemaName(extensionSchema);
   }
+  const extensionMode: ExtensionMode = options.extensionMode ?? "create";
+
+  // `extensionMode: "verify"` はロック取得より前に決着させる（`assertSafeSchemaName` と
+  // 同じ理由——不正/不足のためにロックを取って他プロセスを待たせる意味が無い。
+  // ADR 0093: 経路1（この関数の CREATE SCHEMA の隣の CREATE EXTENSION ループ）と
+  // 経路2（`migrations/0001_init.sql` 本文の CREATE EXTENSION）の**両方**を、ここ1箇所の
+  // 確認で代替する——拡張はスキーマではなくデータベースに属する（ADR 0057 の測定表）ため、
+  // `schema` の有無に関わらず DB 全体を対象に1回確認すれば足りる。
+  let extensionCheck: RunMigrationsResult["extensionCheck"];
+  if (extensionMode === "verify") {
+    await verifyRequiredExtensions(pool, extensionSchema);
+    extensionCheck = { verified: REQUIRED_EXTENSIONS };
+  }
 
   const lockTimeoutMs = options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
   const lockKey = options.lockKey ?? migrationLockKeyFor(schema);
@@ -321,8 +494,15 @@ export async function runMigrations(
   try {
     if (schema !== undefined) {
       await pool.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
-      for (const ext of REQUIRED_EXTENSIONS) {
-        await pool.query(`CREATE EXTENSION IF NOT EXISTS ${ext} WITH SCHEMA "${extensionSchema}"`);
+      // `extensionMode: "verify"` では上ですでに存在を確認済みなので、ここで
+      // `CREATE EXTENSION` を発行しない（それがこのモードの目的そのもの——
+      // `CREATE EXTENSION` 権限を持たないロールでも呼べるようにする、ADR 0093）。
+      if (extensionMode === "create") {
+        for (const ext of REQUIRED_EXTENSIONS) {
+          await pool.query(
+            `CREATE EXTENSION IF NOT EXISTS ${ext} WITH SCHEMA "${extensionSchema}"`,
+          );
+        }
       }
     }
 
@@ -339,7 +519,14 @@ export async function runMigrations(
       if (alreadyApplied.has(file)) {
         continue;
       }
-      const sql = readFileSync(join(migrationsDir, file), "utf8");
+      const fileSql = readFileSync(join(migrationsDir, file), "utf8");
+      // 経路2（`migrations/*.sql` 本文の CREATE EXTENSION、今のところ 0001_init.sql の3行）。
+      // `extensionMode: "verify"` では、この本文を送る前にその行だけを取り除く——
+      // ファイル自体は変えず、実行時にだけ流す文字列を変える（`stripCreateExtensionStatements`
+      // の doc 参照）。上のプリフライトで既に存在を確認済みなので、取り除いても
+      // マイグレーションの結果（テーブル・索引等）は変わらない。
+      const sql =
+        extensionMode === "verify" ? stripCreateExtensionStatements(fileSql).sql : fileSql;
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
@@ -360,7 +547,7 @@ export async function runMigrations(
         client.release();
       }
     }
-    return { applied, lock: { waitedMs } };
+    return { applied, lock: { waitedMs }, extensionCheck };
   } finally {
     await releaseMigrationLock(lockClient, lockKey);
   }

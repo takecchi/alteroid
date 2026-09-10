@@ -9,13 +9,14 @@ import { formatMigrateCliUsage, parseMigrateCliOptions } from "./cli-options.js"
  * 他パッケージやルートから直接 drizzle-kit を叩かせない、という ADR 0001 の規約により、
  * マイグレーションの実行はこの1つの口からのみ行う。
  *
- * 引数・環境変数の解釈（`--schema` / `--extension-schema` / `MNEMORA_SCHEMA` /
- * `MNEMORA_EXTENSION_SCHEMA` / 優先順位 / `--help`）は `./cli-options.ts` の
- * `parseMigrateCliOptions` に切り出してある（Issue #107）。このファイルは薄く保ち、
- * 解釈結果を `runMigrations` の `options` にそのまま渡すだけにする——
- * `schema` / `extensionSchema` がどちらも未指定なら `{ schema: undefined,
- * extensionSchema: undefined }` を渡すことになるが、`runMigrations` はこれを
- * options 省略時と同じに扱うため（`../schema-namespace.ts` 参照）、既定の振る舞いは
+ * 引数・環境変数の解釈（`--schema` / `--extension-schema` / `--extension-mode` /
+ * `MNEMORA_SCHEMA` / `MNEMORA_EXTENSION_SCHEMA` / `MNEMORA_EXTENSION_MODE` / 優先順位 /
+ * `--help`）は `./cli-options.ts` の `parseMigrateCliOptions` に切り出してある
+ * （Issue #107、`extensionMode` は ADR 0093）。このファイルは薄く保ち、解釈結果を
+ * `runMigrations` の `options` にそのまま渡すだけにする——`schema` / `extensionSchema` /
+ * `extensionMode` がどれも未指定なら `{ schema: undefined, extensionSchema: undefined,
+ * extensionMode: undefined }` を渡すことになるが、`runMigrations` はこれを options 省略時と
+ * 同じに扱うため（`../schema-namespace.ts` / `../migrate.ts` 参照）、既定の振る舞いは
  * 今日と1バイトも変わらない。
  */
 async function main(): Promise<void> {
@@ -37,10 +38,14 @@ async function main(): Promise<void> {
     return;
   }
 
-  const { schema, extensionSchema } = parsed.options;
+  const { schema, extensionSchema, extensionMode } = parsed.options;
   const pool = new Pool({ connectionString });
   try {
-    const { applied } = await runMigrations(pool, undefined, { schema, extensionSchema });
+    const { applied } = await runMigrations(pool, undefined, {
+      schema,
+      extensionSchema,
+      extensionMode,
+    });
     if (applied.length === 0) {
       console.log("適用対象のマイグレーションはありません（すべて適用済み）。");
     } else {
