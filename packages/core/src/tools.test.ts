@@ -17,7 +17,7 @@ import type {
 } from './manager.js';
 import { commitmentFor } from './clone.js';
 import { runnerLivenessSchema } from './runner-protocol.js';
-import { measureMemoryFloor, renderMemoryDocuments } from './memory.js';
+import { measureMemoryFloor, renderMemoryDocuments, scanMemorySections } from './memory.js';
 import { createProfileService } from './profile-service.js';
 import {
   journalEntrySchema,
@@ -1600,6 +1600,123 @@ describe('クローンの道具', () => {
     expect(reply).toContain('次に動く時刻: （まだ計算されていない。少し待って呼び直すこと）');
   });
 
+  /**
+   * `schedule_list` の一覧モードに継続点（`cursor`）を足す（issue #662 段1）。
+   *
+   * **直した穴**: 一覧は `kind` の昇順で予算（`SCHEDULE_LIST_BUDGET`）に
+   * 入るところまでを出す。落ちるのは常に末尾（＝ `kind` の綴りが後ろの
+   * 依頼）で、旧い実装はそこへ到達する口を1つも持たなかった——
+   * `schedule_list kind=<kind>`（全文モード）も `schedule_remove` も
+   * `kind` の一致を要求するので、落ちた依頼は綴りを知らない限り
+   * 片付けることも読むこともできない。
+   *
+   * `resolveScheduleCursor`（`schedule-cursor.ts`）の分岐は、そちらの歯
+   * （`schedule-cursor.test.ts`）が I/O 無しで直接測っている。ここで測る
+   * のは、実際の道具（ストア・zod スキーマ・`renderListing` の予算切り）に
+   * 配線した結果である。
+   */
+  describe('schedule_list の一覧モードに継続点（cursor）を足す（#662 段1）', () => {
+    function extractCursor(reply: string): string {
+      const match = /cursor=([A-Za-z0-9\-_]+)/.exec(reply);
+      if (!match) throw new Error(`cursor が案内に無い: ${reply}`);
+      return match[1]!;
+    }
+
+    async function seedSchedules(h: Harness, count: number): Promise<string[]> {
+      const long = 'あ'.repeat(500);
+      const kinds: string[] = [];
+      for (let index = 0; index < count; index += 1) {
+        const kind = `watch-${String(index).padStart(3, '0')}`;
+        kinds.push(kind);
+        await h.call('schedule_create', {
+          kind,
+          request: `見回り${String(index).padStart(3, '0')}: ${long}`,
+          everyMinutes: 60,
+        });
+      }
+      return kinds;
+    }
+
+    it('予算で切れたら、断り書きが cursor= を案内する', async () => {
+      const h = harness();
+      await seedSchedules(h, 25);
+
+      const reply = await h.call('schedule_list', {});
+
+      // 前提: 実際に予算で切れていること（そうでなければ下の assert は
+      // 何も測っていない）。
+      expect(reply).toMatch(/…ほか \d+ 件は省略/);
+      expect(reply).toContain('cursor=');
+      expect(reply).toMatch(/続きは schedule_list cursor=[A-Za-z0-9\-_]+ で取れる/);
+    });
+
+    it('cursor で呼び直すと、1頁目に出た kind は2頁目には出ない（重複しない）', async () => {
+      const h = harness();
+      const kinds = await seedSchedules(h, 25);
+
+      const first = await h.call('schedule_list', {});
+      expect(first).toMatch(/…ほか \d+ 件は省略/);
+      const cursor = extractCursor(first);
+
+      const second = await h.call('schedule_list', { cursor });
+
+      const firstPageKinds = kinds.filter((kind) => first.includes(kind));
+      // 前提: 1頁目で実際に複数件出ていたこと（0件なら重複しないのは当然になる）。
+      expect(firstPageKinds.length).toBeGreaterThan(0);
+      for (const kind of firstPageKinds) {
+        expect(second, `${kind} が2頁目にも重複して出た`).not.toContain(kind);
+      }
+    });
+
+    it('頁を辿り切ると、全 kind に到達できる（Issue の主題そのもの）', async () => {
+      const h = harness();
+      const kinds = await seedSchedules(h, 25);
+
+      const seen = new Set<string>();
+      let cursor: string | undefined;
+      // ガード: 頁数は高々件数を超えない（無限ループの保険）。
+      for (let guard = 0; guard < kinds.length + 1; guard += 1) {
+        const reply: string = await h.call('schedule_list', cursor === undefined ? {} : { cursor });
+        for (const kind of kinds) {
+          if (reply.includes(kind)) seen.add(kind);
+        }
+        if (!reply.includes('cursor=')) break;
+        cursor = extractCursor(reply);
+      }
+
+      for (const kind of kinds) {
+        expect(seen, `${kind} に到達できなかった（窓から落ちたまま迷子）`).toContain(kind);
+      }
+    });
+
+    it('壊れた cursor は明示のエラーで、黙って先頭からへ倒さない', async () => {
+      const h = harness();
+      await h.call('schedule_create', { kind: 'watch', request: '最初の依頼', everyMinutes: 30 });
+
+      const reply = await h.call('schedule_list', { cursor: 'this-is-not-a-real-cursor' });
+
+      expect(reply).toContain('cursor が壊れている');
+      // **黙って先頭から返していない証拠。** 先頭から返していれば一覧の
+      // 内容（'watch' を含む行）が出るはずだが、出ない。
+      expect(reply).not.toContain('watch');
+    });
+
+    it('母数（total）は頁をまたいでも変わらない', async () => {
+      const h = harness();
+      await seedSchedules(h, 25);
+
+      const first = await h.call('schedule_list', {});
+      const cursor = extractCursor(first);
+      const second = await h.call('schedule_list', { cursor });
+
+      expect(first).toContain('継続中の依頼は 25 件あり');
+      // 2頁目でもまだ予算で切れているなら、同じ母数を名乗る。
+      if (second.includes('…ほか')) {
+        expect(second).toContain('継続中の依頼は 25 件あり');
+      }
+    });
+  });
+
   it('同じ kind で仕込み直すと置き換わる（前回動いた時刻は保つ）', async () => {
     const h = harness();
     await h.call('schedule_create', { kind: 'watch', request: '最初の依頼', everyMinutes: 30 });
@@ -2492,6 +2609,48 @@ describe('クローンの道具', () => {
         // 動かしていない節は残る。
         expect(from?.content).toContain('## 次');
         expect(reply).toContain('移した');
+      });
+
+      /**
+       * **#662 段1: 省略の断り書きに `total`/`shown` を足した分の歯。**
+       *
+       * 前置き（`${ordered.length} 節を移した`）から件数を復元させるのでは
+       * なく、断り書き自身が「何節のうち何節を出したか」を名乗ることを測る。
+       * あわせて、③（届かない範囲を名乗る）として案内している
+       * `memory_outline slug=<toSlug>` が実在する経路であること——省いた節も
+       * 含めて移った先の目次に出ること——を実測する。
+       */
+      it('省略の断り書きが total/shown を名乗り、移った先の見出しは memory_outline slug=<toSlug> で確かめられる', async () => {
+        const h = harness();
+        const sectionCount = 30;
+        const body = Array.from({ length: sectionCount }, (_, index) => {
+          const pad = String(index).padStart(2, '0');
+          return `# 節${pad}: ${'み'.repeat(60)}\n\n本文${pad}: ${'あ'.repeat(120)}\n`;
+        }).join('\n');
+        await seed(h, 'many-sections', `---\ndescription: 節の多い文書\ntype: fact\n---\n${body}`);
+        const { entries } = await outlineOf(h, 'many-sections');
+        // 前提: 予算内で全節の id が取れていること（そうでなければ、以下の
+        // 「30節を移した」という前提そのものが崩れる）。
+        expect(entries).toHaveLength(sectionCount);
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'many-sections',
+          sections: entries.map((entry) => entry.id),
+          toSlug: 'many-sections-appendix',
+          summary: '節をまとめて付録へ移した',
+        });
+
+        // 予算（MEMORY_SECTION_MOVE_LIST_BUDGET=2,000字）で実際に切れたこと
+        // （切れていなければ、下の assert は何も測っていない）。
+        expect(reply).toMatch(/…ほか \d+ 節は一覧から省略/);
+        // **`total`/`shown` を名乗っていること。**
+        expect(reply).toMatch(/移した 30 節のうち \d+ 節だけ出した/);
+
+        // **③ の実践の実測。** 一覧から省かれた最後の節（節29）を含め、
+        // 移った先の目次に全節が出ることを確かめる（案内する経路が実在する）。
+        const outline = await h.call('memory_outline', { slug: 'many-sections-appendix' });
+        expect(outline).toContain('記憶 many-sections-appendix の目次');
+        expect(outline).toContain('節29');
       });
 
       /**
@@ -7034,6 +7193,165 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
 });
 
 /**
+ * `manager_list`（絞った先）に継続点（`cursor`）を足す（issue #662 段1）。
+ *
+ * **直した穴**: `status` で群は掘れるが、絞った先が予算（`LIST_BUDGET`）を
+ * 超えたらそこで終わり、押し出された終端を辿る手段が無かった（依頼者が
+ * 今日そこで実際に止まった——全 396 本のうち十数本しか出ず、絞った先へ
+ * 届かなかった）。
+ *
+ * **群の順序（走行中・返事待ち → `lost` → その他、各群の中は `startedAt`
+ * 降順）は #688 のまま1バイトも変えていない**——`resolveManagerCursor` は
+ * keyset フィルタなので、既に整列済みの配列に対して絞るだけであり、相対
+ * 順序は保たれる。
+ *
+ * `resolveManagerCursor`（`manager-cursor.ts`）の分岐は、そちらの歯
+ * （`manager-cursor.test.ts`）が I/O 無しで直接測っている。ここで測るのは、
+ * 実際の道具（`ManagerPool` の代わり・`status` 絞り・`LIST_BUDGET` の予算
+ * 切り）に配線した結果である。
+ */
+describe('manager_list（絞った先）に継続点（cursor）を足す（#662 段1）', () => {
+  const NEWEST = Date.parse('2026-09-10T12:00:00.000Z');
+  const minutesBefore = (minutes: number) => new Date(NEWEST - minutes * 60_000).toISOString();
+
+  function entry(managerId: string, status: JobStatus, minutesAgo: number): ManagerSummary {
+    return {
+      managerId,
+      status,
+      live: status === 'running' || status === 'waiting_human',
+      cwd: '/workspace/repo',
+      request: `依頼 ${managerId}: ${'あ'.repeat(400)}`,
+      startedAt: minutesBefore(minutesAgo),
+      updatedAt: minutesBefore(minutesAgo),
+      waiting: [],
+      runnerId: 'runner-test',
+    };
+  }
+
+  /** `startedAt` 降順で積む（本物の `ManagerPool.list()` と同じ並び）。 */
+  function pool(entries: readonly ManagerSummary[]): Harness {
+    const h = harness();
+    for (const item of [...entries].sort((a, b) => b.startedAt.localeCompare(a.startedAt))) {
+      h.running.push(item);
+    }
+    return h;
+  }
+
+  function extractCursor(reply: string): string {
+    const match = /cursor=([A-Za-z0-9\-_]+)/.exec(reply);
+    if (!match) throw new Error(`cursor が案内に無い: ${reply}`);
+    return match[1]!;
+  }
+
+  it('status で絞った先が予算で切れたら、断り書きが cursor= を案内する', async () => {
+    const running = Array.from({ length: 40 }, (_, index) =>
+      entry(`mgr-run-${index}`, 'running', index),
+    );
+    const h = pool(running);
+
+    const reply = await h.call('manager_list', { status: ['running'] });
+
+    expect(reply).toMatch(/…ほか \d+ 件は省略/);
+    expect(reply).toContain('cursor=');
+    expect(reply).toMatch(/続きは manager_list cursor=[A-Za-z0-9\-_]+/);
+  });
+
+  it('cursor を辿ると、絞った先の全 managerId に到達できる（Issue の主題そのもの）', async () => {
+    const running = Array.from({ length: 40 }, (_, index) =>
+      entry(`mgr-run-${index}`, 'running', index),
+    );
+    const h = pool(running);
+    const ids = running.map((m) => m.managerId);
+
+    const seen = new Set<string>();
+    let cursor: string | undefined;
+    for (let guard = 0; guard < ids.length + 1; guard += 1) {
+      const reply: string = await h.call(
+        'manager_list',
+        cursor === undefined ? { status: ['running'] } : { status: ['running'], cursor },
+      );
+      for (const id of ids) {
+        if (reply.includes(id)) seen.add(id);
+      }
+      if (!reply.includes('cursor=')) break;
+      cursor = extractCursor(reply);
+    }
+
+    for (const id of ids) {
+      expect(seen, `${id} に到達できなかった（絞った先で迷子）`).toContain(id);
+    }
+  });
+
+  it('群の順序は cursor をまたいでも保たれる（走行中・返事待ちは最初の頁に出る）', async () => {
+    // running/waiting_human（rank0）はいちばん古い側、lost（rank1）は中間、
+    // done（rank2）は新しい側に置く——`ManagerPool.list()` は startedAt 降順
+    // なので、並べ替えを外すと done が先頭に来てしまう（#689 の flooded と
+    // 同じ測定条件の反転）。
+    const inFlight = (['running', 'waiting_human'] as const).map((status, index) =>
+      entry(`mgr-live-${index}`, status, 30_000 + index),
+    );
+    const lost = Array.from({ length: 3 }, (_, index) =>
+      entry(`mgr-lost-${index}`, 'lost', 1_000 + index),
+    );
+    const terminal = Array.from({ length: 40 }, (_, index) =>
+      entry(`mgr-term-${index}`, 'done', index),
+    );
+    const h = pool([...inFlight, ...lost, ...terminal]);
+
+    const first = await h.call('manager_list', {});
+
+    expect(first).toMatch(/…ほか \d+ 件は省略/);
+    // 3群とも窓に入っていること（入っていなければ順序は測れない）。
+    for (const id of ['mgr-live-0', 'mgr-live-1', 'mgr-lost-0', 'mgr-term-0']) {
+      expect(first, `${id} が1頁目の窓の外へ落ちた`).toContain(id);
+    }
+    expect(first.indexOf('mgr-live-0')).toBeLessThan(first.indexOf('mgr-lost-0'));
+    expect(first.indexOf('mgr-lost-0')).toBeLessThan(first.indexOf('mgr-term-0'));
+  });
+
+  it('status を変えて cursor を渡すと status-mismatch の明示のエラーになる（黙って倒れない）', async () => {
+    const running = Array.from({ length: 40 }, (_, index) =>
+      entry(`mgr-run-${index}`, 'running', index),
+    );
+    const h = pool(running);
+
+    const first = await h.call('manager_list', { status: ['running'] });
+    const cursor = extractCursor(first);
+
+    // status を変えずに cursor だけ渡す（＝ status 未指定）呼びは食い違う。
+    const reply = await h.call('manager_list', { cursor });
+
+    expect(reply).toContain('食い違う');
+    expect(reply).toContain('status');
+  });
+
+  it('壊れた cursor は明示のエラーで、黙って先頭からへ倒さない', async () => {
+    const h = pool([entry('mgr-run-0', 'running', 0)]);
+
+    const reply = await h.call('manager_list', { cursor: 'this-is-not-a-real-cursor' });
+
+    expect(reply).toContain('cursor が壊れている');
+    expect(reply).not.toContain('mgr-run-0');
+  });
+
+  it('母数は頁をまたいでも変わらない', async () => {
+    const running = Array.from({ length: 40 }, (_, index) =>
+      entry(`mgr-run-${index}`, 'running', index),
+    );
+    const h = pool(running);
+
+    const first = await h.call('manager_list', { status: ['running'] });
+    const cursor = extractCursor(first);
+    const second = await h.call('manager_list', { status: ['running'], cursor });
+
+    expect(first).toContain('status: running に絞った 40 件のうち');
+    if (second.includes('…ほか')) {
+      expect(second).toContain('status: running に絞った 40 件のうち');
+    }
+  });
+});
+
+/**
  * `manager_report` が「報告はまだ無い」と答える直前に生ログを見に行く（#323）。
  *
  * Issue の症状は「マネージャーは書き終えた（生ログに `end_turn` まで残る）のに、
@@ -9147,6 +9465,14 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     name: string;
     args: Record<string, unknown>;
     /**
+     * `args` の代わりに、器（`Harness`）から動的に引数を組み立てる
+     * （#662 段1）。**`args` は静的な値しか書けない**——`memory_section_move`
+     * の `sections`（節id）は `flooded()` が積んだ足場の本文から計算する値
+     * なので、静的な `args` には書けない。`argsOf` が在るときはそちらを
+     * `args` より優先して使う（下の2本の `it.each` を参照）。
+     */
+    argsOf?: (h: Harness) => Promise<Record<string, unknown>>;
+    /**
      * 応答が複数の節を連ねるとき、断り書きの合図をどの節へ帰属させて見るかを
      * 指定する（`## <見出し>` の逐語。#406）。省略時は応答全体を見る
      * （従来どおり）。
@@ -9371,6 +9697,51 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
      * （`RECENT_TRACE_LIMIT`＝200件）を溢れさせる（下の `flooded()` を見ること）。
      */
     { label: 'self_dropped', name: 'self_dropped', args: {} },
+    /*
+     * **`memory_section_move` も名前が `_list` で終わらないが、応答の中に
+     * 一覧（移した節の列挙）を1節持つ**（#662 段1）。`memory_write` の
+     * 「消えた見出しの列挙」（上）と同じ「2 の形」（#212）——道具全体は
+     * 書き込みだが、応答の一部が `renderListing` を通る一覧である。
+     *
+     * **節id（`sections`）は静的な `args` に書けないので `argsOf` を使う。**
+     * `flooded()` が積んだ `OUTLINE_FLOOD_SLUG`（240節）の本文を
+     * `scanMemorySections` で読み直し、全節の id を渡す——`memory_outline`
+     * の応答を経由しない（あちらは予算で先頭/末尾しか出さないので、240節
+     * 全部の id は取れない。`scanMemorySections` は本文を直接読むので
+     * 予算に縛られない）。
+     *
+     * **書き込みの道具である（`memory_write` のケースと同じ前提）。** 器
+     * （`Harness`）は `it` ごとに作り直されるので、ここで `OUTLINE_FLOOD_SLUG`
+     * を消費してもケース間に漏れない。**`memory_write` のケースと同じ
+     * `OUTLINE_FLOOD_SLUG` を使うが、衝突しない**——`memory_write` のケースは
+     * 全文置換（`memory_write`）、こちらは切り取り（`memory_section_move`）
+     * で、どちらも自分の `it`（＝自分の `flooded()` 呼び出し）の中でしか
+     * 実行されない。同じ `it` の中で両方を呼ぶことも無い（`CASES` は
+     * `it.each` で1ケースずつ独立に走る）。
+     *
+     * `toSlug` は他のケースと衝突しない新しい slug。`mark` はこの一覧
+     * レベルの断り書きだけが持つ語彙——素の `TRUNCATION_MARK` に落とすと、
+     * 応答の他の行（`describeMemoryWriteDiff` 側の「消えた見出し」等は
+     * ここでは出ないが、将来出力が増えたときに備えて）と取り違えうるので、
+     * 逐語に寄せる。
+     */
+    {
+      label: 'memory_section_move（移した節の列挙）',
+      name: 'memory_section_move',
+      args: {},
+      argsOf: async (h) => {
+        const doc = await h.stores.persona.read(OUTLINE_FLOOD_SLUG);
+        if (doc === null) throw new Error('OUTLINE_FLOOD_SLUG が flooded() で積まれていない');
+        const { sections } = scanMemorySections(doc.content);
+        return {
+          fromSlug: OUTLINE_FLOOD_SLUG,
+          sections: sections.map((section) => section.id),
+          toSlug: 'section-move-flood-target',
+          summary: '節をまとめて付録へ移した（掃き出しの歯）',
+        };
+      },
+      mark: /…ほか \d+ 節は一覧から省略（移した \d+ 節のうち \d+ 節だけ出した。/,
+    },
   ];
 
   /**
@@ -9699,6 +10070,7 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     label: string;
     name: string;
     args: Record<string, unknown>;
+    argsOf?: (h: Harness) => Promise<Record<string, unknown>>;
     section?: string;
     mark?: RegExp;
   }[] = [
@@ -9706,20 +10078,25 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     ...NAMED,
   ];
 
-  it.each(CASES)('$label — 件数が増えても出力は上限内に収まる', async ({ name, args }) => {
+  it.each(CASES)('$label — 件数が増えても出力は上限内に収まる', async ({ name, args, argsOf }) => {
     const h = await flooded(60);
+    // **`argsOf` が在るときはそちらを使う。** `sections`（節id）のような
+    // 動的な値は、足場を積んでから（`flooded()` の後で）計算しないと
+    // 作れない（`NAMED` の `argsOf` の doc を参照）。
+    const effectiveArgs = argsOf === undefined ? args : await argsOf(h);
 
-    const reply = await h.call(name, args);
+    const reply = await h.call(name, effectiveArgs);
 
     expect(reply.length).toBeLessThan(OUTPUT_CAP);
   });
 
   it.each(CASES)(
     '$label — 切ったなら黙らない（省いたことが出力に出る）',
-    async ({ label, name, args, section, mark }) => {
+    async ({ label, name, args, argsOf, section, mark }) => {
       const h = await flooded(60);
+      const effectiveArgs = argsOf === undefined ? args : await argsOf(h);
 
-      const reply = await h.call(name, args);
+      const reply = await h.call(name, effectiveArgs);
 
       // **「切った」と読める合図が出ていること。** 何も出ていなければ、
       // 受け取った側は「これで全部だ」と読んで全体像を組み立てる。
