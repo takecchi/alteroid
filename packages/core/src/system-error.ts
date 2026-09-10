@@ -67,3 +67,66 @@ export function systemErrorFactsOf(error: unknown): SystemErrorFacts | undefined
       : {}),
   };
 }
+
+/**
+ * `closed_failed` の受信箱本文へ、`event.systemError` を運ぶ（#713 段2）。
+ *
+ * ## 形は `usage-limits.ts` の `withRecoveryNote` に倣う
+ *
+ * `base`（＝ `event.reason`）を1文字も変えず、末尾に改行1本と1行を足すだけ。
+ * `reason` は既に読んでいる側が居るので、意味を動かすと静かに壊れる
+ * （`runner-protocol.ts` の `closed.reason` の doc が禁じる「`reason` の文字列を
+ * 解釈して分類し直さないこと。」と同じ理由 —— 逐語は
+ * `grep -Fn -- '**`reason` の文字列を解釈して分類し直さないこと。**' packages/core/src/runner-protocol.ts`）。
+ *
+ * ## `withRecoveryNote` と違い、`systemError` が無くても行を省かない
+ *
+ * `withRecoveryNote` は `recovery === 'unknown'` のとき何も足さない。ここでは
+ * それを真似ない —— `AGENTS.md`「取れない軸に 0 の行を作る」の地雷は「**観測して
+ * いない軸に、観測したふりの 0 を置くこと**」を禁じているのであって、この場合は
+ * 事情が違う。`closed_failed` は「止まった」と**確定して観測されている**——確定
+ * した事象について、器の資源で落ちたかどうかの分類の材料だけが無い、という状態
+ * である。**これは「0の行」ではなく「この事象については分類が取れなかった」と
+ * いう実在する観測結果であり、書くべき情報である。** 書かなければ、読む側は
+ * 「systemError 無し」を「B（器の資源）ではなかった」と引き算で読む。
+ *
+ * ## D（分類が取れなかった）が A（枠）を飲み込まないこと
+ *
+ * 区別したいのは4つ —— A: 枠（429）で落ちた（`systemError` には乗らない。
+ * `reason` 本文と `lastFailure` が持つ）／B: 器の資源で起動できなかった
+ * （`systemError` が在る）／C: セッションが切れた（`selfFenced` の枝で早期
+ * return されるのでここへ来ない）／D: この軸の材料が取れなかった（`code` を
+ * 持たない例外・signal で畳まれた回）。
+ *
+ * **A と D はどちらも `systemError` が無い**（枠で落ちた回には `code` が付かない
+ * ので、B の判定材料としては D と同じ「無い」に見える）。だから D の行を
+ * 「分類が取れなかった」とだけ書くと、A で落ちた回にもその行が出て、読む側は
+ * 「（A も含めて）何も分からない」と読んでしまう —— 実際には `reason` の本文に
+ * `You've hit your …` のような枠の文言がそのまま入っている。**だから D の行は
+ * 「器の資源による落ち方かどうかは、この欄では判定できなかった」の形にし、
+ * 他の軸（枠・セッション切断）はこの欄の対象外であることと、本文 /
+ * `lastFailure` を見るよう、行の中で明示する。** スコープを「器の資源の軸」
+ * だけに絞ることで、A の情報（`reason` 本文）を上書きしない。
+ *
+ * ## 出す2形とも `code` / `errno` / `syscall` を言い換えない
+ *
+ * `systemError` が在る回は、SDK が出した `code` / `errno` / `syscall` をそのまま
+ * 連ねる（人間が検索できる形で残す。要約や意訳をしない）。
+ */
+export function withSystemErrorNote(
+  base: string,
+  systemError: SystemErrorFacts | undefined,
+): string {
+  if (systemError === undefined) {
+    return (
+      `${base}\n` +
+      '（分類: 器の資源による落ち方かどうかは、この欄では判定できなかった。' +
+      '枠に当たった場合・セッションが切れた場合もこの欄には出ない —— ' +
+      '本文と lastFailure を見ること）'
+    );
+  }
+  const facts = [`code=${systemError.code}`];
+  if (systemError.errno !== undefined) facts.push(`errno=${systemError.errno}`);
+  if (systemError.syscall !== undefined) facts.push(`syscall=${systemError.syscall}`);
+  return `${base}\n（分類: 器の資源で落ちた可能性 —— ${facts.join(' ')}）`;
+}
