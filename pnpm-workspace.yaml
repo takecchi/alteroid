@@ -181,9 +181,18 @@ minimumReleaseAgeExclude:
 # の警告になるだけで何も上書きしない）。**移したくなっても移さないこと** —
 # `package.json` に `"pnpm"` フィールドは無いのが現状なので、新設もしないこと。
 #
-# **`js-yaml` と `esbuild` はここに足していない。** 漏れではない。
-# - `js-yaml`: 親が `@redocly/openapi-core` で、その宣言が `4.3.1` の厳密固定
-#   （範囲指定ではない）。上書きの影響が未検証なので、別 PR に分けてある。
+# **`js-yaml` は足した。`esbuild` はまだ足していない。**
+# - `js-yaml`: 親が `@redocly/openapi-core@1.34.19` で、その宣言は `"js-yaml": "4.3.1"`
+#   の厳密固定（範囲指定ではない、`npm view @redocly/openapi-core@1.34.19 dependencies`
+#   で確認済み）。上書きはこの固定を強制上書きする形になるが、差は patch 1つ
+#   （4.3.1 → 4.3.2）なので採った。`esbuild`（下記）とは形が違う —— あちらは宣言
+#   レンジ `^0.27.0` の**外**へ出る。
+#   実際の使用経路（`pnpm why js-yaml -r` で確認済み）は2本ある:
+#   `@redocly/openapi-core` ← `openapi-typescript` ← `@alteroid/api-client`
+#   （devDependencies、openapi.json を読んで型を生成する側）と、
+#   `cosmiconfig` ← `shadcn` ← `@alteroid/web`（dependencies）。
+#   **`pnpm build`（`pnpm -r build`）はこの2パッケージを両方ビルドするので、
+#   緑であることがこの上書きの実挙動の検査になる。**
 # - `esbuild`: 親の `tsup` の宣言が `^0.27.0` で、修正版（0.28.1）はその範囲に
 #   入らない。上流（`tsup`）が `^0.28` を宣言し直すまでは見送り。
 # **`hono` は `catalog:` と `overrides:` の両方に在る。重複ではない。** `catalog:` が
@@ -200,6 +209,7 @@ minimumReleaseAgeExclude:
 overrides:
   fast-uri: ^3.1.6
   hono: ^4.13.5
+  js-yaml: ^4.3.2
   qs: ^6.16.0
 
 # #246: `pnpm --filter <存在しないパッケージ名>` が黙って exit 0 を返す穴を塞ぐ。
