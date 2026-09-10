@@ -2852,10 +2852,18 @@ class Registry implements RunnerRegistry {
           // **資源を聞けなくても、失敗の記憶までは落とさない（#712）。** ここは
           // 名簿が自分で持っている値で、器へ聞きに行った結果ではない——聞けな
           // かったことを理由に捨てると、**答えない器ほど落とした事実が消える。**
+          //
+          // **`unreachable: true` を立てる（#712 続き）。** ここへ来るのは
+          // `resources()` が throw したか、`withDeadline` が期限切れで reject した
+          // 場合だけ——**probe が返っていない。** 「口が無い／`undefined` を返した」
+          // （上の try の成功経路）とは別の観測なので、`chooseByResources` の側で
+          // 別の値として渡す。この場では平均を計算し直したりしない——それは
+          // `chooseByResources` の仕事のままである。
           return {
             client,
             resources: undefined,
             recentFailures: this.#freshFailuresOf(client.runnerId).length,
+            unreachable: true,
           };
         }
       }),
@@ -3496,6 +3504,36 @@ function withDeadline<T>(
  *
  * **0点でも返る。** 資源を見るのは「どこに置くか」を決めるためで、「置けるか」を
  * 決めるためではない（north_star 禁止2）。
+ *
+ * ## 「報告しなかった」と「聞けなかった」は別の観測である（#712 続き）
+ *
+ * **平均で埋めるのは「報告しなかった」器だけである。** 口が無い・`undefined` を
+ * 返した・欄が一部欠けている——これは probe が**返っている**ので、その器が
+ * いま健康かどうかについて何も語らない。だから上の「見えている器の平均で埋める」
+ * を1ミリも変えていない。
+ *
+ * **「聞けなかった」（`unreachable: true`）は別である。** `resources()` が throw
+ * したか、`withDeadline` の期限（`PLACEMENT_PROBE_MS`）が切れて reject した——
+ * probe が**返っていない。** 期限切れになる器は定義上「いま最も混んでいる器」
+ * なので、これは健康の証拠ではなく「答えられなかった」という観測である。**平均で
+ * 埋めると、聞けなかった器は見えている器の写しになって点数を持ってしまい、逆相関
+ * した艦隊では実測した全器の積を平均の積が上回ることがある**（Issue #712 の実測。
+ * 健全な器の諸元が同じ艦隊でも、報告者が1台だけなら平均がその1台の写しになり、
+ * `scoresTie` で同点になって登録順の先——聞けなかった器——が勝つ）。
+ *
+ * **だから点数の前に「段」で分ける。** 聞けた器が1台でも居るなら、聞けなかった器は
+ * **点数を見ずに**後ろへ回る。同じ段の中の比較（点数 → 同点なら `failures` の
+ * 少ない方 → 登録順の先）は変えていない——段は**順序**であって、上の「重みを
+ * 持たないのは意図である」が禁じた重み・係数・指数の類ではない。段をまたいで
+ * 点数を比べることが無いだけで、点数の計算式そのものは1文字も変わっていない。
+ *
+ * **段は記憶を持たない。** 聞けたかどうかは呼び出しのたびの `withDeadline` の
+ * 生の結果だけで決まり、前回までの判定を持ち越さない（sticky にしない）——
+ * `chooseByResources` が状態を持たない純関数である、という上の性質をそのまま
+ * 引き継ぐ。
+ *
+ * **全台が聞けなくても断らない。** 段で分けても「聞けなかった器しか無い」ときは
+ * その中から返す——上の「0点でも返る」と同じ理由（north_star 禁止2）。
  */
 function chooseByResources(
   reports: readonly {
@@ -3506,6 +3544,14 @@ function chooseByResources(
      * 0 として扱う** ⟹ #712 の直しが入る前と点数が1ミリも変わらない。
      */
     recentFailures?: number;
+    /**
+     * **資源が「聞けなかった」か（#712 続き）。** `resources()` が throw したか
+     * `withDeadline` の期限切れで reject した場合だけ `true`——「口が無い／
+     * `undefined` を返した」（＝ `resources` が `undefined` なだけ）とは別の値
+     * である。**渡さない呼び出しは `false` として扱う** ⟹ 既存の呼び出しの
+     * 振る舞いは1ミリも変わらない。
+     */
+    unreachable?: boolean;
   }[],
 ): RunnerClient | undefined {
   const rooms = reports.flatMap((r) =>
@@ -3530,7 +3576,13 @@ function chooseByResources(
   let best: RunnerClient | undefined;
   let bestScore = -Infinity;
   let bestFailures = Infinity;
+  // **段（#712 続き）。** まだ誰も居ない状態は「聞けなかった」側に置く——最初の
+  // 報告が聞けた器なら、下の分岐で必ず段の上（`!unreachable`）として置き換わる。
+  // 最初の報告が聞けなかった器なら、段が揃ったまま通常の点数比較へ落ちる
+  // （`scoresTie(score, -Infinity)` は `false` を返すので、暫定王として正しく立つ）。
+  let bestUnreachable = true;
   for (const report of reports) {
+    const unreachable = report.unreachable ?? false;
     const room = report.resources?.memory ? memoryRoomOf(report.resources.memory) : meanRoom;
     const pidsRoom = report.resources?.pids ? pidsRoomOf(report.resources.pids) : meanPidsRoom;
     const failures = report.recentFailures ?? 0;
@@ -3538,6 +3590,24 @@ function chooseByResources(
       (report.resources?.cpu?.cores ?? meanCores) /
       ((report.resources?.managers ?? meanHeld) + failures + 1);
     const score = room * pidsRoom * share;
+
+    // **段が違うなら、点数を見ずに決める。** 聞けなかった器は、聞けた器が
+    // どこかに居る限り点数でどれだけ勝っていても前へ出ない——同点で揃うことも
+    // （報告者が1台だけの艦隊で平均がその1台の写しになる形）、艦隊の作り込みで
+    // 逆相関させることも、どちらも段そのものが塞ぐ。
+    if (unreachable !== bestUnreachable) {
+      if (!unreachable) {
+        // 聞けた器が、聞けなかった暫定王を段の上から置き換える。
+        bestScore = score;
+        bestFailures = failures;
+        best = report.client;
+        bestUnreachable = false;
+      }
+      // 聞けなかった器は、聞けた暫定王が居るならここで見送る。
+      continue;
+    }
+
+    // **ここから下は同じ段の中だけ。** 既存の点数比較を1文字も変えていない。
     // **同点かどうかを先に見る。** 後にすると、`0.8000000001` のように誤差ぶん
     // だけ大きい点数が `score > bestScore` を通って勝ち、同点の判定まで届かない
     // （＝艦隊の並び順で結果が変わる）。
