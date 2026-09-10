@@ -613,8 +613,8 @@ declare const RENDERED_MEMORY_BRAND: unique symbol;
  *
  * **`buildCloneSystemPrompt`（`prompt.ts`）の `memory` 引数はこの型を要求する。**
  * 生の文字列を渡すと `tsc` が落ちる——記憶が文字列になる関数は
- * `renderMemoryDocuments` の1つに閉じている（`store.ts:48-53` の「器は文字列を
- * 組み立てない」という契約を、`tsc` が守る側へ回すための釘）。実行時には
+ * `renderMemoryDocuments` の1つに閉じている（`store.ts` の `PersonaStore.documents()` の
+ * doc が持つ「器は文書を渡すだけにする」という契約を、`tsc` が守る側へ回すための釘）。実行時には
  * ただの `string` であり、ランタイムの挙動には一切影響しない。
  */
 export type RenderedMemory = string & { readonly [RENDERED_MEMORY_BRAND]: true };

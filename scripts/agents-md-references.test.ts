@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,6 +18,26 @@ import { describe, expect, it } from 'vitest';
  *
  * **フェンス（```）の中は見ない。** あそこに在るのは出典ではなく**生の出力**
  * （スタックトレース・過去の実測）で、書き換えてはいけないものだからである。
+ *
+ * ---
+ *
+ * ## この歯は `AGENTS.md` 専用である。`.claude/**` とどの階層かの `src/**` は下の別の歯が持つ
+ *
+ * 上の3本は `AGENTS.md` 1ファイルしか見ていなかった（#369 で書かれた当時のまま）。
+ * PR #760（コードの `path:行番号` 出典29件を逐語・シンボル名へ寄せた）の後、
+ * `.claude/**` とどの階層かの `src/**` へ**「1. `path:行番号`」だけ**を広げる歯を
+ * 下に足した（この下にある2本目の `describe(...)` ブロックがそれである。
+ * その describe 名の中身は下の `// ` 行コメント側で確認できる——ここでは
+ * 名前の文字列を引用しない。JSDoc の中で `*` の直後に `/` が続く形を書くと
+ * コメントがそこで閉じてしまうため）。
+ *
+ * **⚠️ 「2. N行目」は広げない。理由と実測は、その歯のすぐ上の doc に書いてある**
+ * （コードの中の「N行目」は出典ではなく語彙だから——詳細はそちらを読むこと）。
+ * **「3. `grep -Fn --` の現物一致」も広げていない**——依頼の主題は
+ * `path:行番号` の腐りだけで（コード中の裸のファイル名を `isRepoFile` が
+ * 解決できず素通りしていた穴）、3.（逐語出典の現物一致）はこの PR が確かめた
+ * 対象ではないため、範囲を広げると同時に線を引く側（AGENTS.md「範囲を広げるなら、
+ * 広げると同時に新しい線を引くこと」）に倣ってここで止めてある。
  *
  * **⚠️ なぜ `grep -n` ではなく `grep -Fn --` か（#408）。** 逐語に正規表現の
  * メタ文字（`$` `{` `}` `(` `)` `[` `]` `*` `+` `?` `.` `|` `^` `\` や、`-`
@@ -54,14 +75,27 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 export type ProseLine = { line: number; text: string };
 
-/** `AGENTS.md` の本文（フェンスの中を落としたもの）を行番号つきで返す。 */
+/**
+ * 本文（フェンスの中を落としたもの）を行番号つきで返す。
+ *
+ * 元々は `AGENTS.md`（生の Markdown）専用だったが、`.claude/**` とどの階層かの
+ * `src/**` にも同じ考え方（フェンス＝出典ではなく生の出力なので見ない）を適用するために
+ * ここで汎用化した。`.ts` のコメントの中のフェンスは行頭がそのまま
+ * ` ``` ` にならず、コメント記号（`//` または JSDoc の `*`）が前に付く
+ * （実例: `packages/core/src/inbox.ts` の JSDoc 内 ` * \`\`\` `、
+ * `packages/core/src/clone.ts` の行コメント内 `// \`\`\` `）。**この形も
+ * フェンスとして認識できないと、コード中の実測ブロックが「フェンスの外」
+ * として誤って歯の対象に入ってしまう**（今回は該当する実測ブロックの中身に
+ * `path:行番号` は無かったが、それは実測がたまたまそうだっただけで、
+ * この関数自身の正しさではない——だから正しく直した）。
+ */
 export function proseLines(markdown: string): ProseLine[] {
   const out: ProseLine[] = [];
   let inFence = false;
   const lines = markdown.split('\n');
   for (let i = 0; i < lines.length; i++) {
     const text = lines[i] ?? '';
-    if (/^\s*(```|~~~)/.test(text)) {
+    if (/^\s*(?:\/\/+|\*)?\s*(```|~~~)/.test(text)) {
       inFence = !inFence;
       continue;
     }
@@ -224,6 +258,91 @@ function readRepoFile(target: string): string {
   return readFileSync(path.join(ROOT, target), 'utf8');
 }
 
+// ---------------------------------------------------------------------------
+// `.claude/**` と `*/src/**` — path:行番号 だけを広げる（#前述の doc）
+// ---------------------------------------------------------------------------
+
+// この歯の対象を `.claude/**` と、どの階層でも `src` という名前のディレクトリを
+// 持つパスに絞る（`AGENTS.md` はここに来ない——別ファイルなので、そもそも
+// `git ls-files` の一覧にしか現れず、`src` も `.claude` も含まないので false になる）。
+//
+// 「どの階層でも」で実装した——PR #760 の再現コマンドが実際に2階層下の
+// `src`（`apps/daemon/src/*`）にも当たっていたことを確かめたうえでの実装
+// （git のパス指定の `*` は `/` を跨ぐ。再現コマンドは下の doc comment に
+// そのまま書ける——`//` 行コメントは `*/` で終わらないため）:
+//
+// ```
+// git grep -nE '[A-Za-z0-9_.-]+\.(ts|tsx|mjs|js|md|json|yml|yaml):[0-9]+' -- '.claude/**' '*/src/**'
+// ```
+export function isWidenedScopeFile(relativePath: string): boolean {
+  if (relativePath === '.claude' || relativePath.startsWith('.claude/')) return true;
+  return /(^|\/)src\//.test(relativePath);
+}
+
+/** `git ls-files -z` で追跡済みファイルの相対パスを列挙する（`check-tracked-nul-bytes.mjs` と同じ形）。 */
+function listTrackedFiles(): string[] {
+  const out = execFileSync('git', ['ls-files', '-z'], {
+    cwd: ROOT,
+    maxBuffer: 1024 * 1024 * 64,
+  });
+  return out
+    .toString('utf8')
+    .split('\0')
+    .filter((p) => p.length > 0);
+}
+
+/**
+ * **この PR の本体。** `isRepoFile`（上）はリポジトリ相対の解決だけで、`clone.ts:505`
+ * のような**裸のファイル名**を1件も拾えない。#760 より前の実測（30件中）は
+ * リポジトリ相対5件・裸のファイル名25件（83%）だったので、裸のファイル名を
+ * 解決できないままでは、この歯は「広げた」を名乗って中身の大半を素通りさせる。
+ *
+ * `repoRelativePaths`（`git ls-files` の出力）から、(a) 完全一致（リポジトリ
+ * 相対） (b) `/` を含まない候補が、どれかのファイルの basename と一致——の
+ * どちらかを許す解決器を作る。**basename が複数のファイルに一致しても
+ * （`index.ts` は7パッケージに1つずつある）曖昧さは解決しない**——ここで
+ * 答える必要があるのは「これはリポジトリのどこかのファイルを指しているか」
+ * だけで、「どのファイルか」ではないため（`findLineNumberCitations` は
+ * target を出典として拾うだけで、どのファイルかを本文と突き合わせない）。
+ */
+export function buildBasenameAwareRepoFileResolver(
+  repoRelativePaths: readonly string[],
+): (candidate: string) => boolean {
+  const exact = new Set(repoRelativePaths);
+  const basenames = new Set(repoRelativePaths.map((p) => path.posix.basename(p)));
+  return (candidate: string): boolean => {
+    if (candidate.includes('..')) return false;
+    if (exact.has(candidate)) return true;
+    if (candidate.includes('/')) return false;
+    return basenames.has(candidate);
+  };
+}
+
+export interface WidenedLineNumberCitationExemption {
+  /** `.claude/**` の中、またはどの階層かの `src/**` の中の、リポジトリ相対パス。 */
+  readonly file: string;
+  /** `findLineNumberCitations` が返す `token`（例: `clone.ts:505`）。完全一致で照合する。 */
+  readonly token: string;
+  /** **非空であること**（下の歯が測る）。「あとで書く」を空文字で表せない。 */
+  readonly why: string;
+}
+
+/**
+ * 免除は「理由付き」であること（#756 `tool-description-enumeration.test.ts` の
+ * 免除表と同じ形）。**⭐ いまは0件——2026-09-10 の実測で、#760 が29件、この PR が
+ * 残り1件（`packages/core/src/memory.ts` の `store.ts:48-53` 引用。#760 が
+ * 「別委譲が同じファイルを持っているため範囲外にした」としていたが、その委譲は
+ * 着地済みで `gh pr list --json files` に `memory.ts` を触る開いた PR は
+ * 無かったため、この PR で直した）を直したので、免除するものが無い。**
+ * 1件でも新しく免除するなら、ここへ理由つきで足すこと。
+ */
+export const WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS: readonly WidenedLineNumberCitationExemption[] =
+  [];
+
+const TRACKED_FILES = listTrackedFiles();
+const WIDENED_SCOPE_FILES = TRACKED_FILES.filter(isWidenedScopeFile);
+const isRepoFileOrBasename = buildBasenameAwareRepoFileResolver(TRACKED_FILES);
+
 const agentsMd = readFileSync(path.join(ROOT, 'AGENTS.md'), 'utf8');
 const prose = proseLines(agentsMd);
 
@@ -283,6 +402,99 @@ describe('AGENTS.md の参照の形（#369）', () => {
         '`--` が無いと、逐語が `-` から始まったときに道具ごと違う形で壊れる' +
           '（固まる／exit 1 無出力／別ファイルの偽陽性。詳細は AGENTS.md 該当箇所）。',
       ].join('\n'),
+    ).toEqual([]);
+  });
+});
+
+// ## なぜここは「N行目」を広げないか（実測。#369 の穴を広げる前に、まず狭める）
+//
+// `.claude/**` と `*/src/**` に対して `findRowNumberCitations`（＝「N行目」を
+// 探す既存のパターン）を素直に当てると **131件** ヒットする（2026-09-10 実測。
+// `//` 行コメントなら再現コマンドを1文字も変えずに書ける——`/** */` だと
+// `'*/src/**'` の中の `*/` がコメントを閉じてしまうため、上の doc comment 群は
+// この形に書き直してある）:
+//
+// ```
+// git grep -noP '\d+\s*行目' -- '.claude/**' '*/src/**' | wc -l
+// ```
+//
+// **抽出したサンプルは全件が誤検出だった** —— コードの中の「N行目」は出典では
+// なく**語彙**として使われている。処理している**データ**（ログ・メッセージ本文・
+// 台帳の行）の何行目かを指しているのであって、**ファイルを指す出典ではない**。
+// 実例（自分で確かめること）:
+//
+// - `grep -Fn -- '理由は1行目だけ・200字で切る' packages/core/src/uncaught-net.test.ts`
+//   —— 例外メッセージの1行目という意味
+// - `grep -Fn -- '**1行目だけ・長さも切る**' packages/core/src/dropped-record.ts`
+//   —— ドライバの例外オブジェクトの1行目という意味
+// - `grep -Fn -- '2行目の補足です' apps/cli/src/chat.test.ts`
+//   —— テストの合成入力（質問文）の2行目という意味
+//
+// **⟹ `AGENTS.md`（ファイルについての散文）では「N行目」は出典の形だが、
+// コードでは同じ文字列が別の意味（語彙）を持つ。だから「2. N行目」の規則は
+// `.claude/**` / `*/src/**` へは広げない**——広げれば131件、実測した範囲では
+// 全件が門を鳴らすだけの偽陽性になる。規則を広げる代わりに、規則そのものを
+// 狭く保つ（誤検出率を実測してから門を広げるかどうかを決める、という判断）。
+//
+// **`.claude/skills/mutation-testing/SKILL.md` の「より前の1行目へ挿入された」も
+// この形（`path:行番号` ではなく `N行目` 単体）であることを確認済み**——
+// `grep -Fn -- 'より前の1行目へ挿入された' .claude/skills/mutation-testing/SKILL.md`
+// で当たる。この決定（N行目を広げない）により、そもそも今回のどちらの歯にも
+// 引っ掛からない。フェンスの外か中かを気にする必要も無い。
+describe('.claude/** と */src/** の path:行番号 出典（PR #760 の続き）', () => {
+  it('免除表の理由（why）が全部、非空である', () => {
+    const blank = WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS.filter(
+      (e) => e.why.trim().length === 0,
+    ).map((e) => `${e.file} ${e.token}`);
+    expect(
+      blank,
+      '免除の理由が空である。なぜ広げた歯の対象から外すのかを書くこと' +
+        '（空欄を許すと、免除表は数合わせの場所になる）。',
+    ).toEqual([]);
+  });
+
+  it('免除表に載っている項目が、いまも実際に検出される現物と一致する（幽霊免除が無い）', () => {
+    // 免除の対象が既に直っている／消えているのに免除表にだけ残る形は、
+    // 「守っていないのに守っているように見える」ので歯自体で防ぐ。
+    const stillDetected = new Set<string>();
+    for (const file of WIDENED_SCOPE_FILES) {
+      const text = readRepoFile(file);
+      const lines = proseLines(text);
+      for (const c of findLineNumberCitations(lines, isRepoFileOrBasename)) {
+        stillDetected.add(`${file} ${c.token}`);
+      }
+    }
+    const ghosts = WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS.filter(
+      (e) => !stillDetected.has(`${e.file} ${e.token}`),
+    ).map((e) => `${e.file} ${e.token}`);
+    expect(
+      ghosts,
+      '免除表に載っている file:token が、もう検出されない（直った/消えた）。' +
+        '免除表からこの行を消すこと——直った後も免除に残すと、次に本当に必要な' +
+        '免除が増えたときに見分けが付かなくなる。',
+    ).toEqual([]);
+  });
+
+  it('リポジトリ内のファイルを `path:行番号`（裸のファイル名を含む）で指さない', () => {
+    const hits: string[] = [];
+    for (const file of WIDENED_SCOPE_FILES) {
+      const text = readRepoFile(file);
+      const lines = proseLines(text);
+      for (const c of findLineNumberCitations(lines, isRepoFileOrBasename)) {
+        const exempted = WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS.some(
+          (e) => e.file === file && e.token === c.token,
+        );
+        if (exempted) continue;
+        hits.push(`${file}:${c.line} ${c.token}`);
+      }
+    }
+    expect(
+      hits,
+      '行番号は腐り、腐ったことが読む側から分からない（AGENTS.md「他のファイルを' +
+        '出典として指すときは、行番号を単独の出典にしない」）。逐語' +
+        "（`grep -Fn -- '<逐語>' <path>`）かシンボル名で指すこと。" +
+        '直せない理由があるなら WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS へ理由つきで足すこと' +
+        '（scripts/agents-md-references.test.ts）。',
     ).toEqual([]);
   });
 });
@@ -417,5 +629,104 @@ describe('出典が現物に当たるかの判定そのもの（陰性 fixture�
         throw new Error('リポジトリ外は isRepoFile で弾かれ、readTarget まで来ないはず');
       }),
     ).toEqual([]);
+  });
+});
+
+describe('isWidenedScopeFile（歯の対象範囲そのもの。合成 fixture）', () => {
+  it('.claude/** に入る', () => {
+    expect(isWidenedScopeFile('.claude/skills/x/SKILL.md')).toBe(true);
+    expect(isWidenedScopeFile('.claude')).toBe(true);
+  });
+
+  it('2階層下の src/** にも入る（PR #760 の再現コマンドが実際に当てていた形）', () => {
+    expect(isWidenedScopeFile('apps/daemon/src/index.ts')).toBe(true);
+    expect(isWidenedScopeFile('packages/core/src/clone.ts')).toBe(true);
+  });
+
+  it('AGENTS.md・docs/・apps/web/app（src を持たない）は入らない', () => {
+    expect(isWidenedScopeFile('AGENTS.md')).toBe(false);
+    expect(isWidenedScopeFile('docs/north_star.md')).toBe(false);
+    expect(isWidenedScopeFile('apps/web/app/routes/chat.tsx')).toBe(false);
+  });
+
+  it('パスの一部に "src" を含む語（srcじゃない）では誤爆しない', () => {
+    expect(isWidenedScopeFile('packages/core/srcs/foo.ts')).toBe(false);
+    expect(isWidenedScopeFile('packages/resrc/foo.ts')).toBe(false);
+  });
+});
+
+describe('buildBasenameAwareRepoFileResolver（この PR の本体。合成 fixture）', () => {
+  const repoFiles = [
+    'packages/core/src/clone.ts',
+    'apps/daemon/src/index.ts',
+    'apps/runner/src/index.ts',
+  ];
+  const resolve = buildBasenameAwareRepoFileResolver(repoFiles);
+
+  it('リポジトリ相対の完全一致を解決する（従来どおり）', () => {
+    expect(resolve('packages/core/src/clone.ts')).toBe(true);
+  });
+
+  it('裸のファイル名（basename）も解決する——これが無いと #760 前の83%を取りこぼす', () => {
+    expect(resolve('clone.ts')).toBe(true);
+  });
+
+  it('複数ファイルに一致する basename も解決する（曖昧さは解決しない仕様）', () => {
+    // index.ts は apps/daemon と apps/runner の2つに一致するが、
+    // 「リポジトリのどこかを指しているか」だけを答えればよいので true。
+    expect(resolve('index.ts')).toBe(true);
+  });
+
+  it('リポジトリに存在しない裸のファイル名は解決しない', () => {
+    expect(resolve('does-not-exist.ts')).toBe(false);
+  });
+
+  it('"/" を含むが完全一致しない候補は解決しない（部分パスの当て推量はしない）', () => {
+    expect(resolve('core/src/clone.ts')).toBe(false);
+  });
+
+  it('".." を含む候補は解決しない', () => {
+    expect(resolve('../clone.ts')).toBe(false);
+  });
+});
+
+describe('広げた歯の end-to-end（合成 fixture。裸のファイル名の形が実際に鳴ることの確認）', () => {
+  const repoFiles = ['packages/core/src/clone.ts', 'apps/daemon/src/index.ts'];
+  const resolve = buildBasenameAwareRepoFileResolver(repoFiles);
+
+  it('裸のファイル名の出典（`clone.ts:505`）を findLineNumberCitations が拾う', () => {
+    const lines = proseLines('参照は `clone.ts:505` に在る。');
+    expect(findLineNumberCitations(lines, resolve)).toEqual([
+      { line: 1, token: 'clone.ts:505', target: 'clone.ts' },
+    ]);
+  });
+
+  it('リポジトリ相対の出典（`apps/daemon/src/index.ts:1049-1050`）も引き続き拾う', () => {
+    const lines = proseLines('参照は `apps/daemon/src/index.ts:1049-1050` に在る。');
+    expect(findLineNumberCitations(lines, resolve)).toEqual([
+      {
+        line: 1,
+        token: 'apps/daemon/src/index.ts:1049-1050',
+        target: 'apps/daemon/src/index.ts',
+      },
+    ]);
+  });
+
+  it('時刻・版番号・リポジトリ外は拾わない（basename 解決を足しても誤検出が増えない）', () => {
+    const lines = proseLines(
+      [
+        '時刻は 2026-08-22T09:35 で、`06:27` に出た。',
+        'バージョンは `typescript-eslint:8.67.0` ではない。',
+        'リポジトリ外は `tsup/dist/index.js:1703` のように書いてよい。',
+      ].join('\n'),
+    );
+    expect(findLineNumberCitations(lines, resolve)).toEqual([]);
+  });
+
+  it('コメント記号つきのフェンス（`// \\`\\`\\` `）の中は見ない', () => {
+    const lines = proseLines(
+      ['// ```', '// clone.ts:505 のような実測はここでは書き換えない', '// ```'].join('\n'),
+    );
+    expect(findLineNumberCitations(lines, resolve)).toEqual([]);
   });
 });
