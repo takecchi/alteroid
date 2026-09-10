@@ -70,4 +70,34 @@ describe('上限つきの帳面', () => {
     expect(() => createRecentMap({ limit: 0 })).toThrow();
     expect(() => createRecentMap({ limit: 1.5 })).toThrow();
   });
+
+  /**
+   * **`manager.ts` の `#reportedOf` / `#askedOf` は、この `onForget` が渡す
+   * 並びを「古い順」だと日誌に書く。** ここで挿入順どおりであることを固定
+   * しておかないと、`set()` の追い出しを「新しい側から」に変える変更が
+   * `manager.ts` 側のテストを一切通さずに紛れ込める（`manager.ts` は
+   * `RecentMap` の中身を見ず、渡された配列をそのまま信じるため）。
+   *
+   * **⚠️ 1回の `set()` 呼び出しで `entries` の大きさは高々+1しか増えない
+   * （既存の id なら delete→set で±0、新規の id なら+1）ので、1回の
+   * `onForget` が渡す配列は常に長さ1になる。** これは実装上の不変条件で
+   * あって、このテストの都合ではない——だから「複数回あふれさせて、忘れた
+   * id を集めた列が挿入順と一致するか」でしか、追い出す側を誤った変異は
+   * 検出できない（1件だけの配列を `.reverse()` しても並びは変わらないので、
+   * その形の変異はこのテストでは——というよりどんなテストでも `set()` を
+   * 素直に呼ぶ限り——検出できない。この限界は PR 本文に明記してある）。
+   */
+  it('複数回あふれても、忘れる id は挿入順（古い順）どおりに1件ずつ出る', () => {
+    const forgotten: string[][] = [];
+    const map = createRecentMap<number>({ limit: 3, onForget: (ids) => forgotten.push(ids) });
+    const ids = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
+    ids.forEach((id, index) => map.set(id, index));
+
+    // 上限3件を超えた4件目（'d'）以降、1件ずつ計4回あふれる。
+    expect(forgotten).toEqual([['a'], ['b'], ['c'], ['d']]);
+    // 平らにしても、挿入順（＝古い順）とそのまま一致する。
+    expect(forgotten.flat()).toEqual(['a', 'b', 'c', 'd']);
+    // 残っているのは新しい側の3件。
+    expect(map.entries().map(([id]) => id)).toEqual(['e', 'f', 'g']);
+  });
 });

@@ -4062,6 +4062,130 @@ describe('report の冪等化（#206）', () => {
 });
 
 /**
+ * **`#reportedOf` が「古い順に」と書く日誌の中身を測る（recent.ts の doc / #409）。**
+ *
+ * `manager.ts` の `#reportedOf` は、上限に達して忘れた id を
+ * `…ほか ${rest} 件省略（${total} 件中、古い順に ${shown} 件だけ出した）` という
+ * 文言で日誌へ書く。この文言が指す「古い順」は `createRecentMap` の `onForget`
+ * が渡す並びに丸ごと依存していて、`manager.ts` 側は並びをそのまま信じている
+ * だけである。**recent.test.ts 側の歯（`RecentMap` 単体）だけだと、
+ * `manager.ts` がその並びを取り違えて渡す・逆順にする、といった `#reportedOf`
+ * 自身の配線の誤りは1つも捕まえない。** ここでは実際に `report` イベントを
+ * 大量に流し込み、`#reportedOf` が実際に日誌へ書いた本文から id を抜き出して
+ * 検証する——文言の**中身**（列挙されている id が本当に古い側か）を測る。
+ *
+ * **⚠️ この上限（512件）は `manager.ts` の非公開定数 `REPORTED_MEMORY_LIMIT`
+ * を手で複製した値である。** 手前でエクスポートされていないので import
+ * できない——もし本体側の値を変えたら、このテストの `LIMIT` も合わせて直す
+ * こと（ずれても壊れるのは「512件目で境界を跨ぐ」という前提だけで、テスト
+ * 自体は「まだ埋まっていない」側に倒れて green のまま何も測らなくなる）。
+ *
+ * **⚠️ さらに大きな限界がある——`RecentMap.set()` は1回の呼び出しで
+ * `entries` の大きさを高々+1しか増やせないので、`onForget` が1回に渡す
+ * 配列の長さは常に1である（recent.test.ts の該当テストの doc を参照）。**
+ * つまり `#reportedOf` の `renderListing(...)` 呼び出しは、実際の `report`
+ * イベント経由では **`items.length === 1` にしかならず、`…ほか N件省略`という
+ * 断り書きの分岐（`rest > 0`）は実行到達しない。** これは
+ * `renderListing`（先頭を残す）を `renderListingFromEnd`（末尾を残す）に
+ * 差し替える変異や、`recent.ts` の `forgotten` を `.reverse()` する変異を、
+ * この経路のテストでは検出できないことを意味する——**実際に変異を当てて
+ * 確認した（PR 本文に生の出力がある）。** 検出できるのは「`RecentMap` が
+ * 新しい側から追い出すように変える」変異のほうで、これは以下のテストが
+ * 実際に赤く落ちる。
+ */
+describe('#reportedOf: 忘れた id は古い側から日誌に出る（#409）', () => {
+  const job = {
+    id: 'mgr-report-oldest-first',
+    managerId: 'mgr-report-oldest-first',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T01:00:00.000Z',
+    status: 'running' as const,
+    summary: '調べ物',
+    request: '調べて',
+    cwd: '/work/project',
+    sessionId: 'sess-report-oldest-first',
+    runnerId: 'runner-primary',
+  };
+
+  it('上限を超えたぶん、日誌に書かれる「忘れた」id は挿入順どおり最も古いものから出る', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job);
+    const fake = swappableRunner();
+    fake.state.alive.push({
+      managerId: job.id,
+      status: 'running',
+      cwd: job.cwd,
+      request: job.request,
+      waiting: [],
+      sessionId: job.sessionId,
+    });
+    const s = setup(undefined, { stores, runner: fake.runner });
+    // `#reportedOf` の記憶は record に載る in-memory の状態なので、record が
+    // 一度読み込まれている（`#records` に居る）必要がある——`restore()` が
+    // それをする（「report の冪等化」の `running()` と同じ理由）。
+    await s.pool.restore();
+    await vi.waitFor(() => {
+      if (s.inbox.length === 0) throw new Error('reattach の知らせがまだ届いていない');
+    });
+
+    // **`order: 'asc'` を明示する。** 既定は `desc`（push の逆順＝新しい順）
+    // なので、既定のまま `slice(journalBefore)` すると「後から積んだ分」を
+    // 正しく取り出せない（先頭に割り込む）。`asc` で push 順に揃えてから
+    // 件数で切る（`testing.ts` の `journal.list` の `order` の doc）。
+    const journalBefore = (await s.stores.journal.list({ types: ['exchange'], order: 'asc' }))
+      .length;
+
+    // **`REPORTED_MEMORY_LIMIT`（manager.ts、非公開）と同じ値。** 上の doc を参照。
+    const LIMIT = 512;
+    // 上限を超えて追加する件数。これだけ「忘れた」旨の exchange が積まれる
+    // ——1回の `set()` があふれさせるのは高々1件なので（recent.test.ts の
+    // 該当テストの doc）、EXTRA 回のあふれが EXTRA 個の別々の journal 行になる。
+    const EXTRA = 5;
+
+    // **前段で await せず、同期のループでまとめて流す。** `#onEvent` は
+    // `record` が既に `#records` に居れば（`restore()` 済みなので居る）、
+    // `.set()` に至るまで `await` を1つも挟まない——だからこの `for` の中で
+    // 呼ぶ順序どおりに `.set()` が実行される（`case 'report':` の該当行を参照）。
+    for (let i = 0; i < LIMIT + EXTRA; i += 1) {
+      fake.report(job.id, `report-body-${i}`, 'done', { reportId: `rep-${i}` });
+    }
+
+    // 「処理済みの報告の記憶が上限」を含む exchange が EXTRA 件届くまで待つ
+    // （日誌への書き込みは fire-and-forget なので、届くまでポーリングする——
+    // 「report の冪等化」の `journalHas` と同じ理由）。
+    const forgetEntries = await vi.waitFor(async () => {
+      const all = await s.stores.journal.list({ types: ['exchange'], order: 'asc' });
+      const found = all
+        .slice(journalBefore)
+        .filter(
+          (entry): entry is Extract<JournalEntry, { type: 'exchange' }> =>
+            entry.type === 'exchange' && entry.text.includes('処理済みの報告の記憶が上限'),
+        );
+      if (found.length < EXTRA) throw new Error(`まだ ${EXTRA} 件ぶん届いていない`);
+      return found;
+    });
+
+    expect(forgetEntries).toHaveLength(EXTRA);
+
+    // **本題:** 忘れた対象として文中に列挙される id が、挿入順どおり最も
+    // 古いもの（rep-0, rep-1, ...）から順に出ていること。
+    const texts = forgetEntries.map((entry) => entry.text);
+    for (let i = 0; i < EXTRA; i += 1) {
+      expect(texts[i]).toContain(`古い 1 件を忘れた: rep-${i}。`);
+    }
+
+    // 新しい側（まだ生きている rep-508 以降）は一度も「忘れた」対象になって
+    // いない——これが崩れるのは、追い出す側を取り違えたときである。
+    const joined = texts.join('\n');
+    for (let i = LIMIT; i < LIMIT + EXTRA; i += 1) {
+      expect(joined).not.toContain(`忘れた: rep-${i}。`);
+    }
+
+    await s.pool.stop();
+  });
+});
+
+/**
  * **止めたことと、止まったことは別である。**
  *
  * `runner.stop()` は該当のセッションが手元に無ければ**黙って何もしない**
