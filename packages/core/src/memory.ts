@@ -20,7 +20,13 @@
 
 import { createHash } from 'node:crypto';
 
-import { excerpt, excerptLine, renderListing, renderListingFromEnd } from './excerpt.js';
+import {
+  excerpt,
+  excerptLine,
+  fillListingBudget,
+  renderListing,
+  renderListingFromEnd,
+} from './excerpt.js';
 import type {
   MemoryCreatedAt,
   MemoryDescriptionFreshness,
@@ -1357,6 +1363,22 @@ const MALFORMED_FRONTMATTER_NOTE =
 const MEMORY_DELTA_MAX_RATIO = 0.5;
 
 /**
+ * カード差分（`renderPremiseDelta`）が「押し出された節」を名指しする分の
+ * 文字数の予算。**件数ではなく文字数で切る**（`MEMORY_PROMPT_OMITTED_TAIL_BUDGET`
+ * と同じ思想——`.claude/skills/listing-and-detail/SKILL.md`「予算は件数ではなく
+ * 文字数で持つ」）。
+ *
+ * **既存の `MEMORY_PROMPT_OMITTED_TAIL_BUDGET` を流用しない。** あちらは
+ * 「目次が予算で切れた、その断り書きの中で末尾を名指しする」ための予算で、
+ * こちらは「カードの差分で、前の版には載っていたのに今の版では押し出された
+ * 節を名指しする」ための予算——**切っている理由も、切る場面も違う**（前者は
+ * 毎ターンの焼き込みそのものに乗る。後者は書き換えが起きたときだけ乗る）。
+ * 値の桁を揃えたのは偶然ではなく、どちらも「目次の1行を数行ぶん載せる」
+ * という同じ形の予算だからである——それでも定数としては分ける。
+ */
+const MEMORY_DELTA_PUSHED_OUT_BUDGET = 300;
+
+/**
  * premise のカードに載せる要旨（frontmatter の `description`）の文字数の予算。
  *
  * **⚠️ これは「要旨を短くしろ」という目安であって、本文の上限ではない。**
@@ -1559,11 +1581,15 @@ function renderPremiseOutlineOmission(
       '**足したばかりの節はここに出る**）:',
     tail,
     arithmetic,
-    'memory_outline（side=tail で末尾も見られる）で残りを確かめ、' +
+'memory_outline は side=tail で末尾も見られるほか、q=<文字列> で見出しを絞り込めば一致した節の節id へ直接届き、' +
+      'offset=<N> で先頭から窓をずらして読むこともできる——後者は窓の大きさぶんずつ進めれば、' +
+      'この文書がどれだけ大きくても全節の節id に有限回で届く（中央の節も含めて）。これらで残りを確かめてから、' +
       'memory_section_move で付録の文書へ割ること。**移すのは済んだ経緯・' +
       '1回きりの実測・失効した手順であって、末尾の新しい節ではない。** ' +
       '⚠ side=tail は末尾を**読む**ための向きであって、末尾を**移す**ための指示ではない' +
-      '——読んで確かめた末尾をそのまま移すと、いちばん新しい学びを fact へ追い出すことになる。',
+      '——読んで確かめた末尾をそのまま移すと、いちばん新しい学びを fact へ追い出すことになる。' +
+      '同じ理由で、q や offset で中央の節id が読めても、それをそのまま移してよいとは限らない——' +
+      '何を移すかの基準（直上）は変わらない。',
   ].join('\n');
 }
 
@@ -1615,6 +1641,137 @@ function renderPremiseCard(part: MemoryPart): string {
 }
 
 /**
+ * カード差分（`renderPremiseDelta`）の消えた行のうち、**目次の1行（節）の
+ * 形をしている行だけ**から見出し文字列を取り出す。
+ *
+ * 形は `memorySectionLines` が組むもの（`[節id] 見出し — N 文字`。インデント
+ * は先頭の空白）——**この形に一致しない行は節ではない**（カードの見出し
+ * コメント・省略の断り書き・算術の説明・案内文のどれも `[` から始まらない
+ * ので、誤って節と数えることはない）。一致しなければ `null` を返す。
+ */
+function parseOutlineLineHeading(line: string): string | null {
+  const match = /^\s*\[[^\]]+\] (.+) — [\d,]+ 文字/.exec(line);
+  return match ? (match[1] as string) : null;
+}
+
+/**
+ * カード差分で消えた行を、**節の行だけ**を対象に3つへ分ける。
+ * （呼び出し元・実例は `renderPremiseDelta` の doc「⚠️『いまは無い行』は
+ * 一枚岩ではない」を見ること。）
+ *
+ * - **押し出された**（甲）: その見出しが、いまの文書の節に**ちょうど1つ**
+ *   在り、かつ**その節のいまの行が、新しいカードのどこにも出ていない**
+ *   ——節そのものは文書に残っており、予算に入らずカードの索引から落ちた
+ *   だけである。**いまの節（id・文字数込み）を返す**——消えた行に書いて
+ *   あった節id はその版のものなので使わない。`memorySectionId` は中身が
+ *   変われば変わるので、版が違えば信用できる保証が無い。
+ * - **消えたか書き換わった**（乙）: その見出しが、いまの文書のどの節にも
+ *   無い。
+ * - **判定できない**（丙）: その見出しが、いまの文書に**複数**在る——どの
+ *   節に対応するかを決める材料が無い（`AGENTS.md`「判定できないという
+ *   3つ目の状態を持つ」）。
+ *
+ * `parseOutlineLineHeading` が `null` を返す行（節ではない行）は `other` に
+ * 入れる。**これは「消えた」とは名乗らない**——カードの1行目や断り書きは
+ * 書き換えのたびに文字数・節数が変わるので、旧い版が消えた行の集合に
+ * 混ざるのは当然であり、実際には何も失われていない（新しい版は `added`
+ * 側に載っている）。
+ *
+ * ## ⚠️ 見出しが一致するだけでは「押し出された」と言わない
+ *
+ * **その節の本文だけが変わり、新しい行がいまのカードに現に載っている**
+ * （＝ `added` 側に既に出ている）なら、それは押し出しではなくただの更新
+ * である——読み手には「その行が別の新しい行に変わった」がそのまま見えて
+ * おり、名指しする必要が無い。ここを見ずに「見出しが1つだけ一致すれば
+ * 押し出された」と判定すると、**本文を書き換えただけの通常の更新まで
+ * 「押し出された」と誤って名乗ってしまう**（節は消えても押し出されても
+ * いない。ただ新しい行に置き換わっただけである）。⟹ `nextLineSet`
+ * （新しいカードの行の集合）にその節の**いまの行そのもの**が含まれるかを
+ * 見て、含まれていれば `other` へ落とす。
+ */
+function classifyDroppedOutlineLines(
+  droppedLines: readonly string[],
+  currentSections: readonly MemorySection[],
+  nextLineSet: ReadonlySet<string>,
+): {
+  pushedOut: { heading: string; section: MemorySection }[];
+  removedOrRewritten: string[];
+  ambiguous: string[];
+  other: string[];
+} {
+  const byHeading = new Map<string, MemorySection[]>();
+  for (const section of currentSections) {
+    const list = byHeading.get(section.heading);
+    if (list) list.push(section);
+    else byHeading.set(section.heading, [section]);
+  }
+  // **いまの各節の行そのもの**を、1回の `memorySectionLines` 呼び出しから
+  // 作る——id の衝突マーカー（`memorySectionLines` が付ける ⚠）は文書全体を
+  // 見て初めて正しく判定できるので、節ごとに単独で呼び直さない。
+  const currentLineBySectionId = new Map<string, string>();
+  const currentLines = memorySectionLines(currentSections);
+  currentSections.forEach((section, index) => {
+    currentLineBySectionId.set(section.id, currentLines[index]!);
+  });
+
+  const pushedOut: { heading: string; section: MemorySection }[] = [];
+  const removedOrRewritten: string[] = [];
+  const ambiguous: string[] = [];
+  const other: string[] = [];
+
+  for (const line of droppedLines) {
+    const heading = parseOutlineLineHeading(line);
+    if (heading === null) {
+      other.push(line);
+      continue;
+    }
+    const matches = byHeading.get(heading) ?? [];
+    if (matches.length === 0) {
+      removedOrRewritten.push(line);
+      continue;
+    }
+    if (matches.length > 1) {
+      ambiguous.push(line);
+      continue;
+    }
+    const section = matches[0]!;
+    const currentLine = currentLineBySectionId.get(section.id);
+    if (currentLine !== undefined && nextLineSet.has(currentLine)) {
+      // その節のいまの行は、新しいカードに現に載っている——押し出しでは
+      // なく、ただの更新（新しい行は `added` 側に既に出ている）。
+      other.push(line);
+      continue;
+    }
+    pushedOut.push({ heading, section });
+  }
+
+  return { pushedOut, removedOrRewritten, ambiguous, other };
+}
+
+/**
+ * 押し出された節を、目次と同じ1行の形（**いまの**節id・文字数つき）で
+ * 名乗る。文字数の予算（`MEMORY_DELTA_PUSHED_OUT_BUDGET`）で切る——件数が
+ * 多いときに差分そのものが肥大化しないため（`.claude/skills/listing-and-detail/SKILL.md`
+ * 「予算は件数ではなく文字数で持つ」）。
+ *
+ * 同じ節が複数の消えた行から重複して拾われることは無い——`section.id` で
+ * 重複を除いてから並べる。
+ */
+function renderPushedOutSections(
+  pushedOut: readonly { heading: string; section: MemorySection }[],
+): string {
+  const uniqueById = new Map<string, MemorySection>();
+  for (const { section } of pushedOut) uniqueById.set(section.id, section);
+  const items = memorySectionLines([...uniqueById.values()]);
+  return renderListing(items, {
+    budget: MEMORY_DELTA_PUSHED_OUT_BUDGET,
+    omitted: ({ rest, shown, total }) =>
+      `…ほか ${formatMemoryCharCount(rest)} 節は省略（押し出された ${formatMemoryCharCount(total)} 節のうち ` +
+      `${formatMemoryCharCount(shown)} 節だけ載せた。残りは memory_outline で確認すること）。`,
+  });
+}
+
+/**
  * premise のカードの「変わった範囲だけ」を描く。差分にする価値が無ければ
  * `null` を返す（呼び手はカード全体へ倒す）。
  *
@@ -1652,8 +1809,33 @@ function renderPremiseCard(part: MemoryPart): string {
  * **⚠️ 行が移動しただけのときは「変わっていない」に数える。** カードは索引なので、
  * 同じ行が別の位置に在っても持っている情報は同じである——ここで位置まで見ると、
  * 節を1つ並べ替えただけで全体が差分に出る。
+ *
+ * ## ⚠️ 「いまは無い行」は一枚岩ではない（本番の実測で判明。2026-09-11）
+ *
+ * `memory_append` で9節・2,319文字を追記しただけの書き換えで、消えた行が
+ * 7行出た。**その7行の中身は一様ではなかった**——3行は「カードの1行目・
+ * 省略の断り書き・算術の説明」のような**節ではない行**で、数字（全体の
+ * 文字数・節数・押し出された文字数）が追記のたびに変わるので、旧い版が
+ * 消えた行の集合に入るのは当然であり、**何も失われていない**（新しい版が
+ * `added` 側に載っている）。残る4行のうち3行は**本物の節の行**で、末尾の
+ * 名指し（`MEMORY_PROMPT_OMITTED_TAIL_BUDGET` の枠）に載っていた節が、
+ * 新しく追記された節に押し出されて**カードの索引から落ちていた**——節
+ * そのものは文書に在る。
+ *
+ * **旧い実装はこの2種類を「消えたか書き換わったかのどちらか」という1つの
+ * 文言に畳んでいた。** これでは押し出された節（＝文書に在り、節id さえ
+ * 分かれば `memory_section_read` で開ける）と、本当に消えた・書き換わった
+ * 節を、呼び手が区別できない。⟹ **消えた行のうち「節の行」だけを、いまの
+ * 文書の節の一覧と突き合わせて3つに分ける**（`classifyDroppedOutlineLines`）。
+ * 節ではない行（カードの見出し・断り書き・案内文）は、この分類に入れず
+ * 黙って除く——それらは「消えた」のではなく「更新された」だけである。
  */
-function renderPremiseDelta(slug: string, seenCard: string, nextCard: string): string | null {
+function renderPremiseDelta(
+  slug: string,
+  seenCard: string,
+  nextCard: string,
+  currentSections: readonly MemorySection[],
+): string | null {
   const nextLines = nextCard.trimEnd().split('\n');
   const seenLines = seenCard.trimEnd().split('\n');
   if (nextCard.trimEnd() === seenCard.trimEnd()) return null;
@@ -1661,11 +1843,42 @@ function renderPremiseDelta(slug: string, seenCard: string, nextCard: string): s
   const seenSet = new Set(seenLines);
   const nextSet = new Set(nextLines);
   const added = nextLines.filter((line) => !seenSet.has(line));
-  const droppedCount = seenLines.filter((line) => !nextSet.has(line)).length;
+  const droppedLines = seenLines.filter((line) => !nextSet.has(line));
   const unchangedCount = nextLines.length - added.length;
 
   // `join('\n')` の長さで測る——実際に載る形そのもので判定する。
   if (added.join('\n').length > nextCard.length * MEMORY_DELTA_MAX_RATIO) return null;
+
+  const { pushedOut, removedOrRewritten, ambiguous } = classifyDroppedOutlineLines(
+    droppedLines,
+    currentSections,
+    nextSet,
+  );
+
+  // **「消えた」と名乗るのは、実際に節が消えた／押し出された／判定できない
+  // ときだけである。** 3つとも0件なら（＝消えたのは節ではない行だけなら）
+  // この節の文言は1文字も出さない——起きていないことを起きたかのように
+  // 書かない（`AGENTS.md` 地雷表「取れない軸に0の行を作る」の裏返し）。
+  const droppedNotes: string[] = [];
+  if (pushedOut.length > 0) {
+    droppedNotes.push(
+      `（前の版のカードに載っていたが、予算で押し出された節: ${formatMemoryCharCount(pushedOut.length)} 節。` +
+        '節そのものは文書に在る——いまの節id で memory_section_read / memory_section_move に渡せる）:',
+      renderPushedOutSections(pushedOut),
+    );
+  }
+  if (removedOrRewritten.length > 0) {
+    droppedNotes.push(
+      `（前の版に在って、いまは無い節: ${formatMemoryCharCount(removedOrRewritten.length)} 節。` +
+        'いまの文書のどの節の見出しとも一致しない——消されたか、見出しごと書き換わった）',
+    );
+  }
+  if (ambiguous.length > 0) {
+    droppedNotes.push(
+      `（判定できない節: ${formatMemoryCharCount(ambiguous.length)} 節。同じ見出しがいまの文書に複数在るため、` +
+        '押し出されたのか消えたのか決められない。memory_outline q=<見出しの一部> で確かめること）',
+    );
+  }
 
   return [
     `<!-- memory: ${slug}.md（カードの変わった範囲だけ） -->`,
@@ -1673,12 +1886,7 @@ function renderPremiseDelta(slug: string, seenCard: string, nextCard: string): s
       `${formatMemoryCharCount(unchangedCount)} 行は変わっていないので載せていない。` +
       `カードの全体は memory_list、節の本文は memory_section_read で開ける）`,
     ...added,
-    ...(droppedCount === 0
-      ? []
-      : [
-          `（前の版に在って、いまは無い行: ${formatMemoryCharCount(droppedCount)} 行。` +
-            '節が消えたか、書き換わって別の行になったかのどちらかである）',
-        ]),
+    ...droppedNotes,
   ].join('\n');
 }
 
@@ -1695,7 +1903,12 @@ function renderPremisePart(part: MemoryPart, seen?: string): string {
   const delta =
     seen === undefined
       ? null
-      : renderPremiseDelta(part.slug, renderPremiseCard({ slug: part.slug, content: seen }), card);
+      : renderPremiseDelta(
+          part.slug,
+          renderPremiseCard({ slug: part.slug, content: seen }),
+          card,
+          scanMemorySections(part.content).sections,
+        );
   const rendered = delta ?? card;
   return frontmatter.kind === 'malformed' ? `${MALFORMED_FRONTMATTER_NOTE}\n${rendered}` : rendered;
 }
@@ -2467,6 +2680,7 @@ export function describeMemoryReinjectionEstimate(
         part.slug,
         renderPremiseCard({ slug: part.slug, content: seen }),
         renderPremiseCard(part),
+        scanMemorySections(part.content).sections,
       ) !== null
       ? 'premise・カードの変わった範囲だけ'
       : 'premise・カード（要旨＋節の目次）';
@@ -3162,15 +3376,47 @@ export type MemoryOutlineSide = (typeof MEMORY_OUTLINE_SIDES)[number];
  * 違うだけの予算のループは既にあちらに在り、断り書きを穴の空いた側（先頭）へ
  * 置くところまで持っている。ここに同じループを書き直さない。
  *
- * **⚠️ この引数が言えないこと: 中央は、どちらの向きでも出ない。** 予算に入らない
- * 中間の節は `'head'` でも `'tail'` でも落ちる。**「末尾から出せる」は「全部
- * 見える」ではない。** 中間へ届く道は1つだけで、**端の節を
- * `memory_section_move` で移して文書を縮めること**である（縮めば次の目次の窓が
- * そこへ伸びる）。⟹ **届くのは縮めた後であって、この値を渡した瞬間ではない。**
+ * **⚠️ `side` 単独が言えないこと: 中央は、どちらの向きでも出ない。** 予算に
+ * 入らない中間の節は `'head'` でも `'tail'` でも落ちる。**「末尾から出せる」は
+ * 「全部見える」ではない。**
  *
  * **節id は `side` に依存しない。** 材料はその節の見出し行と中身だけである
  * （`memorySectionId`）ので、**どちら側を出したかで id は1文字も変わらない ＝
  * 版の照合は弱まらない。**
+ *
+ * ## `q` — 見出しで絞り込む（中央へ届く道その1）
+ *
+ * 大文字小文字を区別しない**部分一致**。渡された文字列は `String.includes`
+ * にそのまま渡すので、正規表現としては解釈しない——メタ文字（`.` `*` `[` `(`
+ * `\` など）を含んでいても、その文字どおりの並びとしてしか一致しない。
+ *
+ * 応答は必ず「全 N 節のうち M 節が一致」を言う。**一致0件と、一致はあるが
+ * 予算で切れた場合は別の文言にしてある**——前者は「一致そのものが無い」で
+ * あって「予算が足りない」ではない。混ぜると、絞り込み語を直せば直るのか
+ * `offset` で窓をずらすしかないのかが読み手に伝わらない。
+ *
+ * `side` と併用できる（絞り込んだ結果を先頭から詰めるか末尾から詰めるか）。
+ * 一致した行は目次の1行と同じ形（`[節id] 見出し — N 文字`）——そのまま
+ * `memory_section_read` / `memory_section_move` へ渡せる。**中間の節でも、
+ * 見出しに残る言葉さえ思い出せれば、この口で直接 節id に届く。**
+ *
+ * ## `offset` — 窓をずらす（中央へ届く道その2。完全な到達を保証する側）
+ *
+ * 先頭から `offset` 節を飛ばしてから予算を埋める。**`q` は「思い出せる言葉が
+ * あるとき」の近道で、`offset` は「言葉を思い出せなくても、有限回の呼び出しで
+ * 必ず全節へ届く」ほうの保証である**——窓の大きさ（応答が「続きは
+ * offset=N で」と返す、その N）ぶんずつ進めれば、文書がどれだけ大きくても
+ * 全節の節id に到達できる。`offset` を渡すと `side` は見ない——`offset` は
+ * 「窓をどこから開けるか」の指定で、`side` は「窓の中で予算に入らない側を
+ * どちらへ捨てるか」の指定であり、役割が違う（窓を開いた後で詰める向きが
+ * 変わると、offset を進める歩幅の保証が崩れる）。範囲外の `offset`（節数以上）
+ * は黙って空にせず、その旨を明示して断る。
+ *
+ * `q` と `offset` は併用できる——`offset` は「絞り込み後の並び」に対して窓を
+ * 開く。
+ *
+ * **⚠️ `q` も `offset` も渡さないとき、出力は1文字も変えていない。** 以下の
+ * 実装はまずこの分岐を独立させ、その中身を移設前と揃えてある。
  */
 /**
  * 節の一覧の**1行の形**。目次を出す場所が2つ（道具の `memory_outline` と、
@@ -3259,9 +3505,40 @@ function renderMemoryOutlineBudgetNote(): string {
   return `${scope} ${sibling} ${family}`;
 }
 
+/**
+ * `memory_outline` へ渡せるオプション。**`side` 単体・省略・`{}` のどれでも、
+ * `q` と `offset` を1つも渡さなければ出力は移設前と1文字も変わらない。**
+ * （下の `renderMemoryOutline` の分岐そのものが歯である——`q === undefined
+ * && offset === undefined` のときは旧実装の式をそのまま評価する。）
+ */
+export interface MemoryOutlineOptions {
+  /** 予算で落とす側（`MEMORY_OUTLINE_SIDES` の doc）。既定は `'head'`。 */
+  side?: MemoryOutlineSide;
+  /** 見出しの絞り込み（上のクラスdocの「`q`」節）。 */
+  q?: string;
+  /** 窓の開始位置（上のクラスdocの「`offset`」節）。0起点。 */
+  offset?: number;
+}
+
+/**
+ * `q` による見出しの絞り込み。
+ *
+ * **大文字小文字を区別しない部分一致。正規表現としては解釈しない。** 渡された
+ * 文字列は `String.prototype.includes` へそのまま渡すので、`.` `*` `[` `(`
+ * `\` のようなメタ文字を含んでいても、その文字どおりの並びとしてしか一致
+ * しない——`RegExp` を経由しないので、壊れようがない。
+ */
+function filterMemorySectionsByHeading(
+  sections: readonly MemorySection[],
+  q: string,
+): MemorySection[] {
+  const needle = q.toLowerCase();
+  return sections.filter((section) => section.heading.toLowerCase().includes(needle));
+}
+
 export function renderMemoryOutline(
   sections: readonly MemorySection[],
-  side: MemoryOutlineSide = 'head',
+  sideOrOptions: MemoryOutlineSide | MemoryOutlineOptions = 'head',
 ): string {
   if (sections.length === 0) {
     return (
@@ -3269,28 +3546,124 @@ export function renderMemoryOutline(
       '前書きは節ではないので memory_section_move では動かせない。'
     );
   }
-  const items = memorySectionLines(sections);
-  // **どちら側を落としたかを言う。** 「N 節省略」だけだと続きの取り方を間違える
-  // （`conversation_read` の中身モードが同じ理由で同じことをしている）。そして
-  // **続きの取り方を書けるのは、呼び手の側にその口が実在するときだけである**
-  // （`excerpt.ts` の `ListingBudget.omitted` の doc）——`side` を足したこの版で
-  // 初めて、末尾側へ行く口が実在する。旧い文面の「先に上の節を減らす」は、
-  // **末尾を指せないまま末尾を減らせ**と言っていた ＝ 到達できない助言だった。
-  const render = side === 'tail' ? renderListingFromEnd : renderListing;
+
+  // **文字列（旧い呼び方）とオプション（新しい呼び方）の両方を受ける。**
+  // 既存の呼び手（`renderMemoryOutline(sections, 'tail')` の形）を壊さない
+  // ための後方互換であって、新しい呼び手が文字列を渡す理由にはならない。
+  const options: MemoryOutlineOptions =
+    typeof sideOrOptions === 'string' ? { side: sideOrOptions } : sideOrOptions;
+  const side = options.side ?? 'head';
+  const { q, offset } = options;
+
+  // ============================================================
+  // **`q` も `offset` も渡さないとき: 以下は移設前の実装そのものである。**
+  // 1文字も変えていない——変えたのは「ここへ来る前に分岐したこと」だけ。
+  // ============================================================
+  if (q === undefined && offset === undefined) {
+    const items = memorySectionLines(sections);
+    // **どちら側を落としたかを言う。** 「N 節省略」だけだと続きの取り方を間違える
+    // （`conversation_read` の中身モードが同じ理由で同じことをしている）。そして
+    // **続きの取り方を書けるのは、呼び手の側にその口が実在するときだけである**
+    // （`excerpt.ts` の `ListingBudget.omitted` の doc）——`side` を足したこの版で
+    // 初めて、末尾側へ行く口が実在する。旧い文面の「先に上の節を減らす」は、
+    // **末尾を指せないまま末尾を減らせ**と言っていた ＝ 到達できない助言だった。
+    const render = side === 'tail' ? renderListingFromEnd : renderListing;
+    const budgetNote = renderMemoryOutlineBudgetNote();
+    return render(items, {
+      budget: MEMORY_OUTLINE_BUDGET,
+      omitted: ({ rest, shown, total }) =>
+        side === 'tail'
+          ? `…先頭 ${rest} 節は省略（節は全 ${total} 件あり、末尾から ${shown} 件だけ出した）。` +
+            '先頭側は side を渡さずに呼べば出る（既定）。' +
+            '⚠中央（どちらの端からも予算の外に出る節）は、どちらの向きでも出ない——' +
+            '端の節を memory_section_move で移して文書を縮めれば、次に memory_outline を' +
+            '呼んだときの応答にそれが載る。' +
+            ` ${budgetNote}`
+          : `…末尾 ${rest} 節は省略（節は全 ${total} 件あり、先頭から ${shown} 件だけ出した）。` +
+            '末尾側の節id が要るなら side=tail で呼ぶこと。' +
+            '⚠中央（どちらの端からも予算の外に出る節）は、どちらの向きでも出ない。' +
+            ` ${budgetNote}`,
+    });
+  }
+
+  // ============================================================
+  // ここから先は `q` / `offset` のどちらか（または両方）が渡された経路。
+  // 上のブロックとは完全に別の式なので、上のブロックの出力には1バイトも
+  // 影響しない。
+  // ============================================================
+
+  // `q`: 見出しで絞り込む。絞り込んだ後の並び（`pool`）を、以降の offset /
+  // side の材料にする。
+  let pool = sections;
+  let queryHeader = '';
+  if (q !== undefined) {
+    const matched = filterMemorySectionsByHeading(sections, q);
+    if (matched.length === 0) {
+      // **一致0件と、一致はあるが予算で切れた場合を混ぜない。** 前者は
+      // 「一致そのものが無い」であって「予算が足りない」ではない——文言を
+      // 変えれば当たるのか、offset で窓をずらすしかないのかが違う。
+      return (
+        `見出しに「${q}」を含む節は無かった（一致0件。全 ${formatMemoryCharCount(sections.length)} 節を検索した）。` +
+        'これは予算で落ちたのではない——一致そのものが無い。'
+      );
+    }
+    pool = matched;
+    queryHeader =
+      `見出しに「${q}」を含む節: 全 ${formatMemoryCharCount(sections.length)} 節のうち ` +
+      `${formatMemoryCharCount(matched.length)} 節が一致した。`;
+  }
+
   const budgetNote = renderMemoryOutlineBudgetNote();
-  return render(items, {
-    budget: MEMORY_OUTLINE_BUDGET,
-    omitted: ({ rest, shown, total }) =>
-      side === 'tail'
-        ? `…先頭 ${rest} 節は省略（節は全 ${total} 件あり、末尾から ${shown} 件だけ出した）。` +
-          '先頭側は side を渡さずに呼べば出る（既定）。' +
-          '⚠中央（どちらの端からも予算の外に出る節）は、どちらの向きでも出ない——' +
-          '端の節を memory_section_move で移して文書を縮めれば、次に memory_outline を' +
-          '呼んだときの応答にそれが載る。' +
-          ` ${budgetNote}`
-        : `…末尾 ${rest} 節は省略（節は全 ${total} 件あり、先頭から ${shown} 件だけ出した）。` +
-          '末尾側の節id が要るなら side=tail で呼ぶこと。' +
-          '⚠中央（どちらの端からも予算の外に出る節）は、どちらの向きでも出ない。' +
-          ` ${budgetNote}`,
-  });
+  const scopeLabel = q !== undefined ? '絞り込み後' : '全';
+
+  // `offset`: 窓をずらす。**常に先頭から詰める（`side` を見ない）。** offset は
+  // 「窓をどこから開けるか」、side は「窓の中で入らない側をどちらへ捨てるか」
+  // で役割が違う——ここで side を見てしまうと、offset を「窓の大きさぶんずつ
+  // 進めれば有限回で全節に届く」という保証が、進み方が向きで変わることで崩れる。
+  if (offset !== undefined) {
+    if (!Number.isInteger(offset) || offset < 0) {
+      return `offset は0以上の整数で渡すこと（渡された値: ${offset}）。`;
+    }
+    if (offset >= pool.length) {
+      return (
+        `${queryHeader ? queryHeader + ' ' : ''}` +
+        `offset=${offset} の位置に節は無い（${scopeLabel} ${formatMemoryCharCount(pool.length)} 節しか無い）。`
+      );
+    }
+    const windowed = pool.slice(offset);
+    const items = memorySectionLines(windowed);
+    const { lines, shown } = fillListingBudget(items, MEMORY_OUTLINE_BUDGET, false);
+    const endIndex = offset + shown; // 次に呼ぶべき offset そのもの。呼び手は算術をしない。
+    const more = endIndex < pool.length;
+    const rangeLine =
+      `${formatMemoryCharCount(offset + 1)}〜${formatMemoryCharCount(endIndex)} 節目 / ` +
+      `${scopeLabel} ${formatMemoryCharCount(pool.length)} 節のうち ${formatMemoryCharCount(shown)} 節を出した。`;
+    const continuationLine = more
+      ? `続きが在る。次は offset=${endIndex} で呼ぶこと` +
+        '（窓の大きさぶんずつ進めれば、有限回で全節に届く）。'
+      : '続きは無い（最後まで出した）。';
+    return [queryHeader, rangeLine, continuationLine, budgetNote, ...lines]
+      .filter((line) => line !== '')
+      .join('\n');
+  }
+
+  // `q` だけが渡された経路。`side` で「絞り込んだ結果」を先頭から詰めるか
+  // 末尾から詰めるかを選ぶ——offset と違い、ここでは向きに意味がある
+  // （窓の開始点を固定していないため）。
+  const items = memorySectionLines(pool);
+  const { lines, shown } = fillListingBudget(items, MEMORY_OUTLINE_BUDGET, side === 'tail');
+  const omittedCount = pool.length - shown;
+  const shownLabel =
+    side === 'tail'
+      ? `そのうち末尾から ${formatMemoryCharCount(shown)} 節を載せた`
+      : `そのうち先頭から ${formatMemoryCharCount(shown)} 節を載せた`;
+  const remainderNote =
+    omittedCount === 0
+      ? '（全件を載せた）。'
+      : side === 'tail'
+        ? `（先頭側の ${formatMemoryCharCount(omittedCount)} 節は予算で省略。` +
+          'offset を併用すればこの絞り込みの先頭側も出せる）。'
+        : `（末尾側の ${formatMemoryCharCount(omittedCount)} 節は予算で省略。` +
+          'side=tail か offset を併用すれば続きが出せる）。';
+  return [`${queryHeader}${shownLabel}${remainderNote}`, budgetNote, ...lines].join('\n');
 }
