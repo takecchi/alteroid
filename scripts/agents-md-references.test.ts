@@ -21,12 +21,14 @@ import { describe, expect, it } from 'vitest';
  *
  * ---
  *
- * ## この歯は `AGENTS.md` 専用である。`.claude/**` とどの階層かの `src/**` は下の別の歯が持つ
+ * ## この歯は `AGENTS.md` 専用である。`.claude/**`・どの階層かの `src/**`・`apps/web/app/**` は下の別の歯が持つ
  *
  * 上の3本は `AGENTS.md` 1ファイルしか見ていなかった（#369 で書かれた当時のまま）。
  * PR #760（コードの `path:行番号` 出典29件を逐語・シンボル名へ寄せた）の後、
  * `.claude/**` とどの階層かの `src/**` へ**「1. `path:行番号`」だけ**を広げる歯を
- * 下に足した（この下にある2本目の `describe(...)` ブロックがそれである。
+ * 下に足した。**その範囲は `src` という名前で決めていたので `apps/web`（`app/` を
+ * 使う）にだけ当たらず、後から `apps/web/app/**` を足した**（理由と実測は
+ * `isWidenedScopeFile` の直上に書いてある）（この下にある2本目の `describe(...)` ブロックがそれである。
  * その describe 名の中身は下の `// ` 行コメント側で確認できる——ここでは
  * 名前の文字列を引用しない。JSDoc の中で `*` の直後に `/` が続く形を書くと
  * コメントがそこで閉じてしまうため）。
@@ -259,12 +261,13 @@ function readRepoFile(target: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// `.claude/**` と `*/src/**` — path:行番号 だけを広げる（#前述の doc）
+// `.claude/**` と `*/src/**` と `apps/web/app/**` — path:行番号 だけを広げる（#前述の doc）
 // ---------------------------------------------------------------------------
 
 // この歯の対象を `.claude/**` と、どの階層でも `src` という名前のディレクトリを
-// 持つパスに絞る（`AGENTS.md` はここに来ない——別ファイルなので、そもそも
-// `git ls-files` の一覧にしか現れず、`src` も `.claude` も含まないので false になる）。
+// 持つパスと、`apps/web/app/**` に絞る（`AGENTS.md` はここに来ない——別ファイル
+// なので、そもそも `git ls-files` の一覧にしか現れず、`src` も `.claude` も
+// `apps/web/app/` も含まないので false になる）。
 //
 // 「どの階層でも」で実装した——PR #760 の再現コマンドが実際に2階層下の
 // `src`（`apps/daemon/src/*`）にも当たっていたことを確かめたうえでの実装
@@ -274,8 +277,41 @@ function readRepoFile(target: string): string {
 // ```
 // git grep -nE '[A-Za-z0-9_.-]+\.(ts|tsx|mjs|js|md|json|yml|yaml):[0-9]+' -- '.claude/**' '*/src/**'
 // ```
+//
+// ## ⚠️ `apps/web/app/**` を足したのは、前の委譲が意図して引いた線を動かす行為である
+//
+// #760 の続きは `apps/web/app/routes/chat.tsx` を **false 側に固定していた**
+// （下の `isWidenedScopeFile` の歯が、その1行を期待値として持っていた）。
+// **偶然そうなっていたのではなく、`src` という名前で範囲を決めた結果である。**
+//
+// **いま動かす理由は、その決め方が `apps/web` にだけ当たらないからである。**
+// このリポジトリで自分のソースを `src/` の下に置いていないワークスペースは
+// `apps/web` だけで、そこは `app/` を使う（Remix / React Router の規約）。
+// ⟹ **「`src` を持つか」で範囲を決めると、`apps/web` のコードだけが規約の外に
+// 落ちる。**実測（2026-09-10、この PR の前の `main`）: `.claude/**` と
+// `*/src/**` の `path:行番号` は0件、免除表も0件で、いっぽう
+// `apps/web/app/**` には25件が残っていた（うち22件は指した行が既に別物）。
+//
+// **⚠️ 広げていない範囲を、広げたように読まないこと。**
+//
+// - **`scripts/**` は入れていない。** この歯自身が `scripts/` に在り、doc と
+//   合成 fixture の中に `path:行番号` の形を12件持っている（`clone.ts:505` など。
+//   どれも出典ではなく**この歯の入力そのもの**である）。⟹ 素直に足すと**歯が
+//   自分自身を数える**。自己参照をどう外すかは、それ自体が設計の問題なので
+//   ここでは足さない（`apps/web/app/reserved-schedule-kind-prose.test.ts` は
+//   同じ問題に `SELF` 除外で答えている——次に `scripts/**` を足す人はそこを読むこと）
+// - **`docs/**`（正典）は入れていない。** 実測で `path:行番号` は0件であり、
+//   広げても線を引いたことにならない
+// - **「2. N行目」と「3. `grep -Fn --` の現物一致」は、`apps/web/app/**` へも
+//   広げていない。**上の doc の理由（コードの中の「N行目」は語彙であって出典
+//   ではない／依頼の主題は `path:行番号` の腐りだけ）がそのまま当てはまる
+// - **`path:` の付かない裸の行番号（`… / \`2258\` / \`2533\` …` の形）は、
+//   この歯では1件も検出できない。** `path:` が無いのでそもそも候補に上がらない。
+//   この PR は `apps/web/app/routes/commitments.tsx` に在った11件を人手で畳んだが、
+//   **畳んだだけで、歯は置いていない**（同じ形が明日また書かれても赤くならない）
 export function isWidenedScopeFile(relativePath: string): boolean {
   if (relativePath === '.claude' || relativePath.startsWith('.claude/')) return true;
+  if (relativePath.startsWith('apps/web/app/')) return true;
   return /(^|\/)src\//.test(relativePath);
 }
 
@@ -441,7 +477,7 @@ describe('AGENTS.md の参照の形（#369）', () => {
 // `grep -Fn -- 'より前の1行目へ挿入された' .claude/skills/mutation-testing/SKILL.md`
 // で当たる。この決定（N行目を広げない）により、そもそも今回のどちらの歯にも
 // 引っ掛からない。フェンスの外か中かを気にする必要も無い。
-describe('.claude/** と */src/** の path:行番号 出典（PR #760 の続き）', () => {
+describe('.claude/** と */src/** と apps/web/app/** の path:行番号 出典（PR #760 の続き）', () => {
   it('免除表の理由（why）が全部、非空である', () => {
     const blank = WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS.filter(
       (e) => e.why.trim().length === 0,
@@ -643,10 +679,23 @@ describe('isWidenedScopeFile（歯の対象範囲そのもの。合成 fixture�
     expect(isWidenedScopeFile('packages/core/src/clone.ts')).toBe(true);
   });
 
-  it('AGENTS.md・docs/・apps/web/app（src を持たない）は入らない', () => {
+  it('apps/web/app/** に入る（src を持たない唯一のワークスペース。この PR で足した）', () => {
+    expect(isWidenedScopeFile('apps/web/app/routes/chat.tsx')).toBe(true);
+    expect(isWidenedScopeFile('apps/web/app/components/page.tsx')).toBe(true);
+  });
+
+  it('AGENTS.md・docs/・scripts/ は入らない', () => {
     expect(isWidenedScopeFile('AGENTS.md')).toBe(false);
     expect(isWidenedScopeFile('docs/north_star.md')).toBe(false);
-    expect(isWidenedScopeFile('apps/web/app/routes/chat.tsx')).toBe(false);
+    // この歯自身が置かれている場所。自己参照になるので入れていない（上の doc）。
+    expect(isWidenedScopeFile('scripts/agents-md-references.test.ts')).toBe(false);
+  });
+
+  it('apps/web でも app/ の外（設定ファイル）は入らない', () => {
+    expect(isWidenedScopeFile('apps/web/package.json')).toBe(false);
+    expect(isWidenedScopeFile('apps/web/vite.config.ts')).toBe(false);
+    // 前方一致であって部分一致ではない（別ワークスペースの同名ディレクトリを巻き込まない）。
+    expect(isWidenedScopeFile('apps/webhooks/app/x.ts')).toBe(false);
   });
 
   it('パスの一部に "src" を含む語（srcじゃない）では誤爆しない', () => {
