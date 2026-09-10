@@ -123,10 +123,40 @@ npm i @mnemora/local-embedding @mnemora/core
 - **ESM のみ**（`"type": "module"`）
 - **初回だけネットワークが要る**（Hugging Face から重みを取得する。既定の置き場所は
   `~/.cache/huggingface`）。2回目以降はキャッシュから読む
-- ネイティブ依存として `onnxruntime-node` が入る。**このリポジトリでは
-  `onnxruntime-node` の postinstall を拒否している**（`pnpm-workspace.yaml` の
-  `allowBuilds`）——CPU 版のバイナリは tarball に同梱済みで、postinstall がやるのは
-  CUDA execution provider（302MB）の追加ダウンロードだけだからである
+- ネイティブ依存として `onnxruntime-node` が入る（次節）
+
+### 🔴 linux/x64 では、install が **CUDA EP を勝手に落とす**（要らないのに）
+
+**このパッケージは CPU 推論しかしない。**それでも `onnxruntime-node` の postinstall は、
+**プラットフォームによっては CUDA execution provider を追加ダウンロードする。**
+`onnxruntime-node@1.24.3` の `script/install-metadata.js` を読んで測った既定値:
+
+| プラットフォーム | postinstall が落とすもの |
+|---|---|
+| **`linux/x64`** | 🔴 **`cuda12`**（このリポジトリの実測で **302MB**） |
+| `linux/arm64` / `darwin/x64` / `darwin/arm64` / `win32/x64` / `win32/arm64` | **無し**（`[]`） |
+
+⚠ **効くのは linux/x64 ——つまり大半の CI runner・Docker image・サーバである。**
+手元の mac では起きないので、**気づくのは本番の image を焼くときになる。**
+
+**CPU 版のネイティブバイナリは tarball に同梱済みなので、落とさなくても動く。**
+
+#### 止め方
+
+| 使っている物 | 既定 | やること |
+|---|---|---|
+| **npm / yarn** | 🔴 **postinstall が走る** | `ONNXRUNTIME_NODE_INSTALL=skip npm i`、または `.npmrc` に `onnxruntime-node-install=skip` |
+| **pnpm 10 以降** | ✅ 走らない（ビルドスクリプトは既定で拒否） | 何もしなくてよい。**明示したいなら** `pnpm-workspace.yaml` に `allowBuilds: { onnxruntime-node: false }` |
+
+⚠ **このリポジトリ自身の `pnpm-workspace.yaml` の `allowBuilds` は、公開物には付いていかない。**
+あれはこの repo を clone した人にしか効かない設定であり、
+**`npm i @mnemora/local-embedding` を打った人は、上を自分でやる必要がある。**
+
+**確かめていないこと**: `ONNXRUNTIME_NODE_INSTALL=skip` を渡した状態で
+このパッケージが動くことは、**この repo では測っていない**（pnpm が既定で
+postinstall を拒否しており、その状態で動いていることは測ってある——
+つまり「CUDA EP 無しで動く」ことは押さえられているが、
+**npm 経路でその env を渡す形そのもの**は測っていない）。
 
 ## 使い方
 
