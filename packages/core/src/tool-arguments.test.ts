@@ -162,7 +162,7 @@ describe('クローンの道具に渡した引数は、長さと位置によら�
 
   it('長い値がどの位置にあっても、後ろの引数まで1文字も欠けずに届く（memory_append）', async () => {
     // 3引数の道具では、長い値を**先頭・真ん中・最後**の全部の位置に置く。
-    // **`slug` には長い値を置けない。** `memorySlugSchema`（`schema.ts:25-29`）が
+    // **`slug` には長い値を置けない。** `memorySlugSchema`（`packages/core/src/schema.ts`）が
     // 128 文字までと決めているので、先頭の位置は「規約上いちばん長い slug」で当てる
     // ——ここだけは「長い」の桁が違うことを承知のうえで書いている。
     const LONGEST_SLUG = 'a'.repeat(128);

@@ -44,7 +44,7 @@ import { createMemoryStores } from './testing.js';
  *
  * **`answer` だけは他の経路と違い、まず `waiting` へ積む前段が要る。** `Pool#send`
  * は `record.waiting` に一致する `requestId` があるときだけ `runner.answer(...)`
- * を呼ぶ（`manager.ts:766` 付近）。`waiting` は runner の `connect(onEvent)` で
+ * を呼ぶ。`waiting` は runner の `connect(onEvent)` で
  * 渡された `onEvent` へ `{type:'ask', ...}` を流して積む（`permission-resend.test.ts`
  * と同じ形）。**だから `StickyRunner#connect` は `onEvent` を捨てずに覚え、
  * テストから `ask()` で流せるようにしてある**（元は空実装で、他の4経路の保証には
@@ -156,8 +156,9 @@ class StickyRunner implements RunnerClient {
     // ではない（journal の decision 表記は `manager.test.ts` の役目）。
     //
     // **`settled` も流す。** `Pool#send` の `answered` 分岐は自分では
-    // `record.waiting` から取り除かない — 実 runner（`runner.ts:1944`）が
-    // `canUseTool` の解決時に `settled` を上げ、それを `#onEvent` が受けて
+    // `record.waiting` から取り除かない — 実 runner（`runner.ts` の
+    // `#onPermission`）が `canUseTool` の解決時に `settled` を上げ、それを
+    // `#onEvent` が受けて
     // 消す形になっている（`permission-resend.test.ts` と同じ約束）。ここで
     // 流さないと、答えたのに `waiting` が残ったままになり「解けた」を
     // 主張できない。

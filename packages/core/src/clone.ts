@@ -1706,15 +1706,15 @@ class Clone implements CloneHost {
     // **待ち時間**の話であって**完了性**の話ではなかったことである。
     //
     // 1. **有界性は崩れない。** `clone.stop()` を呼ぶ製品コードは
-    //    `apps/daemon/src/index.ts:1052` の1件だけで、その手前に
-    //    `if (stopping) return; stopping = true;`（`index.ts:1036-1037`。あいだに
-    //    `await` が1つも無い同期2行）が在る。入口は3つ（SIGTERM `index.ts:1067` /
-    //    SIGINT `index.ts:1068` / `POST /shutdown` → `index.ts:981`）だが全部この
-    //    門を通る。⟹ **shutdown の蒸留はプロセスにつき高々1回**であり、
-    //    「機械の速さで来る」は成り立たない
-    // 2. **完了性には期限が在る。** `apps/daemon/src/index.ts:1049-1050` が
+    //    `apps/daemon/src/index.ts` の `shutdown()` の1件だけで、その手前に
+    //    `if (stopping) return;` ガード（あいだに `await` が1つも無い同期2行）
+    //    が在る。入口は3つ（SIGTERM / SIGINT の `process.on(...)` /
+    //    `POST /shutdown` — `apps/daemon/src/app.ts` の `'/shutdown'` ルート）
+    //    だが全部この `shutdown()` を通る。⟹ **shutdown の蒸留はプロセスにつき
+    //    高々1回**であり、「機械の速さで来る」は成り立たない
+    // 2. **完了性には期限が在る。** `apps/daemon/src/index.ts` の `shutdown()` が
     //    `setTimeout(() => process.exit(0), FORCED_EXIT_MS)` を張っており、
-    //    `FORCED_EXIT_MS = SHUTDOWN_GRACE_MS - 5_000 = 55_000`（`index.ts:141,152`）。
+    //    `FORCED_EXIT_MS` は `SHUTDOWN_GRACE_MS - 5_000` = 55_000。
     //    ⟹ 待ち行列が詰まっていれば、蒸留は「順番が遅い」のではなく**切られる**。
     //    失われるのは会話1区間まるごとである（#564 の観測）
     if (this.#query) {
@@ -1789,7 +1789,7 @@ class Clone implements CloneHost {
    *
    * ## `interrupt` — 「割り込ませるか」を型ではなく呼び出し側で決める（Issue #43）
    *
-   * **`isHumanOriginated`（`clone.ts:221`）は広げない。** `distill` を人間起点の
+   * **`isHumanOriginated` は広げない。** `distill` を人間起点の
    * 型にすると、蒸留という**型**そのものが常に割り込む側になり、有界性の根拠
    * （`isHumanOriginated` の doc「割り込みは人間の速さでしか来ない」）を型では
    * 支えられなくなる。**だから型を増やさず、ここに引数を持たせて、呼び出し側が
@@ -1814,12 +1814,12 @@ class Clone implements CloneHost {
    * 話ではなかったことである。** `stop()` にも渡してよい理由は2つで、どちらも
    * `apps/daemon/src/index.ts` に在る（詳しくは `stop()` の doc）:
    *
-   * - **有界性**: `clone.stop()` の製品コードの呼びは `index.ts:1052` の1件だけで、
-   *   手前の `if (stopping) return; stopping = true;`（`index.ts:1036-1037`）を
-   *   3つの入口が全部通る ⟹ **プロセスにつき高々1回**
-   * - **完了性の期限**: `index.ts:1049-1050` の
-   *   `setTimeout(() => process.exit(0), FORCED_EXIT_MS)`（`FORCED_EXIT_MS =
-   *   SHUTDOWN_GRACE_MS - 5_000 = 55_000`。`index.ts:141,152`）⟹ 行列の後ろで
+   * - **有界性**: `clone.stop()` の製品コードの呼びは `shutdown()` の1件だけで、
+   *   手前の `if (stopping) return;` ガードを3つの入口が全部通る ⟹
+   *   **プロセスにつき高々1回**
+   * - **完了性の期限**: `shutdown()` が張る
+   *   `setTimeout(() => process.exit(0), FORCED_EXIT_MS)`（`FORCED_EXIT_MS` は
+   *   `SHUTDOWN_GRACE_MS - 5_000` = 55_000）⟹ 行列の後ろで
    *   待つ蒸留は**切られる**
    *
    * ⟹ **「割り込みの量は人間が待っている回数に有界」は、いまも保たれている。**
@@ -5863,9 +5863,9 @@ class Clone implements CloneHost {
         // `this.#turn` は既に `null` なので `#reportFailure` は一度も呼ばれず、
         // 例外も起きないから `#handle` は正常終了し、受信箱の合図は `#forget`
         // されて消える — 支出上限でクローンのターンが死んでも、どこにも記録が
-        // 残らなかった。**`runner.ts:1064` の
-        // `if (isSuccessResult(message)) { ... } else { ... }` と同じ分岐をここにも
-        // 置く**（マネージャー側にはこの分岐と回帰テストがあり、クローン側だけ
+        // 残らなかった。**`runner.ts` の `#apply` に在る、成否で分ける同じ形の
+        // 分岐（`failure === undefined ? ... : ...`）をここにも置く**
+        // （マネージャー側にはこの分岐と回帰テストがあり、クローン側だけ
         // 無いのは非対称だった）。
         //
         // **判定は `isAnsweredResult` である（`isSuccessResult` ではない）。**
@@ -5887,8 +5887,9 @@ class Clone implements CloneHost {
           // 「上限に当たったと日報に書いた瞬間に上限と誤判定する」自家中毒に
           // なる（`sdk-failure.ts` の doc の順序）。
           //
-          // `errors[]` を混ぜたのは `runner.ts:1111` に揃えるためで、直す前は
-          // クローン側だけがこれを読んでいなかった。
+          // `errors[]` を混ぜたのは `runner.ts` の同種の候補列（逐語は
+          // `grep -Fn -- 'for (const candidate of [failure.text, resultTextOf(event).text, ...event.errorLines])' packages/core/src/runner.ts`）
+          // に揃えるためで、直す前はクローン側だけがこれを読んでいなかった。
           //
           // `reached` なら以降の合図を保持する側へ切り替わる（`#noteUsageNotice` が
           // `#usageBlocked` を立てる）。この `await` は下の `#reportFailure`
