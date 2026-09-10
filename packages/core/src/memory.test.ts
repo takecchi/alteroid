@@ -4014,9 +4014,21 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
         { length: BASE_COUNT },
         (_, i) => `## 節${i}\n節${i}の本文である。`,
       ).join('\n');
+      // ⚠️ `before.content` は末尾に改行を1つ明示的に持たせる。**理由**:
+      // `scanMemorySections` は「文書の絶対末尾で閉じる最後の節」だけ、次の
+      // 見出しの前で閉じる節と違って末尾の改行を body に含めない（この非対称は
+      // 既存の仕様——`memorySectionId` 周りの歯「末尾の空行まで一致させる」を
+      // 見ること）。そのため、末尾に改行が無い `before` の最後の節（節219）へ
+      // 単純に `\n${appendedBody}` を継ぎ足すと、その節が「文書の絶対末尾」で
+      // なくなることで**改行の含み方が変わり、見出し・本文を1文字も変えて
+      // いないのに id そのものが変わってしまう**（本文が変わって古くなった、
+      // という意味での「押し出された」ではなく、この合成データ特有の継ぎ目の
+      // アーティファクトである）。`before.content` 側に先に改行を持たせ、
+      // `after.content` は単純連結（余分な区切りを足さない）にすることで、
+      // 節219の body スライスが前後で1バイトも変わらないようにしてある。
       const before: MemoryPart = {
         slug: 'doc',
-        content: `---\ntype: premise\ndescription: 前提の要旨\n---\n${baseBody}`,
+        content: `---\ntype: premise\ndescription: 前提の要旨\n---\n${baseBody}\n`,
       };
       // after: 既存の節は1文字も変えず、末尾へさらに節を積む
       // ——`memory_append` と同じ形（末尾への追記）。
@@ -4024,7 +4036,7 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
         { length: 80 },
         (_, i) => `## 追記節${i}\n追記節${i}の本文である。`,
       ).join('\n');
-      const after: MemoryPart = { slug: 'doc', content: `${before.content}\n${appendedBody}` };
+      const after: MemoryPart = { slug: 'doc', content: `${before.content}${appendedBody}` };
 
       const idPattern = /\[([0-9a-f]{8}-[0-9a-f]{8})\]/g;
       const idsIn = (text: string): Set<string> =>
@@ -4115,17 +4127,27 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     });
 
     it('見出しが重複していて、どの節に対応するか決められないときは「判定できない」（丙）と名乗る（3つ目の状態を潰さない）', () => {
+      // ⚠️ 変更した節（1つ）に対して、**変わっていない節を大量に添える**
+      // （`manySections` の60節）。理由: `renderPremiseDelta` は `added` が
+      // カード全体に占める割合が `MEMORY_DELTA_MAX_RATIO`（0.5）を超えたら
+      // 差分そのものを諦め、カード全体を返す（差分にする価値が無いという
+      // 判断）。この fixture をごく小さいまま（節2つ）にすると、書き換えで
+      // 増えた行がカードの過半を占めてしまい、**差分機構そのものが働かず**
+      // 「判定できない節」の文言を検査する前提が崩れる（実測で踏んだ）。
+      // 変わらない節を十分に積むことで、比率をこの歯が測りたい経路
+      // （差分が実際に描かれる経路）に載せている。
       const before: MemoryPart = {
         slug: 'doc',
-        content: '---\ntype: premise\ndescription: 要旨\n---\n## 重複見出し\n本文A\n\n## 節B\n本文B\n',
+        content: manySections(60, '\n\n## 重複見出し\n本文A\n'),
       };
       const after: MemoryPart = {
         slug: 'doc',
         // 節Aの本文を変え（＝旧い行を消す）、かつ同じ見出しをもう1つ足す
         // ——いまの文書に「重複見出し」が2つ在る状態を作る。
-        content:
-          '---\ntype: premise\ndescription: 要旨\n---\n## 重複見出し\n本文A書き換え\n\n' +
-          '## 節B\n本文B\n\n## 重複見出し\n本文C\n',
+        content: manySections(
+          60,
+          '\n\n## 重複見出し\n本文A書き換え\n\n## 重複見出し\n本文C\n',
+        ),
       };
 
       const currentHeadingCount = scanMemorySections(after.content).sections.filter(
