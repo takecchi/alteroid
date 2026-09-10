@@ -5,7 +5,7 @@
 # Claude Code でやることと同じ）。だから ca-certificates・git・ripgrep のような
 # 素の道具は入れる。入れないと「コンテナだからできない」が生まれ、それは仕様では
 # なくバグである（north_star 禁止1）。
-FROM node:22-bookworm-slim AS build
+FROM node:22-trixie-slim AS build
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
@@ -53,7 +53,7 @@ ENV ALTEROID_BUILD_REV=${ALTEROID_BUILD_REV:-$RAILWAY_GIT_COMMIT_SHA}
 RUN pnpm build
 
 
-FROM node:22-bookworm-slim AS runtime
+FROM node:22-trixie-slim AS runtime
 
 # マネージャーが人間と同じ手つきで作業するための素の道具（runner で使う）。
 #
