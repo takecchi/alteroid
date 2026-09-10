@@ -71,6 +71,7 @@ import type {
 } from './manager.js';
 import {
   applyMemoryFrontmatterPatch,
+  assertNeverMemoryDocKind,
   assertNeverMemoryProtectionStatus,
   containsMemoryFrontmatterLineBreak,
   cutMemorySections,
@@ -120,6 +121,7 @@ import type {
   JobStatus,
   JournalEntry,
   JournalEntryInput,
+  MemoryDocKind,
   MemoryDocumentMeta,
   MemoryProtectionStatus,
   PendingApproval,
@@ -2576,7 +2578,7 @@ export function createCloneTools(context: ToolContext) {
         // 引き続きあるため）。
         if (type !== undefined && !isKnownMemoryDocKind(type)) {
           return text(
-            `記憶 ${slug} の frontmatter を更新できない——type に渡せるのは premise か fact のどちらかだけである` +
+            `記憶 ${slug} の frontmatter を更新できない——type に渡せるのは premise か fact か indexed のいずれかだけである` +
               `（渡された値: ${JSON.stringify(type)}）。何も変わっていない。`,
           );
         }
@@ -2629,15 +2631,36 @@ export function createCloneTools(context: ToolContext) {
         );
 
         const diff = describeMemoryWriteDiff(existing.content, written.content);
-        const kindLabel = (kind: 'premise' | 'fact'): string =>
-          kind === 'premise' ? 'premise（要旨＋節の目次が載る）' : 'fact（目次の1行だけ載る）';
+        const kindLabel = (kind: MemoryDocKind): string => {
+          switch (kind) {
+            case 'premise':
+              return 'premise（要旨＋節の目次が載る）';
+            case 'indexed':
+              return 'indexed（要旨だけが載る。節の目次は載らない）';
+            case 'fact':
+              return 'fact（目次の1行だけ載る）';
+            default:
+              return assertNeverMemoryDocKind(kind);
+          }
+        };
+        const describeNextKindLoad = (kind: MemoryDocKind): string => {
+          switch (kind) {
+            case 'fact':
+              return '次のターンから、この文書は目次の1行だけになる（節の目次も載らなくなる）。';
+            case 'indexed':
+              return '次のターンから、この文書は要旨だけがプロンプトへ載る（節の目次は載らない。' +
+                '節を確かめるには memory_outline を呼び、memory_section_read で開くこと）。';
+            case 'premise':
+              return '次のターンから、この文書は要旨と節の目次がプロンプトへ載る（本文は載らない。memory_section_read で開く）。';
+            default:
+              return assertNeverMemoryDocKind(kind);
+          }
+        };
         const kindChangeNote =
           priorKind === nextKind
             ? ''
             : `\n\n区分が変わった: ${kindLabel(priorKind)} → ${kindLabel(nextKind)}。` +
-              (nextKind === 'fact'
-                ? '次のターンから、この文書は目次の1行だけになる（節の目次も載らなくなる）。'
-                : '次のターンから、この文書は要旨と節の目次がプロンプトへ載る（本文は載らない。memory_section_read で開く）。');
+              describeNextKindLoad(nextKind);
         // `memory_frontmatter_set` は既存文書にしか使えない（上の `existing === null`
         // の断り）ので `created` は常に false。
         const floor = memoryFloorNote(memoryBefore, memoryAfter, slug, written.content, false);
@@ -7693,6 +7716,10 @@ function renderMemorySize(
   // 「5項目を満たさない文書」として撃たれる（実測済み）。
   lines.push(
     `- premise 合計: ${floor.premiseChars.toLocaleString('en-US')} 文字（${floor.premiseDocs} 文書。毎ターン「要旨＋節の目次」が焼かれる）`,
+    // `indexed` は2026-09-11 に足した3つ目の区分。**既存2行（premise 合計 /
+    // fact 目次合計）の文言・並びは1文字も変えていない**（歯で固定。
+    // 不変条件3）——この行は末尾に足すだけである。
+    `- indexed 合計: ${floor.indexedChars.toLocaleString('en-US')} 文字（${floor.indexedDocs} 文書。毎ターン要旨だけが焼かれる。節の目次は焼かれない）`,
     `- fact 目次合計: ${floor.tocChars.toLocaleString('en-US')} 文字（${floor.factDocs} 文書。目次の1行だけが焼かれる）`,
   );
   return lines.join('\n');
