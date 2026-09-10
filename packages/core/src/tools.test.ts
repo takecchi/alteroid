@@ -12514,6 +12514,64 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
       // ⭐ 道具名も出る。
       expect(text).toContain('memory_section_move');
     });
+
+    /**
+     * 必須の歯4（今回追加）: **`ask_human` — 副作用が外部の台帳（承認）に実在する
+     * ことを、承認の実在と跡の両方を同じ it の中で測る。**
+     *
+     * `ask_human` のハンドラは `stores.jobs.putApproval(approval)` が先、
+     * `appendJournalOrThrow('ask_human', …, 'act-completed')` が後という構造
+     * （`tools.ts`）。`failingJournalAppend` は `journal.append` だけを落とすので
+     * `putApproval` は通る——つまり journal が落ちても承認は残るはずである。
+     * 既存の4本（memory_delete / journal_write / daily_report_write /
+     * memory_section_move の move_in / 🔴秘密の profile_write）はどれも
+     * `ask_human` を対象にしていない。`ask_human` だけが持つ性質——副作用の
+     * 完了を「ストアの中身を直接読む」のではなく「別の道具（approvals_list）
+     * 経由で読めること」で測れる——を、この歯で埋める。
+     *
+     * ⭐ **この歯が緑であることが意味するのは「日誌が落ちない」ではなく
+     * 「日誌が落ちたときに、承認の実在と跡の両方が残る」である。** 本番で
+     * `journal.append` が落ちないことをこの歯は何も保証しない。
+     */
+    it('act-completed（ask_human）: 承認は実在し（approvals_list から読める）、跡も残る。isError のまま「やり直し禁止」が返る', async () => {
+      clearRecentTracesForTesting();
+      const stores = failingJournalAppend(createMemoryStores(), 'boom-ask-human');
+      const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+
+      // ⚠️ 秘密の扱い: 質問文に秘密（鍵・トークン等）を書かない。中身は
+      // 人工の無害な文言で足りる——ここで測るのは実在と跡であって、内容の
+      // 機密性ではない（プロファイル本文を測る🔴秘密の歯とは別の懸念）。
+      const QUESTION = '歯4用の確認: 本当に実行してよいか（ask_human の journal 失敗時）';
+      const { isError, text } = await callExpectingError(tools, 'ask_human', {
+        question: QUESTION,
+      });
+
+      // (e) 副作用は完了している——承認は実在する。
+      // ⭐ ストアを直接読むのではなく、approvals_list 道具から読めることで測る
+      //   （stores.jobs は putApproval が通っているので直接読んでも実在するが、
+      //   ここでは「外部の台帳に実在する」ことを道具の応答そのもので確かめる）。
+      const listing = await callExpectingError(tools, 'approvals_list', {});
+      expect(listing.isError).toBe(false);
+      expect(listing.text).toContain(QUESTION);
+
+      // 日誌には何も残っていない（append は常に落ちる）。
+      expect(await stores.journal.list({})).toHaveLength(0);
+      // (c) self_dropped の帳面に跡が実在する。
+      const traces = recentDroppedTraces();
+      expect(traces.length).toBeGreaterThan(0);
+      expect(traces.some((line) => line.includes('日誌を記録できませんでした'))).toBe(true);
+      // (d) isError のまま。
+      expect(isError).toBe(true);
+      // (d) 先頭行だけで完了状態・未記録・やり直しの可否の3つが分かる。
+      expect(text.split('\n')[0]).toBe('⚠⚠ 完了済み・未記録・やり直し禁止');
+      expect(text).toContain('やり直さないこと');
+      // (d) journalEntryShape 相当の住所が本文に出る。
+      expect(text).toContain('記録できなかったエントリ:');
+      expect(text).toContain('escalation');
+      expect(text).toContain('boom-ask-human');
+      // ⭐ 道具名が本文に出る（依頼者④: 書き直す対象を選べるだけの材料）。
+      expect(text).toContain('ask_human');
+    });
   });
 
   /**
