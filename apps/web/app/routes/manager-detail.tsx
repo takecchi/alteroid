@@ -845,8 +845,8 @@ const REASON_ID = 'send-message-disabled-reason';
  * `packages/core/src/manager.ts` が
  * **「人間とクローンの明示的な `manager_send` は塞がない（`#unresumable` は見られ
  * ていないし、戻れたら忘れる）」**と書いて意図的に開けてある線を、画面側から
- * 黙って閉じることになる（`#unresumable.add` の直前のコメント。2026-08-16 時点で
- * `manager.ts:1400` 付近）。
+ * 黙って閉じることになる（`#onEvent` メソッド内、
+ * `this.#unresumable.add(event.managerId)` の直前のコメント）。
  *
  * **止めるのは「戻る先が無い」と分かっている相手だけ**である。`live === false`
  * かつ `session_id` を持っていないと、`#resume` は `sessionId === undefined` で

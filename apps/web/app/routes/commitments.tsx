@@ -217,8 +217,8 @@ const ORIGIN_LABEL: Record<CommitmentOrigin, string> = {
  * `ORIGIN_LABEL[origin]` の実行時の倒れ先（issue #288）。
  *
  * **`ORIGIN_LABEL` は `Record<CommitmentOrigin, string>` のまま維持する** —
- * これがビルド時の網羅性そのものである（`commitmentOriginSchema`
- * （`packages/core/src/schema.ts:892`）に新しい値が足されると、この
+ * これがビルド時の網羅性そのものである（`packages/core/src/schema.ts` の
+ * `commitmentOriginSchema` に新しい値が足されると、この
  * `Record` を埋めるまで `pnpm typecheck` を通せない。変異試験で確認済み、
  * 詳細は PR 本文）。
  *
@@ -290,8 +290,8 @@ function PlainBody({ body }: { body: string }) {
 
 /**
  * **網羅性チェック専用（ビルド時）。** `CommitmentBody` の `switch` の
- * `default` から呼ぶ。引数の型は `never` — `commitmentOriginSchema`
- * （`packages/core/src/schema.ts:892`）に新しい値が足されたのに、上の
+ * `default` から呼ぶ。引数の型は `never` — `packages/core/src/schema.ts` の
+ * `commitmentOriginSchema` に新しい値が足されたのに、上の
  * `case` がその値を決めていないと、呼び出し側で `commitment.origin` は
  * ここで `never` にならず、この呼び出し自体が型エラーになる。**新しい
  * origin を足した人は、ここで分岐を決めるまで `pnpm typecheck` を通せない。**
@@ -497,26 +497,33 @@ function ManagerRestBody({ rest, bodyMarkup }: { rest: string; bodyMarkup: strin
  * ある）、**`text` には型で区別されない3種が混ざる**:
  *
  * 1. **マネージャー自身の出力**（`#emit(event.managerId, 'report', event.text)`
- *    など。`manager.ts:2223` / `2258` / `2533`）
- * 2. **デーモンが組み立てた通知文**（`manager.ts:1365` / `1656` / `1760` /
- *    `1799` / `2863` / `2327` / `2698` など）。**このうち複数は本文に既に
- *    Markdown の記法を含む**（実例、`manager.ts:1656` の逐語）:
+ *    など。`packages/core/src/manager.ts` の `#onEvent` メソッド、
+ *    `case 'report'` の分岐）
+ * 2. **デーモンが組み立てた通知文**（`packages/core/src/manager.ts` の
+ *    `flushWithheldReports` / `#restoreJobs` / `#reattach` / `#onEvent`
+ *    （複数の分岐）など）。**このうち複数は本文に既に
+ *    Markdown の記法を含む**（実例、`#restoreJobs` の逐語）:
  *    「この委譲は`**`自分より新しい世代の誰かが握っています`**`。…
- *    `**`新しく起こし直さないでください`**`」（`2327` にも同様の例がある）
- * 3. **SDK / runner が出したエラー文**（`manager.ts:2727`
- *    `#emit(event.managerId, 'report', event.reason)` など。1・2 の文の末尾に
- *    埋め込まれて届くことも多い、例: `2698` の `…挑み直します: ${event.reason}`）
+ *    `**`新しく起こし直さないでください`**`」（`#reattach` にも同じ文言がある）
+ * 3. **SDK / runner が出したエラー文**（`packages/core/src/manager.ts` の
+ *    `#onEvent` メソッドが `event.reason` を報告文へ埋め込む分岐など。
+ *    1・2 の文の末尾に埋め込まれて届くことも多い、例:
+ *    `…挑み直します: ${event.reason}`）
  *
- * **3 は `apps/web/app/routes/reports.tsx:42` が「`Markdown` で描かないこと。
+ * **3 は `apps/web/app/routes/reports.tsx`
+ * （`grep -Fn -- '中身は SDK が出したエラー文であって' apps/web/app/routes/reports.tsx`）
+ * が「`Markdown` で描かないこと。
  * 中身は SDK が出したエラー文であって、クローンが書いた文章ではない」と
  * 書いているものと同じ種類である。それでもここでは `manager` を丸ごと
  * Markdown のままにする。** 理由は3つ:
  *
  * 1. **3種類のどれも、人間が打った文字ではない。** 人間の指示が守ろうとして
- *    いるもの（`chat.tsx:710`「自分が書いた文字が勝手に化けないため」）は、
+ *    いるもの（`apps/web/app/routes/chat.tsx`
+ *    （`grep -Fn -- 'クローンの行だけを Markdown にする' apps/web/app/routes/chat.tsx`）
+ *    の「自分が書いた文字が勝手に化けないため」）は、
  *    ここでは1件も当たらない
- * 2. **2 は既に本文に `**…**` を持っている**（上の逐語、`manager.ts:1656` /
- *    `2327`）。素のテキストで描くと `**` がそのまま画面に出る。Markdown 側に
+ * 2. **2 は既に本文に `**…**` を持っている**（上の逐語、`#restoreJobs` /
+ *    `#reattach`）。素のテキストで描くと `**` がそのまま画面に出る。Markdown 側に
  *    倒すのは、いまの表示の修正でもある
  * 3. **頻度と、害の向きが違う。** 2（デーモンが組み立てた通知）は器の入れ替え・
  *    再開・世代の拒否のたびに頻繁に出る。3（SDK/runner のエラー文）は失敗した
@@ -532,16 +539,22 @@ function ManagerRestBody({ rest, bodyMarkup }: { rest: string; bodyMarkup: strin
  * **これは「仕組みで塞げている」のではなく「分離できないので Markdown 側へ
  * 倒した」である。** `commitment.body` は1本の文字列で `origin: 'manager'` に
  * 下位区分が無く、3 は 1・2 の文の末尾に埋め込まれて届くことが多い
- * （`manager.ts:2698` の `…挑み直します: ${event.reason}` がその形）。切り分け
- * ようとすると本文の中身を判定することになるが、それは `manager.ts:2193`
- * 付近のコメントが「一覧を出す側は『報告が来た』と『エラーで死んだ』を本文の
- * 先頭を読んで判定することになる（＝ 表示のたびに文言の判定が要る）」として
- * `manager.ts` 自身が避けている形である。**同じ種類の文字列（SDK のエラー文）
- * が、`reports.tsx:42` とこことで扱いが食い違う。この食い違いと、3種類が
- * 型で区別されずに混ざっている件そのものは issue #287 に記録してある。**
+ * （`#onEvent` の `…挑み直します: ${event.reason}` がその形）。切り分け
+ * ようとすると本文の中身を判定することになるが、それは `manager.ts` 自身が
+ * 避けている形である——`packages/core/src/manager.ts` の `#onEvent` の
+ * `case 'report'` が「一覧を出す側は『報告が来た』と『エラーで死んだ』を本文の
+ * 先頭を読んで判定することになる（＝ 表示のたびに文言の判定が要る）」と書いている。
+ * **同じ理由は `summaryOf` にも別の言葉で置かれている**（そちらの逐語は
+ * 「本文の文言で判定するしかなくなる」で、上とは別の文である——1つの逐語を
+ * 2つのシンボルに帰属させない）。**同じ種類の文字列（SDK のエラー文）
+ * が、`reports.tsx`（上記の grep が指す箇所）とこことで扱いが食い違う。
+ * この食い違いと、3種類が型で区別されずに混ざっている件そのものは
+ * issue #287 に記録してある。**
  *
  * **`human` を素のままにする理由**: `event.text` は
- * `apps/web/app/routes/chat.tsx:710` が名指しで守っている文字列そのものである
+ * `apps/web/app/routes/chat.tsx`
+ * （`grep -Fn -- 'クローンの行だけを Markdown にする' apps/web/app/routes/chat.tsx`）
+ * が名指しで守っている文字列そのものである
  * ——「**クローンの行だけを Markdown にする。** 人間が打った本文
  * （`role === 'human'`）は素のテキストのままにする — 自分が書いた文字が
  * 勝手に化けないため」。チャット画面では素・台帳では Markdown、という
@@ -916,7 +929,7 @@ function PlainClosedReason({ reason }: { reason: string }) {
  * | `closedBy` | 描き方 | 理由 |
  * | --- | --- | --- |
  * | `'clone'` | `<Markdown>` | AI が書いた |
- * | `'human'` | 素テキスト（`whitespace-pre-wrap` を保つ） | 人間が打った文字を化けさせない（`chat.tsx:710` と同じ線） |
+ * | `'human'` | 素テキスト（`whitespace-pre-wrap` を保つ） | 人間が打った文字を化けさせない（`grep -Fn -- 'クローンの行だけを Markdown にする' apps/web/app/routes/chat.tsx` と同じ線） |
  * | `undefined` | 素テキスト | **「そもそも無い」。** この欄が入る前に閉じられた行にはこの情報が存在しない |
  * | 上記以外（実行時のみ来うる） | 素テキスト＋`console.warn` | デーモンが先に新しい値を返す順序に備える。**`undefined` と同じ扱いにしない** — warn の有無で見分けが付く（`undefined` は warn しない） |
  *
