@@ -50,6 +50,12 @@ import {
   ConsolidationLLMResultSchema,
 } from "./strategies/consolidate.js";
 import type { ConsolidationLLMResult } from "./strategies/consolidate.js";
+import {
+  buildReflectedMemory,
+  buildReflectionPrompt,
+  ReflectionLLMResultSchema,
+} from "./strategies/reflect.js";
+import type { ReflectionLLMResult } from "./strategies/reflect.js";
 
 /**
  * `runtime.observe` / `runtime.tick` の実装（roadmap.md 段階3、docs/architecture.md §3.2・§3.3）。
@@ -424,6 +430,108 @@ export interface ConsolidationResult {
   llmFailure: ExtractionFailure | null;
 }
 
+/**
+ * `runtime.reflect` の対象（Issue #104）。`consolidate` の {@link ConsolidateTarget} と
+ * **意図的に同じ形**——`reflect` に「何を見るか」を決めさせない。`target` を必須にしたのは、
+ * これを省略できると `reflect` 自身が対象を選ぶことになり、それは Background Cognition の
+ * *実運用*（Phase 1 の範囲外、docs/roadmap.md §1.3）の決定を先取りしてしまうためである。
+ *
+ * `{ memoryIds }` は正規化せず、**重複も入力順もそのまま保つ**。`{ query, maxCandidates }` は
+ * `recall(ctx, query)` を1回呼んで得られた `memories` の id を順に採る（`maxCandidates` が
+ * あれば先頭からその件数で切る）。
+ */
+export type ReflectTarget =
+  { memoryIds: MemoryId[] } | { query: RecallQuery; maxCandidates?: number };
+
+/**
+ * `runtime.reflect` の任意オプション（Issue #104）。
+ */
+export interface ReflectOptions {
+  target: ReflectTarget;
+  /**
+   * `true` なら **LLM を呼ばず・1件も書かず**、土台になりうる対象だけを見て返す
+   * （{@link ReflectBasisOutcome} の `"eligible"` を参照）。
+   */
+  dryRun?: boolean;
+  /** `memory_events.actor`（`created` イベント）。省略時 `{ type: "system" }`。 */
+  actor?: EventActor;
+  /** `memory_events.meta.reason` へ足す補足。省略時は積まない（`ConsolidateOptions.reason` と同じ形）。 */
+  reason?: string;
+}
+
+/**
+ * `runtime.reflect` 全体の結末（Issue #104）。`ConsolidateOutcome` と同じ2階層の
+ * 「無い」の分類の適用——「一般化するものが無かった」「そもそも見ていない」「LLM が落ちた」
+ * 「下見だけ」を1つの `false` に潰さない。
+ *
+ * - `"reflected"` — 新しい Memory を1件作った。`reflectedMemoryId` は非 `null`。
+ * - `"nothing_to_reflect"` — 土台を見た上で、作るものが無かった
+ *   （{@link ReflectNothingReason} で細分）。
+ * - `"not_examined"` — 対象そのものが空（`memoryIds: []`）、または `query` が0件だった
+ *   ——store の Memory を1件も見ていない。
+ * - `"llm_failed"` — LLM 呼び出しが失敗した。**1件も書いていない。**
+ * - `"dry_run"` — 下見だけを行った。**1件も書いていない。**
+ */
+export type ReflectOutcome =
+  "reflected" | "nothing_to_reflect" | "not_examined" | "llm_failed" | "dry_run";
+
+/**
+ * `ReflectOutcome: "nothing_to_reflect"` の理由（Issue #104）。
+ *
+ * - `"no_eligible_basis"` — 渡された/引けた対象のうち、採れるもの
+ *   （`status: 'active'` かつ `provenance.kind !== 'reflected'`）が0件。**LLM を呼んでいない**
+ *   （`llmCalls: 0`）。
+ * - `"llm_declined"` — LLM を呼び、モデルが「一般化するものは無い」と答えた
+ *   （`outcome: 'nothing'`、`llmCalls: 1`）。**書き込みは0件。**
+ */
+export type ReflectNothingReason = "no_eligible_basis" | "llm_declined";
+
+/**
+ * `runtime.reflect` が対象1件ごとに返す結末（Issue #104）。`ConsolidateSourceOutcome` と
+ * **意図的に違う語彙を持つ**——`reflect` は N→1 の置換ではなく「足す」操作であり
+ * （既存の行の `status` を1つも動かさない）、書き込みの途中で対象1件だけが失敗しうる
+ * `"status_changed_concurrently"` / `"failed"` / `"not_attempted"` は存在しない
+ * （そもそも対象へ書き込みに行かないので、その種類の失敗が起きようがない）。
+ *
+ * - `"used"` — 実際に新しい Memory の `provenance.sources` に入った土台。
+ * - `"not_found"` — その id の Memory がそもそも無い（`ConsolidateSourceOutcome` と同じ意味）。
+ * - `"status_not_active"` — `status !== 'active'`（`forgotten` はここで確実に弾かれる）。
+ * - `"basis_is_reflected"` — `status: 'active'` だが `provenance.kind === 'reflected'`。
+ *   自己増幅（reflect の産物を土台にまた reflect すること）を形の側で止める。
+ * - `"eligible"` — 土台として採れる状態だったが、この呼び出しでは結局使われなかった
+ *   （`dryRun: true` で下見しただけ／LLM 呼び出しが失敗した／LLM が「無い」と答えた、
+ *   のいずれか）。
+ */
+export type ReflectBasisOutcome =
+  | { memoryId: MemoryId; kind: "used" }
+  | { memoryId: MemoryId; kind: "not_found" }
+  | { memoryId: MemoryId; kind: "status_not_active"; status: Exclude<MemoryStatus, "active"> }
+  | { memoryId: MemoryId; kind: "basis_is_reflected" }
+  | { memoryId: MemoryId; kind: "eligible" };
+
+/**
+ * `runtime.reflect` の結果（Issue #104）。
+ *
+ * ⛔ 派生値（`reflectedCount` 等）を持たない——`ConsolidationResult` と同じ理由
+ * （`basis` を数えれば得られる）。
+ */
+export interface ReflectionResult {
+  outcome: ReflectOutcome;
+  /** `outcome === "nothing_to_reflect"` のときだけ非 `null`。それ以外は必ず `null`。 */
+  nothingReason: ReflectNothingReason | null;
+  /** 作られた Memory の id。`outcome !== "reflected"` のときは必ず `null`。 */
+  reflectedMemoryId: MemoryId | null;
+  /**
+   * 対象1件ごとの結末。**入力と同じ順序・同じ長さ**（`{ memoryIds }` のとき、重複も保つ）。
+   * 対象そのものを見ていない（`outcome === "not_examined"`）場合は空配列。
+   */
+  basis: ReflectBasisOutcome[];
+  /** LLM を実際に呼んだ回数。`dryRun`・`not_examined`・`no_eligible_basis` は必ず `0`。 */
+  llmCalls: number;
+  /** `outcome !== "llm_failed"` のときは必ず `null`（`ConsolidationResult.llmFailure` と同じ規律）。 */
+  llmFailure: ExtractionFailure | null;
+}
+
 export interface TickOptions {
   /**
    * claim のリース長（ミリ秒）。`ClaimOutboxJobsOptions.leaseMs`（ADR 0032）へそのまま渡す。
@@ -618,6 +726,60 @@ export interface Runtime {
    * 足していない（Issue #103 本文「tick のジョブとして回せる形は別 issue」。ADR 0089 §4）。
    */
   consolidate(ctx: Ctx, opts: ConsolidateOptions): Promise<ConsolidationResult>;
+  /**
+   * Issue #104: 複数の Memory から一般化・気づきを1件作る（docs/vision.md「5動詞」の1つ）。
+   *
+   * **`consolidate` の双子だが、意味論は正反対である。** `consolidate` は N→1 の**置換**
+   * （統合元を `superseded` へ動かす）だが、`reflect` は**足すだけ**の操作であり、
+   * 既存の行の `status` を1つも動かさない。書き込みは新しい Memory 1件と `created`
+   * イベントだけであり、`updateStatus`/`updateStatusWithEvent` は1度も呼ばない
+   * ——`reflect` に `superseded`/`forgotten` へ動かす根拠は無い（`consolidate` が
+   * `superseded` を使えるのは N→1 の置換だからである）。
+   *
+   * 手順（`consolidate` §3 と同じ段取りを踏むが、書き込みの終盤だけ違う）:
+   * 1. `target` を正規化する。`{ memoryIds }` はそのまま（重複・入力順を保つ）。空配列は
+   *    store に一切触れず `outcome: 'not_examined'`。`{ query, maxCandidates }` は
+   *    `recall(ctx, query)` を1回呼び、返った `memories` の id を順に採る
+   *    （`maxCandidates` があれば先頭からその件数で切る）。0件も `not_examined`。
+   * 2. `getMany` で一括読み。**この優先順で**分類する: 無ければ `not_found`、
+   *    `status !== 'active'` なら `status_not_active`、`active` かつ
+   *    `provenance.kind === 'reflected'` なら `basis_is_reflected`（reflect の産物を
+   *    土台にまた reflect する自己増幅を、形の側で止める）、それ以外は eligible。
+   * 3. eligible（重複除去）が0件なら `nothing_to_reflect`/`no_eligible_basis` で打ち切る
+   *    ——**LLM を呼ばない**（`llmCalls: 0`）。`consolidate` と違い、eligible が1件だけでも
+   *    ここでは打ち切らない（1件からの一般化も意味を持ちうる）。
+   * 4. `dryRun: true` ならここで打ち切る。eligible は `{ kind: 'eligible' }`、他は2の判定の
+   *    まま。`outcome: 'dry_run'`、`llmCalls: 0`、書き込みゼロ。
+   * 5. LLM を1回呼ぶ（`completeStructured`、スキーマは判別子 `outcome: 'reflected' | 'nothing'`
+   *    を持つ判別可能ユニオン——断れないスキーマを渡すと、モデルは毎回何かを捏造するため、
+   *    モデルが「一般化するものは無い」と答えられる形にしてある）。失敗したら
+   *    `outcome: 'llm_failed'`・`llmFailure`・`llmCalls: 1`・書き込みゼロ（失敗を根拠に
+   *    新しい記憶を作らない。`ReextractResult`/`ConsolidationResult` と同じ規律）。
+   * 6. LLM が `outcome: 'nothing'` を返したら `nothing_to_reflect`/`llm_declined`、
+   *    `llmCalls: 1`、書き込みゼロ。
+   * 7. `buildReflectedMemory(...)` で新しい Memory を1件組み立て
+   *    （`createMemoryWithOutbox(ctx, newMemory, ['embed'])`）。`provenance` は
+   *    `{ kind: 'reflected', sources: <eligible の memoryId> }`——**`sources` は必ず埋める**
+   *    （`ReflectedProvenance.sources` は型としては省略可のままだが、この実装が作る値は
+   *    常に埋める。公開型の破壊的変更を避けるため型は変えていない）。
+   * 8. `created` イベントを1件積む。`meta.reason: 'reflected'`、`meta.sources: <eligible の
+   *    id>`、`opts.reason` があれば `meta.note` にも積む（`consolidate` の `superseded`
+   *    イベントと同じ形）。
+   * 9. `outcome: 'reflected'`、`reflectedMemoryId`、eligible を `'used'` にして返す。
+   *
+   * ⚠ **冪等性は買っていない。**`sourceObservationId: null` なので `createMemoryWithOutbox`
+   * の部分一意索引（`WHERE source_observation_id IS NOT NULL`）は効かず、既存の行の
+   * `status` を動かさない（上の手順に `superseded`/`forgotten` が無い）ため `consolidate` の
+   * 「読んで status で弾く」も使えない。**⟹ 同じ target で2回呼ぶと、内容が同じ
+   * `reflected` Memory が2件できる。**これを塞ぐために `MemoryStore` へメソッドや索引を
+   * 足すことはしていない（`reflect.test.ts` がこの挙動を歯で固定している）。
+   *
+   * ⚠ **`tick()` はこの操作を駆動しない。**`TICK_SUPPORTED_JOB_KINDS` に `'reflect'` は
+   * 足していない——`reflect()` の*実運用*（Background Cognition）が Phase 1 の範囲外
+   * （docs/roadmap.md §1.3）なのであって、この動詞の口が範囲外なのではない
+   * （ADR 0089 決定7 が `consolidate` について採ったのと同じ立場）。
+   */
+  reflect(ctx: Ctx, opts: ReflectOptions): Promise<ReflectionResult>;
 }
 
 function extractObservationPayload(
@@ -1437,5 +1599,207 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     };
   }
 
-  return { observe, tick, recall, reextract, reembed, forget, consolidate };
+  /**
+   * `Runtime.reflect` の実装（Issue #104）。doc コメントは interface 側
+   * （`reflect` の JSDoc）にある——ここはアルゴリズムそのものだけ。`consolidate` の実装の
+   * 双子だが、書き込みの終盤（手順7以降）が違う——既存の行へは一切書き込まない。
+   */
+  async function reflect(ctx: Ctx, opts: ReflectOptions): Promise<ReflectionResult> {
+    const target = opts.target;
+
+    // 1. 対象の正規化。
+    let ids: MemoryId[];
+    if ("memoryIds" in target) {
+      ids = target.memoryIds;
+    } else {
+      const recallResult = await recall(ctx, target.query);
+      const recalledIds = recallResult.memories.map((m) => m.memoryId);
+      ids =
+        target.maxCandidates === undefined
+          ? recalledIds
+          : recalledIds.slice(0, target.maxCandidates);
+    }
+    if (ids.length === 0) {
+      // store に一切触れない——「見ていない」。
+      return {
+        outcome: "not_examined",
+        nothingReason: null,
+        reflectedMemoryId: null,
+        basis: [],
+        llmCalls: 0,
+        llmFailure: null,
+      };
+    }
+
+    // 2. `getMany` で一括読み、id ごとに「まだ何も書いていない時点」の分類を固定する。
+    // 優先順: not_found → status_not_active → basis_is_reflected → eligible。
+    type InitialClassification =
+      | { kind: "not_found" }
+      | { kind: "status_not_active"; status: Exclude<MemoryStatus, "active"> }
+      | { kind: "basis_is_reflected" }
+      | { kind: "eligible" };
+
+    const uniqueIds = Array.from(new Set(ids));
+    const found = await deps.memoryStore.getMany(ctx, uniqueIds);
+    const byId = new Map<MemoryId, Memory>();
+    for (const memory of found) {
+      byId.set(memory.id, memory);
+    }
+    const initialById = new Map<MemoryId, InitialClassification>();
+    for (const id of uniqueIds) {
+      const memory = byId.get(id);
+      if (memory === undefined) {
+        initialById.set(id, { kind: "not_found" });
+      } else if (memory.status !== "active") {
+        initialById.set(id, {
+          kind: "status_not_active",
+          status: memory.status as Exclude<MemoryStatus, "active">,
+        });
+      } else if (memory.provenance.kind === "reflected") {
+        initialById.set(id, { kind: "basis_is_reflected" });
+      } else {
+        initialById.set(id, { kind: "eligible" });
+      }
+    }
+
+    /**
+     * `ids`（入力順・重複を保つ）を `ReflectBasisOutcome[]` へ写す。`eligible` と分類された
+     * id だけ `eligibleOutcome` に委ねる——それ以外はどの分岐でも同じ顔。
+     */
+    function mapBasis(
+      eligibleOutcome: (id: MemoryId) => ReflectBasisOutcome,
+    ): ReflectBasisOutcome[] {
+      return ids.map((id) => {
+        const cls = initialById.get(id)!;
+        if (cls.kind === "not_found") {
+          return { memoryId: id, kind: "not_found" };
+        }
+        if (cls.kind === "status_not_active") {
+          return { memoryId: id, kind: "status_not_active", status: cls.status };
+        }
+        if (cls.kind === "basis_is_reflected") {
+          return { memoryId: id, kind: "basis_is_reflected" };
+        }
+        return eligibleOutcome(id);
+      });
+    }
+
+    // eligible: 重複を除いた「active かつ provenance.kind !== 'reflected'」の id を、`ids`
+    // の中で最初に現れた順に並べる。
+    const eligibleIds: MemoryId[] = [];
+    const seenEligible = new Set<MemoryId>();
+    for (const id of ids) {
+      if (initialById.get(id)!.kind === "eligible" && !seenEligible.has(id)) {
+        seenEligible.add(id);
+        eligibleIds.push(id);
+      }
+    }
+
+    // 3. eligible が0件なら、LLM を呼ばずに打ち切る（`consolidate` と違い、1件だけでも
+    // ここでは打ち切らない——1件からの一般化も意味を持ちうる）。
+    if (eligibleIds.length === 0) {
+      return {
+        outcome: "nothing_to_reflect",
+        nothingReason: "no_eligible_basis",
+        reflectedMemoryId: null,
+        basis: mapBasis((id) => ({ memoryId: id, kind: "eligible" })),
+        llmCalls: 0,
+        llmFailure: null,
+      };
+    }
+
+    // 4. dryRun はここで打ち切る。1件も書かない。
+    if (opts.dryRun === true) {
+      return {
+        outcome: "dry_run",
+        nothingReason: null,
+        reflectedMemoryId: null,
+        basis: mapBasis((id) => ({ memoryId: id, kind: "eligible" })),
+        llmCalls: 0,
+        llmFailure: null,
+      };
+    }
+
+    const eligibleMemories = eligibleIds.map((id) => byId.get(id)!);
+
+    // 5. LLM を1回呼ぶ。失敗したら1件も書かない。
+    let llmResult: ReflectionLLMResult;
+    try {
+      llmResult = await deps.llmProvider.completeStructured(ctx, {
+        prompt: buildReflectionPrompt(eligibleMemories),
+        schema: ReflectionLLMResultSchema,
+      });
+    } catch (error) {
+      return {
+        outcome: "llm_failed",
+        nothingReason: null,
+        reflectedMemoryId: null,
+        basis: mapBasis((id) => ({ memoryId: id, kind: "eligible" })),
+        llmCalls: 1,
+        llmFailure: describeExtractionFailure(error),
+      };
+    }
+
+    // 6. LLM が「一般化するものは無い」と答えた——書き込みゼロ。
+    if (llmResult.outcome === "nothing") {
+      return {
+        outcome: "nothing_to_reflect",
+        nothingReason: "llm_declined",
+        reflectedMemoryId: null,
+        basis: mapBasis((id) => ({ memoryId: id, kind: "eligible" })),
+        llmCalls: 1,
+        llmFailure: null,
+      };
+    }
+
+    // 7. 新しい Memory を1件作る（既存の行へは一切書き込まない——決定4）。
+    const halfLifeHours = await deps.tenantSettingsStore.getDefaultHalfLifeHours(ctx);
+    const now = clock.now();
+    const newMemory = buildReflectedMemory({
+      ctx,
+      eligible: eligibleMemories,
+      llmResult,
+      hashContent: deps.hashContent,
+      digestFallbackLength,
+      halfLifeHours,
+      now,
+    });
+    const { memory: reflectedMemory, created } = await deps.memoryStore.createMemoryWithOutbox(
+      ctx,
+      newMemory,
+      ["embed"],
+    );
+    if (created) {
+      // 8. `created` イベントを1件積む。`reflect` はこれ以外のイベントを一切積まない
+      // （既存の行の status を動かさないため、`superseded`/`forgotten` の類は存在しない）。
+      await deps.eventStore.append(ctx, {
+        tenantId: ctx.tenantId,
+        memoryId: reflectedMemory.id,
+        kind: "created",
+        actor: opts.actor ?? { type: "system" },
+        digestSnapshot: reflectedMemory.digest,
+        sizeBeforeBytes: null,
+        meta: {
+          reason: "reflected",
+          sources: eligibleIds,
+          ...(opts.reason !== undefined ? { note: opts.reason } : {}),
+        },
+      });
+    }
+    // embed ジョブは常に outbox 経由（`createMemoryWithOutbox` が積む）。ここでは何もしない
+    // — tick() の processEmbedJob が処理する。
+
+    // 9. eligible は全件 used——`reflect` は既存の行を一切動かしていないので、`consolidate`
+    // の手順7のような「途中で打ち切られる」分岐は存在しない。
+    return {
+      outcome: "reflected",
+      nothingReason: null,
+      reflectedMemoryId: reflectedMemory.id,
+      basis: mapBasis((id) => ({ memoryId: id, kind: "used" })),
+      llmCalls: 1,
+      llmFailure: null,
+    };
+  }
+
+  return { observe, tick, recall, reextract, reembed, forget, consolidate, reflect };
 }

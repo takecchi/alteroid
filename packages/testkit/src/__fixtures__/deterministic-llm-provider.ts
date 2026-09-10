@@ -11,13 +11,16 @@ import type { Ctx, LLMProvider, LLMResponse, PromptSpec, StructuredRequest } fro
  *
  * この実装は `extraction.ts` の `ExtractionResultSchema`（`{ memories: [...] }`）と
  * `runtime.consolidate`（Issue #103、ADR 0089）の統合スキーマ（`{ content, digest?, tags? }`、
- * `strategies/consolidate.ts` の `ConsolidationLLMResultSchema`）の2つの形だけを知っている。
+ * `strategies/consolidate.ts` の `ConsolidationLLMResultSchema`）と `runtime.reflect`
+ * （Issue #104）の反映スキーマ（`{ outcome: 'reflected', content, digest?, tags? }`、
+ * `strategies/reflect.ts` の `ReflectionLLMResultSchema`）の3つの形だけを知っている。
  * それ以外のスキーマを渡された場合は例外を投げる——「知らない形に遭遇したら黙って何か返す」
  * ことをしない（原則の姿3の適用）。
  *
- * ⚠ **既存の extraction 経路のふるまいは1ミリも変えていない**——下の分岐は「まず extraction の
- * 形を試し、通ればそのまま返る」という元のコードパスをそのまま保ち、通らなかった場合にだけ
- * 統合の形を試す**新しい分岐を足しただけ**である（ADR 0089 §9.3）。
+ * ⚠ **既存の extraction / consolidation 経路のふるまいは1ミリも変えていない**——下の分岐は
+ * 「まず extraction の形を試し、通ればそのまま返る。通らなければ consolidation の形を試す」
+ * という元のコードパスをそのまま保ち、どちらも通らなかった場合にだけ reflection の形を試す
+ * **新しい分岐を足しただけ**である（ADR 0089 §9.3 と同じ形の拡張）。
  */
 export class DeterministicLLMProvider implements LLMProvider {
   async complete(_ctx: Ctx, req: PromptSpec): Promise<LLMResponse> {
@@ -54,11 +57,27 @@ export class DeterministicLLMProvider implements LLMProvider {
       return consolidationParsed.data;
     }
 
+    // Issue #104: extraction / consolidation のどちらの形にもマッチしなかった場合だけ、
+    // reflection の形（`{ outcome: 'reflected', content, digest?, tags? }`）を決定的に試す。
+    // 同じ理由で意味を持たせない決定的な stub である——`outcome: 'nothing'`（LLM が断る側）
+    // は決定的な stub としては表現しない（歯は `reflect.test.ts` のローカルな偽物 LLM で
+    // 別途測る）。
+    const reflectionCandidate = {
+      outcome: "reflected" as const,
+      content: userText,
+      digest,
+      tags: [],
+    };
+    const reflectionParsed = req.schema.safeParse(reflectionCandidate);
+    if (reflectionParsed.success) {
+      return reflectionParsed.data;
+    }
+
     throw new Error(
       "DeterministicLLMProvider: 未対応のスキーマが渡された（extraction.ts の " +
-        "ExtractionResultSchema / runtime.consolidate の統合スキーマ以外の形には " +
-        "対応していない）: " +
-        consolidationParsed.error.message,
+        "ExtractionResultSchema / runtime.consolidate の統合スキーマ / runtime.reflect の " +
+        "反映スキーマ以外の形には対応していない）: " +
+        reflectionParsed.error.message,
     );
   }
 }
