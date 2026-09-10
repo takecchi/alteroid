@@ -66,8 +66,45 @@ function nonEmpty(value: unknown): string | undefined {
  * SDK の `SDKAssistantMessage.error` は
  * `'authentication_failed' | 'oauth_org_not_allowed' | 'account_on_hold' | 'billing_error' |
  * 'rate_limit' | 'overloaded' | 'invalid_request' | 'model_not_found' | 'server_error' |
- * 'unknown' | 'max_output_tokens'` である。**支出上限はこのうち `billing_error` として
- * 来る側**で、つまり SDK は「これはモデルの発言ではない」と最初から言っている。
+ * 'unknown' | 'max_output_tokens' | 'cloud_credential_error'` である。**支出上限は
+ * このうち `billing_error` として来る側**で、つまり SDK は「これはモデルの発言では
+ * ない」と最初から言っている。
+ *
+ * ## `cloud_credential_error`（0.3.267 で増えた）を分類していない理由
+ *
+ * **この語は「Anthropic の API が断った」ではなく「API へ届く前に、AWS / Google
+ * Cloud のローカルな資格情報の解決に失敗した」を指す。** 立つ条件は次のどちらか
+ * だけである（実測 2026-09-10、`@anthropic-ai/claude-agent-sdk-linux-x64@0.3.267`
+ * の `claude` を `grep -a` して読んだ逐語。**npm パッケージ側にはこの語の doc も
+ * 組み立ても無い** — `sdk.d.ts` の union に現れるだけで `.mjs` には0件だった）:
+ *
+ * > `function eJ(e){if(e instanceof Ht&&e.status!==void 0)return null;if(zxt(e))return"AWS";if(ZOn()&&JOn(e,QOn))return"Google Cloud";return null}`
+ *
+ * 先頭の1行が効いている——**HTTP の状態番号を持つ応答はここで先に外れる。**
+ * ⟹ 資格情報は取れたが API が 401/403 を返した回は `authentication_failed` の側
+ * であって、この語には来ない。**`authentication_failed` / `billing_error` /
+ * `account_on_hold` / `rate_limit` はどれも「向こうが断った」側で、この語だけが
+ * 「こちらが名乗れなかった」側である。⟹ 同じ箱に入れない。**
+ *
+ * **⚠️ そのうえで「待てば開くか」は SDK からは決まらない。SDK 自身の印が割れて
+ * いる**（同じ実測から、いずれも逐語）:
+ *
+ * - 立てる側は**一時的だと言っている**:
+ *   `error:"cloud_credential_error",apiErrorIsTransient:!0`
+ * - 人へ見せる側は**人が動けと言っている**:
+ *   `case"cloud_credential_error":return{state:"blocked",needs:"cloud credentials unavailable — check or refresh them"}`
+ * - 詰まりを上げるかの分岐では、**`authentication_failed` の側ではなく
+ *   `overloaded` / `rate_limit` / `unknown` と同じ「上げない」側に置かれている**:
+ *   `case"cloud_credential_error":case"unknown":case void 0:return null`
+ *
+ * ⟹ **どちらとも名乗らせない。** 実際いまそうなっている——この語に付く文言
+ * （`API Error: Could not load AWS credentials · … Check or refresh your AWS
+ * credentials and try again.`）は `USAGE_LIMIT_ERROR_PREFIXES` のどれにも当たらず、
+ * `limitRecoveryOf` は `'unknown'` を返し、`withRecoveryNote` は行を足さない。
+ * **ただしそれは「当たらなかった」から出ている値であって、誰かが決めた値ではない。**
+ * 接頭辞が1本増えるだけで黙って `time` を名乗りうるので、**名乗らないことのほうを
+ * 歯で留めてある**（`sdk-failure.test.ts` の describe
+ * 「`cloud_credential_error` — 回復の見込みを名乗らない」）。
  *
  * **この写しは数え上げなので腐る。** 腐ったことを `tsc` に言わせる歯は
  * `sdk-failure.test.ts` の `SDK_ASSISTANT_ERROR_CODES` にあり、SDK が語を増やすと
