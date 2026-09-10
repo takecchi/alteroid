@@ -69,10 +69,10 @@ FROM node:22-trixie-slim AS runtime
 #
 # **`tini` は runner の pid 1 になる init である（#315）。** `docker/alteroid-runner`
 # が起動の最後で `exec tini -- node …` する（理由と `-g` を付けない理由はそのシムの
-# 側に書いてある）。ここでは Debian bookworm main のパッケージとして入れるだけで、
-# `apt-get install` の行に足す形は `gh` と同じにする — パッケージが消えたり名前が
-# 変わったら、この `image` ステージのビルドで気づける（下の `tini --version` が
-# 存在確認を兼ねる。`gh --version` と同じ理由）。
+# 側に書いてある）。ここではベースイメージの Debian main のパッケージとして入れる
+# だけで、`apt-get install` の行に足す形は `gh` と同じにする — パッケージが消えたり
+# 名前が変わったら、この `image` ステージのビルドで気づける（下の `tini --version`
+# が存在確認を兼ねる。`gh --version` と同じ理由）。
 RUN set -eux; \
   apt-get update; \
   apt-get install -y --no-install-recommends ca-certificates curl; \
