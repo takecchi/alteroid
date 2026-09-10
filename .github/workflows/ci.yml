@@ -4,6 +4,23 @@ on:
   push:
     branches: [main]
   pull_request:
+  # **上流ドリフトを見に行く回。ここだけキャッシュを使わずに焼く**（下の `image` の
+  # `no-cache`）。**定時にしてあるのは、PR の門を人質に取らないためである** — `ci` と
+  # `image` は required なので（`gh api repos/takecchi/alteroid/branches/main/protection`
+  # の `contexts` が `["ci","image"]`。観測 2026-09-10T08:11Z）、PR ごとに焼き直す形に
+  # すると、**上流の apt が落ちている間は1本もマージできなくなる。**
+  # 鳴らしたいのは警報であって、門ではない。
+  #
+  # **時刻は release/prod への反映より前にしてある。** あちらは `cron: '17 19 * * *'`
+  # で、実測の発火は 21:19〜22:04Z（観測 2026-09-05〜09、`event=schedule` の5回）。
+  # ここを 15:41Z にしておけば、`AGENTS.md` が記録している最大の遅れ（2時間37分）を
+  # 足しても 18:18Z ごろには始まるので、**今夜のデプロイの前に鳴る。**
+  # 分をずらしてあるのは release-prod.yml と同じ理由である（逐語は
+  # `grep -Fn -- '時刻ぴったりを避けている' .github/workflows/release-prod.yml`）。
+  schedule:
+    - cron: '41 15 * * *'
+  # 次の定時まで待てない場合の口（`release-prod.yml` の `workflow_dispatch` と同じ形）。
+  workflow_dispatch:
 
 # **同じ PR に続けて push したとき、古い実行を残さない。** 後から押した commit の
 # 結果しか見ないのに、前の実行は最後まで runner を占有する。並行して PR を抱えている
@@ -13,10 +30,11 @@ on:
 #
 # - `github.head_ref` は pull_request のときだけ値が入る（PR の元ブランチ名）。
 #   つまり**同じ PR の実行だけが同じ群に入り、新しい方が古い方を消す**
-# - push（main）では `head_ref` が空なので `github.run_id` に落ちる。これは実行ごとに
-#   必ず違うので、**main の実行はどれも群を共有せず、キャンセルされない**。main の
-#   各 commit は release/prod へ写る候補そのもので、「この commit で緑だった」の記録が
-#   後続の push で消えると、どの commit まで確かめたかが言えなくなる
+# - push（main）と、定時実行・手動起動では `head_ref` が空なので `github.run_id` に
+#   落ちる。これは実行ごとに必ず違うので、**main の実行はどれも群を共有せず、
+#   キャンセルされない**。main の各 commit は release/prod へ写る候補そのもので、
+#   「この commit で緑だった」の記録が後続の push で消えると、どの commit まで
+#   確かめたかが言えなくなる
 #
 # **`github.ref` で書かないこと。** pull_request の `github.ref` は `refs/pull/<n>/merge`
 # で PR ごとに違うので PR 側は同じように効くが、push 側まで1つの群（`refs/heads/main`）に
@@ -29,8 +47,20 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
+# **上流ドリフトを見に行く回か。** `image` の `no-cache` と `cache-to` をこれで切り替える。
+# 判定を1か所に置いてあるのは、2か所に書くと片方だけ直されて食い違うからである。
+#
+# ⚠️ `<条件> && '' || <値>` の形で書かないこと。**空文字は GitHub 式で falsy なので
+# 必ず右へ落ちる。** 下の `cache-to` は「真のときに非空を返す」向きで書いてある。
+env:
+  DRIFT: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+
 jobs:
   ci:
+    # **定時の回は回さない。** あの回が訊いているのは「上流が動いて器が焼けなく
+    # なっていないか」だけである。ここまで毎晩回すと、別の主張（依存の更新で単体
+    # テストが落ちないか）を黙って足すことになる。手動起動では回す。
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -164,7 +194,34 @@ jobs:
           build-args: |
             ALTEROID_BUILD_REV=${{ github.sha }}
           cache-from: type=gha
-          cache-to: type=gha
+          # **定時の回はキャッシュを書き戻さない。** 書き戻すと翌日の PR の `image` が
+          # その層で焼かれることになり、上流が動いた日に**無関係な PR が赤くなる**
+          # ＝ 上の `schedule` で避けたはずの「門を人質に取る」がそのまま戻ってくる。
+          cache-to: ${{ env.DRIFT != 'true' && 'type=gha' || '' }}
+          # **このジョブが自分で名乗っている役割は、ここが無いと果たされない**（逐語は
+          # `grep -Fn -- '上流が変わって壊れたことに気づく場所が要る' .github/workflows/ci.yml`）。
+          # 実測（観測 2026-09-10T06:57Z、`main` の run 34447496931 の `image` ジョブの
+          # ログ）: `apt-get install … git ripgrep jq gh tini` の層は `#22 CACHED` で、
+          # **一度も走っていなかった。** ベースの digest と Dockerfile の本文が変わらない
+          # 限り再実行されないので、`gh` の apt リポジトリ側だけが動いても気づけない。
+          #
+          # **この回が言えること / 言えないこと。**
+          #
+          # - **言えること**: いまの上流で、この Dockerfile が素から焼けるか。焼けた
+          #   イメージが下の実挙動の歯を通るか
+          # - ⚠️ **言えないこと(1): 今夜 Railway が何を焼くか。** Railway は
+          #   `railway/daemon.json` / `railway/runner.json` の `builder: DOCKERFILE` で
+          #   **自分でもう一度焼く**ので、層のキャッシュもこちらとは別物である。実測
+          #   （観測 2026-09-10T08:24Z、走っている runner の中から）: 本番の器の
+          #   `/usr/bin/gh` は `2.98.0`（ファイルの日付 2026-08-20）で、同じ時刻に
+          #   `https://cli.github.com/packages/dists/stable/main/binary-amd64/Packages`
+          #   が配っていたのは `2.100.0` だった。⟹ `Dockerfile` の
+          #   `grep -Fn -- 'その時点の版が入るようにしてある' Dockerfile` は、**層の
+          #   キャッシュが在るあいだ成り立たない**
+          # - ⚠️ **言えないこと(2): これは警報であって門ではない。** ここが赤くても夜の
+          #   反映は止まらない（逐語は
+          #   `grep -Fn -- 'SHA が違えば push する。それだけである。' .github/scripts/reflect-release-prod.sh`）
+          no-cache: ${{ env.DRIFT == 'true' }}
 
       # **マネージャーが実際に走る主体（uid 1001）で見る。** root で揃っていても、
       # 降りた先で欠けていれば「コンテナだからできない」が生まれる（north_star 禁止1）。
