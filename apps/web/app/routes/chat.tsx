@@ -6,7 +6,7 @@ import { Drawer } from '~/components/drawer';
 import { Markdown } from '~/components/markdown';
 import { Button, Card, Empty, ErrorNote, Spinner, Textarea } from '~/components/ui';
 import { useEndConversation, useRecordOwnMessage } from '~/hooks/mutations';
-import { useConversation, useConversations } from '~/hooks/queries';
+import { useConversation, useConversationApprovals, useConversations } from '~/hooks/queries';
 import { useIsMobile } from '~/hooks/use-is-mobile';
 import { useApi } from '~/lib/api';
 import { cn } from '~/lib/cn';
@@ -571,17 +571,86 @@ export function ChatPane({
    */
   const history = useConversation(shownId ?? null);
 
-  // 履歴（日誌から再構成されたもの）＋この画面で流れてきた分。
-  const historyLines = useMemo<Line[]>(
-    () =>
-      (history.data?.messages ?? []).map((message) => ({
+  /**
+   * この会話に上がった確認（`ask_human`）（issue #782 の2）。
+   *
+   * **`exchange` だけでは復元できない。** `ask_human` が積む日誌エントリは
+   * `escalation`（`packages/core/src/schema.ts`）で、`conversationId` を
+   * 持たず、`readConversationWindow`（`with: ['human']`）の窓にも入らない。
+   * 質問・回答は承認の台帳（`GET /approvals`）にしか無いので、ここで別に
+   * 読んで `historyLines` へ織り込む。**journal / 台帳へは何も書かない**——
+   * 読むだけである。
+   */
+  const conversationApprovals = useConversationApprovals(shownId ?? null);
+
+  /**
+   * 履歴（日誌から再構成されたもの）＋確認（承認の台帳）を時刻順に1本へ
+   * 織り込む。
+   *
+   * **`at` の文字列比較で並べる。** サーバの会話（`GET /conversations/:id`）は
+   * 既に古い順で返るが、確認は別の口から読むので混ぜるときは自分で並べ直す。
+   * `message.at` も `approval.createdAt`/`answeredAt` も、生成経路
+   * （`clone.ts` の `#record` / `tools.ts` の `ask_human`）はどちらも
+   * `new Date().toISOString()`（UTC・ミリ秒3桁・`Z` 終端）なので、文字列の
+   * 比較がそのまま時刻の比較になる（`approvalsCursorSchema` の doc と同じ
+   * 前提）。
+   *
+   * **回答も出す（不変条件A）。** 質問だけ復元すると、回答済みの確認が画面を
+   * 開き直した瞬間に「まだ返答が無い」に見える——新しい嘘の「無い」を作って
+   * しまう。
+   */
+  const historyLines = useMemo<Line[]>(() => {
+    const messageItems = (history.data?.messages ?? []).map((message) => ({
+      at: message.at,
+      line: {
         key: message.id,
-        role: message.role === 'inbound' ? 'human' : 'clone',
+        role: message.role === 'inbound' ? ('human' as const) : ('clone' as const),
         text: message.text,
         of: shownId,
-      })),
-    [history.data, shownId],
-  );
+      },
+    }));
+
+    const approvalItems = (conversationApprovals.data?.approvals ?? []).flatMap((approval) => {
+      const items: { at: string; line: Line }[] = [
+        {
+          at: approval.createdAt,
+          line: {
+            key: `a-${approval.id}`,
+            role: 'system',
+            of: shownId,
+            /**
+             * **SSE の `case 'ask_human'`（下）と1文字も違えないこと。** 違えると
+             * `pendingOwnLines` の role＋本文の照合が当たらず、生配信で出た行が
+             * 「まだサーバに引き取られていない行」のままリロード後も残り、同じ
+             * 質問が2つ並ぶ（二重表示）。
+             */
+            text: `確認したいことがある: ${approval.question}\n（承認待ちの画面から答えられる）`,
+          },
+        },
+      ];
+      if (
+        approval.answeredAt !== undefined &&
+        approval.answeredAt !== null &&
+        approval.answer !== undefined &&
+        approval.answer !== null
+      ) {
+        items.push({
+          at: approval.answeredAt,
+          line: {
+            key: `a-${approval.id}-answer`,
+            role: 'system',
+            of: shownId,
+            text: `確認への回答: ${approval.answer}`,
+          },
+        });
+      }
+      return items;
+    });
+
+    return [...messageItems, ...approvalItems]
+      .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
+      .map((item) => item.line);
+  }, [history.data, conversationApprovals.data, shownId]);
 
   /**
    * **同じ会話へ繰り返し戻った分も、`lines` 自体から刈る（issue #446 の

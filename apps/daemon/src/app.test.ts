@@ -2366,6 +2366,117 @@ describe('GET /approvals の order/limit/cursor（issue #432）', () => {
 });
 
 /**
+ * `GET /approvals` の `conversationId`（issue #782 の2）。
+ *
+ * **チャット画面が「表示中の会話に上がった確認だけ」を読むための絞り込み。**
+ * `pending` と同じ側（絞り込み）であって opt-in（`order`/`limit`/`cursor`）の
+ * 対象ではないので、既定の応答の鍵は増えない——ここは `pending` の歯
+ * （直上）と同じ形で確かめる。
+ */
+describe('GET /approvals の conversationId（issue #782 の2）', () => {
+  it('conversationId で、その会話の確認だけに絞る', async () => {
+    await stores.jobs.putApproval({
+      id: 'ap-conv-a-1',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      question: 'conv-a の1件目',
+      conversationId: 'conv-a',
+    });
+    await stores.jobs.putApproval({
+      id: 'ap-conv-a-2',
+      createdAt: '2026-01-02T00:00:00.000Z',
+      question: 'conv-a の2件目',
+      conversationId: 'conv-a',
+    });
+    await stores.jobs.putApproval({
+      id: 'ap-conv-b',
+      createdAt: '2026-01-03T00:00:00.000Z',
+      question: 'conv-b の1件目',
+      conversationId: 'conv-b',
+    });
+    // 会話に紐づかない確認（マネージャー発・内部ターン）も混ぜる——絞りに
+    // よって混入しないことを確かめる。
+    await stores.jobs.putApproval({
+      id: 'ap-no-conv',
+      createdAt: '2026-01-04T00:00:00.000Z',
+      question: '会話に紐づかない確認',
+    });
+
+    const filtered = (await (
+      await app.request(`/approvals?conversationId=conv-a&order=asc`)
+    ).json()) as { approvals: { id: string }[] };
+    expect(filtered.approvals.map((a) => a.id)).toEqual(['ap-conv-a-1', 'ap-conv-a-2']);
+  });
+
+  it('pending / order / limit / cursor と併用できる', async () => {
+    await stores.jobs.putApproval({
+      id: 'ap-1',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      question: '未回答',
+      conversationId: 'conv-a',
+    });
+    await stores.jobs.putApproval({
+      id: 'ap-2',
+      createdAt: '2026-01-02T00:00:00.000Z',
+      question: '回答済み',
+      conversationId: 'conv-a',
+      answeredAt: '2026-01-02T01:00:00.000Z',
+      answer: 'よい',
+    });
+    // **別の会話の確認を混ぜる。** 混ぜないと、この歯は絞り込みが効いて
+    // いなくても緑になる（conv-a しか存在しないので、絞る前と後で件数が
+    // 同じになる）——`total` の期待値が「絞り込みを当てた後の件数」を
+    // 測っていることにならない。
+    await stores.jobs.putApproval({
+      id: 'ap-other-conv',
+      createdAt: '2026-01-03T00:00:00.000Z',
+      question: '別の会話の確認',
+      conversationId: 'conv-b',
+    });
+
+    // 既定（pending=true）では回答済みが落ちる。
+    const pendingOnly = (await (await app.request(`/approvals?conversationId=conv-a`)).json()) as {
+      approvals: { id: string }[];
+    };
+    expect(pendingOnly.approvals.map((a) => a.id)).toEqual(['ap-1']);
+
+    // pending=false で両方——チャット画面が質問と回答の両方を復元するために
+    // 使う組み合わせ（`useConversationApprovals` の doc）。
+    const both = (await (
+      await app.request(`/approvals?conversationId=conv-a&pending=false&order=asc`)
+    ).json()) as { approvals: { id: string }[]; total?: number };
+    expect(both.approvals.map((a) => a.id)).toEqual(['ap-1', 'ap-2']);
+    // order を明示した（opt-in した）ので total が乗り、絞り込み後の件数になる
+    // （絞る前の3件ではなく、conv-a の2件）。
+    expect(both.total).toBe(2);
+  });
+
+  it('該当する会話が無ければ空になる（conversationId 自体は 400 にならない）', async () => {
+    await stores.jobs.putApproval({
+      id: 'ap-1',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      question: 'q',
+      conversationId: 'conv-a',
+    });
+
+    const response = await app.request('/approvals?conversationId=conv-does-not-exist');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ approvals: [] });
+  });
+
+  it('既定の呼び（conversationId を渡さない）では応答の鍵が増えない', async () => {
+    await stores.jobs.putApproval({
+      id: 'ap-1',
+      createdAt: new Date().toISOString(),
+      question: 'q',
+      conversationId: 'conv-a',
+    });
+
+    const body = (await (await app.request('/approvals')).json()) as Record<string, unknown>;
+    expect(Object.keys(body)).toEqual(['approvals']);
+  });
+});
+
+/**
  * `GET /commitments` の `limit` / `cursor`（2026-08-25、人間の明示の「はい」を受けて
  * opt-in で足した窓）。
  *

@@ -91,6 +91,16 @@ export const KEY = {
   manager: (id: string) => ({ type: 'manager', id }) as const,
   transcript: (id: string) => ({ type: 'transcript', id }) as const,
   approvals: (pending: boolean) => ({ type: 'approvals', pending }) as const,
+  /**
+   * ある会話に上がった確認だけの束（issue #782 の2・3）。
+   *
+   * **`type` は `approvals` のまま揃えてある。** `use-journal-live.ts` の
+   * `invalidate()` は `escalation` が届くと `isKeyOfType(key, 'approvals')`
+   * で束ねて無効化する——ここだけ別の `type` にすると、確認に答えが付いた
+   * ときにこのキャッシュだけ古いまま取り残される。
+   */
+  conversationApprovals: (conversationId: string) =>
+    ({ type: 'approvals', pending: false, conversationId }) as const,
   commitments: (includeClosed: boolean) => ({ type: 'commitments', includeClosed }) as const,
   reports: (limit: number) => ({ type: 'reports', limit }) as const,
   report: (date: string) => ({ type: 'report', date }) as const,
@@ -224,6 +234,33 @@ export function useApprovals(pending = true) {
         params: { query: { pending: pending ? 'true' : 'false', order: 'asc' } },
       })
       .then(unwrap),
+  );
+}
+
+/**
+ * ある会話に上がった確認（`ask_human`）だけの一覧（issue #782 の2）。
+ *
+ * **`chat.tsx` がチャットの履歴へ質問・回答を織り込むために読む。** 質問は
+ * `createdAt` の位置へ、回答は `answeredAt` の位置へ——両方とも `chat.tsx`
+ * の `historyLines` が担う。
+ *
+ * **`pending=false` を渡す。** 答えた分も含めて取らないと、回答済みの確認が
+ * 画面をリロードした瞬間に「まだ返答が無い」へ戻って見える——新しい「嘘の
+ * 『無い』」を作ってしまう（不変条件 A）。
+ *
+ * `null` なら取りに行かない（まだ会話 id が無い＝新しい会話。`useConversation`
+ * と同じ形）。
+ */
+export function useConversationApprovals(conversationId: string | null) {
+  const api = useApi();
+  return useSWR(
+    conversationId === null ? null : KEY.conversationApprovals(conversationId),
+    ({ conversationId }) =>
+      api.api
+        .GET('/approvals', {
+          params: { query: { pending: 'false', order: 'asc', conversationId } },
+        })
+        .then(unwrap),
   );
 }
 
