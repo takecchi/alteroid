@@ -35,6 +35,12 @@ class FakeRunner implements RunnerClient {
   report: RunnerPlacementResources | undefined;
   /** `true` = 資源を聞けない（落ちた口・時間切れ）。 */
   fails = false;
+  /**
+   * `true` = `resources()` が永遠に解決しない（`PLACEMENT_PROBE_MS` の期限切れを
+   * 起こすため。#712 続き）。`fails`（同期 throw）とは別の経路——`withDeadline`
+   * が期限切れで reject するところを踏む。
+   */
+  hangs = false;
   /** 聞かれた回数。**1台のときは聞きに行かない**ことを見るために数える。 */
   asked = 0;
   started: string[] = [];
@@ -47,6 +53,7 @@ class FakeRunner implements RunnerClient {
   async resources(): Promise<RunnerPlacementResources | undefined> {
     this.asked += 1;
     if (this.fails) throw new Error('資源を聞けない');
+    if (this.hangs) return new Promise<RunnerPlacementResources | undefined>(() => {});
     return this.report;
   }
 
@@ -886,5 +893,236 @@ describe('runner_list の説明文が名乗る点数の式（#712 / C-3）', () 
         '実装の分母には `failures`（recentFailures）が在り、直上の歯がそのふるまいを固定している——' +
         'クローンは道具の説明しか読まないので、この式を読んで配置を予測すると外れる',
     ).toBe(true);
+  });
+});
+
+/**
+ * 「聞けなかった」と「報告しなかった」を区別する（Issue #712 の残り半分）。
+ *
+ * **`chooseByResources` は材料を軸ごとに「報告した器の平均」で埋め、それを掛け算
+ * する。** 軸が逆相関する艦隊では、平均の積が実測した全器の積を上回ることがある
+ * （B3）。しかも艦隊が2台で「聞けなかった器」と「報告した1台」しか居ないときは、
+ * 平均が唯一の報告者の写しになるので、**諸元を作り込まなくても点数が完全に同点に
+ * なる**（B3b）——こちらのほうが一般に起きる形である。
+ *
+ * **直し方は「聞けなかった」（`resources()` が throw した／`withDeadline` が
+ * 期限切れで reject した）を、「報告しなかった」（口が無い／`undefined` を返した／
+ * 欄が一部欠けている）とは別の値として扱い、点数の前に「段」で分けることである。**
+ * 段は順序であって重みではない——`chooseByResources` の doc（「重みを持たないのは
+ * 意図である」）を破らない。
+ *
+ * **各歯は「何を固定しているか」をタイトルに書く。** 分岐が1本の経路しか通さないと
+ * 緑になる種類のバグなので、経路ごとに別の歯を置く。
+ */
+describe('聞けなかった器は、聞けた器より前に出ない（#712 の残り半分）', () => {
+  const MEMORY = {
+    limitBytes: 32_000_000_000,
+    usedBytes: 8_000_000_000,
+    source: 'cgroup',
+  } as const;
+  const CPU = { cores: 8, source: 'cgroup' } as const;
+
+  it('B1: 聞けなかった器が先に居て、後から聞けた器が来る（登録順 = unreachable, readable）⟹ 聞けた器が勝つ', async () => {
+    const broken = new FakeRunner('runner-broken', { managers: 0 });
+    broken.fails = true;
+    const healthy = new FakeRunner('runner-healthy', { memory: MEMORY, cpu: CPU, managers: 0 });
+    const registry = await registryOf(broken, healthy);
+
+    expect((await registry.select({})).runnerId).toBe('runner-healthy');
+    expect(broken.asked).toBe(1);
+
+    await registry.stop();
+  });
+
+  it('B2: 聞けた器が先に居て、後から聞けなかった器が来る（登録順 = readable, unreachable）⟹ 聞けた器が勝つ', async () => {
+    const healthy = new FakeRunner('runner-healthy', { memory: MEMORY, cpu: CPU, managers: 0 });
+    const broken = new FakeRunner('runner-broken', { managers: 0 });
+    broken.fails = true;
+    const registry = await registryOf(healthy, broken);
+
+    expect((await registry.select({})).runnerId).toBe('runner-healthy');
+
+    await registry.stop();
+  });
+
+  it('B3 ⭐: 逆相関の艦隊では、聞けなかった器（平均の積 2.42）が実測した全器の積（各 0.8）を上回っていたが、直すと負ける', async () => {
+    // Issue #712 の実測そのまま。3台とも cpu.cores: 8 / managers: 0。
+    // - unreachable: 資源が聞けない（throw）
+    // - roomy-memory: memory 1000/1000 空き（room 1.0）・pids 900/1000 使用（room 0.1）
+    // - roomy-pids:   memory limit 1000 / used 900（room 0.1）・pids 0/1000 使用（room 1.0）
+    //
+    // 直す前は、unreachable は見えている2台の平均の写しになる——memoryRoom も
+    // pidsRoom も (1.0 + 0.1) / 2 = 0.55。0.55 × 0.55 × 8 = 2.42 で、roomy-memory /
+    // roomy-pids（どちらも 1.0 × 0.1 × 8 = 0.8）に勝つ。**これが Issue #712 の
+    // 症状そのもの**（資源が聞けなかった器が、聞けた器の全部に勝つ）。
+    const unreachable = new FakeRunner('runner-unreachable', { managers: 0 });
+    unreachable.fails = true;
+    const roomyMemory = new FakeRunner('runner-roomy-memory', {
+      memory: { limitBytes: 1000, usedBytes: 0, source: 'cgroup' },
+      cpu: { cores: 8, source: 'cgroup' },
+      pids: { current: 900, max: 1000 },
+      managers: 0,
+    });
+    const roomyPids = new FakeRunner('runner-roomy-pids', {
+      memory: { limitBytes: 1000, usedBytes: 900, source: 'cgroup' },
+      cpu: { cores: 8, source: 'cgroup' },
+      pids: { current: 0, max: 1000 },
+      managers: 0,
+    });
+    const registry = await registryOf(unreachable, roomyMemory, roomyPids);
+
+    const chosen = await registry.select({});
+    expect(chosen.runnerId).not.toBe('runner-unreachable');
+    // 段の中の比較（roomy-memory と roomy-pids は完全に同点）は既存のまま——
+    // 同点なら登録順の先。ここでは roomy-memory が先に登録されている。
+    expect(chosen.runnerId).toBe('runner-roomy-memory');
+
+    await registry.stop();
+  });
+
+  it('B3b: 聞けなかった器は、聞けた器と点数が同点になっても前に出ない（艦隊が2台なら平均は報告した1台の写しになる）', async () => {
+    // **B3 より単純で、一般に起きる形。** 艦隊が2台（聞けなかった器＋健全な器
+    // 1台）のとき、平均は「報告した唯一の1台」の写しになるので、諸元を作り込ま
+    // なくても点数が完全に同点になる——2台の艦隊なら常に起きる。
+    //
+    // healthy: memory 4G使用/32G（room 0.875）・pids 150/1000使用（room 0.85）・
+    // cores 8・managers 0 ⟹ score = 0.875 × 0.85 × 8 = 5.95。
+    // unreachable の平均埋めも、報告者が healthy 1台だけなので同じ 0.875 /
+    // 0.85 / 8 ⟹ score = 5.95。**直す前はここで同点になり、登録順の先
+    // （unreachable）が勝つ。**
+    const unreachable = new FakeRunner('runner-unreachable', { managers: 0 });
+    unreachable.fails = true;
+    const healthy = new FakeRunner('runner-healthy', {
+      memory: { limitBytes: 32_000_000_000, usedBytes: 4_000_000_000, source: 'cgroup' },
+      cpu: CPU,
+      pids: { current: 150, max: 1000 },
+      managers: 0,
+    });
+    const registry = await registryOf(unreachable, healthy);
+
+    expect((await registry.select({})).runnerId).toBe('runner-healthy');
+
+    await registry.stop();
+  });
+
+  it('B4: 全台が聞けなかった艦隊でも置き先を返す（断らない、の失敗軸版）', async () => {
+    const first = new FakeRunner('runner-first', { managers: 0 });
+    const second = new FakeRunner('runner-second', { managers: 3 });
+    first.fails = true;
+    second.fails = true;
+    const registry = await registryOf(first, second);
+
+    // 全台が同じ段（聞けなかった）に居るので、段より下の通常比較へ落ちる——
+    // 既存の「どれからも資源を聞けなくても置き先を返す」と同じ答え。
+    expect((await registry.select({})).runnerId).toBe('runner-first');
+
+    await registry.stop();
+  });
+
+  it('B5: 聞けた器どうしの比較は1ミリも変わらない（unreachable を渡さない呼び出しの後方互換）', async () => {
+    // 誰も resources() を落とさない——#place の成功経路は `unreachable` を一度も
+    // 渡さない（`?? false` で埋まる）ので、全台が同じ段に揃う。pids と failures
+    // を両方絡めた艦隊で、段の導入が既存の比較に1文字も効かないことを見る。
+    const registry = await registryOf(
+      new FakeRunner('runner-burned', {
+        memory: { limitBytes: 8_000_000_000, usedBytes: 4_000_000_000, source: 'cgroup' },
+        cpu: CPU,
+        pids: { current: 998, max: 1000 },
+        managers: 1,
+      }),
+      new FakeRunner('runner-healthy', {
+        memory: { limitBytes: 8_000_000_000, usedBytes: 4_000_000_000, source: 'cgroup' },
+        cpu: CPU,
+        pids: { current: 115, max: 1000 },
+        managers: 3,
+      }),
+    );
+    registry.noteManagerFailed('runner-burned');
+
+    expect((await registry.select({})).runnerId).toBe('runner-healthy');
+
+    await registry.stop();
+  });
+
+  it('B6: resources() が throw する器は「聞けなかった」に落ちる（失敗数の有利では取り戻せない）', async () => {
+    // broken は resources() が throw する。**noteManagerFailed は一度も呼んで
+    // いないので recentFailures は 0** ——「失敗を数えられている」ことと
+    // 「聞けなかった」ことは別軸だと確かめるため、あえて空にしてある。それでも
+    // 段が下なので、失敗を1本抱えた healthy にも絶対に負ける。
+    const broken = new FakeRunner('runner-broken', { managers: 0 });
+    broken.fails = true;
+    const healthy = new FakeRunner('runner-healthy', { memory: MEMORY, cpu: CPU, managers: 0 });
+    const registry = await registryOf(broken, healthy);
+    registry.noteManagerFailed('runner-healthy');
+
+    expect((await registry.select({})).runnerId).toBe('runner-healthy');
+    expect(broken.asked).toBe(1);
+
+    await registry.stop();
+  });
+
+  it('B7: resources() が PLACEMENT_PROBE_MS で期限切れになる器も「聞けなかった」に落ちる', async () => {
+    // **既存のテストにはこの経路（withDeadline の期限切れ）の歯が無い。**
+    // `FakeRunner.fails` は同期 throw だけを起こす——ここでは `hangs` で
+    // `resources()` を永遠に解決させず、偽のタイマーで `PLACEMENT_PROBE_MS` の
+    // 先まで進める。
+    //
+    // `PLACEMENT_PROBE_MS`（runner-protocol.ts）と同じ値を手で書く——import
+    // すると、値を動かす変更が両側で同時に動いて緑のまま通ってしまう
+    // （`失敗の記憶が消える条件` の `MEMORY_MS` と同じ理由でここに手で書く）。
+    const PROBE_MS = 2_000;
+    vi.useFakeTimers();
+    try {
+      const slow = new FakeRunner('runner-slow', { managers: 0 });
+      slow.hangs = true;
+      const healthy = new FakeRunner('runner-healthy', { memory: MEMORY, cpu: CPU, managers: 0 });
+      const registry = await registryOf(slow, healthy);
+
+      const pending = registry.select({});
+      await vi.advanceTimersByTimeAsync(PROBE_MS + 1);
+      expect((await pending).runnerId).toBe('runner-healthy');
+
+      await registry.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('B8: 口の無い実装／undefined を返す古い器は「聞けなかった」に落ちない（平均埋めのまま、締め出されない）', async () => {
+    // legacy: resources() 自体が無い口相当（`report` 未指定 ⟹ undefined を返す。
+    // throw はしない）。broken: resources() が throw する（＝聞けなかった）。
+    // **legacy はどんなに資源の材料が乏しくても、聞けなかった broken には絶対に
+    // 負けない**——「口が無い／undefined」と「聞けなかった」は別の段だからである。
+    const broken = new FakeRunner('runner-broken', { managers: 0 });
+    broken.fails = true;
+    const legacy = new FakeRunner('runner-legacy'); // report 未指定 = 古い器
+    const registry = await registryOf(broken, legacy);
+
+    expect((await registry.select({})).runnerId).toBe('runner-legacy');
+
+    await registry.stop();
+  });
+
+  it('B9: 聞けなかった器でも recentFailures が落ちない（段の導入で #712 前半のふるまいを壊していない）', async () => {
+    // burned は資源が聞けない（unreachable）。それでも noteManagerFailed で
+    // 積んだ失敗は、平均埋めのスコアの中で分母として効き続ける——健全な
+    // healthy と2台しか居ないので通常なら段で healthy が勝つが、ここで
+    // 見たいのは「失敗の記憶を持ち越しているか」なので、broken 同士の比較で
+    // 確かめる（どちらも聞けない＝同じ段）。
+    const burned = new FakeRunner('runner-burned', { managers: 0 });
+    burned.fails = true;
+    const quiet = new FakeRunner('runner-quiet', { managers: 0 });
+    quiet.fails = true;
+    const registry = await registryOf(burned, quiet);
+    registry.noteManagerFailed('runner-burned');
+    registry.noteManagerFailed('runner-burned');
+
+    // 両方とも resources: undefined で段は同じ（聞けなかった）。分母は
+    // burned = 0(managers) + 2(failures) + 1 = 3、quiet = 0 + 0 + 1 = 1。
+    // **recentFailures が落ちていれば quiet と同点になり登録順の先（burned）が
+    // 勝つ。落ちていなければ burned の点数が下がり quiet が勝つ。**
+    expect((await registry.select({})).runnerId).toBe('runner-quiet');
+
+    await registry.stop();
   });
 });
