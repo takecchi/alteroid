@@ -7325,6 +7325,55 @@ describe('manager_transcript（生ログへ降りる）', () => {
     expect(reply).toMatch(/アーカイブ/);
   });
 
+  /**
+   * #698 — 本文が退避から読めたときは archive id を出力へ添える。**これで
+   * 読んだ直後に `archive_remove` で消せる**（id を手に入れる唯一の経路）。
+   */
+  it('退避から読めた本文には archive id が添う（archive_remove で消せるように）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    h.setTranscript('mgr-1', '退避から読んだ本文', 'mgr-1-archived-0001.jsonl');
+
+    const reply = await h.call('manager_transcript', { managerId: 'mgr-1' });
+
+    expect(reply).toContain('退避から読んだ本文');
+    expect(reply).toContain('mgr-1-archived-0001.jsonl');
+    expect(reply).toContain('archive_remove');
+  });
+
+  it('archive id が無い（走行中の runner 等から読めた）ときは archive_remove の案内を出さない', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    h.setTranscript('mgr-1', '走行中の runner から読んだ本文');
+
+    const reply = await h.call('manager_transcript', { managerId: 'mgr-1' });
+
+    expect(reply).toContain('走行中の runner から読んだ本文');
+    expect(reply).not.toContain('archive_remove');
+  });
+
+  /**
+   * #698 — 退避はあったが本文が消されている（tombstone）ときは、`missing`
+   * （3段のどこにも無い）とは別の文言になる。「無い」と同じ字面に畳まない。
+   */
+  it('本文が消されている（tombstone）ときは、missing とは別の文言で言う', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    h.setTranscriptRemoved('mgr-1', {
+      archiveId: 'mgr-1-removed-0001.jsonl',
+      removedAt: '2026-01-02T00:00:00.000Z',
+      bytes: 123,
+    });
+
+    const reply = await h.call('manager_transcript', { managerId: 'mgr-1' });
+
+    expect(reply).toContain('消されている');
+    expect(reply).toContain('mgr-1-removed-0001.jsonl');
+    expect(reply).toContain('123');
+    // **missing の文言（直上の歯）と混ざらない。**
+    expect(reply).not.toContain('3段のどこにも見当たらなかった');
+  });
+
   it('manager_report の出力から生ログへの降り方が読める', async () => {
     const h = harness();
     await h.call('manager_start', { request: '調べて' });
@@ -7447,6 +7496,99 @@ describe('manager_transcript（生ログへ降りる）', () => {
 
       expect(reply).toContain('判定できない');
     });
+  });
+});
+
+/**
+ * `archive_remove` — アーカイブ済みセッション生ログの本文を1件消す（#698）。
+ *
+ * **雛形は `memory_delete`。** 同じ作法（存在しない id を黙って成功にしない・
+ * `summary` を必須にする）を測る。**走行中のマネージャーの退避は、HTTP の口
+ * （`app.test.ts`）とここ（クローンの道具）の両方で拒めることを別々に測る**
+ * ——判定所は `ManagerPool.runningManagerOwning()` 1箇所で、2箇所に書くと
+ * 片方だけ直る形になる。
+ */
+describe('archive_remove（退避済み生ログの本文を消す）', () => {
+  it('存在しない id は黙って成功にしない', async () => {
+    const h = harness();
+
+    const reply = await h.call('archive_remove', {
+      archiveId: '居ない.jsonl',
+      summary: '掃除',
+    });
+
+    expect(reply).toContain('存在しない');
+    expect(reply).toContain('居ない.jsonl');
+  });
+
+  it('消せる（行は list に残る。日誌に決定として残る）', async () => {
+    const h = harness();
+    const archiveId = await h.stores.archive.archive('sess-x', 'BODY\n');
+
+    const reply = await h.call('archive_remove', {
+      archiveId,
+      summary: 'もう要らないので消した',
+    });
+
+    expect(reply).toContain('消した');
+    expect(await h.stores.archive.list()).toContain(archiveId);
+    expect(await h.stores.archive.read(archiveId)).toMatchObject({ kind: 'removed' });
+
+    const entries = await h.stores.journal.list({ types: ['decision'] });
+    const entry = entries.find(
+      (e) => e.type === 'decision' && e.decision.includes(archiveId),
+    ) as { type: 'decision'; decision: string; grounds: string } | undefined;
+    expect(entry).toBeDefined();
+    expect(entry?.grounds).toBe('もう要らないので消した');
+    // **本文は日誌へ写さない**（`BODY` という語が journal に出ない）。
+    expect(entries.some((e) => e.type === 'decision' && e.decision.includes('BODY'))).toBe(false);
+  });
+
+  it('二重に呼んでも「前から消されている」と言い、何も変えない', async () => {
+    const h = harness();
+    const archiveId = await h.stores.archive.archive('sess-y', 'BODY\n');
+    await h.call('archive_remove', { archiveId, summary: '1回目' });
+
+    const reply = await h.call('archive_remove', { archiveId, summary: '2回目' });
+
+    expect(reply).toContain('前から消されている');
+  });
+
+  /** ⭐ 走行中のマネージャーの退避は、クローンの道具からも消せない（#698）。 */
+  it('走行中のマネージャーの退避は消せない（どのマネージャーが走行中かを言う）', async () => {
+    const h = harness();
+    const archiveId = await h.stores.archive.archive('sess-running', 'BODY\n');
+    h.setRunningManagerOwning(archiveId, 'mgr-running-1');
+
+    const reply = await h.call('archive_remove', { archiveId, summary: '掃除' });
+
+    expect(reply).toContain('消せない');
+    expect(reply).toContain('mgr-running-1');
+    // 拒んだので何も変わっていない。
+    expect(await h.stores.archive.read(archiveId)).toEqual({ kind: 'body', body: 'BODY\n' });
+  });
+
+  /**
+   * `context.managers` が無い場面（委譲の道具が配線されていない内部ターン）
+   * では、走行中かどうかを確かめる材料が無い——安全側に倒して消させない。
+   * `harness()` は常に `managers` を渡すので、ここだけは `createCloneTools`
+   * を直接呼ぶ。
+   */
+  it('managers が配線されていない場面では、安全側に倒して消させない', async () => {
+    const stores = createMemoryStores();
+    const archiveId = await stores.archive.archive('sess-no-pool', 'BODY\n');
+    const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+    const found = tools.find((entry) => entry.name === 'archive_remove');
+    if (!found) throw new Error('archive_remove が無い');
+
+    const result = await found.handler({ archiveId, summary: '掃除' } as never, {});
+    const text = (result.content ?? [])
+      .map((block) => (block.type === 'text' ? block.text : ''))
+      .join('');
+
+    expect(text).toContain('消せない');
+    // 拒んだので何も変わっていない。
+    expect(await stores.archive.read(archiveId)).toEqual({ kind: 'body', body: 'BODY\n' });
   });
 });
 

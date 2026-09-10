@@ -905,6 +905,68 @@ describe('HTTP API', () => {
     expect(await read.text()).toBe('{"a":1}\n');
   });
 
+  /**
+   * `DELETE /archive/:id`（#698）。**行は消えない**——`GET /archive` の一覧には
+   * 引き続き出る。存在しない id は 404、走行中のマネージャーの退避は 409。
+   */
+  it('DELETE /archive/:id は本文だけを落とす（行は list に残る）', async () => {
+    const id = await stores.archive.archive('sess-remove', 'BODY\n');
+
+    const response = await app.request(`/archive/${id}`, { method: 'DELETE' });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      id,
+      bytes: Buffer.byteLength('BODY\n', 'utf8'),
+      alreadyRemoved: false,
+    });
+
+    // 行は list に残る。
+    const list = await app.request('/archive');
+    expect(await list.json()).toMatchObject({ entries: [id] });
+
+    // GET は 410（missing の 404 とは別のステータス）で詳細を返す。
+    const read = await app.request(`/archive/${id}`);
+    expect(read.status).toBe(410);
+    expect(await read.json()).toMatchObject({
+      error: 'removed',
+      bytes: Buffer.byteLength('BODY\n', 'utf8'),
+    });
+  });
+
+  it('DELETE /archive/:id は無い id を黙って成功にしない（404）', async () => {
+    const response = await app.request('/archive/居ない', { method: 'DELETE' });
+    expect(response.status).toBe(404);
+  });
+
+  it('DELETE /archive/:id は二重に呼んでも冪等（2回目は alreadyRemoved: true）', async () => {
+    const id = await stores.archive.archive('sess-twice', 'BODY\n');
+    await app.request(`/archive/${id}`, { method: 'DELETE' });
+
+    const second = await app.request(`/archive/${id}`, { method: 'DELETE' });
+    expect(second.status).toBe(200);
+    expect(await second.json()).toMatchObject({ ok: true, id, alreadyRemoved: true });
+  });
+
+  /**
+   * ⭐ 走行中のマネージャーの退避は、HTTP の口からは消せない（#698）。
+   * クローンの道具（`archive_remove`）側の同じ守りは `tools.test.ts` が測る——
+   * 判定所は `ManagerPool.runningManagerOwning()` 1箇所である。
+   */
+  it('DELETE /archive/:id は走行中のマネージャーの退避を拒む（409。どのマネージャーかを言う）', async () => {
+    const id = await stores.archive.archive('sess-running', 'BODY\n');
+    fake.runningOwners.set(id, 'mgr-running-1');
+
+    const response = await app.request(`/archive/${id}`, { method: 'DELETE' });
+    expect(response.status).toBe(409);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('mgr-running-1');
+
+    // 本文は落ちていない（拒んだので何も変わっていない）。
+    const read = await app.request(`/archive/${id}`);
+    expect(await read.text()).toBe('BODY\n');
+  });
+
   it('manager_id から一覧・状態・生ログへ降りられる（可観測性の下2層）', async () => {
     fake.managerList.push({
       managerId: 'mgr-1234',
@@ -936,6 +998,37 @@ describe('HTTP API', () => {
 
     expect((await app.request('/managers/nope')).status).toBe(404);
     expect((await app.request('/managers/nope/transcript')).status).toBe(404);
+  });
+
+  /**
+   * `GET /managers/:id/transcript` は、生ログが「無い」(404) と「退避された
+   * あと本文を消された」(410) を区別する（#698）。
+   */
+  it('GET /managers/:id/transcript は本文が消されていると410で詳細を返す', async () => {
+    fake.managerList.push({
+      managerId: 'mgr-removed',
+      status: 'done',
+      live: false,
+      cwd: '/work/project',
+      request: '調査',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+      waiting: [],
+    });
+    fake.removedTranscripts.set('mgr-removed', {
+      archiveId: 'mgr-removed-2026-01-01.jsonl',
+      removedAt: '2026-01-02T00:00:00.000Z',
+      bytes: 42,
+    });
+
+    const response = await app.request('/managers/mgr-removed/transcript');
+    expect(response.status).toBe(410);
+    expect(await response.json()).toMatchObject({
+      error: 'removed',
+      removedAt: '2026-01-02T00:00:00.000Z',
+      bytes: 42,
+      archiveId: 'mgr-removed-2026-01-01.jsonl',
+    });
   });
 
   /**
