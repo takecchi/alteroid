@@ -98,4 +98,21 @@ export class PgInboxStore implements InboxStore {
       ...(oldestAt === null || oldestAt === undefined ? {} : { oldestAt: toIso(oldestAt) }),
     };
   }
+
+  /**
+   * 残っている未読を古い順に返す。**`UPDATE` を含めない**
+   * （`InboxStore.peekPending` の doc — 読むだけで配達回数を進めない）。
+   * `claimPending` と同じ `parseEvent` / `toIso` を使う。
+   */
+  async peekPending(): Promise<PendingInboxEvent[]> {
+    const rows = await this.#db.select().from(inboxEvents);
+    return rows
+      .map((row) => ({
+        event: parseEvent(row.id, row.event),
+        at: row.at,
+        deliveries: row.deliveries,
+      }))
+      .sort((a, b) => a.at.getTime() - b.at.getTime())
+      .map((entry) => ({ event: entry.event, at: toIso(entry.at), deliveries: entry.deliveries }));
+  }
 }

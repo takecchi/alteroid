@@ -2773,6 +2773,14 @@ class Clone implements CloneHost {
    * 消さない。** 0 で埋めるのも消すのも「全部片付いている」と読める側へ倒れる——
    * `describeSituationUnavailable` が「数えられなかった」と名乗る
    * （`situation.ts` の doc）。
+   *
+   * **⚠️ この「読めなくても落とさない」は委譲・器の数え上げ（`try`/`catch` の
+   * 外側）の話であって、鍵・受信箱の滞留（#783 段0）は別の層で同じ向きを
+   * 実現している** — こちらは個別に `.then(value, () => undefined)` で
+   * catch し、その材料だけ `undefined` になる（`describeSituation` 側は
+   * `undefined` なら行を出さないだけ）。**`inbox.pending()` が落ちても
+   * ターンそのものは止めない** — 落ちた場合の受信箱の行は単に出ないだけで、
+   * 委譲・器の行はそのまま出る。
    */
   async #situationNoticeFor(events: InboxEvent[]): Promise<string> {
     const event = events[0];
@@ -2800,6 +2808,37 @@ class Clone implements CloneHost {
           (active) => active,
           () => undefined,
         ),
+        // **受信箱の滞留も同じ理由で個別に catch する**（#783 段0）。
+        // 委譲・器・鍵の数え上げとは無関係な材料なので、ここが落ちても
+        // それらを道連れにしない——`describeSituation` 側は `backlog` が
+        // `undefined` なら行を出さないだけで、節全体は消えない
+        // （`situation.ts` の `describeSituationInboxBacklog` の doc）。
+        // **安い `pending()` を使う** — 内訳まで返す `peekPending()` は
+        // 毎ターン呼ぶ口ではない（`InboxStore.peekPending` の doc）。
+        //
+        // **⚠️ このターンが処理している `events` 自身を引く。** `#remember`
+        // （`post()` の中）は型を問わず全部の合図をここへ来る前に
+        // `inbox.put()` していて、消す `#forget()` はこの後（`#handle` の
+        // 完了後）にしか呼ばれない。⟹ `pending()` を素で読むと、**いま
+        // まさに処理しているこの1件（複数件が畳まれることもある）が、
+        // 毎ターン必ず「滞留」として数えられてしまう**——0件になるはずの
+        // ターンが軒並み「1件」になり、この節の存在理由（詰まっている
+        // ときだけ膨らむ）そのものが壊れる。`events.length` を引けば、
+        // 「このターンが片付けようとしている分」を除いた**それ以外の滞留**
+        // になる。
+        //
+        // **`oldestAt` は補正しない。** `events` の `at` は基本的に「いま」に
+        // 近い値（配り直し・catch-up でも「起きた時刻」であって、大昔の
+        // 積み残しの時刻ではない）なので、本物の滞留が在ればそちらのほうが
+        // 古く、`oldestAt` を歪めない。件数が0まで落ちた回は `oldestAt` ごと
+        // 消す（0件のときに値を作らない、というこの節全体の作法どおり）。
+        this.#stores.inbox.pending().then(
+          (backlog) => {
+            const count = Math.max(0, backlog.count - events.length);
+            return count === 0 ? { count: 0 } : { count, oldestAt: backlog.oldestAt };
+          },
+          () => undefined,
+        ),
       ]);
       return describeSituation({
         managers,
@@ -2807,6 +2846,7 @@ class Clone implements CloneHost {
         tokens: pool[0],
         active: pool[1],
         at: Date.now(),
+        backlog: pool[2],
       });
     } catch (error) {
       return describeSituationUnavailable(error);

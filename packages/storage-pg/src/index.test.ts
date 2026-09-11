@@ -2058,6 +2058,51 @@ describe('PgInboxStore', () => {
       expect(claimed[0]?.deliveries).toBe(1);
     });
   });
+
+  /**
+   * `peekPending`（#783 段0）。`pending()` と同じ倒れ先——**読むだけで
+   * `deliveries` を1つも進めない**（`UPDATE` を含まない SQL であることの
+   * 実地の裏取り。fs 版と同じ性質を pg でも確かめる）。
+   */
+  describe('peekPending（#783。本文まで返すが、配達回数は進めない）', () => {
+    it('claimPending と同じ並び（古い順）で、本文まで返す', async () => {
+      await stores.inbox.put(
+        human('evt-2', '2026-08-11T00:00:00.000Z', '2件目'),
+        '2026-08-11T00:00:00.000Z',
+      );
+      await stores.inbox.put(
+        human('evt-1', '2026-08-10T00:00:00.000Z', '1件目'),
+        '2026-08-10T00:00:00.000Z',
+      );
+
+      const rows = await stores.inbox.peekPending();
+
+      expect(rows.map((r) => r.event.id)).toEqual(['evt-1', 'evt-2']);
+      expect((rows[0]?.event as { text: string }).text).toBe('1件目');
+      expect(rows.every((r) => r.deliveries === 0)).toBe(true);
+    });
+
+    it('0件なら空配列を返す', async () => {
+      expect(await stores.inbox.peekPending()).toEqual([]);
+    });
+
+    /**
+     * **この歯が単独で守るもの**: `peekPending()` を何度呼んでも、その後の
+     * `claimPending()` が返す `deliveries` が 1（初回）のままであること。
+     */
+    it('peekPending() を2回呼んでも、その後の claimPending() の deliveries は1のまま', async () => {
+      await stores.inbox.put(
+        human('evt-1', '2026-08-10T00:00:00.000Z', '本文'),
+        '2026-08-10T00:00:00.000Z',
+      );
+
+      await stores.inbox.peekPending();
+      await stores.inbox.peekPending();
+
+      const claimed = await stores.inbox.claimPending();
+      expect(claimed[0]?.deliveries).toBe(1);
+    });
+  });
 });
 
 describe('PgTranscriptArchive', () => {

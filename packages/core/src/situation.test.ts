@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { INBOX_BACKLOG_LOUD_THRESHOLD } from './inbox-backlog.js';
 import type { ManagerSummary } from './manager.js';
 import type { RunnerLiveness } from './runner-protocol.js';
 import type { JobStatus } from './schema.js';
@@ -585,5 +586,85 @@ describe('状況の1行に鍵が載る（describeSituation への配線）', () 
 
     expect(out).toContain('委譲 全 0 本');
     expect(out).not.toContain('認証トークン:');
+  });
+});
+
+/**
+ * 受信箱の滞留の1行（#783 段0）。**3つの状態**を測る——0件で行が無い /
+ * 閾値以下で短い / 閾値超えで膨らむ。既存の `toContain` の作法に揃える
+ * （スナップショットは使わない）。
+ */
+describe('状況の1行に受信箱の滞留が載る（#783 段0）', () => {
+  it('省略した呼びでは行が出ない（既存の呼び出しを壊さない）', () => {
+    const out = describeSituation({ managers: [], runners: [] });
+
+    expect(out).toContain('委譲 全 0 本');
+    expect(out).not.toContain('受信箱の未処理');
+  });
+
+  it('0件のときは行が出ない（backlog を渡しても count: 0 なら消える）', () => {
+    const out = describeSituation({
+      managers: [],
+      runners: [],
+      backlog: { count: 0 },
+    });
+
+    expect(out).not.toContain('受信箱の未処理');
+  });
+
+  it('読めなかった（undefined）ときも行が出ない——ターンは止めない', () => {
+    const out = describeSituation({
+      managers: [],
+      runners: [],
+      backlog: undefined,
+    });
+
+    expect(out).toContain('委譲 全 0 本');
+    expect(out).not.toContain('受信箱の未処理');
+  });
+
+  it('1件以上・閾値以下は短い1行（⚠ も内訳への案内も付かない）', () => {
+    const out = describeSituation({
+      managers: [],
+      runners: [],
+      backlog: { count: INBOX_BACKLOG_LOUD_THRESHOLD, oldestAt: '2026-09-11T00:00:00.000Z' },
+    });
+
+    expect(out).toContain(`受信箱の未処理 ${INBOX_BACKLOG_LOUD_THRESHOLD} 件`);
+    expect(out).toContain('2026-09-11T00:00:00.000Z');
+    expect(out).not.toContain(`⚠ 受信箱の未処理 ${INBOX_BACKLOG_LOUD_THRESHOLD} 件`);
+    // **`manager_list` という語自体は他の行（器の説明文）にも出るので、
+    // 受信箱の行だけを取り出して確かめる**（他の行に引きずられて誤検出
+    // しないように）。
+    const line = out.split('\n').find((l) => l.includes('受信箱の未処理'));
+    if (line === undefined) throw new Error('行が見つからない');
+    expect(line).not.toContain('manager_list');
+  });
+
+  it('閾値を超えると ⚠ 付きで膨らみ、内訳を割る口の名前が付く', () => {
+    const count = INBOX_BACKLOG_LOUD_THRESHOLD + 1;
+    const out = describeSituation({
+      managers: [],
+      runners: [],
+      backlog: { count, oldestAt: '2026-09-10T09:28:55.000Z' },
+    });
+
+    expect(out).toContain(`⚠ 受信箱の未処理 ${count} 件`);
+    expect(out).toContain('2026-09-10T09:28:55.000Z');
+    expect(out).toContain('manager_list');
+  });
+
+  it('指図を書かない（「〜せよ」の類が1文字も無い）', () => {
+    const out = describeSituation({
+      managers: [],
+      runners: [],
+      backlog: { count: INBOX_BACKLOG_LOUD_THRESHOLD + 1 },
+    });
+    const line = out.split('\n').find((l) => l.includes('受信箱の未処理'));
+    if (line === undefined) throw new Error('行が見つからない');
+
+    expect(line).not.toContain('確認せよ');
+    expect(line).not.toContain('対処せよ');
+    expect(line).not.toContain('処理せよ');
   });
 });
