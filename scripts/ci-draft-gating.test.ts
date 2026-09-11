@@ -297,22 +297,43 @@ function evaluateGithubExpression(expr: string, ctx: GithubEventContext): boolea
  * `types:` が見つからなければ `null`（GitHub の既定が使われている＝
  * `ready_for_review` を含まない）を返す。
  */
+/**
+ * 一致した位置が YAML コメント（`#` より後ろ）の中かどうかを判定する。
+ *
+ * **これが要る理由——このファイル自身のドキュメントコメントが house style の
+ * 先例を逐語で引用しており、コメントの中にも `types: [...]` という文字列が
+ * 現れる。** 実際にこの関数の最初の実装はこれを踏んだ——`ci.yml` の
+ * `pull_request:` の doc コメントが `types: [ opened, synchronize,
+ * reopened,\n    # ready_for_review ]`（改行を挟んだ引用）を含んでいたため、
+ * 素朴なフロースタイルの正規表現が本物の `types:` より先にこの引用へ
+ * 一致し、`ready_for_review` を含まない配列を返して偽陰性になった。
+ * 「足場（この関数）が測定対象と同じ文字列を含むと偽陽性・偽陰性になる」の
+ * 実例がテスト対象の doc コメント自身から出た形である。
+ */
+function isInsideYamlComment(text: string, index: number): boolean {
+  const lineStart = text.lastIndexOf('\n', index - 1) + 1;
+  return text.slice(lineStart, index).includes('#');
+}
+
 function extractPullRequestTypes(ciYml: string): string[] | null {
   const blockMatch = /\n {2}pull_request:\n([\s\S]*?)(?=\n {2}[A-Za-z_]+:)/.exec(ciYml);
   if (!blockMatch) return null;
   const block = blockMatch[1];
 
-  const flow = /types:\s*\[([^\]]*)\]/.exec(block);
-  if (flow) {
-    return flow[1]
+  // フロースタイル（1行）。**改行を跨がせない**（この repo の実際の書き方は
+  // 常に1行）ことと、**一致した行が YAML コメントの中でないこと**の両方を
+  // 確かめてから採用する（上の `isInsideYamlComment` の doc を見よ）。
+  for (const m of block.matchAll(/types:\s*\[([^\]\n]*)\]/g)) {
+    if (isInsideYamlComment(block, m.index ?? 0)) continue;
+    return m[1]
       .split(',')
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
   }
 
-  const blockList = /types:\s*\n((?:\s*-\s*\S+\n?)+)/.exec(block);
-  if (blockList) {
-    return [...blockList[1].matchAll(/-\s*(\S+)/g)].map((m) => m[1]);
+  for (const m of block.matchAll(/types:\s*\n((?:[ \t]*-\s*\S+\n?)+)/g)) {
+    if (isInsideYamlComment(block, m.index ?? 0)) continue;
+    return [...m[1].matchAll(/-\s*(\S+)/g)].map((x) => x[1]);
   }
 
   return null;
@@ -455,7 +476,7 @@ describe('固定その1: push / workflow_dispatch / schedule での挙動（罠1
     ['push（main への push）', PUSH_CONTEXT, true, true],
     ['workflow_dispatch（手動起動）', DISPATCH_CONTEXT, true, true],
     ['schedule（定時実行）', SCHEDULE_CONTEXT, false, true],
-  ] as const)('%s: ci=%s / image=%s', (_label, ctx, expectCi, expectImage) => {
+  ] as const)('%s', (_label, ctx, expectCi, expectImage) => {
     expect(jobRuns('ci', ctx)).toBe(expectCi);
     expect(jobRuns('image', ctx)).toBe(expectImage);
   });
