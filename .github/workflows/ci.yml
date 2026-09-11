@@ -98,7 +98,35 @@ jobs:
         run: pnpm --filter @mnemora/postgres run migrate
 
       - name: Run postgres conformance / EXPLAIN / ADR 0011 tests against the real database
+        # Issue #148: `MNEMORA_LEXICAL_REGIME_JSON` を渡す。`lexical-store-identifier.
+        # test.ts` の「素の to_tsvector で識別子を引けるかどうかは server_encoding で
+        # 反転する」の歯が、`expect` より前にこのパスへ測った regime を書く
+        # (歯が赤くなっても値は残る)。このジョブの他のテストはこの変数を無視する。
+        env:
+          MNEMORA_LEXICAL_REGIME_JSON: ${{ github.workspace }}/lexical-regime.json
         run: pnpm --filter @mnemora/postgres run test:db
+
+      - name: 実測した regime を Job Summary に残す(⛔ 門ではない。Issue #148)
+        # このステップは常に走る(`if: always()`)——上の test:db が(regime とは無関係な
+        # 理由も含め)落ちても、その run で regime を書けていたかどうかを Job Summary
+        # から読めるようにする。`lexical-regime-summary.mjs` 自体は server_encoding /
+        # nonAsciiIsIndexed の値では非0にならない——非0になるのは「値が出ていない
+        # (歯が書いていない)」「JSON が壊れている」「値が空だった」の3つだけであり、
+        # これは「値の門」ではなく「可視化そのものが壊れたことの門」である
+        # (`scripts/lexical-regime-summary-lib.mjs` の docstring)。
+        if: always()
+        run: |
+          node scripts/lexical-regime-summary.mjs \
+            --measured "${{ github.workspace }}/lexical-regime.json" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 実測値そのもの(機械可読)を成果物として残す(Issue #148)
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lexical-regime
+          path: ${{ github.workspace }}/lexical-regime.json
+          if-no-files-found: ignore
 
       - name: Build @mnemora/postgres
         run: pnpm --filter @mnemora/postgres run build

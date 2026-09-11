@@ -1,9 +1,31 @@
+import { writeFileSync } from "node:fs";
 import type { Ctx } from "@mnemora/core";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { buildNewMemoryFixture } from "@mnemora/testkit";
 import { PostgresMemoryStore } from "../memory-store.js";
 import { PostgresLexicalStore } from "../lexical-store.js";
 import { closeTestClient, getTestClient, resetTestDatabase } from "./test-db.js";
+
+/**
+ * Issue #148 が足す形。`scripts/lexical-regime-summary.mjs`(CI の Job Summary へ載せる側)
+ * が読む機械可読な JSON の形。**この型はこのファイルにしか無い**——`scripts/` 側は素の
+ * `.mjs`(`tsx` を通さない)であり、import できない。二重管理であることを認めて書く
+ * (`consolidation-cost-summary-lib.mjs` の `WEIGHTS_UNAVAILABLE_PHRASE` と同じ判断)。
+ * `scripts/__tests__/ci-yml-postgres-regime-wiring.test.mjs` がこのファイルのソースを
+ * 文字列として読み、`MNEMORA_LEXICAL_REGIME_JSON` への参照が消えていないことを固定している。
+ */
+interface LexicalRegimeJson {
+  schemaVersion: number;
+  measuredAt: string;
+  serverVersion: string;
+  serverEncoding: string;
+  nonAsciiIsIndexed: boolean;
+  rawTsvector: string;
+  rawIdentifierHit: boolean;
+  rawJapaneseWordHit: boolean;
+  /** 歯が実際に通った分岐。⛔ 固定しない——両方が起こり得る(Issue #148)。 */
+  regime: "non_ascii_indexed" | "non_ascii_dropped";
+}
 
 /**
  * ADR 0084（Issue #106）の中心: 日本語の文に埋め込まれた `PROJ-1234` のような識別子を、
@@ -252,6 +274,31 @@ describe("PostgresLexicalStore.search — 日本語の文に埋め込まれた�
    *
    * ⛔ **この歯を「環境依存だから」と消さないこと。**消すと、`mnemora_lexical_normalize`
    * が要る理由そのものが repo から消える。
+   *
+   * ---
+   *
+   * ### 🔴 Issue #148: この歯が測った regime は、緑のときにも読めるようにする
+   *
+   * この歯は元々、`observed` を `expect` の失敗メッセージにしか埋めていなかった
+   * ——**緑のとき、この歯がどちらの分岐を通ったのかを外から知る手段が無かった**
+   * （PR #147 / ADR 0103 の続き、Issue #148 ①）。
+   *
+   * `MNEMORA_LEXICAL_REGIME_JSON` が環境変数として設定されていたら、そのパスへ
+   * 測った値を機械可読な JSON（`LexicalRegimeJson`）として書く。**書くのは
+   * `expect` より前**——歯がどちらの側で赤くなっても、測った値そのものは残る
+   * （`if: always()` で後続の Job Summary 段を必ず走らせるのと同じ意図）。
+   * `.github/workflows/ci.yml` の `postgres` ジョブがこの環境変数を渡し、
+   * `scripts/lexical-regime-summary.mjs` がこの JSON を読んで Job Summary へ出す
+   * （⛔ 門ではない——値がどちらでも exit 0。`docs/roadmap.md` の
+   * 「決まっていない前提」= SQL_ASCII をサポート対象にするかへ、この可視化の実装が
+   * 先回りして答えを出さないため）。
+   *
+   * ⛔ **環境変数が無いときは何も書かない**——ローカルで `vitest run` するだけの
+   * 開発者に、無関係なファイル書き込みを強いない。
+   *
+   * ⛔ **この JSON 書き込みは、下の3本の `expect` を1つも弱めない。**分岐はどちらにも
+   * 固定していない・`it.skip` にもしていない——書いているのは「実際に測った値」であり、
+   * 「歯がどちらであるべきか」ではない。
    */
   it("素の to_tsvector で識別子を引けるかどうかは server_encoding で反転する（歯が自分の前提を測って名乗る）", async () => {
     const { pool } = await getTestClient();
@@ -274,6 +321,24 @@ describe("PostgresLexicalStore.search — 日本語の文に埋め込まれた�
       rawIdentifierHit: boolean;
       rawJapaneseWordHit: boolean;
     };
+
+    // 🔴 Issue #148: `expect` より前に書く。歯がこの後どちらの分岐で赤くなっても、
+    // 測った値そのものは CI の成果物として残る。
+    const regimeJsonPath = process.env.MNEMORA_LEXICAL_REGIME_JSON;
+    if (regimeJsonPath) {
+      const regimeJson: LexicalRegimeJson = {
+        schemaVersion: 1,
+        measuredAt: new Date().toISOString(),
+        serverVersion: row.version,
+        serverEncoding: row.encoding,
+        nonAsciiIsIndexed: row.nonAsciiIsIndexed,
+        rawTsvector: row.rawTsvector,
+        rawIdentifierHit: row.rawIdentifierHit,
+        rawJapaneseWordHit: row.rawJapaneseWordHit,
+        regime: row.nonAsciiIsIndexed ? "non_ascii_indexed" : "non_ascii_dropped",
+      };
+      writeFileSync(regimeJsonPath, `${JSON.stringify(regimeJson, null, 2)}\n`, "utf8");
+    }
 
     const observed =
       `【この環境の実測】server_version=${row.version} / server_encoding=${row.encoding} / ` +
