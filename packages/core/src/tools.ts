@@ -576,6 +576,12 @@ function describeAskedAt(askedAt: ManagerWaitingItem['askedAt']): string {
  * （`AGENTS.md` の地雷「エージェントへ返す一覧に本文を全文で載せる」）。
  * 0件の文言（「クローンの受信箱に未処理の合図は無い。」）は#562からそのまま
  * ——ここを変えると、その文言に当たる既存の歯が落ちる。
+ *
+ * **⚠️ 黙って重くした——この道具の費用は上がっている。** 以前は
+ * `pending()`（`count(*)` / `min(at)` の1発）だけを読んでいたが、いまは
+ * `peekPending()`（全行を読んで zod で1件ずつ parse する）を読む。
+ * `manager_list` は同じ呼びの中で `listJobs()` が既に台帳の全件を読んでいる
+ * ので**桁は変わらない**が、`pending()` の頃より重いことは事実である。
  */
 function describeInboxBacklog(rows: readonly PendingInboxEvent[], now: number): string {
   if (rows.length === 0) return 'クローンの受信箱に未処理の合図は無い。';

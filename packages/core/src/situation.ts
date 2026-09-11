@@ -453,14 +453,37 @@ function tokenStateOf(
  * 同じになる。**この節はクローンが見落としようがない場所（毎ターンの
  * 入口）に出す** ためにある。
  *
- * ## 3つの状態
+ * ## 4つの状態（当初3つとして実装し、レビューで4つに直った）
  *
- * - **0件 → 行そのものを出さない**（`lost` と同じ作法。行が無いことは
- *   「数えていない」ではなく「0だった」と読める——ここで使う `pending()`
- *   は呼ぶたびにストアを実際に読む生の値で、キャッシュでも「観測できたか」
- *   の付帯情報も持たない`InboxStore.pending`の doc）
- * - **1件以上・{@link INBOX_BACKLOG_LOUD_THRESHOLD} 以下 → 短く1行**
- * - **閾値超え → 同じ1行に、内訳の引き方（`manager_list`）を添えて膨らませる**
+ * - **省略（`undefined`） → 行を出さない**（既存の呼び出しを壊さない側の
+ *   「渡さないと決めた」——`tokens` と同じ作法）
+ * - **`'unreadable'`（`pending()` が落ちた＝読もうとして読めなかった） →
+ *   行を出す。⛔ `0` という数字は1文字も作らない。**
+ * - **`count === 0`（実際に数え切れて0件だった） → 行そのものを出さない**
+ *   （`lost` と同じ作法）
+ * - **1件以上 → 短く1行、{@link INBOX_BACKLOG_LOUD_THRESHOLD} 超えで膨らむ**
+ *
+ * ## ⚠️ 「読めなかった」と「0件」を同じ「行が無い」に潰さない
+ *
+ * **当初の実装はここを潰していた**（`backlog === undefined || count === 0`
+ * を1つの分岐で `null` にしていた）。これは `AGENTS.md` の地雷「取れない軸に
+ * 0 の行を作る」の裏返しの形で、この repo が何度も踏んでいる形そのものである:
+ *
+ * - {@link describeSituationUnavailable} の doc: 「0 で埋めれば『全部片付いて
+ *   いる』と読める（**いちばん見落としたい向きへ倒れる**）」「`runner-swap-
+ *   notice.ts` が `'none-affected'`（0本と数え切れた）と `'ledger-
+ *   unreadable'`（数えられなかった）を**型で分けている**のと同じ理由」
+ * - `tools.ts` の `describeInboxBacklog` の doc: 「**『常に実測できるか、
+ *   観測できていないことがありうるか』という違いが、この非対称性の理由その
+ *   ものである**」
+ *
+ * `lost` との類比が効くのは「同じ配列から必ず数え切れる」ときだけである
+ * （`lost` は `managers` 配列を全走査すれば必ず数えられるので「行が無い＝0」
+ * が本当に成り立つ）。**受信箱の `pending()` は読めないことがある**（だから
+ * `clone.ts` 側で catch している）ので、`undefined` へ潰した瞬間に「読めな
+ * かった」が「0件」と見分けが付かなくなっていた。`'unreadable'` を専用の
+ * 状態として型で分けたのはこのため——`'unreadable'` を渡されたら **必ず
+ * 行を出す**（0 で埋めず、数字も作らない）。
  *
  * ## 閾値はなぜ 50 か
  *
@@ -476,17 +499,24 @@ function tokenStateOf(
  *
  * ## `pending()` が読めなかったとき
  *
- * `undefined` を渡された場合は行を出さない（`clone.ts`
- * `#situationNoticeFor` が `pending()` の失敗を捕まえて `undefined` を渡す
- * ——鍵の材料 {@link describeTokenSituation} と同じ「個別に catch して、
- * 読めなかった軸だけを落とす」作法。ターン全体を
- * {@link describeSituationUnavailable} へ倒すのは委譲・器の数え上げ自体が
- * 読めなかったときだけで、受信箱の滞留はそれとは独立の材料である）。
+ * `clone.ts` の `#situationNoticeFor` は `pending()` の失敗を捕まえて
+ * `'unreadable'` を渡す——鍵の材料 {@link describeTokenSituation} と同じ
+ * 「個別に catch して、読めなかった軸だけを落とす」作法だが、**落とす先が
+ * 違う**（鍵は「読めなかった」と名乗る専用の1行を持ち、こちらも同じく専用の
+ * 1行を持つ——0 で埋めない）。ターン全体を {@link describeSituationUnavailable}
+ * へ倒すのは委譲・器の数え上げ自体が読めなかったときだけで、受信箱の滞留は
+ * それとは独立の材料である。
  */
 function describeSituationInboxBacklog(
-  backlog: { readonly count: number; readonly oldestAt?: string } | undefined,
+  backlog: { readonly count: number; readonly oldestAt?: string } | 'unreadable' | undefined,
 ): string | null {
-  if (backlog === undefined || backlog.count === 0) return null;
+  if (backlog === undefined) return null;
+  if (backlog === 'unreadable') {
+    // ⛔ ここに `0` という数字を書かない——「数えられなかった」を「0件」と
+    // 見分けられなくすることが、この分岐が存在する理由そのものを壊す。
+    return '受信箱の未処理を数えられなかった（`manager_list` で自分で引くこと）。';
+  }
+  if (backlog.count === 0) return null;
   const oldest =
     backlog.oldestAt === undefined ? '' : `（最も古いものは ${backlog.oldestAt} から）`;
   const base = `受信箱の未処理 ${backlog.count} 件${oldest}。`;
@@ -507,9 +537,12 @@ export function describeSituation(input: {
   /**
    * 受信箱（デーモン→クローンの脚）の滞留（#783 段0）。**省略できる** ——
    * 省略すると行が出ない（既存の呼び出しを1つも壊さない。`tokens` と同じ
-   * 作法）。{@link describeSituationInboxBacklog} の doc を見る。
+   * 作法）。**`'unreadable'` は「省略」とは別の状態**（読もうとして読めな
+   * かった）——両方とも `undefined` へ潰すと「0件」と見分けが付かなくなる。
+   * {@link describeSituationInboxBacklog} の doc を見る。
    */
-  readonly backlog?: { readonly count: number; readonly oldestAt?: string } | undefined;
+  readonly backlog?:
+    { readonly count: number; readonly oldestAt?: string } | 'unreadable' | undefined;
 }): string {
   const counts = countManagerSituation(input.managers);
   const byState = countRunnerStates(input.runners);

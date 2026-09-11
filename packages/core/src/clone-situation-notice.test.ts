@@ -485,9 +485,11 @@ describe('状況の節に受信箱の滞留の行が載る（#783 段0）', () =
     // 数え上げは残っている（ここが消えるのがいちばん悪い）。
     expect(text).toContain('委譲 全 3 本');
     expect(text).toContain('器 2 台');
-    // **受信箱の行は単に出ない**（鍵の「読めなかった」のような専用の断りは
-    // 持たない——`describeSituationInboxBacklog` の doc に選んだ理由がある）。
-    expect(text).not.toContain('受信箱の未処理');
+    // **受信箱の行は「数えられなかった」と名乗る専用の1行になる**——鍵の
+    // 「読めなかった」と同じ向き。⛔ 0件だったと見分けが付かなくなるので、
+    // 行そのものを消しはしない（レビューで直った箇所。
+    // `describeSituationInboxBacklog` の doc）。
+    expect(text).toContain('受信箱の未処理を数えられなかった');
 
     await s.clone.stop();
   });

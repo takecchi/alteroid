@@ -2776,11 +2776,14 @@ class Clone implements CloneHost {
    *
    * **⚠️ この「読めなくても落とさない」は委譲・器の数え上げ（`try`/`catch` の
    * 外側）の話であって、鍵・受信箱の滞留（#783 段0）は別の層で同じ向きを
-   * 実現している** — こちらは個別に `.then(value, () => undefined)` で
-   * catch し、その材料だけ `undefined` になる（`describeSituation` 側は
-   * `undefined` なら行を出さないだけ）。**`inbox.pending()` が落ちても
-   * ターンそのものは止めない** — 落ちた場合の受信箱の行は単に出ないだけで、
-   * 委譲・器の行はそのまま出る。
+   * 実現している** — こちらは個別に `.then(value, onRejected)` で catch し、
+   * その材料だけが読めなかったことを表す値になる（鍵は `undefined`。受信箱の
+   * 滞留は **`'unreadable'`** — `undefined` は「省略」に取ってあるので、
+   * 読めなかったことをそちらに潰すと「0件だった」と見分けが付かなくなる。
+   * `situation.ts` の `describeSituationInboxBacklog` の doc）。
+   * **`inbox.pending()` が落ちてもターンそのものは止めない** — 落ちた場合、
+   * 受信箱の行は「数えられなかった」と名乗る専用の1行になり、委譲・器の行は
+   * そのまま出る。
    */
   async #situationNoticeFor(events: InboxEvent[]): Promise<string> {
     const event = events[0];
@@ -2810,8 +2813,16 @@ class Clone implements CloneHost {
         ),
         // **受信箱の滞留も同じ理由で個別に catch する**（#783 段0）。
         // 委譲・器・鍵の数え上げとは無関係な材料なので、ここが落ちても
-        // それらを道連れにしない——`describeSituation` 側は `backlog` が
-        // `undefined` なら行を出さないだけで、節全体は消えない
+        // それらを道連れにしない。
+        //
+        // **⚠️ 読めなかった（catch した）ときは `undefined` ではなく
+        // `'unreadable'` を渡す。** かつては `() => undefined` にしていて、
+        // `describeSituation` 側は「省略（呼び出し側が渡さないと決めた）」と
+        // 「読もうとして読めなかった」を同じ `undefined` に潰していた——
+        // レビューで、これが `AGENTS.md` の地雷「取れない軸に0の行を作る」の
+        // 裏返しだと指摘された（`0` で埋めていないつもりが、行を消すことで
+        // 実質「0件だった」と同じ顔になっていた）。`'unreadable'` は
+        // `describeSituation` 側に必ず専用の1行を出させる
         // （`situation.ts` の `describeSituationInboxBacklog` の doc）。
         // **安い `pending()` を使う** — 内訳まで返す `peekPending()` は
         // 毎ターン呼ぶ口ではない（`InboxStore.peekPending` の doc）。
@@ -2833,11 +2844,19 @@ class Clone implements CloneHost {
         // 古く、`oldestAt` を歪めない。件数が0まで落ちた回は `oldestAt` ごと
         // 消す（0件のときに値を作らない、というこの節全体の作法どおり）。
         this.#stores.inbox.pending().then(
-          (backlog) => {
+          (backlog): { count: number; oldestAt?: string } => {
             const count = Math.max(0, backlog.count - events.length);
-            return count === 0 ? { count: 0 } : { count, oldestAt: backlog.oldestAt };
+            if (count === 0) return { count: 0 };
+            // **`...(x === undefined ? {} : { x })` の形に揃える**
+            // （`pending()` 自身の実装がこの形を採っている）。素に
+            // `oldestAt: backlog.oldestAt` と書くと、値が `undefined` でも
+            // キー自体は生えてしまう。
+            return {
+              count,
+              ...(backlog.oldestAt === undefined ? {} : { oldestAt: backlog.oldestAt }),
+            };
           },
-          () => undefined,
+          (): 'unreadable' => 'unreadable',
         ),
       ]);
       return describeSituation({
