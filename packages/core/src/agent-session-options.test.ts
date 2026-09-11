@@ -437,9 +437,11 @@ describe('クローンの蒸留サイドクエリへ渡す Options', () => {
     const { options } = calls[1] as { options: Options };
     const allowed = options.allowedTools ?? [];
 
-    // 本セッションと揃えている「道具」はそのまま載る。
-    expect(allowed).toEqual(CLONE_ALLOWED_TOOLS);
-
+    // **⚠️ 順序が意味を持つ。規則を名指しする歯を先に置くこと。**
+    // 下の `toEqual` は差分を綺麗に出すが、**落ちた理由の説明を持たない。**
+    // 先に落ちたほうのメッセージしか読み手には届かないので、`toEqual` を前に
+    // 置くと「なぜ載せてはいけないのか」が一度も出ない（実測。この順序にする前は
+    // 逐語が0回だった）。
     for (const rule of CLONE_ALLOWED_PERMISSION_RULES) {
       expect(
         allowed.includes(rule),
@@ -450,6 +452,9 @@ describe('クローンの蒸留サイドクエリへ渡す Options', () => {
           '写せば、要る理由が無いセッションにまで同じ行為が通る＝人間が許した範囲より広くなる。',
       ).toBe(false);
     }
+
+    // 規則が1本も載っていないうえで、本セッションと揃えている「道具」はそのまま載る。
+    expect(allowed).toEqual(CLONE_ALLOWED_TOOLS);
 
     await clone.stop();
   });
