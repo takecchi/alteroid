@@ -270,8 +270,24 @@ describe('確認へ上がらずに止められた実行（permissionMode: auto�
     await s.pool.stop();
   }, 15_000);
 
-  it('1件では受信箱を鳴らさない。同じ道具が繰り返し止められたら上げる', async () => {
-    // 拒否は正常な運用でも起きる。全部流すとクローンの判断が雑音で鈍る。
+  it('1件目で受信箱へ上げる。以後は3倍ごとで、止められ続けても受信箱を埋めない（#830）', async () => {
+    // **期待値の反転（Issue #830）。**
+    //
+    // 変更した事実: このテストは元々「**1件では受信箱を鳴らさない**」を固定して
+    // いた（`DENIED_ESCALATE_AT = 3`）。いまは1件目で1通上げる。
+    //
+    // なぜ必要になったか: 3 から数え始める規則は「繰り返されるものが重要だ」と
+    // いう前提に立つが、**拒否の重要度は繰り返し回数と相関しない**。むしろ
+    // 一度きりで取り返しのつかない行為ほど繰り返されないので、規則が
+    // 「重要な拒否ほど黙る」向きに倒れていた。実機で起きた形（2026-09-11）は
+    // 本番昇格を1回試して1回断られたというもので、件数が 1 で止まるため
+    // **永久に上がらなかった** —— この歯が、その欠陥のほうを固定していた。
+    //
+    // なぜ #50 の意図が壊れていないか: #50 が避けたのは「N 件で N 通」であって
+    // 「N 件で最初の1通」ではない。刻み（3倍ごと）は動かしていないので、
+    // 止められ続けている1本が受信箱を埋めることは**いまも起きない**。
+    // **その2つを別々に固定する** —— 下の「4〜8件目では黙る」がそちら側で、
+    // 比例しないことは次の歯（通数が件数に比例しない）が一般の形で見る。
     const s = open();
     const { managerId } = await s.pool.start({ request: 'テストを直して' });
     const session = s.manager.sessions[0];
@@ -279,41 +295,100 @@ describe('確認へ上がらずに止められた実行（permissionMode: auto�
 
     const messages = () => s.inbox.filter((event) => event.type === 'manager_message');
 
+    // **1件目で上げる。** ここが #830 で反転した1段である。
     session.push(liveDenial('Edit', 'toolu_1', { file_path: 'a.tsx' }));
-    await tick();
-    expect(messages()).toHaveLength(0);
-
-    session.push(liveDenial('Edit', 'toolu_2', { file_path: 'b.tsx' }));
-    await tick();
-    expect(messages()).toHaveLength(0);
-
-    // 3件目で1度だけ上げる
-    session.push(liveDenial('Edit', 'toolu_3', { file_path: 'c.tsx' }));
     await tick();
     expect(messages()).toHaveLength(1);
     const first = messages()[0];
     expect(first).toMatchObject({ managerId, kind: 'report' });
     expect(first?.text).toContain('Edit');
-    expect(first?.text).toContain('3 件目');
+    expect(first?.text).toContain('1 件目');
 
-    // 4〜8件目では黙る（止められ続けている1本で受信箱を埋めない）
+    // 2件目では黙る（刻みは3倍のまま）
+    session.push(liveDenial('Edit', 'toolu_2', { file_path: 'b.tsx' }));
+    await tick();
+    expect(messages()).toHaveLength(1);
+
+    // 3件目でもう一度
+    session.push(liveDenial('Edit', 'toolu_3', { file_path: 'c.tsx' }));
+    await tick();
+    expect(messages()).toHaveLength(2);
+    expect(messages()[1]?.text).toContain('3 件目');
+
+    // 4〜8件目では黙る（止められ続けている1本で受信箱を埋めない＝#50 の意図）
     for (const id of ['toolu_4', 'toolu_5', 'toolu_6', 'toolu_7', 'toolu_8']) {
       session.push(liveDenial('Edit', id, { file_path: `${id}.tsx` }));
       await tick();
     }
-    expect(messages()).toHaveLength(1);
+    expect(messages()).toHaveLength(2);
 
     // 9件目でもう一度（3倍ごと）。**黙り続けもしない**
     session.push(liveDenial('Edit', 'toolu_9', { file_path: 'i.tsx' }));
     await tick();
-    expect(messages()).toHaveLength(2);
-    expect(messages()[1]?.text).toContain('9 件目');
+    expect(messages()).toHaveLength(3);
+    expect(messages()[2]?.text).toContain('9 件目');
 
     // 日誌にはこの間の9件が全部残っている
     expect(await deniedLines(s.stores)).toHaveLength(9);
 
     await s.pool.stop();
   }, 15_000);
+
+  /**
+   * **通数が件数に比例しないこと（#830 で入口を 1 へ下げたときの安全弁）。**
+   *
+   * 入口を下げた改修がいちばん壊しやすいのは #50 が避けた形——「N 件拒否されたら
+   * N 通流れる」である。上の歯は 9 件までを1段ずつ名指しで見ているが、**名指しの
+   * 歯は段の数え方を変えただけの改悪を通してしまう**（例: 刻みを 3 倍から 1.2 倍
+   * へ詰めても、9 件目までなら同じ数に見える組み方がありうる）。
+   *
+   * **だからここでは段を1つも名指しせず、「通数 ≪ 件数」だけを見る。** 27 件の
+   * 拒否に対して上がってよいのは `1, 3, 9, 27` の 4 通だけで、これは件数の
+   * 1/6 未満である。刻みを詰めれば通数が増えてここが赤くなり、入口を上げれば
+   * 最初の1通が消えて上の歯が赤くなる——**2つの壊れ方が別々の歯に当たる。**
+   */
+  it('通数は件数に比例しない（27件の拒否で上がるのは4通だけ・#50 の意図）', async () => {
+    const s = open();
+    await s.pool.start({ request: 'テストを直して' });
+    const session = s.manager.sessions[0];
+    if (!session) throw new Error('マネージャーのセッションが無い');
+
+    const messages = () =>
+      s.inbox.filter(
+        (event): event is Extract<InboxEvent, { type: 'manager_message' }> =>
+          event.type === 'manager_message' && event.text.includes('止められた'),
+      );
+
+    const DENIALS = 27;
+    for (let i = 1; i <= DENIALS; i += 1) {
+      session.push(liveDenial('Edit', `toolu_${i}`, { file_path: `f${i}.tsx` }));
+      await tick();
+    }
+
+    // 日誌には全件残る（黙って捨てていないこと。ここが減るなら別の欠陥である）
+    expect(await deniedLines(s.stores)).toHaveLength(DENIALS);
+
+    // **受信箱は `1, 3, 9, 27` の4通だけ。**
+    expect(
+      messages(),
+      `27 件の拒否で上がった通数が 4 でない。` +
+        `刻みが詰まっていれば #50 が避けた「1 件ずつ流す」へ戻っており、` +
+        `4 より少なければ #830 の「一度きりの拒否が黙る」へ戻っている。` +
+        `入口（DENIED_ESCALATE_AT）と刻み（shouldEscalateDenial の 3 倍）は別の判断で、` +
+        `片方だけ触ると壊れる向きが違う（manager.ts の doc）。`,
+    ).toHaveLength(4);
+    expect(messages().map((event) => event.text.match(/(\d+) 件目/)?.[1])).toEqual([
+      '1',
+      '3',
+      '9',
+      '27',
+    ]);
+
+    // **通数は件数に比例しない**という性質そのものを、段の値と独立に見る。
+    expect(messages().length).toBeLessThan(DENIALS / 6);
+
+    await s.pool.stop();
+  }, 30_000);
 
   it('result の記録からも届く。走行中の合図と同じ1件は二度上げない', async () => {
     // SDK 曰く、走行中の合図は best-effort で、authoritative なのは
@@ -353,8 +428,13 @@ describe('確認へ上がらずに止められた実行（permissionMode: auto�
   it('同じ result が二度届いても数え直さない（累積で来ても壊れない）', async () => {
     // `result.permission_denials` が累積かどうかは SDK の型に書かれていない
     // （`modelUsage` には「累積」と明記があるが、こちらには無い）。**どちらでも
-    // 壊れないこと**を固定する — 累積を素直に数えると、3件目の閾値に一度の
-    // 拒否だけで到達して受信箱が鳴る。
+    // 壊れないこと**を固定する — 累積を素直に数えると、一度の拒否だけで件数が
+    // 3 まで伸びて段を余分に踏む。
+    //
+    // **#830 で期待値が 0 通から 1 通へ変わった**（入口が 3 から 1 になったので、
+    // 同じ拒否1件でも最初の1通は上がる）。**それでもこの歯は二重計上を捕まえる**
+    // —— 重複排除が壊れて件数が 1, 2, 3 と伸びれば、段（1 と 3）を2回踏んで
+    // **2通**になる。見ているのは「0 か否か」ではなく「1 を超えないこと」である。
     const s = open();
     await s.pool.start({ request: '調べて' });
     const session = s.manager.sessions[0];
@@ -377,7 +457,9 @@ describe('確認へ上がらずに止められた実行（permissionMode: auto�
       s.inbox.filter(
         (event) => event.type === 'manager_message' && event.text.includes('止められた'),
       ),
-    ).toHaveLength(0);
+      '同じ拒否を二度数えている。累積で届く result を素直に足すと件数が伸び、' +
+        '段（1, 3, 9…）を余分に踏んで通数が増える（tool_use_id による重複排除を見ること）。',
+    ).toHaveLength(1);
 
     await s.pool.stop();
   }, 15_000);
@@ -404,6 +486,26 @@ describe('確認へ上がらずに止められた実行（permissionMode: auto�
     expect((forgotten[0] as { text: string }).text).toContain('Tool0');
     // 拒否そのものは65件すべて日誌に残っている（忘れたのは件数の帳面だけ）
     expect(await deniedLines(s.stores)).toHaveLength(65);
+
+    // **#830 で足した軸: 蓋は「道具の種類」で効く。**
+    //
+    // 入口を 1 へ下げた（`DENIED_ESCALATE_AT`）ので、**種類が違えばそれぞれの
+    // 1件目で1通ずつ上がる** —— ここは件数の軸（同じ道具が繰り返される）とは
+    // 別で、上の「通数は件数に比例しない」歯では捕まらない。65種すべてが
+    // 1件目なので 65 通で、**それ以上には増えない**ことを固定する。
+    //
+    // **これは入口を下げたことで生まれた軸ではない。** 旧い閾値（3）でも、
+    // 65種がそれぞれ3件ずつ拒否されれば同じ 65 通になった——変わったのは
+    // 各種が何件目で鳴るかであって、種類あたりの通数ではない。**その不変を
+    // ここで言う**（次に入口を触る人が、この軸まで動いたと誤読しないように）。
+    const notices = s.inbox.filter(
+      (event) => event.type === 'manager_message' && event.text.includes('止められた'),
+    );
+    expect(
+      notices,
+      '道具の種類ごとに1通を超えている。蓋（DENIED_TOOL_LIMIT）か段の判定が壊れると、' +
+        '同じ種類で何通も鳴って #50 が避けた「1 件ずつ流す」に戻る。',
+    ).toHaveLength(65);
 
     await s.pool.stop();
   }, 20_000);
@@ -1086,25 +1188,31 @@ describe('live / result の到着順（denial-shape.ts 導入）', () => {
       await tick();
     };
 
+    // 1件目で1度だけ上げる（note が毎回1本増えても、この段は変わらない）。
+    // **#830 で段が `3, 9` から `1, 3, 9` になった**が、この歯が見ているのは
+    // 段の値ではなく「note がカウンタに効かないこと」である——効いていれば、
+    // 組ごとに2ずつ増えて段の踏み方が変わる。
     await pushPair('toolu_1', { file_path: 'a.tsx' });
-    expect(messages()).toHaveLength(0);
-    await pushPair('toolu_2', { file_path: 'b.tsx' });
-    expect(messages()).toHaveLength(0);
-
-    // 3件目で1度だけ上げる（note が毎回1本増えても、この段は変わらない）。
-    await pushPair('toolu_3', { file_path: 'c.tsx' });
     expect(messages()).toHaveLength(1);
-    expect(messages()[0]?.text).toContain('3 件目');
+    expect(messages()[0]?.text).toContain('1 件目');
+
+    await pushPair('toolu_2', { file_path: 'b.tsx' });
+    expect(messages()).toHaveLength(1);
+
+    // 3件目でもう一度。
+    await pushPair('toolu_3', { file_path: 'c.tsx' });
+    expect(messages()).toHaveLength(2);
+    expect(messages()[1]?.text).toContain('3 件目');
 
     for (const id of ['toolu_4', 'toolu_5', 'toolu_6', 'toolu_7', 'toolu_8']) {
       await pushPair(id, { file_path: `${id}.tsx` });
     }
-    expect(messages()).toHaveLength(1);
+    expect(messages()).toHaveLength(2);
 
     // 9件目でもう一度（3倍ごと）。
     await pushPair('toolu_9', { file_path: 'i.tsx' });
-    expect(messages()).toHaveLength(2);
-    expect(messages()[1]?.text).toContain('9 件目');
+    expect(messages()).toHaveLength(3);
+    expect(messages()[2]?.text).toContain('9 件目');
 
     // 拒否の行は9本のまま（note は別カウントなので二重計上されない）。
     expect(await deniedLines(s.stores)).toHaveLength(9);

@@ -8303,6 +8303,88 @@ describe('一覧の文言は、観測した分しか言わない', () => {
     expect(reply).not.toContain('止められた道具');
   });
 
+  /**
+   * **Issue #830 — `manager_list` に出ていて `manager_report` に出ていなかった。**
+   *
+   * `denialLine` の呼び出しは `manager_list` と人間の CLI の2箇所だけで、
+   * `manager_report` には1つも無かった。**この道具自身の案内が「まず
+   * manager_report を見ること」と言っている**ので、案内どおりに動いたクローンは
+   * 拒否を1文字も見ないまま「報告がまだ無い」とだけ読んだ。**案内が嘘をついて
+   * いた**（#714 が `lastFailure` で塞いだのと同じ形——人間の面には出て、
+   * クローンの面には渡っていない）。
+   *
+   * 測るのは `lastFailure` / `lastSystemError` の歯と同じ3つ（在る回に出る／
+   * 無い回に1文字も増えない／`part: 'request'` では出さない）に、**報告が空の
+   * 回にも出る**を足したもの——拒否で手が止まった委譲は報告を書かないので、
+   * **そちらが本命の枝である。**
+   */
+  it('manager_report は拒否を出し、字面が manager_list と割れない（#830）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '依頼の本文' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.lastReport = '終わった';
+    h.denied.set('mgr-1', [{ tool: 'Bash', count: 1, actor: 'worker' }]);
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-1' });
+
+    expect(reply).toContain('Bash 1件 [作業者]');
+    expect(reply).toContain('クローンには回ってきていない');
+    // 本文の**上**に置く（`failureNote` / `systemErrorNote` と同じ順）。
+    expect(reply.indexOf('止められた道具')).toBeLessThan(reply.indexOf('終わった'));
+
+    // **字面の生成元が1箇所であること。** 2つの口が別の語で同じ欄を呼ぶと、
+    // 面をまたいで読む人間がそこで詰まる（`describeDenials` の doc）。
+    const list = await h.call('manager_list', {});
+    const line = (text: string) =>
+      text.split('\n').find((row) => row.includes('止められた道具'))?.trim();
+    expect(line(reply)).toBe(line(list));
+  });
+
+  /**
+   * **報告が空の回こそ拒否がいちばん効く（#830 の本命）。**
+   *
+   * 分類器か deny 規則で手が止まった委譲は `running` のまま報告を書かないので、
+   * `manager_report` の「報告はまだ無い」の枝に落ちる。**ここで黙ると、クローンは
+   * 「まだ書いていない」と「番人に止められて書けない」を区別できない。**
+   */
+  it('manager_report は報告が空でも拒否を出す（黙って「まだ無い」で終わらせない・#830）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '依頼の本文' });
+    // **報告を立てない。** 拒否で止まった委譲の形そのもの。
+    h.denied.set('mgr-1', [{ tool: 'Bash', count: 1, actor: 'worker' }]);
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-1' });
+
+    expect(reply).toContain('Bash 1件 [作業者]');
+    expect(reply).toContain('クローンには回ってきていない');
+  });
+
+  it('manager_report は拒否が無ければ1文字も足さない（#830）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '依頼の本文' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.lastReport = '終わった';
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-1' });
+
+    expect(reply).toContain('終わった');
+    expect(reply).not.toContain('止められた道具');
+    expect(reply).not.toContain('クローンには回ってきていない');
+  });
+
+  it('manager_report の part=request では拒否を出さない（依頼文は止められた話ではない・#830）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '依頼の本文' });
+    h.denied.set('mgr-1', [{ tool: 'Bash', count: 1, actor: 'worker' }]);
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-1', part: 'request' });
+
+    expect(reply).toContain('依頼の本文');
+    expect(reply).not.toContain('止められた道具');
+  });
+
   it('拒否の種類が多くても一覧を食い潰さず、切ったことを言う', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
