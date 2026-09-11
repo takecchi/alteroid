@@ -41,6 +41,7 @@ import {
   type RunnerSource,
   type SelfFacts,
   type Stores,
+  type TokenEnsureEnvOutcome,
   type TokenRotationEntry,
   type TokenRotationOutcome,
 } from '@alteroid/core';
@@ -327,8 +328,13 @@ function describeRunner(): string {
  * 割り当てだけで、規則そのものを変える判断はここに持たせない——変えたくなったら
  * 実装せず人間に確認する。
  *
- * `rotated` / `not_rotated` / `restored` / `recovered` は正常（プールが仕事を
- * した、何もしないという判断が付いた、または止まっていた鍵が開いた）。
+ * `rotated` / `not_rotated` / `restored` / `recovered` / `reopened` は正常（プールが
+ * 仕事をした、何もしないという判断が付いた、または止まっていた鍵が開いた）。
+ *
+ * **`reopened`（現役の冷却が明けた。#833）が正常側に居る理由。** 運んでいる事実は
+ * 「止まりが終わった」で、`recovered` と同じ向きである —— **根拠が観測ではなく
+ * 時計だという違いは、標準ストリームの選び方には効かない**（そこは `event` と
+ * 本文が言い分けている）。
  * `exhausted` / `sweep_stopped` / `restore_failed` / `parked` は異常（全層が
  * 止まる・候補を試し切れていない・起動時の撒き直しが失敗した）。詳細は
  * `.claude/skills/token-pool/SKILL.md` の `event` の表。
@@ -351,6 +357,7 @@ export function tokenRotationStream(event: TokenRotationEntry['event']): NodeJS.
     case 'not_rotated':
     case 'restored':
     case 'recovered':
+    case 'reopened':
       return process.stdout;
     case 'exhausted':
     case 'sweep_stopped':
@@ -384,12 +391,13 @@ export function tokenRotationStream(event: TokenRotationEntry['event']): NodeJS.
  * | --- | --- | --- |
  * | `rotated` | **戻った** | いま通る鍵に移った |
  * | `ignored` ＋ `recovered` | **戻った** | 止まっていた現役が、また通ることを観測できた |
+ * | `ignored` ＋ `reopened` | **戻った** | 現役の冷却が明けた（#833。**時計**であって観測ではない） |
  * | `parked` | **まだ** | 撒いた鍵は `cooldownUntil` まで通らない |
  * | それ以外 | **まだ** | 何も変わっていない |
  */
 export function reopenedTokenOf(
   outcome: TokenRotationOutcome,
-): { tokenId: string; label: string; how: '回した' | 'また通るようになった' } | undefined {
+): { tokenId: string; label: string; how: ReopenedHow } | undefined {
   if (outcome.kind === 'rotated') {
     return { tokenId: outcome.toTokenId, label: outcome.toLabel, how: '回した' };
   }
@@ -407,11 +415,43 @@ export function reopenedTokenOf(
       how: 'また通るようになった',
     };
   }
+  /**
+   * **冷却が明けた**（#833）。**`recovered` と同じ扱いで起こす** —— 止まっていた
+   * 層にとって必要なのは「鍵がまた通る」ことであって、それを**誰が**確かめたか
+   * ではない。
+   *
+   * **⚠️ ここを `parked` の側（起こさない）へ倒さないこと。** `parked` を起こさない
+   * 理由は「撒いた鍵は `cooldownUntil` **まで**通らない」だが、こちらはその
+   * `cooldownUntil` を**過ぎた**ときにしか立たない —— 同じ欄を見て、反対側に居る。
+   *
+   * **根拠の弱さ（観測ではなく時計）は `how` に出す。** 起こした後で結局枠なら、
+   * その回の失敗が新しい観測として上がってくるので、判定はそこでやり直せる。
+   */
+  if (outcome.kind === 'ignored' && outcome.reopened !== undefined) {
+    return {
+      tokenId: outcome.reopened.tokenId,
+      label: outcome.reopened.label,
+      how: '冷却が明けた',
+    };
+  }
   return undefined;
 }
 
+/**
+ * **何をもって「通る状態に戻った」と言っているか**（{@link reopenedTokenOf}）。
+ *
+ * **3値を潰さないこと。** 根拠の強さが違い、**読む側が次に確かめるものが違う**:
+ *
+ * | `how` | 根拠 |
+ * | --- | --- |
+ * | `回した` | 別の鍵へ移した（移す前に候補を probe している） |
+ * | `また通るようになった` | **観測**（probe が枠を測った / ターンが実際に成功した） |
+ * | `冷却が明けた` | **時計**（記録した期限を過ぎた。通ることは誰も確かめていない） |
+ */
+type ReopenedHow = '回した' | 'また通るようになった' | '冷却が明けた';
+
 /** {@link reopenedTokenOf} が返す形。{@link describeReopenedTokenNotice} と共有する。 */
-type ReopenedToken = { tokenId: string; label: string; how: '回した' | 'また通るようになった' };
+type ReopenedToken = { tokenId: string; label: string; how: ReopenedHow };
 
 /**
  * **いま配る意味が在るか**（Issue #783）。
@@ -553,6 +593,47 @@ export function describeReopenedTokenNotice(reopened: ReopenedToken, folded: num
  */
 function assertTokenRotationEventHandled(event: never): never {
   throw new Error(`alteroidd: 認証トークンの日誌で未知の event: ${String(event)}`);
+}
+
+/**
+ * **器の環境変数の行を足そうとした結果を、どこへ何と出すか**（#832）。
+ *
+ * ## なぜ切り出してあるか —— 呼び手が2つになったから
+ *
+ * ここは `main()` の中の3行だったが、`pool_changed` の回にも同じことを出す必要が
+ * できた（`token-watch.ts` の `onEnsuredEnvToken`）。**書き写すと、同じ出来事が
+ * 2通りの文面で残る** —— そして片方だけ直す事故が起きる。
+ *
+ * ## 割り当て
+ *
+ * | `kind` | 行き先 | なぜ |
+ * | --- | --- | --- |
+ * | `added` | stdout | 正常。プールへ行を足した |
+ * | `failed` | stderr | 異常 |
+ * | `exists` / `skipped` | **出さない** | 既定の構成では毎回出ることになり、意味のある行が埋もれる |
+ *
+ * **`added` と `failed` を同じ行き先へ潰さないこと**（Issue #420 の残件）。
+ *
+ * @returns 出すものが無ければ `null`。
+ */
+export function ensuredEnvTokenLine(
+  outcome: TokenEnsureEnvOutcome | { kind: 'failed'; why: string },
+): { stream: NodeJS.WritableStream; text: string } | null {
+  if (outcome.kind === 'added') {
+    return { stream: process.stdout, text: `alteroidd: 認証トークン: ${outcome.why}\n` };
+  }
+  if (outcome.kind === 'failed') {
+    return { stream: process.stderr, text: `alteroidd: 認証トークン: ${outcome.why}\n` };
+  }
+  return null;
+}
+
+/** {@link ensuredEnvTokenLine} が決めた行き先へ、実際に1行出す。 */
+function reportEnsuredEnvToken(
+  outcome: TokenEnsureEnvOutcome | { kind: 'failed'; why: string },
+): void {
+  const line = ensuredEnvTokenLine(outcome);
+  if (line !== null) line.stream.write(line.text);
 }
 
 /**
@@ -1140,14 +1221,9 @@ export async function main(): Promise<void> {
     const ensured = await tokenRotator
       .ensureEnvToken()
       .catch((error: unknown) => ({ kind: 'failed' as const, why: String(error) }));
-    // **`added`（正常。プールへ行を足した）と `failed`（異常）を同じ行き先に
-    // 潰さない**（Issue #420 の残件）。`skipped` は黙る——既定の構成では毎回の
-    // 起動で出ることになり、意味のある行が埋もれる。
-    if (ensured.kind === 'added') {
-      process.stdout.write(`alteroidd: 認証トークン: ${ensured.why}\n`);
-    } else if (ensured.kind === 'failed') {
-      process.stderr.write(`alteroidd: 認証トークン: ${ensured.why}\n`);
-    }
+    // 行き先と文面は {@link ensuredEnvTokenLine} が持つ——`pool_changed` の回
+    // （`token-watch.ts` の `onEnsuredEnvToken`）と**同じ1本**を通す（#832）。
+    reportEnsuredEnvToken(ensured);
   }
 
   {
@@ -1450,6 +1526,9 @@ export async function main(): Promise<void> {
   tokenWatch = startTokenRotationWatch({
     rotator: tokenRotator,
     onOutcome: (outcome) => settleTokenOutcome(outcome),
+    // **起動時と同じ1本へ流す**（#832）。`pool_changed`（＝人間が鍵を足した / 外した）
+    // の回に器の環境変数の行が生えたら、その事実を同じ文面で出す。
+    onEnsuredEnvToken: reportEnsuredEnvToken,
   });
 
   /**

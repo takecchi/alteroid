@@ -503,7 +503,12 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     id: z.string(),
     at: isoDateTime,
     /**
-     * 何が起きたか。**7値を潰さないこと。**
+     * 何が起きたか。**潰さないこと。**
+     *
+     * **⚠️ ここに数を書かないこと**（#833 で踏んだ。かつて「7値を潰さないこと」と
+     * 書いてあったが、その時点で既に8値だった）。**数え上げの持ち主は直下の
+     * `z.enum` である**（`AGENTS.md`「他のファイルを出典として指すときは…」と
+     * 同じ理由——数は先に腐り、腐ったことは読む側から分からない）。
      *
      * とくに `not_rotated`（契機ではなかった）と `exhausted`（回そうとしたが
      * 候補が無かった）は**別の事実**である。前者は正常で、後者は全層が止まる。
@@ -528,6 +533,22 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * ある。** `not_rotated` へ潰すと、**「いつ開いたか」が日誌から消える** ——
      * 止まった側（`exhausted` / `parked`）と対になる唯一の行がこれである。
      * **回してはいない**ので `rotated` にも入れない（鍵は1文字も変わっていない）。
+     *
+     * **`reopened`（現役の冷却が明けた）を `recovered` へ潰さないこと**（#833 で
+     * 足した）。**根拠の強さが違う:**
+     *
+     * | `event` | 何を根拠に「通る」と言っているか |
+     * | --- | --- |
+     * | `recovered` | **観測**（probe が枠を測った / ターンが実際に成功した） |
+     * | `reopened` | **時計**（記録した `cooldownUntil` を過ぎた。通ることは誰も確かめていない） |
+     *
+     * 潰すと、**観測していない成功が観測として日誌に残る** ——
+     * `markTokenUsable` の doc が「『たぶん戻ったはず』（冷却が明けた）で呼ぶな」と
+     * 言っているのと同じ穴の、別の入口である。
+     *
+     * **`not_rotated` へも潰さない。** `reopened` が立った回は**止まっていた層を
+     * 起こしている**（`apps/daemon/src/index.ts` の `reopenedTokenOf`）ので、
+     * 「何もしなかった」の側に置くと、起こした回が日誌から消える。
      */
     event: z.enum([
       'rotated',
@@ -538,6 +559,7 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
       'sweep_stopped',
       'parked',
       'recovered',
+      'reopened',
     ]),
     /**
      * 契機（`TokenRotationSignal`）。起動時の撒き直しには無い。

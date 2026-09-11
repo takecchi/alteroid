@@ -653,6 +653,7 @@ export {
   describeTokenRotation,
   tokenRestoreEntry,
   tokenRotationEntry,
+  type TokenEnsureEnvOutcome,
   type TokenProbePort,
   type TokenReconsiderReason,
   type TokenRestoreOutcome,

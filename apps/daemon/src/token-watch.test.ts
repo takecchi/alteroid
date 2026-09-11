@@ -1,6 +1,7 @@
 import type {
   AccountUsageState,
   TokenCandidateVerdict,
+  TokenEnsureEnvOutcome,
   TokenReconsiderReason,
   TokenRotationOutcome,
   TokenRotator,
@@ -25,6 +26,9 @@ interface Fake {
     current?: { verdict: TokenCandidateVerdict; origin: TokenVerdictOrigin };
   }[];
   outcomes: TokenRotationOutcome[];
+  /** `ensureEnvToken` / `reconsider` を呼ばれた順（#832 の順序を測る）。 */
+  order: string[];
+  ensured: TokenEnsureEnvOutcome[];
   /** `reconsider` を待たせる（重なりの検査で使う）。 */
   hold: (gate: Promise<void>) => void;
 }
@@ -32,6 +36,8 @@ interface Fake {
 function fake(): Fake {
   const calls: Fake['calls'] = [];
   const outcomes: TokenRotationOutcome[] = [];
+  const order: string[] = [];
+  const ensured: TokenEnsureEnvOutcome[] = [];
   let gate: Promise<void> | undefined;
   const ignored: TokenRotationOutcome = {
     kind: 'ignored',
@@ -45,16 +51,22 @@ function fake(): Fake {
       current?: { verdict: TokenCandidateVerdict; origin: TokenVerdictOrigin };
     }) => {
       calls.push(input);
+      order.push('reconsider');
       if (gate !== undefined) await gate;
       return ignored;
     },
     restore: () => Promise.resolve({ kind: 'none' as const, why: '' }),
-    ensureEnvToken: () => Promise.resolve({ kind: 'skipped' as const, why: '' }),
+    ensureEnvToken: () => {
+      order.push('ensureEnvToken');
+      return Promise.resolve({ kind: 'added' as const, tokenId: 'tok-env', why: '行を足した' });
+    },
   } satisfies TokenRotator;
   return {
     rotator,
     calls,
     outcomes,
+    order,
+    ensured,
     hold: (next) => {
       gate = next;
     },
@@ -408,5 +420,87 @@ describe('見張り: ターンの成功を2本目の生産者へ渡す（#681 (1
     // 素通りして**通常の回転判定へ落ちる** —— 成功が回す契機に化ける。
     expect(f.calls).toHaveLength(1);
     expect(f.calls.map((call) => call.reason)).toEqual(['startup']);
+  });
+});
+
+/**
+ * **プールが空→1本目になった回に、器の環境変数の行を生やす**（#832）。
+ *
+ * ## なぜこの歯が要るか
+ *
+ * `ensureEnvToken` は**プールが空なら足さない**（受け入れ基準7）。そして呼ばれる
+ * のは起動時の1回だけだった ⟹ **新しい器では永久に生えない**（起動時は必ず空で、
+ * 人間が1本目を登録するのはその後だからである）。
+ *
+ * 生えないと、`reconsider` が現役を特定できない —— あちらは
+ * `active?.tokenId ?? tokens.find(isEnvToken)?.id` で決めるので、**指名も env 行も
+ * 無い器では毎回 `ignored` を返す。** ⟹ 2026-09-07 に足した「記録から回す」安全網
+ * （`stranded`）が、**新規の器では最初から丸ごと落ちている。**
+ *
+ * 実測（2026-09-11、Railway の新しい2器）: どちらも env 行が無く、日誌に
+ * `stranded` の行が1件も無かった。
+ *
+ * ## ⚠️ ここが測るのは「いつ聞くか」だけである
+ *
+ * 足すかどうかを決めるのは `ensureEnvToken` 自身（空なら足さない・環境変数が
+ * 無ければ足さない・行が在れば何もしない）。**判定をここへ書き写さないこと**
+ * ——それがこの見張りの分担そのものである。
+ */
+describe('器の環境変数の行（#832）', () => {
+  it('pool_changed では ensureEnvToken を reconsider より先に通す', async () => {
+    const f = fake();
+    const watch = startTokenRotationWatch({
+      rotator: f.rotator,
+      onOutcome: () => Promise.resolve(),
+      onEnsuredEnvToken: (outcome) => f.ensured.push(outcome),
+      tickMs: 1_000_000,
+      minGapMs: 0,
+    });
+
+    watch.poke('pool_changed');
+    await settle();
+    watch.stop();
+
+    // **順序がこの歯の本体である。** 逆だと、行が足された回の見直しがその行を
+    // 見ないまま終わる（1回ぶん遅れる。`index.ts` の起動時と同じ順序）。
+    expect(f.order).toEqual(['ensureEnvToken', 'reconsider']);
+    expect(f.ensured).toEqual([{ kind: 'added', tokenId: 'tok-env', why: '行を足した' }]);
+  });
+
+  it('他の契機では呼ばない（目盛りで毎分、記憶ストアを余分に読まない）', async () => {
+    const f = fake();
+    const watch = startTokenRotationWatch({
+      rotator: f.rotator,
+      onOutcome: () => Promise.resolve(),
+      onEnsuredEnvToken: (outcome) => f.ensured.push(outcome),
+      tickMs: 1_000_000,
+      minGapMs: 0,
+    });
+
+    // **プールが空でなくなりうるのは人間が書いた回だけである。**
+    for (const reason of ['tick', 'startup', 'runner_connected', 'settings_changed'] as const) {
+      watch.poke(reason);
+      await settle();
+    }
+    watch.stop();
+
+    expect(f.order.filter((step) => step === 'ensureEnvToken')).toEqual([]);
+    expect(f.ensured).toEqual([]);
+  });
+
+  it('報告の口を渡さなくても落ちない（行を足す側は通る）', async () => {
+    const f = fake();
+    const watch = startTokenRotationWatch({
+      rotator: f.rotator,
+      onOutcome: () => Promise.resolve(),
+      tickMs: 1_000_000,
+      minGapMs: 0,
+    });
+
+    watch.poke('pool_changed');
+    await settle();
+    watch.stop();
+
+    expect(f.order).toEqual(['ensureEnvToken', 'reconsider']);
   });
 });
