@@ -1728,6 +1728,72 @@ describe('premise のカードの束ねた蓋（MEMORY_PREMISE_CARD_BUDGET）—
    * **外挿の材料は蓋が噛む前の値から取る**（1件・2件）。`60_000` も
    * 「296,088」も直書きしない——限界費用の実測から導く。
    */
+  /**
+   * ⭐⭐⭐ **予算は1本である。区分ごとに2本持たない。**
+   *
+   * ## 直上の歯だけでは足りなかった（変異で分かったこと）
+   *
+   * 直上の「蓋は indexed のカードにも掛かる」は **`indexed` だけ**を通して
+   * 「`MEMORY_PREMISE_CARD_BUDGET * 2` 未満」を主張する。⟹ **区分ごとに同じ
+   * 予算を1本ずつ持たせる改修（`premise` に 60,000・`indexed` に 60,000）では、
+   * どちらの区分も単独では予算の2倍に届かないので緑のまま通る。**
+   *
+   * 実測（2026-09-11、`main` = `89cb1a9`）: `selectPremiseCards` の呼びを
+   * `premiseParts` と `indexedParts` の2本へ割る変異を当てて、
+   * **`memory.test.ts` ＋ `tools.test.ts` の 869 件すべて生存。**
+   * ⟹ **床が黙って 120,000 文字（= 60,000 × 2）まで伸びる形が、どの歯にも
+   * 引っかからなかった。**
+   *
+   * ## だから混在で測る
+   *
+   * 両方の区分を同時に、**それぞれ単独では予算に届かない量**だけ積む。
+   * ⟹ 予算が1本なら噛み、2本なら噛まない。**噛むこと自体が主張である。**
+   *
+   * **⚠️ この歯が測っていないこと**: どちらの区分が先に落ちるかは測っていない
+   * （実装は大きさだけで決めており、区分では優先しない——`selectPremiseCards`
+   * の doc）。ここが主張するのは「予算を分け合うこと」だけである。
+   */
+  it('⭐⭐⭐ premise と indexed は1つの予算を分け合う（区分ごとに2本持たない）', () => {
+    const capIndexedShared = (index: number): MemoryPart => ({
+      slug: `shared-idx-${String(index).padStart(3, '0')}`,
+      content: [
+        '---',
+        'type: indexed',
+        `description: ${'い'.repeat(MEMORY_PROMPT_INDEXED_DESCRIPTION_BUDGET)}`,
+        '---',
+        '',
+        '## 節\n\n本文\n',
+      ].join('\n'),
+    });
+
+    // 1枚ぶんの限界費用を実測から取る（枚数を直書きしない）。
+    const marginalPremise = measureCardMarginalCost().marginal;
+    const marginalIndexed =
+      renderMemoryDocuments([capIndexedShared(0), capIndexedShared(1)]).length -
+      renderMemoryDocuments([capIndexedShared(0)]).length;
+
+    // **それぞれ単独では予算に届かない枚数**（予算の 0.6 ぶん）。
+    const premiseCount = Math.floor((MEMORY_PREMISE_CARD_BUDGET * 0.6) / marginalPremise);
+    const indexedCount = Math.floor((MEMORY_PREMISE_CARD_BUDGET * 0.6) / marginalIndexed);
+    expect(premiseCount, 'premise の足場が空である').toBeGreaterThan(0);
+    expect(indexedCount, 'indexed の足場が空である').toBeGreaterThan(0);
+
+    const premiseOnly = Array.from({ length: premiseCount }, (_, i) => capPremise(i));
+    const indexedOnly = Array.from({ length: indexedCount }, (_, i) => capIndexedShared(i));
+
+    // 前提: **単独では噛まない**（＝この足場が「2本の予算」でも通る量である）。
+    expect(renderMemoryDocuments(premiseOnly)).not.toContain(DEMOTION_NOTE_HEAD);
+    expect(renderMemoryDocuments(indexedOnly)).not.toContain(DEMOTION_NOTE_HEAD);
+
+    // 混ぜると噛む——予算が1本だからである（2本なら噛まない）。
+    const mixed = renderMemoryDocuments([...premiseOnly, ...indexedOnly]);
+    expect(mixed).toContain(DEMOTION_NOTE_HEAD);
+
+    // そして総量は予算1本ぶん（＋断り書き）に収まる。
+    const note = mixed.slice(mixed.indexOf(DEMOTION_NOTE_HEAD));
+    expect(mixed.length).toBeLessThan(MEMORY_PREMISE_CARD_BUDGET + note.length);
+  });
+
   it('⭐⭐⭐ 穴の実在: 蓋が無ければ、束ねたカードは文書数に比例して予算を桁で超える', () => {
     const { one, two, marginal } = measureCardMarginalCost();
     // 前提: この2件は束ねた蓋に掛かっていない（＝外挿の材料が「蓋が効く前」の値）。
