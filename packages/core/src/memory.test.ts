@@ -814,8 +814,13 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
   });
 
   it('切ったら言う: 目次を件数で切ったら、切った件数が出力に現れる', () => {
+    // **freshness は absent を使う（#821 以降の約束）。** ここで測りたいのは
+    // 件数の蓋であって鮮度ではない——absent なら印が空文字になり、
+    // 鮮度の印を足す前の（1行の長さが description だけで決まる）行を保てる。
+    // fresh 等を使うと印の文字数ぶん1行が伸び、この it() が固定している
+    // 件数（300／5）が崩れる。
     const docs = Array.from({ length: MEMORY_TOC_ENTRY_LIMIT + 5 }, (_, index) =>
-      fact(`fact-${index}`, { description: `要旨${index}`, freshness: { kind: 'fresh' } }),
+      fact(`fact-${index}`, { description: `要旨${index}`, freshness: { kind: 'absent' } }),
     );
     const rendered = renderMemoryDocuments(docs);
     expect(rendered).toContain('…ほか 5 件は目次から省略');
@@ -839,10 +844,12 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
    * **値は `MEMORY_TOC_ENTRY_LIMIT` を書き写さず参照する**（依頼者の門）。
    */
   it('⭐ 部分だけを描く呼び手の下では、省略行が「記憶の全体ではなく、今回載せた分だけ」と明言する', () => {
+    // freshness は absent（件数の蓋を測るための行の長さを、鮮度の印の分だけ
+    // 伸ばさないため。上の it() と同じ理由、#821）。
     const docs = Array.from({ length: MEMORY_TOC_ENTRY_LIMIT + 5 }, (_, index) =>
-      fact(`fact-${index}`, { description: `要旨${index}`, freshness: { kind: 'fresh' } }),
+      fact(`fact-${index}`, { description: `要旨${index}`, freshness: { kind: 'absent' } }),
     );
-    const outsideDoc = fact('outside-doc', { description: '外', freshness: { kind: 'fresh' } });
+    const outsideDoc = fact('outside-doc', { description: '外', freshness: { kind: 'absent' } });
     const rendered = renderMemoryDocuments(docs, { presentInMemory: [...docs, outsideDoc] });
 
     expect(rendered).toContain(
@@ -859,8 +866,9 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
    * `presentInMemory` の「有無」ではなく「覆えているか」であることの直接の歯。
    */
   it('presentInMemory を渡していても、この描画が記憶の全体を覆っていれば従来どおりの文言のまま', () => {
+    // freshness は absent（同上の理由、#821）。
     const docs = Array.from({ length: MEMORY_TOC_ENTRY_LIMIT + 5 }, (_, index) =>
-      fact(`fact-${index}`, { description: `要旨${index}`, freshness: { kind: 'fresh' } }),
+      fact(`fact-${index}`, { description: `要旨${index}`, freshness: { kind: 'absent' } }),
     );
     const rendered = renderMemoryDocuments(docs, { presentInMemory: docs });
 
@@ -886,10 +894,14 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
    */
   describe('目次の蓋: 件数のみ／文字数のみ／両方を、非自明な入力で作り分ける', () => {
     it('件数のみで切れる（305件・短い要旨——文字数の予算にはまだ余裕がある）', () => {
+      // freshness は absent（鮮度の印の分だけ1行が伸びると、この it() が
+      // 前提にしている「300件ぶんの短い要旨は文字数の予算に収まる」が崩れる。
+      // #821 以降、fresh も印を持つため、この it() の関心（件数の蓋）とは
+      // 無関係な理由で分岐が変わってしまう）。
       const docs = Array.from({ length: MEMORY_TOC_ENTRY_LIMIT + 5 }, (_, i) =>
         fact(`fact-${String(i).padStart(3, '0')}`, {
           description: 'x'.repeat(10),
-          freshness: { kind: 'fresh' },
+          freshness: { kind: 'absent' },
         }),
       );
       const rendered = renderMemoryDocuments(docs);
@@ -1029,11 +1041,16 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
    * 目次の蓋（`MEMORY_TOC_CHAR_BUDGET`）を測るための1件。**要旨は1行の上限
    * ちょうど**（`MEMORY_TOC_LINE_LIMIT`）——1行が運ぶ量を最大にした、蓋が
    * 確実に噛む形である。
+   *
+   * **freshness は absent（#821 以降の約束）。** ここで測りたいのは文字数の
+   * 蓋の算術であって鮮度ではない——`fresh` を使うと鮮度の印の文字数ぶん
+   * 1行が伸び、この関数が使う下の2つの it()（測る側とその外挿）の数値が
+   * 鮮度の印の実装に引きずられて動いてしまう。
    */
   const tocCapFact = (index: number) =>
     fact(`fact-${String(index).padStart(3, '0')}`, {
       description: 'あ'.repeat(MEMORY_TOC_LINE_LIMIT),
-      freshness: { kind: 'fresh' },
+      freshness: { kind: 'absent' },
     });
 
   /**
@@ -1380,10 +1397,12 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
       fact('orphan', { description: '説明', freshness: { kind: 'fresh' }, parent: 'not-exist' }),
     ];
     const rendered = renderMemoryDocuments(docs);
+    // #821 以降、fresh も「要旨の後に本文は動いていない」という印を持つ
+    // （常に何か言う設計。旧来の「fresh は印なし」ではなくなった）。
     expect(rendered).toBe(
       '<!-- memory: index -->\n' +
         '## 記憶の目次（fact。本文は memory_read で開く。階層はインデントで表す）\n' +
-        '- orphan: orphan — 説明［親 not-exist が見つからない］',
+        '- orphan: orphan — 要旨の後に本文は動いていない: 説明［親 not-exist が見つからない］',
     );
   });
 
