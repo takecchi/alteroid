@@ -2493,6 +2493,252 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
         expect(family).not.toContain('memory_list');
       });
     });
+
+    /**
+     * `q`（見出しの絞り込み）と `offset`（窓をずらす）——中央（どちらの端からも
+     * 予算の外に出る節）へ届く2つの口。#（依頼の）本文にある通り、以下を固定する:
+     *
+     * 1. `q` も `offset` も渡さないとき、出力は1文字も変わらない
+     * 2. `q` の一致0件と、一致はあるが予算で切れた場合は別の文言
+     * 3. `offset` を窓の大きさぶんずつ進めれば、全節が有限回で出る
+     * 4. `q` に正規表現のメタ文字を渡しても壊れない
+     */
+    describe('q（見出しの絞り込み）と offset（窓をずらす）', () => {
+      it('⭐ q も offset も渡さないとき、出力は1文字も変わらない（オプション形・省略の両方）', () => {
+        const sections = scanMemorySections(flood(400)).sections;
+
+        const bare = renderMemoryOutline(sections);
+        const emptyOptions = renderMemoryOutline(sections, {});
+        const explicitHead = renderMemoryOutline(sections, { side: 'head' });
+        const stringForm = renderMemoryOutline(sections, 'head');
+
+        expect(emptyOptions).toBe(bare);
+        expect(explicitHead).toBe(bare);
+        expect(stringForm).toBe(bare);
+      });
+
+      it('q が見出しに1つも一致しないとき、一致0件だと明示する（予算で切れたのとは違う文言）', () => {
+        const sections = scanMemorySections('# 見出しA\n本文\n\n# 見出しB\n本文\n').sections;
+
+        const outline = renderMemoryOutline(sections, { q: 'ぜったい出てこない文字列XYZ' });
+
+        expect(outline).toContain('一致0件');
+        expect(outline).toContain('全 2 節を検索した');
+        // 「予算で切れた」側（一致はあるが載せきれなかった場合）の言い回しと
+        // 混ざっていないこと——一致0件は「一致そのものが無い」であって
+        // 「予算が足りない」ではない。
+        expect(outline).not.toContain('予算で省略');
+        expect(outline).not.toContain('全件を載せた');
+      });
+
+      it('q は大文字小文字を区別しない部分一致で見出しを絞り込む', () => {
+        const sections = scanMemorySections(
+          '# Alpha Section\n本文\n\n# beta section\n本文\n\n# gamma\n本文\n',
+        ).sections;
+
+        const outline = renderMemoryOutline(sections, { q: 'SECTION' });
+
+        expect(outline).toContain('Alpha Section');
+        expect(outline).toContain('beta section');
+        expect(outline).not.toContain('gamma');
+        expect(outline).toContain('全 3 節のうち 2 節が一致した');
+      });
+
+      it('q に一致はあるが全件が予算に収まるとき「全件を載せた」と言い、一致0件とは違う文言になる', () => {
+        const sections = scanMemorySections('# Alpha\n本文\n\n# Beta\n本文\n').sections;
+
+        const outline = renderMemoryOutline(sections, { q: 'Alpha' });
+
+        expect(outline).toContain('全 2 節のうち 1 節が一致した');
+        expect(outline).toContain('全件を載せた');
+        expect(outline).not.toContain('一致0件');
+      });
+
+      it('⭐ q に一致した節が予算で切れたとき、一致0件とは別の文言で「予算で省略」と言う', () => {
+        // 見出しに共通の合言葉を持つ節を大量に作り、予算を超えさせる。
+        const many = Array.from(
+          { length: 400 },
+          (_, index) => `## マッチ対象-${index}\n${'あ'.repeat(50)}${index}\n`,
+        ).join('\n');
+        const sections = scanMemorySections(many).sections;
+
+        const outline = renderMemoryOutline(sections, { q: 'マッチ対象' });
+
+        expect(outline).toContain('全 400 節のうち 400 節が一致した');
+        expect(outline).toContain('予算で省略');
+        expect(outline).not.toContain('一致0件');
+        expect(outline).not.toContain('全件を載せた');
+      });
+
+      it('q は side と併用でき、絞り込んだ結果を末尾から詰められる', () => {
+        const many = Array.from(
+          { length: 400 },
+          (_, index) => `## マッチ対象-${index}\n${'あ'.repeat(50)}${index}\n`,
+        ).join('\n');
+        const sections = scanMemorySections(many).sections;
+        const first = sections[0]!;
+        const last = sections[sections.length - 1]!;
+
+        const headOutline = renderMemoryOutline(sections, { q: 'マッチ対象', side: 'head' });
+        const tailOutline = renderMemoryOutline(sections, { q: 'マッチ対象', side: 'tail' });
+
+        expect(headOutline).toContain(first.id);
+        expect(headOutline).not.toContain(last.id);
+        expect(tailOutline).toContain(last.id);
+        expect(tailOutline).not.toContain(first.id);
+      });
+
+      /**
+       * ⚠️ `q` はメタ文字を正規表現として解釈してはいけない——`String.includes`
+       * にそのまま渡すので、`.` `*` `[` `(` `\` のようなメタ文字を含んでいても
+       * 文字どおりの並びとしてしか一致しない。壊れる（例外を投げる／意図しない
+       * 大量一致をする）ことがないことを固定する。
+       */
+      it.each(['.', '*', '[', '(', '\\', '(a', '[a-z]', 'a.b', 'a*b', 'a\\b'])(
+        '⭐ q=%s のような正規表現のメタ文字を渡しても壊れない',
+        (needle) => {
+          const sections = scanMemorySections('# 見出しA\n本文\n\n# 見出しB\n本文\n').sections;
+
+          expect(() => renderMemoryOutline(sections, { q: needle })).not.toThrow();
+          // 見出しにそのメタ文字が literal に含まれていない限り一致しない。
+          expect(renderMemoryOutline(sections, { q: needle })).toContain('一致0件');
+        },
+      );
+
+      it('q のメタ文字が見出しに literal に含まれていれば、その並びとして一致する', () => {
+        const sections = scanMemorySections('# a.b special\n本文\n\n# axb other\n本文\n').sections;
+
+        // 正規表現なら `.` は任意の1文字に一致して両方拾ってしまうが、
+        // literal な部分一致なら "a.b" は最初の見出しにしか一致しない。
+        const outline = renderMemoryOutline(sections, { q: 'a.b' });
+
+        expect(outline).toContain('全 2 節のうち 1 節が一致した');
+        expect(outline).toContain('a.b special');
+        expect(outline).not.toContain('axb other');
+      });
+
+      it('offset は先頭から N 節を飛ばしてから予算を埋める', () => {
+        const sections = scanMemorySections(flood(10)).sections;
+
+        const fromStart = renderMemoryOutline(sections, { offset: 0 });
+        const fromThree = renderMemoryOutline(sections, { offset: 3 });
+
+        expect(fromStart).toContain(sections[0]!.id);
+        expect(fromThree).not.toContain(sections[0]!.id);
+        expect(fromThree).not.toContain(sections[1]!.id);
+        expect(fromThree).not.toContain(sections[2]!.id);
+        expect(fromThree).toContain(sections[3]!.id);
+      });
+
+      it('offset は範囲外（節数以上）なら黙って空を返さず、明示して断る', () => {
+        const sections = scanMemorySections('# A\n本文\n\n# B\n本文\n').sections;
+
+        const outline = renderMemoryOutline(sections, { offset: 5 });
+
+        expect(outline).toContain('offset=5');
+        expect(outline).toContain('節は無い');
+        expect(outline).toContain('全 2 節');
+      });
+
+      /**
+       * ⚠️ 境界値（`offset === 節数`）を単独で固定する。**節数より大きい値
+       * （直上の歯）だけでは、`offset >= pool.length` を `offset > pool.length`
+       * に弱めるオフバイワンを検出できない**——直上の歯は `offset=5` を
+       * 「節数2より大きい」でしか使っておらず、`>` でも `>=` でも同じく
+       * 拒まれるので通ってしまう。ちょうど境界（節数と同じ値）を別に
+       * 固定することで、この2つの演算子を区別する。
+       */
+      it('offset はちょうど節数と同じ値でも範囲外として断る（境界値。節数より大きい値だけでは区別できない）', () => {
+        const sections = scanMemorySections('# A\n本文\n\n# B\n本文\n').sections;
+
+        const outline = renderMemoryOutline(sections, { offset: 2 });
+
+        expect(outline).toContain('offset=2');
+        expect(outline).toContain('節は無い');
+        expect(outline).toContain('全 2 節');
+      });
+
+      it('offset は続きの offset の値そのものと、いま何節目から何節目までかを言う', () => {
+        const sections = scanMemorySections(flood(400)).sections;
+
+        const outline = renderMemoryOutline(sections, { offset: 0 });
+
+        expect(outline).toMatch(/1〜\d+ 節目 \/ 全 400 節のうち \d+ 節を出した。/);
+        expect(outline).toMatch(/続きが在る。次は offset=\d+ で呼ぶこと/);
+      });
+
+      it('offset が最後まで届くと「続きは無い」と言う', () => {
+        const sections = scanMemorySections('# A\n本文\n\n# B\n本文\n').sections;
+
+        const outline = renderMemoryOutline(sections, { offset: 1 });
+
+        expect(outline).toContain('続きは無い（最後まで出した）');
+      });
+
+      /**
+       * ⭐⭐ **「到達できなくなったものが0件である」ことの根拠。**
+       *
+       * 大きな文書（予算を確実に超える）を合成し、`offset` を「前の呼び出しが
+       * 返した次の offset」ぶんずつ進めて machine的に全節を読み切る。**出た
+       * 節id の集合が、文書が持つ全節id の集合と一致すること**を assert する
+       * ——これが「offset を窓の大きさぶんずつ進めれば、どんなに大きい文書
+       * でも有限回の呼び出しで全節を出せる」の直接の証拠である。
+       */
+      it('⭐⭐ offset を窓の大きさぶんずつ進めれば、有限回の呼び出しで全節id が出る（到達漏れ0件の根拠）', () => {
+        const sections = scanMemorySections(flood(2000)).sections;
+        const allIds = new Set(sections.map((section) => section.id));
+
+        const seenIds = new Set<string>();
+        let offset = 0;
+        let iterations = 0;
+        const MAX_ITERATIONS = 2000; // 有限回であることの安全弁（無限ループの検出）。
+
+        for (;;) {
+          iterations += 1;
+          if (iterations > MAX_ITERATIONS) {
+            throw new Error(`offset を進めても終わらない（${MAX_ITERATIONS} 回で打ち切り）`);
+          }
+          const outline = renderMemoryOutline(sections, { offset });
+          for (const match of outline.matchAll(/\[([0-9a-f]{8}-[0-9a-f]{8})\]/g)) {
+            seenIds.add(match[1] as string);
+          }
+          const more = /続きが在る。次は offset=(\d+) で呼ぶこと/.exec(outline);
+          if (!more) break;
+          offset = Number(more[1]);
+        }
+
+        expect(seenIds).toEqual(allIds);
+        // 有限回であること自体も測る（2,000節を1回の窓（数十節程度）で舐めるので、
+        // 反復回数は節数よりずっと少ないはずである）。
+        expect(iterations).toBeLessThan(sections.length);
+      });
+
+      it('offset は side を見ない（渡しても既定の先頭からの詰め方のまま）', () => {
+        const sections = scanMemorySections(flood(10)).sections;
+
+        const withoutSide = renderMemoryOutline(sections, { offset: 2 });
+        const withTailSide = renderMemoryOutline(sections, { offset: 2, side: 'tail' });
+
+        expect(withoutSide).toBe(withTailSide);
+      });
+
+      it('q と offset は併用でき、offset は絞り込んだ結果に対して窓を開く', () => {
+        const many = Array.from(
+          { length: 20 },
+          (_, index) =>
+            `## マッチ対象-${index}\n${'あ'.repeat(10)}${index}\n\n## 無関係-${index}\n本文\n`,
+        ).join('\n');
+        const sections = scanMemorySections(many).sections;
+        const matched = sections.filter((section) => section.heading.includes('マッチ対象'));
+
+        const outline = renderMemoryOutline(sections, { q: 'マッチ対象', offset: 0 });
+
+        expect(outline).toContain('全 40 節のうち 20 節が一致した');
+        expect(outline).toContain(matched[0]!.id);
+        // 絞り込み後の母数（20）に対する窓であって、全体（40）に対する窓ではない。
+        expect(outline).toMatch(/絞り込み後 20 節のうち \d+ 節を出した。/);
+      });
+    });
   });
 });
 
@@ -3727,7 +3973,26 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     expect(rendered.length).toBeLessThan(renderMemoryDocuments([after]).length / 5);
   });
 
-  it('⭐ 要旨だけを直したときも、変わった範囲だけが載る', () => {
+  /**
+   * ⚠️ **この歯は反転させた**（本番の実測、2026-09-11。`renderPremiseDelta` の
+   * doc「『いまは無い行』は一枚岩ではない」を見ること）。
+   *
+   * 旧い実装は「消えた行（節かどうかを問わない）」を1つの数として名乗って
+   * いた——ここでは要旨の行（節ではない）が1行消えるので、旧い実装は
+   * 「いまは無い行: 1 行」と言っていた。**しかしこれは何も失われていない**
+   * ——要旨の行は書き換わっただけで、その新しい版は `added` 側に既に載って
+   * いる（`toContain('要旨: 直した要旨')` の行そのもの）。旧い文言は
+   * 「節が消えたか、書き換わって別の行になったか」としか言わず、要旨の
+   * ような**節ではない行**まで同じ扱いにしていた。
+   *
+   * 直した実装は、消えた行のうち**節の行（`[節id] 見出し — N 文字` の形）
+   * だけ**を「押し出された／消えた・書き換わった／判定できない」に分ける。
+   * 要旨の行はこの形に一致しないので `other` に落ち、**「消えた」とは
+   * 名乗らない**——ここでは節を1つも変えていないので、新しい歯は
+   * 「いまは無い行」系の文言が1文字も出ないことを確かめる（旧い歯が
+   * 期待していた `'いまは無い行: 1 行'` とは逆の期待値である）。
+   */
+  it('⭐ 要旨だけを直したときは、変わった範囲だけが載り、「消えた節」は1文字も名乗らない（要旨の行は節ではない）', () => {
     const before: MemoryPart = { slug: 'doc', content: manySections(60) };
     const after: MemoryPart = {
       slug: 'doc',
@@ -3744,8 +4009,175 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     // 変わっていない行数を名乗る（黙って省かない）。
     expect(rendered).toContain('行は変わっていないので載せていない');
     expect(rendered).toContain('<!-- memory: doc.md（カードの変わった範囲だけ） -->');
-    // 「前の版に在っていまは無い行」＝古い要旨の行が1行あることも名乗る。
-    expect(rendered).toContain('いまは無い行: 1 行');
+    // 要旨の行（節ではない）が書き換わっただけなので、「消えた節」系の文言は
+    // 1文字も出ない——起きていないことを起きたかのように書かない。
+    expect(rendered).not.toContain('いまは無い');
+    expect(rendered).not.toContain('押し出された節');
+    expect(rendered).not.toContain('判定できない節');
+  });
+
+  /**
+   * ⭐⭐ 変更3: 押し出された節（甲）・消えたか書き換わった節（乙）・
+   * 判定できない節（丙）を分けて名乗る（本番の実測、2026-09-11。
+   * `renderPremiseDelta` の doc「⚠️『いまは無い行』は一枚岩ではない」を
+   * 見ること）。
+   */
+  describe('消えた節を「押し出された／消えた・書き換わった／判定できない」に分ける', () => {
+    it('⭐⭐ 押し出された節（甲）は、いまの節id 付きで名指しされ、節自体は文書に在ることが確かめられる', () => {
+      // 主リスト（MEMORY_PROMPT_OUTLINE_BUDGET）・末尾の名指し窓
+      // （MEMORY_PROMPT_OMITTED_TAIL_BUDGET）のどちらの予算も確実に超える数。
+      const BASE_COUNT = 220;
+      const baseBody = Array.from(
+        { length: BASE_COUNT },
+        (_, i) => `## 節${i}\n節${i}の本文である。`,
+      ).join('\n');
+      // ⚠️ `before.content` は末尾に改行を1つ明示的に持たせる。**理由**:
+      // `scanMemorySections` は「文書の絶対末尾で閉じる最後の節」だけ、次の
+      // 見出しの前で閉じる節と違って末尾の改行を body に含めない（この非対称は
+      // 既存の仕様——`memorySectionId` 周りの歯「末尾の空行まで一致させる」を
+      // 見ること）。そのため、末尾に改行が無い `before` の最後の節（節219）へ
+      // 単純に `\n${appendedBody}` を継ぎ足すと、その節が「文書の絶対末尾」で
+      // なくなることで**改行の含み方が変わり、見出し・本文を1文字も変えて
+      // いないのに id そのものが変わってしまう**（本文が変わって古くなった、
+      // という意味での「押し出された」ではなく、この合成データ特有の継ぎ目の
+      // アーティファクトである）。`before.content` 側に先に改行を持たせ、
+      // `after.content` は単純連結（余分な区切りを足さない）にすることで、
+      // 節219の body スライスが前後で1バイトも変わらないようにしてある。
+      const before: MemoryPart = {
+        slug: 'doc',
+        content: `---\ntype: premise\ndescription: 前提の要旨\n---\n${baseBody}\n`,
+      };
+      // after: 既存の節は1文字も変えず、末尾へさらに節を積む
+      // ——`memory_append` と同じ形（末尾への追記）。
+      const appendedBody = Array.from(
+        { length: 80 },
+        (_, i) => `## 追記節${i}\n追記節${i}の本文である。`,
+      ).join('\n');
+      const after: MemoryPart = { slug: 'doc', content: `${before.content}${appendedBody}` };
+
+      const idPattern = /\[([0-9a-f]{8}-[0-9a-f]{8})\]/g;
+      const idsIn = (text: string): Set<string> =>
+        new Set([...text.matchAll(idPattern)].map((match) => match[1] as string));
+
+      // 「前は見えていたが、いまは見えない」節id の集合を、実装を経由せず
+      // 自分で計算する（delta を使わない、素の全文カードどうしの比較）。
+      const idsVisibleBefore = idsIn(renderMemoryDocuments([before]));
+      const idsVisibleAfterAlone = idsIn(renderMemoryDocuments([after]));
+      const vanished = [...idsVisibleBefore].filter((id) => !idsVisibleAfterAlone.has(id));
+
+      // 前提: この合成コーパスで実際に「前は見えていたが、いまは見えない」
+      // 節が生まれていること（そうでなければこの歯は何も測っていない）。
+      expect(vanished.length).toBeGreaterThan(0);
+
+      // 押し出されただけで、節自体はいまの文書にまだ在る。
+      const currentSections = scanMemorySections(after.content).sections;
+      for (const id of vanished) {
+        expect(currentSections.some((section) => section.id === id)).toBe(true);
+      }
+
+      const rendered = renderMemoryDocuments([after], {
+        seenContent: new Map([[after.slug, before.content]]),
+      });
+
+      expect(rendered).toContain(`押し出された節: ${vanished.length} 節`);
+      expect(rendered).toContain('節そのものは文書に在る');
+      // 消えたか書き換わった・判定できない、は0件のはず（今回は追記だけで
+      // 既存の節を1文字も変えていないので、見出しの衝突も消滅も起きない）。
+      expect(rendered).not.toContain('いまは無い節');
+      expect(rendered).not.toContain('判定できない節');
+      // 実際に、計算した節id のうち少なくとも1つが名指しの中に現れる
+      // （予算で全件は載らないことがあるので「少なくとも1つ」で見る）。
+      const idsInRendered = idsIn(rendered);
+      expect(vanished.some((id) => idsInRendered.has(id))).toBe(true);
+    });
+
+    it('見出しが本文と一緒に変わっただけの通常の更新は「押し出された」と名乗らない（同じ節がまだ見えている）', () => {
+      // 小さい文書——予算に確実に収まるので、本文を変えても見た目の
+      // 「見える/見えない」は変わらない。ただの更新である。
+      const before: MemoryPart = {
+        slug: 'doc',
+        content: '---\ntype: premise\ndescription: 要旨\n---\n## 節A\n元の本文\n\n## 節B\n本文B\n',
+      };
+      const after: MemoryPart = {
+        slug: 'doc',
+        content:
+          '---\ntype: premise\ndescription: 要旨\n---\n## 節A\n書き換えた本文\n\n## 節B\n本文B\n',
+      };
+
+      const rendered = renderMemoryDocuments([after], {
+        seenContent: new Map([[after.slug, before.content]]),
+      });
+
+      // 節Aの新しい行はカードに現に載っている（＝押し出されてなどいない）。
+      const afterSection = scanMemorySections(after.content).sections.find(
+        (section) => section.heading === '## 節A',
+      )!;
+      expect(rendered).toContain(afterSection.id);
+      expect(rendered).not.toContain('押し出された節');
+      expect(rendered).not.toContain('いまは無い節');
+      expect(rendered).not.toContain('判定できない節');
+    });
+
+    it('見出しごと消された・書き換わった節は「消えたか書き換わった」（乙）と名乗る', () => {
+      const before: MemoryPart = { slug: 'doc', content: manySections(60) };
+      const after: MemoryPart = {
+        slug: 'doc',
+        content: manySections(60)
+          .split('\n')
+          .filter((line) => line !== '## 節30' && line !== '節30の本文である。')
+          .join('\n'),
+      };
+
+      // 前提: 節30 の見出しはいまの文書のどこにも無い。
+      expect(scanMemorySections(after.content).sections.some((s) => s.heading === '## 節30')).toBe(
+        false,
+      );
+
+      const rendered = renderMemoryDocuments([after], {
+        seenContent: new Map([[after.slug, before.content]]),
+      });
+
+      expect(rendered).toContain('いまは無い節: 1 節');
+      expect(rendered).toContain('どの節の見出しとも一致しない');
+      expect(rendered).not.toContain('押し出された節');
+      expect(rendered).not.toContain('判定できない節');
+    });
+
+    it('見出しが重複していて、どの節に対応するか決められないときは「判定できない」（丙）と名乗る（3つ目の状態を潰さない）', () => {
+      // ⚠️ 変更した節（1つ）に対して、**変わっていない節を大量に添える**
+      // （`manySections` の60節）。理由: `renderPremiseDelta` は `added` が
+      // カード全体に占める割合が `MEMORY_DELTA_MAX_RATIO`（0.5）を超えたら
+      // 差分そのものを諦め、カード全体を返す（差分にする価値が無いという
+      // 判断）。この fixture をごく小さいまま（節2つ）にすると、書き換えで
+      // 増えた行がカードの過半を占めてしまい、**差分機構そのものが働かず**
+      // 「判定できない節」の文言を検査する前提が崩れる（実測で踏んだ）。
+      // 変わらない節を十分に積むことで、比率をこの歯が測りたい経路
+      // （差分が実際に描かれる経路）に載せている。
+      const before: MemoryPart = {
+        slug: 'doc',
+        content: manySections(60, '\n\n## 重複見出し\n本文A\n'),
+      };
+      const after: MemoryPart = {
+        slug: 'doc',
+        // 節Aの本文を変え（＝旧い行を消す）、かつ同じ見出しをもう1つ足す
+        // ——いまの文書に「重複見出し」が2つ在る状態を作る。
+        content: manySections(60, '\n\n## 重複見出し\n本文A書き換え\n\n## 重複見出し\n本文C\n'),
+      };
+
+      const currentHeadingCount = scanMemorySections(after.content).sections.filter(
+        (s) => s.heading === '## 重複見出し',
+      ).length;
+      expect(currentHeadingCount).toBe(2); // 前提の確認。
+
+      const rendered = renderMemoryDocuments([after], {
+        seenContent: new Map([[after.slug, before.content]]),
+      });
+
+      expect(rendered).toContain('判定できない節: 1 節');
+      expect(rendered).toContain('同じ見出しがいまの文書に複数在るため');
+      expect(rendered).not.toContain('押し出された節');
+      expect(rendered).not.toContain('いまは無い節');
+    });
   });
 
   it('⭐ 大半が変わったときは差分にせずカード全体を載せる（「変わった範囲だけ」と名乗らない）', () => {

@@ -87,32 +87,89 @@ export interface ListingBudget {
 }
 
 /**
+ * `renderListing` / `renderListingFromEnd` が積んだ結果の生の形（文言を組む前）。
+ *
+ * **これを公開してあるのは、断り書きの文面を呼び手側で独自に組みたい場面が
+ * あるからである**（`memory.ts` の `memory_outline` の `q`/`offset` がそれ——
+ * 「全 N 節のうち M 節が一致、そのうち K 節を載せた」のような、`omitted`
+ * コールバック1つでは表せない文面が要る）。**ループの実体はここ1つだけに
+ * 置く**（`renderListing` の doc にある「一覧ごとに手で書かない」を、
+ * この道具自身の内部でも守る）。
+ */
+export interface ListingFill {
+  /** 実際に積んだ行（並びは元のまま。`fromEnd` でも反転しない）。 */
+  lines: string[];
+  /** 積んだ件数。 */
+  shown: number;
+  /** 積めなかった件数。 */
+  rest: number;
+  /** 渡された全件数。 */
+  total: number;
+}
+
+/**
+ * 予算に入るところまで `items` を積む（文言は組まない。断り書きは呼び手が組む）。
+ *
+ * **1件だけで予算を超える場合は、その1件を `excerpt` で切る。** 落とすと
+ * 「何も出ない一覧」になり、丸ごと出すと予算そのものが意味を失う——どちらも
+ * 「上限がある」と言えなくなる。切った跡は `excerpt` が付ける。
+ *
+ * `fromEnd` が真なら末尾から詰める（`renderListingFromEnd` と同じ向き）。
+ */
+export function fillListingBudget(
+  items: readonly string[],
+  budget: number,
+  fromEnd = false,
+): ListingFill {
+  const lines: string[] = [];
+  let used = 0;
+  if (fromEnd) {
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      const item = items[index]!;
+      if (lines.length === 0) {
+        // 末尾の1件は必ず出す。ただし予算を超えるなら切って出す。
+        const tail = item.length > budget ? excerpt(item, budget) : item;
+        lines.unshift(tail);
+        used += tail.length;
+        continue;
+      }
+      if (used + item.length > budget) break;
+      lines.unshift(item);
+      used += item.length;
+    }
+  } else {
+    for (const item of items) {
+      if (lines.length === 0) {
+        // 先頭の1件は必ず出す。ただし予算を超えるなら切って出す。
+        const head = item.length > budget ? excerpt(item, budget) : item;
+        lines.push(head);
+        used += head.length;
+        continue;
+      }
+      if (used + item.length > budget) break;
+      lines.push(item);
+      used += item.length;
+    }
+  }
+  return { lines, shown: lines.length, rest: items.length - lines.length, total: items.length };
+}
+
+/**
  * 予算に入るところまで `items` を積み、入らなかった分を断り書きにする。
  *
  * **1件だけで予算を超える場合は、その1件を `excerpt` で切る。** 落とすと
  * 「何も出ない一覧」になり、丸ごと出すと予算そのものが意味を失う——どちらも
  * 「上限がある」と言えなくなる。切った跡は `excerpt` が付ける。
+ *
+ * **ループの実体は `fillListingBudget` にある。** ここは文言を組むだけの薄い
+ * ラッパーで、挙動は移設前と1文字も変えていない。
  */
 export function renderListing(
   items: readonly string[],
   { budget, omitted }: ListingBudget,
 ): string {
-  const lines: string[] = [];
-  let used = 0;
-  for (const item of items) {
-    if (lines.length === 0) {
-      // 先頭の1件は必ず出す。ただし予算を超えるなら切って出す。
-      const head = item.length > budget ? excerpt(item, budget) : item;
-      lines.push(head);
-      used += head.length;
-      continue;
-    }
-    if (used + item.length > budget) break;
-    lines.push(item);
-    used += item.length;
-  }
-  const rest = items.length - lines.length;
-  if (rest > 0) lines.push(omitted({ rest, shown: lines.length, total: items.length }));
+  const { lines, rest, shown, total } = fillListingBudget(items, budget, false);
+  if (rest > 0) lines.push(omitted({ rest, shown, total }));
   return lines.join('\n');
 }
 
@@ -210,28 +267,16 @@ export function renderListingEntry(
  * `renderListing` と対にしてここへ置いてあるのは、**方向が違うだけの予算の
  * ループを、道具の側に手で書かせないため**である（それが3回踏んだ形である。
  * `renderListing` の doc を見ること）。
+ *
+ * **ループの実体は `fillListingBudget` にある。** ここは文言を組むだけの薄い
+ * ラッパーで、挙動は移設前と1文字も変えていない。
  */
 export function renderListingFromEnd(
   items: readonly string[],
   { budget, omitted }: ListingBudget,
 ): string {
-  const lines: string[] = [];
-  let used = 0;
-  // 末尾から詰める。`renderListing` と同じく、1件だけで予算を超えるなら切って出す。
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index]!;
-    if (lines.length === 0) {
-      const tail = item.length > budget ? excerpt(item, budget) : item;
-      lines.unshift(tail);
-      used += tail.length;
-      continue;
-    }
-    if (used + item.length > budget) break;
-    lines.unshift(item);
-    used += item.length;
-  }
-  const rest = items.length - lines.length;
-  if (rest > 0) lines.unshift(omitted({ rest, shown: lines.length, total: items.length }));
+  const { lines, rest, shown, total } = fillListingBudget(items, budget, true);
+  if (rest > 0) lines.unshift(omitted({ rest, shown, total }));
   return lines.join('\n');
 }
 
