@@ -141,6 +141,39 @@ describe('器に置く形', () => {
       expect(sourceTwiceAndCount(path)).toBe('1');
     });
   });
+
+  /**
+   * **密閉の固定点。** 直上の歯は、親の環境に器の番人（`ALTEROID_PROFILE_SOURCED`）が
+   * 立っていない限り、**密閉が外れても緑のままである** — だからあれだけでは、
+   * `sourceTwiceAndCount` から `env` が消えたことを捕まえられない。⟹ **捕まえるには、
+   * 親に番人が立っている状態で同じ呼び出しを通すしかない。**
+   *
+   * ⚠️ **このテストは自分で `process.env` を書く。それはまさにこのファイルが測っている
+   * 汚染の形である。** だから `finally` で**元の状態へ厳密に戻す**（元が `undefined` なら
+   * `delete`、値が在ればその値へ）。同じファイルのテストは直列に走るので、戻し切れば
+   * 他の歯には届かない。**`afterEach` へ置かないのは、書いた場所と戻す場所を離すと
+   * 「戻し忘れ」が別の編集で生まれるからである。**
+   */
+  it('親の環境に器の番人が立っていても同じ結果になる（密閉が外れたら赤くなる）', async () => {
+    const path = join(dir, 'profile.sh');
+    const vessel = createProfileVessel({ path });
+    await vessel.set('COUNT="${COUNT:-0}"; COUNT=$((COUNT + 1)); export COUNT');
+    const previousGuard = process.env[PROFILE_SOURCED_ENV_KEY];
+    process.env[PROFILE_SOURCED_ENV_KEY] = '1';
+    try {
+      expect(
+        sourceTwiceAndCount(path),
+        'この呼び出しが親の env を継承している（`sourceTwiceAndCount` の `env` の明示が' +
+          '外れた）。器は BASH_ENV にプロファイルを指しているので、入れ子の bash 越しに' +
+          ' pnpm test を起こすと ALTEROID_PROFILE_SOURCED が立って vitest の fork ワーカー' +
+          'まで降り、本文が一度も走らずに空文字が返る。機序と実測は profile.ts の' +
+          ' module doc（PR #749 / #759 が実際に踏んだ）。',
+      ).toBe('1');
+    } finally {
+      if (previousGuard === undefined) delete process.env[PROFILE_SOURCED_ENV_KEY];
+      else process.env[PROFILE_SOURCED_ENV_KEY] = previousGuard;
+    }
+  });
 });
 
 /**
