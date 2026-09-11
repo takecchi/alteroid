@@ -2210,7 +2210,7 @@ function renderPremisePart(part: MemoryPart, seen?: string): string {
  * ——`slug` が在れば `memory_outline` / `memory_section_read` / `memory_read` の
  * どれへも行ける。
  */
-function renderPremiseStub(part: MemoryPart, cardChars: number): string {
+function renderPremiseStub(part: MemoryPart, cardChars: number, kind: MemoryDocKind): string {
   const frontmatter = parseMemoryFrontmatter(part.content);
   const description =
     (frontmatter.kind === 'parsed' ? frontmatter.description : undefined)?.trim() ?? '';
@@ -2220,7 +2220,7 @@ function renderPremiseStub(part: MemoryPart, cardChars: number): string {
       ? '（要旨がまだ書かれていない。memory_frontmatter_set の description で書くこと）'
       : excerptLine(description, MEMORY_PREMISE_STUB_LINE_LIMIT);
   return (
-    `- ${part.slug}.md（全 ${formatMemoryCharCount(part.content.length)} 文字 / ` +
+    `- ${part.slug}.md（${kind}・全 ${formatMemoryCharCount(part.content.length)} 文字 / ` +
     `${formatMemoryCharCount(sections.length)} 節・カードにすると ` +
     `${formatMemoryCharCount(cardChars)} 文字）: ${summary}`
   );
@@ -2329,8 +2329,13 @@ function renderPremiseBudgetNotice(
   demoted: readonly { part: MemoryPart; chars: number }[],
   keptCount: number,
   totalChars: number,
+  kindOf: (part: MemoryPart) => MemoryDocKind,
 ): string {
-  const items = demoted.map((entry) => renderPremiseStub(entry.part, entry.chars));
+  const items = demoted.map((entry) =>
+    renderPremiseStub(entry.part, entry.chars, kindOf(entry.part)),
+  );
+  const demotedPremise = demoted.filter((entry) => kindOf(entry.part) === 'premise').length;
+  const demotedIndexed = demoted.length - demotedPremise;
   const listing = renderListing(items, {
     budget: MEMORY_PREMISE_STUB_BUDGET,
     omitted: ({ rest, shown, total }) =>
@@ -2339,21 +2344,32 @@ function renderPremiseBudgetNotice(
   });
 
   return [
-    '<!-- memory: premise（カードを落とした分。文書は消えていない） -->',
-    `⚠️ premise のカードの合計が ${formatMemoryCharCount(totalChars)} 文字になり、` +
+    '<!-- memory: カードを落とした分（premise / indexed。文書は消えていない） -->',
+    `⚠️ カード（premise と indexed）の合計が ${formatMemoryCharCount(totalChars)} 文字になり、` +
       `毎ターンの焼き込みの予算 ${formatMemoryCharCount(MEMORY_PREMISE_CARD_BUDGET)} 文字を超えた。` +
       `⟹ **大きいほうから ${formatMemoryCharCount(demoted.length)} 件のカードを落として1行にした**` +
-      `（カードのまま載っているのは ${formatMemoryCharCount(keptCount)} 件）。` +
+      `（premise ${formatMemoryCharCount(demotedPremise)} 件 / indexed ${formatMemoryCharCount(demotedIndexed)} 件。` +
+      `カードのまま載っているのは ${formatMemoryCharCount(keptCount)} 件）。` +
       '**落ちたのは節の目次と要旨の全文であって、文書そのものではない。**',
     listing,
     '**開く口**: memory_outline slug=<slug>（節の目次。side=tail で末尾も見える）→ ' +
       'memory_section_read（節の本文）。要旨の全文は memory_list / memory_read に在る。',
     '**直し方（どれか1つを実際にやること。読み流さない）**: ' +
-      '(1) この行に出ている文書を memory_frontmatter_set で type: indexed にする' +
-      '——要旨だけが焼かれ、節の目次は焼かれなくなるので、カード1枚が確実に小さくなる' +
-      '（節は memory_outline の q= / offset= で引ける）。' +
-      '(2) memory_section_move で割り、付録にした側を memory_frontmatter_set で fact にする。' +
-      '**⚠️ 要旨（description）を削る方向へ倒さないこと** —— 要旨は判断の前提そのもので、' +
+      // **`indexed` にする手は、落ちたのが premise のときだけ出す。** 既に
+      // `indexed` の文書へ「indexed にせよ」と言うと、クローンはそれを実行して
+      // 床が1文字も下がらない（＝実行できない助言。`renderMemoryTocOmission` が
+      // 「実行できない助言を出さない」として同じ線を引いている）。
+      (demotedPremise > 0
+        ? `(1) 上の premise ${formatMemoryCharCount(demotedPremise)} 件を memory_frontmatter_set で ` +
+          'type: indexed にする——要旨だけが焼かれ、節の目次は焼かれなくなるので、' +
+          'カード1枚が確実に小さくなる（節は memory_outline の q= / offset= で引ける）。'
+        : '') +
+      '(2) memory_section_move で割り、付録にした側を memory_frontmatter_set で fact にする' +
+      (demotedIndexed > 0
+        ? `——**上の indexed ${formatMemoryCharCount(demotedIndexed)} 件に残っている手はこれだけである。` +
+          'すでに節の目次を手放しているので、type: indexed にしても1文字も下がらない。**'
+        : '') +
+      '。**⚠️ 要旨（description）を削る方向へ倒さないこと** —— 要旨は判断の前提そのもので、' +
       '落ちたのは索引のほうである。要旨を削ると、開く口はそのままなのに' +
       '「何が書いてあるか」を指す手掛かりだけが消える。',
   ].join('\n');
@@ -2463,7 +2479,9 @@ function buildMemoryDocumentSections(
         ? keptPremiseCards.join(MEMORY_SECTION_JOIN)
         : [
             ...keptPremiseCards,
-            renderPremiseBudgetNotice(demoted, kept.length, uncappedChars),
+            renderPremiseBudgetNotice(demoted, kept.length, uncappedChars, (part) =>
+              indexedSlugs.has(part.slug) ? 'indexed' : 'premise',
+            ),
           ].join(MEMORY_SECTION_JOIN);
   const indexedSection = keptIndexedCards.join(MEMORY_SECTION_JOIN);
   // 目次の外にも実在する slug を、**在り処ごとに分けて**渡す——`documents` は
