@@ -83,6 +83,7 @@ import {
   archiveListResponseSchema,
   archiveRemovedResponseSchema,
   archiveRemoveResponseSchema,
+  archiveSessionsResponseSchema,
   authProvidersResponseSchema,
   commitmentListResponseSchema,
   commitmentOpenedResponseSchema,
@@ -4076,16 +4077,45 @@ export function createApp(deps: AppDeps) {
       describeRoute({
         tags: ['archive'],
         summary: 'アーカイブ済みセッション生ログの一覧',
-        description: 'セッション生ログ（可観測性の最下段）の id 一覧。',
+        description:
+          'セッション生ログ（可観測性の最下段）の一覧（#698）。id だけでなく ' +
+          'sessionId・時刻・実使用バイト数（storedBytes）を返す——大きさや時刻を ' +
+          '知るために本文（GET /archive/:id）を全文落とす必要が無い。',
         responses: {
           200: {
-            description: 'アーカイブ id の一覧。',
+            description: 'アーカイブの一覧。新しい順。',
             content: { 'application/json': { schema: resolver(archiveListResponseSchema) } },
           },
         },
       }),
       async (c) =>
         c.json(archiveListResponseSchema.parse({ entries: await stores.archive.list() })),
+    )
+
+    /**
+     * `sessionId` ごとの集計（#698）。**`:id` より前に置くこと**——後ろだと
+     * `GET /archive/:id` の `:id` に `sessions` という文字列が食われて、この
+     * 経路へ一生届かない（hono のルーティングは登録順で最初に一致した経路
+     * を使う）。
+     */
+    .get(
+      '/archive/sessions',
+      describeRoute({
+        tags: ['archive'],
+        summary: 'アーカイブ済みセッション生ログの sessionId ごとの集計',
+        description:
+          'sessionId ごとの行数（rows）・実使用バイト数の合計/最大・最初/最後の ' +
+          '時刻（#698）。rows は tombstone 済みの行も数える——「同じセッションの ' +
+          '生ログが何度も積まれている」という重複を見つけるための経路。',
+        responses: {
+          200: {
+            description: 'sessionId ごとの集計の一覧。',
+            content: { 'application/json': { schema: resolver(archiveSessionsResponseSchema) } },
+          },
+        },
+      }),
+      async (c) =>
+        c.json(archiveSessionsResponseSchema.parse({ sessions: await stores.archive.sessions() })),
     )
 
     .get(

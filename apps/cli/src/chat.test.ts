@@ -715,6 +715,26 @@ interface JournalEntryLike {
   [field: string]: unknown;
 }
 
+/** `GET /archive` が返す1件の形（`archiveEntrySchema`。#698）。 */
+interface ArchiveEntryLike {
+  id: string;
+  sessionId: string;
+  at: string;
+  storedBytes: number;
+  removedAt?: string;
+  removedBytes?: number;
+}
+
+/** `GET /archive/sessions` が返す1件の形（`archiveSessionSummarySchema`。#698）。 */
+interface ArchiveSessionSummaryLike {
+  sessionId: string;
+  rows: number;
+  storedBytes: number;
+  maxStoredBytes: number;
+  firstAt: string;
+  lastAt: string;
+}
+
 function stubClient(
   options: {
     commitments?: Commitment[];
@@ -777,6 +797,14 @@ function stubClient(
     transcriptStatus?: number;
     /** `GET /managers/:id/transcript` の応答本体（生テキスト）。既定は空文字。 */
     transcriptBody?: string;
+    /** `GET /archive` が返す一覧(#698)。既定は空。 */
+    archiveEntries?: ArchiveEntryLike[];
+    /** `GET /archive/sessions` が返す一覧(#698)。既定は空。 */
+    archiveSessions?: ArchiveSessionSummaryLike[];
+    /** `GET /archive/:id` の応答コード。既定は 200。 */
+    archiveReadStatus?: number;
+    /** `GET /archive/:id` の応答本体（生テキスト）。既定は空文字。 */
+    archiveReadBody?: string;
   } = {},
 ) {
   const calls: { route: string; args: unknown }[] = [];
@@ -921,6 +949,29 @@ function stubClient(
       $get: (args: unknown) => {
         calls.push({ route: 'GET /reports', args });
         return Promise.resolve(reply(200, { reports: options.reports ?? [] }));
+      },
+    },
+    archive: {
+      $get: (args: unknown) => {
+        calls.push({ route: 'GET /archive', args });
+        return Promise.resolve(reply(200, { entries: options.archiveEntries ?? [] }));
+      },
+      sessions: {
+        $get: (args: unknown) => {
+          calls.push({ route: 'GET /archive/sessions', args });
+          return Promise.resolve(reply(200, { sessions: options.archiveSessions ?? [] }));
+        },
+      },
+      ':id': {
+        $get: (args: unknown) => {
+          calls.push({ route: 'GET /archive/:id', args });
+          const status = options.archiveReadStatus ?? 200;
+          return Promise.resolve({
+            ok: status >= 200 && status < 300,
+            status,
+            text: () => Promise.resolve(options.archiveReadBody ?? ''),
+          });
+        },
       },
     },
   };
@@ -2870,5 +2921,91 @@ describe('chat の /approvals（並びを実装によらず揃える）', () => 
     // 「窓の大きさを何で決めるか」の未決を、ここで黙って埋めることになる。
     expect(query.limit).toBeUndefined();
     expect(query.cursor).toBeUndefined();
+  });
+});
+
+/**
+ * `chat` の `/archive`（#698）。GET /archive の応答が id だけの一覧から
+ * `ArchiveEntry[]` へ拡張されたことを受けて、CLI の表示にも大きさ
+ * （storedBytes）と時刻（at）が出ること、`/archive sessions` で
+ * sessionId ごとの行数・使用量が見えることを測る。
+ */
+describe('chat の /archive', () => {
+  it('一覧に大きさ(storedBytes)と時刻(at)を出す', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      archiveEntries: [
+        {
+          id: 'sess-1-2026-08-20T00-00-00-000Z.jsonl',
+          sessionId: 'sess-1',
+          at: '2026-08-20T00:00:00.000Z',
+          storedBytes: 1234,
+        },
+      ],
+    });
+
+    await runSlashCommand('/archive', client, emptyListed());
+
+    const text = read();
+    expect(text).toContain('sess-1-2026-08-20T00-00-00-000Z.jsonl');
+    expect(text).toContain('1234バイト');
+    expect(text).toContain('2026-08-20T00:00:00.000Z');
+  });
+
+  it('本文が削除済み(removedAt あり)の行にはその旨を出す', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      archiveEntries: [
+        {
+          id: 'sess-2-2026-08-20T00-00-00-000Z.jsonl',
+          sessionId: 'sess-2',
+          at: '2026-08-20T00:00:00.000Z',
+          storedBytes: 0,
+          removedAt: '2026-08-21T00:00:00.000Z',
+          removedBytes: 999,
+        },
+      ],
+    });
+
+    await runSlashCommand('/archive', client, emptyListed());
+
+    expect(read()).toContain('本文は削除済み');
+  });
+
+  it('/archive sessions は sessionId ごとの行数・使用量を出す（⭐ 依頼の動機そのもの）', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient({
+      archiveSessions: [
+        {
+          sessionId: 'sess-repeated',
+          rows: 68,
+          storedBytes: 999,
+          maxStoredBytes: 500,
+          firstAt: '2026-08-01T00:00:00.000Z',
+          lastAt: '2026-08-20T00:00:00.000Z',
+        },
+      ],
+    });
+
+    await runSlashCommand('/archive sessions', client, emptyListed());
+
+    const text = read();
+    expect(text).toContain('sess-repeated');
+    expect(text).toContain('行数: 68');
+    expect(text).toContain('999バイト');
+    expect(text).toContain('500バイト');
+    expect(calls.map((call) => call.route)).toContain('GET /archive/sessions');
+    // GET /archive（id一覧のほう）は呼んでいない。
+    expect(calls.map((call) => call.route)).not.toContain('GET /archive');
+  });
+
+  it('/archive <id> は本文を出す（従来どおり）', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient({ archiveReadBody: 'RAW LOG\n' });
+
+    await runSlashCommand('/archive sess-1-xyz.jsonl', client, emptyListed());
+
+    expect(read()).toContain('RAW LOG');
+    expect(calls.map((call) => call.route)).toContain('GET /archive/:id');
   });
 });

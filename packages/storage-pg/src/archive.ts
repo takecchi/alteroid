@@ -1,8 +1,14 @@
-import type { ArchiveRead, ArchiveRemoval, TranscriptArchive } from '@alteroid/core';
+import type {
+  ArchiveEntry,
+  ArchiveRead,
+  ArchiveRemoval,
+  ArchiveSessionSummary,
+  TranscriptArchive,
+} from '@alteroid/core';
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
-import { stripNulls } from './db.js';
+import { stripNulls, toIso, toNumber } from './db.js';
 import { archive } from './schema.js';
 
 /**
@@ -31,13 +37,71 @@ export class PgTranscriptArchive implements TranscriptArchive {
     return id;
   }
 
-  /** 新しい順。 */
-  async list(): Promise<string[]> {
+  /**
+   * 新しい順（#698）。
+   *
+   * **`storedBytes` は `pg_column_size(body)` で測る。`length(body)` /
+   * `octet_length(body)` は使わない。** あの2つは TOAST を展開して本文を
+   * 丸ごと読む——100MB 級の行がある `archive` で、一覧を取るためだけに毎行
+   * それをやると Issue #698 の動機（本文を落とさずに大きさを知りたい）を
+   * この関数自身が壊す。`pg_column_size` は行内に収まった TOAST ポインタの
+   * サイズだけを見て、外部チャンクを取りに行かない——`body` に触れない
+   * ぶん、この一覧は軽い。
+   */
+  async list(): Promise<ArchiveEntry[]> {
     const rows = await this.#db
-      .select({ id: archive.id })
+      .select({
+        id: archive.id,
+        sessionId: archive.sessionId,
+        at: archive.at,
+        storedBytes: sql<number>`pg_column_size(${archive.body})`,
+        removedAt: archive.removedAt,
+        removedBytes: archive.removedBytes,
+      })
       .from(archive)
       .orderBy(desc(archive.at), desc(archive.id));
-    return rows.map((row) => row.id);
+    return rows.map((row) => ({
+      id: row.id,
+      sessionId: row.sessionId,
+      at: toIso(row.at),
+      storedBytes: row.storedBytes,
+      ...(row.removedAt === null
+        ? {}
+        : { removedAt: toIso(row.removedAt), removedBytes: row.removedBytes ?? 0 }),
+    }));
+  }
+
+  /**
+   * `sessionId` ごとの集計（#698）。**1問い合わせ、`GROUP BY session_id`。**
+   *
+   * `body` には触れない（`pg_column_size` の理由は `list()` の doc と同じ）ので、
+   * `archive` の heap 側だけを見る seq scan でも軽い——索引はいまも主キー
+   * （`id`）だけで足りる。`rows` は tombstone 済みの行も数える（`list()` と
+   * 同じく、消えるのは本文だけで行は残るため）。
+   */
+  async sessions(): Promise<ArchiveSessionSummary[]> {
+    const rows = await this.#db
+      .select({
+        sessionId: archive.sessionId,
+        rows: sql<number>`count(*)::int`,
+        storedBytes: sql<number>`sum(pg_column_size(${archive.body}))`,
+        maxStoredBytes: sql<number>`max(pg_column_size(${archive.body}))::int`,
+        firstAt: sql<Date>`min(${archive.at})`,
+        lastAt: sql<Date>`max(${archive.at})`,
+      })
+      .from(archive)
+      .groupBy(archive.sessionId)
+      .orderBy(sql`sum(pg_column_size(${archive.body})) desc`, archive.sessionId);
+    return rows.map((row) => ({
+      sessionId: row.sessionId,
+      rows: row.rows,
+      // sum(...) は bigint で返るので、素通しにすると文字列のまま漏れうる
+      // （db.ts の toNumber の doc）。
+      storedBytes: toNumber(row.storedBytes),
+      maxStoredBytes: row.maxStoredBytes,
+      firstAt: toIso(row.firstAt),
+      lastAt: toIso(row.lastAt),
+    }));
   }
 
   async read(id: string): Promise<ArchiveRead> {

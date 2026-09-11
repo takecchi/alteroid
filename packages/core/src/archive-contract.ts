@@ -8,7 +8,7 @@ import type { TranscriptArchive } from './store.js';
  * `packages/storage-pg` へ vitest を持ち込まないため）。食い違ったら `throw`
  * する。
  *
- * **測る6性質。3実装（`packages/core/src/testing.ts` のインメモリ /
+ * **測る10性質。3実装（`packages/core/src/testing.ts` のインメモリ /
  * `packages/storage-fs/src/archive.ts` / `packages/storage-pg/src/archive.ts`）
  * すべてがこれを呼ぶこと**（`journal-search-contract.ts` と同じ作法。1つで
  * 測って3つとも測ったことにしない）:
@@ -22,6 +22,21 @@ import type { TranscriptArchive } from './store.js';
  *    （判定は印だけで行う。本文が空かどうかを見ない）
  * 6. **二重の `remove()` は `removed` → `already` になり、バイト数と
  *    `removedAt` は最初の `remove()` のまま変わらない**（冪等）
+ * 7. **`list()` の各行が `id` / `sessionId` / `at` / `storedBytes` を持つ**
+ *    （#698 で `string[]` から拡張。`sessionId` は `archive()` に渡した値と
+ *    一致し、`at` はパースできる ISO 8601 である）
+ * 8. **tombstone 済みの行だけが `removedAt` / `removedBytes` を伴って
+ *    `list()` に出る**（消していない行にはこの2キーが無い）
+ * 9. ⭐ **同一 `sessionId` を複数回 `archive()` すると、`sessions()` の
+ *    `rows` がその回数を正しく数える**（tombstone 済みの行も含む）。
+ *    Issue #698 でいちばん効いたのはこの `rows` である——「同じセッションの
+ *    生ログが68回積まれている」という重複が、個々の大きさより先に問題の
+ *    所在を特定した
+ * 10. **`sessions()` の `storedBytes` / `maxStoredBytes` / `firstAt` /
+ *     `lastAt` は、`list()` の該当 `sessionId` の行から集計した値と一致する**
+ *     （実装ごとの単位の違いを比べるのではなく、同じ実装の中で一覧と集計が
+ *     整合しているかを測る——`ArchiveEntry.storedBytes` の doc「置き場を
+ *     またいで比較しない」と同じ理由で、絶対値は検査しない）
  *
  * 呼び出し側は使い捨ての archive を渡すこと（後始末はしない）。
  */
@@ -55,8 +70,25 @@ export async function verifyTranscriptArchiveContract(archive: TranscriptArchive
     fail('空の生ログはremovedにならない', bodyEmpty);
 
   const listBefore = await archive.list();
-  if (![idA, idB, idEmpty].every((id) => listBefore.includes(id))) {
+  if (![idA, idB, idEmpty].every((id) => listBefore.some((entry) => entry.id === id))) {
     fail('list()に3件とも出る', listBefore);
+  }
+
+  // 7. list() の各行が id / sessionId / at / storedBytes を持つ。
+  const entryA = listBefore.find((entry) => entry.id === idA);
+  if (entryA === undefined) fail('list()にAの行がある', listBefore);
+  if (entryA.sessionId !== 'archive-contract-session-a') {
+    fail('list()のsessionIdがarchive()に渡した値と一致する', entryA);
+  }
+  if (typeof entryA.at !== 'string' || Number.isNaN(Date.parse(entryA.at))) {
+    fail('list()のatがISO8601文字列', entryA);
+  }
+  if (typeof entryA.storedBytes !== 'number' || entryA.storedBytes < 0) {
+    fail('list()のstoredBytesが非負の数値', entryA);
+  }
+  // 8前提. 消す前は removedAt / removedBytes を持たない。
+  if ('removedAt' in entryA || 'removedBytes' in entryA) {
+    fail('消す前のlist()行はremovedAt/removedBytesを持たない', entryA);
   }
 
   // A を消す。
@@ -67,7 +99,26 @@ export async function verifyTranscriptArchiveContract(archive: TranscriptArchive
 
   // 1. remove() の後も行は在る（list() に出続ける）。
   const listAfterRemove = await archive.list();
-  if (!listAfterRemove.includes(idA)) fail('remove後も行は残る', listAfterRemove);
+  const entryAAfterRemove = listAfterRemove.find((entry) => entry.id === idA);
+  if (entryAAfterRemove === undefined) fail('remove後も行は残る', listAfterRemove);
+
+  // 8. tombstone 済みの行は removedAt / removedBytes を伴って list() に出る。
+  if (
+    entryAAfterRemove.removedAt === undefined ||
+    Number.isNaN(Date.parse(entryAAfterRemove.removedAt)) ||
+    entryAAfterRemove.removedBytes !== expectedBytesA
+  ) {
+    fail('remove後のlist()行はremovedAt/removedBytesを伴う', entryAAfterRemove);
+  }
+  // 消していない行（B）は引き続き removedAt / removedBytes を持たない。
+  const entryBAfterRemove = listAfterRemove.find((entry) => entry.id === idB);
+  if (
+    entryBAfterRemove === undefined ||
+    'removedAt' in entryBAfterRemove ||
+    'removedBytes' in entryBAfterRemove
+  ) {
+    fail('消していない行(B)はremovedAt/removedBytesを持たない', entryBAfterRemove);
+  }
 
   // 2. read() が removed を返す（missing とは別物）。
   const readA = await archive.read(idA);
@@ -98,5 +149,119 @@ export async function verifyTranscriptArchiveContract(archive: TranscriptArchive
       first: readA.removedAt,
       second: removedAgain.removedAt,
     });
+  }
+
+  // 9. ⭐ 同一 sessionId を複数回 archive() すると、sessions() の rows が
+  // その回数を正しく数える（tombstone 済みの行を1本混ぜて、8 と同じ扱いに
+  // なることも確かめる——「行は残る」を rows の数え上げの側でも測る）。
+  // ⚠ **1ミリ秒ずつ空ける。** `archive()` の id は
+  // `${sanitize(sessionId)}-${stamp}.jsonl` で `stamp` はミリ秒精度なので、
+  // **同じミリ秒に2回積むと id が衝突し、pg 側は `onConflictDoUpdate` で
+  // 黙って上書きする**（fs 側も `writeFile` で上書きになる）。これは
+  // `list()`/`sessions()` とは別に元から在る欠陥で、ここで測りたいのは
+  // 「同一 sessionId の複数行を `rows` が数えられること」のほうである。
+  // ⟹ 衝突を踏まないように間隔を空けて、測りたいものだけを測る。
+  // **衝突そのものを塞ぐのはこの契約の仕事ではない**（id の形を変えると
+  // fs 側の `STAMP_SUFFIX_RE` による id からの復元も一緒に変わるため）。
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 2));
+  const multiSessionId = 'archive-contract-session-multi';
+  const idM1 = await archive.archive(multiSessionId, 'M1\n');
+  await tick();
+  const idM2 = await archive.archive(multiSessionId, 'M2-longer\n');
+  await tick();
+  const idM3 = await archive.archive(multiSessionId, 'M3\n');
+  if (new Set([idM1, idM2, idM3]).size !== 3) {
+    fail('3回の archive() が別々の id になる（同じなら id がミリ秒で衝突している）', [
+      idM1,
+      idM2,
+      idM3,
+    ]);
+  }
+  await archive.remove(idM2); // 積んだうちの1本を消す。rows は減らないはず。
+
+  const listAfterMulti = await archive.list();
+  const multiEntries = listAfterMulti.filter((entry) => entry.sessionId === multiSessionId);
+  if (
+    multiEntries.length !== 3 ||
+    ![idM1, idM2, idM3].every((id) => multiEntries.some((e) => e.id === id))
+  ) {
+    fail('list()は同一sessionIdの3行を全部返す（tombstone済みも含む）', multiEntries);
+  }
+
+  const sessionSummaries = await archive.sessions();
+  const multiSummary = sessionSummaries.find((s) => s.sessionId === multiSessionId);
+  if (multiSummary === undefined) fail('sessions()にmultiSessionIdの行がある', sessionSummaries);
+  if (multiSummary.rows !== 3) {
+    fail('sessions().rowsは同一sessionIdの行数(tombstone済み込み)を正しく数える', multiSummary);
+  }
+
+  // 10. sessions() の集計は list() の該当行から求めた値と一致する
+  // （絶対値は実装ごとに単位が違うので検査しない——内部の整合性だけを測る）。
+  const expectedStoredBytes = multiEntries.reduce((sum, e) => sum + e.storedBytes, 0);
+  const expectedMaxStoredBytes = Math.max(...multiEntries.map((e) => e.storedBytes));
+  const expectedFirstAt = multiEntries.map((e) => e.at).sort()[0];
+  const expectedLastAt = multiEntries
+    .map((e) => e.at)
+    .sort()
+    .at(-1);
+  if (multiSummary.storedBytes !== expectedStoredBytes) {
+    fail('sessions().storedBytesはlist()の該当行の合計と一致する', {
+      summary: multiSummary,
+      expected: expectedStoredBytes,
+    });
+  }
+  if (multiSummary.maxStoredBytes !== expectedMaxStoredBytes) {
+    fail('sessions().maxStoredBytesはlist()の該当行の最大値と一致する', {
+      summary: multiSummary,
+      expected: expectedMaxStoredBytes,
+    });
+  }
+  if (multiSummary.firstAt !== expectedFirstAt || multiSummary.lastAt !== expectedLastAt) {
+    fail('sessions().firstAt/lastAtはlist()の該当行のat の最小/最大と一致する', {
+      summary: multiSummary,
+      expectedFirstAt,
+      expectedLastAt,
+    });
+  }
+
+  // 11. sessions() の並びが決まっている（storedBytes の降順、同値なら
+  // sessionId の昇順）。⚠ 並びを決めないと、同じ問い合わせが呼ぶたびに違う順で
+  // 返りうる——容量を追う面（大きいセッションから見たい）で黙った揺れになる。
+  const ordered = await archive.sessions();
+  const expectedOrder = [...ordered].sort(
+    (a, b) =>
+      b.storedBytes - a.storedBytes ||
+      (a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : 0),
+  );
+  if (ordered.some((summary, index) => summary.sessionId !== expectedOrder[index]?.sessionId)) {
+    fail('sessions()はstoredBytesの降順・同値ならsessionIdの昇順で返る', ordered);
+  }
+
+  // 12. `storedBytes` が本当にその行の量を測っていること。
+  //
+  // 🔴 **これが無いと `storedBytes` が常に 0 でも上の検査は全部緑になる。**
+  // 9〜11 は「`sessions()` の集計が `list()` と整合するか」しか見ておらず、
+  // 全部 0 なら合計 0・最大 0 で整合してしまう——変異試験（storedBytes を
+  // 常に 0 にする）で実際に素通りした。⟹ **定数を返す実装を落とす。**
+  //
+  // ⚠ 絶対値は実装ごとに単位が違う（pg は圧縮後、fs はファイル長、
+  // インメモリは文字列長）ので**値そのものは検査しない**。検査するのは
+  // 「正であること」と「同じ実装の中で大きい本文のほうが大きいこと」だけ——
+  // この2つなら単位に依らない。
+  const bytesSessionId = 'archive-contract-bytes';
+  const smallId = await archive.archive(bytesSessionId, 'x\n');
+  await tick();
+  const bigId = await archive.archive(bytesSessionId, 'ログの1行 {"k":"v"}\n'.repeat(600));
+  const bytesEntries = await archive.list();
+  const smallEntry = bytesEntries.find((entry) => entry.id === smallId);
+  const bigEntry = bytesEntries.find((entry) => entry.id === bigId);
+  if (smallEntry === undefined || bigEntry === undefined) {
+    fail('storedBytesの検査に使った2行がlist()に在る', { smallId, bigId });
+  }
+  if (!(smallEntry.storedBytes > 0)) {
+    fail('storedBytesは空でない本文に対して正の値を返す（定数0を落とす）', smallEntry);
+  }
+  if (!(bigEntry.storedBytes > smallEntry.storedBytes)) {
+    fail('storedBytesは本文の大きい行のほうが大きい（定数を落とす）', { smallEntry, bigEntry });
   }
 }

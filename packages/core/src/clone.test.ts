@@ -5235,8 +5235,8 @@ describe('クローン — ターンの失敗の跡', () => {
 
         // **退避されている。**
         await waitFor(async () => (await s.stores.archive.list()).length > 0, '退避されること');
-        const ids = await s.stores.archive.list();
-        expect(await s.stores.archive.read(ids[0] as string)).toEqual({
+        const entries = await s.stores.archive.list();
+        expect(await s.stores.archive.read(entries[0]?.id as string)).toEqual({
           kind: 'body',
           body: '畳む直前の生ログ',
         });
@@ -5356,8 +5356,8 @@ describe('クローン — ターンの失敗の跡', () => {
           async () => (await s.stores.sessions.getTranscriptGrave()) !== null,
           '墓標が立つこと',
         );
-        const ids = await s.stores.archive.list();
-        expect((await s.stores.sessions.getTranscriptGrave())?.archiveId).toBe(ids[0]);
+        const entries = await s.stores.archive.list();
+        expect((await s.stores.sessions.getTranscriptGrave())?.archiveId).toBe(entries[0]?.id);
       } finally {
         await s.clone.stop();
         await rm(dir, { recursive: true, force: true });
@@ -6757,6 +6757,7 @@ describe('クローン — 蒸留の末尾は全文を読まずに取る（渡�
           throw new Error('退避先が閉じている');
         },
         list: () => stores.archive.list(),
+        sessions: () => stores.archive.sessions(),
         read: (id: string) => stores.archive.read(id),
         remove: (id: string) => stores.archive.remove(id),
       },

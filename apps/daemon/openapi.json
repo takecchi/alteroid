@@ -7545,10 +7545,10 @@
         "operationId": "getArchive",
         "tags": ["archive"],
         "summary": "アーカイブ済みセッション生ログの一覧",
-        "description": "セッション生ログ（可観測性の最下段）の id 一覧。",
+        "description": "セッション生ログ（可観測性の最下段）の一覧（#698）。id だけでなく sessionId・時刻・実使用バイト数（storedBytes）を返す——大きさや時刻を 知るために本文（GET /archive/:id）を全文落とす必要が無い。",
         "responses": {
           "200": {
-            "description": "アーカイブ id の一覧。",
+            "description": "アーカイブの一覧。新しい順。",
             "content": {
               "application/json": {
                 "schema": {
@@ -7557,11 +7557,99 @@
                     "entries": {
                       "type": "array",
                       "items": {
-                        "type": "string"
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "sessionId": {
+                            "type": "string"
+                          },
+                          "at": {
+                            "type": "string"
+                          },
+                          "storedBytes": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "removedAt": {
+                            "type": "string"
+                          },
+                          "removedBytes": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": ["id", "sessionId", "at", "storedBytes"]
                       }
                     }
                   },
                   "required": ["entries"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/archive/sessions": {
+      "get": {
+        "operationId": "getArchiveSessions",
+        "tags": ["archive"],
+        "summary": "アーカイブ済みセッション生ログの sessionId ごとの集計",
+        "description": "sessionId ごとの行数（rows）・実使用バイト数の合計/最大・最初/最後の 時刻（#698）。rows は tombstone 済みの行も数える——「同じセッションの 生ログが何度も積まれている」という重複を見つけるための経路。",
+        "responses": {
+          "200": {
+            "description": "sessionId ごとの集計の一覧。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sessions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "sessionId": {
+                            "type": "string"
+                          },
+                          "rows": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "storedBytes": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "maxStoredBytes": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "firstAt": {
+                            "type": "string"
+                          },
+                          "lastAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "sessionId",
+                          "rows",
+                          "storedBytes",
+                          "maxStoredBytes",
+                          "firstAt",
+                          "lastAt"
+                        ]
+                      }
+                    }
+                  },
+                  "required": ["sessions"]
                 }
               }
             }
