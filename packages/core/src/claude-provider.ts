@@ -18,6 +18,7 @@ import type {
 } from './agent-events.js';
 import type { AgentProvider } from './agent-ports.js';
 import type { PermissionModeName } from './permission-mode.js';
+import { CLONE_ALLOWED_PERMISSION_RULES } from './permission-rules.js';
 import { resultErrorLines, resultFailureOf } from './sdk-failure.js';
 import { CLONE_ALLOWED_TOOLS, MCP_SERVER_NAME } from './tools.js';
 import { classifyUsageNotice, toRateLimitFacts } from './usage-limits.js';
@@ -112,7 +113,13 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
     //
     // だからここに自作ツールだけを並べても組み込みツールは1つも減らない。並べて
     // あるのは、自分の道具が権限の判断に晒されないようにするためである。
-    allowedTools: CLONE_ALLOWED_TOOLS,
+    //
+    // **自作ツールの後ろに、人間が恒久的に許可した行為の規則を並べる**
+    // （`permission-rules.ts`）。ここは確認なしで通す一覧なので、規則を足しても
+    // 道具は1つも増えも減りもしない —— 変わるのは「確認へ倒れるかどうか」だけである。
+    // **このセッションではそれが効く**（`canUseTool` を繋いでいない ＝ 確認へ
+    // 倒れたものは実行されない。直下の `permissionMode` の doc と同じ事情）。
+    allowedTools: [...CLONE_ALLOWED_TOOLS, ...CLONE_ALLOWED_PERMISSION_RULES],
     // 人間が開く Claude Code と同じ既定（`auto`）。**`default` のまま道具を渡すと
     // 「渡したのに使えない」になる** — このセッションには `canUseTool` が無く、
     // SDK は確認相手が居ないとき `ask` の判断をそのまま拒否で終わらせる。
