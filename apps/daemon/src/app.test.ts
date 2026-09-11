@@ -22,6 +22,7 @@ import {
   clearRecentTracesForTesting,
   createAuthProviderRegistry,
   createAuthService,
+  createCredentialService,
   createManagerPool,
   createMemoryStores,
   createProfileApplier,
@@ -30,6 +31,7 @@ import {
   createRunnerRegistry,
   createTokenPoolService,
   droppedTraceLedgerSince,
+  fingerprintOf,
   noteDroppedRecord,
   RECENT_TRACE_LIMIT,
   RESERVED_SCHEDULE_KINDS,
@@ -4483,6 +4485,151 @@ describe('実行環境プロファイル', () => {
 });
 
 /**
+ * マネージャーへ降ろす環境変数（`/credentials`）。
+ *
+ * 固定しているのは4つである:
+ *
+ * 1. **任意の名前で置ける**（用途が増えるたびに器を焼き直さない）
+ * 2. **値は1文字も外へ出ない**（返るのは指紋だけ）
+ * 3. **置かせない名前は 400 で、理由が返る**（名前を疑うのか権限を疑うのかが分かる）
+ * 4. **正本へ置いてから配る**（器を作り直しても `hello` で降り直せる）
+ */
+describe('マネージャーへ降ろす環境変数（/credentials）', () => {
+  const DUMMY_VALUE = 'CRED-VAULT-DUMMY';
+
+  function withCredentials(runners: ReturnType<typeof fakeRunner>[] = []) {
+    return createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      credentials: createCredentialService({
+        stores,
+        ...(runners.length === 0 ? {} : { runners: registryOf(runners) }),
+        withheldEnvKeys: ['ALTEROID_DATABASE_URL'],
+      }),
+    });
+  }
+
+  async function put(app: ReturnType<typeof withCredentials>, credentials: unknown) {
+    return app.request('/credentials', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ credentials }),
+    });
+  }
+
+  it('器が無ければ 503（「置いていない」と「口が無い」を分ける）', async () => {
+    // 既定の `app`（`beforeEach`）は `credentials` を渡していない
+    expect((await app.request('/credentials')).status).toBe(503);
+  });
+
+  it('置いていなければ空を返す', async () => {
+    const withVault = withCredentials();
+    const response = await withVault.request('/credentials');
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ credentials: [] });
+  });
+
+  it('任意の名前で置けて、runner へ降り、正本にも残る', async () => {
+    const runner = fakeRunner('runner-1');
+    const withVault = withCredentials([runner]);
+
+    const response = await put(withVault, [
+      { name: 'GIT_AUTHOR_NAME', value: 'takecchi' },
+      { name: 'NPM_TOKEN', value: DUMMY_VALUE },
+    ]);
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      credentials: { name: string; sha256: string }[];
+      runners: { runnerId: string; ok: boolean }[];
+    };
+    expect(body.credentials.map((entry) => entry.name)).toEqual(['GIT_AUTHOR_NAME', 'NPM_TOKEN']);
+    expect(body.runners).toEqual([{ runnerId: 'runner-1', ok: true, credentials: expect.anything() }]);
+    expect(runner.held.get('NPM_TOKEN')).toBe(DUMMY_VALUE);
+    // 器を作り直しても戻せる（正本に在る）
+    expect((await stores.credentials.list()).map((row) => row.name)).toEqual([
+      'GIT_AUTHOR_NAME',
+      'NPM_TOKEN',
+    ]);
+  });
+
+  it('応答に値が1文字も出ない（返るのは指紋だけ）', async () => {
+    const runner = fakeRunner('runner-1');
+    const withVault = withCredentials([runner]);
+
+    const response = await put(withVault, [{ name: 'NPM_TOKEN', value: DUMMY_VALUE }]);
+    expect(response.status).toBe(200);
+    expect(await response.text()).not.toContain(DUMMY_VALUE);
+
+    // 読み出す口の側も同じ
+    const read = await withVault.request('/credentials');
+    expect(await read.text()).not.toContain(DUMMY_VALUE);
+  });
+
+  it('プールが正本を持つ名前は 400。理由が返り、1文字も置かない', async () => {
+    const runner = fakeRunner('runner-1');
+    const withVault = withCredentials([runner]);
+
+    const response = await put(withVault, [
+      { name: 'CLAUDE_CODE_OAUTH_TOKEN', value: DUMMY_VALUE },
+    ]);
+
+    expect(response.status).toBe(400);
+    const text = await response.text();
+    // **理由が読めること。** 「置けなかった」だけでは、名前を疑うのか権限を疑うのか
+    // 分からない（人間は PAT の権限を疑いに行く）。
+    expect(text).toContain('alteroid token add');
+    // **値は出ない。**
+    expect(text).not.toContain(DUMMY_VALUE);
+    expect(await stores.credentials.list()).toEqual([]);
+    expect(runner.receivedCredentials).toEqual([]);
+  });
+
+  it('伏せる鍵は 400（伏せる仕組みを鍵の仕組みで越えさせない）', async () => {
+    const withVault = withCredentials();
+
+    const response = await put(withVault, [
+      { name: 'ALTEROID_DATABASE_URL', value: 'postgres://stolen' },
+    ]);
+
+    expect(response.status).toBe(400);
+    expect(await stores.credentials.list()).toEqual([]);
+  });
+
+  it('外す指示（空文字）も runner へ配る', async () => {
+    const runner = fakeRunner('runner-1');
+    const withVault = withCredentials([runner]);
+
+    await put(withVault, [{ name: 'NPM_TOKEN', value: DUMMY_VALUE }]);
+    const response = await put(withVault, [{ name: 'NPM_TOKEN', value: '' }]);
+
+    expect(response.status).toBe(200);
+    expect(await stores.credentials.list()).toEqual([]);
+    expect(runner.held.has('NPM_TOKEN')).toBe(false);
+  });
+
+  it('runner が1台落ちても、正本は書けていて、落ちた台が応答に出る', async () => {
+    const broken = fakeRunner('runner-broken');
+    broken.setCredentials = async () => {
+      throw new Error('つながらない');
+    };
+    const withVault = withCredentials([broken]);
+
+    const response = await put(withVault, [{ name: 'NPM_TOKEN', value: DUMMY_VALUE }]);
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { runners: { runnerId: string; ok: boolean }[] };
+    expect(body.runners).toEqual([
+      { runnerId: 'runner-broken', ok: false, error: expect.stringContaining('つながらない') },
+    ]);
+    expect((await stores.credentials.list()).map((row) => row.name)).toEqual(['NPM_TOKEN']);
+  });
+});
+
+/**
  * `PUT /profile` の応答が宣言（`profileUpdateResponseSchema`）どおりであること。
  *
  * `result.clone`（`ApplyProfileResult['clone']`、core の `ProfileApplyResult`。
@@ -5414,6 +5561,14 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
       body: { reason: [DUMMY] },
     },
     {
+      name: 'PUT /credentials',
+      path: '/credentials',
+      method: 'PUT',
+      // 名前の形（英大文字・数字・_）に落ちる。**値を載せた行ごと**落とすので、
+      // 既定のフックなら値がそのまま応答へ出る。
+      body: { credentials: [{ name: 'npm_token', value: DUMMY }] },
+    },
+    {
       name: 'PUT /tokens/policy',
       path: '/tokens/policy',
       method: 'PUT',
@@ -5484,6 +5639,7 @@ function fakeRunner(
   options: { runnerIdKnown?: boolean; workspacePathKnown?: boolean; workspacePath?: string } = {},
 ) {
   const received: string[] = [];
+  const receivedCredentials: { name: string; value: string }[][] = [];
   return {
     runnerId,
     // **既定は `true`（既存テストの前提を変えない）。** `false` を渡すと
@@ -5503,9 +5659,33 @@ function fakeRunner(
     async profile() {
       return undefined;
     },
+    /**
+     * 降ってきた鍵。**器の側の振る舞いを最小限まねる**（空文字は外す）。
+     *
+     * 既存の `credentials()` は常に空を返していたが、それでは「差があるものだけ
+     * 降ろす」を確かめられない（何を持っているかを答えられない器になる）。
+     */
+    held: new Map<string, string>(),
     async credentials() {
-      return [];
+      return [...this.held].map(([name, value]) => ({
+        name,
+        sha256: fingerprintOf(value),
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      }));
     },
+    async setCredentials(entries: { name: string; value: string }[]) {
+      receivedCredentials.push(entries);
+      for (const entry of entries) {
+        if (entry.value.length === 0) this.held.delete(entry.name);
+        else this.held.set(entry.name, entry.value);
+      }
+      return [...this.held].map(([name, value]) => ({
+        name,
+        sha256: fingerprintOf(value),
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      }));
+    },
+    receivedCredentials,
   };
 }
 

@@ -4,6 +4,7 @@ import type {
   AccountUsageState,
   ChatStreamEvent,
   CloneHost,
+  CredentialService,
   JobStatus,
   JournalEntry,
   JournalEntryType,
@@ -87,6 +88,9 @@ import {
   commitmentOpenedResponseSchema,
   conversationDetailResponseSchema,
   conversationsResponseSchema,
+  credentialsResponseSchema,
+  credentialsUpdateRequestSchema,
+  credentialsUpdateResponseSchema,
   droppedResponseSchema,
   errorResponseSchema,
   eventAcceptedResponseSchema,
@@ -226,6 +230,14 @@ export interface AppDeps {
    * 直列化の意味が消え、同時更新で層ごとに違う本文が残る。
    */
   profile?: ProfileService;
+  /**
+   * マネージャーへ降ろす環境変数（名前→値）を置いて配るまでの1本道。
+   *
+   * **マネージャーのプール（再接続時の降ろし直し）と同じインスタンスを渡すこと。**
+   * `profile` と同じ理由——別々だと直列化の意味が消え、同時更新で層ごとに違う値が
+   * 残る。
+   */
+  credentials?: CredentialService;
   /**
    * 認証トークンのプール（Issue #393「PR1 プールの器」）。**回さない**——ここが
    * 生やすのは器の読み書きの口だけで、検知・切替は無い。
@@ -3730,6 +3742,142 @@ export function createApp(deps: AppDeps) {
               ? {}
               : { sha256: result.sha256, bytes: result.bytes as number }),
             clone: result.clone,
+            runners: result.runners,
+          }),
+        );
+      },
+    )
+
+    // --- マネージャーへ降ろす環境変数（/credentials） ------------------------
+    // 正本はデーモンが持ち、runner へは制御面で降ろす（runner に記憶ストアの鍵を
+    // 渡さないため）。**器（`compose.yaml` の環境変数）を焼き直す代わりの口である。**
+
+    /**
+     * 正本に在る鍵の一覧。**値は出さない（指紋だけ）。**
+     *
+     * **資格は `authenticate` だけ（`requireOperator` は付けない）。** ここが返すのは
+     * 指紋であって値ではなく、同じ指紋は `GET /runners` が runner 側の分をすでに
+     * 同じ資格で出している——読める強さを揃えないと、「届いているか」を確かめたい
+     * だけの人が実行環境の持ち主の資格を要求されることになる。
+     *
+     * **値を返す口は作らない**（`credentialsResponseSchema` の doc）。
+     */
+    .get(
+      '/credentials',
+      describeRoute({
+        tags: ['credentials'],
+        summary: 'マネージャーへ降ろす環境変数の指紋を読む',
+        description:
+          '正本に在る名前と指紋を返す。**値は返さない。** 届いているかは ' +
+          'GET /runners の credentials（runner 側の指紋）と突き合わせる。',
+        responses: {
+          200: {
+            description: '正本に在る鍵の指紋。',
+            content: { 'application/json': { schema: resolver(credentialsResponseSchema) } },
+          },
+          503: {
+            description: '正本の器が無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        if (deps.credentials === undefined) {
+          return c.json({ error: '鍵の正本の器が無い' as const }, 503);
+        }
+        return c.json(
+          credentialsResponseSchema.parse({ credentials: await deps.credentials.fingerprints() }),
+        );
+      },
+    )
+
+    /**
+     * 置いて配る。**器を作り直さない。**
+     *
+     * これが無いと、用途が増えるたびに `compose.yaml`（Railway なら Shared
+     * Variables）へ環境変数を足して器を焼き直すことになる＝「環境を直す」と
+     * 「走行中の仕事を失う」が同じ操作になる（AGENTS.md 地雷表）。
+     *
+     * **`POST /runners/credentials` との違いは、保管するかどうかである。**
+     * あちらは受け取って走っている runner へ降ろすだけ（器を作り直すと消える）。
+     * ここは正本へ置くので、**器が入れ替わっても `hello` のときに降り直す。**
+     *
+     * **実行環境の持ち主だけ**（`requireOperator`。`PUT /profile` と同じ強さ）。
+     * 任意の名前で任意の値を、これから起こすマネージャーの環境へ永続的に置ける口で
+     * あり、**`PATH` のような名前も置ける**——`access grant` を通っただけの
+     * アカウントに渡す強さではない（`PUT /profile` の doc と同じ判断）。
+     *
+     * **⚠️ `POST /runners/credentials` の資格（`authenticate` だけ）はこの PR では
+     * 変えていない。** あちらの緩さは以前から在るもので、締めるかどうかは方針の
+     * 判断（人間の決定）である。ここで勝手に揃えると、いま通っている運用が黙って
+     * 止まる。
+     */
+    .put(
+      '/credentials',
+      describeRoute({
+        tags: ['credentials'],
+        summary: 'マネージャーへ降ろす環境変数を置いて配る',
+        description:
+          '**部分更新**（入力に無い名前は触らない）。空文字は「その名前を外す」。' +
+          '正本へ置いてから全 runner へ降ろす。器を作り直しても hello のときに降り直す。',
+        responses: {
+          200: {
+            description: '正本の指紋と、各 runner への配布結果。',
+            content: {
+              'application/json': { schema: resolver(credentialsUpdateResponseSchema) },
+            },
+          },
+          400: {
+            description:
+              '本文の形が不正、または置かせない名前だった（**1文字も置いていない**）。' +
+              '**送られてきた本文は返さない**——ここは鍵の値そのものを運ぶ口なので、' +
+              '既定の 400 の形は使えない（`POST /runners/credentials` の hook の doc）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          403: {
+            description: '実行環境の持ち主ではない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          503: {
+            description: '正本の器が無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      requireOperator,
+      /**
+       * **既定の 400 を使わない**（`POST /runners/credentials` と同じ理由）。
+       * 鍵を1本 `name` の形式ミスで書き間違えただけで、その回に送った*全部*の鍵の
+       * 値が応答へ載る。どこが不正だったかは返す（`path` だけ）が、送られてきた
+       * 本文は1文字も返さない。
+       */
+      jsonBody(credentialsUpdateRequestSchema, (where) => ({
+        error: '鍵の入力の形が不正（置いていない）' + (where === '' ? '' : `: ${where}`),
+      })),
+      async (c) => {
+        if (deps.credentials === undefined) {
+          return c.json({ error: '鍵の正本の器が無い' as const }, 503);
+        }
+        let result;
+        try {
+          result = await deps.credentials.apply(c.req.valid('json').credentials);
+        } catch (error) {
+          /**
+           * **置かせない名前（伏せる鍵・プールが正本を持つ名前）はここへ来る。**
+           *
+           * 理由を返す——「置けなかった」だけでは、人間は名前を疑うのか権限を
+           * 疑うのか分からない。**`String(error)` に値は入らない**（サービス側の
+           * 例外文は名前しか載せていない。`credential-service.ts` の
+           * `assertEntries`）。
+           */
+          return c.json({ error: String(error) }, 400);
+        }
+        return c.json(
+          // **サービスの返す形をそのまま流さない。** 宣言（`credentials`）と
+          // サービスの語彙（`fingerprints`）が違うので、`parse` で落ちる形に
+          // しておく（外向きの名前は「指紋」より「鍵」のほうが読みやすい）。
+          credentialsUpdateResponseSchema.parse({
+            credentials: result.fingerprints,
             runners: result.runners,
           }),
         );

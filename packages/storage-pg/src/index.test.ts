@@ -2183,6 +2183,65 @@ describe('PgProfileStore', () => {
 });
 
 /**
+ * マネージャーへ降ろす環境変数の正本（名前→値）。
+ *
+ * **fs / インメモリと同じ振る舞いになること**を問う。`put` は**部分更新**で、
+ * 空文字は「外す」である。ここが器ごとに違うと、「片方の器でだけ他の鍵が消える」
+ * という壊れ方をする。
+ */
+describe('PgCredentialVaultStore', () => {
+  it('往復（put → list）で値まで戻り、name 昇順で並ぶ', async () => {
+    expect(await stores.credentials.list()).toEqual([]);
+
+    const written = await stores.credentials.put([
+      { name: 'NPM_TOKEN', value: 'npm_x' },
+      { name: 'GIT_AUTHOR_NAME', value: 'takecchi' },
+    ]);
+    expect(written.map((row) => row.name)).toEqual(['GIT_AUTHOR_NAME', 'NPM_TOKEN']);
+    expect(written.map((row) => row.value)).toEqual(['takecchi', 'npm_x']);
+
+    expect(await stores.credentials.list()).toEqual(written);
+  });
+
+  it('部分更新——入力に無い名前は触らない', async () => {
+    await stores.credentials.put([{ name: 'GH_TOKEN', value: 'ghp_1' }]);
+    await stores.credentials.put([{ name: 'NPM_TOKEN', value: 'npm_x' }]);
+
+    expect((await stores.credentials.list()).map((row) => row.name)).toEqual([
+      'GH_TOKEN',
+      'NPM_TOKEN',
+    ]);
+  });
+
+  it('同じ名前を置き直すと値が入れ替わる（行は増えない）', async () => {
+    await stores.credentials.put([{ name: 'NPM_TOKEN', value: 'npm_old' }]);
+    await stores.credentials.put([{ name: 'NPM_TOKEN', value: 'npm_new' }]);
+
+    expect(await stores.credentials.list()).toEqual([
+      expect.objectContaining({ name: 'NPM_TOKEN', value: 'npm_new' }),
+    ]);
+  });
+
+  it('空文字で外れる（器の側の「外す」と同じ約束）', async () => {
+    await stores.credentials.put([{ name: 'NPM_TOKEN', value: 'npm_x' }]);
+    await stores.credentials.put([{ name: 'NPM_TOKEN', value: '' }]);
+
+    expect(await stores.credentials.list()).toEqual([]);
+  });
+
+  it('手で入れた壊れた名前の行は、降ろす集合から外れる（器の外を指す名前を配らない）', async () => {
+    // **DB は人間が直接 insert できる。** 入口の検査だけに頼ると、手で入れた
+    // `../../x` がそのまま runner へ降りて器の外を指す。
+    await db.execute(
+      sql`insert into manager_credentials (name, value) values ('../../../etc/cron.d/x', 'boom')`,
+    );
+    await stores.credentials.put([{ name: 'NPM_TOKEN', value: 'npm_x' }]);
+
+    expect((await stores.credentials.list()).map((row) => row.name)).toEqual(['NPM_TOKEN']);
+  });
+});
+
+/**
  * 認証トークンのプール（Issue #393「PR1」）。**回さない**——ここで固定するのは
  * 器の振る舞い（往復・設定の既定・トランザクションでの全文置換）だけである。
  */
