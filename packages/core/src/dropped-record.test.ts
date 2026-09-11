@@ -945,7 +945,7 @@ describe('droppedTraceLedgerSince（帳面が数え始めた時刻）', () => {
  *    しか回っておらず、`worker_wait`/`turn_usage`/`subagent_stall` が入って
  *    いない——既存のテストは1文字も変えず、こちらを別の歯として足す。
  *
- * ⚠️ **この歯が守れないもの——2つ（次に読む人はここで立ち止まること）。**
+ * ⚠️ **この歯が守れないもの——3つ（次に読む人はここで立ち止まること）。**
  *
  * 1. **欄は出るが値が間違っていることは捕まえない。** ここが見るのは
  *    `tokenId=` のような目印が出るかどうかまでで、`tag(entry.tokenId)` を
@@ -956,6 +956,14 @@ describe('droppedTraceLedgerSince（帳面が数え始めた時刻）', () => {
  *    入れ子オブジェクトの中に、新しく自由文（例: `contextUsage.detail`）が
  *    足されても、**この歯は赤くならない。** 名簿もフィクスチャも
  *    `contextUsage` という1つの欄までしか見ていない。
+ * 3. **13欄すべての保証は、いまも既存の `toBe` 1本が単独で持っている。**
+ *    `token_rotation` の3つの変異（`recoveredSource` / `generation` /
+ *    `noticeText` を落とす）で赤くなったのは、足場の印に反応した歯を差し引くと
+ *    **同じ1本だけ**だった——`落とした記録の跡 > token_rotation は tag 欄と
+ *    size 欄が混在し、全欄が載ると跡もそれを反映する`。**単独で殺せる歯が1本で、
+ *    群でしか落ちない歯は0本である。** ⟹ **この名簿の歯は、そこを肩代わりしない**
+ *    （名簿が見るのは目印が出るかまでで、13欄が*その順で・その値で*出ることは
+ *    見ていない）。**この `toBe` が緩められた日に、13欄の保証が同時に消える。**
  */
 describe('journalEntryShape の名簿（schema に足した欄の足し忘れを赤くする。PR #709）', () => {
   /**
@@ -1259,7 +1267,15 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
             expect(shape, `${type}.${field}`).toContain(`${fieldPlan.token}.chars=`);
             break;
           case 'size-unnamed':
-            expect(shape, `${type}.${field}`).toContain('chars=');
+            // ⚠️ `toContain('chars=')` にしないこと——同じ型に名前付きの `size` 欄が
+            // 在ると、そちらの `<token>.chars=` に当たって緑になる（無名の欄が実装
+            // から落ちても気づけない。PR #811 自身がこの穴を持ったまま入った実例——
+            // `external_event.summary` / `daily_report.body` / `token_rotation.text`
+            // の3型で、同じ型の名前付き `size` 欄の `<token>.chars=` に紛れて偽陽性の
+            // 緑を出した。変異試験で実測: `external_event` の無名欄を落としても
+            // 生存した）。無名であることまで見る——「行頭」または「空白の直後」の
+            // `chars=<数字>` に絞る（名前付きは直前が `.` なのでここには当たらない）。
+            expect(shape, `${type}.${field}`).toMatch(/(?:^| )chars=\d+/u);
             break;
           case 'tag':
           case 'raw':
