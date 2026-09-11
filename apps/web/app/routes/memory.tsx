@@ -70,7 +70,12 @@ export default function Memory() {
                   <div className="min-w-0 flex-1">
                     {/* 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc） */}
                     <p className="truncate text-sm">
-                      <span className="mr-1.5 text-[10px] text-muted">[{document.kind}]</span>
+                      <span
+                        className="mr-1.5 text-[10px] text-muted"
+                        title={kindHint(document.kind)}
+                      >
+                        [{document.kind}]
+                      </span>
                       {document.title}
                     </p>
                     <p className="truncate font-mono text-[11px] text-muted">{document.slug}</p>
@@ -95,6 +100,28 @@ export default function Memory() {
       )}
     </Page>
   );
+}
+
+/**
+ * `[premise]` / `[fact]` / `[indexed]` タグに付ける、人間向けの1行説明
+ * （`title` 属性・ホバーで出る）。
+ *
+ * **人間が `~/.alteroid/memory/*.md` を直接開いたときの `type:` frontmatter
+ * と対応させてある。** 一覧の1行は Markdown 化の対象外（タグの文字だけでは
+ * 「indexed」が何を意味するか分からないので、ここで意味を持たせる
+ * （`packages/core/src/memory.ts` の `renderIndexedCard` の doc と同じ説明）。
+ */
+function kindHint(kind: 'premise' | 'fact' | 'indexed'): string {
+  switch (kind) {
+    case 'premise':
+      return 'premise: 判断の前提。毎ターン要旨と節の目次がクローンのプロンプトへ焼かれる（本文は開くまで載らない）。';
+    case 'indexed':
+      return 'indexed: 特定の作業でしか使わない記憶。毎ターン要旨だけが焼かれ、節の目次は焼かれない（節は memory_outline で確かめる）。';
+    case 'fact':
+      return 'fact: 事実の蓄積。毎ターン目次の1行だけが焼かれる（本文は開くまで載らない）。';
+    default:
+      return '';
+  }
 }
 
 /**

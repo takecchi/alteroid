@@ -1421,7 +1421,7 @@
                           },
                           "kind": {
                             "type": "string",
-                            "enum": ["premise", "fact"]
+                            "enum": ["premise", "fact", "indexed"]
                           },
                           "description": {
                             "type": "string"
@@ -1604,7 +1604,7 @@
                         },
                         "kind": {
                           "type": "string",
-                          "enum": ["premise", "fact"]
+                          "enum": ["premise", "fact", "indexed"]
                         },
                         "description": {
                           "type": "string"
@@ -1815,7 +1815,7 @@
                         },
                         "kind": {
                           "type": "string",
-                          "enum": ["premise", "fact"]
+                          "enum": ["premise", "fact", "indexed"]
                         },
                         "description": {
                           "type": "string"

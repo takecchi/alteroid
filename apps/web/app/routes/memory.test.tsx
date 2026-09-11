@@ -95,3 +95,32 @@ describe('一覧の行に作成時刻を出す', () => {
     expect(screen.getByText(/更新 1日前/)).toBeTruthy();
   });
 });
+
+/**
+ * `type: indexed`（第3の区分。`packages/core/src/schema.ts` の
+ * `memoryDocKindSchema`）を、人間が一覧で見分けられること。
+ *
+ * 人間が `~/.alteroid/memory/*.md` を直接開いたときの `type:` frontmatter と
+ * 対応させる唯一の場所がこの一覧のタグである。タグの文字（`[indexed]`）
+ * だけでは意味が分からないので、ホバー説明（`title` 属性）を確かめる。
+ */
+describe('記憶の区分タグ（[premise]/[fact]/[indexed]）に人間向けの説明が付く', () => {
+  it('indexed のタグには「要旨だけが焼かれ、節の目次は焼かれない」旨の説明が付く', async () => {
+    renderMemory([doc({ slug: 'proj-only', title: 'プロジェクト専用の記憶', kind: 'indexed' })]);
+
+    const tag = await screen.findByText('[indexed]');
+    expect(tag.getAttribute('title')).toContain('節の目次は焼かれない');
+  });
+
+  it('premise / fact のタグにも説明が付く（indexed だけの特別扱いにしない）', async () => {
+    renderMemory([
+      doc({ slug: 'premise-doc', title: '前提の記憶', kind: 'premise' }),
+      doc({ slug: 'fact-doc', title: '事実の記憶', kind: 'fact' }),
+    ]);
+
+    const premiseTag = await screen.findByText('[premise]');
+    const factTag = await screen.findByText('[fact]');
+    expect(premiseTag.getAttribute('title')).not.toBe('');
+    expect(factTag.getAttribute('title')).not.toBe('');
+  });
+});
