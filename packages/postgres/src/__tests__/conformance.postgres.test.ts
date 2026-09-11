@@ -67,6 +67,8 @@ describeMemoryStoreConformance({
       leaseMs: 60_000,
     });
   },
+  // Issue #134 / ADR 0100: PostgresMemoryStore は supersedeWithNewMemories を実装している。
+  supportsSupersedeWithNewMemories: true,
 });
 
 describeEventStoreConformance({

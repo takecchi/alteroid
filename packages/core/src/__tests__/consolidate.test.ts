@@ -409,7 +409,12 @@ describe("runtime.consolidate — 途中で store が投げたら打ち切る", 
     const b = await stores.memoryStore.createMemory(ctx, newMemory({ content: "B" }));
     const c = await stores.memoryStore.createMemory(ctx, newMemory({ content: "C" }));
 
+    // ⚠ この歯は ADR 0089 決定5（打ち切って返す・投げない）を検査している。ADR 0100 以降、
+    // その契約が生きているのは**口を持たない adapter の経路**である——⟹ 口を外して測る。
+    // さもないと差し替えた `updateStatusWithEvent` が呼ばれず、**歯が黙って意味を失う**
+    // （ADR 0031 決定8 が名指しした壊れ方）。口が在る経路の振る舞いは下の別の歯が測る。
     const base = stores.memoryStore;
+    (base as { supersedeWithNewMemories?: unknown }).supersedeWithNewMemories = undefined;
     let updateCalls = 0;
     const failing = new Proxy(base, {
       get(target, prop, receiver) {
@@ -528,6 +533,8 @@ describe("runtime.consolidate — target の { query } の形", () => {
       sources: [],
       llmCalls: 0,
       llmFailure: null,
+      // ADR 0100: 書き込みを1件も試みていない。
+      atomicity: "not_attempted",
     });
   });
 });
@@ -545,6 +552,8 @@ describe("runtime.consolidate — 空の target", () => {
       sources: [],
       llmCalls: 0,
       llmFailure: null,
+      // ADR 0100: 書き込みを1件も試みていない。
+      atomicity: "not_attempted",
     });
     expect(stores.eventStore.events).toHaveLength(0);
   });
@@ -702,5 +711,157 @@ describe("buildConsolidatedMemory（純関数）", () => {
     });
     expect(memory.digestSource).toBe("fallback");
     expect(memory.digest.length).toBeLessThanOrEqual(11); // 10文字 + "…"
+  });
+});
+
+describe("runtime.consolidate — 口が在る adapter（ADR 0100）", () => {
+  it("atomicity: 'store_supported' を名乗り、統合先の作成と supersede が1回の呼び出しで済む", async () => {
+    const { runtime, stores } = buildRuntime(llmConsolidatingTo({ content: "統合後" }));
+    const a = await stores.memoryStore.createMemory(ctx, newMemory({ content: "A" }));
+    const b = await stores.memoryStore.createMemory(ctx, newMemory({ content: "B" }));
+
+    const result = await runtime.consolidate(ctx, { target: { memoryIds: [a.id, b.id] } });
+
+    expect(result.atomicity).toBe("store_supported");
+    expect(result.outcome).toBe("consolidated");
+    expect(result.sources).toEqual([
+      { memoryId: a.id, kind: "superseded", previousStatus: "active" },
+      { memoryId: b.id, kind: "superseded", previousStatus: "active" },
+    ]);
+    // 統合元は両方 superseded で、統合先を指している。
+    expect((await stores.memoryStore.get(ctx, a.id))?.supersededById).toBe(
+      result.consolidatedMemoryId,
+    );
+    expect((await stores.memoryStore.get(ctx, b.id))?.supersededById).toBe(
+      result.consolidatedMemoryId,
+    );
+    // 監査ログの `meta.supersededById` も store が埋めている（ADR 0100 の契約）。
+    expect(supersededEvents(stores, a.id)[0]?.meta.supersededById).toBe(
+      result.consolidatedMemoryId,
+    );
+  });
+
+  it("口が無い adapter では atomicity: 'store_unsupported' を名乗る", async () => {
+    const { stores } = buildRuntime();
+    (stores.memoryStore as { supersedeWithNewMemories?: unknown }).supersedeWithNewMemories =
+      undefined;
+    const a = await stores.memoryStore.createMemory(ctx, newMemory({ content: "A" }));
+    const b = await stores.memoryStore.createMemory(ctx, newMemory({ content: "B" }));
+    const runtime = createRuntime({
+      memoryStore: stores.memoryStore,
+      outboxStore: stores.outboxStore,
+      vectorStore: stores.vectorStore,
+      eventStore: stores.eventStore,
+      tenantSettingsStore: stores.tenantSettingsStore,
+      llmProvider: llmConsolidatingTo({ content: "統合後" }),
+      embeddingProvider: stores.embeddingProvider,
+      hashContent: (content: string) => `sha256(${content})`,
+      clock: { now: () => NOW },
+    });
+
+    const result = await runtime.consolidate(ctx, { target: { memoryIds: [a.id, b.id] } });
+    expect(result.atomicity).toBe("store_unsupported");
+    expect(result.outcome).toBe("consolidated");
+  });
+
+  /**
+   * 🔴🔴 この歯が ADR 0100 の芯である。
+   *
+   * **投げること自体は本題ではない。*巻き戻ること*が本題である。**
+   * ⚠ 例外が投げられたことだけを見る歯は、書き込みが残っていても緑になる——⟹ store を
+   * 実際に見に行って「新しい Memory も supersede も1つも書かれていない」ことを assert する。
+   */
+  it("口が投げたら例外は呼び出し側まで届き、新しい Memory も supersede も1件も書かれていない", async () => {
+    const { stores } = buildRuntime();
+    const a = await stores.memoryStore.createMemory(ctx, newMemory({ content: "A" }));
+    const b = await stores.memoryStore.createMemory(ctx, newMemory({ content: "B" }));
+    // Fake の裏の Map を直接数える（`FakeMemoryStore` に列挙の口が無いため）。
+    const backingMemories = (
+      stores.memoryStore as unknown as { backing: { memories: Map<string, unknown> } }
+    ).backing.memories;
+    const memoriesBefore = backingMemories.size;
+    const eventsBefore = stores.eventStore.events.length;
+
+    // 口が「トランザクションを張ったが失敗した」を模す。⛔ 部分的な書き込みは残さない
+    // （本物のトランザクションのロールバックに相当する）。
+    const failing = new Proxy(stores.memoryStore, {
+      get(target, prop, receiver) {
+        if (prop === "supersedeWithNewMemories") {
+          return async () => {
+            throw new Error("simulated transaction failure");
+          };
+        }
+        const value = Reflect.get(target, prop, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as MemoryStore;
+
+    const runtimeFailing = createRuntime({
+      memoryStore: failing,
+      outboxStore: stores.outboxStore,
+      vectorStore: stores.vectorStore,
+      eventStore: stores.eventStore,
+      tenantSettingsStore: stores.tenantSettingsStore,
+      llmProvider: llmConsolidatingTo({ content: "統合後" }),
+      embeddingProvider: stores.embeddingProvider,
+      hashContent: (content: string) => `sha256(${content})`,
+      clock: { now: () => NOW },
+    });
+
+    // 🔴 ADR 0089 決定5 をこの経路では部分的に覆す——投げる。理由は「投げない」の理由
+    // （部分的に起きたことを見えなくしない）が、1トランザクションでは成立しないため。
+    await expect(
+      runtimeFailing.consolidate(ctx, { target: { memoryIds: [a.id, b.id] } }),
+    ).rejects.toThrow("simulated transaction failure");
+
+    // 🔴 本題: 何も書かれていない。
+    expect(backingMemories.size).toBe(memoriesBefore);
+    expect(stores.eventStore.events.length).toBe(eventsBefore);
+    expect((await stores.memoryStore.get(ctx, a.id))?.status).toBe("active");
+    expect((await stores.memoryStore.get(ctx, b.id))?.status).toBe("active");
+    expect(supersededEvents(stores, a.id)).toEqual([]);
+    expect(supersededEvents(stores, b.id)).toEqual([]);
+  });
+
+  it("口が在っても、投げたときに今日の2段の経路へフォールバックしない（ADR 0100 禁止1）", async () => {
+    const { stores } = buildRuntime();
+    const a = await stores.memoryStore.createMemory(ctx, newMemory({ content: "A" }));
+    const b = await stores.memoryStore.createMemory(ctx, newMemory({ content: "B" }));
+
+    let usedFallback = false;
+    const failing = new Proxy(stores.memoryStore, {
+      get(target, prop, receiver) {
+        if (prop === "supersedeWithNewMemories") {
+          return async () => {
+            throw new Error("simulated transaction failure");
+          };
+        }
+        if (prop === "updateStatusWithEvent") {
+          return async (...args: Parameters<MemoryStore["updateStatusWithEvent"]>) => {
+            usedFallback = true;
+            return target.updateStatusWithEvent(...args);
+          };
+        }
+        const value = Reflect.get(target, prop, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as MemoryStore;
+
+    const runtimeFailing = createRuntime({
+      memoryStore: failing,
+      outboxStore: stores.outboxStore,
+      vectorStore: stores.vectorStore,
+      eventStore: stores.eventStore,
+      tenantSettingsStore: stores.tenantSettingsStore,
+      llmProvider: llmConsolidatingTo({ content: "統合後" }),
+      embeddingProvider: stores.embeddingProvider,
+      hashContent: (content: string) => `sha256(${content})`,
+      clock: { now: () => NOW },
+    });
+
+    await expect(
+      runtimeFailing.consolidate(ctx, { target: { memoryIds: [a.id, b.id] } }),
+    ).rejects.toThrow("simulated transaction failure");
+    expect(usedFallback).toBe(false);
   });
 });

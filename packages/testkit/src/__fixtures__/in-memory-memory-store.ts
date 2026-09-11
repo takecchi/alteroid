@@ -367,6 +367,113 @@ export class InMemoryMemoryStore implements MemoryStore {
   }
 
   /**
+   * Issue #134 / ADR 0100: `news`（新規 Memory の作成、複数可）と `supersede`（既存 Memory の
+   * supersede、複数可）を1回の呼び出しにまとめる——docs/memory-model.md §11 行5 が要求する
+   * 「旧行の status 更新と新 Memory の作成を1トランザクションで完結させる」を満たすため。
+   *
+   * `news` の各要素は {@link createMemoryWithOutbox} と同じ冪等経路。`supersede` の各要素は
+   * {@link updateStatusWithEvent} と同じ CAS 意味論（`status` は常に `"superseded"`）。
+   * CAS に弾かれた対象は例外にせず `conflicted` に積んで続行する——本メソッド自体は
+   * 常に成功して返る（対象がそもそも存在しない場合を除く）。
+   *
+   * ⚠ **in-memory にトランザクションは無い。**「まだ何も書いていない」ことでロールバックを
+   * 模す——`supersede[].id`/`supersededById` の存在検査を、`news`/`supersede` のどちらにも
+   * まだ1バイトも書き込む前に、**すべて先に済ませる**（`await` を挟まない同期区間、
+   * `updateStatusWithEvent`/`createObservationIdempotent` と同じ作法）。この検査のどれか1つ
+   * でも「無い」なら、この時点で throw する——`news` は1件も Map に入っていない。
+   *
+   * ⚠ **この事前検査の副作用**: `supersededById` が「同じ呼び出しの `news` で作られる
+   * （まだ採番されていない）Memory」を指すケースは、この in-memory 実装ではサポートしない
+   * ——`news` を作る前に存在を検査するため、まだ存在しない id は常に「無い」と判定される。
+   * `packages/postgres` は外部キー制約がトランザクション内の直前の INSERT を見えるため
+   * この形をサポートしうるが、**現在どの呼び出し元もこの形を必要としていない**
+   * （ADR 0100 参照）。
+   *
+   * ⚠ **返す `memory`/`event` は Map の行そのもの（複製しない）。**`listByTenant` の doc
+   * コメントと同じ注意——呼び出し側がこれを書き換えると store 自身の内部状態も書き換わる。
+   * 適合テストで「（CAS に弾かれて）変わっていないこと」を assert するときは、
+   * 呼び出しの前にプリミティブ値へ写し取ってから比べること——写し取らずに同じ参照を
+   * 2回見ると、変異を入れても歯が赤くならない（死んだ歯になる）。
+   */
+  async supersedeWithNewMemories(
+    ctx: Ctx,
+    news: ReadonlyArray<{ input: NewMemory; jobKinds: OutboxJobKind[] }>,
+    supersede: ReadonlyArray<{
+      id: MemoryId;
+      supersededByIndex: number;
+      expectedStatus?: MemoryStatus;
+      event: NewMemoryEvent;
+    }>,
+  ): Promise<{
+    created: Array<{ memory: Memory; created: boolean; jobs: OutboxJobRecord[] }>;
+    superseded: MemoryEvent[];
+    conflicted: Array<{ id: MemoryId; observedStatus: MemoryStatus }>;
+  }> {
+    // 1. 事前検証——まだ何も書いていないうちに投げる（news の作成も含め、何も起きな
+    //    かったのと同じに見せる）。⛔ 3種類の失敗を1つに潰さない（ADR 0100）。
+    for (const target of supersede) {
+      // 1a. 呼び手が壊れた索引を渡した（RangeError。conflicted にも not found にも混ぜない）。
+      if (
+        !Number.isInteger(target.supersededByIndex) ||
+        target.supersededByIndex < 0 ||
+        target.supersededByIndex >= news.length
+      ) {
+        throw new RangeError(
+          `InMemoryMemoryStore: supersededByIndex out of range: ${target.supersededByIndex} (news.length=${news.length})`,
+        );
+      }
+      // 1b. 対象の行がそもそも無い。
+      const memory = this.memories.get(target.id);
+      if (!memory || memory.tenantId !== ctx.tenantId) {
+        throw new Error(`InMemoryMemoryStore: memory not found for tenant: ${target.id}`);
+      }
+    }
+
+    // 2. news を作る（`createMemoryWithOutbox` と同じ経路）。
+    const created: Array<{ memory: Memory; created: boolean; jobs: OutboxJobRecord[] }> = [];
+    for (const { input, jobKinds } of news) {
+      const { value: memory, created: wasCreated } = this.createMemoryIdempotent(ctx, input);
+      if (!wasCreated) {
+        created.push({ memory, created: false, jobs: [] });
+        continue;
+      }
+      const jobs = jobKinds.map((kind) =>
+        this.enqueueOutboxJob(ctx, kind, { memoryId: memory.id }),
+      );
+      created.push({ memory, created: true, jobs });
+    }
+
+    // 3. supersede を1件ずつ CAS で処理する。弾かれても conflicted に積んで続行する
+    //    （本メソッド自体は commit する——ADR 0031「採らなかった案」を覆さない）。
+    const superseded: MemoryEvent[] = [];
+    const conflicted: Array<{ id: MemoryId; observedStatus: MemoryStatus }> = [];
+    for (const target of supersede) {
+      // 1. で存在を確認済み。news の作成（2.）は既存 Memory の status を変えないため、
+      // ここで読む status は 1. の検証時点から変わっていない（同期区間、await 無し）。
+      const memory = this.memories.get(target.id)!;
+      if (target.expectedStatus !== undefined && memory.status !== target.expectedStatus) {
+        conflicted.push({ id: target.id, observedStatus: memory.status });
+        continue;
+      }
+      memory.status = "superseded";
+      // `created` は `news` と同じ順序（下の 2. がそのまま push している）。1. で範囲を
+      // 検査済みなので、この索引は必ず在る。
+      const anchorId = created[target.supersededByIndex]!.memory.id;
+      memory.supersededById = anchorId;
+      memory.updatedAt = new Date();
+      // `meta.supersededById` は解決した id で埋める（interface の契約）。
+      const storedEvent = buildStoredMemoryEvent(ctx, {
+        ...target.event,
+        meta: { ...target.event.meta, supersededById: anchorId },
+      });
+      this.events.push(storedEvent);
+      superseded.push(storedEvent);
+    }
+
+    return { created, superseded, conflicted };
+  }
+
+  /**
    * ADR 0053: `ready` を `failed` へ巻き戻さない。
    *
    * `PostgresMemoryStore.setEmbeddingStatus`（`packages/postgres/src/memory-store.ts`）の

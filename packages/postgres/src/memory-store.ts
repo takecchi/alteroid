@@ -482,6 +482,188 @@ export class PostgresMemoryStore implements MemoryStore {
     });
   }
 
+  /**
+   * Issue #134 / ADR 0100: `news`（新規 Memory の作成、複数可）と `supersede`（既存 Memory の
+   * supersede、複数可）を1つの `db.transaction()` にまとめる——docs/memory-model.md §11 行5
+   * 「旧行の status 更新と新 Memory の作成を1トランザクションで完結させる」を満たす。
+   *
+   * 中身は `createMemoryWithOutbox`（INSERT ... ON CONFLICT ... DO NOTHING / outbox INSERT）と
+   * `updateStatusWithEvent`（条件付き UPDATE + `memory_events` INSERT）と同じ形——**この2つの
+   * 既存メソッドは変更していない**。`news` を先に処理し、`supersede` を後に処理する
+   * （書く順序で被害を最小にする。ADR 0089 決定5 と同じ理由——途中で落ちても、統合先が
+   * 無いのに旧行だけ `superseded_by_id` が指す先を失う、という最悪の状態を避ける）。
+   *
+   * `supersede[].id` が存在しなければトランザクション内で throw し、`news` の INSERT も
+   * 含めてロールバックされる。`supersededById` は `memories.superseded_by_id` の実 FK
+   * （`0001_init.sql`）がそのまま検査する——`news` の INSERT は同一トランザクション内で
+   * 先に実行されているため、`supersededById` が同じ呼び出しの `news` を指していても
+   * FK 違反にはならない（Postgres は同一トランザクション内の自分の書き込みを見る）。
+   * CAS に弾かれた場合（0行 UPDATE、かつ対象は存在する）は `conflicted` に積んで
+   * トランザクションはそのまま commit する——ここで throw しない。
+   */
+  async supersedeWithNewMemories(
+    ctx: Ctx,
+    news: ReadonlyArray<{ input: NewMemory; jobKinds: OutboxJobKind[] }>,
+    supersede: ReadonlyArray<{
+      id: MemoryId;
+      supersededByIndex: number;
+      expectedStatus?: MemoryStatus;
+      event: NewMemoryEvent;
+    }>,
+  ): Promise<{
+    created: Array<{ memory: Memory; created: boolean; jobs: OutboxJobRecord[] }>;
+    superseded: MemoryEvent[];
+    conflicted: Array<{ id: MemoryId; observedStatus: MemoryStatus }>;
+  }> {
+    // 呼び手が壊れた索引を渡した場合は、トランザクションを開く前に落とす（ADR 0100）。
+    // ⛔ `conflicted` にも「memory not found」にも混ぜない——3つとも別の失敗である。
+    // 開く前に落とすので、`news` の作成も当然起きない。
+    for (const target of supersede) {
+      if (
+        !Number.isInteger(target.supersededByIndex) ||
+        target.supersededByIndex < 0 ||
+        target.supersededByIndex >= news.length
+      ) {
+        throw new RangeError(
+          `PostgresMemoryStore: supersededByIndex out of range: ${target.supersededByIndex} (news.length=${news.length})`,
+        );
+      }
+    }
+
+    return this.db.transaction(async (tx) => {
+      const created: Array<{ memory: Memory; created: boolean; jobs: OutboxJobRecord[] }> = [];
+
+      for (const { input, jobKinds } of news) {
+        const sourceObservationId = input.sourceObservationId ?? null;
+        const extractorVersion = input.extractorVersion ?? null;
+        const provenanceKind = input.provenance.kind;
+
+        const inserted = await tx.execute(sql`
+          INSERT INTO memories (
+            id, tenant_id, subject_id,
+            source_observation_id, extractor_version,
+            content, content_hash, digest, digest_source,
+            provenance_kind, provenance,
+            status, superseded_by_id, contested_with_id,
+            tags,
+            occurred_at, recorded_at, last_reinforced_at,
+            strength, half_life_hours, decay_floor_at,
+            embedding_status,
+            created_at, updated_at
+          ) VALUES (
+            gen_random_uuid(), ${ctx.tenantId}, ${input.subjectId ?? null},
+            ${sourceObservationId}, ${extractorVersion},
+            ${input.content}, ${input.contentHash}, ${input.digest}, ${input.digestSource},
+            ${provenanceKind}, ${JSON.stringify(input.provenance)}::jsonb,
+            ${input.status ?? "active"}, ${input.supersededById ?? null}, ${input.contestedWithId ?? null},
+            ${sql.param(input.tags)},
+            ${input.occurredAt ?? null}, ${input.recordedAt}, ${input.lastReinforcedAt ?? null},
+            ${input.strength}, ${input.halfLifeHours}, ${input.decayFloorAt},
+            ${input.embeddingStatus},
+            now(), now()
+          )
+          ON CONFLICT (tenant_id, source_observation_id, extractor_version, content_hash)
+            WHERE source_observation_id IS NOT NULL
+          DO NOTHING
+          RETURNING *
+        `);
+
+        if (inserted.rows.length === 0) {
+          const existing = await tx.execute(sql`
+            SELECT * FROM memories
+            WHERE tenant_id = ${ctx.tenantId}
+              AND source_observation_id = ${sourceObservationId}
+              AND extractor_version IS NOT DISTINCT FROM ${extractorVersion}
+              AND content_hash = ${input.contentHash}
+            LIMIT 1
+          `);
+          created.push({
+            memory: rowToMemory(existing.rows[0] as unknown as MemoryRow),
+            created: false,
+            jobs: [],
+          });
+          continue;
+        }
+
+        const memory = rowToMemory(inserted.rows[0] as unknown as MemoryRow);
+        const jobs: OutboxJobRecord[] = [];
+        for (const kind of jobKinds) {
+          const jobResult = await tx.execute(sql`
+            INSERT INTO outbox (id, tenant_id, kind, payload, available_at, attempts, created_at)
+            VALUES (
+              gen_random_uuid(),
+              ${ctx.tenantId},
+              ${kind},
+              ${JSON.stringify({ memoryId: memory.id })}::jsonb,
+              now(),
+              0,
+              now()
+            )
+            RETURNING *
+          `);
+          jobs.push(rowToOutboxJob(jobResult.rows[0] as unknown as OutboxJobRow));
+        }
+        created.push({ memory, created: true, jobs });
+      }
+
+      const superseded: MemoryEvent[] = [];
+      const conflicted: Array<{ id: MemoryId; observedStatus: MemoryStatus }> = [];
+
+      for (const target of supersede) {
+        if (!isUuidLike(target.id)) {
+          throw new Error(`PostgresMemoryStore: memory not found for tenant: ${target.id}`);
+        }
+        const expectedStatus = target.expectedStatus;
+        const statusCondition =
+          expectedStatus !== undefined ? sql`AND status = ${expectedStatus}` : sql``;
+
+        const anchorId = created[target.supersededByIndex]!.memory.id;
+        const result = await tx.execute(sql`
+          UPDATE memories
+          SET status = 'superseded',
+              superseded_by_id = ${anchorId},
+              updated_at = now()
+          WHERE tenant_id = ${ctx.tenantId} AND id = ${target.id} ${statusCondition}
+          RETURNING *
+        `);
+
+        if (result.rows.length === 0) {
+          if (expectedStatus === undefined) {
+            throw new Error(`PostgresMemoryStore: memory not found for tenant: ${target.id}`);
+          }
+          const current = await tx.execute(sql`
+            SELECT status FROM memories WHERE tenant_id = ${ctx.tenantId} AND id = ${target.id} LIMIT 1
+          `);
+          if (current.rows.length === 0) {
+            throw new Error(`PostgresMemoryStore: memory not found for tenant: ${target.id}`);
+          }
+          const observedStatus = (current.rows[0] as unknown as { status: MemoryStatus }).status;
+          conflicted.push({ id: target.id, observedStatus });
+          continue;
+        }
+
+        const eventResult = await tx.execute(sql`
+          INSERT INTO memory_events (id, tenant_id, memory_id, kind, at, actor, digest_snapshot, size_before_bytes, meta)
+          VALUES (
+            gen_random_uuid(),
+            ${ctx.tenantId},
+            ${target.event.memoryId},
+            ${target.event.kind},
+            ${target.event.at ?? new Date()},
+            ${JSON.stringify(target.event.actor)}::jsonb,
+            ${target.event.digestSnapshot ?? null},
+            ${target.event.sizeBeforeBytes ?? null},
+            ${JSON.stringify({ ...target.event.meta, supersededById: anchorId })}::jsonb
+          )
+          RETURNING *
+        `);
+        superseded.push(rowToMemoryEvent(eventResult.rows[0] as unknown as MemoryEventRow));
+      }
+
+      return { created, superseded, conflicted };
+    });
+  }
+
   async setEmbeddingStatus(ctx: Ctx, id: MemoryId, status: EmbeddingStatus): Promise<Memory> {
     // id 列は uuid 型。この口の契約は「無い == 例外」なので、形式が壊れた入力も
     // クエリを投げる前に同じ「memory not found」の Error へ寄せる（mapping.ts の

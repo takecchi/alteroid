@@ -1,7 +1,7 @@
 import { systemClock } from "./clock.js";
 import type { Clock } from "./interfaces/clock.js";
 import type { Ctx } from "./ctx.js";
-import type { EventActor } from "./event.js";
+import type { EventActor, NewMemoryEvent } from "./event.js";
 import {
   buildNewMemoryFromCandidate,
   describeExtractionFailure,
@@ -29,7 +29,7 @@ import type { TokenCounter } from "./interfaces/token-counter.js";
 import type { VectorStore } from "./interfaces/vector-store.js";
 import type { LexicalStore } from "./interfaces/lexical-store.js";
 import type { MemoryId, ObservationId } from "./ids.js";
-import type { Memory, MemoryStatus } from "./memory.js";
+import type { Memory, MemoryStatus, NewMemory } from "./memory.js";
 import type {
   ObserveDocumentInput,
   ObserveEventInput,
@@ -208,8 +208,35 @@ export interface ObserveResult {
  * `'skipped'` は取らない——呼び出し側が明示的に指定した Observation に対して常に抽出を
  * 試みるため（deferred も冪等な再送もここには来ない）。
  */
+/**
+ * この呼び出しで「正典が要求する1トランザクション」が使えたかどうか（Issue #134 /
+ * [ADR 0100](../../../docs/decisions/0100-supersede-with-new-memories.md)）。
+ *
+ * - `'store_supported'` — `MemoryStore.supersedeWithNewMemories`（任意メソッド）が在り、
+ *   新 Memory の作成と旧行の supersede をその口へ渡した。
+ * - `'store_unsupported'` — 口が無い adapter だったので、今日どおり作成と supersede を
+ *   別々の書き込みとして行った（docs/memory-model.md §11 行5 は**満たされていない**）。
+ * - `'not_attempted'` — **書き込みを1件も試みていない。**`reextract` の安全弁（LLM が
+ *   また失敗した／候補が0件）で早期 return した場合。⛔ この状態を上の2つのどちらかに
+ *   寄せない——「口が無かった」と「そもそも書いていない」は別のことであり、潰すと
+ *   呼び手は「§11 行5 が破れた」と「破れる機会が無かった」を区別できなくなる。
+ *   名前は `ConsolidationResult` の `not_attempted`（ADR 0087 決定5）に揃えた。
+ *
+ * 🔴 **この値は原子性の証拠ではない。口の有無の写しである。** adapter が口を実装したと
+ * 宣言したことしか意味しない——実装していても実際にはトランザクションを張っていない
+ * adapter（`packages/testkit` の `InMemoryMemoryStore` は「トランザクションは一切模して
+ * いない」と自分で書いている）を、この値は見抜けない。原子性を実際に測るのは適合テストと
+ * `packages/postgres` の並行の歯であって、この値ではない。
+ *
+ * ⛔ **省略可能（`?`）にしない。**`undefined` が「口が無かった」と「この欄より前の版の
+ * 戻り値」の両方を意味してしまい、「無い」の種類を潰すことになる。
+ */
+export type WriteAtomicity = "store_supported" | "store_unsupported" | "not_attempted";
+
 export interface ReextractResult {
   observationId: ObservationId;
+  /** {@link WriteAtomicity}。⛔ 省略可能にしない。 */
+  atomicity: WriteAtomicity;
   /**
    * 今回の抽出で作られた（または冪等に既存の行として返された）Memory の id。
    * `outcome !== 'ok'`、または候補が0件だった場合は空配列。
@@ -422,6 +449,14 @@ export type ConsolidateSourceOutcome =
  */
 export interface ConsolidationResult {
   outcome: ConsolidateOutcome;
+  /**
+   * {@link WriteAtomicity}。⛔ 省略可能にしない。
+   *
+   * `outcome` が `"consolidated"` 以外（`dry_run`・`nothing_to_consolidate`・
+   * `not_examined`・`llm_failed`）のときは必ず `"not_attempted"`——書き込みを1件も
+   * 試みていないからである。
+   */
+  atomicity: WriteAtomicity;
   /** `outcome === "nothing_to_consolidate"` のときだけ非 `null`。それ以外は必ず `null`。 */
   nothingReason: ConsolidateNothingReason | null;
   /** 作られた統合先の id。`outcome !== "consolidated"` のときは必ず `null`。 */
@@ -820,19 +855,24 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
    * 新規行は増えない（`created: false` の場合はイベントも積まない）。
    * `contentHashes` は `reextract` が「今回作られた集合」を判定するために使う。
    */
-  async function createMemoriesFromCandidates(
+  /**
+   * 候補から `NewMemory` を組み立てるだけ（**書き込まない**）。
+   *
+   * Issue #134 / ADR 0100 で切り出した。`reextract` は「今回作る content_hash の集合」を
+   * supersede 判定（`classifyReextractTargets`）に渡す必要があり、かつ ADR 0100 の
+   * `supersedeWithNewMemories` は**作成と supersede を1回の呼び出しで**受け取る——
+   * ⟹ 作成より前に content_hash を知る必要がある。組み立てと書き込みを分けないと、
+   * この2つを同時に満たせない。
+   */
+  async function buildNewMemoriesForCandidates(
     ctx: Ctx,
     observation: Observation,
     candidates: ExtractedMemoryCandidate[],
-    outcome: ExtractionOutcome,
-    failure: ExtractionFailure | null,
-  ): Promise<{ memoryIds: MemoryId[]; contentHashes: Set<string> }> {
+  ): Promise<NewMemory[]> {
     const halfLifeHours = await deps.tenantSettingsStore.getDefaultHalfLifeHours(ctx);
     const now = clock.now();
-    const memoryIds: MemoryId[] = [];
-    const contentHashes = new Set<string>();
-    for (const candidate of candidates) {
-      const newMemory = buildNewMemoryFromCandidate({
+    return candidates.map((candidate) =>
+      buildNewMemoryFromCandidate({
         ctx,
         observation,
         candidate,
@@ -843,35 +883,68 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
         halfLifeHours,
         now,
         digestFallbackLength,
-      });
+      }),
+    );
+  }
+
+  /**
+   * 新しく作られた Memory について `created` イベントを積む。
+   *
+   * ⚠ **このイベントは `memories` への INSERT と同一トランザクションではない**
+   * （`EventStore.append` は別コミット）。ADR 0100 が満たしたのは
+   * docs/memory-model.md §11 行5 が名指しした「旧行の更新」と「新 Memory の作成」の
+   * 対であり、`created` イベントはその要求文に含まれていない——この非同時性は
+   * ADR 0100 の「守れないもの」に記録してある。
+   */
+  async function appendCreatedEvent(
+    ctx: Ctx,
+    memory: Memory,
+    observation: Observation,
+    outcome: ExtractionOutcome,
+    failure: ExtractionFailure | null,
+  ): Promise<void> {
+    await deps.eventStore.append(ctx, {
+      tenantId: ctx.tenantId,
+      memoryId: memory.id,
+      kind: "created",
+      actor: { type: "system" },
+      digestSnapshot: memory.digest,
+      sizeBeforeBytes: null,
+      meta: {
+        reason:
+          outcome === "llm_failed_whole_observation"
+            ? "extraction_failed_whole_observation_fallback"
+            : "extracted",
+        sourceObservationId: observation.id,
+        extractorVersion,
+        // `meta` は既存の jsonb NOT NULL 列へのキー追加のみ（マイグレーション不要）。
+        // 失敗経路（outcome: "llm_failed_whole_observation"）のときだけ足す——
+        // 成功経路の meta.reason: "extracted" の形は変えない。
+        ...(outcome === "llm_failed_whole_observation"
+          ? { failureKind: failure?.kind ?? null }
+          : {}),
+      },
+    });
+  }
+
+  async function createMemoriesFromCandidates(
+    ctx: Ctx,
+    observation: Observation,
+    candidates: ExtractedMemoryCandidate[],
+    outcome: ExtractionOutcome,
+    failure: ExtractionFailure | null,
+  ): Promise<{ memoryIds: MemoryId[]; contentHashes: Set<string> }> {
+    const newMemories = await buildNewMemoriesForCandidates(ctx, observation, candidates);
+    const memoryIds: MemoryId[] = [];
+    const contentHashes = new Set<string>();
+    for (const newMemory of newMemories) {
       contentHashes.add(newMemory.contentHash);
       const { memory, created } = await deps.memoryStore.createMemoryWithOutbox(ctx, newMemory, [
         "embed",
       ]);
       memoryIds.push(memory.id);
       if (created) {
-        await deps.eventStore.append(ctx, {
-          tenantId: ctx.tenantId,
-          memoryId: memory.id,
-          kind: "created",
-          actor: { type: "system" },
-          digestSnapshot: memory.digest,
-          sizeBeforeBytes: null,
-          meta: {
-            reason:
-              outcome === "llm_failed_whole_observation"
-                ? "extraction_failed_whole_observation_fallback"
-                : "extracted",
-            sourceObservationId: observation.id,
-            extractorVersion,
-            // `meta` は既存の jsonb NOT NULL 列へのキー追加のみ（マイグレーション不要）。
-            // 失敗経路（outcome: "llm_failed_whole_observation"）のときだけ足す——
-            // 成功経路の meta.reason: "extracted" の形は変えない。
-            ...(outcome === "llm_failed_whole_observation"
-              ? { failureKind: failure?.kind ?? null }
-              : {}),
-          },
-        });
+        await appendCreatedEvent(ctx, memory, observation, outcome, failure);
       }
       // embed ジョブは常に outbox 経由（非同期、docs/memory-model.md §11 行3）。
       // ここでは何もしない — tick() の processEmbedJob が処理する。
@@ -951,6 +1024,8 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
         memoryIds: [],
         supersededMemoryIds: [],
         skipped: [{ kind: "not_examined", reason: "llm_failed_whole_observation" }],
+        // 安全弁1 で早期 return——書き込みを1件も試みていない。
+        atomicity: "not_attempted",
         extraction: "llm_failed_whole_observation",
         extractionFailure: failure,
       };
@@ -962,6 +1037,8 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
         memoryIds: [],
         supersededMemoryIds: [],
         skipped: [{ kind: "not_examined", reason: "no_candidates" }],
+        // 安全弁2 で早期 return——書き込みを1件も試みていない。
+        atomicity: "not_attempted",
         extraction: "ok",
         extractionFailure: null,
       };
@@ -975,60 +1052,125 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       extractorVersion,
     );
 
-    const { memoryIds, contentHashes } = await createMemoriesFromCandidates(
-      ctx,
-      observation,
-      candidates,
-      "ok",
-      // ここに来る時点で outcome は必ず "ok"（上の usedWholeObservationFallback 早期 return
-      // の後）——failure は常に null。
-      null,
-    );
-    // `candidates.length === 0` を上で早期リターンしている以上、`createMemoriesFromCandidates`
-    // は候補ごとに必ず1件 push するため `memoryIds` は非空——ここは構造的に保証されている
-    // （防御的な二重チェックをあえて置かない。安全弁は「候補0件なら supersede しない」の
-    // 早期リターン1本に絞る。ADR 0028「変異A」参照: ここを二重化すると、安全弁を外す変異を
-    // 当てても歯が落ちなくなり、安全弁の実効性を検査できなくなる）。
-    const supersededById = memoryIds[0]!;
+    // ADR 0100: content_hash は**作る前**に分かる（`buildNewMemoriesForCandidates` は
+    // 書き込まない）——`supersedeWithNewMemories` が「作成と supersede を1回の呼び出しで」
+    // 受け取るには、supersede 判定を作成より前に済ませておく必要がある。
+    const newMemories = await buildNewMemoriesForCandidates(ctx, observation, candidates);
+    const contentHashes = new Set(newMemories.map((m) => m.contentHash));
 
     // ADR 0029: 判定そのものは純関数（`classifyReextractTargets`）に切り出してある——
     // ここでは判定結果（`toSupersede`・`skipped`）を受け取って I/O するだけ。
     // supersede する対象・順序・イベントの中身は ADR 0028 からミリも変えていない。
     const { toSupersede, skipped } = classifyReextractTargets(existingBefore, contentHashes);
 
+    // `supersededById` を省略すると `meta` からその欄を落とす——ADR 0100 の口を使う経路では
+    // アンカーの id が呼び出し前に存在しないため、store が解決した id で埋める契約になって
+    // いる（`MemoryStore.supersedeWithNewMemories` の doc 参照）。⟹ 監査ログの中身は
+    // 口が在る adapter と無い adapter で**同一**になる。⛔ 同じ論理操作が adapter ごとに
+    // 別の監査記録を残す形にはしない。
+    const buildSupersedeEventFor = (existing: Memory, supersededById?: MemoryId) =>
+      ({
+        tenantId: ctx.tenantId,
+        memoryId: existing.id,
+        kind: "superseded",
+        actor: { type: "system" },
+        digestSnapshot: existing.digest,
+        sizeBeforeBytes: null,
+        meta: {
+          reason: "reextract_superseded",
+          ...(supersededById === undefined ? {} : { supersededById }),
+          sourceObservationId: observationId,
+          extractorVersion,
+        },
+      }) satisfies NewMemoryEvent;
+
+    // ------------------------------------------------------------------
+    // ADR 0100: 口が在れば、作成と supersede を1トランザクションで撃つ。
+    // 🔴 フォールバックは**口の不在に対してだけ**（書き込みの前に1度判定する）。
+    // ⛔ 撃って投げられたときに今日の経路で撃ち直さない——それをすると
+    // 「トランザクションを張れなかった」と「張ったが失敗した」が呼び手から
+    // 区別できなくなる（Issue #134 が潰すなと명示した破れ）。
+    // ------------------------------------------------------------------
+    const supersedeWithNewMemories = deps.memoryStore.supersedeWithNewMemories;
+    if (supersedeWithNewMemories !== undefined) {
+      // `supersededByIndex: 0` は「この呼び出しの news[0]」——今日の
+      // `const supersededById = memoryIds[0]!` と同じ対象を指す（ADR 0028 の
+      // 「今回作った Memory の1件」）。
+      const result = await supersedeWithNewMemories.call(
+        deps.memoryStore,
+        ctx,
+        newMemories.map((input) => ({ input, jobKinds: ["embed"] as OutboxJobKind[] })),
+        toSupersede.map((existing) => ({
+          id: existing.id,
+          supersededByIndex: 0,
+          expectedStatus: "active" as MemoryStatus,
+          // `meta.supersededById` は store が解決した id で埋める（上のコメント参照）。
+          event: buildSupersedeEventFor(existing),
+        })),
+      );
+
+      const memoryIds = result.created.map((c) => c.memory.id);
+      for (const { memory, created } of result.created) {
+        if (created) {
+          await appendCreatedEvent(ctx, memory, observation, "ok", null);
+        }
+      }
+
+      // CAS に弾かれた対象は**既存の語彙**へ写す（⛔ `ReextractSkip` に新しい kind を
+      // 足さない。exhaustive switch を持つ第三者を壊しうる）。
+      const conflictedIds = new Set(result.conflicted.map((c) => c.id));
+      for (const conflict of result.conflicted) {
+        skipped.push({
+          kind: "status_changed_concurrently",
+          memoryId: conflict.id,
+          observedStatus: conflict.observedStatus,
+        });
+      }
+
+      return {
+        observationId,
+        memoryIds,
+        supersededMemoryIds: toSupersede
+          .map((existing) => existing.id)
+          .filter((id) => !conflictedIds.has(id)),
+        skipped,
+        extraction: "ok",
+        extractionFailure: null,
+        atomicity: "store_supported",
+      };
+    }
+
+    // 口が無い adapter——今日どおりの2段（作成 → supersede ループ）。
+    const memoryIds: MemoryId[] = [];
+    for (const newMemory of newMemories) {
+      const { memory, created } = await deps.memoryStore.createMemoryWithOutbox(ctx, newMemory, [
+        "embed",
+      ]);
+      memoryIds.push(memory.id);
+      if (created) {
+        await appendCreatedEvent(ctx, memory, observation, "ok", null);
+      }
+    }
+    // `candidates.length === 0` を上で早期リターンしている以上 `memoryIds` は非空
+    // ——ここは構造的に保証されている（防御的な二重チェックをあえて置かない。
+    // ADR 0028「変異A」参照）。
+    const supersededById = memoryIds[0]!;
+
     const supersededMemoryIds: MemoryId[] = [];
     for (const existing of toSupersede) {
       try {
-        // 🔴 安全弁3（PR「update-status-compare-and-swap」、ADR 0030）: `classifyReextractTargets`
-        // が「今回作る前」に読んだ時点で active だったからといって、書きに来た今この瞬間も
-        // active だとは限らない（TOCTOU）。`expectedStatus: "active"` の compare-and-swap で
-        // 「読んでから書くまでの間に status が変わった」ケースを検知不能なまま通さない。
+        // 🔴 安全弁3（ADR 0030）: 読んだ時点で active だったからといって、書きに来た今この
+        // 瞬間も active だとは限らない（TOCTOU）。`expectedStatus: "active"` の
+        // compare-and-swap で「読んでから書くまでの間に status が変わった」ケースを
+        // 検知不能なまま通さない。
         //
-        // ADR 0031: status の更新と `superseded` イベントの追記は、以前は
-        // `updateStatus` + `eventStore.append` という**別々の2コミット**だった——前者が
-        // 成功し後者が失敗すると、行は永久に `superseded` のまま対応するイベントが
-        // 永久に存在しない、という永続化された不整合が残りうる。`updateStatusWithEvent`
-        // は両方を1回の呼び出し・1トランザクションにまとめる。CAS に弾かれた場合は
-        // 両方とも起きない（イベントは積まれない）。
+        // ADR 0031: status の更新と `superseded` イベントの追記を1トランザクションで行う。
         await deps.memoryStore.updateStatusWithEvent(
           ctx,
           existing.id,
           "superseded",
           { supersededById, expectedStatus: "active" },
-          {
-            tenantId: ctx.tenantId,
-            memoryId: existing.id,
-            kind: "superseded",
-            actor: { type: "system" },
-            digestSnapshot: existing.digest,
-            sizeBeforeBytes: null,
-            meta: {
-              reason: "reextract_superseded",
-              supersededById,
-              sourceObservationId: observationId,
-              extractorVersion,
-            },
-          },
+          buildSupersedeEventFor(existing, supersededById),
         );
       } catch (error) {
         const skip = classifySupersedeFailure(existing.id, error);
@@ -1037,8 +1179,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
           throw error;
         }
         // CAS に弾かれた——supersededMemoryIds に入れず、superseded イベントも積まない
-        // （積むと「置き換えた」という監査ログが嘘になる。`updateStatusWithEvent` 自身が
-        // 弾かれたときは何も書き換えず何も積まないことを保証している）。
+        // （積むと「置き換えた」という監査ログが嘘になる）。
         skipped.push(skip);
         continue;
       }
@@ -1052,6 +1193,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       skipped,
       extraction: "ok",
       extractionFailure: null,
+      atomicity: "store_unsupported",
     };
   }
 
@@ -1392,6 +1534,8 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     if (ids.length === 0) {
       // store に一切触れない——「見ていない」。
       return {
+        // 書き込みを1件も試みていない（ADR 0100）。
+        atomicity: "not_attempted" as const,
         outcome: "not_examined",
         nothingReason: null,
         consolidatedMemoryId: null,
@@ -1460,6 +1604,8 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     // 3. eligible が0件・1件なら、ここで打ち切る（冪等性の芯）。
     if (eligibleIds.length === 0) {
       return {
+        // 書き込みを1件も試みていない（ADR 0100）。
+        atomicity: "not_attempted" as const,
         outcome: "nothing_to_consolidate",
         nothingReason: "no_eligible_sources",
         consolidatedMemoryId: null,
@@ -1470,6 +1616,8 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     }
     if (eligibleIds.length === 1) {
       return {
+        // 書き込みを1件も試みていない（ADR 0100）。
+        atomicity: "not_attempted" as const,
         outcome: "nothing_to_consolidate",
         nothingReason: "single_eligible_source",
         consolidatedMemoryId: null,
@@ -1482,6 +1630,8 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     // 4. dryRun はここで打ち切る。1件も書かない。
     if (opts.dryRun === true) {
       return {
+        // 書き込みを1件も試みていない（ADR 0100）。
+        atomicity: "not_attempted" as const,
         outcome: "dry_run",
         nothingReason: null,
         consolidatedMemoryId: null,
@@ -1502,6 +1652,8 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       });
     } catch (error) {
       return {
+        // 書き込みを1件も試みていない（ADR 0100）。
+        atomicity: "not_attempted" as const,
         outcome: "llm_failed",
         nothingReason: null,
         consolidatedMemoryId: null,
@@ -1523,6 +1675,95 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       halfLifeHours,
       now,
     });
+    const actor = opts.actor ?? { type: "system" };
+    const buildCreatedEvent = () =>
+      ({
+        tenantId: ctx.tenantId,
+        memoryId: "",
+        kind: "created",
+        actor: { type: "system" },
+        digestSnapshot: "",
+        sizeBeforeBytes: null,
+        meta: { reason: "consolidated", sources: eligibleIds },
+      }) satisfies NewMemoryEvent;
+    const buildConsolidateSupersedeEvent = (source: Memory, supersededById?: MemoryId) =>
+      ({
+        tenantId: ctx.tenantId,
+        memoryId: source.id,
+        kind: "superseded",
+        actor,
+        digestSnapshot: source.digest,
+        sizeBeforeBytes: null,
+        meta: {
+          reason: "consolidated",
+          // 口を使う経路では store が解決した id で埋める（ADR 0100）。⟹ 監査ログの中身は
+          // 口が在る adapter と無い adapter で同一になる。
+          ...(supersededById === undefined ? {} : { supersededById }),
+          ...(opts.reason !== undefined ? { note: opts.reason } : {}),
+        },
+      }) satisfies NewMemoryEvent;
+
+    const finalOutcomeById = new Map<MemoryId, ConsolidateSourceOutcome>();
+
+    // ------------------------------------------------------------------
+    // ADR 0100: 口が在れば、統合先の作成と統合元の supersede を1トランザクションで撃つ。
+    // 🔴 フォールバックは**口の不在に対してだけ**。⛔ 投げられたときに今日の経路で
+    // 撃ち直さない（「張れなかった」と「張ったが失敗した」を潰さない）。
+    //
+    // 🔴 ADR 0089 決定5 を**部分的に覆す**: あちらは「予期しない例外が出たらそこで打ち切り、
+    // 残りを not_attempted にして返す（投げない）」と決めていた。この経路では**投げる**。
+    // 理由——ADR 0089 が「投げない」とした理由は逐語で「部分的に起きたことを呼び出し側から
+    // 見えなくしないためである」。1トランザクションでは**部分的に起きたことが無くなる**
+    // （統合先の作成も supersede も全部巻き戻る）ので、その理由は満たされたままである。
+    // ⚠ 型は変わらないため、例外を受け止めていない呼び手はコンパイルでは気づけない。
+    // ADR 0100「引き受ける負債」参照。オーナー承認済み（`docs/autonomy.md:114`）。
+    // ------------------------------------------------------------------
+    const supersedeWithNewMemories = deps.memoryStore.supersedeWithNewMemories;
+    if (supersedeWithNewMemories !== undefined) {
+      const result = await supersedeWithNewMemories.call(
+        deps.memoryStore,
+        ctx,
+        [{ input: newMemory, jobKinds: ["embed"] as OutboxJobKind[] }],
+        eligibleIds.map((id) => ({
+          id,
+          supersededByIndex: 0,
+          expectedStatus: "active" as MemoryStatus,
+          event: buildConsolidateSupersedeEvent(byId.get(id)!),
+        })),
+      );
+
+      const consolidated = result.created[0]!;
+      if (consolidated.created) {
+        await deps.eventStore.append(ctx, {
+          ...buildCreatedEvent(),
+          memoryId: consolidated.memory.id,
+          digestSnapshot: consolidated.memory.digest,
+        });
+      }
+
+      const conflictedById = new Map(result.conflicted.map((c) => [c.id, c.observedStatus]));
+      for (const id of eligibleIds) {
+        const observed = conflictedById.get(id);
+        finalOutcomeById.set(
+          id,
+          observed === undefined
+            ? { memoryId: id, kind: "superseded", previousStatus: "active" }
+            : { memoryId: id, kind: "status_changed_concurrently", observedStatus: observed },
+        );
+      }
+
+      return {
+        outcome: "consolidated",
+        nothingReason: null,
+        consolidatedMemoryId: consolidated.memory.id,
+        sources: mapSources((id) => finalOutcomeById.get(id)!),
+        llmCalls: 1,
+        llmFailure: null,
+        atomicity: "store_supported",
+      };
+    }
+
+    // 口が無い adapter——今日どおりの2段（作成 → supersede ループ）。
     const { memory: consolidatedMemory, created } = await deps.memoryStore.createMemoryWithOutbox(
       ctx,
       newMemory,
@@ -1530,21 +1771,15 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     );
     if (created) {
       await deps.eventStore.append(ctx, {
-        tenantId: ctx.tenantId,
+        ...buildCreatedEvent(),
         memoryId: consolidatedMemory.id,
-        kind: "created",
-        actor: { type: "system" },
         digestSnapshot: consolidatedMemory.digest,
-        sizeBeforeBytes: null,
-        meta: { reason: "consolidated", sources: eligibleIds },
       });
     }
     // embed ジョブは常に outbox 経由（`createMemoryWithOutbox` が積む）。ここでは何もしない
     // — tick() の processEmbedJob が処理する。
 
     // 7. eligible を1件ずつ superseded へ CAS する（`reextract` のループと同じ形）。
-    const actor = opts.actor ?? { type: "system" };
-    const finalOutcomeById = new Map<MemoryId, ConsolidateSourceOutcome>();
     for (let i = 0; i < eligibleIds.length; i += 1) {
       const id = eligibleIds[i]!;
       const source = byId.get(id)!;
@@ -1554,19 +1789,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
           id,
           "superseded",
           { supersededById: consolidatedMemory.id, expectedStatus: "active" },
-          {
-            tenantId: ctx.tenantId,
-            memoryId: id,
-            kind: "superseded",
-            actor,
-            digestSnapshot: source.digest,
-            sizeBeforeBytes: null,
-            meta: {
-              reason: "consolidated",
-              supersededById: consolidatedMemory.id,
-              ...(opts.reason !== undefined ? { note: opts.reason } : {}),
-            },
-          },
+          buildConsolidateSupersedeEvent(source, consolidatedMemory.id),
         );
         finalOutcomeById.set(id, { memoryId: id, kind: "superseded", previousStatus: "active" });
       } catch (error) {
@@ -1579,7 +1802,9 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
           });
           continue;
         }
-        // 競合以外の例外——ここで打ち切り、残りは「見ていない」として返す。例外は外へ投げない。
+        // 競合以外の例外——ここで打ち切り、残りは「見ていない」として返す。例外は外へ投げない
+        // （ADR 0089 決定5。⚠ この経路では書き込みが部分的に起きているため、ADR 0100 の
+        // 判断はここには当てはまらない——投げずに返す形をそのまま残す）。
         finalOutcomeById.set(id, {
           memoryId: id,
           kind: "failed",
@@ -1604,6 +1829,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       sources: mapSources((id) => finalOutcomeById.get(id)!),
       llmCalls: 1,
       llmFailure: null,
+      atomicity: "store_unsupported",
     };
   }
 

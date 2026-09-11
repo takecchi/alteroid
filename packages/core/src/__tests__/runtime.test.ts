@@ -1309,16 +1309,140 @@ describe("runtime.reextract（ADR 0028: 「やり直したら重複が残る」�
         hashContent: (content: string) => `sha256(${content})`,
       });
 
-      // 競合ではない、ただの障害（例: 接続断）を模す。`reextract` は ADR 0031 以降
-      // `updateStatus` ではなく `updateStatusWithEvent` を呼ぶ（status 更新とイベント追記を
-      // 1回のトランザクションにまとめたため）——ここで差し替えるのもそちらにする。
-      stores.memoryStore.updateStatusWithEvent = async () => {
+      // 競合ではない、ただの障害（例: 接続断）を模す。
+      //
+      // ⚠ **この歯が差し替える先は、`reextract` が実際に呼ぶ口でなければならない。**
+      // ADR 0031 のときは `updateStatus` → `updateStatusWithEvent` へ向け直した。
+      // ADR 0100 で `FakeMemoryStore` が `supersedeWithNewMemories` を実装したため、
+      // `reextract` はそちらを呼ぶ——⟹ **差し替える先もそちらへ向け直す。**
+      // さもないと「差し替えた口が呼ばれず、例外が飛ばないので歯が落ちる」（今回は赤く
+      // なって気付けたが、条件がずれれば**緑のまま何も検査しなくなる**——ADR 0031 決定8 が
+      // 名指しした一番危険な壊れ方である）。
+      stores.memoryStore.supersedeWithNewMemories = async () => {
         throw new Error("simulated connection reset");
       };
 
       await expect(reextractRuntime.reextract(ctx, observeResult.observationId)).rejects.toThrow(
         "simulated connection reset",
       );
+    });
+
+    it("supersedeWithNewMemories が投げたとき、今日の2段の経路へフォールバックしない（ADR 0100）", async () => {
+      const stores = createFakeRuntimeStores();
+      const setupRuntime = createRuntime({
+        memoryStore: stores.memoryStore,
+        outboxStore: stores.outboxStore,
+        vectorStore: stores.vectorStore,
+        eventStore: stores.eventStore,
+        tenantSettingsStore: stores.tenantSettingsStore,
+        llmProvider: llmReturning([{ content: "候補", digest: "要旨", provenanceKind: "stated" }]),
+        embeddingProvider: stores.embeddingProvider,
+        hashContent: (content: string) => `sha256(${content})`,
+      });
+      const observeResult = await setupRuntime.observe(ctx, { kind: "utterance", text: "発話" });
+
+      const reextractRuntime = createRuntime({
+        memoryStore: stores.memoryStore,
+        outboxStore: stores.outboxStore,
+        vectorStore: stores.vectorStore,
+        eventStore: stores.eventStore,
+        tenantSettingsStore: stores.tenantSettingsStore,
+        llmProvider: llmReturning([
+          { content: "新しい抽出結果", digest: "新要旨", provenanceKind: "stated" },
+        ]),
+        embeddingProvider: stores.embeddingProvider,
+        hashContent: (content: string) => `sha256(${content})`,
+      });
+
+      // 🔴 ADR 0100 の禁止1: 口が在って**投げた**ときに今日の経路で撃ち直さない。
+      // 撃ち直すと「トランザクションを張れなかった」と「張ったが失敗した」が呼び手から
+      // 区別できなくなる（Issue #134 が潰すなと明示した破れ）。
+      let usedFallback = false;
+      stores.memoryStore.supersedeWithNewMemories = async () => {
+        throw new Error("simulated transaction failure");
+      };
+      const originalUpdateStatusWithEvent = stores.memoryStore.updateStatusWithEvent.bind(
+        stores.memoryStore,
+      );
+      stores.memoryStore.updateStatusWithEvent = async (...args) => {
+        usedFallback = true;
+        return originalUpdateStatusWithEvent(...args);
+      };
+
+      await expect(reextractRuntime.reextract(ctx, observeResult.observationId)).rejects.toThrow(
+        "simulated transaction failure",
+      );
+      // フォールバックしていない＝今日の経路（updateStatusWithEvent）は呼ばれていない。
+      expect(usedFallback).toBe(false);
+    });
+
+    it("reextract は口が在る adapter で atomicity: 'store_supported' を名乗る（ADR 0100）", async () => {
+      const stores = createFakeRuntimeStores();
+      const setupRuntime = createRuntime({
+        memoryStore: stores.memoryStore,
+        outboxStore: stores.outboxStore,
+        vectorStore: stores.vectorStore,
+        eventStore: stores.eventStore,
+        tenantSettingsStore: stores.tenantSettingsStore,
+        llmProvider: llmReturning([{ content: "候補", digest: "要旨", provenanceKind: "stated" }]),
+        embeddingProvider: stores.embeddingProvider,
+        hashContent: (content: string) => `sha256(${content})`,
+      });
+      const observeResult = await setupRuntime.observe(ctx, { kind: "utterance", text: "発話" });
+
+      const withPort = createRuntime({
+        memoryStore: stores.memoryStore,
+        outboxStore: stores.outboxStore,
+        vectorStore: stores.vectorStore,
+        eventStore: stores.eventStore,
+        tenantSettingsStore: stores.tenantSettingsStore,
+        llmProvider: llmReturning([
+          { content: "新しい抽出結果", digest: "新要旨", provenanceKind: "stated" },
+        ]),
+        embeddingProvider: stores.embeddingProvider,
+        hashContent: (content: string) => `sha256(${content})`,
+      });
+      const supported = await withPort.reextract(ctx, observeResult.observationId);
+      expect(supported.atomicity).toBe("store_supported");
+      expect(supported.supersededMemoryIds).toHaveLength(1);
+    });
+
+    it("reextract は口が無い adapter で atomicity: 'store_unsupported' を名乗り、今日の2段で書く（ADR 0100）", async () => {
+      const stores = createFakeRuntimeStores();
+      const setupRuntime = createRuntime({
+        memoryStore: stores.memoryStore,
+        outboxStore: stores.outboxStore,
+        vectorStore: stores.vectorStore,
+        eventStore: stores.eventStore,
+        tenantSettingsStore: stores.tenantSettingsStore,
+        llmProvider: llmReturning([{ content: "候補", digest: "要旨", provenanceKind: "stated" }]),
+        embeddingProvider: stores.embeddingProvider,
+        hashContent: (content: string) => `sha256(${content})`,
+      });
+      const observeResult = await setupRuntime.observe(ctx, { kind: "utterance", text: "発話" });
+
+      // 口を持たない adapter を模す——第三者の既存 adapter がこの形である。
+      // ⚠ `delete` では消えない（クラスのメソッドは prototype に在り、インスタンスの
+      // own property ではない）——`undefined` を代入して prototype を隠す。
+      (stores.memoryStore as { supersedeWithNewMemories?: unknown }).supersedeWithNewMemories =
+        undefined;
+
+      const withoutPort = createRuntime({
+        memoryStore: stores.memoryStore,
+        outboxStore: stores.outboxStore,
+        vectorStore: stores.vectorStore,
+        eventStore: stores.eventStore,
+        tenantSettingsStore: stores.tenantSettingsStore,
+        llmProvider: llmReturning([
+          { content: "新しい抽出結果", digest: "新要旨", provenanceKind: "stated" },
+        ]),
+        embeddingProvider: stores.embeddingProvider,
+        hashContent: (content: string) => `sha256(${content})`,
+      });
+      const unsupported = await withoutPort.reextract(ctx, observeResult.observationId);
+      expect(unsupported.atomicity).toBe("store_unsupported");
+      // 口が無くても supersede そのものは今日どおり行われる。
+      expect(unsupported.supersededMemoryIds).toHaveLength(1);
     });
   });
 });

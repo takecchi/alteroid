@@ -376,6 +376,89 @@ export class FakeMemoryStore implements MemoryStore {
   }
 
   /**
+   * Issue #134 / ADR 0100: `news`（新規 Memory の作成、複数可）と `supersede`（既存 Memory の
+   * supersede、複数可）を1回の呼び出しにまとめる——`packages/testkit` の
+   * `InMemoryMemoryStore.supersedeWithNewMemories` と同じ形だが、ファイル冒頭のコメントの
+   * 通り意図的に独立している（`backing` を共有する既存の形に揃えただけ）。
+   *
+   * `beforeUpdateStatus` は `supersede` の各要素についても CAS 判定の直前に発火する
+   * ——`updateStatus`/`updateStatusWithEvent` と同じ位置。この口を経由しても
+   * TOCTOU 再現のフックが死なないようにする（ADR 0031 決定8 と同じ理由）。
+   *
+   * 事前検証（`supersede[].id`/`supersededById` の存在）を `news`/`supersede` のどちらにも
+   * 書き込む前にすべて済ませることで、in-memory の「ロールバック」を模す
+   * （`InMemoryMemoryStore.supersedeWithNewMemories` と同じ作法）。
+   */
+  async supersedeWithNewMemories(
+    ctx: Ctx,
+    news: ReadonlyArray<{ input: NewMemory; jobKinds: OutboxJobKind[] }>,
+    supersede: ReadonlyArray<{
+      id: MemoryId;
+      supersededByIndex: number;
+      expectedStatus?: MemoryStatus;
+      event: NewMemoryEvent;
+    }>,
+  ): Promise<{
+    created: Array<{ memory: Memory; created: boolean; jobs: OutboxJobRecord[] }>;
+    superseded: MemoryEvent[];
+    conflicted: Array<{ id: MemoryId; observedStatus: MemoryStatus }>;
+  }> {
+    // 1. 事前検証——まだ何も書いていないうちに投げる。⛔ 3種類の失敗を潰さない（ADR 0100）。
+    for (const target of supersede) {
+      if (
+        !Number.isInteger(target.supersededByIndex) ||
+        target.supersededByIndex < 0 ||
+        target.supersededByIndex >= news.length
+      ) {
+        throw new RangeError(
+          `FakeMemoryStore: supersededByIndex out of range: ${target.supersededByIndex} (news.length=${news.length})`,
+        );
+      }
+      const memory = this.backing.memories.get(target.id);
+      if (!memory || memory.tenantId !== ctx.tenantId) {
+        throw new Error(`FakeMemoryStore: memory not found for tenant: ${target.id}`);
+      }
+    }
+
+    // 2. news を作る（`createMemoryWithOutbox` と同じ経路）。
+    const created: Array<{ memory: Memory; created: boolean; jobs: OutboxJobRecord[] }> = [];
+    for (const { input, jobKinds } of news) {
+      const { value: memory, created: wasCreated } = this.createMemoryIdempotent(ctx, input);
+      if (!wasCreated) {
+        created.push({ memory, created: false, jobs: [] });
+        continue;
+      }
+      const jobs = jobKinds.map((kind) => this.enqueueJob(ctx, kind, { memoryId: memory.id }));
+      created.push({ memory, created: true, jobs });
+    }
+
+    // 3. supersede を1件ずつ CAS で処理する。弾かれても conflicted に積んで続行する。
+    const superseded: MemoryEvent[] = [];
+    const conflicted: Array<{ id: MemoryId; observedStatus: MemoryStatus }> = [];
+    for (const target of supersede) {
+      this.beforeUpdateStatus?.(target.id);
+      const memory = this.backing.memories.get(target.id)!;
+      if (target.expectedStatus !== undefined && memory.status !== target.expectedStatus) {
+        conflicted.push({ id: target.id, observedStatus: memory.status });
+        continue;
+      }
+      memory.status = "superseded";
+      const anchorId = created[target.supersededByIndex]!.memory.id;
+      memory.supersededById = anchorId;
+      memory.updatedAt = new Date();
+      // `meta.supersededById` は解決した id で埋める（interface の契約）。
+      const storedEvent = buildStoredEvent(ctx, {
+        ...target.event,
+        meta: { ...target.event.meta, supersededById: anchorId },
+      });
+      this.backing.events.push(storedEvent);
+      superseded.push(storedEvent);
+    }
+
+    return { created, superseded, conflicted };
+  }
+
+  /**
    * ADR 0053: `ready` を `failed` へ巻き戻さない。
    * `InMemoryMemoryStore.setEmbeddingStatus`（`packages/testkit`）と同じ意味論・
    * 同じ理由——禁じる遷移の判定は共有の {@link isEmbeddingStatusRollback} に固定し、

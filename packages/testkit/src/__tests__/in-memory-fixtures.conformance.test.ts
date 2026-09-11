@@ -83,6 +83,8 @@ describeMemoryStoreConformance({
       leaseMs: 60_000,
     });
   },
+  // Issue #134 / ADR 0100: InMemoryMemoryStore は supersedeWithNewMemories を実装している。
+  supportsSupersedeWithNewMemories: true,
 });
 
 // `InMemoryVectorStore` は `status`/`subjectId`/`decayFloorAt`（Memory の属性であり

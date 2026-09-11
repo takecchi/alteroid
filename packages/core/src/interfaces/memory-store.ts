@@ -411,6 +411,88 @@ export interface MemoryStore {
    * 動くので、繰り返し呼ぶと対象が一巡する（同じ行だけを取り続けて他が飢えることがない）。
    */
   requeueEmbedJobs(ctx: Ctx, opts: RequeueEmbedJobsOptions): Promise<RequeueEmbedJobsResult>;
+  /**
+   * Issue #134 / [ADR 0100](../../../../docs/decisions/0100-supersede-with-new-memories.md):
+   * docs/memory-model.md §11 行5 が要求する「旧行の `status`/`superseded_by_id` 更新と
+   * **新 Memory の作成**は1トランザクションで完結させる」の、後半（新 Memory の作成側）を
+   * 満たすための口。`updateStatusWithEvent`（ADR 0031）は既存 Memory の status 更新と
+   * イベント追記の対だけを扱い、新しい Memory の作成は範囲外だった——このメソッドは
+   * その2つを1回の呼び出し・1トランザクションにまとめる。
+   *
+   * 🔴 **任意メソッドである。**必須にすると `MemoryStore` を実装する第三者の adapter を
+   * 壊す破壊的変更になる（`@mnemora/core` は npm に 0.1.4 で公開済み、
+   * `docs/autonomy.md:114`）。この口を実装しない adapter は今日どおり
+   * `updateStatusWithEvent` + 別呼び出しの `createMemoryWithOutbox` の2段のままでよい。
+   *
+   * `news` が配列である理由: `runtime.consolidate`（N→1）は1件で足りるが、
+   * `runtime.reextract` は候補ごとに `createMemoryWithOutbox` をループで呼び M件作る
+   * （`runtime.ts` の `createMemoriesFromCandidates`）。1件しか受け取らない形にすると
+   * `reextract` をこの口へ寄せられない。
+   *
+   * 意味論:
+   * - `news` の各要素は {@link MemoryStore.createMemoryWithOutbox} と**同じ冪等経路**
+   *   （ON CONFLICT。既存行と衝突したら `created: false` を返し、ジョブは一切積まない）。
+   * - `supersede` の各要素は {@link MemoryStore.updateStatusWithEvent} と**同じ CAS 意味論**
+   *   （`status` は常に `"superseded"` に固定——このメソッドは supersede 専用であり、
+   *   任意の status への更新は今日どおり `updateStatus`/`updateStatusWithEvent` を使うこと）。
+   * - 🔴 **CAS に弾かれた対象は例外にしない。** `conflicted` に `{ id, observedStatus }` として
+   *   積み、**トランザクションはそのまま commit する**（条件付き UPDATE の0行はエラーでは
+   *   ない）。ADR 0031「採らなかった案」（supersede ループ全体を1トランザクションにする案の
+   *   却下）を本メソッドは覆さない——「1件の競合」を「全部やらなかった」に化けさせない。
+   * - 🔴 **`supersede[].id` の行がそもそも存在しない場合は、`updateStatusWithEvent` と同じ
+   *   「memory not found」の `Error` を投げる。**このときトランザクション全体がロール
+   *   バックされ、**`news` の作成も巻き戻る**——⛔ **`conflicted` には混ぜない**
+   *   （「CAS で弾かれた」と「行が無い」は別の「無い」であり、潰すとこの設計の要が壊れる）。
+   * - 🔴 **`supersededByIndex` は `news` への索引である**（`MemoryId` ではない）。この口は
+   *   「今まさに作る Memory へ寄せる」ためのものであり、その id は store が採番するまで
+   *   存在しない——呼び出し側は渡すべき id を渡す前に知りえない（`NewMemory` は
+   *   `Omit<Memory, "id" | ...>` で `id` を持たない）。ADR 0100「採らなかった案」参照。
+   *   索引にしたことで `supersededById` の外部キー違反は**構造的に起こりえなくなった**
+   *   （指す先は必ずこの呼び出しが作った/見つけた行である）——ADR 0047 の「存在」検査は
+   *   下の範囲検査がその役目を引き継ぐ。
+   * - 🔴 **`event.meta.supersededById` は、実装が解決したアンカーの id で埋める**（呼び出し
+   *   側が渡した値があれば上書きする）。呼び出し側は索引しか持たないため、この欄を自分で
+   *   埋められない——実装が埋めることで、**監査ログの中身がこの口を実装した adapter と
+   *   実装していない adapter で同一になる。**⛔ 同じ論理操作が adapter ごとに別の監査記録を
+   *   残す形にはしない。`event` の他の欄は一切変えない。
+   * - ⚠ **`supersededByIndex` が指すのは `news[i]` に対応する Memory であって、それが
+   *   今回作られたか既に在ったかは問わない**（冪等経路で既存行と衝突した場合も同じ行を
+   *   指す。`created[i].created` がどちらかを名乗る）。
+   * - 🔴 **`created` は `news` と同じ順序・同じ長さで返す。**`supersededByIndex` が正しい行を
+   *   指せるのはこの対応が保たれているときだけであり、⚠ **並びがずれても型は何も言わない**
+   *   ——`superseded_by_id` に別の記憶の id が書かれ、検査は緑のまま通る。適合テストが
+   *   3件以上の `news` でこの対応を固定している（1件や2件では並びの入れ替えを検出できない）。
+   * - 🔴 **範囲外の `supersededByIndex` は専用の失敗として落とす**（`RangeError`。
+   *   メッセージは `supersededByIndex out of range`）。⛔ **黙って無視しない。⛔ `conflicted`
+   *   にも「memory not found」にも混ぜない**——「呼び手が壊れた索引を渡した」「CAS で
+   *   弾かれた」「対象の行が無い」は3つとも別の失敗であり、潰すとこの設計の要が壊れる。
+   *   このときも何も書かれない（`news` の作成も巻き戻る）。
+   *
+   * ⚠ **これは振る舞いの変更である。** 今日（`updateStatusWithEvent` を単独で呼ぶ経路）は
+   * 対象が存在しない場合、直前に別途呼んでいた `createMemoryWithOutbox` の作成はすでに
+   * commit 済みで残る。このメソッドを経由すると、その作成も巻き戻る——ADR 0100
+   * 「引き受ける負債」参照。
+   *
+   * 🔴 **原子性の証拠ではない。**この口が在ること自体は「adapter がこの口を実装したと
+   * 宣言した」ことしか意味しない——`packages/testkit` の `InMemoryMemoryStore` のように、
+   * 実装していても「トランザクションは一切模していない」adapter がありうる
+   * （`InMemoryMemoryStore` クラス doc 参照）。実際に原子性を測るのは適合テストと
+   * `packages/postgres` の並行の歯であって、この口の有無そのものではない。
+   */
+  supersedeWithNewMemories?(
+    ctx: Ctx,
+    news: ReadonlyArray<{ input: NewMemory; jobKinds: OutboxJobKind[] }>,
+    supersede: ReadonlyArray<{
+      id: MemoryId;
+      supersededByIndex: number;
+      expectedStatus?: MemoryStatus;
+      event: NewMemoryEvent;
+    }>,
+  ): Promise<{
+    created: Array<{ memory: Memory; created: boolean; jobs: OutboxJobRecord[] }>;
+    superseded: MemoryEvent[];
+    conflicted: Array<{ id: MemoryId; observedStatus: MemoryStatus }>;
+  }>;
 }
 
 /**
