@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ALWAYS_REDELIVER, CLONE_MODEL_ENV_KEY, createClone } from './clone.js';
 import { DEFAULT_PERMISSION_MODE } from './permission-mode.js';
+import { CLONE_ALLOWED_PERMISSION_RULES } from './permission-rules.js';
 import { buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
 import {
   MANAGER_MODEL,
@@ -121,7 +122,15 @@ describe('クローン本セッションへ渡す Options', () => {
     expect(options.model).toBe('fable');
     // preset 一式（明示リストで絞らない = 地雷1）。CLONE_ALLOWED_TOOLS は
     // 「確認なしで通す一覧」であって「使える道具の一覧」ではない。
-    expect(options.allowedTools).toEqual(CLONE_ALLOWED_TOOLS);
+    //
+    // **後ろに人間が恒久的に許可した行為の規則が並ぶ**（`permission-rules.ts`）。
+    // 並びまで固定してあるのは、順序が変わったことに意味は無いが、**この配列が
+    // 「自作ツール ＋ 許可の規則」の2つだけでできていることを、余計な要素が
+    // 混ざれば赤くなる形で言うため**である。
+    expect(options.allowedTools).toEqual([
+      ...CLONE_ALLOWED_TOOLS,
+      ...CLONE_ALLOWED_PERMISSION_RULES,
+    ]);
     expect(options.permissionMode).toBe(DEFAULT_PERMISSION_MODE);
     expect(Object.keys(options.mcpServers ?? {})).toEqual([MCP_SERVER_NAME]);
     expect(typeof options.systemPrompt).toBe('string');
@@ -276,6 +285,10 @@ describe('マネージャー（runner）へ渡す Options', () => {
     // --- ⭐ 「無いこと」の固定 ---
     expect(options.tools).toBeUndefined();
     expect(options.maxTurns).toBeUndefined();
+    // `allowedTools` そのものを渡していない ＝ 人間が恒久的に許可した行為の規則も
+    // 載らない。**マネージャーは `canUseTool` が繋がっていて確認がクローンへ回る**
+    // ので、確認を省く規則を置く理由が無い（上の `canUseTool` の固定と対）。
+    expect(options.allowedTools).toBeUndefined();
   });
 
   it('systemPrompt.append と agents[WORKER_AGENT_NAME].prompt は、ビルダー関数の戻り値そのものである（#357 の残り1点）', async () => {
@@ -398,6 +411,45 @@ describe('クローンの蒸留サイドクエリへ渡す Options', () => {
     expect(options.hooks?.PreCompact).toBeUndefined();
     // 人間の設定と MCP 連携は本セッションと同じ形で渡す。
     expect(options.settingSources).toEqual(['user', 'project', 'local']);
+
+    await clone.stop();
+  });
+
+  /**
+   * 🔴 **蒸留に許可の規則が1本も載っていないこと。**
+   *
+   * **この歯は doc の代わりである。** 本セッションと蒸留は道具も許可モードも
+   * 揃えてあるので、揃っていないものを見た人は「漏れだ」と読んで足しにくる。
+   * **足そうとしたその瞬間にだけ届く場所へ理由を置く**ために、説明を
+   * 失敗メッセージ側に書いてある（コメントは読まない人には届かない）。
+   */
+  it('蒸留には、人間が恒久的に許可した行為の規則が1本も載らない', async () => {
+    const { fn, calls } = fakeCloneSdk();
+    const stores = createMemoryStores();
+    const clone = createClone({ stores, queryFn: fn, env: {}, redeliveryGate: ALWAYS_REDELIVER });
+
+    clone.post(humanMessage('やあ'));
+    await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
+
+    await firePreCompact(calls[0] as { options: Options });
+    await expect.poll(() => calls.length > 1, { timeout: 3000 }).toBe(true);
+
+    const { options } = calls[1] as { options: Options };
+    const allowed = options.allowedTools ?? [];
+
+    // 本セッションと揃えている「道具」はそのまま載る。
+    expect(allowed).toEqual(CLONE_ALLOWED_TOOLS);
+
+    for (const rule of CLONE_ALLOWED_PERMISSION_RULES) {
+      expect(
+        allowed.includes(rule),
+        `蒸留のサイドクエリに許可の規則が載っている: ${rule}\n` +
+          'これは漏れではなく意図的な差である。揃えているのは道具と許可モードであって、' +
+          '人間が個別に許可した行為まで写す約束はしていない。' +
+          '蒸留は記憶を書くための短命なサイドクエリで、リリースを publish する理由が1つも無い。' +
+          '写せば、要る理由が無いセッションにまで同じ行為が通る＝人間が許した範囲より広くなる。',
+      ).toBe(false);
+    }
 
     await clone.stop();
   });
