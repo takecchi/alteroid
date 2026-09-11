@@ -379,7 +379,7 @@ describe('summarizeInboxBacklog', () => {
     expect(b.ageBuckets.reduce((sum, e) => sum + e.count, 0)).toBe(b.total);
   });
 
-  it('齢: 4つの境界（1h/6h/24h）それぞれの内側・外側を通す', () => {
+  it('齢: 4つのバケツそれぞれに1件ずつ落ちる（各バケツの真ん中を通す）', () => {
     const at = (hoursAgo: number) => new Date(NOW - hoursAgo * HOUR_MS_FOR_TEST).toISOString();
     const rows = [
       row(SAMPLE_EVENTS.human_message, at(0.5)), // 1時間未満
@@ -394,6 +394,36 @@ describe('summarizeInboxBacklog', () => {
       { label: '6〜24時間', count: 1 },
       { label: '24時間以上', count: 1 },
     ]);
+  });
+
+  /**
+   * ⚠ **上の歯は境界を1つも踏んでいない。** 0.5h / 3h / 12h / 48h は各バケツの
+   * *真ん中*なので、境界が1時間ずれても（`hours < 6` を `hours < 7` に取り違え
+   * ても）4件とも同じバケツに落ちたままで、歯は緑のままになる——実際に変異を
+   * 当てて生存することを確かめた（#783 の引き継ぎ時の変異試験 M3）。
+   *
+   * だから**境界のちょうど上と、その 1ms 手前**を対で撃つ。境界が動けば、
+   * どちらか（たいていは両方）が別のバケツへ落ちて赤くなる。
+   *
+   * ⭐ 実装の分岐は `hours < 1` / `hours < 6` / `hours < 24` なので、
+   * **「ちょうど」は必ず上のバケツ側**（1時間ちょうどは「1時間未満」ではない）。
+   */
+  it('齢: 境界ちょうどは上のバケツ側、その 1ms 手前は下のバケツ側', () => {
+    const atMs = (ms: number) => new Date(NOW - ms).toISOString();
+    const bucketOf = (ms: number) => {
+      const b = summarizeInboxBacklog([row(SAMPLE_EVENTS.human_message, atMs(ms))], NOW);
+      expect(b.ageBuckets).toHaveLength(1);
+      return b.ageBuckets[0]?.label;
+    };
+
+    expect(bucketOf(1 * HOUR_MS_FOR_TEST)).toBe('1〜6時間');
+    expect(bucketOf(1 * HOUR_MS_FOR_TEST - 1)).toBe('1時間未満');
+
+    expect(bucketOf(6 * HOUR_MS_FOR_TEST)).toBe('6〜24時間');
+    expect(bucketOf(6 * HOUR_MS_FOR_TEST - 1)).toBe('1〜6時間');
+
+    expect(bucketOf(24 * HOUR_MS_FOR_TEST)).toBe('24時間以上');
+    expect(bucketOf(24 * HOUR_MS_FOR_TEST - 1)).toBe('6〜24時間');
   });
 });
 
