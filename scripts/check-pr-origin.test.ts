@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
 import { describe, expect, it } from 'vitest';
 
 // @ts-expect-error -- 素の .mjs（型宣言を持たない検査スクリプト）を読む
@@ -10,6 +13,8 @@ import {
 
 import { formatOriginMarker, ORIGIN_HUMAN } from '../packages/core/src/origin-marker.js';
 import { CLONE_ACTOR_ID } from '../packages/core/src/usage.js';
+
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 /**
  * `check-pr-origin-core.mjs` の判定表（doc の全7行）を1本ずつ確かめる。
@@ -140,6 +145,42 @@ describe('parseOriginMarker: フェンスの中の刻印を数えない', () => 
     const stripped = stripFencedCode(body);
     expect(stripped).not.toContain('alteroid-origin');
     expect(stripped).toContain('残る行');
+  });
+});
+
+/**
+ * **`toContain` は「どこかに在る」しか言わず「どこに在るか」を言わない、という
+ * 罠への手当て（マネージャーからの指摘）。**
+ *
+ * `parseOriginMarker` の正規表現（`extractMarkerValues`）は、既に
+ * `<!--\s*alteroid-origin:\s*(\S+?)\s*-->` という**完全な HTML コメントの形**
+ * でしか刻印を拾わない——地の文に `alteroid-origin` という語だけが出てきても
+ * 一致しない設計に**なっているはずだが**、それを歯として固定していなかった。
+ * ここで固定する。**期待するのは `verdict` の値そのもの**（`toBe` 相当。
+ * `toEqual` で結果オブジェクトごと固定する）であって、「落ちない」ではない。
+ */
+describe('parseOriginMarker: 語の出現だけでは満たされない（説明文・テンプレート現物）', () => {
+  it('本文中に「alteroid-origin」という語だけが出てきても missing のまま（完全な HTML コメントの形が要る）', () => {
+    const body = 'この PR は alteroid-origin という刻印の仕組みについて説明する。';
+    expect(parseOriginMarker(body)).toEqual({ verdict: 'missing' });
+  });
+
+  it('刻印の名前だけを書いた不完全な HTML コメント（値が無い）は invalid にも manager 等にもならない（missing）', () => {
+    const body = '<!-- alteroid-origin -->';
+    expect(parseOriginMarker(body)).toEqual({ verdict: 'missing' });
+  });
+
+  /**
+   * **テンプレートの現物を読み込んで通す歯。** 期待値は `human` の1本しか
+   * 書かない——`.github/pull_request_template.md` の説明コメント（`<!-- ... -->`
+   * の中に「継承されない」等の地の文がある）が万一 `alteroid-origin:` を含む
+   * 形へ書き換わってしまっても、この歯はテンプレートと判定ロジックが別々に
+   * 腐ったことをそのまま検知する（テンプレート側を直接読むので、テンプレートの
+   * 中身を書き写した合成フィクスチャでは塞げない種類の腐りである）。
+   */
+  it('.github/pull_request_template.md の現物を通すと human になる', () => {
+    const template = readFileSync(`${REPO_ROOT}/.github/pull_request_template.md`, 'utf8');
+    expect(parseOriginMarker(template)).toEqual({ verdict: 'human', values: ['human'] });
   });
 });
 

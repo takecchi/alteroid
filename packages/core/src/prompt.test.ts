@@ -259,9 +259,22 @@ describe('器が共有であることの告知', () => {
  * `formatOriginMarker` を呼んだ結果を使っていることを、文字列の一致で固定する。
  */
 describe('外へ出す成果物への出所の刻印（#850）', () => {
-  it('マネージャーの本文に、自分の managerId を含む刻印がそのままの形で現れる', () => {
+  /**
+   * **`toContain` は「どこかに在る」しか言わず「どこに在るか」を言わない。**
+   * `toContain('alteroid-origin')` のような部分一致だと、この節の説明文
+   * （doc ではなく本文側にも「刻印」という語自体は出さないが、将来誰かが
+   * 別の理由で `alteroid-origin` という字面を本文へ足しても、この歯は気づけない
+   * ——だから期待値は `formatOriginMarker(...)` が返す**完全な文字列**にし、
+   * さらに本文を行に割って**その行そのものが一致すること**まで固定する。
+   */
+  it('マネージャーの本文に、自分の managerId を含む刻印がそのままの形で現れる（行ごと一致）', () => {
     const prompt = buildManagerSystemPrompt({ managerId: 'mgr-abc', workerName: 'worker' });
-    expect(prompt).toContain(formatOriginMarker('mgr-abc'));
+    const marker = formatOriginMarker('mgr-abc');
+    expect(prompt).toContain(marker);
+    const lines = prompt.split('\n');
+    expect(lines).toContainEqual(
+      `あなたが出す PR / Issue は、クローンから見て出所が分からない。本文に \`${marker}\` を1行そのまま含めること。`,
+    );
   });
 
   it('managerId を取り違えていない（別の値で呼んでも mgr-test が混ざらない）', () => {
@@ -269,9 +282,14 @@ describe('外へ出す成果物への出所の刻印（#850）', () => {
     expect(prompt).not.toContain(formatOriginMarker('mgr-test'));
   });
 
-  it('クローンの本文に、CLONE_ACTOR_ID の刻印が現れる', () => {
+  it('クローンの本文に、CLONE_ACTOR_ID の刻印が現れる（行ごと一致）', () => {
     const prompt = buildCloneSystemPrompt({ memory: renderMemoryDocuments([]) });
-    expect(prompt).toContain(formatOriginMarker(CLONE_ACTOR_ID));
+    const marker = formatOriginMarker(CLONE_ACTOR_ID);
+    expect(prompt).toContain(marker);
+    const lines = prompt.split('\n');
+    expect(lines).toContainEqual(
+      `あなた自身が PR / Issue を出すときは、本文に \`${marker}\` を1行そのまま含めること。`,
+    );
   });
 
   it('刻印の形は formatOriginMarker と同じ出所である（手書きの文字列に分かれていない）', () => {
