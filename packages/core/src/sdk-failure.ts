@@ -171,13 +171,20 @@ function nonEmpty(value: unknown): string | undefined {
  *
  * **歯は2段構えにしてある**（`sdk-failure.test.ts` の describe
  * 「`verification_required` — 回復の見込みを名乗らない」）——「`time` を
- * 名乗らないこと」と「`unknown` から他の値へ黙って倒れていないこと」は
- * 別の固定点である。前者だけだと、`unknown` が別の何かへ倒れる経路が
- * 空いたままになる。**後者が赤くなったら、それは SDK の
- * `USAGE_LIMIT_ERROR_PREFIXES` に接頭辞が増え、この語の本文がそこへ
- * 落ちるようになったという合図である**（失敗メッセージに次に確かめる
- * 手順を書いてある。この語の扱いを `LIMIT_RECOVERY_BY_PREFIX` へ足すのと
- * 同時に決めること。（Issue 番号は追って差し込む））。
+ * 名乗らないこと」（`limitRecoveryOf(...) === 'unknown'`）と「**`unknown` に
+ * なった理由**（どの接頭辞にも当たっていないこと、
+ * `matchedUsageLimitPrefix(...) === undefined`）」は別の固定点である。
+ * **前者だけでは足りない** — SDK が `USAGE_LIMIT_ERROR_PREFIXES` に接頭辞を
+ * 1本増やし、この語の本文がその接頭辞へ当たるようになっても、当たった先
+ * （`LIMIT_RECOVERY_BY_PREFIX`）の値がたまたま `'unknown'` の行なら、
+ * `limitRecoveryOf` の返り値は `'unknown'` のまま変わらず、前者の歯は
+ * 緑のままになる（`usage-limits.ts` の `matchedUsageLimitPrefix` の doc が
+ * 同じ区別を持っている——「`limitRecoveryOf` の返り値だけを見ても現れない」）。
+ * **後者はこの「値は変わらないが、当たり方は変わった」を捕まえる**——
+ * 赤くなったら、それは SDK の `USAGE_LIMIT_ERROR_PREFIXES` に接頭辞が増え、
+ * この語の本文がそこへ落ちるようになったという合図である（失敗メッセージに
+ * 次に確かめる手順を書いてある。この語の扱いを `LIMIT_RECOVERY_BY_PREFIX` へ
+ * 足すのと同時に決めること。（Issue 番号は追って差し込む））。
  *
  * **この写しは数え上げなので腐る。** 腐ったことを `tsc` に言わせる歯は
  * `sdk-failure.test.ts` の `SDK_ASSISTANT_ERROR_CODES` にあり、SDK が語を増やすと

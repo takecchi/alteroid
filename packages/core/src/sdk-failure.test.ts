@@ -7,7 +7,12 @@ import {
   resultErrorLines,
   resultFailureOf,
 } from './sdk-failure.js';
-import { classifyUsageNotice, limitRecoveryOf, withRecoveryNote } from './usage-limits.js';
+import {
+  classifyUsageNotice,
+  limitRecoveryOf,
+  matchedUsageLimitPrefix,
+  withRecoveryNote,
+} from './usage-limits.js';
 
 /**
  * 「SDK が『これは応答ではない』と言っている」印を読む部分。
@@ -380,19 +385,35 @@ describe('verification_required — 回復の見込みを名乗らない', () =>
     ).toBe('action');
   });
 
-  it('`unknown` から他の値へ黙って倒れていないこと（SDK の接頭辞増加を検知する固定点）', () => {
-    // **守りたいのは「`time` を名乗らないこと」ではなく「測っていない状態を、
-    // 測った状態に見せないこと」である。** ここが赤くなったら、次を疑うこと
-    // （このメッセージがそのまま失敗の生出力に載る——コメントは赤を見た人には
-    // 届かない）。
+  /**
+   * **どの接頭辞にも当たっていないこと（`unknown` になった理由まで固定する）。**
+   *
+   * ⚠️ 直前の「回復の見込みは `unknown`」は `limitRecoveryOf(...) === 'unknown'`
+   * だけを見ており、**値が変わらない壊れ方を捕まえない。** SDK が
+   * `USAGE_LIMIT_ERROR_PREFIXES` に新しい接頭辞を1本増やし、この文言がその
+   * 接頭辞へ当たるようになっても、当たった先の表(`LIMIT_RECOVERY_BY_PREFIX`)の
+   * 値がたまたま `'unknown'` の行なら、`limitRecoveryOf` の返り値は
+   * `'unknown'` のまま変わらない——直前の歯は緑のままになる。
+   *
+   * **`usage-limits.ts` の `matchedUsageLimitPrefix` の doc 自身がこの区別を
+   * 持っている**（逐語、`grep -Fn -- '\`limitRecoveryOf\` の返り値だけを見ても現れない。' packages/core/src/usage-limits.ts`）:
+   *
+   * > `limitRecoveryOf` の返り値だけを見ても現れない。
+   *
+   * ⟹ ここでは値ではなく**どの接頭辞にも当たっていないこと**そのものを測る。
+   */
+  it('どの接頭辞にも当たっていないこと（`unknown` になった理由まで固定する）', () => {
+    // **このメッセージがそのまま失敗の生出力に載る——コメントは赤を見た人には
+    // 届かない。**
     expect(
-      limitRecoveryOf(VERIFICATION_REQUIRED_TEXT),
+      matchedUsageLimitPrefix(VERIFICATION_REQUIRED_TEXT),
       '`verification_required` の文言が USAGE_LIMIT_ERROR_PREFIXES の新しい接頭辞に ' +
-        '当たり、黙って time/action を名乗った可能性が高い。' +
-        'matchedUsageLimitPrefix(VERIFICATION_REQUIRED_TEXT) でどの接頭辞に当たったか ' +
-        '確認すること。この語は実測で「人間（または組織の管理者）が動くまで開かない」側 ' +
-        'だと分かっているので、当たった接頭辞を LIMIT_RECOVERY_BY_PREFIX へ足すときは ' +
-        'この語の扱いも一緒に決めること（Issue 番号は追って差し込む）。',
-    ).toBe('unknown');
+        '当たるようになった（まだ time/action を名乗っているとは限らない——先に当たる ' +
+        '側が起きた段階）。matchedUsageLimitPrefix(VERIFICATION_REQUIRED_TEXT) の返り値 ' +
+        '（＝ここで当たった接頭辞そのもの）を確認すること。この語は実測で「人間（または ' +
+        '組織の管理者）が動くまで開かない」側だと分かっているので、当たった接頭辞を ' +
+        'LIMIT_RECOVERY_BY_PREFIX へ足すときはこの語の扱いも一緒に決めること' +
+        '（Issue 番号は追って差し込む）。',
+    ).toBeUndefined();
   });
 });
