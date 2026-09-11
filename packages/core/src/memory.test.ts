@@ -1633,6 +1633,49 @@ describe('premise のカードの束ねた蓋（MEMORY_PREMISE_CARD_BUDGET）—
   const DEMOTION_NOTE_HEAD = '<!-- memory: premise（カードを落とした分';
 
   /**
+   * ⭐⭐ **導出そのものを歯にする。**
+   *
+   * `MEMORY_PREMISE_CARD_BUDGET` の doc は「張り付いたカードが `premise` なら
+   * 5枚・`indexed` なら9枚で収まり、6枚目の `premise` で噛む」と書いている。
+   * **コメントは検査されないので、1文書あたりの予算かこの蓋のどちらかが動くと、
+   * 導出だけが静かに嘘になる**——実際に2026-09-11 にそうなった（#807 がカードを
+   * 1枚あたり +202 文字にし、#805 が `indexed` を蓋の対象へ加えた）。
+   *
+   * ⟹ **doc に書いた枚数を、定数と実測から計算し直して突き合わせる。** 数値は
+   * 書き写さず、**カード1枚の限界費用を測って割る**（書式が変わっても追随する）。
+   */
+  it('⭐⭐ doc の導出（premise 5枚 / indexed 9枚で収まり、6枚目の premise で噛む）が現物と一致する', () => {
+    /** 1文書あたりの予算に**完全に**張り付いたカード。節は目次の予算を確実に超える数。 */
+    const saturated = (index: number, kind: 'premise' | 'indexed'): MemoryPart => ({
+      slug: `${kind}-${String(index).padStart(3, '0')}`,
+      content: [
+        '---',
+        `type: ${kind}`,
+        `description: ${'あ'.repeat(kind === 'premise' ? MEMORY_PROMPT_DESCRIPTION_BUDGET : MEMORY_PROMPT_INDEXED_DESCRIPTION_BUDGET)}`,
+        '---',
+        '',
+        ...Array.from(
+          { length: 400 },
+          (_, n) => `## 節${n} ${'見出しの語'.repeat(6)}\n\n本文${n}\n`,
+        ),
+      ].join('\n'),
+    });
+    /** カード1枚＋区切りぶんの費用。**書式を真似ずに差で取る。** */
+    const marginal = (kind: 'premise' | 'indexed'): number =>
+      renderMemoryDocuments([saturated(0, kind), saturated(1, kind)]).length -
+      renderMemoryDocuments([saturated(0, kind)]).length;
+
+    expect(Math.floor(MEMORY_PREMISE_CARD_BUDGET / marginal('premise'))).toBe(5);
+    expect(Math.floor(MEMORY_PREMISE_CARD_BUDGET / marginal('indexed'))).toBe(9);
+
+    // **6枚目の premise で実際に噛む**（枚数の割り算だけでなく、噛んだことを出力で見る）。
+    const six = renderMemoryDocuments(
+      Array.from({ length: 6 }, (_, index) => saturated(index, 'premise')),
+    );
+    expect(six).toContain(DEMOTION_NOTE_HEAD);
+  });
+
+  /**
    * ⭐⭐ **蓋は `indexed` のカードにも掛かる。**
    *
    * #810（この蓋）と #805（`indexed`）は独立に書かれ、**合流の時点で衝突した。**
