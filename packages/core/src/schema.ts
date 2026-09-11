@@ -116,10 +116,25 @@ export type MemoryDocKind = z.infer<typeof memoryDocKindSchema>;
  * - **`fresh`** — 要旨があり、最後の本文変更以降に書かれている
  *   （`describedAt >= updatedAt`）
  * - **`stale`** — 要旨があるが、本文の方が新しい（`describedAt < updatedAt`）。
- *   目次からは消さない・全文へも落とさない —— 印つきで出す
+ *   目次からは消さない・全文へも落とさない —— 印つきで出す。**`staleForMs`
+ *   （`updatedAt - describedAt` のミリ秒差）を必ず伴う**（#821）。
+ *
+ *   **常に真になる観測は観測ではない** —— 本文の変更（`memory_append` /
+ *   `memory_section_move`）は要旨の書き直し（`memory_frontmatter_set` /
+ *   `memory_write`）よりずっと高頻度なので、`stale` は放っておくと
+ *   ほぼ全文書で真になる。**`kind: 'stale'` という1ビットだけでは、
+ *   「1時間前に古くなった」文書と「30日前から古いまま」の文書が区別
+ *   できない** —— 読み手はどちらから手を付けるべきか判断できず、鳴りっぱなしの
+ *   印に慣れて*他の*印にも鈍くなる（#821 のコメント、クローンの決定）。
+ *   `staleForMs` はこの区別を渡すための値であって、閾値で `stale` /
+ *   `fresh` を切り直すためのものではない —— 根拠の無い閾値を置くと、
+ *   同じ「常時真」をその閾値の内側で作り直すだけになる。
  * - **`unknown`** — 要旨はあるが、いつ書かれたか分からない（索引を失った・
  *   まだ観測していない）。**`fresh` にも `stale` にも畳まない** — 畳むと、
- *   索引を失った瞬間に「全部新鮮」か「全部古い」のどちらかの嘘になる
+ *   索引を失った瞬間に「全部新鮮」か「全部古い」のどちらかの嘘になる。
+ *   **`staleForMs` を持たない・`0` にもしない** —— 「取れなかった」を
+ *   「0（＝いちばん新しい）」に見せると、欠測がちょうど逆向きの結論を作る
+ *   （#821）
  * - **`absent`** — 要旨がまだ無い
  *
  * ## `title`（`memoryDocumentMetaSchema.title`）と腐り方が違う——畳まないこと
@@ -140,7 +155,7 @@ export type MemoryDocKind = z.infer<typeof memoryDocKindSchema>;
  */
 export const memoryDescriptionFreshnessSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('fresh') }),
-  z.object({ kind: z.literal('stale') }),
+  z.object({ kind: z.literal('stale'), staleForMs: z.number().int().nonnegative() }),
   z.object({ kind: z.literal('unknown') }),
   z.object({ kind: z.literal('absent') }),
 ]);

@@ -40,7 +40,11 @@ export interface MemorySummary {
   title: string;
   kind: 'premise' | 'fact' | 'indexed';
   description?: string;
-  descriptionFreshness: { kind: 'fresh' | 'stale' | 'unknown' | 'absent' };
+  descriptionFreshness:
+    | { kind: 'fresh' }
+    | { kind: 'stale'; staleForMs: number }
+    | { kind: 'unknown' }
+    | { kind: 'absent' };
   /** 最後に本文が変わった時刻。 */
   updatedAt: string;
   /**
@@ -83,7 +87,7 @@ export async function memoryListCommand(): Promise<void> {
     return;
   }
   for (const doc of documents) {
-    const marker = freshnessMarker(doc.descriptionFreshness.kind);
+    const marker = freshnessMarker(doc.descriptionFreshness);
     const desc = doc.description === undefined ? '' : ` — ${marker}${doc.description}`;
     // 5項目: slug（id）/ title（名前）/ description（概要）/ 作成 / 更新。
     // 括弧の中の形は `memory_list` に揃えてある。
@@ -95,19 +99,50 @@ export async function memoryListCommand(): Promise<void> {
 }
 
 /**
+ * 経過ミリ秒を「1時間」「30日」のような字面にする（`freshnessMarker` の
+ * `stale` 専用）。
+ *
+ * **`packages/core/src/memory.ts` の `formatMemoryStaleness` と同じ考え方
+ * だが、実体は分けて持つ。** `@alteroid/core` から値を1つでも import すると
+ * バンドラが tree-shake できずに丸ごと混入する問題は Web 側の話で CLI には
+ * 無いが、CLI はサーバから来た JSON（`MemorySummary`）を見ているだけで
+ * `@alteroid/core` の型そのものを持ち込んでいないので、ここでも同じ理由
+ * （二重管理より用途ごとの独立を取る、`apps/web/app/lib/format.ts` の
+ * `formatRelative` と同じ判断）で私物として持つ。
+ */
+function formatMemoryStaleness(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${Math.max(seconds, 0)}秒`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}分`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}時間`;
+  const days = Math.floor(hours / 24);
+  return `${days}日`;
+}
+
+/**
  * 印は要旨の前に置く（`memory_list` ツール・プロンプトの目次と同じ約束。
  * `packages/core/src/memory.ts` の doc）。**代理指標である** — `fresh` は
  * 「要旨が最後の本文変更以降に書かれた」ことしか意味しない。
  *
+ * **`absent` 以外の3状態は必ず何か言う（#821）。** 「⚠古い要旨」が
+ * 12文書すべてで鳴っていた欠陥の直し——`stale` かどうかの1ビットではなく、
+ * `stale` ならどれだけ古いか（`staleForMs`）を、`unknown` なら「取れな
+ * かった」であって「0（＝最新）」ではないことを、`fresh` なら「本文は
+ * 動いていない」という正直なゼロを、それぞれ別の言葉で言う。
+ *
  * `export` してあるのは `chat.ts` の `/memory` から使うため（同上）。
  */
-export function freshnessMarker(kind: 'fresh' | 'stale' | 'unknown' | 'absent'): string {
-  switch (kind) {
+export function freshnessMarker(freshness: MemorySummary['descriptionFreshness']): string {
+  switch (freshness.kind) {
     case 'stale':
-      return '⚠古い要旨: ';
+      return `要旨は本文より${formatMemoryStaleness(freshness.staleForMs)}古い: `;
     case 'unknown':
-      return '？鮮度不明: ';
-    default:
+      return '要旨を書いた時刻が記録されていない: ';
+    case 'fresh':
+      return '要旨の後に本文は動いていない: ';
+    case 'absent':
       return '';
   }
 }

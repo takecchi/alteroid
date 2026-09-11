@@ -4,7 +4,13 @@ import { Link, useNavigate } from 'react-router';
 import { Page } from '~/components/page';
 import { Button, Card, Empty, ErrorNote, Input, Spinner } from '~/components/ui';
 import { useMemoryDocuments } from '~/hooks/queries';
-import { formatBytes, formatCreatedAtRelative, formatRelative } from '~/lib/format';
+import {
+  formatBytes,
+  formatCreatedAtRelative,
+  formatMemoryStaleness,
+  formatRelative,
+} from '~/lib/format';
+import type { MemorySummary } from '~/lib/types';
 
 /** サーバ側と同じ規則（`memorySlugSchema`）。ここで弾いて 400 を待たない。 */
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
@@ -82,7 +88,7 @@ export default function Memory() {
                     {document.description !== undefined && (
                       // 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc）
                       <p className="truncate text-[11px] text-muted">
-                        {freshnessMark(document.descriptionFreshness.kind)}
+                        {freshnessMark(document.descriptionFreshness)}
                         {document.description}
                       </p>
                     )}
@@ -127,17 +133,28 @@ function kindHint(kind: 'premise' | 'fact' | 'indexed'): string {
 /**
  * 印は要旨の前に置く（`packages/core/src/memory.ts` と同じ約束）。
  *
- * **代理指標である。** `fresh`（印なし）は「要旨が最後の本文変更以降に
- * 書かれた」ことしか意味せず、「本文を読み直して書き直した」ことの保証では
- * ない。誤字だけ直しても fresh になる。
+ * **代理指標である。** `fresh` は「要旨が最後の本文変更以降に書かれた」
+ * ことしか意味せず、「本文を読み直して書き直した」ことの保証ではない。
+ * 誤字だけ直しても fresh になる。
+ *
+ * **`absent` 以外の3状態は必ず何か言う（#821）。** かつて `stale` /
+ * `unknown` だけが `⚠` / `？` を出し、`fresh` は空文字だった——本文の変更
+ * 頻度が要旨の書き直し頻度を大きく上回るこの記憶の運用下では、その形は
+ * ほぼ常に `⚠` が付いた状態を作り、読み手は常に鳴る印に慣れて他の印にも
+ * 鈍くなった（#821 の実測: 12/12 文書で `⚠` が付いていた）。`stale` は
+ * どれだけ古いかを `formatMemoryStaleness` で言い、`unknown` は「取れな
+ * かった」を「0（＝最新）」に見せず別の言葉で言い、`fresh` は「本文は
+ * 動いていない」という正直なゼロを、`unknown` とは違う言葉で言う。
  */
-function freshnessMark(kind: 'fresh' | 'stale' | 'unknown' | 'absent'): string {
-  switch (kind) {
+function freshnessMark(freshness: MemorySummary['descriptionFreshness']): string {
+  switch (freshness.kind) {
     case 'stale':
-      return '⚠古い要旨: ';
+      return `要旨は本文より${formatMemoryStaleness(freshness.staleForMs)}古い: `;
     case 'unknown':
-      return '？鮮度不明: ';
-    default:
+      return '要旨を書いた時刻が記録されていない: ';
+    case 'fresh':
+      return '要旨の後に本文は動いていない: ';
+    case 'absent':
       return '';
   }
 }

@@ -124,3 +124,69 @@ describe('記憶の区分タグ（[premise]/[fact]/[indexed]）に人間向け�
     expect(factTag.getAttribute('title')).not.toBe('');
   });
 });
+
+/**
+ * #821 — 「⚠古い要旨」が12/12で鳴って信号を失っていた欠陥の直し（Web 一覧側）。
+ *
+ * `⚠` を消す決定は core だけでなく Web にも当てる——常に鳴る印が他の印への
+ * 感度を下げる、というクローンの理由は表示面を問わない。
+ */
+describe('記憶一覧の要旨の前に付く印（#821 — ⚠ をやめて数で言う）', () => {
+  it('stale は差の大きさを言い、1時間差と30日差で別の文字列になる（語ではなく数で測る）', async () => {
+    renderMemory([
+      doc({
+        slug: 'stale-1h',
+        title: '1時間だけ古い記憶',
+        description: '古い要旨A',
+        descriptionFreshness: { kind: 'stale', staleForMs: 60 * 60 * 1000 },
+      }),
+      doc({
+        slug: 'stale-30d',
+        title: '30日古い記憶',
+        description: '古い要旨B',
+        descriptionFreshness: { kind: 'stale', staleForMs: 30 * 24 * 60 * 60 * 1000 },
+      }),
+    ]);
+
+    expect(await screen.findByText(/要旨は本文より1時間古い: 古い要旨A/)).toBeTruthy();
+    expect(await screen.findByText(/要旨は本文より30日古い: 古い要旨B/)).toBeTruthy();
+  });
+
+  it('unknown（記録なし）と fresh（正直なゼロ）は別の言葉で出る（条件1: 取れなかったと0を混ぜない）', async () => {
+    renderMemory([
+      doc({
+        slug: 'unknown-doc',
+        title: '鮮度不明の記憶',
+        description: '要旨U',
+        descriptionFreshness: { kind: 'unknown' },
+      }),
+      doc({
+        slug: 'fresh-doc',
+        title: '鮮度が新しい記憶',
+        description: '要旨F',
+        descriptionFreshness: { kind: 'fresh' },
+      }),
+    ]);
+
+    expect(await screen.findByText(/要旨を書いた時刻が記録されていない: 要旨U/)).toBeTruthy();
+    expect(await screen.findByText(/要旨の後に本文は動いていない: 要旨F/)).toBeTruthy();
+    // 「0日ぶん新しい」のような、欠測を鮮度に見せる文言が紛れ込んでいないこと。
+    expect(screen.queryByText(/0日/)).toBeNull();
+  });
+
+  it('absent（要旨なし）は印を出さない', async () => {
+    renderMemory([
+      doc({
+        slug: 'absent-doc',
+        title: '要旨のない記憶',
+        description: undefined,
+        descriptionFreshness: { kind: 'absent' },
+      }),
+    ]);
+
+    await screen.findByText('要旨のない記憶');
+    expect(screen.queryByText(/要旨は本文より/)).toBeNull();
+    expect(screen.queryByText(/記録されていない/)).toBeNull();
+    expect(screen.queryByText(/動いていない/)).toBeNull();
+  });
+});

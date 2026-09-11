@@ -699,7 +699,14 @@ describe('FsPersonaStore', () => {
       // description は変わっていないので describedAt は最初の書き込み時刻の
       // まま据え置かれ、updatedAt はこの2回目の書き込みで進んだ——結果、
       // describedAt < updatedAt になり stale になる。
-      expect(doc?.descriptionFreshness).toEqual({ kind: 'stale' });
+      // **`staleForMs` の厳密な値はここでは固定できない**（実時計・実ファイル
+      // システムの mtime 分解能に依存する、#821）。`kind` は固定値で確かめ、
+      // `staleForMs` は「正の値である」ことだけを確かめる——0 や負の値なら
+      // `resolveMemoryDescriptionFreshness` の引き算の向きが壊れている。
+      expect(doc?.descriptionFreshness.kind).toBe('stale');
+      if (doc?.descriptionFreshness.kind === 'stale') {
+        expect(doc.descriptionFreshness.staleForMs).toBeGreaterThan(0);
+      }
       expect(doc?.description).toBe('費用の推移');
     });
 
@@ -713,9 +720,11 @@ describe('FsPersonaStore', () => {
         'runbook',
         '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版2（本文だけ変えた）\n',
       );
-      expect((await stores.persona.read('runbook'))?.descriptionFreshness).toEqual({
-        kind: 'stale',
-      });
+      const staleDoc = await stores.persona.read('runbook');
+      expect(staleDoc?.descriptionFreshness.kind).toBe('stale');
+      if (staleDoc?.descriptionFreshness.kind === 'stale') {
+        expect(staleDoc.descriptionFreshness.staleForMs).toBeGreaterThan(0);
+      }
 
       await stores.persona.write(
         'runbook',

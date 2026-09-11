@@ -484,7 +484,7 @@ export async function runSlashCommand(
         // 違う答えで出す形になっていた）。新しい言い方を発明せず、
         // `memory.ts` の `formatCreatedAt` / `freshnessMarker` をそのまま使う。
         for (const doc of documents) {
-          const marker = freshnessMarker(doc.descriptionFreshness.kind);
+          const marker = freshnessMarker(doc.descriptionFreshness);
           const desc = doc.description === undefined ? '' : ` — ${marker}${doc.description}`;
           stdout.write(
             `  ${doc.slug}  — ${doc.title}` +

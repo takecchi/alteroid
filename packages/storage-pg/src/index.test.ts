@@ -676,7 +676,13 @@ describe('PgPersonaStore', () => {
       );
 
       const doc = await stores.persona.read('runbook');
-      expect(doc?.descriptionFreshness).toEqual({ kind: 'stale' });
+      // **`staleForMs` の厳密な値はここでは固定できない**（実時計に依存する、
+      // #821）。`kind` は固定値で確かめ、`staleForMs` は「正の値である」
+      // ことだけを確かめる——0 や負の値なら引き算の向きが壊れている。
+      expect(doc?.descriptionFreshness.kind).toBe('stale');
+      if (doc?.descriptionFreshness.kind === 'stale') {
+        expect(doc.descriptionFreshness.staleForMs).toBeGreaterThan(0);
+      }
       expect(doc?.description).toBe('費用の推移');
     });
 
@@ -690,9 +696,11 @@ describe('PgPersonaStore', () => {
         'runbook',
         '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版2（本文だけ変えた）\n',
       );
-      expect((await stores.persona.read('runbook'))?.descriptionFreshness).toEqual({
-        kind: 'stale',
-      });
+      const staleDoc = await stores.persona.read('runbook');
+      expect(staleDoc?.descriptionFreshness.kind).toBe('stale');
+      if (staleDoc?.descriptionFreshness.kind === 'stale') {
+        expect(staleDoc.descriptionFreshness.staleForMs).toBeGreaterThan(0);
+      }
 
       await stores.persona.write(
         'runbook',
@@ -723,7 +731,10 @@ describe('PgPersonaStore', () => {
       // description は append の対象外（末尾に足すだけ）なので変わらず、
       // updatedAt だけが進む——stale になる。
       const doc = await stores.persona.read('log');
-      expect(doc?.descriptionFreshness).toEqual({ kind: 'stale' });
+      expect(doc?.descriptionFreshness.kind).toBe('stale');
+      if (doc?.descriptionFreshness.kind === 'stale') {
+        expect(doc.descriptionFreshness.staleForMs).toBeGreaterThan(0);
+      }
     });
   });
 });
