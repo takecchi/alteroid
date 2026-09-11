@@ -118,6 +118,35 @@ describe('落とした記録の跡', () => {
   });
 
   /**
+   * Issue #823: 名簿の `size-unnamed` の歯（`dropped-record.test.ts` 内の
+   * `journalEntryShape の名簿`）は `/(?:^| )chars=\d+/u` という正規表現で
+   * 「無名の `size` 欄が出ているか」を判定している。**この判定は跡の文字列
+   * 全体を検索しているだけで、どこに当たったのかを見ていない**——`tag()` は
+   * 空白を1個に畳むだけで消さない（`clip(value.replaceAll(/\s+/gu, ' '), …)`。
+   * `dropped-record.ts` の `tag()`）ので、`tag()` を通した値の中に
+   * `chars=<数字>` がそのまま入っていれば、それが「本物の `summary` の
+   * `size-unnamed`」と区別なく緑を出す。
+   *
+   * `external_event` は `tag()` を1回も呼ばない型なので、この型自身の欄が
+   * 毒を運ぶことはできない（`journalEntryShape` の `external_event` ケースは
+   * `size(entry.source, 'source')` と `size(entry.summary)` の2つだけで
+   * 構成される）。**それでも、位置まで含めて丸ごと一致させる `toBe` を
+   * ここに固定する**——`source`（名前付き）と `summary`（無名）を取り違えて
+   * 実装しても、この歯だけは単独で落ちる（名簿の歯は「`source.chars=`」と
+   * 「行頭/空白直後の `chars=`」を別々に見ているだけで、`source` と
+   * `summary` の値そのものが入れ替わっても両方満たせてしまう）。
+   */
+  it('external_event は source と summary の位置ごと toBe で固定する（Issue #823）', () => {
+    const shape = journalEntryShape({
+      type: 'external_event',
+      source: 'github',
+      summary: secret,
+    });
+
+    expect(shape).toBe(`external_event source.chars=6 chars=${secret.length}`);
+  });
+
+  /**
    * 型によって「長さを出す自由文」と「出さない自由文」が混じると、跡の読み方が
    * 型ごとに変わる。**空だったのか書けなかったのかを、どの型でも同じように
    * 判別できること。**
@@ -141,6 +170,67 @@ describe('落とした記録の跡', () => {
     expect(
       journalEntryShape({ type: 'memory_update', slug: 'values', cause: 'clone', summary: 'あ' }),
     ).toContain('chars=1');
+  });
+
+  /**
+   * Issue #823（続き）: `exchange` も `memory_update` と同じく、名簿の
+   * `size-unnamed` の歯（正規表現）1本にしか `text` の見分けを頼っていなかった
+   * ——`daily_report`/`token_rotation`/`subagent_stall` には既にこの形の
+   * `toBe` があるが（このファイルの他の `it`）、`exchange` には無かった。
+   * ここでは丸ごと一致で固定する。**`with`/`role` は `journalEntrySchema` の
+   * `z.enum(...)` から推論された TypeScript のリテラル合併型なので、
+   * `pnpm typecheck` を通る限り、この2欄が任意の自由文（`chars=` を含む値）を
+   * 持つことはできない**——だから `exchange` は最初からこの Issue の言う
+   * 「毒」を仕込みようがない型である。それでも `toBe` を足すのは、値の取り違え
+   * （`with` と `role` を逆に書く等）まで含めて、名簿の歯より強く固定するため。
+   */
+  it('exchange は with/role/text の位置ごと toBe で固定する（Issue #823）', () => {
+    const shape = journalEntryShape({
+      type: 'exchange',
+      with: 'manager',
+      role: 'inbound',
+      text: secret,
+    });
+
+    expect(shape).toBe(`exchange with=manager role=inbound chars=${secret.length}`);
+  });
+
+  /**
+   * Issue #823（本丸）: `memory_update.slug` は `memorySlugSchema`
+   * （`^[a-z0-9][a-z0-9._-]*$`）で検査されるが、**それは書き込み前の実行時
+   * 検査であって、`JournalEntryInput`（`schema.ts` の `DistributiveOmit<
+   * JournalEntry, …>`）が TypeScript へ渡す型は素の `string` である。** その
+   * うえ `journalEntryShape` が呼ばれるのはまさに `journal.append` が失敗した
+   * *後*（`tools.ts` の `appendJournalOrThrow` 等）——失敗の理由が「この
+   * `slug` がその検査を通らなかったから」であっても構造上おかしくない経路
+   * である。**⟹ この欄が検査済みの値だけを持つとは限らない場所で、名簿の
+   * 正規表現は判定している。**
+   *
+   * ここでは検査を通らない `slug`（空白入り）に `chars=999` という毒を
+   * 仕込む。**本物の `summary` の長さ（`secret.length`）は 999 とは無関係な
+   * 値にしてあるので**、`toBe` は毒の 999 では絶対に満たせない——`summary` の
+   * `size()` 呼び出しが実装から落ちても、`toBe` は落ちた事実をそのまま拾う。
+   *
+   * ⚠️ **一方、名簿の歯が使う `/(?:^| )chars=\d+/u` はこの毒だけで満たせて
+   * しまう**（`slug` の毒の直前が空白なので、`(?:^| )chars=\d+` に当たる）。
+   * それを実際に確かめたのが下の1行——**この行は `summary` の実装を
+   * 変異させても常に緑のままで、何も測っていない**（対照として残す。
+   * 落ちるべきなのは直後の `toBe` のほうである）。
+   */
+  it('memory_update の summary は、slug に chars=<数字> を含む壊れた値が来ても、実際の長さで toBe が守る（Issue #823）', () => {
+    const shape = journalEntryShape({
+      type: 'memory_update',
+      slug: 'values chars=999', // memorySlugSchema の検査を通らない値（空白入り）——実行時に落ちた後の跡を想定
+      cause: 'clone',
+      summary: secret, // 実際の長さは secret.length。999 とは異なる値にしてある
+    });
+
+    // ⚠️ 名簿と同じ緩い判定。これは対照——毒だけで常に満たせるので、
+    // summary の size() を実装から落としても、この行は何も検出しない。
+    expect(shape).toMatch(/(?:^| )chars=\d+/u);
+
+    // 本命。位置と値の両方を固定するので、毒では満たせない。
+    expect(shape).toBe(`memory_update slug=values chars=999 cause=clone chars=${secret.length}`);
   });
 
   /**
@@ -964,6 +1054,27 @@ describe('droppedTraceLedgerSince（帳面が数え始めた時刻）', () => {
  *    群でしか落ちない歯は0本である。** ⟹ **この名簿の歯は、そこを肩代わりしない**
  *    （名簿が見るのは目印が出るかまでで、13欄が*その順で・その値で*出ることは
  *    見ていない）。**この `toBe` が緩められた日に、13欄の保証が同時に消える。**
+ * 4. **`size-unnamed` の判定（`/(?:^| )chars=\d+/u`）は、`tag()` を通した
+ *    別の欄の値がたまたま（または実行時検査を通らない壊れた値として）
+ *    `chars=<数字>` という文字列を運んでいると、それを本物の `size-unnamed`
+ *    欄と区別できず緑になる（Issue #823。族は3にある「跡の文字列全体を
+ *    検索して欄の存在を判定する」と同じ——ここでは「どの型のどの欄が」まで
+ *    見ていない）。`tag()` は空白を1個に畳むだけで消さないので、`tag()` を
+ *    通す欄が素の `string` 型（enum でも regex でも TypeScript レベルでは
+ *    縛られていない）で、かつ `journalEntryShape` が呼ばれる経路（`journal.
+ *    append` が失敗した*後*）では検査済みでない値が来てもおかしくない型
+ *    （例: `memory_update.slug`）で、実際に構成できることを確かめた
+ *    （`落とした記録の跡 > memory_update の summary は、slug に chars=<数字>
+ *    を含む壊れた値が来ても…`）。**この名簿の歯は、そこを肩代わりしない**
+ *    ——`size-unnamed` の欄を持つ6型（`exchange`/`memory_update`/
+ *    `daily_report`/`external_event`/`token_rotation`/`subagent_stall`）の
+ *    うち、`daily_report`/`token_rotation`/`subagent_stall` は既存の型別
+ *    `toBe` が（この Issue と無関係に）既に丸ごと一致で守っており、この穴の
+ *    影響を受けない。`exchange`/`memory_update`/`external_event` にはその
+ *    `toBe` が無かったので、この PR で型別に追加した（このファイルの上の
+ *    方、`落とした記録の跡` の中）。**この名簿の `size-unnamed` チェックは
+ *    今回弱めていない**——役割は「欄を足し忘れていないかの目印」のままで、
+ *    「どの値が出ているか」の保証は型別の `toBe` 側に一本化した。
  */
 describe('journalEntryShape の名簿（schema に足した欄の足し忘れを赤くする。PR #709）', () => {
   /**
@@ -1275,6 +1386,14 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
             // 緑を出した。変異試験で実測: `external_event` の無名欄を落としても
             // 生存した）。無名であることまで見る——「行頭」または「空白の直後」の
             // `chars=<数字>` に絞る（名前付きは直前が `.` なのでここには当たらない）。
+            //
+            // ⚠️ **それでも、`tag()` を通した「別の」欄の値が `chars=<数字>` を
+            // 運んでいると、この正規表現はそれと区別できない（Issue #823。上の
+            // クラス docstring の項目4）。** ここは今回あえて緩めたままにする——
+            // 役割を「欄の足し忘れの目印」に絞り、「値の実在・位置」の保証は
+            // 型別の `toBe`（`daily_report`/`token_rotation`/`subagent_stall`
+            // は既存、`exchange`/`memory_update`/`external_event` はこの PR で
+            // 追加）に一本化した。
             expect(shape, `${type}.${field}`).toMatch(/(?:^| )chars=\d+/u);
             break;
           case 'tag':
