@@ -24,12 +24,44 @@ pnpm --filter @alteroid/web dev # http://localhost:5173
 
 上が勝つ。
 
-1. **画面の「設定」で入れた値**（`localStorage`）
-2. ビルド時の `VITE_ALTEROID_API_URL`
+1. **画面で選んだ接続先**（`localStorage` の `alteroid.apiBaseUrl`）
+2. ビルド時の `VITE_ALTEROID_API_URL`（**先頭が既定**）
 3. 同一オリジンの `/api`（既定）
 
 1 があるので、**配る成果物1つのまま人によって違うデーモンへ向けられる**。配置ごとにビルドし
 直す必要はない。
+
+### 接続先は複数持てる
+
+画面（`/settings` と `/login` の「接続先」カード）は**一覧から選ぶ**形になっている。一覧は
+上の3段をそのまま並べたもので、区画で出どころが分かる。
+
+| 区画                         | 中身                                                       | 消せるか                       |
+| ---------------------------- | ---------------------------------------------------------- | ------------------------------ |
+| 既定（このアプリに組み込み） | ビルド時の `VITE_ALTEROID_API_URL`                         | 消せない（ビルドし直すと戻る） |
+| この画面と同じ場所           | `/api`                                                     | 消せない                       |
+| このブラウザに保存           | 画面で足したもの（`localStorage` の `alteroid.endpoints`） | 消せる・名前を変えられる       |
+
+一覧に無い先は、同じカードの「接続先を追加」に URL（と任意の名前）を入れて足す。足すと
+そのまま繋ぎに行き、`localStorage` に残るので次からは選ぶだけでよい。
+
+`VITE_ALTEROID_API_URL` は**カンマ（または改行）区切りで複数**書ける。`ラベル=URL` の形で
+名前を付けてもよい。**1つだけ書いた形は今までと1バイトも変わらない。**
+
+```sh
+VITE_ALTEROID_API_URL=https://api.example.com                                  # いままでどおり
+VITE_ALTEROID_API_URL=https://api.example.com,http://127.0.0.1:4517            # 複数
+VITE_ALTEROID_API_URL=本番=https://api.example.com,ローカル=http://127.0.0.1:4517 # 名前付き
+```
+
+`ラベル=URL` と読むのは `=` の右側が URL に見えるときだけなので、
+`https://api.example.com/?x=1` のようなクエリ文字列付きの URL は切られない。
+
+> **⚠️ 接続先を「外から渡せる経路」から受け取らないこと。** クエリ文字列・ハッシュ・
+> `document.referrer` ・ `postMessage` のような、リンクを踏ませるだけで値を注げる経路から
+> 接続先を受け取ると、**次のログインの資格情報が攻撃者のサーバへ渡る**。受け取ってよいのは
+> 人間がこの画面で打った値と選んだ値だけで、これは歯で固定してある
+> （`scripts/web-api-base-url-no-external-input.test.ts`）。
 
 ## 配置
 
@@ -53,7 +85,8 @@ pnpm --filter @alteroid/web dev # http://localhost:5173
 ALTEROID_ALLOWED_ORIGINS=https://www.example.com,https://www.hoge.vercel.app
 ```
 
-画面側は「設定」で `https://api.example.com` を入れるか、`VITE_ALTEROID_API_URL` を与えてビルドする。
+画面側は「設定」の「接続先を追加」で `https://api.example.com` を入れるか、
+`VITE_ALTEROID_API_URL` を与えてビルドする。
 
 **Cookie は使わない。** 別ドメイン間の Cookie は成立しない（サードパーティ Cookie の廃止と
 ITP、そして登録可能ドメインが違えば `Domain` 属性でも共有できない）。資格情報は
@@ -121,7 +154,7 @@ app/
   lib/api.tsx         @alteroid/api-client の生成と、資格情報を足す唯一の場所
   lib/auth.ts         トークンと引き換え券の置き場（接続先ごと）
   lib/login.ts        ログインの段取り（開始と引き取り。UI を持たないので試験できる）
-  lib/config.ts       接続先の決め方
+  lib/config.ts       接続先の決め方（1つに潰す resolveApiBaseUrl と、潰さず並べる listEndpoints）
   lib/types.ts        生成 spec から導出した型（手書きしない）
 ```
 

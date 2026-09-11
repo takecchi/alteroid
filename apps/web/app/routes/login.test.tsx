@@ -131,7 +131,10 @@ describe('ログイン画面のどの分岐からでも接続先を変えられ�
     );
     expect(await screen.findByText('デーモンに繋がらない')).toBeTruthy();
     expect(screen.getAllByLabelText('接続先')).toHaveLength(1);
-    expect(screen.getAllByRole('button', { name: '適用' })).toHaveLength(1);
+    // **「適用」ボタンは無くなった**（接続先は一覧から選ぶ形になり、選んだ
+    // 時点で切り替わる）。カードが二重に出ていないことを測るという役目は変えず、
+    // 分岐に関係なく必ず在るボタンへ当て直す。
+    expect(screen.getAllByRole('button', { name: '既定に戻す' })).toHaveLength(1);
   });
 });
 

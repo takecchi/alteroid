@@ -241,3 +241,266 @@ describe('「既定に戻す」の表示（本3-3）', () => {
     expect(button.disabled).toBe(false);
   });
 });
+
+/**
+ * 接続先を「複数持って、選ぶ」形にした分（このカードの本体の変更）。
+ *
+ * **これまでは入力欄1つだった。** 切り替えるたびに URL を打ち直すことになり、
+ * 打ち間違いが「繋がらない」として返ってくるうえ、間違えた側の値は既に上書き
+ * されているので元へ戻るにももう一度打ち直すしかなかった。
+ *
+ * ⚠️ ここで固定するのは**一覧の中身と、選ぶ／足す／直す／消すが実際に
+ * `localStorage` に効くこと**である。見た目（幅・折り返し）は上の本2・本4 が
+ * 見ており、jsdom では観測できない（レイアウトを持たないため）。
+ */
+function renderWithEndpoints(options: { buildTime?: string; respondTo?: string } = {}) {
+  if (options.buildTime !== undefined) vi.stubEnv('VITE_ALTEROID_API_URL', options.buildTime);
+  const target = options.respondTo;
+  stubFetch((url) => {
+    if (!url.includes('/health')) return undefined;
+    if (target !== undefined && !url.startsWith(target)) return undefined;
+    return json({
+      ok: true,
+      pid: 1,
+      operator: false,
+      storage: '/data',
+      auth: { enabled: false, providers: [] },
+    });
+  });
+  render(
+    <Providers>
+      <ConnectionCard />
+    </Providers>,
+  );
+}
+
+/** 一覧の `option` を、区画（`optgroup`）ごと読み出す。 */
+function readOptions(
+  select: HTMLSelectElement,
+): Array<{ group: string; value: string; text: string }> {
+  return Array.from(select.querySelectorAll('option')).map((option) => ({
+    group: option.closest('optgroup')?.label ?? '',
+    value: option.value,
+    text: option.textContent ?? '',
+  }));
+}
+
+describe('接続先を一覧から選ぶ', () => {
+  it('ビルド時の値を複数並べる。名前を付けても URL は隠さない', async () => {
+    localStorage.clear();
+    renderWithEndpoints({
+      buildTime: '本番=https://api.example.com,ローカル=http://127.0.0.1:4517',
+    });
+
+    const select = await screen.findByLabelText<HTMLSelectElement>('接続先');
+    expect(readOptions(select)).toEqual([
+      {
+        group: '既定（このアプリに組み込み）',
+        value: 'https://api.example.com',
+        text: '本番 — https://api.example.com',
+      },
+      {
+        group: '既定（このアプリに組み込み）',
+        value: 'http://127.0.0.1:4517',
+        text: 'ローカル — http://127.0.0.1:4517',
+      },
+      { group: 'この画面と同じ場所', value: '/api', text: '/api' },
+    ]);
+    // 先頭が既定（`resolveApiBaseUrl` と同じ規則）。
+    expect(select.value).toBe('https://api.example.com');
+  });
+
+  it('選ぶと、その先へ切り替わって保存される', async () => {
+    localStorage.clear();
+    renderWithEndpoints({ buildTime: 'https://api.example.com,http://127.0.0.1:4517' });
+
+    const select = await screen.findByLabelText<HTMLSelectElement>('接続先');
+    fireEvent.change(select, { target: { value: 'http://127.0.0.1:4517' } });
+
+    await waitFor(() => {
+      expect(localStorage.getItem('alteroid.apiBaseUrl')).toBe('http://127.0.0.1:4517');
+    });
+    expect(select.value).toBe('http://127.0.0.1:4517');
+  });
+
+  /**
+   * ⭐ 一覧が無かった頃に選択だけを設定した人（コンソールから手で入れた人を含む）。
+   *
+   * その先が一覧に出ないと `select` の値がどの `option` とも一致せず、ブラウザは
+   * 黙って先頭を表示する ＝ **実際の接続先と表示が食い違う。**
+   */
+  it('一覧に無い接続先を選んでいても、一覧に出て選ばれた状態になる', async () => {
+    localStorage.clear();
+    localStorage.setItem('alteroid.apiBaseUrl', 'http://console-set.example');
+    renderWithEndpoints({ buildTime: 'https://api.example.com' });
+
+    const select = await screen.findByLabelText<HTMLSelectElement>('接続先');
+    expect(select.value).toBe('http://console-set.example');
+    expect(readOptions(select)).toContainEqual({
+      group: 'このブラウザに保存',
+      value: 'http://console-set.example',
+      text: 'http://console-set.example',
+    });
+  });
+
+  it('描画しただけで、その古い形の選択が一覧へ写る（切り替えても失われない）', async () => {
+    localStorage.clear();
+    localStorage.setItem('alteroid.apiBaseUrl', 'http://console-set.example');
+    renderWithEndpoints({ buildTime: 'https://api.example.com' });
+
+    const select = await screen.findByLabelText<HTMLSelectElement>('接続先');
+    // 別の先へ切り替える。
+    fireEvent.change(select, { target: { value: 'https://api.example.com' } });
+
+    await waitFor(() => {
+      expect(select.value).toBe('https://api.example.com');
+    });
+    // 切り替えた後も、元の接続先は一覧に残っている。
+    expect(readOptions(select).map((option) => option.value)).toContain(
+      'http://console-set.example',
+    );
+  });
+});
+
+describe('接続先を足す・直す・消す', () => {
+  it('足すと一覧へ保存され、そのまま繋ぎに行く', async () => {
+    renderWithEndpoints();
+
+    fireEvent.change(await screen.findByLabelText('追加する接続先の名前（任意）'), {
+      target: { value: '検証' },
+    });
+    fireEvent.change(screen.getByLabelText('追加する接続先の URL'), {
+      target: { value: 'https://stg.example.com/' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '追加して接続' }));
+
+    await waitFor(() => {
+      expect(localStorage.getItem('alteroid.apiBaseUrl')).toBe('https://stg.example.com');
+    });
+    // 末尾のスラッシュは落ちている（経路の連結で // にしないため）。
+    expect(JSON.parse(localStorage.getItem('alteroid.endpoints') ?? '[]')).toContainEqual({
+      url: 'https://stg.example.com',
+      label: '検証',
+    });
+    const select = screen.getByLabelText<HTMLSelectElement>('接続先');
+    expect(select.value).toBe('https://stg.example.com');
+
+    // 足した後、入力欄は空に戻る（次の1件を打てる）。
+    expect(screen.getByLabelText<HTMLInputElement>('追加する接続先の URL').value).toBe('');
+    expect(screen.getByLabelText<HTMLInputElement>('追加する接続先の名前（任意）').value).toBe('');
+  });
+
+  it('名前は任意（空なら URL がそのまま出る）', async () => {
+    renderWithEndpoints();
+
+    fireEvent.change(await screen.findByLabelText('追加する接続先の URL'), {
+      target: { value: 'https://stg.example.com' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '追加して接続' }));
+
+    await waitFor(() => {
+      expect(localStorage.getItem('alteroid.apiBaseUrl')).toBe('https://stg.example.com');
+    });
+    expect(JSON.parse(localStorage.getItem('alteroid.endpoints') ?? '[]')).toContainEqual({
+      url: 'https://stg.example.com',
+    });
+  });
+
+  /**
+   * **ホスト名だけを通すと、相対 URL として画面と同じオリジンの `./example.com` を
+   * 叩きに行く**（そして 404 が「繋がらない」として返る ＝ 原因が画面から見えない）。
+   * ここで止めて、何がまずいのかを画面に書く。
+   */
+  it('接続先として使えない形は足さない。理由を画面に出す', async () => {
+    renderWithEndpoints();
+
+    fireEvent.change(await screen.findByLabelText('追加する接続先の URL'), {
+      target: { value: 'example.com' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '追加して接続' }));
+
+    expect(await screen.findByText(/接続先として使えない/)).toBeTruthy();
+    // 保存も切り替えも起きていない。**一覧が空であることを測らない** —
+    // 描画の時点で「古い形の選択」が一覧へ写っている（migrate）ので、空ではない。
+    // 測るのは「弾いた値が入っていないこと」である。
+    expect(JSON.parse(localStorage.getItem('alteroid.endpoints') ?? '[]')).toEqual([
+      { url: TEST_BASE_URL },
+    ]);
+    expect(localStorage.getItem('alteroid.apiBaseUrl')).toBe(TEST_BASE_URL);
+  });
+
+  it('空のまま押しても、何も起きずに促される', async () => {
+    renderWithEndpoints();
+
+    fireEvent.click(await screen.findByRole('button', { name: '追加して接続' }));
+
+    expect(await screen.findByText('接続先の URL を入れてほしい')).toBeTruthy();
+    expect(localStorage.getItem('alteroid.apiBaseUrl')).toBe(TEST_BASE_URL);
+  });
+
+  it('選んでいる接続先の名前を後から変えられる', async () => {
+    renderWithEndpoints();
+
+    fireEvent.click(await screen.findByRole('button', { name: '名前を変更' }));
+    fireEvent.change(screen.getByLabelText('選択中の接続先の名前'), {
+      target: { value: '手元のデーモン' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => {
+      expect(JSON.parse(localStorage.getItem('alteroid.endpoints') ?? '[]')).toContainEqual({
+        url: TEST_BASE_URL,
+        label: '手元のデーモン',
+      });
+    });
+    const select = screen.getByLabelText<HTMLSelectElement>('接続先');
+    expect(readOptions(select)).toContainEqual({
+      group: 'このブラウザに保存',
+      value: TEST_BASE_URL,
+      text: `手元のデーモン — ${TEST_BASE_URL}`,
+    });
+    // 接続先そのものは変えていない（名前だけ）。
+    expect(select.value).toBe(TEST_BASE_URL);
+  });
+
+  /**
+   * 消したのが「いま選んでいる先」なら、選択も外す。
+   *
+   * **選択だけ残すと、一覧に無い接続先へ繋ぎ続けたうえで「消した」と表示される。**
+   */
+  it('一覧から消すと、選択も既定へ戻る', async () => {
+    renderWithEndpoints({ buildTime: 'https://api.example.com' });
+
+    fireEvent.click(await screen.findByRole('button', { name: '一覧から削除' }));
+
+    await waitFor(() => {
+      expect(localStorage.getItem('alteroid.apiBaseUrl')).toBeNull();
+    });
+    expect(JSON.parse(localStorage.getItem('alteroid.endpoints') ?? '[]')).toEqual([]);
+    const select = screen.getByLabelText<HTMLSelectElement>('接続先');
+    expect(select.value).toBe('https://api.example.com');
+    expect(readOptions(select).map((option) => option.value)).not.toContain(TEST_BASE_URL);
+  });
+
+  /**
+   * **ビルド時の既定と同一オリジンには消す口を出さない。** 消してもビルドし直す
+   * まで戻ってくるので、押せる削除は嘘になる（押した瞬間は消え、読み込み直すと戻る）。
+   */
+  it('ビルド時の既定を選んでいるときは、名前変更も削除も出ない', async () => {
+    localStorage.clear();
+    renderWithEndpoints({ buildTime: 'https://api.example.com' });
+
+    await screen.findByLabelText('接続先');
+    expect(screen.queryByRole('button', { name: '名前を変更' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '一覧から削除' })).toBeNull();
+  });
+
+  it('同一オリジン（既定）を選んでいるときも、名前変更も削除も出ない', async () => {
+    localStorage.clear();
+    renderWithEndpoints();
+
+    await screen.findByLabelText('接続先');
+    expect(screen.queryByRole('button', { name: '名前を変更' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '一覧から削除' })).toBeNull();
+  });
+});

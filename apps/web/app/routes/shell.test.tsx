@@ -14,6 +14,18 @@ import { json, Providers, stubFetch } from '~/test-support';
 
 import Shell from './shell';
 
+/**
+ * **接続先を直す操作が「入力欄へ打って［適用］」から「追加欄へ打って［追加して接続］」に
+ * 変わった**（接続先が一覧から選ぶ形になり、打つのは新しい先を足すときだけになったため）。
+ *
+ * このファイルが測っている保証は1文字も変えていない —— 「繋がらない画面から、
+ * `localStorage` を手で触らずに復帰できること」である。押す物の名前だけが変わった。
+ */
+function fixEndpointFromScreen(url: string): void {
+  fireEvent.change(screen.getByLabelText('追加する接続先の URL'), { target: { value: url } });
+  fireEvent.click(screen.getByRole('button', { name: '追加して接続' }));
+}
+
 const HEALTH = {
   ok: true,
   pid: 1,
@@ -72,8 +84,7 @@ describe('接続できないとき', () => {
     expect(screen.queryByText('ダッシュボードの中身')).toBeNull();
 
     // 別オリジンを保存する
-    fireEvent.change(input, { target: { value: REMOTE } });
-    fireEvent.click(screen.getByRole('button', { name: '適用' }));
+    fixEndpointFromScreen(REMOTE);
 
     // 保存されたら自動で進む（人間が読み込み直さなくてよい）
     expect(await screen.findByText('ダッシュボードの中身')).toBeTruthy();
@@ -91,8 +102,7 @@ describe('接続できないとき', () => {
     const input = await screen.findByLabelText<HTMLInputElement>('接続先');
     expect(input.value).toBe('http://typo.example');
 
-    fireEvent.change(input, { target: { value: REMOTE } });
-    fireEvent.click(screen.getByRole('button', { name: '適用' }));
+    fixEndpointFromScreen(REMOTE);
 
     expect(await screen.findByText('ダッシュボードの中身')).toBeTruthy();
   });
