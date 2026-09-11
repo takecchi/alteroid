@@ -11475,7 +11475,10 @@ describe('クローン — 中身の同じ external をまとめて読む（#841
     );
 
     await waitFor(
-      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('3 件')),
+      () =>
+        (s.calls[0]?.inputs ?? []).some((input) =>
+          input.includes('同じ中身の合図を続けて **3 件** まとめて渡す'),
+        ),
       'まとめたターンが投げられる',
     );
     await settle();
@@ -11486,7 +11489,17 @@ describe('クローン — 中身の同じ external をまとめて読む（#841
     expect(inputs).toHaveLength(2);
 
     const merged = inputs[1] ?? '';
-    expect(merged).toContain('3 件');
+    // **束の本文そのものが件数を言っていることを、行ごと逐語で固定する。**
+    // `toContain('3 件')` だけでは足りない —— 台帳の断り書き（`#commitmentNoticeFor`
+    // の「いま届いたこの 3 件も台帳に載せた（id: ...）」）が同じ部分文字列を
+    // 満たすので、`externalBatchPrompt` から件数を丸ごと落としても緑のままになる。
+    // **変異試験で実測した**（変異 `m3-drop-batch-count`: 件数の行を落としても
+    // 赤くなった歯が0本だった）。Issue #841 の受け入れ基準「束ねるときは
+    // 『N 件を畳んだ』を必ず本文に出すこと」は、この行でだけ固定されている。
+    expect(lineStartingWith(merged, '処理待ちのあいだに、同じ中身の合図を続けて')).toBe(
+      '処理待ちのあいだに、同じ中身の合図を続けて **3 件** まとめて渡す' +
+        '（本文は1回だけ。全件で `source` と中身が一致している）。',
+    );
     expect(merged).toContain('2026-09-01T00:00:00.000Z');
     expect(merged).toContain('2026-09-01T00:00:01.000Z');
     expect(merged).toContain('2026-09-01T00:00:02.000Z');
