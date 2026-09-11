@@ -314,9 +314,41 @@ describe('summarizeInboxBacklog', () => {
       { source: 'external:webhook-a', count: 2 },
       { source: 'manager:mgr-1', count: 1 },
     ]);
+    // human_message は source を言えない型なので、bySource には現れず
+    // unknownCount 側へ数えられる。5件以内なので溢れは0。
+    expect(b.bySourceOverflowKinds).toBe(0);
+    expect(b.bySourceOverflowCount).toBe(0);
+    expect(b.bySourceUnknownCount).toBe(1);
   });
 
-  it('bySource: 上位5件まで、同数は名前順で安定する', () => {
+  /**
+   * ⚠️ #818: `bySource` は上位5件で打ち切るため、それだけでは `total` に
+   * 届かない。境界の両側（5種＝溢れ無し／6種＝1件溢れる）を撃つ。
+   * `5` という上限そのものは実装の定数を直接書いた値であり、入力からは
+   * 導いていない——変異（`5` → `6`）を当てると、5種のケースは変わらず
+   * 緑のままだが、6種のケースは `bySource` の長さと `bySourceOverflowKinds`
+   * の両方が変わって赤くなるはずである（下の mutation 節の M1 に対応）。
+   */
+  it('bySource: 送信元がちょうど5種のとき、溢れは0（境界の内側）', () => {
+    const rows = ['e', 'd', 'c', 'b', 'a'].map((name, i) =>
+      row({ ...SAMPLE_EVENTS.external, id: `e-${i}`, source: name }, '2026-09-11T00:00:00.000Z'),
+    );
+    const b = summarizeInboxBacklog(rows, NOW);
+    expect(b.bySource).toHaveLength(5);
+    expect(b.bySource.map((e) => e.source)).toEqual([
+      'external:a',
+      'external:b',
+      'external:c',
+      'external:d',
+      'external:e',
+    ]);
+    expect(b.bySourceOverflowKinds).toBe(0);
+    expect(b.bySourceOverflowCount).toBe(0);
+    // 全件が bySource に入っているので、算術がそのまま total に一致する。
+    expect(b.bySource.reduce((sum, e) => sum + e.count, 0)).toBe(b.total);
+  });
+
+  it('bySource: 上位5件まで、同数は名前順で安定する（6種目は打ち切られ、溢れとして数えられる）', () => {
     const rows = ['e', 'd', 'c', 'b', 'a', 'f'].map((name, i) =>
       row({ ...SAMPLE_EVENTS.external, id: `e-${i}`, source: name }, '2026-09-11T00:00:00.000Z'),
     );
@@ -329,6 +361,65 @@ describe('summarizeInboxBacklog', () => {
       'external:d',
       'external:e',
     ]);
+    // 6種目（f、1件）が打ち切られて溢れ側へ数えられる。
+    expect(b.bySourceOverflowKinds).toBe(1);
+    expect(b.bySourceOverflowCount).toBe(1);
+    expect(b.bySourceUnknownCount).toBe(0);
+    // 不変条件: bySource の総和 + 溢れ「件数」 + unknown件数 === total。
+    // （bySourceOverflowKinds は種類数であって件数ではないため、この和には
+    // 含めない——次のテストで種類数と件数がずれるケースを別途確かめる）
+    const bySourceSum = b.bySource.reduce((sum, e) => sum + e.count, 0);
+    expect(bySourceSum + b.bySourceOverflowCount + b.bySourceUnknownCount).toBe(b.total);
+  });
+
+  /**
+   * ⭐ 不変条件そのものを固定する歯。`bySource` の件数の総和 +
+   * `bySourceOverflowCount`（溢れた**件数**。種類数の `bySourceOverflowKinds`
+   * とは別軸）+ `bySourceUnknownCount` === `total`。
+   *
+   * 送信元7種（件数は不均一: a=3, b=3, c=2, d=2, e=1, f=1, g=1）+
+   * source を言えない型（human_message）を2件混ぜ、上位5件・溢れ2種・
+   * unknown2件の全部が同時に非0になる入力で撃つ。
+   */
+  it('⭐ 不変条件: bySource の総和 + bySourceOverflowCount + bySourceUnknownCount === total', () => {
+    const externalRows = [
+      ['a', 3],
+      ['b', 3],
+      ['c', 2],
+      ['d', 2],
+      ['e', 1],
+      ['f', 1],
+      ['g', 1],
+    ].flatMap(([name, count]) =>
+      Array.from({ length: count as number }, (_, i) =>
+        row(
+          { ...SAMPLE_EVENTS.external, id: `${name as string}-${i}`, source: name as string },
+          '2026-09-11T00:00:00.000Z',
+        ),
+      ),
+    );
+    const unknownRows = [
+      row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z'),
+      row({ ...SAMPLE_EVENTS.human_message, id: 'h2' }, '2026-09-11T00:00:00.000Z'),
+    ];
+    const rows = [...externalRows, ...unknownRows];
+    const b = summarizeInboxBacklog(rows, NOW);
+
+    expect(b.total).toBe(15); // 3+3+2+2+1+1+1 + 2
+    expect(b.bySource).toEqual([
+      { source: 'external:a', count: 3 },
+      { source: 'external:b', count: 3 },
+      { source: 'external:c', count: 2 },
+      { source: 'external:d', count: 2 },
+      { source: 'external:e', count: 1 },
+    ]);
+    expect(b.bySourceOverflowKinds).toBe(2); // f, g
+    expect(b.bySourceOverflowCount).toBe(2); // f(1) + g(1)
+    expect(b.bySourceUnknownCount).toBe(2); // human_message 2件
+
+    const bySourceSum = b.bySource.reduce((sum, e) => sum + e.count, 0);
+    expect(bySourceSum).toBe(11);
+    expect(bySourceSum + b.bySourceOverflowCount + b.bySourceUnknownCount).toBe(b.total);
   });
 
   it('distinct: 同一本文（id/at 以外が同じ）を畳んだ件数', () => {
@@ -357,6 +448,45 @@ describe('summarizeInboxBacklog', () => {
     expect(b.deliveredOnce).toBe(1);
     expect(b.redelivered).toBe(2);
     expect(b.maxDeliveries).toBe(4);
+  });
+
+  /**
+   * #783 段0 追補: 「未配達の中に人間の依頼が混ざっているか」を種類別で
+   * 直接言えるようにする（`undeliveredByType`）。境界は `deliveries` の
+   * 0 / 1 / 2 の3値を直接撃つ（`=== 0` を `<= 1` に変異すると、
+   * deliveries=1 の行まで未配達側へ数えられて赤くなるはず）。
+   */
+  it('undeliveredByType: deliveries===0 の行だけを種類別に数える（0/1/2の境界）', () => {
+    const rows = [
+      row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z', 0),
+      row({ ...SAMPLE_EVENTS.human_message, id: 'e2' }, '2026-09-11T00:00:00.000Z', 1),
+      row(SAMPLE_EVENTS.manager_message, '2026-09-11T00:00:00.000Z', 0),
+      row({ ...SAMPLE_EVENTS.manager_message, id: 'e4' }, '2026-09-11T00:00:00.000Z', 2),
+      row(SAMPLE_EVENTS.timer, '2026-09-11T00:00:00.000Z', 0),
+    ];
+    const b = summarizeInboxBacklog(rows, NOW);
+    // human_message 1件（e1のみ。e2は1回配達済みなので数えない）、
+    // manager_message 1件（e3のみ。e4は2回で redelivered なので数えない）、
+    // timer 1件。INBOX_EVENT_TYPE_ORDER の並び
+    // （human_message, human_answer, distill, timer, external,
+    // self_initiative, manager_message）どおりに並ぶ。
+    expect(b.undeliveredByType).toEqual([
+      { type: 'human_message', count: 1 },
+      { type: 'timer', count: 1 },
+      { type: 'manager_message', count: 1 },
+    ]);
+    expect(b.undelivered).toBe(3);
+    expect(b.undeliveredByType.reduce((sum, e) => sum + e.count, 0)).toBe(b.undelivered);
+  });
+
+  it('undeliveredByType: 未配達が0件のとき、空配列になる（0件の型は載せない）', () => {
+    const rows = [
+      row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z', 1),
+      row({ ...SAMPLE_EVENTS.human_message, id: 'e2' }, '2026-09-11T00:00:00.000Z', 2),
+    ];
+    const b = summarizeInboxBacklog(rows, NOW);
+    expect(b.undeliveredByType).toEqual([]);
+    expect(b.undelivered).toBe(0);
   });
 
   it('齢: 0件のバケツは省かれ、残りを足すと total に一致する', () => {
@@ -427,6 +557,18 @@ describe('summarizeInboxBacklog', () => {
   });
 });
 
+/**
+ * 描画（`describeInboxBacklogBreakdown`）を「語」ではなく「行」で測るための
+ * ヘルパ。`AGENTS.md`「静かに失敗する道具」——同じ語が別の行にも在ると
+ * `toContain` は節ごと消しても緑のままになる——を避けるため、対象の行を
+ * 改行で割って1本に特定してから、その行の中身を丸ごと突き合わせる。
+ */
+function lineStartingWith(text: string, prefix: string): string {
+  const matches = text.split('\n').filter((line) => line.startsWith(prefix));
+  expect(matches).toHaveLength(1);
+  return matches[0]!;
+}
+
 describe('describeInboxBacklogBreakdown', () => {
   it('必ず total を出す', () => {
     const b: InboxBacklogBreakdown = summarizeInboxBacklog(
@@ -454,6 +596,61 @@ describe('describeInboxBacklogBreakdown', () => {
     const text = describeInboxBacklogBreakdown(b);
     expect(text).not.toContain('絶対に外へ出てはいけない本文XYZ');
     expect(text).not.toContain('bar'); // external.payload.foo の値
+  });
+
+  /**
+   * ⭐ #818: 溢れ件数・unknown件数は**0のときも省かず載せる**——省くと
+   * 「省いた＝0だった」という他の軸（byType/ageBuckets）と同じ見た目になり、
+   * 「測っていない」との区別が読み手からできなくなる。行そのものを
+   * `toBe` で固定し、`toContain` の弱さ（別の行に同じ数字が在っても
+   * 通ってしまう）を避ける。
+   */
+  it('送信元の行: 溢れ・unknownが0でも数字として必ず出る（0件でも省略しない）', () => {
+    const b = summarizeInboxBacklog([row(SAMPLE_EVENTS.external, '2026-09-11T00:00:00.000Z')], NOW);
+    const line = lineStartingWith(describeInboxBacklogBreakdown(b), '送信元');
+    expect(line).toBe(
+      '送信元（上位5件。source/managerIdを持つ型のみ。溢れ 0 種 0 件 / source を言えない型 0 件）: external:webhook-a 1',
+    );
+  });
+
+  it('送信元の行: 溢れ・unknownが実際に非0のとき、その数がそのまま出る', () => {
+    const rows = [
+      ...['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((name, i) =>
+        row({ ...SAMPLE_EVENTS.external, id: `e-${i}`, source: name }, '2026-09-11T00:00:00.000Z'),
+      ),
+      row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z'),
+    ];
+    const b = summarizeInboxBacklog(rows, NOW);
+    const line = lineStartingWith(describeInboxBacklogBreakdown(b), '送信元');
+    expect(line).toBe(
+      '送信元（上位5件。source/managerIdを持つ型のみ。溢れ 2 種 2 件 / source を言えない型 1 件）: ' +
+        'external:a 1 / external:b 1 / external:c 1 / external:d 1 / external:e 1',
+    );
+  });
+
+  /**
+   * 未配達の内訳（種類別）の行——0件のときは他の0件軸と同じ「（無し）」で
+   * よい（`undelivered` 自体が0なので「測っていない」との混同が起きない）。
+   */
+  it('未配達の内訳の行: 未配達が無ければ「（無し）」、在れば種類別に出る', () => {
+    const zero = summarizeInboxBacklog(
+      [row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z', 1)],
+      NOW,
+    );
+    expect(lineStartingWith(describeInboxBacklogBreakdown(zero), '未配達の内訳')).toBe(
+      '未配達の内訳（種類別）: （無し）',
+    );
+
+    const some = summarizeInboxBacklog(
+      [
+        row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z', 0),
+        row(SAMPLE_EVENTS.manager_message, '2026-09-11T00:00:00.000Z', 0),
+      ],
+      NOW,
+    );
+    expect(lineStartingWith(describeInboxBacklogBreakdown(some), '未配達の内訳')).toBe(
+      '未配達の内訳（種類別）: human_message 1 / manager_message 1',
+    );
   });
 });
 
