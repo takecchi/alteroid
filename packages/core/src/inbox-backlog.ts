@@ -290,7 +290,9 @@ export function describeInboxBacklogBreakdown(b: InboxBacklogBreakdown): string 
       ? '（source/managerId を持つ型は無い）'
       : b.bySource.map((e) => `${e.source} ${e.count}`).join(' / ');
   const ageBucketsText =
-    b.ageBuckets.length === 0 ? '（無し）' : b.ageBuckets.map((e) => `${e.label} ${e.count}`).join(' / ');
+    b.ageBuckets.length === 0
+      ? '（無し）'
+      : b.ageBuckets.map((e) => `${e.label} ${e.count}`).join(' / ');
 
   return [
     `内訳（計 ${b.total} 件）:`,

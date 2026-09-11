@@ -491,10 +491,7 @@ function describeSituationInboxBacklog(
     backlog.oldestAt === undefined ? '' : `（最も古いものは ${backlog.oldestAt} から）`;
   const base = `受信箱の未処理 ${backlog.count} 件${oldest}。`;
   if (backlog.count <= INBOX_BACKLOG_LOUD_THRESHOLD) return base;
-  return (
-    `⚠ ${base}` +
-    '内訳（種類 / 同一本文 / 配達回数 / 齢）は `manager_list` で割れる。'
-  );
+  return `⚠ ${base}` + '内訳（種類 / 同一本文 / 配達回数 / 齢）は `manager_list` で割れる。';
 }
 
 export function describeSituation(input: {

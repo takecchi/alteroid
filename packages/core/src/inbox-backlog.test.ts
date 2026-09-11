@@ -282,10 +282,7 @@ describe('summarizeInboxBacklog', () => {
 
   it('bySource: 上位5件まで、同数は名前順で安定する', () => {
     const rows = ['e', 'd', 'c', 'b', 'a', 'f'].map((name, i) =>
-      row(
-        { ...SAMPLE_EVENTS.external, id: `e-${i}`, source: name },
-        '2026-09-11T00:00:00.000Z',
-      ),
+      row({ ...SAMPLE_EVENTS.external, id: `e-${i}`, source: name }, '2026-09-11T00:00:00.000Z'),
     );
     const b = summarizeInboxBacklog(rows, NOW);
     expect(b.bySource).toHaveLength(5);
@@ -302,7 +299,10 @@ describe('summarizeInboxBacklog', () => {
     const rows = [
       row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z'),
       row({ ...SAMPLE_EVENTS.human_message, id: 'e2' }, '2026-09-11T05:00:00.000Z'),
-      row({ ...SAMPLE_EVENTS.human_message, id: 'e3', text: '別の発言' }, '2026-09-11T00:00:00.000Z'),
+      row(
+        { ...SAMPLE_EVENTS.human_message, id: 'e3', text: '別の発言' },
+        '2026-09-11T00:00:00.000Z',
+      ),
     ];
     const b = summarizeInboxBacklog(rows, NOW);
     expect(b.total).toBe(3);
