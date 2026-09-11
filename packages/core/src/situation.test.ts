@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { INBOX_BACKLOG_LOUD_THRESHOLD } from './inbox-backlog.js';
 import type { ManagerSummary } from './manager.js';
 import type { RunnerLiveness } from './runner-protocol.js';
 import type { JobStatus } from './schema.js';
@@ -585,5 +586,140 @@ describe('状況の1行に鍵が載る（describeSituation への配線）', () 
 
     expect(out).toContain('委譲 全 0 本');
     expect(out).not.toContain('認証トークン:');
+  });
+});
+
+/**
+ * 受信箱の滞留の1行（#783 段0）。**3つの状態**を測る——0件で行が無い /
+ * 閾値以下で短い / 閾値超えで膨らむ。既存の `toContain` の作法に揃える
+ * （スナップショットは使わない）。
+ */
+describe('状況の1行に受信箱の滞留が載る（#783 段0）', () => {
+  /**
+   * ⚠ **この節の入力を {@link INBOX_BACKLOG_LOUD_THRESHOLD} から導かない。**
+   *
+   * 導いた形（`count: INBOX_BACKLOG_LOUD_THRESHOLD + 1`）だと、閾値の値が
+   * 変わったとき入力も一緒に動く——歯は「閾値より1つ大きければ膨らむ」という
+   * *関係*しか固定しておらず、「その閾値が 50 である」ことは1文字も固定して
+   * いない。実際その形では、定数を別の値へ変えてもここのふるまいの歯は緑の
+   * ままで、赤くなるのは `inbox-backlog.test.ts` の
+   * `expect(INBOX_BACKLOG_LOUD_THRESHOLD).toBe(50)` 1本だけだった。
+   *
+   * だから入力はリテラルで置き、**リテラルが定数と一致していること自体を
+   * 別の1本（すぐ下）で固定する**。この形なら定数が動いた瞬間、50 と 51 が
+   * 境界のどちら側に居るかが入れ替わって、ふるまいの歯が赤くなる。
+   *
+   * ⚠ **「閾値の値は凍らせない」という逆向きの先例がこの repo に在る**
+   * （`token-candidate.test.ts` の `EXHAUSTED_UTILIZATION`——「これは閾値に
+   * よる判定であって権威ある合図ではない」ので値を固定しない、と doc に在る）。
+   * こちらが逆を選ぶのは、この 50 が {@link INBOX_BACKLOG_LOUD_THRESHOLD} の doc
+   * どおり **#562 の28件の倍という由来を持つ数**で、`inbox-backlog.test.ts` が
+   * その由来ごと `toBe(50)` で凍らせているからである。**値を動かすなら
+   * 由来ごと動かす**——そのときここの 50 / 51 も一緒に直す（この doc が在る
+   * 場所で赤くなるので、どこを直すかは歯が教える）。
+   */
+  const AT_THRESHOLD = 50;
+  const ABOVE_THRESHOLD = 51;
+
+  it('足場のリテラルは閾値そのものである（定数が動けばここで赤くなる）', () => {
+    expect(AT_THRESHOLD).toBe(INBOX_BACKLOG_LOUD_THRESHOLD);
+    expect(ABOVE_THRESHOLD).toBe(INBOX_BACKLOG_LOUD_THRESHOLD + 1);
+  });
+
+  it('省略した呼びでは行が出ない（既存の呼び出しを壊さない）', () => {
+    const out = describeSituation({ managers: [], runners: [] });
+
+    expect(out).toContain('委譲 全 0 本');
+    expect(out).not.toContain('受信箱の未処理');
+  });
+
+  it('0件のときは行が出ない（backlog を渡しても count: 0 なら消える）', () => {
+    const out = describeSituation({
+      managers: [],
+      runners: [],
+      backlog: { count: 0 },
+    });
+
+    expect(out).not.toContain('受信箱の未処理');
+  });
+
+  /**
+   * ⭐ **「省略（`undefined`）」と「読めなかった（`'unreadable'`）」を分ける。**
+   *
+   * レビュー前は両方を `undefined` に潰していて、「読めなかった」が「0件
+   * だった」と出力上で見分けが付かなかった（`AGENTS.md` の地雷「取れない軸に
+   * 0の行を作る」の裏返し。`describeSituationInboxBacklog` の doc）。
+   * `'unreadable'` は**必ず専用の1行を出す**——⛔ `0` という数字を含まない
+   * ことを確かめる（`toContain('0')` は他の行の数字に当たるので使わない）。
+   */
+  it('⭐ 読めなかった（`unreadable`）ときは、0件とは別の専用の1行が出る', () => {
+    const out = describeSituation({
+      managers: [],
+      runners: [],
+      backlog: 'unreadable',
+    });
+
+    expect(out).toContain('委譲 全 0 本');
+    expect(out).toContain('受信箱の未処理を数えられなかった');
+    // ⛔ 「0」という数字を含まない——0件だったと見分けが付かなくなるため。
+    const line = out.split('\n').find((l) => l.includes('受信箱の未処理'));
+    if (line === undefined) throw new Error('行が見つからない');
+    expect(line).not.toContain('0');
+  });
+
+  it('省略（undefined）と unreadable は別の状態——省略は引き続き行が出ない', () => {
+    const out = describeSituation({
+      managers: [],
+      runners: [],
+      backlog: undefined,
+    });
+
+    expect(out).toContain('委譲 全 0 本');
+    expect(out).not.toContain('受信箱の未処理');
+  });
+
+  it('1件以上・閾値以下は短い1行（⚠ も内訳への案内も付かない）', () => {
+    const out = describeSituation({
+      managers: [],
+      runners: [],
+      backlog: { count: AT_THRESHOLD, oldestAt: '2026-09-11T00:00:00.000Z' },
+    });
+
+    expect(out).toContain(`受信箱の未処理 ${AT_THRESHOLD} 件`);
+    expect(out).toContain('2026-09-11T00:00:00.000Z');
+    expect(out).not.toContain(`⚠ 受信箱の未処理 ${AT_THRESHOLD} 件`);
+    // **`manager_list` という語自体は他の行（器の説明文）にも出るので、
+    // 受信箱の行だけを取り出して確かめる**（他の行に引きずられて誤検出
+    // しないように）。
+    const line = out.split('\n').find((l) => l.includes('受信箱の未処理'));
+    if (line === undefined) throw new Error('行が見つからない');
+    expect(line).not.toContain('manager_list');
+  });
+
+  it('閾値を超えると ⚠ 付きで膨らみ、内訳を割る口の名前が付く', () => {
+    const count = ABOVE_THRESHOLD;
+    const out = describeSituation({
+      managers: [],
+      runners: [],
+      backlog: { count, oldestAt: '2026-09-10T09:28:55.000Z' },
+    });
+
+    expect(out).toContain(`⚠ 受信箱の未処理 ${count} 件`);
+    expect(out).toContain('2026-09-10T09:28:55.000Z');
+    expect(out).toContain('manager_list');
+  });
+
+  it('指図を書かない（「〜せよ」の類が1文字も無い）', () => {
+    const out = describeSituation({
+      managers: [],
+      runners: [],
+      backlog: { count: ABOVE_THRESHOLD },
+    });
+    const line = out.split('\n').find((l) => l.includes('受信箱の未処理'));
+    if (line === undefined) throw new Error('行が見つからない');
+
+    expect(line).not.toContain('確認せよ');
+    expect(line).not.toContain('対処せよ');
+    expect(line).not.toContain('処理せよ');
   });
 });

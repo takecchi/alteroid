@@ -2,6 +2,7 @@
 // 置いた同じ形の述語から取る——`manager_list` の並び（`tools.ts`）も同じものを
 // 見るので、2箇所に `status === 'lost'` を書くと *分け方* が割れる（あちらの doc）。
 import { isManagerAwaitingJudgement } from './digest.js';
+import { INBOX_BACKLOG_LOUD_THRESHOLD } from './inbox-backlog.js';
 import type { ManagerSummary } from './manager.js';
 import type { RunnerLiveness } from './runner-protocol.js';
 import type { CooldownSource } from './token-pool.js';
@@ -441,6 +442,88 @@ function tokenStateOf(
   return 'ready';
 }
 
+/**
+ * 受信箱（デーモン→クローンの脚）の滞留を1行にする（#783 段0）。
+ *
+ * ## ここに置く理由 —— 「観測を足すことは、対策を足すことではない」
+ *
+ * `manager_list` の `describeInboxBacklog`（`tools.ts`）は内訳まで持つが、
+ * **明示的に呼ばれたときしか読まれない。** クローンが受信箱の滞留に気づいて
+ * いなければ、そもそも呼ぼうとしない——だから、呼ばれなければ存在しないのと
+ * 同じになる。**この節はクローンが見落としようがない場所（毎ターンの
+ * 入口）に出す** ためにある。
+ *
+ * ## 4つの状態（当初3つとして実装し、レビューで4つに直った）
+ *
+ * - **省略（`undefined`） → 行を出さない**（既存の呼び出しを壊さない側の
+ *   「渡さないと決めた」——`tokens` と同じ作法）
+ * - **`'unreadable'`（`pending()` が落ちた＝読もうとして読めなかった） →
+ *   行を出す。⛔ `0` という数字は1文字も作らない。**
+ * - **`count === 0`（実際に数え切れて0件だった） → 行そのものを出さない**
+ *   （`lost` と同じ作法）
+ * - **1件以上 → 短く1行、{@link INBOX_BACKLOG_LOUD_THRESHOLD} 超えで膨らむ**
+ *
+ * ## ⚠️ 「読めなかった」と「0件」を同じ「行が無い」に潰さない
+ *
+ * **当初の実装はここを潰していた**（`backlog === undefined || count === 0`
+ * を1つの分岐で `null` にしていた）。これは `AGENTS.md` の地雷「取れない軸に
+ * 0 の行を作る」の裏返しの形で、この repo が何度も踏んでいる形そのものである:
+ *
+ * - {@link describeSituationUnavailable} の doc: 「0 で埋めれば『全部片付いて
+ *   いる』と読める（**いちばん見落としたい向きへ倒れる**）」「`runner-swap-
+ *   notice.ts` が `'none-affected'`（0本と数え切れた）と `'ledger-
+ *   unreadable'`（数えられなかった）を**型で分けている**のと同じ理由」
+ * - `tools.ts` の `describeInboxBacklog` の doc: 「**『常に実測できるか、
+ *   観測できていないことがありうるか』という違いが、この非対称性の理由その
+ *   ものである**」
+ *
+ * `lost` との類比が効くのは「同じ配列から必ず数え切れる」ときだけである
+ * （`lost` は `managers` 配列を全走査すれば必ず数えられるので「行が無い＝0」
+ * が本当に成り立つ）。**受信箱の `pending()` は読めないことがある**（だから
+ * `clone.ts` 側で catch している）ので、`undefined` へ潰した瞬間に「読めな
+ * かった」が「0件」と見分けが付かなくなっていた。`'unreadable'` を専用の
+ * 状態として型で分けたのはこのため——`'unreadable'` を渡されたら **必ず
+ * 行を出す**（0 で埋めず、数字も作らない）。
+ *
+ * ## 閾値はなぜ 50 か
+ *
+ * #783 本文が引く #562 は、28件（9〜56分の遅れ）を「詰まり」として扱った。
+ * その倍を超えたら「詰まり」では説明が付かない、という線として
+ * {@link INBOX_BACKLOG_LOUD_THRESHOLD} を置く。
+ *
+ * ## 毎ターン載るので、平常時は短く保つ
+ *
+ * `distill` 以外の全ターンに載るため、行の肥大はそのままトークンの肥大に
+ * 直結する。**指図（「〜せよ」）は書かない**（このファイル冒頭「指図を
+ * 書かない」）——書くのは数と、内訳を割る口の名前までである。
+ *
+ * ## `pending()` が読めなかったとき
+ *
+ * `clone.ts` の `#situationNoticeFor` は `pending()` の失敗を捕まえて
+ * `'unreadable'` を渡す——鍵の材料 {@link describeTokenSituation} と同じ
+ * 「個別に catch して、読めなかった軸だけを落とす」作法だが、**落とす先が
+ * 違う**（鍵は「読めなかった」と名乗る専用の1行を持ち、こちらも同じく専用の
+ * 1行を持つ——0 で埋めない）。ターン全体を {@link describeSituationUnavailable}
+ * へ倒すのは委譲・器の数え上げ自体が読めなかったときだけで、受信箱の滞留は
+ * それとは独立の材料である。
+ */
+function describeSituationInboxBacklog(
+  backlog: { readonly count: number; readonly oldestAt?: string } | 'unreadable' | undefined,
+): string | null {
+  if (backlog === undefined) return null;
+  if (backlog === 'unreadable') {
+    // ⛔ ここに `0` という数字を書かない——「数えられなかった」を「0件」と
+    // 見分けられなくすることが、この分岐が存在する理由そのものを壊す。
+    return '受信箱の未処理を数えられなかった（`manager_list` で自分で引くこと）。';
+  }
+  if (backlog.count === 0) return null;
+  const oldest =
+    backlog.oldestAt === undefined ? '' : `（最も古いものは ${backlog.oldestAt} から）`;
+  const base = `受信箱の未処理 ${backlog.count} 件${oldest}。`;
+  if (backlog.count <= INBOX_BACKLOG_LOUD_THRESHOLD) return base;
+  return `⚠ ${base}` + '内訳（種類 / 同一本文 / 配達回数 / 齢）は `manager_list` で割れる。';
+}
+
 export function describeSituation(input: {
   readonly managers: readonly ManagerSummary[];
   readonly runners: readonly { readonly state: RunnerLiveness }[];
@@ -451,12 +534,22 @@ export function describeSituation(input: {
   readonly tokens?: readonly TokenSituationRow[] | undefined;
   readonly active?: { readonly tokenId: string } | null | undefined;
   readonly at?: number;
+  /**
+   * 受信箱（デーモン→クローンの脚）の滞留（#783 段0）。**省略できる** ——
+   * 省略すると行が出ない（既存の呼び出しを1つも壊さない。`tokens` と同じ
+   * 作法）。**`'unreadable'` は「省略」とは別の状態**（読もうとして読めな
+   * かった）——両方とも `undefined` へ潰すと「0件」と見分けが付かなくなる。
+   * {@link describeSituationInboxBacklog} の doc を見る。
+   */
+  readonly backlog?:
+    { readonly count: number; readonly oldestAt?: string } | 'unreadable' | undefined;
 }): string {
   const counts = countManagerSituation(input.managers);
   const byState = countRunnerStates(input.runners);
   const runnerBreakdown = [...byState.entries()]
     .map(([state, count]) => `${state} ${count}`)
     .join(' / ');
+  const inboxBacklogLine = describeSituationInboxBacklog(input.backlog);
   return block([
     `${SITUATION_HEAD}（数えた材料だけ。ここから何をするかは決めない）。`,
     // **`lost` の区分だけ 0 のとき出さない**（上の doc の2つの理由）。残りの5つは
@@ -489,6 +582,9 @@ export function describeSituation(input: {
       // 同じ袋に入れると「終わったもの」として読み飛ばされる。
       '「その他」は終端したもの（failed / stopped）と、done だが話しかけられないものである。' +
       '個別の状態は `manager_list` / `runner_list` で見る。',
+    // **受信箱の滞留は、委譲・器の直後・鍵の行より前に置く**（#783 段0）。
+    // 0件・読めなかった場合は行を出さない（`describeSituationInboxBacklog` の doc）。
+    ...(inboxBacklogLine === null ? [] : [inboxBacklogLine]),
     // **鍵の行は最後に置く。** 数えた材料（委譲・器）の後に、判断を縛る不変条件が
     // 来る順にしてある（{@link describeTokenSituation}）。**省略した呼びでは出ない。**
     ...(input.tokens === undefined && input.active === undefined

@@ -5454,6 +5454,57 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * #783 段0: `manager_list` の受信箱の行に内訳（種類・同一本文・配達回数・
+   * 齢）が付く。**集計値だけで、合図の本文は1文字も載らない**
+   * （`AGENTS.md` の地雷「エージェントへ返す一覧に本文を全文で載せる」）。
+   */
+  it('manager_list の受信箱の行に内訳（種類・同一本文・配達回数）が付き、本文は載らない', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    await h.stores.inbox.put(
+      {
+        type: 'human_message',
+        id: 'evt-1',
+        at: '2026-08-24T00:00:00.000Z',
+        text: '絶対に外へ出てはいけない本文XYZ',
+        conversationId: 'conv-1',
+      },
+      '2026-08-24T00:00:00.000Z',
+    );
+    await h.stores.inbox.put(
+      {
+        type: 'manager_message',
+        id: 'evt-2',
+        at: '2026-08-24T01:00:00.000Z',
+        managerId: 'mgr-a',
+        kind: 'report',
+        text: 'これも外へ出てはいけない',
+      },
+      '2026-08-24T01:00:00.000Z',
+    );
+
+    const reply = await h.call('manager_list', {});
+
+    // 内訳: 種類・計・同一本文・配達回数・齢の見出しが出る。
+    expect(reply).toContain('内訳（計 2 件）');
+    expect(reply).toContain('種類:');
+    expect(reply).toContain('human_message 1');
+    expect(reply).toContain('manager_message 1');
+    expect(reply).toContain('同一本文');
+    expect(reply).toContain('配達回数:');
+    expect(reply).toContain('未配達 2');
+    // **本文は1文字も載らない**（地雷「一覧に本文を全文で載せる」）。
+    expect(reply).not.toContain('絶対に外へ出てはいけない本文XYZ');
+    expect(reply).not.toContain('これも外へ出てはいけない');
+    // put しか呼んでいない——peekPending も claimPending の副作用（配達回数を
+    // 進める）を経由していないことの裏取り。
+    expect(await h.stores.inbox.pending()).toEqual({
+      count: 2,
+      oldestAt: '2026-08-24T00:00:00.000Z',
+    });
+  });
+
+  /**
    * マネージャーが1本も居なくても、受信箱の滞留は別の軸なので出る
    * （#358「答えない問い」の3行目——マネージャーの本数と無関係）。
    */

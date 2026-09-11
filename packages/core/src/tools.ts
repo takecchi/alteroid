@@ -138,8 +138,9 @@ import {
 } from './self.js';
 import type { CloneRuntimeFacts } from './self.js';
 import { EXCHANGE_WITH_VALUES, UnreadableCommitmentError } from './store.js';
-import type { JournalStore, Stores } from './store.js';
+import type { JournalStore, PendingInboxEvent, Stores } from './store.js';
 import { limitRecoveryOf, withRecoveryNote } from './usage-limits.js';
+import { describeInboxBacklogBreakdown, summarizeInboxBacklog } from './inbox-backlog.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 import {
   ACCOUNT_USAGE_TITLE,
@@ -565,12 +566,32 @@ function describeAskedAt(askedAt: ManagerWaitingItem['askedAt']): string {
  * そのものである。**
  *
  * `⚠` は付けない —— 滞留0は警告ではない。
+ *
+ * ## #783 段0: 内訳を足す
+ *
+ * 件数と最古時刻の2つしか出ていなかったところへ、`peekPending()`（本文まで
+ * 返す読み取り専用の口。`InboxStore.peekPending` の doc）で取った行を
+ * `summarizeInboxBacklog` で集計し、`describeInboxBacklogBreakdown` で
+ * 描いたものを続けて出す。**集計値だけで、合図の本文は1文字も載せない**
+ * （`AGENTS.md` の地雷「エージェントへ返す一覧に本文を全文で載せる」）。
+ * 0件の文言（「クローンの受信箱に未処理の合図は無い。」）は#562からそのまま
+ * ——ここを変えると、その文言に当たる既存の歯が落ちる。
+ *
+ * **⚠️ 黙って重くした——この道具の費用は上がっている。** 以前は
+ * `pending()`（`count(*)` / `min(at)` の1発）だけを読んでいたが、いまは
+ * `peekPending()`（全行を読んで zod で1件ずつ parse する）を読む。
+ * `manager_list` は同じ呼びの中で `listJobs()` が既に台帳の全件を読んでいる
+ * ので**桁は変わらない**が、`pending()` の頃より重いことは事実である。
  */
-function describeInboxBacklog(pending: { count: number; oldestAt?: string }): string {
-  if (pending.count === 0) return 'クローンの受信箱に未処理の合図は無い。';
+function describeInboxBacklog(rows: readonly PendingInboxEvent[], now: number): string {
+  if (rows.length === 0) return 'クローンの受信箱に未処理の合図は無い。';
+  const breakdown = summarizeInboxBacklog(rows, now);
   const oldest =
-    pending.oldestAt === undefined ? '' : `（最も古いものは ${pending.oldestAt} から）`;
-  return `⚠ クローンの受信箱に未処理の合図が ${pending.count} 件ある${oldest}`;
+    breakdown.oldestAt === undefined ? '' : `（最も古いものは ${breakdown.oldestAt} から）`;
+  return (
+    `⚠ クローンの受信箱に未処理の合図が ${breakdown.total} 件ある${oldest}\n` +
+    describeInboxBacklogBreakdown(breakdown)
+  );
 }
 
 /**
@@ -5500,7 +5521,10 @@ export function createCloneTools(context: ToolContext) {
         // **デーモン→クローンの脚（受信箱）の滞留は、マネージャーの本数と無関係**
         // （#358）。マネージャーが1本も居なくても、受信箱には既に合図が溜まって
         // いることがあるので、早期リターンの前に確かめる。
-        const inboxBacklog = describeInboxBacklog(await context.stores.inbox.pending());
+        const inboxBacklog = describeInboxBacklog(
+          await context.stores.inbox.peekPending(),
+          Date.now(),
+        );
         // runner→デーモンの脚も同じ理由で本数と無関係（#358 案b）。
         // `runnerBacklog()` はキャッシュを読むだけ——ここでも往復は増えない。
         //

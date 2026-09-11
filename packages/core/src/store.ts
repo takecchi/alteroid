@@ -717,6 +717,19 @@ export interface InboxStore {
    * 「取れない軸に0の行を作る」）。
    */
   pending(): Promise<{ count: number; oldestAt?: string }>;
+
+  /**
+   * 残っている未読を古い順に返す。**`claimPending()` と違い、配達回数を
+   * 1つも進めない**（`pending()` と同じ倒れ先。違うのは返す形だけである）。
+   *
+   * `pending()` が件数と最古時刻だけを安く返す（fs は全件読むだけ、pg は
+   * `count(*)` / `min(at)` の1発）のに対し、こちらは内訳
+   * （`inbox-backlog.ts` の `summarizeInboxBacklog`）を出すために本文まで
+   * 返す。**毎ターン呼ぶ口ではない** — `clone.ts` の `#situationNoticeFor`
+   * は安い `pending()` を使い、この口は `manager_list`（明示的に内訳を
+   * 求めたときだけ呼ばれる）からのみ呼ぶ。
+   */
+  peekPending(): Promise<PendingInboxEvent[]>;
 }
 
 /** 未読として残っていた合図1件。 */

@@ -2793,6 +2793,17 @@ class Clone implements CloneHost {
    * 消さない。** 0 で埋めるのも消すのも「全部片付いている」と読める側へ倒れる——
    * `describeSituationUnavailable` が「数えられなかった」と名乗る
    * （`situation.ts` の doc）。
+   *
+   * **⚠️ この「読めなくても落とさない」は委譲・器の数え上げ（`try`/`catch` の
+   * 外側）の話であって、鍵・受信箱の滞留（#783 段0）は別の層で同じ向きを
+   * 実現している** — こちらは個別に `.then(value, onRejected)` で catch し、
+   * その材料だけが読めなかったことを表す値になる（鍵は `undefined`。受信箱の
+   * 滞留は **`'unreadable'`** — `undefined` は「省略」に取ってあるので、
+   * 読めなかったことをそちらに潰すと「0件だった」と見分けが付かなくなる。
+   * `situation.ts` の `describeSituationInboxBacklog` の doc）。
+   * **`inbox.pending()` が落ちてもターンそのものは止めない** — 落ちた場合、
+   * 受信箱の行は「数えられなかった」と名乗る専用の1行になり、委譲・器の行は
+   * そのまま出る。
    */
   async #situationNoticeFor(events: InboxEvent[]): Promise<string> {
     const event = events[0];
@@ -2820,6 +2831,53 @@ class Clone implements CloneHost {
           (active) => active,
           () => undefined,
         ),
+        // **受信箱の滞留も同じ理由で個別に catch する**（#783 段0）。
+        // 委譲・器・鍵の数え上げとは無関係な材料なので、ここが落ちても
+        // それらを道連れにしない。
+        //
+        // **⚠️ 読めなかった（catch した）ときは `undefined` ではなく
+        // `'unreadable'` を渡す。** かつては `() => undefined` にしていて、
+        // `describeSituation` 側は「省略（呼び出し側が渡さないと決めた）」と
+        // 「読もうとして読めなかった」を同じ `undefined` に潰していた——
+        // レビューで、これが `AGENTS.md` の地雷「取れない軸に0の行を作る」の
+        // 裏返しだと指摘された（`0` で埋めていないつもりが、行を消すことで
+        // 実質「0件だった」と同じ顔になっていた）。`'unreadable'` は
+        // `describeSituation` 側に必ず専用の1行を出させる
+        // （`situation.ts` の `describeSituationInboxBacklog` の doc）。
+        // **安い `pending()` を使う** — 内訳まで返す `peekPending()` は
+        // 毎ターン呼ぶ口ではない（`InboxStore.peekPending` の doc）。
+        //
+        // **⚠️ このターンが処理している `events` 自身を引く。** `#remember`
+        // （`post()` の中）は型を問わず全部の合図をここへ来る前に
+        // `inbox.put()` していて、消す `#forget()` はこの後（`#handle` の
+        // 完了後）にしか呼ばれない。⟹ `pending()` を素で読むと、**いま
+        // まさに処理しているこの1件（複数件が畳まれることもある）が、
+        // 毎ターン必ず「滞留」として数えられてしまう**——0件になるはずの
+        // ターンが軒並み「1件」になり、この節の存在理由（詰まっている
+        // ときだけ膨らむ）そのものが壊れる。`events.length` を引けば、
+        // 「このターンが片付けようとしている分」を除いた**それ以外の滞留**
+        // になる。
+        //
+        // **`oldestAt` は補正しない。** `events` の `at` は基本的に「いま」に
+        // 近い値（配り直し・catch-up でも「起きた時刻」であって、大昔の
+        // 積み残しの時刻ではない）なので、本物の滞留が在ればそちらのほうが
+        // 古く、`oldestAt` を歪めない。件数が0まで落ちた回は `oldestAt` ごと
+        // 消す（0件のときに値を作らない、というこの節全体の作法どおり）。
+        this.#stores.inbox.pending().then(
+          (backlog): { count: number; oldestAt?: string } => {
+            const count = Math.max(0, backlog.count - events.length);
+            if (count === 0) return { count: 0 };
+            // **`...(x === undefined ? {} : { x })` の形に揃える**
+            // （`pending()` 自身の実装がこの形を採っている）。素に
+            // `oldestAt: backlog.oldestAt` と書くと、値が `undefined` でも
+            // キー自体は生えてしまう。
+            return {
+              count,
+              ...(backlog.oldestAt === undefined ? {} : { oldestAt: backlog.oldestAt }),
+            };
+          },
+          (): 'unreadable' => 'unreadable',
+        ),
       ]);
       return describeSituation({
         managers,
@@ -2827,6 +2885,7 @@ class Clone implements CloneHost {
         tokens: pool[0],
         active: pool[1],
         at: Date.now(),
+        backlog: pool[2],
       });
     } catch (error) {
       return describeSituationUnavailable(error);

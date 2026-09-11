@@ -388,3 +388,109 @@ describe('状況の節に認証トークンの行が載る', () => {
     await s.clone.stop();
   });
 });
+
+/**
+ * **受信箱の滞留が毎ターンの状況へ載る配線**（#783 段0）。
+ *
+ * `describeSituation` / `summarizeInboxBacklog` 自体は `situation.test.ts` /
+ * `inbox-backlog.test.ts` が測る。ここが測るのは**クローンが実際に
+ * `inbox.pending()`（安いほう）を渡していること**と、**それが読めなくても
+ * 状況ごと落ちないこと**——鍵の材料と同じ形の配線である。
+ */
+describe('状況の節に受信箱の滞留の行が載る（#783 段0）', () => {
+  it('受信箱に未読があれば、状況の節にその行が出る', async () => {
+    const stores = createMemoryStores();
+    const s = bootClone(stores, busyPool());
+    // **boot の後に直接ストアへ置く**（`s.clone.post()` を経由しない）。
+    // `createClone` は起動時に `#restoreUnread()` で残っている未読を1回
+    // 拾い直す（`store.ts` の `claimPending` の doc）——boot の**前**に
+    // 置くと、この行がその拾い直しにすぐ乗って処理され、「このセッションが
+    // 一度も触れていない、純粋な滞留」を模せない。boot の後に置くことで、
+    // このイベントは（このテストの中では）誰にも配り直されない、本物の
+    // 積み残しのまま残る。
+    await stores.inbox.put(
+      {
+        type: 'human_message',
+        id: 'evt-backlog',
+        at: '2026-09-05T00:00:00.000Z',
+        text: '未処理の発言',
+        conversationId: 'conv-1',
+      },
+      '2026-09-05T00:00:00.000Z',
+    );
+
+    s.clone.post({
+      type: 'manager_message',
+      id: 'evt-report',
+      at: AT,
+      managerId: 'mgr-run',
+      kind: 'report',
+      text: '終わった',
+    });
+    await waitFor(() => s.inputs.length > 0, 'ターンが走ること');
+
+    const text = s.inputs.join('\n');
+    // **1件** ——受信箱には `evt-backlog` と、いま処理している `evt-report`
+    // 自身の2件が同時に載っているが、`evt-report` は「このターンが片付け
+    // ようとしている分」なので引く（`#situationNoticeFor` の doc）。引かずに
+    // 素の `pending()` をそのまま出すと、毎ターン自分自身を「1件溜まって
+    // いる」と数えてしまい、この節の存在理由（詰まっているときだけ膨らむ）
+    // が壊れる。
+    expect(text).toContain('受信箱の未処理 1 件');
+    expect(text).toContain('2026-09-05T00:00:00.000Z');
+    // ターンが終われば `evt-report` は消え（`#forget`）、残るのは
+    // `evt-backlog` だけ——`claimPending()` を呼んで裏取りする
+    // （`deliveries` が 0 → 1 ＝ 一度も配られていなかったものの初回配達）。
+    const claimed = await stores.inbox.claimPending();
+    expect(claimed.map((r) => r.event.id)).toEqual(['evt-backlog']);
+    expect(claimed[0]?.deliveries).toBe(1);
+
+    await s.clone.stop();
+  });
+
+  it('受信箱が空なら、行そのものが出ない', async () => {
+    const s = bootClone(createMemoryStores(), busyPool());
+
+    s.clone.post({
+      type: 'manager_message',
+      id: 'evt-report',
+      at: AT,
+      managerId: 'mgr-run',
+      kind: 'report',
+      text: '終わった',
+    });
+    await waitFor(() => s.inputs.length > 0, 'ターンが走ること');
+
+    expect(s.inputs.join('\n')).not.toContain('受信箱の未処理');
+
+    await s.clone.stop();
+  });
+
+  it('⭐ 受信箱が読めなくても、委譲・器・鍵の数え上げは消えない（ターンを止めない）', async () => {
+    const stores = createMemoryStores();
+    stores.inbox.pending = () => Promise.reject(new Error('受信箱ストアが落ちた'));
+    const s = bootClone(stores, busyPool());
+
+    s.clone.post({
+      type: 'manager_message',
+      id: 'evt-report',
+      at: AT,
+      managerId: 'mgr-run',
+      kind: 'report',
+      text: '終わった',
+    });
+    await waitFor(() => s.inputs.length > 0, 'ターンが走ること');
+
+    const text = s.inputs.join('\n');
+    // 数え上げは残っている（ここが消えるのがいちばん悪い）。
+    expect(text).toContain('委譲 全 3 本');
+    expect(text).toContain('器 2 台');
+    // **受信箱の行は「数えられなかった」と名乗る専用の1行になる**——鍵の
+    // 「読めなかった」と同じ向き。⛔ 0件だったと見分けが付かなくなるので、
+    // 行そのものを消しはしない（レビューで直った箇所。
+    // `describeSituationInboxBacklog` の doc）。
+    expect(text).toContain('受信箱の未処理を数えられなかった');
+
+    await s.clone.stop();
+  });
+});

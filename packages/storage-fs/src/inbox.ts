@@ -96,6 +96,17 @@ export class FsInboxStore implements InboxStore {
     };
   }
 
+  /**
+   * 残っている未読を古い順に返す。**`claimPending` と違い、`#update` を
+   * 通さない — 1文字も書かない**（`InboxStore.peekPending` の doc）。
+   */
+  async peekPending(): Promise<PendingInboxEvent[]> {
+    const file = await this.#read();
+    return [...file.events]
+      .sort((a, b) => a.at.localeCompare(b.at))
+      .map((entry) => ({ event: entry.event, at: entry.at, deliveries: entry.deliveries }));
+  }
+
   async #read(): Promise<InboxFile> {
     try {
       const raw = await readFile(this.#path, 'utf8');

@@ -407,6 +407,19 @@ export {
   type ManagerSituationCounts,
 } from './situation.js';
 /**
+ * 受信箱（`InboxStore`）の滞留の内訳（doc は `inbox-backlog.ts`）。
+ *
+ * **外へ出しているのは純関数だけである。** `peekPending()` で取った行を
+ * 渡す形なので、ここから出るものは I/O をしない。
+ */
+export {
+  INBOX_BACKLOG_LOUD_THRESHOLD,
+  inboxBacklogDedupeKey,
+  summarizeInboxBacklog,
+  describeInboxBacklogBreakdown,
+  type InboxBacklogBreakdown,
+} from './inbox-backlog.js';
+/**
  * 「この委譲から、この合図より後に報告が届いている」の判定と文面
  * （doc は `superseded.ts`）。**外へ出しているのは純関数だけである。**
  */

@@ -907,6 +907,11 @@ function createMemoryInboxStore(): InboxStore {
       );
       return { count: rows.length, ...(oldest === undefined ? {} : { oldestAt: oldest }) };
     },
+    async peekPending(): Promise<PendingInboxEvent[]> {
+      // **`claimPending` と違い、`unread` を1文字も書き換えない**
+      // （`InboxStore.peekPending` の doc。`pending()` と同じ倒れ先）。
+      return [...unread.values()].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+    },
   };
 }
 
