@@ -1,15 +1,23 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { describe, expect, it } from 'vitest';
 
 // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 import {
   attributeOverlapFiles,
   decideVerdict,
+  deriveGlobalRules,
   extractPrNumber,
+  extractVitestGlobalEntries,
   FILES_TRUNCATION_LIMIT,
   firstLine,
   formatResult,
+  globalHits,
   IDENTITY_STATEMENT,
   intersectFiles,
+  relativeImportsOf,
 } from './check-base-overlap-core.mjs';
 
 /**
@@ -34,7 +42,7 @@ function second(files: string[], commits: { sha: string; message: string }[] = [
 
 const CONTEXT = { repo: 'takecchi/alteroid', base: 'main', head: 'headsha0000000', pr: 842 };
 
-describe('decideVerdict: 4値すべて', () => {
+describe('decideVerdict: 局所の軸（重なり）だけを撃つ', () => {
   it('first が null（読めなかった）なら unmeasurable / unreadable-head', () => {
     const result = decideVerdict({ first: null, second: null });
     expect(result.verdict).toBe('unmeasurable');
@@ -362,5 +370,432 @@ describe('formatResult: unmeasurable', () => {
     const mainUnreadable = decideVerdict({ first: first(2, ['a.ts']), second: null });
     const textMain = formatResult(mainUnreadable, CONTEXT, null);
     expect(textMain).toContain('読めていない');
+  });
+});
+
+/**
+ * ## 2本目の軸: 「大域に効くファイル」（#839 の実測から）
+ *
+ * **合成データだけを撃つ**のは上と同じ。`facts`（現物を読んだ結果）はラッパが
+ * 作るので、ここでは**この repo の現物を写した `facts`** を手で置いて、core の
+ * 純関数だけを撃つ。
+ */
+
+/**
+ * この repo の実際の `vitest.config.ts` の抜粋（`setupFiles: ['./vitest.setup.ts'],`）。
+ * **コメントの中にも `setupFiles` の語が在る**形をそのまま残してある——キーとしての
+ * 出現（直後が `:`）だけを読むことを、現物の形で固定するため。
+ */
+const REAL_VITEST_CONFIG_EXCERPT = [
+  "import { defineConfig } from 'vitest/config';",
+  '',
+  'export default defineConfig({',
+  '  test: {',
+  '    /**',
+  '     * **テストが本物の stdout へ書いたら落とす歯**（#314）。中身と理由は',
+  '     * `vitest.setup.ts` に在る。ここに `setupFiles` を置くのはこれが最初で、',
+  '     * 置き場所は根の vitest 設定しか無い。',
+  '     */',
+  "    setupFiles: ['./vitest.setup.ts'],",
+  '    include: [',
+  "      'packages/*/src/**/*.test.ts',",
+  "      'scripts/**/*.test.ts',",
+  '    ],',
+  '  },',
+  '});',
+].join('\n');
+
+/** この repo の現物を写した `facts`（ラッパが `readdirSync` などで作るもの）。 */
+const FACTS = {
+  rootEntries: [
+    '.prettierignore',
+    '.prettierrc.json',
+    'AGENTS.md',
+    'README.md',
+    'eslint.config.js',
+    'package.json',
+    'pnpm-lock.yaml',
+    'pnpm-workspace.yaml',
+    'tsconfig.base.json',
+    'vitest.config.ts',
+    'vitest.setup.ts',
+  ],
+  vitestConfigPath: 'vitest.config.ts',
+  vitestConfigSource: REAL_VITEST_CONFIG_EXCERPT,
+  rootPackageJson: { scripts: { test: 'node ./scripts/test.mjs' } },
+  testEntryClosure: ['scripts/test-guard-core.mjs', 'scripts/test.mjs'],
+  workflowFiles: ['.github/workflows/ci.yml', '.github/workflows/release-prod.yml'],
+};
+
+const GLOBAL = deriveGlobalRules(FACTS);
+
+/** verdict と「赤か緑か」の対応を1か所に置く（`check-base-overlap.mjs` の終了コード表と同じ）。 */
+const RED_VERDICTS = new Set(['overlap', 'global-change', 'unmeasurable']);
+
+describe('extractVitestGlobalEntries: setupFiles / globalSetup の文字列リテラル', () => {
+  it('この repo の実際の vitest.config.ts の抜粋から ./vitest.setup.ts を抜ける', () => {
+    const result = extractVitestGlobalEntries(REAL_VITEST_CONFIG_EXCERPT);
+    expect(result.mentioned).toBe(true);
+    // 先頭の `./` は落として、compare API の返す repo 相対パスと突き合わせられる形にする
+    expect(result.entries).toEqual(['vitest.setup.ts']);
+  });
+
+  it("単一文字列形（setupFiles: './a.ts'）も受ける", () => {
+    const result = extractVitestGlobalEntries("export default { test: { setupFiles: './a.ts' } };");
+    expect(result.entries).toEqual(['a.ts']);
+  });
+
+  it('globalSetup も同じく抜ける（配列形・複数）', () => {
+    const result = extractVitestGlobalEntries(
+      "export default { test: { globalSetup: ['./g1.ts', './g2.ts'] } };",
+    );
+    expect(result.entries).toEqual(['g1.ts', 'g2.ts']);
+  });
+
+  /**
+   * ⭐ **「語は在るのに1つも抜けなかった」を「無い」と区別できること。**
+   * ここが1値（`entries` だけ）だと、読めなかったソースが静かに
+   * 「大域ファイルは無い」＝緑に化ける。
+   */
+  it('setupFiles が変数で書かれていたら mentioned: true / entries: []（「無い」と区別する）', () => {
+    const result = extractVitestGlobalEntries('export default { test: { setupFiles: SETUP } };');
+    expect(result.mentioned).toBe(true);
+    expect(result.entries).toEqual([]);
+  });
+
+  it('語がそもそも無ければ mentioned: false', () => {
+    const result = extractVitestGlobalEntries('export default { test: { include: [] } };');
+    expect(result.mentioned).toBe(false);
+    expect(result.entries).toEqual([]);
+  });
+});
+
+describe('relativeImportsOf: 相対指定子だけを抜く', () => {
+  it("from './test-guard-core.mjs' を抜ける", () => {
+    const source = [
+      "import { spawn } from 'node:child_process';",
+      "import { ROOT, judgeExecution } from './test-guard-core.mjs';",
+    ].join('\n');
+    expect(relativeImportsOf(source)).toEqual(['./test-guard-core.mjs']);
+  });
+
+  it('../ と動的 import() も抜ける。パッケージ名は抜かない', () => {
+    const source = [
+      "import a from '../lib/a.mjs';",
+      "const b = await import('./b.mjs');",
+      "import 'node:fs';",
+      "import c from 'vitest/config';",
+    ].join('\n');
+    expect(relativeImportsOf(source)).toEqual(['../lib/a.mjs', './b.mjs']);
+  });
+});
+
+describe('deriveGlobalRules: 一覧をハードコードせず、facts から導く', () => {
+  it('undecidable にならない（現物どおりの facts なら導出は成立する）', () => {
+    expect(GLOBAL.undecidable).toBeNull();
+    expect(GLOBAL.rules.length).toBeGreaterThan(0);
+  });
+
+  it('どの規則も why（なぜ大域か）を持つ', () => {
+    for (const rule of GLOBAL.rules) {
+      expect(typeof rule.why).toBe('string');
+      expect(rule.why.length).toBeGreaterThan(0);
+    }
+  });
+
+  /** 現物から導く形であること ＝ facts を足したら規則も増える（名前を決め打ちしていない）。 */
+  it('rootEntries に無い名前は規則に入らない（決め打ちの一覧ではない）', () => {
+    const withoutPrettier = deriveGlobalRules({
+      ...FACTS,
+      rootEntries: FACTS.rootEntries.filter((name) => !name.startsWith('.prettier')),
+    });
+    const paths = withoutPrettier.rules.flatMap((rule: { paths: string[] }) => rule.paths);
+    expect(paths).not.toContain('.prettierrc.json');
+    expect(paths).toContain('tsconfig.base.json');
+  });
+
+  it('新しいワークフローを足したら、それも自動で大域に入る', () => {
+    const derived = deriveGlobalRules({
+      ...FACTS,
+      workflowFiles: [...FACTS.workflowFiles, '.github/workflows/brand-new.yml'],
+    });
+    expect(globalHits(['.github/workflows/brand-new.yml'], derived.rules)).toHaveLength(1);
+  });
+
+  it('根に vitest 設定が無ければ undecidable（黙って軸を1本失わない）', () => {
+    const derived = deriveGlobalRules({
+      ...FACTS,
+      vitestConfigPath: null,
+      vitestConfigSource: null,
+    });
+    expect(derived.undecidable).not.toBeNull();
+    expect(derived.rules).toEqual([]);
+  });
+
+  it('setupFiles が読めなければ undecidable（「無い」に丸めない）', () => {
+    const derived = deriveGlobalRules({
+      ...FACTS,
+      vitestConfigSource: 'export default { test: { setupFiles: SETUP } };',
+    });
+    expect(derived.undecidable).not.toBeNull();
+  });
+});
+
+describe('globalHits: 当たったファイルと why', () => {
+  it('setupFiles に載っているファイルが当たり、why に理由が入る', () => {
+    const hits = globalHits(['vitest.setup.ts'], GLOBAL.rules);
+    expect(hits).toHaveLength(1);
+    expect(hits[0].path).toBe('vitest.setup.ts');
+    expect(hits[0].why).toContain('setupFiles');
+  });
+
+  it('大域でないファイルは当たらない', () => {
+    expect(globalHits(['apps/web/app/routes/reports.tsx'], GLOBAL.rules)).toEqual([]);
+  });
+
+  /**
+   * ⭐ **`scripts/*` を丸ごと大域にはしない。** 大域なのは `scripts.test` が指す
+   * プログラムの閉包だけ——「`pnpm test` が緑か赤かを決めるもの」だからである。
+   * `check-web-bundle-size.mjs` が壊れても壊れるのはその検査1本で、全テストの
+   * 判定は動かない ⟹ 大域ではない。
+   */
+  it('規則7: scripts.test の閉包は大域、scripts/check-web-bundle-size.mjs は大域ではない', () => {
+    const hits = globalHits(
+      ['scripts/test-guard-core.mjs', 'scripts/check-web-bundle-size.mjs'],
+      GLOBAL.rules,
+    );
+    expect(hits.map((hit: { path: string }) => hit.path)).toEqual(['scripts/test-guard-core.mjs']);
+    expect(hits[0].why).toContain('pnpm test');
+  });
+
+  it('当たったファイルは1つも欠けず、パスでソートされる', () => {
+    const hits = globalHits(
+      ['vitest.setup.ts', '.github/workflows/ci.yml', 'package.json'],
+      GLOBAL.rules,
+    );
+    expect(hits.map((hit: { path: string }) => hit.path)).toEqual([
+      '.github/workflows/ci.yml',
+      'package.json',
+      'vitest.setup.ts',
+    ]);
+  });
+});
+
+/**
+ * ⭐ **判定の表をそのまま歯で固定する**（表駆動）。4行のどれか1行でも向きが
+ * 変わったら落ちる。とくに最後の行を赤にしたら、この歯は「古いだけの PR」を
+ * 無関係に赤くし続けて使われなくなる。
+ */
+describe('判定の表（局所の重なり × 大域）', () => {
+  const TABLE = [
+    {
+      name: 'behind>0 / 重なり0 / PR が大域ファイルを触る → global-change（赤）',
+      behindBy: 4,
+      prFiles: ['vitest.setup.ts', 'apps/web/app/routes/reports.tsx'],
+      mainFiles: ['packages/core/src/store.ts'],
+      expected: 'global-change',
+    },
+    {
+      name: 'behind>0 / 重なり1以上 → overlap（赤）',
+      behindBy: 4,
+      prFiles: ['packages/core/src/store.ts'],
+      mainFiles: ['packages/core/src/store.ts'],
+      expected: 'overlap',
+    },
+    {
+      name: 'behind=0 / 大域ファイルを触る → fresh（緑。追いついているなら問題ない）',
+      behindBy: 0,
+      prFiles: ['vitest.setup.ts'],
+      mainFiles: [],
+      expected: 'fresh',
+    },
+    {
+      name: 'behind>0 / 重なり0 / 大域ファイルを触らない → no-overlap（緑）',
+      behindBy: 3,
+      prFiles: ['apps/web/app/routes/reports.tsx'],
+      mainFiles: ['packages/core/src/store.ts'],
+      expected: 'no-overlap',
+    },
+  ];
+
+  it.each(TABLE)('$name', ({ behindBy, prFiles, mainFiles, expected }) => {
+    const result = decideVerdict({
+      first: first(behindBy, prFiles),
+      second: behindBy === 0 ? undefined : second(mainFiles),
+      global: GLOBAL,
+    });
+    expect(result.verdict).toBe(expected);
+    expect(RED_VERDICTS.has(result.verdict)).toBe(
+      expected === 'global-change' || expected === 'overlap',
+    );
+  });
+});
+
+describe('global-change: #839 の形', () => {
+  /**
+   * ⚠ 回帰: **#839 の実測をそのまま置く。** `behind_by=4` / main 側47ファイル /
+   * PR 側2ファイル / **重なり0**。当時この歯は `no-overlap`（緑）を出し、門は
+   * 全部緑だった。**PR が触った `vitest.setup.ts` は根の vitest 設定の
+   * `setupFiles` に載っていて、そこへ足された `afterEach` と、main 側47ファイル
+   * ぶんの新しいテストは一度も一緒に走っていなかった。**
+   */
+  const mainFiles47 = Array.from({ length: 47 }, (_, i) => `packages/core/src/unrelated-${i}.ts`);
+  const result = decideVerdict({
+    first: first(4, ['vitest.setup.ts', 'packages/core/src/journal-store.ts']),
+    second: second(mainFiles47),
+    global: GLOBAL,
+  });
+
+  it('⚠ 回帰: #839 — behind=4 / 重なり0 / vitest.setup.ts を触る → global-change（赤）', () => {
+    expect(result.overlap).toEqual([]);
+    expect(result.verdict).toBe('global-change');
+    expect(RED_VERDICTS.has(result.verdict)).toBe(true);
+  });
+
+  it('⚠ 回帰: #839 — 当たった大域ファイルが globalHits に入る', () => {
+    expect(result.globalHits.map((hit: { path: string }) => hit.path)).toEqual(['vitest.setup.ts']);
+  });
+
+  const text = formatResult(result, CONTEXT, null);
+
+  it('当たった大域ファイルが1つも欠けずに出る', () => {
+    for (const hit of result.globalHits) {
+      expect(text).toContain(hit.path);
+    }
+  });
+
+  it('各ファイルについて why（なぜ大域なのか）が名指しで出る', () => {
+    expect(text).toContain('なぜ大域か');
+    expect(text).toContain('setupFiles');
+    expect(text).toContain(result.globalHits[0].why);
+  });
+
+  it('behind_by の値が出る', () => {
+    expect(text).toContain('behind_by=4');
+  });
+
+  it('なぜ重なりが0でも赤いのかが書いてある（#839 の形）', () => {
+    expect(text).toContain('重なっていない');
+    expect(text).toContain('#839');
+    expect(text).toContain('一緒に走った回が一度も無い');
+  });
+
+  it('何をすればいいか（rebase して取り直す）が書いてある', () => {
+    expect(text).toContain('rebase');
+    expect(text).toContain(CONTEXT.base);
+  });
+
+  it('名乗りの一文（不可能にするための歯ではない）が含まれる', () => {
+    expect(text).toContain(IDENTITY_STATEMENT);
+  });
+});
+
+describe('overlap のときに大域も当たっていたら、両方の節を出す', () => {
+  const result = decideVerdict({
+    first: first(2, ['packages/core/src/store.ts', 'vitest.setup.ts']),
+    second: second(['packages/core/src/store.ts']),
+    global: GLOBAL,
+  });
+  const text = formatResult(result, CONTEXT, null);
+
+  it('verdict は overlap（局所が優先。ただし大域も持ち回る）', () => {
+    expect(result.verdict).toBe('overlap');
+    expect(result.globalHits.map((hit: { path: string }) => hit.path)).toEqual(['vitest.setup.ts']);
+  });
+
+  it('局所の節（重なったファイル）と大域の節の両方が出る（黙って落とさない）', () => {
+    expect(text).toContain('packages/core/src/store.ts');
+    expect(text).toContain('【重なったファイル】');
+    expect(text).toContain('vitest.setup.ts');
+    expect(text).toContain('なぜ大域か');
+  });
+
+  /**
+   * ⚠ 回帰: **重なりが在る出力に「ファイルは1つも重なっていない」と書かない。**
+   * global-change 側の説明文をそのまま使い回すと、この1行だけが嘘になり、
+   * 読む人はそこで道具を信じなくなる（実地確認で踏んだ。2026-09-12、既に main へ
+   * 入った #839 の head を今の main に当てると `overlap` になり、この文が出ていた）。
+   */
+  it('⚠ 回帰: 重なりが在るのに「1つも重なっていない」と書かない', () => {
+    expect(text).not.toContain('ファイルは1つも重なっていない');
+    expect(text).toContain('重なったファイルとは別に');
+  });
+});
+
+describe('大域規則が導出できなければ unmeasurable（fail closed）', () => {
+  /**
+   * ⭐ `setupFiles: SETUP,` は「大域ファイルが無い」ではなく「**読めなかった**」。
+   * 300件打ち切りと同じ理由で赤に倒す。
+   */
+  it('setupFiles が在るのに抜けない書き方 → unmeasurable / global-rules-underivable', () => {
+    const derived = deriveGlobalRules({
+      ...FACTS,
+      vitestConfigSource: 'export default { test: { setupFiles: SETUP } };',
+    });
+    const result = decideVerdict({
+      first: first(3, ['apps/web/app/routes/reports.tsx']),
+      second: second(['packages/core/src/store.ts']),
+      global: derived,
+    });
+    expect(result.verdict).toBe('unmeasurable');
+    expect(result.reason).toBe('global-rules-underivable');
+
+    const text = formatResult(result, CONTEXT, null);
+    expect(text).toContain('導出できていない');
+    expect(text).toContain('評価しているのではない');
+  });
+
+  it('局所の重なりが在れば、大域が導出できなくても overlap のまま（より具体的な赤）', () => {
+    const derived = deriveGlobalRules({
+      ...FACTS,
+      vitestConfigPath: null,
+      vitestConfigSource: null,
+    });
+    const result = decideVerdict({
+      first: first(3, ['packages/core/src/store.ts']),
+      second: second(['packages/core/src/store.ts']),
+      global: derived,
+    });
+    expect(result.verdict).toBe('overlap');
+  });
+
+  /**
+   * ⚠ 大域は**打ち切りより先**に見る（大域が当たっているなら、「測れなかった」より
+   * 具体的な赤が出せる）。
+   */
+  it('打ち切りが在っても、大域が当たっていれば global-change（truncated フラグは立つ）', () => {
+    const prFiles = [
+      ...Array.from({ length: FILES_TRUNCATION_LIMIT - 1 }, (_, i) => `pr-${i}.ts`),
+      'vitest.setup.ts',
+    ];
+    const result = decideVerdict({
+      first: first(1, prFiles),
+      second: second(['main-0.ts']),
+      global: GLOBAL,
+    });
+    expect(result.verdict).toBe('global-change');
+    expect(result.truncated).toBe(true);
+  });
+});
+
+/**
+ * **配線の歯。** `decideVerdict` は `global` を渡されなければ大域の軸を持たない
+ * 判定になる（合成データで局所だけを撃つテストのための既定）。⟹ ラッパが
+ * 渡し忘れると、**軸が1本、黙って消える。** そこだけは現物のソースで固定する
+ * （`check-scripts-wired.test.ts` と同じ形の、配線だけを見る歯）。
+ */
+describe('配線: ラッパが大域規則を組み立てて decideVerdict へ渡している', () => {
+  const WRAPPER_SOURCE = readFileSync(
+    path.join(fileURLToPath(new URL('.', import.meta.url)), 'check-base-overlap.mjs'),
+    'utf8',
+  );
+
+  it('buildGlobalRules の結果を decideVerdict へ渡している', () => {
+    expect(WRAPPER_SOURCE).toContain('buildGlobalRules(repoRoot)');
+    expect(WRAPPER_SOURCE).toContain('decideVerdict({ first, second, global: globalRules })');
+  });
+
+  it('--repo-root で読む先を切り替えられる', () => {
+    expect(WRAPPER_SOURCE).toContain("args['repo-root']");
   });
 });
