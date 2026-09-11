@@ -505,3 +505,76 @@ jobs:
                 && { echo "別 UID(uid 1001)から繋がってしまった" >&2; exit 1; }
               exit 0
             '
+
+  # **PR の base が古く、かつ merge base 以降に main へ入った変更が、この PR と
+  # 同じファイルを触っているときだけ赤くする（#838）。** 判定ロジックは
+  # `scripts/check-base-overlap-core.mjs` が正本（compare API の向きの実測・
+  # 4値の verdict・300件打ち切りの扱いはあちらの doc）。ここは呼び出しだけ。
+  base-overlap:
+    # **この `if:` は `ci` / `image` と意図的に逆（`==` の側）で書く。** `ci.yml`
+    # 自身の `ci` ジョブの直上に「`github.event.pull_request.draft == false` を
+    # 単独では書かない」という長い doc が在り、「先例に揃えて書き換えるな」と
+    # 明示されている——**が、それは `ci` と `image` がどちらも push・pull_request・
+    # workflow_dispatch（`image` はさらに schedule）を1つのジョブで兼ねている
+    # ことが理由であって、`==` そのものが常に間違っているわけではない。** 実際
+    # `ci` の doc も「どちらが正しいかは、そのジョブが*どのイベントを兼ねているか*
+    # で決まる」と書いており、**このジョブはその基準に従った結果として違う形に
+    # なっている**（先例を知らずに違えたのではない）。
+    #
+    # **このジョブは pull_request 専用である。** PR が無ければ「base」も「PR が
+    # 触るファイル」も存在せず、測る対象そのものが無い。push（main）・schedule・
+    # workflow_dispatch では `github.event.pull_request` が存在せず
+    # `null == false` は偽になるので、`==` の形でも安全に skip される
+    # （`!=` にする理由——push を検査ゼロのまま緑にしてしまう罠——がそもそも
+    # 発生しない。実行して意味のある経路が pull_request の1つしか無いため）。
+    #
+    # ⚠️ **`push` では `skipped` になるが、それが安全なのはこのジョブが required
+    # contexts に入っていないからである。** `skipped` は required の判定では
+    # 満たしたものとして扱われる。**もし将来このジョブを required に入れるなら、
+    # この `if:` は同時に見直さなければならない**（`push` を無条件に「満たした」
+    # ことにしてしまうと、main への直 push がこの検査を一度も受けずに緑になる）。
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v4
+      - run: pnpm check:base-overlap
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+          # `github.sha`（pull_request イベントでは merge commit の sha）ではなく、
+          # PR ブランチの先端そのものを渡す。名前は `check-base-overlap.mjs` が
+          # 決めたもの（あちらの doc の「入力」表を見よ）。
+          BASE_OVERLAP_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_OVERLAP_PR_NUMBER: ${{ github.event.pull_request.number }}
+
+  # **`base-overlap` を required contexts（`ci` / `image`、2026-09-12実測）には
+  # 入れていない。**
+  #
+  # 1. **この歯は GitHub API とファイルパスの積集合というヒューリスティックに
+  #    依存する。** 誤検知（無関係な同名変更・偶然のパス一致）が required だと、
+  #    repo 全体のマージがそれだけで止まる。
+  # 2. **この歯は判定時点の値で測る。** 判定後に main が進めば、その判定は古く
+  #    なる。⟹ required にすると「門が閉じている」と読める緑を配ってしまい、
+  #    `check-base-overlap-core.mjs` の `IDENTITY_STATEMENT`
+  #    （気付くための歯であって、不可能にするための歯ではない）と構造的に
+  #    矛盾する。
+  #
+  # **`.github/required-status-checks.json` はここでは触っていない。** あれは
+  # protection の**宣言**であり、`pnpm check:required-status-checks` が実際の
+  # protection と突き合わせるためのもの（`check-required-status-checks-core.mjs`
+  # の doc）。protection 側を変えていない以上、あそこへ `base-overlap` を足すと
+  # 「宣言に在るのに protection に無い」という drift をこちらで新しく作ることに
+  # なる。
+  #
+  # **将来 required にしたくなったときの手順**: (a) リポジトリの branch
+  # protection の required status checks に `base-overlap` を追加する →
+  # (b) `.github/required-status-checks.json` の `contexts` にも `base-overlap`
+  # を足し `observedAt` を更新する → (c) 上の `if:` を見直す（`skipped` が
+  # required を満たしてしまう問題を、`push` を required から外すか他の形で
+  # 塞いだ上で入れる）。この3つは順番も含めて揃える必要がある——`(a)` だけ先に
+  # やると `check-required-status-checks` が drift として赤くなり、`(b)` だけ
+  # 先にやっても protection は変わらないので何も強制されない。
