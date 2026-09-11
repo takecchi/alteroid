@@ -44,6 +44,8 @@ import type {
   Stores,
   StoredCredential,
   TokenPoolStore,
+  ArchiveEntry,
+  ArchiveSessionSummary,
   TranscriptArchive,
   UsageStore,
 } from './store.js';
@@ -153,6 +155,13 @@ export function createMemoryStores(): Stores {
   const archives = new Map<string, string>();
   /** tombstone（#698）。行（`archives` のキー）は消さず、ここへ印だけを持つ。 */
   const archiveRemovals = new Map<string, { removedAt: string; bytes: number }>();
+  /**
+   * `list()` / `sessions()` が返すメタ（#698）。**本文（`archives`）とは別に持つ**
+   * ——tombstone で本文が `''` になっても `sessionId` と `at` は残る（pg 側で
+   * 列が残るのと同じ）。`seq` は積んだ順で、`at` が同じミリ秒に並んだときの
+   * 並びを決めるためだけに在る（pg 側の `order by at desc, id desc` の代わり）。
+   */
+  const archiveMeta = new Map<string, { sessionId: string; at: string; seq: number }>();
   const inboxStore = createMemoryInboxStore();
   let cloneSessionId: string | null = null;
   let transcriptGrave: TranscriptGrave | null = null;
@@ -488,14 +497,75 @@ export function createMemoryStores(): Stores {
     },
   };
 
+  /**
+   * `list()` と `sessions()` が共通で使う1行の組み立て（#698）。2箇所に同じ
+   * 組み立てを書くと、片方だけ直したときに黙ってズレるため1つにまとめてある。
+   *
+   * **`storedBytes` は文字列長である**（この置き場がこの行に使っている量）。
+   * pg の圧縮後バイト数・fs のファイル長とは単位が違う——`ArchiveEntry` の
+   * doc のとおり、置き場をまたいで比較してはならない。
+   *
+   * 並びは新しい順（`at` の降順、同じミリ秒なら積んだ順の降順）。
+   */
+  const buildArchiveEntries = (): ArchiveEntry[] =>
+    [...archives.entries()]
+      .flatMap(([id, body]) => {
+        const meta = archiveMeta.get(id);
+        if (meta === undefined) return [];
+        const removal = archiveRemovals.get(id);
+        const entry: ArchiveEntry = {
+          id,
+          sessionId: meta.sessionId,
+          at: meta.at,
+          storedBytes: body.length,
+          ...(removal === undefined
+            ? {}
+            : { removedAt: removal.removedAt, removedBytes: removal.bytes }),
+        };
+        return [{ entry, seq: meta.seq }];
+      })
+      .sort((x, y) => (x.entry.at < y.entry.at ? 1 : x.entry.at > y.entry.at ? -1 : y.seq - x.seq))
+      .map(({ entry }) => entry);
+
   const archive: TranscriptArchive = {
     async archive(sessionId, transcript) {
       const id = `${sessionId}-${nextId()}`;
       archives.set(id, transcript);
+      archiveMeta.set(id, { sessionId, at: new Date().toISOString(), seq: archiveMeta.size });
       return id;
     },
-    async list() {
-      return [...archives.keys()];
+    async list(): Promise<ArchiveEntry[]> {
+      return buildArchiveEntries();
+    },
+    async sessions(): Promise<ArchiveSessionSummary[]> {
+      const bySession = new Map<string, ArchiveSessionSummary>();
+      for (const entry of buildArchiveEntries()) {
+        const existing = bySession.get(entry.sessionId);
+        if (existing === undefined) {
+          bySession.set(entry.sessionId, {
+            sessionId: entry.sessionId,
+            rows: 1,
+            storedBytes: entry.storedBytes,
+            maxStoredBytes: entry.storedBytes,
+            firstAt: entry.at,
+            lastAt: entry.at,
+          });
+          continue;
+        }
+        bySession.set(entry.sessionId, {
+          sessionId: entry.sessionId,
+          rows: existing.rows + 1,
+          storedBytes: existing.storedBytes + entry.storedBytes,
+          maxStoredBytes: Math.max(existing.maxStoredBytes, entry.storedBytes),
+          firstAt: entry.at < existing.firstAt ? entry.at : existing.firstAt,
+          lastAt: entry.at > existing.lastAt ? entry.at : existing.lastAt,
+        });
+      }
+      return [...bySession.values()].sort(
+        (x, y) =>
+          y.storedBytes - x.storedBytes ||
+          (x.sessionId < y.sessionId ? -1 : x.sessionId > y.sessionId ? 1 : 0),
+      );
     },
     async read(id) {
       // **印（`archiveRemovals`）を先に見る。** `archives.get(id)` が `''`

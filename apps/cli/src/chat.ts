@@ -241,8 +241,9 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /reply <番号|requestId> <本文>  マネージャーの質問に自分の言葉で答える（番号は /waiting の並び）
 /allow <番号|requestId> [理由]  マネージャーの実行許可の確認に許可で答える
 /deny  <番号|requestId> [理由]  マネージャーの実行許可の確認に拒否で答える
-/archive             セッションの生ログ一覧
+/archive             セッションの生ログ一覧（大きさ・時刻つき）
 /archive <id>        生ログの中身
+/archive sessions    sessionId ごとの行数・使用量の集計（#698）
 /approvals           承認待ち（番号付き）
 /answer <番号|id> <回答>  承認待ちに答える（番号は /approvals の並び）
 /answers <番号|id> <回答> [<番号|id> <回答> ...]  溜まった承認待ちにまとめて答える
@@ -979,7 +980,29 @@ export async function runSlashCommand(
 
     case '/archive': {
       // 可観測性の最下段。日誌で足りないときの最後の拠り所へ、chat から降りられる。
-      const id = rest[0];
+      const sub = rest[0];
+
+      // sessionId ごとの行数・使用量の集計(#698)。⭐ 依頼の動機そのもの
+      // ——「1本が何度積まれているか」は、個々の大きさより先に問題を特定する。
+      if (sub === 'sessions') {
+        const response = await client.archive.sessions.$get();
+        if (!response.ok) {
+          stdout.write('アーカイブの集計を読めませんでした\n');
+          return 'ok';
+        }
+        const { sessions } = await response.json();
+        if (sessions.length === 0) stdout.write('（生ログはまだありません）\n');
+        for (const session of sessions) {
+          stdout.write(
+            `  ${session.sessionId}  行数: ${session.rows}` +
+              `  使用量合計: ${session.storedBytes}バイト（最大1行: ${session.maxStoredBytes}バイト）` +
+              `  ${session.firstAt} 〜 ${session.lastAt}\n`,
+          );
+        }
+        return 'ok';
+      }
+
+      const id = sub;
       if (!id) {
         const response = await client.archive.$get();
         if (!response.ok) {
@@ -988,7 +1011,10 @@ export async function runSlashCommand(
         }
         const { entries } = await response.json();
         if (entries.length === 0) stdout.write('（生ログはまだありません）\n');
-        for (const entry of entries) stdout.write(`  ${entry}\n`);
+        for (const entry of entries) {
+          const removedNote = entry.removedAt !== undefined ? '（本文は削除済み）' : '';
+          stdout.write(`  ${entry.id}  ${entry.storedBytes}バイト  ${entry.at}${removedNote}\n`);
+        }
         return 'ok';
       }
       const response = await client.archive[':id'].$get({ param: { id } });

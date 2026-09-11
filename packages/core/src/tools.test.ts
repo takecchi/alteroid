@@ -8053,7 +8053,7 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
     });
 
     expect(reply).toContain('消した');
-    expect(await h.stores.archive.list()).toContain(archiveId);
+    expect((await h.stores.archive.list()).map((entry) => entry.id)).toContain(archiveId);
     expect(await h.stores.archive.read(archiveId)).toMatchObject({ kind: 'removed' });
 
     const entries = await h.stores.journal.list({ types: ['decision'] });

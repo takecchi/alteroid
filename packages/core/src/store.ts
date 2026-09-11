@@ -793,6 +793,57 @@ export type ArchiveRemoval =
   | { readonly kind: 'missing' };
 
 /**
+ * `TranscriptArchive.list()` の1行（#698）。
+ *
+ * Issue #698（「`archive` が DB の89%を占める」という見立てを測ろうとしたら、
+ * サンクションされた口では大きさも時刻も取れず、本番 DB へ直接降りるしか
+ * なかった）を受けて、`list()` の戻り値を id の文字列配列から拡張した。
+ *
+ * **`storedBytes` はその置き場がこの行に実際に使っている量である。** pg は
+ * 圧縮後のバイト数（TOAST 後、`pg_column_size`）、fs はファイルのバイト数
+ * （`stat().size`）、インメモリは文字列長。**生ログの文字数ではない**し、
+ * **置き場をまたいで比較してはならない**——同じ内容でも実装ごとに値の単位・
+ * 大小関係が揃わない。**Issue #698 では、まさにこの2つ（展開後の文字数と
+ * 圧縮後のバイト数）を取り違えた比較が実際に起きた。**
+ *
+ * `removedAt` / `removedBytes` は `remove()`（tombstone）が起きた行にだけ
+ * 載る——`ArchiveRemoval` / `ArchiveRead` の `removed` と同じ情報を、一覧の
+ * 面でも見えるようにしたもの。
+ */
+export interface ArchiveEntry {
+  readonly id: string;
+  readonly sessionId: string;
+  /** ISO 8601（`archive()` を呼んだ時刻）。 */
+  readonly at: string;
+  readonly storedBytes: number;
+  readonly removedAt?: string;
+  readonly removedBytes?: number;
+}
+
+/**
+ * `TranscriptArchive.sessions()` の1行——`sessionId` ごとの集計(#698)。
+ *
+ * **`rows` が数えるのは `archive()` が呼ばれた回数**（tombstone 済みの行も
+ * 含む——`list()` と同じく、`remove()` は本文だけを落とし行は残るため）。
+ * ⭐ **Issue #698 でいちばん効いたのはこの `rows` である。** 個々の
+ * `storedBytes` の大小ではなく「同じセッションの生ログが68回積まれている」
+ * という重複の事実のほうが、先に問題の所在を特定した。
+ *
+ * `storedBytes` / `maxStoredBytes` は、この `sessionId` に属する全行の
+ * `ArchiveEntry.storedBytes`（現在の実使用量。tombstone 済みの行はほぼ0に
+ * 畳まれる）の合計と最大値。単位・比較不可の制約は `ArchiveEntry.storedBytes`
+ * の doc をそのまま継承する。
+ */
+export interface ArchiveSessionSummary {
+  readonly sessionId: string;
+  readonly rows: number;
+  readonly storedBytes: number;
+  readonly maxStoredBytes: number;
+  readonly firstAt: string;
+  readonly lastAt: string;
+}
+
+/**
  * セッションの生ログ退避先（PreCompact フックで落とす）。
  *
  * **⛔ `remove()` は行を消さない。** 本文だけを落とす（tombstone）——`archive`
@@ -803,7 +854,16 @@ export type ArchiveRemoval =
 export interface TranscriptArchive {
   /** 退避したアーカイブのパス（または識別子）を返す。 */
   archive(sessionId: string, transcript: string): Promise<string>;
-  list(): Promise<string[]>;
+  /** 新しい順（#698）。 */
+  list(): Promise<ArchiveEntry[]>;
+  /**
+   * `sessionId` ごとの集計（#698）。3実装の一致は `verifyTranscriptArchiveContract()` が測る。
+   *
+   * **並びは `storedBytes` の降順、同値なら `sessionId` の昇順。** ⚠ 並びを
+   * 決めずに置くと、同じ問い合わせが呼ぶたびに違う順で返りうる——容量を追う面
+   * （大きいセッションから見たい）では、それは黙った揺れになる。
+   */
+  sessions(): Promise<ArchiveSessionSummary[]>;
   read(id: string): Promise<ArchiveRead>;
   /**
    * 本文だけを落とす（tombstone。`DELETE` ではない）。

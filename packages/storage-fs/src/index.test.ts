@@ -2383,7 +2383,7 @@ describe('FsTranscriptArchive', () => {
   it('退避して読み戻せる', async () => {
     const id = await stores.archive.archive('session-1', '{"a":1}\n');
 
-    expect(await stores.archive.list()).toContain(id);
+    expect((await stores.archive.list()).map((entry) => entry.id)).toContain(id);
     expect(await stores.archive.read(id)).toEqual({ kind: 'body', body: '{"a":1}\n' });
   });
 
@@ -2416,9 +2416,9 @@ describe('FsTranscriptArchive', () => {
     expect(marker.bytes).toBe(Buffer.byteLength('BODY\n', 'utf8'));
 
     // list() は .jsonl で絞っているので、印ファイル自身は一覧へ混ざらない。
-    const listed = await stores.archive.list();
-    expect(listed).toContain(id);
-    expect(listed).not.toContain(`${id}.removed`);
+    const listedIds = (await stores.archive.list()).map((entry) => entry.id);
+    expect(listedIds).toContain(id);
+    expect(listedIds).not.toContain(`${id}.removed`);
   });
 
   it('存在しない id への remove() は黙って成功しない（missing）', async () => {
@@ -2468,6 +2468,41 @@ describe('FsTranscriptArchive', () => {
       removedAt: readAfterFirst.removedAt,
       bytes: Buffer.byteLength('TWICE\n', 'utf8'),
     });
+  });
+
+  /**
+   * `storedBytes`（#698）は `stat().size`——**fs 固有の意味**（実装ごとに
+   * 違うことは `ArchiveEntry.storedBytes` の doc が明言する）。ここでは
+   * fs だけが持つ性質、`list()` の `storedBytes` が実ファイルの `stat().size`
+   * と一致することを直接測る（契約テストは実装をまたいだ整合性しか見ない）。
+   */
+  it('list()のstoredBytesは実ファイルのstat().sizeと一致する（fs固有）', async () => {
+    const id = await stores.archive.archive('session-stat', 'HELLO WORLD\n');
+
+    const entry = (await stores.archive.list()).find((e) => e.id === id);
+    expect(entry).toBeDefined();
+    const fileSize = (await stat(join(root, 'archive', id))).size;
+    expect(entry?.storedBytes).toBe(fileSize);
+
+    // remove() で本体を空へ切り詰めた後は 0 になる。
+    await stores.archive.remove(id);
+    const entryAfterRemove = (await stores.archive.list()).find((e) => e.id === id);
+    expect(entryAfterRemove?.storedBytes).toBe(0);
+  });
+
+  /**
+   * `.meta.json`（#698）が無い、この拡張より前に作られたアーカイブでも
+   * `list()` が例外を投げず、ファイル名から best-effort で復元すること。
+   */
+  it('meta.jsonが無い(拡張前に作られた)アーカイブでもlist()は落ちない', async () => {
+    const id = await stores.archive.archive('session-legacy', 'LEGACY\n');
+    // この実装が書いた meta サイドカーを消し、無かった状態を再現する。
+    await rm(join(root, 'archive', `${id}.meta.json`));
+
+    const entry = (await stores.archive.list()).find((e) => e.id === id);
+    expect(entry).toBeDefined();
+    expect(typeof entry?.sessionId).toBe('string');
+    expect(Number.isNaN(Date.parse(entry?.at ?? ''))).toBe(false);
   });
 });
 

@@ -907,10 +907,79 @@ describe('HTTP API', () => {
     const id = await stores.archive.archive('sess-1', '{"a":1}\n');
 
     const list = await app.request('/archive');
-    expect(await list.json()).toMatchObject({ entries: [id] });
+    expect(await list.json()).toMatchObject({
+      entries: [{ id, sessionId: 'sess-1', storedBytes: expect.any(Number) }],
+    });
 
     const read = await app.request(`/archive/${id}`);
     expect(await read.text()).toBe('{"a":1}\n');
+  });
+
+  /**
+   * `GET /archive` の応答が id だけの文字列配列ではなく `ArchiveEntry[]`
+   * であること（#698）。`storedBytes` の絶対値はここでは検査しない——実装
+   * （インメモリ）ごとに単位が違うので、値の存在と形だけを見る
+   * （`ArchiveEntry.storedBytes` の doc「置き場をまたいで比較しない」）。
+   */
+  it('GET /archive は大きさ(storedBytes)と時刻(at)を返す（#698）', async () => {
+    const id = await stores.archive.archive('sess-sizes', 'HELLO\n');
+
+    const response = await app.request('/archive');
+    const body = (await response.json()) as {
+      entries: { id: string; sessionId: string; at: string; storedBytes: number }[];
+    };
+    const entry = body.entries.find((e) => e.id === id);
+    expect(entry).toBeDefined();
+    expect(entry?.sessionId).toBe('sess-sizes');
+    expect(typeof entry?.at).toBe('string');
+    expect(Number.isNaN(Date.parse(entry?.at ?? ''))).toBe(false);
+    expect(entry?.storedBytes).toBeGreaterThan(0);
+  });
+
+  /**
+   * `GET /archive/sessions`（#698）——sessionId ごとの行数と使用量。
+   * ⭐ 依頼の動機そのもの: 同一セッションを複数回 archive すると rows が
+   * その回数を数える（tombstone 済みでも減らない）。
+   */
+  it('GET /archive/sessions は sessionId ごとの rows とstoredBytesを返す（複数回archiveしたセッション）', async () => {
+    const idA1 = await stores.archive.archive('sess-repeated', 'A\n');
+    await stores.archive.archive('sess-repeated', 'BB\n');
+    const idA3 = await stores.archive.archive('sess-repeated', 'CCC\n');
+    await stores.archive.remove(idA1);
+    await stores.archive.archive('sess-once', 'ONLY\n');
+
+    const response = await app.request('/archive/sessions');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      sessions: {
+        sessionId: string;
+        rows: number;
+        storedBytes: number;
+        maxStoredBytes: number;
+        firstAt: string;
+        lastAt: string;
+      }[];
+    };
+
+    const repeated = body.sessions.find((s) => s.sessionId === 'sess-repeated');
+    expect(repeated).toBeDefined();
+    // ⭐ 3回積んだうち1本を消しても rows は3のまま(行は残る)。
+    expect(repeated?.rows).toBe(3);
+    expect(repeated?.storedBytes).toBeGreaterThanOrEqual(0);
+    expect(repeated?.maxStoredBytes).toBeGreaterThan(0);
+    expect(Number.isNaN(Date.parse(repeated?.firstAt ?? ''))).toBe(false);
+    expect(Number.isNaN(Date.parse(repeated?.lastAt ?? ''))).toBe(false);
+
+    const once = body.sessions.find((s) => s.sessionId === 'sess-once');
+    expect(once).toBeDefined();
+    expect(once?.rows).toBe(1);
+
+    // idA3 は消していないので list() 側で確認できる（sessions() の
+    // storedBytes が list() の集計と一致することは archive-contract.ts の
+    // 契約テストが測る——ここは HTTP の口が sessions() を正しく橋渡しして
+    // いることだけを見る）。
+    const list = await (await app.request('/archive')).json();
+    expect((list as { entries: { id: string }[] }).entries.some((e) => e.id === idA3)).toBe(true);
   });
 
   /**
@@ -929,9 +998,18 @@ describe('HTTP API', () => {
       alreadyRemoved: false,
     });
 
-    // 行は list に残る。
+    // 行は list に残る。tombstone 済みなので removedAt / removedBytes を伴う。
     const list = await app.request('/archive');
-    expect(await list.json()).toMatchObject({ entries: [id] });
+    expect(await list.json()).toMatchObject({
+      entries: [
+        {
+          id,
+          sessionId: 'sess-remove',
+          removedAt: expect.any(String),
+          removedBytes: Buffer.byteLength('BODY\n', 'utf8'),
+        },
+      ],
+    });
 
     // GET は 410（missing の 404 とは別のステータス）で詳細を返す。
     const read = await app.request(`/archive/${id}`);
@@ -3739,6 +3817,7 @@ describe('OpenAPI', () => {
       '/runners/credentials',
       '/runners/vacate',
       '/archive',
+      '/archive/sessions',
       '/archive/{id}',
       '/shutdown',
     ]) {

@@ -1222,7 +1222,47 @@ export const droppedResponseSchema = z.object({
 // アーカイブ（/archive）
 // ---------------------------------------------------------------------------
 
-export const archiveListResponseSchema = z.object({ entries: z.array(z.string()) });
+/**
+ * `GET /archive` / `GET /archive/sessions` の1行の共通部分（#698）。
+ *
+ * `storedBytes` は**その置き場（pg / fs）がこの行に実際に使っている量**で
+ * あって、生ログの文字数ではない。**デーモンの永続化層をまたいで比較しては
+ * ならない**——同じ応答の中で比べる分には安全である（同一デーモンは同一の
+ * 層で動く）。詳しい意味は `@alteroid/core` の `ArchiveEntry` の doc を見ること
+ * （このスキーマはそれをそのまま JSON へ写す）。
+ */
+export const archiveEntrySchema = z.object({
+  id: z.string(),
+  sessionId: z.string(),
+  at: z.string(),
+  storedBytes: z.number().int(),
+  /** tombstone 済み（`DELETE /archive/:id`）の行にだけ載る。 */
+  removedAt: z.string().optional(),
+  removedBytes: z.number().int().optional(),
+});
+
+export const archiveListResponseSchema = z.object({ entries: z.array(archiveEntrySchema) });
+
+/**
+ * `GET /archive/sessions`（#698）の1行——`sessionId` ごとの集計。
+ *
+ * `rows` は `archive()` が呼ばれた回数（tombstone 済みの行も含む）。
+ * Issue #698 でいちばん効いたのはこの `rows` である——同じセッションの
+ * 生ログが68回積まれている、という重複の事実が、個々の大きさより先に
+ * 問題の所在を特定した。
+ */
+export const archiveSessionSummarySchema = z.object({
+  sessionId: z.string(),
+  rows: z.number().int(),
+  storedBytes: z.number().int(),
+  maxStoredBytes: z.number().int(),
+  firstAt: z.string(),
+  lastAt: z.string(),
+});
+
+export const archiveSessionsResponseSchema = z.object({
+  sessions: z.array(archiveSessionSummarySchema),
+});
 
 /**
  * `DELETE /archive/:id` が消せた（あるいは前から消されていた）ことを言う

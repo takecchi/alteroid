@@ -2109,7 +2109,7 @@ describe('PgTranscriptArchive', () => {
   it('退避して読み戻せる', async () => {
     const id = await stores.archive.archive('session-1', '{"a":1}\n');
 
-    expect(await stores.archive.list()).toContain(id);
+    expect((await stores.archive.list()).map((entry) => entry.id)).toContain(id);
     expect(await stores.archive.read(id)).toEqual({ kind: 'body', body: '{"a":1}\n' });
   });
 
@@ -2129,7 +2129,7 @@ describe('PgTranscriptArchive', () => {
     expect(removed).toEqual({ kind: 'removed', bytes: Buffer.byteLength('BODY\n', 'utf8') });
 
     // ⭐ 行は在る（list() に出る）。本文だけが落ちている。
-    expect(await stores.archive.list()).toContain(id);
+    expect((await stores.archive.list()).map((entry) => entry.id)).toContain(id);
     expect(await stores.archive.read(id)).toMatchObject({ kind: 'removed' });
 
     // 実際の行に body='' が入っており、DELETE していないことを直接見る。
@@ -2183,6 +2183,49 @@ describe('PgTranscriptArchive', () => {
       removedAt: readAfterFirst.removedAt,
       bytes: Buffer.byteLength('TWICE\n', 'utf8'),
     });
+  });
+
+  /**
+   * `storedBytes`（#698）は `pg_column_size(body)`——**`length()` /
+   * `octet_length()` ではない**（それらは TOAST を展開する）。ここでは
+   * `pg_column_size` を実際に呼んでいることを、同じ値と突き合わせて測る
+   * （`length()` と混同しても短い本文では値が一致してしまう場合があるので、
+   * 突き合わせは同じ関数を使う——「この関数を呼んでいるか」を見るのが
+   * 目的であって、絶対値の検算ではない）。
+   */
+  it('list()のstoredBytesはpg_column_size(body)と一致する（#698）', async () => {
+    const id = await stores.archive.archive('session-column-size', 'HELLO WORLD\n');
+
+    const entry = (await stores.archive.list()).find((e) => e.id === id);
+    expect(entry).toBeDefined();
+
+    const [row] = await db
+      .select({ size: sql<number>`pg_column_size(${archive.body})` })
+      .from(archive)
+      .where(eq(archive.id, id));
+    expect(entry?.storedBytes).toBe(row?.size);
+  });
+
+  /**
+   * `GET /archive/sessions` の元になる `sessions()`——⭐ 依頼の動機そのもの
+   * （同一セッションが複数回積まれている、を rows で数える）を pg 実装でも
+   * 直接測る（契約テストとは別に、GROUP BY が実際に効いていることを見る）。
+   */
+  it('sessions()は同一sessionIdの行数(tombstone済み込み)を正しく数える', async () => {
+    // ⚠ 1ミリ秒ずつ空ける理由は archive-contract.ts の同じ箇所の注記を参照
+    // （id は `-${stamp}.jsonl` のミリ秒精度なので、同じミリ秒に積むと
+    // `onConflictDoUpdate` で黙って上書きになる。元から在る別の欠陥）。
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 2));
+    const idA = await stores.archive.archive('session-grouped', 'A\n');
+    await tick();
+    await stores.archive.archive('session-grouped', 'BB\n');
+    await tick();
+    await stores.archive.archive('session-grouped', 'CCC\n');
+    await stores.archive.remove(idA);
+
+    const summaries = await stores.archive.sessions();
+    const summary = summaries.find((s) => s.sessionId === 'session-grouped');
+    expect(summary?.rows).toBe(3);
   });
 });
 
