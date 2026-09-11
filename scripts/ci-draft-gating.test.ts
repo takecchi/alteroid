@@ -455,12 +455,29 @@ function jobRuns(jobName: string, ctx: GithubEventContext): boolean {
 }
 
 /**
- * required contexts（`gh api repos/takecchi/alteroid/branches/main/protection` の
- * `required_status_checks.contexts` 実測値。観測 2026-09-10T08:11Z、`["ci","image"]`）。
- * **この配列はブランチ保護の実測を写した宣言であって、ci.yml から動的に読んでは
- * いない**——ジョブ名がずれてもこの歯が黙って自分を合わせないようにするため。
+ * required contexts。**値はここに持たず、`.github/required-status-checks.json` から
+ * 読む。**
+ *
+ * **`ci.yml` からは動的に読まない。** ジョブ名がずれてもこの歯が黙って自分を
+ * 合わせないようにするためで、これは元からの判断であって変えていない。
+ *
+ * **変えたのは「どこに1つ置くか」だけである。** かつてはこのファイルが値を直書き
+ * で持っており、**同じ主張の写しが `ci.yml` のコメントにもあった**（2箇所）。
+ * 写しが2つあると、片方だけ直した回に食い違いが残り、しかも食い違ったことが
+ * どこからも見えない。⟹ 正本を1つにして、両方がそこを指す。
+ *
+ * **⚠️ それでもこのファイルは「protection と一致しているか」を測っていない。**
+ * ここが測るのは「宣言した名前が `ci.yml` の実在のジョブに対応するか」までで、
+ * **宣言そのものがブランチ保護からずれていないかは `pnpm check:required-status-checks`
+ * の仕事である**（ネットワークと administration 権限のトークンが要るので
+ * `pnpm test` の中では測れない。理由は `check-required-status-checks-core.mjs` の doc）。
+ * **この歯が緑でも、「いま protection と一致している」ことは1文字も言えない。**
  */
-const REQUIRED_CONTEXTS = ['ci', 'image'];
+const REQUIRED_CONTEXTS: string[] = (
+  JSON.parse(readFileSync(path.join(ROOT, '.github/required-status-checks.json'), 'utf8')) as {
+    contexts: string[];
+  }
+).contexts;
 
 describe('前提: ci.yml から抽出できていること', () => {
   it('ci ジョブと image ジョブの両方を検出している', () => {

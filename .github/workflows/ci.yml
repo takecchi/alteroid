@@ -25,8 +25,9 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
   # **上流ドリフトを見に行く回。ここだけキャッシュを使わずに焼く**（下の `image` の
   # `no-cache`）。**定時にしてあるのは、PR の門を人質に取らないためである** — `ci` と
-  # `image` は required なので（`gh api repos/takecchi/alteroid/branches/main/protection`
-  # の `contexts` が `["ci","image"]`。観測 2026-09-10T08:11Z）、PR ごとに焼き直す形に
+  # `image` は required なので（**正本は `.github/required-status-checks.json`。
+  # ここに値を書き写さない** —— 写しが2つあると、片方だけ直した回の食い違いが
+  # どこからも見えなくなる）、PR ごとに焼き直す形に
   # すると、**上流の apt が落ちている間は1本もマージできなくなる。**
   # 鳴らしたいのは警報であって、門ではない。
   #

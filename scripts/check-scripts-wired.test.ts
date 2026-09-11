@@ -85,7 +85,22 @@ interface Exemption {
   readonly why: string;
 }
 
-const EXEMPT: Exemption[] = [];
+const EXEMPT: Exemption[] = [
+  {
+    script: 'check:required-status-checks',
+    why:
+      'ブランチ保護の読み出しに administration 相当の権限が要り、**CI の既定の GITHUB_TOKEN には付けられない**' +
+      '（GitHub Actions の `permissions:` に指定できるスコープに administration が無い。実測 2026-09-11、' +
+      '公式の workflow syntax から取得した全16個は actions / artifact-metadata / attestations / checks / ' +
+      'code-quality / contents / deployments / discussions / id-token / issues / packages / pages / ' +
+      'pull-requests / security-events / statuses / vulnerability-alerts）。' +
+      'STEPS（手元の一式）にも入れていない —— `pnpm test` は offline でも走るので、ネットワークを足すと' +
+      '「ずれている」と「繋がらなかった」が同じ赤になる。' +
+      '⚠️ **この免除は「配線しなくてよい」ではなく「いまの手持ちのトークンでは配線できない」である。**' +
+      'administration を読めるトークンを secret として置けるなら、ci.yml の schedule の回' +
+      '（門ではなく警報の回）へ `run: pnpm check:required-status-checks` を足すのが本来の置き場所である。',
+  },
+];
 
 describe('check:* がどの門からも呼ばれていない穴を作らない（package.json から導出）', () => {
   const checkScripts = readPackageJsonCheckScripts();

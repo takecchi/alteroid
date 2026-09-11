@@ -1,0 +1,6 @@
+{
+  "note": "main のブランチ保護で required になっている status check の名前。これは宣言であって設定ではない —— これを書き換えても protection は変わらない。ずれていないかは `pnpm check:required-status-checks` が突き合わせる（読むには administration 権限のあるトークンが要る。理由は scripts/check-required-status-checks-core.mjs の doc）。",
+  "observedAt": "2026-09-11T14:56:42Z",
+  "observedBy": "gh api repos/takecchi/alteroid/branches/main/protection",
+  "contexts": ["ci", "image"]
+}
