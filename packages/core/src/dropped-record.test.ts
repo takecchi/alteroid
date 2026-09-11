@@ -671,6 +671,92 @@ describe('捨てた合図の見分け', () => {
       }),
     ).toContain('requestId=req-9');
   });
+
+  /**
+   * Issue #823（B）: `inboxEventShape` には `journalEntryShape` の名簿
+   * （`JOURNAL_SHAPE_PLAN`）に相当するものが無い。**7型のうち `external` と
+   * `manager_message` の2型だけが、上の2つの `it` で位置・値ごと `toBe`/
+   * `toContain` で固定されている。残る5型（`human_message`/`human_answer`/
+   * `distill`/`timer`/`self_initiative`）には、欄が出ているかを直接測る
+   * アサーションが1本も無かった。** 共通ループ（このファイル上部の
+   * 「どの起点でも本文が跡に乗らない（7種類すべて）」）は
+   * `not.toContain(secret)` と `toContain(event.type)` の2本だけで、**どちらも
+   * `size(event.text)` のような無名の呼び出しを実装から消しても真のままである**
+   * ——`type` の文字列（`'human_message'` 等）は `inboxEventShape` の返り値の
+   * 先頭に必ず出るので、`text`/`reason`/`answer` を出す `size()` 呼び出しを
+   * まるごと削っても、この2本のアサーションはどちらも満たされ続ける。
+   *
+   * ここでは `journalEntryShape` の型別 `toBe`（このファイル上部）と同じ
+   * 作りで、5型それぞれの丸ごと一致を固定する——欄の位置・値の両方を
+   * 固定するので、どの欄を実装から落としても必ず落ちる。
+   */
+  it('human_message は text の位置ごと toBe で固定する（Issue #823）', () => {
+    const shape = inboxEventShape({
+      type: 'human_message',
+      id: 'e1',
+      at,
+      text: secret,
+      conversationId: 'conv-1',
+    });
+
+    expect(shape).toBe(`human_message chars=${secret.length}`);
+  });
+
+  it('human_answer は approvalId/answer の位置ごと toBe で固定する（Issue #823）', () => {
+    const shape = inboxEventShape({
+      type: 'human_answer',
+      id: 'e2',
+      at,
+      approvalId: 'ap-1',
+      answer: secret,
+    });
+
+    expect(shape).toBe(`human_answer approvalId=ap-1 answer.chars=${secret.length}`);
+  });
+
+  it('distill は reason の位置ごと toBe で固定する（Issue #823）', () => {
+    const shape = inboxEventShape({
+      type: 'distill',
+      id: 'e3',
+      at,
+      reason: 'shutdown',
+    });
+
+    expect(shape).toBe('distill reason=shutdown');
+  });
+
+  it('timer は kind/cause/target の位置ごと toBe で固定する（Issue #823）', () => {
+    const withAll = inboxEventShape({
+      type: 'timer',
+      id: 'e4',
+      at,
+      kind: 'daily_report',
+      cause: 'schedule_catchup',
+      target: '2026-08-16',
+    });
+    expect(withAll).toBe('timer kind=daily_report cause=schedule_catchup target=2026-08-16');
+
+    // optional の2欄（cause/target）が無い回は、必須の kind だけが載る
+    // ——「取れない軸に0の行を作る」を跡でも守る（他の型と同じ判定基準）。
+    const kindOnly = inboxEventShape({
+      type: 'timer',
+      id: 'e5',
+      at,
+      kind: 'memory_tidy',
+    });
+    expect(kindOnly).toBe('timer kind=memory_tidy');
+  });
+
+  it('self_initiative は reason の位置ごと toBe で固定する（Issue #823）', () => {
+    const shape = inboxEventShape({
+      type: 'self_initiative',
+      id: 'e6',
+      at,
+      reason: secret,
+    });
+
+    expect(shape).toBe(`self_initiative chars=${secret.length}`);
+  });
 });
 
 /**
@@ -1075,6 +1161,27 @@ describe('droppedTraceLedgerSince（帳面が数え始めた時刻）', () => {
  *    方、`落とした記録の跡` の中）。**この名簿の `size-unnamed` チェックは
  *    今回弱めていない**——役割は「欄を足し忘れていないかの目印」のままで、
  *    「どの値が出ているか」の保証は型別の `toBe` 側に一本化した。
+ * 5. **（このPRで追記）上の4は PR #829 時点の状態の記録として残す——読み替え
+ *    ない。この PR は名簿自身の `size-unnamed` 判定を強めた**（`journalEntryShape
+ *    が plan どおりに振る舞う` の `case 'size-unnamed'`）。**「跡の文字列全体を
+ *    検索する」から「無名の欄が実際の長さを、名前付き欄と取り違えられない
+ *    形で持つか」（境界＋値）へ変えた**——旧来の `/(?:^| )chars=\d+/u` は
+ *    どんな桁でも通したが、いまは `SECRET.length` という特定の桁でしか
+ *    満たせない。`poisonableTagField` を持つ4型（`memory_update`/
+ *    `daily_report`/`token_rotation`/`subagent_stall`）では、その欄を実際に
+ *    poison した状態でも取り違えないことを都度確かめる。
+ *    ⚠️ **それでも「位置」を完全には実現していない**——`tag()` は空白を
+ *    畳むだけで消さないため、値が空白を含みうる欄をトークンの「位置」
+ *    （何番目の空白区切りか）で当てにするのは本質的に無理がある（族その
+ *    ものが、poison された tag 欄がトークン数を増減させることに由来する）。
+ *    ⟹ 採ったのは「位置そのもの」ではなく「境界＋値」——名前付き欄との
+ *    混同（位置的な取り違え）は塞ぎ、桁が一致する毒（最大限に意地悪な
+ *    poison）までは塞いでいない。**この残りは、型別の `toBe`（すべて丸ごと
+ *    一致——poison の桁が何であっても、欄が落ちれば必ず文字列全体が変わる
+ *    ので取り違えようがない）が肩代わりする。** 6型すべてに型別 `toBe` が
+ *    揃っている（`daily_report`/`token_rotation`/`subagent_stall` は既存、
+ *    `exchange`/`external_event`/`memory_update` は PR #829、名簿自体の
+ *    強化はこの PR）ので、実運用上のガードは既に二重にかかっている。
  */
 describe('journalEntryShape の名簿（schema に足した欄の足し忘れを赤くする。PR #709）', () => {
   /**
@@ -1085,7 +1192,20 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
     | { readonly emit: 'tag'; readonly token: string }
     | { readonly emit: 'raw'; readonly token: string }
     | { readonly emit: 'size'; readonly token: string }
-    | { readonly emit: 'size-unnamed' }
+    | {
+        readonly emit: 'size-unnamed';
+        /**
+         * Issue #823（族対策）: 同じ型の中に、`tag()` を通す**素の string**
+         * 欄（TypeScript のリテラル合併型ではなく実行時検査だけで縛られて
+         * いるもの——`memory_update.slug` の `memorySlugSchema` のような形）が
+         * 在るなら、その欄名をここへ書く。**書けば、下の振る舞いテストが
+         * その欄を意図的に poison（` chars=<桁>` を仕込んだ値）にしたうえで、
+         * この `size-unnamed` 欄の真の長さを見失わないかを実際に確かめる。**
+         * 無ければ `undefined`——「この型には毒を運べる `tag()` 欄が無い」と
+         * いう判定そのものを明記する（`never` の `why` と同じ扱い）。
+         */
+        readonly poisonableTagField?: string;
+      }
     | { readonly emit: 'never'; readonly why: string };
 
   /** その型が schema で持つ欄（`type` は判別子なので除く。`id`/`at` は入力型に無い）。 */
@@ -1098,6 +1218,11 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
     exchange: {
       with: { emit: 'tag', token: 'with' },
       role: { emit: 'tag', token: 'role' },
+      // poisonableTagField 無し: with/role は journalEntrySchema の
+      // z.enum(...) から推論された TypeScript のリテラル合併型なので、
+      // pnpm typecheck を通る限りこの2欄は任意の自由文（chars= を含む値）を
+      // 持てない——この型自身には毒を運べる tag() 欄が無い（PR #829 の本文で
+      // 確かめた内容と同じ）。
       text: { emit: 'size-unnamed' },
       conversationId: {
         emit: 'never',
@@ -1149,15 +1274,24 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
         emit: 'never',
         why: 'PR #709 が別判断へ回した欄（上の `escalation.answeredAt` と同じ）。',
       },
-      summary: { emit: 'size-unnamed' },
+      // slug は memorySlugSchema（実行時の正規表現）で縛られるが、
+      // TypeScript の型は素の string——journalEntryShape が呼ばれるのは
+      // journal.append が失敗した後の経路なので、検査を通らない値が来ても
+      // 構造上おかしくない（Issue #823 の本丸）。
+      summary: { emit: 'size-unnamed', poisonableTagField: 'slug' },
     },
     daily_report: {
+      // date も z.string()（実行時の書式検査は無い）で TypeScript の型は
+      // 素の string。同じ理由で毒を運べる。
       date: { emit: 'tag', token: 'date' },
-      body: { emit: 'size-unnamed' },
+      body: { emit: 'size-unnamed', poisonableTagField: 'date' },
       unavailable: { emit: 'size', token: 'unavailable' },
     },
     external_event: {
       source: { emit: 'size', token: 'source' },
+      // poisonableTagField 無し: external_event は tag() を1回も呼ばない型
+      // （source/summary はどちらも size() 経由）なので、この型自身の欄が
+      // 毒を運ぶことはできない（PR #829 の本文で確かめた内容と同じ）。
       summary: { emit: 'size-unnamed' },
     },
     worker_wait: {
@@ -1204,7 +1338,9 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       recoveredSource: { emit: 'tag', token: 'recoveredSource' },
       label: { emit: 'size', token: 'label' },
       noticeText: { emit: 'size', token: 'noticeText' },
-      text: { emit: 'size-unnamed' },
+      // tokenId は z.string().optional()——実行時の書式検査が無い素の
+      // string なので毒を運べる（`memory_update.slug` と同じ判定基準）。
+      text: { emit: 'size-unnamed', poisonableTagField: 'tokenId' },
     },
     subagent_stall: {
       agentId: { emit: 'tag', token: 'agentId' },
@@ -1213,7 +1349,8 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       sessionTaskCount: { emit: 'raw', token: 'sessionTaskCount' },
       wakeupCount: { emit: 'raw', token: 'wakeupCount' },
       outcome: { emit: 'tag', token: 'outcome' },
-      text: { emit: 'size-unnamed' },
+      // agentId は z.string()（実行時の書式検査は無い）なので毒を運べる。
+      text: { emit: 'size-unnamed', poisonableTagField: 'agentId' },
     },
   } satisfies { [T in JournalEntryType]: Record<ShapedFieldsOf<T>, FieldPlan> };
 
@@ -1377,25 +1514,80 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
           case 'size':
             expect(shape, `${type}.${field}`).toContain(`${fieldPlan.token}.chars=`);
             break;
-          case 'size-unnamed':
-            // ⚠️ `toContain('chars=')` にしないこと——同じ型に名前付きの `size` 欄が
-            // 在ると、そちらの `<token>.chars=` に当たって緑になる（無名の欄が実装
-            // から落ちても気づけない。PR #811 自身がこの穴を持ったまま入った実例——
-            // `external_event.summary` / `daily_report.body` / `token_rotation.text`
-            // の3型で、同じ型の名前付き `size` 欄の `<token>.chars=` に紛れて偽陽性の
-            // 緑を出した。変異試験で実測: `external_event` の無名欄を落としても
-            // 生存した）。無名であることまで見る——「行頭」または「空白の直後」の
-            // `chars=<数字>` に絞る（名前付きは直前が `.` なのでここには当たらない）。
+          case 'size-unnamed': {
+            // Issue #823（A）: 「跡の全体を検索して欄の存在を判定する」族を
+            // 塞ぐ本体。**`toContain('chars=')` にしないこと**——同じ型に
+            // 名前付きの `size` 欄が在ると、そちらの `<token>.chars=` に
+            // 当たって緑になる（無名の欄が実装から落ちても気づけない。
+            // PR #811 自身がこの穴を持ったまま入った実例——`external_event.
+            // summary`/`daily_report.body`/`token_rotation.text` の3型で、
+            // 同じ型の名前付き `size` 欄の `<token>.chars=` に紛れて偽陽性の
+            // 緑を出した。変異試験で実測: `external_event` の無名欄を落として
+            // も生存した）。
             //
-            // ⚠️ **それでも、`tag()` を通した「別の」欄の値が `chars=<数字>` を
-            // 運んでいると、この正規表現はそれと区別できない（Issue #823。上の
-            // クラス docstring の項目4）。** ここは今回あえて緩めたままにする——
-            // 役割を「欄の足し忘れの目印」に絞り、「値の実在・位置」の保証は
-            // 型別の `toBe`（`daily_report`/`token_rotation`/`subagent_stall`
-            // は既存、`exchange`/`memory_update`/`external_event` はこの PR で
-            // 追加）に一本化した。
+            // ⟹ 「位置」（無名であること）と「値」（実際の長さ）の両方で
+            // 絞る——`(?:^| )chars=<SECRET.length>(?:$| )` は、(1) 直前が
+            // `.` の名前付き欄には当たらず（境界）、(2) 他のどんな桁の
+            // `chars=<N>` にも当たらない（値そのものを固定）。旧来の
+            // `/(?:^| )chars=\d+/u`（このケースの末尾に残したまま）は
+            // (1) しか見ておらず、`\d+` がどんな桁でも通ってしまっていた——
+            // それが Issue #823 の本丸（`tag()` を通した別の欄が
+            // たまたま/壊れた値として `chars=<数字>` を運ぶと区別できない）
+            // である。
+            const realToken = `chars=${SECRET.length}`;
+            const anchoredReal = new RegExp(`(?:^| )chars=${SECRET.length}(?:$| )`, 'u');
+
+            expect(
+              shape,
+              `${type}.${field}: 無名の size 欄が実際の長さ（${SECRET.length}）を、` +
+                '名前付き欄と取り違えられない形で持つこと（Issue #823・境界＋値の判定）',
+            ).toMatch(anchoredReal);
+
+            // ⚠️ **それでも、`tag()` を通した「別の」欄がたまたま／壊れた値
+            // として *同じ桁数* の `chars=<SECRET.length>` を運べば、この
+            // 判定も区別できない（Issue #823 の族そのもの。上のクラス
+            // docstring の項目4）。** 「違う桁なら見分けられる」への改善は
+            // 本物だが、「桁が一致する毒」までは閉じていない——これは無理に
+            // 捻じ曲げず、次で実際に確かめる。
+            if (fieldPlan.poisonableTagField !== undefined) {
+              const poisonField = fieldPlan.poisonableTagField;
+              // 桁を意図的に本物と変える（前方一致もしないことを下で
+              // ガードする）。SECRET が将来変わってもこの歯が黙って
+              // 無力化しないための実測ガードである。
+              const poisonNumber = 1;
+              const poisonToken = `chars=${poisonNumber}`;
+              expect(poisonToken.startsWith(realToken)).toBe(false);
+              expect(realToken.startsWith(poisonToken)).toBe(false);
+
+              const poisonedFields: Record<string, unknown> = { ...FULL_FIXTURES[type] };
+              poisonedFields[poisonField] = `poison ${poisonToken}`;
+              // `poisonedFields` は `FULL_FIXTURES[type]` の複製に1つの
+              // string 欄だけを別の string へ差し替えたもの——判別子
+              // `type` はそのままなので、この cast は安全である。
+              const poisonedShape = journalEntryShape(
+                poisonedFields as unknown as JournalEntryInput,
+              );
+
+              // 対照: 旧来の緩い判定（この `case` の末尾にそのまま残して
+              // ある）は、この毒だけで満たせてしまう——Issue #823 が指摘した
+              // 族の実演であって、今回もここは直していない。
+              expect(poisonedShape).toMatch(/(?:^| )chars=\d+/u);
+
+              // 本命: 境界＋値の判定は、毒（桁違い）があっても真の長さを
+              // 取り違えない。
+              expect(
+                poisonedShape,
+                `${type}.${poisonField} に chars=<数字> を含む毒（${poisonToken}）を` +
+                  `仕込んでも、${type}.${field} の真の長さ（${SECRET.length}）は` +
+                  '取り違えられずに読み取れること（Issue #823）',
+              ).toMatch(anchoredReal);
+            }
+
+            // 既存のまま（弱めていない）。役割は「欄の足し忘れの目印」に
+            // 留める——役割の再定義は上のクラス docstring・PR 本文を見ること。
             expect(shape, `${type}.${field}`).toMatch(/(?:^| )chars=\d+/u);
             break;
+          }
           case 'tag':
           case 'raw':
             expect(shape, `${type}.${field}`).toContain(`${fieldPlan.token}=`);
