@@ -545,17 +545,14 @@ describe('歯1: CloneWakeGate.decide と redeliveryGate は同じ答えを返す
   const redeliveryGate = (event: InboxEvent, context: { usageBlocked: boolean }): boolean =>
     isTokenPoolReopenedNotice(event) ? worthDeliveringNow(context.usageBlocked) : true;
 
-  it.each([true, false] as const)(
-    'usageBlocked=%s のとき、wake の判定と一致する',
-    (blocked) => {
-      const gate = createCloneWakeGate();
+  it.each([true, false] as const)('usageBlocked=%s のとき、wake の判定と一致する', (blocked) => {
+    const gate = createCloneWakeGate();
 
-      const wakeSaysWake = gate.decide('tok-a', blocked).kind === 'wake';
-      const gateSaysDeliver = redeliveryGate(tokenPoolEvent(), { usageBlocked: blocked });
+    const wakeSaysWake = gate.decide('tok-a', blocked).kind === 'wake';
+    const gateSaysDeliver = redeliveryGate(tokenPoolEvent(), { usageBlocked: blocked });
 
-      expect(gateSaysDeliver).toBe(wakeSaysWake);
-    },
-  );
+    expect(gateSaysDeliver).toBe(wakeSaysWake);
+  });
 
   it('token-pool 以外の合図は usageBlocked に関わらず常に配る（wake 側の対象外）', () => {
     const other: InboxEvent = { ...tokenPoolEvent(), source: 'runner-registry' };
