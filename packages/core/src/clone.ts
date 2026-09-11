@@ -3159,6 +3159,11 @@ class Clone implements CloneHost {
    * 自分で開く** — 人間が「あ、これ直さなきゃ」と思ったときにメモするのと同じ形で、
    * 器が代わりに決めることではない。
    *
+   * **`external` にも同じ結論に達する場合がある**（デーモン自身が自分の受信箱へ
+   * 出す合図。`isDaemonSelfNotice` の doc）。理由はここに書いた2つとは別で
+   * （起こされたことそのものではなく、渡してきた相手が最初から居ない）、型では
+   * なく `source` で決まる点も違うが、行き着く先（台帳を開かない）は同じである。
+   *
    * **失敗しても post を落とさない**（`#remember` と同じ理由。跡は stderr へ1行）。
    */
   #commit(event: InboxEvent): void {
@@ -3580,8 +3585,12 @@ class Clone implements CloneHost {
       // **台帳が既に片付いていると言っているかを見る（閉じた主体は問わない
       // ——クローンでも人間でもよい）。** 台帳の id は合図の id その
       // ものである（`commitmentFor`）ので、`event.id` でそのまま引ける。
-      // `commitmentFor` が `null` を返す型（`timer` / `self_initiative` /
-      // `distill`）は台帳に載らない＝引く意味が無いので、そもそも呼ばない。
+      // `commitmentFor` が `null` を返す合図は台帳に載らない＝引く意味が無いので
+      // `stores.commitments.get` を呼ばない。**`null` を返すのは型で決まる3つ
+      // （`timer` / `self_initiative` / `distill`）だけではない** — `external` は
+      // `source` がデーモン自身の合図（`isDaemonSelfNotice`）なら同じく `null` を
+      // 返す。だから型で先読みして分岐を作らず、呼び出した結果（`!== null`）を
+      // 毎回見る。
       if (commitmentFor(record.event) !== null) {
         try {
           const commitment = await this.#stores.commitments.get(record.event.id);
@@ -7610,9 +7619,16 @@ function retrievalHintFor(event: InboxEvent): string {
         `${event.kind} が処理されるたびに、"[${event.managerId}/${event.kind}] " で始まる全文が` +
         '日誌へ書かれる。この配り直しでも直前に書いている）。'
       );
-    // 台帳に載らない型（`commitmentFor` が `null` を返す）。`closedRedeliveryNotice`
-    // はここへは来ない — `#redeliveredClosed` に載る id は必ず `commitmentFor` が
-    // 非 null を返した合図の id である（`#restoreUnread` の doc）。
+    // 台帳に載らない型（`commitmentFor` が型だけで常に `null` を返す組）。
+    // `closedRedeliveryNotice` はここへは来ない — `#redeliveredClosed` に載る id は
+    // 必ず `commitmentFor` が非 null を返した合図の id である（`#restoreUnread` の
+    // doc）。
+    //
+    // **`external` はここに含めない。** `commitmentFor` は `source` によっては
+    // `external` でも `null` を返す（`isDaemonSelfNotice`）が、それは台帳を
+    // 開かないというだけで、受信箱が持つ全文がその回だけ消えるわけではない——
+    // `external` は必ず上の `case 'external':` で全文の取り方を案内する。
+    // 「台帳に載るかどうか」と「全文の取り方があるかどうか」は別の軸である。
     case 'timer':
     case 'self_initiative':
     case 'distill':
@@ -7621,12 +7637,88 @@ function retrievalHintFor(event: InboxEvent): string {
 }
 
 /**
+ * `apps/daemon/src/index.ts` の `wake()` が
+ * `clone.post({ type: 'external', source: DAEMON_TOKEN_POOL_REOPENED_SOURCE, ... })`
+ * で出す送信元名（正本）。
+ *
+ * **正本をここ（`packages/core`）に置く理由。** `apps/daemon/src/index.ts` の
+ * `TOKEN_POOL_REOPENED_SOURCE` の doc は、リテラルを発行側（`post` の呼び出し）と
+ * 判定側（`isTokenPoolReopenedNotice`）の2箇所に直書きすると、どちらかを直し
+ * 忘れたときに黙ってずれる、という理由で定数へ括ってあった。**この PR でその
+ * 判定側がもう1つ増える** — `commitmentFor`（下）の `external` 分岐が、台帳を
+ * 開くかどうかにこの同じ文字列を使う。だが `packages/core` は `apps/daemon` に
+ * 依存できない（`packages/core/package.json` の deps に daemon は無く、
+ * `apps/daemon/package.json` が `@alteroid/core` を依存する片方向だけがある）
+ * ので、定数を daemon 側に置いたまま core が import することはできない。
+ * **だから正本をこちらへ移し、daemon 側の `TOKEN_POOL_REOPENED_SOURCE` はこの
+ * 値をそのまま指す形にしてある。**
+ */
+export const DAEMON_TOKEN_POOL_REOPENED_SOURCE = 'token-pool';
+
+/**
+ * `apps/daemon/src/index.ts` の `postToClone`（runner の登録・接続まわりの
+ * 不具合をクローンへ知らせる経路）が使う送信元名（正本）。
+ *
+ * **かつては `postToClone` の中に直書きのリテラルだった** — 判定側
+ * （`commitmentFor`）がこの文字列を見るようになったので、
+ * {@link DAEMON_TOKEN_POOL_REOPENED_SOURCE} と同じ理由でここへ括った。
+ */
+export const DAEMON_RUNNER_REGISTRY_SOURCE = 'runner-registry';
+
+/**
+ * `event` が、デーモン自身が自分の受信箱へ出した合図か。
+ *
+ * **対象はいまのところ2つ** — {@link DAEMON_TOKEN_POOL_REOPENED_SOURCE}
+ * （`wake()` が出す「認証トークンが通る状態に戻った」通知）と
+ * {@link DAEMON_RUNNER_REGISTRY_SOURCE}（`postToClone` が出す runner 登録の
+ * 不具合通知）。どちらも `apps/daemon/src/index.ts` が **自分で作って自分の
+ * クローンへ渡す** `external` の合図であって、外の誰か・何かがクローンへ渡して
+ * きたものではない。
+ *
+ * **`commitmentFor`（下）の `external` 分岐がこれを見て台帳を開かないよう絞る。**
+ * `isTokenPoolReopenedNotice`（`apps/daemon/src/index.ts`）とは別物である —
+ * あちらは「枠が開いたら配り直しを待たせるか」の判定（`token-pool` だけを見る）
+ * で、こちらは「台帳を開くべき相手が居るか」の判定（2つとも見る）である。
+ * 対象が重なるからといって同じ関数に寄せない——問う相手が違う。
+ *
+ * **⚠️ 払っている代償。** `source` は自由文字列である
+ * （`schema.ts` の `inboxEventSchema` の `external` 枝、`source: z.string()`）。
+ * `POST /events` / `POST /events/:source`（`apps/daemon/src/app.ts`）から
+ * 外部の呼び手が `source: "token-pool"` あるいは `"runner-registry"` を送れば、
+ * その本物の外部イベントも台帳に載らなくなる——この関数は合図の中身
+ * （型と `source` の文字列）しか見えず、発行元がデーモン自身か外部かを区別する
+ * 手段を持たない。**それでも受け入れているのは、この2つがデーモンが自分の
+ * 名として使う予約語であり、外から同じ名を名乗るのは名前空間の衝突だと
+ * 考えているからである。** 衝突を見分ける手段を `commitmentFor` は持てない
+ * ——持たせるなら受信箱か API の入口に「デーモン自身が出した」印を足す
+ * ことになり、それはこの関数の——延いては #852 の——範囲を超える。
+ */
+export function isDaemonSelfNotice(event: InboxEvent): boolean {
+  return (
+    event.type === 'external' &&
+    (event.source === DAEMON_TOKEN_POOL_REOPENED_SOURCE ||
+      event.source === DAEMON_RUNNER_REGISTRY_SOURCE)
+  );
+}
+
+/**
  * 合図から、台帳へ開く未了を作る。開かないものは `null`。
  *
  * **判定の基準は「誰かが渡してきたか」である。** 人間の発言・人間の回答・マネージャー
  * からの一件・外部イベントは、届いた時点で「始末をつける相手」が居る。時間起点の発火と
  * 発意 tick は起こされたこと自体であって渡されたものではないので開かない
- * （`Clone#commit` の doc に理由の全文）。
+ * （`Clone#commit` の doc に理由の全文——そこには `external` が `source` によって
+ * 同じ結論に達することがある理由も並べて置いてある）。
+ *
+ * **⚠️ `external` だけは、型だけでは決まらない。** デーモン自身が自分の受信箱へ
+ * 出す合図（`isDaemonSelfNotice` が真になる2つの `source`）は、型としては
+ * `external` でも「誰かが渡してきた」に当たらない——機械が自分に話しかけている
+ * だけで、引き受けるべき相手がそもそも居ない。**基準そのものは変わっていない**:
+ * 「誰かが渡してきたか」という同じ問いを当てはめると、この2つは最初から不合格
+ * になる。変わったのは、`external` という型だけではその問いに答えられず
+ * `source` まで見る必要がある、という点だけである——他の3つの非 null の型
+ * （`human_message` / `human_answer` / `manager_message`）は型が決まった時点で
+ * 答えが決まる。
  *
  * **本文は全文を入れる。** 台帳の `body` を要約にすると、頼まれた内容そのものが
  * 二度と取れなくなる（切るのは表示側の仕事である）。
@@ -7665,6 +7757,9 @@ export function commitmentFor(event: InboxEvent): Commitment | null {
         ...(event.markup === undefined ? {} : { bodyMarkup: event.markup }),
       };
     case 'external':
+      // **デーモン自身が自分へ出した合図には、始末をつける相手が居ない。**
+      // `isDaemonSelfNotice` の doc に理由と、払っている代償の全文がある。
+      if (isDaemonSelfNotice(event)) return null;
       return {
         ...base,
         origin: 'external',
