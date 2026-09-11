@@ -7292,8 +7292,18 @@ function renderMemorySize(
   // 試験の足場）がこの2行を「文書の1件」と誤認しない——2字下げのままだと、
   // id + 名前 / 作成 + 更新 / 概要 を持たないこの2行が総当たり試験に
   // 「5項目を満たさない文書」として撃たれる（実測済み）。
+  // **蓋が噛んでいる回は、この行の「毎ターン『要旨＋節の目次』が焼かれる」が
+  // その文書について嘘になる**（`MEMORY_PREMISE_CARD_BUDGET`）。⟹ 噛んだ件数を
+  // 同じ行で名乗る。**噛んでいない回は1文字も足さない**（毎回付けると、本当に
+  // 噛んだときの目印が効かなくなる——`memory_read` と同じ倒し方）。
+  const demotedSuffix =
+    floor.demotedPremiseDocs === 0
+      ? ''
+      : `。⚠️ うち ${floor.demotedPremiseDocs.toLocaleString('en-US')} 文書は束ねた予算に当たって` +
+        'カードを落とし、1行になっている（節の目次は焼かれていない。' +
+        '落ちた文書の名前と直し方は焼き込みの断り書きに在り、節は memory_outline で開ける）';
   lines.push(
-    `- premise 合計: ${floor.premiseChars.toLocaleString('en-US')} 文字（${floor.premiseDocs} 文書。毎ターン「要旨＋節の目次」が焼かれる）`,
+    `- premise 合計: ${floor.premiseChars.toLocaleString('en-US')} 文字（${floor.premiseDocs} 文書。毎ターン「要旨＋節の目次」が焼かれる${demotedSuffix}）`,
     `- fact 目次合計: ${floor.tocChars.toLocaleString('en-US')} 文字（${floor.factDocs} 文書。目次の1行だけが焼かれる）`,
   );
   return lines.join('\n');

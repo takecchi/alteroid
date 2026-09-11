@@ -8319,6 +8319,42 @@ describe('self_status（いま自分がどう走っているか）', () => {
       );
     });
 
+    /**
+     * ⭐⭐ **蓋が噛んだら、この行はそれを名乗る**（`MEMORY_PREMISE_CARD_BUDGET`）。
+     *
+     * 名乗らないと、この行の「毎ターン『要旨＋節の目次』が焼かれる」が落ちた
+     * 文書について嘘になる——`self_status` はクローンが記憶の大きさを見る面な
+     * ので、ここが嘘をつくと「premise を足しても安い」と読める
+     * （`MemoryFloor.demotedPremiseDocs` の doc）。
+     *
+     * **⚠️ この歯が測っていないこと**: 断り書きの*文言*が実装のふるまいと
+     * 合っているかは測っていない。字面が現れることしか見ない。
+     */
+    it('⭐⭐ 束ねた予算に当たっているときは、カードを落とした件数を同じ行で名乗る', async () => {
+      const h = harness(() => RUNTIME);
+      // カードが1文書あたりの予算に張り付く形を、束ねた予算を超える枚数だけ積む。
+      const body = Array.from(
+        { length: 200 },
+        (_, n) => `## 節${n} ${'見出し'.repeat(4)}\n\n本文\n`,
+      ).join('\n');
+      const content = `---\ntype: premise\ndescription: ${'あ'.repeat(3_000)}\n---\n\n${body}`;
+      for (let i = 0; i < 12; i += 1) {
+        await h.call('memory_write', { slug: `big-${i}`, content, summary: String(i) });
+      }
+      const floor = measureMemoryFloor(await h.stores.persona.documents());
+      // 前提: 足場が実際に蓋を噛ませている（噛んでいなければこの歯は空振りである）。
+      expect(floor.demotedPremiseDocs).toBeGreaterThan(0);
+
+      const reply = await h.call('self_status', {});
+
+      expect(reply).toContain(
+        `⚠️ うち ${floor.demotedPremiseDocs.toLocaleString('en-US')} 文書は束ねた予算に当たって` +
+          'カードを落とし、1行になっている',
+      );
+      // 直し方と開く口を名指ししている（載せないことを能力の削除にしないための条件）。
+      expect(reply).toContain('memory_outline');
+    });
+
     it('premise 合計・fact 目次合計が、measureMemoryFloor が返す値と一致する', async () => {
       const h = harness(() => RUNTIME);
       await h.call('memory_write', {

@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   MEMORY_LISTING_BUDGET,
   MEMORY_PREMISE_RANKING_BUDGET,
+  MEMORY_PREMISE_CARD_BUDGET,
   MEMORY_PROMPT_DESCRIPTION_BUDGET,
   MEMORY_TIDY_TARGETS_BUDGET,
   describeMemoryTidyTargets,
@@ -1566,6 +1567,375 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
     expect(markers.every((marker) => marker.length > 0)).toBe(true);
     // 5状態が互いに異なる文言であること——これが本体（畳んでいないことの直接の証拠）。
     expect(new Set(markers).size).toBe(5);
+  });
+});
+
+/**
+ * premise のカードを**束ねた全体**の蓋（`MEMORY_PREMISE_CARD_BUDGET`）。
+ *
+ * **1文書あたりの予算（`MEMORY_PROMPT_DESCRIPTION_BUDGET` /
+ * `MEMORY_PROMPT_OUTLINE_BUDGET`）を測る歯とは別である。** あちらは「1枚が
+ * 大きくならないこと」、こちらは「**枚数が増えても総量が伸びないこと**」で、
+ * 片方が緑でももう片方は何も測れていない（`fact` 側で `MEMORY_TOC_ENTRY_LIMIT`
+ * と `MEMORY_TOC_CHAR_BUDGET` を2軸に分けているのと同じ関係）。
+ */
+describe('premise のカードの束ねた蓋（MEMORY_PREMISE_CARD_BUDGET）— 文書数に対する上界', () => {
+  /**
+   * カードが**1文書あたりの予算に張り付く**形の premise 1件。要旨は
+   * `MEMORY_PROMPT_DESCRIPTION_BUDGET` ちょうど、節数は目次が
+   * `MEMORY_PROMPT_OUTLINE_BUDGET` を確実に超える数にしてある——1枚が運ぶ量を
+   * 最大にした、束ねた蓋が確実に噛む形である。
+   */
+  const capPremise = (index: number): MemoryPart => ({
+    slug: `premise-${String(index).padStart(3, '0')}`,
+    title: `前提${index}`,
+    content: [
+      '---',
+      'type: premise',
+      `description: ${'あ'.repeat(MEMORY_PROMPT_DESCRIPTION_BUDGET)}`,
+      '---',
+      '',
+      // 1行あたり数十文字の見出しを、目次の予算を超える数だけ積む。
+      ...Array.from({ length: 200 }, (_, n) => `## 節${n} ${'見出し'.repeat(4)}\n\n本文\n`),
+    ].join('\n'),
+  });
+
+  /**
+   * カード1枚ぶんの限界費用を、**書式を真似ずに実測する。** 2件と1件の
+   * レンダリング結果の差が「カード1枚＋区切り」ぶんである——`renderPremiseCard`
+   * の内部の書式（見出しコメント・要旨の行・節の行）を書き写すと、書式が
+   * 変わったときにここだけが古くなる（`measureTocMarginalCost` と同じ作法）。
+   */
+  const measureCardMarginalCost = () => {
+    const one = renderMemoryDocuments([capPremise(0)]);
+    const two = renderMemoryDocuments([capPremise(0), capPremise(1)]);
+    return { one, two, marginal: two.length - one.length };
+  };
+
+  /** 断り書きの1行目の頭。**逐語で持つ**（定数を import して両側を一緒に動かさない）。 */
+  const DEMOTION_NOTE_HEAD = '<!-- memory: premise（カードを落とした分';
+
+  /**
+   * ⭐⭐⭐ 穴の実在。**緩くてよい歯である**——測りたいのは「蓋が無ければ総量が
+   * 文書数に比例して伸び、予算を桁で超えていた」という事実だけである。
+   *
+   * **外挿の材料は蓋が噛む前の値から取る**（1件・2件）。`60_000` も
+   * 「296,088」も直書きしない——限界費用の実測から導く。
+   */
+  it('⭐⭐⭐ 穴の実在: 蓋が無ければ、束ねたカードは文書数に比例して予算を桁で超える', () => {
+    const { one, two, marginal } = measureCardMarginalCost();
+    // 前提: この2件は束ねた蓋に掛かっていない（＝外挿の材料が「蓋が効く前」の値）。
+    expect(one).not.toContain(DEMOTION_NOTE_HEAD);
+    expect(two).not.toContain(DEMOTION_NOTE_HEAD);
+    // 1枚が1文書あたりの予算に張り付いていること（この足場が薄いと外挿が効かない）。
+    expect(marginal).toBeGreaterThan(MEMORY_PROMPT_OUTLINE_BUDGET);
+
+    // 蓋が無ければ、予算の2倍を超えるのに要る枚数はこれだけである。
+    const docsToDoubleBudget = Math.ceil((MEMORY_PREMISE_CARD_BUDGET * 2) / marginal);
+    const extrapolated = one.length + (docsToDoubleBudget - 1) * marginal;
+    expect(extrapolated).toBeGreaterThan(MEMORY_PREMISE_CARD_BUDGET * 2);
+
+    // そしてその枚数は、実運用で起こりうる桁である（数百件ではない）。
+    expect(docsToDoubleBudget).toBeLessThan(100);
+  });
+
+  /**
+   * ⭐⭐⭐ 修理の実在。**こちらは締まっていないと意味が無い歯である。**
+   *
+   * ## 遊びの大きさを決めるのは断り書きであって、書き手ではない
+   *
+   * 出力が `MEMORY_PREMISE_CARD_BUDGET` を超えてよい理由は1つ——予算が締めて
+   * いるのは**カードだけ**で、落とした分の断り書き（`renderPremiseBudgetNotice`）
+   * はその上に載るからである。⟹ 上界の第2項は丸い数字ではなく「**この出力に
+   * 実際に載った断り書きの長さ**」にする（`MEMORY_TOC_CHAR_BUDGET` の歯と同じ作法）。
+   *
+   * ## ⚠️ この歯が測っていないこと
+   *
+   * - **予算を使い切っていることは主張していない**（これは上界である）
+   * - **断り書きの中身は測っていない**（長さしか見ない。中身は下の it() が逐語で持つ）
+   */
+  it('⭐⭐⭐ 修理の実在: 枚数を増やしても、予算を超えてよいのは断り書きぶんだけ', () => {
+    const { one, marginal } = measureCardMarginalCost();
+    const many = Math.ceil((MEMORY_PREMISE_CARD_BUDGET * 3) / marginal);
+    const rendered = renderMemoryDocuments(Array.from({ length: many }, (_, i) => capPremise(i)));
+
+    const noteStart = rendered.indexOf(DEMOTION_NOTE_HEAD);
+    expect(noteStart).toBeGreaterThan(-1);
+    const note = rendered.slice(noteStart);
+    // 切り出した先にカードが混ざっていない（＝これは断り書きそのものである）。
+    expect(note).not.toContain('節（memory_section_read に節id を渡せば本文が開く');
+
+    expect(rendered.length).toBeLessThan(MEMORY_PREMISE_CARD_BUDGET + note.length);
+
+    // 対照: この上界が「そもそも蓋が噛んでいない」ことで成り立っていない
+    // ——蓋が無いときの外挿値とは桁が違う。
+    const extrapolated = one.length + (many - 1) * marginal;
+    expect(rendered.length).toBeLessThan(extrapolated / 2);
+  });
+
+  /**
+   * ⭐⭐⭐ **文書は消えない。** `renderMemoryTocOmission` が逐語で名乗っている
+   * 約束（「premise はカードが切られても見出しは必ず残るが、fact はここでしか
+   * 名乗らない」）を、この蓋が破っていないことを測る。
+   *
+   * **これが落ちたら、蓋は「能力の削除」になっている**（north_star 禁止1）。
+   */
+  it('⭐⭐⭐ カードを落としても文書は消えない: 全ての slug が焼き込みに現れる', () => {
+    const { marginal } = measureCardMarginalCost();
+    const many = Math.ceil((MEMORY_PREMISE_CARD_BUDGET * 2) / marginal);
+    const docs = Array.from({ length: many }, (_, i) => capPremise(i));
+    const rendered = renderMemoryDocuments(docs);
+
+    // 落ちた分が実際に在る（＝この歯が空振りしていない）。
+    expect(rendered).toContain(DEMOTION_NOTE_HEAD);
+    expect(docs.filter((doc) => !rendered.includes(doc.slug))).toEqual([]);
+  });
+
+  /**
+   * ⭐⭐⭐ **上界は文書数に依らない。** これが `MEMORY_PREMISE_CARD_BUDGET` の
+   * doc が主張している「文書が何件増えても焼き込みはこの和を超えない」の本体である。
+   *
+   * ## なぜ「修理の実在」だけでは足りなかったか（変異で分かったこと）
+   *
+   * 上の「修理の実在」の上界は `MEMORY_PREMISE_CARD_BUDGET + note.length` で、
+   * **`note` の中に落とした分の一覧そのものが入っている。** ⟹ 一覧の予算
+   * （`MEMORY_PREMISE_STUB_BUDGET`）を外しても、上界が一緒に伸びて緑のままに
+   * なる。実測（2026-09-11、変異8）: `budget: MEMORY_PREMISE_STUB_BUDGET` を
+   * `Number.MAX_SAFE_INTEGER` へ変異させて **230件すべて生存。**
+   *
+   * ⟹ **入力の大きさに依らない量で測る。** 枚数を増やしたときに総量がほとんど
+   * 動かないこと——「カード1枚ぶんよりも小さい」を基準にする（この基準自体も
+   * 実測から取る）。
+   */
+  it('⭐⭐⭐ 上界は文書数に依らない: 枚数を足しても、総量はカード1枚ぶんも増えない', () => {
+    const { marginal } = measureCardMarginalCost();
+    const base = Math.ceil((MEMORY_PREMISE_CARD_BUDGET * 2) / marginal);
+    const few = renderMemoryDocuments(Array.from({ length: base }, (_, i) => capPremise(i)));
+    const many = renderMemoryDocuments(Array.from({ length: base + 100 }, (_, i) => capPremise(i)));
+
+    // 前提: どちらも蓋が噛んでいる（＝これは「蓋の後」どうしの比較である）。
+    expect(few).toContain(DEMOTION_NOTE_HEAD);
+    expect(many).toContain(DEMOTION_NOTE_HEAD);
+
+    // 100件足しても、増えるのは件数の桁ぶんだけである。
+    expect(many.length - few.length).toBeLessThan(marginal);
+  });
+
+  /**
+   * ⭐⭐⭐ **断り書きは「蓋が無ければいくらだったか」を名乗る。**
+   *
+   * 切ったあとの長さを名乗ると、**超えたこと自体が出力から消える**
+   * （`excerpt.ts` の「切ったら、切ったことを必ず言う」）。⟹ クローンは
+   * 「どれだけ超えているか」＝どれだけ畳む必要があるかを読めなくなる。
+   *
+   * **期待値は実装の式を写さずに組み立てる**——1文書ずつ描いた長さの和と、
+   * 区切りの長さ（これも2件・1件・1件の実測から導く）で独立に再計算する。
+   *
+   * 実測（2026-09-11、変異7）: `uncappedChars: totalChars` を
+   * `uncappedChars: used`（＝蓋の後の長さ）へ変異させて **230件すべて生存**
+   * だったので、この歯を足した。
+   */
+  it('⭐⭐⭐ 断り書きが名乗るのは蓋が無かったときの総量である（蓋の後の長さではない）', () => {
+    const { marginal } = measureCardMarginalCost();
+    const count = Math.ceil((MEMORY_PREMISE_CARD_BUDGET * 2) / marginal);
+    const docs = Array.from({ length: count }, (_, i) => capPremise(i));
+    const rendered = renderMemoryDocuments(docs);
+    expect(rendered).toContain(DEMOTION_NOTE_HEAD);
+
+    // 区切りの長さを実測から導く（リテラルを書かない）。
+    const a = docs[0];
+    const b = docs[1];
+    if (a === undefined || b === undefined) throw new Error('足場が空である');
+    const joinChars =
+      renderMemoryDocuments([a, b]).length -
+      renderMemoryDocuments([a]).length -
+      renderMemoryDocuments([b]).length;
+    expect(joinChars).toBeGreaterThan(0);
+
+    const uncapped =
+      docs.reduce((sum, doc) => sum + renderMemoryDocuments([doc]).length, 0) +
+      joinChars * (docs.length - 1);
+
+    // 蓋が無かったときの総量を名乗っている。
+    expect(rendered).toContain(`カードの合計が ${uncapped.toLocaleString('en-US')} 文字になり`);
+    // そしてそれは、実際に載った長さより大きい（＝蓋の後の値ではない）。
+    expect(uncapped).toBeGreaterThan(rendered.length);
+  });
+
+  it('落とした件数・残した件数・開く口・直し方を名乗る', () => {
+    const { marginal } = measureCardMarginalCost();
+    const many = Math.ceil((MEMORY_PREMISE_CARD_BUDGET * 2) / marginal);
+    const rendered = renderMemoryDocuments(Array.from({ length: many }, (_, i) => capPremise(i)));
+
+    expect(rendered).toContain('件のカードを落として1行にした');
+    expect(rendered).toContain('カードのまま載っているのは');
+    // 開く口（載せないことを能力の削除にしないための条件）。
+    expect(rendered).toContain('memory_outline');
+    expect(rendered).toContain('memory_section_read');
+    // 直し方と、倒してはいけない方向。
+    expect(rendered).toContain('memory_section_move');
+    expect(rendered).toContain('要旨（description）を削る方向へ倒さないこと');
+  });
+
+  /**
+   * ⭐⭐ **落とす順序は入力の順に依らない。** 依らせると、同じ記憶が呼びごとに
+   * 違うカードを落とし、クローンはそれを記憶の破損として読む。
+   *
+   * **⚠️ この歯が測っていないこと**: 大きさが**同じ**カードどうしの順序は
+   * `slug` で決まるので、大きさが全部同じ入力では「slug の大きい側が恒久的に
+   * 落ちる」——`excerpt.ts` の `ListingBudget.omitted` が名指ししている形が、
+   * その入力に対しては残る。実運用でカードの大きさが完全に一致することは無い
+   * （見出しコメントが `全 N 文字 / M 節` を運ぶ）ので塞いでいないが、
+   * **塞いでいないことをここに書いておく。**
+   */
+  /**
+   * カードの大きさが**要旨の長さに比例して単調に増える** premise。
+   *
+   * **⚠️ 節数で大きさに差を付けてはいけない。** 節目次が1文書あたりの予算
+   * （`MEMORY_PROMPT_OUTLINE_BUDGET`）に当たると、節を増やすほどカードは
+   * **小さくなる**（省略の断り書きへ畳まれるため）——実測（2026-09-11、この
+   * 足場）で 200節 10,179 文字 / 211節 10,153 文字。**節数はカードの大きさの
+   * 代理指標にならない。** だからここは要旨の長さで差を付ける（予算の下に
+   * 収めるので、切り詰めが挟まらず単調である）。
+   */
+  const sizedPremise = (index: number): MemoryPart => ({
+    slug: `sized-${String(index).padStart(3, '0')}`,
+    title: `前提${index}`,
+    content: [
+      '---',
+      'type: premise',
+      `description: ${'あ'.repeat(200 + index * 100)}`,
+      '---',
+      '',
+      ...Array.from({ length: 5 }, (_, n) => `## 節${n}\n\n本文\n`),
+    ].join('\n'),
+  });
+
+  it('⭐⭐ 落とすのは大きいほうから（渡す順序を変えても結果が変わらない）', () => {
+    // 要旨の長さで大きさに差を付ける（`sizedPremise` の doc）。40件あれば
+    // 束ねた予算を確実に超える（1件あたり数百〜数千文字）。
+    const docs = Array.from({ length: 40 }, (_, i) => sizedPremise(i));
+
+    const forward = renderMemoryDocuments(docs);
+    const reversed = renderMemoryDocuments([...docs].reverse());
+
+    // 落ちた slug の集合が一致する（順序に依らない）。
+    const demotedSlugs = (rendered: string) => {
+      const note = rendered.slice(rendered.indexOf(DEMOTION_NOTE_HEAD));
+      return docs
+        .map((doc) => doc.slug)
+        .filter((slug) => note.includes(`- ${slug}.md（`))
+        .sort();
+    };
+    expect(forward).toContain(DEMOTION_NOTE_HEAD);
+    expect(demotedSlugs(forward)).toEqual(demotedSlugs(reversed));
+
+    // そして落ちたのは大きいほう（いちばん小さい1件は必ずカードのまま残る）。
+    const smallest = docs[0];
+    if (smallest === undefined) throw new Error('足場が空である');
+    expect(forward).toContain(`<!-- memory: ${smallest.slug}.md（premise`);
+  });
+
+  /**
+   * ⭐⭐ **差分の載せ直しには蓋を掛けない**（`selectPremiseCards` の doc）。
+   *
+   * `clone.ts` の `#withFreshMemory` が渡す集合は「今回変わった範囲」であって
+   * 床ではない。そこへ蓋を掛けると、システムプロンプト側ではカードが在る文書が
+   * 差分の側だけ1行に落ちる——**同じ文脈の中で、同じ文書について2つの載り方が
+   * 並ぶ。**
+   */
+  it('⭐⭐ 差分の載せ直し（seenContent を渡す呼び）には蓋を掛けない', () => {
+    const { marginal } = measureCardMarginalCost();
+    const many = Math.ceil((MEMORY_PREMISE_CARD_BUDGET * 2) / marginal);
+    const docs = Array.from({ length: many }, (_, i) => capPremise(i));
+
+    // 蓋を掛ける呼び（記憶の全体）では落ちる。
+    expect(renderMemoryDocuments(docs)).toContain(DEMOTION_NOTE_HEAD);
+
+    // 差分の呼びでは落ちない。**`seenContent` は空の Map でよい**——渡したこと
+    // 自体が「これは差分である」の合図である。
+    const asDelta = renderMemoryDocuments(docs, {
+      presentInMemory: docs,
+      seenContent: new Map(),
+    });
+    expect(asDelta).not.toContain(DEMOTION_NOTE_HEAD);
+  });
+
+  /**
+   * ⭐⭐ **メーターが嘘をつかない。** 蓋が噛むと `totalChars` は枚数を増やしても
+   * ほとんど動かない——`demotedPremiseDocs` が0でない限り、`totalChars` は
+   * 「蓋が効いた後の値」である（`MemoryFloor.demotedPremiseDocs` の doc）。
+   */
+  it('⭐⭐ measureMemoryFloor: demotedPremiseDocs が実物と一致し、premiseDocs は引かれない', () => {
+    const { marginal } = measureCardMarginalCost();
+    const many = Math.ceil((MEMORY_PREMISE_CARD_BUDGET * 2) / marginal);
+    const docs = Array.from({ length: many }, (_, i) => capPremise(i));
+
+    const floor = measureMemoryFloor(docs);
+    // 区分の件数は動かない（落ちても premise である）。
+    expect(floor.premiseDocs).toBe(many);
+    expect(floor.demotedPremiseDocs).toBeGreaterThan(0);
+    expect(floor.demotedPremiseDocs).toBeLessThan(many);
+
+    // 落ちた件数は、断り書きが名乗る数と一致する。
+    const rendered = renderMemoryDocuments(docs);
+    expect(rendered).toContain(
+      `**大きいほうから ${floor.demotedPremiseDocs.toLocaleString('en-US')} 件のカードを落として1行にした**`,
+    );
+
+    // 蓋が噛んでいない足場では0である（0 の行を作らないための対照）。
+    expect(measureMemoryFloor([capPremise(0)]).demotedPremiseDocs).toBe(0);
+  });
+
+  /**
+   * ⭐⭐ 蓋が噛んだ回だけ、床の一言が「この増減は蓋の後の値である」と名乗る。
+   * **噛んでいない回は1文字も出さない**（毎回付けると、本当に噛んだときの
+   * 目印が効かなくなる）。
+   */
+  it('⭐⭐ describeMemoryFloor は、蓋が噛んだ回だけ増減の読み方を断る', () => {
+    const { marginal } = measureCardMarginalCost();
+    const many = Math.ceil((MEMORY_PREMISE_CARD_BUDGET * 2) / marginal);
+    const capped = Array.from({ length: many }, (_, i) => capPremise(i));
+    const small = [capPremise(0)];
+
+    const cappedLine = describeMemoryFloor({
+      before: measureMemoryFloor(capped.slice(0, -1)),
+      after: measureMemoryFloor(capped),
+      slug: capped[capped.length - 1]?.slug ?? 'premise-000',
+      kind: 'premise',
+      created: false,
+    });
+    expect(cappedLine).toContain('この増減は蓋が効いた後の値である');
+
+    const smallLine = describeMemoryFloor({
+      before: measureMemoryFloor([]),
+      after: measureMemoryFloor(small),
+      slug: 'premise-000',
+      kind: 'premise',
+      created: false,
+    });
+    expect(smallLine).not.toContain('この増減は蓋が効いた後の値である');
+  });
+
+  /**
+   * ⚠️ **測っていない枝を明記する。** `selectPremiseCards` には「いちばん小さい
+   * カード1枚で予算を超えるときは、その1枚を残す」という倒し方が在るが、
+   * **この枝には歯が無い。**
+   *
+   * 理由: 1枚のカードは1文書あたりの予算で頭打ちになる（要旨
+   * `MEMORY_PROMPT_DESCRIPTION_BUDGET` ＋ 節目次 `MEMORY_PROMPT_OUTLINE_BUDGET`
+   * ＋ 固定費）ので、`MEMORY_PREMISE_CARD_BUDGET` を1枚で超える入力を**作れない。**
+   * ⟹ あの枝は、束ねた予算を1枚ぶんより小さく下げたときのための保険である。
+   *
+   * **ここで測れるのは「1枚のカードは束ねた予算より必ず小さい」という前提のほうで、
+   * それが崩れたらこの歯が落ちる**（＝あの枝に歯を書く必要が生まれたと分かる）。
+   */
+  it('⚠️ 前提の固定: カード1枚は束ねた予算より必ず小さい（だから「1枚は残す」枝は到達不能）', () => {
+    const { marginal } = measureCardMarginalCost();
+    expect(marginal).toBeLessThan(MEMORY_PREMISE_CARD_BUDGET);
+    expect(MEMORY_PROMPT_DESCRIPTION_BUDGET + MEMORY_PROMPT_OUTLINE_BUDGET).toBeLessThan(
+      MEMORY_PREMISE_CARD_BUDGET,
+    );
   });
 });
 
