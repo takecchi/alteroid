@@ -687,6 +687,26 @@ export const managerSummarySchema = z.object({
    * 「失敗していない」と「この器では見ていない」が同じ形になる。
    */
   lastFailure: jobSchema.shape.lastFailure,
+  /**
+   * セッションが `failed` として畳まれたときの、器の資源による落ち方の分類
+   * （#713 段3）。
+   *
+   * **`jobSchema` の枝をそのまま借りる（ここで書き直さない）。** `lastFailure`
+   * と同じ理由——`code` / `errno` / `syscall` / `at` のどれかが片方だけ増えた
+   * 日に spec が黙って古びる。
+   *
+   * **`lastFailure` とは軸が違う。** あちらは「直近の1ターンが報告ではなく
+   * 失敗で終わった」でセッションは生きている。こちらは「セッションその
+   * ものが `closed` として畳まれた」、その落ち方の OS 由来の事実——セッション
+   * はもう走っていない（`packages/core/src/schema.ts` の `lastSystemError` の
+   * doc）。
+   *
+   * **`code` を持つ落ち方の回だけ載る（`optional`）。** 枠（429）や signal で
+   * 畳まれた回には無いので、「器の資源で落ちていない」と「この軸では判定
+   * できなかった」を欄の有無だけでは言い分けられない——そこは本文
+   * （`lastReport` / 受信箱）を見る。
+   */
+  lastSystemError: jobSchema.shape.lastSystemError,
   runnerId: z.string().optional(),
   workspace: workspaceLocatorSchema.optional(),
   /**

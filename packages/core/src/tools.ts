@@ -27,6 +27,7 @@ import {
 } from './manager-cursor.js';
 import { encodeScheduleCursor, resolveScheduleCursor } from './schedule-cursor.js';
 import { assertNeverRunnerLegStatus } from './runner-protocol.js';
+import { formatSystemErrorFacts, SYSTEM_ERROR_UNKNOWN_NOTE } from './system-error.js';
 // **`manager_list` と digest の「マネージャー」節で同じ字面を出すための唯一の
 // 生成元。** 片方だけ変えられると区別が潰れる——実際にクローンがそれで誤り、
 // 終わった仕事へ3本目の委譲を出した（`digest.ts` の `describeManagerState` の
@@ -1584,6 +1585,50 @@ function failureLine(
   lastReport: string | undefined,
 ): string | null {
   const note = describeManagerFailure(failure, lastReport);
+  return note === null ? null : `  ${note}`;
+}
+
+/**
+ * 一覧に添える、セッションが `failed` として畳まれた落ち方の分類
+ * （Issue #713 段3）。
+ *
+ * **`describeManagerFailure`（`lastFailure`）とは軸が違う。** あちらは「直近の
+ * 1ターンが報告ではなく失敗で終わった」——セッションは生きている（`status` は
+ * `done` のまま）。こちらは「**セッションそのものが `closed` として畳まれた**、
+ * その落ち方の OS 由来の事実」——`manager.status === 'failed'` のときにしか
+ * 材料が無いので、**それ以外の回は `null`（1文字も増えない）**。同じ欄には
+ * 混ぜない（`schema.ts` の `lastSystemError` の doc）。
+ *
+ * **B と D を書き分け、D が A を飲み込まない。** `manager.lastSystemError` が
+ * 在れば B（器の資源で落ちた）の事実（`code` / `errno` / `syscall`）をそのまま
+ * 出す（`formatSystemErrorFacts` — `withSystemErrorNote` が受信箱で使うのと
+ * 同じ整形）。無ければ D（この軸では判定できなかった）——**この欄には A
+ * （枠 429）も乗る**ので、D の文言自身が「枠に当たった場合・セッションが
+ * 切れた場合もこの欄には出ない。本文と lastFailure を見ること」と名乗る
+ * （`SYSTEM_ERROR_UNKNOWN_NOTE`。受信箱の `withSystemErrorNote` と同じ1箇所
+ * から取り、字面が割れないようにする）。
+ *
+ * **字面の生成元はここ1箇所である。** `manager_list` と `manager_report` の
+ * 両方がこれを使う——`describeManagerFailure` と同じ理由（同じ欄を2つの口が
+ * 別の語で呼ぶと、面をまたいで読む人間がそこで詰まる）。
+ */
+function describeManagerSystemError(manager: ManagerSummary): string | null {
+  if (manager.status !== 'failed') return null;
+  if (manager.lastSystemError === undefined) {
+    return `⚠ セッションは失敗で畳まれた。${SYSTEM_ERROR_UNKNOWN_NOTE}。`;
+  }
+  return (
+    `⚠ セッションは器の資源による落ち方で畳まれた可能性 ` +
+    `（${manager.lastSystemError.at}）: ${formatSystemErrorFacts(manager.lastSystemError)}`
+  );
+}
+
+/**
+ * {@link describeManagerSystemError} を `manager_list` の `extra` へ入れる形に
+ * する（`failureLine` と同じ作法）。
+ */
+function systemErrorLine(manager: ManagerSummary): string | null {
+  const note = describeManagerSystemError(manager);
   return note === null ? null : `  ${note}`;
 }
 
@@ -5803,6 +5848,16 @@ export function createCloneTools(context: ToolContext) {
               // 分かる順になる。人間の CLI が同じ順で置いてある
               // （`apps/cli/src/chat.ts` の「**失敗は報告の**上**に置く。**」）。
               failureLine(manager.lastFailure, manager.lastReport),
+              // **セッションそのものが `failed` として畳まれた落ち方も、同じ
+              // 「失敗は報告の上」の順で置く（Issue #713 段3）。** `lastFailure`
+              // の行（すぐ上）とは別の軸なので別行——**両方が同時に出ることは
+              // ある**（`lastFailure` を残したまま `case 'report'` を一度も
+              // 経ずにセッションごと `closed`/`failed` で落ちた回。`lastFailure`
+              // は `case 'closed'` では消えない）。その場合は「直近のターンが
+              // 失敗で終わり、その後セッション自体も落ちた」という順の2つの
+              // 事実として両方読める——どちらかを隠さない。
+              // **健全なマネージャーでは `null` を返し、1文字も増えない。**
+              systemErrorLine(manager),
               manager.lastReport === undefined
                 ? null
                 : // **時刻は既存の行に添えるだけ**（#358）。行を1本増やすと、
@@ -5992,7 +6047,15 @@ export function createCloneTools(context: ToolContext) {
           // #323: 依頼文（part === 'request'）では見に行かない——往復を無条件に
           // 増やさない。「報告はまだ無い」を返す直前、report のときだけ生ログを
           // 見て「まだ書いていない」と「書いたのに届いていない」を分ける。
-          return text(await describeMissingReport(context.managers, managerId, found.status));
+          const missing = await describeMissingReport(context.managers, managerId, found.status);
+          // **#713 段3: 報告が一度も届いていない回でも、セッションが `failed`
+          // として畳まれた落ち方は分かることがある。** `describeManagerSystemError`
+          // は `lastReport` の有無を見ていない——`lastSystemError` は `case
+          // 'closed'` が立てる欄で `lastReport` とは別の書き込み元なので、
+          // 「報告が無い」を理由にこちらまで黙らせない（片方が空だからもう
+          // 片方も出さない、にはしない）。
+          const systemError = describeManagerSystemError(found);
+          return text(systemError === null ? missing : `${missing}\n\n${systemError}`);
         }
 
         // **失敗した回は「報告」と呼ばない（Issue #714）。** `manager_list` で
@@ -6006,6 +6069,11 @@ export function createCloneTools(context: ToolContext) {
         // ないので、失敗の有無で呼び方が変わる欄ではない。
         const failure =
           part === 'request' ? null : describeManagerFailure(found.lastFailure, found.lastReport);
+        // **セッションそのものが `failed` として畳まれた落ち方も同じ場所で
+        // 掘れる（Issue #713 段3）。** `manager_list` の `systemErrorLine` と
+        // 同じ材料——`part === 'request'` では出さない（依頼文はそもそも
+        // このセッションの落ち方の話ではない）。
+        const systemError = part === 'request' ? null : describeManagerSystemError(found);
         const label =
           part === 'request' ? '依頼文' : failure === null ? '直近の報告' : '直近のターンの中身';
         const part1 = page(body, offset, REPORT_PAGE);
@@ -6014,6 +6082,11 @@ export function createCloneTools(context: ToolContext) {
         // 同じ順である）。下に置くと、包まれたエラー文を先に読んでから「実は
         // 報告ではない」と分かる順になる。**失敗していない回は1文字も増えない。**
         const failureNote = failure === null ? '' : `${failure}\n\n`;
+        // **`failureNote` と同じ順・同じ理由で本文の上に置く。** 両方が同時に
+        // 出ることもある（`lastFailure` は `case 'closed'` では消えない——
+        // `tools.ts` の `describeManagerSystemError` の doc）。**出ていない
+        // 回は1文字も増えない。**
+        const systemErrorNote = systemError === null ? '' : `${systemError}\n\n`;
         const tail = part1.more
           ? `\n\n…（ここで切れている。続きは manager_report managerId=${managerId}` +
             `${part === 'request' ? ' part=request' : ''} offset=${part1.to}）`
@@ -6024,7 +6097,7 @@ export function createCloneTools(context: ToolContext) {
         // それでも足りないときの次の一手を、切れていない場合にも常に添える。
         const footer =
           '\n\n（さらに掘るなら manager_transcript managerId=' + managerId + ' で生ログへ）';
-        return text(`${head}\n\n${failureNote}${part1.body}${tail}${footer}`);
+        return text(`${head}\n\n${failureNote}${systemErrorNote}${part1.body}${tail}${footer}`);
       },
     ),
 

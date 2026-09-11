@@ -405,6 +405,16 @@ export interface ManagerSummary {
    * （`schema.ts` の `lastFailure` の doc）。
    */
   lastFailure?: NonNullable<Job['lastFailure']>;
+  /**
+   * セッションが `failed` として畳まれたときの、器の資源による落ち方の分類
+   * （`jobSchema.lastSystemError`。#713 段3）。
+   *
+   * **`lastFailure` と軸が違う。** あちらは「直近の1ターンが報告ではなく
+   * 失敗で終わった」で、セッションは生きている。こちらは「セッションその
+   * ものが `closed` として畳まれた」、その落ち方の OS 由来の事実——セッション
+   * はもう走っていない。詳しくは `schema.ts` の `lastSystemError` の doc。
+   */
+  lastSystemError?: NonNullable<Job['lastSystemError']>;
   /** どの runner で走っているか（`manager_id → runner_id` の対応）。 */
   runnerId?: string;
   workspace?: WorkspaceLocator;
@@ -6129,6 +6139,22 @@ class Pool implements ManagerPool {
         // 瞬間として `new Date().toISOString()` を直接使う。
         record.job.lastReportAt = new Date().toISOString();
         record.job.status = event.status;
+        /*
+         * **古びさせない（#713 段3）。** `case 'report'` が届く時点で、この
+         * セッションは新しいターンの出力を返している——`lastSystemError` が
+         * 指すのは「セッションが `closed`（`status: 'failed'`）として畳まれた」
+         * 瞬間なので、`report` が来られた時点でそれはもう過去である（起こし
+         * 直されたか、その `closed` より後に生きているセッションから届いた）。
+         *
+         * **`event.failure` の有無では条件を付けない。** あちらは「このターン
+         * 自体が報告ではなく失敗で終わったか」という別の軸（`lastFailure`）
+         * で、`lastSystemError` が答える問いは「セッションは生きて出力して
+         * いるか」——`event.failure` が在っても無くても、`report` が届いた
+         * こと自体がその答えを「生きている」に確定させる。**下ろす条件を
+         * 「セッションが生きて output を返したか」で引いたのはここが理由**
+         * （PR 本文にも記載）。
+         */
+        delete record.job.lastSystemError;
         // **失敗として終わった回は台帳にもそう残す。** 本文（`event.text`）は
         // runner 側で既に包まれているが、包んだ文字列だけに頼ると、一覧を出す側は
         // 「報告が来た」と「エラーで死んだ」を本文の先頭を読んで判定することに
@@ -7220,6 +7246,19 @@ class Pool implements ManagerPool {
          */
         if (record.job.lease !== undefined) {
           record.job.lease = releaseLease(record.job.lease, this.#now());
+        }
+        /*
+         * **台帳へも残す（#713 段3）。** `event.systemError` は受信箱の合図の
+         * 本文（下の `withSystemErrorNote`）には既に運ばれているが、それだけ
+         * だと振り返る面（`manager_list` / `manager_report`）からは復元できない
+         * ——受信箱は流れる。`event.status === 'failed'` のときだけ、かつ
+         * `event.systemError` が在るときだけ立てる。**無い回に既定値を作らない**
+         * （`AGENTS.md`「取れない軸に 0 の行を作る」）——枠（429）や signal で
+         * 畳まれた回は `code` が付かないので、欄ごと undefined のままにする
+         * （`schema.ts` の `lastSystemError` の doc）。
+         */
+        if (event.status === 'failed' && event.systemError !== undefined) {
+          record.job.lastSystemError = { ...event.systemError, at: new Date().toISOString() };
         }
         await this.#persist(record);
         // **`event.reason` を包まずに渡す（issue #287）。**
@@ -8647,6 +8686,9 @@ function summaryOf(
     // 開き直る）。応答として終わった回では台帳側で消えているので、ここは台帳を
     // そのまま写すだけでよい。
     ...(job.lastFailure === undefined ? {} : { lastFailure: job.lastFailure }),
+    // **台帳をそのまま写すだけ**（#713 段3）。書き込みは `#onEvent` の
+    // `case 'closed'`（立てる）と `case 'report'`（下ろす）に閉じている。
+    ...(job.lastSystemError === undefined ? {} : { lastSystemError: job.lastSystemError }),
     ...(job.runnerId === undefined ? {} : { runnerId: job.runnerId }),
     /*
      * **`unknown` を黙って落とさない。** 台帳が「永続性を確かめられなかった」と
