@@ -478,12 +478,21 @@ describe('createCloneWakeGate', () => {
   });
 });
 
-function tokenPoolEvent(): InboxEvent {
+/**
+ * 判定の的になる `external` の合図を1件作る。
+ *
+ * **`source` を引数で受けるのは、呼び出し側でスプレッドさせないためである。**
+ * `{ ...tokenPoolEvent(), source: '別の値' }` と書くと `InboxEvent` は union
+ * なので、スプレッドの結果も union になり、`source` を持たない枝
+ * （`human_message` など）に対して余剰プロパティとみなされて `TS2322` で落ちる。
+ * **引数で差し替えればスプレッドが要らず、型の細工も要らない。**
+ */
+function tokenPoolEvent(source: string = TOKEN_POOL_REOPENED_SOURCE): InboxEvent {
   return {
     type: 'external',
     id: 'evt-token-pool-1',
     at: '2026-09-07T00:00:00.000Z',
-    source: TOKEN_POOL_REOPENED_SOURCE,
+    source,
     payload: { text: 'ダミー' },
   };
 }
@@ -499,7 +508,7 @@ describe('isTokenPoolReopenedNotice', () => {
   });
 
   it('external でも source が違えば偽', () => {
-    const event: InboxEvent = { ...tokenPoolEvent(), source: 'runner-registry' };
+    const event = tokenPoolEvent('runner-registry');
     expect(isTokenPoolReopenedNotice(event)).toBe(false);
   });
 
@@ -555,7 +564,7 @@ describe('歯1: CloneWakeGate.decide と redeliveryGate は同じ答えを返す
   });
 
   it('token-pool 以外の合図は usageBlocked に関わらず常に配る（wake 側の対象外）', () => {
-    const other: InboxEvent = { ...tokenPoolEvent(), source: 'runner-registry' };
+    const other = tokenPoolEvent('runner-registry');
     expect(redeliveryGate(other, { usageBlocked: true })).toBe(true);
     expect(redeliveryGate(other, { usageBlocked: false })).toBe(true);
   });
