@@ -12580,7 +12580,9 @@ describe('クローン — 定期の棚卸し（scheduled な蒸留）', () => {
 
     const distill = (s.calls[0] as FakeCall).inputs[1] ?? '';
     expect(distill).toContain('記憶へ移すべきものがあるか確認せよ');
-    expect(distill).not.toContain('棚卸しの的');
+    // 語ではなくその実行で実際に流れた的の名前で測る（上の陽性の歯 `- alteroid-work:` と対）。
+    // 語は散文の説明文にも出るため、語の不在では「載っていないこと」の証明にならない。
+    expect(distill).not.toContain('- alteroid-work:');
     expect(distill).not.toContain('定期の棚卸しの刻みが来た');
 
     await s.clone.stop();

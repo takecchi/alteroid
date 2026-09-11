@@ -565,14 +565,49 @@ describe('branded type — RenderedMemory を経由しない記憶は buildClone
  *    「全文置換・削除・節の移動ができない」と3つまとめて断っていた）
  */
 describe('buildDistillPrompt — 定期の棚卸しと、引き直した2つの線', () => {
-  it('⭐ 的の一覧は渡したときだけ載る。渡さない呼び手の出力は1文字も変わらない', () => {
-    const withoutOptions = buildDistillPrompt('conversation_end');
-    expect(buildDistillPrompt('conversation_end', {})).toBe(withoutOptions);
-    expect(withoutOptions).not.toContain('棚卸しの的');
+  /**
+   * ⚠ ここは節の見出しを語として探さない。散文（統合の説明文）がその語を
+   * 名指しした瞬間、`not.toContain` は偽陽性（節が空でも語は散文に残るので
+   * 赤くなる）に、`toContain` は偽陰性（節の描画を丸ごと消しても散文の語が
+   * 引っかかるので緑のまま）になる——名前は片方向にしか効かない罠である。
+   *
+   * ⟹ 節の名前を1文字もテストに書かず、**同じ reason で `tidyTargets` の
+   * 有無だけを変えた2つの出力の差分**（構造）と、**そこに実際に流れた
+   * payload**（データ）だけで測る。
+   */
+  it('⭐ 的の一覧は payload ごと連続した1ブロックとして挿入され、渡さない呼び手の出力は1文字も変わらない', () => {
+    const MARKER = 'TIDY-TARGET-PAYLOAD-MARKER';
 
-    const withTargets = buildDistillPrompt('scheduled', { tidyTargets: 'TARGET-MARKER' });
-    expect(withTargets).toContain('棚卸しの的');
-    expect(withTargets).toContain('TARGET-MARKER');
+    // 渡さない呼び手（会話終了・scheduled 無指定）の出力は1文字も変わらない。
+    expect(buildDistillPrompt('conversation_end', {})).toBe(buildDistillPrompt('conversation_end'));
+
+    const withoutTargets = buildDistillPrompt('scheduled');
+    expect(buildDistillPrompt('scheduled', {})).toBe(withoutTargets);
+
+    // 同じ reason で tidyTargets だけを足し、挿入された連続ブロックを共通の
+    // 接頭辞・接尾辞から機械的に取り出す（節の名前・文面はここに書かない）。
+    const withTargets = buildDistillPrompt('scheduled', { tidyTargets: MARKER });
+    let prefix = 0;
+    while (prefix < withoutTargets.length && withoutTargets[prefix] === withTargets[prefix]) {
+      prefix++;
+    }
+    let suffix = 0;
+    while (
+      suffix < withoutTargets.length - prefix &&
+      withoutTargets[withoutTargets.length - 1 - suffix] ===
+        withTargets[withTargets.length - 1 - suffix]
+    ) {
+      suffix++;
+    }
+    const chunk = withTargets.slice(prefix, withTargets.length - suffix);
+
+    // 挿入は連続した1ブロックである＝それ以外は1文字も変わらない。
+    expect(withTargets.replace(chunk, '')).toBe(withoutTargets);
+    // payload がそのまま載る。
+    expect(chunk).toContain(MARKER);
+    // payload だけでなく枠（節の見出し・案内文）ごと入っている——payload だけの
+    // 挿入なら、節の描画を丸ごと消す変異でもこの歯は赤くならない。
+    expect(chunk.length).toBeGreaterThan(MARKER.length);
   });
 
   it('⭐ scheduled は「会話が終わったからではない」と名乗る（起点を取り違えさせない）', () => {
