@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { renderMemoryDocuments } from './memory.js';
+import { formatOriginMarker } from './origin-marker.js';
 import {
   buildCloneSystemPrompt,
   buildDailyReportPrompt,
@@ -11,6 +12,7 @@ import {
   buildWorkerPrompt,
   PROMPT_CHARACTER_BUDGET,
 } from './prompt.js';
+import { CLONE_ACTOR_ID } from './usage.js';
 
 /**
  * マネージャーのシステムプロンプトに書く「委譲の指針」を守るテスト。
@@ -240,6 +242,75 @@ describe('器が共有であることの告知', () => {
     const paths =
       prompt.match(/\/(?:tmp|workspace|home|root|var|usr|opt|mnt|srv|Users|data)\b/g) ?? [];
     expect(paths).toEqual([]);
+  });
+});
+
+/**
+ * 外へ出す成果物に出所の刻印を書かせる指示（Issue #850）。
+ *
+ * **なぜこの中身を歯で測るのか。** ここも「所在の告知」「`cwd` 共有」と同じ形——
+ * この節を消しても型は通り、`Options` も `agents` 定義も変わらない。刻印を書き
+ * 忘れた PR がそのまま出ても、実行時には何も赤くならない（赤くするのは
+ * `scripts/check-pr-origin-core.mjs` の側であって、ここではない）。
+ *
+ * **`formatOriginMarker` と同じ出所であることを測る歯を含める。** プロンプトの
+ * 本文へ刻印の形を手で書き写すと、`origin-marker.ts` 側の形を変えたときに
+ * プロンプト側だけが古いまま取り残される——書き手（プロンプト）が
+ * `formatOriginMarker` を呼んだ結果を使っていることを、文字列の一致で固定する。
+ */
+describe('外へ出す成果物への出所の刻印（#850）', () => {
+  /**
+   * **`toContain` は「どこかに在る」しか言わず「どこに在るか」を言わない。**
+   * `toContain('alteroid-origin')` のような部分一致だと、この節の説明文
+   * （doc ではなく本文側にも「刻印」という語自体は出さないが、将来誰かが
+   * 別の理由で `alteroid-origin` という字面を本文へ足しても、この歯は気づけない
+   * ——だから期待値は `formatOriginMarker(...)` が返す**完全な文字列**にし、
+   * さらに本文を行に割って**その行そのものが一致すること**まで固定する。
+   */
+  it('マネージャーの本文に、自分の managerId を含む刻印がそのままの形で現れる（行ごと一致）', () => {
+    const prompt = buildManagerSystemPrompt({ managerId: 'mgr-abc', workerName: 'worker' });
+    const marker = formatOriginMarker('mgr-abc');
+    expect(prompt).toContain(marker);
+    const lines = prompt.split('\n');
+    expect(lines).toContainEqual(
+      `あなたが出す PR / Issue は、クローンから見て出所が分からない。本文に \`${marker}\` を1行そのまま含めること。`,
+    );
+  });
+
+  it('managerId を取り違えていない（別の値で呼んでも mgr-test が混ざらない）', () => {
+    const prompt = buildManagerSystemPrompt({ managerId: 'mgr-abc', workerName: 'worker' });
+    expect(prompt).not.toContain(formatOriginMarker('mgr-test'));
+  });
+
+  it('クローンの本文に、CLONE_ACTOR_ID の刻印が現れる（行ごと一致）', () => {
+    const prompt = buildCloneSystemPrompt({ memory: renderMemoryDocuments([]) });
+    const marker = formatOriginMarker(CLONE_ACTOR_ID);
+    expect(prompt).toContain(marker);
+    const lines = prompt.split('\n');
+    expect(lines).toContainEqual(
+      `あなた自身が PR / Issue を出すときは、本文に \`${marker}\` を1行そのまま含めること。`,
+    );
+  });
+
+  it('刻印の形は formatOriginMarker と同じ出所である（手書きの文字列に分かれていない）', () => {
+    // `formatOriginMarker` の形そのものを変えたときに、プロンプト側の期待値だけが
+    // 追随せず取り残される、という事故を塞ぐ歯——期待値もこの関数を呼んで作るので、
+    // プロンプト本文に手書きの `<!-- alteroid-origin: ... -->` が残っていれば
+    // どちらか一方の変更で必ず落ちる。
+    const manager = buildManagerSystemPrompt({ managerId: 'mgr-xyz', workerName: 'worker' });
+    const clone = buildCloneSystemPrompt({ memory: renderMemoryDocuments([]) });
+    expect(manager).toContain(formatOriginMarker('mgr-xyz'));
+    expect(clone).toContain(formatOriginMarker(CLONE_ACTOR_ID));
+  });
+
+  it('置き場所を指図していない（alteroid 専用の記述にしない。#191 と同じ線）', () => {
+    const manager = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
+    const clone = buildCloneSystemPrompt({ memory: renderMemoryDocuments([]) });
+    for (const prompt of [manager, clone]) {
+      const paths =
+        prompt.match(/\/(?:tmp|workspace|home|root|var|usr|opt|mnt|srv|Users|data)\b/g) ?? [];
+      expect(paths).toEqual([]);
+    }
   });
 });
 

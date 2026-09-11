@@ -240,6 +240,13 @@ export {
   type RenderedMemory,
   type RenderMemoryDocumentsOptions,
 } from './memory.js';
+/**
+ * PR / Issue の本文に置く「出所の刻印」（Issue #850）。
+ *
+ * `CLONE_ACTOR_ID`（`usage.ts`）と語彙を共有する理由・`ORIGIN_HUMAN` が
+ * 要る理由は `origin-marker.ts` の doc を見よ。
+ */
+export { formatOriginMarker, ORIGIN_HUMAN, ORIGIN_MARKER_NAME } from './origin-marker.js';
 export type { CloneSystemPromptInput } from './prompt.js';
 export {
   buildCloneSystemPrompt,
