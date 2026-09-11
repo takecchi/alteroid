@@ -4,6 +4,16 @@ on:
   push:
     branches: [main]
   pull_request:
+    # **`ready_for_review` を明示で足す。** GitHub の既定は
+    # `[opened, synchronize, reopened]` で、**`ready_for_review` を含まない。**
+    # 下の `ci` / `image` の `if:` は draft の間だけ節約する形にしてあるが、
+    # 節約が効くのは「draft → ready の遷移そのものが1回の `pull_request` イベントに
+    # なる」ときだけである。既定のままだと、その遷移はどの `types` にも当たらず
+    # イベントが起きない ⟹ **draft のときに skip した required チェックの結果が
+    # そのまま「まだ走っていない」状態で固定され、ready にしても本物の run が
+    # 1本も起きないまま古い（存在しない）結果を待ち続ける。** ここを足し忘れると、
+    # 節約の仕組みそのものが「draft のまま一生 skip される」事故に化ける。
+    types: [opened, synchronize, reopened, ready_for_review]
   # **上流ドリフトを見に行く回。ここだけキャッシュを使わずに焼く**（下の `image` の
   # `no-cache`）。**定時にしてあるのは、PR の門を人質に取らないためである** — `ci` と
   # `image` は required なので（`gh api repos/takecchi/alteroid/branches/main/protection`
@@ -60,7 +70,24 @@ jobs:
     # **定時の回は回さない。** あの回が訊いているのは「上流が動いて器が焼けなく
     # なっていないか」だけである。ここまで毎晩回すと、別の主張（依存の更新で単体
     # テストが落ちないか）を黙って足すことになる。手動起動では回す。
-    if: github.event_name != 'schedule'
+    #
+    # **draft の pull_request では回さない（重い CI を人質に取らない）。** ただし
+    # 条件は「`github.event_name != 'schedule'` の後ろへ draft の判定を足す」形に
+    # してあり、**`github.event.pull_request.draft == false` だけを単独では書かない。**
+    #
+    # 理由 —— `push`（main）・`schedule`・`workflow_dispatch` のどのイベントでも
+    # `github.event.pull_request` はそもそも**存在しない**（コンテキストに無い
+    # キーは GitHub 式では `null` になる）。GitHub Actions の式は `null == false` を
+    # **false** と評価する（`true` ではない）ので、`draft == false` だけを条件に
+    # すると、push でも schedule でも `false` になって**この歯が main の CI ごと
+    # 消える** —— required チェック（`ci`）が絶対に走らない形で赤くも表示されず、
+    # ブランチ保護がただ黙って通ってしまう。**これがいちばん危ない罠である**（push を
+    # 何も検査しないまま「緑」にする）。だから先に `github.event_name` で
+    # `pull_request` かどうかを分け、**pull_request 以外はこの判定を素通りさせる**
+    # （`!= 'pull_request'` の左辺が真になり、右辺の `draft` を評価するまでもなく
+    # `||` で true に落ちる）。draft を見るのは「いま本当に pull_request イベントで
+    # あるとき」だけである。
+    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -178,6 +205,14 @@ jobs:
   # （Railway と同じ。アーキテクチャ差は apt の `dpkg --print-architecture` 任せに
   # してあるので、arm64 固有の分岐はもう無い）。
   image:
+    # **draft の pull_request では焼かない。** `ci` の直上に書いた理由（`push` /
+    # `schedule` / `workflow_dispatch` では `github.event.pull_request` が存在せず
+    # `null == false` は偽になるので、`draft == false` 単独では書けない）が
+    # そのまま当てはまる。**ただし schedule はここでは除外しない** — 上の `env.DRIFT`
+    # /「上流ドリフトを見に行く回」がこのジョブに要求している役目（`ci` とは違い、
+    # `image` は定時でも走り続けて上流の apt/イメージの崩れを見張る）は変えない。
+    # ⟹ `ci` の条件から `github.event_name != 'schedule'` の項だけを抜いた形にする。
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
