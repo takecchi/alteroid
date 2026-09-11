@@ -14,16 +14,14 @@ on:
     # 1本も起きないまま古い（存在しない）結果を待ち続ける。** ここを足し忘れると、
     # 節約の仕組みそのものが「draft のまま一生 skip される」事故に化ける。
     #
-    # **この並びは house style と一致している。** 同じオーナーの
-    # `virchamate/virchamate-backend` の `.github/workflows/backend-test.yml`
-    # に同じ形の先例が在る（`types: [ opened, synchronize, reopened,
-    # ready_for_review ]`。観測 2026-09-11。read-only で確認しただけで、
-    # あちらのファイルは1バイトも変えていない）。**空白の入れ方だけは真似しない
-    # こと** — あちらは角括弧の内側に空白を持つが、この repo は
-    # `pnpm format:check`（prettier）が YAML にも掛かるので、空白の有無を含めて
-    # prettier が決める形に従う（下の `if:` の doc に、あちらとの違いをもう1つ
-    # 書いてある——真似てよいのはここだけで、`if:` の書き方は house style と
-    # 意図的に違える）。
+    # **この並び自体は、同じオーナーの別 repo（非公開）に在る先例と同じ課題への
+    # 答えである**（観測 2026-09-11、read-only で確認しただけで、あちらは1バイトも
+    # 変えていない）。⚠️ ここで引くのは**一般化された設計の判断だけ**にとどめる
+    # （repo 名・ファイル名・ジョブ名・設定の有無といった中身は、非公開 repo の
+    # ものなので書かない）。**書式は真似しない** — この repo は
+    # `pnpm format:check`（prettier）が YAML にも掛かるので、角括弧の内側の空白の
+    # 有無を含めて prettier が決める形に従う。**`if:` の書き方も意図的に違えて
+    # ある**（理由は下の `ci` の `if:` の doc）。
     types: [opened, synchronize, reopened, ready_for_review]
   # **上流ドリフトを見に行く回。ここだけキャッシュを使わずに焼く**（下の `image` の
   # `no-cache`）。**定時にしてあるのは、PR の門を人質に取らないためである** — `ci` と
@@ -77,28 +75,19 @@ env:
   DRIFT: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
 
 # **無条件（`if:` も `needs:` も持たない）で走る安いジョブは置いていない。**
-# house style の先例（`virchamate/virchamate-backend` の
-# `.github/workflows/backend-test.yml`。観測 2026-09-11）には `Format Check`
-# という無条件ジョブが在り、そちらの doc は理由をこう書いている——
-# 「`pull_request` と `push: main` の両方で必ず走らせるため。draft PR でも
-# 走る。捕まえたいのは『npm ci を経ていない clone』と『PR を経由しない main
-# への直 push』で、どちらも『誰かが CI を待っている PR』に限定されないので、
-# 条件を付けて狭めると経路ごと見えなくなる」。**判定基準はここにある —
-# 「その門は PR に紐付かない経路を見ているか」であって、「draft のあいだ
-# required が skipped になるのを避けたいか」ではない**（そもそも
-# virchamate-backend には branch protection が無く、required の概念自体が
-# 無い——同ファイルの冒頭コメントに理由が書いてある）。
+# 同じオーナーの別 repo（非公開）の先例から引いた**判断の基準**はこれである
+# ——「**その門は、PR に紐付かない経路（依存のインストールを経ない clone・
+# PR を経由しない直 push）を見ているか。見ているなら条件で狭めてはならない**」。
+# ⚠️ **「draft の間 required が skipped になるのを避けるため」ではない**
+# （そこを取り違えると、当たらない所へ形だけ運ぶことになる）。狭めた瞬間に
+# その経路ごと見えなくなる、というのが基準の中身である。
 #
 # **alteroid にこの基準を当てると、無条件ジョブは要らない。** `ci` は
 # push（main）と workflow_dispatch で、`image` はさらに schedule でも走り
 # 続ける——上の `ci` / `image` の `if:` は `pull_request` の枝だけを draft の
 # 間だけ狭めており、他のイベントの経路は1ミリも変えていない。⟹ 「PR に
-# 紐付かない経路（直 push・手動起動・定時）を見る」役目は、既存の2ジョブが
-# そのまま持っている。house style が別ジョブを立てたのは、あちらの PR 用
-# ジョブ（`tests` / `generated-client-build`）が push を見ていない
-# （`if: github.event_name == 'pull_request' && ...`）ため、push 側を別ジョブ
-# （`contract-gate`）に切り出す必要があったからで、**1ジョブが複数イベントを
-# 兼ねるこの repo の構造には同じ理由が無い。**
+# 紐付かない経路（直 push・手動起動・定時）を見る」役目は、**既存の2ジョブが
+# そのまま持っているので、別に無条件ジョブを立てる理由が無い。**
 jobs:
   ci:
     # **定時の回は回さない。** あの回が訊いているのは「上流が動いて器が焼けなく
@@ -122,19 +111,17 @@ jobs:
     # `||` で true に落ちる）。draft を見るのは「いま本当に pull_request イベントで
     # あるとき」だけである。
     #
-    # **⚠️ house style（`virchamate/virchamate-backend` の
-    # `.github/workflows/backend-test.yml`。観測 2026-09-11）は `if:` を
-    # `github.event_name == 'pull_request' && github.event.pull_request.draft
-    # == false` の形（`==`）で書いている。ここを「house style に揃えよう」と
-    # 書き換えないこと——あちらとこちらではジョブの位相が違う。** あちらは
-    # PR 専用ジョブ（push では走らない）と push 専用ジョブを最初から分けている
-    # ので `== 'pull_request'` で正しい。**この repo の `ci` は push（main）・
-    # pull_request・workflow_dispatch の3イベントを1つのジョブで兼ねている**
-    # ので、`==` に書き換えると `push` と `workflow_dispatch` まで丸ごと
-    # skip される——これはまさに直上で説明した罠そのものである（今度は
-    # `pull_request` 以外の全イベントが対象になる、より広い形で）。`!=` で
-    # 「pull_request 以外は素通りさせる」形を維持しているのは、house style を
-    # 知らなかったからではなく、**知ったうえで意図的に違えている。**
+    # **⚠️ 同じオーナーの別 repo（非公開）に、この判定を `==` の側で書いた先例が
+    # 在る。ここを「先例に揃えよう」と書き換えないこと。** `github.event_name ==
+    # 'pull_request' && draft == false` の形が正しくなるのは、**PR 専用ジョブと
+    # push 専用ジョブが最初から分かれている**場合である。**この repo の `ci` は
+    # push（main）・pull_request・workflow_dispatch の3イベントを1つのジョブで
+    # 兼ねている**ので、`==` に書き換えると `push` と `workflow_dispatch` まで
+    # 丸ごと skip される——これはまさに直上で説明した罠そのものである（今度は
+    # `pull_request` 以外の全イベントが対象になる、より広い形で）。🔑 **どちらが
+    # 正しいかは、そのジョブが*どのイベントを兼ねているか*で決まる。** `!=` で
+    # 「pull_request 以外は素通りさせる」形を維持しているのは、先例を知らなかった
+    # からではなく、**知ったうえで意図的に違えている。**
     if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     steps:
@@ -261,12 +248,12 @@ jobs:
     # `image` は定時でも走り続けて上流の apt/イメージの崩れを見張る）は変えない。
     # ⟹ `ci` の条件から `github.event_name != 'schedule'` の項だけを抜いた形にする。
     #
-    # **`!=` を使う理由（house style と違えている理由）は `ci` の if: の
+    # **`!=` を使う理由（先例と意図的に違えている理由）は `ci` の if: の
     # doc に書いた——ここでも同じ理由がそのまま当てはまる。** `image` は
     # push・pull_request・schedule・workflow_dispatch の4イベントを1つの
-    # ジョブで兼ねているので、house style の `==` 形にすると `pull_request`
-    # 以外の全イベント（push を含む）が skip される。ここも「house style に
-    # 揃えよう」で書き換えないこと。
+    # ジョブで兼ねているので、`==` の形にすると `pull_request` 以外の全
+    # イベント（push を含む）が skip される。ここも「先例に揃えよう」で
+    # 書き換えないこと。
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
