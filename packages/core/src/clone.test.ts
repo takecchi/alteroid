@@ -11425,6 +11425,385 @@ describe('クローン — 同じマネージャーの連続する report をま
 });
 
 /**
+ * Issue #841: `external`（ほぼ全部 `token-pool`）が受信箱の76.6%を占め、
+ * `#mergedHumanBatch` / `#mergedManagerReportBatch` のどちらの述語にも当たらず
+ * 1件1ターンを消費していた（issue #783 の親issue）。ここは `#mergedExternalBatch`
+ * / `#runExternalBatch` の歯である。
+ *
+ * **`#mergedManagerReportBatch` と違い、束ねてよいのは中身（`source` と
+ * `payload`）が完全に一致するものだけ**——`source` だけの一致では足りない
+ * （issue #841 が名指しした危険:「重要な1件が同じ出所の重複の中に埋もれる」）。
+ * **「束ねない」側の歯がこの PR の本体である。判定は必ずターン数（`s.calls[0]`
+ * の `inputs` の本数）で測る**——本文の文字列一致だけで測ると、束ねてしまって
+ * いるのに文言が違うだけで緑になりうる形が残る。
+ */
+describe('クローン — 中身の同じ external をまとめて読む（#841）', () => {
+  const externalEvent = (id: string, source: string, payload: unknown, at: string): InboxEvent => ({
+    type: 'external',
+    id,
+    at,
+    source,
+    payload,
+  });
+
+  const managerMessage = (id: string, managerId: string, text: string): InboxEvent => ({
+    type: 'manager_message',
+    id,
+    at: new Date().toISOString(),
+    managerId,
+    kind: 'report',
+    text,
+  });
+
+  /** 直後の書き込み・後続ターンの発火が無いことを確かめるための、短い据え置き。 */
+  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 400));
+
+  it('中身（source・payload）が完全に同じ external が3件連続で届くと、1ターンへ束ねられ、本文に件数と全件の届いた時刻が載る', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post(
+      externalEvent('e1', 'token-pool', { text: '枠が開いた' }, '2026-09-01T00:00:00.000Z'),
+    );
+    s.clone.post(
+      externalEvent('e2', 'token-pool', { text: '枠が開いた' }, '2026-09-01T00:00:01.000Z'),
+    );
+    s.clone.post(
+      externalEvent('e3', 'token-pool', { text: '枠が開いた' }, '2026-09-01T00:00:02.000Z'),
+    );
+
+    await waitFor(
+      () =>
+        (s.calls[0]?.inputs ?? []).some((input) =>
+          input.includes('同じ中身の合図を続けて **3 件** まとめて渡す'),
+        ),
+      'まとめたターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    // **束ねられたことをターン数で測る。** 先客 + まとめた1本 = 2回。
+    // 3件を別々に読めば4回になる。
+    expect(inputs).toHaveLength(2);
+
+    const merged = inputs[1] ?? '';
+    // **束の本文そのものが件数を言っていることを、行ごと逐語で固定する。**
+    // `toContain('3 件')` だけでは足りない —— 台帳の断り書き（`#commitmentNoticeFor`
+    // の「いま届いたこの 3 件も台帳に載せた（id: ...）」）が同じ部分文字列を
+    // 満たすので、`externalBatchPrompt` から件数を丸ごと落としても緑のままになる。
+    // **変異試験で実測した**（変異 `m3-drop-batch-count`: 件数の行を落としても
+    // 赤くなった歯が0本だった）。Issue #841 の受け入れ基準「束ねるときは
+    // 『N 件を畳んだ』を必ず本文に出すこと」は、この行でだけ固定されている。
+    expect(lineStartingWith(merged, '処理待ちのあいだに、同じ中身の合図を続けて')).toBe(
+      '処理待ちのあいだに、同じ中身の合図を続けて **3 件** まとめて渡す' +
+        '（本文は1回だけ。全件で `source` と中身が一致している）。',
+    );
+    expect(merged).toContain('2026-09-01T00:00:00.000Z');
+    expect(merged).toContain('2026-09-01T00:00:01.000Z');
+    expect(merged).toContain('2026-09-01T00:00:02.000Z');
+    // 本文（renderPayload）は1回だけ載る——2回目以降を出しても情報は増えない。
+    expect(merged.split('枠が開いた').length - 1).toBe(1);
+
+    // 後始末（#settleInboxEvent）は3件ぶん通る——器に未読が残らない。
+    await waitFor(
+      async () => (await s.stores.inbox.claimPending()).length === 0,
+      '3件とも消し込まれる',
+    );
+
+    // 日誌への追記も3件ぶん行われる（1回にまとめて握り潰していない）。
+    const externals = (await s.stores.journal.list({ types: ['external_event'] })) as {
+      source: string;
+    }[];
+    expect(externals.filter((entry) => entry.source === 'token-pool')).toHaveLength(3);
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('🔴 source が違えば payload が同じでも束ねない（2ターンのまま）', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post(
+      externalEvent('e1', 'token-pool', { text: '同じ中身' }, '2026-09-01T00:00:00.000Z'),
+    );
+    s.clone.post(
+      externalEvent('e2', 'runner-registry', { text: '同じ中身' }, '2026-09-01T00:00:01.000Z'),
+    );
+
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('runner-registry')),
+      '2件目のターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    // **束ねなかったことをターン数で測る。** 先客 + e1単独 + e2単独 = 3回。
+    // 束ねれば先客 + まとめた1本 = 2回になってしまう。
+    expect(inputs).toHaveLength(3);
+    expect(inputs[1] ?? '').toContain('source: token-pool');
+    expect(inputs[1] ?? '').not.toContain('runner-registry');
+    expect(inputs[2] ?? '').toContain('source: runner-registry');
+    expect(inputs[2] ?? '').not.toContain('token-pool');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('🔴 source が同じでも payload が違えば束ねない（2ターンのまま）', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post(externalEvent('e1', 'token-pool', { text: '中身A' }, '2026-09-01T00:00:00.000Z'));
+    s.clone.post(externalEvent('e2', 'token-pool', { text: '中身B' }, '2026-09-01T00:00:01.000Z'));
+
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('中身B')),
+      '2件目のターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    expect(inputs).toHaveLength(3);
+    expect(inputs[1] ?? '').toContain('中身A');
+    expect(inputs[1] ?? '').not.toContain('中身B');
+    expect(inputs[2] ?? '').toContain('中身B');
+    expect(inputs[2] ?? '').not.toContain('中身A');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('🔴 external と human_message が混在すると束ねない', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post(
+      externalEvent('e1', 'token-pool', { text: '同じ中身' }, '2026-09-01T00:00:00.000Z'),
+    );
+    s.clone.post(humanMessage('割り込む人間'));
+
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('割り込む人間')),
+      '人間の発言のターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    // 先客 + external単独 + human単独 = 3回。束ねれば2回になる。
+    expect(inputs).toHaveLength(3);
+    expect(inputs[1] ?? '').toContain('token-pool');
+    expect(inputs[1] ?? '').not.toContain('割り込む人間');
+    expect(inputs[2] ?? '').toContain('割り込む人間');
+    expect(inputs[2] ?? '').not.toContain('token-pool');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('🔴 external と manager_message（report）が混在すると束ねない', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post(
+      externalEvent('e1', 'token-pool', { text: '同じ中身' }, '2026-09-01T00:00:00.000Z'),
+    );
+    s.clone.post(managerMessage('r1', 'mgr-mix', '報告本文'));
+
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('報告本文')),
+      'マネージャーの報告のターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    expect(inputs).toHaveLength(3);
+    expect(inputs[1] ?? '').toContain('token-pool');
+    expect(inputs[1] ?? '').not.toContain('報告本文');
+    expect(inputs[2] ?? '').toContain('報告本文');
+    expect(inputs[2] ?? '').not.toContain('token-pool');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('束の上限に当たっても、外れた分は次の反復でそのまま処理される（1件も失われない。issue #783 と同じ機構）', async () => {
+    const s = setup(undefined, createMemoryStores(), {}, { ALTEROID_MERGED_BATCH_SIZE_LIMIT: '2' });
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    for (let i = 1; i <= 5; i += 1) {
+      s.clone.post(
+        externalEvent(`lim${i}`, 'token-pool', { text: '同じ中身' }, `2026-09-01T00:00:0${i}.000Z`),
+      );
+    }
+
+    // **5件目は束から外れて単独になる**（上限2件で [1+2] / [3+4] / [5単独] に
+    // 割れる）。単発の経路（`buildExternalEventPrompt`）は `at` を本文に出さない
+    // （非回帰——単発の見た目を変えない）ので、5件目が届いたことは台帳の断り書き
+    // （台帳へ載せた id の一覧）で待つ。
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('id: `lim5`')),
+      '5件目ぶんの入力が投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    // 先客 + [1+2] + [3+4] + [5単独] = 4本。上限を入れなければ先客+[1..5まとめ]の2本になる。
+    expect(inputs).toHaveLength(4);
+    expect(inputs[1] ?? '').toContain('2 件');
+    expect(inputs[2] ?? '').toContain('2 件');
+    expect(inputs[3] ?? '').not.toContain('まとめて渡す');
+
+    // **取りこぼしを撃つ歯。** 1〜5件全部が、どこかのターンの台帳の断り書き
+    // （「いま届いたこの◯件も台帳に載せた（id: ...）」）に必ず現れる——
+    // payload の中身は5件とも同一なので、本文の文字列だけでは数えられない。
+    // id は `#journalIncomingBody` / 台帳判定を通じて件ごとに必ず記録される
+    // ものなので、取りこぼしがあればここが最初に崩れる。
+    const joined = inputs.join('\n');
+    for (let i = 1; i <= 5; i += 1) {
+      expect(joined).toContain('`lim' + String(i) + '`');
+    }
+
+    await waitFor(
+      async () => (await s.stores.inbox.claimPending()).length === 0,
+      '5件とも消し込まれる',
+    );
+
+    await s.clone.stop();
+  }, 15_000);
+
+  /**
+   * issue #849（issue #783 の続き）: 上限で束を切ったという事実は
+   * `#drainMergeableWithinLimit` が `#mergedBatchTruncationNotice` へ集約して
+   * 残し、`#runTurn` の入力組み立てが誰の呼び出しにも自動で乗せる。
+   * `#mergedExternalBatch` もこの共有関数を経由する（`#mergedManagerReportBatch`
+   * / `#mergedHumanBatch` と同じ）ので、`external` の束が切れたときも
+   * 断り書きが載るはずである——ここはその歯（`clone.test.ts` の「人間の発言
+   * でも同じ断り書きが載る」と同型）。
+   *
+   * **この歯が無いと、`#pump` で `const mergedExternal = ...` を
+   * `this.#mergedBatchTruncationNotice = '';` より上に置く事故を誰も
+   * 検出できない**（置くと `#mergedExternalBatch` が立てた印を、直後の
+   * リセットが即座に拭き取り、`external` の束でだけ断り書きが黙って消える）。
+   */
+  it('external の束が上限で切れたときも、まとめ読みの断り書き（`#mergedBatchTruncationNotice`）が載る', async () => {
+    const s = setup(undefined, createMemoryStores(), {}, { ALTEROID_MERGED_BATCH_SIZE_LIMIT: '2' });
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post(
+      externalEvent('trunc1', 'token-pool', { text: '同じ中身' }, '2026-09-01T00:00:01.000Z'),
+    );
+    s.clone.post(
+      externalEvent('trunc2', 'token-pool', { text: '同じ中身' }, '2026-09-01T00:00:02.000Z'),
+    );
+    s.clone.post(
+      externalEvent('trunc3', 'token-pool', { text: '同じ中身' }, '2026-09-01T00:00:03.000Z'),
+    );
+
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('id: `trunc3`')),
+      '3件目（単独）のターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    // 先客 + [trunc1+trunc2まとめ・切った束] + [trunc3単独] = 3本。
+    expect(inputs).toHaveLength(3);
+
+    const truncated = inputs[1] ?? '';
+    expect(lineStartingWith(truncated, '[system] **このターンへ束ねる合図は、上限')).toBe(
+      '[system] **このターンへ束ねる合図は、上限（2 件）で切った束である（この束は 2 件）。**' +
+        '同じ束に入るはずの合図が、待ち行列の先頭にあと 1 件連続して残っている。',
+    );
+    expect(truncated).toContain(
+      '**1件も失われていない** —— 上限で止めただけで、外れた分は次のターンで同じ形でまた束ね直される。',
+    );
+
+    // 3件目（単独）には切った断り書きが載らない——待ち行列に何も残っていない。
+    const solo = inputs[2] ?? '';
+    expect(solo).not.toContain('このターンへ束ねる合図は、上限');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('1件だけのときは既存の buildExternalEventPrompt の本文がそのまま出る（単発経路の非回帰）', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post(externalEvent('solo', 'ci', { status: 'failure' }, new Date().toISOString()));
+
+    await waitFor(
+      () => s.calls[0]?.inputs[1]?.includes('failure') ?? false,
+      '2本目のターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    expect(inputs).toHaveLength(2);
+    const solo = inputs[1] ?? '';
+    expect(solo).toContain(
+      '[system] 外部から出来事が届いた（source: ci）。人間はこれを見ていない。',
+    );
+    // まとめ読みの前置き（件数の表示）が載らない。
+    expect(solo).not.toContain('まとめて渡す');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  /**
+   * **鍵が作れない（`JSON.stringify` が投げる循環参照）場合は「束ねない」へ
+   * 倒す。** `#mergedExternalBatch` は `#pump` の `try` の外で呼ばれるので、
+   * ここで例外を漏らせば受信箱のループそのものが死ぬ——それを撃つ歯である。
+   * 循環参照2件の後に正常な external をもう1件続け、**そちらも処理される
+   * こと**（＝ループが生きていること）を確かめる。
+   */
+  it('鍵が作れない payload（循環参照）でも束ねず、受信箱のループは死なない', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    const circular: Record<string, unknown> = { text: '循環参照' };
+    circular.self = circular;
+
+    s.clone.post(externalEvent('circ1', 'token-pool', circular, '2026-09-01T00:00:00.000Z'));
+    s.clone.post(externalEvent('circ2', 'token-pool', circular, '2026-09-01T00:00:01.000Z'));
+    // ループが生きていることを確かめるため、正常な合図をもう1件続ける。
+    s.clone.post(
+      externalEvent('normal', 'token-pool', { text: '正常' }, '2026-09-01T00:00:02.000Z'),
+    );
+
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('正常')),
+      '循環参照の後も処理が続く',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    // 鍵が作れないので束ねない ⟹ 先客 + circ1単独 + circ2単独 + normal単独 = 4本。
+    expect(inputs).toHaveLength(4);
+
+    await waitFor(
+      async () => (await s.stores.inbox.claimPending()).length === 0,
+      '4件とも消し込まれる',
+    );
+
+    await s.clone.stop();
+  }, 15_000);
+});
+
+/**
  * 割り込める起点の集合そのものを固定する。
  *
  * ## なぜ doc では守れないのか

@@ -37,6 +37,7 @@ import {
   distillSucceededEntry,
 } from './distill-gap.js';
 import { excerptLine } from './excerpt.js';
+import { inboxBacklogDedupeKey } from './inbox-backlog.js';
 import {
   inboxEventShape,
   journalEntryShape,
@@ -351,8 +352,9 @@ const UNKNOWN_AGENT_TYPE = '(不明)';
 const DENIED_TOOL_USE_MEMORY_LIMIT = 512;
 
 /**
- * `#mergedHumanBatch` / `#mergedManagerReportBatch` が1ターンへ束ねる合図の
- * 最大件数（issue #783）。
+ * `#mergedHumanBatch` / `#mergedManagerReportBatch` / `#mergedExternalBatch`
+ * が1ターンへ束ねる合図の最大件数（issue #783、`#mergedExternalBatch` は
+ * issue #841）。
  *
  * **これは回数制限ではない**（`SCHEDULE_STORE_ATTEMPTS` 等と同じ言い方をここでは
  * 使わない——あちらは「拾い直しの試行回数」で、上限に当たっても仕事は失われない
@@ -702,10 +704,11 @@ export interface CloneOptions {
    */
   humanPriority?: boolean;
   /**
-   * `#mergedHumanBatch` / `#mergedManagerReportBatch` が1ターンへ束ねる合図の
-   * 最大件数。省略すると `env` の `ALTEROID_MERGED_BATCH_SIZE_LIMIT`、それも
-   * 無ければ既定50件（`resolveMergedBatchSizeLimit`）。主にテスト用の直渡しで、
-   * `humanPriority` と同じ形である。
+   * `#mergedHumanBatch` / `#mergedManagerReportBatch` / `#mergedExternalBatch`
+   * が1ターンへ束ねる合図の最大件数。省略すると `env` の
+   * `ALTEROID_MERGED_BATCH_SIZE_LIMIT`、それも無ければ既定50件
+   * （`resolveMergedBatchSizeLimit`）。主にテスト用の直渡しで、`humanPriority`
+   * と同じ形である。
    */
   mergedBatchLimit?: number;
   /**
@@ -2306,12 +2309,15 @@ class Clone implements CloneHost {
         continue;
       }
 
-      // 処理待ちのあいだに積み上がった**続きの発言・報告**を、ここで一緒に取り出す
-      // （`#mergedHumanBatch` / `#mergedManagerReportBatch`）。両方とも `null`
-      // なら今までどおりこの1件だけを読む。**2つが同時に非 null になることは
-      // 無い** —— 対象の型判定が先頭で分かれている（`event.type ===
-      // 'human_message'` か `isManagerReport(event)` か）ので、両方を毎回計算
-      // しても排他的である。
+      // 処理待ちのあいだに積み上がった**続きの発言・報告・外部からの出来事**を、
+      // ここで一緒に取り出す（`#mergedHumanBatch` / `#mergedManagerReportBatch` /
+      // `#mergedExternalBatch`）。3つとも `null` なら今までどおりこの1件だけを
+      // 読む。**3つが同時に2つ以上非 null になることは無い** —— 対象の型判定が
+      // 先頭で分かれている（`event.type === 'human_message'` か
+      // `isManagerReport(event)` か `event.type === 'external'` か）ので、3つ
+      // 全部を毎回計算しても互いに排他的である（issue #841 で3本目を足した時点で
+      // 「2つが」という数え方は文字どおりには偽になるが、根拠だった排他性その
+      // ものは変わっていない——先頭の型判定が3方向に分かれているだけである）。
       //
       // **ここで言う「積み上がった続きの発言」は、かつては到着順で連続して
       // いたものだけを指していた。** いまは人間優先（`CLONE_HUMAN_PRIORITY_ENV_KEY`）
@@ -2319,16 +2325,24 @@ class Clone implements CloneHost {
       // 到着順では間に人間以外が挟まっていた発言どうしが、並べ替えられた結果
       // として連続することもある（`#mergedHumanBatch` 本体の doc「並びは到着順
       // とは限らない」）。書かないと、この一文が黙って偽になる。**マネージャーの
-      // 報告は人間優先の並べ替えに乗らない**（`post` が `insertAfterLast` を渡すのは
-      // `isHumanOriginated(event)` が真のときだけ）ので、`#mergedManagerReportBatch`
-      // 側の並びは常に到着順のままである。
+      // 報告・外部からの出来事は人間優先の並べ替えに乗らない**（`post` が
+      // `insertAfterLast` を渡すのは `isHumanOriginated(event)` が真のときだけ）
+      // ので、`#mergedManagerReportBatch` / `#mergedExternalBatch` 側の並びは
+      // 常に到着順のままである。
+      //
       // **まとめ読みの判定を呼ぶ前に必ずリセットする**（`#mergedBatchTruncationNotice`
       // の doc）。`#drainMergeableWithinLimit` は対象外の起点では呼ばれないため、
       // ここで戻さないと前の反復で切ったときの断り書きが誤って持ち越される。
+      // **`#mergedExternalBatch` もこの関数を経由する（`#mergedManagerReportBatch`
+      // と同じ）ので、`external` の束が上限で切れたときの断り書きも自動で乗る**
+      // ——ここより下に置くこと。上に置くと、このリセットが `#mergedExternalBatch`
+      // の呼び出しで立った印を即座に拭き取り、`external` の束でだけ断り書きが
+      // 黙って消える。
       this.#mergedBatchTruncationNotice = '';
       const mergedHuman = this.#mergedHumanBatch(event);
       const mergedReports = this.#mergedManagerReportBatch(event);
-      const batch: InboxEvent[] = mergedHuman ?? mergedReports ?? [event];
+      const mergedExternal = this.#mergedExternalBatch(event);
+      const batch: InboxEvent[] = mergedHuman ?? mergedReports ?? mergedExternal ?? [event];
 
       this.#redeliveryNotice = this.#redeliveryNoticeFor(batch);
       // **ここは `try` の外である。** 投げれば `for await` ごと抜けて受信箱の
@@ -2362,6 +2376,7 @@ class Clone implements CloneHost {
       try {
         if (mergedHuman !== null) await this.#runHumanTurn(mergedHuman);
         else if (mergedReports !== null) await this.#runManagerReportBatch(mergedReports);
+        else if (mergedExternal !== null) await this.#runExternalBatch(mergedExternal);
         else await this.#handle(event);
       } catch (error) {
         await this.#reportFailure(this.#conversationOf(event), String(error));
@@ -2518,6 +2533,91 @@ class Clone implements CloneHost {
     // 作れてしまう）。
     if (rest.length === 0) return null;
     return [event, ...rest.filter(isManagerReport)];
+  }
+
+  /**
+   * 取り出した合図と一緒に1ターンで読む、**中身が同じ `external` の連続**を
+   * 決める（issue #841）。まとめないなら `null`。
+   *
+   * **`#mergedManagerReportBatch` と同型だが、束ねる条件が違う。** あちらは
+   * 同じ `managerId` でありさえすれば中身が違う報告でも束ねる —— 報告への
+   * 応答は「続きの指示」の1種類しか無く、混ぜても意味が保てるからである
+   * （`#mergedManagerReportBatch` の doc）。**`external` は違う。** 「外の
+   * 世界で何かが起きた」という、1件ごとに別の意味を持ちうる合図であり、
+   * 同じ出所（`source`）から来た中身の違う合図まで混ぜると、重要な1件が
+   * 同じ出所の重複の中に埋もれる（issue #841 が名指しした危険）。**⟹
+   * `source` だけでなく中身（`payload`）まで一致することを条件にする。**
+   *
+   * **「中身が同じか」の判定は {@link inboxBacklogDedupeKey} を再利用する
+   * だけで、独自の比較は書かない。** そこがこのリポジトリで「同じ本文か」を
+   * 判定する唯一の場所である（`inbox-backlog.ts` の doc「SQL 側に同じ判定を
+   * 書かないこと」）。ここで別の比較を書くと、畳み込みの鍵が2つに割れる ——
+   * それ自体が issue #783 が名指しした欠陥の形そのものである。
+   *
+   * **`external` に限り、鍵の衝突（`inboxBacklogDedupeKey` の doc が挙げる
+   * 限界の1つ目）で別の本文が同じ鍵へ潰れる経路は塞がっている。** 鍵は
+   * `['external', source, JSON.stringify(payload ?? null)]` を NUL 区切りで
+   * 繋いだものである。**第3フィールド（`JSON.stringify` の出力）は生の NUL を
+   * 1つも含まない** —— `JSON.stringify` は文字列の中の制御文字としての NUL を
+   * `\u0000` という6文字（バックスラッシュ・u・0・0・0・0）へエスケープして
+   * 出力する（実測は `inbox-backlog.test.ts` に置く）。⟹ 鍵の文字列に現れる
+   * **最後の NUL は、常に「`source` と `payload` の境界」を指す** ——
+   * その NUL より後ろ（`payload` 側）にはもう NUL が現れないため、2つの鍵が
+   * 文字列として一致するなら、その最後の NUL の位置は両方の鍵で同じでしか
+   * ありえず、そこで区切った前後（`source` と `JSON.stringify(payload)`）も
+   * 両方で文字どおり一致する。**`source` 自身に NUL が混ざっていても、この
+   * 論法は崩れない** —— 崩れるとしたら `payload` 側に追加の NUL が要るが、
+   * それは無い。
+   *
+   * **鍵が作れない場合は「束ねない」へ倒す。** {@link inboxBacklogDedupeKey}
+   * は `JSON.stringify` が投げる入力（循環参照・BigInt を含む payload）で
+   * 例外を投げうる。**この関数は `#pump` の `try` の外で呼ばれる** ので、
+   * ここで投げれば受信箱のループそのものが死ぬ（`#pump` の「ここは `try` の
+   * 外である」のコメントと同じ理由・同じ被害）。鍵の計算に失敗したら
+   * `noteDroppedRecord` で跡を残し、この合図は束ねずに1件1ターンの経路
+   * （既存のふるまい）へ落とす —— 能力の削除にはならない。
+   */
+  #mergedExternalBatch(event: InboxEvent): ExternalEvent[] | null {
+    if (event.type !== 'external') return null;
+    if (!this.#mergeable(event)) return null;
+
+    const key = this.#externalMergeKey(event);
+    // 鍵が作れない（`JSON.stringify` が投げた）なら束ねない。既存の1件1ターン
+    // の経路へ落ちるだけで、能力は削れていない。
+    if (key === null) return null;
+
+    // **`queued.type === 'external'` は鍵の第1フィールドと重複する**（鍵が
+    // 一致する時点で `queued.type` は必ず `'external'` である —— 型ごとに
+    // 鍵の先頭が固定の別々の文字列で、そこが一致しない限り鍵全体も一致しない）。
+    // それでも型を絞り込むためにここへ残す —— TypeScript は文字列の一致から
+    // 型を絞れないので、下の `isExternalEvent` フィルタと合わせて明示する。
+    const rest = this.#drainMergeableWithinLimit(
+      (queued) => queued.type === 'external' && this.#externalMergeKey(queued) === key,
+    );
+    // **1件だけなら `null`**（`#mergedManagerReportBatch` と同じ理由 ——
+    // まとめる側へ寄せると、いちばん多い「1件だけ」の本文にまとめ読みの
+    // 前置きが載る形が作れてしまう）。
+    if (rest.length === 0) return null;
+    return [event, ...rest.filter(isExternalEvent)];
+  }
+
+  /**
+   * `#mergedExternalBatch` が束ねる鍵を計算する。**{@link inboxBacklogDedupeKey}
+   * を呼ぶだけで、独自の比較は書かない**（`#mergedExternalBatch` の doc）。
+   *
+   * 計算に失敗したら（`JSON.stringify` が投げる payload）跡を
+   * `noteDroppedRecord` に残して `null` を返す。**本文は残さない** ——
+   * `inboxEventShape` が返すのは `source` の長さと payload の有無だけで、
+   * `noteDroppedRecord` 自身の「本文を出さない」という約束（`dropped-record.ts`
+   * の doc）をここでも守る。
+   */
+  #externalMergeKey(event: InboxEvent): string | null {
+    try {
+      return inboxBacklogDedupeKey(event);
+    } catch (error) {
+      noteDroppedRecord('external の束ね鍵の計算', inboxEventShape(event), error);
+      return null;
+    }
   }
 
   /**
@@ -2707,6 +2807,33 @@ class Clone implements CloneHost {
     // **`now` はここで1度だけ取る**（`#handle` の単発経路が `managerPrompt` へ
     // 渡すのと同じ形。#562 PR-1）。`managerReportBatchPrompt` を純関数のまま保つ。
     await this.#runInternal(managerReportBatchPrompt(events, settlements, new Date()));
+  }
+
+  /**
+   * 中身の同じ `external` を1ターンとして通す（issue #841）。
+   * **`#mergedExternalBatch` が `null` を返したときは呼ばれない**（1件だけの
+   * 経路は今までどおり `#handle` の `'external'` 分岐を通す）ので、ここへ来る
+   * `events` は常に2件以上である。
+   *
+   * **`#handle` の `'external'` 分岐がしていることを、件数ぶん繰り返す。**
+   * 落とすと、まとめた側だけ日誌への追記が抜ける形になり、能力の削除になる
+   * （AGENTS.md の指示。`#runManagerReportBatch` と同じ理由）。
+   *
+   * **片付け済みの配り直しはここへ来ない。理由は `#runManagerReportBatch` と
+   * 同じ2重の理由である** —— `#mergeable` が `#redelivered` に載っている
+   * 合図を弾かなくなった一方（issue #783）、`#pump` がまとめ読みの判定より
+   * **前**で畳んでいる（`#foldClosedRedelivery`）。
+   */
+  async #runExternalBatch(events: ExternalEvent[]): Promise<void> {
+    for (const event of events) {
+      // **日誌の書き込みは `#handle` の `'external'` 分岐と同じものを呼ぶ**
+      // （`#journalIncomingBody`）。件数ぶん個別に書く —— 1回にまとめると
+      // 「まとめ読みは全文が届いた順に渡り、合図は件数ぶん器に残り、後始末も
+      // 件数ぶん通る」（`#mergedHumanBatch` の doc）が日誌の側で破れる。
+      await this.#journalIncomingBody(event);
+    }
+
+    await this.#runInternal(externalBatchPrompt(events));
   }
 
   /**
@@ -6818,6 +6945,13 @@ function isManagerReport(event: InboxEvent): event is ManagerReportMessage {
   return event.type === 'manager_message' && event.kind === 'report';
 }
 
+/** 外部からの出来事1件（issue #841）。`HumanMessage` / `ManagerReportMessage` と同型。 */
+export type ExternalEvent = Extract<InboxEvent, { type: 'external' }>;
+
+function isExternalEvent(event: InboxEvent): event is ExternalEvent {
+  return event.type === 'external';
+}
+
 /**
  * 人間の発言をターン1本の本文にする。
  *
@@ -7204,6 +7338,80 @@ function managerReportBatchPrompt(
     '',
     '続きが要るなら、それぞれの報告に対して `manager_send` で指示を出せ。要らないなら何もしなくてよい。',
     '学びや判断の基準になったことがあれば記憶へ移すこと。',
+  ].join('\n');
+}
+
+/**
+ * 中身の同じ `external` が連続して届いたとき、ターン1本の本文にする
+ * （`#mergedExternalBatch`。issue #841）。
+ *
+ * **`managerReportBatchPrompt` の姉妹版だが、束ね方が違う。** あちらは
+ * `managerId` だけを揃えて中身の違う報告を並べて渡す（全文を件数ぶん出す）。
+ * こちらは `#mergedExternalBatch` が {@link inboxBacklogDedupeKey} で
+ * `source` と `payload` の一致まで確かめてから束ねるので、束の中で `id` と
+ * `at`（1回の発行ごとに必ず変わる2つ。`inboxBacklogDedupeKey` の doc）を
+ * 除いた中身は全件同一である。
+ *
+ * **⟹ 本文（`renderPayload`）は1回だけ出す。** 2回目以降を出しても、同じ
+ * 文字列が繰り返されるだけで1文字も情報が増えない——根拠は上の一致保証
+ * そのもの（`source` も `JSON.stringify(payload)` も全件で文字どおり一致
+ * している）。
+ *
+ * **それでも1文字も捨てない。** 束の中で件ごとに違いうるのは `id` と `at`
+ * の2つだけなので、**全件の `at` を本文へ出す**（`MERGED_BATCH_SIZE_LIMIT`
+ * ＝50 が上限なので分量は有界）。`id` は出さない —— クローンにとって
+ * 意味を持つのは「いつ・何件」であって、内部の識別子ではない。`at` の並びが
+ * あれば「何件届いたか」も「いつからいつまでか」も本文から読める。
+ *
+ * **束は同じ出来事の反復とは限らないと明記する。** 中身（`source` /
+ * `payload`）が同じでも、外の世界で別々に発行された合図である可能性がある
+ * （issue #841 が名指しした危険——「重要な1件が同じ出所の重複の中に埋もれる」）。
+ * **「重複だから無視してよい」とは書かない。**
+ *
+ * **何が届いたら何をするかの対応表は書かない**（`buildExternalEventPrompt`
+ * と同じ理由。`prompt.ts` の `ExternalEventPromptInput` の doc）。
+ *
+ * **呼び出し元は常に2件以上で呼ぶ**（`#mergedExternalBatch` が1件のとき
+ * `null` を返し、`#pump` はそちらを `#handle` の単発経路
+ * （`buildExternalEventPrompt`）へ落とすため）。0件・1件の来客に別の見た目を
+ * 用意しないのは `managerReportBatchPrompt` の doc と同じ理由——届かない
+ * 分岐に見た目を用意しても検証できない。
+ *
+ * **純関数のまま保つ。** 時刻を出力に使わないので `now` を引数に取る必要も
+ * 無い（`managerReportBatchPrompt` と違い、束の中の経過時間を報告しない——
+ * 全件の `at` をそのまま出すので、経過はクローン自身が計算できる）。
+ *
+ * **⚠️ 「N 件」は束の件数であって「届いた総数」ではない（issue #783 の続き）。**
+ * `humanTurnText` / `managerReportBatchPrompt` の同じ注記と理由は同一——
+ * `#drainMergeableWithinLimit` は上限で束を切ることがあり、切ったときは
+ * `events.length` が実際に届いた総数より小さくなる。**だから文面は
+ * 「N件が届いた」ではなく「N件をまとめて渡す」の形にしてある**——前者は
+ * 上限に当たった回に偽になるが、後者はこの束の件数を言っているだけなので、
+ * 上限に当たったかどうかに関わらず常に真である。**切ったという事実そのものは
+ * `#mergedBatchTruncationNotice`（別の断り書き）が言う——ここで重ねて言わない。**
+ */
+function externalBatchPrompt(events: ExternalEvent[]): string {
+  const head = events[0];
+  if (head === undefined) return '';
+
+  const body = renderPayload(head.payload);
+  const timestamps = events.map((event) => event.at).join(' / ');
+
+  return [
+    `[system] 外部から出来事が届いた（source: ${head.source}）。人間はこれを見ていない。`,
+    `処理待ちのあいだに、同じ中身の合図を続けて **${events.length} 件** まとめて渡す` +
+      '（本文は1回だけ。全件で `source` と中身が一致している）。',
+    `届いた時刻（届いた順）: ${timestamps}`,
+    '',
+    '**同じ中身が複数回届いたからといって、同じ出来事の繰り返しとは限らない**' +
+      '——外の世界で別々に発行された合図である可能性がある。',
+    '',
+    '中身を読み、記憶にある目的と価値観に照らして、何をするか決めよ。動く必要が無ければ何もしなくてよい。',
+    '判断の根拠が記憶に無く、しかも放っておけないことなら `ask_human` に積む。聞かずに動いたなら `journal_write` に残せ。',
+    '',
+    '---',
+    '',
+    body,
   ].join('\n');
 }
 

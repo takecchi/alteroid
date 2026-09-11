@@ -262,6 +262,52 @@ describe('inboxBacklogDedupeKey', () => {
 
     expect(inboxBacklogDedupeKey(a)).not.toBe(inboxBacklogDedupeKey(b));
   });
+
+  /**
+   * ⭐ issue #841 が `external` の束ね鍵として {@link inboxBacklogDedupeKey} を
+   * 再利用してよい根拠の裏取り。**`JSON.stringify` は生の NUL を1つも出力
+   * しない**（制御文字としての NUL は `\u0000` という6文字へエスケープされる）
+   * ので、鍵の第3フィールド（`JSON.stringify(payload ?? null)`）には NUL が
+   * 絶対に現れない。⟹ 鍵の文字列に現れる**最後の NUL は、常に `source` と
+   * `payload` の境界を指す**——`source` 自身に生の NUL を混ぜて境界をずらそう
+   * としても、`payload` 側の json にはもう NUL が無いため境界はずれない。
+   */
+  it('⭐ external: JSON.stringify は payload に生の NUL を出力しない（第3フィールドは NUL を含まない）', () => {
+    const NUL = '\u0000';
+    const withNul = { text: `x${NUL}y` };
+    const json = JSON.stringify(withNul);
+    expect(json).not.toContain(NUL);
+    // エスケープされた6文字表現としては現れる。
+    expect(json).toContain('\\u0000');
+  });
+
+  /**
+   * ⭐ 直上の裏取りが実際に効いていることを、束ね鍵そのもので測る。**`source`
+   * に生の NUL を混ぜて、あたかも `source`/`payload` の境界をずらそうとしても、
+   * 鍵は衝突しない。**
+   */
+  it('⭐ external: source に生の NUL を混ぜて境界をずらそうとしても、鍵は衝突しない（NUL区切りの裏取り）', () => {
+    const NUL = '\u0000';
+    const a: InboxEvent = {
+      type: 'external',
+      id: 'id-a',
+      at: '2026-09-11T00:00:00.000Z',
+      source: 'foo',
+      payload: { x: 1 },
+    };
+    // `source` の中に「NUL + a の payload を JSON 化した文字列」を丸ごと埋め込み、
+    // 自分の payload は `null` にする——素朴な文字列連結ならここで a と衝突しうる
+    // 形を狙っている。
+    const b: InboxEvent = {
+      type: 'external',
+      id: 'id-b',
+      at: '2026-09-11T00:00:00.000Z',
+      source: `foo${NUL}${JSON.stringify({ x: 1 })}`,
+      payload: null,
+    };
+
+    expect(inboxBacklogDedupeKey(a)).not.toBe(inboxBacklogDedupeKey(b));
+  });
 });
 
 describe('summarizeInboxBacklog', () => {
