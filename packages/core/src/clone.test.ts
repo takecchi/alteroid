@@ -11638,9 +11638,14 @@ describe('クローン — 中身の同じ external をまとめて読む（#841
     s.clone.post(humanMessage('先客'));
     await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
 
+    // **`source` は `'ci'`（束ねの挙動だけを測るための任意値）。** かつては
+    // `'token-pool'` を使っていたが、#852 で `commitmentFor` がその文字列を
+    // 台帳を開かない合図として特別扱いするようになったため、この歯が待っている
+    // 「台帳に載せた」の断り書き（下）が出なくなっていた——束ねそのものは
+    // `source` の値に依らないので、予約語と衝突しない値へ変えてある。
     for (let i = 1; i <= 5; i += 1) {
       s.clone.post(
-        externalEvent(`lim${i}`, 'token-pool', { text: '同じ中身' }, `2026-09-01T00:00:0${i}.000Z`),
+        externalEvent(`lim${i}`, 'ci', { text: '同じ中身' }, `2026-09-01T00:00:0${i}.000Z`),
       );
     }
 
@@ -11699,15 +11704,11 @@ describe('クローン — 中身の同じ external をまとめて読む（#841
     s.clone.post(humanMessage('先客'));
     await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
 
-    s.clone.post(
-      externalEvent('trunc1', 'token-pool', { text: '同じ中身' }, '2026-09-01T00:00:01.000Z'),
-    );
-    s.clone.post(
-      externalEvent('trunc2', 'token-pool', { text: '同じ中身' }, '2026-09-01T00:00:02.000Z'),
-    );
-    s.clone.post(
-      externalEvent('trunc3', 'token-pool', { text: '同じ中身' }, '2026-09-01T00:00:03.000Z'),
-    );
+    // `source` は `'ci'`（直前の歯と同じ理由——#852 で `'token-pool'` は台帳を
+    // 開かなくなったので、待ち条件が使う「台帳に載せた」の断り書きが出ない）。
+    s.clone.post(externalEvent('trunc1', 'ci', { text: '同じ中身' }, '2026-09-01T00:00:01.000Z'));
+    s.clone.post(externalEvent('trunc2', 'ci', { text: '同じ中身' }, '2026-09-01T00:00:02.000Z'));
+    s.clone.post(externalEvent('trunc3', 'ci', { text: '同じ中身' }, '2026-09-01T00:00:03.000Z'));
 
     await waitFor(
       () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('id: `trunc3`')),

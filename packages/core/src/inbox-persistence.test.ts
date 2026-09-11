@@ -103,17 +103,25 @@ function bootClone(
 }
 
 /**
- * token-pool の「通る状態に戻った」通知の形を模した `external` 合図
- * （`apps/daemon/src/index.ts` が実際に post する形と同じ——`type: 'external'`。
- * `source` の具体の値は `packages/core` には無い概念なので、ここでは自分の
- * 文字列を使う。`redeliveryGate` は型と文脈だけで判定するので、これで足りる）。
+ * 汎用の `external` 合図（`apps/daemon/src/index.ts` が実際に post する形と
+ * 同じ——`type: 'external'`）。`redeliveryGate` は型と文脈だけで判定するので、
+ * `source` の具体の値は何でもよい。
+ *
+ * **⚠️ Issue #852 より前は `source: 'token-pool'` を使っていた。** 当時の
+ * doc は「`source` の具体の値は `packages/core` には無い概念なので、ここでは
+ * 自分の文字列を使う」と書いていたが、#852 で `commitmentFor`
+ * （`clone.ts`）がまさにこの文字列を特別扱いするようになった
+ * （`isDaemonSelfNotice`）——このヘルパはただの汎用フィクスチャのつもりで
+ * 予約語を使っていたため、`redeliveryGate` の歯（本ファイル）のうち台帳が
+ * 開くことを前提にしていたものが赤くなった。**予約語と衝突しない値へ
+ * 変えてある。**
  */
 function externalNotice(
   payload: string,
   id = 'evt-ext',
   at = '2026-08-01T00:00:00.000Z',
 ): InboxEvent {
-  return { type: 'external', id, at, source: 'token-pool', payload };
+  return { type: 'external', id, at, source: 'redelivery-gate-probe', payload };
 }
 
 /** マネージャーの報告 = 実測で消えていたもの。 */
@@ -990,7 +998,7 @@ describe('redeliveryGate（Issue #783 続き）: `#restoreUnread` の門', () =>
       externalEvents.some(
         (entry) =>
           entry.type === 'external_event' &&
-          entry.source === 'token-pool' &&
+          entry.source === 'redelivery-gate-probe' &&
           entry.summary.includes('GATED-NOTICE-2 本文はこれだけ長くしておく'),
       ),
     ).toBe(true);
