@@ -2642,6 +2642,24 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
         expect(outline).toContain('全 2 節');
       });
 
+      /**
+       * ⚠️ 境界値（`offset === 節数`）を単独で固定する。**節数より大きい値
+       * （直上の歯）だけでは、`offset >= pool.length` を `offset > pool.length`
+       * に弱めるオフバイワンを検出できない**——直上の歯は `offset=5` を
+       * 「節数2より大きい」でしか使っておらず、`>` でも `>=` でも同じく
+       * 拒まれるので通ってしまう。ちょうど境界（節数と同じ値）を別に
+       * 固定することで、この2つの演算子を区別する。
+       */
+      it('offset はちょうど節数と同じ値でも範囲外として断る（境界値。節数より大きい値だけでは区別できない）', () => {
+        const sections = scanMemorySections('# A\n本文\n\n# B\n本文\n').sections;
+
+        const outline = renderMemoryOutline(sections, { offset: 2 });
+
+        expect(outline).toContain('offset=2');
+        expect(outline).toContain('節は無い');
+        expect(outline).toContain('全 2 節');
+      });
+
       it('offset は続きの offset の値そのものと、いま何節目から何節目までかを言う', () => {
         const sections = scanMemorySections(flood(400)).sections;
 
