@@ -91,7 +91,7 @@ describe('alteroid credential list', () => {
 
     const text = read();
     expect(text).toContain('正本に置かれた環境変数はありません');
-    expect(text).toContain('器の環境変数に在るものだけで走ります');
+    expect(text).toContain('デーモン（クローン）の環境変数に在るものだけで走ります');
     expect(text).toContain('alteroid credential set <名前> --file <path>');
   });
 
@@ -218,7 +218,7 @@ describe('alteroid credential remove', () => {
     expect(sent.map((entry) => entry.method)).toEqual(['GET']);
     const text = read();
     expect(text).toContain('NPM_TOKEN は正本に置かれていません');
-    expect(text).toContain('器の環境変数に同じ名前が在れば');
+    expect(text).toContain('デーモン（クローン）の環境変数に同じ名前が在れば');
   });
 
   it('置かれていれば空文字で外す（器の側からも消える）', async () => {

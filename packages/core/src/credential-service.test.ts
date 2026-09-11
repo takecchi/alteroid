@@ -70,12 +70,16 @@ function registryOf(runners: RunnerClient[]) {
   } as never;
 }
 
-function serviceOf(runners: RunnerClient[] = []) {
+function serviceOf(runners: RunnerClient[] = [], env: NodeJS.ProcessEnv = {}) {
   const stores = createMemoryStores();
   const service = createCredentialService({
     stores,
     runners: registryOf(runners),
     withheldEnvKeys: [...WITHHELD],
+    // **器の env を明示で渡す（既定の `process.env` に依らせない）。** 既定のままだと、
+    // 検証を走らせた機械に `GH_TOKEN` が在るかどうかで結果が変わる ——
+    // 実際、`env` の土台を足した直後にこのファイルの5本がそれで落ちた。
+    env,
   });
   return { stores, service };
 }
@@ -219,15 +223,61 @@ describe('置かせない名前', () => {
 });
 
 describe('名乗ってきた runner へ降ろし直す', () => {
-  it('正本が空なら1文字も配らない（器の環境変数から拾った鍵を消して回らない）', async () => {
+  /**
+   * **⚠️ このテストは 2026-09-11 に期待値を反転した。** 元の題と本文は下に残してある。
+   *
+   * 元: 「正本が空なら1文字も配らない（器の環境変数から拾った鍵を消して回らない）」
+   * ——runner が**自分の env から種を拾う器**だったので、空を配るとその種を消して
+   * 回る形になり、移行の途中で資格が消えるためだった。
+   *
+   * **その前提が無くなった**（人間の決定 2026-09-11）。runner は自分の env から
+   * 1文字も拾わない（`apps/runner/src/index.ts` の `seed: {}`、`runner.ts` の
+   * `#childEnv()`）。⟹ **配らなければ鍵はどこにも無い。** だから「正本が空」のときに
+   * 見るべきものは「配らないこと」ではなく、**クローンの器の env から配ること**である。
+   *
+   * **保証は弱くなっていない。** 守る対象が「runner の種を消さない」から
+   * 「鍵の出所をクローン1つに保つ」へ移り、後者のほうが強い（runner の env に
+   * 何が在っても子には届かない）。
+   */
+  it('正本が空でも、クローンの器の env に在れば配る（配らなければ鍵はどこにも無い）', async () => {
     const runner = fakeRunner();
-    // 器の環境変数（`x-shared-env`）から種を拾った状態
-    runner.held.set('GH_TOKEN', 'ghp_from_env');
-    const { service } = serviceOf([runner]);
+    const { stores, service } = serviceOf([runner], { GH_TOKEN: 'ghp_from_clone_env' });
+
+    const result = await service.syncRunner(runner);
+
+    expect(result?.map((entry) => entry.name)).toEqual(['GH_TOKEN']);
+    expect(runner.held.get('GH_TOKEN')).toBe('ghp_from_clone_env');
+    // **正本は書き換えない。** 器の env は「最後の土台」であって正本ではない
+    expect(await stores.credentials.list()).toEqual([]);
+  });
+
+  it('正本にも器の env にも無ければ、1文字も配らない（「全部外せ」とは言わない）', async () => {
+    const runner = fakeRunner();
+    const { service } = serviceOf([runner], {});
 
     expect(await service.syncRunner(runner)).toBeNull();
     expect(runner.received).toEqual([]);
-    expect(runner.held.get('GH_TOKEN')).toBe('ghp_from_env');
+  });
+
+  it('正本が在れば器の env より正本が勝つ（人間が明示的に置いたほうを配る）', async () => {
+    const runner = fakeRunner();
+    const { service } = serviceOf([runner], { GH_TOKEN: 'ghp_from_clone_env' });
+    await service.apply([{ name: 'GH_TOKEN', value: 'ghp_from_vault' }]);
+    runner.received.length = 0;
+
+    await service.syncRunner(runner);
+
+    expect(runner.held.get('GH_TOKEN')).toBe('ghp_from_vault');
+  });
+
+  it('プールが正本を持つ名前は、器の env に在っても配らない（撒き手を2つにしない）', async () => {
+    // **回し手（`token-spread.ts`）が撒く名前である。** ここが同じ名前を降ろすと、
+    // 名乗り直しのたびに回した鍵を巻き戻す。
+    const runner = fakeRunner();
+    const { service } = serviceOf([runner], { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-from-env' });
+
+    expect(await service.syncRunner(runner)).toBeNull();
+    expect(runner.received).toEqual([]);
   });
 
   it('指紋が同じものは降ろさない（再接続のたびにセッションを畳ませない）', async () => {

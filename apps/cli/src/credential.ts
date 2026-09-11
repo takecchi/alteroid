@@ -48,8 +48,8 @@ export async function credentialListCommand(): Promise<void> {
   if (view.credentials.length === 0) {
     stdout.write('正本に置かれた環境変数はありません。\n');
     stdout.write(
-      '**この状態では、マネージャーは器の環境変数に在るものだけで走ります**' +
-        '（`compose.yaml` の x-shared-env / Railway の Shared Variables）。\n',
+      '**この状態では、マネージャーはデーモン（クローン）の環境変数に在るものだけで走ります。**\n' +
+        '（runner 側の環境変数は見ません —— runner は自分の env から鍵を1文字も拾いません）\n',
     );
     stdout.write('置くには: alteroid credential set <名前> --file <path>\n');
     return;
@@ -107,7 +107,7 @@ export async function credentialRemoveCommand(name: string): Promise<void> {
     // **器の環境変数の側は消えない。** ここで黙ると、「外したのにマネージャーが
     // まだ持っている」理由が人間には分からない。
     stdout.write(
-      'なお器の環境変数に同じ名前が在れば、マネージャーはそれで走り続けます' +
+      'なおデーモン（クローン）の環境変数に同じ名前が在れば、そちらが配られます' +
         '（この口が持つのは正本の側だけです）。\n',
     );
     return;

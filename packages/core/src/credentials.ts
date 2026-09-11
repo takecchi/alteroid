@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { chown, mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { chown, mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { excerptLine } from './excerpt.js';
@@ -214,6 +214,22 @@ export interface CredentialStore {
   set(entries: readonly CredentialEntry[]): Promise<CredentialFingerprint[]>;
   /** 起動時に、環境変数から拾った分を器へ書き出す。 */
   flush(): Promise<CredentialFingerprint[]>;
+  /**
+   * **いま持っていない鍵のファイルを置き場から消す。** 消した名前を返す。
+   *
+   * ## なぜ要るか
+   *
+   * 置き場が volume の構成（`compose.yaml` の `control`）では、**器を作り直しても
+   * ファイルが残る。** 残ったものは、デーモンが降ろす前の一瞬だけ効く —— しかも
+   * `gh` シムは呼ばれるたびにファイルを読むので、**memory が空でも古い鍵で
+   * 認証が通る。** ＝「runner は自分では鍵を持たない」が、前の器の置き土産で
+   * 破れる（実行環境プロファイル側の `rmSync` と同じ穴で、同じ直し方である）。
+   *
+   * **消すのは「名前として成立するもの」だけ**（`CREDENTIAL_NAME`）。置き場に
+   * 他人のファイルが在る構成を壊さない。**いま持っている鍵は消さない** ——
+   * 降ろされた直後に呼ばれても、降りた鍵を自分で消さないため。
+   */
+  purge(): Promise<string[]>;
   /** 直近の書き込みに失敗していれば理由。器が無い構成を黙って隠さないための窓。 */
   readonly lastWriteError: string | undefined;
 }
@@ -444,6 +460,37 @@ class Store implements CredentialStore {
       }
     }
     return this.fingerprints();
+  }
+
+  /**
+   * 持っていない鍵のファイルを消す（前の器の置き土産を引き継がない）。
+   *
+   * **置き場が無い構成では何もしない**（ローカルの同一プロセス runner 等）。
+   * 読めないことと「残っていない」ことを同じ扱いにしてよいのは、どちらの場合も
+   * **配る側から見て古い鍵が効かない**という結論が同じだからである。
+   */
+  async purge(): Promise<string[]> {
+    let entries: string[];
+    try {
+      entries = await readdir(this.#dir);
+    } catch {
+      return [];
+    }
+    const removed: string[] = [];
+    for (const name of entries) {
+      // 名前として成立しないもの（他人のファイル・書き込み中の staging）は触らない。
+      if (!CREDENTIAL_NAME.test(name)) continue;
+      // いま持っている鍵は消さない（降りた直後に呼ばれても自分の鍵を落とさない）。
+      if (this.#held.has(name)) continue;
+      try {
+        await rm(join(this.#dir, name), { force: true });
+        removed.push(name);
+      } catch (error) {
+        // **黙って握り潰さない。** 消せなかったファイルは古い鍵として効き続ける。
+        this.#lastWriteError = String(error);
+      }
+    }
+    return removed;
   }
 
   /** 直近の書き込みに失敗していれば理由。成功していれば undefined。 */

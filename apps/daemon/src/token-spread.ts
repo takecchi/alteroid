@@ -80,6 +80,28 @@ export interface TokenSpreadOptions {
   profileEnvNames: () => Promise<readonly string[]>;
   /** 影を見つけたときに出す先（日誌・stderr）。 */
   onShadowed?: (names: readonly string[]) => void;
+  /**
+   * **クローンの器（デーモンのプロセス）の認証トークン。** `source: 'env'` の行を
+   * 撒くときの値である。
+   *
+   * ## なぜ要るか（ここが 2026-09-11 の人間の決定で変わった箇所である）
+   *
+   * 以前は env の行を**空文字で撒いていた** —— 器が鍵のファイルを消し、runner の
+   * `#childEnv()` が**runner 自身の環境変数へ落ちる**ことを期待する形である。
+   * ⟹ **runner が単体で動く器になっていた。** そして runner の env に在る値は、
+   * プールの現役とは別物でありうる（本番実測: runner の env は週次上限で冷却中の
+   * トークンだった）。
+   *
+   * **いまは「現役の値は必ずクローンから撒く」。** env の行も値を持って降りる。
+   * ⟹ runner の env は空でよく、**空であることが正しい。**
+   *
+   * **⚠️ 関数で受ける（値ではなく）。** 構築時に凍らせると、人間が器の変数を
+   * 直した後の再起動でしか反映されない（`CloneOptions.credentials` と同じ理由）。
+   *
+   * **取れなければ `undefined`。** その場合に撒くのは空文字（＝外す）で、結果へ
+   * 「値が無い」を載せる —— **黙って runner の env へ倒さない**（倒す先はもう無い）。
+   */
+  agentTokenFromEnv: () => string | undefined;
 }
 
 /**
@@ -93,7 +115,7 @@ export interface TokenSpreadOptions {
  * 日誌へ全部載せる。
  */
 export function createTokenSpread(options: TokenSpreadOptions): TokenSpreadPort {
-  const { runners, clone, profileEnvNames, onShadowed } = options;
+  const { runners, clone, profileEnvNames, onShadowed, agentTokenFromEnv } = options;
 
   return {
     async spread(
@@ -109,6 +131,26 @@ export function createTokenSpread(options: TokenSpreadOptions): TokenSpreadPort 
         .catch(() => [] as string[]);
       if (shadowed.length > 0) onShadowed?.(shadowed);
 
+      /**
+       * runner へ撒く値。**env の行はクローンの器の値を使う。**
+       *
+       * **取れなかったときは空文字（＝外す）。** 黙って runner の env へ倒す形は
+       * もう無い（runner は自分の env から鍵を拾わない）ので、**撒けなかったことを
+       * 結果に出す**ほうへ倒す —— 出さないと「回した」だけが日誌に残り、
+       * これから起こすマネージャーが資格ゼロで走る理由が誰にも見えない。
+       */
+      const valueToSpread = token.kind === 'env' ? (agentTokenFromEnv() ?? '') : token.value;
+      if (valueToSpread.length === 0) {
+        results.push({
+          target: 'clone-env',
+          ok: false,
+          error:
+            'プールが器の環境変数の行を選んだが、デーモンの環境変数に ' +
+            'CLAUDE_CODE_OAUTH_TOKEN が無い（撒く値が無いので、これから起こす' +
+            'マネージャーは資格を1つも持たずに走る）',
+        });
+      }
+
       const clients = await runners.list().catch(() => []);
       for (const client of clients) {
         // **`runnerId` をそのまま名札にしている。** 既定値（`'runner-primary'`）が
@@ -116,15 +158,12 @@ export function createTokenSpread(options: TokenSpreadOptions): TokenSpreadPort 
         // **どの宛先の話かを人間が見分けられること**までで、識別子としての
         // 権威は要らない（`RunnerClient.runnerId` の注意書き）。
         try {
-          // **env の行は「鍵を消す」ことで表す。** 空文字を渡すと器が鍵の
-          // ファイルを消し（`credentials.ts` の `#commit`）、`#childEnv()` が
-          // 器の環境変数へ落ちる。**リテラルを撒かずに「env を使え」を表現できる。**
-          await client.setCredentials([
-            {
-              name: 'CLAUDE_CODE_OAUTH_TOKEN',
-              value: token.kind === 'env' ? '' : token.value,
-            },
-          ]);
+          // **env の行も値を持って降りる**（2026-09-11 の人間の決定。
+          // `agentTokenFromEnv` の doc）。以前はここで空文字を撒き、runner が
+          // 自分の環境変数へ落ちることを期待していた —— その形は
+          // 「runner が単体で動く」ことを前提にしていて、しかも runner の env は
+          // 現役とは別物でありうる。
+          await client.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: valueToSpread }]);
           results.push({ target: client.runnerId, ok: true });
         } catch (error) {
           // **理由は1行目だけ採る。** ドライバやネットワークの例外は本文へ
@@ -151,8 +190,26 @@ export function createTokenSpread(options: TokenSpreadOptions): TokenSpreadPort 
       // クローン側は同じプロセス内なので落ちない。**身元も一緒に置く** —
       // 置かないと、クローンの観測が身元を名乗れず世代の照合が素通しになる。
       const identity = { tokenId: token.id, generation: token.generation };
-      if (token.kind === 'env') clone.clear(identity);
-      else clone.set(token.value, identity);
+      /**
+       * **env の行も、値が取れたなら holder へ置く**（2026-09-11）。
+       *
+       * ## 置かないと、名乗り直しで鍵が消える
+       *
+       * runner へ撒くのは上の `valueToSpread`（値）だが、**名乗り直しの降ろし直しは
+       * holder を見る**（`createRunnerTokenSync`）。holder が空だと、あちらは
+       * 「鍵を消す指示」＝空文字を降ろす ⟹ **撒いた直後に繋ぎ直した runner が、
+       * 撒いたはずの鍵を失う。** 撒く側と名乗り直し側で出所が割れていた。
+       *
+       * **クローン自身には無害である。** 置く値はデーモンの `process.env` の値そのもの
+       * なので、クローンの子へ重ねても同じ値になる（以前 `clear()` していたのは
+       * 「器の env へ落ちれば同じ」という判断で、値を置いても結論は変わらない）。
+       *
+       * **取れなかったときだけ落とす。** そのときは配る値がどこにも無く、
+       * 「鍵を消す指示」が正しい観測である（上で `clone-env` の失敗も出している）。
+       */
+      if (token.kind === 'stored') clone.set(token.value, identity);
+      else if (valueToSpread.length > 0) clone.set(valueToSpread, identity);
+      else clone.clear(identity);
       results.push({ target: 'clone', ok: true });
 
       if (shadowed.length > 0) {

@@ -313,6 +313,10 @@ function setup(
       stores,
       runners: registry,
       withheldEnvKeys: [...WITHHELD_ENV_KEYS],
+      // **クローンの器の env は明示で空にする（既定の `process.env` に依らせない）。**
+      // 既定のままだと、検証を走らせた機械に `GH_TOKEN` / `GITHUB_TOKEN` が在るか
+      // どうかで降りる鍵が変わる —— 実際、土台を足した直後に3本がそれで落ちた。
+      env: {},
     }),
     ...(options.generateManagerId === undefined
       ? {}
@@ -1338,10 +1342,30 @@ describe('マネージャー', () => {
     expect(env.PGPASSWORD).toBeUndefined();
     for (const key of WITHHELD_ENV_KEYS) expect(env[key]).toBeUndefined();
 
-    // 記憶ストアと関係のない環境は削らない。認証を落とせばマネージャーは
-    // ただ動かなくなる = デグレードであって境界ではない。
-    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('token-for-the-sdk');
+    // 記憶ストアと関係のない環境は削らない（`PATH` はそのまま）。
     expect(env.PATH).toBe('/usr/bin');
+
+    /**
+     * **⚠️ 2026-09-11 に期待値を反転した。** 元はここが
+     * `expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('token-for-the-sdk')` で、直前の
+     * コメントは「認証を落とせばマネージャーはただ動かなくなる ＝ デグレードで
+     * あって境界ではない」だった（上の1行に残してある）。
+     *
+     * **前提が変わった**（人間の決定 2026-09-11）。**runner は自分の env から鍵を
+     * 拾わない器であり、鍵はクローンからもらって初めて持つ。** 器の env に在る鍵が
+     * そのまま子へ渡る形は、次の2つを作っていた:
+     *
+     * 1. **現役でない鍵で走る** —— 本番実測（2026-09-11）で runner の env に在ったのは
+     *    **週次上限で冷却中のトークン**で、プールの現役とは別物だった
+     * 2. **その食い違いが見えない** —— 子は env から読むだけなので、「クローンが撒いた
+     *    もの」と「器に残っていたもの」を区別できない
+     *
+     * **デグレードではない。** 同じ値はクローンが撒く経路で届く（`token-spread.ts` の
+     * `agentTokenFromEnv` と `credential-service.ts` の `effective()`）。変えたのは
+     * **出所**であって能力ではない。**この検証では誰も撒いていない**ので、
+     * 「撒かれなければ持たない」が見える —— それが「単体では動かない」の実体である。
+     */
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
 
     await s.pool.stop();
   });
@@ -2950,9 +2974,17 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     expect(fake.state.held.get('GH_TOKEN')).toBe('ghp_from_vault');
   });
 
-  it('正本が空なら、名乗ってきた runner へ1文字も降ろさない（器の env から拾った鍵を消さない）', async () => {
-    // **移行の途中（器の環境変数にだけ鍵が在る）を殺さない。** 空を配ると、
-    // 器の側が種として拾っていた `GH_TOKEN` を消して回ることになる。
+  it('正本もクローンの器の env も空なら、名乗ってきた runner へ1文字も降ろさない', async () => {
+    /**
+     * **⚠️ 2026-09-11 に題と理由を差し替えた。** 元の題は「正本が空なら、名乗ってきた
+     * runner へ1文字も降ろさない（器の env から拾った鍵を消さない）」で、理由は
+     * 「移行の途中（器の環境変数にだけ鍵が在る）を殺さない。空を配ると、器の側が
+     * 種として拾っていた `GH_TOKEN` を消して回ることになる」だった。
+     *
+     * **runner が種を拾わなくなったので、守る対象が消えた。** いま測るのは
+     * 「配るものが無いときに『全部外せ』と言わないこと」である —— 外す指示は
+     * `apply` が明示的に送る側の仕事で、名乗り直しの側では送らない。
+     */
     const stores = createMemoryStores();
     // **プロファイルを置いておくのは、同期のためである。** 鍵の降ろしは
     // プロファイルの直後に呼ばれるので、プロファイルが降りたのを見てから

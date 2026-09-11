@@ -3,6 +3,7 @@ import {
   fingerprintOf,
   isWithheldCredentialName,
   POOL_OWNED_CREDENTIAL_NAMES,
+  ROTATABLE_CREDENTIAL_KEYS,
   type CredentialEntry,
   type CredentialFingerprint,
 } from './credentials.js';
@@ -11,7 +12,7 @@ import type {
   RunnerCredentialFingerprint,
   RunnerRegistry,
 } from './runner-protocol.js';
-import type { Stores } from './store.js';
+import type { StoredCredential, Stores } from './store.js';
 
 /**
  * マネージャーへ降ろす環境変数を**置いて配る**までの1本道。
@@ -86,6 +87,23 @@ export interface CredentialServiceOptions {
    * 省略可能にしていない。
    */
   withheldEnvKeys: readonly string[];
+  /**
+   * **クローンの器（デーモンのプロセス）の環境変数。** 既定は `process.env`。
+   *
+   * ## なぜ読むのか（2026-09-11 の人間の決定）
+   *
+   * **runner は自分の env から鍵を拾わない器になった**（`apps/runner/src/index.ts` の
+   * `seed: {}` と `runner.ts` の `#childEnv()`）。⟹ 器の `.env` / Shared Variables
+   * に鍵を置いただけの構成では、**誰も配らないので鍵が消える。**
+   *
+   * だから**クローンの器の env を最後の土台として配る**（正本に無い名前だけ）。
+   * 人間が `.env` に1行置くだけで従来どおり動き、しかも配るのは常にクローンである。
+   *
+   * **見るのは `ROTATABLE_CREDENTIAL_KEYS` だけ。** env を総なめにしない —— 何が鍵かを
+   * 推測すると、鍵でないものを晒すか鍵を取りこぼす（`credentials.ts` の同じ doc）。
+   * ⟹ 任意の名前を器の env に置く形は支えない。**それは正本へ置く**（この口の本題）。
+   */
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface ApplyCredentialsResult {
@@ -140,6 +158,7 @@ function assertEntries(entries: readonly CredentialEntry[], withheld: readonly s
 
 export function createCredentialService(options: CredentialServiceOptions): CredentialService {
   const { stores, runners, withheldEnvKeys } = options;
+  const env = options.env ?? process.env;
 
   /**
    * 直列化の実体（`ProfileService` と同じ形）。**次の更新は前の更新の全段が
@@ -187,11 +206,17 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
 
     syncRunner: (runner: RunnerClient) =>
       serial(async () => {
-        const rows = await stores.credentials.list();
-        // **空を配らない。** 正本が空なのは「何も置いていない」であって「全部
-        // 外せ」ではない。空で配ると、器の環境変数から種を拾っていた鍵
-        // （`x-shared-env` の `GH_TOKEN` 等）を消して回ることになる ＝ 移行の
-        // 途中で資格が消える。
+        /**
+         * **降ろす対象は「正本 ∪ クローンの器の env」である**（2026-09-11）。
+         *
+         * 以前はここが「正本が空なら1文字も配らない」だった —— runner が自分の env
+         * から種を拾う器だったので、空を配ると**その種を消して回る**形になるためで
+         * ある。**その前提はもう無い**（runner は拾わない）。⟹ いまは逆で、
+         * **配らなければ鍵はどこにも無い。**
+         */
+        const rows = await effective();
+        // 配るものが無い（正本も器の env も空）。**「全部外せ」とは言わない** ——
+        // 外す指示は `apply` が明示的に送る。
         if (rows.length === 0) return null;
 
         /**
@@ -209,6 +234,27 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
         return runner.setCredentials(behind.map(({ name, value }) => ({ name, value })));
       }),
   };
+
+  /**
+   * 降ろす対象を決める。**正本が先、クローンの器の env が後（正本に無い名前だけ）。**
+   *
+   * **プールが正本を持つ名前は入れない**（`POOL_OWNED_CREDENTIAL_NAMES`）。
+   * あちらは回し手が撒く（`token-spread.ts`）ので、ここが同じ名前を降ろすと
+   * **撒き手が2つになり、名乗り直しのたびに回した鍵を巻き戻す。**
+   */
+  async function effective(): Promise<StoredCredential[]> {
+    const rows = await stores.credentials.list();
+    const held = new Set(rows.map((row) => row.name));
+    const fromEnv = ROTATABLE_CREDENTIAL_KEYS.filter(
+      (name) => !held.has(name) && !POOL_OWNED_CREDENTIAL_NAMES.includes(name),
+    ).flatMap((name) => {
+      const value = env[name];
+      // 空文字は「置かれていない」と同じに扱う（空の鍵は無い鍵より悪い）。
+      if (value === undefined || value.length === 0) return [];
+      return [{ name, value, updatedAt: '(クローンの器の環境変数)' }];
+    });
+    return [...rows, ...fromEnv];
+  }
 
   function fingerprintsOf(
     rows: readonly { name: string; value: string; updatedAt: string }[],
