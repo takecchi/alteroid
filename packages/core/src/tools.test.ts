@@ -9427,6 +9427,90 @@ describe('journalEntrySchema の memory_update（action の後方互換）', () 
 });
 
 /**
+ * `journalEntrySchema` の `turn_usage.contextUsage.categories[].kind` は
+ * **optional** で足した（#804）。
+ *
+ * **この歯が守っているのは「日誌は読み出し時にも検証される」ことである。**
+ * `kind` を必須にすると、この欄が増える前に書かれた `turn_usage` の行が
+ * `safeParse` に落ち、**行ごと `list()` の結果から消える**
+ * （`packages/storage-fs/src/journal.ts` の `parseLine` /
+ * `packages/storage-pg/src/journal.ts` の `list`）。`journal_read`・日報・
+ * 蒸留はどれもそこを通るので、**1つの欄を必須にしただけで、既に記録済みの
+ * ターンの消費が静かに読めなくなる。**
+ *
+ * `memory_update.action` の後方互換の歯（直上）と同じ形・同じ理由である。
+ */
+describe('journalEntrySchema の turn_usage.contextUsage.categories[].kind（後方互換。#804）', () => {
+  /** `kind` を持たない軸だけを積んだ、この欄が増える前の形の行。 */
+  const legacyRow = {
+    type: 'turn_usage' as const,
+    id: 'j-804-legacy',
+    at: '2026-09-01T00:00:00.000Z',
+    layer: 'clone' as const,
+    site: 'session' as const,
+    managerId: CLONE_ACTOR_ID,
+    models: {},
+    summary: 'kind が増える前に書かれたターンの消費',
+    contextUsage: {
+      durationMs: 12,
+      categories: [{ name: 'System prompt', tokens: 8_000 }],
+    },
+  };
+
+  it('⭐⭐ kind の無い既存の行が今も読み出せる（必須にすると list() から丸ごと消える）', () => {
+    const result = journalEntrySchema.safeParse(legacyRow);
+
+    expect(result.success).toBe(true);
+    // **通ったことだけでは足りない。** `safeParse` が成功しても軸そのものが
+    // 剥ぎ取られていれば内訳は読めないので、欄が残っていることまで測る。
+    if (result.success && result.data.type === 'turn_usage') {
+      expect(result.data.contextUsage?.categories).toEqual([
+        { name: 'System prompt', tokens: 8_000 },
+      ]);
+    }
+  });
+
+  it('kind を持つ行は、その値がそのまま読める', () => {
+    const result = journalEntrySchema.safeParse({
+      ...legacyRow,
+      id: 'j-804-kind',
+      contextUsage: {
+        durationMs: 12,
+        categories: [
+          { name: 'System prompt', tokens: 8_000, kind: 'used' },
+          { name: 'Free space', tokens: 4_000, kind: 'free' },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success && result.data.type === 'turn_usage') {
+      expect(result.data.contextUsage?.categories?.map((category) => category.kind)).toEqual([
+        'used',
+        'free',
+      ]);
+    }
+  });
+
+  it('⭐ SDK が5つ目の kind を足しても行は落ちない（z.enum ではなく z.string にしてある）', () => {
+    const result = journalEntrySchema.safeParse({
+      ...legacyRow,
+      id: 'j-804-unknown',
+      contextUsage: {
+        durationMs: 12,
+        categories: [{ name: '将来の軸', tokens: 1_000, kind: 'invented-by-a-later-sdk' }],
+      },
+    });
+
+    // **未知の値でも書き込み（`append` の `parse`）が落ちないことが本題である。**
+    // 落ちれば、1つの未知の軸のせいでそのターンの消費が丸ごと記録できない。
+    expect(result.success).toBe(true);
+    if (result.success && result.data.type === 'turn_usage') {
+      expect(result.data.contextUsage?.categories?.[0]?.kind).toBe('invented-by-a-later-sdk');
+    }
+  });
+});
+/**
  * `journalEntrySchema` の `subagent_stall`（Issue #357）。`token_rotation` と
  * 同じ形で `text` と構造の両方を持つ——ここでは構造側（`safeParse` の可否）を
  * 固定する。人間が読む本文側の描画は `renderJournalEntry` の歯
