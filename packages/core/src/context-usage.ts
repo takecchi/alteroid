@@ -20,7 +20,18 @@
  *
  * `clone.ts` / `tools.ts` / `self.ts` はどれもこの分類を必要とするが、
  * 分類のロジックを2本以上持たない——ここが唯一の場所で、他はここを呼ぶ。
+ *
+ * ## `tokens` は {@link ExactTokens}（#804 案2）
+ *
+ * `self.ts` の `describeCloneRuntime` は、この分類の合計（実トークン）を
+ * 「文字数」（`injectedMemoryChars` / `systemPromptChars`。どちらも
+ * `HeuristicChars`）と同じ画面へ並べて出す。**型がただの `number` のままだと、
+ * 文字数をトークンとして読み替える経路が開いたままになる**——`quantity.ts`
+ * モジュール冒頭の doc。ここで `ExactTokens` を名乗ることで、その代入を
+ * `tsc` が落とす。
  */
+
+import { exactTokens, type ExactTokens } from './quantity.js';
 
 /** SDK が `categories[].kind` に持たせる4値（`sdk.d.ts` の逐語、上記）。 */
 export const CONTEXT_CATEGORY_KINDS = ['used', 'free', 'buffer', 'deferred'] as const;
@@ -29,7 +40,14 @@ export type ContextCategoryKind = (typeof CONTEXT_CATEGORY_KINDS)[number];
 
 /** ある `kind`（または「分類できなかった」側）に属する軸の合計と件数。 */
 export interface ContextCategoryTotals {
-  tokens: number;
+  /**
+   * SDK が実際に数えたトークン（{@link ExactTokens}。`quantity.ts`）。
+   *
+   * **文字数（`HeuristicChars`）とは代入できない**——モジュール冒頭の
+   * 「`tokens` は `ExactTokens`」の節。
+   */
+  tokens: ExactTokens;
+  /** その `kind` に属する軸の件数。**量ではないので単位を持たない。** */
   count: number;
 }
 
@@ -70,7 +88,7 @@ export interface ContextCategorySummary {
 }
 
 function emptyTotals(): ContextCategoryTotals {
-  return { tokens: 0, count: 0 };
+  return { tokens: exactTokens(0), count: 0 };
 }
 
 function isContextCategoryKind(value: string | undefined): value is ContextCategoryKind {
@@ -107,7 +125,12 @@ export function summarizeContextCategories(
     const bucket = isContextCategoryKind(category.kind)
       ? summary[category.kind]
       : summary.unclassified;
-    bucket.tokens += category.tokens;
+    // **`+=` ではなく明示の `exactTokens(...)` を通す。** `bucket.tokens`
+    // は `ExactTokens`（branded number）で、`bucket.tokens + category.tokens`
+    // の結果は算術演算子を通した時点で素の `number` に戻る——`quantity.ts`
+    // の「引き算・足し算の結果は素の `number` に戻る」のとおり。単位付きの
+    // 欄へ入れ直すこの1行が、ここで単位を名乗り直している印である。
+    bucket.tokens = exactTokens(bucket.tokens + category.tokens);
     bucket.count += 1;
   }
   return summary;

@@ -20,6 +20,7 @@ import { runnerLivenessSchema } from './runner-protocol.js';
 import { CLONE_ACTOR_ID } from './usage.js';
 import { measureMemoryFloor, renderMemoryDocuments, scanMemorySections } from './memory.js';
 import { createProfileService } from './profile-service.js';
+import { heuristicChars, type HeuristicChars } from './quantity.js';
 import {
   journalEntrySchema,
   type ChatStreamEvent,
@@ -1024,13 +1025,13 @@ describe('クローンの道具', () => {
       mcpServers: [],
       sessionId: null,
       resumedFrom: null,
-      injectedMemoryChars: 0,
-      systemPromptChars: 0,
+      injectedMemoryChars: heuristicChars(0),
+      systemPromptChars: heuristicChars(0),
       lastContextUsage: null,
     };
 
     it('⭐ runtime が在れば、セッション構築時点との差（文字と割合）が出る', async () => {
-      const h = harness(() => ({ ...RUNTIME_BASE, injectedMemoryChars: 100 }));
+      const h = harness(() => ({ ...RUNTIME_BASE, injectedMemoryChars: heuristicChars(100) }));
 
       const reply = await h.call('memory_write', {
         slug: 'about-me-core',
@@ -1053,7 +1054,7 @@ describe('クローンの道具', () => {
      * 状況を作って確かめる。
      */
     it('⭐⭐ 増分が0のとき（何も変わっていないとき）に、増えたかのような文言を出さない', async () => {
-      let injected = 0;
+      let injected: HeuristicChars = heuristicChars(0);
       const h = harness(() => ({ ...RUNTIME_BASE, injectedMemoryChars: injected }));
 
       await h.call('memory_write', { slug: 'stable', content: '固定の本文', summary: '初回' });
@@ -9086,8 +9087,8 @@ describe('self_status（いま自分がどう走っているか）', () => {
     // **意図的に、以下で書き込む記憶の総文字数とは違う値にしてある。** 「いまの
     // 総文字数」と区別できることを見るための固定値であって、実際の構築時の値を
     // 模したものではない。
-    injectedMemoryChars: 3,
-    systemPromptChars: 999,
+    injectedMemoryChars: heuristicChars(3),
+    systemPromptChars: heuristicChars(999),
     lastContextUsage: null,
   };
 
@@ -10388,8 +10389,8 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     mcpServers: [],
     sessionId: null,
     resumedFrom: null,
-    injectedMemoryChars: 0,
-    systemPromptChars: 0,
+    injectedMemoryChars: heuristicChars(0),
+    systemPromptChars: heuristicChars(0),
     lastContextUsage: null,
   };
 
@@ -13846,8 +13847,8 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
     mcpServers: [],
     sessionId: null,
     resumedFrom: null,
-    injectedMemoryChars: 3,
-    systemPromptChars: 999,
+    injectedMemoryChars: heuristicChars(3),
+    systemPromptChars: heuristicChars(999),
     lastContextUsage: null,
   };
 

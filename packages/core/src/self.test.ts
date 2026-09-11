@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { renderMemoryDocuments } from './memory.js';
 import { buildCloneSystemPrompt } from './prompt.js';
+import { heuristicChars } from './quantity.js';
 import {
   CANON_DOCUMENTS,
   REPOSITORY_URL,
@@ -180,8 +181,8 @@ describe('CloneRuntimeFacts の整形 — 観測した値と、取れていな�
     mcpServers: [{ name: 'alteroid', status: 'connected' }],
     sessionId: 'sess-observed',
     resumedFrom: null,
-    injectedMemoryChars: 120,
-    systemPromptChars: 4000,
+    injectedMemoryChars: heuristicChars(120),
+    systemPromptChars: heuristicChars(4000),
     lastContextUsage: null,
   };
 
@@ -385,8 +386,8 @@ describe('CloneRuntimeFacts の整形 — 観測した値と、取れていな�
   it('記憶の文字数は、焼き込んだ時点とシステムプロンプト全体を別々に出す', () => {
     const section = describeCloneRuntime({
       ...RUNTIME,
-      injectedMemoryChars: 120,
-      systemPromptChars: 4000,
+      injectedMemoryChars: heuristicChars(120),
+      systemPromptChars: heuristicChars(4000),
     });
     expect(section).toContain('120');
     expect(section).toContain('4,000');

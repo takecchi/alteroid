@@ -21,6 +21,7 @@
 import { summarizeContextCategories } from './context-usage.js';
 import { excerptLine } from './excerpt.js';
 import { CANON_DOCUMENTS, CANON_REVISION, type CanonDocument } from './generated/canon.js';
+import type { HeuristicChars } from './quantity.js';
 import { describeBuildRevision, type BuildRevision } from './revision.js';
 import type { JournalEntry } from './schema.js';
 
@@ -206,10 +207,17 @@ export interface CloneRuntimeFacts {
   sessionId: string | null;
   /** resume で引き継いだセッション id。新規に開いたなら `null`。 */
   resumedFrom: string | null;
-  /** システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）。 */
-  injectedMemoryChars: number;
-  /** システムプロンプト全体の文字数（毎ターン払っている入力の土台）。 */
-  systemPromptChars: number;
+  /**
+   * システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）。
+   *
+   * **{@link HeuristicChars}——トークンの近似であって、トークンではない**
+   * （`quantity.ts` モジュール冒頭の doc）。同じ画面に並ぶ `lastContextUsage`
+   * （実トークン。`ExactTokens`）と型で単位を区別しておかないと、片方を
+   * もう片方として読む経路が開く。
+   */
+  injectedMemoryChars: HeuristicChars;
+  /** システムプロンプト全体の文字数（毎ターン払っている入力の土台）。{@link HeuristicChars}——理由は `injectedMemoryChars` と同じ。 */
+  systemPromptChars: HeuristicChars;
   /**
    * 直近のターンの境界で `clone.ts` の `#observeContextUsage` が観測した文脈占有
    * （#804）。
@@ -392,8 +400,12 @@ export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
     `- ${CLONE_RUNTIME_ITEMS.mcpServers}: ${mcpServers}`,
     `- ${CLONE_RUNTIME_ITEMS.sessionId}: ${facts.sessionId ?? unknownBecause(INIT_NOT_OBSERVED)}`,
     `- ${CLONE_RUNTIME_ITEMS.resumedFrom}: ${facts.resumedFrom ?? '（新規に開いた。前のセッションを引き継いでいない）'}`,
-    `- ${CLONE_RUNTIME_ITEMS.injectedMemoryChars}: ${facts.injectedMemoryChars.toLocaleString('en-US')} 文字`,
-    `- ${CLONE_RUNTIME_ITEMS.systemPromptChars}: ${facts.systemPromptChars.toLocaleString('en-US')} 文字`,
+    // **`文字` の直後に注記を足す（既存の文言・区切りは変えない）。** `clone.test.ts`
+    // が `焼き込んだ記憶の文字数（このセッションを組み立てた時点）: N 文字` を
+    // `toContain` で固定しているので、その部分文字列を残したまま末尾へ足す
+    // （`String#includes` は前方一致ではなく部分一致なので、後ろへ足しても壊れない）。
+    `- ${CLONE_RUNTIME_ITEMS.injectedMemoryChars}: ${facts.injectedMemoryChars.toLocaleString('en-US')} 文字（トークンの近似。実トークンは下の2行）`,
+    `- ${CLONE_RUNTIME_ITEMS.systemPromptChars}: ${facts.systemPromptChars.toLocaleString('en-US')} 文字（トークンの近似）`,
     // **ここへ足す理由は `CLONE_RUNTIME_ITEMS.lastTurnUsedTokens` の doc**
     // （#804。この2行のすぐ上が「文字数」の並びで、そこから実トークンへの
     // 読み替えが起きていた欠陥への直接の対処）。

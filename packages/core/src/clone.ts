@@ -56,6 +56,7 @@ import {
   renderMemoryDocuments,
 } from './memory.js';
 import { placedModelTier, resolveModelTier } from './model-tier.js';
+import { heuristicChars } from './quantity.js';
 import {
   placedPermissionMode,
   resolvePermissionModeFor,
@@ -5357,8 +5358,13 @@ class Clone implements CloneHost {
       mcpServers: this.#mcpServersInfo,
       sessionId: this.#sdkSessionId,
       resumedFrom: this.#resumedFrom,
-      injectedMemoryChars: this.#promptMemoryChars,
-      systemPromptChars: this.#systemPromptChars,
+      // **ここで `heuristicChars(...)` を通す。** `#promptMemoryChars` /
+      // `#systemPromptChars` は素の `number`（`String.length` を直接
+      // 控えている私有フィールド）——`CloneRuntimeFacts` の欄は
+      // `HeuristicChars` なので、代入するこの1行が単位を名乗り直している
+      // 印になる（`quantity.ts` モジュール冒頭の doc）。
+      injectedMemoryChars: heuristicChars(this.#promptMemoryChars),
+      systemPromptChars: heuristicChars(this.#systemPromptChars),
       lastContextUsage: this.#lastContextUsage,
     };
   }
