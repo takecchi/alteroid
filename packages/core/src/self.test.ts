@@ -182,6 +182,7 @@ describe('CloneRuntimeFacts の整形 — 観測した値と、取れていな�
     resumedFrom: null,
     injectedMemoryChars: 120,
     systemPromptChars: 4000,
+    lastContextUsage: null,
   };
 
   /**
@@ -394,5 +395,100 @@ describe('CloneRuntimeFacts の整形 — 観測した値と、取れていな�
   it('鍵・トークンの値は一切出さない（この型自体が持たない）', () => {
     const section = describeCloneRuntime(RUNTIME);
     expect(section).not.toMatch(/ghp_|sk-ant|Bearer /);
+  });
+
+  /**
+   * `lastContextUsage`（#804）— 直近のターンの境界で聞いた文脈占有の `kind` 別
+   * 内訳。**核心の歯は「実際に払っていた入力」の数値に `free` の分が混ざらない
+   * こと**を数値で測ることである（字面の一致では、`free` の値が `used` へ
+   * 紛れ込んでいても検出できない）。
+   */
+  describe('lastContextUsage — 実際に払っていた入力と、払っていない枠', () => {
+    it('⭐⭐⭐ free の軸を持つ観測でも、「実際に払っていた入力」の数値は free の分を含まない', () => {
+      const section = describeCloneRuntime({
+        ...RUNTIME,
+        lastContextUsage: {
+          durationMs: 5,
+          categories: [
+            { name: 'System prompt', tokens: 8_000, kind: 'used' },
+            { name: 'Tools', tokens: 1_000, kind: 'used' },
+            { name: 'Remaining window', tokens: 190_000, kind: 'free' },
+          ],
+        },
+      });
+
+      const usedLine = section.split('\n').find((line) => line.includes('実際に払っていた入力'));
+      const unusedLine = section.split('\n').find((line) => line.includes('払っていない枠'));
+      if (usedLine === undefined || unusedLine === undefined) {
+        throw new Error('lastContextUsage の2行が出ていない');
+      }
+
+      // used は System prompt + Tools の合計だけ（9,000）で、free の 190,000 を
+      // 1トークンも含まない——足し算の結果とも比較して、混ざっていないことを
+      // 数値で確かめる。
+      expect(usedLine).toContain('9,000 トークン');
+      expect(usedLine).not.toContain((8_000 + 1_000 + 190_000).toLocaleString('en-US'));
+      expect(unusedLine).toContain('free 190,000 トークン');
+    });
+
+    it('倒れ先(1) — まだ観測していない（null）と、倒れ先(2)(3) と別の文言になり、0 を出さない', () => {
+      const section = describeCloneRuntime({ ...RUNTIME, lastContextUsage: null });
+      const usedLine = section.split('\n').find((line) => line.includes('実際に払っていた入力'));
+      const unusedLine = section.split('\n').find((line) => line.includes('払っていない枠'));
+
+      expect(usedLine).toContain('まだ分からない');
+      expect(usedLine).not.toMatch(/0 トークン/);
+      expect(unusedLine).toContain('まだ分からない');
+      expect(unusedLine).not.toMatch(/0 トークン/);
+    });
+
+    it('倒れ先(2) — 観測を試みて失敗した（error 付き）ときは、理由を出し 0 を出さない', () => {
+      const section = describeCloneRuntime({
+        ...RUNTIME,
+        lastContextUsage: { durationMs: 5, error: '失敗: タイムアウト' },
+      });
+      const usedLine = section.split('\n').find((line) => line.includes('実際に払っていた入力'));
+      const unusedLine = section.split('\n').find((line) => line.includes('払っていない枠'));
+
+      expect(usedLine).toContain('観測を試みて失敗した');
+      expect(usedLine).toContain('失敗: タイムアウト');
+      expect(usedLine).not.toMatch(/0 トークン/);
+      expect(unusedLine).toContain('観測を試みて失敗した');
+      expect(unusedLine).not.toMatch(/0 トークン/);
+      // 倒れ先(1)（未観測）とは別の文言である。
+      expect(usedLine).not.toContain('まだ分からない');
+    });
+
+    it('倒れ先(3) — 観測はできたが categories が無い（SDK が内訳を返さなかった）ときは、そう言い 0 を出さない', () => {
+      const section = describeCloneRuntime({
+        ...RUNTIME,
+        lastContextUsage: { durationMs: 5, totalTokens: 12_000 },
+      });
+      const usedLine = section.split('\n').find((line) => line.includes('実際に払っていた入力'));
+      const unusedLine = section.split('\n').find((line) => line.includes('払っていない枠'));
+
+      expect(usedLine).toContain('カテゴリ別の内訳を返さなかった');
+      expect(usedLine).not.toMatch(/0 トークン/);
+      expect(unusedLine).toContain('カテゴリ別の内訳を返さなかった');
+      expect(unusedLine).not.toMatch(/0 トークン/);
+      // 倒れ先(1)(2) とは別の文言である。
+      expect(usedLine).not.toContain('まだ分からない');
+      expect(usedLine).not.toContain('観測を試みて失敗した');
+    });
+
+    it('unclassified（分類できない軸）が在るときは、その事実が読める（「分類できず」が出る）', () => {
+      const section = describeCloneRuntime({
+        ...RUNTIME,
+        lastContextUsage: {
+          durationMs: 5,
+          categories: [
+            { name: 'System prompt', tokens: 100, kind: 'used' },
+            { name: 'Messages', tokens: 40 },
+          ],
+        },
+      });
+      const unusedLine = section.split('\n').find((line) => line.includes('払っていない枠'));
+      expect(unusedLine).toContain('分類できず 40 トークン');
+    });
   });
 });

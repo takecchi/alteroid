@@ -1026,6 +1026,7 @@ describe('クローンの道具', () => {
       resumedFrom: null,
       injectedMemoryChars: 0,
       systemPromptChars: 0,
+      lastContextUsage: null,
     };
 
     it('⭐ runtime が在れば、セッション構築時点との差（文字と割合）が出る', async () => {
@@ -9087,6 +9088,7 @@ describe('self_status（いま自分がどう走っているか）', () => {
     // 模したものではない。
     injectedMemoryChars: 3,
     systemPromptChars: 999,
+    lastContextUsage: null,
   };
 
   it('道具として配られている（クローンから見えないものを作らない）', () => {
@@ -9528,8 +9530,8 @@ describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
       memoryFileTokens: 700,
       memoryFileCount: 1,
       categories: [
-        { name: 'System prompt', tokens: 8_000 },
-        { name: 'MCP tools', tokens: 1_000 },
+        { name: 'System prompt', tokens: 8_000, kind: 'used' },
+        { name: 'MCP tools', tokens: 1_000, kind: 'deferred' },
       ],
     });
 
@@ -9543,9 +9545,29 @@ describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
     // **記憶の焼き込みがどちらに入るかを名指しする**（取り違えを塞ぐ）。
     expect(reply).toContain('**記憶の焼き込みはここに入る**');
     expect(reply).toContain('**alteroid の記憶ではない**');
-    // カテゴリ別と、名前が SDK 由来であるという断り。
-    expect(reply).toContain('System prompt 8,000');
+    // カテゴリ別、名前が SDK 由来であるという断り、**そして `kind`（#804）**。
+    expect(reply).toContain('System prompt 8,000 [used]');
+    expect(reply).toContain('MCP tools 1,000 [deferred]');
     expect(reply).toContain('名前は SDK の版で変わりうる');
+  });
+
+  /**
+   * ⭐⭐⭐ **`kind` の無い軸は「分類なし」と名乗る**（#804。この欄が増える前に
+   * 書かれた行、または SDK が返さなかった軸と同じ形）。⛔ `used` へは倒さない
+   * ——`[used]` と書けば「毎ターン払っている入力」だと読めてしまう。
+   */
+  it('⭐⭐⭐ kind の無い軸は「分類なし」と名乗る（used へ倒さない）', async () => {
+    const h = harness();
+    const entry = await appendTurnUsage(h, {
+      durationMs: 12,
+      totalTokens: 12_000,
+      categories: [{ name: 'Messages', tokens: 500 }],
+    });
+
+    const reply = await h.call('journal_read', { id: entry.id });
+
+    expect(reply).toContain('Messages 500 [分類なし]');
+    expect(reply).not.toContain('Messages 500 [used]');
   });
 
   it('⭐⭐⭐ 内訳を持たない行では、内訳の節を1文字も出さない（0 として出さない）', async () => {
@@ -10284,6 +10306,7 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     resumedFrom: null,
     injectedMemoryChars: 0,
     systemPromptChars: 0,
+    lastContextUsage: null,
   };
 
   /**
@@ -13741,6 +13764,7 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
     resumedFrom: null,
     injectedMemoryChars: 3,
     systemPromptChars: 999,
+    lastContextUsage: null,
   };
 
   function descriptionOf(tool: string): string {

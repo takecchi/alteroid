@@ -7229,7 +7229,16 @@ function describeContextBreakdown(context: ContextUsageRow): string {
       ? ''
       : `\n  カテゴリ別（SDK が名乗る軸。名前は SDK の版で変わりうる）: ` +
         context.categories
-          .map((category) => `${category.name} ${category.tokens.toLocaleString('en-US')}`)
+          .map(
+            (category) =>
+              // **`kind` を添える（#804）。** 分類（`used`/`free`/`buffer`/
+              // `deferred`）は `context-usage.ts` の `summarizeContextCategories`
+              // が唯一持つが、ここは1行1軸の生の内訳なので、集計を経由せず
+              // その軸の `kind` をそのまま添えるだけである。無ければ
+              // 「分類なし」と名乗る（この欄が増える前の行、または SDK が
+              // 返さなかった軸——`0` や `used` へ倒さない）。
+              `${category.name} ${category.tokens.toLocaleString('en-US')} [${category.kind ?? '分類なし'}]`,
+          )
           .join(' / ') +
         (context.categoriesOmitted === undefined
           ? ''

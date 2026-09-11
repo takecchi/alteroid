@@ -18,9 +18,23 @@
  * （prompt.ts 冒頭の約束と同じ）。
  */
 
+import { summarizeContextCategories } from './context-usage.js';
 import { excerptLine } from './excerpt.js';
 import { CANON_DOCUMENTS, CANON_REVISION, type CanonDocument } from './generated/canon.js';
 import { describeBuildRevision, type BuildRevision } from './revision.js';
+import type { JournalEntry } from './schema.js';
+
+/**
+ * `turn_usage.contextUsage`（`schema.ts`）の形をここで書き直さず、スキーマ側
+ * から引く。**`clone.ts` の `ContextUsageObservation` と同じやり方**——
+ * 二重に定義すると、どちらかを直し忘れたときに型は緑のまま形だけがずれる。
+ * `clone.ts` から import しないのは、あちらが `self.ts` を import しており
+ * （`CloneRuntimeFacts` / `SelfFacts`）循環になるため——同じ導出をここでも
+ * 独立に行う。
+ */
+type ContextUsageObservation = NonNullable<
+  Extract<JournalEntry, { type: 'turn_usage' }>['contextUsage']
+>;
 
 /**
  * `MCP サーバ:` 行を抜粋する厚み（#409）。
@@ -196,6 +210,21 @@ export interface CloneRuntimeFacts {
   injectedMemoryChars: number;
   /** システムプロンプト全体の文字数（毎ターン払っている入力の土台）。 */
   systemPromptChars: number;
+  /**
+   * 直近のターンの境界で `clone.ts` の `#observeContextUsage` が観測した文脈占有
+   * （#804）。
+   *
+   * **`null` は「まだ観測していない」**——ターンの境界を1度も越えていない
+   * （このセッションで最初の道具呼び出しより前、または `#observeContextUsage`
+   * が呼ばれる前）。`null` ではないが `error` が付いている値は「試して失敗した」、
+   * `error` が無く `categories` も無い値は「SDK がカテゴリ別の内訳を返さな
+   * かった」——3つの状態を混ぜない（`schema.ts` の `turn_usage.contextUsage`
+   * の doc「観測していない」と「試して失敗した」を区別する、と同じ規律）。
+   *
+   * **セッションを開き直すと `null` に戻る**（`clone.ts` の
+   * `#forgetObservedFacts`）——前のセッションの文脈占有は自分のものではない。
+   */
+  lastContextUsage: ContextUsageObservation | null;
 }
 
 /** まだ観測していない値の言い方。埋めるのではなく、取れていない理由を言う。 */
@@ -249,7 +278,64 @@ const CLONE_RUNTIME_ITEMS = {
   injectedMemoryChars:
     'システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）',
   systemPromptChars: 'システムプロンプト全体の文字数（毎ターン払っている入力の土台）',
+  /**
+   * ## なぜこの2項目をここへ足すのか（#804）
+   *
+   * `injectedMemoryChars` / `systemPromptChars` は既に「文字数」で毎ターンの
+   * 土台を出している——**それをそのままトークン数と読み替える経路は、この
+   * 2行の並びの直後で開いている。** 実トークン（SDK の `getContextUsage()` が
+   * 返す値。`kind` で分類済み）を真隣に置くのが、その読み替えを塞ぐ最短の形
+   * である。
+   */
+  lastTurnUsedTokens:
+    "直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）",
+  lastTurnUnusedTokens:
+    "同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）",
 } as const;
+
+/**
+ * `facts.lastContextUsage` を「実際に払っていた入力」と「払っていない枠」の
+ * 2行へ整形する（#804）。
+ *
+ * **倒れ先を3つに分ける（どれも 0 を出さない）。**
+ *
+ * 1. `lastContextUsage === null` ——ターンの境界を1度も越えていない
+ * 2. `error` が付いている——観測を試みて失敗した
+ * 3. `categories` が無い——SDK がカテゴリ別の内訳を返さなかった
+ *
+ * この3つを区別せずに数値へ倒すと、「まだ観測していない」が `0 トークン`
+ * という**実際に測った値**に見える（AGENTS.md 地雷表「取れない軸に0の行を
+ * 作る」）。**分類そのもの（`used`/`free`/`buffer`/`deferred`/分類できない軸）は
+ * `context-usage.ts` の `summarizeContextCategories` を呼ぶだけで、ここでは
+ * 二重に判定しない。**
+ */
+function describeLastTurnContextUsage(lastContextUsage: ContextUsageObservation | null): {
+  used: string;
+  unused: string;
+} {
+  if (lastContextUsage === null) {
+    const reason = unknownBecause('ターンの境界をまだ1度も越えていない');
+    return { used: reason, unused: reason };
+  }
+  if (lastContextUsage.error !== undefined) {
+    const reason = `観測を試みて失敗した（理由: ${lastContextUsage.error}）`;
+    return { used: reason, unused: reason };
+  }
+  if (lastContextUsage.categories === undefined) {
+    const reason =
+      'SDK がカテゴリ別の内訳を返さなかった（この回の観測は categories を持っていない）';
+    return { used: reason, unused: reason };
+  }
+  const summary = summarizeContextCategories(lastContextUsage.categories);
+  return {
+    used: `${summary.used.tokens.toLocaleString('en-US')} トークン（${summary.used.count} 軸）`,
+    unused:
+      `free ${summary.free.tokens.toLocaleString('en-US')} トークン（${summary.free.count} 軸） / ` +
+      `buffer ${summary.buffer.tokens.toLocaleString('en-US')} トークン（${summary.buffer.count} 軸） / ` +
+      `deferred ${summary.deferred.tokens.toLocaleString('en-US')} トークン（${summary.deferred.count} 軸） / ` +
+      `分類できず ${summary.unclassified.tokens.toLocaleString('en-US')} トークン（${summary.unclassified.count} 軸）`,
+  };
+}
 
 /** {@link CLONE_RUNTIME_ITEMS} を並び順のまま。**説明文の出所である。** */
 export const CLONE_RUNTIME_ITEM_LABELS: readonly string[] = Object.values(CLONE_RUNTIME_ITEMS);
@@ -268,6 +354,7 @@ export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
             facts.mcpServers.map((server) => `${server.name}(${server.status})`).join(', '),
             SELF_MCP_SERVERS_EXCERPT,
           );
+  const lastTurnContextUsage = describeLastTurnContextUsage(facts.lastContextUsage);
 
   return [
     '## いまどう走っているか',
@@ -307,6 +394,11 @@ export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
     `- ${CLONE_RUNTIME_ITEMS.resumedFrom}: ${facts.resumedFrom ?? '（新規に開いた。前のセッションを引き継いでいない）'}`,
     `- ${CLONE_RUNTIME_ITEMS.injectedMemoryChars}: ${facts.injectedMemoryChars.toLocaleString('en-US')} 文字`,
     `- ${CLONE_RUNTIME_ITEMS.systemPromptChars}: ${facts.systemPromptChars.toLocaleString('en-US')} 文字`,
+    // **ここへ足す理由は `CLONE_RUNTIME_ITEMS.lastTurnUsedTokens` の doc**
+    // （#804。この2行のすぐ上が「文字数」の並びで、そこから実トークンへの
+    // 読み替えが起きていた欠陥への直接の対処）。
+    `- ${CLONE_RUNTIME_ITEMS.lastTurnUsedTokens}: ${lastTurnContextUsage.used}`,
+    `- ${CLONE_RUNTIME_ITEMS.lastTurnUnusedTokens}: ${lastTurnContextUsage.unused}`,
   ].join('\n');
 }
 

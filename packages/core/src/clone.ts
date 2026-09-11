@@ -875,6 +875,22 @@ class Clone implements CloneHost {
   /** init で報告された、いまの SDK セッション id。`#resumedFrom` とは別（あちらは resume 元）。 */
   #sdkSessionId: string | null = null;
   /**
+   * 直近のターンの境界で `#observeContextUsage` が返した観測を、そのまま控える
+   * （#804）。
+   *
+   * **新しく `getContextUsage()` を呼ぶための欄ではない。** `case 'turn_ended'` が
+   * 既に1回呼んでいる戻り値を代入するだけで、呼び出しの回数を1つも増やさない
+   * ——Issue が「`detail: 'full'` は token-count API を呼ぶので、毎ターン呼ぶ
+   * 費用を測ってから決めること」と釘を刺しているのはこの回数についてであり、
+   * ここはその費用を新たに払わない。
+   *
+   * **`null` は「まだ観測していない」。** ターンの境界を1度も越えていないセッ
+   * ションはこのまま——`#observeContextUsage` が失敗した回（`error` 付き）や
+   * `categories` を返さなかった回はここに値が入る（`null` ではない）。3つの
+   * 状態を混ぜないのは `self.ts` の `describeCloneRuntime` 側の仕事。
+   */
+  #lastContextUsage: ContextUsageObservation | null = null;
+  /**
    * 既に日誌へ残した拒否の `tool_use_id`。
    *
    * 生の合図と `result` の記録は同じ1件を2回運んでくるので、ここで畳む。
@@ -5343,6 +5359,7 @@ class Clone implements CloneHost {
       resumedFrom: this.#resumedFrom,
       injectedMemoryChars: this.#promptMemoryChars,
       systemPromptChars: this.#systemPromptChars,
+      lastContextUsage: this.#lastContextUsage,
     };
   }
 
@@ -5353,6 +5370,11 @@ class Clone implements CloneHost {
    * SDK 側の解決結果はセッションを開き直せば変わりうる（版が上がる／帯の別名が
    * 別の id を指す）。effort も同じで、次のセッションで観測し直すまでは
    * 「まだ分からない」が正しい。
+   *
+   * **`#lastContextUsage` も同じ理由で戻す。** 文脈占有は「このセッションが
+   * いまどれだけ窓を使っているか」であって、セッションを開き直せば窓の中身
+   * （記憶の再注入・道具のスキーマ・システムプロンプト）も入れ直しになる——
+   * 前のセッションの占有は、次のセッションの自分のものではない。
    */
   #forgetObservedFacts(): void {
     this.#sdkModel = null;
@@ -5365,6 +5387,7 @@ class Clone implements CloneHost {
     // 次の init が届くまでの窓で「0本」と嘘をつく。
     this.#mcpServersInfo = null;
     this.#sdkSessionId = null;
+    this.#lastContextUsage = null;
   }
 
   /**
@@ -5823,9 +5846,16 @@ class Clone implements CloneHost {
       // 引数なしで呼ぶと SDK の既定は `detail: 'full'`（＝カテゴリごとに
       // token-count API を呼ぶ）なので、**内訳を取り出さなくても費用は同じ**
       // （`schema.ts` の `contextUsage.categories` の doc に逐語）。
+      // **`kind` も写す（#804）。** SDK の doc が名指しでそう言っている
+      // （`schema.ts` の `contextUsage.categories[].kind` の doc、逐語）——
+      // 分類は `kind` の値だけで行い、この `map` は `name` の文字列を
+      // 1文字も見ない。分類そのもの（`used`/`free`/`buffer`/`deferred`/
+      // 分類できない軸）は `context-usage.ts` の `summarizeContextCategories`
+      // が1箇所で持つ——ここは SDK の値をそのまま写すだけである。
       const categories = (usage.categories ?? []).map((category) => ({
         name: category.name,
         tokens: category.tokens,
+        kind: category.kind,
       }));
       const shownCategories = categories.slice(0, CONTEXT_USAGE_CATEGORY_LIMIT);
       const omittedCategories = categories.length - shownCategories.length;
@@ -6294,6 +6324,12 @@ class Clone implements CloneHost {
         // このターンの成否には影響させない —— `#observeContextUsage` が
         // 例外を内側で受け止める。
         const contextUsage = await this.#observeContextUsage();
+        // **`self_status` の材料として控える（#804）。新しい呼び出しは増やさない**
+        // ——上の1回の戻り値をそのまま持つだけである（`#lastContextUsage` の
+        // doc）。`undefined`（まだ観測していない）は `null` へ寄せる —— この欄の
+        // 3値（未観測 `null` / 試して失敗 `error` 付き / 観測できた値）を
+        // `CloneRuntimeFacts.lastContextUsage` 側でも同じ形のまま保つため。
+        this.#lastContextUsage = contextUsage ?? null;
         // **このターンの間に起きた compaction を取り出す。** `this.#turn` は
         // `#finishTurn()` が呼ばれるまでこの後も生きているので、ここで読んでも
         // 消えない（畳むのは `#finishTurn()` が `this.#turn = null` にする形

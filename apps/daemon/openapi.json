@@ -1204,6 +1204,9 @@
                                     "type": "integer",
                                     "minimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "kind": {
+                                    "type": "string"
                                   }
                                 },
                                 "required": ["name", "tokens"]
@@ -2671,6 +2674,9 @@
                                           "type": "integer",
                                           "minimum": 0,
                                           "maximum": 9007199254740991
+                                        },
+                                        "kind": {
+                                          "type": "string"
                                         }
                                       },
                                       "required": ["name", "tokens"]
