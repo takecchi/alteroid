@@ -44,7 +44,9 @@ export const memorySlugSchema = z
  *   2026-09-08 に人間の決定で反転した——`premise` は全文ではなくカード
  *   （要旨＋節の目次）を焼く（`grep -Fn -- '受け入れ基準は、人間が載せ方を反転させた時点で意味を失った' packages/core/src/memory.ts`）。**
  *   frontmatter を1つも持たない文書は、premise としてカードが焼かれ、本文は
- *   `memory_section_read` で節id を渡して開く。
+ *   `memory_section_read` で節id を渡して開く。**`type: indexed`（2026-09-11
+ *   追加）は既知の値なのでここには倒れない**——`indexed` は要旨だけが焼かれ、
+ *   節の目次は焼かれない（下の `memoryDocKindSchema` の doc）。
  * - **`malformed`** — 1行目は `---` だが、狭く固定した形（各行が
  *   `key: value`・キーは既知の集合のみ・ネスト無し・複数行無し・型推論を
  *   しない）から外れた。**`none` に畳まない** — 人間が textarea で編集する
@@ -73,21 +75,31 @@ export const memoryFrontmatterStateSchema = z.discriminatedUnion('kind', [
 export type MemoryFrontmatterState = z.infer<typeof memoryFrontmatterStateSchema>;
 
 /**
- * 区分。**判断の前提（`premise`）はプロンプトへ要旨と節の目次（カード）、
- * 事実と蓄積（`fact`）は目次の1行だけ**が焼かれる。**どちらも本文は焼かれ
- * ない**——premise の本文は `memory_section_read`（節id を渡す）、fact の
+ * 区分。3値（2026-09-11 に `indexed` を追加——`packages/core/src/memory.ts`
+ * の `KNOWN_DOC_KINDS` が唯一の実装として集合を持つ）。**判断の前提
+ * （`premise`）はプロンプトへ要旨と節の目次（カード）、`indexed` は要旨
+ * だけ（節の目次は焼かない）、事実と蓄積（`fact`）は目次の1行だけ**が
+ * 焼かれる。**どの区分も本文は焼かれない**——premise / indexed の本文は
+ * `memory_section_read`（節id を渡す。`indexed` はまず `memory_outline`
+ * で節id を確かめる必要がある——目次が焼き込みに無いため）、fact の
  * 本文は `memory_read` で開く（2026-09-08 の人間の決定で premise の焼き込みを
  * 全文からカードへ反転させた。`grep -Fn -- 'renderPremiseCard' packages/core/src/memory.ts`）。
  *
+ * **`indexed` を選ぶのは「特定のプロジェクトでしか使わない記憶を、それ以外の
+ * ターンでも節の目次だけ毎ターン運ばせない」ためである**（2026-09-10 の
+ * 実測——alteroid-work / virchamate / mnemo / tsumugi の4文書が、触っていない
+ * ターンでも節の目次を焼いていた）。`indexed` の床は必ず `premise` の床
+ * より小さい（`MEMORY_PROMPT_INDEXED_DESCRIPTION_BUDGET` の doc）。
+ *
  * frontmatter が無い（`none`）・読めない（`malformed`）・`type` が既知の
  * 集合に無い値のときは、**すべて `premise` として扱う**（移行の安全弁。
- * `memory.ts` の `resolveMemoryDocKind` の doc）。`fact` を既定にすると、
- * 区分の判定を誤ったとき（本来 `premise` であるべき文書が `fact` に
- * 分類される）に文書が黙って目次の1行へ縮み、クローンはそれに気づけない
+ * `memory.ts` の `resolveMemoryDocKind` の doc）。`fact` や `indexed` を
+ * 既定にすると、区分の判定を誤ったとき（本来 `premise` であるべき文書が
+ * 別の区分に分類される）に文書が黙って縮み、クローンはそれに気づけない
  * — 反対に `premise` を既定にした誤りは「余分にカード（要旨＋節の目次）を焼く」だけなので、
  * `self_status` の総文字数で必ず気づける。
  */
-export const memoryDocKindSchema = z.enum(['premise', 'fact']);
+export const memoryDocKindSchema = z.enum(['premise', 'fact', 'indexed']);
 export type MemoryDocKind = z.infer<typeof memoryDocKindSchema>;
 
 /**

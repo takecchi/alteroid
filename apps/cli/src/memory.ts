@@ -38,7 +38,7 @@ import { resolveTarget } from './target.js';
 export interface MemorySummary {
   slug: string;
   title: string;
-  kind: 'premise' | 'fact';
+  kind: 'premise' | 'fact' | 'indexed';
   description?: string;
   descriptionFreshness: { kind: 'fresh' | 'stale' | 'unknown' | 'absent' };
   /** 最後に本文が変わった時刻。 */
