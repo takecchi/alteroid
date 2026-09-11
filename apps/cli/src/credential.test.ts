@@ -28,9 +28,8 @@ vi.mock('./target.js', async (importOriginal) => ({
     Promise.resolve({ baseUrl: 'http://127.0.0.1:4517', headers: {}, note: null, remote: false }),
 }));
 
-const { credentialListCommand, credentialSetCommand, credentialRemoveCommand } = await import(
-  './credential.js'
-);
+const { credentialListCommand, credentialSetCommand, credentialRemoveCommand } =
+  await import('./credential.js');
 
 interface Reply {
   status: number;
@@ -102,7 +101,11 @@ describe('alteroid credential list', () => {
       body: {
         credentials: [
           { name: 'GH_TOKEN', sha256: 'aaaaaaaaaaaa', updatedAt: '2026-09-01T00:00:00.000Z' },
-          { name: 'GIT_AUTHOR_NAME', sha256: 'bbbbbbbbbbbb', updatedAt: '2026-09-02T00:00:00.000Z' },
+          {
+            name: 'GIT_AUTHOR_NAME',
+            sha256: 'bbbbbbbbbbbb',
+            updatedAt: '2026-09-02T00:00:00.000Z',
+          },
         ],
       },
     });

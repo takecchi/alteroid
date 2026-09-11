@@ -69,7 +69,10 @@ export async function credentialListCommand(): Promise<void> {
   );
 }
 
-export async function credentialSetCommand(name: string, options: { file?: string }): Promise<void> {
+export async function credentialSetCommand(
+  name: string,
+  options: { file?: string },
+): Promise<void> {
   const raw =
     options.file === undefined || options.file === '-'
       ? await readAll()

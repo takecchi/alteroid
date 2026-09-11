@@ -4547,7 +4547,9 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
       runners: { runnerId: string; ok: boolean }[];
     };
     expect(body.credentials.map((entry) => entry.name)).toEqual(['GIT_AUTHOR_NAME', 'NPM_TOKEN']);
-    expect(body.runners).toEqual([{ runnerId: 'runner-1', ok: true, credentials: expect.anything() }]);
+    expect(body.runners).toEqual([
+      { runnerId: 'runner-1', ok: true, credentials: expect.anything() },
+    ]);
     expect(runner.held.get('NPM_TOKEN')).toBe(DUMMY_VALUE);
     // 器を作り直しても戻せる（正本に在る）
     expect((await stores.credentials.list()).map((row) => row.name)).toEqual([
