@@ -64,9 +64,10 @@ function nonEmpty(value: unknown): string | undefined {
  * `assistant` メッセージに付いた失敗の印。無ければ `undefined`。
  *
  * SDK の `SDKAssistantMessage.error` は
- * `'authentication_failed' | 'oauth_org_not_allowed' | 'account_on_hold' | 'billing_error' |
- * 'rate_limit' | 'overloaded' | 'invalid_request' | 'model_not_found' | 'server_error' |
- * 'unknown' | 'max_output_tokens' | 'cloud_credential_error'` である。**支出上限は
+ * `'authentication_failed' | 'oauth_org_not_allowed' | 'account_on_hold' |
+ * 'verification_required' | 'billing_error' | 'rate_limit' | 'overloaded' |
+ * 'invalid_request' | 'model_not_found' | 'server_error' | 'unknown' |
+ * 'max_output_tokens' | 'cloud_credential_error'` である。**支出上限は
  * このうち `billing_error` として来る側**で、つまり SDK は「これはモデルの発言では
  * ない」と最初から言っている。
  *
@@ -105,6 +106,78 @@ function nonEmpty(value: unknown): string | undefined {
  * 接頭辞が1本増えるだけで黙って `time` を名乗りうるので、**名乗らないことのほうを
  * 歯で留めてある**（`sdk-failure.test.ts` の describe
  * 「`cloud_credential_error` — 回復の見込みを名乗らない」）。
+ *
+ * ## `verification_required`（0.3.268 で増えた）は `cloud_credential_error` と逆で、印が揃っている
+ *
+ * **こちらは「Anthropic の API が断った」側そのものである。** HTTP 403 で、
+ * ボディの形は `{error:{type:"permission_error",message,details:{error_code:"verification_required"}}}`
+ * （実測 2026-09-11、`@anthropic-ai/claude-agent-sdk-linux-x64@0.3.268` の
+ * `claude` を `grep -a` して読んだ逐語。この語も npm パッケージ側（`.mjs`）には
+ * 0件で、組み立てはコンパイル済み CLI 本体にしか無い——`cloud_credential_error`
+ * と同じ形）:
+ *
+ * > `function xHt(e,n){if(e!==403)return;let r=vhe().safeParse(n);if(!r.success)return;return cLn(r.data.error.message)}`
+ * > `class kPe extends Error{constructor(e,n){super(e,n);this.name="VerificationRequiredError"}}`
+ *
+ * **`cloud_credential_error` は SDK 自身の印が割れていた**（直上——立てる側は
+ * `apiErrorIsTransient:!0` で一時的だと言い、人へ見せる側は「人が動け」と言い、
+ * 詰まりを上げる分岐では `overloaded` / `rate_limit` と同じ「上げない」側に
+ * 置かれていた。だから「どちらとも名乗らせない」という判断だった）。
+ * **`verification_required` はここが揃っている**（同じ実測から、いずれも逐語）:
+ *
+ * - 人へ見せる側:
+ *   `case"verification_required":return{state:"blocked",needs:fxn}`
+ *   （`fxn="organization verification required — see detail"`）——
+ *   `authentication_failed` / `account_on_hold` / `billing_error` と同じ
+ *   `"blocked"` である。
+ * - 詰まりを上げるかの分岐（`/goal` の自動継続を止めるかどうか）では、
+ *   `account_on_hold` / `authentication_failed` / `billing_error` /
+ *   `model_not_found` と同じ「回復不能・上げる」側に置かれている
+ *   （`overloaded` / `rate_limit` / `invalid_request` / `cloud_credential_error` /
+ *   `unknown` / `max_output_tokens` は「上げない」側のまま）:
+ *   `case"verification_required":return"verification_required"`
+ *   （`authentication_failed` / `account_on_hold` の `"auth"` へは畳まれず、
+ *   専用の箱を持つ。ラベルは
+ *   `{label:"organization verification required",errorCode:"cleared_verification_required"}`）
+ * - この語を立てる箇所（`Ro({error:"verification_required",content:...})`）は
+ *   `apiErrorIsTransient` を**そもそも渡していない**（`cloud_credential_error`
+ *   は明示的に `apiErrorIsTransient:!0` を渡していたのと対照的）。渡されない
+ *   欄は `undefined` になり、CLI 側の判定
+ *   `function VRt(e){return e.apiErrorIsTransient===!0||e.error==="overloaded"||e.error==="server_error"}`
+ *   は `false` を返す——**一時的だと言っている箇所は無い。**
+ *
+ * ⟹ **測った印（403/permission_error・専用クラス名・"blocked"+固定文言・
+ * `/goal` の回復不能群・専用の箱・`apiErrorIsTransient` 不在）が全部同じ向きを
+ * 指している。「人間（または組織の管理者）が動くまで開かない」側だと、ここでは
+ * `cloud_credential_error` と違って判定できる。**
+ *
+ * **それでも `limitRecoveryOf` は `'unknown'` を返す。** ただし理由は
+ * `cloud_credential_error` とは違う。あちらは「SDK の印が割れているので `time`
+ * にも `action` にも倒せない」から `unknown` だった。**こちらは印が揃っていて
+ * 判定できているのに、`limitRecoveryOf` にその判定を運ぶ軸がそもそも無い**——
+ * この関数が見ているのは `SDKAssistantMessageError` の語ではなく
+ * `USAGE_LIMIT_ERROR_PREFIXES` の**文言の接頭辞**であって（`usage-limits.ts`
+ * の doc）、`verification_required` の実際の本文（サーバの `error.message` を
+ * `cLn` で空白正規化・truncate しただけの値——`content:` は `${Ka}: ${o}`、
+ * `Ka="API Error"`。**`cloud_credential_error` の
+ * `Could not load ${p} credentials …` のような CLI 側の固定テンプレートは
+ * この語には存在しない**）は、この12接頭辞のどれとも一致しない形をしている。
+ * **⟹ 「無い」には2種類あり、これを潰さないこと。** ここの `unknown` は
+ * 「とりあえず `unknown`」（＝まだ測っていない・分からない）ではない。
+ * **測れば人間側だと分かっているが、それを名乗る口が無い**——だから
+ * `unknown` になる。**これは分類の放棄ではなく、構造の欠落である。**
+ * `usage-limits.ts` に「`error` の語 → 回復の見込み」の軸を新設するかどうかは
+ * この変更の範囲外（`usage-limits.ts` には触れていない）。
+ *
+ * **歯は2段構えにしてある**（`sdk-failure.test.ts` の describe
+ * 「`verification_required` — 回復の見込みを名乗らない」）——「`time` を
+ * 名乗らないこと」と「`unknown` から他の値へ黙って倒れていないこと」は
+ * 別の固定点である。前者だけだと、`unknown` が別の何かへ倒れる経路が
+ * 空いたままになる。**後者が赤くなったら、それは SDK の
+ * `USAGE_LIMIT_ERROR_PREFIXES` に接頭辞が増え、この語の本文がそこへ
+ * 落ちるようになったという合図である**（失敗メッセージに次に確かめる
+ * 手順を書いてある。この語の扱いを `LIMIT_RECOVERY_BY_PREFIX` へ足すのと
+ * 同時に決めること。（Issue 番号は追って差し込む））。
  *
  * **この写しは数え上げなので腐る。** 腐ったことを `tsc` に言わせる歯は
  * `sdk-failure.test.ts` の `SDK_ASSISTANT_ERROR_CODES` にあり、SDK が語を増やすと
