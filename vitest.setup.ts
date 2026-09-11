@@ -78,3 +78,71 @@ afterEach(() => {
       ' process.stderr.write を使うこと（どちらもこの歯を通らない）。',
   ).toBe('');
 });
+
+/**
+ * **DOM を持つ環境（jsdom）のテストは、終わるときに macrotask 境界を1つ必ず作る。**
+ *
+ * ## 何が起きていたか
+ *
+ * Radix の `FocusScope`（ドロワー＝`drawer.tsx` → shadcn `sheet` → Radix Dialog が
+ * 中で使う）は、**unmount の後始末を `setTimeout(..., 0)` へ逃がす**。その中で
+ * `new CustomEvent('focusScope.autoFocusOnUnmount')` を作り、`container` へ
+ * `dispatchEvent` して、元の場所へ焦点を戻す
+ * （`@radix-ui/react-focus-scope/dist/index.mjs`）。
+ *
+ * **`cleanup()` はこの macrotask を消化しない。** `cleanup()` が返った時点では
+ * まだ積まれたままで、テストが終わってもそのまま残る。残った先で発火すると、
+ * その時点の `CustomEvent` が `container` の属する DOM のものと食い違い、
+ * 走行全体がこう落ちる:
+ *
+ * ```
+ * Test Files  237 passed (237)
+ * Tests       5592 passed (5592)
+ * Errors      1 error          ← これだけで exit 1
+ *
+ * TypeError: Failed to execute 'dispatchEvent' on 'EventTarget':
+ *            parameter 1 is not of type 'Event'.
+ *  ❯ Timeout._onTimeout @radix-ui/react-focus-scope/dist/index.mjs:97:23
+ * ```
+ *
+ * **集計行は全部 `passed` を名乗ったまま exit 1 になる。** これが一番悪い形で、
+ * 「テストが1本落ちている」より重い —— **門が嘘をつく**。しかも同じコミットで
+ * 再走させると緑になる（間欠）ので、「あの変更が壊した」を追っても何も出ない。
+ *
+ * ## なぜ per-file のヘルパにしないのか
+ *
+ * **上の stdout の歯とまったく同じ理由である。** 「呼べば効くが忘れれば何も
+ * しない」ものを各テストファイルへ配ると、次に足されるファイルで静かに再発する。
+ * `apps/web` の jsdom テストは現に38本あり、描画するものはどれも自前の
+ * `afterEach` で `cleanup()` を手で呼んでいて（`~/test-support` はライフサイクルの
+ * フックを1つも登録していない —— 逐語で「後片付けは呼ぶ側」と書いてある）、
+ * 共有のヘルパを足しても **39個目の「呼び忘れうるもの」**が増えるだけである。
+ *
+ * ## なぜ `afterEach` で足りるのか（実測）
+ *
+ * - **global setup の `afterEach` は、各ファイル自身の `afterEach` より後に走る。**
+ *   `cleanup()` が積んだ macrotask が、ここへ来る時点で必ず積まれている
+ *   （ファイル側 → global の順であることは実測で確かめた）。
+ * - **Node の timer は同じ遅延どうしなら積んだ順に発火する。** ここで積む 0ms は
+ *   Radix のものより後なので、Radix 側が先に走り切る。
+ *
+ * ## なぜ `globalThis.setTimeout` を直接呼ばないのか
+ *
+ * テストが `vi.useFakeTimers()` を掛けたまま終わると、`globalThis.setTimeout` は
+ * 偽の時計に差し替わっていて**誰も進めないので永久に返らない**。setup が読まれる
+ * 時点（＝どのテストも動く前）の本物を捕まえておき、それを使う。
+ *
+ * ## なぜ DOM のある環境だけなのか
+ *
+ * 消化したいのは DOM の後始末（`dispatchEvent` / 焦点）だけで、それは jsdom の
+ * ファイルにしか無い。**「呼び忘れ」の穴は開かない** —— 判定しているのは
+ * 環境そのものであって、テストの書き手が足す1行ではない。
+ */
+const realSetTimeout = globalThis.setTimeout;
+
+afterEach(async () => {
+  if (typeof window === 'undefined') return;
+  await new Promise<void>((resolve) => {
+    realSetTimeout(resolve, 0);
+  });
+});
