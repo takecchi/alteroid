@@ -15,6 +15,20 @@ export function formatConsolidationCostReport(json: MeasuredConsolidationCostRun
       `recallLimit=${json.recallLimit} budgetLadder=[${json.budgetLadder.join(",")}]`,
   );
   lines.push(`stoppedAfterRound=${json.stoppedAfterRound} stopReason=${json.stopReason}`);
+  // ⚠ `json.abort === null`(打ち切っていない)のときは1行も足さない——正常系の出力は
+  // 完走したときの表と1文字も変わらない。`abort !== null` のときだけ、以下の表が
+  // 「round `abort.round` の実行中に例外で打ち切った部分的な結果である」ことを明示する
+  // (打ち切りの表が完走した表と見分けが付かない形にしない)。
+  if (json.abort !== null) {
+    lines.push(
+      `⚠ round ${json.abort.round} の実行中に例外が投げられ、打ち切った。` +
+        `以下の表は round 0〜${json.abort.round - 1} までの部分的な結果である。`,
+    );
+    lines.push(`  sqlState=${json.abort.sqlState ?? "なし"}`);
+    json.abort.causeChain.forEach((message, i) => {
+      lines.push(`  [${i}] ${message}`);
+    });
+  }
   lines.push("");
   lines.push(
     "| round | 統合(groups/llmCalls) | outcomes | activeCount | supersededCount | " +

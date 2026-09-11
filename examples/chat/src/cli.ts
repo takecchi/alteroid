@@ -20,7 +20,10 @@ import {
 import { parseConsolidationCostOptions } from "./consolidation-cost-options.js";
 import { runConsolidationCost } from "./consolidation-cost.js";
 import { formatConsolidationCostReport } from "./consolidation-cost-format.js";
-import { buildWeightsUnavailableConsolidationCostRunJson } from "./consolidation-json.js";
+import {
+  buildWeightsUnavailableConsolidationCostRunJson,
+  exitCodeForConsolidationCostRun,
+} from "./consolidation-json.js";
 import { formatRecall } from "./format.js";
 import { tryGitRevParseHead } from "./git-info.js";
 import { formatIdentifierArmReport, runIdentifierProbeArm } from "./identifier-arm.js";
@@ -966,6 +969,10 @@ async function runConsolidationCostCommand(): Promise<void> {
       writeFileSync(jsonPath, `${JSON.stringify(json, null, 2)}\n`, "utf-8");
       console.log(`\n[consolidation-cost] 機械可読な結果を書き出した: ${jsonPath}`);
     }
+    // round の途中で例外により打ち切った場合も、ここまでのレポート印字・JSON書き出しは
+    // 上と同じく行った上で、終了コードだけ非0にする(測れた分を捨てない——これが今回の
+    // 増分。`weights_unavailable` の経路は上の `return` で既に打ち切っており、ここには来ない)。
+    process.exitCode = exitCodeForConsolidationCostRun(json);
   } finally {
     await handle.close();
   }

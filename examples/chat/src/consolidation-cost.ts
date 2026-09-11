@@ -5,9 +5,11 @@ import {
   buildConsolidationMeanJson,
   buildConsolidationProbeJson,
   buildConsolidationStoreJson,
+  describeThrownError,
   emptyOutcomeCounts,
 } from "./consolidation-json.js";
 import type {
+  ConsolidationAbortJson,
   ConsolidationCostRunJson,
   ConsolidationEmbeddingSpaceJson,
   ConsolidationOutcomeCountsJson,
@@ -271,6 +273,7 @@ export async function runConsolidationCost(
   let candidatePool = [...fillerIds];
   let stoppedAfterRound = 0;
   let stopReason: ConsolidationStopReason = "completed_all_rounds";
+  let abort: ConsolidationAbortJson | null = null;
 
   for (let round = 1; round <= MAX_ROUNDS; round += 1) {
     if (candidatePool.length < 2) {
@@ -278,62 +281,77 @@ export async function runConsolidationCost(
       break;
     }
 
-    const { groups, leftover } = splitIntoConsolidationGroups(candidatePool, options.groupSize);
-    const outcomes: ConsolidationOutcomeCountsJson = emptyOutcomeCounts();
-    let llmCalls = 0;
-    const nextPool: string[] = [];
-    const newMemoryIdsThisRound: string[] = [];
+    // ⚠ この try は round の本体まるごとを囲む(群のループ・drainEmbedTicks・
+    // measureNewMemoriesEmbedding・measureStore・measureRecallForRound)。全部 store を
+    // 触るので、どの段で例外が起きても「測れた分を捨てて死ぬ」のではなく、
+    // 完走した round までの結果を持って `aborted_on_error` で打ち切る
+    // (`consolidate()` は ADR 0100 / PR #144 以降、失敗時に投げる)。
+    // 関数全体を1つの try で囲まないのは、そうすると「どの round で死んだか」が
+    // 分からなくなるため。
+    try {
+      const { groups, leftover } = splitIntoConsolidationGroups(candidatePool, options.groupSize);
+      const outcomes: ConsolidationOutcomeCountsJson = emptyOutcomeCounts();
+      let llmCalls = 0;
+      const nextPool: string[] = [];
+      const newMemoryIdsThisRound: string[] = [];
 
-    for (const group of groups) {
-      const result = await options.runtime.consolidate(ctx, {
-        target: { memoryIds: group },
-        reason: `consolidation-cost round ${round}`,
-      });
-      outcomes[result.outcome] += 1;
-      llmCalls += result.llmCalls;
-      if (result.outcome === "consolidated" && result.consolidatedMemoryId !== null) {
-        nextPool.push(result.consolidatedMemoryId);
-        newMemoryIdsThisRound.push(result.consolidatedMemoryId);
-        allIds.push(result.consolidatedMemoryId);
-      } else {
-        // この bench では起きない想定だが(全対象は直前の round で active と確認した
-        // filler/統合結果のみ)、起きた場合は対象を「未統合のまま」次の round へ持ち越す
-        // ——黙って消さない。
-        nextPool.push(...group);
+      for (const group of groups) {
+        const result = await options.runtime.consolidate(ctx, {
+          target: { memoryIds: group },
+          reason: `consolidation-cost round ${round}`,
+        });
+        outcomes[result.outcome] += 1;
+        llmCalls += result.llmCalls;
+        if (result.outcome === "consolidated" && result.consolidatedMemoryId !== null) {
+          nextPool.push(result.consolidatedMemoryId);
+          newMemoryIdsThisRound.push(result.consolidatedMemoryId);
+          allIds.push(result.consolidatedMemoryId);
+        } else {
+          // この bench では起きない想定だが(全対象は直前の round で active と確認した
+          // filler/統合結果のみ)、起きた場合は対象を「未統合のまま」次の round へ持ち越す
+          // ——黙って消さない。
+          nextPool.push(...group);
+        }
       }
+      candidatePool = [...nextPool, ...leftover];
+
+      await drainEmbedTicks(options.runtime, ctx);
+
+      const embedding = await measureNewMemoriesEmbedding(
+        options.memoryStore,
+        options.pool,
+        ctx,
+        newMemoryIdsThisRound,
+      );
+
+      const store = await measureStore(options.memoryStore, ctx, allIds);
+      const recall = await measureRecallForRound(
+        options.runtime,
+        options.memoryStore,
+        ctx,
+        store.json.activeCount,
+        options.budgetLadder,
+        options.recallLimit,
+      );
+
+      const consolidation: ConsolidationRoundConsolidationJson = {
+        groups: groups.length,
+        llmCalls,
+        outcomes,
+        newMemoryCount: newMemoryIdsThisRound.length,
+        embeddingStatus: embedding.embeddingStatus,
+        embeddingFailureKinds: embedding.embeddingFailureKinds,
+      };
+
+      rounds.push({ round, consolidation, store: store.json, recall });
+      // ⚠ この行の直前で例外が起きた場合は実行されない——`stoppedAfterRound` は
+      // 最後に完走した round のままになる(落ちた round は完走していない)。
+      stoppedAfterRound = round;
+    } catch (error) {
+      abort = describeThrownError(error, round);
+      stopReason = "aborted_on_error";
+      break;
     }
-    candidatePool = [...nextPool, ...leftover];
-
-    await drainEmbedTicks(options.runtime, ctx);
-
-    const embedding = await measureNewMemoriesEmbedding(
-      options.memoryStore,
-      options.pool,
-      ctx,
-      newMemoryIdsThisRound,
-    );
-
-    const store = await measureStore(options.memoryStore, ctx, allIds);
-    const recall = await measureRecallForRound(
-      options.runtime,
-      options.memoryStore,
-      ctx,
-      store.json.activeCount,
-      options.budgetLadder,
-      options.recallLimit,
-    );
-
-    const consolidation: ConsolidationRoundConsolidationJson = {
-      groups: groups.length,
-      llmCalls,
-      outcomes,
-      newMemoryCount: newMemoryIdsThisRound.length,
-      embeddingStatus: embedding.embeddingStatus,
-      embeddingFailureKinds: embedding.embeddingFailureKinds,
-    };
-
-    rounds.push({ round, consolidation, store: store.json, recall });
-    stoppedAfterRound = round;
   }
 
   return buildConsolidationCostRunJson({
@@ -350,5 +368,6 @@ export async function runConsolidationCost(
     rounds,
     measuredAt: options.measuredAt,
     commit: options.commit,
+    abort,
   });
 }

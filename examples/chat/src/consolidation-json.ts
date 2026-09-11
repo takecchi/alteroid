@@ -130,7 +130,23 @@ export type ConsolidationStopReason =
   /** 指定した最大 round 数まで実行できた(打ち切りではない)。 */
   | "completed_all_rounds"
   /** ある round の開始時点で、統合対象(filler 由来の active な候補)が2件未満だった。 */
-  | "insufficient_candidates";
+  | "insufficient_candidates"
+  /** ある round の実行中に例外が投げられ、打ち切った。詳細は `abort` 欄。 */
+  | "aborted_on_error";
+
+/**
+ * round の実行中に投げられた例外を、cause の連鎖を辿って記述したもの
+ * (`stopReason === "aborted_on_error"` のときだけ非 null。詳細は
+ * `ConsolidationCostRunJson["measured"]["abort"]` の doc 参照)。
+ */
+export interface ConsolidationAbortJson {
+  /** 例外が起きた round 番号。この round の行は `rounds` に無い。 */
+  round: number;
+  /** cause の連鎖の各段の message(先頭が投げられた例外自身)。空配列にはならない。 */
+  causeChain: string[];
+  /** 連鎖のどこかに在った文字列の `code`(PostgreSQL の SQLSTATE)。無ければ null。 */
+  sqlState: string | null;
+}
 
 /**
  * `status` で「測ったが値がこうだった」と「そもそも測れなかった」を区別する
@@ -158,6 +174,11 @@ export type ConsolidationCostRunJson =
       stoppedAfterRound: number;
       stopReason: ConsolidationStopReason;
       rounds: ConsolidationRoundJson[];
+      /**
+       * `stopReason === "aborted_on_error"` のときだけ非 null。他の2値では
+       * `null`(「打ち切っていない」であって「打ち切ったが詳細不明」ではない)。
+       */
+      abort: ConsolidationAbortJson | null;
     }
   | {
       schemaVersion: 1;
@@ -306,6 +327,7 @@ export interface BuildConsolidationCostRunJsonOptions {
   rounds: ConsolidationRoundJson[];
   measuredAt: Date;
   commit: string | null;
+  abort: ConsolidationAbortJson | null;
 }
 
 /** トップレベルの JSON を組み立てる(`status: "measured"`)。純関数——`rounds` は呼び出し側が
@@ -329,6 +351,7 @@ export function buildConsolidationCostRunJson(
     stoppedAfterRound: options.stoppedAfterRound,
     stopReason: options.stopReason,
     rounds: options.rounds,
+    abort: options.abort,
   };
 }
 
@@ -354,4 +377,61 @@ export function buildWeightsUnavailableConsolidationCostRunJson(options: {
 /** `ConsolidateOutcome` の5値をすべて0に初期化した内訳。 */
 export function emptyOutcomeCounts(): ConsolidationOutcomeCountsJson {
   return { consolidated: 0, nothing_to_consolidate: 0, not_examined: 0, llm_failed: 0, dry_run: 0 };
+}
+
+/**
+ * `runtime.consolidate()` が投げた例外を、cause の連鎖を辿った形で記述する
+ * (ADR 0100 / PR #144 以降、`consolidate()` は失敗時に投げる)。
+ *
+ * ⚠ **`String(error)` に畳まない**: drizzle が pg のエラーを `Error: Failed query: ...`
+ * で包むため、投げられた例外そのものの message だけでは元のメッセージも SQLSTATE も
+ * 失われる。`cause` の連鎖を辿って全段の message を集め、SQLSTATE(文字列の `.code`)を
+ * どこかの段から探す。辿り方は
+ * `packages/postgres/src/__tests__/foreign-key-violation.postgres.test.ts` の
+ * `sqlStateOf`(深さ上限8、文字列の `.code` を探す)に**倣う**——**同じ理由**:
+ * drizzle が pg のエラーを包むので `.code` を直読みすると `undefined` になる。
+ *
+ * `Error` でない値(文字列・null 等)が投げられても落ちない——`causeChain` は
+ * 最低1件、投げられた値そのものの文字列表現を持つ(空配列にはならない)。
+ */
+export function describeThrownError(error: unknown, round: number): ConsolidationAbortJson {
+  const causeChain: string[] = [];
+  let sqlState: string | null = null;
+  let current: unknown = error;
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (current === null || current === undefined) {
+      if (causeChain.length === 0) {
+        causeChain.push(String(current));
+      }
+      break;
+    }
+    causeChain.push(current instanceof Error ? current.message : String(current));
+    const code = (current as { code?: unknown }).code;
+    if (sqlState === null && typeof code === "string") {
+      sqlState = code;
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return { round, causeChain, sqlState };
+}
+
+/**
+ * `cli.ts` の `runConsolidationCostCommand` が立てる終了コード。
+ *
+ * **これを純関数として切り出す理由**: cli.ts の終了コードの判断を歯で測れる形にする
+ * ため——`process.exitCode` への副作用そのものは歯で直接検査しづらい。
+ *
+ * - `status === "weights_unavailable"`(重みを取得できず、そもそも測れなかった) → 1
+ * - `stopReason === "aborted_on_error"`(round の途中で例外により打ち切った) → 1
+ * - それ以外(`completed_all_rounds` / `insufficient_candidates`、いずれも意図した
+ *   完走・停止) → 0
+ */
+export function exitCodeForConsolidationCostRun(json: ConsolidationCostRunJson): 0 | 1 {
+  if (json.status === "weights_unavailable") {
+    return 1;
+  }
+  if (json.stopReason === "aborted_on_error") {
+    return 1;
+  }
+  return 0;
 }

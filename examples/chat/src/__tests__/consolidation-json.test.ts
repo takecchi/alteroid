@@ -8,10 +8,17 @@ import {
   buildWeightsUnavailableConsolidationCostRunJson,
   carriedDigestTokensOf,
   computeRecalledActiveShare,
+  describeThrownError,
   emptyOutcomeCounts,
+  exitCodeForConsolidationCostRun,
   meanExcludingNullGoldRank,
 } from "../consolidation-json.js";
-import type { ConsolidationRecallProbeJson, RawProbeMeasurement } from "../consolidation-json.js";
+import type {
+  ConsolidationAbortJson,
+  ConsolidationCostRunJson,
+  ConsolidationRecallProbeJson,
+  RawProbeMeasurement,
+} from "../consolidation-json.js";
 
 describe("computeRecalledActiveShare", () => {
   it("carriedCount / activeCount", () => {
@@ -207,6 +214,7 @@ describe("buildConsolidationCostRunJson", () => {
       rounds: [],
       measuredAt,
       commit: "abc",
+      abort: null,
     });
     expect(json.schemaVersion).toBe(1);
     expect(json.status).toBe("measured");
@@ -222,6 +230,7 @@ describe("buildConsolidationCostRunJson", () => {
     expect(json.stoppedAfterRound).toBe(3);
     expect(json.stopReason).toBe("completed_all_rounds");
     expect(json.rounds).toEqual([]);
+    expect(json.abort).toBeNull();
   });
 
   it("budgetLadder は写しであり、呼び出し側配列の変更に影響されない", () => {
@@ -240,6 +249,7 @@ describe("buildConsolidationCostRunJson", () => {
       rounds: [],
       measuredAt: new Date(),
       commit: null,
+      abort: null,
     });
     ladder.push(999);
     expect(json.budgetLadder).toEqual([32, 64]);
@@ -265,3 +275,104 @@ describe("buildWeightsUnavailableConsolidationCostRunJson", () => {
     }
   });
 });
+
+describe("describeThrownError", () => {
+  it("cause の連鎖を3段辿って各段のメッセージを集め、深い段の文字列 code を sqlState として拾う", () => {
+    // ⚠ 歯の入力はリテラルで置く(測定対象の実装から導かない)。
+    const innermost = Object.assign(new Error("pg-innermost-message-af3e9"), {
+      code: "23503",
+    });
+    const middle = new Error("drizzle-wrapped-message-b71c2", { cause: innermost });
+    const outer = new Error("outer-thrown-message-9d4f1", { cause: middle });
+
+    const abort = describeThrownError(outer, 3);
+
+    expect(abort.round).toBe(3);
+    expect(abort.sqlState).toBe("23503");
+    expect(abort.causeChain).toEqual([
+      "outer-thrown-message-9d4f1",
+      "drizzle-wrapped-message-b71c2",
+      "pg-innermost-message-af3e9",
+    ]);
+  });
+
+  it("Error でない値(文字列)が投げられても落ちず、causeChain は空配列にならない", () => {
+    const abort = describeThrownError("plain-string-thrown-77xk", 1);
+    expect(abort.round).toBe(1);
+    expect(abort.causeChain).toEqual(["plain-string-thrown-77xk"]);
+    expect(abort.sqlState).toBeNull();
+  });
+
+  it("null/undefined が投げられても落ちず、causeChain は空配列にならない", () => {
+    expect(describeThrownError(null, 2).causeChain).toEqual(["null"]);
+    expect(describeThrownError(undefined, 2).causeChain).toEqual(["undefined"]);
+    expect(describeThrownError(null, 2).sqlState).toBeNull();
+  });
+
+  it("code を持たない cause の連鎖なら sqlState は null", () => {
+    const outer = new Error("no-code-anywhere-3f1a", {
+      cause: new Error("still-no-code-9b2e"),
+    });
+    const abort = describeThrownError(outer, 0);
+    expect(abort.sqlState).toBeNull();
+    expect(abort.causeChain).toEqual(["no-code-anywhere-3f1a", "still-no-code-9b2e"]);
+  });
+});
+
+function measuredJsonWithStopReason(
+  stopReason: "completed_all_rounds" | "insufficient_candidates" | "aborted_on_error",
+  abort: ConsolidationAbortJson | null,
+): Extract<ConsolidationCostRunJson, { status: "measured" }> {
+  return buildConsolidationCostRunJson({
+    llmMode: "deterministic",
+    embeddingMode: "local",
+    embeddingSpace: { provider: "local", model: "m", dimensions: 1 },
+    probeCount: 0,
+    haystackSize: 0,
+    groupSize: 1,
+    budgetLadder: [],
+    recallLimit: 1,
+    stoppedAfterRound: 0,
+    stopReason,
+    rounds: [],
+    measuredAt: new Date(),
+    commit: null,
+    abort,
+  });
+}
+
+describe(
+  "exitCodeForConsolidationCostRun — 「完走した」「意図した停止(候補不足)」" +
+    "「例外で打ち切った」「そもそも測っていない(weights_unavailable)」の4つを終了コードで見分ける",
+  () => {
+    it("completed_all_rounds は 0", () => {
+      expect(
+        exitCodeForConsolidationCostRun(measuredJsonWithStopReason("completed_all_rounds", null)),
+      ).toBe(0);
+    });
+
+    it("insufficient_candidates は 0(意図した停止であり失敗ではない)", () => {
+      expect(
+        exitCodeForConsolidationCostRun(
+          measuredJsonWithStopReason("insufficient_candidates", null),
+        ),
+      ).toBe(0);
+    });
+
+    it("aborted_on_error は 1", () => {
+      const abort = describeThrownError(new Error("round-abort-cause-4k2p"), 2);
+      expect(
+        exitCodeForConsolidationCostRun(measuredJsonWithStopReason("aborted_on_error", abort)),
+      ).toBe(1);
+    });
+
+    it("weights_unavailable は 1(そもそも測っていない)", () => {
+      const json = buildWeightsUnavailableConsolidationCostRunJson({
+        measuredAt: new Date(),
+        commit: null,
+        detail: "重みを取得できなかったので、値は測っていない: network error",
+      });
+      expect(exitCodeForConsolidationCostRun(json)).toBe(1);
+    });
+  },
+);
