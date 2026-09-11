@@ -64,6 +64,28 @@ export class Inbox {
   }
 
   /**
+   * `drainWhile` が次に取るはずの範囲を、**取り出さずに**数える（issue #783）。
+   *
+   * `drainWhile` と同じ述語で受け、同じ規則で数える —— **先頭から連続して
+   * 条件を満たす件数**であり、途中で条件を満たさないものに当たったらそこで
+   * 止める（飛び越えて数えない）。`#queue` そのものは1件も動かさない。
+   *
+   * **`Clone#drainMergeableWithinLimit` が、上限で束を打ち切った直後に
+   * 「同じ束へ入るはずの合図があと何件、待ち行列の先頭に残っているか」を
+   * 答えるために使う。** `drainWhile` を呼べば同じ答えが取り出せるが、それでは
+   * 実際に取り出してしまい、上限の意味が消える —— 数えるだけで済ませたい
+   * 呼び出し側のために、取り出さない形をここへ別に持つ。
+   */
+  countWhile(predicate: (event: InboxEvent) => boolean): number {
+    let count = 0;
+    for (const event of this.#queue) {
+      if (!predicate(event)) break;
+      count += 1;
+    }
+    return count;
+  }
+
+  /**
    * イベントを積む。**既定は末尾**（純粋な先入れ先出し）。
    *
    * ## `insertAfterLast` — 割り込ませる口

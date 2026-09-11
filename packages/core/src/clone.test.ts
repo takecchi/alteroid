@@ -9761,7 +9761,9 @@ describe('クローン — 処理待ちのあいだに積み上がった発言',
     const merged = s.calls[0]?.inputs[1] ?? '';
     expect(merged).toContain('二件目');
     expect(merged).toContain('三件目');
-    expect(merged).toContain('**2 件** の発言が届いた');
+    // issue #783 の続き：「N件が届いた」ではなく「N件をまとめて渡す」
+    // （束の件数であって届いた総数ではないため、上限で切っても偽にならない）。
+    expect(merged).toContain('続けて **2 件** まとめて渡す');
     // 届いた順のまま渡す（言い直しを先に読ませない）
     expect(merged.indexOf('二件目')).toBeLessThan(merged.indexOf('三件目'));
 
@@ -10086,7 +10088,9 @@ describe('humanTurnText（ターン本文の組み立て）', () => {
       message('BBB', '2026-08-20T10:00:09.000Z'),
     ]);
 
-    expect(text).toContain('**2 件** の発言が届いた');
+    // issue #783 の続き：「N件が届いた」ではなく「N件をまとめて渡す」（束の
+    // 件数であって届いた総数ではないため、上限で切っても偽にならない言い方）。
+    expect(text).toContain('続けて **2 件** まとめて渡す');
     expect(text).toContain('AAA');
     expect(text).toContain('BBB');
     expect(text.indexOf('AAA')).toBeLessThan(text.indexOf('BBB'));
@@ -11273,6 +11277,148 @@ describe('クローン — 同じマネージャーの連続する report をま
     expect(solo).not.toContain('続けて');
     expect(solo).not.toContain('まとめて読んでから');
     expect(solo).not.toContain('**(1)**');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  /**
+   * **上限で切ったという事実が、いまはクローンから見える（issue #783 の続き）。**
+   * PR #836 が足した上限（`MERGED_BATCH_SIZE_LIMIT` / `#drainMergeableWithinLimit`）は、
+   * 切っても跡を1文字も残さなかった —— この節はその欠陥の直しを撃つ。
+   *
+   * **境界の両側と、残り件数の1・2の両方を1本ずつに分けて撃つ**（オフバイワンを
+   * 殺すため）。**断り書きの行は改行で割って1本に特定し、`toBe` で全文一致させる**
+   * （AGENTS.md「語ではなくデータで測る」— PR #822 / #826 の教訓）。
+   */
+  it('上限ちょうど（切らない）: 断り書きが1文字も載らない', async () => {
+    const s = setup(undefined, createMemoryStores(), {}, { ALTEROID_MERGED_BATCH_SIZE_LIMIT: '2' });
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    // ちょうど上限（2件）だけ届け、他には何も残さない——上限に当たっても
+    // 「同じ束に入るはずの分」が待ち行列に無いので、切ったことにはならない。
+    s.clone.post(managerMessage('exact1', 'mgr-exact', 'ちょうど上限1本目'));
+    s.clone.post(managerMessage('exact2', 'mgr-exact', 'ちょうど上限2本目'));
+
+    await waitFor(
+      () => s.calls[0]?.inputs[1]?.includes('ちょうど上限2本目') ?? false,
+      'まとめたターンが投げられる',
+    );
+    await settle();
+
+    const merged = (s.calls[0] as FakeCall).inputs[1] ?? '';
+    expect(merged).toContain('ちょうど上限1本目');
+    expect(merged).toContain('ちょうど上限2本目');
+    // **いちばん多い経路（切っていない）の出力を1文字も変えない。**
+    expect(merged).not.toContain('このターンへ束ねる合図は、上限');
+    expect(merged).not.toContain('1件も失われていない');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('上限+1（切る・残り1件）: 断り書きが1行、値は限度2・束2・残り1', async () => {
+    const s = setup(undefined, createMemoryStores(), {}, { ALTEROID_MERGED_BATCH_SIZE_LIMIT: '2' });
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post(managerMessage('r1', 'mgr-plus1', '上限+1テスト1本目'));
+    s.clone.post(managerMessage('r2', 'mgr-plus1', '上限+1テスト2本目'));
+    s.clone.post(managerMessage('r3', 'mgr-plus1', '上限+1テスト3本目'));
+
+    await waitFor(
+      () => s.calls[0]?.inputs[2]?.includes('上限+1テスト3本目') ?? false,
+      '3本目（単独）のターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    // 先客 + [1+2まとめ・切った束] + [3単独] = 3本。
+    expect(inputs).toHaveLength(3);
+
+    const truncated = inputs[1] ?? '';
+    expect(truncated).toContain('上限+1テスト1本目');
+    expect(truncated).toContain('上限+1テスト2本目');
+    expect(truncated).not.toContain('上限+1テスト3本目');
+    expect(lineStartingWith(truncated, '[system] **このターンへ束ねる合図は、上限')).toBe(
+      '[system] **このターンへ束ねる合図は、上限（2 件）で切った束である（この束は 2 件）。**' +
+        '同じ束に入るはずの合図が、待ち行列の先頭にあと 1 件連続して残っている。',
+    );
+    expect(truncated).toContain(
+      '**1件も失われていない** —— 上限で止めただけで、外れた分は次のターンで同じ形でまた束ね直される。',
+    );
+
+    // 3件目（単独）には切った断り書きが載らない——待ち行列に何も残っていない。
+    const solo = inputs[2] ?? '';
+    expect(solo).toContain('上限+1テスト3本目');
+    expect(solo).not.toContain('このターンへ束ねる合図は、上限');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('上限+2（切る・残り2件）: 続く束はちょうど上限で切っていない', async () => {
+    const s = setup(undefined, createMemoryStores(), {}, { ALTEROID_MERGED_BATCH_SIZE_LIMIT: '2' });
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post(managerMessage('r1', 'mgr-plus2', '上限+2テスト1本目'));
+    s.clone.post(managerMessage('r2', 'mgr-plus2', '上限+2テスト2本目'));
+    s.clone.post(managerMessage('r3', 'mgr-plus2', '上限+2テスト3本目'));
+    s.clone.post(managerMessage('r4', 'mgr-plus2', '上限+2テスト4本目'));
+
+    await waitFor(
+      () => s.calls[0]?.inputs[2]?.includes('上限+2テスト4本目') ?? false,
+      '2本目の束（3+4）ぶんの入力が投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    // 先客 + [1+2まとめ・切った束、残り2] + [3+4まとめ・ちょうど上限、切っていない] = 3本。
+    expect(inputs).toHaveLength(3);
+
+    const firstBatch = inputs[1] ?? '';
+    expect(firstBatch).toContain('上限+2テスト1本目');
+    expect(firstBatch).toContain('上限+2テスト2本目');
+    expect(lineStartingWith(firstBatch, '[system] **このターンへ束ねる合図は、上限')).toBe(
+      '[system] **このターンへ束ねる合図は、上限（2 件）で切った束である（この束は 2 件）。**' +
+        '同じ束に入るはずの合図が、待ち行列の先頭にあと 2 件連続して残っている。',
+    );
+
+    // 2本目の束は、それ自身がちょうど上限（2件）だが、後ろに何も残っていない
+    // ので切ったことにはならない——断り書きが載らない。
+    const secondBatch = inputs[2] ?? '';
+    expect(secondBatch).toContain('上限+2テスト3本目');
+    expect(secondBatch).toContain('上限+2テスト4本目');
+    expect(secondBatch).not.toContain('このターンへ束ねる合図は、上限');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('人間の発言でも同じ断り書きが載る（`#mergedHumanBatch` 経由でも共有の実装を通る）', async () => {
+    const s = setup(undefined, createMemoryStores(), {}, { ALTEROID_MERGED_BATCH_SIZE_LIMIT: '2' });
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post(humanMessage('人間1本目'));
+    s.clone.post(humanMessage('人間2本目'));
+    s.clone.post(humanMessage('人間3本目'));
+
+    await waitFor(
+      () => s.calls[0]?.inputs[2]?.includes('人間3本目') ?? false,
+      '3本目（単独）のターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    expect(inputs).toHaveLength(3);
+    const truncated = inputs[1] ?? '';
+    expect(lineStartingWith(truncated, '[system] **このターンへ束ねる合図は、上限')).toBe(
+      '[system] **このターンへ束ねる合図は、上限（2 件）で切った束である（この束は 2 件）。**' +
+        '同じ束に入るはずの合図が、待ち行列の先頭にあと 1 件連続して残っている。',
+    );
 
     await s.clone.stop();
   }, 15_000);

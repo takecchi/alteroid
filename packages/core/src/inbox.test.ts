@@ -154,6 +154,43 @@ describe('Inbox', () => {
     expect((await pending)?.id).toBe('evt-later');
   });
 
+  it('countWhile は drainWhile と同じ件数を、取り出さずに数える（issue #783）', async () => {
+    const inbox = new Inbox();
+    inbox.push(humanMessage('a'));
+    inbox.push(humanMessage('b'));
+    inbox.push(humanMessage('c'));
+
+    const first = await inbox.next();
+    expect(first?.id).toBe('evt-a');
+    expect(inbox.countWhile((event) => event.type === 'human_message')).toBe(2);
+    // 数えただけで、待ち行列は1件も動いていない。
+    expect(inbox.size).toBe(2);
+    expect(inbox.drainWhile((event) => event.type === 'human_message').map((e) => e.id)).toEqual([
+      'evt-b',
+      'evt-c',
+    ]);
+  });
+
+  it('countWhile も条件を満たさないものに当たったらそこで止める（飛び越えて数えない）', async () => {
+    const inbox = new Inbox();
+    inbox.push(humanMessage('a'));
+    inbox.push({ type: 'timer', id: 'evt-timer', at: new Date(0).toISOString(), kind: 'daily' });
+    inbox.push(humanMessage('b'));
+
+    expect(inbox.countWhile((event) => event.type === 'human_message')).toBe(1);
+    // 数えただけなので、順序も件数も崩れていない。
+    expect(inbox.size).toBe(3);
+  });
+
+  it('countWhile は先頭が条件を満たさなければ0を返す', () => {
+    const inbox = new Inbox();
+    inbox.push({ type: 'timer', id: 'evt-timer', at: new Date(0).toISOString(), kind: 'daily' });
+    inbox.push(humanMessage('a'));
+
+    expect(inbox.countWhile((event) => event.type === 'human_message')).toBe(0);
+    expect(inbox.size).toBe(2);
+  });
+
   it('起点の種類を問わず同じ口から入る（4つの起点が同じ受信箱を通る）', async () => {
     const inbox = new Inbox();
     inbox.push({ type: 'timer', id: 'evt-timer', at: new Date(0).toISOString(), kind: 'daily' });
