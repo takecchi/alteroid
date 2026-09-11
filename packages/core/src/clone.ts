@@ -1415,6 +1415,29 @@ class Clone implements CloneHost {
    * 倒れ先も別物である（`superseded.ts` 冒頭）。
    */
   #supersededNotice = '';
+  /**
+   * `#drainMergeableWithinLimit` が上限（`#mergedBatchLimit`）で束を打ち切った
+   * ときだけの断り書き。ターンの本文の先頭に載る（issue #783 の続き — PR #836
+   * が上限そのものは足したが、切った事実がクローンから1文字も見えなかった
+   * 欠陥の直し）。
+   *
+   * **`#redeliveryNotice` / `#supersededNotice` と同じ場所に置く理由も同じ
+   * である。** まとめ読みの起点は2つ（`#mergedHumanBatch` /
+   * `#mergedManagerReportBatch`）だが、どちらも共通の
+   * `#drainMergeableWithinLimit` を経由するので、断り書きもここへ1本だけ
+   * 持てば両方に効く。
+   *
+   * **切っていないときは必ず空文字のまま。** いちばん多い経路（切っていない）
+   * の出力を1文字も変えないための既定値 ——
+   * `describeReopenedTokenNotice` の「`folded` が0のときは何も足さない」と
+   * 同じ理由（余計な行をいちばん多い経路に足さない）。
+   *
+   * **`#pump` の各反復の先頭で必ずリセットする。** まとめ読みの対象にならない
+   * 起点（タイマー・外部イベント・`question`/`permission` 等）では
+   * `#drainMergeableWithinLimit` 自体が呼ばれないため、リセットしないと
+   * 前の反復の断り書きが誤って持ち越される。
+   */
+  #mergedBatchTruncationNotice = '';
 
   /** SDK へ流す入力の待ち行列。 */
   readonly #input: SDKUserMessage[] = [];
@@ -2299,6 +2322,10 @@ class Clone implements CloneHost {
       // 報告は人間優先の並べ替えに乗らない**（`post` が `insertAfterLast` を渡すのは
       // `isHumanOriginated(event)` が真のときだけ）ので、`#mergedManagerReportBatch`
       // 側の並びは常に到着順のままである。
+      // **まとめ読みの判定を呼ぶ前に必ずリセットする**（`#mergedBatchTruncationNotice`
+      // の doc）。`#drainMergeableWithinLimit` は対象外の起点では呼ばれないため、
+      // ここで戻さないと前の反復で切ったときの断り書きが誤って持ち越される。
+      this.#mergedBatchTruncationNotice = '';
       const mergedHuman = this.#mergedHumanBatch(event);
       const mergedReports = this.#mergedManagerReportBatch(event);
       const batch: InboxEvent[] = mergedHuman ?? mergedReports ?? [event];
@@ -2344,6 +2371,7 @@ class Clone implements CloneHost {
         this.#commitmentNotice = '';
         this.#situationNotice = '';
         this.#supersededNotice = '';
+        this.#mergedBatchTruncationNotice = '';
         // **枠のせいで処理できなかったかは、ここで初めて分かることがある。**
         // `#handle` の中（`#dispatch` の `result` / `rate_limit_event` /
         // `system` 通知）で今回の合図が枠に当たったと判明したなら、この時点で
@@ -2515,16 +2543,71 @@ class Clone implements CloneHost {
    * 発言か・同じマネージャーの報告か）は呼び出し元の `predicate` に持たせ、
    * 「まとめる側へ戻さない」という共通の判断はここへ集める——`#mergeable` の
    * doc が言う「対象が違っても外す理由は共通」を、上限の数え方でも1本にする。
+   *
+   * **切ったという事実を、ここで `#mergedBatchTruncationNotice` へ残す。**
+   * かつては上限で切っても、その事実がクローンから1文字も見えなかった
+   * （issue #783 の続き）。`drainWhile` が止まった直後、`Inbox#countWhile` で
+   * **同じ述語に当たる件数を、取り出さずに**数え直す —— この件数が1件でも
+   * あれば、それは「上限に当たっていなければ続けて束ねられたはずの分」であり、
+   * 0件なら「たまたま上限のところで自然に尽きただけ」（切ってはいない）。
+   *
+   * **数を捏造しない。** ここで言えるのは「いまこの瞬間、待ち行列の先頭に
+   * 連続して並んでいる、同じ述語に当たる件数」だけである——`#pump` に取り
+   * 出された `event` 自身より前に本当は何件届いていたかは、既に処理済みの
+   * 分が `#queue` に残っていない以上、測りようがない。だから「本当に届いた
+   * 件数」とは名乗らず、「いま待ち行列の先頭に残っている件数」とだけ言う。
    */
   #drainMergeableWithinLimit(predicate: (queued: InboxEvent) => boolean): InboxEvent[] {
     const limit = this.#mergedBatchLimit;
     let taken = 1;
-    return this.#inbox.drainWhile((queued) => {
+    const matchesRule = (queued: InboxEvent): boolean =>
+      predicate(queued) && this.#mergeable(queued);
+    const rest = this.#inbox.drainWhile((queued) => {
       if (taken >= limit) return false;
-      const matches = predicate(queued) && this.#mergeable(queued);
+      const matches = matchesRule(queued);
       if (matches) taken += 1;
       return matches;
     });
+    // **`rest.length === 0` でも計算する。** `limit === 1` なら1件目の判定
+    // そのものが `taken >= limit` で即座に打ち切られ、`rest` は必ず空になる
+    // （呼び出し元はこのとき `null` を返して単発経路へ落ちる）が、それでも
+    // 待ち行列の先頭に「同じ束に入るはずだった」合図は残りうる——その場合も
+    // 切った事実は本物なので、ここで見落とさない。
+    const remainingHead = this.#inbox.countWhile(matchesRule);
+    if (remainingHead > 0) {
+      this.#mergedBatchTruncationNotice = this.#mergedBatchTruncationNoticeFor({
+        limit,
+        batchSize: taken,
+        remainingHead,
+      });
+    }
+    return rest;
+  }
+
+  /**
+   * `#drainMergeableWithinLimit` が上限で切ったときの断り書きの文面
+   * （`#mergedBatchTruncationNotice` の doc）。
+   *
+   * 3つを必ず言う —— **上限の値**・**この束の件数**・**同じ束に入るはずの
+   * 分が待ち行列の先頭にあと何件残っているか**。そして**1件も失われておらず、
+   * 次のターンで同じ形で束ね直される**ことも言う（`#drainMergeableWithinLimit`
+   * の doc の「1件も消えない」がここでも成り立つ）。
+   */
+  #mergedBatchTruncationNoticeFor(truncation: {
+    readonly limit: number;
+    readonly batchSize: number;
+    readonly remainingHead: number;
+  }): string {
+    const { limit, batchSize, remainingHead } = truncation;
+    return [
+      `[system] **このターンへ束ねる合図は、上限（${String(limit)} 件）で切った束である` +
+        `（この束は ${String(batchSize)} 件）。**` +
+        `同じ束に入るはずの合図が、待ち行列の先頭にあと ${String(remainingHead)} 件連続して残っている。`,
+      '**1件も失われていない** —— 上限で止めただけで、外れた分は次のターンで同じ形でまた束ね直される。',
+      '',
+      '---',
+      '',
+    ].join('\n');
   }
 
   /**
@@ -4520,12 +4603,14 @@ class Clone implements CloneHost {
         await this.#withFreshMemory(
           (await this.#distillGapNotice(kind)) +
             this.#contextWindowFoldNotice(kind) +
-            // **`#redeliveryNotice` の直後に `#supersededNotice` を置く。**
-            // この2本は「いま配られているこの合図の鮮度」の話で、後ろ2本
-            // （`#commitmentNotice` / `#situationNotice`）は「全体の状態」の話
-            // ——規則が違うものを同じ場所に置かない（`turn-input.ts`）。
+            // **`#redeliveryNotice` の直後に `#supersededNotice`、その直後に
+            // `#mergedBatchTruncationNotice` を置く。** この3本は「いま配られて
+            // いるこの束の鮮度・切り方」の話で、後ろ2本（`#commitmentNotice` /
+            // `#situationNotice`）は「全体の状態」の話——規則が違うものを
+            // 同じ場所に置かない（`turn-input.ts`）。
             this.#redeliveryNotice +
             this.#supersededNotice +
+            this.#mergedBatchTruncationNotice +
             this.#commitmentNotice +
             this.#situationNotice +
             text,
@@ -6746,6 +6831,14 @@ function isManagerReport(event: InboxEvent): event is ManagerReportMessage {
  * 出来事で、後者なら最後の一行だけが本題のことがある。判断の材料はクローンに渡し、
  * どう読むかはこちらで決めない（プロンプトで「最後のものを優先せよ」とは書かない —
  * 前の依頼を取り消したのか、条件を足したのかは本文だけが持っている）。
+ *
+ * **⚠️ 「N 件」は束の件数であって「届いた総数」ではない（issue #783 の続き）。**
+ * `#drainMergeableWithinLimit` は上限で束を切ることがあり、切ったときは
+ * `events.length` が実際に届いた総数より小さくなる。**だから文面は
+ * 「N件が届いた」ではなく「N件をまとめて渡す」の形にしてある** —— 前者は
+ * 上限に当たった回に偽になるが、後者はこの束の件数を言っているだけなので、
+ * 上限に当たったかどうかに関わらず常に真である。切ったという事実そのものは
+ * `#mergedBatchTruncationNotice`（別の断り書き）が言う——ここで重ねて言わない。
  */
 export function humanTurnText(events: HumanMessage[]): string {
   const head = events[0];
@@ -6753,8 +6846,8 @@ export function humanTurnText(events: HumanMessage[]): string {
   if (events.length === 1) return head.text;
 
   return [
-    `[system] 前のターンを処理しているあいだに、人間から続けて **${events.length} 件** の発言が届いた。` +
-      '届いた順に全文を渡す（要約していない）。',
+    `[system] 前のターンを処理しているあいだに人間から届いた発言を、続けて **${events.length} 件** ` +
+      'まとめて渡す（届いた順の全文で、要約していない）。',
     '**まとめて1つの応答で答えよ。** 1件目に答えたうえで、後の発言が' +
       'それを言い直している・取り消している・条件を足していることがある。**最後まで読んでから答えること。**',
     '',
@@ -7076,6 +7169,12 @@ function managerPrompt(
  * 落とすため）。0件・1件の来客には空文字列／`managerPrompt` 相当の形を返す
  * ようにはしていない —— 呼び出し元の契約を守っている限り届かない分岐に、
  * 届いたときの見た目を用意しても検証できない。
+ *
+ * **⚠️ 「N 件」は束の件数であって「届いた総数」ではない（issue #783 の続き）。**
+ * `humanTurnText` の同じ注記と理由は同一 —— `#drainMergeableWithinLimit` が
+ * 上限で束を切ると `events.length` は実際に届いた総数より小さくなるので、
+ * 文面は「N件が届いた」ではなく「N件をまとめて渡す」にしてある（切った事実
+ * そのものは `#mergedBatchTruncationNotice` が別に言う）。
  */
 function managerReportBatchPrompt(
   events: ManagerReportMessage[],
@@ -7086,7 +7185,7 @@ function managerReportBatchPrompt(
   if (head === undefined) return '';
 
   return [
-    `[system] マネージャー ${head.managerId} から届いた。処理待ちのあいだに続けて **${events.length} 件** の報告が届いたので、まとめて渡す（要約していない）。`,
+    `[system] マネージャー ${head.managerId} から届いた報告を、処理待ちのあいだに続けて **${events.length} 件** まとめて渡す（要約していない）。`,
     '**まとめて読んでから答えよ。** 後の報告が前の報告を補足・訂正していることがある。**最後まで読んでから判断すること。**',
     '',
     '---',
