@@ -1480,7 +1480,7 @@ function denialActorTag(actor: ManagerDenial['actor']): string {
 }
 
 /**
- * 一覧に添える「確認へ上がらず止められた」件数の行。
+ * 「確認へ上がらず止められた」件数の一文。
  *
  * **`status` は「動いている」を意味しない。** 分類器か deny 規則がその場で拒否
  * すると、その仕事は `running` のまま手が止まる。それが日誌と（繰り返したときだけ）
@@ -1495,8 +1495,15 @@ function denialActorTag(actor: ManagerDenial['actor']): string {
  * **各件に `denialActorTag` で層を添える。** どちらの手が止まったかを畳んで
  * 出すと、クローンが誤った相手（例: マネージャー自身）へ指示を出しうる
  * （Issue #373）。
+ *
+ * **字面の生成元はここ1箇所である（Issue #830）。** `manager_list` と
+ * `manager_report` の両方がこれを使う——`describeManagerFailure` /
+ * `describeManagerSystemError` と同じ理由（同じ欄を2つの口が別の語で呼ぶと、
+ * 面をまたいで読む人間がそこで詰まる）。**`manager_list` 側だけに在った間は、
+ * この道具自身の案内（「まず manager_report を見ること」）どおりに動いた
+ * クローンが拒否を1文字も見なかった** —— 案内が嘘をついていた。
  */
-function denialLine(denials: ManagerDenial[]): string | null {
+function describeDenials(denials: ManagerDenial[]): string | null {
   if (denials.length === 0) return null;
   // 帳面は古い順に積まれている。**新しい側から**採る。
   const recent = [...denials].reverse();
@@ -1504,11 +1511,20 @@ function denialLine(denials: ManagerDenial[]): string | null {
   const rest = recent.length - shown.length;
   const total = denials.reduce((sum, entry) => sum + entry.count, 0);
   return (
-    `  ⚠ 確認へ上がらず止められた道具: ${shown.map((e) => `${e.tool} ${e.count}件${denialActorTag(e.actor)}`).join(' / ')}` +
+    `⚠ 確認へ上がらず止められた道具: ${shown.map((e) => `${e.tool} ${e.count}件${denialActorTag(e.actor)}`).join(' / ')}` +
     (rest > 0 ? `（ほか ${rest} 種、全 ${total} 件）` : '') +
     '。この確認はクローンには回ってきていないので、手が止まっている可能性がある' +
     '（全件は journal_read に残っている。件数はデーモンを作り直すと数え直しになる）。'
   );
+}
+
+/**
+ * {@link describeDenials} を `manager_list` の `extra` へ入れる形にする
+ * （`failureLine` / `systemErrorLine` と同じ作法）。
+ */
+function denialLine(denials: ManagerDenial[]): string | null {
+  const note = describeDenials(denials);
+  return note === null ? null : `  ${note}`;
 }
 
 /**
@@ -6055,7 +6071,13 @@ export function createCloneTools(context: ToolContext) {
           // 「報告が無い」を理由にこちらまで黙らせない（片方が空だからもう
           // 片方も出さない、にはしない）。
           const systemError = describeManagerSystemError(found);
-          return text(systemError === null ? missing : `${missing}\n\n${systemError}`);
+          // **報告が空の回こそ、拒否がいちばん効く（Issue #830）。** 分類器か
+          // deny 規則で手が止まった委譲は `running` のまま報告を書かないので、
+          // **この枝に落ちる**。ここで黙ると、クローンは「まだ書いていない」と
+          // 「番人に止められて書けない」を区別できない——直上の #713 段3 の
+          // コメントと同じ理由で、片方が空だからもう片方も出さない、にはしない。
+          const denied = describeDenials(context.managers.denials(managerId));
+          return text([missing, systemError, denied].filter((s) => s !== null).join('\n\n'));
         }
 
         // **失敗した回は「報告」と呼ばない（Issue #714）。** `manager_list` で
@@ -6074,6 +6096,15 @@ export function createCloneTools(context: ToolContext) {
         // 同じ材料——`part === 'request'` では出さない（依頼文はそもそも
         // このセッションの落ち方の話ではない）。
         const systemError = part === 'request' ? null : describeManagerSystemError(found);
+        // **拒否も同じ場所で掘れる（Issue #830）。** `manager_list` の `denialLine`
+        // と同じ材料を、同じ字面（`describeDenials`）で出す。**報告が在る回でも
+        // 出す** —— 報告を書いた後で別の道具を止められている形が在り、そのとき
+        // 本文だけ読むと「報告どおり進んでいる」と読めてしまう。
+        //
+        // **`part === 'request'` では出さない。** 依頼文はこのセッションで何が
+        // 止められたかの話ではない（`failure` / `systemError` と同じ線）。
+        const denied =
+          part === 'request' ? null : describeDenials(context.managers.denials(managerId));
         const label =
           part === 'request' ? '依頼文' : failure === null ? '直近の報告' : '直近のターンの中身';
         const part1 = page(body, offset, REPORT_PAGE);
@@ -6087,6 +6118,10 @@ export function createCloneTools(context: ToolContext) {
         // `tools.ts` の `describeManagerSystemError` の doc）。**出ていない
         // 回は1文字も増えない。**
         const systemErrorNote = systemError === null ? '' : `${systemError}\n\n`;
+        // **同じ順・同じ理由で本文の上に置く（Issue #830）。** 本文の下だと、
+        // 報告を読み終えてから「実は途中で止められていた」と分かる順になる。
+        // **止められていない回は1文字も増えない。**
+        const denialNote = denied === null ? '' : `${denied}\n\n`;
         const tail = part1.more
           ? `\n\n…（ここで切れている。続きは manager_report managerId=${managerId}` +
             `${part === 'request' ? ' part=request' : ''} offset=${part1.to}）`
@@ -6097,7 +6132,9 @@ export function createCloneTools(context: ToolContext) {
         // それでも足りないときの次の一手を、切れていない場合にも常に添える。
         const footer =
           '\n\n（さらに掘るなら manager_transcript managerId=' + managerId + ' で生ログへ）';
-        return text(`${head}\n\n${failureNote}${systemErrorNote}${part1.body}${tail}${footer}`);
+        return text(
+          `${head}\n\n${failureNote}${systemErrorNote}${denialNote}${part1.body}${tail}${footer}`,
+        );
       },
     ),
 
