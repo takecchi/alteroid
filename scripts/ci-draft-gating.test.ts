@@ -300,15 +300,22 @@ function evaluateGithubExpression(expr: string, ctx: GithubEventContext): boolea
 /**
  * 一致した位置が YAML コメント（`#` より後ろ）の中かどうかを判定する。
  *
- * **これが要る理由——このファイル自身のドキュメントコメントが house style の
- * 先例を逐語で引用しており、コメントの中にも `types: [...]` という文字列が
- * 現れる。** 実際にこの関数の最初の実装はこれを踏んだ——`ci.yml` の
- * `pull_request:` の doc コメントが `types: [ opened, synchronize,
- * reopened,\n    # ready_for_review ]`（改行を挟んだ引用）を含んでいたため、
- * 素朴なフロースタイルの正規表現が本物の `types:` より先にこの引用へ
- * 一致し、`ready_for_review` を含まない配列を返して偽陰性になった。
- * 「足場（この関数）が測定対象と同じ文字列を含むと偽陽性・偽陰性になる」の
- * 実例がテスト対象の doc コメント自身から出た形である。
+ * **これが要る理由——`ci.yml` の doc コメントは、`types:` という文字列そのものを
+ * 含みうる。** 実際にこの関数の最初の実装はこれを踏んだ——当時の `ci.yml` の
+ * `pull_request:` の doc コメントが、同じオーナーの別 repo（非公開）に在る先例を
+ * 引くかたちで `types:` と角括弧の並びを本文に含んでおり、素朴なフロースタイルの
+ * 正規表現が本物の `types:` より先にその引用へ一致して、`ready_for_review` を
+ * 含まない配列を返し偽陰性になった。「足場（この関数）が測定対象と同じ文字列を
+ * 含むと偽陽性・偽陰性になる」の実例が、テスト対象の doc コメント自身から出た
+ * 形である。塞ぎ方は2つ——**フロースタイルの正規表現に改行を跨がせない**ことと、
+ * **YAML コメント内の一致を除外する**こと（この関数）。
+ *
+ * ⚠️ **この2つを測る歯は、`ci.yml` の実物のコメントに依存させていない**（下の
+ * 「除外ロジックそのものを測る」describe）。きっかけになったコメントはのちに
+ * 書き換えられ、いまの `ci.yml` には `types:` を含むコメントが在るとは限らない
+ * ——実物に依存させると、コメントが書き換わった時点でこの歯は黙って空振りする
+ * （除外すべき対象が消えるので、除外が効いているかを誰も測らなくなる）。だから
+ * 入力は合成する。`ci.yml` のコメントを将来どう書き換えても壊れない形である。
  */
 function isInsideYamlComment(text: string, index: number): boolean {
   const lineStart = text.lastIndexOf('\n', index - 1) + 1;
@@ -468,6 +475,120 @@ describe('前提: ci.yml から抽出できていること', () => {
 
   it('on.pull_request.types を抽出できている', () => {
     expect(extractPullRequestTypes(ciYmlText)).not.toBeNull();
+  });
+});
+
+// ============================================================================
+// 除外ロジックそのものを測る（`ci.yml` の実物のコメントに依存しない）
+//
+// `isInsideYamlComment` と「フロースタイルの正規表現に改行を跨がせない」の2つは、
+// 実物の `ci.yml` にたまたま `types:` を含むコメントが在るかどうかで測れたり
+// 測れなくなったりしてはいけない。⟹ 入力はすべてこの場で合成する。
+// ============================================================================
+
+/**
+ * 合成した `ci.yml` 断片。`extractPullRequestTypes` が `on.pull_request` の
+ * ブロックを切り出すのに必要な形（`  pull_request:` で始まり、次の2スペース
+ * インデントのキーで終わる）だけを満たす、最小の足場である。
+ */
+function synthesizeCiYml(pullRequestBlockBody: string): string {
+  return [
+    'name: CI',
+    '',
+    'on:',
+    '  push:',
+    '    branches: [main]',
+    '  pull_request:',
+    pullRequestBlockBody,
+    '  schedule:',
+    "    - cron: '41 15 * * *'",
+    '',
+  ].join('\n');
+}
+
+const REAL_TYPES_LINE = '    types: [opened, synchronize, reopened, ready_for_review]';
+const REAL_TYPES = ['opened', 'synchronize', 'reopened', 'ready_for_review'];
+
+describe('除外ロジックそのものを測る（合成入力。実物のコメントに依存しない）', () => {
+  it('行頭コメントの中の types: [...] は、本物の types: より先に在っても採用されない', () => {
+    const yml = synthesizeCiYml(
+      ['    # 既定は types: [opened, synchronize, reopened] である', REAL_TYPES_LINE].join('\n'),
+    );
+    expect(extractPullRequestTypes(yml)).toEqual(REAL_TYPES);
+  });
+
+  it('行の途中から始まるコメント（コードの後ろの #）の中の types: [...] も採用されない', () => {
+    const yml = synthesizeCiYml(
+      ['    branches: [main] # 旧仕様では types: [opened] と書いていた', REAL_TYPES_LINE].join(
+        '\n',
+      ),
+    );
+    expect(extractPullRequestTypes(yml)).toEqual(REAL_TYPES);
+  });
+
+  it('コメントが改行を跨いで角括弧を閉じていても採用されない（フロー正規表現が改行を跨がない）', () => {
+    const yml = synthesizeCiYml(
+      [
+        '    # 先例の並びは types: [opened, synchronize,',
+        '    # reopened] の形だった',
+        REAL_TYPES_LINE,
+      ].join('\n'),
+    );
+    expect(extractPullRequestTypes(yml)).toEqual(REAL_TYPES);
+  });
+
+  /**
+   * **改行を跨がせない歯を、コメント除外の歯から切り離して測る。**
+   *
+   * 上の「コメントが改行を跨いで…」の例は、2つの塞ぎ方（改行を跨がせない／
+   * コメント内の一致を除外する）の**どちらか片方でも**緑になる——実際、
+   * フロー正規表現に改行を跨がせてもコメント除外のほうが拾うので赤くならない。
+   * ⟹ それだけだと「改行を跨がせない」側を壊しても誰も気づかない。ここでは
+   * **コメントではない位置から始まって改行を跨ぐ**入力を合成し、フロー
+   * 正規表現の文字クラスから改行の除外が落ちたら赤くなるようにする。
+   */
+  it('コメントでない位置から始まる一致も、改行を跨いだら採用されない', () => {
+    const yml = synthesizeCiYml(["    name: 'types: [opened,'", REAL_TYPES_LINE].join('\n'));
+    expect(extractPullRequestTypes(yml)).toEqual(REAL_TYPES);
+  });
+
+  it('ブロックスタイルの本物も、直前のコメントに邪魔されずに読める', () => {
+    const yml = synthesizeCiYml(
+      [
+        '    # 既定は types: [opened, synchronize, reopened] である',
+        '    types:',
+        '      - opened',
+        '      - ready_for_review',
+      ].join('\n'),
+    );
+    expect(extractPullRequestTypes(yml)).toEqual(['opened', 'ready_for_review']);
+  });
+
+  it('陰性対照: コメントが1つも無くても本物は読める（除外が効きすぎていない）', () => {
+    const yml = synthesizeCiYml(REAL_TYPES_LINE);
+    expect(extractPullRequestTypes(yml)).toEqual(REAL_TYPES);
+  });
+
+  it('陰性対照: 本物が無くコメントだけなら null（コメントを本物として拾わない）', () => {
+    const yml = synthesizeCiYml('    # 既定は types: [opened, synchronize, reopened] である');
+    expect(extractPullRequestTypes(yml)).toBeNull();
+  });
+
+  describe('isInsideYamlComment の単体', () => {
+    it('# より後ろの位置は true', () => {
+      const text = 'a: 1 # types: [x]';
+      expect(isInsideYamlComment(text, text.indexOf('types:'))).toBe(true);
+    });
+
+    it('同じ行の # より前の位置は false', () => {
+      const text = '    types: [x] # 注記';
+      expect(isInsideYamlComment(text, text.indexOf('types:'))).toBe(false);
+    });
+
+    it('前の行の # は、次の行をコメント扱いにしない（行単位で見ている）', () => {
+      const text = '    # 注記\n    types: [x]';
+      expect(isInsideYamlComment(text, text.lastIndexOf('types:'))).toBe(false);
+    });
   });
 });
 
