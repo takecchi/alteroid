@@ -545,12 +545,10 @@ describe('除外ロジックそのものを測る（合成入力。実物のコ�
    * フロー正規表現に改行を跨がせてもコメント除外のほうが拾うので赤くならない。
    * ⟹ それだけだと「改行を跨がせない」側を壊しても誰も気づかない。ここでは
    * **コメントではない位置から始まって改行を跨ぐ**入力を合成し、フロー
-   * 正規表現の `[^\\]\\n]` の `\\n` が落ちたら赤くなるようにする。
+   * 正規表現の文字クラスから改行の除外が落ちたら赤くなるようにする。
    */
   it('コメントでない位置から始まる一致も、改行を跨いだら採用されない', () => {
-    const yml = synthesizeCiYml(
-      ["    name: 'types: [opened,'", REAL_TYPES_LINE].join('\n'),
-    );
+    const yml = synthesizeCiYml(["    name: 'types: [opened,'", REAL_TYPES_LINE].join('\n'));
     expect(extractPullRequestTypes(yml)).toEqual(REAL_TYPES);
   });
 
