@@ -7380,6 +7380,15 @@ function managerReportBatchPrompt(
  * **純関数のまま保つ。** 時刻を出力に使わないので `now` を引数に取る必要も
  * 無い（`managerReportBatchPrompt` と違い、束の中の経過時間を報告しない——
  * 全件の `at` をそのまま出すので、経過はクローン自身が計算できる）。
+ *
+ * **⚠️ 「N 件」は束の件数であって「届いた総数」ではない（issue #783 の続き）。**
+ * `humanTurnText` / `managerReportBatchPrompt` の同じ注記と理由は同一——
+ * `#drainMergeableWithinLimit` は上限で束を切ることがあり、切ったときは
+ * `events.length` が実際に届いた総数より小さくなる。**だから文面は
+ * 「N件が届いた」ではなく「N件をまとめて渡す」の形にしてある**——前者は
+ * 上限に当たった回に偽になるが、後者はこの束の件数を言っているだけなので、
+ * 上限に当たったかどうかに関わらず常に真である。**切ったという事実そのものは
+ * `#mergedBatchTruncationNotice`（別の断り書き）が言う——ここで重ねて言わない。**
  */
 function externalBatchPrompt(events: ExternalEvent[]): string {
   const head = events[0];
@@ -7390,9 +7399,9 @@ function externalBatchPrompt(events: ExternalEvent[]): string {
 
   return [
     `[system] 外部から出来事が届いた（source: ${head.source}）。人間はこれを見ていない。`,
-    `処理待ちのあいだに、同じ中身の合図が続けて **${events.length} 件** 届いたので、まとめて渡す` +
+    `処理待ちのあいだに、同じ中身の合図を続けて **${events.length} 件** まとめて渡す` +
       '（本文は1回だけ。全件で `source` と中身が一致している）。',
-    `届いた時刻（${events.length} 件・届いた順）: ${timestamps}`,
+    `届いた時刻（届いた順）: ${timestamps}`,
     '',
     '**同じ中身が複数回届いたからといって、同じ出来事の繰り返しとは限らない**' +
       '——外の世界で別々に発行された合図である可能性がある。',

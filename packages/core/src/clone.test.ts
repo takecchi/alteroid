@@ -11646,7 +11646,7 @@ describe('クローン — 中身の同じ external をまとめて読む（#841
     expect(inputs).toHaveLength(4);
     expect(inputs[1] ?? '').toContain('2 件');
     expect(inputs[2] ?? '').toContain('2 件');
-    expect(inputs[3] ?? '').not.toContain('件** 届いた');
+    expect(inputs[3] ?? '').not.toContain('まとめて渡す');
 
     // **取りこぼしを撃つ歯。** 1〜5件全部が、どこかのターンの台帳の断り書き
     // （「いま届いたこの◯件も台帳に載せた（id: ...）」）に必ず現れる——
@@ -11662,6 +11662,62 @@ describe('クローン — 中身の同じ external をまとめて読む（#841
       async () => (await s.stores.inbox.claimPending()).length === 0,
       '5件とも消し込まれる',
     );
+
+    await s.clone.stop();
+  }, 15_000);
+
+  /**
+   * issue #849（issue #783 の続き）: 上限で束を切ったという事実は
+   * `#drainMergeableWithinLimit` が `#mergedBatchTruncationNotice` へ集約して
+   * 残し、`#runTurn` の入力組み立てが誰の呼び出しにも自動で乗せる。
+   * `#mergedExternalBatch` もこの共有関数を経由する（`#mergedManagerReportBatch`
+   * / `#mergedHumanBatch` と同じ）ので、`external` の束が切れたときも
+   * 断り書きが載るはずである——ここはその歯（`clone.test.ts` の「人間の発言
+   * でも同じ断り書きが載る」と同型）。
+   *
+   * **この歯が無いと、`#pump` で `const mergedExternal = ...` を
+   * `this.#mergedBatchTruncationNotice = '';` より上に置く事故を誰も
+   * 検出できない**（置くと `#mergedExternalBatch` が立てた印を、直後の
+   * リセットが即座に拭き取り、`external` の束でだけ断り書きが黙って消える）。
+   */
+  it('external の束が上限で切れたときも、まとめ読みの断り書き（`#mergedBatchTruncationNotice`）が載る', async () => {
+    const s = setup(undefined, createMemoryStores(), {}, { ALTEROID_MERGED_BATCH_SIZE_LIMIT: '2' });
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post(
+      externalEvent('trunc1', 'token-pool', { text: '同じ中身' }, '2026-09-01T00:00:01.000Z'),
+    );
+    s.clone.post(
+      externalEvent('trunc2', 'token-pool', { text: '同じ中身' }, '2026-09-01T00:00:02.000Z'),
+    );
+    s.clone.post(
+      externalEvent('trunc3', 'token-pool', { text: '同じ中身' }, '2026-09-01T00:00:03.000Z'),
+    );
+
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('id: `trunc3`')),
+      '3件目（単独）のターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    // 先客 + [trunc1+trunc2まとめ・切った束] + [trunc3単独] = 3本。
+    expect(inputs).toHaveLength(3);
+
+    const truncated = inputs[1] ?? '';
+    expect(lineStartingWith(truncated, '[system] **このターンへ束ねる合図は、上限')).toBe(
+      '[system] **このターンへ束ねる合図は、上限（2 件）で切った束である（この束は 2 件）。**' +
+        '同じ束に入るはずの合図が、待ち行列の先頭にあと 1 件連続して残っている。',
+    );
+    expect(truncated).toContain(
+      '**1件も失われていない** —— 上限で止めただけで、外れた分は次のターンで同じ形でまた束ね直される。',
+    );
+
+    // 3件目（単独）には切った断り書きが載らない——待ち行列に何も残っていない。
+    const solo = inputs[2] ?? '';
+    expect(solo).not.toContain('このターンへ束ねる合図は、上限');
 
     await s.clone.stop();
   }, 15_000);
@@ -11687,7 +11743,7 @@ describe('クローン — 中身の同じ external をまとめて読む（#841
       '[system] 外部から出来事が届いた（source: ci）。人間はこれを見ていない。',
     );
     // まとめ読みの前置き（件数の表示）が載らない。
-    expect(solo).not.toContain('件** 届いた');
+    expect(solo).not.toContain('まとめて渡す');
 
     await s.clone.stop();
   }, 15_000);
