@@ -1630,7 +1630,7 @@ describe('premise のカードの束ねた蓋（MEMORY_PREMISE_CARD_BUDGET）—
   };
 
   /** 断り書きの1行目の頭。**逐語で持つ**（定数を import して両側を一緒に動かさない）。 */
-  const DEMOTION_NOTE_HEAD = '<!-- memory: premise（カードを落とした分';
+  const DEMOTION_NOTE_HEAD = '<!-- memory: カードを落とした分（premise / indexed';
 
   /**
    * ⭐⭐ **導出そのものを歯にする。**
@@ -1863,7 +1863,9 @@ describe('premise のカードの束ねた蓋（MEMORY_PREMISE_CARD_BUDGET）—
       joinChars * (docs.length - 1);
 
     // 蓋が無かったときの総量を名乗っている。
-    expect(rendered).toContain(`カードの合計が ${uncapped.toLocaleString('en-US')} 文字になり`);
+    expect(rendered).toContain(
+      `カード（premise と indexed）の合計が ${uncapped.toLocaleString('en-US')} 文字になり`,
+    );
     // そしてそれは、実際に載った長さより大きい（＝蓋の後の値ではない）。
     expect(uncapped).toBeGreaterThan(rendered.length);
   });
@@ -2036,6 +2038,111 @@ describe('premise のカードの束ねた蓋（MEMORY_PREMISE_CARD_BUDGET）—
    * **ここで測れるのは「1枚のカードは束ねた予算より必ず小さい」という前提のほうで、
    * それが崩れたらこの歯が落ちる**（＝あの枝に歯を書く必要が生まれたと分かる）。
    */
+  /**
+   * ⭐⭐⭐ **断り書きは、落ちた文書の区分について嘘をつかない。**
+   *
+   * ## 何が起きていたか（実測 2026-09-11、`main` = `702b5afc`）
+   *
+   * #805 が蓋の対象へ `indexed` を加えたとき、**断り書きの文言は premise のまま
+   * 残った。** ⟹ `indexed` だけ 200 件を通すと、premise が1件も無いのに
+   * 「⚠️ **premise** のカードの合計が 1,225,998 文字になり」と名乗り、落とした
+   * 1行（`- idx-009.md（全 6,046 文字 / 1 節…）`）も区分を1文字も言わなかった。
+   *
+   * ## ⚠️ そして2つ目のほうが重い —— 実行できない助言になっていた
+   *
+   * 直し方の (1) は「この行に出ている文書を `memory_frontmatter_set` で
+   * `type: indexed` にする」だった。**落ちたのが既に `indexed` の文書なら、
+   * これは何もしない。** ⟹ クローンはそれを実行し、床が1文字も下がらないのを見る。
+   *
+   * `renderMemoryTocOmission` は同じ線を逐語で引いている——「実行できない助言
+   * （越権の助言）を出さないための線引きである」。**そこがこちらでは守られて
+   * いなかった。**
+   */
+  describe('断り書きは落ちた区分について嘘をつかない（#805 で蓋が indexed へ広がった後）', () => {
+    /** `indexed` の要旨の予算に張り付いたカード1枚。節の目次は載らない。 */
+    const saturatedIndexed = (index: number): MemoryPart => ({
+      slug: `sat-idx-${String(index).padStart(3, '0')}`,
+      content: [
+        '---',
+        'type: indexed',
+        `description: ${'い'.repeat(MEMORY_PROMPT_INDEXED_DESCRIPTION_BUDGET)}`,
+        '---',
+        '',
+        '## 節\n\n本文\n',
+      ].join('\n'),
+    });
+
+    it('⭐⭐⭐ indexed だけが落ちたとき、premise が落ちたとは名乗らない', () => {
+      const rendered = renderMemoryDocuments(
+        Array.from({ length: 20 }, (_, i) => saturatedIndexed(i)),
+      );
+      expect(rendered).toContain(DEMOTION_NOTE_HEAD);
+
+      // 内訳を名乗る（premise 0 件 / indexed N 件）。
+      expect(rendered).toMatch(/（premise 0 件 \/ indexed [\d,]+ 件。/);
+      // 落とした1行が区分を名乗る。
+      expect(rendered).toMatch(/^- sat-idx-\d+\.md（indexed・/m);
+      // **premise のカードだと名乗らない**（これが嘘だった側）。
+      expect(rendered).not.toContain('premise のカードの合計');
+    });
+
+    it('⭐⭐⭐ 落ちたのが indexed だけなら、「indexed にせよ」という実行できない助言を出さない', () => {
+      const rendered = renderMemoryDocuments(
+        Array.from({ length: 20 }, (_, i) => saturatedIndexed(i)),
+      );
+      // (1) の手そのものを出さない。
+      expect(rendered).not.toContain('type: indexed にする');
+      // 代わりに、残っている手がそれだけであることを言う。
+      expect(rendered).toContain('に残っている手はこれだけである');
+      expect(rendered).toContain('type: indexed にしても1文字も下がらない');
+      // (2) の手は出る（実行できる）。
+      expect(rendered).toContain('memory_section_move で割り');
+    });
+
+    it('⭐⭐ 落ちたのが premise だけなら、(1) の手を premise の件数で名指しして出す', () => {
+      const { marginal } = measureCardMarginalCost();
+      const count = Math.ceil((MEMORY_PREMISE_CARD_BUDGET * 2) / marginal);
+      const rendered = renderMemoryDocuments(
+        Array.from({ length: count }, (_, i) => capPremise(i)),
+      );
+      expect(rendered).toContain(DEMOTION_NOTE_HEAD);
+
+      expect(rendered).toMatch(/（premise [\d,]+ 件 \/ indexed 0 件。/);
+      expect(rendered).toMatch(
+        /\(1\) 上の premise [\d,]+ 件を memory_frontmatter_set で type: indexed にする/,
+      );
+      // indexed が1件も落ちていないので、indexed 向けの断りは出ない。
+      expect(rendered).not.toContain('に残っている手はこれだけである');
+      expect(rendered).toMatch(/^- premise-\d+\.md（premise・/m);
+    });
+
+    it('⭐⭐ 両方が混ざって落ちたときは、内訳と両方の手が出る', () => {
+      // premise を張り付かせ、indexed も張り付かせて混ぜる。premise のほうが
+      // 1枚が大きいので先に落ちる——**それでも内訳は測った値で出す。**
+      const { marginal } = measureCardMarginalCost();
+      const premiseCount = Math.ceil((MEMORY_PREMISE_CARD_BUDGET * 1.5) / marginal);
+      const docs = [
+        ...Array.from({ length: premiseCount }, (_, i) => capPremise(i)),
+        ...Array.from({ length: 20 }, (_, i) => saturatedIndexed(i)),
+      ];
+      const rendered = renderMemoryDocuments(docs);
+      expect(rendered).toContain(DEMOTION_NOTE_HEAD);
+
+      // 内訳の2つの数は、落とした1行の区分の数え上げと一致する。
+      const note = rendered.slice(rendered.indexOf(DEMOTION_NOTE_HEAD));
+      const matched = /（premise ([\d,]+) 件 \/ indexed ([\d,]+) 件。/.exec(note);
+      expect(matched, '内訳が出ていない').not.toBeNull();
+      const declaredPremise = Number((matched?.[1] ?? '0').replace(/,/g, ''));
+      const declaredIndexed = Number((matched?.[2] ?? '0').replace(/,/g, ''));
+      expect(declaredPremise + declaredIndexed).toBe(measureMemoryFloor(docs).demotedPremiseDocs);
+      // **⚠️ 一覧の予算（MEMORY_PREMISE_STUB_BUDGET）で行が省かれうるので、
+      // 内訳の数と「一覧に出ている行の数」は一致しない。** 内訳は落とした全件を
+      // 数えた値であり、行はそこから予算で切ったものである——だから突き合わせる
+      // 相手は measureMemoryFloor の側にした。
+      expect(declaredPremise).toBeGreaterThan(0);
+    });
+  });
+
   it('⚠️ 前提の固定: カード1枚は束ねた予算より必ず小さい（だから「1枚は残す」枝は到達不能）', () => {
     const { marginal } = measureCardMarginalCost();
     expect(marginal).toBeLessThan(MEMORY_PREMISE_CARD_BUDGET);
