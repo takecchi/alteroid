@@ -2490,6 +2490,89 @@ describe('クローン — self_status（runtime facts の配線）', () => {
 
     await s.clone.stop();
   });
+
+  /**
+   * **`#804` の輪を閉じる — ターンの境界で聞いた文脈占有の `kind` 別内訳が、
+   * `self_status` まで実際に届くか。** `context-usage.test.ts` は
+   * `summarizeContextCategories` を単体で見るだけなので、クローンの
+   * `#lastContextUsage` → `#runtimeFacts` → `describeCloneRuntime` という
+   * 配線そのものはここでしか見えない。
+   *
+   * ⭐⭐⭐ **核心の歯**: `free` の軸を混ぜても、「実際に払っていた入力」の
+   * 数値に free の分が1トークンも入らないこと。
+   */
+  it('⭐⭐⭐ ターン終了後、self_status の「実際に払っていた入力」に free の分が混ざらない', async () => {
+    const s = setupCapturing({}, createMemoryStores(), {
+      getContextUsage: () => ({
+        totalTokens: 12_000,
+        rawMaxTokens: 200_000,
+        percentage: 6,
+        categories: [
+          { name: 'System prompt', tokens: 8_000, kind: 'used' },
+          { name: 'Tools', tokens: 1_000, kind: 'used' },
+          { name: 'Remaining window', tokens: 190_000, kind: 'free' },
+          { name: 'Compaction reserve', tokens: 900, kind: 'buffer' },
+          { name: 'Deferred tools', tokens: 100, kind: 'deferred' },
+        ],
+      }),
+    });
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const body = await s.selfStatus();
+    const usedLine = body.split('\n').find((line) => line.includes('実際に払っていた入力'));
+    const unusedLine = body.split('\n').find((line) => line.includes('払っていない枠'));
+    if (usedLine === undefined || unusedLine === undefined) {
+      throw new Error('self_status に文脈占有の2行が無い');
+    }
+    // used は System prompt + Tools の合計だけ（free/buffer/deferred を1トークンも含まない）。
+    expect(usedLine).toContain('9,000 トークン');
+    expect(usedLine).not.toContain('190,000');
+    // unused 側は free/buffer/deferred の内訳を持ち、「分類できず」も名乗る。
+    expect(unusedLine).toContain('free 190,000');
+    expect(unusedLine).toContain('buffer 900');
+    expect(unusedLine).toContain('deferred 100');
+    expect(unusedLine).toContain('分類できず 0');
+
+    await s.clone.stop();
+  });
+
+  /**
+   * 🔴 **`getContextUsage` の呼び出し回数が増えないことの歯（#804）。** Issue が
+   * 「`detail: 'full'` は token-count API を呼ぶので、毎ターン呼ぶ費用を測って
+   * から決めること」と釘を刺している——`self_status` を何回呼んでも、
+   * `#lastContextUsage` は既に払った1回の観測を保持するだけで、新しい呼び出し
+   * を1本も増やさないことを数値で確かめる。
+   */
+  it('🔴 self_status を複数回呼んでも getContextUsage の呼び出し回数は増えない', async () => {
+    let getContextUsageCalls = 0;
+    const s = setupCapturing({}, createMemoryStores(), {
+      getContextUsage: () => {
+        getContextUsageCalls += 1;
+        return {
+          totalTokens: 1_000,
+          rawMaxTokens: 200_000,
+          percentage: 1,
+          categories: [{ name: 'System prompt', tokens: 1_000, kind: 'used' }],
+        };
+      },
+    });
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    expect(getContextUsageCalls).toBe(1);
+
+    await s.selfStatus();
+    await s.selfStatus();
+    await s.selfStatus();
+
+    // ターンをまたいでいないので、まだ1回のまま。
+    expect(getContextUsageCalls).toBe(1);
+
+    await s.clone.stop();
+  });
 });
 
 /**
@@ -7298,8 +7381,8 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
           percentage: 6,
           isAutoCompactEnabled: true,
           categories: [
-            { name: 'System prompt', tokens: 8_000 },
-            { name: 'MCP tools', tokens: 3_000 },
+            { name: 'System prompt', tokens: 8_000, kind: 'used' },
+            { name: 'MCP tools', tokens: 3_000, kind: 'deferred' },
           ],
           mcpTools: [
             { name: 'memory_read', serverName: 'alteroid', tokens: 100 },
@@ -7328,15 +7411,46 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
       expect(entry.contextUsage?.memoryFileCount).toBe(1);
       expect(entry.contextUsage?.systemPromptTokens).toBe(8_000);
       expect(entry.contextUsage?.systemPromptSectionCount).toBe(2);
-      // カテゴリはそのまま（軸の数だけなので小さい）。
+      // カテゴリはそのまま（軸の数だけなので小さい）。**`kind` もそのまま届く**
+      // （#804——`#observeContextUsage` が捨てていた欄）。
       expect(entry.contextUsage?.categories).toEqual([
-        { name: 'System prompt', tokens: 8_000 },
-        { name: 'MCP tools', tokens: 3_000 },
+        { name: 'System prompt', tokens: 8_000, kind: 'used' },
+        { name: 'MCP tools', tokens: 3_000, kind: 'deferred' },
       ]);
       // 切っていないので省略の欄は無い。
       expect(entry.contextUsage?.categoriesOmitted).toBeUndefined();
       // **道具の名前は1つも載らない**（畳んだことの裏側）。
       expect(JSON.stringify(entry.contextUsage)).not.toContain('manager_list');
+
+      await s.clone.stop();
+    });
+
+    /**
+     * ⭐⭐ **`kind` を返さない SDK（実機で未対応の古い版と同じ形）でも、欄が
+     * 壊れない**（#804）。`categories[].kind` は `schema.ts` で `.optional()`
+     * にしてある——ここは書き込み側（`#observeContextUsage`）が `kind` の無い
+     * 軸を落とさず、`kind` だけが無い形で通ることを確かめる。
+     */
+    it('⭐⭐ kind を返さない SDK でも、categories の欄は壊れず kind だけが無い', async () => {
+      const s = setup(undefined, createMemoryStores(), {
+        modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
+        getContextUsage: () => ({
+          totalTokens: 12_000,
+          rawMaxTokens: 200_000,
+          percentage: 6,
+          categories: [{ name: 'System prompt', tokens: 8_000 }],
+        }),
+      });
+
+      s.clone.post(humanMessage('やあ'));
+      await waitForDone(s.events);
+
+      const entries = await s.stores.journal.list({ types: ['turn_usage'] });
+      const entry = entries[0];
+      if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
+
+      expect(entry.contextUsage?.categories).toEqual([{ name: 'System prompt', tokens: 8_000 }]);
+      expect(entry.contextUsage?.categories?.[0]?.kind).toBeUndefined();
 
       await s.clone.stop();
     });

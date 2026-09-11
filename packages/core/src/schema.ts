@@ -1177,7 +1177,47 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
          * `categoriesOmitted` が件数を名乗る。
          */
         categories: z
-          .array(z.object({ name: z.string(), tokens: z.number().int().nonnegative() }))
+          .array(
+            z.object({
+              name: z.string(),
+              tokens: z.number().int().nonnegative(),
+              /**
+               * SDK が名乗る分類（`'used' | 'free' | 'buffer' | 'deferred'`）。
+               * SDK の doc は逐語でこう言う（`context-usage.ts` モジュール
+               * 冒頭に同じ引用がある。「⚠️ 名前は SDK が決めた文字列」の
+               * 直下、`kind` 欄に付いている doc） ——
+               *
+               * > [sdk-verbatim SDKControlGetContextUsageResponse.categories.kind]
+               * > Classify on this, never on the English name.
+               *
+               * 分類・集計は必ずこの欄で行う（`context-usage.ts` の
+               * `summarizeContextCategories`。`clone.ts` / `tools.ts` /
+               * `self.ts` は自前で分類ロジックを持たず、そこを呼ぶ）。
+               *
+               * ## ⚠️ `.optional()` にする理由 —— 既存の行を壊さないため
+               *
+               * この欄が増える**前**に書かれた `turn_usage` の行には無い。
+               * 必須にすると、**読み出し時にも** `journalEntrySchema.safeParse`
+               * を通る既存の行が丸ごと `unknown-shape` として扱われ、
+               * `list()` の結果から消える（`packages/storage-fs/src/journal.ts`
+               * の `parseLine` / `packages/storage-pg/src/journal.ts` の
+               * `list`。`journal_read`・日報・蒸留の全経路がここを経由する）。
+               * **`default` で埋めない** ——`cooldownSource` / `recoveredSource`
+               * の doc（#683）と同じ規律で、無いことは「観測していない」で
+               * あって「`used` だった」ではない。
+               *
+               * ## ⚠️ `z.enum([...])` ではなく `z.string()` にする理由
+               *
+               * SDK が将来5つ目の `kind` を足すと、`z.enum` は**書き込み時の
+               * `parse`**（`append` は `journalEntrySchema.parse`）で例外を
+               * 投げ、`turn_usage` の行そのものが書けなくなる——1つの未知の
+               * 軸のせいでターン全体の消費が記録できない事故になる。**未知の
+               * 値は行を落とすのではなく、`summarizeContextCategories` が
+               * `unclassified` として名乗る側へ倒す**（読む側で吸収する）。
+               */
+              kind: z.string().optional(),
+            }),
+          )
           .optional(),
         /** `categories` を件数の上限で切ったときに、省いた件数。切っていなければ欄そのものが無い。 */
         categoriesOmitted: z.number().int().positive().optional(),

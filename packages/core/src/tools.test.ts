@@ -20,6 +20,7 @@ import { runnerLivenessSchema } from './runner-protocol.js';
 import { CLONE_ACTOR_ID } from './usage.js';
 import { measureMemoryFloor, renderMemoryDocuments, scanMemorySections } from './memory.js';
 import { createProfileService } from './profile-service.js';
+import { heuristicChars, type HeuristicChars } from './quantity.js';
 import {
   journalEntrySchema,
   type ChatStreamEvent,
@@ -1024,12 +1025,13 @@ describe('クローンの道具', () => {
       mcpServers: [],
       sessionId: null,
       resumedFrom: null,
-      injectedMemoryChars: 0,
-      systemPromptChars: 0,
+      injectedMemoryChars: heuristicChars(0),
+      systemPromptChars: heuristicChars(0),
+      lastContextUsage: null,
     };
 
     it('⭐ runtime が在れば、セッション構築時点との差（文字と割合）が出る', async () => {
-      const h = harness(() => ({ ...RUNTIME_BASE, injectedMemoryChars: 100 }));
+      const h = harness(() => ({ ...RUNTIME_BASE, injectedMemoryChars: heuristicChars(100) }));
 
       const reply = await h.call('memory_write', {
         slug: 'about-me-core',
@@ -1052,7 +1054,7 @@ describe('クローンの道具', () => {
      * 状況を作って確かめる。
      */
     it('⭐⭐ 増分が0のとき（何も変わっていないとき）に、増えたかのような文言を出さない', async () => {
-      let injected = 0;
+      let injected: HeuristicChars = heuristicChars(0);
       const h = harness(() => ({ ...RUNTIME_BASE, injectedMemoryChars: injected }));
 
       await h.call('memory_write', { slug: 'stable', content: '固定の本文', summary: '初回' });
@@ -9085,8 +9087,9 @@ describe('self_status（いま自分がどう走っているか）', () => {
     // **意図的に、以下で書き込む記憶の総文字数とは違う値にしてある。** 「いまの
     // 総文字数」と区別できることを見るための固定値であって、実際の構築時の値を
     // 模したものではない。
-    injectedMemoryChars: 3,
-    systemPromptChars: 999,
+    injectedMemoryChars: heuristicChars(3),
+    systemPromptChars: heuristicChars(999),
+    lastContextUsage: null,
   };
 
   it('道具として配られている（クローンから見えないものを作らない）', () => {
@@ -9425,6 +9428,90 @@ describe('journalEntrySchema の memory_update（action の後方互換）', () 
 });
 
 /**
+ * `journalEntrySchema` の `turn_usage.contextUsage.categories[].kind` は
+ * **optional** で足した（#804）。
+ *
+ * **この歯が守っているのは「日誌は読み出し時にも検証される」ことである。**
+ * `kind` を必須にすると、この欄が増える前に書かれた `turn_usage` の行が
+ * `safeParse` に落ち、**行ごと `list()` の結果から消える**
+ * （`packages/storage-fs/src/journal.ts` の `parseLine` /
+ * `packages/storage-pg/src/journal.ts` の `list`）。`journal_read`・日報・
+ * 蒸留はどれもそこを通るので、**1つの欄を必須にしただけで、既に記録済みの
+ * ターンの消費が静かに読めなくなる。**
+ *
+ * `memory_update.action` の後方互換の歯（直上）と同じ形・同じ理由である。
+ */
+describe('journalEntrySchema の turn_usage.contextUsage.categories[].kind（後方互換。#804）', () => {
+  /** `kind` を持たない軸だけを積んだ、この欄が増える前の形の行。 */
+  const legacyRow = {
+    type: 'turn_usage' as const,
+    id: 'j-804-legacy',
+    at: '2026-09-01T00:00:00.000Z',
+    layer: 'clone' as const,
+    site: 'session' as const,
+    managerId: CLONE_ACTOR_ID,
+    models: {},
+    summary: 'kind が増える前に書かれたターンの消費',
+    contextUsage: {
+      durationMs: 12,
+      categories: [{ name: 'System prompt', tokens: 8_000 }],
+    },
+  };
+
+  it('⭐⭐ kind の無い既存の行が今も読み出せる（必須にすると list() から丸ごと消える）', () => {
+    const result = journalEntrySchema.safeParse(legacyRow);
+
+    expect(result.success).toBe(true);
+    // **通ったことだけでは足りない。** `safeParse` が成功しても軸そのものが
+    // 剥ぎ取られていれば内訳は読めないので、欄が残っていることまで測る。
+    if (result.success && result.data.type === 'turn_usage') {
+      expect(result.data.contextUsage?.categories).toEqual([
+        { name: 'System prompt', tokens: 8_000 },
+      ]);
+    }
+  });
+
+  it('kind を持つ行は、その値がそのまま読める', () => {
+    const result = journalEntrySchema.safeParse({
+      ...legacyRow,
+      id: 'j-804-kind',
+      contextUsage: {
+        durationMs: 12,
+        categories: [
+          { name: 'System prompt', tokens: 8_000, kind: 'used' },
+          { name: 'Free space', tokens: 4_000, kind: 'free' },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success && result.data.type === 'turn_usage') {
+      expect(result.data.contextUsage?.categories?.map((category) => category.kind)).toEqual([
+        'used',
+        'free',
+      ]);
+    }
+  });
+
+  it('⭐ SDK が5つ目の kind を足しても行は落ちない（z.enum ではなく z.string にしてある）', () => {
+    const result = journalEntrySchema.safeParse({
+      ...legacyRow,
+      id: 'j-804-unknown',
+      contextUsage: {
+        durationMs: 12,
+        categories: [{ name: '将来の軸', tokens: 1_000, kind: 'invented-by-a-later-sdk' }],
+      },
+    });
+
+    // **未知の値でも書き込み（`append` の `parse`）が落ちないことが本題である。**
+    // 落ちれば、1つの未知の軸のせいでそのターンの消費が丸ごと記録できない。
+    expect(result.success).toBe(true);
+    if (result.success && result.data.type === 'turn_usage') {
+      expect(result.data.contextUsage?.categories?.[0]?.kind).toBe('invented-by-a-later-sdk');
+    }
+  });
+});
+/**
  * `journalEntrySchema` の `subagent_stall`（Issue #357）。`token_rotation` と
  * 同じ形で `text` と構造の両方を持つ——ここでは構造側（`safeParse` の可否）を
  * 固定する。人間が読む本文側の描画は `renderJournalEntry` の歯
@@ -9528,8 +9615,8 @@ describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
       memoryFileTokens: 700,
       memoryFileCount: 1,
       categories: [
-        { name: 'System prompt', tokens: 8_000 },
-        { name: 'MCP tools', tokens: 1_000 },
+        { name: 'System prompt', tokens: 8_000, kind: 'used' },
+        { name: 'MCP tools', tokens: 1_000, kind: 'deferred' },
       ],
     });
 
@@ -9543,9 +9630,29 @@ describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
     // **記憶の焼き込みがどちらに入るかを名指しする**（取り違えを塞ぐ）。
     expect(reply).toContain('**記憶の焼き込みはここに入る**');
     expect(reply).toContain('**alteroid の記憶ではない**');
-    // カテゴリ別と、名前が SDK 由来であるという断り。
-    expect(reply).toContain('System prompt 8,000');
+    // カテゴリ別、名前が SDK 由来であるという断り、**そして `kind`（#804）**。
+    expect(reply).toContain('System prompt 8,000 [used]');
+    expect(reply).toContain('MCP tools 1,000 [deferred]');
     expect(reply).toContain('名前は SDK の版で変わりうる');
+  });
+
+  /**
+   * ⭐⭐⭐ **`kind` の無い軸は「分類なし」と名乗る**（#804。この欄が増える前に
+   * 書かれた行、または SDK が返さなかった軸と同じ形）。⛔ `used` へは倒さない
+   * ——`[used]` と書けば「毎ターン払っている入力」だと読めてしまう。
+   */
+  it('⭐⭐⭐ kind の無い軸は「分類なし」と名乗る（used へ倒さない）', async () => {
+    const h = harness();
+    const entry = await appendTurnUsage(h, {
+      durationMs: 12,
+      totalTokens: 12_000,
+      categories: [{ name: 'Messages', tokens: 500 }],
+    });
+
+    const reply = await h.call('journal_read', { id: entry.id });
+
+    expect(reply).toContain('Messages 500 [分類なし]');
+    expect(reply).not.toContain('Messages 500 [used]');
   });
 
   it('⭐⭐⭐ 内訳を持たない行では、内訳の節を1文字も出さない（0 として出さない）', async () => {
@@ -10282,8 +10389,9 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     mcpServers: [],
     sessionId: null,
     resumedFrom: null,
-    injectedMemoryChars: 0,
-    systemPromptChars: 0,
+    injectedMemoryChars: heuristicChars(0),
+    systemPromptChars: heuristicChars(0),
+    lastContextUsage: null,
   };
 
   /**
@@ -13739,8 +13847,9 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
     mcpServers: [],
     sessionId: null,
     resumedFrom: null,
-    injectedMemoryChars: 3,
-    systemPromptChars: 999,
+    injectedMemoryChars: heuristicChars(3),
+    systemPromptChars: heuristicChars(999),
+    lastContextUsage: null,
   };
 
   function descriptionOf(tool: string): string {

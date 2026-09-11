@@ -27,6 +27,7 @@ import {
   renderListing,
   renderListingFromEnd,
 } from './excerpt.js';
+import { heuristicChars, type HeuristicChars } from './quantity.js';
 import type {
   MemoryCreatedAt,
   MemoryDescriptionFreshness,
@@ -62,19 +63,26 @@ export interface MemoryPart {
  *
  * 単位はすべて**文字**（`String.length`）。bytes ではない
  * （`measureMemoryFloor` の doc）。
+ *
+ * **量の欄（`*Chars`）は {@link HeuristicChars} で持つ。件数の欄
+ * （`*Docs`）は素の `number` のまま。** 件数は「量」ではなく「何件か」で
+ * あり、単位（文字/トークン）も確からしさ（heuristic/exact）も持たない
+ * ——巻き込むと `Quantity` という型が「単位付きの数量」以外のものまで
+ * 名乗ることになり、型そのものが意味を失う（`quantity.ts` モジュール
+ * 冒頭の「なぜ要るか」）。
  */
 export interface MemoryFloor {
   /** premise のカード（要旨＋節の目次）が毎ターン焼かれる分の文字数。 */
-  premiseChars: number;
+  premiseChars: HeuristicChars;
   /**
    * `indexed` のカード（要旨だけ。節の目次は焼かれない）が毎ターン焼かれる
    * 分の文字数。**`indexed` が1件も無ければ 0。**
    */
-  indexedChars: number;
+  indexedChars: HeuristicChars;
   /** fact の目次が毎ターン焼かれる分の文字数。 */
-  tocChars: number;
+  tocChars: HeuristicChars;
   /** 焼き込み全体の文字数。**`renderMemoryDocuments(documents).length` と必ず一致する。** */
-  totalChars: number;
+  totalChars: HeuristicChars;
   premiseDocs: number;
   indexedDocs: number;
   factDocs: number;
@@ -93,9 +101,9 @@ export interface MemoryFloor {
    */
   demotedPremiseDocs: number;
   /** 毎ターン最も大きい premise の1件（premise が無ければ null）。 */
-  largestPremise: { slug: string; chars: number } | null;
+  largestPremise: { slug: string; chars: HeuristicChars } | null;
   /** 毎ターン最も大きい indexed の1件（indexed が無ければ null）。 */
-  largestIndexed: { slug: string; chars: number } | null;
+  largestIndexed: { slug: string; chars: HeuristicChars } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -2673,27 +2681,27 @@ export function measureMemoryFloor(documents: readonly MemoryPart[]): MemoryFloo
   } = buildMemoryDocumentSections(documents);
   const totalChars = joinMemorySections(premiseSection, indexedSection, tocSection).length;
 
-  let largestPremise: { slug: string; chars: number } | null = null;
+  let largestPremise: { slug: string; chars: HeuristicChars } | null = null;
   for (const part of premiseParts) {
     const chars = renderPremisePart(part).length;
     if (largestPremise === null || chars > largestPremise.chars) {
-      largestPremise = { slug: part.slug, chars };
+      largestPremise = { slug: part.slug, chars: heuristicChars(chars) };
     }
   }
 
-  let largestIndexed: { slug: string; chars: number } | null = null;
+  let largestIndexed: { slug: string; chars: HeuristicChars } | null = null;
   for (const part of indexedParts) {
     const chars = renderIndexedPart(part).length;
     if (largestIndexed === null || chars > largestIndexed.chars) {
-      largestIndexed = { slug: part.slug, chars };
+      largestIndexed = { slug: part.slug, chars: heuristicChars(chars) };
     }
   }
 
   return {
-    premiseChars: premiseSection.length,
-    indexedChars: indexedSection.length,
-    tocChars: tocSection.length,
-    totalChars,
+    premiseChars: heuristicChars(premiseSection.length),
+    indexedChars: heuristicChars(indexedSection.length),
+    tocChars: heuristicChars(tocSection.length),
+    totalChars: heuristicChars(totalChars),
     premiseDocs: premiseParts.length,
     indexedDocs: indexedParts.length,
     factDocs: tocEntries.length,
