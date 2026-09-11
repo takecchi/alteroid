@@ -2,12 +2,17 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
+import type { InboxEvent } from '@alteroid/core';
+
 import {
   createCloneWakeGate,
   describeReopenedTokenNotice,
   ensuredEnvTokenLine,
+  isTokenPoolReopenedNotice,
   reopenedTokenOf,
   tokenRotationStream,
+  TOKEN_POOL_REOPENED_SOURCE,
+  worthDeliveringNow,
 } from './index.js';
 
 /**
@@ -470,6 +475,113 @@ describe('createCloneWakeGate', () => {
     expect(gate.decide('tok-a', false)).toEqual({ kind: 'fold' });
     expect(gate.decide('tok-a', false)).toEqual({ kind: 'fold' });
     expect(gate.decide('tok-a', true)).toEqual({ kind: 'wake', folded: 2 });
+  });
+});
+
+function tokenPoolEvent(): InboxEvent {
+  return {
+    type: 'external',
+    id: 'evt-token-pool-1',
+    at: '2026-09-07T00:00:00.000Z',
+    source: TOKEN_POOL_REOPENED_SOURCE,
+    payload: { text: 'ダミー' },
+  };
+}
+
+/**
+ * **`isTokenPoolReopenedNotice`**（Issue #783 続き）。
+ *
+ * 型と `source` だけを見る——他の欄（`payload` の中身）は判定に関わらない。
+ */
+describe('isTokenPoolReopenedNotice', () => {
+  it('external かつ source が token-pool なら真', () => {
+    expect(isTokenPoolReopenedNotice(tokenPoolEvent())).toBe(true);
+  });
+
+  it('external でも source が違えば偽', () => {
+    const event: InboxEvent = { ...tokenPoolEvent(), source: 'runner-registry' };
+    expect(isTokenPoolReopenedNotice(event)).toBe(false);
+  });
+
+  it('external 以外は真になりようがない（型で弾かれる）', () => {
+    const event: InboxEvent = {
+      type: 'human_message',
+      id: 'evt-human-1',
+      at: '2026-09-07T00:00:00.000Z',
+      text: 'こんにちは',
+      conversationId: 'conv-1',
+    };
+    expect(isTokenPoolReopenedNotice(event)).toBe(false);
+  });
+});
+
+/**
+ * **⭐⭐ 歯1（最重要）: `CloneWakeGate.decide` と `#restoreUnread` の門
+ * （`redeliveryGate`）が同じ答えを返す**（Issue #783 続き）。
+ *
+ * ## なぜこの歯が要るか
+ *
+ * `wake()`（`clone.post(...)` 越しの経路）と `createClone(...)` の
+ * `redeliveryGate`（`#restoreUnread` の経路）は、判定の実体を**同じ
+ * `worthDeliveringNow` から呼ぶ**ことで揃えてある（`RedeliveryGate` の doc、
+ * `worthDeliveringNow` の doc「呼び手は2つある」）。**コピーがあれば片方だけを
+ * 直したときに黙ってずれる。** この歯は、その一致を関数として固定する——
+ * どちらか片方だけを直した人は、ここで必ず赤にぶつかる。
+ *
+ * ## 何を測るか
+ *
+ * `blocked` が `true` / `false` の両方で、
+ * `cloneWakeGate.decide(tokenId, blocked).kind === 'wake'` と
+ * `redeliveryGate(tokenPoolEvent, { usageBlocked: blocked }) === true` が一致する
+ * こと。`redeliveryGate` は本番の配線（`index.ts` の `createClone(...)`）と
+ * **同じ2つの部品**（`isTokenPoolReopenedNotice` / `worthDeliveringNow`）から
+ * 組み立てる——配線そのものが同じ部品を呼んでいることは、直後の「本番の配線」
+ * describe が原文で固定する。
+ */
+describe('歯1: CloneWakeGate.decide と redeliveryGate は同じ答えを返す', () => {
+  // **本番の `createClone(...)` に渡す `redeliveryGate` と同じ形。** 部品
+  // （`isTokenPoolReopenedNotice` / `worthDeliveringNow`）が本番と同一の実体で
+  // あることは import 経由で保証されている——コピーはしていない。
+  const redeliveryGate = (event: InboxEvent, context: { usageBlocked: boolean }): boolean =>
+    isTokenPoolReopenedNotice(event) ? worthDeliveringNow(context.usageBlocked) : true;
+
+  it.each([true, false] as const)(
+    'usageBlocked=%s のとき、wake の判定と一致する',
+    (blocked) => {
+      const gate = createCloneWakeGate();
+
+      const wakeSaysWake = gate.decide('tok-a', blocked).kind === 'wake';
+      const gateSaysDeliver = redeliveryGate(tokenPoolEvent(), { usageBlocked: blocked });
+
+      expect(gateSaysDeliver).toBe(wakeSaysWake);
+    },
+  );
+
+  it('token-pool 以外の合図は usageBlocked に関わらず常に配る（wake 側の対象外）', () => {
+    const other: InboxEvent = { ...tokenPoolEvent(), source: 'runner-registry' };
+    expect(redeliveryGate(other, { usageBlocked: true })).toBe(true);
+    expect(redeliveryGate(other, { usageBlocked: false })).toBe(true);
+  });
+});
+
+/**
+ * **本番の配線が実際に `isTokenPoolReopenedNotice` / `worthDeliveringNow` を
+ * 呼んでいること**（Issue #783 続き）。
+ *
+ * `createClone(...)` は `main()` の中に在り、型でも実行時でも触れない
+ * （隣の `takeOverOnSwap` の歯と同じ理由）。**原文を読んで、配線が上の歯1と
+ * 同じ部品を呼んでいることだけを固定する。**
+ */
+describe('本番の配線: redeliveryGate は wake() と同じ部品を呼ぶ', () => {
+  const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+
+  it('redeliveryGate が isTokenPoolReopenedNotice と worthDeliveringNow を呼ぶ', () => {
+    const at = source.indexOf('redeliveryGate: (event, { usageBlocked })');
+    expect(at).toBeGreaterThan(-1);
+    const block = source.slice(at, source.indexOf('\n  });', at));
+
+    expect(block).toContain('isTokenPoolReopenedNotice(event)');
+    expect(block).toContain('worthDeliveringNow(usageBlocked)');
   });
 });
 

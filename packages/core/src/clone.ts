@@ -533,6 +533,53 @@ const CONTEXT_WINDOW_FOLD_HELD_NOTICE =
   '⟹ もう一度開き直しても同じ材料で同じところへ落ちるので、開き直していない。' +
   '⟹ プロンプトそのものが収まっていない可能性がある。';
 
+/**
+ * `#restoreUnread`（前の器が終えられなかった合図を配り直す経路）で、いま1件を
+ * 実際に配るか畳むかを決める述語（Issue #783 続き）。
+ *
+ * ## なぜ要るか —— `#restoreUnread` は `post()` を通らない
+ *
+ * `apps/daemon/src/index.ts` の `wake()` は `CloneWakeGate.decide` で
+ * 「認証トークンが通る状態に戻った」の合図（`external` / `source: 'token-pool'`）を
+ * 配るか畳むかを決めている——理由は {@link CloneHost.usageBlocked} の doc
+ * （host.ts）: この合図がクローンに対して持つ機能上の効果は `post()` の中の
+ * `if (this.#usageBlocked !== null) this.#releaseRequested = true;` の1文だけで、
+ * 枠で止まっていなければ配ってもターンを1本焼くだけである。
+ *
+ * **`#restoreUnread` はその門を素通りする。** 器の入れ替え（プロセスの再起動）で
+ * 未読のまま残った合図を配り直すこの経路は `#inbox.push` を直接呼び、`post()` の
+ * 中の門を一度も通らない。⟹ 配り直された token-pool の合図は、`post()` が持つ
+ * 「唯一の効果」の場所そのものに到達できず、ターンを1本焼くだけになる。
+ *
+ * ## `packages/core` は `apps/daemon` に依存できない
+ *
+ * 門の実体（`worthDeliveringNow` / `CloneWakeGate`）は `apps/daemon/src/index.ts`
+ * に在り、`packages/core` の依存は SDK / croner / zod のみ（`docs/architecture.md`
+ * 「プロセス境界」）。⟹ 門をここから import することはできない——だから
+ * `CloneOptions` に述語を**注入する**形にしてある。呼び手（デーモン）が
+ * `worthDeliveringNow` を包んだ関数を渡す。
+ *
+ * ## 渡さなければ全件配る
+ *
+ * 省略時（`undefined`）は今までどおり——`#restoreUnread` は残っている未読を
+ * 1件も畳まずに全部配り直す（既存の構成の挙動を変えない）。
+ *
+ * @param event 配り直す対象の合図そのもの（型で判定する。文言では判定しない）。
+ * @param context.usageBlocked **呼ばれた瞬間の** {@link CloneHost.usageBlocked}。
+ *   `#restoreUnread` のループは1件ごとに `await` するので、この値は前の記事の
+ *   評価時から変わっていることがある——呼び手はループの外で1回だけ読んで使い
+ *   回してはいけない。
+ * @returns 真なら配る（`#inbox.push` する）。偽なら畳む
+ *   （`#foldGatedRedelivery` — ターンを起こさないが、受信箱の行も台帳の行も
+ *   消さない。日誌には型ごとの本文と「畳んだ」の1行を残す）。
+ *   **判定できない（投げた）ときの倒れ先は呼び手の外——`#restoreUnread` 側で
+ *   真として扱う**（雑音であって喪失ではない側へ倒す。既存の catch と同じ向き）。
+ */
+export type RedeliveryGate = (
+  event: InboxEvent,
+  context: { usageBlocked: boolean },
+) => boolean;
+
 export interface CloneOptions {
   stores: Stores;
   /** 主にテスト用。既定は SDK の `query`。 */
@@ -707,6 +754,14 @@ export interface CloneOptions {
    * （`queryFn` と同じ「差し替え可能だが既定は本物」という形）。
    */
   mcpServerFactory?: typeof createCloneMcpServer;
+  /**
+   * `#restoreUnread` が配り直す1件ごとに、実際に配るか畳むかを決める述語
+   * （Issue #783 続き）。doc は {@link RedeliveryGate} に在る。
+   *
+   * **省略できるのはテストのためだけではない。** 省略すると `#restoreUnread` は
+   * 今までどおり全件を配り直す——既存の構成の挙動を1文字も変えない。
+   */
+  redeliveryGate?: RedeliveryGate;
 }
 
 type Listener = (event: ChatStreamEvent) => void;
@@ -1505,6 +1560,8 @@ class Clone implements CloneHost {
   readonly #profileService: ProfileService | undefined;
   readonly #accountUsage: (() => AccountUsageState) | undefined;
   readonly #scheduler: (() => ScheduleStatus[]) | undefined;
+  /** {@link CloneOptions.redeliveryGate}。`undefined` なら `#restoreUnread` は全件配る。 */
+  readonly #redeliveryGate: RedeliveryGate | undefined;
 
   constructor(options: CloneOptions) {
     const {
@@ -1530,6 +1587,7 @@ class Clone implements CloneHost {
       scheduler,
       self,
       mcpServerFactory,
+      redeliveryGate,
     } = options;
     this.#stores = stores;
     this.#queryFn = queryFn ?? query;
@@ -1559,6 +1617,7 @@ class Clone implements CloneHost {
     this.#scheduler = scheduler;
     this.#self = self;
     this.#mcpServerFactory = mcpServerFactory ?? createCloneMcpServer;
+    this.#redeliveryGate = redeliveryGate;
     this.#managers =
       managers ??
       createManagerPool({
@@ -2696,6 +2755,38 @@ class Clone implements CloneHost {
   }
 
   /**
+   * `redeliveryGate`（{@link CloneOptions.redeliveryGate}）が「いま配る意味が
+   * 無い」と答えた配り直しを、`#restoreUnread` の中でターンを起こさずに畳む
+   * （Issue #783 続き）。
+   *
+   * **`#foldClosedRedelivery` と同じ2本を書く**（あちらの doc「畳む仕組みを
+   * 入れるなら、畳んだ跡が残らなければならない」「無ければ永久に見えない」）。
+   *
+   * 1. **型ごとの本文追記**（`#journalIncomingBody`）。ここで素朴に `continue`
+   *    すると `external` の本文追記が落ち、`retrievalHintFor` の案内する
+   *    取り方が空を指す。
+   * 2. **畳んだこと自体の1行。** 「配り直した」（`#restoreUnread` が既に書いた
+   *    行）と「畳んだ」が対で残るので、次に読む人は両者を区別できる。
+   *
+   * **`#forget` は呼ばない。** `#foldClosedRedelivery` と違い、この畳み込みは
+   * 「もう片付いている」ではなく「いまは配る意味が無い」という一時的な判定
+   * なので、受信箱の行も台帳の行も消さずに残す——次の起動で `#restoreUnread` が
+   * また同じ行を拾い、その時点の状態で判定し直す。
+   */
+  async #foldGatedRedelivery(event: InboxEvent): Promise<void> {
+    await this.#journalIncomingBody(event);
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text:
+        `配り直しの門がいま配る意味は無いと答えたので、ターンを起こさずに畳んだ` +
+        `（モデルへは1文字も渡していない。合図も台帳の行も消していない——次の起動で` +
+        `また拾い直され、そのときの状態であらためて判定される）: ${inboxEventShape(event)}`,
+    });
+  }
+
+  /**
    * 届いた合図の**本文**を日誌へ残す。**配達のたびに書く** —— 配り直しの回でも、
    * 畳んでターンを起こさない回でも同じものを書く。
    *
@@ -2705,12 +2796,14 @@ class Clone implements CloneHost {
    * `approvals_list` を案内するのはそのためである）。`timer` / `self_initiative` /
    * `distill` は渡されたものを持たない（`commitmentFor` が `null` を返す側）。
    *
-   * **1本にまとめてあるのは、呼ぶ場所が3つに増えたからである** —— `#handle` の型
+   * **1本にまとめてあるのは、呼ぶ場所が複数に増えたからである** —— `#handle` の型
    * ごとの分岐・まとめ読み（`#runManagerReportBatch`）・畳み込み
-   * （`#foldClosedRedelivery`）。別々に書くと、`retrievalHintFor` が「処理される
-   * たびに全文が日誌へ書かれる」と案内している約束が、どれか1つの経路でだけ静かに
-   * 破れる。**破れても出力は「案内の体裁のまま取れない」だけなので、気づく手掛かりが
-   * 1つも残らない。**
+   * （`#foldClosedRedelivery` / `#foldGatedRedelivery`）。別々に書くと、
+   * `retrievalHintFor` が「処理されるたびに全文が日誌へ書かれる」と案内している
+   * 約束が、どれか1つの経路でだけ静かに破れる。**破れても出力は「案内の体裁の
+   * まま取れない」だけなので、気づく手掛かりが1つも残らない。**（呼び場所の
+   * 数をここに固定書きしないこと——増えるたびにこの1行だけ直し忘れると、
+   * 数え上げそのものが嘘をつく。）
    */
   async #journalIncomingBody(event: InboxEvent): Promise<void> {
     if (event.type === 'manager_message') {
@@ -3294,6 +3387,43 @@ class Clone implements CloneHost {
       // `open` が器へ届く前に落ちた合図だけが、未読としては残るのに台帳から永久に
       // 漏れる（そしてその窓は、いちばん落ちやすい起動直後と重なる）。
       this.#commit(record.event);
+
+      // **配る前に、この1件だけ「いま配る意味が在るか」を訊く**
+      // （`CloneOptions.redeliveryGate`。Issue #783 続き）。`#restoreUnread` は
+      // `post()` を通らないので、`post()` の中の枠の門（`#usageBlocked` の唯一の
+      // 効果）もここを素通りしてしまう——渡されていれば、その門と同じ実体
+      // （`apps/daemon/src/index.ts` の `worthDeliveringNow`）を使った述語で
+      // ここを埋める。
+      //
+      // **その瞬間の `usageBlocked` で評価する。** ループの外で1回だけ評価して
+      // 使い回さないこと——このループは1件ごとに `await` するので、並行して動く
+      // `#pump` が途中で `usageBlocked` を動かしうる（枠に当たる／解ける）。
+      //
+      // **渡されていなければ、今までどおり全件配る**（`redeliveryGate === undefined`
+      // の分岐）。
+      let worthRedelivering = true;
+      if (this.#redeliveryGate !== undefined) {
+        try {
+          worthRedelivering = this.#redeliveryGate(record.event, {
+            usageBlocked: this.usageBlocked,
+          });
+        } catch (error) {
+          // **判定できないときは配る側へ倒す**（直前の「台帳が読めなければ
+          // 『閉じていない』として扱う」と同じ向き。雑音であって喪失ではない側）。
+          noteDroppedRecord('配り直しの門の判定', inboxEventShape(record.event), error);
+          worthRedelivering = true;
+        }
+      }
+
+      if (!worthRedelivering) {
+        // **`#inbox.push` をしない ＝ ターンを起こさない。** 受信箱の行も台帳の
+        // 行も消さない（`#forget` / `stores.inbox.remove` を呼ばない）——次の
+        // 起動でまた `#restoreUnread` が拾い、その時点の `usageBlocked` で
+        // 判定し直す。跡は `#foldGatedRedelivery` が日誌へ残す。
+        await this.#foldGatedRedelivery(record.event);
+        continue;
+      }
+
       // `post` を通さないのは、tick の畳み込みで落ちた行が器に残り続けるからである
       // （落とした側は誰も消さないので、起動のたびに配られて回数だけが増える）。
       // それでも `post` が効かせている人間優先（`insertAfterLast`）まで
@@ -7113,8 +7243,8 @@ export function closedRedeliveryNotice(event: InboxEvent, commitment: Commitment
  * `human_message` / `manager_message` / `external` は、この合図が処理される
  * たびに全文が日誌へ書かれる（`human_message` は `Clone#record`、他の2つは
  * `#journalIncomingBody`。どちらも配り直しのこの回でも変わらず書く —— **ターンを
- * 起こさずに畳む回でも書く。** `#restoreUnread` / `#foldClosedRedelivery` の
- * 当該コメントを見よ）ので `journal_read` で取れる。
+ * 起こさずに畳む回でも書く。** `#restoreUnread` / `#foldClosedRedelivery` /
+ * `#foldGatedRedelivery` の当該コメントを見よ）ので `journal_read` で取れる。
  *
  * **`human_answer` だけは違う。** 案内するのは `journal_read` ではなく
  * `approvals_list id=<approvalId>` である — `tools.ts` の `approvals_list` の
