@@ -7,7 +7,7 @@ import type {
   CommitmentStore,
   UnreadableCommitment,
 } from '@alteroid/core';
-import { and, asc, desc, eq, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { stripNulls } from './db.js';
@@ -217,6 +217,52 @@ export class PgCommitmentStore implements CommitmentStore {
       .where(and(eq(commitments.id, id), isNull(commitments.closedAt)))
       .returning({ id: commitments.id });
     return updated.length > 0;
+  }
+
+  /**
+   * 複数件を1回でまとめて片付いたことを記録する（issue #844。
+   * `CommitmentStore.closeMany` の doc）。
+   *
+   * **`close()` と同じ筋——`where ... and closed_at is null` の条件付き
+   * UPDATE、jsonb_set 3重——を `inArray` で複数 id へ広げただけの UPDATE 1本
+   * である。** `close()` を `ids.length` 回ループしないのは、呼び出し側
+   * （`tools.ts`）がそのループを持たないようにするためであり、pg 版はもとも
+   * と1回の UPDATE で複数行を更新できる器なので、ここでは1本の SQL に畳む
+   * こと自体に難しさは無い——ループを避ける必要が構造的にあるのは fs 版
+   * （`storage-fs/src/commitments.ts` の `closeMany` の doc）である。
+   *
+   * **`close()` はこの薄い包みにしていない。** 単票の `close()` は
+   * `eq(commitments.id, id)` の1件 UPDATE のまま独立に残してある——
+   * `closeMany([id], …)` を経由させて `boolean` へ畳み直すことも書けるが、
+   * 動いている `close()` を書き換える理由が無い分だけリスクを増やさない
+   * ほうを選んだ（既存の呼び出し元・歯は無傷のまま）。
+   *
+   * **戻り値は実際に更新された id の配列（`returning` が返した行）。**
+   * 存在しない id・既に `closed_at` が入っている id は `where` に一致せず
+   * `returning` にも現れない。**`ids` に重複があっても、対象は `commitments`
+   * テーブルの行（id ごとに高々1行）なので二重に更新されず、戻り値にも
+   * 同じ id が2回現れない。**
+   *
+   * **`ids` が空なら SQL を撃たずに `[]` を返す。** 空配列を `inArray` へ渡すと
+   * ドライバ・SQL 方言によって挙動が割れうる（例えば `WHERE id IN ()` は
+   * 構文として不正になりうる）ので、ここで先に弾く。
+   */
+  async closeMany(
+    ids: readonly string[],
+    at: string,
+    reason: string,
+    by: CommitmentClosedBy,
+  ): Promise<string[]> {
+    if (ids.length === 0) return [];
+    const closedReason = stripNulls(reason);
+    const closed = sql`jsonb_set(jsonb_set(jsonb_set(${commitments.commitment}, '{closedAt}', ${JSON.stringify(at)}::jsonb, true), '{closedReason}', ${JSON.stringify(closedReason)}::jsonb, true), '{closedBy}', ${JSON.stringify(by)}::jsonb, true)`;
+
+    const updated = await this.#db
+      .update(commitments)
+      .set({ closedAt: new Date(at), commitment: closed })
+      .where(and(inArray(commitments.id, [...ids]), isNull(commitments.closedAt)))
+      .returning({ id: commitments.id });
+    return updated.map((row) => row.id);
   }
 
   /**

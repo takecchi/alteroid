@@ -307,6 +307,7 @@ export const CLONE_TOOL_NAMES = [
   'commitment_list',
   'commitment_open',
   'commitment_close',
+  'commitment_close_many',
   'commitment_edit',
   'profile_read',
   'profile_write',
@@ -352,6 +353,7 @@ export const SELF_JOURNALING_CLONE_TOOLS = [
   'schedule_remove',
   'commitment_open',
   'commitment_close',
+  'commitment_close_many',
   'commitment_edit',
   'profile_write',
   'manager_start',
@@ -1062,6 +1064,48 @@ const COMMITMENT_BODY_LIMIT = 240;
  */
 const UNREADABLE_COMMITMENT_IDS_SHOWN = 20;
 /**
+ * `commitment_close_many`（絞り込みでの一括 close、issue #844）の上限4つ。
+ *
+ * **なぜ一括の口が要るのか。** `commitment_close` は `id` を1つしか取らない。
+ * 未了が数千件あるとき、閉じるには同じ数だけ道具を呼ぶことになり、**1ターンに
+ * 載せられる道具呼び出しは有限なので、それは「やっていない」ではなく「構造的に
+ * 到達できない」**（issue #844）。台帳はターンをまたいで残る唯一の場所なので、
+ * そこが閉じる義務を持たない行で埋まると、**残っているのに読めない**という形で
+ * 「落とさないこと」という台帳の存在理由そのものが壊れる。
+ *
+ * **`CLOSE_MANY_LIMIT_DEFAULT` — 1回の呼びで閉じる既定の上限。** 上限を置くのは、
+ * 1回の呼びが背負うもの（台帳への書き込み・日誌の件数・戻り値の長さ）を全部ここで
+ * 抑えるためである。当たった件数がこれを超えたら**閉じずに残した件数を戻り値で
+ * 名乗る** ——「全部閉じた」と読まれないことが、この上限を置いてよい条件である。
+ *
+ * **`CLOSE_MANY_LIMIT_MAX` — 呼ぶ側が指定できる上限の上限。** `closeMany` は id を
+ * SQL のパラメータへ展開する（`storage-pg`）ので、無制限には広げられない。
+ * **同じ上限を store 側にも置いて二重にしない** —— どちらが効いたのか呼び出し側から
+ * 読めなくなる（`CommitmentStore.closeMany` の doc と対になっている）。
+ *
+ * **`CLOSE_MANY_JOURNAL_ID_CHARS` — 日誌1件に載せる id 列の文字数の予算。**
+ * 受け入れ基準は「閉じた行の id が**全部**日誌に残る（件数だけではない）」である
+ * （issue #844）。⟹ 件数と両端だけを書く形は採れない —— 後から何が閉じられたかが
+ * 辿れず、基準を満たさない。一方で全 id を1件へ詰めると 500 件で 18KB の1行になり、
+ * **この面が他の一覧で守っている「予算は件数ではなく文字数」
+ * （`COMMITMENT_LIST_BUDGET` の doc）に反する。** だから第3の形を採る ——
+ * **文字数の予算で id を塊に割り、塊ごとに1件の日誌を書く。** 各件が「何分割の
+ * 何番目か」を名乗るので、後から読んだ人は途中で切れているかを判定できる。
+ */
+const CLOSE_MANY_LIMIT_DEFAULT = 500;
+const CLOSE_MANY_LIMIT_MAX = 2_000;
+const CLOSE_MANY_JOURNAL_ID_CHARS = 3_600;
+/**
+ * 一括 close の**戻り値**に並べる id の件数の上限（#409 と同じ形）。
+ *
+ * 閉じた件数に比例して伸びる列挙をそのまま返すと、`UNREADABLE_COMMITMENT_IDS_SHOWN`
+ * が塞いだのと同じ穴が開く。**全 id は日誌側に在る**ので、ここで切っても
+ * 「後から何が閉じられたか辿れる」は失われない —— 切ったことは必ず言う。
+ */
+const CLOSE_MANY_IDS_SHOWN = 20;
+/** 0件だったときに「実在する source」を挙げて見せる件数の上限（同じ理由）。 */
+const CLOSE_MANY_SOURCES_SHOWN = 8;
+/**
  * `profile_write` が返す配布先の一覧（`配った先` / `配れなかった先`）を
  * 抜粋する厚み（#409）。
  *
@@ -1106,6 +1150,36 @@ const COMMITMENT_ORIGIN_LABEL: Record<CommitmentOrigin, string> = {
   external: '外部イベント',
   self: '自分で気づいた宿題',
 };
+
+/**
+ * id の列を、**文字数の予算**で塊に割る（`commitment_close_many` の日誌用）。
+ *
+ * **件数ではなく文字数で割る理由**は `CLOSE_MANY_JOURNAL_ID_CHARS` の doc に在る。
+ * ここが守るのは「日誌の1件が、閉じた件数に比例して際限なく伸びない」ことだけで
+ * あって、id を間引くことではない —— **渡された id は1つも落とさない**（塊を
+ * 全部つなげると元の列に戻る）。
+ *
+ * 1つの id だけで予算を超える場合でも、その id は単独の塊として必ず返す
+ * （落とすと「全部日誌に残る」が崩れる。予算のほうを譲る）。
+ */
+export function chunkIdsByChars(ids: readonly string[], budget: number): string[][] {
+  const chunks: string[][] = [];
+  let current: string[] = [];
+  let width = 0;
+  for (const id of ids) {
+    // 区切りの1文字も数える（つないだときの実際の長さで測る）。
+    const added = current.length === 0 ? id.length : id.length + 1;
+    if (current.length > 0 && width + added > budget) {
+      chunks.push(current);
+      current = [];
+      width = 0;
+    }
+    current.push(id);
+    width += current.length === 1 ? id.length : added;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
 
 function commitmentOriginBadge(entry: { origin: CommitmentOrigin; source?: string }): string {
   const label = COMMITMENT_ORIGIN_LABEL[entry.origin];
@@ -4789,6 +4863,321 @@ export function createCloneTools(context: ToolContext) {
           'act-completed',
         );
         return text(`${id} の本文を直した（元の本文は日誌に残してある）。`);
+      },
+    ),
+
+    tool(
+      'commitment_close_many',
+      [
+        '台帳の未了の行を、**絞り込みを渡してまとめて閉じる**。',
+        '1件ずつの `commitment_close` では到達できない数（数千件）が溜まったときの口である。',
+        '**既定は試算で、1件も閉じない。** 実際に閉じるには `dryRun: false` を明示すること —— ',
+        '閉じた行を開き直す道具はこの器に無いので、撃ち間違えは道具では戻せない。',
+        '**`origin` は必須で、在る起点（human / manager / external / self）を全部並べた呼びは断る**' +
+          '（「全部閉じる」を1回で撃てる形は作らない）。',
+        '行は消えない（`closedAt` / `closedReason` が付くだけ）。**閉じた id は全部日誌に残る。**',
+      ].join(''),
+      {
+        origin: z
+          .array(z.enum(commitmentOriginSchema.options))
+          .min(1)
+          .describe(
+            '閉じる対象の起点（必須）。在る起点を全部（human / manager / external / self）並べると断られる。' +
+              'manager の行を巻き込むつもりなら manager と自分で打つこと',
+          ),
+        source: z
+          .array(z.string().min(1))
+          .min(1)
+          .optional()
+          .describe(
+            '出所の**完全一致**（例 ["token-pool"]）。q の部分一致とは別物で、' +
+              '器が自分へ出している合図だけを狙い撃つためにある',
+          ),
+        q: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            '本文か出所への部分一致（大文字小文字を区別しない）。commitment_list の q と同じ当て方',
+          ),
+        until: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'この時刻までに載った行だけを対象にする（ISO8601。その瞬間ちょうどの行は含む）。' +
+              '閉じている最中に届いた新しい行を巻き込まないために使う',
+          ),
+        reason: z
+          .string()
+          .min(1)
+          .describe(
+            '何をもってこの絞り込みに当たる行が片付いたとするか。人間はこれを読んで後から否定する',
+          ),
+        dryRun: z
+          .boolean()
+          .optional()
+          .describe(
+            '省略すると true（何件当たるかを数えるだけで1件も閉じない）。実際に閉じるときだけ false を明示する',
+          ),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(CLOSE_MANY_LIMIT_MAX)
+          .optional()
+          .describe(
+            '1回の呼びで閉じる上限（省略すると 500）。**古い側から**閉じる。' +
+              '残りは同じ絞り込みでもう一度呼べば続けられる',
+          ),
+      },
+      async ({ origin, source, q, until, reason, dryRun, limit }) => {
+        // 🔴 **絞り込みの無い呼びを断る（issue #844 の受け入れ基準）。**
+        // `origin` が4値全部を含む呼びは「絞り込みが無い」のと同じであり、
+        // **「全部閉じる」が事故で撃てる形を作らない。** そしてこの1つの規則が、
+        // 同じ Issue のもう1本の基準（「`origin` を絞らない一括は拒否するか、
+        // 明示の確認を要求する」）も同時に満たす —— `manager` 由来の本物の宿題を
+        // 巻き込むには、呼ぶ側が `manager` と自分で打つ必要がある。**確認用の
+        // 追加の引数は作らない**（`dryRun` の既定と合わせて2重に問うことになり、
+        // どちらが効いたのか読めなくなる）。
+        if (commitmentOriginSchema.options.every((known) => origin.includes(known))) {
+          return text(
+            'origin に在る起点を全部（human / manager / external / self）並べた呼びは断る——' +
+              'それは絞り込みが無いのと同じで、1回で台帳を空にできてしまう。' +
+              '閉じたい起点だけを名指しすること（例 origin: ["external"]）。**1件も閉じていない。**',
+          );
+        }
+        // **読めない `until` を「絞り込みが当たらなかった」に混ぜない。** 混ぜると
+        // 打ち間違いが「0件だった」に化けて静かに通る。受ける形は器の他所と同じ
+        // ISO8601（`schema.ts` の `isoDateTime`、逐語: `z.string().datetime({ offset: true })`）。
+        if (
+          until !== undefined &&
+          !z.string().datetime({ offset: true }).safeParse(until).success
+        ) {
+          return text(
+            `until に渡された「${until}」は ISO8601 として読めない` +
+              '（例 2026-09-11T19:00:00.000Z）。**1件も閉じていない。**',
+          );
+        }
+
+        const { entries: openEntries, unreadable } = await stores.commitments.list();
+        // **絞りはツール層で当てる**（`commitment_list` と同じ側・同じ当て方）。
+        // 揃えるのは趣味ではない —— **`commitment_list` で下見した結果と、この
+        // 道具が閉じる集合が食い違わないこと**が、一括で閉じてよいと判断できる
+        // 唯一の根拠だからである。順序も `origin` → `q` の並びをそのまま踏襲する。
+        const afterOrigin = openEntries.filter((entry) => origin.includes(entry.origin));
+        const afterSource =
+          source === undefined
+            ? afterOrigin
+            : afterOrigin.filter(
+                (entry) => entry.source !== undefined && source.includes(entry.source),
+              );
+        const needle = q?.toLowerCase();
+        const afterQ =
+          needle === undefined
+            ? afterSource
+            : afterSource.filter(
+                (entry) =>
+                  entry.body.toLowerCase().includes(needle) ||
+                  (entry.source !== undefined && entry.source.toLowerCase().includes(needle)),
+              );
+        const untilMs = until === undefined ? undefined : Date.parse(until);
+        const matched =
+          untilMs === undefined
+            ? afterQ
+            : afterQ.filter((entry) => Date.parse(entry.at) <= untilMs);
+
+        const filterText = [
+          `origin=[${origin.join(', ')}]`,
+          ...(source === undefined ? [] : [`source=[${source.join(', ')}]（完全一致）`]),
+          ...(q === undefined ? [] : [`q="${q}"`]),
+          ...(until === undefined ? [] : [`until=${until}`]),
+        ].join(' / ');
+        // **漏斗（段ごとの残数）を必ず出す。** 「0件だった」と「絞り込みが
+        // 間違っていて当たらなかった」は、**どの段で0になったか**でしか
+        // 区別できない（issue #844 の受け入れ基準）。当たった場合にも出すのは、
+        // 次にどの軸を緩める／締めるべきかがここにしか無いからである。
+        const funnel = [
+          `未了 ${openEntries.length} 件`,
+          `origin=[${origin.join(', ')}] で ${afterOrigin.length} 件`,
+          ...(source === undefined ? [] : [`source（完全一致）で ${afterSource.length} 件`]),
+          ...(q === undefined ? [] : [`q で ${afterQ.length} 件`]),
+          ...(until === undefined ? [] : [`until で ${matched.length} 件`]),
+        ].join(' → ');
+        // **読めない行はこの道具では閉じられない**（id すら取れない行が在る。
+        // issue #296）。件数を黙って落とすと「これで全部だ」と読まれる。
+        const unreadableNote =
+          unreadable.length === 0
+            ? []
+            : [
+                `⚠ 読めない行が ${unreadable.length} 件ある。` +
+                  'この道具は絞り込みを当てられないので対象に含めていない（commitment_list で確かめること）。',
+              ];
+
+        if (matched.length === 0) {
+          // 0件の理由を**段で名指しする**。ここを1つの文言で済ませると、
+          // 「当たるものが無かった」と「絞り込みを間違えた」が同じ顔になる。
+          let why: string;
+          if (openEntries.length === 0) {
+            why =
+              '台帳に未了が1件も無い。**絞り込みの問題ではない**（閉じるべきものがそもそも無い）。';
+          } else if (afterOrigin.length === 0) {
+            const breakdown = commitmentOriginSchema.options
+              .map(
+                (known) =>
+                  `${known} ${openEntries.filter((entry) => entry.origin === known).length}`,
+              )
+              .join(' / ');
+            why =
+              `未了 ${openEntries.length} 件のうち origin=[${origin.join(', ')}] に当たる行が0件——` +
+              `**絞り込みが外れている。** いま未了に在る起点の内訳: ${breakdown}`;
+          } else if (source !== undefined && afterSource.length === 0) {
+            const counts = new Map<string, number>();
+            for (const entry of afterOrigin) {
+              if (entry.source === undefined) continue;
+              counts.set(entry.source, (counts.get(entry.source) ?? 0) + 1);
+            }
+            const top = [...counts.entries()]
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, CLOSE_MANY_SOURCES_SHOWN)
+              .map(([name, count]) => `${name} ${count}`)
+              .join(' / ');
+            const rest = counts.size - Math.min(counts.size, CLOSE_MANY_SOURCES_SHOWN);
+            why =
+              `origin では ${afterOrigin.length} 件当たったが source=[${source.join(', ')}] の完全一致で0件——` +
+              `**この source は台帳に無い。** 当たった行に実在する source（多い順）: ` +
+              `${top === '' ? '（source を持つ行が無い）' : top}` +
+              `${rest > 0 ? ` …ほか ${rest} 種は省略` : ''}`;
+          } else if (q !== undefined && afterQ.length === 0) {
+            why =
+              `source までで ${afterSource.length} 件当たったが q="${q}" に当たる行が0件` +
+              '（本文と出所の両方を見て当たらなかった）。';
+          } else {
+            const oldest = afterQ.reduce(
+              (acc, entry) => (acc === undefined || entry.at < acc ? entry.at : acc),
+              undefined as string | undefined,
+            );
+            why =
+              `q までで ${afterQ.length} 件当たったが until=${until} より前の行が0件` +
+              `（当たった行のうち最も古いのは ${oldest ?? '不明'}）。`;
+          }
+          return text(
+            [
+              '絞り込みに当たる未了は0件だった。**1件も閉じていない。**',
+              funnel,
+              why,
+              ...unreadableNote,
+            ].join('\n'),
+          );
+        }
+
+        const effectiveLimit = limit ?? CLOSE_MANY_LIMIT_DEFAULT;
+        // **古い側から閉じる。** `CommitmentStore.list` の契約が「未了は古い順」
+        // なので、先頭から取ればそうなる（並べ替えない）。Issue #844 が困って
+        // いるのは「古い側が読めない」ことなので、減らす向きもそちらから。
+        const targets = matched.slice(0, effectiveLimit);
+        const rest = matched.length - targets.length;
+        const restNote =
+          rest === 0
+            ? []
+            : [
+                `1回の上限（${effectiveLimit} 件）に当たったので、残り ${rest} 件は対象にしていない。` +
+                  '**同じ絞り込みでもう一度呼べば続きを閉じられる。**',
+              ];
+
+        if (dryRun !== false) {
+          // **省略された `dryRun` は試算。** 既定を「何も起きない側」に倒すのは、
+          // 閉じた行を開き直す道具がこの器に無い（`commitment_open` /
+          // `commitment_close` / `commitment_edit` の3本だけで、reopen が無い）
+          // からである。⟹ 撃ち間違えた一括 close は道具では戻せない。
+          const shown = targets.slice(0, CLOSE_MANY_IDS_SHOWN).map((entry) => entry.id);
+          const hidden = targets.length - shown.length;
+          return text(
+            [
+              `**試算（dryRun）。1件も閉じていない。** 実際に閉じるには dryRun: false を渡すこと。`,
+              funnel,
+              `絞り込み: ${filterText}`,
+              `この呼びで閉じるのは ${targets.length} 件（当たったのは ${matched.length} 件）。` +
+                `いちばん古いのは ${targets[0]?.at ?? '不明'}、いちばん新しいのは ${
+                  targets[targets.length - 1]?.at ?? '不明'
+                }。`,
+              `対象の id（先頭 ${shown.length} 件）: ${shown.join(', ')}${
+                hidden > 0 ? ` …ほか ${hidden} 件は省略` : ''
+              }`,
+              ...restNote,
+              ...unreadableNote,
+            ].join('\n'),
+          );
+        }
+
+        // **塊ごとに「閉じる → その塊の id を日誌へ書く」を交互に回す。**
+        // まとめて閉じてから日誌を書くと、その間に器が落ちたとき**閉じたのに
+        // 記録が無い行**が最大 `CLOSE_MANY_LIMIT_DEFAULT` 件できる。交互なら
+        // 失われうる最大が1塊に収まる。**`appendJournalOrThrow` は握り潰さない**
+        // ので、途中で日誌が落ちればここで throw して止まる —— それまでの塊は
+        // 「閉じてあり、かつ日誌にも在る」状態で残る。
+        const chunks = chunkIdsByChars(
+          targets.map((entry) => entry.id),
+          CLOSE_MANY_JOURNAL_ID_CHARS,
+        );
+        const now = new Date().toISOString();
+        const closedIds: string[] = [];
+        for (const [index, chunk] of chunks.entries()) {
+          const closed = await stores.commitments.closeMany(chunk, now, reason, 'clone');
+          closedIds.push(...closed);
+          // **1件も閉じられなかった塊では日誌へ書かない**（`commitment_close` が
+          // 成功したときにだけ書くのと揃える）。他の経路が先に閉じていた場合に
+          // 起きる。番号は割った時点の塊番号なので、**抜けている番号そのものが
+          // 「その塊は1件も閉じなかった」を意味する。**
+          if (closed.length === 0) continue;
+          await appendJournalOrThrow(
+            'commitment_close_many',
+            stores.journal,
+            {
+              type: 'decision',
+              decision:
+                `引き受けた仕事を絞り込みで一括して片付けた` +
+                `（${index + 1}/${chunks.length} 塊目、この塊は ${closed.length} 件）: ${reason}\n` +
+                `絞り込み: ${filterText}\n` +
+                `閉じた id: ${closed.join(' ')}`,
+              // **`grounds` には id を置かない。** この欄は「操作の由来そのものを
+              // 名乗る文」であって、載せたものの控えを置く場所ではない
+              // （`journalEntrySchema` の `decision.grounds` の doc）。id は
+              // `commitment_close` が `decision` 側へ書いているのと同じ側に揃える。
+              grounds:
+                'クローン自身が commitment_close_many で絞り込んで閉じた（人間はこれを読んで後から否定する）',
+            },
+            'act-completed',
+          );
+        }
+
+        // **当たったのに閉じられなかった分を黙らせない。** 他の経路
+        // （`POST /commitments/:id/close` や別セッション）が先に閉じていれば
+        // `closeMany` はその id を返さない。件数が食い違ったことは事実であり、
+        // 「全部閉じた」と読まれると次の呼びの判断が狂う。
+        const raced = targets.length - closedIds.length;
+        const shownClosed = closedIds.slice(0, CLOSE_MANY_IDS_SHOWN);
+        const hiddenClosed = closedIds.length - shownClosed.length;
+        return text(
+          [
+            `**${closedIds.length} 件を片付けた**（理由: ${reason}）。`,
+            funnel,
+            `絞り込み: ${filterText}`,
+            `閉じた id（先頭 ${shownClosed.length} 件）: ${shownClosed.join(', ')}${
+              hiddenClosed > 0
+                ? ` …ほか ${hiddenClosed} 件は省略（**全 id は日誌に ${chunks.length} 件に分けて残してある**）`
+                : ''
+            }`,
+            ...(raced === 0
+              ? []
+              : [
+                  `⚠ 対象 ${targets.length} 件のうち ${raced} 件は閉じられなかった` +
+                    '（この呼びの最中に他の経路が先に閉じた）。',
+                ]),
+            ...restNote,
+            ...unreadableNote,
+          ].join('\n'),
+        );
       },
     ),
 

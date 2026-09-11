@@ -1536,6 +1536,112 @@ describe('PgCommitmentStore', () => {
   });
 
   /**
+   * `closeMany`（issue #844）。**`close()` を件数分ループしないための専用の口**
+   * （`store.ts` の `CommitmentStore.closeMany` の doc、`commitments.ts` の
+   * `closeMany` の doc）。pg 版は `inArray` を使った UPDATE 1本で、`close()` の
+   * 条件付き UPDATE（`where ... and closed_at is null`）を複数 id へ広げただけ
+   * ——`close()` 自体は書き換えず、別の実装として並べてある。
+   *
+   * ここで問うのは、語（メソッド名やコメント）ではなく `list()` で読み直した
+   * 実状態で測ること（PR #826 の教訓）——戻り値だけでなく、ストアへ読み直した
+   * ときの `closedAt` / `closedReason` / `closedBy`、そして未了行が無傷である
+   * ことまで確かめる。
+   */
+  describe('closeMany（複数件を1回でまとめて閉じる）', () => {
+    it('実際に閉じた id だけを返す（存在しない id・既に閉じた id を混ぜても、新たに閉じた分だけ）', async () => {
+      await stores.commitments.open(commitment('c-1', '2026-08-10T00:00:00.000Z', '1'));
+      await stores.commitments.open(commitment('c-2', '2026-08-11T00:00:00.000Z', '2'));
+      await stores.commitments.open(commitment('c-3', '2026-08-12T00:00:00.000Z', '3'));
+      await stores.commitments.close('c-2', '2026-08-13T00:00:00.000Z', '先に片付けた', 'human');
+
+      const closed = await stores.commitments.closeMany(
+        ['c-1', 'c-2', 'c-3', 'しらない'],
+        '2026-08-14T00:00:00.000Z',
+        'まとめて片付けた',
+        'clone',
+      );
+
+      // c-2（既に閉じていた）・しらない（存在しない）は返らない
+      expect([...closed].sort()).toEqual(['c-1', 'c-3']);
+    });
+
+    it('空配列を渡すと何も書かずに [] を返す（読み直した台帳の状態が1つも変わらないことで測る）', async () => {
+      await stores.commitments.open(commitment('c-1', '2026-08-10T00:00:00.000Z', '1'));
+      const before = await stores.commitments.list({ includeClosed: true });
+
+      const closed = await stores.commitments.closeMany(
+        [],
+        '2026-08-14T00:00:00.000Z',
+        '対象なし',
+        'clone',
+      );
+
+      expect(closed).toEqual([]);
+      const after = await stores.commitments.list({ includeClosed: true });
+      // 語（「書かなかった」というコメント）ではなく、読み直した実状態が
+      // 1つも変わっていないことで測る。
+      expect(after).toEqual(before);
+    });
+
+    it('closeMany の後、includeClosed で closedAt/closedReason/closedBy が正しく入る', async () => {
+      await stores.commitments.open(commitment('c-1', '2026-08-10T00:00:00.000Z', '1'));
+      await stores.commitments.open(commitment('c-2', '2026-08-11T00:00:00.000Z', '2'));
+
+      await stores.commitments.closeMany(
+        ['c-1', 'c-2'],
+        '2026-08-14T00:00:00.000Z',
+        'まとめて片付けた',
+        'clone',
+      );
+
+      const all = (await stores.commitments.list({ includeClosed: true })).entries;
+      for (const id of ['c-1', 'c-2']) {
+        const entry = all.find((e) => e.id === id);
+        expect(entry?.closedAt).toBe('2026-08-14T00:00:00.000Z');
+        expect(entry?.closedReason).toBe('まとめて片付けた');
+        expect(entry?.closedBy).toBe('clone');
+      }
+    });
+
+    it('同じ id を重複して渡しても、返る id は重複せず二重に閉じない', async () => {
+      await stores.commitments.open(commitment('c-1', '2026-08-10T00:00:00.000Z', '1'));
+
+      const closed = await stores.commitments.closeMany(
+        ['c-1', 'c-1', 'c-1'],
+        '2026-08-14T00:00:00.000Z',
+        'まとめて片付けた',
+        'clone',
+      );
+
+      expect(closed).toEqual(['c-1']);
+      const entry = await stores.commitments.get('c-1');
+      expect(entry?.closedReason).toBe('まとめて片付けた');
+    });
+
+    it('未了の行は1件も消えない・状態も変わらない（pg 版は保持上限を持たないので trimmedClosed は常に0）', async () => {
+      await stores.commitments.open(commitment('open-1', '2026-08-01T00:00:00.000Z', '未了1'));
+      await stores.commitments.open(commitment('open-2', '2026-08-01T00:00:01.000Z', '未了2'));
+      await stores.commitments.open(commitment('c-1', '2026-08-10T00:00:00.000Z', '1'));
+      await stores.commitments.open(commitment('c-2', '2026-08-11T00:00:00.000Z', '2'));
+
+      await stores.commitments.closeMany(
+        ['c-1', 'c-2'],
+        '2026-08-14T00:00:00.000Z',
+        'まとめて片付けた',
+        'clone',
+      );
+
+      const list = await stores.commitments.list({ includeClosed: true });
+      const open = list.entries.filter((entry) => entry.closedAt === undefined);
+      expect(open.map((entry) => entry.id).sort()).toEqual(['open-1', 'open-2']);
+      // pg 版は close() の契約（行は消さない）をそのまま守る——`closeMany` も
+      // 保持上限・削除経路を1つも持たないので `trimmedClosed` は常に 0
+      // （`CommitmentList.trimmedClosed` の doc）。
+      expect(list.trimmedClosed).toBe(0);
+    });
+  });
+
+  /**
    * `editBody`（本 PR）。**まだ片付いていない行だけ書き換えられ、
    * `origin` / `at` / `source` など他の欄には触れないこと**を fs 版と同じ
    * 形で問う。`origin` が `'human'` かどうかの判定はストアの責務ではない

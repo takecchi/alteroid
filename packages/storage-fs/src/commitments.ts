@@ -374,6 +374,62 @@ export class FsCommitmentStore implements CommitmentStore {
   }
 
   /**
+   * 複数件を1回でまとめて片付いたことを記録する（issue #844。
+   * `CommitmentStore.closeMany` の doc）。
+   *
+   * **`#update` の排他区間を1回だけ使い、対象の行を全部その中で処理する。**
+   * `close()` を `ids` の件数だけ呼ぶ形（＝ `#update` を件数分呼ぶ形）にしない
+   * のがこのメソッドの存在理由そのもの——fs 版は `#update` のたびに台帳の
+   * JSON 全体を tmp へ書いて `rename` する器なので（`close()` の doc、
+   * `packages/storage-fs/src/index.test.ts` の注記）、500件を `close()` の
+   * ループで閉じれば500回の全体書き直しになる。**1回の排他区間に畳むことで、
+   * 書き込みの回数を「対象の件数」から「呼び出しの回数（1）」へ落とす。**
+   *
+   * **判定・書き換えの筋は `close()` をそのまま複数件へ広げただけである。**
+   * 対象は `ids` に含まれ、かつ未了の行（`closedAt === undefined`）だけ——
+   * 存在しない id・既に閉じている id はそのまま素通りする。実際に閉じた id
+   * だけを `closedIds` へ積み、戻り値にする。
+   *
+   * **`ids` を `Set` にしてから見るので、重複があっても対象の判定は変わらない
+   * ——同じ行が複数回書き換えられることも、戻り値に同じ id が複数回入ること
+   * も無い。** 1回の走査で1行ごとに高々1回しか処理しないため。
+   *
+   * **`ids` が空なら `#update` を呼ばずに `[]` を返す。** 「対象が無い」と
+   * 分かっている呼び出しでまで排他区間へ入って読み直し・書き直しをする理由が
+   * 無い。これにより、空配列を渡したときはファイルの中身が1バイトも変わらない。
+   *
+   * **`trimClosed` は `close()` と同じくここでも呼ぶ。** 新しく閉じた行が
+   * 増える点は `close()` と変わらないので、保持上限（`CLOSED_HISTORY_LIMIT`）
+   * の扱いも `close()` と揃える——複数件をまとめて閉じたからといって、
+   * 未了の行を切ったり上限の計算を変えたりしない。
+   */
+  async closeMany(
+    ids: readonly string[],
+    at: string,
+    reason: string,
+    by: CommitmentClosedBy,
+  ): Promise<string[]> {
+    if (ids.length === 0) return [];
+    const targets = new Set(ids);
+    return this.#update((file) => {
+      const closedIds: string[] = [];
+      const entries = file.entries.map((entry) => {
+        if (!targets.has(entry.id) || entry.closedAt !== undefined) return entry;
+        closedIds.push(entry.id);
+        return { ...entry, closedAt: at, closedReason: reason, closedBy: by };
+      });
+      return {
+        next: trimClosed({
+          entries,
+          unreadable: file.unreadable,
+          trimmedClosedCount: file.trimmedClosedCount,
+        }),
+        result: closedIds,
+      };
+    });
+  }
+
+  /**
    * `body` を書き換える。**`open` / `close` と同じ排他区間（`#update`）で行う**
    * — 読んでから書く形にすると、並行編集や「編集」と「片付け」の競合で
    * 後勝ちが黙って先の書き込みを踏み消す。
