@@ -130,7 +130,8 @@ function tokenAvailabilityAt(
  *
  * **⚠️ これは実際に起きた形である。** `token_rotation` の `event` は「5値」として
  * 書かれていたが、2026-08-26 に6値目（`sweep_stopped`）が、2026-09-07 に7値目
- * （`parked`）と8値目（`recovered`）が足された。**固定に見える数え上げでも増える。**
+ * （`parked`）と8値目（`recovered`）が、2026-09-11 に9値目（`reopened`。#833）が
+ * 足された。**固定に見える数え上げでも増える。**
  * ⟹ **ここに数を書かないこと**（数のほうが先に腐る。数え上げの持ち主は
  * `packages/core/src/schema.ts` の `z.enum` である）。
  */
@@ -500,9 +501,16 @@ function describeEvent(
         tone: 'danger',
       };
     case 'recovered':
-      // **止まっていた鍵が開いた。** 良い知らせなので `ok` である（他にここへ
-      // 来る `event` は無い）。
+      // **止まっていた鍵が開いた。** 良い知らせなので `ok` である。
       return { label: '止まっていた現役が、また通ることを観測できた', tone: 'ok' };
+    case 'reopened':
+      // **`recovered` と同じ `ok` だが、label は別である**（#833）。あちらは
+      // **観測**、こちらは**時計**（記録した期限を過ぎただけで、通ることは誰も
+      // 確かめていない）。**同じ文にすると、読む側は observed だと思う。**
+      return {
+        label: '現役の冷却が明けた（時計。通ることは観測していない）',
+        tone: 'ok',
+      };
     case 'restored':
       return { label: '起動時に現役を撒き直した', tone: 'neutral' };
     case 'restore_failed':

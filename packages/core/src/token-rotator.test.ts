@@ -2056,6 +2056,171 @@ describe('tokenRotationEntry / tokenRestoreEntry', () => {
  * **⚠️ ここは「回るようになった」を測る歯であって、「本番で通った」を測る歯では
  * ない。** 本物のトークンを扱わない枷があるので、そちらは実装側からは測れない。
  */
+/**
+ * **現役の冷却が明けたら、止まっていた層を起こす契機を出す**（#833）。
+ *
+ * ## なぜこの歯が要るか —— `parked` の出口が probe 1本に依存していた
+ *
+ * `TokenRotationOutcome.recovered` の doc は「`parked` の側は放置ではない ——
+ * 冷却が明ければ枠の probe（5分ごと）が `usable` を観測し、`recovered` として
+ * ここへ戻ってくる」と約束していた。**probe が判定を1つも返さない器では、その
+ * 出口が閉じている**（`apps/daemon/src/token-watch.ts` の「probe が1つも判定を
+ * 返さない器が在る（本番がそれだった）」）。
+ *
+ * 実測（2026-09-11 の本番）: 現役の冷却が 13:20:00Z に明けたのに、日誌もログも
+ * 13:19:30Z を最後に1行も出ず、次の自発ターン（13:57:49Z）まで**約38分**何も
+ * 動かなかった。
+ *
+ * ## ⚠️ ここは「起こす契機が出るか」を測る歯であって、「本番で通った」の歯ではない
+ *
+ * 冷却が明けたことは時計で言えるが、その鍵が実際に通るかは観測しないと分から
+ * ない（`tokenAvailabilityAt` の doc:「`ready` は『通る』ではない」）。**起こした
+ * 後で結局枠なら、その失敗が新しい観測として上がってくる。**
+ */
+describe('reconsider: 現役の冷却が明けたら、止まっていた層を起こす（#833）', () => {
+  /** 現役（`tok-a`）の冷却が `AT` の1時間前に明けている状態を作る。 */
+  async function seedElapsed(h: Harness): Promise<number> {
+    const elapsed = Date.parse(AT) - 60 * 60 * 1000;
+    await h.stores.tokens.replace([
+      {
+        id: 'tok-a',
+        label: 'first',
+        value: 'value-a',
+        order: 0,
+        cooldownUntil: elapsed,
+        cooldownSource: 'quota_reset',
+        lastRejectedAt: '2026-08-25T00:00:00.000Z',
+        lastRejectedReason: "You've hit your session limit · resets 10:20pm (Asia/Tokyo)",
+      },
+      // **候補は置かない。** 置くと「回った」と区別が付かなくなる —— この歯が
+      // 測るのは「回さずに起こす」ほうである。
+    ]);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 3, rotatedAt: AT });
+    return elapsed;
+  }
+
+  it('明けた回に reopened が立ち、日誌は recovered とは別の event で残る', async () => {
+    const h = harness();
+    const elapsed = await seedElapsed(h);
+
+    const outcome = await h.rotator.reconsider({ reason: 'tick' });
+
+    expect(outcome.kind).toBe('ignored');
+    if (outcome.kind !== 'ignored') return;
+    expect(outcome.reopened).toEqual({
+      tokenId: 'tok-a',
+      label: 'first',
+      cooldownUntil: new Date(elapsed).toISOString(),
+    });
+    // **`recovered` を名乗らない。** あちらは「通ることを観測できた」で、ここには
+    // 観測が1つも無い（`markTokenUsable` の doc が禁じている混同そのもの）。
+    expect(outcome.recovered).toBeUndefined();
+    // **回していない。撒いてもいない。** 出すのは「明けた」という事実だけである。
+    expect(h.spreadCalls).toEqual([]);
+    expect(h.probeCalls).toEqual([]);
+
+    const entry = tokenRotationEntry(outcome);
+    expect(entry?.event).toBe('reopened');
+    expect(entry?.tokenId).toBe('tok-a');
+    // **観測していないので、どちらの生産者かを名乗る欄は付かない。**
+    expect(entry?.recoveredSource).toBeUndefined();
+  });
+
+  it('同じ冷却では2回目は立たない（目盛りは60秒ごとに来る）', async () => {
+    const h = harness();
+    await seedElapsed(h);
+
+    const first = await h.rotator.reconsider({ reason: 'tick' });
+    const second = await h.rotator.reconsider({ reason: 'tick' });
+
+    expect(first.kind === 'ignored' && first.reopened !== undefined).toBe(true);
+    // **これがこの歯の本体である。** 立ちっぱなしにすると
+    // `resumeStoppedByUsage()` が毎分走る。
+    expect(second.kind === 'ignored' && second.reopened === undefined).toBe(true);
+    // 2回目は日誌にも出ない（`signal: 'none'` の `not_rotated` は黙る）。
+    expect(describeTokenRotation(second)).toBeNull();
+  });
+
+  it('記録を1文字も消さない（markTokenUsable を呼ばない）', async () => {
+    const h = harness();
+    const elapsed = await seedElapsed(h);
+    const before = h.replaceCalls();
+
+    await h.rotator.reconsider({ reason: 'tick' });
+
+    // **記憶ストアへ1回も書いていない。** 「明けたかどうかは `cooldownUntil` を
+    // 読めば分かるので、消す必要が無い」（`markTokenUsable` の doc の逐語）。
+    expect(h.replaceCalls()).toBe(before);
+    const row = (await h.stores.tokens.list()).find((token) => token.id === 'tok-a');
+    expect(row?.cooldownUntil).toBe(elapsed);
+    expect(row?.cooldownSource).toBe('quota_reset');
+    expect(row?.lastRejectedAt).toBe('2026-08-25T00:00:00.000Z');
+    expect(row?.lastRejectedReason).toBe(
+      "You've hit your session limit · resets 10:20pm (Asia/Tokyo)",
+    );
+  });
+
+  it('冷却を持たない健全な現役では立たない（毎分の目盛りで何も起きない）', async () => {
+    const h = harness();
+    await seedTwo(h);
+
+    const outcome = await h.rotator.reconsider({ reason: 'tick' });
+
+    expect(outcome.kind).toBe('ignored');
+    expect(outcome.kind === 'ignored' ? outcome.reopened : undefined).toBeUndefined();
+    expect(describeTokenRotation(outcome)).toBeNull();
+  });
+
+  it('もう一度冷やされて明けたら、また立つ（(id, cooldownUntil) の組で数える）', async () => {
+    const h = harness();
+    await seedElapsed(h);
+    await h.rotator.reconsider({ reason: 'tick' });
+
+    // 2度目の冷却。**別の期限**なので、明けたらもう一度起こす必要がある。
+    const again = Date.parse(AT) - 60 * 1000;
+    const pool = await h.stores.tokens.list();
+    await h.stores.tokens.replace(
+      pool.map((token) => (token.id === 'tok-a' ? { ...token, cooldownUntil: again } : token)),
+    );
+
+    const outcome = await h.rotator.reconsider({ reason: 'tick' });
+
+    expect(outcome.kind === 'ignored' && outcome.reopened?.cooldownUntil).toBe(
+      new Date(again).toISOString(),
+    );
+  });
+
+  it('rotateOn が off でも立つ（off は「鍵を移すな」であって「止まったままにしておけ」ではない）', async () => {
+    const h = harness();
+    await seedElapsed(h);
+    await h.stores.tokens.writeSettings({ rotateOn: 'off', cooldownMs: 18_000_000, updatedAt: AT });
+
+    const outcome = await h.rotator.reconsider({ reason: 'tick' });
+
+    expect(outcome.kind === 'ignored' && outcome.reopened?.tokenId).toBe('tok-a');
+  });
+
+  it('冷却がまだ明けていなければ立たない（park の途中では起こさない）', async () => {
+    const h = harness();
+    await h.stores.tokens.replace([
+      {
+        id: 'tok-a',
+        label: 'first',
+        value: 'value-a',
+        order: 0,
+        cooldownUntil: Date.parse(AT) + 60 * 60 * 1000,
+      },
+    ]);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: AT });
+
+    const outcome = await h.rotator.reconsider({ reason: 'tick' });
+
+    // 現役は `cooling` なので `ready` の門にすら来ない（候補も無いので `exhausted`）。
+    expect(outcome.kind).toBe('exhausted');
+    expect(outcome.kind === 'ignored' ? outcome.reopened : undefined).toBeUndefined();
+  });
+});
+
 describe('reconsider: 動く鍵が残っているのに諦めない', () => {
   it('記録の上で現役が冷却中で、通る候補が在れば回す（観測は1つも無い）', async () => {
     const h = harness();

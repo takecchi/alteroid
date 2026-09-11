@@ -217,6 +217,46 @@ export type TokenRotationOutcome =
        */
       recovered?: { tokenId: string; label: string; source: TokenVerdictOrigin['source'] };
       /**
+       * **現役の冷却が明けた**（#833）。`cooldownUntil` はその明けた期限（ISO 8601）。
+       *
+       * ## なぜ {@link recovered} と別立てなのか —— 根拠の強さが違う
+       *
+       * あちらは**観測**である（probe が枠を測った / ターンが実際に成功した）。
+       * こちらは**時計**でしかない —— 記録してあった期限を過ぎただけで、**通ることは
+       * 誰も確かめていない。** 同じ欄に載せると、`markTokenUsable` の doc が禁じて
+       * いる「観測していない成功を記録する」を、日誌の側でやることになる。
+       *
+       * ⟹ **記録は1文字も消さない。** `cooldownUntil` も `lastRejectedAt` も
+       * `lastRejectedReason` も残す（消す必要が無い。明けたかどうかは
+       * `cooldownUntil` を読めば分かる——`markTokenUsable` の doc の逐語）。
+       *
+       * ## なぜ要るか —— `parked` の出口が probe 1本に依存していた
+       *
+       * {@link recovered} の doc は「`parked` の側は放置ではない —— 冷却が明ければ
+       * 枠の probe（5分ごと）が `usable` を観測し、`recovered` としてここへ戻って
+       * くる」と約束していたが、**probe が判定を1つも返さない器が在る**
+       * （`apps/daemon/src/token-watch.ts` の「probe が1つも判定を返さない器が在る
+       * （本番がそれだった）」）。そこでは出口が閉じていて、**鍵が通るように
+       * なっても誰も層を起こさなかった** —— 実測（2026-09-11 の本番）で、冷却が
+       * 明けてから次の自発ターンまで約38分、日誌もログも1行も出ない空白ができた。
+       *
+       * 冷却の期限は `resetsAt`（権威ある値）から来ていて、目盛りは60秒ごとに
+       * それを読んでいる ⟹ **「明けた」は probe を待たずに言える。**
+       *
+       * ## 同じ冷却では1回だけ立つ
+       *
+       * 目盛りは60秒ごとに来るので、立ちっぱなしにすると
+       * `resumeStoppedByUsage()` が延々と走る。**`(tokenId, cooldownUntil)` の組で
+       * 1回だけ**にしてある（{@link createTokenRotator} の中の
+       * `announcedReopen`）。**記憶ストアには書かない** —— 書くと記録を消す
+       * ことになるうえ、この抑止は「このプロセスが既に起こしたか」であって
+       * 鍵の状態ではない。
+       *
+       * **⚠️ デーモンが入れ替われば、同じ冷却でもう一度立ちうる。** それは正しい
+       * ——器が入れ替わった後は、止まっていた層はどのみち起こし直す必要がある。
+       */
+      reopened?: { tokenId: string; label: string; cooldownUntil: string };
+      /**
        * `freshness` が `stale` のとき、**いまの現役に対して何件目の取りこぼしか**
        * （この1件を含む）。それ以外では付かない。
        *
@@ -742,6 +782,23 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
    * （事実の側は日誌に出る）。
    */
   let staleRun: { key: string; count: number } | null = null;
+
+  /**
+   * **「その冷却が明けたことは、もう知らせた」**（#833。トークン id → 明けた `cooldownUntil`）。
+   *
+   * 目盛りは60秒ごとに来るので、これが無いと**明けた後ずっと**
+   * `TokenRotationOutcome.reopened` が立ち、`resumeStoppedByUsage()` が毎分走る。
+   *
+   * **鍵は id だけ、値は明けた期限そのものにしてある。** 期限を値に持てば、
+   * 同じ鍵が**次にもう一度冷やされて明けた**回は別の値になるので、自然にもう一度
+   * 立つ ⟹ 明示的に消す経路が要らない（{@link staleRun} と同じ形）。
+   *
+   * **記憶ストアへは書かない。** 2つ理由がある —— (1) 書くなら記録を消すか列を
+   * 増やすことになるが、`markTokenUsable` の doc が「冷却が明けたかどうかは
+   * `cooldownUntil` を読めば分かるので、消す必要が無い」と言っている
+   * (2) これは**このプロセスが既に起こしたか**の計器であって、鍵の状態ではない。
+   */
+  const announcedReopen = new Map<string, number>();
 
   /**
    * **枠が実際に拒否した回の事実**を、枠の種類ごとに覚えておく（#680）。
@@ -1733,6 +1790,35 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           row === undefined ? 'dangling' : tokenAvailabilityAt(row, now().getTime());
 
         if (availability === 'ready') {
+          /**
+           * **冷却が明けた回だけ、通る状態に戻ったことを1回だけ出す**（#833。
+           * {@link TokenRotationOutcome} の `reopened` の doc に理由の全文が在る）。
+           *
+           * ここへ来るのは「記録の上で現役が通る」＝**回す契機が無い**ときだが、
+           * **止まっていた層を起こす契機は在りうる** —— 直前まで冷却中だった鍵が
+           * 明けたなら、枠で止まったクローンとマネージャーは合図を待っている。
+           *
+           * **回さない。撒き直さない。記録も1文字も消さない。** 出すのは
+           * 「明けた」という事実だけで、鍵は1バイトも動かない。
+           *
+           * **`rotateOn: 'off'` でも出す。** あれは「勝手に鍵を移すな」であって
+           * 「止まったままにしておけ」ではない（下の `off` の門は**回す**判断の
+           * 手前に在り、ここはその前である）。
+           */
+          if (
+            row?.cooldownUntil !== undefined &&
+            announcedReopen.get(row.id) !== row.cooldownUntil
+          ) {
+            announcedReopen.set(row.id, row.cooldownUntil);
+            const elapsedAt = new Date(row.cooldownUntil).toISOString();
+            return {
+              kind: 'ignored' as const,
+              signal: 'none' as const,
+              reason,
+              reopened: { tokenId: row.id, label: row.label, cooldownUntil: elapsedAt },
+              why: `現役「${row.label}」の冷却が明けた（${elapsedAt}）。**時計で明けたのであって、通ることを観測したわけではない**`,
+            };
+          }
           return {
             kind: 'ignored' as const,
             signal: 'none' as const,
@@ -1922,6 +2008,17 @@ export function describeTokenRotation(
         tail
       );
     }
+    // **冷却明けも `signal: 'none'` で出す**（#833。理由は直上の `recovered` と
+    // 同じ——止まっていたあいだの記録と対になる行である）。**根拠の強さは文面で
+    // 分ける** —— あちらは「観測できた」、こちらは「時計で明けた」である。
+    if (outcome.reopened !== undefined) {
+      return (
+        `認証トークン: **現役の冷却が明けた**` +
+        `（id ${outcome.reopened.tokenId} / 「${outcome.reopened.label}」。期限 ${outcome.reopened.cooldownUntil}）。${outcome.why}\n` +
+        '**通ることを観測したわけではない** — 記録した期限を過ぎたので、止まっていた層を起こすだけである' +
+        tail
+      );
+    }
     if (outcome.signal === 'none') return null;
     return `認証トークン: 回さなかった（${outcome.signal}）。${outcome.why}${tail}`;
   }
@@ -2084,6 +2181,21 @@ export function tokenRotationEntry(
       // `turn_success`）。`outcome.recovered.source` をそのまま引き継ぐ
       // ——ここで書き直さない（`TokenRotationOutcome` の `recovered` の doc）。
       recoveredSource: outcome.recovered.source,
+    };
+  }
+  if (outcome.kind === 'ignored' && outcome.reopened !== undefined) {
+    // **`recovered` へも `not_rotated` へも潰さない**（#833。`schema.ts` の
+    // `token_rotation.event` の doc）。前者へ潰すと観測していない成功が観測として
+    // 残り、後者へ潰すと**層を起こした回**が「何もしなかった」の中へ消える。
+    //
+    // **`recoveredSource` は付けない。** あの欄は「どちらの生産者が*観測*したか」
+    // で、ここには観測が1つも無い（`schema.ts` の同欄の doc:「無いことは
+    // 『観測していない』であって『account_probe だった』ではない」）。
+    return {
+      ...common,
+      event: 'reopened',
+      tokenId: outcome.reopened.tokenId,
+      label: outcome.reopened.label,
     };
   }
   return { ...common, event: 'not_rotated' };

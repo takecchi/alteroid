@@ -696,7 +696,8 @@
                             "restore_failed",
                             "sweep_stopped",
                             "parked",
-                            "recovered"
+                            "recovered",
+                            "reopened"
                           ]
                         },
                         "signal": {
@@ -2155,7 +2156,8 @@
                                   "restore_failed",
                                   "sweep_stopped",
                                   "parked",
-                                  "recovered"
+                                  "recovered",
+                                  "reopened"
                                 ]
                               },
                               "signal": {

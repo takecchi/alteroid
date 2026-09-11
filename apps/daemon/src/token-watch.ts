@@ -2,6 +2,7 @@ import {
   judgeTokenCandidate,
   type AccountUsageState,
   type TokenCandidateVerdict,
+  type TokenEnsureEnvOutcome,
   type TokenReconsiderReason,
   type TokenRotationOutcome,
   type TokenRotator,
@@ -229,6 +230,14 @@ export interface TokenRotationWatchOptions {
    * の結果と**同じ1本**へ流さなければ「回った」の記録が2通りの形で残る。
    */
   onOutcome: (outcome: TokenRotationOutcome) => Promise<void>;
+  /**
+   * **器の環境変数の行を足そうとした結果**（#832）。`pool_changed` の回にだけ来る。
+   *
+   * **ここでは何も書かない**（{@link onOutcome} と同じ理由）。書く先を知っているのは
+   * `index.ts` で、**起動時の1回と同じ形で出す**必要がある——別々に書くと、同じ
+   * 出来事が2通りの文面で残る。
+   */
+  onEnsuredEnvToken?: (outcome: TokenEnsureEnvOutcome) => void;
   /** 主にテスト用。 */
   tickMs?: number;
   minGapMs?: number;
@@ -280,6 +289,30 @@ export function startTokenRotationWatch(options: TokenRotationWatchOptions): Tok
     lastStartedAt = now();
     const work = (async () => {
       try {
+        /**
+         * **プールが空→1本目になった回に、器の環境変数の行を生やす**（#832）。
+         *
+         * `ensureEnvToken` は**プールが空なら足さない**（受け入れ基準7）ので、
+         * 起動時の1回だけでは**新しい器では永久に生えない** —— 起動時は必ず空で、
+         * 人間が1本目を登録するのはその後だからである。⟹ 実測（2026-09-11 の
+         * Railway）で、`stranded`（記録から回す安全網）が丸ごと死んでいた:
+         * `reconsider` は現役を `active?.tokenId ?? tokens.find(isEnvToken)?.id` で
+         * 決めるので、**指名も env 行も無い器では毎回 `ignored` を返す。**
+         *
+         * **`pool_changed` だけで呼ぶ。** プールが空でなくなりうるのは人間が書いた
+         * 回だけで、目盛り（60秒）で毎分呼ぶと記憶ストアの読みが1本増えるだけである。
+         *
+         * **`reconsider` の前に置く。** 逆だと、行が足された回の見直しがその行を
+         * 見ないまま終わる（1回ぶん遅れる。`index.ts` の起動時と同じ順序である）。
+         *
+         * **判断は持たない**（この節の doc）。足すかどうかを決めるのは
+         * `ensureEnvToken` 自身で（空なら足さない・環境変数が無ければ足さない・
+         * 行が在れば何もしない）、ここが決めるのは**いつ聞くか**だけである。
+         */
+        if (reason === 'pool_changed') {
+          const ensured = await options.rotator.ensureEnvToken();
+          options.onEnsuredEnvToken?.(ensured);
+        }
         const outcome = await options.rotator.reconsider({
           reason,
           ...(current === undefined ? {} : { current }),
