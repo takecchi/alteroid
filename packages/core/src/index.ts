@@ -742,6 +742,7 @@ export {
   type ToolContext,
 } from './tools.js';
 export {
+  ALWAYS_REDELIVER,
   CLONE_MODEL,
   CLONE_MODEL_ENV_KEY,
   CLONE_HUMAN_PRIORITY_ENV_KEY,
@@ -754,6 +755,7 @@ export {
   resolveCloneHumanPriority,
   resolveClonePermissionMode,
   type CloneOptions,
+  type RedeliveryGate,
 } from './clone.js';
 export { placedModelTier, resolveModelTier } from './model-tier.js';
 /**

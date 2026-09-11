@@ -1,7 +1,8 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
-import { createClone } from './clone.js';
+import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import type { RedeliveryGate } from './clone.js';
 import type { CloneHost } from './host.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -80,6 +81,12 @@ function fakeSdk(behavior: 'reply' | 'hang' = 'reply'): Fake {
 function bootClone(
   stores: Stores,
   behavior: 'reply' | 'hang' = 'reply',
+  // **省略した呼び出し元（この下の既存の歯すべて）は、この引数を足す前と
+  // 1文字も変わらない。** `CloneOptions.redeliveryGate` 自体は必須になった
+  // （2026-09-12）ので、省略時はここで名前付きの既定 `ALWAYS_REDELIVER` を
+  // 渡す——「渡さなければ全件配られる」という既存の挙動は、`bootClone` の
+  // この既定を通じて保たれる（`redeliveryGate` 歯、後述の describe）。
+  redeliveryGate: RedeliveryGate = ALWAYS_REDELIVER,
 ): Fake & { clone: CloneHost } {
   const fake = fakeSdk(behavior);
   const clone = createClone({
@@ -90,8 +97,23 @@ function bootClone(
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
     ]),
+    redeliveryGate,
   });
   return { ...fake, clone };
+}
+
+/**
+ * token-pool の「通る状態に戻った」通知の形を模した `external` 合図
+ * （`apps/daemon/src/index.ts` が実際に post する形と同じ——`type: 'external'`。
+ * `source` の具体の値は `packages/core` には無い概念なので、ここでは自分の
+ * 文字列を使う。`redeliveryGate` は型と文脈だけで判定するので、これで足りる）。
+ */
+function externalNotice(
+  payload: string,
+  id = 'evt-ext',
+  at = '2026-08-01T00:00:00.000Z',
+): InboxEvent {
+  return { type: 'external', id, at, source: 'token-pool', payload };
 }
 
 /** マネージャーの報告 = 実測で消えていたもの。 */
@@ -906,6 +928,292 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
       await reborn.clone.stop();
     });
     expect(lines.some((line) => line.includes('配り直しの片付き確認'))).toBe(true);
+  });
+});
+
+/**
+ * **`redeliveryGate`（Issue #783 続き）: `#restoreUnread` が1件ごとに「いま配る
+ * 意味が在るか」を訊く門の歯。** `CloneOptions.redeliveryGate` の doc（`clone.ts`）
+ * と `#foldGatedRedelivery` の doc に書いてある約束を、直上の「片付け済みの
+ * 配り直し」describe と同じ作法（`stores.inbox.put` で前の器の死を直接作り、
+ * 拾い直しを待つ）で固定する。
+ *
+ * **`#foldClosedRedelivery`（直上の describe）との違い**: あちらは「もう片付いて
+ * いる」という永続的な判定なので `#forget` で消してよいが、こちらは「いまは
+ * 配る意味が無い」という一時的な判定なので、**受信箱の行も台帳の行も消さない**
+ * ——次の起動でまた同じ行を拾い直し、そのときの状態で判定し直す。この違いを
+ * 歯1本目（下）で固定する。
+ */
+describe('redeliveryGate（Issue #783 続き）: `#restoreUnread` の門', () => {
+  it('述語が偽を返しても、受信箱の行も台帳の行も消えない（次の起動でまた配り直しの対象になる）', async () => {
+    const stores = createMemoryStores();
+    const event = externalNotice('GATED-NOTICE 本文はこれだけ長くしておく', 'evt-gated');
+    // 前のプロセスが死んで未読のまま残っていた状況を直接作る（#restoreUnread が拾う）。
+    await stores.inbox.put(event, event.at);
+
+    const alwaysFold: RedeliveryGate = () => false;
+    const { clone, inputs } = bootClone(stores, 'reply', alwaysFold);
+    await waitForJournal(stores, 'ターンを起こさずに畳んだ');
+
+    // ターンは1本も起きていない（モデルへ1文字も渡っていない）。
+    expect(inputs).toEqual([]);
+
+    // **受信箱の行がまだ残っている。** `peekPending` は配達回数を進めない安全な
+    // 覗き見（`claimPending` と違い、数え直しても状態を動かさない——後述の
+    // describe「InboxStore.pending」と同じ道具）。
+    const remaining = await stores.inbox.peekPending();
+    expect(remaining.some((r) => r.event.id === event.id)).toBe(true);
+
+    // **台帳の行も残っている。** `#commit` が開いたまま、閉じてもいない
+    // （`#forget` を呼ばない側の畳み込みだからである）。
+    await waitForCommitment(stores, event.id);
+    const commitment = await stores.commitments.get(event.id);
+    expect(commitment).not.toBeNull();
+    expect(commitment?.closedAt).toBeUndefined();
+
+    await clone.stop();
+  });
+
+  it('畳んだ跡が日誌に残る（型ごとの本文追記と「畳んだ」の1行の両方）', async () => {
+    const stores = createMemoryStores();
+    const event = externalNotice('GATED-NOTICE-2 本文はこれだけ長くしておく', 'evt-gated-2');
+    await stores.inbox.put(event, event.at);
+
+    const alwaysFold: RedeliveryGate = () => false;
+    const { clone } = bootClone(stores, 'reply', alwaysFold);
+    await waitForJournal(stores, 'ターンを起こさずに畳んだ');
+
+    // 1. **型ごとの本文追記**（`#journalIncomingBody`。external なので
+    //    `external_event` へ書かれる——`exchange` ではない）。
+    const externalEvents = await stores.journal.list({ types: ['external_event'] });
+    expect(
+      externalEvents.some(
+        (entry) =>
+          entry.type === 'external_event' &&
+          entry.source === 'token-pool' &&
+          entry.summary.includes('GATED-NOTICE-2 本文はこれだけ長くしておく'),
+      ),
+    ).toBe(true);
+
+    // 2. **畳んだこと自体の1行。**
+    const exchanges = await stores.journal.list({ types: ['exchange'] });
+    const folded = exchanges.find(
+      (entry) => entry.type === 'exchange' && entry.text.includes('ターンを起こさずに畳んだ'),
+    );
+    const foldedText = folded && folded.type === 'exchange' ? folded.text : '';
+    expect(foldedText).toContain('配り直しの門がいま配る意味は無いと答えた');
+    expect(foldedText).toContain('モデルへは1文字も渡していない');
+    expect(foldedText).toContain('合図も台帳の行も消していない');
+
+    await clone.stop();
+  });
+
+  it('述語を渡さなければ、フォールドされそうな形の合図も含めて全件配られる（既定の挙動を1文字も変えない）', async () => {
+    const stores = createMemoryStores();
+    const a = externalNotice(
+      'WOULD-BE-GATED-IF-CONFIGURED',
+      'evt-nogate-a',
+      '2026-08-01T00:00:00.000Z',
+    );
+    const b = externalNotice('SECOND-EVENT-BODY', 'evt-nogate-b', '2026-08-01T00:00:01.000Z');
+    await stores.inbox.put(a, a.at);
+    await stores.inbox.put(b, b.at);
+
+    // redeliveryGate を渡さない（省略）。
+    const { clone, inputs } = bootClone(stores, 'reply');
+
+    await waitFor(() => inputs.some((i) => i.includes('SECOND-EVENT-BODY')), '2件目まで処理に入る');
+    expect(inputs.some((i) => i.includes('WOULD-BE-GATED-IF-CONFIGURED'))).toBe(true);
+
+    // 両方とも配り終えて器から消えている（畳まれた行が残っていない）。
+    await waitForNoUnread(stores);
+    await clone.stop();
+  });
+
+  it('述語が投げても、配る側へ倒れて全文でターンが起きる（判定できないのは雑音であって喪失ではない）', async () => {
+    const stores = createMemoryStores();
+    const event = externalNotice('THROW-GATE-NOTICE 本文はこれだけ長くしておく', 'evt-throw-gate');
+    await stores.inbox.put(event, event.at);
+
+    const throwingGate: RedeliveryGate = () => {
+      throw new Error('判定できない（テスト用）');
+    };
+
+    const lines = await captureStderr(async () => {
+      const { clone, inputs } = bootClone(stores, 'reply', throwingGate);
+      await waitFor(
+        () => inputs.some((i) => i.includes('THROW-GATE-NOTICE')),
+        '配る側へ倒れて処理に入る',
+      );
+      await clone.stop();
+    });
+
+    // 判定できなかったこと自体は stderr に跡を残す（`noteDroppedRecord`）。
+    expect(lines.some((line) => line.includes('配り直しの門の判定'))).toBe(true);
+  });
+
+  it('畳まれた合図はモデルへ1文字も渡らない（配られる合図と混在させて確かめる）', async () => {
+    const stores = createMemoryStores();
+    const folded = externalNotice(
+      'FOLDED-UNIQUE-PAYLOAD',
+      'evt-mix-fold',
+      '2026-08-01T00:00:00.000Z',
+    );
+    const delivered = externalNotice(
+      'DELIVERED-UNIQUE-PAYLOAD',
+      'evt-mix-deliver',
+      '2026-08-01T00:00:01.000Z',
+    );
+    await stores.inbox.put(folded, folded.at);
+    await stores.inbox.put(delivered, delivered.at);
+
+    // **id で1件だけを畳む。** 「何も起きなかった」と「畳んだものだけが届かない」
+    // を区別するため、必ず何か別のものが配られる形にする
+    // （AGENTS.md「この歯が緑になる経路は、測りたい経路だけか」）。
+    const gate: RedeliveryGate = (event) => event.id !== folded.id;
+    const { clone, inputs } = bootClone(stores, 'reply', gate);
+
+    await waitFor(
+      () => inputs.some((i) => i.includes('DELIVERED-UNIQUE-PAYLOAD')),
+      '配られる側が処理に入る',
+    );
+    await waitForJournal(stores, 'ターンを起こさずに畳んだ');
+
+    expect(inputs.some((i) => i.includes('DELIVERED-UNIQUE-PAYLOAD'))).toBe(true);
+    expect(inputs.join('')).not.toContain('FOLDED-UNIQUE-PAYLOAD');
+
+    await clone.stop();
+  });
+});
+
+/**
+ * **`redeliveryGate` は「配り直すその瞬間」の `usageBlocked` で評価される。**
+ * ループの外で1回だけ読んで使い回す実装（変異）だと、この歯は赤くなる——
+ * `#restoreUnread` は1件ごとに `await` する（doc「呼び手はループの外で1回だけ
+ * 読んで使い回してはいけない」）ので、並行して動く `#pump` が途中で
+ * `usageBlocked` を動かしうる。
+ *
+ * `fakeSdkWithResultFor`（下）は `packages/core/src/clone.test.ts` の
+ * `fakeSdk` の `resultFor` と同じ発想の縮小版——ターンごとに `result` を
+ * 差し替えられる最小限の形だけをこのファイルに閉じて持つ（他の歯の挙動を
+ * 変えない）。
+ */
+describe('redeliveryGate（Issue #783 続き）: 配り直すその瞬間の usageBlocked で評価する', () => {
+  const spendLimitMessage = "You've hit your individual spend limit for this account.";
+
+  function fakeSdkWithResultFor(
+    resultFor: (turnIndex: number) => { subtype: string; text: string } | undefined,
+  ): Fake {
+    const inputs: string[] = [];
+    let turnIndex = 0;
+    const fn = ((params: { prompt: unknown; options?: Options }) => {
+      async function* generate(): AsyncGenerator<SDKMessage, void> {
+        yield {
+          type: 'system',
+          subtype: 'init',
+          session_id: 'sess-fake',
+          uuid: 'uuid-init',
+        } as unknown as SDKMessage;
+
+        for await (const message of params.prompt as AsyncIterable<{
+          message: { content: unknown };
+        }>) {
+          inputs.push(String(message.message.content));
+          const override = resultFor(turnIndex);
+          turnIndex += 1;
+          yield {
+            type: 'assistant',
+            message: { content: [{ type: 'text', text: 'ok' }] },
+            parent_tool_use_id: null,
+            session_id: 'sess-fake',
+            uuid: 'uuid-assistant',
+          } as unknown as SDKMessage;
+          yield {
+            type: 'result',
+            subtype: override?.subtype ?? 'success',
+            result: override?.text ?? 'ok',
+            session_id: 'sess-fake',
+            uuid: 'uuid-result',
+          } as unknown as SDKMessage;
+        }
+      }
+
+      const generator = generate();
+      return Object.assign(generator, {
+        close: () => undefined,
+        interrupt: async () => undefined,
+      }) as unknown as Query;
+    }) as unknown as typeof sdkQuery;
+
+    return { fn, inputs };
+  }
+
+  it('ループの途中で usageBlocked が変わると、同じ起動の中で前半と後半で扱いが変わる（ループの外で1回だけ評価する実装だと赤くなる）', async () => {
+    const base = createMemoryStores();
+    const first = externalNotice(
+      'FIRST-GATE-TIMING',
+      'evt-timing-first',
+      '2026-08-01T00:00:00.000Z',
+    );
+    const second = externalNotice(
+      'SECOND-GATE-TIMING',
+      'evt-timing-second',
+      '2026-08-01T00:00:01.000Z',
+    );
+    await base.inbox.put(first, first.at);
+    await base.inbox.put(second, second.at);
+
+    // **2件目の「配り直した」日誌の書き込みだけを遅らせる。** その間に1件目の
+    // ターンが枠に落ちて `usageBlocked` を真にする時間を作る。`#restoreUnread`
+    // は1件ごとに「日誌書き込み→台帳確認→gate 評価」の順に進むので、ここを
+    // 遅らせれば2件目の gate 評価がそのぶん後ろへずれる。
+    const stores: Stores = {
+      ...base,
+      journal: {
+        ...base.journal,
+        async append(entry) {
+          if (entry.type === 'exchange' && entry.text.includes(second.at)) {
+            await new Promise((resolve) => setTimeout(resolve, 300));
+          }
+          return base.journal.append(entry);
+        },
+      },
+    };
+
+    const { fn, inputs } = fakeSdkWithResultFor((turnIndex) =>
+      turnIndex === 0 ? { subtype: 'error_during_execution', text: spendLimitMessage } : undefined,
+    );
+
+    // その瞬間の usageBlocked を見て、真なら畳む（偽なら配る）。
+    const gate: RedeliveryGate = (_event, { usageBlocked }) => !usageBlocked;
+
+    const clone = createClone({
+      stores,
+      queryFn: fn,
+      env: {},
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+      redeliveryGate: gate,
+    });
+
+    // 1件目は usageBlocked=false のときに評価されて配られ、ターンが枠に落ちる。
+    await waitFor(() => inputs.some((i) => i.includes('FIRST-GATE-TIMING')), '1件目が処理に入る');
+
+    // 2件目は usageBlocked=true になった後に評価されて畳まれる。
+    await waitForJournal(stores, 'ターンを起こさずに畳んだ');
+
+    expect(inputs.some((i) => i.includes('FIRST-GATE-TIMING'))).toBe(true);
+    expect(inputs.join('')).not.toContain('SECOND-GATE-TIMING');
+
+    // 畳まれたのは2件目だけである（1件目は配られてターンが起きている）。
+    const journal = await stores.journal.list({ types: ['exchange'] });
+    const foldedCount = journal.filter(
+      (entry) => entry.type === 'exchange' && entry.text.includes('ターンを起こさずに畳んだ'),
+    ).length;
+    expect(foldedCount).toBe(1);
+
+    await clone.stop();
   });
 });
 

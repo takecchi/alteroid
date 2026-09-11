@@ -37,6 +37,7 @@ import {
   resolveWorkerModel,
   WITHHELD_ENV_KEYS,
   writeStderrSync,
+  type InboxEvent,
   type RunnerClient,
   type RunnerSource,
   type SelfFacts,
@@ -456,12 +457,26 @@ type ReopenedToken = { tokenId: string; label: string; how: ReopenedHow };
 /**
  * **いま配る意味が在るか**（Issue #783）。
  *
- * ## なぜ名前を切り出してあるか —— いまは1つの呼び手だが、名前は先取りしておく
+ * ## 呼び手は2つある ── コピーを作らず、同じ実体をどちらも呼ぶ
  *
- * いま呼ぶのはクローンの枠（`CloneHost.usageBlocked`）だけである。**引数を
- * 増やして一般化はしない**（依頼者の決定 2026-09-10。呼び手を増やす設計は
- * ここでは作らない）——`blocked` を渡す先が増えたときに、この名前をそのまま
- * 再利用できれば足りる。
+ * 呼ぶのはクローンの枠（`CloneHost.usageBlocked`）に関する経路が2つである。
+ *
+ * 1. **`CloneWakeGate.decide`**（このファイル、下）—— `wake()` が `clone.post(...)`
+ *    越しに配るか畳むかを決める。
+ * 2. **`createClone(...)` へ渡す `redeliveryGate`**（`main()` の中、下）——
+ *    `packages/core/src/clone.ts` の `#restoreUnread`（前の器が終えられなかった
+ *    合図を配り直す経路）は `post()` を通らず `#inbox.push` を直接呼ぶので、
+ *    1の門を素通りする。同じ判定をもう一箇所へ注入してあるのはそのためである
+ *    （`RedeliveryGate` の doc）。
+ *
+ * **どちらも `worthDeliveringNow` をそのまま呼ぶ——コピーしない。** 判定を
+ * 2箇所に書き写すと、片方だけを直したときに黙ってずれる（`decide` は直った
+ * のに配り直しの側は古いまま、というような食い違いが実行時にしか見えない）。
+ * 1つの実体を2箇所が呼ぶ形にしてあれば、ここを直した瞬間に両方へ効く。
+ *
+ * **引数を増やして一般化はしない**（依頼者の決定 2026-09-10。呼び手を増やす
+ * 設計はここでは作らない）——`blocked` を渡す先がさらに増えたときに、この名前を
+ * そのまま再利用できれば足りる。
  *
  * 背景（判断材料としてのみ）: 台帳を一段割った結果、マネージャー側の枠の
  * 断りも同じ形で説明できると分かった——「委譲 X の137回目のターンが枠で
@@ -472,11 +487,38 @@ type ReopenedToken = { tokenId: string; label: string; how: ReopenedHow };
  * ## 中身
  *
  * いまのところ `blocked` をそのまま返すだけである。**それでも独立した名前を
- * 持たせる**——`CloneWakeGate.decide` の中に埋め込むと、次にここへ来る呼び手
- * （まだ無い）がまた同じ1行を書き写すことになる。
+ * 持たせる**——呼び手のどちらかへ埋め込むと、もう一方がまた同じ1行を書き写す
+ * ことになる。
  */
 export function worthDeliveringNow(blocked: boolean): boolean {
   return blocked;
+}
+
+/**
+ * `clone.post({ type: 'external', source: TOKEN_POOL_REOPENED_SOURCE, ... })`
+ * （下、`wake()` の中）が使う送信元の名前。
+ *
+ * **名前付きの定数へ括ってある。** リテラル `'token-pool'` を発行側（`post` の
+ * 呼び出し）と判定側（{@link isTokenPoolReopenedNotice}）の2箇所に直書きすると、
+ * どちらかを直し忘れたときに黙ってずれる——1つの定数を両方が参照する形にして
+ * あれば、直せば両方へ効く。
+ */
+export const TOKEN_POOL_REOPENED_SOURCE = 'token-pool';
+
+/**
+ * 受信箱の合図が「認証トークンが通る状態に戻った」の通知
+ * （`external` / `source: TOKEN_POOL_REOPENED_SOURCE`）か（Issue #783 続き）。
+ *
+ * **`createClone(...)` の `redeliveryGate` から呼ばれる。** `#restoreUnread`
+ * （`packages/core/src/clone.ts`）は型を問わず全種類の合図を配り直すので、
+ * この判定でまず「対象は token-pool の通知だけ」に絞ってから
+ * {@link worthDeliveringNow} を当てる——他の型（人間の発言・マネージャーの
+ * 報告など）まで畳んでしまわないためである。
+ *
+ * **型と `source` だけを見る。文言では判定しない**（`isSameTick` と同じ流儀）。
+ */
+export function isTokenPoolReopenedNotice(event: InboxEvent): boolean {
+  return event.type === 'external' && event.source === TOKEN_POOL_REOPENED_SOURCE;
 }
 
 /**
@@ -1315,6 +1357,16 @@ export async function main(): Promise<void> {
       });
     },
     ...(storage.sessionStore === undefined ? {} : { sessionStore: storage.sessionStore }),
+    /**
+     * **`#restoreUnread` の門**（Issue #783 続き。`RedeliveryGate` の doc）。
+     *
+     * token-pool の「通る状態に戻った」通知だけを、`wake()` の門
+     * （{@link CloneWakeGate.decide}）と**同じ実体**（`worthDeliveringNow`）で
+     * 判定し直す——それ以外の型（人間の発言・マネージャーの報告など）は常に配る
+     * （`true`）。
+     */
+    redeliveryGate: (event, { usageBlocked }) =>
+      isTokenPoolReopenedNotice(event) ? worthDeliveringNow(usageBlocked) : true,
   });
 
   /**
@@ -1458,7 +1510,7 @@ export async function main(): Promise<void> {
             type: 'external',
             id: randomUUID(),
             at: new Date().toISOString(),
-            source: 'token-pool',
+            source: TOKEN_POOL_REOPENED_SOURCE,
             payload: { text: describeReopenedTokenNotice(reopened, decision.folded) },
           });
         }

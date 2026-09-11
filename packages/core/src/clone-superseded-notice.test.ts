@@ -1,7 +1,7 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
-import { createClone } from './clone.js';
+import { ALWAYS_REDELIVER, createClone } from './clone.js';
 import type { CloneHost } from './host.js';
 import type { ManagerPool, ManagerSummary, RunnerFleetOverview } from './manager.js';
 import type { RunnerLiveness } from './runner-protocol.js';
@@ -133,7 +133,13 @@ function stubPool(managers: ManagerSummary[]): ManagerPool {
 
 function bootClone(stores: Stores, managers: ManagerPool): Fake & { clone: CloneHost } {
   const fake = fakeSdk();
-  const clone = createClone({ stores, queryFn: fake.fn, env: {}, managers });
+  const clone = createClone({
+    stores,
+    queryFn: fake.fn,
+    env: {},
+    managers,
+    redeliveryGate: ALWAYS_REDELIVER,
+  });
   return { ...fake, clone };
 }
 
