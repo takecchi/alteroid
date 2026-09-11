@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * `.github/required-status-checks.json` の宣言と、main のブランチ保護が実際に
- * required にしている status check を突き合わせる（#836）。
+ * required にしている status check を突き合わせる。
  *
  * **判定ロジックはここに置かない。** `check-required-status-checks-core.mjs` が
  * 正本で、なぜこれが `pnpm test` の中ではなく別コマンドなのか（offline とトークン

@@ -456,7 +456,7 @@ function jobRuns(jobName: string, ctx: GithubEventContext): boolean {
 
 /**
  * required contexts。**値はここに持たず、`.github/required-status-checks.json` から
- * 読む（#836）。**
+ * 読む。**
  *
  * **`ci.yml` からは動的に読まない。** ジョブ名がずれてもこの歯が黙って自分を
  * 合わせないようにするためで、これは元からの判断であって変えていない。

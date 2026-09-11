@@ -98,7 +98,7 @@ const EXEMPT: Exemption[] = [
       '「ずれている」と「繋がらなかった」が同じ赤になる。' +
       '⚠️ **この免除は「配線しなくてよい」ではなく「いまの手持ちのトークンでは配線できない」である。**' +
       'administration を読めるトークンを secret として置けるなら、ci.yml の schedule の回' +
-      '（門ではなく警報の回）へ `run: pnpm check:required-status-checks` を足すのが本来の置き場所である。#836',
+      '（門ではなく警報の回）へ `run: pnpm check:required-status-checks` を足すのが本来の置き場所である。',
   },
 ];
 

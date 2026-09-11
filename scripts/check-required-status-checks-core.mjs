@@ -3,7 +3,7 @@
  * （`check-web-css-comment-classnames-core.mjs` と同じ分け方・同じ理由 —— 本物の
  * GitHub API を叩かずに、合成した応答で突き合わせだけを確かめられるようにする）。
  *
- * ## 何を塞ぐために在るか（#836）
+ * ## 何を塞ぐために在るか
  *
  * `scripts/ci-draft-gating.test.ts` は required contexts を宣言として持ち、それが
  * `ci.yml` の実在のジョブ名に対応していることを固定している。**`ci.yml` 側には
