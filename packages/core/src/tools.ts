@@ -7719,6 +7719,15 @@ function renderMemorySize(
   // 試験の足場）がこの2行を「文書の1件」と誤認しない——2字下げのままだと、
   // id + 名前 / 作成 + 更新 / 概要 を持たないこの2行が総当たり試験に
   // 「5項目を満たさない文書」として撃たれる（実測済み）。
+  // **蓋が噛んでいる回は、この行の「毎ターン『要旨＋節の目次』が焼かれる」が
+  // その文書について嘘になる**（`MEMORY_CARD_BUDGET`）。⟹ 噛んだ件数を
+  // 同じ行で名乗る。**噛んでいない回は1文字も足さない**（毎回付けると、本当に
+  // 噛んだときの目印が効かなくなる——`memory_read` と同じ倒し方）。
+  //
+  // **⚠️ 区分の行へ足さず、独立した行にする。** `demotedCardDocs` は premise と
+  // indexed の**合算**なので（`MemoryFloor.demotedCardDocs`）、どちらか一方の行に
+  // 付けると「その区分で N 件落ちた」と読める。#805 の不変条件3（既存の区分行の
+  // 文言を1文字も変えない）も、独立した行にすれば同時に満たせる。
   lines.push(
     `- premise 合計: ${floor.premiseChars.toLocaleString('en-US')} 文字（${floor.premiseDocs} 文書。毎ターン「要旨＋節の目次」が焼かれる）`,
     // `indexed` は2026-09-11 に足した3つ目の区分。**既存2行（premise 合計 /
@@ -7727,6 +7736,15 @@ function renderMemorySize(
     `- indexed 合計: ${floor.indexedChars.toLocaleString('en-US')} 文字（${floor.indexedDocs} 文書。毎ターン要旨だけが焼かれる。節の目次は焼かれない）`,
     `- fact 目次合計: ${floor.tocChars.toLocaleString('en-US')} 文字（${floor.factDocs} 文書。目次の1行だけが焼かれる）`,
   );
+  // **噛んでいない回は1文字も出さない。**
+  if (floor.demotedCardDocs > 0) {
+    lines.push(
+      `- ⚠️ カードを落とした分: ${floor.demotedCardDocs.toLocaleString('en-US')} 文書` +
+        '（premise と indexed の合算。束ねた予算に当たって1行になっており、節の目次は焼かれていない）。' +
+        '落ちた文書の名前と直し方は焼き込みの断り書きに在り、節は memory_outline で開ける。' +
+        '**⟹ 上の合計は蓋が効いた後の値である**（カードを足しても、別のカードが落ちて釣り合う）。',
+    );
+  }
   return lines.join('\n');
 }
 

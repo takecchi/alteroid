@@ -78,6 +78,21 @@ export interface MemoryFloor {
   premiseDocs: number;
   indexedDocs: number;
   factDocs: number;
+  /**
+   * そのうち、**カードを落として1行にした件数**（`MEMORY_CARD_BUDGET`）。
+   * **`premise` と `indexed` の合算である**——蓋は区分ごとではなくカードの族に
+   * 掛かる（`MemoryCardPart` の doc）。
+   *
+   * **`premiseDocs` / `indexedDocs` から引かれてはいない。** 落ちても区分は
+   * 変わらないので、区分の件数は動かさない——ここが答えるのは「そのうち
+   * 何件が索引を持っていないか」である。
+   *
+   * **⚠️ この軸が無いと `totalChars` が黙って嘘をつく。** 蓋が噛むと、カードを
+   * 1件足しても `totalChars` はほとんど動かない（別のカードが落ちて釣り合う
+   * ため）。⟹ クローンは「カードを足しても安い」と読む。0 でない限り、
+   * `totalChars` は**蓋が効いた後の値**である。
+   */
+  demotedCardDocs: number;
   /** 毎ターン最も大きい premise の1件（premise が無ければ null）。 */
   largestPremise: { slug: string; chars: number } | null;
   /** 毎ターン最も大きい indexed の1件（indexed が無ければ null）。 */
@@ -1529,6 +1544,106 @@ export const MEMORY_PROMPT_INDEXED_DESCRIPTION_BUDGET = 6_000;
 export const MEMORY_PROMPT_OMITTED_TAIL_BUDGET = 300;
 
 /**
+ * premise のカードを**束ねた全体**の文字数の予算。**1文書あたりの予算
+ * （{@link MEMORY_PROMPT_DESCRIPTION_BUDGET} / {@link MEMORY_PROMPT_OUTLINE_BUDGET}）
+ * とは別の軸で、両方が効く。**
+ *
+ * ## なぜ要るか — 1文書あたりの予算だけでは、文書数に対して線形に伸びる
+ *
+ * `buildMemoryDocumentSections` は premise のカードを全件連結する。⟹ **床は
+ * premise の文書数に比例して伸び、上界が存在しない。** {@link describeMemoryTidyTargets}
+ * の doc が逐語でこの穴を名指ししている——「**⚠️ 当たっていないことは『小さい』では
+ * ない。** 予算は1文書ごとに掛かるので、全部が予算の下でも合計は大きくなりうる」。
+ * そこでの答えは「総量を別に出す」＝**観測**であって、蓋ではなかった。
+ *
+ * **同じ形は `fact` 側では既に塞がれている**（{@link MEMORY_TOC_CHAR_BUDGET}、
+ * 2026-09-09）。件数の上限（{@link MEMORY_TOC_ENTRY_LIMIT}）だけでは束ねた総量が
+ * 運任せになる、という理由でそちらへ文字数の蓋を足した。**premise 側だけが
+ * 残っていた非対称を、ここで閉じる。**
+ *
+ * ## 実測（2026-09-11、この repo での合成入力）
+ *
+ * `renderMemoryDocuments` に premise（要旨 2,900 字 / 40 節）を N 件通した値。
+ * **本番の記憶（PostgreSQL）には触っていない。**
+ *
+ * | premise 件数 | 蓋が無いときの焼き込み |
+ * | --- | --- |
+ * | 1 | 4,932 |
+ * | 5 | 24,668 |
+ * | 10 | 49,338 |
+ * | 30 | 148,038 |
+ * | 60 | **296,088** |
+ *
+ * 対照（`fact` は蓋が効いている）: 300件 12,403 / 1,000件 12,389 / 5,000件 12,255。
+ *
+ * ## 塞いでいるのは費用ではなく可用性である
+ *
+ * システムプロンプトは**要約で畳めない。** ⟹ 床が文脈窓を超えると、クローンは
+ * 毎ターン失敗する。`clone.ts` の `#noteContextWindowFold` は畳み直しの暴走は
+ * 止めるが（`held`）、**記憶の索引を自動で軽くする経路は無い**——クローン自身への
+ * 断り書きも「⚠️ 記憶（システムプロンプトの「現在の記憶」）はそのままである」と
+ * 言う。⟹ **人間が記憶を直すまで、クローンは1ターンも走れない。** この蓋は
+ * そこへ落ちる道を閉じる。
+ *
+ * ## 値の出し方（60,000）
+ *
+ * **⚠️ この値は実装した側の導出であって、人間の決定ではない**
+ * （{@link MEMORY_TOC_CHAR_BUDGET} の「## 値の出し方（12,000。人間の決定）」とは
+ * そこが違う）。変えるならこの定数1つで足りる。
+ *
+ * - **いま噛まない。** #772 が載せている本番の実測（2026-09-10、クローンが自分の
+ *   焼き込みから読んだ値）で premise は6本・カードの合計 51,139 文字だった
+ *   （9,936 / 9,846 / 9,788 / 9,148 / 6,713 / 5,708）。
+ * - **6本が全部1文書あたりの上限に張り付いても収まる位置にした。** 実測の最大は
+ *   9,936 文字なので、`9,936 × 6 = 59,616 < 60,000`。⟹ **いまの文書数のままなら、
+ *   どの文書がどれだけ育っても噛まない。** 噛み始めるのは7本目を足したときである。
+ * - **7本目で噛むことは意図である。** premise は「毎ターン全員が払う」区分なので、
+ *   増やすことに価格が付いていてよい——足したターンにカードが1枚落ちれば、
+ *   クローンはその場で「割るか fact へ落とすか」を判断できる（判断の材料は
+ *   {@link describeMemoryTidyTargets} と、この蓋が出す断り書きの両方に在る）。
+ * - **{@link MEMORY_TOC_CHAR_BUDGET}（12,000）と合わせて、記憶の索引の上界が確定する。**
+ *   premise 60,000 ＋ 落とした分の一覧 {@link MEMORY_CARD_STUB_BUDGET} ＋ fact 12,000
+ *   で、**文書が何件増えても焼き込みはこの和を超えない。**
+ * - **今日の床を下げるのはこの蓋の仕事ではない。** #772 が挙げている案2（節目次を
+ *   深さで切る）・案3（要旨と目次のどちらを切るか選ぶ）が「1文書あたりの定額が
+ *   張り付いている」側の話で、こちらは「文書数に対する上界」側である。**別の軸なので、
+ *   どちらかを入れてももう片方は要る。**
+ *
+ * **`export` してあるのはテストのため**（値を書き写さず参照する）。
+ */
+export const MEMORY_CARD_BUDGET = 60_000;
+
+/**
+ * カードを落とした premise の1行に載せる要旨の長さの上限。
+ *
+ * **{@link MEMORY_TOC_LINE_LIMIT}（fact の目次の1行）と値は同じだが、別に置いてある。**
+ * `.claude/skills/listing-and-detail/SKILL.md` の「予算の定数は**用途ごとに別に置き、
+ * doc に由来を書く。値が同じでも使い回さないこと**（片方だけ直したくなったときに
+ * 一緒に動いてしまう）」に従う——あちらは「fact の目次に何文字載せるか」、こちらは
+ * 「**カードを落とした premise が、落とされた事実と一緒に何を名乗るか**」で、
+ * 切る理由が違う。
+ *
+ * **由来は fact 側に合わせた。** 落とされた premise が名乗る量が fact の1行より
+ * 多いと、「カードを落とした」と言いながら fact より重い行が並ぶことになる。
+ */
+const MEMORY_CARD_STUB_LINE_LIMIT = 200;
+
+/**
+ * カードを落とした premise の**一覧全体**の文字数の予算。
+ *
+ * **これが無いと蓋が蓋にならない。** 落とした分を1行ずつ並べる形は、落とした件数に
+ * 比例して伸びる——{@link MEMORY_CARD_BUDGET} で切った総量が、断り書きの側から
+ * 戻ってくる。⟹ 落とした分の一覧にも予算を持ち、**そこでさらに省いたら件数を名乗る**
+ * （`renderListing`）。
+ *
+ * **値は {@link MEMORY_TIDY_TARGETS_BUDGET}（3,000）に合わせた。** あちらは「毎ターンの
+ * 焼き込みに収まっていない文書を名指しする」一覧で、**これと同じ種類の的**である
+ * （どちらも「この文書に手を入れろ」と言うための名指し）。同じ種類なので同じ量で足りる、
+ * という判断であって、定数を共有はしていない（直上の理由）。
+ */
+const MEMORY_CARD_STUB_BUDGET = 3_000;
+
+/**
  * ATX 見出しの最短の形（`# x`）の長さ。**見出しはこれ未満へは縮められない。**
  *
  * 「見出しを平均 N 文字まで縮めれば載る」と名乗るときの下限として使う——
@@ -2042,10 +2157,15 @@ function renderPremisePart(part: MemoryPart, seen?: string): string {
 }
 
 /**
+/**
  * `indexed` 1文書ぶんの描画。**`renderPremisePart` と同じ形**（`seen` が渡され、
  * 差分にする価値があるときだけ変わった範囲を描く）——`renderPremiseDelta` は
  * カードの行差分を取るだけの汎用関数なので、`indexed` のカードにもそのまま
  * 使える（名前が premise を名乗るが、中身は premise 固有ではない）。
+ *
+ * **⚠️ 第4引数（節の一覧）を渡し忘れないこと。** #807 がこの引数を足したとき、
+ * ここだけが3引数のまま残って CI の build が `TS2554` で落ちた（PR #805 の
+ * `c201e7bf`）。`premise` の側と同じものを渡す。
  */
 function renderIndexedPart(part: MemoryPart, seen?: string): string {
   const frontmatter = parseMemoryFrontmatter(part.content);
@@ -2053,9 +2173,197 @@ function renderIndexedPart(part: MemoryPart, seen?: string): string {
   const delta =
     seen === undefined
       ? null
-      : renderPremiseDelta(part.slug, renderIndexedCard({ slug: part.slug, content: seen }), card);
+      : renderPremiseDelta(
+          part.slug,
+          renderIndexedCard({ slug: part.slug, content: seen }),
+          card,
+          scanMemorySections(part.content).sections,
+        );
   const rendered = delta ?? card;
   return frontmatter.kind === 'malformed' ? `${MALFORMED_FRONTMATTER_NOTE}\n${rendered}` : rendered;
+}
+
+/**
+ * 蓋（{@link MEMORY_CARD_BUDGET}）の対象になる「カードの族」の1件。
+ *
+ * **`premise` と `indexed` は載り方が違うが、同じ予算を分け合う。** 片方だけに
+ * 蓋を掛けると、掛かっていない側を増やすだけで床が無限に伸びる——`indexed` は
+ * 「特定のプロジェクトでしか使わない記憶」＝**増える側**の用途なので、そこに
+ * 蓋が無いのは premise に無いのと同じだけ危ない。
+ */
+interface MemoryCardPart {
+  part: MemoryPart;
+  kind: 'premise' | 'indexed';
+}
+
+/** カードの族の1件を、その区分の載せ方で描く。 */
+function renderMemoryCardPart(entry: MemoryCardPart, seen?: string): string {
+  return entry.kind === 'premise'
+    ? renderPremisePart(entry.part, seen)
+    : renderIndexedPart(entry.part, seen);
+}
+
+/**
+ * カードを落とした1行（`premise` / `indexed` の両方）。
+ *
+ * **「カードが切られても見出しは必ず残る」を守るための形である。**
+ * `renderMemoryTocOmission` が逐語でそう名乗っている（「premise はカードが切られても
+ * 見出しは必ず残るが、fact はここでしか名乗らない」）——{@link MEMORY_CARD_BUDGET}
+ * でカードを落とすとき、その約束を破らない唯一の形がこれである。**文書は消えない。
+ * 落ちるのは節の目次と要旨の全文だけで、識別子・大きさ・節数・要旨の抜粋は残る。**
+ *
+ * 識別子を必ず載せるのは `.claude/skills/listing-and-detail/SKILL.md` の性質1
+ * （「詳細を取りに行く鍵がなければ、抜粋にした瞬間に到達できないものが生まれる」）
+ * ——`slug` が在れば `memory_outline` / `memory_section_read` / `memory_read` の
+ * どれへも行ける。
+ *
+ * **区分を1行の中で名乗る。** `premise` と `indexed` では次に取る手が違う
+ * （`premise` は割る余地が在る／`indexed` は既に目次を手放している）ので、
+ * どちらが落ちたのか分からないと直し方を選べない。
+ */
+function renderCardStub(entry: MemoryCardPart, cardChars: number): string {
+  const { part, kind } = entry;
+  const frontmatter = parseMemoryFrontmatter(part.content);
+  const description =
+    (frontmatter.kind === 'parsed' ? frontmatter.description : undefined)?.trim() ?? '';
+  const { sections } = scanMemorySections(part.content);
+  const summary =
+    description.length === 0
+      ? '（要旨がまだ書かれていない。memory_frontmatter_set の description で書くこと）'
+      : excerptLine(description, MEMORY_CARD_STUB_LINE_LIMIT);
+  return (
+    `- ${part.slug}.md（${kind}・全 ${formatMemoryCharCount(part.content.length)} 文字 / ` +
+    `${formatMemoryCharCount(sections.length)} 節・カードにすると ` +
+    `${formatMemoryCharCount(cardChars)} 文字）: ${summary}`
+  );
+}
+
+/**
+ * カードの族のうち、**どれをカードのまま載せ、どれを1行へ落とすか。**
+ *
+ * ## 蓋を掛けるのは「記憶の全体を描く呼び手」だけである
+ *
+ * `seenContent` が渡されている呼び（`clone.ts` の `#withFreshMemory` の差分）は
+ * **渡された集合そのものが「今回変わった範囲」**であって床ではない。そこへ蓋を
+ * 掛けると、システムプロンプト側ではカードが在る文書が差分の側だけ1行に落ちる
+ * ——**同じ文脈の中で、同じ文書について2つの載り方が並ぶ。** ⟹ 掛けない。
+ *
+ * ## 落とす順序は「大きいほうから」である（位置で落とさない）
+ *
+ * **位置（渡された順＝slug 昇順）で落とすと、落ちる先を動かす手が
+ * リネームしか無い。** `excerpt.ts` の `ListingBudget.omitted` が名指ししている
+ * 「追記で育つ一覧の末尾が恒久的に落ちる」と同じ形で、クローンに取れる手が無い。
+ *
+ * 大きいほうから落とせば、落ちた文書に対して**取れる手が在る**——
+ * `memory_section_move` で割る・付録を `fact` にする・要旨を短くする。しかも
+ * その手は {@link describeMemoryTidyTargets} が既に名指ししている的と一致する。
+ *
+ * **⚠️ 代償を書いておく。いちばん大きいカードは、いちばん使っている前提でも
+ * ありうる**（#772 の本番実測ではそれが `alteroid-work` だった）。だから断り書きの
+ * 側で「要旨を削る方向へ倒すな」と言う（{@link renderCardBudgetNotice}）——
+ * 落ちたのは索引であって、判断の前提そのものではない。
+ *
+ * **⚠️ 区分では優先しない。** `premise` を残して `indexed` から落とす（あるいは逆）
+ * という順序にはしていない。**区分はどちらも「判断の前提」であって、`indexed` は
+ * 「重要度が低い」ではなく「節の目次を手放した」だけである**（`renderIndexedCard`
+ * の doc）。区分で順序を付けると、その差を重要度の差として実装が主張することになる。
+ *
+ * ## 1枚も残らない形は作らない
+ *
+ * いちばん小さいカード1枚で予算を超えるときは、**その1枚は残す。**
+ * `renderListing` の「1件だけで予算を超えるときはその1件を切って出す」と同じ
+ * 倒し方である——0枚にすると「上限がある」と言えなくなる（`excerpt.ts`）。
+ * 1文書あたりの予算が在るので実運用では起きない。
+ */
+function selectMemoryCards(
+  cards: readonly MemoryCardPart[],
+  seenContent: ReadonlyMap<string, string> | undefined,
+): {
+  kept: MemoryCardPart[];
+  demoted: { entry: MemoryCardPart; chars: number }[];
+  /**
+   * **蓋が無ければカードの族が何文字だったか。** 断り書きが名乗るのはこの値で
+   * ある（切ったあとの長さを名乗ると、超えたこと自体が出力から消える——
+   * `excerpt.ts` の「切ったら、切ったことを必ず言う」）。
+   *
+   * **呼び手に計算させない。** ここで数えた値をそのまま返す——呼び手が同じ式を
+   * 書き直すと、区切りの数え方が2本に割れて断り書きだけが静かにずれる
+   * （`measureMemoryFloor` の doc と同じ理由）。
+   */
+  uncappedChars: number;
+} {
+  if (seenContent !== undefined) return { kept: [...cards], demoted: [], uncappedChars: 0 };
+
+  const rendered = cards.map((entry) => ({ entry, chars: renderMemoryCardPart(entry).length }));
+  const joinedChars = (count: number, sum: number): number =>
+    count === 0 ? 0 : sum + MEMORY_SECTION_JOIN.length * (count - 1);
+  const totalChars = joinedChars(
+    rendered.length,
+    rendered.reduce((sum, item) => sum + item.chars, 0),
+  );
+  if (totalChars <= MEMORY_CARD_BUDGET)
+    return { kept: [...cards], demoted: [], uncappedChars: totalChars };
+
+  // 小さいカードから詰める（⟹ 落ちるのは大きいほう）。同じ大きさなら slug で
+  // 決める——**順序を入力の順に依らせないこと**（同じ記憶が呼びごとに違う
+  // カードを落とすと、クローンは記憶が壊れたと読む）。
+  const ascending = [...rendered].sort(
+    (a, b) => a.chars - b.chars || a.entry.part.slug.localeCompare(b.entry.part.slug),
+  );
+  const keep = new Set<string>();
+  let used = 0;
+  for (const item of ascending) {
+    const next = joinedChars(keep.size + 1, used + item.chars);
+    if (keep.size > 0 && next > MEMORY_CARD_BUDGET) break;
+    used += item.chars;
+    keep.add(item.entry.part.slug);
+  }
+
+  return {
+    kept: cards.filter((entry) => keep.has(entry.part.slug)),
+    demoted: rendered.filter((item) => !keep.has(item.entry.part.slug)),
+    uncappedChars: totalChars,
+  };
+}
+
+/**
+ * カードを落としたことの断り書き。**落とした事実・落とした分の名指し・開く口・
+ * 直し方**の4つを出す。
+ *
+ * `excerpt.ts` の「切ったら、切ったことを必ず言う」をそのまま踏む。**そして
+ * 続きの取り方を書けるのは呼び手の側にその口が実在するときだけ**という同じ doc の
+ * 条件も満たしている——`memory_outline` / `memory_section_read` / `memory_read` は
+ * どれも実在する道具である。
+ */
+function renderCardBudgetNotice(
+  demoted: readonly { entry: MemoryCardPart; chars: number }[],
+  keptCount: number,
+  totalChars: number,
+): string {
+  const items = demoted.map((item) => renderCardStub(item.entry, item.chars));
+  const listing = renderListing(items, {
+    budget: MEMORY_CARD_STUB_BUDGET,
+    omitted: ({ rest, shown, total }) =>
+      `…ほか ${formatMemoryCharCount(rest)} 件はこの一覧からも省略（全 ${formatMemoryCharCount(total)} 件のうち ` +
+      `${formatMemoryCharCount(shown)} 件だけ出した）。全件は memory_list で取れる。`,
+  });
+
+  return [
+    '<!-- memory: カードを落とした分（premise / indexed。文書は消えていない） -->',
+    `⚠️ カード（premise と indexed）の合計が ${formatMemoryCharCount(totalChars)} 文字になり、` +
+      `毎ターンの焼き込みの予算 ${formatMemoryCharCount(MEMORY_CARD_BUDGET)} 文字を超えた。` +
+      `⟹ **大きいほうから ${formatMemoryCharCount(demoted.length)} 件のカードを落として1行にした**` +
+      `（カードのまま載っているのは ${formatMemoryCharCount(keptCount)} 件）。` +
+      '**落ちたのは節の目次と要旨の全文であって、文書そのものではない。**',
+    listing,
+    '**開く口**: memory_outline slug=<slug>（節の目次。side=tail で末尾も見える）→ ' +
+      'memory_section_read（節の本文）。要旨の全文は memory_list / memory_read に在る。',
+    '**直し方**: この行に出ている文書を memory_section_move で割るか、' +
+      '付録にした側を memory_frontmatter_set で fact にすること。' +
+      '**⚠️ 要旨（description）を削る方向へ倒さないこと** —— 要旨は判断の前提そのもので、' +
+      '落ちたのは索引のほうである。要旨を削ると、開く口はそのままなのに' +
+      '「何が書いてあるか」を指す手掛かりだけが消える。',
+  ].join('\n');
 }
 
 /**
@@ -2082,6 +2390,18 @@ function buildMemoryDocumentSections(
   premiseSection: string;
   indexedParts: MemoryPart[];
   indexedSection: string;
+  /**
+   * カードを落とした分の断り書き（{@link MEMORY_CARD_BUDGET}）。
+   * **落ちていなければ空文字**なので、蓋が噛まない入力では焼き込みが
+   * 1バイトも変わらない。
+   */
+  demotedSection: string;
+  /**
+   * カードを落とした文書（`premise` / `indexed` の両方）。
+   * **`premiseParts` / `indexedParts` の部分集合であって、そこから引かれては
+   * いない**——落ちても区分は変わらないので、区分の件数は動かさない。
+   */
+  demotedCards: MemoryCardPart[];
   tocEntries: MemoryTocEntry[];
   tocSection: string;
 } {
@@ -2109,18 +2429,30 @@ function buildMemoryDocumentSections(
     });
   }
 
+  // **束ねた全体に蓋を掛ける**（{@link MEMORY_CARD_BUDGET}）。1文書あたりの予算だけでは
+  // 文書数に対して線形に伸びる——`selectMemoryCards` の doc。
+  //
+  // **`premise` と `indexed` を1つの族として渡す。** 区分ごとに別の蓋を掛けると、
+  // 掛かっていない側を増やすだけで床が伸びる（`MemoryCardPart` の doc）。
+  const cards: MemoryCardPart[] = [
+    ...premiseParts.map((part) => ({ part, kind: 'premise' as const })),
+    ...indexedParts.map((part) => ({ part, kind: 'indexed' as const })),
+  ];
+  const { kept, demoted, uncappedChars } = selectMemoryCards(cards, seenContent);
+  const renderKept = (kind: MemoryCardPart['kind']): string[] =>
+    kept
+      .filter((entry) => entry.kind === kind)
+      .map((entry) => renderMemoryCardPart(entry, seenContent?.get(entry.part.slug)));
+  const keptPremiseCards = renderKept('premise');
+  const keptIndexedCards = renderKept('indexed');
   const premiseSection =
-    premiseParts.length === 0
-      ? ''
-      : premiseParts
-          .map((part) => renderPremisePart(part, seenContent?.get(part.slug)))
-          .join('\n\n');
+    premiseParts.length === 0 ? '' : keptPremiseCards.join(MEMORY_SECTION_JOIN);
   const indexedSection =
-    indexedParts.length === 0
-      ? ''
-      : indexedParts
-          .map((part) => renderIndexedPart(part, seenContent?.get(part.slug)))
-          .join('\n\n');
+    indexedParts.length === 0 ? '' : keptIndexedCards.join(MEMORY_SECTION_JOIN);
+  // **断り書きは独立した節にする。** カードの側へ混ぜると、その区分のカードが
+  // 全部落ちたとき（＝その節が空文字になるとき）に断り書きまで消える。
+  const demotedSection =
+    demoted.length === 0 ? '' : renderCardBudgetNotice(demoted, kept.length, uncappedChars);
   // 目次の外にも実在する slug を、**在り処ごとに分けて**渡す——`documents` は
   // 「記憶の全部」とは限らないので、ここで畳むと実在するものが「見つからない」
   // として出る（`renderMemoryTocIssue` の 'parent-not-listed' と
@@ -2138,7 +2470,16 @@ function buildMemoryDocumentSections(
       ? ''
       : renderMemoryToc(tocEntries, { renderedAsPremise: cardSlugs, presentInMemory: presence });
 
-  return { premiseParts, premiseSection, indexedParts, indexedSection, tocEntries, tocSection };
+  return {
+    premiseParts,
+    premiseSection,
+    indexedParts,
+    indexedSection,
+    demotedSection,
+    demotedCards: demoted.map((item) => item.entry),
+    tocEntries,
+    tocSection,
+  };
 }
 
 /**
@@ -2181,14 +2522,26 @@ export interface RenderMemoryDocumentsOptions {
 }
 
 /**
+ * 焼き込みの中で塊を繋ぐ区切り。**カード同士・カードと断り書き・カードの節と
+ * `fact` の目次の、どこでもこれを使う。**
+ *
+ * **リテラルで書き散らさない理由は、この区切りが予算の計算に入るからである。**
+ * {@link selectMemoryCards} は「カードを1枚足したら全体が何文字になるか」を
+ * 区切りぶんも含めて数える。⟹ 繋ぐ側と数える側で別のリテラルを持つと、
+ * **蓋が予算をわずかに超えて通る**（`measureMemoryFloor` の doc「数え方を2本に
+ * 割ると、どちらかだけを直したときにメーターが黙って嘘をつく」と同じ形）。
+ */
+const MEMORY_SECTION_JOIN = '\n\n';
+
+/**
  * 区分ごとの節を、実際に焼き込む1本の文字列へ繋ぐ。**可変長の引数を取る**
- * （2026-09-11 に `indexed` の節を挟むため2引数から3引数対応へ拡張した）。
- * 空文字の節は素通りする——`indexed` を1件も持たない入力では
- * `indexedSection` が常に空文字になるので、この関数の出力は既存の
- * （premise・fact だけの）呼び出しと1バイトも変わらない（不変条件3）。
+ * （2026-09-11 に `indexed` の節と、カードを落とした分の断り書きを挟むため
+ * 2引数から拡張した）。空文字の節は素通りする——`indexed` を1件も持たず蓋も
+ * 噛まない入力では、この関数の出力は既存の（premise・fact だけの）呼び出しと
+ * 1バイトも変わらない（#805 の不変条件3）。
  */
 function joinMemorySections(...sections: readonly string[]): string {
-  return sections.filter((section) => section.length > 0).join('\n\n');
+  return sections.filter((section) => section.length > 0).join(MEMORY_SECTION_JOIN);
 }
 
 /**
@@ -2246,12 +2599,11 @@ export function renderMemoryDocuments(
   documents: readonly MemoryPart[],
   options: RenderMemoryDocumentsOptions = {},
 ): RenderedMemory {
-  const { premiseSection, indexedSection, tocSection } = buildMemoryDocumentSections(
-    documents,
-    options.presentInMemory,
-    options.seenContent,
+  const { premiseSection, indexedSection, demotedSection, tocSection } =
+    buildMemoryDocumentSections(documents, options.presentInMemory, options.seenContent);
+  return brandRenderedMemory(
+    joinMemorySections(premiseSection, indexedSection, demotedSection, tocSection),
   );
-  return brandRenderedMemory(joinMemorySections(premiseSection, indexedSection, tocSection));
 }
 
 /**
@@ -2277,9 +2629,22 @@ export function renderMemoryDocuments(
  * を足すと実物より少ない数を「毎ターンの床」として名乗ることになる）。
  */
 export function measureMemoryFloor(documents: readonly MemoryPart[]): MemoryFloor {
-  const { premiseParts, premiseSection, indexedParts, indexedSection, tocEntries, tocSection } =
-    buildMemoryDocumentSections(documents);
-  const totalChars = joinMemorySections(premiseSection, indexedSection, tocSection).length;
+  const {
+    premiseParts,
+    premiseSection,
+    indexedParts,
+    indexedSection,
+    demotedSection,
+    demotedCards,
+    tocEntries,
+    tocSection,
+  } = buildMemoryDocumentSections(documents);
+  const totalChars = joinMemorySections(
+    premiseSection,
+    indexedSection,
+    demotedSection,
+    tocSection,
+  ).length;
 
   let largestPremise: { slug: string; chars: number } | null = null;
   for (const part of premiseParts) {
@@ -2305,6 +2670,7 @@ export function measureMemoryFloor(documents: readonly MemoryPart[]): MemoryFloo
     premiseDocs: premiseParts.length,
     indexedDocs: indexedParts.length,
     factDocs: tocEntries.length,
+    demotedCardDocs: demotedCards.length,
     largestPremise,
     largestIndexed,
   };
@@ -2667,7 +3033,18 @@ export function describeMemoryFloor(input: {
 }): string {
   const { before, after, slug, kind, created } = input;
   const transition = formatMemoryFloorTransition(before.totalChars, after.totalChars);
-  const floorLine = `毎ターンの床（焼き込み全体。いま読み直した値）: ${transition}。`;
+  // **蓋が噛んでいるあいだ、床の増減だけを読むと嘘になる**（`MemoryFloor.demotedCardDocs`
+  // の doc）。premise を足しても別のカードが落ちて釣り合うので、増減はほとんど動かない。
+  // ⟹ 噛んでいる回はそれを同じ行で名乗る。**噛んでいない回は1文字も出さない**
+  // （毎回付けると、本当に噛んだときの目印が効かなくなる——`memory_read` と同じ倒し方）。
+  const demotedNote =
+    after.demotedCardDocs === 0
+      ? ''
+      : `⚠️ premise のカードは束ねた予算 ${formatMemoryCharCount(MEMORY_CARD_BUDGET)} 文字に当たっていて、` +
+        `${formatMemoryCharCount(after.demotedCardDocs)} 件が1行に落ちている。` +
+        '⟹ **この増減は蓋が効いた後の値である**（premise を足しても、別のカードが落ちて釣り合う）。' +
+        '落ちた文書の名前と直し方は焼き込みの断り書きに在る。';
+  const floorLine = `毎ターンの床（焼き込み全体。いま読み直した値）: ${transition}。` + demotedNote;
 
   if (created && kind === 'premise') {
     const lines = [
