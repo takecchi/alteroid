@@ -7261,6 +7261,153 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
       await s.clone.stop();
     });
 
+    /**
+     * ⭐⭐⭐ **内訳は既に払ってあるものを写すだけである**（#804）。
+     *
+     * `#observeContextUsage` は `getContextUsage()` を**引数なし**で呼ぶ。SDK の
+     * doc は逐語で `Defaults to 'full'.` と言い、`'full'` は「カテゴリごとに
+     * token-count API を呼ぶ」である ⟹ **内訳を取り出さなくても費用は同じ。**
+     * それを捨てていたのがこの Issue の欠陥だった。
+     *
+     * ## ⚠️ この歯が測っていないこと（正直に書く）
+     *
+     * - **SDK が返す数そのものは測っていない。** フェイクの `Query` が返す値は
+     *   テストが書いた任意の数である（#804 の「言えないこと(1)」）。ここが測るのは
+     *   **写し方**——合計へ畳む・空なら欄を作らない・上限で切る——だけである
+     * - **`detail: 'full'` の実費用も測っていない。** 既定がそうであることは
+     *   型定義の逐語で確かめたが、往復の時間は本番の `durationMs` にしか出ない
+     */
+    it('⭐⭐⭐ 配列の内訳は合計へ畳んで載る（道具ごとに1行ずつ写さない）', async () => {
+      const s = setup(undefined, createMemoryStores(), {
+        modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
+        getContextUsage: () => ({
+          totalTokens: 12_000,
+          rawMaxTokens: 200_000,
+          percentage: 6,
+          isAutoCompactEnabled: true,
+          categories: [
+            { name: 'System prompt', tokens: 8_000 },
+            { name: 'MCP tools', tokens: 3_000 },
+          ],
+          mcpTools: [
+            { name: 'memory_read', serverName: 'alteroid', tokens: 100 },
+            { name: 'manager_list', serverName: 'alteroid', tokens: 400 },
+            { name: 'runner_list', serverName: 'alteroid', tokens: 500 },
+          ],
+          memoryFiles: [{ path: '/x/CLAUDE.md', type: 'project', tokens: 700 }],
+          systemPromptSections: [
+            { name: 'core', tokens: 5_000 },
+            { name: 'memory', tokens: 3_000 },
+          ],
+        }),
+      });
+
+      s.clone.post(humanMessage('やあ'));
+      await waitForDone(s.events);
+
+      const entries = await s.stores.journal.list({ types: ['turn_usage'] });
+      const entry = entries[0];
+      if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
+
+      // 配列は合計と件数へ畳まれている（1本ずつは載らない）。
+      expect(entry.contextUsage?.mcpToolTokens).toBe(1_000);
+      expect(entry.contextUsage?.mcpToolCount).toBe(3);
+      expect(entry.contextUsage?.memoryFileTokens).toBe(700);
+      expect(entry.contextUsage?.memoryFileCount).toBe(1);
+      expect(entry.contextUsage?.systemPromptTokens).toBe(8_000);
+      expect(entry.contextUsage?.systemPromptSectionCount).toBe(2);
+      // カテゴリはそのまま（軸の数だけなので小さい）。
+      expect(entry.contextUsage?.categories).toEqual([
+        { name: 'System prompt', tokens: 8_000 },
+        { name: 'MCP tools', tokens: 3_000 },
+      ]);
+      // 切っていないので省略の欄は無い。
+      expect(entry.contextUsage?.categoriesOmitted).toBeUndefined();
+      // **道具の名前は1つも載らない**（畳んだことの裏側）。
+      expect(JSON.stringify(entry.contextUsage)).not.toContain('manager_list');
+
+      await s.clone.stop();
+    });
+
+    /**
+     * ⭐⭐⭐ **空の軸に 0 の欄を作らない**（AGENTS.md の地雷「取れない軸に 0 の
+     * 行を作る」）。
+     *
+     * SDK の `systemPromptSections` / `mcpTools` は optional である ⟹ 返って
+     * こない回が実在する。そこへ 0 を置くと「測ったが 0 だった」と読めるが、
+     * 実際は「その軸を測っていない」である。**欄そのものを作らない側へ倒す。**
+     */
+    it('⭐⭐⭐ SDK が内訳を返さない回は、欄そのものを作らない（0 を置かない）', async () => {
+      const s = setup(undefined, createMemoryStores(), {
+        modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
+        getContextUsage: () => ({
+          totalTokens: 12_000,
+          rawMaxTokens: 200_000,
+          percentage: 6,
+          isAutoCompactEnabled: true,
+          // 内訳はどれも空（実機で古い CLI が返さない形と同じ）。
+          categories: [],
+          mcpTools: [],
+          memoryFiles: [],
+        }),
+      });
+
+      s.clone.post(humanMessage('やあ'));
+      await waitForDone(s.events);
+
+      const entries = await s.stores.journal.list({ types: ['turn_usage'] });
+      const entry = entries[0];
+      if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
+
+      // **既に在った5つの欄だけで、1つも足されていない。**
+      expect(entry.contextUsage).toEqual({
+        durationMs: expect.any(Number),
+        totalTokens: 12_000,
+        rawMaxTokens: 200_000,
+        percentage: 6,
+        isAutoCompactEnabled: true,
+      });
+
+      await s.clone.stop();
+    });
+
+    /**
+     * ⭐⭐ **軸が増えたら件数の上限で切り、切ったことを名乗る。**
+     *
+     * いまの SDK が返す軸は1桁なので**この上限は噛まない。** 塞いでいるのは
+     * 「版が上がって軸が増えたときに、日誌の1行が黙って伸びること」である。
+     */
+    it('⭐⭐ categories が上限を超えたら切り、省いた件数を名乗る', async () => {
+      const s = setup(undefined, createMemoryStores(), {
+        modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
+        getContextUsage: () => ({
+          totalTokens: 12_000,
+          rawMaxTokens: 200_000,
+          percentage: 6,
+          isAutoCompactEnabled: true,
+          categories: Array.from({ length: 100 }, (_, i) => ({ name: `軸${i}`, tokens: i })),
+        }),
+      });
+
+      s.clone.post(humanMessage('やあ'));
+      await waitForDone(s.events);
+
+      const entries = await s.stores.journal.list({ types: ['turn_usage'] });
+      const entry = entries[0];
+      if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
+
+      const shown = entry.contextUsage?.categories?.length ?? 0;
+      const omitted = entry.contextUsage?.categoriesOmitted ?? 0;
+      // 切っている（＝この歯が空振りしていない）。
+      expect(omitted).toBeGreaterThan(0);
+      // **載った数と省いた数の和が、渡した数と一致する**（黙って落ちた分が無い）。
+      expect(shown + omitted).toBe(100);
+      // 落ちたのは末尾側（先頭から詰める）。
+      expect(entry.contextUsage?.categories?.[0]).toEqual({ name: '軸0', tokens: 0 });
+
+      await s.clone.stop();
+    });
+
     it('`getContextUsage()` が失敗しても、ターンは止まらず `contextUsage.error` に理由が入る（秘密は伏せる）', async () => {
       const s = setup(undefined, createMemoryStores(), {
         modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),

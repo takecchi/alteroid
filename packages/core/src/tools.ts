@@ -7034,6 +7034,79 @@ function roleLabel(role: 'inbound' | 'outbound'): string {
  * 探すためなので、*いつ・誰が・どの型か*が残っていれば当たりは付けられる。
  * 本文（長くなりうる側）だけを抜粋の対象にし、見出しは削らない。
  */
+/**
+ * `turn_usage` の `contextUsage` の1件。**`JournalEntry` の union から取り出す**
+ * ——型を写さない（写した側が古いままでも気づけない）。
+ */
+type ContextUsageRow = NonNullable<Extract<JournalEntry, { type: 'turn_usage' }>['contextUsage']>;
+
+/**
+ * `turn_usage.contextUsage` の**内訳**を1行に畳む。
+ *
+ * ## なぜ内訳を出すのか
+ *
+ * 合計（`totalTokens`）は「どこまで積み上がったか」しか言わない。**どこが
+ * 重いのかは言わない。** ⟹ 「記憶を軽くした」「道具を1本足した」が実際に
+ * 何トークン動いたかを、合計だけでは切り分けられない。
+ *
+ * そしてこの内訳は**既に払ってある**（`schema.ts` の `contextUsage.categories`
+ * の doc——SDK の `getContextUsage()` の既定が `detail: 'full'` である）。
+ * ⟹ 出さない理由が無い。**「取れているのに読めない、は『取れていない』と
+ * 同じである」**（この関数を呼んでいる箇所の既存コメント）。
+ *
+ * ## 出さない回は1文字も出さない
+ *
+ * 欄が無い回（古い行・SDK が返さなかった軸）では空文字を返す。**0 を置かない**
+ * ——「測ったが 0 だった」と「測っていない」を混ぜないため（AGENTS.md の地雷
+ * 「取れない軸に 0 の行を作る」）。
+ *
+ * ## ⚠️ `記憶ファイル` は alteroid の記憶ではない
+ *
+ * SDK の `memoryFiles` はハーネスが読む `CLAUDE.md` 系である。alteroid の記憶
+ * （`memory_*` の文書）はシステムプロンプトの本文として渡るので、**`システム
+ * プロンプト` の側に入る。** ここでは SDK の語をそのまま使わず、取り違えない
+ * 語で出す。
+ */
+function describeContextBreakdown(context: ContextUsageRow): string {
+  const parts: string[] = [];
+  if (context.systemPromptTokens !== undefined) {
+    parts.push(
+      `システムプロンプト ${context.systemPromptTokens.toLocaleString('en-US')} トークン` +
+        (context.systemPromptSectionCount === undefined
+          ? ''
+          : `（${context.systemPromptSectionCount} 節。**記憶の焼き込みはここに入る**）`),
+    );
+  }
+  if (context.mcpToolTokens !== undefined) {
+    parts.push(
+      `MCP の道具の説明文 ${context.mcpToolTokens.toLocaleString('en-US')} トークン` +
+        (context.mcpToolCount === undefined ? '' : `（${context.mcpToolCount} 本）`),
+    );
+  }
+  if (context.memoryFileTokens !== undefined) {
+    parts.push(
+      `CLAUDE.md 系のファイル ${context.memoryFileTokens.toLocaleString('en-US')} トークン` +
+        (context.memoryFileCount === undefined ? '' : `（${context.memoryFileCount} 件）`) +
+        '——**alteroid の記憶ではない**',
+    );
+  }
+  const categories =
+    context.categories === undefined || context.categories.length === 0
+      ? ''
+      : `\n  カテゴリ別（SDK が名乗る軸。名前は SDK の版で変わりうる）: ` +
+        context.categories
+          .map((category) => `${category.name} ${category.tokens.toLocaleString('en-US')}`)
+          .join(' / ') +
+        (context.categoriesOmitted === undefined
+          ? ''
+          : `…ほか ${context.categoriesOmitted} 軸は省略`);
+
+  // **早期 return を置かない。** `parts` が空で `categories` も空なら、下の式は
+  // 自然に空文字になる（実測: その早期 return を消す変異は歯を1本も落とさなかった
+  // ——到達不能な分岐だった）。**冗長な分岐は「測れない行」として残るので消す。**
+  return (parts.length === 0 ? '' : `\n  内訳: ${parts.join(' / ')}。`) + categories;
+}
+
 function renderJournalEntry(entry: JournalEntry): { head: string; body: string } {
   switch (entry.type) {
     case 'exchange': {
@@ -7145,7 +7218,8 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
                 ? ''
                 : ` / ${context.rawMaxTokens.toLocaleString('en-US')}`) +
               (context.percentage === undefined ? '' : `（${context.percentage}%）`) +
-              '。';
+              '。' +
+              describeContextBreakdown(context);
       const compactionLine =
         entry.compactions === undefined || entry.compactions.length === 0
           ? ''
