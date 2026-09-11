@@ -381,6 +381,18 @@ function setup(
   return { clone, stores, calls, events, waitForEvents };
 }
 
+/**
+ * ちょうど1行だけを取り出して返す（`inbox-backlog.test.ts` の同名ヘルパと
+ * 同じ形）。**`toContain` は同じ語が別の行に在ると節ごと消しても緑のまま
+ * になる**（AGENTS.md）ので、束の行のような「1行に3つの値を持つ」形を測る
+ * ときは、行そのものを取り出して `toBe` で全文一致させる。
+ */
+function lineStartingWith(text: string, prefix: string): string {
+  const matches = text.split('\n').filter((line) => line.startsWith(prefix));
+  expect(matches).toHaveLength(1);
+  return matches[0]!;
+}
+
 /** 非同期の書き込みが器へ届くまで待つ（`post` は同期で返るので待てない）。 */
 async function waitFor(check: () => Promise<boolean> | boolean, label: string): Promise<void> {
   const started = Date.now();
@@ -9777,7 +9789,23 @@ describe('クローン — 処理待ちのあいだに積み上がった発言',
     await s.clone.stop();
   }, 15_000);
 
-  it('配り直しの合図はまとめない（何が二度目なのか言えなくなる）', async () => {
+  /**
+   * **⚠️ issue #783 で期待値を反転した（名前は歴史として残す）。** 以前は
+   * `#mergeable` が配り直し（`#redelivered`）を無条件で外していたので、この
+   * 2件は必ず別々のターンで読まれ、断り書きも1件ごとの文言だった
+   * （かつての期待値）:
+   *   expect(inputs).toHaveLength(2);
+   *   expect(inputs[0]).toContain('配り直しである');
+   *   expect(inputs[0]).toContain('未読1');
+   *   expect(inputs[0]).not.toContain('未読2');
+   * **いまは配り直しも束ねる対象になった**（`#mergedHumanBatch` が同じ
+   * `conversationId` の連続する `human_message` をまとめる。`#mergeable` の
+   * doc）ので、この2件は隣接して1つの束になる。**「何が二度目なのか言えなく
+   * なる」は起きていない** —— 束の行（`#redeliveryNoticeFor`）が「束 2 件の
+   * うち 2 件が配り直し」と件数を、本文側（`humanTurnText`）が「未読1」
+   * 「未読2」の両方の全文を、それぞれ渡す。
+   */
+  it('配り直しの合図はまとめる（束の行が件数を言うので、何が二度目かは言える。issue #783）', async () => {
     // 前の器が処理を終えられなかった2件。起動時に拾い直される（`#restoreUnread`）
     const stores = createMemoryStores();
     await stores.inbox.put(humanMessage('未読1'), '2026-08-20T10:00:00.000Z');
@@ -9789,10 +9817,21 @@ describe('クローン — 処理待ちのあいだに積み上がった発言',
     await settle();
 
     const inputs = s.calls[0]?.inputs ?? [];
-    expect(inputs).toHaveLength(2);
-    expect(inputs[0]).toContain('配り直しである');
-    expect(inputs[0]).toContain('未読1');
-    expect(inputs[0]).not.toContain('未読2');
+    // 1本の束にまとまる（先客が居ないので合流ターンがそのまま1本目）。
+    expect(inputs).toHaveLength(1);
+    const merged = inputs[0] ?? '';
+    // **束の行を1行として取り出し、全文一致で測る**（`toContain` は同じ語が
+    // 別の行に在ると節ごと消しても緑のままになる。`lineStartingWith` の doc）。
+    // 件数・最大配達回数・最古時刻の3つを、1行の中で同時に固定する。
+    const noticeLine = lineStartingWith(merged, '[system] **これは配り直しの束である');
+    expect(noticeLine).toBe(
+      '[system] **これは配り直しの束である（束 2 件のうち 2 件が配り直し、最大 1 回の配達、' +
+        '最も古いものは 2026-08-20T10:00:00.000Z に受け取った）。**' +
+        '処理を終える前にデーモンが落ちた合図を、起動時に拾い直した。',
+    );
+    // 全文は1文字も捨てない —— 2件とも本文に現れる。
+    expect(merged).toContain('未読1');
+    expect(merged).toContain('未読2');
 
     await s.clone.stop();
   }, 15_000);
@@ -10854,7 +10893,22 @@ describe('クローン — 同じマネージャーの連続する report をま
     await s.clone.stop();
   }, 15_000);
 
-  it('#redelivered に載っている報告はまとめられない（配り直しは単独のまま）', async () => {
+  /**
+   * **⚠️ issue #783 で期待値を反転した（名前・タイトルは歴史として残す）。**
+   * 以前は `#mergeable` が配り直し（`#redelivered`）を無条件で外していたので、
+   * この2件は必ず別々のターンで読まれた（かつての期待値）:
+   *   expect(inputs).toHaveLength(2);
+   *   expect(inputs[0] ?? '').toContain('前回届いた報告1');
+   *   expect(inputs[0] ?? '').toContain('これは配り直しである');
+   *   expect(inputs[0] ?? '').not.toContain('前回届いた報告2');
+   *   expect(inputs[1] ?? '').toContain('前回届いた報告2');
+   *   expect(inputs[1] ?? '').toContain('これは配り直しである');
+   *   expect(inputs[1] ?? '').not.toContain('前回届いた報告1');
+   * **いまは配り直しも束ねる対象になる**（同じ `managerId` の連続する
+   * `report`。`#mergeable` の doc）——issue #783 の実物そのもの（同じマネー
+   * ジャーから369件の配り直しが369ターンを消費した）を、2件の縮小版で確かめる。
+   */
+  it('#redelivered に載っている報告はまとめられる（issue #783: 配り直しの束）', async () => {
     const stores = createMemoryStores();
     const r1 = managerMessage('r1', 'mgr-X', '前回届いた報告1');
     const r2 = managerMessage('r2', 'mgr-X', '前回届いた報告2');
@@ -10865,20 +10919,151 @@ describe('クローン — 同じマネージャーの連続する report をま
     const s = setup(undefined, stores);
 
     await waitFor(
-      () => s.calls[0]?.inputs[1]?.includes('前回届いた報告2') ?? false,
-      '2件目（単独）のターンが投げられる',
+      () => (s.calls[0]?.inputs ?? []).join('\n').includes('前回届いた報告2'),
+      '報告2が渡る',
     );
     await settle();
 
     const inputs = (s.calls[0] as FakeCall).inputs;
-    // 2件とも単独のターンで読まれる（まとめれば1本になる）。
-    expect(inputs).toHaveLength(2);
-    expect(inputs[0] ?? '').toContain('前回届いた報告1');
-    expect(inputs[0] ?? '').toContain('これは配り直しである');
-    expect(inputs[0] ?? '').not.toContain('前回届いた報告2');
-    expect(inputs[1] ?? '').toContain('前回届いた報告2');
-    expect(inputs[1] ?? '').toContain('これは配り直しである');
-    expect(inputs[1] ?? '').not.toContain('前回届いた報告1');
+    // 1本の束にまとまる（先客が居ないので合流ターンがそのまま1本目）。
+    expect(inputs).toHaveLength(1);
+    const merged = inputs[0] ?? '';
+    // **束の行を1行として取り出し、全文一致で測る**（`lineStartingWith` の doc）。
+    const noticeLine = lineStartingWith(merged, '[system] **これは配り直しの束である');
+    expect(noticeLine).toBe(
+      '[system] **これは配り直しの束である（束 2 件のうち 2 件が配り直し、最大 1 回の配達、' +
+        '最も古いものは 1970-01-01T00:00:00.000Z に受け取った）。**' +
+        '処理を終える前にデーモンが落ちた合図を、起動時に拾い直した。',
+    );
+    // 全文は1文字も捨てない —— 2件とも本文に現れる。
+    expect(merged).toContain('前回届いた報告1');
+    expect(merged).toContain('前回届いた報告2');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  /**
+   * **束の上限（issue #783）は表示の単位を切るだけで、取りこぼしを作らない。**
+   * `ALTEROID_MERGED_BATCH_SIZE_LIMIT` を小さく設定し、5件を一度に届けて、
+   * 上限（2件）で束が複数に割れることと、割れた分が次の反復でそのまま処理
+   * されることを確かめる（`#drainMergeableWithinLimit` の doc）。
+   */
+  it('束の上限に当たっても、外れた分は次の反復でそのまま処理される（1件も失われない。issue #783）', async () => {
+    const s = setup(
+      undefined,
+      createMemoryStores(),
+      {},
+      {
+        ALTEROID_MERGED_BATCH_SIZE_LIMIT: '2',
+      },
+    );
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    for (let i = 1; i <= 5; i += 1) {
+      s.clone.post(managerMessage(`lim${i}`, 'mgr-limit', `上限テスト報告${i}`));
+    }
+
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).join('\n').includes('上限テスト報告5'),
+      '5件目ぶんの入力が投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    // 先客 + [1+2] + [3+4] + [5] = 4本。上限を入れなければ先客+[1..5まとめ]の2本になる。
+    expect(inputs).toHaveLength(4);
+    expect(inputs[1] ?? '').toContain('上限テスト報告1');
+    expect(inputs[1] ?? '').toContain('上限テスト報告2');
+    expect(inputs[1] ?? '').not.toContain('上限テスト報告3');
+    expect(inputs[2] ?? '').toContain('上限テスト報告3');
+    expect(inputs[2] ?? '').toContain('上限テスト報告4');
+    expect(inputs[2] ?? '').not.toContain('上限テスト報告5');
+    expect(inputs[3] ?? '').toContain('上限テスト報告5');
+
+    // **取りこぼしを撃つ歯。** 1〜5件全部の本文がどこかのターンに現れる。
+    const joined = inputs.join('\n');
+    for (let i = 1; i <= 5; i += 1) {
+      expect(joined).toContain(`上限テスト報告${i}`);
+    }
+
+    // 消し込み・台帳も件数ぶん通る（1件も器に残らない）。
+    await waitFor(
+      async () => (await s.stores.inbox.claimPending()).length === 0,
+      '5件とも消し込まれる',
+    );
+    const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as {
+      with: string;
+      text: string;
+    }[];
+    const managerExchanges = exchanges.filter((entry) => entry.with === 'manager');
+    for (let i = 1; i <= 5; i += 1) {
+      expect(
+        managerExchanges.filter((entry) => entry.text.includes(`上限テスト報告${i}`)),
+      ).toHaveLength(1);
+    }
+
+    await s.clone.stop();
+  }, 15_000);
+
+  /**
+   * **配り直しが上限を超えても、外れた分は同じ理由で次の反復に残る。** 束の行
+   * （`#redeliveryNoticeFor`）が言う件数・最大配達回数・最古時刻は束ごとに
+   * 別々の値になる——1つの束の言い分が、外れた分の存在を隠さない。
+   */
+  it('配り直しが上限を超えても束が複数に割れ、1件も失われない（issue #783）', async () => {
+    const stores = createMemoryStores();
+    for (let i = 1; i <= 5; i += 1) {
+      await stores.inbox.put(
+        managerMessage(`red${i}`, 'mgr-redlimit', `配り直しテスト${i}`),
+        new Date(i - 1).toISOString(),
+      );
+    }
+
+    const s = setup(undefined, stores, {}, { ALTEROID_MERGED_BATCH_SIZE_LIMIT: '2' });
+
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).join('\n').includes('配り直しテスト5'),
+      '5件目が渡る',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    // 上限2件で [1+2] / [3+4] / [5単独] の3本に割れる（実測）。
+    expect(inputs).toHaveLength(3);
+    // **束ごとに、件数・最大配達回数・最古時刻が別々の値になることを1行で測る**
+    // （`lineStartingWith` の doc）。外れた分（3〜5件目）が次の反復で処理される
+    // だけでなく、**その束自身の言い分も正しい**ことを確かめる。
+    expect(lineStartingWith(inputs[0] ?? '', '[system] **これは配り直しの束である')).toBe(
+      '[system] **これは配り直しの束である（束 2 件のうち 2 件が配り直し、最大 1 回の配達、' +
+        '最も古いものは 1970-01-01T00:00:00.000Z に受け取った）。**' +
+        '処理を終える前にデーモンが落ちた合図を、起動時に拾い直した。',
+    );
+    expect(inputs[0] ?? '').toContain('配り直しテスト1');
+    expect(inputs[0] ?? '').toContain('配り直しテスト2');
+    expect(lineStartingWith(inputs[1] ?? '', '[system] **これは配り直しの束である')).toBe(
+      '[system] **これは配り直しの束である（束 2 件のうち 2 件が配り直し、最大 1 回の配達、' +
+        '最も古いものは 1970-01-01T00:00:00.002Z に受け取った）。**' +
+        '処理を終える前にデーモンが落ちた合図を、起動時に拾い直した。',
+    );
+    expect(inputs[1] ?? '').toContain('配り直しテスト3');
+    expect(inputs[1] ?? '').toContain('配り直しテスト4');
+    // 5件目は束から外れて単独になる——単独用の1件専用の文言（`batch.length === 1`）。
+    expect(inputs[2] ?? '').toContain('これは配り直しである');
+    expect(inputs[2] ?? '').toContain('配り直しテスト5');
+
+    // **取りこぼしを撃つ歯。** 1〜5件全部の本文がどこかのターンに現れる。
+    const joined = inputs.join('\n');
+    for (let i = 1; i <= 5; i += 1) {
+      expect(joined).toContain(`配り直しテスト${i}`);
+    }
+
+    // 消し込みも件数ぶん通る（1件も器に残らない）。
+    await waitFor(
+      async () => (await s.stores.inbox.claimPending()).length === 0,
+      '5件とも消し込まれる',
+    );
 
     await s.clone.stop();
   }, 15_000);
