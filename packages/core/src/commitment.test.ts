@@ -1,7 +1,15 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
-import { ALWAYS_REDELIVER, closedRedeliveryNotice, commitmentFor, createClone } from './clone.js';
+import {
+  ALWAYS_REDELIVER,
+  closedRedeliveryNotice,
+  commitmentFor,
+  createClone,
+  DAEMON_RUNNER_REGISTRY_SOURCE,
+  DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+  isDaemonSelfNotice,
+} from './clone.js';
 import { buildActivityDigest } from './digest.js';
 import type { CloneHost } from './host.js';
 import { renderMemoryDocuments } from './memory.js';
@@ -626,6 +634,94 @@ describe('引き受けたまま終わっていない仕事', () => {
   });
 
   /**
+   * **Issue #852。`isDaemonSelfNotice` そのものを直接問う。**
+   *
+   * `commitmentFor` を経由した歯（直下）は「台帳を開くか」しか見ないので、
+   * ここでは述語そのものの境界（型・完全一致・定数の値）を固定する。
+   */
+  it('isDaemonSelfNotice は external かつ source が2つの定数のどちらかのときだけ真', () => {
+    const at = new Date().toISOString();
+
+    expect(DAEMON_TOKEN_POOL_REOPENED_SOURCE).toBe('token-pool');
+    expect(DAEMON_RUNNER_REGISTRY_SOURCE).toBe('runner-registry');
+
+    expect(
+      isDaemonSelfNotice({
+        type: 'external',
+        id: 'e1',
+        at,
+        source: DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+        payload: {},
+      }),
+    ).toBe(true);
+    expect(
+      isDaemonSelfNotice({
+        type: 'external',
+        id: 'e2',
+        at,
+        source: DAEMON_RUNNER_REGISTRY_SOURCE,
+        payload: {},
+      }),
+    ).toBe(true);
+    expect(
+      isDaemonSelfNotice({ type: 'external', id: 'e3', at, source: 'github', payload: {} }),
+    ).toBe(false);
+    // 型が external でなければ、source が一致していても真になりようがない
+    // （型で弾かれる——`InboxEvent` は union なので、他の枝には `source` が無い）。
+    expect(isDaemonSelfNotice(humanMessage('やって'))).toBe(false);
+  });
+
+  /**
+   * **Issue #852。** `external` は型では一律に決まらない——デーモン自身が自分の
+   * 受信箱へ出す合図（`source` が `isDaemonSelfNotice` の言う2つ）だけは、
+   * 型は `external` のままでも台帳を開かない。
+   *
+   * ⭐ **ここが厚いのは、この歯が「『定数2つを外した』が『external を全部外した』
+   * に滑らないこと」を守る唯一の場所だからである。** 対照
+   * （`github` / `webhook` / 空文字列に近い任意の値）が1件でも `null` に
+   * 引きずられたら、この歯が最初に赤くなる。
+   */
+  it('external は source がデーモン自身の合図（token-pool / runner-registry）のときだけ台帳を開かない', () => {
+    const at = new Date().toISOString();
+
+    // 対象の2つ ―― null
+    expect(
+      commitmentFor({ type: 'external', id: 'e-tp', at, source: 'token-pool', payload: {} }),
+    ).toBeNull();
+    expect(
+      commitmentFor({
+        type: 'external',
+        id: 'e-rr',
+        at,
+        source: 'runner-registry',
+        payload: { text: '' },
+      }),
+    ).toBeNull();
+
+    // **対照 ―― この2つ以外は、payload やペイロードの有無に関わらず引き続き開く。**
+    // `POST /events` / `POST /events/:source`（`apps/daemon/src/app.ts`）から
+    // 実際に入りうる自由文字列の `source` を代表させてある。
+    const others: { source: string; payload?: unknown }[] = [
+      { source: 'github', payload: { action: 'review_requested' } },
+      { source: 'ci', payload: { ok: false } },
+      { source: 'mail', payload: 'ただの文章' },
+      // 予約語の部分文字列・大文字小文字違い・空白付き ―― 完全一致でなければ開く
+      { source: 'token-pool ' },
+      { source: 'Token-Pool' },
+      { source: 'token-pool-2' },
+      { source: 'runner-registry-old' },
+      { source: '' },
+    ];
+    for (const { source, payload } of others) {
+      const event: InboxEvent = { type: 'external', id: `e-${source}`, at, source, payload };
+      const entry = commitmentFor(event);
+      expect(entry, `source: ${JSON.stringify(source)} は台帳を開くはず`).not.toBeNull();
+      expect(entry?.origin).toBe('external');
+      expect(entry?.source).toBe(source);
+    }
+  });
+
+  /**
    * `manager_message.markup`（issue #287）が `Commitment.bodyMarkup` へ
    * そのまま持ち越されること。**印が無いイベントでは `bodyMarkup` が
    * `undefined` のままで、既定（`'markdown'` や `'none'`）へ倒れないこと**
@@ -663,6 +759,91 @@ describe('引き受けたまま終わっていない仕事', () => {
     const open = (await s.stores.commitments.list()).entries;
     expect(open[0]?.origin).toBe('manager');
     expect(open[0]?.source).toBe('mgr-1');
+
+    await s.clone.stop();
+  });
+
+  /**
+   * **Issue #852。`Clone` 全体（`post()` → `#commit`）を通した統合テスト。**
+   *
+   * 上の単体テスト（`commitmentFor` を直接呼ぶもの）は純粋関数としての境界を
+   * 測るが、こちらは実際に受信箱へ届いてから台帳へ書く（or 書かない）ところまで
+   * 見る——`#commit` は `commitmentFor` の結果を非同期に `stores.commitments.open`
+   * へ渡すので、配線そのものが繋がっていることは別に確かめる必要がある。
+   *
+   * ⭐ **受信箱には従来どおり届くこと**（台帳に載らない `external` でも、クローンは
+   * ターンへの入力として読める）も同時に見る——受信箱側（#841 の担当）を壊して
+   * いないことの確認。
+   */
+  it('token-pool の external は受信箱には届くが台帳は開かない。他の source の external は開く', async () => {
+    const s = setup();
+    const at = new Date().toISOString();
+
+    s.clone.post({
+      type: 'external',
+      id: 'e-tp',
+      at,
+      source: 'token-pool',
+      payload: { text: '枠が開いた' },
+    });
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('枠が開いた')),
+      'token-pool の合図がターンへ渡る（受信箱には届く）',
+    );
+    // ターンが処理された後も、台帳には載らない。
+    expect((await s.stores.commitments.list()).entries).toHaveLength(0);
+
+    s.clone.post({
+      type: 'external',
+      id: 'e-webhook',
+      at,
+      source: 'github',
+      payload: { action: 'review_requested' },
+    });
+    await waitFor(
+      async () => (await s.stores.commitments.list()).entries.length > 0,
+      '予約語ではない external の記帳',
+    );
+
+    const open = (await s.stores.commitments.list()).entries;
+    expect(open).toHaveLength(1);
+    expect(open[0]?.origin).toBe('external');
+    expect(open[0]?.source).toBe('github');
+    expect(open[0]?.body).toContain('review_requested');
+
+    await s.clone.stop();
+  });
+
+  /**
+   * **Issue #852。`#restoreUnread`（前の器が終えられなかった合図を器の再起動で
+   * 配り直す経路）が、`commitmentFor` の結果で `stores.commitments.get` を呼ぶ
+   * かどうかを分岐する箇所（片付け済みの再配達を短縮するため）を壊していないか。**
+   *
+   * token-pool の合図は `commitmentFor` が `null` を返すようになったので、
+   * この分岐は `get` を呼ばなくなる（`clone.ts` の `#restoreUnread` の当該
+   * コメント）。**それでも配り直し自体は変わらず起き、クラッシュしないこと**
+   * と、**台帳には載らないこと**を確かめる。
+   */
+  it('未読のまま残っていた token-pool の合図も、器の再起動で配り直される（台帳は開かない）', async () => {
+    const stores = createMemoryStores();
+    const unread: InboxEvent = {
+      type: 'external',
+      id: 'e-tp-unread',
+      at: new Date(0).toISOString(),
+      source: 'token-pool',
+      payload: { text: '前の器が終えられなかった合図' },
+    };
+    await stores.inbox.put(unread, new Date(0).toISOString());
+
+    const s = setup(stores);
+
+    await waitFor(
+      () =>
+        (s.calls[0]?.inputs ?? []).some((input) => input.includes('前の器が終えられなかった合図')),
+      '配り直された token-pool の合図がターンへ渡る',
+    );
+    expect(await stores.commitments.get('e-tp-unread')).toBeNull();
+    expect((await stores.commitments.list()).entries).toHaveLength(0);
 
     await s.clone.stop();
   });

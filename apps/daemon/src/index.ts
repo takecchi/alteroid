@@ -11,6 +11,8 @@ import {
   CLONE_MODEL,
   CLONE_MODEL_ENV_KEY,
   CLONE_PERMISSION_MODE_ENV_KEY,
+  DAEMON_RUNNER_REGISTRY_SOURCE,
+  DAEMON_TOKEN_POOL_REOPENED_SOURCE,
   DEFAULT_PERMISSION_MODE,
   createClone,
   createLocalRunner,
@@ -502,8 +504,15 @@ export function worthDeliveringNow(blocked: boolean): boolean {
  * 呼び出し）と判定側（{@link isTokenPoolReopenedNotice}）の2箇所に直書きすると、
  * どちらかを直し忘れたときに黙ってずれる——1つの定数を両方が参照する形にして
  * あれば、直せば両方へ効く。
+ *
+ * **⚠️ 値そのものの正本は `packages/core` 側（`DAEMON_TOKEN_POOL_REOPENED_SOURCE`）
+ * に移した（Issue #852）。** 台帳（`clone.ts` の `commitmentFor`）もこの文字列を
+ * 判定に使うようになったが、`packages/core` は `apps/daemon` に依存できない
+ * （deps が daemon → core の一方向）ので、正本を daemon 側に置いたまま core が
+ * import することはできない。**この export はそのまま残す** — 外（`index.test.ts`
+ * など）から `TOKEN_POOL_REOPENED_SOURCE` の名前で参照されている。
  */
-export const TOKEN_POOL_REOPENED_SOURCE = 'token-pool';
+export const TOKEN_POOL_REOPENED_SOURCE = DAEMON_TOKEN_POOL_REOPENED_SOURCE;
 
 /**
  * 受信箱の合図が「認証トークンが通る状態に戻った」の通知
@@ -1628,7 +1637,7 @@ export async function main(): Promise<void> {
       type: 'external',
       id: randomUUID(),
       at: new Date().toISOString(),
-      source: 'runner-registry',
+      source: DAEMON_RUNNER_REGISTRY_SOURCE,
       payload: { text },
     });
   };
