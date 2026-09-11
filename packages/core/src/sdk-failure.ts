@@ -184,7 +184,8 @@ function nonEmpty(value: unknown): string | undefined {
  * 赤くなったら、それは SDK の `USAGE_LIMIT_ERROR_PREFIXES` に接頭辞が増え、
  * この語の本文がそこへ落ちるようになったという合図である（失敗メッセージに
  * 次に確かめる手順を書いてある。この語の扱いを `LIMIT_RECOVERY_BY_PREFIX` へ
- * 足すのと同時に決めること。（Issue 番号は追って差し込む））。
+ * 足すのと同時に決めること。（`error` の語 → 回復の見込みという軸そのものが
+ * この実装に無いこと自体は #809 に落とした）。
  *
  * **この写しは数え上げなので腐る。** 腐ったことを `tsc` に言わせる歯は
  * `sdk-failure.test.ts` の `SDK_ASSISTANT_ERROR_CODES` にあり、SDK が語を増やすと
