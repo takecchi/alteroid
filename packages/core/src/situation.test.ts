@@ -595,6 +595,28 @@ describe('状況の1行に鍵が載る（describeSituation への配線）', () 
  * （スナップショットは使わない）。
  */
 describe('状況の1行に受信箱の滞留が載る（#783 段0）', () => {
+  /**
+   * ⚠ **この節の入力を {@link INBOX_BACKLOG_LOUD_THRESHOLD} から導かない。**
+   *
+   * 導いた形（`count: INBOX_BACKLOG_LOUD_THRESHOLD + 1`）だと、閾値の値が
+   * 変わったとき入力も一緒に動く——歯は「閾値より1つ大きければ膨らむ」という
+   * *関係*しか固定しておらず、「その閾値が 50 である」ことは1文字も固定して
+   * いない。実際その形では、定数を別の値へ変えてもここのふるまいの歯は緑の
+   * ままで、赤くなるのは `inbox-backlog.test.ts` の
+   * `expect(INBOX_BACKLOG_LOUD_THRESHOLD).toBe(50)` 1本だけだった。
+   *
+   * だから入力はリテラルで置き、**リテラルが定数と一致していること自体を
+   * 別の1本（すぐ下）で固定する**。この形なら定数が動いた瞬間、50 と 51 が
+   * 境界のどちら側に居るかが入れ替わって、ふるまいの歯が赤くなる。
+   */
+  const AT_THRESHOLD = 50;
+  const ABOVE_THRESHOLD = 51;
+
+  it('足場のリテラルは閾値そのものである（定数が動けばここで赤くなる）', () => {
+    expect(AT_THRESHOLD).toBe(INBOX_BACKLOG_LOUD_THRESHOLD);
+    expect(ABOVE_THRESHOLD).toBe(INBOX_BACKLOG_LOUD_THRESHOLD + 1);
+  });
+
   it('省略した呼びでは行が出ない（既存の呼び出しを壊さない）', () => {
     const out = describeSituation({ managers: [], runners: [] });
 
@@ -651,12 +673,12 @@ describe('状況の1行に受信箱の滞留が載る（#783 段0）', () => {
     const out = describeSituation({
       managers: [],
       runners: [],
-      backlog: { count: INBOX_BACKLOG_LOUD_THRESHOLD, oldestAt: '2026-09-11T00:00:00.000Z' },
+      backlog: { count: AT_THRESHOLD, oldestAt: '2026-09-11T00:00:00.000Z' },
     });
 
-    expect(out).toContain(`受信箱の未処理 ${INBOX_BACKLOG_LOUD_THRESHOLD} 件`);
+    expect(out).toContain(`受信箱の未処理 ${AT_THRESHOLD} 件`);
     expect(out).toContain('2026-09-11T00:00:00.000Z');
-    expect(out).not.toContain(`⚠ 受信箱の未処理 ${INBOX_BACKLOG_LOUD_THRESHOLD} 件`);
+    expect(out).not.toContain(`⚠ 受信箱の未処理 ${AT_THRESHOLD} 件`);
     // **`manager_list` という語自体は他の行（器の説明文）にも出るので、
     // 受信箱の行だけを取り出して確かめる**（他の行に引きずられて誤検出
     // しないように）。
@@ -666,7 +688,7 @@ describe('状況の1行に受信箱の滞留が載る（#783 段0）', () => {
   });
 
   it('閾値を超えると ⚠ 付きで膨らみ、内訳を割る口の名前が付く', () => {
-    const count = INBOX_BACKLOG_LOUD_THRESHOLD + 1;
+    const count = ABOVE_THRESHOLD;
     const out = describeSituation({
       managers: [],
       runners: [],
@@ -682,7 +704,7 @@ describe('状況の1行に受信箱の滞留が載る（#783 段0）', () => {
     const out = describeSituation({
       managers: [],
       runners: [],
-      backlog: { count: INBOX_BACKLOG_LOUD_THRESHOLD + 1 },
+      backlog: { count: ABOVE_THRESHOLD },
     });
     const line = out.split('\n').find((l) => l.includes('受信箱の未処理'));
     if (line === undefined) throw new Error('行が見つからない');
