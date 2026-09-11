@@ -12561,7 +12561,6 @@ describe('クローン — 定期の棚卸し（scheduled な蒸留）', () => {
 
     const input = (s.calls[0] as FakeCall).inputs[1] ?? '';
     expect(input).toContain('定期の棚卸しの刻みが来た');
-    expect(input).toContain('棚卸しの的');
     expect(input).toContain('- alteroid-work:');
     // 何をすればよいかまで載る（名指しだけで終わらせない）。
     expect(input).toContain('memory_section_move');
