@@ -578,3 +578,65 @@ jobs:
   # 塞いだ上で入れる）。この3つは順番も含めて揃える必要がある——`(a)` だけ先に
   # やると `check-required-status-checks` が drift として赤くなり、`(b)` だけ
   # 先にやっても protection は変わらないので何も強制されない。
+
+  # **PR / Issue の本文に「出所の刻印」（`<!-- alteroid-origin: ... -->`）が
+  # 揃っているかを見る（#850）。** 判定ロジックは `scripts/check-pr-origin-core.mjs`
+  # が正本（判定表・フェンスの扱い・`body` が空のときの扱いはあちらの doc）。
+  # ここは呼び出しだけ。
+  pr-origin:
+    # **`base-overlap` と同じ理由・同じ形の `if:` である**（直上のジョブの doc を
+    # 見よ）。このジョブも pull_request 専用——「PR 本文」という測る対象自体が
+    # pull_request イベント以外には存在しない。
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v4
+      # **`PR_BODY` / `PR_CREATED_AT` は `env:` 経由で渡す。`run:` の中に
+      # `${{ }}` を直接書かない。** PR 本文は誰でも編集できる外部入力で、
+      # `run:` のテンプレート展開へ直接埋め込むとその中身がシェルの構文として
+      # 解釈されうる（スクリプトインジェクション）。`env:` に積んだ値は環境変数
+      # として渡るだけで、シェルの構文としては解釈されない——`check-pr-origin.mjs`
+      # がどちらも引数ではなく環境変数からしか読まない理由と対になっている
+      # （あちらの doc に同じ説明がある）。`PR_CREATED_AT` は `legacy`
+      # （門より前に作られた PR を赤くしない扱い、`check-pr-origin-core.mjs`
+      # の doc）の判定に使う。
+      - run: pnpm check:pr-origin
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_CREATED_AT: ${{ github.event.pull_request.created_at }}
+
+  # **`pr-origin` も required contexts には入れていない。** ただし理由は
+  # `base-overlap`（#846）とは別で、写さない——`base-overlap` は「誤検知が
+  # required だと repo 全体が止まる」という歯そのものの性質が理由だが、
+  # こちらは次の2点である。
+  #
+  # 1. **required 化は branch protection の変更であり、管理権限のいる人間の
+  #    操作である。** `.github/required-status-checks.json` はそれ自身の
+  #    `note` が逐語で言うとおり「**宣言であって設定ではない —— これを
+  #    書き換えても protection は変わらない**」（`grep -Fn --
+  #    'これは宣言であって設定ではない' .github/required-status-checks.json`
+  #    で当たる）。⟹ protection 側を変えないまま宣言だけ先に書くと、
+  #    `check-required-status-checks` が検出するために作られた drift を
+  #    こちらから新しく作ることになる。
+  # 2. **この門が入った時点で、既に開いている PR は全部 `legacy`（緑）になる
+  #    が、`legacy` は「出所が引けた」ではなく「引けない、と明示的に分かる」
+  #    である**（`check-pr-origin-core.mjs` の doc）。この状態のまま
+  #    required にすると、「引けない」を「引けた」と同じ強さで強制すること
+  #    になる。required にするかどうかは、`legacy` が実際にどれだけ残って
+  #    いるかを見てから人間が決める判断であって、この PR では決めない。
+  #
+  # **`.github/required-status-checks.json` はここでも触っていない**
+  # （理由は上の1と同じ）。
+  #
+  # **将来 required にしたくなったときの手順は `base-overlap` の (a)(b)(c) と
+  # 同じ3段**: (a) リポジトリの branch protection の required status checks に
+  # `pr-origin` を追加する → (b) `.github/required-status-checks.json` の
+  # `contexts` にも `pr-origin` を足し `observedAt` を更新する → (c) 上の
+  # `if:` を見直す（`skipped` が required を満たしてしまう問題を、`push` を
+  # required から外すか他の形で塞いだ上で入れる）。この3つは順番も含めて
+  # 揃える必要がある——`(a)` だけ先にやると `check-required-status-checks` が
+  # drift として赤くなり、`(b)` だけ先にやっても protection は変わらないので
+  # 何も強制されない。

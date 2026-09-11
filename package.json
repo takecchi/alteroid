@@ -10,6 +10,7 @@
   "scripts": {
     "build": "pnpm -r build",
     "check:base-overlap": "node ./scripts/check-base-overlap.mjs",
+    "check:pr-origin": "node ./scripts/check-pr-origin.mjs",
     "check:required-status-checks": "node ./scripts/check-required-status-checks.mjs",
     "check:sdk-quotes": "node ./scripts/check-sdk-quotes.mjs",
     "check:web-bundle-node-traces": "node ./scripts/check-web-bundle-node-traces.mjs",
