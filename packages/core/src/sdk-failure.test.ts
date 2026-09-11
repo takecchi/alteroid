@@ -7,7 +7,12 @@ import {
   resultErrorLines,
   resultFailureOf,
 } from './sdk-failure.js';
-import { classifyUsageNotice, limitRecoveryOf, withRecoveryNote } from './usage-limits.js';
+import {
+  classifyUsageNotice,
+  limitRecoveryOf,
+  matchedUsageLimitPrefix,
+  withRecoveryNote,
+} from './usage-limits.js';
 
 /**
  * 「SDK が『これは応答ではない』と言っている」印を読む部分。
@@ -59,6 +64,7 @@ const SDK_ASSISTANT_ERROR_CODES: SDK_の_error_の語が増えた_この表と_s
     authentication_failed: true,
     oauth_org_not_allowed: true,
     account_on_hold: true,
+    verification_required: true,
     billing_error: true,
     rate_limit: true,
     overloaded: true,
@@ -292,5 +298,122 @@ describe('cloud_credential_error — 回復の見込みを名乗らない', () =
         "You've hit your individual spend limit · ask your admin to raise it at claude.ai/settings/usage",
       ),
     ).toBe('action');
+  });
+});
+
+/**
+ * **`verification_required`（SDK 0.3.268 で増えた語）が、回復の見込みを名乗らないこと。**
+ *
+ * ## `cloud_credential_error` とは逆の理由で、同じ `unknown` に落ちる
+ *
+ * **`cloud_credential_error` は SDK 自身の印が割れていたので「どちらとも名乗らせない」
+ * という判断だった**（直前の describe、`sdk-failure.ts` の doc）。**`verification_required`
+ * は逆に、実測した印がすべて同じ向き（人間・組織の管理者が動くまで開かない）を
+ * 指している**（`sdk-failure.ts` の doc「`verification_required`（0.3.268 で増えた）」
+ * に逐語を置いた——403 / `permission_error` / 専用クラス名 `VerificationRequiredError`、
+ * 人へ見せる側の固定文言、`/goal` の自動継続を止める群への分類、専用の箱
+ * `cleared_verification_required`、`apiErrorIsTransient` が渡されていないこと）。
+ *
+ * **それでも `limitRecoveryOf` はいまも `unknown` を返す。理由は「分からないから」
+ * ではない。** `limitRecoveryOf` が見ているのは `SDKAssistantMessageError` の語では
+ * なく `USAGE_LIMIT_ERROR_PREFIXES` の**文言の接頭辞**である（`usage-limits.ts` の
+ * doc）。`verification_required` の実際の本文（サーバの `error.message` をそのまま
+ * 通したもの——下の doc 参照）はこの12接頭辞のどれとも一致しない形をしている。
+ * ⟹ **これは「測れば分かっているのに、それを運ぶ軸がこの実装に無い」という構造の
+ * 欠落であって、判定を保留しているわけではない。** その軸を新設するかどうかは
+ * この歯の範囲外（`usage-limits.ts` には触れていない）。
+ */
+describe('verification_required — 回復の見込みを名乗らない', () => {
+  /**
+   * `verification_required` と一緒に流れる本文には**定型が無い**（実測
+   * 2026-09-11、`@anthropic-ai/claude-agent-sdk-linux-x64@0.3.268` の `claude`
+   * を `grep -a` して読んだ逐語）:
+   *
+   * > `content:` + '`${Ka}: ${o}`' + `,error:"verification_required"`
+   *   （`o=xHt(e.status,e.error)`、`xHt` は `e.status===403` かつ
+   *   `error.type==="permission_error"` かつ `error.details.error_code==="verification_required"`
+   *   のときだけ `cLn(r.data.error.message)` を返す。`cLn` は空白の正規化と
+   *   truncate をするだけで、文言そのものは作らない）
+   *
+   * `Ka` は `"API Error"`（実測 `var Ka="API Error"`）。**`cloud_credential_error`
+   * の `Could not load ${p} credentials …` のような CLI 側の固定テンプレートは
+   * この語には存在しない** — 本文は API サーバが返した `error.message` を
+   * そのまま通したものである。⟹ **下の文言は実測ではなく、あり得る形を
+   * 組み立てたものである**（`/goal` 機能が使う固定ラベル
+   * `fxn="organization verification required — see detail"` を手がかりにした）。
+   * この歯が見ているのは「`organization verification required` という語を
+   * 含む文言」という形だけであって、実際にサーバが返す文言そのものではない。
+   */
+  const VERIFICATION_REQUIRED_TEXT =
+    'API Error: organization verification required · complete verification at https://console.anthropic.com/settings/verification';
+
+  it('文言は上限の合図ではない（上限のカードへ回さない）', () => {
+    expect(classifyUsageNotice(VERIFICATION_REQUIRED_TEXT)).toBeUndefined();
+  });
+
+  it('回復の見込みは `unknown`（**`time` を名乗らない**）', () => {
+    // **ここが `time` になったら、クローンは「待てば戻る」と読んで待つ。**
+    // 測った印（403/permission_error・"blocked"+固定文言・/goal の回復不能群・
+    // 専用の箱・apiErrorIsTransient 不在）はどれも「人間が動くまで開かない」側を
+    // 指しているので、`time` はここで最も外してはいけない値である。
+    expect(limitRecoveryOf(VERIFICATION_REQUIRED_TEXT)).toBe('unknown');
+  });
+
+  it('見込みの行を足さない（`unknown` のとき文言を1文字も変えない）', () => {
+    const base = `結果なしで終了: verification_required（assistant_error） / ${VERIFICATION_REQUIRED_TEXT}`;
+    expect(withRecoveryNote(base, limitRecoveryOf(VERIFICATION_REQUIRED_TEXT))).toBe(base);
+  });
+
+  it('語は言い換えずそのまま運ぶ（こちらの語彙へ畳まない）', () => {
+    expect(assistantFailureOf('verification_required', VERIFICATION_REQUIRED_TEXT)).toEqual({
+      via: 'assistant_error',
+      code: 'verification_required',
+      text: VERIFICATION_REQUIRED_TEXT,
+    });
+  });
+
+  /**
+   * **陰性対照。** 上の4本だけだと「`limitRecoveryOf` が何にでも `unknown` を返す」
+   * 状態でも全部緑になる（＝ 何も測っていない歯と区別が付かない）。
+   */
+  it('陰性対照 — 分類できる文言では `unknown` を返さない', () => {
+    expect(limitRecoveryOf(ORG_SPEND_LIMIT)).toBe('time');
+    expect(
+      limitRecoveryOf(
+        "You've hit your individual spend limit · ask your admin to raise it at claude.ai/settings/usage",
+      ),
+    ).toBe('action');
+  });
+
+  /**
+   * **どの接頭辞にも当たっていないこと（`unknown` になった理由まで固定する）。**
+   *
+   * ⚠️ 直前の「回復の見込みは `unknown`」は `limitRecoveryOf(...) === 'unknown'`
+   * だけを見ており、**値が変わらない壊れ方を捕まえない。** SDK が
+   * `USAGE_LIMIT_ERROR_PREFIXES` に新しい接頭辞を1本増やし、この文言がその
+   * 接頭辞へ当たるようになっても、当たった先の表(`LIMIT_RECOVERY_BY_PREFIX`)の
+   * 値がたまたま `'unknown'` の行なら、`limitRecoveryOf` の返り値は
+   * `'unknown'` のまま変わらない——直前の歯は緑のままになる。
+   *
+   * **`usage-limits.ts` の `matchedUsageLimitPrefix` の doc 自身がこの区別を
+   * 持っている**（逐語、`grep -Fn -- '\`limitRecoveryOf\` の返り値だけを見ても現れない。' packages/core/src/usage-limits.ts`）:
+   *
+   * > `limitRecoveryOf` の返り値だけを見ても現れない。
+   *
+   * ⟹ ここでは値ではなく**どの接頭辞にも当たっていないこと**そのものを測る。
+   */
+  it('どの接頭辞にも当たっていないこと（`unknown` になった理由まで固定する）', () => {
+    // **このメッセージがそのまま失敗の生出力に載る——コメントは赤を見た人には
+    // 届かない。**
+    expect(
+      matchedUsageLimitPrefix(VERIFICATION_REQUIRED_TEXT),
+      '`verification_required` の文言が USAGE_LIMIT_ERROR_PREFIXES の新しい接頭辞に ' +
+        '当たるようになった（まだ time/action を名乗っているとは限らない——先に当たる ' +
+        '側が起きた段階）。matchedUsageLimitPrefix(VERIFICATION_REQUIRED_TEXT) の返り値 ' +
+        '（＝ここで当たった接頭辞そのもの）を確認すること。この語は実測で「人間（または ' +
+        '組織の管理者）が動くまで開かない」側だと分かっているので、当たった接頭辞を ' +
+        'LIMIT_RECOVERY_BY_PREFIX へ足すときはこの語の扱いも一緒に決めること' +
+        '（軸そのものの欠落は #809）。',
+    ).toBeUndefined();
   });
 });
