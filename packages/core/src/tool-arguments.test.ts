@@ -257,6 +257,12 @@ describe('クローンの道具に渡した引数は、長さと位置によら�
       memory_append: ['slug', 'content', 'summary'],
       memory_write: ['slug', 'content', 'summary'],
       memory_delete: ['slug', 'summary'],
+      // commitment_close_many（issue #844）: origin と reason は必須。dryRun の
+      // 既定（省略で true）に頼って「全部閉じる」が事故で撃てないための必須化が
+      // モデルへ配る JSON Schema でも落ちていないことを見る
+      // （commitment-close-many.test.ts の15番。あちらの足場は handler を直に
+      // 叩くので zod の検査を通らず、ここでしか測れない）。
+      commitment_close_many: ['origin', 'reason'],
     };
 
     for (const [name, fields] of Object.entries(expected)) {

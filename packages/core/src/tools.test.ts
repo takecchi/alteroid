@@ -14523,6 +14523,30 @@ describe('journal.append 失敗時の応答本文: 17箇所すべてで道具名
       },
     },
     {
+      // **一括の口も、日誌が書けなければ握り潰さずに throw する。** 単票の
+      // `commitment_close` と同じ性質だが、こちらは塊ごとに書くので
+      // **「最初の塊で落ちる」が最初の append で起きる**（`failingJournalAppend`
+      // は全部落とすので、1塊目の append がそのまま失敗する）。
+      tool: 'commitment_close_many',
+      firstLine: ACT_COMPLETED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-13b');
+        await stores.commitments.open({
+          id: 'c-close-many-test',
+          at: '2026-01-01T00:00:00.000Z',
+          origin: 'external',
+          source: 'token-pool',
+          body: '知らせ',
+        });
+        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        return callExpectingError(tools, 'commitment_close_many', {
+          origin: ['external'],
+          reason: '知らせなので引き受ける対象が無い',
+          dryRun: false,
+        });
+      },
+    },
+    {
       tool: 'commitment_edit',
       firstLine: ACT_COMPLETED,
       async run() {

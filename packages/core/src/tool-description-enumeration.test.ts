@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { runnerLivenessSchema } from './runner-protocol.js';
+import { commitmentOriginSchema } from './schema.js';
 import { RESERVED_SCHEDULE_KINDS, RESERVED_SCHEDULE_KIND_ENV_KEYS } from './schedule.js';
 import { CLONE_RUNTIME_ITEM_LABELS } from './self.js';
 import { createMemoryStores } from './testing.js';
@@ -82,6 +83,16 @@ const SUBJECTS: readonly EnumerationSubject[] = [
     tool: 'schedule_create',
     label: 'RESERVED_SCHEDULE_KIND_ENV_KEYS の値（packages/core/src/schedule.ts）',
     source: () => Object.values(RESERVED_SCHEDULE_KIND_ENV_KEYS),
+  },
+  {
+    // **この道具の説明文は「在る起点を全部並べた呼びは断る」と名乗る。** その
+    // 「在る起点」は `commitmentOriginSchema` そのものなので、**起点が1つ増えた
+    // 瞬間に説明文は嘘になる**（クローンは増えた起点を並べてよいのか判断できない）。
+    // ⟹ EXEMPT ではなく SUBJECTS 側である。`commitment_list` が EXEMPT なのは、
+    // あちらの説明文が起点を数え直していないからで、線引きはそこに在る。
+    tool: 'commitment_close_many',
+    label: 'commitmentOriginSchema の値（packages/core/src/schema.ts）',
+    source: () => commitmentOriginSchema.options,
   },
   {
     tool: 'self_status',

@@ -487,6 +487,21 @@ export function createMemoryStores(): Stores {
       commitments.set(id, { ...existing, closedAt: at, closedReason: reason, closedBy: by });
       return true;
     },
+    // **本物（fs / pg）と同じ意味論——実際に閉じた id だけを返す。** 存在しない
+    // id・既に閉じている id は戻り値に含めない。`ids` が空なら何も変えずに
+    // `[]` を返す（本物と同じく、この偽物も `Map` へ一切触れない）。同じ id が
+    // 重複していても `Map` の1エントリを一度書き換えるだけなので、二重に閉じる
+    // ことも戻り値に重複が出ることも無い（`CommitmentStore.closeMany` の doc）。
+    async closeMany(ids: readonly string[], at, reason, by: CommitmentClosedBy) {
+      const closedIds: string[] = [];
+      for (const id of new Set(ids)) {
+        const existing = commitments.get(id);
+        if (!existing || existing.closedAt !== undefined) continue;
+        commitments.set(id, { ...existing, closedAt: at, closedReason: reason, closedBy: by });
+        closedIds.push(id);
+      }
+      return closedIds;
+    },
     // **`origin` の判定はしない**（`CommitmentStore.editBody` の doc）。呼び出し側
     // （`apps/daemon/src/app.ts` の `PATCH /commitments/:id`）が確かめてから呼ぶ。
     async editBody(id, body, at, by: CommitmentEditedBy) {
