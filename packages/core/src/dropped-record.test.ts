@@ -22,7 +22,8 @@ import {
   type DroppedTraceOrigin,
 } from './dropped-record.js';
 import type { RunnerEvent } from './runner-protocol.js';
-import type { InboxEvent, JournalEntryInput } from './schema.js';
+import { JOURNAL_ENTRY_TYPES, journalEntrySchema } from './schema.js';
+import type { InboxEvent, JournalEntryInput, JournalEntryType } from './schema.js';
 import { captureStderr } from './testing.js';
 
 /**
@@ -916,5 +917,363 @@ describe('droppedTraceLedgerSince（帳面が数え始めた時刻）', () => {
 
     expect(after).not.toBe(before);
     expect(new Date(after).getTime()).toBeGreaterThan(new Date(before).getTime());
+  });
+});
+
+/**
+ * `journalEntryShape` の名簿——schema に欄を足したのに、この関数へ足し忘れる
+ * のを赤くする歯（PR #709 の再発防止。#709 自身はそのとき起きた分だけを直し、
+ * 再発を止める歯を置かなかった）。
+ *
+ * **この歯が測るもの:**
+ *
+ * 1. 名簿（`JOURNAL_SHAPE_PLAN`）のキー集合が、`journalEntrySchema`
+ *    （zod から機械的に引いた実装側の欄）と両方向に一致すること。**型でも
+ *    測る**——`ShapedFieldsOf<T>` を使った `satisfies` で、schema に欄が
+ *    増えると `pnpm typecheck` が落ちる。**実行時にも測る**——zod の
+ *    discriminated union から実際の欄を毎回引き直すので、型を直さずに
+ *    schema だけ変えても赤くなる。
+ * 2. 名簿の各欄が言うとおりに `journalEntryShape` が振る舞うこと
+ *    （`never` は出ない・`size`/`size-unnamed` は長さだけ出る・`tag`/`raw`
+ *    は目印が出る）。全欄を埋めた `FULL_FIXTURES`（`Required<>` で optional
+ *    も必須にしてある——ここでも schema に欄が増えると型が落ちる）に対して
+ *    `journalEntryShape` を呼び、名簿どおりかを確かめる。
+ * 3. 値が出ない欄（`size`/`size-unnamed`/`never`）に置いた自由文
+ *    （`SECRET`）が、どの型の跡にも現れないこと。既存の「どの型の自由文も
+ *    跡に乗らない」は8型（`exchange`/`decision`/`escalation`/`tool_use`/
+ *    `memory_update`/`daily_report`/`external_event`/`token_rotation`）
+ *    しか回っておらず、`worker_wait`/`turn_usage`/`subagent_stall` が入って
+ *    いない——既存のテストは1文字も変えず、こちらを別の歯として足す。
+ *
+ * ⚠️ **この歯が守れないもの——2つ（次に読む人はここで立ち止まること）。**
+ *
+ * 1. **欄は出るが値が間違っていることは捕まえない。** ここが見るのは
+ *    `tokenId=` のような目印が出るかどうかまでで、`tag(entry.tokenId)` を
+ *    `tag(entry.fromTokenId)` と取り違えて書いても、この歯は緑のままである。
+ *    値の正しさを持つのは各型別の `toBe`（このファイルの上のほう）のほうで、
+ *    **この歯はそれを肩代わりしない。**
+ * 2. **数えるのは第1階層の欄だけ。** `turn_usage.contextUsage` のような
+ *    入れ子オブジェクトの中に、新しく自由文（例: `contextUsage.detail`）が
+ *    足されても、**この歯は赤くならない。** 名簿もフィクスチャも
+ *    `contextUsage` という1つの欄までしか見ていない。
+ */
+describe('journalEntryShape の名簿（schema に足した欄の足し忘れを赤くする。PR #709）', () => {
+  /**
+   * 跡へ欄をどう出すか。**`never` には理由を必ず書く**——理由の無い除外は、
+   * 次に「これも出すべきでは」と思った人が判断できない。
+   */
+  type FieldPlan =
+    | { readonly emit: 'tag'; readonly token: string }
+    | { readonly emit: 'raw'; readonly token: string }
+    | { readonly emit: 'size'; readonly token: string }
+    | { readonly emit: 'size-unnamed' }
+    | { readonly emit: 'never'; readonly why: string };
+
+  /** その型が schema で持つ欄（`type` は判別子なので除く。`id`/`at` は入力型に無い）。 */
+  type ShapedFieldsOf<T extends JournalEntryType> = Exclude<
+    keyof Extract<JournalEntryInput, { type: T }>,
+    'type'
+  >;
+
+  const JOURNAL_SHAPE_PLAN = {
+    exchange: {
+      with: { emit: 'tag', token: 'with' },
+      role: { emit: 'tag', token: 'role' },
+      text: { emit: 'size-unnamed' },
+      conversationId: {
+        emit: 'never',
+        why:
+          '欠落ではなく設計。呼び出し側が決める値（`app.ts` の `given ?? randomUUID()`）で、' +
+          '`inboxEventShape` の doc が「同じ値の扱いを2か所で変えないこと」と縛っている' +
+          "（逐語は `command grep -Fn -- '同じ値の扱いを2か所で' packages/core/src/dropped-record.ts`）。" +
+          '足すなら2か所同時、`tag()` は禁止。',
+      },
+    },
+    decision: {
+      decision: { emit: 'size', token: 'decision' },
+      grounds: { emit: 'size', token: 'grounds' },
+    },
+    escalation: {
+      question: { emit: 'size', token: 'question' },
+      approvalId: { emit: 'tag', token: 'approvalId' },
+      managerId: { emit: 'tag', token: 'managerId' },
+      answeredAt: {
+        emit: 'never',
+        why: 'PR #709 が「doc が『載せる』と言っていないので機能追加になる」として別判断へ回した欄。載せる判断をするならそこから。',
+      },
+      answer: { emit: 'size', token: 'answer' },
+    },
+    tool_use: {
+      actor: { emit: 'tag', token: 'actor' },
+      tool: { emit: 'tag', token: 'tool' },
+      input: {
+        emit: 'never',
+        why:
+          'この関数の doc が名指しする唯一の例外で、長さも出さない' +
+          "（逐語は `command grep -Fn -- '唯一の例外は' packages/core/src/dropped-record.ts`）。" +
+          '理由は2つ——(1) `z.unknown()` なので長さを出すには `JSON.stringify` が要るが、' +
+          'この関数が走るのは日誌への書き込みが既に失敗した後の例外経路で、そこで循環参照や' +
+          '巨大構造の直列化を新たに走らせるのは跡を残す仕組み自身を落としに行く形になる。' +
+          '(2) ツール引数そのもの（`{ command: <シェル行> }` 等）で、この関数が扱う自由文の' +
+          '中でもいちばん秘密が載りうる。',
+      },
+    },
+    memory_update: {
+      slug: { emit: 'tag', token: 'slug' },
+      cause: { emit: 'tag', token: 'cause' },
+      action: { emit: 'tag', token: 'action' },
+      bytesBefore: {
+        emit: 'never',
+        why: 'PR #709 が別判断へ回した欄（上の `escalation.answeredAt` と同じ）。',
+      },
+      bytesAfter: {
+        emit: 'never',
+        why: 'PR #709 が別判断へ回した欄（上の `escalation.answeredAt` と同じ）。',
+      },
+      summary: { emit: 'size-unnamed' },
+    },
+    daily_report: {
+      date: { emit: 'tag', token: 'date' },
+      body: { emit: 'size-unnamed' },
+      unavailable: { emit: 'size', token: 'unavailable' },
+    },
+    external_event: {
+      source: { emit: 'size', token: 'source' },
+      summary: { emit: 'size-unnamed' },
+    },
+    worker_wait: {
+      openedAt: { emit: 'tag', token: 'openedAt' },
+      tasks: { emit: 'raw', token: 'tasks' },
+      turns: { emit: 'raw', token: 'turns' },
+      byCause: { emit: 'raw', token: 'byCause.input' },
+      toolless: { emit: 'raw', token: 'toolless' },
+      notifications: { emit: 'raw', token: 'notifications' },
+      submits: { emit: 'raw', token: 'submits' },
+      sources: { emit: 'raw', token: 'sources' },
+      settled: { emit: 'raw', token: 'settled' },
+    },
+    turn_usage: {
+      layer: { emit: 'tag', token: 'layer' },
+      site: { emit: 'tag', token: 'site' },
+      managerId: { emit: 'tag', token: 'managerId' },
+      sessionId: { emit: 'tag', token: 'sessionId' },
+      models: { emit: 'raw', token: 'models' },
+      reset: { emit: 'raw', token: 'reset' },
+      contextUsage: {
+        emit: 'never',
+        why: 'PR #709 が別判断へ回した欄（上の `escalation.answeredAt` と同じ）。',
+      },
+      compactions: {
+        emit: 'never',
+        why: 'PR #709 が別判断へ回した欄（上の `escalation.answeredAt` と同じ）。',
+      },
+      mainLoopUsage: {
+        emit: 'never',
+        why: 'PR #709 が別判断へ回した欄（上の `escalation.answeredAt` と同じ）。',
+      },
+    },
+    token_rotation: {
+      event: { emit: 'tag', token: 'event' },
+      signal: { emit: 'tag', token: 'signal' },
+      reason: { emit: 'tag', token: 'reason' },
+      freshness: { emit: 'tag', token: 'freshness' },
+      tokenId: { emit: 'tag', token: 'tokenId' },
+      fromTokenId: { emit: 'tag', token: 'fromTokenId' },
+      generation: { emit: 'raw', token: 'generation' },
+      earliestAt: { emit: 'tag', token: 'earliestAt' },
+      cooldownSource: { emit: 'tag', token: 'cooldownSource' },
+      recoveredSource: { emit: 'tag', token: 'recoveredSource' },
+      label: { emit: 'size', token: 'label' },
+      noticeText: { emit: 'size', token: 'noticeText' },
+      text: { emit: 'size-unnamed' },
+    },
+    subagent_stall: {
+      agentId: { emit: 'tag', token: 'agentId' },
+      agentType: { emit: 'tag', token: 'agentType' },
+      ownedTaskCount: { emit: 'raw', token: 'ownedTaskCount' },
+      sessionTaskCount: { emit: 'raw', token: 'sessionTaskCount' },
+      wakeupCount: { emit: 'raw', token: 'wakeupCount' },
+      outcome: { emit: 'tag', token: 'outcome' },
+      text: { emit: 'size-unnamed' },
+    },
+  } satisfies { [T in JournalEntryType]: Record<ShapedFieldsOf<T>, FieldPlan> };
+
+  const SECRET = 'ghp_222222222222222222222222222222222222';
+
+  /**
+   * 全欄を埋めた見本。**`Required<>` で optional も必須になる**ので、schema に
+   * 欄が増えると（このオブジェクトリテラルが `Required<>` を満たせなくなり）
+   * ここでも型が落ちる。値が跡に出ない欄（`size`/`size-unnamed`/`never`）の
+   * うち文字列型のものには `SECRET` を入れ、下の「値が出ない欄」テストで
+   * 漏れないことを測る。`contextUsage`/`compactions`/`mainLoopUsage`
+   * （構造化された `never` 欄）には秘密を仕込んでいない——この歯は第1階層
+   * までしか見ないので、入れ子の中の自由文は別の限界として上のコメントに
+   * 明記してある。
+   */
+  const FULL_FIXTURES: {
+    [T in JournalEntryType]: Required<Extract<JournalEntryInput, { type: T }>>;
+  } = {
+    exchange: {
+      type: 'exchange',
+      with: 'manager',
+      role: 'inbound',
+      text: SECRET,
+      conversationId: SECRET,
+    },
+    decision: {
+      type: 'decision',
+      decision: SECRET,
+      grounds: SECRET,
+    },
+    escalation: {
+      type: 'escalation',
+      question: SECRET,
+      approvalId: 'ap-1',
+      managerId: 'mgr-1',
+      answeredAt: '2026-08-20T00:00:00.000Z',
+      answer: SECRET,
+    },
+    tool_use: {
+      type: 'tool_use',
+      actor: 'manager:mgr-1',
+      tool: 'Bash',
+      input: { command: SECRET },
+    },
+    memory_update: {
+      type: 'memory_update',
+      slug: 'values',
+      cause: 'clone',
+      action: 'write',
+      bytesBefore: 10,
+      bytesAfter: 20,
+      summary: SECRET,
+    },
+    daily_report: {
+      type: 'daily_report',
+      date: '2026-08-20',
+      body: SECRET,
+      unavailable: SECRET,
+    },
+    external_event: {
+      type: 'external_event',
+      source: SECRET,
+      summary: SECRET,
+    },
+    worker_wait: {
+      type: 'worker_wait',
+      openedAt: '2026-08-20T00:00:00.000Z',
+      tasks: 5,
+      turns: 41,
+      byCause: { input: 1, notification: 3, continuation: 37 },
+      toolless: 38,
+      notifications: 3,
+      submits: 0,
+      sources: { system: 3, user: 1 },
+      settled: false,
+    },
+    turn_usage: {
+      type: 'turn_usage',
+      layer: 'clone',
+      site: 'session',
+      managerId: 'mgr-1',
+      sessionId: 'sess-1',
+      models: {
+        'claude-fable-5': {
+          inputTokens: 10,
+          outputTokens: 20,
+          cacheReadInputTokens: 100,
+          cacheCreationInputTokens: 5,
+          webSearchRequests: 0,
+          costUsd: 1.2345,
+        },
+      },
+      reset: { fromCostUsd: 5, toCostUsd: 3 },
+      contextUsage: { durationMs: 100 },
+      compactions: [{ trigger: 'manual', preTokens: 1000 }],
+      mainLoopUsage: {
+        inputTokens: 1,
+        outputTokens: 2,
+        cacheReadInputTokens: 3,
+        cacheCreationInputTokens: 4,
+      },
+    },
+    token_rotation: {
+      type: 'token_rotation',
+      event: 'recovered',
+      signal: 'reached',
+      reason: 'turn_succeeded',
+      freshness: 'current',
+      tokenId: 'tok-1',
+      fromTokenId: 'tok-0',
+      generation: 3,
+      earliestAt: '2026-08-20T00:00:00.000Z',
+      cooldownSource: 'quota_reset',
+      recoveredSource: 'account_probe',
+      label: SECRET,
+      noticeText: SECRET,
+      text: SECRET,
+    },
+    subagent_stall: {
+      type: 'subagent_stall',
+      agentId: 'agent-1',
+      agentType: 'worker',
+      ownedTaskCount: 1,
+      sessionTaskCount: 2,
+      wakeupCount: 1,
+      outcome: 'woken',
+      text: SECRET,
+    },
+  };
+
+  it('名簿のキー集合は journalEntrySchema の実装側の欄と両方向に一致する（zod から機械的に引く）', () => {
+    // 走査した種別の集合が JOURNAL_ENTRY_TYPES と一致することも確かめる——
+    // 走査が空振りして0件のまま緑になる形を作らないため。
+    const scannedTypes = journalEntrySchema.options.map((option) => option.shape.type.value);
+    expect(new Set(scannedTypes)).toEqual(new Set(JOURNAL_ENTRY_TYPES));
+    expect(scannedTypes.length).toBeGreaterThan(0);
+
+    for (const option of journalEntrySchema.options) {
+      const type = option.shape.type.value;
+      const implementedFields = new Set(Object.keys(option.shape));
+      implementedFields.delete('type');
+      implementedFields.delete('id');
+      implementedFields.delete('at');
+
+      const plannedFields = new Set(Object.keys(JOURNAL_SHAPE_PLAN[type]));
+
+      expect(plannedFields, type).toEqual(implementedFields);
+    }
+  });
+
+  it('名簿の各欄について journalEntryShape が plan どおりに振る舞う（never は出ない・size 系は長さだけ・tag/raw は目印が出る）', () => {
+    for (const type of JOURNAL_ENTRY_TYPES) {
+      const shape = journalEntryShape(FULL_FIXTURES[type]);
+      const plan: Record<string, FieldPlan> = JOURNAL_SHAPE_PLAN[type];
+
+      for (const [field, fieldPlan] of Object.entries(plan)) {
+        switch (fieldPlan.emit) {
+          case 'never':
+            expect(shape, `${type}.${field}`).not.toContain(field);
+            break;
+          case 'size':
+            expect(shape, `${type}.${field}`).toContain(`${fieldPlan.token}.chars=`);
+            break;
+          case 'size-unnamed':
+            expect(shape, `${type}.${field}`).toContain('chars=');
+            break;
+          case 'tag':
+          case 'raw':
+            expect(shape, `${type}.${field}`).toContain(`${fieldPlan.token}=`);
+            break;
+        }
+      }
+    }
+  });
+
+  it('値が出ない欄（size/size-unnamed/never）に置いた自由文は、どの型の跡にも現れない', () => {
+    for (const type of JOURNAL_ENTRY_TYPES) {
+      const shape = journalEntryShape(FULL_FIXTURES[type]);
+      expect(shape, type).not.toContain(SECRET);
+    }
   });
 });
