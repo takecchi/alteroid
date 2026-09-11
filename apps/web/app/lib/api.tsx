@@ -12,7 +12,19 @@ import {
 import { SWRConfig, useSWRConfig } from 'swr';
 
 import { readCredential, storeCredential, type Credential } from './auth.js';
-import { resolveApiBaseUrl, storeApiBaseUrl } from './config.js';
+import {
+  listEndpoints,
+  migrateSelectionIntoStoredEndpoints,
+  normalizeEndpointUrl,
+  readStoredEndpoints,
+  resolveApiBaseUrl,
+  storeApiBaseUrl,
+  storeEndpoints,
+  upsertEndpoint,
+  withoutEndpoint,
+  type Endpoint,
+  type StoredEndpoint,
+} from './config.js';
 
 interface ApiContextValue {
   client: AlteroidClient;
@@ -20,6 +32,22 @@ interface ApiContextValue {
   baseUrl: string;
   /** 接続先を差し替える（`null` で既定に戻す）。保存して即座に反映する。 */
   setBaseUrl(value: string | null): void;
+  /**
+   * 繋げる先の一覧（ビルド時の既定 ＋ 同一オリジン ＋ このブラウザに保存したもの）。
+   *
+   * **`baseUrl` と同じ state から作る。** 別々に持つと、選んだ直後の1描画だけ
+   * 「一覧に無い先へ繋いでいる」状態が見える。
+   */
+  endpoints: Endpoint[];
+  /** このブラウザの一覧へ足す / 名前を差し替える（**選び直しはしない**）。 */
+  saveEndpoint(entry: StoredEndpoint): void;
+  /**
+   * このブラウザの一覧から落とす。
+   *
+   * **落とした先を選んだままにしない。** 選択だけ残すと、一覧に無い接続先へ
+   * 繋ぎ続けたうえで「消した」と表示されることになる。
+   */
+  removeEndpoint(url: string): void;
   /** いまの資格情報（未ログインなら `null`）。 */
   credential: Credential | null;
   /** ログイン結果を保存する（`null` でログアウト）。 */
@@ -53,6 +81,18 @@ export function ApiProvider({ children }: { children: ReactNode }) {
   });
   const { baseUrl, credential } = session;
   const token = credential?.token ?? null;
+
+  /**
+   * このブラウザに保存した接続先の一覧。
+   *
+   * **初期化のときに1度だけ、古い形を写す**（`migrateSelectionIntoStoredEndpoints`）。
+   * 一覧が無かった頃に選択だけを設定した人の接続先を、切り替えただけで失わせない。
+   * 冪等なので、StrictMode が初期化子を2度呼んでも同じ結果になる。
+   */
+  const [saved, setSaved] = useState<StoredEndpoint[]>(() => {
+    migrateSelectionIntoStoredEndpoints();
+    return readStoredEndpoints();
+  });
 
   /**
    * クライアントと、その世代の通信をまとめて打ち切るための紐。
@@ -122,6 +162,37 @@ export function ApiProvider({ children }: { children: ReactNode }) {
     setSession({ baseUrl: next, credential: readCredential(next) });
   }, []);
 
+  /**
+   * 一覧は **`localStorage` を正とする**（`setSaved` の前の値からは作らない）。
+   *
+   * 同じ鍵を別のタブが書き換えていることがあるので、前の render で読んだ配列を
+   * 起点にすると、そのタブの追加を黙って踏み潰す。
+   */
+  const saveEndpoint = useCallback((entry: StoredEndpoint) => {
+    const next = upsertEndpoint(readStoredEndpoints(), entry);
+    storeEndpoints(next);
+    setSaved(next);
+  }, []);
+
+  const removeEndpoint = useCallback(
+    (url: string) => {
+      const next = withoutEndpoint(readStoredEndpoints(), url);
+      storeEndpoints(next);
+      setSaved(next);
+      // 消したのが「いま選んでいる先」なら、選択も外して既定へ落とす。
+      const target = normalizeEndpointUrl(url);
+      if (target !== undefined && resolveApiBaseUrl() === target) setBaseUrl(null);
+    },
+    [setBaseUrl],
+  );
+
+  /**
+   * 一覧の組み立て。**いま選んでいる先を `baseUrl` として渡す** —
+   * `listEndpoints` の既定引数（`localStorage` を読む）に任せると、切り替えた
+   * 直後の render でまだ古い値が混じりうる。
+   */
+  const endpoints = useMemo(() => listEndpoints(saved, undefined, baseUrl), [saved, baseUrl]);
+
   const setCredential = useCallback(
     (value: Credential | null) => {
       storeCredential(baseUrl, value);
@@ -159,11 +230,24 @@ export function ApiProvider({ children }: { children: ReactNode }) {
       client: generation.client,
       baseUrl,
       setBaseUrl,
+      endpoints,
+      saveEndpoint,
+      removeEndpoint,
       credential,
       setCredential,
       clearCredentialIfCurrent,
     }),
-    [generation, baseUrl, setBaseUrl, credential, setCredential, clearCredentialIfCurrent],
+    [
+      generation,
+      baseUrl,
+      setBaseUrl,
+      endpoints,
+      saveEndpoint,
+      removeEndpoint,
+      credential,
+      setCredential,
+      clearCredentialIfCurrent,
+    ],
   );
 
   /**

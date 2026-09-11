@@ -115,17 +115,37 @@ function parseSource(sourceText: string, fileName: string): ts.SourceFile {
 
 /**
  * 接続先に触っているとみなす識別子。`apps/web/app/lib/config.ts` が公開する
- * 4つの関数の名前そのもの。
+ * 関数の名前そのもの。
+ *
+ * **接続先が「1つの値」から「一覧＋選択」になったとき（複数の既定 API と
+ * 接続先の選択）、この一覧も一緒に広げた。** 広げないと、一覧の側だけを触る
+ * 新しいファイルが (A) の抽出から漏れ、(B) の禁止（外から渡せる経路を読まない）
+ * が当たらないまま増えていく —— **接続先を注げる経路は、値が1つか一覧かに
+ * よらず同じだけ危ない。**
  */
 const TARGET_IDENTIFIER_NAMES = new Set([
   'storeApiBaseUrl',
   'resolveApiBaseUrl',
   'resolveApiBaseUrlOrigin',
   'hasStoredApiBaseUrl',
+  // 一覧の側（選択肢の組み立てと、このブラウザに保存した接続先の読み書き）。
+  'listEndpoints',
+  'parseBuildTimeEndpoints',
+  'readStoredEndpoints',
+  'storeEndpoints',
+  'sanitizeEndpoints',
+  'upsertEndpoint',
+  'withoutEndpoint',
+  'migrateSelectionIntoStoredEndpoints',
+  'normalizeEndpointUrl',
 ]);
 
-/** `config.ts` の `STORAGE_KEY` の値そのもの（他ファイルは import せず直書きしうる）。 */
-const TARGET_STORAGE_KEY_LITERAL = 'alteroid.apiBaseUrl';
+/**
+ * `config.ts` が使う `localStorage` の鍵そのもの（他ファイルは import せず
+ * 直書きしうる）。選択（`alteroid.apiBaseUrl`）と一覧（`alteroid.endpoints`）の
+ * **両方**を見る —— 片方だけだと、一覧を直接書き換えるファイルが抽出から漏れる。
+ */
+const TARGET_STORAGE_KEY_LITERALS = new Set(['alteroid.apiBaseUrl', 'alteroid.endpoints']);
 
 /**
  * ソース中に、上の識別子または文字列リテラルへの**コードとしての**参照が
@@ -146,7 +166,7 @@ export function referencesApiBaseUrlConfig(sourceText: string, fileName: string)
       found = true;
       return;
     }
-    if (ts.isStringLiteralLike(node) && node.text === TARGET_STORAGE_KEY_LITERAL) {
+    if (ts.isStringLiteralLike(node) && TARGET_STORAGE_KEY_LITERALS.has(node.text)) {
       found = true;
       return;
     }
@@ -455,6 +475,11 @@ describe('(A) 接続先に触るファイルの集合が、決め打ちの一覧
   it('合成 fixture: 実際に識別子・リテラルを参照していれば true', () => {
     expect(referencesApiBaseUrlConfig('storeApiBaseUrl(null);', 'x.ts')).toBe(true);
     expect(referencesApiBaseUrlConfig("localStorage.getItem('alteroid.apiBaseUrl')", 'x.ts')).toBe(
+      true,
+    );
+    // 一覧の側も同じだけ拾う（選択だけを見ていると、一覧を触るファイルが漏れる）。
+    expect(referencesApiBaseUrlConfig('listEndpoints();', 'x.ts')).toBe(true);
+    expect(referencesApiBaseUrlConfig("localStorage.getItem('alteroid.endpoints')", 'x.ts')).toBe(
       true,
     );
   });
