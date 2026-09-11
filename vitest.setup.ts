@@ -78,3 +78,82 @@ afterEach(() => {
       ' process.stderr.write を使うこと（どちらもこの歯を通らない）。',
   ).toBe('');
 });
+
+/**
+ * **DOM を持つ環境（jsdom）のテストは、終わるときに macrotask 境界を1つ必ず作る。**
+ *
+ * ## 何が起きていたか
+ *
+ * Radix の `FocusScope`（ドロワー＝`drawer.tsx` → shadcn `sheet` → Radix Dialog が
+ * 中で使う）は、**unmount の後始末を `setTimeout(..., 0)` へ逃がす**。その中で
+ * `new CustomEvent('focusScope.autoFocusOnUnmount')` を作り、`container` へ
+ * `dispatchEvent` して、元の場所へ焦点を戻す
+ * （`@radix-ui/react-focus-scope/dist/index.mjs`。実装は現行の依存版
+ * `1.1.16` でも変わっていない — `setTimeout(() => { … }, 0)` が逐語のまま在ることを
+ * 2026-09-11T15:16Z に `node_modules/.pnpm/@radix-ui+react-focus-scope@1.1.16…` の
+ * 現物で確かめてある）。
+ *
+ * **`cleanup()` はこの macrotask を消化しない。** `cleanup()` が返った時点では
+ * まだ積まれたままで、テストが終わってもそのまま残る。残った先で発火すると、
+ * その時点の `CustomEvent` が `container` の属する DOM のものと食い違い、
+ * 走行全体がこう落ちる（**2026-09-11T05:30Z 観測の実例。件数は観測時点のもので、
+ * テストが増減するたびに腐る** — 2026-09-11T15:19Z に同じ症状をこの歯だけを
+ * 先に main へ載せて取り直したときは `Test Files 1 failed | 243 passed (244)` /
+ * `Tests 1 failed | 5835 passed (5836)` だった。数え方も違う — こちらは歯自身が
+ * 赤くなった形で、下の「集計行は全部 `passed`」の間欠とは観測の経路が異なる）:
+ *
+ * ```
+ * Test Files  237 passed (237)
+ * Tests       5592 passed (5592)
+ * Errors      1 error          ← これだけで exit 1
+ *
+ * TypeError: Failed to execute 'dispatchEvent' on 'EventTarget':
+ *            parameter 1 is not of type 'Event'.
+ *  ❯ Timeout._onTimeout @radix-ui/react-focus-scope/dist/index.mjs:97:23
+ * ```
+ *
+ * **集計行は全部 `passed` を名乗ったまま exit 1 になる。** これが一番悪い形で、
+ * 「テストが1本落ちている」より重い —— **門が嘘をつく**。しかも同じコミットで
+ * 再走させると緑になる（間欠）ので、「あの変更が壊した」を追っても何も出ない。
+ *
+ * ## なぜ per-file のヘルパにしないのか
+ *
+ * **上の stdout の歯とまったく同じ理由である。** 「呼べば効くが忘れれば何も
+ * しない」ものを各テストファイルへ配ると、次に足されるファイルで静かに再発する。
+ * `apps/web` の jsdom テストは現に38本あり（2026-09-11T15:19Z 実測、
+ * `grep -rl '@vitest-environment jsdom' apps/web/app | wc -l`）、描画する37本は
+ * どれも自前の `afterEach` で `cleanup()` を手で呼んでいて（残り1本
+ * `apps/web/app/lib/config.test.ts` は描画しない）、`~/test-support` はライフサイクルの
+ * フックを1つも登録していない（同じく2026-09-11T15:19Z に `afterEach(` /
+ * `beforeEach(` 等の呼び出しが無いことを読み直して確認済み —— 逐語で
+ * 「後片付けは呼ぶ側」と書いてある）、共有のヘルパを足しても
+ * **39個目の「呼び忘れうるもの」**が増えるだけである。
+ *
+ * ## なぜ `afterEach` で足りるのか（実測）
+ *
+ * - **global setup の `afterEach` は、各ファイル自身の `afterEach` より後に走る。**
+ *   `cleanup()` が積んだ macrotask が、ここへ来る時点で必ず積まれている
+ *   （ファイル側 → global の順であることは実測で確かめた）。
+ * - **Node の timer は同じ遅延どうしなら積んだ順に発火する。** ここで積む 0ms は
+ *   Radix のものより後なので、Radix 側が先に走り切る。
+ *
+ * ## なぜ `globalThis.setTimeout` を直接呼ばないのか
+ *
+ * テストが `vi.useFakeTimers()` を掛けたまま終わると、`globalThis.setTimeout` は
+ * 偽の時計に差し替わっていて**誰も進めないので永久に返らない**。setup が読まれる
+ * 時点（＝どのテストも動く前）の本物を捕まえておき、それを使う。
+ *
+ * ## なぜ DOM のある環境だけなのか
+ *
+ * 消化したいのは DOM の後始末（`dispatchEvent` / 焦点）だけで、それは jsdom の
+ * ファイルにしか無い。**「呼び忘れ」の穴は開かない** —— 判定しているのは
+ * 環境そのものであって、テストの書き手が足す1行ではない。
+ */
+const realSetTimeout = globalThis.setTimeout;
+
+afterEach(async () => {
+  if (typeof window === 'undefined') return;
+  await new Promise<void>((resolve) => {
+    realSetTimeout(resolve, 0);
+  });
+});
