@@ -1581,7 +1581,7 @@ function renderPremiseOutlineOmission(
       '**足したばかりの節はここに出る**）:',
     tail,
     arithmetic,
-'memory_outline は side=tail で末尾も見られるほか、q=<文字列> で見出しを絞り込めば一致した節の節id へ直接届き、' +
+    'memory_outline は side=tail で末尾も見られるほか、q=<文字列> で見出しを絞り込めば一致した節の節id へ直接届き、' +
       'offset=<N> で先頭から窓をずらして読むこともできる——後者は窓の大きさぶんずつ進めれば、' +
       'この文書がどれだけ大きくても全節の節id に有限回で届く（中央の節も含めて）。これらで残りを確かめてから、' +
       'memory_section_move で付録の文書へ割ること。**移すのは済んだ経緯・' +

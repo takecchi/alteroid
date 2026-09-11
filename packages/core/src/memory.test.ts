@@ -2606,9 +2606,7 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
       );
 
       it('q のメタ文字が見出しに literal に含まれていれば、その並びとして一致する', () => {
-        const sections = scanMemorySections(
-          '# a.b special\n本文\n\n# axb other\n本文\n',
-        ).sections;
+        const sections = scanMemorySections('# a.b special\n本文\n\n# axb other\n本文\n').sections;
 
         // 正規表現なら `.` は任意の1文字に一致して両方拾ってしまうが、
         // literal な部分一致なら "a.b" は最初の見出しにしか一致しない。
@@ -2727,7 +2725,8 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
       it('q と offset は併用でき、offset は絞り込んだ結果に対して窓を開く', () => {
         const many = Array.from(
           { length: 20 },
-          (_, index) => `## マッチ対象-${index}\n${'あ'.repeat(10)}${index}\n\n## 無関係-${index}\n本文\n`,
+          (_, index) =>
+            `## マッチ対象-${index}\n${'あ'.repeat(10)}${index}\n\n## 無関係-${index}\n本文\n`,
         ).join('\n');
         const sections = scanMemorySections(many).sections;
         const matched = sections.filter((section) => section.heading.includes('マッチ対象'));
@@ -4162,10 +4161,7 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
         slug: 'doc',
         // 節Aの本文を変え（＝旧い行を消す）、かつ同じ見出しをもう1つ足す
         // ——いまの文書に「重複見出し」が2つ在る状態を作る。
-        content: manySections(
-          60,
-          '\n\n## 重複見出し\n本文A書き換え\n\n## 重複見出し\n本文C\n',
-        ),
+        content: manySections(60, '\n\n## 重複見出し\n本文A書き換え\n\n## 重複見出し\n本文C\n'),
       };
 
       const currentHeadingCount = scanMemorySections(after.content).sections.filter(
