@@ -259,6 +259,24 @@ export const envProfile = pgTable('env_profile', {
 });
 
 /**
+ * マネージャーへ降ろす環境変数の正本（名前→値）。**1名前1行。**
+ *
+ * `env_profile` が高々1行なのに対してこちらが行を持つのは、**名前ごとに配る
+ * 必要があるから**である（器の側も名前ごとのファイルで、走行中の道具はその
+ * ファイルを読み直す）。「どの行がどの層に効くか」の対応表にはならない——
+ * 行は名前で、層による効かせ分けは持たない（AGENTS.md 地雷3 に触れない）。
+ *
+ * **値は平文で持つ**（`agent_tokens.value` と同じ扱い）。外へ出るのは指紋だけ
+ * である（`GET /credentials`）。
+ */
+export const managerCredentials = pgTable('manager_credentials', {
+  /** 環境変数の名前そのもの（`CREDENTIAL_NAME` の形）。 */
+  name: text('name').primaryKey(),
+  value: text('value').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+});
+
+/**
  * SDK の SessionStore が預ける生ログ1行。
  *
  * `uuid` を持つ行は冪等キーとして扱う（SDK が再送・再取り込みしうる）。

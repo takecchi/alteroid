@@ -6,6 +6,7 @@ import type { Stores } from '@alteroid/core';
 import { FsTranscriptArchive } from './archive.js';
 import { FsAuthStore } from './auth.js';
 import { FsCommitmentStore } from './commitments.js';
+import { FsCredentialVaultStore } from './credentials.js';
 import { FsInboxStore } from './inbox.js';
 import { FsJobStore } from './jobs.js';
 import { FsJournalStore } from './journal.js';
@@ -20,6 +21,7 @@ import { FsUsageStore } from './usage.js';
 export { FsTranscriptArchive } from './archive.js';
 export { FsAuthStore } from './auth.js';
 export { CLOSED_HISTORY_LIMIT, FsCommitmentStore } from './commitments.js';
+export { FsCredentialVaultStore } from './credentials.js';
 export { FsInboxStore } from './inbox.js';
 export { FsJobStore } from './jobs.js';
 export { FsJournalStore } from './journal.js';
@@ -49,6 +51,7 @@ export function createFsStores(root?: string): Stores & { paths: AlteroidPaths }
     sessions: new FsSessionRegistry(paths.state),
     auth: new FsAuthStore(paths.auth),
     profile: new FsProfileStore(paths.profile),
+    credentials: new FsCredentialVaultStore(paths.credentials),
     tokens: new FsTokenPoolStore(paths.tokens),
     usage: new FsUsageStore(paths.usage),
   };
@@ -116,6 +119,7 @@ alteroid のクローンの人格データ。**すべて人間が直接読んで
 | \`profile.sh\` | 実行環境プロファイル（\`.zprofile\` 相当）。ここに \`export\` を書けば、クローンにもマネージャーにも作業者にも届く。器を作り直す必要は無い |
 | \`usage/\` | 利用状況の台帳（alteroid 自身が使った Claude のトークン・費用の推定）。**手で編集しない**（差分の基準がずれる） |
 | \`tokens.json\` | 認証トークンのプール（枠に当たったときに回す候補）。**手で編集しない**（\`alteroid token\` / \`PUT /tokens\` を経由する） |
+| \`credentials.json\` | マネージャーへ降ろす環境変数の正本（名前→値）。器を作り直しても \`hello\` のときに降り直す。**手で編集しない**（\`alteroid credential\` / \`PUT /credentials\` を経由する） |
 
 書き換えるのは \`memory/\` だけでよい。日誌を読んで「それは違う」と伝えれば、
 その否定が次の記憶になる。

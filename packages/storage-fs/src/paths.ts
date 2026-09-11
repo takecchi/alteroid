@@ -50,6 +50,14 @@ export interface AlteroidPaths {
    * /tokens` を経由する）。
    */
   tokens: string;
+  /**
+   * マネージャーへ降ろす環境変数の正本: JSON（0600）。
+   *
+   * `tokens` と同じ理由で `memory/` には置かない——値（鍵そのもの）を持つ場所で
+   * あって、人間が手で書き換える前提の場所ではない（`alteroid credential` /
+   * `PUT /credentials` を経由する）。
+   */
+  credentials: string;
 }
 
 export const ALTEROID_HOME_ENV = 'ALTEROID_HOME';
@@ -72,5 +80,6 @@ export function resolvePaths(root: string = defaultRoot()): AlteroidPaths {
     profile: join(root, 'profile.sh'),
     usage: join(root, 'usage'),
     tokens: join(root, 'tokens.json'),
+    credentials: join(root, 'credentials.json'),
   };
 }

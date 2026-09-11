@@ -1,6 +1,7 @@
 import type { SessionStore } from '@anthropic-ai/claude-agent-sdk';
 
 import type { AuthStore } from './auth.js';
+import type { CredentialEntry } from './credentials.js';
 import type { ActiveAgentToken, AgentToken, TokenRotationSettings } from './token-pool.js';
 import type {
   Commitment,
@@ -838,6 +839,57 @@ export interface ProfileStore {
 }
 
 /**
+ * マネージャーへ降ろす環境変数の正本1行（名前と値）。
+ *
+ * **鍵に限らない。** `GH_TOKEN` のような秘密も `GIT_AUTHOR_NAME` のような身元も
+ * 同じ形で持つ——器（`credentials.ts` の `CredentialStore`）は中身の意味を知らず、
+ * 名前と値の対として置くだけである。**だから用途が増えても実装を直さない**
+ * （`compose.yaml` へ環境変数を足していく形＝器を焼き直す形にしないため。
+ * AGENTS.md 地雷表「用途が増えるたびに `compose.yaml` へ環境変数を足す」）。
+ *
+ * **実行環境プロファイル（`EnvProfile`）との違いは、読む側の性質である。**
+ * あちらはシェルスクリプト1本で、届くのは SDK 子プロセスの起動時（＝走行中の
+ * 仕事には届かない）。こちらは名前ごとにファイルへ落ちるので、`gh` シムのように
+ * **呼ばれるたびに読み直す道具には走行中でも届く**（`credentials.ts` のモジュール
+ * doc）。そして `GET /profile` が本文ごと返すのに対し、こちらは指紋しか返さない。
+ * **秘密の正本はこちら側に置く。**
+ */
+export interface StoredCredential {
+  /** 環境変数の名前そのもの（`CREDENTIAL_NAME` の形）。 */
+  name: string;
+  /** 値。**平文で持つ**（`agent_tokens.value` と同じ扱い。器の外へは指紋しか出ない）。 */
+  value: string;
+  updatedAt: string;
+}
+
+/**
+ * マネージャーへ降ろす環境変数の正本（名前→値）。
+ *
+ * **持つのはデーモンだけである。** runner は自分で読みに行かず、降ってきたものを
+ * 器に置くだけにしてある（読みに行けるということは runner に記憶ストアの鍵がある
+ * ということで、それは M4 受け入れ基準3 が無いと言っているものである）。
+ *
+ * **`env_profile` と同じ形**（正本はデーモンが持ち、器違い（fs / pg）は挙動を
+ * 変えない）。`Stores` の一員として持つのは、器を作り直しても残るという性質が
+ * 同じだからである——**それが無いと、器を作り直した runner は鍵を失ったまま
+ * 上がってくる**（Railway には volume が無いので、runner 側の器は器と一緒に消える）。
+ */
+export interface CredentialVaultStore {
+  /** 置いてある全行（**値を含む**。正本を返す口はここだけである）。`name` 昇順。 */
+  list(): Promise<StoredCredential[]>;
+  /**
+   * 名前ごとに置き換える。**入力に無い名前は触らない**（全文置換ではない）。
+   *
+   * 空文字は「その名前を外す」。`CredentialStore#set` と同じ約束にしてある——
+   * 器と正本で「外す」の表し方が違うと、片方だけ残る。
+   *
+   * 返すのは**置き換えた後の全行**。呼ぶ側（`CredentialService`）はそれをそのまま
+   * 配るので、部分更新のつもりが一部しか降りない、という形を作らない。
+   */
+  put(entries: readonly CredentialEntry[]): Promise<StoredCredential[]>;
+}
+
+/**
  * 認証トークンのプール（Issue #393「プールの器」）。**回さない。** 検知も切替も
  * ここには無い——ここが持つのは置き場と、置いたものを読み書きする口だけである。
  *
@@ -1135,6 +1187,14 @@ export interface Stores {
    * あり、用途が増えるたびに実装を直さずに済ませるためにここに置く。
    */
   profile: ProfileStore;
+  /**
+   * マネージャーへ降ろす環境変数の正本（名前→値）。
+   *
+   * **省略可能にしないこと**（`schedules` / `inbox` と同じ理由）。ここを任意にすると、
+   * 片方の器でだけ「器を作り直しても鍵が戻る」という能力差が生まれる
+   * （north_star 禁止1）。
+   */
+  credentials: CredentialVaultStore;
   /**
    * 認証トークンのプール（Issue #393）。
    *

@@ -524,6 +524,7 @@ export {
   DEFAULT_CREDENTIAL_DIR,
   credentialNamesShadowedByProfile,
   ROTATABLE_CREDENTIAL_KEYS,
+  POOL_OWNED_CREDENTIAL_NAMES,
   isWithheldCredentialName,
   createCredentialStore,
   fingerprintOf,
@@ -532,6 +533,16 @@ export {
   type CredentialStore,
   type CredentialStoreOptions,
 } from './credentials.js';
+
+/**
+ * 置いて配るまでの1本道（`credential-service.ts`）。**正本はデーモンが持つ。**
+ */
+export {
+  createCredentialService,
+  type ApplyCredentialsResult,
+  type CredentialService,
+  type CredentialServiceOptions,
+} from './credential-service.js';
 /**
  * 実行環境プロファイル（`.zprofile` 相当）。**環境変数を器に増やす代わりの口**で、
  * 用途が増えるたびに実装を直さずに済ませるためにある（`profile.ts`）。
