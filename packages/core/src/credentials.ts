@@ -263,10 +263,27 @@ class Store implements CredentialStore {
    * 扱う鍵ぜんぶに `ALTEROID_<NAME>_FILE` を出す。GH_TOKEN だけを特別扱いすると、
    * 「回せる」と言いながら回らない鍵ができる（実際に `GITHUB_TOKEN` がそうなっていた
    * — 器には置かれるのに、走行中のマネージャーへ届く経路がどこにも無かった）。
+   *
+   * **「扱う鍵」は `#names`（起動時に env から拾う表）だけではない。** `set()` は
+   * 表を見ずに任意の名前を受け付ける（検査は名前の形と伏せる鍵の拒否だけ）ので、
+   * デーモンが降ろしてきた名前は表に無い。表だけを見ていると、**配ったのに所在を
+   * 知らせない鍵**ができる — それは `GITHUB_TOKEN` で既に踏んだのと同じ形
+   * （器には在るのに、読み直す道具へ所在が届かない）である。だから和を出す。
+   *
+   * **順序は表が先、降りてきた鍵が後。** どちらも同じ値（`join(dir, name)`）に
+   * なるので勝ち負けは無いが、読む人にとって「既定の表 → 後から足された分」の
+   * 並びのほうが素直である。
+   *
+   * **外したときの振る舞いは、表の分と降りてきた分で違う。** 表の名前は種が無くても
+   * 所在を知らせ続けるが（`names` は「この器が扱うと宣言した集合」である）、降りて
+   * きた名前は外すと所在も消える（あちらは「いま在る鍵」でしかない）。どちらも
+   * 指す先のファイルは無いので、読む道具から見た結果は同じ（ENOENT）である。
    */
   env(): Record<string, string> {
     const out: Record<string, string> = { ALTEROID_CREDENTIAL_DIR: this.#dir };
-    for (const name of this.#names) out[`ALTEROID_${name}_FILE`] = join(this.#dir, name);
+    for (const name of new Set([...this.#names, ...this.#held.keys()])) {
+      out[`ALTEROID_${name}_FILE`] = join(this.#dir, name);
+    }
     return out;
   }
 
