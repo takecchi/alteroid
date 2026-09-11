@@ -17,6 +17,7 @@ import type {
 } from './manager.js';
 import { commitmentFor } from './clone.js';
 import { runnerLivenessSchema } from './runner-protocol.js';
+import { CLONE_ACTOR_ID } from './usage.js';
 import { measureMemoryFloor, renderMemoryDocuments, scanMemorySections } from './memory.js';
 import { createProfileService } from './profile-service.js';
 import {
@@ -9198,6 +9199,125 @@ describe('journalEntrySchema の subagent_stall（Issue #357）', () => {
  * （上のテスト群）、読み出す面がそれを出していなかった。ここで測るのは
  * 読み出し側——`renderJournalEntry` の `memory_update` 分岐——である。
  */
+/**
+ * `journal_read` が `turn_usage` の**文脈の内訳**を出すか（#804）。
+ *
+ * ## なぜ歯が要るのか —— この整形には既存の歯が1本も無かった
+ *
+ * `turn_usage` の `contextUsage` を `journal_read` が出す配線は、この PR の前は
+ * **どのテストも触っていなかった**（実測 2026-09-11: `grep -rn "文脈: " --include='*.test.ts'`
+ * が 0 件）。⟹ 合計の行も内訳の行も、消しても誰も落ちない状態だった。
+ *
+ * この欄が在る理由そのものが「**取れているのに読めない、は『取れていない』と
+ * 同じである**」なので（`tools.ts` の既存コメント）、読める側に歯を置く。
+ *
+ * ## ⚠️ この歯が測っていないこと
+ *
+ * **SDK が返す数の正しさは測っていない。** 日誌へ直接書いた値を、整形が
+ * そのまま出すかだけを見る。値の出所（`#observeContextUsage` の写し方）は
+ * `clone.test.ts` の側が持つ。
+ */
+describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
+  /** 内訳を持つ `turn_usage` の1行を日誌へ直接積む。 */
+  const appendTurnUsage = async (
+    h: ReturnType<typeof harness>,
+    contextUsage: Record<string, unknown>,
+  ) =>
+    h.stores.journal.append({
+      type: 'turn_usage',
+      layer: 'clone',
+      site: 'session',
+      managerId: CLONE_ACTOR_ID,
+      models: [],
+      summary: 'ターンの消費',
+      contextUsage,
+    } as never);
+
+  it('⭐⭐⭐ 内訳（システムプロンプト / MCP の道具 / CLAUDE.md 系）とカテゴリ別を出す', async () => {
+    const h = harness();
+    const entry = await appendTurnUsage(h, {
+      durationMs: 12,
+      totalTokens: 12_000,
+      rawMaxTokens: 200_000,
+      percentage: 6,
+      systemPromptTokens: 8_000,
+      systemPromptSectionCount: 2,
+      mcpToolTokens: 1_000,
+      mcpToolCount: 37,
+      memoryFileTokens: 700,
+      memoryFileCount: 1,
+      categories: [
+        { name: 'System prompt', tokens: 8_000 },
+        { name: 'MCP tools', tokens: 1_000 },
+      ],
+    });
+
+    const reply = await h.call('journal_read', { id: entry.id });
+
+    // 合計（既存の行）は残っている。
+    expect(reply).toContain('文脈: 12,000 トークン / 200,000（6%）');
+    // 内訳が出る。
+    expect(reply).toContain('システムプロンプト 8,000 トークン');
+    expect(reply).toContain('MCP の道具の説明文 1,000 トークン（37 本）');
+    // **記憶の焼き込みがどちらに入るかを名指しする**（取り違えを塞ぐ）。
+    expect(reply).toContain('**記憶の焼き込みはここに入る**');
+    expect(reply).toContain('**alteroid の記憶ではない**');
+    // カテゴリ別と、名前が SDK 由来であるという断り。
+    expect(reply).toContain('System prompt 8,000');
+    expect(reply).toContain('名前は SDK の版で変わりうる');
+  });
+
+  it('⭐⭐⭐ 内訳を持たない行では、内訳の節を1文字も出さない（0 として出さない）', async () => {
+    const h = harness();
+    const entry = await appendTurnUsage(h, {
+      durationMs: 12,
+      totalTokens: 12_000,
+      rawMaxTokens: 200_000,
+      percentage: 6,
+    });
+
+    const reply = await h.call('journal_read', { id: entry.id });
+
+    expect(reply).toContain('文脈: 12,000 トークン');
+    // 内訳の見出しも、0 の行も出ない。
+    expect(reply).not.toContain('内訳:');
+    expect(reply).not.toContain('システムプロンプト');
+    expect(reply).not.toContain('MCP の道具の説明文');
+    expect(reply).not.toContain('カテゴリ別');
+  });
+
+  it('⭐⭐ 一部の軸だけ在る行では、在る軸だけを出す', async () => {
+    const h = harness();
+    const entry = await appendTurnUsage(h, {
+      durationMs: 12,
+      totalTokens: 12_000,
+      mcpToolTokens: 1_000,
+      mcpToolCount: 37,
+    });
+
+    const reply = await h.call('journal_read', { id: entry.id });
+
+    expect(reply).toContain('MCP の道具の説明文 1,000 トークン（37 本）');
+    // 渡していない軸は出ない。
+    expect(reply).not.toContain('システムプロンプト');
+    expect(reply).not.toContain('CLAUDE.md 系');
+  });
+
+  it('⭐⭐ カテゴリを切った行では、省いた軸数を名乗る', async () => {
+    const h = harness();
+    const entry = await appendTurnUsage(h, {
+      durationMs: 12,
+      totalTokens: 12_000,
+      categories: [{ name: '軸0', tokens: 1 }],
+      categoriesOmitted: 76,
+    });
+
+    const reply = await h.call('journal_read', { id: entry.id });
+
+    expect(reply).toContain('…ほか 76 軸は省略');
+  });
+});
+
 describe('journal_read — memory_update の action / バイト数（#339）', () => {
   it('action と前後バイト数を出す（新形式のエントリ）', async () => {
     const h = harness();

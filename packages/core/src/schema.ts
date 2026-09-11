@@ -1117,6 +1117,82 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
         percentage: z.number().nonnegative().optional(),
         autoCompactThreshold: z.number().nonnegative().optional(),
         isAutoCompactEnabled: z.boolean().optional(),
+        /**
+         * **カテゴリ別の実トークン数**（SDK が `categories` で返すものの写し）。
+         *
+         * ## なぜ取れるのに捨てていたのか、そして取るのに追加費用が無い理由
+         *
+         * `#observeContextUsage` は `getContextUsage()` を**引数なし**で呼んでいる。
+         * SDK の doc は逐語でこう言う（同梱の `sdk.d.ts`。**この doc は3行に折り返されて
+         * いるので、印を2つに分けて1行ずつ当てている** —— `scripts/check-sdk-quotes-core.mjs`
+         * が言う「引用は1行に収めること」）:
+         *
+         * > [sdk-verbatim Query.getContextUsage]
+         * > `detail: 'full'` counts each category with the token-count API;
+         *
+         * > [sdk-verbatim SDKControlGetContextUsageResponse.categories]
+         * > without the per-category token-count calls. Defaults to `'full'`.
+         *
+         * ⟹ **既定が `'full'` なので、alteroid は毎ターン token-count API の費用を
+         * 既に払っている。** 払った内訳を捨てていただけである。⟹ **ここへ写すのに
+         * 追加の呼び出しも費用も要らない**（#804 は「費用を測ってから決めること」と
+         * 保留していたが、その前提は既定が `'summary'` だという想定に依っていた）。
+         *
+         * ## ⚠️ 名前は SDK が決めた文字列であって、alteroid の語彙ではない
+         *
+         * `name` は SDK 側の表示名（`System prompt` / `Tools` / `Messages` 等）で、
+         * **版が上がれば変わりうるし、変わっても赤くならない。** ⟹ この欄を
+         * 「alteroid が定義した軸」として読まないこと。軸で集計したいなら、名前で
+         * 引く前にその名前が現物に在るかを確かめる。
+         *
+         * ## 件数の蓋
+         *
+         * `categories` は SDK 側で軸の数だけなので小さい（実装が返すのは
+         * システムプロンプト・道具・メッセージ・MCP 道具・記憶ファイル等）。**それでも
+         * 上限を持つ**——版が上がって軸が増えたときに、日誌の1行が黙って伸びる形を
+         * 作らないため（`MEMORY_TOC_ENTRY_LIMIT` と同じ考え方）。切ったら
+         * `categoriesOmitted` が件数を名乗る。
+         */
+        categories: z
+          .array(z.object({ name: z.string(), tokens: z.number().int().nonnegative() }))
+          .optional(),
+        /** `categories` を件数の上限で切ったときに、省いた件数。切っていなければ欄そのものが無い。 */
+        categoriesOmitted: z.number().int().positive().optional(),
+        /**
+         * **MCP の道具の説明文が占めるトークン数の合計**と、その本数。
+         *
+         * ⚠️ **`self_status` の「総文字数」はこれを1文字も数えていない**（#804）。
+         * 道具は37本あり、説明文の合計は実測で 13,000 文字を超える——**毎ターン
+         * 払っているのに、どの計器にも出ていなかった分である。**
+         *
+         * **1本ずつではなく合計で持つ。** SDK は道具ごとの配列を返すが、道具の数だけ
+         * 行が伸びる形を日誌へ入れない（`turn-input.ts` の「再構成できるものを二重に
+         * 持たない」——道具ごとの内訳が要るなら、そのときに `getContextUsage` を
+         * 直接引けばよい）。
+         */
+        mcpToolTokens: z.number().int().nonnegative().optional(),
+        mcpToolCount: z.number().int().nonnegative().optional(),
+        /**
+         * **記憶ファイル（CLAUDE.md / nested memory）が占めるトークン数の合計**と件数。
+         *
+         * ⚠️ **これはクローンの「記憶」（`memory_*` の文書）ではない。** SDK が
+         * `memoryFiles` と呼ぶのはハーネスが読み込む `CLAUDE.md` 系であって、
+         * alteroid の記憶はシステムプロンプトの本文として焼かれる（⟹ そちらは
+         * `systemPromptTokens` の側に入る）。**取り違えると、記憶の焼き込みが 0
+         * トークンだという読み方が出る。**
+         */
+        memoryFileTokens: z.number().int().nonnegative().optional(),
+        memoryFileCount: z.number().int().nonnegative().optional(),
+        /**
+         * **システムプロンプトの節が占めるトークン数の合計**と節数。
+         *
+         * **alteroid の記憶の焼き込みはここに入る**（`buildCloneSystemPrompt` の
+         * 出力はシステムプロンプトとして渡るため）。⟹ **「記憶が毎ターン何トークンか」
+         * にいちばん近い値はこれである**——ただし固定の指示文も同じ節に混ざるので、
+         * **記憶だけの数ではない。**
+         */
+        systemPromptTokens: z.number().int().nonnegative().optional(),
+        systemPromptSectionCount: z.number().int().nonnegative().optional(),
         /** 試して失敗した理由（秘密は伏せてある）。無ければ成功。 */
         error: z.string().optional(),
       })

@@ -668,6 +668,26 @@ interface Turn {
  */
 type TurnUsageEntry = Extract<JournalEntry, { type: 'turn_usage' }>;
 type ContextUsageObservation = NonNullable<TurnUsageEntry['contextUsage']>;
+/**
+ * `contextUsage.categories` に写す軸の件数の上限。
+ *
+ * **SDK が返す軸は実装が持つ数だけで、いまは1桁である**（システムプロンプト・
+ * 道具・メッセージ・MCP 道具・記憶ファイル等）。⟹ **この上限はいま噛まない。**
+ * 塞いでいるのは「版が上がって軸が増えたときに、日誌の1行が黙って伸びること」
+ * である（`MEMORY_TOC_ENTRY_LIMIT` と同じ考え方——件数で何が壊れるかを運任せに
+ * しない）。
+ *
+ * **切ったら黙らない。** 省いた件数は `contextUsage.categoriesOmitted` に出る。
+ *
+ * ⚠️ **文字数の予算ではなく件数の上限である。** 1軸は「名前＋整数」なので
+ * 1件の長さがほぼ固定で、`renderListing` が扱う可変長の行とは性質が違う
+ * （`.claude/skills/listing-and-detail/SKILL.md`「予算は件数ではなく文字数で
+ * 持つ」が名指ししているのは可変長の行のほうである）。**名前は SDK が決めた
+ * 文字列なので長さの保証は無い**——ただしこれは日誌の1行であって MCP の応答では
+ * ないので、溢れて丸ごと届かなくなる経路は無い。
+ */
+const CONTEXT_USAGE_CATEGORY_LIMIT = 24;
+
 type CompactionObservation = NonNullable<TurnUsageEntry['compactions']>[number];
 
 /**
@@ -5515,6 +5535,23 @@ class Clone implements CloneHost {
     const startedAt = Date.now();
     try {
       const usage = await q.getContextUsage();
+      // **内訳は既に払ってあるものを写すだけである。** `getContextUsage()` を
+      // 引数なしで呼ぶと SDK の既定は `detail: 'full'`（＝カテゴリごとに
+      // token-count API を呼ぶ）なので、**内訳を取り出さなくても費用は同じ**
+      // （`schema.ts` の `contextUsage.categories` の doc に逐語）。
+      const categories = (usage.categories ?? []).map((category) => ({
+        name: category.name,
+        tokens: category.tokens,
+      }));
+      const shownCategories = categories.slice(0, CONTEXT_USAGE_CATEGORY_LIMIT);
+      const omittedCategories = categories.length - shownCategories.length;
+      // **配列は合計へ畳む。** 道具は37本あるので、1本ずつ写すと日誌の1行が
+      // 道具の数だけ伸びる（`turn-input.ts` の「再構成できるものを二重に持たない」）。
+      const sumTokens = (items: readonly { tokens: number }[]): number =>
+        items.reduce((total, item) => total + item.tokens, 0);
+      const mcpTools = usage.mcpTools ?? [];
+      const memoryFiles = usage.memoryFiles ?? [];
+      const systemPromptSections = usage.systemPromptSections ?? [];
       return {
         durationMs: Date.now() - startedAt,
         totalTokens: usage.totalTokens,
@@ -5524,6 +5561,24 @@ class Clone implements CloneHost {
           ? {}
           : { autoCompactThreshold: usage.autoCompactThreshold }),
         isAutoCompactEnabled: usage.isAutoCompactEnabled,
+        // **空の配列のときは欄そのものを作らない。** 0 を置くと「測ったが 0
+        // だった」と読めるが、実際には「SDK がその欄を返さなかった」ことが
+        // ありうる（`systemPromptSections` などは optional である）——
+        // AGENTS.md の地雷「取れない軸に 0 の行を作る」と同じ形。
+        ...(shownCategories.length === 0 ? {} : { categories: shownCategories }),
+        ...(omittedCategories > 0 ? { categoriesOmitted: omittedCategories } : {}),
+        ...(mcpTools.length === 0
+          ? {}
+          : { mcpToolTokens: sumTokens(mcpTools), mcpToolCount: mcpTools.length }),
+        ...(memoryFiles.length === 0
+          ? {}
+          : { memoryFileTokens: sumTokens(memoryFiles), memoryFileCount: memoryFiles.length }),
+        ...(systemPromptSections.length === 0
+          ? {}
+          : {
+              systemPromptTokens: sumTokens(systemPromptSections),
+              systemPromptSectionCount: systemPromptSections.length,
+            }),
       };
     } catch (error) {
       return {
