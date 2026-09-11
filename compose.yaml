@@ -18,8 +18,8 @@
 #   docker compose exec app alteroid credential set GIT_AUTHOR_NAME -f - <<< '...'
 #
 # こちらは記憶ストアが正本で、器を作り直しても runner が名乗り直したときに降り直す。
-# 下の `.env` へ置く形も引き続き効く（正本が空のときの土台。詳細は x-shared-env の
-# GH_TOKEN の節）:
+# 下の `.env` へ置く形も引き続き効く（app の環境変数が最後の土台になる。詳細は
+# x-shared-env の GH_TOKEN の節）:
 #
 #   GH_TOKEN=github_pat_...      # fine-grained PAT: Contents RW / Pull requests RW
 #   GIT_AUTHOR_NAME=...
@@ -206,10 +206,12 @@ x-shared-env: &shared-env
   #   printf %s 'github_pat_xxx' > /tmp/pat && \
   #     docker compose exec -T app alteroid credential set GH_TOKEN -f - < /tmp/pat
   #
-  # **この5行を残してあるのは、正本が空のときの土台だからである。** 正本が空なら
-  # デーモンは1文字も配らない（配ると器の環境変数から拾った鍵を消して回ることに
-  # なる）。⟹ **正本へ移し、指紋が揃うのを見てから、この行を消す**（空文字で残す
-  # のは未設定より悪い）。順序を逆にすると commit が `empty ident name` で落ちる。
+  # **⚠️ ここは app（クローン）にだけ在れば足りる。runner には要らない。**
+  # runner は自分の環境変数から鍵を1文字も拾わない（`apps/runner/src/index.ts` の
+  # `seed: {}`）ので、置いてもマネージャーには渡らない。配るのは常にクローンで、
+  # 出所は「正本（`alteroid credential`）→ 無ければ app の環境変数」である。
+  # ⟹ **この5行は app 側の土台として効く。** runner 側からは消してよい
+  # （空文字で残すのは未設定より悪いので、行ごと消すこと）。
   GH_TOKEN:
   GIT_AUTHOR_NAME:
   GIT_AUTHOR_EMAIL:

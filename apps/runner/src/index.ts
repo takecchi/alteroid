@@ -269,21 +269,51 @@ export async function main(): Promise<void> {
    * 器を作り直すまで届かず、**「鍵を直す」と「走行中の仕事を失う」が同じ操作**に
    * なる（`credentials.ts` に経緯）。読む主体は SDK 子プロセスなので、降ろす UID で
    * 読めるようにしておく。
+   *
+   * ## ⭐ 種は空である（`seed: {}`）。**runner は自分の env から1文字も拾わない**
+   *
+   * **runner は単体では動かない器である。** 鍵はクローンからもらって初めて持つ
+   * （人間の決定 2026-09-11）。既定（`seed` 省略 ＝ `process.env`）にしていた
+   * あいだ、ここは**器の環境変数にあった鍵を自分で器へ書いていた**。
+   *
+   * **実害が出ていた。** 本番の実測（2026-09-11T10:51Z、`railway logs --service runner`）:
+   *
+   *     alteroid-runner: 鍵 1 件を器へ置きました CLAUDE_CODE_OAUTH_TOKEN=cf634320ac9e
+   *
+   * この `cf634320ac9e` は**週次上限で5日後まで冷却中のトークン**で、プールの現役
+   * （`9faab468c414`）とは別物だった。デーモンが `hello` で現役を上書きするので
+   * 結果としては動くが、**上書きされるまでの窓では死んだ鍵が器に載っている。**
+   * そして上書きが失敗した回は、**古い鍵で走り続けたことが誰にも見えない**
+   * （`#pushAgentToken` の doc が言う「食い違いはマネージャーの側からは見えない」）。
+   *
+   * ⟹ **拾わない。** 鍵が器に在るのは、デーモンが降ろしたときだけである。
    */
   const credentials = createCredentialStore({
     ...(envValue(process.env, 'ALTEROID_CREDENTIAL_DIR') === undefined
       ? {}
       : { dir: process.env.ALTEROID_CREDENTIAL_DIR as string }),
     ...(childUser === undefined ? {} : { reader: { uid: childUser.uid, gid: childUser.gid } }),
+    // **自分の env を種にしない**（上の doc）。空を渡すのは「省略」と意味が違う。
+    seed: {},
     // 伏せる鍵は鍵として配れない。**伏せる仕組みと配る仕組みを結び付けておく** —
     // 別々のままだと、後から足した配る側が前からある守りを黙って越える。
     withheldEnvKeys: WITHHELD_ENV_KEYS,
   });
-  const seeded = await credentials.flush();
+  /**
+   * **器を空の状態から始める。** 種が空なので書くものは無いが、`flush()` は
+   * 「置き場が使えるか」を確かめる唯一の入口でもある（失敗は `lastWriteError`
+   * に残る）。**前の器の置き土産を消す意味もある** — 置き場が volume の構成では
+   * ファイルが残り、残ったものはデーモンが降ろす前の一瞬だけ効く
+   * （プロファイル側の `rmSync` と同じ理由）。
+   */
+  await credentials.flush();
+  const stale = await credentials.purge();
   process.stdout.write(
-    `alteroid-runner: 鍵 ${seeded.length} 件を器へ置きました${seeded
-      .map((entry) => ` ${entry.name}=${entry.sha256}`)
-      .join('')}\n`,
+    `alteroid-runner: 鍵は自分の env から拾いません（クローンが降ろすまで0件）${
+      stale.length === 0
+        ? ''
+        : `。前の器の置き土産 ${stale.length} 件を消しました: ${stale.join(', ')}`
+    }\n`,
   );
 
   /**

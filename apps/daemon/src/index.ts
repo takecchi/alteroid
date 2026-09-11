@@ -1108,6 +1108,18 @@ export async function main(): Promise<void> {
       // ——その場合は影を検出できないが、「影が無い」とは主張しない
       // （`createTokenSpread` の doc）。
       profileEnvNames: () => Promise.resolve(Object.keys(profile.env())),
+      /**
+       * **器の環境変数の行を撒くときの値**（`TokenSpreadOptions.agentTokenFromEnv`
+       * の doc）。**上の `probe` が同じ行を評価するときに読むのと同じ場所である** ——
+       * 片方だけ `process.env` を見る形だと、「試したのは自分の env の値」なのに
+       * 「撒いたのは空文字（runner の env を使え）」という非対称が残る。
+       */
+      agentTokenFromEnv: () => {
+        // **空文字は「無い」と同じに扱う**（空を撒くと器が鍵を消すだけで、
+        // 「空の鍵が置かれた」という状態を作らない。`credentials.ts` と同じ約束）。
+        const value = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+        return value === undefined || value.length === 0 ? undefined : value;
+      },
       onShadowed: (names) => {
         process.stderr.write(
           `alteroidd: 実行環境プロファイルが認証の鍵と同じ名前を宣言しています。` +

@@ -97,6 +97,73 @@ describe('runner が配る鍵', () => {
     expect(readFileSync(file as string, 'utf8')).toBe('ghp_new');
   });
 
+  it('器の env に在るだけの鍵は、子へ1文字も渡らない（出所はクローンが降ろしたものだけ）', async () => {
+    /**
+     * **runner は単体では動かない器である**（人間の決定 2026-09-11）。
+     *
+     * ここが無かったあいだ、runner は自分の環境変数に在る鍵でマネージャーを走らせて
+     * いた。本番実測（2026-09-11）では、その値は**週次上限で冷却中のトークン**で、
+     * プールの現役とは別物だった ⟹ デーモンが降ろすまでの窓（と、降ろしに失敗した
+     * 回）はそれが効き、しかも**食い違いはマネージャーの側からは見えない。**
+     *
+     * ⟹ 鍵の名前は `#childEnv()` が**重ねる前に**落とす。器（＝クローンが降ろした
+     * もの）だけが出所になる。
+     */
+    const fake = fakeSdk();
+    // **器は空**（クローンはまだ何も降ろしていない）。
+    const credentials = createCredentialStore({ dir: join(dir, 'creds'), seed: {} });
+
+    host = createRunnerHost({
+      runnerId: 'runner-primary',
+      workspacePath: dir,
+      emit: () => undefined,
+      queryFn: fake.fn,
+      // **器の環境変数には鍵が在る**（人間が消し忘れた / 前の構成の置き土産）。
+      env: {
+        PATH: process.env.PATH ?? '',
+        GH_TOKEN: 'ghp_from_the_runner_env',
+        GITHUB_TOKEN: 'ghp_from_the_runner_env',
+        CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-from-the-runner-env',
+        SOME_OTHER_VALUE: '鍵ではないものは落とさない',
+      },
+      credentials,
+    });
+
+    await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const env = fake.started[0]?.options.env ?? {};
+
+    // **1つも渡っていない。**
+    expect(env.GH_TOKEN).toBeUndefined();
+    expect(env.GITHUB_TOKEN).toBeUndefined();
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    // **鍵でないものは落とさない**（環境を痩せさせるのが目的ではない）。
+    expect(env.SOME_OTHER_VALUE).toBe('鍵ではないものは落とさない');
+  });
+
+  it('クローンが降ろせば、同じ名前が子へ渡る（能力は落ちていない）', async () => {
+    // 直上のテストと対にしてある。**落としているのは出所であって能力ではない** ——
+    // これが無いと、上のテストは「鍵が渡らなくなった」だけを固定してしまう。
+    const fake = fakeSdk();
+    const credentials = createCredentialStore({ dir: join(dir, 'creds'), seed: {} });
+
+    host = createRunnerHost({
+      runnerId: 'runner-primary',
+      workspacePath: dir,
+      emit: () => undefined,
+      queryFn: fake.fn,
+      env: { PATH: process.env.PATH ?? '', GH_TOKEN: 'ghp_from_the_runner_env' },
+      credentials,
+    });
+
+    // クローンが降ろす（制御面の `POST /credentials`）。
+    await host.setCredentials([{ name: 'GH_TOKEN', value: 'ghp_from_the_clone' }]);
+
+    await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+
+    // **器の env の値ではなく、降ろされた値である。**
+    expect(fake.started[0]?.options.env?.GH_TOKEN).toBe('ghp_from_the_clone');
+  });
+
   it('記憶へ到達する鍵は伏せたまま（配るのは下向きの鍵だけ）', async () => {
     const fake = fakeSdk();
     const credentials = createCredentialStore({
