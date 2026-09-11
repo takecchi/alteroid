@@ -8337,7 +8337,10 @@ describe('一覧の文言は、観測した分しか言わない', () => {
     // 面をまたいで読む人間がそこで詰まる（`describeDenials` の doc）。
     const list = await h.call('manager_list', {});
     const line = (text: string) =>
-      text.split('\n').find((row) => row.includes('止められた道具'))?.trim();
+      text
+        .split('\n')
+        .find((row) => row.includes('止められた道具'))
+        ?.trim();
     expect(line(reply)).toBe(line(list));
   });
 

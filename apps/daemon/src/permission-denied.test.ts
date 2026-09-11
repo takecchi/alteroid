@@ -225,7 +225,21 @@ describe('確認へ上がらずに止められた実行（HTTP 境界）', () =>
       uuid: 'uuid-result-1',
     } as unknown as SDKMessage);
 
-    // 3件で受信箱が鳴る（同じ道具が繰り返し止められている形）
+    // **期待値の反転（Issue #830）。**
+    //
+    // 変更した事実: ここは元々「3件そろって初めて受信箱が鳴る」（通数 1・
+    // `3 件目`）を固定していた。いまは**走行中の合図の1件目で既に1通鳴って
+    // いる**ので、境界越しに届く通数は2（`1 件目` と `3 件目`）になる。
+    //
+    // なぜ必要になったか: `DENIED_ESCALATE_AT` を 3 から 1 へ下げたため
+    // （`manager.ts` の doc）。3 から数え始める規則は「繰り返されるものが重要だ」
+    // という前提に立つが、**一度きりで取り返しのつかない行為ほど繰り返されない**
+    // ので、「重要な拒否ほど黙る」向きに倒れていた。
+    //
+    // なぜ保証が弱くなっていないか: このテストが見ているのは**境界（HTTP）を
+    // 越えて受信箱まで届くか**であって、段の値ではない。段が `1, 3` の2つに
+    // 増えたぶん、**境界を越える経路を2回通ることになり、むしろ強くなっている。**
+    // 「二度上げない」（`toolu_1` の重複排除）も下の日誌3件でそのまま見ている。
     await expect
       .poll(
         () =>
@@ -234,13 +248,17 @@ describe('確認へ上がらずに止められた実行（HTTP 境界）', () =>
           ).length,
         { timeout: 2000 },
       )
-      .toBe(1);
-    const alert = r.inbox.find(
+      .toBe(2);
+    const alerts = r.inbox.filter(
       (event): event is Extract<InboxEvent, { type: 'manager_message' }> =>
         event.type === 'manager_message' && event.text.includes('止められた'),
     );
-    expect(alert).toMatchObject({ managerId, kind: 'report' });
-    expect(alert?.text).toContain('3 件目');
+    expect(alerts[0]).toMatchObject({ managerId, kind: 'report' });
+    // 走行中の合図の1件目（#830 で足した段）。
+    expect(alerts[0]?.text).toContain('1 件目');
+    // result で 2, 3 件目が積まれ、3件目でもう一度（刻みは3倍のまま＝#50 の意図）。
+    expect(alerts[1]).toMatchObject({ managerId, kind: 'report' });
+    expect(alerts[1]?.text).toContain('3 件目');
 
     // 日誌には3件（重複した toolu_1 は1件のまま）
     expect(await deniedLines(r.stores)).toHaveLength(3);
