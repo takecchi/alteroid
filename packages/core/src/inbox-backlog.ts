@@ -119,6 +119,21 @@ function inboxBacklogSourceFor(event: InboxEvent): string | undefined {
 }
 
 /**
+ * {@link inboxBacklogDedupeKey} がフィールドを繋ぐ区切り。**NUL（`'\u0000'`）
+ * である。**
+ *
+ * 半角スペースから替えた理由は「衝突しないから」ではない（下の限界のとおり、
+ * NUL も本文に混ざりうる）。**衝突が倒れる向きが片側だからである** ——
+ * 区切りが本文に現れて境界がずれると、別の本文が同じ鍵へ潰れ、`distinct` が
+ * 実際より**小さく**出る。⟹ この計器は「畳めば大きく減る」と言う側へ系統的に
+ * 偏って嘘をつく。**半角スペースはほぼ全ての本文に含まれるが、NUL は通常の
+ * 経路では1つも入らない**（pg は書き込み時に `stripNulls` で落とす。逐語は
+ * `grep -Fn -- 'const value = stripNulls(inboxEventSchema.parse(event));' packages/storage-pg/src/inbox.ts`）
+ * ので、同じ向きの偏りを桁で小さくできる。
+ */
+const DEDUPE_SEPARATOR = '\u0000';
+
+/**
  * 「同じ本文か」を畳むための鍵。**このリポジトリで、この判定をするのはここ
  * 1箇所だけである。SQL 側に同じ判定を書かないこと。**
  *
@@ -135,34 +150,30 @@ function inboxBacklogSourceFor(event: InboxEvent): string | undefined {
  * ## 鍵の作り方
  *
  * `id` と `at`（1回の発行ごとに必ず変わる2つ）を除いた中身から作る。区切りは
- * 半角スペース1文字。**`switch (event.type)` で書き、網羅性を型で強制する**
- * ——新しい合図の型が足されたら、この関数を含むファイルの `typecheck` が
- * 落ちる（`AGENTS.md`「テストを弱めずに直す」の #285 と同じ作法。実行時の
- * 倒れ先は default 節で throw する——この repo の同じ union に対する既存の
- * 倒れ先（`clone.ts` の `#dispatch` の `default`）と同じ形である）。
+ * {@link DEDUPE_SEPARATOR}（NUL）。**`switch (event.type)` で書き、網羅性を
+ * 型で強制する** ——新しい合図の型が足されたら、この関数を含むファイルの
+ * `typecheck` が落ちる（`AGENTS.md`「テストを弱めずに直す」の #285 と同じ
+ * 作法。実行時の倒れ先は default 節で throw する——この repo の同じ union に
+ * 対する既存の倒れ先（`clone.ts` の `#dispatch` の `default`）と同じ形である）。
  *
  * ## 2つの限界
  *
- * - **区切りは半角スペース1文字**（`' '`）。フィールドの境界がずれて衝突し
- *   うる（例: `a` と `' b'` の2フィールドと、`'a '` と `b` の2フィールドは
- *   同じ文字列になる）。**それでも「絶対に衝突しない」区切りは無い** ——
- *   NUL は本文（人間の発言・webhook 由来）に混ざりうる
+ * - **区切りは NUL 1文字**（{@link DEDUPE_SEPARATOR}）。フィールドの境界が
+ *   ずれて衝突しうる（例: `a` と `'\u0000b'` の2フィールドと、`'a\u0000'` と
+ *   `b` の2フィールドは同じ文字列になる）。**それでも「絶対に衝突しない」
+ *   区切りは無い** ——NUL も本文（人間の発言・webhook 由来）に混ざりうる
  *   （`packages/storage-pg/src/inbox.ts` の `stripNulls` の存在がその証拠。
- *   `AGENTS.md`「静かに失敗する道具」にも NUL 混入の実例が在る）ので、区切りを
- *   NUL のような「まず現れない」文字に変えても、同じ形で崩れうる余地は残る。
- *   **それでも半角スペースを選ぶ** ——本文にほぼ必ず現れる文字（衝突しやすい）
- *   と、通常の経路では1つも現れない文字（NUL。しかも pg 側は書き込み時に
- *   `stripNulls` で落としており、本番の主ストアでは混ざった NUL が鍵に届く
- *   前に消えている）とでは、**衝突の起きやすさが桁で違う。** 「どちらも
- *   完全ではない」は「どちらも同じ」を意味しない
+ *   `AGENTS.md`「静かに失敗する道具」にも NUL 混入の実例が在る）ので、
+ *   「絶対に衝突しない」わけではない
  * - **⚠️ この限界が効くのは、誤差が両側へ散るときだけではない。** 衝突すると
  *   *別の本文が同じ鍵に潰れる*方向にしか働かない——`distinct`（畳んだ後の
  *   件数）は**実際より小さくしか出ない**。⟹ 「畳めば大幅に減る」と読める
  *   側へ**系統的に**偏る。`distinct` / `total` の比は「本文ベースの畳み込み
  *   が効くか」を判断する材料になりうるので、**この計器は『対策を打てば効く』
  *   という、いちばん確かめずに信じたい向きへ嘘をつきやすい形をしている**
- *   ——半角スペースを選んでもこの向きの偏り自体は消えない（頻度が下がる
- *   だけである）ことを、読む側は割り引くこと
+ *   ——区切りを NUL にしてもこの向きの偏り自体は消えない（頻度が桁で下がる
+ *   だけである）ことを、読む側は割り引くこと（{@link DEDUPE_SEPARATOR} の
+ *   doc）
  * - **`external.payload` は `JSON.stringify` で鍵に含めるが、オブジェクトの
  *   キー順に依存する。** 同じコード経路（同じ webhook ハンドラなど）が作った
  *   同形のオブジェクトなら安定するが、一般には保証されない——キー順が違う
@@ -171,19 +182,23 @@ function inboxBacklogSourceFor(event: InboxEvent): string | undefined {
 export function inboxBacklogDedupeKey(event: InboxEvent): string {
   switch (event.type) {
     case 'human_message':
-      return [event.type, event.conversationId, event.text].join(' ');
+      return [event.type, event.conversationId, event.text].join(DEDUPE_SEPARATOR);
     case 'human_answer':
-      return [event.type, event.approvalId, event.answer].join(' ');
+      return [event.type, event.approvalId, event.answer].join(DEDUPE_SEPARATOR);
     case 'manager_message':
-      return [event.type, event.managerId, event.kind, event.text].join(' ');
+      return [event.type, event.managerId, event.kind, event.text].join(DEDUPE_SEPARATOR);
     case 'external':
-      return [event.type, event.source, JSON.stringify(event.payload ?? null)].join(' ');
+      return [event.type, event.source, JSON.stringify(event.payload ?? null)].join(
+        DEDUPE_SEPARATOR,
+      );
     case 'timer':
-      return [event.type, event.kind, event.target ?? '', event.cause ?? 'schedule'].join(' ');
+      return [event.type, event.kind, event.target ?? '', event.cause ?? 'schedule'].join(
+        DEDUPE_SEPARATOR,
+      );
     case 'self_initiative':
-      return [event.type, event.reason, event.cause ?? 'schedule'].join(' ');
+      return [event.type, event.reason, event.cause ?? 'schedule'].join(DEDUPE_SEPARATOR);
     case 'distill':
-      return [event.type, event.reason].join(' ');
+      return [event.type, event.reason].join(DEDUPE_SEPARATOR);
     default: {
       const exhaustive: never = event;
       throw new Error(`未知の受信箱イベント種別（dedupeKey）: ${JSON.stringify(exhaustive)}`);

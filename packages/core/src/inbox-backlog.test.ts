@@ -226,6 +226,42 @@ describe('inboxBacklogDedupeKey', () => {
     const unknown = { type: 'not_a_real_type', id: 'x', at: '2026-09-11T00:00:00.000Z' };
     expect(() => inboxBacklogDedupeKey(unknown as unknown as InboxEvent)).toThrow();
   });
+
+  /**
+   * ⭐ 区切りが NUL であることが実際に効いていることを測る歯（レビューで
+   * 半角スペースから NUL へ変えた変更そのものの裏取り）。
+   *
+   * `conversationId` と `text` の境界に半角スペースが挟まると、**区切りが
+   * 半角スペースのままなら2つの別のフィールド分けが同じ文字列に潰れる**
+   * ——`conversationId='conv'` / `text='1 x'` と
+   * `conversationId='conv 1'` / `text='x'` は、どちらも
+   * `'human_message' + SEP + conversationId + SEP + text` を素直に
+   * 半角スペースで結ぶと同じ `'human_message conv 1 x'` になる。
+   *
+   * **区切りが NUL なら、本文に半角スペースが含まれても境界がずれない**
+   * ——NUL は本文中の半角スペースとは別の文字なので、2つは別の鍵になる。
+   * ⚠️ この歯は、区切りを半角スペースへ戻すと落ちる形になっている
+   * （`DEDUPE_SEPARATOR` を `' '` に戻して自分で確かめた。報告に生出力を
+   * 添える）。
+   */
+  it('⭐ 本文に半角スペースを含む2件は、境界がずれても別の鍵になる（NUL区切りの裏取り）', () => {
+    const a: InboxEvent = {
+      type: 'human_message',
+      id: 'id-a',
+      at: '2026-09-11T00:00:00.000Z',
+      conversationId: 'conv',
+      text: '1 x',
+    };
+    const b: InboxEvent = {
+      type: 'human_message',
+      id: 'id-b',
+      at: '2026-09-11T00:00:00.000Z',
+      conversationId: 'conv 1',
+      text: 'x',
+    };
+
+    expect(inboxBacklogDedupeKey(a)).not.toBe(inboxBacklogDedupeKey(b));
+  });
 });
 
 describe('summarizeInboxBacklog', () => {
