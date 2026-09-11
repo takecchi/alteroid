@@ -4918,6 +4918,151 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * **`lastSystemError`（`schema.ts` の `jobSchema`。#713 段3）を `manager_list` /
+   * `manager_report` が読む。**
+   *
+   * `lastFailure`（すぐ上の #714 の歯）とは軸が違う——あちらは「直近の1ターンが
+   * 報告ではなく失敗で終わった」（セッションは生きている）。こちらは「セッション
+   * そのものが `failed` として畳まれた」、その落ち方の OS 由来の事実。
+   *
+   * **成功基準は「出力が増えた」ではない。** 区別させたいのは B（器の資源で
+   * 落ちた。`lastSystemError` 在り）・D（この軸では判定できなかった。無し）・
+   * A（枠 429 で落ちた。`systemError` は付かないので D と同じ「無し」だが、
+   * D の文言自身が A を対象外だと名乗ることで飲み込みを避ける）の3つ。
+   *
+   * 測るのは4つ:
+   * 1. B と D で出る文言が違う（`code=` の有無で入れ替えたら赤くなる）
+   * 2. D は `manager.status !== 'failed'`（健全なマネージャー）では1文字も
+   *    足さない（`lastFailure` 側の歯と同じ形——予算を食わない）
+   * 3. D の行が、同じ出力に在る他の事実（`lastFailure`）を消さない
+   * 4. `systemError` が無い回に `code=` 形の既定値が出ない
+   */
+  describe('lastSystemError（#713 段3）', () => {
+    const B_SYSTEM_ERROR = {
+      code: 'EAGAIN',
+      errno: -11,
+      syscall: 'spawn /app/node_modules/.bin/claude',
+      at: '2026-09-10T03:00:00.000Z',
+    };
+
+    it('manager_list: B（systemError 在り）と D（無し）で出る文言が違う（入れ替えで赤くなる）', async () => {
+      const h = harness();
+
+      await h.call('manager_start', { request: 'B' });
+      const b = h.running[0];
+      if (!b) throw new Error('準備に失敗');
+      b.status = 'failed';
+      b.lastSystemError = B_SYSTEM_ERROR;
+
+      await h.call('manager_start', { request: 'D' });
+      const d = h.running[1];
+      if (!d) throw new Error('準備に失敗');
+      d.status = 'failed';
+      // lastSystemError はセットしない（D）。
+
+      const reply = await h.call('manager_list', {});
+
+      // B: SDK が出した値がそのまま読める。
+      expect(reply).toContain('code=EAGAIN');
+      expect(reply).toContain('errno=-11');
+      expect(reply).toContain('syscall=spawn /app/node_modules/.bin/claude');
+      expect(reply).toContain('2026-09-10T03:00:00.000Z');
+      // D: 「取れなかった」の行が出て、B の事実の語を1つも持たない。
+      expect(reply).toContain('器の資源による落ち方かどうかは、この欄では判定できなかった');
+      // 4. 既定値を作らない——`code=` の形は B の1件ぶんしか出ない。
+      expect(reply.match(/code=/g)).toHaveLength(1);
+    });
+
+    it('manager_list: 健全なマネージャー（status !== failed）は1文字も足さない', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'ok' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.status = 'done';
+      target.lastReport = '終わった';
+      // lastSystemError は元から無い。
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).not.toContain('器の資源');
+      expect(reply).not.toContain('セッションは失敗で畳まれた');
+      expect(reply).not.toContain('code=');
+    });
+
+    it('manager_list: D の行は、同じ出力に在る lastFailure（別の軸）の事実を消さない', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      // **直近のターンは billing_error（枠）で失敗し、その後セッション自体も
+      // （別の理由・systemError 無しで）落ちた、という composite な状態。**
+      // `lastFailure` は `case 'closed'` では消えないので、この組み合わせは
+      // 実在する（`tools.ts` の `describeManagerSystemError` の doc）。
+      target.lastReport = '（このターンは応答を返さずに終わった: billing_error / assistant_error）';
+      target.lastFailure = {
+        code: 'billing_error',
+        via: 'assistant_error',
+        at: '2026-09-10T02:00:00.000Z',
+      };
+      target.status = 'failed';
+      // lastSystemError はセットしない（D）。
+
+      const reply = await h.call('manager_list', {});
+
+      // D の行は出るが、
+      expect(reply).toContain('器の資源による落ち方かどうかは、この欄では判定できなかった');
+      // すぐ上の lastFailure の事実（枠の軸）は1文字も消えていない。
+      expect(reply).toContain('billing_error');
+      expect(reply).toContain('assistant_error');
+      expect(reply).toContain('2026-09-10T02:00:00.000Z');
+      // D の文言自身が「見よ」と名乗っている対象を含む。
+      expect(reply).toContain('lastFailure');
+    });
+
+    it('manager_report: B と D で出る文言が違い、報告がまだ無い回にも D/B が乗る', async () => {
+      const h = harness();
+
+      // **報告が一度も届いていない**（`lastReport` 無し）のに、セッションは
+      // `failed` として畳まれている——`describeMissingReport` の早期 return に
+      // 埋もれさせない、という歯。
+      await h.call('manager_start', { request: 'B-no-report' });
+      const b = h.running[0];
+      if (!b) throw new Error('準備に失敗');
+      b.status = 'failed';
+      b.lastSystemError = B_SYSTEM_ERROR;
+
+      const replyB = await h.call('manager_report', { managerId: b.managerId });
+      expect(replyB).toContain('報告はまだ無い');
+      expect(replyB).toContain('code=EAGAIN');
+
+      await h.call('manager_start', { request: 'D-no-report' });
+      const d = h.running[1];
+      if (!d) throw new Error('準備に失敗');
+      d.status = 'failed';
+
+      const replyD = await h.call('manager_report', { managerId: d.managerId });
+      expect(replyD).toContain('報告はまだ無い');
+      expect(replyD).toContain('器の資源による落ち方かどうかは、この欄では判定できなかった');
+      expect(replyD).not.toContain('code=');
+    });
+
+    it('manager_report: 健全なマネージャーは1文字も足さない', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'ok' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.status = 'done';
+      target.lastReport = '終わった';
+
+      const reply = await h.call('manager_report', { managerId: target.managerId });
+
+      expect(reply).not.toContain('器の資源');
+      expect(reply).not.toContain('セッションは失敗で畳まれた');
+      expect(reply).not.toContain('code=');
+    });
+  });
+
+  /**
    * **顔⑥（Issue #393 段2）: `describeManagerFailure` の ⚠ 行に回復の見込みを
    * 添える。** 段1で確定した事実（`lastFailure` 自体は `{ code, via, at }` しか
    * 持たないが、同じ `ManagerSummary.lastReport` に `failedReportText()` が

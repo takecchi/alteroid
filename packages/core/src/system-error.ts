@@ -118,15 +118,33 @@ export function withSystemErrorNote(
   systemError: SystemErrorFacts | undefined,
 ): string {
   if (systemError === undefined) {
-    return (
-      `${base}\n` +
-      '（分類: 器の資源による落ち方かどうかは、この欄では判定できなかった。' +
-      '枠に当たった場合・セッションが切れた場合もこの欄には出ない —— ' +
-      '本文と lastFailure を見ること）'
-    );
+    return `${base}\n（分類: ${SYSTEM_ERROR_UNKNOWN_NOTE}）`;
   }
+  return `${base}\n（分類: 器の資源で落ちた可能性 —— ${formatSystemErrorFacts(systemError)}）`;
+}
+
+/**
+ * D（この軸では判定できなかった）の核となる一文。
+ *
+ * **1箇所にまとめる。** `withSystemErrorNote`（受信箱の本文）と `tools.ts` の
+ * `manager_list` / `manager_report`（クローンの一覧・詳細）の3箇所が同じ
+ * D の事実を書く——文言が割れると、受信箱で読んだ説明と一覧で読んだ説明が
+ * 違う言葉になり、同じ観測結果だと読み手が気づけなくなる（A を D が飲み込ま
+ * ないための注意書きも含めて、ここ1本を参照する）。
+ */
+export const SYSTEM_ERROR_UNKNOWN_NOTE =
+  '器の資源による落ち方かどうかは、この欄では判定できなかった。' +
+  '枠に当たった場合・セッションが切れた場合もこの欄には出ない —— ' +
+  '本文と lastFailure を見ること';
+
+/**
+ * `code=... errno=... syscall=...` の形に整形する。B（器の資源で落ちた）の
+ * 事実を出す全箇所（`withSystemErrorNote` と `tools.ts` の `manager_list` /
+ * `manager_report`）で共有し、値の言い換えが起きないようにする。
+ */
+export function formatSystemErrorFacts(systemError: SystemErrorFacts): string {
   const facts = [`code=${systemError.code}`];
   if (systemError.errno !== undefined) facts.push(`errno=${systemError.errno}`);
   if (systemError.syscall !== undefined) facts.push(`syscall=${systemError.syscall}`);
-  return `${base}\n（分類: 器の資源で落ちた可能性 —— ${facts.join(' ')}）`;
+  return facts.join(' ');
 }

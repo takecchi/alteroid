@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { CRON_EXPRESSION_MAX, isCronExpression } from './cron.js';
+import { systemErrorFactsSchema } from './system-error.js';
 // `usage.ts` はこちら（`schema.js`）を import していない（確認済み。下記
 // `turn_usage` の doc）ので循環しない。日誌の `turn_usage.layer` / `.site` /
 // `.models` は台帳（`UsageStore`）の同名の列と**同じ値**であるべきなので、
@@ -2137,6 +2138,29 @@ export const jobSchema = z.object({
       at: isoDateTime,
     })
     .optional(),
+  /**
+   * セッションが `failed` として畳まれたときの、器の資源による落ち方の分類
+   * （`system-error.ts` の `SystemErrorFacts`。#713 段3）。
+   *
+   * **軸が `lastFailure` と違う。** `lastFailure` は「直近の**1ターン**が報告
+   * ではなく失敗で終わった」で、セッション自体は生きている（`status` は
+   * `done` のまま、`manager_send` で続けられる）。こちらは「**セッションその
+   * ものが `closed`（`status: 'failed'`）として畳まれた**、その落ち方の OS
+   * 由来の事実」——セッションはもう走っていない。**同じ欄に混ぜない**（軸が
+   * 違うものを1つの欄に載せると、どちらの質問にも正しく答えられなくなる）。
+   *
+   * `manager.ts` の `#onEvent` の `case 'closed'`（`event.status === 'failed'`）
+   * が、`event.systemError` が在るときだけ立てる。**`code` を持たない例外
+   * （枠 429 で落ちた／signal で畳まれた）では立たない**——`systemErrorFactsOf`
+   * の doc が言う「取れなかった」を、この欄でも値で埋めない
+   * （`AGENTS.md`「取れない軸に 0 の行を作る」）。
+   *
+   * **古びさせる。** 新しいターンの出力（`case 'report'`）が届いた回には
+   * 下ろす——下ろさないと、起こし直されて普通に報告しているマネージャーに、
+   * 過去の落ち方が貼り付いたままになる（`lastFailure` が「応答として終わった
+   * 回では消える」のと同じ理由。下ろす条件は `case 'report'` 側の doc）。
+   */
+  lastSystemError: systemErrorFactsSchema.extend({ at: isoDateTime }).optional(),
 });
 
 export type Job = z.infer<typeof jobSchema>;
