@@ -71,6 +71,7 @@ import type {
 } from './manager.js';
 import {
   applyMemoryFrontmatterPatch,
+  assertNeverMemoryDocKind,
   assertNeverMemoryProtectionStatus,
   containsMemoryFrontmatterLineBreak,
   cutMemorySections,
@@ -120,6 +121,7 @@ import type {
   JobStatus,
   JournalEntry,
   JournalEntryInput,
+  MemoryDocKind,
   MemoryDocumentMeta,
   MemoryProtectionStatus,
   PendingApproval,
@@ -2213,11 +2215,12 @@ export function createCloneTools(context: ToolContext) {
       'memory_list',
       [
         '記憶の文書一覧を返す。中身は返さない。',
-        '各行は `[premise|fact] slug: title (作成: createdAt / 更新: updatedAt) — 要旨` の形。',
+        '各行は `[premise|fact|indexed] slug: title (作成: createdAt / 更新: updatedAt) — 要旨` の形。',
         '作成は書き込まれた瞬間にその場で分かる。「不明」と出るのは、この配線より前に作られ、',
         '日誌にも根拠（最初の書き込み）が無い古い記憶だけである（ファイルの mtime は使わない）。',
         'premise はプロンプトへ要旨と節の目次（節id・見出し・文字数）だけが焼かれ、本文は載らない',
-        '（節id を memory_section_read に渡せば開ける）。fact は目次の1行だけがプロンプトに載るので、',
+        '（節id を memory_section_read に渡せば開ける）。indexed は要旨だけが焼かれ、節の目次は焼かれない',
+        '（節id を確かめるにはまず memory_outline を呼ぶこと）。fact は目次の1行だけがプロンプトに載るので、',
         '中身が要るなら memory_read で開くこと。要旨の前に付く印（⚠古い要旨 / ？鮮度不明）は',
         'description が最後の本文変更より前に書かれた可能性があることを示す（本文と合っている保証ではない）。',
         '階層は frontmatter の parent から組み立てた木で、インデントで表す。',
@@ -2271,8 +2274,10 @@ export function createCloneTools(context: ToolContext) {
         '人間が手で書いた記述を、整形の都合で消さないこと。',
         '先頭に frontmatter を置ける（無くてもよい。無ければ premise として扱う——安全側の既定）。',
         '形は `---` で始まり `---` で閉じ、各行は `key: value`。使えるキーは description（要旨。目次の1行に載る）・',
-        'type（premise または fact。premise は「要旨＋節の目次」が焼かれ、fact は目次の1行だけになる。' +
-          'どちらも本文は焼かれない——premise の節の本文は memory_section_read で開く。判断の前提なら premise、',
+        'type（premise・indexed・fact のいずれか。premise は「要旨＋節の目次」が焼かれ、' +
+          'indexed は要旨だけが焼かれて節の目次は焼かれない（特定の作業でしか使わない記憶向け。' +
+          '節を確かめるにはまず memory_outline を呼ぶこと）、fact は目次の1行だけになる。',
+        'どれも本文は焼かれない——premise / indexed の節の本文は memory_section_read で開く。判断の前提なら premise、',
         '事実の蓄積で毎回全文を読む必要が無いものなら fact）・parent（親文書の slug。階層を作る）の3つだけ。',
         'ネスト・複数行・引用符の解釈は無い（値は文字列としてそのまま読む）。狭い形から外れると malformed として',
         '扱われ、文書は消えずに premise のまま残る（本文はプロンプトには載らず、memory_section_read で開く）。',
@@ -2511,8 +2516,8 @@ export function createCloneTools(context: ToolContext) {
         'frontmatter が壊れている（malformed）文書には断る（機械が推測して組み直すと本文を食う経路ができるため）。',
         'memory_write で全文を書き直すか、人間に確認を通すこと。',
         'description・type・parent のうち少なくとも1つを渡すこと（1つも渡さない呼びは断る。何も変わらない）。',
-        'type に渡せるのは premise か fact のどちらかだけ（それ以外の値は断る。綴りを間違えたまま黙って書かない）。',
-        'premise は「要旨＋節の目次」がプロンプトへ焼かれ、fact は目次の1行だけになる（どちらも本文は焼かれない）。区分が変わったときは、その変化が応答に出る。',
+        'type に渡せるのは premise・indexed・fact のいずれかだけ（それ以外の値は断る。綴りを間違えたまま黙って書かない）。',
+        'premise は「要旨＋節の目次」がプロンプトへ焼かれ、indexed は要旨だけが焼かれて節の目次は焼かれない（節を確かめるにはまず memory_outline を呼ぶこと）、fact は目次の1行だけになる（どれも本文は焼かれない）。区分が変わったときは、その変化が応答に出る。',
         '**統合の走行（distill）からは、人間が一度でも書いた文書・履歴の無い文書には使えない**',
         '（断られる。ask_human で人間に確認を通せば次のターンで実行できる）。会話の中の書き込みは通る。',
       ].join(' '),
@@ -2526,7 +2531,7 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe(
-            'premise か fact のどちらかのみ（それ以外は断る）。渡さなければ既存の値のまま（既定は premise）',
+            'premise・indexed・fact のいずれかのみ（それ以外は断る）。渡さなければ既存の値のまま（既定は premise）',
           ),
         parent: z.string().optional().describe('親文書の slug（階層）。渡さなければ既存の値のまま'),
         summary: z.string().describe('何を直したかの一行要約（日誌に残る）'),
@@ -2576,7 +2581,7 @@ export function createCloneTools(context: ToolContext) {
         // 引き続きあるため）。
         if (type !== undefined && !isKnownMemoryDocKind(type)) {
           return text(
-            `記憶 ${slug} の frontmatter を更新できない——type に渡せるのは premise か fact のどちらかだけである` +
+            `記憶 ${slug} の frontmatter を更新できない——type に渡せるのは premise か fact か indexed のいずれかだけである` +
               `（渡された値: ${JSON.stringify(type)}）。何も変わっていない。`,
           );
         }
@@ -2629,15 +2634,38 @@ export function createCloneTools(context: ToolContext) {
         );
 
         const diff = describeMemoryWriteDiff(existing.content, written.content);
-        const kindLabel = (kind: 'premise' | 'fact'): string =>
-          kind === 'premise' ? 'premise（要旨＋節の目次が載る）' : 'fact（目次の1行だけ載る）';
+        const kindLabel = (kind: MemoryDocKind): string => {
+          switch (kind) {
+            case 'premise':
+              return 'premise（要旨＋節の目次が載る）';
+            case 'indexed':
+              return 'indexed（要旨だけが載る。節の目次は載らない）';
+            case 'fact':
+              return 'fact（目次の1行だけ載る）';
+            default:
+              return assertNeverMemoryDocKind(kind);
+          }
+        };
+        const describeNextKindLoad = (kind: MemoryDocKind): string => {
+          switch (kind) {
+            case 'fact':
+              return '次のターンから、この文書は目次の1行だけになる（節の目次も載らなくなる）。';
+            case 'indexed':
+              return (
+                '次のターンから、この文書は要旨だけがプロンプトへ載る（節の目次は載らない。' +
+                '節を確かめるには memory_outline を呼び、memory_section_read で開くこと）。'
+              );
+            case 'premise':
+              return '次のターンから、この文書は要旨と節の目次がプロンプトへ載る（本文は載らない。memory_section_read で開く）。';
+            default:
+              return assertNeverMemoryDocKind(kind);
+          }
+        };
         const kindChangeNote =
           priorKind === nextKind
             ? ''
             : `\n\n区分が変わった: ${kindLabel(priorKind)} → ${kindLabel(nextKind)}。` +
-              (nextKind === 'fact'
-                ? '次のターンから、この文書は目次の1行だけになる（節の目次も載らなくなる）。'
-                : '次のターンから、この文書は要旨と節の目次がプロンプトへ載る（本文は載らない。memory_section_read で開く）。');
+              describeNextKindLoad(nextKind);
         // `memory_frontmatter_set` は既存文書にしか使えない（上の `existing === null`
         // の断り）ので `created` は常に false。
         const floor = memoryFloorNote(memoryBefore, memoryAfter, slug, written.content, false);
@@ -7703,6 +7731,10 @@ function renderMemorySize(
         '落ちた文書の名前と直し方は焼き込みの断り書きに在り、節は memory_outline で開ける）';
   lines.push(
     `- premise 合計: ${floor.premiseChars.toLocaleString('en-US')} 文字（${floor.premiseDocs} 文書。毎ターン「要旨＋節の目次」が焼かれる${demotedSuffix}）`,
+    // `indexed` は2026-09-11 に足した3つ目の区分。**既存2行（premise 合計 /
+    // fact 目次合計）の文言・並びは1文字も変えていない**（歯で固定。
+    // 不変条件3）——この行は末尾に足すだけである。
+    `- indexed 合計: ${floor.indexedChars.toLocaleString('en-US')} 文字（${floor.indexedDocs} 文書。毎ターン要旨だけが焼かれる。節の目次は焼かれない）`,
     `- fact 目次合計: ${floor.tocChars.toLocaleString('en-US')} 文字（${floor.factDocs} 文書。目次の1行だけが焼かれる）`,
   );
   return lines.join('\n');

@@ -8,6 +8,7 @@ import {
   MEMORY_PREMISE_RANKING_BUDGET,
   MEMORY_PREMISE_CARD_BUDGET,
   MEMORY_PROMPT_DESCRIPTION_BUDGET,
+  MEMORY_PROMPT_INDEXED_DESCRIPTION_BUDGET,
   MEMORY_TIDY_TARGETS_BUDGET,
   describeMemoryTidyTargets,
   MEMORY_PROMPT_OUTLINE_BUDGET,
@@ -477,9 +478,22 @@ describe('区分の解決（resolveMemoryDocKind）— 既定は premise（4-11 
     expect(resolveMemoryDocKind({ kind: 'parsed', type: 'note' })).toBe('premise');
   });
 
-  it('type: premise は premise、type: fact は fact', () => {
+  it('type: premise は premise、type: fact は fact、type: indexed は indexed', () => {
     expect(resolveMemoryDocKind({ kind: 'parsed', type: 'premise' })).toBe('premise');
     expect(resolveMemoryDocKind({ kind: 'parsed', type: 'fact' })).toBe('fact');
+    expect(resolveMemoryDocKind({ kind: 'parsed', type: 'indexed' })).toBe('indexed');
+  });
+
+  /**
+   * ⚠️ 安全弁の回帰確認（`indexed` を既知にした後でも壊れていないこと）。
+   * `indexed` を足す前は綴り違い・大文字は無条件で premise へ倒れていた——
+   * `indexed` を既知の値へ加えたことで、**未知の値の判定基準そのものが
+   * 変わっていないか**を確かめる。`Indexed`（大文字）は依然として未知の
+   * 値なので premise へ倒れる。
+   */
+  it('⚠️ indexed を追加した後も、綴り違い（大文字）は premise へ倒れる（安全弁は壊れていない）', () => {
+    expect(resolveMemoryDocKind({ kind: 'parsed', type: 'Indexed' })).toBe('premise');
+    expect(resolveMemoryDocKind({ kind: 'parsed', type: 'indexeds' })).toBe('premise');
   });
 });
 
@@ -491,9 +505,10 @@ describe('区分の解決（resolveMemoryDocKind）— 既定は premise（4-11 
  * 一致する）。
  */
 describe('isKnownMemoryDocKind — 書き込み側の入口が使う判定', () => {
-  it('premise と fact は既知', () => {
+  it('premise と fact と indexed は既知', () => {
     expect(isKnownMemoryDocKind('premise')).toBe(true);
     expect(isKnownMemoryDocKind('fact')).toBe(true);
+    expect(isKnownMemoryDocKind('indexed')).toBe(true);
   });
 
   it('綴り違い・大文字・空文字・未知の語は既知ではない', () => {
@@ -502,6 +517,8 @@ describe('isKnownMemoryDocKind — 書き込み側の入口が使う判定', () 
     expect(isKnownMemoryDocKind('premis')).toBe(false);
     expect(isKnownMemoryDocKind('')).toBe(false);
     expect(isKnownMemoryDocKind('note')).toBe(false);
+    expect(isKnownMemoryDocKind('Indexed')).toBe(false);
+    expect(isKnownMemoryDocKind('indexeds')).toBe(false);
   });
 });
 
@@ -1616,6 +1633,52 @@ describe('premise のカードの束ねた蓋（MEMORY_PREMISE_CARD_BUDGET）—
   const DEMOTION_NOTE_HEAD = '<!-- memory: premise（カードを落とした分';
 
   /**
+   * ⭐⭐ **蓋は `indexed` のカードにも掛かる。**
+   *
+   * #810（この蓋）と #805（`indexed`）は独立に書かれ、**合流の時点で衝突した。**
+   * #810 の `selectPremiseCards` は premise のカードだけを集め、大きさを
+   * `renderPremisePart` で直に測っていた ⟹ **そのまま合わせると `indexed` の
+   * カードが蓋の外へ出る。** 上限が「60,000 ＋ indexed の総量」に化け、
+   * **文書数に比例して伸びる穴が `indexed` の側へ開き直る**——この蓋が
+   * まさに塞いだ形である。
+   *
+   * ⟹ 測る式を引数へ外へ出し、`[...premiseParts, ...indexedParts]` を同じ蓋へ
+   * 通すようにした。**この歯はその判断を固定する。**
+   *
+   * ⚠️ **`indexed` を1件も含まない入力では、この変更で出力は1文字も変わらない**
+   * （既定の描き手は `renderPremisePart` のままで、`cardParts === premiseParts`
+   * になる）——不変条件3は別の歯が持つ。
+   */
+  it('⭐⭐ 蓋は indexed のカードにも掛かる（indexed を蓋の外に置かない）', () => {
+    const capIndexed = (index: number): MemoryPart => ({
+      slug: `indexed-${String(index).padStart(3, '0')}`,
+      title: `索引${index}`,
+      content: [
+        '---',
+        'type: indexed',
+        `description: ${'い'.repeat(MEMORY_PROMPT_INDEXED_DESCRIPTION_BUDGET)}`,
+        '---',
+        '',
+        ...Array.from({ length: 200 }, (_, n) => `## 節${n} ${'見出し'.repeat(4)}\n\n本文\n`),
+      ].join('\n'),
+    });
+
+    // **indexed だけで蓋を確実に超える枚数**を、限界費用の実測から出す
+    // （枚数を直書きしない。`measureCardMarginalCost` と同じ作法）。
+    const marginalIndexed =
+      renderMemoryDocuments([capIndexed(0), capIndexed(1)]).length -
+      renderMemoryDocuments([capIndexed(0)]).length;
+    const count = Math.ceil((MEMORY_PREMISE_CARD_BUDGET * 2) / marginalIndexed);
+    const docs = Array.from({ length: count }, (_, index) => capIndexed(index));
+
+    const rendered = renderMemoryDocuments(docs);
+
+    // **蓋が噛んでいる**（噛まなければ、この枚数で予算の2倍へ届いてしまう）。
+    expect(rendered).toContain(DEMOTION_NOTE_HEAD);
+    expect(rendered.length).toBeLessThan(MEMORY_PREMISE_CARD_BUDGET * 2);
+  });
+
+  /**
    * ⭐⭐⭐ 穴の実在。**緩くてよい歯である**——測りたいのは「蓋が無ければ総量が
    * 文書数に比例して伸び、予算を桁で超えていた」という事実だけである。
    *
@@ -1936,6 +1999,193 @@ describe('premise のカードの束ねた蓋（MEMORY_PREMISE_CARD_BUDGET）—
     expect(MEMORY_PROMPT_DESCRIPTION_BUDGET + MEMORY_PROMPT_OUTLINE_BUDGET).toBeLessThan(
       MEMORY_PREMISE_CARD_BUDGET,
     );
+  });
+});
+
+/**
+ * 不変条件2（既定の振る舞いは1文字も変えない）を測る合成コーパス。
+ *
+ * **`indexed` を1件も含まない** —— `type` 無指定（none）・明示的な
+ * premise・fact・malformed・未知の type の5文書。この配列の中身を変えたら、
+ * `INVARIANT2_GOLDEN` も測り直すこと（外部の pre-PR ビルドとの突き合わせは
+ * 報告の測定セクションを見よ）。
+ */
+const INVARIANT2_CORPUS: MemoryPart[] = [
+  { slug: 'no-frontmatter', content: '# no-frontmatter\n本文A\n## 節A1\n中身A1' },
+  {
+    slug: 'explicit-premise',
+    content:
+      '---\ntype: premise\ndescription: 要旨B\n---\n# explicit-premise\n本文B\n## 節B1\n中身B1\n## 節B2\n中身B2',
+  },
+  { slug: 'fact-doc', content: '---\ntype: fact\ndescription: 要旨C\n---\n# fact-doc\n本文C' },
+  { slug: 'broken', content: '---\nno colon here\n---\n# broken\n本文D' },
+  {
+    slug: 'unknown-type',
+    content:
+      '---\ntype: something-else\ndescription: 要旨E\n---\n# unknown-type\n本文E\n## 節E1\n中身E1',
+  },
+];
+
+/**
+ * `INVARIANT2_CORPUS` を `renderMemoryDocuments` に通した golden。
+ *
+ * **採取した実装**: この PR（`indexed` 追加後）の `renderMemoryDocuments`。
+ * **突き合わせ**: 同じ `INVARIANT2_CORPUS`（コピー）を、base
+ * `05c3d31ca07c3de800643cad1e50bfe5ab330d20` で独立にビルドした
+ * `@alteroid/core` の `renderMemoryDocuments` へ通した出力と1文字も違わず
+ * 一致することを、node スクリプトで確認済み（報告に生出力を記載）。
+ */
+const INVARIANT2_GOLDEN =
+  '<!-- memory: no-frontmatter.md（premise・本文は載っていない。全 32 文字 / 2 節） -->\n要旨: （まだ書かれていない。memory_frontmatter_set の description で書くこと——ここが空だと、本文を開くまでこの文書が何なのか分からない）\n節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:\n[5f35fd4b-d02c5e61] # no-frontmatter — 32 文字\n  [a200735a-6700831a] ## 節A1 — 11 文字\n\n<!-- memory: explicit-premise.md（premise・本文は載っていない。全 85 文字 / 3 節） -->\n要旨: 要旨B\n節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:\n[d261b61a-c981527a] # explicit-premise — 46 文字\n  [0ca6eb3f-52241122] ## 節B1 — 12 文字\n  [e2d59aaf-2a39d6bb] ## 節B2 — 11 文字\n\n<!-- memory: frontmatter が壊れている（既知の形にならなかった。premise として扱っている） -->\n<!-- memory: broken.md（premise・本文は載っていない。全 34 文字 / 1 節） -->\n要旨: （まだ書かれていない。memory_frontmatter_set の description で書くこと——ここが空だと、本文を開くまでこの文書が何なのか分からない）\n節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:\n[489e4048-1b0e31ad] # broken — 12 文字\n\n<!-- memory: unknown-type.md（premise・本文は載っていない。全 76 文字 / 2 節） -->\n要旨: 要旨E\n節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:\n[9f0ec3f9-96417823] # unknown-type — 30 文字\n  [d6a625f1-9195a16d] ## 節E1 — 11 文字\n\n<!-- memory: index -->\n## 記憶の目次（fact。本文は memory_read で開く。階層はインデントで表す）\n- fact-doc: fact-doc — ？要旨の鮮度不明: 要旨C';
+
+/**
+ * `indexed` — 第3の区分（2026-09-11 追加）。要旨だけが焼かれ、節の目次は
+ * 焼かれない。**満たすべき不変条件は3つ**（依頼の設計の芯）:
+ *
+ * 1. ⭐⭐ `indexed` の床は、同じ文書を `premise` にしたときの床を絶対に超えない
+ * 2. 既定の振る舞い（`type` 無指定・premise・fact・malformed・未知の値）は
+ *    この PR の前後で1文字も変わらない
+ * 3. `indexed` のカードでも「そこに何が在るか」（節数・全体の文字数）は
+ *    失われない。節を開く手段（`memory_outline` → `memory_section_read`）を
+ *    案内する
+ */
+describe('indexed — 第3の区分（要旨だけ。節の目次は焼かれない）', () => {
+  /**
+   * ⭐⭐ 不変条件1（歯で固定）。**定数どうしを比較する歯** — `indexed` の
+   * 要旨予算と `premise` の要旨＋目次予算のどちらか一方だけが将来動くと、
+   * この歯が赤くなる。
+   */
+  it('⭐⭐ MEMORY_PROMPT_INDEXED_DESCRIPTION_BUDGET は premise の要旨予算＋目次予算より必ず小さい', () => {
+    expect(MEMORY_PROMPT_INDEXED_DESCRIPTION_BUDGET).toBeLessThan(
+      MEMORY_PROMPT_DESCRIPTION_BUDGET + MEMORY_PROMPT_OUTLINE_BUDGET,
+    );
+    // 推奨値（6,000）そのものも固定する——変わったら気づけるように。
+    expect(MEMORY_PROMPT_INDEXED_DESCRIPTION_BUDGET).toBe(6_000);
+  });
+
+  it('indexed のカードには「本文は載っていない」（head）と「目次は載らない」（節の行）、節数・全体の文字数が出る', () => {
+    // 節を複数持たせて、節数を確かめられるようにする。
+    const withSections: MemoryPart = {
+      slug: 'proj-only',
+      content:
+        '---\ndescription: 特定のプロジェクトでしか使わない記憶\ntype: indexed\n---\n' +
+        '## 一\n本文1\n## 二\n本文2\n## 三\n本文3',
+    };
+    const rendered = renderMemoryDocuments([withSections]);
+
+    expect(rendered).toContain('<!-- memory: proj-only.md（indexed・本文は載っていない。');
+    // head は premise と同じ形（不変条件1 — 節0件のとき indexed と premise の
+    // 床が一致してしまうのを避けるため、head に indexed 固有の説明は足さない。
+    // `renderIndexedCard` の doc を見よ）。目次を焼かない旨は節の行に出る。
+    expect(rendered).toContain('目次は載らない');
+    // 「そこに何が在るか」——節数と全体の文字数（不変条件3）。
+    expect(rendered).toContain(`全 ${withSections.content.length} 文字`);
+    expect(rendered).toContain('/ 3 節');
+    expect(rendered).toContain('要旨: 特定のプロジェクトでしか使わない記憶');
+  });
+
+  it('indexed は節の目次（節idの行）を1文字も焼かない（unlike premise）', () => {
+    const content = '---\ntype: indexed\ndescription: 要旨\n---\n## 一\n本文1\n## 二\n本文2';
+    const indexedRendered = renderMemoryDocuments([{ slug: 'doc', content }]);
+    const premiseRendered = renderMemoryDocuments([
+      { slug: 'doc', content: content.replace('type: indexed', 'type: premise') },
+    ]);
+
+    // premise 側には節idの行（`[hexhex-hexhex] 見出し — N 文字`）が出る。
+    const sectionIdLine = /\[[0-9a-f]{8}-[0-9a-f]{8}\]/;
+    expect(premiseRendered).toMatch(sectionIdLine);
+    // indexed 側には出ない——節の目次を丸ごと持たない。
+    expect(indexedRendered).not.toMatch(sectionIdLine);
+    expect(indexedRendered).not.toContain('見出し');
+  });
+
+  it('indexed は節を開く手段（memory_outline → memory_section_read）を案内する。q= / offset= は名指ししない', () => {
+    const content = '---\ntype: indexed\ndescription: 要旨\n---\n## 一\n本文1';
+    const rendered = renderMemoryDocuments([{ slug: 'doc', content }]);
+
+    expect(rendered).toContain('memory_outline');
+    expect(rendered).toContain('memory_section_read');
+    // ⚠️ q= / offset= は memory_outline へ足す別 PR が未マージなので名指ししない
+    // （実行できない助言を書かない）。
+    expect(rendered).not.toContain('q=');
+    expect(rendered).not.toContain('offset=');
+  });
+
+  it('節が1つも無い indexed 文書は、memory_read で開く旨を出す（premise の0節分岐と同じ形）', () => {
+    const rendered = renderMemoryDocuments([
+      { slug: 'doc', content: '---\ntype: indexed\ndescription: 要旨\n---\n前書きだけ' },
+    ]);
+    expect(rendered).toContain('1つも無い');
+    expect(rendered).toContain('memory_read');
+  });
+
+  /**
+   * ⭐⭐ 不変条件1の実地版——測定した床（`measureMemoryFloor`）で、同じ文書を
+   * `indexed` にしたときが `premise` にしたときを必ず下回ることを、複数の
+   * 器（節数・要旨の長さを変えて）で確かめる。
+   */
+  it.each([
+    { sections: 0, descLen: 10 },
+    { sections: 3, descLen: 100 },
+    { sections: 50, descLen: 4_000 },
+    { sections: 300, descLen: 9_000 },
+  ])(
+    '⭐⭐ 同じ文書を premise にしたときより indexed にしたときのほうが床は必ず小さい（節 $sections・要旨 $descLen 文字）',
+    ({ sections, descLen }) => {
+      const body = Array.from({ length: sections }, (_, i) => `## 節${i}\n本文${i}`).join('\n');
+      const description = 'あ'.repeat(descLen);
+      const premiseDoc: MemoryPart = {
+        slug: 'doc',
+        content: `---\ndescription: ${description}\ntype: premise\n---\n${body}`,
+      };
+      const indexedDoc: MemoryPart = {
+        slug: 'doc',
+        content: `---\ndescription: ${description}\ntype: indexed\n---\n${body}`,
+      };
+
+      const premiseFloor = measureMemoryFloor([premiseDoc]);
+      const indexedFloor = measureMemoryFloor([indexedDoc]);
+
+      expect(indexedFloor.totalChars).toBeLessThan(premiseFloor.totalChars);
+    },
+  );
+
+  it('measureMemoryFloor は indexedChars / indexedDocs / largestIndexed を返す（indexed 0件なら 0 / 0 / null）', () => {
+    const onlyPremise = measureMemoryFloor([premise('p', '本文')]);
+    expect(onlyPremise.indexedChars).toBe(0);
+    expect(onlyPremise.indexedDocs).toBe(0);
+    expect(onlyPremise.largestIndexed).toBeNull();
+
+    const withIndexed = measureMemoryFloor([
+      { slug: 'small', content: '---\ntype: indexed\ndescription: 小\n---\n## 一\n本文' },
+      {
+        slug: 'large',
+        content: `---\ntype: indexed\ndescription: 大\n---\n${'## 節\n本文\n'.repeat(20)}`,
+      },
+    ]);
+    expect(withIndexed.indexedDocs).toBe(2);
+    expect(withIndexed.indexedChars).toBeGreaterThan(0);
+    expect(withIndexed.largestIndexed?.slug).toBe('large');
+  });
+
+  /**
+   * ⭐ 不変条件2（既定の振る舞いは1文字も変えない）。
+   *
+   * `indexed` を1件も含まない合成コーパス（`type` 無指定・premise・fact・
+   * malformed・未知の type）を `renderMemoryDocuments` へ通し、出力を
+   * 固定する（golden）。
+   *
+   * **この golden は post-PR の実装から採取したものだが、pre-PR（base
+   * `05c3d31c`）で独立にビルドした `@alteroid/core` の同じ関数へ、
+   * `INVARIANT2_CORPUS` と全く同じコーパスを通した出力と、1文字も違わず
+   * 一致することを別途 node スクリプトで確認済み**（報告の測定セクションに
+   * 実行コマンドと生出力を記載。このリポジトリの外の一時ビルドを使うため、
+   * その突き合わせ自体はここには書けない——ここに書けるのは、その突き合わせ
+   * で確認した値をこの歯で固定することだけである）。
+   */
+  it('⭐ 不変条件2: indexed を含まない合成コーパスの出力は、この PR の前後で1文字も変わらない（golden）', () => {
+    const rendered = renderMemoryDocuments(INVARIANT2_CORPUS);
+    expect(rendered).toBe(INVARIANT2_GOLDEN);
   });
 });
 
@@ -3108,6 +3358,102 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
         // 絞り込み後の母数（20）に対する窓であって、全体（40）に対する窓ではない。
         expect(outline).toMatch(/絞り込み後 20 節のうち \d+ 節を出した。/);
       });
+    });
+  });
+
+  /**
+   * **#805（`indexed`）と #807（`memory_outline` の `q` / `offset`）が噛み合って
+   * いることを測る。⭐⭐ どちらか片方の改修だけでは書けない歯である。**
+   *
+   * `indexed` は節の目次を焼き込みから外す ⟹ **その文書の節id は毎ターンの
+   * カードに1つも出ない。** そこだけを見ると到達性が消えたように見えるが、
+   * 消えていない——`memory_outline` の `offset` が有限回で全節を出すからである。
+   *
+   * **この2つを同じ歯で通さないと、「載っていないのに全部届く」という主張の
+   * 片側しか測れない。** 片方だけでは「載っていない」か「届く」のどちらかしか
+   * 言えず、`indexed` へ移すことが安全だという根拠にならない。
+   */
+  describe('indexed の文書と memory_outline の統合（#805 × #807）', () => {
+    const indexedDoc = (body: string): string =>
+      ['---', 'description: 要旨である。', 'type: indexed', '---', body].join('\n');
+
+    it('⭐⭐ indexed は節の目次を1つも焼かないが、offset を回せば全節id に到達できる（到達漏れ0件）', () => {
+      const content = indexedDoc(flood(2000));
+      const sections = scanMemorySections(content).sections;
+      const allIds = new Set(sections.map((section) => section.id));
+
+      // (1) **焼き込みのカードには節id が1つも出ない**（indexed の効き目そのもの）。
+      const card = renderMemoryDocuments([{ slug: 'probe', content }]);
+      expect(card).not.toMatch(/\[[0-9a-f]{8}-[0-9a-f]{8}\]/);
+
+      // (2) **それでも offset を回せば全節id が出る。** (1) と (2) の両方が同時に
+      // 真であることが、この歯の主張の全体である。
+      const seenIds = new Set<string>();
+      let offset = 0;
+      let iterations = 0;
+      const MAX_ITERATIONS = 2000; // 有限回であることの安全弁（無限ループの検出）。
+      for (;;) {
+        iterations += 1;
+        if (iterations > MAX_ITERATIONS) {
+          throw new Error(`offset を進めても終わらない（${MAX_ITERATIONS} 回で打ち切り）`);
+        }
+        const outline = renderMemoryOutline(sections, { offset });
+        for (const match of outline.matchAll(/\[([0-9a-f]{8}-[0-9a-f]{8})\]/g)) {
+          seenIds.add(match[1] as string);
+        }
+        const more = /続きが在る。次は offset=(\d+) で呼ぶこと/.exec(outline);
+        if (!more) break;
+        offset = Number(more[1]);
+      }
+
+      expect(seenIds).toEqual(allIds);
+      expect(iterations).toBeLessThan(sections.length);
+    });
+
+    /**
+     * **`q` が見るのは見出しだけである。⚠️ ただし「本文を見ない」ことは、この歯
+     * ではなく型が守っている**——`renderMemoryOutline` が受け取る `MemorySection`
+     * は `id` / `heading` / `depth` / `start` / `end` / `chars` しか持たず、
+     * **本文がそもそも手元に無い。** ⟹「本文の語では引けない」を assert しても
+     * **失敗しようのない歯（いつでも緑）になる。実際に変異を当てて測ったらそうだった。**
+     * ⟹ ここでは代わりに**失敗しうること**を測る——**節が持つ他の欄（節id・文字数）
+     * へ `q` が広がっていないこと。**
+     *
+     * ⚠️ **見出しに数字を入れない合成データを使う。** `flood` の `## 節12` の形だと、
+     * 文字数（例: `34`）が見出しの数字に偶然当たって、**当たった理由が区別できない。**
+     */
+    it('indexed の文書でも q で見出しを引ける。⛔ 節id や文字数へは広がらない（見出しだけを見る）', () => {
+      const kana = 'あいうえおかきくけこ';
+      const digitFree = (index: number): string =>
+        String(index)
+          .split('')
+          .map((digit) => kana[Number(digit)])
+          .join('');
+      const body = Array.from(
+        { length: 300 },
+        (_, index) => `## セクション${digitFree(index)}\n${'ん'.repeat(50)}${digitFree(index)}\n`,
+      ).join('\n');
+      const content = indexedDoc(
+        ['## ミダシダケノゴ を含む見出し', 'この節の本文には目印がある。', '', body].join('\n'),
+      );
+      const sections = scanMemorySections(content).sections;
+      const target = sections.find((section) => section.heading.includes('ミダシダケノゴ'));
+      if (target === undefined) throw new Error('合成データが壊れている（目印の節が無い）');
+
+      // 見出しに在る語は1回で当たり、**節id がそのまま出る**（＝その場で開ける）。
+      const byHeading = renderMemoryOutline(sections, { q: 'ミダシダケノゴ' });
+      expect(byHeading).toContain('ミダシダケノゴ');
+      expect(byHeading).toMatch(/\[[0-9a-f]{8}-[0-9a-f]{8}\]/);
+
+      // **節id の断片では引けない。** 節id は見出しではないので、ここへ広がると
+      // 「見出しで探す」という道具の約束が静かに変わる。
+      const byId = renderMemoryOutline(sections, { q: target.id.slice(0, 8) });
+      expect(byId).toContain('一致0件');
+
+      // **文字数の数字でも引けない。** 見出しに数字が1つも無いので、当たったら
+      // それは文字数の欄へ広がったということである（当たった理由が一意に決まる）。
+      const byChars = renderMemoryOutline(sections, { q: String(target.chars) });
+      expect(byChars).toContain('一致0件');
     });
   });
 });

@@ -64,13 +64,19 @@ export interface MemoryPart {
  * （`measureMemoryFloor` の doc）。
  */
 export interface MemoryFloor {
-  /** premise の全文が毎ターン焼かれる分の文字数。 */
+  /** premise のカード（要旨＋節の目次）が毎ターン焼かれる分の文字数。 */
   premiseChars: number;
+  /**
+   * `indexed` のカード（要旨だけ。節の目次は焼かれない）が毎ターン焼かれる
+   * 分の文字数。**`indexed` が1件も無ければ 0。**
+   */
+  indexedChars: number;
   /** fact の目次が毎ターン焼かれる分の文字数。 */
   tocChars: number;
   /** 焼き込み全体の文字数。**`renderMemoryDocuments(documents).length` と必ず一致する。** */
   totalChars: number;
   premiseDocs: number;
+  indexedDocs: number;
   factDocs: number;
   /**
    * そのうち、**カードを落として1行にした premise の件数**
@@ -88,6 +94,8 @@ export interface MemoryFloor {
   demotedPremiseDocs: number;
   /** 毎ターン最も大きい premise の1件（premise が無ければ null）。 */
   largestPremise: { slug: string; chars: number } | null;
+  /** 毎ターン最も大きい indexed の1件（indexed が無ければ null）。 */
+  largestIndexed: { slug: string; chars: number } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -495,10 +503,10 @@ export function applyMemoryFrontmatterPatch(
   return content.endsWith('\n') ? `${header}\n` : header;
 }
 
-const KNOWN_DOC_KINDS: ReadonlySet<MemoryDocKind> = new Set(['premise', 'fact']);
+const KNOWN_DOC_KINDS: ReadonlySet<MemoryDocKind> = new Set(['premise', 'fact', 'indexed']);
 
 /**
- * `value` が既知の区分（`premise` / `fact`）かどうか。
+ * `value` が既知の区分（`premise` / `fact` / `indexed`）かどうか。
  *
  * **`resolveMemoryDocKind`（読み出し側）の「未知の値は premise へ倒す」安全弁
  * とは別の使い道である。** あちらは既存文書・`memory_write` が書いた任意の
@@ -516,12 +524,16 @@ export function isKnownMemoryDocKind(value: string): value is MemoryDocKind {
 }
 
 /**
- * 区分を解決する（frontmatter → `premise` | `fact`）。
+ * 区分を解決する（frontmatter → `premise` | `fact` | `indexed`）。
  *
  * **区分が無い（`none`）・読めない（`malformed`）・`type` が既知の集合に
- * 無い値のときは、`fact` ではなく `premise` として扱う。** これが移行の
- * 安全弁である——frontmatter を1つも持たない文書（`none`）は全て `premise`
- * になるので、この改修をマージした直後は焼き込みが従来と完全に同じになる。
+ * 無い値のときは、`fact` にも `indexed` にもせず `premise` として扱う。**
+ * これが移行の安全弁である——frontmatter を1つも持たない文書（`none`）は
+ * 全て `premise` になるので、この改修をマージした直後は焼き込みが従来と
+ * 完全に同じになる。`indexed` を足したときも、この安全弁の向き（既知でない
+ * 値は `premise` へ倒す）は1ミリも変えていない——`indexed` は `KNOWN_DOC_KINDS`
+ * に加わった**既知の値**なので、`type: indexed` はそのまま `indexed` として
+ * 解決される（安全弁が発動するのは未知の値のときだけである）。
  *
  * 取り返しがつく側へ倒す判断でもある: `premise` を既定にした誤りは
  * 「余分に全文を焼く」だけで `self_status` の総文字数から必ず気づけるが、
@@ -534,6 +546,15 @@ export function resolveMemoryDocKind(frontmatter: MemoryFrontmatterState): Memor
   if (type !== undefined && KNOWN_DOC_KINDS.has(type as MemoryDocKind))
     return type as MemoryDocKind;
   return 'premise';
+}
+
+/**
+ * `MemoryDocKind`（3値）の網羅性を型で強制する（`assertNeverMemoryProtectionStatus`
+ * と同じ形）。呼び手（`tools.ts` の `kindLabel` 等）が `switch` の `default` で
+ * これへ渡すと、区分を1つ足したときに埋め忘れた分岐で `tsc` が落ちる。
+ */
+export function assertNeverMemoryDocKind(kind: never): never {
+  throw new Error(`未知の記憶の区分: ${JSON.stringify(kind)}`);
 }
 
 /**
@@ -885,8 +906,11 @@ function buildMemoryPresence(documents: readonly MemoryPart[]): MemoryPresence {
  */
 interface MemoryHierarchyElsewhere {
   /**
-   * この目次の対象ではないが、**同じ描画の中に premise として全文が載って
-   * いる** slug（渡し手は `buildMemoryDocumentSections`）。
+   * この目次の対象ではないが、**同じ描画の中にカードとして載っている**
+   * slug（渡し手は `buildMemoryDocumentSections`）。**premise だけでなく
+   * `indexed` の slug も含む**（2026-09-11。どちらも目次行ではなくカードとして
+   * 描かれる側なので、扱いは同じである——`indexed` はカードに節の目次こそ
+   * 載らないが、要旨とカードの見出し自体はこの描画の中に在る）。
    */
   renderedAsPremise?: ReadonlySet<string>;
   /**
@@ -1157,6 +1181,11 @@ function renderMemoryTocIssue(node: ResolvedTocNode): string {
   if (node.issue === 'missing-parent') return `［親 ${String(node.entry.parent)} が見つからない］`;
   if (node.issue === 'cycle') return `［親 ${String(node.entry.parent)} との間で循環］`;
   if (node.issue === 'parent-not-listed') {
+    // ⚠️ 文言は premise を名指ししたまま据え置く（不変条件3 —— premise/fact
+    // のみの入力では出力を1文字も変えない）。`indexed` の親がここへ来ても
+    // 分類（parent-not-listed）自体は正しくなる——親は実在し、この描画の
+    // 中にカードとして載っている——が、文言はやや不正確になる（「premise
+    // として」だが実際は indexed）。この不整合は既知の限界として報告に残す。
     return (
       `［親 ${String(node.entry.parent)} は在るが、この目次は fact だけを列挙する` +
       '（premise として本文が上に全文で載っている）］'
@@ -1438,6 +1467,42 @@ export const MEMORY_PROMPT_DESCRIPTION_BUDGET = 3_000;
 export const MEMORY_PROMPT_OUTLINE_BUDGET = 6_000;
 
 /**
+ * `indexed` のカードに載せる要旨の文字数の予算。
+ *
+ * ## なぜ要るか（人間の決定 2026-09-10）
+ *
+ * 特定のプロジェクトでしか使わない記憶（実測でいう alteroid-work /
+ * virchamate / mnemo / tsumugi の4文書）は、そのプロジェクトを触っていない
+ * ターンでも premise として節の目次を焼き続けていた。**しかしセッションの
+ * システムプロンプトはターンが始まる前に組み立てられるので、「いま触って
+ * いるプロジェクト」で載せ方を選ぶことは実装できない。** ⟹ 成立するのは
+ * 「人間またはクローンが事前に選べる形」だけであり、それが `type: indexed`
+ * である——**節の目次を焼くのをやめ、要旨だけを焼く。**
+ *
+ * ## ⭐⭐ 不変条件: `indexed` の床は `premise` の床を絶対に超えない
+ *
+ * `indexed` は節の目次を1文字も焼かないので、逃した分の一部を要旨の予算へ
+ * 回してよい——それでも `MEMORY_PROMPT_DESCRIPTION_BUDGET + MEMORY_PROMPT_OUTLINE_BUDGET`
+ * （3,000 + 6,000 = 9,000）を絶対に超えないこと。**これは歯で固定してある**
+ * （`memory.test.ts` の「`indexed` の要旨予算は premise の要旨＋目次予算より
+ * 必ず小さい」——定数どうしを比較する歯なので、将来どちらかの値だけが動くと
+ * 赤くなる）。
+ *
+ * **推奨値は 6,000 を採った。** 理由は2つ:
+ *
+ * 1. **要旨の予算を `MEMORY_PROMPT_DESCRIPTION_BUDGET`（3,000）のまま
+ *    据え置かないこと。** 実測（2026-09-10）で、クローンの要旨は3,000文字で
+ *    切られており、**切られるのは末尾＝いちばん新しい記述**である（実際に
+ *    新しい規則が1本切れた実績がある）。節の目次で切られ、避難先の要旨でも
+ *    切られるという**二重の切断**を、`indexed` では起こさないこと。
+ * 2. **それでも無制限にはしないこと**（肥大化対策の放棄になる）。節の目次
+ *    （6,000）を丸ごと手放すぶんを、そのまま要旨の予算へ回す形にすれば、
+ *    「節の目次を手放した代わりに要旨を厚くする」という交換の形が数として
+ *    も分かりやすい。
+ */
+export const MEMORY_PROMPT_INDEXED_DESCRIPTION_BUDGET = 6_000;
+
+/**
  * 目次が予算で切れたときに、**落ちた末尾の側を名指しする**ぶんの文字数の予算。
  *
  * ## なぜ落ちた側の見出しを断り書きへ出すのか
@@ -1707,6 +1772,27 @@ function renderPremiseOutlineOmission(
   ].join('\n');
 }
 
+/**
+ * カードの要旨（`description`）1行を組む。**`renderPremiseCard`（`indexed` も
+ * 含む）が共有する下ごしらえ**——premise と indexed は要旨の予算だけが違い
+ * （`MEMORY_PROMPT_DESCRIPTION_BUDGET` / `MEMORY_PROMPT_INDEXED_DESCRIPTION_BUDGET`）、
+ * 切ったときの文面の形は同じである。**premise 側の抽出であり、既存の文面を
+ * 1文字も変えていない**（`renderPremiseCard` の出力は抽出の前後で一致する
+ * ことを歯で固定する——不変条件3）。
+ */
+function renderMemoryCardSummaryLine(description: string | undefined, budget: number): string {
+  const trimmed = description?.trim() ?? '';
+  return trimmed.length === 0
+    ? '要旨: （まだ書かれていない。memory_frontmatter_set の description で書くこと——' +
+        'ここが空だと、本文を開くまでこの文書が何なのか分からない）'
+    : trimmed.length <= budget
+      ? `要旨: ${trimmed}`
+      : `要旨: ${excerpt(trimmed, budget)}\n` +
+        `⚠ 要旨が長すぎて毎ターンの焼き込みに収まっていない（${formatMemoryCharCount(trimmed.length)} 文字 / ` +
+        `目安 ${formatMemoryCharCount(budget)} 文字）。全文は memory_list / memory_read に在る。` +
+        '要旨に本文を書かず、本文は節へ移して memory_frontmatter_set で要旨を短くすること。';
+}
+
 function renderPremiseCard(part: MemoryPart): string {
   const frontmatter = parseMemoryFrontmatter(part.content);
   const description = frontmatter.kind === 'parsed' ? frontmatter.description : undefined;
@@ -1716,17 +1802,7 @@ function renderPremiseCard(part: MemoryPart): string {
     `<!-- memory: ${part.slug}.md（premise・本文は載っていない。` +
     `全 ${formatMemoryCharCount(part.content.length)} 文字 / ${formatMemoryCharCount(sections.length)} 節） -->`;
 
-  const trimmed = description?.trim() ?? '';
-  const summaryLine =
-    trimmed.length === 0
-      ? '要旨: （まだ書かれていない。memory_frontmatter_set の description で書くこと——' +
-        'ここが空だと、本文を開くまでこの文書が何なのか分からない）'
-      : trimmed.length <= MEMORY_PROMPT_DESCRIPTION_BUDGET
-        ? `要旨: ${trimmed}`
-        : `要旨: ${excerpt(trimmed, MEMORY_PROMPT_DESCRIPTION_BUDGET)}\n` +
-          `⚠ 要旨が長すぎて毎ターンの焼き込みに収まっていない（${formatMemoryCharCount(trimmed.length)} 文字 / ` +
-          `目安 ${formatMemoryCharCount(MEMORY_PROMPT_DESCRIPTION_BUDGET)} 文字）。全文は memory_list / memory_read に在る。` +
-          '要旨に本文を書かず、本文は節へ移して memory_frontmatter_set で要旨を短くすること。';
+  const summaryLine = renderMemoryCardSummaryLine(description, MEMORY_PROMPT_DESCRIPTION_BUDGET);
 
   if (sections.length === 0) {
     return [
@@ -1752,6 +1828,58 @@ function renderPremiseCard(part: MemoryPart): string {
     '節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:',
     listing,
   ].join('\n');
+}
+
+/**
+ * `indexed` 1文書ぶんの**カード**（要旨だけ。節の目次は載らない）。
+ *
+ * **`renderPremiseCard` との唯一の違いは、要旨の予算と、節の目次を出さない
+ * ことである。** 見出し（`head`）の形は premise と揃えてある——`全 N 文字 /
+ * M 節` は premise のカードの1行目と同じ役目（「そこに何が在るか」を失わない。
+ * PR の不変条件4）を、節の目次を省いた `indexed` でも果たす。
+ *
+ * **節の目次を焼かない代わりに、開く手段を必ず案内する。** `memory_outline`
+ * （節id と見出しの一覧を返す）→ `memory_section_read`（節id を渡して開く）
+ * の2手である。
+ *
+ * ⚠️ ここでは `q=` / `offset=` を名指ししない——`memory_outline` にその引数を
+ * 足す変更は別 PR として並行に進んでいる（未マージ）。実行できない引数を
+ * 助言に書かない（AGENTS.md「実行できない助言を出さない」と同じ線）。
+ */
+function renderIndexedCard(part: MemoryPart): string {
+  const frontmatter = parseMemoryFrontmatter(part.content);
+  const description = frontmatter.kind === 'parsed' ? frontmatter.description : undefined;
+  const { sections } = scanMemorySections(part.content);
+
+  // ⚠️ 見出し（head）は premise と同じ形にする（「indexed」の語だけが違う）。
+  // ここへ premise には無い説明を足すと、それだけで premise より必ず大きく
+  // なる（節が0件のとき、他の行はどちらも同じ長さになるため）。
+  const head =
+    `<!-- memory: ${part.slug}.md（indexed・本文は載っていない。` +
+    `全 ${formatMemoryCharCount(part.content.length)} 文字 / ${formatMemoryCharCount(sections.length)} 節） -->`;
+
+  const summaryLine = renderMemoryCardSummaryLine(
+    description,
+    MEMORY_PROMPT_INDEXED_DESCRIPTION_BUDGET,
+  );
+
+  // ⚠️ 節が0件のときも premise と一字一句同じ文にしない——head も summaryLine も
+  // premise と同じ形になりうる（説明が予算内に収まる短い要旨のとき）ので、
+  // ここが同じ文言だと indexed の床が premise と完全に一致してしまい、
+  // 不変条件1（indexed の床は premise の床を必ず下回る）が節0件のときだけ
+  // 破れる（実測で見つかった。`memory.test.ts` の「節 +0・要旨 10 文字」）。
+  // だから premise の0節分岐より必ず短い文にする——「見出しを付けると節id で
+  // 開けるようになる」という追加の案内は落とし、内容は変えず短くするだけに
+  // とどめる。
+  // 節が1件以上のときは、premise の最小1節ぶんの目次（見出し・節id・前置き込み）
+  // より必ず短くなるよう、短い1行に切り詰めてある。
+  const sectionsLine =
+    sections.length === 0
+      ? '節: 1つも無い（見出しが無いか、前書きしか無い）。本文は memory_read で開く。'
+      : `節: 全 ${formatMemoryCharCount(sections.length)} 節（目次は載らない。` +
+        'memory_outline → memory_section_read で開く）。';
+
+  return [head, summaryLine, sectionsLine].join('\n');
 }
 
 /**
@@ -2092,6 +2220,13 @@ function renderPremiseStub(part: MemoryPart, cardChars: number): string {
 function selectPremiseCards(
   parts: readonly MemoryPart[],
   seenContent: ReadonlyMap<string, string> | undefined,
+  /**
+   * カードの大きさを測るための描き手。**既定は `renderPremisePart`**（渡さない
+   * 呼び手の出力は1文字も変わらない）。`indexed` を同じ蓋に入れるために、
+   * 測る式をここへ外へ出してある——**測る側と描く側で別の関数を使うと、
+   * 蓋が実際に載る量とは違う量を測る。**
+   */
+  render: (part: MemoryPart) => string = renderPremisePart,
 ): {
   kept: MemoryPart[];
   demoted: { part: MemoryPart; chars: number }[];
@@ -2108,7 +2243,7 @@ function selectPremiseCards(
 } {
   if (seenContent !== undefined) return { kept: [...parts], demoted: [], uncappedChars: 0 };
 
-  const rendered = parts.map((part) => ({ part, chars: renderPremisePart(part).length }));
+  const rendered = parts.map((part) => ({ part, chars: render(part).length }));
   const joinedChars = (count: number, sum: number): number =>
     count === 0 ? 0 : sum + MEMORY_SECTION_JOIN.length * (count - 1);
   const totalChars = joinedChars(
@@ -2181,6 +2316,28 @@ function renderPremiseBudgetNotice(
 }
 
 /**
+ * `indexed` 1文書ぶんの描画。**`renderPremisePart` と同じ形**（`seen` が渡され、
+ * 差分にする価値があるときだけ変わった範囲を描く）——`renderPremiseDelta` は
+ * カードの行差分を取るだけの汎用関数なので、`indexed` のカードにもそのまま
+ * 使える（名前が premise を名乗るが、中身は premise 固有ではない）。
+ */
+function renderIndexedPart(part: MemoryPart, seen?: string): string {
+  const frontmatter = parseMemoryFrontmatter(part.content);
+  const card = renderIndexedCard(part);
+  const delta =
+    seen === undefined
+      ? null
+      : renderPremiseDelta(
+          part.slug,
+          renderIndexedCard({ slug: part.slug, content: seen }),
+          card,
+          scanMemorySections(part.content).sections,
+        );
+  const rendered = delta ?? card;
+  return frontmatter.kind === 'malformed' ? `${MALFORMED_FRONTMATTER_NOTE}\n${rendered}` : rendered;
+}
+
+/**
  * `renderMemoryDocuments` と `measureMemoryFloor` の共有の下ごしらえ。
  *
  * **数え方を2本に割らないためだけに存在する。** 焼き込みの本体
@@ -2188,6 +2345,12 @@ function renderPremiseBudgetNotice(
  * （`measureMemoryFloor`）が別々に「premise を集めて全文にし、fact を
  * 集めて目次にする」処理を書くと、どちらか一方だけを直した瞬間に
  * メーターが実物と食い違う——ここへ1本にまとめ、両方がこれを呼ぶ。
+ *
+ * **`indexed` は3つ目の枝である**（2026-09-11）。premise・indexed のどちらも
+ * カードとして描かれ（目次行にはならない）、`indexed` はそのカードから節の
+ * 目次だけを省く。**`indexed` が1件も無い入力では、`indexedParts` は空配列、
+ * `indexedSection` は空文字になり、下流（`joinMemorySections`）はそれを
+ * 素通りするので出力は1文字も変わらない**（不変条件3）。
  */
 function buildMemoryDocumentSections(
   documents: readonly MemoryPart[],
@@ -2202,10 +2365,13 @@ function buildMemoryDocumentSections(
    * premise であることは変わらないので、区分の件数（`premiseDocs`）は動かさない。
    */
   demotedPremise: MemoryPart[];
+  indexedParts: MemoryPart[];
+  indexedSection: string;
   tocEntries: MemoryTocEntry[];
   tocSection: string;
 } {
   const premiseParts: MemoryPart[] = [];
+  const indexedParts: MemoryPart[] = [];
   const tocEntries: MemoryTocEntry[] = [];
 
   for (const doc of documents) {
@@ -2213,6 +2379,10 @@ function buildMemoryDocumentSections(
     const kind = resolveMemoryDocKind(frontmatter);
     if (kind === 'premise') {
       premiseParts.push(doc);
+      continue;
+    }
+    if (kind === 'indexed') {
+      indexedParts.push(doc);
       continue;
     }
     tocEntries.push({
@@ -2226,21 +2396,40 @@ function buildMemoryDocumentSections(
 
   // **束ねた全体に蓋を掛ける**（{@link MEMORY_PREMISE_CARD_BUDGET}）。1文書あたりの
   // 予算だけでは文書数に対して線形に伸びる——`selectPremiseCards` の doc。
-  const { kept, demoted, uncappedChars } = selectPremiseCards(premiseParts, seenContent);
-  const keptCards = kept.map((part) => renderPremisePart(part, seenContent?.get(part.slug)));
+  // **蓋は premise と indexed の両方に掛ける。** indexed のカードを蓋の外に置くと、
+  // 上限が「60,000 ＋ indexed の総量」に化けて、文書数に比例して伸びる穴が
+  // `indexed` の側に開き直る（この蓋がまさに塞いだ形である）。**indexed のカードは
+  // premise のカードより必ず小さい**（`MEMORY_PROMPT_INDEXED_DESCRIPTION_BUDGET`）
+  // ので、同じ蓋に入れても premise 側が不利になることは無い。
+  const cardParts = [...premiseParts, ...indexedParts];
+  const indexedSlugs = new Set(indexedParts.map((part) => part.slug));
+  const renderCard = (part: MemoryPart, seen?: string): string =>
+    indexedSlugs.has(part.slug) ? renderIndexedPart(part, seen) : renderPremisePart(part, seen);
+  const { kept, demoted, uncappedChars } = selectPremiseCards(cardParts, seenContent, renderCard);
+  const keptPremiseCards = kept
+    .filter((part) => !indexedSlugs.has(part.slug))
+    .map((part) => renderPremisePart(part, seenContent?.get(part.slug)));
+  const keptIndexedCards = kept
+    .filter((part) => indexedSlugs.has(part.slug))
+    .map((part) => renderIndexedPart(part, seenContent?.get(part.slug)));
   const premiseSection =
-    premiseParts.length === 0
+    cardParts.length === 0
       ? ''
       : demoted.length === 0
-        ? keptCards.join(MEMORY_SECTION_JOIN)
-        : [...keptCards, renderPremiseBudgetNotice(demoted, kept.length, uncappedChars)].join(
-            MEMORY_SECTION_JOIN,
-          );
+        ? keptPremiseCards.join(MEMORY_SECTION_JOIN)
+        : [
+            ...keptPremiseCards,
+            renderPremiseBudgetNotice(demoted, kept.length, uncappedChars),
+          ].join(MEMORY_SECTION_JOIN);
+  const indexedSection = keptIndexedCards.join(MEMORY_SECTION_JOIN);
   // 目次の外にも実在する slug を、**在り処ごとに分けて**渡す——`documents` は
   // 「記憶の全部」とは限らないので、ここで畳むと実在するものが「見つからない」
   // として出る（`renderMemoryTocIssue` の 'parent-not-listed' と
-  // 'parent-not-rendered'）。
-  const premiseSlugs = new Set(premiseParts.map((part) => part.slug));
+  // 'parent-not-rendered'）。**`indexed` も premise と同じくカードとして
+  // 描かれる側なので、同じ集合へ合流させる**（`MemoryHierarchyElsewhere.renderedAsPremise`
+  // の doc）——`indexed` が1件も無ければこの合流は premiseSlugs を1つも
+  // 変えない（不変条件3）。
+  const cardSlugs = new Set([...premiseParts, ...indexedParts].map((part) => part.slug));
   // `MemoryPresence` はここで1回だけ組み立てる（`buildMemoryPresence` の doc
   // どおり、`parentOf` の中身の解析はさらに遅延する——`presentInMemory` が
   // 渡されていても、循環検出が実際にこの描画の外へ出ない限り1文字も解析しない）。
@@ -2248,12 +2437,14 @@ function buildMemoryDocumentSections(
   const tocSection =
     tocEntries.length === 0
       ? ''
-      : renderMemoryToc(tocEntries, { renderedAsPremise: premiseSlugs, presentInMemory: presence });
+      : renderMemoryToc(tocEntries, { renderedAsPremise: cardSlugs, presentInMemory: presence });
 
   return {
     premiseParts,
     premiseSection,
     demotedPremise: demoted.map((entry) => entry.part),
+    indexedParts,
+    indexedSection,
     tocEntries,
     tocSection,
   };
@@ -2310,19 +2501,30 @@ export interface RenderMemoryDocumentsOptions {
  */
 const MEMORY_SECTION_JOIN = '\n\n';
 
-/** `premiseSection` と `tocSection` を、実際に焼き込む1本の文字列へ繋ぐ。 */
-function joinMemorySections(premiseSection: string, tocSection: string): string {
-  return [premiseSection, tocSection]
-    .filter((section) => section.length > 0)
-    .join(MEMORY_SECTION_JOIN);
+/**
+ * 区分ごとの節を、実際に焼き込む1本の文字列へ繋ぐ。**可変長の引数を取る**
+ * （2026-09-11 に `indexed` の節を挟むため2引数から3引数対応へ拡張した）。
+ * 空文字の節は素通りするので、`indexed` を1件も持たない入力では出力が
+ * 従来と1バイトも変わらない（不変条件3）。
+ *
+ * **区切りは {@link MEMORY_SECTION_JOIN} である**——繋ぐ側と数える側で別の
+ * リテラルを持つと蓋が予算をわずかに超えて通る（直上の doc）。
+ */
+function joinMemorySections(...sections: readonly string[]): string {
+  return sections.filter((section) => section.length > 0).join(MEMORY_SECTION_JOIN);
 }
 
 /**
  * 記憶をクローンの文脈へ載せる、唯一の入口。
  *
- * **区分ごとに載り方を変える**（4-1「B. 区分と載せ方」）:
+ * **区分ごとに載り方を変える**（4-1「B. 区分と載せ方」。`indexed` は
+ * 2026-09-11 に追加した3つ目の区分）:
  * - `premise`（判断の前提。既定でもある） — **要旨と節の目次**
  *   （`renderPremiseCard`）。本文は `memory_section_read` で節id を指して開く
+ * - `indexed`（特定のプロジェクトでしか使わない記憶） — **要旨だけ**
+ *   （`renderIndexedCard`）。節の目次は焼かれない——節を確かめるにはまず
+ *   `memory_outline` を呼ぶ必要がある（premise は焼き込みにある目次から
+ *   節id をそのまま拾えるが、`indexed` にはその近道が無い）
  * - `fact`（事実と蓄積） — **目次の1行だけ**。本文は `memory_read` で開く
  *
  * **⚠️ かつてここは「`premise` は全文。切り詰めない（切り詰めた前提は『持って
@@ -2367,12 +2569,12 @@ export function renderMemoryDocuments(
   documents: readonly MemoryPart[],
   options: RenderMemoryDocumentsOptions = {},
 ): RenderedMemory {
-  const { premiseSection, tocSection } = buildMemoryDocumentSections(
+  const { premiseSection, indexedSection, tocSection } = buildMemoryDocumentSections(
     documents,
     options.presentInMemory,
     options.seenContent,
   );
-  return brandRenderedMemory(joinMemorySections(premiseSection, tocSection));
+  return brandRenderedMemory(joinMemorySections(premiseSection, indexedSection, tocSection));
 }
 
 /**
@@ -2398,9 +2600,16 @@ export function renderMemoryDocuments(
  * を足すと実物より少ない数を「毎ターンの床」として名乗ることになる）。
  */
 export function measureMemoryFloor(documents: readonly MemoryPart[]): MemoryFloor {
-  const { premiseParts, premiseSection, demotedPremise, tocEntries, tocSection } =
-    buildMemoryDocumentSections(documents);
-  const totalChars = joinMemorySections(premiseSection, tocSection).length;
+  const {
+    premiseParts,
+    premiseSection,
+    demotedPremise,
+    indexedParts,
+    indexedSection,
+    tocEntries,
+    tocSection,
+  } = buildMemoryDocumentSections(documents);
+  const totalChars = joinMemorySections(premiseSection, indexedSection, tocSection).length;
 
   let largestPremise: { slug: string; chars: number } | null = null;
   for (const part of premiseParts) {
@@ -2410,14 +2619,25 @@ export function measureMemoryFloor(documents: readonly MemoryPart[]): MemoryFloo
     }
   }
 
+  let largestIndexed: { slug: string; chars: number } | null = null;
+  for (const part of indexedParts) {
+    const chars = renderIndexedPart(part).length;
+    if (largestIndexed === null || chars > largestIndexed.chars) {
+      largestIndexed = { slug: part.slug, chars };
+    }
+  }
+
   return {
     premiseChars: premiseSection.length,
+    indexedChars: indexedSection.length,
     tocChars: tocSection.length,
     totalChars,
     premiseDocs: premiseParts.length,
+    indexedDocs: indexedParts.length,
     factDocs: tocEntries.length,
     demotedPremiseDocs: demotedPremise.length,
     largestPremise,
+    largestIndexed,
   };
 }
 
