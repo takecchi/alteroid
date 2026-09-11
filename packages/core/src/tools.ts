@@ -2516,8 +2516,8 @@ export function createCloneTools(context: ToolContext) {
         'frontmatter が壊れている（malformed）文書には断る（機械が推測して組み直すと本文を食う経路ができるため）。',
         'memory_write で全文を書き直すか、人間に確認を通すこと。',
         'description・type・parent のうち少なくとも1つを渡すこと（1つも渡さない呼びは断る。何も変わらない）。',
-        'type に渡せるのは premise か fact のどちらかだけ（それ以外の値は断る。綴りを間違えたまま黙って書かない）。',
-        'premise は「要旨＋節の目次」がプロンプトへ焼かれ、fact は目次の1行だけになる（どちらも本文は焼かれない）。区分が変わったときは、その変化が応答に出る。',
+        'type に渡せるのは premise・indexed・fact のいずれかだけ（それ以外の値は断る。綴りを間違えたまま黙って書かない）。',
+        'premise は「要旨＋節の目次」がプロンプトへ焼かれ、indexed は要旨だけが焼かれて節の目次は焼かれない（節を確かめるにはまず memory_outline を呼ぶこと）、fact は目次の1行だけになる（どれも本文は焼かれない）。区分が変わったときは、その変化が応答に出る。',
         '**統合の走行（distill）からは、人間が一度でも書いた文書・履歴の無い文書には使えない**',
         '（断られる。ask_human で人間に確認を通せば次のターンで実行できる）。会話の中の書き込みは通る。',
       ].join(' '),
@@ -2531,7 +2531,7 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe(
-            'premise か fact のどちらかのみ（それ以外は断る）。渡さなければ既存の値のまま（既定は premise）',
+            'premise・indexed・fact のいずれかのみ（それ以外は断る）。渡さなければ既存の値のまま（既定は premise）',
           ),
         parent: z.string().optional().describe('親文書の slug（階層）。渡さなければ既存の値のまま'),
         summary: z.string().describe('何を直したかの一行要約（日誌に残る）'),
