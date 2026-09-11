@@ -8,7 +8,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
-import { createClone } from './clone.js';
+import { ALWAYS_REDELIVER, createClone } from './clone.js';
 import { createManagerPool, type ManagerPool } from './manager.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -141,7 +141,12 @@ describe('エスカレーション（受け入れ基準2）', () => {
       ]),
     });
 
-    const host = createClone({ stores, queryFn: clone.fn, managers: pool });
+    const host = createClone({
+      stores,
+      queryFn: clone.fn,
+      managers: pool,
+      redeliveryGate: ALWAYS_REDELIVER,
+    });
     const hands = handsOf(stores, pool);
 
     const { managerId } = await pool.start({ request: '2つ確認してくる仕事' });

@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { CLONE_MODEL_ENV_KEY, createClone } from './clone.js';
+import { ALWAYS_REDELIVER, CLONE_MODEL_ENV_KEY, createClone } from './clone.js';
 import { DEFAULT_PERMISSION_MODE } from './permission-mode.js';
 import { buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
 import {
@@ -110,7 +110,7 @@ describe('クローン本セッションへ渡す Options', () => {
   it('既定のモデル帯・道具の配置・許可モードを固定する', async () => {
     const { fn, calls } = fakeCloneSdk();
     const stores = createMemoryStores();
-    const clone = createClone({ stores, queryFn: fn, env: {} });
+    const clone = createClone({ stores, queryFn: fn, env: {}, redeliveryGate: ALWAYS_REDELIVER });
 
     clone.post(humanMessage('やあ'));
     await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
@@ -156,6 +156,7 @@ describe('クローン本セッションへ渡す Options', () => {
     const { fn, calls } = fakeCloneSdk();
     const stores = createMemoryStores();
     const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: { [CLONE_MODEL_ENV_KEY]: 'opus' },
@@ -377,7 +378,7 @@ describe('クローンの蒸留サイドクエリへ渡す Options', () => {
   it('persistSession: false、PostToolUse はあるが PreCompact は無い', async () => {
     const { fn, calls } = fakeCloneSdk();
     const stores = createMemoryStores();
-    const clone = createClone({ stores, queryFn: fn, env: {} });
+    const clone = createClone({ stores, queryFn: fn, env: {}, redeliveryGate: ALWAYS_REDELIVER });
 
     clone.post(humanMessage('やあ'));
     await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);

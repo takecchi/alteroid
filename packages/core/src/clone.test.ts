@@ -13,6 +13,7 @@ import type {
 import { describe, expect, it } from 'vitest';
 
 import {
+  ALWAYS_REDELIVER,
   CLONE_MODEL,
   CLONE_MODEL_ENV_KEY,
   CLONE_PERMISSION_MODE_ENV_KEY,
@@ -368,6 +369,7 @@ function setup(
   // マネージャーも偽物にしておく。ここで検証したいのはクローンのループだけであり、
   // 誤って本物の SDK を起こさないようにする。
   const clone = createClone({
+    redeliveryGate: ALWAYS_REDELIVER,
     stores,
     queryFn: fn,
     env,
@@ -1464,6 +1466,7 @@ describe('クローン', () => {
       let captured: ToolContext | undefined;
       const { fn, calls } = fakeSdk(undefined, { delayMs: 200 });
       const clone = createClone({
+        redeliveryGate: ALWAYS_REDELIVER,
         stores,
         queryFn: fn,
         env: {},
@@ -1686,6 +1689,7 @@ describe('クローン — マネージャーの確認がいまも待たれて�
     const manager = fakeManagerSdk();
     const { fn, calls } = fakeSdk(reply);
     const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
       runners: createRunnerRegistry([
@@ -1909,6 +1913,7 @@ describe('クローン — マネージャーの確認がいまも待たれて�
     };
 
     const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
       managers: throwingPool,
@@ -2105,6 +2110,7 @@ describe('クローン — self_status（runtime facts の配線）', () => {
     const { fn, calls } = fakeSdk(undefined, fakeSdkOptions);
     let captured: ToolContext | undefined;
     const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env,
@@ -2252,6 +2258,7 @@ describe('クローン — self_status（runtime facts の配線）', () => {
     }) as unknown as typeof sdkQuery;
 
     const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: { [CLONE_MODEL_ENV_KEY]: 'まだ無いモデル' },
@@ -2406,6 +2413,7 @@ describe('クローン — self_status（runtime facts の配線）', () => {
     }) as unknown as typeof sdkQuery;
 
     const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
       env: {},
@@ -2711,6 +2719,7 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
     let tools: ReturnType<typeof createCloneTools> | undefined;
     const stores = createMemoryStores();
     const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},
@@ -2833,6 +2842,7 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
     // 歯そのものは `tools.test.ts` が持つ）。
     await stores.persona.write('values', '# 価値観\n\n（下書き）\n');
     const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},
@@ -3102,7 +3112,12 @@ describe('クローン — 自律（人間以外の起点）', () => {
       stop: () => Promise.resolve(),
     };
 
-    const clone = createClone({ stores, queryFn: fn, managers: pool });
+    const clone = createClone({
+      stores,
+      queryFn: fn,
+      managers: pool,
+      redeliveryGate: ALWAYS_REDELIVER,
+    });
 
     clone.post({
       type: 'self_initiative',
@@ -5079,6 +5094,7 @@ describe('クローン — ターンの失敗の跡', () => {
         return fn(args);
       };
       const clone = createClone({
+        redeliveryGate: ALWAYS_REDELIVER,
         stores,
         queryFn,
         env: {},
@@ -5666,6 +5682,7 @@ describe('クローン — 考えている合図（thinking）', () => {
     const { fn, calls } = fakeScriptedSdk(turns);
     const stores = createMemoryStores();
     const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},
@@ -5980,6 +5997,7 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
   function setupGated(stores: Stores = createMemoryStores()): Gated {
     const { fn, calls, release } = fakeGatedSdk();
     const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},
@@ -6495,6 +6513,7 @@ describe('クローンの消費が台帳に載る（誰が・どこで）', () =
         modelUsage: () => usage('claude-fable-5', ++nth * 0.5),
       });
       const clone = createClone({
+        redeliveryGate: ALWAYS_REDELIVER,
         stores,
         queryFn: fn,
         env: {},
@@ -8496,6 +8515,7 @@ describe('クローン — 枠で保持している間、中身を持たない�
   ): Setup {
     const { fn, calls } = fakeSdk(reply, sdkOptions);
     const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},
@@ -9168,6 +9188,7 @@ describe('usageBlocked（クローンがいま枠で止まっているかを読�
           : { subtype: 'error_during_execution', text: spendLimitMessage },
     });
     const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
       env: {},
@@ -9227,6 +9248,7 @@ describe('クローン — 枠が回復した後の返信は、人間の側か�
     const stores = createMemoryStores();
     const { fn, calls } = fakeSdk(undefined, sdkOptions);
     const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},
@@ -10095,6 +10117,7 @@ describe('クローン — 人間が待っている合図を待ち行列の先�
     const stores = createMemoryStores();
     const { fn, calls } = fakeSdk(reply, sdkOptions);
     const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},
@@ -11644,6 +11667,7 @@ describe('credentials（SDK 子プロセスへ重ねる鍵の現在値）', () =
   }) {
     const { fn, calls } = fakeSdk();
     const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
       env: input.env ?? {},
@@ -11761,6 +11785,7 @@ describe('onUsageObservation（回し手へ渡す観測）', () => {
     const seen: TokenRotatorObservation[] = [];
     const { fn, calls } = fakeSdk(undefined, input.sdkOptions ?? {});
     const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
       env: {},
@@ -12061,6 +12086,7 @@ describe('recycleSessionForToken（回した後のセッション作り直し）
   function setupRecycle(sdkOptions: Parameters<typeof fakeSdk>[1] = {}) {
     const { fn, calls } = fakeSdk(undefined, sdkOptions);
     const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
       env: {},
@@ -12161,6 +12187,7 @@ describe('recycleSessionForToken（回した後のセッション作り直し）
 
   function cloneWith(fn: typeof sdkQuery, onTokenSessionRecycled?: () => void) {
     return createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
       stores: createMemoryStores(),
       queryFn: fn,
       env: {},
@@ -12460,6 +12487,7 @@ describe('recycleSessionForToken（回した後のセッション作り直し）
     const recycled: string[] = [];
     const stores = createMemoryStores();
     const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
       stores,
       queryFn: fn,
       env: {},

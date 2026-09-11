@@ -559,10 +559,18 @@ const CONTEXT_WINDOW_FOLD_HELD_NOTICE =
  * `CloneOptions` に述語を**注入する**形にしてある。呼び手（デーモン）が
  * `worthDeliveringNow` を包んだ関数を渡す。
  *
- * ## 渡さなければ全件配る
+ * ## `CloneOptions.redeliveryGate` は必須である
  *
- * 省略時（`undefined`）は今までどおり——`#restoreUnread` は残っている未読を
- * 1件も畳まずに全部配り直す（既存の構成の挙動を変えない）。
+ * **省略はできない**（2026-09-12、Issue #783 続き。かつては省略可能で、省略時は
+ * 全件配っていた）。呼び出し元を数えるのに `grep` を使わず `pnpm typecheck` の
+ * 出力を正とすること——`grep` はコメント行まで数えてしまい、実際に直す必要が
+ * ある箇所より多く／少なく数える取り違えが起きる（コード注釈でしか見つからない
+ * 取り違えの実例が過去にある）。
+ *
+ * **全件配りたいだけなら {@link ALWAYS_REDELIVER} を渡す。** 無名関数を
+ * 呼び出し箇所ごとに書き散らさない——同じ意図の関数が複数箇所に散ると、
+ * 一方だけ直し忘れる形が生まれる（この Issue そのものが「同じ判定を2箇所に
+ * 書き写すと片方だけ直したときに黙ってずれる」を主題にしている）。
  *
  * @param event 配り直す対象の合図そのもの（型で判定する。文言では判定しない）。
  * @param context.usageBlocked **呼ばれた瞬間の** {@link CloneHost.usageBlocked}。
@@ -575,10 +583,19 @@ const CONTEXT_WINDOW_FOLD_HELD_NOTICE =
  *   **判定できない（投げた）ときの倒れ先は呼び手の外——`#restoreUnread` 側で
  *   真として扱う**（雑音であって喪失ではない側へ倒す。既存の catch と同じ向き）。
  */
-export type RedeliveryGate = (
-  event: InboxEvent,
-  context: { usageBlocked: boolean },
-) => boolean;
+export type RedeliveryGate = (event: InboxEvent, context: { usageBlocked: boolean }) => boolean;
+
+/**
+ * {@link RedeliveryGate} の名前付きの既定——常に真を返す（＝畳まず全件配る）。
+ *
+ * **`CloneOptions.redeliveryGate` が必須になった（2026-09-12、Issue #783 続き）
+ * ことに伴って足した。** 本番の配線（`apps/daemon/src/index.ts`）は自分の門
+ * （`worthDeliveringNow` を包んだもの）を渡すので、これは使わない——使うのは
+ * 「配り直しの門そのものを検証対象にしていないテスト」だけである。**無名関数
+ * （`() => true` 等）を呼び出し箇所ごとに書き散らさないための、共有の1つの
+ * 実体である。**
+ */
+export const ALWAYS_REDELIVER: RedeliveryGate = () => true;
 
 export interface CloneOptions {
   stores: Stores;
@@ -758,10 +775,11 @@ export interface CloneOptions {
    * `#restoreUnread` が配り直す1件ごとに、実際に配るか畳むかを決める述語
    * （Issue #783 続き）。doc は {@link RedeliveryGate} に在る。
    *
-   * **省略できるのはテストのためだけではない。** 省略すると `#restoreUnread` は
-   * 今までどおり全件を配り直す——既存の構成の挙動を1文字も変えない。
+   * **必須である（2026-09-12 以降。省略できない）。** 全件配りたいだけなら
+   * {@link ALWAYS_REDELIVER} を渡す——書き手ごとに同じ意図の無名関数を
+   * 書き散らさないための、共有の1つの実体である。
    */
-  redeliveryGate?: RedeliveryGate;
+  redeliveryGate: RedeliveryGate;
 }
 
 type Listener = (event: ChatStreamEvent) => void;

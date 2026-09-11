@@ -7,7 +7,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it, vi } from 'vitest';
 
-import { createClone } from './clone.js';
+import { ALWAYS_REDELIVER, createClone } from './clone.js';
 import type { CloneHost } from './host.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -175,6 +175,7 @@ function fakeSdk(options: FakeOptions = {}): Fake {
 
 function bootClone(stores: Stores, fake: Fake): CloneHost {
   return createClone({
+    redeliveryGate: ALWAYS_REDELIVER,
     stores,
     queryFn: fake.fn,
     env: {},

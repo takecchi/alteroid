@@ -1,7 +1,7 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
-import { createClone } from './clone.js';
+import { ALWAYS_REDELIVER, createClone } from './clone.js';
 import type { RedeliveryGate } from './clone.js';
 import type { CloneHost } from './host.js';
 import { createLocalRunner } from './runner-local.js';
@@ -81,11 +81,12 @@ function fakeSdk(behavior: 'reply' | 'hang' = 'reply'): Fake {
 function bootClone(
   stores: Stores,
   behavior: 'reply' | 'hang' = 'reply',
-  // **省略できるのはテストのためだけではない**（`CloneOptions.redeliveryGate` の
-  // doc と同じ言い方）。省略した呼び出し元（この下の既存の歯すべて）は、この
-  // 引数を足す前と1文字も変わらない——`redeliveryGate` 歯（後述の describe）の
-  // 「渡さなければ全件配られる」を、ここでも壊さないことで裏付ける。
-  redeliveryGate?: RedeliveryGate,
+  // **省略した呼び出し元（この下の既存の歯すべて）は、この引数を足す前と
+  // 1文字も変わらない。** `CloneOptions.redeliveryGate` 自体は必須になった
+  // （2026-09-12）ので、省略時はここで名前付きの既定 `ALWAYS_REDELIVER` を
+  // 渡す——「渡さなければ全件配られる」という既存の挙動は、`bootClone` の
+  // この既定を通じて保たれる（`redeliveryGate` 歯、後述の describe）。
+  redeliveryGate: RedeliveryGate = ALWAYS_REDELIVER,
 ): Fake & { clone: CloneHost } {
   const fake = fakeSdk(behavior);
   const clone = createClone({
@@ -96,7 +97,7 @@ function bootClone(
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
     ]),
-    ...(redeliveryGate === undefined ? {} : { redeliveryGate }),
+    redeliveryGate,
   });
   return { ...fake, clone };
 }
@@ -1009,7 +1010,11 @@ describe('redeliveryGate（Issue #783 続き）: `#restoreUnread` の門', () =>
 
   it('述語を渡さなければ、フォールドされそうな形の合図も含めて全件配られる（既定の挙動を1文字も変えない）', async () => {
     const stores = createMemoryStores();
-    const a = externalNotice('WOULD-BE-GATED-IF-CONFIGURED', 'evt-nogate-a', '2026-08-01T00:00:00.000Z');
+    const a = externalNotice(
+      'WOULD-BE-GATED-IF-CONFIGURED',
+      'evt-nogate-a',
+      '2026-08-01T00:00:00.000Z',
+    );
     const b = externalNotice('SECOND-EVENT-BODY', 'evt-nogate-b', '2026-08-01T00:00:01.000Z');
     await stores.inbox.put(a, a.at);
     await stores.inbox.put(b, b.at);
@@ -1049,7 +1054,11 @@ describe('redeliveryGate（Issue #783 続き）: `#restoreUnread` の門', () =>
 
   it('畳まれた合図はモデルへ1文字も渡らない（配られる合図と混在させて確かめる）', async () => {
     const stores = createMemoryStores();
-    const folded = externalNotice('FOLDED-UNIQUE-PAYLOAD', 'evt-mix-fold', '2026-08-01T00:00:00.000Z');
+    const folded = externalNotice(
+      'FOLDED-UNIQUE-PAYLOAD',
+      'evt-mix-fold',
+      '2026-08-01T00:00:00.000Z',
+    );
     const delivered = externalNotice(
       'DELIVERED-UNIQUE-PAYLOAD',
       'evt-mix-deliver',
