@@ -43,6 +43,7 @@ import {
   noteBackgroundFailure,
   noteDroppedInboxEvent,
   noteDroppedRecord,
+  noteUnreadableRecord,
 } from './dropped-record.js';
 import type { CloneHost } from './host.js';
 import { createRunnerRegistry, type RunnerClient } from './runner-protocol.js';
@@ -349,6 +350,82 @@ const UNKNOWN_AGENT_TYPE = '(不明)';
 const DENIED_TOOL_USE_MEMORY_LIMIT = 512;
 
 /**
+ * `#mergedHumanBatch` / `#mergedManagerReportBatch` が1ターンへ束ねる合図の
+ * 最大件数（issue #783）。
+ *
+ * **これは回数制限ではない**（`SCHEDULE_STORE_ATTEMPTS` 等と同じ言い方をここでは
+ * 使わない——あちらは「拾い直しの試行回数」で、上限に当たっても仕事は失われない
+ * ことが構造で保証されている。**ここは違う。** `Inbox#drainWhile` そのものには
+ * 上限が無い（`inbox.ts` の doc）ので、`#mergeable` が配り直し（`#redelivered`）
+ * を外さなくなった以上（`#mergeable` の doc）、この上限を入れないと**起動直後に
+ * 拾い直した在庫が全部1ターンへ入る**——同じ `managerId` の報告が369件なら、
+ * `managerReportBatchPrompt`（「全文を届いた順に並べ、要約も間引きもしない」）が
+ * 369件全文を1本のプロンプトへ連結する。
+ *
+ * **⚠️ 当たっても合図は1件も失われない。** `drainWhile` の述語でここまで数えたら
+ * 止めるだけで、外れた分は `#queue` の先頭に残り、次の反復（`#pump` が次の
+ * `for await` を回したとき）でそのまま処理される——**表示の単位を切っているだけで、
+ * 取りこぼしを作る仕組みではない。**
+ *
+ * **既定値（50）は実測から出た値ではなく判断である。** 「数十件の桁」という
+ * 保守的な線を選んだだけで、369件・6213件という実測の規模から逆算した値では
+ * ない（AGENTS.md「固定した数は固定した瞬間から腐り、腐ったことは読む側からは
+ * 分からない」）。広げれば1ターンの本文がその分大きくなり、狭めれば束ねる効果が
+ * 薄れる——どちらの向きにも実測の裏付けは無いので、環境変数で差し替えられる
+ * ようにしてある（north_star 禁止2）。
+ */
+const MERGED_BATCH_SIZE_LIMIT = 50;
+
+/**
+ * `MERGED_BATCH_SIZE_LIMIT` を人間が差し替えるための環境変数。
+ * **`SYNTHESIZED_NOTICE_WINDOW_MS_ENV_KEY`（`manager.ts`）と同じ作法。**
+ */
+export const MERGED_BATCH_SIZE_LIMIT_ENV_KEY = 'ALTEROID_MERGED_BATCH_SIZE_LIMIT';
+
+/**
+ * 上の env が「非空だが読めない」ときに跡へ書く固定文言
+ * （`SYNTHESIZED_NOTICE_WINDOW_MS_UNREADABLE_WHAT` と同じ作法）。
+ */
+const MERGED_BATCH_SIZE_LIMIT_UNREADABLE_WHAT = 'まとめ読みの束の上限件数の設定';
+
+/**
+ * 環境変数を見て束の上限件数を決める。`resolveSynthesizedNoticeWindowMs`
+ * （`manager.ts`）と全く同じ形（early return・跡の出し方・値そのものを跡に
+ * 載せないこと、すべて同じ理由でそのまま踏襲する——そちらの doc を参照）。
+ *
+ * | env の状態 | 返す値 | 跡 |
+ * | --- | --- | --- |
+ * | 未設定 / 空・空白のみ | 既定50件 | 出さない |
+ * | 非空だが数値として読めない | 既定50件 | 残す |
+ * | 非空で数値だが 0 以下 | 既定50件 | 残す |
+ */
+export function resolveMergedBatchSizeLimit(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[MERGED_BATCH_SIZE_LIMIT_ENV_KEY];
+  if (raw === undefined) return MERGED_BATCH_SIZE_LIMIT;
+  const trimmed = raw.trim();
+  if (trimmed === '') return MERGED_BATCH_SIZE_LIMIT;
+
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) {
+    noteUnreadableRecord(
+      MERGED_BATCH_SIZE_LIMIT_UNREADABLE_WHAT,
+      `${MERGED_BATCH_SIZE_LIMIT_ENV_KEY} chars=${String(trimmed.length)}`,
+      new Error(`数値として読めない。既定の ${String(MERGED_BATCH_SIZE_LIMIT)} 件で走る`),
+    );
+    return MERGED_BATCH_SIZE_LIMIT;
+  }
+  if (parsed <= 0) {
+    noteUnreadableRecord(
+      MERGED_BATCH_SIZE_LIMIT_UNREADABLE_WHAT,
+      `${MERGED_BATCH_SIZE_LIMIT_ENV_KEY} chars=${String(trimmed.length)}`,
+      new Error(`0 以下は上限にならない。既定の ${String(MERGED_BATCH_SIZE_LIMIT)} 件で走る`),
+    );
+    return MERGED_BATCH_SIZE_LIMIT;
+  }
+  return Math.floor(parsed);
+}
+
+/**
  * 継続中の依頼の器に触るときの試行回数と間隔（読み取りと発火の記録の両方）。
  *
  * **これは回数制限ではない**（AGENTS.md 地雷2）。器が一瞬揺れただけで1周期ぶんの
@@ -560,6 +637,13 @@ export interface CloneOptions {
    */
   humanPriority?: boolean;
   /**
+   * `#mergedHumanBatch` / `#mergedManagerReportBatch` が1ターンへ束ねる合図の
+   * 最大件数。省略すると `env` の `ALTEROID_MERGED_BATCH_SIZE_LIMIT`、それも
+   * 無ければ既定50件（`resolveMergedBatchSizeLimit`）。主にテスト用の直渡しで、
+   * `humanPriority` と同じ形である。
+   */
+  mergedBatchLimit?: number;
+  /**
    * 実行環境プロファイル（`.zprofile` 相当）。
    *
    * **クローンにも効かせる。** 人間の `.zshenv` は、その人が Claude Code に頼む
@@ -767,6 +851,8 @@ class Clone implements CloneHost {
   readonly #permissionMode: PermissionModeName;
   /** 人間の合図を割り込ませるか（`CLONE_HUMAN_PRIORITY_ENV_KEY`）。 */
   readonly #humanPriority: boolean;
+  /** 1ターンへ束ねる合図の最大件数（`MERGED_BATCH_SIZE_LIMIT_ENV_KEY`）。 */
+  readonly #mergedBatchLimit: number;
   /** 道具の MCP サーバを組み立てる関数。既定は本物、テストでは差し替えられる。 */
   readonly #mcpServerFactory: typeof createCloneMcpServer;
 
@@ -1419,6 +1505,7 @@ class Clone implements CloneHost {
       syncRunnerToken,
       permissionMode,
       humanPriority,
+      mergedBatchLimit,
       profile,
       profileService,
       credentialService,
@@ -1443,6 +1530,7 @@ class Clone implements CloneHost {
     this.#modelOverridden = placedCloneModel(envSource) !== null;
     this.#permissionMode = permissionMode ?? resolveClonePermissionMode(envSource);
     this.#humanPriority = humanPriority ?? resolveCloneHumanPriority(envSource);
+    this.#mergedBatchLimit = mergedBatchLimit ?? resolveMergedBatchSizeLimit(envSource);
     this.#env = envSource;
     this.#credentials = credentials;
     this.#tokenIdentity = tokenIdentity;
@@ -2121,7 +2209,7 @@ class Clone implements CloneHost {
       const mergedReports = this.#mergedManagerReportBatch(event);
       const batch: InboxEvent[] = mergedHuman ?? mergedReports ?? [event];
 
-      this.#redeliveryNotice = this.#redeliveryNoticeFor(event);
+      this.#redeliveryNotice = this.#redeliveryNoticeFor(batch);
       // **ここは `try` の外である。** 投げれば `for await` ごと抜けて受信箱の
       // ループが死に、クローンは何も受け取れなくなる（`#handle` の失敗とは被害の
       // 桁が違う）。中では読み取りの失敗を自分で握っているが、握り漏らしが1つでも
@@ -2204,8 +2292,14 @@ class Clone implements CloneHost {
    * 並べる（`humanTurnText`）。合図そのものも捨てないので、器の未読・台帳・日誌は
    * 件数ぶん残り、後始末（`#settleInboxEvent`）も件数ぶん通る。
    *
-   * 4つは**まとめない**（かつては3つと書いていたが、4つ並べたまま数が合っていな
-   * かった。書いた本人が数え間違えていただけで、対象が3つだったことは一度も無い）。
+   * **いまは3つをまとめない。** かつてここは4つで、その4つ目が配り直しの合図
+   * （`#redelivered`）だった —— issue #783 で外した（下の追記）。**いまの「3つ」は
+   * 数え間違いではなく、対象が1つ減った結果である。**
+   *
+   * **⚠️ さらにその前に「3つ」と書いてあった時期があるが、そちらは別件である。**
+   * 4つ並べたまま数が合っていなかっただけで、書いた本人が数え間違えていた
+   * （当時の対象は4つであり、3つだったことは一度も無い）。**同じ「3つ」という
+   * 語が別の理由で2度現れるので、混ぜないこと。**
    *
    * - **人間の発言以外のうち、`report` を除いたもの。** タイマー・外部イベント・
    *   蒸留・承認の回答・マネージャーからの `question`/`permission` は、それぞれ
@@ -2216,10 +2310,18 @@ class Clone implements CloneHost {
    *   「まとめない」はクローン全体の性質ではなく、この関数の性質である
    * - **会話が違う発言。** 応答の宛先（`#emit` は会話単位）が1つに決まらない。
    *   別のタブ・別の端末で話している相手の画面に、こちらの応答が流れる
-   * - **配り直しの合図**（`#redelivered`）。「これは配り直しである（N 回目）」は
-   *   合図1件ごとの断り書きで、初回配達のものと混ぜると何が二度目なのか言えなくなる
    * - **枠で保持した合図**（`#heldForUsage`）。再試行は「新しい合図1件につき高々1回」
    *   に絞ってあり、束ねるとその1回が何件ぶんの仕事なのかが変わる
+   *
+   * **⟹ かつては「配り直しの合図」（`#redelivered`）も、ここでまとめなかった
+   * 4つ目の対象だった（issue #700 前後）。元の理由:** 「これは配り直しである
+   * （N 回目）」は合図1件ごとの断り書きで、初回配達のものと混ぜると何が二度目
+   * なのか言えなくなる。**issue #783 で外した。** 起動直後に拾い直した在庫が
+   * 大量にある状況（同じマネージャーから369件の報告が配り直され、1件ずつ処理
+   * すると369ターンを消費した）で、まとめ読みが1文字も効かなかったのが直接の
+   * 理由だが、外せた根拠は「元の理由が成立しなくなったこと」である ——
+   * 断り書き（`#redeliveryNoticeFor`）を1件ごとから束ごとへ変えたので、束ねても
+   * 「何が二度目か」は言える（詳細は `#mergeable` の doc）。
    */
   #mergedHumanBatch(event: InboxEvent): HumanMessage[] | null {
     if (event.type !== 'human_message') return null;
@@ -2234,11 +2336,8 @@ class Clone implements CloneHost {
     // **ここはむしろ素直に効く** — 人間の発言が先頭側へ固まるぶん、連続して
     // 取れる範囲が広がる（人間どうしの到着順は保たれているので、まとめた本文の
     // 並びも到着順のままである）。
-    const rest = this.#inbox.drainWhile(
-      (queued) =>
-        queued.type === 'human_message' &&
-        queued.conversationId === event.conversationId &&
-        this.#mergeable(queued),
+    const rest = this.#drainMergeableWithinLimit(
+      (queued) => queued.type === 'human_message' && queued.conversationId === event.conversationId,
     );
     // **1件だけなら `null` を返す**（`#handle` の通常経路をそのまま通す）。まとめる
     // 側へ寄せると、いちばん多い「1件だけ」の本文に断り書きが載る形が作れてしまう。
@@ -2272,8 +2371,10 @@ class Clone implements CloneHost {
    * であり、複数のマネージャーを混ぜると「誰からの何件か」が1つの文で言えなく
    * なる。
    *
-   * **配り直し（`#redelivered`）・枠での保持（`#heldForUsage`）を外すのは
-   * `#mergedHumanBatch` と同じ理由**（`#mergeable` の doc）。
+   * **枠での保持（`#heldForUsage`）を外すのは `#mergedHumanBatch` と同じ理由**
+   * （`#mergeable` の doc）。**配り直し（`#redelivered`）は、かつては同じ理由で
+   * 外していたが issue #783 でやめた** —— `#mergedHumanBatch` の doc の追記と
+   * 同じ経緯で、詳細は `#mergeable` の doc にある。
    *
    * **これも畳み込みではない。** `post` の `isTick` 畳み込みとの違いは
    * `#mergedHumanBatch` と同じ —— 1文字も捨てず、合図そのものも件数ぶん残る
@@ -2287,15 +2388,49 @@ class Clone implements CloneHost {
     // 理由は `#mergedHumanBatch` と同じ —— 間に別の起点（別のマネージャーの
     // 報告・`question`/`permission`・人間の発言・タイマー等）が挟まったら
     // そこで止まる。
-    const rest = this.#inbox.drainWhile(
-      (queued) =>
-        isManagerReport(queued) && queued.managerId === event.managerId && this.#mergeable(queued),
+    const rest = this.#drainMergeableWithinLimit(
+      (queued) => isManagerReport(queued) && queued.managerId === event.managerId,
     );
     // **1件だけなら `null`**（`#mergedHumanBatch` と同じ理由 —— まとめる側へ
     // 寄せると、いちばん多い「1件だけ」の本文にまとめ読みの前置きが載る形が
     // 作れてしまう）。
     if (rest.length === 0) return null;
     return [event, ...rest.filter(isManagerReport)];
+  }
+
+  /**
+   * `#mergedHumanBatch` / `#mergedManagerReportBatch` が共有する、上限つきの
+   * `Inbox#drainWhile` 呼び出し（issue #783）。
+   *
+   * **`Inbox#drainWhile` そのものには上限が無い**（`inbox.ts` の doc）。
+   * `#mergeable` が配り直し（`#redelivered`）を外さなくなったので、上限を
+   * ここに入れないと拾い直した在庫が全部1ターンへ入る（`MERGED_BATCH_SIZE_LIMIT`
+   * の doc）。
+   *
+   * **数えるのは「今回のターンへ入る件数」（＝ここで取り出した `event` 自身
+   * を含めた件数）。** 呼び出し元は必ず `event` 自身を1件として先頭に足すので、
+   * ここでは `1` から数え始める——`taken` の初期値を `0` にすると、
+   * `MERGED_BATCH_SIZE_LIMIT` 件のつもりで実際は `+1` 件束ねてしまう。
+   *
+   * **上限に当たったら、その時点で `false` を返して止める。** `drainWhile` は
+   * 述語が最初に偽を返した地点でそのまま止まり、それ以降（上限に当たった候補
+   * 自身も含む）は`#queue` の先頭に残ったまま返る——**1件も消えない。** 次に
+   * `#pump` がループを回したとき、残った分から同じ形でまた束ねが始まる。
+   *
+   * **`this.#mergeable` は呼び出し元ではなくここで見る。** 対象の判定（人間の
+   * 発言か・同じマネージャーの報告か）は呼び出し元の `predicate` に持たせ、
+   * 「まとめる側へ戻さない」という共通の判断はここへ集める——`#mergeable` の
+   * doc が言う「対象が違っても外す理由は共通」を、上限の数え方でも1本にする。
+   */
+  #drainMergeableWithinLimit(predicate: (queued: InboxEvent) => boolean): InboxEvent[] {
+    const limit = this.#mergedBatchLimit;
+    let taken = 1;
+    return this.#inbox.drainWhile((queued) => {
+      if (taken >= limit) return false;
+      const matches = predicate(queued) && this.#mergeable(queued);
+      if (matches) taken += 1;
+      return matches;
+    });
   }
 
   /**
@@ -2308,9 +2443,31 @@ class Clone implements CloneHost {
    * **一度でも「1件として扱う」と決めた合図は、まとめる側へ戻さない。** 配り直し
    * （`#redelivered`）も枠での保持（`#heldForUsage`）も、合図1件ごとの断り書きと
    * 1件ごとの試行回数に意味があり、束ねるとその意味が言えなくなる。
+   *
+   * **⟹ 上の段落は経緯として残す。配り直し（`#redelivered`）は、いまはここで
+   * 外していない**（issue #783）。**外していた理由（「合図1件ごとの断り書きと
+   * 束ねるとその意味が言えなくなる」）は、断り書き（`#redeliveryNoticeFor`）を
+   * 1件ごとから束ごとへ変えたことで成立しなくなった** —— 束の行は「件数・
+   * 配達回数の最大値・いちばん古いものの時刻」を束として言うので、1件ごとに
+   * 言えていた情報を1つも失わない。**そして1件ずつに意味がある局面は一度も
+   * 無かった** —— `#redeliveryNoticeFor` が実際に使っていたのは常に「これは
+   * 古い合図の反復である」という束としての判定だけで、個々の合図を分けて扱う
+   * 理由には使われていなかった（クローン自身の判断。issue #783）。
+   *
+   * **`#heldForUsage` は外したままにする。** 再試行の回数制限（「新しい合図
+   * 1件につき高々1回」）は試行回数そのものの話であり、断り書きの書式を変えても
+   * 解けない（`#heldForUsage` フィールドの doc「費用の設計に触るので、ここは
+   * 分けたままにする」）。
+   *
+   * ⟹ 起動直後に拾い直した在庫が大量にある状況（issue #783: 同じマネージャー
+   * から369件の報告が配り直され、1件ずつ処理すると369ターンを消費した）で、
+   * まとめ読みが効くようになる。**束の大きさの上限は別に持つ**
+   * （`#drainMergeableWithinLimit` / `MERGED_BATCH_SIZE_LIMIT`）—— ここで
+   * 際限なく束ねると、`Inbox#drainWhile` に上限が無い分だけ1ターンの本文が
+   * 際限なく育つ。
    */
   #mergeable(event: InboxEvent): boolean {
-    return !this.#redelivered.has(event.id) && !this.#heldForUsage.has(event.id);
+    return !this.#heldForUsage.has(event.id);
   }
 
   /**
@@ -3133,41 +3290,97 @@ class Clone implements CloneHost {
   }
 
   /**
-   * 配り直しの断り書き。初めての配達なら空文字。
+   * 配り直しの断り書き。**束（`batch`）のうち1件も配り直しでなければ空文字。**
    *
    * **「二度届く」ことは受け入れるが、「二度目だと分からない」ことは受け入れない。**
    * 分からなければクローンは同じ報告に二度応答し、そのターンが丸ごと無駄になる
    * （消費にも直結する）。ここが、消し込みを「終えた時点」に置いた取引の対価である。
+   *
+   * **`batch.length === 1` は、以前の1件専用の実装を1文字も変えない**（issue
+   * #783）。いちばん多い経路（単発）の出力を変えないため、かつ既存の歯
+   * （`clone.test.ts` / `inbox-persistence.test.ts` の逐語一致）を壊さないため
+   * である。
+   *
+   * **`batch.length >= 2` で印付きが1件以上あるときだけ束の行にする。** 1件
+   * ごとに断り書きを繰り返さない —— `#mergedManagerReportBatch` が同じ
+   * `managerId` の配り直しを大量に束ねられるようになった以上（issue #783、
+   * `#mergeable` の doc）、N 件を1件ずつの断り書きで並べると、断り書きの分量が
+   * 本文そのものを埋める。代わりに次の3つを必ず持たせる —— **(1) 件数**（束が
+   * 何件で、うち配り直しが何件か） **(2) 配達回数の最大値** **(3) いちばん
+   * 古いものの時刻**（印付きのうち最も古い `at`）。どれも「判定の根拠にならなく
+   * なった情報」ではない —— 1件ごとに繰り返すのをやめるだけで、1つも消していない。
+   *
+   * **束が2件以上ある時点で「1件だけが拾い直された（`alone`）」側は出さない。**
+   * `alone` が言えるのは束の中の印付きが1件のときだけで、束に2件以上の印付きが
+   * 在れば、それらは同じ `#restoreUnread` の呼び出しで一緒に拾い直された仲間が
+   * 2件以上いたことの直接の証拠になる（＝ `#restoredCohort` は最低でもその件数
+   * ぶんある）。**印付きが1件しかない束**（印付き1件＋新規の合図が隣接して
+   * 束ねられた場合）も、安全側（`alone` ではない側 = 「この回数をこの合図の
+   * せいにしない」という、より慎重な言い方）へ倒す —— どちらの言い方でも
+   * 情報は減らない。
    */
-  #redeliveryNoticeFor(event: InboxEvent): string {
-    const record = this.#redelivered.get(event.id);
-    if (record === undefined) return '';
+  #redeliveryNoticeFor(batch: readonly InboxEvent[]): string {
+    if (batch.length === 1) {
+      const event = batch[0];
+      if (event === undefined) return '';
+      const record = this.#redelivered.get(event.id);
+      if (record === undefined) return '';
 
-    // **同時に拾い直した件数で名乗り分ける**（`#restoredCohort` の doc）。
-    // 1件だけなら、器が入れ替わった時点で受信箱に在った未読はこの合図なので、
-    // 回数はこの合図について語れる。2件以上なら語れない — **居合わせただけの
-    // 合図も同じだけ増えている**ので、回数から原因は1文字も読めない。
-    const alone = this.#restoredCohort <= 1;
+      // **同時に拾い直した件数で名乗り分ける**（`#restoredCohort` の doc）。
+      // 1件だけなら、器が入れ替わった時点で受信箱に在った未読はこの合図なので、
+      // 回数はこの合図について語れる。2件以上なら語れない — **居合わせただけの
+      // 合図も同じだけ増えている**ので、回数から原因は1文字も読めない。
+      const alone = this.#restoredCohort <= 1;
+      return [
+        `[system] **これは配り直しである（${record.deliveries} 回目の配達）。**` +
+          `${record.at} に受け取ったまま、処理を終える前にデーモンが落ちた合図を、起動時に拾い直した。`,
+        '同じ内容に既に応答しているかもしれない。日誌（`journal_read`）と `manager_list` を見て、' +
+          '同じ仕事を二度起こさないこと。',
+        ...(alone
+          ? record.deliveries >= 2
+            ? [
+                '**2 回以上配り直している。** 器が入れ替わった時点で受信箱に在った未読はこの1件' +
+                  'だけだった ⟹ この合図の処理そのものが落ちている可能性がある。' +
+                  '同じやり方をもう一度なぞる前に、なぜ落ちたかを先に見ること。',
+              ]
+            : []
+          : [
+              `**この回数は「器が入れ替わった回数」であって、この合図の処理が落ちた回数ではない。**` +
+                `同じ起動で一緒に拾い直した未読が ${this.#restoredCohort} 件あり、この合図は` +
+                'そのうちの1件である（配達回数は残っている未読の**全行**で一緒に進む）。' +
+                '**まだ一度も処理されていない可能性がある** — この回数を「この合図で落ちた」' +
+                'の根拠にしないこと。',
+            ]),
+        '',
+        '---',
+        '',
+      ].join('\n');
+    }
+
+    // **束の行。** 印が付いた（配り直しの）ものだけを集める——1件も無ければ
+    // 空文字（初回配達だけの束）。
+    const records: PendingInboxEvent[] = [];
+    for (const event of batch) {
+      const record = this.#redelivered.get(event.id);
+      if (record !== undefined) records.push(record);
+    }
+    if (records.length === 0) return '';
+
+    const maxDeliveries = Math.max(...records.map((record) => record.deliveries));
+    // `at` は ISO 8601 なので文字列としての昇順が時刻の昇順と一致する。
+    const oldestAt = records.map((record) => record.at).sort()[0];
+
     return [
-      `[system] **これは配り直しである（${record.deliveries} 回目の配達）。**` +
-        `${record.at} に受け取ったまま、処理を終える前にデーモンが落ちた合図を、起動時に拾い直した。`,
+      `[system] **これは配り直しの束である（束 ${batch.length} 件のうち ${records.length} 件が` +
+        `配り直し、最大 ${maxDeliveries} 回の配達、最も古いものは ${oldestAt} に受け取った）。**` +
+        '処理を終える前にデーモンが落ちた合図を、起動時に拾い直した。',
       '同じ内容に既に応答しているかもしれない。日誌（`journal_read`）と `manager_list` を見て、' +
         '同じ仕事を二度起こさないこと。',
-      ...(alone
-        ? record.deliveries >= 2
-          ? [
-              '**2 回以上配り直している。** 器が入れ替わった時点で受信箱に在った未読はこの1件' +
-                'だけだった ⟹ この合図の処理そのものが落ちている可能性がある。' +
-                '同じやり方をもう一度なぞる前に、なぜ落ちたかを先に見ること。',
-            ]
-          : []
-        : [
-            `**この回数は「器が入れ替わった回数」であって、この合図の処理が落ちた回数ではない。**` +
-              `同じ起動で一緒に拾い直した未読が ${this.#restoredCohort} 件あり、この合図は` +
-              'そのうちの1件である（配達回数は残っている未読の**全行**で一緒に進む）。' +
-              '**まだ一度も処理されていない可能性がある** — この回数を「この合図で落ちた」' +
-              'の根拠にしないこと。',
-          ]),
+      `**この回数は「器が入れ替わった回数」であって、この合図の処理が落ちた回数ではない。**` +
+        `同じ起動で一緒に拾い直した未読が ${this.#restoredCohort} 件あり、この合図は` +
+        'そのうちの1件である（配達回数は残っている未読の**全行**で一緒に進む）。' +
+        '**まだ一度も処理されていない可能性がある** — この回数を「この合図で落ちた」' +
+        'の根拠にしないこと。',
       '',
       '---',
       '',
