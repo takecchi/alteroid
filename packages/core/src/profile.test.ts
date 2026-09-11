@@ -53,6 +53,33 @@ function viaBashEnv(dir: string, script: string, profilePath: string): string {
   }).trim();
 }
 
+/**
+ * 同じプロファイルを2回 source して、本文が走った回数（`COUNT`）を出させる。
+ *
+ * **器の番人を継承しないよう env を明示する。** `execFileSync` は `env` を渡さないと
+ * 親の `process.env` をそのまま継承する。この器は `BASH_ENV` にプロファイルを指して
+ * いるので、**入れ子の bash 越しに `pnpm test` を起こすと `ALTEROID_PROFILE_SOURCED`
+ * が立った状態で vitest の fork ワーカーまで降りてくる**（機序と実測は `profile.ts` の
+ * module doc）。継承したままだと、ここで測りたい本文が**一度も走らずに**空文字が返り、
+ * 「無限再帰しない」の歯が**呼び出し経路のせいで**赤くなる（PR #749 / #759 が実際に
+ * 踏み、どちらも原因を追わずに範囲外へ上げた）。
+ *
+ * **測っている内容は変えていない。** 見たいのは「同じファイルを2回 source しても本文が
+ * 1回しか走らないこと」で、そのためには**番人が立っていない状態から始める**必要がある。
+ * ⟹ `env` を空にするのは対象を特定する側の変更であって、保証を緩める側ではない
+ * （同じ describe の他の assert も `env: {}` で揃えてある）。
+ *
+ * **共有にしてあるのは、密閉が片方だけ外れないようにするためである。** 下の2本（素の場合と、
+ * 親に番人が立っている場合）が同じ呼び出しを通るので、**ここから `env` を外すと後者が
+ * 赤くなる。**
+ */
+function sourceTwiceAndCount(profilePath: string): string {
+  return execFileSync('/bin/sh', ['-c', `. "$0"; . "$0"; printf %s "$COUNT"`, profilePath], {
+    encoding: 'utf8',
+    env: {},
+  });
+}
+
 describe('器に置く形', () => {
   it('本文を関数に閉じ込め、その呼び出しの後で伏せる鍵を落とす', () => {
     const rendered = renderProfileFile('export FOO=1', ['ALTEROID_DATABASE_URL']);
@@ -111,11 +138,41 @@ describe('器に置く形', () => {
     // 本文がコマンドを走らせる形。番人が無いと、`BASH_ENV` を継承した内側の
     // シェルが同じ本文をまた読み、そのまま無限に降りていく。
     return vessel.set('COUNT="${COUNT:-0}"; COUNT=$((COUNT + 1)); export COUNT').then(() => {
-      const out = execFileSync('/bin/sh', ['-c', `. "$0"; . "$0"; printf %s "$COUNT"`, path], {
-        encoding: 'utf8',
-      });
-      expect(out).toBe('1');
+      expect(sourceTwiceAndCount(path)).toBe('1');
     });
+  });
+
+  /**
+   * **密閉の固定点。** 直上の歯は、親の環境に器の番人（`ALTEROID_PROFILE_SOURCED`）が
+   * 立っていない限り、**密閉が外れても緑のままである** — だからあれだけでは、
+   * `sourceTwiceAndCount` から `env` が消えたことを捕まえられない。⟹ **捕まえるには、
+   * 親に番人が立っている状態で同じ呼び出しを通すしかない。**
+   *
+   * ⚠️ **このテストは自分で `process.env` を書く。それはまさにこのファイルが測っている
+   * 汚染の形である。** だから `finally` で**元の状態へ厳密に戻す**（元が `undefined` なら
+   * `delete`、値が在ればその値へ）。同じファイルのテストは直列に走るので、戻し切れば
+   * 他の歯には届かない。**`afterEach` へ置かないのは、書いた場所と戻す場所を離すと
+   * 「戻し忘れ」が別の編集で生まれるからである。**
+   */
+  it('親の環境に器の番人が立っていても同じ結果になる（密閉が外れたら赤くなる）', async () => {
+    const path = join(dir, 'profile.sh');
+    const vessel = createProfileVessel({ path });
+    await vessel.set('COUNT="${COUNT:-0}"; COUNT=$((COUNT + 1)); export COUNT');
+    const previousGuard = process.env[PROFILE_SOURCED_ENV_KEY];
+    process.env[PROFILE_SOURCED_ENV_KEY] = '1';
+    try {
+      expect(
+        sourceTwiceAndCount(path),
+        'この呼び出しが親の env を継承している（`sourceTwiceAndCount` の `env` の明示が' +
+          '外れた）。器は BASH_ENV にプロファイルを指しているので、入れ子の bash 越しに' +
+          ' pnpm test を起こすと ALTEROID_PROFILE_SOURCED が立って vitest の fork ワーカー' +
+          'まで降り、本文が一度も走らずに空文字が返る。機序と実測は profile.ts の' +
+          ' module doc（PR #749 / #759 が実際に踏んだ）。',
+      ).toBe('1');
+    } finally {
+      if (previousGuard === undefined) delete process.env[PROFILE_SOURCED_ENV_KEY];
+      else process.env[PROFILE_SOURCED_ENV_KEY] = previousGuard;
+    }
   });
 });
 
