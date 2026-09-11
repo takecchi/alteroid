@@ -260,6 +260,21 @@ export interface ManagerSessionOptionsRequest {
    * `#onSubagentStop` の doc を見よ。
    */
   onSubagentStop: HookCallback;
+  /**
+   * **マネージャー自身のターンが閉じる瞬間**の背景処理の在り高を観測する専用
+   * フック（#861 の実測口）。
+   *
+   * **`onSubagentStop` とちょうど裏返しの発火条件を持つ。** あちらは「作業者が
+   * 畳んだ瞬間に**親のターンが開いていた**」ときにしか来ないので、親が先に
+   * 閉じる形（委譲は既定で `is_backgrounded: true` なので**本番ではこちらが
+   * 普通**）を1件も拾えない。こちらはその閉じる瞬間そのものに来る。
+   *
+   * **optional にしない。理由は直上の `onSubagentStop` と同じ** —— 省略できる
+   * 形にすると、provider を足す側が「渡さない」ことで観測を静かに落とせる
+   * （可観測性は要件である。PRD「可観測性」）。中身は `runner.ts` の `#onStop`
+   * の doc を見よ。
+   */
+  onStop: HookCallback;
 }
 
 /** マネージャーへ渡す `Options`。組み立ての知識は `runner.ts` の旧 `#buildOptions` から移した。 */
@@ -281,6 +296,7 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     onPreCompact,
     onUserPromptSubmit,
     onSubagentStop,
+    onStop,
   } = request;
 
   return {
@@ -343,6 +359,11 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
       // **観測専用**（#357）。`{ continue: true }` を返すだけで何もブロック
       // しない。理由は `runner.ts` の `#onSubagentStop` の doc を見よ。
       SubagentStop: [{ hooks: [onSubagentStop] }],
+      // **観測専用**（#861）。`{ continue: true }` を返すだけで、`decision` も
+      // `hookSpecificOutput` も返さない —— 直上の `SubagentStop` は起こし直し
+      // （`additionalContext`）を返す側へ変わっているが、**こちらは記録だけで
+      // ある。** 理由は `runner.ts` の `#onStop` の doc を見よ。
+      Stop: [{ hooks: [onStop] }],
     },
   };
 }

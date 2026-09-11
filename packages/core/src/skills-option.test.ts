@@ -60,6 +60,7 @@ function managerOptions(): Options {
     onPreCompact: noopHook,
     onUserPromptSubmit: noopHook,
     onSubagentStop: noopHook,
+    onStop: noopHook,
   });
 }
 
