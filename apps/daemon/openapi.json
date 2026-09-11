@@ -6888,6 +6888,218 @@
         }
       }
     },
+    "/credentials": {
+      "get": {
+        "operationId": "getCredentials",
+        "tags": ["credentials"],
+        "summary": "マネージャーへ降ろす環境変数の指紋を読む",
+        "description": "正本に在る名前と指紋を返す。**値は返さない。** 届いているかは GET /runners の credentials（runner 側の指紋）と突き合わせる。",
+        "responses": {
+          "200": {
+            "description": "正本に在る鍵の指紋。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "credentials": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "sha256": {
+                            "type": "string"
+                          },
+                          "updatedAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["name", "sha256", "updatedAt"]
+                      }
+                    }
+                  },
+                  "required": ["credentials"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "正本の器が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "putCredentials",
+        "tags": ["credentials"],
+        "summary": "マネージャーへ降ろす環境変数を置いて配る",
+        "description": "**部分更新**（入力に無い名前は触らない）。空文字は「その名前を外す」。正本へ置いてから全 runner へ降ろす。器を作り直しても hello のときに降り直す。",
+        "responses": {
+          "200": {
+            "description": "正本の指紋と、各 runner への配布結果。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "credentials": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "sha256": {
+                            "type": "string"
+                          },
+                          "updatedAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["name", "sha256", "updatedAt"]
+                      }
+                    },
+                    "runners": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "runnerId": {
+                            "type": "string"
+                          },
+                          "ok": {
+                            "type": "boolean"
+                          },
+                          "error": {
+                            "type": "string"
+                          },
+                          "credentials": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "name": {
+                                  "type": "string"
+                                },
+                                "sha256": {
+                                  "type": "string"
+                                },
+                                "updatedAt": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["name", "sha256", "updatedAt"]
+                            }
+                          }
+                        },
+                        "required": ["runnerId", "ok"]
+                      }
+                    }
+                  },
+                  "required": ["credentials", "runners"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文の形が不正、または置かせない名前だった（**1文字も置いていない**）。**送られてきた本文は返さない**——ここは鍵の値そのものを運ぶ口なので、既定の 400 の形は使えない（`POST /runners/credentials` の hook の doc）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "実行環境の持ち主ではない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "正本の器が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "credentials": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Z][A-Z0-9_]*$"
+                        },
+                        "value": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["name", "value"]
+                    }
+                  }
+                },
+                "required": ["credentials"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/tokens": {
       "get": {
         "operationId": "getTokens",

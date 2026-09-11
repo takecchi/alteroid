@@ -465,6 +465,19 @@ export const STATEMENTS = [
   // 生ログは正当にありえる）。
   `alter table archive add column if not exists removed_at timestamptz`,
   `alter table archive add column if not exists removed_bytes integer`,
+
+  // --- マネージャーへ降ろす環境変数の正本 ------------------------------------
+  // **1名前1行。** 名前が主キーなので、置き換えは `on conflict` で済む。
+  // まだ誰の DB にも無い新規テーブルなので、他のテーブルのような「列を足す →
+  // 鍵を差し替える」の順序は要らず、最初から今の形で作ってよい。
+  //
+  // **`value` を not null にしてある。** 「外す」は行の削除で表す（空文字の行を
+  // 残せる形にすると、`list()` が返す集合と器へ降りる集合が食い違う）。
+  `create table if not exists manager_credentials (
+     name text primary key,
+     value text not null,
+     updated_at timestamptz not null default now()
+   )`,
 ] as const;
 
 export async function migrate(db: Db): Promise<void> {

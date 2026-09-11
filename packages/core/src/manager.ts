@@ -25,6 +25,7 @@ import {
 import { classifyManagerActivity, describeManagerActivityForFlush } from './manager-activity.js';
 import type { ManagerActivityInput } from './manager-activity.js';
 import { codeSpan } from './markdown-span.js';
+import type { CredentialService } from './credential-service.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap, type RecentMap } from './recent.js';
 import { reportRunnerRevision, resolveBuildRevision } from './revision.js';
@@ -1393,6 +1394,14 @@ export interface ManagerPoolOptions {
    */
   profile?: ProfileService;
   /**
+   * マネージャーへ降ろす環境変数（名前→値）の1本道。
+   *
+   * **プロファイルとまったく同じ理由でここに要る** — runner は記憶ストアを
+   * 読めないので、器が作り直されたときに降ろすのはデーモンの責任である。
+   * **降ろし直しも更新（`apply`）と同じ列を通す。**
+   */
+  credentials?: CredentialService;
+  /**
    * いまの時刻（既定は `Date.now`）。**貸し出し期限の判定のために口を開けてある。**
    *
    * 期限は時刻そのものが答えを決めるので、渡せない形だと「猶予の中では奪わない」を
@@ -2573,6 +2582,7 @@ class Pool implements ManagerPool {
   readonly #post: (event: InboxEvent) => void;
   readonly #runners: RunnerRegistry;
   readonly #profile: ProfileService | undefined;
+  readonly #credentials: CredentialService | undefined;
   readonly #records = new Map<string, ManagerRecord>();
   /**
    * いまの時刻。**器の時計を直に読まない**（テストが判定の時刻を持てるようにする）。
@@ -2837,6 +2847,7 @@ class Pool implements ManagerPool {
     post,
     runners,
     profile,
+    credentials,
     now,
     leaseTtlMs,
     withheldReportFlushMs,
@@ -2851,6 +2862,7 @@ class Pool implements ManagerPool {
     this.#post = post;
     this.#runners = runners;
     this.#profile = profile;
+    this.#credentials = credentials;
     this.#now = now ?? (() => Date.now());
     this.#leaseTtlMs = leaseTtlMs ?? LEASE_TTL_MS;
     this.#withheldReportFlushMs = withheldReportFlushMs ?? resolveWithheldReportFlushMs();
@@ -4863,6 +4875,36 @@ class Pool implements ManagerPool {
   }
 
   /**
+   * 名乗ってきた runner へ、いま正本に在る環境変数（名前→値）を降ろす。
+   *
+   * **`#pushProfile` と同じ位置・同じ理由・同じ倒れ方である。** runner は記憶
+   * ストアを読めないので降ろすのはデーモンの責任で、失敗しても委譲は止めず、
+   * 降りていないことは日誌に残す（黙って古い鍵で走ると、「鍵が届いていない」のか
+   * 「鍵の権限が足りない」のかを誰も切り分けられない）。
+   *
+   * **プロファイルと別の呼びにしてあるのは、片方が落ちても片方は降りるべき
+   * だからである。** 1つにまとめると、プロファイルの評価が落ちた器へは鍵も
+   * 降りない——落ちる理由が無関係なのに、巻き添えで資格を失う。
+   */
+  async #pushCredentials(runner: RunnerClient): Promise<void> {
+    if (this.#stopped || this.#credentials === undefined) return;
+    const runnerId = runner.runnerId;
+    try {
+      // **更新と同じ列に入れる**（`#pushProfile` と同じ）。直に読んで直に書くと、
+      // 人間の更新の最中に古い値で上書きしうる。
+      await this.#credentials.syncRunner(runner);
+    } catch (error) {
+      // **`this.#journal` を経由する**（`#pushProfile` と同じ理由・同じ非対称）。
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text: `${runnerId} へマネージャーの環境変数を降ろせなかった（この runner で起こすマネージャーは、器の環境変数に在るものだけで走る）: ${String(error)}`,
+      });
+    }
+  }
+
+  /**
    * イベントの受け口を開く。**繋ぎに行くのはデーモン側**である。
    *
    * **一度きりにしない。** 名簿は動的で、runner は後から載る（roadmap M5）。
@@ -4923,6 +4965,9 @@ class Pool implements ManagerPool {
       // 最初のマネージャーがプロファイルの届く前に走り出しうる。届いていない
       // ことは本人には見えないので、「たまに鍵が無い」という形で現れる。
       await this.#pushProfile(runner);
+      // **名前→値の袋も同じ位置で降ろす。** 器が作り直されていれば置いた鍵は
+      // 消えているので、ここで降ろさないと最初のマネージャーが鍵無しで走り出す。
+      await this.#pushCredentials(runner);
       // **認証トークンも同じ位置で降ろす。** プロファイルと同じ理由——名乗り
       // 任せにすると、最初のマネージャーが古いトークンで走り出しうる。
       await this.#pushAgentToken(runner);
@@ -5050,6 +5095,10 @@ class Pool implements ManagerPool {
       // 見てもらう。
       const push = (async () => {
         await this.#pushProfile(runner);
+        // **名前→値の袋も同じ位置で降ろす（#connectTo と同じ）。** 繋ぎ直して
+        // きた runner は器ごと入れ替わっていることがあり、そのとき置いた鍵は
+        // 消えている。
+        await this.#pushCredentials(runner);
         // **認証トークンも同じ位置で降ろす（Issue #393）。** 直上の理由がそのまま
         // 効く —— **器が入れ替わっていれば置いた鍵も消えている。** この経路にだけ
         // 無かったので、繋ぎ直してきた runner は`#connectTo`と違って鍵が降りず、

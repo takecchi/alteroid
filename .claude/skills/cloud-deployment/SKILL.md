@@ -27,7 +27,12 @@ description: クラウド構成（docker compose、PostgreSQL、daemon / manager
   - ネットワークも分けてある（`data`: daemon↔db / `control`: daemon↔runner）。**runner から db は名前解決すらできない**。ここを1つに戻すと、鍵を持たないという境界が「鍵を渡していないだけ」に薄まる
   - マネージャーへ渡す MCP 設定・プロジェクト設定は `workspace/`（＝runner コンテナの `/workspace`）に置く。cwd がそこなので `settingSources: ['project','local']` がそのまま拾う
   - 境界の確認は `docker compose exec runner env | grep ALTEROID_DATABASE_URL`（出ないこと）、`docker compose exec runner tr '\0' '\n' < /proc/1/environ | grep '^ALTEROID_RUNNER_TOKEN='`（出ないこと。sha256 だけが残る）、`docker compose exec runner getent hosts db`（引けないこと）
-  - マネージャーに PR を出させるなら `.env` に `GH_TOKEN` と `GIT_AUTHOR_*` / `GIT_COMMITTER_*` を足す（両方へ渡る）。無くても公開リポジトリの clone は通る。手順とスコープは [railway/README.md](./railway/README.md) の「マネージャーに GitHub を渡す」。**`gh` の版は固定していない** — 固定すると人間の手元より古い `gh` を配ることになり、その遅れがデグレードになる
+  - **マネージャーへ降ろす環境変数は、器に足さずに正本へ置ける**（`alteroid credential set <名前> -f <path>` / `PUT /credentials`）。正本は記憶ストア（fs は `credentials.json`、pg は `manager_credentials`）で、**runner が名乗り直すたびにデーモンが降ろし直す** ⟹ 器を作り直しても痩せない。名前は任意（英大文字・数字・`_`）で、**用途が増えても実装も器も直さない**
+  - **runner に読みに行かせない**のはプロファイルと同じ（読みに行けるということは記憶ストアの鍵が在るということ）。降ろすのはデーモンで、`ManagerPool` が `#pushProfile` と同じ位置で呼ぶ
+  - **正本が空なら1文字も配らない。** 空を配ると、器の環境変数から種を拾っていた鍵（`x-shared-env` の `GH_TOKEN`）を消して回ることになる ＝ 移行の途中で資格が消える
+  - **`CLAUDE_CODE_OAUTH_TOKEN` は置けない**（400）。正本はプールの側（`alteroid token`）で、こちらへ置くと名乗り直しのたびに回した鍵を巻き戻す（`.claude/skills/token-pool/`）
+  - **プロファイル（`alteroid profile`）との使い分けは「走行中に届くか」である。** こちらは名前ごとにファイルへ落ちるので `gh` / `git` は次の呼び出しから読み直す。あちらは SDK 子プロセスの起動時にしか効かない。そして `GET /profile` は本文ごと返すが、こちらは指紋しか返さない ⟹ **秘密はこちら側へ置く**
+- マネージャーに PR を出させるなら `.env` に `GH_TOKEN` と `GIT_AUTHOR_*` / `GIT_COMMITTER_*` を足す形も引き続き効く（両方へ渡る。正本が空のときの土台である）。無くても公開リポジトリの clone は通る。手順とスコープは [railway/README.md](./railway/README.md) の「マネージャーに GitHub を渡す」。**`gh` の版は固定していない** — 固定すると人間の手元より古い `gh` を配ることになり、その遅れがデグレードになる
 - ホスティング（Railway）の手順は [railway/README.md](./railway/README.md)。**同じ3つを Service に写すだけだが、境界がいくつかゆるむ**（サービス間でボリュームを共有できないので制御面が TCP になる／`*.railway.internal` がフラットなので runner から db が名前解決でき、**外から叩ける形にすると runner からデーモンへも TCP が届く** — 守っているのはログイン認証だけになる）。**ここに数を書かないこと**（増えるたびに数え直すことになる。数え上げは同文書「先に読む」だけが持つ）。ゆるみの内訳と、それでも残る守りは同文書に書いてある。**Shared Variables に置かないものは2つ** — `ALTEROID_DATABASE_URL`（置いた瞬間に runner へ降りて、残った守りが消える。合鍵は runner 側で畳まれるので共有してよい）と `ALTEROID_RUNNER_ID`（**台ごとに違う値**である。共有すると全台が同じ id を名乗り、`manager_send` が割り当て先ではない器へ黙って届く — 名簿の `get` は線形一致で、重複を検出しない）
 - pg ドライバのテストは PGlite（インプロセスの実 PostgreSQL）で回る。CI に DB を用意する必要はないが、**偽の DB で代用しない**（SQL と索引と冪等性ごと確かめる意味が消える）
 - デーモン再起動時の引き取りは2通り。**runner が生きていれば繋ぎ直すだけ**（マネージャーは走り続けている）、**runner ごと落ちていれば実際に resume する**（JobStore の `session_id` ＋ 預かった生ログ）。どちらもクローンの受信箱へ知らせる

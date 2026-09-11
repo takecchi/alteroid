@@ -28,6 +28,8 @@ import {
   resolveManagerModel,
   resolveWorkerModel,
 } from './runner.js';
+import { createCredentialService } from './credential-service.js';
+import { fingerprintOf } from './credentials.js';
 import { createProfileService } from './profile-service.js';
 import { createLocalRunner } from './runner-local.js';
 import {
@@ -306,6 +308,12 @@ function setup(
     // **本番と同じ1本道を通す。** 降ろし直しは更新と同じ列に入る必要があるので、
     // ここを省くと「重なったら壊れる」経路をテストが見なくなる。
     profile: createProfileService({ stores, runners: registry }),
+    // **鍵の袋も本番と同じ1本道を通す**（降ろし直しは更新と同じ列に入る）。
+    credentials: createCredentialService({
+      stores,
+      runners: registry,
+      withheldEnvKeys: [...WITHHELD_ENV_KEYS],
+    }),
     ...(options.generateManagerId === undefined
       ? {}
       : { generateManagerId: options.generateManagerId }),
@@ -2134,6 +2142,14 @@ function swappableRunner(runnerId = 'runner-primary') {
     answers: [] as { managerId: string; requestId: string }[],
     /** 降ろされた実行環境プロファイル。名乗るたびに1本増える。 */
     profiles: [] as string[],
+    /**
+     * 降ろされた鍵（名前→値の袋）。**器の側の振る舞いを最小限まねる** ——
+     * 空文字は外す。`credentials()` がここから答えるので、「差があるものだけ
+     * 降ろす」も測れる。
+     */
+    held: new Map<string, string>(),
+    /** 降ろしの呼びごとの中身（何回・何を降ろしたか）。 */
+    credentialPushes: [] as { name: string; value: string }[][],
   };
   const runner: RunnerClient = {
     runnerId,
@@ -2199,10 +2215,23 @@ function swappableRunner(runnerId = 'runner-primary') {
       return null;
     },
     async credentials() {
-      return [];
+      return [...state.held].map(([name, value]) => ({
+        name,
+        sha256: fingerprintOf(value),
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      }));
     },
-    async setCredentials() {
-      return [];
+    async setCredentials(entries) {
+      state.credentialPushes.push([...entries]);
+      for (const entry of entries) {
+        if (entry.value.length === 0) state.held.delete(entry.name);
+        else state.held.set(entry.name, entry.value);
+      }
+      return [...state.held].map(([name, value]) => ({
+        name,
+        sha256: fingerprintOf(value),
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      }));
     },
     async profile() {
       return undefined;
@@ -2894,6 +2923,50 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     fake.swap();
     await expect.poll(() => fake.state.profiles.length, { timeout: 2000 }).toBe(2);
     expect(fake.state.profiles[1]).toContain('SOME_API_TOKEN');
+  });
+
+  it('runner が名乗るたびに、マネージャーへ降ろす環境変数も降ろし直す', async () => {
+    // **プロファイルと同じ理由である**（runner は記憶ストアを読めない）。降ろし
+    // 直さないと、器を作り直した瞬間に鍵が消える —— Railway には volume が無いので
+    // runner 側の器（`/run/alteroid/credentials`）は器と一緒に消える。
+    const stores = createMemoryStores();
+    await stores.credentials.put([
+      { name: 'GH_TOKEN', value: 'ghp_from_vault' },
+      { name: 'GIT_AUTHOR_NAME', value: 'takecchi' },
+    ]);
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    // **委譲を始める前に降りている。**
+    await s.pool.restore();
+    await expect.poll(() => fake.state.credentialPushes.length, { timeout: 2000 }).toBe(1);
+    expect(fake.state.held.get('GH_TOKEN')).toBe('ghp_from_vault');
+    expect(fake.state.held.get('GIT_AUTHOR_NAME')).toBe('takecchi');
+
+    // 器が入れ替わる ＝ 置いたものは消えている。もう一度降ろす。
+    fake.state.held.clear();
+    fake.swap();
+    await expect.poll(() => fake.state.credentialPushes.length, { timeout: 2000 }).toBe(2);
+    expect(fake.state.held.get('GH_TOKEN')).toBe('ghp_from_vault');
+  });
+
+  it('正本が空なら、名乗ってきた runner へ1文字も降ろさない（器の env から拾った鍵を消さない）', async () => {
+    // **移行の途中（器の環境変数にだけ鍵が在る）を殺さない。** 空を配ると、
+    // 器の側が種として拾っていた `GH_TOKEN` を消して回ることになる。
+    const stores = createMemoryStores();
+    // **プロファイルを置いておくのは、同期のためである。** 鍵の降ろしは
+    // プロファイルの直後に呼ばれるので、プロファイルが降りたのを見てから
+    // 鍵の側を見れば「まだ降りていないだけ」を「降ろさなかった」と読まない。
+    await stores.profile.write('export MARKER=1');
+    const fake = swappableRunner();
+    fake.state.held.set('GH_TOKEN', 'ghp_from_env');
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    await s.pool.restore();
+    await expect.poll(() => fake.state.profiles.length, { timeout: 2000 }).toBe(1);
+
+    expect(fake.state.credentialPushes).toEqual([]);
+    expect(fake.state.held.get('GH_TOKEN')).toBe('ghp_from_env');
   });
 
   it('取り直しの最中に起こされた委譲を、死んだものとして起こし直さない', async () => {

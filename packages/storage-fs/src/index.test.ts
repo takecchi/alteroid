@@ -2639,6 +2639,68 @@ describe('FsTokenPoolStore', () => {
   });
 });
 
+/**
+ * マネージャーへ降ろす環境変数の正本（名前→値）。
+ *
+ * **器（fs / pg / インメモリ）で同じ振る舞いになること**を問う。ここが揃っていないと、
+ * 「テストの器では通るのに本物では他の鍵が消える」というずれ方をする——`put` は
+ * **部分更新**であり、全文置換ではない。
+ */
+describe('FsCredentialVaultStore', () => {
+  it('往復（put → list）で値まで戻り、name 昇順で並ぶ', async () => {
+    expect(await stores.credentials.list()).toEqual([]);
+
+    const written = await stores.credentials.put([
+      { name: 'NPM_TOKEN', value: 'npm_x' },
+      { name: 'GIT_AUTHOR_NAME', value: 'takecchi' },
+    ]);
+    expect(written.map((row) => row.name)).toEqual(['GIT_AUTHOR_NAME', 'NPM_TOKEN']);
+    expect(written.map((row) => row.value)).toEqual(['takecchi', 'npm_x']);
+
+    expect(await stores.credentials.list()).toEqual(written);
+  });
+
+  it('部分更新——入力に無い名前は触らない', async () => {
+    await stores.credentials.put([{ name: 'GH_TOKEN', value: 'ghp_1' }]);
+    await stores.credentials.put([{ name: 'NPM_TOKEN', value: 'npm_x' }]);
+
+    expect((await stores.credentials.list()).map((row) => row.name)).toEqual([
+      'GH_TOKEN',
+      'NPM_TOKEN',
+    ]);
+  });
+
+  it('空文字で外れる（器の側の「外す」と同じ約束）', async () => {
+    await stores.credentials.put([{ name: 'NPM_TOKEN', value: 'npm_x' }]);
+    await stores.credentials.put([{ name: 'NPM_TOKEN', value: '' }]);
+
+    expect(await stores.credentials.list()).toEqual([]);
+  });
+
+  it('書かれたファイルのモードが 0600（中身が鍵そのもの）', async () => {
+    await stores.credentials.put([{ name: 'NPM_TOKEN', value: 'npm_x' }]);
+    const info = await stat(stores.paths.credentials);
+    expect(info.mode & 0o777).toBe(0o600);
+  });
+
+  it('手で書いた壊れた名前の行は読みで落ちる（器の外を指す名前を降ろさない）', async () => {
+    // **ファイルは人間が開ける。** 入口の検査だけに頼ると、手で書いた
+    // `../../x` がそのまま runner へ降りて器の外を指す。
+    await stores.credentials.put([{ name: 'NPM_TOKEN', value: 'npm_x' }]);
+    await writeFile(
+      stores.paths.credentials,
+      JSON.stringify({
+        credentials: [
+          { name: '../../../etc/cron.d/x', value: 'boom', updatedAt: '2026-01-01T00:00:00.000Z' },
+        ],
+      }),
+      'utf8',
+    );
+
+    await expect(stores.credentials.list()).rejects.toThrow();
+  });
+});
+
 describe('FsSessionRegistry', () => {
   it('セッション id を覚えて忘れられる', async () => {
     expect(await stores.sessions.getCloneSessionId()).toBeNull();

@@ -61,6 +61,7 @@ import {
   type PermissionModeName,
 } from './permission-mode.js';
 import type { ProfileApplier } from './profile.js';
+import type { CredentialService } from './credential-service.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap } from './recent.js';
 import { describeSituation, describeSituationUnavailable } from './situation.js';
@@ -575,6 +576,15 @@ export interface CloneOptions {
    * 別のインスタンスを持つと直列化の意味が消える（層ごとに違う本文が残る）。
    */
   profileService?: ProfileService;
+  /**
+   * マネージャーへ降ろす環境変数（名前→値）を置いて配る1本道。
+   *
+   * **デーモンが作った同じインスタンスを渡すこと**（`profileService` と同じ
+   * 理由）。ここに渡すのは、再接続時の降ろし直しがマネージャーのプールを通る
+   * ためである——runner は記憶ストアを読めないので、降ろすのはデーモンの責任
+   * である。
+   */
+  credentialService?: CredentialService;
   /**
    * アカウント全体の利用状況（claude.ai 側の値）を読む口。
    *
@@ -1411,6 +1421,7 @@ class Clone implements CloneHost {
       humanPriority,
       profile,
       profileService,
+      credentialService,
       accountUsage,
       scheduler,
       self,
@@ -1448,6 +1459,7 @@ class Clone implements CloneHost {
       createManagerPool({
         stores,
         ...(profileService === undefined ? {} : { profile: profileService }),
+        ...(credentialService === undefined ? {} : { credentials: credentialService }),
         // マネージャーからの報告・質問も、人間の発言と同じ受信箱を通る。
         post: (event) => this.post(event),
         runners: runners ?? createRunnerRegistry([]),

@@ -229,6 +229,22 @@ describe('鍵の器が越えてはいけない線', () => {
     // 種が無くても所在は知らせる（後から置かれた鍵も同じ経路で届く）
     expect(env.ALTEROID_GITHUB_TOKEN_FILE).toBe(join(dir, 'GITHUB_TOKEN'));
   });
+
+  it('表に無い名前が降りてきても、その所在を子へ知らせる（配ったのに読み直せない鍵を作らない）', async () => {
+    const store = createCredentialStore({ dir, seed: {}, names: ['GH_TOKEN'] });
+
+    // `set()` は表を見ない（名前の形と伏せる鍵の拒否だけ）。デーモンが降ろして
+    // くるのはこの経路なので、表だけを見ていると所在が届かない。
+    await store.set([{ name: 'NPM_TOKEN', value: 'npm_x' }]);
+
+    const env = store.env();
+
+    expect(env.ALTEROID_NPM_TOKEN_FILE).toBe(join(dir, 'NPM_TOKEN'));
+    // 表の分は引き続き知らせる（種が無くても）
+    expect(env.ALTEROID_GH_TOKEN_FILE).toBe(join(dir, 'GH_TOKEN'));
+    // 所在だけ。値は1文字も出さない
+    expect(JSON.stringify(env)).not.toContain('npm_x');
+  });
 });
 
 /**

@@ -11,6 +11,7 @@ import {
   memoryDocumentSchema,
   pendingApprovalSchema,
   runnerCredentialFingerprintSchema,
+  runnerCredentialSchema,
   runnerLivenessSchema,
   runnerProfileFingerprintSchema,
   scheduleSpecSchema,
@@ -1081,6 +1082,48 @@ export const profileUpdateResponseSchema = z.object({
       output: z.string().optional(),
       names: z.array(z.string()).optional(),
       profile: runnerProfileFingerprintSchema.optional(),
+    }),
+  ),
+});
+
+// ---------------------------------------------------------------------------
+// マネージャーへ降ろす環境変数（/credentials）
+// ---------------------------------------------------------------------------
+
+/**
+ * 正本に在る鍵の一覧。**値は出さない（指紋だけ）。**
+ *
+ * `/profile` が本文を返すのとは逆にしてある。あちらは**人間が書いたスクリプトを
+ * 直すために読み直せなければ typo ひとつ直せない**が、こちらは名前ごとに置く袋
+ * なので、**直したい1本だけを置き直せる**——全文を読み出す必要が無い。
+ * ⟹ 値を返す口を作らない（作れば、読む側の資格を置く側と同じ強さまで上げる
+ * ことになる）。
+ */
+export const credentialsResponseSchema = z.object({
+  credentials: z.array(runnerCredentialFingerprintSchema),
+});
+
+/**
+ * `PUT /credentials` の入力。**部分更新である**（入力に無い名前は触らない）。
+ *
+ * 名前の形は `runnerCredentialSchema`（runner の制御面と同じ）をそのまま使う——
+ * 名前は器の中のファイル名になるので、パスとして解釈されうる形を最初から名前と
+ * して認めない（そちらの doc）。**2つ書くと必ずずれるので、書き直さない。**
+ */
+export const credentialsUpdateRequestSchema = z.object({
+  credentials: z.array(runnerCredentialSchema).min(1),
+});
+
+export const credentialsUpdateResponseSchema = z.object({
+  /** 置き換えた後の正本の指紋。 */
+  credentials: z.array(runnerCredentialFingerprintSchema),
+  /** 各 runner へ降ろした結果。**台ごとに返す**（畳んで1つの成否にしない）。 */
+  runners: z.array(
+    z.object({
+      runnerId: z.string(),
+      ok: z.boolean(),
+      error: z.string().optional(),
+      credentials: z.array(runnerCredentialFingerprintSchema).optional(),
     }),
   ),
 });

@@ -15,6 +15,7 @@ import {
   createClone,
   createLocalRunner,
   createProfileApplier,
+  createCredentialService,
   createProfileService,
   createProfileVessel,
   createRunnerRegistry,
@@ -892,6 +893,22 @@ export async function main(): Promise<void> {
   const profileService = createProfileService({ stores, applier: profile, runners });
 
   /**
+   * マネージャーへ降ろす環境変数（名前→値）の1本道。**インスタンスは1つだけ。**
+   *
+   * 人間の口（`PUT /credentials`）と、runner が名乗り直したときの降ろし直し
+   * （`ManagerPool` 経由）は同じものを書き換えるので、別インスタンスを持つと
+   * 直列化の意味が消える（`profileService` と同じ理由）。
+   *
+   * **伏せる鍵の名前を渡す。** 渡し忘れると「伏せたはずの環境変数を鍵の名前として
+   * 注入し直せる」穴が開く（器の側と同じ拒否を、400 を返せる位置にも置く）。
+   */
+  const credentialService = createCredentialService({
+    stores,
+    runners,
+    withheldEnvKeys: [...WITHHELD_ENV_KEYS, ...storage.withheldEnvKeys],
+  });
+
+  /**
    * 認証トークンのプール（Issue #393「PR1 プールの器」）。**回さない**——ここで
    * 作るのは器の読み書きの口だけで、検知・切替は回し手が持つ（`createTokenRotator`）。
    *
@@ -1167,6 +1184,7 @@ export async function main(): Promise<void> {
     runners,
     profile,
     profileService,
+    credentialService,
     self,
     // 現役のトークン。**値ではなく関数**——構築時に凍らせない（`CloneOptions` の doc）。
     credentials: () => agentTokenHolder.values(),
@@ -1580,6 +1598,7 @@ export async function main(): Promise<void> {
     allowedOrigins,
     auth: { plan: authPlan },
     profile: profileService,
+    credentials: credentialService,
     tokens: tokenPoolService,
   });
   // 開けたこと自体は方針の変更であって禁止事項ではない。ただし**黙って**外へ

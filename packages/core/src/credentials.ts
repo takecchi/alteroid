@@ -91,6 +91,43 @@ export const ROTATABLE_CREDENTIAL_KEYS = [
 ] as const;
 
 /**
+ * **正本を認証トークンのプールが持つ名前。** 名前→値の袋（`CredentialService`）
+ * へは置かせない。
+ *
+ * ## なぜ拒むのか（`credentialNamesShadowedByProfile` は拒まないのに）
+ *
+ * プロファイルの側を拒まないのは、あちらが**中身を解釈しない自由記述**であり、
+ * 名前を禁じると追加制限になるからである（そちらの doc）。こちらは違う——
+ * **名前ごとに置く袋なので、置けば必ず名前ごとに配る。** そして配る契機に
+ * `hello`（runner が名乗り直すたび）が含まれる:
+ *
+ * 1. 回し手がプールの現役を撒く（新しい値が器へ入る）
+ * 2. runner が繋ぎ直す（デプロイ・再接続）
+ * 3. 袋の `syncRunner` が**袋に入っている古い値**を降ろし直す
+ *
+ * ⟹ **回した鍵が、再接続のたびに黙って巻き戻る。** しかも器も日誌も「撒いた」と
+ * 言うので、どこにも赤が出ない（`credentialNamesShadowedByProfile` が防いでいる
+ * のと同じ壊れ方を、こちらは**自分で作り出す**）。
+ *
+ * **能力は1つも減らない。** この名前を置く口は在り、そちらのほうが強い
+ * （`alteroid token add` は複数本を持って枠に当たったら回す）。ここで拒むのは
+ * 「2つ目の正本を作らせない」ためであって、できることを削るためではない。
+ *
+ * **型で `ROTATABLE_CREDENTIAL_KEYS` に縛ってある**（`runner.ts` の
+ * `AGENT_TOKEN_CREDENTIAL_NAME` と同じ理由）。裸のリテラルだと、名前が変わった
+ * ときにここだけが古い名前を拒み続け、**新しい名前は素通りするのにテストも
+ * typecheck も緑**という静かな壊れ方をする。
+ *
+ * **縛りは `satisfies` で掛け、宣言する型は `readonly string[]` にしてある。**
+ * 型そのものを union にすると、`includes(<任意の名前>)` が「その union の値しか
+ * 渡せない」と言って落ちる——**検査したい相手（器の外から来た任意の文字列）を
+ * 検査できなくなる**ので、縛りと使い勝手を分けている。
+ */
+export const POOL_OWNED_CREDENTIAL_NAMES: readonly string[] = [
+  'CLAUDE_CODE_OAUTH_TOKEN',
+] satisfies readonly (typeof ROTATABLE_CREDENTIAL_KEYS)[number][];
+
+/**
  * プロファイルが、鍵と同じ名前を宣言してしまっていないか。**名前だけを返す。**
  *
  * ## なぜこの検査が要るか
@@ -263,10 +300,27 @@ class Store implements CredentialStore {
    * 扱う鍵ぜんぶに `ALTEROID_<NAME>_FILE` を出す。GH_TOKEN だけを特別扱いすると、
    * 「回せる」と言いながら回らない鍵ができる（実際に `GITHUB_TOKEN` がそうなっていた
    * — 器には置かれるのに、走行中のマネージャーへ届く経路がどこにも無かった）。
+   *
+   * **「扱う鍵」は `#names`（起動時に env から拾う表）だけではない。** `set()` は
+   * 表を見ずに任意の名前を受け付ける（検査は名前の形と伏せる鍵の拒否だけ）ので、
+   * デーモンが降ろしてきた名前は表に無い。表だけを見ていると、**配ったのに所在を
+   * 知らせない鍵**ができる — それは `GITHUB_TOKEN` で既に踏んだのと同じ形
+   * （器には在るのに、読み直す道具へ所在が届かない）である。だから和を出す。
+   *
+   * **順序は表が先、降りてきた鍵が後。** どちらも同じ値（`join(dir, name)`）に
+   * なるので勝ち負けは無いが、読む人にとって「既定の表 → 後から足された分」の
+   * 並びのほうが素直である。
+   *
+   * **外したときの振る舞いは、表の分と降りてきた分で違う。** 表の名前は種が無くても
+   * 所在を知らせ続けるが（`names` は「この器が扱うと宣言した集合」である）、降りて
+   * きた名前は外すと所在も消える（あちらは「いま在る鍵」でしかない）。どちらも
+   * 指す先のファイルは無いので、読む道具から見た結果は同じ（ENOENT）である。
    */
   env(): Record<string, string> {
     const out: Record<string, string> = { ALTEROID_CREDENTIAL_DIR: this.#dir };
-    for (const name of this.#names) out[`ALTEROID_${name}_FILE`] = join(this.#dir, name);
+    for (const name of new Set([...this.#names, ...this.#held.keys()])) {
+      out[`ALTEROID_${name}_FILE`] = join(this.#dir, name);
+    }
     return out;
   }
 

@@ -27,6 +27,7 @@ import {
   type LoginRequest,
 } from './auth.js';
 import type {
+  CredentialVaultStore,
   EnvProfile,
   InboxStore,
   JobStore,
@@ -41,6 +42,7 @@ import type {
   SessionRegistry,
   TranscriptGrave,
   Stores,
+  StoredCredential,
   TokenPoolStore,
   TranscriptArchive,
   UsageStore,
@@ -632,6 +634,32 @@ export function createMemoryStores(): Stores {
   };
 
   /**
+   * マネージャーへ降ろす環境変数の正本（インメモリ）。
+   *
+   * **3実装（インメモリ / fs / pg）で同じ答えにすること。** 空文字は「外す」で、
+   * `put` は入力に無い名前を触らない（部分更新である）。ここだけ全文置換にすると、
+   * 「テストの器では通るのに本物では他の鍵が消える」というずれ方をする。
+   */
+  const credentialRows = new Map<string, StoredCredential>();
+
+  const credentials: CredentialVaultStore = {
+    async list() {
+      return [...credentialRows.values()].sort((a, b) => a.name.localeCompare(b.name));
+    },
+    async put(entries) {
+      const at = new Date().toISOString();
+      for (const entry of entries) {
+        if (entry.value.length === 0) {
+          credentialRows.delete(entry.name);
+          continue;
+        }
+        credentialRows.set(entry.name, { name: entry.name, value: entry.value, updatedAt: at });
+      }
+      return credentials.list();
+    },
+  };
+
+  /**
    * 認証トークンのプール（インメモリ）。**回さない**——ここも fs / pg と同じく
    * 器と口だけを持つ（Issue #393「PR1 プールの器」）。
    */
@@ -864,6 +892,7 @@ export function createMemoryStores(): Stores {
     sessions,
     auth,
     profile,
+    credentials,
     tokens,
     usage,
   };

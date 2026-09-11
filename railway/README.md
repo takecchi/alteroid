@@ -495,6 +495,27 @@ printf %s 'github_pat_xxx' | jq -Rn '{credentials:[{name:"GH_TOKEN",value:input}
 
 **変数（Shared Variables）も一緒に直しておくこと。** 器が作り直されたとき（再デプロイ）に読まれるのは変数の方である。順序は「先に上の口で回して仕事を止めない → 落ち着いてから変数を直す」。
 
+### 変数の代わりに正本へ置く（器を焼き直さない）
+
+**上の `POST /runners/credentials` は保管しない。** 走っている runner へ降ろすだけなので、器が作り直されれば消え、**そのとき読まれるのは Shared Variables の方**である。だから上の手順は「変数も一緒に直す」が対になっている。
+
+**`PUT /credentials` は正本へ置く。** 記憶ストア（`manager_credentials` の1名前1行）が正本になり、**runner が名乗り直すたびにデーモンが降ろし直す** ⟹ 器を作り直しても痩せない。⟹ **用途が増えるたびに Shared Variables を足す必要が無い。**
+
+```bash
+railway ssh --service app
+
+alteroid credential list                              # 名前と指紋（値は出ない）
+printf %s 'github_pat_xxx' > /tmp/pat && alteroid credential set GH_TOKEN -f /tmp/pat && rm /tmp/pat
+alteroid credential set GIT_AUTHOR_NAME -f - <<< 'takecchi'
+alteroid credential remove SOME_OLD_KEY               # 外す（runner の器からも消える）
+```
+
+**⚠️ `CLAUDE_CODE_OAUTH_TOKEN` はここへは置けない**（400 で断る）。正本はプールの側（`alteroid token add`）で、こちらへ置くと**名乗り直しのたびに回した鍵を巻き戻す**。
+
+**⚠️ 移行の順序。** 正本へ置いて `alteroid credential list` と `GET /runners` の指紋が揃うのを見てから、Shared Variables の側を消す。**逆順にすると、消した瞬間から次に降ろすまでのあいだ、器の環境変数にも正本にも無い状態ができる**（`GIT_AUTHOR_NAME` が無いと commit が `empty ident name` で即落ちる）。**空文字で残さないこと** —— 空は未設定より悪い。
+
+**それでも Shared Variables に残すもの**は、正本が降りる前から要るもの（`ALTEROID_RUNNER_TOKEN` / `ALTEROID_RUNNER_ID` / `ALTEROID_RUNNER_SOCKET`）と、**器自身が読むもの**（`ALTEROID_MANAGER_MODEL` / `ALTEROID_WORKER_MODEL`。あちらは SDK 子プロセスの env ではなく runner のプロセス自身が読むので、降ろしても効かない）である。
+
 指紋が食い違っていたら、鍵の権限ではなく**経路**の問題である。PAT の設定を見に行く前にここを見る。
 
 ### 通っているか確かめる

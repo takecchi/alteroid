@@ -166,7 +166,7 @@ export function countRequireOperatorReferences(sourceText: string, fileName = 'a
  * （`grep -Fn -- '`docs/` は正典。**AI が単独で書き換えない。**' AGENTS.md`）。
  * **人間へ上げること。**
  */
-const EXPECTED_OPERATOR_ROUTES = ['GET /profile', 'PUT /profile'];
+const EXPECTED_OPERATOR_ROUTES = ['GET /profile', 'PUT /credentials', 'PUT /profile'];
 
 /** 比較を配線順（AST の訪問順）に依存させないための整列。 */
 function sorted(values: readonly string[]): string[] {
