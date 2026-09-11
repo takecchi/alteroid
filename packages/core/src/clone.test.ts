@@ -11631,8 +11631,12 @@ describe('クローン — 中身の同じ external をまとめて読む（#841
       );
     }
 
+    // **5件目は束から外れて単独になる**（上限2件で [1+2] / [3+4] / [5単独] に
+    // 割れる）。単発の経路（`buildExternalEventPrompt`）は `at` を本文に出さない
+    // （非回帰——単発の見た目を変えない）ので、5件目が届いたことは台帳の断り書き
+    // （台帳へ載せた id の一覧）で待つ。
     await waitFor(
-      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('5 件')),
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('id: `lim5`')),
       '5件目ぶんの入力が投げられる',
     );
     await settle();
@@ -11644,12 +11648,14 @@ describe('クローン — 中身の同じ external をまとめて読む（#841
     expect(inputs[2] ?? '').toContain('2 件');
     expect(inputs[3] ?? '').not.toContain('件** 届いた');
 
-    // **取りこぼしを撃つ歯。** 1〜5件全部の本文がどこかのターンに現れる
-    // （同じ中身なので、5件とも1つの文字列に畳まれてしまう検査はできない——
-    // 代わりに `at` の値5つがどこかに現れることで数を確かめる）。
+    // **取りこぼしを撃つ歯。** 1〜5件全部が、どこかのターンの台帳の断り書き
+    // （「いま届いたこの◯件も台帳に載せた（id: ...）」）に必ず現れる——
+    // payload の中身は5件とも同一なので、本文の文字列だけでは数えられない。
+    // id は `#journalIncomingBody` / 台帳判定を通じて件ごとに必ず記録される
+    // ものなので、取りこぼしがあればここが最初に崩れる。
     const joined = inputs.join('\n');
     for (let i = 1; i <= 5; i += 1) {
-      expect(joined).toContain(`2026-09-01T00:00:0${i}.000Z`);
+      expect(joined).toContain('`lim' + String(i) + '`');
     }
 
     await waitFor(
