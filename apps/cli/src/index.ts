@@ -29,6 +29,11 @@ import {
 import { alteroidRoot } from './paths.js';
 import { runnersCommand } from './runners.js';
 import {
+  credentialListCommand,
+  credentialRemoveCommand,
+  credentialSetCommand,
+} from './credential.js';
+import {
   tokenAddCommand,
   tokenDisableCommand,
   tokenEnableCommand,
@@ -367,6 +372,48 @@ profileCommand
   .description('プロファイルを外す')
   .action(async () => {
     await profileClearCommand();
+  });
+
+/**
+ * `alteroid credential` — マネージャーへ降ろす環境変数（名前→値の袋）。
+ *
+ * **器（`compose.yaml` の環境変数 / Railway の Shared Variables）を焼き直す
+ * 代わりの口である。** 正本は記憶ストアなので、器を作り直しても runner が名乗り
+ * 直したときに降り直す。
+ */
+const credentialCommand = program
+  .command('credential')
+  .description('マネージャーへ降ろす環境変数（GH_TOKEN / GIT_AUTHOR_NAME など）を見る・置く');
+
+credentialCommand
+  .command('list')
+  .description('正本に置かれた名前と指紋を一覧する（値は出さない）')
+  .action(async () => {
+    await credentialListCommand();
+  });
+
+credentialCommand
+  .command('set <名前>')
+  .description('1つ置く（英大文字・数字・_ の名前。既に在れば入れ替える）')
+  .option('-f, --file <path>', '値を読むファイル（省略か - で標準入力）')
+  .addHelpText(
+    'after',
+    '\n値はコマンドライン引数では受け取りません（argv は同じ器の他のプロセスから' +
+      '見えるため）。ファイルか標準入力から渡してください:\n' +
+      '  alteroid credential set GH_TOKEN -f ./pat.txt\n' +
+      '  echo -n "$GH_TOKEN" | alteroid credential set GH_TOKEN\n' +
+      '\nCLAUDE_CODE_OAUTH_TOKEN はここへは置けません（正本はプールの側です）:\n' +
+      '  alteroid token add --label <名前> -f <path>\n',
+  )
+  .action(async (name: string, options: { file?: string }) => {
+    await credentialSetCommand(name, options);
+  });
+
+credentialCommand
+  .command('remove <名前>')
+  .description('1つ外す（runner の器からも消す）')
+  .action(async (name: string) => {
+    await credentialRemoveCommand(name);
   });
 
 /**

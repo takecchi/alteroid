@@ -10,6 +10,8 @@ description: 実行環境プロファイル（alteroid profile / profile.sh、.z
 **環境変数を器に増やす代わりの口である。** 道具の鍵や `PATH` を `compose.yaml` へ足していくと、1つ増えるたびに器を焼き直すことになる ＝「環境を直す」と「走行中の仕事を失う」が同じ操作になる。人間が `~/.zshenv` に1行足せば済ませていることが実装作業になっている時点でデグレードである（north_star 禁止1）。設計の全体像は [docs/architecture.md](./docs/architecture.md)「実行環境プロファイル」。
 
 - 実体は**シェルスクリプト1本**。器は中身を解釈しない（`export` でも `eval $(...)` でも `PATH` 追加でもよい）。**環境変数の一覧を持たないこと**が要点で、名前の表を足したくなったらそれは `credentials` の口の仕事である
+  - **その `credentials` の口には正本が在る**（`alteroid credential set <名前>` / `PUT /credentials`。記憶ストアの `credentials.json` / `manager_credentials`）。名前は任意で、`hello` のたびに降り直す。**秘密はそちらへ置くこと** —— こちらは `GET /profile` が本文ごと返すのに対し、あちらは指紋しか返さない。そして**走行中の `gh` / `git` に届くのもあちらだけ**である
+  - **⚠️ プロファイルに `GH_TOKEN` のような名前を書くと、`credentials` の口を影にする**（`#childEnv()` はプロファイルを鍵より後に重ねるので勝つ）。撒いた側は「撒いた」と報告し、子プロセスは古い値を受け取る。検出はある（`credentialNamesShadowedByProfile`）が、止めはしない
 - 置き場は記憶ストア（fs なら `~/.alteroid/profile.sh`、pg なら `env_profile` の1行）。**記憶ではない**ので `memory/` には置かない（クローンのシステムプロンプトに鍵が載る）
 - 操作は `alteroid profile show|status|edit|set|clear`、API は `GET /profile` / `PUT /profile`、**クローンの道具は `profile_read` / `profile_write`**
 - **クローンにも人間と同じ手を持たせてある。** 人間は自分の `~/.zshenv` を開いて直せるのだから、その写像であるクローンにできないのは能力の削除である（north_star 禁止2 は層を問わず効く）。人間が chat で「このトークン使って」と言ったものを、クローンが実行環境へ移せる形にしてあること自体が要件である
