@@ -631,6 +631,32 @@ describe('要旨の鮮度（resolveMemoryDescriptionFreshness）— 4状態、�
     }
   });
 
+  /**
+   * ⚠️ `stale` を決める比較（文字列の辞書式）と、差を作る比較（`Date.parse`
+   * の数値）は別物である——精度（小数秒の桁数）が違う2つの ISO 8601 文字列
+   * では、辞書式が「小さい」と判定した側が、数値としては後（＝大きい）で
+   * ありうる。
+   *
+   * ここでは `describedAt = '...T10:00:00.500Z'`（小数点あり）・
+   * `updatedAt = '...T10:00:00Z'`（小数点なし）を渡す。辞書式では `'.'`
+   * （0x2E）が `'Z'`（0x5A）より小さいので `describedAt < updatedAt` が
+   * 真になり `stale` へ入るが、数値としては `describedAt` の方が500ミリ秒
+   * 後（＝大きい）——clamp が無ければ `staleForMs` は `-500` になる。
+   *
+   * **`Math.max(0, ...)` を外す変異（マネージャー指摘、条件1の直接の歯）は
+   * ここで捕まる。** 負の値が「0（＝最新）」以外の意味を持ってはいけない
+   * ——このテストは「0になる」ことそのものを固定する（負のまま漏れる／
+   * NaN になる、のどちらでもないことを確かめる）。
+   */
+  it('精度違いで辞書式と数値の順序が食い違っても、staleForMs は負にならない（0 に丸める）', () => {
+    const result = resolveMemoryDescriptionFreshness({
+      description: '要旨',
+      describedAt: '2026-09-11T10:00:00.500Z',
+      updatedAt: '2026-09-11T10:00:00Z',
+    });
+    expect(result).toEqual({ kind: 'stale', staleForMs: 0 });
+  });
+
   it('assertNeverMemoryDescriptionFreshness は未知の状態を投げる', () => {
     const bogus = { kind: 'bogus' } as never;
     expect(() => assertNeverMemoryDescriptionFreshness(bogus)).toThrow(/bogus/);

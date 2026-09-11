@@ -573,11 +573,32 @@ export function assertNeverMemoryDocKind(kind: never): never {
  * 直して書き直したか」ではない。
  *
  * **`stale` には `staleForMs`（`updatedAt - describedAt` のミリ秒差）を必ず
- * 添える**（#821）。`describedAt < updatedAt` は文字列の辞書式比較で決まる
- * ため、両方が ISO 8601 の絶対時刻である限り `Date.parse` の引き算は正の値
- * になる —— 順序を保つのは呼び出し側ではなくここ1か所であることが要点で、
- * 引き算の向きを間違えると符号が反転するだけで例外は出ない（変異試験で
- * 狙う場所）。
+ * 添える**（#821）。
+ *
+ * ⚠️ **`stale` かどうかを決める比較と、差を作る比較は種類が違う。**
+ * `describedAt < updatedAt` は**文字列の辞書式比較**だが、差は
+ * **`Date.parse` の数値比較**である——両者は常に同じ答えを返すとは限らない。
+ * 小数秒の桁数（精度）が違う2つの ISO 8601 文字列（例: `'...T00:00:00.500Z'`
+ * と `'...T00:00:00Z'`）では、辞書式比較は「小数点が在る側」を小さいと判定
+ * する（`.` の符号位置 `0x2E` は `Z` の `0x5A` より小さい）一方、数値としては
+ * 前者のほうが**後**であることもありうる。⟹ **`stale` の分岐に入ったことと、
+ * 引き算の結果が正の値であることは、別の主張である。** だからここで
+ * `Math.max(0, ...)` を掛けて必ず非負にする——**責任をここ1か所に置く。**
+ * 呼び出し側や表示側（`formatMemoryStaleness`）でも同じ clamp を重ねると、
+ * 同じ異常を2箇所が別々の流儀で隠すことになり、**どちらか片方が
+ * 「0（＝最新）」に化けても、もう片方を見るまで気づけない**（クローンの
+ * 条件1「取れなかったと0を混ぜない」が名指しした失敗の形そのもの）。
+ *
+ * **この経路では実際には起こらないと確認した。** `storage-fs`（`persona.ts`
+ * の `read()` の `stats.mtime.toISOString()`）も `storage-pg`（`db.ts` の
+ * `toIso()`、内部は `Date.prototype.toISOString()`）も、`describedAt` /
+ * `updatedAt` を常に同じ関数・同じ精度（ミリ秒3桁 + `Z`）で書く——`#writeNow`
+ * 自身のコメントも「`describedAt` をここで別に採番すると mtime の精度差で
+ * `stale` に化けうる」と述べ、同じ懸念を承知のうえで両者を同じ文字列に
+ * 揃えている（新規描写時）。**この clamp は、この関数が任意の文字列を
+ * 受け取れる型を持つこと自体への防御である**（テスト・将来の呼び手が
+ * 精度の異なる文字列を混ぜても、負の値が「0（＝最新）」以外の意味を
+ * 持たないことだけは保つ）。
  */
 export function resolveMemoryDescriptionFreshness(input: {
   description: string | undefined;
@@ -588,7 +609,7 @@ export function resolveMemoryDescriptionFreshness(input: {
   if (input.description === undefined) return { kind: 'absent' };
   if (input.describedAt === undefined) return { kind: 'unknown' };
   if (input.describedAt >= input.updatedAt) return { kind: 'fresh' };
-  const staleForMs = Date.parse(input.updatedAt) - Date.parse(input.describedAt);
+  const staleForMs = Math.max(0, Date.parse(input.updatedAt) - Date.parse(input.describedAt));
   return { kind: 'stale', staleForMs };
 }
 
@@ -1151,10 +1172,15 @@ export function formatMemoryCreatedAt(createdAt: MemoryCreatedAt): string {
  * 「いま」からの経過やゾンビの年齢という別の量を測る専用の実装なので
  * 共有しない。値を間違えて直したくなったとき、片方だけ直して済むように
  * 分けてある）。
+ *
+ * **`ms` が非負であることは呼び出し元（`resolveMemoryDescriptionFreshness`）
+ * が保証する——ここでは重ねて clamp しない。** 同じ異常を2箇所で別々に
+ * 隠すと、片方だけ直っていない状態に気づけなくなる（`resolveMemoryDescriptionFreshness`
+ * の doc に理由を書いてある）。
  */
 function formatMemoryStaleness(ms: number): string {
   const seconds = Math.floor(ms / 1000);
-  if (seconds < 60) return `${Math.max(seconds, 0)}秒`;
+  if (seconds < 60) return `${seconds}秒`;
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}分`;
   const hours = Math.floor(minutes / 60);

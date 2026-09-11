@@ -102,6 +102,12 @@ export function formatCreatedAtRelative(createdAt: MemoryCreatedAt): string {
  * 実体は分けて持つ。** `@alteroid/core` から値を1つでも import すると client
  * バンドルへ丸ごと混入する（このファイル冒頭の `assertNeverCreatedAt` の doc と
  * 同じ理由）ので、ここでも私物として持つ。
+ *
+ * **`Math.max(seconds, 0)` は core 側とは違う理由で残す。** core の
+ * `resolveMemoryDescriptionFreshness` は非負を保証してから返すが、ここが
+ * 受け取るのは HTTP 経由の JSON（信頼境界の外）——型が保証しているだけの
+ * 値を信じない、という境界防御である（同じプロセス内で2箇所が同じ異常を
+ * 隠す、という core 側で避けた形とは異なる）。
  */
 export function formatMemoryStaleness(ms: number): string {
   const seconds = Math.floor(ms / 1000);

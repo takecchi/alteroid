@@ -109,6 +109,12 @@ export async function memoryListCommand(): Promise<void> {
  * `@alteroid/core` の型そのものを持ち込んでいないので、ここでも同じ理由
  * （二重管理より用途ごとの独立を取る、`apps/web/app/lib/format.ts` の
  * `formatRelative` と同じ判断）で私物として持つ。
+ *
+ * **`Math.max(seconds, 0)` は core 側とは違う理由で残す。** core の
+ * `resolveMemoryDescriptionFreshness` は非負であることを保証してから返すが、
+ * ここが受け取るのは HTTP 経由の JSON（信頼境界の外）——境界を越えた値を
+ * 型が保証しているだけで信じない、という別の理由の防御である（同じ異常を
+ * 同じプロセス内で2箇所が隠す、という core 側で避けた形とは異なる）。
  */
 function formatMemoryStaleness(ms: number): string {
   const seconds = Math.floor(ms / 1000);
