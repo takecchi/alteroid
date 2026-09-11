@@ -911,6 +911,96 @@ node scripts/identifier-probe-summary.mjs \
 
 ---
 
+## `consolidation-cost`: `Runtime.consolidate()` が「載る量」に効くかの実測（Issue #136）
+
+`Runtime.consolidate()`（ADR 0089）は入ったが、`examples/chat` に配線が無く、北極星の物差し
+（「使う側が会話ログを全部プロンプトへ積むのをやめられたか」）に効いたかを誰も測っていなかった
+（Issue #136）。さらに ADR 0090 は逐語で「反復で `content` が縮む保証はコードに無い
+（⚠ 実際に単調増加することは測っていない）」と書いている。**この bench は「そもそも縮んだか」
+——載る量が動いたかどうか——を実測する器である。**
+
+```bash
+DATABASE_URL=... pnpm --filter @mnemora/example-chat run consolidation-cost
+```
+
+### 何を測るか（想起の「質」ではない）
+
+- **測っているのは「載る量」である。**`store`（active/superseded の件数・文字数・
+  トークン数）と `recall().usage`（実際に carry した digest の件数・トークン数・
+  `recalledActiveShare`）を、統合前（round 0）と統合1〜3回（round 1〜3）で並べる。
+- ⛔ **想起の質（`goldRank`/MRR）の物差しではない。**`goldRank` は載っている——
+  「統合後も gold が引けているか」を見失わないための保険として付いているだけであり、
+  `retrieval`/`identifier-probes` のように率を主張する目的の欄ではない
+  （標本は probe 7件。下記「読み方の注意」参照）。
+- **`groupSize`（既定5件）ずつ filler を束ね、群ごとに `runtime.consolidate()` を呼ぶ**
+  ラウンド制（`src/consolidation-cost.ts`）。round 2 以降は前回の統合結果も対象に含める。
+  ある round の開始時点で対象が2件未満なら、その回で打ち切る
+  （`stopReason: "insufficient_candidates"`）。
+- **`budget.maxMemoryTokens` の階段（既定 `[8,16,24,32,48,64,128,256,512]`、
+  `src/consolidation-cost-options.ts` の `DEFAULT_BUDGET_LADDER`）ごとに、
+  「gold を載せるのに要った最小の予算」を診断表として出す**
+  （`scripts/consolidation-cost-summary-lib.mjs` の `computeMinBudgetForGold`）。
+  ⚠ **下の段を細かくしてあるのは実測に基づく**——既定 `[32,64,128,256,512]` では
+  probe 7件のうち6件が最下段(32)で既に gold を載せてしまい、この診断表が床に
+  張り付いて分解能を失った（統合前後で Σ が 320 → 224 としか動かなかった）。
+
+### provider 層: 擬似LLM（`deterministic`）＋ `local` 埋め込み——なぜ `recorded` が使えないか
+
+`identifier-probes`（ADR 0094）と同じ組み合わせを使う。**`recorded`（カセットの再生。
+ADR 0051）は使えない**——理由は2つある。
+
+1. **`consolidate()` が呼ぶ LLM プロンプトが、カセット（`cassettes/retrieval.json`）に
+   記録されていない。**カセットの鍵は入力文字列の SHA-256 であり、記録に無い入力は
+   `RecordedLLMProvider` が例外を投げる。統合プロンプトは `retrieval`/`compare` が
+   録ったどの入力とも一致しない。
+2. **統合結果として新しく作られる Memory の `content` の埋め込みも、カセットに無い。**
+   統合前には存在しなかった文字列であり、記録のしようがない。
+
+⟹ **鍵もカセットも要らない `deterministic` LLM（`@mnemora/testkit`）＋
+`local` 埋め込み（`@mnemora/local-embedding`、ADR 0085）を固定で使う。**
+
+### ⚠ 擬似 LLM の `content`/`digest` は擬似物の性質であり、実 LLM の要約性能について何も言わない
+
+`DeterministicLLMProvider`（`packages/testkit/src/__fixtures__/deterministic-llm-provider.ts`）
+の統合結果は、**プロンプト全文をそのまま `content` として返す**（統合対象の
+`content`/`digest` を連結した文字列であり、必ず育つ）。`digest` は先頭40字を切って `…` を
+付けたもの（必ず41字以下になる）。
+
+⟹ **`activeContentChars`/`activeDigestChars` に見える非対称（content は伸び続け、digest は
+頭打ちになる）は、この擬似 LLM の実装そのものが作っている性質であり、本物の LLM が
+「うまく要約できている／できていない」を一切反映していない。** 測っているのはあくまで
+「`Runtime.consolidate()` を呼ぶと、パイプラインの配線として載る量がどう動くか」である。
+
+### ⛔ 門ではない
+
+`identifier-probes`/`retrieval` と同じ判断（ADR 0088）。CI（`.github/workflows/ci.yml` の
+`consolidation-cost` ジョブ）は毎回 `scripts/consolidation-cost-summary.mjs` で基準値と
+突き合わせ、**一致していれば1行で黙り、違うときだけ内訳を展開する**——**相違では
+落ちない（`exit 0`）。**非0になるのは入力そのものが壊れているとき（JSON が読めない・
+必須項目が無い）と、`@mnemora/local-embedding` の重み取得に失敗したとき
+（`status: "weights_unavailable"`。前回の値・既定値・`0` のいずれへも倒さず、
+メトリクスを1件も出さずに落ちる）だけである。
+
+### ⚠ `recalledActiveShare` が 1.0 に近い行は「退化（全部載せる）」＝比較不能
+
+`recalledActiveShare`（`carriedCount / activeCount` の平均）が 1.0 に近いとき、それは
+「budget を上げて対象を絞れた」のではなく、**その時点の active Memory 数がそもそも少なく、
+budget に関係なく全件載っている**ことを意味する。この状態の段どうしを比べても意味を持たない
+——`scripts/consolidation-cost-summary-lib.mjs` の Job Summary は、この状態を検出した行に
+必ず印を付ける（`buildDegenerateShareSection`）。**黙って良い数字として並べない。**
+
+### 読み方の注意（Job Summary に必ず随伴する）
+
+1. **LLM は擬似であり、統合結果の `content`/`digest` の長さは擬似物の性質である**（上記）。
+2. **標本は probe 7件である。ここから率を主張しない**
+   （[ADR 0033](../../docs/decisions/0033-what-decided-the-rank-in-the-retrieval-bench.md) §3）。
+3. **件数が減ったこと自体は良し悪しを言わない。**`activeCount` が減っても
+   `allContentChars`（active+superseded の合計）は増え続ける——「載る記憶の件数」と
+   「実際に保持している文字量」は別の軸である。
+
+
+---
+
 ## この会話生成（`src/scenario.ts`）について
 
 `buildConversation(fillerPairs)` は乱数を使わない決定的な関数——同じ `fillerPairs` を

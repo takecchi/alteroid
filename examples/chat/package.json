@@ -15,6 +15,7 @@
     "retrieval": "tsx src/cli.ts retrieval",
     "time-term": "tsx src/cli.ts time-term",
     "identifier-probes": "tsx src/cli.ts identifier-probes",
+    "consolidation-cost": "tsx src/cli.ts consolidation-cost",
     "record": "tsx src/cli.ts record retrieval",
     "verify": "tsx src/cli.ts verify retrieval",
     "record:compare": "tsx src/cli.ts record compare",

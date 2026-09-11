@@ -486,3 +486,109 @@ jobs:
           name: identifier-probe
           path: ${{ github.workspace }}/identifier-probe.json
           if-no-files-found: ignore
+
+  consolidation-cost:
+    name: Runtime.consolidate() が「載る量」に効くかを実測し、値を残す（Issue #136）
+    runs-on: ubuntu-latest
+    # Issue #136。`identifier-probes` ジョブと同じ体裁を踏襲する——`retrieval-quality`/
+    # `identifier-probes` が確立した「実測値を Job Summary へ残す・落とすのは bench 自体が
+    # 壊れたときだけ」という形（ADR 0088）。
+    #
+    # ⚠ **なぜ閾値の門にしないか**: 標本は probe 7件・haystack由来の filler 群であり、
+    # ADR 0033 §3 の規律（標本7件からは失敗率も成功率も主張しない）にそのまま照らせば
+    # 閾値判定に足る母数ではない。`retrieval-quality`/`identifier-probes` と同じ判断。
+    #
+    # 🔴 **ただし「重みを取得できなかった」ときは、このジョブ自体を意図して失敗させる**
+    # ——`consolidation-cost` サブコマンドも `warmup()` が失敗したらメトリクスを1件も
+    # 出さずに `process.exitCode = 1` で終わる（`local-embedding-warmup.ts` を共有）。
+    # measure ステップが失敗しても、後続の summary/artifact ステップは `if: always()` で
+    # 必ず走る。
+    #
+    # ⛔ **これは想起の質の門でも、統合の質の門でもない。**この bench が測るのは
+    # 「載る量」（`store`/`recall.*.usage` の実測）と「そもそも縮んだか」であって、
+    # `deterministic` LLM が作る統合結果の意味的な良し悪しではない
+    # （AGENTS.md「`deterministic` で測った想起の質は、性能について何も言っていない」）。
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: mnemora_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/mnemora_ci
+      # `LocalEmbeddingProvider` はモデル重みの取得先を選ぶ鍵を要求しない
+      # (`@mnemora/local-embedding` は外部サービスへ繋がない、ADR 0085)。
+      # `consolidate()` は LLM も呼ぶが、`deterministic` に固定するため
+      # `MNEMORA_PROVIDER_SOURCE`/`OPENAI_API_KEY` はこのジョブに関係が無い
+      # （`RecordedLLMProvider` はカセットに統合プロンプトを持たないため使えない——
+      # examples/chat/README.md「consolidation-cost」節参照）。
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Enable required extensions (vector / btree_gin / pgcrypto)
+        run: |
+          PGPASSWORD=postgres psql -h localhost -U postgres -d mnemora_ci -c "select 1;" \
+            && PGPASSWORD=postgres psql -h localhost -U postgres -d mnemora_ci \
+              -c "CREATE EXTENSION IF NOT EXISTS vector;" \
+              -c "CREATE EXTENSION IF NOT EXISTS btree_gin;" \
+              -c "CREATE EXTENSION IF NOT EXISTS pgcrypto;"
+
+      - name: Run migrations (packages/postgres の唯一のマイグレーション実行口)
+        run: pnpm --filter @mnemora/postgres run migrate
+
+      - name: モデル重みをキャッシュする（actions/cache。cacheDir を明示して場所を固定する）
+        # `identifier-probes` ジョブと同じキー空間を使う——同じモデル
+        # （`sirasagi62/ruri-v3-30m-ONNX`、既定 dtype）を使うため、キャッシュを分ける理由が無い。
+        uses: actions/cache@v6
+        with:
+          path: ${{ github.workspace }}/.cache/local-embedding
+          key: local-embedding-ruri-v3-30m-q8-v1
+
+      - name: Runtime.consolidate() の「載る量」を実測する
+        # ⚠ **`continue-on-error: true` にしない。**重みを取得できなかった run は
+        # このジョブが赤くなること自体が仕様である（メトリクスを出さずに落ちる）。
+        env:
+          MNEMORA_CONSOLIDATION_JSON: ${{ github.workspace }}/consolidation-cost.json
+          MNEMORA_LOCAL_EMBEDDING_CACHE_DIR: ${{ github.workspace }}/.cache/local-embedding
+        run: pnpm --filter @mnemora/example-chat run consolidation-cost
+
+      - name: 実測値と基準値の差分を Job Summary に残す（⛔ 門ではない）
+        # このステップは常に走る（`if: always()`）——measure ステップが重み取得失敗で
+        # 落ちても、その理由を Job Summary へ出すのはこのステップの役目である。
+        # `consolidation-cost-summary.mjs` 自体は「入力そのものが壊れている」ときだけ
+        # 非0で終わる。
+        if: always()
+        run: |
+          node scripts/consolidation-cost-summary.mjs \
+            --measured "${{ github.workspace }}/consolidation-cost.json" \
+            --baseline examples/chat/consolidation-baseline.json \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 実測値そのもの（機械可読）を成果物として残す
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: consolidation-cost
+          path: ${{ github.workspace }}/consolidation-cost.json
+          if-no-files-found: ignore

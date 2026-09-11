@@ -1,5 +1,6 @@
 import type { Clock, EmbeddingProvider, Runtime } from "@mnemora/core";
 import { createRuntime } from "@mnemora/core";
+import type { PostgresClient } from "@mnemora/postgres";
 import {
   PostgresEventStore,
   PostgresMemoryStore,
@@ -42,6 +43,16 @@ export interface ExampleRuntimeHandle {
    * 返り値に含めていなかっただけ（`memoryStore` を足したときと同じ理由）。
    */
   embeddingProvider: EmbeddingProvider;
+  /**
+   * `consolidation-cost`（Issue #136）が公開する。ADR 0090 の
+   * `LocalEmbeddingProviderError.kind`（`"input_too_long"` 等）は `Memory`/`MemoryStore`
+   * の列に残らない——`packages/core`/`packages/postgres` を変更しない制約の中でこれを
+   * 読む唯一の手段は、`outbox.last_error` に残った文字列を読むことである
+   * （`embed-failure-kind.ts` 参照）。`memoryStore`/`embeddingProvider` を足したときと
+   * 同じ理由：`client.pool` は元から `createPostgresClient` の公開の返り値であり、
+   * これまで `createExampleRuntime` の返り値に含めていなかっただけ。
+   */
+  pool: PostgresClient["pool"];
   close(): Promise<void>;
 }
 
@@ -99,6 +110,7 @@ export async function createExampleRuntime(
     ...(usageMeter !== undefined ? { usageMeter } : {}),
     memoryStore,
     embeddingProvider,
+    pool: client.pool,
     close: () => closePostgresClient(client),
   };
 }

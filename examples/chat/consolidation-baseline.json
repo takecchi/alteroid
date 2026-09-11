@@ -1,0 +1,707 @@
+{
+  "_readme": "Runtime.consolidate() が「載る量」に効いたかの基準値（Issue #136 / ADR 0101）。\n⛔ これは門ではない。基準値と違っても CI は落ちない（ADR 0088 §2.1 と同じ判断）。\n⚠ LLM は deterministic（擬似）である。統合結果の content はプロンプト全文、digest は40字で切られる\n   ——activeContentChars が育つことも activeDigestChars が縮むことも擬似物の性質であり、\n   実 LLM が縮めるかどうかについて何も言っていない。\n⚠ 標本は probe 7件である。ここから失敗率も成功率も主張しない（ADR 0033 §3）。\n⚠ recalledActiveShare が 1.0 に張り付いた段は「全部載せる」に退化しており、比較が成立しない。",
+  "provenance": {
+    "commit": "59711d168662c2ff6d8aaf8eccb629a36628688e",
+    "measuredAt": "2026-09-11T04:17:07.304Z",
+    "how": "pnpm --filter @mnemora/example-chat run consolidation-cost（MNEMORA_CONSOLIDATION_JSON に出力）",
+    "database": "使い捨ての PostgreSQL 17 + pgvector 0.8.6（127.0.0.1、空の DB を作って migrate した）",
+    "providers": "LLM=deterministic（擬似）/ Embedding=local（@mnemora/local-embedding, ruri-v3-30m/sym, 256次元）。⛔ recorded は使えない（統合の LLM prompt も統合結果の埋め込みもカセットに無い）",
+    "repeatRuns": "2回実行し、measuredAt を除いて完全に一致した（差分なし）。⚠ 2回一致は決定的であることの証明ではない（ADR 0088 §2.1）",
+    "note": "probes 配列は基準値に持たない（診断表は基準値と比べないため）。mean だけを残す。"
+  },
+  "schemaVersion": 1,
+  "status": "measured",
+  "measuredAt": "2026-09-11T04:17:07.304Z",
+  "commit": "59711d168662c2ff6d8aaf8eccb629a36628688e",
+  "llmMode": "deterministic",
+  "embeddingMode": "local",
+  "embeddingSpace": {
+    "provider": "local",
+    "model": "ruri-v3-30m/sym",
+    "dimensions": 256
+  },
+  "probeCount": 7,
+  "haystackSize": 60,
+  "groupSize": 5,
+  "budgetLadder": [8, 16, 24, 32, 48, 64, 128, 256, 512],
+  "recallLimit": 50,
+  "stoppedAfterRound": 3,
+  "stopReason": "completed_all_rounds",
+  "rounds": [
+    {
+      "round": 0,
+      "consolidation": null,
+      "store": {
+        "activeCount": 74,
+        "supersededCount": 0,
+        "activeContentChars": 1871,
+        "activeContentTokens": 1686,
+        "activeDigestChars": 1871,
+        "activeDigestTokens": 1686,
+        "allContentChars": 1871
+      },
+      "recall": {
+        "unbudgeted": {
+          "mean": {
+            "carriedCount": 10,
+            "carriedDigestTokens": 206,
+            "usageChars": 4418.571428571428,
+            "usageEstimatedTokens": 2042.142857142857,
+            "usageIndexChars": 4187,
+            "totalInScope": 74,
+            "recalledActiveShare": 0.13513513513513511,
+            "goldRank": 1.8571428571428572,
+            "goldRankExcludedCount": 0
+          }
+        },
+        "budgeted": [
+          {
+            "budgetTokens": 8,
+            "mean": {
+              "carriedCount": 0,
+              "carriedDigestTokens": 0,
+              "usageChars": 4200,
+              "usageEstimatedTokens": 1849,
+              "usageIndexChars": 4200,
+              "totalInScope": 74,
+              "recalledActiveShare": 0,
+              "goldRank": null,
+              "goldRankExcludedCount": 7
+            }
+          },
+          {
+            "budgetTokens": 16,
+            "mean": {
+              "carriedCount": 0.5714285714285714,
+              "carriedDigestTokens": 7.428571428571429,
+              "usageChars": 4209.714285714285,
+              "usageEstimatedTokens": 1855.857142857143,
+              "usageIndexChars": 4200,
+              "totalInScope": 74,
+              "recalledActiveShare": 0.007722007722007722,
+              "goldRank": 1,
+              "goldRankExcludedCount": 4
+            }
+          },
+          {
+            "budgetTokens": 24,
+            "mean": {
+              "carriedCount": 1.2857142857142858,
+              "carriedDigestTokens": 19.285714285714285,
+              "usageChars": 4223,
+              "usageEstimatedTokens": 1867.2857142857142,
+              "usageIndexChars": 4200,
+              "totalInScope": 74,
+              "recalledActiveShare": 0.017374517374517374,
+              "goldRank": 1.1666666666666667,
+              "goldRankExcludedCount": 1
+            }
+          },
+          {
+            "budgetTokens": 32,
+            "mean": {
+              "carriedCount": 1.5714285714285714,
+              "carriedDigestTokens": 22.571428571428573,
+              "usageChars": 4226.571428571428,
+              "usageEstimatedTokens": 1870.5714285714287,
+              "usageIndexChars": 4200,
+              "totalInScope": 74,
+              "recalledActiveShare": 0.021235521235521238,
+              "goldRank": 1.1666666666666667,
+              "goldRankExcludedCount": 1
+            }
+          },
+          {
+            "budgetTokens": 48,
+            "mean": {
+              "carriedCount": 2.2857142857142856,
+              "carriedDigestTokens": 32,
+              "usageChars": 4237.285714285715,
+              "usageEstimatedTokens": 1880.142857142857,
+              "usageIndexChars": 4200,
+              "totalInScope": 74,
+              "recalledActiveShare": 0.03088803088803089,
+              "goldRank": 1.1666666666666667,
+              "goldRankExcludedCount": 1
+            }
+          },
+          {
+            "budgetTokens": 64,
+            "mean": {
+              "carriedCount": 3.5714285714285716,
+              "carriedDigestTokens": 58,
+              "usageChars": 4263.857142857143,
+              "usageEstimatedTokens": 1903.5714285714287,
+              "usageIndexChars": 4197.142857142857,
+              "totalInScope": 74,
+              "recalledActiveShare": 0.04826254826254826,
+              "goldRank": 1.1666666666666667,
+              "goldRankExcludedCount": 1
+            }
+          },
+          {
+            "budgetTokens": 128,
+            "mean": {
+              "carriedCount": 6.571428571428571,
+              "carriedDigestTokens": 119.28571428571429,
+              "usageChars": 4331.857142857143,
+              "usageEstimatedTokens": 1963.7142857142858,
+              "usageIndexChars": 4195.714285714285,
+              "totalInScope": 74,
+              "recalledActiveShare": 0.08880308880308882,
+              "goldRank": 1.8571428571428572,
+              "goldRankExcludedCount": 0
+            }
+          },
+          {
+            "budgetTokens": 256,
+            "mean": {
+              "carriedCount": 12,
+              "carriedDigestTokens": 248.85714285714286,
+              "usageChars": 4465.714285714285,
+              "usageEstimatedTokens": 2085.285714285714,
+              "usageIndexChars": 4186.714285714285,
+              "totalInScope": 74,
+              "recalledActiveShare": 0.1621621621621622,
+              "goldRank": 1.8571428571428572,
+              "goldRankExcludedCount": 0
+            }
+          },
+          {
+            "budgetTokens": 512,
+            "mean": {
+              "carriedCount": 22.857142857142858,
+              "carriedDigestTokens": 501,
+              "usageChars": 4743,
+              "usageEstimatedTokens": 2316,
+              "usageIndexChars": 4185.142857142857,
+              "totalInScope": 74,
+              "recalledActiveShare": 0.3088803088803089,
+              "goldRank": 1.8571428571428572,
+              "goldRankExcludedCount": 0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "round": 1,
+      "consolidation": {
+        "groups": 12,
+        "llmCalls": 12,
+        "outcomes": {
+          "consolidated": 12,
+          "nothing_to_consolidate": 0,
+          "not_examined": 0,
+          "llm_failed": 0,
+          "dry_run": 0
+        },
+        "newMemoryCount": 12,
+        "embeddingStatus": {
+          "ok": 12,
+          "pending": 0,
+          "failed": 0
+        },
+        "embeddingFailureKinds": []
+      },
+      "store": {
+        "activeCount": 26,
+        "supersededCount": 60,
+        "activeContentChars": 4941,
+        "activeContentTokens": 3516,
+        "activeDigestChars": 709,
+        "activeDigestTokens": 516,
+        "allContentChars": 6595
+      },
+      "recall": {
+        "unbudgeted": {
+          "mean": {
+            "carriedCount": 10,
+            "carriedDigestTokens": 186.71428571428572,
+            "usageChars": 1928.142857142857,
+            "usageEstimatedTokens": 817,
+            "usageIndexChars": 1674.4285714285713,
+            "totalInScope": 26,
+            "recalledActiveShare": 0.38461538461538464,
+            "goldRank": 1.2857142857142858,
+            "goldRankExcludedCount": 0
+          }
+        },
+        "budgeted": [
+          {
+            "budgetTokens": 8,
+            "mean": {
+              "carriedCount": 0,
+              "carriedDigestTokens": 0,
+              "usageChars": 2569,
+              "usageEstimatedTokens": 975,
+              "usageIndexChars": 2569,
+              "totalInScope": 26,
+              "recalledActiveShare": 0,
+              "goldRank": null,
+              "goldRankExcludedCount": 7
+            }
+          },
+          {
+            "budgetTokens": 16,
+            "mean": {
+              "carriedCount": 0.7142857142857143,
+              "carriedDigestTokens": 9.142857142857142,
+              "usageChars": 2523.285714285714,
+              "usageEstimatedTokens": 963.5714285714286,
+              "usageIndexChars": 2511.714285714286,
+              "totalInScope": 26,
+              "recalledActiveShare": 0.027472527472527476,
+              "goldRank": 1,
+              "goldRankExcludedCount": 4
+            }
+          },
+          {
+            "budgetTokens": 24,
+            "mean": {
+              "carriedCount": 1.4285714285714286,
+              "carriedDigestTokens": 19.285714285714285,
+              "usageChars": 2477.5714285714284,
+              "usageEstimatedTokens": 952.1428571428571,
+              "usageIndexChars": 2454.5714285714284,
+              "totalInScope": 26,
+              "recalledActiveShare": 0.05494505494505495,
+              "goldRank": 1.2857142857142858,
+              "goldRankExcludedCount": 0
+            }
+          },
+          {
+            "budgetTokens": 32,
+            "mean": {
+              "carriedCount": 1.7142857142857142,
+              "carriedDigestTokens": 22.571428571428573,
+              "usageChars": 2459.285714285714,
+              "usageEstimatedTokens": 947.5714285714286,
+              "usageIndexChars": 2432.714285714286,
+              "totalInScope": 26,
+              "recalledActiveShare": 0.06593406593406595,
+              "goldRank": 1.2857142857142858,
+              "goldRankExcludedCount": 0
+            }
+          },
+          {
+            "budgetTokens": 48,
+            "mean": {
+              "carriedCount": 3.142857142857143,
+              "carriedDigestTokens": 42.142857142857146,
+              "usageChars": 2367.8571428571427,
+              "usageEstimatedTokens": 925,
+              "usageIndexChars": 2317.5714285714284,
+              "totalInScope": 26,
+              "recalledActiveShare": 0.1208791208791209,
+              "goldRank": 1.2857142857142858,
+              "goldRankExcludedCount": 0
+            }
+          },
+          {
+            "budgetTokens": 64,
+            "mean": {
+              "carriedCount": 4.142857142857143,
+              "carriedDigestTokens": 55.857142857142854,
+              "usageChars": 2303.8571428571427,
+              "usageEstimatedTokens": 909.5714285714286,
+              "usageIndexChars": 2235.5714285714284,
+              "totalInScope": 26,
+              "recalledActiveShare": 0.15934065934065936,
+              "goldRank": 1.2857142857142858,
+              "goldRankExcludedCount": 0
+            }
+          },
+          {
+            "budgetTokens": 128,
+            "mean": {
+              "carriedCount": 7.142857142857143,
+              "carriedDigestTokens": 118.57142857142857,
+              "usageChars": 2111.4285714285716,
+              "usageEstimatedTokens": 862,
+              "usageIndexChars": 1953.5714285714287,
+              "totalInScope": 26,
+              "recalledActiveShare": 0.2747252747252747,
+              "goldRank": 1.2857142857142858,
+              "goldRankExcludedCount": 0
+            }
+          },
+          {
+            "budgetTokens": 256,
+            "mean": {
+              "carriedCount": 12.428571428571429,
+              "carriedDigestTokens": 241.85714285714286,
+              "usageChars": 1772.7142857142858,
+              "usageEstimatedTokens": 778.7142857142857,
+              "usageIndexChars": 1442,
+              "totalInScope": 26,
+              "recalledActiveShare": 0.47802197802197804,
+              "goldRank": 1.2857142857142858,
+              "goldRankExcludedCount": 0
+            }
+          },
+          {
+            "budgetTokens": 512,
+            "mean": {
+              "carriedCount": 25,
+              "carriedDigestTokens": 501.57142857142856,
+              "usageChars": 965,
+              "usageEstimatedTokens": 580,
+              "usageIndexChars": 275,
+              "totalInScope": 26,
+              "recalledActiveShare": 0.9615384615384616,
+              "goldRank": 1.2857142857142858,
+              "goldRankExcludedCount": 0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "round": 2,
+      "consolidation": {
+        "groups": 3,
+        "llmCalls": 3,
+        "outcomes": {
+          "consolidated": 3,
+          "nothing_to_consolidate": 0,
+          "not_examined": 0,
+          "llm_failed": 0,
+          "dry_run": 0
+        },
+        "newMemoryCount": 3,
+        "embeddingStatus": {
+          "ok": 3,
+          "pending": 0,
+          "failed": 0
+        },
+        "embeddingFailureKinds": []
+      },
+      "store": {
+        "activeCount": 17,
+        "supersededCount": 72,
+        "activeContentChars": 5715,
+        "activeContentTokens": 3916,
+        "activeDigestChars": 340,
+        "activeDigestTokens": 241,
+        "allContentChars": 12093
+      },
+      "recall": {
+        "unbudgeted": {
+          "mean": {
+            "carriedCount": 10,
+            "carriedDigestTokens": 141.14285714285714,
+            "usageChars": 980,
+            "usageEstimatedTokens": 399,
+            "usageIndexChars": 782.5714285714286,
+            "totalInScope": 17,
+            "recalledActiveShare": 0.5882352941176471,
+            "goldRank": 1.2857142857142858,
+            "goldRankExcludedCount": 0
+          }
+        },
+        "budgeted": [
+          {
+            "budgetTokens": 8,
+            "mean": {
+              "carriedCount": 0,
+              "carriedDigestTokens": 0,
+              "usageChars": 1622,
+              "usageEstimatedTokens": 557,
+              "usageIndexChars": 1622,
+              "totalInScope": 17,
+              "recalledActiveShare": 0,
+              "goldRank": null,
+              "goldRankExcludedCount": 7
+            }
+          },
+          {
+            "budgetTokens": 16,
+            "mean": {
+              "carriedCount": 0.7142857142857143,
+              "carriedDigestTokens": 9.142857142857142,
+              "usageChars": 1576.2857142857142,
+              "usageEstimatedTokens": 545.5714285714286,
+              "usageIndexChars": 1564.7142857142858,
+              "totalInScope": 17,
+              "recalledActiveShare": 0.04201680672268908,
+              "goldRank": 1,
+              "goldRankExcludedCount": 4
+            }
+          },
+          {
+            "budgetTokens": 24,
+            "mean": {
+              "carriedCount": 1.4285714285714286,
+              "carriedDigestTokens": 19.285714285714285,
+              "usageChars": 1530.5714285714287,
+              "usageEstimatedTokens": 534.5714285714286,
+              "usageIndexChars": 1507.5714285714287,
+              "totalInScope": 17,
+              "recalledActiveShare": 0.08403361344537816,
+              "goldRank": 1.2857142857142858,
+              "goldRankExcludedCount": 0
+            }
+          },
+          {
+            "budgetTokens": 32,
+            "mean": {
+              "carriedCount": 1.7142857142857142,
+              "carriedDigestTokens": 22.571428571428573,
+              "usageChars": 1512.2857142857142,
+              "usageEstimatedTokens": 530.2857142857143,
+              "usageIndexChars": 1485.7142857142858,
+              "totalInScope": 17,
+              "recalledActiveShare": 0.10084033613445378,
+              "goldRank": 1.2857142857142858,
+              "goldRankExcludedCount": 0
+            }
+          },
+          {
+            "budgetTokens": 48,
+            "mean": {
+              "carriedCount": 3.142857142857143,
+              "carriedDigestTokens": 40.285714285714285,
+              "usageChars": 1420.857142857143,
+              "usageEstimatedTokens": 507.7142857142857,
+              "usageIndexChars": 1374,
+              "totalInScope": 17,
+              "recalledActiveShare": 0.18487394957983194,
+              "goldRank": 1.2857142857142858,
+              "goldRankExcludedCount": 0
+            }
+          },
+          {
+            "budgetTokens": 64,
+            "mean": {
+              "carriedCount": 4.285714285714286,
+              "carriedDigestTokens": 55.142857142857146,
+              "usageChars": 1347.7142857142858,
+              "usageEstimatedTokens": 489.42857142857144,
+              "usageIndexChars": 1280.4285714285713,
+              "totalInScope": 17,
+              "recalledActiveShare": 0.2521008403361345,
+              "goldRank": 1.2857142857142858,
+              "goldRankExcludedCount": 0
+            }
+          },
+          {
+            "budgetTokens": 128,
+            "mean": {
+              "carriedCount": 8.714285714285714,
+              "carriedDigestTokens": 118.71428571428571,
+              "usageChars": 1062.5714285714287,
+              "usageEstimatedTokens": 419.57142857142856,
+              "usageIndexChars": 901.1428571428571,
+              "totalInScope": 17,
+              "recalledActiveShare": 0.5126050420168068,
+              "goldRank": 1.2857142857142858,
+              "goldRankExcludedCount": 0
+            }
+          },
+          {
+            "budgetTokens": 256,
+            "mean": {
+              "carriedCount": 17,
+              "carriedDigestTokens": 241,
+              "usageChars": 533,
+              "usageEstimatedTokens": 289,
+              "usageIndexChars": 193,
+              "totalInScope": 17,
+              "recalledActiveShare": 1,
+              "goldRank": 1.2857142857142858,
+              "goldRankExcludedCount": 0
+            }
+          },
+          {
+            "budgetTokens": 512,
+            "mean": {
+              "carriedCount": 17,
+              "carriedDigestTokens": 241,
+              "usageChars": 533,
+              "usageEstimatedTokens": 289,
+              "usageIndexChars": 193,
+              "totalInScope": 17,
+              "recalledActiveShare": 1,
+              "goldRank": 1.2857142857142858,
+              "goldRankExcludedCount": 0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "round": 3,
+      "consolidation": {
+        "groups": 1,
+        "llmCalls": 1,
+        "outcomes": {
+          "consolidated": 1,
+          "nothing_to_consolidate": 0,
+          "not_examined": 0,
+          "llm_failed": 0,
+          "dry_run": 0
+        },
+        "newMemoryCount": 1,
+        "embeddingStatus": {
+          "ok": 1,
+          "pending": 0,
+          "failed": 0
+        },
+        "embeddingFailureKinds": []
+      },
+      "store": {
+        "activeCount": 15,
+        "supersededCount": 75,
+        "activeContentChars": 5908,
+        "activeContentTokens": 3991,
+        "activeDigestChars": 258,
+        "activeDigestTokens": 193,
+        "allContentChars": 17784
+      },
+      "recall": {
+        "unbudgeted": {
+          "mean": {
+            "carriedCount": 10,
+            "carriedDigestTokens": 128.57142857142858,
+            "usageChars": 770,
+            "usageEstimatedTokens": 320,
+            "usageIndexChars": 607.1428571428571,
+            "totalInScope": 15,
+            "recalledActiveShare": 0.6666666666666666,
+            "goldRank": 1.2857142857142858,
+            "goldRankExcludedCount": 0
+          }
+        },
+        "budgeted": [
+          {
+            "budgetTokens": 8,
+            "mean": {
+              "carriedCount": 0,
+              "carriedDigestTokens": 0,
+              "usageChars": 1412,
+              "usageEstimatedTokens": 478,
+              "usageIndexChars": 1412,
+              "totalInScope": 15,
+              "recalledActiveShare": 0,
+              "goldRank": null,
+              "goldRankExcludedCount": 7
+            }
+          },
+          {
+            "budgetTokens": 16,
+            "mean": {
+              "carriedCount": 0.7142857142857143,
+              "carriedDigestTokens": 9.142857142857142,
+              "usageChars": 1366.2857142857142,
+              "usageEstimatedTokens": 466.57142857142856,
+              "usageIndexChars": 1354.7142857142858,
+              "totalInScope": 15,
+              "recalledActiveShare": 0.047619047619047616,
+              "goldRank": 1,
+              "goldRankExcludedCount": 4
+            }
+          },
+          {
+            "budgetTokens": 24,
+            "mean": {
+              "carriedCount": 1.4285714285714286,
+              "carriedDigestTokens": 19.285714285714285,
+              "usageChars": 1320.5714285714287,
+              "usageEstimatedTokens": 455.57142857142856,
+              "usageIndexChars": 1297.5714285714287,
+              "totalInScope": 15,
+              "recalledActiveShare": 0.09523809523809523,
+              "goldRank": 1.2857142857142858,
+              "goldRankExcludedCount": 0
+            }
+          },
+          {
+            "budgetTokens": 32,
+            "mean": {
+              "carriedCount": 1.7142857142857142,
+              "carriedDigestTokens": 22.571428571428573,
+              "usageChars": 1302.2857142857142,
+              "usageEstimatedTokens": 451.2857142857143,
+              "usageIndexChars": 1275.7142857142858,
+              "totalInScope": 15,
+              "recalledActiveShare": 0.11428571428571428,
+              "goldRank": 1.2857142857142858,
+              "goldRankExcludedCount": 0
+            }
+          },
+          {
+            "budgetTokens": 48,
+            "mean": {
+              "carriedCount": 3.2857142857142856,
+              "carriedDigestTokens": 42,
+              "usageChars": 1201.7142857142858,
+              "usageEstimatedTokens": 426.42857142857144,
+              "usageIndexChars": 1152.7142857142858,
+              "totalInScope": 15,
+              "recalledActiveShare": 0.21904761904761902,
+              "goldRank": 1.2857142857142858,
+              "goldRankExcludedCount": 0
+            }
+          },
+          {
+            "budgetTokens": 64,
+            "mean": {
+              "carriedCount": 4.571428571428571,
+              "carriedDigestTokens": 57.142857142857146,
+              "usageChars": 1119.4285714285713,
+              "usageEstimatedTokens": 405.85714285714283,
+              "usageIndexChars": 1048.2857142857142,
+              "totalInScope": 15,
+              "recalledActiveShare": 0.30476190476190473,
+              "goldRank": 1.2857142857142858,
+              "goldRankExcludedCount": 0
+            }
+          },
+          {
+            "budgetTokens": 128,
+            "mean": {
+              "carriedCount": 9.428571428571429,
+              "carriedDigestTokens": 121.28571428571429,
+              "usageChars": 806.5714285714286,
+              "usageEstimatedTokens": 329.14285714285717,
+              "usageIndexChars": 651.7142857142857,
+              "totalInScope": 15,
+              "recalledActiveShare": 0.6285714285714284,
+              "goldRank": 1.2857142857142858,
+              "goldRankExcludedCount": 0
+            }
+          },
+          {
+            "budgetTokens": 256,
+            "mean": {
+              "carriedCount": 15,
+              "carriedDigestTokens": 193,
+              "usageChars": 451,
+              "usageEstimatedTokens": 242,
+              "usageIndexChars": 193,
+              "totalInScope": 15,
+              "recalledActiveShare": 1,
+              "goldRank": 1.2857142857142858,
+              "goldRankExcludedCount": 0
+            }
+          },
+          {
+            "budgetTokens": 512,
+            "mean": {
+              "carriedCount": 15,
+              "carriedDigestTokens": 193,
+              "usageChars": 451,
+              "usageEstimatedTokens": 242,
+              "usageIndexChars": 193,
+              "totalInScope": 15,
+              "recalledActiveShare": 1,
+              "goldRank": 1.2857142857142858,
+              "goldRankExcludedCount": 0
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

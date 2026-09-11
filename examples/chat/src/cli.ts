@@ -17,6 +17,10 @@ import {
   formatRecallQualityTable,
   runComparison,
 } from "./compare.js";
+import { parseConsolidationCostOptions } from "./consolidation-cost-options.js";
+import { runConsolidationCost } from "./consolidation-cost.js";
+import { formatConsolidationCostReport } from "./consolidation-cost-format.js";
+import { buildWeightsUnavailableConsolidationCostRunJson } from "./consolidation-json.js";
 import { formatRecall } from "./format.js";
 import { tryGitRevParseHead } from "./git-info.js";
 import { formatIdentifierArmReport, runIdentifierProbeArm } from "./identifier-arm.js";
@@ -889,6 +893,84 @@ async function runIdentifierProbes(): Promise<void> {
   }
 }
 
+/**
+ * `consolidation-cost` サブコマンド(Issue #136)。
+ *
+ * **なぜ `deterministic` LLM + `local` embedding か**（仕様書「使う provider 層」節）:
+ * `consolidate()` は LLM を呼ぶため `recorded` は使えない(カセットに consolidation の
+ * プロンプトが無く、`RecordedLLMProvider` が例外を投げる)。統合結果の新しい content の
+ * 埋め込みもカセットに無い。⟹ この2点を避けるため `deterministic` LLM ＋ `local` 埋め込み
+ * を固定で使う(`identifier-probes` と同じ組み合わせ、ADR 0094)。
+ */
+async function runConsolidationCostCommand(): Promise<void> {
+  const databaseUrl = requireDatabaseUrl();
+  const options = parseConsolidationCostOptions(process.env);
+  const tenantId = `consolidation-cost-${newRunToken()}`;
+  const measuredAt = new Date();
+  const commit = tryGitRevParseHead(process.cwd());
+
+  const handle = await createExampleRuntime(databaseUrl, {
+    ...process.env,
+    MNEMORA_LLM: "deterministic",
+    MNEMORA_EMBEDDING: "local",
+  });
+  printProviderMode(handle.llmMode, handle.embeddingMode);
+  try {
+    console.log(
+      "\n[consolidation-cost] warmup() でモデルの読み込みを先に済ませる" +
+        "(取得に失敗したら、ここでメトリクスを出さずに打ち切る)…",
+    );
+    const warmup = await warmupLocalEmbedding(handle.embeddingProvider);
+    if (!warmup.ok) {
+      console.error(`\n🔴 ${warmup.detail}`);
+      console.error(
+        "  メトリクスは1件も測っていない(前回の値・既定値・0 へは倒さない)。" +
+          "ネットワーク・Hugging Face repo の状態を確認し、再実行すること。",
+      );
+      process.exitCode = 1;
+      const jsonPathOnFailure = process.env.MNEMORA_CONSOLIDATION_JSON;
+      if (jsonPathOnFailure) {
+        const failureJson = buildWeightsUnavailableConsolidationCostRunJson({
+          measuredAt,
+          commit,
+          detail: warmup.detail,
+        });
+        writeFileSync(jsonPathOnFailure, `${JSON.stringify(failureJson, null, 2)}\n`, "utf-8");
+        console.log(
+          `\n[consolidation-cost] 機械可読な結果(取得失敗)を書き出した: ${jsonPathOnFailure}`,
+        );
+      }
+      return;
+    }
+    console.log(`  ${warmup.detail}`);
+
+    const json = await runConsolidationCost({
+      runtime: handle.runtime,
+      memoryStore: handle.memoryStore,
+      embeddingProvider: handle.embeddingProvider,
+      pool: handle.pool,
+      llmMode: handle.llmMode,
+      embeddingMode: handle.embeddingMode,
+      tenantId,
+      groupSize: options.groupSize,
+      budgetLadder: options.budgetLadder,
+      recallLimit: options.recallLimit,
+      measuredAt,
+      commit,
+    });
+
+    console.log(`\n${formatConsolidationCostReport(json)}`);
+
+    const jsonPath = process.env.MNEMORA_CONSOLIDATION_JSON;
+    if (jsonPath) {
+      writeFileSync(jsonPath, `${JSON.stringify(json, null, 2)}\n`, "utf-8");
+      console.log(`\n[consolidation-cost] 機械可読な結果を書き出した: ${jsonPath}`);
+    }
+  } finally {
+    await handle.close();
+  }
+}
+
 function printHelp(): void {
   console.log(
     [
@@ -905,6 +987,9 @@ function printHelp(): void {
       "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run identifier-probes",
       "                                                                      # ASCII識別子・固有名詞を含む probe(Issue #109)を@mnemora/local-embeddingで測る",
       "                                                                      #   鍵・カセット不要。日本語意味probe7件・識別子probe12件(sparse/dense haystack)を別々に集計する",
+      "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run consolidation-cost",
+      "                                                                      # Runtime.consolidate() の統合が「載る量」をどう動かすかをラウンド制で実測する(Issue #136)",
+      "                                                                      #   鍵・カセット不要(deterministic LLM + local embedding)。MNEMORA_CONSOLIDATION_JSON で機械可読出力",
       "  DATABASE_URL=... OPENAI_API_KEY=... pnpm --filter @mnemora/example-chat run record",
       "                                                                      # retrieval の応答を記録する(ADR 0051)",
       "  DATABASE_URL=... OPENAI_API_KEY=... pnpm --filter @mnemora/example-chat run record:compare",
@@ -937,6 +1022,8 @@ async function main(): Promise<void> {
     await runTimeTerm();
   } else if (command === "identifier-probes") {
     await runIdentifierProbes();
+  } else if (command === "consolidation-cost") {
+    await runConsolidationCostCommand();
   } else if (command === "record") {
     await runRecord(parseCassetteTarget(process.argv[3]));
   } else if (command === "verify") {
