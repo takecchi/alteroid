@@ -2803,6 +2803,204 @@ describe('renderMemoryListing — `memory_list` 用の一覧。全区分を対�
 });
 
 /**
+ * #913: 「時間差だけでは、いちばん手が入っている文書がいちばん新しく見える」
+ * ——#821 が測った `staleForMs`（`describedAt` と `updatedAt` の時間差）は
+ * 「要旨がどれだけ前に古くなったか」しか言えず、「その間に本文がどれだけ
+ * 変わったか（本文の変化量）」を持っていない。
+ *
+ * ⚠️⚠️ **これは2手目（歯を先に書く手）である。実装（`memory.ts` の本体・
+ * ストア・表示）は1文字も変えていない。** ここに置く歯は、契約
+ * （マネージャーが確定させた設計）が実装される前に書いた「失敗する歯」で
+ * あり、現時点では赤くなることを狙っている（一部は #821 と同じ理由で
+ * 現時点でも緑になりうる——各 it() のコメントに実測を書く）。
+ *
+ * **狙う契約（マネージャー確定）:**
+ * - `MemoryDescriptionFreshness` の `stale` に `drift: MemoryDescriptionDrift`
+ *   を足す。`measured`（`describedBytes` / `currentBytes` / 符号付き
+ *   `deltaBytes`）と `unrecorded`（記録が無い＝0ではない）の2状態
+ * - `fresh` には `drift` を持たせない（drift は stale 専用）
+ *
+ * ここではまだ実装されていない `drift` を、あたかも在るかのように
+ * `descriptionFreshness` へ直接埋め込んで `renderMemoryListing` を呼ぶ
+ * ——実装（`memoryFreshnessMarker` 等）がまだ `drift` を1文字も読んでいない
+ * ので、出力に変化量の数値が現れず、下の `it()` は赤くなるはずである。
+ */
+describe('#913: 要旨の鮮度は時間差だけでなく本文の変化量も運ぶ（契約のみ。実装はまだ無い）', () => {
+  /** 本文が実際にどれだけ変わったか（`drift`）を埋め込んだ1件を作る。 */
+  function driftEntry(
+    slug: string,
+    staleForMs: number,
+    drift:
+      | { kind: 'measured'; describedBytes: number; currentBytes: number; deltaBytes: number }
+      | { kind: 'unrecorded' },
+  ) {
+    return {
+      slug,
+      title: slug,
+      kind: 'fact' as const,
+      description: '要旨',
+      // ⚠️ `drift` はまだ `MemoryDescriptionFreshness` の型に無い。ここでは
+      // 契約が実装された後の形を先取りして埋め込んでいる（vitest は tsc を
+      // 通さないので、型エラーではなく実行時の assert 差分として赤くなる）。
+      descriptionFreshness: { kind: 'stale' as const, staleForMs, drift } as unknown as MemoryDescriptionFreshness,
+      parent: undefined,
+      updatedAt: '2026-08-21T00:00:00Z',
+      createdAt: { kind: 'unknown' as const },
+    };
+  }
+
+  /** 一覧の中から `slug` の行を取り出し、符号付きのバイト変化量を読む。無ければ null。 */
+  function extractByteDelta(listing: string, slug: string): number | null {
+    const line = listing.split('\n').find((l) => l.includes(`${slug}:`));
+    if (line === undefined) return null;
+    const match = /([+-])\s*([\d,]+)\s*バイト/.exec(line);
+    if (match === null) return null;
+    const sign = match[1] === '-' ? -1 : 1;
+    return sign * Number(match[2].replace(/,/g, ''));
+  }
+
+  /**
+   * 歯1（本題の再現）。#913 の表そのもの——
+   * 文書A: 要旨から30日、本文は+200バイト。文書B: 要旨から1時間、本文は+60,000バイト。
+   *
+   * **測るのは「語がある」ではなく「読み手が B を先に選べるか」——数として
+   * B の変化量が A より大きいことを直接比較する。** 時間差だけで見れば
+   * A（30日）のほうが「古い」が、本文の変化量で見れば B のほうが桁違いに
+   * 大きく動いている、というのが #913 の指摘そのものである。
+   */
+  it('⭐ 30日で+200バイトの文書より、1時間で+60,000バイト変わった文書のほうが、変化量としては大きいと数で分かる', () => {
+    const barelyTouchedInAMonth = driftEntry('doc-a', 30 * 24 * 60 * 60 * 1000, {
+      kind: 'measured',
+      describedBytes: 1000,
+      currentBytes: 1200,
+      deltaBytes: 200,
+    });
+    const heavilyEditedInAnHour = driftEntry('doc-b', 60 * 60 * 1000, {
+      kind: 'measured',
+      describedBytes: 1000,
+      currentBytes: 61000,
+      deltaBytes: 60000,
+    });
+
+    const listing = renderMemoryListing([barelyTouchedInAMonth, heavilyEditedInAnHour]);
+
+    const deltaA = extractByteDelta(listing, 'doc-a');
+    const deltaB = extractByteDelta(listing, 'doc-b');
+
+    expect(deltaA).not.toBeNull();
+    expect(deltaB).not.toBeNull();
+    expect(deltaB as number).toBeGreaterThan(deltaA as number);
+  });
+
+  /**
+   * ⛔ `toContain('60,000')` だけで済ませない——数を変えたら出力も変わる
+   * ことを、2点（200 バイトと 60,000 バイト）で直接確かめる。固定文字列を
+   * 返す変異はここで生存できない。
+   */
+  it('⭐ 変化量の数を変えると出力も変わる（語ではなく数で測る。200バイトと60,000バイトの2点）', () => {
+    const small = renderMemoryListing([
+      driftEntry('doc', 60 * 60 * 1000, {
+        kind: 'measured',
+        describedBytes: 1000,
+        currentBytes: 1200,
+        deltaBytes: 200,
+      }),
+    ]);
+    const large = renderMemoryListing([
+      driftEntry('doc', 60 * 60 * 1000, {
+        kind: 'measured',
+        describedBytes: 1000,
+        currentBytes: 61000,
+        deltaBytes: 60000,
+      }),
+    ]);
+
+    expect(small).not.toBe(large);
+    expect(extractByteDelta(small, 'doc')).toBe(200);
+    expect(extractByteDelta(large, 'doc')).toBe(60000);
+  });
+
+  /**
+   * 歯2-1（陰性対照）。#821 が名指しした失敗——「検出する歯だけ置くと決定の
+   * 巻き戻しが通る」——と同じ形をここでも避ける。`unrecorded`（記録が無い）
+   * を「0バイト変わった」（measured, deltaBytes: 0）と同じ言葉にしないこと。
+   * #821 の条件1（「取れなかった」と「0」を混ぜない）の、変化量版である。
+   */
+  it('⭐⭐ 陰性対照1: unrecorded（記録なし）と「0バイト変わった」は別の言葉で出る（#821 条件1と同じ形）', () => {
+    const unrecorded = renderMemoryListing([
+      driftEntry('doc', 60 * 60 * 1000, { kind: 'unrecorded' }),
+    ]);
+    const zeroChanged = renderMemoryListing([
+      driftEntry('doc', 60 * 60 * 1000, {
+        kind: 'measured',
+        describedBytes: 1000,
+        currentBytes: 1000,
+        deltaBytes: 0,
+      }),
+    ]);
+
+    expect(unrecorded).not.toBe(zeroChanged);
+    expect(extractByteDelta(unrecorded, 'doc')).toBeNull();
+    expect(unrecorded).toContain('記録されていない');
+    expect(zeroChanged).not.toContain('記録されていない');
+  });
+
+  /**
+   * 歯2-2（陰性対照）。本文が縮んだ文書（`deltaBytes < 0`）を「変わって
+   * いない」（`deltaBytes === 0`）と同じ表示にしない——減った側を「変わって
+   * いない」に畳むと、実質的な改変（削って書き直した等）を見逃す。
+   */
+  it('⭐⭐ 陰性対照2: 本文が縮んだ文書（負の変化量）は「変わっていない」と同じ表示にならない', () => {
+    const shrunk = renderMemoryListing([
+      driftEntry('doc', 60 * 60 * 1000, {
+        kind: 'measured',
+        describedBytes: 1000,
+        currentBytes: 800,
+        deltaBytes: -200,
+      }),
+    ]);
+    const unchanged = renderMemoryListing([
+      driftEntry('doc', 60 * 60 * 1000, {
+        kind: 'measured',
+        describedBytes: 1000,
+        currentBytes: 1000,
+        deltaBytes: 0,
+      }),
+    ]);
+
+    expect(shrunk).not.toBe(unchanged);
+    expect(extractByteDelta(shrunk, 'doc')).toBe(-200);
+  });
+
+  /**
+   * 歯2-3（陰性対照）。`drift` は `stale`専用の契約——`fresh` の文書には
+   * 変化量が出てはいけない。#821 が直した「常に鳴る印」（12/12 文書で ⚠ が
+   * 付いていた欠陥）と同じ形に戻っていないかを確かめる。
+   *
+   * ⚠️ この it() は、実装が無い現時点でも**すでに緑になりうる**
+   * （`fresh` はそもそもどんな変化量も出力しないため）。実装が入った後の
+   * 回帰を防ぐための歯として、あえて先に置いている——実測は報告に書く。
+   */
+  it('⭐⭐ 陰性対照3: fresh の文書には変化量が出ない（stale 以外へ漏れていない）', () => {
+    const fresh = renderMemoryListing([
+      {
+        slug: 'doc',
+        title: 'Doc',
+        kind: 'fact' as const,
+        description: '要旨',
+        descriptionFreshness: { kind: 'fresh' as const },
+        parent: undefined,
+        updatedAt: '2026-08-21T00:00:00Z',
+        createdAt: { kind: 'unknown' as const },
+      },
+    ]);
+
+    expect(extractByteDelta(fresh, 'doc')).toBeNull();
+    expect(fresh).not.toMatch(/バイト/);
+  });
+});
+
+/**
  * 節（section）の走査・節id・切り取り・目次（#318 案 (b)）。
  *
  * **ここで測るのは純粋関数だけである。** ストア（3実装）を通す性質は
