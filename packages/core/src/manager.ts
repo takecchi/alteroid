@@ -407,6 +407,21 @@ export interface ManagerSummary {
    */
   lastFailure?: NonNullable<Job['lastFailure']>;
   /**
+   * 直近の1ターンが、`result` を受け取らないまま畳まれたこと
+   * （`jobSchema.lastUnreported`。Issue #917）。
+   *
+   * **`lastFailure` と軸が違う。** あちらは SDK が「これは応答ではない」と
+   * 言った回、こちらは SDK からその声明すら届かないまま畳まれた回
+   * （器の入れ替え・`manager_stop`・クラッシュ等）。**どちらか一方だけが
+   * 立つ**——同じ欄には混ぜない（`schema.ts` の `lastUnreported` の doc）。
+   *
+   * `manager_list` / `manager_report` の見出しは、`lastFailure` と同じく
+   * これが在れば「直近のターンの中身」へ倒す——本文（`lastReport`）は
+   * 完遂した報告ではなく畳まれる前の途中経過なので、見出しを「直近の報告」の
+   * ままにすると、Issue #714 が塞いだのと同じ穴が開く。
+   */
+  lastUnreported?: NonNullable<Job['lastUnreported']>;
+  /**
    * セッションが `failed` として畳まれたときの、器の資源による落ち方の分類
    * （`jobSchema.lastSystemError`。#713 段3）。
    *
@@ -6216,6 +6231,18 @@ class Pool implements ManagerPool {
         } else {
           record.job.lastFailure = { ...event.failure, at: new Date().toISOString() };
         }
+        // **`result` を受け取らないまま畳まれた回だと台帳にも残す（Issue #917）。**
+        // `lastFailure` と同じ作法——在れば書き、応答として終わった回（この
+        // 欄を伴わずに `report` が届いた回）では消す（`delete` にしているのは
+        // `undefined` を入れると `exactOptionalPropertyTypes` で通らないため、
+        // `lastFailure` のすぐ上と同じ理由）。**`event.failure` の有無とは
+        // 独立に判定する**——両方が無いことも、片方だけ在ることもある
+        // （`schema.ts` の `lastUnreported` の doc）。
+        if (event.unreported === undefined) {
+          delete record.job.lastUnreported;
+        } else {
+          record.job.lastUnreported = { ...event.unreported, at: new Date().toISOString() };
+        }
         await this.#persist(record);
         await this.#journal({
           type: 'exchange',
@@ -8768,6 +8795,9 @@ function summaryOf(
     // 開き直る）。応答として終わった回では台帳側で消えているので、ここは台帳を
     // そのまま写すだけでよい。
     ...(job.lastFailure === undefined ? {} : { lastFailure: job.lastFailure }),
+    // **`lastFailure` と同じ行で運ぶ（Issue #917）。** 台帳をそのまま写すだけ
+    // ——書き込みは `#onEvent` の `case 'report'` の1箇所に閉じている。
+    ...(job.lastUnreported === undefined ? {} : { lastUnreported: job.lastUnreported }),
     // **台帳をそのまま写すだけ**（#713 段3）。書き込みは `#onEvent` の
     // `case 'closed'`（立てる）と `case 'report'`（下ろす）に閉じている。
     ...(job.lastSystemError === undefined ? {} : { lastSystemError: job.lastSystemError }),
