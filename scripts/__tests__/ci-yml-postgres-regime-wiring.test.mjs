@@ -563,10 +563,16 @@ describe("値を作る側の歯が MNEMORA_LEXICAL_REGIME_JSON を参照して�
     // PostgreSQL 16 で lc_collate / lc_ctype は GUC ではなくなり DB ごとの属性に
     // なった ⟹ GUC として引くと 42704 で落ちる（PR #151 の CI が pg17 で実測）。
     // ⟹ ロケール2つは pg_database から、text search config は GUC から引く。
+    // ⚠ **空白の数で固定しない。**以前はここを `toContain("SELECT datctype   FROM
+    // pg_database")` と**桁揃えの空白ごと**書いていたので、SQL の桁を揃え直すだけ
+    // ——**SQL として1文字も意味が変わらない変更**——でこの歯が赤くなった（撃って確かめた）。
+    // ⟹ それは「ふるまい不変で赤くなる歯」であり、直す人に嘘の警告を出す。
+    // ⟹ 空白を \s+ で受ける正規表現にする。**測る強さは落ちていない**
+    //   （式を消す・GUC 経由へ戻す、はどちらも下で赤くなる）。
     const probeExpressions = [
-      ["lcCollate", "SELECT datcollate FROM pg_database"],
-      ["lcCtype", "SELECT datctype   FROM pg_database"],
-      ["defaultTextSearchConfig", "current_setting('default_text_search_config')"],
+      ["lcCollate", /SELECT\s+datcollate\s+FROM\s+pg_database/],
+      ["lcCtype", /SELECT\s+datctype\s+FROM\s+pg_database/],
+      ["defaultTextSearchConfig", /current_setting\('default_text_search_config'\)/],
     ];
     for (const [field, expression] of probeExpressions) {
       expect(
@@ -574,7 +580,7 @@ describe("値を作る側の歯が MNEMORA_LEXICAL_REGIME_JSON を参照して�
         `probe の SQL が ${field} を実際に問い合わせていない（期待する式: ${expression}）。` +
           "JSON の欄と TS の型だけが残ると、値は undefined になり、" +
           "Job Summary 側の validateMeasured が「値が空だった」で落ちるまで誰も気づかない。",
-      ).toContain(expression);
+      ).toMatch(expression);
     }
     // 🔴 弾いていないことも測る: GUC 経由へ戻したら赤くなる。
     // 戻すと pg17 で 42704 になり、測定段そのものが落ちる。
