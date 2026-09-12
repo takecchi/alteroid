@@ -348,7 +348,14 @@ export type TokenRotationOutcome =
     }
   | {
       /**
-       * **撒くものが無いまま返った。**
+       * **プールから撒くものが無いまま返った。**
+       *
+       * ⚠️ **「何も撒かずに返る」ではない**（2026-09-12, #869）。**プールの選択と
+       * しては何も撒かない**が、現役が**待っても戻らない**（消された / 外された /
+       * 失効した）回だけは、**器の環境変数の値**を撒いてから返る —— `restore()` の
+       * `dangling` / `withheld` と同じ手当てである（`finishSweep` の
+       * `strandedOnDeadKey` の doc）。**プールの記録は1バイトも動かない**ので、
+       * この `kind` の意味（「回せなかった」）は変わっていない。
        *
        * ⚠️ **`parked` が入ってから、ここへ落ちる道は3本だけになった。** 冷却中の
        * 候補が1本でも在れば、そちらは `parked`（撒いて待つ）へ行く。
@@ -1356,6 +1363,55 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
       }
     }
 
+    /**
+     * **いま撒いてある鍵が自力では戻らない回だけ、器の環境変数の値を撒く（#869）。**
+     *
+     * `exhausted` は**何も撒かずに返る**ので、全コンテナは**降りたトークンを
+     * 持ったまま**待つ（{@link TokenRotationOutcome} の `parked` の doc）。冷却中の
+     * 鍵なら待てば戻るが、**記録上の現役がプールから消えている（人間が消した）／
+     * 人間が外した／失効している**回は、**待っても戻らない** —— 通らないと分かって
+     * いる値を持ったまま、次のデーモン再起動（`restore()`）まで走り続ける。
+     * **#868 が塞いだのは `restore()`＝起動した瞬間だけで、起動後にそうなった回は
+     * ここに残っていた**（#869）。
+     *
+     * ⟹ `restore()` の `dangling` / `withheld` と**同じ状態**なので、**同じ手当てを
+     * する。撒くのは器の環境変数の値であって、人間が外した行の値ではない** ——
+     * #868 の逐語「戻していないのは*その行の値*であって、*器の環境変数の値*は
+     * 最初から人間の判断の対象ではない」がそのまま効く。**プールの記録は1バイトも
+     * 動かさない**（`replace()` も `writeActive()` も呼ばない ＝ `nominate` を通らない）。
+     *
+     * **撒かない道を3つ残している。どれも「戻らない」が確定していないからである:**
+     *
+     * 1. **冷却中**（`cooling`）—— 待てば戻る。そのうえここは `parked` が
+     *    「いちばん早く戻る鍵」を撒いて待つ道であり、器の環境変数へ落とすのは
+     *    **プールの選択を覆す**ことになる
+     * 2. **持ち時間で打ち切った**（`stoppedBy: 'budget'`）—— まだ試していない候補が
+     *    在るので、現役が戻らないとはまだ言えない
+     * 3. **`active === null`（一度も指名していない）** —— その器の runner が持って
+     *    いるのは `restore()` が起動時に撒いた器の環境変数の値そのものなので、
+     *    同じ値をもう一度撒いても何も変わらない
+     */
+    const availabilityOfActive =
+      active === null
+        ? undefined
+        : activeRow === undefined
+          ? ('dangling' as const)
+          : tokenAvailabilityAt(activeRow, now().getTime());
+    const strandedOnDeadKey =
+      !sweep.stoppedByBudget &&
+      (availabilityOfActive === 'dangling' ||
+        availabilityOfActive === 'disabled' ||
+        availabilityOfActive === 'invalidated');
+    if (strandedOnDeadKey && active !== null) {
+      // **身元は記録が指していたものをそのまま使う**（`restore()` の `dangling` /
+      // `withheld` と同じ）。新しい id を作らない —— 台帳の tokenId 軸は動かさない。
+      await spread.spread({
+        id: active.tokenId,
+        generation: active.generation,
+        kind: 'env' as const,
+      });
+    }
+
     return {
       kind: 'exhausted' as const,
       // **打ち切ったときは `earliest` を出さない。** 出せる材料が無い
@@ -1370,18 +1426,24 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
       // 「プールが空、または降りた1本しか無い」と書く —— **試して外した分も
       // 「無い」に見えているだけ**なので、そのまま出すと**候補が4本在ったのに
       // 「プールが空」と読める行**になる。
-      why: sweep.stoppedByBudget
-        ? `候補を試す持ち時間（${String(CANDIDATE_SWEEP_BUDGET_MS)}ms）を使い切った${skipped}`
-        : earliest !== undefined
-          ? // `parked` の条件3か4で落ちた。**どちらも「候補が無い」ではない。**
-            // **2つを言い分ける** —— 前者は「同じ鍵」、後者は「もっと遅い鍵」で、
-            // 読む側が次に確かめるものが違う。
-            earliest.tokenId === active?.tokenId
-            ? `いちばん早く戻る候補が現役自身だった（撒き直しても同じ鍵なので、世代だけ増やすことはしない）${skipped}`
-            : `いま撒いてある鍵のほうが早く戻る（いちばん早い候補「${earliest.label}」は ${new Date(earliest.cooldownUntil).toISOString()}）。遅い鍵へ移すのは改善ではないので撒き直さない${skipped}`
-          : sweep.unusableLabels.length > 0
-            ? `試せる候補を使い切った${skipped}`
-            : (sweep.ranOut?.why ?? '候補が無い'),
+      why:
+        (sweep.stoppedByBudget
+          ? `候補を試す持ち時間（${String(CANDIDATE_SWEEP_BUDGET_MS)}ms）を使い切った${skipped}`
+          : earliest !== undefined
+            ? // `parked` の条件3か4で落ちた。**どちらも「候補が無い」ではない。**
+              // **2つを言い分ける** —— 前者は「同じ鍵」、後者は「もっと遅い鍵」で、
+              // 読む側が次に確かめるものが違う。
+              earliest.tokenId === active?.tokenId
+              ? `いちばん早く戻る候補が現役自身だった（撒き直しても同じ鍵なので、世代だけ増やすことはしない）${skipped}`
+              : `いま撒いてある鍵のほうが早く戻る（いちばん早い候補「${earliest.label}」は ${new Date(earliest.cooldownUntil).toISOString()}）。遅い鍵へ移すのは改善ではないので撒き直さない${skipped}`
+            : sweep.unusableLabels.length > 0
+              ? `試せる候補を使い切った${skipped}`
+              : (sweep.ranOut?.why ?? '候補が無い')) +
+        // **撒いたことは日誌に出す。** 出さないと「何も撒かずに返った」と見分けが
+        // 付かず、#869 が直っているかを日誌から言えない。
+        (strandedOnDeadKey
+          ? '。**現役は待っても戻らない**（消された / 外された / 失効した）ので、器の環境変数の値を撒いた（#869。人間が外した行の値ではない）'
+          : ''),
     };
   }
 
@@ -1852,9 +1914,16 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
          * かつてそう書いていたのは 2026-09-11 より前の前提——runner の
          * `#childEnv()` はいま自分の環境変数の鍵を無条件に削除するので、撒かな
          * ければ資格が1本も届かない。`restore()` は起動時にこの穴を器の環境
-         * 変数の値で塞ぐ（#866。`TokenRotator.restore` の doc）が、**ここ
-         * （`reconsider()`）は起動後に行が消えた回を扱っており、その手当ては
-         * 無い**——`restore()` が塞ぐのは「起動した瞬間の状態」だけである。
+         * 変数の値で塞ぐ（#866。`TokenRotator.restore` の doc）。
+         *
+         * **⚠️ 2026-09-12（#869）にここを直した。** かつてこの文は「ここ
+         * （`reconsider()`）は起動後に行が消えた回を扱っており、その手当ては無い」
+         * と書いていた——**いまは偽である。** 通る候補が1本も無くて
+         * `finishSweep` が `exhausted` へ落ちる回のうち、**現役が待っても戻らない
+         * （消された / 外された / 失効した）ものだけ**、あちらで器の環境変数の値を
+         * 撒く（`finishSweep` の `strandedOnDeadKey` の doc に、撒かない3つの道も
+         * 含めて全文が在る）。**`observe()` 側の `exhausted` も同じ関数を通るので
+         * 同時に塞がっている。**
          *
          * `restore()` は*トークンの値*を戻さないと決めているが（人間の判断を
          * 覆さない）、**通る候補が在るならここで移してよい**（あちらは「起動時に
