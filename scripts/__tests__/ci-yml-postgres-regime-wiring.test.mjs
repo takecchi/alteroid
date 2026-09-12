@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { blankOutWorkflowComments } from "../workflow-comment-blank-lib.mjs";
 
 /**
  * ⚠ **2026-09-12 追記(Issue #155)**: `postgres` ジョブを `server_encoding` の
@@ -219,9 +220,29 @@ const artifactStep = steps.find(
 );
 
 /**
+ * このファイル内で `extractStepBlock` が `blankOutWorkflowComments` を通した結果、
+ * 「扱えない」と名乗った箇所をすべて集める(呼び出し側がこれを無視できないようにするため
+ * ——下の describe("コメント潰しが …") が空であることを固定する)。
+ *
+ * @type {{ stepName: string, unhandled: { lineNumber: number, reason: string, line: string }[] }[]}
+ */
+const stepBlockCommentUnhandled = [];
+
+/**
  * ある段の生テキスト(`- name: <name>` から次の段の `- name:` まで)を切り出す。
  * `parseSteps` は `if:`/`uses:`/`with:` を読まないので、それらを検査したいときは
  * こちらを使う。
+ *
+ * 🔴 **返す前にコメントを空白へ潰す(Issue #148/#155 段1)。**この歯の一部
+ * (下の `if: always()` / `${{ matrix.serverEncoding }}` の固定)は、実キーではなく
+ * **地の文のコメントがその文字列を引用しているだけ**でも `toContain` が一致していた
+ * (変異H。段0で実測)。⟹ 照合前にコメントを潰す(`blankOutComments` が
+ * `lexical-store-identifier.test.ts` のために下ったのと同じ判断——
+ * `scripts/workflow-comment-blank-lib.mjs` の docstring)。
+ *
+ * ⛔ **この関数は照合専用であり、実行はしない。**`jobBlock`/`parseSteps` 側
+ * (`summaryStep.run` → `runSummaryStepFromWorkflow` が子プロセスで実際に走らせる)には
+ * 適用しない——実行するテキストからコメントを潰すと歯の意味が変わる。
  *
  * @param {string} stepName
  * @returns {string | undefined}
@@ -239,7 +260,12 @@ function extractStepBlock(stepName) {
       break;
     }
   }
-  return lines.slice(start, end).join("\n");
+  const raw = lines.slice(start, end).join("\n");
+  const { text, unhandled } = blankOutWorkflowComments(raw);
+  if (unhandled.length > 0) {
+    stepBlockCommentUnhandled.push({ stepName, unhandled });
+  }
+  return text;
 }
 
 /**
@@ -928,5 +954,20 @@ describe("blankOutComments 自体が効いていること(⭐ この可視化が
     const source = ["/*", " * 2行のブロックコメント", " */", "const a = 1;", ""].join("\n");
     const countLines = (text) => text.split("\n").length;
     expect(countLines(blankOutComments(source))).toBe(countLines(source));
+  });
+});
+
+describe("コメント潰しが postgres ジョブの対象範囲で「扱えない」形に当たっていないこと(段1)", () => {
+  // 🔴 `extractStepBlock` が返す前に通す `blankOutWorkflowComments` の
+  // unhandled を無視できないようにする(呼び出し側が黙って安全側へ倒さないための
+  // 配線そのもの。`scripts/workflow-comment-blank-lib.mjs` の docstring)。
+  // ⚠ 特定の呼び出し履歴に依存しないよう、ここで postgres ジョブの全段を
+  // 洗い直してから確かめる。
+  it("postgres ジョブの全段(name 段)に unhandled が無い", () => {
+    stepBlockCommentUnhandled.length = 0;
+    for (const step of steps) {
+      extractStepBlock(step.name);
+    }
+    expect(stepBlockCommentUnhandled).toEqual([]);
   });
 });

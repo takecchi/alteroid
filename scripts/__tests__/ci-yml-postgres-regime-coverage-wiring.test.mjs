@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { EXPECTED_SERVER_ENCODINGS } from "../lexical-regime-coverage-lib.mjs";
+import { blankOutWorkflowComments } from "../workflow-comment-blank-lib.mjs";
 
 /**
  * ⭐ **この歯が測っているもの(消す前に読むこと)**
@@ -97,9 +98,24 @@ function extractMatrixServerEncodings() {
   return encodings;
 }
 
-const coverageJobBlock = extractJob(COVERAGE_JOB_ID);
+// 🔴 **コメントを潰してから当てる(Issue #155 段1)。**この歯の一部(`exit 1` /
+// `needs: postgres` / `if: always()` の固定)は、実際に実行される行ではなく
+// **地の文のコメントがその文字列を引用しているだけ**でも `toContain` が一致していた
+// (変異D。段0で実測)。⟹ 照合前にコメントを潰す
+// (`scripts/workflow-comment-blank-lib.mjs` の docstring)。
+//
+// ⛔ **この歯の `coverageJobBlock` は `toContain`/`toMatch` にしか使っていない
+// (実行しない)ことを確認済み。**実行する側の生テキストへ適用してはいけない、という
+// `ci-yml-postgres-regime-wiring.test.mjs` の断り書きと同じ理由による区別である。
+const { text: coverageJobBlock, unhandled: coverageJobBlockUnhandled } = blankOutWorkflowComments(
+  extractJob(COVERAGE_JOB_ID),
+);
 
 describe("ci.yml の postgres-regime-coverage ジョブの配線(Issue #155 満たすべきこと2)", () => {
+  it("🔴 コメント潰しが「扱えない」形に当たっていない(無視できないAPIにする)", () => {
+    expect(coverageJobBlockUnhandled).toEqual([]);
+  });
+
   it("ジョブが存在し、needs: postgres / if: always() を持つ(片脚が落ちても走る)", () => {
     expect(coverageJobBlock).toContain("needs: postgres");
     expect(coverageJobBlock).toContain("if: always()");
