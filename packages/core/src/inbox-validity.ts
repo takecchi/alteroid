@@ -109,13 +109,13 @@ export function describeValidity(validity: InboxEventValidity, managerId: string
     case 'changed':
       return (
         `⚠️ この報告が受信箱へ積まれた時点で ${managerId} は \`${validity.claimed}\` でしたが、` +
-        `いまは \`${validity.now}\` です（報告が名乗った前提は動いています。` +
+        `この断り書きを組んだ時点では \`${validity.now}\` です（報告が名乗った前提は動いています。` +
         `中身が要らなくなったとは限りません）。`
       );
     case 'unknowable':
       return (
         `⚠️ この報告が受信箱へ積まれた時点で ${managerId} は \`${validity.claimed}\` でしたが、` +
-        `いまの状態を引けませんでした（${validity.detail}）。` +
+        `この断り書きを組む時点の状態を引けませんでした（${validity.detail}）。` +
         `**「変わっていない」ではなく「確かめられなかった」です。**`
       );
     case 'unchanged':

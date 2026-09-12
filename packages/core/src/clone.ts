@@ -71,6 +71,7 @@ import type { ProfileService } from './profile-service.js';
 import { createRecentMap } from './recent.js';
 import { describeSituation, describeSituationUnavailable } from './situation.js';
 import { countSupersedingReports, describeSuperseded } from './superseded.js';
+import { describeValidity, inboxEventValidity } from './inbox-validity.js';
 import { toAgentTokenView } from './token-pool.js';
 import type { RunnerRegistry } from './runner-protocol.js';
 import {
@@ -1420,6 +1421,16 @@ class Clone implements CloneHost {
    * 倒れ先も別物である（`superseded.ts` 冒頭）。
    */
   #supersededNotice = '';
+
+  /**
+   * **「この合図が名乗った前提が、まだ生きているか」の断り書き**（Issue #879。
+   * doc の本体は `inbox-validity.ts`）。
+   *
+   * **`#supersededNotice` とは別に持つ。** あちらは「**同じ委譲から、より
+   * 新しい報告が来ているか**」を数え、こちらは「**この報告が積まれた当時の
+   * 状態が、いまも同じか**」を見る——鍵も倒れ先も別物である。
+   */
+  #validityNotice = '';
   /**
    * `#drainMergeableWithinLimit` が上限（`#mergedBatchLimit`）で束を打ち切った
    * ときだけの断り書き。ターンの本文の先頭に載る（issue #783 の続き — PR #836
@@ -2369,6 +2380,7 @@ class Clone implements CloneHost {
       // 死ぬ）。倒れ先は空文字ではなく `describeSuperseded` の `uncountable` の文
       // （`#situationNoticeFor` と同じ向き）——「数えられなかった」を 0 件と
       // 混同しない、という `superseded.ts` の要である。
+      this.#validityNotice = await this.#validityNoticeFor(batch);
       this.#supersededNotice = await this.#supersededNoticeFor(batch).catch((error: unknown) => {
         noteDroppedRecord('後続の報告の組み立て', inboxEventShape(event), error);
         return event.type === 'manager_message'
@@ -2388,6 +2400,7 @@ class Clone implements CloneHost {
         this.#commitmentNotice = '';
         this.#situationNotice = '';
         this.#supersededNotice = '';
+        this.#validityNotice = '';
         this.#mergedBatchTruncationNotice = '';
         // **枠のせいで処理できなかったかは、ここで初めて分かることがある。**
         // `#handle` の中（`#dispatch` の `result` / `rate_limit_event` /
@@ -3488,6 +3501,48 @@ class Clone implements CloneHost {
    * 安全側の文面を作る材料（`managerId`）を呼び出し側も同じく持っているので、
    * 二重に握る理由が無い。
    */
+  /**
+   * {@link Clone.#validityNotice} を組む（Issue #879）。
+   *
+   * **`#supersededNoticeFor` と同じ形で値を引く。** 報告でなければ即空文字を
+   * 返し、`this.#managers.list()` を1本も引かない——**同じ境界に在る2つの
+   * 断り書きが、違う形で値を引くほうが、次に読む人には高くつく**（この repo は
+   * 既にその形である、というのが採った理由であって、他の PR の都合ではない）。
+   *
+   * ## ⚠️ この断り書きは、`#situationNotice` と食い違いうる
+   *
+   * `#situationNoticeFor` も同じターンで `this.#managers.list()` を引くが、
+   * **2つは別々の呼び出しである。** `list()` 自身が `await`（名簿の読みと
+   * `listJobs()`）を含み、そのあいだに runner の出来事が届けば
+   * `ManagerPool` の像は動く（`manager.ts` の `#records` を書き換える箇所は
+   * 8つ在る）。⟹ **まれに、同じターンの本文の中で2つの断り書きが違う状態を
+   * 名乗る。**
+   *
+   * **だから文言は「いまは」ではなく「この断り書きを組んだ時点では」と言う**
+   * （`describeValidity`）——**どちらも自分が読んだ瞬間の値しか名乗らない**
+   * 形にしてあれば、食い違っても嘘にはならない。⛔ 1ターン1回に寄せる形
+   * （`#situationNoticeFor` と値を共有する）は、`clone.ts` の差分がこの
+   * 便の範囲を越えるので採っていない。
+   */
+  async #validityNoticeFor(events: InboxEvent[]): Promise<string> {
+    const event = events[0];
+    if (event === undefined) return '';
+    // **報告でなければ1本も引かない**（`#supersededNoticeFor` と同じ短絡）。
+    if (event.type !== 'manager_message') return '';
+
+    const now = await this.#managers
+      .list()
+      .then((managers) => {
+        const found = managers.find((manager) => manager.managerId === event.managerId);
+        return found === undefined
+          ? { detail: `${event.managerId} が一覧に居ない` }
+          : { status: found.status };
+      })
+      .catch((error: unknown) => ({ detail: String(error) }));
+
+    return describeValidity(inboxEventValidity(event, now), event.managerId);
+  }
+
   async #supersededNoticeFor(events: InboxEvent[]): Promise<string> {
     const event = events[0];
     if (event === undefined) return '';
@@ -4835,6 +4890,9 @@ class Clone implements CloneHost {
             // 同じ場所に置かない（`turn-input.ts`）。
             this.#redeliveryNotice +
             this.#supersededNotice +
+            // `#validityNotice` もこの組である——「この束の合図が名乗った前提が
+            // まだ生きているか」は鮮度の話で、後ろ2本の「全体の状態」ではない。
+            this.#validityNotice +
             this.#mergedBatchTruncationNotice +
             this.#commitmentNotice +
             this.#situationNotice +
