@@ -698,6 +698,75 @@ describe('describeInboxBacklogBreakdown', () => {
       '未配達の内訳（種類別）: human_message 1 / manager_message 1',
     );
   });
+
+  /**
+   * ⭐ #910: **軸の名前と断り書きが「刷られること」を測る歯。**
+   *
+   * この2行（`同一本文…` と `器の入れ替え回数…`）は #818 の時点から
+   * `describeInboxBacklogBreakdown` の doc が但し書きを持っていたのに、
+   * **出力には1文字も刷っていなかった。** クローンはこの出力しか読まないので、
+   * doc の但し書きは届かず、2つの誤った結論が立ち、その筋で委譲が1本出た（#910）。
+   *
+   * **`toContain` で語を拾わない。** 語だけを見る形だと、断り書きを節ごと消しても
+   * 数字の側が残って緑のままになる（`lineStartingWith` の doc）。行を1本に特定して
+   * **丸ごと `toBe` で固定する** —— 断り書きの1文字が消えれば赤くなる。
+   *
+   * **`not.toContain('配達回数')` を対で置く。** 全文固定だけだと、この関数の
+   * *他の行*（あるいは将来足される行）に古い名前が戻ってきても緑のままになる。
+   * #910 が塞いだのは「この計器が `配達回数` と名乗ること」そのものなので、
+   * 名前が戻らないことを出力全体に対して測る。
+   */
+  it('同一本文の行: 数字だけでなく、両方向にぶれることと doc の在り処が刷られる', () => {
+    const rows = [
+      row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z'),
+      row({ ...SAMPLE_EVENTS.human_message, id: 'e2' }, '2026-09-11T05:00:00.000Z'),
+      row(
+        { ...SAMPLE_EVENTS.human_message, id: 'e3', text: '別の発言' },
+        '2026-09-11T00:00:00.000Z',
+      ),
+    ];
+    const b = summarizeInboxBacklog(rows, NOW);
+    expect(lineStartingWith(describeInboxBacklogBreakdown(b), '同一本文')).toBe(
+      '同一本文（id/at を除いた中身）を畳むと 2 件 ⚠ 本文が同じでも別々に起きた出来事である。' +
+        'この数は上下どちらへもぶれる（向きと理由は inboxBacklogDedupeKey の doc）',
+    );
+  });
+
+  it('器の入れ替え回数の行: 軸名が「配達回数」ではなく、0回が未配達だと名乗る', () => {
+    const rows = [
+      row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z', 0),
+      row({ ...SAMPLE_EVENTS.human_message, id: 'e2' }, '2026-09-11T00:00:00.000Z', 1),
+      row({ ...SAMPLE_EVENTS.human_message, id: 'e3' }, '2026-09-11T00:00:00.000Z', 2),
+      row({ ...SAMPLE_EVENTS.human_message, id: 'e4' }, '2026-09-11T00:00:00.000Z', 4),
+    ];
+    const b = summarizeInboxBacklog(rows, NOW);
+    expect(lineStartingWith(describeInboxBacklogBreakdown(b), '器の入れ替え回数')).toBe(
+      '器の入れ替え回数: 0回（＝未配達）1 / 1回 1 / 2回以上 2（最大 4）',
+    );
+  });
+
+  /**
+   * **陰性対照と対になる歯である。** 上の2本（陽性）は「その行がその文言で在ること」を
+   * 測るので、断り書きを消せば赤くなる。こちらは逆側 —— **古い名前が出力のどこにも
+   * 戻っていないこと**を、同じ被験体（同じ行）に対して測る。片方だけだと、
+   * 名前を戻しつつ新しい行を足す形が緑のまま通る。
+   */
+  it('出力のどこにも「配達回数」という軸名が現れない（#910 で塞いだ名前）', () => {
+    const rows = [
+      row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z', 0),
+      row({ ...SAMPLE_EVENTS.external, id: 'e2' }, '2026-09-11T00:00:00.000Z', 3),
+    ];
+    const text = describeInboxBacklogBreakdown(summarizeInboxBacklog(rows, NOW));
+
+    expect(text).not.toContain('配達回数');
+    // **「未配達」そのものは残っている**（`deliveries === 0` は実際に
+    // 「一度も配っていない」ことを言えるので、この語は嘘ではない）。
+    // 消したのは軸名としての「配達回数」だけであることを、同じ被験体で固定する。
+    expect(text).toContain('0回（＝未配達）');
+    expect(lineStartingWith(text, '未配達の内訳')).toBe(
+      '未配達の内訳（種類別）: human_message 1',
+    );
+  });
 });
 
 describe('INBOX_BACKLOG_LOUD_THRESHOLD', () => {

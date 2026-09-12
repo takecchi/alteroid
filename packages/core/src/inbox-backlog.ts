@@ -24,13 +24,14 @@ import type { PendingInboxEvent } from './store.js';
  * - **同一本文**（`distinct` / {@link inboxBacklogDedupeKey}）: `id` と `at`
  *   （1回の発行ごとに必ず変わる2つ）を除いた中身が同じなら同じ本文とみなし、
  *   畳んだら何件になるかを数える
- * - **配達回数**（`undelivered` / `deliveredOnce` / `redelivered`）と
+ * - **器の入れ替え回数**（`undelivered` / `deliveredOnce` / `redelivered`）と
  *   **齢**（`ageBuckets`）: `claimPending()` の doc が言う「配達回数は器が
- *   入れ替わった回数であって処理が落ちた回数ではない」を踏まえ、まだ一度も
- *   配っていないものと、配り直されているものを分けて見せる。**未配達は種類
- *   別にも見せる**（`undeliveredByType`）——「未配達の中に人間の依頼
- *   （`human_message`）が混ざっているか」を、種類と配達回数の突き合わせ無しに
- *   直接言えるようにするため
+ *   入れ替わった回数であって処理が落ちた回数ではない」を**出力の軸名そのものへ
+ *   写した**（#910。理由は {@link describeInboxBacklogBreakdown} の doc）。まだ
+ *   一度も配っていないものと、器の入れ替えを跨いで残っているものを分けて見せる。
+ *   **未配達は種類別にも見せる**（`undeliveredByType`）——「未配達の中に人間の
+ *   依頼（`human_message`）が混ざっているか」を、種類と器の入れ替え回数の
+ *   突き合わせ無しに直接言えるようにするため
  *
  * ## 純関数である
  *
@@ -49,7 +50,7 @@ export const INBOX_BACKLOG_LOUD_THRESHOLD = 50;
  *
  * ## 0を出す軸と、値を作らない軸
  *
- * ここで数えている軸（種類・送信元・同一本文・配達回数・齢）は、
+ * ここで数えている軸（種類・送信元・同一本文・器の入れ替え回数・齢）は、
  * **`peekPending()` が返す行を1件も漏らさず全走査すれば必ず数え切れる**
  * ——`AGENTS.md`の地雷「取れない軸に0の行を作る」が指すのは*取れない*軸に
  * 値を作ることであって、ここは全部**実際に数え切れている**軸である。だから
@@ -115,11 +116,22 @@ export interface InboxBacklogBreakdown {
   readonly bySourceUnknownCount: number;
   /** `inboxBacklogDedupeKey` で畳んだ後の件数。 */
   readonly distinct: number;
-  /** `deliveries === 0`（まだ一度も配っていない）。 */
+  /**
+   * `deliveries === 0`（この行が積まれてから器が一度も入れ替わっていない
+   * ＝ まだ一度も配っていない）。**出力での軸名は「器の入れ替え回数」である**
+   * （#910。{@link describeInboxBacklogBreakdown} の doc）。
+   */
   readonly undelivered: number;
-  /** `deliveries === 1`。 */
+  /** `deliveries === 1`（器が1回入れ替わった）。 */
   readonly deliveredOnce: number;
-  /** `deliveries >= 2`（配り直されている）。 */
+  /**
+   * `deliveries >= 2`（器が2回以上入れ替わった）。
+   *
+   * ⚠️ **「この合図の処理が2回以上落ちた」ではない。** `claimPending()` は
+   * 残っている未読の**全行**を一緒に進めるので、待ち行列に居ただけで一度も
+   * 処理されていない合図も同じだけ増える（`InboxStore.claimPending` の doc）。
+   * ⟹ 出力ではこの軸を `配達回数` と名乗らない（#910）。
+   */
   readonly redelivered: number;
   readonly maxDeliveries: number;
   /**
@@ -423,8 +435,52 @@ export function summarizeInboxBacklog(
  * ため（{@link InboxBacklogBreakdown} の doc の「⚠️ #818 の欠陥と直し方」）。
  *
  * **未配達は種類別の内訳も出す**（`undeliveredByType`）——「未配達の中に
- * 人間の依頼（`human_message`）が混ざっているか」を、種類と配達回数の2つの
- * 一覧を突き合わせずに直接言えるようにするため（#783 段0 追補）。
+ * 人間の依頼（`human_message`）が混ざっているか」を、種類と器の入れ替え回数の
+ * 2つの一覧を突き合わせずに直接言えるようにするため（#783 段0 追補）。
+ *
+ * ## ⚠️ #910: 出力の軸名は「配達回数」ではない。**改名であって、断り書きではない**
+ *
+ * この関数の doc は #818 の時点で既に「`claimPending()` の doc が言う『配達回数は
+ * 器が入れ替わった回数であって処理が落ちた回数ではない』を踏まえ」と書いていたが、
+ * **出力には1文字も刷っていなかった。読み手が違う** —— この doc を読むのは
+ * このコードを触る実装者で、`配達回数: 2回以上 4249` を読むのはクローンである。
+ * クローンは `manager_list` の戻り値しか見えないので、doc へ置いた断り書きは届かない
+ * （実測 2026-09-12: クローンがこの2行から「4253 件は実質 30 種類の増殖」「配達しても
+ * 消えず、また配達されている」という2つの誤った結論を立て、その筋で委譲を1本出した。
+ * #910。同じ誤読は #700 でも起きており、そのときは断り書きを `store.ts` 側へ足した
+ * ——**実装者が読む場所へ置いて、4日後に破られた**）。
+ *
+ * **⟹ ここで採ったのは改名である。** `AGENTS.md`（逐語:
+ * `grep -Fn -- '添えるのではなく分ける' AGENTS.md`）が「**列の分かれ目は読む順に
+ * 関係なく効くが、断り書きは読み手がそこを通ったときにしか効かない**」と書いている
+ * とおりで、断り書きは読み飛ばされうるが、名前は数字を読む前に必ず通る。
+ *
+ * **2つの数で扱いが違う。その違いには理由がある:**
+ *
+ * - **`undelivered` / `deliveredOnce` / `redelivered` / `maxDeliveries` は改名した**
+ *   （`配達回数` → `器の入れ替え回数`）。**この計器では、この数は例外なく
+ *   「器が入れ替わった回数」だからである。** `claimPending()` は残っている未読の
+ *   全行を一緒に進め（`InboxStore.claimPending` の doc）、`peekPending()` が返すのは
+ *   その全行である ⟹ ここに「この合図の処理が落ちた回数」と読んでよい行は1つも無い。
+ *   **名前が無条件に間違っているなら、直すのは名前である。**
+ * - **`distinct` は改名せず、断り書きを足した。** 名前（`同一本文…を畳むと N 件`）は
+ *   計算しているものを正確に言っている ⟹ 誤読は名前ではなく**そこから引く推論**
+ *   （「同じ本文＝同じ出来事の増殖」「畳めば減る」）の側で起きる。**名前の直しは
+ *   間違った名前を直せるだけで、正しい名前が招く推論は止められない。**
+ *
+ * **`clone.ts` の `#redeliveryNoticeFor` を改名しないのは、この線の裏側である。**
+ * あちらは1件ごとの断り書きで、`#restoredCohort <= 1`（同じ起動で一緒に拾い直した
+ * のがその1件だけ）のときは回数がその合図について語れる ⟹ 名前が**条件付きで
+ * 正しい**ので、#700 / #708 が採った「名前は保って修飾を足す」が正しい。ここは
+ * その条件が起きえない側である。
+ *
+ * **`distinct` の断り書きは1行に畳んである。** 偏りの向きは2つあり
+ * （区切りの衝突で小さく出る／本文へ畳んだ件数を焼き込む合図で大きく出る。
+ * {@link inboxBacklogDedupeKey} の doc の「限界」）、**片方だけ書くと新しい誤読を
+ * 作る。** 2つの機構を出力へ書き下すと120字を超えて数字が埋まるので、出力には
+ * 向きに中立な事実（「上下どちらへもぶれる」）と**機構が書いてある場所の名前**を
+ * 載せ、機構そのものは doc に置く —— クローンが doc へ辿る経路を、出力の側から
+ * 作るためである。
  */
 export function describeInboxBacklogBreakdown(b: InboxBacklogBreakdown): string {
   const byTypeText =
@@ -446,8 +502,8 @@ export function describeInboxBacklogBreakdown(b: InboxBacklogBreakdown): string 
     `内訳（計 ${b.total} 件）:`,
     `種類: ${byTypeText}`,
     `送信元（上位5件。source/managerIdを持つ型のみ。溢れ ${b.bySourceOverflowKinds} 種 ${b.bySourceOverflowCount} 件 / source を言えない型 ${b.bySourceUnknownCount} 件）: ${bySourceText}`,
-    `同一本文（id/at を除いた中身）を畳むと ${b.distinct} 件`,
-    `配達回数: 未配達 ${b.undelivered} / 1回 ${b.deliveredOnce} / 2回以上 ${b.redelivered}（最大 ${b.maxDeliveries}）`,
+    `同一本文（id/at を除いた中身）を畳むと ${b.distinct} 件 ⚠ 本文が同じでも別々に起きた出来事である。この数は上下どちらへもぶれる（向きと理由は inboxBacklogDedupeKey の doc）`,
+    `器の入れ替え回数: 0回（＝未配達）${b.undelivered} / 1回 ${b.deliveredOnce} / 2回以上 ${b.redelivered}（最大 ${b.maxDeliveries}）`,
     `未配達の内訳（種類別）: ${undeliveredByTypeText}`,
     `齢: ${ageBucketsText}`,
   ].join('\n');

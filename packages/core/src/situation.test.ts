@@ -707,6 +707,13 @@ describe('状況の1行に受信箱の滞留が載る（#783 段0）', () => {
     expect(out).toContain(`⚠ 受信箱の未処理 ${count} 件`);
     expect(out).toContain('2026-09-10T09:28:55.000Z');
     expect(out).toContain('manager_list');
+    // **#910: 案内する軸名は、出す側（`describeInboxBacklogBreakdown`）と揃える。**
+    // この1行は滞留が閾値を超えている間 `distill` 以外の全ターンに載るので、
+    // ここが古い名前（`配達回数`）を名乗ると、クローンは `manager_list` を引く
+    // 前にその名前を覚える。逐語の出所は
+    // `grep -Fn -- '器の入れ替え回数: 0回（＝未配達）' packages/core/src/inbox-backlog.ts`。
+    expect(out).toContain('器の入れ替え回数');
+    expect(out).not.toContain('配達回数');
   });
 
   it('指図を書かない（「〜せよ」の類が1文字も無い）', () => {
