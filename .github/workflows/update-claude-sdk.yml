@@ -129,7 +129,10 @@ jobs:
             echo '## 検証（このワークフローが実行した生の出力）'
             echo ''
             echo '**`sdk-quotes` は `pnpm test` 経由でも走っている（＝この行は二重の1回目）。**'
-            echo '根拠: `scripts/check-sdk-quotes.test.ts:324` の「実物の検査」describe が、'
+            # ⚠️ 行番号ではなく逐語（grep -Fn -- '実物の検査' scripts/check-sdk-quotes.test.ts で当たる）で指す（#785）。
+            # ⚠️ .github/workflows/** はこの規約の歯の対象範囲外である ⟹ この形を守る歯は1本も無い
+            # （範囲を広げるかどうかは #785 とは別の決定）。
+            echo '根拠: `grep -Fn -- '"'"'実物の検査'"'"' scripts/check-sdk-quotes.test.ts` の describe が、'
             echo '同じ core を実物の SDK と実物の repo に当てている（`--reporter=verbose` で'
             echo '実際に走ることを確認済み）。'
             echo ''
