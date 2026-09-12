@@ -958,6 +958,13 @@ describe('HTTP API', () => {
         maxStoredBytes: number;
         firstAt: string;
         lastAt: string;
+        continuity: {
+          first: number;
+          continues: number;
+          diverged: number;
+          unknown: number;
+          absent: number;
+        };
       }[];
     };
 
@@ -969,10 +976,16 @@ describe('HTTP API', () => {
     expect(repeated?.maxStoredBytes).toBeGreaterThan(0);
     expect(Number.isNaN(Date.parse(repeated?.firstAt ?? ''))).toBe(false);
     expect(Number.isNaN(Date.parse(repeated?.lastAt ?? ''))).toBe(false);
+    // continuity（#698 続き）: 'A\n' → first、'BB\n' / 'CCC\n' は前方一致しない
+    // ので diverged（1つ目の bodyChars=2 分だけ切った 'BB' が 'A\n' と md5 が
+    // 合わない）。HTTP の口が sessions() の内訳をそのまま橋渡ししていることを
+    // 見る——判定そのものの正しさは archive-contract.ts の契約テストが測る。
+    expect(repeated?.continuity).toEqual({ first: 1, continues: 0, diverged: 2, unknown: 0, absent: 0 });
 
     const once = body.sessions.find((s) => s.sessionId === 'sess-once');
     expect(once).toBeDefined();
     expect(once?.rows).toBe(1);
+    expect(once?.continuity).toEqual({ first: 1, continues: 0, diverged: 0, unknown: 0, absent: 0 });
 
     // idA3 は消していないので list() 側で確認できる（sessions() の
     // storedBytes が list() の集計と一致することは archive-contract.ts の

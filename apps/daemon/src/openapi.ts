@@ -1269,6 +1269,12 @@ export const archiveListResponseSchema = z.object({ entries: z.array(archiveEntr
  * Issue #698 でいちばん効いたのはこの `rows` である——同じセッションの
  * 生ログが68回積まれている、という重複の事実が、個々の大きさより先に
  * 問題の所在を特定した。
+ *
+ * `continuity`（#698 続き）はこの `sessionId` の全行の連続性判定の内訳。
+ * **`absent` と `unknown` は別物である**（`@alteroid/core` の
+ * `ArchiveContinuityTally` の doc）——`unknown` は判定はできたが直前の行に
+ * 指紋が無かった、`absent` はその行自体が判定の門より前に積まれた。5つとも
+ * 必須（`first + continues + diverged + unknown + absent === rows`）。
  */
 export const archiveSessionSummarySchema = z.object({
   sessionId: z.string(),
@@ -1277,6 +1283,13 @@ export const archiveSessionSummarySchema = z.object({
   maxStoredBytes: z.number().int(),
   firstAt: z.string(),
   lastAt: z.string(),
+  continuity: z.object({
+    first: z.number().int(),
+    continues: z.number().int(),
+    diverged: z.number().int(),
+    unknown: z.number().int(),
+    absent: z.number().int(),
+  }),
 });
 
 export const archiveSessionsResponseSchema = z.object({

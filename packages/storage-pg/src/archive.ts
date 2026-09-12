@@ -162,6 +162,14 @@ export class PgTranscriptArchive implements TranscriptArchive {
    * `archive` の heap 側だけを見る seq scan でも軽い——索引はいまも主キー
    * （`id`）だけで足りる。`rows` は tombstone 済みの行も数える（`list()` と
    * 同じく、消えるのは本文だけで行は残るため）。
+   *
+   * `continuity`（#698 続き）は `count(*) filter (where continuity = '…')`
+   * を5本並べて、同じ1問い合わせの中で内訳まで数える——`body` はおろか行
+   * そのものを JS 側へ引き上げない（fs / インメモリの `tallyArchiveContinuity`
+   * とは違い、pg はここだけ集計を SQL 側に閉じる。`archive-continuity.ts` の
+   * `tallyArchiveContinuity` の doc）。`absent` は `continuity is null`——
+   * 門（#873）より前に積まれた行、あるいは判定自体に失敗した行がここに入る
+   * （`ArchiveContinuityTally` の doc。`unknown` との違いはそちらを見よ）。
    */
   async sessions(): Promise<ArchiveSessionSummary[]> {
     const rows = await this.#db
@@ -172,6 +180,11 @@ export class PgTranscriptArchive implements TranscriptArchive {
         maxStoredBytes: sql<number>`max(pg_column_size(${archive.body}))::int`,
         firstAt: sql<Date>`min(${archive.at})`,
         lastAt: sql<Date>`max(${archive.at})`,
+        continuityFirst: sql<number>`count(*) filter (where ${archive.continuity} = 'first')::int`,
+        continuityContinues: sql<number>`count(*) filter (where ${archive.continuity} = 'continues')::int`,
+        continuityDiverged: sql<number>`count(*) filter (where ${archive.continuity} = 'diverged')::int`,
+        continuityUnknown: sql<number>`count(*) filter (where ${archive.continuity} = 'unknown')::int`,
+        continuityAbsent: sql<number>`count(*) filter (where ${archive.continuity} is null)::int`,
       })
       .from(archive)
       .groupBy(archive.sessionId)
@@ -185,6 +198,13 @@ export class PgTranscriptArchive implements TranscriptArchive {
       maxStoredBytes: row.maxStoredBytes,
       firstAt: toIso(row.firstAt),
       lastAt: toIso(row.lastAt),
+      continuity: {
+        first: row.continuityFirst,
+        continues: row.continuityContinues,
+        diverged: row.continuityDiverged,
+        unknown: row.continuityUnknown,
+        absent: row.continuityAbsent,
+      },
     }));
   }
 

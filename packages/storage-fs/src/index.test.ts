@@ -2661,6 +2661,54 @@ describe('FsTranscriptArchive', () => {
   });
 
   /**
+   * `sessions().continuity`（#698 続き）——fs は `.meta.json` サイドカーの
+   * `continuity` から数える。`absent` は「サイドカーに `continuity` が無い」
+   * 行——ここではサイドカー自体を丸ごと消して再現する（「meta.jsonが無い」
+   * の歯と同じ手口）。`unknown` は、その直後の `archive()` が「直前の行は
+   * 指紋を持たない」と判定した結果——`absent` と `unknown` が別カウンタに
+   * 割れることを、fs 実装で直接測る。
+   *
+   * ⚠ 呼び出しの間に `tick()` を挟む——`#findPreviousArchiveForSession` は
+   * 同じミリ秒に積まれた行の順序を id の辞書順で決めるため、間隔を空けずに
+   * 呼ぶと「直前の行」が意図しないものになりうる（archive-contract.ts の
+   * 同じ注記と同じ理由）。
+   */
+  it('sessions()のcontinuityはfirst/continues/diverged/unknown/absentを正しく数える', async () => {
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 2));
+    const sessionId = 'session-continuity-tally';
+
+    const writeFirst = await stores.archive.archive(sessionId, 'A\n');
+    expect(writeFirst.continuity).toBe('first');
+    await tick();
+    const writeContinues = await stores.archive.archive(sessionId, 'A\nB\n');
+    expect(writeContinues.continuity).toBe('continues');
+    await tick();
+    const writeDiverged = await stores.archive.archive(sessionId, 'X\n');
+    expect(writeDiverged.continuity).toBe('diverged');
+    await tick();
+
+    // absent: サイドカーごと無い行（「meta.jsonが無い」の歯と同じ再現）。
+    const absentWrite = await stores.archive.archive(sessionId, 'ABSENT\n');
+    await rm(join(root, 'archive', `${absentWrite.id}.meta.json`));
+    await tick();
+
+    // unknown: 直前の行（上のabsent行）が指紋を持たないので、その直後はunknown。
+    const writeAfterAbsent = await stores.archive.archive(sessionId, 'ANYTHING\n');
+    expect(writeAfterAbsent.continuity).toBe('unknown');
+
+    const summaries = await stores.archive.sessions();
+    const summary = summaries.find((s) => s.sessionId === sessionId);
+    expect(summary?.rows).toBe(5);
+    expect(summary?.continuity).toEqual({
+      first: 1,
+      continues: 1,
+      diverged: 1,
+      unknown: 1,
+      absent: 1,
+    });
+  });
+
+  /**
    * ⭐ #905: 同じミリ秒に2回積んでも、1本目のファイルが上書きされない。
    *
    * 契約テスト（検査20）は `read()` を通した本文しか見ない——ここでは

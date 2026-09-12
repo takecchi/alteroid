@@ -2660,6 +2660,59 @@ describe('PgTranscriptArchive', () => {
   });
 
   /**
+   * `sessions().continuity`（#698 続き）は `count(*) filter (where …)` で
+   * 内訳を数える——5つのバケツ全部に1行ずつ落として、pg 実装が
+   * `first` / `continues` / `diverged` / `unknown` / `absent` を取り違えずに
+   * 数えることを直接測る（契約テストとは別に、`filter` が実際に効いている
+   * ことを見る）。
+   *
+   * - `first` / `continues` / `diverged` — 素直に `archive()` を4回呼んだ
+   *   結果（うち1回は `null` の `continuity` を持つ行＝`absent` を挟んでから
+   *   呼ぶことで `unknown` を作る）。
+   * - `absent` — この機能の前に積まれた行の再現。生 SQL で `continuity` を
+   *   `null` のまま挿入する。
+   * - `unknown` — 直前の行（上の `absent` 行）が指紋を持たないので、
+   *   その直後の `archive()` はここに落ちる。
+   *
+   * ⚠ 1ミリ秒ずつ空ける理由は archive-contract.ts の同じ箇所の注記と同じ
+   * ——同じミリ秒に積むと id が衝突し、「直前の行」の順序が曖昧になる。
+   */
+  it('sessions()のcontinuityはfirst/continues/diverged/unknown/absentを正しく数える', async () => {
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 2));
+    const sessionId = 'session-continuity-tally';
+
+    const writeFirst = await stores.archive.archive(sessionId, 'A\n');
+    expect(writeFirst.continuity).toBe('first');
+    await tick();
+    const writeContinues = await stores.archive.archive(sessionId, 'A\nB\n');
+    expect(writeContinues.continuity).toBe('continues');
+    await tick();
+    const writeDiverged = await stores.archive.archive(sessionId, 'X\n');
+    expect(writeDiverged.continuity).toBe('diverged');
+    await tick();
+
+    const legacyId = `${sessionId}-legacy`;
+    await db.execute(
+      sql`insert into archive (id, session_id, at, body) values (${legacyId}, ${sessionId}, now(), ${'LEGACY\n'})`,
+    );
+    await tick();
+
+    const writeAfterLegacy = await stores.archive.archive(sessionId, 'ANYTHING\n');
+    expect(writeAfterLegacy.continuity).toBe('unknown');
+
+    const summaries = await stores.archive.sessions();
+    const summary = summaries.find((s) => s.sessionId === sessionId);
+    expect(summary?.rows).toBe(5);
+    expect(summary?.continuity).toEqual({
+      first: 1,
+      continues: 1,
+      diverged: 1,
+      unknown: 1,
+      absent: 1,
+    });
+  });
+
+  /**
    * ⭐ #905: 同じミリ秒に2回積んでも、行が2本残る。
    *
    * 契約テスト（検査20）は `list()` / `read()` を通した姿しか見ない——ここでは
