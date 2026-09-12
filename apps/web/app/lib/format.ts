@@ -125,3 +125,55 @@ export function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
+
+/**
+ * 本文の変化量（#913）。`packages/core/src/schema.ts` の
+ * `MemoryDescriptionDrift` と同じ形——`@alteroid/core` の値を import すると
+ * client バンドルへ丸ごと混入する（このファイル冒頭の `assertNeverCreatedAt`
+ * の doc と同じ理由）ので、ここでも私物として持つ。
+ */
+type MemoryDescriptionDrift =
+  | { kind: 'measured'; describedBytes: number; currentBytes: number; deltaBytes: number }
+  | { kind: 'unrecorded' };
+
+/** `MemoryDescriptionDrift` の網羅性を型で強制する（#913）。 */
+function assertNeverMemoryDescriptionDrift(drift: never): never {
+  throw new Error(`未知の要旨の変化量の状態: ${JSON.stringify(drift)}`);
+}
+
+/**
+ * 変化量（バイト）を人間可読な文字列にする（`describeMemoryDescriptionDrift`
+ * の `measured` 専用。`packages/core/src/memory.ts` の
+ * `formatMemoryDescriptionDrift` と同じ考え方だが実体は分けて持つ）。
+ *
+ * **符号つきで出す。** 減った（削って書き直した等）ことと増えた（放置の
+ * まま追記された）ことを同じ表示にしない。**`describedBytes === 0` の
+ * ときは % を出さない**（0除算を「0%」に化けさせない）。
+ */
+export function formatMemoryDescriptionDrift(drift: {
+  describedBytes: number;
+  currentBytes: number;
+  deltaBytes: number;
+}): string {
+  const sign = drift.deltaBytes < 0 ? '-' : '+';
+  const magnitude = Math.abs(drift.deltaBytes).toLocaleString('en-US');
+  if (drift.describedBytes === 0) return `本文は${sign}${magnitude}バイト変わった`;
+  const percent = Math.round((Math.abs(drift.deltaBytes) / drift.describedBytes) * 100);
+  return `本文は${sign}${magnitude}バイト（${sign}${percent.toLocaleString('en-US')}%）変わった`;
+}
+
+/**
+ * `MemoryDescriptionDrift`（2状態）を人間可読な文字列にする（#913）。
+ * **`switch` で網羅し、`default` で `assertNeverMemoryDescriptionDrift` へ
+ * 落とす。**
+ */
+export function describeMemoryDescriptionDrift(drift: MemoryDescriptionDrift): string {
+  switch (drift.kind) {
+    case 'measured':
+      return formatMemoryDescriptionDrift(drift);
+    case 'unrecorded':
+      return '本文の変化量は記録されていない';
+    default:
+      return assertNeverMemoryDescriptionDrift(drift);
+  }
+}

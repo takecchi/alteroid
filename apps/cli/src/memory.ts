@@ -35,6 +35,17 @@ import { resolveTarget } from './target.js';
  * 型と整形ロジック（`formatCreatedAt` / `freshnessMarker`）をここから
  * 再利用し、`chat.ts` 側で新しい言い方を発明しないようにする。
  */
+/**
+ * 本文の変化量（#913）。`MemoryDescriptionFreshness` の `stale` にだけ乗る
+ * （`fresh` は定義上 drift 0 なので持たない）。`packages/core/src/schema.ts`
+ * の `memoryDescriptionDriftSchema` と同じ形——CLI は HTTP 経由の JSON を
+ * 見ているだけで `@alteroid/core` の型そのものを持ち込んでいないので、ここでも
+ * 私物として持つ（`formatMemoryStaleness` の doc と同じ理由）。
+ */
+export type MemoryDescriptionDrift =
+  | { kind: 'measured'; describedBytes: number; currentBytes: number; deltaBytes: number }
+  | { kind: 'unrecorded' };
+
 export interface MemorySummary {
   slug: string;
   title: string;
@@ -42,7 +53,7 @@ export interface MemorySummary {
   description?: string;
   descriptionFreshness:
     | { kind: 'fresh' }
-    | { kind: 'stale'; staleForMs: number }
+    | { kind: 'stale'; staleForMs: number; drift: MemoryDescriptionDrift }
     | { kind: 'unknown' }
     | { kind: 'absent' };
   /** 最後に本文が変わった時刻。 */
@@ -128,6 +139,49 @@ function formatMemoryStaleness(ms: number): string {
 }
 
 /**
+ * `MemoryDescriptionDrift` の網羅性を型で強制する（#913。core 側の
+ * `assertNeverMemoryDescriptionDrift` と同じ形——`drift` の状態を1つ
+ * 足したときに埋め忘れた分岐で `tsc` が落ちる側へ倒す）。
+ */
+function assertNeverMemoryDescriptionDrift(drift: never): never {
+  throw new Error(`未知の要旨の変化量の状態: ${JSON.stringify(drift)}`);
+}
+
+/**
+ * 変化量（バイト）を人間可読な文字列にする（`describeMemoryDescriptionDrift`
+ * の `measured` 専用。`packages/core/src/memory.ts` の
+ * `formatMemoryDescriptionDrift` と同じ考え方だが実体は分けて持つ——同上の
+ * 理由）。
+ */
+function formatMemoryDescriptionDrift(drift: {
+  describedBytes: number;
+  currentBytes: number;
+  deltaBytes: number;
+}): string {
+  const sign = drift.deltaBytes < 0 ? '-' : '+';
+  const magnitude = Math.abs(drift.deltaBytes).toLocaleString('en-US');
+  if (drift.describedBytes === 0) return `本文は${sign}${magnitude}バイト変わった`;
+  const percent = Math.round((Math.abs(drift.deltaBytes) / drift.describedBytes) * 100);
+  return `本文は${sign}${magnitude}バイト（${sign}${percent.toLocaleString('en-US')}%）変わった`;
+}
+
+/**
+ * `MemoryDescriptionDrift`（2状態）を人間可読な文字列にする（#913）。
+ * **`switch` で網羅し、`default` で `assertNeverMemoryDescriptionDrift` へ
+ * 落とす。**
+ */
+function describeMemoryDescriptionDrift(drift: MemoryDescriptionDrift): string {
+  switch (drift.kind) {
+    case 'measured':
+      return formatMemoryDescriptionDrift(drift);
+    case 'unrecorded':
+      return '本文の変化量は記録されていない';
+    default:
+      return assertNeverMemoryDescriptionDrift(drift);
+  }
+}
+
+/**
  * 印は要旨の前に置く（`memory_list` ツール・プロンプトの目次と同じ約束。
  * `packages/core/src/memory.ts` の doc）。**代理指標である** — `fresh` は
  * 「要旨が最後の本文変更以降に書かれた」ことしか意味しない。
@@ -138,12 +192,19 @@ function formatMemoryStaleness(ms: number): string {
  * かった」であって「0（＝最新）」ではないことを、`fresh` なら「本文は
  * 動いていない」という正直なゼロを、それぞれ別の言葉で言う。
  *
+ * **`stale` は本文の変化量（`drift`、#913）も期間に並べて言う。** 時間差
+ * だけでは「いちばん手が入っている文書がいちばん新しく見える」ので、
+ * 期間フレーズは置き換えず追記する。
+ *
  * `export` してあるのは `chat.ts` の `/memory` から使うため（同上）。
  */
 export function freshnessMarker(freshness: MemorySummary['descriptionFreshness']): string {
   switch (freshness.kind) {
     case 'stale':
-      return `要旨は本文より${formatMemoryStaleness(freshness.staleForMs)}古い: `;
+      return (
+        `要旨は本文より${formatMemoryStaleness(freshness.staleForMs)}古い` +
+        `（${describeMemoryDescriptionDrift(freshness.drift)}）: `
+      );
     case 'unknown':
       return '要旨を書いた時刻が記録されていない: ';
     case 'fresh':

@@ -218,6 +218,7 @@ export { Inbox } from './inbox.js';
  */
 export {
   assertNeverMemoryCreatedAt,
+  assertNeverMemoryDescriptionDrift,
   assertNeverMemoryDescriptionFreshness,
   assertNeverMemoryFrontmatterState,
   assertNeverMemoryProtectionStatus,
@@ -228,7 +229,7 @@ export {
   describeMemoryTidyTargets,
   memoryProtectionAllowsFullReplace,
   memoryProtectionRebuildDecision,
-  nextDescribedAt,
+  nextDescribedState,
   parseMemoryFrontmatter,
   renderMemoryDocument,
   renderMemoryDocuments,

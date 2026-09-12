@@ -5,7 +5,7 @@ import {
   type ArchiveContinuity,
 } from './archive-continuity.js';
 import { setStderrSinkForTesting } from './dropped-record.js';
-import { deriveMemoryFrontmatter, nextDescribedAt } from './memory.js';
+import { deriveMemoryFrontmatter, nextDescribedState } from './memory.js';
 import { matchesJournalSearch } from './journal-search.js';
 import type {
   Commitment,
@@ -202,6 +202,10 @@ export function createMemoryStores(): Stores {
   // #170（記憶の目次化）の派生値。fs の `.index.json` / pg の `described_at`
   // 列と同じ形——書き手は書けず、write() が新旧の description を比べて進める。
   const describedAt = new Map<string, string>();
+  // #913: `describedAt` と必ず同時に進む（`nextDescribedState` が1つの
+  // オブジェクトで両方を返す）。fs の `.index.json` の `describedBytes` /
+  // pg の `described_bytes` 列と同じ形。
+  const describedBytes = new Map<string, number>();
   // 記憶の `createdAt`。fs の `.index.json` / pg の `created_at` 列と同じ形
   // ——素の optional。「unknown」という値をここへ書き込まない。値が無いのは
   // (1) この配線より前に作られ (2) 日誌にも根拠が無い、両方を満たす昔の行
@@ -298,29 +302,41 @@ export function createMemoryStores(): Stores {
       // ずれる。
       const body = ensureTrailingNewline(content);
       // **write() と append()（下）の唯一の通り道。** fs / pg と同じく、誰が
-      // 書いたかを問わずここでハッシュ・describedAt を更新する。human 印には
-      // 触らない。describedAt は書き手が書けない（`nextDescribedAt` の doc）。
+      // 書いたかを問わずここでハッシュ・describedAt/describedBytes を更新する。
+      // human 印には触らない。describedAt/describedBytes は書き手が書けない
+      // （`nextDescribedState` の doc）。
       // **`createdAt` は本物（fs / pg）と同じく、この書き込みが文書を作った
       // ときだけ立てる。** `before === undefined`（＝この slug の実体が
       // 無かった）かつ、まだ値を持っていないときだけ set する——一度立てたら
       // 二度と触らない一度きりの確定（`markCreatedAt` による backfill は昔の
       // 行の後始末で、ここでは何もしない）。
       if (before === undefined && !createdAtStore.has(slug)) createdAtStore.set(slug, updatedAt);
-      const next = nextDescribedAt({
+      const writtenBytes = Buffer.byteLength(body);
+      const next = nextDescribedState({
         priorContent: before?.content ?? null,
         nextContent: body,
         priorDescribedAt: describedAt.get(slug),
+        priorDescribedBytes: describedBytes.get(slug),
         writtenAt: updatedAt,
+        writtenBytes,
       });
-      if (next === undefined) describedAt.delete(slug);
-      else describedAt.set(slug, next);
-      const derived = deriveMemoryFrontmatter({ content: body, updatedAt, describedAt: next });
+      if (next.describedAt === undefined) describedAt.delete(slug);
+      else describedAt.set(slug, next.describedAt);
+      if (next.describedBytes === undefined) describedBytes.delete(slug);
+      else describedBytes.set(slug, next.describedBytes);
+      const derived = deriveMemoryFrontmatter({
+        content: body,
+        updatedAt,
+        describedAt: next.describedAt,
+        describedBytes: next.describedBytes,
+        currentBytes: writtenBytes,
+      });
       const doc: MemoryDocument = {
         slug,
         title: /^#\s+(.+)$/m.exec(body)?.[1] ?? slug,
         updatedAt,
         createdAt: toMemoryCreatedAt(createdAtStore.get(slug)),
-        bytes: Buffer.byteLength(body),
+        bytes: writtenBytes,
         content: body,
         frontmatter: derived.frontmatter,
         kind: derived.kind,
@@ -353,6 +369,7 @@ export function createMemoryStores(): Stores {
       humanTouchedAt.delete(slug);
       contentSha256.delete(slug);
       describedAt.delete(slug);
+      describedBytes.delete(slug);
       createdAtStore.delete(slug);
     },
     async protectionStatus(slug): Promise<MemoryProtectionStatus> {

@@ -5,6 +5,7 @@ import { Page } from '~/components/page';
 import { Button, Card, Empty, ErrorNote, Input, Spinner } from '~/components/ui';
 import { useMemoryDocuments } from '~/hooks/queries';
 import {
+  describeMemoryDescriptionDrift,
   formatBytes,
   formatCreatedAtRelative,
   formatMemoryStaleness,
@@ -145,11 +146,18 @@ function kindHint(kind: 'premise' | 'fact' | 'indexed'): string {
  * どれだけ古いかを `formatMemoryStaleness` で言い、`unknown` は「取れな
  * かった」を「0（＝最新）」に見せず別の言葉で言い、`fresh` は「本文は
  * 動いていない」という正直なゼロを、`unknown` とは違う言葉で言う。
+ *
+ * **`stale` は本文の変化量（`drift`、#913）も期間に並べて言う。** 時間差
+ * だけでは「いちばん手が入っている文書がいちばん新しく見える」ので、
+ * 期間フレーズは置き換えず追記する。
  */
 function freshnessMark(freshness: MemorySummary['descriptionFreshness']): string {
   switch (freshness.kind) {
     case 'stale':
-      return `要旨は本文より${formatMemoryStaleness(freshness.staleForMs)}古い: `;
+      return (
+        `要旨は本文より${formatMemoryStaleness(freshness.staleForMs)}古い` +
+        `（${describeMemoryDescriptionDrift(freshness.drift)}）: `
+      );
     case 'unknown':
       return '要旨を書いた時刻が記録されていない: ';
     case 'fresh':

@@ -104,6 +104,41 @@ export const memoryDocKindSchema = z.enum(['premise', 'fact', 'indexed']);
 export type MemoryDocKind = z.infer<typeof memoryDocKindSchema>;
 
 /**
+ * 要旨を書いた時点から、本文がどれだけ変わったか（#913）。`staleForMs`
+ * （時間差）だけでは「いちばん手が入っている文書がいちばん新しく見える」
+ * ——1時間前に要旨を書き直した直後に50回追記された文書は「1時間ぶん古い」
+ * としか出ず、30日放置されて200字しか変わっていない文書のほうが「30日
+ * 古い」と大きく出る。#821 の決定1「本文の変化量（要旨を書いてから本文が
+ * N 文字 / M% 変わった）」に従い、`stale`（下）にだけこの値を添える——
+ * `fresh` は定義上 drift 0 なので持たない。
+ *
+ * 2状態、畳まない（`MemoryDescriptionFreshness` の4状態と同じ判断）。
+ *
+ * - **`measured`** — 要旨を書いた時点の本文サイズ（`describedBytes`）と
+ *   いまの本文サイズ（`currentBytes`）の両方が分かる。**`deltaBytes` は
+ *   符号つき**（`currentBytes - describedBytes`）——本文が縮んだ文書
+ *   （削って書き直した等）を「変わっていない」と混ぜないため。`0` は
+ *   「測れて、かつ変わっていない」という正直な値であり、`unrecorded`
+ *   とは別の状態である。
+ * - **`unrecorded`** — 要旨を書いた時点の本文サイズが記録されていない
+ *   （この仕組みより前に書かれた記憶、等）。**`measured` の `deltaBytes: 0`
+ *   と同じ言葉にしないこと** —— 「取れなかった」を「0（＝変化なし）」に
+ *   見せると、`MemoryDescriptionFreshness` の `unknown` が名指しした失敗
+ *   （#821 条件1）と同じ形で欠測が「手を入れなくてよい」側に化ける。
+ */
+export const memoryDescriptionDriftSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('measured'),
+    describedBytes: z.number().int().nonnegative(),
+    currentBytes: z.number().int().nonnegative(),
+    /** `currentBytes - describedBytes`。符号つき——縮んだ文書は負になる。 */
+    deltaBytes: z.number().int(),
+  }),
+  z.object({ kind: z.literal('unrecorded') }),
+]);
+export type MemoryDescriptionDrift = z.infer<typeof memoryDescriptionDriftSchema>;
+
+/**
  * 要旨（`description`）の鮮度。4状態、畳まない。
  *
  * **代理指標である。** `fresh` が言えるのは「`description` が最後の本文
@@ -155,7 +190,12 @@ export type MemoryDocKind = z.infer<typeof memoryDocKindSchema>;
  */
 export const memoryDescriptionFreshnessSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('fresh') }),
-  z.object({ kind: z.literal('stale'), staleForMs: z.number().int().nonnegative() }),
+  z.object({
+    kind: z.literal('stale'),
+    staleForMs: z.number().int().nonnegative(),
+    /** 本文の変化量（#913）。`unrecorded` を省略可能にしない——書き忘れを型で防ぐ。 */
+    drift: memoryDescriptionDriftSchema,
+  }),
   z.object({ kind: z.literal('unknown') }),
   z.object({ kind: z.literal('absent') }),
 ]);

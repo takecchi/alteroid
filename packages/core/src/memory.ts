@@ -30,6 +30,7 @@ import {
 import { heuristicChars, type HeuristicChars } from './quantity.js';
 import type {
   MemoryCreatedAt,
+  MemoryDescriptionDrift,
   MemoryDescriptionFreshness,
   MemoryDocKind,
   MemoryFrontmatterState,
@@ -654,23 +655,65 @@ export function assertNeverMemoryDocKind(kind: never): never {
  * 受け取れる型を持つこと自体への防御である**（テスト・将来の呼び手が
  * 精度の異なる文字列を混ぜても、負の値が「0（＝最新）」以外の意味を
  * 持たないことだけは保つ）。
+ *
+ * **`stale` には `drift`（本文の変化量、#913）も必ず添える。** `staleForMs`
+ * は「どれだけ前に古くなったか」しか言えず、「その間に本文がどれだけ
+ * 変わったか」を持たない——1時間前に要旨を書き直した直後に50回追記された
+ * 文書が「1時間ぶん古い」としか出ず、30日放置されて200字しか変わっていない
+ * 文書のほうが「30日古い」と大きく出る、という #913 の指摘そのものへの
+ * 直しである。`drift` の組み立ては `resolveMemoryDescriptionDrift` に
+ * 委ねる（`describedBytes` が無ければ `unrecorded`）。
  */
 export function resolveMemoryDescriptionFreshness(input: {
   description: string | undefined;
   /** ストアの派生値。一度も観測できていなければ `undefined`。 */
   describedAt: string | undefined;
   updatedAt: string;
+  /**
+   * 要旨（`describedAt`）を立てた時点の本文サイズ。一度も観測できていなければ
+   * `undefined`（`unrecorded` になる。#913）。
+   */
+  describedBytes: number | undefined;
+  /** いまの本文サイズ。呼び手の `bytes` と同じ測り方で渡すこと（#913）。 */
+  currentBytes: number;
 }): MemoryDescriptionFreshness {
   if (input.description === undefined) return { kind: 'absent' };
   if (input.describedAt === undefined) return { kind: 'unknown' };
   if (input.describedAt >= input.updatedAt) return { kind: 'fresh' };
   const staleForMs = Math.max(0, Date.parse(input.updatedAt) - Date.parse(input.describedAt));
-  return { kind: 'stale', staleForMs };
+  const drift = resolveMemoryDescriptionDrift({
+    describedBytes: input.describedBytes,
+    currentBytes: input.currentBytes,
+  });
+  return { kind: 'stale', staleForMs, drift };
+}
+
+/**
+ * `stale` に添える本文の変化量を組み立てる（#913）。**`describedBytes` が
+ * 無ければ `unrecorded`**——「取れなかった」を「0（＝変化なし）」に見せない
+ * （`MemoryDescriptionDrift` の doc の条件1と同じ判断）。
+ */
+function resolveMemoryDescriptionDrift(input: {
+  describedBytes: number | undefined;
+  currentBytes: number;
+}): MemoryDescriptionDrift {
+  if (input.describedBytes === undefined) return { kind: 'unrecorded' };
+  return {
+    kind: 'measured',
+    describedBytes: input.describedBytes,
+    currentBytes: input.currentBytes,
+    deltaBytes: input.currentBytes - input.describedBytes,
+  };
 }
 
 /** `MemoryDescriptionFreshness` の4状態の網羅性を型で強制する。 */
 export function assertNeverMemoryDescriptionFreshness(freshness: never): never {
   throw new Error(`未知の要旨の鮮度状態: ${JSON.stringify(freshness)}`);
+}
+
+/** `MemoryDescriptionDrift` の2状態の網羅性を型で強制する（#913）。 */
+export function assertNeverMemoryDescriptionDrift(drift: never): never {
+  throw new Error(`未知の要旨の変化量の状態: ${JSON.stringify(drift)}`);
 }
 
 /**
@@ -687,6 +730,13 @@ export function deriveMemoryFrontmatter(input: {
   updatedAt: string;
   /** ストアの派生値置き場（fs: `.index.json` / pg: `described_at` 列）。 */
   describedAt: string | undefined;
+  /**
+   * 要旨を立てた時点の本文サイズ（fs: `.index.json` の `describedBytes` /
+   * pg: `described_bytes` 列）。一度も観測できていなければ `undefined`（#913）。
+   */
+  describedBytes: number | undefined;
+  /** いまの本文サイズ。呼び手の `bytes` と同じ測り方で渡すこと（#913）。 */
+  currentBytes: number;
 }): {
   frontmatter: MemoryFrontmatterState;
   kind: MemoryDocKind;
@@ -702,29 +752,44 @@ export function deriveMemoryFrontmatter(input: {
     description,
     describedAt: input.describedAt,
     updatedAt: input.updatedAt,
+    describedBytes: input.describedBytes,
+    currentBytes: input.currentBytes,
   });
   return { frontmatter, kind, description, parent, descriptionFreshness };
 }
 
 /**
  * `description` が新旧で変わったかを比べる。ストアの `write()` がこれで
- * `describedAt` を進めるか据え置くかを決める（4-3: 書き手は `describedAt` を
- * 書けない——store が採番する `updatedAt` を書き手は知らないので、書いた
- * 直後から必ず「古い」と出てしまう。だから store が導出する）。
+ * `describedAt` / `describedBytes` を進めるか据え置くかを決める（4-3: 書き手は
+ * `describedAt` を書けない——store が採番する `updatedAt` を書き手は知らないので、
+ * 書いた直後から必ず「古い」と出てしまう。だから store が導出する）。
  *
- * 変わっていなければ据え置く。変わっていれば新しい時刻へ進める——**その
- * 時刻は呼び手が渡す**（fs なら書き込み後に確定した `updatedAt`、pg なら
- * `UPDATE` が返した行の `updatedAt`。ここで `Date.now()` を新たに取らない
- * ことで、`describedAt === updatedAt` が保証され、直後の読み出しが必ず
+ * 変わっていなければ据え置く。変わっていれば新しい時刻／本文サイズへ進める
+ * ——**その時刻・サイズは呼び手が渡す**（fs なら書き込み後に確定した
+ * `updatedAt` / `bytes`、pg なら `UPDATE`（または `INSERT ... RETURNING`）が
+ * 返した行の `updatedAt` / 本文サイズ。ここで `Date.now()` や本文の再測定を
+ * 新たに行わないことで、`describedAt === updatedAt` かつ
+ * `describedBytes === currentBytes` が保証され、直後の読み出しが必ず
  * `fresh` になる）。
+ *
+ * **`describedAt` と `describedBytes` を1つのオブジェクトで返す（#913）。**
+ * かつては `nextDescribedAt` が `describedAt` だけを返し、`describedBytes` は
+ * 別途呼び手が進めなければならない形だったが、それだと「`describedAt` は
+ * 進めたのに `describedBytes` は据え置いたまま」という片方だけ進む状態を
+ * 型が防げない——`drift` が実際より小さく（あるいは大きく）出る、という
+ * `MemoryDescriptionFreshness` の条件1と同じ形の欠測を作る。1本の関数が
+ * 両方を同時に決めることで、そのズレを型で作れなくする。
  */
-export function nextDescribedAt(input: {
+export function nextDescribedState(input: {
   priorContent: string | null;
   nextContent: string;
   priorDescribedAt: string | undefined;
+  priorDescribedBytes: number | undefined;
   /** この書き込みが確定した時刻（呼び手の `updatedAt` と同じ値を渡すこと）。 */
   writtenAt: string;
-}): string | undefined {
+  /** この書き込みが確定した本文サイズ（呼び手の `bytes` と同じ測り方で渡すこと）。 */
+  writtenBytes: number;
+}): { describedAt: string | undefined; describedBytes: number | undefined } {
   const priorDescription =
     input.priorContent === null
       ? undefined
@@ -733,7 +798,10 @@ export function nextDescribedAt(input: {
         );
   const nextState = parseMemoryFrontmatter(input.nextContent);
   const nextDescription = nextState.kind === 'parsed' ? nextState.description : undefined;
-  return priorDescription === nextDescription ? input.priorDescribedAt : input.writtenAt;
+  if (priorDescription === nextDescription) {
+    return { describedAt: input.priorDescribedAt, describedBytes: input.priorDescribedBytes };
+  }
+  return { describedAt: input.writtenAt, describedBytes: input.writtenBytes };
 }
 
 // ---------------------------------------------------------------------------
@@ -1245,6 +1313,53 @@ function formatMemoryStaleness(ms: number): string {
 }
 
 /**
+ * 本文の変化量（バイト）を人間が読める文字列にする（#913、`describeMemoryDescriptionDrift`
+ * の `measured` 専用）。
+ *
+ * **符号つきで出す。** 増えても減っても「変わった」ことに変わりはないが、
+ * 減った（削って書き直した等）ことと増えた（放置のまま追記された）ことを
+ * 同じ表示にすると、読み手はどちらが起きたかを取り違える。
+ *
+ * **`describedBytes === 0` のときは % を出さない。** 0除算を「0%」に
+ * 化けさせない——「変化が無かった」と「そもそも比べる母数が無い」は別の
+ * 意味である。
+ */
+function formatMemoryDescriptionDrift(drift: {
+  describedBytes: number;
+  currentBytes: number;
+  deltaBytes: number;
+}): string {
+  const sign = drift.deltaBytes < 0 ? '-' : '+';
+  const magnitude = Math.abs(drift.deltaBytes).toLocaleString('en-US');
+  if (drift.describedBytes === 0) return `本文は${sign}${magnitude}バイト変わった`;
+  const percent = Math.round((Math.abs(drift.deltaBytes) / drift.describedBytes) * 100);
+  return `本文は${sign}${magnitude}バイト（${sign}${percent.toLocaleString('en-US')}%）変わった`;
+}
+
+/**
+ * `MemoryDescriptionDrift`（2状態）を人間が読める文字列にする（#913）。
+ *
+ * **`switch` で網羅し、`default` は `assertNeverMemoryDescriptionDrift` へ
+ * 落とす**（この repo の既存の作法。`memoryFreshnessMarker` と同じ形）。
+ * 状態を1つ足したときに埋め忘れた分岐で `tsc` が落ちる側へ倒す。
+ *
+ * - `measured` — `formatMemoryDescriptionDrift` で数値化して言う
+ * - `unrecorded` — **「0バイト変わった」と同じ言葉にしない**（`measured`
+ *   の `deltaBytes: 0` とは別の状態。`MemoryDescriptionDrift` の doc の
+ *   条件1と同じ判断）
+ */
+function describeMemoryDescriptionDrift(drift: MemoryDescriptionDrift): string {
+  switch (drift.kind) {
+    case 'measured':
+      return formatMemoryDescriptionDrift(drift);
+    case 'unrecorded':
+      return '本文の変化量は記録されていない';
+    default:
+      return assertNeverMemoryDescriptionDrift(drift);
+  }
+}
+
+/**
  * 印は要旨の**前**に置く——左から読んで必ず当たる形にする（4-1）。
  *
  * **代理指標であることをここにも書く**（`MemoryDescriptionFreshness` の doc
@@ -1260,13 +1375,18 @@ function formatMemoryStaleness(ms: number): string {
  * 別の言葉を割り当てる** —— 「古いか」ではなく「どういう状態か」を言う形に
  * 変える。
  *
- * - `stale` — どれだけ古いかを `formatMemoryStaleness` で数値化して言う
+ * - `stale` — どれだけ古いかを `formatMemoryStaleness` で数値化して言い、
+ *   **本文の変化量（`drift`、#913）を期間に並べて足す**。時間差だけでは
+ *   「いちばん手が入っている文書がいちばん新しく見える」（#913）ので、
+ *   期間フレーズは**置き換えない**——追記する
  * - `unknown` — **「0（＝最新）」に見せない**。「要旨を書いた時刻が記録され
  *   ていない」と、`stale` とも `fresh` とも別の言葉で言う——欠測を鮮度として
  *   読ませると、直すべき文書が「手を入れなくてよい」側に化ける（#821）
  * - `fresh` — 「要旨の後に本文は動いていない」という正直なゼロ。`unknown`
  *   （そもそも測れていない）とは必ず違う言葉にする——同じ言葉にすると、
- *   読み手は「古くない」と「分からない」を区別できなくなる
+ *   読み手は「古くない」と「分からない」を区別できなくなる。**`drift` は
+ *   持たない**（`fresh` は定義上 drift 0 なので、`stale` 専用の値をここへ
+ *   漏らさない。#821 と同じ形の「常に鳴る印」に戻さないため）
  * - `absent` — 要旨そのものが無いので何も出さない（このケースは呼び出し側
  *   で `description === undefined` として既に弾かれているので、ここに来る
  *   ことは無い。網羅性のためだけに残す）
@@ -1276,7 +1396,10 @@ function memoryFreshnessMarker(freshness: MemoryDescriptionFreshness): string {
     case 'fresh':
       return '要旨の後に本文は動いていない: ';
     case 'stale':
-      return `要旨は本文より${formatMemoryStaleness(freshness.staleForMs)}古い: `;
+      return (
+        `要旨は本文より${formatMemoryStaleness(freshness.staleForMs)}古い` +
+        `（${describeMemoryDescriptionDrift(freshness.drift)}）: `
+      );
     case 'unknown':
       return '要旨を書いた時刻が記録されていない: ';
     case 'absent':

@@ -61,10 +61,20 @@ export const memory = pgTable('memory', {
    * 最後に `content` 先頭の frontmatter の `description` が変わったと確定した
    * 時刻。**書き手は書けない** — `write()` / `append()` が新旧の `description`
    * を比べて進めるか据え置くかを決める（`@alteroid/core` の
-   * `nextDescribedAt` の doc）。`updatedAt` と比べて要旨の鮮度
+   * `nextDescribedState` の doc）。`updatedAt` と比べて要旨の鮮度
    * （fresh / stale / unknown / absent）を出す。
    */
   describedAt: timestamp('described_at', { withTimezone: true, mode: 'date' }),
+  /**
+   * `describedAt` を立てた時点の本文サイズ（bytes、#913）。**`described_at`
+   * の隣へ追記で足す**（同じ約束。列の追加は `migrate.ts` の `STATEMENTS`
+   * 末尾で行う——索引は足さない）。`describedAt` と必ず同時に進む
+   * （`nextDescribedState` が1つのオブジェクトで両方を返すので、片方だけ
+   * 進む形はコードの側で作れない）。`toDocument` が返す `bytes`
+   * （`Buffer.byteLength(row.content, 'utf8')`）と同じ測り方——ここが
+   * ずれると、全文書が「要旨を書いた直後から少し変わっている」に化ける。
+   */
+  describedBytes: integer('described_bytes'),
   /**
    * この slug が作られた時刻。**#173 が置いた列の隣へ追記で足す**（同じ約束）。
    *
