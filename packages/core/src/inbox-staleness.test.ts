@@ -74,9 +74,12 @@ describe('restoredInboxEventVerdict', () => {
     (type) => type !== 'external',
   );
 
-  it.each(LIVE_ALWAYS_TYPES)('%s: 常に live（token-pool の合図以外を消し込む理由が無い）', (type) => {
-    expect(restoredInboxEventVerdict(SAMPLE_EVENTS[type])).toBe('live');
-  });
+  it.each(LIVE_ALWAYS_TYPES)(
+    '%s: 常に live（token-pool の合図以外を消し込む理由が無い）',
+    (type) => {
+      expect(restoredInboxEventVerdict(SAMPLE_EVENTS[type])).toBe('live');
+    },
+  );
 
   it('external: source が DAEMON_TOKEN_POOL_REOPENED_SOURCE（token-pool）なら stale', () => {
     const event: InboxEvent = {
