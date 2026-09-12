@@ -459,6 +459,35 @@ export function findLineNumberCitations(
   return out;
 }
 
+/**
+ * 広げた対象範囲（`entries`）の各ファイルから `path:行番号`（裸のファイル名を含む）
+ * 出典を拾い、`skipped`（`WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS` と
+ * `CAPTURED_OUTPUT_NON_CITATIONS` を合わせたもの）に載っている `file`+`token` を
+ * 除いた残りを `file:line token` の形で返す。
+ *
+ * 実在 corpus の歯（describe 名の中身は下の describe 呼び出しで確認できる——
+ * ここでは `*` の直後に `/` が続く文字列を JSDoc の中で引用しない。上の
+ * `isWidenedScopeFile` の doc comment に同じ理由が書いてある）が直書きしていた
+ * ループを、合成 fixture からも撃てるようにここへ切り出したもの（#785）。
+ * ふるまいは変えていない。
+ */
+export function collectWidenedLineNumberCitations(
+  entries: readonly { file: string; text: string }[],
+  isRepoFileLike: (candidate: string) => boolean,
+  skipped: readonly { file: string; token: string }[],
+): string[] {
+  const out: string[] = [];
+  for (const { file, text } of entries) {
+    const lines = proseLines(text);
+    for (const c of findLineNumberCitations(lines, isRepoFileLike)) {
+      const isSkipped = skipped.some((s) => s.file === file && s.token === c.token);
+      if (isSkipped) continue;
+      out.push(`${file}:${c.line} ${c.token}`);
+    }
+  }
+  return out;
+}
+
 export type RowNumberCitation = { line: number; token: string };
 
 /** 「106行目」の形の参照を返す。 */
@@ -620,12 +649,19 @@ function readRepoFile(target: string): string {
 //
 // **⚠️ 広げていない範囲を、広げたように読まないこと。**
 //
-// - **`scripts/**` は入れていない。** この歯自身が `scripts/` に在り、doc と
-//   合成 fixture の中に `path:行番号` の形を12件持っている（`clone.ts:505` など。
-//   どれも出典ではなく**この歯の入力そのもの**である）。⟹ 素直に足すと**歯が
-//   自分自身を数える**。自己参照をどう外すかは、それ自体が設計の問題なので
-//   ここでは足さない（`apps/web/app/reserved-schedule-kind-prose.test.ts` は
-//   同じ問題に `SELF` 除外で答えている——次に `scripts/**` を足す人はそこを読むこと）
+// - **`scripts/**` を対象へ足した（#785）。** この歯自身が `scripts/` に在り、
+//   doc と合成 fixture の中に `path:行番号` の形を大量に持っている（`clone.ts:505`
+//   など。どれも出典ではなく**この歯の入力そのもの**である）ため、素直に足すと
+//   歯が自分自身を数える。答えは `apps/web/app/reserved-schedule-kind-prose.test.ts`
+//   と同じ形——**このファイル自身を `CITATION_SCOPE_SELF_FILE` という名前1つで
+//   対象から除く**（`excludeCitationScopeSelf`。実体は下にある）。
+//
+//   **このファイル自身は `path:行番号` の対象から除く（自己参照）。** 除外は
+//   **名前1つだけで、内容は測っていない** ⟹ **このファイルの中に本物の出典が
+//   書かれても、誰も赤くしない。** `apps/web/app/reserved-schedule-kind-prose.test.ts`
+//   と同じ形である。**埋め合わせは別の歯が持つ**（#881 の被覆の歯がこのファイルを
+//   1ファイルだけ名指しで測っている）が、⛔ **それは「フェンスで落ちた行数」を
+//   測るだけで、出典の腐りは1件も測っていない。**
 // - **`docs/**`（正典）は入れていない。** 実測で `path:行番号` は0件であり、
 //   広げても線を引いたことにならない
 // - **「2. N行目」と「3. `grep -Fn --` の現物一致」は、`apps/web/app/**` へも
@@ -638,7 +674,19 @@ function readRepoFile(target: string): string {
 export function isWidenedScopeFile(relativePath: string): boolean {
   if (relativePath === '.claude' || relativePath.startsWith('.claude/')) return true;
   if (relativePath.startsWith('apps/web/app/')) return true;
+  if (relativePath.startsWith('scripts/')) return true;
   return /(^|\/)src\//.test(relativePath);
+}
+
+/** **この歯自身。**`path:行番号` の対象から名前1つで除く（自己参照）。 */
+export const CITATION_SCOPE_SELF_FILE = 'scripts/agents-md-references.test.ts';
+
+/**
+ * 対象範囲から自己参照を1件だけ外す。⛔ **除外は名前1つだけで、内容は測っていない。**
+ * `apps/web/app/reserved-schedule-kind-prose.test.ts` の `SELF` 除外と同じ形。
+ */
+export function excludeCitationScopeSelf(files: readonly string[]): string[] {
+  return files.filter((f) => f !== CITATION_SCOPE_SELF_FILE);
 }
 
 /** `git ls-files -z` で追跡済みファイルの相対パスを列挙する（`check-tracked-nul-bytes.mjs` と同じ形）。 */
@@ -697,12 +745,43 @@ export interface WidenedLineNumberCitationExemption {
  * 着地済みで `gh pr list --json files` に `memory.ts` を触る開いた PR は
  * 無かったため、この PR で直した）を直したので、免除するものが無い。**
  * 1件でも新しく免除するなら、ここへ理由つきで足すこと。
+ *
+ * ⛔ **`scripts/mutate-unhandled-errors.test.ts` が持つ1件（`scripts/check-tracked-nul-bytes.test.ts:43`）
+ * はここへ足さない。** あれは出典ではなく、過去に道具が吐いた出力の逐語コピーで
+ * 腐らない ⟹ 免除表（＝規約の対象だが例外を1つ作った、という意味）に載せると
+ * 意味が変わる。そちらは `CAPTURED_OUTPUT_NON_CITATIONS`（下）が別枠で持つ。
  */
 export const WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS: readonly WidenedLineNumberCitationExemption[] =
   [];
 
+export interface CapturedOutputNonCitation {
+  readonly file: string;
+  readonly token: string;
+  /** **非空であること**（下の歯が測る）。 */
+  readonly why: string;
+}
+
+/**
+ * **⛔ 免除表ではない。規約の「対象外」である。**
+ *
+ * ここに並ぶのは「出典として書かれたもの」ではなく、**過去に道具が吐いた出力の
+ * 逐語コピー**である ⟹ 指した先が動いても、この文字列を直す必要は無い ⟹ **腐らない。**
+ * 規約（行番号を単独の出典にしない）が守りたいのは**出典が腐ること**なので、
+ * 腐らないものは**そもそも対象ではない。**
+ *
+ * ⛔ **`WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS` へ載せないこと** —— 載せると
+ * 「規約の対象だが例外を1つ作った」という**別の意味**になる。
+ */
+export const CAPTURED_OUTPUT_NON_CITATIONS: readonly CapturedOutputNonCitation[] = [
+  {
+    file: 'scripts/mutate-unhandled-errors.test.ts',
+    token: 'scripts/check-tracked-nul-bytes.test.ts:43',
+    why: '過去に test-guard が吐いた stdout の逐語コピー（`REAL_GUARD_B_SKIP`）の中の1行。指した先が動いてもこの文字列を直す必要は無い ⟹ 腐らない。',
+  },
+];
+
 const TRACKED_FILES = listTrackedFiles();
-const WIDENED_SCOPE_FILES = TRACKED_FILES.filter(isWidenedScopeFile);
+const WIDENED_SCOPE_FILES = excludeCitationScopeSelf(TRACKED_FILES.filter(isWidenedScopeFile));
 const isRepoFileOrBasename = buildBasenameAwareRepoFileResolver(TRACKED_FILES);
 
 const agentsMd = readFileSync(path.join(ROOT, 'AGENTS.md'), 'utf8');
@@ -727,12 +806,14 @@ const prose = proseLines(agentsMd);
 const FENCE_COVERAGE_SELF_FILE = 'scripts/agents-md-references.test.ts';
 
 // フェンス被覆の歯（下）が対象とする corpus。`AGENTS.md` 自身 + 広げた対象範囲
-// （`WIDENED_SCOPE_FILES`）+ `FENCE_COVERAGE_SELF_FILE`（歯自身のファイル。理由は
-// 直上の doc）。`scripts/**` はこの1件を除いて対象に足さない（#785 が決める範囲。
-// この歯自身が `scripts/` に在り、doc と合成 fixture の中に大量のフェンス例を
-// 持つため、素直に全部足すと歯が自分自身を大量に数える。上の `isWidenedScopeFile`
-// の「`scripts/**` は入れていない」の doc と同じ理由——ただし被覆の歯は出典を
-// 読まないので、名指しした1件だけは安全に足せる）。
+// （`WIDENED_SCOPE_FILES`）+ `FENCE_COVERAGE_SELF_FILE`（歯自身のファイル）。
+//
+// #785 で `scripts/**` を `path:行番号` の対象へ足したので、`WIDENED_SCOPE_FILES`
+// は `excludeCitationScopeSelf` で既にこの歯自身のファイルを除いた状態になって
+// いる（直上の定義）。⟹ ここで `FENCE_COVERAGE_SELF_FILE` を足し戻しても、
+// **2回入らない**（除かれているものを1回だけ足し戻すだけである）。被覆の歯は
+// 出典を1件も読まないので、この1件を戻しても#785の本題（歯が自分自身を出典として
+// 数える）は起きない。
 const FENCE_COVERAGE_ENTRIES: readonly { file: string; text: string }[] = [
   { file: 'AGENTS.md', text: agentsMd },
   ...WIDENED_SCOPE_FILES.map((file) => ({ file, text: readRepoFile(file) })),
@@ -846,7 +927,7 @@ describe('AGENTS.md の参照の形（#369）', () => {
 // `grep -Fn -- 'より前の1行目へ挿入された' .claude/skills/mutation-testing/SKILL.md`
 // で当たる。この決定（N行目を広げない）により、そもそも今回のどちらの歯にも
 // 引っ掛からない。フェンスの外か中かを気にする必要も無い。
-describe('.claude/** と */src/** と apps/web/app/** の path:行番号 出典（PR #760 の続き）', () => {
+describe('.claude/** と */src/** と apps/web/app/** と scripts/** の path:行番号 出典（PR #760 / #785）', () => {
   it('免除表の理由（why）が全部、非空である', () => {
     const blank = WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS.filter(
       (e) => e.why.trim().length === 0,
@@ -855,6 +936,16 @@ describe('.claude/** と */src/** と apps/web/app/** の path:行番号 出典�
       blank,
       '免除の理由が空である。なぜ広げた歯の対象から外すのかを書くこと' +
         '（空欄を許すと、免除表は数合わせの場所になる）。',
+    ).toEqual([]);
+  });
+
+  it('`CAPTURED_OUTPUT_NON_CITATIONS` の why が全部、非空である', () => {
+    const blank = CAPTURED_OUTPUT_NON_CITATIONS.filter((e) => e.why.trim().length === 0).map(
+      (e) => `${e.file} ${e.token}`,
+    );
+    expect(
+      blank,
+      '「なぜ規約の対象外なのか」が空である。空欄を許すと、ここも数合わせの' + '場所になる。',
     ).toEqual([]);
   });
 
@@ -880,26 +971,42 @@ describe('.claude/** と */src/** と apps/web/app/** の path:行番号 出典�
     ).toEqual([]);
   });
 
-  it('リポジトリ内のファイルを `path:行番号`（裸のファイル名を含む）で指さない', () => {
-    const hits: string[] = [];
+  it('`CAPTURED_OUTPUT_NON_CITATIONS` に載っている file+token が、いまも実際に検出される現物と一致する（幽霊が無い）', () => {
+    // 上と同じ考え方——「過去に道具が吐いた出力」がもう検出されないなら、
+    // 対象外として書き続ける理由も無い。
+    const stillDetected = new Set<string>();
     for (const file of WIDENED_SCOPE_FILES) {
       const text = readRepoFile(file);
       const lines = proseLines(text);
       for (const c of findLineNumberCitations(lines, isRepoFileOrBasename)) {
-        const exempted = WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS.some(
-          (e) => e.file === file && e.token === c.token,
-        );
-        if (exempted) continue;
-        hits.push(`${file}:${c.line} ${c.token}`);
+        stillDetected.add(`${file} ${c.token}`);
       }
     }
+    const ghosts = CAPTURED_OUTPUT_NON_CITATIONS.filter(
+      (e) => !stillDetected.has(`${e.file} ${e.token}`),
+    ).map((e) => `${e.file} ${e.token}`);
+    expect(
+      ghosts,
+      '`CAPTURED_OUTPUT_NON_CITATIONS` に載っている file:token が、もう検出されない' +
+        '（直った/消えた）。この行を表から消すこと。',
+    ).toEqual([]);
+  });
+
+  it('リポジトリ内のファイルを `path:行番号`（裸のファイル名を含む）で指さない', () => {
+    const entries = WIDENED_SCOPE_FILES.map((file) => ({ file, text: readRepoFile(file) }));
+    const skipped = [
+      ...WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS.map((e) => ({ file: e.file, token: e.token })),
+      ...CAPTURED_OUTPUT_NON_CITATIONS.map((e) => ({ file: e.file, token: e.token })),
+    ];
+    const hits = collectWidenedLineNumberCitations(entries, isRepoFileOrBasename, skipped);
     expect(
       hits,
       '行番号は腐り、腐ったことが読む側から分からない（AGENTS.md「他のファイルを' +
         '出典として指すときは、行番号を単独の出典にしない」）。逐語' +
         "（`grep -Fn -- '<逐語>' <path>`）かシンボル名で指すこと。" +
         '直せない理由があるなら WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS へ理由つきで足すこと' +
-        '（scripts/agents-md-references.test.ts）。',
+        '（scripts/agents-md-references.test.ts）。過去に道具が吐いた出力の逐語コピーで' +
+        '腐らないものなら CAPTURED_OUTPUT_NON_CITATIONS へ（免除表とは別枠）。',
     ).toEqual([]);
   });
 
@@ -1467,11 +1574,17 @@ describe('isWidenedScopeFile（歯の対象範囲そのもの。合成 fixture�
     expect(isWidenedScopeFile('apps/web/app/components/page.tsx')).toBe(true);
   });
 
-  it('AGENTS.md・docs/・scripts/ は入らない', () => {
+  it('AGENTS.md・docs/ は入らない', () => {
     expect(isWidenedScopeFile('AGENTS.md')).toBe(false);
     expect(isWidenedScopeFile('docs/north_star.md')).toBe(false);
-    // この歯自身が置かれている場所。自己参照になるので入れていない（上の doc）。
-    expect(isWidenedScopeFile('scripts/agents-md-references.test.ts')).toBe(false);
+  });
+
+  it('scripts/** は入る（#785。歯自身は isWidenedScopeFile ではなく excludeCitationScopeSelf が名前1つで除く）', () => {
+    expect(isWidenedScopeFile('scripts/check-tracked-nul-bytes.test.ts')).toBe(true);
+    // この歯自身が置かれている場所も isWidenedScopeFile 自体は true を返す——
+    // 自己参照の除外は `WIDENED_SCOPE_FILES` を組み立てる側（`excludeCitationScopeSelf`）
+    // の責務であって、この関数の責務ではない。
+    expect(isWidenedScopeFile('scripts/agents-md-references.test.ts')).toBe(true);
   });
 
   it('apps/web でも app/ の外（設定ファイル）は入らない', () => {
@@ -1560,5 +1673,69 @@ describe('広げた歯の end-to-end（合成 fixture。裸のファイル名の
       ['// ```', '// clone.ts:505 のような実測はここでは書き換えない', '// ```'].join('\n'),
     );
     expect(findLineNumberCitations(lines, resolve)).toEqual([]);
+  });
+});
+
+/**
+ * **`excludeCitationScopeSelf` / `collectWidenedLineNumberCitations`（#785）の
+ * 合成 fixture。** 実在 corpus に頼らない——`WIDENED_SCOPE_FILES` の実測が
+ * たまたま今日ゼロ件でも、ここは常に当たる。
+ */
+describe('excludeCitationScopeSelf / collectWidenedLineNumberCitations（合成 fixture。#785）', () => {
+  it('除外が効く: CITATION_SCOPE_SELF_FILE だけを落とし、他は落とさない', () => {
+    const files = [
+      'scripts/check-tracked-nul-bytes.test.ts',
+      CITATION_SCOPE_SELF_FILE,
+      'scripts/mutate-unhandled-errors.test.ts',
+    ];
+    expect(excludeCitationScopeSelf(files)).toEqual([
+      'scripts/check-tracked-nul-bytes.test.ts',
+      'scripts/mutate-unhandled-errors.test.ts',
+    ]);
+  });
+
+  it('除外が効きすぎていない（対の歯）: scripts/ の *別の* ファイルが持つ出典は検出され続ける', () => {
+    // ⟹ 除外の名前を `*` のように広げる変異（例: f.startsWith('scripts/') で
+    // 落とす形）が入ると、このファイルの出典まで一緒に消えて赤くなるはず。
+    const entries = [
+      { file: 'scripts/other-file.test.ts', text: '参照は `clone.ts:505` に在る。' },
+    ];
+    const resolve = buildBasenameAwareRepoFileResolver(['packages/core/src/clone.ts']);
+    expect(collectWidenedLineNumberCitations(entries, resolve, [])).toEqual([
+      'scripts/other-file.test.ts:1 clone.ts:505',
+    ]);
+  });
+
+  it('自己参照が実際に外れる: CITATION_SCOPE_SELF_FILE と同じ名前のファイルが持つ出典は、excludeCitationScopeSelf を通した後は検出されない', () => {
+    const files = ['scripts/other-file.test.ts', CITATION_SCOPE_SELF_FILE];
+    const textByFile: Record<string, string> = {
+      'scripts/other-file.test.ts': '参照は `clone.ts:505` に在る。',
+      [CITATION_SCOPE_SELF_FILE]: '参照は `clone.ts:505` に在る（この歯自身の入力）。',
+    };
+    const resolve = buildBasenameAwareRepoFileResolver(['packages/core/src/clone.ts']);
+    const scoped = excludeCitationScopeSelf(files);
+    const entries = scoped.map((file) => ({ file, text: textByFile[file] ?? '' }));
+    expect(collectWidenedLineNumberCitations(entries, resolve, [])).toEqual([
+      'scripts/other-file.test.ts:1 clone.ts:505',
+    ]);
+  });
+
+  it('`CAPTURED_OUTPUT_NON_CITATIONS` に載せた file+token は skipped 経由で落ちる（合成入力）', () => {
+    const entries = [
+      {
+        file: 'scripts/mutate-unhandled-errors.test.ts',
+        text: '生ログの1行: scripts/check-tracked-nul-bytes.test.ts:43 it.skip',
+      },
+    ];
+    const resolve = buildBasenameAwareRepoFileResolver([
+      'scripts/check-tracked-nul-bytes.test.ts',
+    ]);
+    const skipped = CAPTURED_OUTPUT_NON_CITATIONS.map((e) => ({ file: e.file, token: e.token }));
+    expect(collectWidenedLineNumberCitations(entries, resolve, skipped)).toEqual([]);
+    // skipped を渡さなければ検出されること自体は確認しておく（skip の効果が
+    // 「そもそも拾えていない」のではないことの確認）。
+    expect(collectWidenedLineNumberCitations(entries, resolve, [])).toEqual([
+      'scripts/mutate-unhandled-errors.test.ts:1 scripts/check-tracked-nul-bytes.test.ts:43',
+    ]);
   });
 });
