@@ -138,18 +138,31 @@ describe('記憶一覧の要旨の前に付く印（#821 — ⚠ をやめて数
         slug: 'stale-1h',
         title: '1時間だけ古い記憶',
         description: '古い要旨A',
-        descriptionFreshness: { kind: 'stale', staleForMs: 60 * 60 * 1000 },
+        descriptionFreshness: {
+          kind: 'stale',
+          staleForMs: 60 * 60 * 1000,
+          drift: { kind: 'unrecorded' },
+        },
       }),
       doc({
         slug: 'stale-30d',
         title: '30日古い記憶',
         description: '古い要旨B',
-        descriptionFreshness: { kind: 'stale', staleForMs: 30 * 24 * 60 * 60 * 1000 },
+        descriptionFreshness: {
+          kind: 'stale',
+          staleForMs: 30 * 24 * 60 * 60 * 1000,
+          drift: { kind: 'unrecorded' },
+        },
       }),
     ]);
 
-    expect(await screen.findByText(/要旨は本文より1時間古い: 古い要旨A/)).toBeTruthy();
-    expect(await screen.findByText(/要旨は本文より30日古い: 古い要旨B/)).toBeTruthy();
+    // #913: 期間フレーズは置き換えず、変化量（ここでは unrecorded）を並べて足す。
+    expect(
+      await screen.findByText(/要旨は本文より1時間古い（本文の変化量は記録されていない）: 古い要旨A/),
+    ).toBeTruthy();
+    expect(
+      await screen.findByText(/要旨は本文より30日古い（本文の変化量は記録されていない）: 古い要旨B/),
+    ).toBeTruthy();
   });
 
   it('unknown（記録なし）と fresh（正直なゼロ）は別の言葉で出る（条件1: 取れなかったと0を混ぜない）', async () => {

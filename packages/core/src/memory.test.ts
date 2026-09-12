@@ -18,6 +18,7 @@ import {
   MEMORY_TOC_LINE_LIMIT,
   applyMemoryFrontmatterPatch,
   assertNeverMemoryCreatedAt,
+  assertNeverMemoryDescriptionDrift,
   assertNeverMemoryDescriptionFreshness,
   assertNeverMemoryFrontmatterState,
   assertNeverMemoryProtectionStatus,
@@ -39,7 +40,7 @@ import {
   memoryBodyStart,
   memoryProtectionAllowsFullReplace,
   memorySectionId,
-  nextDescribedAt,
+  nextDescribedState,
   parseMemoryFrontmatter,
   renderMemoryDocument,
   renderMemoryDocuments,
@@ -592,6 +593,8 @@ describe('要旨の鮮度（resolveMemoryDescriptionFreshness）— 4状態、�
         description: undefined,
         describedAt: '2026-08-20T00:00:00Z',
         updatedAt: '2026-08-21T00:00:00Z',
+        describedBytes: undefined,
+        currentBytes: 0,
       }),
     ).toEqual({ kind: 'absent' });
   });
@@ -602,6 +605,8 @@ describe('要旨の鮮度（resolveMemoryDescriptionFreshness）— 4状態、�
         description: '要旨',
         describedAt: undefined,
         updatedAt: '2026-08-21T00:00:00Z',
+        describedBytes: undefined,
+        currentBytes: 0,
       }),
     ).toEqual({ kind: 'unknown' });
   });
@@ -612,18 +617,26 @@ describe('要旨の鮮度（resolveMemoryDescriptionFreshness）— 4状態、�
         description: '要旨',
         describedAt: '2026-08-21T00:00:00Z',
         updatedAt: '2026-08-21T00:00:00Z',
+        describedBytes: undefined,
+        currentBytes: 0,
       }),
     ).toEqual({ kind: 'fresh' });
   });
 
-  it('describedAt が updatedAt より前なら stale（差をミリ秒で持つ、#821）', () => {
+  it('describedAt が updatedAt より前なら stale（差をミリ秒で持つ、#821）。drift も併せて持つ（#913）', () => {
     expect(
       resolveMemoryDescriptionFreshness({
         description: '要旨',
         describedAt: '2026-08-20T00:00:00Z',
         updatedAt: '2026-08-21T00:00:00Z',
+        describedBytes: 500,
+        currentBytes: 700,
       }),
-    ).toEqual({ kind: 'stale', staleForMs: 24 * 60 * 60 * 1000 });
+    ).toEqual({
+      kind: 'stale',
+      staleForMs: 24 * 60 * 60 * 1000,
+      drift: { kind: 'measured', describedBytes: 500, currentBytes: 700, deltaBytes: 200 },
+    });
   });
 
   it('stale の差は1時間と30日で別の値になる（語ではなく数で測る、#821 条件2）', () => {
@@ -631,14 +644,26 @@ describe('要旨の鮮度（resolveMemoryDescriptionFreshness）— 4状態、�
       description: '要旨',
       describedAt: '2026-08-20T00:00:00Z',
       updatedAt: '2026-08-20T01:00:00Z',
+      describedBytes: 500,
+      currentBytes: 700,
     });
     const thirtyDays = resolveMemoryDescriptionFreshness({
       description: '要旨',
       describedAt: '2026-08-01T00:00:00Z',
       updatedAt: '2026-08-31T00:00:00Z',
+      describedBytes: 500,
+      currentBytes: 700,
     });
-    expect(oneHour).toEqual({ kind: 'stale', staleForMs: 60 * 60 * 1000 });
-    expect(thirtyDays).toEqual({ kind: 'stale', staleForMs: 30 * 24 * 60 * 60 * 1000 });
+    expect(oneHour).toEqual({
+      kind: 'stale',
+      staleForMs: 60 * 60 * 1000,
+      drift: { kind: 'measured', describedBytes: 500, currentBytes: 700, deltaBytes: 200 },
+    });
+    expect(thirtyDays).toEqual({
+      kind: 'stale',
+      staleForMs: 30 * 24 * 60 * 60 * 1000,
+      drift: { kind: 'measured', describedBytes: 500, currentBytes: 700, deltaBytes: 200 },
+    });
     // 差そのものが違う値であることを直接確かめる——「stale というラベルが
     // 出た」ではなく「差が動いた」ことを見る。
     expect(oneHour.kind === 'stale' && thirtyDays.kind === 'stale').toBe(true);
@@ -662,15 +687,19 @@ describe('要旨の鮮度（resolveMemoryDescriptionFreshness）— 4状態、�
    * **`Math.max(0, ...)` を外す変異（マネージャー指摘、条件1の直接の歯）は
    * ここで捕まる。** 負の値が「0（＝最新）」以外の意味を持ってはいけない
    * ——このテストは「0になる」ことそのものを固定する（負のまま漏れる／
-   * NaN になる、のどちらでもないことを確かめる）。
+   * NaN になる、のどちらでもないことを確かめる）。**`describedBytes` は
+   * 渡さない**（`unrecorded`）——このテストの関心は `staleForMs` の丸めで
+   * あって `drift` ではないため。
    */
   it('精度違いで辞書式と数値の順序が食い違っても、staleForMs は負にならない（0 に丸める）', () => {
     const result = resolveMemoryDescriptionFreshness({
       description: '要旨',
       describedAt: '2026-09-11T10:00:00.500Z',
       updatedAt: '2026-09-11T10:00:00Z',
+      describedBytes: undefined,
+      currentBytes: 0,
     });
-    expect(result).toEqual({ kind: 'stale', staleForMs: 0 });
+    expect(result).toEqual({ kind: 'stale', staleForMs: 0, drift: { kind: 'unrecorded' } });
   });
 
   it('assertNeverMemoryDescriptionFreshness は未知の状態を投げる', () => {
@@ -684,12 +713,68 @@ describe('要旨の鮮度（resolveMemoryDescriptionFreshness）— 4状態、�
   });
 });
 
+/**
+ * #913: `drift`（本文の変化量）の組み立て。`resolveMemoryDescriptionFreshness`
+ * の `stale` 分岐が内部で使う `resolveMemoryDescriptionDrift` は export
+ * していないので、`resolveMemoryDescriptionFreshness` 経由で測る（`stale`
+ * になる入力を固定し、`drift` の4パターンだけを変える）。
+ */
+describe('#913: stale に添える drift（本文の変化量）', () => {
+  const stale = (describedBytes: number | undefined, currentBytes: number) =>
+    resolveMemoryDescriptionFreshness({
+      description: '要旨',
+      describedAt: '2026-08-20T00:00:00Z',
+      updatedAt: '2026-08-21T00:00:00Z',
+      describedBytes,
+      currentBytes,
+    });
+
+  it('本文が増えていれば deltaBytes は正', () => {
+    expect(stale(1000, 1200)).toEqual({
+      kind: 'stale',
+      staleForMs: 24 * 60 * 60 * 1000,
+      drift: { kind: 'measured', describedBytes: 1000, currentBytes: 1200, deltaBytes: 200 },
+    });
+  });
+
+  it('本文が縮んでいれば deltaBytes は負（「変わっていない」と混ぜない）', () => {
+    expect(stale(1000, 800)).toEqual({
+      kind: 'stale',
+      staleForMs: 24 * 60 * 60 * 1000,
+      drift: { kind: 'measured', describedBytes: 1000, currentBytes: 800, deltaBytes: -200 },
+    });
+  });
+
+  it('本文が変わっていなければ deltaBytes は0（measured のまま。unrecorded にはしない）', () => {
+    expect(stale(1000, 1000)).toEqual({
+      kind: 'stale',
+      staleForMs: 24 * 60 * 60 * 1000,
+      drift: { kind: 'measured', describedBytes: 1000, currentBytes: 1000, deltaBytes: 0 },
+    });
+  });
+
+  it('describedBytes が無ければ unrecorded（0 に化けさせない、#821 条件1と同じ形）', () => {
+    expect(stale(undefined, 1000)).toEqual({
+      kind: 'stale',
+      staleForMs: 24 * 60 * 60 * 1000,
+      drift: { kind: 'unrecorded' },
+    });
+  });
+
+  it('assertNeverMemoryDescriptionDrift は未知の状態を投げる', () => {
+    const bogus = { kind: 'bogus' } as never;
+    expect(() => assertNeverMemoryDescriptionDrift(bogus)).toThrow(/bogus/);
+  });
+});
+
 describe('deriveMemoryFrontmatter — fs / pg が list() / read() / documents() で共通に使う唯一の実装', () => {
   it('none の文書は premise・description 無し・absent', () => {
     const derived = deriveMemoryFrontmatter({
       content: '# 価値観\n本文',
       updatedAt: '2026-08-21T00:00:00Z',
       describedAt: undefined,
+      describedBytes: undefined,
+      currentBytes: 0,
     });
     expect(derived.frontmatter).toEqual({ kind: 'none' });
     expect(derived.kind).toBe('premise');
@@ -702,6 +787,8 @@ describe('deriveMemoryFrontmatter — fs / pg が list() / read() / documents() 
       content: '---\ndescription: 要旨\ntype: fact\n---\n# T\n本文',
       updatedAt: '2026-08-21T00:00:00Z',
       describedAt: '2026-08-21T00:00:00Z',
+      describedBytes: undefined,
+      currentBytes: 0,
     });
     expect(derived.kind).toBe('fact');
     expect(derived.description).toBe('要旨');
@@ -709,47 +796,62 @@ describe('deriveMemoryFrontmatter — fs / pg が list() / read() / documents() 
   });
 });
 
-describe('nextDescribedAt — 書き手は書けない。store が新旧の description を比べて進める（4-3）', () => {
-  it('description が変わっていなければ据え置く', () => {
-    const result = nextDescribedAt({
+describe('nextDescribedState — 書き手は書けない。store が新旧の description を比べて describedAt/describedBytes を進める（4-3、#913）', () => {
+  it('description が変わっていなければ、describedAt と describedBytes の両方を据え置く', () => {
+    const result = nextDescribedState({
       priorContent: '---\ndescription: 同じ\n---\n# T\n旧本文',
       nextContent: '---\ndescription: 同じ\n---\n# T\n新本文（本文だけ変えた）',
       priorDescribedAt: '2026-08-01T00:00:00Z',
+      priorDescribedBytes: 123,
       writtenAt: '2026-08-21T00:00:00Z',
+      writtenBytes: 999,
     });
-    expect(result).toBe('2026-08-01T00:00:00Z');
+    expect(result).toEqual({ describedAt: '2026-08-01T00:00:00Z', describedBytes: 123 });
   });
 
-  it('description が変わっていれば、渡された writtenAt へ進める', () => {
-    const result = nextDescribedAt({
+  it('description が変わっていれば、渡された writtenAt / writtenBytes の両方へ進める', () => {
+    const result = nextDescribedState({
       priorContent: '---\ndescription: 旧\n---\n# T\n本文',
       nextContent: '---\ndescription: 新\n---\n# T\n本文',
       priorDescribedAt: '2026-08-01T00:00:00Z',
+      priorDescribedBytes: 123,
       writtenAt: '2026-08-21T00:00:00Z',
+      writtenBytes: 999,
     });
-    expect(result).toBe('2026-08-21T00:00:00Z');
+    expect(result).toEqual({ describedAt: '2026-08-21T00:00:00Z', describedBytes: 999 });
   });
 
-  it('新規作成（priorContent が null）で description が付けば、changed 扱いになる', () => {
-    const result = nextDescribedAt({
+  it('新規作成（priorContent が null）で description が付けば、changed 扱いになる（両方進む）', () => {
+    const result = nextDescribedState({
       priorContent: null,
       nextContent: '---\ndescription: 初めての要旨\n---\n# T\n本文',
       priorDescribedAt: undefined,
+      priorDescribedBytes: undefined,
       writtenAt: '2026-08-21T00:00:00Z',
+      writtenBytes: 42,
     });
-    expect(result).toBe('2026-08-21T00:00:00Z');
+    expect(result).toEqual({ describedAt: '2026-08-21T00:00:00Z', describedBytes: 42 });
   });
 
-  it('書いた直後は describedAt === updatedAt になるので、直後の読み出しは必ず fresh', () => {
+  it('書いた直後は describedAt === updatedAt かつ describedBytes === writtenBytes になるので、直後の読み出しは必ず fresh', () => {
     const writtenAt = '2026-08-21T00:00:00Z';
-    const describedAt = nextDescribedAt({
+    const writtenBytes = 42;
+    const { describedAt, describedBytes } = nextDescribedState({
       priorContent: '---\ndescription: 旧\n---\n# T\n本文',
       nextContent: '---\ndescription: 新\n---\n# T\n本文',
       priorDescribedAt: '2026-08-01T00:00:00Z',
+      priorDescribedBytes: 123,
       writtenAt,
+      writtenBytes,
     });
     expect(
-      resolveMemoryDescriptionFreshness({ description: '新', describedAt, updatedAt: writtenAt }),
+      resolveMemoryDescriptionFreshness({
+        description: '新',
+        describedAt,
+        updatedAt: writtenAt,
+        describedBytes,
+        currentBytes: writtenBytes,
+      }),
     ).toEqual({ kind: 'fresh' });
   });
 });
@@ -839,7 +941,10 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
       premise('premise-a'),
       premise('premise-b'),
       fact('fact-a', { description: '要旨a', freshness: { kind: 'fresh' } }),
-      fact('fact-b', { description: '要旨b', freshness: { kind: 'stale', staleForMs: 1000 } }),
+      fact('fact-b', {
+        description: '要旨b',
+        freshness: { kind: 'stale', staleForMs: 1000, drift: { kind: 'unrecorded' } },
+      }),
       fact('malformed-parent-ignored', {
         description: '要旨c',
         freshness: { kind: 'unknown' },
@@ -1271,11 +1376,16 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
       fact('stale-doc', {
         title: 'Stale Doc',
         description: '古い要旨',
-        freshness: { kind: 'stale', staleForMs: 60 * 60 * 1000 },
+        freshness: {
+          kind: 'stale',
+          staleForMs: 60 * 60 * 1000,
+          drift: { kind: 'measured', describedBytes: 500, currentBytes: 700, deltaBytes: 200 },
+        },
       }),
     ]);
     expect(rendered).toContain('stale-doc');
-    expect(rendered).toContain('要旨は本文より1時間古い: 古い要旨');
+    // #913: 期間フレーズは置き換えず、本文の変化量を並べて足す。
+    expect(rendered).toContain('要旨は本文より1時間古い（本文は+200バイト（+40%）変わった）: 古い要旨');
   });
 
   /**
@@ -1313,7 +1423,10 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
       fact(SAME_SLUG, { description: '説明', freshness: { kind: 'fresh' } }),
     ]);
     const stale = renderMemoryDocuments([
-      fact(SAME_SLUG, { description: '説明', freshness: { kind: 'stale', staleForMs: 1000 } }),
+      fact(SAME_SLUG, {
+        description: '説明',
+        freshness: { kind: 'stale', staleForMs: 1000, drift: { kind: 'unrecorded' } },
+      }),
     ]);
     const unknown = renderMemoryDocuments([
       fact(SAME_SLUG, { description: '説明', freshness: { kind: 'unknown' } }),
@@ -2658,7 +2771,11 @@ describe('renderMemoryListing — `memory_list` 用の一覧。全区分を対�
       title: 'Stale',
       kind: 'fact' as const,
       description: '要旨',
-      descriptionFreshness: { kind: 'stale' as const, staleForMs },
+      descriptionFreshness: {
+        kind: 'stale' as const,
+        staleForMs,
+        drift: { kind: 'unrecorded' as const },
+      },
       parent: undefined,
       updatedAt: '2026-08-21T00:00:00Z',
       createdAt: { kind: 'unknown' as const },
@@ -2725,7 +2842,11 @@ describe('renderMemoryListing — `memory_list` 用の一覧。全区分を対�
       {
         ...base,
         description: '説明',
-        descriptionFreshness: { kind: 'stale' as const, staleForMs: 1000 },
+        descriptionFreshness: {
+          kind: 'stale' as const,
+          staleForMs: 1000,
+          drift: { kind: 'unrecorded' as const },
+        },
       },
     ]);
     const unknown = renderMemoryListing([
@@ -2806,26 +2927,15 @@ describe('renderMemoryListing — `memory_list` 用の一覧。全区分を対�
  * #913: 「時間差だけでは、いちばん手が入っている文書がいちばん新しく見える」
  * ——#821 が測った `staleForMs`（`describedAt` と `updatedAt` の時間差）は
  * 「要旨がどれだけ前に古くなったか」しか言えず、「その間に本文がどれだけ
- * 変わったか（本文の変化量）」を持っていない。
+ * 変わったか（本文の変化量）」を持っていなかった。
  *
- * ⚠️⚠️ **これは2手目（歯を先に書く手）である。実装（`memory.ts` の本体・
- * ストア・表示）は1文字も変えていない。** ここに置く歯は、契約
- * （マネージャーが確定させた設計）が実装される前に書いた「失敗する歯」で
- * あり、現時点では赤くなることを狙っている（一部は #821 と同じ理由で
- * 現時点でも緑になりうる——各 it() のコメントに実測を書く）。
- *
- * **狙う契約（マネージャー確定）:**
- * - `MemoryDescriptionFreshness` の `stale` に `drift: MemoryDescriptionDrift`
- *   を足す。`measured`（`describedBytes` / `currentBytes` / 符号付き
- *   `deltaBytes`）と `unrecorded`（記録が無い＝0ではない）の2状態
- * - `fresh` には `drift` を持たせない（drift は stale 専用）
- *
- * ここではまだ実装されていない `drift` を、あたかも在るかのように
- * `descriptionFreshness` へ直接埋め込んで `renderMemoryListing` を呼ぶ
- * ——実装（`memoryFreshnessMarker` 等）がまだ `drift` を1文字も読んでいない
- * ので、出力に変化量の数値が現れず、下の `it()` は赤くなるはずである。
+ * **3手目（実装）でここが実装された。** `MemoryDescriptionFreshness` の
+ * `stale` は `drift: MemoryDescriptionDrift` を必ず持つ——`measured`
+ * （`describedBytes` / `currentBytes` / 符号付き `deltaBytes`）と
+ * `unrecorded`（記録が無い＝0ではない）の2状態（`fresh` には `drift` を
+ * 持たせない——drift は stale 専用）。
  */
-describe('#913: 要旨の鮮度は時間差だけでなく本文の変化量も運ぶ（契約のみ。実装はまだ無い）', () => {
+describe('#913: 要旨の鮮度は時間差だけでなく本文の変化量も運ぶ', () => {
   /** 本文が実際にどれだけ変わったか（`drift`）を埋め込んだ1件を作る。 */
   function driftEntry(
     slug: string,
@@ -2839,10 +2949,7 @@ describe('#913: 要旨の鮮度は時間差だけでなく本文の変化量も�
       title: slug,
       kind: 'fact' as const,
       description: '要旨',
-      // ⚠️ `drift` はまだ `MemoryDescriptionFreshness` の型に無い。ここでは
-      // 契約が実装された後の形を先取りして埋め込んでいる（vitest は tsc を
-      // 通さないので、型エラーではなく実行時の assert 差分として赤くなる）。
-      descriptionFreshness: { kind: 'stale' as const, staleForMs, drift } as unknown as MemoryDescriptionFreshness,
+      descriptionFreshness: { kind: 'stale' as const, staleForMs, drift },
       parent: undefined,
       updatedAt: '2026-08-21T00:00:00Z',
       createdAt: { kind: 'unknown' as const },
@@ -2973,13 +3080,11 @@ describe('#913: 要旨の鮮度は時間差だけでなく本文の変化量も�
   });
 
   /**
-   * 歯2-3（陰性対照）。`drift` は `stale`専用の契約——`fresh` の文書には
+   * 歯2-3（陰性対照）。`drift` は `stale` 専用の契約——`fresh` の文書には
    * 変化量が出てはいけない。#821 が直した「常に鳴る印」（12/12 文書で ⚠ が
-   * 付いていた欠陥）と同じ形に戻っていないかを確かめる。
-   *
-   * ⚠️ この it() は、実装が無い現時点でも**すでに緑になりうる**
-   * （`fresh` はそもそもどんな変化量も出力しないため）。実装が入った後の
-   * 回帰を防ぐための歯として、あえて先に置いている——実測は報告に書く。
+   * 付いていた欠陥）と同じ形に戻っていないかを確かめる（`fresh` は型として
+   * `drift` を持てないので、実装が正しく `stale` 専用に留めていることを
+   * 出力の側からも固定する）。
    */
   it('⭐⭐ 陰性対照3: fresh の文書には変化量が出ない（stale 以外へ漏れていない）', () => {
     const fresh = renderMemoryListing([

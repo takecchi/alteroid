@@ -744,6 +744,92 @@ describe('FsPersonaStore', () => {
       expect(doc?.kind).toBe('premise');
     });
   });
+
+  /**
+   * #913: `describedBytes`（要旨を立てた時点の本文サイズ）の往復。
+   * `describedAt` と同じ通り道（`#writeNow`）を通るので、揃っていることを
+   * ここで直接確かめる——ここが1バイトでもずれると、全文書が「要旨を書いた
+   * 直後から少し変わっている」に化ける（`nextDescribedState` の doc）。
+   */
+  describe('describedBytes（本文の変化量の派生値、#913）', () => {
+    it('要旨を書いた直後は drift の deltaBytes が厳密に0（describedBytes と bytes の測り方が揃っている）', async () => {
+      const written = await stores.persona.write(
+        'runbook',
+        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n本文\n',
+      );
+
+      const doc = await stores.persona.read('runbook');
+      expect(doc?.descriptionFreshness).toEqual({ kind: 'fresh' });
+      // fresh は drift を持たないので、bytes 自体の一致を別途確かめる
+      // （`.index.json` の describedBytes と `read()` の bytes が同じ
+      // 測り方であることの直接証拠）。
+      expect(doc?.bytes).toBe(written.bytes);
+    });
+
+    it('append の後、describedAt/describedBytes は据え置きで、deltaBytes は追記したバイト数と一致する', async () => {
+      const before = await stores.persona.write(
+        'runbook',
+        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n本文\n',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const appended = '追記した1行\n';
+      await stores.persona.append('runbook', appended);
+
+      const doc = await stores.persona.read('runbook');
+      expect(doc?.descriptionFreshness.kind).toBe('stale');
+      if (doc?.descriptionFreshness.kind === 'stale') {
+        expect(doc.descriptionFreshness.drift).toEqual({
+          kind: 'measured',
+          describedBytes: before.bytes,
+          currentBytes: doc.bytes,
+          deltaBytes: doc.bytes - before.bytes,
+        });
+        // 追記したぶんだけ増えている（`ensureTrailingNewline` が足す改行を
+        // 別に数えないよう、範囲での比較にする——1〜数バイトの余地を持たせる）。
+        expect(doc.descriptionFreshness.drift.kind === 'measured').toBe(true);
+        if (doc.descriptionFreshness.drift.kind === 'measured') {
+          expect(doc.descriptionFreshness.drift.deltaBytes).toBeGreaterThanOrEqual(
+            Buffer.byteLength(appended, 'utf8'),
+          );
+        }
+      }
+    });
+
+    /**
+     * この仕組みより前に書かれた記憶（`describedAt` はあるが `describedBytes`
+     * が無い行）は `unrecorded` になる——`0`（変化なし）に化けさせない
+     * （#821 条件1と同じ形）。`.index.json` を直接書き換えて、その状態を
+     * 再現する。
+     */
+    it('describedAt を持つが describedBytes を持たない既存の行は unrecorded になり、deltaBytes: 0 にならない', async () => {
+      await stores.persona.write(
+        'runbook',
+        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版1\n',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await stores.persona.write(
+        'runbook',
+        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版2（本文だけ変えた）\n',
+      );
+
+      // ここまでで stale + measured のはず。次に `.index.json` を直接
+      // 書き換えて「describedBytes を持たない古い行」を再現する。
+      const indexPath = join(stores.paths.memory, '.index.json');
+      const index = JSON.parse(await readFile(indexPath, 'utf8')) as Record<
+        string,
+        { describedBytes?: number }
+      >;
+      expect(index.runbook?.describedBytes).toBeGreaterThan(0);
+      delete index.runbook?.describedBytes;
+      await writeFile(indexPath, JSON.stringify(index), 'utf8');
+
+      const doc = await stores.persona.read('runbook');
+      expect(doc?.descriptionFreshness.kind).toBe('stale');
+      if (doc?.descriptionFreshness.kind === 'stale') {
+        expect(doc.descriptionFreshness.drift).toEqual({ kind: 'unrecorded' });
+      }
+    });
+  });
 });
 
 describe('FsJournalStore', () => {

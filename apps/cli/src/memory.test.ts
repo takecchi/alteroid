@@ -200,7 +200,11 @@ describe('alteroid memory list / show', () => {
             title: '定点観測',
             kind: 'fact',
             description: '費用の推移',
-            descriptionFreshness: { kind: 'stale', staleForMs: 60 * 60 * 1000 },
+            descriptionFreshness: {
+              kind: 'stale',
+              staleForMs: 60 * 60 * 1000,
+              drift: { kind: 'measured', describedBytes: 500, currentBytes: 700, deltaBytes: 200 },
+            },
             createdAt: { kind: 'known', at: '2026-08-10T00:00:00.000Z' },
             updatedAt: '2026-08-15T00:00:00.000Z',
           },
@@ -213,7 +217,10 @@ describe('alteroid memory list / show', () => {
     const text = read();
     expect(text).toContain('[fact] runbook');
     // #821 — 「⚠」ではなく、どれだけ古いかを数で言う（語ではなく数で測る）。
-    expect(text).toContain('要旨は本文より1時間古い: 費用の推移');
+    // #913 — 期間に加えて、本文の変化量も数で言う（期間フレーズは置き換えない）。
+    expect(text).toContain(
+      '要旨は本文より1時間古い（本文は+200バイト（+40%）変わった）: 費用の推移',
+    );
   });
 
   it('無い記憶を読もうとしたら、そう言う（空の本文と区別する）', async () => {
@@ -274,8 +281,16 @@ describe('alteroid memory list / show', () => {
  */
 describe('freshnessMarker（CLI 側の印。core と別実装だが同じ理由で直す、#821）', () => {
   it('stale の印は差の大きさで文字列が変わる（1時間差と30日差）', () => {
-    const oneHour = freshnessMarker({ kind: 'stale', staleForMs: 60 * 60 * 1000 });
-    const thirtyDays = freshnessMarker({ kind: 'stale', staleForMs: 30 * 24 * 60 * 60 * 1000 });
+    const oneHour = freshnessMarker({
+      kind: 'stale',
+      staleForMs: 60 * 60 * 1000,
+      drift: { kind: 'unrecorded' },
+    });
+    const thirtyDays = freshnessMarker({
+      kind: 'stale',
+      staleForMs: 30 * 24 * 60 * 60 * 1000,
+      drift: { kind: 'unrecorded' },
+    });
 
     expect(oneHour).toContain('1時間');
     expect(thirtyDays).toContain('30日');

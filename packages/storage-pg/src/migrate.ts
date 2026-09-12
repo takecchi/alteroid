@@ -488,6 +488,16 @@ export const STATEMENTS = [
   `alter table archive add column if not exists body_chars integer`,
   `alter table archive add column if not exists body_md5 text`,
   `alter table archive add column if not exists continuity text`,
+
+  // --- 要旨の変化量（#913）--------------------------------------------------
+  // `described_at`（#170、上の「記憶の目次化」の節）の隣に本来置きたい列だが、
+  // 間に他のテーブルの列が何本も積まれているので、過去の文の並びは動かさず
+  // この末尾へ足す。**既存行にとって null は「この仕組みより前の記憶」を表し、
+  // `resolveMemoryDescriptionFreshness` はこれを `unrecorded`（`0` ではない）
+  // として扱う。安全な既定である——値を作らない。索引は足さない**（`drop index`
+  // と対でない `alter table ... add column` は、この配列が2周目に通っても
+  // 「古い鍵を作りに行く」形の罠（このファイル冒頭の doc）には当たらない）。
+  `alter table memory add column if not exists described_bytes integer`,
 ] as const;
 
 export async function migrate(db: Db): Promise<void> {

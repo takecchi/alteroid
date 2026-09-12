@@ -740,6 +740,85 @@ describe('PgPersonaStore', () => {
       }
     });
   });
+
+  /**
+   * #913: `describedBytes`（要旨を立てた時点の本文サイズ）の往復。fs 版と
+   * 同じ契約を pg（PGlite）に対しても確かめる。
+   */
+  describe('describedBytes（本文の変化量の派生値、#913）', () => {
+    it('要旨を書いた直後は drift の deltaBytes が厳密に0（describedBytes と bytes の測り方が揃っている）', async () => {
+      const written = await stores.persona.write(
+        'runbook',
+        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n本文\n',
+      );
+
+      const doc = await stores.persona.read('runbook');
+      expect(doc?.descriptionFreshness).toEqual({ kind: 'fresh' });
+      // fresh は drift を持たないので、bytes 自体の一致を別途確かめる
+      // （`described_bytes` 列と `toDocument` の bytes が同じ測り方である
+      // ことの直接証拠）。
+      expect(doc?.bytes).toBe(written.bytes);
+    });
+
+    it('append の後、describedAt/describedBytes は据え置きで、deltaBytes は追記したバイト数と一致する', async () => {
+      const before = await stores.persona.write(
+        'runbook',
+        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n本文\n',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const appended = '追記した1行';
+      await stores.persona.append('runbook', appended);
+
+      const doc = await stores.persona.read('runbook');
+      expect(doc?.descriptionFreshness.kind).toBe('stale');
+      if (doc?.descriptionFreshness.kind === 'stale') {
+        expect(doc.descriptionFreshness.drift).toEqual({
+          kind: 'measured',
+          describedBytes: before.bytes,
+          currentBytes: doc.bytes,
+          deltaBytes: doc.bytes - before.bytes,
+        });
+        if (doc.descriptionFreshness.drift.kind === 'measured') {
+          expect(doc.descriptionFreshness.drift.deltaBytes).toBeGreaterThanOrEqual(
+            Buffer.byteLength(appended, 'utf8'),
+          );
+        }
+      }
+    });
+
+    /**
+     * この仕組みより前に書かれた記憶（`described_at` はあるが
+     * `described_bytes` が NULL の行）は `unrecorded` になる——`0`
+     * （変化なし）に化けさせない（#821 条件1と同じ形）。列を直接 NULL に
+     * 戻し、その状態を再現する（`created_at` を null に戻す既存の歯と
+     * 同じ手法）。
+     */
+    it('described_at はあるが described_bytes が無い既存の行は unrecorded になり、deltaBytes: 0 にならない', async () => {
+      await stores.persona.write(
+        'runbook',
+        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版1\n',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      await stores.persona.write(
+        'runbook',
+        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版2（本文だけ変えた）\n',
+      );
+
+      const before = await stores.persona.read('runbook');
+      expect(before?.descriptionFreshness.kind).toBe('stale');
+      if (before?.descriptionFreshness.kind === 'stale') {
+        expect(before.descriptionFreshness.drift.kind).toBe('measured');
+      }
+
+      await db.execute(sql`update memory set described_bytes = null where slug = 'runbook'`);
+
+      const doc = await stores.persona.read('runbook');
+      expect(doc?.descriptionFreshness.kind).toBe('stale');
+      if (doc?.descriptionFreshness.kind === 'stale') {
+        expect(doc.descriptionFreshness.drift).toEqual({ kind: 'unrecorded' });
+      }
+    });
+  });
 });
 
 describe('PgJournalStore', () => {
