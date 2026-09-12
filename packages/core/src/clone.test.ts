@@ -13623,7 +13623,14 @@ describe('クローン — PreCompact の退避は diverged/unknown だけを日
 
   async function continuityRows(stores: Stores): Promise<{ text: string }[]> {
     const entries = (await stores.journal.list({ types: ['exchange'] })) as { text: string }[];
-    return entries.filter((entry) => entry.text.includes('[PreCompact の退避]'));
+    // **呼び手の名前と `continuity=` の2つで絞る。囲みの飾り（`[…]`）では絞らない。**
+    // 飾りで絞っていたときは、飾りを変えるだけの変異でこの歯が赤くなった（＝当てすぎ。
+    // #698 の変異試験 m5 で実測）。絞りが担っているのは2つ——同じ呼び手の**失敗**の記録
+    // （`PreCompact の退避に失敗した`）を拾わないことと、他の2つの呼び手と混ざらないこと。
+    // **どちらも飾りには依存しない。**
+    return entries.filter(
+      (entry) => entry.text.includes('PreCompact の退避') && entry.text.includes('continuity='),
+    );
   }
 
   it('first/continues は記録されない。diverged だけが記録される', async () => {
@@ -13770,9 +13777,12 @@ describe('クローン — 文脈窓で畳む前の退避は diverged/unknown �
       await successThenFold(s, dir, 'AAAABBBB'); // continues
       await successThenFold(s, dir, 'ZZZZZZZZZZZZ'); // diverged
 
-      const rows = (
-        (await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[]
-      ).filter((entry) => entry.text.includes('[文脈窓で畳む前の退避]'));
+      const rows = ((await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[])
+        // 囲みの飾りでは絞らない（理由は `#onPreCompact` 側の `continuityRows` の注釈）。
+        .filter(
+          (entry) =>
+            entry.text.includes('文脈窓で畳む前の退避') && entry.text.includes('continuity='),
+        );
       expect(rows.some((row) => row.text.includes('continuity=continues'))).toBe(false);
       expect(rows.some((row) => row.text.includes('continuity=first'))).toBe(false);
       expect(rows.some((row) => row.text.includes('continuity=diverged'))).toBe(true);

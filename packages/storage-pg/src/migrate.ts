@@ -479,9 +479,10 @@ export const STATEMENTS = [
      updated_at timestamptz not null default now()
    )`,
 
-  // --- archive の tombstone（#698） ---------------------------------------
-  // 上の tombstone 列（removed_at / removed_bytes）と同じ tombstone 節に
-  // 続けて追記する。**本文の指紋と連続性判定の3列——すべて nullable。**
+  // --- archive の本文の指紋と連続性判定（#698） ----------------------------
+  // **tombstone（removed_at / removed_bytes）とは別の目的の列である。**
+  // 積む瞬間に「同じ session_id の直前の退避と前方一致するか」を判定して残す
+  // （`archive-continuity.ts` の `classifyArchiveContinuity`）。**すべて nullable。**
   // この機能より前に積まれた行はどれも持たない（`classifyArchiveContinuity`
   // が欠落を `'unknown'` へ落とすので、埋め直す必要はない）。
   `alter table archive add column if not exists body_chars integer`,

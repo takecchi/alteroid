@@ -9066,7 +9066,9 @@ describe('マネージャー — case archive は diverged/unknown だけを日�
       expect(rows.some((row) => row.text.includes('AAAA'))).toBe(false);
       expect(rows.some((row) => row.text.includes('ZZZZZZZZZZZZ'))).toBe(false);
       // **呼び手を名乗る**（`describeArchiveContinuityForJournal` の doc）。
-      expect(rows.some((row) => row.text.includes('[マネージャーの生ログの退避]'))).toBe(true);
+      // 囲みの飾り（`[…]`）ではなく呼び手の名前そのものを見る——飾りを変えるだけの
+      // 変異でここが赤くなるのは当てすぎである（測りたいのは「呼び手を名乗ること」）。
+      expect(rows.some((row) => row.text.includes('マネージャーの生ログの退避'))).toBe(true);
     } finally {
       // **先に stop() する。** stop() 自身も `#shipArchive()` を経由しうるので、
       // ディレクトリを先に消すと「読み出せない」の跡が stderr へ残る
