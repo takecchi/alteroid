@@ -24,6 +24,7 @@ import {
   buildCloneSessionOptions,
   foldClaudeMessage,
 } from './claude-provider.js';
+import { describeArchiveContinuityForJournal } from './archive-continuity.js';
 import { denialInputAbsence, denialInputShape, type DeniedRecord } from './denial-shape.js';
 import {
   buildActivityDigest,
@@ -4126,7 +4127,21 @@ class Clone implements CloneHost {
     let archiveId: string | null = null;
     try {
       const transcript = await readFile(path, 'utf8');
-      archiveId = await this.#stores.archive.archive(this.#sdkSessionId ?? 'clone', transcript);
+      const write = await this.#stores.archive.archive(this.#sdkSessionId ?? 'clone', transcript);
+      archiveId = write.id;
+      // **diverged / unknown のときだけ日誌へ記録する**（#698。理由は
+      // `describeArchiveContinuityForJournal` の doc）。`#journal` は自分で
+      // 失敗を握り潰すので、退避の成功を道連れにしない。
+      const continuityText = describeArchiveContinuityForJournal({
+        caller: '文脈窓で畳む前の退避',
+        sessionId: this.#sdkSessionId ?? 'clone',
+        continuity: write.continuity,
+        comparedTo: write.comparedTo,
+        bodyChars: transcript.length,
+      });
+      if (continuityText !== null) {
+        await this.#journal({ type: 'exchange', with: 'self', role: 'outbound', text: continuityText });
+      }
     } catch (error) {
       // (i) が落ちた。**「残っているはず」と読まれないように必ず残す。**
       await this.#journal({
@@ -6073,7 +6088,21 @@ class Clone implements CloneHost {
       // 退避するのは全文（ロードマップの要件）。**全文を 1 本の文字列にするのは
       // ここだけである**（`readTranscriptTail` の doc）。
       const transcript = await readFile(transcriptPath, 'utf8');
-      await this.#stores.archive.archive(sessionId ?? 'clone', transcript);
+      const write = await this.#stores.archive.archive(sessionId ?? 'clone', transcript);
+      // **diverged / unknown のときだけ日誌へ記録する**（#698。`continues` は
+      // ノイズにしかならない——理由は `describeArchiveContinuityForJournal`
+      // の doc）。`#journal` は自分で失敗を握り潰すので、退避の成功を道連れに
+      // しない。
+      const continuityText = describeArchiveContinuityForJournal({
+        caller: 'PreCompact の退避',
+        sessionId: sessionId ?? 'clone',
+        continuity: write.continuity,
+        comparedTo: write.comparedTo,
+        bodyChars: transcript.length,
+      });
+      if (continuityText !== null) {
+        await this.#journal({ type: 'exchange', with: 'self', role: 'outbound', text: continuityText });
+      }
     } catch (error) {
       // これはクローンの判断ではなくシステムの失敗なので、判断として記録しない
       await this.#journal({

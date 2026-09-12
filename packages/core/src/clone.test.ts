@@ -6828,10 +6828,12 @@ describe('クローン — 起動時に墓標を拾い直す（#564 E1b）', () 
 
   it('墓標が在れば拾って蒸留し、印を下ろす', async () => {
     const stores = createMemoryStores();
-    const archiveId = await stores.archive.archive(
-      'sess-old',
-      'GRAVE-TRANSCRIPT-MARKER-3c9d 前の器が記憶へ移せなかった区間の生ログ',
-    );
+    const archiveId = (
+      await stores.archive.archive(
+        'sess-old',
+        'GRAVE-TRANSCRIPT-MARKER-3c9d 前の器が記憶へ移せなかった区間の生ログ',
+      )
+    ).id;
     await stores.sessions.setTranscriptGrave({ archiveId });
 
     const s = setup(undefined, stores);
@@ -6891,7 +6893,7 @@ describe('クローン — 起動時に墓標を拾い直す（#564 E1b）', () 
    */
   it('退避の本文が消されている（tombstone）ときは、missing とは別の文言で印を下ろす', async () => {
     const stores = createMemoryStores();
-    const archiveId = await stores.archive.archive('sess-removed', '畳めなかった生ログ\n');
+    const archiveId = (await stores.archive.archive('sess-removed', '畳めなかった生ログ\n')).id;
     await stores.archive.remove(archiveId);
     await stores.sessions.setTranscriptGrave({ archiveId });
 

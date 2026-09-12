@@ -2510,7 +2510,7 @@ describe('FsInboxStore', () => {
 
 describe('FsTranscriptArchive', () => {
   it('退避して読み戻せる', async () => {
-    const id = await stores.archive.archive('session-1', '{"a":1}\n');
+    const id = (await stores.archive.archive('session-1', '{"a":1}\n')).id;
 
     expect((await stores.archive.list()).map((entry) => entry.id)).toContain(id);
     expect(await stores.archive.read(id)).toEqual({ kind: 'body', body: '{"a":1}\n' });
@@ -2526,11 +2526,28 @@ describe('FsTranscriptArchive', () => {
 
   /** 契約（#698）を3実装ぶんの1つとして測る。他は testing.ts / storage-pg。 */
   it('TranscriptArchive の契約を満たす', async () => {
-    await verifyTranscriptArchiveContract(stores.archive);
+    await verifyTranscriptArchiveContract(stores.archive, {
+      // 検査19のためだけの裏口（#698）。`.jsonl` と、指紋フィールド
+      // （`bodyChars` / `bodyMd5` / `continuity`）を持たない `.meta.json` を
+      // 直接書き、この機能より前に積まれた行を再現する。
+      seedFingerprintlessRow: async (sessionId, body) => {
+        const dir = join(root, 'archive');
+        await mkdir(dir, { recursive: true });
+        const at = new Date();
+        const id = `${sessionId}-fingerprintless-${at.toISOString().replace(/[:.]/g, '-')}.jsonl`;
+        await writeFile(join(dir, id), body, 'utf8');
+        await writeFile(
+          join(dir, `${id}.meta.json`),
+          JSON.stringify({ sessionId, at: at.toISOString() }),
+          'utf8',
+        );
+        return id;
+      },
+    });
   });
 
   it('remove() は本体の .jsonl を消さない（空へ切り詰め、脇に印を置く）', async () => {
-    const id = await stores.archive.archive('session-remove', 'BODY\n');
+    const id = (await stores.archive.archive('session-remove', 'BODY\n')).id;
 
     const removed = await stores.archive.remove(id);
     expect(removed).toEqual({ kind: 'removed', bytes: Buffer.byteLength('BODY\n', 'utf8') });
@@ -2555,8 +2572,8 @@ describe('FsTranscriptArchive', () => {
   });
 
   it('id A を消しても id B は読める（巻き添えが無い）', async () => {
-    const idA = await stores.archive.archive('session-a', 'A\n');
-    const idB = await stores.archive.archive('session-b', 'B\n');
+    const idA = (await stores.archive.archive('session-a', 'A\n')).id;
+    const idB = (await stores.archive.archive('session-b', 'B\n')).id;
 
     await stores.archive.remove(idA);
 
@@ -2571,7 +2588,7 @@ describe('FsTranscriptArchive', () => {
    * `read()` は `body`（空文字）を返す。
    */
   it('空の生ログを退避しただけの行は removed にならない（本体が空文字であることを判定に使わない）', async () => {
-    const id = await stores.archive.archive('session-empty', '');
+    const id = (await stores.archive.archive('session-empty', '')).id;
 
     await expect(
       stat(join(root, 'archive', `${id}.removed`)).then(
@@ -2583,7 +2600,7 @@ describe('FsTranscriptArchive', () => {
   });
 
   it('二重の remove() は冪等（removed → already。バイト数・removedAt は変わらない）', async () => {
-    const id = await stores.archive.archive('session-twice', 'TWICE\n');
+    const id = (await stores.archive.archive('session-twice', 'TWICE\n')).id;
 
     const first = await stores.archive.remove(id);
     expect(first).toEqual({ kind: 'removed', bytes: Buffer.byteLength('TWICE\n', 'utf8') });
@@ -2606,7 +2623,7 @@ describe('FsTranscriptArchive', () => {
    * と一致することを直接測る（契約テストは実装をまたいだ整合性しか見ない）。
    */
   it('list()のstoredBytesは実ファイルのstat().sizeと一致する（fs固有）', async () => {
-    const id = await stores.archive.archive('session-stat', 'HELLO WORLD\n');
+    const id = (await stores.archive.archive('session-stat', 'HELLO WORLD\n')).id;
 
     const entry = (await stores.archive.list()).find((e) => e.id === id);
     expect(entry).toBeDefined();
@@ -2624,7 +2641,7 @@ describe('FsTranscriptArchive', () => {
    * `list()` が例外を投げず、ファイル名から best-effort で復元すること。
    */
   it('meta.jsonが無い(拡張前に作られた)アーカイブでもlist()は落ちない', async () => {
-    const id = await stores.archive.archive('session-legacy', 'LEGACY\n');
+    const id = (await stores.archive.archive('session-legacy', 'LEGACY\n')).id;
     // この実装が書いた meta サイドカーを消し、無かった状態を再現する。
     await rm(join(root, 'archive', `${id}.meta.json`));
 

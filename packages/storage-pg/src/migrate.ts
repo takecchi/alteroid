@@ -478,6 +478,15 @@ export const STATEMENTS = [
      value text not null,
      updated_at timestamptz not null default now()
    )`,
+
+  // --- archive の tombstone（#698） ---------------------------------------
+  // 上の tombstone 列（removed_at / removed_bytes）と同じ tombstone 節に
+  // 続けて追記する。**本文の指紋と連続性判定の3列——すべて nullable。**
+  // この機能より前に積まれた行はどれも持たない（`classifyArchiveContinuity`
+  // が欠落を `'unknown'` へ落とすので、埋め直す必要はない）。
+  `alter table archive add column if not exists body_chars integer`,
+  `alter table archive add column if not exists body_md5 text`,
+  `alter table archive add column if not exists continuity text`,
 ] as const;
 
 export async function migrate(db: Db): Promise<void> {

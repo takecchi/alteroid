@@ -227,6 +227,15 @@ export const inboxEvents = pgTable(
  * 入れる。列の削除・型変更・RENAME は一切しない）。判定は `removedAt` が
  * `null` かどうかだけで行う——`body` が空文字であることを「消された」の根拠に
  * 使わない（空の生ログは正当にありえる）。
+ *
+ * `bodyChars` / `bodyMd5` / `continuity`（#698「畳んでよいかを積む瞬間に判定
+ * する門」）は本文の指紋と、直前の退避との連続性判定。**すべて nullable**——
+ * この機能より前に積まれた行にはどれも無い（`classifyArchiveContinuity` が
+ * `bodyChars` / `bodyMd5` の欠落を `'unknown'` へ落とす）。`PgTranscriptArchive`
+ * の `archive()` は `body`（`stripNulls` 後の値）に対して指紋を取る——fs /
+ * インメモリは `stripNulls` を行わないので、NUL を含む本文では3実装の判定が
+ * 揃わない可能性がある（`archive-continuity.ts` の doc 参照。`stripNulls` は
+ * pg だけが持つ必須の変換で、指紋はストアに実際に入る値を表すべきだから）。
  */
 export const archive = pgTable('archive', {
   id: text('id').primaryKey(),
@@ -237,6 +246,12 @@ export const archive = pgTable('archive', {
   removedAt: timestamp('removed_at', { withTimezone: true, mode: 'date' }),
   /** 落とす直前のバイト数（`octet_length(body)`）。 */
   removedBytes: integer('removed_bytes'),
+  /** 本文の長さ（UTF-16 コード単位。`ArchiveBodyFingerprint.bodyChars` の doc）。 */
+  bodyChars: integer('body_chars'),
+  /** 本文の md5（照合専用）。 */
+  bodyMd5: text('body_md5'),
+  /** 直前の退避との連続性判定（`ArchiveContinuity`）。 */
+  continuity: text('continuity'),
 });
 
 /** デーモンの内部状態（クローンの session id など）。消えても記憶から戻る。 */

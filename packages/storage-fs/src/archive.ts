@@ -1,12 +1,16 @@
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import type {
-  ArchiveEntry,
-  ArchiveRead,
-  ArchiveRemoval,
-  ArchiveSessionSummary,
-  TranscriptArchive,
+import {
+  classifyArchiveContinuity,
+  fingerprintArchiveBody,
+  type ArchiveContinuity,
+  type ArchiveEntry,
+  type ArchiveRead,
+  type ArchiveRemoval,
+  type ArchiveSessionSummary,
+  type ArchiveWrite,
+  type TranscriptArchive,
 } from '@alteroid/core';
 
 /** `${sanitize(sessionId)}-${stamp}.jsonl` の `stamp` 部分（`at.toISOString()` の `:` `.` を `-` に潰した形）。 */
@@ -41,8 +45,17 @@ export class FsTranscriptArchive implements TranscriptArchive {
     this.#dir = dir;
   }
 
-  async archive(sessionId: string, transcript: string): Promise<string> {
+  /**
+   * **判定のために本体の `.jsonl` を読まない（#698）。** 直前の退避は
+   * `#findPreviousArchiveForSession` が `.meta.json` サイドカーだけを見て
+   * 探し、その `bodyChars` / `bodyMd5` と新しい本文の指紋を突き合わせる
+   * だけで `classifyArchiveContinuity` が判定を終える。
+   */
+  async archive(sessionId: string, transcript: string): Promise<ArchiveWrite> {
     await mkdir(this.#dir, { recursive: true });
+    const previous = await this.#findPreviousArchiveForSession(sessionId);
+    const fingerprint = fingerprintArchiveBody(transcript);
+    const { continuity, comparedTo } = classifyArchiveContinuity(previous, transcript);
     const at = new Date();
     const stamp = at.toISOString().replace(/[:.]/g, '-');
     const name = `${sanitize(sessionId)}-${stamp}.jsonl`;
@@ -52,8 +65,43 @@ export class FsTranscriptArchive implements TranscriptArchive {
     // 競合が無い）。実測上の心配は要らないが、本体が読めればこの id は
     // 実在するので、meta を本体の後に書いても `list()` が拾えない窓は
     // `#fallbackMeta` が埋める。
-    await this.#writeMeta(name, { sessionId, at: at.toISOString() });
-    return name;
+    await this.#writeMeta(name, {
+      sessionId,
+      at: at.toISOString(),
+      bodyChars: fingerprint.bodyChars,
+      bodyMd5: fingerprint.bodyMd5,
+      continuity,
+    });
+    return { id: name, continuity, ...(comparedTo === undefined ? {} : { comparedTo }) };
+  }
+
+  /**
+   * 「直前の退避」＝同じ `sessionId` の行のうち `at` が最大（同値なら `id`
+   * が最大）のもの（#698）。**`removedAt`（印ファイルの有無）で絞らない**
+   * ——tombstone された行の指紋も、`remove()` が起きた時点までは当時の本文を
+   * 正しく表していた有効な情報である。`remove()` は本文を空へ切り詰める
+   * だけで、サイドカーの `bodyChars` / `bodyMd5` は書き換えない（`remove()`
+   * の実装を見よ）ので、消された行を除外する理由が無い。
+   *
+   * **`.jsonl` 本体には一切触れない**——`.meta.json` サイドカー（無ければ
+   * `fallbackMeta` の best-effort 復元）だけを読む。サイドカーが無い、
+   * または `bodyChars` / `bodyMd5` を持たない行は `bodyChars` / `bodyMd5`
+   * が `undefined` のまま返り、`classifyArchiveContinuity` がそれを
+   * `'unknown'` へ落とす。
+   */
+  async #findPreviousArchiveForSession(
+    sessionId: string,
+  ): Promise<{ id: string; bodyChars?: number; bodyMd5?: string } | null> {
+    const ids = await this.#listIds();
+    let best: { id: string; at: string; bodyChars?: number; bodyMd5?: string } | null = null;
+    for (const id of ids) {
+      const meta = (await this.#readMeta(id)) ?? fallbackMeta(id);
+      if (meta.sessionId !== sessionId) continue;
+      if (best === null || meta.at > best.at || (meta.at === best.at && id > best.id)) {
+        best = { id, at: meta.at, bodyChars: meta.bodyChars, bodyMd5: meta.bodyMd5 };
+      }
+    }
+    return best === null ? null : { id: best.id, bodyChars: best.bodyChars, bodyMd5: best.bodyMd5 };
   }
 
   /**
@@ -186,6 +234,7 @@ export class FsTranscriptArchive implements TranscriptArchive {
       at: resolvedMeta.at,
       storedBytes,
       ...(marker === null ? {} : { removedAt: marker.removedAt, removedBytes: marker.bytes }),
+      ...(resolvedMeta.continuity === undefined ? {} : { continuity: resolvedMeta.continuity }),
     };
   }
 
@@ -216,19 +265,33 @@ export class FsTranscriptArchive implements TranscriptArchive {
     return join(this.#dir, `${id}.meta.json`);
   }
 
-  async #writeMeta(id: string, meta: { sessionId: string; at: string }): Promise<void> {
+  async #writeMeta(id: string, meta: ArchiveMeta): Promise<void> {
     await writeFile(this.#metaPath(id), JSON.stringify(meta), 'utf8');
   }
 
-  async #readMeta(id: string): Promise<{ sessionId: string; at: string } | null> {
+  /**
+   * `bodyChars` / `bodyMd5` / `continuity` を持たないサイドカー（この機能
+   * より前に積まれた行）でも例外を投げない——欠けたフィールドは `undefined`
+   * のまま返り、`classifyArchiveContinuity` が `'unknown'` へ落とす（#698）。
+   */
+  async #readMeta(id: string): Promise<ArchiveMeta | null> {
     try {
       const raw = await readFile(this.#metaPath(id), 'utf8');
-      return JSON.parse(raw) as { sessionId: string; at: string };
+      return JSON.parse(raw) as ArchiveMeta;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw error;
     }
   }
+}
+
+/** `.meta.json` サイドカーの中身（#698。`bodyChars`/`bodyMd5`/`continuity` は optional）。 */
+interface ArchiveMeta {
+  readonly sessionId: string;
+  readonly at: string;
+  readonly bodyChars?: number;
+  readonly bodyMd5?: string;
+  readonly continuity?: ArchiveContinuity;
 }
 
 /**
@@ -241,7 +304,7 @@ export class FsTranscriptArchive implements TranscriptArchive {
  * ファイル名全体を `sessionId`、`epoch` を `at` として返す——`list()` /
  * `sessions()` を例外で落とさないことを優先する。
  */
-function fallbackMeta(id: string): { sessionId: string; at: string } {
+function fallbackMeta(id: string): ArchiveMeta {
   const match = STAMP_SUFFIX_RE.exec(id);
   const suffix = match?.[0];
   const stamp = match?.[1];

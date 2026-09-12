@@ -1,9 +1,13 @@
-import type {
-  ArchiveEntry,
-  ArchiveRead,
-  ArchiveRemoval,
-  ArchiveSessionSummary,
-  TranscriptArchive,
+import {
+  classifyArchiveContinuity,
+  fingerprintArchiveBody,
+  type ArchiveContinuity,
+  type ArchiveEntry,
+  type ArchiveRead,
+  type ArchiveRemoval,
+  type ArchiveSessionSummary,
+  type ArchiveWrite,
+  type TranscriptArchive,
 } from '@alteroid/core';
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 
@@ -25,16 +29,62 @@ export class PgTranscriptArchive implements TranscriptArchive {
     this.#db = db;
   }
 
-  async archive(sessionId: string, transcript: string): Promise<string> {
+  /**
+   * **指紋は `stripNulls` 後の値に対して取る**（#698）。`body` はストアに
+   * 実際に入る値——`stripNulls` される前の `transcript` で指紋を取ると、
+   * NUL を含む本文で「積んだ値」と「指紋が指す値」がずれる。
+   *
+   * ⚠️ **これは fs / インメモリ実装との非対称である。** あの2つは
+   * `stripNulls` を行わないので、NUL を含む本文では3実装の連続性判定が
+   * 揃わない可能性がある（`db.ts` の `stripNulls` は pg 固有の制約——
+   * PostgreSQL の `text` / `jsonb` が NUL を受け付けないための変換であって、
+   * fs / インメモリにはその制約が無い）。
+   *
+   * **直前の行を引くとき `body` 列に触れない**（`select` に含めない）。
+   * 100MB 級の行がある `archive` で、判定のためだけに本文を読み直すと
+   * Issue #698 の動機そのものを壊す（`list()` の doc と同じ理由）。
+   *
+   * **「直前を引く → 判定する → insert する」を1トランザクションに閉じる。**
+   * 割ると、同じ `sessionId` への並行 `archive()` が同じ「直前」を見て
+   * 同じ判定を出す競合が起きる（`PgUsageStore.record` と同じ理由）。
+   */
+  async archive(sessionId: string, transcript: string): Promise<ArchiveWrite> {
     const body = stripNulls(transcript);
     const at = new Date();
     const stamp = at.toISOString().replace(/[:.]/g, '-');
     const id = `${sanitize(sessionId)}-${stamp}.jsonl`;
-    await this.#db
-      .insert(archive)
-      .values({ id, sessionId, at, body })
-      .onConflictDoUpdate({ target: archive.id, set: { body } });
-    return id;
+    const fingerprint = fingerprintArchiveBody(body);
+    return this.#db.transaction(async (tx) => {
+      const previousRows = await tx
+        .select({ id: archive.id, bodyChars: archive.bodyChars, bodyMd5: archive.bodyMd5 })
+        .from(archive)
+        .where(eq(archive.sessionId, sessionId))
+        .orderBy(desc(archive.at), desc(archive.id))
+        .limit(1);
+      const previous = previousRows[0] ?? null;
+      const { continuity, comparedTo } = classifyArchiveContinuity(previous, body);
+      await tx
+        .insert(archive)
+        .values({
+          id,
+          sessionId,
+          at,
+          body,
+          bodyChars: fingerprint.bodyChars,
+          bodyMd5: fingerprint.bodyMd5,
+          continuity,
+        })
+        .onConflictDoUpdate({
+          target: archive.id,
+          set: {
+            body,
+            bodyChars: fingerprint.bodyChars,
+            bodyMd5: fingerprint.bodyMd5,
+            continuity,
+          },
+        });
+      return { id, continuity, ...(comparedTo === undefined ? {} : { comparedTo }) };
+    });
   }
 
   /**
@@ -57,6 +107,7 @@ export class PgTranscriptArchive implements TranscriptArchive {
         storedBytes: sql<number>`pg_column_size(${archive.body})`,
         removedAt: archive.removedAt,
         removedBytes: archive.removedBytes,
+        continuity: archive.continuity,
       })
       .from(archive)
       .orderBy(desc(archive.at), desc(archive.id));
@@ -65,6 +116,7 @@ export class PgTranscriptArchive implements TranscriptArchive {
       sessionId: row.sessionId,
       at: toIso(row.at),
       storedBytes: row.storedBytes,
+      ...(row.continuity === null ? {} : { continuity: row.continuity as ArchiveContinuity }),
       ...(row.removedAt === null
         ? {}
         : { removedAt: toIso(row.removedAt), removedBytes: row.removedBytes ?? 0 }),

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { verifyTranscriptArchiveContract } from './archive-contract.js';
-import { createMemoryStores } from './testing.js';
+import { createMemoryStores, seedFingerprintlessArchiveRow } from './testing.js';
 
 /**
  * `TranscriptArchive` の契約（#698）を、**インメモリ実装**（`testing.ts`）に
@@ -18,7 +18,12 @@ describe('TranscriptArchive の契約（インメモリ実装）', () => {
   it('remove() は行を消さない／read()は3つの顔／巻き添え無し／存在しないidは黙って成功しない／空の本文はremovedにならない／二重removeは冪等', async () => {
     const stores = createMemoryStores();
 
-    await expect(verifyTranscriptArchiveContract(stores.archive)).resolves.toBeUndefined();
+    await expect(
+      verifyTranscriptArchiveContract(stores.archive, {
+        seedFingerprintlessRow: (sessionId, body) =>
+          seedFingerprintlessArchiveRow(stores.archive, sessionId, body),
+      }),
+    ).resolves.toBeUndefined();
   });
 });
 
@@ -33,7 +38,7 @@ describe('TranscriptArchive の契約（インメモリ実装）', () => {
 describe('TranscriptArchive（インメモリ実装）固有の細部', () => {
   it('remove() の前後で list() の件数が変わらない（行を削除していない）', async () => {
     const stores = createMemoryStores();
-    const id = await stores.archive.archive('session-1', 'BODY\n');
+    const id = (await stores.archive.archive('session-1', 'BODY\n')).id;
     const before = (await stores.archive.list()).length;
 
     await stores.archive.remove(id);

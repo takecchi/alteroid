@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { describeArchiveContinuityForJournal } from './archive-continuity.js';
 import { denialInputAbsence, denialInputShape } from './denial-shape.js';
 import {
   journalEntryShape,
@@ -7082,9 +7083,28 @@ class Pool implements ManagerPool {
 
       case 'archive': {
         try {
-          const id = await this.#stores.archive.archive(event.managerId, event.body);
-          record.job.archiveIds = [...(record.job.archiveIds ?? []), id];
+          const write = await this.#stores.archive.archive(event.managerId, event.body);
+          record.job.archiveIds = [...(record.job.archiveIds ?? []), write.id];
           await this.#persist(record);
+          // **diverged / unknown のときだけ日誌へ記録する**（#698。理由は
+          // `describeArchiveContinuityForJournal` の doc）。`#journal` は
+          // 自分で失敗を握り潰すので、退避と台帳への記録の成功を道連れに
+          // しない。
+          const continuityText = describeArchiveContinuityForJournal({
+            caller: 'マネージャーの生ログの退避',
+            sessionId: event.managerId,
+            continuity: write.continuity,
+            comparedTo: write.comparedTo,
+            bodyChars: event.body.length,
+          });
+          if (continuityText !== null) {
+            await this.#journal({
+              type: 'exchange',
+              with: 'manager',
+              role: 'outbound',
+              text: continuityText,
+            });
+          }
         } catch (error) {
           // 退避できなくてもマネージャーを止めない。ただし黙って消さない —
           // 退避できなかったトランスクリプトは器と一緒に消えるので、
