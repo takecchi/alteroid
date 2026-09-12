@@ -12298,6 +12298,147 @@ describe('credentials（SDK 子プロセスへ重ねる鍵の現在値）', () =
 });
 
 /**
+ * 正本（`CredentialService`）をクローンへ通す口（人間の決定 2026-09-12、
+ * 「梯子を1本に統一する」——Issue #865 の恒久策）。
+ *
+ * **ここが固定するのは、マネージャー側（`credential-service.test.ts` の
+ * `resolveCredentialRows`）と同じ優先順位が、クローンの子プロセスへ届く
+ * env にも同じ形で現れること**である。両方が同じ関数を通るので、この節と
+ * あちらの節は同じ主張を別の観測点（子プロセスへ実際に渡る env）から測る。
+ */
+describe('credentialService（正本を同期で覗いて重ねる。#865）', () => {
+  let postSeq2 = 0;
+
+  function cloneWithVault(input: {
+    vault?: readonly { name: string; value: string; updatedAt: string }[];
+    env?: NodeJS.ProcessEnv;
+    credentials?: () => Record<string, string>;
+  }) {
+    const { fn, calls } = fakeSdk();
+    const fakeCredentialService = {
+      vaultSnapshot: () => input.vault ?? [],
+    } as unknown as Parameters<typeof createClone>[0]['credentialService'];
+    const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
+      stores: createMemoryStores(),
+      queryFn: fn,
+      env: input.env ?? {},
+      credentialService: fakeCredentialService,
+      ...(input.credentials === undefined ? {} : { credentials: input.credentials }),
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    return { clone, calls };
+  }
+
+  function say(clone: ReturnType<typeof createClone>): void {
+    clone.post({
+      type: 'human_message',
+      id: `evt-vault-${String(++postSeq2)}`,
+      at: new Date().toISOString(),
+      text: 'こんにちは',
+      conversationId: 'conv-1',
+    });
+  }
+
+  it('credentialService を渡さなければ、既定の構成の挙動を変えない', async () => {
+    const { fn, calls } = fakeSdk();
+    // **意図して `credentialService` を渡さない。** cloneWithVault は必ず渡すので
+    // ここだけ直接 createClone を呼ぶ。
+    const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
+      stores: createMemoryStores(),
+      queryFn: fn,
+      env: { GH_TOKEN: 'from-container-env' },
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    say(clone);
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    expect(calls[0]?.options.env?.GH_TOKEN).toBe('from-container-env');
+  });
+
+  it('正本にしか無い GH_TOKEN も、クローンへ届く（以前は0件だった。梯子を1本に統一した副作用）', async () => {
+    const { clone, calls } = cloneWithVault({
+      vault: [{ name: 'GH_TOKEN', value: 'from-vault', updatedAt: '2026-09-12T00:00:00.000Z' }],
+    });
+    say(clone);
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    expect(calls[0]?.options.env?.GH_TOKEN).toBe('from-vault');
+  });
+
+  it('器の env が非空なら、正本より器の env が勝つ（GitHub の名前だけ）', async () => {
+    const { clone, calls } = cloneWithVault({
+      vault: [{ name: 'GH_TOKEN', value: 'from-vault', updatedAt: '2026-09-12T00:00:00.000Z' }],
+      env: { GH_TOKEN: 'from-container-env' },
+    });
+    say(clone);
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    expect(calls[0]?.options.env?.GH_TOKEN).toBe('from-container-env');
+  });
+
+  it('🔴 器の env が空文字なら、正本が勝つ（空は「置かれていない」と同じ）', async () => {
+    const { clone, calls } = cloneWithVault({
+      vault: [{ name: 'GH_TOKEN', value: 'from-vault', updatedAt: '2026-09-12T00:00:00.000Z' }],
+      env: { GH_TOKEN: '' },
+    });
+    say(clone);
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    expect(calls[0]?.options.env?.GH_TOKEN).toBe('from-vault');
+  });
+
+  it('🔴 ROTATABLE_CREDENTIAL_KEYS に無い任意の名前は、器の env が在っても正本が勝つ', async () => {
+    const { clone, calls } = cloneWithVault({
+      vault: [{ name: 'NPM_TOKEN', value: 'from-vault', updatedAt: '2026-09-12T00:00:00.000Z' }],
+      env: { NPM_TOKEN: 'from-container-env' },
+    });
+    say(clone);
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    expect(calls[0]?.options.env?.NPM_TOKEN).toBe('from-vault');
+  });
+
+  it('🔴 CLAUDE_CODE_OAUTH_TOKEN はこの重ねの対象外——Anthropic のプールの鍵が最後まで勝つ', async () => {
+    // **正本にも同名の行が在る想定**（正規の口では作れないが、`vaultSnapshot` は
+    // 直接差し込めるので、対象外であることをここで測る）。プールの `credentials`
+    // が最後に重なるので、正本にも器の env にも引きずられずプールの値が届く。
+    const { clone, calls } = cloneWithVault({
+      vault: [
+        { name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'from-vault', updatedAt: '2026-09-12T00:00:00.000Z' },
+      ],
+      env: { CLAUDE_CODE_OAUTH_TOKEN: 'frozen-at-startup' },
+      credentials: () => ({ CLAUDE_CODE_OAUTH_TOKEN: 'rotated-now' }),
+    });
+    say(clone);
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    expect(calls[0]?.options.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe('rotated-now');
+  });
+
+  it('正本の写しがまだ何も無い（vaultSnapshot が空を返す）ときも、器の env はそのまま届く', async () => {
+    // **起動直後の窓の再現。** `vault` を渡さない ＝ `vaultSnapshot()` が `[]`。
+    const { clone, calls } = cloneWithVault({ env: { GH_TOKEN: 'from-container-env' } });
+    say(clone);
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    expect(calls[0]?.options.env?.GH_TOKEN).toBe('from-container-env');
+  });
+});
+
+/**
  * 枠の観測を回し手へ渡す口（Issue #393 PR3）。
  *
  * **ここが固定するのは「何を渡すか」である。** クローンは回すかどうかを判断しない

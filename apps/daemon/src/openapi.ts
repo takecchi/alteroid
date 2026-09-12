@@ -1128,9 +1128,10 @@ export const credentialsResponseSchema = z.object({
   credentials: z.array(
     runnerCredentialFingerprintSchema.extend({
       /**
-       * 正本のこの値が、このデーモンの器の環境変数と食い違っている（＝
-       * マネージャーとクローンが別の鍵で走っている）ときだけ `true`。
-       * 既定では付かない（Issue #865）。値そのものは載らない。
+       * GitHub の名前（`GITHUB_CREDENTIAL_NAMES`）で、正本のこの行より
+       * デーモンの器の環境変数の値が優先して配られている（＝正本のこの行は
+       * どこにも配られていない）ときだけ `true`。既定では付かない
+       * （Issue #865 の恒久策、2026-09-12）。値そのものは載らない。
        */
       shadowsCloneEnv: z.boolean().optional(),
     }),
