@@ -763,9 +763,7 @@ describe('describeInboxBacklogBreakdown', () => {
     // 「一度も配っていない」ことを言えるので、この語は嘘ではない）。
     // 消したのは軸名としての「配達回数」だけであることを、同じ被験体で固定する。
     expect(text).toContain('0回（＝未配達）');
-    expect(lineStartingWith(text, '未配達の内訳')).toBe(
-      '未配達の内訳（種類別）: human_message 1',
-    );
+    expect(lineStartingWith(text, '未配達の内訳')).toBe('未配達の内訳（種類別）: human_message 1');
   });
 });
 
