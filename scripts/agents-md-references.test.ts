@@ -353,6 +353,86 @@ export const FENCE_COVERAGE_MIN_DROPPED_LINES = 40;
 /** ⭐ いまは0件（実測。閾値を超えるファイルが1つも無い）。1件でも足すなら理由つきで。 */
 export const FENCE_COVERAGE_EXEMPTIONS: readonly FenceCoverageExemption[] = [];
 
+// ---------------------------------------------------------------------------
+// 旧実装（#796 より前）との食い違い（#786 残り）—— 「被覆の歯が
+// FENCE_COVERAGE_SELF_FILE を名指しで測っている」という前提（食い違うファイルは
+// リポジトリ全体で1本だけ）を、機械に見張らせる。
+// ---------------------------------------------------------------------------
+
+/**
+ * **PR #796 より前のフェンス判定（1行トグル）。⚠ 実装としては壊れている。**
+ *
+ * ここに残してあるのは**使うため**ではなく、**いまの実装とどこで食い違うかを機械に
+ * 数えさせるため**だけである（下の `findFenceRuleDivergences`）。⛔ この関数を
+ * `proseLines` の代わりに呼ばないこと。
+ */
+export function proseLinesLegacyToggle(markdown: string): ProseLine[] {
+  const out: ProseLine[] = [];
+  let inFence = false;
+  const lines = markdown.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const text = lines[i] ?? '';
+    if (/^\s*(?:\/\/+|\*)?\s*(```|~~~)/.test(text)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    out.push({ line: i + 1, text });
+  }
+  return out;
+}
+
+export type FenceRuleDivergence = {
+  file: string;
+  /** 現実装が検査した行数。 */
+  current: number;
+  /** 旧実装（1行トグル）が検査した行数。 */
+  legacy: number;
+};
+
+/**
+ * 現実装（`proseLinesWithFenceState`）と旧実装（`proseLinesLegacyToggle`）とで、
+ * 検査した行数（＝プローズとして数えた行数）が食い違うファイルを返す。
+ * 一致するファイルは1件も含めない——ここが返す件数がそのまま
+ * 「#786 の回帰が署名を出せる場所の数」になる。
+ */
+export function findFenceRuleDivergences(
+  entries: readonly { file: string; text: string }[],
+): FenceRuleDivergence[] {
+  const out: FenceRuleDivergence[] = [];
+  for (const { file, text } of entries) {
+    const current = proseLinesWithFenceState(text).lines.length;
+    const legacy = proseLinesLegacyToggle(text).length;
+    if (current !== legacy) {
+      out.push({ file, current, legacy });
+    }
+  }
+  return out;
+}
+
+export interface FenceRuleDivergenceFile {
+  readonly file: string;
+  /** **非空であること**（歯が測る）。 */
+  readonly why: string;
+}
+
+/**
+ * **旧実装（#796 前）と現実装で落とし行が食い違う、リポジトリ全体で唯一のファイル。**
+ * ⟹ **#786 の回帰が署名を出せる唯一の場所**であり、被覆の歯が
+ * `FENCE_COVERAGE_SELF_FILE` を名指しで測っている根拠そのものである。
+ *
+ * ⚠ **この表は「いまの repo の形に依存した事実」である。**2本目が現れたら
+ * （＝別のファイルにも #786 の形が書かれたら）**下の歯が赤くなる。**
+ * ⛔ **0件になっても赤くなる** —— 「食い違いが無くなった」と「数え方が壊れた」を
+ * 同じ顔にしないため。どちらの向きでも、**赤を消す前に何が起きたのかを確かめること。**
+ */
+export const FENCE_RULE_DIVERGENCE_FILES: readonly FenceRuleDivergenceFile[] = [
+  {
+    file: 'scripts/agents-md-references.test.ts',
+    why: '#786 の欠陥そのものを再現する合成 fixture と、フェンス記号を含む doc を持つ唯一のファイル。旧実装ではここだけが 933 行中 704 行（75.46%）を無検査にしていた（2026-09-12 実測、main = 77e6088）。',
+  },
+];
+
 export type LineNumberCitation = { line: number; token: string; target: string };
 
 /**
@@ -628,14 +708,35 @@ const isRepoFileOrBasename = buildBasenameAwareRepoFileResolver(TRACKED_FILES);
 const agentsMd = readFileSync(path.join(ROOT, 'AGENTS.md'), 'utf8');
 const prose = proseLines(agentsMd);
 
+/**
+ * **被覆の歯だけが名指しで測る1ファイル。**
+ *
+ * ⛔ **これは #785 が決める「`path:行番号` の歯を `scripts/**` へ広げる」ではない** ——
+ * ここが数えるのは**フェンスで落ちた行数だけ**で、出典を1件も読まない ⟹ 歯が自分自身を
+ * 出典として数える問題（#785 の本題）は起きない。
+ *
+ * ⭐ **名指しする理由は実測1つだけである**（2026-09-12、`main` = 77e6088）。
+ * 旧実装（#796 より前）と現実装で落とし行が食い違うファイルは**リポジトリ全体でこの1本だけ**で、
+ * ⟹ **#786 の回帰が署名を出す場所がここしか無い**（現行 6/933 = 0.64% ↔ 旧実装 704/933 = 75.46%）。
+ * 対象範囲（`AGENTS.md` ＋ 431 ファイル）では旧実装と現実装の落とし行が**1ファイルも違わない**。
+ * ⟹ **この1ファイルを外すと、被覆の歯は #786 の回帰で1ミリも動かない。**
+ *
+ * ⚠ **「食い違うのは1本だけ」という前提そのものは、下の `FENCE_RULE_DIVERGENCE_FILES` の
+ * 歯が機械で見張っている**（増えても減っても赤くなる）。
+ */
+const FENCE_COVERAGE_SELF_FILE = 'scripts/agents-md-references.test.ts';
+
 // フェンス被覆の歯（下）が対象とする corpus。`AGENTS.md` 自身 + 広げた対象範囲
-// （`WIDENED_SCOPE_FILES`）——`scripts/**` は対象に足さない（#785 が決める範囲。
+// （`WIDENED_SCOPE_FILES`）+ `FENCE_COVERAGE_SELF_FILE`（歯自身のファイル。理由は
+// 直上の doc）。`scripts/**` はこの1件を除いて対象に足さない（#785 が決める範囲。
 // この歯自身が `scripts/` に在り、doc と合成 fixture の中に大量のフェンス例を
-// 持つため、素直に足すと歯が自分自身を数える。上の `isWidenedScopeFile` の
-// 「`scripts/**` は入れていない」の doc と同じ理由）。
+// 持つため、素直に全部足すと歯が自分自身を大量に数える。上の `isWidenedScopeFile`
+// の「`scripts/**` は入れていない」の doc と同じ理由——ただし被覆の歯は出典を
+// 読まないので、名指しした1件だけは安全に足せる）。
 const FENCE_COVERAGE_ENTRIES: readonly { file: string; text: string }[] = [
   { file: 'AGENTS.md', text: agentsMd },
   ...WIDENED_SCOPE_FILES.map((file) => ({ file, text: readRepoFile(file) })),
+  { file: FENCE_COVERAGE_SELF_FILE, text: readRepoFile(FENCE_COVERAGE_SELF_FILE) },
 ];
 const FENCE_COVERAGE_LIMITS: FenceCoverageLimits = {
   maxDroppedRatio: FENCE_COVERAGE_MAX_DROPPED_RATIO,
@@ -1023,6 +1124,92 @@ describe('findFenceCoverageViolations / formatFenceCoverageViolation（合成 fi
     );
     expect(unterminated.coverage.blocks).toEqual([{ open: 2, close: null, lines: 2 }]);
     expect(unterminated.unterminated).toBe(true);
+  });
+});
+
+// 旧実装（#796 より前）との食い違い（#786 残り）。「対象集合が1つより増えたら
+// 気づける形にする」「取れなかった軸に0の行を作らない」「集合の数え方に grep を
+// 単独で使わない」という条件のもとで、`FENCE_COVERAGE_SELF_FILE` を名指しできる
+// 根拠（食い違うファイルはリポジトリ全体でこの1本だけ）を機械に見張らせる。
+describe('findFenceRuleDivergences（実在 corpus。TRACKED_FILES 全体。#786 残り）', () => {
+  it('FENCE_RULE_DIVERGENCE_FILES の why が全部、非空である', () => {
+    const blank = FENCE_RULE_DIVERGENCE_FILES.filter((f) => f.why.trim().length === 0).map(
+      (f) => f.file,
+    );
+    expect(
+      blank,
+      '理由が空である。なぜこのファイルだけが #786 の回帰の署名を出せる場所なのかを書くこと。',
+    ).toEqual([]);
+  });
+
+  it('食い違うファイルの集合が FENCE_RULE_DIVERGENCE_FILES と完全一致する（増えても減っても赤）', () => {
+    // `TRACKED_FILES` は `git ls-files -z`（`listTrackedFiles`）が返す全追跡ファイル
+    // そのもの——grep は使わない。取得できなければ execFileSync が例外を投げて
+    // ここまで来ないので、「対象が無かった」と「取れなかった」を混同しない。
+    const entries = TRACKED_FILES.map((file) => ({ file, text: readRepoFile(file) }));
+    // 対象集合そのものが空/激減していないことの確認（「0件だから一致」という
+    // 見かけ上の緑を、コーパスが取れていない場合と区別するための下限）。
+    expect(entries.length).toBeGreaterThan(400);
+
+    const divergences = findFenceRuleDivergences(entries);
+    const divergentFiles = new Map(divergences.map((d) => [d.file, d]));
+    const expectedFiles = new Set(FENCE_RULE_DIVERGENCE_FILES.map((f) => f.file));
+
+    const added = [...divergentFiles.values()]
+      .filter((d) => !expectedFiles.has(d.file))
+      .map((d) => `${d.file} 現行${d.current}行/旧実装${d.legacy}行`);
+    const removed = FENCE_RULE_DIVERGENCE_FILES.map((f) => f.file).filter(
+      (file) => !divergentFiles.has(file),
+    );
+
+    expect(
+      { added, removed },
+      [
+        '旧実装（1行トグル、#796 より前）と現実装とで検査した行数が食い違うファイルの',
+        '集合が、FENCE_RULE_DIVERGENCE_FILES と一致しなくなった。',
+        '',
+        '増えた場合（added、`パス 現行N行/旧実装N行` の形）: このファイルにも #786 の形',
+        '（コメント内のインライン ``` など）が新しく書かれた ⟹ 被覆の歯が名指しで測る',
+        '対象（FENCE_COVERAGE_SELF_FILE）を見直すこと。⟹ FENCE_RULE_DIVERGENCE_FILES へ',
+        '理由つきで足すこと。',
+        '',
+        '消えた場合（removed、パスのみ）: 前提（署名を出せる場所は1本だけ）が実際に',
+        '変わったか、もしくは数え方そのものが壊れた ⟹ ⛔ 表からこの行を消す前に、',
+        'どちらなのかを確かめること（0件になっても赤くする——「食い違いが無くなった」と',
+        '「数え方が壊れた」を同じ顔にしないため）。',
+      ].join('\n'),
+    ).toEqual({ added: [], removed: [] });
+  });
+});
+
+describe('findFenceRuleDivergences / proseLinesLegacyToggle（合成 fixture。#786）', () => {
+  it('当たるべきところで当たる: #786 の形（1行に開閉が両方在る行の後ろに本文が続く）は current > legacy で1件検出する', () => {
+    const tail = Array.from({ length: 20 }, (_, i) => `prose line ${i}`);
+    const text = [' * ```code``` の続き', ...tail].join('\n');
+    const divergences = findFenceRuleDivergences([{ file: 'fixture/defect.md', text }]);
+    expect(divergences).toHaveLength(1);
+    expect(divergences[0]?.file).toBe('fixture/defect.md');
+    expect(divergences[0] && divergences[0].current > divergences[0].legacy).toBe(true);
+  });
+
+  it('当たってはいけないところで当たらない: 開き行と閉じ行が別々に在る普通のフェンスは食い違わない（0件）', () => {
+    const text = ['prose 1', '```', 'fenced content', '```', 'prose 2'].join('\n');
+    expect(findFenceRuleDivergences([{ file: 'fixture/normal-fence.md', text }])).toEqual([]);
+  });
+
+  it('当たってはいけないところで当たらない: フェンスを1つも持たない入力は食い違わない（0件）', () => {
+    const text = ['prose 1', 'prose 2', 'prose 3'].join('\n');
+    expect(findFenceRuleDivergences([{ file: 'fixture/no-fence.md', text }])).toEqual([]);
+  });
+
+  it('proseLinesLegacyToggle 自身が旧実装のとおりに壊れている（1行に開閉が両方在る行でトグルし、後ろを落とす）', () => {
+    // ⛔ これが緑にならないなら旧実装のコピーが間違っている——`0f7b9ed^` の
+    // proseLines をそのまま持ってきたものであること（当時のコミットで確認済み）。
+    const tail = Array.from({ length: 5 }, (_, i) => `prose line ${i}`);
+    const text = [' * ```code``` の続き', ...tail].join('\n');
+    // 1行目でトグルし inFence=true になった後、閉じるフェンスが無いまま末尾へ
+    // 達する ⟹ 1行目も含めて全行が「フェンスの中」として落ちる。
+    expect(proseLinesLegacyToggle(text)).toEqual([]);
   });
 });
 
