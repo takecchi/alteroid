@@ -21,6 +21,7 @@ import type {
   AgentPermissionDenial,
   AgentTurnEnded,
 } from './agent-events.js';
+import { inspectBashCommand } from './bash-wait-guard.js';
 import { buildManagerSessionOptions, foldClaudeMessage } from './claude-provider.js';
 import { denialInputShape, type DeniedRecord } from './denial-shape.js';
 import {
@@ -1765,6 +1766,9 @@ class RunnerSession {
         ? {}
         : { spawnClaudeCodeProcess: (options) => this.#spawnAsChildUser(options) }),
       canUseTool: (toolName, input, extra) => this.#onPermission(toolName, input, extra),
+      // **上の5本と違い、これだけが実際にブロックする**（#894 段1・案(A)）。
+      // 理由は `#onPreToolUse` の doc を見よ。
+      onPreToolUse: (input) => this.#onPreToolUse(input),
       onPostToolUse: (input) => this.#onPostToolUse(input),
       onPreCompact: (input) => this.#onPreCompact(input),
       // **観測専用**（`worker_wait`）。`{ continue: true }` を返すだけで何も
@@ -3121,6 +3125,86 @@ class RunnerSession {
     this.#emit({ type: 'ask', managerId: this.#id, requestId: id, kind, summary, askedAt });
 
     return result;
+  }
+
+  /**
+   * `Bash` へ渡すコマンドが「無限に待つだけの形」なら実行そのものを止める
+   * （#894 段1・案(A)）。
+   *
+   * ## なぜここだけが実際にブロックする
+   *
+   * このクラスの他のフック（`#onPostToolUse` 以下・`#onSubagentStop` /
+   * `#onStop` 等）はすべて観測専用で、`{ continue: true }` を返すだけである。
+   * ここは違う —— #894 が実測したのは「システムプロンプトへ逐語で書いても
+   * 守られない」ということそのものなので、対策を「もっと強く書く」側へは
+   * 倒さず、**能力そのものを弾く**側へ倒す（Issue #894 の候補(a)）。判定の
+   * 中身（何を弾き、何を通すか）は `bash-wait-guard.ts` の
+   * `inspectBashCommand` の doc を見よ —— ここは SDK への配線と、弾いた
+   * ことを日誌へ残す役目だけを持つ。
+   *
+   * ## `Bash` 以外・`command` が文字列でない入力は素通しする
+   *
+   * `inspectBashCommand` は `Bash` のコマンド文字列だけを見る判定器であって、
+   * 他のツールの入力の形を知らない。**ここで弾くのは `Bash` だけである** —
+   * 他のツールまで巻き込むと、この PreToolUse が「何でも弾きうる門」に
+   * 見えてしまい、地雷表「確認が要る行為の一覧を作る」に近づく。
+   *
+   * ## 拒否は SDK の `permissionDecision: 'deny'` で返す
+   *
+   * `decision: 'block'`（セッション全体を止める側の口）ではなく、この
+   * ツール呼び出し1件だけを拒否する口を使う（SDK の型定義。逐語は
+   * `claude-provider.ts` の `onPreToolUse` の doc）。マネージャーは拒否の
+   * 事実と理由（代替の提示つき）を受け取り、そのターンを続けられる。
+   *
+   * ## 弾いたら escalate しない note を1本出す
+   *
+   * 依頼者（クローン）が日誌から拾えるように、弾いたこと自体を残す。
+   * **`escalate` は立てない** —— これは「作業者が動けなくなった」
+   * （`#onSubagentStop` の `escalate: true`）のような危険の通知ではなく、
+   * ツール呼び出し1件がその場で拒否に置き換わっただけの経過だからである。
+   */
+  async #onPreToolUse(input: unknown): Promise<{
+    continue: true;
+    hookSpecificOutput?: {
+      hookEventName: 'PreToolUse';
+      permissionDecision: 'deny';
+      permissionDecisionReason: string;
+    };
+  }> {
+    const hook = input as {
+      tool_name?: unknown;
+      tool_input?: unknown;
+      agent_id?: string;
+      agent_type?: string;
+    };
+
+    if (hook.tool_name !== 'Bash') return { continue: true };
+
+    const command = (hook.tool_input as { command?: unknown } | null | undefined)?.command;
+    if (typeof command !== 'string') return { continue: true };
+
+    const verdict = inspectBashCommand(command);
+    if (!verdict.blocked) return { continue: true };
+
+    const actor =
+      hook.agent_id === undefined
+        ? `manager:${this.#id}`
+        : `worker:${this.#id}:${hook.agent_type ?? WORKER_AGENT_NAME}`;
+
+    this.#emit({
+      type: 'note',
+      managerId: this.#id,
+      text: `Bash の呼び出しを弾いた（${actor}・形=${verdict.form}）。${verdict.reason}`,
+    });
+
+    return {
+      continue: true,
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: verdict.reason,
+      },
+    };
   }
 
   /**
