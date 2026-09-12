@@ -1385,7 +1385,9 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
     ]);
     expect(rendered).toContain('stale-doc');
     // #913: 期間フレーズは置き換えず、本文の変化量を並べて足す。
-    expect(rendered).toContain('要旨は本文より1時間古い（本文は+200バイト（+40%）変わった）: 古い要旨');
+    expect(rendered).toContain(
+      '要旨は本文より1時間古い（本文は+200バイト（+40%）変わった）: 古い要旨',
+    );
   });
 
   /**

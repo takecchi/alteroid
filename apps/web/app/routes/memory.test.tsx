@@ -158,10 +158,14 @@ describe('記憶一覧の要旨の前に付く印（#821 — ⚠ をやめて数
 
     // #913: 期間フレーズは置き換えず、変化量（ここでは unrecorded）を並べて足す。
     expect(
-      await screen.findByText(/要旨は本文より1時間古い（本文の変化量は記録されていない）: 古い要旨A/),
+      await screen.findByText(
+        /要旨は本文より1時間古い（本文の変化量は記録されていない）: 古い要旨A/,
+      ),
     ).toBeTruthy();
     expect(
-      await screen.findByText(/要旨は本文より30日古い（本文の変化量は記録されていない）: 古い要旨B/),
+      await screen.findByText(
+        /要旨は本文より30日古い（本文の変化量は記録されていない）: 古い要旨B/,
+      ),
     ).toBeTruthy();
   });
 
