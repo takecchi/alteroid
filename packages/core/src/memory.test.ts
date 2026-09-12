@@ -35,6 +35,7 @@ import {
   isKnownMemoryDocKind,
   lookupMemorySection,
   measureMemoryFloor,
+  measurePremiseOutlineFit,
   memoryBodyStart,
   memoryProtectionAllowsFullReplace,
   memorySectionId,
@@ -293,6 +294,21 @@ function fact(
 
 function premise(slug: string, body = '本文'): MemoryPart {
   return { slug, content: `# ${slug}\n${body}` };
+}
+
+/**
+ * 節数 `n`・見出し長 `headingLength` の premise を作る（frontmatter 無し＝
+ * 既定で premise。`resolveMemoryDocKind` の doc）。
+ *
+ * **`measurePremiseOutlineFit` / `MemoryFloor.outlineSaturatedPremise` /
+ * `describeMemoryFloor` の A/B/C の歯が共有する**——1文書あたりの目次の
+ * 予算に対する飽和・非飽和を、節数だけで作り分けられるようにするための
+ * 器である。
+ */
+function manySectionPremise(slug: string, n: number, headingLength = 40): MemoryPart {
+  const heading = (i: number) => `${'あ'.repeat(headingLength)}${String(i).padStart(4, '0')}`;
+  const body = Array.from({ length: n }, (_, i) => `# ${heading(i)}\n本文`).join('\n');
+  return { slug, content: body };
 }
 
 describe('frontmatter の解釈（parseMemoryFrontmatter）— 3状態、畳まない', () => {
@@ -4005,6 +4021,139 @@ describe('measureMemoryFloor — 焼き込みの大きさを測る（記憶の�
 });
 
 /**
+ * `measurePremiseOutlineFit` / `MemoryFloor.outlineSaturatedPremise` — 1文書
+ * あたりの目次の予算（`MEMORY_PROMPT_OUTLINE_BUDGET`）に対して、premise の
+ * 節の目次がどこに居るかを測る（#772「記憶の肥大」の続き）。
+ *
+ * **`shown` が崖そのものであることを実測で固定する歯（下の「⭐⭐」）が
+ * いちばんの中核である。** リテラル（85 のような値）は見出し長で動くので
+ * 書かない——`measurePremiseOutlineFit` 自身が返す `shown` を使って、
+ * その境目を実地に確かめる。
+ */
+describe('measurePremiseOutlineFit / MemoryFloor.outlineSaturatedPremise — 目次の崖（#772）', () => {
+  it('切れていない文書に対して null を返す（節が少ない文書）', () => {
+    const doc = manySectionPremise('small', 3);
+    // 前提: 本当に切れていない（切れていればこのテストは何も測らない）。
+    expect(renderMemoryDocuments([doc])).not.toContain('節は目次から省略');
+    expect(measurePremiseOutlineFit(doc)).toBeNull();
+  });
+
+  it('節が1つも無い文書に対して null を返す', () => {
+    const doc: MemoryPart = { slug: 'no-sections', content: '見出しの無い前書きだけ' };
+    expect(measurePremiseOutlineFit(doc)).toBeNull();
+  });
+
+  /**
+   * ⭐ これは「数え方が2本に割れていない」を測る歯である。期待値をリテラルで
+   * 書かず、`renderMemoryDocuments` の出力（断り書き）から正規表現で数を
+   * 抜き出して、`measurePremiseOutlineFit` の戻り値と突き合わせる。
+   */
+  it('⭐ 切れている文書に対して返す rest/shown/total が、断り書きの中の数と一致する', () => {
+    const doc = manySectionPremise('saturated', 400);
+    const fit = measurePremiseOutlineFit(doc);
+    expect(fit).not.toBeNull();
+
+    const rendered = renderMemoryDocuments([doc]);
+    const hit =
+      /末尾 ([\d,]+) 節は目次から省略（全 ([\d,]+) 節のうち先頭 ([\d,]+) 節だけ載せた）/.exec(
+        rendered,
+      );
+    expect(hit).not.toBeNull();
+    const [, rest = '', total = '', shown = ''] = hit as RegExpExecArray;
+    const toNumber = (s: string) => Number(s.replace(/,/g, ''));
+
+    expect(fit?.rest).toBe(toNumber(rest));
+    expect(fit?.total).toBe(toNumber(total));
+    expect(fit?.shown).toBe(toNumber(shown));
+    // 足し算としても整合する。
+    expect(fit!.shown + fit!.rest).toBe(fit!.total);
+  });
+
+  /**
+   * ⭐⭐ **`shown` が崖そのものであることを実測で固定する。** 節数 N（切れる）
+   * の文書から `shown = S` を取り、**同じ見出し生成器で先頭 S 節だけを持つ
+   * 文書**を作ると省略が出ないこと、**S+1 節**だと省略が出ることを両方
+   * assert する。リテラル（85 等）は見出し長で動くので書かない。
+   *
+   * なぜこれで崖に当たると言えるか: `fillListingBudget` は先頭から貪欲に
+   * 積むので、各行の重みはその文書の総節数に依存しない（節id・文字数の
+   * 固定費も見出しも、その節自身の長さでしか決まらない）。⟹ 先頭 S 節・
+   * 先頭 S+1 節だけを持つ文書でも、`items[0..S-1]` の累積は元の文書と
+   * 1文字も変わらず、`items[S]` を足すかどうかだけが違う——だから
+   * 「ちょうど S 節で収まり、S+1 節目から溢れる」という境目を、切り出した
+   * 文書で再現できる。
+   */
+  it('⭐⭐ shown は崖そのものである（先頭 shown 節では省略が出ず、shown+1 節では出る）', () => {
+    const headingLength = 40;
+    const saturated = manySectionPremise('cliff-source', 400, headingLength);
+    const fit = measurePremiseOutlineFit(saturated);
+    expect(fit).not.toBeNull();
+    const shown = fit!.shown;
+    // 前提: 崖が文書の範囲内に実在する（0 や総節数と同じでは何も測れない）。
+    expect(shown).toBeGreaterThan(0);
+    expect(shown).toBeLessThan(400);
+
+    const exactlyShown = manySectionPremise('cliff-exact', shown, headingLength);
+    expect(measurePremiseOutlineFit(exactlyShown)).toBeNull();
+    expect(renderMemoryDocuments([exactlyShown])).not.toContain('節は目次から省略');
+
+    const oneMore = manySectionPremise('cliff-plus-one', shown + 1, headingLength);
+    const oneMoreFit = measurePremiseOutlineFit(oneMore);
+    expect(oneMoreFit).not.toBeNull();
+    expect(oneMoreFit?.rest).toBe(1);
+    expect(oneMoreFit?.shown).toBe(shown);
+    expect(renderMemoryDocuments([oneMore])).toContain('節は目次から省略');
+  });
+
+  it('measureMemoryFloor(...).outlineSaturatedPremise は、切れている premise だけを含む', () => {
+    const saturated = manySectionPremise('floor-saturated', 400);
+    const notSaturated = premise('floor-small', '短い前提');
+    const floor = measureMemoryFloor([saturated, notSaturated]);
+
+    const slugs = floor.outlineSaturatedPremise.map((entry) => entry.slug);
+    expect(slugs).toContain('floor-saturated');
+    expect(slugs).not.toContain('floor-small');
+    expect(floor.outlineSaturatedPremise).toHaveLength(1);
+  });
+
+  /**
+   * ⚠⚠ **`demotedPremise`（束ねた蓋 `MEMORY_PREMISE_CARD_BUDGET` でカードごと
+   * 1行に落ちた文書）は除外する。** あちらは目次そのものが焼かれていないので、
+   * 「目次が予算で切れている」と名乗ると嘘になる（`MemoryFloor.outlineSaturatedPremise`
+   * の doc）。
+   */
+  it('⚠⚠ outlineSaturatedPremise は、束ねた蓋で1行に落ちた premise を含まない', () => {
+    // 全件を「単体でも目次が切れる」同じ形の文書にする——そうすることで、
+    // 「そもそも目次が切れていないから外れた」のか「蓋で1行に落ちたから
+    // 外れた」のかを区別できる。件数を積んで束ねた予算
+    // （`MEMORY_PREMISE_CARD_BUDGET`）を超えさせ、大きいほうから蓋を掛ける。
+    const template = (index: number): MemoryPart => ({
+      slug: `outline-demoted-${String(index).padStart(3, '0')}`,
+      content: Array.from({ length: 200 }, (_, i) => `## ${'あ'.repeat(20)}${i}\n本文`).join('\n'),
+    });
+
+    // 前提: テンプレート単体は本当に目次が切れている（切れていなければ、
+    // 以下の等式は「そもそも飽和していないから外れた」ケースと区別できない）。
+    expect(measurePremiseOutlineFit(template(0))).not.toBeNull();
+
+    const count = 20;
+    const docs = Array.from({ length: count }, (_, i) => template(i));
+    const floor = measureMemoryFloor(docs);
+
+    // 前提: 本当に蓋が噛んでいる（1件も落ちていなければ、除外の効果を
+    // このテストは何も測っていない）。全件が落ちてもいけない
+    // （1件は必ず残るはずで、残らなければ `selectPremiseCards` 側の前提が壊れている）。
+    expect(floor.demotedPremiseDocs).toBeGreaterThan(0);
+    expect(floor.demotedPremiseDocs).toBeLessThan(count);
+
+    // 全 count 件が個別には目次飽和している。⟹ outlineSaturatedPremise から
+    // 減っている分は、蓋で落ちた分とちょうど一致するはずである——除外が
+    // 効いていなければ（デグレードすれば）、この等式は count を超えて壊れる。
+    expect(floor.outlineSaturatedPremise.length + floor.demotedPremiseDocs).toBe(count);
+  });
+});
+
+/**
  * `describeMemoryFloor` — 書く4口（`memory_write` / `memory_append` /
  * `memory_frontmatter_set` / `memory_section_move`）の応答の末尾に添える、
  * 「毎ターンの床」の一言。
@@ -4227,6 +4376,237 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
     expect(reply).not.toContain('memory_outline');
     expect(reply).not.toContain('memory_section_move');
     expect(reply).not.toContain('memory_frontmatter_set');
+  });
+
+  /**
+   * `outlineSaturationNote`（1文書あたりの目次の予算。#772）— `before` /
+   * `after` の両方を見て4つに分ける（A/B/C/無し。`describeMemoryFloor` の
+   * doc の表）。
+   *
+   * ⚠ **訂正2（依頼者の決裁）: 「出さない」を歯で固定する。** 唯一の根拠は
+   * 「張り付いていない回は1文字も出さない」——文字数の増減では測らず、
+   * `張り付いている` / `越えた` / `切られなくなった` が1文字も含まれないことそのものを
+   * assert する。**同じ歯で、焼き込みの側（`renderMemoryDocuments`）にも
+   * 変更4の1文（`落ちている` / `移し切るまで`）が出ていないことを測る**
+   * ——こちらが本当の「床 +0」である。
+   */
+  describe('outlineSaturationNote — 1文書あたりの目次の予算に対する4つの場合（#772）', () => {
+    it('⭐ 収まっている → 収まっている: 1文字も出さない（floorLine にも焼き込みにも0）', () => {
+      const before = measureMemoryFloor([premise('doc', '短い本文')]);
+      const after = measureMemoryFloor([premise('doc', '短い本文をもっと増やした')]);
+      const reply = describeMemoryFloor({
+        before,
+        after,
+        slug: 'doc',
+        kind: 'premise',
+        created: false,
+      });
+
+      expect(reply).not.toContain('張り付いている');
+      expect(reply).not.toContain('越えた');
+      expect(reply).not.toContain('切られなくなった');
+
+      // 焼き込みの側（変更4の1文）も0——こちらが本当の「床 +0」である。
+      const rendered = renderMemoryDocuments([premise('doc', '短い本文をもっと増やした')]);
+      expect(rendered).not.toContain('落ちている');
+      expect(rendered).not.toContain('移し切るまで');
+    });
+
+    it('A: 張り付き → 張り付き: 「揺れ」の断り（節を移した効果ではない）', () => {
+      const before = measureMemoryFloor([manySectionPremise('doc', 400)]);
+      const after = measureMemoryFloor([manySectionPremise('doc', 450)]);
+      const reply = describeMemoryFloor({
+        before,
+        after,
+        slug: 'doc',
+        kind: 'premise',
+        created: false,
+      });
+
+      const afterFit = after.outlineSaturatedPremise.find((entry) => entry.slug === 'doc');
+      expect(afterFit).toBeDefined();
+      expect(reply).toContain('張り付いている');
+      expect(reply).toContain('この増減は張り付いた領域の中の揺れであって、節を移した効果ではない');
+      expect(reply).toContain(`全 ${afterFit!.total.toLocaleString('en-US')} 節`);
+      expect(reply).toContain(
+        `${afterFit!.shown.toLocaleString('en-US')} 節だけが焼き込みに載っている`,
+      );
+      expect(reply).toContain(
+        `落ちている ${afterFit!.rest.toLocaleString('en-US')} 節を移し切るまで`,
+      );
+      // B・C の文言は出ない。
+      expect(reply).not.toContain('越えた');
+      expect(reply).not.toContain('切られなくなった');
+    });
+
+    it('B: 収まっている → 張り付き: 「この書き込みで予算を越えた」（増分は本物）', () => {
+      const before = measureMemoryFloor([manySectionPremise('doc', 3)]);
+      const after = measureMemoryFloor([manySectionPremise('doc', 400)]);
+      const reply = describeMemoryFloor({
+        before,
+        after,
+        slug: 'doc',
+        kind: 'premise',
+        created: false,
+      });
+
+      const afterFit = after.outlineSaturatedPremise.find((entry) => entry.slug === 'doc');
+      expect(afterFit).toBeDefined();
+      expect(reply).toContain('この書き込みで doc の節の目次が1文書あたりの予算');
+      expect(reply).toContain('越えた');
+      expect(reply).toContain('この増分は揺れではなく本物である');
+      expect(reply).toContain(`${afterFit!.rest.toLocaleString('en-US')} 節が落ちた`);
+      // A・C の文言は出ない。
+      expect(reply).not.toContain('張り付いている');
+      expect(reply).not.toContain('切られなくなった');
+    });
+
+    it('C: 張り付き → 飽和リストから外れた: 「目次で切られなくなった」。⛔ この先どう動くかは言わない', () => {
+      const before = measureMemoryFloor([manySectionPremise('doc', 400)]);
+      const after = measureMemoryFloor([manySectionPremise('doc', 3)]);
+      const reply = describeMemoryFloor({
+        before,
+        after,
+        slug: 'doc',
+        kind: 'premise',
+        created: false,
+      });
+
+      const beforeFit = before.outlineSaturatedPremise.find((entry) => entry.slug === 'doc');
+      const afterFit = after.outlineSaturatedPremise.find((entry) => entry.slug === 'doc');
+      expect(beforeFit).toBeDefined();
+      expect(afterFit).toBeUndefined(); // after は定義上もう飽和していない。
+      expect(reply).toContain('切られなくなった');
+      expect(reply).toContain('省略の断り書きごと床から落ちた');
+      // A・B の文言は出ない。
+      expect(reply).not.toContain('張り付いている');
+      expect(reply).not.toContain('越えた');
+      // ⛔ この先どう動くかは言わない（下の indexed の歯が理由を持つ）。
+      expect(reply).not.toContain('節を移した分だけ床が下がる');
+    });
+
+    /**
+     * ⭐⭐ **C が「この先どう動くか」を言ってはいけない理由を、そのまま歯にする。**
+     *
+     * C は「飽和していた premise が `after.outlineSaturatedPremise` から消えた」
+     * で発火するが、消え方は4通りある（予算に収まった／`indexed` になった／
+     * `fact` になった／文書ごと消えた）。**`MemoryFloor` は slug ごとの区分を
+     * 持たないので、この関数は4つを区別できない。**
+     *
+     * ⟹ かつて C は「ここから先は、節を移した分だけ床が下がる」と書いていたが、
+     * **`indexed` へ移った回にはそれが偽である**——`indexed` は節の目次を1行も
+     * 焼かないので、節を移しても床は1文字も動かない。**そして `premise` から
+     * `indexed` への付け替えは実運用で最も多く起きた操作である**（本番の記憶は
+     * 2026-09-12 時点で6文書中5文書が `indexed`）。この歯はその遷移を直接作って、
+     * 偽の予測が戻ってこないことを固定する。
+     */
+    it('⭐⭐ premise → indexed で飽和が消えた回でも、C は「節を移した分だけ床が下がる」と言わない', () => {
+      const saturated = manySectionPremise('doc', 400);
+      const asIndexed: MemoryPart = {
+        slug: 'doc',
+        content: `---\ntype: indexed\ndescription: 付け替えた\n---\n${saturated.content}`,
+      };
+      const before = measureMemoryFloor([saturated]);
+      const after = measureMemoryFloor([asIndexed]);
+      // 前提: 節数は1つも減っていないのに、飽和リストからは消えている
+      // （＝「節を移したから収まった」ではない、という遷移そのもの）。
+      expect(before.outlineSaturatedPremise.map((entry) => entry.slug)).toContain('doc');
+      expect(after.outlineSaturatedPremise).toHaveLength(0);
+      expect(after.indexedDocs).toBe(1);
+
+      const reply = describeMemoryFloor({
+        before,
+        after,
+        slug: 'doc',
+        kind: 'indexed',
+        created: false,
+      });
+
+      expect(reply).toContain('切られなくなった');
+      // 🔴 これが本題——`indexed` では節を移しても床は動かないので、偽になる。
+      expect(reply).not.toContain('節を移した分だけ床が下がる');
+      // そして「区別していない」ことを行そのものが名乗る。
+      expect(reply).toContain('区別していない');
+    });
+
+    /**
+     * ⭐⭐ **いちばん重要な歯（訂正3）。** `memory_section_move` は移し先
+     * （`toSlug`）の視点で `slug` を渡す（`tools.ts` の「床は『移した先』の
+     * 視点で言う」）。⟹ 「予算に張り付いた premise（A）から、別の文書（B）へ
+     * 節を移す」呼び出しでは、`slug` に入っているのは B だが、名乗るべきは
+     * **張り付いている当の文書 A** である。`input.slug` に引きずられて B を
+     * 主語にしていないか、A を主語にできているかを両方確かめる。
+     */
+    it('⭐⭐ memory_section_move: slug（移し先 B）ではなく、張り付いている移動元 A を名乗る', () => {
+      // A: 400節で飽和 → 300節を B へ移した後も、100節でなお飽和している
+      // （揺れ＝A。数値は変わるので「何も変わっていない」側には落ちない）。
+      const before = measureMemoryFloor([
+        manySectionPremise('a-doc', 400),
+        premise('b-doc', '移す前のB'),
+      ]);
+      const after = measureMemoryFloor([
+        manySectionPremise('a-doc', 100),
+        premise('b-doc', '移した後のB（節が増えた）'),
+      ]);
+      // `memory_section_move` は移し先（B）の視点で slug を渡す。
+      const reply = describeMemoryFloor({
+        before,
+        after,
+        slug: 'b-doc',
+        kind: 'premise',
+        created: false,
+      });
+
+      // 前提: a-doc は before/after とも本当に飽和していて、かつ数値が
+      // 変わっている（そうでなければ「何も変わっていない」側に落ちて、
+      // このテストは何も測らない）。
+      const beforeAFit = before.outlineSaturatedPremise.find((entry) => entry.slug === 'a-doc');
+      const afterAFit = after.outlineSaturatedPremise.find((entry) => entry.slug === 'a-doc');
+      expect(beforeAFit).toBeDefined();
+      expect(afterAFit).toBeDefined();
+      expect(beforeAFit!.rest).not.toBe(afterAFit!.rest);
+
+      // 名乗るべきは A ——slug（B）ではない。
+      expect(reply).toContain('a-doc の節の目次は1文書あたりの予算');
+      expect(reply).toContain('張り付いている');
+      // ⛔ B（`input.slug`）を主語にした一文は出ない。
+      expect(reply).not.toContain('b-doc の節の目次');
+    });
+
+    /**
+     * ⭐ 「飽和しているが何も変わっていない premise」は名乗らない——無関係な
+     * 文書へ書いたターンで、張り付いた別の文書の名前が毎回出るのを防ぐ側
+     * （`demotedNote` と同じ「噛んでいない回は1文字も出さない」の倒し方）。
+     */
+    it('⭐ 飽和したまま何も変わっていない premise は、無関係な書き込みでは名乗らない', () => {
+      const saturatedElsewhere = manySectionPremise('saturated-elsewhere', 400);
+      const before = measureMemoryFloor([saturatedElsewhere, premise('unrelated', '元の本文')]);
+      const after = measureMemoryFloor([
+        saturatedElsewhere,
+        premise('unrelated', '書き換えた本文'),
+      ]);
+
+      // 前提: saturated-elsewhere は前後で1文字も変わっていない
+      // （数値が同一であることを直接確かめる）。
+      const beforeFit = before.outlineSaturatedPremise.find(
+        (entry) => entry.slug === 'saturated-elsewhere',
+      );
+      const afterFit = after.outlineSaturatedPremise.find(
+        (entry) => entry.slug === 'saturated-elsewhere',
+      );
+      expect(beforeFit).toEqual(afterFit);
+
+      const reply = describeMemoryFloor({
+        before,
+        after,
+        slug: 'unrelated',
+        kind: 'premise',
+        created: false,
+      });
+
+      expect(reply).not.toContain('saturated-elsewhere');
+      expect(reply).not.toContain('張り付いている');
+    });
   });
 });
 
@@ -4955,6 +5335,58 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     expect(toNumber(iShown) + toNumber(iDropped)).toBe(toNumber(iOutline));
     expect(toNumber(iShown)).toBeGreaterThan(0);
     expect(toNumber(iDropped)).toBeGreaterThan(0);
+  });
+
+  /**
+   * ⭐ **変更4: 断り書きは、数（rest/shown）が何を意味するかを1文で言う（#772）。**
+   * これは「1文が本当に出ていること」を直接固定する歯である——`shown` を
+   * 描き直さず、断り書きの中の数（`測る` 側と同じ数え方）と突き合わせる。
+   *
+   * 反転側・非反転側の両方で確かめる（`arithmetic` と同じく両分岐で共有
+   * されている文なので、片方だけでは片方の壊れ方を見逃す）。
+   */
+  it('⭐ 断り書きは「落ちている節を移し切るまで床は動かない」ことを1文で言う（rest/shown の数と一致する）', () => {
+    const sentence =
+      /落ちている ([\d,]+) 節をすべて移し切るまで、毎ターンの床はほとんど動かない.+?。([\d,]+) 節まで割り切った時点で省略が消え、この断り書きごと床から落ちる——そこが節の移動が床に効き始める点である。/;
+    const toNumber = (s: string) => Number(s.replace(/,/g, ''));
+
+    // 非反転側。
+    const shrinkable = Array.from(
+      { length: 120 },
+      (_, i) => `## これは十分に長い見出しであり予算を食い尽くす ${i}\n本文`,
+    ).join('\n');
+    const nonInverted = renderMemoryDocuments([
+      {
+        slug: 'sentence-shrinkable',
+        content: `---\ntype: premise\ndescription: d\n---\n${shrinkable}`,
+      },
+    ]);
+    const nonInvertedHit = sentence.exec(nonInverted);
+    expect(nonInvertedHit).not.toBeNull();
+    const omissionHit =
+      /末尾 ([\d,]+) 節は目次から省略（全 ([\d,]+) 節のうち先頭 ([\d,]+) 節だけ載せた）/.exec(
+        nonInverted,
+      );
+    expect(omissionHit).not.toBeNull();
+    const [, nRest = '', , nShown = ''] = omissionHit as RegExpExecArray;
+    const [, sentenceRest = '', sentenceShown = ''] = nonInvertedHit as RegExpExecArray;
+    expect(toNumber(sentenceRest)).toBe(toNumber(nRest));
+    expect(toNumber(sentenceShown)).toBe(toNumber(nShown));
+
+    // 反転側（見出しを縮めても載らない側でも、同じ1文が出る）。
+    const unshrinkable = Array.from({ length: 400 }, (_, i) => `# ${i}\n本文`).join('\n');
+    const inverted = renderMemoryDocuments([
+      {
+        slug: 'sentence-unshrinkable',
+        content: `---\ntype: premise\ndescription: d\n---\n${unshrinkable}`,
+      },
+    ]);
+    expect(sentence.test(inverted)).toBe(true);
+
+    // 切れていない文書には、この1文は1文字も出ない（床 +0 の対照）。
+    const notSaturated = renderMemoryDocuments([premise('not-saturated', '本文')]);
+    expect(notSaturated).not.toContain('落ちている');
+    expect(notSaturated).not.toContain('移し切るまで');
   });
 
   /**
