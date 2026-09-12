@@ -628,11 +628,7 @@ export function createMemoryStores(): Stores {
       null;
     for (const [id, meta] of archiveMeta) {
       if (meta.sessionId !== sessionId) continue;
-      if (
-        best === null ||
-        meta.at > best.at ||
-        (meta.at === best.at && meta.seq > best.seq)
-      ) {
+      if (best === null || meta.at > best.at || (meta.at === best.at && meta.seq > best.seq)) {
         best = { id, at: meta.at, seq: meta.seq, bodyChars: meta.bodyChars, bodyMd5: meta.bodyMd5 };
       }
     }

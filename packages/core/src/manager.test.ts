@@ -9019,7 +9019,10 @@ describe('穴C: #pushAgentToken が journal.append の失敗で跡を残す', ()
 describe('マネージャー — case archive は diverged/unknown だけを日誌へ記録する（#698）', () => {
   /** PreCompact フックを鳴らし、`archive` イベントを実際に発行させる。 */
   async function firePreCompact(session: FakeSession, dir: string, body: string): Promise<void> {
-    const transcriptPath = join(dir, `t-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonl`);
+    const transcriptPath = join(
+      dir,
+      `t-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonl`,
+    );
     await writeFile(transcriptPath, body, 'utf8');
     const matchers = session.options.hooks?.PreCompact as HookCallbackMatcher[] | undefined;
     for (const matcher of matchers ?? []) {

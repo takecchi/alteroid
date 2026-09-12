@@ -4140,7 +4140,12 @@ class Clone implements CloneHost {
         bodyChars: transcript.length,
       });
       if (continuityText !== null) {
-        await this.#journal({ type: 'exchange', with: 'self', role: 'outbound', text: continuityText });
+        await this.#journal({
+          type: 'exchange',
+          with: 'self',
+          role: 'outbound',
+          text: continuityText,
+        });
       }
     } catch (error) {
       // (i) が落ちた。**「残っているはず」と読まれないように必ず残す。**
@@ -6101,7 +6106,12 @@ class Clone implements CloneHost {
         bodyChars: transcript.length,
       });
       if (continuityText !== null) {
-        await this.#journal({ type: 'exchange', with: 'self', role: 'outbound', text: continuityText });
+        await this.#journal({
+          type: 'exchange',
+          with: 'self',
+          role: 'outbound',
+          text: continuityText,
+        });
       }
     } catch (error) {
       // これはクローンの判断ではなくシステムの失敗なので、判断として記録しない

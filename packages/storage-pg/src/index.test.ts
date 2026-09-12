@@ -98,7 +98,8 @@ describe('migrate', () => {
     expect(await stores.archive.read(removedId)).toMatchObject({ kind: 'removed' });
 
     // 消していない行も、2周目のあとに積んでも壊れていない。
-    const untouchedId = (await stores.archive.archive('session-migrate-twice-untouched', 'OTHER\n')).id;
+    const untouchedId = (await stores.archive.archive('session-migrate-twice-untouched', 'OTHER\n'))
+      .id;
     expect(await stores.archive.read(untouchedId)).toEqual({ kind: 'body', body: 'OTHER\n' });
   });
 });

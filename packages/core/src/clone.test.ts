@@ -13735,7 +13735,10 @@ describe('クローン — 文脈窓で畳む前の退避は diverged/unknown �
     s.clone.post(humanMessage('やあ'));
     await waitForNewEvent(s.events, fromLength, 'done', '1本目が通ること');
 
-    const transcriptPath = join(dir, `t-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonl`);
+    const transcriptPath = join(
+      dir,
+      `t-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonl`,
+    );
     await writeFile(transcriptPath, body, 'utf8');
     const main = s.calls[s.calls.length - 1] as FakeCall;
     const hook = main.options.hooks?.PostToolUse?.[0]?.hooks?.[0];
@@ -13767,9 +13770,9 @@ describe('クローン — 文脈窓で畳む前の退避は diverged/unknown �
       await successThenFold(s, dir, 'AAAABBBB'); // continues
       await successThenFold(s, dir, 'ZZZZZZZZZZZZ'); // diverged
 
-      const rows = ((await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[]).filter(
-        (entry) => entry.text.includes('[文脈窓で畳む前の退避]'),
-      );
+      const rows = (
+        (await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[]
+      ).filter((entry) => entry.text.includes('[文脈窓で畳む前の退避]'));
       expect(rows.some((row) => row.text.includes('continuity=continues'))).toBe(false);
       expect(rows.some((row) => row.text.includes('continuity=first'))).toBe(false);
       expect(rows.some((row) => row.text.includes('continuity=diverged'))).toBe(true);
