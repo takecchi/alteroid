@@ -6,6 +6,14 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
+ * ⚠ **2026-09-12 追記(Issue #155)**: `postgres` ジョブを `server_encoding` の
+ * matrix(`UTF8` / `SQL_ASCII`)にした。下の (b)(c) は matrix 化に合わせて
+ * 主張を作り直した(弱めていない——`scripts/__tests__/ci-yml-postgres-regime-wiring
+ * .test.mjs` 内の該当 describe の docstring に理由を書いた)。summary 段を実際に
+ * 走らせる歯(`runSummaryStepFromWorkflow`)は `${{ matrix.serverEncoding }}` /
+ * `${{ matrix.initdbArgs }}` も展開できるようにした(`substituteWorkspace` に
+ * `leg` を渡す)。
+ *
  * ⭐ **この歯が測っているもの(消す前に読むこと)**
  *
  * **`.github/workflows/ci.yml` の `postgres` ジョブが、実際に
@@ -235,14 +243,25 @@ function extractStepBlock(stepName) {
 }
 
 /**
- * `${{ github.workspace }}` を実際の場所に置き換える。
+ * `${{ github.workspace }}` / `${{ matrix.serverEncoding }}` / `${{ matrix.initdbArgs }}`
+ * を実際の値に置き換える。
+ *
+ * 🔴 **Issue #155 で足した。**`postgres` ジョブを matrix にしたことで、
+ * `summaryStep.run` は `${{ matrix.serverEncoding }}` を、`POSTGRES_INITDB_ARGS` は
+ * `${{ matrix.initdbArgs }}` を含むようになった——GitHub Actions はこれを実行時に
+ * 脚ごとの値へ展開するが、この歯は bash へ直接渡すので**自分で展開する**必要がある。
  *
  * @param {string} text
- * @param {string} workspace
+ * @param {{ workspace: string, leg?: { serverEncoding: string, initdbArgs: string } }} substitutions
  * @returns {string}
  */
-function substituteWorkspace(text, workspace) {
-  const replaced = text.replaceAll("${{ github.workspace }}", workspace);
+function substituteWorkspace(text, { workspace, leg }) {
+  let replaced = text.replaceAll("${{ github.workspace }}", workspace);
+  if (leg) {
+    replaced = replaced
+      .replaceAll("${{ matrix.serverEncoding }}", leg.serverEncoding)
+      .replaceAll("${{ matrix.initdbArgs }}", leg.initdbArgs);
+  }
   if (replaced.includes("${{")) {
     throw new Error(
       `この歯が解釈できない GitHub Actions の式が残っている: ${replaced}。` +
@@ -288,15 +307,25 @@ function makeValidRegime(overrides = {}) {
 }
 
 /**
+ * postgres ジョブの matrix の脚(既定は UTF8——既存の歯の呼び出しをそのまま使えるように
+ * するため。Issue #155)。
+ *
+ * @type {{ serverEncoding: string, initdbArgs: string }}
+ */
+const DEFAULT_LEG = { serverEncoding: "UTF8", initdbArgs: "--encoding=UTF8" };
+
+/**
  * yml から取り出した summary の段を、実際に bash で走らせる。
  *
  * @param {"present" | "missing"} fileState `"missing"` なら measured ファイルを
  *   一切書かず、ENOENT の経路を実地で走らせる。
  * @param {unknown} [content] `fileState: "present"` のときにファイルへ書く中身
  *   (JSON.stringify する。文字列を渡せばそのまま書く——壊れた JSON も作れる)。
+ * @param {{ serverEncoding: string, initdbArgs: string }} [leg] `${{ matrix.* }}` を
+ *   どの脚の値として展開するか(既定は UTF8 脚。Issue #155)。
  * @returns {{ status: number, summary: string, stderr: string }}
  */
-function runSummaryStepFromWorkflow(fileState, content) {
+function runSummaryStepFromWorkflow(fileState, content, leg = DEFAULT_LEG) {
   if (!summaryStep) {
     throw new Error(
       "ci.yml の postgres ジョブに lexical-regime-summary.mjs を打つ段が無い。" +
@@ -305,8 +334,8 @@ function runSummaryStepFromWorkflow(fileState, content) {
   }
   const workspace = mkdtempSync(join(tmpdir(), "mnemora-postgres-regime-wiring-"));
   try {
-    const script = substituteWorkspace(summaryStep.run, workspace);
-    const measuredPath = substituteWorkspace(benchStepMeasuredPath(), workspace);
+    const script = substituteWorkspace(summaryStep.run, { workspace, leg });
+    const measuredPath = substituteWorkspace(benchStepMeasuredPath(), { workspace });
     if (fileState === "present") {
       writeFileSync(
         measuredPath,
@@ -372,12 +401,51 @@ describe("ci.yml の postgres ジョブの regime 配線(Issue #148)", () => {
     expect(block).toContain("if-no-files-found: ignore");
   });
 
-  it("⭐ 正常な JSON なら exit 0 で、Job Summary に server_encoding / server_version が出る", () => {
+  it("🔴 Issue #155: artifact 名が matrix.serverEncoding へ配線されている(脚ごとに分かれていないと上書き・衝突する)", () => {
+    const block = extractStepBlock(artifactStep.name);
+    expect(block).toContain("name: lexical-regime-${{ matrix.serverEncoding }}");
+  });
+
+  it("⭐ 正常な JSON なら exit 0 で、Job Summary に server_encoding / server_version が出る(UTF8 脚)", () => {
     const result = runSummaryStepFromWorkflow("present", makeValidRegime());
     expect(result.status, `stderr: ${result.stderr}`).toBe(0);
     expect(result.summary).toContain("server_encoding");
     expect(result.summary).toContain("server_version");
     expect(result.summary).toContain("UTF8");
+  });
+
+  it("🔴 Issue #155: SQL_ASCII 脚として走らせても、宣言と実測が一致していれば exit 0", () => {
+    const sqlAsciiLeg = {
+      serverEncoding: "SQL_ASCII",
+      initdbArgs: "--encoding=SQL_ASCII --locale=C",
+    };
+    const result = runSummaryStepFromWorkflow(
+      "present",
+      makeValidRegime({
+        serverEncoding: "SQL_ASCII",
+        nonAsciiIsIndexed: false,
+        regime: "non_ascii_dropped",
+        rawIdentifierHit: true,
+      }),
+      sqlAsciiLeg,
+    );
+    expect(result.status, `stderr: ${result.stderr}`).toBe(0);
+    expect(result.summary).toContain("SQL_ASCII");
+  });
+
+  it("🔴 Issue #155: SQL_ASCII 脚として渡しているのに実測が UTF8 だと exit 1(宣言と実測の食い違い——matrix でも門は生きている)", () => {
+    const sqlAsciiLeg = {
+      serverEncoding: "SQL_ASCII",
+      initdbArgs: "--encoding=SQL_ASCII --locale=C",
+    };
+    const result = runSummaryStepFromWorkflow(
+      "present",
+      makeValidRegime({ serverEncoding: "UTF8" }),
+      sqlAsciiLeg,
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("SQL_ASCII");
+    expect(result.stderr).toContain("UTF8");
   });
 
   it("🔴 nonAsciiIsIndexed が true でも false でも exit 0(⛔ 門ではないことの固定点)", () => {
@@ -597,11 +665,26 @@ describe("値を作る側の歯が MNEMORA_LEXICAL_REGIME_JSON を参照して�
   });
 });
 
-describe("ci.yml の6本の pgvector ジョブが regime を宣言していること(Issue #148 ②)", () => {
+describe("ci.yml の6本の pgvector ジョブが regime を宣言していること(Issue #148 ②/Issue #155)", () => {
   // 🔴 この describe が固定しているのは「1本で測った regime が6本に効く」根拠そのもの
   // ——`postgres` ジョブ1本だけが実際に regime を測るが、他5本は同じ
   // `POSTGRES_INITDB_ARGS` を宣言することで「同じ regime のはず」を保証する設計である
-  // (ADR 0106「測ったこと」)。6本の値が同一であることが崩れたら、この歯が赤くなる。
+  // (ADR 0106「測ったこと」)。
+  //
+  // ⚠ **Issue #155 で (b)(c) の主張を作り直した(弱めていない)。**`postgres` ジョブが
+  // matrix になったことで、6本のうち1本(`postgres` ジョブ)の `POSTGRES_INITDB_ARGS` は
+  // もはやリテラル文字列ではなく `${{ matrix.initdbArgs }}` という式になった——だから
+  // (b)「6本の値がすべて同一」という主張はそのままでは成立しなくなった(1本だけ式、
+  // 5本はリテラル)。
+  //
+  // 作り直した主張:
+  // - (b): **matrix 化していない他5本の値は、matrix の UTF8 脚の initdbArgs と一致する**
+  //   ——UTF8 脚の値は Issue #148 由来の実測のまま1バイトも変えていないので、
+  //   「1本(いまは1脚)で測った regime が他5本に効く」という根拠は保たれる。
+  // - (c): **matrix の各脚について、--encoding= の値とその脚の serverEncoding が一致し
+  //   (自己無矛盾)、かつ service env と summary 段がどちらも同じ matrix 変数へ
+  //   直接配線されている**(値を書き写すのではなく、同じ変数を参照している——
+  //   実行時にどちらの脚が走っても自動的に一致する)。
 
   /**
    * `image: pgvector/pgvector:pg17` を持つ全 services ブロックの `env:` 行を
@@ -659,7 +742,57 @@ describe("ci.yml の6本の pgvector ジョブが regime を宣言している�
     return env;
   }
 
+  /**
+   * `postgres` ジョブの `strategy.matrix.include` を切り出す(Issue #155)。
+   * `jobBlock` はファイル先頭で `extractJob(workflow, "postgres")` によってすでに
+   * 切り出してある——このジョブの `strategy:` はここでしか出てこない前提で、
+   * インデント(10スペースのバレット、12スペースの続き)だけを頼りに読む。
+   *
+   * @returns {{ serverEncoding: string, initdbArgs: string }[]}
+   */
+  function extractMatrixLegs() {
+    const lines = jobBlock.split("\n");
+    const includeAt = lines.findIndex((line) => line === "        include:");
+    if (includeAt === -1) {
+      throw new Error(
+        "ci.yml の postgres ジョブに strategy.matrix.include が無い(Issue #155 の matrix 化が外れている)。",
+      );
+    }
+    /** @type {{ serverEncoding: string, initdbArgs: string }[]} */
+    const legs = [];
+    /** @type {{ serverEncoding: string, initdbArgs?: string } | undefined} */
+    let current;
+    for (let i = includeAt + 1; i < lines.length; i += 1) {
+      const line = lines[i];
+      const legStart = /^ {10}- serverEncoding: (.+)$/.exec(line);
+      if (legStart) {
+        if (current?.initdbArgs !== undefined) {
+          legs.push(/** @type {{ serverEncoding: string, initdbArgs: string }} */ (current));
+        }
+        current = { serverEncoding: legStart[1].trim() };
+        continue;
+      }
+      const initdbArgsMatched = /^ {12}initdbArgs: "(.*)"$/.exec(line);
+      if (initdbArgsMatched && current) {
+        current.initdbArgs = initdbArgsMatched[1];
+        continue;
+      }
+      if (line.trim() === "" || line.trim().startsWith("#")) {
+        continue;
+      }
+      if (!/^ {10,}/.test(line)) {
+        // include リストの終わり(次のキー、例えば `services:` へ戻った)。
+        break;
+      }
+    }
+    if (current?.initdbArgs !== undefined) {
+      legs.push(/** @type {{ serverEncoding: string, initdbArgs: string }} */ (current));
+    }
+    return legs;
+  }
+
   const serviceBlocks = extractPgvectorServiceEnvBlocks();
+  const matrixLegs = extractMatrixLegs();
 
   it("(a) image: pgvector/pgvector:pg17 の services ブロックが6本あり、6本すべてが POSTGRES_INITDB_ARGS を持つ", () => {
     expect(serviceBlocks, "pgvector/pgvector:pg17 の services ブロックの数が変わった").toHaveLength(
@@ -674,32 +807,81 @@ describe("ci.yml の6本の pgvector ジョブが regime を宣言している�
     }
   });
 
-  it("(b) ⭐ 6本の POSTGRES_INITDB_ARGS の値がすべて同一である(『1本で測った regime が6本に効く』根拠そのもの)", () => {
-    const values = serviceBlocks.map((block) => parseEnvLines(block.envLines).POSTGRES_INITDB_ARGS);
-    const distinct = new Set(values);
-    expect(
-      distinct.size,
-      `6本の POSTGRES_INITDB_ARGS が同一でない: ${JSON.stringify(values)}。` +
-        "packages/postgres ジョブ1本でしか regime を実測していない前提が崩れる" +
-        "(ADR 0106)。",
-    ).toBe(1);
+  it("🔴 Issue #155: postgres ジョブに strategy.matrix.include が2脚(UTF8/SQL_ASCII)ある", () => {
+    expect(matrixLegs.map((leg) => leg.serverEncoding).sort()).toEqual(["SQL_ASCII", "UTF8"]);
   });
 
-  it("(c) ⭐ POSTGRES_INITDB_ARGS の --encoding= の値と、summary 段の --expect-encoding の値が一致する(二重管理が壊れたら赤くなる)", () => {
-    const declaredValues = serviceBlocks.map(
-      (block) => parseEnvLines(block.envLines).POSTGRES_INITDB_ARGS,
-    );
-    const encodingMatches = declaredValues.map((value) => /--encoding=([^\s"]+)/.exec(value));
-    for (const match of encodingMatches) {
-      expect(match, "POSTGRES_INITDB_ARGS から --encoding= を取り出せない").not.toBeNull();
+  it("🔴 Issue #155: strategy.fail-fast が false である(SQL_ASCII 脚が落ちても UTF8 脚の証拠を残す)", () => {
+    expect(jobBlock).toMatch(/fail-fast:\s*false/);
+  });
+
+  it("(b) ⭐ matrix 化していない他5本の POSTGRES_INITDB_ARGS は、matrix の UTF8 脚の initdbArgs と一致する(Issue #155で作り直し。『1本(いま1脚)で測った regime が他5本に効く』根拠そのもの)", () => {
+    const values = serviceBlocks.map((block) => parseEnvLines(block.envLines).POSTGRES_INITDB_ARGS);
+    const matrixWired = values.filter((value) => value === "${{ matrix.initdbArgs }}");
+    const fixedValues = values.filter((value) => value !== "${{ matrix.initdbArgs }}");
+
+    expect(
+      matrixWired,
+      "postgres ジョブの POSTGRES_INITDB_ARGS が ${{ matrix.initdbArgs }} へ配線されていない" +
+        "(matrix 化が外れたか、postgres ジョブが増えた)。",
+    ).toHaveLength(1);
+    expect(
+      fixedValues,
+      "matrix 化していないはずの5本の数が変わった(Issue #155 はpostgresジョブ1本だけをmatrix化する)。",
+    ).toHaveLength(5);
+
+    const utf8Leg = matrixLegs.find((leg) => leg.serverEncoding === "UTF8");
+    expect(utf8Leg, "postgres ジョブの matrix に UTF8 脚が無い").toBeDefined();
+
+    const distinctFixed = new Set(fixedValues);
+    expect(
+      distinctFixed.size,
+      `matrix 化していない5本の POSTGRES_INITDB_ARGS が同一でない: ${JSON.stringify(fixedValues)}。` +
+        "packages/postgres ジョブでしか regime を実測していない前提が崩れる(ADR 0106)。",
+    ).toBe(1);
+    // `parseEnvLines` は `KEY: "value"` の右辺をクォート込みで返す(YAML の文字列表現を
+    // そのまま持つ)のに対し、`extractMatrixLegs` は `initdbArgs: "(.*)"` の中身だけを
+    // 取り出しているのでクォート無し——比較する前に外側のクォートを剥がす。
+    const fixedValueUnquoted = [...distinctFixed][0]?.replace(/^"(.*)"$/, "$1");
+    expect(
+      fixedValueUnquoted,
+      "他5本の値が、postgres ジョブの matrix の UTF8 脚と食い違う。UTF8 脚は過去の実測との" +
+        "比較可能性のため1バイトも変えない約束である。",
+    ).toBe(utf8Leg?.initdbArgs);
+  });
+
+  it("(c) ⭐ matrix の各脚は自己無矛盾(--encoding= の値がその脚の serverEncoding と一致する)", () => {
+    expect(matrixLegs.length).toBeGreaterThan(0);
+    for (const leg of matrixLegs) {
+      const match = /--encoding=([^\s"]+)/.exec(leg.initdbArgs);
+      expect(
+        match,
+        `脚 ${leg.serverEncoding} の initdbArgs から --encoding= を取り出せない`,
+      ).not.toBeNull();
+      expect(
+        match?.[1],
+        `脚 ${leg.serverEncoding} の initdbArgs の --encoding=(${match?.[1]}) が` +
+          "自身の serverEncoding と食い違う",
+      ).toBe(leg.serverEncoding);
     }
-    const encodings = new Set(encodingMatches.map((match) => match[1]));
-    expect(encodings.size).toBe(1);
-    const declaredEncoding = [...encodings][0];
+  });
+
+  it("(c') ⭐ service env の POSTGRES_INITDB_ARGS と summary 段の --expect-encoding は、どちらも同じ matrix 変数へ直接配線されている(値を書き写すのではなく、実行時に自動で揃う)", () => {
+    const values = serviceBlocks.map((block) => parseEnvLines(block.envLines).POSTGRES_INITDB_ARGS);
+    expect(
+      values.filter((value) => value === "${{ matrix.initdbArgs }}"),
+      "postgres ジョブの POSTGRES_INITDB_ARGS が ${{ matrix.initdbArgs }} という式そのもの" +
+        "になっていない(リテラル値を書いてしまうと、脚によって食い違う余地が生まれる)。",
+    ).toHaveLength(1);
 
     const expectFlag = /--expect-encoding\s+"([^"]+)"/.exec(summaryStep?.run ?? "");
     expect(expectFlag, "summary 段に --expect-encoding の指定が無い").not.toBeNull();
-    expect(expectFlag?.[1]).toBe(declaredEncoding);
+    expect(
+      expectFlag?.[1],
+      "summary 段の --expect-encoding がリテラル値になっている。" +
+        "${{ matrix.serverEncoding }} という式そのものへ配線すること" +
+        "(そうしないと、脚が増えたときにこの値だけ古いまま残りうる)。",
+    ).toBe("${{ matrix.serverEncoding }}");
   });
 });
 

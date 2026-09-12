@@ -43,12 +43,38 @@ jobs:
         run: pnpm run check:cjs-parse
 
   postgres:
-    name: packages/postgres (本物の Postgres + pgvector)
+    name: packages/postgres (本物の Postgres + pgvector, server_encoding=${{ matrix.serverEncoding }})
     runs-on: ubuntu-latest
     # roadmap.md 段階2の完了条件: 「testkit の適合テストが postgres 実装に対してすべて通る
     # （2テナント分離のテストを含む）。EXPLAIN で実際に HNSW 索引が使われることを確認する
     # 検査が通る」。擬似物での置き換えを認めない——本物の Postgres の service container に
     # 対して実行する。
+    #
+    # 🔴 Issue #155(ADR 0105): このジョブだけを regime の matrix にする。オーナーが
+    # 2026-09-12T00:09Z に「server_encoding=SQL_ASCII の PostgreSQL をサポート対象に
+    # する」と決めた(ADR 0106 追記)——CI はその regime を一度も踏んでいなかった。
+    # `fail-fast: false` を必ず付ける: SQL_ASCII 脚が落ちても UTF8 脚の証拠(artifact/
+    # Job Summary)を残すため。⛔ 他5本の pgvector ジョブは matrix にしない
+    # (Issue #155 の範囲外——まず1本で機序を確かめる)。
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # UTF8 脚: Issue #148 由来の実測(main の run 34635954755)のままで、
+          # 1バイトも変えない——過去の実測との比較可能性を壊さないため。
+          - serverEncoding: UTF8
+            initdbArgs: "--encoding=UTF8"
+          # SQL_ASCII 脚: オーナーが決めた新しいサポート対象(ADR 0106 追記)。
+          # `--locale=C` が要る——initdb は encoding とロケールの整合を検査するので、
+          # SQL_ASCII だけを渡すと既定ロケール(実測 en_US.utf8)と噛み合わずに
+          # コンテナの起動ごと落ちうる(それ自体が「POSTGRES_INITDB_ARGS が効いている」
+          # という答えである。Issue #155 満たすべきこと5)。
+          # ⛔ この `--locale=C` は「ロケールを ci.yml で宣言すること」(Issue #148 が
+          # 順序として見送った側)ではない——ADR 0106 決定2が見送ったのは
+          # `LANG`/`LC_*` の env や `--expect-locale` の門であり、`initdb` に
+          # 要求される整合のための指定はその対象ではない。
+          - serverEncoding: SQL_ASCII
+            initdbArgs: "--encoding=SQL_ASCII --locale=C"
     services:
       postgres:
         image: pgvector/pgvector:pg17
@@ -56,14 +82,13 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: mnemora_ci
-          # 🔴 Issue #148 ②: この CI が**どの regime で測っているか**を宣言する。
-          # 値は推測ではない——PR #149 が入れた可視化が main の run 34635954755 で
-          # 実測した server_encoding そのもの(artifact `lexical-regime`)である。
+          # 🔴 Issue #148 ②/Issue #155: この CI が**どの regime で測っているか**を
+          # 宣言する。matrix の脚ごとに値が変わる——UTF8 脚の値は変えていない
+          # (上のコメント参照)。
           # ⛔ ロケール(LANG / LC_COLLATE / LC_CTYPE)は宣言しない。**まだ測っていない**
-          #    からである(この PR で測る側には足したが、その実測値が出るのは
-          #    この PR の CI が初めてである)。測る前に宣言するのは、Issue #148 が
-          #    「⛔ 順序を逆にしない」と名指しで禁じた形そのものである。
-          POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+          #    からである。測る前に宣言するのは、Issue #148 が「⛔ 順序を逆にしない」
+          #    と名指しで禁じた形そのものである。
+          POSTGRES_INITDB_ARGS: ${{ matrix.initdbArgs }}
         ports:
           - 5432:5432
         options: >-
@@ -120,31 +145,81 @@ jobs:
         # から読めるようにする。`lexical-regime-summary.mjs` 自体は server_encoding /
         # nonAsciiIsIndexed の値そのものでは非0にならない——非0になるのは「値が出ていない
         # (歯が書いていない)」「JSON が壊れている」「値が空だった」、そして
-        # 🔴 「この6本の services が宣言した POSTGRES_INITDB_ARGS(下の --expect-encoding)
-        # と、実際に測れた server_encoding が食い違った」の4つだけである(Issue #148 ②)。
+        # 🔴 「この脚が宣言した POSTGRES_INITDB_ARGS(下の --expect-encoding)と、
+        # 実際に測れた server_encoding が食い違った」の4つだけである(Issue #148 ②)。
         # **最後の1つだけは値を見るが、『UTF8 が正しい』ではなく『宣言どおりだったか』
         # だけを見る。**これは「値の良し悪しの門」ではなく「宣言と実測が揃っている
         # ことの門」である(`scripts/lexical-regime-summary-lib.mjs` の docstring)。
-        # ⚠ --expect-encoding の値は、6本の services env の POSTGRES_INITDB_ARGS と
-        # 揃っていなければならない——揃っていることは
-        # scripts/__tests__/ci-yml-postgres-regime-wiring.test.mjs が固定している。
+        # ⚠ --expect-encoding は matrix.serverEncoding にそのまま揃えている——
+        # 揃っていることは scripts/__tests__/ci-yml-postgres-regime-wiring.test.mjs が
+        # 固定している。
         if: always()
         run: |
           node scripts/lexical-regime-summary.mjs \
             --measured "${{ github.workspace }}/lexical-regime.json" \
-            --expect-encoding "UTF8" \
+            --expect-encoding "${{ matrix.serverEncoding }}" \
             >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 実測値そのもの(機械可読)を成果物として残す(Issue #148)
+      - name: 実測値そのもの(機械可読)を成果物として残す(Issue #148/#155)
+        # 🔴 artifact 名を脚ごとに分ける(lexical-regime-${{ matrix.serverEncoding }})。
+        # 分けないと2脚が同じ名前へ upload しようとして衝突・上書きする
+        # (Issue #155 満たすべきこと1)。
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: lexical-regime
+          name: lexical-regime-${{ matrix.serverEncoding }}
           path: ${{ github.workspace }}/lexical-regime.json
           if-no-files-found: ignore
 
       - name: Build @mnemora/postgres
         run: pnpm --filter @mnemora/postgres run build
+
+  postgres-regime-coverage:
+    name: 両方の server_encoding regime が実際に走ったことを測る(Issue #155)
+    needs: postgres
+    # 🔴 `postgres` ジョブ(matrix)の一部の脚が落ちても、このジョブは必ず走る——
+    # 「揃って別々に走ったか」を測れるだけの artifact は、失敗した run にも残りうる
+    # (Issue #155 満たすべきこと2 の裏側)。
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: postgres ジョブ(matrix)が skip されていないこと(⛔ skip を成功として読ませない)
+        # ⚠ ここで見るのは "skipped" だけである。"failure"(片脚が落ちた)はこの
+        # チェックを通す——落ちた脚の artifact が残っていれば、次の段で判定できる。
+        run: |
+          if [ "${{ needs.postgres.result }}" = "skipped" ]; then
+            echo "postgres ジョブ(matrix)が skip された。両方の regime が実際に走ったかを" >&2
+            echo "測れない——これは意図した失敗である(skip を成功として読ませないため、Issue #155)。" >&2
+            exit 1
+          fi
+
+      - name: 両脚が残した lexical-regime-* artifact を全部ダウンロードする
+        uses: actions/download-artifact@v6
+        with:
+          pattern: lexical-regime-*
+          path: ${{ github.workspace }}/lexical-regime-artifacts
+          if-no-artifact-found: warn
+
+      - name: 両方の regime が実際に走ったかを判定する(⛔ 値の良し悪しではなく「揃って別々に走ったか」の門)
+        # scripts/lexical-regime-coverage.mjs が非0で終わる経路は、期待する脚の
+        # artifact が無い・JSON が壊れている・artifact 名と中身の server_encoding が
+        # 食い違う・実際に測れた server_encoding が2種類に届かない、の4つ
+        # (Issue #155 満たすべきこと2)。期待する脚の集合(UTF8/SQL_ASCII)は
+        # scripts/lexical-regime-coverage-lib.mjs の EXPECTED_SERVER_ENCODINGS に
+        # 持たせてあり、それが上の matrix の脚と一致していることは
+        # scripts/__tests__/ci-yml-postgres-regime-coverage-wiring.test.mjs が固定している。
+        run: |
+          node scripts/lexical-regime-coverage.mjs \
+            --artifacts-dir "${{ github.workspace }}/lexical-regime-artifacts" \
+            >> "$GITHUB_STEP_SUMMARY"
 
   example-chat:
     name: examples/chat (本物の Postgres + pgvector、擬似 provider)
