@@ -35,10 +35,13 @@ import { formatSystemErrorFacts, SYSTEM_ERROR_UNKNOWN_NOTE } from './system-erro
 // **`isManagerInFlight` も同じ理由で同じ場所から取る**——あちらは字面ではなく
 // **群の分け方**（走行中・返事待ちを先に出す側か）の唯一の生成元である。
 import {
+  classifyUnobservedOutcome,
   describeManagerState,
   describeSessionMissingKind,
+  describeUnobservedOutcome,
   isManagerAwaitingJudgement,
   isManagerInFlight,
+  JUDGEMENT_RANK_NOT_APPLICABLE,
 } from './digest.js';
 import {
   describeDroppedTraceEmpty,
@@ -1719,6 +1722,20 @@ function describeManagerSystemError(manager: ManagerSummary): string | null {
  */
 function systemErrorLine(manager: ManagerSummary): string | null {
   const note = describeManagerSystemError(manager);
+  return note === null ? null : `  ${note}`;
+}
+
+/**
+ * {@link describeUnobservedOutcome}（`digest.ts`）を `manager_list` の
+ * `extra` へ入れる形にする（Issue #857。`failureLine` / `systemErrorLine` /
+ * `denialLine` と同じ作法）。
+ *
+ * **字面そのものはここで作らない**——作ると `manager_report` と割れる
+ * （`failureLine` の doc と同じ理由）。**対象外の委譲では `null` で、
+ * 一覧は1文字も伸びない。**
+ */
+function unobservedOutcomeLine(manager: ManagerSummary): string | null {
+  const note = describeUnobservedOutcome(manager);
   return note === null ? null : `  ${note}`;
 }
 
@@ -6218,6 +6235,21 @@ export function createCloneTools(context: ToolContext) {
                   'コミットまで届いていることがある）。まずそこを確かめ、続きが要ると' +
                   '判断したときだけ manager_start で起こし直すこと。'
                 : null,
+              // **既存の `lost` の注記（すぐ上）とは軸が違う（Issue #857）。**
+              // あちらは「戻れなかった」という**一つの観測**の名乗りと、次の一手
+              // （確かめてから `manager_start`）である。こちらは**依頼者が何を
+              // 観測していないか**——本文が届いているか（軸1）と、刻印で照合できる
+              // 時代か（軸2）——で、`failed` にも出る。**両方出しても同じことを
+              // 2回は言っていない**ので、どちらも削っていない。
+              //
+              // **`lost` の行すべてに同じ注記が出て順位が付かない**、というのが
+              // #857 が直した穴そのものである（依頼者は1本ずつ `gh` を叩いて
+              // 成果の所在を測るしかなかった）。⟹ この行は委譲ごとに違う文になり、
+              // **並び（`judgementRank`）と同じ分類から作られる。**
+              //
+              // **対象外（`running` / `waiting_human` / `done` / `stopped`）
+              // では1文字も足さない。**
+              unobservedOutcomeLine(manager),
               // **拒否は `status` に映らない。** 分類器か deny 規則がその場で止めた
               // 仕事は `running` のまま手が動かない。日誌と（繰り返したときだけ）
               // 受信箱にしか出ないので、一覧を見ているクローンには「走っている」と
@@ -6472,7 +6504,17 @@ export function createCloneTools(context: ToolContext) {
           // 「番人に止められて書けない」を区別できない——直上の #713 段3 の
           // コメントと同じ理由で、片方が空だからもう片方も出さない、にはしない。
           const denied = describeDenials(context.managers.denials(managerId));
-          return text([missing, systemError, denied].filter((s) => s !== null).join('\n\n'));
+          // **この枝こそが軸1の `none`（本文が1文字も届いていない）である**
+          // （Issue #857）。`manager_list` で「何も届いていない」と読んだ
+          // クローンが掘りに来る先がここなので、**ここで黙ると、順位を付けた
+          // 意味が掘った先で消える**——`describeManagerSystemError` /
+          // `describeDenials` を同じ枝に置いてあるのと同じ理由で、片方が空だから
+          // もう片方も出さない、にはしない。字面の生成元は
+          // `describeUnobservedOutcome` 1箇所で、`manager_list` と割れない。
+          const unobserved = describeUnobservedOutcome(found);
+          return text(
+            [missing, systemError, denied, unobserved].filter((s) => s !== null).join('\n\n'),
+          );
         }
 
         // **失敗した回は「報告」と呼ばない（Issue #714）。** `manager_list` で
@@ -6500,6 +6542,14 @@ export function createCloneTools(context: ToolContext) {
         // 止められたかの話ではない（`failure` / `systemError` と同じ線）。
         const denied =
           part === 'request' ? null : describeDenials(context.managers.denials(managerId));
+        // **一覧と同じ分類を、掘った先でも同じ字面で出す（Issue #857）。**
+        // `manager_list` で順位が付いた理由（本文が届いているか／刻印で照合
+        // できる時代か）が、掘った先で消えないようにする。
+        //
+        // **`part === 'request'` では出さない。** 依頼文は「何が観測されて
+        // いないか」の話ではない（`failure` / `systemError` / `denied` と
+        // 同じ線）。
+        const unobserved = part === 'request' ? null : describeUnobservedOutcome(found);
         const label =
           part === 'request' ? '依頼文' : failure === null ? '直近の報告' : '直近のターンの中身';
         const part1 = page(body, offset, REPORT_PAGE);
@@ -6517,6 +6567,10 @@ export function createCloneTools(context: ToolContext) {
         // 報告を読み終えてから「実は途中で止められていた」と分かる順になる。
         // **止められていない回は1文字も増えない。**
         const denialNote = denied === null ? '' : `${denied}\n\n`;
+        // **同じ順・同じ理由で本文の上に置く（Issue #857）。** 本文の下だと、
+        // 「完遂した報告とは限らない」を読み終えてから知ることになる。
+        // **対象外の委譲では1文字も増えない。**
+        const unobservedNote = unobserved === null ? '' : `${unobserved}\n\n`;
         const tail = part1.more
           ? `\n\n…（ここで切れている。続きは manager_report managerId=${managerId}` +
             `${part === 'request' ? ' part=request' : ''} offset=${part1.to}）`
@@ -6528,7 +6582,7 @@ export function createCloneTools(context: ToolContext) {
         const footer =
           '\n\n（さらに掘るなら manager_transcript managerId=' + managerId + ' で生ログへ）';
         return text(
-          `${head}\n\n${failureNote}${systemErrorNote}${denialNote}${part1.body}${tail}${footer}`,
+          `${head}\n\n${failureNote}${systemErrorNote}${denialNote}${unobservedNote}${part1.body}${tail}${footer}`,
         );
       },
     ),
@@ -7414,9 +7468,30 @@ function managerAttentionRank(status: JobStatus): 0 | 1 | 2 {
  * 両方がここを通る。** 別々に書くと、片方だけがずれたときに黙って行が飛ぶ
  * ——同じ錨を使うことを構造で保証するための1箇所である。
  */
+/**
+ * 群（`rank`）の**中**の副順位（Issue #857）。**群の境界は1バイトも動かさない**
+ * ——{@link managerAttentionRank} には1文字も触れていない。
+ *
+ * **分類の対象外は `JUDGEMENT_RANK_NOT_APPLICABLE` で同順に落ちる**ので、
+ * 対象外どうし・対象外と `delivered` の相対順序は `startedAt` のまま変わら
+ * ない（`digest.ts` のあの定数の doc に、新しい値を与えると群2の中に4つ目の
+ * 群を黙って作ることになる理由が在る）。
+ *
+ * **判定は `digest.ts` の純関数から取る**（{@link managerAttentionRank} が
+ * `isManagerInFlight` / `isManagerAwaitingJudgement` から取るのと同じ理由）
+ * ——ここに `lastReport === undefined` を書き下ろすと、*分け方* が字面の側
+ * （`describeUnobservedOutcome`）と割れ、「順位は先頭なのに文は delivered と
+ * 言う」という形が黙って作れてしまう。
+ */
+function managerJudgementRank(entry: ManagerSummary): 0 | 1 | 2 {
+  const outcome = classifyUnobservedOutcome(entry);
+  return outcome === null ? JUDGEMENT_RANK_NOT_APPLICABLE : outcome.rank;
+}
+
 function managerPositionOf(entry: ManagerSummary): ManagerPosition {
   return {
     rank: managerAttentionRank(entry.status),
+    judgementRank: managerJudgementRank(entry),
     startedAt: entry.startedAt,
     managerId: entry.managerId,
   };

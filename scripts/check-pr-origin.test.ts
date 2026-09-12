@@ -11,7 +11,11 @@ import {
   stripFencedCode,
 } from './check-pr-origin-core.mjs';
 
-import { formatOriginMarker, ORIGIN_HUMAN } from '../packages/core/src/origin-marker.js';
+import {
+  formatOriginMarker,
+  ORIGIN_GATE_SINCE as ORIGIN_GATE_SINCE_TS,
+  ORIGIN_HUMAN,
+} from '../packages/core/src/origin-marker.js';
 import { CLONE_ACTOR_ID } from '../packages/core/src/usage.js';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -287,5 +291,39 @@ describe('decideGateVerdict: legacy（門より前に作られた PR）', () => 
     expect(decideGateVerdict({ body: null, createdAt: ORIGIN_GATE_SINCE })).toEqual({
       verdict: 'missing',
     });
+  });
+});
+
+/**
+ * 🔴 **刻印の境界時刻は2実装で同じ値である（Issue #857）。**
+ *
+ * この値は2箇所に在る——`scripts/check-pr-origin-core.mjs`（CI の門。
+ * **依存を1本も持てない**ので TypeScript を読めない）と
+ * `packages/core/src/origin-marker.ts`（`digest.ts` の
+ * `classifyUnobservedOutcome` が読む側。`packages/core` の中から `scripts/` の
+ * 素の `.mjs` を import すると、パッケージ境界と `dist/` の build を跨ぐ）。
+ * **どちらからも相手を import できないので、写しを置くしかない。**
+ *
+ * ⟹ **「2箇所に同じ値が在って誰も見張っていない」状態を作らないための歯が
+ * これである。** この歯が赤くなったら、片方だけを直している。
+ *
+ * 形は `scripts/mutate-core-strip-ansi.test.ts` と同じ——`@ts-expect-error` 付きで
+ * 素の `.mjs` を読み、2実装へ同じものを突き合わせる。
+ */
+describe('刻印の境界時刻は2実装で同じ値である（#857）', () => {
+  it('.mjs（CI の門）と origin-marker.ts（digest が読む側）が同じ文字列を持つ', () => {
+    expect(ORIGIN_GATE_SINCE_TS).toBe(ORIGIN_GATE_SINCE);
+  });
+
+  /**
+   * **同じ「文字列」であるだけでなく、同じ「瞬間」として読めること。**
+   * 片方が `Z` 無し・片方がオフセット付き、のような書き換えを通さない
+   * （文字列の一致だけだと「読める時刻であること」を1文字も測っていない——
+   * `digest.ts` の側は `Date.parse` の結果で `markable` / `pre-marker` を
+   * 分けるので、読めない値になった瞬間に全件が `unknown` へ倒れる）。
+   */
+  it('両方が Date.parse で読める同じ瞬間である', () => {
+    expect(Number.isNaN(Date.parse(ORIGIN_GATE_SINCE_TS))).toBe(false);
+    expect(Date.parse(ORIGIN_GATE_SINCE_TS)).toBe(Date.parse(ORIGIN_GATE_SINCE));
   });
 });

@@ -7479,7 +7479,20 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
       expect(reply, `${id} が窓の外へ落ちた`).toContain(id);
     }
     // **id が出るだけでは足りない**——終端より先に出ていることまで見る。
-    expect(reply.indexOf('mgr-lost-00')).toBeLessThan(reply.indexOf('mgr-term-0000'));
+    //
+    // **#857 で、比べる相手を `mgr-term-0000`（`done`）から `mgr-term-0001`
+    // （`failed`）へ変えた。** 群2 の中に副順位（軸1）が入ったので、`lastReport`
+    // を持たない `failed`（副順位 0）が `done`（分類の対象外＝副順位はいちばん
+    // 後ろ）より先に出るようになり、**`mgr-term-0000` は予算の窓の外へ落ちた**
+    // （`indexOf` が -1 を返し、「-1 より小さい」を測る意味の無い比較になっていた）。
+    // **群1 → 群2 という測定の中身は1バイトも変えていない**——比べる相手を、
+    // 窓に残っている終端へ付け替えただけである。
+    //
+    // **窓に在ることを先に測る**（`indexOf` の -1 と「先に出る」を混ぜない）。
+    expect(reply, 'mgr-term-0001 が窓の外へ落ち、群の順序を測れていない').toContain(
+      'mgr-term-0001',
+    );
+    expect(reply.indexOf('mgr-lost-00')).toBeLessThan(reply.indexOf('mgr-term-0001'));
   });
 
   /**
@@ -14859,5 +14872,343 @@ describe('journal.append 失敗時の応答本文: 17箇所すべてで道具名
     );
     const actualTools = [...new Set(CASES.map((c) => c.tool))];
     expect(actualTools.sort()).toEqual([...EXPECTED_TOOLS].sort());
+  });
+});
+
+/**
+ * Issue #857: `lost` / `failed` の警告に順位を付ける。
+ *
+ * **直した穴**: `manager_list` は `lost` の行すべてに同じ注記（「前のセッション
+ * へ戻れなかった」）を出していた。**ほぼ常に真なので順位が付かない**——依頼者
+ * （クローン）は1本ずつ `gh` を叩いて成果の所在を測るしかなかった。
+ *
+ * ここで測るのは**一覧に配線した結果**である（分類そのものと字面は
+ * `digest.test.ts` の同名の節が純関数として測る）。
+ *
+ * **群（#688 の3群）の境界は1バイトも動かさない。** 挟んだのは群の**中**の
+ * 副順位だけで、それも歯で固定してある（下の「群の境界は動いていない」）。
+ */
+describe('#857: lost / failed の中を「依頼者が何を知らないか」で並べる', () => {
+  const NEWEST = Date.parse('2026-09-12T12:00:00.000Z');
+  const minutesBefore = (minutes: number) => new Date(NEWEST - minutes * 60_000).toISOString();
+
+  const FAILURE = {
+    code: 'billing_error',
+    via: 'assistant_error',
+    at: '2026-09-12T01:00:00.000Z',
+  } as const;
+
+  /**
+   * 委譲1本ぶんの足場。**`request` を厚くしてある**——1件の行の長さはここで
+   * 決まるので、`LIST_BUDGET` を実際に溢れさせるために要る（#688 の節の
+   * `entry` と同じ理由）。
+   */
+  function entry(
+    managerId: string,
+    status: JobStatus,
+    minutesAgo: number,
+    report: 'none' | 'failure-wrapped' | 'delivered',
+  ): ManagerSummary {
+    return {
+      managerId,
+      status,
+      live: false,
+      cwd: '/workspace/repo',
+      request: `依頼 ${managerId}: ${'あ'.repeat(400)}`,
+      startedAt: minutesBefore(minutesAgo),
+      updatedAt: minutesBefore(minutesAgo),
+      waiting: [],
+      runnerId: 'runner-test',
+      ...(report === 'none'
+        ? {}
+        : report === 'failure-wrapped'
+          ? {
+              lastReport: '（このターンは応答を返さずに終わった: billing_error）',
+              lastFailure: FAILURE,
+            }
+          : { lastReport: '終わった' }),
+    };
+  }
+
+  /** `startedAt` 降順で積む（本物の `ManagerPool.list()` と同じ並び）。 */
+  function pool(entries: readonly ManagerSummary[]): Harness {
+    const h = harness();
+    for (const item of [...entries].sort((a, b) => b.startedAt.localeCompare(a.startedAt))) {
+      h.running.push(item);
+    }
+    return h;
+  }
+
+  /**
+   * ⭐⭐ **この節の本体。**
+   *
+   * **⭐ 測定条件を反転させてある**——`none` を**いちばん古い側**、`delivered` を
+   * **いちばん新しい側**に置く。`ManagerPool.list()` も群の中の並びも
+   * `startedAt` 降順なので、**副順位を消すと期待の逆順になる**。⟹ この歯は
+   * 副順位が実際に効いていることしか緑にしない。
+   *
+   * **⭐ 順序は文字列ではなく `indexOf` の数値比較で測り、目印は注記の字面では
+   * なく `managerId` である**（足場が自分で作った、測定対象と重ならない文字列。
+   * #688 の節と同じ作法）。
+   */
+  it('⭐⭐ lost の中は none → failure-wrapped → delivered の順に出る（古い側に none を置いても逆転しない）', async () => {
+    const h = pool([
+      entry('mgr-lost-none', 'lost', 300, 'none'),
+      entry('mgr-lost-wrapped', 'lost', 200, 'failure-wrapped'),
+      entry('mgr-lost-delivered', 'lost', 100, 'delivered'),
+    ]);
+
+    const reply = await h.call('manager_list', {});
+
+    // 3本とも窓に入っていること（入っていなければ順序は測れない）。
+    for (const id of ['mgr-lost-none', 'mgr-lost-wrapped', 'mgr-lost-delivered']) {
+      expect(reply, `${id} が窓の外へ落ちた`).toContain(id);
+    }
+    expect(reply.indexOf('mgr-lost-none')).toBeLessThan(reply.indexOf('mgr-lost-wrapped'));
+    expect(reply.indexOf('mgr-lost-wrapped')).toBeLessThan(reply.indexOf('mgr-lost-delivered'));
+  });
+
+  /** 終端群（`failed` を含む群2）の中でも同じ順位が効く。 */
+  it('⭐⭐ failed の中も none → failure-wrapped → delivered の順に出る（同じ測定条件の反転）', async () => {
+    const h = pool([
+      entry('mgr-fail-none', 'failed', 300, 'none'),
+      entry('mgr-fail-wrapped', 'failed', 200, 'failure-wrapped'),
+      entry('mgr-fail-delivered', 'failed', 100, 'delivered'),
+    ]);
+
+    const reply = await h.call('manager_list', {});
+
+    for (const id of ['mgr-fail-none', 'mgr-fail-wrapped', 'mgr-fail-delivered']) {
+      expect(reply, `${id} が窓の外へ落ちた`).toContain(id);
+    }
+    expect(reply.indexOf('mgr-fail-none')).toBeLessThan(reply.indexOf('mgr-fail-wrapped'));
+    expect(reply.indexOf('mgr-fail-wrapped')).toBeLessThan(reply.indexOf('mgr-fail-delivered'));
+  });
+
+  /**
+   * 🔴 **群（#688 の3群）の境界が1バイトも動いていないこと。**
+   *
+   * **⭐ 測定条件を反転させてある**——走行中・返事待ち（群0）と `lost`（群1）を
+   * **いちばん古い側**に、終端（群2）を**いちばん新しい側**に置き、さらに
+   * **群0/群1 の側に「副順位のいちばん後ろ」を、群2 の側に「副順位の先頭」を**
+   * 割り当てる。⟹ 副順位が群の境界を跨いで効いてしまう実装（`rank` より先に
+   * `judgementRank` を比べる等）では、この歯は必ず赤くなる。
+   */
+  it('🔴 群の境界は動いていない（走行中・返事待ち → lost → その他。副順位は群を跨がない）', async () => {
+    const inFlight = (['running', 'waiting_human'] as const).map((status, index) =>
+      // 群0。**いちばん古い側**。分類の対象外なので副順位はいちばん後ろに落ちる。
+      entry(`mgr-live-${index}`, status, 30_000 + index, 'delivered'),
+    );
+    const lost = [
+      // 群1。古い側。**副順位はいちばん後ろ**（`delivered`）。
+      entry('mgr-lost-delivered', 'lost', 20_000, 'delivered'),
+    ];
+    const terminal = [
+      // 群2。**いちばん新しい側**で、**副順位は先頭**（`none`）。
+      entry('mgr-fail-none', 'failed', 1, 'none'),
+      entry('mgr-done-0', 'done', 2, 'delivered'),
+    ];
+    const h = pool([...inFlight, ...lost, ...terminal]);
+
+    const reply = await h.call('manager_list', {});
+
+    for (const id of ['mgr-live-0', 'mgr-live-1', 'mgr-lost-delivered', 'mgr-fail-none']) {
+      expect(reply, `${id} が窓の外へ落ちた`).toContain(id);
+    }
+    expect(reply.indexOf('mgr-live-0')).toBeLessThan(reply.indexOf('mgr-lost-delivered'));
+    expect(reply.indexOf('mgr-live-1')).toBeLessThan(reply.indexOf('mgr-lost-delivered'));
+    expect(reply.indexOf('mgr-lost-delivered')).toBeLessThan(reply.indexOf('mgr-fail-none'));
+  });
+
+  /**
+   * **分類の対象外（`done` / `stopped`）と `delivered` の相対順序は `startedAt`
+   * のまま変わらない**（`JUDGEMENT_RANK_NOT_APPLICABLE` が `delivered` と同値
+   * だから）。**新しい値を与えると、群2 の中に「`failed` 全部 → `done` 全部」
+   * という4つ目の群を黙って作ることになる**——それを作っていないことを測る。
+   */
+  it('対象外（done / stopped）と delivered は startedAt のまま混ざる（4つ目の群を作っていない）', async () => {
+    const h = pool([
+      entry('mgr-done-new', 'done', 10, 'delivered'),
+      entry('mgr-fail-delivered', 'failed', 20, 'delivered'),
+      entry('mgr-stopped-old', 'stopped', 30, 'delivered'),
+    ]);
+
+    const reply = await h.call('manager_list', {});
+
+    // `startedAt` 降順そのまま（`failed` が `done` を追い越さない）。
+    expect(reply.indexOf('mgr-done-new')).toBeLessThan(reply.indexOf('mgr-fail-delivered'));
+    expect(reply.indexOf('mgr-fail-delivered')).toBeLessThan(reply.indexOf('mgr-stopped-old'));
+  });
+
+  /**
+   * 🔴 **並びと継続点（cursor）が同じ比較を使っていること**（#662 の約束）。
+   * 別の比較を使うと、`manager_list` の続きが**飛ぶか、同じ行を繰り返す**。
+   *
+   * **ふるまいで測る**——予算（`LIST_BUDGET`）を実際に溢れさせ、案内された
+   * `cursor` で最後まで辿り、**(a) 全件に到達すること**と **(b) 同じ
+   * `managerId` が2つの頁に出ないこと**を見る。**副順位を cursor 側だけ忘れる**
+   * 実装は (b) で落ちる。
+   */
+  it('🔴 副順位を挟んでも cursor は飛ばない・繰り返さない（並びと継続点が同じ比較を使っている）', async () => {
+    const kinds = ['none', 'failure-wrapped', 'delivered'] as const;
+    const entries = Array.from({ length: 45 }, (_, index) =>
+      entry(
+        `mgr-unobs-${String(index).padStart(2, '0')}`,
+        // **群は1つに揃える（全部 `lost`）。** 副順位は群の**中**の順位なので、
+        // 2つの群を混ぜると「群1の delivered → 群2の none」が正しい並びになり、
+        // 通し順では副順位を測れない（測っているものが群の境界に化ける）。
+        'lost',
+        // **副順位と `startedAt` をわざと逆向きにする**——副順位が効いていれば、
+        // 頁の切れ目は `startedAt` の順とは一致しない。
+        index,
+        kinds[index % 3]!,
+      ),
+    );
+    const h = pool(entries);
+    const ids = entries.map((m) => m.managerId);
+
+    const sequence: string[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    for (let guard = 0; guard < ids.length + 1; guard += 1) {
+      const reply: string = await h.call('manager_list', cursor === undefined ? {} : { cursor });
+      pages += 1;
+      // **この頁に出た id を、出た順で拾う。**
+      const onThisPage = ids
+        .filter((id) => reply.includes(id))
+        .sort((a, b) => reply.indexOf(a) - reply.indexOf(b));
+      sequence.push(...onThisPage);
+      if (!reply.includes('cursor=')) break;
+      cursor = /cursor=([A-Za-z0-9\-_]+)/.exec(reply)![1]!;
+    }
+
+    // **前提条件を先に測る**——1頁で収まっていたら、この歯は cursor を1文字も
+    // 測っていない（#688 の節の「予算を実際に溢れさせたこと」と同じ作法）。
+    expect(pages, '1頁で収まってしまい、cursor を測れていない').toBeGreaterThan(1);
+    // (a) 全件に到達する（飛んでいない）。
+    expect(new Set(sequence).size, '到達できなかった委譲が在る').toBe(ids.length);
+    // (b) 同じ id が2度出ていない（繰り返していない）。
+    expect(sequence.length, '同じ委譲が2つの頁に出ている').toBe(ids.length);
+    // (c) 頁をまたいだ通し順が、副順位どおりである（`none` が全部先）。
+    const firstDelivered = sequence.findIndex((id) => {
+      const found = entries.find((e) => e.managerId === id)!;
+      return found.lastReport !== undefined && found.lastFailure === undefined;
+    });
+    const lastNone = sequence.reduce(
+      (acc, id, index) =>
+        entries.find((e) => e.managerId === id)!.lastReport === undefined ? index : acc,
+      -1,
+    );
+    expect(lastNone, 'none が1本も出ていない').toBeGreaterThanOrEqual(0);
+    expect(lastNone, 'none より先に delivered が出ている').toBeLessThan(firstDelivered);
+  });
+
+  /**
+   * ⭐ **分類の対象外の委譲には1文字も足さない**（`describeManagerFailure` の
+   * 「`null` は1文字も増やさない」と同じ形。一覧は予算に張り付いていて、行を
+   * 1本増やすと出る件数が減る）。
+   *
+   * これが無いと「条件を外して常に出す」実装でも上の歯は全部緑になる。
+   */
+  it('⭐ running / waiting_human / done / stopped には1文字も足さない（予算を食わない）', async () => {
+    for (const status of ['running', 'waiting_human', 'done', 'stopped'] as const) {
+      const h = pool([entry(`mgr-${status}`, status, 10, 'delivered')]);
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply, `${status} に行が出た`).toContain(`mgr-${status}`);
+      for (const word of [
+        '終端までに本文が1文字も届いていない',
+        '包んだエラー文であって報告ではない',
+        '完遂した報告とは限らない',
+        '刻印では照合できない',
+        'gh pr list',
+      ]) {
+        expect(reply, `${status} に #857 の行（${word}）が漏れている`).not.toContain(word);
+      }
+    }
+  });
+
+  /**
+   * 🔴 **`pre-marker` の委譲には、一覧の側でも引き方を出さない。**
+   * 出すと、**必ず0件になる検索**の結果を成果の所在として読むことになる
+   * （Issue #857 の実例2）。
+   *
+   * **行の選定は `managerId` で行い、測っている文言そのものでは選んでいない**
+   * （AGENTS.md「対象をスコープして特定する」。足場が測定対象と同じ文字列で
+   * 対象を選ぶと、「文言に依存していない」という主張を足場自身が裏切る）。
+   */
+  it('🔴 刻印の導入より前に始まった lost には gh の引き方が出ない（後の委譲には出る）', async () => {
+    const old = entry('mgr-premarker', 'lost', 0, 'none');
+    old.startedAt = '2026-09-01T00:00:00.000Z';
+    old.updatedAt = old.startedAt;
+    const recent = entry('mgr-markable', 'lost', 0, 'none');
+    recent.startedAt = '2026-09-12T00:00:00.000Z';
+    recent.updatedAt = recent.startedAt;
+    const h = pool([old, recent]);
+
+    const reply = await h.call('manager_list', {});
+
+    // **対象をスコープして測る**——1件ぶんの塊を `managerId` で切り出す
+    // （`renderListingEntry` は1件を `- <id> [...]` で始める）。
+    const blocks = reply.split('\n- ');
+    const oldBlock = blocks.find((b) => b.startsWith('mgr-premarker'));
+    const recentBlock = blocks.find((b) => b.startsWith('mgr-markable'));
+    expect(oldBlock, 'mgr-premarker の塊が見つからない').toBeDefined();
+    expect(recentBlock, 'mgr-markable の塊が見つからない').toBeDefined();
+
+    expect(oldBlock).toContain('刻印では照合できない');
+    expect(oldBlock).not.toContain('gh pr list');
+    // 後に始まった側には引き方が出る（＝「そもそも出す経路が無い」ではない）。
+    expect(recentBlock).toContain('gh pr list');
+    expect(recentBlock).toContain('mgr-markable');
+  });
+
+  /**
+   * **`manager_report` も同じ字面を出す**（一覧から掘りに行く先。
+   * `describeManagerFailure` / `describeManagerSystemError` / `describeDenials` と
+   * 同じ作法で、字面の生成元は1箇所である）。
+   *
+   * **軸1 の `none` は、報告が空のときの枝に落ちる**——そこで黙ると、一覧で
+   * 順位を付けた意味が掘った先で消える。
+   */
+  it('manager_report は報告が空の回にも #857 の行を出す（掘った先で消えない）', async () => {
+    const target = entry('mgr-report-none', 'lost', 10, 'none');
+    const h = pool([target]);
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-report-none' });
+
+    expect(reply).toContain('終端までに本文が1文字も届いていない');
+    expect(reply).toContain('gh pr list');
+  });
+
+  it('manager_report は報告が在る回にも出し、part: request では1文字も足さない', async () => {
+    const target = entry('mgr-report-delivered', 'failed', 10, 'delivered');
+    const h = pool([target]);
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-report-delivered' });
+    expect(reply).toContain('完遂した報告とは限らない');
+
+    const request = await h.call('manager_report', {
+      managerId: 'mgr-report-delivered',
+      part: 'request',
+    });
+    expect(request).toContain('依頼文');
+    expect(request).not.toContain('完遂した報告とは限らない');
+    expect(request).not.toContain('gh pr list');
+  });
+
+  /**
+   * **既存の `lost` の注記（「前のセッションへ戻れなかった」）を消していない。**
+   * あれは「戻れたかどうかしか見ていない」という**一つの観測**の名乗りで、
+   * 新しい行は「依頼者が何を観測していないか」——軸が違うので両方出す。
+   */
+  it('既存の lost の注記は消えていない（軸が違うので両方出る）', async () => {
+    const h = pool([entry('mgr-lost-both', 'lost', 10, 'none')]);
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('⚠ 前のセッションへ戻れなかった');
+    expect(reply).toContain('終端までに本文が1文字も届いていない');
   });
 });

@@ -3,6 +3,7 @@ import { excerptLine } from './excerpt.js';
 // 実行時の循環を作らない）。字面の生成元をここに置く理由は
 // `describeSessionMissingKind` の doc に在る。
 import type { ManagerAwaitingBackground, SessionMissingKind } from './manager.js';
+import { ORIGIN_GATE_SINCE, ORIGIN_MARKER_NAME } from './origin-marker.js';
 import { describeScheduleSpec } from './schedule.js';
 import type { Job, JobStatus, JournalEntry, PendingApproval } from './schema.js';
 import type { Stores } from './store.js';
@@ -271,6 +272,246 @@ export function isManagerInFlight(status: JobStatus): boolean {
  */
 export function isManagerAwaitingJudgement(status: JobStatus): boolean {
   return status === 'lost';
+}
+
+/**
+ * その委譲が**終端していて、かつ誰も望んでいない終わり方をした**か
+ * （`lost` / `failed`。Issue #857）。
+ *
+ * ## ⛔ {@link isManagerAwaitingJudgement} を書き換えてこれにしないこと
+ *
+ * あちらは `lost` 1値だけを見る述語で、**日報（#688）の判断を握っている**
+ * （`manager_list` の第2群の境界そのもの）。こちらは `failed` を足した別の集合
+ * である——`failed` を `isManagerAwaitingJudgement` へ混ぜると、`manager_list`
+ * の群1（`lost`）の境界が動き、#688 が決めた並びが1バイト以上変わる。
+ * **だから別の述語として並べて置く。** 群の境界は `isManagerAwaitingJudgement`
+ * が持ったまま、この述語は**群の中の副順位**にしか使わない
+ * （`tools.ts` の `managerPositionOf`）。
+ *
+ * ## なぜ `done` / `stopped` を含めないのか
+ *
+ * `done` は報告を受け取って畳んだ終端で、`stopped` は人間・クローンが自分で
+ * 止めた終端である——**どちらも「そう終わってほしかった」側**で、依頼者は
+ * 終わり方そのものを知っている。`lost`（前のセッションへ戻れなかった）と
+ * `failed`（セッションが落ちた）だけが、**依頼者が望まないところで終わり、
+ * かつ何が起きたかを台帳が持っていない**（`schema.ts` の `lost` の doc と
+ * `lastSystemError` の doc）。
+ */
+export function isManagerOutcomeUnobserved(status: JobStatus): boolean {
+  return status === 'lost' || status === 'failed';
+}
+
+/**
+ * 軸1（順位の芯）: **依頼者に本文が届いているか**（Issue #857）。
+ *
+ * - `none`: `lastReport === undefined`。**終端までに本文が1文字も届いていない。**
+ *   `manager.ts` の `case 'report'` が唯一の書き込み元で、一度でも届けば上書きで
+ *   残る ⟹ 「1文字も届いていない」は台帳から**厳密に真**である。
+ * - `failure-wrapped`: `lastReport` は在るが `lastFailure` も在る。中身は runner が
+ *   包んだエラー文であって報告ではない（Issue #714。`tools.ts` に逐語で
+ *   「失敗した回は「報告」と呼ばない（Issue #714）。」と在る）。
+ * - `delivered`: `lastReport` が在り `lastFailure` は無い。**本文は届いたが、完遂
+ *   した報告とは限らない**——`runner.ts` の `#flushUnreported(reason, status)` が
+ *   終端の直前に「喋っただけの本文」を報告として出す経路を持つ。**この2つは台帳
+ *   からは区別できない**ので、`delivered` は「完遂した」とは名乗らない。
+ */
+export type UnobservedReportState = 'none' | 'failure-wrapped' | 'delivered';
+
+/**
+ * 軸2（各行に添える。順位には使わない）: **刻印で照合できる時代か**
+ * （Issue #857）。
+ *
+ * ⚠ **3値である。** `startedAt` が空文字・`Date.parse` が `NaN` になる回を
+ * `pre-marker` へ倒さない——「照合できない」（刻印が付いていないと分かっている）
+ * と「判定できなかった」（付いているかどうかを決められない）は別の状態である。
+ * `check-pr-origin-core.mjs` が `missing` を `human` へ倒さないのと同じ線で、
+ * **倒した瞬間に読み手が「引いても無駄だ」と決め打つ**。
+ */
+export type UnobservedMarkerState = 'markable' | 'pre-marker' | 'unknown';
+
+/**
+ * 軸1 を順位の数へ写したもの。**小さいほど先に出る**（`tools.ts` の
+ * `managerPositionOf` が `ManagerPosition.judgementRank` として使う）。
+ *
+ * `none`（何も知らない）→ `failure-wrapped`（届いているのは報告ではない）→
+ * `delivered`（本文は届いている）。**「依頼者が何を知らないか」の順であって、
+ * 成果が在りそうな順ではない**——成果の有無はこの台帳からは言えない。
+ */
+export type JudgementRank = 0 | 1 | 2;
+
+/**
+ * 分類の対象外（`running` / `waiting_human` / `done` / `stopped`）の委譲が持つ
+ * 副順位。
+ *
+ * **いちばん後ろ（`delivered` と同値）に置く。** 副順位で前へ出さない、という
+ * 意味である。⟹ **対象外どうし・対象外と `delivered` の相対順序は `startedAt`
+ * のまま1バイトも動かない**（`compareManagerPosition` は `judgementRank` が
+ * 同値なら次のキーへ落ちる）。新しい値（`3`）を与えると、群2の中で
+ * 「`failed` 全部 → `done`/`stopped` 全部」という**4つ目の群**を黙って作って
+ * しまう——#688 が決めた群の境界を動かさない、という約束に反する。
+ */
+export const JUDGEMENT_RANK_NOT_APPLICABLE = 2 satisfies JudgementRank;
+
+/**
+ * {@link classifyUnobservedOutcome} / {@link describeUnobservedOutcome} が読む欄
+ * だけを名指しした入力。
+ *
+ * **`ManagerSummary` をそのまま渡せる**（構造的に代入できる）が、型としては
+ * この4＋1欄しか読まないことを宣言しておく——`manager-activity.ts` の
+ * `ManagerActivityInput` と同じ作法で、「この判定が台帳の何を見ているか」を
+ * 型から読めるようにするためである。
+ */
+export interface UnobservedOutcomeInput {
+  managerId: string;
+  status: JobStatus;
+  startedAt: string;
+  lastReport?: string;
+  lastFailure?: Job['lastFailure'];
+}
+
+/** {@link classifyUnobservedOutcome} の結果。 */
+export interface UnobservedOutcome {
+  reportState: UnobservedReportState;
+  markerState: UnobservedMarkerState;
+  rank: JudgementRank;
+}
+
+/**
+ * 軸2 の判定。**`startedAt` が読めなければ `unknown`**（`pre-marker` へ倒さない
+ * ——{@link UnobservedMarkerState} の doc）。
+ *
+ * 境界は `>=` である——`ORIGIN_GATE_SINCE` ちょうどに始まった委譲は
+ * `markable` 側に入る（`check-pr-origin-core.mjs` の `decideGateVerdict` が
+ * `createdAtMs < Date.parse(ORIGIN_GATE_SINCE)` を `legacy` にしているのと
+ * 同じ切り方の裏返しで、境界の1点がどちらにも入らない／両方に入ることが
+ * 起きないようにしてある）。
+ */
+function classifyMarkerState(startedAt: string): UnobservedMarkerState {
+  const startedAtMs = Date.parse(startedAt);
+  if (Number.isNaN(startedAtMs)) return 'unknown';
+  return startedAtMs >= Date.parse(ORIGIN_GATE_SINCE) ? 'markable' : 'pre-marker';
+}
+
+/**
+ * 終端していて誰も望んでいない終わり方をした委譲（`lost` / `failed`）を、
+ * **台帳だけから**2軸で分類する（Issue #857）。**対象外なら `null`。**
+ *
+ * ## 直した穴
+ *
+ * `manager_list` は `lost` の行すべてに同じ注記（「前のセッションへ戻れなかった」）
+ * を出していた。**ほぼ常に真なので順位が付かない**——依頼者（クローン）は1本ずつ
+ * `gh` を叩いて成果の所在を測るしかなかった。
+ *
+ * ## 芯: 順位は「依頼者が何を知らないか」で付ける。**PR の有無では付けない**
+ *
+ * PR の有無を順位の芯にすると、**依頼の種類によって系統的に間違える。** 実例
+ * （Issue #857 の本文）:
+ *
+ * 1. `failed` だが PR を出し終えた後に落ちていた（成果は無事）
+ * 2. 成果が `main` に着地していたのに、id で検索すると0件だった
+ * 3. **調査だけを頼んだ委譲**——PR も枝もコミットも無いが、報告の中身は価値が高かった
+ *
+ * ⟹ **「PR が無い」を「成果が無い」と読む判定器を作らない。** だから順位は
+ * 軸1（本文が届いているか）だけで付け、刻印（軸2）は各行に添えるだけで順位に
+ * 使わない。
+ *
+ * ## どちらの軸も、取れなかったときに 0 や「成果なし」へ倒さない
+ *
+ * 軸1 の `delivered` は「完遂した」と名乗らず、軸2 は `unknown` という第3の値を
+ * 持つ（AGENTS.md の地雷「取れない軸に 0 の行を作る」と同じ線）。
+ */
+export function classifyUnobservedOutcome(
+  manager: UnobservedOutcomeInput,
+): UnobservedOutcome | null {
+  if (!isManagerOutcomeUnobserved(manager.status)) return null;
+  const reportState: UnobservedReportState =
+    manager.lastReport === undefined
+      ? 'none'
+      : manager.lastFailure === undefined
+        ? 'delivered'
+        : 'failure-wrapped';
+  const rank: JudgementRank =
+    reportState === 'none' ? 0 : reportState === 'failure-wrapped' ? 1 : 2;
+  return { reportState, markerState: classifyMarkerState(manager.startedAt), rank };
+}
+
+/** 軸1 の字面。**3値で別々の文である**（入れ替えると読み手の次の一手が変わる）。 */
+function describeReportState(state: UnobservedReportState): string {
+  switch (state) {
+    case 'none':
+      return (
+        '⚠ 終端までに本文が1文字も届いていない。' +
+        'この委譲が何をしたかは、この一覧からは1文字も読めない' +
+        '（台帳の報告欄は一度でも届けば残る欄なので、「まだ読んでいない」ではなく「届いていない」である）。'
+      );
+    case 'failure-wrapped':
+      return (
+        '⚠ 届いている本文は runner が包んだエラー文であって報告ではない（Issue #714）。' +
+        '中身を完遂の報告として読まないこと。'
+      );
+    case 'delivered':
+      return (
+        '⚠ 本文は届いているが、完遂した報告とは限らない。' +
+        '終端の直前に「喋っただけの本文」がそのまま報告として出る経路が runner に在り、' +
+        '台帳からはこの2つを区別できない。'
+      );
+  }
+}
+
+/**
+ * 軸2 の字面。**3値で別々の文である。**
+ *
+ * 🔴 **`pre-marker` では引き方（`gh` の綴り）を出さない。** その委譲の PR は
+ * 刻印を持たないので、綴りを出せば**必ず0件になる検索**を案内することになり、
+ * 読み手はその0件を成果の不在として読む（Issue #857 の実例2 が、まさに
+ * 「id で検索して0件だったが成果は `main` に在った」である）。
+ */
+function describeMarkerState(state: UnobservedMarkerState, managerId: string): string {
+  switch (state) {
+    case 'markable':
+      return (
+        `刻印（${ORIGIN_MARKER_NAME}）の導入より後に始まっているので、この委譲が出した PR / Issue は刻印を持つ: ` +
+        `gh pr list --repo <対象の repo> --state all --search "${managerId}"。` +
+        '**0件は「刻印付きの PR が見つからなかった」までである**——' +
+        '枝だけの成果や、PR を作らない依頼（調査・レビュー）はこの引き方では出ないので、' +
+        '成果の所在はここからは言えない。'
+      );
+    case 'pre-marker':
+      return (
+        `この委譲は刻印（${ORIGIN_MARKER_NAME}）の導入（${ORIGIN_GATE_SINCE}）より前に始まっているので、` +
+        'その PR / Issue は刻印を持たない ⟹ **刻印では照合できない。** ' +
+        '引き方をここには出さない（出すと、必ず0件になる検索の結果を成果の所在として読むことになる）。'
+      );
+    case 'unknown':
+      return (
+        '開始時刻（startedAt）が読めず、刻印で照合できる時代かを判定できなかった。' +
+        '**「照合できない」とは別である**——照合の可否そのものを決められていない。'
+      );
+  }
+}
+
+/**
+ * {@link classifyUnobservedOutcome} の結果を、一覧と `manager_report` に添える
+ * 1つの字面にする（Issue #857）。**対象外なら `null`——1文字も増やさない。**
+ *
+ * **字面の生成元はここ1箇所である。** `manager_list`（`tools.ts` の
+ * `unobservedOutcomeLine`）と `manager_report` の両方がこれを使う——
+ * `describeManagerFailure` / `describeManagerSystemError` / `describeDenials` と
+ * 同じ理由（同じ欄を2つの口が別の語で呼ぶと、面をまたいで読む人間がそこで詰まる）。
+ * **`digest.ts` に置いてあるのは `describeManagerState` と同じ層に揃えるため**で、
+ * 将来 CLI / Web の面が同じ字面で出せる。
+ *
+ * **健全な（対象外の）委譲では `null` を返し、一覧は1文字も伸びない**——
+ * 一覧は文字数の予算（`LIST_BUDGET`）に張り付いていて、行を1本増やすと出る件数が
+ * 減る（`describeManagerFailure` の doc と同じ理由）。
+ *
+ * 🔴 **どの枝でも「成果が無い」と言い切らない。** 0件は「この探し方では出な
+ * かった」までしか言えない（上の `classifyUnobservedOutcome` の doc の実例2）。
+ */
+export function describeUnobservedOutcome(manager: UnobservedOutcomeInput): string | null {
+  const outcome = classifyUnobservedOutcome(manager);
+  if (outcome === null) return null;
+  return `${describeReportState(outcome.reportState)} ${describeMarkerState(outcome.markerState, manager.managerId)}`;
 }
 
 /**
