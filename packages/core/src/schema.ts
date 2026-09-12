@@ -449,6 +449,65 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
      * 書いた文章（prose）であり、Markdown として描くのが正しいため。
      */
     markup: z.string().optional(),
+    /**
+     * **配る瞬間に台帳（`Job.status`）が名乗っていた `JobStatus`**（issue #870）。
+     * 任意欄——`packages/core/src/manager.ts` が `this.#records` から手元で
+     * 取れたときだけ載る。取れない回（台帳が既に畳まれている等）は**欄ごと
+     * 省く**（AGENTS.md 地雷表「取れない軸に 0 の行を作る」——`undefined` を
+     * 書かず、キー自体を書かない。この schema の `requestId` / `markup` と
+     * 同じ形）。
+     *
+     * **`status` という名前にしていない。** Issue の題が言う「manager_message
+     * が名乗った status」は*合図が作られた時点*の値だが、この欄は*配る瞬間*
+     * の値である——配り直し（`#withheldReports` の flush・`#flushSynthesizedNoticeFor`
+     * 等）が挟まると、合図が積まれてから実際に届くまでに台帳の `status` が
+     * 動いていることがある。同じ名前を付けると、読む側が「合図が名乗った
+     * 値」だと誤って照合に使う。**この欄が答えるのは常に「配る瞬間」の値
+     * だけである。**
+     *
+     * **散文（`text`）の `status=...` とは別の量である。** `text` に
+     * `status=${status}` を埋めている箇所（`manager.ts` の `#onRunnerEvent`
+     * `case 'closed'`）は表示のための飾りで、正本はこの構造化欄のほう
+     * ——`#124`（`d2ff50c`）が固定した「判定は構造化された印で行い、文言は
+     * 表示にだけ使う」をここでも踏襲する。**文言の判定に戻らないこと**
+     * （下の「なぜ `z.enum` を置くか」の段落と対で読むこと）。
+     *
+     * ## なぜ `z.enum`（`jobStatusSchema`）を置くか——`markup` とは逆の結論
+     *
+     * `markup` の上のコメントは、`commitmentClosedBySchema`（issue #286 /
+     * #296）を引いて「未知の値が1つ入るだけで一覧が丸ごと落ちるので、この
+     * 欄には `z.enum` を置かない」と言っている。**同じ問いをこの欄にも通した
+     * うえで、結論を変えている。**
+     *
+     * - **同じ危険は確かに在る。** `manager_message` を含む `InboxEvent` は
+     *   `packages/storage-pg/src/inbox.ts` の `parseEvent` が
+     *   `safeParse` 失敗で throw し、`claimPending` / `peekPending` は
+     *   try/catch なしで全行を `map` する——`markup` の doc が警戒した形と
+     *   機構は同じで、しかも巻き込む範囲はこちらのほうが広い（`manager_message`
+     *   1件の不正が、その回に溜まっていた**他の型の** `InboxEvent` の配達
+     *   まで道連れにする）。
+     * - **それでも `z.enum` を選んだ。** 理由は2つ。(1) この欄の値は
+     *   `jobStatusSchema` という**既に load-bearing な唯一の情報源**からの
+     *   写しでしかない——`kind` / `distill.reason` / `timer.cause` /
+     *   `self_initiative.cause` と同じく、この schema には元々 `z.enum` の
+     *   欄が複数在り（`markup` だけが例外）、`jobStatusSchema` を緩めるべき
+     *   独立した理由が無い限りここだけ緩めても一貫しない。(2)
+     *   `commitmentClosedBySchema` の危険は「長く生きる台帳（監査ログ）に、
+     *   別の版が書いた値が何年も残る」ことに根ざすが、**受信箱の合図は
+     *   短命**——`manager_message` は配り終えたら箱から消える（`InboxStore`
+     *   の doc「まだ処理し終えていない合図」）ので、版がずれた値が長期間
+     *   居座る窓は小さい。**それでもゼロではない**（デーモンの再起動を
+     *   跨いで残る回はある）——だから `jobStatusSchema` 自体を将来変える
+     *   ときは、この欄が持つ既存の値との互換も同時に確かめること。
+     *
+     * **`z.lazy` で包んでいる。** `jobStatusSchema` はこのファイルの下のほう
+     * （「ジョブ・承認待ち」の節）で定義されており、`inboxEventSchema` はそれより
+     * 前で評価される——モジュール読み込み順に `jobStatusSchema` を直接参照すると
+     * TDZ の `ReferenceError` になる。`z.lazy(() => jobStatusSchema)` は
+     * getter を parse 時まで遅延させるので、宣言の順序に依存しない
+     * （`manager_message` ブロックの外を動かさずに直す唯一の口）。
+     */
+    statusAtDelivery: z.lazy(() => jobStatusSchema).optional(),
   }),
 ]);
 

@@ -4509,6 +4509,7 @@ class Pool implements ManagerPool {
               `${job.id} の起動時の引き取りが世代で拒まれました（409）。この委譲は**自分より新しい世代の誰かが握っています**。` +
               `終わったとは限らないので、**新しく起こし直さないでください** — ` +
               `台帳の貸し出しと runner の世代が食い違っています（デーモンが2つ走っているか、貸し出しの書き込みが落ちた可能性）。人間へ相談すること: ${String(error)}`,
+            ...this.#statusAtDelivery(job.id),
           });
         } else if (isRetryableRunnerError(error)) {
           // **一時的なこけ方（起動直後・瞬断・5xx）。** 黙って引き下がると、
@@ -4819,6 +4820,7 @@ class Pool implements ManagerPool {
         kind: 'report',
         text: messageText,
         ...(markup === undefined ? {} : { markup }),
+        ...this.#statusAtDelivery(managerId),
       });
     }
 
@@ -5350,6 +5352,7 @@ class Pool implements ManagerPool {
                 `${job.id} の取り直しが世代で拒まれました（409）。この委譲は**自分より新しい世代の誰かが握っています**。` +
                 `終わったとは限らないので、**新しく起こし直さないでください** — ` +
                 `台帳の貸し出しと runner の世代が食い違っています（デーモンが2つ走っているか、貸し出しの書き込みが落ちた可能性）。人間へ相談すること: ${String(error)}`,
+              ...this.#statusAtDelivery(job.id),
             });
           } else if (isRetryableRunnerError(error)) retry = true;
           else {
@@ -5807,6 +5810,7 @@ class Pool implements ManagerPool {
       text:
         `${describeAmbiguousSighting(runnerId, duplicates)} ` +
         '**新しく起こし直さないこと** — 起こし直すと同じ仕事が2本になりえます。',
+      ...this.#statusAtDelivery(managerId),
     });
   }
 
@@ -5841,6 +5845,7 @@ class Pool implements ManagerPool {
       managerId,
       kind: 'report',
       text: `runnerId=${runnerId} の併存は解けました（宛先が一意に戻りました）。以後は自動で引き取ります。`,
+      ...this.#statusAtDelivery(managerId),
     });
   }
 
@@ -7794,7 +7799,29 @@ class Pool implements ManagerPool {
       ]
         .filter((line) => line !== '')
         .join('\n'),
+      ...this.#statusAtDelivery(job.id),
     });
+  }
+
+  /**
+   * **配る瞬間の `Job.status` を、`manager_message` の `statusAtDelivery` に
+   * 積める形で返す**（issue #870）。
+   *
+   * `this.#records` は走行中の像で、追加の I/O なしに手元で読める
+   * （`#activityInputOfRecord` などと同じ前提）。**`#records` に無ければ
+   * `{}` を返す**——`#retire()` 済み（`abort()` が `#post` の前に呼ぶ
+   * `outcome === 'stopped'` の分岐など）で像が既に消えている回がこれに
+   * 当たる。**既定値を作らない**（AGENTS.md 地雷表「取れない軸に 0 の
+   * 行を作る」）——`{}` を展開すればキー自体が付かないので、「取れなかった」
+   * と「そういう状態だった」が同じ顔にならない。
+   *
+   * **すべての `#post({ type: 'manager_message', … })` 呼び出し箇所（この
+   * ファイル内、`#deliver` を含めて7箇所）がこれを展開する。** 呼び出し側を
+   * 増やしても分岐を1つも足さずに済むよう、判定はこの1本へ寄せてある。
+   */
+  #statusAtDelivery(managerId: string): { statusAtDelivery: JobStatus } | Record<string, never> {
+    const status = this.#records.get(managerId)?.job.status;
+    return status === undefined ? {} : { statusAtDelivery: status };
   }
 
   /**
@@ -7880,6 +7907,9 @@ class Pool implements ManagerPool {
       // `undefined` のときはキーごと書かない — 上の `requestId` と同じ形
       // （`abort()` の `markup` の扱いにも揃えてある）。
       ...(markup === undefined ? {} : { markup }),
+      // **配る瞬間の `Job.status`**（issue #870。`#statusAtDelivery` の doc）。
+      // 同じく取れない回は展開してもキーが付かない。
+      ...this.#statusAtDelivery(managerId),
     });
   }
 
