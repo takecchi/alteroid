@@ -2963,7 +2963,12 @@ describe('#913: 要旨の鮮度は時間差だけでなく本文の変化量も�
     const match = /([+-])\s*([\d,]+)\s*バイト/.exec(line);
     if (match === null) return null;
     const sign = match[1] === '-' ? -1 : 1;
-    return sign * Number(match[2].replace(/,/g, ''));
+    const digits = match[2];
+    // noUncheckedIndexedAccess: 捕獲群は型の上では undefined になりうる。
+    // ⛔ ここで 0 を作らない——「読めなかった」を「0バイト変わった」に
+    // 化けさせると、この歯が測っている当のものを歯自身が壊す。
+    if (digits === undefined) return null;
+    return sign * Number(digits.replace(/,/g, ''));
   }
 
   /**
