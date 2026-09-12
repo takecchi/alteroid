@@ -16,6 +16,20 @@ import { stripNulls, toIso, toNumber } from './db.js';
 import { archive } from './schema.js';
 
 /**
+ * 同じミリ秒に同じセッションへ積まれたときに、枝番を試す上限（#905）。
+ *
+ * **超えたら例外を投げる。⛔ 黙って上書きへ落ちない。** fs 側
+ * （`packages/storage-fs/src/archive.ts` の `MAX_ARCHIVE_ID_ATTEMPTS`）と
+ * 同じ値・同じ倒れ方である。
+ */
+const MAX_ARCHIVE_ID_ATTEMPTS = 1000;
+
+/** `n` 回目の候補 id（1回目は枝番無し＝従来と同じ形）。fs 側と同じ形を作る。 */
+function archiveIdCandidate(base: string, attempt: number): string {
+  return attempt === 1 ? `${base}.jsonl` : `${base}-${attempt}.jsonl`;
+}
+
+/**
  * セッション生ログの退避先（可観測性3層の最下段）。
  *
  * fs 版がファイル名で持っていた識別子を、そのまま主キーとして使う。ジョブ台帳の
@@ -47,12 +61,28 @@ export class PgTranscriptArchive implements TranscriptArchive {
    * **「直前を引く → 判定する → insert する」を1トランザクションに閉じる。**
    * 割ると、同じ `sessionId` への並行 `archive()` が同じ「直前」を見て
    * 同じ判定を出す競合が起きる（`PgUsageStore.record` と同じ理由）。
+   *
+   * **id が衝突したら枝番を上げる（#905）。** `stamp` はミリ秒精度なので、
+   * 同じセッションへ同じミリ秒に2回積むと id が衝突する。**`onConflictDoUpdate`
+   * はそれを黙って上書きしていた**——退避の回数が過少に数えられ、生ログが1本
+   * 消えた。いまは `onConflictDoNothing` ＋ `returning()` で「入ったか」を見て、
+   * 0行なら `${base}-2.jsonl` → `${base}-3.jsonl` … と枝番を上げて**同じ
+   * トランザクションの中で**やり直す。
+   *
+   * ⚠️ **`onConflictDoUpdate` → `onConflictDoNothing` は振る舞いの変更である。**
+   * 既存の id を狙って `archive()` を呼ぶと、以前は上書きになったが、いまは
+   * 別の id の行が増える。**上書きが期待されていた経路は無い**——`id` は
+   * この関数が生成するだけで、呼び出し側から渡す口が無い。
+   *
+   * **衝突していない id の形は1文字も変わらない**ので、既存の行に移行は
+   * 要らない。**先頭が `sanitize(sessionId)` である性質も保たれる**（`id` の
+   * 前方一致 LIKE が主キーの btree に落ちる。#698 §6-5）。
    */
   async archive(sessionId: string, transcript: string): Promise<ArchiveWrite> {
     const body = stripNulls(transcript);
     const at = new Date();
     const stamp = at.toISOString().replace(/[:.]/g, '-');
-    const id = `${sanitize(sessionId)}-${stamp}.jsonl`;
+    const base = `${sanitize(sessionId)}-${stamp}`;
     const fingerprint = fingerprintArchiveBody(body);
     return this.#db.transaction(async (tx) => {
       const previousRows = await tx
@@ -63,27 +93,29 @@ export class PgTranscriptArchive implements TranscriptArchive {
         .limit(1);
       const previous = previousRows[0] ?? null;
       const { continuity, comparedTo } = classifyArchiveContinuity(previous, body);
-      await tx
-        .insert(archive)
-        .values({
-          id,
-          sessionId,
-          at,
-          body,
-          bodyChars: fingerprint.bodyChars,
-          bodyMd5: fingerprint.bodyMd5,
-          continuity,
-        })
-        .onConflictDoUpdate({
-          target: archive.id,
-          set: {
+      for (let attempt = 1; attempt <= MAX_ARCHIVE_ID_ATTEMPTS; attempt += 1) {
+        const id = archiveIdCandidate(base, attempt);
+        const inserted = await tx
+          .insert(archive)
+          .values({
+            id,
+            sessionId,
+            at,
             body,
             bodyChars: fingerprint.bodyChars,
             bodyMd5: fingerprint.bodyMd5,
             continuity,
-          },
-        });
-      return { id, continuity, ...(comparedTo === undefined ? {} : { comparedTo }) };
+          })
+          .onConflictDoNothing({ target: archive.id })
+          .returning({ id: archive.id });
+        // 0行 ＝ その id は既に埋まっている。次の枝番へ。
+        if (inserted.length > 0) {
+          return { id, continuity, ...(comparedTo === undefined ? {} : { comparedTo }) };
+        }
+      }
+      throw new Error(
+        `archive(): id の衝突が ${MAX_ARCHIVE_ID_ATTEMPTS} 回続いたので退避を中止した（base=${base}）`,
+      );
     });
   }
 

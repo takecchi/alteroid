@@ -56,6 +56,21 @@ import type { TranscriptArchive } from './store.js';
  *     （鎖が続く）
  * 19. 🔴🔴 **指紋を持たない行の直後は `'unknown'`**（`'continues'` ではない）
  *
+ * **20〜22 は #905（同じミリ秒の id 衝突）の検査である:**
+ *
+ * 20. 🔴 **同じミリ秒に2回積んでも両方が残る**——id が別々になり、`list()` に
+ *     2行出て、⭐ **`read()` が2本ともそれぞれの本文を返す**（生ログが消えて
+ *     いない。ここが「黙って捨てない」の本体）。`sessions().rows` は 2 で、
+ *     2行の `at` は固定した瞬間と一致する
+ * 21. **違うミリ秒に2回積んでも、従来どおり2本とも出る**（陰性対照）。⚠ これが
+ *     無いと 20 は「件数を決め打ちした歯」になる——**正しい振る舞いを壊して
+ *     いないことを別に測る**
+ * 22. **`id` は `sessionId` で始まる**（衝突した2本目＝枝番付きも含む）。
+ *     この契約が使う `sessionId` は `[a-z0-9-]` だけなので `sanitize()` は
+ *     恒等写像になり、3実装とも `id.startsWith(sessionId)` が成り立つはず——
+ *     **`id` の前方一致 LIKE が主キーの btree に落ちる性質の歯である**
+ *     （#698 §6-5。id の形を変えるときに、この性質を落としたら赤くなる）
+ *
  * 呼び出し側は使い捨ての archive を渡すこと（後始末はしない）。
  *
  * @param deps.seedFingerprintlessRow 指紋（`bodyChars`/`bodyMd5`）を持たない
@@ -64,6 +79,48 @@ import type { TranscriptArchive } from './store.js';
  *   これらのフィールドを持たない `.meta.json` を書く、インメモリは
  *   `seedFingerprintlessArchiveRow` を経由する）。
  */
+/**
+ * 検査20 / 21 専用: `Date` を指定の瞬間へ固定して `run()` を通す（#905）。
+ *
+ * **実時計では「同じミリ秒に2回積む」を確実に再現できない**——pg の往復は
+ * 普通1ミリ秒を超えるので、素直に2回呼ぶと違うミリ秒に落ちて検査20 が測りたい
+ * ものを測らない。⟹ 時計を1点に固定する。
+ *
+ * **vitest の `vi.useFakeTimers()` を使わない。** この契約関数は vitest 非依存
+ * という約束（`packages/storage-fs` / `packages/storage-pg` へ vitest を持ち
+ * 込まないため。本ファイル冒頭の doc）があり、`journal-order-with-contract.ts`
+ * の `appendPairAtSameMillisecond` が同じ理由で同じ形を採っている——プレーンな
+ * JS で `globalThis.Date` を差し替え、`finally` で必ず戻す。
+ *
+ * ⭐ **差し替えるのは `Date` だけで、`setTimeout` は本物のままである。**
+ * `tick()`（この契約の中で使う待ち）と PGlite の内部が止まらないために、
+ * ここが効いている。
+ *
+ * **`class extends Date` ではなく `Proxy` にしてある理由**も
+ * `appendPairAtSameMillisecond` と同じ（可変長引数を `super(...)` へ渡す形が
+ * tsup の dts ビルドの TS2556 で拒まれる）。
+ */
+async function withFrozenNow<T>(frozenMs: number, run: () => Promise<T>): Promise<T> {
+  const RealDate = Date;
+  const FrozenDate = new Proxy(RealDate, {
+    construct(target, args: unknown[]) {
+      if (args.length === 0) return new target(frozenMs);
+      return Reflect.construct(target, args);
+    },
+    get(target, prop, receiver) {
+      if (prop === 'now') return () => frozenMs;
+      return Reflect.get(target, prop, receiver) as unknown;
+    },
+  });
+
+  globalThis.Date = FrozenDate;
+  try {
+    return await run();
+  } finally {
+    globalThis.Date = RealDate;
+  }
+}
+
 export async function verifyTranscriptArchiveContract(
   archive: TranscriptArchive,
   deps: { seedFingerprintlessRow(sessionId: string, body: string): Promise<string> },
@@ -190,6 +247,15 @@ export async function verifyTranscriptArchiveContract(
   // ⟹ 衝突を踏まないように間隔を空けて、測りたいものだけを測る。
   // **衝突そのものを塞ぐのはこの契約の仕事ではない**（id の形を変えると
   // fs 側の `STAMP_SUFFIX_RE` による id からの復元も一緒に変わるため）。
+  //
+  // ⭐ **追記（#905。上の段落は当時の判断として残す）: その「衝突そのもの」は
+  // #905 で塞いだ。** fs は排他作成（`flag: 'wx'`）、pg は
+  // `onConflictDoNothing` ＋ `returning()` で、衝突したときだけ id へ枝番を
+  // 足す。**そして `STAMP_SUFFIX_RE` からの復元も一緒に直してある**——上の
+  // 括弧が手を出さない理由に挙げた結合が、まさに #905 の担当範囲だった。
+  // ⟹ **この 1ミリ秒ずつ空ける形は、それでも残す。** ここで測りたいのは
+  // 「同一 sessionId の複数行を `rows` が数えられること」であって、衝突では
+  // ない（衝突は検査20 が測る）——測る対象を1つに保つ。
   const tick = () => new Promise((resolve) => setTimeout(resolve, 2));
   const multiSessionId = 'archive-contract-session-multi';
   const idM1 = (await archive.archive(multiSessionId, 'M1\n')).id;
@@ -383,5 +449,156 @@ export async function verifyTranscriptArchiveContract(
       fingerprintlessId,
       afterFingerprintless,
     });
+  }
+
+  // --- ここから #905（同じミリ秒に積んだ2本が両方残る）----------------------
+
+  // 20. 🔴 同じミリ秒に2回積んでも両方が残る。
+  //
+  // ⚠ **実時計では再現できない**ので、時計を1点へ固定して積む（`withFrozenNow`
+  // の doc）。⭐ **いちばん重いのは `read()` の2本である**——`list()` と
+  // `sessions()` だけだと「行は増えたが本文は片方に潰れている」形を見逃す。
+  // 生ログが黙って消えていないことを、本文そのもので測る。
+  const sameMsSessionId = 'archive-contract-same-millisecond';
+  const frozenMs = Date.now();
+  const frozenIso = new Date(frozenMs).toISOString();
+  const [sameMs1, sameMs2] = await withFrozenNow(frozenMs, async () => {
+    const first = await archive.archive(sameMsSessionId, 'SAME-MS-1\n');
+    const second = await archive.archive(sameMsSessionId, 'SAME-MS-2\n');
+    return [first, second] as const;
+  });
+
+  if (sameMs1.id === sameMs2.id) {
+    fail('同じミリ秒に2回積むと別々のidになる（#905。同じなら片方が上書きされる）', {
+      first: sameMs1,
+      second: sameMs2,
+    });
+  }
+
+  const sameMsEntries = (await archive.list()).filter(
+    (entry) => entry.sessionId === sameMsSessionId,
+  );
+  if (
+    sameMsEntries.length !== 2 ||
+    ![sameMs1.id, sameMs2.id].every((id) => sameMsEntries.some((entry) => entry.id === id))
+  ) {
+    fail('同じミリ秒に積んだ2本がlist()に2行とも出る（#905）', {
+      first: sameMs1,
+      second: sameMs2,
+      sameMsEntries,
+    });
+  }
+
+  // ⭐ 本体: 2本ともそれぞれの本文が読める（生ログが黙って消えていない）。
+  const readSameMs1 = await archive.read(sameMs1.id);
+  if (readSameMs1.kind !== 'body' || readSameMs1.body !== 'SAME-MS-1\n') {
+    fail('同じミリ秒に積んだ1本目の本文が残っている（#905。⭐ 上書きされていない）', {
+      id: sameMs1.id,
+      readSameMs1,
+    });
+  }
+  const readSameMs2 = await archive.read(sameMs2.id);
+  if (readSameMs2.kind !== 'body' || readSameMs2.body !== 'SAME-MS-2\n') {
+    fail('同じミリ秒に積んだ2本目の本文が残っている（#905）', { id: sameMs2.id, readSameMs2 });
+  }
+
+  const sameMsSummary = (await archive.sessions()).find((s) => s.sessionId === sameMsSessionId);
+  if (sameMsSummary === undefined || sameMsSummary.rows !== 2) {
+    fail('同じミリ秒に2回積むとsessions().rowsが2になる（#905。退避の回数を過少に数えない）', {
+      sameMsSummary,
+    });
+  }
+
+  // 固定した瞬間がそのまま `at` になっている（時計の固定が効いていることの
+  // 確認でもある——効いていなければ 2行の `at` は別々の実時刻になる）。
+  if (sameMsEntries.some((entry) => entry.at !== frozenIso)) {
+    fail('同じミリ秒に積んだ2行のatは固定した瞬間と一致する（#905）', {
+      frozenIso,
+      ats: sameMsEntries.map((entry) => entry.at),
+    });
+  }
+
+  // 21. 違うミリ秒に2回積んでも、従来どおり2本とも出る（陰性対照）。
+  //
+  // ⚠⚠ **この2本目が無いと、検査20は「件数を決め打ちした歯」になる。**
+  // 20 が測るのは「衝突しても消えない」、21 が測るのは「衝突しない普通の道を
+  // 壊していない」——**別のことを測っている。**
+  const diffMsSessionId = 'archive-contract-different-millisecond';
+  const diffBaseMs = Date.now();
+  const diffMs1 = await withFrozenNow(diffBaseMs, () =>
+    archive.archive(diffMsSessionId, 'DIFF-MS-1\n'),
+  );
+  const diffMs2 = await withFrozenNow(diffBaseMs + 7, () =>
+    archive.archive(diffMsSessionId, 'DIFF-MS-2\n'),
+  );
+
+  if (diffMs1.id === diffMs2.id) {
+    fail('違うミリ秒に積んだ2本は別々のidになる（#905の陰性対照）', {
+      first: diffMs1,
+      second: diffMs2,
+    });
+  }
+
+  const diffMsEntries = (await archive.list()).filter(
+    (entry) => entry.sessionId === diffMsSessionId,
+  );
+  if (
+    diffMsEntries.length !== 2 ||
+    ![diffMs1.id, diffMs2.id].every((id) => diffMsEntries.some((entry) => entry.id === id))
+  ) {
+    fail('違うミリ秒に積んだ2本がlist()に2行とも出る（#905の陰性対照）', {
+      first: diffMs1,
+      second: diffMs2,
+      diffMsEntries,
+    });
+  }
+
+  const readDiffMs1 = await archive.read(diffMs1.id);
+  if (readDiffMs1.kind !== 'body' || readDiffMs1.body !== 'DIFF-MS-1\n') {
+    fail('違うミリ秒に積んだ1本目の本文が残っている（#905の陰性対照）', {
+      id: diffMs1.id,
+      readDiffMs1,
+    });
+  }
+  const readDiffMs2 = await archive.read(diffMs2.id);
+  if (readDiffMs2.kind !== 'body' || readDiffMs2.body !== 'DIFF-MS-2\n') {
+    fail('違うミリ秒に積んだ2本目の本文が残っている（#905の陰性対照）', {
+      id: diffMs2.id,
+      readDiffMs2,
+    });
+  }
+
+  const diffMsSummary = (await archive.sessions()).find((s) => s.sessionId === diffMsSessionId);
+  if (diffMsSummary === undefined || diffMsSummary.rows !== 2) {
+    fail('違うミリ秒に2回積むとsessions().rowsが2になる（#905の陰性対照）', { diffMsSummary });
+  }
+
+  // 2行が本当に別のミリ秒に落ちていること（陰性対照が「同じミリ秒」を測って
+  // しまっていないことの確認）。
+  const diffMsAts = new Set(diffMsEntries.map((entry) => entry.at));
+  if (diffMsAts.size !== 2) {
+    fail('陰性対照の2行は別々のatを持つ（同じミリ秒を測ってしまっていない）', {
+      ats: [...diffMsAts],
+    });
+  }
+
+  // 22. `id` は `sessionId` で始まる（衝突した2本目＝枝番付きも含む）。
+  //
+  // この契約の `sessionId` は `[a-z0-9-]` だけなので、fs / pg の `sanitize()`
+  // は恒等写像になる。⟹ 3実装とも `id.startsWith(sessionId)` が成り立つ。
+  // **`id` の前方一致 LIKE が主キーの btree に落ちる性質の歯である**（#698 §6-5）。
+  const prefixPairs: ReadonlyArray<readonly [string, string]> = [
+    [sameMsSessionId, sameMs1.id],
+    [sameMsSessionId, sameMs2.id],
+    [diffMsSessionId, diffMs1.id],
+    [diffMsSessionId, diffMs2.id],
+  ];
+  for (const [prefixSessionId, id] of prefixPairs) {
+    if (!id.startsWith(prefixSessionId)) {
+      fail('idはsessionIdで始まる（前方一致LIKEが効く性質。#698 §6-5 / #905）', {
+        sessionId: prefixSessionId,
+        id,
+      });
+    }
   }
 }

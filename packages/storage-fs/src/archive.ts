@@ -13,8 +13,34 @@ import {
   type TranscriptArchive,
 } from '@alteroid/core';
 
-/** `${sanitize(sessionId)}-${stamp}.jsonl` の `stamp` 部分（`at.toISOString()` の `:` `.` を `-` に潰した形）。 */
-const STAMP_SUFFIX_RE = /-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)\.jsonl$/;
+/**
+ * `${sanitize(sessionId)}-${stamp}.jsonl` の `stamp` 部分（`at.toISOString()` の
+ * `:` `.` を `-` に潰した形）と、**衝突したときだけ付く枝番**（#905）。
+ *
+ * **枝番は optional である。** 衝突していない id の形は1文字も変わっていない
+ * ので、この正規表現も枝番の無い側を今までどおり拾う。`fallbackMeta()` は
+ * マッチ全体（枝番を含む）の長さで `sessionId` を切り出すため、枝番が付いた
+ * id でも `sessionId` / `at` が正しく戻る——**枝番を拾わない形へ戻すと、
+ * `sessionId` にファイル名全体が入り `at` が epoch へ落ちる**（`index.test.ts`
+ * の「枝番付きの id でもサイドカー無しから sessionId / at を復元できる」が
+ * その歯）。
+ */
+const STAMP_SUFFIX_RE = /-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)(?:-(\d+))?\.jsonl$/;
+
+/**
+ * 同じミリ秒に同じセッションへ積まれたときに、枝番を試す上限（#905）。
+ *
+ * **超えたら例外を投げる。⛔ 黙って上書きへ落ちない。** 「捨てた」ことが
+ * 観測できない形がこの Issue の欠陥そのものなので、塞ぎ方の側で同じ形を
+ * 作らない。pg 側（`packages/storage-pg/src/archive.ts` の
+ * `MAX_ARCHIVE_ID_ATTEMPTS`）と同じ値・同じ倒れ方である。
+ */
+const MAX_ARCHIVE_ID_ATTEMPTS = 1000;
+
+/** `n` 回目の候補 id（1回目は枝番無し＝従来と同じ形）。 */
+function archiveIdCandidate(base: string, attempt: number): string {
+  return attempt === 1 ? `${base}.jsonl` : `${base}-${attempt}.jsonl`;
+}
 
 /**
  * セッション生ログの退避先（可観測性3層の最下段）。
@@ -50,6 +76,20 @@ export class FsTranscriptArchive implements TranscriptArchive {
    * `#findPreviousArchiveForSession` が `.meta.json` サイドカーだけを見て
    * 探し、その `bodyChars` / `bodyMd5` と新しい本文の指紋を突き合わせる
    * だけで `classifyArchiveContinuity` が判定を終える。
+   *
+   * **id が衝突したら枝番を上げる（#905）。** `stamp` はミリ秒精度なので、
+   * 同じセッションへ同じミリ秒に2回積むと id が衝突する。**排他フラグ無しの
+   * `writeFile` はそれを黙って上書きしていた**——退避の回数が過少に数えられ、
+   * 生ログが1本消えた。いまは `flag: 'wx'`（排他作成）で書き、`EEXIST` なら
+   * `${base}-2.jsonl` → `${base}-3.jsonl` … と枝番を上げる。
+   *
+   * ⭐ **`remove()` は本体を消さず空へ切り詰めるだけ**なので、tombstone
+   * 済みの id でも `wx` は正しく `EEXIST` になる（＝ 一度使った id は埋まった
+   * まま）。この性質に依存している。
+   *
+   * **衝突していない id の形は1文字も変わらない**ので、既存の退避に移行は
+   * 要らない。**先頭が `sanitize(sessionId)` である性質も保たれる**（id の
+   * 前方一致が効く。#698 §6-5）。
    */
   async archive(sessionId: string, transcript: string): Promise<ArchiveWrite> {
     await mkdir(this.#dir, { recursive: true });
@@ -58,8 +98,8 @@ export class FsTranscriptArchive implements TranscriptArchive {
     const { continuity, comparedTo } = classifyArchiveContinuity(previous, transcript);
     const at = new Date();
     const stamp = at.toISOString().replace(/[:.]/g, '-');
-    const name = `${sanitize(sessionId)}-${stamp}.jsonl`;
-    await writeFile(join(this.#dir, name), transcript, 'utf8');
+    const base = `${sanitize(sessionId)}-${stamp}`;
+    const name = await this.#writeBodyExclusively(base, transcript);
     // **本体より先に meta を書かない理由は無い**（`remove()` の
     // 「印を書いてから本体を切り詰める」とは違い、こちらは新規作成で
     // 競合が無い）。実測上の心配は要らないが、本体が読めればこの id は
@@ -73,6 +113,27 @@ export class FsTranscriptArchive implements TranscriptArchive {
       continuity,
     });
     return { id: name, continuity, ...(comparedTo === undefined ? {} : { comparedTo }) };
+  }
+
+  /**
+   * 本体の `.jsonl` を**排他作成**で書き、実際に使えた名前を返す（#905）。
+   *
+   * `EEXIST` 以外の失敗はそのまま投げる（握り潰さない）。上限に達したら
+   * 例外——**黙って上書きへ落ちない。**
+   */
+  async #writeBodyExclusively(base: string, transcript: string): Promise<string> {
+    for (let attempt = 1; attempt <= MAX_ARCHIVE_ID_ATTEMPTS; attempt += 1) {
+      const name = archiveIdCandidate(base, attempt);
+      try {
+        await writeFile(join(this.#dir, name), transcript, { encoding: 'utf8', flag: 'wx' });
+        return name;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      }
+    }
+    throw new Error(
+      `archive(): id の衝突が ${MAX_ARCHIVE_ID_ATTEMPTS} 回続いたので退避を中止した（base=${base}）`,
+    );
   }
 
   /**
@@ -297,7 +358,8 @@ interface ArchiveMeta {
 /**
  * `.meta.json` が無い(この拡張より前に作られた)アーカイブ向けの best-effort 復元。
  *
- * ファイル名の `stamp` 部分(`-YYYY-MM-DDTHH-MM-SS-mmmZ.jsonl`)を ISO 8601 へ
+ * ファイル名の `stamp` 部分(`-YYYY-MM-DDTHH-MM-SS-mmmZ.jsonl`。**衝突したときは
+ * 枝番が付いて `-YYYY-MM-DDTHH-MM-SS-mmmZ-2.jsonl` になる**。#905)を ISO 8601 へ
  * 戻し、残りを `sessionId` とする——**ただし `sanitize()` 済みの近似値**
  * （元の `sessionId` に `sanitize` が潰した文字が在れば、その情報は failsafe
  * では戻らない）。パターンに一致しない(壊れた・想定外の名前の)場合は、
@@ -306,6 +368,8 @@ interface ArchiveMeta {
  */
 function fallbackMeta(id: string): ArchiveMeta {
   const match = STAMP_SUFFIX_RE.exec(id);
+  // **`match[0]`（マッチ全体）で切る。** 枝番（#905）が付いた id では
+  // `match[0]` にその枝番も入るので、`sessionId` 側へ枝番が漏れない。
   const suffix = match?.[0];
   const stamp = match?.[1];
   if (suffix === undefined || stamp === undefined) {
