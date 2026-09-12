@@ -904,7 +904,7 @@ describe('HTTP API', () => {
   });
 
   it('セッションログまで降りられる（可観測性の最下段）', async () => {
-    const id = await stores.archive.archive('sess-1', '{"a":1}\n');
+    const id = (await stores.archive.archive('sess-1', '{"a":1}\n')).id;
 
     const list = await app.request('/archive');
     expect(await list.json()).toMatchObject({
@@ -922,7 +922,7 @@ describe('HTTP API', () => {
    * （`ArchiveEntry.storedBytes` の doc「置き場をまたいで比較しない」）。
    */
   it('GET /archive は大きさ(storedBytes)と時刻(at)を返す（#698）', async () => {
-    const id = await stores.archive.archive('sess-sizes', 'HELLO\n');
+    const id = (await stores.archive.archive('sess-sizes', 'HELLO\n')).id;
 
     const response = await app.request('/archive');
     const body = (await response.json()) as {
@@ -942,9 +942,9 @@ describe('HTTP API', () => {
    * その回数を数える（tombstone 済みでも減らない）。
    */
   it('GET /archive/sessions は sessionId ごとの rows とstoredBytesを返す（複数回archiveしたセッション）', async () => {
-    const idA1 = await stores.archive.archive('sess-repeated', 'A\n');
+    const idA1 = (await stores.archive.archive('sess-repeated', 'A\n')).id;
     await stores.archive.archive('sess-repeated', 'BB\n');
-    const idA3 = await stores.archive.archive('sess-repeated', 'CCC\n');
+    const idA3 = (await stores.archive.archive('sess-repeated', 'CCC\n')).id;
     await stores.archive.remove(idA1);
     await stores.archive.archive('sess-once', 'ONLY\n');
 
@@ -987,7 +987,7 @@ describe('HTTP API', () => {
    * 引き続き出る。存在しない id は 404、走行中のマネージャーの退避は 409。
    */
   it('DELETE /archive/:id は本文だけを落とす（行は list に残る）', async () => {
-    const id = await stores.archive.archive('sess-remove', 'BODY\n');
+    const id = (await stores.archive.archive('sess-remove', 'BODY\n')).id;
 
     const response = await app.request(`/archive/${id}`, { method: 'DELETE' });
     expect(response.status).toBe(200);
@@ -1026,7 +1026,7 @@ describe('HTTP API', () => {
   });
 
   it('DELETE /archive/:id は二重に呼んでも冪等（2回目は alreadyRemoved: true）', async () => {
-    const id = await stores.archive.archive('sess-twice', 'BODY\n');
+    const id = (await stores.archive.archive('sess-twice', 'BODY\n')).id;
     await app.request(`/archive/${id}`, { method: 'DELETE' });
 
     const second = await app.request(`/archive/${id}`, { method: 'DELETE' });
@@ -1040,7 +1040,7 @@ describe('HTTP API', () => {
    * 判定所は `ManagerPool.runningManagerOwning()` 1箇所である。
    */
   it('DELETE /archive/:id は走行中のマネージャーの退避を拒む（409。どのマネージャーかを言う）', async () => {
-    const id = await stores.archive.archive('sess-running', 'BODY\n');
+    const id = (await stores.archive.archive('sess-running', 'BODY\n')).id;
     fake.runningOwners.set(id, 'mgr-running-1');
 
     const response = await app.request(`/archive/${id}`, { method: 'DELETE' });
@@ -1060,7 +1060,7 @@ describe('HTTP API', () => {
    * 応答の両方にその事実と理由が載ることを測る。
    */
   it('DELETE /archive/:id は overrideReason を渡せば走行中でも消せる（理由が journal と応答に残る）', async () => {
-    const id = await stores.archive.archive('sess-override', 'BODY\n');
+    const id = (await stores.archive.archive('sess-override', 'BODY\n')).id;
     fake.runningOwners.set(id, 'mgr-running-2');
 
     const response = await app.request(
@@ -1091,7 +1091,7 @@ describe('HTTP API', () => {
   });
 
   it('DELETE /archive/:id は overrideReason が空文字だと拒否のまま（うっかり通らない）', async () => {
-    const id = await stores.archive.archive('sess-empty-override', 'BODY\n');
+    const id = (await stores.archive.archive('sess-empty-override', 'BODY\n')).id;
     fake.runningOwners.set(id, 'mgr-running-3');
 
     const response = await app.request(`/archive/${id}?overrideReason=`, { method: 'DELETE' });

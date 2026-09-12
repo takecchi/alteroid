@@ -7580,6 +7580,10 @@
                             "type": "integer",
                             "minimum": -9007199254740991,
                             "maximum": 9007199254740991
+                          },
+                          "continuity": {
+                            "type": "string",
+                            "enum": ["first", "continues", "diverged", "unknown"]
                           }
                         },
                         "required": ["id", "sessionId", "at", "storedBytes"]

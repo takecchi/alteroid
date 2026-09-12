@@ -87,7 +87,7 @@ describe('migrate', () => {
    * 行の両方が、2周目のあとも壊れていないことを見る。
    */
   it('archive の tombstone 列の追加は2回通しても壊れない（1周目の後に remove() してから2周目を当てる）', async () => {
-    const removedId = await stores.archive.archive('session-migrate-twice-removed', 'BODY\n');
+    const removedId = (await stores.archive.archive('session-migrate-twice-removed', 'BODY\n')).id;
     const removed = await stores.archive.remove(removedId);
     expect(removed.kind).toBe('removed');
 
@@ -98,7 +98,8 @@ describe('migrate', () => {
     expect(await stores.archive.read(removedId)).toMatchObject({ kind: 'removed' });
 
     // 消していない行も、2周目のあとに積んでも壊れていない。
-    const untouchedId = await stores.archive.archive('session-migrate-twice-untouched', 'OTHER\n');
+    const untouchedId = (await stores.archive.archive('session-migrate-twice-untouched', 'OTHER\n'))
+      .id;
     expect(await stores.archive.read(untouchedId)).toEqual({ kind: 'body', body: 'OTHER\n' });
   });
 });
@@ -2213,7 +2214,7 @@ describe('PgInboxStore', () => {
 
 describe('PgTranscriptArchive', () => {
   it('退避して読み戻せる', async () => {
-    const id = await stores.archive.archive('session-1', '{"a":1}\n');
+    const id = (await stores.archive.archive('session-1', '{"a":1}\n')).id;
 
     expect((await stores.archive.list()).map((entry) => entry.id)).toContain(id);
     expect(await stores.archive.read(id)).toEqual({ kind: 'body', body: '{"a":1}\n' });
@@ -2225,11 +2226,22 @@ describe('PgTranscriptArchive', () => {
 
   /** 契約（#698）を3実装ぶんの1つとして測る。他は testing.ts / storage-fs。 */
   it('TranscriptArchive の契約を満たす', async () => {
-    await verifyTranscriptArchiveContract(stores.archive);
+    await verifyTranscriptArchiveContract(stores.archive, {
+      // 検査19のためだけの裏口（#698）。生 SQL で body_chars / body_md5 を
+      // null のまま insert し、この機能より前に積まれた行を再現する
+      // （drizzle 経由だと `.default` 等で値が入りうるため、生の SQL を使う）。
+      seedFingerprintlessRow: async (sessionId, body) => {
+        const id = `${sessionId}-fingerprintless-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        await db.execute(
+          sql`insert into archive (id, session_id, at, body) values (${id}, ${sessionId}, now(), ${body})`,
+        );
+        return id;
+      },
+    });
   });
 
   it('remove() は行を消さない（本文だけを落とす。list() に出続ける）', async () => {
-    const id = await stores.archive.archive('session-remove', 'BODY\n');
+    const id = (await stores.archive.archive('session-remove', 'BODY\n')).id;
 
     const removed = await stores.archive.remove(id);
     expect(removed).toEqual({ kind: 'removed', bytes: Buffer.byteLength('BODY\n', 'utf8') });
@@ -2249,8 +2261,8 @@ describe('PgTranscriptArchive', () => {
   });
 
   it('id A を消しても id B は読める（巻き添えが無い）', async () => {
-    const idA = await stores.archive.archive('session-a', 'A\n');
-    const idB = await stores.archive.archive('session-b', 'B\n');
+    const idA = (await stores.archive.archive('session-a', 'A\n')).id;
+    const idB = (await stores.archive.archive('session-b', 'B\n')).id;
 
     await stores.archive.remove(idA);
 
@@ -2265,7 +2277,7 @@ describe('PgTranscriptArchive', () => {
    * 確かめる。
    */
   it('空の生ログを退避しただけの行は removed にならない（body の空文字を判定に使わない）', async () => {
-    const id = await stores.archive.archive('session-empty', '');
+    const id = (await stores.archive.archive('session-empty', '')).id;
 
     const rows = await db.select().from(archive).where(eq(archive.id, id));
     expect(rows[0]?.body).toBe('');
@@ -2275,7 +2287,7 @@ describe('PgTranscriptArchive', () => {
   });
 
   it('二重の remove() は冪等（removed → already。バイト数・removedAt は変わらない）', async () => {
-    const id = await stores.archive.archive('session-twice', 'TWICE\n');
+    const id = (await stores.archive.archive('session-twice', 'TWICE\n')).id;
 
     const first = await stores.archive.remove(id);
     expect(first).toEqual({ kind: 'removed', bytes: Buffer.byteLength('TWICE\n', 'utf8') });
@@ -2300,7 +2312,7 @@ describe('PgTranscriptArchive', () => {
    * 目的であって、絶対値の検算ではない）。
    */
   it('list()のstoredBytesはpg_column_size(body)と一致する（#698）', async () => {
-    const id = await stores.archive.archive('session-column-size', 'HELLO WORLD\n');
+    const id = (await stores.archive.archive('session-column-size', 'HELLO WORLD\n')).id;
 
     const entry = (await stores.archive.list()).find((e) => e.id === id);
     expect(entry).toBeDefined();
@@ -2322,7 +2334,7 @@ describe('PgTranscriptArchive', () => {
     // （id は `-${stamp}.jsonl` のミリ秒精度なので、同じミリ秒に積むと
     // `onConflictDoUpdate` で黙って上書きになる。元から在る別の欠陥）。
     const tick = () => new Promise((resolve) => setTimeout(resolve, 2));
-    const idA = await stores.archive.archive('session-grouped', 'A\n');
+    const idA = (await stores.archive.archive('session-grouped', 'A\n')).id;
     await tick();
     await stores.archive.archive('session-grouped', 'BB\n');
     await tick();

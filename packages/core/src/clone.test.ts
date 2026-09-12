@@ -54,6 +54,7 @@ import {
   failingJournalAppend,
   flakyInboxRemove,
   humanMessage,
+  seedFingerprintlessArchiveRow,
 } from './testing.js';
 
 /**
@@ -6828,10 +6829,12 @@ describe('クローン — 起動時に墓標を拾い直す（#564 E1b）', () 
 
   it('墓標が在れば拾って蒸留し、印を下ろす', async () => {
     const stores = createMemoryStores();
-    const archiveId = await stores.archive.archive(
-      'sess-old',
-      'GRAVE-TRANSCRIPT-MARKER-3c9d 前の器が記憶へ移せなかった区間の生ログ',
-    );
+    const archiveId = (
+      await stores.archive.archive(
+        'sess-old',
+        'GRAVE-TRANSCRIPT-MARKER-3c9d 前の器が記憶へ移せなかった区間の生ログ',
+      )
+    ).id;
     await stores.sessions.setTranscriptGrave({ archiveId });
 
     const s = setup(undefined, stores);
@@ -6891,7 +6894,7 @@ describe('クローン — 起動時に墓標を拾い直す（#564 E1b）', () 
    */
   it('退避の本文が消されている（tombstone）ときは、missing とは別の文言で印を下ろす', async () => {
     const stores = createMemoryStores();
-    const archiveId = await stores.archive.archive('sess-removed', '畳めなかった生ログ\n');
+    const archiveId = (await stores.archive.archive('sess-removed', '畳めなかった生ログ\n')).id;
     await stores.archive.remove(archiveId);
     await stores.sessions.setTranscriptGrave({ archiveId });
 
@@ -13587,5 +13590,208 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
     expect(input).not.toContain('## HABITS-HEAD');
 
     await s.clone.stop();
+  });
+});
+
+/**
+ * `#onPreCompact` の退避は `diverged` / `unknown` のときだけ日誌へ記録する
+ * （`continues` は記録しない）——理由は `archive-continuity.ts` の
+ * `describeArchiveContinuityForJournal` の doc。文言は `'PreCompact の退避'`
+ * を名乗り、他の2つの呼び手（`#salvageTranscript` / `manager.ts` の
+ * `case 'archive'`）と区別できる。
+ */
+describe('クローン — PreCompact の退避は diverged/unknown だけを日誌へ記録する（#698）', () => {
+  /** `PreCompact` フックを実際に叩く。`session_id` を固定して連続性の鎖を作る。 */
+  async function firePreCompact(
+    main: FakeCall,
+    sessionId: string,
+    transcript: string,
+  ): Promise<void> {
+    const dir = await mkdtemp(join(tmpdir(), 'alteroid-clone-precompact-continuity-'));
+    try {
+      const transcriptPath = join(dir, 'transcript.jsonl');
+      await writeFile(transcriptPath, transcript, 'utf8');
+      const hook = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
+      if (hook === undefined) throw new Error('PreCompact フックが登録されていない');
+      await hook({ session_id: sessionId, transcript_path: transcriptPath } as never, undefined, {
+        signal: new AbortController().signal,
+      } as never);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  async function continuityRows(stores: Stores): Promise<{ text: string }[]> {
+    const entries = (await stores.journal.list({ types: ['exchange'] })) as { text: string }[];
+    // **呼び手の名前と `continuity=` の2つで絞る。囲みの飾り（`[…]`）では絞らない。**
+    // 飾りで絞っていたときは、飾りを変えるだけの変異でこの歯が赤くなった（＝当てすぎ。
+    // #698 の変異試験 m5 で実測）。絞りが担っているのは2つ——同じ呼び手の**失敗**の記録
+    // （`PreCompact の退避に失敗した`）を拾わないことと、他の2つの呼び手と混ざらないこと。
+    // **どちらも飾りには依存しない。**
+    return entries.filter(
+      (entry) => entry.text.includes('PreCompact の退避') && entry.text.includes('continuity='),
+    );
+  }
+
+  it('first/continues は記録されない。diverged だけが記録される', async () => {
+    const s = setup();
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+    const main = s.calls[0] as FakeCall;
+
+    await firePreCompact(main, 'sess-continuity', 'AAAA'); // first
+    await firePreCompact(main, 'sess-continuity', 'AAAABBBB'); // continues
+    await firePreCompact(main, 'sess-continuity', 'ZZZZZZZZZZZZ'); // diverged
+
+    await waitFor(async () => (await s.stores.archive.list()).length >= 3, '3件退避されること');
+
+    const rows = await continuityRows(s.stores);
+    expect(rows.some((row) => row.text.includes('continuity=continues'))).toBe(false);
+    expect(rows.some((row) => row.text.includes('continuity=first'))).toBe(false);
+    expect(rows.some((row) => row.text.includes('continuity=diverged'))).toBe(true);
+    // 本文そのもの・断片は載らない。
+    expect(rows.some((row) => row.text.includes('AAAA'))).toBe(false);
+    expect(rows.some((row) => row.text.includes('ZZZZZZZZZZZZ'))).toBe(false);
+
+    await s.clone.stop();
+  });
+
+  it('unknown（直前の行が指紋を持たない）も記録される', async () => {
+    const stores = createMemoryStores();
+    await seedFingerprintlessArchiveRow(stores.archive, 'sess-legacy', 'LEGACY\n');
+    const s = setup(undefined, stores);
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+    const main = s.calls[0] as FakeCall;
+
+    await firePreCompact(main, 'sess-legacy', 'LEGACY\nNEW\n');
+
+    await waitFor(async () => (await stores.archive.list()).length >= 2, '退避されること');
+
+    const rows = await continuityRows(stores);
+    expect(rows.some((row) => row.text.includes('continuity=unknown'))).toBe(true);
+
+    await s.clone.stop();
+  });
+});
+
+/**
+ * `#salvageTranscript`（文脈窓で畳む前の退避）も同じ規則で記録する。
+ * 文言は `'文脈窓で畳む前の退避'` を名乗る——`#onPreCompact` の
+ * `'PreCompact の退避'` / `manager.ts` の `'マネージャーの生ログの退避'` とは
+ * 区別できる形である。
+ *
+ * `fakeSdk` は `system:init` の `session_id` を常に固定値（`'sess-fake'`）で
+ * 出すので、文脈窓の畳みで新しいセッションへ作り直しても
+ * `this.#sdkSessionId` は同じ値のまま——同じ `sessionId` を鍵にした連続性の
+ * 鎖を2回の畳みにまたがって作れる。
+ */
+describe('クローン — 文脈窓で畳む前の退避は diverged/unknown だけを日誌へ記録する（#698）', () => {
+  const tooLong = 'Prompt is too long';
+
+  /**
+   * **`resultFor` の `turnIndex` はセッションごとに0から数え直す**（`fakeSdk`
+   * の doc）。⟹ 各セッションの「1本目は成功・2本目は長さで落ちる（畳む）」を
+   * 固定すれば、`failNext` のような使い回しの旗を持たなくても、畳みのたびに
+   * 新しいセッションで同じ形（成功→畳み）を繰り返させられる。
+   */
+  function setupFold() {
+    const stores = createMemoryStores();
+    const { fn, calls } = fakeSdk(undefined, {
+      resultFor: (turnIndex) =>
+        turnIndex === 1 ? { subtype: 'success', isError: true, text: tooLong } : undefined,
+    });
+    const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
+      stores,
+      queryFn: fn,
+      env: {},
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    const events: ChatStreamEvent[] = [];
+    clone.subscribe('conv-1', (event) => events.push(event));
+    return { clone, stores, calls, events };
+  }
+
+  /**
+   * `events` は全サイクルぶん積み上がる配列なので、**新しく起きた分だけ**を
+   * 見て待つ（`.some()` を配列全体に掛けると、1周目の 'done' / 'error' が
+   * 2周目以降の待ちを即座に満たしてしまう）。
+   */
+  async function waitForNewEvent(
+    events: ChatStreamEvent[],
+    fromLength: number,
+    type: ChatStreamEvent['type'],
+    label: string,
+  ): Promise<void> {
+    await waitFor(() => events.slice(fromLength).some((event) => event.type === type), label);
+  }
+
+  /**
+   * 1セッションぶん——1本目を成功させ、生ログの在り処を控えたうえで2本目を
+   * 長さ失敗させて畳ませる。畳み終わる（退避が `list()` に出る）まで待つ。
+   */
+  async function successThenFold(
+    s: ReturnType<typeof setupFold>,
+    dir: string,
+    body: string,
+  ): Promise<void> {
+    let fromLength = s.events.length;
+    s.clone.post(humanMessage('やあ'));
+    await waitForNewEvent(s.events, fromLength, 'done', '1本目が通ること');
+
+    const transcriptPath = join(
+      dir,
+      `t-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonl`,
+    );
+    await writeFile(transcriptPath, body, 'utf8');
+    const main = s.calls[s.calls.length - 1] as FakeCall;
+    const hook = main.options.hooks?.PostToolUse?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
+    await hook({ tool_name: 'Read', transcript_path: transcriptPath } as never, undefined, {
+      signal: new AbortController().signal,
+    } as never);
+
+    const before = (await s.stores.archive.list()).length;
+    fromLength = s.events.length;
+    s.clone.post(humanMessage('やあ'));
+    await waitForNewEvent(s.events, fromLength, 'error', '2本目（長さ失敗）が落ちること');
+    await waitFor(
+      async () => (await s.stores.archive.list()).length > before,
+      '文脈窓の畳みで退避されること',
+    );
+    // 次のサイクルが新しいセッションへ入れるよう、資材が捨てられるまで待つ。
+    await waitFor(
+      async () => (await s.stores.sessions.getCloneSessionId()) === null,
+      '資材が捨てられて次が新しいセッションになること',
+    );
+  }
+
+  it('continues は記録されない。diverged だけが記録される', async () => {
+    const s = setupFold();
+    const dir = await mkdtemp(join(tmpdir(), 'alteroid-clone-salvage-continuity-'));
+    try {
+      await successThenFold(s, dir, 'AAAA'); // first
+      await successThenFold(s, dir, 'AAAABBBB'); // continues
+      await successThenFold(s, dir, 'ZZZZZZZZZZZZ'); // diverged
+
+      const rows = ((await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[])
+        // 囲みの飾りでは絞らない（理由は `#onPreCompact` 側の `continuityRows` の注釈）。
+        .filter(
+          (entry) =>
+            entry.text.includes('文脈窓で畳む前の退避') && entry.text.includes('continuity='),
+        );
+      expect(rows.some((row) => row.text.includes('continuity=continues'))).toBe(false);
+      expect(rows.some((row) => row.text.includes('continuity=first'))).toBe(false);
+      expect(rows.some((row) => row.text.includes('continuity=diverged'))).toBe(true);
+      // 本文そのもの・断片は載らない。
+      expect(rows.some((row) => row.text.includes('AAAA'))).toBe(false);
+      expect(rows.some((row) => row.text.includes('ZZZZZZZZZZZZ'))).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+      await s.clone.stop();
+    }
   });
 });

@@ -1,3 +1,8 @@
+import {
+  classifyArchiveContinuity,
+  fingerprintArchiveBody,
+  type ArchiveContinuity,
+} from './archive-continuity.js';
 import { setStderrSinkForTesting } from './dropped-record.js';
 import { deriveMemoryFrontmatter, nextDescribedAt } from './memory.js';
 import { matchesJournalSearch } from './journal-search.js';
@@ -46,6 +51,7 @@ import type {
   TokenPoolStore,
   ArchiveEntry,
   ArchiveSessionSummary,
+  ArchiveWrite,
   TranscriptArchive,
   UsageStore,
 } from './store.js';
@@ -127,6 +133,62 @@ function isBeforeUsageStart(start: string | null, from: string | undefined): boo
 }
 
 /**
+ * `createMemoryStores()` が作った `archive`（`TranscriptArchive`）ごとの内部
+ * 状態への裏口（#698）。**`TranscriptArchive` interface にはメソッドを足さ
+ * ない**——足すと3実装（インメモリ / fs / pg）すべてに同じメソッドが要ることに
+ * なる。この `WeakMap` は `seedFingerprintlessArchiveRow` のためだけに在る。
+ */
+const archiveInternalsRegistry = new WeakMap<
+  TranscriptArchive,
+  {
+    archives: Map<string, string>;
+    archiveMeta: Map<
+      string,
+      {
+        sessionId: string;
+        at: string;
+        seq: number;
+        bodyChars?: number;
+        bodyMd5?: string;
+        continuity?: ArchiveContinuity;
+      }
+    >;
+  }
+>();
+
+/**
+ * インメモリ実装（`createMemoryStores().archive`）に、**指紋を持たない行**を
+ * 直接登録する（#698）。`archive()` を経由すると必ず指紋が付くので、
+ * この機能より前に積まれた行（本番の5.4GBの既存行）を再現するにはこの口が
+ * 要る——`verifyTranscriptArchiveContract` の `seedFingerprintlessRow` に渡す
+ * ためのものであり、`archive-contract.test.ts` 以外から呼ぶ想定は無い。
+ *
+ * `createMemoryStores()` が作った `archive` 以外を渡すと例外を投げる。
+ */
+export async function seedFingerprintlessArchiveRow(
+  archive: TranscriptArchive,
+  sessionId: string,
+  body: string,
+): Promise<string> {
+  const internals = archiveInternalsRegistry.get(archive);
+  if (internals === undefined) {
+    throw new Error(
+      'seedFingerprintlessArchiveRow: createMemoryStores() が作ったインメモリ実装ではない',
+    );
+  }
+  const id = `${sessionId}-fingerprintless-${internals.archiveMeta.size}`;
+  internals.archives.set(id, body);
+  // **意図して bodyChars / bodyMd5 / continuity を入れない**——指紋を持たない
+  // 行を再現するのがこの関数の目的である。
+  internals.archiveMeta.set(id, {
+    sessionId,
+    at: new Date().toISOString(),
+    seq: internals.archiveMeta.size,
+  });
+  return id;
+}
+
+/**
  * テスト用のインメモリストア。storage-fs の代わりに core のテストで使う。
  * 本番の配線には出てこない（永続化は必ずドライバ側）。
  */
@@ -161,7 +223,17 @@ export function createMemoryStores(): Stores {
    * 列が残るのと同じ）。`seq` は積んだ順で、`at` が同じミリ秒に並んだときの
    * 並びを決めるためだけに在る（pg 側の `order by at desc, id desc` の代わり）。
    */
-  const archiveMeta = new Map<string, { sessionId: string; at: string; seq: number }>();
+  const archiveMeta = new Map<
+    string,
+    {
+      sessionId: string;
+      at: string;
+      seq: number;
+      bodyChars?: number;
+      bodyMd5?: string;
+      continuity?: ArchiveContinuity;
+    }
+  >();
   const inboxStore = createMemoryInboxStore();
   let cloneSessionId: string | null = null;
   let transcriptGrave: TranscriptGrave | null = null;
@@ -536,18 +608,49 @@ export function createMemoryStores(): Stores {
           ...(removal === undefined
             ? {}
             : { removedAt: removal.removedAt, removedBytes: removal.bytes }),
+          ...(meta.continuity === undefined ? {} : { continuity: meta.continuity }),
         };
         return [{ entry, seq: meta.seq }];
       })
       .sort((x, y) => (x.entry.at < y.entry.at ? 1 : x.entry.at > y.entry.at ? -1 : y.seq - x.seq))
       .map(({ entry }) => entry);
 
+  /**
+   * 「直前の退避」＝同じ `sessionId` の行のうち `at` が最大（同値なら `seq`
+   * が最大）のもの（#698）。**`removedAt` で絞らない**——tombstone された
+   * 行の指紋も、当時の本文を表す有効な情報である（pg / fs 実装の doc と
+   * 同じ理由）。`archiveMeta` だけを見る（`archives` の本文には触れない）。
+   */
+  const findPreviousArchiveForSession = (
+    sessionId: string,
+  ): { id: string; bodyChars?: number; bodyMd5?: string } | null => {
+    let best: { id: string; at: string; seq: number; bodyChars?: number; bodyMd5?: string } | null =
+      null;
+    for (const [id, meta] of archiveMeta) {
+      if (meta.sessionId !== sessionId) continue;
+      if (best === null || meta.at > best.at || (meta.at === best.at && meta.seq > best.seq)) {
+        best = { id, at: meta.at, seq: meta.seq, bodyChars: meta.bodyChars, bodyMd5: meta.bodyMd5 };
+      }
+    }
+    return best === null ? null : { id: best.id, bodyChars: best.bodyChars, bodyMd5: best.bodyMd5 };
+  };
+
   const archive: TranscriptArchive = {
-    async archive(sessionId, transcript) {
+    async archive(sessionId, transcript): Promise<ArchiveWrite> {
       const id = `${sessionId}-${nextId()}`;
+      const previous = findPreviousArchiveForSession(sessionId);
+      const fingerprint = fingerprintArchiveBody(transcript);
+      const { continuity, comparedTo } = classifyArchiveContinuity(previous, transcript);
       archives.set(id, transcript);
-      archiveMeta.set(id, { sessionId, at: new Date().toISOString(), seq: archiveMeta.size });
-      return id;
+      archiveMeta.set(id, {
+        sessionId,
+        at: new Date().toISOString(),
+        seq: archiveMeta.size,
+        bodyChars: fingerprint.bodyChars,
+        bodyMd5: fingerprint.bodyMd5,
+        continuity,
+      });
+      return { id, continuity, ...(comparedTo === undefined ? {} : { comparedTo }) };
     },
     async list(): Promise<ArchiveEntry[]> {
       return buildArchiveEntries();
@@ -605,6 +708,12 @@ export function createMemoryStores(): Stores {
       return { kind: 'removed', bytes };
     },
   };
+  // **テストが指紋を持たない行を作れるようにする口**（#698。
+  // `seedFingerprintlessArchiveRow` の doc）。`TranscriptArchive` interface に
+  // メソッドを足すと3実装すべてに同じメソッドが要ることになるので、この
+  // インメモリ実装だけが持つ内部状態への出入口を、`archive` オブジェクトを鍵に
+  // した `WeakMap` 越しに公開する。
+  archiveInternalsRegistry.set(archive, { archives, archiveMeta });
 
   const sessions: SessionRegistry = {
     async getCloneSessionId() {

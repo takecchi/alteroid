@@ -8045,7 +8045,7 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
 
   it('消せる（行は list に残る。日誌に決定として残る）', async () => {
     const h = harness();
-    const archiveId = await h.stores.archive.archive('sess-x', 'BODY\n');
+    const archiveId = (await h.stores.archive.archive('sess-x', 'BODY\n')).id;
 
     const reply = await h.call('archive_remove', {
       archiveId,
@@ -8067,7 +8067,7 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
 
   it('二重に呼んでも「前から消されている」と言い、何も変えない', async () => {
     const h = harness();
-    const archiveId = await h.stores.archive.archive('sess-y', 'BODY\n');
+    const archiveId = (await h.stores.archive.archive('sess-y', 'BODY\n')).id;
     await h.call('archive_remove', { archiveId, summary: '1回目' });
 
     const reply = await h.call('archive_remove', { archiveId, summary: '2回目' });
@@ -8078,7 +8078,7 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
   /** ⭐ 走行中のマネージャーの退避は、クローンの道具からも消せない（#698）。 */
   it('走行中のマネージャーの退避は消せない（どのマネージャーが走行中かを言う）', async () => {
     const h = harness();
-    const archiveId = await h.stores.archive.archive('sess-running', 'BODY\n');
+    const archiveId = (await h.stores.archive.archive('sess-running', 'BODY\n')).id;
     h.setRunningManagerOwning(archiveId, 'mgr-running-1');
 
     const reply = await h.call('archive_remove', { archiveId, summary: '掃除' });
@@ -8097,7 +8097,7 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
    */
   it('overrideReason を渡せば走行中でも消せる（理由が journal に残る）', async () => {
     const h = harness();
-    const archiveId = await h.stores.archive.archive('sess-override', 'BODY\n');
+    const archiveId = (await h.stores.archive.archive('sess-override', 'BODY\n')).id;
     h.setRunningManagerOwning(archiveId, 'mgr-running-2');
 
     const reply = await h.call('archive_remove', {
@@ -8122,7 +8122,7 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
 
   it('overrideReason が空文字だと拒否のまま（うっかり通らない）', async () => {
     const h = harness();
-    const archiveId = await h.stores.archive.archive('sess-empty-override', 'BODY\n');
+    const archiveId = (await h.stores.archive.archive('sess-empty-override', 'BODY\n')).id;
     h.setRunningManagerOwning(archiveId, 'mgr-running-3');
 
     const reply = await h.call('archive_remove', {
@@ -8137,7 +8137,7 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
 
   it('overrideReason が空白だけだと拒否のまま（trim して非空を要求する）', async () => {
     const h = harness();
-    const archiveId = await h.stores.archive.archive('sess-blank-override', 'BODY\n');
+    const archiveId = (await h.stores.archive.archive('sess-blank-override', 'BODY\n')).id;
     h.setRunningManagerOwning(archiveId, 'mgr-running-4');
 
     const reply = await h.call('archive_remove', {
@@ -8152,7 +8152,7 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
 
   it('走行中でなければ overrideReason を渡さなくても普通に消せる（override の有無で通常経路が変わらない）', async () => {
     const h = harness();
-    const archiveId = await h.stores.archive.archive('sess-not-running', 'BODY\n');
+    const archiveId = (await h.stores.archive.archive('sess-not-running', 'BODY\n')).id;
     // setRunningManagerOwning しない ＝ 誰も走行中に抱えていない。
 
     const reply = await h.call('archive_remove', { archiveId, summary: '掃除' });
@@ -8169,7 +8169,7 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
    */
   it('managers が配線されていない場面では、安全側に倒して消させない', async () => {
     const stores = createMemoryStores();
-    const archiveId = await stores.archive.archive('sess-no-pool', 'BODY\n');
+    const archiveId = (await stores.archive.archive('sess-no-pool', 'BODY\n')).id;
     const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
     const found = tools.find((entry) => entry.name === 'archive_remove');
     if (!found) throw new Error('archive_remove が無い');
@@ -14636,7 +14636,7 @@ describe('journal.append 失敗時の応答本文: 17箇所すべてで道具名
       firstLine: ACT_COMPLETED,
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-17');
-        const archiveId = await stores.archive.archive('sess-case-17', 'BODY\n');
+        const archiveId = (await stores.archive.archive('sess-case-17', 'BODY\n')).id;
         // `runningManagerOwning` だけを持つ最小のスタブ（この道具はそれ以外を呼ばない）。
         const managers = { runningManagerOwning: () => undefined } as unknown as ManagerPool;
         const tools = createCloneTools({

@@ -1,3 +1,7 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import type {
   query as sdkQuery,
   AgentDefinition,
@@ -55,6 +59,7 @@ import {
   createMemoryStores,
   failingJobWrite,
   failingJournalAppend,
+  seedFingerprintlessArchiveRow,
 } from './testing.js';
 import type { TokenRotatorObservation } from './token-rotator.js';
 import type { UsageTotals } from './usage.js';
@@ -8998,5 +9003,110 @@ describe('穴C: #pushAgentToken が journal.append の失敗で跡を残す', ()
           line.includes('日誌を記録できませんでした') && line.includes('with=self role=outbound'),
       ),
     ).toBe(true);
+  });
+});
+
+/**
+ * `case 'archive'`（#698）は `diverged` / `unknown` のときだけ日誌へ記録する
+ * （`continues` は記録しない）——理由は
+ * `archive-continuity.ts` の `describeArchiveContinuityForJournal` の doc。
+ *
+ * **`archive` イベントは `runner.ts` の `#onPreCompact`（マネージャー自身の
+ * SDK セッションの PreCompact フック）が `#shipArchive()` を通じて発行する。**
+ * ここでは読むだけで触らない `runner.ts` のその経路を実際に鳴らし、
+ * `ManagerPool#onEvent` の `case 'archive'` まで実物で通す。
+ */
+describe('マネージャー — case archive は diverged/unknown だけを日誌へ記録する（#698）', () => {
+  /** PreCompact フックを鳴らし、`archive` イベントを実際に発行させる。 */
+  async function firePreCompact(session: FakeSession, dir: string, body: string): Promise<void> {
+    const transcriptPath = join(
+      dir,
+      `t-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonl`,
+    );
+    await writeFile(transcriptPath, body, 'utf8');
+    const matchers = session.options.hooks?.PreCompact as HookCallbackMatcher[] | undefined;
+    for (const matcher of matchers ?? []) {
+      for (const hook of matcher.hooks) {
+        await hook({ transcript_path: transcriptPath } as never, undefined, {
+          signal: new AbortController().signal,
+        });
+      }
+    }
+  }
+
+  async function continuityRows(stores: Stores): Promise<{ text: string }[]> {
+    const entries = await stores.journal.list({ types: ['exchange'] });
+    return entries
+      .filter(
+        (entry): entry is Extract<JournalEntry, { type: 'exchange' }> =>
+          entry.type === 'exchange' && entry.text.includes('マネージャーの生ログの退避'),
+      )
+      .map((entry) => ({ text: entry.text }));
+  }
+
+  it('continues は記録されない。diverged/unknown だけが記録され、文言はマネージャーの呼び手を名乗る', async () => {
+    const s = setup();
+    await s.pool.start({ request: 'デプロイして' });
+    const session = s.sessions[0] as FakeSession;
+    const dir = await mkdtemp(join(tmpdir(), 'alteroid-mgr-archive-continuity-'));
+    try {
+      await firePreCompact(session, dir, 'AAAA'); // first（記録しない）
+      await firePreCompact(session, dir, 'AAAABBBB'); // continues（記録しない）
+      await firePreCompact(session, dir, 'ZZZZZZZZZZZZ'); // diverged（記録する）
+
+      await vi.waitFor(async () => {
+        expect((await s.stores.archive.list()).length).toBe(3);
+      });
+
+      const rows = await continuityRows(s.stores);
+      expect(rows.some((row) => row.text.includes('continuity=continues'))).toBe(false);
+      expect(rows.some((row) => row.text.includes('continuity=first'))).toBe(false);
+      expect(rows.some((row) => row.text.includes('continuity=diverged'))).toBe(true);
+      // **本文そのもの・断片は載らない。**
+      expect(rows.some((row) => row.text.includes('AAAA'))).toBe(false);
+      expect(rows.some((row) => row.text.includes('ZZZZZZZZZZZZ'))).toBe(false);
+      // **呼び手を名乗る**（`describeArchiveContinuityForJournal` の doc）。
+      // 囲みの飾り（`[…]`）ではなく呼び手の名前そのものを見る——飾りを変えるだけの
+      // 変異でここが赤くなるのは当てすぎである（測りたいのは「呼び手を名乗ること」）。
+      expect(rows.some((row) => row.text.includes('マネージャーの生ログの退避'))).toBe(true);
+    } finally {
+      // **先に stop() する。** stop() 自身も `#shipArchive()` を経由しうるので、
+      // ディレクトリを先に消すと「読み出せない」の跡が stderr へ残る
+      // （実害は無いが、テスト自身がノイズを作らないようにする）。
+      await s.pool.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * `unknown`——直前の退避が指紋を持たない行を、テストの裏口
+   * （インメモリ実装の `seedFingerprintlessArchiveRow`）で再現する。
+   */
+  it('unknown（直前が指紋を持たない）も記録される', async () => {
+    const stores = createMemoryStores();
+    const s = setup(undefined, { stores });
+    const { managerId } = await s.pool.start({ request: 'デプロイして' });
+    const session = s.sessions[0] as FakeSession;
+    const dir = await mkdtemp(join(tmpdir(), 'alteroid-mgr-archive-unknown-'));
+    try {
+      // managerId をそのまま sessionId として使う裏口で、指紋の無い行を仕込む
+      // （`manager.ts` の `case 'archive'` は `event.managerId` を sessionId に使う）。
+      await seedFingerprintlessArchiveRow(stores.archive, managerId, 'LEGACY\n');
+
+      await firePreCompact(session, dir, 'LEGACY\nNEW\n');
+
+      await vi.waitFor(async () => {
+        expect((await stores.archive.list()).length).toBe(2);
+      });
+
+      const rows = await continuityRows(stores);
+      expect(rows.some((row) => row.text.includes('continuity=unknown'))).toBe(true);
+    } finally {
+      // **先に stop() する。** stop() 自身も `#shipArchive()` を経由しうるので、
+      // ディレクトリを先に消すと「読み出せない」の跡が stderr へ残る
+      // （実害は無いが、テスト自身がノイズを作らないようにする）。
+      await s.pool.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

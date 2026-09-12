@@ -1239,6 +1239,11 @@ export const archiveEntrySchema = z.object({
   /** tombstone 済み（`DELETE /archive/:id`）の行にだけ載る。 */
   removedAt: z.string().optional(),
   removedBytes: z.number().int().optional(),
+  /**
+   * 直前の退避との連続性（#698。`@alteroid/core` の `ArchiveContinuity` の
+   * doc）。**この機能より前に積まれた行には無いので optional。**
+   */
+  continuity: z.enum(['first', 'continues', 'diverged', 'unknown']).optional(),
 });
 
 export const archiveListResponseSchema = z.object({ entries: z.array(archiveEntrySchema) });
