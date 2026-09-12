@@ -12313,6 +12313,7 @@ describe('credentialService（正本を同期で覗いて重ねる。#865）', (
     vault?: readonly { name: string; value: string; updatedAt: string }[];
     env?: NodeJS.ProcessEnv;
     credentials?: () => Record<string, string>;
+    profileEnv?: Record<string, string>;
   }) {
     const { fn, calls } = fakeSdk();
     const fakeCredentialService = {
@@ -12325,6 +12326,13 @@ describe('credentialService（正本を同期で覗いて重ねる。#865）', (
       env: input.env ?? {},
       credentialService: fakeCredentialService,
       ...(input.credentials === undefined ? {} : { credentials: input.credentials }),
+      ...(input.profileEnv === undefined
+        ? {}
+        : {
+            profile: {
+              env: () => input.profileEnv as Record<string, string>,
+            } as unknown as Parameters<typeof createClone>[0]['profile'],
+          }),
       runners: createRunnerRegistry([
         createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
       ]),
@@ -12439,6 +12447,24 @@ describe('credentialService（正本を同期で覗いて重ねる。#865）', (
     clone.stop();
 
     expect(calls[0]?.options.env?.GH_TOKEN).toBe('from-container-env');
+  });
+
+  /**
+   * **重ね順そのものを測る。** 正本は「env の後・プロファイルの前」に重ねる
+   * 約束（`#childEnv()` のdoc）——ここが崩れると、プロファイルが同じ名前を
+   * 宣言していても正本に上書きされ、`credentialNamesShadowedByProfile` が
+   * 検出できる形（人間が明示的に書いたほうが勝つ）が壊れる。
+   */
+  it('プロファイルが同じ名前を宣言していれば、正本より後で重なってプロファイルが勝つ', async () => {
+    const { clone, calls } = cloneWithVault({
+      vault: [{ name: 'GH_TOKEN', value: 'from-vault', updatedAt: '2026-09-12T00:00:00.000Z' }],
+      profileEnv: { GH_TOKEN: 'declared-in-profile' },
+    });
+    say(clone);
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    expect(calls[0]?.options.env?.GH_TOKEN).toBe('declared-in-profile');
   });
 });
 
