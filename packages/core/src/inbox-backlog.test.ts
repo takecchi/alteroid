@@ -770,6 +770,46 @@ describe('describeInboxBacklogBreakdown', () => {
   });
 });
 
+describe('observedAt（#910 追補2 — 齢の基準点）', () => {
+  /**
+   * ⭐ 齢（`1時間未満 21` など）は `now` からの**相対値**である。基準点を
+   * 刷らないと、この内訳を別の場所へ写した瞬間に「いつから見て1時間未満か」が
+   * 消える。⟹ 足したのは断り書きではなく**落としていた演算子**である。
+   *
+   * **陽性**: 基準点が消えたら赤くなる（行を丸ごと `toBe` で固定）。
+   * **対の側**: `Date.now()` を呼ばず、渡された `now` をそのまま写していること
+   * （純関数のまま）を、`NOW` とは違う値を渡して測る。
+   */
+  it('齢の行に、渡された now が基準点として刷られる', () => {
+    const b = summarizeInboxBacklog(
+      [row(SAMPLE_EVENTS.human_message, '2026-09-11T11:30:00.000Z')],
+      NOW,
+    );
+    expect(b.observedAt).toBe('2026-09-11T12:00:00.000Z');
+    expect(lineStartingWith(describeInboxBacklogBreakdown(b), '齢')).toBe(
+      '齢（観測 2026-09-11T12:00:00.000Z 時点。齢は相対値なので、この行を写すときは基準点も一緒に写すこと）: 1時間未満 1',
+    );
+  });
+
+  it('Date.now() を呼ばない — 渡された now がそのまま基準点になる（NOW とは別の値で測る）', () => {
+    const other = Date.parse('2026-01-02T03:04:05.678Z');
+    const b = summarizeInboxBacklog(
+      [row(SAMPLE_EVENTS.human_message, '2026-01-02T03:00:00.000Z')],
+      other,
+    );
+    expect(b.observedAt).toBe('2026-01-02T03:04:05.678Z');
+    expect(describeInboxBacklogBreakdown(b)).toContain('観測 2026-01-02T03:04:05.678Z 時点');
+  });
+
+  it('0件の内訳でも基準点は落ちない（値を作らない軸とは違い、これは必ず取れる）', () => {
+    const b = summarizeInboxBacklog([], NOW);
+    expect(b.observedAt).toBe('2026-09-11T12:00:00.000Z');
+    expect(lineStartingWith(describeInboxBacklogBreakdown(b), '齢')).toBe(
+      '齢（観測 2026-09-11T12:00:00.000Z 時点。齢は相対値なので、この行を写すときは基準点も一緒に写すこと）: （無し）',
+    );
+  });
+});
+
 describe('INBOX_BACKLOG_LOUD_THRESHOLD', () => {
   it('50 である（#562 の28件の倍を超えたら「詰まり」では説明が付かない、という線）', () => {
     expect(INBOX_BACKLOG_LOUD_THRESHOLD).toBe(50);

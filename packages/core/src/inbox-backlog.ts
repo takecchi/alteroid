@@ -158,6 +158,21 @@ export interface InboxBacklogBreakdown {
   }[];
   /** 件数0のバケツは載せない。足すと必ず `total` に一致する（全行を必ずどれかの齢バケツへ分類できるため）。 */
   readonly ageBuckets: readonly { readonly label: string; readonly count: number }[];
+  /**
+   * {@link ageBuckets} を数えた基準時刻（`summarizeInboxBacklog` に渡された
+   * `now` の ISO 8601。#910 追補）。
+   *
+   * **齢は相対値なので、基準点が無いと引用に耐えない。** 読んだその場では
+   * 「いま」が基準だと分かるが、**この内訳を別の場所へ写した瞬間に基準点が
+   * 消える**——写された側は `1時間未満 21` を「いつから見て1時間未満か」を
+   * 知らないまま読むことになる。`AGENTS.md`「報告の形」が逐語で言っている
+   * 形と同じである（`grep -Fn -- '「その報告がいつの観測か」が報告自身から取れないと' AGENTS.md`）。
+   *
+   * **新しい観測はしていない。** `summarizeInboxBacklog` が齢を数えるために
+   * 既に受け取っている値を、落とさずに持たせているだけである
+   * （`Date.now()` はここでも呼ばない——純関数のままである）。
+   */
+  readonly observedAt: string;
 }
 
 /** {@link summarizeInboxBacklog} が並べる齢バケツの境界と順序。 */
@@ -426,6 +441,8 @@ export function summarizeInboxBacklog(
     maxDeliveries,
     undeliveredByType,
     ageBuckets,
+    // **齢の基準点を落とさずに持たせる**（#910 追補。{@link InboxBacklogBreakdown.observedAt}）。
+    observedAt: new Date(now).toISOString(),
   };
 }
 
@@ -521,6 +538,28 @@ export function summarizeInboxBacklog(
  * 持っており（#910 が言う「読み手が違う」の裏側）、識別子まで一緒に変えると
  * 差分が本題から離れる。**この doc がその対応表である。**
  *
+ * ## ⚠️ #910 追補2: `齢` は但し書きではなく**基準点**が欠けていた
+ *
+ * `齢: 1時間未満 21 / …` は `now` からの**相対値**なのに、その `now` を1文字も
+ * 刷っていなかった。**読んだその場では困らない**（「いま」が基準だと分かる）が、
+ * **この内訳を別の場所へ写した瞬間に基準点が消える。**
+ *
+ * **実測 2026-09-12（クローン自身の誤り）**: クローンが `resets 6:40am
+ * (Asia/Tokyo)` という**時間帯つきの正しい表示**を持っていながら、別の場所から
+ * 取った時間帯なしの数字（vitest の `Start at 03:52:01`）を基準にして
+ * 「窓はもう明けた」と結論した。実際には9時間ずれていた。⟹ **但し書きの無い数字の
+ * 害は、その数字自身が誤読されることだけではない——他の正しい計器を誤読させる
+ * 基準にもなる。**
+ *
+ * **⟹ ここで足したのは断り書きではない。** {@link InboxBacklogBreakdown.observedAt}
+ * は齢を数えるために既に受け取っている `now` そのもので、**新しい観測は1つも
+ * していない。** 落としていた演算子を落とさなくしただけである。
+ *
+ * **他の軸には足していない。** `総数` / `種類` / `齢の桶の名前` / `最も古いものは
+ * <ISO8601 Z> から` は、どれも基準点を要しない（絶対値か、名前が境界を字面で
+ * 言っているか、全行が必ずどれかへ入って足すと `total` になるか）。**全部に足すのが
+ * 正解ではない**——足すべきなのは「それ無しでは読めない数」だけである。
+ *
  * **`distinct` の断り書きは1行に畳んである。** 偏りの向きは2つあり
  * （区切りの衝突で小さく出る／本文へ畳んだ件数を焼き込む合図で大きく出る。
  * {@link inboxBacklogDedupeKey} の doc の「限界」）、**片方だけ書くと新しい誤読を
@@ -552,6 +591,6 @@ export function describeInboxBacklogBreakdown(b: InboxBacklogBreakdown): string 
     `同一本文（id/at を除いた中身）を畳むと ${b.distinct} 件 ⚠ 本文が同じでも別々に起きた出来事である。この数は上下どちらへもぶれる（向きと理由は inboxBacklogDedupeKey の doc）`,
     `器の入れ替え回数: 0回＝いまの器になってから積まれた ${b.undelivered} / 1回 ${b.deliveredOnce} / 2回以上 ${b.redelivered}（最大 ${b.maxDeliveries}）⚠ 配られた回数ではない — 門が畳んだ行はターンが1度も起きないまま数だけ増える`,
     `いまの器になってから積まれた分（0回）の内訳（種類別）: ${undeliveredByTypeText}`,
-    `齢: ${ageBucketsText}`,
+    `齢（観測 ${b.observedAt} 時点。齢は相対値なので、この行を写すときは基準点も一緒に写すこと）: ${ageBucketsText}`,
   ].join('\n');
 }
