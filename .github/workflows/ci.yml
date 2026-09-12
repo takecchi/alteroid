@@ -39,7 +39,7 @@ jobs:
       - name: Build
         run: pnpm run build
 
-      - name: 配布物（packages/*/dist）が CommonJS として構文解析できること（Issue #110）
+      - name: "配布物（packages/*/dist）が CommonJS として構文解析できること（Issue #110）"
         run: pnpm run check:cjs-parse
 
   postgres:
@@ -139,7 +139,7 @@ jobs:
           MNEMORA_LEXICAL_REGIME_JSON: ${{ github.workspace }}/lexical-regime.json
         run: pnpm --filter @mnemora/postgres run test:db
 
-      - name: 実測した regime を Job Summary に残す(⛔ 値の良し悪しの門ではない。ただし宣言と実測の食い違いは門である。Issue #148 ②)
+      - name: "実測した regime を Job Summary に残す(⛔ 値の良し悪しの門ではない。ただし宣言と実測の食い違いは門である。Issue #148 ②)"
         # このステップは常に走る(`if: always()`)——上の test:db が(regime とは無関係な
         # 理由も含め)落ちても、その run で regime を書けていたかどうかを Job Summary
         # から読めるようにする。`lexical-regime-summary.mjs` 自体は server_encoding /
@@ -160,7 +160,7 @@ jobs:
             --expect-encoding "${{ matrix.serverEncoding }}" \
             >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 実測値そのもの(機械可読)を成果物として残す(Issue #148/#155)
+      - name: "実測値そのもの(機械可読)を成果物として残す(Issue #148/#155)"
         # 🔴 artifact 名を脚ごとに分ける(lexical-regime-${{ matrix.serverEncoding }})。
         # 分けないと2脚が同じ名前へ upload しようとして衝突・上書きする
         # (Issue #155 満たすべきこと1)。
@@ -641,7 +641,7 @@ jobs:
           if-no-files-found: ignore
 
   consolidation-cost:
-    name: Runtime.consolidate() が「載る量」に効くかを実測し、値を残す（Issue #136）
+    name: "Runtime.consolidate() が「載る量」に効くかを実測し、値を残す（Issue #136）"
     runs-on: ubuntu-latest
     # Issue #136。`identifier-probes` ジョブと同じ体裁を踏襲する——`retrieval-quality`/
     # `identifier-probes` が確立した「実測値を Job Summary へ残す・落とすのは bench 自体が
