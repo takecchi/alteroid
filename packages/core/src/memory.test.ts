@@ -1278,21 +1278,58 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
     expect(rendered).toContain('要旨は本文より1時間古い: 古い要旨');
   });
 
-  it('4状態を畳まない: fresh / stale / unknown / absent がそれぞれ別の表示になる', () => {
+  /**
+   * ⚠️⚠️ **4つの被験体には必ず同じ slug を渡す（`SAME_SLUG`）。読みやすさの
+   * ために `x-fresh` / `x-stale` のように分けないこと。**
+   *
+   * **理由**: slug は出力の行頭にそのまま出る（`- <slug>: <title> — …`）。
+   * ⟹ **4つに別々の slug を渡すと、測りたい当のもの（印を作る
+   * `memoryFreshnessMarker`）が何を返そうと4つの文字列は必ず互いに異なり、
+   * `distinct.size === 4` は無条件に成立する。** つまりこの歯は常に緑で、
+   * 変異を1つも検出しない。
+   *
+   * **実際にそうなっていた**（実測 2026-09-12）。ここはかつて `x-fresh` /
+   * `x-stale` / `x-unknown` / `x-absent` の4つの slug を使っており、
+   * `memoryFreshnessMarker` の **4分岐すべてを空文字に潰しても**——つまり
+   * #821 の直しを丸ごと削除しても——**緑のまま通った。** 4つを同じ slug に
+   * すると `expected 2 to be 4` で赤くなる。
+   *
+   * ⟹ 🔑 **これは #821 が名指しした欠陥と同じ形である**——「常に真になる
+   * 観測は、観測ではない」。**#821 を直した PR（#860）が、その Issue と同じ形
+   * の歯を置いていた。**
+   *
+   * ⟹ ⭐ **一般形: 「N 通りが互いに別の表示になる」型の歯は、被験体の識別子を
+   * 揃えないと無条件に通る。** 同じ形の歯を書くときは、まず「測りたいものを
+   * 潰したらこの歯は赤くなるか」を実際に撃って確かめること。
+   *
+   * ⛔ 下の `expect(slugs.size).toBe(1)` は、**分けた人がその場で気づくため**に
+   * 置いてある。`distinct.size` より**先に**落ちるので、失敗の理由が
+   * 「印が畳まれた」ではなく「被験体が分かれている」であることが出力で分かる。
+   */
+  it('4状態を畳まない: fresh / stale / unknown / absent がそれぞれ別の表示になる（被験体の slug は揃える）', () => {
+    // 4つの render の差が「印」だけになるように、被験体は1つの slug に固定する。
+    const SAME_SLUG = 'x';
     const fresh = renderMemoryDocuments([
-      fact('x-fresh', { description: '説明', freshness: { kind: 'fresh' } }),
+      fact(SAME_SLUG, { description: '説明', freshness: { kind: 'fresh' } }),
     ]);
     const stale = renderMemoryDocuments([
-      fact('x-stale', { description: '説明', freshness: { kind: 'stale', staleForMs: 1000 } }),
+      fact(SAME_SLUG, { description: '説明', freshness: { kind: 'stale', staleForMs: 1000 } }),
     ]);
     const unknown = renderMemoryDocuments([
-      fact('x-unknown', { description: '説明', freshness: { kind: 'unknown' } }),
+      fact(SAME_SLUG, { description: '説明', freshness: { kind: 'unknown' } }),
     ]);
     // absent は description そのものを frontmatter に書かない（4状態のうち
     // description が無いときの唯一の状態であることを、内容そのもので表す）。
-    const absent = renderMemoryDocuments([fact('x-absent', { freshness: { kind: 'absent' } })]);
+    const absent = renderMemoryDocuments([fact(SAME_SLUG, { freshness: { kind: 'absent' } })]);
 
-    const distinct = new Set([fresh, stale, unknown, absent].map((s) => s.trim()));
+    const rendered = [fresh, stale, unknown, absent];
+
+    // ⛔ 被験体が分かれていないこと。ここが 1 でなければ、下の `distinct.size` は
+    // 印ではなく slug の差を測っている——この歯が無力になる唯一の壊れ方である。
+    const slugs = new Set(rendered.map((s) => s.match(/^- (\S+?):/m)?.[1]));
+    expect(slugs).toEqual(new Set([SAME_SLUG]));
+
+    const distinct = new Set(rendered.map((s) => s.trim()));
     expect(distinct.size).toBe(4);
     expect(absent).toContain('（要旨なし）');
   });
