@@ -194,8 +194,9 @@ describe('Bash の待つだけのループを弾く', () => {
       },
     });
 
-    expect(result.continue).toBe(true);
-    const output = (result as { hookSpecificOutput?: Record<string, unknown> }).hookSpecificOutput;
+    const asRecord = result as { continue?: boolean; hookSpecificOutput?: Record<string, unknown> };
+    expect(asRecord.continue).toBe(true);
+    const output = asRecord.hookSpecificOutput;
     expect(output?.hookEventName).toBe('PreToolUse');
     expect(output?.permissionDecision).toBe('deny');
     expect(String(output?.permissionDecisionReason)).toContain('gh run watch');
@@ -237,7 +238,7 @@ describe('Bash の待つだけのループを弾く', () => {
 
 describe('Bash の有界な形は通す', () => {
   const passingCommands = [
-    ['timeout でラップされている', 'timeout 60 bash -c \'until true; do sleep 1; done\''],
+    ['timeout でラップされている', "timeout 60 bash -c 'until true; do sleep 1; done'"],
     ['for ループ', 'for i in $(seq 1 5); do echo $i; sleep 1; done'],
     ['while read', 'while read -r line; do sleep 1; echo "$line"; done < /tmp/q.txt'],
     ['カウンタ比較', 'i=0; while [ "$i" -lt 5 ]; do sleep 1; i=$((i + 1)); done'],

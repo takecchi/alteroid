@@ -279,12 +279,14 @@ export interface ManagerSessionOptionsRequest {
    * **上の5本と違い、これだけが実際にブロックする**（#894 段1・案(A)）。
    *
    * `Bash` へ渡す `command` が「無限に待つだけの形」
-   * （`bash-wait-guard.ts` の `inspectBashCommand`）だったら、SDK の型定義
-   * （逐語。`PreToolUseHookSpecificOutput` の doc、`sdk.d.ts`）が持つ
-   * `permissionDecision: 'deny'` でツール実行そのものを止める:
+   * （`bash-wait-guard.ts` の `inspectBashCommand`）だったら、SDK の型
+   * （`sdk.d.ts` の `PreToolUseHookSpecificOutput.permissionDecision`）が
+   * 持つ `'deny'` でツール実行そのものを止める。**`PreToolUseHookSpecificOutput`
+   * 自体には JSDoc の説明文が無い**ので、同じ契約だと明記している隣の型
+   * （`PreModelSwitchHookSpecificOutput`）の説明文を逐語で引く:
    *
-   * [sdk-verbatim PreToolUseHookSpecificOutput]
-   * > hookEventName: 'PreToolUse'; permissionDecision?: 'allow' | 'deny' | 'ask'; permissionDecisionReason?: string
+   * [sdk-verbatim PreModelSwitchHookSpecificOutput]
+   * > Same contract as PreToolUse: allow proceeds (skipping the interactive cache-miss confirm), deny cancels the switch, ask asks the user to confirm (a headless session refuses instead)
    *
    * **optional にしない。理由は上の5本と同じ**（可観測性・安全弁は provider
    * を足す側が黙って落とせない要件である）。中身は `runner.ts` の

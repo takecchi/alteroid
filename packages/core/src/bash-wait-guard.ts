@@ -65,8 +65,7 @@
 export type WaitGuardForm = 'until-sleep' | 'while-sleep' | 'tail-f';
 
 export type WaitGuardVerdict =
-  | { blocked: false }
-  | { blocked: true; form: WaitGuardForm; reason: string };
+  { blocked: false } | { blocked: true; form: WaitGuardForm; reason: string };
 
 /**
  * 拒否理由に必ず添える具体的な代替（依頼者からの明示の条件）。

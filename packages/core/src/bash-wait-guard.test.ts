@@ -72,7 +72,7 @@ describe('inspectBashCommand — 弾くべきもの（無限待ちの形）', ()
 describe('inspectBashCommand — 弾いてはいけないもの（有界と読める形。⚠️ 全種を fixture にする）', () => {
   it('全体が timeout N ... に包まれていれば通す', () => {
     const verdict = inspectBashCommand(
-      'timeout 60 bash -c \'until grep -q done /tmp/x.log; do sleep 5; done\'',
+      "timeout 60 bash -c 'until grep -q done /tmp/x.log; do sleep 5; done'",
     );
     expect(verdict.blocked).toBe(false);
   });
@@ -90,7 +90,9 @@ describe('inspectBashCommand — 弾いてはいけないもの（有界と読�
   });
 
   it('カウンタの比較（-lt）が在れば通す', () => {
-    const verdict = inspectBashCommand('i=0; while [ "$i" -lt 30 ]; do sleep 1; i=$((i + 1)); done');
+    const verdict = inspectBashCommand(
+      'i=0; while [ "$i" -lt 30 ]; do sleep 1; i=$((i + 1)); done',
+    );
     expect(verdict.blocked).toBe(false);
   });
 
