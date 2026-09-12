@@ -1205,6 +1205,24 @@ export async function main(): Promise<void> {
     withheldEnvKeys: storage.withheldEnvKeys,
   });
 
+  /**
+   * **器の環境変数の行を撒くときの値**（`TokenSpreadOptions.agentTokenFromEnv`
+   * の doc）。**probe（下の `tokenRotator.probe`）が同じ行を評価するときに
+   * 読むのと同じ場所である** —— 片方だけ `process.env` を見る形だと、
+   * 「試したのは自分の env の値」なのに「撒いたのは空文字（runner の env を
+   * 使え）」という非対称が残る。
+   *
+   * **`createRunnerTokenSync`（後から繋いだ runner に追いつかせる側）とも
+   * 共有する**（2026-09-12、#866）——箱がまだ何も撒いていない runner にも、
+   * ここと同じ値を降ろす。
+   */
+  const agentTokenFromEnv = (): string | undefined => {
+    // **空文字は「無い」と同じに扱う**（空を撒くと器が鍵を消すだけで、
+    // 「空の鍵が置かれた」という状態を作らない。`credentials.ts` と同じ約束）。
+    const value = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    return value === undefined || value.length === 0 ? undefined : value;
+  };
+
   const tokenRotator = createTokenRotator({
     stores,
     // **値ではなく「在るか」だけを渡す**（`TokenRotatorOptions.hasEnvToken` の doc）。
@@ -1240,18 +1258,7 @@ export async function main(): Promise<void> {
       // ——その場合は影を検出できないが、「影が無い」とは主張しない
       // （`createTokenSpread` の doc）。
       profileEnvNames: () => Promise.resolve(Object.keys(profile.env())),
-      /**
-       * **器の環境変数の行を撒くときの値**（`TokenSpreadOptions.agentTokenFromEnv`
-       * の doc）。**上の `probe` が同じ行を評価するときに読むのと同じ場所である** ——
-       * 片方だけ `process.env` を見る形だと、「試したのは自分の env の値」なのに
-       * 「撒いたのは空文字（runner の env を使え）」という非対称が残る。
-       */
-      agentTokenFromEnv: () => {
-        // **空文字は「無い」と同じに扱う**（空を撒くと器が鍵を消すだけで、
-        // 「空の鍵が置かれた」という状態を作らない。`credentials.ts` と同じ約束）。
-        const value = process.env.CLAUDE_CODE_OAUTH_TOKEN;
-        return value === undefined || value.length === 0 ? undefined : value;
-      },
+      agentTokenFromEnv,
       onShadowed: (names) => {
         process.stderr.write(
           `alteroidd: 実行環境プロファイルが認証の鍵と同じ名前を宣言しています。` +
@@ -1329,7 +1336,7 @@ export async function main(): Promise<void> {
     credentials: () => agentTokenHolder.values(),
     tokenIdentity: () => agentTokenHolder.identity(),
     // 後から上がってきた runner に追いつかせる（プロファイルの `syncRunner` と同じ位置）。
-    syncRunnerToken: createRunnerTokenSync(agentTokenHolder),
+    syncRunnerToken: createRunnerTokenSync(agentTokenHolder, agentTokenFromEnv),
     /**
      * **セッションが実際に畳まれた ⟹ 待たせていた再開の合図を、いま入れる**
      * （人間の決定 2026-09-07。`pendingTokenWake` の doc）。

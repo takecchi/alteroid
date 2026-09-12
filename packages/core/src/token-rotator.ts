@@ -77,8 +77,19 @@ export interface TokenSpreadPort {
    * `generation` も渡す。**撒く先が「どの世代の鍵を持っているか」を名乗れないと、
    * 世代の照合（{@link observationFreshness}）が成立しない** — クローンは
    * セッションを起こす瞬間にこれを捕まえて、そのセッションの観測へ添える。
+   *
+   * **`id` / `generation` は省略できる**（2026-09-12, #866）。プールに実在する
+   * 行を持たない「器の環境変数」をそのまま撒くとき（`restore()` の `none` が、
+   * 環境変数の行すら無い＝プールが本当に空の器で撒くとき）に使う。**省略した
+   * ときは、クローンの箱（`AgentTokenHolder`）へ値だけを置き、身元
+   * （`identity()`）は動かさない** —— 実在しない id を台帳の tokenId 軸へ
+   * 持ち込まないためである（`manager.ts` の usage record が「無いときは渡さない。
+   * プールが空の器では毎回 undefined になる ＝ 受け入れ基準7」と書いているのと
+   * 同じ理由。id を捏造すると、その一致を壊す）。
    */
-  spread(token: { id: string; generation: number } & TokenCredential): Promise<TokenSpreadResult[]>;
+  spread(
+    token: { id?: string; generation?: number } & TokenCredential,
+  ): Promise<TokenSpreadResult[]>;
 }
 
 /** 候補を1本試す口（PR2 の `probeTokenCandidate` を包んで渡す）。 */
@@ -597,15 +608,29 @@ export interface TokenRotator {
    *
    * | 結果 | 何が起きたか | この後どうなるか |
    * | --- | --- | --- |
-   * | `none` | 一度も回していない | 器の環境変数がそのまま効く |
+   * | `none` | 一度も回していない | 器の環境変数の値を撒く（下の注記） |
    * | `restored` | 撒き直した | 記憶ストアと実際が揃う |
-   * | `dangling` | 指名の先の行が消えている | 環境変数が効く。**次に枠へ当たれば直る** |
+   * | `dangling` | 指名の先の行が消えている | 同上。**次に枠へ当たれば直る** |
    * | `withheld` | 人間がその行を外した / 失効している | 同上 |
    *
-   * **`dangling` と `withheld` では撒かない。** 人間が外したものを起動時に戻すのは、
-   * **人間の判断を実装が黙って覆すこと**である。食い違いは残るが、次の当たりで
-   * 回し手が正しい候補へ移る（消えた / 外された id は候補から外れる）——だから
-   * `why` に出して見えるようにするだけにしてある。
+   * **`dangling` と `withheld` では*トークンの値*を戻さない。** 人間が外した
+   * ものや消えた指名を起動時に戻すのは、**人間の判断を実装が黙って覆すこと**
+   * である。食い違いは残るが、次の当たりで回し手が正しい候補へ移る（消えた /
+   * 外された id は候補から外れる）——だから `why` に出して見えるようにするだけに
+   * してある。
+   *
+   * **⚠️ 2026-09-12（#866）: 3つとも「器の環境変数の値」は撒くようになった。**
+   * 以前はここが「撒かない」を「何もしない」とも読める形にしていたが、それは
+   * 2026-09-11 より前の前提（runner は自分の環境変数の鍵をそのまま使う）に
+   * 立っていた。`runner.ts` の `#childEnv()` はいまその鍵を無条件に削除する
+   * （人間の決定 2026-09-11）ので、**撒かなければ runner に資格が1本も無い
+   * まま起動し続ける**——`active === null`（一度も回していない）の器は
+   * ほぼ全器がこれに当たる。ここで撒くのは**プールが選んだトークンの値では
+   * なく、デーモンの器そのものの `CLAUDE_CODE_OAUTH_TOKEN`**である
+   * （`TokenSpreadPort.spread` の `kind: 'env'`）。`dangling` / `withheld` で
+   * 「トークンの値を戻さない」という人間の判断はそのまま守っている——戻して
+   * いないのは*その行の値*であって、*器の環境変数の値*は最初から人間の判断の
+   * 対象ではない。
    */
   restore(): Promise<TokenRestoreOutcome>;
   /**
@@ -1402,9 +1427,32 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         ]);
 
         if (active === null) {
+          /**
+           * **一度も回していない ⟹ ここが #866 の本体である。** 2026-09-11
+           * より前は「撒かない」で正しかった —— runner は自分の環境変数の鍵を
+           * そのまま使えたので、器の `CLAUDE_CODE_OAUTH_TOKEN` が黙って効いた。
+           * いま runner の `#childEnv()` はその鍵を無条件に削除する（人間の
+           * 決定 2026-09-11）ので、撒かなければ runner は資格を1本も持たずに
+           * 起動する——**プールを一度も使っていない、まさに既定の構成がいちばん
+           * 割を食う。**
+           *
+           * **撒くのは器の環境変数の値であって、プールが選んだ値ではない。**
+           * プールに「器の環境変数」を指す行（`isEnvToken`）があれば、その id を
+           * 身元として使う——実在する行なので台帳の tokenId 軸を汚さない。
+           * **無ければ id を捏造しない**（`TokenSpreadPort.spread` の id 省略の
+           * doc）。プールが本当に空の器（人間がまだ1本も触っていない既定の
+           * 構成）で実在しない id を身元にすると、台帳の tokenId 軸に
+           * 「`alteroid token list` に出てこない行」が生まれる。
+           */
+          const envRow = tokens.find(isEnvToken);
+          await spread.spread(
+            envRow === undefined
+              ? { kind: 'env' as const }
+              : { id: envRow.id, generation: 0, kind: 'env' as const },
+          );
           return {
             kind: 'none' as const,
-            why: 'まだ一度も回していない（器の環境変数がそのまま効く）',
+            why: 'まだ一度も回していない。器の環境変数の値は撒いた（プールの現役は選び直していない。#866）',
           };
         }
 
@@ -1412,24 +1460,41 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         if (row === undefined) {
           // **記憶ストアへ書いて直さない。** 次の当たりで回し手が正しい候補へ移る
           // ので、ここで消すのは「見えなくする」だけの操作になる。
+          // **ただし器の環境変数の値は撒く**（#866。上の `active === null` と
+          // 同じ理由——撒かなければ runner に資格が無いまま残る）。身元は
+          // 記録が指していた `active.tokenId` / `active.generation` をそのまま
+          // 使う——それが「記録の上でいま現役とされている行」だからである
+          // （新しい id を作らない。台帳の tokenId 軸は動かさない）。
+          await spread.spread({
+            id: active.tokenId,
+            generation: active.generation,
+            kind: 'env' as const,
+          });
           return {
             kind: 'dangling' as const,
             tokenId: active.tokenId,
-            why: '現役として記録された行がプールに無い（人間が消した）。器の環境変数が効いたままである',
+            why: '現役として記録された行がプールに無い（人間が消した）。器の環境変数の値は撒いた（#866）',
           };
         }
 
         const availability = tokenAvailabilityAt(row, now().getTime());
         if (availability === 'disabled' || availability === 'invalidated') {
-          // **人間が外したものを起動時に戻さない。**
+          // **人間が外したものを起動時に戻さない。** 戻さないのは*その行の値*
+          // であって、器の環境変数の値ではない——後者は最初から人間の判断の
+          // 対象ではないので、撒く（#866。上と同じ理由）。
+          await spread.spread({
+            id: row.id,
+            generation: active.generation,
+            kind: 'env' as const,
+          });
           return {
             kind: 'withheld' as const,
             tokenId: row.id,
             label: row.label,
             why:
               availability === 'disabled'
-                ? `現役として記録された「${row.label}」は人間が外している。撒き直さない（器の環境変数が効いたままである）`
-                : `現役として記録された「${row.label}」は失効している。撒き直さない（器の環境変数が効いたままである）`,
+                ? `現役として記録された「${row.label}」は人間が外している。撒き直さない（器の環境変数の値は撒いた。#866）`
+                : `現役として記録された「${row.label}」は失効している。撒き直さない（器の環境変数の値は撒いた。#866）`,
           };
         }
 
@@ -1781,10 +1846,19 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         const row = pool.find((token) => token.id === currentId);
         /**
          * 記録の上でいまの現役が通るか。**指名の先の行が消えていたら通らない側で
-         * ある**（`dangling`）—— 撒く値そのものが取れないので、次のセッションは
-         * 器の環境変数で走る。`restore()` はそれを直さないと決めているが、
-         * **通る候補が在るならここで移してよい**（あちらは「起動時に人間の判断を
-         * 覆さない」の話で、これは「通る鍵へ移す」の話である）。
+         * ある**（`dangling`）—— 撒く値そのものが取れない。
+         *
+         * **⚠️ 「次のセッションは器の環境変数で走る」わけではない**（この文書が
+         * かつてそう書いていたのは 2026-09-11 より前の前提——runner の
+         * `#childEnv()` はいま自分の環境変数の鍵を無条件に削除するので、撒かな
+         * ければ資格が1本も届かない。`restore()` は起動時にこの穴を器の環境
+         * 変数の値で塞ぐ（#866。`TokenRotator.restore` の doc）が、**ここ
+         * （`reconsider()`）は起動後に行が消えた回を扱っており、その手当ては
+         * 無い**——`restore()` が塞ぐのは「起動した瞬間の状態」だけである。
+         *
+         * `restore()` は*トークンの値*を戻さないと決めているが（人間の判断を
+         * 覆さない）、**通る候補が在るならここで移してよい**（あちらは「起動時に
+         * 人間の判断を覆さない」の話で、これは「通る鍵へ移す」の話である）。
          */
         const availability =
           row === undefined ? 'dangling' : tokenAvailabilityAt(row, now().getTime());
