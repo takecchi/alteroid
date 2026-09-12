@@ -1,5 +1,6 @@
 import type { SessionStore } from '@anthropic-ai/claude-agent-sdk';
 
+import type { ArchiveContinuity } from './archive-continuity.js';
 import type { AuthStore } from './auth.js';
 import type { CredentialEntry } from './credentials.js';
 import type { ActiveAgentToken, AgentToken, TokenRotationSettings } from './token-pool.js';
@@ -859,6 +860,10 @@ export type ArchiveRemoval =
  * `removedAt` / `removedBytes` は `remove()`（tombstone）が起きた行にだけ
  * 載る——`ArchiveRemoval` / `ArchiveRead` の `removed` と同じ情報を、一覧の
  * 面でも見えるようにしたもの。
+ *
+ * `continuity`（#698）は `archive()` が積んだ瞬間に判定した、同じ `sessionId`
+ * の直前の退避との連続性（`ArchiveContinuity` の doc）。**この機能より前に
+ * 積まれた行には無いので optional。**
  */
 export interface ArchiveEntry {
   readonly id: string;
@@ -868,6 +873,22 @@ export interface ArchiveEntry {
   readonly storedBytes: number;
   readonly removedAt?: string;
   readonly removedBytes?: number;
+  readonly continuity?: ArchiveContinuity;
+}
+
+/**
+ * `TranscriptArchive.archive()` の戻り値（#698）。
+ *
+ * **畳まない設計の門である。** `continuity` / `comparedTo` は判定結果を
+ * 呼び出し側（`clone.ts` / `manager.ts`）へ渡すためのもので、これを受けて
+ * `remove()` を呼ぶコードは1行も無い——この PR は判定を記録するところまでで、
+ * 畳むのは次の PR である（`ArchiveContinuity` の doc）。
+ */
+export interface ArchiveWrite {
+  readonly id: string;
+  readonly continuity: ArchiveContinuity;
+  /** 比べた相手の id。`continuity` が `'first'` のときは無い。 */
+  readonly comparedTo?: string;
 }
 
 /**
@@ -902,8 +923,14 @@ export interface ArchiveSessionSummary {
  * （HTTP の口とクローンの道具の両方がそこを通ることで、守りを1箇所に保つ）。
  */
 export interface TranscriptArchive {
-  /** 退避したアーカイブのパス（または識別子）を返す。 */
-  archive(sessionId: string, transcript: string): Promise<string>;
+  /**
+   * 退避したアーカイブの id と、直前の退避との連続性判定（#698）を返す。
+   *
+   * **判定するだけで、畳まない。** `continuity` が `'diverged'` /
+   * `'unknown'` でも、この呼び出しの中で古い行を `remove()` したりしない
+   * （`ArchiveWrite` の doc）。
+   */
+  archive(sessionId: string, transcript: string): Promise<ArchiveWrite>;
   /** 新しい順（#698）。 */
   list(): Promise<ArchiveEntry[]>;
   /**

@@ -8,7 +8,7 @@ import type { TranscriptArchive } from './store.js';
  * `packages/storage-pg` へ vitest を持ち込まないため）。食い違ったら `throw`
  * する。
  *
- * **測る10性質。3実装（`packages/core/src/testing.ts` のインメモリ /
+ * **測る性質。3実装（`packages/core/src/testing.ts` のインメモリ /
  * `packages/storage-fs/src/archive.ts` / `packages/storage-pg/src/archive.ts`）
  * すべてがこれを呼ぶこと**（`journal-search-contract.ts` と同じ作法。1つで
  * 測って3つとも測ったことにしない）:
@@ -37,10 +37,37 @@ import type { TranscriptArchive } from './store.js';
  *     （実装ごとの単位の違いを比べるのではなく、同じ実装の中で一覧と集計が
  *     整合しているかを測る——`ArchiveEntry.storedBytes` の doc「置き場を
  *     またいで比較しない」と同じ理由で、絶対値は検査しない）
+ * 11. **`sessions()` の並びが決まっている**（`storedBytes` の降順、同値なら
+ *     `sessionId` の昇順）
+ * 12. **`storedBytes` が本当にその行の量を測っている**（常に0を返す実装を落とす）
+ *
+ * **13〜19 は #698 の「畳んでよいかどうかを積む瞬間に判定して記録する門」
+ * （`archive-continuity.ts`）の検査である:**
+ *
+ * 13. 同じ `sessionId` の1本目は `'first'`
+ * 14. 前方一致する2本目は `'continues'`、`comparedTo` が1本目の id
+ * 15. 🔴 **本文が短くなった3本目は `'diverged'`**（本番の「6,900万文字
+ *     *縮んだ*」行に相当）
+ * 16. 🔴 **伸びているのに前方一致しない本文は `'diverged'`**（本番の
+ *     「1%伸びたのに偽」に相当。⭐ 長さ比較へ退化したら赤くなる歯）
+ * 17. 別の `sessionId` は互いに影響しない（それぞれ `'first'` から始まり、
+ *     元の `sessionId` の連続性も乱さない）
+ * 18. `'continues'` の後にさらに前方一致する本文を積むと、また `'continues'`
+ *     （鎖が続く）
+ * 19. 🔴🔴 **指紋を持たない行の直後は `'unknown'`**（`'continues'` ではない）
  *
  * 呼び出し側は使い捨ての archive を渡すこと（後始末はしない）。
+ *
+ * @param deps.seedFingerprintlessRow 指紋（`bodyChars`/`bodyMd5`）を持たない
+ *   行を作る（この機能より前に積まれた行の再現）。積んだ id を返す——検査19
+ *   のためだけに要る、実装ごとの裏口（pg は生 SQL で null のまま insert、fs は
+ *   これらのフィールドを持たない `.meta.json` を書く、インメモリは
+ *   `seedFingerprintlessArchiveRow` を経由する）。
  */
-export async function verifyTranscriptArchiveContract(archive: TranscriptArchive): Promise<void> {
+export async function verifyTranscriptArchiveContract(
+  archive: TranscriptArchive,
+  deps: { seedFingerprintlessRow(sessionId: string, body: string): Promise<string> },
+): Promise<void> {
   function fail(label: string, detail: unknown): never {
     throw new Error(`TranscriptArchive contract violated: ${label} — ${JSON.stringify(detail)}`);
   }
@@ -56,15 +83,15 @@ export async function verifyTranscriptArchiveContract(archive: TranscriptArchive
   if (readMissing.kind !== 'missing') fail('read(存在しないid)', readMissing);
 
   // 積んで読める（2つ。巻き添えの検査に使う）。
-  const idA = await archive.archive('archive-contract-session-a', 'BODY-A\n');
-  const idB = await archive.archive('archive-contract-session-b', 'BODY-B\n');
+  const idA = (await archive.archive('archive-contract-session-a', 'BODY-A\n')).id;
+  const idB = (await archive.archive('archive-contract-session-b', 'BODY-B\n')).id;
   const bodyA = await archive.read(idA);
   if (bodyA.kind !== 'body' || bodyA.body !== 'BODY-A\n') fail('積んで読める(A)', bodyA);
   const bodyB = await archive.read(idB);
   if (bodyB.kind !== 'body' || bodyB.body !== 'BODY-B\n') fail('積んで読める(B)', bodyB);
 
   // 5. 空の生ログを退避しても removed にならない（判定に本文の中身を使わない）。
-  const idEmpty = await archive.archive('archive-contract-session-empty', '');
+  const idEmpty = (await archive.archive('archive-contract-session-empty', '')).id;
   const bodyEmpty = await archive.read(idEmpty);
   if (bodyEmpty.kind !== 'body' || bodyEmpty.body !== '')
     fail('空の生ログはremovedにならない', bodyEmpty);
@@ -165,11 +192,11 @@ export async function verifyTranscriptArchiveContract(archive: TranscriptArchive
   // fs 側の `STAMP_SUFFIX_RE` による id からの復元も一緒に変わるため）。
   const tick = () => new Promise((resolve) => setTimeout(resolve, 2));
   const multiSessionId = 'archive-contract-session-multi';
-  const idM1 = await archive.archive(multiSessionId, 'M1\n');
+  const idM1 = (await archive.archive(multiSessionId, 'M1\n')).id;
   await tick();
-  const idM2 = await archive.archive(multiSessionId, 'M2-longer\n');
+  const idM2 = (await archive.archive(multiSessionId, 'M2-longer\n')).id;
   await tick();
-  const idM3 = await archive.archive(multiSessionId, 'M3\n');
+  const idM3 = (await archive.archive(multiSessionId, 'M3\n')).id;
   if (new Set([idM1, idM2, idM3]).size !== 3) {
     fail('3回の archive() が別々の id になる（同じなら id がミリ秒で衝突している）', [
       idM1,
@@ -249,9 +276,9 @@ export async function verifyTranscriptArchiveContract(archive: TranscriptArchive
   // 「正であること」と「同じ実装の中で大きい本文のほうが大きいこと」だけ——
   // この2つなら単位に依らない。
   const bytesSessionId = 'archive-contract-bytes';
-  const smallId = await archive.archive(bytesSessionId, 'x\n');
+  const smallId = (await archive.archive(bytesSessionId, 'x\n')).id;
   await tick();
-  const bigId = await archive.archive(bytesSessionId, 'ログの1行 {"k":"v"}\n'.repeat(600));
+  const bigId = (await archive.archive(bytesSessionId, 'ログの1行 {"k":"v"}\n'.repeat(600))).id;
   const bytesEntries = await archive.list();
   const smallEntry = bytesEntries.find((entry) => entry.id === smallId);
   const bigEntry = bytesEntries.find((entry) => entry.id === bigId);
@@ -263,5 +290,98 @@ export async function verifyTranscriptArchiveContract(archive: TranscriptArchive
   }
   if (!(bigEntry.storedBytes > smallEntry.storedBytes)) {
     fail('storedBytesは本文の大きい行のほうが大きい（定数を落とす）', { smallEntry, bigEntry });
+  }
+
+  // --- ここから #698 の連続性判定（archive-continuity.ts）--------------------
+
+  // 13. 同じ sessionId の1本目は 'first'（comparedTo 無し）。
+  const continuitySessionId = 'archive-contract-continuity';
+  const write1 = await archive.archive(continuitySessionId, 'AAAA\n');
+  if (write1.continuity !== 'first' || write1.comparedTo !== undefined) {
+    fail('同一sessionIdの1本目はfirst（comparedTo無し）', write1);
+  }
+
+  // 14. 前方一致する2本目は continues、comparedTo が1本目の id。
+  await tick();
+  const write2 = await archive.archive(continuitySessionId, 'AAAA\nBBBB\n');
+  if (write2.continuity !== 'continues' || write2.comparedTo !== write1.id) {
+    fail('前方一致する2本目はcontinues（comparedToは1本目のid）', { write1, write2 });
+  }
+
+  // 15. 🔴 本文が短くなった3本目は diverged
+  // （本番の「6,900万文字*縮んだ*」行に相当。長さの大小では判定しない —
+  // slice が短い文字列を返して md5 が外れ、自然に diverged になる）。
+  await tick();
+  const write3 = await archive.archive(continuitySessionId, 'AAAA\n');
+  if (write3.continuity !== 'diverged' || write3.comparedTo !== write2.id) {
+    fail('縮んだ3本目はdiverged（長さの大小では判定しない）', { write2, write3 });
+  }
+
+  // 16. 🔴 伸びているのに前方一致しない本文は diverged
+  // （本番の「1%伸びたのに偽」に相当）。⭐ ここが長さ比較へ退化すると
+  // 緑になってしまう歯——write4 は write3 より長いが、先頭が違う。
+  await tick();
+  const write4 = await archive.archive(continuitySessionId, 'ZZZZ\nBBBB\nCCCC\n');
+  if (write4.continuity !== 'diverged') {
+    fail('伸びているが前方一致しない本文はdiverged（長さ比較への退化を検出する歯）', {
+      write3,
+      write4,
+    });
+  }
+
+  // 17. 別の sessionId は互いに影響しない（それぞれ first から始まり、
+  // 元の sessionId の連続性も乱さない）。
+  const otherSessionId = 'archive-contract-continuity-other';
+  const otherWrite1 = await archive.archive(otherSessionId, 'OTHER-A\n');
+  if (otherWrite1.continuity !== 'first') {
+    fail('別のsessionIdはfirstから始まる（互いに影響しない）', otherWrite1);
+  }
+  await tick();
+  const continuityAfterOther = await archive.archive(
+    continuitySessionId,
+    'ZZZZ\nBBBB\nCCCC\nDDDD\n',
+  );
+  if (
+    continuityAfterOther.continuity !== 'continues' ||
+    continuityAfterOther.comparedTo !== write4.id
+  ) {
+    fail('別のsessionIdを挟んでも元のsessionIdの連続性は影響を受けない', {
+      write4,
+      otherWrite1,
+      continuityAfterOther,
+    });
+  }
+
+  // 18. 'continues' の後にさらに前方一致する本文を積むと、また 'continues'
+  // （鎖が続く）。
+  await tick();
+  const continuityChain = await archive.archive(
+    continuitySessionId,
+    'ZZZZ\nBBBB\nCCCC\nDDDD\nEEEE\n',
+  );
+  if (
+    continuityChain.continuity !== 'continues' ||
+    continuityChain.comparedTo !== continuityAfterOther.id
+  ) {
+    fail('continuesの後にさらに前方一致する本文を積むとまたcontinues（鎖が続く）', {
+      continuityAfterOther,
+      continuityChain,
+    });
+  }
+
+  // 19. 🔴🔴 指紋を持たない行の直後は unknown（continues ではない）。
+  // この機能より前に積まれた行（本番の5.4GBの既存行）の再現。
+  const fingerprintlessSessionId = 'archive-contract-fingerprintless';
+  const fingerprintlessId = await deps.seedFingerprintlessRow(fingerprintlessSessionId, 'LEGACY\n');
+  await tick();
+  const afterFingerprintless = await archive.archive(fingerprintlessSessionId, 'LEGACY\nNEW\n');
+  if (
+    afterFingerprintless.continuity !== 'unknown' ||
+    afterFingerprintless.comparedTo !== fingerprintlessId
+  ) {
+    fail('指紋を持たない行の直後はunknown（continuesではない）', {
+      fingerprintlessId,
+      afterFingerprintless,
+    });
   }
 }

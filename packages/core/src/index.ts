@@ -370,6 +370,17 @@ export {
  */
 export { verifyTranscriptArchiveContract } from './archive-contract.js';
 /**
+ * `archive()` が積む瞬間に判定する、直前の退避との連続性(#698)。畳まない
+ * 設計の門——`TranscriptArchive` interface（`store.ts`）と3実装が使う。
+ */
+export {
+  classifyArchiveContinuity,
+  describeArchiveContinuityForJournal,
+  fingerprintArchiveBody,
+  type ArchiveBodyFingerprint,
+  type ArchiveContinuity,
+} from './archive-continuity.js';
+/**
  * クローンの自己認識。正典（`docs/*.md`）の全文はビルド時に焼き込まれる
  * （`scripts/write-canon.mjs`）。要約を手書きしないこと — docs と二重管理になる。
  */
