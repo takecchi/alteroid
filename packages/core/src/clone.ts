@@ -25,6 +25,7 @@ import {
   foldClaudeMessage,
 } from './claude-provider.js';
 import { describeArchiveContinuityForJournal } from './archive-continuity.js';
+import { restoredInboxEventVerdict } from './inbox-staleness.js';
 import { denialInputAbsence, denialInputShape, type DeniedRecord } from './denial-shape.js';
 import {
   buildActivityDigest,
@@ -2984,6 +2985,40 @@ class Clone implements CloneHost {
   }
 
   /**
+   * 拾い直した合図のうち、**もう要らない**もの（`restoredInboxEventVerdict`
+   * が `stale`）を、ターンを起こさずに消す（Issue #783 段1）。
+   *
+   * **`#foldGatedRedelivery` との違いは、残すか消すかである。** あちらは
+   * 「いまは配る意味が無い」という**一時的な**判定なので行を残す。こちらは
+   * 「この合図はもう効く先が無い」という**合図の性質**の判定なので消す
+   * ——残しても次の起動で同じ答えが返るだけで、消す経路を一度も通らない。
+   *
+   * **`#foldClosedRedelivery` / `#foldGatedRedelivery` と同じ2本を書く**
+   * （あちらの doc「畳む仕組みを入れるなら、畳んだ跡が残らなければならない」
+   * 「無ければ永久に見えない」）。**消す側では、この2本がより要る。**
+   *
+   * 1. **型ごとの本文追記**（`#journalIncomingBody`）。⛔ 飛ばすと、消した
+   *    合図の中身が日誌のどこにも残らない
+   * 2. **消したこと自体の1行。** 「配り直した」（`#restoreUnread` が既に
+   *    書いた行）と対で残るので、**何件消えたかを後から数えられる**
+   *
+   * ⚠️ **消し込み（`#forget`）そのものは呼び手が行う。** ここは跡を書くだけ
+   * にしてある——跡が書けなかったときに、消し込みまで道連れにしないため。
+   */
+  async #dropStaleRedelivery(event: InboxEvent): Promise<void> {
+    await this.#journalIncomingBody(event);
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text:
+        `拾い直した合図がもう効く先の無い種類だったので、ターンを起こさずに消した` +
+        `（モデルへは1文字も渡していない。本文は直前の行に残してある。` +
+        `まだ要る状況なら、この種類の合図は作り直される）: ${inboxEventShape(event)}`,
+    });
+  }
+
+  /**
    * `redeliveryGate`（{@link CloneOptions.redeliveryGate}）が「いま配る意味が
    * 無い」と答えた配り直しを、`#restoreUnread` の中でターンを起こさずに畳む
    * （Issue #783 続き）。
@@ -3001,6 +3036,23 @@ class Clone implements CloneHost {
    * 「もう片付いている」ではなく「いまは配る意味が無い」という一時的な判定
    * なので、受信箱の行も台帳の行も消さずに残す——次の起動で `#restoreUnread` が
    * また同じ行を拾い、その時点の状態で判定し直す。
+   *
+   * **⚠️ ただし「判定し直す」は、いまの `token-pool` の門については答えが
+   * 変わらない。** `#restoreUnread` は `#pump` の先頭で1回だけ走り、そのとき
+   * `#usageBlocked` は初期値である——この値は器を跨いで持ち越さない（宣言の
+   * 逐語 `#usageBlocked: UsageLimitNotice | null = null;`）。⟹ 門の実体
+   * （`apps/daemon/src/index.ts` の `worthDeliveringNow`。逐語
+   * `export function worthDeliveringNow(blocked: boolean): boolean`）は起動の
+   * たびに偽を返し、**器の入れ替えを跨いだ `token-pool` の合図はここで畳まれ
+   * 続け、消す経路（`#forget`）を一度も通らない。** 唯一の例外は、このループ
+   * が1件ごとに `await` するあいだに並行する `#pump` が枠に当たって
+   * `#usageBlocked` が立った窓だけである。
+   *
+   * ⟹ **欠けているのは「畳んだ側の出口」であって、この型に固有の話ではない。**
+   * 同じ形は `#restoreUnread` の `#inbox.push` の手前にも逐語で書いてある
+   * （「落とした側は誰も消さないので、起動のたびに配られて回数だけが増える」）。
+   * **Issue #783 の段1 の対象である。⛔ この便では振る舞いを1文字も変えて
+   * いない**——出口を足すかどうかは段1 の設計の合意を待つ。
    */
   async #foldGatedRedelivery(event: InboxEvent): Promise<void> {
     await this.#journalIncomingBody(event);
@@ -3625,6 +3677,23 @@ class Clone implements CloneHost {
       // `open` が器へ届く前に落ちた合図だけが、未読としては残るのに台帳から永久に
       // 漏れる（そしてその窓は、いちばん落ちやすい起動直後と重なる）。
       this.#commit(record.event);
+
+      // **門より先に「そもそもまだ意味が在るか」を訊く**（Issue #783 段1）。
+      //
+      // **門（`redeliveryGate`）とは別の問いである。** あちらは `usageBlocked`
+      // という**揺れる値**で「いま配るか」を決め、偽でも行を残す。こちらは
+      // **合図の性質**だけで「もう要らないか」を決め、要らないものを消す——
+      // だから `restoredInboxEventVerdict` は `usageBlocked` を受け取らない
+      // （その doc）。**消し込みを揺れる値に預けない**ための分け方である。
+      //
+      // **跡は残す。** `#dropStaleRedelivery` が本文の追記と「消した」の1行を
+      // 日誌へ書く——落ちた分が何件で何だったかが読めなければ、「無い」の種類
+      // （届かなかった／畳まれた／そもそも起きなかった）が区別できなくなる。
+      if (restoredInboxEventVerdict(record.event) === 'stale') {
+        await this.#dropStaleRedelivery(record.event);
+        await this.#forget(record.event);
+        continue;
+      }
 
       // **配る前に、この1件だけ「いま配る意味が在るか」を訊く**
       // （`CloneOptions.redeliveryGate`。Issue #783 続き）。`#restoreUnread` は

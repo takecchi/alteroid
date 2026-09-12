@@ -1,7 +1,12 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
-import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import {
+  ALWAYS_REDELIVER,
+  DAEMON_RUNNER_REGISTRY_SOURCE,
+  DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+  createClone,
+} from './clone.js';
 import type { RedeliveryGate } from './clone.js';
 import type { CloneHost } from './host.js';
 import { createLocalRunner } from './runner-local.js';
@@ -1220,6 +1225,155 @@ describe('redeliveryGate（Issue #783 続き）: 配り直すその瞬間の usa
       (entry) => entry.type === 'exchange' && entry.text.includes('ターンを起こさずに畳んだ'),
     ).length;
     expect(foldedCount).toBe(1);
+
+    await clone.stop();
+  });
+});
+
+/**
+ * 拾い直した token-pool の合図の消し込み（Issue #783 段1）。
+ *
+ * **上の2つの describe（門）とは別の経路である。** 門（`redeliveryGate`）は
+ * 「いま配る意味が在るか」を `usageBlocked` で問い、偽でも行を残す
+ * （畳む）。ここで測るのは `restoredInboxEventVerdict`
+ * （`inbox-staleness.ts`）による消し込みで、**門より先に**評価され、
+ * `usageBlocked` を一切見ない。`external` の `source` が
+ * `DAEMON_TOKEN_POOL_REOPENED_SOURCE`（`token-pool`）のときだけ、受信箱の
+ * 行そのものを消す。
+ */
+async function waitForAbsentFromPending(stores: Stores, id: string): Promise<void> {
+  const started = Date.now();
+  for (;;) {
+    const remaining = await stores.inbox.peekPending();
+    if (!remaining.some((r) => r.event.id === id)) return;
+    if (Date.now() - started > 3000) throw new Error(`${id} が受信箱から消えない`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+/** 型ごとの本文追記（`ターンを起こさずに畳んだ`）が指定の件数そろうまで待つ。 */
+async function waitForFoldedCount(stores: Stores, count: number): Promise<void> {
+  const started = Date.now();
+  for (;;) {
+    const exchanges = await stores.journal.list({ types: ['exchange'] });
+    const folded = exchanges.filter(
+      (entry) => entry.type === 'exchange' && entry.text.includes('ターンを起こさずに畳んだ'),
+    ).length;
+    if (folded >= count) return;
+    if (Date.now() - started > 3000) throw new Error('畳んだ件数が揃わない');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+describe('拾い直した token-pool の合図の消し込み（Issue #783 段1）', () => {
+  it('token-pool の合図は起動時に受信箱から消え、日誌には本文追記と「消した」の1行が両方残り、モデルへは1文字も渡らない', async () => {
+    const stores = createMemoryStores();
+    const event: InboxEvent = {
+      type: 'external',
+      id: 'evt-token-pool-stale',
+      at: '2026-08-01T00:00:00.000Z',
+      source: DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+      payload: 'TOKEN-POOL-STALE-PAYLOAD',
+    };
+    // 前のプロセスが死んで未読のまま残っていた状況を直接作る（#restoreUnread が拾う）。
+    await stores.inbox.put(event, event.at);
+
+    const { clone, inputs } = bootClone(stores, 'reply');
+    await waitForJournal(stores, 'ターンを起こさずに消した');
+    await waitForAbsentFromPending(stores, event.id);
+
+    // 1. 型ごとの本文追記（external なので `external_event` へ書かれる）。
+    const externalEvents = await stores.journal.list({ types: ['external_event'] });
+    expect(
+      externalEvents.some(
+        (entry) =>
+          entry.type === 'external_event' &&
+          entry.source === DAEMON_TOKEN_POOL_REOPENED_SOURCE &&
+          entry.summary.includes('TOKEN-POOL-STALE-PAYLOAD'),
+      ),
+    ).toBe(true);
+
+    // 2. 消したこと自体の1行。
+    const exchanges = await stores.journal.list({ types: ['exchange'] });
+    const dropped = exchanges.find(
+      (entry) => entry.type === 'exchange' && entry.text.includes('ターンを起こさずに消した'),
+    );
+    const droppedText = dropped && dropped.type === 'exchange' ? dropped.text : '';
+    expect(droppedText).toContain('モデルへは1文字も渡していない');
+
+    // モデルへは1文字も渡っていない（ターンそのものが起きていない）。
+    expect(inputs).toEqual([]);
+    expect(inputs.join('')).not.toContain('TOKEN-POOL-STALE-PAYLOAD');
+
+    await clone.stop();
+  });
+
+  it('同じ起動の中で token-pool だけが消え、runner-registry と自由文字列の external は受信箱に残る（門は常に畳む設定に固定——門の気分ではなく合図の性質で決めていることの確認）', async () => {
+    const stores = createMemoryStores();
+    const tokenPool: InboxEvent = {
+      type: 'external',
+      id: 'evt-mix-token-pool',
+      at: '2026-08-01T00:00:00.000Z',
+      source: DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+      payload: 'MIX-TOKEN-POOL-PAYLOAD',
+    };
+    const runnerRegistry: InboxEvent = {
+      type: 'external',
+      id: 'evt-mix-runner-registry',
+      at: '2026-08-01T00:00:01.000Z',
+      source: DAEMON_RUNNER_REGISTRY_SOURCE,
+      payload: 'MIX-RUNNER-REGISTRY-PAYLOAD',
+    };
+    const freeform: InboxEvent = {
+      type: 'external',
+      id: 'evt-mix-freeform',
+      at: '2026-08-01T00:00:02.000Z',
+      source: 'webhook-from-somewhere-outside',
+      payload: 'MIX-FREEFORM-PAYLOAD',
+    };
+    await stores.inbox.put(tokenPool, tokenPool.at);
+    await stores.inbox.put(runnerRegistry, runnerRegistry.at);
+    await stores.inbox.put(freeform, freeform.at);
+
+    // 門は常に「いま配る意味は無い」（畳む）に固定する——token-pool だけが
+    // 消えるなら、それは門の答えとは無関係だという証拠になる。
+    const alwaysFold: RedeliveryGate = () => false;
+    const { clone, inputs } = bootClone(stores, 'reply', alwaysFold);
+
+    await waitForAbsentFromPending(stores, tokenPool.id);
+    // runner-registry と自由文字列の2件は `live` なので門まで進み、門が畳む。
+    await waitForFoldedCount(stores, 2);
+
+    const remaining = await stores.inbox.peekPending();
+    const remainingIds = remaining.map((r) => r.event.id);
+    expect(remainingIds).not.toContain(tokenPool.id);
+    expect(remainingIds).toContain(runnerRegistry.id);
+    expect(remainingIds).toContain(freeform.id);
+
+    // 3件とも配られていない（ターンが起きていない）。
+    expect(inputs).toEqual([]);
+
+    await clone.stop();
+  });
+
+  it('redeliveryGate を省略した既定のクローンでも token-pool の合図は消える（消し込みは門の設定と独立である）', async () => {
+    const stores = createMemoryStores();
+    const event: InboxEvent = {
+      type: 'external',
+      id: 'evt-token-pool-no-gate',
+      at: '2026-08-01T00:00:00.000Z',
+      source: DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+      payload: 'NO-GATE-TOKEN-POOL-PAYLOAD',
+    };
+    await stores.inbox.put(event, event.at);
+
+    // redeliveryGate を渡さない（省略）→ bootClone の既定 ALWAYS_REDELIVER が使われる
+    // （既定は全件配る側だが、それでもこの合図は門へ辿り着く前に消える）。
+    const { clone, inputs } = bootClone(stores, 'reply');
+    await waitForJournal(stores, 'ターンを起こさずに消した');
+    await waitForAbsentFromPending(stores, event.id);
+
+    expect(inputs).toEqual([]);
 
     await clone.stop();
   });

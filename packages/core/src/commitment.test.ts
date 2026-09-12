@@ -821,10 +821,23 @@ describe('引き受けたまま終わっていない仕事', () => {
    *
    * token-pool の合図は `commitmentFor` が `null` を返すようになったので、
    * この分岐は `get` を呼ばなくなる（`clone.ts` の `#restoreUnread` の当該
-   * コメント）。**それでも配り直し自体は変わらず起き、クラッシュしないこと**
-   * と、**台帳には載らないこと**を確かめる。
+   * コメント）。**それでもクラッシュしないこと**と、**台帳には載らないこと**を
+   * 確かめる。
+   *
+   * ⚠️ **この歯は Issue #783 段1 で結論だけが変わった。** かつては「**配り直し
+   * 自体は変わらず起き**」を確かめていたが、段1 が `restoredInboxEventVerdict`
+   * （`inbox-staleness.ts`）を足し、**拾い直した token-pool の合図は門より先に
+   * 消すようになった**（その doc に理由の全文がある——この合図の唯一の効果は
+   * `post()` の中に在り、`#restoreUnread` はそこを素通りするので、配り直しても
+   * 効く先が無い）。
+   *
+   * ⭐ **#852 が守らせていた性質は1つも落ちていない。** 消し込みは `#record` /
+   * `#commit` より**後ろ**に置いてあるので、この歯が見張っている
+   * `commitmentFor` の分岐は**いまも通る**——落ちたのは「ターンへ渡る」という
+   * 結論だけである。**代わりに「消えた」と「モデルへ渡っていない」を足して
+   * あるので、確かめている事柄は1つ増えている。**
    */
-  it('未読のまま残っていた token-pool の合図も、器の再起動で配り直される（台帳は開かない）', async () => {
+  it('未読のまま残っていた token-pool の合図は、器の再起動で消し込まれる（台帳は開かない。#852 の分岐は通る）', async () => {
     const stores = createMemoryStores();
     const unread: InboxEvent = {
       type: 'external',
@@ -837,11 +850,16 @@ describe('引き受けたまま終わっていない仕事', () => {
 
     const s = setup(stores);
 
+    // **消えるところまで待つ**（消し込みは `#restoreUnread` の中で起きる）。
     await waitFor(
-      () =>
-        (s.calls[0]?.inputs ?? []).some((input) => input.includes('前の器が終えられなかった合図')),
-      '配り直された token-pool の合図がターンへ渡る',
+      async () => (await stores.inbox.peekPending()).every((row) => row.event.id !== 'e-tp-unread'),
+      '拾い直された token-pool の合図が受信箱から消える',
     );
+    // **モデルへは1文字も渡っていない**（かつてはここが「渡る」側だった）。
+    expect(
+      (s.calls[0]?.inputs ?? []).some((input) => input.includes('前の器が終えられなかった合図')),
+    ).toBe(false);
+    // ⭐ **#852 が守らせていた2つは、そのまま残す。**
     expect(await stores.commitments.get('e-tp-unread')).toBeNull();
     expect((await stores.commitments.list()).entries).toHaveLength(0);
 
