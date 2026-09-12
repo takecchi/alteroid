@@ -72,6 +72,7 @@ import { createRecentMap } from './recent.js';
 import { describeSituation, describeSituationUnavailable } from './situation.js';
 import { countSupersedingReports, describeSuperseded } from './superseded.js';
 import { describeValidity, inboxEventValidity } from './inbox-validity.js';
+import type { JobStatus } from './schema.js';
 import { toAgentTokenView } from './token-pool.js';
 import type { RunnerRegistry } from './runner-protocol.js';
 import {
@@ -3528,17 +3529,31 @@ class Clone implements CloneHost {
     const event = events[0];
     if (event === undefined) return '';
     // **報告でなければ1本も引かない**（`#supersededNoticeFor` と同じ短絡）。
-    if (event.type !== 'manager_message') return '';
+    //
+    // **`kind` まで絞る。** 質問・許可確認は「もう待たれていないか」を
+    // `managers.list()` の `waiting` で既に見ており（`#situationNoticeFor` の
+    // 側の判定）、そこは #879 の範囲ではない——**#879 が名指しした穴は
+    // `reportSettlement` の側、つまり報告である。** 絞らないと、質問・許可
+    // 確認のターンでも `list()` を1本余計に引くことになる。
+    if (event.type !== 'manager_message' || event.kind !== 'report') return '';
 
-    const now = await this.#managers
-      .list()
-      .then((managers) => {
-        const found = managers.find((manager) => manager.managerId === event.managerId);
-        return found === undefined
+    // ⚠️ **`list()` は同期的に投げうる。** `ManagerPool` は interface なので、
+    // 実装が `Promise` を返す前に throw する形が在りうる（`clone.test.ts` の
+    // 「`managers.list()` が投げても、ターンは落ちず、いまの文言のまま届く」が
+    // まさにその形を歯にしている）。⟹ **`.catch()` だけでは拾えない**
+    // ——同期の throw は `.then()` へ辿り着く前に呼び出し元へ抜ける。
+    // `try` で囲って、**どちらの投げ方でも `unknowable` へ倒す。**
+    let now: { readonly status: JobStatus } | { readonly detail: string };
+    try {
+      const managers = await this.#managers.list();
+      const found = managers.find((manager) => manager.managerId === event.managerId);
+      now =
+        found === undefined
           ? { detail: `${event.managerId} が一覧に居ない` }
           : { status: found.status };
-      })
-      .catch((error: unknown) => ({ detail: String(error) }));
+    } catch (error) {
+      now = { detail: String(error) };
+    }
 
     return describeValidity(inboxEventValidity(event, now), event.managerId);
   }

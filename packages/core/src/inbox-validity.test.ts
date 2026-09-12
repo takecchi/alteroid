@@ -124,9 +124,7 @@ describe('inboxEventValidity: manager_message の4つの倒れ先', () => {
   });
 
   it('unclaimed: statusAtDelivery を持たない manager_message（任意欄が省かれた回）', () => {
-    expect(
-      inboxEventValidity(MANAGER_MESSAGE_WITHOUT_CLAIM, { status: 'running' }),
-    ).toEqual({
+    expect(inboxEventValidity(MANAGER_MESSAGE_WITHOUT_CLAIM, { status: 'running' })).toEqual({
       kind: 'unclaimed',
     });
   });
@@ -169,10 +167,7 @@ describe('describeValidity', () => {
   });
 
   it('changed: 断り書きを組む（claimed / now 両方を名乗る）', () => {
-    const text = describeValidity(
-      { kind: 'changed', claimed: 'running', now: 'done' },
-      MANAGER,
-    );
+    const text = describeValidity({ kind: 'changed', claimed: 'running', now: 'done' }, MANAGER);
     expect(text).toContain(MANAGER);
     expect(text).toContain('running');
     expect(text).toContain('done');
@@ -195,10 +190,7 @@ describe('describeValidity', () => {
   // 瞬間の値」としてしか名乗らなければ、食い違っても嘘にはならない。「いまは」
   // だと、後から読んだ別の断り書きと矛盾したときに文字どおり嘘になる。
   it('⭐ changed の文言は「いまは」ではなく「この断り書きを組んだ時点では」と言う', () => {
-    const text = describeValidity(
-      { kind: 'changed', claimed: 'running', now: 'done' },
-      MANAGER,
-    );
+    const text = describeValidity({ kind: 'changed', claimed: 'running', now: 'done' }, MANAGER);
     expect(text).toContain('この断り書きを組んだ時点では');
     expect(text).not.toContain('いまは');
   });
