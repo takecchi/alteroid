@@ -66,6 +66,23 @@ import {
 interface FakeCall {
   options: Options;
   inputs: string[];
+  /**
+   * **この呼び出しが本流のセッションのものか、サイドクエリのものか**（#890）。
+   *
+   * 見分けは `prompt` の形そのものである —— 本流は入力ストリーム
+   * （`AsyncIterable`）で入り、サイドクエリ（蒸留）は**1本の文字列**で入る
+   * （`clone.ts` の `#inputStream` と `#distillFromTranscript`）。下の
+   * `generate()` も同じ `typeof prompt === 'string'` で枝分かれしている。
+   *
+   * **控えておかないと、テスト側は「`calls` の最後」でしか本流を指せない。**
+   * ⟹ サイドクエリが後から積まれた回に、本流のつもりでサイドクエリを掴む。
+   * **そして掴めてしまう** —— 蒸留側の `Options` にも `PostToolUse` は在る
+   * （`claude-provider.ts` の `buildCloneDistillOptions`）ので、「フックが
+   * 無い」で落ちてくれず、**呼ぶ先が `#onDistillToolUse` に差し替わるだけ**に
+   * なる。あちらは `transcript_path` を控えないので、生ログの在り処が
+   * 立たないまま畳みへ入り、退避が黙って素通りする（#890 の落ち方）。
+   */
+  kind: 'session' | 'sideQuery';
 }
 
 function fakeSdk(
@@ -182,7 +199,11 @@ function fakeSdk(
   const calls: FakeCall[] = [];
 
   const fn = ((params: { prompt: unknown; options?: Options }) => {
-    const call: FakeCall = { options: params.options ?? {}, inputs: [] };
+    const call: FakeCall = {
+      options: params.options ?? {},
+      inputs: [],
+      kind: typeof params.prompt === 'string' ? 'sideQuery' : 'session',
+    };
     const callIndex = calls.length;
     calls.push(call);
 
@@ -396,12 +417,44 @@ function lineStartingWith(text: string, prefix: string): string {
   return matches[0]!;
 }
 
+/**
+ * **本流のセッションの、最後の呼び出し**（#890）。
+ *
+ * ⛔ `calls` の末尾をそのまま使わないこと。蒸留のサイドクエリは畳みの後に
+ * **遅れて**積まれるので、末尾が本流である保証はどこにも無い —— 実測（#890）で、
+ * 蒸留側の生ログ読み取りが数 ms 遅れるだけで末尾がサイドクエリへ入れ替わり、
+ * そこから先の待ちが budget を丸ごと使い切って落ちた。**位置ではなく種類で指す。**
+ *
+ * サイドクエリそのものを掴みたいテストは `calls.at(-1)` のままでよい（あちらは
+ * 「直前に自分で起こしたサイドクエリ」を指しており、末尾であることが意味を持つ）。
+ */
+function lastSessionCall(calls: FakeCall[]): FakeCall {
+  for (let i = calls.length - 1; i >= 0; i -= 1) {
+    const call = calls[i]!;
+    if (call.kind === 'session') return call;
+  }
+  throw new Error('本流のセッションの呼び出しが1本も無い');
+}
+
+/**
+ * `waitFor` / `waitForDone` の打ち切り。**⛔ ここを伸ばして歯を黙らせないこと**
+ * （#890）。この budget は本来の所要（実測 36〜53ms）の 60 倍以上あり、
+ * **使い切る回は「遅い」ではなく「起きていない」である。**
+ */
+const WAIT_BUDGET_MS = 3000;
+
 /** 非同期の書き込みが器へ届くまで待つ（`post` は同期で返るので待てない）。 */
 async function waitFor(check: () => Promise<boolean> | boolean, label: string): Promise<void> {
   const started = Date.now();
   for (;;) {
     if (await check()) return;
-    if (Date.now() - started > 3000) throw new Error(`${label} が起きない`);
+    // **「起きない」と言い切らない**（#890）。ここで言えるのは「budget の内に
+    // 起きなかった」までで、**「起きなかった」と「まだ起きていない」は別である。**
+    // 潰すと、次に読む人がこの1行から「そもそも起きない」と読む ⟹ 実際に
+    // #890 でその誤診が出ている。
+    if (Date.now() - started > WAIT_BUDGET_MS) {
+      throw new Error(`${label} が ${WAIT_BUDGET_MS}ms 以内に起きなかった`);
+    }
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
@@ -414,9 +467,11 @@ function waitForDone(events: ChatStreamEvent[]): Promise<void> {
       if (events.some((event) => event.type === 'done')) {
         clearInterval(tick);
         resolve();
-      } else if (Date.now() - started > 3000) {
+      } else if (Date.now() - started > WAIT_BUDGET_MS) {
         clearInterval(tick);
-        reject(new Error(`done が来ない: ${JSON.stringify(events)}`));
+        reject(
+          new Error(`done が ${WAIT_BUDGET_MS}ms 以内に来なかった: ${JSON.stringify(events)}`),
+        );
       }
     }, 5);
   });
@@ -2625,7 +2680,11 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
     let passThrough = false;
 
     const fn = ((params: { prompt: unknown; options?: Options }) => {
-      const call: FakeCall = { options: params.options ?? {}, inputs: [] };
+      const call: FakeCall = {
+        options: params.options ?? {},
+        inputs: [],
+        kind: typeof params.prompt === 'string' ? 'sideQuery' : 'session',
+      };
       const callIndex = calls.length;
       calls.push(call);
 
@@ -5647,7 +5706,11 @@ describe('クローン — 考えている合図（thinking）', () => {
     let turnIndex = 0;
 
     const fn = ((params: { prompt: unknown; options?: Options }) => {
-      const call: FakeCall = { options: params.options ?? {}, inputs: [] };
+      const call: FakeCall = {
+        options: params.options ?? {},
+        inputs: [],
+        kind: typeof params.prompt === 'string' ? 'sideQuery' : 'session',
+      };
       calls.push(call);
 
       async function* generate(): AsyncGenerator<SDKMessage, void> {
@@ -5935,7 +5998,11 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
     let held = true;
 
     const fn = ((params: { prompt: unknown; options?: Options }) => {
-      const call: FakeCall = { options: params.options ?? {}, inputs: [] };
+      const call: FakeCall = {
+        options: params.options ?? {},
+        inputs: [],
+        kind: typeof params.prompt === 'string' ? 'sideQuery' : 'session',
+      };
       calls.push(call);
 
       async function* generate(): AsyncGenerator<SDKMessage, void> {
@@ -13918,7 +13985,7 @@ describe('クローン — 文脈窓で畳む前の退避は diverged/unknown �
       `t-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonl`,
     );
     await writeFile(transcriptPath, body, 'utf8');
-    const main = s.calls[s.calls.length - 1] as FakeCall;
+    const main = lastSessionCall(s.calls);
     const hook = main.options.hooks?.PostToolUse?.[0]?.hooks?.[0];
     if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
     await hook({ tool_name: 'Read', transcript_path: transcriptPath } as never, undefined, {
