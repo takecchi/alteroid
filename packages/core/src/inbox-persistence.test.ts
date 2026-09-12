@@ -11,7 +11,7 @@ import type { RedeliveryGate } from './clone.js';
 import type { CloneHost } from './host.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
-import type { InboxEvent } from './schema.js';
+import type { InboxEvent, JobStatus } from './schema.js';
 import type { Stores } from './store.js';
 import { captureStderr, createMemoryStores, failingInboxPut, humanMessage } from './testing.js';
 
@@ -1410,5 +1410,64 @@ describe('InboxStore.pending（#358。読むだけで配達回数を進めない
 
     const claimed = await stores.inbox.claimPending();
     expect(claimed[0]?.deliveries).toBe(1);
+  });
+});
+
+describe('manager_message.statusAtDelivery は #restoreUnread を通っても積まれた当時の値のまま残る（issue #879）', () => {
+  /**
+   * 🔴 **この歯が赤くなったら、まず疑うのは `#restoreUnread` ではない。**
+   *
+   * `inbox-validity.ts`（`inboxEventValidity`）は「積まれた当時の
+   * `statusAtDelivery`」と「いまの状態」を突き合わせて、その報告が届いた
+   * 時点の前提がまだ生きているかを言う述語である（issue #879）。その突き
+   * 合わせが意味を持つのは**この欄が `#restoreUnread`（器の入れ替えを跨いだ
+   * 配り直し）を通っても書き換わらないからである**（`schema.ts` の
+   * `statusAtDelivery` の doc、`inbox-validity.ts` 冒頭の doc）。
+   *
+   * ⟹ この歯が赤いということは、**`#restoreUnread` が壊れた**のではなく
+   * **#879 の前提（この欄は配り直しで動かない）が崩れた**ということ。
+   * この値を「配り直すたびに『いま』の状態へ差し替える」向きへ直せば通る
+   * ように見えるが、それは #879 の述語が二度と差を見つけられなくなる
+   * （黙って `unchanged` 側へ倒れ続ける）ことの裏返しである。**直すなら
+   * `inbox-validity.ts` の `inboxEventValidity` / `inbox-validity.test.ts`
+   * も一緒に設計し直すこと。この歯だけを消して満足しないこと。**
+   */
+  it('起動前に stores.inbox へ直に積んだ statusAtDelivery は、#restoreUnread が拾い直した後も変わらない', async () => {
+    const stores = createMemoryStores();
+    const claimedStatus: JobStatus = 'running';
+    const event: InboxEvent = {
+      type: 'manager_message',
+      id: 'evt-status-at-delivery',
+      at: '2026-08-01T00:00:00.000Z',
+      managerId: 'mgr-1',
+      kind: 'report',
+      text: '終わった',
+      statusAtDelivery: claimedStatus,
+    };
+    // **`manager.ts` を経由せず、起動前に直に器へ積む。** 「積まれた当時の
+    // 値」だけを持たせ、これから起こす `#restoreUnread` 以外の経路が
+    // この欄へ触れる余地を無くすため。
+    await stores.inbox.put(event, event.at);
+
+    // **`'hang'` で起こす**（`#restoreUnread` が拾い直したこの1件の処理が
+    // 途中で止まったまま残る——`clone.stop()` は呼ばない。呼べば未完のターンの
+    // 決着を待ち続けて戻らない。このファイルの他の `'hang'` 起動も同じ理由で
+    // `stop()` を呼んでいない）。
+    const { inputs } = bootClone(stores, 'hang');
+    await waitFor(() => inputs.length > 0, '#restoreUnread が拾い直した合図が処理に入る');
+
+    const pending = await stores.inbox.peekPending();
+    const restored = pending.find((row) => row.event.id === event.id);
+    const restoredClaim =
+      restored?.event.type === 'manager_message' ? restored.event.statusAtDelivery : undefined;
+
+    expect(
+      restoredClaim,
+      'statusAtDelivery が claimedStatus と違う（＝ #restoreUnread がこの欄を書き換えた）。' +
+        ' inbox-validity.ts の inboxEventValidity は「積まれた当時の値が動かないこと」を' +
+        ' 前提に組んである — この欄を新しい値へ差し替える直しは、その述語が差を1件も' +
+        ' 見つけられなくなる形で#879を黙って無力化する。直すなら inbox-validity.ts の' +
+        ' 述語（と inbox-validity.test.ts）も一緒に設計し直すこと。',
+    ).toBe(claimedStatus);
   });
 });
