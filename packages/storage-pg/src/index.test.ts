@@ -1,5 +1,7 @@
 import {
   captureStderr,
+  createManagerPool,
+  createRunnerRegistry,
   renderMemoryDocuments,
   verifyJournalStoreOrderContract,
   verifyJournalStoreQueryEdgeContract,
@@ -7,7 +9,7 @@ import {
   verifyJournalStoreWithContract,
   verifyTranscriptArchiveContract,
 } from '@alteroid/core';
-import type { Commitment, InboxEvent, Job, JournalEntry } from '@alteroid/core';
+import type { Commitment, InboxEvent, Job, JournalEntry, ManagerSummary } from '@alteroid/core';
 import { PGlite } from '@electric-sql/pglite';
 import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -15,7 +17,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb, migrate, seedPgWorkspace, type PgStores } from './index.js';
-import { archive, memory } from './schema.js';
+import { archive, jobs as jobsTable, memory } from './schema.js';
 
 /**
  * pg ドライバの受け入れ確認。
@@ -1242,6 +1244,306 @@ describe('PgJobStore', () => {
       });
 
       expect(lines.join('')).not.toContain('日誌の行を読み出せずに飛ばした');
+    });
+  });
+
+  /**
+   * `listJobs()` の行の版メモ（Issue #900）。
+   *
+   * **狙いは「速くなったこと」ではなく「答えが変わっていないこと」を測ること。**
+   * 冷たい覚え（1回目）と温かい覚え（2回目以降）で `listJobs()` の戻りが
+   * 並びを含めて一致すること、太った（新しい job が増えた）ときに正しい位置に
+   * 出ること、書き換えが温かい覚えにも届くこと、壊れた行の跡が2回目でも
+   * 同じ文言で出ること、そして2回目が jsonb を1行も引かないことを撃つ。
+   */
+  describe('listJobs() の行の版メモ（Issue #900）', () => {
+    // **要素を対称にしない。** id・createdAt・status・本文をすべて違う値にし、
+    // どれか2つを入れ替えたら少なくとも1つのアサーションが落ちる形にする。
+    const t = (offsetMs: number) =>
+      new Date(Date.parse('2026-01-01T00:00:00.000Z') + offsetMs).toISOString();
+
+    async function seedFour(): Promise<void> {
+      await stores.jobs.putJob({
+        id: 'zeta',
+        createdAt: t(0),
+        updatedAt: t(0),
+        status: 'running',
+        summary: 'zeta の要旨',
+        lastReport: 'zeta の最初の報告',
+      });
+      await stores.jobs.putJob({
+        id: 'alpha',
+        createdAt: t(1_000),
+        updatedAt: t(1_000),
+        status: 'done',
+        summary: 'alpha の要旨',
+        lastReport: 'alpha の最初の報告',
+      });
+      await stores.jobs.putJob({
+        id: 'mid',
+        createdAt: t(2_000),
+        updatedAt: t(2_000),
+        status: 'failed',
+        summary: 'mid の要旨',
+        lastReport: 'mid の最初の報告',
+      });
+      await stores.jobs.putJob({
+        id: 'beta',
+        createdAt: t(3_000),
+        updatedAt: t(3_000),
+        status: 'lost',
+        summary: 'beta の要旨',
+        lastReport: 'beta の最初の報告',
+      });
+    }
+
+    it('答えが同じ（冷たい覚え vs 温かい覚え）——並びを含めて完全一致する', async () => {
+      await seedFour();
+
+      const cold = await stores.jobs.listJobs();
+      const warm = await stores.jobs.listJobs();
+
+      expect(cold.map((j) => j.id)).toEqual(['zeta', 'alpha', 'mid', 'beta']);
+      expect(warm).toEqual(cold);
+    });
+
+    it('太る＝緑: 新しい job が正しい位置に出る（覚えが隠さない）', async () => {
+      await seedFour();
+      await stores.jobs.listJobs(); // 覚えを温める
+
+      // mid（t=2000）より前・alpha（t=1000）より後 ⟹ 正しい位置は alpha と mid の間。
+      await stores.jobs.putJob({
+        id: 'gamma',
+        createdAt: t(1_500),
+        updatedAt: t(1_500),
+        status: 'running',
+        summary: 'gamma の要旨',
+      });
+
+      const found = await stores.jobs.listJobs();
+      expect(found.map((j) => j.id)).toEqual(['zeta', 'alpha', 'gamma', 'mid', 'beta']);
+    });
+
+    it('痩せない側／書き換えが届く＝緑: putJob 後の listJobs() は新しい値を返す（覚えの一番危ない失敗——古い値を返す——を直接撃つ）', async () => {
+      await seedFour();
+      await stores.jobs.listJobs(); // 覚えを温める（この時点で mid は status=failed）
+
+      await stores.jobs.putJob({
+        id: 'mid',
+        createdAt: t(2_000),
+        updatedAt: t(2_500), // xmin も updated_at も進む
+        status: 'done',
+        summary: 'mid の要旨',
+        lastReport: 'mid の書き換え後の報告',
+      });
+
+      const found = await stores.jobs.listJobs();
+      const mid = found.find((j) => j.id === 'mid');
+      expect(mid?.status).toBe('done');
+      expect(mid?.lastReport).toBe('mid の書き換え後の報告');
+    });
+
+    it('壊れた行: 2回目の呼び出しでも同じ跡が同じ文言で出る（覚えが「壊れていた」を忘れない）', async () => {
+      const bodyMarker = '跡には載ってはいけない本文の目印-QZXW';
+      await stores.jobs.putJob({
+        id: 'mgr-ok',
+        createdAt: t(0),
+        updatedAt: t(0),
+        status: 'running',
+        summary: '健全な行',
+      });
+      await db.execute(
+        sql`insert into jobs (id, status, created_at, updated_at, job)
+            values (
+              'broken-2',
+              'future-status',
+              '2026-08-12T00:00:00.000Z',
+              '2026-08-12T00:00:00.000Z',
+              ${JSON.stringify({
+                id: 'broken-2',
+                status: 'future-status',
+                createdAt: '2026-08-12T00:00:00.000Z',
+                updatedAt: '2026-08-12T00:00:00.000Z',
+                request: `秘密は ${bodyMarker} だった`,
+              })}::jsonb
+            )`,
+      );
+
+      const first = await captureStderr(async () => {
+        await stores.jobs.listJobs();
+      });
+      const second = await captureStderr(async () => {
+        await stores.jobs.listJobs();
+      });
+
+      expect(first.join('')).toContain('日誌の行を読み出せずに飛ばした');
+      expect(second.join('')).toContain('日誌の行を読み出せずに飛ばした');
+      expect(second.join('')).not.toContain(bodyMarker);
+    });
+
+    /**
+     * 費用の歯: 2回目の呼び出しは jsonb を1行も引かない。
+     *
+     * **時間では測らない**（器の混雑で偽陽性・偽陰性になる。AGENTS.md
+     * 「速くなったを時間で測る歯にしないこと」）。`drizzle(client, { logger })`
+     * で実際に発行された SQL 文字列を捕まえ、`job` 列（jsonb）を選ぶ
+     * クエリが2回目には1本も出ていないことを見る。
+     */
+    it('費用の歯: 2回目の呼び出しは jsonb を1行も引かない（発行された SQL で見る）', async () => {
+      const queries: string[] = [];
+      const localClient = new PGlite();
+      const localDb = drizzle(localClient, {
+        logger: {
+          logQuery(query: string) {
+            queries.push(query);
+          },
+        },
+      });
+      await migrate(localDb);
+      const localStores = createPgStoresFromDb(localDb);
+
+      await localStores.jobs.putJob({
+        id: 'a',
+        createdAt: t(0),
+        updatedAt: t(0),
+        status: 'running',
+        summary: 'a',
+      });
+      await localStores.jobs.putJob({
+        id: 'b',
+        createdAt: t(1_000),
+        updatedAt: t(1_000),
+        status: 'done',
+        summary: 'b',
+      });
+
+      queries.length = 0;
+      await localStores.jobs.listJobs();
+      const firstCallQueries = [...queries];
+
+      queries.length = 0;
+      await localStores.jobs.listJobs();
+      const secondCallQueries = [...queries];
+
+      // 1回目は段2（jsonb を引く SELECT）が出る。
+      expect(firstCallQueries.some((q) => /select .*"job".* from "jobs"/i.test(q))).toBe(true);
+      // 2回目は段1（id/xmin/updated_at だけ）しか出ない——jsonb 列を選ぶ形が無い。
+      expect(secondCallQueries.some((q) => /select .*"job".* from "jobs"/i.test(q))).toBe(false);
+      expect(secondCallQueries.length).toBe(1);
+
+      await localClient.close();
+    });
+
+    /**
+     * 段2の2つの枝——「全行が stale（冷たい起動。バインド変数の上限
+     * 65,535を避けるため `WHERE` を経由しない素の `SELECT`）」と
+     * 「一部だけ stale（`WHERE id IN (...)` を経由する）」——の**両方**が
+     * 実際に選ばれることを、発行された SQL 文字列で見る。マネージャーの
+     * レビュー指摘（2026-09-12）: 元の歯は「全部 stale」か「0件」しか
+     * 通しておらず、`WHERE` 付きの枝を1本も撃っていなかった。
+     */
+    it('段2の分岐: 全行stale(冷たい起動)はWHERE無し・一部staleはWHERE付きのSQLが出る', async () => {
+      const queries: string[] = [];
+      const localClient = new PGlite();
+      const localDb = drizzle(localClient, {
+        logger: {
+          logQuery(query: string) {
+            queries.push(query);
+          },
+        },
+      });
+      await migrate(localDb);
+      const localStores = createPgStoresFromDb(localDb);
+
+      await localStores.jobs.putJob({
+        id: 'a',
+        createdAt: t(0),
+        updatedAt: t(0),
+        status: 'running',
+        summary: 'a',
+      });
+      await localStores.jobs.putJob({
+        id: 'b',
+        createdAt: t(1_000),
+        updatedAt: t(1_000),
+        status: 'done',
+        summary: 'b',
+      });
+
+      // 1回目(冷たい起動): 2件とも stale ⟹ 段2は WHERE を経由しない。
+      queries.length = 0;
+      await localStores.jobs.listJobs();
+      const coldCallQueries = [...queries];
+      const coldStage2 = coldCallQueries.filter((q) => /select .*"job".* from "jobs"/i.test(q));
+      expect(coldStage2).toHaveLength(1);
+      expect(coldStage2[0]).not.toMatch(/where/i);
+
+      // b だけ書き換える ⟹ 2回目は a が温かい・b だけ stale(一部)。
+      await localStores.jobs.putJob({
+        id: 'b',
+        createdAt: t(1_000),
+        updatedAt: t(2_000),
+        status: 'done',
+        summary: 'b',
+        lastReport: '書き換え後',
+      });
+
+      queries.length = 0;
+      await localStores.jobs.listJobs();
+      const partialCallQueries = [...queries];
+      const partialStage2 = partialCallQueries.filter((q) =>
+        /select .*"job".* from "jobs"/i.test(q),
+      );
+      expect(partialStage2).toHaveLength(1);
+      expect(partialStage2[0]).toMatch(/where "jobs"\."id" in/i);
+
+      await localClient.close();
+    });
+
+    /**
+     * `ManagerPool.list()` 側。**`packages/core/src/manager.ts` は1文字も
+     * 変えていない**——`list()` の戻りが同じであることは「`listJobs()` の
+     * 戻りが同じ」から従う、という論証をここで実際に確かめる。
+     *
+     * `#records` に何も載っていない（`ManagerPool` を起こしただけで委譲を
+     * 1本も動かしていない）状態なので、すべてのジョブが「台帳にしか無い分」
+     * の枝（`manager.ts` の `#load` に相当する fallback 経路）を通る——
+     * これは実際の508行の内訳（事前情報）と同じ枝である。
+     */
+    it('ManagerPool.list(): 2回呼んでも並びを含めて戻りが一致する', async () => {
+      await seedFour();
+
+      const pool = createManagerPool({
+        stores,
+        post: () => {},
+        runners: createRunnerRegistry(),
+      });
+
+      const first: ManagerSummary[] = await pool.list();
+      const second: ManagerSummary[] = await pool.list();
+
+      // list() は startedAt（=job.createdAt）の降順——listJobs() の昇順とは逆順。
+      expect(first.map((s) => s.managerId)).toEqual(['beta', 'mid', 'alpha', 'zeta']);
+      expect(second).toEqual(first);
+    });
+
+    /**
+     * マネージャーからの追補（2026-09-12）: 「行が消えない」を覚えの前提に
+     * しないことを直接撃つ。
+     *
+     * **`JobStore` にはいま行を消す口が無い**（`#cache` の doc）ので、ここは
+     * `db.delete(jobsTable)` を drizzle で直接呼ぶ——`JobStore` の口を経由
+     * しない。**将来 `JobStore` に消す口が生えたときの先取りとしてこの形に
+     * してある。**
+     */
+    it('行が直接 DELETE された後の listJobs() は、消えた id を返さない（並びも崩れない）', async () => {
+      await seedFour();
+      await stores.jobs.listJobs(); // 覚えを温める（zeta/alpha/mid/beta の4件とも覚えに乗る）
+
+      await db.delete(jobsTable).where(eq(jobsTable.id, 'mid'));
+
+      const found = await stores.jobs.listJobs();
+      expect(found.map((j) => j.id)).toEqual(['zeta', 'alpha', 'beta']);
     });
   });
 });
