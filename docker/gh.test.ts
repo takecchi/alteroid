@@ -77,7 +77,11 @@ function runGh(args: string[], options: RunOptions = {}): Result & { fakeGhPath:
   let stdout: string;
   let stderr = '';
   try {
-    stdout = execFileSync(SCRIPT, args, { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    stdout = execFileSync(SCRIPT, args, {
+      env,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
   } catch (e) {
     const err = e as { status?: number; stdout?: Buffer | string; stderr?: Buffer | string };
     exitCode = err.status ?? 1;
@@ -96,7 +100,14 @@ describe('マネージャー・作業者の層（uid が ALTEROID_RUNNER_CHILD_U
     ],
     [
       'gh api ... /actions/workflows/release-prod.yml/dispatches',
-      ['api', '-X', 'POST', 'repos/o/r/actions/workflows/release-prod.yml/dispatches', '-f', 'ref=main'],
+      [
+        'api',
+        '-X',
+        'POST',
+        'repos/o/r/actions/workflows/release-prod.yml/dispatches',
+        '-f',
+        'ref=main',
+      ],
     ],
   ])('%s は弾かれる（本物の gh は呼ばれない・非0で終わる）', (_label, args) => {
     const r = runGh(args, { childUid: OWN_UID });
@@ -109,7 +120,10 @@ describe('マネージャー・作業者の層（uid が ALTEROID_RUNNER_CHILD_U
 
   it.each([
     ['gh workflow run ci.yml（別のワークフロー）', ['workflow', 'run', 'ci.yml']],
-    ['gh workflow run update-claude-sdk.yml（別のワークフロー）', ['workflow', 'run', 'update-claude-sdk.yml']],
+    [
+      'gh workflow run update-claude-sdk.yml（別のワークフロー）',
+      ['workflow', 'run', 'update-claude-sdk.yml'],
+    ],
     [
       'gh api ... /actions/workflows/ci.yml/dispatches（別のワークフロー）',
       ['api', '-X', 'POST', 'repos/o/r/actions/workflows/ci.yml/dispatches', '-f', 'ref=main'],
