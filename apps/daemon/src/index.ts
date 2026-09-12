@@ -1038,6 +1038,28 @@ export async function main(): Promise<void> {
     stores,
     runners,
     withheldEnvKeys: [...WITHHELD_ENV_KEYS, ...storage.withheldEnvKeys],
+    /**
+     * **マネージャーとクローンが別の鍵で走っている**（Issue #865 の実測）ことを
+     * 知らせる。正本にその名前の行が在り、かつこのデーモンの器の env にも
+     * 別の値が在るときだけ立つ（`cloneEnvShadowedNames` の doc）。
+     *
+     * **値も指紋も渡ってこない**（`onCloneEnvShadowed` の型）ので、ここで
+     * 出す行にも名前しか載らない。**「正本が勝つ」仕様は変えない**——ここは
+     * 知らせるだけで、何も配り直さない。
+     *
+     * 連続した同じ食い違いは呼ばれない（`createCredentialService` 側で
+     * 抑止済み）ので、ここで頻度を気にする必要は無い。
+     */
+    onCloneEnvShadowed: (names) => {
+      process.stderr.write(
+        `alteroidd: 正本に置かれた鍵が、このデーモンの器の環境変数と食い違っています` +
+          `（マネージャーは正本の値、クローンは器の環境変数の値で走っています）: ` +
+          `${names.join(', ')}。` +
+          `直すには、正本のその行を外してください` +
+          `（外せば effective() が器の環境変数へ落ち、マネージャーとクローンが揃います）: ` +
+          `${names.map((name) => `alteroid credential remove ${name}`).join(' / ')}\n`,
+      );
+    },
   });
 
   /**

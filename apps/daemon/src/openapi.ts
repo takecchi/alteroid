@@ -1118,9 +1118,23 @@ export const profileUpdateResponseSchema = z.object({
  * なので、**直したい1本だけを置き直せる**——全文を読み出す必要が無い。
  * ⟹ 値を返す口を作らない（作れば、読む側の資格を置く側と同じ強さまで上げる
  * ことになる）。
+ *
+ * `runnerCredentialFingerprintSchema` をそのまま使わず `.extend()` している
+ * ——`shadowsCloneEnv` は runner 側の指紋（`GET /runners` の credentials）には
+ * 無い概念で、あちらに書き足すと「runner にはクローンの器という比較対象が
+ * 無い」という区別が崩れる（`CredentialFingerprint.shadowsCloneEnv` の doc）。
  */
 export const credentialsResponseSchema = z.object({
-  credentials: z.array(runnerCredentialFingerprintSchema),
+  credentials: z.array(
+    runnerCredentialFingerprintSchema.extend({
+      /**
+       * 正本のこの値が、このデーモンの器の環境変数と食い違っている（＝
+       * マネージャーとクローンが別の鍵で走っている）ときだけ `true`。
+       * 既定では付かない（Issue #865）。値そのものは載らない。
+       */
+      shadowsCloneEnv: z.boolean().optional(),
+    }),
+  ),
 });
 
 /**
