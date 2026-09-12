@@ -600,14 +600,61 @@ describe('要旨の鮮度（resolveMemoryDescriptionFreshness）— 4状態、�
     ).toEqual({ kind: 'fresh' });
   });
 
-  it('describedAt が updatedAt より前なら stale', () => {
+  it('describedAt が updatedAt より前なら stale（差をミリ秒で持つ、#821）', () => {
     expect(
       resolveMemoryDescriptionFreshness({
         description: '要旨',
         describedAt: '2026-08-20T00:00:00Z',
         updatedAt: '2026-08-21T00:00:00Z',
       }),
-    ).toEqual({ kind: 'stale' });
+    ).toEqual({ kind: 'stale', staleForMs: 24 * 60 * 60 * 1000 });
+  });
+
+  it('stale の差は1時間と30日で別の値になる（語ではなく数で測る、#821 条件2）', () => {
+    const oneHour = resolveMemoryDescriptionFreshness({
+      description: '要旨',
+      describedAt: '2026-08-20T00:00:00Z',
+      updatedAt: '2026-08-20T01:00:00Z',
+    });
+    const thirtyDays = resolveMemoryDescriptionFreshness({
+      description: '要旨',
+      describedAt: '2026-08-01T00:00:00Z',
+      updatedAt: '2026-08-31T00:00:00Z',
+    });
+    expect(oneHour).toEqual({ kind: 'stale', staleForMs: 60 * 60 * 1000 });
+    expect(thirtyDays).toEqual({ kind: 'stale', staleForMs: 30 * 24 * 60 * 60 * 1000 });
+    // 差そのものが違う値であることを直接確かめる——「stale というラベルが
+    // 出た」ではなく「差が動いた」ことを見る。
+    expect(oneHour.kind === 'stale' && thirtyDays.kind === 'stale').toBe(true);
+    if (oneHour.kind === 'stale' && thirtyDays.kind === 'stale') {
+      expect(oneHour.staleForMs).not.toBe(thirtyDays.staleForMs);
+    }
+  });
+
+  /**
+   * ⚠️ `stale` を決める比較（文字列の辞書式）と、差を作る比較（`Date.parse`
+   * の数値）は別物である——精度（小数秒の桁数）が違う2つの ISO 8601 文字列
+   * では、辞書式が「小さい」と判定した側が、数値としては後（＝大きい）で
+   * ありうる。
+   *
+   * ここでは `describedAt = '...T10:00:00.500Z'`（小数点あり）・
+   * `updatedAt = '...T10:00:00Z'`（小数点なし）を渡す。辞書式では `'.'`
+   * （0x2E）が `'Z'`（0x5A）より小さいので `describedAt < updatedAt` が
+   * 真になり `stale` へ入るが、数値としては `describedAt` の方が500ミリ秒
+   * 後（＝大きい）——clamp が無ければ `staleForMs` は `-500` になる。
+   *
+   * **`Math.max(0, ...)` を外す変異（マネージャー指摘、条件1の直接の歯）は
+   * ここで捕まる。** 負の値が「0（＝最新）」以外の意味を持ってはいけない
+   * ——このテストは「0になる」ことそのものを固定する（負のまま漏れる／
+   * NaN になる、のどちらでもないことを確かめる）。
+   */
+  it('精度違いで辞書式と数値の順序が食い違っても、staleForMs は負にならない（0 に丸める）', () => {
+    const result = resolveMemoryDescriptionFreshness({
+      description: '要旨',
+      describedAt: '2026-09-11T10:00:00.500Z',
+      updatedAt: '2026-09-11T10:00:00Z',
+    });
+    expect(result).toEqual({ kind: 'stale', staleForMs: 0 });
   });
 
   it('assertNeverMemoryDescriptionFreshness は未知の状態を投げる', () => {
@@ -776,7 +823,7 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
       premise('premise-a'),
       premise('premise-b'),
       fact('fact-a', { description: '要旨a', freshness: { kind: 'fresh' } }),
-      fact('fact-b', { description: '要旨b', freshness: { kind: 'stale' } }),
+      fact('fact-b', { description: '要旨b', freshness: { kind: 'stale', staleForMs: 1000 } }),
       fact('malformed-parent-ignored', {
         description: '要旨c',
         freshness: { kind: 'unknown' },
@@ -793,8 +840,13 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
   });
 
   it('切ったら言う: 目次を件数で切ったら、切った件数が出力に現れる', () => {
+    // **freshness は absent を使う（#821 以降の約束）。** ここで測りたいのは
+    // 件数の蓋であって鮮度ではない——absent なら印が空文字になり、
+    // 鮮度の印を足す前の（1行の長さが description だけで決まる）行を保てる。
+    // fresh 等を使うと印の文字数ぶん1行が伸び、この it() が固定している
+    // 件数（300／5）が崩れる。
     const docs = Array.from({ length: MEMORY_TOC_ENTRY_LIMIT + 5 }, (_, index) =>
-      fact(`fact-${index}`, { description: `要旨${index}`, freshness: { kind: 'fresh' } }),
+      fact(`fact-${index}`, { description: `要旨${index}`, freshness: { kind: 'absent' } }),
     );
     const rendered = renderMemoryDocuments(docs);
     expect(rendered).toContain('…ほか 5 件は目次から省略');
@@ -818,10 +870,12 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
    * **値は `MEMORY_TOC_ENTRY_LIMIT` を書き写さず参照する**（依頼者の門）。
    */
   it('⭐ 部分だけを描く呼び手の下では、省略行が「記憶の全体ではなく、今回載せた分だけ」と明言する', () => {
+    // freshness は absent（件数の蓋を測るための行の長さを、鮮度の印の分だけ
+    // 伸ばさないため。上の it() と同じ理由、#821）。
     const docs = Array.from({ length: MEMORY_TOC_ENTRY_LIMIT + 5 }, (_, index) =>
-      fact(`fact-${index}`, { description: `要旨${index}`, freshness: { kind: 'fresh' } }),
+      fact(`fact-${index}`, { description: `要旨${index}`, freshness: { kind: 'absent' } }),
     );
-    const outsideDoc = fact('outside-doc', { description: '外', freshness: { kind: 'fresh' } });
+    const outsideDoc = fact('outside-doc', { description: '外', freshness: { kind: 'absent' } });
     const rendered = renderMemoryDocuments(docs, { presentInMemory: [...docs, outsideDoc] });
 
     expect(rendered).toContain(
@@ -838,8 +892,9 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
    * `presentInMemory` の「有無」ではなく「覆えているか」であることの直接の歯。
    */
   it('presentInMemory を渡していても、この描画が記憶の全体を覆っていれば従来どおりの文言のまま', () => {
+    // freshness は absent（同上の理由、#821）。
     const docs = Array.from({ length: MEMORY_TOC_ENTRY_LIMIT + 5 }, (_, index) =>
-      fact(`fact-${index}`, { description: `要旨${index}`, freshness: { kind: 'fresh' } }),
+      fact(`fact-${index}`, { description: `要旨${index}`, freshness: { kind: 'absent' } }),
     );
     const rendered = renderMemoryDocuments(docs, { presentInMemory: docs });
 
@@ -865,10 +920,14 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
    */
   describe('目次の蓋: 件数のみ／文字数のみ／両方を、非自明な入力で作り分ける', () => {
     it('件数のみで切れる（305件・短い要旨——文字数の予算にはまだ余裕がある）', () => {
+      // freshness は absent（鮮度の印の分だけ1行が伸びると、この it() が
+      // 前提にしている「300件ぶんの短い要旨は文字数の予算に収まる」が崩れる。
+      // #821 以降、fresh も印を持つため、この it() の関心（件数の蓋）とは
+      // 無関係な理由で分岐が変わってしまう）。
       const docs = Array.from({ length: MEMORY_TOC_ENTRY_LIMIT + 5 }, (_, i) =>
         fact(`fact-${String(i).padStart(3, '0')}`, {
           description: 'x'.repeat(10),
-          freshness: { kind: 'fresh' },
+          freshness: { kind: 'absent' },
         }),
       );
       const rendered = renderMemoryDocuments(docs);
@@ -1008,11 +1067,16 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
    * 目次の蓋（`MEMORY_TOC_CHAR_BUDGET`）を測るための1件。**要旨は1行の上限
    * ちょうど**（`MEMORY_TOC_LINE_LIMIT`）——1行が運ぶ量を最大にした、蓋が
    * 確実に噛む形である。
+   *
+   * **freshness は absent（#821 以降の約束）。** ここで測りたいのは文字数の
+   * 蓋の算術であって鮮度ではない——`fresh` を使うと鮮度の印の文字数ぶん
+   * 1行が伸び、この関数が使う下の2つの it()（測る側とその外挿）の数値が
+   * 鮮度の印の実装に引きずられて動いてしまう。
    */
   const tocCapFact = (index: number) =>
     fact(`fact-${String(index).padStart(3, '0')}`, {
       description: 'あ'.repeat(MEMORY_TOC_LINE_LIMIT),
-      freshness: { kind: 'fresh' },
+      freshness: { kind: 'absent' },
     });
 
   /**
@@ -1191,11 +1255,11 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
       fact('stale-doc', {
         title: 'Stale Doc',
         description: '古い要旨',
-        freshness: { kind: 'stale' },
+        freshness: { kind: 'stale', staleForMs: 60 * 60 * 1000 },
       }),
     ]);
     expect(rendered).toContain('stale-doc');
-    expect(rendered).toContain('⚠古い要旨（本文の方が新しい）: 古い要旨');
+    expect(rendered).toContain('要旨は本文より1時間古い: 古い要旨');
   });
 
   it('4状態を畳まない: fresh / stale / unknown / absent がそれぞれ別の表示になる', () => {
@@ -1203,7 +1267,7 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
       fact('x-fresh', { description: '説明', freshness: { kind: 'fresh' } }),
     ]);
     const stale = renderMemoryDocuments([
-      fact('x-stale', { description: '説明', freshness: { kind: 'stale' } }),
+      fact('x-stale', { description: '説明', freshness: { kind: 'stale', staleForMs: 1000 } }),
     ]);
     const unknown = renderMemoryDocuments([
       fact('x-unknown', { description: '説明', freshness: { kind: 'unknown' } }),
@@ -1359,10 +1423,12 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
       fact('orphan', { description: '説明', freshness: { kind: 'fresh' }, parent: 'not-exist' }),
     ];
     const rendered = renderMemoryDocuments(docs);
+    // #821 以降、fresh も「要旨の後に本文は動いていない」という印を持つ
+    // （常に何か言う設計。旧来の「fresh は印なし」ではなくなった）。
     expect(rendered).toBe(
       '<!-- memory: index -->\n' +
         '## 記憶の目次（fact。本文は memory_read で開く。階層はインデントで表す）\n' +
-        '- orphan: orphan — 説明［親 not-exist が見つからない］',
+        '- orphan: orphan — 要旨の後に本文は動いていない: 説明［親 not-exist が見つからない］',
     );
   });
 
@@ -2252,7 +2318,7 @@ const INVARIANT2_CORPUS: MemoryPart[] = [
  * 一致することを、node スクリプトで確認済み（報告に生出力を記載）。
  */
 const INVARIANT2_GOLDEN =
-  '<!-- memory: no-frontmatter.md（premise・本文は載っていない。全 32 文字 / 2 節） -->\n要旨: （まだ書かれていない。memory_frontmatter_set の description で書くこと——ここが空だと、本文を開くまでこの文書が何なのか分からない）\n節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:\n[5f35fd4b-d02c5e61] # no-frontmatter — 32 文字\n  [a200735a-6700831a] ## 節A1 — 11 文字\n\n<!-- memory: explicit-premise.md（premise・本文は載っていない。全 85 文字 / 3 節） -->\n要旨: 要旨B\n節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:\n[d261b61a-c981527a] # explicit-premise — 46 文字\n  [0ca6eb3f-52241122] ## 節B1 — 12 文字\n  [e2d59aaf-2a39d6bb] ## 節B2 — 11 文字\n\n<!-- memory: frontmatter が壊れている（既知の形にならなかった。premise として扱っている） -->\n<!-- memory: broken.md（premise・本文は載っていない。全 34 文字 / 1 節） -->\n要旨: （まだ書かれていない。memory_frontmatter_set の description で書くこと——ここが空だと、本文を開くまでこの文書が何なのか分からない）\n節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:\n[489e4048-1b0e31ad] # broken — 12 文字\n\n<!-- memory: unknown-type.md（premise・本文は載っていない。全 76 文字 / 2 節） -->\n要旨: 要旨E\n節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:\n[9f0ec3f9-96417823] # unknown-type — 30 文字\n  [d6a625f1-9195a16d] ## 節E1 — 11 文字\n\n<!-- memory: index -->\n## 記憶の目次（fact。本文は memory_read で開く。階層はインデントで表す）\n- fact-doc: fact-doc — ？要旨の鮮度不明: 要旨C';
+  '<!-- memory: no-frontmatter.md（premise・本文は載っていない。全 32 文字 / 2 節） -->\n要旨: （まだ書かれていない。memory_frontmatter_set の description で書くこと——ここが空だと、本文を開くまでこの文書が何なのか分からない）\n節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:\n[5f35fd4b-d02c5e61] # no-frontmatter — 32 文字\n  [a200735a-6700831a] ## 節A1 — 11 文字\n\n<!-- memory: explicit-premise.md（premise・本文は載っていない。全 85 文字 / 3 節） -->\n要旨: 要旨B\n節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:\n[d261b61a-c981527a] # explicit-premise — 46 文字\n  [0ca6eb3f-52241122] ## 節B1 — 12 文字\n  [e2d59aaf-2a39d6bb] ## 節B2 — 11 文字\n\n<!-- memory: frontmatter が壊れている（既知の形にならなかった。premise として扱っている） -->\n<!-- memory: broken.md（premise・本文は載っていない。全 34 文字 / 1 節） -->\n要旨: （まだ書かれていない。memory_frontmatter_set の description で書くこと——ここが空だと、本文を開くまでこの文書が何なのか分からない）\n節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:\n[489e4048-1b0e31ad] # broken — 12 文字\n\n<!-- memory: unknown-type.md（premise・本文は載っていない。全 76 文字 / 2 節） -->\n要旨: 要旨E\n節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:\n[9f0ec3f9-96417823] # unknown-type — 30 文字\n  [d6a625f1-9195a16d] ## 節E1 — 11 文字\n\n<!-- memory: index -->\n## 記憶の目次（fact。本文は memory_read で開く。階層はインデントで表す）\n- fact-doc: fact-doc — 要旨を書いた時刻が記録されていない: 要旨C';
 
 /**
  * `indexed` — 第3の区分（2026-09-11 追加）。要旨だけが焼かれ、節の目次は
@@ -2523,6 +2589,106 @@ describe('renderMemoryListing — `memory_list` 用の一覧。全区分を対�
     // 「作成: 」で終わって空になっていないこと（取れないことが出力から消えない）。
     expect(listing).not.toMatch(/作成: $/m);
     expect(listing).not.toMatch(/作成: \/ /);
+  });
+
+  /**
+   * #821 — 「⚠古い要旨」が12/12で鳴って信号を失っていた欠陥の直し。
+   *
+   * **語ではなく数で測る（条件2）。** `staleForMs` を変えると出力の文字列
+   * そのものが変わることを、1時間差・30日差の2点で撃つ——`toContain` で
+   * 固定の語（例えば「古い」）だけを探すと、実装が数を無視して固定文字列を
+   * 返す変異が生き残る。ここでは実際の数値を含む文字列を要求する。
+   */
+  it('stale の印は差の大きさで文字列が変わる（1時間差と30日差、条件2）', () => {
+    const entry = (staleForMs: number) => ({
+      slug: 'stale-doc',
+      title: 'Stale',
+      kind: 'fact' as const,
+      description: '要旨',
+      descriptionFreshness: { kind: 'stale' as const, staleForMs },
+      parent: undefined,
+      updatedAt: '2026-08-21T00:00:00Z',
+      createdAt: { kind: 'unknown' as const },
+    });
+
+    const oneHour = renderMemoryListing([entry(60 * 60 * 1000)]);
+    const thirtyDays = renderMemoryListing([entry(30 * 24 * 60 * 60 * 1000)]);
+
+    expect(oneHour).toContain('要旨は本文より1時間古い');
+    expect(thirtyDays).toContain('要旨は本文より30日古い');
+    // 数を変えたら文字列も変わる——固定文字列を返す変異はここで生存できない。
+    expect(oneHour).not.toBe(thirtyDays);
+  });
+
+  /**
+   * 条件1: 「取れなかった」（describedAt が無い＝ unknown）と「0（＝最新）」
+   * （fresh）を同じ言葉にしない。**unknown を stale の0日版として出さない**
+   * ——読み手が「0日ぶん新しい＝いちばん新しい＝手を入れなくてよい」と
+   * 誤読するのを防ぐ（#821 コメント、クローンの決定）。
+   */
+  it('unknown（記録なし）と fresh（正直なゼロ）は別の言葉で出る（条件1）', () => {
+    const entry = (descriptionFreshness: { kind: 'fresh' | 'unknown' }) => ({
+      slug: 'doc',
+      title: 'Doc',
+      kind: 'fact' as const,
+      description: '要旨',
+      descriptionFreshness,
+      parent: undefined,
+      updatedAt: '2026-08-21T00:00:00Z',
+      createdAt: { kind: 'unknown' as const },
+    });
+
+    const fresh = renderMemoryListing([entry({ kind: 'fresh' })]);
+    const unknown = renderMemoryListing([entry({ kind: 'unknown' })]);
+
+    expect(fresh).not.toBe(unknown);
+    // unknown 側に「古い」の文字列や日数表現が紛れ込んでいないこと
+    // （「0日ぶん新しい」のような誤読を招く文言を禁じる）。
+    expect(unknown).not.toMatch(/\d+(秒|分|時間|日)/);
+    expect(unknown).toContain('記録されていない');
+    expect(fresh).not.toContain('記録されていない');
+    expect(fresh).toContain('本文は動いていない');
+  });
+
+  /**
+   * 条件3: ⚠ を消したことで「何も言わなくなる」文書が出ないか。
+   * `absent`（要旨そのものが無い）だけは何も出さない設計だが、
+   * `fresh` / `stale` / `unknown` は要旨がある限り必ず何か言う
+   * （「常に出す」設計。「古いときだけ出す」なら fresh は何も言わない）。
+   */
+  it('要旨がある文書（fresh / stale / unknown）は必ず何か言う。absent だけ何も出さない（条件3）', () => {
+    const base = {
+      slug: 'doc',
+      title: 'Doc',
+      kind: 'fact' as const,
+      parent: undefined,
+      updatedAt: '2026-08-21T00:00:00Z',
+      createdAt: { kind: 'unknown' as const },
+    };
+    const fresh = renderMemoryListing([
+      { ...base, description: '説明', descriptionFreshness: { kind: 'fresh' as const } },
+    ]);
+    const stale = renderMemoryListing([
+      {
+        ...base,
+        description: '説明',
+        descriptionFreshness: { kind: 'stale' as const, staleForMs: 1000 },
+      },
+    ]);
+    const unknown = renderMemoryListing([
+      { ...base, description: '説明', descriptionFreshness: { kind: 'unknown' as const } },
+    ]);
+    const absent = renderMemoryListing([
+      { ...base, description: undefined, descriptionFreshness: { kind: 'absent' as const } },
+    ]);
+
+    // fresh/stale/unknown は「説明」の前に必ず何か文字が入る（—description という
+    // 剥き出しの形にならない）。
+    expect(fresh).not.toContain('— 説明');
+    expect(stale).not.toContain('— 説明');
+    expect(unknown).not.toContain('— 説明');
+    // absent は description が無いので、そもそも「— 」の区切りごと出ない。
+    expect(absent).not.toContain(' — ');
   });
 
   /**

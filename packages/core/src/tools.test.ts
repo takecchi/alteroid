@@ -2071,7 +2071,7 @@ describe('クローンの道具', () => {
       expect(doc?.parent).toBe('root');
     });
 
-    it('description を変えると memory_list の ⚠古い要旨 が消える（describedAt が進む）', async () => {
+    it('description を変えると memory_list の「要旨は本文より…古い」が消える（describedAt が進む）', async () => {
       // **時刻を自分で固定する。** `updatedAt` / `describedAt` は実時計
       // （`new Date().toISOString()`）から来るので、2回の write が同じ
       // ミリ秒に収まると `describedAt >= updatedAt` が偶然 true になり
@@ -2091,7 +2091,9 @@ describe('クローンの道具', () => {
         vi.advanceTimersByTime(1000);
 
         const staleListing = await h.call('memory_list', {});
-        expect(staleListing).toContain('⚠古い要旨');
+        // 1回目の write から2回目の write まで1秒進めてある——
+        // formatMemoryStaleness の秒の桁で区別できる（語ではなく数で測る、#821）。
+        expect(staleListing).toContain('要旨は本文より1秒古い');
 
         await h.call('memory_frontmatter_set', {
           slug: 'values',
@@ -2100,7 +2102,8 @@ describe('クローンの道具', () => {
         });
 
         const freshListing = await h.call('memory_list', {});
-        expect(freshListing).not.toContain('⚠古い要旨');
+        expect(freshListing).not.toContain('要旨は本文より');
+        expect(freshListing).toContain('要旨の後に本文は動いていない');
         expect(freshListing).toContain('本文に合わせた新しい要旨');
       } finally {
         vi.useRealTimers();

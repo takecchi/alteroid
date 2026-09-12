@@ -22,8 +22,13 @@ vi.mock('./target.js', () => ({
   describeAuthFailure: () => null,
 }));
 
-const { memoryListCommand, memoryRemoveCommand, memorySetCommand, memoryShowCommand } =
-  await import('./memory.js');
+const {
+  freshnessMarker,
+  memoryListCommand,
+  memoryRemoveCommand,
+  memorySetCommand,
+  memoryShowCommand,
+} = await import('./memory.js');
 
 interface Sent {
   url: string;
@@ -195,7 +200,7 @@ describe('alteroid memory list / show', () => {
             title: '定点観測',
             kind: 'fact',
             description: '費用の推移',
-            descriptionFreshness: { kind: 'stale' },
+            descriptionFreshness: { kind: 'stale', staleForMs: 60 * 60 * 1000 },
             createdAt: { kind: 'known', at: '2026-08-10T00:00:00.000Z' },
             updatedAt: '2026-08-15T00:00:00.000Z',
           },
@@ -207,7 +212,8 @@ describe('alteroid memory list / show', () => {
 
     const text = read();
     expect(text).toContain('[fact] runbook');
-    expect(text).toContain('⚠古い要旨: 費用の推移');
+    // #821 — 「⚠」ではなく、どれだけ古いかを数で言う（語ではなく数で測る）。
+    expect(text).toContain('要旨は本文より1時間古い: 費用の推移');
   });
 
   it('無い記憶を読もうとしたら、そう言う（空の本文と区別する）', async () => {
@@ -257,5 +263,36 @@ describe('alteroid memory list / show', () => {
     const text = read();
     expect(text).toContain('作成: 2026-08-10T00:00:00.000Z / 更新: 2026-08-15T00:00:00.000Z');
     expect(text).toContain('作成: 不明 / 更新: 2026-08-12T00:00:00.000Z');
+  });
+});
+
+/**
+ * #821 — CLI 側の印（`freshnessMarker`）も core と同じ理由で直す
+ * （常に鳴る ⚠ は他の ⚠ への感度も下げる、というクローンの理由は表示面を
+ * 問わない）。core 側（`memory.test.ts`）と同じ観点をここでも撃つ——
+ * 語ではなく数で測ること（条件2）、取れなかったのと0を区別すること（条件1）。
+ */
+describe('freshnessMarker（CLI 側の印。core と別実装だが同じ理由で直す、#821）', () => {
+  it('stale の印は差の大きさで文字列が変わる（1時間差と30日差）', () => {
+    const oneHour = freshnessMarker({ kind: 'stale', staleForMs: 60 * 60 * 1000 });
+    const thirtyDays = freshnessMarker({ kind: 'stale', staleForMs: 30 * 24 * 60 * 60 * 1000 });
+
+    expect(oneHour).toContain('1時間');
+    expect(thirtyDays).toContain('30日');
+    expect(oneHour).not.toBe(thirtyDays);
+  });
+
+  it('unknown（記録なし）と fresh（正直なゼロ）は別の言葉で出る', () => {
+    const unknown = freshnessMarker({ kind: 'unknown' });
+    const fresh = freshnessMarker({ kind: 'fresh' });
+
+    expect(unknown).not.toBe(fresh);
+    expect(unknown).toContain('記録されていない');
+    expect(unknown).not.toMatch(/\d+(秒|分|時間|日)/);
+    expect(fresh).toContain('本文は動いていない');
+  });
+
+  it('absent は何も出さない', () => {
+    expect(freshnessMarker({ kind: 'absent' })).toBe('');
   });
 });

@@ -571,6 +571,34 @@ export function assertNeverMemoryDocKind(kind: never): never {
  * **代理指標である**（`MemoryDescriptionFreshness` の doc）。ここが言えるのは
  * 「`description` が最後の本文変更以降に変わったか」だけで、「本文を読み
  * 直して書き直したか」ではない。
+ *
+ * **`stale` には `staleForMs`（`updatedAt - describedAt` のミリ秒差）を必ず
+ * 添える**（#821）。
+ *
+ * ⚠️ **`stale` かどうかを決める比較と、差を作る比較は種類が違う。**
+ * `describedAt < updatedAt` は**文字列の辞書式比較**だが、差は
+ * **`Date.parse` の数値比較**である——両者は常に同じ答えを返すとは限らない。
+ * 小数秒の桁数（精度）が違う2つの ISO 8601 文字列（例: `'...T00:00:00.500Z'`
+ * と `'...T00:00:00Z'`）では、辞書式比較は「小数点が在る側」を小さいと判定
+ * する（`.` の符号位置 `0x2E` は `Z` の `0x5A` より小さい）一方、数値としては
+ * 前者のほうが**後**であることもありうる。⟹ **`stale` の分岐に入ったことと、
+ * 引き算の結果が正の値であることは、別の主張である。** だからここで
+ * `Math.max(0, ...)` を掛けて必ず非負にする——**責任をここ1か所に置く。**
+ * 呼び出し側や表示側（`formatMemoryStaleness`）でも同じ clamp を重ねると、
+ * 同じ異常を2箇所が別々の流儀で隠すことになり、**どちらか片方が
+ * 「0（＝最新）」に化けても、もう片方を見るまで気づけない**（クローンの
+ * 条件1「取れなかったと0を混ぜない」が名指しした失敗の形そのもの）。
+ *
+ * **この経路では実際には起こらないと確認した。** `storage-fs`（`persona.ts`
+ * の `read()` の `stats.mtime.toISOString()`）も `storage-pg`（`db.ts` の
+ * `toIso()`、内部は `Date.prototype.toISOString()`）も、`describedAt` /
+ * `updatedAt` を常に同じ関数・同じ精度（ミリ秒3桁 + `Z`）で書く——`#writeNow`
+ * 自身のコメントも「`describedAt` をここで別に採番すると mtime の精度差で
+ * `stale` に化けうる」と述べ、同じ懸念を承知のうえで両者を同じ文字列に
+ * 揃えている（新規描写時）。**この clamp は、この関数が任意の文字列を
+ * 受け取れる型を持つこと自体への防御である**（テスト・将来の呼び手が
+ * 精度の異なる文字列を混ぜても、負の値が「0（＝最新）」以外の意味を
+ * 持たないことだけは保つ）。
  */
 export function resolveMemoryDescriptionFreshness(input: {
   description: string | undefined;
@@ -580,7 +608,9 @@ export function resolveMemoryDescriptionFreshness(input: {
 }): MemoryDescriptionFreshness {
   if (input.description === undefined) return { kind: 'absent' };
   if (input.describedAt === undefined) return { kind: 'unknown' };
-  return input.describedAt >= input.updatedAt ? { kind: 'fresh' } : { kind: 'stale' };
+  if (input.describedAt >= input.updatedAt) return { kind: 'fresh' };
+  const staleForMs = Math.max(0, Date.parse(input.updatedAt) - Date.parse(input.describedAt));
+  return { kind: 'stale', staleForMs };
 }
 
 /** `MemoryDescriptionFreshness` の4状態の網羅性を型で強制する。 */
@@ -1131,21 +1161,69 @@ export function formatMemoryCreatedAt(createdAt: MemoryCreatedAt): string {
 }
 
 /**
+ * ミリ秒差を人間が読める期間にする（`memoryFreshnessMarker` の `stale` 専用）。
+ *
+ * **`⚠` を数に置き換える #821 の核心はここが担う。** 「古いか古くないか」の
+ * 1ビットではなく、「どれだけ古いか」を文字で運ぶ —— 1時間しか経っていない
+ * 文書と30日放置された文書が、同じ印で束ねられないようにする。
+ *
+ * 秒・分・時間・日の4段で丸める（`describeZombieAge` / `formatElapsed`
+ * ——`tools.ts` / `clone.ts`——と桁の切り方は同じ考え方だが、あちらは
+ * 「いま」からの経過やゾンビの年齢という別の量を測る専用の実装なので
+ * 共有しない。値を間違えて直したくなったとき、片方だけ直して済むように
+ * 分けてある）。
+ *
+ * **`ms` が非負であることは呼び出し元（`resolveMemoryDescriptionFreshness`）
+ * が保証する——ここでは重ねて clamp しない。** 同じ異常を2箇所で別々に
+ * 隠すと、片方だけ直っていない状態に気づけなくなる（`resolveMemoryDescriptionFreshness`
+ * の doc に理由を書いてある）。
+ */
+function formatMemoryStaleness(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds}秒`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}分`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}時間`;
+  const days = Math.floor(hours / 24);
+  return `${days}日`;
+}
+
+/**
  * 印は要旨の**前**に置く——左から読んで必ず当たる形にする（4-1）。
  *
  * **代理指標であることをここにも書く**（`MemoryDescriptionFreshness` の doc
- * と同じ注意）。`fresh`（印なし）は「`description` が本文の変更後に書かれた」
- * ことしか意味しない。「本文を読み直して要旨を書き直した」ことの保証では
- * ない。
+ * と同じ注意）。`fresh` は「`description` が本文の変更後に書かれた」ことしか
+ * 意味しない。「本文を読み直して要旨を書き直した」ことの保証ではない。
+ *
+ * **`absent` 以外の3状態は必ず何かを出す**（#821）。かつては `fresh` /
+ * `absent` がどちらも空文字で、`stale` / `unknown` だけが `⚠` / `？` を
+ * 出していた —— その結果、本文の変更頻度が要旨の書き直し頻度を大きく
+ * 上回るこの記憶の運用下では `stale` がほぼ常に真になり、「常に鳴る印」に
+ * 読み手が慣れて他の印まで見なくなった（#821 の実測: 12/12 文書で `⚠` が
+ * 付いていた）。**`stale` の有無という1ビットの信号をやめ、3状態それぞれに
+ * 別の言葉を割り当てる** —— 「古いか」ではなく「どういう状態か」を言う形に
+ * 変える。
+ *
+ * - `stale` — どれだけ古いかを `formatMemoryStaleness` で数値化して言う
+ * - `unknown` — **「0（＝最新）」に見せない**。「要旨を書いた時刻が記録され
+ *   ていない」と、`stale` とも `fresh` とも別の言葉で言う——欠測を鮮度として
+ *   読ませると、直すべき文書が「手を入れなくてよい」側に化ける（#821）
+ * - `fresh` — 「要旨の後に本文は動いていない」という正直なゼロ。`unknown`
+ *   （そもそも測れていない）とは必ず違う言葉にする——同じ言葉にすると、
+ *   読み手は「古くない」と「分からない」を区別できなくなる
+ * - `absent` — 要旨そのものが無いので何も出さない（このケースは呼び出し側
+ *   で `description === undefined` として既に弾かれているので、ここに来る
+ *   ことは無い。網羅性のためだけに残す）
  */
 function memoryFreshnessMarker(freshness: MemoryDescriptionFreshness): string {
   switch (freshness.kind) {
     case 'fresh':
-      return '';
+      return '要旨の後に本文は動いていない: ';
     case 'stale':
-      return '⚠古い要旨（本文の方が新しい）: ';
+      return `要旨は本文より${formatMemoryStaleness(freshness.staleForMs)}古い: `;
     case 'unknown':
-      return '？要旨の鮮度不明: ';
+      return '要旨を書いた時刻が記録されていない: ';
     case 'absent':
       return '';
     default:
