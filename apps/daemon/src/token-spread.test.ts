@@ -88,9 +88,10 @@ describe('env の行（器の環境変数を指す行）を撒くとき', () => 
     expect(clone.values()).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: ENV_TOKEN });
     expect(clone.identity()).toEqual({ tokenId: 'tok-env', generation: 3 });
 
-    // 名乗り直しでも同じ値が降りる（空文字にならない）
+    // 名乗り直しでも同じ値が降りる（空文字にならない）。身元が在るので
+    // 器の環境変数（別のダミー）は見ない。
     const again = fakeClient('runner-2');
-    await createRunnerTokenSync(clone)(again);
+    await createRunnerTokenSync(clone, () => 'dummy-should-not-be-used')(again);
     expect(again.calls).toEqual([[{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: ENV_TOKEN }]]);
   });
 
@@ -347,18 +348,40 @@ describe('createRunnerTokenSync（後から繋いだ runner を追いつかせ�
     };
   }
 
-  it('一度も撒いていなければ setCredentials を呼ばない（器の環境変数だけの既定の構成のまま）', async () => {
+  /**
+   * **⚠️ 2026-09-12（#866）に期待を反転した。** 元の題は「一度も撒いていなければ
+   * setCredentials を呼ばない（器の環境変数だけの既定の構成のまま）」で、
+   * 「箱が空 ⟹ runner は自分の環境変数の鍵をそのまま使える」という前提の上で
+   * 正しかった。`runner.ts` の `#childEnv()` はいまその鍵を無条件に削除する
+   * （人間の決定 2026-09-11）ので、何もしなければ繋ぎ直した runner は資格を
+   * 1本も持たずに走り続ける——本番で全マネージャーが `Not logged in` に
+   * 落ちた実害（Issue #866）がこれである。いま「箱が空」は「器の環境変数の
+   * 値をそのまま降ろす」に変わった。
+   */
+  it('一度も撒いていなければ、器の環境変数の値を降ろす（#866）', async () => {
     const holder = createAgentTokenHolder();
     const runner = fakeRunner();
-    await createRunnerTokenSync(holder)(runner);
-    expect(runner.calls).toEqual([]);
+    await createRunnerTokenSync(holder, () => 'dummy-not-a-real-token')(runner);
+    expect(runner.calls).toEqual([
+      [{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'dummy-not-a-real-token' }],
+    ]);
   });
 
-  it('stored を撒いた後はその値を降ろす', async () => {
+  it('一度も撒いておらず、器にも値が無ければ空文字（鍵を消す指示）を降ろす', async () => {
+    const holder = createAgentTokenHolder();
+    const runner = fakeRunner();
+    await createRunnerTokenSync(holder, () => undefined)(runner);
+    expect(runner.calls).toEqual([[{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: '' }]]);
+  });
+
+  it('stored を撒いた後はその値を降ろす（身元が在れば器の環境変数は見ない）', async () => {
     const holder = createAgentTokenHolder();
     holder.set(SECRET, { tokenId: 'tok-a', generation: 1 });
     const runner = fakeRunner();
-    await createRunnerTokenSync(holder)(runner);
+    // **器の環境変数の値（別のダミー）を渡しても、身元が在るなら無視される。**
+    // これが降りたら「身元があるのに env 側を読んでしまっている」という
+    // 実装ミスである。
+    await createRunnerTokenSync(holder, () => 'dummy-should-not-be-used')(runner);
     expect(runner.calls).toEqual([[{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: SECRET }]]);
   });
 
@@ -377,7 +400,8 @@ describe('createRunnerTokenSync（後から繋いだ runner を追いつかせ�
     holder.set(SECRET, { tokenId: 'tok-a', generation: 1 });
     holder.clear({ tokenId: 'tok-a', generation: 2 });
     const runner = fakeRunner();
-    await createRunnerTokenSync(holder)(runner);
+    // **身元が在るので、器の環境変数（別のダミー）は見ない。**
+    await createRunnerTokenSync(holder, () => 'dummy-should-not-be-used')(runner);
     expect(runner.calls).toEqual([[{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: '' }]]);
   });
 });
