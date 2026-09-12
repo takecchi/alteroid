@@ -506,6 +506,27 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
      * TDZ の `ReferenceError` になる。`z.lazy(() => jobStatusSchema)` は
      * getter を parse 時まで遅延させるので、宣言の順序に依存しない
      * （`manager_message` ブロックの外を動かさずに直す唯一の口）。
+     *
+     * ## 🔴 「常に配る瞬間の値」は、**1つの経路では成り立たない**（issue #879）
+     *
+     * 上の「この欄が答えるのは常に『配る瞬間』の値だけである」は、**`manager.ts`
+     * を通って配られるときの話である。** その経路では `#statusAtDelivery` が
+     * `#post` のたびに `#records` の現在値を読み直すので、`#withheldReports` の
+     * flush などの配り直しでも毎回新しい値になる。
+     *
+     * **⚠️ しかし `#restoreUnread`（`clone.ts`。器の入れ替えを跨いだ配り直し）は
+     * `manager.ts` を通らない。** あちらは器に積まれた `InboxEvent` をそのまま
+     * 読み直すので、**この欄は積まれた当時の値のまま残る。**
+     *
+     * ⟹ ⭐ **その差を、issue #879 が「合図が名乗った値」として使っている**
+     * （`inbox-validity.ts`）——積まれた当時の状態といまの状態が違えば、その
+     * 報告は届いた時点の前提が動いていることになる。
+     *
+     * ⟹ ⛔ **ここを「配り直しでも新しい値に差し替える」向きへ直さないこと。**
+     * doc の上半分だけを読むと**それが自然な直しに見える**が、直した瞬間に
+     * #879 の述語は差を1件も見つけられなくなる（そして黙る）。**直すなら
+     * #879 の述語も一緒に設計し直すこと。** この性質は
+     * `packages/core/src/inbox-persistence.test.ts` の歯（「`#restoreUnread` を通っても `statusAtDelivery` は積まれた当時の値のまま」）が見張っている。
      */
     statusAtDelivery: z.lazy(() => jobStatusSchema).optional(),
   }),
