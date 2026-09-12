@@ -132,8 +132,7 @@ function hasUnboundedTailFollow(command: string): boolean {
  * 早期に打ち切って誤爆する（doc 冒頭「`do` / `done` は『コマンドの位置に
  * 在るとき』だけ終端と見なす」）。
  */
-const LOOP_RE =
-  /\b(until|while)\b([\s\S]*?)(?<=^|[\s;&|])do\b([\s\S]*?)(?<=^|[\s;&|])done\b/g;
+const LOOP_RE = /\b(until|while)\b([\s\S]*?)(?<=^|[\s;&|])do\b([\s\S]*?)(?<=^|[\s;&|])done\b/g;
 
 /** カウンタ比較（`-lt` 系 / `(( ... ))`）が条件節・本体のどちらかに在るか。 */
 const COUNTER_COMPARISON_RE = /-lt\b|-le\b|-gt\b|-ge\b|\(\(/;
