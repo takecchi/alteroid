@@ -1694,19 +1694,43 @@ describe('excludeCitationScopeSelf / collectWidenedLineNumberCitations（合成 
     ]);
   });
 
-  it('除外が効きすぎていない（対の歯）: scripts/ の *別の* ファイルが持つ出典は検出され続ける', () => {
-    // ⟹ 除外の名前を `*` のように広げる変異（例: f.startsWith('scripts/') で
-    // 落とす形）が入ると、このファイルの出典まで一緒に消えて赤くなるはず。
-    const entries = [
-      { file: 'scripts/other-file.test.ts', text: '参照は `clone.ts:505` に在る。' },
+  it('除外が効きすぎていない（対の歯）: excludeCitationScopeSelf を通しても、SELF 以外の複数ファイルはどれも落ちない', () => {
+    // ⚠️ この歯は必ず excludeCitationScopeSelf を経由させること——経由させずに
+    // collectWidenedLineNumberCitations だけへ合成 entries を渡す形では、除外
+    // そのものを広げる変異（f.startsWith('scripts/') で落とす形）に1文字も
+    // 反応しない（実測。785-m1-widen-exclusion で確認済み——この歯の旧版は
+    // この変異で緑のままだった）。
+    //
+    // ⟹ こちらが測るのは「SELF 以外が複数在っても、どれも落とさない」こと
+    // （＝除外の広さの上限）。直下の「自己参照が実際に外れる」は「SELF 自身が
+    // 落ちる」こと（＝除外の下限）を測る——上限と下限は別の性質なので、
+    // 2本に分けてある。
+    const files = [
+      'scripts/other-file-a.test.ts',
+      CITATION_SCOPE_SELF_FILE,
+      'scripts/other-file-b.test.ts',
     ];
-    const resolve = buildBasenameAwareRepoFileResolver(['packages/core/src/clone.ts']);
+    const textByFile: Record<string, string> = {
+      'scripts/other-file-a.test.ts': '参照は `clone.ts:505` に在る。',
+      [CITATION_SCOPE_SELF_FILE]: '参照は `clone.ts:505` に在る（この歯自身の入力）。',
+      'scripts/other-file-b.test.ts': '参照は `apps/daemon/src/index.ts:1049-1050` に在る。',
+    };
+    const resolve = buildBasenameAwareRepoFileResolver([
+      'packages/core/src/clone.ts',
+      'apps/daemon/src/index.ts',
+    ]);
+    const scoped = excludeCitationScopeSelf(files);
+    const entries = scoped.map((file) => ({ file, text: textByFile[file] ?? '' }));
     expect(collectWidenedLineNumberCitations(entries, resolve, [])).toEqual([
-      'scripts/other-file.test.ts:1 clone.ts:505',
+      'scripts/other-file-a.test.ts:1 clone.ts:505',
+      'scripts/other-file-b.test.ts:1 apps/daemon/src/index.ts:1049-1050',
     ]);
   });
 
   it('自己参照が実際に外れる: CITATION_SCOPE_SELF_FILE と同じ名前のファイルが持つ出典は、excludeCitationScopeSelf を通した後は検出されない', () => {
+    // こちらが測るのは「SELF 自身が落ちる」こと（＝除外の下限）。直上の
+    // 「除外が効きすぎていない」は「SELF 以外は落ちない」こと（＝除外の上限）
+    // を測る——2本で除外の効き目の両端を挟む。
     const files = ['scripts/other-file.test.ts', CITATION_SCOPE_SELF_FILE];
     const textByFile: Record<string, string> = {
       'scripts/other-file.test.ts': '参照は `clone.ts:505` に在る。',
