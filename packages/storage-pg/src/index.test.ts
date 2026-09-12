@@ -13,7 +13,7 @@ import type { Commitment, InboxEvent, Job, JournalEntry, ManagerSummary } from '
 import { PGlite } from '@electric-sql/pglite';
 import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb, migrate, seedPgWorkspace, type PgStores } from './index.js';
@@ -2657,6 +2657,65 @@ describe('PgTranscriptArchive', () => {
     const summaries = await stores.archive.sessions();
     const summary = summaries.find((s) => s.sessionId === 'session-grouped');
     expect(summary?.rows).toBe(3);
+  });
+
+  /**
+   * ⭐ #905: 同じミリ秒に2回積んでも、行が2本残る。
+   *
+   * 契約テスト（検査20）は `list()` / `read()` を通した姿しか見ない——ここでは
+   * **テーブルの側**を直接見て、`body` が2本とも別々に残っていることを測る
+   * （`onConflictDoUpdate` へ戻すと1行になり、`body` は後勝ちの1本だけになる）。
+   *
+   * **時計は `toFake: ['Date']` に絞って固定する。** `setTimeout` まで偽物に
+   * すると PGlite の待ちが止まる。
+   */
+  it('同じミリ秒に2回積むと archive に2行残り、body が2本とも別々（#905）', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    let first: string;
+    let second: string;
+    try {
+      vi.setSystemTime(new Date('2026-09-12T03:04:05.678Z'));
+      first = (await stores.archive.archive('session-collision', 'FIRST\n')).id;
+      second = (await stores.archive.archive('session-collision', 'SECOND\n')).id;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // 1本目の id は従来どおり（枝番が付くのは衝突した2本目だけ）。
+    expect(first).toBe('session-collision-2026-09-12T03-04-05-678Z.jsonl');
+    expect(second).toBe('session-collision-2026-09-12T03-04-05-678Z-2.jsonl');
+
+    const rows = await db.select().from(archive).where(eq(archive.sessionId, 'session-collision'));
+    expect(rows).toHaveLength(2);
+    const bodyById = new Map(rows.map((row) => [row.id, row.body]));
+    expect(bodyById.get(first)).toBe('FIRST\n');
+    expect(bodyById.get(second)).toBe('SECOND\n');
+  });
+
+  /**
+   * ⭐ #905 の要件3の歯: **`id` の前方一致 LIKE が、枝番付きの2本目も拾う。**
+   *
+   * `id` の先頭が `sanitize(sessionId)` であるという性質は、消す問い合わせの
+   * 費用に効いている（前方一致が主キーの btree に落ちる。#698 §6-5）。
+   * **枝番を id の先頭側へ付ける形にすると、この `expect` が赤くなる。**
+   */
+  it("where id like 'session-…%' の前方一致が枝番付きの2本目も拾う（#905）", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    let first: string;
+    let second: string;
+    try {
+      vi.setSystemTime(new Date('2026-09-12T03:04:05.678Z'));
+      first = (await stores.archive.archive('session-collision', 'FIRST\n')).id;
+      second = (await stores.archive.archive('session-collision', 'SECOND\n')).id;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const prefixed = await db
+      .select({ id: archive.id })
+      .from(archive)
+      .where(sql`${archive.id} like ${'session-collision-%'}`);
+    expect(new Set(prefixed.map((row) => row.id))).toEqual(new Set([first, second]));
   });
 });
 

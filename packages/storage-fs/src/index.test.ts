@@ -12,7 +12,7 @@ import {
   verifyTranscriptArchiveContract,
 } from '@alteroid/core';
 import type { Commitment, InboxEvent, JournalEntry } from '@alteroid/core';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CLOSED_HISTORY_LIMIT, createFsStores, initWorkspace } from './index.js';
 
@@ -2658,6 +2658,64 @@ describe('FsTranscriptArchive', () => {
     expect(entry).toBeDefined();
     expect(typeof entry?.sessionId).toBe('string');
     expect(Number.isNaN(Date.parse(entry?.at ?? ''))).toBe(false);
+  });
+
+  /**
+   * ⭐ #905: 同じミリ秒に2回積んでも、1本目のファイルが上書きされない。
+   *
+   * 契約テスト（検査20）は `read()` を通した本文しか見ない——ここでは
+   * **ディスクの側**（付いた名前の形と、実ファイルの中身）を fs 固有の歯として
+   * 直接測る。**時計は `toFake: ['Date']` に絞って固定する**（`setTimeout` まで
+   * 偽物にすると `writeFile` の待ちが止まる）。
+   */
+  it('同じミリ秒に2回積むと2本目が <base>-2.jsonl になり、1本目の中身は元のまま（#905）', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-09-12T03:04:05.678Z'));
+      const first = (await stores.archive.archive('session-collision', 'FIRST\n')).id;
+      const second = (await stores.archive.archive('session-collision', 'SECOND\n')).id;
+
+      // 1本目の名前は従来どおり（枝番が付くのは衝突した2本目だけ）。
+      expect(first).toBe('session-collision-2026-09-12T03-04-05-678Z.jsonl');
+      expect(second).toBe('session-collision-2026-09-12T03-04-05-678Z-2.jsonl');
+
+      // ⭐ ディスクを直接読む。1本目が SECOND で上書きされていたら赤くなる。
+      expect(await readFile(join(root, 'archive', first), 'utf8')).toBe('FIRST\n');
+      expect(await readFile(join(root, 'archive', second), 'utf8')).toBe('SECOND\n');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * ⭐ #905 の要件2の歯: **id の形を変えたら、id からの復元も一緒に直っている
+   * こと。**
+   *
+   * `.meta.json` サイドカーを消して「ファイル名からの復元だけが頼りの行」を
+   * 作り、枝番付きの id でも `sessionId` と `at` が正しく戻ることを測る。
+   * **`STAMP_SUFFIX_RE` を枝番非対応の形へ戻すと、`sessionId` にファイル名
+   * 全体が入り `at` が epoch へ落ちるので、下の2つの `expect` が赤くなる。**
+   * 直前の「meta.jsonが無い…」の歯は型しか見ていないので、この退化を捕まえない。
+   */
+  it('枝番付きのidでも、meta.jsonが無ければファイル名からsessionId/atを復元する（#905）', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    let second: string;
+    try {
+      vi.setSystemTime(new Date('2026-09-12T03:04:05.678Z'));
+      await stores.archive.archive('session-fallback', 'FIRST\n');
+      second = (await stores.archive.archive('session-fallback', 'SECOND\n')).id;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(second).toBe('session-fallback-2026-09-12T03-04-05-678Z-2.jsonl');
+
+    // サイドカーを消して、ファイル名からの復元だけが頼りの状態にする。
+    await rm(join(root, 'archive', `${second}.meta.json`));
+
+    const entry = (await stores.archive.list()).find((e) => e.id === second);
+    expect(entry).toBeDefined();
+    expect(entry?.sessionId).toBe('session-fallback');
+    expect(entry?.at).toBe('2026-09-12T03:04:05.678Z');
   });
 });
 
