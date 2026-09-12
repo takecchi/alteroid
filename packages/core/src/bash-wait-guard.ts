@@ -46,6 +46,19 @@
  * - 本体に `break` が在る
  * - ループが無い（この検出器はループの構文にしか反応しないので、他のどんな
  *   コマンドも通る）
+ *
+ * ## ⚠️ 既知の弱さ —— `do` / `done` を「単語」としてしか見ていない
+ *
+ * ループの本体は `\bdo\b … \bdone\b` を非貪欲に切り出して読むので、**本体の
+ * 途中に現れる引数やパス名がたまたま `do` / `done` という語を含むと、そこで
+ * 早期に閉じたと誤読する。** 実際にテスト作成時に踏んだ —— `if [ -f
+ * /tmp/done ]; then break; fi; done` は `/tmp/done` の `done` を本物の
+ * `done` と取り違え、`break` を読む前に本体を打ち切って `sleep` だけの
+ * ループに見せかけた（歯は `/tmp/finished.flag` へ避けて回避した）。
+ * ⟹ **この誤読は両方向に効きうる** —— 「有界なのに弾く」（この実例）も
+ * 「無限待ちなのに、たまたま本体に `done` を含む語があって早期に閉じ、
+ * 後半の `sleep` を読み損ねて通す」もありうる。**完全な shell 構文解析器
+ * ではない**ことの直接の帰結であり、この PR では直していない。
  */
 
 /** 弾いた形の種別。テストと呼び出し側の note 文言がここへ分岐する。 */
@@ -138,8 +151,8 @@ export function inspectBashCommand(command: string): WaitGuardVerdict {
   let match: RegExpExecArray | null;
   while ((match = LOOP_RE.exec(trimmed)) !== null) {
     const keyword = match[1] as 'until' | 'while';
-    const cond = match[2];
-    const body = match[3];
+    const cond = match[2] ?? '';
+    const body = match[3] ?? '';
 
     // sleep を伴わないループ（busy-wait 等）は、この検出器が弾く対象の形
     // ではない（下の doc 冒頭「していないこと」）。

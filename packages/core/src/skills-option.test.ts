@@ -61,6 +61,7 @@ function managerOptions(): Options {
     onUserPromptSubmit: noopHook,
     onSubagentStop: noopHook,
     onStop: noopHook,
+    onPreToolUse: noopHook,
   });
 }
 

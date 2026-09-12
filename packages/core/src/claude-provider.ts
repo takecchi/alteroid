@@ -275,6 +275,22 @@ export interface ManagerSessionOptionsRequest {
    * の doc を見よ。
    */
   onStop: HookCallback;
+  /**
+   * **上の5本と違い、これだけが実際にブロックする**（#894 段1・案(A)）。
+   *
+   * `Bash` へ渡す `command` が「無限に待つだけの形」
+   * （`bash-wait-guard.ts` の `inspectBashCommand`）だったら、SDK の型定義
+   * （逐語。`PreToolUseHookSpecificOutput` の doc、`sdk.d.ts`）が持つ
+   * `permissionDecision: 'deny'` でツール実行そのものを止める:
+   *
+   * [sdk-verbatim PreToolUseHookSpecificOutput]
+   * > hookEventName: 'PreToolUse'; permissionDecision?: 'allow' | 'deny' | 'ask'; permissionDecisionReason?: string
+   *
+   * **optional にしない。理由は上の5本と同じ**（可観測性・安全弁は provider
+   * を足す側が黙って落とせない要件である）。中身は `runner.ts` の
+   * `#onPreToolUse` の doc を見よ。
+   */
+  onPreToolUse: HookCallback;
 }
 
 /** マネージャーへ渡す `Options`。組み立ての知識は `runner.ts` の旧 `#buildOptions` から移した。 */
@@ -297,6 +313,7 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     onUserPromptSubmit,
     onSubagentStop,
     onStop,
+    onPreToolUse,
   } = request;
 
   return {
@@ -351,6 +368,10 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     ...(spawnClaudeCodeProcess === undefined ? {} : { spawnClaudeCodeProcess }),
     canUseTool,
     hooks: {
+      // **ブロックする唯一のフック**（#894 段1・案(A)）。`Bash` 以外は
+      // `#onPreToolUse` の内側で素通しする。理由は `runner.ts` の
+      // `#onPreToolUse` の doc を見よ。
+      PreToolUse: [{ hooks: [onPreToolUse] }],
       PostToolUse: [{ hooks: [onPostToolUse] }],
       PreCompact: [{ hooks: [onPreCompact] }],
       // **観測専用**（`worker_wait`）。`{ continue: true }` を返すだけで何も
