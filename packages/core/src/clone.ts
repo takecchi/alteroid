@@ -65,7 +65,7 @@ import {
   type PermissionModeName,
 } from './permission-mode.js';
 import type { ProfileApplier } from './profile.js';
-import type { CredentialService } from './credential-service.js';
+import { resolveCredentialRows, type CredentialService } from './credential-service.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap } from './recent.js';
 import { describeSituation, describeSituationUnavailable } from './situation.js';
@@ -736,6 +736,11 @@ export interface CloneOptions {
    * 理由）。ここに渡すのは、再接続時の降ろし直しがマネージャーのプールを通る
    * ためである——runner は記憶ストアを読めないので、降ろすのはデーモンの責任
    * である。
+   *
+   * **クローン自身も読む**（2026-09-12。`#childEnv()` の `#vaultCredentialOverlay`）
+   * ——`vaultSnapshot()` 経由で正本の同期の写しを覗き、マネージャー側の
+   * `effective()` と同じ解決（`resolveCredentialRows`）に通す。渡さなければ
+   * 正本を素通りし、変更前の `#childEnv()` と同じ挙動になる。
    */
   credentialService?: CredentialService;
   /**
@@ -1603,6 +1608,16 @@ class Clone implements CloneHost {
   readonly #rateLimits = new Map<string, RateLimitFacts>();
   readonly #profile: ProfileApplier | undefined;
   readonly #profileService: ProfileService | undefined;
+  /**
+   * マネージャーへ降ろす環境変数（名前→値）の1本道。**`#childEnv()` が正本を
+   * 同期で覗くための唯一の窓**（`CredentialService.vaultSnapshot()`）。
+   *
+   * このクローン自身が置いて配る操作（`apply` / `syncRunner`）に使うのでは
+   * ない——それは `createManagerPool` へ渡した同じインスタンスの役目である
+   * （`this.#managers` の構築を見ること）。ここに持つのは読み出し専用の窓
+   * だけである。
+   */
+  readonly #credentialService: CredentialService | undefined;
   readonly #accountUsage: (() => AccountUsageState) | undefined;
   readonly #scheduler: (() => ScheduleStatus[]) | undefined;
   /** {@link CloneOptions.redeliveryGate}。`undefined` なら `#restoreUnread` は全件配る。 */
@@ -1658,6 +1673,7 @@ class Clone implements CloneHost {
     this.#onTokenSessionRecycled = onTokenSessionRecycled;
     this.#profile = profile;
     this.#profileService = profileService;
+    this.#credentialService = credentialService;
     this.#accountUsage = accountUsage;
     this.#scheduler = scheduler;
     this.#self = self;
@@ -6020,10 +6036,15 @@ class Clone implements CloneHost {
     // そのまま配ると人間（や回し手）が後から差し替えた鍵が永久に届かない
     // （`credentials.ts` / `runner.ts` の `#childEnv()` と同じ理由）。
     //
-    // **重ね順は runner.ts と揃えてある** ——`env` → 鍵 → プロファイル。あちらの
-    // doc が「プロファイルは鍵より後。人間が明示的に書いたほうが勝つ」と言っており、
-    // **層ごとに順序が違うと「マネージャーには回るのにクローンには回らない」
-    // （あるいは逆）が生まれる。** 規則は1つにする。
+    // **重ね順は runner.ts と揃えてある** ——`env` → 正本 → 鍵 → プロファイル。
+    // あちらの doc が「プロファイルは鍵より後。人間が明示的に書いたほうが勝つ」と
+    // 言っており、**層ごとに順序が違うと「マネージャーには回るのにクローンには
+    // 回らない」（あるいは逆）が生まれる。** 規則は1つにする。**正本の重ねを
+    // `env` の直後・鍵とプロファイルより前に置くのは、Anthropic のプールの扱い
+    // （`this.#credentials`）を1バイトも変えないためである** —— 正本の重ねは
+    // `resolveCredentialRows` が `CLAUDE_CODE_OAUTH_TOKEN` を決して含まないので
+    // （`GITHUB_CREDENTIAL_NAMES` の doc）ここに挟んでも衝突しないが、念のため
+    // プールの重ねより手前に置いて、プールの行を後勝ちのまま動かさない。
     //
     // **⚠️ この順序の帰結として、プロファイルが鍵と同じ名前を宣言していると
     // 鍵が黙って上書きされる。** 塞ぐのは順序ではなく検出のほうである
@@ -6033,9 +6054,54 @@ class Clone implements CloneHost {
     this.#sessionTokenIdentity = this.#tokenIdentity?.();
     return {
       ...this.#env,
+      ...this.#vaultCredentialOverlay(),
       ...(this.#credentials?.() ?? {}),
       ...(this.#profile?.env() ?? {}),
     };
+  }
+
+  /**
+   * 正本（`CredentialService`）を、マネージャー側（`effective()`）と**同じ
+   * 1本の解決**（`resolveCredentialRows`）へ通してから重ねる（人間の決定
+   * 2026-09-12、「梯子を1本に統一する」——Issue #865 の恒久策）。
+   *
+   * ## なぜ以前は正本を素通りしていたか
+   *
+   * `#childEnv()` は同期だが、正本（`stores.credentials`）の読み出しは
+   * 非同期である。⟹ ここで直接 `await` はできない。**同期の写し**
+   * （`CredentialService#vaultSnapshot()`）を経由することで、この制約の
+   * 中で正本を覗く。
+   *
+   * ## `credentialService` を渡さなかったら
+   *
+   * `[]` を正本として解決する——`resolveCredentialRows([], this.#env)` は
+   * 「正本に何も無い」場合と同じ形になり、**変更前の `#childEnv()`**
+   * （`env` → 鍵 → プロファイルだけ）とちょうど同じ集合を返す。**既定の
+   * 構成の挙動を変えない**（`CloneOptions.credentials` の同じ doc と同じ
+   * 約束）。
+   *
+   * ## 写しがまだ一度も読めていないとき（起動直後の窓）
+   *
+   * 同じく `[]` として扱われる——`vaultSnapshot()` の doc が言うとおり、
+   * これは退行ではない。**痩せるのは「正本にしか無い名前」だけで、それは
+   * この変更より前からクローンに届いていなかった名前である。** GitHub の
+   * 名前（`GITHUB_CREDENTIAL_NAMES`）で器の env が非空なら、この窓の間も
+   * 変わらず `this.#env` の値が届く（`resolveCredentialRows` がその名前を
+   * 器の env から出す）。
+   *
+   * ## 範囲が広がる副作用
+   *
+   * **正本にしか無い任意の名前（GitHub 以外。PR #825）も、初めてクローンへ
+   * 届くようになる。** 以前はマネージャーだけが正本を読んでいた
+   * （`effective()`）ので、クローンには一切届いていなかった。これは能力の
+   * 削除ではなく追加であり、north_star が求める「クローンは道具を全部持つ」
+   * （地雷表）にむしろ沿う——マネージャーが読める正本を、その代理である
+   * クローンが読めないほうが不自然である。
+   */
+  #vaultCredentialOverlay(): Record<string, string> {
+    const rows = this.#credentialService?.vaultSnapshot() ?? [];
+    const resolved = resolveCredentialRows(rows, this.#env);
+    return Object.fromEntries(resolved.map((row) => [row.name, row.value]));
   }
 
   /**
