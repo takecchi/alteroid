@@ -1727,9 +1727,7 @@ describe('excludeCitationScopeSelf / collectWidenedLineNumberCitations（合成 
         text: '生ログの1行: scripts/check-tracked-nul-bytes.test.ts:43 it.skip',
       },
     ];
-    const resolve = buildBasenameAwareRepoFileResolver([
-      'scripts/check-tracked-nul-bytes.test.ts',
-    ]);
+    const resolve = buildBasenameAwareRepoFileResolver(['scripts/check-tracked-nul-bytes.test.ts']);
     const skipped = CAPTURED_OUTPUT_NON_CITATIONS.map((e) => ({ file: e.file, token: e.token }));
     expect(collectWidenedLineNumberCitations(entries, resolve, skipped)).toEqual([]);
     // skipped を渡さなければ検出されること自体は確認しておく（skip の効果が
