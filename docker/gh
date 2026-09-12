@@ -1,0 +1,134 @@
+#!/bin/sh
+# `gh` の入口（`/usr/local/bin/gh`）。**素の `gh`（`/usr/bin/gh`）を隠すためではなく、
+# 鍵の読み場所を1つ挟むためのシムだった**（元の版。理由は下の3段落）。
+#
+# **このファイルはもともと Dockerfile に `printf` で焼かれていた。** 独立ファイルへ
+# 出したのは、下に足した「release-prod の起動を止める門」に歯（`docker/gh.test.ts`）を
+# 書くためである（Dockerfile の中の文字列には歯を掛けにくい）。中身は移しただけで、
+# 削った行は無い。
+#
+# 鍵は毎回ファイルから読む（走行中の差し替えを届かせるため）。
+# **扱う鍵ぜんぶを読む。** 片方だけ読むと「回せる」と言いながら回らない鍵ができる。
+set -eu
+
+d="${ALTEROID_CREDENTIAL_DIR:-/run/alteroid/credentials}"
+for n in GH_TOKEN GITHUB_TOKEN; do
+  eval "f=\${ALTEROID_${n}_FILE:-$d/$n}"
+  [ -r "$f" ] || continue
+  t="$(cat "$f")"
+  # 空を export すると「鍵が無い」より悪い（hosts.yml も無視される）
+  [ -n "$t" ] || continue
+  eval "$n=\$t"; export "$n"
+done
+# 実行環境プロファイル（人間の .zprofile 相当）も読む。**鍵より後**に読むのは、
+# 人間が明示的に書いたほうを勝たせるためである（`profile.ts` と同じ順序）。
+# Bash 経由なら BASH_ENV で既に読まれているので、番人が二度読みを止める。
+p="${ALTEROID_PROFILE_FILE:-/run/alteroid/profile/profile.sh}"
+# 本文の標準出力は stderr へ寄せる（gh の出力に混ぜない）。
+if [ -r "$p" ]; then . "$p" >&2 || true; fi
+
+# **本物の gh。** テストで差し替えられるように変数へ出す（既定はこれまでどおり
+# `/usr/bin/gh` 決め打ち。本番の挙動は1文字も変えていない）。
+REAL_GH="${ALTEROID_GH_REAL_BIN:-/usr/bin/gh}"
+
+# --- release-prod 起動の門（ここから） -------------------------------------
+#
+# ⚠️ **これは守りではなく見分けである。** 硬い境界（誰が push できるかそのものを
+# 縛るもの）は `release/prod` の ruleset 側に置く判断で、まだ設定していない
+# （依頼者かリポジトリのオーナーが決める）。ここにあるのは、それとは別の
+# 「委譲した層（マネージャー・作業者）が `gh` 経由でうっかり／意図して
+# release-prod を起動しない」ための緩和であり、**迂回できる**:
+#
+#   - `curl` で REST を直に叩けば、この門は無い（`gh` を経由しないため）
+#   - `git push origin main:release/prod` も同じ理由で無い
+#   - `gh api .../actions/workflows/<数値ID>/dispatches` のように、workflow を
+#     ファイル名ではなく**数値の workflow_id で指定**すると、下の判定は
+#     名前（`release-prod` という文字列）でしか見ていないので素通りする
+#   - `gh run rerun <過去の release-prod の run-id>` も、ここでは判定していない
+#     （`checkout` の `ref: main` はブランチ名なので、rerun 時点の main 先端を
+#     取り直す＝新規の起動とほぼ同じ効果になりうるが、対応は見送った。
+#     理由は依頼者への報告に書いてある）
+#
+# **見分けの根拠は呼び出し主体の uid である。** マネージャー・作業者は runner の
+# 中で `ALTEROID_RUNNER_CHILD_UID`（既定 1001）として起こされる子プロセスで
+# あり、クローンはデーモンの中で `node`（既定 uid 1000）として走る。**同じ
+# イメージ・同じこのシムを両方の器が持つ**ので、クローンの手動配備まで
+# 塞がないよう、ここで層を見分ける。`ALTEROID_RUNNER_CHILD_UID` という値
+# そのものは両方の器に ENV として焼かれているが、実際にその uid で「動いて
+# いる」のは runner に起こされた子（マネージャー・作業者）だけである。
+#
+# **`ALTEROID_RUNNER_CHILD_UID` が読めない／空のときは門を掛けない**（見分けが
+# つかない側に倒す。fail-open）。この門は「迂回可能な緩和」であって、無いと
+# 困る境界ではないので、見分けを間違えて人間やクローンを止めるより、見分けが
+# つかないときは何もしない方を選んである。
+
+__alteroid_gh_gate_should_block() {
+  # $@ は `gh` に渡ったのと同じ引数列（`gh` 自身の名前は含まない）。
+
+  # 1. `gh workflow run ... release-prod ...`
+  #
+  # **トークンを1つずつ見る（部分文字列の連結ではない）。** `*' workflow '*' run '*`
+  # のような glob だと、"workflow" と "run" の間の空白1つを両方の `' … '` が
+  # 取り合って一致しない（`docker/gh.test.ts` の回帰テストが押さえている実際の
+  # バグ）。トークン単位の比較ならこの重なりは起きない。
+  __wf_prev=''
+  __wf_run_seen=0
+  __wf_release_prod_seen=0
+  for __a in "$@"; do
+    __al=$(printf '%s' "$__a" | tr '[:upper:]' '[:lower:]')
+    case "$__al" in
+      *'release-prod'*|*'release/prod'*) __wf_release_prod_seen=1 ;;
+    esac
+    if [ "$__wf_prev" = 'workflow' ] && [ "$__al" = 'run' ]; then
+      __wf_run_seen=1
+    fi
+    __wf_prev="$__al"
+  done
+  if [ "$__wf_run_seen" = 1 ] && [ "$__wf_release_prod_seen" = 1 ]; then
+    return 0
+  fi
+
+  # 2. `gh api ... /actions/workflows/.../dispatches ...`（workflow_dispatch を
+  #    ファイル名で指定した場合だけを見分ける。数値 ID は上の既知の抜け道）
+  __joined=" $* "
+  __lower=$(printf '%s' "$__joined" | tr '[:upper:]' '[:lower:]')
+  case "$__lower" in
+    *' api '*)
+      case "$__lower" in
+        *'/dispatches'*)
+          case "$__lower" in
+            *'/actions/workflows/'*)
+              case "$__lower" in
+                *'release-prod'*) return 0 ;;
+              esac
+              ;;
+          esac
+          ;;
+      esac
+      ;;
+  esac
+
+  return 1
+}
+
+__alteroid_gh_gate_actor_is_runner_child() {
+  child_uid="${ALTEROID_RUNNER_CHILD_UID:-}"
+  [ -n "$child_uid" ] || return 1
+  [ "$(id -u)" = "$child_uid" ]
+}
+
+if __alteroid_gh_gate_actor_is_runner_child && __alteroid_gh_gate_should_block "$@"; then
+  cat >&2 <<'EOF'
+alteroid: gh 経由での release-prod（本番デプロイ）の起動をここで止めた。
+  対象: マネージャー・作業者の層（uid が ALTEROID_RUNNER_CHILD_UID と一致）。
+  クローンや人間の直接操作はここに当たらない。
+  これは「起動できないこと」の証明ではなく緩和である。既知の抜け道
+  （curl で REST を直に叩く／git push origin main:release/prod／workflow を
+  数値 ID で指定／gh run rerun）はこの門の対象外——docker/gh のコメントに
+  書いてある。
+EOF
+  exit 1
+fi
+# --- release-prod 起動の門（ここまで） -------------------------------------
+
+exec "$REAL_GH" "$@"
