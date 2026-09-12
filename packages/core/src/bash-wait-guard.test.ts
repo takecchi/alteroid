@@ -108,6 +108,20 @@ describe('inspectBashCommand — 弾いてはいけないもの（有界と読�
     expect(verdict.blocked).toBe(false);
   });
 
+  // ⭐ #894 段2で直した誤爆の回帰歯。逐語は bash-wait-guard.ts の doc
+  // 「`do` / `done` は『コマンドの位置に在るとき』だけ終端と見なす」に在る。
+  // 以前はこの入力を「有界なのに弾く」形で誤爆していた（`/tmp/done` の
+  // `done` を本物の `done` と取り違え、`break` を読む前に本体を打ち切って
+  // いた）。前任者はこの実例のパス名を `/tmp/finished.flag` へ避けて回避
+  // したが、それは検出器の正しさとは無関係に緑にしただけだった。この歯は
+  // 避けずに元の実例そのものを歯として戻す。
+  it('本体に break が在れば通す（パス名が done を含んでいても誤爆しない）', () => {
+    const verdict = inspectBashCommand(
+      'while true; do sleep 1; if [ -f /tmp/done ]; then break; fi; done',
+    );
+    expect(verdict.blocked).toBe(false);
+  });
+
   it('ループが無ければ通す（gh run watch のような自分で終わる呼び出し）', () => {
     const verdict = inspectBashCommand('gh run watch 12345 --exit-status');
     expect(verdict.blocked).toBe(false);
