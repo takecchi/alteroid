@@ -4,7 +4,7 @@ import { excerptLine } from './excerpt.js';
 // `describeSessionMissingKind` の doc に在る。
 import type { ManagerAwaitingBackground, SessionMissingKind } from './manager.js';
 import { describeScheduleSpec } from './schedule.js';
-import type { JobStatus, JournalEntry, PendingApproval } from './schema.js';
+import type { Job, JobStatus, JournalEntry, PendingApproval } from './schema.js';
 import type { Stores } from './store.js';
 import { formatUsd, isCloneActor, summarizeUsage, usageDate } from './usage.js';
 
@@ -123,6 +123,48 @@ function describeLiveState(status: JobStatus, live: boolean | undefined): string
   if (live === true) return status;
   if (live === false) return `${status}/セッション切断`;
   return `${status}/セッション不明`;
+}
+
+/**
+ * 日報の「マネージャー」節に足す、`job.lastFailure`（`{ code, via, at }`）の
+ * 1行（Issue #714 の3面目）。
+ *
+ * **台帳には前から在った。日報の面だけが読んでいなかった。** `manager_list` /
+ * `manager_report`（`tools.ts` の `describeManagerFailure`）は既にこの欄を
+ * 出しているが、日報はここまで `job.lastReport` しか見ておらず、直近のターンが
+ * 報告ではなく失敗で終わっていても日報の文面に何も現れなかった（north_star
+ * 禁止1——人間・他の面にできることがこの面でできないならバグ）。
+ *
+ * **`describeManagerFailure` をそのまま呼ばない。** あちらは200文字を超える
+ * 定型文（次の一手の注意書きまで含む）で、`manager_list` の1エントリ用に
+ * 作られている。日報はマネージャー1本につき最大 {@link MAX_ITEMS}（15）本を
+ * 並べる面なので、そのまま使うと1節だけで3,000文字級になり、この節の後ろに
+ * 続く節（決めたこと・エスカレーション・使った分…）が
+ * `PROMPT_CHARACTER_BUDGET`（`prompt.ts`）の tail-cut で押し出される
+ * （このファイル冒頭 `isManagerInFlight` の doc が記録している、`lost` を
+ * 誤って第1群へ混ぜたときと同じ形の事故——**枠を共有する節を1つ膨らませると、
+ * 別の節が黙って消える**）。**だから日報側は短い1行に留め、全文と次の一手は
+ * `manager_list` / `manager_report` へ案内する。** `omitted()` が他の節でも
+ * 同じ形（`manager_list` で状態を見る）で案内しているのに揃えてある。
+ *
+ * **`code` / `via` は `brief()` で軽く縛る。** `schema.ts` の `lastFailure` は
+ * SDK の語をそのまま持つ（`z.string()` に長さの上限は無い）——通常は
+ * `billing_error` のような短い定数だが、`code`/`via` は SDK 側の値で
+ * こちらが決められない。他の外部由来の文字列（`request` / `lastReport` /
+ * `decision.grounds` など）と同じく、縛らずに出すと worst case が際限なく
+ * 伸びる（`prompt.ts` の `PROMPT_CHARACTER_BUDGET` の doc が言う「`brief()` を
+ * 通らない列は伸び続けうる」の仲間を増やさない）。
+ *
+ * **健全な回では `''` を返し、1文字も増えない**（`describeManagerFailure` の
+ * doc と同じ約束）。
+ */
+function describeLastFailureLine(failure: Job['lastFailure']): string {
+  if (failure === undefined) return '';
+  return (
+    `\n  ⚠ 直近のターンは失敗で終わっている: ${brief(failure.code, 60)}` +
+    `（via: ${brief(failure.via, 60)}, ${failure.at}）。` +
+    '全文と次の一手は `manager_list` / `manager_report` で見る。'
+  );
 }
 
 /**
@@ -777,7 +819,8 @@ export async function buildActivityDigest(
     for (const job of shownManagers) {
       sections.push(
         `- ${job.id} [${describeManagerState(job.status, liveness?.get(job.id), awaitingBackground?.get(job.id))}] ${brief(job.request ?? job.summary)}` +
-          (job.lastReport === undefined ? '' : `\n  直近の報告: ${brief(job.lastReport)}`),
+          (job.lastReport === undefined ? '' : `\n  直近の報告: ${brief(job.lastReport)}`) +
+          describeLastFailureLine(job.lastFailure),
       );
     }
     sections.push(

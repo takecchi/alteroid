@@ -265,6 +265,69 @@ describe('活動の要約', () => {
   });
 
   /**
+   * `job.lastFailure`（`{ code, via, at }`）が日報の文面に現れることの歯
+   * （Issue #714 の3面目）。`manager_list` / `manager_report`（`tools.ts`）は
+   * 既にこの欄を出しているが、直す前の `buildActivityDigest` は
+   * `job.lastFailure` を1文字も読んでいなかった——失敗した委譲があっても
+   * 日報の文面は健全な委譲と見分けが付かなかった。
+   *
+   * **定型の飾り文（「⚠ 直近のターンは失敗で終わっている」）だけを
+   * `toContain` しない。** それだと実装が `lastFailure` を実際には読まずに
+   * 固定文言だけ出しても緑になる（偽陽性）。ここでは `code` / `via` / `at` に
+   * このテストだけが与えた値（他のどの fixture にも出てこない印）を使い、
+   * それが digest の出力へ現れることを見る——**「関数が呼ばれた」ではなく
+   * 「その理由が文面に現れる」を測る。**
+   */
+  it('直近のターンが失敗で終わっているとき、日報にその理由（code/via/at）が出る', async () => {
+    const stores = createMemoryStores();
+    const now = new Date().toISOString();
+    await stores.jobs.putJob({
+      id: 'mgr-failed-turn',
+      createdAt: now,
+      updatedAt: now,
+      status: 'done',
+      summary: '仕事',
+      request: '仕事',
+      lastFailure: {
+        code: 'sentinel-code-9f2a71',
+        via: 'sentinel-via-7c1b44',
+        at: '2026-09-01T00:00:00.000Z',
+      },
+    });
+
+    const digest = await buildActivityDigest(stores, { since: new Date(Date.now() - 60_000) });
+
+    // まずマネージャーの行そのものを切り出す（他の節に偶然同じ印が出ていない
+    // ことを確かめる意図もある）。
+    const start = digest.indexOf('mgr-failed-turn');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const block = digest.slice(start);
+    expect(block).toContain('sentinel-code-9f2a71');
+    expect(block).toContain('sentinel-via-7c1b44');
+    expect(block).toContain('2026-09-01T00:00:00.000Z');
+    // digest 全体でも印が1箇所にしか出ていないこと（他の節から漏れ入っていない）。
+    expect(digest.split('sentinel-code-9f2a71')).toHaveLength(2);
+  });
+
+  it('直近のターンが報告で終わっている（lastFailure が無い）ときは、失敗の一行が出ない', async () => {
+    const stores = createMemoryStores();
+    const now = new Date().toISOString();
+    await stores.jobs.putJob({
+      id: 'mgr-healthy-turn',
+      createdAt: now,
+      updatedAt: now,
+      status: 'done',
+      summary: '仕事',
+      request: '仕事',
+      lastReport: '完了した',
+    });
+
+    const digest = await buildActivityDigest(stores, { since: new Date(Date.now() - 60_000) });
+
+    expect(digest).not.toContain('直近のターンは失敗で終わっている');
+  });
+
+  /**
    * `live`（＝いま話しかけられるか）が要約の側で潰れていた実害そのものを歯にする
    * （#5243d633）。
    *
@@ -1428,7 +1491,11 @@ describe('digest 全体の大きさを測る歯（#414）', () => {
       });
     }
 
-    // マネージャー。
+    // マネージャー。**全件に `lastFailure` を持たせる**（Issue #714 3面目）。
+    // これが無いと worst case が「日報が lastFailure を読んで1行足す」ぶんの
+    // 伸びを測らないまま固定されてしまう——実際、この行を足す前は
+    // `lastFailure` を1件もセットしておらず、`describeLastFailureLine`
+    // （`digest.ts`）を足しただけではこの it は1文字も動かなかった。
     for (let i = 0; i < COUNT; i += 1) {
       await stores.jobs.putJob({
         id: `mgr-worst-${i}`,
@@ -1438,6 +1505,11 @@ describe('digest 全体の大きさを測る歯（#414）', () => {
         summary: `仕事 ${i}`,
         request: `依頼本文 ${i} ${long(300)}`,
         lastReport: `直近の報告 ${i} ${long(300)}`,
+        lastFailure: {
+          code: `billing_error-${i}-${long(20)}`,
+          via: `stream_event-${i}-${long(20)}`,
+          at: now,
+        },
       });
     }
 
@@ -1658,6 +1730,16 @@ describe('digest 全体の大きさを測る歯（#414）', () => {
    * の `process.stderr.write` の生出力）。そこへ約 11% の余裕を乗せて
    * 47,000 とした。余裕を大きく取ると「1節増える」程度の変化を吸収してしまい、
    * この歯が育ったことに気づけなくなる（PR 本文の要件——余裕は取りすぎない）。
+   *
+   * **2026-09-12 追記（Issue #714 3面目）。** マネージャー節の fixture に
+   * `lastFailure` を足した（`digest.ts` の `describeLastFailureLine` が
+   * 読むようになった欄——直す前は1件もセットしておらず、この歯が実際の
+   * worst case を測れていなかった）。この追記後の実測は **45,389 文字**
+   * （同じく `process.stderr.write` の生出力）で、47,000 の枠にはまだ収まる
+   * （余裕 1,611 文字）。**予算そのものは上げていない**——収まっている間は
+   * 上げる理由が無い（`prompt.ts` の `PROMPT_CHARACTER_BUDGET` との関係は
+   * そちらのファイルを参照。今回の追記でこの digest 側の枠も
+   * `PROMPT_CHARACTER_BUDGET` 側の枠も、どちらも超えていない）。
    */
   const CHARACTER_BUDGET = 47_000;
 
