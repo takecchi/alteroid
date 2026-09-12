@@ -101,6 +101,22 @@ import type { ManagerSummary } from './manager.js';
  */
 export interface ManagerPosition {
   rank: 0 | 1 | 2;
+  /**
+   * 群（`rank`）の**中**の副順位（Issue #857。`digest.ts` の
+   * {@link JudgementRank}）。**小さいほど先に出る。**
+   *
+   * **群の境界（0/1/2）は1バイトも動かしていない。** 挟んだのは群の中だけで、
+   * 軸は「依頼者が何を知らないか」である——`none`（終端までに本文が1文字も
+   * 届いていない）→ `failure-wrapped`（届いているのは包まれたエラー文）→
+   * `delivered`（本文は届いている）。分類の対象外（`running` /
+   * `waiting_human` / `done` / `stopped`）は
+   * `JUDGEMENT_RANK_NOT_APPLICABLE` で同順に落ちるので、**対象外どうしの
+   * 相対順序は `startedAt` のまま変わらない**（あちらの doc）。
+   *
+   * ⟹ 群1（`lost`）の中も、群2（`failed` を含む終端群）の中も、
+   * **依頼者が何も知らない委譲が先に出る。**
+   */
+  judgementRank: 0 | 1 | 2;
   /** `ManagerSummary.startedAt`（降順で比較する）。 */
   startedAt: string;
   managerId: string;
@@ -117,6 +133,9 @@ export interface ManagerPosition {
  */
 export function compareManagerPosition(a: ManagerPosition, b: ManagerPosition): number {
   if (a.rank !== b.rank) return a.rank - b.rank;
+  // **副順位は群の中だけに効く（Issue #857）。** `rank` を先に比べているので、
+  // 群の境界（#688 の3群）はこの行が何を返しても動かない。
+  if (a.judgementRank !== b.judgementRank) return a.judgementRank - b.judgementRank;
   if (a.startedAt !== b.startedAt) return a.startedAt < b.startedAt ? 1 : -1;
   if (a.managerId !== b.managerId) return a.managerId < b.managerId ? -1 : 1;
   return 0;
@@ -124,6 +143,24 @@ export function compareManagerPosition(a: ManagerPosition, b: ManagerPosition): 
 
 const managerCursorSchema = z.object({
   rank: z.union([z.literal(0), z.literal(1), z.literal(2)]),
+  /**
+   * 副順位（Issue #857）。**`.default(0)` を付けてある。**
+   *
+   * この欄を足す前に発行済みの cursor はこの欄を持たない——無条件の必須に
+   * すると、それらが一斉に `malformed` へ化ける（このファイル冒頭の doc
+   * 「`.default()` は使わない——ただし将来欄を足すときは要注意」が指して
+   * いる、まさにその場面である。`commitment-cursor.ts` の `order` 欄と
+   * 同じ理由）。
+   *
+   * **既定を `0` にした理由。** 古い錨は自分の副順位を知らないので、どの値を
+   * 入れても正しくはならない——選べるのは**壊れ方**だけである。`0`（最小）を
+   * 入れると、同じ `rank` の副順位 1 / 2 の行が pivot より後ろと判定され、
+   * **既に見た行をもう一度出す**。`2` を入れると逆に**間の行を飛ばす**。
+   * ⟹ 繰り返す側を選んだ。飛ばすと到達できない委譲が生まれる（north_star
+   * 禁止2。このファイルの「実在検査はしない」の doc も、飛ばす側を実害として
+   * 書いている）。
+   */
+  judgementRank: z.union([z.literal(0), z.literal(1), z.literal(2)]).default(0),
   startedAt: z.string().min(1),
   managerId: z.string().min(1),
   /** 絞っていなければ `null`。絞っていれば正規化済み（ソート済み）の配列。 */

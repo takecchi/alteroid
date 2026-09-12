@@ -53,3 +53,32 @@ export function formatOriginMarker(origin: string): string {
 // **`CLONE_ACTOR_ID` はここでは定義も再輸出もしない。** 呼び出し側
 // （`prompt.ts`）は `usage.ts` から直接 import すること — 出所を1本に保つ
 // （このファイルが持つのは刻印の形だけで、値の語彙は台帳側が持つ）。
+
+/**
+ * 刻印が本文へ入り始めた境界時刻（Issue #857）。
+ *
+ * **`scripts/check-pr-origin-core.mjs` の `ORIGIN_GATE_SINCE` と同じ値・同じ名前
+ * である。** 名前をわざと揃えてあるのは、片方を `grep -rn ORIGIN_GATE_SINCE` した
+ * 者が必ずもう片方に当たるようにするためである。**値の正本はあちら側の宣言**
+ * （境界をいつから効かせるかは人間の判断であって、こちらが測り直す性質のもので
+ * はない。理由の全文はあちらの doc に在る）。
+ *
+ * **なぜ2箇所に在るのか（コピーではなく、写しであると名乗る）。** あちらは
+ * `check-*-core.mjs` の約束で**依存を1本も持てない**（import 文が0本）ので、
+ * TypeScript のこのファイルを読めない。逆にこちら（`packages/core` の中から
+ * 読まれる `digest.ts`）が `scripts/` の素の `.mjs` を import すると、
+ * パッケージの境界と `dist/` の build を跨ぐことになる。⟹ **写しを置くしかない。**
+ * だから「2箇所に同じ値が在って誰も見張っていない」状態を作らないための歯を
+ * 添えてある——`scripts/check-pr-origin.test.ts` の
+ * 「刻印の境界時刻は2実装で同じ値である（#857）」が、両側を import して
+ * 突き合わせる（`mutate-core-strip-ansi.test.ts` が素の `.mjs` を
+ * `@ts-expect-error` 付きで読んで2実装を見張っているのと同じ形）。
+ *
+ * **この値が答えるのは「照合できる時代か」だけである。** この時刻より後に
+ * 始まった委譲の PR / Issue には刻印が入りうる（＝ id で引ける）が、
+ * **引けたかどうかと成果が在るかどうかは別の話である**——刻印を持たない成果
+ * （枝だけ・コミットだけ）や、そもそも PR を作らない依頼（調査・レビュー）が
+ * 実在する（Issue #857 の実例3）。字面の側（`digest.ts` の
+ * `describeUnobservedOutcome`）がそれを毎回名乗る。
+ */
+export const ORIGIN_GATE_SINCE = '2026-09-11T20:00:00Z';

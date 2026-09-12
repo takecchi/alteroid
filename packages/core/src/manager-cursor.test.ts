@@ -51,13 +51,27 @@ function positionOf(entry: ManagerSummary): ManagerPosition {
       : entry.status === 'lost'
         ? 1
         : 2;
-  return { rank, startedAt: entry.startedAt, managerId: entry.managerId };
+  // **副順位はこの足場では常に同値にする（Issue #857）。** ここで測っているのは
+  // `rank` / `startedAt` / `managerId` の3つの比較であって、副順位ではない
+  // ——同値にしておけば `compareManagerPosition` は次のキーへ落ちるので、
+  // この節の測定条件は1バイトも変わらない。
+  return { rank, judgementRank: 0, startedAt: entry.startedAt, managerId: entry.managerId };
 }
 
 describe('compareManagerPosition（部品）', () => {
   it('rank が違えば rank の昇順（0 が先）', () => {
-    const a: ManagerPosition = { rank: 0, startedAt: '2026-01-01T00:00:00.000Z', managerId: 'z' };
-    const b: ManagerPosition = { rank: 2, startedAt: '2026-01-01T00:00:00.000Z', managerId: 'a' };
+    const a: ManagerPosition = {
+      rank: 0,
+      judgementRank: 0,
+      startedAt: '2026-01-01T00:00:00.000Z',
+      managerId: 'z',
+    };
+    const b: ManagerPosition = {
+      rank: 2,
+      judgementRank: 0,
+      startedAt: '2026-01-01T00:00:00.000Z',
+      managerId: 'a',
+    };
     expect(compareManagerPosition(a, b)).toBeLessThan(0);
     expect(compareManagerPosition(b, a)).toBeGreaterThan(0);
   });
@@ -65,11 +79,13 @@ describe('compareManagerPosition（部品）', () => {
   it('rank が同じなら startedAt の降順（新しいほうが先）', () => {
     const newer: ManagerPosition = {
       rank: 0,
+      judgementRank: 0,
       startedAt: '2026-02-01T00:00:00.000Z',
       managerId: 'x',
     };
     const older: ManagerPosition = {
       rank: 0,
+      judgementRank: 0,
       startedAt: '2026-01-01T00:00:00.000Z',
       managerId: 'x',
     };
@@ -78,8 +94,18 @@ describe('compareManagerPosition（部品）', () => {
   });
 
   it('rank と startedAt が同値なら managerId の昇順（破れ役）', () => {
-    const a: ManagerPosition = { rank: 0, startedAt: '2026-01-01T00:00:00.000Z', managerId: 'a' };
-    const b: ManagerPosition = { rank: 0, startedAt: '2026-01-01T00:00:00.000Z', managerId: 'b' };
+    const a: ManagerPosition = {
+      rank: 0,
+      judgementRank: 0,
+      startedAt: '2026-01-01T00:00:00.000Z',
+      managerId: 'a',
+    };
+    const b: ManagerPosition = {
+      rank: 0,
+      judgementRank: 0,
+      startedAt: '2026-01-01T00:00:00.000Z',
+      managerId: 'b',
+    };
     expect(compareManagerPosition(a, b)).toBeLessThan(0);
     expect(compareManagerPosition(b, a)).toBeGreaterThan(0);
     expect(compareManagerPosition(a, a)).toBe(0);
@@ -111,6 +137,7 @@ describe('encodeManagerCursor / decodeManagerCursor（部品）', () => {
   it('符号化・復号の往復で中身が保たれる', () => {
     const cursor = {
       rank: 0 as const,
+      judgementRank: 0 as const,
       startedAt: '2026-01-01T00:00:00.000Z',
       managerId: 'mgr-1',
       status: null,
@@ -151,6 +178,7 @@ describe('resolveManagerCursor（分岐）', () => {
     const entries = [summary('a', 'running', '2026-01-03T00:00:00.000Z')];
     const cursor = encodeManagerCursor({
       rank: 0,
+      judgementRank: 0,
       startedAt: '2026-01-01T00:00:00.000Z',
       managerId: 'seed',
       status: ['running'],
@@ -165,6 +193,7 @@ describe('resolveManagerCursor（分岐）', () => {
     const entries = [summary('a', 'running', '2026-01-03T00:00:00.000Z')];
     const cursor = encodeManagerCursor({
       rank: 0,
+      judgementRank: 0,
       startedAt: '2026-01-01T00:00:00.000Z',
       managerId: 'seed',
       status: ['running'],
@@ -185,6 +214,7 @@ describe('resolveManagerCursor（分岐）', () => {
     ];
     const cursor = encodeManagerCursor({
       rank: 0,
+      judgementRank: 0,
       startedAt: '2026-01-04T00:00:00.000Z',
       managerId: 'mgr-run-old',
       status: null,
@@ -202,6 +232,7 @@ describe('resolveManagerCursor（分岐）', () => {
     const entries = [summary('mgr-done', 'done', '2026-01-02T00:00:00.000Z')];
     const cursor = encodeManagerCursor({
       rank: 2,
+      judgementRank: 0,
       startedAt: '2026-01-02T00:00:00.000Z',
       managerId: 'mgr-done',
       status: null,
@@ -221,6 +252,7 @@ describe('resolveManagerCursor（分岐）', () => {
     ];
     const cursor = encodeManagerCursor({
       rank: 0,
+      judgementRank: 0,
       startedAt: '2026-01-04T00:00:00.000Z',
       managerId: 'mgr-run-old',
       status: null,
