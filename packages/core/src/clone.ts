@@ -3001,6 +3001,23 @@ class Clone implements CloneHost {
    * 「もう片付いている」ではなく「いまは配る意味が無い」という一時的な判定
    * なので、受信箱の行も台帳の行も消さずに残す——次の起動で `#restoreUnread` が
    * また同じ行を拾い、その時点の状態で判定し直す。
+   *
+   * **⚠️ ただし「判定し直す」は、いまの `token-pool` の門については答えが
+   * 変わらない。** `#restoreUnread` は `#pump` の先頭で1回だけ走り、そのとき
+   * `#usageBlocked` は初期値である——この値は器を跨いで持ち越さない（宣言の
+   * 逐語 `#usageBlocked: UsageLimitNotice | null = null;`）。⟹ 門の実体
+   * （`apps/daemon/src/index.ts` の `worthDeliveringNow`。逐語
+   * `export function worthDeliveringNow(blocked: boolean): boolean`）は起動の
+   * たびに偽を返し、**器の入れ替えを跨いだ `token-pool` の合図はここで畳まれ
+   * 続け、消す経路（`#forget`）を一度も通らない。** 唯一の例外は、このループ
+   * が1件ごとに `await` するあいだに並行する `#pump` が枠に当たって
+   * `#usageBlocked` が立った窓だけである。
+   *
+   * ⟹ **欠けているのは「畳んだ側の出口」であって、この型に固有の話ではない。**
+   * 同じ形は `#restoreUnread` の `#inbox.push` の手前にも逐語で書いてある
+   * （「落とした側は誰も消さないので、起動のたびに配られて回数だけが増える」）。
+   * **Issue #783 の段1 の対象である。⛔ この便では振る舞いを1文字も変えて
+   * いない**——出口を足すかどうかは段1 の設計の合意を待つ。
    */
   async #foldGatedRedelivery(event: InboxEvent): Promise<void> {
     await this.#journalIncomingBody(event);
