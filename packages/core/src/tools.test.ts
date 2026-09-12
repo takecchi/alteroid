@@ -5817,10 +5817,13 @@ describe('クローンの道具', () => {
     expect(reply).toContain('manager_message 1');
     expect(reply).toContain('同一本文');
     expect(reply).toContain('器の入れ替え回数:');
-    expect(reply).toContain('0回（＝未配達）2');
+    expect(reply).toContain('0回＝いまの器になってから積まれた 2');
     // **#910: 古い軸名がこの面へ戻らないこと。** `manager_list` の応答は
     // クローンがこの数字を読む唯一の面である（doc は届かない）。
     expect(reply).not.toContain('配達回数');
+    // **#910 追補: `未配達` も戻らないこと。** 0 は「届いていない」ではなく
+    // 「いまの器になってから積まれ、まだ片付いていない」である（実測 2026-09-12）。
+    expect(reply).not.toContain('未配達');
     // **本文は1文字も載らない**（地雷「一覧に本文を全文で載せる」）。
     expect(reply).not.toContain('絶対に外へ出てはいけない本文XYZ');
     expect(reply).not.toContain('これも外へ出てはいけない');

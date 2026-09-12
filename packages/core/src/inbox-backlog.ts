@@ -27,11 +27,12 @@ import type { PendingInboxEvent } from './store.js';
  * - **器の入れ替え回数**（`undelivered` / `deliveredOnce` / `redelivered`）と
  *   **齢**（`ageBuckets`）: `claimPending()` の doc が言う「配達回数は器が
  *   入れ替わった回数であって処理が落ちた回数ではない」を**出力の軸名そのものへ
- *   写した**（#910。理由は {@link describeInboxBacklogBreakdown} の doc）。まだ
- *   一度も配っていないものと、器の入れ替えを跨いで残っているものを分けて見せる。
- *   **未配達は種類別にも見せる**（`undeliveredByType`）——「未配達の中に人間の
- *   依頼（`human_message`）が混ざっているか」を、種類と器の入れ替え回数の
- *   突き合わせ無しに直接言えるようにするため
+ *   写した**（#910。理由は {@link describeInboxBacklogBreakdown} の doc）。いまの
+ *   器になってから積まれたものと、器の入れ替えを跨いで残っているものを分けて
+ *   見せる（**どちらも「配られたか」は答えない。**#910 追補）。
+ *   **0回の桶は種類別にも見せる**（`undeliveredByType`）——「いまの器になって
+ *   から積まれた分に人間の依頼（`human_message`）が混ざっているか」を、種類と
+ *   器の入れ替え回数の突き合わせ無しに直接言えるようにするため
  *
  * ## 純関数である
  *
@@ -117,9 +118,14 @@ export interface InboxBacklogBreakdown {
   /** `inboxBacklogDedupeKey` で畳んだ後の件数。 */
   readonly distinct: number;
   /**
-   * `deliveries === 0`（この行が積まれてから器が一度も入れ替わっていない
-   * ＝ まだ一度も配っていない）。**出力での軸名は「器の入れ替え回数」である**
-   * （#910。{@link describeInboxBacklogBreakdown} の doc）。
+   * `deliveries === 0`。
+   *
+   * ⚠️ **「まだ配っていない」ではない**（#910 追補）。`post()` は受理した瞬間に
+   * `put()` し（`clone.ts` の `#remember`）、同時に待ち行列へも載せるので、
+   * **いまの器で積まれた行は、いま処理されている最中のものも含めて必ず 0 である。**
+   * ⟹ この数が言えるのは「**いまの器になってから積まれ、まだ片付いていない**」
+   * までである。**出力でも `未配達` とは名乗らない**
+   * （{@link describeInboxBacklogBreakdown} の doc）。
    */
   readonly undelivered: number;
   /** `deliveries === 1`（器が1回入れ替わった）。 */
@@ -131,14 +137,19 @@ export interface InboxBacklogBreakdown {
    * 残っている未読の**全行**を一緒に進めるので、待ち行列に居ただけで一度も
    * 処理されていない合図も同じだけ増える（`InboxStore.claimPending` の doc）。
    * ⟹ 出力ではこの軸を `配達回数` と名乗らない（#910）。
+   *
+   * ⚠️ **「2回以上配られた」でもない**（#910 追補）。`#restoreUnread` の門
+   * （`CloneOptions.redeliveryGate`）が畳んだ行は `#inbox.push` されない
+   * ＝ **ターンが1度も起きない**まま受信箱に残り、起動のたびにこの数だけが
+   * 増える。⟹ 名前では塞げない*推論*なので、出力では断り書きを添えている。
    */
   readonly redelivered: number;
   readonly maxDeliveries: number;
   /**
    * `undelivered`（`deliveries === 0`）の行を、種類（`InboxEvent['type']`）別に
-   * 数えたもの（#783 段0 追補——「未配達の中に人間の依頼が混ざっているか」を
+   * 数えたもの（#783 段0 追補——「いまの器になってから積まれた分に人間の依頼が混ざっているか」を
    * 直接言えるようにする）。`INBOX_EVENT_TYPE_ORDER` の並びで、件数0の型は
-   * 載せない。足すと必ず `undelivered` に一致する（未配達行は必ずどれか1つの
+   * 載せない。足すと必ず `undelivered` に一致する（0回の行は必ずどれか1つの
    * 型に分類できるため）。
    */
   readonly undeliveredByType: readonly {
@@ -434,9 +445,12 @@ export function summarizeInboxBacklog(
  * しまい、実際には打ち切られている可能性（測っていない）と区別できなくなる
  * ため（{@link InboxBacklogBreakdown} の doc の「⚠️ #818 の欠陥と直し方」）。
  *
- * **未配達は種類別の内訳も出す**（`undeliveredByType`）——「未配達の中に
- * 人間の依頼（`human_message`）が混ざっているか」を、種類と器の入れ替え回数の
- * 2つの一覧を突き合わせずに直接言えるようにするため（#783 段0 追補）。
+ * **0回の桶は種類別の内訳も出す**（`undeliveredByType`）——「いまの器になって
+ * から積まれた分に人間の依頼（`human_message`）が混ざっているか」を、種類と
+ * 器の入れ替え回数の2つの一覧を突き合わせずに直接言えるようにするため
+ * （#783 段0 追補）。**この行が、実際にいちばん行動へ効く**——クローンは
+ * `manager_message 25`（受け取っていない報告が25本）をここから読む
+ * （実測 2026-09-12）。
  *
  * ## ⚠️ #910: 出力の軸名は「配達回数」ではない。**改名であって、断り書きではない**
  *
@@ -474,6 +488,39 @@ export function summarizeInboxBacklog(
  * 正しい**ので、#700 / #708 が採った「名前は保って修飾を足す」が正しい。ここは
  * その条件が起きえない側である。
  *
+ * ## ⚠️ #910 追補: **`未配達` も同じ理由で名前が間違っていた**（実測 2026-09-12、3回目）
+ *
+ * 上の改名を最初に入れたとき、0の桶だけは `0回（＝未配達）` と旧い語を残した
+ * ——「`deliveries === 0` なら一度も配っていないのは本当だろう」と考えたからである。
+ * **現物を読むと違った。**
+ *
+ * - `post()` は受理した瞬間に `put()` する（`clone.ts` の `#remember`）ので、
+ *   **いまの器で積まれた行の `deliveries` は必ず 0 である。** 同時に
+ *   `#inbox.push` で待ち行列にも載っている ⟹ **0 は「届いていない」ではなく
+ *   「いまの器になってから積まれ、まだ片付いていない（＝いま流れている最中）」**
+ *   である。処理中のその1件も 0 で数えられる
+ * - 逆に **`2回以上` は「配られた」を意味しない。** `#restoreUnread` の門
+ *   （`CloneOptions.redeliveryGate`。#843 / #883）が畳んだ行は
+ *   **`#inbox.push` されない＝ターンが1度も起きない**まま、受信箱にも残り、
+ *   起動のたびに回数だけ増える（逐語は
+ *   `grep -Fn -- '**`#inbox.push` をしない ＝ ターンを起こさない。**' packages/core/src/clone.ts`）
+ *
+ * **実測 2026-09-12（クローン自身の観測）**: 未読 4283 件の内訳を読んだクローンが
+ * 「`2回以上 4249` ＝ 既に配達済み＝自分が読んだ上で処理していないだけ」「`未配達 30`
+ * ＝ 届いていない＝異常」と読み、**両方とも逆だった。** そしてこのとき
+ * `齢: 1時間未満 21 / 1〜6時間 9` の和がちょうど 30 で、**0 の桶は「いまの器の
+ * 起動より後に積まれた行」と完全に一致していた。**
+ *
+ * ⟹ **`未配達` を出力から外し、0 の桶は「いまの器になってから積まれた」と名乗る。**
+ * `2回以上` の側は名前では塞げない（`器の入れ替え回数` は正しく数えている——
+ * 誤りは「⟹ だから配られたはずだ」という*推論*の側にある）ので、`distinct` と
+ * 同じ扱い、すなわち**断り書き**にした。
+ *
+ * **欄の名前（`undelivered` / `undeliveredByType`）はそのままにしてある。**
+ * 直すのは出力の語であって、内部の識別子ではない——実装者はこの doc を読む経路を
+ * 持っており（#910 が言う「読み手が違う」の裏側）、識別子まで一緒に変えると
+ * 差分が本題から離れる。**この doc がその対応表である。**
+ *
  * **`distinct` の断り書きは1行に畳んである。** 偏りの向きは2つあり
  * （区切りの衝突で小さく出る／本文へ畳んだ件数を焼き込む合図で大きく出る。
  * {@link inboxBacklogDedupeKey} の doc の「限界」）、**片方だけ書くと新しい誤読を
@@ -503,8 +550,8 @@ export function describeInboxBacklogBreakdown(b: InboxBacklogBreakdown): string 
     `種類: ${byTypeText}`,
     `送信元（上位5件。source/managerIdを持つ型のみ。溢れ ${b.bySourceOverflowKinds} 種 ${b.bySourceOverflowCount} 件 / source を言えない型 ${b.bySourceUnknownCount} 件）: ${bySourceText}`,
     `同一本文（id/at を除いた中身）を畳むと ${b.distinct} 件 ⚠ 本文が同じでも別々に起きた出来事である。この数は上下どちらへもぶれる（向きと理由は inboxBacklogDedupeKey の doc）`,
-    `器の入れ替え回数: 0回（＝未配達）${b.undelivered} / 1回 ${b.deliveredOnce} / 2回以上 ${b.redelivered}（最大 ${b.maxDeliveries}）`,
-    `未配達の内訳（種類別）: ${undeliveredByTypeText}`,
+    `器の入れ替え回数: 0回＝いまの器になってから積まれた ${b.undelivered} / 1回 ${b.deliveredOnce} / 2回以上 ${b.redelivered}（最大 ${b.maxDeliveries}）⚠ 配られた回数ではない — 門が畳んだ行はターンが1度も起きないまま数だけ増える`,
+    `いまの器になってから積まれた分（0回）の内訳（種類別）: ${undeliveredByTypeText}`,
     `齢: ${ageBucketsText}`,
   ].join('\n');
 }

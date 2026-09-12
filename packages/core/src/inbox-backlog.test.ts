@@ -675,16 +675,16 @@ describe('describeInboxBacklogBreakdown', () => {
   });
 
   /**
-   * 未配達の内訳（種類別）の行——0件のときは他の0件軸と同じ「（無し）」で
+   * 0回の桶の内訳（種類別）の行——0件のときは他の0件軸と同じ「（無し）」で
    * よい（`undelivered` 自体が0なので「測っていない」との混同が起きない）。
    */
-  it('未配達の内訳の行: 未配達が無ければ「（無し）」、在れば種類別に出る', () => {
+  it('0回の内訳の行: 0回が無ければ「（無し）」、在れば種類別に出る', () => {
     const zero = summarizeInboxBacklog(
       [row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z', 1)],
       NOW,
     );
-    expect(lineStartingWith(describeInboxBacklogBreakdown(zero), '未配達の内訳')).toBe(
-      '未配達の内訳（種類別）: （無し）',
+    expect(lineStartingWith(describeInboxBacklogBreakdown(zero), 'いまの器')).toBe(
+      'いまの器になってから積まれた分（0回）の内訳（種類別）: （無し）',
     );
 
     const some = summarizeInboxBacklog(
@@ -694,8 +694,8 @@ describe('describeInboxBacklogBreakdown', () => {
       ],
       NOW,
     );
-    expect(lineStartingWith(describeInboxBacklogBreakdown(some), '未配達の内訳')).toBe(
-      '未配達の内訳（種類別）: human_message 1 / manager_message 1',
+    expect(lineStartingWith(describeInboxBacklogBreakdown(some), 'いまの器')).toBe(
+      'いまの器になってから積まれた分（0回）の内訳（種類別）: human_message 1 / manager_message 1',
     );
   });
 
@@ -732,7 +732,7 @@ describe('describeInboxBacklogBreakdown', () => {
     );
   });
 
-  it('器の入れ替え回数の行: 軸名が「配達回数」ではなく、0回が未配達だと名乗る', () => {
+  it('器の入れ替え回数の行: 軸名が「配達回数」ではなく、0回が何を意味するかを名乗る', () => {
     const rows = [
       row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z', 0),
       row({ ...SAMPLE_EVENTS.human_message, id: 'e2' }, '2026-09-11T00:00:00.000Z', 1),
@@ -741,7 +741,8 @@ describe('describeInboxBacklogBreakdown', () => {
     ];
     const b = summarizeInboxBacklog(rows, NOW);
     expect(lineStartingWith(describeInboxBacklogBreakdown(b), '器の入れ替え回数')).toBe(
-      '器の入れ替え回数: 0回（＝未配達）1 / 1回 1 / 2回以上 2（最大 4）',
+      '器の入れ替え回数: 0回＝いまの器になってから積まれた 1 / 1回 1 / 2回以上 2（最大 4）' +
+        '⚠ 配られた回数ではない — 門が畳んだ行はターンが1度も起きないまま数だけ増える',
     );
   });
 
@@ -759,11 +760,13 @@ describe('describeInboxBacklogBreakdown', () => {
     const text = describeInboxBacklogBreakdown(summarizeInboxBacklog(rows, NOW));
 
     expect(text).not.toContain('配達回数');
-    // **「未配達」そのものは残っている**（`deliveries === 0` は実際に
-    // 「一度も配っていない」ことを言えるので、この語は嘘ではない）。
-    // 消したのは軸名としての「配達回数」だけであることを、同じ被験体で固定する。
-    expect(text).toContain('0回（＝未配達）');
-    expect(lineStartingWith(text, '未配達の内訳')).toBe('未配達の内訳（種類別）: human_message 1');
+    expect(text).toContain('0回＝いまの器になってから積まれた');
+    // ⭐ #910 追補: 旧い語（`未配達`）も出力から外した。0 は「届いていない」では
+    // なく「いまの器になってから積まれ、まだ片付いていない」である。
+    expect(text).not.toContain('未配達');
+    expect(lineStartingWith(text, 'いまの器になってから積まれた分')).toBe(
+      'いまの器になってから積まれた分（0回）の内訳（種類別）: human_message 1',
+    );
   });
 });
 
