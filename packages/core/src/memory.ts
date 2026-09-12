@@ -71,6 +71,35 @@ export interface MemoryPart {
  * 名乗ることになり、型そのものが意味を失う（`quantity.ts` モジュール
  * 冒頭の「なぜ要るか」）。
  */
+/**
+ * premise 1文書の節の目次が、1文書あたりの予算（{@link MEMORY_PROMPT_OUTLINE_BUDGET}）
+ * にどう当たっているか。`measurePremiseOutlineFit` の戻り値。
+ *
+ * ## ⭐ 崖の位置そのものである（#772）
+ *
+ * `renderPremiseOutlineOmission` が出す断り書きの逐語（「末尾 N 節は目次から
+ * 省略（全 T 節のうち先頭 S 節だけ載せた）」）を、そのまま数値として持たせた
+ * だけの型である。**式は無い**——`shown` は「目次が予算に入りきる境目」その
+ * ものであり、`rest` は「あと何節を付録へ移せば、目次の省略（＝断り書きその
+ * もの）が消えるか」そのものである。近似ではなく厳密である——落ちている
+ * `rest` 節をちょうど全部移せば、残るのは「いま `shown` に載っている節」その
+ * もので、定義上すでに予算に収まっているから外れようがない。
+ *
+ * ⚠️ **`room / 1行あたりの平均` のような式では崖に当たらない**（実測で
+ * 51.3 対 85 —— #772 の実測）。あの式が答えるのは「見出しを平均何文字まで
+ * 縮めるか」であって節数ではない。この型はその式を使わず、`fillListingBudget`
+ * が実際に何節積んだかをそのまま数える。
+ */
+export interface PremiseOutlineFit {
+  slug: string;
+  /** その文書の節の総数。 */
+  total: number;
+  /** そのうち焼き込みの目次に載った節数。**これが崖そのものである。** */
+  shown: number;
+  /** 予算に入らず落ちた節数。**これが「あと何節移せば崖に届くか」そのものである。** */
+  rest: number;
+}
+
 export interface MemoryFloor {
   /** premise のカード（要旨＋節の目次）が毎ターン焼かれる分の文字数。 */
   premiseChars: HeuristicChars;
@@ -104,6 +133,32 @@ export interface MemoryFloor {
   largestPremise: { slug: string; chars: HeuristicChars } | null;
   /** 毎ターン最も大きい indexed の1件（indexed が無ければ null）。 */
   largestIndexed: { slug: string; chars: HeuristicChars } | null;
+  /**
+   * 節の目次が1文書あたりの予算（{@link MEMORY_PROMPT_OUTLINE_BUDGET}）で
+   * **切れている** premise（切れていない文書はここに現れない）。
+   *
+   * **`demotedPremiseDocs`（束ねた蓋 {@link MEMORY_PREMISE_CARD_BUDGET} で
+   * カードごと1行に落ちた文書）は除外する。** あちらはカードそのものが
+   * 1行に潰れていて節の目次を焼いていないので、「目次が予算で切れている」と
+   * 名乗ると嘘になる——目次が「切れている」と「そもそも焼かれていない」は
+   * 別の状態であり、混ぜると「節を移せば効く」が効かない文書にまで案内を
+   * 出すことになる（#772）。
+   *
+   * ⚠️ **実費**: premise 1件につき `scanMemorySections` の呼び出しが1回増える
+   * （`measureMemoryFloor` は premise ごとに `renderPremisePart` を既に
+   * 呼んでいるので、その隣に増える形——`renderPremisePart` の内部で
+   * `scanMemorySections` を呼んでいるが、その結果はここへ渡ってこないので
+   * 使い回せない。二重に走査する）。
+   *
+   * ## なぜ値として持つか（計算し直せば要らないのでは、という問いへの答え）
+   *
+   * `describeMemoryFloor` は純粋関数で、受け取るのは `before` / `after` の
+   * `MemoryFloor` と slug だけである——**文書の本文を持っていないので、
+   * ここにある値を自分で計算し直せない。** そして `describeMemoryFloor` が
+   * 語るのは `before → after` の**差**なので、**両端の状態が要る**
+   * （`describeMemoryFloor` の doc「A/B/C」）。
+   */
+  outlineSaturatedPremise: readonly PremiseOutlineFit[];
 }
 
 // ---------------------------------------------------------------------------
@@ -1816,7 +1871,7 @@ const MEMORY_MIN_HEADING_CHARS = 3;
 /**
  * 節の目次が予算で切れたときの断り書き。**「切った」だけを名乗らない。**
  *
- * 出すのは3つである:
+ * 出すのは4つである:
  *
  * 1. 省いた件数（従来どおり）。
  * 2. ⭐ **落ちた末尾のうち直近の節を、節id つきの行そのままで名指しする**
@@ -1825,6 +1880,15 @@ const MEMORY_MIN_HEADING_CHARS = 3;
  * 3. ⭐ **何をすれば全部載るかを算術で出す**——1行の平均と、そのうち固定費
  *    （節id と `— N 文字`）が何文字か、そして見出しを平均いくつまで縮めれば
  *    予算に入るか。
+ * 4. ⭐ **数（`rest`/`shown`/`total`）が何を意味するかを1文で言う**（#772）。
+ *    1〜3 は数を出すだけで、それが「節を移すことが床にいつ効き始めるか」を
+ *    意味することを言っていなかった。**`shown` は目次が予算に入りきる境目
+ *    そのもの、`rest` は「あと何節を付録へ移せば省略（＝この断り書き自体）が
+ *    消えるか」そのものである**（近似ではなく厳密——落ちている `rest` 節を
+ *    ちょうど全部移せば、残るのは定義上すでに予算に収まっている `shown` 節
+ *    そのものだから）。⟹ 「`rest` 節を移し切るまで、毎ターンの床はほとんど
+ *    動かない」ことを1文で言う（`measurePremiseOutlineFit` の doc「崖の位置
+ *    そのものである」と同じ発見）。
  *
  * ## ⚠️ 3 は達成不能なことがある。そのときは「縮めれば載る」と言わない
  *
@@ -1838,6 +1902,15 @@ const MEMORY_MIN_HEADING_CHARS = 3;
  * 名乗らせる。** これは `ListingBudget.omitted` の「続きの取り方を書けるのは、
  * 呼び手の側にその口が実在するときだけである」を、助言の側へ当てた形である
  * ——**実行できない助言を出さない。**
+ *
+ * ## ⚠️ 4 のぶん、張り付いた文書の床は増える
+ *
+ * **この1文のぶん、張り付いた文書の床（毎ターンの焼き込み）は増える。**
+ * 隠さない——4 が出るのは断り書きそのものが描かれる回（＝この文書が
+ * 切れている回）だけなので、**張り付いていない文書ではこの断り書き自体が
+ * 描かれず、増分は 0 である。** 増える具体量は文書の見出し長・節数に依存する
+ * ので、ここではリテラルを書かない（実測した値だけを書く、という報告の作法を
+ * doc の中でも守る）。
  */
 function renderPremiseOutlineOmission(
   items: readonly string[],
@@ -1882,7 +1955,11 @@ function renderPremiseOutlineOmission(
       '⚠ この文書は大きすぎて、目次すら毎ターンの焼き込みに収まっていない。' +
       `節の目次は全 ${formatMemoryCharCount(total)} 節ぶんで ${formatMemoryCharCount(outlineChars)} 文字` +
       `（節の本文の総量ではない）——うち焼き込みに載った分 ${formatMemoryCharCount(shownChars)} 文字、` +
-      `予算に入らず省いた分 ${formatMemoryCharCount(droppedChars)} 文字。`,
+      `予算に入らず省いた分 ${formatMemoryCharCount(droppedChars)} 文字。` +
+      `⭐ 落ちている ${formatMemoryCharCount(rest)} 節をすべて移し切るまで、毎ターンの床はほとんど動かない` +
+      '——目次の費用は1文書あたりの予算に張り付いていて、節を減らしても「載る節が入れ替わる」だけ' +
+      `だからである。${formatMemoryCharCount(shown)} 節まで割り切った時点で省略が消え、この断り書きごと` +
+      '床から落ちる——そこが節の移動が床に効き始める点である。',
     '落ちた末尾のうち直近の節（節id はそのまま memory_section_read に渡せる。' +
       '**足したばかりの節はここに出る**）:',
     tail,
@@ -1955,6 +2032,31 @@ function renderPremiseCard(part: MemoryPart): string {
     '節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:',
     listing,
   ].join('\n');
+}
+
+/**
+ * premise 1文書ぶんの節の目次が、1文書あたりの予算（{@link MEMORY_PROMPT_OUTLINE_BUDGET}）に
+ * どう当たっているかを測る（#772「記憶の肥大」の続き）。
+ *
+ * **`renderPremiseCard` が `renderListing` 経由で使うのと同一の
+ * `fillListingBudget` を、同一の予算（`MEMORY_PROMPT_OUTLINE_BUDGET`）で
+ * 呼ぶ。** 数え方を2本に割らない——`measureMemoryFloor` の doc「器ごとに
+ * 別々に書いていた載せ方が実際に食い違った」と同じ理由で、目次に実際に
+ * 何節載ったかを数える場所は1つでなければならない。ここで独自にループを
+ * 書き直すと、`renderPremiseCard` の断り書きが数える `shown`/`rest` と、
+ * この関数が返す `shown`/`rest` がいつか食い違う。
+ *
+ * 節が1つも無い文書と、目次が予算に切れていない文書（`rest === 0`）は
+ * `null` を返す——**呼び手（`measureMemoryFloor`）が「切れている premise」
+ * だけを集めるための門を、ここに1つだけ置く。**
+ */
+export function measurePremiseOutlineFit(part: MemoryPart): PremiseOutlineFit | null {
+  const { sections } = scanMemorySections(part.content);
+  if (sections.length === 0) return null;
+  const items = memorySectionLines(sections);
+  const { shown, rest, total } = fillListingBudget(items, MEMORY_PROMPT_OUTLINE_BUDGET);
+  if (rest === 0) return null;
+  return { slug: part.slug, total, shown, rest };
 }
 
 /**
@@ -2775,6 +2877,17 @@ export function measureMemoryFloor(documents: readonly MemoryPart[]): MemoryFloo
     }
   }
 
+  // **束ねた蓋（`demotedPremise`）で1行に落ちた文書は除外する**——目次そのものが
+  // 焼かれていないので、「目次が予算で切れている」と名乗ると嘘になる
+  // （`MemoryFloor.outlineSaturatedPremise` の doc）。
+  const demotedSlugs = new Set(demotedPremise.map((part) => part.slug));
+  const outlineSaturatedPremise: PremiseOutlineFit[] = [];
+  for (const part of premiseParts) {
+    if (demotedSlugs.has(part.slug)) continue;
+    const fit = measurePremiseOutlineFit(part);
+    if (fit !== null) outlineSaturatedPremise.push(fit);
+  }
+
   return {
     premiseChars: heuristicChars(premiseSection.length),
     indexedChars: heuristicChars(indexedSection.length),
@@ -2786,6 +2899,7 @@ export function measureMemoryFloor(documents: readonly MemoryPart[]): MemoryFloo
     demotedPremiseDocs: demotedPremise.length,
     largestPremise,
     largestIndexed,
+    outlineSaturatedPremise,
   };
 }
 
@@ -3096,7 +3210,7 @@ function formatMemoryFloorTransition(beforeChars: number, afterChars: number): s
  * 機能を足せば全部を壊す。こちらは追加の1行として応答の末尾に足すためだけに
  * 存在する。
  *
- * 言うことは3つ:
+ * 言うことは4つ:
  * 1. 書いた文書の区分（`premise` / `fact`。書いた**後**の区分）
  * 2. 焼き込み全体の文字数が `before.totalChars` → `after.totalChars` へ
  *    どう動いたか（文字。`renderMemoryDocuments(documents).length` と一致する値。
@@ -3116,6 +3230,27 @@ function formatMemoryFloorTransition(beforeChars: number, afterChars: number): s
  *      だった）
  *    - **縮めるのに全文置換は要らないこと**と、その3手順の道具名
  *      （`memory_outline` → `memory_section_move` → `memory_frontmatter_set`）
+ * 4. **この書き込みで状態が動いた premise の、節の目次が1文書あたりの予算
+ *    （`MEMORY_PROMPT_OUTLINE_BUDGET`）に対してどの領域に居るか**（#772
+ *    「記憶の肥大」の続き）。⚠️ **対象は `input.slug` ではない**——
+ *    `before.outlineSaturatedPremise` と `after.outlineSaturatedPremise` を
+ *    premise の slug で突き合わせ、状態が変わった premise をそれ自身の
+ *    slug で名乗る（`outlineSaturationNote` の doc に理由がある）。
+ *
+ * ## ⚠️ 3 と 4 は別の蓋である。混ぜない
+ *
+ * **`demotedNote`（3の隣で先に足された、束ねた蓋 `MEMORY_PREMISE_CARD_BUDGET`
+ * の断り）と、この4つ目（1文書あたりの目次の予算 `MEMORY_PROMPT_OUTLINE_BUDGET`）
+ * は別の蓋である。** 前者はカードそのものが1行に潰れる蓋、後者はカードの中の
+ * 節の目次だけが切れる蓋——**どちらか片方だけが噛むことも、両方が同時に噛む
+ * こともある。** 両方が噛んだ回は `floorLine` に両方の断りが並ぶ。どちらの
+ * 蓋の断りかは文言そのもの（「束ねた予算」対「1文書あたりの予算」）で見分けが
+ * つくようにしてある。
+ *
+ * ⚠️ **この4つ目の行は床には乗らない。** `describeMemoryFloor` は書く4口が
+ * 応答の末尾に足す1行であって、システムプロンプトへの焼き込みではない
+ * （`renderPremiseOutlineOmission` が断り書きに足す1文――変更4――とは違い、
+ * こちらは毎ターン繰り返し焼かれるわけではなく、この応答1回にしか乗らない）。
  *
  * ⛔ 既存の語「区分が変わった」（`memory_frontmatter_set` の `kindChangeNote`）を
  * 使い回さない。`tools.test.ts` に
@@ -3136,6 +3271,96 @@ function formatMemoryFloorTransition(beforeChars: number, afterChars: number): s
  * の枝へは足さないこと。** あの枝を強くしている理由は「premise の新規作成は
  * 稀だから習慣化しない」であり、全部の枝に足すと稀ではなくなる——毎回出る側は
  * 「効かない機構」のままにしておく（直上の限界のとおり）。
+ *
+ * ## `outlineSaturationNote`（4つ目）— なぜ `input.slug` では引かないか
+ *
+ * ⚠️ **`input.slug` はこの note の対象を選ぶのに使わない。** `slug` は
+ * 「書いた文書」を指すが、`memory_section_move` は**移し先**（`toSlug`）の
+ * 視点でこれを渡す（`tools.ts` の「床は『移した先』の視点で言う」）。
+ * ⟹ 節の移動元（予算に張り付いていた当の文書であることが多い——それこそ
+ * この計器が存在する理由の場面）は、`slug` として一度も渡ってこない。
+ * `input.slug` で `outlineSaturatedPremise` を引くと、**張り付いた文書から
+ * 節を移したのに床が動かない**という、この4つ目の note がいちばん言うべき
+ * 場面で黙る。
+ *
+ * **だから `before.outlineSaturatedPremise` と `after.outlineSaturatedPremise`
+ * を premise の slug で突き合わせ、状態が変わった premise を**それ自身の
+ * slug で**名乗る。** 1回の書き込みで複数の premise の状態が動きうる
+ * （`memory_section_move` は移動元・移動先の2文書を書く）ので、対象は
+ * 1件とは限らない——slug ごとに次の表で分け、該当した分だけ**すべて**
+ * 出す（`renderListing` の予算は掛けない。次の節に理由がある）。
+ *
+ * | before | after | 出すもの |
+ * | --- | --- | --- |
+ * | 張り付き | 張り付き・**数値が変わった** | **A: 「揺れ」の断り**——この増減は張り付いた領域の中の揺れ |
+ * | 張り付き | 張り付き・**数値が1つも変わっていない** | ⭐ **出さない**（この書き込みとは無関係） |
+ * | 収まっている（or 無い） | 張り付き | **B: 「この書き込みで予算を越えた」**——増分は本物 |
+ * | 張り付き | 収まっている（or 無い） | **C: 「目次で切られなくなった」**——落ちている節がもう無い |
+ * | 収まっている | 収まっている | ⭐ **出さない** |
+ *
+ * **なぜ両方が要るか。** `describeMemoryFloor` は純粋関数で、受け取るのは
+ * `before` / `after` の `MemoryFloor` だけである——文書の本文を持っていない
+ * ので、飽和状態をここで計算し直せない。そして語るのは `before → after` の
+ * **差**なので、片端だけでは B と C を A と区別できない（`before` だけを
+ * 見ると、いま張り付いているかどうかしか分からず、それが「元から張り付いて
+ * いた（A）」のか「今回張り付いた（B）」のか言えない）。
+ *
+ * **A のうち「数値が変わっていない」回は出さない。** 無関係な文書へ書いた
+ * ターンでも、他の張り付いた premise が毎回名乗られると、本当に動いた
+ * ときの目印が効かなくなる（`demotedNote` / 変更4と同じ「噛んでいない回は
+ * 1文字も出さない」の倒し方）。**A のうち数値が変わった回では「これは
+ * 揺れだ」と言い、B では言わない**——B の増分は**本物である**（省略の
+ * 断り書きがまるごと生える。実測で 1,136 文字。見出し40字・要旨2,900字の
+ * 合成、#772）。ここで「揺れ」と言うと、本物の増分を雑音として捨てさせる
+ * ことになる。**C は逆に、いちばん名乗るべき回である**——省略の断り書きが
+ * まるごと落ちた瞬間だからである。
+ *
+ * ## ⚠️ C は「この先どう動くか」を言わない（言えないから）
+ *
+ * **「収まっている」と「（前後どちらかに）存在しない」は、同じ側へ倒して
+ * ある。** 節を移して予算に収まった回だけでなく、`premise` から
+ * `indexed` / `fact` へ区分を変えた回・文書を消した回でも、その slug は
+ * `after.outlineSaturatedPremise` に現れない。**この関数は4つを区別できない**
+ * ——`MemoryFloor` は区分の内訳を slug ごとには持っていないからである。
+ *
+ * ⛔ **だから C は「ここから先は、節を移した分だけ床が下がる」と言わない。**
+ * かつてそう書いていたが、**それは `indexed` / `fact` へ移った回には偽である**
+ * ——どちらも節の目次を1行も焼かないので、節を移しても床は1文字も動かない。
+ * **そして `premise` から `indexed` への付け替えは、実運用で最も多く起きた
+ * 操作である**（本番の記憶は 2026-09-12 時点で6文書中5文書が `indexed`）。
+ * ⟹ **いちばん起きる遷移で、いちばん強く嘘をつく形だった。**
+ *
+ * **言えるのは「目次から落ちている節はもう無い」までである。** その先は
+ * この行では区別できないので、**区別していないことを行そのものに書く**
+ * （`renderPremiseOutlineOmission` の「実行できない助言を出さない」と同じ
+ * 倒し方——出せない値を出さず、出せないことを名乗る）。
+ *
+ * ⚠️ **C では「全 T 節」（after の節の総数）を出さない。** `after` は
+ * 定義上もう飽和していないので `after.outlineSaturatedPremise` には
+ * 現れず、この関数は `before` / `after` の `MemoryFloor` 以外の情報を
+ * 持たない——T を出すには `measurePremiseOutlineFit` が `rest === 0` でも
+ * 値を返すよう変え、かつ `outlineSaturatedPremise` の絞り込み（飽和して
+ * いる文書だけを載せる、という `MemoryFloor` 側の約束）をやめる必要が
+ * あり、そちらを崩すと `MemoryFloor.outlineSaturatedPremise` の doc
+ * 「切れていない文書はここに現れない」が嘘になる。**達成できない値を
+ * 出すよりは、その値を文面から落とす**（`renderPremiseOutlineOmission`
+ * の「実行できない助言を出さない」と同じ倒し方）。
+ *
+ * ## 件数に予算を掛けない理由と、その上界
+ *
+ * **1回の書き込みで状態が変わりうる premise は、通常は最大2件である**
+ * （4口のうち `memory_section_move` だけが2文書を書き、残り3口は1文書
+ * しか書かない）。**⚠️ ただし「必ず2件以下」とは言い切らない**——人間が
+ * `PUT /memory/:slug` で横から書き換える窓が理屈のうえでは在る
+ * （`describeMemoryFloor` の「2. 焼き込み全体の文字数が…」に既にある
+ * 同種の断りと同じ形）。件数がその窓のせいで想定より増えても、`renderListing`
+ * のような一覧の予算はここでは掛けない——最大でも数件であることが期待
+ * される軸に予算を掛けると、いちばん言うべき回（張り付いた文書の名前）が
+ * 予算で落ちる恐れのほうが実害として大きい。
+ *
+ * ⚠️ 並び順は premise の **slug 昇順**で固定する。`before` / `after` の
+ * 配列に載っている順（挿入順・呼び手の順）に依存させると、同じ入力でも
+ * 呼び手が違うだけで出力の並びが動き、歯が不安定になる。
  */
 export function describeMemoryFloor(input: {
   before: MemoryFloor;
@@ -3157,7 +3382,64 @@ export function describeMemoryFloor(input: {
         `${formatMemoryCharCount(after.demotedPremiseDocs)} 件が1行に落ちている。` +
         '⟹ **この増減は蓋が効いた後の値である**（premise を足しても、別のカードが落ちて釣り合う）。' +
         '落ちた文書の名前と直し方は焼き込みの断り書きに在る。';
-  const floorLine = `毎ターンの床（焼き込み全体。いま読み直した値）: ${transition}。` + demotedNote;
+
+  // **1文書あたりの目次の予算——`demotedNote`（束ねた蓋）とは別の蓋である。**
+  // ⚠️ **`input.slug` では引かない。** `memory_section_move` は移し先
+  // （`toSlug`）の視点で `slug` を渡す（`tools.ts` の「床は『移した先』の
+  // 視点で言う」）ので、`slug` で引くと**移動元**（張り付いている当の文書で
+  // あることが多い）を一度も名乗れない。⟹ `before` / `after` の
+  // `outlineSaturatedPremise` を**両方とも slug で突き合わせ**、状態が
+  // 変わった premise を**それ自身の slug で**名乗る（`describeMemoryFloor`
+  // の doc「なぜ `input.slug` を使わないか」）。
+  const beforeOutlineFits = new Map(before.outlineSaturatedPremise.map((fit) => [fit.slug, fit]));
+  const afterOutlineFits = new Map(after.outlineSaturatedPremise.map((fit) => [fit.slug, fit]));
+  const outlineTouchedSlugs = [
+    ...new Set([...beforeOutlineFits.keys(), ...afterOutlineFits.keys()]),
+  ].sort((a, b) => a.localeCompare(b));
+  const outlineSaturationNotes: string[] = [];
+  for (const outlineSlug of outlineTouchedSlugs) {
+    const beforeFit = beforeOutlineFits.get(outlineSlug);
+    const afterFit = afterOutlineFits.get(outlineSlug);
+    if (afterFit !== undefined) {
+      if (beforeFit !== undefined) {
+        // A: 前も今回も張り付いている。数が1つも変わっていなければ、この
+        // 書き込みとは無関係なので**名乗らない**（無関係な文書へ書いた
+        // ターンで、他の張り付いた文書の名前が毎回出るのを防ぐ）。
+        if (
+          beforeFit.total === afterFit.total &&
+          beforeFit.shown === afterFit.shown &&
+          beforeFit.rest === afterFit.rest
+        ) {
+          continue;
+        }
+        outlineSaturationNotes.push(
+          `⚠️ ${outlineSlug} の節の目次は1文書あたりの予算 ${formatMemoryCharCount(MEMORY_PROMPT_OUTLINE_BUDGET)} 文字に張り付いている（全 ${formatMemoryCharCount(afterFit.total)} 節のうち ${formatMemoryCharCount(afterFit.shown)} 節だけが焼き込みに載っている）。⟹ **この増減は張り付いた領域の中の揺れであって、節を移した効果ではない**——落ちている ${formatMemoryCharCount(afterFit.rest)} 節を移し切るまで、床は移した本文の量と関係なく動く。移し切ると省略の断り書きごと消えて、そこで初めてまとめて落ちる。`,
+        );
+      } else {
+        // B: 収まっていた（または存在しなかった）のが、この書き込みで
+        // 張り付いた——増分は本物。
+        outlineSaturationNotes.push(
+          `⚠️ この書き込みで ${outlineSlug} の節の目次が1文書あたりの予算 ${formatMemoryCharCount(MEMORY_PROMPT_OUTLINE_BUDGET)} 文字を越えた（全 ${formatMemoryCharCount(afterFit.total)} 節のうち ${formatMemoryCharCount(afterFit.shown)} 節しか焼き込みに載らなくなり、${formatMemoryCharCount(afterFit.rest)} 節が落ちた）。⟹ **この増分は揺れではなく本物である**——省略の断り書きがまるごと生えたぶんを含む。ここから先は、節を移しても ${formatMemoryCharCount(afterFit.rest)} 節を移し切るまで床はほとんど動かない。`,
+        );
+      }
+    } else if (beforeFit !== undefined) {
+      // C: 張り付いていた（そして今回はもう飽和リストに無い＝収まった、
+      // または区分が変わった・消えた等で飽和リストから外れた）。⛔ この先どう
+      // 動くかは言わない（`describeMemoryFloor` の doc「C は『この先どう動くか』を
+      // 言わない」——`indexed` / `fact` へ移った回には偽になるため）。
+      outlineSaturationNotes.push(
+        `⭐ この書き込みで ${outlineSlug} の節の目次は、1文書あたりの予算 ${formatMemoryCharCount(MEMORY_PROMPT_OUTLINE_BUDGET)} 文字で切られなくなった。⟹ **省略の断り書きごと床から落ちた**——目次から落ちている節は、もう無い。⚠️ この先どう動くかはこの行では言えない（予算に収まったのか、premise ではなくなった（indexed / fact）のか、消えたのかを区別していない——後の2つでは節の目次そのものが焼かれないので、節を移しても床は動かない）。`,
+      );
+    }
+    // 両方とも undefined（前も今回も収まっている）はここへ来ない
+    // （`outlineTouchedSlugs` が before/after どちらかの飽和リストに
+    // 載っている slug だけを列挙するため）。
+  }
+  const outlineSaturationNote = outlineSaturationNotes.join('');
+  const floorLine =
+    `毎ターンの床（焼き込み全体。いま読み直した値）: ${transition}。` +
+    demotedNote +
+    outlineSaturationNote;
 
   if (created && kind === 'premise') {
     const lines = [

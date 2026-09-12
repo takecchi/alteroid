@@ -2660,10 +2660,42 @@ describe('クローンの道具', () => {
       });
 
       /**
-       * ⭐ 記憶の肥大への恒久対策——節の移動で「毎ターンの床」がどう動くかは
-       * 移し先（`toSlug`）の区分で決まる。移し先が既に `type: fact` なら、
-       * 移した本文はその文書の目次の1行にしか影響しない（本文は焼かれない）
-       * ので、出どころ（premise）の全文からその分が消えたぶん、床は**減る**。
+       * ⭐ 記憶の肥大への恒久対策——節の移動で「毎ターンの床」がどう動くか。
+       *
+       * ## いまの機序（2026-09-08 に premise の載せ方を反転させた後）
+       *
+       * **⚠️ かつてこの doc は「出どころ（premise）の全文からその分が消える
+       * ので床は減る」と書いていたが、これは偽である。** premise はもう
+       * 全文を焼かない——人間が載せ方を反転させた
+       * （`grep -Fn -- '受け入れ基準は、人間が載せ方を反転させた時点で意味を失った' packages/core/src/memory.ts`）。
+       * **主張（assert）そのものはこの反転の前後で変わっていない**（予算内の
+       * 文書では実際に床は減る）。偽だったのは説明であって、歯ではない。
+       *
+       * **premise が毎ターン焼かれるのは本文ではなく「カード」**——要旨＋節の
+       * 目次（節id・見出し・文字数を1行に並べたもの。`renderPremiseCard`）
+       * である。本文は1文字も載らない（開くのは `memory_section_read`）。
+       *
+       * ⟹ **節を既存の `fact` へ移すと、出どころのカードから目次の1行
+       * （移した節ぶん）が消え、移し先は `fact` なので目次にも1行しか増えない
+       * （`fact` はカードではなく目次の1行にしか現れない——
+       * `renderMemoryDocuments` の不変条件）。** 動くのは「消えた1行」と
+       * 「増えた1行」の差だけであり、**本文の量そのものは移す前も後も焼き込みに
+       * 一度も乗っていない**——だから床が減るのは「本文が消えたから」ではなく、
+       * 「目次の1行が消えたから」である。
+       *
+       * ## ⚠️ これが成り立つのは「出どころの目次が予算に収まっているとき」だけ
+       *
+       * 目次には1文書あたり `MEMORY_PROMPT_OUTLINE_BUDGET`（6,000文字）の
+       * 予算が掛かる。**予算の内側**では目次の費用が乗っている節の数に比例
+       * するので、節を1つ移せば目次からその1行が確実に消え、床は減る——
+       * **この歯が測っているのはその内側の挙動だけである。**
+       *
+       * **予算に張り付いた文書ではそうならない。** 目次の費用は節数ではなく
+       * **予算そのもの**（省略の断り書きを含めて常に予算いっぱい）になるので、
+       * 節をどれだけ移しても出どころの目次の文字数はほとんど動かない。⟹
+       * 「予算に張り付いた側」で床がどう動く（動かない）かは、この歯ではなく
+       * 対になる歯（`目次の予算に張り付いた premise から大量の節を fact へ
+       * 移しても…`）が測る。
        */
       it('⭐ premise から既存の fact へ節を移すと、毎ターンの床は減ると応答が言う', async () => {
         const h = harness();
@@ -2688,6 +2720,144 @@ describe('クローンの道具', () => {
         expect(reply).toMatch(
           /毎ターンの床（焼き込み全体。いま読み直した値）: [\d,]+ 文字から [\d,]+ 文字へ（-[\d,]+）/,
         );
+      });
+
+      /**
+       * ⭐⭐ **予算の内側と外側は別の現象である。この歯は「外側」を測る。**
+       *
+       * 上の歯（`premise から既存の fact へ節を移すと、毎ターンの床は減る`）が
+       * 測っているのは、出どころ premise の節の目次が
+       * `MEMORY_PROMPT_OUTLINE_BUDGET`（6,000文字）の**内側**に収まっている
+       * ときの挙動である。そこでは目次の費用が節数に比例するので、節を1つ
+       * 移せば目次からその1行が確実に消え、床は減る。
+       *
+       * **予算に張り付いた文書ではその比例関係が壊れる。** 目次の費用は
+       * 「乗っている節の数」ではなく「予算そのもの」（省略の断り書きを含めて
+       * 常に予算いっぱい）になる。⟹ 節を大量に移しても、移す前・移した後の
+       * 両方で目次が予算に張り付いたままなら、出どころのカードの大きさは
+       * ほとんど動かない——**移した本文の量に比例しない。**
+       *
+       * ## ⚠️ 符号にも単調性にも触れない（実測に基づく判断）
+       *
+       * マネージャーが実物の `measureMemoryFloor` を import し、premise 1文書・
+       * 要旨2,900字・見出し40字均一の合成入力で実測した値（残り節数 →
+       * totalChars）: 1,416節→10,193 ／ 916節→10,181（−12）／ 200節→10,179
+       * （−14）／ 120節→10,135（−58）／ 80節→8,697（−1,496、ここで省略が
+       * 消える＝崖）。⟹ **91.5%（1,296節）を移しても床は −58 文字**——差の列
+       * （0, 0, −12, −12, −14, −58）は単調非増加だったが、**マネージャーは
+       * 非単調（増えたり減ったりする実測）を再現できなかった。** それでも
+       * 符号を assert しないのは、断り書きの中の数字（節数・文字数の桁）が
+       * 1文字動くだけで符号が反転しうるほど値そのものが小さい領域に居るから
+       * である——**この領域で保証できるのは「（本文の量に比べて）動かない」
+       * という大きさの話だけ**であって、「どちらへ動くか」でも「動く量が
+       * 単調か」でもない。だからここで固定するのは Δ の絶対値が小さいこと
+       * （移した本文の量に比例しないこと）だけであり、**符号にも単調性にも
+       * 触れない。**
+       *
+       * ## 種の作り方
+       *
+       * 見出し40字前後・400節の premise を作る（崖は見出し40字均一で85節
+       * 前後——300節移した後の残り100節でも、まだ崖の手前＝張り付いたままの
+       * 領域に留まる。この文書の見出しは「節0000: 」のぶん40字よりやや長く、
+       * 崖はむしろ手前に寄るので、100節はさらに余裕を持って張り付き側に居る）。
+       * 移し先は既存の fact として先に作る（上の歯と同じ作法）。節id は
+       * `memory_outline` ではなく `scanMemorySections` で直接読む——
+       * `memory_outline` は応答自身の予算（`MEMORY_OUTLINE_BUDGET`）で
+       * 切られるので、400節ぶんの id は1回の呼び出しでは取れない
+       * （下の「移した節の列挙」の歯が同じ理由で同じ手を使っている。
+       * `grep -Fn -- 'scanMemorySections で読み直し、全節の id を渡す' packages/core/src/tools.test.ts`）。
+       */
+      it('⭐ 目次の予算に張り付いた premise から大量の節を fact へ移しても、毎ターンの床は移した本文の量に比例して減らない（そしてそれは欠陥ではなく設計である）', async () => {
+        const h = harness();
+        const sectionCount = 400;
+        const moveCount = 300;
+        const bigTocBody = Array.from({ length: sectionCount }, (_, index) => {
+          const pad = String(index).padStart(4, '0');
+          return `# 節${pad}: ${'み'.repeat(40)}\n\n本文${pad}: ${'あ'.repeat(60)}\n`;
+        }).join('\n');
+        await seed(
+          h,
+          'big-toc',
+          `---\ndescription: 目次が予算に張り付いた文書\ntype: premise\n---\n${bigTocBody}`,
+        );
+        // 移し先は先に fact として作っておく（上の歯と同じ作法）。
+        await h.stores.persona.write(
+          'big-toc-appendix',
+          '---\ntype: fact\ndescription: 大量移動の受け皿\n---\n# 付録\n既存の本文\n',
+        );
+
+        // **前提の assert・その1（移す前）**: すでに目次が予算に張り付いて
+        // いること。でなければ、この歯は「予算内側」の歯と同じ現象を測る
+        // だけになる。
+        const before = await h.stores.persona.documents();
+        expect(renderMemoryDocuments(before)).toContain('目次から省略');
+
+        // `memory_outline` は応答自身の予算で切られるので400節ぶんの id は
+        // 1回で取れない——`scanMemorySections` で直接読む。
+        const doc = await h.stores.persona.read('big-toc');
+        if (doc === null) throw new Error('big-toc が見つからない（seed に失敗した）');
+        const { sections } = scanMemorySections(doc.content);
+        // 前提: 全節を読めている（読めていなければ「300節を移した」という
+        // 前提そのものが崩れる）。
+        expect(sections).toHaveLength(sectionCount);
+        const moved = sections.slice(0, moveCount);
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'big-toc',
+          sections: moved.map((section) => section.id),
+          toSlug: 'big-toc-appendix',
+          summary: '張り付いた目次から先頭寄りの節をまとめて付録へ移した',
+        });
+
+        // **前提の assert・その2（移した後）**: 出どころの目次はまだ予算に
+        // 張り付いている。400節中300節を移しても、残り100節はまだ崖
+        // （見出し40字前後で85節前後）の手前——でなければ、この歯は
+        // 「途中で予算内側へ落ちた」ケースを測ることになり、上の歯と同じ
+        // 現象を二重に固定するだけになる。
+        const after = await h.stores.persona.documents();
+        expect(renderMemoryDocuments(after)).toContain('目次から省略');
+
+        // 対照: 移した本文の量が大きいこと（そもそも小さい操作だった、と
+        // いう反論を消す）。応答自身が名乗る「合計 N 文字」を読む。
+        const movedMatch = /合計 ([\d,]+) 文字）を big-toc-appendix の末尾へ移した/.exec(reply);
+        if (movedMatch === null) throw new Error(`応答から移した文字数を読めない:\n${reply}`);
+        const movedChars = Number(movedMatch[1]!.replace(/,/g, ''));
+        expect(movedChars).toBeGreaterThanOrEqual(10_000);
+
+        // ⭐ 床の増減の絶対値を、応答の「毎ターンの床」の一言から正規表現で
+        // 抜き出す。**符号は見ない**（上の doc「符号にも単調性にも触れない」）。
+        const floorMatch =
+          /毎ターンの床（焼き込み全体。いま読み直した値）: [\d,]+ 文字から [\d,]+ 文字へ（([+-][\d,]+)）/.exec(
+            reply,
+          );
+        if (floorMatch === null) throw new Error(`応答から毎ターンの床の遷移を読めない:\n${reply}`);
+        const delta = Math.abs(Number(floorMatch[1]!.replace(/,/g, '')));
+
+        // ⭐ 本体の assert: 移した本文の量（10,000文字以上）に対して、床の
+        // 増減はその比ではない小ささである。上界の 500 はマネージャーの実測
+        // （91.5% 移して −58 文字）に十分な余裕を持たせた値で、実装の内部
+        // 定数からは導いていない——「本文の量に比例しない」ことを示すための
+        // 恣意的な小ささである。
+        expect(delta).toBeLessThan(500);
+        // 対照: 移した本文の量が Δ の絶対値の何十倍もあること
+        // （`Math.max(delta, 1)` は delta が 0 のときの0除算を避けるだけで、
+        // 判定の意味は変えない）。
+        expect(movedChars).toBeGreaterThan(Math.max(delta, 1) * 20);
+
+        // ⭐ **応答が「どちらの領域に居るか」を名乗ること。**
+        // `describeMemoryFloor` は `slug` でこの一言を引かない——`memory_section_move`
+        // が渡す `slug` は常に**移し先**（`toSlug`）なので、引くと張り付いている当の
+        // 文書（`fromSlug`）を一度も名乗れない。⟹ `before` / `after` の
+        // `outlineSaturatedPremise` を突き合わせ、状態が動いた premise を**それ自身の
+        // slug で**名乗る（`memory.ts` の `describeMemoryFloor` の doc
+        // 「なぜ `input.slug` では引かないか」）。
+        // ⟹ ここで名乗られるのは `fromSlug`（`big-toc`）であって、`slug` として
+        // 渡された `toSlug`（`big-toc-appendix`。区分は fact なので目次の予算の
+        // 対象ですらない）ではない。**これが無いと、この歯は「床が動かない」ことは
+        // 測れても「動かないと応答が言う」ことを測っていない。**
+        expect(reply).toContain('張り付いている');
+        expect(reply).toContain('big-toc の節の目次は1文書あたりの予算');
+        expect(reply).not.toContain('big-toc-appendix の節の目次');
       });
 
       /**
