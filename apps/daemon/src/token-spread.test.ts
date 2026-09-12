@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import type { RunnerClient, RunnerRegistry } from '@alteroid/core';
+import {
+  createMemoryStores,
+  createTokenRotator,
+  type RunnerClient,
+  type RunnerRegistry,
+} from '@alteroid/core';
 
 import {
   createAgentTokenHolder,
@@ -403,5 +408,64 @@ describe('createRunnerTokenSync（後から繋いだ runner を追いつかせ�
     // **身元が在るので、器の環境変数（別のダミー）は見ない。**
     await createRunnerTokenSync(holder, () => 'dummy-should-not-be-used')(runner);
     expect(runner.calls).toEqual([[{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: '' }]]);
+  });
+});
+
+/**
+ * **配達の端から端まで1本で測る（#869）。**
+ *
+ * ⭐ **ここが答えるのは「`reconsider()` の中で関数が呼ばれたか」ではない。**
+ * 「**`reconsider()` が返った後、これから起こす子プロセスへ渡る資格の箱に、値が
+ * 入っているか**」である —— `RunnerClient#setCredentials` が受け取ったものが、
+ * runner の `CredentialStore` に入り、`Host#childEnv()` がそれを
+ * **これから起こすマネージャー／作業者の env** へ重ねる（`runner.ts` の
+ * `#childEnv()` は `ROTATABLE_CREDENTIAL_KEYS` を無条件に削除してから、この箱を
+ * 重ね直す。人間の決定 2026-09-11）。
+ *
+ * ⚠️ **`#childEnv()` の中まで測る形は取れない**（private で、core の外の配線に
+ * 依存する）。**`setCredentials` はその手前の、観測できる最後の点である。**
+ * ⟹ **ここが空なら、その後に起こる子プロセスには資格が1本も無い。**
+ */
+describe('起動後に現役が戻らなくなっても、これから起こす子プロセスへ資格が届く（#869）', () => {
+  it('現役の行を人間が消した後の reconsider() で、runner の資格箱に値が入る', async () => {
+    const runner = fakeClient('runner-primary');
+    const clone = createAgentTokenHolder();
+    const stores = createMemoryStores();
+    const spread = createTokenSpread({
+      agentTokenFromEnv: () => ENV_TOKEN,
+      runners: registry([runner]),
+      clone,
+      profileEnvNames: () => Promise.resolve([]),
+    });
+    const rotator = createTokenRotator({
+      stores,
+      spread,
+      probe: { probe: async () => ({ verdict: 'usable' as const }) },
+      now: () => new Date('2026-09-12T02:07:00.000Z'),
+    });
+
+    // **起動後に現役の行が消えた**（人間が消した）。残りは人間が外してあるので、
+    // 回す先の候補は1本も立たない ＝ `exhausted` の道。
+    await stores.tokens.replace([
+      {
+        id: 'tok-b',
+        label: 'second',
+        value: 'value-b',
+        order: 1,
+        disabledAt: '2026-09-12T00:00:00.000Z',
+      },
+    ]);
+    await stores.tokens.writeActive({
+      tokenId: 'ghost',
+      generation: 3,
+      rotatedAt: '2026-09-12T00:00:00.000Z',
+    });
+
+    await rotator.reconsider({ reason: 'tick' });
+
+    // 🔴 **これが空配列なら、この後に起こすマネージャーは資格ゼロで走る。**
+    expect(runner.calls).toEqual([[{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: ENV_TOKEN }]]);
+    // **人間が外した行の値ではない。**
+    expect(JSON.stringify(runner.calls)).not.toContain('value-b');
   });
 });
