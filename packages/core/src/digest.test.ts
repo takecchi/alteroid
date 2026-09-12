@@ -309,7 +309,25 @@ describe('活動の要約', () => {
     expect(digest.split('sentinel-code-9f2a71')).toHaveLength(2);
   });
 
-  it('直近のターンが報告で終わっている（lastFailure が無い）ときは、失敗の一行が出ない', async () => {
+  /**
+   * **直近のターンが健全（`lastFailure` が無い）なら、1文字も増えない**
+   * （`describeLastFailureLine` の doc の約束そのもの）。
+   *
+   * **⚠️ 直す前はここを `expect(digest).not.toContain('直近のターンは失敗で
+   * 終わっている')` という逐語一致で測っていた。** これは「静かに測らなくなる」
+   * 歯である——`describeLastFailureLine` の飾り文（`⚠ 直近のターンは失敗で
+   * 終わっている: …`）を書き換えると、この `not.toContain` は**赤くならずに、
+   * ただ何も測らなくなる**（元から一致していないので、空振りのまま緑が続く）。
+   * 飾り文の書き換えは実装として正当な変更でありうる——測る側がそれで壊れて
+   * よい理由にはならない。
+   *
+   * **だから飾り文の字面に依存しない、構造そのものを見る形にする。** マネージャー
+   * 節（ヘッダ + このジョブ1本）を丸ごと切り出し、行の本数と中身が「lastReport
+   * までで終わっている」ことを `toEqual` で厳密に見る——`describeLastFailureLine`
+   * が何を返そうと、健全な回で1文字でも足せばこの一致が崩れる。飾り文がどう
+   * 変わっても、"何も足されていないこと" は文言に触れずに測れる。
+   */
+  it('直近のターンが報告で終わっている（lastFailure が無い）ときは、失敗の一行が出ない（構造で見る。飾り文の toContain には依存しない）', async () => {
     const stores = createMemoryStores();
     const now = new Date().toISOString();
     await stores.jobs.putJob({
@@ -324,7 +342,24 @@ describe('活動の要約', () => {
 
     const digest = await buildActivityDigest(stores, { since: new Date(Date.now() - 60_000) });
 
-    expect(digest).not.toContain('直近のターンは失敗で終わっている');
+    // マネージャー節を切り出す。このテストではジョブが1本だけで MAX_ITEMS を
+    // 超えないので、`omitted()` の断り書きは付かず、節の中身は
+    // 「ヘッダ行 + このジョブのブロック」だけになるはずである。次の節
+    // （空行区切りで始まる）の手前までを取り出す。
+    const sectionStart = digest.indexOf('## マネージャー');
+    expect(sectionStart).toBeGreaterThanOrEqual(0);
+    const rest = digest.slice(sectionStart);
+    const sectionEnd = rest.indexOf('\n\n');
+    const section = sectionEnd === -1 ? rest : rest.slice(0, sectionEnd);
+
+    // 行数・中身をちょうど一致で見る——`describeLastFailureLine` が健全な
+    // 回で `''` 以外の何かを返せば、行が増えるか末尾の行が伸びるかのどちらか
+    // で必ずこの一致が崩れる。飾り文そのものの字面には触れていない。
+    expect(section.split('\n')).toEqual([
+      '## マネージャー（走行中・返事待ちから先に出す）',
+      '- mgr-healthy-turn [done/セッション不明] 仕事',
+      '  直近の報告: 完了した',
+    ]);
   });
 
   /**
