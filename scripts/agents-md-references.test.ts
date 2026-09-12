@@ -1029,6 +1029,53 @@ describe('findFenceCoverageViolations / formatFenceCoverageViolation（合成 fi
     expect(violations).toEqual([]);
   });
 
+  it('正当な最大（AGENTS.md 実測 18.54%: dropped=117/total=631）は違反0件 ⟹ 閾値を下げすぎると赤くなる', () => {
+    // 18.54% は「いまの AGENTS.md」を実際に測った値そのもの（prose=514, dropped=117,
+    // total=631）。この合成入力はその3つの数をそのまま再現する——AGENTS.md 自身が
+    // 育っても数が動かないよう、ここでは固定した合成テキストで確かめる。
+    // dropped(117) は40行を超えている（min の側は素通り）。ratio(0.1854) は
+    // FENCE_COVERAGE_MAX_DROPPED_RATIO(0.4) 未満なので違反にならない。
+    // ⟹ 次に閾値を 0.1854 以下へ下げる変更をすると、この it が赤くなる。
+    const fenceBody = Array.from({ length: 115 }, (_, i) => `dropped line ${i}`);
+    const proseBefore = Array.from({ length: 257 }, (_, i) => `prose before ${i}`);
+    const proseAfter = Array.from({ length: 257 }, (_, i) => `prose after ${i}`);
+    const text = [...proseBefore, '```', ...fenceBody, '```', ...proseAfter].join('\n');
+    const { coverage } = proseLinesWithFenceState(text);
+    expect(coverage).toMatchObject({ total: 631, prose: 514, dropped: 117 });
+    expect(coverage.ratio).toBeCloseTo(0.1854, 4);
+
+    const violations = findFenceCoverageViolations(
+      [{ file: 'fixture/legit-max.md', text }],
+      [],
+      FENCE_COVERAGE_LIMITS,
+    );
+    expect(violations).toEqual([]);
+  });
+
+  it('欠陥の署名（旧実装での歯自身のファイルの実測 75.46%: dropped=704/total=933）は違反1件 ⟹ 閾値を上げすぎると赤くなる', () => {
+    // 75.46% は「#796 より前の旧実装が、歯自身のファイルを測ったときの実測値」
+    // そのもの（total=933, dropped=704。2026-09-12 実測、main = 77e6088）。
+    // dropped(704) は40行を超え、ratio(0.7546) は FENCE_COVERAGE_MAX_DROPPED_RATIO
+    // (0.4) を超えるので違反になる。
+    // ⟹ 次に閾値を 0.7546 以上へ上げる変更をすると、この it が赤くなる
+    // （#786 の回帰そのものが緑を通り抜けるようになる、という意味）。
+    const fenceBody = Array.from({ length: 702 }, (_, i) => `dropped line ${i}`);
+    const proseBefore = Array.from({ length: 115 }, (_, i) => `prose before ${i}`);
+    const proseAfter = Array.from({ length: 114 }, (_, i) => `prose after ${i}`);
+    const text = [...proseBefore, '```', ...fenceBody, '```', ...proseAfter].join('\n');
+    const { coverage } = proseLinesWithFenceState(text);
+    expect(coverage).toMatchObject({ total: 933, prose: 229, dropped: 704 });
+    expect(coverage.ratio).toBeCloseTo(0.7546, 4);
+
+    const violations = findFenceCoverageViolations(
+      [{ file: 'fixture/defect-signature.md', text }],
+      [],
+      FENCE_COVERAGE_LIMITS,
+    );
+    expect(violations).toHaveLength(1);
+    expect(violations[0]?.file).toBe('fixture/defect-signature.md');
+  });
+
   it('免除表に載せた違反は違反にならない。免除したのに閾値を超えていないものは幽霊免除として拾われる', () => {
     const fenceBody = Array.from({ length: 50 }, (_, i) => `dropped line ${i}`);
     const violatingText = ['prose 1', '```', ...fenceBody, '```', 'prose 2'].join('\n');
