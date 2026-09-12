@@ -71,6 +71,23 @@ import type { TranscriptArchive } from './store.js';
  *     **`id` の前方一致 LIKE が主キーの btree に落ちる性質の歯である**
  *     （#698 §6-5。id の形を変えるときに、この性質を落としたら赤くなる）
  *
+ * **23〜25 は `ArchiveSessionSummary.continuity`（#698 続き。「畳んでよい行が
+ * 何割か」を数える口）の検査である:**
+ *
+ * 23. 🔴 **不変条件**: `sessions()` が返す全 `sessionId` について
+ *     `first + continues + diverged + unknown + absent === rows` が成り立つ
+ *     （`ArchiveContinuityTally` の doc）
+ * 24. `archive-contract-continuity` セッション（検査13〜18 で使ったシナリオ）
+ *     について、**その6回の `archive()` が返した `write.continuity` を
+ *     足し上げた期待 tally と、`sessions()` が返す `continuity` が一致する**
+ *     ——期待値は手で数えた定数ではなく、この契約が実際に受け取った戻り値
+ *     から組み立てる（シナリオが変わっても歯が自動で追随する）
+ * 25. 🔴 **`absent` が実際に立つ経路**（検査19 で `seedFingerprintlessRow`
+ *     が作った、指紋も `continuity` も持たない行）を数える——その行自体は
+ *     `absent` に、直後の `archive()`（検査19 で `'unknown'` と確かめた
+ *     呼び出し）は `unknown` に、別々に積まれることを見る。**`absent` と
+ *     `unknown` が同じカウンタに混ざったら、この歯が落ちる**
+ *
  * 呼び出し側は使い捨ての archive を渡すこと（後始末はしない）。
  *
  * @param deps.seedFingerprintlessRow 指紋（`bodyChars`/`bodyMd5`）を持たない
@@ -600,5 +617,70 @@ export async function verifyTranscriptArchiveContract(
         id,
       });
     }
+  }
+
+  // --- ここから #698 続き（sessions() の continuity 内訳）------------------
+
+  const allSessionSummaries = await archive.sessions();
+
+  // 23. 🔴 不変条件: 全 sessionId で5値の和が rows と一致する。
+  for (const summary of allSessionSummaries) {
+    const total =
+      summary.continuity.first +
+      summary.continuity.continues +
+      summary.continuity.diverged +
+      summary.continuity.unknown +
+      summary.continuity.absent;
+    if (total !== summary.rows) {
+      fail('sessions().continuityの5値の和はrowsと一致する（不変条件）', summary);
+    }
+  }
+
+  // 24. continuitySessionId の continuity 内訳は、その6回の archive() が
+  // 返した write.continuity を足し上げた期待値と一致する。
+  // **手で数えた定数を書かない**——期待値はこの契約が実際に受け取った
+  // 戻り値（write1〜write4 / continuityAfterOther / continuityChain）から
+  // 組み立てる。シナリオが後で変わっても、この歯は自動で追随する。
+  const continuityWrites = [write1, write2, write3, write4, continuityAfterOther, continuityChain];
+  const expectedContinuityTally = { first: 0, continues: 0, diverged: 0, unknown: 0, absent: 0 };
+  for (const write of continuityWrites) {
+    expectedContinuityTally[write.continuity] += 1;
+  }
+  const continuitySummary = allSessionSummaries.find((s) => s.sessionId === continuitySessionId);
+  if (continuitySummary === undefined) {
+    fail('sessions()にcontinuitySessionIdの行がある', allSessionSummaries);
+  }
+  if (
+    continuitySummary.continuity.first !== expectedContinuityTally.first ||
+    continuitySummary.continuity.continues !== expectedContinuityTally.continues ||
+    continuitySummary.continuity.diverged !== expectedContinuityTally.diverged ||
+    continuitySummary.continuity.unknown !== expectedContinuityTally.unknown ||
+    continuitySummary.continuity.absent !== expectedContinuityTally.absent
+  ) {
+    fail('sessions().continuityはarchive()が返したcontinuityの積み上げと一致する', {
+      expected: expectedContinuityTally,
+      actual: continuitySummary.continuity,
+    });
+  }
+
+  // 25. 🔴 absent が実際に立つ経路（seedFingerprintlessRow が作った行）を
+  // 数える。fingerprintlessSessionId は2行——(1) 指紋も continuity も
+  // 持たない seed 行そのもの（absent）、(2) その直後の archive()（検査19で
+  // 'unknown' と確かめた呼び出し）。**absent と unknown が同じカウンタに
+  // 混ざったら、ここが落ちる。**
+  const fingerprintlessSummary = allSessionSummaries.find(
+    (s) => s.sessionId === fingerprintlessSessionId,
+  );
+  if (fingerprintlessSummary === undefined) {
+    fail('sessions()にfingerprintlessSessionIdの行がある', allSessionSummaries);
+  }
+  if (
+    fingerprintlessSummary.continuity.absent !== 1 ||
+    fingerprintlessSummary.continuity.unknown !== 1 ||
+    fingerprintlessSummary.rows !== 2
+  ) {
+    fail('absentとunknownは別カウンタに割れる（seedした行はabsent、その直後はunknown）', {
+      summary: fingerprintlessSummary,
+    });
   }
 }

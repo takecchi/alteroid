@@ -892,6 +892,44 @@ export interface ArchiveWrite {
 }
 
 /**
+ * `ArchiveSessionSummary.continuity` の内訳（#698 続き）。
+ *
+ * PR #873 が「積む瞬間に連続性を判定して記録する門」（`ArchiveContinuity` の
+ * doc）を入れたが、記録した `continuity` を**数える口**がどこにも無かった
+ * ——`GET /archive` は1行ずつ返すだけ、`GET /archive/sessions` の集計には
+ * 内訳が無く、本番 DB へ `psql` で降りられる人も居ない。⟹「畳んでよい行が
+ * 何割か」を誰も測れないまま、畳む実装（次の PR）へ進めなかった。この型は
+ * その口を塞ぐ——**数えるだけで、まだ何も畳まない**（`ArchiveWrite` の doc
+ * と同じ境界線）。
+ *
+ * **⛔ `absent` と `unknown` を畳まないこと。ここが設計の核心である:**
+ *
+ * - **`unknown`** — 門は走ったが、**直前の行が指紋（`bodyChars` /
+ *   `bodyMd5`）を持っていなかった**（`classifyArchiveContinuity` が返す4値
+ *   の1つ。`ArchiveContinuity` の doc）。判定はできた——「前方一致するか
+ *   確かめる材料が無い」と申告した結果である。
+ * - **`absent`** — **その行自体が門より前に積まれた**——pg は `continuity`
+ *   列が `null`、fs / インメモリはメタに `continuity` が無い。門を一度も
+ *   通っていないので、そもそも判定した値が存在しない。
+ *
+ * 前者は「確かめようとしたが確かめられなかった」、後者は「確かめる機会
+ * 自体が無かった」であって、**同じ『分からない』に見えても理由が違う。**
+ * これを1つへ畳むと、`archive-continuity.ts` が「⛔ `'unknown'` を
+ * `'continues'` に倒さない」で禁じているのと同じ種類の誤りになる——
+ * 確かめていないことを、確かめた側へ寄せてしまう。
+ *
+ * **不変条件: `first + continues + diverged + unknown + absent === rows`。**
+ * `verifyTranscriptArchiveContract()` がこれを全 `sessionId` について測る。
+ */
+export interface ArchiveContinuityTally {
+  readonly first: number;
+  readonly continues: number;
+  readonly diverged: number;
+  readonly unknown: number;
+  readonly absent: number;
+}
+
+/**
  * `TranscriptArchive.sessions()` の1行——`sessionId` ごとの集計(#698)。
  *
  * **`rows` が数えるのは `archive()` が呼ばれた回数**（tombstone 済みの行も
@@ -904,6 +942,12 @@ export interface ArchiveWrite {
  * `ArchiveEntry.storedBytes`（現在の実使用量。tombstone 済みの行はほぼ0に
  * 畳まれる）の合計と最大値。単位・比較不可の制約は `ArchiveEntry.storedBytes`
  * の doc をそのまま継承する。
+ *
+ * `continuity`（#698 続き）はこの `sessionId` に属する全行の `continuity`
+ * の内訳。**どのセッションにも内訳は在るので optional にしない**——
+ * `ArchiveEntry.continuity` は行そのものが機能より前に積まれていれば無い
+ * (optional) が、こちらは無い行を `absent` として数えるので、集計自体は
+ * 常に存在する（`ArchiveContinuityTally` の doc）。
  */
 export interface ArchiveSessionSummary {
   readonly sessionId: string;
@@ -912,6 +956,7 @@ export interface ArchiveSessionSummary {
   readonly maxStoredBytes: number;
   readonly firstAt: string;
   readonly lastAt: string;
+  readonly continuity: ArchiveContinuityTally;
 }
 
 /**

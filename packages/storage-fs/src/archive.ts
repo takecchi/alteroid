@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   classifyArchiveContinuity,
   fingerprintArchiveBody,
+  tallyArchiveContinuity,
   type ArchiveContinuity,
   type ArchiveEntry,
   type ArchiveRead,
@@ -180,32 +181,39 @@ export class FsTranscriptArchive implements TranscriptArchive {
     return entries.sort((a, b) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id));
   }
 
-  /** `sessionId` ごとの集計(#698)。`list()` を1回読んで自分で畳む——fs は集計用の索引を持たない。 */
+  /**
+   * `sessionId` ごとの集計(#698)。`list()` を1回読んで自分で畳む——fs は
+   * 集計用の索引を持たない。
+   *
+   * `continuity`（#698 続き）は `list()` の各行が持つ `ArchiveEntry.continuity`
+   * （`.meta.json` サイドカーから読んだ値。無ければ `undefined`）を
+   * `tallyArchiveContinuity` へ渡すだけ——`undefined` は `absent` に数えられる
+   * （サイドカー自体が無い、またはサイドカーはあるが `continuity` フィールドを
+   * 持たない＝どちらも「この機能より前に積まれた行」であって、判定はできて
+   * いない。`ArchiveContinuityTally` の doc）。
+   */
   async sessions(): Promise<ArchiveSessionSummary[]> {
-    const bySession = new Map<string, ArchiveSessionSummary>();
+    // **2パス**: まず sessionId ごとに行をまとめ、それぞれをまとめて畳む。
+    const bySessionId = new Map<string, ArchiveEntry[]>();
     for (const entry of await this.list()) {
-      const existing = bySession.get(entry.sessionId);
-      if (existing === undefined) {
-        bySession.set(entry.sessionId, {
-          sessionId: entry.sessionId,
-          rows: 1,
-          storedBytes: entry.storedBytes,
-          maxStoredBytes: entry.storedBytes,
-          firstAt: entry.at,
-          lastAt: entry.at,
-        });
-        continue;
-      }
-      bySession.set(entry.sessionId, {
-        sessionId: entry.sessionId,
-        rows: existing.rows + 1,
-        storedBytes: existing.storedBytes + entry.storedBytes,
-        maxStoredBytes: Math.max(existing.maxStoredBytes, entry.storedBytes),
-        firstAt: entry.at < existing.firstAt ? entry.at : existing.firstAt,
-        lastAt: entry.at > existing.lastAt ? entry.at : existing.lastAt,
-      });
+      const group = bySessionId.get(entry.sessionId);
+      if (group === undefined) bySessionId.set(entry.sessionId, [entry]);
+      else group.push(entry);
     }
-    return [...bySession.values()].sort(
+    const summaries = [...bySessionId.entries()].map(([sessionId, entries]) => {
+      const storedBytesList = entries.map((e) => e.storedBytes);
+      const atList = entries.map((e) => e.at);
+      return {
+        sessionId,
+        rows: entries.length,
+        storedBytes: storedBytesList.reduce((sum, n) => sum + n, 0),
+        maxStoredBytes: Math.max(...storedBytesList),
+        firstAt: atList.reduce((min, at) => (at < min ? at : min)),
+        lastAt: atList.reduce((max, at) => (at > max ? at : max)),
+        continuity: tallyArchiveContinuity(entries.map((e) => e.continuity)),
+      };
+    });
+    return summaries.sort(
       (a, b) =>
         b.storedBytes - a.storedBytes ||
         (a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : 0),

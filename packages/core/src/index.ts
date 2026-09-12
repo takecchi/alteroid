@@ -377,6 +377,7 @@ export {
   classifyArchiveContinuity,
   describeArchiveContinuityForJournal,
   fingerprintArchiveBody,
+  tallyArchiveContinuity,
   type ArchiveBodyFingerprint,
   type ArchiveContinuity,
 } from './archive-continuity.js';

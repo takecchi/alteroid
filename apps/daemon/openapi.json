@@ -7658,6 +7658,37 @@
                           },
                           "lastAt": {
                             "type": "string"
+                          },
+                          "continuity": {
+                            "type": "object",
+                            "properties": {
+                              "first": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "continues": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "diverged": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "unknown": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "absent": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": ["first", "continues", "diverged", "unknown", "absent"]
                           }
                         },
                         "required": [
@@ -7666,7 +7697,8 @@
                           "storedBytes",
                           "maxStoredBytes",
                           "firstAt",
-                          "lastAt"
+                          "lastAt",
+                          "continuity"
                         ]
                       }
                     }

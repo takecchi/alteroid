@@ -45,4 +45,43 @@ describe('TranscriptArchive（インメモリ実装）固有の細部', () => {
 
     expect((await stores.archive.list()).length).toBe(before);
   });
+
+  /**
+   * `sessions().continuity`（#698 続き）——インメモリ実装は
+   * `tallyArchiveContinuity`（`archive-continuity.ts`）で数える。`absent` は
+   * `seedFingerprintlessArchiveRow` が作った、指紋も `continuity` も持たない
+   * 行（この機能より前に積まれた行の再現）。`unknown` は、その直後の
+   * `archive()` が「直前の行は指紋を持たない」と判定した結果——`absent` と
+   * `unknown` が別カウンタに割れることを、インメモリ実装で直接測る。
+   */
+  it('sessions()のcontinuityはfirst/continues/diverged/unknown/absentを正しく数える', async () => {
+    const stores = createMemoryStores();
+    const sessionId = 'session-continuity-tally';
+
+    const writeFirst = await stores.archive.archive(sessionId, 'A\n');
+    expect(writeFirst.continuity).toBe('first');
+    const writeContinues = await stores.archive.archive(sessionId, 'A\nB\n');
+    expect(writeContinues.continuity).toBe('continues');
+    const writeDiverged = await stores.archive.archive(sessionId, 'X\n');
+    expect(writeDiverged.continuity).toBe('diverged');
+
+    // absent: 指紋も continuity も持たない行（この機能より前の行の再現）。
+    await seedFingerprintlessArchiveRow(stores.archive, sessionId, 'LEGACY\n');
+
+    // unknown: 直前の行（上で seed した行）が指紋を持たないので、
+    // その直後の archive() はここに落ちる。
+    const writeAfterSeed = await stores.archive.archive(sessionId, 'ANYTHING\n');
+    expect(writeAfterSeed.continuity).toBe('unknown');
+
+    const summaries = await stores.archive.sessions();
+    const summary = summaries.find((s) => s.sessionId === sessionId);
+    expect(summary?.rows).toBe(5);
+    expect(summary?.continuity).toEqual({
+      first: 1,
+      continues: 1,
+      diverged: 1,
+      unknown: 1,
+      absent: 1,
+    });
+  });
 });

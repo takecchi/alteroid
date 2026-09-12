@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 
+import type { ArchiveContinuityTally } from './store.js';
+
 /**
  * 同じ `sessionId` の直前の退避との連続性（#698）。
  *
@@ -146,4 +148,36 @@ export function describeArchiveContinuityForJournal(params: {
     `[${params.caller}] continuity=${params.continuity} sessionId=${params.sessionId} ` +
     `bodyChars=${params.bodyChars}${comparedToPart}`
   );
+}
+
+/**
+ * `ArchiveEntry.continuity` の列（1セッション分）を `ArchiveSessionSummary.continuity`
+ * の内訳へ積み上げる（#698 続き）。`storage-fs` とインメモリ実装
+ * （`testing.ts`）が共有する——どちらも `list()` 相当の行を JS 側へ引き上げて
+ * から集計するので、同じ数え方を1箇所に置く。
+ *
+ * pg 実装（`storage-pg/src/archive.ts`）はこの関数を使わない。SQL の
+ * `count(*) filter (where …)` で同じ内訳を1問い合わせの中で数えており、
+ * `body` はおろか行そのものを JS 側へ引き上げないため（`list()` / `sessions()`
+ * の doc「`body` に触れない」を集計でも保つ）。
+ *
+ * **`undefined` は `absent` に数える。** `ArchiveEntry.continuity` が無いのは
+ * 「その行が門（#873）より前に積まれた」ことを意味し、`'unknown'`（門は
+ * 通ったが直前の行の指紋が無かった）とは別の状態——畳まない理由は
+ * `ArchiveContinuityTally` の doc（`store.ts`）を見よ。この関数は
+ * その区別を保ったまま数えるだけで、判定はしない（判定は
+ * `classifyArchiveContinuity` の役目である）。
+ */
+export function tallyArchiveContinuity(
+  continuities: ReadonlyArray<ArchiveContinuity | undefined>,
+): ArchiveContinuityTally {
+  const tally = { first: 0, continues: 0, diverged: 0, unknown: 0, absent: 0 };
+  for (const continuity of continuities) {
+    if (continuity === undefined) {
+      tally.absent += 1;
+      continue;
+    }
+    tally[continuity] += 1;
+  }
+  return tally;
 }
