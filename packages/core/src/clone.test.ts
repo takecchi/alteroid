@@ -12415,7 +12415,11 @@ describe('credentialService（正本を同期で覗いて重ねる。#865）', (
     // が最後に重なるので、正本にも器の env にも引きずられずプールの値が届く。
     const { clone, calls } = cloneWithVault({
       vault: [
-        { name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'from-vault', updatedAt: '2026-09-12T00:00:00.000Z' },
+        {
+          name: 'CLAUDE_CODE_OAUTH_TOKEN',
+          value: 'from-vault',
+          updatedAt: '2026-09-12T00:00:00.000Z',
+        },
       ],
       env: { CLAUDE_CODE_OAUTH_TOKEN: 'frozen-at-startup' },
       credentials: () => ({ CLAUDE_CODE_OAUTH_TOKEN: 'rotated-now' }),

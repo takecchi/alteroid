@@ -621,7 +621,9 @@ describe('resolveCredentialRows（正本と器の env から配る値を1本で�
     const resolved = resolveCredentialRows([row('GH_TOKEN', 'from-vault')], {
       GH_TOKEN: 'from-clone-env',
     });
-    expect(resolved).toEqual([{ name: 'GH_TOKEN', value: 'from-clone-env', updatedAt: expect.any(String) }]);
+    expect(resolved).toEqual([
+      { name: 'GH_TOKEN', value: 'from-clone-env', updatedAt: expect.any(String) },
+    ]);
   });
 
   it('GITHUB_TOKEN でも同じ優先順位が効く（GH_TOKEN だけの特別扱いではない）', () => {

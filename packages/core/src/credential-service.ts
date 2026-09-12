@@ -365,7 +365,10 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
   // クローンが正本を覗ける窓を作る。**失敗してもここは止めない**——空のまま
   // 残っても `vaultSnapshot()` の doc が言うとおり退行ではなく、次にどれかが
   // 呼ばれれば追いつく。
-  void stores.credentials.list().then(noteVaultSnapshot).catch(() => undefined);
+  void stores.credentials
+    .list()
+    .then(noteVaultSnapshot)
+    .catch(() => undefined);
 
   /**
    * 直列化の実体（`ProfileService` と同じ形）。**次の更新は前の更新の全段が
