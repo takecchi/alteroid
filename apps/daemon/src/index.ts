@@ -1039,25 +1039,28 @@ export async function main(): Promise<void> {
     runners,
     withheldEnvKeys: [...WITHHELD_ENV_KEYS, ...storage.withheldEnvKeys],
     /**
-     * **マネージャーとクローンが別の鍵で走っている**（Issue #865 の実測）ことを
-     * 知らせる。正本にその名前の行が在り、かつこのデーモンの器の env にも
-     * 別の値が在るときだけ立つ（`cloneEnvShadowedNames` の doc）。
+     * **GitHub の名前で、正本の行より器の環境変数の値が優先して配られている**
+     * （Issue #865 の恒久策、2026-09-12）ことを知らせる。正本にその名前の行が
+     * 在り、かつこのデーモンの器の env にも別の値が在るときだけ立つ
+     * （`cloneEnvShadowedNames` の doc）。
      *
      * **値も指紋も渡ってこない**（`onCloneEnvShadowed` の型）ので、ここで
-     * 出す行にも名前しか載らない。**「正本が勝つ」仕様は変えない**——ここは
-     * 知らせるだけで、何も配り直さない。
+     * 出す行にも名前しか載らない。**⚠️ 「正本が勝つ」だった以前の仕様は、
+     * GitHub の名前について反転した**（`resolveCredentialRows`）——ここは
+     * 知らせるだけで、勝敗の決定そのものはしない。
      *
      * 連続した同じ食い違いは呼ばれない（`createCredentialService` 側で
      * 抑止済み）ので、ここで頻度を気にする必要は無い。
      */
     onCloneEnvShadowed: (names) => {
       process.stderr.write(
-        `alteroidd: 正本に置かれた鍵が、このデーモンの器の環境変数と食い違っています` +
-          `（マネージャーは正本の値、クローンは器の環境変数の値で走っています）: ` +
-          `${names.join(', ')}。` +
-          `直すには、正本のその行を外してください` +
-          `（外せば effective() が器の環境変数へ落ち、マネージャーとクローンが揃います）: ` +
-          `${names.map((name) => `alteroid credential remove ${name}`).join(' / ')}\n`,
+        `alteroidd: GitHub の名前で、正本の行よりこのデーモンの器の環境変数の値が` +
+          `優先して配られています（マネージャーもクローンも、器の環境変数の値で` +
+          `走っています。正本のその行は配られていません）: ${names.join(', ')}。` +
+          `正本のその行を外しても配られる値は変わりません（どちらにしても器の` +
+          `環境変数の値が配られます）。揃えるには、正本の値を器の環境変数に` +
+          `合わせて置き直すか（alteroid credential set <名前>）、器の環境変数の` +
+          `側を変えてください（この HTTP の口からは変えられません）\n`,
       );
     },
   });

@@ -96,13 +96,17 @@ describe('alteroid credential list', () => {
   });
 
   /**
-   * **クローンとマネージャーが別の鍵で走っていることを、ここで名指しする（#865）。**
+   * **GitHub の名前で、正本の行より器の環境変数の値が優先して配られている
+   * ことを、ここで名指しする（#865 の恒久策、2026-09-12）。**
    *
    * ⭐ **旗が立っていることを言うだけでは足りない。** 読んだ人が次に何を
-   * すればいいか（＝正本のその行を外す）まで出ていなければ、この口は
-   * 「観測はしたが誰も動けない」になる。**だから次の一手も歯で固定する。**
+   * すればいいかまで出ていなければ、この口は「観測はしたが誰も動けない」に
+   * なる。**⚠️ この PR で次の一手が変わった** —— 以前は「正本の行を外す」
+   * だったが、GitHub の名前は器の環境変数のほうが優先されるようになった
+   * ので、外しても配られる値は変わらない。**だから新しい一手（正本の値を
+   * 器の環境変数に合わせる）を歯で固定する。**
    */
-  it('食い違っている名前を名指しし、次にやること（正本の行を外す）まで言う', async () => {
+  it('食い違っている名前を名指しし、次にやること（正本を器の環境変数に合わせる）まで言う', async () => {
     setReply('GET', '/credentials', {
       status: 200,
       body: {
@@ -122,11 +126,11 @@ describe('alteroid credential list', () => {
     await credentialListCommand();
 
     const text = read();
-    expect(text).toContain('クローンとマネージャーが別の鍵で走っています');
-    expect(text).toContain('alteroid credential remove GH_TOKEN');
+    expect(text).toContain('優先して配られています');
+    expect(text).toContain('alteroid credential set GH_TOKEN --file <path>');
     // **旗が立っていない行を巻き込まない。** 巻き込むと「全部おかしい」に
     // 見えて、本当に食い違っている1本が埋もれる。
-    expect(text).not.toContain('alteroid credential remove NPM_TOKEN');
+    expect(text).not.toContain('alteroid credential set NPM_TOKEN --file <path>');
   });
 
   it('食い違いが無ければ、その節は出ない（無い警告を出さない）', async () => {

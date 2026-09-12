@@ -9,7 +9,9 @@ import {
   credentialNamesShadowedByProfile,
   CREDENTIAL_NAME,
   fingerprintOf,
+  GITHUB_CREDENTIAL_NAMES,
   isWithheldCredentialName,
+  POOL_OWNED_CREDENTIAL_NAMES,
   ROTATABLE_CREDENTIAL_KEYS,
 } from './credentials.js';
 import { WITHHELD_ENV_KEYS } from './runner.js';
@@ -407,6 +409,38 @@ describe('CLAUDE_CODE_OAUTH_TOKEN を回せる鍵にする', () => {
     const fingerprints = store.fingerprints();
     expect(fingerprints.map((f) => f.name)).toContain('CLAUDE_CODE_OAUTH_TOKEN');
     expect(JSON.stringify(fingerprints)).not.toContain('sk-ant-oat-seeded');
+  });
+});
+
+/**
+ * **クローンの器の env が正本より勝つ名前の範囲（Issue #865 の恒久策、
+ * 2026-09-12）。** ここが守るのは「推測で広がらないこと」——中身は明示的な
+ * 列挙であって、`ROTATABLE_CREDENTIAL_KEYS` からプールを引いた計算結果では
+ * ない（`GITHUB_CREDENTIAL_NAMES` の doc）。
+ */
+describe('GITHUB_CREDENTIAL_NAMES（クローンの器の env が正本より勝つ名前）', () => {
+  it('いまは GH_TOKEN と GITHUB_TOKEN の2つだけである', () => {
+    expect([...GITHUB_CREDENTIAL_NAMES].sort()).toEqual(['GH_TOKEN', 'GITHUB_TOKEN']);
+  });
+
+  it('CLAUDE_CODE_OAUTH_TOKEN（プールの名前）を含まない', () => {
+    // **プールの名前が紛れ込んだら、Anthropic のトークンの優先順位まで
+    // 一緒に反転する。** ここが守るのはそれが起きないことである。
+    for (const name of POOL_OWNED_CREDENTIAL_NAMES) {
+      expect(GITHUB_CREDENTIAL_NAMES).not.toContain(name);
+    }
+  });
+
+  it('ROTATABLE_CREDENTIAL_KEYS からプールを引いた集合そのものである必要はない', () => {
+    // **⚠️ 現状は値として一致するが、この一致を機械的な計算結果として
+    // テストしない。** 一致するのは「たまたま」であって「そう作られている
+    // から」ではない——ROTATABLE_CREDENTIAL_KEYS に GitHub 以外の非プールの
+    // 名前が増えても、この配列は自動では広がらない（doc の主張そのもの）。
+    // ここでは「現状は一致する」という1つの事実だけを固定する。
+    const rotatableMinusPool = ROTATABLE_CREDENTIAL_KEYS.filter(
+      (name) => !POOL_OWNED_CREDENTIAL_NAMES.includes(name),
+    );
+    expect([...GITHUB_CREDENTIAL_NAMES].sort()).toEqual([...rotatableMinusPool].sort());
   });
 });
 
