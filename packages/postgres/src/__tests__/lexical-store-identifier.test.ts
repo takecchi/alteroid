@@ -13,6 +13,17 @@ import { closeTestClient, getTestClient, resetTestDatabase } from "./test-db.js"
  * (`consolidation-cost-summary-lib.mjs` の `WEIGHTS_UNAVAILABLE_PHRASE` と同じ判断)。
  * `scripts/__tests__/ci-yml-postgres-regime-wiring.test.mjs` がこのファイルのソースを
  * 文字列として読み、`MNEMORA_LEXICAL_REGIME_JSON` への参照が消えていないことを固定している。
+ *
+ * 🔴 **Issue #148 ②: `schemaVersion: 2` — ロケールを測り始めた理由**
+ *
+ * `.github/workflows/ci.yml` は6本の pgvector ジョブすべてで
+ * `POSTGRES_INITDB_ARGS: "--encoding=UTF8"` を宣言し始めた(Issue #148 ②)。
+ * **ただしロケール(`lc_collate`/`lc_ctype`)は宣言していない**——ADR 0103 が実測した
+ * 分岐軸は `server_encoding` であり、ロケールが `nonAsciiIsIndexed` に効くかどうかは
+ * まだ測っていない。**測っていない値を宣言するのは、Issue #148 が名指しで禁じた
+ * 「⛔ 順序を逆にしない」を破ることになる。** そこでこの歯は `lc_collate` / `lc_ctype` /
+ * `default_text_search_config` を先に**測るだけ**にする——次にロケールを宣言するなら、
+ * この実測値を見てからである。
  */
 interface LexicalRegimeJson {
   schemaVersion: number;
@@ -25,6 +36,12 @@ interface LexicalRegimeJson {
   rawJapaneseWordHit: boolean;
   /** 歯が実際に通った分岐。⛔ 固定しない——両方が起こり得る(Issue #148)。 */
   regime: "non_ascii_indexed" | "non_ascii_dropped";
+  /** 🔴 Issue #148 ②: 測るだけで、まだ ci.yml では宣言していない。 */
+  lcCollate: string;
+  /** 🔴 Issue #148 ②: 測るだけで、まだ ci.yml では宣言していない。 */
+  lcCtype: string;
+  /** 🔴 Issue #148 ②: 測るだけで、まだ ci.yml では宣言していない。 */
+  defaultTextSearchConfig: string;
 }
 
 /**
@@ -289,9 +306,17 @@ describe("PostgresLexicalStore.search — 日本語の文に埋め込まれた�
    * （`if: always()` で後続の Job Summary 段を必ず走らせるのと同じ意図）。
    * `.github/workflows/ci.yml` の `postgres` ジョブがこの環境変数を渡し、
    * `scripts/lexical-regime-summary.mjs` がこの JSON を読んで Job Summary へ出す
-   * （⛔ 門ではない——値がどちらでも exit 0。`docs/roadmap.md` の
-   * 「決まっていない前提」= SQL_ASCII をサポート対象にするかへ、この可視化の実装が
-   * 先回りして答えを出さないため）。
+   * （⛔ 門ではない——値がどちらでも exit 0）。
+   *
+   * ⚠ **2026-09-12 訂正**: 以前はここに「`docs/roadmap.md` の『決まっていない前提』
+   * = SQL_ASCII をサポート対象にするかへ、この可視化の実装が先回りして答えを出さない
+   * ため」と書いていたが、これはもう事実ではない——オーナー（takecchi）は
+   * 2026-09-12T00:09Z に、`server_encoding` が `SQL_ASCII` の PostgreSQL を
+   * サポート対象にすると決めた（[ADR 0106](../../../../docs/decisions/
+   * 0106-ci-declares-the-regime-it-measures.md)）。**それでもこの可視化が門にしない
+   * ことは変わらない**——むしろサポート対象と決まった `SQL_ASCII` を、この可視化が
+   * 「悪い値」として先回りに門へ持ち込むことはできない（`LATIN1` は未回答であり、
+   * この決定の対象外のままである）。
    *
    * ⛔ **環境変数が無いときは何も書かない**——ローカルで `vitest run` するだけの
    * 開発者に、無関係なファイル書き込みを強いない。
@@ -299,6 +324,22 @@ describe("PostgresLexicalStore.search — 日本語の文に埋め込まれた�
    * ⛔ **この JSON 書き込みは、下の3本の `expect` を1つも弱めない。**分岐はどちらにも
    * 固定していない・`it.skip` にもしていない——書いているのは「実際に測った値」であり、
    * 「歯がどちらであるべきか」ではない。
+   *
+   * ---
+   *
+   * ### 🔴 Issue #148 ②: なぜロケールを測り始めたか(まだ宣言はしない)
+   *
+   * `.github/workflows/ci.yml` は6本の pgvector ジョブすべてに
+   * `POSTGRES_INITDB_ARGS: "--encoding=UTF8"` を足し、**encoding だけ**を宣言し始めた
+   * (Issue #148 ②)。**ロケール(`lc_collate`/`lc_ctype`)は宣言していない**——ADR 0103
+   * が総当たりで割った軸は `server_encoding` であり、ロケールが `nonAsciiIsIndexed` に
+   * 効くかどうかはまだ測っていない値だからである。
+   *
+   * この歯はここで `lc_collate` / `lc_ctype` / `default_text_search_config` を
+   * `LexicalRegimeJson`(`schemaVersion: 2`)へ足して**測るだけ**にする。
+   * ⟹ **次にロケールを ci.yml へ宣言するなら、この実測値を見てからである**
+   * ——測る前に宣言しない、という Issue #148 の「⛔ 順序を逆にしない」をそのまま
+   * ロケールにも適用する。
    */
   it("素の to_tsvector で識別子を引けるかどうかは server_encoding で反転する（歯が自分の前提を測って名乗る）", async () => {
     const { pool } = await getTestClient();
@@ -310,7 +351,14 @@ describe("PostgresLexicalStore.search — 日本語の文に埋め込まれた�
               length(to_tsvector('simple', '日本語')) > 0 AS "nonAsciiIsIndexed",
               to_tsvector('simple', $1)::text AS "rawTsvector",
               to_tsvector('simple', $1) @@ websearch_to_tsquery('simple', $2) AS "rawIdentifierHit",
-              to_tsvector('simple', $1) @@ websearch_to_tsquery('simple', $3) AS "rawJapaneseWordHit"`,
+              to_tsvector('simple', $1) @@ websearch_to_tsquery('simple', $3) AS "rawJapaneseWordHit",
+              -- PostgreSQL 16 で lc_collate / lc_ctype は GUC ではなくなり、DB ごとの
+              -- 属性になった。GUC として引くと 42704 unrecognized configuration
+              -- parameter で落ちる（PR #151 の CI が pg17 で実際に落ちた。2026-09-12）。
+              -- そこで pg_database から引く。GUC 経由へ戻さないこと。
+              (SELECT datcollate FROM pg_database WHERE datname = current_database()) AS "lcCollate",
+              (SELECT datctype   FROM pg_database WHERE datname = current_database()) AS "lcCtype",
+              current_setting('default_text_search_config') AS "defaultTextSearchConfig"`,
       [content, "PROJ-1234", "レビュー"],
     );
     const row = probe.rows[0] as {
@@ -320,6 +368,9 @@ describe("PostgresLexicalStore.search — 日本語の文に埋め込まれた�
       rawTsvector: string;
       rawIdentifierHit: boolean;
       rawJapaneseWordHit: boolean;
+      lcCollate: string;
+      lcCtype: string;
+      defaultTextSearchConfig: string;
     };
 
     // 🔴 Issue #148: `expect` より前に書く。歯がこの後どちらの分岐で赤くなっても、
@@ -327,7 +378,7 @@ describe("PostgresLexicalStore.search — 日本語の文に埋め込まれた�
     const regimeJsonPath = process.env.MNEMORA_LEXICAL_REGIME_JSON;
     if (regimeJsonPath) {
       const regimeJson: LexicalRegimeJson = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         measuredAt: new Date().toISOString(),
         serverVersion: row.version,
         serverEncoding: row.encoding,
@@ -336,6 +387,9 @@ describe("PostgresLexicalStore.search — 日本語の文に埋め込まれた�
         rawIdentifierHit: row.rawIdentifierHit,
         rawJapaneseWordHit: row.rawJapaneseWordHit,
         regime: row.nonAsciiIsIndexed ? "non_ascii_indexed" : "non_ascii_dropped",
+        lcCollate: row.lcCollate,
+        lcCtype: row.lcCtype,
+        defaultTextSearchConfig: row.defaultTextSearchConfig,
       };
       writeFileSync(regimeJsonPath, `${JSON.stringify(regimeJson, null, 2)}\n`, "utf8");
     }
@@ -343,7 +397,9 @@ describe("PostgresLexicalStore.search — 日本語の文に埋め込まれた�
     const observed =
       `【この環境の実測】server_version=${row.version} / server_encoding=${row.encoding} / ` +
       `非ASCIIが語彙として残るか=${row.nonAsciiIsIndexed} / ` +
-      `to_tsvector('simple', 本文)=${row.rawTsvector}`;
+      `to_tsvector('simple', 本文)=${row.rawTsvector} / ` +
+      `lc_collate=${row.lcCollate} / lc_ctype=${row.lcCtype} / ` +
+      `default_text_search_config=${row.defaultTextSearchConfig}`;
 
     if (row.nonAsciiIsIndexed) {
       expect(

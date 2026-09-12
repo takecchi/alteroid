@@ -56,6 +56,14 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: mnemora_ci
+          # 🔴 Issue #148 ②: この CI が**どの regime で測っているか**を宣言する。
+          # 値は推測ではない——PR #149 が入れた可視化が main の run 34635954755 で
+          # 実測した server_encoding そのもの(artifact `lexical-regime`)である。
+          # ⛔ ロケール(LANG / LC_COLLATE / LC_CTYPE)は宣言しない。**まだ測っていない**
+          #    からである(この PR で測る側には足したが、その実測値が出るのは
+          #    この PR の CI が初めてである)。測る前に宣言するのは、Issue #148 が
+          #    「⛔ 順序を逆にしない」と名指しで禁じた形そのものである。
+          POSTGRES_INITDB_ARGS: "--encoding=UTF8"
         ports:
           - 5432:5432
         options: >-
@@ -106,18 +114,25 @@ jobs:
           MNEMORA_LEXICAL_REGIME_JSON: ${{ github.workspace }}/lexical-regime.json
         run: pnpm --filter @mnemora/postgres run test:db
 
-      - name: 実測した regime を Job Summary に残す(⛔ 門ではない。Issue #148)
+      - name: 実測した regime を Job Summary に残す(⛔ 値の良し悪しの門ではない。ただし宣言と実測の食い違いは門である。Issue #148 ②)
         # このステップは常に走る(`if: always()`)——上の test:db が(regime とは無関係な
         # 理由も含め)落ちても、その run で regime を書けていたかどうかを Job Summary
         # から読めるようにする。`lexical-regime-summary.mjs` 自体は server_encoding /
-        # nonAsciiIsIndexed の値では非0にならない——非0になるのは「値が出ていない
-        # (歯が書いていない)」「JSON が壊れている」「値が空だった」の3つだけであり、
-        # これは「値の門」ではなく「可視化そのものが壊れたことの門」である
-        # (`scripts/lexical-regime-summary-lib.mjs` の docstring)。
+        # nonAsciiIsIndexed の値そのものでは非0にならない——非0になるのは「値が出ていない
+        # (歯が書いていない)」「JSON が壊れている」「値が空だった」、そして
+        # 🔴 「この6本の services が宣言した POSTGRES_INITDB_ARGS(下の --expect-encoding)
+        # と、実際に測れた server_encoding が食い違った」の4つだけである(Issue #148 ②)。
+        # **最後の1つだけは値を見るが、『UTF8 が正しい』ではなく『宣言どおりだったか』
+        # だけを見る。**これは「値の良し悪しの門」ではなく「宣言と実測が揃っている
+        # ことの門」である(`scripts/lexical-regime-summary-lib.mjs` の docstring)。
+        # ⚠ --expect-encoding の値は、6本の services env の POSTGRES_INITDB_ARGS と
+        # 揃っていなければならない——揃っていることは
+        # scripts/__tests__/ci-yml-postgres-regime-wiring.test.mjs が固定している。
         if: always()
         run: |
           node scripts/lexical-regime-summary.mjs \
             --measured "${{ github.workspace }}/lexical-regime.json" \
+            --expect-encoding "UTF8" \
             >> "$GITHUB_STEP_SUMMARY"
 
       - name: 実測値そのもの(機械可読)を成果物として残す(Issue #148)
@@ -146,6 +161,14 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: mnemora_ci
+          # 🔴 Issue #148 ②: この CI が**どの regime で測っているか**を宣言する。
+          # 値は推測ではない——PR #149 が入れた可視化が main の run 34635954755 で
+          # 実測した server_encoding そのもの(artifact `lexical-regime`)である。
+          # ⛔ ロケール(LANG / LC_COLLATE / LC_CTYPE)は宣言しない。**まだ測っていない**
+          #    からである(この PR で測る側には足したが、その実測値が出るのは
+          #    この PR の CI が初めてである)。測る前に宣言するのは、Issue #148 が
+          #    「⛔ 順序を逆にしない」と名指しで禁じた形そのものである。
+          POSTGRES_INITDB_ARGS: "--encoding=UTF8"
         ports:
           - 5432:5432
         options: >-
@@ -233,6 +256,14 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: mnemora_ci
+          # 🔴 Issue #148 ②: この CI が**どの regime で測っているか**を宣言する。
+          # 値は推測ではない——PR #149 が入れた可視化が main の run 34635954755 で
+          # 実測した server_encoding そのもの(artifact `lexical-regime`)である。
+          # ⛔ ロケール(LANG / LC_COLLATE / LC_CTYPE)は宣言しない。**まだ測っていない**
+          #    からである(この PR で測る側には足したが、その実測値が出るのは
+          #    この PR の CI が初めてである)。測る前に宣言するのは、Issue #148 が
+          #    「⛔ 順序を逆にしない」と名指しで禁じた形そのものである。
+          POSTGRES_INITDB_ARGS: "--encoding=UTF8"
         ports:
           - 5432:5432
         options: >-
@@ -331,6 +362,14 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: mnemora_ci
+          # 🔴 Issue #148 ②: この CI が**どの regime で測っているか**を宣言する。
+          # 値は推測ではない——PR #149 が入れた可視化が main の run 34635954755 で
+          # 実測した server_encoding そのもの(artifact `lexical-regime`)である。
+          # ⛔ ロケール(LANG / LC_COLLATE / LC_CTYPE)は宣言しない。**まだ測っていない**
+          #    からである(この PR で測る側には足したが、その実測値が出るのは
+          #    この PR の CI が初めてである)。測る前に宣言するのは、Issue #148 が
+          #    「⛔ 順序を逆にしない」と名指しで禁じた形そのものである。
+          POSTGRES_INITDB_ARGS: "--encoding=UTF8"
         ports:
           - 5432:5432
         options: >-
@@ -425,6 +464,14 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: mnemora_ci
+          # 🔴 Issue #148 ②: この CI が**どの regime で測っているか**を宣言する。
+          # 値は推測ではない——PR #149 が入れた可視化が main の run 34635954755 で
+          # 実測した server_encoding そのもの(artifact `lexical-regime`)である。
+          # ⛔ ロケール(LANG / LC_COLLATE / LC_CTYPE)は宣言しない。**まだ測っていない**
+          #    からである(この PR で測る側には足したが、その実測値が出るのは
+          #    この PR の CI が初めてである)。測る前に宣言するのは、Issue #148 が
+          #    「⛔ 順序を逆にしない」と名指しで禁じた形そのものである。
+          POSTGRES_INITDB_ARGS: "--encoding=UTF8"
         ports:
           - 5432:5432
         options: >-
@@ -544,6 +591,14 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: mnemora_ci
+          # 🔴 Issue #148 ②: この CI が**どの regime で測っているか**を宣言する。
+          # 値は推測ではない——PR #149 が入れた可視化が main の run 34635954755 で
+          # 実測した server_encoding そのもの(artifact `lexical-regime`)である。
+          # ⛔ ロケール(LANG / LC_COLLATE / LC_CTYPE)は宣言しない。**まだ測っていない**
+          #    からである(この PR で測る側には足したが、その実測値が出るのは
+          #    この PR の CI が初めてである)。測る前に宣言するのは、Issue #148 が
+          #    「⛔ 順序を逆にしない」と名指しで禁じた形そのものである。
+          POSTGRES_INITDB_ARGS: "--encoding=UTF8"
         ports:
           - 5432:5432
         options: >-

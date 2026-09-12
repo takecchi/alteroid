@@ -7,21 +7,25 @@
  * 組み立ては `./lexical-regime-summary-lib.mjs` の純関数に委ねる
  * (`consolidation-cost-summary.mjs`/`identifier-probe-summary.mjs` と同じ分担)。ここは
  *
- * 1. `--measured <path>`(必須)を読む
+ * 1. `--measured <path>` と `--expect-encoding <value>`(どちらも必須)を読む
  * 2. ファイルを読んで JSON.parse する(壊れていたら理由を stderr に出して非0で終わる)
  * 3. 形を検査する(`validateMeasured`。壊れていたら同様に非0)
- * 4. Markdown を stdout に出す
+ * 4. Markdown を stdout に出す(⭐ここまでは無条件——赤くなるときこそ Job Summary に
+ *    値が残らないと意味がない)
+ * 5. `--expect-encoding` の宣言値と実測した `serverEncoding` を突き合わせる
+ *    (`compareDeclaredEncoding`)。不一致なら stderr にメッセージを出して非0で終わる
+ *    (Issue #148 ②)
  *
  * だけを行う。
  *
  * 使い方:
- *   node scripts/lexical-regime-summary.mjs --measured <path>
+ *   node scripts/lexical-regime-summary.mjs --measured <path> --expect-encoding <value>
  *
- * ⛔ **これは門ではない。**`server_encoding`/`nonAsciiIsIndexed` がどちらの値でも
- * exit 0 のままである(基準値ファイルも置いていない——理由は
+ * ⛔ **値の良し悪しは門ではない。**`server_encoding`/`nonAsciiIsIndexed` がどちらの
+ * 値でも、それ自体では非0にならない(基準値ファイルも置いていない——理由は
  * `lexical-regime-summary-lib.mjs` の docstring)。
  *
- * 🔴 **非0で終わる経路は3つあり、意図して別々のメッセージにしている**
+ * 🔴 **非0で終わる経路は4つあり、意図して別々のメッセージにしている**
  * (Issue #148 の受け入れ基準「可視化そのものが壊れても気づけること」の実装):
  *
  * 1. **ファイルが無い**(`ENOENT`) — 「値が出ていない」。歯がそもそも
@@ -32,12 +36,25 @@
  *    空だった」。これは(1)(2)のどちらとも異なるメッセージにする——「歯が書く
  *    呼び出しごと消えた」のか「歯は書いたが中身が壊れている」のかを、この段の
  *    stderr だけで見分けられるようにするため。
+ * 4. **🔴 Issue #148 ②: 宣言(`--expect-encoding`)と実測(`serverEncoding`)が食い違う**
+ *    — Markdown を stdout に出したあとで判定する(順序が重要。下記参照)。
  *
- * これら3つは、regime の値(UTF8 か SQL_ASCII か等)を一切見ない——
+ * 1〜3は、regime の値(UTF8 か SQL_ASCII か等)を一切見ない——
  * **「可視化そのものが壊れたことの門」であって「値の門」ではない。**
+ * 4だけは値を見るが、「一致したか」だけを見る——「どちらの値が正しいか」は判定しない。
+ *
+ * ⭐ **順序が重要**: `validateMeasured` を通ったら、**先に Markdown を stdout へ出す**。
+ * そのあとで `compareDeclaredEncoding` を見て、不一致なら stderr へ出して exit 1 する。
+ * このステップは `>> "$GITHUB_STEP_SUMMARY"` で使われるため、**赤くなるときこそ
+ * 値が Job Summary に残らないと意味がない**——先に判定して早期 return すると、
+ * 一番見たいとき(食い違ったとき)に限って値が残らなくなる。
  */
 import { readFileSync } from "node:fs";
-import { validateMeasured, buildSummaryMarkdown } from "./lexical-regime-summary-lib.mjs";
+import {
+  validateMeasured,
+  buildSummaryMarkdown,
+  compareDeclaredEncoding,
+} from "./lexical-regime-summary-lib.mjs";
 
 const args = process.argv.slice(2);
 
@@ -50,9 +67,13 @@ function readArgValue(flag) {
 }
 
 const measuredPath = readArgValue("--measured");
+const expectEncoding = readArgValue("--expect-encoding");
 
-if (!measuredPath) {
-  console.error("使い方: node scripts/lexical-regime-summary.mjs --measured <path>");
+if (!measuredPath || !expectEncoding) {
+  console.error(
+    "使い方: node scripts/lexical-regime-summary.mjs --measured <path> " +
+      "--expect-encoding <value>",
+  );
   process.exit(1);
 }
 
@@ -91,6 +112,19 @@ if (!validated.ok) {
   process.exit(1);
 }
 
-console.log(buildSummaryMarkdown(validated.value));
-// 明示的に0を宣言する——ここまで来たら regime の値がどちらでも門にしない。
+// ⭐ 先に Markdown を stdout へ出す(順序が重要)。このステップは
+// `>> "$GITHUB_STEP_SUMMARY"` で使われるため、下の④(宣言と実測の食い違い)で
+// 非0になるときこそ、Job Summary に値が残っていないと意味がない。
+console.log(buildSummaryMarkdown(validated.value, expectEncoding));
+
+const comparison = compareDeclaredEncoding(validated.value, expectEncoding);
+if (!comparison.ok) {
+  // ④ 宣言と実測が食い違った(Issue #148 ②)。regime の値そのものの良し悪しではなく、
+  // 「宣言どおりだったか」だけを見ている——`compareDeclaredEncoding` の docstring参照。
+  console.error(comparison.error);
+  process.exit(1);
+}
+
+// 明示的に0を宣言する——ここまで来たら regime の値がどちらでも門にしない
+// (宣言と実測が一致している限り)。
 process.exit(0);
