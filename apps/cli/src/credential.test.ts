@@ -95,6 +95,56 @@ describe('alteroid credential list', () => {
     expect(text).toContain('alteroid credential set <名前> --file <path>');
   });
 
+  /**
+   * **クローンとマネージャーが別の鍵で走っていることを、ここで名指しする（#865）。**
+   *
+   * ⭐ **旗が立っていることを言うだけでは足りない。** 読んだ人が次に何を
+   * すればいいか（＝正本のその行を外す）まで出ていなければ、この口は
+   * 「観測はしたが誰も動けない」になる。**だから次の一手も歯で固定する。**
+   */
+  it('食い違っている名前を名指しし、次にやること（正本の行を外す）まで言う', async () => {
+    setReply('GET', '/credentials', {
+      status: 200,
+      body: {
+        credentials: [
+          {
+            name: 'GH_TOKEN',
+            sha256: 'cccccccccccc',
+            updatedAt: '2026-09-12T00:00:00.000Z',
+            shadowsCloneEnv: true,
+          },
+          { name: 'NPM_TOKEN', sha256: 'dddddddddddd', updatedAt: '2026-09-12T00:00:00.000Z' },
+        ],
+      },
+    });
+    const read = captureStdout();
+
+    await credentialListCommand();
+
+    const text = read();
+    expect(text).toContain('クローンとマネージャーが別の鍵で走っています');
+    expect(text).toContain('alteroid credential remove GH_TOKEN');
+    // **旗が立っていない行を巻き込まない。** 巻き込むと「全部おかしい」に
+    // 見えて、本当に食い違っている1本が埋もれる。
+    expect(text).not.toContain('alteroid credential remove NPM_TOKEN');
+  });
+
+  it('食い違いが無ければ、その節は出ない（無い警告を出さない）', async () => {
+    setReply('GET', '/credentials', {
+      status: 200,
+      body: {
+        credentials: [
+          { name: 'GH_TOKEN', sha256: 'cccccccccccc', updatedAt: '2026-09-12T00:00:00.000Z' },
+        ],
+      },
+    });
+    const read = captureStdout();
+
+    await credentialListCommand();
+
+    expect(read()).not.toContain('別の鍵で走っています');
+  });
+
   it('名前と指紋を並べ、突き合わせ先（runner 側）まで言う', async () => {
     setReply('GET', '/credentials', {
       status: 200,

@@ -30,6 +30,12 @@ interface CredentialFingerprint {
   /** sha256（16進）の先頭12桁。**値は返らない。** */
   sha256: string;
   updatedAt: string;
+  /**
+   * **正本のこの値が、デーモン（クローン）の器の環境変数と食い違っている**
+   * （＝マネージャーとクローンが別の鍵で走っている）ときだけ `true`。
+   * 既定では返らない（`credentialsResponseSchema` の doc、Issue #865）。
+   */
+  shadowsCloneEnv?: boolean;
 }
 
 interface CredentialsView {
@@ -67,6 +73,28 @@ export async function credentialListCommand(): Promise<void> {
     '届いているかは runner 側の指紋と突き合わせます: alteroid runners\n' +
       '（値はどちらにも出ません。指紋が一致していれば同じものです）\n',
   );
+
+  /**
+   * **クローンとマネージャーが別の鍵で走っている名前を名指しする**（Issue #865）。
+   *
+   * 黙って通り過ぎない理由: 正本にその名前の行が在ると「正本が勝つ」ので
+   * マネージャーはこの値で走るが、**クローンはデーモンの器の環境変数を直に
+   * 読む**ので、器の env に同じ名前で別の値が在れば、クローンだけ別の鍵で
+   * 走り続ける。しかも `alteroid credential list` はここまで指紋しか出さない
+   * ので、値も指紋も見比べない限り誰にも気づけない——だからここで名前だけを
+   * 突き合わせて出す（値は出さない。指紋も出さない。名前と次の一手だけ）。
+   */
+  const shadowed = view.credentials.filter((entry) => entry.shadowsCloneEnv === true);
+  if (shadowed.length > 0) {
+    stdout.write('\n');
+    stdout.write(
+      `⚠ クローンとマネージャーが別の鍵で走っています（正本の値と、デーモンの器の\n` +
+        `環境変数の値が食い違っています）: ${shadowed.map((entry) => entry.name).join(', ')}\n` +
+        `次にやること: 正本のその行を外してください。外せば同じ名前をデーモンの器の\n` +
+        `環境変数から配るようになり、クローンと揃います:\n` +
+        shadowed.map((entry) => `  alteroid credential remove ${entry.name}\n`).join(''),
+    );
+  }
 }
 
 export async function credentialSetCommand(

@@ -195,6 +195,26 @@ export interface CredentialFingerprint {
   /** sha256（16進）の先頭12桁。**値そのものは決して出さない。** */
   sha256: string;
   updatedAt: string;
+  /**
+   * **正本のこの値が、クローンの器の環境変数に在る同名の値と食い違っている**
+   * ときだけ `true`。**既定では付けない**（この行を持たない器は、この旗を
+   * 理由に何も変わらない——`false` を敷き詰めると「明示的に食い違っていない
+   * と確かめた」という意味になってしまい、見ていないものと見て揃っていた
+   * ものの区別が付かない）。
+   *
+   * 真になるのは、マネージャー（正本を読む `CredentialService#effective()`）と
+   * クローン（`Clone#childEnv()` 経由でデーモンの器の env をそのまま持つ）が
+   * **別の鍵で走っているとき**だけである（Issue #865 の実測）。検出条件は
+   * `credential-service.ts` の `cloneEnvShadowedNames` に置いてある。
+   *
+   * **「正本が在れば器の env より正本が勝つ」という仕様は変えていない**
+   * （`CredentialServiceOptions.env` の doc、2026-09-11 の人間の決定）。
+   * この旗は勝敗を変えず、ただ知らせるだけである。
+   *
+   * `CredentialStore`（runner 側の器）はこの旗を立てない——runner には
+   * 「クローンの器の env」という比較対象がそもそも無い。
+   */
+  shadowsCloneEnv?: boolean;
 }
 
 export interface CredentialEntry {

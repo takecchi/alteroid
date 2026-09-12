@@ -102,8 +102,27 @@ export interface CredentialServiceOptions {
    * **見るのは `ROTATABLE_CREDENTIAL_KEYS` だけ。** env を総なめにしない —— 何が鍵かを
    * 推測すると、鍵でないものを晒すか鍵を取りこぼす（`credentials.ts` の同じ doc）。
    * ⟹ 任意の名前を器の env に置く形は支えない。**それは正本へ置く**（この口の本題）。
+   *
+   * **⚠️ この土台は「正本が勝つ」の裏返しとして、クローンとマネージャーを
+   * 割りうる。** 正本にその名前の行が在れば `effective()` は正本の値を配る
+   * ——マネージャーはそれで走る。だが**クローンはここ（この `env`）を直に
+   * 読んで走る**（`Clone#childEnv()`）ので、正本の値とこの `env` の値が違えば、
+   * 2つの主体が別の鍵で走ることになる（Issue #865 の実測: マネージャーは
+   * GitHub App のトークン、クローンは classic PAT）。**この食い違いの検出が
+   * `cloneEnvShadowedNames` である。**
    */
   env?: NodeJS.ProcessEnv;
+  /**
+   * クローンとマネージャーが別の鍵で走っている（`cloneEnvShadowedNames` が
+   * 名前を返した）ことを知らせる。**渡すのは名前の配列だけ。値も指紋も
+   * 渡さない**——ここから先へ値を運ぶ経路をひとつも作らない。
+   *
+   * 呼ぶ位置は `syncRunner()`（後述のdocを見ること）。**同じ食い違いを
+   * 連続して知らせない**——直前に知らせた名前の集合と変わらなければ黙る
+   * （`syncRunner` は runner が名乗り直すたびに叩かれるので、そのたびに
+   * 出すと同じ1行で日誌が埋まり、意味のある行が埋もれる）。
+   */
+  onCloneEnvShadowed?: (names: readonly string[]) => void;
 }
 
 export interface ApplyCredentialsResult {
@@ -156,9 +175,78 @@ function assertEntries(entries: readonly CredentialEntry[], withheld: readonly s
   }
 }
 
+/**
+ * マネージャーとクローンが同じ名前で別の鍵を持つ名前を返す。**名前だけを
+ * 返す。値も指紋も返さない**（`fingerprintOf` で比べた結果しか外へ出さない）。
+ *
+ * ## 検出条件（これがすべて）
+ *
+ * 1. 正本（`stores.credentials`）にその名前の行が在る
+ * 2. クローンの器の env（`CredentialServiceOptions.env`）にも、その名前の
+ *    空でない値が在る
+ * 3. 両者の指紋（`fingerprintOf`）が違う
+ *
+ * この3つが揃ったときだけ、マネージャー（`effective()` 経由で正本を読む）と
+ * クローン（`Clone#childEnv()` 経由でこの `env` をそのまま持つ）が別の鍵で
+ * 走る。実測（Issue #865）: マネージャーは GitHub App の user-to-server
+ * トークン、クローンは classic PAT だった。
+ *
+ * **正本にしか無い、あるいは器の env にしか無いときは立たない。** 前者は
+ * `effective()` が正本の値を配るので両者は揃う（`CredentialServiceOptions.env`
+ * の doc「正本が勝つ」）。後者は正本に無い名前なので `effective()` が env から
+ * 埋め、こちらも揃う。**「両方に在って中身が違う」ときだけが揃わない**——
+ * ここが唯一の食い違いである。
+ *
+ * **`POOL_OWNED_CREDENTIAL_NAMES` は最初から見ない。** あの名前は `effective()`
+ * が最初から除外していて（`effective()` の doc）、比べるべき「クローンが
+ * 実際に使う値」はそもそも正本ではなくプールの撒き手（`token-spread.ts`）が
+ * 撒く値である。正本と器の env をここで比べても、クローンが本当に使っている
+ * 値とは無関係な比較になる（＝比べる意味が無い。誤検出を作るだけ）。
+ *
+ * **「正本が勝つ」という仕様には一切触れない。** この関数は検出するだけで、
+ * どちらの値を配るかには手を出さない（それは `effective()` の役目のまま）。
+ */
+function cloneEnvShadowedNames(
+  authoritative: readonly StoredCredential[],
+  env: NodeJS.ProcessEnv,
+): string[] {
+  const vaultValue = new Map(authoritative.map((row) => [row.name, row.value]));
+  return ROTATABLE_CREDENTIAL_KEYS.filter((name) => {
+    if (POOL_OWNED_CREDENTIAL_NAMES.includes(name)) return false;
+    const vault = vaultValue.get(name);
+    if (vault === undefined) return false; // 正本に無い（食い違いようがない）
+    const clone = env[name];
+    if (clone === undefined || clone.length === 0) return false; // 器の env に無い
+    return fingerprintOf(vault) !== fingerprintOf(clone);
+  });
+}
+
 export function createCredentialService(options: CredentialServiceOptions): CredentialService {
-  const { stores, runners, withheldEnvKeys } = options;
+  const { stores, runners, withheldEnvKeys, onCloneEnvShadowed } = options;
   const env = options.env ?? process.env;
+
+  /**
+   * 直前に知らせた食い違いの名前（ソート済み・カンマ結合）。**同じ集合を
+   * 連続して知らせないための記憶**（`onCloneEnvShadowed` の doc）。`undefined`
+   * は「まだ一度も測っていない」で、空集合とは区別する——区別しないと、
+   * 「一度も食い違ったことが無い」状態と「測ったら食い違いが無かった」状態が
+   * 同じ値になり、最初の食い違いが「変わっていない」と誤認されて出なくなる。
+   */
+  let lastShadowSignature: string | undefined;
+
+  /**
+   * `syncRunner()` の副作用として食い違いを知らせる。**ここでしか呼ばない**
+   * ——`effective()` の呼び手は `syncRunner()` だけなので、行を読み直さずに
+   * 済む場所がここしか無い（`apply()` は `effective()` を経由しない）。
+   */
+  function reportCloneEnvShadow(authoritative: readonly StoredCredential[]): void {
+    if (onCloneEnvShadowed === undefined) return;
+    const shadowed = cloneEnvShadowedNames(authoritative, env);
+    const signature = [...shadowed].sort().join(',');
+    if (signature === lastShadowSignature) return;
+    lastShadowSignature = signature;
+    if (shadowed.length > 0) onCloneEnvShadowed(shadowed);
+  }
 
   /**
    * 直列化の実体（`ProfileService` と同じ形）。**次の更新は前の更新の全段が
@@ -175,12 +263,22 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
   }
 
   return {
-    fingerprints: async () =>
-      (await stores.credentials.list()).map((row) => ({
+    fingerprints: async () => {
+      const rows = await stores.credentials.list();
+      // **読むだけの口でも旗を立てる。** `GET /credentials` は人間が能動的に
+      // 見に行く経路であり、`syncRunner` の側（runner が名乗るたびの契機）と
+      // 独立して「いま食い違っているか」を確かめられる必要がある——だから
+      // ここは `lastShadowSignature` を経由せず、呼ばれるたびに測り直す。
+      const shadowed = new Set(cloneEnvShadowedNames(rows, env));
+      return rows.map((row) => ({
         name: row.name,
         sha256: fingerprintOf(row.value),
         updatedAt: row.updatedAt,
-      })),
+        // **`false` を敷き詰めない。** 立っているときだけ載せる
+        // （`CredentialFingerprint.shadowsCloneEnv` の doc）。
+        ...(shadowed.has(row.name) ? { shadowsCloneEnv: true as const } : {}),
+      }));
+    },
 
     apply: (entries: readonly CredentialEntry[]) =>
       serial(async () => {
@@ -241,9 +339,15 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
    * **プールが正本を持つ名前は入れない**（`POOL_OWNED_CREDENTIAL_NAMES`）。
    * あちらは回し手が撒く（`token-spread.ts`）ので、ここが同じ名前を降ろすと
    * **撒き手が2つになり、名乗り直しのたびに回した鍵を巻き戻す。**
+   *
+   * **副作用として、ここでクローンとの食い違いも知らせる。** `effective()` の
+   * 呼び手は `syncRunner()` だけで、正本の行はここで一度だけ読む——
+   * `reportCloneEnvShadow` のために `stores.credentials.list()` を二重に
+   * 呼び直さずに済む場所が、ここ以外に無い。
    */
   async function effective(): Promise<StoredCredential[]> {
     const rows = await stores.credentials.list();
+    reportCloneEnvShadow(rows);
     const held = new Set(rows.map((row) => row.name));
     const fromEnv = ROTATABLE_CREDENTIAL_KEYS.filter(
       (name) => !held.has(name) && !POOL_OWNED_CREDENTIAL_NAMES.includes(name),

@@ -72,6 +72,11 @@ function registryOf(runners: RunnerClient[]) {
 
 function serviceOf(runners: RunnerClient[] = [], env: NodeJS.ProcessEnv = {}) {
   const stores = createMemoryStores();
+  /**
+   * クローンとの食い違いを知らせた回（#865）。**名前の配列しか受け取らない**
+   * ——値も指紋も渡らないことを、この型そのものが固定している。
+   */
+  const shadowNotices: readonly string[][] = [];
   const service = createCredentialService({
     stores,
     runners: registryOf(runners),
@@ -80,8 +85,11 @@ function serviceOf(runners: RunnerClient[] = [], env: NodeJS.ProcessEnv = {}) {
     // 検証を走らせた機械に `GH_TOKEN` が在るかどうかで結果が変わる ——
     // 実際、`env` の土台を足した直後にこのファイルの5本がそれで落ちた。
     env,
+    onCloneEnvShadowed: (names) => {
+      (shadowNotices as string[][]).push([...names]);
+    },
   });
-  return { stores, service };
+  return { stores, service, shadowNotices };
 }
 
 describe('置いて配る', () => {
@@ -392,5 +400,143 @@ describe('同時に更新されたとき', () => {
     // 正本と器が同じ値で揃っている（どちらが後だったかは問わない）
     const stored = (await stores.credentials.list()).find((row) => row.name === 'WHICH');
     expect(stored?.value).toBe(runner.held.get('WHICH'));
+  });
+});
+
+/**
+ * **クローンとマネージャーが別の鍵で走っていることを検出する（#865）。**
+ *
+ * ⭐ **これは挙動の歯ではなく、観測の歯である。** 「正本が在れば器の env より
+ * 正本が勝つ」という仕様は1ミリも変わっていない（そちらは上の
+ * `it('正本が在れば器の env より正本が勝つ（人間が明示的に置いたほうを配る）')`
+ * が固定しており、**この節を全部消してもあちらは緑のままでなければならない**）。
+ *
+ * ここが守っているのは1つだけ: **食い違っていることに、誰かが気づけること。**
+ * 実測（#865）では、マネージャーが GitHub App の user-to-server トークンで、
+ * クローンが classic PAT で走っていた —— **どちらの層も自分は正常に見えており、
+ * 気づける経路は「マネージャーが 403 で止まって人間が原因を追う」しか無かった。**
+ */
+describe('クローンとマネージャーで別の鍵が配られていることを検出する（#865）', () => {
+  /** 実在の鍵と紛れない形（`token-rotator.test.ts` の `dummy-not-a-real-token` と同じ作法）。 */
+  const VAULT = 'dummy-not-a-real-token-vault';
+  const CLONE_ENV = 'dummy-not-a-real-token-clone-env';
+
+  it('正本と器の env に同じ名前で別の値が在れば、旗が立つ', async () => {
+    const { service } = serviceOf([], { GH_TOKEN: CLONE_ENV });
+    await service.apply([{ name: 'GH_TOKEN', value: VAULT }]);
+
+    expect(await service.fingerprints()).toEqual([
+      expect.objectContaining({ name: 'GH_TOKEN', shadowsCloneEnv: true }),
+    ]);
+  });
+
+  it('同じ値なら立たない（食い違っていない）', async () => {
+    const { service } = serviceOf([], { GH_TOKEN: VAULT });
+    await service.apply([{ name: 'GH_TOKEN', value: VAULT }]);
+
+    // **`false` を敷き詰めない。** 旗そのものが付かない。
+    expect((await service.fingerprints())[0]).not.toHaveProperty('shadowsCloneEnv');
+  });
+
+  it('正本にしか無ければ立たない（effective() が正本を配るので両者は揃う）', async () => {
+    const { service } = serviceOf([], {});
+    await service.apply([{ name: 'GH_TOKEN', value: VAULT }]);
+
+    expect((await service.fingerprints())[0]).not.toHaveProperty('shadowsCloneEnv');
+  });
+
+  it('器の env にしか無ければ立たない（正本に行が無いので effective() が env から埋める）', async () => {
+    const { service } = serviceOf([], { GH_TOKEN: CLONE_ENV });
+
+    // 正本が空なので、そもそも並べる行が無い。
+    expect(await service.fingerprints()).toEqual([]);
+  });
+
+  it('器の env の値が空文字なら立たない（空は「置かれていない」と同じ）', async () => {
+    const { service } = serviceOf([], { GH_TOKEN: '' });
+    await service.apply([{ name: 'GH_TOKEN', value: VAULT }]);
+
+    expect((await service.fingerprints())[0]).not.toHaveProperty('shadowsCloneEnv');
+  });
+
+  it('回せない名前では立たない（見るのは ROTATABLE_CREDENTIAL_KEYS だけ）', async () => {
+    // **身元は回せる鍵ではない。** ここを見ると、クローンが自分の身元で
+    // コミットし、マネージャーが正本の身元でコミットする**正常な構成**まで
+    // 食い違いとして出てしまう。
+    const { service } = serviceOf([], { GIT_AUTHOR_NAME: 'from-clone-env' });
+    await service.apply([{ name: 'GIT_AUTHOR_NAME', value: 'from-vault' }]);
+
+    expect((await service.fingerprints())[0]).not.toHaveProperty('shadowsCloneEnv');
+  });
+
+  it('プールが正本を持つ名前では立たない（比べる相手がそもそも違う）', async () => {
+    // **`apply()` は経由できない。** あちらは `CLAUDE_CODE_OAUTH_TOKEN` を
+    // 「正本はプールの側である」と拒むので（`assertEntries`）、この状態は
+    // 正規の口からは作れない。**それでも門を測る** —— 記憶ストアを直に
+    // 書けば作れてしまう状態であり、門が消えたことに気づける経路は他に無い。
+    //
+    // **立ってはいけない理由**: クローンが実際に使う `CLAUDE_CODE_OAUTH_TOKEN` は
+    // 正本でも器の env でもなく、回し手（`token-spread.ts`）が撒いた値である。
+    // ここで正本と器の env を比べても、**クローンが本当に使っている値とは
+    // 無関係な比較**になり、誤検出しか生まない。
+    const { stores, service } = serviceOf([], { CLAUDE_CODE_OAUTH_TOKEN: CLONE_ENV });
+    await stores.credentials.put([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: VAULT }]);
+
+    expect((await service.fingerprints())[0]).not.toHaveProperty('shadowsCloneEnv');
+  });
+
+  it('syncRunner が食い違いを知らせる。ただし同じ食い違いは繰り返さない', async () => {
+    const runner = fakeRunner();
+    const { service, shadowNotices } = serviceOf([runner], { GH_TOKEN: CLONE_ENV });
+    await service.apply([{ name: 'GH_TOKEN', value: VAULT }]);
+
+    await service.syncRunner(runner);
+    await service.syncRunner(runner);
+
+    // **1回だけ。** `syncRunner` は runner が名乗り直すたびに叩かれるので、
+    // 毎回出すと同じ1行で日誌が埋まり、意味のある行が埋もれる。
+    expect(shadowNotices).toEqual([['GH_TOKEN']]);
+  });
+
+  it('食い違いが無ければ、一度も知らせない', async () => {
+    const runner = fakeRunner();
+    const { service, shadowNotices } = serviceOf([runner], { GH_TOKEN: VAULT });
+    await service.apply([{ name: 'GH_TOKEN', value: VAULT }]);
+
+    await service.syncRunner(runner);
+
+    expect(shadowNotices).toEqual([]);
+  });
+
+  it('値も指紋も、旗にも知らせにも出ない', async () => {
+    const runner = fakeRunner();
+    const { service, shadowNotices } = serviceOf([runner], { GH_TOKEN: CLONE_ENV });
+    await service.apply([{ name: 'GH_TOKEN', value: VAULT }]);
+    await service.syncRunner(runner);
+
+    const fingerprints = JSON.stringify(await service.fingerprints());
+    const notices = JSON.stringify(shadowNotices);
+    for (const secret of [VAULT, CLONE_ENV, fingerprintOf(CLONE_ENV)]) {
+      expect(notices).not.toContain(secret);
+    }
+    // **旗の側には正本の指紋だけが載る**（元から載っているもの）。
+    // **器の env の側の指紋は、どこにも出さない。**
+    expect(fingerprints).not.toContain(VAULT);
+    expect(fingerprints).not.toContain(CLONE_ENV);
+    expect(fingerprints).not.toContain(fingerprintOf(CLONE_ENV));
+  });
+
+  it('🔴 旗が立っていても、配るのは正本の値のままである（挙動を変えていない）', async () => {
+    const runner = fakeRunner();
+    const { service } = serviceOf([runner], { GH_TOKEN: CLONE_ENV });
+    await service.apply([{ name: 'GH_TOKEN', value: VAULT }]);
+    runner.received.length = 0;
+
+    await service.syncRunner(runner);
+
+    // **検出は勝敗を変えない**（`CredentialServiceOptions.env` の doc、
+    // 2026-09-11 の人間の決定）。ここが `CLONE_ENV` になったら、この PR は
+    // 「知らせるだけ」ではなくなっている。
+    expect(runner.held.get('GH_TOKEN')).toBe(VAULT);
   });
 });
