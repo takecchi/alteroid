@@ -1,6 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { PGlite } from '@electric-sql/pglite';
+import { eq } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/pglite';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { STATEMENTS } from './migrate.js';
+import type { Db } from './db.js';
+import { migrate, STATEMENTS } from './migrate.js';
+import { archive } from './schema.js';
 
 /**
  * **`migrate` の配列そのものを構造で見る歯。**
@@ -52,5 +57,59 @@ describe('migrate の配列（起動のたびに頭から通るもの）', () =>
   it('歯が実際に文を拾えている（正規表現が空振りしていない）', () => {
     expect(STATEMENTS.flatMap(droppedIndexNames)).toContain('usage_daily_key_idx');
     expect(STATEMENTS.flatMap(createdIndexNames)).toContain('usage_daily_token_key_idx');
+  });
+});
+
+/**
+ * `archive` の指紋・連続性判定の3列（`body_chars` / `body_md5` /
+ * `continuity`。#698）の追加は2回通しても壊れない。
+ *
+ * **⚠️ 同じ入り口を2回呼ぶだけでは測ったことにならない**（AGENTS.md
+ * 「2回通しても壊れないを測るテストは…『2周目でだけ壊れる状態』を挟む
+ * こと」）——1周目（`beforeEach` の `migrate(db)`）の後に**実際に3列へ値の
+ * 入った行を積んでから**2周目を当てる。`alter table ... add column
+ * if not exists` は列が既に在れば2周目は本当の no-op になるはずだが、それを
+ * 「空の DB に対して2回通す」だけで確かめると、`usage_daily_key_idx` の事故
+ * （`migrate.ts` 冒頭の doc）と同じ形で見落とす。
+ */
+describe('migrate（archive の指紋・連続性列。#698）', () => {
+  let client: PGlite;
+  let db: Db;
+
+  beforeEach(async () => {
+    client = new PGlite();
+    db = drizzle(client);
+    await migrate(db);
+  });
+
+  afterEach(async () => {
+    await client.close();
+  });
+
+  it('body_chars / body_md5 / continuity に値が入った行が、2周目のあとも生き残る', async () => {
+    await db.insert(archive).values({
+      id: 'session-migrate-continuity-1.jsonl',
+      sessionId: 'session-migrate-continuity',
+      at: new Date('2026-09-12T00:00:00.000Z'),
+      body: 'BODY\n',
+      bodyChars: 5,
+      bodyMd5: 'deadbeefdeadbeefdeadbeefdeadbeef',
+      continuity: 'continues',
+    });
+
+    // 2周目——3列に値が入った行が実在する状態で当てる。
+    await migrate(db);
+
+    const rows = await db
+      .select({
+        bodyChars: archive.bodyChars,
+        bodyMd5: archive.bodyMd5,
+        continuity: archive.continuity,
+      })
+      .from(archive)
+      .where(eq(archive.id, 'session-migrate-continuity-1.jsonl'));
+    expect(rows).toEqual([
+      { bodyChars: 5, bodyMd5: 'deadbeefdeadbeefdeadbeefdeadbeef', continuity: 'continues' },
+    ]);
   });
 });
