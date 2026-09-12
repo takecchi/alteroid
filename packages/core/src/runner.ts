@@ -673,6 +673,19 @@ const DENIED_MEMORY_LIMIT = 512;
 const SUBAGENT_STOP_NOTE_TEXT_LIMIT = 1_500;
 
 /**
+ * `#onStop` が `note` の `text` へ積む文字数の上限（#861）。
+ *
+ * **値は `SUBAGENT_STOP_NOTE_TEXT_LIMIT` と同じだが、別の定数にしてある。**
+ * 片方を動かしたときに、もう片方が黙って一緒に動かないためである —— 2つの
+ * フックが積む一覧は長さの事情が違う（あちらは「当人が起こした分」だけに
+ * 絞られるが、こちらは**セッション全体の在庫**が載る）。
+ *
+ * **黙って落とさない**（AGENTS.md「静かに失敗する道具」）。超えたら切り、
+ * 切ったこと自体を末尾に書く。
+ */
+const STOP_NOTE_TEXT_LIMIT = 1_500;
+
+/**
  * `#backgroundTaskOwners`（背景タスクの id → それを起こした主体）が持つ件数の
  * 上限（#570）。
  *
@@ -1150,6 +1163,30 @@ class RunnerSession {
    * 出す。毎回出すと、背景処理を使う作業者が畳むたびに1行増えて雑音になる。
    */
   #settledOnlyNoted = false;
+  /**
+   * `Stop`（マネージャー自身のターンが閉じる瞬間）がこのセッションで発火した
+   * **通算の回数**（#861）。**観測専用の計数であり、何の判定にも使わない。**
+   *
+   * この値そのものが答えの一部である —— #861 が問うているのは「`Stop` は
+   * いつ来て、いつ来ないか」であり、`note` が1行も出ないときに
+   * 「発火していない」と「発火したが在り高が 0 だった」を割るのはこの数である。
+   */
+  #stopFirings = 0;
+  /**
+   * 「`Stop` が発火したが、背景処理も `session_crons` も 0件 だった」診断を、
+   * このセッションで既に出したか（#861）。
+   *
+   * `#settledOnlyNoted` と同じ形・同じ理由で**1セッションに1回だけ**出す ——
+   * こちらは**マネージャーのターンが閉じるたび**に来るので、毎回出せば日誌が
+   * ターン数ぶんの同じ行で埋まる。
+   *
+   * ⚠️ **この間引きが落とすもの（#861 へ残す）。** 2回目以降の「0件で閉じた」
+   * 回は個別には残らない。通算の回数（`#stopFirings`）は在り高が非0の回の
+   * `note` に載るので、そこから復元できる範囲でしか復元できない ——
+   * **在り高が最後まで 0 のままだったセッションでは、発火が1回だったのか
+   * 200回だったのかをこの観測からは言えない。**
+   */
+  #stopIdleNoted = false;
   /**
    * `subagentWakeupKey(agentId, taskId)` → **その組（作業者 × 背景処理）を
    * 起こし直した回数**（#570 の追跡の続き。`SUBAGENT_WAKEUP_LIMIT_PER_TASK`
@@ -1736,6 +1773,9 @@ class RunnerSession {
       // **観測専用**（#357）。`{ continue: true }` を返すだけで何もブロック
       // しない。理由は `#onSubagentStop` の doc を見よ。
       onSubagentStop: (input) => this.#onSubagentStop(input),
+      // **観測専用**（#861）。`{ continue: true }` を返すだけで、**何も判断せず、
+      // 何も抑制しない。** 理由は `#onStop` の doc を見よ。
+      onStop: (input) => this.#onStop(input),
     });
   }
 
@@ -3732,6 +3772,284 @@ class RunnerSession {
         'そのあいだ「自分の背景処理を残して畳んだ作業者」の記録は出なくなる（無音になる）。' +
         '（雑音にしないため、この診断はセッションに1回だけ出す。）',
     });
+  }
+
+  /**
+   * **マネージャー自身のターンが閉じる瞬間**に、セッションに残っている背景処理の
+   * 在り高を記録する（#861）。
+   *
+   * ## ⭐ これは観測だけである —— 何も判断せず、何も抑制しない
+   *
+   * 返すのは `{ continue: true }` ちょうどで、`decision` も `hookSpecificOutput`
+   * （`additionalContext`）も**一度も返さない。** 直上の `#onSubagentStop` は #570 の
+   * 追跡で「起こし直す」側へ変わっているが、**こちらは記録だけである** —— まず
+   * `background_tasks` に何が入るかを実測し、**その実データを見てから**機構を足すか
+   * どうかを決める、という順序が #861 の本文に書いてある。
+   *
+   * ⛔ **この関数が在ることをもって #861 を閉じないこと。** 観測口を足して「対処済み」に
+   * し、残件を別の Issue のコメントへ流して住所を失うのは、この repo が #570 → #357 で
+   * 実際に踏んだ道である（経緯は #861 に書いてある）。**続きの住所は #861 である。**
+   *
+   * ## なぜ `Stop` が要るのか —— `SubagentStop` とちょうど裏返しだからである
+   *
+   * `#onSubagentStop` の doc の最後の節が逐語でこう名乗っている:「この `note`（および
+   * `additionalContext`）が出ないことは『空転が無かった』を意味しない」。**発火条件
+   * そのものが条件付きだからである** —— `SubagentStop` は「作業者が畳んだ瞬間に
+   * **親のターンが開いていた**」ときにしか来ない（#570 の実測で、作業者の完了8件が
+   * 発火4件／不発火4件に、この条件ちょうどで割れた）。そして委譲は既定で
+   * `is_backgrounded: true` なので、**親が先に閉じる形が本番では普通である。**
+   *
+   * ⟹ `Stop` は**マネージャーのターンが閉じる瞬間**に来る ＝ `SubagentStop` が発火
+   * しない側の条件そのものである。SDK 自身がこの欄をまさにこの用途だと説明している
+   * （逐語。SDK 0.3.268 同梱の `sdk.d.ts`）:
+   *
+   * [sdk-verbatim StopHookInput.background_tasks]
+   * > In-flight background work (running/pending + backgrounded) registered in this session. Lets hooks distinguish "session is done" from "session is paused waiting for background work to wake it". Empty array when nothing is in flight.
+   *
+   * ## ⛔ この観測が覆わないもの（覆えるように見せないために書く）
+   *
+   * **`Stop` はマネージャーが起きているときにしか来ない。** ⟹ 「**マネージャーが二度と
+   * 起きない**」回 —— 器が落ちた・入れ替わった・そもそも起こされなかった —— は
+   * **この観測でも覆えない。** 完全な形には器の外（デーモン側）に時計が要る。
+   * ⟹ **ここが覆うのは「マネージャーが起きたのに、残っている背景処理に気づかずに
+   * 閉じる」回までである。** 同じ断りを `note` の本文にも書いてある（片方だけ読んだ
+   * 人が誤らないため）。
+   *
+   * ## 所有者の引き方（⛔ `owned_by_subagent` に依存しない）
+   *
+   * `BackgroundTaskSummary` に所有者の欄は無い。#570 が SDK 0.3.247 のライブ JSON で
+   * `owned_by_subagent` を観測しているが、**0.3.259 / 0.3.261 / 0.3.268 のどの型定義にも
+   * 存在しない**（0.3.268 は手元で確かめた）。⟹ **所有者は既存の
+   * `#backgroundTaskOwners`（`#recordBackgroundTaskOwner` が `tool_response` の
+   * `backgroundTaskId` と `agent_id` から作っている表）からしか引かない。**
+   *
+   * ## 乗ってよい id の等式と、乗らない等式
+   *
+   * `StopHookInput.background_tasks[]` は `SubagentStopHookInput.background_tasks[]` と
+   * **同じ `BackgroundTaskSummary` 型**であり、後者の `id` が
+   * `tool_response.backgroundTaskId` と同じ値であることは #570 が生 JSON で実測して
+   * いる。**この等式にだけ乗る**（同じ型であること自体は `runner-stop.test.ts` が型で
+   * 固定してあるので、SDK が2つを分岐させたら `typecheck` が落ちる）。
+   *
+   * ⛔ **`background_tasks_changed.tasks[].task_id` が同じ id 空間かは、誰もライブで
+   * 確かめていない。** ⟹ ここはその等式に乗らない（`#liveBackgroundTasks` を引きに
+   * 行かない）。
+   *
+   * ## 雑音の抑え方（そして、それが落とすもの）
+   *
+   * **在り高が非0の回（背景処理か `session_crons` のどちらかが在る）は、毎回出す。**
+   * 同じ在り高で何度も閉じていること自体が #861 の探している署名なので、内容が同じ
+   * だからといって畳まない。**在り高が 0 の回だけ1セッションに1回へ間引く**
+   * （`#noteStopIdle`。間引きが落とすものはそちらの doc）。
+   *
+   * **入力は防御的に読む**（既存フックと同じく `as` で受けて型を仮定しない）。例外は
+   * すべて握って `{ continue: true }` へ倒す —— フックが例外でセッションを止めては
+   * いけない。`#markProgressed()` などの既存の副作用は呼ばない（この PR は観測を
+   * 足すだけで、既存の挙動を1つも変えない）。
+   */
+  async #onStop(input: unknown): Promise<{ continue: true }> {
+    try {
+      // **数えるのは何より先。** 下のどの枝を通っても（間引かれても）通算は進む ——
+      // この数そのものが #861 の問い「`Stop` はいつ来て、いつ来ないか」への材料である。
+      this.#stopFirings += 1;
+
+      const hook = input as {
+        background_tasks?: unknown;
+        session_crons?: unknown;
+        stop_hook_active?: unknown;
+      };
+      const tasks = Array.isArray(hook.background_tasks) ? hook.background_tasks : [];
+      const crons = Array.isArray(hook.session_crons) ? hook.session_crons : [];
+      // **取れたときだけ載せる。** 取れない回に既定値の行を作らない
+      // （AGENTS.md 地雷「取れない軸に0の行を作る」）。
+      const stopHookActive =
+        typeof hook.stop_hook_active === 'boolean' ? hook.stop_hook_active : undefined;
+
+      // **在庫も予約も無い ＝ SDK の言う「session is done」の側。**
+      if (tasks.length === 0 && crons.length === 0) {
+        this.#noteStopIdle();
+        return { continue: true };
+      }
+
+      // 所有者と `status` で数え上げる。**どちらの内訳も合計が `tasks.length` に
+      // 一致する**ので、0 の行も残す —— これは「取れなかった軸」ではなく、**数えた
+      // 結果の 0** である（AGENTS.md 地雷「取れない軸に0の行を作る」が禁じているのは
+      // 前者で、内訳から項目が消えると合計との突き合わせができなくなる）。
+      const owners = { manager: 0, worker: 0, delegation: 0, unresolved: 0 };
+      const statuses = { live: 0, settled: 0, unknown: 0 };
+      for (const task of tasks) {
+        owners[this.#stopTaskOwnerKind(task)] += 1;
+        statuses[classifyBackgroundTaskStatus((task as { status?: unknown }).status)] += 1;
+      }
+
+      const stopHookActiveText =
+        stopHookActive === undefined ? '' : ` stop_hook_active=${String(stopHookActive)}。`;
+
+      const noteLines = [
+        `Stop（マネージャーのターンが閉じる瞬間。このセッションで通算 ${this.#stopFirings}回目）: ` +
+          `**背景処理 ${tasks.length}件 / session_crons ${crons.length}件 を残したまま閉じようとしている。**` +
+          stopHookActiveText,
+        `所有者の内訳（表 #backgroundTaskOwners から引いた）: マネージャー自身 ${owners.manager}件 / ` +
+          `作業者 ${owners.worker}件 / 委譲そのもの ${owners.delegation}件 / ` +
+          `引けなかった ${owners.unresolved}件。`,
+        `status の内訳: 走っている ${statuses.live}件 / 終わった ${statuses.settled}件 / ` +
+          `分からない ${statuses.unknown}件。`,
+        ...tasks.map((task) => this.#renderStopTaskLine(task)),
+        ...(owners.unresolved === 0
+          ? []
+          : [
+              `⚠️ 上のうち ${owners.unresolved}件 は**所有者を引けなかった**（\`type\` が ` +
+                '`subagent` でない ＝ 委譲そのものではないのに、表に無い）。この行が出たら計器の' +
+                'ほうを疑う —— `PostToolUse` の `tool_response.backgroundTaskId` が改名・消滅したか、' +
+                `表が上限（${BACKGROUND_TASK_OWNER_LIMIT}件）で古い側を捨てたかである。`,
+            ]),
+        ...(statuses.unknown === 0
+          ? []
+          : [
+              `⚠️ 上のうち ${statuses.unknown}件 は status が既知の語彙のどちらでもない。` +
+                'この行が出たら計器のほうを疑う —— SDK が status の語彙を変えた見込みが高い。',
+            ]),
+        '⚠️ **これは観測だけである（#861 の段1）。** この行は何も止めておらず、何も起こし直していない。',
+        '⚠️ この行が出ないことは「空転が無かった」を意味しない —— `Stop` は**マネージャーが起きて' +
+          'いるときにしか来ない**。器が落ちた・入れ替わった・二度と起こされなかった回は、' +
+          'この観測にも現れない（#861）。',
+      ];
+
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        // **`stall` は載せない。** `runner-protocol.ts` の `note.stall.outcome` は
+        // `'woken' | 'limit_reached'` の2語で、ここは**どちらでもない**（起こし直しても
+        // 諦めてもいない。ただ記録している）。欄を増やすとデーモンと runner が別々に
+        // デプロイされる窓で古い側が黙って落とすので、`#noteSettledOnly` /
+        // `#noteOwnerLookupFailure` と同じく `stall` 無しの素の `note` にする
+        // （`manager.ts` の `case 'note'` は `stall === undefined` を日誌の `exchange`
+        // として通す）。
+        //
+        // **`escalate` も立てない。** 観測だけなので、クローンの受信箱へ割り込む理由が
+        // まだ無い（割り込むかどうかは実データを見てから決める。#861 の段2）。
+        text: this.#truncateStopNoteText(noteLines.join('\n')),
+      });
+
+      return { continue: true };
+    } catch (error: unknown) {
+      // フックが例外でセッションを止めてはいけない。記録そのものが失敗したことだけを、
+      // 握れる範囲でもう一度 note として上げる（`#onSubagentStop` の `catch` と同じ
+      // 形・同じ理由）。
+      try {
+        this.#emit({
+          type: 'note',
+          managerId: this.#id,
+          text: `Stop の観測に失敗した: ${String(error)}`,
+        });
+      } catch {
+        // ここまで失敗したら、もう上げる手段が無い。黙って諦める
+        // （挙動は変えない＝必ず continue: true を返すことのほうを優先する）。
+      }
+      return { continue: true };
+    }
+  }
+
+  /**
+   * 背景処理1件の**所有者の種類**を、既存の `#backgroundTaskOwners` だけから言い分ける
+   * （`#onStop`。#861）。
+   *
+   * - `manager` —— 表の値が空文字（マネージャー自身が起こした。
+   *   `#recordBackgroundTaskOwner` の取り決め）
+   * - `worker` —— 表の値が非空（その `agent_id` の作業者が起こした）
+   * - `delegation` —— 表に無く、`type` が `subagent`。**これは正常である** —— 委譲
+   *   そのもの（当人・兄弟）は `PostToolUse` の `backgroundTaskId` を持たないので、
+   *   表に無いのが当たり前である（`#noteOwnerLookupFailure` が `subagent` を除外して
+   *   いるのと同じ判定）
+   * - `unresolved` —— 表に無く、`type` も `subagent` でない。**ここだけが「計器を疑う」
+   *   側である。**
+   *
+   * **4つ目を3つ目に混ぜないことが本題である。** 混ぜると、経路が壊れて表が空に
+   * なった状態が「全部が委譲そのものだった」に化ける。
+   */
+  #stopTaskOwnerKind(task: unknown): 'manager' | 'worker' | 'delegation' | 'unresolved' {
+    const t = task as { id?: unknown; type?: unknown };
+    const owner = typeof t.id === 'string' ? this.#backgroundTaskOwners.get(t.id) : undefined;
+    if (owner !== undefined) return owner === '' ? 'manager' : 'worker';
+    return t.type === 'subagent' ? 'delegation' : 'unresolved';
+  }
+
+  /**
+   * 背景処理1件を、人間が読める1行へ変換する（`#onStop`。#861）。
+   *
+   * **`#renderSubagentStopTaskLines` を使い回さない。** あちらは各行の末尾に「この背景
+   * 処理では何回目か」（起こし直しの回数）を付けるが、こちらは**一度も起こし直して
+   * いない** —— 付ければ `0回目` が並び、読んだ人は「起こし直しの枠がまだ在る」と
+   * 読む。観測だけの行に、判定の軸を載せない。
+   */
+  #renderStopTaskLine(task: unknown): string {
+    const t = task as {
+      id?: unknown;
+      type?: unknown;
+      status?: unknown;
+      description?: unknown;
+      // `command` は shell タスクにしか付かない任意欄で、SDK 側で既に1000文字に
+      // 切ってある（`BackgroundTaskSummary.command` の doc）。全体の上限
+      // （`#truncateStopNoteText`）で二重に守る。
+      command?: unknown;
+    };
+    const id = typeof t.id === 'string' ? t.id : '(不明)';
+    const type = typeof t.type === 'string' ? t.type : '(不明)';
+    const status = typeof t.status === 'string' ? t.status : '(不明)';
+    const description = typeof t.description === 'string' ? t.description : '(不明)';
+    const command = typeof t.command === 'string' ? ` command=${t.command}` : '';
+    const kind = this.#stopTaskOwnerKind(task);
+    const owner =
+      kind === 'worker' && typeof t.id === 'string'
+        ? `worker:${this.#backgroundTaskOwners.get(t.id) ?? ''}`
+        : kind;
+    return `- id=${id} owner=${owner} type=${type} status=${status} description=${description}${command}`;
+  }
+
+  /**
+   * 「`Stop` は発火したが、背景処理も `session_crons` も 0件 だった」ことを、
+   * **1セッションに1回だけ**日誌へ出す（#861）。**観測専用。**
+   *
+   * **これが要る理由 —— この1行が「`Stop` はこの器で発火する」の実測そのものだから
+   * である。** 在り高が最後まで 0 だったセッションでこれを黙ると、「`Stop` が一度も
+   * 発火しなかった」と「発火したが毎回きれいに閉じた」が日誌の上で同じ顔（無音）に
+   * なる —— #861 が問うているのはまさにその区別である。
+   *
+   * ⚠️ **この間引きが落とすもの（#861 へ残す）。** 2回目以降の「0件で閉じた」回は
+   * 個別には残らない。通算（`#stopFirings`）は在り高が非0の回の `note` にしか載らない
+   * ので、**在り高が最後まで 0 のままだったセッションでは、発火が1回だったのか
+   * 200回だったのかをこの観測からは言えない。** 毎回出す形にしなかったのは、`Stop` が
+   * **マネージャーのターンが閉じるたび**に来るからで、毎回出せば日誌がターン数ぶんの
+   * 同じ行で埋まる（`#noteSettledOnly` と同じ作法）。**どちらが正しいかは実データを
+   * 見てから決まる。**
+   */
+  #noteStopIdle(): void {
+    if (this.#stopIdleNoted) return;
+    this.#stopIdleNoted = true;
+
+    this.#emit({
+      type: 'note',
+      managerId: this.#id,
+      text: this.#truncateStopNoteText(
+        'Stop: マネージャーのターンが閉じたが、**背景処理も session_crons も 0件 だった**' +
+          `（このセッションで通算 ${this.#stopFirings}回目の発火）。` +
+          '⟹ SDK の言う「session is done」の側である。' +
+          '**この行が出たこと自体が「`Stop` はこの器で発火する」の実測である**（#861 の段1）。' +
+          '（雑音にしないため、この「0件で閉じた」診断はセッションに1回だけ出す —— `Stop` は' +
+          'ターンが閉じるたびに来るので、毎回出せば日誌がターン数ぶんの同じ行で埋まる。' +
+          '⟹ **2回目以降の「0件で閉じた」回は個別には残らない。** 続きは #861。）',
+      ),
+    });
+  }
+
+  /**
+   * `#onStop` が `note` の `text` へ積む文字列を `STOP_NOTE_TEXT_LIMIT` で切る。
+   * **黙って落とさない**（AGENTS.md「静かに失敗する道具」）。超えたら切り、切ったこと
+   * 自体を末尾に書く。
+   */
+  #truncateStopNoteText(text: string): string {
+    if (text.length <= STOP_NOTE_TEXT_LIMIT) return text;
+    return text.slice(0, STOP_NOTE_TEXT_LIMIT) + `…（上限 ${STOP_NOTE_TEXT_LIMIT} 文字で切った）`;
   }
 
   /** 要約に潰される前に全文を上げる（監査は日誌＋アーカイブで担保する）。 */
