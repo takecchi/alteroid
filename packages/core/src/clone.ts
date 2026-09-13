@@ -5995,8 +5995,9 @@ class Clone implements CloneHost {
    * preset の道具と同じくここに残る — あちらも「自分でブラウザを開いた」側で
    * ある）。
    *
-   * **名簿は `tools.ts` に在り、37 本がどちらか一方に必ず属することを型で
-   * 強制している**（`SELF_JOURNALING_CLONE_TOOLS` / `TRACELESS_CLONE_TOOLS`。
+   * **名簿は `tools.ts` に在り、`CLONE_TOOL_NAMES` の全部がどちらか一方に
+   * 必ず属することを型で強制している**（`SELF_JOURNALING_CLONE_TOOLS` /
+   * `TRACELESS_CLONE_TOOLS`。
    * `CloneToolName` に対する網羅性・排他性のチェック）。道具を1本足す人は、
    * その場でどちらかへ入れることになる — 入れなければ `typecheck` が落ちる。
    *
@@ -6481,8 +6482,9 @@ class Clone implements CloneHost {
       }));
       const shownCategories = categories.slice(0, CONTEXT_USAGE_CATEGORY_LIMIT);
       const omittedCategories = categories.length - shownCategories.length;
-      // **配列は合計へ畳む。** 道具は37本あるので、1本ずつ写すと日誌の1行が
-      // 道具の数だけ伸びる（`turn-input.ts` の「再構成できるものを二重に持たない」）。
+      // **配列は合計へ畳む。** 道具は `CLONE_TOOL_NAMES`（`tools.ts`）の本数だけ
+      // あるので、1本ずつ写すと日誌の1行がその数だけ伸びる
+      // （`turn-input.ts` の「再構成できるものを二重に持たない」）。
       const sumTokens = (items: readonly { tokens: number }[]): number =>
         items.reduce((total, item) => total + item.tokens, 0);
       const mcpTools = usage.mcpTools ?? [];
