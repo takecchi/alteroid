@@ -34,6 +34,11 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
+// @ts-expect-error -- 素の .mjs（型宣言を持たない検査スクリプト）を読む
+import { decideGateVerdict } from '../../scripts/check-pr-origin-core.mjs';
+
+import { formatOriginMarker, ORIGIN_AUTOMATION } from '../../packages/core/src/origin-marker.js';
+
 const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url));
 const UPDATE_SCRIPT = join(SCRIPTS_DIR, 'update-claude-sdk.sh');
 const PR_SCRIPT = join(SCRIPTS_DIR, 'open-claude-sdk-pr.sh');
@@ -412,6 +417,13 @@ describe('open-claude-sdk-pr.sh', () => {
   // force push 前の「bot 以外のコミットが無いか」チェックのテストで使う。
   const BOT_EMAIL = '41898282+github-actions[bot]@users.noreply.github.com';
   const BOT_NAME = 'github-actions[bot]';
+  // #867 の CI未起動警告と #893/#930 の出所の刻印、両方の describe から使うので
+  // ここへ持つ（元は「SDK_CI_TRIGGERED による CI未起動の通知」の中だけにあった）。
+  const WARNING_MARK = '> [!WARNING]';
+  // このスクリプトが本文の先頭へ必ず差し込む刻印そのもの。
+  // `formatOriginMarker(ORIGIN_AUTOMATION)` から作る——値をここへ書き写さない
+  // ことで、`origin-marker.ts` 側の値が変わればこの定数も追随する。
+  const ORIGIN_MARKER_LINE = formatOriginMarker(ORIGIN_AUTOMATION);
 
   /** `reflect-release-prod.test.ts` と同じ手法：push が来たら1行記録するだけの
    * bare origin。ネットワークには一切触らない。 */
@@ -953,7 +965,6 @@ fi
   // （陽性）だけでなく検出しないこと（陰性対照）も対で測る** — 依頼者の言葉:
   // 「検出する歯だけを置くと、決定の巻き戻しが静かに通る」。
   describe('SDK_CI_TRIGGERED による CI未起動の通知（#867）', () => {
-    const WARNING_MARK = '> [!WARNING]';
     const PREFIXED_TITLE = `[CI未起動] ${TITLE}`;
 
     function writeCatalogDiff(s: ReturnType<typeof setup>): void {
@@ -1002,8 +1013,9 @@ fi
         expect(body).not.toContain('WARNING');
         expect(body).not.toContain('CI が付かない');
         expect(body).not.toContain('#867');
-        // 本文は元のままで、警告ブロックの追記が一切無い
-        expect(body).toBe('本文\n');
+        // 本文は元のまま＋出所の刻印（#893/#930）だけが先頭に付く。
+        // 警告ブロックの追記は一切無い。
+        expect(body).toBe(`${ORIGIN_MARKER_LINE}\n本文\n`);
         const calls = parseGhCalls(s.ghLog);
         expect(calls[1][calls[1].indexOf('--title') + 1]).toBe(TITLE);
         expect(calls[1]).not.toContain(PREFIXED_TITLE);
@@ -1098,7 +1110,7 @@ fi
         expect(calls[1]).toEqual(['pr', 'edit', '42', '--title', TITLE, '--body-file', s.bodyFile]);
         const body = readFileSync(s.bodyFile, 'utf8');
         expect(body).not.toContain('WARNING');
-        expect(body).toBe('本文\n');
+        expect(body).toBe(`${ORIGIN_MARKER_LINE}\n本文\n`);
       });
 
       it('前夜に付いた接頭・警告は、CI が回復した回では残らない（本文はワークフローが毎回作り直す前提で確かめる）', () => {
@@ -1139,8 +1151,72 @@ fi
         expect(lastEdit[lastEdit.indexOf('--title') + 1]).toBe(TITLE);
         const bodyAfterSecond = readFileSync(s.bodyFile, 'utf8');
         expect(bodyAfterSecond).not.toContain('WARNING');
-        expect(bodyAfterSecond).toBe('本文\n');
+        expect(bodyAfterSecond).toBe(`${ORIGIN_MARKER_LINE}\n本文\n`);
       });
+    });
+  });
+
+  // ==========================================================================
+  // 出所の刻印（Issue #893 / #930）
+  // ==========================================================================
+  //
+  // `update-claude-sdk.yml` が立てる PR には出所の刻印が一切入らない、という
+  // 穴（#930）を塞ぐ。刻印の値 `automation`（#893）は
+  // `packages/core/src/origin-marker.ts` が正本で、このスクリプトはその写しを
+  // 本文の先頭へ直書きする（このファイルの doc「出所の刻印を本文の先頭へ
+  // 必ず差し込む」参照）。
+  describe('出所の刻印（automation, #893 / #930）', () => {
+    function writeCatalogDiff(s: ReturnType<typeof setup>): void {
+      writeFileSync(
+        join(s.workdir, 'pnpm-workspace.yaml'),
+        "catalog:\n  '@anthropic-ai/claude-agent-sdk': ^0.3.238\n",
+      );
+    }
+
+    /**
+     * ⭐ **これが「自動化の PR が門を通る」ことを端から端まで繋ぐ唯一の歯である。**
+     * このスクリプトが実際に書いた本文を、CI の門（`decideGateVerdict`、
+     * `scripts/check-pr-origin-core.mjs`）へ本物の `authorType: 'Bot'` と
+     * ともに通し、`automation` として通ることを確かめる。刻印がちょうど1つ
+     * であることも合わせて見る——2つ以上あれば `parseOriginMarker` は
+     * `conflict`（値が同じでも重複自体は許すが、ここでは「必ず1つ」という
+     * このスクリプトの契約を固定したい）。
+     */
+    it('⭐ 本文の刻印はちょうど1つで、decideGateVerdict へ authorType: "Bot" とともに通すと automation で通る', () => {
+      const s = setup();
+      writeCatalogDiff(s);
+
+      const result = run(s, { FAKE_GH_PR_NUMBER: '', SDK_VERIFY_OK: 'true' });
+      expect(result.exitCode).toBe(0);
+
+      const body = readFileSync(s.bodyFile, 'utf8');
+      const occurrences = body.split(ORIGIN_MARKER_LINE).length - 1;
+      expect(occurrences).toBe(1);
+
+      // ORIGIN_GATE_SINCE（2026-09-11T20:00:00Z）より後の作成時刻を渡す——
+      // legacy へ倒れないことを確かめたいので、意図的に境界の後を選ぶ。
+      expect(
+        decideGateVerdict({ body, createdAt: '2026-09-12T00:00:00Z', authorType: 'Bot' }),
+      ).toEqual({ verdict: 'automation', values: ['automation'] });
+    });
+
+    it('CI が起きない回（SDK_CI_TRIGGERED が true でない）でも、本文は WARNING_MARK で始まり、かつ刻印も含む', () => {
+      const s = setup();
+      writeCatalogDiff(s);
+
+      const result = run(s, {
+        FAKE_GH_PR_NUMBER: '',
+        SDK_VERIFY_OK: 'true',
+        SDK_CI_TRIGGERED: 'false',
+      });
+      expect(result.exitCode).toBe(0);
+
+      const body = readFileSync(s.bodyFile, 'utf8');
+      expect(body.startsWith(WARNING_MARK)).toBe(true);
+      expect(body).toContain(ORIGIN_MARKER_LINE);
+      // 並び順: [CI 警告] → [刻印] → [本文]。
+      expect(body.indexOf(WARNING_MARK)).toBeLessThan(body.indexOf(ORIGIN_MARKER_LINE));
+      expect(body.indexOf(ORIGIN_MARKER_LINE)).toBeLessThan(body.indexOf('本文'));
     });
   });
 });

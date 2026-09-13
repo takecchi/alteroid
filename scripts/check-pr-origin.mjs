@@ -4,25 +4,28 @@
  * 揃っているかを見る（`pnpm check:pr-origin`）。
  *
  * **判定は `check-pr-origin-core.mjs` の doc が正本。** このファイルには置かない。
- * ここは `PR_BODY` / `PR_CREATED_AT` 環境変数を読み、`decideGateVerdict` を呼び、
- * 終了コードを決めるだけの薄い層（`check-base-overlap.mjs` の CLI の作法を
- * 真似ている）。`legacy`（門より前に作られた PR を赤くしない扱い）の条件は
- * `check-pr-origin-core.mjs` の doc「`legacy`（門より前に作られた PR）」を見よ。
+ * ここは `PR_BODY` / `PR_CREATED_AT` / `PR_AUTHOR_TYPE` 環境変数を読み、
+ * `decideGateVerdict` を呼び、終了コードを決めるだけの薄い層
+ * （`check-base-overlap.mjs` の CLI の作法を真似ている）。`legacy`（門より
+ * 前に作られた PR を赤くしない扱い）の条件は `check-pr-origin-core.mjs` の
+ * doc「`legacy`（門より前に作られた PR）」を、`automation` の担保・限界は
+ * 同ファイルの doc「`automation` の担保と限界」を見よ。
  *
- * ## なぜ `PR_BODY` / `PR_CREATED_AT` を環境変数で受け、引数やシェルの補間で受けないか
+ * ## なぜ `PR_BODY` / `PR_CREATED_AT` / `PR_AUTHOR_TYPE` を環境変数で受け、引数やシェルの補間で受けないか
  *
- * **PR 本文も作成時刻も外部入力である。** GitHub 上で誰でも編集できる文字列を、
- * ワークフローの `run:` の中へ `${{ github.event.pull_request.body }}` の
- * ような形で直接展開すると、本文の中身がそのままシェルスクリプトの一部として
- * 解釈される——本文に埋め込んだコマンドが CI のシェルで実行される、という
- * スクリプトインジェクションの経路になる（GitHub Actions の既知の落とし穴。
- * 対策は「信頼できない入力は `env:` を経由して渡し、シェルの外側で変数展開する」
+ * **PR 本文も作成時刻も作者種別も外部入力である。** GitHub 上で誰でも編集
+ * できる文字列を、ワークフローの `run:` の中へ
+ * `${{ github.event.pull_request.body }}` のような形で直接展開すると、
+ * 本文の中身がそのままシェルスクリプトの一部として解釈される——本文に
+ * 埋め込んだコマンドが CI のシェルで実行される、というスクリプト
+ * インジェクションの経路になる（GitHub Actions の既知の落とし穴。対策は
+ * 「信頼できない入力は `env:` を経由して渡し、シェルの外側で変数展開する」
  * ことで、`env:` に積んだ値は環境変数としてプロセスに渡るだけでシェルの構文と
- * しては解釈されない）。**だからこの CLI はどちらも `process.env` からしか
+ * しては解釈されない）。**だからこの CLI はどれも `process.env` からしか
  * 読まない** —— コマンドライン引数や `--body="$PR_BODY"` のような形を口にしない。
- * `PR_CREATED_AT` 自体は GitHub が発行する日時文字列で本文ほど自由度は無いが、
- * 同じワークフローの同じ `run:` に混ぜて書けば結局同じ経路になるので、
- * 揃えて `env:` を通す。
+ * `PR_CREATED_AT` / `PR_AUTHOR_TYPE` 自体は GitHub が発行する値で本文ほど
+ * 自由度は無いが、同じワークフローの同じ `run:` に混ぜて書けば結局同じ経路に
+ * なるので、揃えて `env:` を通す。
  *
  * ## 落ちたときに完全な形の刻印を出力しない理由
  *
@@ -53,12 +56,15 @@ function logError(text) {
   process.stderr.write(text + '\n');
 }
 
-const OK_VERDICTS = new Set(['manager', 'clone', 'human']);
+const OK_VERDICTS = new Set(['manager', 'clone', 'human', 'automation']);
 
 function main() {
   const body = process.env.PR_BODY;
   const createdAt = process.env.PR_CREATED_AT;
-  const result = decideGateVerdict({ body, createdAt });
+  // **PR_AUTHOR_TYPE も引数・シェル補間ではなく process.env からしか読まない**
+  // ——本文・作成時刻と同じ理由（上の doc「なぜ環境変数で受けるか」）。
+  const authorType = process.env.PR_AUTHOR_TYPE;
+  const result = decideGateVerdict({ body, createdAt, authorType });
 
   if (result.verdict === 'legacy') {
     log('check-pr-origin: OK（legacy）— この PR は門より前に作られたので、出所は引けない。');
@@ -84,6 +90,19 @@ function main() {
   if (result.verdict === 'conflict') {
     logError('  複数の刻印が食い違う値を持っている。');
   }
+  if (result.verdict === 'unverified') {
+    logError(
+      `  本文は automation を名乗っているが、この PR の作者は bot ではない（PR_AUTHOR_TYPE=${
+        authorType ? JSON.stringify(authorType) : '未設定'
+      }）。`,
+    );
+    logError('  読みは2つある。どちらかを確かめること:');
+    logError('    - 人間（または bot でない何か）が本文に automation と書いた。');
+    logError('    - この PR を出す自動化が ALTEROID_PR_TOKEN（人間の PAT）で走るようになり、');
+    logError(
+      '      作者が人間になった（#867）。その場合は automation の担保の設計を見直す判断が要る。',
+    );
+  }
   logError('');
   logError('  置く形（値の位置は埋めない。埋めて貼ると必ず誤った出所を刻むことになる）:');
   logError('    <!-- alteroid-origin: <値> -->');
@@ -92,6 +111,9 @@ function main() {
   logError('    - `mgr-...`（あなたが走っているセッションの識別子）= その委譲');
   logError('    - `clone`                                           = クローン自身');
   logError('    - `human`                                           = 人間が直接作った');
+  logError(
+    '    - `automation`                                      = bot が作った PR でしか通らない',
+  );
   logError('  直し方: PR 本文を編集して上の1行を足せば直る。');
   process.exitCode = 1;
 }

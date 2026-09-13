@@ -27,6 +27,7 @@
  * | 刻印1つ、値が `mgr-` で始まる | `manager` | `managerId` にその値が入る |
  * | 刻印1つ、値が `clone` | `clone` | |
  * | 刻印1つ、値が `human` | `human` | |
+ * | 刻印1つ、値が `automation` | `automation` → `authorType !== 'Bot'` なら `unverified` | `decideGateVerdict` だけが担保を見る（下「`automation` の担保と限界」） |
  * | 刻印が0個 | `missing` | ⛔ `human` に倒さない（下の理由） |
  * | 刻印は在るが値が上のどれでもない | `invalid` | |
  * | 刻印が2つ以上で値が食い違う | `conflict` | |
@@ -142,12 +143,61 @@
  * 通す側の値（`createdAt`）が信頼できないときに安全側（＝より赤くなりうる側）
  * へ倒すのは、`unmeasurable` を赤に倒す `check-base-overlap-core.mjs` の
  * `decideVerdict` と同じ考え方である。
+ *
+ * ## `automation` の担保と限界（Issue #893 / #930）
+ *
+ * **なぜ担保が要るか。** PR 本文は誰でも編集できる——刻印の値も例外ではない。
+ * `manager` / `clone` / `human` は「自己申告のまま通す」ことが問題にならない
+ * （その委譲・そのクローン・その人間が自分の PR に自分の名を刻むだけで、
+ * 他人になりすます動機が無い）。しかし `automation` を同じ扱いにすると、
+ * **誰でも本文に1行足すだけで「これは自動化がやった」と名乗れる**——刻印が
+ * 「本文の外の事実」を何も裏付けなくなり、門が意味を失う。だから
+ * `automation` だけは、本文の外の事実で裏付ける。
+ *
+ * **担保の中身。** `PR_AUTHOR_TYPE`（`github.event.pull_request.user.type`。
+ * `scripts/check-pr-origin.mjs` の doc、`.github/workflows/ci.yml` の
+ * `pr-origin` ジョブを見よ）は GitHub がイベントペイロードとして発行する値で、
+ * **PR 本文を書き換えられる人間にも書き換えられない。** これで「本文の主張
+ * （`automation`）」を「本文の外の事実（`user.type === 'Bot'`）」で裏付ける
+ * 形になる。
+ *
+ * **⚠️ この担保にも限界がある（省略しない——書くこと自体がこの節の成果）:**
+ *
+ * 1. **(限界1) 担保するのは「作者が bot アカウントである」までで、「この repo
+ *    自身の自動化である」ではない。** 書き込み権を持つ別の bot（別の
+ *    GitHub App）が立てた PR も、本文に `automation` と書けば同じ値を
+ *    名乗れる。いま測った時点（2026-09-13 観測、`gh pr list --state all
+ *    --limit 1000` を全走査）では、`app/` 始まりの author は
+ *    `github-actions[bot]`（id 41898282）1つだけで、他の bot は0本である。
+ * 2. **(限界2) `ALTEROID_PR_TOKEN`（人間の PAT。Issue #867 がその導入を
+ *    求めている）が secret に置かれると、同じワークフローが立てる PR の
+ *    作者は PAT の持ち主＝人間（`user.type` が `User`）になる。** そのとき
+ *    `automation` は `unverified` で赤くなる。**これは意図した向きである**
+ *    ——緑のまま通すと、人間の作者と自動化の主張が食い違ったまま黙って
+ *    通ることになる。赤くなったときに何が起きたのかが読めるよう、
+ *    `check-pr-origin.mjs` の失敗メッセージにこの2つの読み（人間が
+ *    `automation` と書いた／自動化が PAT で走るようになり作者が人間に
+ *    なった）を書く。
+ * 3. **(限界3) 秘密の有無は測れないので、いま `ALTEROID_PR_TOKEN` が
+ *    secret に置かれているかどうかは測っていない。**
+ *
+ * **`authorType` が動かすのは `automation` の verdict だけである。** 他の
+ * verdict（`manager` / `clone` / `human` / `missing` / `invalid` /
+ * `conflict` / `legacy`）は `authorType` の値によらず同じ結果を返す——
+ * 変更の血管を細く保つため、`decideGateVerdict` の分岐は `base.verdict ===
+ * 'automation'` のときだけに限る。
+ *
+ * **`authorType` が `undefined` / `null` / 空文字のときは fail closed**
+ * （`unverified` 側へ倒す）。上の「`createdAt` が取れない・壊れているときは
+ * fail closed」と同じ考え方——門を通す側の値が信頼できない・渡っていない
+ * ときに、安全側（＝より赤くなりうる側）へ倒す。
  */
 
 const MARKER_NAME = 'alteroid-origin';
 const MANAGER_PREFIX = 'mgr-';
 const CLONE_VALUE = 'clone';
 const HUMAN_VALUE = 'human';
+const AUTOMATION_VALUE = 'automation';
 
 /** フェンスの開き（```` ``` ```` / `~~~`）を検出する正規表現。行頭0〜3空白まで許す。 */
 const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
@@ -282,11 +332,12 @@ function extractMarkerValues(prose) {
   return values;
 }
 
-/** 1つの値を verdict へ分類する（`manager` / `clone` / `human` / `invalid`）。 */
+/** 1つの値を verdict へ分類する（`manager` / `clone` / `human` / `automation` / `invalid`）。 */
 function classifyValue(value) {
   if (value.startsWith(MANAGER_PREFIX)) return { verdict: 'manager', managerId: value };
   if (value === CLONE_VALUE) return { verdict: 'clone' };
   if (value === HUMAN_VALUE) return { verdict: 'human' };
+  if (value === AUTOMATION_VALUE) return { verdict: 'automation' };
   return { verdict: 'invalid', value };
 }
 
@@ -296,7 +347,7 @@ function classifyValue(value) {
  * @param {string | null | undefined} body
  * @returns {
  *   | { verdict: 'manager', managerId: string, values: string[] }
- *   | { verdict: 'clone' | 'human', values: string[] }
+ *   | { verdict: 'clone' | 'human' | 'automation', values: string[] }
  *   | { verdict: 'missing' }
  *   | { verdict: 'invalid', value: string, values: string[] }
  *   | { verdict: 'conflict', values: string[] }
@@ -336,15 +387,31 @@ export function parseOriginMarker(body) {
 export const ORIGIN_GATE_SINCE = '2026-09-11T20:00:00Z';
 
 /**
- * `parseOriginMarker` の結果と PR の作成時刻を合わせて、最終の verdict を出す。
- * `legacy` の条件・`invalid`/`conflict` を `legacy` へ逃がさない理由・
- * `createdAt` が壊れているときに fail closed する理由は、上の doc
- * 「`legacy`（門より前に作られた PR）」を見よ。
+ * `parseOriginMarker` の結果と PR の作成時刻・作者種別を合わせて、最終の
+ * verdict を出す。`legacy` の条件・`invalid`/`conflict` を `legacy` へ
+ * 逃がさない理由・`createdAt` が壊れているときに fail closed する理由は、
+ * 上の doc「`legacy`（門より前に作られた PR）」を見よ。`automation` の担保・
+ * 限界・fail closed の理由は上の doc「`automation` の担保と限界」を見よ。
  *
- * @param {{ body: string | null | undefined, createdAt: string | null | undefined }} input
+ * @param {{
+ *   body: string | null | undefined,
+ *   createdAt: string | null | undefined,
+ *   authorType?: string | null | undefined,
+ * }} input
  */
-export function decideGateVerdict({ body, createdAt }) {
+export function decideGateVerdict({ body, createdAt, authorType }) {
   const base = parseOriginMarker(body);
+
+  // `automation` だけは本文の外の事実（作者の種別）で裏付ける。他の verdict
+  // には一切触れない——上の doc「`authorType` が動かすのは `automation` の
+  // verdict だけである」のとおり。
+  if (base.verdict === 'automation') {
+    if (authorType !== 'Bot') {
+      return { verdict: 'unverified', values: base.values };
+    }
+    return base;
+  }
+
   if (base.verdict !== 'missing') return base;
 
   const createdAtMs = createdAt === null || createdAt === undefined ? NaN : Date.parse(createdAt);

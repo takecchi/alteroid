@@ -594,19 +594,26 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: jdx/mise-action@v4
-      # **`PR_BODY` / `PR_CREATED_AT` は `env:` 経由で渡す。`run:` の中に
-      # `${{ }}` を直接書かない。** PR 本文は誰でも編集できる外部入力で、
-      # `run:` のテンプレート展開へ直接埋め込むとその中身がシェルの構文として
-      # 解釈されうる（スクリプトインジェクション）。`env:` に積んだ値は環境変数
-      # として渡るだけで、シェルの構文としては解釈されない——`check-pr-origin.mjs`
-      # がどちらも引数ではなく環境変数からしか読まない理由と対になっている
-      # （あちらの doc に同じ説明がある）。`PR_CREATED_AT` は `legacy`
-      # （門より前に作られた PR を赤くしない扱い、`check-pr-origin-core.mjs`
-      # の doc）の判定に使う。
+      # **`PR_BODY` / `PR_CREATED_AT` / `PR_AUTHOR_TYPE` は `env:` 経由で渡す。
+      # `run:` の中に `${{ }}` を直接書かない。** PR 本文は誰でも編集できる
+      # 外部入力で、`run:` のテンプレート展開へ直接埋め込むとその中身が
+      # シェルの構文として解釈されうる（スクリプトインジェクション）。`env:`
+      # に積んだ値は環境変数として渡るだけで、シェルの構文としては解釈されない
+      # ——`check-pr-origin.mjs` がどれも引数ではなく環境変数からしか読まない
+      # 理由と対になっている（あちらの doc に同じ説明がある）。`PR_CREATED_AT`
+      # は `legacy`（門より前に作られた PR を赤くしない扱い、
+      # `check-pr-origin-core.mjs` の doc）の判定に使う。**`PR_AUTHOR_TYPE`
+      # （`github.event.pull_request.user.type`）を新たに渡すのは、`automation`
+      # という刻印の値を本文の外の事実で裏付けるためである** —— 本文は誰でも
+      # 「これは自動化がやった」と書けるので、GitHub が発行するこの値（PR
+      # 本文を書き換えられる人間にも書き換えられない）と突き合わせない限り、
+      # `automation` は自己申告のまま通ってしまう。詳細は
+      # `check-pr-origin-core.mjs` の doc「`automation` の担保と限界」を見よ。
       - run: pnpm check:pr-origin
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
           PR_CREATED_AT: ${{ github.event.pull_request.created_at }}
+          PR_AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
 
   # **`pr-origin` も required contexts には入れていない。** ただし理由は
   # `base-overlap`（#846）とは別で、写さない——`base-overlap` は「誤検知が

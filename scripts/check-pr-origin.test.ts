@@ -14,6 +14,7 @@ import {
 
 import {
   formatOriginMarker,
+  ORIGIN_AUTOMATION,
   ORIGIN_GATE_SINCE as ORIGIN_GATE_SINCE_TS,
   ORIGIN_HUMAN,
 } from '../packages/core/src/origin-marker.js';
@@ -42,6 +43,19 @@ describe('parseOriginMarker: 判定表の7行', () => {
   it('刻印1つ、値が human ⟹ human', () => {
     const body = '<!-- alteroid-origin: human -->';
     expect(parseOriginMarker(body)).toEqual({ verdict: 'human', values: ['human'] });
+  });
+
+  /**
+   * **`automation` 単体では `parseOriginMarker`（本文だけを見る純関数）は
+   * `automation` を返す。** 作者種別による担保（`authorType !== 'Bot'` なら
+   * `unverified` に倒す）は `decideGateVerdict` 側の仕事であり、
+   * `parseOriginMarker` はそれを一切知らない——上の doc「`parseOriginMarker`
+   * は本文だけを見る純関数のままにする」のとおり。担保のテストは下の
+   * `describe('decideGateVerdict: automation の担保（authorType）')` に置く。
+   */
+  it('刻印1つ、値が automation ⟹ automation（Issue #893 / #930）', () => {
+    const body = '<!-- alteroid-origin: automation -->';
+    expect(parseOriginMarker(body)).toEqual({ verdict: 'automation', values: ['automation'] });
   });
 
   it('刻印が0個 ⟹ missing', () => {
@@ -358,6 +372,36 @@ describe('書き手（origin-marker.ts）と読み手（check-pr-origin-core.mjs
     const marker = formatOriginMarker(ORIGIN_HUMAN);
     expect(parseOriginMarker(marker)).toEqual({ verdict: 'human', values: [ORIGIN_HUMAN] });
   });
+
+  it('formatOriginMarker(ORIGIN_AUTOMATION) は automation と判定される（Issue #893）', () => {
+    const marker = formatOriginMarker(ORIGIN_AUTOMATION);
+    expect(parseOriginMarker(marker)).toEqual({
+      verdict: 'automation',
+      values: [ORIGIN_AUTOMATION],
+    });
+  });
+});
+
+/**
+ * **写しの突き合わせ（Issue #893 / #930）。**
+ *
+ * `.github/scripts/open-claude-sdk-pr.sh` は TypeScript の
+ * `ORIGIN_AUTOMATION` を import できない（シェルスクリプトのため）ので、
+ * 値 `automation` を直書きした「写し」を持つ（同スクリプトの doc「なぜ値を
+ * 直書きするか」）。**この歯が無いと、`origin-marker.ts` 側だけを直しても
+ * シェル側の写しはそのまま残り、CI に付かない自動化の PR が生まれる**
+ * ——`scripts/check-pr-origin.test.ts` の「書き手と読み手の形の突き合わせ」
+ * や「刻印の境界時刻は2実装で同じ値である（#857）」と同じ形（測っているのは
+ * 実装の文字列ではなく、2箇所が同じ値を指していること）。
+ */
+describe('写しの突き合わせ: open-claude-sdk-pr.sh の刻印は origin-marker.ts と同じ値である（#893 / #930）', () => {
+  it('.github/scripts/open-claude-sdk-pr.sh に直書きされた刻印の行が formatOriginMarker(ORIGIN_AUTOMATION) と一致する', () => {
+    const script = readFileSync(`${REPO_ROOT}/.github/scripts/open-claude-sdk-pr.sh`, 'utf8');
+    const marker = formatOriginMarker(ORIGIN_AUTOMATION);
+    // ダブルクォートではなくシングルクォートで書いてある前提（シェルの
+    // echo 呼び出しの実物と揃える）。値そのものが変わればここも赤くなる。
+    expect(script).toContain(`echo '${marker}'`);
+  });
 });
 
 /**
@@ -425,6 +469,131 @@ describe('decideGateVerdict: legacy（門より前に作られた PR）', () => 
     expect(decideGateVerdict({ body: null, createdAt: ORIGIN_GATE_SINCE })).toEqual({
       verdict: 'missing',
     });
+  });
+});
+
+/**
+ * **`decideGateVerdict`: `automation` の担保（`authorType`、Issue #893 / #930）。**
+ *
+ * 本文が `automation` を名乗っていても、それだけでは通さない——本文の外の
+ * 事実（GitHub が発行する `user.type`）で裏付けが取れたときだけ通す。
+ * 担保の理由・限界（3点）は `check-pr-origin-core.mjs` の doc「`automation`
+ * の担保と限界」を見よ。
+ */
+describe('decideGateVerdict: automation の担保（authorType、Issue #893 / #930）', () => {
+  const AUTOMATION_BODY = '<!-- alteroid-origin: automation -->';
+  const AFTER_GATE = '2026-09-12T00:00:00Z';
+
+  it('authorType: "Bot" ⟹ automation で通る', () => {
+    expect(
+      decideGateVerdict({ body: AUTOMATION_BODY, createdAt: AFTER_GATE, authorType: 'Bot' }),
+    ).toEqual({ verdict: 'automation', values: ['automation'] });
+  });
+
+  it('authorType: "User" ⟹ unverified（人間の作者が automation を名乗っている）', () => {
+    expect(
+      decideGateVerdict({ body: AUTOMATION_BODY, createdAt: AFTER_GATE, authorType: 'User' }),
+    ).toEqual({ verdict: 'unverified', values: ['automation'] });
+  });
+
+  it('authorType が undefined ⟹ fail closed（unverified）', () => {
+    expect(
+      decideGateVerdict({ body: AUTOMATION_BODY, createdAt: AFTER_GATE, authorType: undefined }),
+    ).toEqual({ verdict: 'unverified', values: ['automation'] });
+  });
+
+  it('authorType が渡されていない（キーごと無い） ⟹ fail closed（unverified）', () => {
+    expect(decideGateVerdict({ body: AUTOMATION_BODY, createdAt: AFTER_GATE })).toEqual({
+      verdict: 'unverified',
+      values: ['automation'],
+    });
+  });
+
+  it('authorType が空文字 ⟹ fail closed（unverified）', () => {
+    expect(
+      decideGateVerdict({ body: AUTOMATION_BODY, createdAt: AFTER_GATE, authorType: '' }),
+    ).toEqual({ verdict: 'unverified', values: ['automation'] });
+  });
+
+  it('authorType が null ⟹ fail closed（unverified）', () => {
+    expect(
+      decideGateVerdict({ body: AUTOMATION_BODY, createdAt: AFTER_GATE, authorType: null }),
+    ).toEqual({ verdict: 'unverified', values: ['automation'] });
+  });
+});
+
+/**
+ * **`authorType` は `automation` 以外の verdict を一切動かさない
+ * （Issue #893 / #930）。**
+ *
+ * `decideGateVerdict` の分岐は `base.verdict === 'automation'` のときだけ
+ * `authorType` を見る（`check-pr-origin-core.mjs` の doc「`authorType` が
+ * 動かすのは `automation` の verdict だけである」）。ここではその境界線を
+ * 固定する——同じ本文に対して `authorType` を variance させても、
+ * `automation` 以外の verdict はどれも変わらないことを見る。**変更の血管を
+ * 細く保つ、という設計判断そのものの回帰確認である。**
+ */
+describe('decideGateVerdict: authorType は automation 以外の verdict を動かさない（Issue #893 / #930）', () => {
+  const AFTER_GATE = '2026-09-12T00:00:00Z';
+  const AUTHOR_TYPES = ['Bot', 'User', undefined, null, ''] as const;
+
+  it.each(AUTHOR_TYPES)('human: authorType=%p でも human のまま', (authorType) => {
+    expect(
+      decideGateVerdict({
+        body: '<!-- alteroid-origin: human -->',
+        createdAt: AFTER_GATE,
+        authorType,
+      }),
+    ).toEqual({ verdict: 'human', values: ['human'] });
+  });
+
+  it.each(AUTHOR_TYPES)('clone: authorType=%p でも clone のまま', (authorType) => {
+    expect(
+      decideGateVerdict({
+        body: '<!-- alteroid-origin: clone -->',
+        createdAt: AFTER_GATE,
+        authorType,
+      }),
+    ).toEqual({ verdict: 'clone', values: ['clone'] });
+  });
+
+  it.each(AUTHOR_TYPES)('mgr- : authorType=%p でも manager のまま', (authorType) => {
+    expect(
+      decideGateVerdict({
+        body: '<!-- alteroid-origin: mgr-abc123 -->',
+        createdAt: AFTER_GATE,
+        authorType,
+      }),
+    ).toEqual({ verdict: 'manager', managerId: 'mgr-abc123', values: ['mgr-abc123'] });
+  });
+
+  it.each(AUTHOR_TYPES)(
+    'missing: authorType=%p でも missing のまま（legacy 判定は別軸）',
+    (authorType) => {
+      expect(decideGateVerdict({ body: null, createdAt: AFTER_GATE, authorType })).toEqual({
+        verdict: 'missing',
+      });
+    },
+  );
+
+  it.each(AUTHOR_TYPES)('invalid: authorType=%p でも invalid のまま', (authorType) => {
+    expect(
+      decideGateVerdict({
+        body: '<!-- alteroid-origin: bot -->',
+        createdAt: AFTER_GATE,
+        authorType,
+      }),
+    ).toEqual({ verdict: 'invalid', value: 'bot', values: ['bot'] });
+  });
+
+  it.each(AUTHOR_TYPES)('conflict: authorType=%p でも conflict のまま', (authorType) => {
+    expect(
+      decideGateVerdict({
+        body: '<!-- alteroid-origin: clone -->\n<!-- alteroid-origin: human -->',
+        createdAt: AFTER_GATE,
+        authorType,
+      }),
+    ).toEqual({ verdict: 'conflict', values: ['clone', 'human'] });
   });
 });
 

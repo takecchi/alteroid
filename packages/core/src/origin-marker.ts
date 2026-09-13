@@ -39,6 +39,41 @@ export const ORIGIN_MARKER_NAME = 'alteroid-origin';
 export const ORIGIN_HUMAN = 'human';
 
 /**
+ * この repo 自身の自動化（`update-claude-sdk.yml` のような、人間・クローン・
+ * マネージャーのどれでもない書き込み）が作ったことを名乗る値（Issue #893）。
+ *
+ * ## なぜ `automation` という名前か
+ *
+ * 既存の語彙（`mgr-` 接頭辞・`clone`・`human`）はどれも**役割**を名乗る —
+ * 特定の委譲・クローン自身・人間、のように「誰か」を指す。この repo 自身の
+ * 自動化にはそのどれも当てはまらない。Issue #893 は逐語で「自動化に当たる
+ * 語彙」と呼んでこの穴を起票しており、実際に赤を踏んだ自動化
+ * （`update-claude-sdk.yml`）が押し続けている枝の名前も
+ * `automation/claude-agent-sdk` である ⟹ **既にこの repo が「自動化」を
+ * 指して使っている語をそのまま採る**。新しい語を作らない。
+ *
+ * **`bot` を採らない理由**: それは GitHub のアカウント種別
+ * （`user.type === 'Bot'`）の名前であって役割ではない。しかも下で足す担保
+ * （`decideGateVerdict` の `authorType` チェック）がその型そのものを見るので、
+ * 値の名前まで `bot` にすると担保の言い換えを二重に書くだけで何も足さない。
+ *
+ * **`ci` を採らない理由**: この repo で `ci` は既に「門を回す側」
+ * （ジョブ名・`pnpm verify`）を指す語として使われている。PR の**作者**の
+ * 意味へ重ねると、同じ字面が指すものが2つに割れる。
+ *
+ * ## ⛔ この値をプロンプト（`prompt.ts`）には足さないこと
+ *
+ * `buildManagerSystemPrompt` / `buildWorkerPrompt` が刻印として書けと教える値は
+ * `mgr-` 接頭辞・`CLONE_ACTOR_ID`・`ORIGIN_HUMAN` のままにする。クローンも
+ * マネージャーも作業者も bot ではない（`user.type` は `User` である）ので、
+ * この値をプロンプトへ渡せば「いちばん近い嘘」（Issue #893 の言葉）を
+ * 新しく1つ増やすだけである。**この値を書けるのは
+ * `.github/scripts/open-claude-sdk-pr.sh` のような、実際に bot アカウントで
+ * 走る自動化だけである。**
+ */
+export const ORIGIN_AUTOMATION = 'automation';
+
+/**
  * PR / Issue の本文に置く刻印の1行を作る。
  *
  * `origin` には `managerId`（`mgr-` 接頭辞）・`CLONE_ACTOR_ID`（`usage.ts`）・
