@@ -52,6 +52,7 @@ export class PgPersonaStore implements PersonaStore {
         updatedAt: memory.updatedAt,
         describedAt: memory.describedAt,
         describedBytes: memory.describedBytes,
+        describedBytesAt: memory.describedBytesAt,
         createdAt: memory.createdAt,
       })
       .from(memory)
@@ -67,6 +68,7 @@ export class PgPersonaStore implements PersonaStore {
         updatedAt: memory.updatedAt,
         describedAt: memory.describedAt,
         describedBytes: memory.describedBytes,
+        describedBytesAt: memory.describedBytesAt,
         createdAt: memory.createdAt,
       })
       .from(memory)
@@ -101,14 +103,19 @@ export class PgPersonaStore implements PersonaStore {
       });
     const row = rows[0];
     if (row === undefined) throw new Error(`記憶の書き込みに失敗: ${slug}`);
-    const { describedAt, describedBytes } = await this.#updateDerived(key, prior, row);
-    return toDocument({ ...row, describedAt, describedBytes });
+    const { describedAt, describedBytes, describedBytesAt } = await this.#updateDerived(
+      key,
+      prior,
+      row,
+    );
+    return toDocument({ ...row, describedAt, describedBytes, describedBytesAt });
   }
 
   /**
    * 書いた直後の content をハッシュして `content_sha256` へ記録し、
-   * `described_at` / `described_bytes` を進める（変わっていなければ両方
-   * 据え置く）。
+   * `described_at` / `described_bytes` / `described_bytes_at` を進める
+   * （#821 残課題。変わっていなければ、既に基準点が在ればそのまま据え置き、
+   * 無ければ「書く前の状態」を新しい基準点として立てる）。
    *
    * **write() と append() の両方から呼ぶ。** fs 版は `#writeNow` という
    * 唯一の通り道があるが、pg はこの2つが独立したメソッドなので、片方だけ
@@ -116,20 +123,37 @@ export class PgPersonaStore implements PersonaStore {
    * 一切更新しない — 降ろさないための唯一の保証は、この列を更新対象に
    * 含めないことである。
    *
-   * **`describedAt` / `describedBytes` は書き手が渡す値ではなく、ここで
-   * 新旧の `description` を比べて決める**（`@alteroid/core` の
-   * `nextDescribedState` の doc——1つのオブジェクトで両方を返すので、
-   * 片方だけ進む形をコードの側で作れない）。渡した `row.updatedAt` /
-   * `Buffer.byteLength(written.content, 'utf8')` と同じ値を使うことで、
-   * 直後の読み出しが必ず `fresh`（かつ `deltaBytes: 0`）になるようにする。
-   * **`Buffer.byteLength` は `toDocument` の `bytes` と同じ測り方**——ここが
-   * ずれると、書いた直後から「少し変わっている」に化ける。
+   * **`describedAt` / `describedBytes` / `describedBytesAt` は書き手が渡す
+   * 値ではなく、ここで新旧の `description` を比べて決める**（`@alteroid/core`
+   * の `nextDescribedState` の doc——1つのオブジェクトで3つを返すので、
+   * どれか1つだけ進む形をコードの側で作れない）。要旨を書き直したときは
+   * 渡した `row.updatedAt` / `Buffer.byteLength(written.content, 'utf8')` と
+   * 同じ値を使うことで、直後の読み出しが必ず `fresh`（かつ `deltaBytes: 0`）
+   * になるようにする。**`Buffer.byteLength` は `toDocument` の `bytes` と
+   * 同じ測り方**——ここがずれると、書いた直後から「少し変わっている」に
+   * 化ける。基準点を新しく立てるとき（本文だけの書き込みで基準点がまだ無い）
+   * は、`prior`（この書き込みの直前に SELECT した行）の `content` / `updatedAt`
+   * を基準点にする——**`written`（書いた後の値）を使わない**（使うと
+   * `deltaBytes: 0` から始まり、この書き込み自身の増減が測れなくなる。
+   * `nextDescribedState` の doc の分岐3）。
    */
   async #updateDerived(
     slug: string,
-    prior: { content: string; describedAt: Date | null; describedBytes: number | null } | undefined,
+    prior:
+      | {
+          content: string;
+          updatedAt: Date | string;
+          describedAt: Date | null;
+          describedBytes: number | null;
+          describedBytesAt: Date | null;
+        }
+      | undefined,
     written: { content: string; updatedAt: Date | string },
-  ): Promise<{ describedAt: Date | null; describedBytes: number | null }> {
+  ): Promise<{
+    describedAt: Date | null;
+    describedBytes: number | null;
+    describedBytesAt: Date | null;
+  }> {
     const next = nextDescribedState({
       priorContent: prior?.content ?? null,
       nextContent: written.content,
@@ -138,28 +162,48 @@ export class PgPersonaStore implements PersonaStore {
           ? undefined
           : toIso(prior.describedAt),
       priorDescribedBytes: prior?.describedBytes === null ? undefined : prior?.describedBytes,
+      priorDescribedBytesAt:
+        prior?.describedBytesAt === null || prior?.describedBytesAt === undefined
+          ? undefined
+          : toIso(prior.describedBytesAt),
+      priorBytes: prior === undefined ? undefined : Buffer.byteLength(prior.content, 'utf8'),
+      priorUpdatedAt: prior === undefined ? undefined : toIso(prior.updatedAt),
       writtenAt: toIso(written.updatedAt),
       writtenBytes: Buffer.byteLength(written.content, 'utf8'),
     });
     const describedAt = next.describedAt === undefined ? null : new Date(next.describedAt);
     const describedBytes = next.describedBytes === undefined ? null : next.describedBytes;
+    const describedBytesAt =
+      next.describedBytesAt === undefined ? null : new Date(next.describedBytesAt);
     await this.#db
       .update(memory)
-      .set({ contentSha256: sha256Hex(written.content), describedAt, describedBytes })
+      .set({
+        contentSha256: sha256Hex(written.content),
+        describedAt,
+        describedBytes,
+        describedBytesAt,
+      })
       .where(eq(memory.slug, slug));
-    return { describedAt, describedBytes };
+    return { describedAt, describedBytes, describedBytesAt };
   }
 
-  async #readPrior(
-    slug: string,
-  ): Promise<
-    { content: string; describedAt: Date | null; describedBytes: number | null } | undefined
+  async #readPrior(slug: string): Promise<
+    | {
+        content: string;
+        updatedAt: Date | string;
+        describedAt: Date | null;
+        describedBytes: number | null;
+        describedBytesAt: Date | null;
+      }
+    | undefined
   > {
     const rows = await this.#db
       .select({
         content: memory.content,
+        updatedAt: memory.updatedAt,
         describedAt: memory.describedAt,
         describedBytes: memory.describedBytes,
+        describedBytesAt: memory.describedBytesAt,
       })
       .from(memory)
       .where(eq(memory.slug, slug))
@@ -207,8 +251,12 @@ export class PgPersonaStore implements PersonaStore {
       });
     const row = rows[0];
     if (row === undefined) throw new Error(`記憶の追記に失敗: ${slug}`);
-    const { describedAt, describedBytes } = await this.#updateDerived(key, prior, row);
-    return toDocument({ ...row, describedAt, describedBytes });
+    const { describedAt, describedBytes, describedBytesAt } = await this.#updateDerived(
+      key,
+      prior,
+      row,
+    );
+    return toDocument({ ...row, describedAt, describedBytes, describedBytesAt });
   }
 
   /**
@@ -338,6 +386,7 @@ export class PgPersonaStore implements PersonaStore {
         updatedAt: memory.updatedAt,
         describedAt: memory.describedAt,
         describedBytes: memory.describedBytes,
+        describedBytesAt: memory.describedBytesAt,
         createdAt: memory.createdAt,
       })
       .from(memory)
@@ -352,6 +401,7 @@ interface MemoryRow {
   updatedAt: Date | string;
   describedAt: Date | string | null;
   describedBytes: number | null;
+  describedBytesAt: Date | string | null;
   createdAt: Date | string | null;
 }
 
@@ -363,6 +413,7 @@ function toDocument(row: MemoryRow): MemoryDocument {
     updatedAt,
     describedAt: row.describedAt === null ? undefined : toIso(row.describedAt),
     describedBytes: row.describedBytes === null ? undefined : row.describedBytes,
+    describedBytesAt: row.describedBytesAt === null ? undefined : toIso(row.describedBytesAt),
     currentBytes,
   });
   return {

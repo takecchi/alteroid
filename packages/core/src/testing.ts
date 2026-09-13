@@ -202,10 +202,14 @@ export function createMemoryStores(): Stores {
   // #170（記憶の目次化）の派生値。fs の `.index.json` / pg の `described_at`
   // 列と同じ形——書き手は書けず、write() が新旧の description を比べて進める。
   const describedAt = new Map<string, string>();
-  // #913: `describedAt` と必ず同時に進む（`nextDescribedState` が1つの
-  // オブジェクトで両方を返す）。fs の `.index.json` の `describedBytes` /
-  // pg の `described_bytes` 列と同じ形。
+  // #913 / #821 残課題: 基準点。fs の `.index.json` の `describedBytes` /
+  // pg の `described_bytes` 列と同じ形。**`describedAt` と必ず同時に進む
+  // わけではない**——本文だけの書き込みでも、基準点が無ければここが立つ
+  // （`nextDescribedState` の doc の分岐3）。
   const describedBytes = new Map<string, number>();
+  // #821 残課題: `describedBytes` を測った時刻。fs の `.index.json` の
+  // `describedBytesAt` / pg の `described_bytes_at` 列と同じ形。
+  const describedBytesAt = new Map<string, string>();
   // 記憶の `createdAt`。fs の `.index.json` / pg の `created_at` 列と同じ形
   // ——素の optional。「unknown」という値をここへ書き込まない。値が無いのは
   // (1) この配線より前に作られ (2) 日誌にも根拠が無い、両方を満たす昔の行
@@ -317,6 +321,9 @@ export function createMemoryStores(): Stores {
         nextContent: body,
         priorDescribedAt: describedAt.get(slug),
         priorDescribedBytes: describedBytes.get(slug),
+        priorDescribedBytesAt: describedBytesAt.get(slug),
+        priorBytes: before?.bytes,
+        priorUpdatedAt: before?.updatedAt,
         writtenAt: updatedAt,
         writtenBytes,
       });
@@ -324,11 +331,14 @@ export function createMemoryStores(): Stores {
       else describedAt.set(slug, next.describedAt);
       if (next.describedBytes === undefined) describedBytes.delete(slug);
       else describedBytes.set(slug, next.describedBytes);
+      if (next.describedBytesAt === undefined) describedBytesAt.delete(slug);
+      else describedBytesAt.set(slug, next.describedBytesAt);
       const derived = deriveMemoryFrontmatter({
         content: body,
         updatedAt,
         describedAt: next.describedAt,
         describedBytes: next.describedBytes,
+        describedBytesAt: next.describedBytesAt,
         currentBytes: writtenBytes,
       });
       const doc: MemoryDocument = {
@@ -370,6 +380,7 @@ export function createMemoryStores(): Stores {
       contentSha256.delete(slug);
       describedAt.delete(slug);
       describedBytes.delete(slug);
+      describedBytesAt.delete(slug);
       createdAtStore.delete(slug);
     },
     async protectionStatus(slug): Promise<MemoryProtectionStatus> {

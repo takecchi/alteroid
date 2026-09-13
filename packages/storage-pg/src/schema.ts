@@ -76,6 +76,22 @@ export const memory = pgTable('memory', {
    */
   describedBytes: integer('described_bytes'),
   /**
+   * `describedBytes` を測った時刻（#821 残課題）。**`described_bytes` の隣へ
+   * 追記で足す**（同じ約束。列の追加は `migrate.ts` の `STATEMENTS` 末尾で
+   * 行う——索引は足さない）。
+   *
+   * **`describedAt` とは限らない。** #821 の残課題（本文だけの書き込みが
+   * 要旨の書き直しよりずっと高頻度なので、基準点が永久に立たない）を直す
+   * ため、この PR から「基準点が無ければ、本文だけの書き込みでもその
+   * 書き込みの直前の状態を基準点にする」ようになった——そのときの
+   * `describedBytesAt` は「その書き込みの直前の `updated_at`」であって、
+   * 要旨を書き直した時刻ではない（`@alteroid/core` の `nextDescribedState`
+   * の doc）。`describedAt` と `describedBytesAt` を突き合わせて、基準点が
+   * 「要旨を書いた瞬間に測られたもの」（`measured`）か「後から立てられた
+   * 下限」（`at-least`）かを判定する（`resolveMemoryDescriptionDrift` の doc）。
+   */
+  describedBytesAt: timestamp('described_bytes_at', { withTimezone: true, mode: 'date' }),
+  /**
    * この slug が作られた時刻。**#173 が置いた列の隣へ追記で足す**（同じ約束）。
    *
    * **値が入る経路は2つ。** (1) 第一の出所は `persona.ts` の `write` /
