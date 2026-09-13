@@ -4929,7 +4929,9 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
       kind: 'premise',
       created: true,
     });
-    const transition = reply.split('\n').find((line) => line.includes('から') && line.includes('へ'));
+    const transition = reply
+      .split('\n')
+      .find((line) => line.includes('から') && line.includes('へ'));
     expect(
       transition,
       '床の遷移を名乗る行そのものが応答から消えた（この歯は、その行の単位を測っている）',
