@@ -1629,6 +1629,67 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
   });
 
   /**
+   * ⭐ `drift`（3状態、#821 残課題）を畳んでいないことを、上と同じ「被験体の
+   * slug を揃える」手口で撃つ。`stale` という1つの `descriptionFreshness.kind`
+   * の中で、`drift.kind` だけを `measured` / `at-least` / `unrecorded` へ
+   * 変える——上のテストが `descriptionFreshness.kind` の4状態を畳んでいない
+   * ことを撃つのに対し、こちらは `drift` という別の軸を撃つ（被験体を足す形。
+   * 上のテストの被験体数・比較方法は変えない）。
+   */
+  it('stale の drift 3状態を畳まない: measured / at-least / unrecorded がそれぞれ別の表示になる（被験体の slug は揃える）', () => {
+    const SAME_SLUG = 'y';
+    const measured = renderMemoryDocuments([
+      fact(SAME_SLUG, {
+        description: '説明',
+        freshness: {
+          kind: 'stale',
+          staleForMs: 1000,
+          drift: { kind: 'measured', describedBytes: 1000, currentBytes: 1200, deltaBytes: 200 },
+        },
+      }),
+    ]);
+    const atLeast = renderMemoryDocuments([
+      fact(SAME_SLUG, {
+        description: '説明',
+        freshness: {
+          kind: 'stale',
+          staleForMs: 1000,
+          drift: {
+            kind: 'at-least',
+            baselineBytes: 1000,
+            baselineAt: '2026-08-20T12:00:00Z',
+            currentBytes: 1200,
+            deltaBytes: 200,
+          },
+        },
+      }),
+    ]);
+    const unrecorded = renderMemoryDocuments([
+      fact(SAME_SLUG, {
+        description: '説明',
+        freshness: { kind: 'stale', staleForMs: 1000, drift: { kind: 'unrecorded' } },
+      }),
+    ]);
+
+    const rendered = [measured, atLeast, unrecorded];
+    const slugs = new Set(rendered.map((s) => s.match(/^- (\S+?):/m)?.[1]));
+    expect(slugs).toEqual(new Set([SAME_SLUG]));
+
+    const distinct = new Set(rendered.map((s) => s.trim()));
+    expect(distinct.size).toBe(3);
+
+    // **`at-least` は `%` を出さない**（母数が「要旨を書いた時点の大きさ」
+    // ではないので）。`measured` は同じ deltaBytes/describedBytes の組でも
+    // `%` を出す——ここで両者が違う文字列になることを直接見る。
+    expect(measured).toContain('本文は+200バイト（+20%）変わった');
+    expect(atLeast).toContain('+200バイト以上変わった');
+    expect(atLeast).not.toContain('%');
+    // **`baselineAt` は刷らない**（クローンのプロンプトへ毎ターン焼かれる
+    // ため）。
+    expect(atLeast).not.toContain('2026-08-20T12:00:00Z');
+  });
+
+  /**
    * **かつてここは「本文が残る」まで固定していた。** premise の載り方が全文から
    * カードへ変わったので（`renderPremiseCard`）、本文は誰の枝でも載らない。
    *
@@ -3123,6 +3184,13 @@ describe('#913: 要旨の鮮度は時間差だけでなく本文の変化量も�
     staleForMs: number,
     drift:
       | { kind: 'measured'; describedBytes: number; currentBytes: number; deltaBytes: number }
+      | {
+          kind: 'at-least';
+          baselineBytes: number;
+          baselineAt: string;
+          currentBytes: number;
+          deltaBytes: number;
+        }
       | { kind: 'unrecorded' },
   ) {
     return {
@@ -3272,6 +3340,44 @@ describe('#913: 要旨の鮮度は時間差だけでなく本文の変化量も�
    * `drift` を持てないので、実装が正しく `stale` 専用に留めていることを
    * 出力の側からも固定する）。
    */
+  /**
+   * 歯2-4（陰性対照、#821 残課題）。`at-least`（基準点はあるが要旨を書いた
+   * 時点のものではない）を `measured`（同じ % つきの語）とも `unrecorded`
+   * （記録なし）とも同じ言葉にしない。下限を確定値に見せる変異——`at-least`
+   * を `measured` と同じ形式で言わせる——をここで検出する。
+   */
+  it('⭐⭐ 陰性対照4: at-least は measured（% つき）とも unrecorded とも別の言葉で出る（#821 残課題）', () => {
+    const atLeast = renderMemoryListing([
+      driftEntry('doc', 60 * 60 * 1000, {
+        kind: 'at-least',
+        baselineBytes: 1000,
+        baselineAt: '2026-08-20T12:00:00Z',
+        currentBytes: 1200,
+        deltaBytes: 200,
+      }),
+    ]);
+    const measured = renderMemoryListing([
+      driftEntry('doc', 60 * 60 * 1000, {
+        kind: 'measured',
+        describedBytes: 1000,
+        currentBytes: 1200,
+        deltaBytes: 200,
+      }),
+    ]);
+    const unrecorded = renderMemoryListing([
+      driftEntry('doc', 60 * 60 * 1000, { kind: 'unrecorded' }),
+    ]);
+
+    expect(atLeast).not.toBe(measured);
+    expect(atLeast).not.toBe(unrecorded);
+    // 同じ deltaBytes（200）でも、at-least は % を出さない——measured は出す。
+    expect(atLeast).toContain('以上変わった');
+    expect(atLeast).not.toContain('%');
+    expect(measured).toContain('%');
+    // baselineAt はプロンプトへ焼かれる文字列に刷らない。
+    expect(atLeast).not.toContain('2026-08-20T12:00:00Z');
+  });
+
   it('⭐⭐ 陰性対照3: fresh の文書には変化量が出ない（stale 以外へ漏れていない）', () => {
     const fresh = renderMemoryListing([
       {
