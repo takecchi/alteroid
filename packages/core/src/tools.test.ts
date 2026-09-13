@@ -4790,8 +4790,48 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * `manager_list` の**件数の行**だけを、区分ごとに割って返す
+   * （`describeManagerCounts` が ` / ` で継いでいるもの）。
+   *
+   * ## ⭐ なぜ「`返事待ち 0 本` が無いこと」で測ってはいけないか（#935 の追加測定）
+   *
+   * 区分の行を組み立てているのは `describeManagerCounts` の
+   * `if (waiting > 0) parts.push(…)` **1箇所だけ**で、その門の内側に在る。
+   * ⟹ `返事待ち 0 本` という文字列は**どんな入力でも作られない。**
+   * ⟹ `expect(reply).not.toContain('返事待ち 0 本')` は**入力が何であっても真**で、
+   * **門を外す変異を当てても緑のまま**だった（`$0.00` と同じ族である）。
+   *
+   * ## この形が測っているもの
+   *
+   * 件数の行を**区分の並びそのもの**として取り出し、`toEqual` で突き合わせる。
+   * ⟹ どれか1つでも門が外れれば `… 0 本` が並びへ増えて赤くなる ——
+   * **「返事待ち」だけでなく5区分すべてに同時に効く。**
+   *
+   * ⛔ `not.toContain('<区分> 0 本')` の形へ戻さないこと（出ない字面を探しても
+   * 何も測れない）。⛔ 件数（`.length`）だけを見る形にもしないこと。
+   */
+  function countParts(reply: string): string[] {
+    const line = reply.split('\n').find((l) => l.startsWith('件数: '));
+    if (line === undefined) throw new Error('件数の行が無い（manager_list の本文が変わった）');
+    return line.slice('件数: '.length).split('。')[0]!.split(' / ');
+  }
+
+  /**
+   * **赤の意味を1行で言う。** ⚠ 同じ「返事待ち N」でも `situation.ts` は
+   * **意図して 0 を出す側**なので、そちらの規約と混ぜないこと（同じ字面に逆向きの
+   * 規約が2つ在る）。
+   */
+  const ZERO_LINE_RULE =
+    '赤の意味: `manager_list` の件数の行は**該当が 0 の区分を書かない**規約である' +
+    '（`describeManagerCounts` の `if (… > 0) parts.push(…)`）。' +
+    '⚠ `situation.ts` の「返事待ち 0」は**意図して 0 を出す**別の規約なので、混ぜないこと。';
+
+  /**
    * **0 の行を作らない**（AGENTS.md の地雷表）。「返事待ち 0本」と書くと、
    * 数えて 0 だったのか、そもそも数えていないのかが読めなくなる。
+   *
+   * ⛔ **直下の（対照）と対で読むこと。** こちらだけなら、門を「常に false」にして
+   * どの区分も一生出さない巻き戻しが素通りする。
    */
   it('該当が無い区分は件数の行に書かない（0 の行を作らない）', async () => {
     const h = harness();
@@ -4799,8 +4839,44 @@ describe('クローンの道具', () => {
 
     const reply = await h.call('manager_list', {});
 
-    expect(reply).toContain('全 1 本');
-    expect(reply).not.toContain('返事待ち 0 本');
+    expect(countParts(reply), ZERO_LINE_RULE).toEqual([
+      '全 1 本',
+      '走行中 1 本（うち話しかけられる 1 本）',
+    ]);
+  });
+
+  /**
+   * ⭐ **直上の陰性対照の対照である。** 門が「常に false」へ倒れたら、上の歯は
+   * 緑のままここだけが赤くなる —— **0 を書かないことと、在るときに書くことは
+   * 別の主張である。**
+   *
+   * 4区分を並べるのは、1つだけだと「その区分の綴りだけを通す」という同じ形の
+   * 誤りがまた通るからである（`走行中` は `manager_start` した時点で必ず立つので、
+   * 上の陰性対照そのものが対照になっている）。
+   */
+  it.each([
+    ['返事待ち', (m: ManagerSummary) => (m.status = 'waiting_human'), '返事待ち 1 本'],
+    [
+      '宛先の器が名乗らなくなった',
+      (m: ManagerSummary) => (m.runnerLostSince = '2026-08-20T00:00:00.000Z'),
+      '宛先の器が名乗らなくなった 1 本',
+    ],
+    [
+      'runner にセッションが無い',
+      (m: ManagerSummary) => (m.sessionMissingSince = '2026-08-20T00:00:00.000Z'),
+      'runner にセッションが無い 1 本',
+    ],
+    ['戻れなかった(lost)', (m: ManagerSummary) => (m.status = 'lost'), '戻れなかった(lost) 1 本'],
+  ])('（対照）%s が1本在れば、その区分の行が出る', async (_label, mutate, expected) => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (target === undefined) throw new Error('準備に失敗');
+    mutate(target);
+
+    const reply = await h.call('manager_list', {});
+
+    expect(countParts(reply), ZERO_LINE_RULE).toContain(expected);
   });
 
   it('manager_list は返事待ちの種別と時刻を出す（kind/askedAt が揃っているとき）', async () => {
