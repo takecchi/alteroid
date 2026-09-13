@@ -14513,14 +14513,14 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
 });
 
 /**
- * `appendJournalOrThrow` の17箇所すべてについて、応答本文が
+ * `appendJournalOrThrow` を経由する呼び出しすべてについて、応答本文が
  * **道具名**（どれが落ちたか）と**先頭行の outcome**（完了状態・未記録・
  * やり直しの可否）の両方を持つことを、道具ごとに独立して測る。
  *
  * **なぜ道具名だけでなく先頭行も測るのか。** 上の
- * `describe('journal.append が失敗したとき…')` の既存の歯は、14箇所の
- * act-completed / 2箇所の act-not-performed / 1箇所の
- * act-partially-completed という **outcome の3分類を網羅する**ために
+ * `describe('journal.append が失敗したとき…')` の既存の歯は、
+ * act-completed / act-not-performed / act-partially-completed という
+ * **outcome の3分類を網羅する**ために
  * 選ばれた代表4件（memory_delete・journal_write・daily_report_write・
  * memory_section_move の move_in）＋ profile_write の秘密の歯だけで、
  * 道具名の `expect(text).toContain(tool)` はその代表の中に**相乗り**して
@@ -14529,10 +14529,16 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
  * `memory_append` の呼び出しが誤って `'memory_write'` という道具名で
  * `appendJournalOrThrow` を呼んでも、act-completed の代表4件には
  * 元から `memory_append` が入っていないので、既存の歯は何も言わない。
- * ここでは17箇所それぞれを独立したケースにして、この相乗りを解消する
- * （17箇所目は `archive_remove`。#698）。
+ * ここでは呼び出し1つずつを独立したケースにして、この相乗りを解消する
+ * （`archive_remove` のケースは #698 で加わった）。
+ *
+ * ⚠️ **ケースが何件かを、ここにも describe 名にも書かないこと**（#923 と同じ
+ * 規則）。散文の本数は呼び出しが1つ増えるたびに腐る——実際ここは「17箇所」と
+ * 名乗ったまま18件まで伸びていた。**この歯が「足りない」と言えるのは
+ * `SELF_JOURNALING_CLONE_TOOLS` から期待値を導いている下の it であって、
+ * 散文の数字ではない。**
  */
-describe('journal.append 失敗時の応答本文: 17箇所すべてで道具名と先頭行 outcome を測る', () => {
+describe('journal.append 失敗時の応答本文: 呼び出し箇所すべてで道具名と先頭行 outcome を測る', () => {
   /** 上の describe の `callExpectingError` と同じもの（複製）。既存側は1文字も変えない。 */
   async function callExpectingError(
     tools: ReturnType<typeof createCloneTools>,
