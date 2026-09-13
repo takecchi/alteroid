@@ -74,6 +74,49 @@
  *    これは `missing` 側（安全側）に倒れる欠落であって、値を捏造する側の欠落
  *    ではない。
  *
+ * ## インラインのコードスパンの中も数えない（Issue #857）
+ *
+ * **`stripFencedCode` が落とすのはフェンス付きコードブロックだけである。**
+ * しかも PR #796 の欠陥Aの直しは、**同じ行にバックティックの開閉が両方在る
+ * 行をフェンスの開きとして扱わず、プローズとして残す**という分岐そのもの
+ * だった——CommonMark はバックティックフェンスの info string にバックティック
+ * を許さないため、その行はフェンスではなくインラインのコードスパン
+ * （`` `inline code` `` の形）である、という判断は正しい。**しかし「フェンスの
+ * 開きではない」までしか判定しておらず、「インラインのコードスパンの中身も
+ * 除く」までは踏み込んでいなかった**——残された行はプローズとして
+ * `extractMarkerValues` に渡り、その中に「刻印の書き方の例」を書けば拾われて
+ * しまう。実測（Issue #857）: 本文中の唯一の刻印が
+ * `` `<!-- alteroid-origin: mgr-… -->` `` という**インラインスパンの中の例**
+ * （値は全角三点リーダを含む5文字で、実在しない managerId）で、直す前は
+ * これを `manager` と誤判定していた（正しくは `missing`）。
+ *
+ * **だから `stripFencedCode` の後段に `stripInlineCode` を足し、フェンス判定
+ * そのものは1バイトも変えず、インラインのコードスパンの除去だけを別の関数に
+ * 分離した。** 理由は2つ——(1) フェンス判定を変えると PR #796 の直しを壊す
+ * リスクを負う。既に効いている判定に手を入れず、新しい関数を後ろに継ぎ足す
+ * ほうが安全である。(2) 「フェンスの開きの判定」と「インラインスパンの除去」
+ * は別の関心事なので、分けたほうがそれぞれの歯が何を守っているかを言える。
+ *
+ * `stripInlineCode`（下）は CommonMark のコードスパンの規則
+ * （https://spec.commonmark.org/0.31.2/#code-spans）に沿う——バックティックの
+ * 連なり（backtick string）が開き、**同じ長さちょうど**の連なりが後ろに在れば
+ * そこまでが閉じ、無ければその連なりはただの文字である。
+ *
+ * **走査は1行ずつに閉じる。** CommonMark のコードスパンは空行を跨げないので、
+ * 行単位の走査は「跨がない」という制約の安全側の部分集合になる——見落とす
+ * 方向にしか外れない。そしてこれには副次的な効能がある: **行を跨いで走査する
+ * 実装だと、本文の離れた場所に在る孤立したバックティック2個（説明文の中の
+ * 単発の `` ` `` のような、対応する閉じの無いもの）が、たまたま別の行の
+ * 別の孤立したバックティックと「同じ長さの連なり」として対応してしまい、
+ * その間に挟まった本物の刻印ごと1つの巨大なコードスパンとして消してしまう**
+ * ——行ごとに閉じておけば、この種の「離れた行同士の誤対応」がそもそも起こらない。
+ *
+ * **除いた span は空文字ではなく空白1個に置き換える。** 空文字にすると、
+ * スパンの直前と直後の文字が連結し、除去によって偶然新しい文字列（たとえば
+ * 別々の行にまたがっていた `<!--` と `-->` が隣接して刻印の形を作る、という
+ * ようなもの）が生まれる余地がある。空白1個を挟めばそれを防げる——
+ * `extractMarkerValues` の正規表現は空白をまたいで一致しないため。
+ *
  * ## `legacy`（門より前に作られた PR）
  *
  * この門が `main` に入った時点で、**既に開いている PR は全部無印**である。
@@ -156,10 +199,78 @@ export function stripFencedCode(markdown) {
 }
 
 /**
- * `stripFencedCode` を通した本文から、刻印の値を全部（出現順で）拾う。
- * 値は空白を含まない前提（`mgr-` id・`clone`・`human` はどれも1トークン）
- * なので `\S+` で取る——想定外に空白入りの値を書かれた場合は最初のトークンだけ
- * を拾い、以降は info string の残りとして無視される（既知の限界）。
+ * 1行の中のバックティックの連なり（backtick string）を、位置と長さの一覧として返す。
+ * 「連なり」は正規表現 `` /`+/g `` で拾うので、1個のバックティックに挟まれた
+ * 別のバックティックが独立した連なりとして数えられることはない
+ * （`` ``` `` は長さ3の1個の連なりであって、長さ1の連なり3個ではない）。
+ */
+function findBacktickRuns(line) {
+  const runs = [];
+  const re = /`+/g;
+  let m;
+  while ((m = re.exec(line)) !== null) {
+    runs.push({ start: m.index, end: m.index + m[0].length, length: m[0].length });
+  }
+  return runs;
+}
+
+/**
+ * 1行からインラインのコードスパンを取り除く。
+ * CommonMark の規則どおり、開き候補（ある連なり）に対して「その後ろで最初に
+ * 現れる同じ長さの連なり」を閉じとして採用する。見つからなければ、その連なりは
+ * コードスパンを開始しない（ただの文字として読み飛ばし、次の連なりを開き候補
+ * として試す）。
+ */
+function stripInlineCodeFromLine(line) {
+  const runs = findBacktickRuns(line);
+  if (runs.length === 0) return line;
+
+  let result = '';
+  let cursor = 0;
+  let i = 0;
+  while (i < runs.length) {
+    const open = runs[i];
+    let closeIdx = -1;
+    for (let j = i + 1; j < runs.length; j++) {
+      if (runs[j].length === open.length) {
+        closeIdx = j;
+        break;
+      }
+    }
+    if (closeIdx === -1) {
+      // 閉じが見つからない ⟹ この連なりはコードスパンを開始しない、ただの文字。
+      i++;
+      continue;
+    }
+    const close = runs[closeIdx];
+    // 開きの手前まではそのまま残し、開き〜閉じの全体を空白1個に置き換える
+    // （理由は上の doc「除いた span は空文字ではなく空白1個に置き換える」）。
+    result += line.slice(cursor, open.start) + ' ';
+    cursor = close.end;
+    i = closeIdx + 1;
+  }
+  result += line.slice(cursor);
+  return result;
+}
+
+/**
+ * `markdown` からインラインのコードスパン（`` `...` `` 1個で囲んだ部分）の中身を
+ * 取り除いた本文を返す。`stripFencedCode` の後段として使う——フェンスの判定は
+ * 一切行わない（フェンスの中の行はこの関数に渡す前に既に除かれている前提）。
+ * 上の doc「インラインのコードスパンの中も数えない（Issue #857）」がこの
+ * 関数を置いた理由と設計そのものである。1行ずつ独立に処理し、行を跨いで
+ * バックティックを対応させることはしない。
+ */
+export function stripInlineCode(markdown) {
+  return markdown.split('\n').map(stripInlineCodeFromLine).join('\n');
+}
+
+/**
+ * `stripFencedCode` → `stripInlineCode` を通した本文から、刻印の値を全部
+ * （出現順で）拾う。値は空白を含まない前提（`mgr-` id・`clone`・`human` は
+ * どれも1トークン）なので `\S+` で取る——想定外に空白入りの値を書かれた場合は
+ * 最初のトークンだけを拾い、以降は info string の残りとして無視される
+ * （既知の限界）。
  */
 function extractMarkerValues(prose) {
   const re = new RegExp(`<!--\\s*${MARKER_NAME}:\\s*(\\S+?)\\s*-->`, 'g');
@@ -196,7 +307,7 @@ export function parseOriginMarker(body) {
     return { verdict: 'missing' };
   }
 
-  const prose = stripFencedCode(body);
+  const prose = stripInlineCode(stripFencedCode(body));
   const values = extractMarkerValues(prose);
 
   if (values.length === 0) {
