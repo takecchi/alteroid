@@ -128,6 +128,40 @@ export const POOL_OWNED_CREDENTIAL_NAMES: readonly string[] = [
 ] satisfies readonly (typeof ROTATABLE_CREDENTIAL_KEYS)[number][];
 
 /**
+ * **クローンの器の環境変数が、正本より優先して配られる名前。** GitHub の
+ * 認証だけを明示的に列挙してある（人間の決定 2026-09-12、Issue #865 の
+ * 恒久策）。
+ *
+ * ## なぜこの名前だけか
+ *
+ * オーナーの仕様は逐語で「alteroidの作りとして環境変数はcloneと同じものを渡す
+ * ように仕様として決めています」——**クローンが基準**であり、マネージャーは
+ * それと同じものを受け取る。GitHub の資格（`GH_TOKEN` / `GITHUB_TOKEN`）は
+ * この不一致が実害になった当の名前（Issue #865 の実測: マネージャーは
+ * GitHub App の user-to-server トークン、クローンは classic PAT）なので、
+ * ここへ明示的に挙げる。
+ *
+ * **`ROTATABLE_CREDENTIAL_KEYS` から `POOL_OWNED_CREDENTIAL_NAMES` を引いた
+ * 集合の別名ではない。** 現状はたまたま同じ2要素になるが、将来
+ * `ROTATABLE_CREDENTIAL_KEYS` に GitHub 以外の非プールの名前が増えても、
+ * **ここへ明示的に足さない限りこの優先順位は広がらない**——広げる人は、
+ * この配列に1行足す判断を必ず一度通ることになる（歯:
+ * `credential-service.test.ts` の「GITHUB_CREDENTIAL_NAMES の外は正本のまま」）。
+ *
+ * ここに載っていない名前——`CLAUDE_CODE_OAUTH_TOKEN`（`POOL_OWNED_CREDENTIAL_NAMES`
+ * で別途必ず除かれる）と、`ROTATABLE_CREDENTIAL_KEYS` に無い任意の名前
+ * （PR #825「任意の名前→任意の値」）——は**従来どおり正本が勝つ**。
+ *
+ * **型で `ROTATABLE_CREDENTIAL_KEYS` に縛ってある**（`POOL_OWNED_CREDENTIAL_NAMES`
+ * と同じ理由。裸のリテラルだと、名前が変わったときにここだけが古い名前を
+ * 見続け、新しい名前は素通りするのに typecheck が緑という静かな壊れ方をする）。
+ */
+export const GITHUB_CREDENTIAL_NAMES: readonly string[] = [
+  'GH_TOKEN',
+  'GITHUB_TOKEN',
+] satisfies readonly (typeof ROTATABLE_CREDENTIAL_KEYS)[number][];
+
+/**
  * プロファイルが、鍵と同じ名前を宣言してしまっていないか。**名前だけを返す。**
  *
  * ## なぜこの検査が要るか
@@ -196,20 +230,26 @@ export interface CredentialFingerprint {
   sha256: string;
   updatedAt: string;
   /**
-   * **正本のこの値が、クローンの器の環境変数に在る同名の値と食い違っている**
-   * ときだけ `true`。**既定では付けない**（この行を持たない器は、この旗を
-   * 理由に何も変わらない——`false` を敷き詰めると「明示的に食い違っていない
-   * と確かめた」という意味になってしまい、見ていないものと見て揃っていた
-   * ものの区別が付かない）。
+   * **正本のこの行が、クローンの器の環境変数の値に優先順位で負けていて
+   * 配られていない**ときだけ `true`。**既定では付けない**（この行を持たない
+   * 器は、この旗を理由に何も変わらない——`false` を敷き詰めると「明示的に
+   * 食い違っていないと確かめた」という意味になってしまい、見ていないものと
+   * 見て揃っていたものの区別が付かない）。
    *
-   * 真になるのは、マネージャー（正本を読む `CredentialService#effective()`）と
-   * クローン（`Clone#childEnv()` 経由でデーモンの器の env をそのまま持つ）が
-   * **別の鍵で走っているとき**だけである（Issue #865 の実測）。検出条件は
-   * `credential-service.ts` の `cloneEnvShadowedNames` に置いてある。
+   * 真になるのは、正本にこの名前の行が在り（**GitHub の名前
+   * ——`GITHUB_CREDENTIAL_NAMES`——に限る**）、かつクローンの器の環境変数にも
+   * 空でない別の値が在るときだけである（Issue #865 の実測を機に、人間が
+   * 2026-09-12 に決めた恒久策）。検出条件は `credential-service.ts` の
+   * `cloneEnvShadowedNames` に置いてある。
    *
-   * **「正本が在れば器の env より正本が勝つ」という仕様は変えていない**
-   * （`CredentialServiceOptions.env` の doc、2026-09-11 の人間の決定）。
-   * この旗は勝敗を変えず、ただ知らせるだけである。
+   * **⚠️ 「正本が在れば器の env より正本が勝つ」だった以前の仕様は、この名前に
+   * ついて反転した**（`resolveCredentialRows`、2026-09-12。オーナーの仕様
+   * 「クローンへ渡す環境変数と同じものをマネージャーへ渡す」——クローンが
+   * 基準）。**⟹ この旗が立っているとき、正本のその行はマネージャーにも
+   * クローンにも配られていない。両方ともクローンの器の環境変数の値で走る。**
+   * 正本のその行を外しても配られる値は変わらない——直すには、正本の値を
+   * クローンの器の環境変数に合わせて置き直すか、器の環境変数の側を変える
+   * （この HTTP の口からは変えられない）。
    *
    * `CredentialStore`（runner 側の器）はこの旗を立てない——runner には
    * 「クローンの器の env」という比較対象がそもそも無い。

@@ -7,7 +7,7 @@ import {
   ensureTrailingNewline,
   memorySlugSchema,
   memoryProtectionRebuildDecision,
-  nextDescribedAt,
+  nextDescribedState,
   resolveMemoryDescriptionFreshness,
   sha256Hex,
 } from '@alteroid/core';
@@ -51,9 +51,17 @@ interface MemoryIndexEntry {
    * **書き手は書けない**（`write()` のとき新旧の `description` を比べて
    * store がここを進める。書き手が採番するとしたら `updatedAt` より必ず
    * 前になり、書いた直後から「古い」と出てしまう）。変わっていなければ
-   * 据え置く（`@alteroid/core` の `nextDescribedAt` の doc）。
+   * 据え置く（`@alteroid/core` の `nextDescribedState` の doc）。
    */
   describedAt?: string;
+  /**
+   * `describedAt` を立てた時点の本文サイズ（bytes）。#913。**`describedAt`
+   * と必ず同時に進む**（`nextDescribedState` が1つのオブジェクトで両方を
+   * 返すので、片方だけ進む形は型で作れない）。`read()` が返す `bytes`
+   * （`stats.size`）と同じ測り方——ここが1バイトでもずれると、全文書が
+   * 「要旨を書いた直後から少し変わっている」に化ける。
+   */
+  describedBytes?: number;
   /**
    * この slug が作られた時刻。**一度定まったら変わらない**
    * （`markHumanTouched` の単調非減少とも違う——単調非減少ですらなく、
@@ -267,6 +275,8 @@ export class FsPersonaStore implements PersonaStore {
         content,
         updatedAt,
         describedAt: index[slug]?.describedAt,
+        describedBytes: index[slug]?.describedBytes,
+        currentBytes: stats.size,
       });
       return {
         slug,
@@ -305,9 +315,10 @@ export class FsPersonaStore implements PersonaStore {
    * 壊れた状態が見える瞬間を作らない）。
    */
   async #writeNow(slug: string, content: string): Promise<MemoryDocument> {
-    // **describedAt の判定に要る「書く前の内容」を先に控える。** 存在しない
-    // slug（新規作成）なら null——`nextDescribedAt` はその場合 `description`
-    // が「無い→在る」に変わったとみなし、新しい describedAt を立てる。
+    // **describedAt / describedBytes の判定に要る「書く前の内容」を先に
+    // 控える。** 存在しない slug（新規作成）なら null——`nextDescribedState`
+    // はその場合 `description` が「無い→在る」に変わったとみなし、新しい
+    // describedAt / describedBytes を立てる。
     const before = await this.read(slug);
     const path = this.#path(slug);
     await mkdir(this.#dir, { recursive: true });
@@ -323,17 +334,21 @@ export class FsPersonaStore implements PersonaStore {
     // ここで更新対象に含めないことである）。
     const index = await this.#readIndex();
     const priorEntry = index[slug];
-    // **describedAt も同じ唯一の通り道で進める。** 書き手は describedAt を
-    // 直接書けない（`MemoryIndexEntry.describedAt` の doc）——ここが
-    // `description` の新旧を比べて、変わっていれば `written.updatedAt` と
-    // 同じ時刻に確定させる（変わっていなければ据え置く）。同じ時刻を使うのは、
-    // 直後の読み出しが必ず `fresh` になるようにするためである（`describedAt`
-    // をここで別に採番すると mtime の精度差で `stale` に化けうる）。
-    const describedAt = nextDescribedAt({
+    // **describedAt / describedBytes も同じ唯一の通り道で進める。** 書き手は
+    // どちらも直接書けない（`MemoryIndexEntry.describedAt` / `.describedBytes`
+    // の doc）——ここが `description` の新旧を比べて、変わっていれば
+    // `written.updatedAt` / `written.bytes` と同じ値に確定させる（変わって
+    // いなければ両方据え置く）。同じ値を使うのは、直後の読み出しが必ず
+    // `fresh`（かつ `deltaBytes: 0`）になるようにするためである（`describedAt`
+    // をここで別に採番すると mtime の精度差で `stale` に化けうるのと同じ理由で、
+    // `describedBytes` も `written.bytes` 以外の値を使うと1バイトずれうる）。
+    const { describedAt, describedBytes } = nextDescribedState({
       priorContent: before?.content ?? null,
       nextContent: written.content,
       priorDescribedAt: priorEntry?.describedAt,
+      priorDescribedBytes: priorEntry?.describedBytes,
       writtenAt: written.updatedAt,
+      writtenBytes: written.bytes,
     });
     // **作成そのものを観測している唯一の場所。** `before === null`（＝この
     // 書き込みが文書を作った）ときだけ `createdAt` を立てる。既に値が在れば
@@ -351,6 +366,7 @@ export class FsPersonaStore implements PersonaStore {
       ...priorEntry,
       contentSha256: sha256Hex(written.content),
       describedAt,
+      describedBytes,
       createdAt,
     };
     await this.#writeIndex(index);
@@ -367,6 +383,8 @@ export class FsPersonaStore implements PersonaStore {
         description: written.description,
         describedAt,
         updatedAt: written.updatedAt,
+        describedBytes,
+        currentBytes: written.bytes,
       }),
     };
   }

@@ -66,6 +66,23 @@ import {
 interface FakeCall {
   options: Options;
   inputs: string[];
+  /**
+   * **この呼び出しが本流のセッションのものか、サイドクエリのものか**（#890）。
+   *
+   * 見分けは `prompt` の形そのものである —— 本流は入力ストリーム
+   * （`AsyncIterable`）で入り、サイドクエリ（蒸留）は**1本の文字列**で入る
+   * （`clone.ts` の `#inputStream` と `#distillFromTranscript`）。下の
+   * `generate()` も同じ `typeof prompt === 'string'` で枝分かれしている。
+   *
+   * **控えておかないと、テスト側は「`calls` の最後」でしか本流を指せない。**
+   * ⟹ サイドクエリが後から積まれた回に、本流のつもりでサイドクエリを掴む。
+   * **そして掴めてしまう** —— 蒸留側の `Options` にも `PostToolUse` は在る
+   * （`claude-provider.ts` の `buildCloneDistillOptions`）ので、「フックが
+   * 無い」で落ちてくれず、**呼ぶ先が `#onDistillToolUse` に差し替わるだけ**に
+   * なる。あちらは `transcript_path` を控えないので、生ログの在り処が
+   * 立たないまま畳みへ入り、退避が黙って素通りする（#890 の落ち方）。
+   */
+  kind: 'session' | 'sideQuery';
 }
 
 function fakeSdk(
@@ -182,7 +199,11 @@ function fakeSdk(
   const calls: FakeCall[] = [];
 
   const fn = ((params: { prompt: unknown; options?: Options }) => {
-    const call: FakeCall = { options: params.options ?? {}, inputs: [] };
+    const call: FakeCall = {
+      options: params.options ?? {},
+      inputs: [],
+      kind: typeof params.prompt === 'string' ? 'sideQuery' : 'session',
+    };
     const callIndex = calls.length;
     calls.push(call);
 
@@ -396,12 +417,44 @@ function lineStartingWith(text: string, prefix: string): string {
   return matches[0]!;
 }
 
+/**
+ * **本流のセッションの、最後の呼び出し**（#890）。
+ *
+ * ⛔ `calls` の末尾をそのまま使わないこと。蒸留のサイドクエリは畳みの後に
+ * **遅れて**積まれるので、末尾が本流である保証はどこにも無い —— 実測（#890）で、
+ * 蒸留側の生ログ読み取りが数 ms 遅れるだけで末尾がサイドクエリへ入れ替わり、
+ * そこから先の待ちが budget を丸ごと使い切って落ちた。**位置ではなく種類で指す。**
+ *
+ * サイドクエリそのものを掴みたいテストは `calls.at(-1)` のままでよい（あちらは
+ * 「直前に自分で起こしたサイドクエリ」を指しており、末尾であることが意味を持つ）。
+ */
+function lastSessionCall(calls: FakeCall[]): FakeCall {
+  for (let i = calls.length - 1; i >= 0; i -= 1) {
+    const call = calls[i]!;
+    if (call.kind === 'session') return call;
+  }
+  throw new Error('本流のセッションの呼び出しが1本も無い');
+}
+
+/**
+ * `waitFor` / `waitForDone` の打ち切り。**⛔ ここを伸ばして歯を黙らせないこと**
+ * （#890）。この budget は本来の所要（実測 36〜53ms）の 60 倍以上あり、
+ * **使い切る回は「遅い」ではなく「起きていない」である。**
+ */
+const WAIT_BUDGET_MS = 3000;
+
 /** 非同期の書き込みが器へ届くまで待つ（`post` は同期で返るので待てない）。 */
 async function waitFor(check: () => Promise<boolean> | boolean, label: string): Promise<void> {
   const started = Date.now();
   for (;;) {
     if (await check()) return;
-    if (Date.now() - started > 3000) throw new Error(`${label} が起きない`);
+    // **「起きない」と言い切らない**（#890）。ここで言えるのは「budget の内に
+    // 起きなかった」までで、**「起きなかった」と「まだ起きていない」は別である。**
+    // 潰すと、次に読む人がこの1行から「そもそも起きない」と読む ⟹ 実際に
+    // #890 でその誤診が出ている。
+    if (Date.now() - started > WAIT_BUDGET_MS) {
+      throw new Error(`${label} が ${WAIT_BUDGET_MS}ms 以内に起きなかった`);
+    }
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
@@ -414,9 +467,11 @@ function waitForDone(events: ChatStreamEvent[]): Promise<void> {
       if (events.some((event) => event.type === 'done')) {
         clearInterval(tick);
         resolve();
-      } else if (Date.now() - started > 3000) {
+      } else if (Date.now() - started > WAIT_BUDGET_MS) {
         clearInterval(tick);
-        reject(new Error(`done が来ない: ${JSON.stringify(events)}`));
+        reject(
+          new Error(`done が ${WAIT_BUDGET_MS}ms 以内に来なかった: ${JSON.stringify(events)}`),
+        );
       }
     }, 5);
   });
@@ -2625,7 +2680,11 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
     let passThrough = false;
 
     const fn = ((params: { prompt: unknown; options?: Options }) => {
-      const call: FakeCall = { options: params.options ?? {}, inputs: [] };
+      const call: FakeCall = {
+        options: params.options ?? {},
+        inputs: [],
+        kind: typeof params.prompt === 'string' ? 'sideQuery' : 'session',
+      };
       const callIndex = calls.length;
       calls.push(call);
 
@@ -5647,7 +5706,11 @@ describe('クローン — 考えている合図（thinking）', () => {
     let turnIndex = 0;
 
     const fn = ((params: { prompt: unknown; options?: Options }) => {
-      const call: FakeCall = { options: params.options ?? {}, inputs: [] };
+      const call: FakeCall = {
+        options: params.options ?? {},
+        inputs: [],
+        kind: typeof params.prompt === 'string' ? 'sideQuery' : 'session',
+      };
       calls.push(call);
 
       async function* generate(): AsyncGenerator<SDKMessage, void> {
@@ -5935,7 +5998,11 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
     let held = true;
 
     const fn = ((params: { prompt: unknown; options?: Options }) => {
-      const call: FakeCall = { options: params.options ?? {}, inputs: [] };
+      const call: FakeCall = {
+        options: params.options ?? {},
+        inputs: [],
+        kind: typeof params.prompt === 'string' ? 'sideQuery' : 'session',
+      };
       calls.push(call);
 
       async function* generate(): AsyncGenerator<SDKMessage, void> {
@@ -12298,6 +12365,177 @@ describe('credentials（SDK 子プロセスへ重ねる鍵の現在値）', () =
 });
 
 /**
+ * 正本（`CredentialService`）をクローンへ通す口（人間の決定 2026-09-12、
+ * 「梯子を1本に統一する」——Issue #865 の恒久策）。
+ *
+ * **ここが固定するのは、マネージャー側（`credential-service.test.ts` の
+ * `resolveCredentialRows`）と同じ優先順位が、クローンの子プロセスへ届く
+ * env にも同じ形で現れること**である。両方が同じ関数を通るので、この節と
+ * あちらの節は同じ主張を別の観測点（子プロセスへ実際に渡る env）から測る。
+ */
+describe('credentialService（正本を同期で覗いて重ねる。#865）', () => {
+  let postSeq2 = 0;
+
+  function cloneWithVault(input: {
+    vault?: readonly { name: string; value: string; updatedAt: string }[];
+    env?: NodeJS.ProcessEnv;
+    credentials?: () => Record<string, string>;
+    profileEnv?: Record<string, string>;
+  }) {
+    const { fn, calls } = fakeSdk();
+    const fakeCredentialService = {
+      vaultSnapshot: () => input.vault ?? [],
+    } as unknown as Parameters<typeof createClone>[0]['credentialService'];
+    const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
+      stores: createMemoryStores(),
+      queryFn: fn,
+      env: input.env ?? {},
+      credentialService: fakeCredentialService,
+      ...(input.credentials === undefined ? {} : { credentials: input.credentials }),
+      ...(input.profileEnv === undefined
+        ? {}
+        : {
+            profile: {
+              env: () => input.profileEnv as Record<string, string>,
+            } as unknown as Parameters<typeof createClone>[0]['profile'],
+          }),
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    return { clone, calls };
+  }
+
+  function say(clone: ReturnType<typeof createClone>): void {
+    clone.post({
+      type: 'human_message',
+      id: `evt-vault-${String(++postSeq2)}`,
+      at: new Date().toISOString(),
+      text: 'こんにちは',
+      conversationId: 'conv-1',
+    });
+  }
+
+  it('credentialService を渡さなければ、既定の構成の挙動を変えない', async () => {
+    const { fn, calls } = fakeSdk();
+    // **意図して `credentialService` を渡さない。** cloneWithVault は必ず渡すので
+    // ここだけ直接 createClone を呼ぶ。
+    const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
+      stores: createMemoryStores(),
+      queryFn: fn,
+      env: { GH_TOKEN: 'from-container-env' },
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    say(clone);
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    expect(calls[0]?.options.env?.GH_TOKEN).toBe('from-container-env');
+  });
+
+  it('正本にしか無い GH_TOKEN も、クローンへ届く（以前は0件だった。梯子を1本に統一した副作用）', async () => {
+    const { clone, calls } = cloneWithVault({
+      vault: [{ name: 'GH_TOKEN', value: 'from-vault', updatedAt: '2026-09-12T00:00:00.000Z' }],
+    });
+    say(clone);
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    expect(calls[0]?.options.env?.GH_TOKEN).toBe('from-vault');
+  });
+
+  it('器の env が非空なら、正本より器の env が勝つ（GitHub の名前だけ）', async () => {
+    const { clone, calls } = cloneWithVault({
+      vault: [{ name: 'GH_TOKEN', value: 'from-vault', updatedAt: '2026-09-12T00:00:00.000Z' }],
+      env: { GH_TOKEN: 'from-container-env' },
+    });
+    say(clone);
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    expect(calls[0]?.options.env?.GH_TOKEN).toBe('from-container-env');
+  });
+
+  it('🔴 器の env が空文字なら、正本が勝つ（空は「置かれていない」と同じ）', async () => {
+    const { clone, calls } = cloneWithVault({
+      vault: [{ name: 'GH_TOKEN', value: 'from-vault', updatedAt: '2026-09-12T00:00:00.000Z' }],
+      env: { GH_TOKEN: '' },
+    });
+    say(clone);
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    expect(calls[0]?.options.env?.GH_TOKEN).toBe('from-vault');
+  });
+
+  it('🔴 ROTATABLE_CREDENTIAL_KEYS に無い任意の名前は、器の env が在っても正本が勝つ', async () => {
+    const { clone, calls } = cloneWithVault({
+      vault: [{ name: 'NPM_TOKEN', value: 'from-vault', updatedAt: '2026-09-12T00:00:00.000Z' }],
+      env: { NPM_TOKEN: 'from-container-env' },
+    });
+    say(clone);
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    expect(calls[0]?.options.env?.NPM_TOKEN).toBe('from-vault');
+  });
+
+  it('🔴 CLAUDE_CODE_OAUTH_TOKEN はこの重ねの対象外——Anthropic のプールの鍵が最後まで勝つ', async () => {
+    // **正本にも同名の行が在る想定**（正規の口では作れないが、`vaultSnapshot` は
+    // 直接差し込めるので、対象外であることをここで測る）。プールの `credentials`
+    // が最後に重なるので、正本にも器の env にも引きずられずプールの値が届く。
+    const { clone, calls } = cloneWithVault({
+      vault: [
+        {
+          name: 'CLAUDE_CODE_OAUTH_TOKEN',
+          value: 'from-vault',
+          updatedAt: '2026-09-12T00:00:00.000Z',
+        },
+      ],
+      env: { CLAUDE_CODE_OAUTH_TOKEN: 'frozen-at-startup' },
+      credentials: () => ({ CLAUDE_CODE_OAUTH_TOKEN: 'rotated-now' }),
+    });
+    say(clone);
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    expect(calls[0]?.options.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe('rotated-now');
+  });
+
+  it('正本の写しがまだ何も無い（vaultSnapshot が空を返す）ときも、器の env はそのまま届く', async () => {
+    // **起動直後の窓の再現。** `vault` を渡さない ＝ `vaultSnapshot()` が `[]`。
+    const { clone, calls } = cloneWithVault({ env: { GH_TOKEN: 'from-container-env' } });
+    say(clone);
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    expect(calls[0]?.options.env?.GH_TOKEN).toBe('from-container-env');
+  });
+
+  /**
+   * **重ね順そのものを測る。** 正本は「env の後・プロファイルの前」に重ねる
+   * 約束（`#childEnv()` のdoc）——ここが崩れると、プロファイルが同じ名前を
+   * 宣言していても正本に上書きされ、`credentialNamesShadowedByProfile` が
+   * 検出できる形（人間が明示的に書いたほうが勝つ）が壊れる。
+   */
+  it('プロファイルが同じ名前を宣言していれば、正本より後で重なってプロファイルが勝つ', async () => {
+    const { clone, calls } = cloneWithVault({
+      vault: [{ name: 'GH_TOKEN', value: 'from-vault', updatedAt: '2026-09-12T00:00:00.000Z' }],
+      profileEnv: { GH_TOKEN: 'declared-in-profile' },
+    });
+    say(clone);
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    expect(calls[0]?.options.env?.GH_TOKEN).toBe('declared-in-profile');
+  });
+});
+
+/**
  * 枠の観測を回し手へ渡す口（Issue #393 PR3）。
  *
  * **ここが固定するのは「何を渡すか」である。** クローンは回すかどうかを判断しない
@@ -13747,7 +13985,7 @@ describe('クローン — 文脈窓で畳む前の退避は diverged/unknown �
       `t-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonl`,
     );
     await writeFile(transcriptPath, body, 'utf8');
-    const main = s.calls[s.calls.length - 1] as FakeCall;
+    const main = lastSessionCall(s.calls);
     const hook = main.options.hooks?.PostToolUse?.[0]?.hooks?.[0];
     if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
     await hook({ tool_name: 'Read', transcript_path: transcriptPath } as never, undefined, {

@@ -4,7 +4,7 @@ import {
   ensureTrailingNewline,
   memorySlugSchema,
   memoryProtectionRebuildDecision,
-  nextDescribedAt,
+  nextDescribedState,
   sha256Hex,
 } from '@alteroid/core';
 import type {
@@ -51,6 +51,7 @@ export class PgPersonaStore implements PersonaStore {
         content: memory.content,
         updatedAt: memory.updatedAt,
         describedAt: memory.describedAt,
+        describedBytes: memory.describedBytes,
         createdAt: memory.createdAt,
       })
       .from(memory)
@@ -65,6 +66,7 @@ export class PgPersonaStore implements PersonaStore {
         content: memory.content,
         updatedAt: memory.updatedAt,
         describedAt: memory.describedAt,
+        describedBytes: memory.describedBytes,
         createdAt: memory.createdAt,
       })
       .from(memory)
@@ -99,13 +101,14 @@ export class PgPersonaStore implements PersonaStore {
       });
     const row = rows[0];
     if (row === undefined) throw new Error(`記憶の書き込みに失敗: ${slug}`);
-    const describedAt = await this.#updateDerived(key, prior, row);
-    return toDocument({ ...row, describedAt });
+    const { describedAt, describedBytes } = await this.#updateDerived(key, prior, row);
+    return toDocument({ ...row, describedAt, describedBytes });
   }
 
   /**
    * 書いた直後の content をハッシュして `content_sha256` へ記録し、
-   * `described_at` を進める（変わっていなければ据え置く）。
+   * `described_at` / `described_bytes` を進める（変わっていなければ両方
+   * 据え置く）。
    *
    * **write() と append() の両方から呼ぶ。** fs 版は `#writeNow` という
    * 唯一の通り道があるが、pg はこの2つが独立したメソッドなので、片方だけ
@@ -113,38 +116,51 @@ export class PgPersonaStore implements PersonaStore {
    * 一切更新しない — 降ろさないための唯一の保証は、この列を更新対象に
    * 含めないことである。
    *
-   * **`describedAt` は書き手が渡す値ではなく、ここで新旧の `description` を
-   * 比べて決める**（`@alteroid/core` の `nextDescribedAt` の doc）。渡した
-   * `row.updatedAt` と同じ時刻を使うことで、直後の読み出しが必ず `fresh` に
-   * なるようにする。
+   * **`describedAt` / `describedBytes` は書き手が渡す値ではなく、ここで
+   * 新旧の `description` を比べて決める**（`@alteroid/core` の
+   * `nextDescribedState` の doc——1つのオブジェクトで両方を返すので、
+   * 片方だけ進む形をコードの側で作れない）。渡した `row.updatedAt` /
+   * `Buffer.byteLength(written.content, 'utf8')` と同じ値を使うことで、
+   * 直後の読み出しが必ず `fresh`（かつ `deltaBytes: 0`）になるようにする。
+   * **`Buffer.byteLength` は `toDocument` の `bytes` と同じ測り方**——ここが
+   * ずれると、書いた直後から「少し変わっている」に化ける。
    */
   async #updateDerived(
     slug: string,
-    prior: { content: string; describedAt: Date | null } | undefined,
+    prior: { content: string; describedAt: Date | null; describedBytes: number | null } | undefined,
     written: { content: string; updatedAt: Date | string },
-  ): Promise<Date | null> {
-    const describedAtIso = nextDescribedAt({
+  ): Promise<{ describedAt: Date | null; describedBytes: number | null }> {
+    const next = nextDescribedState({
       priorContent: prior?.content ?? null,
       nextContent: written.content,
       priorDescribedAt:
         prior?.describedAt === null || prior?.describedAt === undefined
           ? undefined
           : toIso(prior.describedAt),
+      priorDescribedBytes: prior?.describedBytes === null ? undefined : prior?.describedBytes,
       writtenAt: toIso(written.updatedAt),
+      writtenBytes: Buffer.byteLength(written.content, 'utf8'),
     });
-    const describedAt = describedAtIso === undefined ? null : new Date(describedAtIso);
+    const describedAt = next.describedAt === undefined ? null : new Date(next.describedAt);
+    const describedBytes = next.describedBytes === undefined ? null : next.describedBytes;
     await this.#db
       .update(memory)
-      .set({ contentSha256: sha256Hex(written.content), describedAt })
+      .set({ contentSha256: sha256Hex(written.content), describedAt, describedBytes })
       .where(eq(memory.slug, slug));
-    return describedAt;
+    return { describedAt, describedBytes };
   }
 
   async #readPrior(
     slug: string,
-  ): Promise<{ content: string; describedAt: Date | null } | undefined> {
+  ): Promise<
+    { content: string; describedAt: Date | null; describedBytes: number | null } | undefined
+  > {
     const rows = await this.#db
-      .select({ content: memory.content, describedAt: memory.describedAt })
+      .select({
+        content: memory.content,
+        describedAt: memory.describedAt,
+        describedBytes: memory.describedBytes,
+      })
       .from(memory)
       .where(eq(memory.slug, slug))
       .limit(1);
@@ -191,8 +207,8 @@ export class PgPersonaStore implements PersonaStore {
       });
     const row = rows[0];
     if (row === undefined) throw new Error(`記憶の追記に失敗: ${slug}`);
-    const describedAt = await this.#updateDerived(key, prior, row);
-    return toDocument({ ...row, describedAt });
+    const { describedAt, describedBytes } = await this.#updateDerived(key, prior, row);
+    return toDocument({ ...row, describedAt, describedBytes });
   }
 
   /**
@@ -321,6 +337,7 @@ export class PgPersonaStore implements PersonaStore {
         content: memory.content,
         updatedAt: memory.updatedAt,
         describedAt: memory.describedAt,
+        describedBytes: memory.describedBytes,
         createdAt: memory.createdAt,
       })
       .from(memory)
@@ -334,22 +351,26 @@ interface MemoryRow {
   content: string;
   updatedAt: Date | string;
   describedAt: Date | string | null;
+  describedBytes: number | null;
   createdAt: Date | string | null;
 }
 
 function toDocument(row: MemoryRow): MemoryDocument {
   const updatedAt = toIso(row.updatedAt);
+  const currentBytes = Buffer.byteLength(row.content, 'utf8');
   const derived = deriveMemoryFrontmatter({
     content: row.content,
     updatedAt,
     describedAt: row.describedAt === null ? undefined : toIso(row.describedAt),
+    describedBytes: row.describedBytes === null ? undefined : row.describedBytes,
+    currentBytes,
   });
   return {
     slug: row.slug,
     title: titleOf(row.content, row.slug),
     updatedAt,
     createdAt: toMemoryCreatedAt(row.createdAt),
-    bytes: Buffer.byteLength(row.content, 'utf8'),
+    bytes: currentBytes,
     content: row.content,
     frontmatter: derived.frontmatter,
     kind: derived.kind,

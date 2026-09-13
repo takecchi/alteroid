@@ -1508,9 +1508,53 @@
                                     "type": "integer",
                                     "minimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "drift": {
+                                    "oneOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "const": "measured"
+                                          },
+                                          "describedBytes": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "currentBytes": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "deltaBytes": {
+                                            "type": "integer",
+                                            "minimum": -9007199254740991,
+                                            "maximum": 9007199254740991
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "describedBytes",
+                                          "currentBytes",
+                                          "deltaBytes"
+                                        ]
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "const": "unrecorded"
+                                          }
+                                        },
+                                        "required": ["kind"]
+                                      }
+                                    ]
                                   }
                                 },
-                                "required": ["kind", "staleForMs"]
+                                "required": ["kind", "staleForMs", "drift"]
                               },
                               {
                                 "type": "object",
@@ -1696,9 +1740,53 @@
                                   "type": "integer",
                                   "minimum": 0,
                                   "maximum": 9007199254740991
+                                },
+                                "drift": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "measured"
+                                        },
+                                        "describedBytes": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "currentBytes": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "deltaBytes": {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        }
+                                      },
+                                      "required": [
+                                        "kind",
+                                        "describedBytes",
+                                        "currentBytes",
+                                        "deltaBytes"
+                                      ]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "unrecorded"
+                                        }
+                                      },
+                                      "required": ["kind"]
+                                    }
+                                  ]
                                 }
                               },
-                              "required": ["kind", "staleForMs"]
+                              "required": ["kind", "staleForMs", "drift"]
                             },
                             {
                               "type": "object",
@@ -1912,9 +2000,53 @@
                                   "type": "integer",
                                   "minimum": 0,
                                   "maximum": 9007199254740991
+                                },
+                                "drift": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "measured"
+                                        },
+                                        "describedBytes": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "currentBytes": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "deltaBytes": {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        }
+                                      },
+                                      "required": [
+                                        "kind",
+                                        "describedBytes",
+                                        "currentBytes",
+                                        "deltaBytes"
+                                      ]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "unrecorded"
+                                        }
+                                      },
+                                      "required": ["kind"]
+                                    }
+                                  ]
                                 }
                               },
-                              "required": ["kind", "staleForMs"]
+                              "required": ["kind", "staleForMs", "drift"]
                             },
                             {
                               "type": "object",
