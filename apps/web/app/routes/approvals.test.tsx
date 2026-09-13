@@ -4,7 +4,9 @@
  *
  * デーモンには「1件が駄目でも残りは進む」`POST /approvals/answer` が既にあった
  * のに、画面は `POST /approvals/{id}/answer` を1件ずつ呼ぶだけだった
- * （`docs/roadmap.md` M3・`docs/PRD.md`「入口の等価性」に対するバグ）。
+ * （**廃止済みの実装計画**〈#479〉の M3 —— 当時の文言は
+ * `git show 7046e2c:docs/roadmap.md` —— と `docs/PRD.md`「入口の等価性」に
+ * 対するバグ）。
  *
  * ここで固定するのは:
  *

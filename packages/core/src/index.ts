@@ -384,7 +384,8 @@ export {
 } from './archive-continuity.js';
 /**
  * クローンの自己認識。正典（`docs/*.md`）の全文はビルド時に焼き込まれる
- * （`scripts/write-canon.mjs`）。要約を手書きしないこと — docs と二重管理になる。
+ * （`packages/core/scripts/write-canon.mjs`）。要約を手書きしないこと — docs と
+ * 二重管理になる。
  */
 export {
   CANON_DOCUMENTS,

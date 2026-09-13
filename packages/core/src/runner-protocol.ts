@@ -2076,7 +2076,7 @@ export interface RunnerRegistry {
    * - 一致する器が複数開けている（`Registry#get` は線形一致で先に見つかった方を
    *   返す実装なので、指名しても片方に固定できない。roadmap M5 PR4（fencing）待ちの
    *   既知のギャップが、指名を足したことで「クローンの判断が黙って別の器へ向く」形で
-   *   表に出る——`docs/roadmap.md` の申し送りそのもの）
+   *   表に出る——#485 が M5 から逐語で写した申し送りそのもの。個別の穴は #200）
    */
   select(input: { cwd?: string; runnerId?: string }): Promise<RunnerClient>;
   /**
@@ -2821,7 +2821,7 @@ class Registry implements RunnerRegistry {
    *   添えて言う
    * - 一致する器が複数開けている。**`Registry#get` は `#entries` を線形一致で
    *   走査し先に見つかった方を返す実装なので、指名しても片方に固定できない**
-   *   （`docs/roadmap.md` M5 の申し送り、`get()` の doc に同じ注意がある）。
+   *   （M5 の申し送り＝#485・#200。`get()` の doc に同じ注意がある）。
    *   fencing（roadmap M5 PR4）が無いいまは、これを「一意でない」として拒むのが
    *   誤った器を黙って選ぶよりましである
    */
