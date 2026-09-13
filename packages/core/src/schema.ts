@@ -2383,6 +2383,33 @@ export const jobSchema = z.object({
     })
     .optional(),
   /**
+   * 直近の1ターンが、`result` を受け取らないまま畳まれたこと（Issue #917）。
+   *
+   * `lastFailure` とは軸が違う——あちらは SDK が「これは応答ではない」と
+   * 言った回（`failure` が付く）で、こちらは SDK からその声明すら届かないまま
+   * 器の入れ替え・`manager_stop`・クラッシュ等で畳まれた回
+   * （`runner.ts` の `#flushUnreported` / `runnerEventSchema` の
+   * `report.unreported` の doc）。**両方が無いことも、片方だけ在ることもある**
+   * ——同じ欄に混ぜない。
+   *
+   * **これが無いと、`lastReport` が完遂した報告に見える。** 本文
+   * （`unreportedText()` が包んだもの）は畳まれる前の途中経過であって、
+   * 完遂した報告ではない——`case 'report'` がここを見て `manager_list` /
+   * `manager_report` の見出しを「直近のターンの中身」へ倒す
+   * （`tools.ts` の見出し分岐の doc）。
+   *
+   * `reason` は `#flushUnreported` が受け取った理由文字列をそのまま運ぶ
+   * （言い換えない）。応答として終わった回（次の `report` が `unreported`
+   * を伴わずに届いた回）では消える——`lastFailure` と同じ「直近」の意味を
+   * 守る。
+   */
+  lastUnreported: z
+    .object({
+      reason: z.string(),
+      at: isoDateTime,
+    })
+    .optional(),
+  /**
    * セッションが `failed` として畳まれたときの、器の資源による落ち方の分類
    * （`system-error.ts` の `SystemErrorFacts`。#713 段3）。
    *

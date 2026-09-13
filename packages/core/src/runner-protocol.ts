@@ -703,6 +703,52 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * **無ければ畳まない＝安全側へ倒れる。**
      */
     synthesized: z.string().min(1).optional(),
+    /**
+     * **`result` を受け取らないまま畳まれたターンの報告であること（Issue #917）。**
+     *
+     * `runner.ts` の `#flushUnreported()`（`stop()` と `#finish()` の両方から
+     * 呼ばれる——器の入れ替え・`manager_stop`・クラッシュ・`lost`・`failed`の
+     * どの経路でも通る）が作る報告だけがこれを立てる。**`result` が来ていない
+     * ので `failure` はここでは立てられない**——SDK は一度も「これは応答では
+     * ない」と言っていないので、立てると取れない事実を取れた顔で出すことに
+     * なる（`#flushUnreported` の doc「名乗れないものを名乗らない」
+     * ＝ `AGENTS.md`「取れない軸に0の行を作る」）。`status` も `stop()` の
+     * 呼び出し元が持っていた値（多くは `running`）のまま変えない——同じ理由。
+     *
+     * それでも本文（`unreportedText()` が「（このターンは結果を受け取らない
+     * まま畳まれた: …）」と包んだもの）は完遂した報告ではなく、畳まれる前の
+     * **途中経過**である。`failure` と同じ理由で、見出し（`manager_list` /
+     * `manager_report`）が「直近の報告」のままだと、包みの内側だけを読んで
+     * 完遂した報告として扱うことになる——**Issue #714 が `failedReportText`
+     * の経路で塞いだのとまったく同じ穴**が、`result` を受け取らずに畳まれた
+     * この経路にはまだ残っていた（`tools.ts` の見出し分岐の doc、
+     * `grep -Fn -- '失敗した回は「報告」と呼ばない（Issue #714）' packages/core/src/tools.ts`）。
+     *
+     * **既存の `synthesized` は流用しない。** あちらの doc は「`reportText()`
+     * が作る経路では立てない——本人が書いた・喋った断片を含みうるので、
+     * 機構が合成したとは言えない」と明言している。`unreportedText()` の本文も
+     * `said`（マネージャー自身が畳まれる前に書いていた断片）をそのまま
+     * 連結するので、`synthesized` を流用すると doc が嘘になる——別の欄に
+     * した理由はここにある。
+     *
+     * `reason` は `#flushUnreported` が受け取った理由文字列（`stop()` /
+     * `#finish()` それぞれの呼び出し元が渡す `reason`）をそのまま運ぶ。
+     * **言い換えない**——次に同じことが起きたときの掘り始めの位置が違う
+     * （`failure.code` / `failure.via` を言い換えないのと同じ理由）。
+     *
+     * **`.optional()` にしてあるのは `contentless` / `synthesized` と同じ
+     * 理由。** デーモンと runner は別々にデプロイされ、入れ替わる順序は
+     * 保証されない:
+     * - **新デーモン ＋ 旧 runner**: この欄が来ない ⟹ 見出しはこれまで
+     *   どおり「直近の報告」のまま（直す前と同じ挙動——退行ではない）
+     * - **新 runner ＋ 旧デーモン**: 旧デーモンはこの欄を知らずに無視する
+     *   ⟹ 同上
+     *
+     * どちらのずれでも「これまでどおり」へ倒れる——`reportId` の doc
+     * 「旧 runner はここを素通りする」と同じ非対称であり、新旧のデーモン・
+     * runner が両方揃ったときにしか見出しの直しは効かない。
+     */
+    unreported: z.object({ reason: z.string() }).optional(),
   }),
   /**
    * 委譲1区間ぶんの集計（マネージャーが作業者を投げてから、全員が完了通知を

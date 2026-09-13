@@ -351,6 +351,26 @@ describe('#flushUnreported — result を受け取らないまま畳んだ回の
     expect(reportEventsSync(s.events)).toHaveLength(1);
   });
 
+  it('report に unreported（構造化された印）が付く（Issue #917。`failure` は付かない）', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const session = await firstSession(s.sessions);
+
+    await session.say('畳まれる前の本文');
+    // `RunnerHost#stop()` は `Session#stop()` に固定の理由文字列を渡す
+    // （`runner.ts` の `stop(managerId)` 実装 —
+    // `session.stop('デーモンから停止を指示された。')`）。
+    await s.host.stop('mgr-1');
+
+    const [report] = await reportEvents(s.events, 1);
+    // **`unreported.reason` は `stop()` が受け取った理由をそのまま運ぶ**
+    // （言い換えない——`runnerEventSchema` の `report.unreported` の doc）。
+    expect(report?.unreported).toEqual({ reason: 'デーモンから停止を指示された。' });
+    // **`result` が来ていないこの経路では `failure` を立てない**
+    // （`#flushUnreported` の doc「名乗れないものを名乗らない」）。
+    expect(report?.failure).toBeUndefined();
+  });
+
   it('reportId は、本文を運んだ assistant メッセージの uuid と一致する', async () => {
     const s = setup();
     await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });

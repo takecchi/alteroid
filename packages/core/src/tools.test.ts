@@ -5093,6 +5093,69 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * `lastUnreported`（`schema.ts` の `jobSchema`。Issue #917）が在る回も、
+   * `lastFailure` と同じく見出しを「直近のターンの中身」へ倒す。
+   *
+   * **`lastFailure` とは軸が違う。** あちらは SDK が「これは応答ではない」と
+   * 言った回、こちらは `result` を受け取らないまま畳まれた回（`runner.ts` の
+   * `#flushUnreported`）——SDK は一度も失敗を名乗っていないので、⚠ の専用行
+   * （`describeManagerFailure`）は出さない。**見出しだけを切り替える。**
+   */
+  it('manager_list は lastUnreported が在る回でも見出しを「報告」から切り替える（#917。⚠ 行は出さない）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.lastReport =
+      '（このターンは結果を受け取らないまま畳まれた: デーモンから停止を指示された。）\n途中まで';
+    target.lastUnreported = {
+      reason: 'デーモンから停止を指示された。',
+      at: '2026-09-13T01:23:45.000Z',
+    };
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain(
+      '直近のターンの中身: （このターンは結果を受け取らないまま畳まれた: デーモンから停止を指示された。）',
+    );
+    expect(reply).not.toContain('直近の報告');
+    // **`lastFailure` 側の専用行（⚠）はここでは出ない。** SDK は失敗を
+    // 名乗っていないので、`describeManagerFailure` は `lastFailure` の
+    // 有無しか見ない——`lastUnreported` だけでは立たせない。
+    expect(reply).not.toContain('⚠ 直近のターンは報告ではなく失敗で終わっている');
+  });
+
+  /**
+   * `manager_report` 側でも同じ切り替えが効く（#917）。`part: 'request'` は
+   * 依頼文なので、切り替えの対象外のまま——`lastFailure` の歯と同じ形。
+   */
+  it('manager_report は lastUnreported が在る回でも見出しを「報告」から切り替える（#917）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '依頼の本文' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.lastReport =
+      '（このターンは結果を受け取らないまま畳まれた: デーモンから停止を指示された。）\n途中まで';
+    target.lastUnreported = {
+      reason: 'デーモンから停止を指示された。',
+      at: '2026-09-13T01:23:45.000Z',
+    };
+
+    const reply = await h.call('manager_report', { managerId: target.managerId });
+
+    expect(reply).toContain('直近のターンの中身');
+    expect(reply).not.toContain('直近の報告');
+    expect(reply).not.toContain('⚠ 直近のターンは報告ではなく失敗で終わっている');
+
+    const request = await h.call('manager_report', {
+      managerId: target.managerId,
+      part: 'request',
+    });
+    expect(request).toContain('依頼文');
+    expect(request).not.toContain('直近のターンの中身');
+  });
+
+  /**
    * **`lastSystemError`（`schema.ts` の `jobSchema`。#713 段3）を `manager_list` /
    * `manager_report` が読む。**
    *
@@ -5774,11 +5837,16 @@ describe('クローンの道具', () => {
   });
 
   /**
-   * #783 段0: `manager_list` の受信箱の行に内訳（種類・同一本文・配達回数・
-   * 齢）が付く。**集計値だけで、合図の本文は1文字も載らない**
+   * #783 段0: `manager_list` の受信箱の行に内訳（種類・同一本文・器の入れ替え
+   * 回数・齢）が付く。**集計値だけで、合図の本文は1文字も載らない**
    * （`AGENTS.md` の地雷「エージェントへ返す一覧に本文を全文で載せる」）。
+   *
+   * **#910 で軸名を `配達回数` から `器の入れ替え回数` へ改名した。** 期待値の
+   * 更新であって、保証は弱めていない —— 同じ3本を軸名の新旧で測り直したうえに、
+   * **古い名前が戻らないこと**（`not.toContain('配達回数')`）を1本足してある。
+   * 改名の理由は `inbox-backlog.ts` の `describeInboxBacklogBreakdown` の doc。
    */
-  it('manager_list の受信箱の行に内訳（種類・同一本文・配達回数）が付き、本文は載らない', async () => {
+  it('manager_list の受信箱の行に内訳（種類・同一本文・器の入れ替え回数）が付き、本文は載らない', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
     await h.stores.inbox.put(
@@ -5805,14 +5873,20 @@ describe('クローンの道具', () => {
 
     const reply = await h.call('manager_list', {});
 
-    // 内訳: 種類・計・同一本文・配達回数・齢の見出しが出る。
+    // 内訳: 種類・計・同一本文・器の入れ替え回数・齢の見出しが出る。
     expect(reply).toContain('内訳（計 2 件）');
     expect(reply).toContain('種類:');
     expect(reply).toContain('human_message 1');
     expect(reply).toContain('manager_message 1');
     expect(reply).toContain('同一本文');
-    expect(reply).toContain('配達回数:');
-    expect(reply).toContain('未配達 2');
+    expect(reply).toContain('器の入れ替え回数:');
+    expect(reply).toContain('0回＝いまの器になってから積まれた 2');
+    // **#910: 古い軸名がこの面へ戻らないこと。** `manager_list` の応答は
+    // クローンがこの数字を読む唯一の面である（doc は届かない）。
+    expect(reply).not.toContain('配達回数');
+    // **#910 追補: `未配達` も戻らないこと。** 0 は「届いていない」ではなく
+    // 「いまの器になってから積まれ、まだ片付いていない」である（実測 2026-09-12）。
+    expect(reply).not.toContain('未配達');
     // **本文は1文字も載らない**（地雷「一覧に本文を全文で載せる」）。
     expect(reply).not.toContain('絶対に外へ出てはいけない本文XYZ');
     expect(reply).not.toContain('これも外へ出てはいけない');

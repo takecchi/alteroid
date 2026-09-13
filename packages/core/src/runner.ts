@@ -2944,6 +2944,11 @@ class RunnerSession {
    * あれはターンの終わり方を言う印で、その確定は `result` が運ぶ。
    * `result` が来ていないこの経路では「失敗として終わった」と名乗れない
    * ——名乗れないものを名乗らない（`AGENTS.md`「取れない軸に0の行を作る」）。
+   *
+   * **`unreported` を立てる（Issue #917）。** `failure` は上の理由で立てられ
+   * ないが、この本文（`unreportedText()`）は完遂した報告ではなく畳まれる前の
+   * 途中経過である——`runnerEventSchema` の `report.unreported` の doc が
+   * 詳しい。値は `reason` をそのまま運ぶ（言い換えない）。
    */
   #flushUnreported(reason: string, status: JobStatus): void {
     if (this.#said.length === 0) return;
@@ -2959,6 +2964,7 @@ class RunnerSession {
       ...(reportId === undefined ? {} : { reportId }),
       text: unreportedText(said, reason),
       status,
+      unreported: { reason },
     });
   }
 
