@@ -594,6 +594,7 @@ describe('要旨の鮮度（resolveMemoryDescriptionFreshness）— 4状態、�
         describedAt: '2026-08-20T00:00:00Z',
         updatedAt: '2026-08-21T00:00:00Z',
         describedBytes: undefined,
+        describedBytesAt: undefined,
         currentBytes: 0,
       }),
     ).toEqual({ kind: 'absent' });
@@ -606,6 +607,7 @@ describe('要旨の鮮度（resolveMemoryDescriptionFreshness）— 4状態、�
         describedAt: undefined,
         updatedAt: '2026-08-21T00:00:00Z',
         describedBytes: undefined,
+        describedBytesAt: undefined,
         currentBytes: 0,
       }),
     ).toEqual({ kind: 'unknown' });
@@ -618,6 +620,7 @@ describe('要旨の鮮度（resolveMemoryDescriptionFreshness）— 4状態、�
         describedAt: '2026-08-21T00:00:00Z',
         updatedAt: '2026-08-21T00:00:00Z',
         describedBytes: undefined,
+        describedBytesAt: undefined,
         currentBytes: 0,
       }),
     ).toEqual({ kind: 'fresh' });
@@ -630,6 +633,7 @@ describe('要旨の鮮度（resolveMemoryDescriptionFreshness）— 4状態、�
         describedAt: '2026-08-20T00:00:00Z',
         updatedAt: '2026-08-21T00:00:00Z',
         describedBytes: 500,
+        describedBytesAt: undefined,
         currentBytes: 700,
       }),
     ).toEqual({
@@ -645,6 +649,7 @@ describe('要旨の鮮度（resolveMemoryDescriptionFreshness）— 4状態、�
       describedAt: '2026-08-20T00:00:00Z',
       updatedAt: '2026-08-20T01:00:00Z',
       describedBytes: 500,
+      describedBytesAt: undefined,
       currentBytes: 700,
     });
     const thirtyDays = resolveMemoryDescriptionFreshness({
@@ -652,6 +657,7 @@ describe('要旨の鮮度（resolveMemoryDescriptionFreshness）— 4状態、�
       describedAt: '2026-08-01T00:00:00Z',
       updatedAt: '2026-08-31T00:00:00Z',
       describedBytes: 500,
+      describedBytesAt: undefined,
       currentBytes: 700,
     });
     expect(oneHour).toEqual({
@@ -697,6 +703,7 @@ describe('要旨の鮮度（resolveMemoryDescriptionFreshness）— 4状態、�
       describedAt: '2026-09-11T10:00:00.500Z',
       updatedAt: '2026-09-11T10:00:00Z',
       describedBytes: undefined,
+      describedBytesAt: undefined,
       currentBytes: 0,
     });
     expect(result).toEqual({ kind: 'stale', staleForMs: 0, drift: { kind: 'unrecorded' } });
@@ -714,18 +721,24 @@ describe('要旨の鮮度（resolveMemoryDescriptionFreshness）— 4状態、�
 });
 
 /**
- * #913: `drift`（本文の変化量）の組み立て。`resolveMemoryDescriptionFreshness`
- * の `stale` 分岐が内部で使う `resolveMemoryDescriptionDrift` は export
- * していないので、`resolveMemoryDescriptionFreshness` 経由で測る（`stale`
- * になる入力を固定し、`drift` の4パターンだけを変える）。
+ * #913 / #821 残課題: `drift`（本文の変化量）の組み立て。
+ * `resolveMemoryDescriptionFreshness` の `stale` 分岐が内部で使う
+ * `resolveMemoryDescriptionDrift` は export していないので、
+ * `resolveMemoryDescriptionFreshness` 経由で測る（`stale` になる入力を
+ * 固定し、`drift` に効くパラメータだけを変える）。
  */
-describe('#913: stale に添える drift（本文の変化量）', () => {
-  const stale = (describedBytes: number | undefined, currentBytes: number) =>
+describe('#913 / #821 残課題: stale に添える drift（本文の変化量）', () => {
+  const stale = (
+    describedBytes: number | undefined,
+    currentBytes: number,
+    describedBytesAt?: string,
+  ) =>
     resolveMemoryDescriptionFreshness({
       description: '要旨',
       describedAt: '2026-08-20T00:00:00Z',
       updatedAt: '2026-08-21T00:00:00Z',
       describedBytes,
+      describedBytesAt,
       currentBytes,
     });
 
@@ -761,6 +774,51 @@ describe('#913: stale に添える drift（本文の変化量）', () => {
     });
   });
 
+  it('describedBytesAt が describedAt 以下（同時刻含む）なら measured（#821 残課題）', () => {
+    // describedAt は '2026-08-20T00:00:00Z'。同時刻を渡す——要旨を書き直した
+    // 瞬間に基準点も測られた、という通常経路の形。
+    expect(stale(1000, 1200, '2026-08-20T00:00:00Z')).toEqual({
+      kind: 'stale',
+      staleForMs: 24 * 60 * 60 * 1000,
+      drift: { kind: 'measured', describedBytes: 1000, currentBytes: 1200, deltaBytes: 200 },
+    });
+  });
+
+  it('describedBytesAt が describedAt より後なら at-least（基準点は下限でしかない、#821 残課題）', () => {
+    expect(stale(1000, 1200, '2026-08-20T12:00:00Z')).toEqual({
+      kind: 'stale',
+      staleForMs: 24 * 60 * 60 * 1000,
+      drift: {
+        kind: 'at-least',
+        baselineBytes: 1000,
+        baselineAt: '2026-08-20T12:00:00Z',
+        currentBytes: 1200,
+        deltaBytes: 200,
+      },
+    });
+  });
+
+  /**
+   * ⭐ 条件2（語ではなく数で測る）を `at-least` にも適用する。基準点の
+   * バイト数を変えると `deltaBytes` が動くことを、2点で撃つ。
+   */
+  it('at-least でも、基準点のバイト数を変えると deltaBytes が動く（#821 条件2と同じ形）', () => {
+    const smallDelta = stale(1000, 1100, '2026-08-20T12:00:00Z');
+    const largeDelta = stale(500, 1100, '2026-08-20T12:00:00Z');
+    expect(smallDelta.kind === 'stale' && smallDelta.drift.kind === 'at-least').toBe(true);
+    expect(largeDelta.kind === 'stale' && largeDelta.drift.kind === 'at-least').toBe(true);
+    if (
+      smallDelta.kind === 'stale' &&
+      smallDelta.drift.kind === 'at-least' &&
+      largeDelta.kind === 'stale' &&
+      largeDelta.drift.kind === 'at-least'
+    ) {
+      expect(smallDelta.drift.deltaBytes).toBe(100);
+      expect(largeDelta.drift.deltaBytes).toBe(600);
+      expect(smallDelta.drift.deltaBytes).not.toBe(largeDelta.drift.deltaBytes);
+    }
+  });
+
   it('assertNeverMemoryDescriptionDrift は未知の状態を投げる', () => {
     const bogus = { kind: 'bogus' } as never;
     expect(() => assertNeverMemoryDescriptionDrift(bogus)).toThrow(/bogus/);
@@ -774,6 +832,7 @@ describe('deriveMemoryFrontmatter — fs / pg が list() / read() / documents() 
       updatedAt: '2026-08-21T00:00:00Z',
       describedAt: undefined,
       describedBytes: undefined,
+      describedBytesAt: undefined,
       currentBytes: 0,
     });
     expect(derived.frontmatter).toEqual({ kind: 'none' });
@@ -788,6 +847,7 @@ describe('deriveMemoryFrontmatter — fs / pg が list() / read() / documents() 
       updatedAt: '2026-08-21T00:00:00Z',
       describedAt: '2026-08-21T00:00:00Z',
       describedBytes: undefined,
+      describedBytesAt: undefined,
       currentBytes: 0,
     });
     expect(derived.kind).toBe('fact');
@@ -796,51 +856,75 @@ describe('deriveMemoryFrontmatter — fs / pg が list() / read() / documents() 
   });
 });
 
-describe('nextDescribedState — 書き手は書けない。store が新旧の description を比べて describedAt/describedBytes を進める（4-3、#913）', () => {
-  it('description が変わっていなければ、describedAt と describedBytes の両方を据え置く', () => {
+describe('nextDescribedState — 書き手は書けない。store が新旧の description を比べて describedAt/describedBytes/describedBytesAt を進める（4-3、#913、#821 残課題）', () => {
+  it('description が変わっていない、かつ基準点が既に在れば、3つとも据え置く（分岐2）', () => {
     const result = nextDescribedState({
       priorContent: '---\ndescription: 同じ\n---\n# T\n旧本文',
       nextContent: '---\ndescription: 同じ\n---\n# T\n新本文（本文だけ変えた）',
       priorDescribedAt: '2026-08-01T00:00:00Z',
       priorDescribedBytes: 123,
+      priorDescribedBytesAt: '2026-08-01T00:00:00Z',
+      priorBytes: 456,
+      priorUpdatedAt: '2026-08-10T00:00:00Z',
       writtenAt: '2026-08-21T00:00:00Z',
       writtenBytes: 999,
     });
-    expect(result).toEqual({ describedAt: '2026-08-01T00:00:00Z', describedBytes: 123 });
+    expect(result).toEqual({
+      describedAt: '2026-08-01T00:00:00Z',
+      describedBytes: 123,
+      describedBytesAt: '2026-08-01T00:00:00Z',
+    });
   });
 
-  it('description が変わっていれば、渡された writtenAt / writtenBytes の両方へ進める', () => {
+  it('description が変わっていれば、渡された writtenAt / writtenBytes の3つへ進める（分岐1）', () => {
     const result = nextDescribedState({
       priorContent: '---\ndescription: 旧\n---\n# T\n本文',
       nextContent: '---\ndescription: 新\n---\n# T\n本文',
       priorDescribedAt: '2026-08-01T00:00:00Z',
       priorDescribedBytes: 123,
+      priorDescribedBytesAt: '2026-08-01T00:00:00Z',
+      priorBytes: 111,
+      priorUpdatedAt: '2026-08-15T00:00:00Z',
       writtenAt: '2026-08-21T00:00:00Z',
       writtenBytes: 999,
     });
-    expect(result).toEqual({ describedAt: '2026-08-21T00:00:00Z', describedBytes: 999 });
+    expect(result).toEqual({
+      describedAt: '2026-08-21T00:00:00Z',
+      describedBytes: 999,
+      describedBytesAt: '2026-08-21T00:00:00Z',
+    });
   });
 
-  it('新規作成（priorContent が null）で description が付けば、changed 扱いになる（両方進む）', () => {
+  it('新規作成（priorContent が null）で description が付けば、changed 扱いになる（分岐1、3つとも進む）', () => {
     const result = nextDescribedState({
       priorContent: null,
       nextContent: '---\ndescription: 初めての要旨\n---\n# T\n本文',
       priorDescribedAt: undefined,
       priorDescribedBytes: undefined,
+      priorDescribedBytesAt: undefined,
+      priorBytes: undefined,
+      priorUpdatedAt: undefined,
       writtenAt: '2026-08-21T00:00:00Z',
       writtenBytes: 42,
     });
-    expect(result).toEqual({ describedAt: '2026-08-21T00:00:00Z', describedBytes: 42 });
+    expect(result).toEqual({
+      describedAt: '2026-08-21T00:00:00Z',
+      describedBytes: 42,
+      describedBytesAt: '2026-08-21T00:00:00Z',
+    });
   });
 
   it('書いた直後は describedAt === updatedAt かつ describedBytes === writtenBytes になるので、直後の読み出しは必ず fresh', () => {
     const writtenAt = '2026-08-21T00:00:00Z';
     const writtenBytes = 42;
-    const { describedAt, describedBytes } = nextDescribedState({
+    const { describedAt, describedBytes, describedBytesAt } = nextDescribedState({
       priorContent: '---\ndescription: 旧\n---\n# T\n本文',
       nextContent: '---\ndescription: 新\n---\n# T\n本文',
       priorDescribedAt: '2026-08-01T00:00:00Z',
       priorDescribedBytes: 123,
+      priorDescribedBytesAt: '2026-08-01T00:00:00Z',
+      priorBytes: 111,
+      priorUpdatedAt: '2026-08-15T00:00:00Z',
       writtenAt,
       writtenBytes,
     });
@@ -850,9 +934,104 @@ describe('nextDescribedState — 書き手は書けない。store が新旧の d
         describedAt,
         updatedAt: writtenAt,
         describedBytes,
+        describedBytesAt,
         currentBytes: writtenBytes,
       }),
     ).toEqual({ kind: 'fresh' });
+  });
+
+  /**
+   * ⭐⭐ #821 残課題の本題（分岐3）: 要旨は変わっていないが、基準点がまだ
+   * 無い（この仕組みより前に書かれた記憶、等）。**このとき基準点を
+   * 「この書き込みの直前の状態」（`priorBytes` / `priorUpdatedAt`）で立てる
+   * ——`writtenBytes` / `writtenAt`（書いた後の値）を使わない。**
+   */
+  it('基準点がまだ無ければ、本文だけの書き込みでも「書く前の状態」を基準点として立てる（分岐3）', () => {
+    const result = nextDescribedState({
+      priorContent: '---\ndescription: 同じ\n---\n# T\n旧本文',
+      nextContent: '---\ndescription: 同じ\n---\n# T\n新本文（本文だけ追記した）',
+      priorDescribedAt: '2026-08-01T00:00:00Z',
+      priorDescribedBytes: undefined,
+      priorDescribedBytesAt: undefined,
+      priorBytes: 456,
+      priorUpdatedAt: '2026-08-10T00:00:00Z',
+      writtenAt: '2026-08-21T00:00:00Z',
+      writtenBytes: 999,
+    });
+    // ⛔ 書いた後の値（999 / '2026-08-21T00:00:00Z'）ではなく、書く前の値
+    // （456 / '2026-08-10T00:00:00Z'）が基準点になる。`describedAt`（要旨を
+    // 書き直した時刻）は据え置き——要旨そのものは変わっていない。
+    expect(result).toEqual({
+      describedAt: '2026-08-01T00:00:00Z',
+      describedBytes: 456,
+      describedBytesAt: '2026-08-10T00:00:00Z',
+    });
+  });
+
+  it('基準点が無く、かつ「書く前の状態」も無い（新規作成で description が無いまま）なら、何も立てない', () => {
+    const result = nextDescribedState({
+      priorContent: null,
+      nextContent: '# T\n本文（description 無し）',
+      priorDescribedAt: undefined,
+      priorDescribedBytes: undefined,
+      priorDescribedBytesAt: undefined,
+      priorBytes: undefined,
+      priorUpdatedAt: undefined,
+      writtenAt: '2026-08-21T00:00:00Z',
+      writtenBytes: 42,
+    });
+    expect(result).toEqual({
+      describedAt: undefined,
+      describedBytes: undefined,
+      describedBytesAt: undefined,
+    });
+  });
+
+  /**
+   * ⭐ 「弾いていないことを測る歯」— 一度立った基準点は、2回目の本文だけの
+   * 書き込みで動かない（分岐2）。動くと「直前の1回ぶん」しか測れない道具に
+   * 戻る（#821 残課題）。
+   */
+  it('一度立った基準点は、次の本文だけの書き込みでも動かない（分岐2。基準点のリセットを検出する歯）', () => {
+    // 1回目の本文だけの書き込みで基準点が立つ（分岐3）。
+    const first = nextDescribedState({
+      priorContent: '---\ndescription: 同じ\n---\n# T\n旧本文',
+      nextContent: '---\ndescription: 同じ\n---\n# T\n新本文（1回目の追記）',
+      priorDescribedAt: '2026-08-01T00:00:00Z',
+      priorDescribedBytes: undefined,
+      priorDescribedBytesAt: undefined,
+      priorBytes: 456,
+      priorUpdatedAt: '2026-08-10T00:00:00Z',
+      writtenAt: '2026-08-21T00:00:00Z',
+      writtenBytes: 700,
+    });
+    expect(first).toEqual({
+      describedAt: '2026-08-01T00:00:00Z',
+      describedBytes: 456,
+      describedBytesAt: '2026-08-10T00:00:00Z',
+    });
+
+    // 2回目の本文だけの書き込み。基準点は既に立っているので、
+    // 「書く前の状態」（このときの priorBytes/priorUpdatedAt）ではなく、
+    // 1回目が立てた基準点がそのまま引き継がれるはず。
+    const second = nextDescribedState({
+      priorContent: '---\ndescription: 同じ\n---\n# T\n新本文（1回目の追記）',
+      nextContent: '---\ndescription: 同じ\n---\n# T\n新本文（2回目の追記）',
+      priorDescribedAt: first.describedAt,
+      priorDescribedBytes: first.describedBytes,
+      priorDescribedBytesAt: first.describedBytesAt,
+      priorBytes: 700,
+      priorUpdatedAt: '2026-08-21T00:00:00Z',
+      writtenAt: '2026-08-25T00:00:00Z',
+      writtenBytes: 900,
+    });
+    // ⛔ 700 / '2026-08-21T00:00:00Z'（2回目の書く前の状態）ではなく、
+    // 1回目が立てた 456 / '2026-08-10T00:00:00Z' のまま。
+    expect(second).toEqual({
+      describedAt: '2026-08-01T00:00:00Z',
+      describedBytes: 456,
+      describedBytesAt: '2026-08-10T00:00:00Z',
+    });
   });
 });
 
