@@ -1682,6 +1682,30 @@ function failureLine(
 }
 
 /**
+ * **`lastReport` を「直近の報告」と呼んでよいか（Issue #714 / #917）。**
+ *
+ * 呼んではいけない回が2つある——どちらも `lastReport` の本文は完遂した報告
+ * ではなく、runner 側が言葉で包んだ途中経過である:
+ *
+ * 1. `lastFailure` が在る回（SDK が「これは応答ではない」と言った回。
+ *    `failedReportText()` が包む——Issue #714）
+ * 2. `lastUnreported` が在る回（`result` を受け取らないまま畳まれた回。
+ *    `unreportedText()` が包む——Issue #917。`runner-protocol.ts` の
+ *    `report.unreported` の doc）
+ *
+ * **判定は構造化された印だけで行う。** 本文の文言（「（このターンは…）」）を
+ * 見て判定しない——`sdk-failure.ts` の「検知は構造化された印だけで行う」と
+ * 同じ理由。`manager_list` と `manager_report` の両方がこの1関数を使う
+ * ——見出しの生成元を2つに割らない（`describeManagerFailure` の doc と
+ * 同じ理由）。
+ */
+function isFoldedTurnReport(
+  manager: Pick<ManagerSummary, 'lastFailure' | 'lastUnreported'>,
+): boolean {
+  return manager.lastFailure !== undefined || manager.lastUnreported !== undefined;
+}
+
+/**
  * 一覧に添える、セッションが `failed` として畳まれた落ち方の分類
  * （Issue #713 段3）。
  *
@@ -6312,15 +6336,17 @@ export function createCloneTools(context: ToolContext) {
                   // の実測を参照）。`lastReportAt` が無い行（古いデータ・版の
                   // ずれ）には何も足さない——「未受信」のような行は作らない。
                   //
-                  // **失敗した回は「報告」と呼ばない（Issue #714）。** 本文は
-                  // runner 側で「（このターンは応答を返さずに終わった: …）」と
-                  // 包まれているが、見出しが「直近の報告」のままだと、包みの
-                  // 内側だけを読んで報告として扱うことになる——**クローンが
-                  // 2026-09-08 に実際にそう読んでいる。** 字面は人間の CLI と
-                  // 揃えてある（`apps/cli/src/chat.ts` の `直近のターンの中身`）
-                  // ——同じ台帳の欄を2つの面が別の語で呼ぶと、面をまたいで
-                  // 読む人間がそこで詰まる。
-                  `  ${manager.lastFailure === undefined ? '直近の報告' : '直近のターンの中身'}${manager.lastReportAt === undefined ? '' : `（${manager.lastReportAt} 受信）`}: ${excerptLine(manager.lastReport, LIST_REPORT_EXCERPT)}`,
+                  // **失敗した回・畳まれた回は「報告」と呼ばない（Issue #714 /
+                  // #917）。** 本文は runner 側で「（このターンは応答を返さずに
+                  // 終わった: …）」/「（このターンは結果を受け取らないまま
+                  // 畳まれた: …）」と包まれているが、見出しが「直近の報告」の
+                  // ままだと、包みの内側だけを読んで報告として扱うことになる
+                  // ——**クローンが2026-09-08に実際にそう読んでいる**（#714）。
+                  // 字面は人間の CLI と揃えてある（`apps/cli/src/chat.ts` の
+                  // `直近のターンの中身`）——同じ台帳の欄を2つの面が別の語で
+                  // 呼ぶと、面をまたいで読む人間がそこで詰まる。判定は
+                  // `isFoldedTurnReport` に寄せてある（その doc を参照）。
+                  `  ${isFoldedTurnReport(manager) ? '直近のターンの中身' : '直近の報告'}${manager.lastReportAt === undefined ? '' : `（${manager.lastReportAt} 受信）`}: ${excerptLine(manager.lastReport, LIST_REPORT_EXCERPT)}`,
               // **Issue #567**: ターンが終わっているらしいのに報告が届いて
               // いない可能性を、条件つきで添える（`describeTurnEnd` の doc）。
               // **健全なマネージャーでは `null` を返し、1文字も増えない**——
@@ -6528,6 +6554,13 @@ export function createCloneTools(context: ToolContext) {
         // 違えである）。字面の生成元は `describeManagerFailure` 1箇所で、
         // `manager_list` と割れない。
         //
+        // **`result` を受け取らないまま畳まれた回も同じ扱い（Issue #917）。**
+        // 見出し自体の判定は下の `label`（`isFoldedTurnReport`）へ寄せてある
+        // ——`describeManagerFailure` はあくまで ⚠ の注記文を作る関数で、
+        // `lastUnreported` には対応する注記が無い（この回は SDK が失敗を
+        // 名乗っていないので、失敗の注記を出すと取れない事実を取れた顔で
+        // 出すことになる）。
+        //
         // **`part === 'request'` では何もしない。** 依頼文はそもそも報告では
         // ないので、失敗の有無で呼び方が変わる欄ではない。
         const failure =
@@ -6555,7 +6588,11 @@ export function createCloneTools(context: ToolContext) {
         // 同じ線）。
         const unobserved = part === 'request' ? null : describeUnobservedOutcome(found);
         const label =
-          part === 'request' ? '依頼文' : failure === null ? '直近の報告' : '直近のターンの中身';
+          part === 'request'
+            ? '依頼文'
+            : isFoldedTurnReport(found)
+              ? '直近のターンの中身'
+              : '直近の報告';
         const part1 = page(body, offset, REPORT_PAGE);
         const head = `マネージャー ${managerId} の${label}（${describePage(part1)}）`;
         // **失敗は本文の`上`に置く**（`manager_list` と同じ順。人間の CLI も

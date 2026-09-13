@@ -5093,6 +5093,69 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * `lastUnreported`（`schema.ts` の `jobSchema`。Issue #917）が在る回も、
+   * `lastFailure` と同じく見出しを「直近のターンの中身」へ倒す。
+   *
+   * **`lastFailure` とは軸が違う。** あちらは SDK が「これは応答ではない」と
+   * 言った回、こちらは `result` を受け取らないまま畳まれた回（`runner.ts` の
+   * `#flushUnreported`）——SDK は一度も失敗を名乗っていないので、⚠ の専用行
+   * （`describeManagerFailure`）は出さない。**見出しだけを切り替える。**
+   */
+  it('manager_list は lastUnreported が在る回でも見出しを「報告」から切り替える（#917。⚠ 行は出さない）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.lastReport =
+      '（このターンは結果を受け取らないまま畳まれた: デーモンから停止を指示された。）\n途中まで';
+    target.lastUnreported = {
+      reason: 'デーモンから停止を指示された。',
+      at: '2026-09-13T01:23:45.000Z',
+    };
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain(
+      '直近のターンの中身: （このターンは結果を受け取らないまま畳まれた: デーモンから停止を指示された。）',
+    );
+    expect(reply).not.toContain('直近の報告');
+    // **`lastFailure` 側の専用行（⚠）はここでは出ない。** SDK は失敗を
+    // 名乗っていないので、`describeManagerFailure` は `lastFailure` の
+    // 有無しか見ない——`lastUnreported` だけでは立たせない。
+    expect(reply).not.toContain('⚠ 直近のターンは報告ではなく失敗で終わっている');
+  });
+
+  /**
+   * `manager_report` 側でも同じ切り替えが効く（#917）。`part: 'request'` は
+   * 依頼文なので、切り替えの対象外のまま——`lastFailure` の歯と同じ形。
+   */
+  it('manager_report は lastUnreported が在る回でも見出しを「報告」から切り替える（#917）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '依頼の本文' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.lastReport =
+      '（このターンは結果を受け取らないまま畳まれた: デーモンから停止を指示された。）\n途中まで';
+    target.lastUnreported = {
+      reason: 'デーモンから停止を指示された。',
+      at: '2026-09-13T01:23:45.000Z',
+    };
+
+    const reply = await h.call('manager_report', { managerId: target.managerId });
+
+    expect(reply).toContain('直近のターンの中身');
+    expect(reply).not.toContain('直近の報告');
+    expect(reply).not.toContain('⚠ 直近のターンは報告ではなく失敗で終わっている');
+
+    const request = await h.call('manager_report', {
+      managerId: target.managerId,
+      part: 'request',
+    });
+    expect(request).toContain('依頼文');
+    expect(request).not.toContain('直近のターンの中身');
+  });
+
+  /**
    * **`lastSystemError`（`schema.ts` の `jobSchema`。#713 段3）を `manager_list` /
    * `manager_report` が読む。**
    *
