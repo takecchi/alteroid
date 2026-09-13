@@ -151,7 +151,7 @@ const LOST_NOTICE =
  */
 export interface ManagerSituationCounts {
   readonly total: number;
-  /** `status === 'running'`。**「進んでいる」ではない**（`describeManagerCounts` と同じ断り）。 */
+  /** `status === 'running'` かつ `awaitingBackground === undefined`。**「進んでいる」ではない**（`describeManagerCounts` と同じ断り）。 */
   readonly running: number;
   /** `status === 'waiting_human'`。 */
   readonly waitingHuman: number;
