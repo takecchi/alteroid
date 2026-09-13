@@ -656,13 +656,15 @@ export function assertNeverMemoryDocKind(kind: never): never {
  * 精度の異なる文字列を混ぜても、負の値が「0（＝最新）」以外の意味を
  * 持たないことだけは保つ）。
  *
- * **`stale` には `drift`（本文の変化量、#913）も必ず添える。** `staleForMs`
- * は「どれだけ前に古くなったか」しか言えず、「その間に本文がどれだけ
- * 変わったか」を持たない——1時間前に要旨を書き直した直後に50回追記された
- * 文書が「1時間ぶん古い」としか出ず、30日放置されて200字しか変わっていない
- * 文書のほうが「30日古い」と大きく出る、という #913 の指摘そのものへの
- * 直しである。`drift` の組み立ては `resolveMemoryDescriptionDrift` に
- * 委ねる（`describedBytes` が無ければ `unrecorded`）。
+ * **`stale` には `drift`（本文の変化量、#913 / #821 残課題）も必ず添える。**
+ * `staleForMs` は「どれだけ前に古くなったか」しか言えず、「その間に本文が
+ * どれだけ変わったか」を持たない——1時間前に要旨を書き直した直後に50回
+ * 追記された文書が「1時間ぶん古い」としか出ず、30日放置されて200字しか
+ * 変わっていない文書のほうが「30日古い」と大きく出る、という #913 の
+ * 指摘そのものへの直しである。`drift` の組み立ては
+ * `resolveMemoryDescriptionDrift` に委ねる（`describedBytes` が無ければ
+ * `unrecorded`。基準点はあるが要旨を書いた時点のものではないときは
+ * `at-least`——`MemoryDescriptionDrift` の doc を見よ）。
  */
 export function resolveMemoryDescriptionFreshness(input: {
   description: string | undefined;
@@ -670,10 +672,17 @@ export function resolveMemoryDescriptionFreshness(input: {
   describedAt: string | undefined;
   updatedAt: string;
   /**
-   * 要旨（`describedAt`）を立てた時点の本文サイズ。一度も観測できていなければ
-   * `undefined`（`unrecorded` になる。#913）。
+   * 基準点を立てた時点の本文サイズ。一度も観測できていなければ `undefined`
+   * （`unrecorded` になる。#913 / #821 残課題）。
    */
   describedBytes: number | undefined;
+  /**
+   * `describedBytes` を測った時刻。**`describedAt`（要旨を書き直した時刻）
+   * とは限らない**——基準点が無いまま本文だけが書かれたときは、その
+   * 書き込みの直前の時刻になる（`nextDescribedState` の doc）。
+   * `describedBytes` が `undefined` なら意味を持たない。
+   */
+  describedBytesAt: string | undefined;
   /** いまの本文サイズ。呼び手の `bytes` と同じ測り方で渡すこと（#913）。 */
   currentBytes: number;
 }): MemoryDescriptionFreshness {
@@ -683,24 +692,55 @@ export function resolveMemoryDescriptionFreshness(input: {
   const staleForMs = Math.max(0, Date.parse(input.updatedAt) - Date.parse(input.describedAt));
   const drift = resolveMemoryDescriptionDrift({
     describedBytes: input.describedBytes,
+    describedBytesAt: input.describedBytesAt,
+    describedAt: input.describedAt,
     currentBytes: input.currentBytes,
   });
   return { kind: 'stale', staleForMs, drift };
 }
 
 /**
- * `stale` に添える本文の変化量を組み立てる（#913）。**`describedBytes` が
- * 無ければ `unrecorded`**——「取れなかった」を「0（＝変化なし）」に見せない
- * （`MemoryDescriptionDrift` の doc の条件1と同じ判断）。
+ * `stale` に添える本文の変化量を組み立てる（#913 / #821 残課題）。
+ *
+ * - **`describedBytes` が無ければ `unrecorded`**——「取れなかった」を
+ *   「0（＝変化なし）」に見せない（`MemoryDescriptionDrift` の doc の
+ *   条件1と同じ判断）。
+ * - **`describedBytesAt` が `describedAt` 以下（＝要旨を書き直した瞬間に
+ *   測られた）なら `measured`。** それより後（＝要旨を書き直した後の、
+ *   基準点が無いことに気づいたどこかの書き込みの直前に測られた）なら
+ *   `at-least`——下限でしかない。
+ *
+ * ⚠️ **`describedBytesAt === undefined` を `measured` 側へ倒す根拠は推測
+ * ではない。** この関数を呼ぶのは `describedAt` が定義済みのとき
+ * （`resolveMemoryDescriptionFreshness` の `stale` 分岐）に限られ、かつ
+ * `nextDescribedState` は `describedAt` と `describedBytes` を必ず同時に
+ * 立てる／据え置く形でしか進まない（1つのオブジェクトで両方を返す設計。
+ * `nextDescribedState` の doc）。⟹ `describedBytes` が在って
+ * `describedBytesAt` が無いのは、この PR より前に敷かれた列・索引
+ * （`describedAt` だけを持ち、`describedBytesAt` という概念自体が
+ * 無かった時代の行）だけであり、そのときの `describedBytes` は
+ * `describedAt` と同時刻に立ったと構造的に言える——推定ではなく、
+ * 旧コードがそれ以外の立て方をできなかったことから導かれる。
  */
 function resolveMemoryDescriptionDrift(input: {
   describedBytes: number | undefined;
+  describedBytesAt: string | undefined;
+  describedAt: string;
   currentBytes: number;
 }): MemoryDescriptionDrift {
   if (input.describedBytes === undefined) return { kind: 'unrecorded' };
+  if (input.describedBytesAt === undefined || input.describedBytesAt <= input.describedAt) {
+    return {
+      kind: 'measured',
+      describedBytes: input.describedBytes,
+      currentBytes: input.currentBytes,
+      deltaBytes: input.currentBytes - input.describedBytes,
+    };
+  }
   return {
-    kind: 'measured',
-    describedBytes: input.describedBytes,
+    kind: 'at-least',
+    baselineBytes: input.describedBytes,
+    baselineAt: input.describedBytesAt,
     currentBytes: input.currentBytes,
     deltaBytes: input.currentBytes - input.describedBytes,
   };
@@ -711,7 +751,7 @@ export function assertNeverMemoryDescriptionFreshness(freshness: never): never {
   throw new Error(`未知の要旨の鮮度状態: ${JSON.stringify(freshness)}`);
 }
 
-/** `MemoryDescriptionDrift` の2状態の網羅性を型で強制する（#913）。 */
+/** `MemoryDescriptionDrift` の3状態の網羅性を型で強制する（#913 / #821 残課題）。 */
 export function assertNeverMemoryDescriptionDrift(drift: never): never {
   throw new Error(`未知の要旨の変化量の状態: ${JSON.stringify(drift)}`);
 }

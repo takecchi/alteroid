@@ -104,15 +104,37 @@ export const memoryDocKindSchema = z.enum(['premise', 'fact', 'indexed']);
 export type MemoryDocKind = z.infer<typeof memoryDocKindSchema>;
 
 /**
- * 要旨を書いた時点から、本文がどれだけ変わったか（#913）。`staleForMs`
- * （時間差）だけでは「いちばん手が入っている文書がいちばん新しく見える」
- * ——1時間前に要旨を書き直した直後に50回追記された文書は「1時間ぶん古い」
- * としか出ず、30日放置されて200字しか変わっていない文書のほうが「30日
- * 古い」と大きく出る。#821 の決定1「本文の変化量（要旨を書いてから本文が
- * N 文字 / M% 変わった）」に従い、`stale`（下）にだけこの値を添える——
- * `fresh` は定義上 drift 0 なので持たない。
+ * 要旨を書いた時点から、本文がどれだけ変わったか（#913、#821 残課題）。
+ * `staleForMs`（時間差）だけでは「いちばん手が入っている文書がいちばん
+ * 新しく見える」——1時間前に要旨を書き直した直後に50回追記された文書は
+ * 「1時間ぶん古い」としか出ず、30日放置されて200字しか変わっていない
+ * 文書のほうが「30日古い」と大きく出る。#821 の決定1「本文の変化量
+ * （要旨を書いてから本文が N 文字 / M% 変わった）」に従い、`stale`
+ * （下）にだけこの値を添える——`fresh` は定義上 drift 0 なので持たない。
  *
- * 2状態、畳まない（`MemoryDescriptionFreshness` の4状態と同じ判断）。
+ * 3状態、畳まない（`MemoryDescriptionFreshness` の4状態と同じ判断）。
+ *
+ * ## なぜ `at-least` が要るか（#821 残課題）
+ *
+ * #915 時点の実装（`measured` / `unrecorded` の2状態）には見落としが
+ * 在った——**`nextDescribedState` が `describedBytes` を進めるのは
+ * `description`（要旨）そのものが変わったときだけ**だった。本文だけの
+ * 書き込み（`memory_append` / `memory_section_move`）は要旨の書き直し
+ * より桁違いに高頻度なので、**既存の全文書は `describedBytes` が
+ * 一度も立たず、`unrecorded` のまま固定される。** これは #821 が名指しした
+ * 根本原因（本文の変更頻度が要旨の書き直し頻度を大きく上回る）そのものへ
+ * 計測を紐付けてしまった結果であり、一般化すると「観測を足すとき、その
+ * 観測が更新される契機が、観測したい事象と同じ稀さで律速していないかを
+ * 見ること」——#915 は #821 を直したはずが、直した先でもう一度同じ形を
+ * 作っていた。
+ *
+ * この PR は、本文だけの書き込みでもまだ基準点（`describedBytes` /
+ * `describedBytesAt`、`memory.ts` の `nextDescribedState`）が無ければ
+ * 立てるように直す。ただし立てた基準点は「要旨を書いた時点の大きさ」では
+ * ない——**その書き込みの直前の状態**（基準点が無いと分かった時点の本文
+ * サイズ）でしかない。これを `measured` と同じ言葉で語ると、実際には
+ * 分からない「要旨を書いた時点からの正確な変化量」を名乗ることになる。
+ * `at-least`（下限）という別の状態にして区別する。
  *
  * - **`measured`** — 要旨を書いた時点の本文サイズ（`describedBytes`）と
  *   いまの本文サイズ（`currentBytes`）の両方が分かる。**`deltaBytes` は
@@ -120,11 +142,23 @@ export type MemoryDocKind = z.infer<typeof memoryDocKindSchema>;
  *   （削って書き直した等）を「変わっていない」と混ぜないため。`0` は
  *   「測れて、かつ変わっていない」という正直な値であり、`unrecorded`
  *   とは別の状態である。
- * - **`unrecorded`** — 要旨を書いた時点の本文サイズが記録されていない
- *   （この仕組みより前に書かれた記憶、等）。**`measured` の `deltaBytes: 0`
- *   と同じ言葉にしないこと** —— 「取れなかった」を「0（＝変化なし）」に
- *   見せると、`MemoryDescriptionFreshness` の `unknown` が名指しした失敗
+ * - **`at-least`** — 基準点（`baselineBytes` / `baselineAt`）はあるが、
+ *   それは「要旨を書いた時点」ではなく「基準点が無いと分かった、ある
+ *   書き込みの直前」の値でしかない。**`deltaBytes` はその基準点からの
+ *   変化量であって、要旨を書いてからの真の変化量ではない**——真の値は
+ *   基準点より前の分だけ余分に含まれうるので、これは常に**下限**である。
+ *   `baselineAt` は型としては持つが、表示側（`describeMemoryDescriptionDrift`
+ *   / `memoryFreshnessMarker` を含む一覧描画）では刷らない——この文字列は
+ *   クローンのプロンプトへ毎ターン焼かれるため、恒久的なトークン肥大化を
+ *   避ける（PR 本文の実測を見よ）。
+ * - **`unrecorded`** — 基準点が一度も立っていない（`describedBytes` が
+ *   まだ無い）。**`measured` の `deltaBytes: 0` と同じ言葉にしないこと**
+ *   —— 「取れなかった」を「0（＝変化なし）」に見せると、
+ *   `MemoryDescriptionFreshness` の `unknown` が名指しした失敗
  *   （#821 条件1）と同じ形で欠測が「手を入れなくてよい」側に化ける。
+ *   **この状態は、もう恒久的なものではない**——次にその文書へ本文だけの
+ *   書き込みがあれば、その場で基準点が立ち `at-least` へ変わる（#821
+ *   残課題）。一度も書き込まれない文書だけが `unrecorded` のまま残る。
  */
 export const memoryDescriptionDriftSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -132,6 +166,19 @@ export const memoryDescriptionDriftSchema = z.discriminatedUnion('kind', [
     describedBytes: z.number().int().nonnegative(),
     currentBytes: z.number().int().nonnegative(),
     /** `currentBytes - describedBytes`。符号つき——縮んだ文書は負になる。 */
+    deltaBytes: z.number().int(),
+  }),
+  z.object({
+    kind: z.literal('at-least'),
+    /** 基準点を立てた時点の本文サイズ（「要旨を書いた時点」ではない）。 */
+    baselineBytes: z.number().int().nonnegative(),
+    /**
+     * 基準点を立てた時刻。**表示側では刷らない**（型としてだけ持つ）——
+     * `memoryDescriptionDriftSchema` の doc の `at-least` の項を見よ。
+     */
+    baselineAt: isoDateTime,
+    currentBytes: z.number().int().nonnegative(),
+    /** `currentBytes - baselineBytes`。下限——真の変化量はこれ以上でありうる。 */
     deltaBytes: z.number().int(),
   }),
   z.object({ kind: z.literal('unrecorded') }),
