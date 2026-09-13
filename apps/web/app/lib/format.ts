@@ -127,16 +127,23 @@ export function formatBytes(bytes: number): string {
 }
 
 /**
- * 本文の変化量（#913）。`packages/core/src/schema.ts` の
+ * 本文の変化量（#913 / #821 残課題）。`packages/core/src/schema.ts` の
  * `MemoryDescriptionDrift` と同じ形——`@alteroid/core` の値を import すると
  * client バンドルへ丸ごと混入する（このファイル冒頭の `assertNeverCreatedAt`
  * の doc と同じ理由）ので、ここでも私物として持つ。
  */
 type MemoryDescriptionDrift =
   | { kind: 'measured'; describedBytes: number; currentBytes: number; deltaBytes: number }
+  | {
+      kind: 'at-least';
+      baselineBytes: number;
+      baselineAt: string;
+      currentBytes: number;
+      deltaBytes: number;
+    }
   | { kind: 'unrecorded' };
 
-/** `MemoryDescriptionDrift` の網羅性を型で強制する（#913）。 */
+/** `MemoryDescriptionDrift` の網羅性を型で強制する（#913 / #821 残課題）。 */
 function assertNeverMemoryDescriptionDrift(drift: never): never {
   throw new Error(`未知の要旨の変化量の状態: ${JSON.stringify(drift)}`);
 }
@@ -163,14 +170,37 @@ export function formatMemoryDescriptionDrift(drift: {
 }
 
 /**
- * `MemoryDescriptionDrift`（2状態）を人間可読な文字列にする（#913）。
- * **`switch` で網羅し、`default` で `assertNeverMemoryDescriptionDrift` へ
- * 落とす。**
+ * 変化量（バイト）を人間可読な文字列にする（`at-least` 専用、#821 残課題。
+ * `packages/core/src/memory.ts` の `formatMemoryDescriptionDriftAtLeast` と
+ * 同じ考え方だが実体は分けて持つ）。
+ *
+ * **`%` を出さない**（母数が「要旨を書いた時点の大きさ」ではないので、
+ * `measured` の `%` とは別の量になる）。**`baselineAt` も刷らない**（この
+ * 文字列はクローンのプロンプトへ毎ターン焼かれるため、恒久的なトークン
+ * 肥大化を避ける）。**`本文は` を持たない**（トークン収支の実測で削った。
+ * 外側の `freshnessMark` が既に「要旨は本文より…古い」と言っている）。
+ */
+export function formatMemoryDescriptionDriftAtLeast(drift: {
+  baselineBytes: number;
+  currentBytes: number;
+  deltaBytes: number;
+}): string {
+  const sign = drift.deltaBytes < 0 ? '-' : '+';
+  const magnitude = Math.abs(drift.deltaBytes).toLocaleString('en-US');
+  return `${sign}${magnitude}バイト以上変わった`;
+}
+
+/**
+ * `MemoryDescriptionDrift`（3状態）を人間可読な文字列にする（#913 /
+ * #821 残課題）。**`switch` で網羅し、`default` で
+ * `assertNeverMemoryDescriptionDrift` へ落とす。**
  */
 export function describeMemoryDescriptionDrift(drift: MemoryDescriptionDrift): string {
   switch (drift.kind) {
     case 'measured':
       return formatMemoryDescriptionDrift(drift);
+    case 'at-least':
+      return formatMemoryDescriptionDriftAtLeast(drift);
     case 'unrecorded':
       return '本文の変化量は記録されていない';
     default:
