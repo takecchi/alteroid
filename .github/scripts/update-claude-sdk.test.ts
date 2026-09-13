@@ -579,6 +579,13 @@ fi
         SDK_VERSION,
         SDK_PR_BODY: s.bodyFile,
         PUSH_LOG: s.pushLog,
+        // **既定は「CI が起きる」側。** #867 より前からある既存のテスト群は
+        // CI 未起動の通知（タイトル接頭・本文の警告）を主題にしていないので、
+        // 既定をここで 'true' にしておくことで、それらのテストが期待する
+        // タイトル・本文の形をそのまま保つ。CI未起動の挙動だけを見たいテストは
+        // 個別に `SDK_CI_TRIGGERED` を上書きする（下の
+        // 「SDK_CI_TRIGGERED による CI未起動の通知」参照）。
+        SDK_CI_TRIGGERED: 'true',
         ...extraEnv,
       },
       options,
@@ -933,5 +940,207 @@ fi
         expect(result.stderr).toContain(`${missingKey}`);
       },
     );
+  });
+
+  // ==========================================================================
+  // SDK_CI_TRIGGERED による CI未起動の通知（#867）
+  // ==========================================================================
+  //
+  // Issue #867 の誤り訂正: 「理由は Job Summary に書いているが誰も読まない」は
+  // 事実ではない（GITHUB_STEP_SUMMARY への書き込みはどこにも無かった）。実際には
+  // PR 本文の末尾に無条件で3行あり、それを4晩マージまで運用しても直らなかった。
+  // だから今回の実装は条件付き・本文の先頭という形を取る。**検出する側
+  // （陽性）だけでなく検出しないこと（陰性対照）も対で測る** — 依頼者の言葉:
+  // 「検出する歯だけを置くと、決定の巻き戻しが静かに通る」。
+  describe('SDK_CI_TRIGGERED による CI未起動の通知（#867）', () => {
+    const WARNING_MARK = '> [!WARNING]';
+    const PREFIXED_TITLE = `[CI未起動] ${TITLE}`;
+
+    function writeCatalogDiff(s: ReturnType<typeof setup>): void {
+      writeFileSync(
+        join(s.workdir, 'pnpm-workspace.yaml'),
+        "catalog:\n  '@anthropic-ai/claude-agent-sdk': ^0.3.238\n",
+      );
+    }
+
+    describe('新規作成の経路（gh pr create）', () => {
+      it('陽性: SDK_CI_TRIGGERED=false のとき、本文の先頭に警告が付きタイトルに接頭が付き ::warning:: annotation が出る', () => {
+        const s = setup();
+        writeCatalogDiff(s);
+
+        const result = run(s, {
+          FAKE_GH_PR_NUMBER: '',
+          SDK_VERIFY_OK: 'true',
+          SDK_CI_TRIGGERED: 'false',
+        });
+
+        expect(result.exitCode).toBe(0);
+        const body = readFileSync(s.bodyFile, 'utf8');
+        // **先頭であることを位置で検査する**（末尾ではなく）。
+        expect(body.startsWith(WARNING_MARK)).toBe(true);
+        expect(body).toContain('#867');
+        // 元の本文は消さず、警告の下に残す
+        expect(body).toContain('本文');
+        expect(body.indexOf(WARNING_MARK)).toBeLessThan(body.indexOf('本文'));
+        const calls = parseGhCalls(s.ghLog);
+        expect(calls[1][calls[1].indexOf('--title') + 1]).toBe(PREFIXED_TITLE);
+        expect(result.stderr).toContain('::warning::');
+      });
+
+      it('🔴 陰性対照: SDK_CI_TRIGGERED=true のとき、警告の文言が本文のどこにも1文字も出ずタイトルに接頭も付かず annotation も出ない', () => {
+        const s = setup();
+        writeCatalogDiff(s);
+
+        const result = run(s, {
+          FAKE_GH_PR_NUMBER: '',
+          SDK_VERIFY_OK: 'true',
+          SDK_CI_TRIGGERED: 'true',
+        });
+
+        expect(result.exitCode).toBe(0);
+        const body = readFileSync(s.bodyFile, 'utf8');
+        expect(body).not.toContain('WARNING');
+        expect(body).not.toContain('CI が付かない');
+        expect(body).not.toContain('#867');
+        // 本文は元のままで、警告ブロックの追記が一切無い
+        expect(body).toBe('本文\n');
+        const calls = parseGhCalls(s.ghLog);
+        expect(calls[1][calls[1].indexOf('--title') + 1]).toBe(TITLE);
+        expect(calls[1]).not.toContain(PREFIXED_TITLE);
+        expect(result.stderr).not.toContain('::warning::');
+      });
+
+      it('空文字は「起きない」側へ倒れる（陽性側と同じ扱い）', () => {
+        const s = setup();
+        writeCatalogDiff(s);
+
+        const result = run(s, {
+          FAKE_GH_PR_NUMBER: '',
+          SDK_VERIFY_OK: 'true',
+          SDK_CI_TRIGGERED: '',
+        });
+
+        expect(result.exitCode).toBe(0);
+        const body = readFileSync(s.bodyFile, 'utf8');
+        expect(body.startsWith(WARNING_MARK)).toBe(true);
+        const calls = parseGhCalls(s.ghLog);
+        expect(calls[1][calls[1].indexOf('--title') + 1]).toBe(PREFIXED_TITLE);
+      });
+
+      it('未設定（キー自体が無い）も「起きない」側へ倒れる（陽性側と同じ扱い）', () => {
+        // `run()` の既定は SDK_CI_TRIGGERED='true' を足すので、ここでは
+        // 「キーが無い」を作るために env を自前で組み、run() を経由しない
+        // （「必須の環境変数が無いとき」テストと同じ手法）。
+        const s = setup();
+        writeCatalogDiff(s);
+        const env: NodeJS.ProcessEnv = {
+          PATH: process.env.PATH ?? '',
+          HOME: s.fakeHome,
+          GH: s.fakeGh,
+          FAKE_GH_LOG: s.ghLog,
+          FAKE_GH_PR_NUMBER: '',
+          SDK_VERIFY_OK: 'true',
+          SDK_BRANCH: BRANCH,
+          SDK_VERSION,
+          SDK_PR_BODY: s.bodyFile,
+          PUSH_LOG: s.pushLog,
+        };
+        expect('SDK_CI_TRIGGERED' in env).toBe(false);
+
+        const result = runScript(PR_SCRIPT, s.workdir, env);
+
+        expect(result.exitCode).toBe(0);
+        const body = readFileSync(s.bodyFile, 'utf8');
+        expect(body.startsWith(WARNING_MARK)).toBe(true);
+        const calls = parseGhCalls(s.ghLog);
+        expect(calls[1][calls[1].indexOf('--title') + 1]).toBe(PREFIXED_TITLE);
+      });
+    });
+
+    describe('既存 PR の書き換え経路（gh pr edit）', () => {
+      it('陽性: SDK_CI_TRIGGERED=false のとき、本文の先頭に警告が付きタイトルに接頭が付く', () => {
+        const s = setup();
+        writeCatalogDiff(s);
+
+        const result = run(s, {
+          FAKE_GH_PR_NUMBER: '42',
+          SDK_VERIFY_OK: 'true',
+          SDK_CI_TRIGGERED: 'false',
+        });
+
+        expect(result.exitCode).toBe(0);
+        const calls = parseGhCalls(s.ghLog);
+        expect(calls[1]).toEqual([
+          'pr',
+          'edit',
+          '42',
+          '--title',
+          PREFIXED_TITLE,
+          '--body-file',
+          s.bodyFile,
+        ]);
+        const body = readFileSync(s.bodyFile, 'utf8');
+        expect(body.startsWith(WARNING_MARK)).toBe(true);
+      });
+
+      it('🔴 陰性対照: SDK_CI_TRIGGERED=true のとき、警告もタイトル接頭も出ない', () => {
+        const s = setup();
+        writeCatalogDiff(s);
+
+        const result = run(s, {
+          FAKE_GH_PR_NUMBER: '42',
+          SDK_VERIFY_OK: 'true',
+          SDK_CI_TRIGGERED: 'true',
+        });
+
+        expect(result.exitCode).toBe(0);
+        const calls = parseGhCalls(s.ghLog);
+        expect(calls[1]).toEqual(['pr', 'edit', '42', '--title', TITLE, '--body-file', s.bodyFile]);
+        const body = readFileSync(s.bodyFile, 'utf8');
+        expect(body).not.toContain('WARNING');
+        expect(body).toBe('本文\n');
+      });
+
+      it('前夜に付いた接頭・警告は、CI が回復した回では残らない（本文はワークフローが毎回作り直す前提で確かめる）', () => {
+        const s = setup();
+        writeCatalogDiff(s);
+
+        // 前夜: CI未起動でこの PR を書き換えた（タイトル・本文に印が付く）
+        const first = run(s, {
+          FAKE_GH_PR_NUMBER: '42',
+          SDK_VERIFY_OK: 'true',
+          SDK_CI_TRIGGERED: 'false',
+        });
+        expect(first.exitCode).toBe(0);
+        expect(readFileSync(s.bodyFile, 'utf8').startsWith(WARNING_MARK)).toBe(true);
+
+        // 今夜: ワークフローは毎回 SDK_PR_BODY を新しく作り直す
+        // （update-claude-sdk.yml の `{ ... } >"$SDK_PR_BODY"`）ので、
+        // テストでも同じ前提で本文ファイルを元の内容へ作り直してから2回目を走らせる。
+        writeFileSync(s.bodyFile, '本文\n');
+        // 2回目にも実際に commit する差分が要る（1回目と同じ内容のままだと
+        // 「commit するものが無い」で落ちる＝これは本物の update-claude-sdk.sh が
+        // changed=true のときだけこのスクリプトを呼ぶのと同じ前提）。
+        // タイトルの版表示（SDK_VERSION/SDK_VERSION_BEFORE）には影響させたくないので
+        // pnpm-lock.yaml 側に差分を作る。
+        writeFileSync(join(s.workdir, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n# night 2\n");
+        const second = run(s, {
+          FAKE_GH_PR_NUMBER: '42',
+          SDK_VERIFY_OK: 'true',
+          SDK_CI_TRIGGERED: 'true',
+        });
+        expect(second.exitCode).toBe(0);
+
+        const calls = parseGhCalls(s.ghLog);
+        const editCalls = calls.filter((c) => c[0] === 'pr' && c[1] === 'edit');
+        expect(editCalls).toHaveLength(2);
+        const lastEdit = editCalls[1];
+        // タイトルは毎回ゼロから組み立てられるので、前夜の接頭は残らない
+        expect(lastEdit[lastEdit.indexOf('--title') + 1]).toBe(TITLE);
+        const bodyAfterSecond = readFileSync(s.bodyFile, 'utf8');
+        expect(bodyAfterSecond).not.toContain('WARNING');
+        expect(bodyAfterSecond).toBe('本文\n');
+      });
+    });
   });
 });

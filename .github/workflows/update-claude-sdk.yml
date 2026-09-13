@@ -103,6 +103,12 @@ jobs:
           SDK_VERSION_BEFORE: ${{ steps.update.outputs.before }}
           SDK_VERIFY_OK: ${{ steps.verify.outputs.ok }}
           SDK_PR_BODY: ${{ runner.temp }}/body.md
+          # **秘密の値そのものではなく、比較結果の真偽だけを渡す（#867）。**
+          # 読む側（open-claude-sdk-pr.sh）が知りたいのは「トークンが在るか」ではなく
+          # 「CI が起きるか」なので、変数名もそちらで表す。`ALTEROID_PR_TOKEN` が
+          # 空/未設定なら `GITHUB_TOKEN` にフォールバックし、`GITHUB_TOKEN` で作った
+          # PR は `pull_request` を起こさない（GitHub の仕様）ので false になる。
+          SDK_CI_TRIGGERED: ${{ secrets.ALTEROID_PR_TOKEN != '' }}
         run: |
           set -euo pipefail
 
@@ -139,10 +145,13 @@ jobs:
             cat "${RUNNER_TEMP:-/tmp}/verify.md"
             echo ''
             printf '実行: %s\n' "$RUN_URL"
-            echo ''
-            echo '**PR に CI が付いていない場合の理由**: `GITHUB_TOKEN` で作った PR は'
-            echo '`pull_request` のワークフローを起こさない（GitHub の仕様）。その場合、'
-            echo '上の一式はこのワークフロー自身が同じ実行系（mise.toml）で回したものである。'
+            # **ここに「CI が付いていない場合の理由」は書かない（#867）。**
+            # 以前はここで無条件に3行を足していたが、それは「CI が付いている回にも
+            # 同じ文が出る」形だった（仮定法の但し書きなのに常に出る＝情報を持たない）。
+            # しかも位置は約4000字ある検証ログのいちばん下で、人が実際に読む場所
+            # （本文の先頭・PR タイトル）ではなかった。だから条件付き（CI が本当に
+            # 起きないときだけ）・本文の先頭という形で `open-claude-sdk-pr.sh` 側が
+            # `SDK_CI_TRIGGERED` を見て差し込む。ここでは無条件の文言を持たない。
           } >"$SDK_PR_BODY"
 
           ./.github/scripts/open-claude-sdk-pr.sh
