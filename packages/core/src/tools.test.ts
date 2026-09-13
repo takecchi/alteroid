@@ -10327,6 +10327,55 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
   const SWEPT = CLONE_TOOL_NAMES.filter((name) => name.endsWith('_list'));
 
   /**
+   * 総当たりで拾う一覧（`SWEPT`）の、**一覧レベルの断り書きだけが持つ語彙**（#935）。
+   *
+   * ## ⭐ なぜ名簿が要るのか —— 素の `TRUNCATION_MARK` は何も測っていなかった
+   *
+   * `SWEPT` は `section` も `mark` も持たないまま素の `TRUNCATION_MARK`
+   * （`/省略|残り \d|文字目/`）へ落ちていた。足場（`flooded(60)`）が積む本文は
+   * 1件 1,500 字で、**1件ごとの抜粋が `…（1,268 文字省略。全 1,508 文字）` という
+   * 「省略」を独立に出す** ⟹ 一覧レベルの断り書きを1文字も見なくても合格する。
+   *
+   * **実測（#935。7本とも同時に測った）**: 7本の断り書きから「省略」の語だけを
+   * 消す変異を当てても、`— 切ったなら黙らない` の 7本は**全部緑のままだった。**
+   * ⟹ この2文字の逐語こそが、この歯の測っている当のものである。
+   *
+   * ## ⛔ ここに名前を足すときは、必ず現物の応答から写すこと
+   *
+   * 他の道具の断り書きから写さない。**書式は道具ごとに違う**（`件` / `台`、
+   * `全 N 件` / `N 件あり`）。写し間違えると、その道具の歯だけが黙って空になる。
+   */
+  const SWEPT_MARKS: Record<string, RegExp> = {
+    memory_list: /…ほか \d+ 件は省略（記憶は全 \d+ 件あり、\d+ 件だけ出した）。/,
+    approvals_list: /…ほか \d+ 件は省略（回答待ちは \d+ 件あり、先頭から \d+ 件だけ出した）。/,
+    schedule_list: /…ほか \d+ 件は省略（継続中の依頼は \d+ 件あり、\d+ 件だけ出した。/,
+    commitment_list: /…ほか \d+ 件は省略（未了は \d+ 件あり、古い順に \d+ 件だけ出した。/,
+    token_list: /…ほか \d+ 件は省略（プールは \d+ 件あり、order の昇順に \d+ 件だけ出した）。/,
+    manager_list: /…ほか \d+ 件は省略（全 \d+ 件）。/,
+    runner_list: /…ほか \d+ 台は省略（登録は \d+ 台あり、\d+ 台だけ出した）。/,
+  };
+
+  /**
+   * `SWEPT_MARKS` から引く。**名簿に無い一覧が現れたら、そこで止める。**
+   *
+   * ⭐ これも歯である —— `*_list` の道具が1本増えたとき、名簿へ足さなければ
+   * この総当たりは**走る前に落ちる。** 黙って素の `TRUNCATION_MARK` へ落ちて
+   * 「空で緑」の歯が1本増える形には、二度と戻らない。
+   */
+  function sweptMark(name: string): RegExp {
+    const mark = SWEPT_MARKS[name];
+    if (mark === undefined) {
+      throw new Error(
+        `SWEPT_MARKS: '${name}' の一覧レベルの断り書きが名簿に無い。` +
+          '実際の応答からその逐語を写して足すこと（⛔ 他の道具から写さない）。' +
+          '足さずに素の TRUNCATION_MARK へ落とすと、1件ごとの抜粋の「省略」が' +
+          '代わりに合格を出して、この道具の歯だけが黙って空になる（#935）。',
+      );
+    }
+    return mark;
+  }
+
+  /**
    * 節の多い記憶の文書の slug と節数（`flooded()` が積む足場）。
    *
    * `memory_outline`（目次）と `memory_write`（消えた見出しの列挙）は
@@ -10379,8 +10428,26 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
      * 見る旧実装が CI で壊れた）。
      */
     mark?: RegExp;
+    /**
+     * ⚠️ **この呼び方では、一覧レベルでは切れない**（実測。#935）。
+     *
+     * ⟹ 「切ったなら黙らない」は前提（切った）が成り立たないので、代わりに
+     * **その断り書きが出ていないこと**を測る。`mark` と `absent` は
+     * **どちらか一方だけ**を指定する（下の `it.each` の門）。
+     *
+     * ⛔ ここを「何も指定しない」へ戻さないこと —— 素の `TRUNCATION_MARK` へ
+     * 落ちると、1件ごとの抜粋の「省略」が代わりに合格を出して空になる。
+     */
+    absent?: RegExp;
   }[] = [
-    { label: 'journal_read（既定）', name: 'journal_read', args: {} },
+    {
+      label: 'journal_read（既定）',
+      name: 'journal_read',
+      args: {},
+      // ⚠️ **既定の limit では、この足場でも一覧レベルでは切れない**（実測 #935）。
+      // ⟹「切ったなら黙らない」の前提が立たないので、断り書きが**出ていない**ことを測る。
+      absent: /…ほか \d+ 件は省略（この条件で/,
+    },
     /*
      * **`journal_read` は既定の引数では予算に届かない。**
      *
@@ -10392,7 +10459,12 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
      * だから**呼び手が広げられる上限まで広げた呼び**も測る。`limit` の最大は
      * 200 なので、これが「クローンが出せる最大の要求」である。
      */
-    { label: 'journal_read（limit 最大）', name: 'journal_read', args: { limit: 200 } },
+    {
+      label: 'journal_read（limit 最大）',
+      name: 'journal_read',
+      args: { limit: 200 },
+      mark: /…ほか \d+ 件は省略（この条件で \d+ 件あり、新しい順に \d+ 件だけ出した）。/,
+    },
     /*
      * **`journal_read` の語検索（`q`）も一覧モードである（issue #250）。**
      *
@@ -10406,7 +10478,13 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
      * `flooded()` は `決めた<連番>: あ×1500` の `decision` を count 件積む
      * ので、`q: '決めた'` はその全件に当たる（＝件数で伸びる一覧になる）。
      */
-    { label: 'journal_read（語で探す）', name: 'journal_read', args: { q: '決めた' } },
+    {
+      label: 'journal_read（語で探す）',
+      name: 'journal_read',
+      args: { q: '決めた' },
+      // ⚠️ 同上（実測 #935）。絞った結果が既定の limit に収まるので切れない。
+      absent: /…ほか \d+ 件は省略（この条件で/,
+    },
     /*
      * 既定は 20 件なので、`limit` を広げた呼びも測る（既定だけだと
      * `JOURNAL_BUDGET` が一度も拘束条件にならない。上の既定モードと同じ理由）。
@@ -10415,8 +10493,14 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       label: 'journal_read（語で探す・limit 最大）',
       name: 'journal_read',
       args: { q: '決めた', limit: 200 },
+      mark: /…ほか \d+ 件は省略（この条件で \d+ 件あり、新しい順に \d+ 件だけ出した）。/,
     },
-    { label: 'usage_read', name: 'usage_read', args: {} },
+    {
+      label: 'usage_read',
+      name: 'usage_read',
+      args: {},
+      mark: /…（残り \d+ 件は出していない。axis="[a-z]+", offset=\d+ で続きが出る）/,
+    },
     /*
      * **`conversation_read` は3つの一覧モードを持ち、予算の切り口が別々である。**
      *
@@ -10425,7 +10509,13 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
      * 何も測れていない**（中身モードだけが `renderListingFromEnd` を通る）。
      * `id` モードは一覧ではないので、下の「詳細側」の試験が持つ。
      */
-    { label: 'conversation_read（会話の一覧）', name: 'conversation_read', args: {} },
+    {
+      label: 'conversation_read（会話の一覧）',
+      name: 'conversation_read',
+      args: {},
+      // **limit で切った側**（予算で切った下の1本とは理由が違う。逐語も違う）。
+      mark: /…ほか \d+ 件は省略（この窓に \d+ 件あり、新しい順に \d+ 件だけ出した）。省いたのは\*\*古い側\*\*で、切ったのは limit=\d+ である。/,
+    },
     /*
      * 一覧の既定は 20 件なので、`limit` を広げた呼びも測る（`journal_read` と
      * 同じ理由 — 既定だけだと予算が拘束条件にならないことがある）。
@@ -10434,6 +10524,8 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       label: 'conversation_read（会話の一覧・limit 最大）',
       name: 'conversation_read',
       args: { limit: 200 },
+      // **予算で切った側**（直上の limit で切った1本と逐語で見分ける）。
+      mark: /…ほか \d+ 件は省略（この窓に \d+ 件あり、新しい順に \d+ 件だけ出した）。省いたのは\*\*古い側\*\*である。limit を増やしても出てこない/,
     },
     {
       // **長く続いた会話を指す**（`conv-0000` のような2発言の会話では予算が
@@ -10441,8 +10533,14 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       label: 'conversation_read（会話の中身）',
       name: 'conversation_read',
       args: { conversationId: 'conv-long' },
+      mark: /…この会話の\*\*古い側\*\* \d+ 件は省略（この窓に \d+ 件あり、新しい側から \d+ 件だけ出した）。/,
     },
-    { label: 'conversation_read（語で探す）', name: 'conversation_read', args: { q: '発言' } },
+    {
+      label: 'conversation_read（語で探す）',
+      name: 'conversation_read',
+      args: { q: '発言' },
+      mark: /…ほか \d+ 件は省略（"[^"]*" に \d+ 件当たり、新しい順に \d+ 件だけ出した）。/,
+    },
     /*
      * **`self_status` は名前が `_list` で終わらないが、「記憶の大きさ」の節に
      * 一覧（文書ごとの内訳）を持つ。** ここで測るのは節全体の出力（P1/P2 は
@@ -10576,7 +10674,12 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
      * `flooded()` は各周回で `noteDroppedRecord` を1回呼び、帳面
      * （`RECENT_TRACE_LIMIT`＝200件）を溢れさせる（下の `flooded()` を見ること）。
      */
-    { label: 'self_dropped', name: 'self_dropped', args: {} },
+    {
+      label: 'self_dropped',
+      name: 'self_dropped',
+      args: {},
+      mark: /…ほか古い \d+ 件は省略（この呼び出しで渡した \d+ 件のうち直近 \d+ 件だけ出した）。/,
+    },
     /*
      * **`memory_section_move` も名前が `_list` で終わらないが、応答の中に
      * 一覧（移した節の列挙）を1節持つ**（#662 段1）。`memory_write` の
@@ -10954,8 +11057,14 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     argsOf?: (h: Harness) => Promise<Record<string, unknown>>;
     section?: string;
     mark?: RegExp;
+    absent?: RegExp;
   }[] = [
-    ...SWEPT.map((name) => ({ label: name, name, args: {} as Record<string, unknown> })),
+    ...SWEPT.map((name) => ({
+      label: name,
+      name,
+      args: {} as Record<string, unknown>,
+      mark: sweptMark(name),
+    })),
     ...NAMED,
   ];
 
@@ -10973,7 +11082,7 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
 
   it.each(CASES)(
     '$label — 切ったなら黙らない（省いたことが出力に出る）',
-    async ({ label, name, args, argsOf, section, mark }) => {
+    async ({ label, name, args, argsOf, section, mark, absent }) => {
       const h = await flooded(60);
       const effectiveArgs = argsOf === undefined ? args : await argsOf(h);
 
@@ -11003,16 +11112,36 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       // 働かない**（`TRUNCATION_MARK` は `/省略|残り \d|文字目/` という
       // 総称で、`mark` はその一覧に固有の逐語だから、`mark` を満たす出力は
       // 必ず `TRUNCATION_MARK` も満たす）。
-      if (section !== undefined && mark === undefined) {
+      // ## ⛔ 門は「式」ではなく「性質」を弾く（#935）
+      //
+      // **前はこう書いてあった**: `section !== undefined && mark === undefined` を
+      // 弾く。⟹ 「`section` が在るのに `mark` が無い」という**実例の1つ**しか
+      // 見ておらず、**「どちらも無い」は素通りしていた。** 素通りしたケースは素の
+      // `TRUNCATION_MARK` へ落ち、1件ごとの抜粋の「省略」で合格する ——
+      // **実測で `SWEPT` の 7本すべてが、断り書きから「省略」を消しても緑のままだった。**
+      //
+      // **守りたい性質は「表明が素の `TRUNCATION_MARK` へ落ちないこと」である。**
+      // ⟹ 門もそう書く: **どのケースも `mark`（出ていることを名指しで測る）か
+      // `absent`（そもそも切れないので、出ていないことを名指しで測る）の
+      // どちらか一方を必ず持つ。**
+      if ((mark === undefined) === (absent === undefined)) {
         throw new Error(
-          `CASES: section を指定したケースは mark も必ず指定すること（label="${label}"）。` +
-            'mark 無しで素の TRUNCATION_MARK に落とすと、entries の省略が代わりに合格を出す' +
-            '欠陥（#406）へ逆戻りする。',
+          `CASES: mark と absent は、どちらか一方だけを指定すること（label="${label}"）。` +
+            'どちらも無いと表明が素の TRUNCATION_MARK へ落ち、1件ごとの抜粋の「省略」が' +
+            '代わりに合格を出して、この歯は何も測らなくなる（#406 / #935）。' +
+            '両方在ると、同じ断り書きについて出ていることと出ていないことを同時に主張する。',
         );
       }
       const scope = section === undefined ? reply : extractSection(reply, section);
 
-      expect(scope).toMatch(mark ?? TRUNCATION_MARK);
+      if (absent !== undefined) {
+        // **この呼び方では一覧レベルで切れない**（実測）。⟹ 断り書きが出ていないこと
+        // そのものを測る。**切れるようになったらここが赤くなる** —— そのときは
+        // `absent` を `mark` へ置き換える番である（黙って緑のままにはならない）。
+        expect(scope).not.toMatch(absent);
+        return;
+      }
+      expect(scope).toMatch(mark!);
     },
   );
 
