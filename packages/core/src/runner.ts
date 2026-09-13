@@ -701,6 +701,81 @@ const STOP_NOTE_TEXT_LIMIT = 1_500;
 const BACKGROUND_TASK_OWNER_LIMIT = 500;
 
 /**
+ * **所有者を控えられる**背景処理の種類（`BackgroundTaskSummary.type`）の名簿
+ * （#570 / #861）。
+ *
+ * ## ⭐ ここが測るのは「性質」であって「実例」ではない
+ *
+ * 所有者を控える経路は `#recordBackgroundTaskOwner` ただ1本で、そこが読むのは
+ * `PostToolUse` の `tool_response.backgroundTaskId` **だけ**である。⟹ 「所有者を
+ * 引けないのが正常」かどうかを決めているのは、**その背景処理を起こした道具の出力が
+ * このキーを持つか**という性質であって、`type` の綴りではない。
+ *
+ * **実測（SDK 0.3.269 同梱の型定義。`grep -Fc -- 'backgroundTaskId' sdk-tools.d.ts`
+ * が 4185行中 1件）**: このキーを持つ出力は `BashOutput` ただ1つである。背景処理を
+ * 作る他の道具はどれも別のキーで id を返す。
+ *
+ * | 背景処理を作る道具の出力 | id のキー | 表に載るか | `type` |
+ * | --- | --- | --- | --- |
+ * | `BashOutput`（`Bash` の `run_in_background`） | `backgroundTaskId` | **載る** | `shell` |
+ * | `AgentOutput`（`Task`。`status: "async_launched"`） | `agentId` | 載らない | `subagent` |
+ * | `AgentOutput`（`Task`。`status: "remote_launched"`） | `taskId` | 載らない | ⚠️ 未測定 |
+ * | `MonitorOutput`（`Monitor`） | `taskId` | 載らない | `monitor` |
+ * | `WorkflowOutput`（`Workflow`） | `taskId` | 載らない | `workflow` |
+ *
+ * **⚠️ 表のうち実測は「id のキー」の列だけである**（型定義を直接読んだ）。`type` の列は
+ * 下の逐語（友好名の例）から読んだもので、**フックの実物の JSON では確かめていない。**
+ * 遠隔の `Task` の行を「未測定」にしてあるのは、`WorkflowOutput.taskType` の逐語が
+ * 遠隔ぶんを `'remote_agent'` と名乗る一方、その値が `BackgroundTaskSummary.type` の
+ * 友好名でどう出るかがどこにも書かれていないためである。**どちらに出ても判定は変わらない**
+ * —— この名簿は引ける側だけを数えるので、`shell` 以外はすべて「控えられないのが正常」へ倒れる。
+ *
+ * [sdk-verbatim BackgroundTaskSummary.type]
+ * > Friendly task-type label (e.g. 'shell', 'subagent', 'monitor', 'workflow'). Falls back to the raw discriminant for unknown types.
+ *
+ * [sdk-verbatim BashOutput.backgroundTaskId]
+ * > ID of the background task if command is running in background
+ *
+ * [sdk-verbatim MonitorOutput.taskId]
+ * > ID of the background monitor task.
+ *
+ * [sdk-verbatim WorkflowOutput.taskType]
+ * > TaskType of the registered background task — 'local_workflow' for in-process runs, 'remote_agent' when remote:true dispatches to CCR. Set on all new writes; absent only on transcripts written before this field existed.
+ *
+ * ## ⚠️ なぜ `type !== 'subagent'` では足りなかったか（この名簿を置いた理由）
+ *
+ * PR #594 は「表に無いのが正常」な実例として `subagent`（委譲そのもの）**だけ**を
+ * 除外した。しかし上の表のとおり、その性質を持つ種類は `subagent` のほかにもある
+ * （`monitor` / `workflow` / 遠隔の `Task`）。⟹ 除外は**性質ではなく実例の1つ**を
+ * 測っており、`Monitor` / `Workflow` を1度でも起こしたセッションでは、**設計どおりに
+ * 動いているのに「所有者を引く経路が壊れた」という診断が出る。**
+ * ⭐ しかも遠隔の `Task` は、その除外が守ろうとした当の道具である。
+ *
+ * **どちらの道具もマネージャーと作業者の手元に在る** ——
+ * `buildManagerSessionOptions`（`claude-provider.ts`）は `tools` を渡さない（preset 全部）、
+ * 作業者の `AgentDefinition` にも `tools` を書かない（親の全ツールを継承）。
+ *
+ * ## ⛔ ここへ「引けなかった種類」を足さないこと
+ *
+ * これは**引ける側**の名簿である。新しい道具が背景処理を作るようになっても、その出力が
+ * `backgroundTaskId` を返さない限りここは増えない。増えるのは
+ * `#recordBackgroundTaskOwner` が読むキーを増やしたときだけである。
+ * **名簿と現物がずれたら赤くなる歯が在る**（`background-task-owner-roster.test.ts`）。
+ */
+export const OWNER_RECORDABLE_TASK_TYPES: ReadonlySet<string> = new Set(['shell']);
+
+/**
+ * その背景処理の**所有者を控えられる種類か**（`OWNER_RECORDABLE_TASK_TYPES`）。
+ *
+ * **`false` は「壊れている」ではなく「控えられないのが正常」である。**
+ * `#noteOwnerLookupFailure` と `#stopTaskOwnerKind` の両方から引く ——
+ * 片方だけ直すと、同じ問いに2つの答えが出る。
+ */
+function isOwnerRecordableTaskType(type: unknown): boolean {
+  return typeof type === 'string' && OWNER_RECORDABLE_TASK_TYPES.has(type);
+}
+
+/**
  * 同じ作業者（`agent_id`）が起こした**同じ背景処理（`taskId`）**を、それが
  * 残ったまま畳もうとした回に対して起こし直す（`additionalContext` を
  * 返す）回数の上限（#570 の追跡の続き。単位を「作業者」から「作業者 ×
@@ -3272,6 +3347,12 @@ class RunnerSession {
    *
    * **入力は防御的に読む。** `tool_response` の形は SDK 側の都合で変わりうるので、
    * 文字列の `backgroundTaskId` が在るときだけ控える（無ければ何もしない）。
+   *
+   * **⚠️ 道具名で絞っていないが、このキーを返す道具は `Bash` だけである**（SDK 0.3.269
+   * 同梱の型定義で実測。表は `OWNER_RECORDABLE_TASK_TYPES` の doc）。⟹ **ここで早期
+   * return するのは異常ではなく、`Task` / `Monitor` / `Workflow` を含む `Bash` 以外の
+   * すべての道具で通る正常な経路である。** 「引けなかった」を診断する側
+   * （`#noteOwnerLookupFailure` / `#stopTaskOwnerKind`）は、この非対称を名簿で受けている。
    */
   #recordBackgroundTaskOwner(toolResponse: unknown, agentId: string | undefined): void {
     if (typeof toolResponse !== 'object' || toolResponse === null) return;
@@ -3825,17 +3906,23 @@ class RunnerSession {
    * 捨てた・経路が変わった）と、「作業者はきれいに畳んだ」が、日誌の上で同じ
    * 顔になる。**その2つを分けるためだけの1行である。**
    *
-   * 出す条件は「`type` が `subagent` でないエントリのうち、id が表に**1件も**
-   * 無いものが在る」。`subagent` を外すのは、委譲そのもの（当人・兄弟）は
-   * `PostToolUse` の `backgroundTaskId` を持たないので、表に無いのが正常だから
-   * である。
+   * 出す条件は「**所有者を控えられる種類**（`OWNER_RECORDABLE_TASK_TYPES`）の
+   * エントリのうち、id が表に**1件も**無いものが在る」。
+   *
+   * **⚠️ ここは `type !== 'subagent'` だった（PR #594）。** 委譲そのもの（当人・兄弟）は
+   * `PostToolUse` の `backgroundTaskId` を持たないので表に無いのが正常、という理由は
+   * 正しいが、**同じ理由が当てはまる種類は `subagent` だけではない** ——
+   * `Monitor` / `Workflow` / 遠隔の `Task` はどれも `taskId` で返すので表に載らない。
+   * ⟹ 条件が「性質」ではなく「実例の1つ」を測っており、設計どおりに動いているのに
+   * この診断が出る形になっていた。名簿と実測は `OWNER_RECORDABLE_TASK_TYPES` の doc。
    */
   #noteOwnerLookupFailure(tasks: readonly unknown[]): void {
     if (this.#ownerLookupFailureNoted) return;
 
     const orphans = tasks.filter((task) => {
       const t = task as { id?: unknown; type?: unknown };
-      if (t.type === 'subagent') return false;
+      // **控えられない種類は、表に無いのが正常である**（診断の対象にしない）。
+      if (!isOwnerRecordableTaskType(t.type)) return false;
       return typeof t.id !== 'string' || !this.#backgroundTaskOwners.has(t.id);
     });
     if (orphans.length === 0) return;
@@ -3965,7 +4052,7 @@ class RunnerSession {
       // 一致する**ので、0 の行も残す —— これは「取れなかった軸」ではなく、**数えた
       // 結果の 0** である（AGENTS.md 地雷「取れない軸に0の行を作る」が禁じているのは
       // 前者で、内訳から項目が消えると合計との突き合わせができなくなる）。
-      const owners = { manager: 0, worker: 0, delegation: 0, unresolved: 0 };
+      const owners = { manager: 0, worker: 0, delegation: 0, unrecordable: 0, unresolved: 0 };
       const statuses = { live: 0, settled: 0, unknown: 0 };
       for (const task of tasks) {
         owners[this.#stopTaskOwnerKind(task)] += 1;
@@ -3981,17 +4068,19 @@ class RunnerSession {
           stopHookActiveText,
         `所有者の内訳（表 #backgroundTaskOwners から引いた）: マネージャー自身 ${owners.manager}件 / ` +
           `作業者 ${owners.worker}件 / 委譲そのもの ${owners.delegation}件 / ` +
-          `引けなかった ${owners.unresolved}件。`,
+          `控えられない種類 ${owners.unrecordable}件 / 引けなかった ${owners.unresolved}件。`,
         `status の内訳: 走っている ${statuses.live}件 / 終わった ${statuses.settled}件 / ` +
           `分からない ${statuses.unknown}件。`,
         ...tasks.map((task) => this.#renderStopTaskLine(task)),
         ...(owners.unresolved === 0
           ? []
           : [
-              `⚠️ 上のうち ${owners.unresolved}件 は**所有者を引けなかった**（\`type\` が ` +
-                '`subagent` でない ＝ 委譲そのものではないのに、表に無い）。この行が出たら計器の' +
+              `⚠️ 上のうち ${owners.unresolved}件 は**所有者を引けなかった**（\`type\` が` +
+                '**所有者を控えられる種類**なのに、表に無い）。この行が出たら計器の' +
                 'ほうを疑う —— `PostToolUse` の `tool_response.backgroundTaskId` が改名・消滅したか、' +
-                `表が上限（${BACKGROUND_TASK_OWNER_LIMIT}件）で古い側を捨てたかである。`,
+                `表が上限（${BACKGROUND_TASK_OWNER_LIMIT}件）で古い側を捨てたかである。` +
+                '（`monitor` / `workflow` / 遠隔の `Task` は元から控えられないので、この数には入らない' +
+                '—— それらは「控えられない種類」に数えてある。）',
             ]),
         ...(statuses.unknown === 0
           ? []
@@ -4049,19 +4138,30 @@ class RunnerSession {
    * - `worker` —— 表の値が非空（その `agent_id` の作業者が起こした）
    * - `delegation` —— 表に無く、`type` が `subagent`。**これは正常である** —— 委譲
    *   そのもの（当人・兄弟）は `PostToolUse` の `backgroundTaskId` を持たないので、
-   *   表に無いのが当たり前である（`#noteOwnerLookupFailure` が `subagent` を除外して
-   *   いるのと同じ判定）
-   * - `unresolved` —— 表に無く、`type` も `subagent` でない。**ここだけが「計器を疑う」
-   *   側である。**
+   *   表に無いのが当たり前である
+   * - `unrecordable` —— 表に無く、`type` が**所有者を控えられる種類でもない**
+   *   （`OWNER_RECORDABLE_TASK_TYPES`）。**これも正常である** —— `Monitor` /
+   *   `Workflow` / 遠隔の `Task` はどれも `backgroundTaskId` を返さないので、
+   *   表に無いのが当たり前である（`#noteOwnerLookupFailure` と同じ判定）
+   * - `unresolved` —— 表に無く、`type` は**控えられる種類である**。
+   *   **ここだけが「計器を疑う」側である。**
    *
-   * **4つ目を3つ目に混ぜないことが本題である。** 混ぜると、経路が壊れて表が空に
+   * **最後の1つを他へ混ぜないことが本題である。** 混ぜると、経路が壊れて表が空に
    * なった状態が「全部が委譲そのものだった」に化ける。
+   *
+   * **⚠️ `unrecordable` はこの PR で足した**（それまでは `subagent` 以外がすべて
+   * `unresolved` へ倒れていた）。`delegation` と分けたままにしてあるのは、#570 の実測が
+   * `subagent` について具体に取れている一方、他の3種は型定義から読んだだけだからである
+   * —— **測れている区別を、名前を1つにして消さない。**
    */
-  #stopTaskOwnerKind(task: unknown): 'manager' | 'worker' | 'delegation' | 'unresolved' {
+  #stopTaskOwnerKind(
+    task: unknown,
+  ): 'manager' | 'worker' | 'delegation' | 'unrecordable' | 'unresolved' {
     const t = task as { id?: unknown; type?: unknown };
     const owner = typeof t.id === 'string' ? this.#backgroundTaskOwners.get(t.id) : undefined;
     if (owner !== undefined) return owner === '' ? 'manager' : 'worker';
-    return t.type === 'subagent' ? 'delegation' : 'unresolved';
+    if (t.type === 'subagent') return 'delegation';
+    return isOwnerRecordableTaskType(t.type) ? 'unresolved' : 'unrecordable';
   }
 
   /**

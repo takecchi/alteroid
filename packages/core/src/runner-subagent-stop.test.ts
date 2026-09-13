@@ -435,6 +435,64 @@ describe('SubagentStop の観測（#357 / #570）', () => {
     expect(noteEvents(s.events)).toHaveLength(1);
   });
 
+  /**
+   * ⭐ **判定は「性質」を測る。「実例」ではない**（#570）。
+   *
+   * 所有者を控えられるのは `OWNER_RECORDABLE_TASK_TYPES`（いまは `shell` だけ）で、
+   * `Monitor` / `Workflow` / 遠隔の `Task` はどれも `tool_response` に
+   * `backgroundTaskId` を持たない ⟹ **表に載らないのが正常であり、診断の対象ではない。**
+   *
+   * **PR #594 の除外（`type !== 'subagent'`）はこの4件を落としていた** —— 除外が
+   * 「表に無いのが正常」という性質ではなく、その実例の1つ（委譲そのもの）を測って
+   * いたためである。⟹ `Monitor` を1度でも起こしたセッションでは、**設計どおりに
+   * 動いているのに「所有者を引く経路が壊れた」という診断が出ていた。**
+   *
+   * ⛔ **直下の（対照）と対で読むこと。** こちらだけなら、診断そのものを消しても緑になる。
+   * ⛔ **1件では足りない。** 種類を1つだけ挙げると、同じ形の誤り（実例を測る条件）がまた通る。
+   */
+  it.each(['monitor', 'workflow', 'local_workflow', 'remote_agent'])(
+    'type=%s が表に無くても診断は出さない（控えられないのが正常）',
+    async (type) => {
+      const s = setup();
+      await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+      const started = s.started[0];
+      if (started === undefined) throw new Error('セッションが開いていない');
+
+      const result = await fireSubagentStop(started.options, {
+        ...STOP_BASE,
+        agent_id: 'agent-1',
+        background_tasks: [selfEntry('agent-1'), { id: `bg-${type}`, type, status: 'running' }],
+      });
+
+      expect(result).toEqual({ continue: true });
+      expect(noteEvents(s.events)).toHaveLength(0);
+    },
+  );
+
+  // ⭐ 直上の対照。**診断そのものを消していない**ことを測る —— これが無いと、
+  // 直上の4本は「`#noteOwnerLookupFailure` を常に無音にする」変異でも緑になる。
+  it('（対照）同じ形でも type=shell なら診断が出る', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    const result = await fireSubagentStop(started.options, {
+      ...STOP_BASE,
+      agent_id: 'agent-1',
+      background_tasks: [
+        selfEntry('agent-1'),
+        { id: 'bg-shell', type: 'shell', status: 'running' },
+      ],
+    });
+
+    expect(result).toEqual({ continue: true });
+    const notes = noteEvents(s.events);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]?.text).toContain('所有者を引けなかった');
+    expect(notes[0]?.text).toContain('bg-shell');
+  });
+
   // ⚠️ 同上（`mine.length === 0`）。
   it('当人・兄弟しか無いときは、診断も出さない（引けないのではなく、引く対象が無い）', async () => {
     const s = setup();
