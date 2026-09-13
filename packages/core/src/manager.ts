@@ -2477,6 +2477,75 @@ interface SynthesizedNoticeWindow {
 }
 
 /**
+ * ある managerId が**直前に配った束**の署名と、そのあと同じ署名で届いて
+ * **配らなかった**束の数（`#synthesizedNoticeStreaks` の値）。
+ *
+ * **これは「連続するかぎり畳む」ための記憶であって、上限ではない。**
+ * `#queueSynthesizedNotice` は既に「族も本文もバイト単位で同一なら数だけ
+ * 増やす」を実装しているが、その畳み込みは**合流窓（既定3000ms）の中でしか
+ * 効かない**——窓が閉じた瞬間に積みが消えるので、次に届いた同文は「新しい束」
+ * としてもう一度配られる。⟹ **429 のように同じ失敗が何分も繰り返される場面
+ * では、同じ本文が窓の数だけ受信箱へ積まれる。**
+ *
+ * **実測（依頼者＝クローンが 2026-09-13T21:31:03Z に自分で数えた。こちらで
+ * 数え直したものではない）**: 台帳の未了 5,349 件のうち **5,342 件**（99.9%）が
+ * `origin=manager` で本文が `result_is_error`、積まれた時刻の幅は
+ * `17:23:31`〜`17:33:50` の**約10分**。本文は全件が逐語で同一である:
+ *
+ * ```
+ * （このターンは応答を返さずに終わった: success/429 / result_is_error）
+ * You've hit your session limit · resets 6am (Asia/Tokyo)
+ * ```
+ *
+ * **そのうち 1,880 件が1本のマネージャー（`mgr-c6cf54c3`）から届いている。**
+ * 受信箱の合図は8件ずつ束ねてクローンへ配られるので、5,334 件は**約660
+ * ターン**にあたる。**台帳を閉じても受信箱は減らない**（別の口である）ので、
+ * クローンの直前のセッションは毎ターンの要約がこれで埋まって文脈窓に当たった。
+ *
+ * **⛔ だから「黙らせる」のではない。1件目は必ず配る。** 枠で落ちたことは
+ * クローンが知らなければならない事実である（落ちた委譲は自動では再開せず、
+ * クローンが `manager_send` で拾い直す必要がある）。**消すのは2件目以降の
+ * 完全な重複だけで、その件数は (1) 日誌に1束ごと1行 (2) 次に配る
+ * `manager_message` の末尾の1行（`#deliver`）の両方に残る。**
+ *
+ * **窓（3000ms）を広げて解く道は採らない。** 窓は「本文が違う束」を1件へ
+ * まとめる補助で、広げると**無関係な出来事が混ざる**（`#queueSynthesizedNotice`
+ * の doc「⛔ だから『実測の最大間隔に合わせて広げる』という決め方をしない」）。
+ * こちらが扱うのは**バイト単位で同一**の束だけなので混ざりようが無く、時間の
+ * 窓を必要としない。**⟹ 足したのは新しい制限ではなく、既に在る畳み込みから
+ * 「3000ms」という恣意的な境界を外した形である。**
+ */
+interface SynthesizedNoticeStreak {
+  /** 直前に配った束の署名（`synthesizedNoticeSignature`）。 */
+  signature: string;
+  /** 同じ署名のまま配らなかった**束**の数（0以上）。 */
+  suppressed: number;
+  /** 配らなかった束に含まれていた**通数**の総和（束の数ではない）。 */
+  suppressedArrived: number;
+  /** 配らなかった最初の束の時刻（`suppressed === 0` のあいだは持たない）。 */
+  firstAt?: string;
+  /** 配らなかった最後の束の時刻（同上）。 */
+  lastAt?: string;
+}
+
+/**
+ * 束の署名 ——「族と本文の並び」だけから作る。**`count` は入れない。**
+ *
+ * 入れると「同文が3通の束」と「同文が1通の束」が別物になり、繰り返すたびに
+ * 通数が揺れる枠落ちでは畳めなくなる（実測でも通数は回によって違う
+ * ——`SYNTHESIZED_NOTICE_WINDOW_MS` の doc「**通数は回によって違う。**」）。
+ * **通数は署名ではなく `suppressedArrived` の側で保存する。**
+ *
+ * **正規化も切り詰めもしない**（`#queueSynthesizedNotice` の本文比較と同じ
+ * 作法。1バイトでも違えば「別のことを言っている」側へ倒す）。
+ */
+export function synthesizedNoticeSignature(
+  fragments: readonly SynthesizedNoticeFragment[],
+): string {
+  return JSON.stringify(fragments.map((fragment) => [fragment.label, fragment.text]));
+}
+
+/**
  * 機構が合成した知らせの合流窓の長さ（既定 3000ms）。
  *
  * **1つの出来事が起きると受信箱イベントが複数件立ち、クローンのターンが
@@ -2809,6 +2878,20 @@ class Pool implements ManagerPool {
    * 受信箱へ入って到着順が崩れるのを防ぐ。
    */
   readonly #synthesizedNotices = new Map<string, SynthesizedNoticeWindow>();
+  /**
+   * **窓をまたいで同文を畳むための記憶**（{@link SynthesizedNoticeStreak}）。
+   *
+   * `#synthesizedNotices` が「いま開いている窓」なのに対し、こちらは
+   * **もう配った束の署名**を managerId ごとに1件だけ持つ。窓が閉じても
+   * 消えず、**別の `manager_message` を配った時点で消える**
+   * （`#deliver` が消す＝「連続が途切れた」）。
+   *
+   * **だから寿命は `#withheldReports` と同じ形で有限である**——委譲1本につき
+   * 1件、終端すれば `#retire()` が同じ場所で外す
+   * （`grep -Fn -- 'this.#synthesizedNoticeStreaks.delete(managerId);' packages/core/src/manager.ts`）。
+   * **タイマーは持たない**（窓のタイマーは `#synthesizedNotices` の側にある）。
+   */
+  readonly #synthesizedNoticeStreaks = new Map<string, SynthesizedNoticeStreak>();
   /** 起動時の引き取りが走っている間だけ立つ。`#reattach` はこれを待つ。 */
   #restoring: Promise<void> | null = null;
   /**
@@ -7922,6 +8005,24 @@ class Pool implements ManagerPool {
           ? `${countNote}）`
           : `${countNote}最後の1本の冒頭: ${excerptLine(withheld.lastText, WITHHELD_REPORT_EXCERPT)}）`;
     }
+    // **窓をまたいで畳んだ件数を、次に配る1件の末尾へ載せる**
+    // （{@link SynthesizedNoticeStreak}。直上の `#withheldReports` と同じ形で、
+    // 「後で必ず届く」を実現する唯一の場所である）。
+    //
+    // **ここは同時に「連鎖が途切れる」場所でもある。** 何を配ったかに関わらず
+    // 帳面を消すので、次に同じ本文の知らせが来たら、それは**また1件目として
+    // 配られる**——`#flushSynthesizedNoticeFor` からの呼び出しだけは、消えた
+    // 直後に新しい署名で `set` し直す。
+    const streak = this.#synthesizedNoticeStreaks.get(managerId);
+    this.#synthesizedNoticeStreaks.delete(managerId);
+    if (streak !== undefined && streak.suppressed > 0) {
+      outgoing =
+        `${outgoing}\n\n（この間に、直前と同じ本文の「機構が合成した知らせ」を ` +
+        `${String(streak.suppressed)} 束（通数 ${String(streak.suppressedArrived)} 件）配っていない` +
+        `（最初 ${streak.firstAt ?? '不明'} / 最後 ${streak.lastAt ?? '不明'}）。` +
+        `**1件目は配ってあり、配らなかったのは2件目以降の完全な重複だけである。**` +
+        `全文は日誌に在る（\`journal_read\`）。）`;
+    }
     this.#post({
       type: 'manager_message',
       id: randomUUID(),
@@ -8050,7 +8151,43 @@ class Pool implements ManagerPool {
     this.#synthesizedNotices.delete(managerId);
     clearTimeout(entry.timer);
     const { text, breakdown, arrived } = mergeSynthesizedNoticeFragments(entry.fragments);
+    // **直前に配った束と署名が同じなら、配らずに数だけ残す**
+    // （{@link SynthesizedNoticeStreak}）。**1件目はここへ来ない**——
+    // 連鎖はこの下の `set` で「配った」あとに初めて立つので、
+    // `streak === undefined` の回（＝まだ1件も配っていない）は必ず配る側へ
+    // 倒れる。⛔ **ここを「同文なら常に捨てる」に変えないこと**——1件目まで
+    // 消えて「黙らせる」側になる（歯: 「1件目は必ず配る」）。
+    const signature = synthesizedNoticeSignature(entry.fragments);
+    const streak = this.#synthesizedNoticeStreaks.get(managerId);
+    if (streak !== undefined && streak.signature === signature) {
+      const at = new Date(this.#now()).toISOString();
+      streak.suppressed += 1;
+      streak.suppressedArrived += arrived;
+      streak.firstAt ??= at;
+      streak.lastAt = at;
+      // **記録は消さない（`#flushSynthesizedNoticeFor` の既存の doc と同じ理由）。**
+      // 個々の本文は積む側（`case 'rate_limit'` 等）が既に `#journal` して
+      // いるので、ここで足すのは「配らなかった」の1行だけである。
+      void this.#journal({
+        type: 'exchange',
+        with: 'manager',
+        role: 'inbound',
+        text:
+          `[${managerId}] 直前に配ったものと同文の知らせ（内訳: ${breakdown}）が ` +
+          `${String(arrived)} 件届いたので、受信箱へは回さず数だけ残した` +
+          `（この連鎖で ${String(streak.suppressed)} 束目 / 通数 ${String(streak.suppressedArrived)} 件）。`,
+      });
+      return;
+    }
+    // **`#deliver` より先に `set` しないこと。** `#deliver` は直前の連鎖の
+    // 件数を末尾の1行として運んでから帳面を消すので、先に上書きすると
+    // 「配らなかった件数」がクローンへ届かないまま消える。
     this.#deliver(managerId, 'report', text);
+    this.#synthesizedNoticeStreaks.set(managerId, {
+      signature,
+      suppressed: 0,
+      suppressedArrived: 0,
+    });
     // **消えてよいのは「クローンを起こすこと」だけで、記録ではない。**
     // 個々の知らせは積んだ時点で呼び出し元（`case 'rate_limit'` 等）が
     // 既にそれぞれの `#journal` を書いている——ここで足すのは「まとめた」
@@ -8176,6 +8313,13 @@ class Pool implements ManagerPool {
       );
     }
     this.#withheldReports.delete(managerId);
+    // **窓をまたいだ畳み込みの帳面も、同じ契機で外す**
+    // （{@link SynthesizedNoticeStreak}。委譲1本につき1件しか持たないので
+    // 上限は要らない——外す契機は上と同じ「終端した」だけである）。
+    // **ここで消えるのは「次に配る1件へ載せる予定だった件数」だけで、
+    // 記録ではない**——配らなかった束は1つずつ `#journal` に残っている
+    // （`#flushSynthesizedNoticeFor`）ので、`journal_read` で全部引ける。
+    this.#synthesizedNoticeStreaks.delete(managerId);
   }
 
   async #journal(entry: JournalEntryInput): Promise<void> {
