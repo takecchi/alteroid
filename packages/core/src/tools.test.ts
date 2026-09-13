@@ -3549,6 +3549,22 @@ describe('クローンの道具', () => {
         expect(reply).toContain('移した');
       });
 
+      /**
+       * ⚠️ **この歯 1本では、どの免除が効いて通ったのかを特定できない。**
+       *
+       * `guardFullReplace` は `cause !== 'distill'`（会話の中の書き手）と
+       * `action === '節の移動'`（失わない操作）を**独立した2本の早期 return**で
+       * 通す。この歯が使う組み合わせ（clone × 節の移動）は**その両方に当たる**ので、
+       * **片方を潰しても、もう片方が代わりに通してしまう。**
+       *
+       * #935 の実測（`origin/main` の `b83708e`、いずれも型検査 0）:
+       * - `if (cause !== 'distill') return null;` を潰す → 78本が落ちたが**この歯は生存**
+       * - `if (action === '節の移動') return null;` を潰す → 3本が落ちたが**この歯は生存**
+       *
+       * ⟹ **単発の欠陥では原理的に赤にならない。** 免除ごとの切り分けは、
+       * 直下の `GUARD_EXEMPTIONS` の表がやる（この歯はその表の1セルであり、
+       * 「両方に守られているセル」として表の中でも名指ししてある）。
+       */
       it('対照 — 会話の中（clone）なら human 印の文書でも通る（能力を消していない）', async () => {
         const h = harness();
         await markHuman(h, 'about-me', source);
@@ -3565,6 +3581,97 @@ describe('クローンの道具', () => {
         expect(reply).toContain('移した');
         expect((await h.stores.persona.read('about-me-appendix'))?.content).toContain('## 事例');
       });
+
+      /**
+       * **免除を1本ずつ切り分ける表。**
+       *
+       * `guardFullReplace` の2本の早期 return を、**それぞれ単独で効いている
+       * セル**で測る。⟹ **どちらか片方を潰せば、必ずどこか1セルが赤くなる。**
+       *
+       * | cause | action | 期待 | 単独で効いている免除 |
+       * | --- | --- | --- | --- |
+       * | clone | 全文置換 | 通る | `cause !== 'distill'` **だけ** |
+       * | distill | 節の移動 | 通る | `action === '節の移動'` **だけ** |
+       * | distill | 全文置換 | **断る** | どちらも効かない（歯が本当に弾く側） |
+       * | clone | 節の移動 | 通る | ⛔ **両方が通すので特定できない**（上の歯） |
+       *
+       * **⚠️ 「弾いていないこと」だけを並べない。** 3行目（断る側）が無いと、
+       * `guardFullReplace` が丸ごと `return null` に化けた欠陥が全セル緑で通る
+       * ——免除の表が、歯そのものを外す変更を承認してしまう。
+       */
+      const GUARD_EXEMPTIONS = [
+        {
+          label: 'clone × 全文置換',
+          cause: 'clone' as const,
+          action: '全文置換' as const,
+          allowed: true,
+          isolates: "会話の中の書き手を通す免除（`cause !== 'distill'`）",
+        },
+        {
+          label: 'distill × 節の移動',
+          cause: 'distill' as const,
+          action: '節の移動' as const,
+          allowed: true,
+          isolates: "失わない操作を通す免除（`action === '節の移動'`）",
+        },
+        {
+          label: 'distill × 全文置換',
+          cause: 'distill' as const,
+          action: '全文置換' as const,
+          allowed: false,
+          isolates: '（どの免除も効かない ＝ 歯が本当に弾いている側）',
+        },
+        {
+          label: 'clone × 節の移動',
+          cause: 'clone' as const,
+          action: '節の移動' as const,
+          allowed: true,
+          isolates: '⛔ 2本の免除が両方とも通すので、このセルでは免除を特定できない',
+        },
+      ];
+
+      it.each(GUARD_EXEMPTIONS)(
+        '$label — 免除の切り分け（$isolates）',
+        async ({ cause, action, allowed, isolates }) => {
+          const h = harness();
+          await markHuman(h, 'about-me', source);
+          h.setMemoryCause(cause);
+
+          const reply =
+            action === '全文置換'
+              ? await h.call('memory_write', {
+                  slug: 'about-me',
+                  content: '# 私について\n書き換えたつもり',
+                  summary: '書き換えたつもり',
+                })
+              : await h.call('memory_section_move', {
+                  fromSlug: 'about-me',
+                  sections: [await outlineId(h, 'about-me', '## 事例')],
+                  toSlug: 'about-me-appendix',
+                  summary: '移した',
+                });
+
+          expect(
+            reply.includes('断った'),
+            allowed
+              ? `**通るはずの組み合わせが断られた。** ${isolates} が消えたか、判定の向きが反転している。` +
+                  'この赤の意味は「能力の削除」——記憶を整理する道が、通ってよい書き手からも塞がった。'
+              : '**弾くはずの組み合わせが通った。** この赤の意味は「歯そのものが外れた」——' +
+                  '人間が書いた文書が、人間の居ない走行から全文置換で失われうる。',
+          ).toBe(!allowed);
+
+          // **応答の文言だけで終わらせない**（「断ってから書く」「通ったと言って書かない」
+          // のどちらも、文言だけを見る歯は素通りする）。
+          const after = (await h.stores.persona.read('about-me'))?.content;
+          if (allowed) {
+            expect(after, '通ったと言いながら、出どころの文書が1文字も変わっていない').not.toBe(
+              source,
+            );
+          } else {
+            expect(after, '断ったと言いながら、出どころの文書が書き換わっている').toBe(source);
+          }
+        },
+      );
 
       /**
        * **移した先には歯を掛けない**（追記なので。`memory_append` が
@@ -5871,6 +5978,15 @@ describe('クローンの道具', () => {
 
       expect(reply).toContain('toolu_noname');
       expect(reply).not.toContain('undefined');
+      // **名乗りの第1の主張（「不明」と分かる形で出す）を、実際に測る。**
+      // ⚠️ 直す前はこの表明が無く、`undefined` を出さずに **代わりの語も出さない**
+      // 欠陥（差し替え先を空文字にする）が 624/624 緑で通った（#935）。
+      // ⟹ `undefined` を出さないことと、分かる形で名乗ることは別の主張である。
+      expect(
+        reply,
+        'name の無い tool_use が、undefined でもないが「不明」とも名乗らない形で出ている。' +
+          'この赤の意味は「読み手が、名前が取れなかったのか名前が空なのかを区別できない」。',
+      ).toContain('不明');
     });
 
     /**
