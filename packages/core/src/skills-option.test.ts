@@ -41,6 +41,7 @@ function cloneOptions(): Options {
     resume: null,
     onPreCompact: noopHook,
     onPostToolUse: noopHook,
+    onPostToolUseFailure: noopHook,
   });
 }
 
@@ -78,6 +79,7 @@ describe("skills: 'all' の字義（Options を組み立てる3つの口）", ()
       systemPrompt: 'システムプロンプト',
       env: {},
       onPostToolUse: noopHook,
+      onPostToolUseFailure: noopHook,
     });
 
     expect(options.skills).toBe('all');

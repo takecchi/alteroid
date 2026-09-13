@@ -877,7 +877,14 @@
                         "tool": {
                           "type": "string"
                         },
-                        "input": {}
+                        "input": {},
+                        "outcome": {
+                          "type": "string",
+                          "enum": ["failed", "interrupted"]
+                        },
+                        "error": {
+                          "type": "string"
+                        }
                       },
                       "required": ["type", "id", "at", "actor", "tool"]
                     },
@@ -2595,7 +2602,14 @@
                               "tool": {
                                 "type": "string"
                               },
-                              "input": {}
+                              "input": {},
+                              "outcome": {
+                                "type": "string",
+                                "enum": ["failed", "interrupted"]
+                              },
+                              "error": {
+                                "type": "string"
+                              }
                             },
                             "required": ["type", "id", "at", "actor", "tool"]
                           },

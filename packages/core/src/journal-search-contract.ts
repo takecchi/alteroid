@@ -24,7 +24,8 @@ import type { JournalStore } from './store.js';
  * 5. **`''`（空文字列）= 絞らない**（`matchesJournalSearch` の doc）
  * 6. **`limit` より前に効く**（`with` の契約4と同じ形。#418 の穴の本体）
  *
- * そして**対象外の欄が本当に対象外であること**（`tool_use` の `input`）も
+ * そして**対象外の欄が本当に対象外であること**（`tool_use` の `input`）と、
+ * **対象内の欄が本当に対象内であること**（`tool_use` の `error`。#924）も
  * 測る。ここが実装ごとに違うと、「当たらない」の意味が実装ごとに変わる。
  *
  * `append` した行は呼び出し側のストアへ実際に残る（後始末はしない）。
@@ -68,6 +69,14 @@ export async function verifyJournalStoreSearchContract(
     actor: 'clone',
     tool: 'Bash',
     input: { command: `${TAG}: ナスの育て方` },
+  });
+  // 対象内の欄（`tool_use` の `error`。#924）に語を置く。**ここには当たること。**
+  const failed = await journal.append({
+    type: 'tool_use',
+    actor: 'clone',
+    tool: 'Bash',
+    outcome: 'failed',
+    error: `${TAG}: キュウリの育て方`,
   });
 
   const ids = async (q: string, extra: { limit?: number } = {}): Promise<string[]> =>
@@ -167,6 +176,21 @@ export async function verifyJournalStoreSearchContract(
       'JournalStore の q 契約（対象外の欄）が破れている — ' +
         `tool_use の input にだけ 'ナス' を置いた行が、q: 'ナス' で ${outOfScope.length} 件返った。` +
         '照合の対象は journal-search.ts の SEARCHABLE_FIELDS_BY_TYPE が持つ欄だけである。',
+    );
+  }
+
+  // --- 対象内の欄（`tool_use` の `error`。#924）に当たる ---
+  // `input` とは逆に、こちらは当たらなければならない —— `error` はトップ
+  // レベルの素の文字列で、pg のテキスト化と JS の読みが一致するため対象内に
+  // した（`journal-search.ts` の doc）。3実装で揃っていないと「失敗した
+  // 道具呼び出しを探す」口が実装ごとに違う顔になる。
+  const inScope = await ids('キュウリ');
+  if (!inScope.includes(failed.id)) {
+    throw new Error(
+      'JournalStore の q 契約（対象内の欄: tool_use.error）が破れている — ' +
+        `tool_use の error に 'キュウリ' を置いた行（id=${failed.id}）が、` +
+        `q: 'キュウリ' で返らなかった。照合の対象は journal-search.ts の ` +
+        'SEARCHABLE_FIELDS_BY_TYPE が持つ欄だけである。',
     );
   }
 }

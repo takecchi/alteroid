@@ -136,6 +136,9 @@ describe('クローン本セッションへ渡す Options', () => {
     // 気づける（characterization test として意味は保たれる）。
     expect(options.hooks?.PreCompact?.[0]?.timeout).toBe(120);
     expect(options.hooks?.PostToolUse).toHaveLength(1);
+    // 失敗・中断した道具呼び出しも観測する（Issue #924）。`PostToolUse` と
+    // 排他で発火するので、両方に登録しても二重記録にはならない。
+    expect(options.hooks?.PostToolUseFailure).toHaveLength(1);
 
     // --- ⭐ 「無いこと」の固定 ---
     // `tools` は渡さない（地雷1: 明示リストで絞らない = preset 一式）。
@@ -393,6 +396,10 @@ describe('クローンの蒸留サイドクエリへ渡す Options', () => {
     expect(options.persistSession).toBe(false);
     // 監査は必要（道具と許可モードを本セッションと揃えた以上、記録も要る）。
     expect(options.hooks?.PostToolUse).toHaveLength(1);
+    // 失敗・中断した道具呼び出しも同じ理由で要る（Issue #924）— 蒸留は
+    // memory_write を叩く経路なので、そこの失敗が消えると「記憶が書かれ
+    // なかった」が静かに落ちる。
+    expect(options.hooks?.PostToolUseFailure).toHaveLength(1);
     // PreCompact フックは無い（これは既に PreCompact の中で走っている別セッション
     // なので、自分自身をもう一段 compaction する入口を持たせない）。
     expect(options.hooks?.PreCompact).toBeUndefined();

@@ -822,6 +822,274 @@ describe('クローン', () => {
     await s.clone.stop();
   });
 
+  /**
+   * **Issue #924**: `PostToolUse` は道具呼び出しが成功したときにしか発火しない
+   * （出荷済みの SDK 実行体を実測して確認した排他分岐 — Issue 本文参照）。
+   * ⟹ 失敗・中断した道具呼び出しは、`onPostToolUseFailure` を足すまで日誌に
+   * 1件も残らなかった。3マスで陰性対照ごと確かめる —— 失敗・成功（陰性対照）・
+   * 中断の3つを分けて測らないと、「常に failed を書く」実装でも緑になる。
+   */
+  it('失敗した道具呼び出しは tool_use として残り、outcome: "failed" と error が読める', async () => {
+    const s = setup();
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUseFailure?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PostToolUseFailure フックが登録されていない');
+
+    await hook(
+      {
+        tool_name: 'Bash',
+        tool_input: { command: 'git push' },
+        error: 'exit code 1: 認証に失敗した',
+      } as never,
+      undefined,
+      {} as never,
+    );
+
+    const entries = await s.stores.journal.list({ types: ['tool_use'] });
+    expect(entries.length).toBe(1);
+    const entry = entries[0] as {
+      actor: string;
+      tool: string;
+      outcome?: string;
+      error?: string;
+    };
+    expect(entry.tool).toBe('Bash');
+    expect(entry.actor).toBe(CLONE_ACTOR_ID);
+    expect(entry.outcome).toBe('failed');
+    expect(entry.error).toBe('exit code 1: 認証に失敗した');
+
+    await s.clone.stop();
+  });
+
+  it('⭐ 陰性対照: 成功した道具呼び出しには outcome も error も付かない（従来どおり）', async () => {
+    // これが無いと「常に outcome: 'failed' を書く」実装でも緑になる。
+    const s = setup();
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUse?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
+
+    await hook(
+      { tool_name: 'Bash', tool_input: { command: 'git log --oneline -3' } } as never,
+      undefined,
+      {} as never,
+    );
+
+    const entries = await s.stores.journal.list({ types: ['tool_use'] });
+    expect(entries.length).toBe(1);
+    const entry = entries[0] as { outcome?: string; error?: string };
+    expect(entry.outcome).toBeUndefined();
+    expect(entry.error).toBeUndefined();
+
+    await s.clone.stop();
+  });
+
+  it('中断された道具呼び出しは outcome: "interrupted" と読める（失敗とは別の印）', async () => {
+    const s = setup();
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUseFailure?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PostToolUseFailure フックが登録されていない');
+
+    await hook(
+      {
+        tool_name: 'Bash',
+        tool_input: { command: 'sleep 999' },
+        error: 'aborted',
+        is_interrupt: true,
+      } as never,
+      undefined,
+      {} as never,
+    );
+
+    const entries = await s.stores.journal.list({ types: ['tool_use'] });
+    expect(entries.length).toBe(1);
+    expect((entries[0] as { outcome?: string }).outcome).toBe('interrupted');
+
+    await s.clone.stop();
+  });
+
+  it('is_interrupt が欠けている失敗は "interrupted" ではなく "failed" 側へ倒れる', async () => {
+    // is_interrupt は optional——SDK が付けてこないことがある。欠けを第3の
+    // 値にせず、安全側（failed）に倒す（schema.ts の tool_use.outcome の doc）。
+    const s = setup();
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUseFailure?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PostToolUseFailure フックが登録されていない');
+
+    await hook(
+      { tool_name: 'Bash', tool_input: { command: 'false' }, error: 'exit 1' } as never,
+      undefined,
+      {} as never,
+    );
+
+    const entries = await s.stores.journal.list({ types: ['tool_use'] });
+    expect((entries[0] as { outcome?: string }).outcome).toBe('failed');
+
+    await s.clone.stop();
+  });
+
+  it('蒸留のサイドクエリで失敗した道具呼び出しも日誌に残る（別セッションだと分かる形で）', async () => {
+    const s = setup();
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const main = s.calls[0] as FakeCall;
+    const dir = await mkdtemp(join(tmpdir(), 'alteroid-distill-failure-audit-'));
+    try {
+      const transcriptPath = join(dir, 'transcript.jsonl');
+      await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
+      const preCompact = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
+      if (preCompact === undefined) throw new Error('PreCompact フックが登録されていない');
+      await preCompact(
+        { session_id: 'sess-fake', transcript_path: transcriptPath } as never,
+        undefined,
+        { signal: new AbortController().signal } as never,
+      );
+
+      const side = s.calls.at(-1) as FakeCall;
+      expect(side).not.toBe(main);
+      const hook = side.options.hooks?.PostToolUseFailure?.[0]?.hooks?.[0];
+      if (hook === undefined) throw new Error('蒸留側に PostToolUseFailure フックが無い');
+      await hook(
+        {
+          tool_name: qualifiedToolName('memory_write'),
+          tool_input: { slug: 'values' },
+          error: 'ストアに書けなかった',
+        } as never,
+        undefined,
+        {} as never,
+      );
+      // **自作ツール（memory_write）の失敗は除外される**——`#journalToolUse` と
+      // 同じ除外規則を通すため（判断は `#journalToolUseFailure` の doc に
+      // 名指ししてある）。だから別の道具（`Write`）で「蒸留側の失敗が残る」
+      // ことを別途確かめる。
+      await hook(
+        { tool_name: 'Write', tool_input: { file_path: '/a' }, error: 'ENOSPC' } as never,
+        undefined,
+        {} as never,
+      );
+
+      const entries = await s.stores.journal.list({ types: ['tool_use'] });
+      const memoryWrite = entries.find(
+        (entry) => (entry as { tool: string }).tool === qualifiedToolName('memory_write'),
+      );
+      expect(memoryWrite).toBeUndefined();
+
+      const write = entries.find((entry) => (entry as { tool: string }).tool === 'Write');
+      expect((write as { actor: string } | undefined)?.actor).toBe('clone:distill');
+      expect((write as { outcome?: string } | undefined)?.outcome).toBe('failed');
+      expect((write as { error?: string } | undefined)?.error).toBe('ENOSPC');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+
+    await s.clone.stop();
+  });
+
+  it('自作ツール（自前で日誌へ書く側）の失敗は、成功と同じ規則で除かれる', async () => {
+    // **判断が要った点**: 失敗だけは自作ツールでも重ねて残す、という選択肢も
+    // 在ったが、`#journalToolUse` と同じ除外規則（`cloneToolJournalsItself`）を
+    // そのまま通すことにした（`#journalToolUseFailure` の doc に名指ししてある）。
+    const s = setup();
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUseFailure?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PostToolUseFailure フックが登録されていない');
+
+    await hook(
+      {
+        tool_name: qualifiedToolName('memory_write'),
+        tool_input: { slug: 'values' },
+        error: 'ストアに書けなかった',
+      } as never,
+      undefined,
+      {} as never,
+    );
+
+    expect(await s.stores.journal.list({ types: ['tool_use'] })).toEqual([]);
+
+    await s.clone.stop();
+  });
+
+  it('自作ツールでも「読む」道具（TRACELESS 側）の失敗は残る', async () => {
+    const s = setup();
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUseFailure?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PostToolUseFailure フックが登録されていない');
+
+    await hook(
+      {
+        tool_name: qualifiedToolName('memory_read'),
+        tool_input: { slug: 'values' },
+        error: 'not found',
+      } as never,
+      undefined,
+      {} as never,
+    );
+
+    const entries = await s.stores.journal.list({ types: ['tool_use'] });
+    expect(entries.length).toBe(1);
+    expect((entries[0] as { outcome?: string }).outcome).toBe('failed');
+
+    await s.clone.stop();
+  });
+
+  it('道具の名前が読めない失敗でも、記録を落とさない（監査の穴を静かに空けない）', async () => {
+    const s = setup();
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUseFailure?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PostToolUseFailure フックが登録されていない');
+
+    await hook({ tool_input: { any: 1 }, error: '???' } as never, undefined, {} as never);
+
+    const entries = await s.stores.journal.list({ types: ['tool_use'] });
+    expect(entries.map((entry) => (entry as { tool: string }).tool)).toEqual(['(不明な道具)']);
+    expect((entries[0] as { outcome?: string }).outcome).toBe('failed');
+
+    await s.clone.stop();
+  });
+
+  it('error が上限を超えると切り詰められ、切り詰めたと分かる合図が付く', async () => {
+    const s = setup();
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUseFailure?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PostToolUseFailure フックが登録されていない');
+
+    const huge = 'エラー詳細:'.repeat(2000); // 明らかにどの上限よりも長い
+    await hook(
+      { tool_name: 'Bash', tool_input: { command: 'x' }, error: huge } as never,
+      undefined,
+      {} as never,
+    );
+
+    const entries = await s.stores.journal.list({ types: ['tool_use'] });
+    const error = (entries[0] as { error?: string }).error;
+    expect(error).toBeDefined();
+    // 黙って切らない——`excerptLine` の「省略」合図が付く（excerpt.ts の doc）。
+    expect(error).toMatch(/省略/);
+    // 全文を書けば huge.length（20,000字超）になる。切れていることを見る
+    // ——正確な上限値はここでは固定しない（clone.ts の TOOL_USE_ERROR_EXCERPT
+    // が正本）。
+    expect(error!.length).toBeLessThan(huge.length);
+    expect(error!.length).toBeLessThan(1000);
+
+    await s.clone.stop();
+  });
+
   it('確認へ上がらず止められた道具は日誌に残る。生の合図と result で二重に書かない', async () => {
     // `permissionMode: 'auto'` ＋ `canUseTool` 無しなので拒否は普通に起きる。
     // ここを捨てると「静かになった」と「起きていない」が区別できなくなる。

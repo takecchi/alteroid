@@ -4,6 +4,7 @@ import { open, readFile } from 'node:fs/promises';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type {
   Options,
+  PostToolUseFailureHookInput,
   PostToolUseHookInput,
   Query,
   SDKUserMessage,
@@ -345,6 +346,20 @@ const CLONE_ID_LIST_EXCERPT = 400;
  */
 const UNKNOWN_TOOL_NAME = '(不明な道具)';
 const UNKNOWN_AGENT_TYPE = '(不明)';
+
+/**
+ * `PostToolUseFailureHookInput.error` を `tool_use` の `error` 欄へ残すときの
+ * 上限（Issue #924）。
+ *
+ * `tool_use` は日誌でいちばん数の多い種別で（`journal-search.ts` の doc）、
+ * `error` はその道具・MCP サーバ・SDK が書く**上限の無い自由文**である。
+ * 切らずに残すと、1件の巨大な失敗メッセージが日誌の1行を埋め尽くしうる。
+ * `excerptLine` を通すので、切り詰めたときは省いた文字数と全体の長さが
+ * 末尾に付き（`excerpt.ts` の doc）、「そこで切れている」と読む側から
+ * 黙らずに分かる。改行も1行に潰す——`error` は日誌の1エントリに収まる
+ * べき値であって、複数行の生ログではない。
+ */
+const TOOL_USE_ERROR_EXCERPT = 500;
 
 /**
  * 二重書き込み防止のために覚えておく拒否 `tool_use_id` の件数。
@@ -5826,6 +5841,14 @@ class Clone implements CloneHost {
       //    どの `PostToolUse` も発火しておらず `effort` は `null` のままである
       //    （`CloneRuntimeFacts.effort` のコメントと同じ）。
       onPostToolUse: (input) => this.#onPostToolUse(input),
+      // **`PostToolUse` と排他である**（Issue #924 — 出荷済みの SDK 実行体を
+      // 実測して確認した。同じ `try/catch` の `try` 側が `PostToolUse` を、
+      // `catch` 側が `PostToolUseFailure` を組み立てる）。⟹ 道具呼び出しは
+      // 必ずどちらか一方だけを発火させるので、両方に登録しても二重記録には
+      // ならない——**片方しか無いままだと、失敗・中断した道具呼び出しが日誌に
+      // 1件も残らない**（`docs/architecture.md`「非対称な可視性」が求める
+      // 「どちらで見たかは日誌に残す」から静かに落ちていた）。
+      onPostToolUseFailure: (input) => this.#onPostToolUseFailure(input),
     });
   }
 
@@ -6059,6 +6082,104 @@ class Clone implements CloneHost {
       actor: cloneToolActor(raw, mainThreadActor),
       tool,
       input: raw?.tool_input,
+    });
+  }
+
+  /**
+   * 失敗・中断した道具呼び出しの合図（`PostToolUseFailure`）を拾う（Issue #924）。
+   *
+   * **`#onPostToolUse` と排他である**（`#buildOptions` の `onPostToolUseFailure`
+   * の doc — 出荷済みの SDK 実行体を実測して確認した排他分岐）。⟹ 1回の道具
+   * 呼び出しにつき、このハンドラと `#onPostToolUse` のどちらか一方だけが呼ばれる。
+   *
+   * **`effort` と `transcript_path` もここで拾う。** どちらも `BaseHookInput`
+   * の欄で `PostToolUseFailureHookInput` にも載る（`PostToolUseHookInput` と
+   * 同じ形）。**拾わない理由が無い** — 排他である以上、直近の道具呼び出しが
+   * 失敗した回だけこの2つを拾わずにいると、次に成功する道具呼び出しが来る
+   * までのあいだ `#effort` と生ログの在り処が古いまま取り残される
+   * （`#onPostToolUse` の同じ2行と同じ理由）。
+   */
+  async #onPostToolUseFailure(input: unknown): Promise<{ continue: true }> {
+    const raw = input as Partial<PostToolUseFailureHookInput> | null | undefined;
+    const level = raw?.effort?.level;
+    if (typeof level === 'string') this.#effort = level;
+    this.#noteTranscriptPath(raw?.transcript_path);
+
+    await this.#journalToolUseFailure(raw, CLONE_ACTOR_ID);
+    return { continue: true };
+  }
+
+  /**
+   * 蒸留のサイドクエリでの、失敗・中断した道具呼び出しを日誌へ残す。
+   *
+   * **`#onDistillToolUse` と同じ理由で足す。** 道具の配置を揃えたのだから
+   * 記録も揃える（片方だけ記録が無いと「蒸留のターンで何をしたか」がどこにも
+   * 残らない）。しかも蒸留は `memory_write` を叩く経路なので、そこの失敗が
+   * 記録されないと「記憶が書かれなかった」が静かに落ちる。
+   *
+   * **effort はここでは拾わない**（`#onDistillToolUse` と同じ理由 — 別
+   * セッションの値を本セッションの観測として持つと嘘になる）。
+   */
+  async #onDistillToolUseFailure(input: unknown): Promise<{ continue: true }> {
+    await this.#journalToolUseFailure(
+      input as Partial<PostToolUseFailureHookInput> | null | undefined,
+      CLONE_DISTILL_ACTOR_ID,
+    );
+    return { continue: true };
+  }
+
+  /**
+   * `PostToolUseFailure` の合図1件を `tool_use` として日誌へ落とす（Issue #924）。
+   *
+   * ## なぜ `#noteDenial` のように `exchange` へ落とさないのか
+   *
+   * 分かれ目は「実行されたか」である。
+   *
+   * - **拒否**（`#noteDenial` が扱う）= 一度も走っていない ⟹ 「自分で手を
+   *   動かした回数」に数えてはいけない ⟹ だから `exchange`
+   * - **失敗**（ここ）= **走った。走った結果として投げた**（だから *Post* で
+   *   ある）⟹ 副作用が在りうる ⟹ **「自分で手を動かした回数」に数えるべき**
+   *   ⟹ だから `tool_use`
+   *
+   * **ただし成功と見分けが付かなくなってはいけない。** `outcome` を立てる
+   * ことで区別する（`schema.ts` の `tool_use.outcome` の doc）。
+   *
+   * ## 自作ツールの除外は成功側と同じ規則をそのまま通す
+   *
+   * `cloneToolJournalsItself` の判定を `#journalToolUse` と共有しているので、
+   * **自作ツールの失敗も、成功と同じ理由で除かれる**——`memory_write` が
+   * 失敗しても、この関数はそれを重ねて書かない。**これは判断であり、
+   * 名指ししておく**: 別の選択肢（失敗だけは自作ツールでも重ねて残す）も
+   * 在ったが、道具ごとに「成功は除く／失敗は残す」という非対称を持ち込むと、
+   * 除外規則を読む側が「この道具の記録はどちらの規則に従うか」をその都度
+   * 確かめる必要が生まれる。自作ツール自身が失敗を記録するかどうかは
+   * その道具のハンドラの責務であって、ここでは踏み込まない。
+   */
+  async #journalToolUseFailure(
+    raw: Partial<PostToolUseFailureHookInput> | null | undefined,
+    mainThreadActor: string,
+  ): Promise<void> {
+    // 名前が読めない扱いも成功側と揃える（`#journalToolUse` と同じ理由）。
+    const tool = typeof raw?.tool_name === 'string' ? raw.tool_name : UNKNOWN_TOOL_NAME;
+    if (cloneToolJournalsItself(tool)) return;
+    await this.#journal({
+      type: 'tool_use',
+      actor: cloneToolActor(raw, mainThreadActor),
+      tool,
+      input: raw?.tool_input,
+      // **`is_interrupt` が `true` のときだけ `'interrupted'`。** それ以外
+      // （`false` または欠け）は `'failed'` とする——`is_interrupt` は
+      // optional なので SDK が付けてこないことがあるが、そのときは「中断だと
+      // 分かっていない」であって「中断ではないと確定している」ではない。
+      // 欠けを第3の値にはせず、安全側（failed）に倒す
+      // （`schema.ts` の `tool_use.outcome` の doc と同じ判断）。
+      outcome: raw?.is_interrupt === true ? 'interrupted' : 'failed',
+      // `error` は無制限長の自由文なので切り詰める（`TOOL_USE_ERROR_EXCERPT`
+      // の doc）。`raw?.error` が読めない形（文字列でない）のときは欄ごと
+      // 省く——作り物の文言で埋めない。
+      ...(typeof raw?.error === 'string'
+        ? { error: excerptLine(raw.error, TOOL_USE_ERROR_EXCERPT) }
+        : {}),
     });
   }
 
@@ -6407,6 +6528,11 @@ class Clone implements CloneHost {
         env: this.#childEnv(),
         ...(this.#cwd === undefined ? {} : { cwd: this.#cwd }),
         onPostToolUse: (input) => this.#onDistillToolUse(input),
+        // **本セッションと同じ理由で足す**（`#buildOptions` の
+        // `onPostToolUseFailure` の doc）。蒸留は `memory_write` を叩く経路
+        // なので、そこの失敗を記録しないと「記憶が書かれなかった」が
+        // 静かに落ちる。
+        onPostToolUseFailure: (input) => this.#onDistillToolUseFailure(input),
       }),
     });
 

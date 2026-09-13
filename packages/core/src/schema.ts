@@ -959,6 +959,43 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * `input` を持つ既存の形はそのまま通り続ける（保証は弱くならない）。**
      */
     input: z.unknown().optional(),
+    /**
+     * この道具呼び出しが失敗・中断したときだけ載る（`PostToolUseFailure` の
+     * 合図。Issue #924）。**欄が無い ＝ 成功。**
+     *
+     * `PostToolUse` はツールの実行が成功したときにしか発火しない
+     * （Issue #924 — 出荷済みの SDK 実行体を実測し、`try` 側で `PostToolUse`
+     * を、`catch` 側で `PostToolUseFailure` を組み立てる排他分岐を確認した。
+     * SDK の型定義そのものは「どちらが発火するか」を明言していない）。
+     * ⟹ **この欄が導入される前から在る `tool_use` の行は、すべて成功で
+     * ある。** だからこの欄を足すのに移行（既存行の書き換え）は要らない —
+     * 「欄が無い」がそのまま「成功だった」を意味し、それは追加より前の行に
+     * 対しても事後的に真である。
+     *
+     * **`failed` と `interrupted` を潰さないこと。** 失敗は「失敗したと
+     * 確定している」、中断は「どこまで進んだか分からない」で、監査の意味が
+     * 違う（`subagent_stall.outcome` の doc「2値を潰さないこと」と同じ
+     * 判断）。`PostToolUseFailureHookInput.is_interrupt` が `true` の
+     * ときだけ `'interrupted'`、それ以外（`false` または欠け）は `'failed'`
+     * とする。**`is_interrupt` は optional なので SDK が付けてこないことが
+     * ある——そのときを第3の値にはしない。** 「中断かどうか分かっていない」
+     * は「中断ではないと確定している」と同じではないが、安全側（失敗として
+     * 扱う）に倒す方が、中断を見逃すより監査上ましである。
+     */
+    outcome: z.enum(['failed', 'interrupted']).optional(),
+    /**
+     * 失敗・中断の理由（`PostToolUseFailureHookInput.error`）。**`outcome`
+     * が載っているときだけ載る。** 「失敗した」というラベルだけでは監査に
+     * ならない——後から人間が読んで「本当に落ちるべきだったか」を判断する
+     * には、何で落ちたかの本文が要る。
+     *
+     * **秘密の露出について**: `tool_use` は既にこのエントリの `input`
+     * （道具の生の引数）をそのまま保存しているので、`error` を足しても
+     * 露出の「種類」自体は増えない。ただし外部（道具・MCP サーバ）が書く
+     * 無制限長の自由文なので、書き込み側（`clone.ts` の
+     * `TOOL_USE_ERROR_EXCERPT`）で切り詰める。
+     */
+    error: z.string().optional(),
   }),
   z.object({
     type: z.literal('memory_update'),

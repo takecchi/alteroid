@@ -92,8 +92,14 @@ const SEARCHABLE_FIELDS_BY_TYPE = {
    */
   subagent_stall: ['text'],
   escalation: ['question', 'answer'],
-  /** `input` は対象外（上の doc）。他に自由文の欄が無い。 */
-  tool_use: [],
+  /**
+   * `input` は対象外（上の doc）が、**`error`（Issue #924）は対象内である。**
+   * `input` を外している理由（jsonb のテキスト化と `JSON.stringify` の不一致）
+   * はここには当たらない——`error` は `z.string().optional()` の**トップレベル
+   * の素の文字列**なので、pg の `entry->>'error'` も JS の直読みも同じ文字列に
+   * なる。3実装で揃うので足せる（`journal-search-contract.ts` で測る）。
+   */
+  tool_use: ['error'],
   memory_update: ['summary'],
   daily_report: ['body', 'unavailable'],
   external_event: ['summary'],

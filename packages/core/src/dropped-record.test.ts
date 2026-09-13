@@ -1261,6 +1261,11 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
           '(2) ツール引数そのもの（`{ command: <シェル行> }` 等）で、この関数が扱う自由文の' +
           '中でもいちばん秘密が載りうる。',
       },
+      // `outcome`（Issue #924）は SDK の排他分岐が決める列挙値で、外部の
+      // 自由入力ではない——`subagent_stall.outcome` と同じ判定基準で tag()。
+      outcome: { emit: 'tag', token: 'outcome' },
+      // `error`（Issue #924）は SDK・道具・MCP サーバが書く自由文なので size()。
+      error: { emit: 'size', token: 'error' },
     },
     memory_update: {
       slug: { emit: 'tag', token: 'slug' },
@@ -1394,6 +1399,8 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       actor: 'manager:mgr-1',
       tool: 'Bash',
       input: { command: SECRET },
+      outcome: 'failed',
+      error: SECRET,
     },
     memory_update: {
       type: 'memory_update',
