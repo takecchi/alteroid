@@ -161,7 +161,8 @@ describe('指名（select({ runnerId })）', () => {
 
   it('同じ名前を名乗る2台が開けているとき失敗する（名前が一意でない）', async () => {
     // **`Registry#get` の線形一致と同じ穴。** 別々の label で登録された2台が、
-    // 同じ `runnerId` を名乗って開けている状況（roadmap M5 PR4 の fencing 待ち）。
+    // 同じ `runnerId` を名乗って開けている状況（fencing #160 が入った後も未解決の
+    // 一意性の穴。個別の穴は #200・#209）。
     const registry = createRunnerRegistry();
     await registry.register({ label: 'label-a', open: async () => new FakeRunner('dup-name') });
     await registry.register({ label: 'label-b', open: async () => new FakeRunner('dup-name') });
