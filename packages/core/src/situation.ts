@@ -521,7 +521,14 @@ function describeSituationInboxBacklog(
     backlog.oldestAt === undefined ? '' : `（最も古いものは ${backlog.oldestAt} から）`;
   const base = `受信箱の未処理 ${backlog.count} 件${oldest}。`;
   if (backlog.count <= INBOX_BACKLOG_LOUD_THRESHOLD) return base;
-  return `⚠ ${base}` + '内訳（種類 / 同一本文 / 配達回数 / 齢）は `manager_list` で割れる。';
+  // **軸の名前はここが出す側と揃える**（#910）。この1行は滞留が閾値を超えている
+  // 間`distill` 以外の全ターンに載るので、ここで古い軸名（`配達回数`）を名乗ると、
+  // クローンは `manager_list` を引く前にその名前を覚える —— 実際に、誤った名前で
+  // 読んだ数字から2つの誤った結論が立ち、その筋で委譲が1本出ている（#910）。
+  // 逐語の出所は `grep -Fn -- '器の入れ替え回数: 0回（＝未配達）' packages/core/src/inbox-backlog.ts`。
+  return (
+    `⚠ ${base}` + '内訳（種類 / 同一本文 / 器の入れ替え回数 / 齢）は `manager_list` で割れる。'
+  );
 }
 
 export function describeSituation(input: {
