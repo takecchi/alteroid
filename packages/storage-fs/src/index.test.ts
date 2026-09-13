@@ -928,7 +928,8 @@ describe('FsPersonaStore', () => {
       expect(afterSecond?.descriptionFreshness.kind).toBe('stale');
       if (afterSecond?.descriptionFreshness.kind !== 'stale') throw new Error('unreachable');
       expect(afterSecond.descriptionFreshness.drift.kind).toBe('at-least');
-      if (afterSecond.descriptionFreshness.drift.kind !== 'at-least') throw new Error('unreachable');
+      if (afterSecond.descriptionFreshness.drift.kind !== 'at-least')
+        throw new Error('unreachable');
       expect(afterSecond.descriptionFreshness.drift.baselineBytes).toBe(firstBaselineBytes);
       expect(afterSecond.descriptionFreshness.drift.baselineAt).toBe(firstBaselineAt);
       // かつ deltaBytes は「2回目の追記だけ」ではなく、基準点からの累計
