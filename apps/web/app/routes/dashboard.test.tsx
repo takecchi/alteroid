@@ -15,7 +15,14 @@ import { JournalFeedProvider } from '~/hooks/journal-feed';
 import { summarizeJournalEntry } from '~/hooks/queries';
 import type { JournalLive } from '~/hooks/use-journal-live';
 import type { JournalEntry } from '~/lib/types';
-import { json, Providers, stubFetch, storeTestBaseUrl, type FetchStub } from '~/test-support';
+import {
+  json,
+  Providers,
+  renderedMoneyTexts,
+  stubFetch,
+  storeTestBaseUrl,
+  type FetchStub,
+} from '~/test-support';
 
 import Dashboard from './dashboard';
 
@@ -101,18 +108,21 @@ function renderDashboard(
 }
 
 describe('ダッシュボードの「今日の利用」', () => {
-  it('台帳がまだ空（since が null）なら $0.00 と言わない', async () => {
+  it('台帳がまだ空（since が null）なら金額を1つも出さない', async () => {
     renderDashboard({ rows: [], since: null, beforeLedger: false });
 
     expect(await screen.findByText('まだ記録が無い。')).toBeTruthy();
-    expect(screen.queryByText('$0.00')).toBeNull();
+    // ⛔ ここは `queryByText('$0.00')` だった。**`formatUsd` は `$0.00` を
+    // 原理的に出さない**（`$1` 未満は小数4桁）ので、あの行は入力が何であっても
+    // 真で、金額が出たかどうかを一度も測っていなかった（#935）。
+    expect(renderedMoneyTexts()).toEqual(new Set());
   });
 
-  it('beforeLedger が真なら 0 ではなく記録が無いと言う', async () => {
+  it('beforeLedger が真なら、0 ではなく記録が無いと言い、金額を1つも出さない', async () => {
     renderDashboard({ rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: true });
 
     expect(await screen.findByText(/今日の分はまだ記録が無い/)).toBeTruthy();
-    expect(screen.queryByText('$0.00')).toBeNull();
+    expect(renderedMoneyTexts()).toEqual(new Set());
   });
 
   it('金額が出ているときは但し書きも一緒に出す', async () => {
@@ -132,6 +142,10 @@ describe('ダッシュボードの「今日の利用」', () => {
 
     expect(await screen.findByText('$0.0200')).toBeTruthy();
     expect(screen.getByText(USAGE_ESTIMATE_NOTICE)).toBeTruthy();
+    // ⭐ **上の2本の陰性対照の対照である**（`renderedMoneyTexts` の doc）。網が壊れて
+    // 常に空集合を返すようになったら、ここだけが赤くなる —— 陰性対照の側は緑のままで、
+    // 「空で緑」と「正しく緑」は区別が付かない。
+    expect(renderedMoneyTexts()).toEqual(new Set(['$0.0200']));
   });
 });
 

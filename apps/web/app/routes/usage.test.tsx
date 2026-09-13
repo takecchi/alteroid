@@ -10,7 +10,7 @@ import { USAGE_ESTIMATE_NOTICE, ZERO_USAGE } from '@alteroid/core/usage';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
+import { json, Providers, renderedMoneyTexts, stubFetch, storeTestBaseUrl } from '~/test-support';
 
 import Usage from './usage';
 
@@ -111,7 +111,7 @@ function axisCard(title: string): HTMLElement {
 }
 
 describe('/usage 画面', () => {
-  it('台帳がまだ空（since が null）なら、$0.00 ではなく「まだ記録が無い」と言う', async () => {
+  it('台帳がまだ空（since が null）なら、金額を1つも出さず「まだ記録が無い」と言う', async () => {
     stubUsage({ rows: [], since: null, beforeLedger: false });
 
     render(
@@ -121,7 +121,8 @@ describe('/usage 画面', () => {
     );
 
     expect(await screen.findByText(/台帳にはまだ1件も記録が無い/)).toBeTruthy();
-    expect(screen.queryByText('$0.00')).toBeNull();
+    // ⛔ ここは `queryByText('$0.00')` だった（#935。理由は `renderedMoneyTexts` の doc）。
+    expect(renderedMoneyTexts()).toEqual(new Set());
   });
 
   it('beforeLedger が真なら、0 ではなく記録が無い範囲だと明示する', async () => {
@@ -139,9 +140,8 @@ describe('/usage 画面', () => {
 
     expect(await screen.findByText(/その範囲には記録が無い/)).toBeTruthy();
     expect(await screen.findByText(/照会した範囲は台帳の始点より前にかかっている/)).toBeTruthy();
-    expect(screen.queryByText('$0.00')).toBeNull();
     // 「合計」の見出し自体は出るが、金額は出ない（記録が無いと言うだけ）。
-    expect(screen.queryByText(/^\$/)).toBeNull();
+    expect(renderedMoneyTexts()).toEqual(new Set());
   });
 
   it('但し書き（推定値であり請求明細ではない）を必ず出す', async () => {
@@ -176,7 +176,10 @@ describe('/usage 画面', () => {
     // 合計・日別・マネージャー別・モデル別のすべてに同じ金額がそのまま出る
     // （行が1件しかないので全軸で一致する）。
     expect((await screen.findAllByText('$0.0123')).length).toBeGreaterThan(0);
-    expect(screen.queryByText('$0.00')).toBeNull();
+    // ⭐ **直上の陰性対照の対照でもある**（`renderedMoneyTexts` の doc）。この行が
+    // 赤くならない限り、「金額を1つも出さない」側の歯が空でないことは言えない ——
+    // 網が壊れて常に空集合を返しても、陰性対照だけなら緑のままである。
+    expect(renderedMoneyTexts()).toEqual(new Set(['$0.0123']));
   });
 
   it('日別・マネージャー別・モデル別の内訳を出す', async () => {

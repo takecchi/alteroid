@@ -12834,7 +12834,11 @@ describe('onUsageObservation（回し手へ渡す観測）', () => {
         createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
       ]),
     });
-    return { clone, calls, seen };
+    // **届いた報告そのものを見られるようにする**（#935）。`calls`（SDK が何回
+    // 呼ばれたか）だけでは「ターンが壊れなかった」までしか言えず、**どの報告が
+    // 届いたか**——この節がいちばん測りたいこと——に一度も触れない。
+    const { events } = wireEvents(clone, 'conv-1');
+    return { clone, calls, seen, events };
   }
 
   /**
@@ -12975,19 +12979,52 @@ describe('onUsageObservation（回し手へ渡す観測）', () => {
     expect(seen[0]).not.toHaveProperty('observedBy');
   });
 
+  /**
+   * ⭐ **この歯は「空で緑」だった**（#935）。唯一の表明が
+   * `expect(calls.length).toBeGreaterThan(0)` で、その値は**直前の
+   * `await waitFor(() => calls.length > 0)` が既に真にしたもの**だった
+   * （`waitFor` は打ち切りで throw するので、次の行に届いた時点で必ず 1 以上）。
+   * ⟹ 名乗っている「**別の失敗で上限の報告を置き換えない**」を、どの行も
+   * 測っていなかった。
+   *
+   * **測るべきものは3つある**（`#observeForTokenRotation` の doc が言っている
+   * とおりの3つである）:
+   *
+   * 1. **上限の報告がそのまま人間へ届く** —— `usage_limited` の本文が上限の文言で
+   *    あって、「回し手が落ちた」ではないこと。**ここが置き換わるのが、この節が
+   *    名指ししている欠陥である。**
+   * 2. **ターンは終端まで走る** —— 回し手の失敗で途中で切れない
+   * 3. **回し手の失敗は黙って消えない** —— 跡（`noteDroppedRecord`）が残る。
+   *    ⛔ ここを落とすと「握り潰してよい」に化ける
+   */
   it('回し手が投げてもターンを壊さない（別の失敗で上限の報告を置き換えない）', async () => {
-    const { clone, calls } = cloneObserving({
+    const limitText = "You've hit your org's monthly spend limit";
+    const { clone, calls, events } = cloneObserving({
       onObserve: () => Promise.reject(new Error('回し手が落ちた')),
-      sdkOptions: {
-        resultSubtype: 'error_during_execution',
-        resultText: "You've hit your org's monthly spend limit",
-      },
+      sdkOptions: { resultSubtype: 'error_during_execution', resultText: limitText },
     });
-    say(clone);
-    // セッションは開き、ターンは最後まで走る。
-    await waitFor(() => calls.length > 0, 'セッションが開くこと');
-    clone.stop();
-    expect(calls.length).toBeGreaterThan(0);
+
+    const lines = await captureStderr(async () => {
+      say(clone);
+      // セッションは開き、**ターンは終端（error / done）まで走る。**
+      await waitForTerminal(events);
+    });
+    await clone.stop();
+
+    // 1. 上限の報告が、回し手の失敗に置き換えられずに届く。
+    const limited = events.filter((event) => event.type === 'usage_limited');
+    expect(limited).toHaveLength(1);
+    const message = (limited[0] as Extract<ChatStreamEvent, { type: 'usage_limited' }>).message;
+    expect(message).toContain(limitText);
+    expect(message).not.toContain('回し手が落ちた');
+
+    // 2. セッションは実際に開いている（回し手の失敗が起動そのものを潰していない）。
+    expect(calls.filter((call) => call.kind === 'session')).not.toHaveLength(0);
+
+    // 3. 回し手の失敗は黙って消えず、跡が残る。⛔ この行を落とすと「握り潰して
+    //    よい」に化ける（`#observeForTokenRotation` の catch は跡を残すためだけに在る）。
+    const dropped = lines.filter((line) => line.includes('認証トークンの切替')).join('\n');
+    expect(dropped).toContain('回し手が落ちた');
   });
 
   /**
