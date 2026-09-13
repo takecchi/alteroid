@@ -64,6 +64,39 @@ import type { CooldownSource } from './token-pool.js';
 const SITUATION_HEAD = '[system] いまの全体';
 
 /**
+ * 節が**いつ数えた値か**を名乗る短い形（UTC の時刻だけ。#902）。
+ *
+ * ## なぜ要るのか —— 節は1つではない。**セッションに溜まる**
+ *
+ * この節は `clone.ts` の `#runTurn` が `#pushInput` で**ユーザー入力の本文へ
+ * 連結する**。⟹ **会話履歴に残る。** ターンが N 回走れば、文脈には N 個の
+ * 「いまの全体」が並ぶ。**そしてどれも現在形で断定する。**
+ *
+ * ⟹ 🔑 **読む側には、どれがいちばん新しいのかを節の中から判定する手段が
+ * 1つも無かった。** 数が変わっていなければ、古い節と新しい節は**1バイトも
+ * 違わない**（#902 の実測）。
+ *
+ * ## ⚠️ 「この行を組んだ時点では」という*言い回し*では、これは直らない
+ *
+ * PR #898 が新しい行（有効性の断り書き）で採ったのはその形で、**1つの行が
+ * 自分の断定を弱める**目的には足りている。**しかしこの節の欠陥は断定の強さ
+ * ではなく、`同じ顔をした節が複数ある`ことである** —— 全部が「組んだ時点では」
+ * と名乗っても、**どれがいちばん新しいかは依然として分からない。**
+ * ⟹ **区別を作れるのは、実際に違う値を持つ時刻そのものだけである。**
+ *
+ * ## ⚠️ 秒までしか出さない（そして日付を出さない）
+ *
+ * **同じ秒に2つの節が積まれれば、やはり区別が付かない。** 実運用のターンは
+ * 秒〜分の間隔なので実害は無いと踏んでいるが、**「必ず区別できる」とは
+ * 書かない。** 日付を出さないのも同じ割り切りで、**24時間ちょうど離れた2つの
+ * 節は取り違えうる**（1つの文脈窓にそれが起きるとは考えていない）。
+ * ⟹ どちらも**毎ターンの文字数を増やさない**ことを優先した結果である。
+ */
+function readAtLabel(at: number): string {
+  return `${new Date(at).toISOString().slice(11, 19)}Z`;
+}
+
+/**
  * `lost` の区分の見出し（#688）。**`status` の綴りを括弧で添える。**
  *
  * ここを読んだクローンが次にやるのは `manager_list status:["lost"]` である
@@ -557,8 +590,12 @@ export function describeSituation(input: {
     .map(([state, count]) => `${state} ${count}`)
     .join(' / ');
   const inboxBacklogLine = describeSituationInboxBacklog(input.backlog);
+  // **`at` はここでも使う（#902）。** かつてこの値はトークンの行の判定にしか
+  // 渡っておらず、**節の本体は自分がいつの値かを1文字も名乗らなかった。**
+  // {@link readAtLabel} の doc（節は会話履歴に溜まる）。
+  const at = input.at ?? Date.now();
   return block([
-    `${SITUATION_HEAD}（数えた材料だけ。ここから何をするかは決めない）。`,
+    `${SITUATION_HEAD}（${readAtLabel(at)} に数えた材料だけ。ここから何をするかは決めない）。`,
     // **`lost` の区分だけ 0 のとき出さない**（上の doc の2つの理由）。残りの5つは
     // 0 でも出るので、5つを足して `total` に一致すれば `lost` は 0 だと*算術で*
     // 読める——**「数えていない」と読む余地が構造的に無い。**
@@ -600,7 +637,7 @@ export function describeSituation(input: {
           describeTokenSituation({
             tokens: input.tokens,
             active: input.active,
-            at: input.at ?? Date.now(),
+            at,
           }),
         ]),
   ]);
@@ -615,9 +652,12 @@ export function describeSituation(input: {
  * `runner-swap-notice.ts` が `'none-affected'`（0本と数え切れた）と
  * `'ledger-unreadable'`（数えられなかった）を型で分けているのと同じ理由である。
  */
-export function describeSituationUnavailable(error: unknown): string {
+export function describeSituationUnavailable(error: unknown, at: number = Date.now()): string {
   return block([
-    `${SITUATION_HEAD}を数えられなかった: ${String(error)}`,
+    // **こちらも時刻を名乗る（#902）。** 数えられた節だけが名乗る形にすると、
+    // 「非対称そのものが理由を要求する」という #902 の指摘を、**この関数が
+    // そっくり作り直すことになる。**
+    `${SITUATION_HEAD}を数えられなかった（${readAtLabel(at)} 時点）: ${String(error)}`,
     'これは「全部片付いている」ではなく「**数えられなかった**」である。' +
       '本数が要るなら `manager_list` / `runner_list` を自分で呼ぶこと。',
   ]);
