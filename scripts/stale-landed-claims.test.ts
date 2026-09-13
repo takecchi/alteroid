@@ -7,14 +7,17 @@ import { describe, expect, it } from 'vitest';
 
 /**
  * **着地した機能を「待ち」「無い」と言い続けている散文を測る歯**（着地元は
- * #944。11箇所の実例は同じ PR の本文にある）。
+ * #944。13箇所の実例は同じ PR の本文にある——最初の11件に加え、"fencing"
+ * という語を使わずに同じ主張をしていた2件（`onSwap` の doc、
+ * `railway/README.md` の既知のざらつき6番）を、マネージャーの検算で
+ * 射程内と確認して追加した）。
  *
  * ## この歯が測るもの・測らないもの
  *
  * `#942` の `scripts/agents-md-references.test.ts` が測るのは**参照の形**
  * （行番号で指しているか、逐語が現物に当たるか）だけで、`roadmap M5 PR4`
  * のような散文の**内容**は1件も測っていない（その歯自身が同じことを逐語で
- * 言っている）。ここが埋めるのはその隙間だが、**埋めるのは「この11件と
+ * 言っている）。ここが埋めるのはその隙間だが、**埋めるのは「この13件と
  * 同じ言い方の再発」だけである。** 字面（正規表現）で追う以上、新しい言い回し
  * で同じ主張が書かれても、この歯は1件も測っていない——**測っていないものを
  * 測ったように見せないこと**（この注意そのものが上の歯の作法である）。
@@ -141,7 +144,14 @@ const FENCING_FORBIDDEN: readonly RegExp[] = [
   /fencing[^。\n]{0,30}待ち/,
   /fencing(?:（[^）]{0,40}）)?が無い/,
   /fencing[^。\n]{0,10}(?:が|は)[^。\n]{0,20}入って(?:から)/,
-  /解決するのは fencing[^。\n]{0,20}である/,
+  // 「解決するのは fencing（…）である」「…形にするのは fencing（…）である」の
+  // どちらも捕まえる（#944 への追い作業。railway/README.md「既知のざらつき」6番の
+  // 原文は後者の形で、"待ち" 系の語を1つも含まないため上のパターンには掛からない）。
+  /のは fencing[^。\n]{0,20}である/,
+  // onSwap / onLost の doc がそれぞれ持っていた「貸し出し期限（lease）が揃って
+  // 初めて…できる」という言い回し。"fencing" の語を使っていないため上の
+  // パターンには一切掛からないが、同じ「まだ着地していないかのように書く」形。
+  /貸し出し期限（lease）が揃って初めて/,
 ];
 
 const RELOCATION_FORBIDDEN: readonly RegExp[] = [/移送は[^。\n]{0,30}fencing[^。\n]{0,30}の後/];
@@ -192,6 +202,86 @@ describe('着地した機能を「待ち」と言い続けている散文（fenc
         {
           file: 'synthetic.md',
           text: '二重実行を止める仕組みは roadmap M5 PR4 の fencing 待ちの既知のギャップである。',
+        },
+      ],
+      [
+        {
+          feature: 'fencing（合成・未着地のふり）',
+          isLanded: false,
+          forbidden: FENCING_FORBIDDEN,
+          redMeaning: '合成テスト',
+        },
+      ],
+    );
+    expect(violations).toEqual([]);
+  });
+
+  it('陽性対照: 「のは fencing…である」形（"待ち"を含まない）も検出される（railway/README.md「既知のざらつき」6番の原文）', () => {
+    const violations = findStaleLandedClaims(
+      [
+        {
+          file: 'synthetic.md',
+          text: '片側だけで言える形にするのは fencing（roadmap M5 PR4）である',
+        },
+      ],
+      [
+        {
+          feature: 'fencing（合成）',
+          isLanded: true,
+          forbidden: FENCING_FORBIDDEN,
+          redMeaning: '合成テスト',
+        },
+      ],
+    );
+    expect(violations.length).toBeGreaterThan(0);
+  });
+
+  it('陰性対照: 「のは fencing…である」形も、目印が無ければ許される', () => {
+    const violations = findStaleLandedClaims(
+      [
+        {
+          file: 'synthetic.md',
+          text: '片側だけで言える形にするのは fencing（roadmap M5 PR4）である',
+        },
+      ],
+      [
+        {
+          feature: 'fencing（合成・未着地のふり）',
+          isLanded: false,
+          forbidden: FENCING_FORBIDDEN,
+          redMeaning: '合成テスト',
+        },
+      ],
+    );
+    expect(violations).toEqual([]);
+  });
+
+  it('陽性対照: 「貸し出し期限（lease）が揃って初めて」形（onSwap / onLost の元の文言）も検出される', () => {
+    const violations = findStaleLandedClaims(
+      [
+        {
+          file: 'synthetic.md',
+          text: '貸し出し期限（lease）が揃って初めて引き取りの契機にできる。この口が出すのは知らせだけである。',
+        },
+      ],
+      [
+        {
+          feature: 'fencing（合成）',
+          isLanded: true,
+          forbidden: FENCING_FORBIDDEN,
+          redMeaning: '合成テスト',
+        },
+      ],
+    );
+    expect(violations.length).toBeGreaterThan(0);
+  });
+
+  it('陰性対照: 「貸し出し期限（lease）が揃って初めて」形も、目印が無ければ許される', () => {
+    const violations = findStaleLandedClaims(
+      [
+        {
+          file: 'synthetic.md',
+          text: '貸し出し期限（lease）が揃って初めて引き取りの契機にできる。この口が出すのは知らせだけである。',
         },
       ],
       [
