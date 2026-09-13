@@ -10139,7 +10139,7 @@ describe('システムプロンプトの道具一覧', () => {
  * この歯は `test` だけで踏める。
  */
 describe('自作ツールの日誌名簿（SELF_JOURNALING_CLONE_TOOLS / TRACELESS_CLONE_TOOLS）', () => {
-  it('CLONE_TOOL_NAMES の全37本が、2つの名簿のちょうど一方に属する', () => {
+  it('CLONE_TOOL_NAMES の全部が、2つの名簿のちょうど一方に属する', () => {
     const selfJournaling = new Set<string>(SELF_JOURNALING_CLONE_TOOLS);
     const traceless = new Set<string>(TRACELESS_CLONE_TOOLS);
 
@@ -14927,8 +14927,8 @@ describe('journal.append 失敗時の応答本文: 17箇所すべてで道具名
 
   /**
    * ⭐⭐ 弱点の手当て: `CASES` の道具名の集合を、手で並べた一覧とではなく
-   * `SELF_JOURNALING_CLONE_TOOLS`（18本。#698 で `archive_remove` が
-   * 加わった）から導いた期待値と突き合わせる。
+   * `SELF_JOURNALING_CLONE_TOOLS`（`archive_remove` は #698 で加わった）
+   * から導いた期待値と突き合わせる。
    *
    * `manager_send` / `manager_stop` を除く理由: この2本は `ManagerPool` の
    * ガード付き `#journal`（`clone.ts`）を通るので `appendJournalOrThrow` を
@@ -14936,7 +14936,7 @@ describe('journal.append 失敗時の応答本文: 17箇所すべてで道具名
    * 書く」という性質の名簿であって、その書き方が `appendJournalOrThrow`
    * 経由とは限らない。
    *
-   * これにより、19本目の「自前で journal.append を呼ぶ道具」が
+   * これにより、新しく「自前で journal.append を呼ぶ道具」が
    * `SELF_JOURNALING_CLONE_TOOLS` に足されたとき、`CASES` にケースを
    * 足し忘れるとこの歯が「ケースが足りない」と言って赤くなる。
    */

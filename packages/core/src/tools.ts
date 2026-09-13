@@ -331,7 +331,7 @@ export const CLONE_TOOL_NAMES = [
 export type CloneToolName = (typeof CLONE_TOOL_NAMES)[number];
 
 /**
- * 自作ツール 37 本のうち、**ハンドラが自前で日誌へ書く 18 本**
+ * `CLONE_TOOL_NAMES` の道具のうち、**ハンドラが自前で日誌へ書く側**
  * （`memory_write` は `memory_update`、`journal_write` は本文、`manager_start`
  * は台帳と `tool_use`、という形で自分の跡を残す。`archive_remove` は #698 で
  * 加わった）。
@@ -342,6 +342,13 @@ export type CloneToolName = (typeof CLONE_TOOL_NAMES)[number];
  * **道具を1本足すときは、ここか {@link TRACELESS_CLONE_TOOLS} のどちらかへ
  * 必ず入れること。** 入れ忘れ・両方へ入れる・`CLONE_TOOL_NAMES` に無い名前を
  * 書く、のどれも `typecheck` を落とす（下の型チェックが担保する）。
+ *
+ * ⚠️ **この2つの名簿の現在の本数を、ここにも {@link TRACELESS_CLONE_TOOLS}
+ * にも書かない。** 散文に書いた本数は道具を1本足すたびに腐り、しかも
+ * 腐ったことは読む側からは分からない——数え上げの持ち主は `CLONE_TOOL_NAMES`
+ * という配列そのものであって、散文ではない。現在の内訳が要るなら
+ * `SELF_JOURNALING_CLONE_TOOLS.length` / `TRACELESS_CLONE_TOOLS.length` を
+ * 直接数えること。
  */
 export const SELF_JOURNALING_CLONE_TOOLS = [
   'memory_write',
@@ -366,8 +373,8 @@ export const SELF_JOURNALING_CLONE_TOOLS = [
 ] as const satisfies readonly CloneToolName[];
 
 /**
- * 自作ツール 37 本のうち、**ハンドラが自前では日誌へ書かない 19 本**（読む道具。
- * `memory_list` / `journal_read` など）。
+ * `CLONE_TOOL_NAMES` の道具のうち、**ハンドラが自前では日誌へ書かない側**
+ * （読む道具。`memory_list` / `journal_read` など）。
  *
  * `clone.ts` の `#journalToolUse` は、この名簿に載る道具の `tool_use` を残す
  * ——除くと `docs/architecture.md`「非対称な可視性」が求める「どちらで見たかは
