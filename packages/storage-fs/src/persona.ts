@@ -55,13 +55,26 @@ interface MemoryIndexEntry {
    */
   describedAt?: string;
   /**
-   * `describedAt` を立てた時点の本文サイズ（bytes）。#913。**`describedAt`
-   * と必ず同時に進む**（`nextDescribedState` が1つのオブジェクトで両方を
-   * 返すので、片方だけ進む形は型で作れない）。`read()` が返す `bytes`
-   * （`stats.size`）と同じ測り方——ここが1バイトでもずれると、全文書が
-   * 「要旨を書いた直後から少し変わっている」に化ける。
+   * 基準点（`describedBytesAt`）を立てた時点の本文サイズ（bytes）。
+   * #913 / #821 残課題。**`describedBytesAt` と必ず同時に進む**
+   * （`nextDescribedState` が1つのオブジェクトで両方を返すので、片方だけ
+   * 進む形は型で作れない）。`read()` が返す `bytes`（`stats.size`）と同じ
+   * 測り方——ここが1バイトでもずれると、全文書が「基準点を立てた直後から
+   * 少し変わっている」に化ける。
+   *
+   * **`describedAt` と必ず同時に進むわけではない。** #821 残課題により、
+   * 本文だけの書き込みでも基準点が無ければここが立つ（`describedAt` は
+   * 据え置かれたまま）——`nextDescribedState` の doc の分岐3を見よ。
    */
   describedBytes?: number;
+  /**
+   * `describedBytes` を測った時刻。#913 / #821 残課題。**`describedAt`
+   * （要旨を書き直した時刻）とは限らない**——基準点が無いまま本文だけが
+   * 書かれたときは、その書き込みの直前の `updatedAt` になる
+   * （`nextDescribedState` の doc）。`describedBytes` が無ければ意味を
+   * 持たない。
+   */
+  describedBytesAt?: string;
   /**
    * この slug が作られた時刻。**一度定まったら変わらない**
    * （`markHumanTouched` の単調非減少とも違う——単調非減少ですらなく、
@@ -276,6 +289,7 @@ export class FsPersonaStore implements PersonaStore {
         updatedAt,
         describedAt: index[slug]?.describedAt,
         describedBytes: index[slug]?.describedBytes,
+        describedBytesAt: index[slug]?.describedBytesAt,
         currentBytes: stats.size,
       });
       return {
@@ -318,7 +332,9 @@ export class FsPersonaStore implements PersonaStore {
     // **describedAt / describedBytes の判定に要る「書く前の内容」を先に
     // 控える。** 存在しない slug（新規作成）なら null——`nextDescribedState`
     // はその場合 `description` が「無い→在る」に変わったとみなし、新しい
-    // describedAt / describedBytes を立てる。
+    // describedAt / describedBytes を立てる。**`before` の `bytes` /
+    // `updatedAt` は、基準点がまだ無いときの新しい基準点の候補としても使う
+    // （#821 残課題）——「この書き込みの直前の状態」を渡せる唯一の場所。
     const before = await this.read(slug);
     const path = this.#path(slug);
     await mkdir(this.#dir, { recursive: true });
@@ -334,19 +350,25 @@ export class FsPersonaStore implements PersonaStore {
     // ここで更新対象に含めないことである）。
     const index = await this.#readIndex();
     const priorEntry = index[slug];
-    // **describedAt / describedBytes も同じ唯一の通り道で進める。** 書き手は
-    // どちらも直接書けない（`MemoryIndexEntry.describedAt` / `.describedBytes`
-    // の doc）——ここが `description` の新旧を比べて、変わっていれば
-    // `written.updatedAt` / `written.bytes` と同じ値に確定させる（変わって
-    // いなければ両方据え置く）。同じ値を使うのは、直後の読み出しが必ず
-    // `fresh`（かつ `deltaBytes: 0`）になるようにするためである（`describedAt`
-    // をここで別に採番すると mtime の精度差で `stale` に化けうるのと同じ理由で、
-    // `describedBytes` も `written.bytes` 以外の値を使うと1バイトずれうる）。
-    const { describedAt, describedBytes } = nextDescribedState({
+    // **describedAt / describedBytes / describedBytesAt も同じ唯一の通り道で
+    // 進める。** 書き手はどれも直接書けない（`MemoryIndexEntry` の doc）
+    // ——ここが `description` の新旧を比べて、変わっていれば `written.updatedAt` /
+    // `written.bytes` と同じ値に確定させる。変わっていなければ、既に基準点が
+    // 在ればそのまま据え置き、無ければ「書く前の状態」（`before`）を新しい
+    // 基準点として立てる（#821 残課題。`nextDescribedState` の doc の分岐3）。
+    // 要旨を書き直したときに `written.updatedAt` / `written.bytes` と同じ値を
+    // 使うのは、直後の読み出しが必ず `fresh`（かつ `deltaBytes: 0`）になる
+    // ようにするためである（`describedAt` をここで別に採番すると mtime の
+    // 精度差で `stale` に化けうるのと同じ理由で、`describedBytes` も
+    // `written.bytes` 以外の値を使うと1バイトずれうる）。
+    const { describedAt, describedBytes, describedBytesAt } = nextDescribedState({
       priorContent: before?.content ?? null,
       nextContent: written.content,
       priorDescribedAt: priorEntry?.describedAt,
       priorDescribedBytes: priorEntry?.describedBytes,
+      priorDescribedBytesAt: priorEntry?.describedBytesAt,
+      priorBytes: before?.bytes,
+      priorUpdatedAt: before?.updatedAt,
       writtenAt: written.updatedAt,
       writtenBytes: written.bytes,
     });
@@ -367,6 +389,7 @@ export class FsPersonaStore implements PersonaStore {
       contentSha256: sha256Hex(written.content),
       describedAt,
       describedBytes,
+      describedBytesAt,
       createdAt,
     };
     await this.#writeIndex(index);
@@ -384,6 +407,7 @@ export class FsPersonaStore implements PersonaStore {
         describedAt,
         updatedAt: written.updatedAt,
         describedBytes,
+        describedBytesAt,
         currentBytes: written.bytes,
       }),
     };

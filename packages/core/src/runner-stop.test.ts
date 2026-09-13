@@ -27,8 +27,10 @@ import { runnerEventSchema, type RunnerEvent } from './runner-protocol.js';
  *    `SubagentStop`（`runner-subagent-stop.test.ts`）は #570 の追跡で「起こし直す」側へ
  *    変わっているので、**こちらが同じ道を歩いていないこと**を検算する歯である。
  * 2. **在り高の内訳が値で割れること。** 所有者（マネージャー自身／作業者／委譲そのもの／
- *    引けなかった）と `status`（走っている／終わった／分からない）の4×3が、既存の
- *    `#backgroundTaskOwners` だけから引けている。
+ *    控えられない種類／引けなかった）と `status`（走っている／終わった／分からない）の
+ *    5×3が、既存の `#backgroundTaskOwners` だけから引けている。**5つ目（控えられない種類）は
+ *    `OWNER_RECORDABLE_TASK_TYPES` を置いたときに足した** —— それまでは `subagent` 以外が
+ *    すべて「引けなかった」へ倒れており、`Monitor` / `Workflow` が正常なまま計器の故障に見えていた。
  *
  * ## ⚠️ この歯の弱さ（⛔ 書かずに置くと、次の人が守られていると思う）
  *
@@ -307,19 +309,77 @@ describe('Stop の観測 —— 在り高が残っている回（#861）', () =>
 
     const text = stopNotes(events)[0]?.text ?? '';
     expect(text).toContain('委譲そのもの 1件');
+    expect(text).toContain('控えられない種類 0件');
     expect(text).toContain('引けなかった 0件');
     expect(text).toContain('owner=delegation');
     expect(text).not.toContain('所有者を引けなかった**');
   });
 
-  it('表に無く type も subagent でない分は owner=unresolved として、計器を疑う行を足す', async () => {
+  it('表に無く、所有者を控えられる種類（shell）の分は owner=unresolved として、計器を疑う行を足す', async () => {
     const { started, events } = await startSession();
 
     await fireStop(started.options, { ...STOP_BASE, background_tasks: [shellTask('bg-orphan')] });
 
     const text = stopNotes(events)[0]?.text ?? '';
+    expect(text).toContain('控えられない種類 0件');
     expect(text).toContain('引けなかった 1件');
     expect(text).toContain('owner=unresolved');
+    expect(text).toContain('計器のほうを疑う');
+  });
+
+  /**
+   * ⭐ **判定は「性質」を測る。「実例」ではない**（#570 / #861）。
+   *
+   * 所有者を控えられるのは `OWNER_RECORDABLE_TASK_TYPES`（いまは `shell` だけ）で、
+   * `Monitor` / `Workflow` / 遠隔の `Task` はどれも `tool_response` に
+   * `backgroundTaskId` を持たない ⟹ **表に載らないのが正常である。**
+   *
+   * **ここは PR #594 の除外（`type !== 'subagent'`）が落としていた4件である** ——
+   * 除外が「表に無いのが正常」という性質ではなく、その実例の1つ（委譲そのもの）を
+   * 測っていたため、設計どおりに動いているのに「計器を疑え」という診断が出ていた。
+   *
+   * ⛔ **直下の（対照）と対で読むこと。** こちらだけなら、診断そのものを消しても緑になる。
+   * ⛔ **1件では足りない。** 種類を1つだけ挙げると「その綴りだけを除外する」という、
+   * 同じ形の誤り（実例を測る条件）がまた通る。
+   */
+  const NOT_RECORDABLE_TYPES = ['monitor', 'workflow', 'local_workflow', 'remote_agent'];
+
+  it.each(NOT_RECORDABLE_TYPES)(
+    'type=%s は表に無くても owner=unrecordable として数え、「引けなかった」に混ぜない',
+    async (type) => {
+      const { started, events } = await startSession();
+
+      await fireStop(started.options, {
+        ...STOP_BASE,
+        background_tasks: [{ id: `bg-${type}`, type, status: 'running', description: '背景' }],
+      });
+
+      const text = stopNotes(events)[0]?.text ?? '';
+      expect(text).toContain('控えられない種類 1件');
+      expect(text).toContain('引けなかった 0件');
+      expect(text).toContain('owner=unrecordable');
+      expect(text).not.toContain('所有者を引けなかった**');
+    },
+  );
+
+  it('（対照）控えられない種類と shell が混ざったら、別々に数えて診断は shell の分だけで出る', async () => {
+    const { started, events } = await startSession();
+
+    await fireStop(started.options, {
+      ...STOP_BASE,
+      background_tasks: [
+        shellTask('bg-orphan'),
+        { id: 'bg-monitor', type: 'monitor', status: 'running', description: '監視' },
+      ],
+    });
+
+    const text = stopNotes(events)[0]?.text ?? '';
+    expect(text).toContain('控えられない種類 1件');
+    expect(text).toContain('引けなかった 1件');
+    expect(text).toContain('owner=unrecordable');
+    expect(text).toContain('owner=unresolved');
+    // **診断そのものは消していない**（消したらこの行が落ちる）。
+    expect(text).toContain('所有者を引けなかった**');
     expect(text).toContain('計器のほうを疑う');
   });
 

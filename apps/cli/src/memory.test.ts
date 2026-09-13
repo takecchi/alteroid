@@ -310,4 +310,41 @@ describe('freshnessMarker（CLI 側の印。core と別実装だが同じ理由�
   it('absent は何も出さない', () => {
     expect(freshnessMarker({ kind: 'absent' })).toBe('');
   });
+
+  /**
+   * #821 残課題: `at-least`（基準点はあるが要旨を書いた時点のものではない）
+   * を `measured`（% つき）とも `unrecorded` とも別の言葉で出す。下限を
+   * 確定値に見せる変異——`at-least` を `measured` と同じ形式で言わせる——を
+   * ここで検出する。`baselineAt` も刷らない。
+   */
+  it('at-least は measured（%つき）とも unrecorded とも別の言葉で出る。baselineAt は刷らない（#821 残課題）', () => {
+    const atLeast = freshnessMarker({
+      kind: 'stale',
+      staleForMs: 60 * 60 * 1000,
+      drift: {
+        kind: 'at-least',
+        baselineBytes: 1000,
+        baselineAt: '2026-08-20T12:00:00Z',
+        currentBytes: 1200,
+        deltaBytes: 200,
+      },
+    });
+    const measured = freshnessMarker({
+      kind: 'stale',
+      staleForMs: 60 * 60 * 1000,
+      drift: { kind: 'measured', describedBytes: 1000, currentBytes: 1200, deltaBytes: 200 },
+    });
+    const unrecorded = freshnessMarker({
+      kind: 'stale',
+      staleForMs: 60 * 60 * 1000,
+      drift: { kind: 'unrecorded' },
+    });
+
+    expect(atLeast).not.toBe(measured);
+    expect(atLeast).not.toBe(unrecorded);
+    expect(atLeast).toContain('以上変わった');
+    expect(atLeast).not.toContain('%');
+    expect(measured).toContain('%');
+    expect(atLeast).not.toContain('2026-08-20T12:00:00Z');
+  });
 });

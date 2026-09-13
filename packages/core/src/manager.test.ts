@@ -61,6 +61,7 @@ import {
   failingJournalAppend,
   seedFingerprintlessArchiveRow,
 } from './testing.js';
+import { createCloneTools } from './tools.js';
 import type { TokenRotatorObservation } from './token-rotator.js';
 import type { UsageTotals } from './usage.js';
 
@@ -2306,10 +2307,11 @@ function swappableRunner(runnerId = 'runner-primary') {
     /**
      * マネージャーの1ターンが終わって報告が上がる。
      *
-     * `fields` は `contentless` / `failure` / `reportId`（#206）を差し込むための
-     * 口（`runner-protocol.ts` の `report` イベントの doc）。**固定値のスタブに
-     * しない** — 渡さなければ3つとも省略される既存の振る舞いのままなので、他の
-     * テストの挙動は1つも変わらない（`reportId` 無し＝旧 runner 相当）。
+     * `fields` は `contentless` / `failure` / `reportId`（#206）/ `unreported`
+     * （Issue #917）を差し込むための口（`runner-protocol.ts` の `report`
+     * イベントの doc）。**固定値のスタブにしない** — 渡さなければ4つとも
+     * 省略される既存の振る舞いのままなので、他のテストの挙動は1つも変わらない
+     * （`reportId` 無し＝旧 runner 相当）。
      */
     report(
       managerId: string,
@@ -2319,6 +2321,7 @@ function swappableRunner(runnerId = 'runner-primary') {
         contentless?: true;
         failure?: { code: string; via: string };
         reportId?: string;
+        unreported?: { reason: string };
       } = {},
     ) {
       emit?.({ type: 'report', managerId, text, status, ...fields });
@@ -4293,6 +4296,148 @@ describe('#reportedOf: 忘れた id は古い側から日誌に出る（#409）'
     for (let i = LIMIT; i < LIMIT + EXTRA; i += 1) {
       expect(joined).not.toContain(`忘れた: rep-${i}。`);
     }
+
+    await s.pool.stop();
+  });
+});
+
+/**
+ * **`#flushUnreported` の印（`unreported`）が manager.ts を経由して
+ * `manager_list` / `manager_report` の見出しにまで届く（Issue #917）。**
+ *
+ * `runner-unreported.test.ts` は runner.ts が `report` イベントに `unreported`
+ * を立てることを固定し、`tools.test.ts` は `lastFailure` の有無で見出しが
+ * 切り替わることを固定している——だが**両者をまたいで**「report イベントの
+ * `unreported` が実際に見出しへ届くか」を見る歯が1本も無かった
+ * （`grep -rn "unreportedText\|flushUnreported" packages/core/src/tools.test.ts
+ * packages/core/src/manager.test.ts` が0件）。この describe はその跨ぎを
+ * 1本埋める。
+ *
+ * `swappableRunner` で `report` イベントを直接組み立てて emit する
+ * （「report の冪等化（#206）」と同じ足場）——runner.ts の `#flushUnreported`
+ * が実際に作る形（`unreported: { reason }` が付き、`failure` は付かない）を
+ * そのまま再現する。
+ */
+describe('#flushUnreported の印が manager_list / manager_report の見出しに届く（#917）', () => {
+  const job = {
+    id: 'mgr-unreported-cross',
+    managerId: 'mgr-unreported-cross',
+    createdAt: '2026-09-01T00:00:00.000Z',
+    updatedAt: '2026-09-01T01:00:00.000Z',
+    status: 'running' as const,
+    summary: '調べ物',
+    request: '調べて',
+    cwd: '/work/project',
+    sessionId: 'sess-unreported-cross',
+    runnerId: 'runner-primary',
+  };
+
+  async function running() {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job);
+    const fake = swappableRunner();
+    fake.state.alive.push({
+      managerId: job.id,
+      status: 'running',
+      cwd: job.cwd,
+      request: job.request,
+      waiting: [],
+      sessionId: job.sessionId,
+    });
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+    await vi.waitFor(() => {
+      if (s.inbox.length === 0) throw new Error('reattach の知らせがまだ届いていない');
+    });
+    return { s, fake };
+  }
+
+  it('unreported が在る report では、見出しが「直近のターンの中身」へ倒れる（落ちるべきものが落ちる）', async () => {
+    const { s, fake } = await running();
+
+    // **runner.ts の `#flushUnreported` が実際に作る形をそのまま再現する。**
+    // `failure` は付かない（名乗れないものを名乗らない）。`status` も
+    // `stop()` 経路の既定どおり `running` のまま。
+    fake.report(
+      job.id,
+      '（このターンは結果を受け取らないまま畳まれた: デーモンから停止を指示された。）\n' +
+        '（以下は畳まれる前にマネージャーが書いていた本文である。ターンの途中の発言が' +
+        '混ざっていることがある）\n\n途中まで調べた内容',
+      'running',
+      { unreported: { reason: 'デーモンから停止を指示された。' } },
+    );
+
+    await vi.waitFor(async () => {
+      const listed = (await s.pool.list()).find((m) => m.managerId === job.id);
+      if (listed?.lastReport === undefined) throw new Error('報告がまだ台帳に届いていない');
+    });
+
+    const tools = createCloneTools({
+      stores: s.stores,
+      emit: () => undefined,
+      managers: s.pool,
+      memoryCause: () => 'clone',
+    });
+    const list = tools.find((entry) => entry.name === 'manager_list');
+    const report = tools.find((entry) => entry.name === 'manager_report');
+    if (!list || !report) throw new Error('manager_list / manager_report が無い');
+
+    const listResult = await list.handler({} as never, {});
+    const listText = (listResult.content ?? [])
+      .map((block) => (block.type === 'text' ? block.text : ''))
+      .join('');
+    expect(listText).toContain('直近のターンの中身');
+    expect(listText).not.toContain('直近の報告');
+
+    const reportResult = await report.handler({ managerId: job.id } as never, {});
+    const reportText = (reportResult.content ?? [])
+      .map((block) => (block.type === 'text' ? block.text : ''))
+      .join('');
+    expect(reportText).toContain('直近のターンの中身');
+    expect(reportText).not.toContain('直近の報告');
+
+    await s.pool.stop();
+  });
+
+  /**
+   * ⭐ **落ちるべきでないものが落ちていないことも測る。** `unreported` も
+   * `failure` も立たない、普通に完遂した report では、見出しはこれまでどおり
+   * 「直近の報告」のままであること——「常に切り替える」実装でも上の歯だけなら
+   * 緑になってしまう。
+   */
+  it('unreported も failure も無い、普通に完了した report では見出しは「直近の報告」のまま', async () => {
+    const { s, fake } = await running();
+
+    fake.report(job.id, '普通に完遂した報告の本文', 'done');
+
+    await vi.waitFor(async () => {
+      const listed = (await s.pool.list()).find((m) => m.managerId === job.id);
+      if (listed?.lastReport === undefined) throw new Error('報告がまだ台帳に届いていない');
+    });
+
+    const tools = createCloneTools({
+      stores: s.stores,
+      emit: () => undefined,
+      managers: s.pool,
+      memoryCause: () => 'clone',
+    });
+    const list = tools.find((entry) => entry.name === 'manager_list');
+    const report = tools.find((entry) => entry.name === 'manager_report');
+    if (!list || !report) throw new Error('manager_list / manager_report が無い');
+
+    const listResult = await list.handler({} as never, {});
+    const listText = (listResult.content ?? [])
+      .map((block) => (block.type === 'text' ? block.text : ''))
+      .join('');
+    expect(listText).toContain('直近の報告');
+    expect(listText).not.toContain('直近のターンの中身');
+
+    const reportResult = await report.handler({ managerId: job.id } as never, {});
+    const reportText = (reportResult.content ?? [])
+      .map((block) => (block.type === 'text' ? block.text : ''))
+      .join('');
+    expect(reportText).toContain('直近の報告');
+    expect(reportText).not.toContain('直近のターンの中身');
 
     await s.pool.stop();
   });

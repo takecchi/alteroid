@@ -104,15 +104,37 @@ export const memoryDocKindSchema = z.enum(['premise', 'fact', 'indexed']);
 export type MemoryDocKind = z.infer<typeof memoryDocKindSchema>;
 
 /**
- * 要旨を書いた時点から、本文がどれだけ変わったか（#913）。`staleForMs`
- * （時間差）だけでは「いちばん手が入っている文書がいちばん新しく見える」
- * ——1時間前に要旨を書き直した直後に50回追記された文書は「1時間ぶん古い」
- * としか出ず、30日放置されて200字しか変わっていない文書のほうが「30日
- * 古い」と大きく出る。#821 の決定1「本文の変化量（要旨を書いてから本文が
- * N 文字 / M% 変わった）」に従い、`stale`（下）にだけこの値を添える——
- * `fresh` は定義上 drift 0 なので持たない。
+ * 要旨を書いた時点から、本文がどれだけ変わったか（#913、#821 残課題）。
+ * `staleForMs`（時間差）だけでは「いちばん手が入っている文書がいちばん
+ * 新しく見える」——1時間前に要旨を書き直した直後に50回追記された文書は
+ * 「1時間ぶん古い」としか出ず、30日放置されて200字しか変わっていない
+ * 文書のほうが「30日古い」と大きく出る。#821 の決定1「本文の変化量
+ * （要旨を書いてから本文が N 文字 / M% 変わった）」に従い、`stale`
+ * （下）にだけこの値を添える——`fresh` は定義上 drift 0 なので持たない。
  *
- * 2状態、畳まない（`MemoryDescriptionFreshness` の4状態と同じ判断）。
+ * 3状態、畳まない（`MemoryDescriptionFreshness` の4状態と同じ判断）。
+ *
+ * ## なぜ `at-least` が要るか（#821 残課題）
+ *
+ * #915 時点の実装（`measured` / `unrecorded` の2状態）には見落としが
+ * 在った——**`nextDescribedState` が `describedBytes` を進めるのは
+ * `description`（要旨）そのものが変わったときだけ**だった。本文だけの
+ * 書き込み（`memory_append` / `memory_section_move`）は要旨の書き直し
+ * より桁違いに高頻度なので、**既存の全文書は `describedBytes` が
+ * 一度も立たず、`unrecorded` のまま固定される。** これは #821 が名指しした
+ * 根本原因（本文の変更頻度が要旨の書き直し頻度を大きく上回る）そのものへ
+ * 計測を紐付けてしまった結果であり、一般化すると「観測を足すとき、その
+ * 観測が更新される契機が、観測したい事象と同じ稀さで律速していないかを
+ * 見ること」——#915 は #821 を直したはずが、直した先でもう一度同じ形を
+ * 作っていた。
+ *
+ * この PR は、本文だけの書き込みでもまだ基準点（`describedBytes` /
+ * `describedBytesAt`、`memory.ts` の `nextDescribedState`）が無ければ
+ * 立てるように直す。ただし立てた基準点は「要旨を書いた時点の大きさ」では
+ * ない——**その書き込みの直前の状態**（基準点が無いと分かった時点の本文
+ * サイズ）でしかない。これを `measured` と同じ言葉で語ると、実際には
+ * 分からない「要旨を書いた時点からの正確な変化量」を名乗ることになる。
+ * `at-least`（下限）という別の状態にして区別する。
  *
  * - **`measured`** — 要旨を書いた時点の本文サイズ（`describedBytes`）と
  *   いまの本文サイズ（`currentBytes`）の両方が分かる。**`deltaBytes` は
@@ -120,11 +142,23 @@ export type MemoryDocKind = z.infer<typeof memoryDocKindSchema>;
  *   （削って書き直した等）を「変わっていない」と混ぜないため。`0` は
  *   「測れて、かつ変わっていない」という正直な値であり、`unrecorded`
  *   とは別の状態である。
- * - **`unrecorded`** — 要旨を書いた時点の本文サイズが記録されていない
- *   （この仕組みより前に書かれた記憶、等）。**`measured` の `deltaBytes: 0`
- *   と同じ言葉にしないこと** —— 「取れなかった」を「0（＝変化なし）」に
- *   見せると、`MemoryDescriptionFreshness` の `unknown` が名指しした失敗
+ * - **`at-least`** — 基準点（`baselineBytes` / `baselineAt`）はあるが、
+ *   それは「要旨を書いた時点」ではなく「基準点が無いと分かった、ある
+ *   書き込みの直前」の値でしかない。**`deltaBytes` はその基準点からの
+ *   変化量であって、要旨を書いてからの真の変化量ではない**——真の値は
+ *   基準点より前の分だけ余分に含まれうるので、これは常に**下限**である。
+ *   `baselineAt` は型としては持つが、表示側（`describeMemoryDescriptionDrift`
+ *   / `memoryFreshnessMarker` を含む一覧描画）では刷らない——この文字列は
+ *   クローンのプロンプトへ毎ターン焼かれるため、恒久的なトークン肥大化を
+ *   避ける（PR 本文の実測を見よ）。
+ * - **`unrecorded`** — 基準点が一度も立っていない（`describedBytes` が
+ *   まだ無い）。**`measured` の `deltaBytes: 0` と同じ言葉にしないこと**
+ *   —— 「取れなかった」を「0（＝変化なし）」に見せると、
+ *   `MemoryDescriptionFreshness` の `unknown` が名指しした失敗
  *   （#821 条件1）と同じ形で欠測が「手を入れなくてよい」側に化ける。
+ *   **この状態は、もう恒久的なものではない**——次にその文書へ本文だけの
+ *   書き込みがあれば、その場で基準点が立ち `at-least` へ変わる（#821
+ *   残課題）。一度も書き込まれない文書だけが `unrecorded` のまま残る。
  */
 export const memoryDescriptionDriftSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -132,6 +166,19 @@ export const memoryDescriptionDriftSchema = z.discriminatedUnion('kind', [
     describedBytes: z.number().int().nonnegative(),
     currentBytes: z.number().int().nonnegative(),
     /** `currentBytes - describedBytes`。符号つき——縮んだ文書は負になる。 */
+    deltaBytes: z.number().int(),
+  }),
+  z.object({
+    kind: z.literal('at-least'),
+    /** 基準点を立てた時点の本文サイズ（「要旨を書いた時点」ではない）。 */
+    baselineBytes: z.number().int().nonnegative(),
+    /**
+     * 基準点を立てた時刻。**表示側では刷らない**（型としてだけ持つ）——
+     * `memoryDescriptionDriftSchema` の doc の `at-least` の項を見よ。
+     */
+    baselineAt: isoDateTime,
+    currentBytes: z.number().int().nonnegative(),
+    /** `currentBytes - baselineBytes`。下限——真の変化量はこれ以上でありうる。 */
     deltaBytes: z.number().int(),
   }),
   z.object({ kind: z.literal('unrecorded') }),
@@ -912,6 +959,43 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * `input` を持つ既存の形はそのまま通り続ける（保証は弱くならない）。**
      */
     input: z.unknown().optional(),
+    /**
+     * この道具呼び出しが失敗・中断したときだけ載る（`PostToolUseFailure` の
+     * 合図。Issue #924）。**欄が無い ＝ 成功。**
+     *
+     * `PostToolUse` はツールの実行が成功したときにしか発火しない
+     * （Issue #924 — 出荷済みの SDK 実行体を実測し、`try` 側で `PostToolUse`
+     * を、`catch` 側で `PostToolUseFailure` を組み立てる排他分岐を確認した。
+     * SDK の型定義そのものは「どちらが発火するか」を明言していない）。
+     * ⟹ **この欄が導入される前から在る `tool_use` の行は、すべて成功で
+     * ある。** だからこの欄を足すのに移行（既存行の書き換え）は要らない —
+     * 「欄が無い」がそのまま「成功だった」を意味し、それは追加より前の行に
+     * 対しても事後的に真である。
+     *
+     * **`failed` と `interrupted` を潰さないこと。** 失敗は「失敗したと
+     * 確定している」、中断は「どこまで進んだか分からない」で、監査の意味が
+     * 違う（`subagent_stall.outcome` の doc「2値を潰さないこと」と同じ
+     * 判断）。`PostToolUseFailureHookInput.is_interrupt` が `true` の
+     * ときだけ `'interrupted'`、それ以外（`false` または欠け）は `'failed'`
+     * とする。**`is_interrupt` は optional なので SDK が付けてこないことが
+     * ある——そのときを第3の値にはしない。** 「中断かどうか分かっていない」
+     * は「中断ではないと確定している」と同じではないが、安全側（失敗として
+     * 扱う）に倒す方が、中断を見逃すより監査上ましである。
+     */
+    outcome: z.enum(['failed', 'interrupted']).optional(),
+    /**
+     * 失敗・中断の理由（`PostToolUseFailureHookInput.error`）。**`outcome`
+     * が載っているときだけ載る。** 「失敗した」というラベルだけでは監査に
+     * ならない——後から人間が読んで「本当に落ちるべきだったか」を判断する
+     * には、何で落ちたかの本文が要る。
+     *
+     * **秘密の露出について**: `tool_use` は既にこのエントリの `input`
+     * （道具の生の引数）をそのまま保存しているので、`error` を足しても
+     * 露出の「種類」自体は増えない。ただし外部（道具・MCP サーバ）が書く
+     * 無制限長の自由文なので、書き込み側（`clone.ts` の
+     * `TOOL_USE_ERROR_EXCERPT`）で切り詰める。
+     */
+    error: z.string().optional(),
   }),
   z.object({
     type: z.literal('memory_update'),
@@ -1360,8 +1444,8 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
          * **MCP の道具の説明文が占めるトークン数の合計**と、その本数。
          *
          * ⚠️ **`self_status` の「総文字数」はこれを1文字も数えていない**（#804）。
-         * 道具は37本あり、説明文の合計は実測で 13,000 文字を超える——**毎ターン
-         * 払っているのに、どの計器にも出ていなかった分である。**
+         * 自作ツール（`CLONE_TOOL_NAMES`）の説明文の合計は実測で 13,000 文字を
+         * 超える——**毎ターン払っているのに、どの計器にも出ていなかった分である。**
          *
          * **1本ずつではなく合計で持つ。** SDK は道具ごとの配列を返すが、道具の数だけ
          * 行が伸びる形を日誌へ入れない（`turn-input.ts` の「再構成できるものを二重に
@@ -2332,6 +2416,33 @@ export const jobSchema = z.object({
       code: z.string(),
       /** どの印で分かったか（`sdk-failure.ts` の `SdkFailureVia`）。 */
       via: z.string(),
+      at: isoDateTime,
+    })
+    .optional(),
+  /**
+   * 直近の1ターンが、`result` を受け取らないまま畳まれたこと（Issue #917）。
+   *
+   * `lastFailure` とは軸が違う——あちらは SDK が「これは応答ではない」と
+   * 言った回（`failure` が付く）で、こちらは SDK からその声明すら届かないまま
+   * 器の入れ替え・`manager_stop`・クラッシュ等で畳まれた回
+   * （`runner.ts` の `#flushUnreported` / `runnerEventSchema` の
+   * `report.unreported` の doc）。**両方が無いことも、片方だけ在ることもある**
+   * ——同じ欄に混ぜない。
+   *
+   * **これが無いと、`lastReport` が完遂した報告に見える。** 本文
+   * （`unreportedText()` が包んだもの）は畳まれる前の途中経過であって、
+   * 完遂した報告ではない——`case 'report'` がここを見て `manager_list` /
+   * `manager_report` の見出しを「直近のターンの中身」へ倒す
+   * （`tools.ts` の見出し分岐の doc）。
+   *
+   * `reason` は `#flushUnreported` が受け取った理由文字列をそのまま運ぶ
+   * （言い換えない）。応答として終わった回（次の `report` が `unreported`
+   * を伴わずに届いた回）では消える——`lastFailure` と同じ「直近」の意味を
+   * 守る。
+   */
+  lastUnreported: z
+    .object({
+      reason: z.string(),
       at: isoDateTime,
     })
     .optional(),

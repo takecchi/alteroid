@@ -9,6 +9,7 @@ import {
   ORIGIN_GATE_SINCE,
   parseOriginMarker,
   stripFencedCode,
+  stripInlineCode,
 } from './check-pr-origin-core.mjs';
 
 import {
@@ -149,6 +150,139 @@ describe('parseOriginMarker: フェンスの中の刻印を数えない', () => 
     const stripped = stripFencedCode(body);
     expect(stripped).not.toContain('alteroid-origin');
     expect(stripped).toContain('残る行');
+  });
+});
+
+/**
+ * **インラインのコードスパン（バックティック1個で囲んだ部分）の中の刻印を数えない（Issue #857）。**
+ *
+ * `stripFencedCode` が落とすのはフェンス付きコードブロックだけで、PR #796 が
+ * 固定した欠陥Aの直し（同じ行に開閉のバックティックが両方在ればフェンスの開き
+ * として扱わずプローズとして残す）は、そのプローズに残った行の**中身**まで
+ * 検査していなかった。⟹ 刻印の書き方をインラインのコードスパンで説明する
+ * 本文が、その例をそのまま本物として拾われていた。
+ */
+describe('parseOriginMarker: インラインのコードスパンの中の刻印を数えない（Issue #857）', () => {
+  /**
+   * **(陽性) Issue #857 の実物の形。** 本文中の唯一の刻印はインラインスパンの
+   * 中の例（値は全角三点リーダを含む5文字で、実在しない managerId）で、
+   * 直す前はこれを `manager`（`managerId: 'mgr-…'`）と誤判定していた。
+   * 正しくは、本文に本物の刻印は無いので `missing` である。
+   */
+  it('刻印がインラインスパンの中の例だけなら missing（Issue #857 の実物）', () => {
+    const body =
+      '**PR #854（Issue #850）で、PR / Issue の本文に `<!-- alteroid-origin: mgr-… -->` の刻印が入るようになった。**';
+    expect(parseOriginMarker(body)).toEqual({ verdict: 'missing' });
+  });
+
+  /**
+   * **(陰性対照) プローズに在る本物の刻印は、今までどおり拾われる。**
+   * これが無いと「インラインスパンを含む行を丸ごと無視する」ような過剰な
+   * 直し方（＝刻印の抽出そのものが壊れて何も拾わなくなる退化）でも、
+   * 上の陽性テストは緑のままになってしまう。
+   */
+  it('インラインスパンの説明と並んで本物の刻印がプローズに在れば拾われる', () => {
+    const body = [
+      '**PR #854（Issue #850）で、PR / Issue の本文に `<!-- alteroid-origin: mgr-… -->` の刻印が入るようになった。**',
+      '',
+      '<!-- alteroid-origin: clone -->',
+    ].join('\n');
+    expect(parseOriginMarker(body)).toEqual({ verdict: 'clone', values: ['clone'] });
+  });
+
+  /**
+   * **(陰性対照) フェンスの中の例は、今までどおり除かれる**（PR #854 / #925 の形）。
+   * インラインスパンの直しがフェンスの判定へ手を伸ばしていないことの確認。
+   */
+  it('フェンス（```` ``` ````）で囲んだ例は今までどおり除かれる', () => {
+    const body = [
+      '刻印の書き方はこう:',
+      '',
+      '```',
+      '<!-- alteroid-origin: mgr-example -->',
+      '```',
+      '',
+      '本文はここまで。',
+    ].join('\n');
+    expect(parseOriginMarker(body)).toEqual({ verdict: 'missing' });
+  });
+
+  /**
+   * **(陰性対照) PR #796 の欠陥A —— 同じ行に開閉のバックティックが両方在る行の
+   * 後ろに続くプローズの刻印が、無検査にならないこと。** インラインスパンの
+   * 直しは「その行自身の中身」だけを除く形なので、後続の行には影響しない
+   * ——欠陥Aの直しが壊れて後続の行ごとフェンスとして無視される、という
+   * 退化が起きていないことをここで固定する。
+   */
+  it('1行に開閉両方在るバックティックの行の後ろの、別行の本物の刻印は拾われる（PR #796 の欠陥Aが戻っていない）', () => {
+    const body = ['`inline code`という表記がある。', '<!-- alteroid-origin: clone -->'].join('\n');
+    expect(parseOriginMarker(body)).toEqual({ verdict: 'clone', values: ['clone'] });
+  });
+
+  /**
+   * **Issue #927 の形。** 本物の `clone` の刻印がプローズに在り、かつ別の行の
+   * インラインスパンの中にも `clone` の例が在る。直す前は `values` が
+   * `['clone', 'clone']`（値は一致するので verdict はどちらも `clone` のまま
+   * ——だから verdict だけを見ていると壊れていることに気づけない）、直した
+   * 後は `['clone']` になる。**もし例の値が本物と違っていたら、直す前は偽の
+   * `conflict` になっていたはずである** ——この歯はその危険を検出する。
+   */
+  it('本物の clone とインラインスパンの中の clone の例が両方在っても、values は本物の1件だけになる（Issue #927）', () => {
+    const body = [
+      '<!-- alteroid-origin: clone -->',
+      '',
+      '刻印の書き方の例: `<!-- alteroid-origin: clone -->` のように書く。',
+    ].join('\n');
+    expect(parseOriginMarker(body)).toEqual({ verdict: 'clone', values: ['clone'] });
+  });
+
+  it('stripInlineCode は素の文字列も直接確かめられる（上のテストの裏取り）', () => {
+    const stripped = stripInlineCode('例: `<!-- alteroid-origin: mgr-example -->` のように書く。');
+    expect(stripped).not.toContain('alteroid-origin');
+    expect(stripped).toContain('例:');
+    expect(stripped).toContain('のように書く。');
+  });
+
+  it('stripInlineCode は行を跨がない（離れた行の孤立したバックティック2個が、間の本物の刻印を巻き込まない）', () => {
+    const body = [
+      'この行には開きだけの孤立したバックティックが `在る。',
+      '<!-- alteroid-origin: clone -->',
+      'この行にも孤立したバックティックが在る`。',
+    ].join('\n');
+    // 行を跨いで対応させる実装だと、1行目の ` と3行目の ` が対応してしまい、
+    // 挟まれた本物の刻印ごと1つの巨大なコードスパンとして消えてしまう。
+    expect(parseOriginMarker(body)).toEqual({ verdict: 'clone', values: ['clone'] });
+  });
+
+  /**
+   * **除いた span を空文字ではなく空白1個に置き換える設計の回帰確認。**
+   * `<!-- alteroid-orig` の直後にインラインスパン（中身は `X` で、刻印とは
+   * 無関係）が在り、その直後に `in: clone -->` が続く。**もし空文字で
+   * 除くと、スパンの前後（`alteroid-orig` と `in:`）が直接連結して
+   * `alteroid-origin:` という文字列を作ってしまい、実際には本文のどこにも
+   * 書かれていなかった刻印が捏造される。** 空白1個で除けば `orig in:` の
+   * ように途中に空白が残るので、`alteroid-origin:` という連続した文字列には
+   * ならず、`missing` のままになる。
+   */
+  it('除いたインラインスパンの前後が連結して偽の刻印を作らない（空文字ではなく空白1個で除く設計の回帰）', () => {
+    const body = '<!-- alteroid-orig`X`in: clone -->';
+    expect(parseOriginMarker(body)).toEqual({ verdict: 'missing' });
+    expect(stripInlineCode(body)).toBe('<!-- alteroid-orig in: clone -->');
+  });
+
+  /**
+   * **CommonMark のコードスパンは、開きと「同じ長さちょうど」の連なりでしか
+   * 閉じない、という規則の回帰確認。** 長さの違う連なり同士が対応してしまうと
+   * （たとえば `` ` `` と `` ``` `` が対応する、というような緩い実装だと）、
+   * 開きと閉じの間に挟まった本物の刻印まで巻き込んで1つの巨大なスパンとして
+   * 消してしまう。ここでは長さ1の孤立したバックティックの後ろに本物の刻印を
+   * 置き、さらにその後ろに長さ3の孤立したバックティックの連なりを置く——
+   * どちらも対応する閉じが無いので、CommonMark の規則どおりならどちらも
+   * ただの文字として残り、刻印はそのまま拾われる。
+   */
+  it('長さの違うバックティックの連なりは対応しない（誤って閉じにならず、挟まれた刻印を巻き込まない）', () => {
+    const body = 'before ` <!-- alteroid-origin: clone --> ``` after';
+    expect(parseOriginMarker(body)).toEqual({ verdict: 'clone', values: ['clone'] });
   });
 });
 

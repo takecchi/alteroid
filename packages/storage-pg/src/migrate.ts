@@ -498,6 +498,14 @@ export const STATEMENTS = [
   // と対でない `alter table ... add column` は、この配列が2周目に通っても
   // 「古い鍵を作りに行く」形の罠（このファイル冒頭の doc）には当たらない）。
   `alter table memory add column if not exists described_bytes integer`,
+
+  // --- 要旨の変化量の基準点を測った時刻（#821 残課題）--------------------
+  // `described_bytes`（直上）の隣に足す。**既存行にとって null は「基準点が
+  // まだ立っていない」を表し（`resolveMemoryDescriptionDrift` はこれを
+  // `unrecorded` として扱う）、埋め直さない**——過去の値を捏造しない
+  // という、この2列を最初に置いた #913 の判断をそのまま引き継ぐ。索引は
+  // 足さない（同じ理由。このファイル冒頭の doc）。
+  `alter table memory add column if not exists described_bytes_at timestamptz`,
 ] as const;
 
 export async function migrate(db: Db): Promise<void> {

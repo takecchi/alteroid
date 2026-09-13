@@ -835,8 +835,16 @@ export function journalEntryShape(entry: JournalEntryInput): string {
         ` ${size(entry.question, 'question')}` +
         (entry.answer === undefined ? '' : ` ${size(entry.answer, 'answer')}`)
       );
+    // **`outcome` は列挙値（こちら側=SDKの排他分岐が決める値であって、外部が
+    // 決める自由文ではない）なので `tag()` に載せてよい**——`subagent_stall.outcome`
+    // と同じ判定基準。**`error` は SDK・道具・MCP サーバが書く自由文なので、
+    // 他の自由文と同じく `size()` へ逃がす**（値の中身は跡に残さない）。
     case 'tool_use':
-      return `tool_use actor=${tag(entry.actor)} tool=${tag(entry.tool)}`;
+      return (
+        `tool_use actor=${tag(entry.actor)} tool=${tag(entry.tool)}` +
+        (entry.outcome === undefined ? '' : ` outcome=${tag(entry.outcome)}`) +
+        (entry.error === undefined ? '' : ` ${size(entry.error, 'error')}`)
+      );
     case 'memory_update':
       return (
         `memory_update slug=${tag(entry.slug)} cause=${tag(entry.cause)}` +

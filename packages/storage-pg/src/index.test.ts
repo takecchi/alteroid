@@ -818,6 +818,95 @@ describe('PgPersonaStore', () => {
         expect(doc.descriptionFreshness.drift).toEqual({ kind: 'unrecorded' });
       }
     });
+
+    /**
+     * ⭐⭐ #821 残課題のいちばん重要な歯（pg 側）。「本文だけの書き込み
+     * （`append`）で基準点が立つ」——`described_bytes` / `described_bytes_at`
+     * を直接 NULL に戻した行へ append を1回当て、`drift` が `unrecorded` から
+     * `at-least` へ変わり、**`deltaBytes` がその append のバイト数と一致する**
+     * （0 ではない）ことを見る。fs 版と同じ契約を pg（PGlite）に対しても確かめる。
+     */
+    it('described_bytes が無い既存の行へ append すると、その場で基準点が立ち drift が at-least になる（deltaBytes は0にならない、#821 残課題）', async () => {
+      await stores.persona.write(
+        'runbook',
+        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版1\n',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      await stores.persona.write(
+        'runbook',
+        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版2（本文だけ変えた）\n',
+      );
+
+      await db.execute(
+        sql`update memory set described_bytes = null, described_bytes_at = null where slug = 'runbook'`,
+      );
+
+      const before = await stores.persona.read('runbook');
+      expect(before?.descriptionFreshness.kind).toBe('stale');
+      if (before?.descriptionFreshness.kind === 'stale') {
+        expect(before.descriptionFreshness.drift).toEqual({ kind: 'unrecorded' });
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const appended = '基準点を立てるための追記';
+      await stores.persona.append('runbook', appended);
+
+      const after = await stores.persona.read('runbook');
+      expect(after?.descriptionFreshness.kind).toBe('stale');
+      if (after?.descriptionFreshness.kind === 'stale') {
+        expect(after.descriptionFreshness.drift.kind).toBe('at-least');
+        if (after.descriptionFreshness.drift.kind === 'at-least') {
+          expect(after.descriptionFreshness.drift.deltaBytes).not.toBe(0);
+          expect(after.descriptionFreshness.drift.deltaBytes).toBeGreaterThanOrEqual(
+            Buffer.byteLength(appended, 'utf8'),
+          );
+        }
+      }
+    });
+
+    /**
+     * ⭐ 「弾いていないことを測る歯」（pg 側）。一度立った基準点は、2回目の
+     * append で動かない——動けば「直前の1回ぶん」しか測れない道具に戻る
+     * （#821 残課題）。
+     */
+    it('一度立った基準点は、2回目の append で動かない（#821 残課題、pg）', async () => {
+      await stores.persona.write(
+        'runbook',
+        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版1\n',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      await stores.persona.write(
+        'runbook',
+        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版2（本文だけ変えた）\n',
+      );
+      await db.execute(
+        sql`update memory set described_bytes = null, described_bytes_at = null where slug = 'runbook'`,
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      await stores.persona.append('runbook', '1回目の追記');
+      const afterFirst = await stores.persona.read('runbook');
+      expect(afterFirst?.descriptionFreshness.kind).toBe('stale');
+      if (afterFirst?.descriptionFreshness.kind !== 'stale') throw new Error('unreachable');
+      expect(afterFirst.descriptionFreshness.drift.kind).toBe('at-least');
+      if (afterFirst.descriptionFreshness.drift.kind !== 'at-least') throw new Error('unreachable');
+      const firstBaselineBytes = afterFirst.descriptionFreshness.drift.baselineBytes;
+      const firstBaselineAt = afterFirst.descriptionFreshness.drift.baselineAt;
+
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      await stores.persona.append('runbook', '2回目の追記');
+      const afterSecond = await stores.persona.read('runbook');
+      expect(afterSecond?.descriptionFreshness.kind).toBe('stale');
+      if (afterSecond?.descriptionFreshness.kind !== 'stale') throw new Error('unreachable');
+      expect(afterSecond.descriptionFreshness.drift.kind).toBe('at-least');
+      if (afterSecond.descriptionFreshness.drift.kind !== 'at-least')
+        throw new Error('unreachable');
+      expect(afterSecond.descriptionFreshness.drift.baselineBytes).toBe(firstBaselineBytes);
+      expect(afterSecond.descriptionFreshness.drift.baselineAt).toBe(firstBaselineAt);
+      expect(afterSecond.descriptionFreshness.drift.deltaBytes).toBeGreaterThan(
+        afterFirst.descriptionFreshness.drift.deltaBytes,
+      );
+    });
   });
 });
 

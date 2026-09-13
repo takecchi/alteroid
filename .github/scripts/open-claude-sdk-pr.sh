@@ -27,6 +27,19 @@
 # **「人間がこの更新を断った」を表す場所は無い。** PR を close しても、次に版が
 # 上がった日に新しい PR が出る（`--state open` で探すので closed は拾わない）。
 # 断りを覚えさせたくなったら、それは別の状態を足す変更であり、ここではない。
+#
+# ## CI が起動しない回の扱い（#867）
+#
+# `SDK_CI_TRIGGERED`（`ALTEROID_PR_TOKEN` が secret に置かれているかの真偽。
+# 秘密の値そのものはここへは渡らない）が `'true'` でないとき、この PR には
+# CI が付かない（`GITHUB_TOKEN` 制約。上の「PR を出す」ステップのコメント参照）。
+# その回だけ、(1) PR タイトルに `[CI未起動] ` を接頭し、(2) 本文の**先頭**に
+# 警告を差し込み、(3) `::warning::` を1本出す。**ラベルは採らない** — この
+# repo にはカスタムラベルが無く、新規作成には `issues: write` が要る
+# （オーナーの手番に触れる）。**ワークフローを赤で終わらせることもしない** —
+# SDK 更新自体は成功しているのに失敗として届き、しかも毎晩赤くなるので、また
+# 無視される側に回る。`SDK_CI_TRIGGERED` が空/未設定のときは「起きない」側へ
+# 倒す（`SDK_VERIFY_OK` と同じ規約）。
 
 set -euo pipefail
 
@@ -47,6 +60,18 @@ base="${SDK_PR_BASE:-main}"
 # **空なら false 側へ倒す。** 検証ステップが落ちて出力が空になった場合、
 # 「緑だった」ではなく「確かめられていない」が正しい。
 verify_ok="${SDK_VERIFY_OK:-}"
+# **同じ規約を `SDK_CI_TRIGGERED` にも適用する（#867）。** 空/未設定のときは
+# 「起きる」ではなく「起きない」側へ倒す —— 上の `verify_ok` と同じ理由で、
+# 「確かめられていない」を楽観側（起きる）に倒すと、CI が付かないまま静かに
+# ready 扱いになりかねない。ワークフロー側は必ず 'true' か 'false' の文字列を
+# 渡すが、渡し忘れ・古い呼び出し元（テストなど）は空になりうるので、ここで
+# 明示的に false 側へ倒しておく。
+ci_triggered="${SDK_CI_TRIGGERED:-}"
+if [ "$ci_triggered" = 'true' ]; then
+  ci_missing=''
+else
+  ci_missing='true'
+fi
 bot_email="${GIT_AUTHOR_EMAIL:-41898282+github-actions[bot]@users.noreply.github.com}"
 bot_name="${GIT_AUTHOR_NAME:-github-actions[bot]}"
 
@@ -69,6 +94,55 @@ if [ -n "$version_before" ] && [ "$version_before" = "$version" ]; then
   title="chore: @anthropic-ai/claude-agent-sdk 周辺の lockfile を更新する（版は $version のまま）"
 else
   title="chore: @anthropic-ai/claude-agent-sdk を $version へ上げる"
+fi
+
+# **CI が起きない回だけ、タイトルへ接頭を付ける（#867）。** 上の版の出し分けとは
+# 別の軸なので、二重に書かず後段でここへ付け足す。`gh pr list` / PR 一覧 /
+# 通知メールの件名として、開く前に読める場所へ出すのがこの接頭の役目。
+# **タイトルは毎回この2ブロックだけからゼロ組み立てされる**ので、前夜に付いた
+# 接頭が残ることはない（CI が回復した回は素通りしてこの if に入らない）。
+if [ -n "$ci_missing" ]; then
+  title="[CI未起動] $title"
+fi
+
+# **CI が起きない回だけ、本文の先頭へ警告を差し込む（#867）。**
+#
+# ## なぜここに書くか（Issue #867 の誤りの訂正）
+# Issue は「理由は Job Summary に書いているが誰も読まない」と書いていたが、
+# 実際には `GITHUB_STEP_SUMMARY` への書き込みはこのワークフロー・スクリプトの
+# どこにも無かった（grep で確認、ヒット0）。理由は実際には **PR 本文の末尾**
+# （このスクリプトを呼ぶ `update-claude-sdk.yml` のヒアドキュメントの最後の3行）
+# に書かれていて、しかも**無条件**だった（CI が付いている回にも同じ文が出る
+# ＝ 常に在る文字列は情報を持たない）。それを4晩分マージまで運用しても
+# 「開かない PR が積む」問題は直らなかった —— 場所（本文の最後）と条件
+# （常に出る）の両方が外れていたからである。だからここでは
+# **条件付き（CI が本当に起きないときだけ）・本文の先頭**に出す。
+#
+# ## 誰が・いつ・どうやって見るか
+# PR 本文の先頭は、オーナーが朝この PR を開いてマージしようとした瞬間に
+# 読む場所である（過去の同枝 PR はすべて人間が開いてマージしている＝実績の
+# ある視線の通り道）。タイトルの接頭（上）は `gh pr list` / PR 一覧 / 通知
+# メールの件名として、開く前に読める場所である。
+if [ -n "$ci_missing" ]; then
+  warning_file="$(mktemp)"
+  {
+    echo '> [!WARNING]'
+    echo '> **この PR には CI が付かない。** `GITHUB_TOKEN` で作った PR は `pull_request`'
+    echo '> のワークフローを起こさない（GitHub の仕様。無限ループ防止）。required の'
+    echo '> `ci` / `image` はこの PR には永久に現れないので、放っておくと'
+    echo '> `BLOCKED` のまま動かない。'
+    echo '>'
+    echo '> **恒久的に直すには:** `ALTEROID_PR_TOKEN`（fine-grained PAT。'
+    echo '> `Contents: Read and write` / `Pull requests: Read and write`）を'
+    echo '> secret に置く。それが無いあいだは、Actions 画面でこの PR を作った run を'
+    echo '> 開き「Approve and run」を押す必要がある。'
+    echo '>'
+    echo '> 詳細: #867'
+    echo ''
+    cat "$body_file"
+  } >"$warning_file"
+  mv "$warning_file" "$body_file"
+  echo '::warning::この PR には CI が付かない（GITHUB_TOKEN 制約。ALTEROID_PR_TOKEN を secret に置くと解消する。詳細は本文と #867）' >&2
 fi
 
 git config user.name "$bot_name"
@@ -149,13 +223,21 @@ create_pr() {
   fi
 }
 
+# **outcome にも CI 起動可否を載せる（#867）。** trap の1行がこのスクリプトの
+# 唯一の必ず出る合図なので、そこにも状態を残す。
+if [ -n "$ci_missing" ]; then
+  ci_note='、CI未起動'
+else
+  ci_note=''
+fi
+
 if [ -z "$number" ]; then
   if [ "$verify_ok" = 'true' ]; then
     create_pr --base "$base" --head "$branch" --title "$title" --body-file "$body_file"
-    outcome="PR を新規に作成した（ready）: $title"
+    outcome="PR を新規に作成した（ready${ci_note}）: $title"
   else
     create_pr --draft --base "$base" --head "$branch" --title "$title" --body-file "$body_file"
-    outcome="PR を新規に作成した（draft ＝ 検証が緑ではない）: $title"
+    outcome="PR を新規に作成した（draft ＝ 検証が緑ではない${ci_note}）: $title"
   fi
 else
   $GH pr edit "$number" --title "$title" --body-file "$body_file"
@@ -163,12 +245,12 @@ else
   # ここが非0で落ちる ＝ **一番中身を知りたい回に落ちる**ので、落ちても PR 自体は
   # 残っていることが分かるように outcome を先に置いておく。
   if [ "$verify_ok" = 'true' ]; then
-    outcome="既存の PR #$number を書き換えた（ready にする）"
+    outcome="既存の PR #$number を書き換えた（ready にする${ci_note}）"
     $GH pr ready "$number"
-    outcome="既存の PR #$number を書き換えた（ready）"
+    outcome="既存の PR #$number を書き換えた（ready${ci_note}）"
   else
-    outcome="既存の PR #$number を書き換えた（draft へ戻す）"
+    outcome="既存の PR #$number を書き換えた（draft へ戻す${ci_note}）"
     $GH pr ready --undo "$number"
-    outcome="既存の PR #$number を書き換えた（draft へ戻した ＝ 検証が緑ではない）"
+    outcome="既存の PR #$number を書き換えた（draft へ戻した ＝ 検証が緑ではない${ci_note}）"
   fi
 fi

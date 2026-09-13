@@ -4790,8 +4790,48 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * `manager_list` の**件数の行**だけを、区分ごとに割って返す
+   * （`describeManagerCounts` が ` / ` で継いでいるもの）。
+   *
+   * ## ⭐ なぜ「`返事待ち 0 本` が無いこと」で測ってはいけないか（#935 の追加測定）
+   *
+   * 区分の行を組み立てているのは `describeManagerCounts` の
+   * `if (waiting > 0) parts.push(…)` **1箇所だけ**で、その門の内側に在る。
+   * ⟹ `返事待ち 0 本` という文字列は**どんな入力でも作られない。**
+   * ⟹ `expect(reply).not.toContain('返事待ち 0 本')` は**入力が何であっても真**で、
+   * **門を外す変異を当てても緑のまま**だった（`$0.00` と同じ族である）。
+   *
+   * ## この形が測っているもの
+   *
+   * 件数の行を**区分の並びそのもの**として取り出し、`toEqual` で突き合わせる。
+   * ⟹ どれか1つでも門が外れれば `… 0 本` が並びへ増えて赤くなる ——
+   * **「返事待ち」だけでなく5区分すべてに同時に効く。**
+   *
+   * ⛔ `not.toContain('<区分> 0 本')` の形へ戻さないこと（出ない字面を探しても
+   * 何も測れない）。⛔ 件数（`.length`）だけを見る形にもしないこと。
+   */
+  function countParts(reply: string): string[] {
+    const line = reply.split('\n').find((l) => l.startsWith('件数: '));
+    if (line === undefined) throw new Error('件数の行が無い（manager_list の本文が変わった）');
+    return line.slice('件数: '.length).split('。')[0]!.split(' / ');
+  }
+
+  /**
+   * **赤の意味を1行で言う。** ⚠ 同じ「返事待ち N」でも `situation.ts` は
+   * **意図して 0 を出す側**なので、そちらの規約と混ぜないこと（同じ字面に逆向きの
+   * 規約が2つ在る）。
+   */
+  const ZERO_LINE_RULE =
+    '赤の意味: `manager_list` の件数の行は**該当が 0 の区分を書かない**規約である' +
+    '（`describeManagerCounts` の `if (… > 0) parts.push(…)`）。' +
+    '⚠ `situation.ts` の「返事待ち 0」は**意図して 0 を出す**別の規約なので、混ぜないこと。';
+
+  /**
    * **0 の行を作らない**（AGENTS.md の地雷表）。「返事待ち 0本」と書くと、
    * 数えて 0 だったのか、そもそも数えていないのかが読めなくなる。
+   *
+   * ⛔ **直下の（対照）と対で読むこと。** こちらだけなら、門を「常に false」にして
+   * どの区分も一生出さない巻き戻しが素通りする。
    */
   it('該当が無い区分は件数の行に書かない（0 の行を作らない）', async () => {
     const h = harness();
@@ -4799,8 +4839,44 @@ describe('クローンの道具', () => {
 
     const reply = await h.call('manager_list', {});
 
-    expect(reply).toContain('全 1 本');
-    expect(reply).not.toContain('返事待ち 0 本');
+    expect(countParts(reply), ZERO_LINE_RULE).toEqual([
+      '全 1 本',
+      '走行中 1 本（うち話しかけられる 1 本）',
+    ]);
+  });
+
+  /**
+   * ⭐ **直上の陰性対照の対照である。** 門が「常に false」へ倒れたら、上の歯は
+   * 緑のままここだけが赤くなる —— **0 を書かないことと、在るときに書くことは
+   * 別の主張である。**
+   *
+   * 4区分を並べるのは、1つだけだと「その区分の綴りだけを通す」という同じ形の
+   * 誤りがまた通るからである（`走行中` は `manager_start` した時点で必ず立つので、
+   * 上の陰性対照そのものが対照になっている）。
+   */
+  it.each([
+    ['返事待ち', (m: ManagerSummary) => (m.status = 'waiting_human'), '返事待ち 1 本'],
+    [
+      '宛先の器が名乗らなくなった',
+      (m: ManagerSummary) => (m.runnerLostSince = '2026-08-20T00:00:00.000Z'),
+      '宛先の器が名乗らなくなった 1 本',
+    ],
+    [
+      'runner にセッションが無い',
+      (m: ManagerSummary) => (m.sessionMissingSince = '2026-08-20T00:00:00.000Z'),
+      'runner にセッションが無い 1 本',
+    ],
+    ['戻れなかった(lost)', (m: ManagerSummary) => (m.status = 'lost'), '戻れなかった(lost) 1 本'],
+  ])('（対照）%s が1本在れば、その区分の行が出る', async (_label, mutate, expected) => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (target === undefined) throw new Error('準備に失敗');
+    mutate(target);
+
+    const reply = await h.call('manager_list', {});
+
+    expect(countParts(reply), ZERO_LINE_RULE).toContain(expected);
   });
 
   it('manager_list は返事待ちの種別と時刻を出す（kind/askedAt が揃っているとき）', async () => {
@@ -5090,6 +5166,69 @@ describe('クローンの道具', () => {
     expect(reply).not.toContain('⚠ 直近のターンは報告ではなく失敗で終わっている');
     expect(reply).not.toContain('完遂して畳んだと読まないこと');
     expect(reply).not.toContain('原因が解ければ manager_send で続きから進む');
+  });
+
+  /**
+   * `lastUnreported`（`schema.ts` の `jobSchema`。Issue #917）が在る回も、
+   * `lastFailure` と同じく見出しを「直近のターンの中身」へ倒す。
+   *
+   * **`lastFailure` とは軸が違う。** あちらは SDK が「これは応答ではない」と
+   * 言った回、こちらは `result` を受け取らないまま畳まれた回（`runner.ts` の
+   * `#flushUnreported`）——SDK は一度も失敗を名乗っていないので、⚠ の専用行
+   * （`describeManagerFailure`）は出さない。**見出しだけを切り替える。**
+   */
+  it('manager_list は lastUnreported が在る回でも見出しを「報告」から切り替える（#917。⚠ 行は出さない）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.lastReport =
+      '（このターンは結果を受け取らないまま畳まれた: デーモンから停止を指示された。）\n途中まで';
+    target.lastUnreported = {
+      reason: 'デーモンから停止を指示された。',
+      at: '2026-09-13T01:23:45.000Z',
+    };
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain(
+      '直近のターンの中身: （このターンは結果を受け取らないまま畳まれた: デーモンから停止を指示された。）',
+    );
+    expect(reply).not.toContain('直近の報告');
+    // **`lastFailure` 側の専用行（⚠）はここでは出ない。** SDK は失敗を
+    // 名乗っていないので、`describeManagerFailure` は `lastFailure` の
+    // 有無しか見ない——`lastUnreported` だけでは立たせない。
+    expect(reply).not.toContain('⚠ 直近のターンは報告ではなく失敗で終わっている');
+  });
+
+  /**
+   * `manager_report` 側でも同じ切り替えが効く（#917）。`part: 'request'` は
+   * 依頼文なので、切り替えの対象外のまま——`lastFailure` の歯と同じ形。
+   */
+  it('manager_report は lastUnreported が在る回でも見出しを「報告」から切り替える（#917）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '依頼の本文' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.lastReport =
+      '（このターンは結果を受け取らないまま畳まれた: デーモンから停止を指示された。）\n途中まで';
+    target.lastUnreported = {
+      reason: 'デーモンから停止を指示された。',
+      at: '2026-09-13T01:23:45.000Z',
+    };
+
+    const reply = await h.call('manager_report', { managerId: target.managerId });
+
+    expect(reply).toContain('直近のターンの中身');
+    expect(reply).not.toContain('直近の報告');
+    expect(reply).not.toContain('⚠ 直近のターンは報告ではなく失敗で終わっている');
+
+    const request = await h.call('manager_report', {
+      managerId: target.managerId,
+      part: 'request',
+    });
+    expect(request).toContain('依頼文');
+    expect(request).not.toContain('直近のターンの中身');
   });
 
   /**
@@ -5774,11 +5913,16 @@ describe('クローンの道具', () => {
   });
 
   /**
-   * #783 段0: `manager_list` の受信箱の行に内訳（種類・同一本文・配達回数・
-   * 齢）が付く。**集計値だけで、合図の本文は1文字も載らない**
+   * #783 段0: `manager_list` の受信箱の行に内訳（種類・同一本文・器の入れ替え
+   * 回数・齢）が付く。**集計値だけで、合図の本文は1文字も載らない**
    * （`AGENTS.md` の地雷「エージェントへ返す一覧に本文を全文で載せる」）。
+   *
+   * **#910 で軸名を `配達回数` から `器の入れ替え回数` へ改名した。** 期待値の
+   * 更新であって、保証は弱めていない —— 同じ3本を軸名の新旧で測り直したうえに、
+   * **古い名前が戻らないこと**（`not.toContain('配達回数')`）を1本足してある。
+   * 改名の理由は `inbox-backlog.ts` の `describeInboxBacklogBreakdown` の doc。
    */
-  it('manager_list の受信箱の行に内訳（種類・同一本文・配達回数）が付き、本文は載らない', async () => {
+  it('manager_list の受信箱の行に内訳（種類・同一本文・器の入れ替え回数）が付き、本文は載らない', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
     await h.stores.inbox.put(
@@ -5805,14 +5949,20 @@ describe('クローンの道具', () => {
 
     const reply = await h.call('manager_list', {});
 
-    // 内訳: 種類・計・同一本文・配達回数・齢の見出しが出る。
+    // 内訳: 種類・計・同一本文・器の入れ替え回数・齢の見出しが出る。
     expect(reply).toContain('内訳（計 2 件）');
     expect(reply).toContain('種類:');
     expect(reply).toContain('human_message 1');
     expect(reply).toContain('manager_message 1');
     expect(reply).toContain('同一本文');
-    expect(reply).toContain('配達回数:');
-    expect(reply).toContain('未配達 2');
+    expect(reply).toContain('器の入れ替え回数:');
+    expect(reply).toContain('0回＝いまの器になってから積まれた 2');
+    // **#910: 古い軸名がこの面へ戻らないこと。** `manager_list` の応答は
+    // クローンがこの数字を読む唯一の面である（doc は届かない）。
+    expect(reply).not.toContain('配達回数');
+    // **#910 追補: `未配達` も戻らないこと。** 0 は「届いていない」ではなく
+    // 「いまの器になってから積まれ、まだ片付いていない」である（実測 2026-09-12）。
+    expect(reply).not.toContain('未配達');
     // **本文は1文字も載らない**（地雷「一覧に本文を全文で載せる」）。
     expect(reply).not.toContain('絶対に外へ出てはいけない本文XYZ');
     expect(reply).not.toContain('これも外へ出てはいけない');
@@ -10065,7 +10215,7 @@ describe('システムプロンプトの道具一覧', () => {
  * この歯は `test` だけで踏める。
  */
 describe('自作ツールの日誌名簿（SELF_JOURNALING_CLONE_TOOLS / TRACELESS_CLONE_TOOLS）', () => {
-  it('CLONE_TOOL_NAMES の全37本が、2つの名簿のちょうど一方に属する', () => {
+  it('CLONE_TOOL_NAMES の全部が、2つの名簿のちょうど一方に属する', () => {
     const selfJournaling = new Set<string>(SELF_JOURNALING_CLONE_TOOLS);
     const traceless = new Set<string>(TRACELESS_CLONE_TOOLS);
 
@@ -10177,6 +10327,55 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
   const SWEPT = CLONE_TOOL_NAMES.filter((name) => name.endsWith('_list'));
 
   /**
+   * 総当たりで拾う一覧（`SWEPT`）の、**一覧レベルの断り書きだけが持つ語彙**（#935）。
+   *
+   * ## ⭐ なぜ名簿が要るのか —— 素の `TRUNCATION_MARK` は何も測っていなかった
+   *
+   * `SWEPT` は `section` も `mark` も持たないまま素の `TRUNCATION_MARK`
+   * （`/省略|残り \d|文字目/`）へ落ちていた。足場（`flooded(60)`）が積む本文は
+   * 1件 1,500 字で、**1件ごとの抜粋が `…（1,268 文字省略。全 1,508 文字）` という
+   * 「省略」を独立に出す** ⟹ 一覧レベルの断り書きを1文字も見なくても合格する。
+   *
+   * **実測（#935。7本とも同時に測った）**: 7本の断り書きから「省略」の語だけを
+   * 消す変異を当てても、`— 切ったなら黙らない` の 7本は**全部緑のままだった。**
+   * ⟹ この2文字の逐語こそが、この歯の測っている当のものである。
+   *
+   * ## ⛔ ここに名前を足すときは、必ず現物の応答から写すこと
+   *
+   * 他の道具の断り書きから写さない。**書式は道具ごとに違う**（`件` / `台`、
+   * `全 N 件` / `N 件あり`）。写し間違えると、その道具の歯だけが黙って空になる。
+   */
+  const SWEPT_MARKS: Record<string, RegExp> = {
+    memory_list: /…ほか \d+ 件は省略（記憶は全 \d+ 件あり、\d+ 件だけ出した）。/,
+    approvals_list: /…ほか \d+ 件は省略（回答待ちは \d+ 件あり、先頭から \d+ 件だけ出した）。/,
+    schedule_list: /…ほか \d+ 件は省略（継続中の依頼は \d+ 件あり、\d+ 件だけ出した。/,
+    commitment_list: /…ほか \d+ 件は省略（未了は \d+ 件あり、古い順に \d+ 件だけ出した。/,
+    token_list: /…ほか \d+ 件は省略（プールは \d+ 件あり、order の昇順に \d+ 件だけ出した）。/,
+    manager_list: /…ほか \d+ 件は省略（全 \d+ 件）。/,
+    runner_list: /…ほか \d+ 台は省略（登録は \d+ 台あり、\d+ 台だけ出した）。/,
+  };
+
+  /**
+   * `SWEPT_MARKS` から引く。**名簿に無い一覧が現れたら、そこで止める。**
+   *
+   * ⭐ これも歯である —— `*_list` の道具が1本増えたとき、名簿へ足さなければ
+   * この総当たりは**走る前に落ちる。** 黙って素の `TRUNCATION_MARK` へ落ちて
+   * 「空で緑」の歯が1本増える形には、二度と戻らない。
+   */
+  function sweptMark(name: string): RegExp {
+    const mark = SWEPT_MARKS[name];
+    if (mark === undefined) {
+      throw new Error(
+        `SWEPT_MARKS: '${name}' の一覧レベルの断り書きが名簿に無い。` +
+          '実際の応答からその逐語を写して足すこと（⛔ 他の道具から写さない）。' +
+          '足さずに素の TRUNCATION_MARK へ落とすと、1件ごとの抜粋の「省略」が' +
+          '代わりに合格を出して、この道具の歯だけが黙って空になる（#935）。',
+      );
+    }
+    return mark;
+  }
+
+  /**
    * 節の多い記憶の文書の slug と節数（`flooded()` が積む足場）。
    *
    * `memory_outline`（目次）と `memory_write`（消えた見出しの列挙）は
@@ -10229,8 +10428,26 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
      * 見る旧実装が CI で壊れた）。
      */
     mark?: RegExp;
+    /**
+     * ⚠️ **この呼び方では、一覧レベルでは切れない**（実測。#935）。
+     *
+     * ⟹ 「切ったなら黙らない」は前提（切った）が成り立たないので、代わりに
+     * **その断り書きが出ていないこと**を測る。`mark` と `absent` は
+     * **どちらか一方だけ**を指定する（下の `it.each` の門）。
+     *
+     * ⛔ ここを「何も指定しない」へ戻さないこと —— 素の `TRUNCATION_MARK` へ
+     * 落ちると、1件ごとの抜粋の「省略」が代わりに合格を出して空になる。
+     */
+    absent?: RegExp;
   }[] = [
-    { label: 'journal_read（既定）', name: 'journal_read', args: {} },
+    {
+      label: 'journal_read（既定）',
+      name: 'journal_read',
+      args: {},
+      // ⚠️ **既定の limit では、この足場でも一覧レベルでは切れない**（実測 #935）。
+      // ⟹「切ったなら黙らない」の前提が立たないので、断り書きが**出ていない**ことを測る。
+      absent: /…ほか \d+ 件は省略（この条件で/,
+    },
     /*
      * **`journal_read` は既定の引数では予算に届かない。**
      *
@@ -10242,7 +10459,12 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
      * だから**呼び手が広げられる上限まで広げた呼び**も測る。`limit` の最大は
      * 200 なので、これが「クローンが出せる最大の要求」である。
      */
-    { label: 'journal_read（limit 最大）', name: 'journal_read', args: { limit: 200 } },
+    {
+      label: 'journal_read（limit 最大）',
+      name: 'journal_read',
+      args: { limit: 200 },
+      mark: /…ほか \d+ 件は省略（この条件で \d+ 件あり、新しい順に \d+ 件だけ出した）。/,
+    },
     /*
      * **`journal_read` の語検索（`q`）も一覧モードである（issue #250）。**
      *
@@ -10256,7 +10478,13 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
      * `flooded()` は `決めた<連番>: あ×1500` の `decision` を count 件積む
      * ので、`q: '決めた'` はその全件に当たる（＝件数で伸びる一覧になる）。
      */
-    { label: 'journal_read（語で探す）', name: 'journal_read', args: { q: '決めた' } },
+    {
+      label: 'journal_read（語で探す）',
+      name: 'journal_read',
+      args: { q: '決めた' },
+      // ⚠️ 同上（実測 #935）。絞った結果が既定の limit に収まるので切れない。
+      absent: /…ほか \d+ 件は省略（この条件で/,
+    },
     /*
      * 既定は 20 件なので、`limit` を広げた呼びも測る（既定だけだと
      * `JOURNAL_BUDGET` が一度も拘束条件にならない。上の既定モードと同じ理由）。
@@ -10265,8 +10493,14 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       label: 'journal_read（語で探す・limit 最大）',
       name: 'journal_read',
       args: { q: '決めた', limit: 200 },
+      mark: /…ほか \d+ 件は省略（この条件で \d+ 件あり、新しい順に \d+ 件だけ出した）。/,
     },
-    { label: 'usage_read', name: 'usage_read', args: {} },
+    {
+      label: 'usage_read',
+      name: 'usage_read',
+      args: {},
+      mark: /…（残り \d+ 件は出していない。axis="[a-z]+", offset=\d+ で続きが出る）/,
+    },
     /*
      * **`conversation_read` は3つの一覧モードを持ち、予算の切り口が別々である。**
      *
@@ -10275,7 +10509,13 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
      * 何も測れていない**（中身モードだけが `renderListingFromEnd` を通る）。
      * `id` モードは一覧ではないので、下の「詳細側」の試験が持つ。
      */
-    { label: 'conversation_read（会話の一覧）', name: 'conversation_read', args: {} },
+    {
+      label: 'conversation_read（会話の一覧）',
+      name: 'conversation_read',
+      args: {},
+      // **limit で切った側**（予算で切った下の1本とは理由が違う。逐語も違う）。
+      mark: /…ほか \d+ 件は省略（この窓に \d+ 件あり、新しい順に \d+ 件だけ出した）。省いたのは\*\*古い側\*\*で、切ったのは limit=\d+ である。/,
+    },
     /*
      * 一覧の既定は 20 件なので、`limit` を広げた呼びも測る（`journal_read` と
      * 同じ理由 — 既定だけだと予算が拘束条件にならないことがある）。
@@ -10284,6 +10524,8 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       label: 'conversation_read（会話の一覧・limit 最大）',
       name: 'conversation_read',
       args: { limit: 200 },
+      // **予算で切った側**（直上の limit で切った1本と逐語で見分ける）。
+      mark: /…ほか \d+ 件は省略（この窓に \d+ 件あり、新しい順に \d+ 件だけ出した）。省いたのは\*\*古い側\*\*である。limit を増やしても出てこない/,
     },
     {
       // **長く続いた会話を指す**（`conv-0000` のような2発言の会話では予算が
@@ -10291,8 +10533,14 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       label: 'conversation_read（会話の中身）',
       name: 'conversation_read',
       args: { conversationId: 'conv-long' },
+      mark: /…この会話の\*\*古い側\*\* \d+ 件は省略（この窓に \d+ 件あり、新しい側から \d+ 件だけ出した）。/,
     },
-    { label: 'conversation_read（語で探す）', name: 'conversation_read', args: { q: '発言' } },
+    {
+      label: 'conversation_read（語で探す）',
+      name: 'conversation_read',
+      args: { q: '発言' },
+      mark: /…ほか \d+ 件は省略（"[^"]*" に \d+ 件当たり、新しい順に \d+ 件だけ出した）。/,
+    },
     /*
      * **`self_status` は名前が `_list` で終わらないが、「記憶の大きさ」の節に
      * 一覧（文書ごとの内訳）を持つ。** ここで測るのは節全体の出力（P1/P2 は
@@ -10426,7 +10674,12 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
      * `flooded()` は各周回で `noteDroppedRecord` を1回呼び、帳面
      * （`RECENT_TRACE_LIMIT`＝200件）を溢れさせる（下の `flooded()` を見ること）。
      */
-    { label: 'self_dropped', name: 'self_dropped', args: {} },
+    {
+      label: 'self_dropped',
+      name: 'self_dropped',
+      args: {},
+      mark: /…ほか古い \d+ 件は省略（この呼び出しで渡した \d+ 件のうち直近 \d+ 件だけ出した）。/,
+    },
     /*
      * **`memory_section_move` も名前が `_list` で終わらないが、応答の中に
      * 一覧（移した節の列挙）を1節持つ**（#662 段1）。`memory_write` の
@@ -10804,8 +11057,14 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     argsOf?: (h: Harness) => Promise<Record<string, unknown>>;
     section?: string;
     mark?: RegExp;
+    absent?: RegExp;
   }[] = [
-    ...SWEPT.map((name) => ({ label: name, name, args: {} as Record<string, unknown> })),
+    ...SWEPT.map((name) => ({
+      label: name,
+      name,
+      args: {} as Record<string, unknown>,
+      mark: sweptMark(name),
+    })),
     ...NAMED,
   ];
 
@@ -10823,7 +11082,7 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
 
   it.each(CASES)(
     '$label — 切ったなら黙らない（省いたことが出力に出る）',
-    async ({ label, name, args, argsOf, section, mark }) => {
+    async ({ label, name, args, argsOf, section, mark, absent }) => {
       const h = await flooded(60);
       const effectiveArgs = argsOf === undefined ? args : await argsOf(h);
 
@@ -10853,16 +11112,49 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       // 働かない**（`TRUNCATION_MARK` は `/省略|残り \d|文字目/` という
       // 総称で、`mark` はその一覧に固有の逐語だから、`mark` を満たす出力は
       // 必ず `TRUNCATION_MARK` も満たす）。
-      if (section !== undefined && mark === undefined) {
+      // ## ⛔ 門は「式」ではなく「性質」を弾く（#935）
+      //
+      // **前はこう書いてあった**: `section !== undefined && mark === undefined` を
+      // 弾く。⟹ 「`section` が在るのに `mark` が無い」という**実例の1つ**しか
+      // 見ておらず、**「どちらも無い」は素通りしていた。** 素通りしたケースは素の
+      // `TRUNCATION_MARK` へ落ち、1件ごとの抜粋の「省略」で合格する ——
+      // **実測で `SWEPT` の 7本すべてが、断り書きから「省略」を消しても緑のままだった。**
+      //
+      // **守りたい性質は「表明が素の `TRUNCATION_MARK` へ落ちないこと」である。**
+      // ⟹ 門もそう書く: **どのケースも `mark`（出ていることを名指しで測る）か
+      // `absent`（そもそも切れないので、出ていないことを名指しで測る）の
+      // どちらか一方を必ず持つ。**
+      if ((mark === undefined) === (absent === undefined)) {
         throw new Error(
-          `CASES: section を指定したケースは mark も必ず指定すること（label="${label}"）。` +
-            'mark 無しで素の TRUNCATION_MARK に落とすと、entries の省略が代わりに合格を出す' +
-            '欠陥（#406）へ逆戻りする。',
+          `CASES: mark と absent は、どちらか一方だけを指定すること（label="${label}"）。` +
+            'どちらも無いと表明が素の TRUNCATION_MARK へ落ち、1件ごとの抜粋の「省略」が' +
+            '代わりに合格を出して、この歯は何も測らなくなる（#406 / #935）。' +
+            '両方在ると、同じ断り書きについて出ていることと出ていないことを同時に主張する。',
         );
       }
       const scope = section === undefined ? reply : extractSection(reply, section);
 
-      expect(scope).toMatch(mark ?? TRUNCATION_MARK);
+      if (absent !== undefined) {
+        // **この呼び方では一覧レベルで切れない**（実測）。⟹ 断り書きが出ていないこと
+        // そのものを測る。**切れるようになったらここが赤くなる** —— そのときは
+        // `absent` を `mark` へ置き換える番である（黙って緑のままにはならない）。
+        expect(scope).not.toMatch(absent);
+        return;
+      }
+      expect(scope).toMatch(mark!);
+
+      // ⭐ **`mark` が「締める方向」にしか働かないことを、ここで測る**（#935）。
+      //
+      // この doc は前から「`mark` を満たす出力は必ず `TRUNCATION_MARK` も満たす」と
+      // 書いていたが、**それを測る行は1つも無かった。** `mark` はその一覧に固有の
+      // 逐語であって、**その逐語が「切った」の合図であることまでは名前からは決まらない**
+      // —— たとえば `続きは <道具> cursor=` を `mark` にすると、断り書きから
+      // 「省略」の語が消えても当たり続け、この PR が塞いだ欠陥と同じ形へ戻る。
+      //
+      // ⟹ **`mark` が実際に当てた文字列そのもの**が、総称の `TRUNCATION_MARK` を
+      // 満たすことを測る（応答のどこかが満たすこと、ではない —— それだと1件ごとの
+      // 抜粋の「省略」で合格してしまい、いま直した穴に戻る）。
+      expect(mark!.exec(scope)?.[0] ?? '').toMatch(TRUNCATION_MARK);
     },
   );
 
@@ -14439,14 +14731,14 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
 });
 
 /**
- * `appendJournalOrThrow` の17箇所すべてについて、応答本文が
+ * `appendJournalOrThrow` を経由する呼び出しすべてについて、応答本文が
  * **道具名**（どれが落ちたか）と**先頭行の outcome**（完了状態・未記録・
  * やり直しの可否）の両方を持つことを、道具ごとに独立して測る。
  *
  * **なぜ道具名だけでなく先頭行も測るのか。** 上の
- * `describe('journal.append が失敗したとき…')` の既存の歯は、14箇所の
- * act-completed / 2箇所の act-not-performed / 1箇所の
- * act-partially-completed という **outcome の3分類を網羅する**ために
+ * `describe('journal.append が失敗したとき…')` の既存の歯は、
+ * act-completed / act-not-performed / act-partially-completed という
+ * **outcome の3分類を網羅する**ために
  * 選ばれた代表4件（memory_delete・journal_write・daily_report_write・
  * memory_section_move の move_in）＋ profile_write の秘密の歯だけで、
  * 道具名の `expect(text).toContain(tool)` はその代表の中に**相乗り**して
@@ -14455,10 +14747,16 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
  * `memory_append` の呼び出しが誤って `'memory_write'` という道具名で
  * `appendJournalOrThrow` を呼んでも、act-completed の代表4件には
  * 元から `memory_append` が入っていないので、既存の歯は何も言わない。
- * ここでは17箇所それぞれを独立したケースにして、この相乗りを解消する
- * （17箇所目は `archive_remove`。#698）。
+ * ここでは呼び出し1つずつを独立したケースにして、この相乗りを解消する
+ * （`archive_remove` のケースは #698 で加わった）。
+ *
+ * ⚠️ **ケースが何件かを、ここにも describe 名にも書かないこと**（#923 と同じ
+ * 規則）。散文の本数は呼び出しが1つ増えるたびに腐る——実際ここは「17箇所」と
+ * 名乗ったまま18件まで伸びていた。**この歯が「足りない」と言えるのは
+ * `SELF_JOURNALING_CLONE_TOOLS` から期待値を導いている下の it であって、
+ * 散文の数字ではない。**
  */
-describe('journal.append 失敗時の応答本文: 17箇所すべてで道具名と先頭行 outcome を測る', () => {
+describe('journal.append 失敗時の応答本文: 呼び出し箇所すべてで道具名と先頭行 outcome を測る', () => {
   /** 上の describe の `callExpectingError` と同じもの（複製）。既存側は1文字も変えない。 */
   async function callExpectingError(
     tools: ReturnType<typeof createCloneTools>,
@@ -14853,8 +15151,8 @@ describe('journal.append 失敗時の応答本文: 17箇所すべてで道具名
 
   /**
    * ⭐⭐ 弱点の手当て: `CASES` の道具名の集合を、手で並べた一覧とではなく
-   * `SELF_JOURNALING_CLONE_TOOLS`（18本。#698 で `archive_remove` が
-   * 加わった）から導いた期待値と突き合わせる。
+   * `SELF_JOURNALING_CLONE_TOOLS`（`archive_remove` は #698 で加わった）
+   * から導いた期待値と突き合わせる。
    *
    * `manager_send` / `manager_stop` を除く理由: この2本は `ManagerPool` の
    * ガード付き `#journal`（`clone.ts`）を通るので `appendJournalOrThrow` を
@@ -14862,7 +15160,7 @@ describe('journal.append 失敗時の応答本文: 17箇所すべてで道具名
    * 書く」という性質の名簿であって、その書き方が `appendJournalOrThrow`
    * 経由とは限らない。
    *
-   * これにより、19本目の「自前で journal.append を呼ぶ道具」が
+   * これにより、新しく「自前で journal.append を呼ぶ道具」が
    * `SELF_JOURNALING_CLONE_TOOLS` に足されたとき、`CASES` にケースを
    * 足し忘れるとこの歯が「ケースが足りない」と言って赤くなる。
    */

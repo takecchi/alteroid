@@ -66,6 +66,23 @@ import {
 interface FakeCall {
   options: Options;
   inputs: string[];
+  /**
+   * **この呼び出しが本流のセッションのものか、サイドクエリのものか**（#890）。
+   *
+   * 見分けは `prompt` の形そのものである —— 本流は入力ストリーム
+   * （`AsyncIterable`）で入り、サイドクエリ（蒸留）は**1本の文字列**で入る
+   * （`clone.ts` の `#inputStream` と `#distillFromTranscript`）。下の
+   * `generate()` も同じ `typeof prompt === 'string'` で枝分かれしている。
+   *
+   * **控えておかないと、テスト側は「`calls` の最後」でしか本流を指せない。**
+   * ⟹ サイドクエリが後から積まれた回に、本流のつもりでサイドクエリを掴む。
+   * **そして掴めてしまう** —— 蒸留側の `Options` にも `PostToolUse` は在る
+   * （`claude-provider.ts` の `buildCloneDistillOptions`）ので、「フックが
+   * 無い」で落ちてくれず、**呼ぶ先が `#onDistillToolUse` に差し替わるだけ**に
+   * なる。あちらは `transcript_path` を控えないので、生ログの在り処が
+   * 立たないまま畳みへ入り、退避が黙って素通りする（#890 の落ち方）。
+   */
+  kind: 'session' | 'sideQuery';
 }
 
 function fakeSdk(
@@ -182,7 +199,11 @@ function fakeSdk(
   const calls: FakeCall[] = [];
 
   const fn = ((params: { prompt: unknown; options?: Options }) => {
-    const call: FakeCall = { options: params.options ?? {}, inputs: [] };
+    const call: FakeCall = {
+      options: params.options ?? {},
+      inputs: [],
+      kind: typeof params.prompt === 'string' ? 'sideQuery' : 'session',
+    };
     const callIndex = calls.length;
     calls.push(call);
 
@@ -396,12 +417,44 @@ function lineStartingWith(text: string, prefix: string): string {
   return matches[0]!;
 }
 
+/**
+ * **本流のセッションの、最後の呼び出し**（#890）。
+ *
+ * ⛔ `calls` の末尾をそのまま使わないこと。蒸留のサイドクエリは畳みの後に
+ * **遅れて**積まれるので、末尾が本流である保証はどこにも無い —— 実測（#890）で、
+ * 蒸留側の生ログ読み取りが数 ms 遅れるだけで末尾がサイドクエリへ入れ替わり、
+ * そこから先の待ちが budget を丸ごと使い切って落ちた。**位置ではなく種類で指す。**
+ *
+ * サイドクエリそのものを掴みたいテストは `calls.at(-1)` のままでよい（あちらは
+ * 「直前に自分で起こしたサイドクエリ」を指しており、末尾であることが意味を持つ）。
+ */
+function lastSessionCall(calls: FakeCall[]): FakeCall {
+  for (let i = calls.length - 1; i >= 0; i -= 1) {
+    const call = calls[i]!;
+    if (call.kind === 'session') return call;
+  }
+  throw new Error('本流のセッションの呼び出しが1本も無い');
+}
+
+/**
+ * `waitFor` / `waitForDone` の打ち切り。**⛔ ここを伸ばして歯を黙らせないこと**
+ * （#890）。この budget は本来の所要（実測 36〜53ms）の 60 倍以上あり、
+ * **使い切る回は「遅い」ではなく「起きていない」である。**
+ */
+const WAIT_BUDGET_MS = 3000;
+
 /** 非同期の書き込みが器へ届くまで待つ（`post` は同期で返るので待てない）。 */
 async function waitFor(check: () => Promise<boolean> | boolean, label: string): Promise<void> {
   const started = Date.now();
   for (;;) {
     if (await check()) return;
-    if (Date.now() - started > 3000) throw new Error(`${label} が起きない`);
+    // **「起きない」と言い切らない**（#890）。ここで言えるのは「budget の内に
+    // 起きなかった」までで、**「起きなかった」と「まだ起きていない」は別である。**
+    // 潰すと、次に読む人がこの1行から「そもそも起きない」と読む ⟹ 実際に
+    // #890 でその誤診が出ている。
+    if (Date.now() - started > WAIT_BUDGET_MS) {
+      throw new Error(`${label} が ${WAIT_BUDGET_MS}ms 以内に起きなかった`);
+    }
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
@@ -414,9 +467,11 @@ function waitForDone(events: ChatStreamEvent[]): Promise<void> {
       if (events.some((event) => event.type === 'done')) {
         clearInterval(tick);
         resolve();
-      } else if (Date.now() - started > 3000) {
+      } else if (Date.now() - started > WAIT_BUDGET_MS) {
         clearInterval(tick);
-        reject(new Error(`done が来ない: ${JSON.stringify(events)}`));
+        reject(
+          new Error(`done が ${WAIT_BUDGET_MS}ms 以内に来なかった: ${JSON.stringify(events)}`),
+        );
       }
     }, 5);
   });
@@ -763,6 +818,274 @@ describe('クローン', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+
+    await s.clone.stop();
+  });
+
+  /**
+   * **Issue #924**: `PostToolUse` は道具呼び出しが成功したときにしか発火しない
+   * （出荷済みの SDK 実行体を実測して確認した排他分岐 — Issue 本文参照）。
+   * ⟹ 失敗・中断した道具呼び出しは、`onPostToolUseFailure` を足すまで日誌に
+   * 1件も残らなかった。3マスで陰性対照ごと確かめる —— 失敗・成功（陰性対照）・
+   * 中断の3つを分けて測らないと、「常に failed を書く」実装でも緑になる。
+   */
+  it('失敗した道具呼び出しは tool_use として残り、outcome: "failed" と error が読める', async () => {
+    const s = setup();
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUseFailure?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PostToolUseFailure フックが登録されていない');
+
+    await hook(
+      {
+        tool_name: 'Bash',
+        tool_input: { command: 'git push' },
+        error: 'exit code 1: 認証に失敗した',
+      } as never,
+      undefined,
+      {} as never,
+    );
+
+    const entries = await s.stores.journal.list({ types: ['tool_use'] });
+    expect(entries.length).toBe(1);
+    const entry = entries[0] as {
+      actor: string;
+      tool: string;
+      outcome?: string;
+      error?: string;
+    };
+    expect(entry.tool).toBe('Bash');
+    expect(entry.actor).toBe(CLONE_ACTOR_ID);
+    expect(entry.outcome).toBe('failed');
+    expect(entry.error).toBe('exit code 1: 認証に失敗した');
+
+    await s.clone.stop();
+  });
+
+  it('⭐ 陰性対照: 成功した道具呼び出しには outcome も error も付かない（従来どおり）', async () => {
+    // これが無いと「常に outcome: 'failed' を書く」実装でも緑になる。
+    const s = setup();
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUse?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
+
+    await hook(
+      { tool_name: 'Bash', tool_input: { command: 'git log --oneline -3' } } as never,
+      undefined,
+      {} as never,
+    );
+
+    const entries = await s.stores.journal.list({ types: ['tool_use'] });
+    expect(entries.length).toBe(1);
+    const entry = entries[0] as { outcome?: string; error?: string };
+    expect(entry.outcome).toBeUndefined();
+    expect(entry.error).toBeUndefined();
+
+    await s.clone.stop();
+  });
+
+  it('中断された道具呼び出しは outcome: "interrupted" と読める（失敗とは別の印）', async () => {
+    const s = setup();
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUseFailure?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PostToolUseFailure フックが登録されていない');
+
+    await hook(
+      {
+        tool_name: 'Bash',
+        tool_input: { command: 'sleep 999' },
+        error: 'aborted',
+        is_interrupt: true,
+      } as never,
+      undefined,
+      {} as never,
+    );
+
+    const entries = await s.stores.journal.list({ types: ['tool_use'] });
+    expect(entries.length).toBe(1);
+    expect((entries[0] as { outcome?: string }).outcome).toBe('interrupted');
+
+    await s.clone.stop();
+  });
+
+  it('is_interrupt が欠けている失敗は "interrupted" ではなく "failed" 側へ倒れる', async () => {
+    // is_interrupt は optional——SDK が付けてこないことがある。欠けを第3の
+    // 値にせず、安全側（failed）に倒す（schema.ts の tool_use.outcome の doc）。
+    const s = setup();
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUseFailure?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PostToolUseFailure フックが登録されていない');
+
+    await hook(
+      { tool_name: 'Bash', tool_input: { command: 'false' }, error: 'exit 1' } as never,
+      undefined,
+      {} as never,
+    );
+
+    const entries = await s.stores.journal.list({ types: ['tool_use'] });
+    expect((entries[0] as { outcome?: string }).outcome).toBe('failed');
+
+    await s.clone.stop();
+  });
+
+  it('蒸留のサイドクエリで失敗した道具呼び出しも日誌に残る（別セッションだと分かる形で）', async () => {
+    const s = setup();
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const main = s.calls[0] as FakeCall;
+    const dir = await mkdtemp(join(tmpdir(), 'alteroid-distill-failure-audit-'));
+    try {
+      const transcriptPath = join(dir, 'transcript.jsonl');
+      await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
+      const preCompact = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
+      if (preCompact === undefined) throw new Error('PreCompact フックが登録されていない');
+      await preCompact(
+        { session_id: 'sess-fake', transcript_path: transcriptPath } as never,
+        undefined,
+        { signal: new AbortController().signal } as never,
+      );
+
+      const side = s.calls.at(-1) as FakeCall;
+      expect(side).not.toBe(main);
+      const hook = side.options.hooks?.PostToolUseFailure?.[0]?.hooks?.[0];
+      if (hook === undefined) throw new Error('蒸留側に PostToolUseFailure フックが無い');
+      await hook(
+        {
+          tool_name: qualifiedToolName('memory_write'),
+          tool_input: { slug: 'values' },
+          error: 'ストアに書けなかった',
+        } as never,
+        undefined,
+        {} as never,
+      );
+      // **自作ツール（memory_write）の失敗は除外される**——`#journalToolUse` と
+      // 同じ除外規則を通すため（判断は `#journalToolUseFailure` の doc に
+      // 名指ししてある）。だから別の道具（`Write`）で「蒸留側の失敗が残る」
+      // ことを別途確かめる。
+      await hook(
+        { tool_name: 'Write', tool_input: { file_path: '/a' }, error: 'ENOSPC' } as never,
+        undefined,
+        {} as never,
+      );
+
+      const entries = await s.stores.journal.list({ types: ['tool_use'] });
+      const memoryWrite = entries.find(
+        (entry) => (entry as { tool: string }).tool === qualifiedToolName('memory_write'),
+      );
+      expect(memoryWrite).toBeUndefined();
+
+      const write = entries.find((entry) => (entry as { tool: string }).tool === 'Write');
+      expect((write as { actor: string } | undefined)?.actor).toBe('clone:distill');
+      expect((write as { outcome?: string } | undefined)?.outcome).toBe('failed');
+      expect((write as { error?: string } | undefined)?.error).toBe('ENOSPC');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+
+    await s.clone.stop();
+  });
+
+  it('自作ツール（自前で日誌へ書く側）の失敗は、成功と同じ規則で除かれる', async () => {
+    // **判断が要った点**: 失敗だけは自作ツールでも重ねて残す、という選択肢も
+    // 在ったが、`#journalToolUse` と同じ除外規則（`cloneToolJournalsItself`）を
+    // そのまま通すことにした（`#journalToolUseFailure` の doc に名指ししてある）。
+    const s = setup();
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUseFailure?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PostToolUseFailure フックが登録されていない');
+
+    await hook(
+      {
+        tool_name: qualifiedToolName('memory_write'),
+        tool_input: { slug: 'values' },
+        error: 'ストアに書けなかった',
+      } as never,
+      undefined,
+      {} as never,
+    );
+
+    expect(await s.stores.journal.list({ types: ['tool_use'] })).toEqual([]);
+
+    await s.clone.stop();
+  });
+
+  it('自作ツールでも「読む」道具（TRACELESS 側）の失敗は残る', async () => {
+    const s = setup();
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUseFailure?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PostToolUseFailure フックが登録されていない');
+
+    await hook(
+      {
+        tool_name: qualifiedToolName('memory_read'),
+        tool_input: { slug: 'values' },
+        error: 'not found',
+      } as never,
+      undefined,
+      {} as never,
+    );
+
+    const entries = await s.stores.journal.list({ types: ['tool_use'] });
+    expect(entries.length).toBe(1);
+    expect((entries[0] as { outcome?: string }).outcome).toBe('failed');
+
+    await s.clone.stop();
+  });
+
+  it('道具の名前が読めない失敗でも、記録を落とさない（監査の穴を静かに空けない）', async () => {
+    const s = setup();
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUseFailure?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PostToolUseFailure フックが登録されていない');
+
+    await hook({ tool_input: { any: 1 }, error: '???' } as never, undefined, {} as never);
+
+    const entries = await s.stores.journal.list({ types: ['tool_use'] });
+    expect(entries.map((entry) => (entry as { tool: string }).tool)).toEqual(['(不明な道具)']);
+    expect((entries[0] as { outcome?: string }).outcome).toBe('failed');
+
+    await s.clone.stop();
+  });
+
+  it('error が上限を超えると切り詰められ、切り詰めたと分かる合図が付く', async () => {
+    const s = setup();
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUseFailure?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PostToolUseFailure フックが登録されていない');
+
+    const huge = 'エラー詳細:'.repeat(2000); // 明らかにどの上限よりも長い
+    await hook(
+      { tool_name: 'Bash', tool_input: { command: 'x' }, error: huge } as never,
+      undefined,
+      {} as never,
+    );
+
+    const entries = await s.stores.journal.list({ types: ['tool_use'] });
+    const error = (entries[0] as { error?: string }).error;
+    expect(error).toBeDefined();
+    // 黙って切らない——`excerptLine` の「省略」合図が付く（excerpt.ts の doc）。
+    expect(error).toMatch(/省略/);
+    // 全文を書けば huge.length（20,000字超）になる。切れていることを見る
+    // ——正確な上限値はここでは固定しない（clone.ts の TOOL_USE_ERROR_EXCERPT
+    // が正本）。
+    expect(error!.length).toBeLessThan(huge.length);
+    expect(error!.length).toBeLessThan(1000);
 
     await s.clone.stop();
   });
@@ -2625,7 +2948,11 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
     let passThrough = false;
 
     const fn = ((params: { prompt: unknown; options?: Options }) => {
-      const call: FakeCall = { options: params.options ?? {}, inputs: [] };
+      const call: FakeCall = {
+        options: params.options ?? {},
+        inputs: [],
+        kind: typeof params.prompt === 'string' ? 'sideQuery' : 'session',
+      };
       const callIndex = calls.length;
       calls.push(call);
 
@@ -5647,7 +5974,11 @@ describe('クローン — 考えている合図（thinking）', () => {
     let turnIndex = 0;
 
     const fn = ((params: { prompt: unknown; options?: Options }) => {
-      const call: FakeCall = { options: params.options ?? {}, inputs: [] };
+      const call: FakeCall = {
+        options: params.options ?? {},
+        inputs: [],
+        kind: typeof params.prompt === 'string' ? 'sideQuery' : 'session',
+      };
       calls.push(call);
 
       async function* generate(): AsyncGenerator<SDKMessage, void> {
@@ -5935,7 +6266,11 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
     let held = true;
 
     const fn = ((params: { prompt: unknown; options?: Options }) => {
-      const call: FakeCall = { options: params.options ?? {}, inputs: [] };
+      const call: FakeCall = {
+        options: params.options ?? {},
+        inputs: [],
+        kind: typeof params.prompt === 'string' ? 'sideQuery' : 'session',
+      };
       calls.push(call);
 
       async function* generate(): AsyncGenerator<SDKMessage, void> {
@@ -12499,7 +12834,11 @@ describe('onUsageObservation（回し手へ渡す観測）', () => {
         createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
       ]),
     });
-    return { clone, calls, seen };
+    // **届いた報告そのものを見られるようにする**（#935）。`calls`（SDK が何回
+    // 呼ばれたか）だけでは「ターンが壊れなかった」までしか言えず、**どの報告が
+    // 届いたか**——この節がいちばん測りたいこと——に一度も触れない。
+    const { events } = wireEvents(clone, 'conv-1');
+    return { clone, calls, seen, events };
   }
 
   /**
@@ -12640,19 +12979,52 @@ describe('onUsageObservation（回し手へ渡す観測）', () => {
     expect(seen[0]).not.toHaveProperty('observedBy');
   });
 
+  /**
+   * ⭐ **この歯は「空で緑」だった**（#935）。唯一の表明が
+   * `expect(calls.length).toBeGreaterThan(0)` で、その値は**直前の
+   * `await waitFor(() => calls.length > 0)` が既に真にしたもの**だった
+   * （`waitFor` は打ち切りで throw するので、次の行に届いた時点で必ず 1 以上）。
+   * ⟹ 名乗っている「**別の失敗で上限の報告を置き換えない**」を、どの行も
+   * 測っていなかった。
+   *
+   * **測るべきものは3つある**（`#observeForTokenRotation` の doc が言っている
+   * とおりの3つである）:
+   *
+   * 1. **上限の報告がそのまま人間へ届く** —— `usage_limited` の本文が上限の文言で
+   *    あって、「回し手が落ちた」ではないこと。**ここが置き換わるのが、この節が
+   *    名指ししている欠陥である。**
+   * 2. **ターンは終端まで走る** —— 回し手の失敗で途中で切れない
+   * 3. **回し手の失敗は黙って消えない** —— 跡（`noteDroppedRecord`）が残る。
+   *    ⛔ ここを落とすと「握り潰してよい」に化ける
+   */
   it('回し手が投げてもターンを壊さない（別の失敗で上限の報告を置き換えない）', async () => {
-    const { clone, calls } = cloneObserving({
+    const limitText = "You've hit your org's monthly spend limit";
+    const { clone, calls, events } = cloneObserving({
       onObserve: () => Promise.reject(new Error('回し手が落ちた')),
-      sdkOptions: {
-        resultSubtype: 'error_during_execution',
-        resultText: "You've hit your org's monthly spend limit",
-      },
+      sdkOptions: { resultSubtype: 'error_during_execution', resultText: limitText },
     });
-    say(clone);
-    // セッションは開き、ターンは最後まで走る。
-    await waitFor(() => calls.length > 0, 'セッションが開くこと');
-    clone.stop();
-    expect(calls.length).toBeGreaterThan(0);
+
+    const lines = await captureStderr(async () => {
+      say(clone);
+      // セッションは開き、**ターンは終端（error / done）まで走る。**
+      await waitForTerminal(events);
+    });
+    await clone.stop();
+
+    // 1. 上限の報告が、回し手の失敗に置き換えられずに届く。
+    const limited = events.filter((event) => event.type === 'usage_limited');
+    expect(limited).toHaveLength(1);
+    const message = (limited[0] as Extract<ChatStreamEvent, { type: 'usage_limited' }>).message;
+    expect(message).toContain(limitText);
+    expect(message).not.toContain('回し手が落ちた');
+
+    // 2. セッションは実際に開いている（回し手の失敗が起動そのものを潰していない）。
+    expect(calls.filter((call) => call.kind === 'session')).not.toHaveLength(0);
+
+    // 3. 回し手の失敗は黙って消えず、跡が残る。⛔ この行を落とすと「握り潰して
+    //    よい」に化ける（`#observeForTokenRotation` の catch は跡を残すためだけに在る）。
+    const dropped = lines.filter((line) => line.includes('認証トークンの切替')).join('\n');
+    expect(dropped).toContain('回し手が落ちた');
   });
 
   /**
@@ -13918,7 +14290,7 @@ describe('クローン — 文脈窓で畳む前の退避は diverged/unknown �
       `t-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonl`,
     );
     await writeFile(transcriptPath, body, 'utf8');
-    const main = s.calls[s.calls.length - 1] as FakeCall;
+    const main = lastSessionCall(s.calls);
     const hook = main.options.hooks?.PostToolUse?.[0]?.hooks?.[0];
     if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
     await hook({ tool_name: 'Read', transcript_path: transcriptPath } as never, undefined, {

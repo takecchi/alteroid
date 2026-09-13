@@ -36,14 +36,22 @@ import { resolveTarget } from './target.js';
  * 再利用し、`chat.ts` 側で新しい言い方を発明しないようにする。
  */
 /**
- * 本文の変化量（#913）。`MemoryDescriptionFreshness` の `stale` にだけ乗る
- * （`fresh` は定義上 drift 0 なので持たない）。`packages/core/src/schema.ts`
- * の `memoryDescriptionDriftSchema` と同じ形——CLI は HTTP 経由の JSON を
- * 見ているだけで `@alteroid/core` の型そのものを持ち込んでいないので、ここでも
- * 私物として持つ（`formatMemoryStaleness` の doc と同じ理由）。
+ * 本文の変化量（#913 / #821 残課題）。`MemoryDescriptionFreshness` の
+ * `stale` にだけ乗る（`fresh` は定義上 drift 0 なので持たない）。
+ * `packages/core/src/schema.ts` の `memoryDescriptionDriftSchema` と同じ形
+ * ——CLI は HTTP 経由の JSON を見ているだけで `@alteroid/core` の型その
+ * ものを持ち込んでいないので、ここでも私物として持つ
+ * （`formatMemoryStaleness` の doc と同じ理由）。
  */
 export type MemoryDescriptionDrift =
   | { kind: 'measured'; describedBytes: number; currentBytes: number; deltaBytes: number }
+  | {
+      kind: 'at-least';
+      baselineBytes: number;
+      baselineAt: string;
+      currentBytes: number;
+      deltaBytes: number;
+    }
   | { kind: 'unrecorded' };
 
 export interface MemorySummary {
@@ -139,9 +147,9 @@ function formatMemoryStaleness(ms: number): string {
 }
 
 /**
- * `MemoryDescriptionDrift` の網羅性を型で強制する（#913。core 側の
- * `assertNeverMemoryDescriptionDrift` と同じ形——`drift` の状態を1つ
- * 足したときに埋め忘れた分岐で `tsc` が落ちる側へ倒す）。
+ * `MemoryDescriptionDrift` の網羅性を型で強制する（#913 / #821 残課題。
+ * core 側の `assertNeverMemoryDescriptionDrift` と同じ形——`drift` の
+ * 状態を1つ足したときに埋め忘れた分岐で `tsc` が落ちる側へ倒す）。
  */
 function assertNeverMemoryDescriptionDrift(drift: never): never {
   throw new Error(`未知の要旨の変化量の状態: ${JSON.stringify(drift)}`);
@@ -166,14 +174,32 @@ function formatMemoryDescriptionDrift(drift: {
 }
 
 /**
- * `MemoryDescriptionDrift`（2状態）を人間可読な文字列にする（#913）。
- * **`switch` で網羅し、`default` で `assertNeverMemoryDescriptionDrift` へ
- * 落とす。**
+ * 変化量（バイト）を人間可読な文字列にする（`at-least` 専用、#821 残課題。
+ * `packages/core/src/memory.ts` の `formatMemoryDescriptionDriftAtLeast` と
+ * 同じ考え方だが実体は分けて持つ）。**`%` を出さず、`baselineAt` も刷らず、
+ * `本文は` も持たない**——理由は core 側の同名関数の doc と同じ。
+ */
+function formatMemoryDescriptionDriftAtLeast(drift: {
+  baselineBytes: number;
+  currentBytes: number;
+  deltaBytes: number;
+}): string {
+  const sign = drift.deltaBytes < 0 ? '-' : '+';
+  const magnitude = Math.abs(drift.deltaBytes).toLocaleString('en-US');
+  return `${sign}${magnitude}バイト以上変わった`;
+}
+
+/**
+ * `MemoryDescriptionDrift`（3状態）を人間可読な文字列にする（#913 /
+ * #821 残課題）。**`switch` で網羅し、`default` で
+ * `assertNeverMemoryDescriptionDrift` へ落とす。**
  */
 function describeMemoryDescriptionDrift(drift: MemoryDescriptionDrift): string {
   switch (drift.kind) {
     case 'measured':
       return formatMemoryDescriptionDrift(drift);
+    case 'at-least':
+      return formatMemoryDescriptionDriftAtLeast(drift);
     case 'unrecorded':
       return '本文の変化量は記録されていない';
     default:

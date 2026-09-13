@@ -829,6 +829,115 @@ describe('FsPersonaStore', () => {
         expect(doc.descriptionFreshness.drift).toEqual({ kind: 'unrecorded' });
       }
     });
+
+    /**
+     * ⭐⭐ #821 残課題のいちばん重要な歯。「本文だけの書き込み（`append`）で
+     * 基準点が立つ」——直上のテストが再現した「`describedBytes` が無い既存の
+     * 行」へ append を1回当て、`drift` が `unrecorded` から `at-least` へ
+     * 変わり、**`deltaBytes` がその append のバイト数と一致する**（0 では
+     * ない）ことを見る。
+     */
+    it('describedBytes を持たない既存の行へ append すると、その場で基準点が立ち drift が at-least になる（deltaBytes は0にならない、#821 残課題）', async () => {
+      await stores.persona.write(
+        'runbook',
+        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版1\n',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await stores.persona.write(
+        'runbook',
+        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版2（本文だけ変えた）\n',
+      );
+
+      // 直上のテストと同じ手口で「describedBytes を持たない古い行」を再現する。
+      const indexPath = join(stores.paths.memory, '.index.json');
+      const index = JSON.parse(await readFile(indexPath, 'utf8')) as Record<
+        string,
+        { describedBytes?: number; describedBytesAt?: string }
+      >;
+      delete index.runbook?.describedBytes;
+      delete index.runbook?.describedBytesAt;
+      await writeFile(indexPath, JSON.stringify(index), 'utf8');
+
+      const before = await stores.persona.read('runbook');
+      expect(before?.descriptionFreshness.kind).toBe('stale');
+      if (before?.descriptionFreshness.kind === 'stale') {
+        expect(before.descriptionFreshness.drift).toEqual({ kind: 'unrecorded' });
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const appended = '基準点を立てるための追記\n';
+      await stores.persona.append('runbook', appended);
+
+      const after = await stores.persona.read('runbook');
+      expect(after?.descriptionFreshness.kind).toBe('stale');
+      if (after?.descriptionFreshness.kind === 'stale') {
+        expect(after.descriptionFreshness.drift.kind).toBe('at-least');
+        if (after.descriptionFreshness.drift.kind === 'at-least') {
+          // ⛔ 0 ではない——この append 自身の増減が最初から数に乗っている
+          // （基準点を「書いた後の値」にする変異は、ここで deltaBytes: 0 を
+          // 返して落ちる）。
+          expect(after.descriptionFreshness.drift.deltaBytes).not.toBe(0);
+          expect(after.descriptionFreshness.drift.deltaBytes).toBeGreaterThanOrEqual(
+            Buffer.byteLength(appended, 'utf8'),
+          );
+        }
+      }
+    });
+
+    /**
+     * ⭐ 「弾いていないことを測る歯」。一度立った基準点は、2回目の append で
+     * 進んでいない——進んでいたら、常に「直前の1回ぶん」しか測れない道具に
+     * 戻る（#821 残課題）。
+     */
+    it('一度立った基準点は、2回目の append で動かない（#821 残課題）', async () => {
+      await stores.persona.write(
+        'runbook',
+        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版1\n',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await stores.persona.write(
+        'runbook',
+        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版2（本文だけ変えた）\n',
+      );
+
+      const indexPath = join(stores.paths.memory, '.index.json');
+      const index = JSON.parse(await readFile(indexPath, 'utf8')) as Record<
+        string,
+        { describedBytes?: number; describedBytesAt?: string }
+      >;
+      delete index.runbook?.describedBytes;
+      delete index.runbook?.describedBytesAt;
+      await writeFile(indexPath, JSON.stringify(index), 'utf8');
+
+      // 1回目の append で基準点が立つ。
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await stores.persona.append('runbook', '1回目の追記\n');
+      const afterFirst = await stores.persona.read('runbook');
+      expect(afterFirst?.descriptionFreshness.kind).toBe('stale');
+      if (afterFirst?.descriptionFreshness.kind !== 'stale') throw new Error('unreachable');
+      expect(afterFirst.descriptionFreshness.drift.kind).toBe('at-least');
+      if (afterFirst.descriptionFreshness.drift.kind !== 'at-least') throw new Error('unreachable');
+      const firstBaselineBytes = afterFirst.descriptionFreshness.drift.baselineBytes;
+      const firstBaselineAt = afterFirst.descriptionFreshness.drift.baselineAt;
+
+      // 2回目の append。基準点（baselineBytes / baselineAt）は動かないはず
+      // ——動けば「2回目の直前」の値に置き換わる。
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await stores.persona.append('runbook', '2回目の追記\n');
+      const afterSecond = await stores.persona.read('runbook');
+      expect(afterSecond?.descriptionFreshness.kind).toBe('stale');
+      if (afterSecond?.descriptionFreshness.kind !== 'stale') throw new Error('unreachable');
+      expect(afterSecond.descriptionFreshness.drift.kind).toBe('at-least');
+      if (afterSecond.descriptionFreshness.drift.kind !== 'at-least')
+        throw new Error('unreachable');
+      expect(afterSecond.descriptionFreshness.drift.baselineBytes).toBe(firstBaselineBytes);
+      expect(afterSecond.descriptionFreshness.drift.baselineAt).toBe(firstBaselineAt);
+      // かつ deltaBytes は「2回目の追記だけ」ではなく、基準点からの累計
+      // （1回目 + 2回目）——基準点が動いていないことの、もう1つの裏付け。
+      expect(afterSecond.descriptionFreshness.drift.deltaBytes).toBeGreaterThan(
+        afterFirst.descriptionFreshness.drift.deltaBytes,
+      );
+    });
   });
 });
 

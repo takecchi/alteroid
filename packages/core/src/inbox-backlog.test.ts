@@ -675,16 +675,16 @@ describe('describeInboxBacklogBreakdown', () => {
   });
 
   /**
-   * 未配達の内訳（種類別）の行——0件のときは他の0件軸と同じ「（無し）」で
+   * 0回の桶の内訳（種類別）の行——0件のときは他の0件軸と同じ「（無し）」で
    * よい（`undelivered` 自体が0なので「測っていない」との混同が起きない）。
    */
-  it('未配達の内訳の行: 未配達が無ければ「（無し）」、在れば種類別に出る', () => {
+  it('0回の内訳の行: 0回が無ければ「（無し）」、在れば種類別に出る', () => {
     const zero = summarizeInboxBacklog(
       [row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z', 1)],
       NOW,
     );
-    expect(lineStartingWith(describeInboxBacklogBreakdown(zero), '未配達の内訳')).toBe(
-      '未配達の内訳（種類別）: （無し）',
+    expect(lineStartingWith(describeInboxBacklogBreakdown(zero), 'いまの器')).toBe(
+      'いまの器になってから積まれた分（0回）の内訳（種類別）: （無し）',
     );
 
     const some = summarizeInboxBacklog(
@@ -694,8 +694,118 @@ describe('describeInboxBacklogBreakdown', () => {
       ],
       NOW,
     );
-    expect(lineStartingWith(describeInboxBacklogBreakdown(some), '未配達の内訳')).toBe(
-      '未配達の内訳（種類別）: human_message 1 / manager_message 1',
+    expect(lineStartingWith(describeInboxBacklogBreakdown(some), 'いまの器')).toBe(
+      'いまの器になってから積まれた分（0回）の内訳（種類別）: human_message 1 / manager_message 1',
+    );
+  });
+
+  /**
+   * ⭐ #910: **軸の名前と断り書きが「刷られること」を測る歯。**
+   *
+   * この2行（`同一本文…` と `器の入れ替え回数…`）は #818 の時点から
+   * `describeInboxBacklogBreakdown` の doc が但し書きを持っていたのに、
+   * **出力には1文字も刷っていなかった。** クローンはこの出力しか読まないので、
+   * doc の但し書きは届かず、2つの誤った結論が立ち、その筋で委譲が1本出た（#910）。
+   *
+   * **`toContain` で語を拾わない。** 語だけを見る形だと、断り書きを節ごと消しても
+   * 数字の側が残って緑のままになる（`lineStartingWith` の doc）。行を1本に特定して
+   * **丸ごと `toBe` で固定する** —— 断り書きの1文字が消えれば赤くなる。
+   *
+   * **`not.toContain('配達回数')` を対で置く。** 全文固定だけだと、この関数の
+   * *他の行*（あるいは将来足される行）に古い名前が戻ってきても緑のままになる。
+   * #910 が塞いだのは「この計器が `配達回数` と名乗ること」そのものなので、
+   * 名前が戻らないことを出力全体に対して測る。
+   */
+  it('同一本文の行: 数字だけでなく、両方向にぶれることと doc の在り処が刷られる', () => {
+    const rows = [
+      row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z'),
+      row({ ...SAMPLE_EVENTS.human_message, id: 'e2' }, '2026-09-11T05:00:00.000Z'),
+      row(
+        { ...SAMPLE_EVENTS.human_message, id: 'e3', text: '別の発言' },
+        '2026-09-11T00:00:00.000Z',
+      ),
+    ];
+    const b = summarizeInboxBacklog(rows, NOW);
+    expect(lineStartingWith(describeInboxBacklogBreakdown(b), '同一本文')).toBe(
+      '同一本文（id/at を除いた中身）を畳むと 2 件 ⚠ 本文が同じでも別々に起きた出来事である。' +
+        'この数は上下どちらへもぶれる（向きと理由は inboxBacklogDedupeKey の doc）',
+    );
+  });
+
+  it('器の入れ替え回数の行: 軸名が「配達回数」ではなく、0回が何を意味するかを名乗る', () => {
+    const rows = [
+      row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z', 0),
+      row({ ...SAMPLE_EVENTS.human_message, id: 'e2' }, '2026-09-11T00:00:00.000Z', 1),
+      row({ ...SAMPLE_EVENTS.human_message, id: 'e3' }, '2026-09-11T00:00:00.000Z', 2),
+      row({ ...SAMPLE_EVENTS.human_message, id: 'e4' }, '2026-09-11T00:00:00.000Z', 4),
+    ];
+    const b = summarizeInboxBacklog(rows, NOW);
+    expect(lineStartingWith(describeInboxBacklogBreakdown(b), '器の入れ替え回数')).toBe(
+      '器の入れ替え回数: 0回＝いまの器になってから積まれた 1 / 1回 1 / 2回以上 2（最大 4）' +
+        '⚠ 配られた回数ではない — 門が畳んだ行はターンが1度も起きないまま数だけ増える',
+    );
+  });
+
+  /**
+   * **陰性対照と対になる歯である。** 上の2本（陽性）は「その行がその文言で在ること」を
+   * 測るので、断り書きを消せば赤くなる。こちらは逆側 —— **古い名前が出力のどこにも
+   * 戻っていないこと**を、同じ被験体（同じ行）に対して測る。片方だけだと、
+   * 名前を戻しつつ新しい行を足す形が緑のまま通る。
+   */
+  it('出力のどこにも「配達回数」という軸名が現れない（#910 で塞いだ名前）', () => {
+    const rows = [
+      row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z', 0),
+      row({ ...SAMPLE_EVENTS.external, id: 'e2' }, '2026-09-11T00:00:00.000Z', 3),
+    ];
+    const text = describeInboxBacklogBreakdown(summarizeInboxBacklog(rows, NOW));
+
+    expect(text).not.toContain('配達回数');
+    expect(text).toContain('0回＝いまの器になってから積まれた');
+    // ⭐ #910 追補: 旧い語（`未配達`）も出力から外した。0 は「届いていない」では
+    // なく「いまの器になってから積まれ、まだ片付いていない」である。
+    expect(text).not.toContain('未配達');
+    expect(lineStartingWith(text, 'いまの器になってから積まれた分')).toBe(
+      'いまの器になってから積まれた分（0回）の内訳（種類別）: human_message 1',
+    );
+  });
+});
+
+describe('observedAt（#910 追補2 — 齢の基準点）', () => {
+  /**
+   * ⭐ 齢（`1時間未満 21` など）は `now` からの**相対値**である。基準点を
+   * 刷らないと、この内訳を別の場所へ写した瞬間に「いつから見て1時間未満か」が
+   * 消える。⟹ 足したのは断り書きではなく**落としていた演算子**である。
+   *
+   * **陽性**: 基準点が消えたら赤くなる（行を丸ごと `toBe` で固定）。
+   * **対の側**: `Date.now()` を呼ばず、渡された `now` をそのまま写していること
+   * （純関数のまま）を、`NOW` とは違う値を渡して測る。
+   */
+  it('齢の行に、渡された now が基準点として刷られる', () => {
+    const b = summarizeInboxBacklog(
+      [row(SAMPLE_EVENTS.human_message, '2026-09-11T11:30:00.000Z')],
+      NOW,
+    );
+    expect(b.observedAt).toBe('2026-09-11T12:00:00.000Z');
+    expect(lineStartingWith(describeInboxBacklogBreakdown(b), '齢')).toBe(
+      '齢（観測 2026-09-11T12:00:00.000Z 時点。齢は相対値なので、この行を写すときは基準点も一緒に写すこと）: 1時間未満 1',
+    );
+  });
+
+  it('Date.now() を呼ばない — 渡された now がそのまま基準点になる（NOW とは別の値で測る）', () => {
+    const other = Date.parse('2026-01-02T03:04:05.678Z');
+    const b = summarizeInboxBacklog(
+      [row(SAMPLE_EVENTS.human_message, '2026-01-02T03:00:00.000Z')],
+      other,
+    );
+    expect(b.observedAt).toBe('2026-01-02T03:04:05.678Z');
+    expect(describeInboxBacklogBreakdown(b)).toContain('観測 2026-01-02T03:04:05.678Z 時点');
+  });
+
+  it('0件の内訳でも基準点は落ちない（値を作らない軸とは違い、これは必ず取れる）', () => {
+    const b = summarizeInboxBacklog([], NOW);
+    expect(b.observedAt).toBe('2026-09-11T12:00:00.000Z');
+    expect(lineStartingWith(describeInboxBacklogBreakdown(b), '齢')).toBe(
+      '齢（観測 2026-09-11T12:00:00.000Z 時点。齢は相対値なので、この行を写すときは基準点も一緒に写すこと）: （無し）',
     );
   });
 });

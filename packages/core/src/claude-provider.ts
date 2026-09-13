@@ -51,7 +51,7 @@ export const CLAUDE_PROVIDER: AgentProvider = {
   displayName: 'Claude',
   capabilities: {
     permissions: true, // runner.ts の #onPermission（canUseTool）
-    toolAudit: true, // clone.ts の #onPostToolUse・#onDistillToolUse / runner.ts の #onPostToolUse（PostToolUse フック）
+    toolAudit: true, // clone.ts の #onPostToolUse・#onDistillToolUse・#onPostToolUseFailure・#onDistillToolUseFailure / runner.ts の #onPostToolUse（PostToolUse フック。runner.ts は PostToolUseFailure 未対応 — Issue #924 はクローン側の2箇所のみ）
     compactionHook: true, // clone.ts の #onPreCompact / runner.ts の #onPreCompact（PreCompact フック）
     resume: true, // buildCloneSessionOptions / buildManagerSessionOptions の Options.resume
     sessionLog: true, // buildCloneSessionOptions / buildManagerSessionOptions の Options.sessionStore
@@ -80,6 +80,8 @@ export interface CloneSessionOptionsRequest {
   sessionStore?: SessionStore;
   onPreCompact: HookCallback;
   onPostToolUse: HookCallback;
+  /** 失敗・中断した道具呼び出し（`PostToolUse` と排他）。Issue #924。 */
+  onPostToolUseFailure: HookCallback;
 }
 
 /** クローン本セッションへ渡す `Options`。組み立ての知識は `clone.ts` の旧 `#buildOptions` から移した。 */
@@ -95,6 +97,7 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
     sessionStore,
     onPreCompact,
     onPostToolUse,
+    onPostToolUseFailure,
   } = request;
 
   return {
@@ -173,6 +176,17 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
           hooks: [onPostToolUse],
         },
       ],
+      // **`PostToolUse` とは排他で発火する**（Issue #924 — 出荷済みの SDK
+      // 実行体を実測し、`try` 側で `PostToolUse` を、`catch` 側で
+      // `PostToolUseFailure` を組み立てる排他分岐を確認した）。⟹ 道具呼び出し
+      // 1回につきどちらか一方だけが呼ばれるので、両方に登録しても二重記録に
+      // ならない。**片方だけ登録しない道は無い** — 失敗・中断した道具呼び出し
+      // が日誌に1件も残らなくなる（`docs/architecture.md`「非対称な可視性」）。
+      PostToolUseFailure: [
+        {
+          hooks: [onPostToolUseFailure],
+        },
+      ],
     },
   };
 }
@@ -189,11 +203,22 @@ export interface CloneDistillOptionsRequest {
   env: NodeJS.ProcessEnv;
   cwd?: string;
   onPostToolUse: HookCallback;
+  /** 失敗・中断した道具呼び出し（`PostToolUse` と排他）。Issue #924。 */
+  onPostToolUseFailure: HookCallback;
 }
 
 /** 蒸留のサイドクエリへ渡す `Options`。組み立ての知識は `clone.ts` の旧 `#distillFromTranscript` から移した。 */
 export function buildCloneDistillOptions(request: CloneDistillOptionsRequest): Options {
-  const { model, permissionMode, mcpServer, systemPrompt, env, cwd, onPostToolUse } = request;
+  const {
+    model,
+    permissionMode,
+    mcpServer,
+    systemPrompt,
+    env,
+    cwd,
+    onPostToolUse,
+    onPostToolUseFailure,
+  } = request;
 
   return {
     model,
@@ -219,6 +244,10 @@ export function buildCloneDistillOptions(request: CloneDistillOptionsRequest): O
     // `#effort` を汚さないよう、日誌だけを書く枝を通す）。
     hooks: {
       PostToolUse: [{ hooks: [onPostToolUse] }],
+      // **本セッション側と同じ理由で登録する**（`buildCloneSessionOptions` の
+      // `PostToolUseFailure` の doc）。蒸留は `memory_write` を叩く経路なので、
+      // そこの失敗を記録しないと「記憶が書かれなかった」が静かに落ちる。
+      PostToolUseFailure: [{ hooks: [onPostToolUseFailure] }],
     },
   };
 }
