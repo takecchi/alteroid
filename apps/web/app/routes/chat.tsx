@@ -589,15 +589,18 @@ export function ChatPane({
    *
    * **`at` の文字列比較で並べる。** サーバの会話（`GET /conversations/:id`）は
    * 既に古い順で返るが、確認は別の口から読むので混ぜるときは自分で並べ直す。
-   * `message.at` も `approval.createdAt`/`answeredAt` も、生成経路
-   * （`clone.ts` の `#record` / `tools.ts` の `ask_human`）はどちらも
-   * `new Date().toISOString()`（UTC・ミリ秒3桁・`Z` 終端）なので、文字列の
-   * 比較がそのまま時刻の比較になる（`approvalsCursorSchema` の doc と同じ
-   * 前提）。
+   * `message.at` も `approval.createdAt`/`answeredAt`/`withdrawnAt` も、生成
+   * 経路（`clone.ts` の `#record` / `tools.ts` の `ask_human` / `tools.ts` の
+   * `approval_withdraw`）はどれも `new Date().toISOString()`（UTC・ミリ秒3桁・
+   * `Z` 終端）なので、文字列の比較がそのまま時刻の比較になる
+   * （`approvalsCursorSchema` の doc と同じ前提）。
    *
    * **回答も出す（不変条件A）。** 質問だけ復元すると、回答済みの確認が画面を
    * 開き直した瞬間に「まだ返答が無い」に見える——新しい嘘の「無い」を作って
    * しまう。
+   *
+   * **取り下げも出す（issue #974。不変条件Aの取り下げ側）。** 詳細は下の
+   * `approvalItems` 内の doc。
    */
   const historyLines = useMemo<Line[]>(() => {
     const messageItems = (history.data?.messages ?? []).map((message) => ({
@@ -641,6 +644,35 @@ export function ChatPane({
             role: 'system',
             of: shownId,
             text: `確認への回答: ${approval.answer}`,
+          },
+        });
+      }
+      /**
+       * **取り下げも出す（issue #974。不変条件Aの取り下げ側）。** クローンが
+       * `approval_withdraw`（`packages/core/src/schema.ts` の `withdrawnAt` の
+       * doc）で理由付きで取り下げた確認は、`answeredAt` と排他的なので上の枝
+       * には乗らない。乗らないまま `historyLines` に何も足さないと、会話には
+       * 質問だけが残って**痕跡なく終わる**——人間は「あの質問、その後どう
+       * なった？」を `/approvals`（`approvals.tsx` の取り下げ表示）まで見に
+       * 行かないと分からない。#963 §5 の判断（取り下げの実行者はクローンで
+       * 人間側に取り下げる口は要らないが、**取り下げられた件と理由が読める
+       * ことは要る**）を、人間が実際に読む場所（会話）でも満たす。
+       *
+       * **`withdrawnReason` が欠けている行でも出す。** スキーマ上 optional
+       * なのは古い行を想定してのことで（`withdrawnAt` の doc）、理由が無くて
+       * も「取り下げられた事実」のほうが主なので行自体は出す。
+       *
+       * `answer` 側と違って `withdrawnReason` の非 null は条件に含めない——
+       * `withdrawnAt` の有無だけで素直に分岐する（issue #974 の指示どおり）。
+       */
+      if (approval.withdrawnAt !== undefined && approval.withdrawnAt !== null) {
+        items.push({
+          at: approval.withdrawnAt,
+          line: {
+            key: `a-${approval.id}-withdrawn`,
+            role: 'system',
+            of: shownId,
+            text: `確認の取り下げ: ${approval.withdrawnReason ?? '（理由の記録なし）'}`,
           },
         });
       }
