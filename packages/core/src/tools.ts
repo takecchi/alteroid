@@ -3832,6 +3832,20 @@ export function createCloneTools(context: ToolContext) {
     ),
 
     // --- 人間への確認 ----------------------------------------------------
+    /**
+     * 人間に確認を積む。`managerId`/`requestId` 付きなら、マネージャーからの
+     * 許可確認・質問を人間へ回している（宛先を持つ確認）。
+     *
+     * **不要になったら `approval_withdraw` で取り下げられる（issue #963）。
+     * ただし、取り下げても `deny` は自動では飛ばない。** `deny` は受け取る
+     * マネージャーにとって「人間が拒否した」を意味する信号であって、
+     * 取り下げの場面で人間は何も言っていない——ここで自動 `deny` を選択肢に
+     * 持てば、機械が人間の承認を偽造することになる（同じ言葉を
+     * `approval_withdraw` と `manager_send` の doc にも置いてある。issue
+     * #963 §4）。**⟹ `jobId`/`requestId` 付きの確認が取り下げられても、
+     * 積んだマネージャー（`record.waiting`）は解放されない。** 待ったままなら
+     * クローン自身が `manager_send`（`decision` 付き）で答えて始末をつける。
+     */
     tool(
       'ask_human',
       [
@@ -4019,19 +4033,28 @@ export function createCloneTools(context: ToolContext) {
      *
      * **⚠️ `jobId`/`requestId` を持つ件（マネージャーからの許可確認を人間へ
      * 回した件）は、取り下げても自動では何もしない（issue #963 §4、案(b)）。**
-     * 自動 `deny` は既定にしないこと——`ask_human` を経由してこの確認を
-     * 人間へ回したマネージャーは、`record.waiting` に積んだままなので
-     * `manager_send` で `decision` を返すまで待ち続ける（`manager.ts` の
-     * `#choosePending` / `record.waiting`）。ここで機械的に `deny` を送ると、
-     * クローンが意図せずマネージャーを止める形を作りうる（人間の承認の
-     * 迂回に近い——`AGENTS.md` 地雷表「枠に当たったら自動で別 provider へ
-     * 切り替える」と同種の判断）。**案(a)（`jobId`/`requestId` を持つ件は
-     * 取り下げ不可にする）を採らない理由は、マネージャー自体が既に
-     * 停止している場合に詰むため**（issue #963 の言う通り）——`ask_human` の
-     * `human_answer` 経路（このファイルすぐ上、`clone.ts` の `case
-     * 'human_answer'`）が「答えは人間から届き、宛先への配達はクローン
-     * 自身が `manager_send` で行う」という設計を既に採用しているので、
-     * 取り下げも同じ形（クローンへ委ねる）に揃える。
+     * `ask_human` を経由してこの確認を人間へ回したマネージャーは、
+     * `record.waiting` に積んだままなので `manager_send` で `decision` を
+     * 返すまで待ち続ける（`manager.ts` の `#choosePending` / `record.waiting`）。
+     *
+     * **自動 `deny` は「既定にしない」のではなく、選択肢として持たない
+     * （確定。issue #963 §4）。** `deny` は受け取るマネージャーにとって
+     * 「人間が拒否した」を意味する信号である。しかし取り下げの場面で
+     * 人間は何も言っていない——クローンがここで `deny` を発することは、
+     * 機械が人間の承認を偽造することにあたる。だから既定にしないだけでは
+     * 足りず、選択肢としても持たない（人間の承認の迂回に近い——
+     * `AGENTS.md` 地雷表「枠に当たったら自動で別 provider へ切り替える」と
+     * 同種の判断）。**この判断はこの1箇所だけでなく `ask_human` と
+     * `manager_send`（`decision` の口）の doc にも同じ言葉で置いてある——
+     * 次に同じ提案をする人が、どこから読んでも同じ答えに着くように。**
+     *
+     * **案(a)（`jobId`/`requestId` を持つ件は取り下げ不可にする）を採らない
+     * 理由は、マネージャー自体が既に停止している場合に詰むため**
+     * （issue #963 の言う通り）——`ask_human` の `human_answer` 経路
+     * （このファイルすぐ上、`clone.ts` の `case 'human_answer'`）が
+     * 「答えは人間から届き、宛先への配達はクローン自身が `manager_send` で
+     * 行う」という設計を既に採用しているので、取り下げも同じ形
+     * （クローンへ委ねる）に揃える。
      */
     tool(
       'approval_withdraw',
@@ -5884,6 +5907,14 @@ export function createCloneTools(context: ToolContext) {
         message: z
           .string()
           .describe('マネージャーへの本文。deny のときは、なぜ駄目でどうしてほしいかを書く'),
+        // **`deny` は人間の意思表示の代弁であって、機械が状態の辻褄合わせに
+        // 使ってよい値ではない（issue #963 §4。同じ言葉が `ask_human` /
+        // `approval_withdraw` の doc にも置いてある）。** 受け取るマネージャーは
+        // `deny` を「人間が拒否した」としてしか読めない——他の理由（例えば
+        // 承認待ちが取り下げられて宛先を失った）で待ちを終わらせたいときに、
+        // ここへ `deny` を機械的に流すのは人間の承認の偽造になる。そういう
+        // 場面でも、答えるのは人間かクローンであって、この口が自動で選ぶ値では
+        // ない。
         decision: z
           .enum(['allow', 'deny'])
           .optional()
