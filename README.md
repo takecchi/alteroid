@@ -81,11 +81,11 @@ docker compose exec app alteroid chat
 
 `.env` に要るのは3つだけである。
 
-| 変数                      | 取り方                                             |
-| ------------------------- | -------------------------------------------------- |
-| `CLAUDE_CODE_OAUTH_TOKEN` | `claude setup-token`（人間が一度だけ）             |
-| `ALTEROID_RUNNER_TOKEN`   | `openssl rand -hex 32`。**app と runner で同じ値** |
-| `POSTGRES_PASSWORD`       | `openssl rand -hex 16`                             |
+| 変数                      | 取り方                                                                                  |
+| ------------------------- | --------------------------------------------------------------------------------------- |
+| `CLAUDE_CODE_OAUTH_TOKEN` | `claude setup-token`（人間が一度だけ）                                                  |
+| `ALTEROID_RUNNER_TOKEN`   | `openssl rand -hex 32`。**app と runner で同じ値**                                      |
+| `ALTEROID_DATABASE_URL`   | `postgres://alteroid:<openssl rand -hex 16>@db:5432/alteroid`。内蔵 `db` もここから起動 |
 
 **道具の鍵や PATH をここに増やさないこと。** それは実行環境プロファイル（`alteroid profile edit`）
 の側で、器を焼き直さずに差し替えられる。境界の説明は [.env.example](./.env.example) と

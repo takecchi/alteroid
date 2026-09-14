@@ -506,6 +506,42 @@ jobs:
               exit 0
             '
 
+      # **`db` サービス専用の像も、素の `postgres:17-alpine` から `ALTEROID_DATABASE_URL`
+      # 1本だけで起動できることを実物で見る。** ここが無いと、`docker/db.Dockerfile` /
+      # `docker/alteroid-db`（URL パース）の誤りに、実際に `docker compose up` する
+      # まで気づけない——上の `alteroid:ci` の像とは別の Dockerfile なので、上の
+      # ステップはこちらを一切検証していない。
+      - uses: docker/build-push-action@v7
+        with:
+          context: ./docker
+          file: ./docker/db.Dockerfile
+          load: true
+          tags: alteroid-db:ci
+          cache-from: type=gha,scope=db
+          cache-to: ${{ env.DRIFT != 'true' && 'type=gha,scope=db' || '' }}
+          no-cache: ${{ env.DRIFT == 'true' }}
+
+      # パスワードに `:` / `@` / パーセントエンコードが混じっても正しく割れること
+      # まで見る（素朴なシェルのパラメータ展開だと誤って割ってしまう値である）。
+      - name: db は ALTEROID_DATABASE_URL 1本（記号入りパスワード込み）から起動できるか
+        run: |
+          docker run -d --name alteroid-db-ci \
+            -e ALTEROID_DATABASE_URL='postgres://alteroid:p%40ss%3Aword@db:5432/alteroid' \
+            alteroid-db:ci
+          trap 'docker logs alteroid-db-ci; docker rm -f alteroid-db-ci >/dev/null 2>&1' EXIT
+
+          for _ in $(seq 1 30); do
+            docker exec alteroid-db-ci pg_isready >/dev/null 2>&1 && break
+            sleep 1
+          done
+          docker exec alteroid-db-ci pg_isready \
+            || { echo "起動していない" >&2; exit 1; }
+
+          # パースしたユーザー名・db 名・（デコードした）パスワードで実際に繋がること。
+          docker exec -e PGPASSWORD='p@ss:word' alteroid-db-ci \
+            psql -U alteroid -d alteroid -c 'select 1;' \
+            || { echo "パースしたユーザー名/パスワードで繋がらない" >&2; exit 1; }
+
   # **PR の base が古く、かつ merge base 以降に main へ入った変更が、この PR と
   # 同じファイルを触っているときだけ赤くする（#838）。** 判定ロジックは
   # `scripts/check-base-overlap-core.mjs` が正本（compare API の向きの実測・

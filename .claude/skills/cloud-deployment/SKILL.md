@@ -20,7 +20,8 @@ description: クラウド構成（docker compose、PostgreSQL、daemon / manager
 - 記憶の置き場は `ALTEROID_DATABASE_URL` の有無だけで決まる（無ければローカルの fs）。**器が違うだけで、上の層が見るものは同じ**。切り替えでできなくなることを作らない
   - 起動時にスキーマを自分で用意する（`packages/storage-pg/src/migrate.ts`）。「先にマイグレーションを流す」という人間の手順を足さないこと
   - `state/daemon.json`（CLI がデーモンを見つける手段）は pg 構成でもローカルに残る。記憶ではない
-- `cp .env.example .env` → `docker compose up -d` → `docker compose exec app alteroid chat`。埋めるのは3つ（`CLAUDE_CODE_OAUTH_TOKEN` / `ALTEROID_RUNNER_TOKEN` / `POSTGRES_PASSWORD`）。ホストのディレクトリを workspace にするなら先に `mkdir -p workspace`（Docker に作らせると root 所有になり、コンテナ内の `node` が書けない＝「コンテナだからできない」が生まれる）
+- `cp .env.example .env` → `docker compose up -d` → `docker compose exec app alteroid chat`。埋めるのは3つ（`CLAUDE_CODE_OAUTH_TOKEN` / `ALTEROID_RUNNER_TOKEN` / `ALTEROID_DATABASE_URL`）。ホストのディレクトリを workspace にするなら先に `mkdir -p workspace`（Docker に作らせると root 所有になり、コンテナ内の `node` が書けない＝「コンテナだからできない」が生まれる）
+  - **`POSTGRES_PASSWORD` は廃止した（破壊的変更）。** 内蔵 `db` サービスも `ALTEROID_DATABASE_URL` 1本から起動する——起動時のシム（`docker/alteroid-db`）が URL をパースして `POSTGRES_USER`/`POSTGRES_PASSWORD_FILE`/`POSTGRES_DB` を postgres 公式イメージへ渡す。二重管理（URL とパスワードを別々に持つ）をやめただけで、記憶ストアの鍵の置き場という設計自体は変えていない
   - **環境変数は app と runner で同じものを渡す**（`compose.yaml` の `x-shared-env`）。**役ごとに違うのは `ALTEROID_DATABASE_URL` だけ**で、使う / 使わないは役が決める。ここへ変数を足すときは「runner に降りてよいか」だけを考えればよく、降りてはいけないなら app の `environment` に直接書く
   - 役は `command` で選ぶ。**`node <entry>` を直に叩かない** — `alteroidd`（root なら `node` へ降りる）と `alteroid-runner`（合鍵を畳んで素の値を落とす）が器側の前処理を持っている（`docker/`）
   - **ポートは公開していない。** 待ち受けは既定で 127.0.0.1（`ALTEROID_BIND` で開けられるが、開けるなら手前に境界を置くのが先）。runner だけは `ALTEROID_RUNNER_BIND=0.0.0.0` でデーモンから届かせるが、公開はしない

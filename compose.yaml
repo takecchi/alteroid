@@ -8,7 +8,12 @@
 #
 #   CLAUDE_CODE_OAUTH_TOKEN=... # claude setup-token（人間が一度だけ）
 #   ALTEROID_RUNNER_TOKEN=...   # openssl rand -hex 32。**app と runner で同じ値**
-#   POSTGRES_PASSWORD=...       # openssl rand -hex 16
+#   ALTEROID_DATABASE_URL=...   # postgres://alteroid:<openssl rand -hex 16>@db:5432/alteroid
+#
+# ⚠️ 破壊的変更: 旧 `POSTGRES_PASSWORD` は廃止した。内蔵 db サービスもこの1本の
+# URL から起動するようになった（`docker/alteroid-db` が起動時にパースする）。
+# 旧い `.env` を持っている場合は `POSTGRES_PASSWORD=xxx` を
+# `ALTEROID_DATABASE_URL=postgres://alteroid:xxx@db:5432/alteroid` に書き換えること。
 #
 # マネージャーに「実装して PR を出して」と頼むなら、GitHub の鍵とコミットの身元も
 # 要る（無ければ公開リポジトリの clone だけができる）。**置き場は2つあり、器を
@@ -51,6 +56,12 @@
 # 下の `x-shared-env` を両方の役へ丸ごと渡している。**役ごとに違うのは
 # `ALTEROID_DATABASE_URL`（記憶ストアの鍵）だけ**で、それは app にしか無い。
 # 使う / 使わないは役が決めればよく、人間が2か所に別々の値を置く必要は無い。
+#
+# **この1本は db サービスの起動にも使われる。** 人間が書くのは `ALTEROID_DATABASE_URL`
+# だけで、`db` コンテナは起動時（`docker/alteroid-db`）にそこからユーザー名・
+# パスワード・db 名を取り出して postgres 公式イメージの起動ロジックへ渡す。
+# `POSTGRES_USER` / `POSTGRES_PASSWORD` を人間が別に書く必要は無くなった
+# （二重管理をやめた——食い違いようがない）。
 #
 # **合鍵も「同じ値を置くだけ」である。** runner は起動時（`docker/alteroid-runner`）に
 # sha256 へ畳み、素の値を自分の環境から落としてから node を exec する。だから
@@ -220,16 +231,21 @@ x-shared-env: &shared-env
 
 services:
   db:
-    image: postgres:17-alpine
+    build:
+      context: ./docker
+      dockerfile: db.Dockerfile
     environment:
-      POSTGRES_USER: alteroid
       # 既定値を置かない。置けば「compose を読めば入れる」DB になる。
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?推測できない値を .env に置くこと}
-      POSTGRES_DB: alteroid
+      # ここから `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` を
+      # 取り出すのは起動時のシム（`docker/alteroid-db`）の仕事である。
+      ALTEROID_DATABASE_URL: ${ALTEROID_DATABASE_URL:?postgres://alteroid:<openssl rand -hex 16>@db:5432/alteroid の形で .env に置くこと（旧 POSTGRES_PASSWORD は廃止した）}
     volumes:
       - db:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U alteroid -d alteroid']
+      # ユーザー名・db 名を明示しない。`pg_isready` は「サーバーが接続を受け付けて
+      # いるか」を見るだけで、指定したロールでの認証はしない——`ALTEROID_DATABASE_URL`
+      # の中身に応じて動的に決まるユーザー名・db 名をここへ二重に持ち込まずに済む。
+      test: ['CMD-SHELL', 'pg_isready']
       interval: 5s
       timeout: 5s
       retries: 20
@@ -293,7 +309,9 @@ services:
       <<: *shared-env
       # **役ごとに違う唯一の変数。** 記憶・日誌・ジョブ・セッションの置き場であり、
       # この鍵はデーモンだけが持つ。共通ブロックへ移さないこと。
-      ALTEROID_DATABASE_URL: postgres://alteroid:${POSTGRES_PASSWORD}@db:5432/alteroid
+      # 人間が書いた値をそのまま渡す——`db` サービスも同じ値をパースして使うので
+      # （`docker/alteroid-db`）、ここで組み立て直す必要は無い。
+      ALTEROID_DATABASE_URL: ${ALTEROID_DATABASE_URL:?postgres://alteroid:<openssl rand -hex 16>@db:5432/alteroid の形で .env に置くこと（旧 POSTGRES_PASSWORD は廃止した）}
     volumes:
       # state（daemon.json）だけ。記憶は PostgreSQL 側にある。
       - state:/data/alteroid
