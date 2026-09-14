@@ -530,12 +530,21 @@ jobs:
             alteroid-db:ci
           trap 'docker logs alteroid-db-ci; docker rm -f alteroid-db-ci >/dev/null 2>&1' EXIT
 
+          # **`pg_isready` だけでは初期化完了を判定できない（実測で踏んだ）。** postgres
+          # 公式イメージは初回起動時、initdb 直後に「セットアップ専用の一時サーバー」
+          # （Unix ソケットで待受けるが `POSTGRES_DB` 相当のデータベース作成前）を
+          # 一時的に起こす。`pg_isready` はこの一時サーバーに対しても「accepting
+          # connections」を返すため、そのタイミングで `psql -d alteroid` を打つと
+          # `FATAL: database "alteroid" does not exist` になる（本番サーバーへの
+          # 切り替えより前）。手元では初期化が速く終わってたまたま踏まなかったが、
+          # CI では実際にこのレースを踏んだ（run 34826494756）。
+          # ⟹ 「接続を受け付けるか」ではなく「実際に目的の db へ繋がるか」自体を
+          # リトライの条件にする。
           for _ in $(seq 1 30); do
-            docker exec alteroid-db-ci pg_isready >/dev/null 2>&1 && break
+            docker exec -e PGPASSWORD='p@ss:word' alteroid-db-ci \
+              psql -U alteroid -d alteroid -c 'select 1;' >/dev/null 2>&1 && break
             sleep 1
           done
-          docker exec alteroid-db-ci pg_isready \
-            || { echo "起動していない" >&2; exit 1; }
 
           # パースしたユーザー名・db 名・（デコードした）パスワードで実際に繋がること。
           docker exec -e PGPASSWORD='p@ss:word' alteroid-db-ci \
