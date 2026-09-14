@@ -1,14 +1,18 @@
 # ローカルと同じものを、コンテナ + PostgreSQL で常駐させる（roadmap M4）。
 #
-#   cp .env.example .env        # 3つ埋める（下記）
+#   cp .env.example .env        # 2つ埋める（下記）
 #   docker compose up -d
+#   docker compose exec app alteroid token add --label <名前> -f <path>  # 認証トークンを登録
 #   docker compose exec app alteroid chat
 #
-# `.env` に要るのは3つだけである:
+# `.env` に要るのは2つだけである:
 #
-#   CLAUDE_CODE_OAUTH_TOKEN=... # claude setup-token（人間が一度だけ）
 #   ALTEROID_RUNNER_TOKEN=...   # openssl rand -hex 32。**app と runner で同じ値**
 #   ALTEROID_DATABASE_URL=...   # postgres://alteroid:<openssl rand -hex 16>@db:5432/alteroid
+#
+# ⚠️ 破壊的変更（2026-09-14）: `CLAUDE_CODE_OAUTH_TOKEN` は環境変数として廃止した。
+# クローン・マネージャーの認証は `alteroid token add`（トークンプール、DB 正本）
+# だけで持つ。1本も登録していないと起動はするが、クローンもマネージャーも走れない。
 #
 # ⚠️ 破壊的変更: 旧 `POSTGRES_PASSWORD` は廃止した。内蔵 db サービスもこの1本の
 # URL から起動するようになった（`docker/alteroid-db` が起動時にパースする）。
@@ -125,9 +129,8 @@ x-shared-env: &shared-env
   # 安定した識別子。台帳の `manager_id → runner_id` はこれで引く
   # （器を作り直しても同じ宛先として戻る）。
   ALTEROID_RUNNER_ID: ${ALTEROID_RUNNER_ID:-runner-primary}
-  # 認証はサブスクリプションの長期トークン（claude setup-token）。クローンも
-  # マネージャーも SDK セッションなので、両方に要る。
-  CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:?claude setup-token で取得して .env に置くこと}
+  # **認証は 2026-09-14 からトークンプール（DB 正本）だけで持つ。** ここには
+  # 環境変数を置かない——`alteroid token add` で登録する（`.env.example` 冒頭）。
   # 層とモデル帯の対応（クローン Fable / マネージャー Opus / 作業者 Sonnet）を
   # 差し替えるための置き場。**これは設定ではなく、人間の承認の置き場である** —
   # 対応は設計判断であり、変更には人間の承認が要る（AGENTS.md 地雷5）。費用を詰める

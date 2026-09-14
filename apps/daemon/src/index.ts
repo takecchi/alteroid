@@ -14,6 +14,8 @@ import {
   DAEMON_RUNNER_REGISTRY_SOURCE,
   DAEMON_TOKEN_POOL_REOPENED_SOURCE,
   DEFAULT_PERMISSION_MODE,
+  applyAppScopedEnvVars,
+  seedDefaultEnvVars,
   createClone,
   createLocalRunner,
   createProfileApplier,
@@ -44,7 +46,6 @@ import {
   type RunnerSource,
   type SelfFacts,
   type Stores,
-  type TokenEnsureEnvOutcome,
   type TokenRotationEntry,
   type TokenRotationOutcome,
 } from '@alteroid/core';
@@ -647,47 +648,6 @@ function assertTokenRotationEventHandled(event: never): never {
 }
 
 /**
- * **器の環境変数の行を足そうとした結果を、どこへ何と出すか**（#832）。
- *
- * ## なぜ切り出してあるか —— 呼び手が2つになったから
- *
- * ここは `main()` の中の3行だったが、`pool_changed` の回にも同じことを出す必要が
- * できた（`token-watch.ts` の `onEnsuredEnvToken`）。**書き写すと、同じ出来事が
- * 2通りの文面で残る** —— そして片方だけ直す事故が起きる。
- *
- * ## 割り当て
- *
- * | `kind` | 行き先 | なぜ |
- * | --- | --- | --- |
- * | `added` | stdout | 正常。プールへ行を足した |
- * | `failed` | stderr | 異常 |
- * | `exists` / `skipped` | **出さない** | 既定の構成では毎回出ることになり、意味のある行が埋もれる |
- *
- * **`added` と `failed` を同じ行き先へ潰さないこと**（Issue #420 の残件）。
- *
- * @returns 出すものが無ければ `null`。
- */
-export function ensuredEnvTokenLine(
-  outcome: TokenEnsureEnvOutcome | { kind: 'failed'; why: string },
-): { stream: NodeJS.WritableStream; text: string } | null {
-  if (outcome.kind === 'added') {
-    return { stream: process.stdout, text: `alteroidd: 認証トークン: ${outcome.why}\n` };
-  }
-  if (outcome.kind === 'failed') {
-    return { stream: process.stderr, text: `alteroidd: 認証トークン: ${outcome.why}\n` };
-  }
-  return null;
-}
-
-/** {@link ensuredEnvTokenLine} が決めた行き先へ、実際に1行出す。 */
-function reportEnsuredEnvToken(
-  outcome: TokenEnsureEnvOutcome | { kind: 'failed'; why: string },
-): void {
-  const line = ensuredEnvTokenLine(outcome);
-  if (line !== null) line.stream.write(line.text);
-}
-
-/**
  * alteroidd — 常駐デーモン。
  *
  * 常駐は自律の前提であり、後から足す機能ではない（PRD）。M1 の時点で人間が
@@ -704,6 +664,21 @@ export async function main(): Promise<void> {
   // 承認待ちが出たことに気づける）。ここを通さない書き手を作らないこと。
   const journalBus = createJournalBus(storage.stores.journal);
   const stores: Stores = { ...storage.stores, journal: journalBus.journal };
+
+  /**
+   * **alteroid 自身の運用設定を、環境変数の袋（DB 正本）へ播種してから反映する。**
+   * `TZ` / `ALTEROID_ALLOWED_ORIGINS` / 自律のスケジュール等を「器を焼き直さないと
+   * 直せない」ままにしないための口である（`env-vars-boot.ts` の doc）。
+   *
+   * **ここで（この後の CORS・認証・スケジュールの組み立てより前で）行う。** 反映は
+   * `process.env` を書き換えるだけなので、後続のコードが読む `process.env.X` は
+   * すべて素通りで新しい値を受け取る——各所を個別に直さずに済む。
+   *
+   * 播種・反映のどちらも失敗を投げない（`env-vars-boot.ts` の doc）ので、ここで
+   * `await` しても起動を止めない。
+   */
+  await seedDefaultEnvVars(stores);
+  await applyAppScopedEnvVars(stores);
 
   // クローンのセッションは人格データディレクトリを基準に置く。呼び出し元の
   // カレントディレクトリに依存させると、別の場所から起動した瞬間に resume が
@@ -1231,50 +1206,28 @@ export async function main(): Promise<void> {
   });
 
   /**
-   * **器の環境変数の行を撒くときの値**（`TokenSpreadOptions.agentTokenFromEnv`
-   * の doc）。**probe（下の `tokenRotator.probe`）が同じ行を評価するときに
-   * 読むのと同じ場所である** —— 片方だけ `process.env` を見る形だと、
-   * 「試したのは自分の env の値」なのに「撒いたのは空文字（runner の env を
-   * 使え）」という非対称が残る。
+   * **器の環境変数（`CLAUDE_CODE_OAUTH_TOKEN`）へのフォールバックは廃止した**
+   * （人間の決定。トークンプールは100% DB 駆動にする——`alteroid token add` で
+   * 実トークンを登録することが唯一の入口であり、プールに通る行が無い状態を
+   * 器の環境変数の値で埋め合わせる経路はどこにも残さない）。
    *
-   * **`createRunnerTokenSync`（後から繋いだ runner に追いつかせる側）とも
-   * 共有する**（2026-09-12、#866）——箱がまだ何も撒いていない runner にも、
-   * ここと同じ値を降ろす。
+   * **⚠️ かつて（2026-09-12〜2026-09-14、#866・#832）はここに `agentTokenFromEnv`
+   * という関数があり、`hasEnvToken` オプション・probe の env 分岐・`ensureEnvToken()`
+   * の呼び出し・`createRunnerTokenSync` への2つ目の引数として使われていた。**
+   * 全部撤去した——プールが選んだトークンの `value` だけを probe・撒く先の両方が
+   * 使う。
    */
-  const agentTokenFromEnv = (): string | undefined => {
-    // **空文字は「無い」と同じに扱う**（空を撒くと器が鍵を消すだけで、
-    // 「空の鍵が置かれた」という状態を作らない。`credentials.ts` と同じ約束）。
-    const value = process.env.CLAUDE_CODE_OAUTH_TOKEN;
-    return value === undefined || value.length === 0 ? undefined : value;
-  };
-
   const tokenRotator = createTokenRotator({
     stores,
-    // **値ではなく「在るか」だけを渡す**（`TokenRotatorOptions.hasEnvToken` の doc）。
-    hasEnvToken: () => (process.env.CLAUDE_CODE_OAUTH_TOKEN ?? '').length > 0,
     probe: {
       // **本番の仕事で試さない**（Issue #393 の設計の骨）。推論が走らない probe。
-      probe: (token) => {
-        // **env の行は器の環境変数の値で試す。** リテラルや空文字で試すと、
-        // **その行を「使えない」と誤って冷却する**（＝いま走っているトークンを
-        // 自分で降ろす）。
-        const value = token.kind === 'env' ? process.env.CLAUDE_CODE_OAUTH_TOKEN : token.value;
-        if (value === undefined || value.length === 0) {
-          // **env の行なのに環境変数が無い。** 器を作り直すときに `.env` から
-          // 落ちた、という形で実際に起こりうる。**「判定できない」ではなく
-          // 「使えない」である** —— 撒くと鍵を消して全層が資格を失う。
-          return Promise.resolve({
-            verdict: 'unusable' as const,
-            reason: '器の環境変数（CLAUDE_CODE_OAUTH_TOKEN）が置かれていない',
-          });
-        }
-        return probeTokenCandidate(query, {
-          token: value,
+      probe: (token) =>
+        probeTokenCandidate(query, {
+          token: token.value,
           cwd: paths.root,
           // **同上（#431）。** 候補トークンの観測でも記憶ストアの鍵は渡さない。
           withheldEnvKeys: storage.withheldEnvKeys,
-        });
-      },
+        }),
     },
     spread: createTokenSpread({
       runners,
@@ -1283,7 +1236,6 @@ export async function main(): Promise<void> {
       // ——その場合は影を検出できないが、「影が無い」とは主張しない
       // （`createTokenSpread` の doc）。
       profileEnvNames: () => Promise.resolve(Object.keys(profile.env())),
-      agentTokenFromEnv,
       onShadowed: (names) => {
         process.stderr.write(
           `alteroidd: 実行環境プロファイルが認証の鍵と同じ名前を宣言しています。` +
@@ -1294,21 +1246,10 @@ export async function main(): Promise<void> {
   });
 
   // **クローンを作る前に撒き直す。** `createClone` は構築の中でループを回し始める
-  // ので、後にすると最初のターンが器の環境変数のまま走る窓ができる。
+  // ので、後にすると最初のターンが撒く前の状態のまま走る窓ができる。
   //
   // **繋がっていない runner へは、ここでは届かない。** 後から上がってくる分は
   // `syncRunnerToken`（`ManagerPool#connectTo`）が追いつかせる。
-  {
-    // **行を足すのが先、撒き直しが後。** 逆にすると、環境変数の行が足された回だけ
-    // 撒き直しがその行を見ないまま終わる（1回ぶん遅れる）。
-    const ensured = await tokenRotator
-      .ensureEnvToken()
-      .catch((error: unknown) => ({ kind: 'failed' as const, why: String(error) }));
-    // 行き先と文面は {@link ensuredEnvTokenLine} が持つ——`pool_changed` の回
-    // （`token-watch.ts` の `onEnsuredEnvToken`）と**同じ1本**を通す（#832）。
-    reportEnsuredEnvToken(ensured);
-  }
-
   {
     const restored = await tokenRotator
       .restore()
@@ -1361,7 +1302,7 @@ export async function main(): Promise<void> {
     credentials: () => agentTokenHolder.values(),
     tokenIdentity: () => agentTokenHolder.identity(),
     // 後から上がってきた runner に追いつかせる（プロファイルの `syncRunner` と同じ位置）。
-    syncRunnerToken: createRunnerTokenSync(agentTokenHolder, agentTokenFromEnv),
+    syncRunnerToken: createRunnerTokenSync(agentTokenHolder),
     /**
      * **セッションが実際に畳まれた ⟹ 待たせていた再開の合図を、いま入れる**
      * （人間の決定 2026-09-07。`pendingTokenWake` の doc）。
@@ -1619,9 +1560,6 @@ export async function main(): Promise<void> {
   tokenWatch = startTokenRotationWatch({
     rotator: tokenRotator,
     onOutcome: (outcome) => settleTokenOutcome(outcome),
-    // **起動時と同じ1本へ流す**（#832）。`pool_changed`（＝人間が鍵を足した / 外した）
-    // の回に器の環境変数の行が生えたら、その事実を同じ文面で出す。
-    onEnsuredEnvToken: reportEnsuredEnvToken,
   });
 
   /**

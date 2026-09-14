@@ -180,9 +180,11 @@ compose の `stop_grace_period: 60s` に対応する。Railway の既定は短�
 ```bash
 npm i -g @railway/cli
 railway login
-claude setup-token          # → CLAUDE_CODE_OAUTH_TOKEN（人間が一度だけ）
 
 ./railway/setup.sh          # ここから下は全部これがやる
+# 立ち上がった後、認証トークンを登録する（2026-09-14 から環境変数では持たない）:
+#   railway ssh --service app
+#   echo -n "<claude setup-token の値>" | alteroid token add --label <名前>
 ```
 
 **埋めるものは compose と同じ `.env` である。** 在る値は読み、無い値だけ尋ね、作れるもの（合鍵）は作って `.env` へ書き戻す。だから「compose では動くのに Railway では埋め直し」が起きない。`.env` が無くても、尋ねた値を書き留めるので次からは尋ねない。
@@ -236,11 +238,12 @@ alteroid chat
 npm i -g @railway/cli
 railway login
 
-# クローンとマネージャーの認証（サブスクリプションの長期トークン）
-claude setup-token          # → CLAUDE_CODE_OAUTH_TOKEN
-
 # 制御面の合鍵。**app と runner に同じ値を置くだけ**でよい
 openssl rand -hex 32        # → ALTEROID_RUNNER_TOKEN
+
+# クローンとマネージャーの認証は環境変数では持たない（2026-09-14 に廃止）。
+# 立ち上がった後に alteroid token add で登録する（下の「トークンを回す」節）。
+claude setup-token          # → alteroid token add --label <名前> -f <path>
 ```
 
 `.env.example` と同じものを Railway に置く、と思ってよい。**役ごとに違うのは `ALTEROID_DATABASE_URL` だけ**である。
@@ -286,13 +289,12 @@ railway add --database postgres
 >
 > そのため**ダッシュボードで値を直すときは2か所**になる（`app` と `runner`）。`.env` を直して `setup.sh` を回し直すか、`railway variable set K=V --service app` と `--service runner` の2回。走行中の仕事を殺さずに `GH_TOKEN` を差し替えるなら、変数ではなく後述「鍵を回す（走行中でも）」を使う。
 
-| 変数                      | 値                                               | なぜ                                                                                                                                                                                                                                                                                  |
-| ------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ALTEROID_RUNNER_TOKEN`   | `openssl rand -hex 32` の値                      | 制御面の合鍵。**同じ値を両方が持つだけでよい。** runner は起動時に sha256 へ畳み、素の値を自分の環境から落としてから走る（`docker/alteroid-runner`）ので、走っている runner に素の鍵は残らない                                                                                        |
-| `CLAUDE_CODE_OAUTH_TOKEN` | `claude setup-token` の値                        | クローンもマネージャーも SDK セッションなので、両方に要る                                                                                                                                                                                                                             |
-| `ALTEROID_RUNNER_URL`     | `http://${{runner.RAILWAY_PRIVATE_DOMAIN}}:4518` | 委譲の宛先（**app が読む。runner 自身は読まない**）。固定 URL をコードに埋めず、ここで名簿へ登録する。private network は Wireguard で暗号化済みなので `http://`。**複数台なら下の `ALTEROID_RUNNER_URLS` を使う**。どちらも起動時の種であって、繋ぐのは待ち受けを開いた後の背景である |
-| `ALTEROID_RUNNER_BIND`    | `::`                                             | runner の待ち受け。Railway の private network は IPv6（新しい環境は dual stack）で、既定の `127.0.0.1` のままだと daemon から届かない。**app 側は無視する**（daemon が見るのは `ALTEROID_BIND`）                                                                                      |
-| `ALTEROID_RUNNER_PORT`    | `4518`                                           | 同上                                                                                                                                                                                                                                                                                  |
+| 変数                    | 値                                               | なぜ                                                                                                                                                                                                                                                                                  |
+| ----------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ALTEROID_RUNNER_TOKEN` | `openssl rand -hex 32` の値                      | 制御面の合鍵。**同じ値を両方が持つだけでよい。** runner は起動時に sha256 へ畳み、素の値を自分の環境から落としてから走る（`docker/alteroid-runner`）ので、走っている runner に素の鍵は残らない                                                                                        |
+| `ALTEROID_RUNNER_URL`   | `http://${{runner.RAILWAY_PRIVATE_DOMAIN}}:4518` | 委譲の宛先（**app が読む。runner 自身は読まない**）。固定 URL をコードに埋めず、ここで名簿へ登録する。private network は Wireguard で暗号化済みなので `http://`。**複数台なら下の `ALTEROID_RUNNER_URLS` を使う**。どちらも起動時の種であって、繋ぐのは待ち受けを開いた後の背景である |
+| `ALTEROID_RUNNER_BIND`  | `::`                                             | runner の待ち受け。Railway の private network は IPv6（新しい環境は dual stack）で、既定の `127.0.0.1` のままだと daemon から届かない。**app 側は無視する**（daemon が見るのは `ALTEROID_BIND`）                                                                                      |
+| `ALTEROID_RUNNER_PORT`  | `4518`                                           | 同上                                                                                                                                                                                                                                                                                  |
 
 **台ごとに違う変数（Shared Variables に置いてはいけない唯一のもう1つ）**
 

@@ -5357,7 +5357,6 @@ export function createCloneTools(context: ToolContext) {
             createdAt: view.createdAt ?? '（記録が無い）',
             updatedAt: view.updatedAt ?? '（記録が無い）',
             extra: [
-              view.source === 'env' ? '  器の環境変数を指す行（値を持たない）' : null,
               view.sha256 === undefined ? null : `  指紋 ${view.sha256}`,
               view.cooldownUntil === undefined
                 ? null

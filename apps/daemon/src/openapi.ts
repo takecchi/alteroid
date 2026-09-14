@@ -1111,48 +1111,68 @@ export const profileUpdateResponseSchema = z.object({
 // ---------------------------------------------------------------------------
 
 /**
- * 正本に在る鍵の一覧。**値は出さない（指紋だけ）。**
- *
- * `/profile` が本文を返すのとは逆にしてある。あちらは**人間が書いたスクリプトを
- * 直すために読み直せなければ typo ひとつ直せない**が、こちらは名前ごとに置く袋
- * なので、**直したい1本だけを置き直せる**——全文を読み出す必要が無い。
- * ⟹ 値を返す口を作らない（作れば、読む側の資格を置く側と同じ強さまで上げる
- * ことになる）。
- *
- * `runnerCredentialFingerprintSchema` をそのまま使わず `.extend()` している
- * ——`shadowsCloneEnv` は runner 側の指紋（`GET /runners` の credentials）には
- * 無い概念で、あちらに書き足すと「runner にはクローンの器という比較対象が
- * 無い」という区別が崩れる（`CredentialFingerprint.shadowsCloneEnv` の doc）。
+ * 撒く先。既定は 'all'（クローン・マネージャー双方）。
+ * packages/core/src/store.ts の StoredCredential.scope と同じ意味・同じ既定。
  */
+const credentialScopeSchema = z.enum(['all', 'app', 'runner']);
+
+/**
+ * デーモンが外向けに返す指紋に、scope・secret・（非シークレットなら）値を足したもの。
+ *
+ * runnerCredentialFingerprintSchema を直接拡張せず、こちらで .extend() する
+ * ——あちらは runner 側の指紋（GET /runners の credentials）とも共有する土台
+ * なので、そちらへ scope/secret/value の概念を持ち込まない（runner には
+ * 「クローンの器の env」のような比較対象も scope の概念も無い）。
+ */
+const credentialFingerprintWithMetaSchema = runnerCredentialFingerprintSchema.extend({
+  /**
+   * GitHub の名前（GITHUB_CREDENTIAL_NAMES）で、正本のこの行より
+   * デーモンの器の環境変数の値が優先して配られている（＝正本のこの行は
+   * どこにも配られていない）ときだけ true。既定では付かない
+   * （Issue #865 の恒久策、2026-09-12）。値そのものは載らない。
+   */
+  shadowsCloneEnv: z.boolean().optional(),
+  /** 撒く先（共通/clone/manager）。 */
+  scope: credentialScopeSchema,
+  /** シークレット可否。false の行だけ value が併走する。 */
+  secret: z.boolean(),
+  /** secret === false の行だけ載る。シークレットの行では欄自体が無い。 */
+  value: z.string().optional(),
+});
+
 export const credentialsResponseSchema = z.object({
-  credentials: z.array(
-    runnerCredentialFingerprintSchema.extend({
-      /**
-       * GitHub の名前（`GITHUB_CREDENTIAL_NAMES`）で、正本のこの行より
-       * デーモンの器の環境変数の値が優先して配られている（＝正本のこの行は
-       * どこにも配られていない）ときだけ `true`。既定では付かない
-       * （Issue #865 の恒久策、2026-09-12）。値そのものは載らない。
-       */
-      shadowsCloneEnv: z.boolean().optional(),
-    }),
-  ),
+  credentials: z.array(credentialFingerprintWithMetaSchema),
 });
 
 /**
- * `PUT /credentials` の入力。**部分更新である**（入力に無い名前は触らない）。
+ * PUT /credentials の入力。部分更新である（入力に無い名前は触らない）。
  *
- * 名前の形は `runnerCredentialSchema`（runner の制御面と同じ）をそのまま使う——
+ * 名前の形は runnerCredentialSchema（runner の制御面と同じ）をそのまま使う——
  * 名前は器の中のファイル名になるので、パスとして解釈されうる形を最初から名前と
- * して認めない（そちらの doc）。**2つ書くと必ずずれるので、書き直さない。**
+ * して認めない（そちらの doc）。2つ書くと必ずずれるので、書き直さない。
+ *
+ * scope・secret はこの口だけの拡張（runnerCredentialSchema 自体は拡張
+ * しない——runner の制御面の命令はいまも名前と値だけでよい）。
  */
+const credentialInputSchema = runnerCredentialSchema.extend({
+  /** 省略時は 'all'（新規行）／既存行の値を引き継ぐ（更新）。 */
+  scope: credentialScopeSchema.optional(),
+  /**
+   * 新規作成時にだけ効く。既存行に対して既存の値と異なる secret を
+   * 渡すと 400 で拒否される（StoredCredential.secret の doc）。省略時は
+   * 新規行なら true、既存行の更新なら前回の値を引き継ぐ。
+   */
+  secret: z.boolean().optional(),
+});
+
 export const credentialsUpdateRequestSchema = z.object({
-  credentials: z.array(runnerCredentialSchema).min(1),
+  credentials: z.array(credentialInputSchema).min(1),
 });
 
 export const credentialsUpdateResponseSchema = z.object({
   /** 置き換えた後の正本の指紋。 */
-  credentials: z.array(runnerCredentialFingerprintSchema),
-  /** 各 runner へ降ろした結果。**台ごとに返す**（畳んで1つの成否にしない）。 */
+  credentials: z.array(credentialFingerprintWithMetaSchema),
+  /** 各 runner へ降ろした結果。台ごとに返す（畳んで1つの成否にしない）。 */
   runners: z.array(
     z.object({
       runnerId: z.string(),

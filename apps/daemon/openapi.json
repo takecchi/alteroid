@@ -7235,9 +7235,19 @@
                           },
                           "shadowsCloneEnv": {
                             "type": "boolean"
+                          },
+                          "scope": {
+                            "type": "string",
+                            "enum": ["all", "app", "runner"]
+                          },
+                          "secret": {
+                            "type": "boolean"
+                          },
+                          "value": {
+                            "type": "string"
                           }
                         },
-                        "required": ["name", "sha256", "updatedAt"]
+                        "required": ["name", "sha256", "updatedAt", "scope", "secret"]
                       }
                     }
                   },
@@ -7290,9 +7300,22 @@
                           },
                           "updatedAt": {
                             "type": "string"
+                          },
+                          "shadowsCloneEnv": {
+                            "type": "boolean"
+                          },
+                          "scope": {
+                            "type": "string",
+                            "enum": ["all", "app", "runner"]
+                          },
+                          "secret": {
+                            "type": "boolean"
+                          },
+                          "value": {
+                            "type": "string"
                           }
                         },
-                        "required": ["name", "sha256", "updatedAt"]
+                        "required": ["name", "sha256", "updatedAt", "scope", "secret"]
                       }
                     },
                     "runners": {
@@ -7407,6 +7430,13 @@
                         },
                         "value": {
                           "type": "string"
+                        },
+                        "scope": {
+                          "type": "string",
+                          "enum": ["all", "app", "runner"]
+                        },
+                        "secret": {
+                          "type": "boolean"
                         }
                       },
                       "required": ["name", "value"]
@@ -7455,7 +7485,7 @@
                           },
                           "source": {
                             "type": "string",
-                            "enum": ["stored", "env"]
+                            "enum": ["stored"]
                           },
                           "disabledAt": {
                             "type": "string"
@@ -7569,7 +7599,7 @@
                           },
                           "source": {
                             "type": "string",
-                            "enum": ["stored", "env"]
+                            "enum": ["stored"]
                           },
                           "disabledAt": {
                             "type": "string"

@@ -17,7 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb, migrate, seedPgWorkspace, type PgStores } from './index.js';
-import { archive, jobs as jobsTable, memory } from './schema.js';
+import { agentTokens, archive, jobs as jobsTable, memory } from './schema.js';
 
 /**
  * pg ドライバの受け入れ確認。
@@ -3038,6 +3038,41 @@ describe('PgCredentialVaultStore', () => {
 
     expect((await stores.credentials.list()).map((row) => row.name)).toEqual(['NPM_TOKEN']);
   });
+
+  /**
+   * 撒く先・シークレット可否（2026-09-14）。既定は `'all'` / `true`——この列が
+   * 無かった頃の全行が実際にそうだったことをそのまま表す（`migrate.ts` の
+   * 該当 `alter table` のコメント）。
+   */
+  it('scope・secret を指定して put すると、list にそのまま戻る', async () => {
+    await stores.credentials.put([
+      { name: 'TZ', value: 'Asia/Tokyo', scope: 'app', secret: false },
+      { name: 'MANAGER_ONLY', value: 'x', scope: 'runner', secret: true },
+    ]);
+
+    expect(await stores.credentials.list()).toEqual([
+      expect.objectContaining({ name: 'MANAGER_ONLY', scope: 'runner', secret: true }),
+      expect.objectContaining({ name: 'TZ', scope: 'app', secret: false }),
+    ]);
+  });
+
+  it('scope・secret を省略すると all / true になる（列が無かった頃の全行と同じ既定）', async () => {
+    await stores.credentials.put([{ name: 'NPM_TOKEN', value: 'npm_x' }]);
+
+    expect(await stores.credentials.list()).toEqual([
+      expect.objectContaining({ name: 'NPM_TOKEN', scope: 'all', secret: true }),
+    ]);
+  });
+
+  it('列を書く前に直接 insert された行（旧スキーマ相当）も既定で読める', async () => {
+    // **2026-09-14 より前に書かれた行を模す。** DB の `not null default` が
+    // ここで効くことを確かめる——コード側で埋め直す必要が無いこと。
+    await db.execute(sql`insert into manager_credentials (name, value) values ('LEGACY_ROW', 'v')`);
+
+    expect(await stores.credentials.list()).toEqual([
+      expect.objectContaining({ name: 'LEGACY_ROW', scope: 'all', secret: true }),
+    ]);
+  });
 });
 
 /**
@@ -3154,6 +3189,27 @@ describe('PgTokenPoolStore', () => {
     const [row] = await stores.tokens.list();
     expect(row).not.toHaveProperty('createdAt');
     expect(row).not.toHaveProperty('updatedAt');
+  });
+
+  /**
+   * **器の環境変数を指す行（`source: 'env'`）という概念は 2026-09-14 に廃止した**
+   * が、`ensureEnvToken`（廃止済み）が過去に書いた行が既存の `agent_tokens` 表に
+   * 残っていることがある。**そういう行は値を持たないので、そのまま domain の
+   * 型（`AgentToken`）へ持ち上げると `credentialOf` が「値が無い」で投げる。**
+   * ⟹ `list()` はこの行を静かに読み捨てる（他の行はそのまま返る）。
+   */
+  it('過去に書かれた source: "env" の行は list() で静かに読み捨てる（クラッシュしない）', async () => {
+    // `replace()` は正規化された `AgentToken`（いまは `source: 'stored'` しか
+    // 作れない）しか受けないので、レガシー行は drizzle で直接差し込んで再現する。
+    await db.insert(agentTokens).values([
+      { id: 'env-1', label: '器の環境変数', source: 'env', order: -1 },
+      { id: 'tok-a', label: 'spare', value: 'tok-aaa', order: 0 },
+    ]);
+
+    const rows = await stores.tokens.list();
+
+    expect(rows.map((row) => row.id)).toEqual(['tok-a']);
+    expect(rows[0]).not.toHaveProperty('source');
   });
 
   it('設定は置かれていなければ core の既定を返す', async () => {

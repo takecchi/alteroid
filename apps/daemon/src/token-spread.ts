@@ -38,11 +38,16 @@ export interface AgentTokenHolder {
   identity(): { tokenId: string; generation: number } | undefined;
   set(value: string, identity?: { tokenId: string; generation: number }): void;
   /**
-   * 値を落として**器の環境変数へ戻す**（`source: 'env'` の行を撒くとき）。
+   * 値を落とす（撒く値そのものが取れなかったときの手当て）。
    *
    * **空文字を `set` しない。** 空文字は `#childEnv()` へ空の `CLAUDE_CODE_OAUTH_TOKEN`
-   * を重ね、**器の環境変数を「空で上書き」してしまう**（＝資格が消える）。落とすのは
-   * キーごとである。
+   * を重ね、**資格が「空文字」という値で上書きされてしまう。** 落とすのはキー
+   * ごとである。
+   *
+   * **⚠️ いまはどこからも呼ばれていない。** 器の環境変数を指す行（`source: 'env'`）
+   * という概念を廃止したことで、このメソッドを使っていた唯一の呼び出し元
+   * （`createTokenSpread` の空文字フォールバック）が無くなった。プリミティブ
+   * としては引き続き意味があるので、インターフェースには残してある。
    */
   clear(identity?: { tokenId: string; generation: number }): void;
 }
@@ -80,28 +85,6 @@ export interface TokenSpreadOptions {
   profileEnvNames: () => Promise<readonly string[]>;
   /** 影を見つけたときに出す先（日誌・stderr）。 */
   onShadowed?: (names: readonly string[]) => void;
-  /**
-   * **クローンの器（デーモンのプロセス）の認証トークン。** `source: 'env'` の行を
-   * 撒くときの値である。
-   *
-   * ## なぜ要るか（ここが 2026-09-11 の人間の決定で変わった箇所である）
-   *
-   * 以前は env の行を**空文字で撒いていた** —— 器が鍵のファイルを消し、runner の
-   * `#childEnv()` が**runner 自身の環境変数へ落ちる**ことを期待する形である。
-   * ⟹ **runner が単体で動く器になっていた。** そして runner の env に在る値は、
-   * プールの現役とは別物でありうる（本番実測: runner の env は週次上限で冷却中の
-   * トークンだった）。
-   *
-   * **いまは「現役の値は必ずクローンから撒く」。** env の行も値を持って降りる。
-   * ⟹ runner の env は空でよく、**空であることが正しい。**
-   *
-   * **⚠️ 関数で受ける（値ではなく）。** 構築時に凍らせると、人間が器の変数を
-   * 直した後の再起動でしか反映されない（`CloneOptions.credentials` と同じ理由）。
-   *
-   * **取れなければ `undefined`。** その場合に撒くのは空文字（＝外す）で、結果へ
-   * 「値が無い」を載せる —— **黙って runner の env へ倒さない**（倒す先はもう無い）。
-   */
-  agentTokenFromEnv: () => string | undefined;
 }
 
 /**
@@ -115,11 +98,11 @@ export interface TokenSpreadOptions {
  * 日誌へ全部載せる。
  */
 export function createTokenSpread(options: TokenSpreadOptions): TokenSpreadPort {
-  const { runners, clone, profileEnvNames, onShadowed, agentTokenFromEnv } = options;
+  const { runners, clone, profileEnvNames, onShadowed } = options;
 
   return {
     async spread(
-      token: { id?: string; generation?: number } & TokenCredential,
+      token: { id: string; generation: number } & TokenCredential,
     ): Promise<TokenSpreadResult[]> {
       const results: TokenSpreadResult[] = [];
 
@@ -131,26 +114,6 @@ export function createTokenSpread(options: TokenSpreadOptions): TokenSpreadPort 
         .catch(() => [] as string[]);
       if (shadowed.length > 0) onShadowed?.(shadowed);
 
-      /**
-       * runner へ撒く値。**env の行はクローンの器の値を使う。**
-       *
-       * **取れなかったときは空文字（＝外す）。** 黙って runner の env へ倒す形は
-       * もう無い（runner は自分の env から鍵を拾わない）ので、**撒けなかったことを
-       * 結果に出す**ほうへ倒す —— 出さないと「回した」だけが日誌に残り、
-       * これから起こすマネージャーが資格ゼロで走る理由が誰にも見えない。
-       */
-      const valueToSpread = token.kind === 'env' ? (agentTokenFromEnv() ?? '') : token.value;
-      if (valueToSpread.length === 0) {
-        results.push({
-          target: 'clone-env',
-          ok: false,
-          error:
-            'プールが器の環境変数の行を選んだが、デーモンの環境変数に ' +
-            'CLAUDE_CODE_OAUTH_TOKEN が無い（撒く値が無いので、これから起こす' +
-            'マネージャーは資格を1つも持たずに走る）',
-        });
-      }
-
       const clients = await runners.list().catch(() => []);
       for (const client of clients) {
         // **`runnerId` をそのまま名札にしている。** 既定値（`'runner-primary'`）が
@@ -158,12 +121,7 @@ export function createTokenSpread(options: TokenSpreadOptions): TokenSpreadPort 
         // **どの宛先の話かを人間が見分けられること**までで、識別子としての
         // 権威は要らない（`RunnerClient.runnerId` の注意書き）。
         try {
-          // **env の行も値を持って降りる**（2026-09-11 の人間の決定。
-          // `agentTokenFromEnv` の doc）。以前はここで空文字を撒き、runner が
-          // 自分の環境変数へ落ちることを期待していた —— その形は
-          // 「runner が単体で動く」ことを前提にしていて、しかも runner の env は
-          // 現役とは別物でありうる。
-          await client.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: valueToSpread }]);
+          await client.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: token.value }]);
           results.push({ target: client.runnerId, ok: true });
         } catch (error) {
           // **理由は1行目だけ採る。** ドライバやネットワークの例外は本文へ
@@ -189,35 +147,8 @@ export function createTokenSpread(options: TokenSpreadOptions): TokenSpreadPort 
 
       // クローン側は同じプロセス内なので落ちない。**身元も一緒に置く** —
       // 置かないと、クローンの観測が身元を名乗れず世代の照合が素通しになる。
-      //
-      // **`token.id` が無ければ身元は置かない**（2026-09-12、#866）。呼ぶ側
-      // （`restore()` の `none`）が、プールに実在する行を持たない「器の環境
-      // 変数」をそのまま撒くときに使う——実在しない id を台帳の tokenId 軸へ
-      // 持ち込まないためである（`TokenSpreadPort.spread` の doc）。
-      const identity =
-        token.id === undefined
-          ? undefined
-          : { tokenId: token.id, generation: token.generation ?? 0 };
-      /**
-       * **env の行も、値が取れたなら holder へ置く**（2026-09-11）。
-       *
-       * ## 置かないと、名乗り直しで鍵が消える
-       *
-       * runner へ撒くのは上の `valueToSpread`（値）だが、**名乗り直しの降ろし直しは
-       * holder を見る**（`createRunnerTokenSync`）。holder が空だと、あちらは
-       * 「鍵を消す指示」＝空文字を降ろす ⟹ **撒いた直後に繋ぎ直した runner が、
-       * 撒いたはずの鍵を失う。** 撒く側と名乗り直し側で出所が割れていた。
-       *
-       * **クローン自身には無害である。** 置く値はデーモンの `process.env` の値そのもの
-       * なので、クローンの子へ重ねても同じ値になる（以前 `clear()` していたのは
-       * 「器の env へ落ちれば同じ」という判断で、値を置いても結論は変わらない）。
-       *
-       * **取れなかったときだけ落とす。** そのときは配る値がどこにも無く、
-       * 「鍵を消す指示」が正しい観測である（上で `clone-env` の失敗も出している）。
-       */
-      if (token.kind === 'stored') clone.set(token.value, identity);
-      else if (valueToSpread.length > 0) clone.set(valueToSpread, identity);
-      else clone.clear(identity);
+      const identity = { tokenId: token.id, generation: token.generation };
+      clone.set(token.value, identity);
       results.push({ target: 'clone', ok: true });
 
       if (shadowed.length > 0) {
@@ -255,49 +186,19 @@ function firstLine(error: unknown): string {
  * ものである。`ManagerPool` の `#connectTo` から呼ばれる（プロファイルの
  * `syncRunner` と同じ位置）。
  *
- * **⚠️ 「箱が空なら何もしない」は 2026-09-12（#866）に誤りだと分かった。**
- * 以前はここで「まだ一度も撒いていない ⟹ 器の環境変数だけの既定の構成なので
- * 1文字も変えない（受け入れ基準7）」として `return` していた——**runner が
- * 自分の環境変数の鍵をそのまま使える**という前提に立っていたためである。
- * `runner.ts` の `#childEnv()` はいまその鍵を無条件に削除する（人間の決定
- * 2026-09-11）ので、何もしなければこの runner は資格を1本も持たずに走る。
- * ⟹ **箱が空のときも、器の環境変数の値をそのまま降ろす**（`agentTokenFromEnv`）。
- *
- * **⚠️ 「箱が空」を `values()` の値の有無だけで見ないこと。** `AgentTokenHolder`
- * には2つの「値が無い」がある——(1) `identity()` も `undefined`：まだ一度も
- * 撒いていない（**いまはここも器の環境変数の値を降ろす。#866**） (2) `identity()`
- * は在るが `values()` の値が無い：env 行（`source: 'env'`）が現役で、`clear()`
- * されている（`AgentTokenHolder.clear` の doc: 「身元は渡されたときだけ更新する」
- * ので `currentIdentity` は残る）。(2) を (1) と同じに扱うと、`spread()` が
- * `value: ''` で表している「鍵を消せ」という指示を、後から繋ぎ直してきた
- * runner（`ManagerPool#connectTo` / `#reattach`）にだけ伝え損ねる——その runner
- * は器の再起動でしか鍵ファイルを作り直さない（`apps/runner/src/index.ts` の
- * `credentials.flush()` はプロセス起動時の1回きりで、ストリームの繋ぎ直しでは
- * 走らない）ので、古い（冷却中の）トークンの鍵ファイルを持ったまま走り続ける。
- * `spread()` と同じ表現（空文字で「env を使え」を伝える）に揃えることで、
- * この経路にも「鍵を消せ」が届くようにする。
+ * **⚠️ 箱（{@link AgentTokenHolder}）がまだ何も撒いていなければ何もしない。**
+ * かつて（2026-09-12〜2026-09-14、#866）はここで器の環境変数
+ * （`CLAUDE_CODE_OAUTH_TOKEN`）の値をそのまま降ろしていたが、その手当ては
+ * 廃止した——トークンプールは100% DB 駆動にする、器の環境変数へのフォール
+ * バックはどの経路にも残さない、という人間の決定による。⟹ **プールから一度も
+ * 撒いていない器では、後から上がってきた runner も資格を持たずに走る。** 直す
+ * のは `alteroid token add` で通る鍵を登録し、それが撒かれるのを待つことである。
  */
 export function createRunnerTokenSync(
   holder: AgentTokenHolder,
-  /**
-   * **器の環境変数（デーモンのプロセスの `CLAUDE_CODE_OAUTH_TOKEN`）**。
-   * `TokenSpreadOptions.agentTokenFromEnv` と同じ値を渡すこと——片方だけ違う
-   * 値を見る形にすると、`spread()` が撒いた直後の値と、後から繋ぎ直した
-   * runner が受け取る値が食い違いうる。
-   */
-  agentTokenFromEnv: () => string | undefined,
 ): (runner: { setCredentials: RunnerLike['setCredentials'] }) => Promise<void> {
   return async (runner) => {
-    if (holder.identity() === undefined) {
-      // **まだ一度も撒いていない ⟹ 器の環境変数の値をそのまま降ろす**（#866）。
-      // 空なら空文字（＝鍵を消す指示。`spread()` の `clone-env` 失敗と同じ
-      // 約束——黙って runner の env へ倒さない）。
-      const value = agentTokenFromEnv() ?? '';
-      await runner.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value }]);
-      return;
-    }
-    // 身元はあるのに値が無い ⟹ env 行が現役。`spread()` と同じ表現（空文字）で
-    // 「鍵を消せ」を降ろす。
+    if (holder.identity() === undefined) return;
     const value = holder.values().CLAUDE_CODE_OAUTH_TOKEN ?? '';
     await runner.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value }]);
   };

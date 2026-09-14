@@ -1273,23 +1273,15 @@ describe('降りた本人へ「回す」を作らない（resetsAt が過去で�
  */
 describe('restore（起動時の引き取り）', () => {
   /**
-   * **⚠️ 2026-09-12（#866）に期待を反転した。** 元の題は「一度も回していなければ
-   * none（器の環境変数がそのまま効く）」で、「撒かない。指名されていないものを
-   * 起動時に撒くのは、回していないのに回したことにする操作である」として
-   * `spreadCalls` が空であることを固定していた。**これは
-   * `runner.ts` の `#childEnv()` が runner 自身の env の鍵を無条件に削除する
-   * ようになる（人間の決定 2026-09-11）より前は正しかった** —— それまでは
-   * 撒かなくても runner が自分の環境変数の鍵をそのまま使えたので、本当に
-   * 「何もしない」で構わなかった。いまは撒かないと runner は資格を1本も
-   * 持たずに起動する。⟹ **`kind: 'none'`（プールの現役は選び直さない。
-   * 受け入れ基準7が守る「プールの記録を1文字も変えない」はいまも真）は
-   * 変えず、器の環境変数の値だけを撒くようにした。**
-   *
-   * プールに env 行（`source: 'env'`）が無いので、身元は付けない
-   * （`id`/`generation` を省略する。実在しない id を台帳の tokenId 軸へ
-   * 持ち込まないため）。
+   * **⚠️ 2026-09-14 に、器の環境変数へのフォールバックを完全に廃止した。**
+   * 2026-09-12〜2026-09-14（#866）のあいだは、一度も回していない・指名の先が
+   * 消えている・人間が外した、のどの回でも器の環境変数（`CLAUDE_CODE_OAUTH_TOKEN`）
+   * の値を撒く手当てが入っていたが、その手当てごと撤去した——トークンプールは
+   * 100% DB 駆動にする、器の環境変数へのフォールバックはどの経路にも残さない、
+   * という人間の決定による。⟹ いまは `none` を含め、値を撒く材料が無い回は
+   * **何も撒かない**（`spreadCalls` は空のまま）。
    */
-  it('一度も回していなくても、器の環境変数の値は撒く（#866。身元は付けない）', async () => {
+  it('一度も回していなければ none。何も撒かない', async () => {
     const h = harness();
     await h.stores.tokens.replace([{ id: 'tok-a', label: 'first', value: 'value-a', order: 0 }]);
 
@@ -1298,12 +1290,10 @@ describe('restore（起動時の引き取り）', () => {
     expect(outcome.kind).toBe('none');
     // **プールの現役は選び直していない**（`stores.tokens` へは1文字も書いていない）。
     expect(await h.stores.tokens.readActive()).toBeNull();
-    // **撒くのは器の環境変数の値**（`kind: 'env'`）。id が無い ⟹ 実在する行を
-    // 台帳の tokenId 軸へ持ち込んでいない。
-    expect(h.spreadCalls).toEqual([{ kind: 'env' }]);
+    expect(h.spreadCalls).toEqual([]);
   });
 
-  it('プールが本当に空でも、器の環境変数の値は撒く（受け入れ基準7が守るのは「プールの記録」で、配達は別である）', async () => {
+  it('プールが本当に空でも none。何も撒かない', async () => {
     const h = harness();
     // `tokens.replace` を一度も呼んでいない ⟹ プールは文字どおり空。
 
@@ -1311,20 +1301,7 @@ describe('restore（起動時の引き取り）', () => {
 
     expect(outcome.kind).toBe('none');
     expect(await h.stores.tokens.list()).toEqual([]);
-    expect(h.spreadCalls).toEqual([{ kind: 'env' }]);
-  });
-
-  it('プールに env 行が既に在れば、その id を身元にする（実在する行なので台帳を汚さない）', async () => {
-    const h = harness();
-    await h.stores.tokens.replace([
-      { id: 'tok-env', label: '器の環境変数', source: 'env', order: -1 },
-      { id: 'tok-a', label: 'spare', value: 'value-a', order: 0 },
-    ]);
-
-    const outcome = await h.rotator.restore();
-
-    expect(outcome.kind).toBe('none');
-    expect(h.spreadCalls).toEqual([{ id: 'tok-env', generation: 0, kind: 'env' }]);
+    expect(h.spreadCalls).toEqual([]);
   });
 
   it('現役として記録された行を撒き直す', async () => {
@@ -1395,16 +1372,7 @@ describe('restore（起動時の引き取り）', () => {
     expect(outcome.why).toContain('冷却中');
   });
 
-  /**
-   * **⚠️ 2026-09-12（#866）に期待を反転した。** 元の題は「指名の先の行が消えて
-   * いたら dangling。撒かない」だった。「撒かない」は*その行の値を戻さない*
-   * という人間の判断とは関係が無く、`#childEnv()` が無条件に鍵を消す前の
-   * 前提（撒かなくても runner は自分の環境変数で走れる）の上に乗っていた。
-   * いまは撒く——ただし撒くのは記録が指していた行の値ではなく、器の環境変数の
-   * 値である。身元は記録が指していた `tokenId` / `generation` をそのまま使う
-   * （新しい id を作らない。プールの記録は1文字も書き換えていない）。
-   */
-  it('指名の先の行が消えていたら dangling。器の環境変数の値は撒く（#866）', async () => {
+  it('指名の先の行が消えていたら dangling。何も撒かない', async () => {
     const h = harness();
     await seedTwo(h);
     await h.stores.tokens.writeActive({ tokenId: 'ghost', generation: 3, rotatedAt: AT });
@@ -1412,19 +1380,12 @@ describe('restore（起動時の引き取り）', () => {
     const outcome = await h.rotator.restore();
 
     expect(outcome.kind).toBe('dangling');
-    expect(h.spreadCalls).toEqual([{ id: 'ghost', generation: 3, kind: 'env' }]);
+    expect(h.spreadCalls).toEqual([]);
     // **記憶ストアへ書いて直さない**（次の当たりで回し手が正しい候補へ移る）。
     expect(await h.stores.tokens.readActive()).toMatchObject({ tokenId: 'ghost' });
   });
 
-  /**
-   * **⚠️ 2026-09-12（#866）に期待を反転した。** 元の題は「人間が外した行なら
-   * withheld。撒かない（人間の判断を実装が覆さない）」。**「撒かない」の対象を
-   * 誤読しないこと** —— 人間が外したのは*その行の値*であり、いまもそれは戻さ
-   * ない（`kind: 'env'` であって `credentialOf(row)` ではない）。撒くのは器の
-   * 環境変数の値で、これは最初から人間の判断の対象ではない。
-   */
-  it('人間が外した行なら withheld。ただし器の環境変数の値は撒く（外した鍵の値ではない。#866）', async () => {
+  it('人間が外した行なら withheld。何も撒かない（人間の判断を実装が覆さない）', async () => {
     const h = harness();
     await h.stores.tokens.replace([
       { id: 'tok-a', label: 'first', value: 'value-a', order: 0, disabledAt: AT },
@@ -1434,12 +1395,10 @@ describe('restore（起動時の引き取り）', () => {
     const outcome = await h.rotator.restore();
 
     expect(outcome.kind).toBe('withheld');
-    // **`kind: 'env'` であって `value: 'value-a'` ではない** —— 外した鍵の値を
-    // 戻していないことを、撒いた中身そのもので確かめる。
-    expect(h.spreadCalls).toEqual([{ id: 'tok-a', generation: 1, kind: 'env' }]);
+    expect(h.spreadCalls).toEqual([]);
   });
 
-  it('失効している行も withheld。器の環境変数の値は撒く', async () => {
+  it('失効している行も withheld。何も撒かない', async () => {
     const h = harness();
     await h.stores.tokens.replace([
       { id: 'tok-a', label: 'first', value: 'value-a', order: 0, invalidatedAt: AT },
@@ -1447,7 +1406,7 @@ describe('restore（起動時の引き取り）', () => {
     await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: AT });
 
     expect((await h.rotator.restore()).kind).toBe('withheld');
-    expect(h.spreadCalls).toEqual([{ id: 'tok-a', generation: 1, kind: 'env' }]);
+    expect(h.spreadCalls).toEqual([]);
   });
 
   it('値が結果のどこにも出ない', async () => {
@@ -1487,160 +1446,6 @@ describe('restore（起動時の引き取り）', () => {
     expect(tokens.find((t) => t.id === 'tok-a')).not.toHaveProperty('cooldownUntil');
     // 次は tok-c（tok-a へ戻らない。order 順で tok-b の後ろ…ではなく ready の先頭）。
     expect(await h.stores.tokens.readActive()).toMatchObject({ generation: 3 });
-  });
-});
-
-/**
- * 器の環境変数を指す行（Issue #393）。
- *
- * **これが無いと、環境変数のトークンが止まっても記録が残らない** — 回し手は現役の
- * 行を冷却へ入れるが、環境変数は行を持たないので入れる先が無い。**最初に止まった
- * 1本だけが台帳から消える。**
- */
-describe('ensureEnvToken（環境変数の行）', () => {
-  function withEnv(present: boolean) {
-    const stores = createMemoryStores();
-    let seq = 0;
-    const rotator = createTokenRotator({
-      stores,
-      probe: { probe: async () => ({ verdict: 'usable' }) },
-      spread: { spread: async () => [] },
-      now: () => new Date(AT),
-      hasEnvToken: () => present,
-      newId: () => `env-${String(++seq)}`,
-    });
-    return { stores, rotator };
-  }
-
-  it('⚠️ プールが空なら足さない（受け入れ基準7 を字義どおり守る）', async () => {
-    const { stores, rotator } = withEnv(true);
-
-    const outcome = await rotator.ensureEnvToken();
-
-    expect(outcome.kind).toBe('skipped');
-    // **記憶ストアに1行も生えない。**
-    expect(await stores.tokens.list()).toEqual([]);
-  });
-
-  it('人間が1本でも登録していれば足す', async () => {
-    const { stores, rotator } = withEnv(true);
-    await stores.tokens.replace([{ id: 'tok-a', label: 'spare', value: 'value-a', order: 0 }]);
-
-    const outcome = await rotator.ensureEnvToken();
-
-    expect(outcome.kind).toBe('added');
-    const tokens = await stores.tokens.list();
-    const env = tokens.find((t) => t.source === 'env');
-    expect(env).toBeDefined();
-    // **値を持たない**（器の環境変数を指すだけ）。
-    expect(env).not.toHaveProperty('value');
-  });
-
-  it('環境変数の行は既存のどれよりも先に試される', async () => {
-    // 環境変数のトークンは*いま走っている*ものなので、その残枠を使い切ってから
-    // 予備へ回るのが自然な順序である。
-    const { stores, rotator } = withEnv(true);
-    await stores.tokens.replace([{ id: 'tok-a', label: 'spare', value: 'value-a', order: 0 }]);
-
-    await rotator.ensureEnvToken();
-
-    const tokens = await stores.tokens.list();
-    expect(tokens[0]?.source).toBe('env');
-    expect(tokens[1]?.id).toBe('tok-a');
-  });
-
-  it('既存の行の order を振り直さない（updatedAt を一斉に動かさない）', async () => {
-    const { stores, rotator } = withEnv(true);
-    await stores.tokens.replace([
-      {
-        id: 'tok-a',
-        label: 'a',
-        value: 'value-a',
-        order: 0,
-        updatedAt: '2026-08-01T00:00:00.000Z',
-      },
-      {
-        id: 'tok-b',
-        label: 'b',
-        value: 'value-b',
-        order: 1,
-        updatedAt: '2026-08-01T00:00:00.000Z',
-      },
-    ]);
-
-    await rotator.ensureEnvToken();
-
-    const tokens = await stores.tokens.list();
-    expect(tokens.find((t) => t.id === 'tok-a')?.order).toBe(0);
-    expect(tokens.find((t) => t.id === 'tok-a')?.updatedAt).toBe('2026-08-01T00:00:00.000Z');
-    expect(tokens.find((t) => t.id === 'tok-b')?.updatedAt).toBe('2026-08-01T00:00:00.000Z');
-  });
-
-  it('環境変数が置かれていなければ足さない（指す先が無い）', async () => {
-    const { stores, rotator } = withEnv(false);
-    await stores.tokens.replace([{ id: 'tok-a', label: 'spare', value: 'value-a', order: 0 }]);
-
-    expect((await rotator.ensureEnvToken()).kind).toBe('skipped');
-    expect((await stores.tokens.list()).some((t) => t.source === 'env')).toBe(false);
-  });
-
-  it('2回呼んでも増えない（起動のたびに行が増えない）', async () => {
-    const { stores, rotator } = withEnv(true);
-    await stores.tokens.replace([{ id: 'tok-a', label: 'spare', value: 'value-a', order: 0 }]);
-
-    await rotator.ensureEnvToken();
-    const second = await rotator.ensureEnvToken();
-
-    expect(second.kind).toBe('exists');
-    expect((await stores.tokens.list()).filter((t) => t.source === 'env')).toHaveLength(1);
-  });
-
-  it('人間が外した行でも「在る」として扱う（外した判断を無視して足し直さない）', async () => {
-    const { stores, rotator } = withEnv(true);
-    await stores.tokens.replace([
-      { id: 'tok-a', label: 'spare', value: 'value-a', order: 0 },
-      { id: 'env-old', label: '器の環境変数', source: 'env', order: -1, disabledAt: AT },
-    ]);
-
-    const outcome = await rotator.ensureEnvToken();
-
-    expect(outcome.kind).toBe('exists');
-    expect((await stores.tokens.list()).filter((t) => t.source === 'env')).toHaveLength(1);
-  });
-
-  /** **この修正の本体** — 環境変数のトークンが止まったことが記録に残る。 */
-  it('環境変数の行が止まったら、文言と復帰予定時刻が残る', async () => {
-    const stores = createMemoryStores();
-    const spreadCalls: unknown[] = [];
-    const rotator = createTokenRotator({
-      stores,
-      probe: { probe: async () => ({ verdict: 'usable' }) },
-      spread: {
-        spread: async (t) => {
-          spreadCalls.push(t);
-          return [];
-        },
-      },
-      now: () => new Date(AT),
-      hasEnvToken: () => true,
-      newId: () => 'env-1',
-    });
-    await stores.tokens.replace([{ id: 'tok-a', label: 'spare', value: 'value-a', order: 0 }]);
-    await rotator.ensureEnvToken();
-    // 環境変数の行が現役だとして始める（起動時の撒き直しが指名した状態）。
-    await stores.tokens.writeActive({ tokenId: 'env-1', generation: 1, rotatedAt: AT });
-
-    await rotator.observe({
-      notice: { kind: 'reached', text: "You've hit your org's monthly spend limit" },
-      observedBy: { tokenId: 'env-1', generation: 1 },
-    });
-
-    const env = (await stores.tokens.list()).find((t) => t.id === 'env-1');
-    // **止まった事実が残る。これが行を作った理由そのものである。**
-    expect(env?.lastRejectedReason).toBe("You've hit your org's monthly spend limit");
-    expect(env?.cooldownUntil).toBeDefined();
-    // 予備へ回っている。
-    expect(await stores.tokens.readActive()).toMatchObject({ tokenId: 'tok-a', generation: 2 });
   });
 });
 
@@ -2407,29 +2212,22 @@ describe('reconsider: 動く鍵が残っているのに諦めない', () => {
     expect(outcome.why).toContain('プールに無い');
   });
 
-  it('指名が無い器では、環境変数の行を現役として見る', async () => {
-    // **既定の構成から1度も回っていない器**（`active` が `null`）。ここを
-    // 「現役が居ない」と読むと、環境変数のトークンが冷却へ入っていても
-    // 永久に何も起きない。
+  /**
+   * **⚠️ 2026-09-14 に期待を反転した。** 元の題は「指名が無い器では、環境変数の
+   * 行を現役として見る」——器の環境変数を指す行（`source: 'env'`）が「実質の
+   * 現役」として扱われ、その行が冷却中なら状態からでも回っていた。その概念
+   * （`isEnvToken` によるフォールバック）ごと廃止したので、**指名が一度も無い
+   * （`active === null`）状態からは、状態だけでは何も決めない。**
+   */
+  it('指名が一度も無い器では、状態からは決めない（候補が在っても回さない）', async () => {
     const h = harness();
-    await h.stores.tokens.replace([
-      {
-        id: 'tok-env',
-        label: '器の環境変数',
-        source: 'env',
-        order: -1,
-        cooldownUntil: Date.parse(AT) + 60 * 60 * 1000,
-      },
-      { id: 'tok-b', label: 'second', value: 'value-b', order: 0 },
-    ]);
+    await h.stores.tokens.replace([{ id: 'tok-b', label: 'second', value: 'value-b', order: 0 }]);
+    // `writeActive` を一度も呼んでいない ⟹ `active` は `null`。
 
     const outcome = await h.rotator.reconsider({ reason: 'account_probe' });
 
-    expect(outcome.kind).toBe('rotated');
-    if (outcome.kind !== 'rotated') return;
-    expect(outcome.toTokenId).toBe('tok-b');
-    // **`fromTokenId` を名乗らない。** 指名が無いので、回したことのある鍵が無い。
-    expect(outcome.fromTokenId).toBeUndefined();
+    expect(outcome.kind).toBe('ignored');
+    expect(h.spreadCalls).toEqual([]);
   });
 });
 
@@ -2876,25 +2674,23 @@ describe('冷却の記録に、期限の出所を残す', () => {
 });
 
 /**
- * **起動*後*に現役が「待っても戻らない」状態になった回（#869）。**
+ * **起動*後*に現役が「待っても戻らない」状態になった回。**
+ *
+ * **⚠️ 2026-09-14 に、器の環境変数へのフォールバックを完全に廃止した。**
+ * 2026-09-12〜2026-09-14（#869）のあいだは、通る候補が無く現役が待っても
+ * 戻らない（消された / 外された / 失効した）回だけ、器の環境変数
+ * （`CLAUDE_CODE_OAUTH_TOKEN`）の値を代わりに撒く手当てが入っていたが、その
+ * 手当てごと撤去した——トークンプールは100% DB 駆動にする、という人間の決定
+ * による。⟹ `exhausted` はいま、どの理由であっても**何も撒かない。**
  *
  * ⭐ **ここで測るのは「関数が呼ばれたか」ではなく「撒く口に資格が渡ったか」である。**
  * `spreadCalls` は {@link TokenSpreadPort} が受け取った引数そのもの ——
  * `apps/daemon/src/token-spread.ts` がこれを `RunnerClient#setCredentials` へ渡し、
  * runner の資格箱が `Host#childEnv()` で**これから起こす子プロセスの env** へ重ねる。
  * ⟹ **この配列が空である回は、その後に起こる子プロセスに資格が1本も無い回である。**
- *
- * ⚠️ **`Host#childEnv()` の中まで測る形は取れない**（private なうえ core の外の
- * 配線に依存する）。**撒く口はその手前の、観測できる最後の点である。**
- *
- * **#868 が塞いだのは `restore()`＝起動した瞬間だけだった。** ここは
- * `finishSweep()` の `exhausted` の道（`reconsider()` と `observe()` の両方が通る）。
  */
-describe('起動後に現役が戻らなくなった回、器の環境変数の値を撒く（#869）', () => {
-  /** 撒いた中身が「器の環境変数の値」であることを、`kind` そのもので確かめる。 */
-  const envSpread = (id: string, generation: number) => [{ id, generation, kind: 'env' }];
-
-  it('指名の先の行が消えた（人間が消した）まま通る候補が無ければ、器の環境変数の値を撒く', async () => {
+describe('exhausted は何も撒かない（器の環境変数へのフォールバックは廃止した）', () => {
+  it('指名の先の行が消えた（人間が消した）まま通る候補が無ければ exhausted。何も撒かない', async () => {
     const h = harness();
     // 残っている行は人間が外してあるので、候補は1本も立たない。
     await h.stores.tokens.replace([
@@ -2905,13 +2701,12 @@ describe('起動後に現役が戻らなくなった回、器の環境変数の�
     const outcome = await h.rotator.reconsider({ reason: 'tick' });
 
     expect(outcome.kind).toBe('exhausted');
-    // **身元は記録が指していたものそのまま。** 新しい id を作っていない。
-    expect(h.spreadCalls).toEqual(envSpread('ghost', 3));
+    expect(h.spreadCalls).toEqual([]);
     // **プールの記録は1バイトも動かさない。**
     expect(await h.stores.tokens.readActive()).toMatchObject({ tokenId: 'ghost', generation: 3 });
   });
 
-  it('人間が外した行が現役のまま通る候補が無ければ、器の環境変数の値を撒く（外した鍵の値ではない）', async () => {
+  it('人間が外した行が現役のまま通る候補が無ければ exhausted。何も撒かない', async () => {
     const h = harness();
     await h.stores.tokens.replace([
       { id: 'tok-a', label: 'first', value: 'value-a', order: 0, disabledAt: AT },
@@ -2921,13 +2716,10 @@ describe('起動後に現役が戻らなくなった回、器の環境変数の�
     const outcome = await h.rotator.reconsider({ reason: 'tick' });
 
     expect(outcome.kind).toBe('exhausted');
-    // **`kind: 'env'` であって `value: 'value-a'` ではない** —— 人間が外した*行の
-    // 値*は戻していないことを、撒いた中身そのもので確かめる（#868 が引いた線）。
-    expect(h.spreadCalls).toEqual(envSpread('tok-a', 1));
-    expect(JSON.stringify(h.spreadCalls)).not.toContain('value-a');
+    expect(h.spreadCalls).toEqual([]);
   });
 
-  it('失効した行が現役のままでも、器の環境変数の値を撒く', async () => {
+  it('失効した行が現役のままでも exhausted。何も撒かない', async () => {
     const h = harness();
     await h.stores.tokens.replace([
       { id: 'tok-a', label: 'first', value: 'value-a', order: 0, invalidatedAt: AT },
@@ -2935,30 +2727,9 @@ describe('起動後に現役が戻らなくなった回、器の環境変数の�
     await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: AT });
 
     expect((await h.rotator.reconsider({ reason: 'tick' })).kind).toBe('exhausted');
-    expect(h.spreadCalls).toEqual(envSpread('tok-a', 1));
+    expect(h.spreadCalls).toEqual([]);
   });
 
-  it('撒いたことは日誌に出る（何も撒かずに返った回と見分けが付く）', async () => {
-    const h = harness();
-    await h.stores.tokens.replace([
-      { id: 'tok-a', label: 'first', value: 'value-a', order: 0, disabledAt: AT },
-    ]);
-    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: AT });
-
-    const outcome = await h.rotator.reconsider({ reason: 'tick' });
-
-    expect(describeTokenRotation(outcome)).toContain('器の環境変数の値を撒いた');
-    // **値は出さない**（受け入れ基準5）。
-    expect(describeTokenRotation(outcome)).not.toContain('value-a');
-  });
-
-  /**
-   * 🔴 **ここから下は「撒かない」を固定する側である。**
-   *
-   * 撒くほうだけを固定すると、「`exhausted` なら常に撒く」へ緩めても緑のままに
-   * なる —— それは**プールの選択を器の環境変数で黙って上書きする**実装であり、
-   * `parked`（いちばん早く戻る鍵を撒いて待つ）が守っているものを壊す。
-   */
   it('現役が冷却中なだけなら撒かない（待てば戻る。プールの選択を覆さない）', async () => {
     const h = harness();
     await h.stores.tokens.replace([
@@ -2979,9 +2750,6 @@ describe('起動後に現役が戻らなくなった回、器の環境変数の�
   });
 
   it('持ち時間で打ち切った回は、現役が消えていても撒かない（まだ試していない候補が在る）', async () => {
-    // **現役は `dangling` なのに撒かない。** 打ち切った回は「通る候補が無い」と
-    // まだ言えていない —— ここで器の環境変数へ落とすと、次の周で見つかるはずの
-    // 候補を飛ばして**プールの選択を先回りで覆す**ことになる。
     const h = harness({
       verdict: { verdict: 'unusable', reason: '枠が尽きている' },
       probeTakesMs: 40_000,
@@ -2995,15 +2763,16 @@ describe('起動後に現役が戻らなくなった回、器の環境変数の�
     expect(h.spreadCalls).toEqual([]);
   });
 
-  it('まだ一度も指名していない器では撒かない（restore() が起動時に撒いた値と同じものになる）', async () => {
+  it('まだ一度も指名していない器では、状態からは決めない（撒く先の身元が無い）', async () => {
     const h = harness();
     await h.stores.tokens.replace([
-      { id: 'tok-env', label: '器の環境変数', source: 'env', order: -1, disabledAt: AT },
+      { id: 'tok-a', label: 'first', value: 'value-a', order: 0, disabledAt: AT },
     ]);
+    // `writeActive` を一度も呼んでいない ⟹ `active` は `null`。
 
     const outcome = await h.rotator.reconsider({ reason: 'tick' });
 
-    expect(outcome.kind).toBe('exhausted');
+    expect(outcome.kind).toBe('ignored');
     expect(h.spreadCalls).toEqual([]);
   });
 });

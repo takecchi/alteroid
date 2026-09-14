@@ -13007,19 +13007,6 @@ describe('token_list（読むだけ。値は返らない）', () => {
     expect(reply).toContain('回復の見込み（分類）');
   });
 
-  it('器の環境変数を指す行は、値を持たないことが分かる形で出る', async () => {
-    const h = harness();
-    await h.stores.tokens.replace([
-      { id: 'tok-env', label: '器の環境変数', source: 'env', order: -1 },
-      { id: 'tok-a', label: '予備1', value: 'v1', order: 0 },
-    ]);
-
-    const reply = await h.call('token_list', {});
-
-    expect(reply).toContain('器の環境変数を指す行');
-    expect(reply).toContain('値を持たない');
-  });
-
   it('止まった理由の原文が長くても、1件が一覧を食い潰さない', async () => {
     // **`renderListing` の予算だけでは足りない。** あちらは全体を締めるので、
     // 1件が長いままでも上限は守られる——**代わりにその1件だけが出て、他の候補が

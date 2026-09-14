@@ -255,12 +255,38 @@ export interface CredentialFingerprint {
    * 「クローンの器の env」という比較対象がそもそも無い。
    */
   shadowsCloneEnv?: boolean;
+  /**
+   * 撒く先。`StoredCredential.scope` と同じ意味・同じ既定（`'all'`）。
+   * ここに載せるのは、読み手（CLI/Web UI）が「共通/clone/manager」を表示できる
+   * ようにするためであって、判断はしない。
+   */
+  scope?: 'all' | 'app' | 'runner';
+  /** `StoredCredential.secret` と同じ。読み手が「シークレット」バッジを出すためのもの。 */
+  secret?: boolean;
+  /**
+   * **`secret === false` の行だけ載る。** `secret === true`（既定）の行では
+   * この欄自体が無い——`undefined` を敷き詰めると「値を確認したが空だった」
+   * と区別が付かなくなる（地雷「取れない軸に0の行を作る」と同じ形）。
+   */
+  value?: string;
 }
 
 export interface CredentialEntry {
   name: string;
   /** 空文字は「鍵を外す」の意味（未設定へ戻す）。 */
   value: string;
+  /**
+   * 撒く先。省略時の既定は `'all'`（呼び出し側が解決する）。既存行の更新では
+   * 省略すると前回の値を引き継ぐ。
+   */
+  scope?: 'all' | 'app' | 'runner';
+  /**
+   * この行を API/CLI/Web UI から見えなくするか。**新規作成時にだけ効く**——
+   * 既存行に対して既存の値と違う `secret` を渡すと `CredentialService.apply`
+   * が拒否する（`StoredCredential.secret` の doc）。省略時の既定は新規行なら
+   * `true`、既存行の更新なら前回の値を引き継ぐ。
+   */
+  secret?: boolean;
 }
 
 export interface CredentialStore {

@@ -930,7 +930,16 @@ export function createMemoryStores(): Stores {
           credentialRows.delete(entry.name);
           continue;
         }
-        credentialRows.set(entry.name, { name: entry.name, value: entry.value, updatedAt: at });
+        // **呼び手（`credential-service.ts` の `resolveEntryForWrite`）が scope・
+        // secret を必ず解決してから渡す。** ここでは受け取ったものをそのまま
+        // 持つだけで、既定値の補完はしない（fs/pg 実装と同じ分担）。
+        credentialRows.set(entry.name, {
+          name: entry.name,
+          value: entry.value,
+          updatedAt: at,
+          scope: entry.scope ?? 'all',
+          secret: entry.secret ?? true,
+        });
       }
       return credentials.list();
     },

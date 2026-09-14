@@ -397,16 +397,32 @@ credentialCommand
   .command('set <名前>')
   .description('1つ置く（英大文字・数字・_ の名前。既に在れば入れ替える）')
   .option('-f, --file <path>', '値を読むファイル（省略か - で標準入力）')
+  .option(
+    '--scope <all|app|runner>',
+    '撒く先。all=共通(既定) / app=clone だけ / runner=manager だけ。' +
+      '既存行の更新では省略すると前回の値を引き継ぐ',
+  )
+  .option(
+    '--secret',
+    '値をシークレット扱いにする（既定。新規行にのみ効く。API/CLI/Web UI で値を返さない）',
+  )
+  .option(
+    '--no-secret',
+    '値を非シークレット扱いにする（新規行にのみ効く。API/CLI/Web UI でそのまま見える）',
+  )
   .addHelpText(
     'after',
     '\n値はコマンドライン引数では受け取りません（argv は同じ器の他のプロセスから' +
       '見えるため）。ファイルか標準入力から渡してください:\n' +
       '  alteroid credential set GH_TOKEN -f ./pat.txt\n' +
       '  echo -n "$GH_TOKEN" | alteroid credential set GH_TOKEN\n' +
+      '\n非シークレットな設定値の例（TZ 等）:\n' +
+      '  echo -n "Asia/Tokyo" | alteroid credential set TZ --scope app --no-secret\n' +
+      '\n⚠ シークレット可否は作成時に決まり、後から変更できません。\n' +
       '\nCLAUDE_CODE_OAUTH_TOKEN はここへは置けません（正本はプールの側です）:\n' +
       '  alteroid token add --label <名前> -f <path>\n',
   )
-  .action(async (name: string, options: { file?: string }) => {
+  .action(async (name: string, options: { file?: string; scope?: string; secret?: boolean }) => {
     await credentialSetCommand(name, options);
   });
 

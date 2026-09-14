@@ -15,7 +15,7 @@ import { useCallback } from 'react';
 import { useSWRConfig } from 'swr';
 
 import { expectOk, unwrap, useApi } from '~/lib/api';
-import type { ConversationSummary } from '~/lib/types';
+import type { AgentTokenView, ConversationSummary, EnvVarScope } from '~/lib/types';
 
 import { isKeyOfType, KEY } from './queries';
 
@@ -427,6 +427,111 @@ export function useResetWorkspace() {
     await mutate(() => true);
     return result.cleared;
   }, [api, mutate]);
+}
+
+/**
+ * 環境変数を1つ置く（`PUT /credentials`）。
+ *
+ * **`scope`・`secret` は新規行にのみ渡す意味を持つ**（既存行を更新するときに
+ * 省略すると前回の値を引き継ぐ。`secret` を既存行と違う値で渡すとサーバが
+ * 400 で拒否する——`apps/cli/src/credential.ts` と同じ資格・同じ制約）。
+ *
+ * **`requireOperator`。** 実行環境の持ち主でなければ 403 が返る——呼び出し側
+ * （`env-vars.tsx`）はボタンを隠さず、失敗を `ErrorNote` で見せること
+ * （`settings.tsx` の `ResetWorkspace` と同じ「隠さない」方針）。
+ */
+export function useSetEnvVar() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (entry: { name: string; value: string; scope?: EnvVarScope; secret?: boolean }) => {
+      const result = await api.api
+        .PUT('/credentials', { body: { credentials: [entry] } })
+        .then(unwrap);
+      await mutate(KEY.credentials);
+      return result;
+    },
+    [api, mutate],
+  );
+}
+
+/** 環境変数を1つ外す（空値の `PUT /credentials` = 「外す」）。 */
+export function useRemoveEnvVar() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (name: string) => {
+      const result = await api.api
+        .PUT('/credentials', { body: { credentials: [{ name, value: '' }] } })
+        .then(unwrap);
+      await mutate(KEY.credentials);
+      return result;
+    },
+    [api, mutate],
+  );
+}
+
+/**
+ * 認証トークンのプールへ1本足す（`PUT /tokens`）。
+ *
+ * **`GET /tokens` → 加工 → `PUT /tokens`（全置換）の形。** `apps/cli/src/token.ts`
+ * の `tokenAddCommand` と同じパターン——キャッシュではなく都度取り直す
+ * （ブラウザのタブが複数開いていても、直前の実際の状態を土台にするため）。
+ */
+export function useAddToken() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (label: string, value: string) => {
+      const current = await api.api.GET('/tokens').then(unwrap);
+      const inputs = current.tokens.map(toTokenInput);
+      const result = await api.api
+        .PUT('/tokens', { body: { tokens: [...inputs, { label, value }] } })
+        .then(unwrap);
+      await mutate(KEY.tokens);
+      return result;
+    },
+    [api, mutate],
+  );
+}
+
+/** プールから1本外す。 */
+export function useRemoveToken() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (id: string) => {
+      const current = await api.api.GET('/tokens').then(unwrap);
+      const inputs = current.tokens.filter((token) => token.id !== id).map(toTokenInput);
+      const result = await api.api.PUT('/tokens', { body: { tokens: inputs } }).then(unwrap);
+      await mutate(KEY.tokens);
+      return result;
+    },
+    [api, mutate],
+  );
+}
+
+/** 無効化・有効化を切り替える（人間の判断。`disable` は戻らない側の合図として残る）。 */
+export function useSetTokenDisabled() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (id: string, disabled: boolean) => {
+      const current = await api.api.GET('/tokens').then(unwrap);
+      const inputs = current.tokens.map((token) =>
+        token.id === id ? { ...toTokenInput(token), disabled } : toTokenInput(token),
+      );
+      const result = await api.api.PUT('/tokens', { body: { tokens: inputs } }).then(unwrap);
+      await mutate(KEY.tokens);
+      return result;
+    },
+    [api, mutate],
+  );
+}
+
+/** 外向けの顔（値を持たない）を、次の `PUT /tokens` の入力へ変換する。 */
+function toTokenInput(token: AgentTokenView): { id: string; label: string; order: number } {
+  return { id: token.id, label: token.label, order: token.order };
 }
 
 /** 会話を終える。クローンがここで学びを蒸留する。 */

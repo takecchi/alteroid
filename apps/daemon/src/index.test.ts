@@ -7,7 +7,6 @@ import type { InboxEvent } from '@alteroid/core';
 import {
   createCloneWakeGate,
   describeReopenedTokenNotice,
-  ensuredEnvTokenLine,
   isTokenPoolReopenedNotice,
   reopenedTokenOf,
   tokenRotationStream,
@@ -160,39 +159,6 @@ describe('index.ts の原文で測る配線（onSwap の引き取り / 枠の観
  * **見えない側の壊れ方が、この改修そのものの症状と同じ**なので、判定は測れる
  * 形にしてある（`reopenedTokenOf` の doc）。
  */
-/**
- * **器の環境変数の行を足そうとした結果の行き先**（#832）。
- *
- * ## なぜ測るのか —— 呼び手が2つになった
- *
- * 起動時（`main()`）と `pool_changed` の回（`token-watch.ts` の
- * `onEnsuredEnvToken`）の**両方**がここを通る。書き写す形にすると、同じ出来事が
- * 2通りの文面で残り、片方だけ直す事故が起きる。
- *
- * **`added`（正常）と `failed`（異常）を同じ行き先へ潰さないこと**（Issue #420
- * の残件）。`.write()` は呼ばない——同一性だけを見る（`tokenRotationStream` の
- * 歯と同じ理由。#314）。
- */
-describe('ensuredEnvTokenLine', () => {
-  it('added は stdout へ、why をそのまま出す', () => {
-    const line = ensuredEnvTokenLine({ kind: 'added', tokenId: 'tok-env', why: '行を足した' });
-
-    expect(line?.stream).toBe(process.stdout);
-    expect(line?.text).toBe('alteroidd: 認証トークン: 行を足した\n');
-  });
-
-  it('failed は stderr へ', () => {
-    const line = ensuredEnvTokenLine({ kind: 'failed', why: '書けなかった' });
-
-    expect(line?.stream).toBe(process.stderr);
-  });
-
-  it('exists と skipped は出さない（既定の構成で毎回出ると、意味のある行が埋もれる）', () => {
-    expect(ensuredEnvTokenLine({ kind: 'exists', tokenId: 'tok-env' })).toBeNull();
-    expect(ensuredEnvTokenLine({ kind: 'skipped', why: 'プールが空' })).toBeNull();
-  });
-});
-
 describe('reopenedTokenOf', () => {
   it('回した回は戻ったと数える（いま通る鍵に移った）', () => {
     expect(

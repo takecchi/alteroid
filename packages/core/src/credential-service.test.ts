@@ -608,33 +608,41 @@ describe('resolveCredentialRows（正本と器の env から配る値を1本で�
   }
 
   it('正本にしか無ければ、GitHub の名前でも正本が勝つ', () => {
-    const resolved = resolveCredentialRows([row('GH_TOKEN', 'from-vault')], {});
+    const resolved = resolveCredentialRows([row('GH_TOKEN', 'from-vault')], {}, 'clone');
     expect(resolved).toEqual([row('GH_TOKEN', 'from-vault')]);
   });
 
   it('器の env にしか無ければ、GitHub の名前は器の env から埋める（既存の土台）', () => {
-    const resolved = resolveCredentialRows([], { GH_TOKEN: 'from-clone-env' });
+    const resolved = resolveCredentialRows([], { GH_TOKEN: 'from-clone-env' }, 'clone');
     expect(resolved.map((r) => [r.name, r.value])).toEqual([['GH_TOKEN', 'from-clone-env']]);
   });
 
   it('両方に在って GitHub の名前なら、器の env が正本より勝つ', () => {
-    const resolved = resolveCredentialRows([row('GH_TOKEN', 'from-vault')], {
-      GH_TOKEN: 'from-clone-env',
-    });
+    const resolved = resolveCredentialRows(
+      [row('GH_TOKEN', 'from-vault')],
+      { GH_TOKEN: 'from-clone-env' },
+      'clone',
+    );
     expect(resolved).toEqual([
       { name: 'GH_TOKEN', value: 'from-clone-env', updatedAt: expect.any(String) },
     ]);
   });
 
   it('GITHUB_TOKEN でも同じ優先順位が効く（GH_TOKEN だけの特別扱いではない）', () => {
-    const resolved = resolveCredentialRows([row('GITHUB_TOKEN', 'from-vault')], {
-      GITHUB_TOKEN: 'from-clone-env',
-    });
+    const resolved = resolveCredentialRows(
+      [row('GITHUB_TOKEN', 'from-vault')],
+      { GITHUB_TOKEN: 'from-clone-env' },
+      'clone',
+    );
     expect(resolved.map((r) => [r.name, r.value])).toEqual([['GITHUB_TOKEN', 'from-clone-env']]);
   });
 
   it('🔴 器の env が空文字なら、GitHub の名前でも正本が勝つ（空は「置かれていない」と同じ）', () => {
-    const resolved = resolveCredentialRows([row('GH_TOKEN', 'from-vault')], { GH_TOKEN: '' });
+    const resolved = resolveCredentialRows(
+      [row('GH_TOKEN', 'from-vault')],
+      { GH_TOKEN: '' },
+      'clone',
+    );
     expect(resolved).toEqual([row('GH_TOKEN', 'from-vault')]);
   });
 
@@ -642,26 +650,30 @@ describe('resolveCredentialRows（正本と器の env から配る値を1本で�
     // **正規の口（`apply()`）ではこの状態は作れない**（`assertEntries` が
     // `POOL_OWNED_CREDENTIAL_NAMES` を拒む）。それでも `resolveCredentialRows`
     // 自身が誤って解けないことを、入力を直接与えて測る——ここが唯一の門である。
-    const resolved = resolveCredentialRows([row('CLAUDE_CODE_OAUTH_TOKEN', 'from-vault')], {
-      CLAUDE_CODE_OAUTH_TOKEN: 'from-clone-env',
-    });
+    const resolved = resolveCredentialRows(
+      [row('CLAUDE_CODE_OAUTH_TOKEN', 'from-vault')],
+      { CLAUDE_CODE_OAUTH_TOKEN: 'from-clone-env' },
+      'clone',
+    );
     expect(resolved).toEqual([row('CLAUDE_CODE_OAUTH_TOKEN', 'from-vault')]);
   });
 
   it('🔴 ROTATABLE_CREDENTIAL_KEYS に無い任意の名前は対象外——両方に在っても正本が勝つ', () => {
-    const resolved = resolveCredentialRows([row('NPM_TOKEN', 'from-vault')], {
-      NPM_TOKEN: 'from-clone-env',
-    });
+    const resolved = resolveCredentialRows(
+      [row('NPM_TOKEN', 'from-vault')],
+      { NPM_TOKEN: 'from-clone-env' },
+      'clone',
+    );
     expect(resolved).toEqual([row('NPM_TOKEN', 'from-vault')]);
   });
 
   it('任意の名前は、正本にしか無くても配る（PR #825 の既存の約束を壊さない）', () => {
-    const resolved = resolveCredentialRows([row('NPM_TOKEN', 'from-vault')], {});
+    const resolved = resolveCredentialRows([row('NPM_TOKEN', 'from-vault')], {}, 'clone');
     expect(resolved).toEqual([row('NPM_TOKEN', 'from-vault')]);
   });
 
   it('任意の名前は、器の env にしか無くても配らない（この土台は回せる名前だけに効く）', () => {
-    const resolved = resolveCredentialRows([], { NPM_TOKEN: 'from-clone-env' });
+    const resolved = resolveCredentialRows([], { NPM_TOKEN: 'from-clone-env' }, 'clone');
     expect(resolved).toEqual([]);
   });
 
@@ -673,7 +685,136 @@ describe('resolveCredentialRows（正本と器の env から配る値を1本で�
    * マネージャーへ実際に渡すもの）は1文字も変わらない。
    */
   it('器の env 由来の行の updatedAt は固定文字列である（値には関与しない）', () => {
-    const resolved = resolveCredentialRows([], { GH_TOKEN: 'from-clone-env' });
+    const resolved = resolveCredentialRows([], { GH_TOKEN: 'from-clone-env' }, 'clone');
     expect(resolved[0]?.updatedAt).toBe('(クローンの器の環境変数)');
+  });
+
+  it('target を変えても、scope の無い行（＝ all 相当）は両方に届く', () => {
+    const rows: StoredCredential[] = [
+      { name: 'NPM_TOKEN', value: 'npm_x', updatedAt: '2026-09-14T00:00:00.000Z' },
+    ];
+    expect(resolveCredentialRows(rows, {}, 'clone')).toEqual(rows);
+    expect(resolveCredentialRows(rows, {}, 'manager')).toEqual(rows);
+  });
+
+  it('scope: app の行は clone にだけ届き、manager には届かない', () => {
+    const rows: StoredCredential[] = [
+      { name: 'TZ', value: 'Asia/Tokyo', updatedAt: '2026-09-14T00:00:00.000Z', scope: 'app' },
+    ];
+    expect(resolveCredentialRows(rows, {}, 'clone')).toEqual(rows);
+    expect(resolveCredentialRows(rows, {}, 'manager')).toEqual([]);
+  });
+
+  it('scope: runner の行は manager にだけ届き、clone には届かない', () => {
+    const rows: StoredCredential[] = [
+      {
+        name: 'MANAGER_ONLY',
+        value: 'x',
+        updatedAt: '2026-09-14T00:00:00.000Z',
+        scope: 'runner',
+      },
+    ];
+    expect(resolveCredentialRows(rows, {}, 'clone')).toEqual([]);
+    expect(resolveCredentialRows(rows, {}, 'manager')).toEqual(rows);
+  });
+
+  it('scope: all を明示した行も、scope が無い行と同じく両方に届く', () => {
+    const rows: StoredCredential[] = [
+      { name: 'NPM_TOKEN', value: 'npm_x', updatedAt: '2026-09-14T00:00:00.000Z', scope: 'all' },
+    ];
+    expect(resolveCredentialRows(rows, {}, 'clone')).toEqual(rows);
+    expect(resolveCredentialRows(rows, {}, 'manager')).toEqual(rows);
+  });
+});
+
+/**
+ * **scope（撒く先）**。`packages/storage-pg/src/schema.ts` が `manager_credentials` /
+ * `env_profile` について明記していた「行ごとに層への効かせ分けを持たせない」
+ * という方針を、人間の明示的な指示で上書きした部分（2026-09-14）。ここでは
+ * `apply()` → `runner.setCredentials()` の実配布経路まで通して確かめる
+ * （上の `resolveCredentialRows` の describe は関数単体の確認）。
+ */
+describe('apply() の scope フィルタ（runner への実配布）', () => {
+  it('既定（scope 省略）は runner へも降りる', async () => {
+    const runner = fakeRunner();
+    const { service } = serviceOf([runner]);
+    await service.apply([{ name: 'NPM_TOKEN', value: 'npm_x' }]);
+    expect(runner.held.get('NPM_TOKEN')).toBe('npm_x');
+  });
+
+  it('scope: app の行は runner へ降りない（clone だけに意味を持つ値だから）', async () => {
+    const runner = fakeRunner();
+    const { stores, service } = serviceOf([runner]);
+    await service.apply([{ name: 'TZ', value: 'Asia/Tokyo', scope: 'app', secret: false }]);
+    expect(runner.held.has('TZ')).toBe(false);
+    // 正本には在る（clone 自身の childEnv には届く——そちらは resolveCredentialRows
+    // の describe が別途確かめている）。
+    expect(await stores.credentials.list()).toEqual([
+      expect.objectContaining({ name: 'TZ', value: 'Asia/Tokyo', scope: 'app' }),
+    ]);
+  });
+
+  it('scope: runner の行は降りる', async () => {
+    const runner = fakeRunner();
+    const { service } = serviceOf([runner]);
+    await service.apply([{ name: 'MANAGER_ONLY', value: 'x', scope: 'runner' }]);
+    expect(runner.held.get('MANAGER_ONLY')).toBe('x');
+  });
+});
+
+describe('secret（値を API/CLI/Web UI に返すかどうか）', () => {
+  it('既定は secret: true で、fingerprints() は値を1文字も返さない', async () => {
+    const { service } = serviceOf([]);
+    await service.apply([{ name: 'NPM_TOKEN', value: 'npm_x' }]);
+    const rows = await service.fingerprints();
+    expect(rows).toEqual([expect.objectContaining({ name: 'NPM_TOKEN', secret: true })]);
+    expect(rows[0]).not.toHaveProperty('value');
+    expect(JSON.stringify(rows)).not.toContain('npm_x');
+  });
+
+  it('secret: false の行は fingerprints() が値も返す', async () => {
+    const { service } = serviceOf([]);
+    await service.apply([{ name: 'TZ', value: 'Asia/Tokyo', secret: false }]);
+    const rows = await service.fingerprints();
+    expect(rows).toEqual([
+      expect.objectContaining({ name: 'TZ', value: 'Asia/Tokyo', secret: false }),
+    ]);
+  });
+
+  it('secret は作成時に決まり、既存行と異なる値を渡すと拒む（後から変更できない）', async () => {
+    const { service } = serviceOf([]);
+    await service.apply([{ name: 'TZ', value: 'Asia/Tokyo', secret: false }]);
+
+    await expect(
+      service.apply([{ name: 'TZ', value: 'Europe/London', secret: true }]),
+    ).rejects.toThrow(/secret/);
+
+    // 拒否は書く前に起きるので、値も secret も変わっていない。
+    const rows = await service.fingerprints();
+    expect(rows).toEqual([
+      expect.objectContaining({ name: 'TZ', value: 'Asia/Tokyo', secret: false }),
+    ]);
+  });
+
+  it('secret を省略すれば、既存行の secret を引き継いだまま値だけ更新できる', async () => {
+    const { service } = serviceOf([]);
+    await service.apply([{ name: 'TZ', value: 'Asia/Tokyo', secret: false }]);
+    await service.apply([{ name: 'TZ', value: 'Europe/London' }]);
+
+    const rows = await service.fingerprints();
+    expect(rows).toEqual([
+      expect.objectContaining({ name: 'TZ', value: 'Europe/London', secret: false }),
+    ]);
+  });
+
+  it('外して同じ名前を作り直すのは新規作成であり、secret を変えられる', async () => {
+    const { service } = serviceOf([]);
+    await service.apply([{ name: 'TZ', value: 'Asia/Tokyo', secret: false }]);
+    await service.apply([{ name: 'TZ', value: '' }]); // 外す
+    await service.apply([{ name: 'TZ', value: 'Europe/London', secret: true }]); // 作り直す
+
+    const rows = await service.fingerprints();
+    expect(rows).toEqual([expect.objectContaining({ name: 'TZ', secret: true })]);
+    expect(rows[0]).not.toHaveProperty('value');
   });
 });

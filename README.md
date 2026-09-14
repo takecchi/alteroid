@@ -74,21 +74,28 @@ alteroid chat       # クローンと会話する（デーモンが居なけれ�
 デーモン / manager-runner / PostgreSQL の3コンテナ構成。
 
 ```sh
-cp .env.example .env        # 3つ埋める（下記）
+cp .env.example .env        # 2つ埋める（下記）
 docker compose up -d
+docker compose exec app alteroid token add --label <名前> -f <path>  # 認証トークンを登録
 docker compose exec app alteroid chat
 ```
 
-`.env` に要るのは3つだけである。
+`.env` に要るのは2つだけである。
 
-| 変数                      | 取り方                                                                                  |
-| ------------------------- | --------------------------------------------------------------------------------------- |
-| `CLAUDE_CODE_OAUTH_TOKEN` | `claude setup-token`（人間が一度だけ）                                                  |
-| `ALTEROID_RUNNER_TOKEN`   | `openssl rand -hex 32`。**app と runner で同じ値**                                      |
-| `ALTEROID_DATABASE_URL`   | `postgres://alteroid:<openssl rand -hex 16>@db:5432/alteroid`。内蔵 `db` もここから起動 |
+| 変数                    | 取り方                                                                                  |
+| ----------------------- | --------------------------------------------------------------------------------------- |
+| `ALTEROID_RUNNER_TOKEN` | `openssl rand -hex 32`。**app と runner で同じ値**                                      |
+| `ALTEROID_DATABASE_URL` | `postgres://alteroid:<openssl rand -hex 16>@db:5432/alteroid`。内蔵 `db` もここから起動 |
+
+**クローン・マネージャーの認証（`claude setup-token`）は環境変数では持たない**
+（2026-09-14 に廃止）。正本は認証トークンのプール（DB）だけで、上の
+`alteroid token add` で登録する。1本も登録していないと、クローンもマネージャーも
+走れない。
 
 **道具の鍵や PATH をここに増やさないこと。** それは実行環境プロファイル（`alteroid profile edit`）
-の側で、器を焼き直さずに差し替えられる。境界の説明は [.env.example](./.env.example) と
+の側で、器を焼き直さずに差し替えられる。alteroid 自身の運用設定（TZ 等）も
+`alteroid credential` / Web UI の「環境変数」画面で置く（一部は初回起動時に
+既定値が入る）。境界の説明は [.env.example](./.env.example) と
 [compose.yaml](./compose.yaml) の冒頭に書いてある。
 
 ### クラウド

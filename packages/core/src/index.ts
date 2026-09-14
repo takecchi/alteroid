@@ -566,10 +566,20 @@ export {
  */
 export {
   createCredentialService,
+  resolveCredentialRows,
   type ApplyCredentialsResult,
   type CredentialService,
   type CredentialServiceOptions,
 } from './credential-service.js';
+/**
+ * alteroid 自身の運用設定（TZ・自律のスケジュール等）を、環境変数の袋（DB正本）へ
+ * 播種・反映する（2026-09-14）。
+ */
+export {
+  APP_ENV_VAR_DEFAULTS,
+  applyAppScopedEnvVars,
+  seedDefaultEnvVars,
+} from './env-vars-boot.js';
 /**
  * 実行環境プロファイル（`.zprofile` 相当）。**環境変数を器に増やす代わりの口**で、
  * 用途が増えるたびに実装を直さずに済ませるためにある（`profile.ts`）。
@@ -614,9 +624,7 @@ export {
   DEFAULT_TOKEN_ROTATION_POLICY,
   DEFAULT_TOKEN_ROTATION_SETTINGS,
   TokenPoolInputError,
-  buildEnvToken,
   credentialOf,
-  isEnvToken,
   markTokenUnusable,
   markTokenUsable,
   normalizeTokenPool,
@@ -667,7 +675,6 @@ export {
   describeTokenRotation,
   tokenRestoreEntry,
   tokenRotationEntry,
-  type TokenEnsureEnvOutcome,
   type TokenProbePort,
   type TokenReconsiderReason,
   type TokenRestoreOutcome,

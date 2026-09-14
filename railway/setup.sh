@@ -181,9 +181,10 @@ else
   dim "$(basename "$ENV_FILE") が無い。尋ねた値は書き留める"
 fi
 
-CLAUDE_TOKEN="$(resolve CLAUDE_CODE_OAUTH_TOKEN 'クローンとマネージャーの認証。claude setup-token で取る' secret)"
-[ -n "$CLAUDE_TOKEN" ] || die 'CLAUDE_CODE_OAUTH_TOKEN が無いと、クローンもマネージャーも動かない'
-persist_env CLAUDE_CODE_OAUTH_TOKEN "$CLAUDE_TOKEN"
+# **クローン・マネージャーの認証は 2026-09-14 から環境変数では持たない。**
+# `CLAUDE_CODE_OAUTH_TOKEN` を Shared Variable として尋ねる・置く経路はここで
+# 廃止した——正本はトークンプール（DB）だけである。デーモンが立ち上がった後に
+# 人間が `alteroid token add` で登録する（下の「次にすること」で案内する）。
 
 RUNNER_TOKEN="$(printenv ALTEROID_RUNNER_TOKEN 2>/dev/null || true)"
 [ -n "$RUNNER_TOKEN" ] || RUNNER_TOKEN="$(env_file_get ALTEROID_RUNNER_TOKEN)"
@@ -535,7 +536,6 @@ step '変数を置く'
 # ものであり、runner 自身は読まない。台数が2以上のとき「どの1台か」を書けない。
 shared_pairs=(
   ALTEROID_RUNNER_TOKEN "$RUNNER_TOKEN"
-  CLAUDE_CODE_OAUTH_TOKEN "$CLAUDE_TOKEN"
   ALTEROID_RUNNER_BIND '::'
   ALTEROID_RUNNER_PORT "$RUNNER_PORT"
   TZ "$TZ_VALUE"
@@ -718,7 +718,13 @@ fi
 
 cat >&2 <<EOS
 
-    使う（CLI はデーモンを 127.0.0.1 に見に行くので、同じ器の中から）:
+    ⚠ ここまでではまだ動かない。認証トークンを1本も登録していない
+    （2026-09-14 から環境変数では持たない。正本はトークンプール（DB）だけ）:
+
+      railway ssh --service $APP_SERVICE
+      echo -n "<claude setup-token の値>" | alteroid token add --label <名前>
+
+    登録してから使う（CLI はデーモンを 127.0.0.1 に見に行くので、同じ器の中から）:
 
       railway ssh --service $APP_SERVICE
       alteroid chat

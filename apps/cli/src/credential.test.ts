@@ -115,9 +115,17 @@ describe('alteroid credential list', () => {
             name: 'GH_TOKEN',
             sha256: 'cccccccccccc',
             updatedAt: '2026-09-12T00:00:00.000Z',
+            scope: 'all',
+            secret: true,
             shadowsCloneEnv: true,
           },
-          { name: 'NPM_TOKEN', sha256: 'dddddddddddd', updatedAt: '2026-09-12T00:00:00.000Z' },
+          {
+            name: 'NPM_TOKEN',
+            sha256: 'dddddddddddd',
+            updatedAt: '2026-09-12T00:00:00.000Z',
+            scope: 'all',
+            secret: true,
+          },
         ],
       },
     });
@@ -138,7 +146,13 @@ describe('alteroid credential list', () => {
       status: 200,
       body: {
         credentials: [
-          { name: 'GH_TOKEN', sha256: 'cccccccccccc', updatedAt: '2026-09-12T00:00:00.000Z' },
+          {
+            name: 'GH_TOKEN',
+            sha256: 'cccccccccccc',
+            updatedAt: '2026-09-12T00:00:00.000Z',
+            scope: 'all',
+            secret: true,
+          },
         ],
       },
     });
@@ -154,11 +168,19 @@ describe('alteroid credential list', () => {
       status: 200,
       body: {
         credentials: [
-          { name: 'GH_TOKEN', sha256: 'aaaaaaaaaaaa', updatedAt: '2026-09-01T00:00:00.000Z' },
+          {
+            name: 'GH_TOKEN',
+            sha256: 'aaaaaaaaaaaa',
+            updatedAt: '2026-09-01T00:00:00.000Z',
+            scope: 'all',
+            secret: true,
+          },
           {
             name: 'GIT_AUTHOR_NAME',
             sha256: 'bbbbbbbbbbbb',
             updatedAt: '2026-09-02T00:00:00.000Z',
+            scope: 'all',
+            secret: true,
           },
         ],
       },
@@ -174,6 +196,44 @@ describe('alteroid credential list', () => {
     // **「置いた」と「届いた」は別である。** 突き合わせ先を言わないと、人間は
     // 正本に在ることを届いた証拠として読む。
     expect(text).toContain('alteroid runners');
+  });
+
+  it('scope・secret を並べ、非シークレットな行は値も出す', async () => {
+    setReply('GET', '/credentials', {
+      status: 200,
+      body: {
+        credentials: [
+          {
+            name: 'GH_TOKEN',
+            sha256: 'aaaaaaaaaaaa',
+            updatedAt: '2026-09-01T00:00:00.000Z',
+            scope: 'runner',
+            secret: true,
+          },
+          {
+            name: 'TZ',
+            sha256: 'eeeeeeeeeeee',
+            updatedAt: '2026-09-14T00:00:00.000Z',
+            scope: 'app',
+            secret: false,
+            value: 'Asia/Tokyo',
+          },
+        ],
+      },
+    });
+    const read = captureStdout();
+
+    await credentialListCommand();
+
+    const text = read();
+    expect(text).toContain('撒く先=runner（manager だけ）');
+    expect(text).toContain('指紋 sha256=aaaaaaaaaaaa');
+    expect(text).toContain('撒く先=app（clone だけ）');
+    expect(text).toContain('非シークレット');
+    expect(text).toContain('値=Asia/Tokyo');
+    // シークレットな行は値を出さない（指紋だけ）——`値=` が非シークレットの
+    // 1行分しか現れないことで確かめる。
+    expect(text.match(/ {2}値=/g)).toHaveLength(1);
   });
 });
 
@@ -218,6 +278,46 @@ describe('alteroid credential set', () => {
     await credentialSetCommand('SOME_VALUE', { file: path });
 
     expect(sent[0]?.body).toEqual({ credentials: [{ name: 'SOME_VALUE', value: 'a b  c' }] });
+  });
+
+  it('--scope --no-secret を渡すと、そのまま本文へ乗る', async () => {
+    const path = join(dir, 'tz.txt');
+    await writeFile(path, 'Asia/Tokyo', 'utf8');
+    setReply('PUT', '/credentials', {
+      status: 200,
+      body: { credentials: [], runners: [] },
+    });
+    captureStdout();
+
+    await credentialSetCommand('TZ', { file: path, scope: 'app', secret: false });
+
+    expect(sent[0]?.body).toEqual({
+      credentials: [{ name: 'TZ', value: 'Asia/Tokyo', scope: 'app', secret: false }],
+    });
+  });
+
+  it('scope・secret を省略すると、本文にも欄自体が乗らない（サーバ側の既定・引き継ぎに任せる）', async () => {
+    const path = join(dir, 'value.txt');
+    await writeFile(path, DUMMY, 'utf8');
+    setReply('PUT', '/credentials', {
+      status: 200,
+      body: { credentials: [], runners: [] },
+    });
+    captureStdout();
+
+    await credentialSetCommand('NPM_TOKEN', { file: path });
+
+    expect(sent[0]?.body).toEqual({ credentials: [{ name: 'NPM_TOKEN', value: DUMMY }] });
+  });
+
+  it('--scope に不正な値を渡すと、サーバへ送らずに断る', async () => {
+    const path = join(dir, 'value.txt');
+    await writeFile(path, DUMMY, 'utf8');
+
+    await expect(credentialSetCommand('NPM_TOKEN', { file: path, scope: 'bogus' })).rejects.toThrow(
+      /--scope/,
+    );
+    expect(sent).toEqual([]);
   });
 
   it('空の値は置かず、外し方を案内する（空で上書きして資格を消さない）', async () => {

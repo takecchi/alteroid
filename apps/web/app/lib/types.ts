@@ -123,6 +123,17 @@ export type TokenRecovery = NonNullable<AgentTokenView['recovery']>;
 export type TokenRotationEntry = Extract<JournalEntry, { type: 'token_rotation' }>;
 
 /**
+ * 環境変数の袋（`GET /credentials`。旧「マネージャーへ降ろす環境変数」）。
+ *
+ * **`value` は `secret === false` の行だけに載る。** サーバ側（`credentialsResponseSchema`）
+ * が secret な行では欄自体を返さないので、画面側で「消し忘れて出す」形は作れない。
+ */
+export type CredentialsState = Ok<paths['/credentials']['get']>;
+export type EnvVarView = CredentialsState['credentials'][number];
+/** 撒く先。`'all'`=共通 / `'app'`=clone だけ / `'runner'`=manager だけ。 */
+export type EnvVarScope = EnvVarView['scope'];
+
+/**
  * 握り潰しの跡（`GET /dropped`）。CLI（`alteroid dropped`）・クローンの MCP
  * 道具 `self_dropped` と同じ帳面を読む（`packages/core/src/dropped-record.ts`）。
  *

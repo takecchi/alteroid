@@ -21,8 +21,16 @@ import { z } from 'zod';
 const agentTokenRowSchema = z.object({
   id: z.string(),
   label: z.string(),
-  /** `source: 'env'` の行は持たない（器の環境変数を指すだけなので）。 */
   value: z.string().optional(),
+  /**
+   * **`'env'` も読めるようにしてある（書けない）。** 器の環境変数
+   * （`CLAUDE_CODE_OAUTH_TOKEN`）を指す行という概念は廃止したので、新しく
+   * `'env'` の行を書く経路はもう無い（`@alteroid/core` の `AgentToken.source`
+   * は `'stored'` しか持たない）。**それでも過去にこの機構が書いた行が
+   * ファイルに残っていることがある**——読めなければ `fileSchema.parse` が
+   * ファイル全体を落としてしまうので、読めることだけは残し、`list()` 側で
+   * 読み捨てる（値を持たない行なので、そのまま渡すと `credentialOf` が壊れる）。
+   */
   source: z.enum(['stored', 'env']).optional(),
   order: z.number().int(),
   disabledAt: z.string().optional(),
@@ -80,7 +88,14 @@ export class FsTokenPoolStore implements TokenPoolStore {
 
   async list(): Promise<AgentToken[]> {
     const file = await this.#read();
-    return [...file.tokens].sort((a, b) => a.order - b.order);
+    // **`source: 'env'` の行は読み捨てる。** 器の環境変数を指す行という概念は
+    // 廃止した（値を持たないので、渡すと `credentialOf` が「値が無い」で
+    // 投げる）。ファイルの `source` 列そのものは過去との読み取り互換のために
+    // `'env'` を受け付けるが（{@link agentTokenRowSchema} の doc）、ここから先
+    // （domain の {@link AgentToken}）には `'stored'` の行しか出さない。
+    return file.tokens
+      .filter((token): token is AgentToken => token.source !== 'env')
+      .sort((a, b) => a.order - b.order);
   }
 
   async replace(tokens: readonly AgentToken[]): Promise<AgentToken[]> {

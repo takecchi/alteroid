@@ -1,9 +1,5 @@
-import { randomUUID } from 'node:crypto';
-
 import {
-  buildEnvToken,
   credentialOf,
-  isEnvToken,
   markTokenUnusable,
   markTokenUsable,
   tokenAvailabilityAt,
@@ -78,18 +74,12 @@ export interface TokenSpreadPort {
    * 世代の照合（{@link observationFreshness}）が成立しない** — クローンは
    * セッションを起こす瞬間にこれを捕まえて、そのセッションの観測へ添える。
    *
-   * **`id` / `generation` は省略できる**（2026-09-12, #866）。プールに実在する
-   * 行を持たない「器の環境変数」をそのまま撒くとき（`restore()` の `none` が、
-   * 環境変数の行すら無い＝プールが本当に空の器で撒くとき）に使う。**省略した
-   * ときは、クローンの箱（`AgentTokenHolder`）へ値だけを置き、身元
-   * （`identity()`）は動かさない** —— 実在しない id を台帳の tokenId 軸へ
-   * 持ち込まないためである（`manager.ts` の usage record が「無いときは渡さない。
-   * プールが空の器では毎回 undefined になる ＝ 受け入れ基準7」と書いているのと
-   * 同じ理由。id を捏造すると、その一致を壊す）。
+   * **`id` / `generation` は必須である。** かつて（2026-09-12〜2026-09-14、
+   * #866）は「プールに実在する行を持たない器の環境変数をそのまま撒く」ときに
+   * 省略できた——その経路（器の環境変数へのフォールバック）自体を廃止したので、
+   * ここへ来るのは常にプールの実在する行である。
    */
-  spread(
-    token: { id?: string; generation?: number } & TokenCredential,
-  ): Promise<TokenSpreadResult[]>;
+  spread(token: { id: string; generation: number } & TokenCredential): Promise<TokenSpreadResult[]>;
 }
 
 /** 候補を1本試す口（PR2 の `probeTokenCandidate` を包んで渡す）。 */
@@ -348,14 +338,14 @@ export type TokenRotationOutcome =
     }
   | {
       /**
-       * **プールから撒くものが無いまま返った。**
+       * **プールから撒くものが無いまま返った。何も撒かない。**
        *
-       * ⚠️ **「何も撒かずに返る」ではない**（2026-09-12, #869）。**プールの選択と
-       * しては何も撒かない**が、現役が**待っても戻らない**（消された / 外された /
-       * 失効した）回だけは、**器の環境変数の値**を撒いてから返る —— `restore()` の
-       * `dangling` / `withheld` と同じ手当てである（`finishSweep` の
-       * `strandedOnDeadKey` の doc）。**プールの記録は1バイトも動かない**ので、
-       * この `kind` の意味（「回せなかった」）は変わっていない。
+       * ⚠️ **かつて（2026-09-12〜2026-09-14, #869）は、現役が待っても戻らない
+       * （消された / 外された / 失効した）回だけ器の環境変数の値を撒いてから
+       * 返っていた。** その手当ては廃止した（人間の決定。器の環境変数への
+       * フォールバックはどの経路にも残さない）——`restore()` の `dangling` /
+       * `withheld` が値を撒かないのと同じ判断である。**プールの記録は1バイトも
+       * 動かない**ので、この `kind` の意味（「回せなかった」）は変わっていない。
        *
        * ⚠️ **`parked` が入ってから、ここへ落ちる道は3本だけになった。** 冷却中の
        * 候補が1本でも在れば、そちらは `parked`（撒いて待つ）へ行く。
@@ -435,16 +425,6 @@ export interface TokenRotatorOptions {
   spread: TokenSpreadPort;
   /** 現在時刻。テストで固定するため。 */
   now?: () => Date;
-  /**
-   * 器の環境変数（`CLAUDE_CODE_OAUTH_TOKEN`）が置かれているか（Issue #393）。
-   *
-   * **値そのものを受けない。** core は正本を持つが、**器の環境変数は器のもの**で
-   * あって記憶ストアの正本ではない——値を持ち込むと「どちらが正か」が2つになる。
-   * 要るのは「指す先が在るか」だけである。
-   */
-  hasEnvToken?: () => boolean;
-  /** 新しい行の id を作る。テストで固定するため。 */
-  newId?: () => string;
 }
 
 /**
@@ -591,10 +571,10 @@ export interface TokenRotator {
    * ## なぜ要るか
    *
    * 撒いた先（runner の env・クローンの箱）は**プロセスと一緒に消える**が、現役の
-   * 指名は記憶ストアに残る。⟹ これが無いと、デーモンを再起動した直後は**器の
-   * 環境変数のトークンが走っているのに、記憶ストアは別のトークンを現役だと思って
-   * いる**という食い違いが残る。その状態で枠に当たると、**走ってもいないトークンを
-   * 冷却へ入れて**候補を1本無駄に飛ばす。
+   * 指名は記憶ストアに残る。⟹ これが無いと、デーモンを再起動した直後は**撒いた
+   * 先がプロセス起動直後の空の状態のままなのに、記憶ストアは特定のトークンを
+   * 現役だと思っている**という食い違いが残る。その状態で枠に当たると、**走って
+   * もいないトークンを冷却へ入れて**候補を1本無駄に飛ばす。
    *
    * ## 引き取りは回転ではない
    *
@@ -615,10 +595,10 @@ export interface TokenRotator {
    *
    * | 結果 | 何が起きたか | この後どうなるか |
    * | --- | --- | --- |
-   * | `none` | 一度も回していない | 器の環境変数の値を撒く（下の注記） |
+   * | `none` | 一度も回していない | **何も撒かない**（下の注記） |
    * | `restored` | 撒き直した | 記憶ストアと実際が揃う |
-   * | `dangling` | 指名の先の行が消えている | 同上。**次に枠へ当たれば直る** |
-   * | `withheld` | 人間がその行を外した / 失効している | 同上 |
+   * | `dangling` | 指名の先の行が消えている | **何も撒かない。** 次に枠へ当たれば直る |
+   * | `withheld` | 人間がその行を外した / 失効している | **何も撒かない** |
    *
    * **`dangling` と `withheld` では*トークンの値*を戻さない。** 人間が外した
    * ものや消えた指名を起動時に戻すのは、**人間の判断を実装が黙って覆すこと**
@@ -626,54 +606,19 @@ export interface TokenRotator {
    * 外された id は候補から外れる）——だから `why` に出して見えるようにするだけに
    * してある。
    *
-   * **⚠️ 2026-09-12（#866）: 3つとも「器の環境変数の値」は撒くようになった。**
-   * 以前はここが「撒かない」を「何もしない」とも読める形にしていたが、それは
-   * 2026-09-11 より前の前提（runner は自分の環境変数の鍵をそのまま使う）に
-   * 立っていた。`runner.ts` の `#childEnv()` はいまその鍵を無条件に削除する
-   * （人間の決定 2026-09-11）ので、**撒かなければ runner に資格が1本も無い
-   * まま起動し続ける**——`active === null`（一度も回していない）の器は
-   * ほぼ全器がこれに当たる。ここで撒くのは**プールが選んだトークンの値では
-   * なく、デーモンの器そのものの `CLAUDE_CODE_OAUTH_TOKEN`**である
-   * （`TokenSpreadPort.spread` の `kind: 'env'`）。`dangling` / `withheld` で
-   * 「トークンの値を戻さない」という人間の判断はそのまま守っている——戻して
-   * いないのは*その行の値*であって、*器の環境変数の値*は最初から人間の判断の
-   * 対象ではない。
+   * **⚠️ 2026-09-12（#866）から 2026-09-14 のあいだ、`none` / `dangling` /
+   * `withheld` の3つとも「器の環境変数（`CLAUDE_CODE_OAUTH_TOKEN`）の値」を
+   * 撒いていた時期がある。** `runner.ts` の `#childEnv()` が自分の環境変数の鍵を
+   * 無条件に削除する（人間の決定 2026-09-11）ため、撒かなければ runner に資格が
+   * 1本も無いまま起動し続けることへの当座の手当てだった。**その手当ては撤廃した**
+   * ——トークンプールは100% DB 駆動にする、器の環境変数へのフォールバックは
+   * どの経路にも残さない、という人間の決定による。⟹ **いまは `none` /
+   * `dangling` / `withheld` のどれも、値をまったく撒かない。** プールに1本も
+   * 通る行が無い（または現役の指名が壊れている）器では、runner は資格を持たずに
+   * 起動する——直すのは `alteroid token add` で実トークンを登録することである。
    */
   restore(): Promise<TokenRestoreOutcome>;
-  /**
-   * 器の環境変数を指す行が無ければ足す（Issue #393）。**起動時に1度だけ。**
-   *
-   * ## なぜ要るか
-   *
-   * 器の環境変数のトークンには、これまでプールの行が無かった。⟹ **それが枠に
-   * 当たっても、いつ・何と言われたかがどこにも残らない。** 回し手は現役の行を
-   * 冷却へ入れるが、環境変数は行を持たないので入れる先が無い。**最初に止まった
-   * 1本だけが台帳から消える**——しかもそれは、たいてい人間が最初に踏む1本である。
-   *
-   * ## 人間が書いた行ではなく、事実の射影である
-   *
-   * 器に環境変数が置かれているという事実を1行として表しているだけなので、
-   * **消しても次の起動で戻る。** 「もう使わない」を表したいなら
-   * `alteroid token disable`（{@link AgentToken.disabledAt}）を使う——そちらは
-   * 人間の判断なので戻らない（この関数は行が在れば何もしない）。
-   *
-   * ## ⚠️ プールが空なら足さない
-   *
-   * **受け入れ基準7（プールが空の既定構成の挙動を1文字も変えない）を字義どおり
-   * 守るためである。** 人間が1本も登録していない＝プールを使うと決めていない器で、
-   * 記憶ストアに行が生えて日誌に線が増えるのは、たとえ挙動が同じでも「1文字も
-   * 変えない」ではない。**人間が1本でも登録した時点で**環境変数の行が生える。
-   *
-   * **環境変数が置かれていなければ足さない**（指す先が無いので）。
-   */
-  ensureEnvToken(): Promise<TokenEnsureEnvOutcome>;
 }
-
-/** {@link TokenRotator.ensureEnvToken} の結果。**足したかどうかを畳まない。** */
-export type TokenEnsureEnvOutcome =
-  | { kind: 'added'; tokenId: string; why: string }
-  | { kind: 'exists'; tokenId: string }
-  | { kind: 'skipped'; why: string };
 
 /**
  * 1回の観測で、候補を試すことに使ってよい壁時計の持ち時間（ミリ秒）。
@@ -799,8 +744,6 @@ function describeCooldownFacts(facts: RateLimitFacts | undefined): string {
 export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
   const { stores, probe, spread } = options;
   const now = options.now ?? (() => new Date());
-  const hasEnvToken = options.hasEnvToken ?? (() => false);
-  const newId = options.newId ?? (() => randomUUID());
 
   /**
    * いまの現役に対して、`stale` で捨てた観測が続けて何件になったか。
@@ -1364,53 +1307,20 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
     }
 
     /**
-     * **いま撒いてある鍵が自力では戻らない回だけ、器の環境変数の値を撒く（#869）。**
+     * **いま撒いてある鍵が自力では戻らないときも、もう何も撒かない。**
      *
      * `exhausted` は**何も撒かずに返る**ので、全コンテナは**降りたトークンを
      * 持ったまま**待つ（{@link TokenRotationOutcome} の `parked` の doc）。冷却中の
      * 鍵なら待てば戻るが、**記録上の現役がプールから消えている（人間が消した）／
-     * 人間が外した／失効している**回は、**待っても戻らない** —— 通らないと分かって
-     * いる値を持ったまま、次のデーモン再起動（`restore()`）まで走り続ける。
-     * **#868 が塞いだのは `restore()`＝起動した瞬間だけで、起動後にそうなった回は
-     * ここに残っていた**（#869）。
+     * 人間が外した／失効している**回は、待っても戻らない——直す方法は
+     * `alteroid token add` で通る鍵を登録することであって、器の環境変数を代わりに
+     * 撒くことではない（人間の決定。トークンプールは100% DB 駆動——器の環境変数
+     * へのフォールバックはどの経路にも残さない）。
      *
-     * ⟹ `restore()` の `dangling` / `withheld` と**同じ状態**なので、**同じ手当てを
-     * する。撒くのは器の環境変数の値であって、人間が外した行の値ではない** ——
-     * #868 の逐語「戻していないのは*その行の値*であって、*器の環境変数の値*は
-     * 最初から人間の判断の対象ではない」がそのまま効く。**プールの記録は1バイトも
-     * 動かさない**（`replace()` も `writeActive()` も呼ばない ＝ `nominate` を通らない）。
-     *
-     * **撒かない道を3つ残している。どれも「戻らない」が確定していないからである:**
-     *
-     * 1. **冷却中**（`cooling`）—— 待てば戻る。そのうえここは `parked` が
-     *    「いちばん早く戻る鍵」を撒いて待つ道であり、器の環境変数へ落とすのは
-     *    **プールの選択を覆す**ことになる
-     * 2. **持ち時間で打ち切った**（`stoppedBy: 'budget'`）—— まだ試していない候補が
-     *    在るので、現役が戻らないとはまだ言えない
-     * 3. **`active === null`（一度も指名していない）** —— その器の runner が持って
-     *    いるのは `restore()` が起動時に撒いた器の環境変数の値そのものなので、
-     *    同じ値をもう一度撒いても何も変わらない
+     * **⚠️ かつて（#869、2026-09-12〜2026-09-14）はここで器の環境変数の値を
+     * 撒いていた。** その手当ては撤廃した——`restore()` の `dangling` / `withheld`
+     * と同じ判断である（あちらの doc）。
      */
-    const availabilityOfActive =
-      active === null
-        ? undefined
-        : activeRow === undefined
-          ? ('dangling' as const)
-          : tokenAvailabilityAt(activeRow, now().getTime());
-    const strandedOnDeadKey =
-      !sweep.stoppedByBudget &&
-      (availabilityOfActive === 'dangling' ||
-        availabilityOfActive === 'disabled' ||
-        availabilityOfActive === 'invalidated');
-    if (strandedOnDeadKey && active !== null) {
-      // **身元は記録が指していたものをそのまま使う**（`restore()` の `dangling` /
-      // `withheld` と同じ）。新しい id を作らない —— 台帳の tokenId 軸は動かさない。
-      await spread.spread({
-        id: active.tokenId,
-        generation: active.generation,
-        kind: 'env' as const,
-      });
-    }
 
     return {
       kind: 'exhausted' as const,
@@ -1426,59 +1336,22 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
       // 「プールが空、または降りた1本しか無い」と書く —— **試して外した分も
       // 「無い」に見えているだけ**なので、そのまま出すと**候補が4本在ったのに
       // 「プールが空」と読める行**になる。
-      why:
-        (sweep.stoppedByBudget
-          ? `候補を試す持ち時間（${String(CANDIDATE_SWEEP_BUDGET_MS)}ms）を使い切った${skipped}`
-          : earliest !== undefined
-            ? // `parked` の条件3か4で落ちた。**どちらも「候補が無い」ではない。**
-              // **2つを言い分ける** —— 前者は「同じ鍵」、後者は「もっと遅い鍵」で、
-              // 読む側が次に確かめるものが違う。
-              earliest.tokenId === active?.tokenId
-              ? `いちばん早く戻る候補が現役自身だった（撒き直しても同じ鍵なので、世代だけ増やすことはしない）${skipped}`
-              : `いま撒いてある鍵のほうが早く戻る（いちばん早い候補「${earliest.label}」は ${new Date(earliest.cooldownUntil).toISOString()}）。遅い鍵へ移すのは改善ではないので撒き直さない${skipped}`
-            : sweep.unusableLabels.length > 0
-              ? `試せる候補を使い切った${skipped}`
-              : (sweep.ranOut?.why ?? '候補が無い')) +
-        // **撒いたことは日誌に出す。** 出さないと「何も撒かずに返った」と見分けが
-        // 付かず、#869 が直っているかを日誌から言えない。
-        (strandedOnDeadKey
-          ? '。**現役は待っても戻らない**（消された / 外された / 失効した）ので、器の環境変数の値を撒いた（#869。人間が外した行の値ではない）'
-          : ''),
+      why: sweep.stoppedByBudget
+        ? `候補を試す持ち時間（${String(CANDIDATE_SWEEP_BUDGET_MS)}ms）を使い切った${skipped}`
+        : earliest !== undefined
+          ? // `parked` の条件3か4で落ちた。**どちらも「候補が無い」ではない。**
+            // **2つを言い分ける** —— 前者は「同じ鍵」、後者は「もっと遅い鍵」で、
+            // 読む側が次に確かめるものが違う。
+            earliest.tokenId === active?.tokenId
+            ? `いちばん早く戻る候補が現役自身だった（撒き直しても同じ鍵なので、世代だけ増やすことはしない）${skipped}`
+            : `いま撒いてある鍵のほうが早く戻る（いちばん早い候補「${earliest.label}」は ${new Date(earliest.cooldownUntil).toISOString()}）。遅い鍵へ移すのは改善ではないので撒き直さない${skipped}`
+          : sweep.unusableLabels.length > 0
+            ? `試せる候補を使い切った${skipped}`
+            : (sweep.ranOut?.why ?? '候補が無い'),
     };
   }
 
   return {
-    ensureEnvToken: () =>
-      serial(async () => {
-        const tokens = await stores.tokens.list();
-        // **プールが空なら足さない**（受け入れ基準7。この関数の doc）。
-        if (tokens.length === 0) {
-          return {
-            kind: 'skipped' as const,
-            why: 'プールが空（人間がまだ1本も登録していない器では、行を作らない）',
-          };
-        }
-        const existing = tokens.find(isEnvToken);
-        // **人間が外した行でも「在る」である。** 外した判断を無視して足し直さない。
-        if (existing !== undefined) return { kind: 'exists' as const, tokenId: existing.id };
-        if (!hasEnvToken()) {
-          return {
-            kind: 'skipped' as const,
-            why: '器に CLAUDE_CODE_OAUTH_TOKEN が置かれていない（指す先が無い）',
-          };
-        }
-
-        const row = buildEnvToken(tokens, { id: newId(), at: now().toISOString() });
-        // **既存の行に触らない。** `buildEnvToken` が既存より小さい `order` を
-        // 選ぶので、振り直しが要らない（振り直すと全行の `updatedAt` が動く）。
-        await stores.tokens.replace([row, ...tokens]);
-        return {
-          kind: 'added' as const,
-          tokenId: row.id,
-          why: '器の環境変数を指す行をプールへ足した（枠に当たったときに記録が残るようになる）',
-        };
-      }),
-
     // **同じ列を通す。** 引き取りと観測が並ぶと、撒き直しの途中に回転が割り込んで
     // 「古い方を後から撒く」が起きる。
     restore: () =>
@@ -1489,74 +1362,40 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         ]);
 
         if (active === null) {
-          /**
-           * **一度も回していない ⟹ ここが #866 の本体である。** 2026-09-11
-           * より前は「撒かない」で正しかった —— runner は自分の環境変数の鍵を
-           * そのまま使えたので、器の `CLAUDE_CODE_OAUTH_TOKEN` が黙って効いた。
-           * いま runner の `#childEnv()` はその鍵を無条件に削除する（人間の
-           * 決定 2026-09-11）ので、撒かなければ runner は資格を1本も持たずに
-           * 起動する——**プールを一度も使っていない、まさに既定の構成がいちばん
-           * 割を食う。**
-           *
-           * **撒くのは器の環境変数の値であって、プールが選んだ値ではない。**
-           * プールに「器の環境変数」を指す行（`isEnvToken`）があれば、その id を
-           * 身元として使う——実在する行なので台帳の tokenId 軸を汚さない。
-           * **無ければ id を捏造しない**（`TokenSpreadPort.spread` の id 省略の
-           * doc）。プールが本当に空の器（人間がまだ1本も触っていない既定の
-           * 構成）で実在しない id を身元にすると、台帳の tokenId 軸に
-           * 「`alteroid token list` に出てこない行」が生まれる。
-           */
-          const envRow = tokens.find(isEnvToken);
-          await spread.spread(
-            envRow === undefined
-              ? { kind: 'env' as const }
-              : { id: envRow.id, generation: 0, kind: 'env' as const },
-          );
+          // **一度も回していない ⟹ 何も撒かない。** 器の環境変数へのフォール
+          // バックは廃止した（人間の決定。トークンプールは100% DB 駆動——
+          // `alteroid token add` で実トークンを登録することが唯一の入口である）。
+          // runner はこの状態では資格を持たずに起動する。
           return {
             kind: 'none' as const,
-            why: 'まだ一度も回していない。器の環境変数の値は撒いた（プールの現役は選び直していない。#866）',
+            why: 'まだ一度も回していない（プールにまだ何も登録されていない、または一度も候補へ回っていない）',
           };
         }
 
         const row = tokens.find((token) => token.id === active.tokenId);
         if (row === undefined) {
           // **記憶ストアへ書いて直さない。** 次の当たりで回し手が正しい候補へ移る
-          // ので、ここで消すのは「見えなくする」だけの操作になる。
-          // **ただし器の環境変数の値は撒く**（#866。上の `active === null` と
-          // 同じ理由——撒かなければ runner に資格が無いまま残る）。身元は
-          // 記録が指していた `active.tokenId` / `active.generation` をそのまま
-          // 使う——それが「記録の上でいま現役とされている行」だからである
-          // （新しい id を作らない。台帳の tokenId 軸は動かさない）。
-          await spread.spread({
-            id: active.tokenId,
-            generation: active.generation,
-            kind: 'env' as const,
-          });
+          // ので、ここで消すのは「見えなくする」だけの操作になる。**値も撒かない**
+          // ——器の環境変数へのフォールバックは廃止した。
           return {
             kind: 'dangling' as const,
             tokenId: active.tokenId,
-            why: '現役として記録された行がプールに無い（人間が消した）。器の環境変数の値は撒いた（#866）',
+            why: '現役として記録された行がプールに無い（人間が消した）',
           };
         }
 
         const availability = tokenAvailabilityAt(row, now().getTime());
         if (availability === 'disabled' || availability === 'invalidated') {
-          // **人間が外したものを起動時に戻さない。** 戻さないのは*その行の値*
-          // であって、器の環境変数の値ではない——後者は最初から人間の判断の
-          // 対象ではないので、撒く（#866。上と同じ理由）。
-          await spread.spread({
-            id: row.id,
-            generation: active.generation,
-            kind: 'env' as const,
-          });
+          // **人間が外したものを起動時に戻さない。** 値も撒かない——器の環境変数
+          // へのフォールバックは廃止した。
           return {
             kind: 'withheld' as const,
             tokenId: row.id,
             label: row.label,
             why:
               availability === 'disabled'
-                ? `現役として記録された「${row.label}」は人間が外している。撒き直さない（器の環境変数の値は撒いた。#866）`
-                : `現役として記録された「${row.label}」は失効している。撒き直さない（器の環境変数の値は撒いた。#866）`,
+                ? `現役として記録された「${row.label}」は人間が外している。撒き直さない`
+                : `現役として記録された「${row.label}」は失効している。撒き直さない`,
           };
         }
 
@@ -1724,15 +1563,12 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         /**
          * いまの現役の行。
          *
-         * **指名が無ければ、器の環境変数の行が de facto の現役である。** そこを
-         * 「現役が居ない」と読むと、**既定の構成から1度も回っていない器では
-         * 永久に何も起きない** —— 器の環境変数のトークンが冷却へ入っていても
-         * （probe が `unusable` を返した回など）、見る相手が居ないことになる。
-         *
-         * **`isEnvToken` の行が無ければ `undefined` である。** 埋めない ——
-         * 「いま何が走っているのか記録から言えない」は、それ自体が答えである。
+         * **指名が無ければ `undefined` である。** かつては「器の環境変数の行が
+         * de facto の現役」という埋め方をしていたが、その行という概念自体を
+         * 廃止した——埋めない。「いま何が走っているのか記録から言えない」は、
+         * それ自体が答えである。
          */
-        const currentId = active?.tokenId ?? tokens.find(isEnvToken)?.id;
+        const currentId = active?.tokenId;
         const currentRow =
           currentId === undefined ? undefined : tokens.find((token) => token.id === currentId);
 
@@ -1741,7 +1577,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
             kind: 'ignored' as const,
             signal: 'none' as const,
             reason,
-            why: 'まだ一度も指名しておらず、器の環境変数を指す行も無い（いま何が走っているのか記録から言えないので、状態からは決めない）',
+            why: 'まだ一度も指名していない（いま何が走っているのか記録から言えないので、状態からは決めない）',
           };
         }
 
@@ -1910,20 +1746,14 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
          * 記録の上でいまの現役が通るか。**指名の先の行が消えていたら通らない側で
          * ある**（`dangling`）—— 撒く値そのものが取れない。
          *
-         * **⚠️ 「次のセッションは器の環境変数で走る」わけではない**（この文書が
-         * かつてそう書いていたのは 2026-09-11 より前の前提——runner の
-         * `#childEnv()` はいま自分の環境変数の鍵を無条件に削除するので、撒かな
-         * ければ資格が1本も届かない。`restore()` は起動時にこの穴を器の環境
-         * 変数の値で塞ぐ（#866。`TokenRotator.restore` の doc）。
-         *
-         * **⚠️ 2026-09-12（#869）にここを直した。** かつてこの文は「ここ
-         * （`reconsider()`）は起動後に行が消えた回を扱っており、その手当ては無い」
-         * と書いていた——**いまは偽である。** 通る候補が1本も無くて
-         * `finishSweep` が `exhausted` へ落ちる回のうち、**現役が待っても戻らない
-         * （消された / 外された / 失効した）ものだけ**、あちらで器の環境変数の値を
-         * 撒く（`finishSweep` の `strandedOnDeadKey` の doc に、撒かない3つの道も
-         * 含めて全文が在る）。**`observe()` 側の `exhausted` も同じ関数を通るので
-         * 同時に塞がっている。**
+         * **⚠️ 通らない場合に器の環境変数の値へフォールバックすることはもう無い。**
+         * かつて（2026-09-12〜2026-09-14、#866・#869）は runner の `#childEnv()`
+         * が自分の環境変数の鍵を無条件に削除する（人間の決定 2026-09-11）ことへの
+         * 当座の手当てとして、`restore()` や `finishSweep()` が器の環境変数の値を
+         * 代わりに撒いていた。**その手当ては廃止した**——トークンプールは100% DB
+         * 駆動にする、という人間の決定による。⟹ 通る候補が無ければ、runner は
+         * 資格を持たずに走る。直すのは `alteroid token add` で通る鍵を登録する
+         * ことである。
          *
          * `restore()` は*トークンの値*を戻さないと決めているが（人間の判断を
          * 覆さない）、**通る候補が在るならここで移してよい**（あちらは「起動時に

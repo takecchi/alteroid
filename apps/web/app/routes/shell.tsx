@@ -12,6 +12,7 @@ import {
   Menu,
   MessageSquare,
   Settings,
+  SlidersHorizontal,
   Users,
 } from 'lucide-react';
 import { useState } from 'react';
@@ -40,6 +41,7 @@ const NAV = [
   { to: '/reports', label: '日報', icon: BookText, end: false },
   { to: '/usage', label: '利用状況', icon: DollarSign, end: false },
   { to: '/tokens', label: '認証トークン', icon: KeyRound, end: false },
+  { to: '/env-vars', label: '環境変数', icon: SlidersHorizontal, end: false },
   { to: '/dropped', label: '握り潰しの跡', icon: Footprints, end: false },
   { to: '/memory', label: '記憶', icon: Brain, end: false },
   { to: '/schedule', label: 'スケジュール', icon: CalendarClock, end: false },

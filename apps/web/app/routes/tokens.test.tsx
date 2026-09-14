@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
 /**
- * `/tokens` — 認証トークンのプール一覧・回転の設定・回転の履歴を見る画面。
+ * `/tokens` — 認証トークンのプール一覧・追加・削除・無効化/有効化・回転の設定・
+ * 回転の履歴を見る画面（2026-09-14 から読み取り専用ではない）。
  *
- * ここで固定したいのは「読み取り専用」「値は絶対に出さない」「4状態を潰さない」
+ * ここで固定したいのは「値は追加フォーム以外へ出さない」「4状態を潰さない」
  * 「不明と、そもそも無いを混ぜない」「冷却は原文と絶対時刻の両方を出す」
- * 「403 に専用の文言がある」の各点。文言の細部より、この規律が壊れていないかを見る。
+ * 「403 に専用の文言がある」「追加・削除・無効化/有効化は既存の一覧を土台に
+ * `PUT /tokens` を全置換で呼ぶ」の各点。文言の細部より、この規律が壊れていないかを見る。
  */
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { formatDateTime } from '~/lib/format';
@@ -61,6 +63,83 @@ function stubScreen(options: {
 
 async function waitForPoolLoaded(): Promise<void> {
   await screen.findByRole('heading', { name: 'プール一覧' });
+}
+
+interface StubTokenRow {
+  id: string;
+  label: string;
+  order: number;
+  sha256?: string;
+  source?: 'stored';
+  disabledAt?: string;
+}
+
+/**
+ * **状態を持つ** `/tokens` の stub（追加・削除・無効化/有効化を検証するため）。
+ *
+ * `useAddToken` / `useRemoveToken` / `useSetTokenDisabled`（`hooks/mutations.ts`）は
+ * どれも「`GET /tokens` を取り直す → 加工 → `PUT /tokens`（全置換）」の形なので、
+ * PUT を受けたらその場で一覧を書き換え、以降の GET（再検証も含む）がその状態を
+ * 返すようにする——1回きりの応答では「置いたのに一覧に反映されない」を見逃す。
+ *
+ * **共有の `stubFetch` は使えない。** あちらが route へ渡すのは URL と `init` だけ
+ * だが、`openapi-fetch` は `fetch(new Request(...))` の形で呼ぶので `init` が
+ * `undefined` になり、method も本文も落ちる（`schedule.test.tsx` の同じ断り書きと
+ * 同じ理由）。ここでは `globalThis.fetch` を自分で差し替える。
+ */
+function stubCrudScreen(initial: StubTokenRow[]) {
+  let rows = initial;
+  const puts: {
+    id?: string;
+    label: string;
+    value?: string;
+    order?: number;
+    disabled?: boolean;
+  }[][] = [];
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = input instanceof Request ? input : null;
+    const url = request?.url ?? (typeof input === 'string' ? input : String(input));
+    const method = request?.method ?? init?.method ?? 'GET';
+
+    if (url.includes('/journal')) return json({ entries: [] });
+    if (!url.includes('/tokens')) {
+      return Promise.reject(new TypeError(`Failed to fetch: ${url}`));
+    }
+    if (method === 'PUT') {
+      const body = (request !== null ? await request.json() : JSON.parse(String(init?.body))) as {
+        tokens: {
+          id?: string;
+          label: string;
+          value?: string;
+          order?: number;
+          disabled?: boolean;
+        }[];
+      };
+      puts.push(body.tokens);
+      rows = body.tokens.map((tokenInput, index) => {
+        const existing = rows.find((row) => row.id === tokenInput.id);
+        return {
+          id: tokenInput.id ?? existing?.id ?? `new-${String(puts.length)}-${String(index)}`,
+          label: tokenInput.label,
+          order: tokenInput.order ?? index,
+          sha256: existing?.sha256 ?? 'f'.repeat(12),
+          source: 'stored' as const,
+          ...(tokenInput.disabled === undefined
+            ? existing?.disabledAt === undefined
+              ? {}
+              : { disabledAt: existing.disabledAt }
+            : tokenInput.disabled
+              ? { disabledAt: '2026-09-14T00:00:00.000Z' }
+              : {}),
+        };
+      });
+      return json({ tokens: rows, settings: DEFAULT_SETTINGS });
+    }
+    return json({ tokens: rows, settings: DEFAULT_SETTINGS });
+  }) as typeof fetch;
+
+  return { puts };
 }
 
 describe('/tokens 画面 — プールの4状態', () => {
@@ -150,34 +229,6 @@ describe('/tokens 画面 — 値を絶対に出さない', () => {
 });
 
 describe('/tokens 画面 — 不明と、そもそも無いを混ぜない', () => {
-  it('source: env（sha256 無し）の行は「不明」ではなく「そもそも無い」と言う', async () => {
-    stubScreen({
-      tokens: [
-        {
-          id: 't-env',
-          label: 'env-token',
-          order: 0,
-          source: 'env',
-          createdAt: '2026-08-01T00:00:00.000Z',
-          updatedAt: '2026-08-01T00:00:00.000Z',
-        },
-      ],
-    });
-
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
-
-    await waitForPoolLoaded();
-
-    expect(screen.getByText(/環境変数由来のため指紋は無い/)).toBeTruthy();
-    // 「不明」という言い方に潰していない（createdAt/updatedAt は与えてあるので
-    // この行には他の理由で「不明」が出る余地も無い）。
-    expect(screen.queryByText('不明')).toBeNull();
-  });
-
   it('断られたことが一度も無い行は「断られた記録が無い」と言う（空文字や - で濁さない）', async () => {
     stubScreen({
       tokens: [{ id: 't-clean', label: 'clean-token', order: 0, sha256: 'e'.repeat(12) }],
@@ -195,59 +246,6 @@ describe('/tokens 画面 — 不明と、そもそも無いを混ぜない', () 
 });
 
 describe('/tokens 画面 — recovery（回復の見込み）を潰さない', () => {
-  /**
-   * `recovery: 'unknown'` は実装が持つ**正規の値**（「どちらとも言えない」）で
-   * あって、「取れなかった」ではない。一方 `source: 'env'` の指紋欄は値を
-   * 持たないので「そもそも無い」——こちらは PoolCard 側の別の理由による欠落
-   * である。**この2つが将来同じ文言（例えば「不明」）へ潰れても、片方だけの
-   * テストでは検知できない** ので、同じ描画の中に両方を置いて別々の文字列で
-   * 出ることを見る。
-   */
-  it('recovery: unknown と source: env（指紋なし）が同じ描画の中で別々の文言のまま出る', async () => {
-    stubScreen({
-      tokens: [
-        {
-          id: 't-recovery-unknown',
-          label: 'recovery-unknown-token',
-          order: 0,
-          sha256: 'a'.repeat(12),
-          lastRejectedAt: '2026-08-25T00:00:00.000Z',
-          lastRejectedReason: 'some previously unseen limit message',
-          recovery: 'unknown',
-        },
-        {
-          id: 't-env-2',
-          label: 'env-token-2',
-          order: 1,
-          source: 'env',
-          createdAt: '2026-08-01T00:00:00.000Z',
-          updatedAt: '2026-08-01T00:00:00.000Z',
-        },
-      ],
-    });
-
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
-
-    await waitForPoolLoaded();
-
-    // **exact match。** 実装が「不明」のような共通の言い方へ潰すと、この
-    // どちらの getByText も落ちる（見つからない、または曖昧に複数ヒットする）。
-    const recoveryText = screen.getByText(
-      '分類: どちらとも言えない（time でも action でもない。捨てる判断の根拠にしないこと）',
-    );
-    const fingerprintText = screen.getByText('（環境変数由来のため指紋は無い）');
-    expect(recoveryText).toBeTruthy();
-    expect(fingerprintText).toBeTruthy();
-    // 別々の要素であること（1つのノードが両方の役目を兼ねていない）。
-    expect(recoveryText).not.toBe(fingerprintText);
-    // 潰れた合成文言（例:「不明」のような共通語だけ）に短縮されていないこと。
-    expect(screen.queryByText('不明')).toBeNull();
-  });
-
   it('time / action / unknown の3値が、それぞれ別の文言で出る', async () => {
     stubScreen({
       tokens: [
@@ -517,5 +515,103 @@ describe('/tokens 画面 — 回転の履歴（エラー状況）', () => {
     );
 
     expect(await screen.findByText('回転の記録がまだ1件も無い。')).toBeTruthy();
+  });
+});
+
+describe('/tokens 画面 — 追加・削除・無効化/有効化（2026-09-14）', () => {
+  it('追加すると、既存行を土台に PUT /tokens が全置換で呼ばれ、一覧に反映される', async () => {
+    const { puts } = stubCrudScreen([
+      { id: 't-existing', label: 'existing-token', order: 0, sha256: 'a'.repeat(12) },
+    ]);
+
+    render(
+      <Providers>
+        <Tokens />
+      </Providers>,
+    );
+    await waitForPoolLoaded();
+
+    fireEvent.change(screen.getByLabelText('ラベル（人間が読む名前。秘密ではない）'), {
+      target: { value: 'new-token' },
+    });
+    fireEvent.change(screen.getByLabelText('値（claude setup-token の出力）'), {
+      target: { value: 'sk-ant-oat01-new-secret' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '追加' }));
+
+    expect(await screen.findByText('new-token')).toBeTruthy();
+    // 既存行はそのまま（label/order だけを土台にし、値は送り直さない）。
+    expect(puts).toEqual([
+      [
+        { id: 't-existing', label: 'existing-token', order: 0 },
+        { label: 'new-token', value: 'sk-ant-oat01-new-secret' },
+      ],
+    ]);
+    // 送った値はどこにも出ない（送信後に state から消える）。
+    expect(document.body.textContent).not.toContain('sk-ant-oat01-new-secret');
+  });
+
+  it('削除すると、その行を除いた一覧で PUT /tokens が呼ばれ、画面から消える', async () => {
+    const { puts } = stubCrudScreen([
+      { id: 't-a', label: 'token-a', order: 0, sha256: 'a'.repeat(12) },
+      { id: 't-b', label: 'token-b', order: 1, sha256: 'b'.repeat(12) },
+    ]);
+
+    render(
+      <Providers>
+        <Tokens />
+      </Providers>,
+    );
+    await waitForPoolLoaded();
+    expect(await screen.findByText('token-a')).toBeTruthy();
+
+    const rows = screen.getAllByText('削除');
+    fireEvent.click(rows[0]!);
+
+    await screen.findByText('token-b');
+    expect(screen.queryByText('token-a')).toBeNull();
+    expect(puts).toEqual([[{ id: 't-b', label: 'token-b', order: 1 }]]);
+  });
+
+  it('無効化すると disabled: true で PUT され、バッジが「無効化済み」に変わる', async () => {
+    const { puts } = stubCrudScreen([
+      { id: 't-a', label: 'token-a', order: 0, sha256: 'a'.repeat(12) },
+    ]);
+
+    render(
+      <Providers>
+        <Tokens />
+      </Providers>,
+    );
+    await waitForPoolLoaded();
+
+    fireEvent.click(screen.getByRole('button', { name: '無効化する' }));
+
+    expect(await screen.findByText(/無効化済み/)).toBeTruthy();
+    expect(puts).toEqual([[{ id: 't-a', label: 'token-a', order: 0, disabled: true }]]);
+  });
+
+  it('戻す（有効化）と disabled: false で PUT される', async () => {
+    const { puts } = stubCrudScreen([
+      {
+        id: 't-a',
+        label: 'token-a',
+        order: 0,
+        sha256: 'a'.repeat(12),
+        disabledAt: '2026-08-01T00:00:00.000Z',
+      },
+    ]);
+
+    render(
+      <Providers>
+        <Tokens />
+      </Providers>,
+    );
+    await waitForPoolLoaded();
+
+    fireEvent.click(screen.getByRole('button', { name: '戻す' }));
+
+    expect(await screen.findByText('使用可能')).toBeTruthy();
+    expect(puts).toEqual([[{ id: 't-a', label: 'token-a', order: 0, disabled: false }]]);
   });
 });
