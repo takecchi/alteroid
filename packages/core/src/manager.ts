@@ -6954,6 +6954,14 @@ class Pool implements ManagerPool {
         // 増分が空の回は行を書かない（取れない軸に0の行を作らない。
         // `foldUsageSnapshot` は増えていないモデルの行を `delta` に作らない
         // ので、キーが1つも無ければ増分ゼロが確定する）。
+        //
+        // **`contextUsage` は #967 で足した。** `runner.ts` の
+        // `#observeContextUsage` が測った、委譲セッション側の文脈窓の占有
+        // ——クローン層の `clone.ts` の `#recordUsage` が渡しているのと
+        // 同じ形（`contextUsageObservationSchema`）を、ここでも渡すだけで
+        // ある。**増分が空の回は上と同じ理由で行自体を書かないので、
+        // その回に観測できていても一緒に捨てる**（`runner-protocol.ts` の
+        // `usage` イベントの `contextUsage` の doc と同じ非対称）。
         if (Object.keys(fold.delta).length > 0) {
           await this.#journal({
             type: 'turn_usage',
@@ -6967,6 +6975,7 @@ class Pool implements ManagerPool {
               : {
                   reset: { fromCostUsd: fold.reset.fromCostUsd, toCostUsd: fold.reset.toCostUsd },
                 }),
+            ...(event.contextUsage === undefined ? {} : { contextUsage: event.contextUsage }),
           });
         }
 

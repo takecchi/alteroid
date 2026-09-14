@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import { excerptLine } from './excerpt.js';
 import { type RunnerRevisionReport } from './revision.js';
-import { jobStatusSchema } from './schema.js';
+import { contextUsageObservationSchema, jobStatusSchema } from './schema.js';
 import { systemErrorFactsSchema } from './system-error.js';
 import { rateLimitFactsSchema, usageLimitNoticeSchema } from './usage-limits.js';
 import { usageTotalsSchema } from './usage.js';
@@ -1203,6 +1203,23 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     sessionId: z.string().optional(),
     /** モデル id → その時点の累積。 */
     models: z.record(z.string(), usageTotalsSchema),
+    /**
+     * ターンの境界で聞いた文脈窓の占有（`runner.ts` の
+     * `#observeContextUsage`。クローン層の `clone.ts` と同じ形——
+     * `schema.ts` の `contextUsageObservationSchema` を1箇所で共有する。
+     * #967。
+     *
+     * **この欄が付くのは `case 'turn_ended'` から emit される回だけである。**
+     * `#flushUsage`（セッションを畳む直前の best-effort な読み取り）は
+     * ターンの境界ではないので付けない——`clone.ts` の
+     * `#flushSessionUsage` が `turnBoundary` を渡さないのと同じ理由
+     * （あちらの doc に理由の全文がある）。
+     *
+     * **`.optional()` にしてあるのは、この欄を送らない古い runner を
+     * 1つも壊さないため。** 受け取る側（`manager.ts` の `case 'usage'`）は
+     * 無ければ何も書かない。
+     */
+    contextUsage: contextUsageObservationSchema.optional(),
   }),
   /**
    * 上限に関する SDK の文言（当たった / 課金枠へ移った / 近づいている / 組織方針）。

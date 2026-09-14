@@ -627,6 +627,174 @@ export type InboxEventType = InboxEvent['type'];
 // ---------------------------------------------------------------------------
 
 /**
+ * ターンの境界で聞いた文脈窓の占有（SDK の control channel
+ * `Query.getContextUsage()` の写し）。
+ *
+ * **層をまたいで共有するスキーマである（#967）。** クローン層
+ * （`clone.ts` の `#observeContextUsage`）とマネージャー／ランナー層
+ * （`runner.ts` の `#observeContextUsage`）が、同じ形で同じものを聞く
+ * ——`turn_usage.contextUsage`（この下）と `runner-protocol.ts` の
+ * `usage` イベントの両方がここを参照する。**形を二重に定義すると、片方だけ
+ * 直し忘れたときにどちらかの層だけが古い形のまま残る。**
+ *
+ * ## 何のために置いたか
+ *
+ * `models`（`turn_usage`）はモデル別の**消費**（累積の増分）であって、
+ * **残りの窓**を言わない。文脈窓は消費と別の理由でも減る — 記憶ファイルの
+ * 再注入・MCP 道具のスキーマ・システムプロンプトはどれもターンをまたいで
+ * 焼き込まれ続けるので、「今日いくら使ったか」が同じでも「あと何文字
+ * 積めるか」は日によって違う。ここは後者を、ターンの境界で1回だけ聞いて
+ * 添える。
+ *
+ * ## 「観測していない」と「試して失敗した」を区別する
+ *
+ * **欄そのものが無い行は「観測していない」** —— この欄が増える前に
+ * 書かれた行、または `Query` が既に無かった回（`#observeContextUsage` は
+ * `Query` が無いとき呼ばずに `undefined` を返す）。**欄は在るが `error` が
+ * 付いている行は「試して失敗した」**（`getContextUsage()` が例外を投げた・
+ * タイムアウトした等）。**`error` が無い行だけが実際に読めた値を持つ。**
+ *
+ * **失敗してもターンは止めない。** `#observeContextUsage` は例外を内側で
+ * 受け止め、`error` として運ぶだけである —— 文脈占有が読めないことは、
+ * ターンの結果そのものとは無関係である。
+ *
+ * **`error` の文言に秘密を含めない。** `usage-probe.ts` の
+ * `describeProbeError` / `redactEnvSecrets`（既にある伏せ字の作法）を
+ * そのまま再利用している。新しい伏せ字の仕組みは作っていない。
+ *
+ * `durationMs` は成功・失敗を問わず必ず入る —— この呼び出し自体の所要時間。
+ */
+export const contextUsageObservationSchema = z.object({
+  durationMs: z.number().int().nonnegative(),
+  totalTokens: z.number().int().nonnegative().optional(),
+  rawMaxTokens: z.number().int().nonnegative().optional(),
+  percentage: z.number().nonnegative().optional(),
+  autoCompactThreshold: z.number().nonnegative().optional(),
+  isAutoCompactEnabled: z.boolean().optional(),
+  /**
+   * **カテゴリ別の実トークン数**（SDK が `categories` で返すものの写し）。
+   *
+   * ## なぜ取れるのに捨てていたのか、そして取るのに追加費用が無い理由
+   *
+   * `#observeContextUsage` は `getContextUsage()` を**引数なし**で呼んでいる。
+   * SDK の doc は逐語でこう言う（同梱の `sdk.d.ts`。**この doc は3行に折り返されて
+   * いるので、印を2つに分けて1行ずつ当てている** —— `scripts/check-sdk-quotes-core.mjs`
+   * が言う「引用は1行に収めること」）:
+   *
+   * > [sdk-verbatim Query.getContextUsage]
+   * > `detail: 'full'` counts each category with the token-count API;
+   *
+   * > [sdk-verbatim SDKControlGetContextUsageResponse.categories]
+   * > without the per-category token-count calls. Defaults to `'full'`.
+   *
+   * ⟹ **既定が `'full'` なので、alteroid は毎ターン token-count API の費用を
+   * 既に払っている。** 払った内訳を捨てていただけである。⟹ **ここへ写すのに
+   * 追加の呼び出しも費用も要らない**（#804 は「費用を測ってから決めること」と
+   * 保留していたが、その前提は既定が `'summary'` だという想定に依っていた）。
+   *
+   * ## ⚠️ 名前は SDK が決めた文字列であって、alteroid の語彙ではない
+   *
+   * `name` は SDK 側の表示名（`System prompt` / `Tools` / `Messages` 等）で、
+   * **版が上がれば変わりうるし、変わっても赤くならない。** ⟹ この欄を
+   * 「alteroid が定義した軸」として読まないこと。軸で集計したいなら、名前で
+   * 引く前にその名前が現物に在るかを確かめる。
+   *
+   * ## 件数の蓋
+   *
+   * `categories` は SDK 側で軸の数だけなので小さい（実装が返すのは
+   * システムプロンプト・道具・メッセージ・MCP 道具・記憶ファイル等）。**それでも
+   * 上限を持つ**——版が上がって軸が増えたときに、日誌の1行が黙って伸びる形を
+   * 作らないため（`MEMORY_TOC_ENTRY_LIMIT` と同じ考え方）。切ったら
+   * `categoriesOmitted` が件数を名乗る。
+   */
+  categories: z
+    .array(
+      z.object({
+        name: z.string(),
+        tokens: z.number().int().nonnegative(),
+        /**
+         * SDK が名乗る分類（`'used' | 'free' | 'buffer' | 'deferred'`）。
+         * SDK の doc は逐語でこう言う（`context-usage.ts` モジュール
+         * 冒頭に同じ引用がある。「⚠️ 名前は SDK が決めた文字列」の
+         * 直下、`kind` 欄に付いている doc） ——
+         *
+         * > [sdk-verbatim SDKControlGetContextUsageResponse.categories.kind]
+         * > Classify on this, never on the English name.
+         *
+         * 分類・集計は必ずこの欄で行う（`context-usage.ts` の
+         * `summarizeContextCategories`。`clone.ts` / `tools.ts` /
+         * `self.ts` は自前で分類ロジックを持たず、そこを呼ぶ）。
+         *
+         * ## ⚠️ `.optional()` にする理由 —— 既存の行を壊さないため
+         *
+         * この欄が増える**前**に書かれた `turn_usage` の行には無い。
+         * 必須にすると、**読み出し時にも** `journalEntrySchema.safeParse`
+         * を通る既存の行が丸ごと `unknown-shape` として扱われ、
+         * `list()` の結果から消える（`packages/storage-fs/src/journal.ts`
+         * の `parseLine` / `packages/storage-pg/src/journal.ts` の
+         * `list`。`journal_read`・日報・蒸留の全経路がここを経由する）。
+         * **`default` で埋めない** ——`cooldownSource` / `recoveredSource`
+         * の doc（#683）と同じ規律で、無いことは「観測していない」で
+         * あって「`used` だった」ではない。
+         *
+         * ## ⚠️ `z.enum([...])` ではなく `z.string()` にする理由
+         *
+         * SDK が将来5つ目の `kind` を足すと、`z.enum` は**書き込み時の
+         * `parse`**（`append` は `journalEntrySchema.parse`）で例外を
+         * 投げ、`turn_usage` の行そのものが書けなくなる——1つの未知の
+         * 軸のせいでターン全体の消費が記録できない事故になる。**未知の
+         * 値は行を落とすのではなく、`summarizeContextCategories` が
+         * `unclassified` として名乗る側へ倒す**（読む側で吸収する）。
+         */
+        kind: z.string().optional(),
+      }),
+    )
+    .optional(),
+  /** `categories` を件数の上限で切ったときに、省いた件数。切っていなければ欄そのものが無い。 */
+  categoriesOmitted: z.number().int().positive().optional(),
+  /**
+   * **MCP の道具の説明文が占めるトークン数の合計**と、その本数。
+   *
+   * ⚠️ **`self_status` の「総文字数」はこれを1文字も数えていない**（#804）。
+   * 自作ツール（`CLONE_TOOL_NAMES`）の説明文の合計は実測で 13,000 文字を
+   * 超える——**毎ターン払っているのに、どの計器にも出ていなかった分である。**
+   *
+   * **1本ずつではなく合計で持つ。** SDK は道具ごとの配列を返すが、道具の数だけ
+   * 行が伸びる形を日誌へ入れない（`turn-input.ts` の「再構成できるものを二重に
+   * 持たない」——道具ごとの内訳が要るなら、そのときに `getContextUsage` を
+   * 直接引けばよい）。
+   */
+  mcpToolTokens: z.number().int().nonnegative().optional(),
+  mcpToolCount: z.number().int().nonnegative().optional(),
+  /**
+   * **記憶ファイル（CLAUDE.md / nested memory）が占めるトークン数の合計**と件数。
+   *
+   * ⚠️ **これはクローンの「記憶」（`memory_*` の文書）ではない。** SDK が
+   * `memoryFiles` と呼ぶのはハーネスが読み込む `CLAUDE.md` 系であって、
+   * alteroid の記憶はシステムプロンプトの本文として焼かれる（⟹ そちらは
+   * `systemPromptTokens` の側に入る）。**取り違えると、記憶の焼き込みが 0
+   * トークンだという読み方が出る。**
+   */
+  memoryFileTokens: z.number().int().nonnegative().optional(),
+  memoryFileCount: z.number().int().nonnegative().optional(),
+  /**
+   * **システムプロンプトの節が占めるトークン数の合計**と節数。
+   *
+   * **alteroid の記憶の焼き込みはここに入る**（`buildCloneSystemPrompt` の
+   * 出力はシステムプロンプトとして渡るため）。⟹ **「記憶が毎ターン何トークンか」
+   * にいちばん近い値はこれである**——ただし固定の指示文も同じ節に混ざるので、
+   * **記憶だけの数ではない。**
+   */
+  systemPromptTokens: z.number().int().nonnegative().optional(),
+  systemPromptSectionCount: z.number().int().nonnegative().optional(),
+  /** 試して失敗した理由（秘密は伏せてある）。無ければ成功。 */
+  error: z.string().optional(),
+});
+
+/** {@link contextUsageObservationSchema} の推論型。 */
+export type ContextUsageObservation = z.infer<typeof contextUsageObservationSchema>;
+
+/**
  * 追記専用の記録（PRD「可観測性」の中段）。
  * 型は architecture.md の JournalStore 行に対応する。
  */
@@ -1303,182 +1471,27 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
       })
       .optional(),
     /**
-     * ターンの境界で聞いた文脈窓の占有（`clone.ts` の `#observeContextUsage`。
-     * SDK の control channel `Query.getContextUsage()` の写し）。
+     * ターンの境界で聞いた文脈窓の占有。形と各欄の doc は
+     * {@link contextUsageObservationSchema}（このファイルの上のほう。
+     * `#967` でクローン層とマネージャー／ランナー層の共有スキーマへ
+     * 括り出した）を見よ——二重に書かない。
      *
-     * ## 何のために置いたか
+     * ここに残すのは `turn_usage` という行の単位に特有の注意だけである。
      *
-     * `models` はモデル別の**消費**（累積の増分）であって、**残りの窓**を
-     * 言わない。文脈窓は消費と別の理由でも減る — 記憶ファイルの再注入・
-     * MCP 道具のスキーマ・システムプロンプトはどれもターンをまたいで
-     * 焼き込まれ続けるので、「今日いくら使ったか」が同じでも「あと何文字
-     * 積めるか」は日によって違う。ここは後者を、`#recordUsage` が
-     * `turn_usage` を書く直前に1回だけ聞いて添える。
-     *
-     * ## 「観測していない」と「試して失敗した」を区別する
-     *
-     * **欄そのものが無い行は「観測していない」** —— この欄が増える前に
-     * 書かれた行、または `this.#query` が既に無かった回（`clone.ts` の
-     * `#observeContextUsage` は `this.#query === null` のとき呼ばずに
-     * `undefined` を返す）。**欄は在るが `error` が付いている行は「試して
-     * 失敗した」**（`getContextUsage()` が例外を投げた・タイムアウトした
-     * 等）。**`error` が無い行だけが実際に読めた値を持つ。** この3値の
-     * 使い分けは `clone.ts` の `#forgetObservedFacts` が採る「`null` ＝
-     * まだ観測していない」という作法を、日誌の1行という単位へ持ち込んだ
-     * ものである。
-     *
-     * **失敗してもターンは止めない。** `#observeContextUsage` は例外を
-     * 内側で受け止め、`error` として運ぶだけである —— 文脈占有が読めない
-     * ことは、ターンの結果そのものとは無関係である。
-     *
-     * **`error` の文言に秘密を含めない。** `usage-probe.ts` の
-     * `describeProbeError` / `redactEnvSecrets`（既にある伏せ字の作法）を
-     * そのまま再利用している。新しい伏せ字の仕組みは作っていない。
-     *
-     * `durationMs` は成功・失敗を問わず必ず入る —— **この呼び出し自体の
-     * 所要時間**（ターンの境界で毎回1回、control channel の往復が増える
-     * ことの影響を、測らずに「軽いはず」と決めつけないための値。実測は
-     * PR 本文の「言えないこと」を見よ ―― この PR ではこの値そのものは
-     * まだ実機で走らせて確かめていない）。
+     * **観測は `#recordUsage`（クローン層）/ `case 'turn_ended'`
+     * （マネージャー／ランナー層）が、行を書く直前に1回だけ行う。**
      *
      * **⚠️ この行が無くても「増分ゼロだった」と読めるとは限らない。**
-     * `#recordUsage` は `fold.delta` が空の回、`usage` が `undefined` の回
-     * （失敗したターン）は `turn_usage` の行自体を書かない（`models` の doc
-     * 「行が無い理由は3つある」）。**その回は `#observeContextUsage` を
-     * 呼んでいても、結果は行ごと捨てる** —— 文脈占有を聞くこと自体は
-     * 成功しても、増分が無ければ載せる場所（`turn_usage` の行）が無いため
-     * である。つまりこの行の有無だけでは「その回は観測しなかった」のか
-     * 「観測はしたが増分ゼロで行自体が無い」のかを区別できない —— 区別が
-     * 要るなら `exchange` 等の他の跡と突き合わせること。
+     * 増分が空の回・`usage` が `undefined` の回（失敗したターン）は
+     * `turn_usage` の行自体を書かない（`models` の doc「行が無い理由は
+     * 3つある」）。**その回は観測を呼んでいても、結果は行ごと捨てる**
+     * —— 文脈占有を聞くこと自体は成功しても、増分が無ければ載せる場所
+     * （`turn_usage` の行）が無いためである。つまりこの行の有無だけでは
+     * 「その回は観測しなかった」のか「観測はしたが増分ゼロで行自体が
+     * 無い」のかを区別できない —— 区別が要るなら `exchange` 等の他の跡と
+     * 突き合わせること。
      */
-    contextUsage: z
-      .object({
-        durationMs: z.number().int().nonnegative(),
-        totalTokens: z.number().int().nonnegative().optional(),
-        rawMaxTokens: z.number().int().nonnegative().optional(),
-        percentage: z.number().nonnegative().optional(),
-        autoCompactThreshold: z.number().nonnegative().optional(),
-        isAutoCompactEnabled: z.boolean().optional(),
-        /**
-         * **カテゴリ別の実トークン数**（SDK が `categories` で返すものの写し）。
-         *
-         * ## なぜ取れるのに捨てていたのか、そして取るのに追加費用が無い理由
-         *
-         * `#observeContextUsage` は `getContextUsage()` を**引数なし**で呼んでいる。
-         * SDK の doc は逐語でこう言う（同梱の `sdk.d.ts`。**この doc は3行に折り返されて
-         * いるので、印を2つに分けて1行ずつ当てている** —— `scripts/check-sdk-quotes-core.mjs`
-         * が言う「引用は1行に収めること」）:
-         *
-         * > [sdk-verbatim Query.getContextUsage]
-         * > `detail: 'full'` counts each category with the token-count API;
-         *
-         * > [sdk-verbatim SDKControlGetContextUsageResponse.categories]
-         * > without the per-category token-count calls. Defaults to `'full'`.
-         *
-         * ⟹ **既定が `'full'` なので、alteroid は毎ターン token-count API の費用を
-         * 既に払っている。** 払った内訳を捨てていただけである。⟹ **ここへ写すのに
-         * 追加の呼び出しも費用も要らない**（#804 は「費用を測ってから決めること」と
-         * 保留していたが、その前提は既定が `'summary'` だという想定に依っていた）。
-         *
-         * ## ⚠️ 名前は SDK が決めた文字列であって、alteroid の語彙ではない
-         *
-         * `name` は SDK 側の表示名（`System prompt` / `Tools` / `Messages` 等）で、
-         * **版が上がれば変わりうるし、変わっても赤くならない。** ⟹ この欄を
-         * 「alteroid が定義した軸」として読まないこと。軸で集計したいなら、名前で
-         * 引く前にその名前が現物に在るかを確かめる。
-         *
-         * ## 件数の蓋
-         *
-         * `categories` は SDK 側で軸の数だけなので小さい（実装が返すのは
-         * システムプロンプト・道具・メッセージ・MCP 道具・記憶ファイル等）。**それでも
-         * 上限を持つ**——版が上がって軸が増えたときに、日誌の1行が黙って伸びる形を
-         * 作らないため（`MEMORY_TOC_ENTRY_LIMIT` と同じ考え方）。切ったら
-         * `categoriesOmitted` が件数を名乗る。
-         */
-        categories: z
-          .array(
-            z.object({
-              name: z.string(),
-              tokens: z.number().int().nonnegative(),
-              /**
-               * SDK が名乗る分類（`'used' | 'free' | 'buffer' | 'deferred'`）。
-               * SDK の doc は逐語でこう言う（`context-usage.ts` モジュール
-               * 冒頭に同じ引用がある。「⚠️ 名前は SDK が決めた文字列」の
-               * 直下、`kind` 欄に付いている doc） ——
-               *
-               * > [sdk-verbatim SDKControlGetContextUsageResponse.categories.kind]
-               * > Classify on this, never on the English name.
-               *
-               * 分類・集計は必ずこの欄で行う（`context-usage.ts` の
-               * `summarizeContextCategories`。`clone.ts` / `tools.ts` /
-               * `self.ts` は自前で分類ロジックを持たず、そこを呼ぶ）。
-               *
-               * ## ⚠️ `.optional()` にする理由 —— 既存の行を壊さないため
-               *
-               * この欄が増える**前**に書かれた `turn_usage` の行には無い。
-               * 必須にすると、**読み出し時にも** `journalEntrySchema.safeParse`
-               * を通る既存の行が丸ごと `unknown-shape` として扱われ、
-               * `list()` の結果から消える（`packages/storage-fs/src/journal.ts`
-               * の `parseLine` / `packages/storage-pg/src/journal.ts` の
-               * `list`。`journal_read`・日報・蒸留の全経路がここを経由する）。
-               * **`default` で埋めない** ——`cooldownSource` / `recoveredSource`
-               * の doc（#683）と同じ規律で、無いことは「観測していない」で
-               * あって「`used` だった」ではない。
-               *
-               * ## ⚠️ `z.enum([...])` ではなく `z.string()` にする理由
-               *
-               * SDK が将来5つ目の `kind` を足すと、`z.enum` は**書き込み時の
-               * `parse`**（`append` は `journalEntrySchema.parse`）で例外を
-               * 投げ、`turn_usage` の行そのものが書けなくなる——1つの未知の
-               * 軸のせいでターン全体の消費が記録できない事故になる。**未知の
-               * 値は行を落とすのではなく、`summarizeContextCategories` が
-               * `unclassified` として名乗る側へ倒す**（読む側で吸収する）。
-               */
-              kind: z.string().optional(),
-            }),
-          )
-          .optional(),
-        /** `categories` を件数の上限で切ったときに、省いた件数。切っていなければ欄そのものが無い。 */
-        categoriesOmitted: z.number().int().positive().optional(),
-        /**
-         * **MCP の道具の説明文が占めるトークン数の合計**と、その本数。
-         *
-         * ⚠️ **`self_status` の「総文字数」はこれを1文字も数えていない**（#804）。
-         * 自作ツール（`CLONE_TOOL_NAMES`）の説明文の合計は実測で 13,000 文字を
-         * 超える——**毎ターン払っているのに、どの計器にも出ていなかった分である。**
-         *
-         * **1本ずつではなく合計で持つ。** SDK は道具ごとの配列を返すが、道具の数だけ
-         * 行が伸びる形を日誌へ入れない（`turn-input.ts` の「再構成できるものを二重に
-         * 持たない」——道具ごとの内訳が要るなら、そのときに `getContextUsage` を
-         * 直接引けばよい）。
-         */
-        mcpToolTokens: z.number().int().nonnegative().optional(),
-        mcpToolCount: z.number().int().nonnegative().optional(),
-        /**
-         * **記憶ファイル（CLAUDE.md / nested memory）が占めるトークン数の合計**と件数。
-         *
-         * ⚠️ **これはクローンの「記憶」（`memory_*` の文書）ではない。** SDK が
-         * `memoryFiles` と呼ぶのはハーネスが読み込む `CLAUDE.md` 系であって、
-         * alteroid の記憶はシステムプロンプトの本文として焼かれる（⟹ そちらは
-         * `systemPromptTokens` の側に入る）。**取り違えると、記憶の焼き込みが 0
-         * トークンだという読み方が出る。**
-         */
-        memoryFileTokens: z.number().int().nonnegative().optional(),
-        memoryFileCount: z.number().int().nonnegative().optional(),
-        /**
-         * **システムプロンプトの節が占めるトークン数の合計**と節数。
-         *
-         * **alteroid の記憶の焼き込みはここに入る**（`buildCloneSystemPrompt` の
-         * 出力はシステムプロンプトとして渡るため）。⟹ **「記憶が毎ターン何トークンか」
-         * にいちばん近い値はこれである**——ただし固定の指示文も同じ節に混ざるので、
-         * **記憶だけの数ではない。**
-         */
-        systemPromptTokens: z.number().int().nonnegative().optional(),
-        systemPromptSectionCount: z.number().int().nonnegative().optional(),
-        /** 試して失敗した理由（秘密は伏せてある）。無ければ成功。 */
-        error: z.string().optional(),
-      })
-      .optional(),
+    contextUsage: contextUsageObservationSchema.optional(),
     /**
      * このターンの中で起きた compaction（SDK の
      * `SDKCompactBoundaryMessage.compact_metadata` の写し）。
