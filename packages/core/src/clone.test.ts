@@ -7115,6 +7115,7 @@ describe('クローン — 蒸留の末尾は全文を読まずに取る（渡�
         sessions: () => stores.archive.sessions(),
         read: (id: string) => stores.archive.read(id),
         remove: (id: string) => stores.archive.remove(id),
+        clear: () => stores.archive.clear(),
       },
     };
 

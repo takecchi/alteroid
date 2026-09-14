@@ -4,13 +4,15 @@
 // 人間は疑う先を取り違える。**ブラウザが読めるのは subpath の側だけである**
 // （`revision.ts` は焼き込んだ正典と zod を読むので初期チャンクへ入れられない）。
 import { describeRevisionStatus } from '@alteroid/core/revision';
+import { Fragment, useRef, useState } from 'react';
 
 import { ConnectionCard } from '~/components/connection';
 import { Page } from '~/components/page';
-import { Badge, Button, Card, CardHeader, Empty, ErrorNote, Spinner } from '~/components/ui';
+import { Badge, Button, Card, CardHeader, Empty, ErrorNote, Input, Spinner } from '~/components/ui';
 import { useRunners } from '~/hooks/queries';
 import { formatDateTime } from '~/lib/format';
 import { useAuth } from '~/hooks/use-auth';
+import { useResetWorkspace, type WorkspaceResetSummary } from '~/hooks/mutations';
 import type { RunnerSummary } from '~/lib/types';
 
 export default function Settings() {
@@ -20,6 +22,7 @@ export default function Settings() {
         <ConnectionCard />
         <Account />
         <Runners />
+        <ResetWorkspace />
       </div>
     </Page>
   );
@@ -248,6 +251,171 @@ function Runners() {
           ))}
         </ul>
       )}
+    </Card>
+  );
+}
+
+/** ラベルは表示用の日本語、キーは `WorkspaceResetSummary` の実欄。 */
+const RESET_SUMMARY_LABELS: [keyof WorkspaceResetSummary, string][] = [
+  ['memory', '記憶'],
+  ['journal', '日誌'],
+  ['jobs', 'ジョブ'],
+  ['approvals', '承認待ち'],
+  ['schedules', '継続中の依頼'],
+  ['schedulePhases', '既定の仕込みの位相'],
+  ['inbox', '受信箱'],
+  ['commitments', '引き受けたまま終わっていない仕事'],
+  ['archive', 'アーカイブ'],
+  ['sessions', 'セッション登録簿'],
+  ['profile', '実行環境プロファイル'],
+  ['usageDaily', '利用状況（日次）'],
+  ['usageBaseline', '利用状況（基準）'],
+  ['usageLedger', '利用状況（台帳の開始時刻）'],
+  ['usageTurns', '利用状況（回数）'],
+  ['sessionLog', 'SDK セッション生ログ'],
+];
+
+function ResetSummaryView({ cleared }: { cleared: WorkspaceResetSummary }) {
+  return (
+    <dl className="mt-3 grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 text-xs">
+      {RESET_SUMMARY_LABELS.map(([key, label]) => {
+        const value = cleared[key];
+        // `sessionLog` は pg 構成でだけ付く（`WorkspaceResetSummary` の doc）。
+        if (value === undefined) return null;
+        return (
+          <Fragment key={key}>
+            <dt className="text-muted">{label}</dt>
+            <dd className="font-mono tabular-nums">{value}</dd>
+          </Fragment>
+        );
+      })}
+    </dl>
+  );
+}
+
+/**
+ * ワークスペースのリセット（「トークン情報以外を全部消す」）。
+ *
+ * **由来**: 本番（Railway）の Postgres に対して人間の依頼で1度、手作業の
+ * `TRUNCATE` を行った（2026-09-14）。ここはその「同条件」を画面からも
+ * 起こせるようにしたもの。何を残し何を消すかは `useResetWorkspace`
+ * （`@alteroid/core` の `resetWorkspaceState` が正本）の doc を見ること。
+ *
+ * **確認は `<dialog>`（ブラウザ組み込みのモーダル）で行う。** この画面には
+ * 他に確認ダイアログを持つ操作が無い（`memory-detail.tsx` の削除は確認なしで
+ * 即実行する）——ここだけ確認を挟むのは、対象がワークスペース全体で取り消せ
+ * ないという重さの違いによる。**`reset` という語を打たせる**（`y` 1文字の
+ * 誤打で通らないようにするため。CLI の `resetCommand` の確認と同じ判断）。
+ *
+ * **ボタンは常に出す。** 実行環境の持ち主でなければ `POST /reset` が 403 を
+ * 返すが、隠さない——隠すと「なぜ押せないか」が消える
+ * （`hooks/mutations.ts` の `useRemoveSchedule` の doc と同じ判断）。
+ */
+function ResetWorkspace() {
+  const resetWorkspace = useResetWorkspace();
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [confirmText, setConfirmText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<unknown>(undefined);
+  const [cleared, setCleared] = useState<WorkspaceResetSummary | null>(null);
+
+  const canConfirm = confirmText.trim().toLowerCase() === 'reset';
+
+  function openDialog() {
+    setConfirmText('');
+    setFailure(undefined);
+    setCleared(null);
+    dialogRef.current?.showModal();
+  }
+
+  async function runReset() {
+    if (!canConfirm) return;
+    setBusy(true);
+    setFailure(undefined);
+    try {
+      setCleared(await resetWorkspace());
+    } catch (caught) {
+      setFailure(caught);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader
+        title="ワークスペースのリセット"
+        subtitle="トークン情報以外を全部消す。取り消せない"
+      />
+      <div className="px-4 py-3 text-sm">
+        <p className="text-xs leading-relaxed text-muted">
+          記憶・日誌・ジョブ・承認待ち・継続中の依頼・受信箱・引き受けたまま終わって
+          いない仕事・アーカイブ・セッション・実行環境プロファイル・利用状況の台帳を 全部消す。
+          <strong className="text-fg">
+            認証トークンのプール・マネージャーへ 降ろす環境変数・このログインアカウントは消さない。
+          </strong>
+        </p>
+        <div className="mt-3">
+          <Button variant="danger" size="sm" onClick={openDialog}>
+            リセットする
+          </Button>
+        </div>
+      </div>
+
+      <dialog
+        ref={dialogRef}
+        className="w-[min(28rem,calc(100vw-2rem))] rounded-md border border-border bg-surface p-0 text-fg backdrop:bg-black/50"
+      >
+        <div className="p-4">
+          <h2 className="text-sm font-semibold">本当に削除しますか？</h2>
+          <p className="mt-2 text-xs leading-relaxed text-muted">
+            記憶・日誌・ジョブ・承認待ち・継続中の依頼・受信箱・引き受けたまま終わって
+            いない仕事・アーカイブ・セッション・実行環境プロファイル・利用状況の台帳を
+            全部消します。認証トークンのプール・マネージャーへ降ろす環境変数・この
+            ログインアカウントは消しません。<strong className="text-fg">取り消せません。</strong>
+          </p>
+
+          {cleared === null ? (
+            <>
+              <label className="mt-3 block text-xs text-muted">
+                続けるなら <code className="rounded bg-surface-2 px-1 font-mono">reset</code> と入力
+                <Input
+                  autoFocus
+                  className="mt-1"
+                  value={confirmText}
+                  onChange={(event) => setConfirmText(event.target.value)}
+                  placeholder="reset"
+                />
+              </label>
+              <ErrorNote error={failure} className="mt-3" />
+              <div className="mt-4 flex justify-end gap-2">
+                <Button size="sm" disabled={busy} onClick={() => dialogRef.current?.close()}>
+                  やめる
+                </Button>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  disabled={!canConfirm}
+                  loading={busy}
+                  onClick={() => void runReset()}
+                >
+                  本当に削除する
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="mt-3 text-xs font-medium text-ok">リセットしました。</p>
+              <ResetSummaryView cleared={cleared} />
+              <div className="mt-4 flex justify-end">
+                <Button variant="primary" size="sm" onClick={() => dialogRef.current?.close()}>
+                  閉じる
+                </Button>
+              </div>
+            </>
+          )}
+        </div>
+      </dialog>
     </Card>
   );
 }

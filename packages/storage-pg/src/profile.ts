@@ -69,4 +69,10 @@ export class PgProfileStore implements ProfileStore {
         set: { script: previous.script, updatedAt: at },
       });
   }
+
+  /** 外す（`ProfileStore.clear` の doc）。 */
+  async clear(): Promise<number> {
+    const removed = await this.#db.delete(envProfile).returning({ id: envProfile.id });
+    return removed.length;
+  }
 }

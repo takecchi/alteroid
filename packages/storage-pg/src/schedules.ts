@@ -177,4 +177,13 @@ export class PgScheduleStore implements ScheduleStore {
         set: { updatedAt, phase: value },
       });
   }
+
+  /** 継続中の依頼と既定の仕込みの位相を両方消す（`ScheduleStore.clear` の doc）。 */
+  async clear(): Promise<{ schedules: number; phases: number }> {
+    const removedSchedules = await this.#db.delete(schedules).returning({ kind: schedules.kind });
+    const removedPhases = await this.#db
+      .delete(schedulePhases)
+      .returning({ kind: schedulePhases.kind });
+    return { schedules: removedSchedules.length, phases: removedPhases.length };
+  }
 }

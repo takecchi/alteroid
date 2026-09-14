@@ -9371,6 +9371,180 @@
           }
         }
       }
+    },
+    "/reset": {
+      "post": {
+        "operationId": "postReset",
+        "tags": ["system"],
+        "summary": "トークン情報以外のワークスペースを全部消す",
+        "description": "記憶・日誌・ジョブ・承認待ち・継続中の依頼・受信箱・引き受けた仕事・アーカイブ・セッション・実行環境プロファイル・利用状況の台帳を全部消す。**認証トークンのプール・マネージャーへ降ろす環境変数・Web UI のログインアカウントは消さない。** 取り消せない。",
+        "responses": {
+          "200": {
+            "description": "消した件数の内訳。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "cleared": {
+                      "type": "object",
+                      "properties": {
+                        "memory": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "journal": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "jobs": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "approvals": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "schedules": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "schedulePhases": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "inbox": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "commitments": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "archive": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "sessions": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "profile": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "usageDaily": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "usageBaseline": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "usageLedger": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "usageTurns": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "sessionLog": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "memory",
+                        "journal",
+                        "jobs",
+                        "approvals",
+                        "schedules",
+                        "schedulePhases",
+                        "inbox",
+                        "commitments",
+                        "archive",
+                        "sessions",
+                        "profile",
+                        "usageDaily",
+                        "usageBaseline",
+                        "usageLedger",
+                        "usageTurns"
+                      ]
+                    }
+                  },
+                  "required": ["cleared"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`confirm: true` を伴っていない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "実行環境の持ち主ではない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "confirm": {
+                    "type": "boolean",
+                    "const": true
+                  }
+                },
+                "required": ["confirm"]
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

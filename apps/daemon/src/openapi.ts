@@ -1331,6 +1331,49 @@ export const archiveRemovedResponseSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// ワークスペースのリセット（/reset）— #workspace-reset
+// ---------------------------------------------------------------------------
+
+/**
+ * **`confirm: true` を必須にする。** CLI（読み確認プロンプト）・Web UI（確認
+ * ダイアログ）はどちらも呼ぶ前に人間へ確認するが、この口自体にも確認の印を
+ * 要求することで、確認を経ずにこの経路を直接叩くどんな呼び出し（スクリプト・
+ * 将来の第三の UI）も 400 で止まる——確認は UI の見た目の話にせず、契約の
+ * 一部にする。
+ */
+export const resetRequestSchema = z.object({
+  confirm: z.literal(true),
+});
+
+/**
+ * 何を何件消したか（`@alteroid/core` の `WorkspaceResetSummary` をそのまま
+ * JSON へ写す）。**件数を返すのは「本当に消えたか」を呼び出し側が確かめられる
+ * ようにするためである** — `{ ok: true }` だけでは、対象が既に空だったのか
+ * 何百件と消したのかが呼び出し側から見えない。
+ */
+export const resetResponseSchema = z.object({
+  cleared: z.object({
+    memory: z.number().int(),
+    journal: z.number().int(),
+    jobs: z.number().int(),
+    approvals: z.number().int(),
+    schedules: z.number().int(),
+    schedulePhases: z.number().int(),
+    inbox: z.number().int(),
+    commitments: z.number().int(),
+    archive: z.number().int(),
+    sessions: z.number().int(),
+    profile: z.number().int(),
+    usageDaily: z.number().int(),
+    usageBaseline: z.number().int(),
+    usageLedger: z.number().int(),
+    usageTurns: z.number().int(),
+    /** pg 構成でだけ付く（`WorkspaceResetSummary.sessionLog` の doc）。 */
+    sessionLog: z.number().int().optional(),
+  }),
+});
+
+// ---------------------------------------------------------------------------
 // documentation（`GET /openapi.json` の骨格）
 // ---------------------------------------------------------------------------
 

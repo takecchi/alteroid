@@ -381,6 +381,54 @@ export function usePostEvent() {
   );
 }
 
+/**
+ * `POST /reset` が返す、消した件数の内訳。**何を残し何を消すかは
+ * `@alteroid/core` の `resetWorkspaceState` が正本**（サーバ側の doc）——
+ * ここは応答の形を写すだけで、範囲を選ぶ口は持たない。
+ */
+export interface WorkspaceResetSummary {
+  memory: number;
+  journal: number;
+  jobs: number;
+  approvals: number;
+  schedules: number;
+  schedulePhases: number;
+  inbox: number;
+  commitments: number;
+  archive: number;
+  sessions: number;
+  profile: number;
+  usageDaily: number;
+  usageBaseline: number;
+  usageLedger: number;
+  usageTurns: number;
+  /** pg 構成でだけ付く。 */
+  sessionLog?: number;
+}
+
+/**
+ * ワークスペースをリセットする（「トークン情報以外を全部消す」）。
+ *
+ * **呼ぶ前に確認するのは呼び出し側（`settings.tsx` のダイアログ）の仕事**で
+ * あり、この hook 自体は確認を持たない——`POST /reset` はサーバ側で
+ * `confirm: true` を必須にしているので、確認を経ない直接の呼び出しはどこから
+ * 来ても 400 で止まる（二重の安全網の片方をここが担う）。
+ *
+ * **呼んだ後は全キャッシュを引き直す。** `ApiProvider` が接続先を切り替えた
+ * ときと同じ形（`api.tsx` の `previousBaseUrl` の effect）——記憶・日誌・
+ * ジョブ・スケジュール等すべてが変わるので、種類を選んで落とす形は選び漏れが
+ * そのまま「消えたのに画面には残る」になる。
+ */
+export function useResetWorkspace() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(async (): Promise<WorkspaceResetSummary> => {
+    const result = await api.api.POST('/reset', { body: { confirm: true } }).then(unwrap);
+    await mutate(() => true);
+    return result.cleared;
+  }, [api, mutate]);
+}
+
 /** 会話を終える。クローンがここで学びを蒸留する。 */
 export function useEndConversation() {
   const api = useApi();

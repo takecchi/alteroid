@@ -107,6 +107,11 @@ export class FsInboxStore implements InboxStore {
       .map((entry) => ({ event: entry.event, at: entry.at, deliveries: entry.deliveries }));
   }
 
+  /** 全件を消す（`InboxStore.clear` の doc）。 */
+  async clear(): Promise<number> {
+    return this.#update((file) => ({ next: { events: [] }, result: file.events.length }));
+  }
+
   async #read(): Promise<InboxFile> {
     try {
       const raw = await readFile(this.#path, 'utf8');

@@ -50,6 +50,9 @@ function fakeJournal(entries: JournalEntry[]): JournalStore {
       }
       return query.limit === undefined ? found : found.slice(0, query.limit);
     },
+    async clear() {
+      throw new Error('このテストでは消さない');
+    },
   };
 }
 

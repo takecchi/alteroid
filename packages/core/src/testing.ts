@@ -422,6 +422,17 @@ export function createMemoryStores(): Stores {
       }
       return found;
     },
+    async clear() {
+      const removed = documents.size;
+      documents.clear();
+      humanTouchedAt.clear();
+      contentSha256.clear();
+      describedAt.clear();
+      describedBytes.clear();
+      describedBytesAt.clear();
+      createdAtStore.clear();
+      return removed;
+    },
   };
 
   const journal: JournalStore = {
@@ -483,6 +494,11 @@ export function createMemoryStores(): Stores {
     async get(id: string) {
       return entries.find((entry) => entry.id === id) ?? null;
     },
+    async clear() {
+      const removed = entries.length;
+      entries.length = 0;
+      return removed;
+    },
   };
 
   const jobStore: JobStore = {
@@ -501,6 +517,12 @@ export function createMemoryStores(): Stores {
     },
     async putApproval(approval) {
       approvals.set(approval.id, approval);
+    },
+    async clear() {
+      const removed = { jobs: jobs.size, approvals: approvals.size };
+      jobs.clear();
+      approvals.clear();
+      return removed;
     },
   };
 
@@ -540,6 +562,12 @@ export function createMemoryStores(): Stores {
       // **本物と同じく parse を通す。** 通さないと、この足場でだけ通る形の位相を
       // 書いたテストが緑になり、fs / pg では落ちる（動くのに嘘をつくスタブ）。
       schedulePhases.set(phase.kind, schedulePhaseSchema.parse(phase));
+    },
+    async clear() {
+      const removed = { schedules: schedules.size, phases: schedulePhases.size };
+      schedules.clear();
+      schedulePhases.clear();
+      return removed;
     },
   };
 
@@ -610,6 +638,11 @@ export function createMemoryStores(): Stores {
       if (!existing || existing.closedAt !== undefined) return false;
       commitments.set(id, { ...existing, body, editedAt: at, editedBy: by });
       return true;
+    },
+    async clear() {
+      const removed = commitments.size;
+      commitments.clear();
+      return removed;
     },
   };
 
@@ -735,6 +768,13 @@ export function createMemoryStores(): Stores {
       archiveRemovals.set(id, { removedAt, bytes });
       return { kind: 'removed', bytes };
     },
+    async clear() {
+      const removed = archiveMeta.size;
+      archives.clear();
+      archiveRemovals.clear();
+      archiveMeta.clear();
+      return removed;
+    },
   };
   // **テストが指紋を持たない行を作れるようにする口**（#698。
   // `seedFingerprintlessArchiveRow` の doc）。`TranscriptArchive` interface に
@@ -767,6 +807,16 @@ export function createMemoryStores(): Stores {
     },
     async setProjectKey(value) {
       projectKey = value;
+    },
+    async clear() {
+      const removed = [cloneSessionId, transcriptGrave, lostSessionGrave, projectKey].filter(
+        (value) => value !== null,
+      ).length;
+      cloneSessionId = null;
+      transcriptGrave = null;
+      lostSessionGrave = null;
+      projectKey = null;
+      return removed;
     },
   };
 
@@ -852,6 +902,11 @@ export function createMemoryStores(): Stores {
     },
     async revert(previous) {
       envProfile = previous;
+    },
+    async clear() {
+      const existed = envProfile !== null;
+      envProfile = null;
+      return existed ? 1 : 0;
     },
   };
 
@@ -1101,6 +1156,22 @@ export function createMemoryStores(): Stores {
     async recordedManagerIds() {
       return new Set([...usageRows.values()].map((row) => row.managerId));
     },
+    async clear() {
+      const removed = {
+        daily: usageRows.size,
+        baseline: usageBaselines.size,
+        ledger: usageStartedAt === null ? 0 : 1,
+        turns: usageTurns.size,
+      };
+      usageRows.clear();
+      usageBaselines.clear();
+      usageTurns.clear();
+      usageStartedAt = null;
+      usageLayeredAt = null;
+      usageTokensAt = null;
+      usageTurnsAt = null;
+      return removed;
+    },
   };
 
   return {
@@ -1162,6 +1233,11 @@ function createMemoryInboxStore(): InboxStore {
       // **`claimPending` と違い、`unread` を1文字も書き換えない**
       // （`InboxStore.peekPending` の doc。`pending()` と同じ倒れ先）。
       return [...unread.values()].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+    },
+    async clear(): Promise<number> {
+      const removed = unread.size;
+      unread.clear();
+      return removed;
     },
   };
 }

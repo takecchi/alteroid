@@ -842,6 +842,17 @@ export { clearRecentTracesForTesting } from './dropped-record.js';
  */
 export { installUncaughtNet } from './uncaught-net.js';
 
+/**
+ * ワークスペースのリセット（「トークン情報以外を全部消す」）。CLI の
+ * `alteroid reset` と `POST /reset`（`apps/daemon/src/app.ts`）が使う唯一の
+ * 正本 — 何を残し何を消すかはここにしか書かない（`workspace-reset.ts` の doc）。
+ */
+export {
+  resetWorkspaceState,
+  type ResetWorkspaceStateOptions,
+  type WorkspaceResetSummary,
+} from './workspace-reset.js';
+
 /** テスト用ユーティリティ（本番の配線には出てこない）。 */
 export {
   captureStderr,

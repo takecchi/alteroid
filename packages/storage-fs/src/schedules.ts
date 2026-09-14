@@ -135,6 +135,14 @@ export class FsScheduleStore implements ScheduleStore {
     }));
   }
 
+  /** 継続中の依頼と既定の仕込みの位相を両方消す（`ScheduleStore.clear` の doc）。 */
+  async clear(): Promise<{ schedules: number; phases: number }> {
+    return this.#update((file) => ({
+      next: { schedules: [], phases: [] },
+      result: { schedules: file.schedules.length, phases: file.phases.length },
+    }));
+  }
+
   async #read(): Promise<ScheduleFile> {
     try {
       const raw = await readFile(this.#path, 'utf8');

@@ -313,6 +313,21 @@ export class PgJobStore implements JobStore {
         set: { answeredAt, approval: value },
       });
   }
+
+  /**
+   * ジョブと承認待ちを両方消す（`JobStore.clear` の doc）。
+   *
+   * **`#cache`（段1/段2の覚え、上の doc）は直接触らない。** 次の `listJobs()`
+   * が段1（`jobs` テーブルへの素の SELECT）から必ずやり直すので、この
+   * `DELETE` の後は段1の結果が空になり、「段1に無くなった id は覚えから
+   * 落とす」のループが古い entry を自然に捨てる——これは `#cache` の doc が
+   * 明示的に想定している経路である。
+   */
+  async clear(): Promise<{ jobs: number; approvals: number }> {
+    const removedJobs = await this.#db.delete(jobs).returning({ id: jobs.id });
+    const removedApprovals = await this.#db.delete(approvals).returning({ id: approvals.id });
+    return { jobs: removedJobs.length, approvals: removedApprovals.length };
+  }
 }
 
 /**

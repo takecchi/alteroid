@@ -1784,6 +1784,7 @@ export async function main(): Promise<void> {
     profile: profileService,
     credentials: credentialService,
     tokens: tokenPoolService,
+    clearSessionLog: storage.clearSessionLog,
   });
   // 開けたこと自体は方針の変更であって禁止事項ではない。ただし**黙って**外へ
   // 出さない — ここは叩けばクローンのターンが起きる実行の口である。

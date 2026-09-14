@@ -106,6 +106,19 @@ export interface PersonaStore {
   documents(): Promise<MemoryDocument[]>;
 
   /**
+   * 全文書を消す（ワークスペースのリセット専用。#workspace-reset）。
+   *
+   * **`remove()` を文書の数だけ呼ぶのと同じ意味だが、器ごとに1操作で済ませる**
+   * （fs は memory ディレクトリごと作り直す、pg は `truncate`）。保護状態
+   * （`human_touched_at` 等）も同じ行・同じファイルに乗っているので一緒に消える
+   * ——過去に human で書かれた事実そのものは日誌に残るので、リセット後に新しく
+   * 書かれた記憶へは backfill が改めて印を立てられる。
+   *
+   * 消した件数を返す（`WorkspaceResetSummary` が申告に使う）。
+   */
+  clear(): Promise<number>;
+
+  /**
    * この文書の保護状態（`schema.ts` の `MemoryProtectionStatus`）を返す。
    *
    * **新しい真実ではない。** 実体は日誌（`memory_update.cause`）にあり、ここは
@@ -402,6 +415,21 @@ export interface JournalStore {
    * クローンから永久に読めなくなる＝能力の削除（north_star 禁止1）。
    */
   get(id: string): Promise<JournalEntry | null>;
+
+  /**
+   * 全件を消す（ワークスペースのリセット専用。#workspace-reset）。
+   *
+   * **これは「追記専用」の契約（`append` しか書き込みの口を持たない）への
+   * 例外である。** 通常運用でこの口を呼ぶ経路は無い——呼ぶのは
+   * `resetWorkspaceState`（`workspace-reset.ts`）だけで、依頼者が明示的に
+   * 「トークン情報以外を全部消す」と決めたときにしか届かない。日誌が守っている
+   * 「聞かずに実行した判断は必ず残る」という性質は、通常運用で消せないことに
+   * よってではなく、リセットが常に人間の明示的な決定を経由することによって
+   * 保たれる。
+   *
+   * 消した件数を返す。
+   */
+  clear(): Promise<number>;
 }
 
 /** ジョブと承認待ちキュー。M1 では承認待ちだけを使う。 */
@@ -412,6 +440,12 @@ export interface JobStore {
   listApprovals(options?: { pendingOnly?: boolean }): Promise<PendingApproval[]>;
   getApproval(id: string): Promise<PendingApproval | null>;
   putApproval(approval: PendingApproval): Promise<void>;
+
+  /**
+   * ジョブと承認待ちを両方とも消す（ワークスペースのリセット専用。
+   * #workspace-reset）。**この2つは1枚のストアなので、一緒に1操作で消す。**
+   */
+  clear(): Promise<{ jobs: number; approvals: number }>;
 }
 
 /**
@@ -474,6 +508,13 @@ export interface ScheduleStore {
 
   /** 同じ kind があれば置き換える。 */
   putPhase(phase: SchedulePhase): Promise<void>;
+
+  /**
+   * 継続中の依頼と、既定の仕込みの位相を両方とも消す（ワークスペースのリセット
+   * 専用。#workspace-reset）。**この2つは1枚のストア（fs は同じファイル、pg は
+   * 別テーブルだが同じ意味の単位）なので、一緒に1操作で消す。**
+   */
+  clear(): Promise<{ schedules: number; phases: number }>;
 }
 
 /**
@@ -698,6 +739,17 @@ export interface CommitmentStore {
    * なら、`journal.append` を必ず対にすること。
    */
   editBody(id: string, body: string, at: string, by: CommitmentEditedBy): Promise<boolean>;
+
+  /**
+   * 全件を消す（ワークスペースのリセット専用。#workspace-reset）。**未了・
+   * 片付いた行の両方、`unreadable`（issue #296）に回っていた読めない行も
+   * 含めて消す。** `close()` / `closeMany()` の「行は消さない」契約とは別の
+   * 操作である——あちらは日常運用の一部として通り、こちらは人間が明示的に
+   * 「引き受けた仕事ごと全部忘れる」と決めたときにしか呼ばれない。
+   *
+   * 消した件数を返す。
+   */
+  clear(): Promise<number>;
 }
 
 /**
@@ -782,6 +834,15 @@ export interface InboxStore {
    * 求めたときだけ呼ばれる）からのみ呼ぶ。
    */
   peekPending(): Promise<PendingInboxEvent[]>;
+
+  /**
+   * 全件を消す（ワークスペースのリセット専用。#workspace-reset）。配達回数
+   * （`deliveries`）ごと消える——残すべき理由が無い（次に同じ合図が来ても
+   * 初回として配ればよい）。
+   *
+   * 消した件数を返す。
+   */
+  clear(): Promise<number>;
 }
 
 /** 未読として残っていた合図1件。 */
@@ -995,6 +1056,16 @@ export interface TranscriptArchive {
    * ファイル）は、本文の中身を一切見ずに判定する。
    */
   remove(id: string): Promise<ArchiveRemoval>;
+
+  /**
+   * 全件を消す（ワークスペースのリセット専用。#workspace-reset）。
+   * **`remove()`（tombstone）とは違う——行そのものを消す。** 本文を落として
+   * 行を残す通常の消し込みとは、消える対象の大きさが違う（`archive` は
+   * 3層のうち最も生々しい生ログを持つ、可観測性の最下段）。
+   *
+   * 消した件数を返す。
+   */
+  clear(): Promise<number>;
 }
 
 /**
@@ -1031,6 +1102,15 @@ export interface ProfileStore {
    * 更新日時を呼び出し側が決められる口なので、失敗の巻き戻し専用である。
    */
   revert(previous: EnvProfile | null): Promise<void>;
+
+  /**
+   * 置かれていたプロファイルを外す（ワークスペースのリセット専用。
+   * #workspace-reset）。`write('')` と同じ結果になるが、専用の口として持つ
+   * ことで「リセットが呼んだ」ことを実装の側で区別できるようにしてある。
+   *
+   * 何か置かれていたら `1`、置かれていなければ `0` を返す。
+   */
+  clear(): Promise<number>;
 }
 
 /**
@@ -1215,6 +1295,19 @@ export interface UsageStore {
    * `tools.ts`）が行う。
    */
   recordedManagerIds(): Promise<Set<string>>;
+
+  /**
+   * 台帳（`usage_daily` / `usage_baseline` / `usage_ledger` / `usage_turns`
+   * に当たる4つの単位）を丸ごと消す（ワークスペースのリセット専用。
+   * #workspace-reset）。**`since` / `layersSince` / `tokensSince` /
+   * `turnsSince` も一緒に消える** — 台帳そのものを空にする以上、「いつから
+   * 記録しているか」も同時に無かったことになる。中途半端に日次行だけを
+   * 消して開始時刻だけ残すと、`aggregate()` が「記録の空白期間」と「本当に
+   * 使っていない期間」を見分けられなくなる。
+   *
+   * 消した行数の内訳を返す。
+   */
+  clear(): Promise<{ daily: number; baseline: number; ledger: number; turns: number }>;
 }
 
 /**
@@ -1292,6 +1385,19 @@ export interface SessionRegistry {
    */
   getProjectKey(): Promise<string | null>;
   setProjectKey(projectKey: string): Promise<void>;
+
+  /**
+   * ここが持つ4つの欄（クローンのセッション id・2つの墓標・生ログの scope）を
+   * すべて消す（ワークスペースのリセット専用。#workspace-reset）。
+   *
+   * **これは resume を諦める操作である。** クローンの同一性は記憶に宿るので
+   * （`architecture.md`「寿命モデル」）、ここが空でも次のターンからクローンは
+   * 記憶を通じて再構成される——失うのはいま走っていたセッションへ戻る手段
+   * だけである。
+   *
+   * 消した欄の数（0〜4）を返す。
+   */
+  clear(): Promise<number>;
 }
 
 /**

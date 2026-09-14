@@ -27,6 +27,7 @@ import {
   profileStatusCommand,
 } from './profile.js';
 import { alteroidRoot } from './paths.js';
+import { resetCommand } from './reset.js';
 import { runnersCommand } from './runners.js';
 import {
   credentialListCommand,
@@ -501,6 +502,21 @@ daemonCommand
   .description('デーモンの状態を見る')
   .action(async () => {
     await daemonStatusCommand();
+  });
+
+/**
+ * ワークスペースのリセット（「トークン情報以外を全部消す」）。
+ *
+ * **既定では対話で確認する**（`resetCommand` の doc）。`--yes` はスクリプト・
+ * CI から呼ぶための脱出口——確認そのものを無くすのではなく、確認の主体を
+ * 対話の相手から呼び出し側へ移すだけである。
+ */
+program
+  .command('reset')
+  .description('ワークスペースをリセットする（トークン情報以外を全部消す。取り消せない）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け）')
+  .action(async (options: { yes?: boolean }) => {
+    await resetCommand(options);
   });
 
 /**
