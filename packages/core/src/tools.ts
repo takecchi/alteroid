@@ -6284,9 +6284,8 @@ export function createCloneTools(context: ToolContext) {
               // **既存の `lost` の注記（すぐ上）とは軸が違う（Issue #857）。**
               // あちらは「戻れなかった」という**一つの観測**の名乗りと、次の一手
               // （確かめてから `manager_start`）である。こちらは**依頼者が何を
-              // 観測していないか**——本文が届いているか（軸1）と、刻印で照合できる
-              // 時代か（軸2）——で、`failed` にも出る。**両方出しても同じことを
-              // 2回は言っていない**ので、どちらも削っていない。
+              // 観測していないか**——本文が届いているか——で、`failed` にも出る。
+              // **両方出しても同じことを2回は言っていない**ので、どちらも削っていない。
               //
               // **`lost` の行すべてに同じ注記が出て順位が付かない**、というのが
               // #857 が直した穴そのものである（依頼者は1本ずつ `gh` を叩いて
@@ -6598,8 +6597,8 @@ export function createCloneTools(context: ToolContext) {
         const denied =
           part === 'request' ? null : describeDenials(context.managers.denials(managerId));
         // **一覧と同じ分類を、掘った先でも同じ字面で出す（Issue #857）。**
-        // `manager_list` で順位が付いた理由（本文が届いているか／刻印で照合
-        // できる時代か）が、掘った先で消えないようにする。
+        // `manager_list` で順位が付いた理由（本文が届いているか）が、
+        // 掘った先で消えないようにする。
         //
         // **`part === 'request'` では出さない。** 依頼文は「何が観測されて
         // いないか」の話ではない（`failure` / `systemError` / `denied` と

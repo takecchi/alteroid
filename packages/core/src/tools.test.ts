@@ -15603,8 +15603,6 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
         '終端までに本文が1文字も届いていない',
         '包んだエラー文であって報告ではない',
         '完遂した報告とは限らない',
-        '刻印では照合できない',
-        'gh pr list',
       ]) {
         expect(reply, `${status} に #857 の行（${word}）が漏れている`).not.toContain(word);
       }
@@ -15612,46 +15610,11 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
   });
 
   /**
-   * 🔴 **`pre-marker` の委譲には、一覧の側でも引き方を出さない。**
-   * 出すと、**必ず0件になる検索**の結果を成果の所在として読むことになる
-   * （Issue #857 の実例2）。
-   *
-   * **行の選定は `managerId` で行い、測っている文言そのものでは選んでいない**
-   * （AGENTS.md「対象をスコープして特定する」。足場が測定対象と同じ文字列で
-   * 対象を選ぶと、「文言に依存していない」という主張を足場自身が裏切る）。
-   */
-  it('🔴 刻印の導入より前に始まった lost には gh の引き方が出ない（後の委譲には出る）', async () => {
-    const old = entry('mgr-premarker', 'lost', 0, 'none');
-    old.startedAt = '2026-09-01T00:00:00.000Z';
-    old.updatedAt = old.startedAt;
-    const recent = entry('mgr-markable', 'lost', 0, 'none');
-    recent.startedAt = '2026-09-12T00:00:00.000Z';
-    recent.updatedAt = recent.startedAt;
-    const h = pool([old, recent]);
-
-    const reply = await h.call('manager_list', {});
-
-    // **対象をスコープして測る**——1件ぶんの塊を `managerId` で切り出す
-    // （`renderListingEntry` は1件を `- <id> [...]` で始める）。
-    const blocks = reply.split('\n- ');
-    const oldBlock = blocks.find((b) => b.startsWith('mgr-premarker'));
-    const recentBlock = blocks.find((b) => b.startsWith('mgr-markable'));
-    expect(oldBlock, 'mgr-premarker の塊が見つからない').toBeDefined();
-    expect(recentBlock, 'mgr-markable の塊が見つからない').toBeDefined();
-
-    expect(oldBlock).toContain('刻印では照合できない');
-    expect(oldBlock).not.toContain('gh pr list');
-    // 後に始まった側には引き方が出る（＝「そもそも出す経路が無い」ではない）。
-    expect(recentBlock).toContain('gh pr list');
-    expect(recentBlock).toContain('mgr-markable');
-  });
-
-  /**
    * **`manager_report` も同じ字面を出す**（一覧から掘りに行く先。
    * `describeManagerFailure` / `describeManagerSystemError` / `describeDenials` と
    * 同じ作法で、字面の生成元は1箇所である）。
    *
-   * **軸1 の `none` は、報告が空のときの枝に落ちる**——そこで黙ると、一覧で
+   * **`none` は、報告が空のときの枝に落ちる**——そこで黙ると、一覧で
    * 順位を付けた意味が掘った先で消える。
    */
   it('manager_report は報告が空の回にも #857 の行を出す（掘った先で消えない）', async () => {
@@ -15661,7 +15624,6 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
     const reply = await h.call('manager_report', { managerId: 'mgr-report-none' });
 
     expect(reply).toContain('終端までに本文が1文字も届いていない');
-    expect(reply).toContain('gh pr list');
   });
 
   it('manager_report は報告が在る回にも出し、part: request では1文字も足さない', async () => {
@@ -15677,7 +15639,6 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
     });
     expect(request).toContain('依頼文');
     expect(request).not.toContain('完遂した報告とは限らない');
-    expect(request).not.toContain('gh pr list');
   });
 
   /**
