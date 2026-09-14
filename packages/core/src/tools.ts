@@ -72,6 +72,7 @@ import type {
   ManagerSummary,
   ManagerTranscript,
   RunnerBacklogSnapshot,
+  RunnerPushOutcome,
 } from './manager.js';
 import {
   applyMemoryFrontmatterPatch,
@@ -5357,7 +5358,6 @@ export function createCloneTools(context: ToolContext) {
             createdAt: view.createdAt ?? '（記録が無い）',
             updatedAt: view.updatedAt ?? '（記録が無い）',
             extra: [
-              view.source === 'env' ? '  器の環境変数を指す行（値を持たない）' : null,
               view.sha256 === undefined ? null : `  指紋 ${view.sha256}`,
               view.cooldownUntil === undefined
                 ? null
@@ -6284,9 +6284,8 @@ export function createCloneTools(context: ToolContext) {
               // **既存の `lost` の注記（すぐ上）とは軸が違う（Issue #857）。**
               // あちらは「戻れなかった」という**一つの観測**の名乗りと、次の一手
               // （確かめてから `manager_start`）である。こちらは**依頼者が何を
-              // 観測していないか**——本文が届いているか（軸1）と、刻印で照合できる
-              // 時代か（軸2）——で、`failed` にも出る。**両方出しても同じことを
-              // 2回は言っていない**ので、どちらも削っていない。
+              // 観測していないか**——本文が届いているか——で、`failed` にも出る。
+              // **両方出しても同じことを2回は言っていない**ので、どちらも削っていない。
               //
               // **`lost` の行すべてに同じ注記が出て順位が付かない**、というのが
               // #857 が直した穴そのものである（依頼者は1本ずつ `gh` を叩いて
@@ -6598,8 +6597,8 @@ export function createCloneTools(context: ToolContext) {
         const denied =
           part === 'request' ? null : describeDenials(context.managers.denials(managerId));
         // **一覧と同じ分類を、掘った先でも同じ字面で出す（Issue #857）。**
-        // `manager_list` で順位が付いた理由（本文が届いているか／刻印で照合
-        // できる時代か）が、掘った先で消えないようにする。
+        // `manager_list` で順位が付いた理由（本文が届いているか）が、
+        // 掘った先で消えないようにする。
         //
         // **`part === 'request'` では出さない。** 依頼文は「何が観測されて
         // いないか」の話ではない（`failure` / `systemError` / `denied` と
@@ -7183,6 +7182,12 @@ export function createCloneTools(context: ToolContext) {
         '版が「不明」（器が自分の版を知らない）と「未確認」（名乗りをまだ聞けていない）は' +
           '別物で、疑う先が違う（前者は器の設定、後者は登録とネットワーク）。' +
           'state が lost の器の版は黙る前に聞いた古い値である。',
+        '「直近の押し込み」は、その器へプロファイル・環境変数・認証トークンを配る' +
+          '（`#connectTo`/繋ぎ直しのたびに必ず試みる）処理が、直近どうだったかである。' +
+          'state が connected でもこれが1つでも「失敗」なら、その種類はまだ古い値の' +
+          'ままで走っている——manager_start する前にここを見て気づける。' +
+          '「失敗」は自分から諦めずに挑み直すので、次に見たときには直っていることがある' +
+          '（人間が手で繋ぎ直す必要は無い）。まだ一度も試みていない種類は行ごと出ない。',
         'resources: true を渡すと器ごとの pids（プロセス数）の現在値/上限も出る' +
           '（#315 案1）。**pids の現在値/上限そのものは今も器の合計である**——何が' +
           'その数を持っているかはこの2つの数字からは分からない。空き（上限 − ' +
@@ -7337,6 +7342,30 @@ export function createCloneTools(context: ToolContext) {
           }
           if (fingerprints === true && runner.profile !== undefined) {
             lines.push(`  プロファイルの指紋: ${runner.profile.sha256}`);
+          }
+          /*
+           * **押し込みの結果（`pushHealth`）は `fingerprints` を見ない。**
+           * `credentials`/`profile` と違い runner への新しい往復を払わない
+           * （`RunnerOverview.pushHealth` の doc）ので、opt-in にする理由が無い。
+           *
+           * **3種類とも「まだ一度も試みていない」ことがある。** その種類だけ
+           * 行を出さない——`undefined` を「成功した」の既定値として埋めない。
+           */
+          if (runner.pushHealth !== undefined) {
+            const outcomeText = (label: string, outcome: RunnerPushOutcome | undefined) =>
+              outcome === undefined
+                ? undefined
+                : outcome.status === 'ok'
+                  ? `${label} ok（${outcome.at}）`
+                  : `${label} 失敗（${outcome.at}）: ${outcome.error ?? '理由不明'}`;
+            const pushLines = [
+              outcomeText('プロファイル', runner.pushHealth.profile),
+              outcomeText('環境変数', runner.pushHealth.credentials),
+              outcomeText('認証トークン', runner.pushHealth.agentToken),
+            ].filter((line): line is string => line !== undefined);
+            if (pushLines.length > 0) {
+              lines.push(`  直近の押し込み: ${pushLines.join(' / ')}`);
+            }
           }
           /*
            * **pids（#315 案1）。3つの状態を混ぜない。**

@@ -111,4 +111,19 @@ export class FsSessionRegistry implements SessionRegistry {
     await mkdir(this.#dir, { recursive: true });
     await writeFile(this.#projectKeyPath, `${JSON.stringify({ projectKey })}\n`, 'utf8');
   }
+
+  /** 4つの欄を全部消す（`SessionRegistry.clear` の doc）。 */
+  async clear(): Promise<number> {
+    const paths = [this.#path, this.#gravePath, this.#lostSessionPath, this.#projectKeyPath];
+    let removed = 0;
+    for (const path of paths) {
+      try {
+        await rm(path);
+        removed += 1;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    }
+    return removed;
+  }
 }

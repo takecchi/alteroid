@@ -6364,7 +6364,7 @@ class Clone implements CloneHost {
    */
   #vaultCredentialOverlay(): Record<string, string> {
     const rows = this.#credentialService?.vaultSnapshot() ?? [];
-    const resolved = resolveCredentialRows(rows, this.#env);
+    const resolved = resolveCredentialRows(rows, this.#env, 'clone');
     return Object.fromEntries(resolved.map((row) => [row.name, row.value]));
   }
 

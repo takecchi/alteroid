@@ -22,6 +22,10 @@ const rowSchema = z.object({
   name: z.string().regex(CREDENTIAL_NAME),
   value: z.string(),
   updatedAt: z.string(),
+  /** 撒く先。読めない・無い行は `'all'`（この列より前の全行の実際の挙動）。 */
+  scope: z.enum(['all', 'app', 'runner']).default('all'),
+  /** シークレット可否。読めない・無い行は `true`（この列より前の全行の実際の挙動）。 */
+  secret: z.boolean().default(true),
 });
 
 const fileSchema = z.object({
@@ -68,7 +72,16 @@ export class FsCredentialVaultStore implements CredentialVaultStore {
           rows.delete(entry.name);
           continue;
         }
-        rows.set(entry.name, { name: entry.name, value: entry.value, updatedAt: at });
+        // **呼び手（`credential-service.ts` の `resolveEntryForWrite`）が scope・
+        // secret を必ず解決してから渡す。** ここでは受け取ったものをそのまま
+        // 書くだけで、既定値の補完はしない（1か所で決める）。
+        rows.set(entry.name, {
+          name: entry.name,
+          value: entry.value,
+          updatedAt: at,
+          scope: entry.scope ?? 'all',
+          secret: entry.secret ?? true,
+        });
       }
       return { credentials: [...rows.values()] };
     });

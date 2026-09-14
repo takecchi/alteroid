@@ -315,6 +315,18 @@ export const managerCredentials = pgTable('manager_credentials', {
   name: text('name').primaryKey(),
   value: text('value').notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  /**
+   * 撒く先（`'all' | 'app' | 'runner'`）。2026-09-14 に追加。**既定は `'all'`**
+   * ——この列が無かった頃の全行は実際に両方へ撒かれていたので、`default 'all'`
+   * は過去を捏造しない（`migrate.ts` の該当 `alter table` のコメントを見よ）。
+   */
+  scope: text('scope').notNull().default('all'),
+  /**
+   * シークレット可否。2026-09-14 に追加。**既定は `true`**——この列が無かった
+   * 頃の全行は実際に「値を絶対に返さない」挙動だったので、これも過去を
+   * 捏造しない既定である。
+   */
+  secret: boolean('secret').notNull().default(true),
 });
 
 /**

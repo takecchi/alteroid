@@ -393,6 +393,12 @@ export class PgPersonaStore implements PersonaStore {
       .orderBy(asc(memory.slug));
     return rows.map(toDocument);
   }
+
+  /** 全文書を消す（`PersonaStore.clear` の doc）。保護状態も同じ行なので一緒に消える。 */
+  async clear(): Promise<number> {
+    const removed = await this.#db.delete(memory).returning({ slug: memory.slug });
+    return removed.length;
+  }
 }
 
 interface MemoryRow {

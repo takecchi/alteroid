@@ -409,6 +409,26 @@ export class PgUsageStore implements UsageStore {
     return new Set(rows.map((row) => row.managerId));
   }
 
+  /**
+   * 4テーブルを丸ごと消す（`UsageStore.clear` の doc）。**`usage_ledger` も
+   * 消す** — `since` / `layersSince` / `tokensSince` / `turnsSince` の基準が
+   * 台帳と一緒に無かったことになる。
+   */
+  async clear(): Promise<{ daily: number; baseline: number; ledger: number; turns: number }> {
+    const daily = await this.#db.delete(usageDaily).returning({ date: usageDaily.date });
+    const baseline = await this.#db
+      .delete(usageBaseline)
+      .returning({ managerId: usageBaseline.managerId });
+    const ledger = await this.#db.delete(usageLedger).returning({ id: usageLedger.id });
+    const turns = await this.#db.delete(usageTurns).returning({ date: usageTurns.date });
+    return {
+      daily: daily.length,
+      baseline: baseline.length,
+      ledger: ledger.length,
+      turns: turns.length,
+    };
+  }
+
   #toRow(row: typeof usageDaily.$inferSelect): UsageRow {
     return {
       date: row.date,

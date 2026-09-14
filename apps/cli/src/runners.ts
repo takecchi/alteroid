@@ -2,6 +2,8 @@ import { stdout } from 'node:process';
 
 import {
   describeRevisionStatus,
+  type RunnerPushHealth,
+  type RunnerPushOutcome,
   type RunnerRevisionReport,
   type RunnerRevisionStatus,
 } from '@alteroid/core';
@@ -60,6 +62,14 @@ interface RunnersView {
     instanceId?: string;
     instanceSince?: string;
     revision: RunnerRevisionStatus;
+    /**
+     * 押し込み（push）の直近結果。**指紋（`credentialsProbe`/`profileProbe`）とは
+     * 別物**——こちらはデーモンが最後に送ろうとして何が起きたかの記憶で、新たな
+     * 往復は発生しない。一度も試みていなければ欄自体が無い（`RunnerOverview.pushHealth`
+     * の doc）。この口はまだ `credentialsProbe`/`profileProbe` を読んでいない
+     * （版と同じく段階的に足す）。
+     */
+    pushHealth?: RunnerPushHealth;
   }[];
   daemonRevision: RunnerRevisionReport;
 }
@@ -113,6 +123,15 @@ export function renderRunners(view: RunnersView): string {
     // 片方でもう片方を推測することになる。
     lines.push(`  版: ${describeRevisionStatus(runner.revision)}`);
     if (runner.error !== undefined) lines.push(`  直近の失敗: ${runner.error}`);
+    // **押し込みの結果（`pushHealth`）は新たな往復を払わない**（`credentialsProbe`/
+    // `profileProbe` とは別物）ので、その場で聞き直すのではなく記憶をそのまま出す。
+    // **3種類とも「まだ一度も試みていない」ことがある。** その種類だけ行を出さない
+    // ——`undefined` を「成功した」の既定値として埋めない（`packages/core/src/tools.ts`
+    // の `runner_list` と同じ判断・同じ文言）。
+    if (runner.pushHealth !== undefined) {
+      const line = renderPushHealth(runner.pushHealth);
+      if (line !== undefined) lines.push(`  直近の押し込み: ${line}`);
+    }
   }
 
   // **器ごとのマネージャーの本数はここでは出さない。** `GET /runners` はそれを
@@ -121,4 +140,24 @@ export function renderRunners(view: RunnersView): string {
   // 本数が要るなら `alteroid` の別の口（`/managers`）が持つ。
 
   return lines.join('\n');
+}
+
+/**
+ * `pushHealth` の3欄（プロファイル・環境変数・認証トークン）を1行へまとめる。
+ * **独立の軸として扱う** — 1つが失敗していても他の成否を畳まない。1つも
+ * 試みていなければ `undefined` を返し、呼び出し側で行そのものを出さない。
+ */
+function renderPushHealth(pushHealth: RunnerPushHealth): string | undefined {
+  const outcomeText = (label: string, outcome: RunnerPushOutcome | undefined) =>
+    outcome === undefined
+      ? undefined
+      : outcome.status === 'ok'
+        ? `${label} ok（${outcome.at}）`
+        : `${label} 失敗（${outcome.at}）: ${outcome.error ?? '理由不明'}`;
+  const parts = [
+    outcomeText('プロファイル', pushHealth.profile),
+    outcomeText('環境変数', pushHealth.credentials),
+    outcomeText('認証トークン', pushHealth.agentToken),
+  ].filter((part): part is string => part !== undefined);
+  return parts.length === 0 ? undefined : parts.join(' / ');
 }

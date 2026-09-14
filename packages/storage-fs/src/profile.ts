@@ -75,4 +75,11 @@ export class FsProfileStore implements ProfileStore {
     const at = new Date(previous.updatedAt);
     await utimes(this.#path, at, at);
   }
+
+  /** 外す（`ProfileStore.clear` の doc）。 */
+  async clear(): Promise<number> {
+    const existed = (await this.read()) !== null;
+    await rm(this.#path, { force: true });
+    return existed ? 1 : 0;
+  }
 }

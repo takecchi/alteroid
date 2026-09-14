@@ -171,6 +171,12 @@ export class PgJournalStore implements JournalStore {
     noteDroppedJournalRowsSummary(dropped);
     return null;
   }
+
+  /** 全件を消す（`JournalStore.clear` の doc）。 */
+  async clear(): Promise<number> {
+    const removed = await this.#db.delete(journal).returning({ seq: journal.seq });
+    return removed.length;
+  }
 }
 
 /**

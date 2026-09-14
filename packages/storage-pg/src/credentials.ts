@@ -10,7 +10,7 @@ import type { Db } from './db.js';
 import { managerCredentials } from './schema.js';
 
 /**
- * マネージャーへ降ろす環境変数の正本（クラウド段）。
+ * マネージャーへ降ろす環境変数の正本（クラウド段)。
  *
  * fs 版（`~/.alteroid/credentials.json`）と同じものの器違いである。器が変わって
  * できなくなることを作らない（M4 受け入れ基準1）。
@@ -48,6 +48,11 @@ export class PgCredentialVaultStore implements CredentialVaultStore {
           name: row.name,
           value: row.value,
           updatedAt: row.updatedAt.toISOString(),
+          // **列は `not null default` 済みなので常に文字列/真偽値が来る**——
+          // ここでの `??` はテスト用の PGlite に旧スキーマの行が残っている
+          // 場合の保険であって、通常運用では素通りするだけである。
+          scope: (row.scope ?? 'all') as StoredCredential['scope'],
+          secret: row.secret ?? true,
         }))
     );
   }
@@ -62,12 +67,17 @@ export class PgCredentialVaultStore implements CredentialVaultStore {
       await this.#db.delete(managerCredentials).where(inArray(managerCredentials.name, removed));
     }
     for (const entry of upserted) {
+      // **呼び手（`credential-service.ts` の `resolveEntryForWrite`）が scope・
+      // secret を必ず解決してから渡す。** ここでは受け取ったものをそのまま
+      // 書くだけで、既定値の補完はしない（1か所で決める）。
+      const scope = entry.scope ?? 'all';
+      const secret = entry.secret ?? true;
       await this.#db
         .insert(managerCredentials)
-        .values({ name: entry.name, value: entry.value, updatedAt: at })
+        .values({ name: entry.name, value: entry.value, updatedAt: at, scope, secret })
         .onConflictDoUpdate({
           target: managerCredentials.name,
-          set: { value: entry.value, updatedAt: at },
+          set: { value: entry.value, updatedAt: at, scope, secret },
         });
     }
     return this.list();

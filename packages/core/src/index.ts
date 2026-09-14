@@ -241,13 +241,6 @@ export {
   type RenderedMemory,
   type RenderMemoryDocumentsOptions,
 } from './memory.js';
-/**
- * PR / Issue の本文に置く「出所の刻印」（Issue #850）。
- *
- * `CLONE_ACTOR_ID`（`usage.ts`）と語彙を共有する理由・`ORIGIN_HUMAN` が
- * 要る理由は `origin-marker.ts` の doc を見よ。
- */
-export { formatOriginMarker, ORIGIN_HUMAN, ORIGIN_MARKER_NAME } from './origin-marker.js';
 export type { CloneSystemPromptInput } from './prompt.js';
 export {
   buildCloneSystemPrompt,
@@ -384,7 +377,8 @@ export {
 } from './archive-continuity.js';
 /**
  * クローンの自己認識。正典（`docs/*.md`）の全文はビルド時に焼き込まれる
- * （`scripts/write-canon.mjs`）。要約を手書きしないこと — docs と二重管理になる。
+ * （`packages/core/scripts/write-canon.mjs`）。要約を手書きしないこと — docs と
+ * 二重管理になる。
  */
 export {
   CANON_DOCUMENTS,
@@ -511,6 +505,8 @@ export {
   type RunnerFleetOverview,
   type RunnerManagerEntry,
   type RunnerOverview,
+  type RunnerPushHealth,
+  type RunnerPushOutcome,
   resolveWorkspacePolicy,
   type WorkspacePolicy,
 } from './manager.js';
@@ -558,6 +554,7 @@ export {
   credentialNamesShadowedByProfile,
   ROTATABLE_CREDENTIAL_KEYS,
   POOL_OWNED_CREDENTIAL_NAMES,
+  ENV_FILE_OWNED_CREDENTIAL_NAMES,
   isWithheldCredentialName,
   createCredentialStore,
   fingerprintOf,
@@ -572,10 +569,20 @@ export {
  */
 export {
   createCredentialService,
+  resolveCredentialRows,
   type ApplyCredentialsResult,
   type CredentialService,
   type CredentialServiceOptions,
 } from './credential-service.js';
+/**
+ * alteroid 自身の運用設定（TZ・自律のスケジュール等）を、環境変数の袋（DB正本）へ
+ * 播種・反映する（2026-09-14）。
+ */
+export {
+  APP_ENV_VAR_DEFAULTS,
+  applyAppScopedEnvVars,
+  seedDefaultEnvVars,
+} from './env-vars-boot.js';
 /**
  * 実行環境プロファイル（`.zprofile` 相当）。**環境変数を器に増やす代わりの口**で、
  * 用途が増えるたびに実装を直さずに済ませるためにある（`profile.ts`）。
@@ -620,9 +627,7 @@ export {
   DEFAULT_TOKEN_ROTATION_POLICY,
   DEFAULT_TOKEN_ROTATION_SETTINGS,
   TokenPoolInputError,
-  buildEnvToken,
   credentialOf,
-  isEnvToken,
   markTokenUnusable,
   markTokenUsable,
   normalizeTokenPool,
@@ -673,7 +678,6 @@ export {
   describeTokenRotation,
   tokenRestoreEntry,
   tokenRotationEntry,
-  type TokenEnsureEnvOutcome,
   type TokenProbePort,
   type TokenReconsiderReason,
   type TokenRestoreOutcome,
@@ -840,6 +844,17 @@ export { clearRecentTracesForTesting } from './dropped-record.js';
  * `uncaughtExceptionMonitor` なのか（実測の表つき）は `uncaught-net.ts` に在る。
  */
 export { installUncaughtNet } from './uncaught-net.js';
+
+/**
+ * ワークスペースのリセット（「トークン情報以外を全部消す」）。CLI の
+ * `alteroid reset` と `POST /reset`（`apps/daemon/src/app.ts`）が使う唯一の
+ * 正本 — 何を残し何を消すかはここにしか書かない（`workspace-reset.ts` の doc）。
+ */
+export {
+  resetWorkspaceState,
+  type ResetWorkspaceStateOptions,
+  type WorkspaceResetSummary,
+} from './workspace-reset.js';
 
 /** テスト用ユーティリティ（本番の配線には出てこない）。 */
 export {

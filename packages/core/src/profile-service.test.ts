@@ -90,6 +90,7 @@ function tripwire(stores: Stores, runner: RunnerClient & { received: string[] })
     },
     write: (script: string) => store.write(script),
     revert: (previous) => store.revert(previous),
+    clear: () => store.clear(),
   };
 
   const push = runner.setProfile.bind(runner);

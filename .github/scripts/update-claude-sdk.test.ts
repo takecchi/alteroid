@@ -412,6 +412,9 @@ describe('open-claude-sdk-pr.sh', () => {
   // force push 前の「bot 以外のコミットが無いか」チェックのテストで使う。
   const BOT_EMAIL = '41898282+github-actions[bot]@users.noreply.github.com';
   const BOT_NAME = 'github-actions[bot]';
+  // #867 の CI未起動警告の describe から使うので、ここへ持つ（元は
+  // 「SDK_CI_TRIGGERED による CI未起動の通知」の中だけにあった）。
+  const WARNING_MARK = '> [!WARNING]';
 
   /** `reflect-release-prod.test.ts` と同じ手法：push が来たら1行記録するだけの
    * bare origin。ネットワークには一切触らない。 */
@@ -953,7 +956,6 @@ fi
   // （陽性）だけでなく検出しないこと（陰性対照）も対で測る** — 依頼者の言葉:
   // 「検出する歯だけを置くと、決定の巻き戻しが静かに通る」。
   describe('SDK_CI_TRIGGERED による CI未起動の通知（#867）', () => {
-    const WARNING_MARK = '> [!WARNING]';
     const PREFIXED_TITLE = `[CI未起動] ${TITLE}`;
 
     function writeCatalogDiff(s: ReturnType<typeof setup>): void {
@@ -1002,7 +1004,7 @@ fi
         expect(body).not.toContain('WARNING');
         expect(body).not.toContain('CI が付かない');
         expect(body).not.toContain('#867');
-        // 本文は元のままで、警告ブロックの追記が一切無い
+        // 本文は元のまま。警告ブロックの追記は一切無い。
         expect(body).toBe('本文\n');
         const calls = parseGhCalls(s.ghLog);
         expect(calls[1][calls[1].indexOf('--title') + 1]).toBe(TITLE);

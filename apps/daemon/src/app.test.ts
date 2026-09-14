@@ -11,6 +11,7 @@ import type {
   ManagerPool,
   ManagerSummary,
   RunnerClient,
+  RunnerPushHealth,
   ScheduleStatus,
   Scheduler,
   Stores,
@@ -78,6 +79,9 @@ function fakeClone() {
   // `POST /managers/:id/messages` が outcome ごとに正しい HTTP ステータスを写すことを
   // 見るためのノブ（#563）。既定は従来どおり `'delivered'`。
   let sendOutcome: 'answered' | 'delivered' | 'session_missing' = 'delivered';
+  // `GET /runners` が `ManagerPool.pushHealthOf(runnerId)` をそのまま出すことを
+  // 見るためのノブ。既定は空（一度も繋がっていない runner と同じ「無い」）。
+  const pushHealthByRunnerId = new Map<string, RunnerPushHealth>();
 
   const managers: ManagerPool = {
     async start() {
@@ -137,6 +141,11 @@ function fakeClone() {
     // （クローンの道具専用）ので、ここでは型を満たすだけの空スタブで足りる。
     async runners() {
       return { runners: [], unassigned: [], daemonRevision: { status: 'unknown' } };
+    },
+    // `GET /runners` は `pushHealthOf()` だけを直接呼ぶ（`runners()` 経由ではない）。
+    // push health を検証したいテストは `setPushHealth()` で個別に設定する。
+    pushHealthOf(runnerId) {
+      return pushHealthByRunnerId.get(runnerId);
     },
     async transcript(managerId) {
       const removed = removedTranscripts.get(managerId);
@@ -220,6 +229,9 @@ function fakeClone() {
     },
     setReply(events: ChatStreamEvent[]) {
       reply = events;
+    },
+    setPushHealth(runnerId: string, health: RunnerPushHealth) {
+      pushHealthByRunnerId.set(runnerId, health);
     },
   };
 }
@@ -6598,6 +6610,76 @@ describe('runner の版（GET /runners revision）', () => {
     // 依存するので、期待するのは「known か unknown のどちらかであり、
     // プレースホルダではない」ことだけである。
     expect(['known', 'unknown']).toContain(body.daemonRevision.status);
+  });
+});
+
+/**
+ * **`GET /runners` の `pushHealth`。** `app.ts` のハンドラは `entry`/`registry`
+ * からは取れず、`clone.managers.pushHealthOf(runnerId)` を直接呼んで結果を
+ * 差し込む——`runners()`（クローンの道具専用の経路）は経由しない。ここでは
+ * その配線だけを見る（`ManagerPool` 内部の押し込みロジック自体は
+ * `manager.test.ts` の担当）。
+ */
+describe('runner の押し込み結果（GET /runners pushHealth）', () => {
+  it('pushHealthOf() が返した値が、そのまま該当 runner の行に出る', async () => {
+    const registry = createRunnerRegistry();
+    await registry.register({
+      label: 'http://runner-with-health:4518',
+      open: async () => fakeRunner('runner-with-health') as never,
+    });
+    fake.setPushHealth('runner-with-health', {
+      profile: { status: 'ok', at: '2026-09-01T00:00:00.000Z' },
+      credentials: { status: 'failed', at: '2026-09-01T00:00:05.000Z', error: 'timeout' },
+    });
+
+    const withRunners = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      runners: registry,
+    });
+
+    const body = (await (await withRunners.request('/runners')).json()) as {
+      runners: { runnerId?: string; pushHealth?: unknown }[];
+    };
+    const entry = body.runners.find((r) => r.runnerId === 'runner-with-health');
+
+    expect(entry?.pushHealth).toEqual({
+      profile: { status: 'ok', at: '2026-09-01T00:00:00.000Z' },
+      credentials: { status: 'failed', at: '2026-09-01T00:00:05.000Z', error: 'timeout' },
+    });
+
+    await registry.stop();
+  });
+
+  it('pushHealthOf() が undefined を返す（一度も押し込みを試みていない）runner では、その行が出ない', async () => {
+    const registry = createRunnerRegistry();
+    await registry.register({
+      label: 'http://runner-without-health:4518',
+      open: async () => fakeRunner('runner-without-health') as never,
+    });
+    // `fake.setPushHealth` を一度も呼ばない＝既定のまま（`undefined`）。
+
+    const withRunners = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      runners: registry,
+    });
+
+    const body = (await (await withRunners.request('/runners')).json()) as {
+      runners: { runnerId?: string; pushHealth?: unknown }[];
+    };
+    const entry = body.runners.find((r) => r.runnerId === 'runner-without-health');
+
+    expect(entry).toBeDefined();
+    // **取れない軸に 0 の行を作らない。** キー自体が無いことを確かめる
+    // （`pushHealth: undefined` のような値を作って畳んでいないこと）。
+    expect(entry).not.toHaveProperty('pushHealth');
+
+    await registry.stop();
   });
 });
 

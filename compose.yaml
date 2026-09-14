@@ -1,14 +1,23 @@
 # ローカルと同じものを、コンテナ + PostgreSQL で常駐させる（roadmap M4）。
 #
-#   cp .env.example .env        # 3つ埋める（下記）
+#   cp .env.example .env        # 2つ埋める（下記）
 #   docker compose up -d
+#   docker compose exec app alteroid token add --label <名前> -f <path>  # 認証トークンを登録
 #   docker compose exec app alteroid chat
 #
-# `.env` に要るのは3つだけである:
+# `.env` に要るのは2つだけである:
 #
-#   CLAUDE_CODE_OAUTH_TOKEN=... # claude setup-token（人間が一度だけ）
 #   ALTEROID_RUNNER_TOKEN=...   # openssl rand -hex 32。**app と runner で同じ値**
-#   POSTGRES_PASSWORD=...       # openssl rand -hex 16
+#   ALTEROID_DATABASE_URL=...   # postgres://alteroid:<openssl rand -hex 16>@db:5432/alteroid
+#
+# ⚠️ 破壊的変更（2026-09-14）: `CLAUDE_CODE_OAUTH_TOKEN` は環境変数として廃止した。
+# クローン・マネージャーの認証は `alteroid token add`（トークンプール、DB 正本）
+# だけで持つ。1本も登録していないと起動はするが、クローンもマネージャーも走れない。
+#
+# ⚠️ 破壊的変更: 旧 `POSTGRES_PASSWORD` は廃止した。内蔵 db サービスもこの1本の
+# URL から起動するようになった（`docker/alteroid-db` が起動時にパースする）。
+# 旧い `.env` を持っている場合は `POSTGRES_PASSWORD=xxx` を
+# `ALTEROID_DATABASE_URL=postgres://alteroid:xxx@db:5432/alteroid` に書き換えること。
 #
 # マネージャーに「実装して PR を出して」と頼むなら、GitHub の鍵とコミットの身元も
 # 要る（無ければ公開リポジトリの clone だけができる）。**置き場は2つあり、器を
@@ -51,6 +60,12 @@
 # 下の `x-shared-env` を両方の役へ丸ごと渡している。**役ごとに違うのは
 # `ALTEROID_DATABASE_URL`（記憶ストアの鍵）だけ**で、それは app にしか無い。
 # 使う / 使わないは役が決めればよく、人間が2か所に別々の値を置く必要は無い。
+#
+# **この1本は db サービスの起動にも使われる。** 人間が書くのは `ALTEROID_DATABASE_URL`
+# だけで、`db` コンテナは起動時（`docker/alteroid-db`）にそこからユーザー名・
+# パスワード・db 名を取り出して postgres 公式イメージの起動ロジックへ渡す。
+# `POSTGRES_USER` / `POSTGRES_PASSWORD` を人間が別に書く必要は無くなった
+# （二重管理をやめた——食い違いようがない）。
 #
 # **合鍵も「同じ値を置くだけ」である。** runner は起動時（`docker/alteroid-runner`）に
 # sha256 へ畳み、素の値を自分の環境から落としてから node を exec する。だから
@@ -114,9 +129,8 @@ x-shared-env: &shared-env
   # 安定した識別子。台帳の `manager_id → runner_id` はこれで引く
   # （器を作り直しても同じ宛先として戻る）。
   ALTEROID_RUNNER_ID: ${ALTEROID_RUNNER_ID:-runner-primary}
-  # 認証はサブスクリプションの長期トークン（claude setup-token）。クローンも
-  # マネージャーも SDK セッションなので、両方に要る。
-  CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:?claude setup-token で取得して .env に置くこと}
+  # **認証は 2026-09-14 からトークンプール（DB 正本）だけで持つ。** ここには
+  # 環境変数を置かない——`alteroid token add` で登録する（`.env.example` 冒頭）。
   # 層とモデル帯の対応（クローン Fable / マネージャー Opus / 作業者 Sonnet）を
   # 差し替えるための置き場。**これは設定ではなく、人間の承認の置き場である** —
   # 対応は設計判断であり、変更には人間の承認が要る（AGENTS.md 地雷5）。費用を詰める
@@ -155,13 +169,18 @@ x-shared-env: &shared-env
   # 静かに無効になる。
   ALTEROID_DAILY_REPORT_AT: ${ALTEROID_DAILY_REPORT_AT:-22:00}
   ALTEROID_INITIATIVE_EVERY: ${ALTEROID_INITIATIVE_EVERY:-55}
-  # **ここだけフォールバック値を書かない。** 空・空白のみは「未設定」として
+  # **ここから3つはフォールバック値を書かない。** 空・空白のみは「未設定」として
   # コード側の既定へ落ちる（`apps/daemon/src/schedule.ts` の `value()` が
-  # `raw.trim().length > 0` で切る）ので、既定の時刻をここへ書き写す必要が無い
+  # `raw.trim().length > 0` で切る）ので、既定値をここへ書き写す必要が無い
   # ＝ 上2つが負っている「揃え続ける義務」がここには生まれない。**空で渡して
   # 安全なのは `ALTEROID_CLONE_MODEL` と同じ理由**で、空が未設定より悪くなる
   # `GIT_*` とは事情が違う。
   ALTEROID_MEMORY_TIDY_AT: ${ALTEROID_MEMORY_TIDY_AT:-}
+  ALTEROID_REPORT_LOOKBACK_DAYS: ${ALTEROID_REPORT_LOOKBACK_DAYS:-}
+  # `packages/core/src/manager.ts` の `WITHHELD_REPORT_FLUSH_MS`（既定30分）を
+  # 差し替える。**未設定なら既定を使う**——読むのは `env[WITHHELD_REPORT_FLUSH_MS_ENV_KEY]`
+  # で、空・空白は数値として読めずに既定へ倒れる（`resolveWithheldReportFlushMs` の doc）。
+  ALTEROID_WITHHELD_REPORT_FLUSH_MS: ${ALTEROID_WITHHELD_REPORT_FLUSH_MS:-}
   TZ: ${TZ:-Asia/Tokyo}
   # 入口の認証（誰がこの HTTP API を叩いてよいか）。**人間が置くのはここ1か所**で、
   # **走っている runner には残らない** — `docker/alteroid-runner` が `exec` の前に
@@ -184,6 +203,10 @@ x-shared-env: &shared-env
   # ブラウザが戻ってくる先の起点。**外から届く URL を書く**（プロバイダに登録する
   # Redirect URI は `<これ>/auth/google/callback` の1本だけでよい）。
   ALTEROID_PUBLIC_URL: ${ALTEROID_PUBLIC_URL:-}
+  # 画面（apps/web）を別オリジンに置く配置のための境界設定。**空（既定）なら
+  # CORS ヘッダを一切返さない**——そこが今までの姿勢であり、既定では1バイトも
+  # 変わらない（`apps/daemon/src/app.ts` の `parseAllowedOrigins` の doc）。
+  ALTEROID_ALLOWED_ORIGINS: ${ALTEROID_ALLOWED_ORIGINS:-}
   # GitHub を触るための鍵と、コミットの身元。**これは下＝外の世界へ手を伸ばす鍵で
   # あり、渡すのが正しい**（記憶ストアの鍵と逆。伏せると人間が Claude Code でできる
   # `gh pr create` が層を下りた瞬間にできなくなる＝デグレード。north_star 禁止1）。
@@ -220,16 +243,21 @@ x-shared-env: &shared-env
 
 services:
   db:
-    image: postgres:17-alpine
+    build:
+      context: ./docker
+      dockerfile: db.Dockerfile
     environment:
-      POSTGRES_USER: alteroid
       # 既定値を置かない。置けば「compose を読めば入れる」DB になる。
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?推測できない値を .env に置くこと}
-      POSTGRES_DB: alteroid
+      # ここから `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` を
+      # 取り出すのは起動時のシム（`docker/alteroid-db`）の仕事である。
+      ALTEROID_DATABASE_URL: ${ALTEROID_DATABASE_URL:?postgres://alteroid:<openssl rand -hex 16>@db:5432/alteroid の形で .env に置くこと（旧 POSTGRES_PASSWORD は廃止した）}
     volumes:
       - db:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U alteroid -d alteroid']
+      # ユーザー名・db 名を明示しない。`pg_isready` は「サーバーが接続を受け付けて
+      # いるか」を見るだけで、指定したロールでの認証はしない——`ALTEROID_DATABASE_URL`
+      # の中身に応じて動的に決まるユーザー名・db 名をここへ二重に持ち込まずに済む。
+      test: ['CMD-SHELL', 'pg_isready']
       interval: 5s
       timeout: 5s
       retries: 20
@@ -293,7 +321,9 @@ services:
       <<: *shared-env
       # **役ごとに違う唯一の変数。** 記憶・日誌・ジョブ・セッションの置き場であり、
       # この鍵はデーモンだけが持つ。共通ブロックへ移さないこと。
-      ALTEROID_DATABASE_URL: postgres://alteroid:${POSTGRES_PASSWORD}@db:5432/alteroid
+      # 人間が書いた値をそのまま渡す——`db` サービスも同じ値をパースして使うので
+      # （`docker/alteroid-db`）、ここで組み立て直す必要は無い。
+      ALTEROID_DATABASE_URL: ${ALTEROID_DATABASE_URL:?postgres://alteroid:<openssl rand -hex 16>@db:5432/alteroid の形で .env に置くこと（旧 POSTGRES_PASSWORD は廃止した）}
     volumes:
       # state（daemon.json）だけ。記憶は PostgreSQL 側にある。
       - state:/data/alteroid

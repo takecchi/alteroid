@@ -115,4 +115,10 @@ export class PgInboxStore implements InboxStore {
       .sort((a, b) => a.at.getTime() - b.at.getTime())
       .map((entry) => ({ event: entry.event, at: toIso(entry.at), deliveries: entry.deliveries }));
   }
+
+  /** 全件を消す（`InboxStore.clear` の doc）。 */
+  async clear(): Promise<number> {
+    const removed = await this.#db.delete(inboxEvents).returning({ id: inboxEvents.id });
+    return removed.length;
+  }
 }

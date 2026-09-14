@@ -41,6 +41,12 @@ interface CredentialFingerprint {
    * マネージャーへ渡す」）。
    */
   shadowsCloneEnv?: boolean;
+  /** 撒く先。'all'=共通(既定) / 'app'=clone だけ / 'runner'=manager だけ。 */
+  scope: 'all' | 'app' | 'runner';
+  /** シークレット可否。`false` の行だけ `value` が併走する。 */
+  secret: boolean;
+  /** `secret === false` の行だけ載る。 */
+  value?: string;
 }
 
 interface CredentialsView {
@@ -50,6 +56,22 @@ interface CredentialsView {
 interface CredentialsUpdateView {
   credentials: CredentialFingerprint[];
   runners: { runnerId: string; ok: boolean; error?: string }[];
+}
+
+function describeScope(scope: 'all' | 'app' | 'runner'): string {
+  switch (scope) {
+    case 'all':
+      return 'all（共通）';
+    case 'app':
+      return 'app（clone だけ）';
+    case 'runner':
+      return 'runner（manager だけ）';
+    default:
+      // **送られてくる値である。** CLI とデーモンは別々に配られうるので、
+      // 古い CLI が新しいデーモンの値を知らないことがある——投げずに
+      // 「未知」とそのまま出す（`apps/web` の `describeUnknown` と同じ判断）。
+      return `未知の撒く先（${String(scope)}）`;
+  }
 }
 
 export async function credentialListCommand(): Promise<void> {
@@ -69,7 +91,16 @@ export async function credentialListCommand(): Promise<void> {
   stdout.write('\n');
   for (const entry of view.credentials) {
     stdout.write(`${entry.name}\n`);
-    stdout.write(`  指紋 sha256=${entry.sha256} / 更新 ${entry.updatedAt}\n`);
+    stdout.write(
+      `  撒く先=${describeScope(entry.scope)} / ` +
+        `${entry.secret ? 'シークレット' : '非シークレット'} / 更新 ${entry.updatedAt}\n`,
+    );
+    // **`secret === false` の行だけ値が載る。** シークレットの行は指紋だけ。
+    stdout.write(
+      entry.secret
+        ? `  指紋 sha256=${entry.sha256}\n`
+        : `  値=${entry.value ?? '（サーバがまだ値を返していない版）'}\n`,
+    );
   }
   stdout.write('\n');
   // **「置いた」と「届いた」は別である。** 正本に在ることは、走っている runner の
@@ -110,8 +141,19 @@ export async function credentialListCommand(): Promise<void> {
 
 export async function credentialSetCommand(
   name: string,
-  options: { file?: string },
+  options: { file?: string; scope?: string; secret?: boolean },
 ): Promise<void> {
+  if (
+    options.scope !== undefined &&
+    options.scope !== 'all' &&
+    options.scope !== 'app' &&
+    options.scope !== 'runner'
+  ) {
+    throw new Error(
+      `--scope は all / app / runner のいずれかである（渡されたのは ${options.scope}）`,
+    );
+  }
+
   const raw =
     options.file === undefined || options.file === '-'
       ? await readAll()
@@ -133,7 +175,14 @@ export async function credentialSetCommand(
   }
 
   const target = await resolveTarget();
-  const view = (await put(target, [{ name, value }])) as CredentialsUpdateView;
+  const view = (await put(target, [
+    {
+      name,
+      value,
+      ...(options.scope === undefined ? {} : { scope: options.scope }),
+      ...(options.secret === undefined ? {} : { secret: options.secret }),
+    },
+  ])) as CredentialsUpdateView;
   stdout.write(`${name} を置きました。\n`);
   reportRunners(view);
 }
@@ -179,7 +228,10 @@ async function readAll(): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-async function put(target: Target, credentials: { name: string; value: string }[]) {
+async function put(
+  target: Target,
+  credentials: { name: string; value: string; scope?: string; secret?: boolean }[],
+) {
   return request(target, '/credentials', {
     method: 'PUT',
     body: JSON.stringify({ credentials }),

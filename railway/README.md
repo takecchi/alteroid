@@ -4,11 +4,11 @@ compose.yaml の3コンテナ構成（daemon / manager-runner / PostgreSQL）を
 
 **runner は増やせる。減らすのはまだできない。**
 
-|                   | 何で                              | 状態                                                                                               |
-| ----------------- | --------------------------------- | -------------------------------------------------------------------------------------------------- |
-| 新しく N 台建てる | `./railway/setup.sh -c 3`         | ある（既定は1台。台数は費用なので、増やすのは人間が言ったときだけ）                                |
-| 既存に足す        | `./railway/scale-runners.sh -n 3` | ある（下の「runner を増やす」）                                                                    |
-| 減らす            | —                                 | **無い。** その器で走っているマネージャーの移送が要り、移送は fencing の後（roadmap M5 PR4 → PR5） |
+|                   | 何で                              | 状態                                                                                                                                                                                             |
+| ----------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 新しく N 台建てる | `./railway/setup.sh -c 3`         | ある（既定は1台。台数は費用なので、増やすのは人間が言ったときだけ）                                                                                                                              |
+| 既存に足す        | `./railway/scale-runners.sh -n 3` | ある（下の「runner を増やす」）                                                                                                                                                                  |
+| 減らす            | —                                 | **無い。** 移送そのものは入っている（#485 PR-2。`POST /runners/vacate` / `ManagerPool#relocateFrom`）——ただしどの器を空けるかの判断はクローンの仕事で、`scale-runners.sh` はまだその口を呼ばない |
 
 roadmap M5 の「Railway の複数 Service …で runner 数を増減できるデプロイ定義」のうち、**増やす側だけが来ている**。減らす側を自動でやらないのは、**「落ちた」は観測の欠落であって停止の証明ではない**からで、いま減らすと同じセッションが2か所で走りうる。
 
@@ -180,14 +180,18 @@ compose の `stop_grace_period: 60s` に対応する。Railway の既定は短�
 ```bash
 npm i -g @railway/cli
 railway login
-claude setup-token          # → CLAUDE_CODE_OAUTH_TOKEN（人間が一度だけ）
 
 ./railway/setup.sh          # ここから下は全部これがやる
+# 立ち上がった後、認証トークンを登録する（2026-09-14 から環境変数では持たない）:
+#   railway ssh --service app
+#   echo -n "<claude setup-token の値>" | alteroid token add --label <名前>
 ```
 
 **埋めるものは compose と同じ `.env` である。** 在る値は読み、無い値だけ尋ね、作れるもの（合鍵）は作って `.env` へ書き戻す。だから「compose では動くのに Railway では埋め直し」が起きない。`.env` が無くても、尋ねた値を書き留めるので次からは尋ねない。
 
-途中で3つだけ尋ねる。どれも後から足せる。
+**置き先（ワークスペースとブランチ）も、明示しなければ尋ねる。** `-w` を省いてワークスペースが複数あるときは、一覧を見せた上でどこに作るか尋ねる（1つしか無ければ尋ねずそれを使う）。**黙って `railway init` へ投げていた頃は、複数ある人だけ `--workspace required in non-interactive mode` という、候補すら見えないエラーで止まっていた**（`-y` のときは今もこのエラーで止まるが、候補名がメッセージに出るようになった）。`-b` を省いたときも、既定（`release/prod`。無ければ origin の既定ブランチへ倒す）を見せた上で確認する。どちらも `-y` を付ければ今までどおり尋ねずに既定へ倒れる。
+
+途中でさらに3つ尋ねる。どれも後から足せる。
 
 | 尋ねること                                                      | いいえのとき                                      |
 | --------------------------------------------------------------- | ------------------------------------------------- |
@@ -236,11 +240,12 @@ alteroid chat
 npm i -g @railway/cli
 railway login
 
-# クローンとマネージャーの認証（サブスクリプションの長期トークン）
-claude setup-token          # → CLAUDE_CODE_OAUTH_TOKEN
-
 # 制御面の合鍵。**app と runner に同じ値を置くだけ**でよい
 openssl rand -hex 32        # → ALTEROID_RUNNER_TOKEN
+
+# クローンとマネージャーの認証は環境変数では持たない（2026-09-14 に廃止）。
+# 立ち上がった後に alteroid token add で登録する（下の「トークンを回す」節）。
+claude setup-token          # → alteroid token add --label <名前> -f <path>
 ```
 
 `.env.example` と同じものを Railway に置く、と思ってよい。**役ごとに違うのは `ALTEROID_DATABASE_URL` だけ**である。
@@ -286,13 +291,12 @@ railway add --database postgres
 >
 > そのため**ダッシュボードで値を直すときは2か所**になる（`app` と `runner`）。`.env` を直して `setup.sh` を回し直すか、`railway variable set K=V --service app` と `--service runner` の2回。走行中の仕事を殺さずに `GH_TOKEN` を差し替えるなら、変数ではなく後述「鍵を回す（走行中でも）」を使う。
 
-| 変数                      | 値                                               | なぜ                                                                                                                                                                                                                                                                                  |
-| ------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ALTEROID_RUNNER_TOKEN`   | `openssl rand -hex 32` の値                      | 制御面の合鍵。**同じ値を両方が持つだけでよい。** runner は起動時に sha256 へ畳み、素の値を自分の環境から落としてから走る（`docker/alteroid-runner`）ので、走っている runner に素の鍵は残らない                                                                                        |
-| `CLAUDE_CODE_OAUTH_TOKEN` | `claude setup-token` の値                        | クローンもマネージャーも SDK セッションなので、両方に要る                                                                                                                                                                                                                             |
-| `ALTEROID_RUNNER_URL`     | `http://${{runner.RAILWAY_PRIVATE_DOMAIN}}:4518` | 委譲の宛先（**app が読む。runner 自身は読まない**）。固定 URL をコードに埋めず、ここで名簿へ登録する。private network は Wireguard で暗号化済みなので `http://`。**複数台なら下の `ALTEROID_RUNNER_URLS` を使う**。どちらも起動時の種であって、繋ぐのは待ち受けを開いた後の背景である |
-| `ALTEROID_RUNNER_BIND`    | `::`                                             | runner の待ち受け。Railway の private network は IPv6（新しい環境は dual stack）で、既定の `127.0.0.1` のままだと daemon から届かない。**app 側は無視する**（daemon が見るのは `ALTEROID_BIND`）                                                                                      |
-| `ALTEROID_RUNNER_PORT`    | `4518`                                           | 同上                                                                                                                                                                                                                                                                                  |
+| 変数                    | 値                                               | なぜ                                                                                                                                                                                                                                                                                  |
+| ----------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ALTEROID_RUNNER_TOKEN` | `openssl rand -hex 32` の値                      | 制御面の合鍵。**同じ値を両方が持つだけでよい。** runner は起動時に sha256 へ畳み、素の値を自分の環境から落としてから走る（`docker/alteroid-runner`）ので、走っている runner に素の鍵は残らない                                                                                        |
+| `ALTEROID_RUNNER_URL`   | `http://${{runner.RAILWAY_PRIVATE_DOMAIN}}:4518` | 委譲の宛先（**app が読む。runner 自身は読まない**）。固定 URL をコードに埋めず、ここで名簿へ登録する。private network は Wireguard で暗号化済みなので `http://`。**複数台なら下の `ALTEROID_RUNNER_URLS` を使う**。どちらも起動時の種であって、繋ぐのは待ち受けを開いた後の背景である |
+| `ALTEROID_RUNNER_BIND`  | `::`                                             | runner の待ち受け。Railway の private network は IPv6（新しい環境は dual stack）で、既定の `127.0.0.1` のままだと daemon から届かない。**app 側は無視する**（daemon が見るのは `ALTEROID_BIND`）                                                                                      |
+| `ALTEROID_RUNNER_PORT`  | `4518`                                           | 同上                                                                                                                                                                                                                                                                                  |
 
 **台ごとに違う変数（Shared Variables に置いてはいけない唯一のもう1つ）**
 
@@ -439,6 +443,8 @@ su -s /bin/sh worker -c "curl -s http://127.0.0.1:4518/livez"
 
 app にも降りるが、それでよい。**クローンは人間の写像であり、人間は Claude Code に頼むだけでなく自分の手も持っている**（north_star「適用範囲」）。「クローンの道具はマネージャーだけ」は写像として成り立たない。
 
+**`./railway/setup.sh` で `GH_TOKEN` を入力した場合、置き場は Shared/Service Variables ではなく正本（DB）である。** `app` が上がった後に `railway ssh -- alteroid credential set` を自動で実行する（下の「変数の代わりに正本へ置く」と同じ形）。Service Variables に置くと「器を作り直すたびに人間が焼き直す」形に戻るため（AGENTS.md 地雷表）、`setup.sh` はここへは置かない。以下の「鍵を作る」〜「置く」は、**手で（ダッシュボードや CLI で直接）構成する場合の手順**である。
+
 ### 鍵を作る
 
 GitHub → Settings → Developer settings → Personal access tokens → **Fine-grained tokens**
@@ -514,7 +520,9 @@ alteroid credential remove SOME_OLD_KEY               # 外す（runner の器�
 
 **⚠️ 移行の順序。** 正本へ置いて `alteroid credential list` と `GET /runners` の指紋が揃うのを見てから、Shared Variables の側を消す。**逆順にすると、消した瞬間から次に降ろすまでのあいだ、器の環境変数にも正本にも無い状態ができる**（`GIT_AUTHOR_NAME` が無いと commit が `empty ident name` で即落ちる）。**空文字で残さないこと** —— 空は未設定より悪い。
 
-**それでも Shared Variables に残すもの**は、正本が降りる前から要るもの（`ALTEROID_RUNNER_TOKEN` / `ALTEROID_RUNNER_ID` / `ALTEROID_RUNNER_SOCKET`）と、**器自身が読むもの**（`ALTEROID_MANAGER_MODEL` / `ALTEROID_WORKER_MODEL`。あちらは SDK 子プロセスの env ではなく runner のプロセス自身が読むので、降ろしても効かない）である。
+**それでも Shared Variables に残すもの**は、正本が降りる前から要るもの（`ALTEROID_RUNNER_TOKEN` / `ALTEROID_RUNNER_ID` / `ALTEROID_RUNNER_SOCKET`）と、**器自身が読むもの**（`ALTEROID_CLONE_MODEL` / `ALTEROID_MANAGER_MODEL` / `ALTEROID_WORKER_MODEL`。後の2つは SDK 子プロセスの env ではなく runner のプロセス自身が読むので、降ろしても効かない）である。
+
+**⚠️ モデル帯の3つも、ここへは置けない**（400 で断る。2026-09-15）。正本は器の生の環境変数（Shared Variables / `.env`）だけで、**袋に行が在っても誰にも配られない**。置けたままだと層で割れていた —— `ALTEROID_CLONE_MODEL` はデーモン自身のプロセスが読むので**効いてしまい**、`ALTEROID_MANAGER_MODEL` / `ALTEROID_WORKER_MODEL` は runner 自身のプロセスが読むので**黙って効かない**。後者を置くと、**デーモン側の宣言だけが変わって runner は既定の帯のまま走る** ＝ 上の「片方にだけ置くと、クローンが『Opus に委譲している』と宣言しながら別の帯が走る」を袋の側から作れてしまう。**そして帯は設定ではなく人間の承認の置き場である**（AGENTS.md 地雷5）—— 承認の置き場は1つでなければならない。拒むようにする前に置いた行が残っていたら、デーモンの起動時に stderr が名前を1行出す（消すのは `alteroid credential remove <名前>`、または Web UI の環境変数の画面から）。
 
 指紋が食い違っていたら、鍵の権限ではなく**経路**の問題である。PAT の設定を見に行く前にここを見る。
 
@@ -600,7 +608,7 @@ curl -s -H "authorization: Bearer $(node -e 'console.log(JSON.parse(require("fs"
 
 ### 減らすとき（自動ではやらない）
 
-`-n` に今より小さい数を渡すと**断る**（非0）。台数を減らす操作は、その器で走っているマネージャーを移送できて初めて安全になり、移送は fencing（貸し出し期限）の後でしかできない（roadmap M5 PR4 → PR5）。**「落ちた」は観測の欠落であって停止の証明ではない**ので、いま減らすと同じセッションが2か所で走りうる。
+`-n` に今より小さい数を渡すと**断る**（非0）。移送そのものは入っている（#485 PR-2。`POST /runners/vacate` / `ManagerPool#relocateFrom`——runner が黙れば走っていた委譲は別の器へ移る）——ただし**どの器を空けるかの判断はクローンの仕事で、このスクリプトはまだ `POST /runners/vacate` を呼ばない**。**「落ちた」は観測の欠落であって停止の証明ではない**ので、drain もせずに減らすと同じセッションが2か所で走りうる。
 
 手で消すなら、**その器に仕事が無いことを先に見る**（上の `GET /runners` と `/managers`）。消す順番は「app の `ALTEROID_RUNNER_URLS` から外して上げ直す → Service を消す」である。逆にすると、宛先だけが残って名簿が永久に挑み続ける。
 
@@ -719,4 +727,4 @@ railway ssh --service Postgres 'psql -c "\dt"'        # 表が張り直ってい
 3. **App Sleep を有効にしないこと。** 常駐は自律の前提であり、寝かせると起点②〜④が止まる
 4. **Service は全部常時起動する**（app / runner × N / PostgreSQL）。止めてよいのは承認待ちの仕事だけで、器ではない。**台数はそのまま費用である** — だから `setup.sh` の既定は1台で、増やすのは人間が言ったときだけにしてある
 5. **runner が N 台あると、runner のコード変更は N 台を同時に畳む。** 増やすことは「デプロイの事故の規模を増やすこと」でもある（「デプロイは走行中の仕事を畳む操作である」2）
-6. **同じ `runner_id` の重複を、名簿は検出しない。** 置き方（`setup.sh` / `scale-runners.sh`）が構造として一意にし、`verify.sh` が事後に見る、という二段でしか守っていない。片側だけで言える形にするのは fencing（roadmap M5 PR4）である
+6. **同じ `runner_id` の重複を、名簿は検出しない。** 置き方（`setup.sh` / `scale-runners.sh`）が構造として一意にし、`verify.sh` が事後に見る、という二段でしか守っていない。fencing（#160）が入った後も `Registry#get` 自身の一意性は解けていない——貸し出しの引き取り側だけ #209 が塞いだ（Issue #200 は CLOSED）。片側だけで言える形にはまだなっていない

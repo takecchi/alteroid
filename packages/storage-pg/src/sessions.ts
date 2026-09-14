@@ -137,4 +137,15 @@ export class PgSessionRegistry implements SessionRegistry {
       .values({ key: CLONE_PROJECT_KEY, value: projectKey })
       .onConflictDoUpdate({ target: daemonState.key, set: { value: projectKey } });
   }
+
+  /**
+   * 全件を消す（`SessionRegistry.clear` の doc）。**`daemon_state` テーブル全体
+   * を消す** — 現時点でこのテーブルを使うのはこのクラスの4つの欄だけである
+   * （`grep -rln daemonState packages/storage-pg/src` で確認できる）。将来
+   * 別の用途がこのテーブルへ相乗りしたら、ここも見直すこと。
+   */
+  async clear(): Promise<number> {
+    const removed = await this.#db.delete(daemonState).returning({ key: daemonState.key });
+    return removed.length;
+  }
 }

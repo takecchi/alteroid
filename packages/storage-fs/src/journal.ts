@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { appendFile, mkdir, readFile, readdir } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -176,6 +176,26 @@ export class FsJournalStore implements JournalStore {
     }
     noteDroppedJournalRowsSummary(dropped);
     return null;
+  }
+
+  /**
+   * 全件を消す（`JournalStore.clear` の doc）。`append()` と同じ `#chain` で
+   * 直列化する — 消している最中に別の呼び出しが追記した日付ファイルを
+   * 巻き込んで消してしまわないため。
+   */
+  async clear(): Promise<number> {
+    const run = this.#chain.then(async () => {
+      const files = await this.#files('desc');
+      let removed = 0;
+      for (const file of files) {
+        const raw = await readFile(join(this.#dir, file), 'utf8');
+        removed += raw.split('\n').filter((line) => line.length > 0).length;
+        await rm(join(this.#dir, file), { force: true });
+      }
+      return removed;
+    });
+    this.#chain = run.catch(() => undefined);
+    return run;
   }
 
   #file(at: string): string {

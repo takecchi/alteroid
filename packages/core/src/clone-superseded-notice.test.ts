@@ -102,6 +102,7 @@ function stubPool(managers: ManagerSummary[]): ManagerPool {
     abort: notImplemented,
     list: () => Promise.resolve(managers),
     denials: () => [],
+    pushHealthOf: () => undefined,
     runnerBacklog: () => [],
     runnerIdOf: () => Promise.resolve(undefined),
     runners: (): Promise<RunnerFleetOverview> =>

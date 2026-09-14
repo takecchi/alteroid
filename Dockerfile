@@ -103,29 +103,15 @@ RUN git config --system credential.https://github.com.helper '!gh auth git-crede
 # 新しい鍵を使う。走行中のマネージャーを殺さずに鍵が回る。
 #
 # 能力は1つも減っていない。`gh` の版も引数もそのままで、変えたのは鍵の読み場所だけ。
-RUN set -eux; \
-  printf '%s\n' \
-    '#!/bin/sh' \
-    '# 鍵は毎回ファイルから読む（走行中の差し替えを届かせるため）。' \
-    '# **扱う鍵ぜんぶを読む。** 片方だけ読むと「回せる」と言いながら回らない鍵ができる。' \
-    'd="${ALTEROID_CREDENTIAL_DIR:-/run/alteroid/credentials}"' \
-    'for n in GH_TOKEN GITHUB_TOKEN; do' \
-    '  eval "f=\${ALTEROID_${n}_FILE:-$d/$n}"' \
-    '  [ -r "$f" ] || continue' \
-    '  t="$(cat "$f")"' \
-    '  # 空を export すると「鍵が無い」より悪い（hosts.yml も無視される）' \
-    '  [ -n "$t" ] || continue' \
-    '  eval "$n=\$t"; export "$n"' \
-    'done' \
-    '# 実行環境プロファイル（人間の .zprofile 相当）も読む。**鍵より後**に読むのは、' \
-    '# 人間が明示的に書いたほうを勝たせるためである（`profile.ts` と同じ順序）。' \
-    '# Bash 経由なら BASH_ENV で既に読まれているので、番人が二度読みを止める。' \
-    'p="${ALTEROID_PROFILE_FILE:-/run/alteroid/profile/profile.sh}"' \
-    '# 本文の標準出力は stderr へ寄せる（gh の出力に混ぜない）。' \
-    'if [ -r "$p" ]; then . "$p" >&2 || true; fi' \
-    'exec /usr/bin/gh "$@"' \
-    > /usr/local/bin/gh; \
-  chmod 0755 /usr/local/bin/gh; \
+#
+# **中身は `docker/gh` に在る（#865）。** 以前はここに `printf` で焼いていたが、
+# マネージャー・作業者の層が `gh` 経由で release-prod（本番デプロイ）を起動しない
+# ようにする門を足すにあたり、独立ファイルへ出した方が歯（`docker/gh.test.ts`）を
+# 書きやすいのでそうしてある。門の中身・迂回できる経路・見分けの根拠は
+# `docker/gh` 自身のコメントに書いてある（Dockerfile の中の文字列には歯を掛けにくい
+# ので、二重管理を避けてそちらだけを正本にする）。
+COPY docker/gh /usr/local/bin/gh
+RUN chmod 0755 /usr/local/bin/gh; \
   test -x /usr/bin/gh
 # 鍵の置き場。中身は runner が起動時と差し替え時に書く（イメージには入らない）。
 # 一覧はできなくてよいので 0711 — 読めるのは、名前を知っている子プロセスだけである。

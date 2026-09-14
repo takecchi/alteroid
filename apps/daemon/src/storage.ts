@@ -50,6 +50,22 @@ export interface Storage {
    */
   description: string;
   close(): Promise<void>;
+  /**
+   * SDK のセッション生ログ（`sessionStore` の預け先）を空にする
+   * （ワークスペースのリセット専用。#workspace-reset）。
+   *
+   * **pg 構成でだけ付く。** fs 構成では SDK 自身がローカルディスクへ直接
+   * 生ログを書いており（`sessionStore` の doc「pg 構成でだけ付く」と同じ
+   * 非対称）、`Storage` から触れる預け先そのものが無い。
+   *
+   * `resetWorkspaceState`（`@alteroid/core`）の `clear()` 一式には含めない
+   * ——あちらは `Stores` のフィールドだけを知っていればよい設計にしてあり、
+   * `sessionStore` は `Storage` 側にしか無いフィールドである（`Stores.
+   * sessionStore` は同じ実体だが、`Stores` を渡す先はこの生ログの預け先の
+   * 存在を知らなくてよい層まで含む）。呼び出し側（`POST /reset`）が
+   * `resetWorkspaceState(stores, { clearSessionLog })` の形でここへ橋渡しする。
+   */
+  clearSessionLog?: () => Promise<number>;
 }
 
 /** 空文字の環境変数は「未指定」として扱う。 */
@@ -233,6 +249,7 @@ export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise
     kind: 'pg',
     description: plan.description,
     close: () => pg.close(),
+    clearSessionLog: () => pg.sessionStore.clearAll(),
   };
 }
 

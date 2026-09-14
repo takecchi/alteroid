@@ -3128,6 +3128,33 @@ describe('FsTokenPoolStore', () => {
     expect(row).not.toHaveProperty('createdAt');
     expect(row).not.toHaveProperty('updatedAt');
   });
+
+  /**
+   * **器の環境変数を指す行（`source: 'env'`）という概念は 2026-09-14 に廃止した**
+   * が、`ensureEnvToken`（廃止済み）が過去に書いた行が既存の `tokens.json` に
+   * 残っていることがある。**そういう行は値を持たないので、そのまま domain の
+   * 型（`AgentToken`）へ持ち上げると `credentialOf` が「値が無い」で投げる。**
+   * ⟹ `list()` はこの行を静かに読み捨てる（他の行はそのまま返る）。
+   */
+  it('過去に書かれた source: "env" の行は list() で静かに読み捨てる（クラッシュしない）', async () => {
+    // `replace()` は正規化された `AgentToken`（いまは `source: 'stored'` しか
+    // 作れない）しか受けないので、レガシー行は直接ファイルへ書いて再現する。
+    await writeFile(
+      stores.paths.tokens,
+      JSON.stringify({
+        tokens: [
+          { id: 'env-1', label: '器の環境変数', source: 'env', order: -1 },
+          { id: 'tok-a', label: 'spare', value: 'tok-aaa', order: 0 },
+        ],
+      }),
+      'utf8',
+    );
+
+    const rows = await stores.tokens.list();
+
+    expect(rows.map((row) => row.id)).toEqual(['tok-a']);
+    expect(rows[0]).not.toHaveProperty('source');
+  });
 });
 
 /**
@@ -3189,6 +3216,47 @@ describe('FsCredentialVaultStore', () => {
     );
 
     await expect(stores.credentials.list()).rejects.toThrow();
+  });
+
+  /**
+   * 撒く先・シークレット可否（2026-09-14）。既定は `'all'` / `true`——この列が
+   * 無かった頃の全行が実際にそうだったことをそのまま表す（`rowSchema` の
+   * `.default(...)`）。
+   */
+  it('scope・secret を指定して put すると、list にそのまま戻る', async () => {
+    await stores.credentials.put([
+      { name: 'TZ', value: 'Asia/Tokyo', scope: 'app', secret: false },
+      { name: 'MANAGER_ONLY', value: 'x', scope: 'runner', secret: true },
+    ]);
+
+    expect(await stores.credentials.list()).toEqual([
+      expect.objectContaining({ name: 'MANAGER_ONLY', scope: 'runner', secret: true }),
+      expect.objectContaining({ name: 'TZ', scope: 'app', secret: false }),
+    ]);
+  });
+
+  it('scope・secret を省略すると all / true になる（列が無かった頃の全行と同じ既定）', async () => {
+    await stores.credentials.put([{ name: 'NPM_TOKEN', value: 'npm_x' }]);
+
+    expect(await stores.credentials.list()).toEqual([
+      expect.objectContaining({ name: 'NPM_TOKEN', scope: 'all', secret: true }),
+    ]);
+  });
+
+  it('scope・secret の列を持たない旧形式のファイルも既定で読める', async () => {
+    // **2026-09-14 より前に書かれたファイルを模す。** `rowSchema` の
+    // `.default(...)` がここで効くことを確かめる——書き直しを要求しない。
+    await writeFile(
+      stores.paths.credentials,
+      JSON.stringify({
+        credentials: [{ name: 'LEGACY_ROW', value: 'v', updatedAt: '2026-01-01T00:00:00.000Z' }],
+      }),
+      'utf8',
+    );
+
+    expect(await stores.credentials.list()).toEqual([
+      expect.objectContaining({ name: 'LEGACY_ROW', scope: 'all', secret: true }),
+    ]);
   });
 });
 

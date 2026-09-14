@@ -58,6 +58,16 @@ export class FsJobStore implements JobStore {
     });
   }
 
+  /** ジョブと承認待ちを両方消す（`JobStore.clear` の doc）。 */
+  async clear(): Promise<{ jobs: number; approvals: number }> {
+    let removed = { jobs: 0, approvals: 0 };
+    await this.#update((file) => {
+      removed = { jobs: file.jobs.length, approvals: file.approvals.length };
+      return { jobs: [], approvals: [] };
+    });
+    return removed;
+  }
+
   async #read(): Promise<JobFile> {
     try {
       const raw = await readFile(this.#path, 'utf8');

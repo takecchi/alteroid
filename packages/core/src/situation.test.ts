@@ -399,6 +399,62 @@ describe('describeSituation', () => {
     expect(text).toContain('「背景処理待ち」は器が名乗った分だけである');
   });
 
+  /**
+   * **歯1（本体）。** `countManagerSituation` は `awaitingBackground` を
+   * `status` より先に見るので、`status: 'running'` の委譲でも背景処理待ちの
+   * 印が立っていれば「走行中」には数えない（`countManagerSituation` の doc）。
+   * この歯は、**その数え方を節の断り書きが逐語で名乗っていること**と、
+   * **実際の本数がその主張どおりであること**の両方を測る——文字列の有無
+   * だけでは、断り書きが嘘でも緑になる（#941 で `readAtLabel` を固定値にする
+   * 変異が「時刻らしき字面がある」だけの歯を素通りした実例と同じ穴）。
+   *
+   * **`委譲 全 ` の行だけを取り出して測る**（AGENTS.md「対象をスコープして
+   * 特定する」。直前の「器 」の行の歯と同じ形——`toContain('走行中 0')` を
+   * 節全体に当てると、他の行の偶然の一致を拾いうる）。
+   */
+  it('「走行中」は status だけでなく背景処理待ちの印を見て数えることを、本数と断り書きの両方で測る', () => {
+    const text = describeSituation({
+      managers: [summary('a', 'running', true, BG)],
+      runners: [],
+    });
+    const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
+    expect(countsLine, '「委譲 全 」の行が見つからない').toBeDefined();
+    // status は 'running' の委譲が1本いるのに、走行中は 0 本——この歯が在る理由そのもの。
+    expect(countsLine).toContain('走行中 0');
+    expect(countsLine).toContain('背景処理待ち 1');
+    // 節の字面が、その数え方を逐語で名乗っていること。
+    expect(text).toContain('「背景処理待ち」を含まない');
+    expect(text).toContain('`status`');
+    expect(text).toContain('`running`');
+  });
+
+  /**
+   * **歯2（陰性対照）。** 歯1 と同じ委譲から印（`awaitingBackground`）だけを
+   * 外すと、走行中が 1 本に増え背景処理待ちが 0 本に減ることを測る。
+   *
+   * **これが無いと歯1 だけでは区別の実在を測れない**——たとえば「`running`
+   * を常に 0 と数える」実装（印の有無を一切見ない）でも歯1 は緑になり得る。
+   * 印の有無で数え方が本当に変わることを、字面の比較ではなく**差の実在**
+   * （`not.toBe`）で確かめる。
+   */
+  it('（陰性対照）印を外すと同じ委譲が走行中側へ数え直されることを、差分そのもので測る', () => {
+    const withMark = describeSituation({
+      managers: [summary('a', 'running', true, BG)],
+      runners: [],
+    });
+    const withoutMark = describeSituation({
+      managers: [summary('a', 'running', true)],
+      runners: [],
+    });
+    const lineWith = withMark.split('\n').find((l) => l.startsWith('委譲 全 '));
+    const lineWithout = withoutMark.split('\n').find((l) => l.startsWith('委譲 全 '));
+    expect(lineWithout, '「委譲 全 」の行が見つからない').toBeDefined();
+    expect(lineWithout).toContain('走行中 1');
+    expect(lineWithout).toContain('背景処理待ち 0');
+    // 印の有無で「委譲 全 …」の行そのものが変わる（＝区別が実在する）。
+    expect(lineWith).not.toBe(lineWithout);
+  });
+
   /** **指図を書かない。** 何をするかはクローンが決める（材料だけを出す）。 */
   it('次に何をするかを1文字も指図しない', () => {
     const text = describeSituation({
@@ -442,6 +498,70 @@ describe('describeSituationUnavailable', () => {
     expect(ng.startsWith('[system] いまの全体')).toBe(true);
     // それでも本文は見分けが付く。
     expect(ng).not.toBe(ok);
+  });
+});
+
+/**
+ * **節は「いつ数えた値か」を名乗る（#902）。**
+ *
+ * ## この歯が塞いでいる穴
+ *
+ * この節は `clone.ts` の `#runTurn` が `#pushInput` で**ユーザー入力の本文へ
+ * 連結する**ので、**会話履歴に溜まる。** ⟹ 文脈には過去のターンの節が並び、
+ * **どれも現在形で断定する。**
+ *
+ * **直す前の実測（`origin/main` の `aaedec1`）**: 委譲・器の数を1つも変えずに
+ * 2ターン回すと、**2つの節は1バイトも違わなかった**（`===` が `true`）。
+ * ⟹ **どちらが新しいかを節の中から判定する手段が1つも無い。**
+ *
+ * ## ⚠️ 測るのは「時刻が出ていること」ではなく「**違う時刻なら違う節になる**」ことである
+ *
+ * 「時刻の字面が在る」だけを測る歯は、**値が固定値に化けても緑のまま**になる
+ * （`toMatch(/\d{2}:\d{2}:\d{2}/)` は `00:00:00` でも通る）。⟹ **区別が
+ * 作れているかを直接測る。**
+ */
+describe('いまの全体は、いつ数えた値かを名乗る（#902）', () => {
+  const material = { managers: [], runners: [] } as const;
+
+  it('⭐⭐ 数が同じでも、数えた時刻が違えば節も違う（文脈に溜まった節を読み分けられる）', () => {
+    const early = describeSituation({ ...material, at: Date.parse('2026-09-13T12:51:03.000Z') });
+    const late = describeSituation({ ...material, at: Date.parse('2026-09-13T13:07:41.000Z') });
+
+    // 材料は1つも変えていない ⟹ 本数の行は同じままであることを先に押さえる
+    // （そうでないと、下の「違う」が別の理由で通ってしまう）。
+    expect(early, '正の対照: 本数の行が出ていない（節そのものが変わってしまっている）').toContain(
+      '委譲 全 0 本',
+    );
+    expect(late).toContain('委譲 全 0 本');
+
+    expect(
+      late,
+      '数えた時刻が違うのに節が1バイトも違わない。この赤の意味は「会話履歴に溜まった' +
+        '複数の『いまの全体』を、読む側が読み分けられない」——どれも現在形で断定するので、' +
+        '古い節が最新として読まれる（#902）。',
+    ).not.toBe(early);
+  });
+
+  it('名乗るのは「数えた時刻」そのものである（渡した値がそのまま出る）', () => {
+    const text = describeSituation({ ...material, at: Date.parse('2026-09-13T12:51:03.000Z') });
+    expect(
+      text,
+      '節が名乗る時刻が、数えた時刻と一致していない（固定値や別の時計に化けている）',
+    ).toContain('12:51:03Z');
+  });
+
+  it('数えられなかった側も同じ規則で名乗る（片方だけ名乗る非対称を作らない）', () => {
+    const text = describeSituationUnavailable(
+      new Error('list() が壊れている'),
+      Date.parse('2026-09-13T12:51:03.000Z'),
+    );
+    expect(
+      text,
+      '「数えられなかった」の節だけが時刻を名乗らない。この赤の意味は「#902 が指摘した' +
+        '非対称（同じファイルの中で一部の行にだけ配慮が当たっている）を、こちらで作り直した」。',
+    ).toContain('12:51:03Z');
+    // 数えられなかったことは、時刻を足しても消えない。
+    expect(text).toContain('数えられなかった');
   });
 });
 

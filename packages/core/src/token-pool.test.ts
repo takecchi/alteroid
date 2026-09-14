@@ -758,48 +758,18 @@ describe('外向きの顔に載る回復の見込み', () => {
 });
 
 /**
- * 環境変数を指す行が `PUT /tokens` を通れること（Issue #393）。
+ * `source` フィールド（Issue #393。器の環境変数を指す `'env'` という値は
+ * 2026-09-14 に廃止した——いまは `'stored'` しか無い）。
  *
- * **`token add` / `disable` / `enable` / `remove` はすべて「既存を読み直して全文で
- * 書き戻す」形である。** ⟹ 正規化が env の行で投げると、**その行が在るだけで
- * これらの操作が全部落ちる。**
+ * **人間の入力からは作れない**（`agentTokenInputSchema` に `source` を渡す口が
+ * そもそも無いので、既存の行から引き継ぐ以外に値が付く経路が無い）。この
+ * 不変条件そのものは `source` の取りうる値が減っても変わらないので残す。
  */
-describe('環境変数の行と normalizeTokenPool', () => {
-  const envRow: AgentToken = {
-    id: 'env-1',
-    label: '器の環境変数',
-    source: 'env',
-    order: -1,
-  };
-
-  it('value が無くても投げない（env の行は値を持たない）', () => {
-    const result = normalizeTokenPool(
-      [{ id: 'env-1', label: '器の環境変数', order: -1 }],
-      [envRow],
-      opts(),
-    );
-    expect(result[0]?.source).toBe('env');
-    expect(result[0]).not.toHaveProperty('value');
-  });
-
-  it('env の行が在る状態で新しい行を足せる（token add の形）', () => {
-    // これが落ちると、env の行ができた瞬間に `alteroid token add` が使えなくなる。
-    const result = normalizeTokenPool(
-      [
-        { id: 'env-1', label: '器の環境変数', order: -1 },
-        { label: 'spare', value: 'tok-spare' },
-      ],
-      [envRow],
-      opts(['tok-new']),
-    );
-    expect(result.map((t) => t.id)).toEqual(['env-1', 'tok-new']);
-  });
-
-  it('source は既存の行からだけ引き継ぐ。**人間の入力からは作れない**', () => {
-    // env の行は「器に環境変数が置かれている」という事実の射影であって、人間が
-    // 宣言するものではない。作れる形にすると、環境変数が無い器に「環境変数を
-    // 指す行」が立ち、撒いた瞬間に全層が資格を失う。
-    const raw: unknown = { label: 'forged', value: 'tok-x', source: 'env' };
+describe('source は既存の行からだけ引き継ぐ', () => {
+  it('人間の入力に `source` を混ぜても、正規化後の行には現れない', () => {
+    // `agentTokenInputSchema` はそもそも `source` を受けないので、実行時に
+    // 無視される／弾かれることを見る（`unknown` を経由して渡す）。
+    const raw: unknown = { label: 'forged', value: 'tok-x', source: 'not-a-real-source' };
     const parsed = agentTokenInputSchema.parse(raw);
     expect(parsed).not.toHaveProperty('source');
 
@@ -807,18 +777,12 @@ describe('環境変数の行と normalizeTokenPool', () => {
     expect(result[0]).not.toHaveProperty('source');
   });
 
-  it('stored の行で value が無ければ、今までどおり投げる', () => {
+  it('stored の行で value が無ければ投げる', () => {
     expect(() => normalizeTokenPool([{ label: '新規' }], [], opts())).toThrow();
   });
 });
 
 describe('credentialOf', () => {
-  it('env の行は kind:"env"（値を持たない）', () => {
-    expect(credentialOf({ id: 'e', label: 'env', source: 'env', order: -1 })).toEqual({
-      kind: 'env',
-    });
-  });
-
   it('stored の行は kind:"stored" と値', () => {
     expect(credentialOf({ id: 'a', label: 'a', value: 'v', order: 0 })).toEqual({
       kind: 'stored',
@@ -826,9 +790,7 @@ describe('credentialOf', () => {
     });
   });
 
-  it('⚠️ stored なのに値が無い行は投げる（黙って env へ倒さない）', () => {
-    // 倒すと、値を失った行が「環境変数を使う行」に化けて、**どのトークンで
-    // 走っているかが記録とずれる。**
+  it('値が無い行は投げる（器の環境変数へのフォールバックは廃止した——常に値が要る）', () => {
     expect(() => credentialOf({ id: 'a', label: 'a', order: 0 })).toThrow();
   });
 });

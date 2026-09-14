@@ -62,6 +62,17 @@ export type RunnerSummary = Ok<paths['/runners']['get']>['runners'][number];
  */
 export type DaemonRevision = Ok<paths['/runners']['get']>['daemonRevision'];
 
+/**
+ * runner ごとの押し込み（push）の直近結果（`RunnerSummary['pushHealth']`）。
+ *
+ * **`profile` / `credentials` / `agentToken` は独立の3欄。**1つの成否へ畳まない
+ * （`packages/core/src/manager.ts` の `RunnerPushHealth` の doc）。**`pushHealth`
+ * 自体が無い行もある**——一度も押し込みを試みていない runner で、`{}` のような
+ * 値を作らず欄そのものが無い（AGENTS.md「取れない軸に0の行を作らない」）。
+ */
+export type RunnerPushHealth = NonNullable<RunnerSummary['pushHealth']>;
+export type RunnerPushOutcome = NonNullable<RunnerPushHealth['profile']>;
+
 export type Health = Ok<paths['/health']['get']>;
 
 /**
@@ -121,6 +132,17 @@ export type TokenAvailability = 'disabled' | 'invalidated' | 'cooling' | 'ready'
 export type TokenRecovery = NonNullable<AgentTokenView['recovery']>;
 /** 日誌の `token_rotation` 種別1件。`event` の5値を潰さずに読むこと。 */
 export type TokenRotationEntry = Extract<JournalEntry, { type: 'token_rotation' }>;
+
+/**
+ * 環境変数の袋（`GET /credentials`。旧「マネージャーへ降ろす環境変数」）。
+ *
+ * **`value` は `secret === false` の行だけに載る。** サーバ側（`credentialsResponseSchema`）
+ * が secret な行では欄自体を返さないので、画面側で「消し忘れて出す」形は作れない。
+ */
+export type CredentialsState = Ok<paths['/credentials']['get']>;
+export type EnvVarView = CredentialsState['credentials'][number];
+/** 撒く先。`'all'`=共通 / `'app'`=clone だけ / `'runner'`=manager だけ。 */
+export type EnvVarScope = EnvVarView['scope'];
 
 /**
  * 握り潰しの跡（`GET /dropped`）。CLI（`alteroid dropped`）・クローンの MCP

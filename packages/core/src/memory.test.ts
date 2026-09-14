@@ -4907,6 +4907,19 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
     expect(reply).not.toContain('区分が変わった');
   });
 
+  /**
+   * ⚠️ **「文字」を応答全体から探さない。**
+   *
+   * この応答には**単位を名乗る行が複数ある** —— 床の遷移（`N 文字から M 文字へ`）
+   * のほかに「いま最も大きい premise: …（N 文字）」も出る。⟹ **応答全体で
+   * `toContain('文字')` を測ると、遷移の単位を別の語へ変えても、もう一方の行が
+   * 代わりに合格を出す。** #935 の実測（`origin/main` の `b83708e`、型検査 0）:
+   * `formatMemoryFloorTransition` の単位を「字」へ変えても**この歯は生存**した
+   * （落ちたのは、遷移の行を逐語で測っている別の歯 1本だけ）。
+   *
+   * ⟹ **測る対象を「遷移を名乗っている行」に絞る。** 絞ることで保証は強くなる
+   * （どの行の単位を見ているかが確定する）。
+   */
   it('単位は文字である（bytes を出していない）', () => {
     const after = measureMemoryFloor([premise('zenkaku', '価値観です')]);
     const reply = describeMemoryFloor({
@@ -4916,7 +4929,19 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
       kind: 'premise',
       created: true,
     });
-    expect(reply).toContain('文字');
+    const transition = reply
+      .split('\n')
+      .find((line) => line.includes('から') && line.includes('へ'));
+    expect(
+      transition,
+      '床の遷移を名乗る行そのものが応答から消えた（この歯は、その行の単位を測っている）',
+    ).toBeDefined();
+    expect(
+      transition,
+      '床の遷移の単位が「文字」でなくなった。この赤の意味は「読み手が、床の数を' +
+        '何の単位で読めばよいか分からなくなった」——応答の別の行にまだ「文字」が' +
+        '残っていても、遷移の行が名乗っていなければ同じことである。',
+    ).toContain('文字');
     expect(reply).not.toContain('bytes');
   });
 

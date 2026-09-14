@@ -614,6 +614,41 @@ export interface RunnerManagerEntry {
 }
 
 /**
+ * プロファイル・環境変数・認証トークンの押し込みが1回、直近どうだったか。
+ *
+ * **プロセス内の記憶であって、DB には残らない**——デーモンを作り直せば消える
+ * （`RunnerLiveness` と同じ扱い。押し込みそのものが繋ぎ直しのたびにやり直す
+ * ものなので、それでよい）。
+ */
+export interface RunnerPushOutcome {
+  status: 'ok' | 'failed';
+  /** その結果を確かめた時刻（ISO 8601）。 */
+  at: string;
+  /** `status: 'failed'` のときだけ載る、失敗の理由（原文。言い換えない）。 */
+  error?: string;
+}
+
+/**
+ * runner へ配る3種類（プロファイル・環境変数・認証トークン）それぞれの、
+ * 直近の押し込み結果。
+ *
+ * **`#pushProfile` / `#pushCredentials` / `#pushAgentToken` は互いに独立して
+ * 落ちる**（`#pushCredentials` の doc「片方が落ちても片方は降りるべき」）ので、
+ * 1つの状態へ畳まない——畳むと「どれが原因か」が読み手から見えなくなる。
+ *
+ * **各欄は「まだ一度も押し込みを試みていない」ときは省く。** `undefined` を
+ * 「成功した」の既定値として埋めない（AGENTS.md「取れない軸に0の行を作らない」）。
+ * 押し込みは runner が繋がった瞬間（`#connectTo` / `#reattach`）に必ず一度は
+ * 試みるので、`state: 'connected'` の runner でこの3つが全部省かれているのは
+ * デーモンを作り直した直後などのごく短い窓だけである。
+ */
+export interface RunnerPushHealth {
+  profile?: RunnerPushOutcome;
+  credentials?: RunnerPushOutcome;
+  agentToken?: RunnerPushOutcome;
+}
+
+/**
  * 器（runner）1台の様子と、そこに紐づくマネージャー（`runner_list` の材料）。
  *
  * `label` / `state` / `since` / `error?` / `runnerId?` / `workspacePath?` は
@@ -692,6 +727,14 @@ export interface RunnerOverview {
    * 「未接続」と「頼んで失敗」が同じ空の形へ潰れる穴を、ここでは増やさない。
    */
   revision: RunnerRevisionStatus;
+  /**
+   * プロファイル・環境変数・認証トークンの押し込みの、直近の結果。
+   *
+   * **`fingerprints: true` の要否とは無関係に常に載る**（`runnerId` を持つ
+   * 行だけ）。`credentials` / `profile` と違って runner への新しい往復を
+   * 払わない——デーモンのプロセス内に既にある記憶を読むだけである。
+   */
+  pushHealth?: RunnerPushHealth;
 }
 
 /** `runner_list` が返す全体像。 */
@@ -990,6 +1033,17 @@ export interface ManagerPool {
    * とは区別すること（`RunnerOverview.resources` の doc の3値）。
    */
   runners(options?: { fingerprints?: boolean; resources?: boolean }): Promise<RunnerFleetOverview>;
+  /**
+   * 1台ぶんの押し込み結果（`RunnerOverview.pushHealth` と同じもの）を、
+   * `runners()` を呼ばずに直接読む。
+   *
+   * **`GET /runners`（`apps/daemon/src/app.ts`）はここを経由する。** あちらは
+   * `runner_list`（`runners()`）とは別の経路で `RunnerRegistry` から直接
+   * 一覧を組み立てているので、`runners()` の中でしか計算しない値を見るには
+   * この単体の読み口が要る——**数え上げの持ち主を増やさない**ため、実体は
+   * `runners()` が読むのと同じ `#pushHealth` を返すだけの薄い口である。
+   */
+  pushHealthOf(runnerId: string): RunnerPushHealth | undefined;
   /**
    * runner→デーモンの脚（`Outbox` の滞留）について、最後に観測できた値
    * （#358 案b・案b の第2段）。**ネットワークを一切叩かない**——直近の
@@ -1485,6 +1539,17 @@ export function createManagerPool(options: ManagerPoolOptions): ManagerPool {
  */
 const REATTACH_RETRY_BASE_MS = 1_000;
 const REATTACH_RETRY_MAX_MS = 30_000;
+
+/**
+ * プロファイル・環境変数・認証トークンの押し込みに失敗した runner へ、挑み直す
+ * までの待ち時間（倍々で伸ばし、上限で頭打ちにする）。`REATTACH_RETRY_*` と
+ * 同じ形——**これも能力の上限ではなく、混雑を作らないための間隔である**
+ * （north_star 禁止2）。押し込みは `#connectTo` / `#reattach` が繋ぎ直しの
+ * たびに毎回やり直すので、ここは「繋ぎ直しを待たずに、繋がったままの runner へ
+ * 自分から挑み直す」ための梯子である。
+ */
+const PUSH_RETRY_BASE_MS = 2_000;
+const PUSH_RETRY_MAX_MS = 60_000;
 
 /**
  * 預かってある生ログを引いた結果。
@@ -2883,6 +2948,23 @@ class Pool implements ManagerPool {
    */
   readonly #connections = new WeakMap<RunnerClient, Promise<void>>();
   /**
+   * プロファイル・環境変数・認証トークンの押し込みの、直近の結果
+   * （`runnerId` → `RunnerPushHealth`）。`runners()` がそのまま外へ出す。
+   *
+   * **`RunnerLiveness` と同じくプロセス内の記憶である。** デーモンを作り直せば
+   * 消える——押し込み自体が繋ぎ直しのたびにやり直されるので、それでよい。
+   */
+  readonly #pushHealth = new Map<string, RunnerPushHealth>();
+  /**
+   * 押し込みが失敗した runner へ、諦めずに挑み直す予約（`#scheduleReattach`と
+   * 同じ形）。**`#reattachTimers` とは別のタイマーである**——繋ぎ直し
+   * そのもの（`hello` を待つ）とは別に、繋がったままの runner へ自分から
+   * 挑み直すためのものだからである。
+   */
+  readonly #pushRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** 次に待つ時間。全部直ったら忘れる（`#reattachDelays` と同じ形）。 */
+  readonly #pushRetryDelays = new Map<string, number>();
+  /**
    * `probeTurnEnds` が最後に生ログを読みに行った時刻（managerId → `#now()`。
    * Issue #567）。**費用の門のバックオフにしか使わない**——ここに載ったこと
    * 自体は「症状である」を意味しない。
@@ -3578,6 +3660,10 @@ class Pool implements ManagerPool {
     });
   }
 
+  pushHealthOf(runnerId: string): RunnerPushHealth | undefined {
+    return this.#pushHealth.get(runnerId);
+  }
+
   async runners(
     options: { fingerprints?: boolean; resources?: boolean } = {},
   ): Promise<RunnerFleetOverview> {
@@ -3625,6 +3711,8 @@ class Pool implements ManagerPool {
     const runners = await Promise.all(
       entries.map(async (entry) => {
         const client = entry.runnerId === undefined ? undefined : open?.get(entry.runnerId);
+        const pushHealth =
+          entry.runnerId === undefined ? undefined : this.#pushHealth.get(entry.runnerId);
         const [credentials, profile] =
           client === undefined || !options.fingerprints
             ? [undefined, undefined]
@@ -3680,6 +3768,10 @@ class Pool implements ManagerPool {
           ...(profile === undefined ? {} : { profile }),
           ...(resources === undefined ? {} : { resources }),
           revision: entry.revision,
+          // **`credentials`/`profile` と違い、`fingerprints` の要否を見ない。**
+          // runner への新しい往復を払わない（プロセス内の記憶を読むだけ）ので、
+          // opt-in にする理由が無い。
+          ...(pushHealth === undefined ? {} : { pushHealth }),
         };
         return overview;
       }),
@@ -4856,6 +4948,10 @@ class Pool implements ManagerPool {
     for (const timer of this.#reattachTimers.values()) clearTimeout(timer);
     this.#reattachTimers.clear();
     this.#reattachDelays.clear();
+    // 予約してあった押し込みの挑み直しも同様に畳む（`#reattachTimers` と同じ理由）。
+    for (const timer of this.#pushRetryTimers.values()) clearTimeout(timer);
+    this.#pushRetryTimers.clear();
+    this.#pushRetryDelays.clear();
     this.#unresumable.clear();
     // **runner のマネージャーは止めない。** デーモンの都合で人の仕事を殺さない
     // （インプロセス runner だけは、プロセスが消えるので中で畳まれる）。
@@ -4887,8 +4983,16 @@ class Pool implements ManagerPool {
       // **更新と同じ列に入れる。** 直に読んで直に書くと、人間やクローンの更新の
       // 最中に古い本文で上書きしうる（3層が別々の本文を持つ状態になる）。
       const result = await this.#profile.syncRunner(runner);
-      if (result === null || result.ok) return;
+      if (result === null || result.ok) {
+        this.#notePushOutcome(runnerId, 'profile', { status: 'ok', at: this.#nowIso() });
+        return;
+      }
 
+      this.#notePushOutcome(runnerId, 'profile', {
+        status: 'failed',
+        at: this.#nowIso(),
+        error: result.error ?? '理由不明',
+      });
       // **`this.#journal` を経由する（直に `this.#stores.journal.append` を
       // 呼ばない）。** `#journal` は失敗を握り潰さず `noteDroppedRecord` で
       // `self_dropped` の帳面へ跡を残す（穴C。日誌 append 自体が失敗しても
@@ -4920,6 +5024,11 @@ class Pool implements ManagerPool {
       // クローンが読んで書き直せる道具の応答という口を持つが、`#pushProfile` の
       // 呼び出し元には誰も応答を受け取る者がいない——投げ直しても、それを
       // 読んで判断し直す相手がここには存在しない。
+      this.#notePushOutcome(runnerId, 'profile', {
+        status: 'failed',
+        at: this.#nowIso(),
+        error: String(error),
+      });
       await this.#journal({
         type: 'exchange',
         with: 'self',
@@ -4948,7 +5057,13 @@ class Pool implements ManagerPool {
       // **更新と同じ列に入れる**（`#pushProfile` と同じ）。直に読んで直に書くと、
       // 人間の更新の最中に古い値で上書きしうる。
       await this.#credentials.syncRunner(runner);
+      this.#notePushOutcome(runnerId, 'credentials', { status: 'ok', at: this.#nowIso() });
     } catch (error) {
+      this.#notePushOutcome(runnerId, 'credentials', {
+        status: 'failed',
+        at: this.#nowIso(),
+        error: String(error),
+      });
       // **`this.#journal` を経由する**（`#pushProfile` と同じ理由・同じ非対称）。
       await this.#journal({
         type: 'exchange',
@@ -5026,6 +5141,8 @@ class Pool implements ManagerPool {
       // **認証トークンも同じ位置で降ろす。** プロファイルと同じ理由——名乗り
       // 任せにすると、最初のマネージャーが古いトークンで走り出しうる。
       await this.#pushAgentToken(runner);
+      // **1つでも失敗していれば、次の `hello` を待たずに自分から挑み直す。**
+      this.#settlePushRetry(runner.runnerId);
     })().catch((error: unknown) => {
       this.#connections.delete(runner);
       throw error;
@@ -5167,6 +5284,8 @@ class Pool implements ManagerPool {
         // —— そしてそれは、この関数の doc が逐語で「runner の器だけが入れ替わると」
         // と書いている、**この経路がまさに拾いに来た場合そのもの**である。
         await this.#pushAgentToken(runner);
+        // **1つでも失敗していれば、次の `hello` を待たずに自分から挑み直す。**
+        this.#settlePushRetry(runnerId);
       })();
       this.#reattachPushes.set(runnerId, push);
       try {
@@ -7600,7 +7719,13 @@ class Pool implements ManagerPool {
     if (this.#stopped || this.#syncRunnerToken === undefined) return;
     try {
       await this.#syncRunnerToken(runner);
+      this.#notePushOutcome(runner.runnerId, 'agentToken', { status: 'ok', at: this.#nowIso() });
     } catch (error) {
+      this.#notePushOutcome(runner.runnerId, 'agentToken', {
+        status: 'failed',
+        at: this.#nowIso(),
+        error: String(error),
+      });
       // **`this.#journal` を経由する（`#pushProfile` と同じ理由・同じ非対称）。**
       // 直に `this.#stores.journal.append(...).catch(() => undefined)` で
       // 揉み消していたときは、日誌 append 自体が落ちても跡が一切残らなかった
@@ -7616,6 +7741,103 @@ class Pool implements ManagerPool {
         text: `${runner.runnerId} に認証トークンを降ろせなかった（この runner で起こすマネージャーは、器の環境変数に認証トークンが入っていればそれで走り、入っていなければ資格を1つも持たずに走る——どちらになるかは器の env 次第で、ここからは分からない）: ${String(error)}`,
       });
     }
+  }
+
+  /** `this.#now()` を ISO 8601 の文字列にする（テストで時刻を固定するため経由する）。 */
+  #nowIso(): string {
+    return new Date(this.#now()).toISOString();
+  }
+
+  /**
+   * 押し込み1件の結果を覚える（`RunnerPushHealth` の該当欄を上書き）。
+   *
+   * **`runnerId` が無い runner には書かない。** 名乗る前の runner は
+   * `RunnerOverview` の一覧にすら `runnerId` を持たない行として出るので、
+   * そちらへ紐づけようがない（`RunnerOverview.runnerId?` の doc）。
+   */
+  #notePushOutcome(
+    runnerId: string | undefined,
+    kind: keyof RunnerPushHealth,
+    outcome: RunnerPushOutcome,
+  ): void {
+    if (runnerId === undefined) return;
+    const health = this.#pushHealth.get(runnerId) ?? {};
+    health[kind] = outcome;
+    this.#pushHealth.set(runnerId, health);
+  }
+
+  /**
+   * 押し込みが終わった直後に呼ぶ。**全部直っていれば挑み直しの予約を忘れ、
+   * 1つでも失敗が残っていれば予約する。**
+   *
+   * `#connectTo` / `#reattach` は runner が繋がるたびに3つとも必ず一度は
+   * 試みる——ここは「繋がったまま runner 側の一時障害だけが直った」ケースを、
+   * 次の `hello` を待たずに拾うためのものである。
+   */
+  #settlePushRetry(runnerId: string): void {
+    const health = this.#pushHealth.get(runnerId);
+    const stillFailing =
+      health !== undefined && Object.values(health).some((outcome) => outcome?.status === 'failed');
+    if (!stillFailing) {
+      // 直った。次に失敗したときは最初の間隔からやり直す（`#reattach` が
+      // `retry === false` のときに `#reattachDelays` を消すのと同じ形）。
+      this.#pushRetryDelays.delete(runnerId);
+      return;
+    }
+    this.#schedulePushRetry(runnerId);
+  }
+
+  /**
+   * 押し込みの挑み直しを予約する（`#scheduleReattach` と同じ形）。
+   *
+   * **間隔は伸ばすが、諦めはしない**（north_star 禁止2。`PUSH_RETRY_MAX_MS` の
+   * doc）。予約が既にあれば重ねない——同じ runner へ何本も挑み直しを積まない。
+   */
+  #schedulePushRetry(runnerId: string): void {
+    if (this.#stopped) return;
+    if (this.#pushRetryTimers.has(runnerId)) return;
+    const delay = this.#pushRetryDelays.get(runnerId) ?? PUSH_RETRY_BASE_MS;
+    this.#pushRetryDelays.set(runnerId, Math.min(delay * 2, PUSH_RETRY_MAX_MS));
+    const timer = setTimeout(() => {
+      this.#pushRetryTimers.delete(runnerId);
+      if (!this.#stopped) void this.#retryFailedPushes(runnerId);
+    }, delay);
+    // デーモンの停止をこのタイマーで引き延ばさない（`#scheduleReattach` と同じ）。
+    timer.unref?.();
+    this.#pushRetryTimers.set(runnerId, timer);
+  }
+
+  /**
+   * いま失敗と記録されている分だけ、繋がったままの runner へ挑み直す。
+   *
+   * **直っている分は触らない。** 3種類は互いに独立して落ちる
+   * （`#pushCredentials` の doc）ので、直し方も独立にする——1つだけ失敗して
+   * いる runner へ、直っている残り2つまで撒き直す理由は無い。
+   *
+   * **繋ぎ直し中の押し込みとは競合しない。** `#connectTo` / `#reattach` が
+   * いま押し込みの最中なら、それを待ってから改めて見直す——二重に撒いても
+   * 実害は無いが、日誌が無駄に二重の跡を残す。
+   */
+  async #retryFailedPushes(runnerId: string): Promise<void> {
+    if (this.#stopped) return;
+    const health = this.#pushHealth.get(runnerId);
+    if (health === undefined) return;
+
+    const runner = await this.#runners.get(runnerId).catch(() => null);
+    if (runner === null) {
+      // もう繋がっていない。**ここで諦めない**——繋ぎ直してくれば `#connectTo` /
+      // `#reattach` が改めて押し込みを試み、`#settlePushRetry` がまた見る。
+      return;
+    }
+
+    const inFlight = this.#reattachPushes.get(runnerId) ?? this.#connections.get(runner);
+    if (inFlight !== undefined) await inFlight.catch(() => undefined);
+    if (this.#stopped) return;
+
+    if (health.profile?.status === 'failed') await this.#pushProfile(runner);
+    if (health.credentials?.status === 'failed') await this.#pushCredentials(runner);
+    if (health.agentToken?.status === 'failed') await this.#pushAgentToken(runner);
+    this.#settlePushRetry(runnerId);
   }
 
   /** そのマネージャーのセッションが起きた瞬間の身元を覚える。 */

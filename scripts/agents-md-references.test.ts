@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync, statSync } from 'node:fs';
+import { lstatSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -1759,5 +1759,274 @@ describe('excludeCitationScopeSelf / collectWidenedLineNumberCitations（合成 
     expect(collectWidenedLineNumberCitations(entries, resolve, [])).toEqual([
       'scripts/mutate-unhandled-errors.test.ts:1 scripts/check-tracked-nul-bytes.test.ts:43',
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4本目 — **正典（docs 配下の .md）を名指しした住所が、実在するパスを指しているか**（#904）
+// ---------------------------------------------------------------------------
+
+/**
+ * **出典が壊れる形は2つ在り、上の3本はそのうち「指し先が動く」ほうしか見ていない。**
+ *
+ * | 形 | 壊れ方 | 見ている歯 |
+ * |---|---|---|
+ * | **指し先が動く**（`path:行番号`） | 開くと無関係だが正しそうな行が出る | 上の1.・2. |
+ * | 🔴 **指し先が消える**（パスそのもの） | **開こうとしない限り、永久に気づかれない** | **ここ（それまで誰も見ていなかった）** |
+ *
+ * 実例（#904）: `docs/roadmap.md` は #479（PR #488）で廃止されたのに、`main` の
+ * ソース6箇所が**いまも実在するパスとして名指ししていた**。6件はどれも「なぜこの
+ * 設計なのか」の根拠として引かれており、⟹ **失われていたのは参照ではなく判断の
+ * 理由そのものである。** #488 はファイルを消しただけで参照は直しておらず、
+ * **消えてから気づかれるまで17日かかった。**
+ *
+ * ---
+ *
+ * ## 🔴 射程 — 何を見て、何を見ないか
+ *
+ * **見るもの**: 追跡済みファイルのプローズ（フェンスの外）に現れる
+ * `docs/<なにか>.md` の形のトークンが、`git ls-files` に在るか。**それだけである。**
+ *
+ * **見ないもの**（＝ここが緑でも言えないこと）:
+ *
+ * - ⛔ **`docs/` の外のパスは1件も見ていない。** `apps` `packages` `scripts` の下へ
+ *   広げると**偽陽性が支配的になる**ので、意図して広げていない。実測（2026-09-13、
+ *   `main` = `07f1586`。リポジトリ全体で「トップレベル名 + 拡張子」の形のトークンを
+ *   数えた）: 延べ 1944 件のうち解決しないのは **37 種類**で、その内訳は
+ *   **dist と生成物**（`packages/core/dist/probe.js` 等。gitignore 済みだが実行時
+ *   には実在する）・**glob パターン**（`packages/*` の下の test を指す形）・**歯の
+ *   合成 fixture**（`packages/core/src/x.test.ts`・`scripts/other-file-a.test.ts` 等。
+ *   実在しないことが入力の前提）・**意図して実在しないプローブ**
+ *   （`packages/core/src/zz-probe-untracked.ts`）である。⟹ **本物の腐りは
+ *   `docs/roadmap.md` と `scripts/write-canon.mjs`（現物は
+ *   `packages/core/scripts/write-canon.mjs`）の2つだけで、残りは全部ノイズだった。**
+ *   `docs` の下にはこの4種類がどれも無い（正典3ファイルだけで、生成物も fixture も
+ *   glob も無い）ので、ここだけは偽陽性ゼロで測れる。
+ * - ⛔ **`<なにか>:docs/….md` の形は見ない。** `git show 13d7794:docs/roadmap.md`
+ *   （＝**畳んだ住所**。`AGENTS.md` と `docs/architecture.md` が既に使っている形）を
+ *   そのまま許すためである。⟹ **副作用として、sha が実在するか・その sha に
+ *   そのパスが在るかは1件も測っていない。**
+ * - ⛔ **URL の中は見ない**（GitHub の blob URL の末尾に正典のパスが付く形）。
+ *   直前が `/` のものを弾いているためである。
+ * - ⛔ **フェンスの中は見ない。** 上の3本と同じ理由——あそこに在るのは
+ *   出典ではなく生の出力である。
+ * - ⛔ **symlink は読まない。** `CLAUDE.md` は `AGENTS.md` への symlink なので、
+ *   読むと同じ本文を2回数え、免除表も2行要ることになる（実体は1つである）。
+ * - ⛔ **この歯自身のファイルは対象から外す**（`excludeCitationScopeSelf`）。
+ *   下の免除表がトークンとして `docs/roadmap.md` を持つためで、上の
+ *   `path:行番号` の歯が同じ理由で同じ除外をしているのに倣った。
+ *
+ * ## ⚠️ 偽陽性が出る条件（出る前に書く）
+ *
+ * 1. **`docs` の下に生成物を置いたとき**（ビルドで作られ gitignore される `.md`）。
+ *    いまは1つも無いが、置けばこの歯は「実在しない」と言う。
+ * 2. **`docs` の下のパスを合成 fixture として書いたとき**（架空の `docs/x.md` の
+ *    ような名前を歯の入力に使う）。⟹ そのときは免除表ではなく、**この歯自身の
+ *    ファイルの中に書く**（自己参照として既に除外されている）。
+ * 3. **正典を意図して名前ごと消したとき。** そのときこの歯は赤くなるが、**それが
+ *    この歯の目的である**——消した人が参照の後始末をする場所がここになる。
+ */
+export interface CanonPathCitation {
+  readonly line: number;
+  /** 検出したトークン（リポジトリ相対。先頭の `./` は剥がしてある）。 */
+  readonly token: string;
+}
+
+/**
+ * `docs/<なにか>.md` の形のトークンを拾う。
+ *
+ * - 直前が英数・`.`・`-`・`/`・`:` のものを弾く。**`:` を弾くのが
+ *   `git show <sha>:docs/….md`（畳んだ住所）を許す仕組みそのもの**で、`/` を弾くのが
+ *   URL を避ける仕組みである。
+ * - 先頭の `./`（Markdown リンクの相対形）は同じトークンへ畳む。
+ */
+export function findCanonPathCitations(lines: readonly ProseLine[]): CanonPathCitation[] {
+  const re = /(?<![\w.\-/:])(?:\.\/)?(docs\/[A-Za-z0-9_.\-/]*[A-Za-z0-9_-]\.md)/g;
+  const out: CanonPathCitation[] = [];
+  for (const { line, text } of lines) {
+    for (const m of text.matchAll(re)) out.push({ line, token: m[1] });
+  }
+  return out;
+}
+
+/**
+ * 実在しない正典パスを `file:line token` の形で返す。`skipped`（免除表）に
+ * `file` + `token` が載っているものは落とす。
+ */
+export function collectMissingCanonPathCitations(
+  entries: readonly { file: string; text: string }[],
+  exists: (candidate: string) => boolean,
+  skipped: readonly { file: string; token: string }[],
+): string[] {
+  const skip = new Set(skipped.map((s) => `${s.file} ${s.token}`));
+  const out: string[] = [];
+  for (const { file, text } of entries) {
+    for (const c of findCanonPathCitations(proseLines(text))) {
+      if (exists(c.token)) continue;
+      if (skip.has(`${file} ${c.token}`)) continue;
+      out.push(`${file}:${c.line} ${c.token}`);
+    }
+  }
+  return out;
+}
+
+export interface MissingCanonPathExemption {
+  /** リポジトリ相対パス。 */
+  readonly file: string;
+  /** `findCanonPathCitations` が返す `token`。完全一致で照合する。 */
+  readonly token: string;
+  /** **非空であること**（下の歯が測る）。 */
+  readonly why: string;
+}
+
+/**
+ * **⭐ ここに載っているのは「腐った参照」ではなく、廃止を説明している文そのものである。**
+ *
+ * ⚠️ **免除は `file` + `token` の2つだけで照合し、行も件数も持たない。** ⟹ 同じ
+ * ファイルに同じトークンの**本物の腐り**が新しく書かれても、この歯は黙る。
+ * **件数を持たせないのは意図である**——件数を焼き込むと「健全な参照を1本足しただけで
+ * 赤くなる歯」になり、直す動機ではなく書かない動機を作るからである。⟹ **その代わり、
+ * 免除はどちらも「AI が単独で書き換えない側」（正典と `AGENTS.md`）に限ってあり、
+ * どちらも既に畳んだ住所を同じ行に持っている。**
+ */
+export const MISSING_CANON_PATH_EXEMPTIONS: readonly MissingCanonPathExemption[] = [
+  {
+    file: 'AGENTS.md',
+    token: 'docs/roadmap.md',
+    why: '廃止そのものを説明している2行（「ここには4本目として … 実装計画 … が在ったが、2026-08-26 に廃止した」と「かつて … の進捗チェックボックスだけが例外だったが、その文書は廃止した」）。前者は同じ行に畳んだ住所 `git show 13d7794:…` を持ち、後者は指し先の内容を必要としない過去形の言及である ⟹ どちらも直すものが無い。',
+  },
+  {
+    file: 'docs/architecture.md',
+    token: 'docs/roadmap.md',
+    why: '**正典。AI が単独で書き換えない側である**（AGENTS.md「正典は AI が単独で書き換えない」）。かつ中身は「廃止された」と明示したうえで畳んだ住所2本（`git show 13d7794:…` / `git show 7046e2c:…`）を同じ行に持つ ⟹ #904 が「正しく畳んだ見本」と呼んだものそのものである。',
+  },
+];
+
+/**
+ * この歯が読む corpus。**追跡済みの全ファイルから symlink と歯自身を除いたもの**
+ * （射程の doc を見よ）。上の3本と違って範囲を `src` や `.claude` で絞っていないのは、
+ * **正典への腐った住所はどこにでも書けるから**である（実際 #904 の6件は
+ * `apps/cli` `apps/daemon` `apps/web` `packages/core` の4ワークスペースに散っていた）。
+ */
+const CANON_PATH_SCOPE_FILES = excludeCitationScopeSelf(
+  TRACKED_FILES.filter((f) => !lstatSync(path.join(ROOT, f)).isSymbolicLink()),
+);
+
+describe('正典のパスを名指しした住所が実在すること（#904）', () => {
+  it('免除表の理由（why）が全部、非空である', () => {
+    const blank = MISSING_CANON_PATH_EXEMPTIONS.filter((e) => e.why.trim().length === 0).map(
+      (e) => `${e.file} ${e.token}`,
+    );
+    expect(
+      blank,
+      '免除の理由が空である。なぜ実在しないパスを名指ししたままでよいのかを' +
+        '書くこと（空欄を許すと、免除表は数合わせの場所になる）。',
+    ).toEqual([]);
+  });
+
+  it('免除表に載っている項目が、いまも実際に検出される現物と一致する（幽霊免除が無い）', () => {
+    const stillDetected = new Set<string>();
+    for (const file of CANON_PATH_SCOPE_FILES) {
+      for (const c of findCanonPathCitations(proseLines(readRepoFile(file)))) {
+        if (!isRepoFile(c.token)) stillDetected.add(`${file} ${c.token}`);
+      }
+    }
+    const ghosts = MISSING_CANON_PATH_EXEMPTIONS.filter(
+      (e) => !stillDetected.has(`${e.file} ${e.token}`),
+    ).map((e) => `${e.file} ${e.token}`);
+    expect(
+      ghosts,
+      '免除表に載っている file+token が、もう検出されない（直った/消えた/パスが' +
+        '復活した）。免除表からこの行を消すこと——直った後も免除に残すと、次に' +
+        '本当に必要な免除が増えたときに見分けが付かなくなる。',
+    ).toEqual([]);
+  });
+
+  it('実在しない正典のパスを、実在するかのように名指ししていない', () => {
+    const entries = CANON_PATH_SCOPE_FILES.map((file) => ({ file, text: readRepoFile(file) }));
+    const skipped = MISSING_CANON_PATH_EXEMPTIONS.map((e) => ({ file: e.file, token: e.token }));
+    const hits = collectMissingCanonPathCitations(entries, isRepoFile, skipped);
+    expect(
+      hits,
+      '**消えたパスを「実在する住所」として名指ししている。**行番号の腐り' +
+        '（開くと別の行が出るので気づく余地がある）と違って、**消えたパスは' +
+        '開こうとしない限り永久に気づかれない** ⟹ 根拠として引いているなら、' +
+        '失われるのは参照ではなく判断の理由そのものである（#904。実例は ' +
+        'roadmap の6件で、消えてから気づかれるまで17日かかった）。' +
+        '【直し方】(a) 根拠がいまも要る ⟹ `git show <sha>:<path>` の形へ畳む' +
+        '（`AGENTS.md` と正典に見本が在る） (b) 根拠が別の場所へ移った ⟹ その' +
+        '住所を指す（未完のフェーズを持つのは Issue である） (c) 根拠がもう' +
+        '要らない ⟹ **理由を書いて**参照ごと消す。⛔ 黙って消さないこと——' +
+        '「要らなくなった」と「探すのが面倒だった」は、消えた後では区別が' +
+        '付かない。⛔ **「たぶんこのパスだろう」で書き換えないこと。**指そうと' +
+        'していたものが分からないなら、直さずに人間へ聞くほうが安い——推測で' +
+        '書いた住所は、次の人にとって同じ嘘である。直せない理由があるなら ' +
+        'MISSING_CANON_PATH_EXEMPTIONS へ理由つきで足すこと' +
+        '（scripts/agents-md-references.test.ts）。',
+    ).toEqual([]);
+  });
+});
+
+describe('findCanonPathCitations / collectMissingCanonPathCitations（合成 fixture。#904）', () => {
+  const exists = (c: string) => c === 'docs/PRD.md' || c === 'docs/architecture.md';
+
+  it('実在しないパスを拾い、実在するパスは拾わない', () => {
+    const entries = [
+      { file: 'a.ts', text: '根拠は `docs/gone.md` に在る。' },
+      { file: 'b.ts', text: '根拠は `docs/PRD.md` に在る。' },
+    ];
+    expect(collectMissingCanonPathCitations(entries, exists, [])).toEqual(['a.ts:1 docs/gone.md']);
+  });
+
+  it('畳んだ住所（`<sha>:` が直前に付く形）は拾わない', () => {
+    const entries = [{ file: 'a.ts', text: '読むなら `git show 13d7794:docs/gone.md` である。' }];
+    expect(collectMissingCanonPathCitations(entries, exists, [])).toEqual([]);
+  });
+
+  it('先頭の `./` は剥がして同じトークンへ畳む', () => {
+    const entries = [{ file: 'a.md', text: '[消えた計画](./docs/gone.md) を見よ。' }];
+    expect(collectMissingCanonPathCitations(entries, exists, [])).toEqual(['a.md:1 docs/gone.md']);
+  });
+
+  it('URL の中（直前が `/`）は拾わない', () => {
+    const entries = [
+      { file: 'a.md', text: 'https://github.com/takecchi/alteroid/blob/main/docs/gone.md' },
+    ];
+    expect(collectMissingCanonPathCitations(entries, exists, [])).toEqual([]);
+  });
+
+  it('フェンスの中（生の出力）は拾わない', () => {
+    const entries = [
+      { file: 'a.md', text: ['本文。', '```', '$ cat docs/gone.md', '```'].join('\n') },
+    ];
+    expect(collectMissingCanonPathCitations(entries, exists, [])).toEqual([]);
+  });
+
+  it('免除表に載せた file+token は落ちる。載せなければ落ちない（免除が「そもそも拾えていない」のではないことの確認）', () => {
+    const entries = [{ file: 'a.ts', text: '`docs/gone.md` は廃止された。' }];
+    expect(
+      collectMissingCanonPathCitations(entries, exists, [{ file: 'a.ts', token: 'docs/gone.md' }]),
+    ).toEqual([]);
+    expect(collectMissingCanonPathCitations(entries, exists, [])).toEqual(['a.ts:1 docs/gone.md']);
+  });
+
+  it('免除は file と token の両方が一致したときだけ効く（別ファイルの同じ token は落ちない）', () => {
+    const entries = [{ file: 'b.ts', text: '`docs/gone.md` は廃止された。' }];
+    expect(
+      collectMissingCanonPathCitations(entries, exists, [{ file: 'a.ts', token: 'docs/gone.md' }]),
+    ).toEqual(['b.ts:1 docs/gone.md']);
+  });
+
+  it('⭐ 陰性対照2: 健全な参照を何本足しても緑のまま（件数を焼き込んでいないことの証拠）', () => {
+    const entries = [
+      { file: 'a.ts', text: '`docs/PRD.md` と `docs/architecture.md` と `docs/PRD.md`。' },
+      { file: 'b.ts', text: '[PRD](./docs/PRD.md) をもう1本足した。' },
+    ];
+    expect(collectMissingCanonPathCitations(entries, exists, [])).toEqual([]);
+  });
+
+  it('行番号は検出したトークンの行を指す（複数行）', () => {
+    const entries = [{ file: 'a.ts', text: ['1行目。', '2行目。', '`docs/gone.md`'].join('\n') }];
+    expect(collectMissingCanonPathCitations(entries, exists, [])).toEqual(['a.ts:3 docs/gone.md']);
   });
 });
