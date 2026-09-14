@@ -942,7 +942,12 @@ describe('HTTP API', () => {
     expect(stillDefault.approvals.find((a) => a.id === 'ap-withdrawn')).toBeUndefined();
 
     const allList = (await (await app.request('/approvals?pending=false')).json()) as {
-      approvals: { id: string; withdrawnAt?: string; withdrawnReason?: string; updatedAt: string }[];
+      approvals: {
+        id: string;
+        withdrawnAt?: string;
+        withdrawnReason?: string;
+        updatedAt: string;
+      }[];
     };
     const withdrawnEntry = allList.approvals.find((a) => a.id === 'ap-withdrawn');
     expect(withdrawnEntry).toMatchObject({

@@ -1086,7 +1086,9 @@ export async function runSlashCommand(
         // をこの口にも揃える）。
         if (approval.withdrawnAt) {
           stdout.write(`      状態: 取り下げ済み（${approval.withdrawnAt}）\n`);
-          stdout.write(`      取り下げた理由: ${approval.withdrawnReason ?? '（理由の記録なし）'}\n`);
+          stdout.write(
+            `      取り下げた理由: ${approval.withdrawnReason ?? '（理由の記録なし）'}\n`,
+          );
         } else if (approval.answeredAt) {
           stdout.write(`      状態: 回答済み（${approval.answeredAt}）\n`);
           if (approval.answer) stdout.write(`      回答: ${approval.answer}\n`);

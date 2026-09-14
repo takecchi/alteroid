@@ -560,7 +560,9 @@ describe('## エスカレーション — approvalId で束ねる（同じ問い
 
     const digest = await buildActivityDigest(stores, { since: since() });
 
-    const escalationLines = digest.split('\n').filter((line) => line.includes('本番へ流してよいか →'));
+    const escalationLines = digest
+      .split('\n')
+      .filter((line) => line.includes('本番へ流してよいか →'));
     expect(escalationLines).toHaveLength(1);
     expect(escalationLines[0]).toContain('取り下げ: 自分で答えを見つけた');
     expect(escalationLines[0]).not.toContain('未回答');

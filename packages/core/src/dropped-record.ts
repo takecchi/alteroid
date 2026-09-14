@@ -836,7 +836,9 @@ export function journalEntryShape(entry: JournalEntryInput): string {
         (entry.answer === undefined ? '' : ` ${size(entry.answer, 'answer')}`) +
         // withdrawnReason も自由文（人間が読む取り下げの理由）なので、他の
         // 自由文と同じく size() へ逃がす（#963）。
-        (entry.withdrawnReason === undefined ? '' : ` ${size(entry.withdrawnReason, 'withdrawnReason')}`)
+        (entry.withdrawnReason === undefined
+          ? ''
+          : ` ${size(entry.withdrawnReason, 'withdrawnReason')}`)
       );
     // **`outcome` は列挙値（こちら側=SDKの排他分岐が決める値であって、外部が
     // 決める自由文ではない）なので `tag()` に載せてよい**——`subagent_stall.outcome`
