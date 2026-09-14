@@ -15,7 +15,8 @@ import {
   POOL_OWNED_CREDENTIAL_NAMES,
   ROTATABLE_CREDENTIAL_KEYS,
 } from './credentials.js';
-import { WITHHELD_ENV_KEYS } from './runner.js';
+import { CLONE_MODEL_ENV_KEY } from './clone.js';
+import { MANAGER_MODEL_ENV_KEY, WITHHELD_ENV_KEYS, WORKER_MODEL_ENV_KEY } from './runner.js';
 
 /**
  * 鍵は器を作り直さずに回せること。
@@ -451,19 +452,35 @@ describe('GITHUB_CREDENTIAL_NAMES（クローンの器の env が正本より勝
  * 列挙であって、alteroid が外部と向き合う境界を決める値だけである。
  */
 describe('ENV_FILE_OWNED_CREDENTIAL_NAMES（正本を器の生の環境変数が持つ名前）', () => {
-  it('いまはこの5つだけである', () => {
+  it('いまはこの一覧だけである（2群。推測で広がらない）', () => {
     expect([...ENV_FILE_OWNED_CREDENTIAL_NAMES].sort()).toEqual([
+      // 群1: alteroid が外部と向き合う境界（人間の決定 2026-09-14）
       'ALTEROID_ALLOWED_ORIGINS',
       'ALTEROID_AUTH',
+      // 群2: 層とモデル帯の対応＝人間の承認の置き場（2026-09-15）
+      'ALTEROID_CLONE_MODEL',
       'ALTEROID_GOOGLE_CLIENT_ID',
       'ALTEROID_GOOGLE_CLIENT_SECRET',
+      'ALTEROID_MANAGER_MODEL',
       'ALTEROID_PUBLIC_URL',
+      'ALTEROID_WORKER_MODEL',
     ]);
+  });
+
+  /**
+   * **モデル帯の3つが、実際に読まれる名前と一致していること。** ここがずれると
+   * 「拒んでいるつもりの名前」と「器が読む名前」が別物になり、袋へ置けてしまう
+   * 側が黙って復活する（名前の文字列を2か所に書いていることへの歯）。
+   */
+  it('モデル帯の3つは、各層が実際に読む環境変数名と一致する', () => {
+    for (const key of [CLONE_MODEL_ENV_KEY, MANAGER_MODEL_ENV_KEY, WORKER_MODEL_ENV_KEY]) {
+      expect(ENV_FILE_OWNED_CREDENTIAL_NAMES).toContain(key);
+    }
   });
 
   it('ROTATABLE_CREDENTIAL_KEYS（回せる鍵）には1つも含まない', () => {
     // **回す対象ですらない**——道具の鍵の一覧に紛れ込むと、器のファイルへ
-    // 配る経路がこの5つにも生えてしまう。
+    // 配る経路がここに載る名前にも生えてしまう。
     for (const name of ENV_FILE_OWNED_CREDENTIAL_NAMES) {
       expect(ROTATABLE_CREDENTIAL_KEYS).not.toContain(name);
     }

@@ -520,7 +520,9 @@ alteroid credential remove SOME_OLD_KEY               # 外す（runner の器�
 
 **⚠️ 移行の順序。** 正本へ置いて `alteroid credential list` と `GET /runners` の指紋が揃うのを見てから、Shared Variables の側を消す。**逆順にすると、消した瞬間から次に降ろすまでのあいだ、器の環境変数にも正本にも無い状態ができる**（`GIT_AUTHOR_NAME` が無いと commit が `empty ident name` で即落ちる）。**空文字で残さないこと** —— 空は未設定より悪い。
 
-**それでも Shared Variables に残すもの**は、正本が降りる前から要るもの（`ALTEROID_RUNNER_TOKEN` / `ALTEROID_RUNNER_ID` / `ALTEROID_RUNNER_SOCKET`）と、**器自身が読むもの**（`ALTEROID_MANAGER_MODEL` / `ALTEROID_WORKER_MODEL`。あちらは SDK 子プロセスの env ではなく runner のプロセス自身が読むので、降ろしても効かない）である。
+**それでも Shared Variables に残すもの**は、正本が降りる前から要るもの（`ALTEROID_RUNNER_TOKEN` / `ALTEROID_RUNNER_ID` / `ALTEROID_RUNNER_SOCKET`）と、**器自身が読むもの**（`ALTEROID_CLONE_MODEL` / `ALTEROID_MANAGER_MODEL` / `ALTEROID_WORKER_MODEL`。後の2つは SDK 子プロセスの env ではなく runner のプロセス自身が読むので、降ろしても効かない）である。
+
+**⚠️ モデル帯の3つも、ここへは置けない**（400 で断る。2026-09-15）。正本は器の生の環境変数（Shared Variables / `.env`）だけで、**袋に行が在っても誰にも配られない**。置けたままだと層で割れていた —— `ALTEROID_CLONE_MODEL` はデーモン自身のプロセスが読むので**効いてしまい**、`ALTEROID_MANAGER_MODEL` / `ALTEROID_WORKER_MODEL` は runner 自身のプロセスが読むので**黙って効かない**。後者を置くと、**デーモン側の宣言だけが変わって runner は既定の帯のまま走る** ＝ 上の「片方にだけ置くと、クローンが『Opus に委譲している』と宣言しながら別の帯が走る」を袋の側から作れてしまう。**そして帯は設定ではなく人間の承認の置き場である**（AGENTS.md 地雷5）—— 承認の置き場は1つでなければならない。拒むようにする前に置いた行が残っていたら、デーモンの起動時に stderr が名前を1行出す（消すのは `alteroid credential remove <名前>`、または Web UI の環境変数の画面から）。
 
 指紋が食い違っていたら、鍵の権限ではなく**経路**の問題である。PAT の設定を見に行く前にここを見る。
 

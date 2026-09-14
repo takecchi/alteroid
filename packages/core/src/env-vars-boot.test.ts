@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   APP_ENV_VAR_DEFAULTS,
@@ -199,5 +199,51 @@ describe('applyAppScopedEnvVars', () => {
     for (const entry of APP_ENV_VAR_DEFAULTS) {
       expect(target[entry.name]).toBe(entry.value);
     }
+  });
+
+  /**
+   * **書き込みを拒むだけでは塞がらない**（2026-09-15）。一覧へ名前を足す前に
+   * 置かれた行は袋に残り続ける ⟹ 重ねてしまえば、器の生の環境変数を直しても
+   * 二度と効かない（`credentials.ts` の `ENV_FILE_OWNED_CREDENTIAL_NAMES` の doc）。
+   */
+  it('正本が器の生の環境変数である名前の行は、既に在っても重ねない', async () => {
+    const stores = createMemoryStores();
+    // `apply` は拒むので、店の側から直に作る（拒む前に置かれた行の再現）。
+    await stores.credentials.put([
+      { name: 'ALTEROID_CLONE_MODEL', value: 'opus', scope: 'app', secret: false },
+      { name: 'ALTEROID_MANAGER_MODEL', value: 'haiku', scope: 'all', secret: false },
+      { name: 'ALTEROID_AUTH', value: 'off', scope: 'app', secret: false },
+    ]);
+    const target: NodeJS.ProcessEnv = { ALTEROID_CLONE_MODEL: 'fable' };
+
+    await applyAppScopedEnvVars(stores, target);
+
+    // **器の生の環境変数の値がそのまま残る。**
+    expect(target.ALTEROID_CLONE_MODEL).toBe('fable');
+    expect(target.ALTEROID_MANAGER_MODEL).toBeUndefined();
+    expect(target.ALTEROID_AUTH).toBeUndefined();
+  });
+
+  it('重ねなかった行は黙って落とさず、名前だけを stderr に出す', async () => {
+    const stores = createMemoryStores();
+    await stores.credentials.put([
+      { name: 'ALTEROID_CLONE_MODEL', value: 'opus', scope: 'app', secret: false },
+    ]);
+    const written: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+      written.push(String(chunk));
+      return true;
+    });
+
+    try {
+      await applyAppScopedEnvVars(stores, {});
+    } finally {
+      spy.mockRestore();
+    }
+
+    const line = written.join('');
+    expect(line).toContain('ALTEROID_CLONE_MODEL');
+    // **値は出さない**（この袋には秘密の行も居る）。
+    expect(line).not.toContain('opus');
   });
 });

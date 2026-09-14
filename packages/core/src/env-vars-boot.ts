@@ -1,4 +1,5 @@
 import { resolveCredentialRows } from './credential-service.js';
+import { ENV_FILE_OWNED_CREDENTIAL_NAMES } from './credentials.js';
 import type { Stores } from './store.js';
 
 /**
@@ -28,16 +29,16 @@ import type { Stores } from './store.js';
  * 播種しない**（空文字は袋の中で「外す」と同じ意味になるため——播種できるのは
  * 非空の既定を持つ変数だけである）。
  *
- * **`ALTEROID_ALLOWED_ORIGINS` / `ALTEROID_GOOGLE_CLIENT_ID` / `_SECRET` /
- * `ALTEROID_PUBLIC_URL` / `ALTEROID_AUTH` の5つはこの理由では説明できない
- * 一段強い対象外である。** 播種しないだけでなく、この袋（記憶ストアの正本）
- * 自体に置けない——`credentials.ts` の `ENV_FILE_OWNED_CREDENTIAL_NAMES` が
- * `assertEntries` で拒む（人間の決定 2026-09-14）。正本は器の生の環境変数
+ * **`ENV_FILE_OWNED_CREDENTIAL_NAMES`（`credentials.ts`）はこの理由では説明
+ * できない一段強い対象外である。** 播種しないだけでなく、この袋（記憶ストアの
+ * 正本）自体に置けない——`assertEntries` が書き込みを拒み、
+ * `resolveCredentialRows` が読み出しでも落とす。正本は器の生の環境変数
  * （`.env` / Railway の Service 変数、`railway/setup.sh` や compose.yaml の
- * `x-shared-env` が渡す）だけであり、`applyAppScopedEnvVars` がこの5つを
- * `process.env` へ重ねることは無い。alteroid が外部と向き合う境界そのもの
- * （CORS・ログイン・公開URL）を、走行中に画面から直せる強さにしない、という
- * 判断である。
+ * `x-shared-env` が渡す）だけであり、`applyAppScopedEnvVars` がこれらを
+ * `process.env` へ重ねることは無い。内訳は2群——alteroid が外部と向き合う境界
+ * （CORS・ログイン・公開URL。人間の決定 2026-09-14）と、層とモデル帯の対応
+ * （＝人間の承認の置き場。2026-09-15）である。**どちらも走行中に画面から直せる
+ * 強さにしない**、という判断である（理由の違いは `credentials.ts` の doc）。
  *
  * **それ以外（下の配列）は「非空の既定を持つ、alteroid 自身の運用設定」として
  * 播種する。** `ALTEROID_MEMORY_TIDY_AT`（既定 `03:00`）と
@@ -138,6 +139,27 @@ export async function applyAppScopedEnvVars(
     );
     return;
   }
+  /**
+   * **配らなかった行を黙らせない。** `resolveCredentialRows` は
+   * `ENV_FILE_OWNED_CREDENTIAL_NAMES` の行を落とすが（あちらの doc）、落ちるのは
+   * たいてい「拒むようにする前に人間が置いた行」である。⟹ 黙って落とすと
+   * **画面には残っているのに効かない**行ができ、人間からは「置いたのに効かない」
+   * としか見えない（AGENTS.md「静かに失敗する道具」の形そのもの）。
+   *
+   * **名前だけを出す。値は出さない**（この袋には秘密の行も居る）。
+   */
+  const ignored = rows
+    .filter((row) => ENV_FILE_OWNED_CREDENTIAL_NAMES.includes(row.name))
+    .map((row) => row.name);
+  if (ignored.length > 0) {
+    process.stderr.write(
+      `alteroidd: 環境変数の袋に、正本が器の生の環境変数である名前の行が残っています。` +
+        `**この行は誰にも配られていません**（効いているのは器の生の環境変数の値です）。` +
+        `消すには alteroid credential remove <名前>、または Web UI の環境変数の画面から: ` +
+        `${ignored.join(', ')}\n`,
+    );
+  }
+
   const resolved = resolveCredentialRows(rows, target, 'clone');
   for (const row of resolved) {
     target[row.name] = row.value;

@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import { createCredentialService, resolveCredentialRows } from './credential-service.js';
-import { fingerprintOf, type CredentialEntry } from './credentials.js';
+import {
+  ENV_FILE_OWNED_CREDENTIAL_NAMES,
+  fingerprintOf,
+  type CredentialEntry,
+} from './credentials.js';
 import type { RunnerClient, RunnerCredentialFingerprint } from './runner-protocol.js';
 import type { StoredCredential } from './store.js';
 import { createMemoryStores } from './testing.js';
@@ -208,28 +212,60 @@ describe('置かせない名前', () => {
   it('正本を器の生の環境変数が持つ名前は拒む（.env / Railway の変数が二重の正本を持たない）', async () => {
     const { stores, service } = serviceOf([fakeRunner()]);
 
-    for (const name of [
-      'ALTEROID_ALLOWED_ORIGINS',
-      'ALTEROID_GOOGLE_CLIENT_ID',
-      'ALTEROID_GOOGLE_CLIENT_SECRET',
-      'ALTEROID_PUBLIC_URL',
-      'ALTEROID_AUTH',
-    ]) {
+    for (const name of ENV_FILE_OWNED_CREDENTIAL_NAMES) {
       await expect(service.apply([{ name, value: 'x' }])).rejects.toThrow();
     }
     expect(await stores.credentials.list()).toEqual([]);
   });
 
-  it('正本を器の生の環境変数が持つ名前は、外す（空文字）操作でも拒む', async () => {
-    // **`POOL_OWNED_CREDENTIAL_NAMES` と同じ形——空文字も `entry.value` の
-    // 中身に関わらず assertEntries を通る前に落ちる。** すでに DB に紛れ込んで
-    // いる行を消したいだけの呼び出しも拒まれる、という既存の仕様をそのまま
-    // 引き継ぐことを固定する（新しい非対称を作らない）。
-    const { service } = serviceOf([fakeRunner()]);
+  it('層とモデル帯の3つも拒む（人間の承認の置き場を2つにしない）', async () => {
+    // **群2**（`credentials.ts` の `ENV_FILE_OWNED_CREDENTIAL_NAMES` の doc）。
+    // 置けてしまうと、クローンだけ効いて runner の2層は黙って効かない、という
+    // 割れ方になる（読む主体が層ごとに違うため）。
+    const { stores, service } = serviceOf([fakeRunner()]);
+
+    for (const name of [
+      'ALTEROID_CLONE_MODEL',
+      'ALTEROID_MANAGER_MODEL',
+      'ALTEROID_WORKER_MODEL',
+    ]) {
+      await expect(service.apply([{ name, value: 'opus' }])).rejects.toThrow();
+    }
+    expect(await stores.credentials.list()).toEqual([]);
+  });
+
+  /**
+   * **⚠️ 2026-09-15 に期待を反転した。** 元の題は「正本を器の生の環境変数が持つ
+   * 名前は、外す（空文字）操作でも拒む」で、元のコメントはこうだった:
+   *
+   * > **`POOL_OWNED_CREDENTIAL_NAMES` と同じ形——空文字も `entry.value` の
+   * > 中身に関わらず assertEntries を通る前に落ちる。** すでに DB に紛れ込んで
+   * > いる行を消したいだけの呼び出しも拒まれる、という既存の仕様をそのまま
+   * > 引き継ぐことを固定する（新しい非対称を作らない）。
+   *
+   * **反転した理由——「同じ形」は消し口の有無を見ていなかった。**
+   * `POOL_OWNED_CREDENTIAL_NAMES` には別の消し口が在る（`alteroid token remove`）
+   * が、こちらには1つも無い。`PUT /credentials` が袋を触る唯一の口なので、
+   * 空文字まで拒むと**一覧へ名前を足す前に置かれた行を人間が二度と消せない**。
+   * この PR が一覧へ3つ足す以上、それは**この PR が作る穴**である。
+   *
+   * **保証は弱くなっていない。** 空文字は行を消す操作であり、「置ける」側へは
+   * 1文字も倒れない（直上の2つの歯が、値を伴う書き込みを拒み続けることを測る）。
+   */
+  it('正本を器の生の環境変数が持つ名前でも、外す（空文字）操作は通る（消し口が他に無い）', async () => {
+    const { stores, service } = serviceOf([fakeRunner()]);
+    // 一覧へ名前を足す前に置かれた行を、店の側から直に作る（`apply` は拒むので）。
+    await stores.credentials.put([
+      { name: 'ALTEROID_CLONE_MODEL', value: 'opus', scope: 'app', secret: false },
+    ]);
 
     await expect(
-      service.apply([{ name: 'ALTEROID_ALLOWED_ORIGINS', value: '' }]),
-    ).rejects.toThrow();
+      service.apply([{ name: 'ALTEROID_CLONE_MODEL', value: '' }]),
+    ).resolves.toBeDefined();
+
+    expect(
+      (await stores.credentials.list()).some((row) => row.name === 'ALTEROID_CLONE_MODEL'),
+    ).toBe(false);
   });
 
   it('器の外を指す名前は拒む（正本はファイル名にもなる）', async () => {
@@ -636,6 +672,27 @@ describe('resolveCredentialRows（正本と器の env から配る値を1本で�
 
   it('正本にしか無ければ、GitHub の名前でも正本が勝つ', () => {
     const resolved = resolveCredentialRows([row('GH_TOKEN', 'from-vault')], {}, 'clone');
+    expect(resolved).toEqual([row('GH_TOKEN', 'from-vault')]);
+  });
+
+  /**
+   * **書き込みを拒むだけでは塞がらない**（2026-09-15）。`assertEntries` が
+   * 拒むようになる前に置かれた行は袋に残り続け、配られれば
+   * `applyAppScopedEnvVars` がデーモンの `process.env` を上書きする。
+   */
+  it('正本が器の生の環境変数である名前は、行が在っても配らない', () => {
+    for (const name of ENV_FILE_OWNED_CREDENTIAL_NAMES) {
+      expect(resolveCredentialRows([row(name, 'from-vault')], {}, 'clone')).toEqual([]);
+      expect(resolveCredentialRows([row(name, 'from-vault')], {}, 'manager')).toEqual([]);
+    }
+  });
+
+  it('落とすのはその名前だけで、隣の行は配る', () => {
+    const resolved = resolveCredentialRows(
+      [row('ALTEROID_MANAGER_MODEL', 'sonnet'), row('GH_TOKEN', 'from-vault')],
+      {},
+      'manager',
+    );
     expect(resolved).toEqual([row('GH_TOKEN', 'from-vault')]);
   });
 

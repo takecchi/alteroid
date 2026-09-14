@@ -207,11 +207,25 @@ function assertEntries(
           'ローテーションが黙って効かなくなる',
       );
     }
-    if (ENV_FILE_OWNED_CREDENTIAL_NAMES.includes(entry.name)) {
+    /**
+     * **置くのは拒む。外す（空文字）のは通す**（2026-09-15 に後者を分けた）。
+     *
+     * `POOL_OWNED_CREDENTIAL_NAMES`（直上）は空文字も拒むが、**あちらには別の
+     * 消し口が在る**（`alteroid token remove` / `PUT /tokens`）ので、ここで拒んでも
+     * 消せなくならない。こちらには**消し口が1つも無い** —— `PUT /credentials` が
+     * 名前→値の袋を触る唯一の口なので、空文字まで拒むと、**一覧へ名前を足す前に
+     * 置かれた行を人間が二度と消せなくなる**（画面には残り、`resolveCredentialRows`
+     * は配らず、消すこともできない行になる）。
+     *
+     * **⟹ 対称に見えて、消し口の有無が違う。** 空文字を通すのは「置ける」ことに
+     * はならない —— 空文字は行そのものを消す操作であり、正本が2つになる側へは
+     * 1文字も倒れない。
+     */
+    if (ENV_FILE_OWNED_CREDENTIAL_NAMES.includes(entry.name) && entry.value.length > 0) {
       throw new Error(
         `${entry.name} の正本は器の生の環境変数（.env / Railway の Service 変数）である。` +
-          'ここへ置くと正本が2つになり、デーモン起動のたびにこちらの値で器の環境変数を' +
-          '上書きする（直すのは railway/setup.sh が置く側、または器の .env）',
+          'ここへ置いても誰にも配られない（正本を2つにしないため、読み出しでも落とす）' +
+          '（直すのは railway/setup.sh が置く側、または器の .env）',
       );
     }
     if (seen.has(entry.name)) {
@@ -323,6 +337,17 @@ const CLONE_ENV_UPDATED_AT = '(クローンの器の環境変数)';
  * `ROTATABLE_CREDENTIAL_KEYS` に GitHub 以外の非プールの名前が増えても、
  * ここで使っている優先順位はその名前へ自動では広がらない
  * （`credentials.ts` の `GITHUB_CREDENTIAL_NAMES` の doc）。
+ *
+ * ## 正本が器の生の環境変数である名前は、行が在っても配らない（2026-09-15）
+ *
+ * `ENV_FILE_OWNED_CREDENTIAL_NAMES` の名前は `assertEntries` が書き込みを拒むが、
+ * **拒むようにする前に置かれた行は袋に残り続ける**（`credentials.ts` のその doc）。
+ * 書き込みだけを塞ぐと、その行は以後も配られ——`applyAppScopedEnvVars` 経由で
+ * デーモンの `process.env` を上書きし続ける。⟹ 配る側のここでも落とす。
+ *
+ * **`target` で分けない。** クローンにもマネージャーにも配らない——この一覧の
+ * 名前を読むのは器自身のプロセス（デーモン / runner）であって、SDK 子プロセス
+ * では誰も読まないからである（`credentials.ts` の群2の表）。
  */
 export function resolveCredentialRows(
   authoritative: readonly StoredCredential[],
@@ -333,7 +358,14 @@ export function resolveCredentialRows(
   // `packages/storage-pg/src/schema.ts` の「行ごとに層への効かせ分けを持たせない」
   // 方針を上書きしている——理由とその判断は {@link StoredCredential.scope} の doc）。
   // `scope` が無い行（この列より前に作られた行）は `'all'` と同じに扱う。
-  const scoped = authoritative.filter((row) => scopeAppliesTo(row.scope, target));
+  //
+  // **正本が器の生の環境変数である名前は、ここで落とす**（直上の doc）。scope の
+  // 前後どちらでもよいが、**落とす理由が scope とは無関係**（層への効かせ分けでは
+  // なく「そもそも袋の持ち物ではない」）なので、条件を分けて書いてある。
+  const scoped = authoritative.filter(
+    (row) =>
+      !ENV_FILE_OWNED_CREDENTIAL_NAMES.includes(row.name) && scopeAppliesTo(row.scope, target),
+  );
   const held = new Set(scoped.map((row) => row.name));
 
   const cloneEnvWins = (name: string): boolean => {
