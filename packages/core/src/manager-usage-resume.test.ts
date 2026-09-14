@@ -79,6 +79,7 @@ function nudgeRunner() {
     },
     async send(managerId, text) {
       sends.push({ managerId, text });
+      return true;
     },
     async answer(): Promise<RunnerAnswerOutcome> {
       return { delivered: false };

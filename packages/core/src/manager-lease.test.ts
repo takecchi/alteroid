@@ -120,8 +120,9 @@ class LeasedRunner implements RunnerClient {
     this.resumes.push(command);
     this.hold(command.managerId);
   }
-  async send(): Promise<void> {
+  async send(): Promise<boolean> {
     if (this.sendFailure !== undefined) throw this.sendFailure;
+    return true;
   }
   async answer(): Promise<RunnerAnswerOutcome> {
     return { delivered: false };

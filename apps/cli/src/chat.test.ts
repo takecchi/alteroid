@@ -683,6 +683,7 @@ interface ApprovalLike {
   context?: string;
   jobId?: string;
   answeredAt?: string;
+  conversationId?: string;
 }
 
 /** `GET /schedule` が返す1件の形（`scheduleStatusSchema`）。 */
@@ -1514,6 +1515,52 @@ describe('chat の /approvals（一覧）', () => {
     expect(text).not.toContain(
       'id: appr-answered  作成: 2026-08-14T00:00:00.000Z' + '  更新: 2026-08-14T00:00:00.000Z',
     );
+  });
+
+  /**
+   * issue #877 — Web の承認画面（`approvals.tsx` の `ConversationPanel`）は
+   * `conversationId` からこの確認が上がった会話を辿れるが、CLI の `/approvals`
+   * は id しか出しておらず、辿る手がかりが無かった。**`GET /approvals` は
+   * 元から `conversationId` を返している**（#773）ので、CLI 側の表示だけを
+   * 足す。会話が無い側・在る側の両方を、行ごとに正しく出し分けること
+   * （片方だけ直して他方が引きずられていないかを見る——直上の作成/更新の
+   * テストと同じ形）。
+   */
+  it('会話が紐づいていれば id と /conversation の案内を出し、無ければ機構が無いと出す', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      approvals: [
+        {
+          id: 'appr-with-conv',
+          createdAt: '2026-08-16T10:00:00.000Z',
+          question: '会話ありの質問',
+          conversationId: 'conv-42',
+        },
+        {
+          id: 'appr-without-conv',
+          createdAt: '2026-08-16T10:00:00.000Z',
+          question: '会話なしの質問',
+        },
+      ],
+    });
+
+    await runSlashCommand('/approvals', client, emptyListed());
+
+    const text = read();
+    const lines = text.split('\n');
+    // **各行が自分の承認と対応していること。** `toContain` だけでは、
+    // 「在る側の行が無い側にも紛れ込んでいる」形（両方の行が両方の承認の
+    // 下に出る）を見逃す——`lines` の中で1回ずつしか出ていないことまで見る。
+    expect(
+      lines.filter((line) => line === '      会話: conv-42（/conversation conv-42 で読めます）'),
+    ).toHaveLength(1);
+    expect(
+      lines.filter(
+        (line) =>
+          line ===
+          '      会話: 紐づいていない（マネージャー発・内部ターンには紐づけられる会話が存在しない）',
+      ),
+    ).toHaveLength(1);
   });
 });
 

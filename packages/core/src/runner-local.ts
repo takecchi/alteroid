@@ -141,8 +141,18 @@ class LocalRunner implements RunnerClient {
     await this.#host.resume(command);
   }
 
-  async send(managerId: string, text: string): Promise<void> {
-    await this.#host.send(managerId, text);
+  /**
+   * **`#host.send` が返す `boolean` をそのまま返す（#899）。** 以前はここで
+   * `await` だけして戻り値を捨てていた——`ManagerHost.send`（`runner.ts`）は
+   * セッションが無ければ `false` を返す実装なのに、`RunnerClient.send` の
+   * 署名が `Promise<void>` だったため、この実装は例外を投げない以上「常に
+   * 成功した」ようにしか見えなかった。`HttpRunner`（`apps/daemon/src/
+   * runner-client.ts`）は同じ状況で 404 を例外として投げられたので、2つの
+   * 経路は同じ入力（セッションの無い `managerId`）に対して違う結果を返して
+   * いた。
+   */
+  async send(managerId: string, text: string): Promise<boolean> {
+    return this.#host.send(managerId, text);
   }
 
   async answer(managerId: string, answer: RunnerAnswerCommand): Promise<RunnerAnswerOutcome> {

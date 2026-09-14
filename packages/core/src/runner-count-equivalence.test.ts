@@ -96,7 +96,9 @@ class PlacementFakeRunner implements RunnerClient {
   async connect(): Promise<void> {}
   async start(): Promise<void> {}
   async resume(): Promise<void> {}
-  async send(): Promise<void> {}
+  async send(): Promise<boolean> {
+    return true;
+  }
   async answer(): Promise<RunnerAnswerOutcome> {
     return { delivered: false };
   }
@@ -275,8 +277,9 @@ class RoutingFakeRunner implements RunnerClient {
     this.resumes.push(command);
     this.hold(command.managerId);
   }
-  async send(managerId: string, text: string): Promise<void> {
+  async send(managerId: string, text: string): Promise<boolean> {
     this.sends.push({ managerId, text });
+    return true;
   }
   async answer(managerId: string, answer: RunnerAnswerCommand): Promise<RunnerAnswerOutcome> {
     this.answers.push({ managerId, answer });

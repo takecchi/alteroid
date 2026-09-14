@@ -96,6 +96,7 @@ function usageRunner() {
     },
     async send() {
       /* この検証では使わない */
+      return true;
     },
     async answer(): Promise<RunnerAnswerOutcome> {
       return { delivered: false };

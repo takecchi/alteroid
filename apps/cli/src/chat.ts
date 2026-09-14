@@ -1072,6 +1072,29 @@ export async function runSlashCommand(
         );
         if (approval.jobId) stdout.write(`      マネージャー: ${approval.jobId}\n`);
         if (approval.context) stdout.write(`      背景: ${summarizeText(approval.context)}\n`);
+        // **この確認が上がった会話を辿れるようにする（issue #877）。** Web の
+        // 承認画面（`apps/web/app/routes/approvals.tsx` の `ConversationPanel`）
+        // は `approval.conversationId` から会話を復元して出すが、CLI はここが
+        // 空で、`/approvals` を見ても`ask_human` の問いがどの会話から出たのか
+        // 辿る手がかりが無かった。**`GET /approvals` は元から
+        // `conversationId` を返している**（#773／`pendingApprovalSchema`）ので、
+        // 読み側だけで揃う。
+        //
+        // **会話の中身はここでは出さない。** 一覧に本文を全文で載せると件数で
+        // 溢れる（north_star 禁止1、地雷表「エージェントへ返す一覧に本文を
+        // 全文で載せる」）うえ、承認1件ごとに会話を1本取りに行く形は承認が
+        // 溜まるほどリクエストが線形に増える（同じ issue が範囲外として
+        // 挙げている懸念そのもの）。CLI には既に会話の中身を読む専用コマンド
+        // （`/conversation <番号|id>`。id は生の文字列も直接渡せる——
+        // `resolveListedId` 参照）があるので、ここでは id を出して案内するだけ
+        // にする。
+        stdout.write(
+          approval.conversationId
+            ? `      会話: ${approval.conversationId}` +
+                `（/conversation ${approval.conversationId} で読めます）\n`
+            : '      会話: 紐づいていない' +
+                '（マネージャー発・内部ターンには紐づけられる会話が存在しない）\n',
+        );
       });
       stdout.write('  /answer <番号> <回答> で答えられます（答えた仕事だけが再開します）\n');
       return 'ok';

@@ -1725,7 +1725,31 @@ export interface RunnerClient {
   readonly legState?: RunnerLegState;
   start(command: RunnerStartCommand): Promise<void>;
   resume(command: RunnerResumeCommand): Promise<void>;
-  send(managerId: string, text: string): Promise<void>;
+  /**
+   * 追加の1文をセッションへ流す。**戻り値は「届いたか」——`answer()` の
+   * `delivered` と同じ意味である（#899）。
+   *
+   * `false` = runner がこの `managerId` のセッションを持っていない（既に畳まれた
+   * / まだ resume していない）。**`RunnerHost.send`（`runner.ts`）が返す
+   * `boolean` そのものである。**
+   *
+   * **以前は `Promise<void>` だった。** `answer()` の隣に並んでいながら、
+   * `send()` だけが配送結果を名乗れなかった——`HttpRunner` は非2xx（`runner`
+   * 側が返す 404）を例外（`RunnerHttpError`）で表現できていたので気づかれずに
+   * 済んでいたが、`LocalRunner` は例外を投げる経路を持たず、`ManagerHost.send`
+   * が返す `boolean` を `await` だけして捨てていた（`runner-local.ts`）。
+   * ⟹ `manager.ts` の `#sendDetectingMissingSession` は `RunnerHttpError` の
+   * 404 だけを見て自己修復していたため、**`LocalRunner` 配下ではその自己修復が
+   * 一度も発火せず**、セッションが無くても `outcome: 'delivered'` を返しうる
+   * 状態になっていた。
+   *
+   * **実装の作法は2つに分かれてよい。** `HttpRunner` は今までどおり非2xx
+   * （404 を含む）を例外として投げてよい——`#sendDetectingMissingSession` は
+   * 例外と `false` の両方を「セッションが無い」として読む。**「常に `true` を
+   * 返し、無ければ例外を投げる」実装と「例外を投げず `false` を返す」実装の
+   * 両方が、この契約を満たす。**
+   */
+  send(managerId: string, text: string): Promise<boolean>;
   /**
    * `delivered: false` = その確認は runner 側に無い（既に解けた / 別の宛先）。
    * `decision` は runner.ts が確定した allow/deny（#322）——**`delivered` が

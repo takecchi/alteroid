@@ -135,6 +135,7 @@ function fakeRunner(runnerId: string, workspacePath: string) {
     },
     async send() {
       /* この検証では使わない */
+      return true;
     },
     async answer() {
       return { delivered: false };
