@@ -887,6 +887,15 @@ export type ManagerDecision = 'allow' | 'deny';
  * **`session_missing` はまさに「そのものは居る」側である**（台帳にはあり、`sessionId`
  * が残っていればもう一度 resume を試せる）。404 は人間もクローンも CLI も Web も
  * 「そんなものは無い」としてしか読めず、**文言と違って読み手の解釈で救われない。**
+ *
+ * **#563 が塞いだのは `HttpRunner` 配下の穴だけだった（#899）。** 上の「例外として
+ * 貫通していた」は `RunnerHttpError` が投げられる経路（`HttpRunner`）の話で、
+ * `LocalRunner`（同一プロセス実装）は例外を投げず、`RunnerClient.send` の署名が
+ * `Promise<void>` だったため戻り値も持たなかった——`#sendDetectingMissingSession`
+ * の1つ目の分岐（404 捕捉）が一度も発火せず、**`LocalRunner` 配下ではセッションが
+ * 無くても常に `'delivered'` になっていた。** `RunnerClient.send` を
+ * `Promise<boolean>` にし、`#sendDetectingMissingSession` が戻り値も読むように
+ * したことで、2つの実装は同じ入力に同じ `outcome` を返す。
  */
 export interface ManagerSendResult {
   outcome: 'answered' | 'delivered' | 'session_missing' | 'unknown';
@@ -3428,18 +3437,29 @@ class Pool implements ManagerPool {
 
   /**
    * `runner.send()` を呼び、**「runner がこのセッションを持っていない」という答えだけ**を
-   * 例外から値へ変える（#563）。
+   * 例外／戻り値から値へ変える（#563 / #899）。
    *
-   * **捕まえるのは `RunnerHttpError` の 404 だけである。** それ以外は今までどおり
-   * 投げる——「送れなかった」の理由は 404 以外にもあり（5xx・接続断・fencing の 409）、
-   * それらは**待てば直る**か**別の手当てが要る**もので、「セッションが無い」とは
-   * 別の事実である。ここで広く捕まえると、`send()` が resume を試みる条件が
-   * 「runner が答えなかったとき」まで広がり、**生きている仕事を二重に起こす**
-   * （`#restoreJobs` / `#reattach` が逐語で持っている歯止めと同じクラスの危険）。
+   * **2つの経路を両方読む。**
    *
-   * 404 の出どころは `apps/daemon/src/runner-client.ts` の `RunnerHttpError` で、
-   * `apps/runner/src/app.ts` が `#sessions` に無い `managerId` へ返すものである
-   * （**runner 側には何も足していない。既に在る答えを読み替えるだけ**）。
+   * 1. **`RunnerHttpError` の 404 だけを捕まえる。** それ以外は今までどおり
+   *    投げる——「送れなかった」の理由は 404 以外にもあり（5xx・接続断・fencing
+   *    の 409）、それらは**待てば直る**か**別の手当てが要る**もので、
+   *    「セッションが無い」とは別の事実である。ここで広く捕まえると、
+   *    `send()` が resume を試みる条件が「runner が答えなかったとき」まで
+   *    広がり、**生きている仕事を二重に起こす**（`#restoreJobs` / `#reattach`
+   *    が逐語で持っている歯止めと同じクラスの危険）。404 の出どころは
+   *    `apps/daemon/src/runner-client.ts` の `RunnerHttpError` で、
+   *    `apps/runner/src/app.ts` が `#sessions` に無い `managerId` へ返すもの
+   *    である（**runner 側には何も足していない。既に在る答えを読み替える
+   *    だけ**）。
+   * 2. **`runner.send()` が例外を投げずに `false` を返す。** `RunnerClient.send`
+   *    は #899 で `Promise<boolean>` になった——`LocalRunner`（同一プロセス
+   *    実装）は 404 に相当する状況（`ManagerHost.send` がセッション不在で
+   *    `false` を返す）でも例外を投げない。**この分岐が無いと、`LocalRunner`
+   *    配下では1つ目の分岐が一度も発火せず、セッションが無くても
+   *    `outcome: 'delivered'` を返してしまう**（`HttpRunner` とは違う結果に
+   *    なる）。`HttpRunner.send` は成功時に `true` を返すだけで、404 は今まで
+   *    どおり例外のまま——だからこの分岐は `HttpRunner` の挙動を1つも変えない。
    */
   async #sendDetectingMissingSession(
     runner: RunnerClient,
@@ -3447,8 +3467,8 @@ class Pool implements ManagerPool {
     message: string,
   ): Promise<boolean> {
     try {
-      await runner.send(managerId, message);
-      return false;
+      const delivered = await runner.send(managerId, message);
+      return !delivered;
     } catch (error) {
       if (error instanceof RunnerHttpError && error.status === 404) return true;
       throw error;

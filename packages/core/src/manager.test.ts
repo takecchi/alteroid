@@ -1236,6 +1236,7 @@ describe('マネージャー', () => {
       },
       async send() {
         /* この検証では使わない */
+        return true;
       },
       async answer(_managerId, answer) {
         // **この版の runner は decision を報告しない（#322 が模す版skew）。**
@@ -1325,6 +1326,31 @@ describe('マネージャー', () => {
   it('居ないマネージャーへの送信は、黙って捨てずに理由を返す', async () => {
     const s = setup();
     expect((await s.pool.send('mgr-nope', 'やあ')).outcome).toBe('unknown');
+    await s.pool.stop();
+  });
+
+  /**
+   * **`RunnerClient.send` の契約そのものを測る（#899）。** 上のテストは
+   * `Pool#send` から見た結果（`outcome`）だけを見ているが、それだけでは
+   * `LocalRunner.send()` が実際に何を返しているかを取り違えても気づけない
+   * ——`Pool#send` が別の経路（台帳に無い＝`attached: false`）で `'unknown'`
+   * に落としているだけかもしれない。ここは `s.runner`（`setup()` が実際に
+   * 使っている本物の `LocalRunner`）へ直接呼び、**`HttpRunner` が 404 を
+   * 例外にするのと同じ立場**——セッションを持たない `managerId` へは
+   * `false` を返すこと、生きているセッションへは `true` を返すことを、
+   * 型どおりに（`Promise<void>` の `undefined` ではなく）確かめる。
+   */
+  it('LocalRunner.send はセッションの有無を boolean で報告する（#899）', async () => {
+    const s = setup();
+
+    // まだどのセッションも無い ⟹ false（以前は Promise<void> で `undefined`
+    // を返し、呼び出し元からは「投げなかった＝成功した」としか見えなかった）。
+    await expect(s.runner.send('mgr-never-started', 'こんにちは')).resolves.toBe(false);
+
+    const { managerId } = await s.pool.start({ request: '調べて' });
+    // 生きているセッションへは true（`HttpRunner` の非2xxにならない側と対）。
+    await expect(s.runner.send(managerId, '続けて')).resolves.toBe(true);
+
     await s.pool.stop();
   });
 
@@ -2224,6 +2250,7 @@ function swappableRunner(runnerId = 'runner-primary') {
           404,
         );
       }
+      return true;
     },
     async answer(managerId, answer) {
       state.answers.push({ managerId, requestId: answer.requestId });
@@ -5838,7 +5865,9 @@ class FakePoolRunner implements RunnerClient {
     this.started.push(command.managerId);
   }
   async resume(): Promise<void> {}
-  async send(): Promise<void> {}
+  async send(): Promise<boolean> {
+    return true;
+  }
   async answer(): Promise<RunnerAnswerOutcome> {
     return { delivered: false };
   }
@@ -6706,7 +6735,9 @@ class FakeBacklogMergeRunner implements RunnerClient {
   async connect(): Promise<void> {}
   async start(): Promise<void> {}
   async resume(): Promise<void> {}
-  async send(): Promise<void> {}
+  async send(): Promise<boolean> {
+    return true;
+  }
   async answer(): Promise<RunnerAnswerOutcome> {
     return { delivered: false };
   }

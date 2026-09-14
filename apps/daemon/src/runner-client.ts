@@ -1581,8 +1581,19 @@ class HttpRunner implements RunnerClient {
     await this.#call('POST', `/managers/${encodeURIComponent(command.managerId)}/resume`, command);
   }
 
-  async send(managerId: string, text: string): Promise<void> {
+  /**
+   * **成功したら `true`（#899）。** セッションが無いときの振る舞いは変えて
+   * いない——`apps/runner/src/app.ts` の `POST /managers/:id/messages` は
+   * `host.send()` が `false` を返したら 404 を返しており、ここは今までどおり
+   * `#call` の非2xx検出（`RunnerHttpError`）に乗せて例外で表す。変わったのは
+   * `RunnerClient.send` の署名が `Promise<boolean>` になったことで、
+   * `LocalRunner`（同一プロセス実装）が例外を投げずに `false` を返せるように
+   * なった——`manager.ts` の `#sendDetectingMissingSession` は例外と `false`
+   * の両方を「セッションが無い」として読む。
+   */
+  async send(managerId: string, text: string): Promise<boolean> {
     await this.#call('POST', `/managers/${encodeURIComponent(managerId)}/messages`, { text });
+    return true;
   }
 
   async answer(managerId: string, answer: RunnerAnswerCommand): Promise<RunnerAnswerOutcome> {

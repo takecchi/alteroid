@@ -190,7 +190,10 @@ describe('制御面の期限（runner-client.ts）', () => {
       deadlineMs: 2_000,
     });
 
-    await expect(client.send('mgr-1', 'ping')).resolves.toBeUndefined();
+    // **#899: `send()` は届いたら `true` を返す。** 以前は `Promise<void>` で
+    // `undefined` を測っていたが、`RunnerClient.send` の署名が `Promise<boolean>`
+    // になったため、ここで測る「成功のまま」は `true` である。
+    await expect(client.send('mgr-1', 'ping')).resolves.toBe(true);
   });
 
   /**

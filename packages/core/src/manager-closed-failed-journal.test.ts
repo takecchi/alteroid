@@ -58,6 +58,7 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
     },
     async send() {
       /* この検証では使わない */
+      return true;
     },
     async answer(): Promise<RunnerAnswerOutcome> {
       return { delivered: false };

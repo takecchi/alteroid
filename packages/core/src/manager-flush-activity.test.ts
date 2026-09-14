@@ -78,6 +78,7 @@ function flushRunner(runnerId = 'runner-primary'): FlushRunner {
     },
     async send() {
       /* この検証では使わない */
+      return true;
     },
     async answer(): Promise<RunnerAnswerOutcome> {
       return { delivered: false };

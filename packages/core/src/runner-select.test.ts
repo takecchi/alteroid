@@ -50,7 +50,9 @@ class FakeRunner implements RunnerClient {
     this.started.push(command.managerId);
   }
   async resume(): Promise<void> {}
-  async send(): Promise<void> {}
+  async send(): Promise<boolean> {
+    return true;
+  }
   async answer(): Promise<RunnerAnswerOutcome> {
     return { delivered: false };
   }

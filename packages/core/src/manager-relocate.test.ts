@@ -175,6 +175,7 @@ function fakeRunner(
     },
     async send() {
       /* この試験群では使わない。 */
+      return true;
     },
     async answer(): Promise<RunnerAnswerOutcome> {
       return { delivered: false };
