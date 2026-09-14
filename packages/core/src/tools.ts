@@ -72,6 +72,7 @@ import type {
   ManagerSummary,
   ManagerTranscript,
   RunnerBacklogSnapshot,
+  RunnerManagerEntry,
   RunnerPushOutcome,
 } from './manager.js';
 import {
@@ -1991,6 +1992,58 @@ function describeToolUseStall(manager: ManagerSummary): string | null {
     'この行だけでは症状と区別できない — 止めずに、timestamp を見て次の一覧まで待つこと。' +
     '**先に manager_start で起こし直さないこと** — 同じ仕事が2本になる。'
   );
+}
+
+/**
+ * この委譲が抱えている認証トークンの世代を言う（Issue #914 提案1）。
+ * `manager_list` と `runner_list`（`runnerManagerTag`）の2つで生成元を
+ * 揃えてある——同じ判定を2箇所へ別々に書くと、いつか字面が割れる
+ * （`systemErrorLine` の doc と同じ理由）。
+ *
+ * **材料が無ければ `null`**（`manager.tokenGeneration === undefined`。
+ * プールを一度も使っていない構成・このマネージャーがまだ観測されて
+ * いない）。**健全（世代が一致）でも `null` は返さない**——他の ⚠ 系の行
+ * （`describeToolUseStall` 等）と違い、この道具の説明文で「出す」と
+ * 約束している値そのものなので、一致していることも材料が在る限り言う。
+ */
+function describeTokenGeneration(manager: ManagerSummary): string | null {
+  if (manager.tokenGeneration === undefined) return null;
+  if (manager.activeTokenGeneration === undefined) {
+    // **比べる相手がいま取れない。** プールへ一度も撒いていない・現役の
+    // 身元をまだ確認できていない、のどちらか——`ManagerSummary.
+    // activeTokenGeneration` の doc と同じ理由で、0 や「一致」を捏造しない。
+    return `  認証トークンの世代: ${manager.tokenGeneration}（現役は不明——比べられない）`;
+  }
+  if (manager.tokenGeneration === manager.activeTokenGeneration) {
+    return `  認証トークンの世代: ${manager.tokenGeneration}（現役と一致）`;
+  }
+  return (
+    `  ⚠ 認証トークンの世代が食い違っている（世代 ${manager.tokenGeneration} を抱えたまま、` +
+    `現役は世代 ${manager.activeTokenGeneration}）。この委譲のセッションが、` +
+    'ターンの境界（確認待ち・背景処理が無い状態）に一度も達しないまま古い鍵で走り続けている' +
+    '可能性がある（認証トークンを回した直後は、次のターンの境界に達するまでの短い遅れとして' +
+    '普通に起こる——それ自体は症状ではない）。この行が消えないまま 429 が続くようなら、' +
+    'manager_stop → manager_start で起こし直すこと（新しいプロセスなので新しい鍵で走る。' +
+    'ただし会話は失われる）。'
+  );
+}
+
+/**
+ * `runner_list`（器ごとの内訳・`unassigned` の両方）が積む1行の末尾に足す、
+ * 認証トークンの世代の食い違いだけの短い印（Issue #914 提案1）。
+ *
+ * **`describeTokenGeneration` の縮約版であって、別の判定ではない。** `runner_list`
+ * の内訳は `manager_list で全部見える` 前提の圧縮表現（`describeManagerState` と
+ * 同じ生成元を通す、というこのファイルの既存の作法）なので、一致している・
+ * 材料が無い場合は1文字も足さない——⚠ の1件だけを、詳細は `manager_list` へ
+ * 委ねる形で名指しする。
+ */
+function runnerManagerTokenTag(manager: RunnerManagerEntry): string {
+  if (manager.tokenGeneration === undefined || manager.activeTokenGeneration === undefined) {
+    return '';
+  }
+  if (manager.tokenGeneration === manager.activeTokenGeneration) return '';
+  return ` ⚠世代${manager.tokenGeneration}≠現役${manager.activeTokenGeneration}`;
 }
 
 const NO_POOL = text(
@@ -6004,6 +6057,18 @@ export function createCloneTools(context: ToolContext) {
           'あちらは [] を「どれにも当たらない」＝0件として扱う。',
         // **#662 段1。** `commitment_list` の同じ行に寄せた文言。
         '絞った先が予算で切れたら、断り書きが次に打つ cursor を案内する。それを cursor へ渡すと続きから読める。',
+        // **Issue #914 提案1**: 走っているプロセスの env は起動時に凍るので、
+        // 認証トークンを回した直後、この委譲がターンの境界（確認待ち・
+        // 背景処理が無い状態）へ達するまでは古い鍵のまま走り続ける
+        // （`.claude/skills/token-pool/SKILL.md` の「走行中には届かない」）。
+        // それ自体は正常な遅れだが、境界へ一度も達しなければ、この委譲は
+        // ずっと古い鍵のまま 429 を返し続ける——気づく手段が3箇所の時刻の
+        // 突き合わせしか無かった。
+        '認証トークンの世代の行（`describeTokenGeneration` の doc）が出ているマネージャーでは、' +
+          'この委譲が最後に起こした／自動で開き直した時点の世代と、いまの現役の世代を比べられる。' +
+          '⚠ が付いていれば世代が食い違っている——回した直後の短い遅れなら自然に消える。' +
+          '429 が続いたまま消えないなら、manager_stop → manager_start で起こし直すこと' +
+          '（会話は失われる）。プールを使っていない構成や、まだ観測していない委譲では行ごと出ない。',
       ].join(' '),
       {
         // **人間の入口（`GET /managers`）にだけ在った絞りを、クローンにも渡す**
@@ -6379,6 +6444,12 @@ export function createCloneTools(context: ToolContext) {
               // **返事待ち（`waiting`）が在るものにも出さない**——それは届いて
               // いて、クローンがまだ答えていないだけの正常な状態である。
               describeToolUseStall(manager),
+              // **Issue #914 提案1**: この委譲が抱えている認証トークンの
+              // 世代と、現役の世代が食い違っていないかを添える
+              // （`describeTokenGeneration` の doc）。**材料が無ければ
+              // `null` を返し、1文字も増えない**——プールを使っていない
+              // 構成・観測前の器では出ない。
+              describeTokenGeneration(manager),
             ],
           }),
         );
@@ -7175,6 +7246,14 @@ export function createCloneTools(context: ToolContext) {
           'この欄を送らない古い器では、待っていても出ない）。' +
           '「セッション切断」は、その委譲にこのデーモンからもう話しかけられないという意味で、' +
           '仕事が終わったという意味ではない。',
+        // **Issue #914 提案1。** manager_list の ⚠ 行（世代の食い違い）を、
+        // ここでは短い印だけに圧縮して足す——詳細は manager_list へ委ねる
+        // （`runnerManagerTokenTag` の doc）。
+        'マネージャーの字面の直後に ⚠世代N≠現役M が付くことがある——この委譲が抱えている' +
+          '認証トークンの世代（N）と、いまの現役の世代（M）が食い違っている（Issue #914）。' +
+          '回した直後の短い遅れなら自然に消える。429 が続いたまま消えないなら manager_stop → ' +
+          'manager_start で起こし直すこと（会話は失われる）。詳しい文面は manager_list に出る。' +
+          '一致している・材料が無い（プールを使っていない構成）ときはこの印自体が出ない。',
         'デーモン自身の版と、各 runner が名乗った版（コミット sha）も出る。' +
           'デーモンと runner は別々にデプロイされるので、同じ main から起こしていても' +
           '別のコミットで走る窓がある——調べ物で「コードはこうなっている」と言う前に、' +
@@ -7320,7 +7399,10 @@ export function createCloneTools(context: ToolContext) {
                 shown
                   .map(
                     (m) =>
-                      `${m.managerId}[${describeManagerState(m.status, m.live, m.awaitingBackground)}]`,
+                      `${m.managerId}[${describeManagerState(m.status, m.live, m.awaitingBackground)}]` +
+                      // **Issue #914 提案1。** 世代が食い違うときだけ足す短い印
+                      // （`runnerManagerTokenTag` の doc）。詳細は manager_list へ。
+                      runnerManagerTokenTag(m),
                   )
                   .join(', ') +
                 (rest === 0 ? '' : `, …ほか ${rest} 本は省略（manager_list で全部見える）`),
@@ -7488,7 +7570,8 @@ export function createCloneTools(context: ToolContext) {
               shown
                 .map(
                   (m) =>
-                    `${m.managerId}[${describeManagerState(m.status, m.live, m.awaitingBackground)}]`,
+                    `${m.managerId}[${describeManagerState(m.status, m.live, m.awaitingBackground)}]` +
+                    runnerManagerTokenTag(m),
                 )
                 .join(', ') +
               (rest === 0 ? '' : `, …ほか ${rest} 本は省略（manager_list で全部見える）`) +

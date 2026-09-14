@@ -748,6 +748,24 @@ export const managerSummarySchema = z.object({
       since: z.string(),
     })
     .optional(),
+  /**
+   * この委譲が抱えている認証トークンの世代（Issue #914 提案1。
+   * `packages/core/src/manager.ts` の `ManagerSummary.tokenGeneration`）。
+   *
+   * **`activeTokenGeneration` と対で運ぶ**（真下）。プールを使っていない
+   * 構成・まだ観測していない委譲では欄ごと消える。
+   *
+   * **ここに宣言しないと、値が在っても黙って落ちる**（真上の
+   * `awaitingBackground` と同じ断り。落ちると CLI と Web の両方が同時に
+   * 盲目になり、クローンの `manager_list` にだけ出る形になる）。
+   */
+  tokenGeneration: z.number().int().nonnegative().optional(),
+  /**
+   * 呼び出した時点の現役の世代（`ManagerSummary.activeTokenGeneration` の
+   * 写し。Issue #914 提案1）。`tokenGeneration` と対で運ぶ——単独では
+   * 出ない（比べる相手が無い判定を作らない）。
+   */
+  activeTokenGeneration: z.number().int().nonnegative().optional(),
   waiting: z.array(managerWaitingSchema),
   /**
    * 確認へ上がらずに止められた道具と件数（**古い順**）。

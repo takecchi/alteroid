@@ -181,6 +181,37 @@ async function reportTexts(inbox: InboxEvent[], expected: number): Promise<strin
 }
 
 /**
+ * **2件目以降の完全な重複が、日誌へ「畳んだ」と記録されるまで待つ。**
+ *
+ * PR #946（`fix/429-notice-amplification-cap`。窓をまたいだ `turn_failed` の
+ * 完全な重複を畳む）が入ったので、`本文が完全に同一な turn_failed` を
+ * 2回連続で起こしても**受信箱には1件しか立たない**（2件目は畳まれて
+ * 日誌にだけ残る）。この関数が導入される前は `reportTexts(s.inbox, 2)` を
+ * バリアに使っていたが、それは「2件目の `finish()` がここまで処理された」
+ * ことを確かめるための代用でしかなく、この2本のテストが実際に検算している
+ * のは受信箱の件数ではなく**stderr の集計行**（`captureStderr` で取った
+ * `lines`）である。畳まれた事実は受信箱ではなく日誌に残るので、バリアも
+ * そちらへ合わせる（`manager-synthesized-notices.test.ts` の「配らなかった
+ * 束は、1束ごとに日誌へ1行残る」と同じ形）。
+ */
+async function waitForSuppressedTurnFailed(stores: Stores, count: number): Promise<void> {
+  await vi.waitFor(
+    async () => {
+      const entries = await stores.journal.list({ types: ['exchange'] });
+      const suppressed = entries.filter((entry) =>
+        JSON.stringify(entry).includes('受信箱へは回さず数だけ残した'),
+      );
+      if (suppressed.length < count) {
+        throw new Error(
+          `畳んだ記録が ${String(count)} 件届いていない（いま ${String(suppressed.length)} 件）`,
+        );
+      }
+    },
+    { timeout: 4000 },
+  );
+}
+
+/**
  * **回し手が原理的に聞けない失敗を数える（Issue #393）。**
  *
  * 回し手の入口は `usage_notice` / `rate_limit` の2つだけなので、
@@ -224,13 +255,16 @@ describe('分類できなかった失敗の跡（回し手には届かない側�
       // **本文が空**＝分類にかける材料が1文字も無い。資格ゼロの器で起こした
       // ときと同じ形である（`is_error` は立つが、枠の文言はどこにも出ない）。
       // **2回とも単独の断片**（伴走する `usage_notice` が無い）なので、
-      // それぞれ独立した合流窓として扱われ、`finish` を2回に分ければ
-      // 受信箱にも2件立つ——ただし窓（既定3000ms）を2回挟むぶん、
-      // このテスト自体の許容時間を伸ばす必要がある。
+      // それぞれ独立した合流窓として扱われる。**ただし本文はどちらも逐語で
+      // 同一なので、PR #946（窓をまたいだ `turn_failed` の完全な重複を畳む）
+      // により2件目は受信箱へは回らず、日誌にだけ「畳んだ」と残る**
+      // （`waitForSuppressedTurnFailed` の doc）。ここで検算したいのは受信箱の
+      // 件数ではなく下の stderr 集計（`first`）なので、バリアも畳んだ記録の
+      // 側で待つ。
       await session.finish('', { isError: true });
       await reportTexts(s.inbox, 1);
       await session.finish('', { isError: true });
-      await reportTexts(s.inbox, 2);
+      await waitForSuppressedTurnFailed(s.stores, 1);
       await s.pool.stop();
     });
     const first = lines.filter((line) => line.includes('（初出。**回し手には届かない**）'));
@@ -260,7 +294,11 @@ describe('分類できなかった失敗の跡（回し手には届かない側�
       await session.finish('', { isError: true });
       await reportTexts(s.inbox, 1);
       await session.finish('', { isError: true });
-      await reportTexts(s.inbox, 2);
+      // **2件目は PR #946 の窓またぎ畳み込みで受信箱へは回らない**
+      // （`waitForSuppressedTurnFailed` の doc）。ここが検算したいのは
+      // stderr の合計行（`summary`）であって受信箱の件数ではないので、
+      // バリアも畳んだ記録の側で待つ。
+      await waitForSuppressedTurnFailed(s.stores, 1);
       await s.pool.stop();
     });
     const summary = lines.filter((line) => line.includes('このセッションの合計'));
