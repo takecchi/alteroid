@@ -205,6 +205,33 @@ describe('置かせない名前', () => {
     expect(await stores.credentials.list()).toEqual([]);
   });
 
+  it('正本を器の生の環境変数が持つ名前は拒む（.env / Railway の変数が二重の正本を持たない）', async () => {
+    const { stores, service } = serviceOf([fakeRunner()]);
+
+    for (const name of [
+      'ALTEROID_ALLOWED_ORIGINS',
+      'ALTEROID_GOOGLE_CLIENT_ID',
+      'ALTEROID_GOOGLE_CLIENT_SECRET',
+      'ALTEROID_PUBLIC_URL',
+      'ALTEROID_AUTH',
+    ]) {
+      await expect(service.apply([{ name, value: 'x' }])).rejects.toThrow();
+    }
+    expect(await stores.credentials.list()).toEqual([]);
+  });
+
+  it('正本を器の生の環境変数が持つ名前は、外す（空文字）操作でも拒む', async () => {
+    // **`POOL_OWNED_CREDENTIAL_NAMES` と同じ形——空文字も `entry.value` の
+    // 中身に関わらず assertEntries を通る前に落ちる。** すでに DB に紛れ込んで
+    // いる行を消したいだけの呼び出しも拒まれる、という既存の仕様をそのまま
+    // 引き継ぐことを固定する（新しい非対称を作らない）。
+    const { service } = serviceOf([fakeRunner()]);
+
+    await expect(
+      service.apply([{ name: 'ALTEROID_ALLOWED_ORIGINS', value: '' }]),
+    ).rejects.toThrow();
+  });
+
   it('器の外を指す名前は拒む（正本はファイル名にもなる）', async () => {
     const { service } = serviceOf();
 

@@ -554,6 +554,7 @@ export {
   credentialNamesShadowedByProfile,
   ROTATABLE_CREDENTIAL_KEYS,
   POOL_OWNED_CREDENTIAL_NAMES,
+  ENV_FILE_OWNED_CREDENTIAL_NAMES,
   isWithheldCredentialName,
   createCredentialStore,
   fingerprintOf,

@@ -71,7 +71,7 @@ describe('seedDefaultEnvVars', () => {
     expect(tz).toEqual(expect.objectContaining({ value: 'Asia/Tokyo' }));
   });
 
-  it('未設定/空・空白だけの変数は播種しない（ALTEROID_ALLOWED_ORIGINS 等）', async () => {
+  it('器の生の環境変数だけが正本の5つは播種しない（ENV_FILE_OWNED_CREDENTIAL_NAMES）', async () => {
     const stores = createMemoryStores();
 
     await seedDefaultEnvVars(stores, {});
@@ -82,7 +82,20 @@ describe('seedDefaultEnvVars', () => {
     expect(rows.some((row) => row.name === 'ALTEROID_GOOGLE_CLIENT_SECRET')).toBe(false);
     expect(rows.some((row) => row.name === 'ALTEROID_PUBLIC_URL')).toBe(false);
     expect(rows.some((row) => row.name === 'ALTEROID_AUTH')).toBe(false);
-    expect(rows.some((row) => row.name === 'ALTEROID_MEMORY_TIDY_AT')).toBe(false);
+  });
+
+  it('ALTEROID_MEMORY_TIDY_AT / ALTEROID_REPORT_LOOKBACK_DAYS は既定値を持つので播種する', async () => {
+    const stores = createMemoryStores();
+
+    await seedDefaultEnvVars(stores, {});
+
+    const rows = await stores.credentials.list();
+    expect(rows.find((row) => row.name === 'ALTEROID_MEMORY_TIDY_AT')).toEqual(
+      expect.objectContaining({ value: '03:00', scope: 'app', secret: false }),
+    );
+    expect(rows.find((row) => row.name === 'ALTEROID_REPORT_LOOKBACK_DAYS')).toEqual(
+      expect.objectContaining({ value: '3', scope: 'app', secret: false }),
+    );
   });
 
   it('器の環境変数に既に値が在れば、そちらを優先して播種する（移行期の配慮）', async () => {

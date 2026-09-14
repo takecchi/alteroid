@@ -128,6 +128,50 @@ export const POOL_OWNED_CREDENTIAL_NAMES: readonly string[] = [
 ] satisfies readonly (typeof ROTATABLE_CREDENTIAL_KEYS)[number][];
 
 /**
+ * **正本を器の生の環境変数（`.env` / Railway の Service 変数）が持つ名前。**
+ * 名前→値の袋（`CredentialService`）へは置かせない。
+ *
+ * ## なぜ拒むのか（`POOL_OWNED_CREDENTIAL_NAMES` と同じ形の穴）
+ *
+ * ここへ置けてしまうと、デーモンの起動シーケンス（`env-vars-boot.ts` の
+ * `applyAppScopedEnvVars`）が正本のこの行を `process.env` へ**上書きで**重ねる。
+ * ⟹ 器の生の環境変数（`railway/setup.sh` が Service 変数として置く値、compose
+ * なら `.env`）を直しても、正本にこの名前の行が残っている限り二度と効かない。
+ * しかも画面・CLI には「置けた」としか出ず、どちらの値が勝っているかはどこにも
+ * 現れない——**二つの正本のうち、後から起動したデーモンが読んだほうが黙って勝つ**。
+ *
+ * ## この5つ（人間の決定 2026-09-14）
+ *
+ * - `ALTEROID_ALLOWED_ORIGINS` — CORS の許可オリジン
+ * - `ALTEROID_GOOGLE_CLIENT_ID` / `ALTEROID_GOOGLE_CLIENT_SECRET` — Google ログインの鍵
+ * - `ALTEROID_PUBLIC_URL` — 外から届く起点（Redirect URI の組み立てに使う）
+ * - `ALTEROID_AUTH` — 認証を強制的に on/off する上書き
+ *
+ * どれも**alteroid が外部と向き合う境界そのもの**（ブラウザから叩いてよい相手・
+ * ログインを許す相手・どこから届くか）を決める値であり、`requireOperator` の
+ * 資格さえあれば走行中に画面から直せる強さを持たせない、という判断。値自体は
+ * 秘密ではないものもあるので、伏せる理由（`WITHHELD_ENV_KEYS`）とは別の理由で
+ * 拒んでいる——伏せたい相手は子プロセスの目ではなく、**走行中に直せる経路**
+ * そのものである。
+ *
+ * **`ALTEROID_GOOGLE_CLIENT_ID` / `_SECRET` は `AUTH_WITHHELD_ENV_KEYS`
+ * （`apps/daemon/src/auth.ts`）でも独立に拒まれている**（上へ到達する鍵という
+ * 別の理由——`credentialNamesShadowedByProfile` の doc）。ここに重ねて載せるのは
+ * 「この5つは器の生の環境変数だけが正本」という一覧を1か所にまとめるためで、
+ * 拒否そのものは二重に効いていて構わない。
+ *
+ * **`ROTATABLE_CREDENTIAL_KEYS` には含めない。** あちらは「置き場所を器の
+ * ファイルへ移す、回せる鍵」の一覧であり、ここに載る名前は回す対象ですらない。
+ */
+export const ENV_FILE_OWNED_CREDENTIAL_NAMES: readonly string[] = [
+  'ALTEROID_ALLOWED_ORIGINS',
+  'ALTEROID_GOOGLE_CLIENT_ID',
+  'ALTEROID_GOOGLE_CLIENT_SECRET',
+  'ALTEROID_PUBLIC_URL',
+  'ALTEROID_AUTH',
+];
+
+/**
  * **クローンの器の環境変数が、正本より優先して配られる名前。** GitHub の
  * 認証だけを明示的に列挙してある（人間の決定 2026-09-12、Issue #865 の
  * 恒久策）。

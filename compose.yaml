@@ -169,13 +169,18 @@ x-shared-env: &shared-env
   # 静かに無効になる。
   ALTEROID_DAILY_REPORT_AT: ${ALTEROID_DAILY_REPORT_AT:-22:00}
   ALTEROID_INITIATIVE_EVERY: ${ALTEROID_INITIATIVE_EVERY:-55}
-  # **ここだけフォールバック値を書かない。** 空・空白のみは「未設定」として
+  # **ここから3つはフォールバック値を書かない。** 空・空白のみは「未設定」として
   # コード側の既定へ落ちる（`apps/daemon/src/schedule.ts` の `value()` が
-  # `raw.trim().length > 0` で切る）ので、既定の時刻をここへ書き写す必要が無い
+  # `raw.trim().length > 0` で切る）ので、既定値をここへ書き写す必要が無い
   # ＝ 上2つが負っている「揃え続ける義務」がここには生まれない。**空で渡して
   # 安全なのは `ALTEROID_CLONE_MODEL` と同じ理由**で、空が未設定より悪くなる
   # `GIT_*` とは事情が違う。
   ALTEROID_MEMORY_TIDY_AT: ${ALTEROID_MEMORY_TIDY_AT:-}
+  ALTEROID_REPORT_LOOKBACK_DAYS: ${ALTEROID_REPORT_LOOKBACK_DAYS:-}
+  # `packages/core/src/manager.ts` の `WITHHELD_REPORT_FLUSH_MS`（既定30分）を
+  # 差し替える。**未設定なら既定を使う**——読むのは `env[WITHHELD_REPORT_FLUSH_MS_ENV_KEY]`
+  # で、空・空白は数値として読めずに既定へ倒れる（`resolveWithheldReportFlushMs` の doc）。
+  ALTEROID_WITHHELD_REPORT_FLUSH_MS: ${ALTEROID_WITHHELD_REPORT_FLUSH_MS:-}
   TZ: ${TZ:-Asia/Tokyo}
   # 入口の認証（誰がこの HTTP API を叩いてよいか）。**人間が置くのはここ1か所**で、
   # **走っている runner には残らない** — `docker/alteroid-runner` が `exec` の前に
@@ -198,6 +203,10 @@ x-shared-env: &shared-env
   # ブラウザが戻ってくる先の起点。**外から届く URL を書く**（プロバイダに登録する
   # Redirect URI は `<これ>/auth/google/callback` の1本だけでよい）。
   ALTEROID_PUBLIC_URL: ${ALTEROID_PUBLIC_URL:-}
+  # 画面（apps/web）を別オリジンに置く配置のための境界設定。**空（既定）なら
+  # CORS ヘッダを一切返さない**——そこが今までの姿勢であり、既定では1バイトも
+  # 変わらない（`apps/daemon/src/app.ts` の `parseAllowedOrigins` の doc）。
+  ALTEROID_ALLOWED_ORIGINS: ${ALTEROID_ALLOWED_ORIGINS:-}
   # GitHub を触るための鍵と、コミットの身元。**これは下＝外の世界へ手を伸ばす鍵で
   # あり、渡すのが正しい**（記憶ストアの鍵と逆。伏せると人間が Claude Code でできる
   # `gh pr create` が層を下りた瞬間にできなくなる＝デグレード。north_star 禁止1）。

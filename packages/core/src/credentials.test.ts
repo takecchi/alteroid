@@ -8,6 +8,7 @@ import {
   createCredentialStore,
   credentialNamesShadowedByProfile,
   CREDENTIAL_NAME,
+  ENV_FILE_OWNED_CREDENTIAL_NAMES,
   fingerprintOf,
   GITHUB_CREDENTIAL_NAMES,
   isWithheldCredentialName,
@@ -441,6 +442,31 @@ describe('GITHUB_CREDENTIAL_NAMES（クローンの器の env が正本より勝
       (name) => !POOL_OWNED_CREDENTIAL_NAMES.includes(name),
     );
     expect([...GITHUB_CREDENTIAL_NAMES].sort()).toEqual([...rotatableMinusPool].sort());
+  });
+});
+
+/**
+ * 正本を器の生の環境変数（.env / Railway の Service 変数）が持つ名前の範囲
+ * （人間の決定 2026-09-14）。**推測で広がらないこと**を守る——中身は明示的な
+ * 列挙であって、alteroid が外部と向き合う境界を決める値だけである。
+ */
+describe('ENV_FILE_OWNED_CREDENTIAL_NAMES（正本を器の生の環境変数が持つ名前）', () => {
+  it('いまはこの5つだけである', () => {
+    expect([...ENV_FILE_OWNED_CREDENTIAL_NAMES].sort()).toEqual([
+      'ALTEROID_ALLOWED_ORIGINS',
+      'ALTEROID_AUTH',
+      'ALTEROID_GOOGLE_CLIENT_ID',
+      'ALTEROID_GOOGLE_CLIENT_SECRET',
+      'ALTEROID_PUBLIC_URL',
+    ]);
+  });
+
+  it('ROTATABLE_CREDENTIAL_KEYS（回せる鍵）には1つも含まない', () => {
+    // **回す対象ですらない**——道具の鍵の一覧に紛れ込むと、器のファイルへ
+    // 配る経路がこの5つにも生えてしまう。
+    for (const name of ENV_FILE_OWNED_CREDENTIAL_NAMES) {
+      expect(ROTATABLE_CREDENTIAL_KEYS).not.toContain(name);
+    }
   });
 });
 

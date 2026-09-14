@@ -1,5 +1,6 @@
 import {
   CREDENTIAL_NAME,
+  ENV_FILE_OWNED_CREDENTIAL_NAMES,
   fingerprintOf,
   GITHUB_CREDENTIAL_NAMES,
   isWithheldCredentialName,
@@ -204,6 +205,13 @@ function assertEntries(
         `${entry.name} の正本は認証トークンのプールである（alteroid token add / PUT /tokens）。` +
           'ここへ置くと撒き手が2つになり、回した鍵をこちらが名乗り直しで上書きして' +
           'ローテーションが黙って効かなくなる',
+      );
+    }
+    if (ENV_FILE_OWNED_CREDENTIAL_NAMES.includes(entry.name)) {
+      throw new Error(
+        `${entry.name} の正本は器の生の環境変数（.env / Railway の Service 変数）である。` +
+          'ここへ置くと正本が2つになり、デーモン起動のたびにこちらの値で器の環境変数を' +
+          '上書きする（直すのは railway/setup.sh が置く側、または器の .env）',
       );
     }
     if (seen.has(entry.name)) {

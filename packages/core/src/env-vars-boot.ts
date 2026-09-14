@@ -26,10 +26,26 @@ import type { Stores } from './store.js';
 /**
  * 初回起動時に既定値を播種する変数。**「未設定＝空」が正しい既定の変数は
  * 播種しない**（空文字は袋の中で「外す」と同じ意味になるため——播種できるのは
- * 非空の既定を持つ変数だけである）。`ALTEROID_ALLOWED_ORIGINS` /
- * `ALTEROID_GOOGLE_CLIENT_ID` / `_SECRET` / `ALTEROID_PUBLIC_URL` / `ALTEROID_AUTH` /
- * `ALTEROID_MEMORY_TIDY_AT` はこの理由で対象外のまま（既定は「未設定」なので、
- * 要るときに人間が明示的に置く）。
+ * 非空の既定を持つ変数だけである）。
+ *
+ * **`ALTEROID_ALLOWED_ORIGINS` / `ALTEROID_GOOGLE_CLIENT_ID` / `_SECRET` /
+ * `ALTEROID_PUBLIC_URL` / `ALTEROID_AUTH` の5つはこの理由では説明できない
+ * 一段強い対象外である。** 播種しないだけでなく、この袋（記憶ストアの正本）
+ * 自体に置けない——`credentials.ts` の `ENV_FILE_OWNED_CREDENTIAL_NAMES` が
+ * `assertEntries` で拒む（人間の決定 2026-09-14）。正本は器の生の環境変数
+ * （`.env` / Railway の Service 変数、`railway/setup.sh` や compose.yaml の
+ * `x-shared-env` が渡す）だけであり、`applyAppScopedEnvVars` がこの5つを
+ * `process.env` へ重ねることは無い。alteroid が外部と向き合う境界そのもの
+ * （CORS・ログイン・公開URL）を、走行中に画面から直せる強さにしない、という
+ * 判断である。
+ *
+ * **それ以外（下の配列）は「非空の既定を持つ、alteroid 自身の運用設定」として
+ * 播種する。** `ALTEROID_MEMORY_TIDY_AT`（既定 `03:00`）と
+ * `ALTEROID_REPORT_LOOKBACK_DAYS`（既定 `3`）は、`apps/daemon/src/schedule.ts`
+ * の `DEFAULT_MEMORY_TIDY_AT` / `DEFAULT_REPORT_LOOKBACK_DAYS` と同じ値で
+ * ここにも並べてある（`ALTEROID_DAILY_REPORT_AT` が `DEFAULT_DAILY_REPORT_AT`
+ * と並べてあるのと同じ形——コードの既定と、播種してDBへ書く既定を、あえて
+ * 同じ値で二重に持つ）。
  *
  * **どれも `scope: 'app'`**（デーモン自身の運用設定であって、マネージャーの
  * Bash 環境には意味を持たない）。**どれも `secret: false`**（秘密ではなく、
@@ -41,6 +57,8 @@ export const APP_ENV_VAR_DEFAULTS: readonly { name: string; value: string }[] = 
   { name: 'ALTEROID_INITIATIVE_EVERY', value: '55' },
   { name: 'ALTEROID_ACCESS_TOKEN_TTL_DAYS', value: '30' },
   { name: 'ALTEROID_WITHHELD_REPORT_FLUSH_MS', value: '1800000' },
+  { name: 'ALTEROID_MEMORY_TIDY_AT', value: '03:00' },
+  { name: 'ALTEROID_REPORT_LOOKBACK_DAYS', value: '3' },
 ];
 
 /**
