@@ -2579,6 +2579,13 @@ interface SynthesizedNoticeWindow {
  * こちらが扱うのは**バイト単位で同一**の束だけなので混ざりようが無く、時間の
  * 窓を必要としない。**⟹ 足したのは新しい制限ではなく、既に在る畳み込みから
  * 「3000ms」という恣意的な境界を外した形である。**
+ *
+ * **⚠️ この記憶を実際に読み書きするのは `turn_failed` 単独の束だけである**
+ * （{@link isCrossWindowStreakEligible}）。`rate_limit` / `usage_notice` は
+ * 別の専用の記憶で既に「配る価値があるか」を判定済みなので、ここでも
+ * 文字列一致を掛けると状態ベースの判定を上書きしてしまう——2026-09-14 の
+ * 検証で `rate_limit` を巻き込んで実際に壊した。この doc の上の説明
+ * （429 の実測）は変わらず正しいが、**適用範囲はそこ止まり**だと読むこと。
  */
 interface SynthesizedNoticeStreak {
   /** 直前に配った束の署名（`synthesizedNoticeSignature`）。 */
@@ -2608,6 +2615,50 @@ export function synthesizedNoticeSignature(
   fragments: readonly SynthesizedNoticeFragment[],
 ): string {
   return JSON.stringify(fragments.map((fragment) => [fragment.label, fragment.text]));
+}
+
+/**
+ * **窓をまたいだ抑制（{@link SynthesizedNoticeStreak}）の対象を、`turn_failed`
+ * 単独の束に絞る。**
+ *
+ * ⚠️ **これは実装時の想定漏れの後始末である。** 当初は全ての族へ一律に
+ * 掛けていたが、そのままだと `rate_limit` の既存の歯を壊す
+ * （`usage-notice-redelivery.test.ts` の「枠が開いたと観測できたら、次に
+ * 追い返されたときはもう一度配る」。2026-09-14、rebase 後の `pnpm test` で
+ * 実測）。
+ *
+ * **`rate_limit` と `usage_notice` は、ここへ来る前に専用の記憶で
+ * 「配る価値があるか」を既に判定している** — `case 'rate_limit'` の
+ * `usageTransitionOf`（`#rateLimits` の状態遷移）と、`case 'usage_notice'`
+ * の `#usageNoticeMemoryOf().delivered`（種類ごとに配った文言の集合）。
+ * その判定は**状態**に基づくので、「rejected → allowed → rejected」の
+ * ように**文字列は同一でも意味的には新しい出来事**を正しく通す。窓を
+ * またいだ抑制を残りの族にも一律に重ねると、この状態ベースの判定を
+ * **文字列一致だけで後ろから上書き**してしまい、`allowed` を挟んでも
+ * 「もう配った文言と同じだから」で握りつぶす——実際に壊れた。
+ *
+ * **`turn_failed` にはその種の専用記憶が無い。** `#queueSynthesizedNotice`
+ * が窓の中でだけ持つ一時的な重複排除（`SynthesizedNoticeFragment.count`）
+ * しか無く、窓が閉じれば消える——これが issue #954 の実測（429 が
+ * 5,342 件、本文は逐語で同一）そのものである。**だから窓をまたいだ記憶が
+ * 要るのはここだけであり、対象をここへ絞ることは能力を削ることではない**
+ * （north_star 禁止2 — 削るのではなく、他の族が既に持っている専用の判定を
+ * 上書きしないという境界を引いているだけである）。
+ *
+ * **`resume_fallback` / `resume_failed` / `closed_failed` は対象に含めて
+ * いない。** issue #954 が実測したのは `turn_failed` の連投であり、他の
+ * 3族について窓をまたいだ抑制が必要だという実測は無い。**要ると分かって
+ * から広げる** — 要る前に広げて、`rate_limit` と同じ形でまた壊すより安全
+ * である。
+ *
+ * **単独の束であることも条件にしている。** `#queueSynthesizedNotice` は
+ * 同じ窓の中に複数の族を混ぜて積むことがある（「一枠落ち一合図」で
+ * `usage_notice` と `turn_failed` が同じ窓に同居する場合など）。混ざった
+ * 束は対象にしない——`turn_failed` 単独の束だけが確実に issue #954 の
+ * 形と一致する。
+ */
+function isCrossWindowStreakEligible(fragments: readonly SynthesizedNoticeFragment[]): boolean {
+  return fragments.length === 1 && fragments[0]?.label === 'turn_failed';
 }
 
 /**
@@ -8379,9 +8430,14 @@ class Pool implements ManagerPool {
     // `streak === undefined` の回（＝まだ1件も配っていない）は必ず配る側へ
     // 倒れる。⛔ **ここを「同文なら常に捨てる」に変えないこと**——1件目まで
     // 消えて「黙らせる」側になる（歯: 「1件目は必ず配る」）。
+    //
+    // **対象は `turn_failed` 単独の束だけ**（{@link isCrossWindowStreakEligible}
+    // の doc）。`rate_limit` / `usage_notice` は専用の状態ベースの判定を
+    // 既に経ているので、ここでさらに文字列一致を重ねると誤って握りつぶす。
     const signature = synthesizedNoticeSignature(entry.fragments);
+    const eligible = isCrossWindowStreakEligible(entry.fragments);
     const streak = this.#synthesizedNoticeStreaks.get(managerId);
-    if (streak !== undefined && streak.signature === signature) {
+    if (eligible && streak !== undefined && streak.signature === signature) {
       const at = new Date(this.#now()).toISOString();
       streak.suppressed += 1;
       streak.suppressedArrived += arrived;
@@ -8405,11 +8461,20 @@ class Pool implements ManagerPool {
     // 件数を末尾の1行として運んでから帳面を消すので、先に上書きすると
     // 「配らなかった件数」がクローンへ届かないまま消える。
     this.#deliver(managerId, 'report', text);
-    this.#synthesizedNoticeStreaks.set(managerId, {
-      signature,
-      suppressed: 0,
-      suppressedArrived: 0,
-    });
+    // **対象外の束では新しい連鎖を立てない。** `eligible` でない配達
+    // （`rate_limit` / `usage_notice` / 混在した束）は、この関数に関する
+    // 限り「連鎖を継がない」——`#deliver` 自身が既存の連鎖を必ず断つので
+    // （直前のコメント）、ここで何もしなければ古い `turn_failed` の連鎖は
+    // 正しく途切れる。新しく立てないのは、対象外の族で連鎖を始めても
+    // 次に同じ族が来たときに握りつぶす先が無い（`isCrossWindowStreakEligible`
+    // が偽を返し続ける）ので、記憶を持つだけ無駄だからである。
+    if (eligible) {
+      this.#synthesizedNoticeStreaks.set(managerId, {
+        signature,
+        suppressed: 0,
+        suppressedArrived: 0,
+      });
+    }
     // **消えてよいのは「クローンを起こすこと」だけで、記録ではない。**
     // 個々の知らせは積んだ時点で呼び出し元（`case 'rate_limit'` 等）が
     // 既にそれぞれの `#journal` を書いている——ここで足すのは「まとめた」
