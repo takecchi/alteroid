@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { approvalUpdatedAt, commitmentUpdatedAt, inboxEventSchema } from './schema.js';
+import {
+  approvalUpdatedAt,
+  commitmentUpdatedAt,
+  inboxEventSchema,
+  pendingApprovalSchema,
+} from './schema.js';
 
 /**
  * `manager_message` の `statusAtDelivery`（issue #870）。
@@ -127,5 +132,47 @@ describe('approvalUpdatedAt', () => {
         answeredAt: '2026-01-03T00:00:00.000Z',
       }),
     ).toBe('2026-01-03T00:00:00.000Z');
+  });
+
+  // #963: withdrawnAt を answeredAt と対の終端として足した。
+  it('withdrawnAt があればそちらを返す（取り下げ済み）', () => {
+    expect(
+      approvalUpdatedAt({
+        createdAt: '2026-01-01T00:00:00.000Z',
+        withdrawnAt: '2026-01-04T00:00:00.000Z',
+      }),
+    ).toBe('2026-01-04T00:00:00.000Z');
+  });
+
+  it('withdrawnAt と answeredAt が両方あれば withdrawnAt を優先する（正常な経路では両立しないが、優先順位を明示する）', () => {
+    expect(
+      approvalUpdatedAt({
+        createdAt: '2026-01-01T00:00:00.000Z',
+        answeredAt: '2026-01-03T00:00:00.000Z',
+        withdrawnAt: '2026-01-04T00:00:00.000Z',
+      }),
+    ).toBe('2026-01-04T00:00:00.000Z');
+  });
+});
+
+describe('pendingApprovalSchema（#963: withdrawnAt / withdrawnReason）', () => {
+  it('withdrawnAt / withdrawnReason 無しでもパースできる（既存の行と互換）', () => {
+    const parsed = pendingApprovalSchema.safeParse({
+      id: 'ap-1',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      question: '質問',
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('withdrawnAt / withdrawnReason 付きでパースできる', () => {
+    const parsed = pendingApprovalSchema.safeParse({
+      id: 'ap-1',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      question: '質問',
+      withdrawnAt: '2026-01-02T00:00:00.000Z',
+      withdrawnReason: '不要になった',
+    });
+    expect(parsed.success).toBe(true);
   });
 });

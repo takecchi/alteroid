@@ -245,6 +245,7 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /archive <id>        生ログの中身
 /archive sessions    sessionId ごとの行数・使用量の集計（#698）
 /approvals           承認待ち（番号付き）
+/approvals all       回答済み・取り下げ済みも含めて見る
 /answer <番号|id> <回答>  承認待ちに答える（番号は /approvals の並び）
 /answers <番号|id> <回答> [<番号|id> <回答> ...]  溜まった承認待ちにまとめて答える
                      （回答は1語。複数語なら "..." で囲む。1件が駄目でも残りは進み、
@@ -1031,6 +1032,10 @@ export async function runSlashCommand(
      * 人間が席に戻ったときに UUID を写す作業をさせないためである。
      */
     case '/approvals': {
+      // **`all` で回答済み・取り下げ済みも含める（#963。`/commitments all` と
+      // 同じ約束）。** 既定は未回答かつ未取り下げのみ——番号を振って
+      // `/answer` に使わせる一覧を、答えようがない行で埋めないため。
+      const includeSettled = rest[0] === 'all';
       // **`order` を明示して呼ぶ。窓（`limit` / `cursor`）は作らない。**
       // 直しているのは並びの不安定さであって、件数の可視化ではない（ここは全件を
       // 受け取っているので、応答へ載る `total` は受け取った配列の長さと必ず一致する
@@ -1044,7 +1049,9 @@ export async function runSlashCommand(
       //
       // **ここで番号を振って `/approve <番号>` に使わせている以上、並びが動くのは
       // そのまま誤爆の経路である**（人間が見た番号と、次に打つ番号がずれる）。
-      const response = await client.approvals.$get({ query: { order: 'asc' } });
+      const response = await client.approvals.$get({
+        query: { order: 'asc', ...(includeSettled ? { pending: 'false' as const } : {}) },
+      });
       if (!response.ok) {
         stdout.write('承認待ちを読めませんでした\n');
         return 'ok';
@@ -1072,6 +1079,18 @@ export async function runSlashCommand(
         );
         if (approval.jobId) stdout.write(`      マネージャー: ${approval.jobId}\n`);
         if (approval.context) stdout.write(`      背景: ${summarizeText(approval.context)}\n`);
+        // **取り下げ済み・回答済みの状態を出す（#963）。** `/approvals all` で
+        // 初めて視界に入る2状態——`approval_withdraw` はクローンが起こす行為
+        // なので人間に取り下げボタンは無いが、取り下げられた事実と理由は
+        // CLI からも読めること（issue #963 §5「少なくとも…読めることは要る」
+        // をこの口にも揃える）。
+        if (approval.withdrawnAt) {
+          stdout.write(`      状態: 取り下げ済み（${approval.withdrawnAt}）\n`);
+          stdout.write(`      取り下げた理由: ${approval.withdrawnReason ?? '（理由の記録なし）'}\n`);
+        } else if (approval.answeredAt) {
+          stdout.write(`      状態: 回答済み（${approval.answeredAt}）\n`);
+          if (approval.answer) stdout.write(`      回答: ${approval.answer}\n`);
+        }
         // **この確認が上がった会話を辿れるようにする（issue #877）。** Web の
         // 承認画面（`apps/web/app/routes/approvals.tsx` の `ConversationPanel`）
         // は `approval.conversationId` から会話を復元して出すが、CLI はここが

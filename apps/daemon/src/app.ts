@@ -2331,6 +2331,17 @@ export function createApp(deps: AppDeps) {
             results.push({ id, ok: false, error: 'already answered' });
             continue;
           }
+          // **取り下げ済みは回答できない（#963）。** 「答えたのに取り下げられた」
+          // の逆向き——クローンが `approval_withdraw` で「もう要らない」と
+          // 決めた件へ人間が答えると、`putApproval` が上書きして
+          // `withdrawnAt` と `answeredAt` が同時に立った行を作ってしまう
+          // うえ、クローンが止めたつもりの仕事を人間の回答が再開しうる
+          // （`clone.ts` の `case 'human_answer'` は `answeredAt` の有無しか
+          // 見ない）。
+          if (approval.withdrawnAt !== undefined) {
+            results.push({ id, ok: false, error: 'withdrawn' });
+            continue;
+          }
           try {
             await clone.answerApproval(id, answer);
             results.push({ id, ok: true });
@@ -2349,7 +2360,8 @@ export function createApp(deps: AppDeps) {
         summary: '承認待ちに1件答える',
         description:
           '二度答えると、既に再開した仕事へ同じ回答がもう一度流れ、記録上の回答も上書きされる。' +
-          '答え直したいなら新しい確認として来るのが正しい（→ 409）。',
+          '答え直したいなら新しい確認として来るのが正しい（→ 409）。' +
+          'クローンが approval_withdraw で取り下げた件も答えられない（→ 409 error="withdrawn"。#963）。',
         responses: {
           200: {
             description: '答えた。',
@@ -2380,6 +2392,10 @@ export function createApp(deps: AppDeps) {
         // 上書きされる。答え直したいなら新しい確認として来るのが正しい。
         if (approval.answeredAt !== undefined) {
           return c.json({ error: 'already answered' as const }, 409);
+        }
+        // 取り下げ済みも答えられない（#963。上のバルク版と同じ理由）。
+        if (approval.withdrawnAt !== undefined) {
+          return c.json({ error: 'withdrawn' as const }, 409);
         }
         await clone.answerApproval(id, c.req.valid('json').answer);
         return c.json({ ok: true });

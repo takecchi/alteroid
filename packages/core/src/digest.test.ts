@@ -532,6 +532,69 @@ describe('## エスカレーション — approvalId で束ねる（同じ問い
     expect(escalationLines[0]).toContain('id: ap-hub-issue');
   });
 
+  /**
+   * #963: 取り下げも「聞いた」行と対の終端として同じ approvalId に積まれる
+   * ——回答と同じ二重表示問題を持つので、同じ束ね方で防ぐ。
+   */
+  it('同じ approvalId の「聞いた」行と「取り下げた」行は1行に束ね、「取り下げ」だけを出す（未回答としては出さない）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putApproval({
+      id: 'ap-withdrawn',
+      createdAt: new Date().toISOString(),
+      question: '本番へ流してよいか',
+      withdrawnAt: new Date().toISOString(),
+      withdrawnReason: '自分で答えを見つけた',
+    });
+    await stores.journal.append({
+      type: 'escalation',
+      question: '本番へ流してよいか',
+      approvalId: 'ap-withdrawn',
+    });
+    await stores.journal.append({
+      type: 'escalation',
+      question: '本番へ流してよいか',
+      approvalId: 'ap-withdrawn',
+      withdrawnAt: new Date().toISOString(),
+      withdrawnReason: '自分で答えを見つけた',
+    });
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    const escalationLines = digest.split('\n').filter((line) => line.includes('本番へ流してよいか →'));
+    expect(escalationLines).toHaveLength(1);
+    expect(escalationLines[0]).toContain('取り下げ: 自分で答えを見つけた');
+    expect(escalationLines[0]).not.toContain('未回答');
+    expect(escalationLines[0]).toContain('id: ap-withdrawn');
+  });
+
+  it('この期間の日誌には取り下げ前の行しか無いが、キューでは既に取り下げ済み（この期間の外で取り下げられた）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putApproval({
+      id: 'ap-withdrawn-later',
+      createdAt: new Date().toISOString(),
+      question: '本番へ流してよいか（後で取り下げ）',
+      withdrawnAt: new Date().toISOString(),
+      withdrawnReason: '前提が消えた',
+    });
+    // 日誌にはこの期間の「聞いた」行しか無い（「取り下げた」行はこの digest
+    // の窓の外に積まれた、という状況を模している）。
+    await stores.journal.append({
+      type: 'escalation',
+      question: '本番へ流してよいか（後で取り下げ）',
+      approvalId: 'ap-withdrawn-later',
+    });
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    const line = digest.split('\n').find((l) => l.includes('本番へ流してよいか（後で取り下げ） →'));
+    expect(line).toContain('この期間の外で取り下げられた');
+    expect(line).toContain('前提が消えた');
+    // 「回答の本文が無い記録——台帳の破損の可能性がある」に落ちていないこと
+    // （#963 で見つかった、取り下げを回答済みの破損として誤読する形）。
+    expect(line).not.toContain('台帳の破損');
+    expect(line).toContain('id: ap-withdrawn-later');
+  });
+
   it('未回答で承認待ちキューに在る（次の一手: 待つ／催促する）。回答待ち節と同じ id が行そのものに出る', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putApproval({

@@ -683,6 +683,11 @@ interface ApprovalLike {
   context?: string;
   jobId?: string;
   answeredAt?: string;
+  answer?: string;
+  /** クローンが `approval_withdraw` で取り下げた時刻（issue #963）。 */
+  withdrawnAt?: string;
+  /** 取り下げの理由（issue #963）。 */
+  withdrawnReason?: string;
   conversationId?: string;
 }
 
@@ -1561,6 +1566,97 @@ describe('chat の /approvals（一覧）', () => {
           '      会話: 紐づいていない（マネージャー発・内部ターンには紐づけられる会話が存在しない）',
       ),
     ).toHaveLength(1);
+  });
+
+  /**
+   * issue #963 — クローンが `approval_withdraw` で取り下げた件も、CLI から
+   * 理由ごと読めること（既定は `pending=true` の一覧からは対象外——だから
+   * `/approvals all` を足した）。
+   */
+  describe('/approvals all（issue #963: 取り下げ済み・回答済みも見る）', () => {
+    it('引数無しの /approvals は pending を渡さない（既定の挙動を変えない）', async () => {
+      captureStdout();
+      const { client, calls } = stubClient({ approvals: [] });
+
+      await runSlashCommand('/approvals', client, emptyListed());
+
+      const call = calls.find((c) => c.route === 'GET /approvals');
+      const query = (call?.args as { query: Record<string, unknown> }).query;
+      expect(query.pending).toBeUndefined();
+    });
+
+    it('/approvals all は pending=false を渡す', async () => {
+      captureStdout();
+      const { client, calls } = stubClient({ approvals: [] });
+
+      await runSlashCommand('/approvals all', client, emptyListed());
+
+      const call = calls.find((c) => c.route === 'GET /approvals');
+      const query = (call?.args as { query: Record<string, unknown> }).query;
+      expect(query.pending).toBe('false');
+    });
+
+    it('取り下げ済みの状態と理由を出す（回答済みとは別の文言）', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({
+        approvals: [
+          {
+            id: 'appr-withdrawn',
+            createdAt: '2026-08-16T10:00:00.000Z',
+            question: '取り下げられた質問',
+            withdrawnAt: '2026-08-16T11:00:00.000Z',
+            withdrawnReason: '自分で答えを見つけた',
+          },
+        ],
+      });
+
+      await runSlashCommand('/approvals all', client, emptyListed());
+
+      const text = read();
+      expect(text).toContain('状態: 取り下げ済み（2026-08-16T11:00:00.000Z）');
+      expect(text).toContain('取り下げた理由: 自分で答えを見つけた');
+      expect(text).not.toContain('状態: 回答済み');
+    });
+
+    it('理由の記録が無い取り下げでも空で終わらない', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({
+        approvals: [
+          {
+            id: 'appr-withdrawn-no-reason',
+            createdAt: '2026-08-16T10:00:00.000Z',
+            question: '質問',
+            withdrawnAt: '2026-08-16T11:00:00.000Z',
+          },
+        ],
+      });
+
+      await runSlashCommand('/approvals all', client, emptyListed());
+
+      expect(read()).toContain('取り下げた理由: （理由の記録なし）');
+    });
+
+    it('回答済みの状態と回答本文を出す（取り下げとは別の文言）', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({
+        approvals: [
+          {
+            id: 'appr-answered',
+            createdAt: '2026-08-16T10:00:00.000Z',
+            question: '答えの付いた質問',
+            answeredAt: '2026-08-16T11:00:00.000Z',
+            answer: 'はい、進めてよい',
+          },
+        ],
+      });
+
+      await runSlashCommand('/approvals all', client, emptyListed());
+
+      const text = read();
+      expect(text).toContain('状態: 回答済み（2026-08-16T11:00:00.000Z）');
+      expect(text).toContain('回答: はい、進めてよい');
+      expect(text).not.toContain('状態: 取り下げ済み');
+    });
   });
 });
 

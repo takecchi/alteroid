@@ -4477,6 +4477,121 @@ describe('クローンの道具', () => {
     expect(reply).not.toContain('済んだ質問');
   });
 
+  describe('approval_withdraw（issue #963）', () => {
+    it('未回答の承認待ちを理由付きで取り下げ、一覧から消え、id で理由ごと読み戻せる', async () => {
+      const h = harness();
+      await h.call('ask_human', { question: '本番に出してよいか' });
+      const [pending] = await h.stores.jobs.listApprovals({ pendingOnly: true });
+      const id = pending?.id;
+      expect(id).toBeDefined();
+
+      const reply = await h.call('approval_withdraw', {
+        id,
+        reason: '自分で答えを見つけた',
+      });
+      expect(reply).toContain('取り下げた');
+
+      // 受け入れ基準: 既定の一覧（pendingOnly）から消える。
+      expect(await h.stores.jobs.listApprovals({ pendingOnly: true })).toHaveLength(0);
+      expect(await h.call('approvals_list', {})).toContain('回答待ちは無い');
+
+      // 受け入れ基準: id 指定で理由ごと読み戻せる。
+      const full = await h.call('approvals_list', { id });
+      expect(full).toContain('取り下げ');
+      expect(full).toContain('自分で答えを見つけた');
+
+      // 受け入れ基準: 取り下げの事実と理由が日誌に残る。
+      const [escalation] = await h.stores.journal.list({ types: ['escalation'] });
+      expect(escalation).toMatchObject({
+        type: 'escalation',
+        approvalId: id,
+        withdrawnReason: '自分で答えを見つけた',
+      });
+      expect((escalation as { withdrawnAt?: string }).withdrawnAt).toBeDefined();
+    });
+
+    it('id が無ければ断る', async () => {
+      const h = harness();
+      const reply = await h.call('approval_withdraw', { id: 'no-such-id', reason: '理由' });
+      expect(reply).toContain('無い');
+    });
+
+    it('回答済みの件は取り下げられない', async () => {
+      const h = harness();
+      await h.stores.jobs.putApproval({
+        id: 'ap-answered',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        question: '済んだ質問',
+        answeredAt: '2026-01-01T01:00:00.000Z',
+        answer: 'よい',
+      });
+
+      const reply = await h.call('approval_withdraw', { id: 'ap-answered', reason: '理由' });
+      expect(reply).toContain('回答済み');
+      expect(reply).not.toContain('取り下げた。');
+
+      // 断られた以上、行は書き換わっていない。
+      const after = await h.stores.jobs.getApproval('ap-answered');
+      expect(after?.withdrawnAt).toBeUndefined();
+    });
+
+    it('既に取り下げ済みの件を二重に取り下げようとしても断る（新しい行を積まない）', async () => {
+      const h = harness();
+      await h.call('ask_human', { question: '質問' });
+      const [pending] = await h.stores.jobs.listApprovals({ pendingOnly: true });
+      const id = pending?.id as string;
+
+      await h.call('approval_withdraw', { id, reason: '最初の理由' });
+      const reply = await h.call('approval_withdraw', { id, reason: '二度目の理由' });
+      expect(reply).toContain('取り下げ済み');
+
+      const after = await h.stores.jobs.getApproval(id);
+      expect(after?.withdrawnReason).toBe('最初の理由');
+    });
+
+    /**
+     * issue #963 §4（jobId/requestId を持つ件の扱い）: 案(b) — 通すが、
+     * マネージャー側の始末を要求する。自動 deny はしない。
+     */
+    it('jobId/requestId 付きの件を取り下げても、マネージャーは自動では解放されない（応答が manager_send を促す）', async () => {
+      const h = harness();
+      await h.call('ask_human', {
+        question: '本番に出してよいか',
+        managerId: 'mgr-1',
+        requestId: 'req-9',
+      });
+      const [pending] = await h.stores.jobs.listApprovals({ pendingOnly: true });
+      const id = pending?.id as string;
+
+      const reply = await h.call('approval_withdraw', { id, reason: '前提が消えた' });
+      expect(reply).toContain('取り下げた');
+      expect(reply).toContain('mgr-1');
+      expect(reply).toContain('req-9');
+      expect(reply).toContain('manager_send');
+    });
+
+    it('jobId が無い件を取り下げても、マネージャー宛の案内は出ない', async () => {
+      const h = harness();
+      await h.call('ask_human', { question: '質問' });
+      const [pending] = await h.stores.jobs.listApprovals({ pendingOnly: true });
+      const id = pending?.id as string;
+
+      const reply = await h.call('approval_withdraw', { id, reason: '理由' });
+      expect(reply).not.toContain('マネージャー');
+      expect(reply).not.toContain('manager_send');
+    });
+
+    it('ask_human の説明文が取り下げられることに触れる', () => {
+      const tools = createCloneTools({
+        stores: createMemoryStores(),
+        emit: () => {},
+        memoryCause: () => 'clone',
+      });
+      const description = tools.find((t) => t.name === 'ask_human')?.description ?? '';
+      expect(description).toContain('approval_withdraw');
+    });
+  });
+
   it('daily_report_write は指定された日付で日報を残す', async () => {
     const h = harness();
 
@@ -15174,6 +15289,26 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-08');
         const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
         return callExpectingError(tools, 'ask_human', { question: '質問' });
+      },
+    },
+    {
+      // `approval_withdraw` は commitment_close と同じ形——台帳（承認待ち）の
+      // 書き込みが先に済み、日誌が書けなくても取り下げ自体は既に起きている
+      // （#963）。
+      tool: 'approval_withdraw',
+      firstLine: ACT_COMPLETED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-08b');
+        await stores.jobs.putApproval({
+          id: 'ap-withdraw-test',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          question: '取り下げられる質問',
+        });
+        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        return callExpectingError(tools, 'approval_withdraw', {
+          id: 'ap-withdraw-test',
+          reason: '不要になった',
+        });
       },
     },
     {

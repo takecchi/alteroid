@@ -1246,6 +1246,13 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
         why: 'PR #709 が「doc が『載せる』と言っていないので機能追加になる」として別判断へ回した欄。載せる判断をするならそこから。',
       },
       answer: { emit: 'size', token: 'answer' },
+      // #963: withdrawnAt は answeredAt と対の欄（終端の時刻）。同じ判断
+      // （PR #709 が回した先）をそのまま引き継ぎ、この関数では出さない。
+      withdrawnAt: {
+        emit: 'never',
+        why: '#963 で足した欄。answeredAt と対称の終端時刻で、PR #709 が answeredAt に付けた判断（載せる判断は別途）をそのまま引き継ぐ。',
+      },
+      withdrawnReason: { emit: 'size', token: 'withdrawnReason' },
     },
     tool_use: {
       actor: { emit: 'tag', token: 'actor' },
@@ -1393,6 +1400,8 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       managerId: 'mgr-1',
       answeredAt: '2026-08-20T00:00:00.000Z',
       answer: SECRET,
+      withdrawnAt: '2026-08-20T00:00:00.000Z',
+      withdrawnReason: SECRET,
     },
     tool_use: {
       type: 'tool_use',

@@ -13,6 +13,19 @@ function isAnswered(approval: PendingApproval): boolean {
   return approval.answeredAt !== undefined && approval.answeredAt !== null;
 }
 
+/**
+ * クローンが `approval_withdraw` で取り下げたか（issue #963）。
+ *
+ * **`isAnswered` と排他的な想定である。** 正常な経路では両方 true になる
+ * 行は無い（回答済みは取り下げられず、取り下げ済みは答えられない——
+ * `packages/core/src/schema.ts` の `pendingApprovalSchema.withdrawnAt` の
+ * doc、`apps/daemon/src/app.ts` の `/approvals/:id/answer` の `withdrawn`
+ * ガード）。
+ */
+function isWithdrawn(approval: PendingApproval): boolean {
+  return approval.withdrawnAt !== undefined && approval.withdrawnAt !== null;
+}
+
 /** `Record` から1つの key を落とした新しい `Record` を作る（同じ参照は返さない）。 */
 function without<T>(record: Record<string, T>, key: string): Record<string, T> {
   if (!(key in record)) return record;
@@ -51,7 +64,11 @@ export default function Approvals() {
   // 先に片付いた下書きを、まとめ送信の対象へ混ぜないため。
   const unansweredIds = useMemo(
     () =>
-      new Set((data?.approvals ?? []).filter((approval) => !isAnswered(approval)).map((a) => a.id)),
+      new Set(
+        (data?.approvals ?? [])
+          .filter((approval) => !isAnswered(approval) && !isWithdrawn(approval))
+          .map((a) => a.id),
+      ),
     [data],
   );
   const pendingDrafts = Object.entries(drafts).filter(
@@ -90,7 +107,7 @@ export default function Approvals() {
       description="記憶に根拠が無かったこと。ここで答えると、同じ判断は次から聞かれなくなる"
       action={
         <Button size="sm" onClick={() => setShowAnswered((v) => !v)}>
-          {showAnswered ? '未回答だけ' : '回答済みも見る'}
+          {showAnswered ? '未回答だけ' : '回答済み・取り下げ済みも見る'}
         </Button>
       }
     >
@@ -166,6 +183,7 @@ function ApprovalCard({
   const [failure, setFailure] = useState<unknown>(undefined);
 
   const answered = isAnswered(approval);
+  const withdrawn = isWithdrawn(approval);
 
   async function submit(text: string) {
     if (text.trim() === '') return;
@@ -185,13 +203,22 @@ function ApprovalCard({
     <Card className="p-4">
       {/*
         **本3 で `Badge` に `shrink-0` が入り、縮まなくなった。** メタ行の
-        バッジ（未回答/回答済）は文字数を持たないので普段は問題ないが、
-        `job {jobId}` は `z.string()` に長さの上限が無く、他のバッジ・時刻
-        表示と合わせて `flex-wrap` が無いと押し出す側へ振れる。同じ画面の
-        `:98`（`flex flex-wrap items-center gap-3 ...`）に既に在る流儀へ揃える。
+        バッジ（未回答/回答済/取り下げ済）は文字数を持たないので普段は
+        問題ないが、`job {jobId}` は `z.string()` に長さの上限が無く、他の
+        バッジ・時刻表示と合わせて `flex-wrap` が無いと押し出す側へ振れる。
+        同じ画面の `:98`（`flex flex-wrap items-center gap-3 ...`）に既に
+        在る流儀へ揃える。
+
+        **取り下げ済み（`accent`）を回答済み（`neutral`）と別のトーンにする
+        （#963）。** 両方とも「もう待っていない」点は同じだが、次の一手が
+        違う——回答済みは人間が既に応えた終端、取り下げ済みはクローンが
+        自分で不要と判断した終端で、混同すると「答えたのに何も起きて
+        いない」ように見える。
       */}
       <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-muted">
-        <Badge tone={answered ? 'neutral' : 'warn'}>{answered ? '回答済' : '未回答'}</Badge>
+        <Badge tone={withdrawn ? 'accent' : answered ? 'neutral' : 'warn'}>
+          {withdrawn ? '取り下げ済' : answered ? '回答済' : '未回答'}
+        </Badge>
         <span>{formatDateTime(approval.createdAt)}</span>
         <span>({formatRelative(approval.createdAt)})</span>
         {approval.jobId !== undefined && approval.jobId !== null && (
@@ -229,7 +256,19 @@ function ApprovalCard({
         </div>
       )}
 
-      {answered ? (
+      {withdrawn ? (
+        /*
+          **クローンが取り下げた件（#963）。** 回答欄は出さない——`answered`の
+          分岐と同じ理由で、取り下げも「もう入力を受け付ける状態ではない」
+          終端である。`withdrawnReason` はクローンが書いた自由文だが、
+          `answer`（人間の発言）と同じ枠に置くので素のテキストのままにする
+          （Markdown にするかどうかで枠の意味を変えない）。
+        */
+        <p className="mt-3 rounded border border-border bg-bg p-2 text-sm break-words whitespace-pre-wrap">
+          <span className="mr-2 text-[11px] text-muted">取り下げた理由</span>
+          {approval.withdrawnReason ?? '（理由の記録なし）'}
+        </p>
+      ) : answered ? (
         /*
           **`answer` は Markdown にしない。** これは人間が打った文だからである。
           repo の既存方針が `apps/web/app/routes/chat.tsx`

@@ -148,6 +148,7 @@ const EXEMPT: readonly Exemption[] = [
     tool: 'approvals_list',
     why: '実装側に一覧が無い。並び順の主張（作成時刻の昇順か）はふるまいの歯を tools.test.ts に置いた',
   },
+  { tool: 'approval_withdraw', why: '実装側に、説明文が数え直すような一覧が無い（#963）' },
   { tool: 'daily_report_write', why: '実装側に、説明文が数え直すような一覧が無い' },
   { tool: 'schedule_remove', why: '実装側に、説明文が数え直すような一覧が無い' },
   {

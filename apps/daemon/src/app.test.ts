@@ -915,6 +915,43 @@ describe('HTTP API', () => {
     expect(answeredEntry?.updatedAt).toBe(answeredEntry?.answeredAt);
   });
 
+  /**
+   * #963: クローンが `approval_withdraw` で取り下げた件も、回答済みと同じ形で
+   * 既定の一覧（未回答のみ）から消え、`pending=false` で理由ごと読める。
+   * `withdrawnAt` / `withdrawnReason` は `pendingApprovalSchema` の欄で、
+   * `/approvals` の応答はそれをそのまま素通しする（`approvalsResponseSchema`
+   * が `pendingApprovalSchema.extend()` を土台にしているため）。
+   */
+  it('取り下げた承認待ちは、既定の一覧から消え、pending=false で理由ごと読める', async () => {
+    await stores.jobs.putApproval({
+      id: 'ap-withdrawn',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      question: '取り下げの確認',
+    });
+    await stores.jobs.putApproval({
+      id: 'ap-withdrawn',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      question: '取り下げの確認',
+      withdrawnAt: '2026-01-02T00:00:00.000Z',
+      withdrawnReason: '自分で答えを見つけた',
+    });
+
+    const stillDefault = (await (await app.request('/approvals')).json()) as {
+      approvals: { id: string }[];
+    };
+    expect(stillDefault.approvals.find((a) => a.id === 'ap-withdrawn')).toBeUndefined();
+
+    const allList = (await (await app.request('/approvals?pending=false')).json()) as {
+      approvals: { id: string; withdrawnAt?: string; withdrawnReason?: string; updatedAt: string }[];
+    };
+    const withdrawnEntry = allList.approvals.find((a) => a.id === 'ap-withdrawn');
+    expect(withdrawnEntry).toMatchObject({
+      withdrawnAt: '2026-01-02T00:00:00.000Z',
+      withdrawnReason: '自分で答えを見つけた',
+    });
+    expect(withdrawnEntry?.updatedAt).toBe('2026-01-02T00:00:00.000Z');
+  });
+
   it('セッションログまで降りられる（可観測性の最下段）', async () => {
     const id = (await stores.archive.archive('sess-1', '{"a":1}\n')).id;
 
@@ -2306,6 +2343,38 @@ describe('HTTP API', () => {
     );
     expect(await batch.json()).toMatchObject({
       results: [{ id: 'ap-1', ok: false, error: 'already answered' }],
+    });
+
+    expect(fake.answered).toEqual([]);
+  });
+
+  /**
+   * #963: 逆向きの整合性——クローンが取り下げた件に人間が回答すると、
+   * `putApproval` の上書きで `withdrawnAt` と `answeredAt` が同時に立った
+   * 行ができてしまい、クローンが止めたつもりの仕事が人間の回答で再開しうる
+   * （`clone.ts` の `case 'human_answer'` は `answeredAt` の有無しか見ない）。
+   * 「回答済みは取り下げられない」の逆（「取り下げ済みは答えられない」）を
+   * 同じ強さで断る。
+   */
+  it('取り下げ済みの承認待ちには答えられない', async () => {
+    await stores.jobs.putApproval({
+      id: 'ap-1',
+      createdAt: '2026-08-12T00:00:00.000Z',
+      question: '進めてよいか',
+      withdrawnAt: '2026-08-12T01:00:00.000Z',
+      withdrawnReason: '前提が消えた',
+    });
+
+    const single = await app.request('/approvals/ap-1/answer', json({ answer: 'よい' }));
+    expect(single.status).toBe(409);
+    expect(await single.json()).toMatchObject({ error: 'withdrawn' });
+
+    const batch = await app.request(
+      '/approvals/answer',
+      json({ answers: [{ id: 'ap-1', answer: 'よい' }] }),
+    );
+    expect(await batch.json()).toMatchObject({
+      results: [{ id: 'ap-1', ok: false, error: 'withdrawn' }],
     });
 
     expect(fake.answered).toEqual([]);

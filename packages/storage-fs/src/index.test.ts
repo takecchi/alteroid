@@ -1542,6 +1542,31 @@ describe('FsJobStore', () => {
     expect((await stores.jobs.getApproval('ap-1'))?.answer).toBe('よい');
   });
 
+  // #963: 取り下げも回答と同じく pendingOnly の絞り込みから外れるが、行は
+  // 消えず getApproval で理由ごと読み戻せる。
+  it('取り下げた承認待ちは pendingOnly から消えるが、getApproval では理由ごと読める', async () => {
+    await stores.jobs.putApproval({
+      id: 'ap-withdraw',
+      createdAt: new Date().toISOString(),
+      question: 'これをやってよいか',
+    });
+
+    expect(await stores.jobs.listApprovals({ pendingOnly: true })).toHaveLength(1);
+
+    const approval = await stores.jobs.getApproval('ap-withdraw');
+    await stores.jobs.putApproval({
+      ...(approval as NonNullable<typeof approval>),
+      withdrawnAt: new Date().toISOString(),
+      withdrawnReason: '自分で答えを見つけた',
+    });
+
+    expect(await stores.jobs.listApprovals({ pendingOnly: true })).toHaveLength(0);
+    // 消えたわけではない——全件（pendingOnly を外した）一覧には残る。
+    expect(await stores.jobs.listApprovals()).toHaveLength(1);
+    const after = await stores.jobs.getApproval('ap-withdraw');
+    expect(after?.withdrawnReason).toBe('自分で答えを見つけた');
+  });
+
   it('同じ id は上書きされる', async () => {
     const base = { id: 'j-1', createdAt: '2026-01-01T00:00:00.000Z', question: 'q' };
     await stores.jobs.putApproval(base);

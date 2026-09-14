@@ -322,6 +322,64 @@ describe('折り返しの付け忘れ（本2）', () => {
 });
 
 /**
+ * クローンが `approval_withdraw` で取り下げた件の表示（issue #963）。
+ *
+ * 受け入れ基準「Web UI で取り下げられた件と理由が読める」を直接固定する。
+ */
+describe('取り下げ済みの表示（issue #963）', () => {
+  it('取り下げ済みのバッジと、理由の本文を出す（回答済みとは別のバッジ）', async () => {
+    stubApprovals([
+      approval({
+        id: 'a-1',
+        question: '質問1',
+        withdrawnAt: '2026-08-19T12:00:00.000Z',
+        withdrawnReason: '自分で答えを見つけた',
+      }),
+    ]);
+    renderPage();
+
+    expect(await screen.findByText('取り下げ済')).not.toBeNull();
+    // 回答済みのバッジは出ない（混同しない）。
+    expect(screen.queryByText('回答済')).toBeNull();
+
+    const label = await screen.findByText('取り下げた理由');
+    const wrapper = label.closest('p');
+    expect(wrapper).not.toBeNull();
+    expect(wrapper!.textContent).toContain('自分で答えを見つけた');
+  });
+
+  it('取り下げ済みには回答フォームを出さない（もう入力を受け付けない終端）', async () => {
+    stubApprovals([
+      approval({
+        id: 'a-1',
+        question: '質問1',
+        withdrawnAt: '2026-08-19T12:00:00.000Z',
+        withdrawnReason: '前提が消えた',
+      }),
+    ]);
+    renderPage();
+
+    await screen.findByText('取り下げ済');
+    expect(screen.queryByPlaceholderText(/答える/)).toBeNull();
+    expect(screen.queryByRole('button', { name: '許可' })).toBeNull();
+  });
+
+  it('理由の記録が無い取り下げでも空で終わらない', async () => {
+    stubApprovals([
+      approval({
+        id: 'a-1',
+        question: '質問1',
+        withdrawnAt: '2026-08-19T12:00:00.000Z',
+      }),
+    ]);
+    renderPage();
+
+    const label = await screen.findByText('取り下げた理由');
+    expect(label.closest('p')!.textContent).toContain('理由の記録なし');
+  });
+});
+
+/**
  * クローン（AI）が書いた文字列だけを Markdown で描く（`approvals.tsx`）。
  *
  * **Markdown の中身の正しさはここの仕事ではない** — それは

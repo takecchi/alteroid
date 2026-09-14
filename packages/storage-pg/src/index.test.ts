@@ -1343,6 +1343,31 @@ describe('PgJobStore', () => {
     expect((await stores.jobs.getApproval('ap-1'))?.answer).toBe('よい');
   });
 
+  // #963: withdrawn_at 列（answered_at と対の派生列）が pendingOnly の絞り込みに
+  // 効くこと。fs / インメモリと同じ契約（`packages/storage-fs/src/index.test.ts`
+  // の同名テスト）。
+  it('取り下げた承認待ちは pendingOnly から消えるが、getApproval では理由ごと読める', async () => {
+    await stores.jobs.putApproval({
+      id: 'ap-withdraw',
+      createdAt: new Date().toISOString(),
+      question: 'これをやってよいか',
+    });
+
+    expect(await stores.jobs.listApprovals({ pendingOnly: true })).toHaveLength(1);
+
+    const approval = await stores.jobs.getApproval('ap-withdraw');
+    await stores.jobs.putApproval({
+      ...(approval as NonNullable<typeof approval>),
+      withdrawnAt: new Date().toISOString(),
+      withdrawnReason: '自分で答えを見つけた',
+    });
+
+    expect(await stores.jobs.listApprovals({ pendingOnly: true })).toHaveLength(0);
+    expect(await stores.jobs.listApprovals()).toHaveLength(1);
+    const after = await stores.jobs.getApproval('ap-withdraw');
+    expect(after?.withdrawnReason).toBe('自分で答えを見つけた');
+  });
+
   /**
    * **`listJobs` もスキーマに合わない行を「飛ばすが、跡は残す」（Issue #224）。**
    *

@@ -4573,7 +4573,7 @@
         "operationId": "postApprovalsByIdAnswer",
         "tags": ["approvals"],
         "summary": "承認待ちに1件答える",
-        "description": "二度答えると、既に再開した仕事へ同じ回答がもう一度流れ、記録上の回答も上書きされる。答え直したいなら新しい確認として来るのが正しい（→ 409）。",
+        "description": "二度答えると、既に再開した仕事へ同じ回答がもう一度流れ、記録上の回答も上書きされる。答え直したいなら新しい確認として来るのが正しい（→ 409）。クローンが approval_withdraw で取り下げた件も答えられない（→ 409 error=\"withdrawn\"。#963）。",
         "responses": {
           "200": {
             "description": "答えた。",
