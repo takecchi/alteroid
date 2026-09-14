@@ -940,6 +940,26 @@ const runnerProbeSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('failed'), error: z.string() }),
 ]);
 
+/**
+ * プロファイル・環境変数・認証トークンの押し込みが1回、直近どうだったか。
+ * `@alteroid/core` の `RunnerPushOutcome` / `RunnerPushHealth` と同じ形。
+ *
+ * **プロセス内の記憶であって、DB には残らない**（デーモンを作り直せば消える）。
+ */
+const runnerPushOutcomeSchema = z.object({
+  status: z.enum(['ok', 'failed']),
+  /** その結果を確かめた時刻（ISO 8601）。 */
+  at: z.string(),
+  /** `status: 'failed'` のときだけ載る、失敗の理由（原文）。 */
+  error: z.string().optional(),
+});
+
+const runnerPushHealthSchema = z.object({
+  profile: runnerPushOutcomeSchema.optional(),
+  credentials: runnerPushOutcomeSchema.optional(),
+  agentToken: runnerPushOutcomeSchema.optional(),
+});
+
 const runnerSummarySchema = z.object({
   /**
    * 人間が見る宛先（URL か「同一プロセス」）。
@@ -1011,6 +1031,14 @@ const runnerSummarySchema = z.object({
    * runner を叩かない）。
    */
   revision: runnerRevisionStatusSchema,
+  /**
+   * プロファイル・環境変数・認証トークンの押し込みの、直近の結果。
+   *
+   * **`credentials`/`profile` と違い、常に載る**（`runnerId` を持つ行だけ）。
+   * runner への新しい往復を払わない——デーモンのプロセス内に既にある記憶を
+   * 読むだけである（`@alteroid/core` の `RunnerOverview.pushHealth` の doc）。
+   */
+  pushHealth: runnerPushHealthSchema.optional(),
 });
 
 export const runnersListResponseSchema = z.object({
@@ -1111,48 +1139,68 @@ export const profileUpdateResponseSchema = z.object({
 // ---------------------------------------------------------------------------
 
 /**
- * 正本に在る鍵の一覧。**値は出さない（指紋だけ）。**
- *
- * `/profile` が本文を返すのとは逆にしてある。あちらは**人間が書いたスクリプトを
- * 直すために読み直せなければ typo ひとつ直せない**が、こちらは名前ごとに置く袋
- * なので、**直したい1本だけを置き直せる**——全文を読み出す必要が無い。
- * ⟹ 値を返す口を作らない（作れば、読む側の資格を置く側と同じ強さまで上げる
- * ことになる）。
- *
- * `runnerCredentialFingerprintSchema` をそのまま使わず `.extend()` している
- * ——`shadowsCloneEnv` は runner 側の指紋（`GET /runners` の credentials）には
- * 無い概念で、あちらに書き足すと「runner にはクローンの器という比較対象が
- * 無い」という区別が崩れる（`CredentialFingerprint.shadowsCloneEnv` の doc）。
+ * 撒く先。既定は 'all'（クローン・マネージャー双方）。
+ * packages/core/src/store.ts の StoredCredential.scope と同じ意味・同じ既定。
  */
+const credentialScopeSchema = z.enum(['all', 'app', 'runner']);
+
+/**
+ * デーモンが外向けに返す指紋に、scope・secret・（非シークレットなら）値を足したもの。
+ *
+ * runnerCredentialFingerprintSchema を直接拡張せず、こちらで .extend() する
+ * ——あちらは runner 側の指紋（GET /runners の credentials）とも共有する土台
+ * なので、そちらへ scope/secret/value の概念を持ち込まない（runner には
+ * 「クローンの器の env」のような比較対象も scope の概念も無い）。
+ */
+const credentialFingerprintWithMetaSchema = runnerCredentialFingerprintSchema.extend({
+  /**
+   * GitHub の名前（GITHUB_CREDENTIAL_NAMES）で、正本のこの行より
+   * デーモンの器の環境変数の値が優先して配られている（＝正本のこの行は
+   * どこにも配られていない）ときだけ true。既定では付かない
+   * （Issue #865 の恒久策、2026-09-12）。値そのものは載らない。
+   */
+  shadowsCloneEnv: z.boolean().optional(),
+  /** 撒く先（共通/clone/manager）。 */
+  scope: credentialScopeSchema,
+  /** シークレット可否。false の行だけ value が併走する。 */
+  secret: z.boolean(),
+  /** secret === false の行だけ載る。シークレットの行では欄自体が無い。 */
+  value: z.string().optional(),
+});
+
 export const credentialsResponseSchema = z.object({
-  credentials: z.array(
-    runnerCredentialFingerprintSchema.extend({
-      /**
-       * GitHub の名前（`GITHUB_CREDENTIAL_NAMES`）で、正本のこの行より
-       * デーモンの器の環境変数の値が優先して配られている（＝正本のこの行は
-       * どこにも配られていない）ときだけ `true`。既定では付かない
-       * （Issue #865 の恒久策、2026-09-12）。値そのものは載らない。
-       */
-      shadowsCloneEnv: z.boolean().optional(),
-    }),
-  ),
+  credentials: z.array(credentialFingerprintWithMetaSchema),
 });
 
 /**
- * `PUT /credentials` の入力。**部分更新である**（入力に無い名前は触らない）。
+ * PUT /credentials の入力。部分更新である（入力に無い名前は触らない）。
  *
- * 名前の形は `runnerCredentialSchema`（runner の制御面と同じ）をそのまま使う——
+ * 名前の形は runnerCredentialSchema（runner の制御面と同じ）をそのまま使う——
  * 名前は器の中のファイル名になるので、パスとして解釈されうる形を最初から名前と
- * して認めない（そちらの doc）。**2つ書くと必ずずれるので、書き直さない。**
+ * して認めない（そちらの doc）。2つ書くと必ずずれるので、書き直さない。
+ *
+ * scope・secret はこの口だけの拡張（runnerCredentialSchema 自体は拡張
+ * しない——runner の制御面の命令はいまも名前と値だけでよい）。
  */
+const credentialInputSchema = runnerCredentialSchema.extend({
+  /** 省略時は 'all'（新規行）／既存行の値を引き継ぐ（更新）。 */
+  scope: credentialScopeSchema.optional(),
+  /**
+   * 新規作成時にだけ効く。既存行に対して既存の値と異なる secret を
+   * 渡すと 400 で拒否される（StoredCredential.secret の doc）。省略時は
+   * 新規行なら true、既存行の更新なら前回の値を引き継ぐ。
+   */
+  secret: z.boolean().optional(),
+});
+
 export const credentialsUpdateRequestSchema = z.object({
-  credentials: z.array(runnerCredentialSchema).min(1),
+  credentials: z.array(credentialInputSchema).min(1),
 });
 
 export const credentialsUpdateResponseSchema = z.object({
   /** 置き換えた後の正本の指紋。 */
-  credentials: z.array(runnerCredentialFingerprintSchema),
-  /** 各 runner へ降ろした結果。**台ごとに返す**（畳んで1つの成否にしない）。 */
+  credentials: z.array(credentialFingerprintWithMetaSchema),
+  /** 各 runner へ降ろした結果。台ごとに返す（畳んで1つの成否にしない）。 */
   runners: z.array(
     z.object({
       runnerId: z.string(),
@@ -1331,6 +1379,49 @@ export const archiveRemovedResponseSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// ワークスペースのリセット（/reset）— #workspace-reset
+// ---------------------------------------------------------------------------
+
+/**
+ * **`confirm: true` を必須にする。** CLI（読み確認プロンプト）・Web UI（確認
+ * ダイアログ）はどちらも呼ぶ前に人間へ確認するが、この口自体にも確認の印を
+ * 要求することで、確認を経ずにこの経路を直接叩くどんな呼び出し（スクリプト・
+ * 将来の第三の UI）も 400 で止まる——確認は UI の見た目の話にせず、契約の
+ * 一部にする。
+ */
+export const resetRequestSchema = z.object({
+  confirm: z.literal(true),
+});
+
+/**
+ * 何を何件消したか（`@alteroid/core` の `WorkspaceResetSummary` をそのまま
+ * JSON へ写す）。**件数を返すのは「本当に消えたか」を呼び出し側が確かめられる
+ * ようにするためである** — `{ ok: true }` だけでは、対象が既に空だったのか
+ * 何百件と消したのかが呼び出し側から見えない。
+ */
+export const resetResponseSchema = z.object({
+  cleared: z.object({
+    memory: z.number().int(),
+    journal: z.number().int(),
+    jobs: z.number().int(),
+    approvals: z.number().int(),
+    schedules: z.number().int(),
+    schedulePhases: z.number().int(),
+    inbox: z.number().int(),
+    commitments: z.number().int(),
+    archive: z.number().int(),
+    sessions: z.number().int(),
+    profile: z.number().int(),
+    usageDaily: z.number().int(),
+    usageBaseline: z.number().int(),
+    usageLedger: z.number().int(),
+    usageTurns: z.number().int(),
+    /** pg 構成でだけ付く（`WorkspaceResetSummary.sessionLog` の doc）。 */
+    sessionLog: z.number().int().optional(),
+  }),
+});
+
+// ---------------------------------------------------------------------------
 // documentation（`GET /openapi.json` の骨格）
 // ---------------------------------------------------------------------------
 
@@ -1468,6 +1559,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     },
     runners() {
       throw new Error('spec 生成専用のスタブ: 器の一覧は持たない');
+    },
+    pushHealthOf() {
+      throw new Error('spec 生成専用のスタブ: 押し込み結果は持たない');
     },
     runnerBacklog() {
       throw new Error('spec 生成専用のスタブ: 器の滞留は観測していない');

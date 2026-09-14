@@ -9255,3 +9255,195 @@ describe('マネージャー — case archive は diverged/unknown だけを日�
     }
   });
 });
+
+/**
+ * `RunnerOverview.pushHealth` / `ManagerPool.pushHealthOf()`。
+ *
+ * ここで固定するのは、プロファイル・環境変数・認証トークンの押し込みが
+ * **runner ごと・種類ごとに独立して**「直近どうだったか」を持つこと、そして
+ * `pushHealthOf()` と `runners()` の両方から同じ値が読めること（`runners()` は
+ * `runner_list` の、`pushHealthOf()` は `GET /runners` の材料——`pushHealthOf`
+ * の doc に書いたとおり数え上げの持ち主は1つだけである）。
+ */
+describe('runner ごとの押し込み結果（pushHealth）', () => {
+  it('繋がった直後、試みた分だけ ok になる（試みていない種類は省かれる）', async () => {
+    const s = setup();
+    await s.pool.start({ request: '調べて' });
+
+    const health = s.pool.pushHealthOf(s.runner.runnerId);
+    expect(health?.profile).toEqual({ status: 'ok', at: expect.any(String) });
+    expect(health?.credentials).toEqual({ status: 'ok', at: expect.any(String) });
+    // **`syncRunnerToken` を渡していない runner。** `#pushAgentToken` は
+    // 何もせず return するので、この種類は「まだ試みていない」まま——
+    // `undefined` を「成功した」の既定値として埋めない。
+    expect(health?.agentToken).toBeUndefined();
+
+    await s.pool.stop();
+  });
+
+  it('runners()（runner_list の材料）にも同じ値が出る', async () => {
+    const s = setup();
+    await s.pool.start({ request: '調べて' });
+
+    const overview = await s.pool.runners();
+    const entry = overview.runners.find((r) => r.runnerId === s.runner.runnerId);
+    expect(entry?.pushHealth).toEqual(s.pool.pushHealthOf(s.runner.runnerId));
+    expect(entry?.pushHealth?.profile?.status).toBe('ok');
+
+    await s.pool.stop();
+  });
+
+  it('プロファイルの押し込みが失敗すると failed になり、原文の理由も残る', async () => {
+    const stores = createMemoryStores();
+    // **何か置いておく。** 何も置いていないと `syncRunner` は「同期の必要
+    // なし」で `null` を返し、`runner.setProfile` 自体が呼ばれない（穴C の
+    // it と同じ理由）。
+    await stores.profile.write('export A=1');
+    const s = setup(undefined, { stores });
+    s.runner.setProfile = async () => ({ ok: false, error: 'profile sync failed (test)' });
+
+    await s.pool.start({ request: '調べて' });
+
+    expect(s.pool.pushHealthOf(s.runner.runnerId)?.profile).toEqual({
+      status: 'failed',
+      at: expect.any(String),
+      error: 'profile sync failed (test)',
+    });
+    // **credentials は独立に成功している。** 1種類の失敗が他を巻き添えにしない
+    // （`#pushCredentials` の doc「片方が落ちても片方は降りるべき」）。
+    expect(s.pool.pushHealthOf(s.runner.runnerId)?.credentials?.status).toBe('ok');
+
+    await s.pool.stop();
+  });
+
+  it('環境変数の押し込みが例外で失敗すると failed になる', async () => {
+    const stores = createMemoryStores();
+    // **何か置いておく。** 正本が空だと `syncRunner` は「配るものが無い」で
+    // `null` を返し、`runner.setCredentials` 自体が呼ばれない。
+    await stores.credentials.put([{ name: 'NPM_TOKEN', value: 'npm_x' }]);
+    const s = setup(undefined, { stores });
+    s.runner.setCredentials = async () => {
+      throw new Error('credentials sync failed (test)');
+    };
+
+    await s.pool.start({ request: '調べて' });
+
+    const outcome = s.pool.pushHealthOf(s.runner.runnerId)?.credentials;
+    expect(outcome?.status).toBe('failed');
+    expect(outcome?.error).toContain('credentials sync failed (test)');
+
+    await s.pool.stop();
+  });
+
+  it('認証トークンの押し込みが失敗すると failed になる（syncRunnerToken 経由）', async () => {
+    const s = setup(undefined, {
+      syncRunnerToken: async () => {
+        throw new Error('token sync failed (test)');
+      },
+    });
+
+    await s.pool.start({ request: '調べて' });
+
+    const outcome = s.pool.pushHealthOf(s.runner.runnerId)?.agentToken;
+    expect(outcome?.status).toBe('failed');
+    expect(outcome?.error).toContain('token sync failed (test)');
+
+    await s.pool.stop();
+  });
+
+  it('名乗っていない（runnerId を持たない）行には何も記録されない', () => {
+    const stores = createMemoryStores();
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: createRunnerRegistry([]),
+    });
+    // 一度も繋がっていない runnerId を尋ねても、undefined が返るだけ（例外にしない）。
+    expect(pool.pushHealthOf('never-seen')).toBeUndefined();
+  });
+});
+
+/**
+ * 押し込みに失敗した runner を、次の `hello`（繋ぎ直し）を待たずに自分から
+ * 挑み直す（north_star 禁止2「回数では諦めない」— 間隔は伸ばすが止めない）。
+ *
+ * **時計は手で進める**（`runnerBacklog()` の歯と同じ理由——実時間で待たない）。
+ */
+describe('押し込みに失敗した runner へ、諦めずに挑み直す', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-15T00:00:00.000Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('繋がったままの runner で、一時的な失敗が次の hello を待たずに自然に直る', async () => {
+    const stores = createMemoryStores();
+    await stores.profile.write('export A=1');
+    const s = setup(undefined, { stores });
+    let broken = true;
+    s.runner.setProfile = async () =>
+      broken ? { ok: false, error: 'profile sync failed (test)' } : { ok: true };
+
+    await s.pool.start({ request: '調べて' });
+    expect(s.pool.pushHealthOf(s.runner.runnerId)?.profile?.status).toBe('failed');
+
+    // 器の側は直った。**`hello` はまだ来ていない**——それでも直る。
+    broken = false;
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(s.pool.pushHealthOf(s.runner.runnerId)?.profile?.status).toBe('ok');
+
+    await s.pool.stop();
+  });
+
+  it('直り続けなくても諦めない（何度でも挑み直す）', async () => {
+    const stores = createMemoryStores();
+    await stores.profile.write('export A=1');
+    const s = setup(undefined, { stores });
+    let attempts = 0;
+    s.runner.setProfile = async () => {
+      attempts += 1;
+      return { ok: false, error: 'profile sync failed (test)' };
+    };
+
+    await s.pool.start({ request: '調べて' });
+    const attemptsAfterConnect = attempts;
+    expect(s.pool.pushHealthOf(s.runner.runnerId)?.profile?.status).toBe('failed');
+
+    // 間隔を十分に空けて2回ぶん進める。**回数の上限は無い**——`north_star 禁止2`。
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(attempts).toBeGreaterThan(attemptsAfterConnect + 1);
+    // まだ直っていないので、記録も failed のまま（諦めて忘れたりしない）。
+    expect(s.pool.pushHealthOf(s.runner.runnerId)?.profile?.status).toBe('failed');
+
+    await s.pool.stop();
+  });
+
+  it('pool.stop() の後は、予約していた挑み直しを起こさない', async () => {
+    const stores = createMemoryStores();
+    await stores.profile.write('export A=1');
+    const s = setup(undefined, { stores });
+    let attempts = 0;
+    s.runner.setProfile = async () => {
+      attempts += 1;
+      return { ok: false, error: 'profile sync failed (test)' };
+    };
+
+    await s.pool.start({ request: '調べて' });
+    const attemptsAtStop = attempts;
+    // **前提の確認。** 播種を忘れると `setProfile` が一度も呼ばれず、この後の
+    // 「止めた後は増えない」が両方 0 のまま無意味に緑になる。
+    expect(attemptsAtStop).toBeGreaterThan(0);
+
+    await s.pool.stop();
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    // **止めた後は増えない。** `#pushRetryTimers` を `stop()` で畳んでいなければ、
+    // ここで呼ばれ続けて「止めたはずのプールが後から動く」形になる
+    // （`#reattachTimers` を畳むのと同じ理由）。
+    expect(attempts).toBe(attemptsAtStop);
+  });
+});

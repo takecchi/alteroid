@@ -284,6 +284,15 @@ export class PgTranscriptArchive implements TranscriptArchive {
       bytes: existingRow.removedBytes ?? 0,
     };
   }
+
+  /**
+   * 全件を消す（`TranscriptArchive.clear` の doc）。**tombstone 済み・未 tombstone
+   * を問わず行そのものを消す** — `remove()` と違い、本文だけを落とすのではない。
+   */
+  async clear(): Promise<number> {
+    const removed = await this.#db.delete(archive).returning({ id: archive.id });
+    return removed.length;
+  }
 }
 
 function sanitize(value: string): string {

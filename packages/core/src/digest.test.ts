@@ -12,7 +12,6 @@ import {
   type UnobservedOutcomeInput,
   type UnobservedReportState,
 } from './digest.js';
-import { ORIGIN_GATE_SINCE } from './origin-marker.js';
 import type { SessionMissingKind } from './manager.js';
 import { createMemoryStores } from './testing.js';
 import { usageDate } from './usage.js';
@@ -1797,7 +1796,7 @@ describe('digest 全体の大きさを測る歯（#414）', () => {
 });
 
 /**
- * Issue #857: `lost` / `failed` の警告に順位を付ける2軸の分類と、その字面。
+ * Issue #857: `lost` / `failed` の警告に順位を付ける分類と、その字面。
  *
  * **直した穴**: `manager_list` は `lost` の行すべてに同じ注記を出していた。
  * ほぼ常に真なので順位が付かず、依頼者（クローン）は1本ずつ `gh` を叩いて
@@ -1806,17 +1805,10 @@ describe('digest 全体の大きさを測る歯（#414）', () => {
  * ここで測るのは**純関数のふるまい**である（一覧に配線した結果は
  * `tools.test.ts` の同名の節が測る）。
  */
-describe('#857: 終端していて誰も望んでいない終わり方（lost / failed）を2軸で分類する', () => {
-  /** 刻印の境界より後（軸2 = `markable`）。 */
-  const AFTER_GATE = '2026-09-12T00:00:00.000Z';
-  /** 刻印の境界より前（軸2 = `pre-marker`）。 */
-  const BEFORE_GATE = '2026-09-01T00:00:00.000Z';
-
+describe('#857: 終端していて誰も望んでいない終わり方（lost / failed）を分類する', () => {
   function input(over: Partial<UnobservedOutcomeInput> = {}): UnobservedOutcomeInput {
     return {
-      managerId: 'mgr-fixture-0000',
       status: 'lost',
-      startedAt: AFTER_GATE,
       ...over,
     };
   }
@@ -1855,7 +1847,7 @@ describe('#857: 終端していて誰も望んでいない終わり方（lost / 
     });
   });
 
-  describe('軸1（順位の芯）: 依頼者に本文が届いているか', () => {
+  describe('順位の芯: 依頼者に本文が届いているか', () => {
     it('lastReport が無ければ none（rank 0。最優先）', () => {
       const outcome = classifyUnobservedOutcome(input());
       expect(outcome?.reportState).toBe('none');
@@ -1898,48 +1890,6 @@ describe('#857: 終端していて誰も望んでいない終わり方（lost / 
     });
   });
 
-  describe('軸2（順位には使わない）: 刻印で照合できる時代か', () => {
-    it('境界より後に始まっていれば markable', () => {
-      expect(classifyUnobservedOutcome(input({ startedAt: AFTER_GATE }))?.markerState).toBe(
-        'markable',
-      );
-    });
-
-    it('境界より前に始まっていれば pre-marker', () => {
-      expect(classifyUnobservedOutcome(input({ startedAt: BEFORE_GATE }))?.markerState).toBe(
-        'pre-marker',
-      );
-    });
-
-    /** 境界のちょうど1点は `markable` 側（`>=`）。どちらにも入らない／両方に入る、を作らない。 */
-    it('境界ちょうどは markable 側（>= であって > ではない）', () => {
-      expect(classifyUnobservedOutcome(input({ startedAt: ORIGIN_GATE_SINCE }))?.markerState).toBe(
-        'markable',
-      );
-    });
-
-    /**
-     * 🔴 **読めない開始時刻を `pre-marker` へ倒さない。** 「照合できない」と
-     * 「判定できなかった」は別の状態である——倒した瞬間、読み手は「引いても
-     * 無駄だ」と決め打つ。
-     */
-    it('🔴 startedAt が空文字・壊れていれば unknown（pre-marker へ倒れない）', () => {
-      for (const startedAt of ['', 'not-a-time', '2026-13-45T99:99:99Z']) {
-        const outcome = classifyUnobservedOutcome(input({ startedAt }));
-        expect(outcome?.markerState, `startedAt=${JSON.stringify(startedAt)}`).toBe('unknown');
-      }
-    });
-
-    /** 軸2 は順位に1ミリも効かない（順位の芯は軸1 だけである）。 */
-    it('軸2 が違っても rank は変わらない（刻印は順位に使わない）', () => {
-      const markable = classifyUnobservedOutcome(input({ startedAt: AFTER_GATE }));
-      const preMarker = classifyUnobservedOutcome(input({ startedAt: BEFORE_GATE }));
-      const unknown = classifyUnobservedOutcome(input({ startedAt: '' }));
-      expect(markable?.rank).toBe(preMarker?.rank);
-      expect(preMarker?.rank).toBe(unknown?.rank);
-    });
-  });
-
   /**
    * **対象外の委譲では `null`（＝字面は1文字も出ない）。** これが無いと
    * 「条件を外して常に出す」実装でも上の歯は全部緑になる
@@ -1957,7 +1907,7 @@ describe('#857: 終端していて誰も望んでいない終わり方（lost / 
      * ⭐ **3値それぞれで別の文が出る。** 「どれかの文が出る」ではなく
      * **互いに違う**ことを測る——同じ文を3つ返す実装を通さない。
      */
-    it('⭐ 軸1 の3値は互いに違う文になる', () => {
+    it('⭐ 3値は互いに違う文になる', () => {
       const none = describeUnobservedOutcome(input());
       const wrapped = describeUnobservedOutcome(input({ lastReport: 'x', lastFailure: FAILURE }));
       const delivered = describeUnobservedOutcome(input({ lastReport: 'x' }));
@@ -1995,67 +1945,22 @@ describe('#857: 終端していて誰も望んでいない終わり方（lost / 
       }
     });
 
-    /** 軸2 の3値も互いに違う文になる。 */
-    it('⭐ 軸2 の3値は互いに違う文になる', () => {
-      const markable = describeUnobservedOutcome(input({ startedAt: AFTER_GATE }));
-      const preMarker = describeUnobservedOutcome(input({ startedAt: BEFORE_GATE }));
-      const unknown = describeUnobservedOutcome(input({ startedAt: '' }));
-      expect(new Set([markable, preMarker, unknown]).size).toBe(3);
-    });
-
-    it('markable のときは刻印で引く綴りと managerId が出る', () => {
-      const text = describeUnobservedOutcome(
-        input({ managerId: 'mgr-abc123', startedAt: AFTER_GATE }),
-      )!;
-      expect(text).toContain('gh pr list --repo <対象の repo> --state all --search "mgr-abc123"');
-      // **0件の読み方を必ず添える**（実例2: id で引いて0件だったが成果は main に在った）。
-      expect(text).toContain('0件は「刻印付きの PR が見つからなかった」までである');
-      expect(text).toContain('PR を作らない依頼（調査・レビュー）');
-    });
-
     /**
-     * 🔴 **`pre-marker` では引き方を1文字も出さない。** その委譲の PR は刻印を
-     * 持たないので、綴りを出せば**必ず0件になる検索**を案内することになる。
-     */
-    it('🔴 pre-marker のときは gh の引き方を1文字も出さない', () => {
-      const text = describeUnobservedOutcome(
-        input({ managerId: 'mgr-abc123', startedAt: BEFORE_GATE }),
-      )!;
-      expect(text).toContain('刻印では照合できない');
-      for (const spell of ['gh pr list', '--search', '--state all']) {
-        expect(text, `pre-marker に引き方（${spell}）が漏れている`).not.toContain(spell);
-      }
-    });
-
-    it('unknown のときは「判定できなかった」と名乗り、引き方も出さない', () => {
-      const text = describeUnobservedOutcome(input({ startedAt: '' }))!;
-      expect(text).toContain('判定できなかった');
-      expect(text).not.toContain('gh pr list');
-      // **「照合できない」と混ぜない。**
-      expect(text).toContain('「照合できない」とは別である');
-    });
-
-    /**
-     * 🔴 **どの枝でも「成果が無い」と断定しない。** 0件は「この探し方では
-     * 出なかった」までしか言えない（Issue #857 の実例2 が実害そのもの）。
-     *
-     * 9通り（軸1 の3値 × 軸2 の3値）全部を通す——1つの枝だけ直した実装を
+     * 🔴 **どの枝でも「成果が無い」と断定しない。** 3値（`none` /
+     * `failure-wrapped` / `delivered`）全部を通す——1つの枝だけ直した実装を
      * 通さない。
      */
-    it('🔴 9通りのどの枝でも「成果が無い」と断定する語を出さない', () => {
+    it('🔴 どの枝でも「成果が無い」と断定する語を出さない', () => {
       const reports: Partial<UnobservedOutcomeInput>[] = [
         {},
         { lastReport: 'x', lastFailure: FAILURE },
         { lastReport: 'x' },
       ];
-      const startedAts = [AFTER_GATE, BEFORE_GATE, ''];
       for (const report of reports) {
-        for (const startedAt of startedAts) {
-          const text = describeUnobservedOutcome(input({ ...report, startedAt }))!;
-          expect(text, `${JSON.stringify(report)} / ${startedAt}`).not.toBeNull();
-          for (const forbidden of ['成果が無い', '成果は無い', '成果なし', '成果が無かった']) {
-            expect(text, `断定の語（${forbidden}）が出ている`).not.toContain(forbidden);
-          }
+        const text = describeUnobservedOutcome(input(report))!;
+        expect(text, `${JSON.stringify(report)}`).not.toBeNull();
+        for (const forbidden of ['成果が無い', '成果は無い', '成果なし', '成果が無かった']) {
+          expect(text, `断定の語（${forbidden}）が出ている`).not.toContain(forbidden);
         }
       }
     });

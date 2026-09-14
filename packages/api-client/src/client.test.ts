@@ -53,6 +53,11 @@ function fakeClone(stores: Stores) {
     async runners() {
       return { runners: [], unassigned: [], daemonRevision: { status: 'unknown' } };
     },
+    // 外部クライアントの経路（本ファイルの検証対象）は `GET /runners` の
+    // push health を検証しない。型を満たすだけの空スタブで足りる。
+    pushHealthOf() {
+      return undefined;
+    },
     async transcript() {
       return { kind: 'missing' as const };
     },

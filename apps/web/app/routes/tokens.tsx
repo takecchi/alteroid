@@ -1,5 +1,8 @@
+import { useState } from 'react';
+
 import { Page } from '~/components/page';
-import { Badge, Card, CardHeader, Empty, ErrorNote, Spinner } from '~/components/ui';
+import { Badge, Button, Card, CardHeader, Empty, ErrorNote, Input, Spinner } from '~/components/ui';
+import { useAddToken, useRemoveToken, useSetTokenDisabled } from '~/hooks/mutations';
 import { useJournal, useTokens } from '~/hooks/queries';
 import { ApiError } from '~/lib/api';
 import { formatDateTime, formatRelative } from '~/lib/format';
@@ -14,29 +17,97 @@ import type {
 /**
  * `/tokens` — 認証トークンのプール一覧・回転の設定・回転の履歴（エラー状況）。
  *
- * **読み取り専用。** 登録・無効化は CLI（`alteroid token add` / `disable` /
- * `enable` / `policy`）と `PUT /tokens` の仕事であって、この画面の仕事ではない
- * （Issue #464「Web UI にプールの画面が1つも無い」を埋める分）。経路は
- * `GET /tokens` と `GET /journal?type=token_rotation` の2本だけで、どちらも
- * 既に在るものを読むだけ——ここで新しい API 経路は足していない。
+ * **追加・削除・無効化/有効化はこの画面からも行える**（2026-09-14。Issue #464
+ * が埋めた「読み取り専用」の形をここで解いた——人間の決定により、CLI
+ * （`alteroid token add` / `remove` / `disable` / `enable`）と同じ資格・同じ
+ * `PUT /tokens`（全置換）をこの画面からも呼べるようにしてある）。回す契機・
+ * 冷却の設定（`policy`）はまだこの画面からは変えられない——引き続き
+ * `alteroid token policy` / `PUT /tokens/policy` の仕事である。
  *
  * **値（`value`）はどこにも出さない。** サーバ側の型（`AgentTokenView`）が
  * そもそも `value` を持たないので、この画面が「消し忘れて出す」形は作れない。
- * 出してよいのは id / label / 指紋（`sha256`、salt 無し sha256 の先頭12hex）/
- * 状態 / 時刻 / 断られた・失効した理由の文言までである
+ * 追加フォームで受け取った値は送信直後に捨てる（コンポーネントの state に
+ * 残さない）。出してよいのは id / label / 指紋（`sha256`、salt 無し sha256
+ * の先頭12hex）/ 状態 / 時刻 / 断られた・失効した理由の文言までである
  * （`.claude/skills/token-pool/SKILL.md`）。
  */
 export default function Tokens() {
   return (
     <Page
       title="認証トークン"
-      description="プールの一覧・回転の設定・回転の履歴（エラー状況）。読み取り専用 — 登録や無効化は alteroid token コマンド、または PUT /tokens で行う"
+      description="プールの一覧・追加・削除・無効化/有効化・回転の設定・回転の履歴（エラー状況）"
     >
       <div className="flex flex-col gap-4">
         <PoolAndSettings />
+        <AddTokenForm />
         <RotationHistory />
       </div>
     </Page>
+  );
+}
+
+/**
+ * トークンを1本足す。**値はテキストエリアへ貼り付ける**（`alteroid token add`
+ * と違いブラウザにファイル入力を持たせない——貼り付けのほうが手数が少ない）。
+ *
+ * **送信後は即座に state から値を消す。** ブラウザの history/フォーム復元に
+ * 秘密が残らないようにする。
+ */
+function AddTokenForm() {
+  const addToken = useAddToken();
+  const [label, setLabel] = useState('');
+  const [value, setValue] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<unknown>(undefined);
+
+  const canSubmit = label.trim().length > 0 && value.trim().length > 0;
+
+  async function submit() {
+    if (!canSubmit) return;
+    setBusy(true);
+    setFailure(undefined);
+    try {
+      await addToken(label.trim(), value.trim());
+      setLabel('');
+      setValue('');
+    } catch (caught) {
+      setFailure(caught);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader title="追加" subtitle="alteroid token add / PUT /tokens と同じもの" />
+      <div className="flex flex-col gap-3 px-4 py-3 text-sm">
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-muted">ラベル（人間が読む名前。秘密ではない）</span>
+          <Input value={label} onChange={(event) => setLabel(event.target.value)} />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-muted">値（claude setup-token の出力）</span>
+          <Input
+            type="password"
+            value={value}
+            onChange={(event) => setValue(event.target.value)}
+            autoComplete="off"
+          />
+        </label>
+        <ErrorNote error={failure} />
+        <div>
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={!canSubmit}
+            loading={busy}
+            onClick={() => void submit()}
+          >
+            追加
+          </Button>
+        </div>
+      </div>
+    </Card>
   );
 }
 
@@ -196,12 +267,13 @@ function describeCooldownSource(source: AgentTokenView['cooldownSource']): strin
 }
 
 /**
- * 指紋の欄。**「不明」で埋めない** —— `source: 'env'` の行はそもそも指紋を
- * 持たない（値を持たないので）。「取れなかった」ではなく「そもそも無い」と
- * 名指しする。
+ * 指紋の欄。**「不明」で埋めない。**
+ *
+ * **⚠️ かつては `source: 'env'` の行（器の環境変数を指す、値を持たない行）が
+ * あり、その行だけ指紋も無かった。** その概念自体を廃止した（トークンプールは
+ * 100% DB 駆動——登録された行は必ず値を持つ）ので、いまは常に指紋が付く。
  */
 function describeFingerprint(token: AgentTokenView): string {
-  if (token.source === 'env') return '（環境変数由来のため指紋は無い）';
   if (token.sha256 !== undefined) return token.sha256;
   // 実装上ここには来ないはず（`stored` は値を持つので必ず指紋が付く）——
   // それでも「不明」ではなく、想定外であることを名指しする。
@@ -268,6 +340,34 @@ function TokenRow({ token }: { token: AgentTokenView }) {
   const availability = tokenAvailabilityAt(token);
   const state = describeAvailability(availability);
   const rejected = token.lastRejectedAt !== undefined || token.lastRejectedReason !== undefined;
+  const setDisabled = useSetTokenDisabled();
+  const removeToken = useRemoveToken();
+  const [busy, setBusy] = useState<'disable' | 'enable' | 'remove' | null>(null);
+  const [failure, setFailure] = useState<unknown>(undefined);
+
+  async function toggleDisabled(next: boolean) {
+    setBusy(next ? 'disable' : 'enable');
+    setFailure(undefined);
+    try {
+      await setDisabled(token.id, next);
+    } catch (caught) {
+      setFailure(caught);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function remove() {
+    setBusy('remove');
+    setFailure(undefined);
+    try {
+      await removeToken(token.id);
+    } catch (caught) {
+      setFailure(caught);
+    } finally {
+      setBusy(null);
+    }
+  }
 
   return (
     <li className="border-b border-border px-4 py-3 last:border-b-0">
@@ -365,6 +465,38 @@ function TokenRow({ token }: { token: AgentTokenView }) {
           )}
         </dd>
       </dl>
+
+      <ErrorNote error={failure} className="mt-2" />
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {token.disabledAt === undefined ? (
+          <Button
+            size="sm"
+            loading={busy === 'disable'}
+            disabled={busy !== null}
+            onClick={() => void toggleDisabled(true)}
+          >
+            無効化する
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            loading={busy === 'enable'}
+            disabled={busy !== null}
+            onClick={() => void toggleDisabled(false)}
+          >
+            戻す
+          </Button>
+        )}
+        <Button
+          variant="danger"
+          size="sm"
+          loading={busy === 'remove'}
+          disabled={busy !== null}
+          onClick={() => void remove()}
+        >
+          削除
+        </Button>
+      </div>
     </li>
   );
 }

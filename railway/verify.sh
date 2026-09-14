@@ -292,7 +292,7 @@ if [ "${#SEEN_RUNNER_IDS[@]}" -gt 1 ]; then
   if [ -n "${dupes// /}" ]; then
     fail "!! 同じ id を名乗る器がある: ${dupes}"
     dim 'manager_send が割り当て先ではない器へ黙って届く。ALTEROID_RUNNER_ID を台ごとに違う値にする'
-    dim 'これは運用の間違いだが、名簿が検出しないので実装の穴でもある（roadmap M5 PR4 の fencing 待ち）'
+    dim 'これは運用の間違いだが、名簿が検出しないので実装の穴でもある（runnerId の一意性は fencing #160 が入った後も未解決。個別の穴は #200・#209）'
   else
     pass "${#SEEN_RUNNER_IDS[@]} 台が別々の id を名乗っている（sticky routing が引ける）"
   fi

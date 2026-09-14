@@ -296,4 +296,10 @@ export class PgCommitmentStore implements CommitmentStore {
       .returning({ id: commitments.id });
     return updated.length > 0;
   }
+
+  /** 全件を消す（`CommitmentStore.clear` の doc）。未了・片付いた行を問わない。 */
+  async clear(): Promise<number> {
+    const removed = await this.#db.delete(commitments).returning({ id: commitments.id });
+    return removed.length;
+  }
 }

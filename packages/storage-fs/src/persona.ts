@@ -493,6 +493,21 @@ export class FsPersonaStore implements PersonaStore {
     }
     return docs;
   }
+
+  /**
+   * 全文書を消す（`PersonaStore.clear` の doc）。**`.md` ファイルと `.index.json`
+   * の両方を消す** — 索引だけ残すと、次の起動でここに実体を持たない slug の
+   * 保護状態だけが残った状態になる（`#readIndex` は壊れていなければ組み直さ
+   * ないので、孤児のまま拾われ続ける）。
+   */
+  async clear(): Promise<number> {
+    return this.#serialize(async () => {
+      const docs = await this.#listRawContents();
+      for (const doc of docs) await rm(this.#path(doc.slug), { force: true });
+      await rm(this.#indexPath(), { force: true });
+      return docs.length;
+    });
+  }
 }
 
 function stripContent(doc: MemoryDocument): MemoryDocumentMeta {

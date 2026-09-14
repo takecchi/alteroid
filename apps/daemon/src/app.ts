@@ -50,6 +50,7 @@ import {
   RECENT_TRACE_LIMIT,
   recentDroppedTraces,
   reportRunnerRevision,
+  resetWorkspaceState,
   resolveBuildRevision,
   runnerSetCredentialsCommandSchema,
   scheduleKindSchema,
@@ -114,6 +115,8 @@ import {
   profileUpdateRequestSchema,
   profileUpdateResponseSchema,
   reportsResponseSchema,
+  resetRequestSchema,
+  resetResponseSchema,
   runnersCredentialsResponseSchema,
   runnersListResponseSchema,
   runnersVacateCommandSchema,
@@ -253,6 +256,15 @@ export interface AppDeps {
    * 差し替える理由が無い設定なので、実行環境プロファイルの対象にもしない。
    */
   sseHeartbeatMs?: number;
+  /**
+   * SDK のセッション生ログを消す口（`apps/daemon/src/storage.ts` の
+   * `Storage.clearSessionLog` の doc）。**pg 構成でだけ付く。**
+   *
+   * `POST /reset` がこれを `resetWorkspaceState`（`@alteroid/core`）へ橋渡し
+   * する。省略すればその分の申告（`WorkspaceResetSummary.sessionLog`）が
+   * 単に出ないだけで、fs 構成・テストの HTTP 層検証のどちらでも安全に省略できる。
+   */
+  clearSessionLog?: () => Promise<number>;
 }
 
 /**
@@ -1041,8 +1053,17 @@ async function accountView(
   };
 }
 
-/** ブラウザに返す終了画面。**ここで alteroid を操作させない**（Web UI は非ゴール）。 */
-function callbackPage(title: string, detail: string): string {
+/**
+ * ブラウザに返す終了画面。**ここで alteroid を操作させない**（Web UI は非ゴール）。
+ *
+ * `autoClose` は成功時のみ立てる。`window.open()` で `noopener=no`（Web UI の
+ * `openAuthorization`）で開いたポップアップなら `opener` が残るので閉じられるが、
+ * ポップアップが塞がれて**同じタブごと**遷移していた場合は `opener` が無く、
+ * `window.close()` は黙って何もしない（例外にならない）——その場合は下の
+ * メッセージ「閉じて端末に戻る」がそのままフォールバックとして機能する。
+ * だから成否をここで判定する必要はない。
+ */
+function callbackPage(title: string, detail: string, autoClose = false): string {
   const escape = (value: string) =>
     value.replace(/[&<>"]/g, (ch) =>
       ch === '&' ? '&amp;' : ch === '<' ? '&lt;' : ch === '>' ? '&gt;' : '&quot;',
@@ -1058,7 +1079,9 @@ function callbackPage(title: string, detail: string): string {
  h1{font-size:1.25rem;margin:0 0 .75rem}
  p{margin:0;color:#555;line-height:1.7}
 </style></head>
-<body><main><h1>${escape(title)}</h1><p>${escape(detail)}</p></main></body></html>`;
+<body><main><h1>${escape(title)}</h1><p>${escape(detail)}</p></main></body>${
+    autoClose ? '<script>window.close()</script>' : ''
+  }</html>`;
 }
 
 /**
@@ -3453,6 +3476,18 @@ export function createApp(deps: AppDeps) {
                   // ここで新たに runner を叩かない——`fingerprints` と同じ「未接続
                   // ／頼んで失敗／頼んでいない」が潰れる穴を増やさないため。
                   revision: entry.revision,
+                  // **押し込み（push）の直近結果。** `probe` の指紋とは別物——
+                  // 指紋は「いま runner に何が乗っているか」を毎回聞き直すのに
+                  // 対し、こちらは「デーモンが最後に送ろうとして何が起きたか」を
+                  // 記憶から返すだけで、新たな往復は発生しない。`ManagerPool` の
+                  // 内部状態なので `entry`/`registry` からは取れず、`clone.managers`
+                  // 経由の専用アクセサ（`pushHealthOf`）が要る。
+                  ...(entry.runnerId === undefined
+                    ? {}
+                    : (() => {
+                        const pushHealth = clone.managers.pushHealthOf(entry.runnerId);
+                        return pushHealth === undefined ? {} : { pushHealth };
+                      })()),
                 };
               }),
             ),
@@ -4437,8 +4472,9 @@ export function createApp(deps: AppDeps) {
           callbackPage(
             'ログインしました',
             result.granted
-              ? 'この画面を閉じて端末に戻ってください。'
-              : 'この画面を閉じて端末に戻ってください。なお、このアカウントにはまだ alteroid を使う許可がありません（alteroid access grant で付与します）。',
+              ? 'この画面は自動で閉じます。閉じない場合は手動で閉じて端末に戻ってください。'
+              : 'この画面は自動で閉じます。閉じない場合は手動で閉じて端末に戻ってください。なお、このアカウントにはまだ alteroid を使う許可がありません（alteroid access grant で付与します）。',
+            true,
           ),
         );
       },
@@ -4715,6 +4751,71 @@ export function createApp(deps: AppDeps) {
       (c) => {
         setTimeout(() => deps.shutdown(), 10);
         return c.json({ ok: true });
+      },
+    )
+
+    /**
+     * ワークスペースのリセット（「トークン情報以外を全部消す」）。
+     * `resetWorkspaceState`（`@alteroid/core`）がそのまま実体で、何を残し何を
+     * 消すかはそちらの doc が正本——ここでは選べない・書き写さない。
+     *
+     * **由来**: 本番（Railway）の Postgres に対して人間の依頼で1度、手作業の
+     * `TRUNCATE` を行った（2026-09-14）。ここはその「同条件」を alteroid
+     * 自身の機能として持たせたもの。
+     *
+     * **実行環境の持ち主だけ**（`requireOperator`。`PUT /profile` `PUT
+     * /credentials` と同じ強さ）——`access grant` だけのアカウントに、記憶
+     * そのものを消せる資格までは渡さない。
+     *
+     * **`confirm: true` を必須にする**（`resetRequestSchema` の doc）。CLI・
+     * Web UI の確認ダイアログは呼ぶ前の話で、この口自体にも確認の印を要求する
+     * ことで、確認を経ない直接の呼び出し（スクリプト等）を 400 で止める。
+     *
+     * **取り消せない。** 消した件数の内訳を返すので、対象が空だったのか
+     * 大量に消えたのかは呼び出し側から見える（`resetResponseSchema` の doc）。
+     * 日誌にも残す——これは「聞かずに実行した判断」ではなく人間が明示的に
+     * 確認した操作だが、何がいつ消えたかを可観測性の3層（日報・日誌・
+     * セッションログ）の外に置かないため。
+     */
+    .post(
+      '/reset',
+      describeRoute({
+        tags: ['system'],
+        summary: 'トークン情報以外のワークスペースを全部消す',
+        description:
+          '記憶・日誌・ジョブ・承認待ち・継続中の依頼・受信箱・引き受けた仕事・' +
+          'アーカイブ・セッション・実行環境プロファイル・利用状況の台帳を全部消す。' +
+          '**認証トークンのプール・マネージャーへ降ろす環境変数・Web UI の' +
+          'ログインアカウントは消さない。** 取り消せない。',
+        responses: {
+          200: {
+            description: '消した件数の内訳。',
+            content: { 'application/json': { schema: resolver(resetResponseSchema) } },
+          },
+          400: {
+            description: '`confirm: true` を伴っていない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          403: {
+            description: '実行環境の持ち主ではない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      requireOperator,
+      jsonBody(resetRequestSchema, () => ({
+        error: '`confirm: true` を伴っていない（取り消せない操作なので確認を必須にしてある）',
+      })),
+      async (c) => {
+        const cleared = await resetWorkspaceState(stores, {
+          ...(deps.clearSessionLog === undefined ? {} : { clearSessionLog: deps.clearSessionLog }),
+        });
+        await stores.journal.append({
+          type: 'decision',
+          decision: 'ワークスペースをリセットした（トークン情報以外を全部消した）',
+          grounds: `${describeActor(c.get('principal'))}（POST /reset。confirm 済み）`,
+        });
+        return c.json(resetResponseSchema.parse({ cleared }));
       },
     );
 

@@ -483,6 +483,25 @@ export class FsUsageStore implements UsageStore {
     return new Set(Object.values(file.rows).map((row) => row.managerId));
   }
 
+  /**
+   * 台帳を丸ごと消す（`UsageStore.clear` の doc）。**`startedAt` /
+   * `layeredAt` / `tokensAt` / `turnsAt` も null へ戻す** — pg 版
+   * （`usage_ledger` も含めて4テーブルを消す）と同じ意味を fs 側でも揃える。
+   */
+  async clear(): Promise<{ daily: number; baseline: number; ledger: number; turns: number }> {
+    return this.#mutate((file) => ({
+      next: EMPTY,
+      result: {
+        daily: Object.keys(file.rows).length,
+        baseline: Object.keys(file.baselines).length,
+        // 台帳（`usage_ledger` に当たる`startedAt` 等4欄）は高々1組。何か
+        // 一度でも記録されていれば1、まっさらなら0。
+        ledger: file.startedAt === null ? 0 : 1,
+        turns: Object.keys(file.turns).length,
+      },
+    }));
+  }
+
   async #read(): Promise<UsageFile> {
     try {
       const raw = await readFile(this.#path, 'utf8');

@@ -1,0 +1,80 @@
+#!/bin/sh
+# 内蔵 PostgreSQL を、`ALTEROID_DATABASE_URL` 1本だけから起こす。
+#
+# postgres 公式イメージ（`docker-entrypoint.sh`）は、初回起動時のロール作成に
+# `POSTGRES_USER` / `POSTGRES_PASSWORD`（または `POSTGRES_PASSWORD_FILE`） /
+# `POSTGRES_DB` という環境変数の形でしか値を受け取れない。一方 `.env` に人間が
+# 書くのは接続文字列（`postgres://user:pass@host:port/db`）1本だけにしたい
+# （`POSTGRES_PASSWORD` を別に持つと、`ALTEROID_DATABASE_URL` と食い違ったときに
+# どちらが正しいか分からなくなる二重管理になる）。
+#
+# だからここで一度だけ URL をパースし、3つの環境変数を **exec の前に** 用意する。
+set -eu
+
+if [ -z "${ALTEROID_DATABASE_URL:-}" ]; then
+  echo 'alteroid-db: ALTEROID_DATABASE_URL が無い（postgres://user:pass@host:port/dbname の形で .env に置くこと）' >&2
+  exit 1
+fi
+
+# URL のパースは Node の `new URL()` に寄せる。シェルのパラメータ展開（`${var#*@}`
+# 等）でも大半の値は割れるが、パスワードに `:` / `@` / パーセントエンコードが
+# 混じった瞬間に誤って割ってしまう（AGENTS.md の grep メタ文字と同じ形の罠）。
+# `new URL()` はその区切りを仕様どおりに解決するので、ここだけは Node に任せる。
+#
+# **受け渡しは `\n` 区切り + `sed -n 'Np'` ではなく、sh の `export` 文を Node 側で
+# 安全にクォートして生成し `eval` する。** `\n` 区切りだと、パスワードにパーセント
+# エンコードされた改行（`%0A` 等）が混じった瞬間、デコード後の値に現れる改行が
+# フィールド区切りと衝突し、以降の全フィールドが1行ずつずれる（気付かれずに
+# ユーザー名やパスワードが欠けた db が初期化される）。シングルクォートで囲んだ
+# `export` 文なら、値の中に改行が入っていても sh の文法上の区切りにはならない。
+# db 名も username/password と同じく `decodeURIComponent` する
+# （しないと、パーセントエンコードされた db 名がそのまま `POSTGRES_DB` に渡り、
+# 実際に接続するクライアント側がデコードした名前と食い違う）。
+# **`node` の失敗を代入の失敗として拾う。** `eval "$(cmd)"` という1行に直接
+# コマンド置換を書くと、`cmd` が exit 1 で何も出力しなかった場合でも
+# `eval ""` は「空文字列を実行して成功」になり、`set -e` がここで発火しない
+# （下の `export` で初めて「未定義変数」として爆発する——node 側の分かりやすい
+# エラーメッセージの後に、無関係な二次エラーが付く形になってしまう）。
+# 代入を1段挟むことで、node の非0終了が代入自体の失敗として `set -e` に伝わる。
+parsed_exports="$(ALTEROID_DATABASE_URL="$ALTEROID_DATABASE_URL" node -e '
+  const u = new URL(process.env.ALTEROID_DATABASE_URL);
+  if (!u.username || !u.password) {
+    process.stderr.write("alteroid-db: ALTEROID_DATABASE_URL にユーザー名とパスワードが無い\n");
+    process.exit(1);
+  }
+  const dbName = decodeURIComponent(u.pathname.replace(/^\//, ""));
+  if (!dbName) {
+    process.stderr.write("alteroid-db: ALTEROID_DATABASE_URL に db 名（末尾の /名前）が無い\n");
+    process.exit(1);
+  }
+  // sh のシングルクォート文字列として安全な形に変換する
+  // （`x27` 単体 → `x27\x27x27` = クォート閉じ＋エスケープしたクォート＋クォート再開）。
+  const shQuote = (s) => "\x27" + s.replace(/\x27/g, "\x27\\\x27\x27") + "\x27";
+  process.stdout.write(
+    "ALTEROID_DB_USER=" + shQuote(decodeURIComponent(u.username)) + "\n" +
+    "ALTEROID_DB_NAME=" + shQuote(dbName) + "\n" +
+    "ALTEROID_DB_PASS=" + shQuote(decodeURIComponent(u.password)) + "\n"
+  );
+')"
+eval "$parsed_exports"
+
+export POSTGRES_USER="$ALTEROID_DB_USER"
+export POSTGRES_DB="$ALTEROID_DB_NAME"
+
+# パスワードは環境変数としてではなく、ファイル経由で渡す（`POSTGRES_PASSWORD_FILE`。
+# postgres 公式イメージが両対応している）。**理由は「/proc/1/environ に残さないため」
+# ではない** — 公式イメージの `docker-entrypoint.sh` は初期化が終わると
+# `unset "${!POSTGRES_@}"` で `POSTGRES_*` を丸ごと落としてから最終的な `postgres`
+# 本体を exec するので、そこは `POSTGRES_PASSWORD` を直接渡す旧構成でも同じだった
+# （退行ではない）。ファイル渡しにする理由は、compose 側の設定（`docker inspect` で
+# 見えるコンテナ設定）に素のパスワードを書かずに済むことである。
+# 置き場所は環境変数で差し替えられる（歯：`docker/alteroid-db.test.ts` がコンテナの
+# 外——`/run` が無い・書けない環境——から実行するため。`docker/gh` が
+# `ALTEROID_CREDENTIAL_DIR` で同じことをしているのと同じ形）。
+pw_file="${ALTEROID_DB_PASSWORD_FILE:-/run/alteroid-db-password}"
+umask 077
+printf '%s' "$ALTEROID_DB_PASS" >"$pw_file"
+export POSTGRES_PASSWORD_FILE="$pw_file"
+unset ALTEROID_DATABASE_URL ALTEROID_DB_USER ALTEROID_DB_NAME ALTEROID_DB_PASS
+
+exec docker-entrypoint.sh "$@"

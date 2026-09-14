@@ -506,6 +506,17 @@ export const STATEMENTS = [
   // という、この2列を最初に置いた #913 の判断をそのまま引き継ぐ。索引は
   // 足さない（同じ理由。このファイル冒頭の doc）。
   `alter table memory add column if not exists described_bytes_at timestamptz`,
+
+  // --- 環境変数の撒く先・シークレット可否（2026-09-14）--------------------
+  // **どちらも「今まで全行がそうだった」ことをそのまま表す既定値である**
+  // ——この列が無かった頃、`manager_credentials` の全行は実際に両方へ撒かれ
+  // （scope 相当が常に `all`）、かつ値は API から絶対に返らなかった
+  // （secret 相当が常に `true`）。だから `default` を付けても過去を捏造しない
+  // （このファイル冒頭の「既存行の意味を変える変更を黙って混ぜない」の例外に
+  // ならない——意味は変えておらず、無かった列に「元からそうだった値」を
+  // 明示しているだけである）。
+  `alter table manager_credentials add column if not exists scope text not null default 'all'`,
+  `alter table manager_credentials add column if not exists secret boolean not null default true`,
 ] as const;
 
 export async function migrate(db: Db): Promise<void> {

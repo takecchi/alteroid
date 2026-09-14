@@ -74,9 +74,9 @@ Railway に alteroid の Service（app / runner × N / PostgreSQL）を用意す
   ./railway/setup.sh [オプション]
 
   -n, --name <名前>       プロジェクト名（既定: alteroid）
-  -w, --workspace <名前>  Workspace（複数持っているときだけ要る）
+  -w, --workspace <名前>  Workspace（省くと、複数あれば一覧を見せて尋ねる）
   -r, --repo <owner/repo> GitHub 連携する対象（既定: origin から拾う）
-  -b, --branch <ブランチ> 追いかけるブランチ（既定: release/prod）
+  -b, --branch <ブランチ> 追いかけるブランチ（省くと既定 release/prod を確認される）
   -c, --runners <台数>    runner の台数（既定: 1。.env の ALTEROID_RUNNER_COUNT も見る）
   -y, --yes               尋ねない（値は .env と既定値から取る）
   -h, --help              これ
@@ -158,17 +158,49 @@ if [ -z "$GIT_BRANCH" ]; then
   # **ここを main へ戻すと、その形へ戻る**（railway/README.md「デプロイは走行中の
   # 仕事を畳む操作である」1）。とくに M5 で runner を2台目足すとき、片方だけが main を
   # 見ていると**そこだけがマージのたびに畳まれる**ので、既定を弱いほうへ倒さないこと。
-  GIT_BRANCH='release/prod'
-  if ! git -C "$REPO_ROOT" ls-remote --exit-code --heads origin "$GIT_BRANCH" >/dev/null 2>&1; then
+  branch_default='release/prod'
+  branch_fell_back=0
+  if ! git -C "$REPO_ROOT" ls-remote --exit-code --heads origin "$branch_default" >/dev/null 2>&1; then
     # まだ一度も反映が走っていないリポジトリ。**main へ落とすが黙らない** — この形は
     # マージした瞬間に落ちるので、気づかないまま常駐させたくない（黙って倒すと、
     # あとで「なぜマージで死ぬのか」を Railway 側に探しに行くことになる）。
-    GIT_BRANCH="$(git -C "$REPO_ROOT" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || true)"
-    GIT_BRANCH="${GIT_BRANCH#origin/}"
-    : "${GIT_BRANCH:=main}"
+    branch_default="$(git -C "$REPO_ROOT" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+    branch_default="${branch_default#origin/}"
+    : "${branch_default:=main}"
+    branch_fell_back=1
+  fi
+  # **既定値を尋ねるだけで、当てずっぽうでは確定しない。** `-y` のときは ask() が
+  # 既定をそのまま返すので、今までと同じ挙動になる（尋ねない・default を使う）
+  GIT_BRANCH="$(ask 'どのブランチを追いかけますか？' "$branch_default")"
+  if [ "$GIT_BRANCH" = "$branch_default" ] && [ "$branch_fell_back" = 1 ]; then
     warn "origin に release/prod が無いので $GIT_BRANCH に繋ぐ。**マージした瞬間にデプロイが走る形**である"
     warn "  → Actions の「release/prod へ反映」を一度起こしてから、Settings → Source を release/prod へ向け直すこと"
+  elif [ "$GIT_BRANCH" != 'release/prod' ]; then
+    warn "release/prod 以外（${GIT_BRANCH}）に繋ぐ。**マージした瞬間にデプロイが走る形**である"
   fi
+fi
+
+if [ -z "$WORKSPACE" ]; then
+  # **一覧を見せてから尋ねる。** 黙って `railway init` に投げると、複数ある人だけ
+  # 「--workspace required in non-interactive mode」という、一覧すら見えないエラーで
+  # 止まる（実際に起きた）。1つしか無い人はここで自動的に決まるので、今までどおり
+  # 何も聞かれない
+  workspace_names="$(list_workspace_names)"
+  workspace_count="$(printf '%s' "$workspace_names" | grep -c . || true)"
+  if [ "$workspace_count" = 1 ]; then
+    WORKSPACE="$workspace_names"
+    dim "ワークスペース: ${WORKSPACE}（1つしか無いので自動で選んだ）"
+  elif [ "$workspace_count" -gt 1 ]; then
+    if [ "$ASSUME_YES" = 1 ]; then
+      die "ワークスペースが複数ある（$(printf '%s' "$workspace_names" | tr '\n' '/')）。--workspace で指定すること"
+    fi
+    info 'ワークスペースが複数ある。どこに作りますか？'
+    while IFS= read -r name; do info "  - $name"; done <<<"$workspace_names"
+    WORKSPACE="$(ask 'ワークスペース名')"
+    [ -n "$WORKSPACE" ] || die 'ワークスペースが未入力（一覧から名前をそのまま貼ること）'
+  fi
+  # workspace_count=0（API 応答が読めなかった等）なら何もしない。今までどおり
+  # railway init 自身の判断（1つなら通り、複数ならそちらのエラーで止まる）に委ねる
 fi
 
 # --- 1. 人間が埋めるもの ----------------------------------------------------
@@ -181,9 +213,10 @@ else
   dim "$(basename "$ENV_FILE") が無い。尋ねた値は書き留める"
 fi
 
-CLAUDE_TOKEN="$(resolve CLAUDE_CODE_OAUTH_TOKEN 'クローンとマネージャーの認証。claude setup-token で取る' secret)"
-[ -n "$CLAUDE_TOKEN" ] || die 'CLAUDE_CODE_OAUTH_TOKEN が無いと、クローンもマネージャーも動かない'
-persist_env CLAUDE_CODE_OAUTH_TOKEN "$CLAUDE_TOKEN"
+# **クローン・マネージャーの認証は 2026-09-14 から環境変数では持たない。**
+# `CLAUDE_CODE_OAUTH_TOKEN` を Shared Variable として尋ねる・置く経路はここで
+# 廃止した——正本はトークンプール（DB）だけである。デーモンが立ち上がった後に
+# 人間が `alteroid token add` で登録する（下の「次にすること」で案内する）。
 
 RUNNER_TOKEN="$(printenv ALTEROID_RUNNER_TOKEN 2>/dev/null || true)"
 [ -n "$RUNNER_TOKEN" ] || RUNNER_TOKEN="$(env_file_get ALTEROID_RUNNER_TOKEN)"
@@ -322,6 +355,7 @@ step '作るもの'
 [ -n "$PROJECT_NAME" ] || PROJECT_NAME="$(ask 'プロジェクト名' alteroid)"
 
 info "プロジェクト    ${PROJECT_NAME}（新しく作る。既存には触らない）"
+info "ワークスペース  ${WORKSPACE:-（1つしか無い、または未検出。railway init 自身に委ねる）}"
 info "Service         ${APP_SERVICE}（${APP_CONFIG}）"
 for i in $(seq 1 "$RUNNER_COUNT"); do
   info "                $(runner_service_name "$i")（${RUNNER_CONFIG} / ALTEROID_RUNNER_ID=$(runner_id_for "$i")）"
@@ -329,7 +363,7 @@ done
 info "                PostgreSQL"
 info "GitHub          ${GIT_REPO:-（連携しない。ローカルから上げる）}${GIT_REPO:+ / $GIT_BRANCH}"
 if [ -n "$GH_TOKEN_VALUE" ]; then
-  info 'GH_TOKEN        置く（マネージャーが PR を出せる）'
+  info 'GH_TOKEN        app が上がったら正本（DB）へ置く（マネージャーが PR を出せる）'
 else
   info 'GH_TOKEN        置かない（公開リポジトリの clone だけ）'
 fi
@@ -535,7 +569,6 @@ step '変数を置く'
 # ものであり、runner 自身は読まない。台数が2以上のとき「どの1台か」を書けない。
 shared_pairs=(
   ALTEROID_RUNNER_TOKEN "$RUNNER_TOKEN"
-  CLAUDE_CODE_OAUTH_TOKEN "$CLAUDE_TOKEN"
   ALTEROID_RUNNER_BIND '::'
   ALTEROID_RUNNER_PORT "$RUNNER_PORT"
   TZ "$TZ_VALUE"
@@ -562,20 +595,14 @@ if [ -n "$WORKER_MODEL" ]; then
   shared_pairs+=(ALTEROID_WORKER_MODEL "$WORKER_MODEL")
 fi
 
-# 下＝外の世界へ手を伸ばす鍵。**伏せるのは上＝記憶へ到達する鍵だけ**なので、
-# これは両方へ渡すのが正しい（伏せると、人間が Claude Code でできることが
-# 層を下りた瞬間に消える＝デグレード）
-if [ -n "$GH_TOKEN_VALUE" ]; then
-  shared_pairs+=(GH_TOKEN "$GH_TOKEN_VALUE")
-  if [ -n "$GIT_AUTHOR_NAME_VALUE" ]; then
-    shared_pairs+=(
-      GIT_AUTHOR_NAME "$GIT_AUTHOR_NAME_VALUE"
-      GIT_AUTHOR_EMAIL "$GIT_AUTHOR_EMAIL_VALUE"
-      GIT_COMMITTER_NAME "$GIT_COMMITTER_NAME_VALUE"
-      GIT_COMMITTER_EMAIL "$GIT_COMMITTER_EMAIL_VALUE"
-    )
-  fi
-fi
+# **GH_TOKEN / GIT_AUTHOR_* / GIT_COMMITTER_* は、ここ（Shared/Service Variables）
+# には置かない。** 下＝外の世界へ手を伸ばす鍵なので伏せる理由は無いが（伏せると、
+# 人間が Claude Code でできることが層を下りた瞬間に消える＝デグレード）、
+# Service Variables に置くと「器を作り直すたびに人間が焼き直す」形に戻り、
+# AGENTS.md 地雷表「用途が増えるたびに compose.yaml へ環境変数を足す」を踏む。
+# **正本（DB）へ置く** — app が上がった後、`alteroid credential set` で置く
+# （下の「GitHub の鍵を正本へ置く」。README「変数の代わりに正本へ置く」と同じ形）。
+# runner が名乗り直すたびにデーモンが降ろし直すので、器を作り直しても痩せない。
 
 # app にだけ置くもの。**記憶ストアの鍵はここから外へ出さない**
 app_pairs=("${shared_pairs[@]}" ALTEROID_DATABASE_URL "\${{$PG_NAME.DATABASE_URL}}")
@@ -629,6 +656,9 @@ done
 # --- 8. デプロイ（runner を先に）--------------------------------------------
 
 deploy_failed=0
+# app が上がったか（GitHub の鍵を正本へ置けるかの前提）。runner だけ落ちた場合と
+# 区別するため、deploy_failed とは別に持つ
+app_deployed=0
 
 if [ -n "$GIT_REPO" ]; then
   step "GitHub を繋ぐ（$GIT_REPO / ${GIT_BRANCH}）"
@@ -653,7 +683,7 @@ if [ -n "$GIT_REPO" ]; then
     if railway service source connect --repo "$GIT_REPO" --branch "$GIT_BRANCH" --service "$APP_SERVICE" >/dev/null 2>&1; then
       ok "$APP_SERVICE ← $GIT_REPO"
       ensure_deploy "$APP_SERVICE" || deploy_failed=1
-      wait_for_deploy "$APP_SERVICE" || deploy_failed=1
+      if wait_for_deploy "$APP_SERVICE"; then app_deployed=1; else deploy_failed=1; fi
     else
       warn "$APP_SERVICE の GitHub 連携に失敗した"
       deploy_failed=1
@@ -678,7 +708,7 @@ if [ -z "$GIT_REPO" ]; then
       wait_for_deploy "$name" || deploy_failed=1
     done
     railway up --service "$APP_SERVICE" --detach >/dev/null || deploy_failed=1
-    wait_for_deploy "$APP_SERVICE" || deploy_failed=1
+    if wait_for_deploy "$APP_SERVICE"; then app_deployed=1; else deploy_failed=1; fi
   else
     info '後で（runner を先に。app は最後）:'
     for name in "${RUNNER_NAMES[@]}"; do
@@ -688,9 +718,54 @@ if [ -z "$GIT_REPO" ]; then
   fi
 fi
 
+# --- 8.5 GitHub の鍵を正本（DB）へ置く ---------------------------------------
+#
+# **`app` が上がってからでないと置けない。** `alteroid credential set` はデーモンの
+# HTTP API（127.0.0.1、同じ器の中）へ届く必要があるため、runner だけ上がった
+# 時点ではまだ早い。
+credentials_failed=0
+if [ -n "$GH_TOKEN_VALUE" ]; then
+  if [ "$app_deployed" = 1 ]; then
+    step 'GitHub の鍵を正本（DB）へ置く'
+    if set_credential "$APP_SERVICE" GH_TOKEN "$GH_TOKEN_VALUE"; then
+      ok 'GH_TOKEN'
+    else
+      warn 'GH_TOKEN を正本へ置けなかった'
+      credentials_failed=1
+    fi
+    cred_names=(GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL)
+    cred_values=(
+      "$GIT_AUTHOR_NAME_VALUE" "$GIT_AUTHOR_EMAIL_VALUE"
+      "$GIT_COMMITTER_NAME_VALUE" "$GIT_COMMITTER_EMAIL_VALUE"
+    )
+    for idx in "${!cred_names[@]}"; do
+      name="${cred_names[$idx]}"
+      value="${cred_values[$idx]}"
+      [ -n "$value" ] || continue
+      if set_credential "$APP_SERVICE" "$name" "$value"; then
+        ok "$name"
+      else
+        warn "$name を正本へ置けなかった"
+        credentials_failed=1
+      fi
+    done
+    if [ "$credentials_failed" = 1 ]; then
+      warn '置けなかったものは手で置く（値は表示されない標準入力から）:'
+      warn "  railway ssh --service $APP_SERVICE"
+      warn '  alteroid credential set GH_TOKEN            # 続けて貼り付けて Enter → Ctrl-D'
+      warn '  alteroid credential set GIT_AUTHOR_NAME      # 他 GIT_* も同様'
+    fi
+  else
+    warn 'app が上がっていないので GitHub の鍵を正本へ置けなかった。上がってから手で置く:'
+    warn "  railway ssh --service $APP_SERVICE"
+    warn '  alteroid credential set GH_TOKEN'
+    credentials_failed=1
+  fi
+fi
+
 # --- 9. これから -------------------------------------------------------------
 
-if [ "$deploy_failed" = 1 ] || [ "$setup_failed" = 1 ]; then
+if [ "$deploy_failed" = 1 ] || [ "$setup_failed" = 1 ] || [ "$credentials_failed" = 1 ]; then
   step '途中まで作った'
 else
   step 'できた'
@@ -718,7 +793,13 @@ fi
 
 cat >&2 <<EOS
 
-    使う（CLI はデーモンを 127.0.0.1 に見に行くので、同じ器の中から）:
+    ⚠ ここまでではまだ動かない。認証トークンを1本も登録していない
+    （2026-09-14 から環境変数では持たない。正本はトークンプール（DB）だけ）:
+
+      railway ssh --service $APP_SERVICE
+      echo -n "<claude setup-token の値>" | alteroid token add --label <名前>
+
+    登録してから使う（CLI はデーモンを 127.0.0.1 に見に行くので、同じ器の中から）:
 
       railway ssh --service $APP_SERVICE
       alteroid chat
@@ -743,16 +824,19 @@ if [ "$EXPOSE_PUBLIC" = 1 ] && [ -n "$PUBLIC_URL" ]; then
 EOS
 fi
 
-if [ -n "$GH_TOKEN_VALUE" ]; then
-  cat >&2 <<'EOS'
+if [ -n "$GH_TOKEN_VALUE" ] && [ "$credentials_failed" != 1 ]; then
+  cat >&2 <<EOS
 
     マネージャーに頼む:
 
       alteroid chat
       > alteroid リポジトリの #485（M5）を実装して PR を出して。AGENTS.md を先に読んで。
 
-    鍵の差し替えは変数を置き直すだけでは走行中のマネージャーに届かない。
-    railway/README.md「鍵を回す（走行中でも）」を見る。
+    鍵を差し替えるときは、正本（DB）を置き直すだけでよい（走行中のマネージャーにも
+    次の git / gh 呼び出しから届く）。器を作り直す必要は無い:
+
+      railway ssh --service $APP_SERVICE
+      alteroid credential set GH_TOKEN
 EOS
 fi
 
@@ -762,7 +846,7 @@ printf '\n' >&2
 # 「できた」と 0 を返すと、呼んだ側（CI や別のスクリプト）はできたと読む。
 # **境界を作れなかったことも 0 で隠さない** — 隠すと、外から叩けない理由を
 # 人間が Google 側の設定に探しに行く（実際に一番時間を食う探し方である）
-if [ "$deploy_failed" = 1 ] || [ "$setup_failed" = 1 ]; then
+if [ "$deploy_failed" = 1 ] || [ "$setup_failed" = 1 ] || [ "$credentials_failed" = 1 ]; then
   exit 1
 fi
 exit 0

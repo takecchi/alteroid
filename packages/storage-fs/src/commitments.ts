@@ -462,6 +462,19 @@ export class FsCommitmentStore implements CommitmentStore {
     });
   }
 
+  /**
+   * 全件を消す（`CommitmentStore.clear` の doc）。未了・片付いた行・読めない行
+   * （`unreadable`）を問わず消す。`trimmedClosedCount`（issue #416 の累計）も
+   * 0へ戻す——台帳そのものが空になった以上、これまでの切り詰め累計は意味を
+   * 持たない。
+   */
+  async clear(): Promise<number> {
+    return this.#update((file) => ({
+      next: { entries: [], unreadable: [], trimmedClosedCount: 0 },
+      result: file.entries.length + file.unreadable.length,
+    }));
+  }
+
   async #read(): Promise<CommitmentFile> {
     try {
       const raw = await readFile(this.#path, 'utf8');

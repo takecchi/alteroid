@@ -105,50 +105,6 @@ if [ -n "$ci_missing" ]; then
   title="[CI未起動] $title"
 fi
 
-# **出所の刻印（`<!-- alteroid-origin: automation -->`）を本文の先頭へ
-# 必ず差し込む（Issue #893 / #930）。**
-#
-# ## なぜ .yml のヒアドキュメントではなくここに置くか
-#
-# このリポジトリの出所の刻印は `packages/core/src/origin-marker.ts` /
-# `scripts/check-pr-origin-core.mjs` が正本で、書く側は `prompt.ts`
-# （マネージャー・クローン・作業者向け）と、この自動化（bot として走る
-# `update-claude-sdk.yml`）の2箇所に分かれている。**`update-claude-sdk.yml`
-# のヒアドキュメントへ直書きする案もあったが、採らなかった** —— このスクリプト
-# は `.github/scripts/update-claude-sdk.test.ts` の
-# `describe('open-claude-sdk-pr.sh')` が gh シム経由で**実際に走らせ**、
-# 実行後の `$body_file` の中身を読み返して確かめている唯一の場所である。
-# `.github/workflows/**` の中身（`.yml` のヒアドキュメント）を守る歯は
-# 1本も無い——書けば「動くのに嘘をつく」側の穴を自分で作ることになる
-# （`AGENTS.md`「作業者へ切り出す」の同じ注意）。しかもここに置けば、
-# 新規作成の経路（`create_pr`）と既存 PR の書き換え（`gh pr edit
-# --body-file`、下）の**両方**が必ずこの `$body_file` を通るので、1箇所で
-# 両方の歯が立つ。
-#
-# ## なぜ値を直書きするか
-#
-# このシェルは TypeScript の `ORIGIN_AUTOMATION`（`origin-marker.ts`）を
-# import できないので、値 `automation` はここでは**写し**である（この
-# ファイル自身がそう名乗る）。`check-pr-origin-core.mjs` が `CLONE_VALUE` /
-# `HUMAN_VALUE` を文字列として複製しているのと同じ形の重複であり、
-# `scripts/check-pr-origin.test.ts` の「写しの突き合わせ」の歯が、この行の
-# 文字列と `formatOriginMarker(ORIGIN_AUTOMATION)` の一致を見張っている
-# ——値を変えるならその歯を通して両方直すこと。
-#
-# ## 並び順（CI が起きない回の警告より前に置く）
-#
-# 下の「CI が起きない回だけ、本文の先頭へ警告を差し込む」ブロックは
-# `$body_file` の**現在の中身**の前に警告を継ぎ足す。刻印をこのブロックより
-# 前に置くことで、最終的な並びは
-# `[CI 警告（在る回だけ）] → [刻印] → [本文]` になり、`WARNING_MARK` で
-# 本文が始まることを確かめる既存テストを壊さない。
-marker_file="$(mktemp)"
-{
-  echo '<!-- alteroid-origin: automation -->'
-  cat "$body_file"
-} >"$marker_file"
-mv "$marker_file" "$body_file"
-
 # **CI が起きない回だけ、本文の先頭へ警告を差し込む（#867）。**
 #
 # ## なぜここに書くか（Issue #867 の誤りの訂正）

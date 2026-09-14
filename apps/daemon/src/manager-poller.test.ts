@@ -40,6 +40,7 @@ function fakeManagers(
     runners: () => {
       throw new Error('not implemented');
     },
+    pushHealthOf: () => undefined,
     transcript: () => {
       throw new Error('not implemented');
     },

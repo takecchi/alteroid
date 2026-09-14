@@ -189,4 +189,26 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
       eq(sessionEntries.subpath, key.subpath ?? ''),
     );
   }
+
+  /**
+   * 全件を消す（ワークスペースのリセット専用。#workspace-reset）。
+   *
+   * **SDK の `SessionStore` / `SessionTranscriptTail` interface にはこのメソッド
+   * を足さない** — 足すと fs 側にも同じ口が要ることになるが、fs 構成では
+   * SDK 自身がローカルディスクへ直接生ログを書いており（`Stores.sessionStore`
+   * の doc「pg 構成でだけ付く」）、core の `Stores` から触れる預け先そのものが
+   * 無い。だから `Storage`（`apps/daemon/src/storage.ts`）が pg 構成でだけ、
+   * このメソッドを直接呼べる形で配線する（`clearSessionLog` の doc）。
+   *
+   * `session_entries` と `sessions` の両方を消す（`append` が両方へ書くのと
+   * 対）。消した `session_entries` の行数を返す（`sessions` は1セッションに
+   * つき高々1行なので、行数の桁が違う——申告として意味があるのは前者）。
+   */
+  async clearAll(): Promise<number> {
+    const removedEntries = await this.#db
+      .delete(sessionEntries)
+      .returning({ seq: sessionEntries.seq });
+    await this.#db.delete(sessions);
+    return removedEntries.length;
+  }
 }

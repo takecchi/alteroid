@@ -113,6 +113,7 @@ export const KEY = {
   conversation: (id: string) => ({ type: 'conversation', id }) as const,
   runners: { type: 'runners' } as const,
   tokens: { type: 'tokens' } as const,
+  credentials: { type: 'credentials' } as const,
   dropped: { type: 'dropped' } as const,
 };
 
@@ -385,6 +386,18 @@ export function useRunners() {
 export function useTokens() {
   const api = useApi();
   return useSWR(KEY.tokens, () => api.api.GET('/tokens').then(unwrap));
+}
+
+/**
+ * 環境変数の袋（`GET /credentials`。旧「マネージャーへ降ろす環境変数」）。
+ *
+ * **資格は `authenticate` だけ**（`PUT /credentials` は実行環境の持ち主だけ
+ * だが、読み出しは指紋のみを返すので `/tokens` / `/credentials` GET と同じ
+ * 強さで開けてある）。
+ */
+export function useCredentials() {
+  const api = useApi();
+  return useSWR(KEY.credentials, () => api.api.GET('/credentials').then(unwrap));
 }
 
 /**

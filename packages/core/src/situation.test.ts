@@ -399,6 +399,62 @@ describe('describeSituation', () => {
     expect(text).toContain('「背景処理待ち」は器が名乗った分だけである');
   });
 
+  /**
+   * **歯1（本体）。** `countManagerSituation` は `awaitingBackground` を
+   * `status` より先に見るので、`status: 'running'` の委譲でも背景処理待ちの
+   * 印が立っていれば「走行中」には数えない（`countManagerSituation` の doc）。
+   * この歯は、**その数え方を節の断り書きが逐語で名乗っていること**と、
+   * **実際の本数がその主張どおりであること**の両方を測る——文字列の有無
+   * だけでは、断り書きが嘘でも緑になる（#941 で `readAtLabel` を固定値にする
+   * 変異が「時刻らしき字面がある」だけの歯を素通りした実例と同じ穴）。
+   *
+   * **`委譲 全 ` の行だけを取り出して測る**（AGENTS.md「対象をスコープして
+   * 特定する」。直前の「器 」の行の歯と同じ形——`toContain('走行中 0')` を
+   * 節全体に当てると、他の行の偶然の一致を拾いうる）。
+   */
+  it('「走行中」は status だけでなく背景処理待ちの印を見て数えることを、本数と断り書きの両方で測る', () => {
+    const text = describeSituation({
+      managers: [summary('a', 'running', true, BG)],
+      runners: [],
+    });
+    const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
+    expect(countsLine, '「委譲 全 」の行が見つからない').toBeDefined();
+    // status は 'running' の委譲が1本いるのに、走行中は 0 本——この歯が在る理由そのもの。
+    expect(countsLine).toContain('走行中 0');
+    expect(countsLine).toContain('背景処理待ち 1');
+    // 節の字面が、その数え方を逐語で名乗っていること。
+    expect(text).toContain('「背景処理待ち」を含まない');
+    expect(text).toContain('`status`');
+    expect(text).toContain('`running`');
+  });
+
+  /**
+   * **歯2（陰性対照）。** 歯1 と同じ委譲から印（`awaitingBackground`）だけを
+   * 外すと、走行中が 1 本に増え背景処理待ちが 0 本に減ることを測る。
+   *
+   * **これが無いと歯1 だけでは区別の実在を測れない**——たとえば「`running`
+   * を常に 0 と数える」実装（印の有無を一切見ない）でも歯1 は緑になり得る。
+   * 印の有無で数え方が本当に変わることを、字面の比較ではなく**差の実在**
+   * （`not.toBe`）で確かめる。
+   */
+  it('（陰性対照）印を外すと同じ委譲が走行中側へ数え直されることを、差分そのもので測る', () => {
+    const withMark = describeSituation({
+      managers: [summary('a', 'running', true, BG)],
+      runners: [],
+    });
+    const withoutMark = describeSituation({
+      managers: [summary('a', 'running', true)],
+      runners: [],
+    });
+    const lineWith = withMark.split('\n').find((l) => l.startsWith('委譲 全 '));
+    const lineWithout = withoutMark.split('\n').find((l) => l.startsWith('委譲 全 '));
+    expect(lineWithout, '「委譲 全 」の行が見つからない').toBeDefined();
+    expect(lineWithout).toContain('走行中 1');
+    expect(lineWithout).toContain('背景処理待ち 0');
+    // 印の有無で「委譲 全 …」の行そのものが変わる（＝区別が実在する）。
+    expect(lineWith).not.toBe(lineWithout);
+  });
+
   /** **指図を書かない。** 何をするかはクローンが決める（材料だけを出す）。 */
   it('次に何をするかを1文字も指図しない', () => {
     const text = describeSituation({

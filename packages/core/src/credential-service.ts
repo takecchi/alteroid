@@ -1,5 +1,6 @@
 import {
   CREDENTIAL_NAME,
+  ENV_FILE_OWNED_CREDENTIAL_NAMES,
   fingerprintOf,
   GITHUB_CREDENTIAL_NAMES,
   isWithheldCredentialName,
@@ -178,7 +179,11 @@ export interface ApplyCredentialsResult {
  * 応答の指紋も後の行のものになる。つまり**前の行は黙って捨てられる**ので、
  * 「置いたはずの値が無い」を静かに作る。
  */
-function assertEntries(entries: readonly CredentialEntry[], withheld: readonly string[]): void {
+function assertEntries(
+  entries: readonly CredentialEntry[],
+  withheld: readonly string[],
+  existingByName: ReadonlyMap<string, StoredCredential>,
+): void {
   if (entries.length === 0) {
     throw new Error('鍵が1つも渡されていない（置くものが無い）');
   }
@@ -202,10 +207,49 @@ function assertEntries(entries: readonly CredentialEntry[], withheld: readonly s
           'ローテーションが黙って効かなくなる',
       );
     }
+    /**
+     * **置くのは拒む。外す（空文字）のは通す**（2026-09-15 に後者を分けた）。
+     *
+     * `POOL_OWNED_CREDENTIAL_NAMES`（直上）は空文字も拒むが、**あちらには別の
+     * 消し口が在る**（`alteroid token remove` / `PUT /tokens`）ので、ここで拒んでも
+     * 消せなくならない。こちらには**消し口が1つも無い** —— `PUT /credentials` が
+     * 名前→値の袋を触る唯一の口なので、空文字まで拒むと、**一覧へ名前を足す前に
+     * 置かれた行を人間が二度と消せなくなる**（画面には残り、`resolveCredentialRows`
+     * は配らず、消すこともできない行になる）。
+     *
+     * **⟹ 対称に見えて、消し口の有無が違う。** 空文字を通すのは「置ける」ことに
+     * はならない —— 空文字は行そのものを消す操作であり、正本が2つになる側へは
+     * 1文字も倒れない。
+     */
+    if (ENV_FILE_OWNED_CREDENTIAL_NAMES.includes(entry.name) && entry.value.length > 0) {
+      throw new Error(
+        `${entry.name} の正本は器の生の環境変数（.env / Railway の Service 変数）である。` +
+          'ここへ置いても誰にも配られない（正本を2つにしないため、読み出しでも落とす）' +
+          '（直すのは railway/setup.sh が置く側、または器の .env）',
+      );
+    }
     if (seen.has(entry.name)) {
       throw new Error(`${entry.name} が2回渡されている（どちらが残るかを決めない）`);
     }
     seen.add(entry.name);
+
+    /**
+     * {@link StoredCredential.secret} は作成時に決まり、後から変えられない。空文字（＝外す）は行そのものが消えるので
+     * 検査しない —— 外して同じ名前を作り直すのは「新規作成」であり、不変の対象ではない。
+     */
+    if (entry.value.length > 0 && entry.secret !== undefined) {
+      const existing = existingByName.get(entry.name);
+      if (existing !== undefined) {
+        const existingSecret = existing.secret ?? true;
+        if (entry.secret !== existingSecret) {
+          throw new Error(
+            `${entry.name} の secret（シークレット可否）は作成時に決まり、後から変更できない` +
+              `（いまは ${existingSecret ? 'シークレット' : '非シークレット'}）。` +
+              '値を変えたいだけなら secret を省略すること',
+          );
+        }
+      }
+    }
   }
 }
 
@@ -293,12 +337,36 @@ const CLONE_ENV_UPDATED_AT = '(クローンの器の環境変数)';
  * `ROTATABLE_CREDENTIAL_KEYS` に GitHub 以外の非プールの名前が増えても、
  * ここで使っている優先順位はその名前へ自動では広がらない
  * （`credentials.ts` の `GITHUB_CREDENTIAL_NAMES` の doc）。
+ *
+ * ## 正本が器の生の環境変数である名前は、行が在っても配らない（2026-09-15）
+ *
+ * `ENV_FILE_OWNED_CREDENTIAL_NAMES` の名前は `assertEntries` が書き込みを拒むが、
+ * **拒むようにする前に置かれた行は袋に残り続ける**（`credentials.ts` のその doc）。
+ * 書き込みだけを塞ぐと、その行は以後も配られ——`applyAppScopedEnvVars` 経由で
+ * デーモンの `process.env` を上書きし続ける。⟹ 配る側のここでも落とす。
+ *
+ * **`target` で分けない。** クローンにもマネージャーにも配らない——この一覧の
+ * 名前を読むのは器自身のプロセス（デーモン / runner）であって、SDK 子プロセス
+ * では誰も読まないからである（`credentials.ts` の群2の表）。
  */
 export function resolveCredentialRows(
   authoritative: readonly StoredCredential[],
   cloneEnv: NodeJS.ProcessEnv,
+  target: 'clone' | 'manager',
 ): StoredCredential[] {
-  const held = new Set(authoritative.map((row) => row.name));
+  // **scope でまず絞る**（2026-09-14。人間の明示的な指示で
+  // `packages/storage-pg/src/schema.ts` の「行ごとに層への効かせ分けを持たせない」
+  // 方針を上書きしている——理由とその判断は {@link StoredCredential.scope} の doc）。
+  // `scope` が無い行（この列より前に作られた行）は `'all'` と同じに扱う。
+  //
+  // **正本が器の生の環境変数である名前は、ここで落とす**（直上の doc）。scope の
+  // 前後どちらでもよいが、**落とす理由が scope とは無関係**（層への効かせ分けでは
+  // なく「そもそも袋の持ち物ではない」）なので、条件を分けて書いてある。
+  const scoped = authoritative.filter(
+    (row) =>
+      !ENV_FILE_OWNED_CREDENTIAL_NAMES.includes(row.name) && scopeAppliesTo(row.scope, target),
+  );
+  const held = new Set(scoped.map((row) => row.name));
 
   const cloneEnvWins = (name: string): boolean => {
     if (!GITHUB_CREDENTIAL_NAMES.includes(name)) return false;
@@ -306,7 +374,7 @@ export function resolveCredentialRows(
     return value !== undefined && value.length > 0;
   };
 
-  const fromVault = authoritative.map((row) =>
+  const fromVault = scoped.map((row) =>
     cloneEnvWins(row.name)
       ? { name: row.name, value: cloneEnv[row.name]!, updatedAt: CLONE_ENV_UPDATED_AT }
       : row,
@@ -322,6 +390,56 @@ export function resolveCredentialRows(
   });
 
   return [...fromVault, ...fromEnvOnly];
+}
+
+/**
+ * その行が `target`（`'clone'` = クローン自身の SDK 子プロセス env / `'manager'` =
+ * runner へ配布する分）に届くべきか。**`scope` 未設定（`undefined`）は `'all'` と同じ**
+ * ——この列が無かった頃に作られた行を「届かない」側へ倒さない。
+ */
+function scopeAppliesTo(scope: StoredCredential['scope'], target: 'clone' | 'manager'): boolean {
+  const normalized = scope ?? 'all';
+  if (normalized === 'all') return true;
+  return normalized === 'app' ? target === 'clone' : target === 'manager';
+}
+
+/**
+ * 1行を外向けの {@link CredentialFingerprint} へ写す。**`fingerprints()` と
+ * `fingerprintsOf()` の両方がここを通る**——scope/secret/value の出し方を
+ * 2箇所で書くと、片方だけ直し忘れる形になる。
+ */
+function fingerprintOfRow(row: StoredCredential, shadowsCloneEnv: boolean): CredentialFingerprint {
+  const secret = row.secret ?? true;
+  return {
+    name: row.name,
+    sha256: fingerprintOf(row.value),
+    updatedAt: row.updatedAt,
+    scope: row.scope ?? 'all',
+    secret,
+    // **`false` を敷き詰めない**（`CredentialFingerprint.shadowsCloneEnv` の doc と同じ形）。
+    ...(shadowsCloneEnv ? { shadowsCloneEnv: true as const } : {}),
+    // **secret === false の行だけ値を載せる。**
+    ...(secret ? {} : { value: row.value }),
+  };
+}
+
+/**
+ * リクエストの1行に、省略された `scope`/`secret` を補って書き込み用の
+ * {@link CredentialEntry} を作る。**「外す」行（空値）はそのまま通す**——
+ * 消える行に scope/secret の意味は無い。
+ */
+function resolveEntryForWrite(
+  entry: CredentialEntry,
+  existingByName: ReadonlyMap<string, StoredCredential>,
+): CredentialEntry {
+  if (entry.value.length === 0) return entry;
+  const existing = existingByName.get(entry.name);
+  return {
+    name: entry.name,
+    value: entry.value,
+    scope: entry.scope ?? existing?.scope ?? 'all',
+    secret: entry.secret ?? existing?.secret ?? true,
+  };
 }
 
 export function createCredentialService(options: CredentialServiceOptions): CredentialService {
@@ -395,21 +513,23 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
       // 独立して「いま食い違っているか」を確かめられる必要がある——だから
       // ここは `lastShadowSignature` を経由せず、呼ばれるたびに測り直す。
       const shadowed = new Set(cloneEnvShadowedNames(rows, env));
-      return rows.map((row) => ({
-        name: row.name,
-        sha256: fingerprintOf(row.value),
-        updatedAt: row.updatedAt,
-        // **`false` を敷き詰めない。** 立っているときだけ載せる
-        // （`CredentialFingerprint.shadowsCloneEnv` の doc）。
-        ...(shadowed.has(row.name) ? { shadowsCloneEnv: true as const } : {}),
-      }));
+      return rows.map((row) => fingerprintOfRow(row, shadowed.has(row.name)));
     },
 
     apply: (entries: readonly CredentialEntry[]) =>
       serial(async () => {
-        assertEntries(entries, withheldEnvKeys);
+        const existing = await stores.credentials.list();
+        const existingByName = new Map(existing.map((row) => [row.name, row]));
+        assertEntries(entries, withheldEnvKeys, existingByName);
 
-        const rows = await stores.credentials.put(entries);
+        /**
+         * **scope・secret を解決してから書く。** 省略された欄は「既存行の値を
+         * 引き継ぐ」「新規行なら既定（`all` / `true`）」のどちらか——ここで
+         * 解決しておけば、器（fs/pg）は渡された値をそのまま持つだけでよい。
+         */
+        const resolved = entries.map((entry) => resolveEntryForWrite(entry, existingByName));
+
+        const rows = await stores.credentials.put(resolved);
         noteVaultSnapshot(rows);
 
         /**
@@ -419,11 +539,16 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
          * **正本に在る名前は正本の値で配る**（入力の値ではなく）。同じものになる
          * はずだが、正本を経由させておけば、器が正規化や検査で値を変えた場合にも
          * 「配った値＝正本の値」が崩れない。
+         *
+         * **scope が `manager` に届かない行（`app` 専用）は runner へ渡さない。**
+         * 削除の合図（`removed`）は scope を問わず送る——無かった名前を消しても
+         * 無害な no-op である。
          */
         const removed = entries
           .filter((entry) => entry.value.length === 0)
           .map((entry) => ({ name: entry.name, value: '' }));
-        const payload = [...rows.map(({ name, value }) => ({ name, value })), ...removed];
+        const upserted = rows.filter((row) => scopeAppliesTo(row.scope, 'manager'));
+        const payload = [...upserted.map(({ name, value }) => ({ name, value })), ...removed];
 
         return { fingerprints: fingerprintsOf(rows), runners: await pushAll(payload) };
       }),
@@ -473,17 +598,11 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
     const rows = await stores.credentials.list();
     reportCloneEnvShadow(rows);
     noteVaultSnapshot(rows);
-    return resolveCredentialRows(rows, env);
+    return resolveCredentialRows(rows, env, 'manager');
   }
 
-  function fingerprintsOf(
-    rows: readonly { name: string; value: string; updatedAt: string }[],
-  ): CredentialFingerprint[] {
-    return rows.map((row) => ({
-      name: row.name,
-      sha256: fingerprintOf(row.value),
-      updatedAt: row.updatedAt,
-    }));
+  function fingerprintsOf(rows: readonly StoredCredential[]): CredentialFingerprint[] {
+    return rows.map((row) => fingerprintOfRow(row, false));
   }
 
   async function pushAll(

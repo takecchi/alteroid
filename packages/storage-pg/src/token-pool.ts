@@ -27,7 +27,11 @@ function toRow(token: AgentToken) {
     value: token.value ?? null,
     // **null は `stored`**（後から足した列なので既存の行は null）。既定を書き戻して
     // 「'stored' の行」と「列が無い行」を混在させない。
-    source: token.source === 'env' ? 'env' : null,
+    //
+    // **もう `'env'` は書かない。** 器の環境変数を指す行という概念は廃止した
+    // （`@alteroid/core` の `AgentToken.source` は `'stored'` しか持たない）ので、
+    // ここへ来る `token.source` はもう `'env'` になりえない。
+    source: token.source === 'stored' ? 'stored' : null,
     order: token.order,
     disabledAt: token.disabledAt === undefined ? null : new Date(token.disabledAt),
     cooldownUntil: token.cooldownUntil ?? null,
@@ -47,7 +51,11 @@ function fromRow(row: AgentTokenRow): AgentToken {
     id: row.id,
     label: row.label,
     ...(row.value === null ? {} : { value: row.value }),
-    ...(row.source === 'env' ? { source: 'env' as const } : {}),
+    // **`'env'` はもう domain 値として作らない。** 器の環境変数を指す行という
+    // 概念は廃止した（`@alteroid/core` の `AgentToken.source` は `'stored'` しか
+    // 持たない）——過去にこの機構が書いた行（`source = 'env'`、`value` 無し）が
+    // 列にそのまま残っていることがあるが、それは `list()` 側で読み捨てる。
+    ...(row.source === 'stored' ? { source: 'stored' as const } : {}),
     order: row.order,
     ...(row.disabledAt === null ? {} : { disabledAt: row.disabledAt.toISOString() }),
     ...(row.cooldownUntil === null ? {} : { cooldownUntil: row.cooldownUntil }),
@@ -85,7 +93,10 @@ export class PgTokenPoolStore implements TokenPoolStore {
 
   async list(): Promise<AgentToken[]> {
     const rows = await this.#db.select().from(agentTokens).orderBy(asc(agentTokens.order));
-    return rows.map(fromRow);
+    // **`source = 'env'` の行は読み捨てる。** 器の環境変数を指す行という概念は
+    // 廃止した（値を持たないので、渡すと `credentialOf` が「値が無い」で
+    // 投げる）——`fromRow` の doc と同じ理由。
+    return rows.filter((row) => row.source !== 'env').map(fromRow);
   }
 
   /**

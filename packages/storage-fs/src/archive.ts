@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -279,6 +279,26 @@ export class FsTranscriptArchive implements TranscriptArchive {
     // 判定してはいけない状態を自分で作る。
     await writeFile(filePath, '', 'utf8');
     return { kind: 'removed', bytes: size };
+  }
+
+  /**
+   * 全件を消す（`TranscriptArchive.clear` の doc）。**`.jsonl` 本体・
+   * `.meta.json` サイドカー・`.removed` tombstone 印の3つとも消す** —
+   * `remove()`（本体を空へ切り詰めるだけ）とは違い、行そのものを無かった
+   * ことにする。
+   *
+   * 返すのは消した `.jsonl`（＝行）の数。サイドカー・印ファイルの有無は
+   * 行ごとにまちまちなので数えない（pg 版が返す `archive` テーブルの行数と
+   * 単位を揃える）。
+   */
+  async clear(): Promise<number> {
+    const ids = await this.#listIds();
+    for (const id of ids) {
+      await rm(join(this.#dir, id), { force: true });
+      await rm(this.#metaPath(id), { force: true });
+      await rm(this.#markerPath(id), { force: true });
+    }
+    return ids.length;
   }
 
   async #listIds(): Promise<string[]> {

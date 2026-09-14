@@ -128,6 +128,91 @@ export const POOL_OWNED_CREDENTIAL_NAMES: readonly string[] = [
 ] satisfies readonly (typeof ROTATABLE_CREDENTIAL_KEYS)[number][];
 
 /**
+ * **正本を器の生の環境変数（`.env` / Railway の Service 変数）が持つ名前。**
+ * 名前→値の袋（`CredentialService`）へは置かせない。
+ *
+ * ## なぜ拒むのか（`POOL_OWNED_CREDENTIAL_NAMES` と同じ形の穴）
+ *
+ * ここへ置けてしまうと、デーモンの起動シーケンス（`env-vars-boot.ts` の
+ * `applyAppScopedEnvVars`）が正本のこの行を `process.env` へ**上書きで**重ねる。
+ * ⟹ 器の生の環境変数（`railway/setup.sh` が Service 変数として置く値、compose
+ * なら `.env`）を直しても、正本にこの名前の行が残っている限り二度と効かない。
+ * しかも画面・CLI には「置けた」としか出ず、どちらの値が勝っているかはどこにも
+ * 現れない——**二つの正本のうち、後から起動したデーモンが読んだほうが黙って勝つ**。
+ *
+ * ## 拒否は書き込みと読み出しの両方で効く（2026-09-15 に後者を足した）
+ *
+ * `assertEntries`（書き込み）だけでは、**この一覧へ名前を足す前に置かれた行**が
+ * 残り続け、上の上書きをそのまま起こす——拒むようにした後も、既にある行は
+ * 効き続けるからである。だから `credential-service.ts` の `resolveCredentialRows`
+ * （配る側の1本の解決）でも落とす。⟹ この一覧に載った名前は、袋に行が在っても
+ * **誰にも配られない**。落ちた行はデーモンの起動時に stderr で1行知らせる
+ * （`env-vars-boot.ts`。**黙って落とすと「置いたのに効かない」が出力から消える**）。
+ *
+ * ## 内訳（2群。**理由が違うので畳まないこと**）
+ *
+ * ### 群1: alteroid が外部と向き合う境界（人間の決定 2026-09-14）
+ *
+ * - `ALTEROID_ALLOWED_ORIGINS` — CORS の許可オリジン
+ * - `ALTEROID_GOOGLE_CLIENT_ID` / `ALTEROID_GOOGLE_CLIENT_SECRET` — Google ログインの鍵
+ * - `ALTEROID_PUBLIC_URL` — 外から届く起点（Redirect URI の組み立てに使う）
+ * - `ALTEROID_AUTH` — 認証を強制的に on/off する上書き
+ *
+ * どれも**alteroid が外部と向き合う境界そのもの**（ブラウザから叩いてよい相手・
+ * ログインを許す相手・どこから届くか）を決める値であり、`requireOperator` の
+ * 資格さえあれば走行中に画面から直せる強さを持たせない、という判断。値自体は
+ * 秘密ではないものもあるので、伏せる理由（`WITHHELD_ENV_KEYS`）とは別の理由で
+ * 拒んでいる——伏せたい相手は子プロセスの目ではなく、**走行中に直せる経路**
+ * そのものである。
+ *
+ * ### 群2: 層とモデル帯の対応（2026-09-15）
+ *
+ * - `ALTEROID_CLONE_MODEL` — クローンの帯（既定 `fable`）
+ * - `ALTEROID_MANAGER_MODEL` — マネージャーの帯（既定 `opus`）
+ * - `ALTEROID_WORKER_MODEL` — 作業者の帯（既定 `sonnet`）
+ *
+ * **こちらは設定ではなく、人間の承認の置き場である**（AGENTS.md 地雷5「安いモデル
+ * に寄せる / 階層を潰して速くする」——層とモデル帯の対応は固定で、変更には人間の
+ * 承認が要る）。承認の置き場が2つある状態は、承認が承認でなくなる。
+ *
+ * **そして群2は、置けてしまうと3層で挙動が割れていた**（実測 2026-09-15、コードを
+ * 読んで確認）。読む主体が層ごとに違うからである:
+ *
+ * | 名前 | 読む主体 | 袋へ置いたときに起きていたこと |
+ * | --- | --- | --- |
+ * | `ALTEROID_CLONE_MODEL` | デーモン自身のプロセス | `applyAppScopedEnvVars` が `process.env` を書き換えた後に `resolveCloneModel()` が読むので、**効いてしまう** |
+ * | `ALTEROID_MANAGER_MODEL` / `ALTEROID_WORKER_MODEL` | **runner 自身のプロセス**（`runner.ts` の `resolveManagerModel(this.#env)`） | runner は袋を自分の `process.env` へ重ねないので、**黙って効かない** |
+ *
+ * ⟹ `ALTEROID_MANAGER_MODEL` を袋へ置くと、**デーモン側の自己認識の宣言だけが
+ * 変わって、runner は既定の帯のまま走る**。これは `railway/README.md` が
+ * 「片方にだけ置くと、クローンが『Opus に委譲している』と宣言しながら別の帯が
+ * 走る」と警告しているその状態を、袋の側から作れてしまうということである。
+ * **どちらの層も正本は器の生の環境変数だけにして、この割れ方ごと無くす。**
+ *
+ * **`ALTEROID_GOOGLE_CLIENT_ID` / `_SECRET` は `AUTH_WITHHELD_ENV_KEYS`
+ * （`apps/daemon/src/auth.ts`）でも独立に拒まれている**（上へ到達する鍵という
+ * 別の理由——`credentialNamesShadowedByProfile` の doc）。ここに重ねて載せるのは
+ * 「器の生の環境変数だけが正本」という一覧を1か所にまとめるためで、
+ * 拒否そのものは二重に効いていて構わない。
+ *
+ * **`ROTATABLE_CREDENTIAL_KEYS` には含めない。** あちらは「置き場所を器の
+ * ファイルへ移す、回せる鍵」の一覧であり、ここに載る名前は回す対象ですらない。
+ *
+ * **⚠️ ここに数を書かないこと**（数え上げの持ち主は直下の配列である。実際に
+ * 5 → 8 と増えている）。
+ */
+export const ENV_FILE_OWNED_CREDENTIAL_NAMES: readonly string[] = [
+  'ALTEROID_ALLOWED_ORIGINS',
+  'ALTEROID_GOOGLE_CLIENT_ID',
+  'ALTEROID_GOOGLE_CLIENT_SECRET',
+  'ALTEROID_PUBLIC_URL',
+  'ALTEROID_AUTH',
+  'ALTEROID_CLONE_MODEL',
+  'ALTEROID_MANAGER_MODEL',
+  'ALTEROID_WORKER_MODEL',
+];
+
+/**
  * **クローンの器の環境変数が、正本より優先して配られる名前。** GitHub の
  * 認証だけを明示的に列挙してある（人間の決定 2026-09-12、Issue #865 の
  * 恒久策）。
@@ -255,12 +340,38 @@ export interface CredentialFingerprint {
    * 「クローンの器の env」という比較対象がそもそも無い。
    */
   shadowsCloneEnv?: boolean;
+  /**
+   * 撒く先。`StoredCredential.scope` と同じ意味・同じ既定（`'all'`）。
+   * ここに載せるのは、読み手（CLI/Web UI）が「共通/clone/manager」を表示できる
+   * ようにするためであって、判断はしない。
+   */
+  scope?: 'all' | 'app' | 'runner';
+  /** `StoredCredential.secret` と同じ。読み手が「シークレット」バッジを出すためのもの。 */
+  secret?: boolean;
+  /**
+   * **`secret === false` の行だけ載る。** `secret === true`（既定）の行では
+   * この欄自体が無い——`undefined` を敷き詰めると「値を確認したが空だった」
+   * と区別が付かなくなる（地雷「取れない軸に0の行を作る」と同じ形）。
+   */
+  value?: string;
 }
 
 export interface CredentialEntry {
   name: string;
   /** 空文字は「鍵を外す」の意味（未設定へ戻す）。 */
   value: string;
+  /**
+   * 撒く先。省略時の既定は `'all'`（呼び出し側が解決する）。既存行の更新では
+   * 省略すると前回の値を引き継ぐ。
+   */
+  scope?: 'all' | 'app' | 'runner';
+  /**
+   * この行を API/CLI/Web UI から見えなくするか。**新規作成時にだけ効く**——
+   * 既存行に対して既存の値と違う `secret` を渡すと `CredentialService.apply`
+   * が拒否する（`StoredCredential.secret` の doc）。省略時の既定は新規行なら
+   * `true`、既存行の更新なら前回の値を引き継ぐ。
+   */
+  secret?: boolean;
 }
 
 export interface CredentialStore {

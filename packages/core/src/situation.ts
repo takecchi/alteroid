@@ -151,7 +151,7 @@ const LOST_NOTICE =
  */
 export interface ManagerSituationCounts {
   readonly total: number;
-  /** `status === 'running'`。**「進んでいる」ではない**（`describeManagerCounts` と同じ断り）。 */
+  /** `status === 'running'` かつ `awaitingBackground === undefined`。**「進んでいる」ではない**（`describeManagerCounts` と同じ断り）。 */
   readonly running: number;
   /** `status === 'waiting_human'`。 */
   readonly waitingHuman: number;
@@ -619,7 +619,8 @@ export function describeSituation(input: {
       '置けるかどうかはここでは答えていない。' +
       '**「背景処理待ち」は器が名乗った分だけである** — この印を送らない古い器では、' +
       '待っていても「手が空いている」側に数える。' +
-      '**「走行中」は「進んでいる」ではない。**' +
+      '**「走行中」は「進んでいる」ではないし、「背景処理待ち」を含まない** — ' +
+      '`status` が `running` でも、背景処理待ちの印が立っていればそちらへ数える。' +
       // **`lost` をここから外した（#688）。** 畳んでいたあいだ、この一文が
       // 「lost は終端したものである」と読ませていた——`lost` は終端の値だが、
       // **成果の有無を観測していない**のはこれだけで、`failed` / `stopped` と
