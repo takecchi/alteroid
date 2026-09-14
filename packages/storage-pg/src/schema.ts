@@ -160,6 +160,14 @@ export const approvals = pgTable('approvals', {
   id: text('id').primaryKey(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
   answeredAt: timestamp('answered_at', { withTimezone: true, mode: 'date' }),
+  /**
+   * クローンが `approval_withdraw` で取り下げた時刻（#963）。`answered_at` と
+   * 同じ形の派生列 — 本体は `approval`（jsonb）に既に入っているが、
+   * `listApprovals({ pendingOnly: true })` の絞り込みに `answered_at` と
+   * 同じ索引の効く列を使うため、専用の列としても持つ（`migrate.ts` の
+   * `withdrawn_at` の doc）。
+   */
+  withdrawnAt: timestamp('withdrawn_at', { withTimezone: true, mode: 'date' }),
   approval: jsonb('approval').notNull(),
 });
 

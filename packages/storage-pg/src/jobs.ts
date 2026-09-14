@@ -6,7 +6,7 @@ import {
   pendingApprovalSchema,
 } from '@alteroid/core';
 import type { Job, JobStore, PendingApproval } from '@alteroid/core';
-import { asc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { stripNulls } from './db.js';
@@ -274,10 +274,16 @@ export class PgJobStore implements JobStore {
   }
 
   async listApprovals(options: { pendingOnly?: boolean } = {}): Promise<PendingApproval[]> {
+    // 未回答かつ未取り下げだけを「保留」とする（#963。3実装で揃える —
+    // `storage-fs` の `jobs.ts` / `testing.ts` の同名フィルタと同じ条件）。
     const rows = await this.#db
       .select({ approval: approvals.approval })
       .from(approvals)
-      .where(options.pendingOnly === true ? isNull(approvals.answeredAt) : undefined)
+      .where(
+        options.pendingOnly === true
+          ? and(isNull(approvals.answeredAt), isNull(approvals.withdrawnAt))
+          : undefined,
+      )
       .orderBy(asc(approvals.createdAt));
     return rows.flatMap((row) => {
       const parsed = pendingApprovalSchema.safeParse(row.approval);
@@ -300,17 +306,19 @@ export class PgJobStore implements JobStore {
   async putApproval(approval: PendingApproval): Promise<void> {
     const value = stripNulls(pendingApprovalSchema.parse(approval));
     const answeredAt = value.answeredAt === undefined ? null : new Date(value.answeredAt);
+    const withdrawnAt = value.withdrawnAt === undefined ? null : new Date(value.withdrawnAt);
     await this.#db
       .insert(approvals)
       .values({
         id: value.id,
         createdAt: new Date(value.createdAt),
         answeredAt,
+        withdrawnAt,
         approval: value,
       })
       .onConflictDoUpdate({
         target: approvals.id,
-        set: { answeredAt, approval: value },
+        set: { answeredAt, withdrawnAt, approval: value },
       });
   }
 

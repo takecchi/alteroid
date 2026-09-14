@@ -517,6 +517,17 @@ export const STATEMENTS = [
   // 明示しているだけである）。
   `alter table manager_credentials add column if not exists scope text not null default 'all'`,
   `alter table manager_credentials add column if not exists secret boolean not null default true`,
+
+  // --- 承認待ちの取り下げ（#963）------------------------------------------
+  // **既存行にとって null は「取り下げられていない」を表す** —— この列が
+  // 無かった頃、取り下げという状態そのものが存在しなかったので、過去の値を
+  // 捏造していない（`described_bytes` 等と同じ判断）。`answered_at` と対の
+  // 列として持つのは、`listApprovals({ pendingOnly: true })` の絞り込みに
+  // 使うため（`jobs.ts` の `where` 節）—— jsonb の中の `withdrawnAt` を毎回
+  // `->>'withdrawnAt' is null` で見るより、専用の列を素直に `isNull` で
+  // 見るほうが `answered_at` と揃った形になる。索引は足さない（承認待ちの
+  // 行数は運用の規模から見て小さく、`answered_at` にも専用の索引は無い）。
+  `alter table approvals add column if not exists withdrawn_at timestamptz`,
 ] as const;
 
 export async function migrate(db: Db): Promise<void> {

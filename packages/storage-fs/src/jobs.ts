@@ -42,7 +42,12 @@ export class FsJobStore implements JobStore {
 
   async listApprovals(options: { pendingOnly?: boolean } = {}): Promise<PendingApproval[]> {
     const { approvals } = await this.#read();
-    return options.pendingOnly ? approvals.filter((a) => a.answeredAt === undefined) : approvals;
+    // **未回答かつ未取り下げだけを「保留」とする（#963）。** 取り下げも
+    // `answeredAt` と同じく「もう保留ではない」終端の一形態である
+    // （`pendingApprovalSchema.withdrawnAt` の doc）。
+    return options.pendingOnly
+      ? approvals.filter((a) => a.answeredAt === undefined && a.withdrawnAt === undefined)
+      : approvals;
   }
 
   async getApproval(id: string): Promise<PendingApproval | null> {

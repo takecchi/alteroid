@@ -504,6 +504,14 @@ interface EscalationGroup {
    * ——古い行が新しい行を上書きして answer が後退することを防ぐ。
    */
   answeredInWindow: { answer: string; at: string } | undefined;
+  /**
+   * この期間の日誌行の中に取り下げの行があれば、その理由（#963）。
+   *
+   * `answeredInWindow` と対称の欄。正常な経路では `answeredInWindow` と
+   * 両方が同時に埋まることは無い（回答済みは取り下げられない。
+   * `tools.ts` の `approval_withdraw` の doc）。
+   */
+  withdrawnInWindow: { reason: string; at: string } | undefined;
 }
 
 /**
@@ -529,12 +537,20 @@ function groupEscalations(
     ) {
       answeredInWindow = { answer: entry.answer, at: entry.at };
     }
+    let withdrawnInWindow = existing?.withdrawnInWindow;
+    if (
+      entry.withdrawnAt !== undefined &&
+      (withdrawnInWindow === undefined || entry.at > withdrawnInWindow.at)
+    ) {
+      withdrawnInWindow = { reason: entry.withdrawnReason ?? '', at: entry.at };
+    }
     byId.set(entry.approvalId, {
       approvalId: entry.approvalId,
       question: existing?.question ?? entry.question,
       managerId: existing?.managerId ?? entry.managerId,
       at: existing === undefined || entry.at > existing.at ? entry.at : existing.at,
       answeredInWindow,
+      withdrawnInWindow,
     });
   }
   return [...byId.values()];
@@ -610,16 +626,34 @@ async function describeEscalationState(
   if (group.answeredInWindow !== undefined) {
     return `回答: ${brief(group.answeredInWindow.answer, 80)}`;
   }
+  // **取り下げも回答と同じ「この期間で終端した」側**（#963）。回答と違い、
+  // 取り下げは `pendingOnly` の窓から見ても人間の次の一手が無いので
+  // （催促する相手がいない）、`pendingById.has` の枝より先に確かめる。
+  if (group.withdrawnInWindow !== undefined) {
+    return `取り下げ: ${brief(group.withdrawnInWindow.reason, 80)}`;
+  }
   if (pendingById.has(group.approvalId)) {
     // 次の一手: 待つ／催促する。id は下の「人間の回答待ち」節と同じなので
     // 突き合わせられる。
     return '未回答（承認待ちキューに在る。下の「人間の回答待ち」に同じ id で出ている）';
   }
   // ここから先だけ、この1件について承認待ちキューを直接引く。`pendingById`
-  // は未回答分しか持たないので、「本当に無い」のか「答えが付いて
-  // pendingOnly の窓から外れた」のかは、これを呼ばないと分からない。
+  // は未回答かつ未取り下げの分しか持たないので、「本当に無い」のか
+  // 「答えが付いた／取り下げられて pendingOnly の窓から外れた」のかは、
+  // これを呼ばないと分からない。
   const approval = await stores.jobs.getApproval(group.approvalId);
   if (approval !== null) {
+    // **取り下げを先に見る。** `withdrawnAt` が付いた行は `answer` を
+    // 持たないので、この判定を後回しにすると次の分岐の「回答の本文が無い
+    // 記録——台帳の破損の可能性がある」に誤って落ちる（#963 で見つかった
+    // ことそのもの——取り下げは破損ではない）。
+    if (approval.withdrawnAt !== undefined) {
+      // 次の一手: 無い（クローン自身が取り下げた。催促する相手がいない）。
+      return (
+        `この期間の日誌には取り下げ前の行しか無いが、承認待ちキューでは既に取り下げ済み` +
+        `（この期間の外で取り下げられた）: ${brief(approval.withdrawnReason ?? '（理由の記録なし）', 80)}`
+      );
+    }
     // 次の一手: この digest では見えない答えを読みに行く（`approvals_list`
     // id=<approvalId> か、この期間より後の journal_read）。「2」（未回答で
     // キューに在る）とは次の一手が違うので、同じ文言にしない。

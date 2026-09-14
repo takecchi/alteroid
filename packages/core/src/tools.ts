@@ -303,6 +303,7 @@ export const CLONE_TOOL_NAMES = [
   'conversation_read',
   'ask_human',
   'approvals_list',
+  'approval_withdraw',
   'daily_report_write',
   'usage_read',
   'schedule_list',
@@ -359,6 +360,7 @@ export const SELF_JOURNALING_CLONE_TOOLS = [
   'memory_section_move',
   'journal_write',
   'ask_human',
+  'approval_withdraw',
   'daily_report_write',
   'schedule_create',
   'schedule_remove',
@@ -3784,6 +3786,7 @@ export function createCloneTools(context: ToolContext) {
         'これは承認待ちキューに積むだけで、人間の応答を待たない。',
         '止まるのはこの件だけであり、他の仕事は進めてよい。',
         '回答は後から受信箱に届く。',
+        '不要になったら approval_withdraw で理由付きで取り下げられる（未回答のうちだけ）。',
       ].join(' '),
       {
         question: z.string().describe('人間への質問。何を判断してほしいかを具体的に'),
@@ -3865,11 +3868,18 @@ export function createCloneTools(context: ToolContext) {
         if (id !== undefined) {
           const approval = await stores.jobs.getApproval(id);
           if (!approval) return text(`承認待ち ${id} は無い（id が違う）。`);
-          // **答えが付いた件も読める。** 「もう答えが来た」ことと「その質問が
-          // 何だったか」は別の問いで、後者は答えが付いた後にこそ要る。
+          // **答えが付いた件も、取り下げた件も読める。** 「もう答えが来た/
+          // 取り下げた」ことと「その質問が何だったか」は別の問いで、後者は
+          // 終端が付いた後にこそ要る（#963）。
+          const status =
+            approval.withdrawnAt !== undefined
+              ? `${approval.withdrawnAt} に取り下げ`
+              : approval.answeredAt === undefined
+                ? '回答待ち'
+                : `${approval.answeredAt} に回答済み`;
           const head =
             `${approval.id}（${approval.createdAt}）` +
-            (approval.answeredAt === undefined ? '回答待ち' : `${approval.answeredAt} に回答済み`) +
+            status +
             (approval.jobId === undefined
               ? ''
               : ` / 宛先 managerId: "${approval.jobId}"` +
@@ -3878,6 +3888,9 @@ export function createCloneTools(context: ToolContext) {
             `質問: ${approval.question}`,
             ...(approval.context === undefined ? [] : [`背景: ${approval.context}`]),
             ...(approval.answer === undefined ? [] : [`回答: ${approval.answer}`]),
+            ...(approval.withdrawnReason === undefined
+              ? []
+              : [`取り下げた理由: ${approval.withdrawnReason}`]),
           ].join('\n\n');
           const part = page(body, offset, APPROVAL_PAGE);
           const tail = part.more
@@ -3930,13 +3943,103 @@ export function createCloneTools(context: ToolContext) {
                 // なので、文言を実装が保証している通りへ寄せる。**
                 `…ほか ${rest} 件は省略（回答待ちは ${total} 件あり、先頭から ${shown} 件だけ出した）。`,
             }),
-            '（質問は抜粋。全文は approvals_list id=<id> で取れる。答えが付いた件も id で開けて、回答の本文もそこに出る）',
+            '（質問は抜粋。全文は approvals_list id=<id> で取れる。答えが付いた件・取り下げた件も id で開けて、回答/取り下げ理由もそこに出る）',
             '（更新＝この1件が最後に変わった時刻。回答待ちだけを出す一覧なので、常に作成と同じになる）',
             // **並びを保証しているのはこの口ではない。** 並べ直しを1行も持たない
             // ので、出る順は保存先が返した順である（#756）。
             '（並び順はこの口では作っていない——保存先が返した順に出る。本番の台帳は作成時刻の昇順で返すが、同時刻どうしの順序は決まっていない）',
           ].join('\n'),
         );
+      },
+    ),
+
+    /**
+     * 承認待ちを取り下げる（issue #963）。
+     *
+     * **`commitment_close` と同じ思想。** 行を消さず、`withdrawnAt` /
+     * `withdrawnReason` で終端させる——`answeredAt` / `answer` が回答という
+     * 終端を表すのと対称に、こちらは取り下げという終端を表す
+     * （`schema.ts` の `pendingApprovalSchema.withdrawnAt` の doc）。
+     *
+     * **回答済みは取り下げられない。** 「答えたのに取り下げられた」という
+     * 状態を作らない（issue #963 の受け入れ基準）。
+     *
+     * **⚠️ `jobId`/`requestId` を持つ件（マネージャーからの許可確認を人間へ
+     * 回した件）は、取り下げても自動では何もしない（issue #963 §4、案(b)）。**
+     * 自動 `deny` は既定にしないこと——`ask_human` を経由してこの確認を
+     * 人間へ回したマネージャーは、`record.waiting` に積んだままなので
+     * `manager_send` で `decision` を返すまで待ち続ける（`manager.ts` の
+     * `#choosePending` / `record.waiting`）。ここで機械的に `deny` を送ると、
+     * クローンが意図せずマネージャーを止める形を作りうる（人間の承認の
+     * 迂回に近い——`AGENTS.md` 地雷表「枠に当たったら自動で別 provider へ
+     * 切り替える」と同種の判断）。**案(a)（`jobId`/`requestId` を持つ件は
+     * 取り下げ不可にする）を採らない理由は、マネージャー自体が既に
+     * 停止している場合に詰むため**（issue #963 の言う通り）——`ask_human` の
+     * `human_answer` 経路（このファイルすぐ上、`clone.ts` の `case
+     * 'human_answer'`）が「答えは人間から届き、宛先への配達はクローン
+     * 自身が `manager_send` で行う」という設計を既に採用しているので、
+     * 取り下げも同じ形（クローンへ委ねる）に揃える。
+     */
+    tool(
+      'approval_withdraw',
+      [
+        '未回答の承認待ちを、理由付きで取り下げる。行は消えず、取り下げた事実と理由が残る。',
+        '回答済みの件は取り下げられない（先に answered ならここでは断られる）。',
+        '⚠️ マネージャーからの許可確認を人間へ回した件（jobId/requestId 付き）を取り下げても、',
+        'そのマネージャーは自動では解放されない——待ったままなら manager_send（decision 付き）で',
+        '自分から答えること。ここでの取り下げは「人間の承認キューから消す」だけである。',
+      ].join(' '),
+      {
+        id: z.string().describe('approvals_list に出ている id'),
+        reason: z
+          .string()
+          .min(1)
+          .describe(
+            'なぜ取り下げるか（不要になった経緯・自分で答えを見つけた等）。' +
+              '人間はこれを読んで後から否定する',
+          ),
+      },
+      async ({ id, reason }) => {
+        const existing = await stores.jobs.getApproval(id);
+        if (!existing) return text(`承認待ち ${id} は無い（id が違う）。`);
+        if (existing.answeredAt !== undefined) {
+          return text(
+            `${id} は既に ${existing.answeredAt} に回答済みなので取り下げられない` +
+              `（回答: ${existing.answer ?? '（本文なし）'}）。`,
+          );
+        }
+        if (existing.withdrawnAt !== undefined) {
+          return text(
+            `${id} は既に ${existing.withdrawnAt} に取り下げ済み（理由: ${existing.withdrawnReason ?? ''}）。`,
+          );
+        }
+        const withdrawnAt = new Date().toISOString();
+        await stores.jobs.putApproval({ ...existing, withdrawnAt, withdrawnReason: reason });
+        // **自分で閉じたことは日誌に残す**（`commitment_close` と同じ理由 —
+        // `reason` の説明そのものが「人間はこれを読んで後から否定する」と
+        // 言っている以上、材料は台帳だけでなく日誌にも要る）。同じ
+        // `approvalId` の新しい行として積む（追記専用。既存行は書き換えない）。
+        await appendJournalOrThrow(
+          'approval_withdraw',
+          stores.journal,
+          {
+            type: 'escalation',
+            question: existing.question,
+            approvalId: id,
+            ...(existing.jobId === undefined ? {} : { managerId: existing.jobId }),
+            withdrawnAt,
+            withdrawnReason: reason,
+          },
+          'act-completed',
+        );
+        const waiting =
+          existing.jobId === undefined
+            ? ''
+            : ` ⚠️ この確認はマネージャー ${existing.jobId} のものである` +
+              (existing.requestId === undefined ? '' : `（requestId: "${existing.requestId}"）`) +
+              '。取り下げてもそのマネージャーは自動では解放されない——待ったままなら、' +
+              '自分から manager_send（decision 付き）で答えて始末をつけること。';
+        return text(`${id} を取り下げた。${waiting}`);
       },
     ),
 
@@ -7819,11 +7922,23 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
       return { head: '[decision]', body: `${entry.decision}（根拠: ${entry.grounds}）` };
     case 'escalation': {
       const to = entry.managerId === undefined ? '' : ` manager=${entry.managerId}`;
-      const answered = entry.answeredAt === undefined ? '未回答' : `回答済み ${entry.answeredAt}`;
-      return {
-        head: `[escalation approval=${entry.approvalId}${to} ${answered}]`,
-        body: entry.answer === undefined ? entry.question : `${entry.question} → ${entry.answer}`,
-      };
+      // **取り下げを最初に見る（#963）。** `withdrawnAt` と `answeredAt` は
+      // 正常な経路では両立しない（`pendingApprovalSchema.withdrawnAt` の
+      // doc）ので順序に実害は無いが、取り下げのほうを先に確かめる形へ揃える
+      // （`digest.ts` の `describeEscalationState` と同じ順）。
+      const status =
+        entry.withdrawnAt !== undefined
+          ? `取り下げ済み ${entry.withdrawnAt}`
+          : entry.answeredAt === undefined
+            ? '未回答'
+            : `回答済み ${entry.answeredAt}`;
+      const body =
+        entry.withdrawnAt !== undefined
+          ? `${entry.question} →（取り下げ: ${entry.withdrawnReason ?? '（理由の記録なし）'}）`
+          : entry.answer === undefined
+            ? entry.question
+            : `${entry.question} → ${entry.answer}`;
+      return { head: `[escalation approval=${entry.approvalId}${to} ${status}]`, body };
     }
     case 'tool_use':
       return {

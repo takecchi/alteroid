@@ -510,7 +510,10 @@ export function createMemoryStores(): Stores {
     },
     async listApprovals(options = {}) {
       const all = [...approvals.values()];
-      return options.pendingOnly ? all.filter((a) => a.answeredAt === undefined) : all;
+      // 未回答かつ未取り下げだけを「保留」とする（#963。3実装で揃える）。
+      return options.pendingOnly
+        ? all.filter((a) => a.answeredAt === undefined && a.withdrawnAt === undefined)
+        : all;
     },
     async getApproval(id) {
       return approvals.get(id) ?? null;

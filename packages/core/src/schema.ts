@@ -916,6 +916,18 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     managerId: z.string().optional(),
     answeredAt: isoDateTime.optional(),
     answer: z.string().optional(),
+    /**
+     * クローン自身が `approval_withdraw`（`tools.ts`）で取り下げたとき、その
+     * 時刻（#963）。**行は消さず、`commitment_close` と同じ「終端は別の新しい
+     * 行として積む」形にする** — `answeredAt` / `answer` が回答という終端を
+     * 別行で表すのと対称に、こちらは取り下げという終端を表す。同じ
+     * `approvalId` に `answeredAt` と `withdrawnAt` の両方が付いた行が別々に
+     * 在ることは、正常な経路では起きない（回答済みは取り下げられない。
+     * `tools.ts` の `approval_withdraw` の doc）。
+     */
+    withdrawnAt: isoDateTime.optional(),
+    /** 取り下げの理由（必須入力。人間が後から「なぜ消えたか」を読むための本体）。 */
+    withdrawnReason: z.string().optional(),
   }),
   z.object({
     type: z.literal('tool_use'),
@@ -2502,6 +2514,29 @@ export const pendingApprovalSchema = z.object({
    * `self` へ積まれ、挙動は変わらない。
    */
   conversationId: z.string().optional(),
+  /**
+   * クローンが `approval_withdraw`（`tools.ts`）で取り下げた時刻（#963）。
+   *
+   * **行は消さない。** `commitment_close` が `closedAt` / `closedReason` で
+   * 台帳の行を終端させるのと同じ思想 — `listApprovals({ pendingOnly: true })`
+   * はこの欄が付いた行を除くが、`getApproval` / `approvals_list id=<id>` で
+   * 引けば理由ごと読み戻せる。
+   *
+   * **`answeredAt` とは排他的な想定である。** `approval_withdraw` は
+   * `answeredAt` が付いている行を断り、`answerApproval`（`clone.ts`）は
+   * `withdrawnAt` が付いている行を想定していない（人間の回答は承認待ち
+   * キューの一覧経由で選ばれるので、`pendingOnly` から外れた取り下げ済みの
+   * 行が回答の対象に上がることは無い）。
+   */
+  withdrawnAt: isoDateTime.optional(),
+  /**
+   * 取り下げの理由。**`approval_withdraw` は必須入力として要求する**
+   * （issue #963 —「人間が後から『なぜ取り下げられたのか』を読めること」が
+   * 最終承認の実体である）。ここが optional なのは、スキーマとしては
+   * `withdrawnAt` の無い行に付かないことを表すだけで、`withdrawnAt` が
+   * 付いた行では常に埋まっている。
+   */
+  withdrawnReason: z.string().optional(),
 });
 
 export type PendingApproval = z.infer<typeof pendingApprovalSchema>;
@@ -2548,11 +2583,17 @@ export type PendingApproval = z.infer<typeof pendingApprovalSchema>;
  * 自身については成り立たない。** `schema.test.ts` はこのヘルパを直接呼ぶ
  * 単体試験で `answeredAt` 有りの枝を固定しており、HTTP 側も上記のとおり
  * `app.test.ts` が固定している。
+ *
+ * **2026-09-15 追記（#963）: `withdrawnAt` を先頭の枝に足した。** 取り下げも
+ * 「この1件が最後に変わった時刻」の一種であり、`answeredAt` と同じ扱いを
+ * 受ける。両方が付くことは正常な経路では無い（`pendingApprovalSchema` の
+ * `withdrawnAt` の doc）が、万一両方在れば「最後に変わった」側を優先する
+ * 意味で `withdrawnAt` を先に見る。
  */
 export function approvalUpdatedAt(
-  approval: Pick<PendingApproval, 'createdAt' | 'answeredAt'>,
+  approval: Pick<PendingApproval, 'createdAt' | 'answeredAt' | 'withdrawnAt'>,
 ): string {
-  return approval.answeredAt ?? approval.createdAt;
+  return approval.withdrawnAt ?? approval.answeredAt ?? approval.createdAt;
 }
 
 // ---------------------------------------------------------------------------
