@@ -2218,15 +2218,57 @@ describe('reconsider: 動く鍵が残っているのに諦めない', () => {
    * 現役」として扱われ、その行が冷却中なら状態からでも回っていた。その概念
    * （`isEnvToken` によるフォールバック）ごと廃止したので、**指名が一度も無い
    * （`active === null`）状態からは、状態だけでは何も決めない。**
+   *
+   * **⚠️ 2026-09-15 にもう一度反転した。** 「状態だけでは何も決めない」を貫くと、
+   * プールが空のままデーモンが起動し、あとから初めてトークンを登録した器では
+   * 永久に最初の現役が選ばれなかった——`observe` は `classifyUsageNotice` に
+   * 一致する文言（利用上限系）でしか呼ばれず、それに当たらない失敗（実例:
+   * `Not logged in · Please run /login`）では一度も呼ばれない。実運用
+   * （2026-09-14）でこの形を踏み、トークンを5本登録しても回復しなかった。
+   * ⟹ **「現役が一度も無い」は「現役が通らない」の最も極端な形として扱い、
+   * 候補が在れば選ぶ側へ倒す。**
    */
-  it('指名が一度も無い器では、状態からは決めない（候補が在っても回さない）', async () => {
+  it('指名が一度も無い器でも、候補が在れば選ぶ', async () => {
     const h = harness();
     await h.stores.tokens.replace([{ id: 'tok-b', label: 'second', value: 'value-b', order: 0 }]);
     // `writeActive` を一度も呼んでいない ⟹ `active` は `null`。
 
     const outcome = await h.rotator.reconsider({ reason: 'account_probe' });
 
+    expect(outcome.kind).toBe('rotated');
+    if (outcome.kind !== 'rotated') return;
+    expect(outcome.toTokenId).toBe('tok-b');
+    expect(outcome.signal).toBe('stranded');
+  });
+
+  it('指名が一度も無い器で、成功の観測だけでは回さない', async () => {
+    const h = harness();
+    await h.stores.tokens.replace([{ id: 'tok-b', label: 'second', value: 'value-b', order: 0 }]);
+    // `writeActive` を一度も呼んでいない ⟹ `active` は `null`。
+
+    const outcome = await h.rotator.reconsider({
+      reason: 'turn_succeeded',
+      current: {
+        verdict: { verdict: 'usable' },
+        origin: { source: 'turn_success', observedBy: { tokenId: 'tok-b', generation: 1 } },
+      },
+    });
+
     expect(outcome.kind).toBe('ignored');
+    expect(h.spreadCalls).toEqual([]);
+  });
+
+  it('指名が一度も無い器で、設定が off なら選ばない（記録だけする）', async () => {
+    const h = harness();
+    await h.stores.tokens.replace([{ id: 'tok-b', label: 'second', value: 'value-b', order: 0 }]);
+    await h.stores.tokens.writeSettings({ rotateOn: 'off', cooldownMs: 1 });
+    // `writeActive` を一度も呼んでいない ⟹ `active` は `null`。
+
+    const outcome = await h.rotator.reconsider({ reason: 'account_probe' });
+
+    expect(outcome.kind).toBe('ignored');
+    if (outcome.kind !== 'ignored') return;
+    expect(outcome.signal).toBe('stranded');
     expect(h.spreadCalls).toEqual([]);
   });
 });
@@ -2763,7 +2805,14 @@ describe('exhausted は何も撒かない（器の環境変数へのフォール
     expect(h.spreadCalls).toEqual([]);
   });
 
-  it('まだ一度も指名していない器では、状態からは決めない（撒く先の身元が無い）', async () => {
+  /**
+   * **⚠️ 2026-09-15 に期待を反転した。** 元は「まだ一度も指名していない器では、
+   * 状態からは決めない（撒く先の身元が無い）」——`active === null` を無条件で
+   * `ignored` にしていた。いまは候補を探す側へ倒したので、**この行（人間が
+   * 外した1本しか無い）では候補が見つからず `exhausted` になる**——「選ぶ側へ
+   * 倒した」ことと「選べる候補が無い」ことは別で、後者は従来どおり何も撒かない。
+   */
+  it('まだ一度も指名していない器で、通る候補も無ければ exhausted。何も撒かない', async () => {
     const h = harness();
     await h.stores.tokens.replace([
       { id: 'tok-a', label: 'first', value: 'value-a', order: 0, disabledAt: AT },
@@ -2772,7 +2821,7 @@ describe('exhausted は何も撒かない（器の環境変数へのフォール
 
     const outcome = await h.rotator.reconsider({ reason: 'tick' });
 
-    expect(outcome.kind).toBe('ignored');
+    expect(outcome.kind).toBe('exhausted');
     expect(h.spreadCalls).toEqual([]);
   });
 });

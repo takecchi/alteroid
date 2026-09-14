@@ -483,6 +483,19 @@ export interface TokenRotator {
    * - **記録の上で現役が `ready` → 回さない。** ここが「健全な鍵から勝手に移らない」
    *   の歯止めである
    *
+   * ## 現役がまだ一度も指名されていない場合は、選ぶ（回す側に含める）
+   *
+   * **`active?.tokenId === undefined` は「現役が通らない」の最も極端な形として
+   * 扱う** —— `dangling`（指名の先の行が消えている）と同じで、撒く値がそもそも
+   * 無い。プールに `ready` な候補が在れば選ぶ。**そうしないと、プールが空の状態で
+   * デーモンが起動し、あとから初めてトークンを登録した器では、`observe` が
+   * 一度も呼ばれない失敗（`classifyUsageNotice` に一致しない文言。実例:
+   * `Not logged in · Please run /login`）を踏むと、`reconsider` のどの契機
+   * （`pool_changed` / `tick` / `account_probe` / `startup` /
+   * `runner_connected`）を通しても永久に最初の現役が選ばれない**（2026-09-14
+   * の実運用で確認・2026-09-15 に直した）。`turn_succeeded` はこの場合も
+   * 回す契機にしない（下の出所2 の門と同じ判断）。
+   *
    * ## probe を焼かない場合がはっきりしている
    *
    * 候補選び（`selectNextToken`）は**記録だけを見る純粋関数**で、`ready` な行が
@@ -1573,12 +1586,55 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           currentId === undefined ? undefined : tokens.find((token) => token.id === currentId);
 
         if (currentId === undefined) {
-          return {
-            kind: 'ignored' as const,
-            signal: 'none' as const,
+          // **成功は回す契機にしない**（下の `reason === 'turn_succeeded'` の門と
+          // 同じ判断）。現役がまだ無いのに、身元を運ぶ成功の観測だけを理由に
+          // 選ぶのは筋が違う——`turn_succeeded` は「あるトークンでターンが
+          // 成功した」という証拠であって、選び直す判定ではない。
+          if (reason === 'turn_succeeded') {
+            return {
+              kind: 'ignored' as const,
+              signal: 'none' as const,
+              reason,
+              why: 'ターンの成功を観測したが、まだ一度も指名していない（成功は回す契機にしない）',
+            };
+          }
+
+          /**
+           * **まだ一度も指名していない状態からは、候補を選ぶ。**
+           *
+           * **かつてはここで諦めていた。** それだと、プールに候補を足しても
+           * ——`reconsider` のどの契機（`pool_changed` / `tick` /
+           * `account_probe` / `startup` / `runner_connected`）を通しても
+           * ——永久に最初の現役が選ばれなかった。`observe` は既に
+           * `active === null` を扱える（`outgoingId === undefined` の分岐）が、
+           * `observe` はセッションの失敗が `classifyUsageNotice` に一致する
+           * 文言だったときにしか呼ばれない。それに当たらない失敗（例えば
+           * 「まだログインしていない」）では `observe` が一度も呼ばれず、
+           * 状態側のこのガードだけが毎回引っかかって、詰みになっていた
+           * （実運用で確認: 2026-09-14、プールへ登録した直後の会話が
+           * `Not logged in · Please run /login` で失敗し、そのまま回復
+           * しなかった）。
+           *
+           * **「通らないことが確定している」の最も極端な形として扱う**——
+           * `dangling`（指名の先の行が消えている）と同じで、撒く値がそもそも
+           * 無い。`stranded` の印をそのまま使う。
+           */
+          if (settings.rotateOn === 'off') {
+            return {
+              kind: 'ignored' as const,
+              signal: 'stranded' as const,
+              reason,
+              why: 'まだ一度も指名していない。回す契機の設定が off なので回さない（記録だけする）',
+            };
+          }
+          const sweep = await sweepCandidates(tokens, [], settings);
+          return finishSweep({
+            sweep,
+            active: null,
+            signal: 'stranded' as const,
             reason,
-            why: 'まだ一度も指名していない（いま何が走っているのか記録から言えないので、状態からは決めない）',
-          };
+            whyHead: 'まだ一度も指名していない',
+          });
         }
 
         /**
