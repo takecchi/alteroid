@@ -457,3 +457,17 @@ wait_for_deploy() { # <Service名> [制限秒]
   warn "$service: ${limit}秒では終わらなかった。railway logs --service $service を見る"
   return 1
 }
+
+# マネージャーへ降ろす環境変数を正本（デーモンの記憶ストア）へ置く
+# （`alteroid credential set` と同じ操作を `railway ssh` 越しに非対話で行う）。
+#
+# **値は引数で渡さない。** `railway ssh` の先の `alteroid credential set` が
+# argv から秘密を受け取らない設計なので（`apps/cli/src/credential.ts` の doc）、
+# ここでも stdin で渡す。`ps` に出さないという意図をここで壊さない。
+#
+# `app` が上がっていない・`railway ssh` が届かない、のどちらでも非0を返すだけで
+# die しない — 呼ぶ側（setup.sh）が「置けなかった」を集めて、最後に手順として出す。
+set_credential() { # <APP_SERVICE> <名前> <値>
+  local service="$1" name="$2" value="$3"
+  printf '%s' "$value" | railway ssh --service "$service" -- alteroid credential set "$name" >/dev/null 2>&1
+}

@@ -443,6 +443,8 @@ su -s /bin/sh worker -c "curl -s http://127.0.0.1:4518/livez"
 
 app にも降りるが、それでよい。**クローンは人間の写像であり、人間は Claude Code に頼むだけでなく自分の手も持っている**（north_star「適用範囲」）。「クローンの道具はマネージャーだけ」は写像として成り立たない。
 
+**`./railway/setup.sh` で `GH_TOKEN` を入力した場合、置き場は Shared/Service Variables ではなく正本（DB）である。** `app` が上がった後に `railway ssh -- alteroid credential set` を自動で実行する（下の「変数の代わりに正本へ置く」と同じ形）。Service Variables に置くと「器を作り直すたびに人間が焼き直す」形に戻るため（AGENTS.md 地雷表）、`setup.sh` はここへは置かない。以下の「鍵を作る」〜「置く」は、**手で（ダッシュボードや CLI で直接）構成する場合の手順**である。
+
 ### 鍵を作る
 
 GitHub → Settings → Developer settings → Personal access tokens → **Fine-grained tokens**

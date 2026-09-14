@@ -119,6 +119,31 @@ switch (args[0]) {
     if (process.env.FAKE_DOMAIN_FAILS) process.exit(1);
     out({ domain: 'test-app.up.railway.app' });
     break;
+  case 'ssh': {
+    // 「railway ssh --service X -- alteroid credential set NAME」の形だけを
+    // 解釈する。setup.sh がこの形でしか呼ばないため、他の形（対話シェル等）は
+    // 実装しない
+    const svc = flag('--service');
+    const dashdash = args.indexOf('--');
+    const cmd = dashdash >= 0 ? args.slice(dashdash + 1) : [];
+    if (cmd[0] === 'alteroid' && cmd[1] === 'credential' && cmd[2] === 'set') {
+      // 正本（DB）へ置くのが一時的にこける、を再現する
+      if (process.env.FAKE_SSH_CREDENTIAL_FAILS) process.exit(1);
+      let value = '';
+      try {
+        value = fs.readFileSync(0, 'utf8');
+      } catch {
+        // 何もパイプされていなければ空のまま（credential.ts 側の「値が空」判定と
+        // 同じ状況だが、偽 CLI 側では確かめない——確かめるのは setup.sh の側）
+      }
+      fs.appendFileSync(
+        at('credentials.jsonl'),
+        JSON.stringify({ service: svc, name: cmd[3], value }) + '\\n',
+      );
+    }
+    out({});
+    break;
+  }
   default:
     out({});
 }
@@ -141,6 +166,8 @@ export type Run = {
   touched: (serviceId: string) => boolean;
   /** 投入された順の Service id（同じ id が複数回あればその回数だけ並ぶ）。 */
   upsertedServices: string[];
+  /** `railway ssh -- alteroid credential set` で置かれた順（`set_credential`）。 */
+  credentials: { service: string | undefined; name: string | undefined; value: string }[];
   calls: string[];
   apiLog: string;
   stderr: string;
@@ -259,11 +286,20 @@ export function runScript(options: RunOptions): Run {
     return found;
   };
 
+  const credentials = read('credentials.jsonl')
+    .split('\n')
+    .filter(Boolean)
+    .map(
+      (l) =>
+        JSON.parse(l) as { service: string | undefined; name: string | undefined; value: string },
+    );
+
   return {
     upsert,
     vars: (serviceId) => upsert(serviceId).variables,
     touched: (serviceId) => payloads.some((p) => p.serviceId === serviceId),
     upsertedServices: payloads.map((p) => p.serviceId),
+    credentials,
     calls: read('calls.log').split('\n').filter(Boolean),
     apiLog: read('api.log'),
     stderr,

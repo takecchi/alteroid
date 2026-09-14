@@ -37,6 +37,8 @@ type Options = {
   yes?: boolean;
   /** `--branch` を渡すか（既定 'main'）。null にすると渡さず、既定解決ロジックを通す */
   branch?: string | null;
+  /** `railway ssh -- alteroid credential set` をこけさせる（正本へ置く段） */
+  sshCredentialFails?: boolean;
 };
 
 /** `.env` を1つ書いて setup.sh を通し、投げられた入力と終了状態を返す。 */
@@ -58,6 +60,7 @@ function run(env: string, options: Options = {}): Run {
       ...(options.domainFails ? { FAKE_DOMAIN_FAILS: '1' } : {}),
       ...(options.domainList ? { FAKE_DOMAIN_LIST: options.domainList } : {}),
       ...(options.workspaces ? { FAKE_WORKSPACES: JSON.stringify(options.workspaces) } : {}),
+      ...(options.sshCredentialFails ? { FAKE_SSH_CREDENTIAL_FAILS: '1' } : {}),
     },
     allowFailure: options.allowFailure,
     onEnvFile: options.onEnvFile,
@@ -191,14 +194,15 @@ describe('setup.sh が置く変数の割り振り', () => {
     expect(runner).not.toHaveProperty('ALTEROID_RUNNER_TOKEN_SHA256');
   });
 
-  it('GH_TOKEN と身元は両方へ渡る（下へ手を伸ばす鍵は伏せない）', () => {
-    // 伏せるのは上＝記憶へ到達する鍵だけである。これを伏せると、人間が Claude Code で
-    // できる gh pr create が層を下りた瞬間に消える＝デグレード
+  it('GH_TOKEN と身元は Shared/Service Variables には置かない（正本＝DBへ置く）', () => {
+    // 置くと「器を作り直すたびに人間が焼き直す」形に戻る（AGENTS.md 地雷表）。
+    // 下へ手を伸ばす鍵を伏せる話ではない——置き場を変えただけである
+    // （下の「GitHub の鍵を正本（DB）へ置く」describe が置き先を確かめる）
     for (const id of ['id-app', 'id-runner']) {
       const v = r.vars(id);
-      expect(v.GH_TOKEN).toBe('github_pat_test');
-      expect(v.GIT_AUTHOR_NAME).toBe('tester');
-      expect(v.GIT_COMMITTER_EMAIL).toBe('t@example.com');
+      expect(v).not.toHaveProperty('GH_TOKEN');
+      expect(v).not.toHaveProperty('GIT_AUTHOR_NAME');
+      expect(v).not.toHaveProperty('GIT_COMMITTER_EMAIL');
     }
   });
 
@@ -230,6 +234,73 @@ describe('setup.sh が置く変数の割り振り', () => {
   it('秘密を引数で渡さない（プロセス一覧に出る）', () => {
     expect(r.apiLog).not.toContain('sk-ant-test');
     expect(r.apiLog).not.toContain('github_pat_test');
+  });
+});
+
+describe('GitHub の鍵を正本（DB）へ置く', () => {
+  // Shared/Service Variables に置くのをやめ、app が上がった後
+  // `railway ssh -- alteroid credential set` で正本（DB）へ置くようにした
+  // （旧: 実際のデプロイで手動でこの形にしたが、setup.sh 自体は直っておらず、
+  // 再実行すると元の Shared Variables 置きへ戻っていた不具合の是正）。
+
+  it('app が上がった後、GH_TOKEN と身元を正本へ置く（値は stdin から）', () => {
+    const r = run(
+      [
+        MINIMAL,
+        'GH_TOKEN=github_pat_test',
+        'GIT_AUTHOR_NAME=tester',
+        'GIT_AUTHOR_EMAIL=t@example.com',
+        'GIT_COMMITTER_NAME=tester',
+        'GIT_COMMITTER_EMAIL=t@example.com',
+        '',
+      ].join('\n'),
+    );
+    expect(r.exitCode).toBe(0);
+    const byName = Object.fromEntries(r.credentials.map((c) => [c.name, c]));
+    expect(byName.GH_TOKEN).toMatchObject({ service: 'app', value: 'github_pat_test' });
+    expect(byName.GIT_AUTHOR_NAME).toMatchObject({ service: 'app', value: 'tester' });
+    expect(byName.GIT_AUTHOR_EMAIL).toMatchObject({ service: 'app', value: 't@example.com' });
+    expect(byName.GIT_COMMITTER_NAME).toMatchObject({ service: 'app', value: 'tester' });
+    expect(byName.GIT_COMMITTER_EMAIL).toMatchObject({ service: 'app', value: 't@example.com' });
+  });
+
+  it('GIT_AUTHOR_* が無ければ GH_TOKEN だけ置く（身元が空なら置かない）', () => {
+    const r = run([MINIMAL, 'GH_TOKEN=github_pat_test', ''].join('\n'));
+    expect(r.exitCode).toBe(0);
+    const names = r.credentials.map((c) => c.name);
+    expect(names).toEqual(['GH_TOKEN']);
+  });
+
+  it('GH_TOKEN を渡さなければ、正本にも何も置かない', () => {
+    const r = run(MINIMAL);
+    expect(r.exitCode).toBe(0);
+    expect(r.credentials).toEqual([]);
+  });
+
+  it('置けなかったら非0で終わる（黙って Shared Variables 無し・DB 無しにしない）', () => {
+    const r = run([MINIMAL, 'GH_TOKEN=github_pat_test', ''].join('\n'), {
+      sshCredentialFails: true,
+      allowFailure: true,
+    });
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toContain('正本へ置けなかった');
+  });
+
+  it('runner の Shared Variables には置かない（runner は自分の env から鍵を拾わない設計と対になる）', () => {
+    const r = run(
+      [
+        MINIMAL,
+        'GH_TOKEN=github_pat_test',
+        'GIT_AUTHOR_NAME=tester',
+        'GIT_AUTHOR_EMAIL=t@example.com',
+        '',
+      ].join('\n'),
+      { runners: 2 },
+    );
+    for (const c of r.credentials) {
+      // 正本は app 経由でしか置けない（daemon の HTTP API が 127.0.0.1 の app に居る）
+      expect(c.service).toBe('app');
+    }
   });
 });
 
@@ -284,8 +355,8 @@ describe('runner を3台で作るとき（-c 3）', () => {
       expect(r.vars(id).RAILWAY_RUN_UID).toBe('0');
       // 合鍵は全台で同じ（食い違うと 401 で unusable になる）
       expect(r.vars(id).ALTEROID_RUNNER_TOKEN).toBe('deadbeef');
-      // 下＝外の世界へ手を伸ばす鍵は伏せない
-      expect(r.vars(id).GH_TOKEN).toBe('github_pat_test');
+      // GH_TOKEN は Shared/Service Variables には置かない（正本＝DBへ置く）
+      expect(r.vars(id)).not.toHaveProperty('GH_TOKEN');
     }
     expect(r.vars('id-app')).not.toHaveProperty('RAILWAY_RUN_UID');
   });
