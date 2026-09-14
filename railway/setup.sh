@@ -74,9 +74,9 @@ Railway に alteroid の Service（app / runner × N / PostgreSQL）を用意す
   ./railway/setup.sh [オプション]
 
   -n, --name <名前>       プロジェクト名（既定: alteroid）
-  -w, --workspace <名前>  Workspace（複数持っているときだけ要る）
+  -w, --workspace <名前>  Workspace（省くと、複数あれば一覧を見せて尋ねる）
   -r, --repo <owner/repo> GitHub 連携する対象（既定: origin から拾う）
-  -b, --branch <ブランチ> 追いかけるブランチ（既定: release/prod）
+  -b, --branch <ブランチ> 追いかけるブランチ（省くと既定 release/prod を確認される）
   -c, --runners <台数>    runner の台数（既定: 1。.env の ALTEROID_RUNNER_COUNT も見る）
   -y, --yes               尋ねない（値は .env と既定値から取る）
   -h, --help              これ
@@ -158,17 +158,49 @@ if [ -z "$GIT_BRANCH" ]; then
   # **ここを main へ戻すと、その形へ戻る**（railway/README.md「デプロイは走行中の
   # 仕事を畳む操作である」1）。とくに M5 で runner を2台目足すとき、片方だけが main を
   # 見ていると**そこだけがマージのたびに畳まれる**ので、既定を弱いほうへ倒さないこと。
-  GIT_BRANCH='release/prod'
-  if ! git -C "$REPO_ROOT" ls-remote --exit-code --heads origin "$GIT_BRANCH" >/dev/null 2>&1; then
+  branch_default='release/prod'
+  branch_fell_back=0
+  if ! git -C "$REPO_ROOT" ls-remote --exit-code --heads origin "$branch_default" >/dev/null 2>&1; then
     # まだ一度も反映が走っていないリポジトリ。**main へ落とすが黙らない** — この形は
     # マージした瞬間に落ちるので、気づかないまま常駐させたくない（黙って倒すと、
     # あとで「なぜマージで死ぬのか」を Railway 側に探しに行くことになる）。
-    GIT_BRANCH="$(git -C "$REPO_ROOT" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || true)"
-    GIT_BRANCH="${GIT_BRANCH#origin/}"
-    : "${GIT_BRANCH:=main}"
+    branch_default="$(git -C "$REPO_ROOT" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+    branch_default="${branch_default#origin/}"
+    : "${branch_default:=main}"
+    branch_fell_back=1
+  fi
+  # **既定値を尋ねるだけで、当てずっぽうでは確定しない。** `-y` のときは ask() が
+  # 既定をそのまま返すので、今までと同じ挙動になる（尋ねない・default を使う）
+  GIT_BRANCH="$(ask 'どのブランチを追いかけますか？' "$branch_default")"
+  if [ "$GIT_BRANCH" = "$branch_default" ] && [ "$branch_fell_back" = 1 ]; then
     warn "origin に release/prod が無いので $GIT_BRANCH に繋ぐ。**マージした瞬間にデプロイが走る形**である"
     warn "  → Actions の「release/prod へ反映」を一度起こしてから、Settings → Source を release/prod へ向け直すこと"
+  elif [ "$GIT_BRANCH" != 'release/prod' ]; then
+    warn "release/prod 以外（${GIT_BRANCH}）に繋ぐ。**マージした瞬間にデプロイが走る形**である"
   fi
+fi
+
+if [ -z "$WORKSPACE" ]; then
+  # **一覧を見せてから尋ねる。** 黙って `railway init` に投げると、複数ある人だけ
+  # 「--workspace required in non-interactive mode」という、一覧すら見えないエラーで
+  # 止まる（実際に起きた）。1つしか無い人はここで自動的に決まるので、今までどおり
+  # 何も聞かれない
+  workspace_names="$(list_workspace_names)"
+  workspace_count="$(printf '%s' "$workspace_names" | grep -c . || true)"
+  if [ "$workspace_count" = 1 ]; then
+    WORKSPACE="$workspace_names"
+    dim "ワークスペース: ${WORKSPACE}（1つしか無いので自動で選んだ）"
+  elif [ "$workspace_count" -gt 1 ]; then
+    if [ "$ASSUME_YES" = 1 ]; then
+      die "ワークスペースが複数ある（$(printf '%s' "$workspace_names" | tr '\n' '/')）。--workspace で指定すること"
+    fi
+    info 'ワークスペースが複数ある。どこに作りますか？'
+    while IFS= read -r name; do info "  - $name"; done <<<"$workspace_names"
+    WORKSPACE="$(ask 'ワークスペース名')"
+    [ -n "$WORKSPACE" ] || die 'ワークスペースが未入力（一覧から名前をそのまま貼ること）'
+  fi
+  # workspace_count=0（API 応答が読めなかった等）なら何もしない。今までどおり
+  # railway init 自身の判断（1つなら通り、複数ならそちらのエラーで止まる）に委ねる
 fi
 
 # --- 1. 人間が埋めるもの ----------------------------------------------------
@@ -323,6 +355,7 @@ step '作るもの'
 [ -n "$PROJECT_NAME" ] || PROJECT_NAME="$(ask 'プロジェクト名' alteroid)"
 
 info "プロジェクト    ${PROJECT_NAME}（新しく作る。既存には触らない）"
+info "ワークスペース  ${WORKSPACE:-（1つしか無い、または未検出。railway init 自身に委ねる）}"
 info "Service         ${APP_SERVICE}（${APP_CONFIG}）"
 for i in $(seq 1 "$RUNNER_COUNT"); do
   info "                $(runner_service_name "$i")（${RUNNER_CONFIG} / ALTEROID_RUNNER_ID=$(runner_id_for "$i")）"

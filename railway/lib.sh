@@ -280,6 +280,17 @@ service_id() { # <名前>
   json_get "$list" "(d.find(s => s.name === $name_json) || {}).id"
 }
 
+# ワークスペース名の一覧（1行1名前）。**空を返すことがある**（API 応答が一時的に
+# 乱れた・権限が無い等）— 呼ぶ側は「0件なら判断しない（railway init 自身に委ねる）」で
+# 受ける。die しないのは、ここで止めると「ワークスペースが1つしか無い人」まで
+# 巻き込むためである（今までその人達はこの呼び出し自体が無くても通っていた）
+list_workspace_names() {
+  local resp
+  resp="$(railway api 'query { me { workspaces { name } } }' --compact 2>/dev/null || true)"
+  # railway api の応答は GraphQL の封筒（{"data": {...}}）に包まれている
+  json_get "$resp" '(d.data && d.data.me && d.data.me.workspaces || []).map(w => w.name).join("\n")'
+}
+
 # PostgreSQL の Service 名は Railway が決める（テンプレート由来。既定 `Postgres`）。
 # **決め打ちにしない** — 変数参照 `\${{名前.DATABASE_URL}}` がその名前に依存する
 postgres_service_name() {

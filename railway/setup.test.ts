@@ -29,26 +29,35 @@ type Options = {
   onEnvFile?: (path: string) => void;
   /** runner の台数（`-c`）。既定は渡さない＝1台 */
   runners?: number;
+  /** 偽 CLI が `me.workspaces` として返す名前。既定は `['test']`（1つ＝尋ねない） */
+  workspaces?: string[];
+  /** `--yes` を付けるか（既定 true）。false にすると ASSUME_YES=0 で走る —
+   * 対話プロンプトはどれも `/dev/tty` が無い環境では即座に空文字へ倒れるので、
+   * 「尋ねようとしたか」までは確かめられるが「人間が何を打ったか」は確かめられない */
+  yes?: boolean;
+  /** `--branch` を渡すか（既定 'main'）。null にすると渡さず、既定解決ロジックを通す */
+  branch?: string | null;
 };
 
 /** `.env` を1つ書いて setup.sh を通し、投げられた入力と終了状態を返す。 */
 function run(env: string, options: Options = {}): Run {
+  const branch = options.branch === undefined ? 'main' : options.branch;
   return runScript({
     script: 'setup.sh',
     args: [
-      '--yes',
+      ...(options.yes === false ? [] : ['--yes']),
       '--name',
       'test',
       '--repo',
       'takecchi/alteroid',
-      '--branch',
-      'main',
+      ...(branch === null ? [] : ['--branch', branch]),
       ...(options.runners === undefined ? [] : ['--runners', String(options.runners)]),
     ],
     envFile: env,
     extraEnv: {
       ...(options.domainFails ? { FAKE_DOMAIN_FAILS: '1' } : {}),
       ...(options.domainList ? { FAKE_DOMAIN_LIST: options.domainList } : {}),
+      ...(options.workspaces ? { FAKE_WORKSPACES: JSON.stringify(options.workspaces) } : {}),
     },
     allowFailure: options.allowFailure,
     onEnvFile: options.onEnvFile,
@@ -563,6 +572,89 @@ describe('.env に持ち込みのドメインがあるとき', () => {
     expect(r.exitCode).toBe(0);
     expect(r.vars('id-app').ALTEROID_PUBLIC_URL).toBe('https://alteroid.example');
   });
+});
+
+describe('ワークスペースの解決', () => {
+  // `--workspace` を省いたときの分岐。実際に「複数ワークスペースを持つ人だけが
+  // `--workspace required in non-interactive mode` という、候補すら見えないエラーで
+  // 止まる」が起きたので、ここを直した（railway/lib.sh の `list_workspace_names`）。
+
+  it('1つしか無ければ尋ねずに使う', () => {
+    const r = run(MINIMAL, { workspaces: ['solo'] });
+    expect(r.exitCode).toBe(0);
+    expect(r.calls.some((c) => c.startsWith('init') && c.includes('--workspace solo'))).toBe(true);
+  });
+
+  it('明示した --workspace を優先し、一覧を見に行かない', () => {
+    const r = runScript({
+      script: 'setup.sh',
+      args: [
+        '--yes',
+        '--name',
+        'test',
+        '--repo',
+        'takecchi/alteroid',
+        '--branch',
+        'main',
+        '--workspace',
+        'chosen',
+      ],
+      envFile: MINIMAL,
+      extraEnv: { FAKE_WORKSPACES: JSON.stringify(['a', 'b', 'c']) },
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.calls.some((c) => c.startsWith('init') && c.includes('--workspace chosen'))).toBe(
+      true,
+    );
+    // 一覧を問い合わせる api 呼び出し自体が無い（明示されているので不要）
+    expect(r.calls.some((c) => c.includes('workspaces'))).toBe(false);
+  });
+
+  it('複数あって --yes なら、候補を示して非0で止まる（黙って選ばない）', () => {
+    const r = run(MINIMAL, { workspaces: ['ws-a', 'ws-b'], allowFailure: true });
+    expect(r.exitCode).not.toBe(0);
+    // 一覧すら見えないエラーで止まっていたのが元の不具合だった。候補名が
+    // エラーメッセージ自体に出ることを確かめる
+    expect(r.stderr).toContain('ws-a');
+    expect(r.stderr).toContain('ws-b');
+    expect(r.stderr).toContain('--workspace');
+  });
+
+  it('複数あって対話なら、選ぶ前に一覧を見せる', () => {
+    // tty が無いテスト環境では `ask` が空文字へ倒れて止まるので、「人間が何を
+    // 選んだか」までは確かめられない。確かめられるのは「一覧を見せてから
+    // 尋ねようとしたか」である
+    const r = run(MINIMAL, { workspaces: ['ws-a', 'ws-b'], yes: false, allowFailure: true });
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toContain('ws-a');
+    expect(r.stderr).toContain('ws-b');
+  });
+
+  it('一覧が0件（API 応答が読めない等）なら、今までどおり railway init に委ねる', () => {
+    const r = run(MINIMAL, { workspaces: [] });
+    expect(r.exitCode).toBe(0);
+    // --workspace を付けずに呼ぶ（今までの挙動のまま）
+    expect(r.calls.some((c) => c.startsWith('init') && !c.includes('--workspace'))).toBe(true);
+  });
+});
+
+describe('ブランチの解決', () => {
+  // --branch を明示したときに尋ねない（＝今までの全テストが実は確かめている
+  // 経路）は、既存の describe 群がそのまま線を引いている。ここで確かめるのは
+  // 省いたときの新しい経路だけである。
+
+  it('--branch を省くと、release/prod を既定として尋ねた上で使う', () => {
+    // **このテストだけ本物の origin（GitHub）へ `git ls-remote` する。**
+    // REPO_ROOT は railway/lib.sh 自身の場所（＝このリポジトリの根）から
+    // 固定的に決まり、テストから差し替える口が無い。release/prod は本番の
+    // 反映元として運用されている枝なので、ネットワークが繋がる環境では
+    // 安定して存在する（無ければ CI 自体が他の理由で壊れている）。
+    const r = run(MINIMAL, { branch: null, workspaces: ['test'] });
+    expect(r.exitCode).toBe(0);
+    expect(
+      r.calls.some((c) => c.includes('source connect') && c.includes('--branch release/prod')),
+    ).toBe(true);
+  }, 15_000);
 });
 
 describe('railway/*.json を Service の設定へ写す', () => {

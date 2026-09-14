@@ -94,6 +94,18 @@ switch (args[0]) {
     const v = args.find((a) => a.startsWith('@'));
     if (v) fs.appendFileSync(at('payloads.jsonl'), fs.readFileSync(v.slice(1), 'utf8') + '\\n');
     fs.appendFileSync(at('api.log'), args.join(' ') + '\\n');
+    // ワークスペース一覧の問い合わせ。**既定は1つ**（テストが明示しない限り、
+    // 複数ワークスペースの分岐に無関係なテストを巻き込まない）
+    if (args.some((a) => a.includes('workspaces'))) {
+      let names;
+      try {
+        names = JSON.parse(process.env.FAKE_WORKSPACES || '["test"]');
+      } catch {
+        names = ['test'];
+      }
+      out({ data: { me: { workspaces: names.map((name) => ({ name })) } } });
+      break;
+    }
     out({ data: { ok: true } });
     break;
   }
