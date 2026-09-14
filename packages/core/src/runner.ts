@@ -23,6 +23,7 @@ import type {
 } from './agent-events.js';
 import { inspectBashCommand } from './bash-wait-guard.js';
 import { buildManagerSessionOptions, foldClaudeMessage } from './claude-provider.js';
+import { CONTEXT_USAGE_CATEGORY_LIMIT } from './context-usage.js';
 import { denialInputShape, type DeniedRecord } from './denial-shape.js';
 import {
   noteBackgroundFailure,
@@ -55,7 +56,7 @@ import type {
   RunnerResumeCommand,
   RunnerStartCommand,
 } from './runner-protocol.js';
-import type { JobStatus } from './schema.js';
+import type { ContextUsageObservation, JobStatus } from './schema.js';
 // **クローン（`clone.ts`）と同じ判定を呼ぶ。** 「これは応答ではない」の見分けを
 // 層ごとに書くと、片方だけが印を見落として非対称になる（実際に
 // `result.errors[]` はここにしか無く、クローン側は読んでいなかった）。
@@ -65,6 +66,7 @@ import type { JobStatus } from './schema.js';
 import { assistantFailureOf, type SdkFailure } from './sdk-failure.js';
 import { systemErrorFactsOf, type SystemErrorFacts } from './system-error.js';
 import { classifyUsageNotice } from './usage-limits.js';
+import { describeProbeError } from './usage-probe.js';
 import { readSessionUsage } from './usage.js';
 
 /**
@@ -2066,7 +2068,7 @@ class RunnerSession {
         // **provider の綴りを読むのはここまでである**（`claude-provider.ts` の
         // `foldClaudeMessage`）。ここから下へ流れるのは中立イベントだけで、
         // 次の provider を足しても `#apply` は1本のままになる（#486）。
-        for (const event of foldClaudeMessage(message)) this.#apply(event);
+        for (const event of foldClaudeMessage(message)) await this.#apply(event);
       }
       if (this.#stopped || generation !== this.#generation) return;
       // **認証トークンの畳み直しで、自分から入力ストリームを終えた回。**
@@ -2194,6 +2196,13 @@ class RunnerSession {
       text:
         '認証トークンが差し替わったので、ターンの境界でセッションを畳んで' +
         '開き直した（会話は resume で続く）。',
+      // **daemon 側に「いま開き直した」を構造化して伝える**（Issue #914 提案1。
+      // `runner-protocol.ts` の `note.tokenRotation` の doc）。`text` の
+      // 言い回しでは判定させない——`manager.ts` の `case 'note'` はこの旗を
+      // 見て、この委譲が抱えている鍵の世代（`#tokenIdentities`）を
+      // 自分の現役の身元で更新し直す。ここでは世代そのものは運ばない
+      // （runner はどの世代かを知らない。旗だけで足りる）。
+      tokenRotation: true,
     });
     this.#open(sessionId);
   }
@@ -2313,8 +2322,14 @@ class RunnerSession {
    * 反応するか」だけである —— 何を `RunnerEvent` として降ろすか、委譲の区間を
    * どう数えるか、どこでセッションを畳むか。**クローン層の同じ場所は
    * `clone.ts` の `#apply` で、副作用は2層で15種あり重なるのは2種だけである。**
+   *
+   * **`async` である（#967 で足した）。** `case 'turn_ended'` が文脈占有を
+   * 聞く（`#observeContextUsage`）ために control channel への往復を1回
+   * 挟むため。唯一の呼び出し元（`#read` の `for` ループ）は各イベントを
+   * `await` してから次へ進む——同じメッセージ内の複数イベントも、次の
+   * メッセージも、この1件の処理が終わるまで割り込まない。
    */
-  #apply(event: AgentEvent): void {
+  async #apply(event: AgentEvent): Promise<void> {
     switch (event.type) {
       case 'session_started': {
         // **`init` そのものはリセットの契機にしない。** `SDKSystemMessage`
@@ -2473,6 +2488,14 @@ class RunnerSession {
         return;
 
       case 'turn_ended': {
+        // **ターンの境界の文脈占有を、`usage` を降ろす前に1回だけ聞く**
+        // （`schema.ts` の `contextUsageObservationSchema` の doc）。失敗しても
+        // このターンの成否には影響させない —— `#observeContextUsage` が
+        // 例外を内側で受け止める。`clone.ts` の `#apply` の `case 'turn_ended'`
+        // と同じ位置（成否分岐より前）に置く——成否で絞ると、失敗したターン
+        // （#931 が実測した5連続 429 の側）の文脈占有が測れなくなる。
+        const contextUsage = await this.#observeContextUsage();
+
         // ターンの区切りで必ず畳む。持ち越すと、前のターンの本文が次の報告に
         // 混ざって「言っていないことを言った」ことになる。
         const said = this.#said;
@@ -2563,6 +2586,13 @@ class RunnerSession {
               managerId: this.#id,
               sessionId: this.#sessionId,
               models: event.usage.models,
+              // **この回だけ付く。** `#flushUsage`（セッションを畳む直前の
+              // 別経路）は `turnBoundary` を持たないので付けない
+              // （`#observeContextUsage` の doc）。無い（`undefined`）ことは
+              // 「observe できなかった」だけでなく「`this.#query` が既に
+              // 無かった」も含む——`contextUsageObservationSchema` の doc の
+              // 3値の使い分けと同じ。
+              ...(contextUsage === undefined ? {} : { contextUsage }),
             });
           }
         }
@@ -2947,6 +2977,88 @@ class RunnerSession {
       ...(denial.reasonType === undefined ? {} : { reasonType: denial.reasonType }),
       ...(denial.message === undefined ? {} : { message: denial.message }),
     });
+  }
+
+  /**
+   * ターンの境界の文脈占有を、SDK の control channel から1回だけ聞く
+   * （`schema.ts` の `contextUsageObservationSchema` の doc）。
+   *
+   * **クローン層（`clone.ts` の `#observeContextUsage`）と同じ形である。**
+   * #967 —— このメソッドが移されるまで、委譲セッション（マネージャー／
+   * ランナー層）の側には文脈占有を測る計器が1つも無かった（`getContextUsage`
+   * の呼び出しがクローン層の1箇所にしか無いことは #967 の本文が実測している）。
+   * **分類ロジック（`kind` を見た畳み込み）は複製しない** —— それを行う
+   * `summarizeContextCategories`（`context-usage.ts`）はここでは呼ばない。
+   * ここは SDK の値をそのまま写すだけで、集計は読む側（`context-usage.ts`）が
+   * 1箇所で持つ。
+   *
+   * **`this.#query` が既に無ければ何も聞かない。** セッションが終わる窓
+   * （`#query = null` にした後）でここへ来ると `getContextUsage` を持たない
+   * 値を呼ぶことになるので、`null` のときは呼ばずに `undefined` を返す ——
+   * これは「試して失敗した」ではなく「まだ観測していない」の側である
+   * （`contextUsageObservationSchema` の doc、欄そのものが無い行の意味）。
+   *
+   * **失敗してもターンを止めない。** 呼び出しは `try`/`catch` で必ず値を
+   * 返す形にしてあり、呼び出し元（`case 'turn_ended'`）はここで例外を
+   * 待ち受けない。
+   *
+   * **秘密を漏らさない。** 例外・rejection の理由は `usage-probe.ts` の
+   * `describeProbeError`（`redactEnvSecrets` を内側で通す）でしか運ばない
+   * ——新しい伏せ字の仕組みは作っていない。
+   */
+  async #observeContextUsage(): Promise<ContextUsageObservation | undefined> {
+    const q = this.#query;
+    if (q === null) return undefined;
+    const startedAt = Date.now();
+    try {
+      const usage = await q.getContextUsage();
+      // **内訳は既に払ってあるものを写すだけである。** `clone.ts` の
+      // `#observeContextUsage` と同じ理由（あちらの doc に逐語）——
+      // 既定の `detail: 'full'` により、内訳を取り出さなくても費用は同じ。
+      const categories = (usage.categories ?? []).map((category) => ({
+        name: category.name,
+        tokens: category.tokens,
+        kind: category.kind,
+      }));
+      const shownCategories = categories.slice(0, CONTEXT_USAGE_CATEGORY_LIMIT);
+      const omittedCategories = categories.length - shownCategories.length;
+      const sumTokens = (items: readonly { tokens: number }[]): number =>
+        items.reduce((total, item) => total + item.tokens, 0);
+      const mcpTools = usage.mcpTools ?? [];
+      const memoryFiles = usage.memoryFiles ?? [];
+      const systemPromptSections = usage.systemPromptSections ?? [];
+      return {
+        durationMs: Date.now() - startedAt,
+        totalTokens: usage.totalTokens,
+        rawMaxTokens: usage.rawMaxTokens,
+        percentage: usage.percentage,
+        ...(usage.autoCompactThreshold === undefined
+          ? {}
+          : { autoCompactThreshold: usage.autoCompactThreshold }),
+        isAutoCompactEnabled: usage.isAutoCompactEnabled,
+        // **空の配列のときは欄そのものを作らない。** クローン層と同じ理由
+        // （AGENTS.md の地雷「取れない軸に 0 の行を作る」）。
+        ...(shownCategories.length === 0 ? {} : { categories: shownCategories }),
+        ...(omittedCategories > 0 ? { categoriesOmitted: omittedCategories } : {}),
+        ...(mcpTools.length === 0
+          ? {}
+          : { mcpToolTokens: sumTokens(mcpTools), mcpToolCount: mcpTools.length }),
+        ...(memoryFiles.length === 0
+          ? {}
+          : { memoryFileTokens: sumTokens(memoryFiles), memoryFileCount: memoryFiles.length }),
+        ...(systemPromptSections.length === 0
+          ? {}
+          : {
+              systemPromptTokens: sumTokens(systemPromptSections),
+              systemPromptSectionCount: systemPromptSections.length,
+            }),
+      };
+    } catch (error) {
+      return {
+        durationMs: Date.now() - startedAt,
+        error: describeProbeError(error, process.env),
+      };
+    }
   }
 
   /**

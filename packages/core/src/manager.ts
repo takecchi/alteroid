@@ -470,6 +470,47 @@ export interface ManagerSummary {
    * `describeManagerState`（`digest.ts`）1箇所だけである。
    */
   awaitingBackground?: ManagerAwaitingBackground;
+  /**
+   * **この委譲が抱えている認証トークンの世代**（Issue #914 提案1）。
+   *
+   * 材料は `ManagerPool` の `#tokenIdentities`——このマネージャーのセッション
+   * が最後に(daemon の目から見て)起きた瞬間（`start` / 起動時の引き取り /
+   * 明示的な `resume` / `#reopenForTokenRotation` によるターン境界での
+   * 自動の畳み直し）に daemon が撒いていた現役の世代。
+   *
+   * **`activeTokenGeneration` と対で運ぶ**（真下の doc）。**この委譲がまだ
+   * 一度もセッションを起こしていない、またはプールを一度も使っていない
+   * 構成では欄ごと消える**——`0` や「不明」という値を作らない
+   * （AGENTS.md「取れない軸に0の行を作る」と同じ理由）。
+   *
+   * **⚠️ これは「いま実際にこのプロセスの env に入っている値」の直接観測
+   * ではない。** daemon は runner の子プロセスの env を覗けない——
+   * ここにあるのは「daemon が最後にこの委譲へ向けて撒いた／撒いたと
+   * 確認できた世代」である。`#reopenForTokenRotation`（`runner.ts`）が
+   * ターンの境界（確認待ち・背景処理が無い状態）に一度も達しないまま、
+   * このマネージャーが古い鍵で走り続けていれば、この値も古いまま残る
+   * ——**それはこの欄が壊れているのではなく、まさにこの欄が名指ししたい
+   * 状態そのものである**（2026-09-15 の実測、#914）。
+   *
+   * **揮発する。** `#tokenIdentities` と同じくプロセス内の Map なので、
+   * デーモンを作り直すと消え、次にこのマネージャーへ触れた時点で
+   * 記録し直される。
+   */
+  tokenGeneration?: number;
+  /**
+   * **呼び出した時点の現役の世代**（daemon がいま撒いているもの。Issue #914
+   * 提案1）。`tokenGeneration`（このマネージャーが抱えている世代）と
+   * 突き合わせる相手——一致しなければ、このマネージャーは古い鍵を抱えた
+   * まま走っている可能性がある。
+   *
+   * **`tokenGeneration` が無ければこちらも無い。** 比べる相手が居ない
+   * 判定を作らない——`tokenGeneration` と独立に消える欄ではない。
+   *
+   * **一致・不一致そのものの判定はここに焼かない。** `lease` と同じ理由
+   * （`ManagerSummary.lease` の doc）——読む側（`manager_list` /
+   * `runner_list` の描画）が2つの数を比べる。ここに出すのは材料だけである。
+   */
+  activeTokenGeneration?: number;
 }
 
 /**
@@ -611,6 +652,19 @@ export interface RunnerManagerEntry {
    * 名乗る」形にはならない。
    */
   awaitingBackground?: ManagerAwaitingBackground;
+  /**
+   * この委譲が抱えている認証トークンの世代（`ManagerSummary.tokenGeneration`
+   * の写し。Issue #914 提案1）。**`live` / `awaitingBackground` と同じ理由で
+   * ここにも運ぶ**——運ばないと、`manager_list` で立つ ⚠（世代の食い違い）が
+   * `runner_list` の側だけで見えなくなる。**握り潰しと同じく省略可能**
+   * （プールを使っていない構成・観測前は欄ごと消える）。
+   */
+  tokenGeneration?: number;
+  /**
+   * 呼び出した時点の現役の世代（`ManagerSummary.activeTokenGeneration` の
+   * 写し。Issue #914 提案1）。`tokenGeneration` と対で運ぶ——真上と同じ理由。
+   */
+  activeTokenGeneration?: number;
 }
 
 /**
@@ -2551,6 +2605,126 @@ interface SynthesizedNoticeWindow {
 }
 
 /**
+ * ある managerId が**直前に配った束**の署名と、そのあと同じ署名で届いて
+ * **配らなかった**束の数（`#synthesizedNoticeStreaks` の値）。
+ *
+ * **これは「連続するかぎり畳む」ための記憶であって、上限ではない。**
+ * `#queueSynthesizedNotice` は既に「族も本文もバイト単位で同一なら数だけ
+ * 増やす」を実装しているが、その畳み込みは**合流窓（既定3000ms）の中でしか
+ * 効かない**——窓が閉じた瞬間に積みが消えるので、次に届いた同文は「新しい束」
+ * としてもう一度配られる。⟹ **429 のように同じ失敗が何分も繰り返される場面
+ * では、同じ本文が窓の数だけ受信箱へ積まれる。**
+ *
+ * **実測（依頼者＝クローンが 2026-09-13T21:31:03Z に自分で数えた。こちらで
+ * 数え直したものではない）**: 台帳の未了 5,349 件のうち **5,342 件**（99.9%）が
+ * `origin=manager` で本文が `result_is_error`、積まれた時刻の幅は
+ * `17:23:31`〜`17:33:50` の**約10分**。本文は全件が逐語で同一である:
+ *
+ * ```
+ * （このターンは応答を返さずに終わった: success/429 / result_is_error）
+ * You've hit your session limit · resets 6am (Asia/Tokyo)
+ * ```
+ *
+ * **そのうち 1,880 件が1本のマネージャー（`mgr-c6cf54c3`）から届いている。**
+ * 受信箱の合図は8件ずつ束ねてクローンへ配られるので、5,334 件は**約660
+ * ターン**にあたる。**台帳を閉じても受信箱は減らない**（別の口である）ので、
+ * クローンの直前のセッションは毎ターンの要約がこれで埋まって文脈窓に当たった。
+ *
+ * **⛔ だから「黙らせる」のではない。1件目は必ず配る。** 枠で落ちたことは
+ * クローンが知らなければならない事実である（落ちた委譲は自動では再開せず、
+ * クローンが `manager_send` で拾い直す必要がある）。**消すのは2件目以降の
+ * 完全な重複だけで、その件数は (1) 日誌に1束ごと1行 (2) 次に配る
+ * `manager_message` の末尾の1行（`#deliver`）の両方に残る。**
+ *
+ * **窓（3000ms）を広げて解く道は採らない。** 窓は「本文が違う束」を1件へ
+ * まとめる補助で、広げると**無関係な出来事が混ざる**（`#queueSynthesizedNotice`
+ * の doc「⛔ だから『実測の最大間隔に合わせて広げる』という決め方をしない」）。
+ * こちらが扱うのは**バイト単位で同一**の束だけなので混ざりようが無く、時間の
+ * 窓を必要としない。**⟹ 足したのは新しい制限ではなく、既に在る畳み込みから
+ * 「3000ms」という恣意的な境界を外した形である。**
+ *
+ * **⚠️ この記憶を実際に読み書きするのは `turn_failed` 単独の束だけである**
+ * （{@link isCrossWindowStreakEligible}）。`rate_limit` / `usage_notice` は
+ * 別の専用の記憶で既に「配る価値があるか」を判定済みなので、ここでも
+ * 文字列一致を掛けると状態ベースの判定を上書きしてしまう——2026-09-14 の
+ * 検証で `rate_limit` を巻き込んで実際に壊した。この doc の上の説明
+ * （429 の実測）は変わらず正しいが、**適用範囲はそこ止まり**だと読むこと。
+ */
+interface SynthesizedNoticeStreak {
+  /** 直前に配った束の署名（`synthesizedNoticeSignature`）。 */
+  signature: string;
+  /** 同じ署名のまま配らなかった**束**の数（0以上）。 */
+  suppressed: number;
+  /** 配らなかった束に含まれていた**通数**の総和（束の数ではない）。 */
+  suppressedArrived: number;
+  /** 配らなかった最初の束の時刻（`suppressed === 0` のあいだは持たない）。 */
+  firstAt?: string;
+  /** 配らなかった最後の束の時刻（同上）。 */
+  lastAt?: string;
+}
+
+/**
+ * 束の署名 ——「族と本文の並び」だけから作る。**`count` は入れない。**
+ *
+ * 入れると「同文が3通の束」と「同文が1通の束」が別物になり、繰り返すたびに
+ * 通数が揺れる枠落ちでは畳めなくなる（実測でも通数は回によって違う
+ * ——`SYNTHESIZED_NOTICE_WINDOW_MS` の doc「**通数は回によって違う。**」）。
+ * **通数は署名ではなく `suppressedArrived` の側で保存する。**
+ *
+ * **正規化も切り詰めもしない**（`#queueSynthesizedNotice` の本文比較と同じ
+ * 作法。1バイトでも違えば「別のことを言っている」側へ倒す）。
+ */
+export function synthesizedNoticeSignature(
+  fragments: readonly SynthesizedNoticeFragment[],
+): string {
+  return JSON.stringify(fragments.map((fragment) => [fragment.label, fragment.text]));
+}
+
+/**
+ * **窓をまたいだ抑制（{@link SynthesizedNoticeStreak}）の対象を、`turn_failed`
+ * 単独の束に絞る。**
+ *
+ * ⚠️ **これは実装時の想定漏れの後始末である。** 当初は全ての族へ一律に
+ * 掛けていたが、そのままだと `rate_limit` の既存の歯を壊す
+ * （`usage-notice-redelivery.test.ts` の「枠が開いたと観測できたら、次に
+ * 追い返されたときはもう一度配る」。2026-09-14、rebase 後の `pnpm test` で
+ * 実測）。
+ *
+ * **`rate_limit` と `usage_notice` は、ここへ来る前に専用の記憶で
+ * 「配る価値があるか」を既に判定している** — `case 'rate_limit'` の
+ * `usageTransitionOf`（`#rateLimits` の状態遷移）と、`case 'usage_notice'`
+ * の `#usageNoticeMemoryOf().delivered`（種類ごとに配った文言の集合）。
+ * その判定は**状態**に基づくので、「rejected → allowed → rejected」の
+ * ように**文字列は同一でも意味的には新しい出来事**を正しく通す。窓を
+ * またいだ抑制を残りの族にも一律に重ねると、この状態ベースの判定を
+ * **文字列一致だけで後ろから上書き**してしまい、`allowed` を挟んでも
+ * 「もう配った文言と同じだから」で握りつぶす——実際に壊れた。
+ *
+ * **`turn_failed` にはその種の専用記憶が無い。** `#queueSynthesizedNotice`
+ * が窓の中でだけ持つ一時的な重複排除（`SynthesizedNoticeFragment.count`）
+ * しか無く、窓が閉じれば消える——これが issue #954 の実測（429 が
+ * 5,342 件、本文は逐語で同一）そのものである。**だから窓をまたいだ記憶が
+ * 要るのはここだけであり、対象をここへ絞ることは能力を削ることではない**
+ * （north_star 禁止2 — 削るのではなく、他の族が既に持っている専用の判定を
+ * 上書きしないという境界を引いているだけである）。
+ *
+ * **`resume_fallback` / `resume_failed` / `closed_failed` は対象に含めて
+ * いない。** issue #954 が実測したのは `turn_failed` の連投であり、他の
+ * 3族について窓をまたいだ抑制が必要だという実測は無い。**要ると分かって
+ * から広げる** — 要る前に広げて、`rate_limit` と同じ形でまた壊すより安全
+ * である。
+ *
+ * **単独の束であることも条件にしている。** `#queueSynthesizedNotice` は
+ * 同じ窓の中に複数の族を混ぜて積むことがある（「一枠落ち一合図」で
+ * `usage_notice` と `turn_failed` が同じ窓に同居する場合など）。混ざった
+ * 束は対象にしない——`turn_failed` 単独の束だけが確実に issue #954 の
+ * 形と一致する。
+ */
+function isCrossWindowStreakEligible(fragments: readonly SynthesizedNoticeFragment[]): boolean {
+  return fragments.length === 1 && fragments[0]?.label === 'turn_failed';
+}
+
+/**
  * 機構が合成した知らせの合流窓の長さ（既定 3000ms）。
  *
  * **1つの出来事が起きると受信箱イベントが複数件立ち、クローンのターンが
@@ -2832,6 +3006,17 @@ class Pool implements ManagerPool {
    * **記録（`#records`）へ足さずに別の箱にしてあるのは、`#records.set` が5箇所
    * あるからである。** 1箇所忘れると、そのマネージャーの観測だけが身元を失う
    * ——しかもそれは「回りすぎる」形で出るので、テストでは気づきにくい。
+   *
+   * **`manager_list` / `runner_list` の「この委譲が抱えている鍵の世代」の
+   * 材料にもなる（Issue #914 提案1）。** 「材料」であって「いまの env の
+   * 直接観測」ではないことに注意——daemon は runner の子プロセスの env を
+   * 覗けない。ここが持つのは「daemon が最後にこの委譲へ向けて撒いた／
+   * 撒いたと確認した世代」であって、その委譲がターンの境界に一度も
+   * 達しないまま古い鍵で走り続けていれば、ここも古いままである。**それは
+   * 欠陥ではなく、この欄の存在理由そのものである**（2026-09-15 の実測、
+   * #914：4本のマネージャーが古い鍵を抱えたまま自動では起こし直されず
+   * 429 を返し続けた——`#reopenForTokenRotation` がターンの境界に一度も
+   * 達しなかった回）。
    */
   readonly #tokenIdentities = new Map<string, { tokenId: string; generation: number }>();
   /**
@@ -2883,6 +3068,20 @@ class Pool implements ManagerPool {
    * 受信箱へ入って到着順が崩れるのを防ぐ。
    */
   readonly #synthesizedNotices = new Map<string, SynthesizedNoticeWindow>();
+  /**
+   * **窓をまたいで同文を畳むための記憶**（{@link SynthesizedNoticeStreak}）。
+   *
+   * `#synthesizedNotices` が「いま開いている窓」なのに対し、こちらは
+   * **もう配った束の署名**を managerId ごとに1件だけ持つ。窓が閉じても
+   * 消えず、**別の `manager_message` を配った時点で消える**
+   * （`#deliver` が消す＝「連続が途切れた」）。
+   *
+   * **だから寿命は `#withheldReports` と同じ形で有限である**——委譲1本につき
+   * 1件、終端すれば `#retire()` が同じ場所で外す
+   * （`grep -Fn -- 'this.#synthesizedNoticeStreaks.delete(managerId);' packages/core/src/manager.ts`）。
+   * **タイマーは持たない**（窓のタイマーは `#synthesizedNotices` の側にある）。
+   */
+  readonly #synthesizedNoticeStreaks = new Map<string, SynthesizedNoticeStreak>();
   /** 起動時の引き取りが走っている間だけ立つ。`#reattach` はこれを待つ。 */
   #restoring: Promise<void> | null = null;
   /**
@@ -3205,6 +3404,8 @@ class Pool implements ManagerPool {
       record.toolUseStallAt,
       record.toolUseStallPending,
       this.#awaitingBackgroundOf(record.job.id),
+      this.#tokenIdentities.get(record.job.id)?.generation,
+      this.#tokenIdentity?.()?.generation,
     );
   }
 
@@ -3619,6 +3820,12 @@ class Pool implements ManagerPool {
     // 読んで台帳へ写すだけである（`#noteMissingSessions` / `#silentRunners`）。
     this.#noteMissingSessions();
     const silent = this.#silentRunners();
+    // **一覧まるごと同じ「現役」で比べる**（Issue #914 提案1）。1本ずつ
+    // `this.#tokenIdentity?.()` を呼び直すと、一覧を作っている間に回転が
+    // 割り込んだとき、同じ応答の中で一部だけ新しい現役と比べることになる
+    // ——`#tokenIdentities` を読み直さない理由（このファイル冒頭の doc）と
+    // 同じ筋で、1回だけ引いて使い回す。
+    const activeTokenGeneration = this.#tokenIdentity?.()?.generation;
     const known = new Map<string, ManagerSummary>();
     for (const record of this.#records.values()) {
       known.set(
@@ -3634,6 +3841,8 @@ class Pool implements ManagerPool {
           record.toolUseStallAt,
           record.toolUseStallPending,
           this.#awaitingBackgroundOf(record.job.id),
+          this.#tokenIdentities.get(record.job.id)?.generation,
+          activeTokenGeneration,
         ),
       );
     }
@@ -3659,6 +3868,8 @@ class Pool implements ManagerPool {
           fallback.toolUseStallAt,
           fallback.toolUseStallPending,
           this.#awaitingBackgroundOf(job.id),
+          this.#tokenIdentities.get(job.id)?.generation,
+          activeTokenGeneration,
         ),
       );
     }
@@ -3708,6 +3919,14 @@ class Pool implements ManagerPool {
         ...(manager.awaitingBackground === undefined
           ? {}
           : { awaitingBackground: manager.awaitingBackground }),
+        // **同上（Issue #914 提案1）。** `list()` が既に計算済み——ここでも
+        // 往復は増えない。
+        ...(manager.tokenGeneration === undefined
+          ? {}
+          : { tokenGeneration: manager.tokenGeneration }),
+        ...(manager.activeTokenGeneration === undefined
+          ? {}
+          : { activeTokenGeneration: manager.activeTokenGeneration }),
       };
       if (manager.runnerId === undefined) {
         unassigned.push(item);
@@ -4504,6 +4723,8 @@ class Pool implements ManagerPool {
             record.toolUseStallAt,
             record.toolUseStallPending,
             this.#awaitingBackgroundOf(record.job.id),
+            this.#tokenIdentities.get(record.job.id)?.generation,
+            this.#tokenIdentity?.()?.generation,
           ),
         );
         continue;
@@ -4608,6 +4829,8 @@ class Pool implements ManagerPool {
             record.toolUseStallAt,
             record.toolUseStallPending,
             this.#awaitingBackgroundOf(record.job.id),
+            this.#tokenIdentities.get(record.job.id)?.generation,
+            this.#tokenIdentity?.()?.generation,
           ),
         );
       } catch (error) {
@@ -6702,6 +6925,21 @@ class Pool implements ManagerPool {
               '全件は日誌に残っている（`journal_read` で辿れる）。',
           );
         }
+
+        // **この委譲が抱えている鍵の世代を、いま追いつかせる**（Issue #914
+        // 提案1。`runner-protocol.ts` の `note.tokenRotation` の doc）。
+        // `#reopenForTokenRotation` がターンの境界でセッションを畳んで
+        // 開き直した回にだけ立つ旗——ここを逃すと `#tokenIdentities` は
+        // セッション開始／引き取り／明示的な resume の3箇所でしか更新
+        // されないままになり、自動で追いついたセッションにまで
+        // `manager_list` / `runner_list` の世代の食い違いが恒久的に
+        // 出続ける（検知そのものが意味を失う）。
+        //
+        // **世代の値はここでは受け取らない。** runner 側はどの世代かを
+        // 知らない（`token-spread.ts` の doc）。daemon は自分の現役の
+        // 身元（`#tokenIdentity?.()`）を読み直すだけでよい——
+        // `#rememberTokenIdentity` は既にその形になっている。
+        if (event.tokenRotation === true) this.#rememberTokenIdentity(event.managerId);
         return;
       }
 
@@ -6954,6 +7192,14 @@ class Pool implements ManagerPool {
         // 増分が空の回は行を書かない（取れない軸に0の行を作らない。
         // `foldUsageSnapshot` は増えていないモデルの行を `delta` に作らない
         // ので、キーが1つも無ければ増分ゼロが確定する）。
+        //
+        // **`contextUsage` は #967 で足した。** `runner.ts` の
+        // `#observeContextUsage` が測った、委譲セッション側の文脈窓の占有
+        // ——クローン層の `clone.ts` の `#recordUsage` が渡しているのと
+        // 同じ形（`contextUsageObservationSchema`）を、ここでも渡すだけで
+        // ある。**増分が空の回は上と同じ理由で行自体を書かないので、
+        // その回に観測できていても一緒に捨てる**（`runner-protocol.ts` の
+        // `usage` イベントの `contextUsage` の doc と同じ非対称）。
         if (Object.keys(fold.delta).length > 0) {
           await this.#journal({
             type: 'turn_usage',
@@ -6967,6 +7213,7 @@ class Pool implements ManagerPool {
               : {
                   reset: { fromCostUsd: fold.reset.fromCostUsd, toCostUsd: fold.reset.toCostUsd },
                 }),
+            ...(event.contextUsage === undefined ? {} : { contextUsage: event.contextUsage }),
           });
         }
 
@@ -7860,7 +8107,17 @@ class Pool implements ManagerPool {
     this.#settlePushRetry(runnerId);
   }
 
-  /** そのマネージャーのセッションが起きた瞬間の身元を覚える。 */
+  /**
+   * そのマネージャーのセッションが起きた瞬間の身元を覚える。
+   *
+   * **呼び出し口は4つ**（`start` / 起動時の引き取り / 明示的な `resume` /
+   * `case 'note'` の `event.tokenRotation === true`）。**最後の1つは
+   * Issue #914 提案1で足した**——それまでは「daemon が明示的にセッションへ
+   * 触った瞬間」の3つだけで、`runner.ts` の `#reopenForTokenRotation`
+   * （認証トークンの差し替えで、ターンの境界を認めて自動で畳んで開き直す
+   * 経路）はここを一切通らず、`#tokenIdentities` は自動の追いつきを
+   * 知らないまま古い世代を名乗り続けていた。
+   */
   #rememberTokenIdentity(managerId: string): void {
     const identity = this.#tokenIdentity?.();
     if (identity === undefined) return;
@@ -8164,6 +8421,24 @@ class Pool implements ManagerPool {
           ? `${countNote}）`
           : `${countNote}最後の1本の冒頭: ${excerptLine(withheld.lastText, WITHHELD_REPORT_EXCERPT)}）`;
     }
+    // **窓をまたいで畳んだ件数を、次に配る1件の末尾へ載せる**
+    // （{@link SynthesizedNoticeStreak}。直上の `#withheldReports` と同じ形で、
+    // 「後で必ず届く」を実現する唯一の場所である）。
+    //
+    // **ここは同時に「連鎖が途切れる」場所でもある。** 何を配ったかに関わらず
+    // 帳面を消すので、次に同じ本文の知らせが来たら、それは**また1件目として
+    // 配られる**——`#flushSynthesizedNoticeFor` からの呼び出しだけは、消えた
+    // 直後に新しい署名で `set` し直す。
+    const streak = this.#synthesizedNoticeStreaks.get(managerId);
+    this.#synthesizedNoticeStreaks.delete(managerId);
+    if (streak !== undefined && streak.suppressed > 0) {
+      outgoing =
+        `${outgoing}\n\n（この間に、直前と同じ本文の「機構が合成した知らせ」を ` +
+        `${String(streak.suppressed)} 束（通数 ${String(streak.suppressedArrived)} 件）配っていない` +
+        `（最初 ${streak.firstAt ?? '不明'} / 最後 ${streak.lastAt ?? '不明'}）。` +
+        `**1件目は配ってあり、配らなかったのは2件目以降の完全な重複だけである。**` +
+        `全文は日誌に在る（\`journal_read\`）。）`;
+    }
     this.#post({
       type: 'manager_message',
       id: randomUUID(),
@@ -8292,7 +8567,57 @@ class Pool implements ManagerPool {
     this.#synthesizedNotices.delete(managerId);
     clearTimeout(entry.timer);
     const { text, breakdown, arrived } = mergeSynthesizedNoticeFragments(entry.fragments);
+    // **直前に配った束と署名が同じなら、配らずに数だけ残す**
+    // （{@link SynthesizedNoticeStreak}）。**1件目はここへ来ない**——
+    // 連鎖はこの下の `set` で「配った」あとに初めて立つので、
+    // `streak === undefined` の回（＝まだ1件も配っていない）は必ず配る側へ
+    // 倒れる。⛔ **ここを「同文なら常に捨てる」に変えないこと**——1件目まで
+    // 消えて「黙らせる」側になる（歯: 「1件目は必ず配る」）。
+    //
+    // **対象は `turn_failed` 単独の束だけ**（{@link isCrossWindowStreakEligible}
+    // の doc）。`rate_limit` / `usage_notice` は専用の状態ベースの判定を
+    // 既に経ているので、ここでさらに文字列一致を重ねると誤って握りつぶす。
+    const signature = synthesizedNoticeSignature(entry.fragments);
+    const eligible = isCrossWindowStreakEligible(entry.fragments);
+    const streak = this.#synthesizedNoticeStreaks.get(managerId);
+    if (eligible && streak !== undefined && streak.signature === signature) {
+      const at = new Date(this.#now()).toISOString();
+      streak.suppressed += 1;
+      streak.suppressedArrived += arrived;
+      streak.firstAt ??= at;
+      streak.lastAt = at;
+      // **記録は消さない（`#flushSynthesizedNoticeFor` の既存の doc と同じ理由）。**
+      // 個々の本文は積む側（`case 'rate_limit'` 等）が既に `#journal` して
+      // いるので、ここで足すのは「配らなかった」の1行だけである。
+      void this.#journal({
+        type: 'exchange',
+        with: 'manager',
+        role: 'inbound',
+        text:
+          `[${managerId}] 直前に配ったものと同文の知らせ（内訳: ${breakdown}）が ` +
+          `${String(arrived)} 件届いたので、受信箱へは回さず数だけ残した` +
+          `（この連鎖で ${String(streak.suppressed)} 束目 / 通数 ${String(streak.suppressedArrived)} 件）。`,
+      });
+      return;
+    }
+    // **`#deliver` より先に `set` しないこと。** `#deliver` は直前の連鎖の
+    // 件数を末尾の1行として運んでから帳面を消すので、先に上書きすると
+    // 「配らなかった件数」がクローンへ届かないまま消える。
     this.#deliver(managerId, 'report', text);
+    // **対象外の束では新しい連鎖を立てない。** `eligible` でない配達
+    // （`rate_limit` / `usage_notice` / 混在した束）は、この関数に関する
+    // 限り「連鎖を継がない」——`#deliver` 自身が既存の連鎖を必ず断つので
+    // （直前のコメント）、ここで何もしなければ古い `turn_failed` の連鎖は
+    // 正しく途切れる。新しく立てないのは、対象外の族で連鎖を始めても
+    // 次に同じ族が来たときに握りつぶす先が無い（`isCrossWindowStreakEligible`
+    // が偽を返し続ける）ので、記憶を持つだけ無駄だからである。
+    if (eligible) {
+      this.#synthesizedNoticeStreaks.set(managerId, {
+        signature,
+        suppressed: 0,
+        suppressedArrived: 0,
+      });
+    }
     // **消えてよいのは「クローンを起こすこと」だけで、記録ではない。**
     // 個々の知らせは積んだ時点で呼び出し元（`case 'rate_limit'` 等）が
     // 既にそれぞれの `#journal` を書いている——ここで足すのは「まとめた」
@@ -8418,6 +8743,13 @@ class Pool implements ManagerPool {
       );
     }
     this.#withheldReports.delete(managerId);
+    // **窓をまたいだ畳み込みの帳面も、同じ契機で外す**
+    // （{@link SynthesizedNoticeStreak}。委譲1本につき1件しか持たないので
+    // 上限は要らない——外す契機は上と同じ「終端した」だけである）。
+    // **ここで消えるのは「次に配る1件へ載せる予定だった件数」だけで、
+    // 記録ではない**——配らなかった束は1つずつ `#journal` に残っている
+    // （`#flushSynthesizedNoticeFor`）ので、`journal_read` で全部引ける。
+    this.#synthesizedNoticeStreaks.delete(managerId);
   }
 
   async #journal(entry: JournalEntryInput): Promise<void> {
@@ -8984,6 +9316,8 @@ function summaryOf(
   toolUseStallAt: string | undefined,
   toolUseStallPending: PendingToolUse[] | undefined,
   awaitingBackground: ManagerAwaitingBackground | undefined,
+  tokenGeneration: number | undefined,
+  activeTokenGeneration: number | undefined,
 ): ManagerSummary {
   const { job } = record;
   return {
@@ -9072,5 +9406,15 @@ function summaryOf(
      * `undefined` は「そうではない」ではなく「そう名乗られていない」である）。
      */
     ...(awaitingBackground === undefined ? {} : { awaitingBackground }),
+    // **`live` と同じ引数の作法で運ぶ（Issue #914 提案1）。** 材料は
+    // `#tokenIdentities` / `#tokenIdentity?.()`——`record` からは読めない
+    // プロセス内の像なので、引数で受ける。`tokenGeneration` が無ければ
+    // `activeTokenGeneration` も出さない（比べる相手が無い判定を作らない）。
+    ...(tokenGeneration === undefined
+      ? {}
+      : {
+          tokenGeneration,
+          ...(activeTokenGeneration === undefined ? {} : { activeTokenGeneration }),
+        }),
   };
 }

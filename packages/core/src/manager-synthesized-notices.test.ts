@@ -146,31 +146,37 @@ interface ManualSetup {
 
 async function runningManualSetup(
   managerId = 'mgr-quota',
-  options: { synthesizedNoticeWindowMs?: number } = {},
+  options: { synthesizedNoticeWindowMs?: number; alsoRunning?: readonly string[] } = {},
 ): Promise<ManualSetup> {
-  const job: Job = {
-    id: managerId,
-    createdAt: '2026-09-01T00:00:00.000Z',
-    updatedAt: '2026-09-01T00:00:00.000Z',
-    status: 'running',
-    summary: '調べ物',
-    request: '調べて',
-    cwd: '/work/project',
-    sessionId: `sess-${managerId}`,
-    runnerId: 'runner-primary',
-  };
   const stores = createMemoryStores();
-  await stores.jobs.putJob(job);
-
   const fake = manualRunner();
-  fake.alive.push({
-    managerId: job.id,
-    status: 'running',
-    cwd: '/work/project',
-    request: '調べて',
-    waiting: [],
-    sessionId: job.sessionId,
-  });
+  // **足したのは「同じプールにもう1本走らせる」口（`alsoRunning`）だけで、
+  // 既存の呼び出し（1本だけ）の組み立ては1バイトも変えていない。** 窓をまたいだ
+  // 畳み込みが**マネージャーごとに独立している**ことを撃つ歯が、1本の
+  // プールに2本の委譲を要求するために要る（AGENTS.md「テストが書けない構造は、
+  // テストが無いのと同じ」——出力・挙動は変わっていない）。
+  for (const id of [managerId, ...(options.alsoRunning ?? [])]) {
+    const job: Job = {
+      id,
+      createdAt: '2026-09-01T00:00:00.000Z',
+      updatedAt: '2026-09-01T00:00:00.000Z',
+      status: 'running',
+      summary: '調べ物',
+      request: '調べて',
+      cwd: '/work/project',
+      sessionId: `sess-${id}`,
+      runnerId: 'runner-primary',
+    };
+    await stores.jobs.putJob(job);
+    fake.alive.push({
+      managerId: job.id,
+      status: 'running',
+      cwd: '/work/project',
+      request: '調べて',
+      waiting: [],
+      sessionId: job.sessionId,
+    });
+  }
 
   const registry = createRunnerRegistry([fake.runner]);
   const inbox: InboxEvent[] = [];
@@ -184,8 +190,13 @@ async function runningManualSetup(
   await pool.restore();
   // **`restore()` の知らせ（`#notifyRestored`）を fire-and-forget で待つ**
   // （`manager-withheld-reports.test.ts` の `runningManualSetup` と同じ理由）。
+  // **走らせた本数ぶん待つ。** 1本だけの既存の呼び出しでは `>= 1` と同じで
+  // 挙動は変わらないが、`alsoRunning` で2本にしたとき「1本ぶんだけ届いた時点」で
+  // 先へ進むと、遅れて届いた reattach の知らせが後続の `slice(before)` に
+  // 混ざって歯が測っているものとは別の理由で赤くなる。
+  const started = 1 + (options.alsoRunning?.length ?? 0);
   await vi.waitFor(() => {
-    if (inbox.length === 0) throw new Error('reattach の知らせがまだ届いていない');
+    if (inbox.length < started) throw new Error('reattach の知らせがまだ届いていない');
   });
 
   return { pool, stores, inbox, fake };
@@ -783,5 +794,219 @@ describe('1件だけのときは、まとめた前置きが1文字も載らな�
     expect(indexOf1).toBeGreaterThan(-1);
     expect(indexOf2).toBeGreaterThan(indexOf1);
     expect(indexOf3).toBeGreaterThan(indexOf2);
+  });
+});
+
+/**
+ * ============================================================================
+ * **窓をまたいだ同文の畳み込み**（`SynthesizedNoticeStreak`）
+ * ============================================================================
+ *
+ * **依頼者（クローン）が 2026-09-13T21:31:03Z に自分で数えた実測**: 台帳の未了
+ * 5,349 件のうち **5,342 件**（99.9%）が `origin=manager` で本文が
+ * `result_is_error`、積まれた時刻の幅は `17:23:31`〜`17:33:50` の**約10分**で、
+ * **本文は全件が逐語で同一**。そのうち **1,880 件が1本のマネージャーから**届いた。
+ * 受信箱の合図は8件ずつクローンへ配られるので、5,334 件は**約660ターン**にあたり、
+ * 実際にクローンのセッションが文脈窓に当たって落ちた。
+ *
+ * **上の describe（合流窓）が畳めるのは、窓（既定3000ms）の中だけである。**
+ * 窓が閉じると積みが消えるので、次に届いた同文は「新しい束」としてもう一度
+ * 配られる —— ⟹ **同じ失敗が繰り返されるかぎり、受信箱は窓の数だけ増える。**
+ * この節の歯は、その繰り返しが**2件目以降だけ**畳まれることを固定する。
+ *
+ * **⛔ この節は「畳まれること」と「1件目が消えないこと」を必ず対で置く。**
+ * 検出する歯だけを置くと、**1件目まで消す「黙らせる」変更が緑のまま通る**——
+ * 枠で落ちたことはクローンが知らなければならない事実である（落ちた委譲は
+ * 自動では再開せず、クローンが `manager_send` で拾い直す必要がある）。
+ */
+const QUOTA_TURN_FAILED_BODY =
+  '（このターンは応答を返さずに終わった: success/429 / result_is_error）\n' +
+  "You've hit your session limit · resets 6am (Asia/Tokyo)";
+
+/** 枠(429)で落ちたターンの報告を1件、`synthesized` の印つきで流す。 */
+function emitQuotaTurnFailed(fake: ManualRunner, managerId: string, body: string): void {
+  fake.report(managerId, body, 'running', {
+    failure: { code: 'success/429', via: 'result_is_error' },
+    synthesized: 'turn_failed',
+  });
+}
+
+/** 窓（この節では 30ms に絞ってある）が確実に閉じ切るまで待つ。 */
+async function afterWindow(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 150));
+}
+
+describe('窓をまたいだ同文の知らせは、2件目以降だけを畳む', () => {
+  it('🔴 1件目は必ず配る（同文が1件しか来なくても消えない）', async () => {
+    const { pool, inbox, fake } = await runningManualSetup('mgr-quota', {
+      synthesizedNoticeWindowMs: 30,
+    });
+    const before = reportsOf(inbox).length;
+
+    emitQuotaTurnFailed(fake, 'mgr-quota', QUOTA_TURN_FAILED_BODY);
+    await afterWindow();
+    await pool.stop();
+
+    const reports = reportsOf(inbox).slice(before);
+    expect(
+      reports,
+      '赤の意味: 枠(429)で落ちた1件目の知らせが受信箱へ届いていない。これは' +
+        '「うるさいから黙らせる」側へ倒れた状態で、クローンは委譲が枠で止まった' +
+        'ことを知れず、拾い直す契機を失う。畳み込みは2件目以降にだけ掛けること。',
+    ).toHaveLength(1);
+    expect(reports[0]?.text).toContain('resets 6am');
+  });
+
+  it('窓より離れて届いた同文の2件目以降は、受信箱へ回さない', async () => {
+    const { pool, inbox, fake } = await runningManualSetup('mgr-quota', {
+      synthesizedNoticeWindowMs: 30,
+    });
+    const before = reportsOf(inbox).length;
+
+    // **5回とも別々の窓で届かせる。** 窓の中の畳み込みは上の describe が既に
+    // 撃っているので、ここが測るのは「窓が閉じたあと」だけである。
+    for (let i = 0; i < 5; i += 1) {
+      emitQuotaTurnFailed(fake, 'mgr-quota', QUOTA_TURN_FAILED_BODY);
+      await afterWindow();
+    }
+    await pool.stop();
+
+    const reports = reportsOf(inbox).slice(before);
+    expect(
+      reports,
+      '赤の意味: 同じ本文の「応答を返さずに終わった」報告が、窓が閉じるたびに' +
+        '新しい受信箱イベントとして積み直されている（実測では1本の委譲から' +
+        '10分で1,880件）。畳めるのは合流窓の中だけ、という状態へ戻っている。',
+    ).toHaveLength(1);
+  });
+
+  it('配らなかった件数は、次に配る1件の末尾で必ずクローンへ届く', async () => {
+    const { pool, stores, inbox, fake } = await runningManualSetup('mgr-quota', {
+      synthesizedNoticeWindowMs: 30,
+    });
+    const before = reportsOf(inbox).length;
+
+    for (let i = 0; i < 3; i += 1) {
+      emitQuotaTurnFailed(fake, 'mgr-quota', QUOTA_TURN_FAILED_BODY);
+      await afterWindow();
+    }
+    // 連鎖を断ち切る「別のもの」＝マネージャー本人が書いた報告。
+    fake.report('mgr-quota', '数えた結果と設計判断', 'done');
+    await settledReport(stores, '数えた結果と設計判断');
+    await pool.stop();
+
+    const reports = reportsOf(inbox).slice(before);
+    expect(reports).toHaveLength(2);
+    const tail = reports[1]?.text ?? '';
+    expect(
+      tail,
+      '赤の意味: 畳んだ件数がクローンへ届いていない。件数が消えると' +
+        '「3件が1件に減ったのか、1回しか起きなかったのか」を後から区別できず、' +
+        '機構の健康についての情報がそこで失われる。',
+    ).toContain('2 束');
+    expect(tail).toContain('通数 2 件');
+    expect(
+      tail,
+      '赤の意味: 断り書きが「何を配って何を配らなかったか」を名乗っていない。' +
+        '読む側が「1件目も消された」と読める形は、この直しの禁止事項そのものである。',
+    ).toContain('1件目は配ってあり');
+  });
+
+  it('本文が1バイトでも違えば、2件目も配る（畳み間違いを作らない）', async () => {
+    const { pool, inbox, fake } = await runningManualSetup('mgr-quota', {
+      synthesizedNoticeWindowMs: 30,
+    });
+    const before = reportsOf(inbox).length;
+
+    emitQuotaTurnFailed(fake, 'mgr-quota', QUOTA_TURN_FAILED_BODY);
+    await afterWindow();
+    // **reset 時刻だけが違う。** 実測でも、同じ族で文言だけ違う2通が届く
+    // （`usage-notice-redelivery.test.ts`）。
+    emitQuotaTurnFailed(fake, 'mgr-quota', QUOTA_TURN_FAILED_BODY.replace('6am', '9am'));
+    await afterWindow();
+    await pool.stop();
+
+    const reports = reportsOf(inbox).slice(before);
+    expect(
+      reports,
+      '赤の意味: 本文の違う2つの観測が1件に潰れている。クローンから見て' +
+        '「2件目が来なかった」のと区別が付かなくなる。畳んでよいのは' +
+        'バイト単位で完全に同一の場合だけである。',
+    ).toHaveLength(2);
+    expect(reports[1]?.text).toContain('resets 9am');
+  });
+
+  it('連鎖が途切れたら、次の同文はまた1件目として配る', async () => {
+    const { pool, stores, inbox, fake } = await runningManualSetup('mgr-quota', {
+      synthesizedNoticeWindowMs: 30,
+    });
+    const before = reportsOf(inbox).length;
+
+    emitQuotaTurnFailed(fake, 'mgr-quota', QUOTA_TURN_FAILED_BODY);
+    await afterWindow();
+    fake.report('mgr-quota', '途中経過', 'running');
+    await settledReport(stores, '途中経過');
+    emitQuotaTurnFailed(fake, 'mgr-quota', QUOTA_TURN_FAILED_BODY);
+    await afterWindow();
+    await pool.stop();
+
+    const reports = reportsOf(inbox).slice(before);
+    expect(
+      reports,
+      '赤の意味: 一度配った本文が永久に配られなくなっている。畳むのは' +
+        '「連続するかぎり」であって以後ずっとではない —— 別のことが起きた' +
+        'あとに同じ壁へ当たり直したなら、それは新しい事実である。',
+    ).toHaveLength(3);
+    expect(reports[2]?.text).toContain('resets 6am');
+  });
+
+  it('畳み込みはマネージャーごとに独立している（他の委譲の同文を消さない）', async () => {
+    // **#783 が記録した「機構A」の失敗形を作り直さないための歯。** 枠の事実の
+    // 畳み込み（`#rateLimits` / `#usageNotices`）は Pool 全体で1つの鍵を持つため、
+    // **別のマネージャーが同じ壁に当たった事実がそこで消える**（実測の日誌で
+    // 連番が3本の managerId を跨いで進んでいる）。ここは同じ形へ倒れていない
+    // ことを撃つ。
+    const { pool, inbox, fake } = await runningManualSetup('mgr-quota', {
+      synthesizedNoticeWindowMs: 30,
+      alsoRunning: ['mgr-other'],
+    });
+    const before = reportsOf(inbox).length;
+
+    emitQuotaTurnFailed(fake, 'mgr-quota', QUOTA_TURN_FAILED_BODY);
+    await afterWindow();
+    emitQuotaTurnFailed(fake, 'mgr-other', QUOTA_TURN_FAILED_BODY);
+    await afterWindow();
+    await pool.stop();
+
+    const reports = reportsOf(inbox).slice(before);
+    expect(
+      reports,
+      '赤の意味: 別の委譲が枠で落ちた事実が、先に落ちた委譲の同文に吸われて' +
+        '消えている。落ちた委譲は自動では再開しないので、消えた側はクローンから' +
+        '永久に見えなくなる（#783 の「機構A」と同じ形）。',
+    ).toHaveLength(2);
+  });
+
+  it('配らなかった束は、1束ごとに日誌へ1行残る', async () => {
+    const { pool, stores, fake } = await runningManualSetup('mgr-quota', {
+      synthesizedNoticeWindowMs: 30,
+    });
+
+    for (let i = 0; i < 3; i += 1) {
+      emitQuotaTurnFailed(fake, 'mgr-quota', QUOTA_TURN_FAILED_BODY);
+      await afterWindow();
+    }
+    await pool.stop();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const entries = await stores.journal.list({ types: ['exchange'] });
+    const suppressed = entries.filter((entry) =>
+      JSON.stringify(entry).includes('受信箱へは回さず数だけ残した'),
+    );
+    expect(
+      suppressed,
+      '赤の意味: 配らなかった束が記録のどこにも残っていない。受信箱は流れるので、' +
+        '日誌に無ければ「何件畳んだのか」を後から復元できない。',
+    ).toHaveLength(2);
   });
 });

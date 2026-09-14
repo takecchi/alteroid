@@ -678,6 +678,11 @@ describe('認証トークンを回した後、走行中のマネージャーの�
     expect(notes[0]?.text).toContain('認証トークン');
     expect(notes[0]?.text).not.toContain('token-fake-new-666');
     expect(notes[0]?.text).not.toContain(OLD_TOKEN);
+    // **Issue #914 提案1。** daemon 側（`manager.ts` の `case 'note'`）が
+    // 「この委譲が抱えている鍵の世代」を追いつかせる判定に使う旗——文言
+    // ではなくこの構造化欄で判定させる（`runner-protocol.ts` の
+    // `note.tokenRotation` の doc）。
+    expect(notes[0]?.tokenRotation).toBe(true);
   });
 
   /**

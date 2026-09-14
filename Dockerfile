@@ -59,7 +59,11 @@ FROM node:22-trixie-slim AS runtime
 #
 # **`gh` も素の道具である。** 人間の Claude Code には `gh` があるので、ここに無いと
 # 「PR を出す」が層を下りた瞬間にできなくなる — それは仕様ではなくバグである
-# （north_star 禁止1）。Debian の apt には無いので GitHub 公式の apt リポジトリを足す。
+# （north_star 禁止1）。**`gh` は Debian の apt にも在る**（実測 2026-09-15、
+# `packages.debian.org/trixie/gh`: trixie の main に `2.46.0-3` が在る）が、**版が
+# 古い**（`cli.github.com` はこの実測時点で `2.100.0` を配っていた）ので、新しい版を
+# 取りに GitHub 公式の apt リポジトリを足す（#806。以前ここは「Debian の apt には
+# 無いので」と書いていたが、それは書かれた時点から偽だった）。
 #
 # **版は固定しない。** git / ripgrep / curl と同じ扱いにして、器を作り直したときに
 # その時点の版が入るようにしてある。`gh` だけを固定版にすると、人間の手元より古い
@@ -72,7 +76,18 @@ FROM node:22-trixie-slim AS runtime
 # 側に書いてある）。ここではベースイメージの Debian main のパッケージとして入れる
 # だけで、`apt-get install` の行に足す形は `gh` と同じにする — パッケージが消えたり
 # 名前が変わったら、この `image` ステージのビルドで気づける（下の `tini --version`
-# が存在確認を兼ねる。`gh --version` と同じ理由）。
+# が存在確認を兼ねる）。**`tini` は Debian main にしか無いので、これは成立する** —
+# 消えれば `apt-get install` がそのまま落ちる。
+#
+# ⚠ **`gh` については同じ強さで成立しない（#806）。** `gh` は Debian main にも
+# 在る（上のコメント）ので、`cli.github.com` と Debian main の両方が `gh` を配って
+# いる状態になる。ふだんは版の高い `cli.github.com` 側が候補に選ばれるが、
+# `cli.github.com` が消えた／到達できなくなった場合、apt は `apt-get install` を
+# 落とさずに Debian 側の古い `gh` へ静かに落ちる。`gh --version` もその古い版で
+# 通ってしまうので、**「存在確認を兼ねる」は存在は確かめるが、どこから来たかは
+# 確かめない** — 版が何マイナーも戻ってもビルドは緑のままで、壊れるのは実行時
+# である。取得元（`apt-cache policy gh` 等）まで検査する歯を足す案はビルドに1段
+# 乗るので、入れるかどうかは費用対効果を見て別に判断する。
 RUN set -eux; \
   apt-get update; \
   apt-get install -y --no-install-recommends ca-certificates curl; \

@@ -26,6 +26,7 @@ import {
   foldClaudeMessage,
 } from './claude-provider.js';
 import { describeArchiveContinuityForJournal } from './archive-continuity.js';
+import { CONTEXT_USAGE_CATEGORY_LIMIT } from './context-usage.js';
 import { restoredInboxEventVerdict } from './inbox-staleness.js';
 import { denialInputAbsence, denialInputShape, type DeniedRecord } from './denial-shape.js';
 import {
@@ -863,25 +864,6 @@ interface Turn {
  */
 type TurnUsageEntry = Extract<JournalEntry, { type: 'turn_usage' }>;
 type ContextUsageObservation = NonNullable<TurnUsageEntry['contextUsage']>;
-/**
- * `contextUsage.categories` に写す軸の件数の上限。
- *
- * **SDK が返す軸は実装が持つ数だけで、いまは1桁である**（システムプロンプト・
- * 道具・メッセージ・MCP 道具・記憶ファイル等）。⟹ **この上限はいま噛まない。**
- * 塞いでいるのは「版が上がって軸が増えたときに、日誌の1行が黙って伸びること」
- * である（`MEMORY_TOC_ENTRY_LIMIT` と同じ考え方——件数で何が壊れるかを運任せに
- * しない）。
- *
- * **切ったら黙らない。** 省いた件数は `contextUsage.categoriesOmitted` に出る。
- *
- * ⚠️ **文字数の予算ではなく件数の上限である。** 1軸は「名前＋整数」なので
- * 1件の長さがほぼ固定で、`renderListing` が扱う可変長の行とは性質が違う
- * （`.claude/skills/listing-and-detail/SKILL.md`「予算は件数ではなく文字数で
- * 持つ」が名指ししているのは可変長の行のほうである）。**名前は SDK が決めた
- * 文字列なので長さの保証は無い**——ただしこれは日誌の1行であって MCP の応答では
- * ないので、溢れて丸ごと届かなくなる経路は無い。
- */
-const CONTEXT_USAGE_CATEGORY_LIMIT = 24;
 
 type CompactionObservation = NonNullable<TurnUsageEntry['compactions']>[number];
 
