@@ -620,6 +620,26 @@ describe('認証が有効なとき', () => {
     expect(html).not.toContain('alt_');
     expect(callback.headers.get('location')).toBeNull();
   });
+
+  it('ログイン成功のコールバックは window.close() を仕込む（ポップアップを自動で閉じる）', async () => {
+    const started = (await (
+      await app.request('/auth/login', { ...post, body: JSON.stringify({ provider: 'fake' }) })
+    ).json()) as { authorizationUrl: string };
+    const state = new URL(started.authorizationUrl).searchParams.get('state') ?? '';
+
+    const callback = await app.request(
+      `/auth/fake/callback?code=any&state=${encodeURIComponent(state)}`,
+    );
+    const html = await callback.text();
+    expect(html).toContain('<script>window.close()</script>');
+  });
+
+  it('code / state が無い失敗コールバックは window.close() を仕込まない（人間にエラーを読ませる）', async () => {
+    const response = await app.request('/auth/fake/callback');
+    expect(response.status).toBe(400);
+    const html = await response.text();
+    expect(html).not.toContain('window.close()');
+  });
 });
 
 /**

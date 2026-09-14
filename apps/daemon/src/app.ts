@@ -1053,8 +1053,17 @@ async function accountView(
   };
 }
 
-/** ブラウザに返す終了画面。**ここで alteroid を操作させない**（Web UI は非ゴール）。 */
-function callbackPage(title: string, detail: string): string {
+/**
+ * ブラウザに返す終了画面。**ここで alteroid を操作させない**（Web UI は非ゴール）。
+ *
+ * `autoClose` は成功時のみ立てる。`window.open()` で `noopener=no`（Web UI の
+ * `openAuthorization`）で開いたポップアップなら `opener` が残るので閉じられるが、
+ * ポップアップが塞がれて**同じタブごと**遷移していた場合は `opener` が無く、
+ * `window.close()` は黙って何もしない（例外にならない）——その場合は下の
+ * メッセージ「閉じて端末に戻る」がそのままフォールバックとして機能する。
+ * だから成否をここで判定する必要はない。
+ */
+function callbackPage(title: string, detail: string, autoClose = false): string {
   const escape = (value: string) =>
     value.replace(/[&<>"]/g, (ch) =>
       ch === '&' ? '&amp;' : ch === '<' ? '&lt;' : ch === '>' ? '&gt;' : '&quot;',
@@ -1070,7 +1079,9 @@ function callbackPage(title: string, detail: string): string {
  h1{font-size:1.25rem;margin:0 0 .75rem}
  p{margin:0;color:#555;line-height:1.7}
 </style></head>
-<body><main><h1>${escape(title)}</h1><p>${escape(detail)}</p></main></body></html>`;
+<body><main><h1>${escape(title)}</h1><p>${escape(detail)}</p></main></body>${
+    autoClose ? '<script>window.close()</script>' : ''
+  }</html>`;
 }
 
 /**
@@ -4461,8 +4472,9 @@ export function createApp(deps: AppDeps) {
           callbackPage(
             'ログインしました',
             result.granted
-              ? 'この画面を閉じて端末に戻ってください。'
-              : 'この画面を閉じて端末に戻ってください。なお、このアカウントにはまだ alteroid を使う許可がありません（alteroid access grant で付与します）。',
+              ? 'この画面は自動で閉じます。閉じない場合は手動で閉じて端末に戻ってください。'
+              : 'この画面は自動で閉じます。閉じない場合は手動で閉じて端末に戻ってください。なお、このアカウントにはまだ alteroid を使う許可がありません（alteroid access grant で付与します）。',
+            true,
           ),
         );
       },
