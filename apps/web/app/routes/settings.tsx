@@ -13,7 +13,7 @@ import { useRunners } from '~/hooks/queries';
 import { formatDateTime } from '~/lib/format';
 import { useAuth } from '~/hooks/use-auth';
 import { useResetWorkspace, type WorkspaceResetSummary } from '~/hooks/mutations';
-import type { RunnerSummary } from '~/lib/types';
+import type { RunnerPushOutcome, RunnerSummary } from '~/lib/types';
 
 export default function Settings() {
   return (
@@ -156,6 +156,49 @@ function Credentials({ runner }: { runner: RunnerSummary }) {
   );
 }
 
+/**
+ * 押し込み（push）の直近結果。**指紋（`Credentials`）とは別物。**
+ *
+ * 指紋は runner へ聞き直した「いま何が乗っているか」だが、こちらはデーモンが
+ * 最後に送ろうとして何が起きたかの記憶で、新たな往復は発生しない
+ * （`packages/core/src/manager.ts` の `RunnerOverview.pushHealth` の doc）。
+ *
+ * **`pushHealth` 自体が無ければ何も描かない**（一度も押し込みを試みていない
+ * ＝AGENTS.md「取れない軸に0の行を作らない」）。3種類（プロファイル・環境変数・
+ * 認証トークン）は独立の軸なので、1つでも失敗していれば個別に赤く出す
+ * ——1つの成否へ畳まない。
+ */
+function PushHealth({ runner }: { runner: RunnerSummary }) {
+  const { pushHealth } = runner;
+  if (pushHealth === undefined) return null;
+
+  const items: [string, RunnerPushOutcome | undefined][] = [
+    ['プロファイル', pushHealth.profile],
+    ['環境変数', pushHealth.credentials],
+    ['認証トークン', pushHealth.agentToken],
+  ];
+  const attempted = items.filter(
+    (item): item is [string, RunnerPushOutcome] => item[1] !== undefined,
+  );
+  if (attempted.length === 0) return null;
+
+  return (
+    <div className="mt-2 flex flex-col gap-1">
+      {attempted.map(([label, outcome]) => (
+        <div key={label} className="flex flex-wrap items-center gap-1.5">
+          <Badge tone={outcome.status === 'ok' ? 'ok' : 'danger'}>
+            {label}: {outcome.status === 'ok' ? '押し込み済み' : '押し込み失敗'}（
+            {formatDateTime(outcome.at)}）
+          </Badge>
+          {outcome.status === 'failed' && outcome.error !== undefined ? (
+            <span className="text-[11px] break-words text-danger">{outcome.error}</span>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Runners() {
   const { data, error, isLoading } = useRunners();
   const runners = data?.runners ?? [];
@@ -247,6 +290,7 @@ function Runners() {
               <div className="mt-2 flex flex-wrap gap-1.5">
                 <Credentials runner={runner} />
               </div>
+              <PushHealth runner={runner} />
             </li>
           ))}
         </ul>

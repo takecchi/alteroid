@@ -505,6 +505,8 @@ export {
   type RunnerFleetOverview,
   type RunnerManagerEntry,
   type RunnerOverview,
+  type RunnerPushHealth,
+  type RunnerPushOutcome,
   resolveWorkspacePolicy,
   type WorkspacePolicy,
 } from './manager.js';

@@ -3465,6 +3465,18 @@ export function createApp(deps: AppDeps) {
                   // ここで新たに runner を叩かない——`fingerprints` と同じ「未接続
                   // ／頼んで失敗／頼んでいない」が潰れる穴を増やさないため。
                   revision: entry.revision,
+                  // **押し込み（push）の直近結果。** `probe` の指紋とは別物——
+                  // 指紋は「いま runner に何が乗っているか」を毎回聞き直すのに
+                  // 対し、こちらは「デーモンが最後に送ろうとして何が起きたか」を
+                  // 記憶から返すだけで、新たな往復は発生しない。`ManagerPool` の
+                  // 内部状態なので `entry`/`registry` からは取れず、`clone.managers`
+                  // 経由の専用アクセサ（`pushHealthOf`）が要る。
+                  ...(entry.runnerId === undefined
+                    ? {}
+                    : (() => {
+                        const pushHealth = clone.managers.pushHealthOf(entry.runnerId);
+                        return pushHealth === undefined ? {} : { pushHealth };
+                      })()),
                 };
               }),
             ),

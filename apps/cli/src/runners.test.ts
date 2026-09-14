@@ -207,6 +207,47 @@ describe('renderRunners', () => {
     expect(text).toContain('[lost]');
     expect(text).toContain('[unreachable]');
   });
+
+  /**
+   * **押し込み（push）の直近結果。** 指紋（`credentialsProbe`/`profileProbe`。この
+   * 口はまだ持たない）とは別物で、デーモンが最後に送ろうとして何が起きたかの記憶
+   * である。3種類は独立の軸なので、1つが失敗していても他は畳まずに出す
+   * （`packages/core/src/tools.ts` の `runner_list` と同じ判断）。
+   */
+  it('押し込みの結果を、種類ごとに畳まずに出す', () => {
+    const text = renderRunners({
+      runners: [
+        {
+          ...RUNNER,
+          revision: { status: 'unheard' },
+          pushHealth: {
+            profile: { status: 'ok', at: '2026-09-01T00:00:00.000Z' },
+            credentials: {
+              status: 'failed',
+              at: '2026-09-01T00:00:05.000Z',
+              error: 'ECONNRESET',
+            },
+          },
+        },
+      ],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    expect(text).toContain('プロファイル ok（2026-09-01T00:00:00.000Z）');
+    expect(text).toContain('環境変数 失敗（2026-09-01T00:00:05.000Z）: ECONNRESET');
+    // **3つ目（認証トークン）は一度も試みていない——出ないことを確かめる。**
+    expect(text).not.toContain('認証トークン');
+  });
+
+  /** **`pushHealth` 自体が無ければ、行そのものを出さない**（取れない軸に0の行を作らない）。 */
+  it('pushHealth 自体が無ければ、押し込みの行を出さない', () => {
+    const text = renderRunners({
+      runners: [{ ...RUNNER, revision: { status: 'unheard' } }],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    expect(text).not.toContain('直近の押し込み');
+  });
 });
 
 /**

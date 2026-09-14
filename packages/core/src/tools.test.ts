@@ -199,6 +199,9 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     denials(managerId: string) {
       return denied.get(managerId) ?? [];
     },
+    pushHealthOf() {
+      return undefined;
+    },
     async transcript(managerId: string) {
       transcriptCalls.push(managerId);
       const failure = transcriptErrors.get(managerId);
@@ -7033,6 +7036,67 @@ describe('runner_list（器の一覧）', () => {
     expect(reply).toContain('deadbeef0000');
     expect(reply).toContain('cafef00dbabe');
     expect(h.runnersCalls).toEqual([{ fingerprints: true }]);
+  });
+
+  /**
+   * **`pushHealth` は `fingerprints` を見ない。** `credentials`/`profile` と
+   * 違い runner への新しい往復を払わないので、opt-in にする理由が無い
+   * （`RunnerOverview.pushHealth` の doc）。
+   */
+  it('pushHealth は fingerprints を渡さなくても出る', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-a',
+          revision: { status: 'unheard' },
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-a',
+          managers: [],
+          pushHealth: {
+            profile: { status: 'ok', at: '2026-01-01T00:00:00.000Z' },
+            credentials: {
+              status: 'failed',
+              at: '2026-01-01T00:00:01.000Z',
+              error: 'credentials sync failed (test)',
+            },
+          },
+        },
+      ],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', {});
+
+    expect(reply).toContain('プロファイル ok');
+    expect(reply).toContain('環境変数 失敗');
+    expect(reply).toContain('credentials sync failed (test)');
+    // **試みていない種類（agentToken）は出ない。**
+    expect(reply).not.toContain('認証トークン');
+    expect(h.runnersCalls).toEqual([{}]);
+  });
+
+  it('pushHealth 自体が無い（一度も繋がっていない）runner では、その行が出ない', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-a',
+          revision: { status: 'unheard' },
+          state: 'connecting',
+          since: '2026-01-01T00:00:00.000Z',
+          managers: [],
+        },
+      ],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', {});
+
+    expect(reply).not.toContain('直近の押し込み');
   });
 
   /**

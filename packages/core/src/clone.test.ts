@@ -2213,6 +2213,7 @@ describe('クローン — マネージャーの確認がいまも待たれて�
         throw new Error('list() が壊れている（実測を模す）');
       },
       denials: () => [],
+      pushHealthOf: () => undefined,
       runnerBacklog: () => [],
       runnerIdOf: () => Promise.resolve(undefined),
       runners: () => {
@@ -3417,6 +3418,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
       },
       list: () => Promise.resolve([summaryOf('mgr-alive', true), summaryOf('mgr-dead', false)]),
       denials: () => [],
+      pushHealthOf: () => undefined,
       runnerBacklog: () => [],
       runnerIdOf: () => Promise.resolve(undefined),
       runners: () => {

@@ -940,6 +940,26 @@ const runnerProbeSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('failed'), error: z.string() }),
 ]);
 
+/**
+ * プロファイル・環境変数・認証トークンの押し込みが1回、直近どうだったか。
+ * `@alteroid/core` の `RunnerPushOutcome` / `RunnerPushHealth` と同じ形。
+ *
+ * **プロセス内の記憶であって、DB には残らない**（デーモンを作り直せば消える）。
+ */
+const runnerPushOutcomeSchema = z.object({
+  status: z.enum(['ok', 'failed']),
+  /** その結果を確かめた時刻（ISO 8601）。 */
+  at: z.string(),
+  /** `status: 'failed'` のときだけ載る、失敗の理由（原文）。 */
+  error: z.string().optional(),
+});
+
+const runnerPushHealthSchema = z.object({
+  profile: runnerPushOutcomeSchema.optional(),
+  credentials: runnerPushOutcomeSchema.optional(),
+  agentToken: runnerPushOutcomeSchema.optional(),
+});
+
 const runnerSummarySchema = z.object({
   /**
    * 人間が見る宛先（URL か「同一プロセス」）。
@@ -1011,6 +1031,14 @@ const runnerSummarySchema = z.object({
    * runner を叩かない）。
    */
   revision: runnerRevisionStatusSchema,
+  /**
+   * プロファイル・環境変数・認証トークンの押し込みの、直近の結果。
+   *
+   * **`credentials`/`profile` と違い、常に載る**（`runnerId` を持つ行だけ）。
+   * runner への新しい往復を払わない——デーモンのプロセス内に既にある記憶を
+   * 読むだけである（`@alteroid/core` の `RunnerOverview.pushHealth` の doc）。
+   */
+  pushHealth: runnerPushHealthSchema.optional(),
 });
 
 export const runnersListResponseSchema = z.object({
@@ -1531,6 +1559,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     },
     runners() {
       throw new Error('spec 生成専用のスタブ: 器の一覧は持たない');
+    },
+    pushHealthOf() {
+      throw new Error('spec 生成専用のスタブ: 押し込み結果は持たない');
     },
     runnerBacklog() {
       throw new Error('spec 生成専用のスタブ: 器の滞留は観測していない');

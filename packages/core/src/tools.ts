@@ -72,6 +72,7 @@ import type {
   ManagerSummary,
   ManagerTranscript,
   RunnerBacklogSnapshot,
+  RunnerPushOutcome,
 } from './manager.js';
 import {
   applyMemoryFrontmatterPatch,
@@ -7181,6 +7182,12 @@ export function createCloneTools(context: ToolContext) {
         '版が「不明」（器が自分の版を知らない）と「未確認」（名乗りをまだ聞けていない）は' +
           '別物で、疑う先が違う（前者は器の設定、後者は登録とネットワーク）。' +
           'state が lost の器の版は黙る前に聞いた古い値である。',
+        '「直近の押し込み」は、その器へプロファイル・環境変数・認証トークンを配る' +
+          '（`#connectTo`/繋ぎ直しのたびに必ず試みる）処理が、直近どうだったかである。' +
+          'state が connected でもこれが1つでも「失敗」なら、その種類はまだ古い値の' +
+          'ままで走っている——manager_start する前にここを見て気づける。' +
+          '「失敗」は自分から諦めずに挑み直すので、次に見たときには直っていることがある' +
+          '（人間が手で繋ぎ直す必要は無い）。まだ一度も試みていない種類は行ごと出ない。',
         'resources: true を渡すと器ごとの pids（プロセス数）の現在値/上限も出る' +
           '（#315 案1）。**pids の現在値/上限そのものは今も器の合計である**——何が' +
           'その数を持っているかはこの2つの数字からは分からない。空き（上限 − ' +
@@ -7335,6 +7342,30 @@ export function createCloneTools(context: ToolContext) {
           }
           if (fingerprints === true && runner.profile !== undefined) {
             lines.push(`  プロファイルの指紋: ${runner.profile.sha256}`);
+          }
+          /*
+           * **押し込みの結果（`pushHealth`）は `fingerprints` を見ない。**
+           * `credentials`/`profile` と違い runner への新しい往復を払わない
+           * （`RunnerOverview.pushHealth` の doc）ので、opt-in にする理由が無い。
+           *
+           * **3種類とも「まだ一度も試みていない」ことがある。** その種類だけ
+           * 行を出さない——`undefined` を「成功した」の既定値として埋めない。
+           */
+          if (runner.pushHealth !== undefined) {
+            const outcomeText = (label: string, outcome: RunnerPushOutcome | undefined) =>
+              outcome === undefined
+                ? undefined
+                : outcome.status === 'ok'
+                  ? `${label} ok（${outcome.at}）`
+                  : `${label} 失敗（${outcome.at}）: ${outcome.error ?? '理由不明'}`;
+            const pushLines = [
+              outcomeText('プロファイル', runner.pushHealth.profile),
+              outcomeText('環境変数', runner.pushHealth.credentials),
+              outcomeText('認証トークン', runner.pushHealth.agentToken),
+            ].filter((line): line is string => line !== undefined);
+            if (pushLines.length > 0) {
+              lines.push(`  直近の押し込み: ${pushLines.join(' / ')}`);
+            }
           }
           /*
            * **pids（#315 案1）。3つの状態を混ぜない。**

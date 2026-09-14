@@ -112,6 +112,7 @@ function stubPool(input: {
         ? Promise.reject(new Error('list() が壊れている（実測を模す）'))
         : Promise.resolve(input.managers),
     denials: () => [],
+    pushHealthOf: () => undefined,
     runnerBacklog: () => [],
     runnerIdOf: () => Promise.resolve(undefined),
     runners: (): Promise<RunnerFleetOverview> =>

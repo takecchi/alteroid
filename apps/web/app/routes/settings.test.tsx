@@ -263,6 +263,51 @@ describe('runner の鍵欄は、聞けた分しか言わない', () => {
 });
 
 /**
+ * `pushHealth`（押し込みの直近結果）は `credentialsProbe`/`profileProbe`（指紋・
+ * 聞き直し）とは別物。**「一度も試みていない」ときは行そのものを出さない**
+ * （AGENTS.md「取れない軸に0の行を作らない」）。3種類は独立の軸なので、1つが
+ * 失敗していても他は畳まずに出す。
+ */
+describe('runner の押し込み結果（pushHealth）', () => {
+  it('pushHealth 自体が無ければ、押し込みの行を出さない', async () => {
+    renderSettings({
+      runners: [{ ...BASE }],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+
+    await screen.findByText(BASE.label);
+    expect(screen.queryByText(/押し込み/)).toBeNull();
+  });
+
+  it('成功した種類は ok、失敗した種類は理由付きで出て、互いを畳まない', async () => {
+    renderSettings({
+      runners: [
+        {
+          ...BASE,
+          pushHealth: {
+            profile: { status: 'ok', at: '2026-09-01T00:00:00.000Z' },
+            credentials: {
+              status: 'failed',
+              at: '2026-09-01T00:00:05.000Z',
+              error: 'ECONNRESET: 途中で切れた',
+            },
+          },
+        },
+      ],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+
+    expect(await screen.findByText(/プロファイル: 押し込み済み/)).toBeTruthy();
+    expect(await screen.findByText(/環境変数: 押し込み失敗/)).toBeTruthy();
+    expect(await screen.findByText(/ECONNRESET: 途中で切れた/)).toBeTruthy();
+    // **3つ目（認証トークン）は一度も試みていない——出ないことを確かめる。**
+    // （`認証トークン` 単独は他の静的文言にも現れるので、押し込みバッジの
+    // 文言そのもの——コロン区切り——で絞る）
+    expect(screen.queryByText(/認証トークン: 押し込み/)).toBeNull();
+  });
+});
+
+/**
  * 折り返しの付け忘れ（本2）。
  *
  * `runnerId` / `label` / `workspacePath` は空白を含まない識別子・パスなので

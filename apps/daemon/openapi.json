@@ -6788,6 +6788,59 @@
                                 "required": ["status"]
                               }
                             ]
+                          },
+                          "pushHealth": {
+                            "type": "object",
+                            "properties": {
+                              "profile": {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["ok", "failed"]
+                                  },
+                                  "at": {
+                                    "type": "string"
+                                  },
+                                  "error": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["status", "at"]
+                              },
+                              "credentials": {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["ok", "failed"]
+                                  },
+                                  "at": {
+                                    "type": "string"
+                                  },
+                                  "error": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["status", "at"]
+                              },
+                              "agentToken": {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["ok", "failed"]
+                                  },
+                                  "at": {
+                                    "type": "string"
+                                  },
+                                  "error": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["status", "at"]
+                              }
+                            }
                           }
                         },
                         "required": [

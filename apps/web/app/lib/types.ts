@@ -62,6 +62,17 @@ export type RunnerSummary = Ok<paths['/runners']['get']>['runners'][number];
  */
 export type DaemonRevision = Ok<paths['/runners']['get']>['daemonRevision'];
 
+/**
+ * runner ごとの押し込み（push）の直近結果（`RunnerSummary['pushHealth']`）。
+ *
+ * **`profile` / `credentials` / `agentToken` は独立の3欄。**1つの成否へ畳まない
+ * （`packages/core/src/manager.ts` の `RunnerPushHealth` の doc）。**`pushHealth`
+ * 自体が無い行もある**——一度も押し込みを試みていない runner で、`{}` のような
+ * 値を作らず欄そのものが無い（AGENTS.md「取れない軸に0の行を作らない」）。
+ */
+export type RunnerPushHealth = NonNullable<RunnerSummary['pushHealth']>;
+export type RunnerPushOutcome = NonNullable<RunnerPushHealth['profile']>;
+
 export type Health = Ok<paths['/health']['get']>;
 
 /**
