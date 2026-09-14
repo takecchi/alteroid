@@ -226,3 +226,41 @@ describe('summarizeJournalEntry — turn_usage', () => {
     expect(summary).toContain('write=40');
   });
 });
+
+describe('summarizeJournalEntry — escalation（取り下げ #963）', () => {
+  it('withdrawnAt が付いた行は「確認:」ではなく「取り下げ済み:」と言う', () => {
+    // **`answeredAt` 未設定のまま「確認:」に落ちないことを確かめる。**
+    // `approval_withdraw` が積む行は回答していないので、この分岐が無いと
+    // 「まだ誰も答えていない新しい質問」に見える（journal.tsx / dashboard.tsx
+    // どちらもこの関数の文言をそのまま出す）。
+    const entry: JournalEntry = {
+      type: 'escalation',
+      id: 'esc-withdrawn',
+      at: '2026-09-15T00:00:00.000Z',
+      question: 'このPRはもうマージされていますか？',
+      approvalId: 'ap-1',
+      withdrawnAt: '2026-09-15T00:00:00.000Z',
+      withdrawnReason: '別経路で判明したので不要になった',
+    };
+    expect(summarizeJournalEntry(entry)).toBe('取り下げ済み: このPRはもうマージされていますか？');
+  });
+
+  it('withdrawnAt が無ければ、これまでどおり回答の有無で言い分ける', () => {
+    const asked: JournalEntry = {
+      type: 'escalation',
+      id: 'esc-asked',
+      at: '2026-09-15T00:00:00.000Z',
+      question: '進めてよいですか？',
+      approvalId: 'ap-2',
+    };
+    expect(summarizeJournalEntry(asked)).toBe('確認: 進めてよいですか？');
+
+    const answered: JournalEntry = {
+      ...asked,
+      id: 'esc-answered',
+      answeredAt: '2026-09-15T00:05:00.000Z',
+      answer: 'よい',
+    };
+    expect(summarizeJournalEntry(answered)).toBe('回答済: 進めてよいですか？');
+  });
+});

@@ -418,6 +418,15 @@ export function summarizeJournalEntry(entry: JournalEntry): string {
     case 'decision':
       return `${entry.decision}（根拠: ${entry.grounds}）`;
     case 'escalation':
+      // **取り下げを先に見る（#963）。** `withdrawnAt` と `answeredAt` は
+      // 正常な経路では両立しない（`schema.ts` の `journalEntrySchema` の
+      // `escalation` 分岐、`withdrawnAt` の doc）。この分岐が無いと、
+      // `approval_withdraw` が積む行（`answeredAt` 未設定）が「確認:」
+      // （＝まだ誰も答えていない新しい質問）と誤読される——日誌フィード・
+      // ダッシュボードのどちらも、取り下げた事実が読めなくなる
+      // （issue #963 の受け入れ基準「取り下げの事実と理由が日誌に残る」は、
+      // 行が在るだけでなく人間が読んで分かることを指す）。
+      if (entry.withdrawnAt !== undefined) return `取り下げ済み: ${entry.question}`;
       return entry.answeredAt === undefined
         ? `確認: ${entry.question}`
         : `回答済: ${entry.question}`;
