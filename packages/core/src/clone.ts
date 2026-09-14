@@ -1648,8 +1648,8 @@ class Clone implements CloneHost {
   readonly #credentialService: CredentialService | undefined;
   readonly #accountUsage: (() => AccountUsageState) | undefined;
   readonly #scheduler: (() => ScheduleStatus[]) | undefined;
-  /** {@link CloneOptions.redeliveryGate}。`undefined` なら `#restoreUnread` は全件配る。 */
-  readonly #redeliveryGate: RedeliveryGate | undefined;
+  /** {@link CloneOptions.redeliveryGate}。必須（{@link CloneOptions.redeliveryGate} の doc）。 */
+  readonly #redeliveryGate: RedeliveryGate;
 
   constructor(options: CloneOptions) {
     const {
@@ -3807,20 +3807,18 @@ class Clone implements CloneHost {
       // 使い回さないこと——このループは1件ごとに `await` するので、並行して動く
       // `#pump` が途中で `usageBlocked` を動かしうる（枠に当たる／解ける）。
       //
-      // **渡されていなければ、今までどおり全件配る**（`redeliveryGate === undefined`
-      // の分岐）。
-      let worthRedelivering = true;
-      if (this.#redeliveryGate !== undefined) {
-        try {
-          worthRedelivering = this.#redeliveryGate(record.event, {
-            usageBlocked: this.usageBlocked,
-          });
-        } catch (error) {
-          // **判定できないときは配る側へ倒す**（直前の「台帳が読めなければ
-          // 『閉じていない』として扱う」と同じ向き。雑音であって喪失ではない側）。
-          noteDroppedRecord('配り直しの門の判定', inboxEventShape(record.event), error);
-          worthRedelivering = true;
-        }
+      // **`redeliveryGate` は必須なので、ここは常に呼ぶ**
+      // （`CloneOptions.redeliveryGate` の doc）。
+      let worthRedelivering: boolean;
+      try {
+        worthRedelivering = this.#redeliveryGate(record.event, {
+          usageBlocked: this.usageBlocked,
+        });
+      } catch (error) {
+        // **判定できないときは配る側へ倒す**（直前の「台帳が読めなければ
+        // 『閉じていない』として扱う」と同じ向き。雑音であって喪失ではない側）。
+        noteDroppedRecord('配り直しの門の判定', inboxEventShape(record.event), error);
+        worthRedelivering = true;
       }
 
       if (!worthRedelivering) {

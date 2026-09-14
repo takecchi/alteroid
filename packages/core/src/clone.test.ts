@@ -14341,3 +14341,39 @@ describe('クローン — 文脈窓で畳む前の退避は diverged/unknown �
     }
   });
 });
+
+/**
+ * `CloneOptions.redeliveryGate` は必須（Issue #845。#783 続きで必須化した後、
+ * `#redeliveryGate` フィールドと `#restoreUnread` の分岐だけが `| undefined` /
+ * 到達しない `if` として「省略できる」と主張し続けていた）。
+ *
+ * **これは型レベルの歯である。** `vitest` はトランスパイル済みの JS を実行する
+ * だけなので、この `it()` 自体は実行時には常に通る。守っているのは
+ * **`pnpm typecheck`（`tsc --noEmit`）がこのファイルを検査したときに、次の行が
+ * 「型エラーである」ことを要求する** 側——`@ts-expect-error` は「次の行は型
+ * エラーになるはずだ」という主張で、**実際にエラーにならなければ
+ * `@ts-expect-error` 自身が「不要な抑制」として `pnpm typecheck` を落とす**
+ * （作法は `prompt.test.ts`「branded type — RenderedMemory を経由しない記憶は
+ * buildCloneSystemPrompt に渡せない」に既に在る）。
+ *
+ * ⟹ **`redeliveryGate` を再び `redeliveryGate?:` へ緩めると、ここが
+ * `pnpm typecheck` を落とす。**
+ */
+describe('CloneOptions.redeliveryGate は必須 — 省いた形は型として組めない（Issue #845）', () => {
+  it('redeliveryGate を省いた CloneOptions は型として組めない（対照: 明示すれば組める）', () => {
+    const wontTypeCheck = () =>
+      // @ts-expect-error redeliveryGate は必須。省いた形は型として組めない
+      // （`CloneOptions.redeliveryGate` の doc）。
+      createClone({ stores: createMemoryStores() });
+    // 実行はしない。ここが測るのは型として組めないことだけである
+    // （実行時に「無くても動く」ことを測っているのではない——それでは
+    // 必須化そのものの歯にならない）。
+    expect(typeof wontTypeCheck).toBe('function');
+
+    // 対照: 明示すれば従来どおり組める（この歯が「redeliveryGate を
+    // 渡すこと自体を壊した」だけではないことを確かめる）。
+    expect(() =>
+      createClone({ stores: createMemoryStores(), redeliveryGate: ALWAYS_REDELIVER }),
+    ).not.toThrow();
+  });
+});
