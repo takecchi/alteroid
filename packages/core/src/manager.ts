@@ -470,6 +470,47 @@ export interface ManagerSummary {
    * `describeManagerState`（`digest.ts`）1箇所だけである。
    */
   awaitingBackground?: ManagerAwaitingBackground;
+  /**
+   * **この委譲が抱えている認証トークンの世代**（Issue #914 提案1）。
+   *
+   * 材料は `ManagerPool` の `#tokenIdentities`——このマネージャーのセッション
+   * が最後に(daemon の目から見て)起きた瞬間（`start` / 起動時の引き取り /
+   * 明示的な `resume` / `#reopenForTokenRotation` によるターン境界での
+   * 自動の畳み直し）に daemon が撒いていた現役の世代。
+   *
+   * **`activeTokenGeneration` と対で運ぶ**（真下の doc）。**この委譲がまだ
+   * 一度もセッションを起こしていない、またはプールを一度も使っていない
+   * 構成では欄ごと消える**——`0` や「不明」という値を作らない
+   * （AGENTS.md「取れない軸に0の行を作る」と同じ理由）。
+   *
+   * **⚠️ これは「いま実際にこのプロセスの env に入っている値」の直接観測
+   * ではない。** daemon は runner の子プロセスの env を覗けない——
+   * ここにあるのは「daemon が最後にこの委譲へ向けて撒いた／撒いたと
+   * 確認できた世代」である。`#reopenForTokenRotation`（`runner.ts`）が
+   * ターンの境界（確認待ち・背景処理が無い状態）に一度も達しないまま、
+   * このマネージャーが古い鍵で走り続けていれば、この値も古いまま残る
+   * ——**それはこの欄が壊れているのではなく、まさにこの欄が名指ししたい
+   * 状態そのものである**（2026-09-15 の実測、#914）。
+   *
+   * **揮発する。** `#tokenIdentities` と同じくプロセス内の Map なので、
+   * デーモンを作り直すと消え、次にこのマネージャーへ触れた時点で
+   * 記録し直される。
+   */
+  tokenGeneration?: number;
+  /**
+   * **呼び出した時点の現役の世代**（daemon がいま撒いているもの。Issue #914
+   * 提案1）。`tokenGeneration`（このマネージャーが抱えている世代）と
+   * 突き合わせる相手——一致しなければ、このマネージャーは古い鍵を抱えた
+   * まま走っている可能性がある。
+   *
+   * **`tokenGeneration` が無ければこちらも無い。** 比べる相手が居ない
+   * 判定を作らない——`tokenGeneration` と独立に消える欄ではない。
+   *
+   * **一致・不一致そのものの判定はここに焼かない。** `lease` と同じ理由
+   * （`ManagerSummary.lease` の doc）——読む側（`manager_list` /
+   * `runner_list` の描画）が2つの数を比べる。ここに出すのは材料だけである。
+   */
+  activeTokenGeneration?: number;
 }
 
 /**
@@ -611,6 +652,19 @@ export interface RunnerManagerEntry {
    * 名乗る」形にはならない。
    */
   awaitingBackground?: ManagerAwaitingBackground;
+  /**
+   * この委譲が抱えている認証トークンの世代（`ManagerSummary.tokenGeneration`
+   * の写し。Issue #914 提案1）。**`live` / `awaitingBackground` と同じ理由で
+   * ここにも運ぶ**——運ばないと、`manager_list` で立つ ⚠（世代の食い違い）が
+   * `runner_list` の側だけで見えなくなる。**握り潰しと同じく省略可能**
+   * （プールを使っていない構成・観測前は欄ごと消える）。
+   */
+  tokenGeneration?: number;
+  /**
+   * 呼び出した時点の現役の世代（`ManagerSummary.activeTokenGeneration` の
+   * 写し。Issue #914 提案1）。`tokenGeneration` と対で運ぶ——真上と同じ理由。
+   */
+  activeTokenGeneration?: number;
 }
 
 /**
@@ -2832,6 +2886,17 @@ class Pool implements ManagerPool {
    * **記録（`#records`）へ足さずに別の箱にしてあるのは、`#records.set` が5箇所
    * あるからである。** 1箇所忘れると、そのマネージャーの観測だけが身元を失う
    * ——しかもそれは「回りすぎる」形で出るので、テストでは気づきにくい。
+   *
+   * **`manager_list` / `runner_list` の「この委譲が抱えている鍵の世代」の
+   * 材料にもなる（Issue #914 提案1）。** 「材料」であって「いまの env の
+   * 直接観測」ではないことに注意——daemon は runner の子プロセスの env を
+   * 覗けない。ここが持つのは「daemon が最後にこの委譲へ向けて撒いた／
+   * 撒いたと確認した世代」であって、その委譲がターンの境界に一度も
+   * 達しないまま古い鍵で走り続けていれば、ここも古いままである。**それは
+   * 欠陥ではなく、この欄の存在理由そのものである**（2026-09-15 の実測、
+   * #914：4本のマネージャーが古い鍵を抱えたまま自動では起こし直されず
+   * 429 を返し続けた——`#reopenForTokenRotation` がターンの境界に一度も
+   * 達しなかった回）。
    */
   readonly #tokenIdentities = new Map<string, { tokenId: string; generation: number }>();
   /**
@@ -3205,6 +3270,8 @@ class Pool implements ManagerPool {
       record.toolUseStallAt,
       record.toolUseStallPending,
       this.#awaitingBackgroundOf(record.job.id),
+      this.#tokenIdentities.get(record.job.id)?.generation,
+      this.#tokenIdentity?.()?.generation,
     );
   }
 
@@ -3619,6 +3686,12 @@ class Pool implements ManagerPool {
     // 読んで台帳へ写すだけである（`#noteMissingSessions` / `#silentRunners`）。
     this.#noteMissingSessions();
     const silent = this.#silentRunners();
+    // **一覧まるごと同じ「現役」で比べる**（Issue #914 提案1）。1本ずつ
+    // `this.#tokenIdentity?.()` を呼び直すと、一覧を作っている間に回転が
+    // 割り込んだとき、同じ応答の中で一部だけ新しい現役と比べることになる
+    // ——`#tokenIdentities` を読み直さない理由（このファイル冒頭の doc）と
+    // 同じ筋で、1回だけ引いて使い回す。
+    const activeTokenGeneration = this.#tokenIdentity?.()?.generation;
     const known = new Map<string, ManagerSummary>();
     for (const record of this.#records.values()) {
       known.set(
@@ -3634,6 +3707,8 @@ class Pool implements ManagerPool {
           record.toolUseStallAt,
           record.toolUseStallPending,
           this.#awaitingBackgroundOf(record.job.id),
+          this.#tokenIdentities.get(record.job.id)?.generation,
+          activeTokenGeneration,
         ),
       );
     }
@@ -3659,6 +3734,8 @@ class Pool implements ManagerPool {
           fallback.toolUseStallAt,
           fallback.toolUseStallPending,
           this.#awaitingBackgroundOf(job.id),
+          this.#tokenIdentities.get(job.id)?.generation,
+          activeTokenGeneration,
         ),
       );
     }
@@ -3708,6 +3785,14 @@ class Pool implements ManagerPool {
         ...(manager.awaitingBackground === undefined
           ? {}
           : { awaitingBackground: manager.awaitingBackground }),
+        // **同上（Issue #914 提案1）。** `list()` が既に計算済み——ここでも
+        // 往復は増えない。
+        ...(manager.tokenGeneration === undefined
+          ? {}
+          : { tokenGeneration: manager.tokenGeneration }),
+        ...(manager.activeTokenGeneration === undefined
+          ? {}
+          : { activeTokenGeneration: manager.activeTokenGeneration }),
       };
       if (manager.runnerId === undefined) {
         unassigned.push(item);
@@ -4504,6 +4589,8 @@ class Pool implements ManagerPool {
             record.toolUseStallAt,
             record.toolUseStallPending,
             this.#awaitingBackgroundOf(record.job.id),
+            this.#tokenIdentities.get(record.job.id)?.generation,
+            this.#tokenIdentity?.()?.generation,
           ),
         );
         continue;
@@ -4608,6 +4695,8 @@ class Pool implements ManagerPool {
             record.toolUseStallAt,
             record.toolUseStallPending,
             this.#awaitingBackgroundOf(record.job.id),
+            this.#tokenIdentities.get(record.job.id)?.generation,
+            this.#tokenIdentity?.()?.generation,
           ),
         );
       } catch (error) {
@@ -6702,6 +6791,21 @@ class Pool implements ManagerPool {
               '全件は日誌に残っている（`journal_read` で辿れる）。',
           );
         }
+
+        // **この委譲が抱えている鍵の世代を、いま追いつかせる**（Issue #914
+        // 提案1。`runner-protocol.ts` の `note.tokenRotation` の doc）。
+        // `#reopenForTokenRotation` がターンの境界でセッションを畳んで
+        // 開き直した回にだけ立つ旗——ここを逃すと `#tokenIdentities` は
+        // セッション開始／引き取り／明示的な resume の3箇所でしか更新
+        // されないままになり、自動で追いついたセッションにまで
+        // `manager_list` / `runner_list` の世代の食い違いが恒久的に
+        // 出続ける（検知そのものが意味を失う）。
+        //
+        // **世代の値はここでは受け取らない。** runner 側はどの世代かを
+        // 知らない（`token-spread.ts` の doc）。daemon は自分の現役の
+        // 身元（`#tokenIdentity?.()`）を読み直すだけでよい——
+        // `#rememberTokenIdentity` は既にその形になっている。
+        if (event.tokenRotation === true) this.#rememberTokenIdentity(event.managerId);
         return;
       }
 
@@ -7860,7 +7964,17 @@ class Pool implements ManagerPool {
     this.#settlePushRetry(runnerId);
   }
 
-  /** そのマネージャーのセッションが起きた瞬間の身元を覚える。 */
+  /**
+   * そのマネージャーのセッションが起きた瞬間の身元を覚える。
+   *
+   * **呼び出し口は4つ**（`start` / 起動時の引き取り / 明示的な `resume` /
+   * `case 'note'` の `event.tokenRotation === true`）。**最後の1つは
+   * Issue #914 提案1で足した**——それまでは「daemon が明示的にセッションへ
+   * 触った瞬間」の3つだけで、`runner.ts` の `#reopenForTokenRotation`
+   * （認証トークンの差し替えで、ターンの境界を認めて自動で畳んで開き直す
+   * 経路）はここを一切通らず、`#tokenIdentities` は自動の追いつきを
+   * 知らないまま古い世代を名乗り続けていた。
+   */
   #rememberTokenIdentity(managerId: string): void {
     const identity = this.#tokenIdentity?.();
     if (identity === undefined) return;
@@ -8984,6 +9098,8 @@ function summaryOf(
   toolUseStallAt: string | undefined,
   toolUseStallPending: PendingToolUse[] | undefined,
   awaitingBackground: ManagerAwaitingBackground | undefined,
+  tokenGeneration: number | undefined,
+  activeTokenGeneration: number | undefined,
 ): ManagerSummary {
   const { job } = record;
   return {
@@ -9072,5 +9188,15 @@ function summaryOf(
      * `undefined` は「そうではない」ではなく「そう名乗られていない」である）。
      */
     ...(awaitingBackground === undefined ? {} : { awaitingBackground }),
+    // **`live` と同じ引数の作法で運ぶ（Issue #914 提案1）。** 材料は
+    // `#tokenIdentities` / `#tokenIdentity?.()`——`record` からは読めない
+    // プロセス内の像なので、引数で受ける。`tokenGeneration` が無ければ
+    // `activeTokenGeneration` も出さない（比べる相手が無い判定を作らない）。
+    ...(tokenGeneration === undefined
+      ? {}
+      : {
+          tokenGeneration,
+          ...(activeTokenGeneration === undefined ? {} : { activeTokenGeneration }),
+        }),
   };
 }

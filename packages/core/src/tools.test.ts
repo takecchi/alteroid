@@ -6032,6 +6032,85 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * **この委譲が抱えている認証トークンの世代**（Issue #914 提案1）。
+   *
+   * `ManagerPool.list()` 側の生成（`#tokenIdentities` / `#tokenIdentity?.()`）は
+   * `manager-token-generation.test.ts` が持つ——ここで固定するのは
+   * `describeTokenGeneration`（`tools.ts`）の言い方だけである。
+   */
+  describe('manager_list は認証トークンの世代の食い違いを出す（Issue #914 提案1）', () => {
+    it('材料が無ければ1文字も足さない（プールを使っていない構成）', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).not.toContain('認証トークンの世代');
+    });
+
+    it('世代が一致していれば、一致していると言う（⚠ は出さない）', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.tokenGeneration = 3;
+      target.activeTokenGeneration = 3;
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('認証トークンの世代: 3（現役と一致）');
+      expect(reply).not.toContain('⚠ 認証トークンの世代');
+    });
+
+    it('世代が食い違っていれば ⚠ を立て、両方の世代の値と次の一手を言う', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.tokenGeneration = 3;
+      target.activeTokenGeneration = 5;
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('⚠ 認証トークンの世代が食い違っている');
+      expect(reply).toContain('世代 3');
+      expect(reply).toContain('現役は世代 5');
+      expect(reply).toContain('manager_stop → manager_start');
+    });
+
+    /**
+     * **比べる相手が取れないときは、一致とも不一致とも言わない。**
+     * `activeTokenGeneration` が無い（現役の身元をまだ確認できていない）のに
+     * 「一致」と偽らない——`ManagerSummary.activeTokenGeneration` の doc と
+     * 同じ理由。
+     */
+    it('現役が取れなければ「比べられない」と言い、一致とも不一致とも言わない', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.tokenGeneration = 3;
+      // activeTokenGeneration は設定しない。
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('認証トークンの世代: 3（現役は不明——比べられない）');
+      expect(reply).not.toContain('一致');
+      expect(reply).not.toContain('⚠ 認証トークンの世代');
+    });
+
+    /** 道具の説明文にも書く（JSDoc はクローンに届かない）。 */
+    it('道具の説明文が世代の食い違いの意味と次の一手を説明する', () => {
+      const stores = createMemoryStores();
+      const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+      const description = tools.find((entry) => entry.name === 'manager_list')?.description;
+
+      expect(description).toContain('認証トークンの世代');
+      expect(description).toContain('manager_stop');
+    });
+  });
+
+  /**
    * クローンの受信箱（`InboxStore`）の滞留は、`renderListing` の外——一覧
    * 全体に1行だけ添える（#358「答えない問い」のうち、デーモン→クローンの脚）。
    *
@@ -7488,6 +7567,115 @@ describe('runner_list（器の一覧）', () => {
     expect(reply).toContain('内訳: ゾンビ 0 / 生存 40（40プロセス）');
     expect(reply).not.toContain('    ゾンビの comm');
     expect(reply).not.toContain('    いちばん古いゾンビ');
+  });
+
+  /**
+   * **この委譲が抱えている認証トークンの世代**（Issue #914 提案1）。
+   *
+   * `manager_list` の詳しい行（`describeTokenGeneration`）とは別に、`runner_list`
+   * は圧縮した印（`runnerManagerTokenTag`）だけを足す——`manager_list で全部
+   * 見える` という、この一覧の既存の作法（`pids` の内訳などと同じ）に揃えてある。
+   */
+  describe('runner_list は認証トークンの世代の食い違いを短い印で出す（Issue #914 提案1）', () => {
+    it('世代が一致していれば、印を1文字も足さない', async () => {
+      const h = harness();
+      h.setRunnersOverview({
+        runners: [
+          {
+            label: 'runner-a',
+            revision: { status: 'unheard' },
+            state: 'connected',
+            since: '2026-01-01T00:00:00.000Z',
+            runnerId: 'runner-a',
+            managers: [
+              {
+                managerId: 'mgr-1',
+                status: 'running',
+                live: true,
+                tokenGeneration: 3,
+                activeTokenGeneration: 3,
+              },
+            ],
+          },
+        ],
+        unassigned: [],
+        daemonRevision: { status: 'unknown' },
+      });
+
+      const reply = await h.call('runner_list', {});
+
+      expect(reply).toContain('mgr-1[running]');
+      expect(reply).not.toContain('⚠世代');
+    });
+
+    it('世代が食い違っていれば、⚠世代N≠現役M を足す', async () => {
+      const h = harness();
+      h.setRunnersOverview({
+        runners: [
+          {
+            label: 'runner-a',
+            revision: { status: 'unheard' },
+            state: 'connected',
+            since: '2026-01-01T00:00:00.000Z',
+            runnerId: 'runner-a',
+            managers: [
+              {
+                managerId: 'mgr-1',
+                status: 'running',
+                live: true,
+                tokenGeneration: 3,
+                activeTokenGeneration: 5,
+              },
+            ],
+          },
+        ],
+        unassigned: [],
+        daemonRevision: { status: 'unknown' },
+      });
+
+      const reply = await h.call('runner_list', {});
+
+      expect(reply).toContain('mgr-1[running] ⚠世代3≠現役5');
+    });
+
+    /**
+     * **材料が無ければ、この一覧では1文字も足さない。** プールを使っていない
+     * 構成・観測前の委譲では `tokenGeneration` / `activeTokenGeneration` の
+     * どちらも欄ごと消える（`RunnerManagerEntry` の doc）。
+     */
+    it('材料が無ければ、印を1文字も足さない', async () => {
+      const h = harness();
+      h.setRunnersOverview({
+        runners: [
+          {
+            label: 'runner-a',
+            revision: { status: 'unheard' },
+            state: 'connected',
+            since: '2026-01-01T00:00:00.000Z',
+            runnerId: 'runner-a',
+            managers: [{ managerId: 'mgr-1', status: 'running', live: true }],
+          },
+        ],
+        unassigned: [],
+        daemonRevision: { status: 'unknown' },
+      });
+
+      const reply = await h.call('runner_list', {});
+
+      expect(reply).toContain('mgr-1[running]');
+      expect(reply).not.toContain('⚠世代');
+      expect(reply).not.toContain('世代');
+    });
+
+    /** 道具の説明文にも書く（JSDoc はクローンに届かない）。 */
+    it('道具の説明文が ⚠世代N≠現役M の意味を説明する', () => {
+      const stores = createMemoryStores();
+      const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+      const description = tools.find((entry) => entry.name === 'runner_list')?.description;
+
+      expect(description).toContain('⚠世代N≠現役M');
+      expect(description).toContain('manager_stop');
+    });
   });
 });
 

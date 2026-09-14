@@ -2194,6 +2194,13 @@ class RunnerSession {
       text:
         '認証トークンが差し替わったので、ターンの境界でセッションを畳んで' +
         '開き直した（会話は resume で続く）。',
+      // **daemon 側に「いま開き直した」を構造化して伝える**（Issue #914 提案1。
+      // `runner-protocol.ts` の `note.tokenRotation` の doc）。`text` の
+      // 言い回しでは判定させない——`manager.ts` の `case 'note'` はこの旗を
+      // 見て、この委譲が抱えている鍵の世代（`#tokenIdentities`）を
+      // 自分の現役の身元で更新し直す。ここでは世代そのものは運ばない
+      // （runner はどの世代かを知らない。旗だけで足りる）。
+      tokenRotation: true,
     });
     this.#open(sessionId);
   }

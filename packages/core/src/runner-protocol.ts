@@ -1036,6 +1036,39 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
         outcome: z.enum(['woken', 'limit_reached']),
       })
       .optional(),
+    /**
+     * **任意欄（Issue #914 提案1）。** 立っているのは、この `note` が
+     * `runner.ts` の `#reopenForTokenRotation`（認証トークンの差し替えで、
+     * ターンの境界を認めてセッションを畳んで開き直した）から来た回だけ。
+     *
+     * **`manager.ts` の `case 'note'` はこれを見て `#rememberTokenIdentity`
+     * を呼び直す。** そうしないと、daemon が持つ「この委譲が抱えている鍵の
+     * 世代」（`ManagerPool` の `#tokenIdentities`）は、この自動の開き直しを
+     * 一度も知らないまま——セッション開始／引き取り／明示的な resume の3箇所
+     * でしか更新されない——古い世代を名乗り続ける。それでは `manager_list` /
+     * `runner_list` の世代表示が、実際には追いついたセッションにまで
+     * 恒久的に ⚠ を出し続ける（食い違いの検知を無意味にする）。
+     *
+     * **識別子（`tokenId` / `generation`）そのものはここに乗せない。** runner
+     * 側は `setCredentials` で生の値（`name`/`value`）しか受け取っておらず、
+     * どの世代かを知らない（`token-spread.ts` の `RunnerLike.setCredentials`
+     * の doc）。世代を知っているのは daemon 側だけなので、daemon は
+     * この旗を受けた時点で**自分の**現役の身元（`#tokenIdentity?.()`）を
+     * 読み直すだけでよい——runner から運ぶ必要が無い。
+     *
+     * **判定は必ずこの欄で行い、`text`（日本語の言い回し）では判定しない**
+     * （`escalate` / `stall` と同じ理由・同じ欄の哲学）。
+     *
+     * **なぜ任意欄が安全か——`escalate` / `stall` と同じ形。**
+     *
+     * - **新 runner ＋ 旧デーモン**: 旧デーモンの zod は未知の欄を黙って
+     *   落とすので、これまでどおり `{ type: 'exchange' }` として記録される
+     *   だけになる。`#tokenIdentities` を更新し損ねるが、その委譲は
+     *   これまでどおり次の明示的な resume で追いつく
+     * - **旧 runner ＋ 新デーモン**: `tokenRotation` が来ない（`undefined`）
+     *   ので、新デーモンの分岐が立たない＝これまでどおり
+     */
+    tokenRotation: z.literal(true).optional(),
   }),
   z.object({
     type: z.literal('tool_use'),
