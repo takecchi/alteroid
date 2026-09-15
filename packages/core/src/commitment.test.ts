@@ -708,7 +708,13 @@ describe('引き受けたまま終わっていない仕事', () => {
     });
 
     it('⭐ 陰性対照(4) origin が manager でない候補は常に false（人間・外部の同文は畳まない）', () => {
-      const humanCandidate: Commitment = { id: 'evt-h', at, origin: 'human', source: 'conv-1', body: '同じ発言' };
+      const humanCandidate: Commitment = {
+        id: 'evt-h',
+        at,
+        origin: 'human',
+        source: 'conv-1',
+        body: '同じ発言',
+      };
       const entries: Commitment[] = [
         { id: 'evt-old', at, origin: 'human', source: 'conv-1', body: '同じ発言' },
       ];
@@ -1010,12 +1016,7 @@ describe('引き受けたまま終わっていない仕事', () => {
     expect((await s.stores.commitments.list()).entries).toHaveLength(1);
 
     // 1件目を閉じる——「片付いた」ので、もう畳む相手が居ない。
-    await s.stores.commitments.close(
-      'evt-repeat-1',
-      new Date().toISOString(),
-      '対応した',
-      'clone',
-    );
+    await s.stores.commitments.close('evt-repeat-1', new Date().toISOString(), '対応した', 'clone');
     expect((await s.stores.commitments.list()).entries).toHaveLength(0);
 
     // 同文の3件目——**畳まれず、新しい未了として台帳に載る。**

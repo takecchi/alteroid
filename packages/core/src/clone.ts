@@ -3316,18 +3316,21 @@ class Clone implements CloneHost {
     if (entry === null) return;
     this.#committed.set(
       event.id,
-      this.#stores.commitments.list().then(
-        (list) => hasOpenManagerDuplicate(list.entries, entry),
-        () => false,
-      ).then((duplicate) => {
-        if (duplicate) return undefined;
-        return this.#stores.commitments.open(entry).then(
-          () => undefined,
-          (error: unknown) => {
-            noteDroppedRecord('未了の記帳', inboxEventShape(event), error);
-          },
-        );
-      }),
+      this.#stores.commitments
+        .list()
+        .then(
+          (list) => hasOpenManagerDuplicate(list.entries, entry),
+          () => false,
+        )
+        .then((duplicate) => {
+          if (duplicate) return undefined;
+          return this.#stores.commitments.open(entry).then(
+            () => undefined,
+            (error: unknown) => {
+              noteDroppedRecord('未了の記帳', inboxEventShape(event), error);
+            },
+          );
+        }),
     );
   }
 
