@@ -151,6 +151,16 @@ export type TokenRecovery = NonNullable<AgentTokenView['recovery']>;
 export type TokenRotationEntry = Extract<JournalEntry, { type: 'token_rotation' }>;
 
 /**
+ * ログインしたアカウントと許可の一覧（`GET /access`）。CLI の
+ * `alteroid access list` と同じもの。
+ *
+ * **`apps/web/app/routes/access.tsx` は読み取り専用**——`grant` / `revoke`
+ * はこの画面には無い（Issue #213。理由はその画面の doc）。
+ */
+export type AccessState = Ok<paths['/access']['get']>;
+export type AccessAccount = AccessState['accounts'][number];
+
+/**
  * 環境変数の袋（`GET /credentials`。旧「マネージャーへ降ろす環境変数」）。
  *
  * **`value` は `secret === false` の行だけに載る。** サーバ側（`credentialsResponseSchema`）

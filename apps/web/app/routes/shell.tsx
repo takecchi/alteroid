@@ -13,6 +13,7 @@ import {
   Menu,
   MessageSquare,
   Settings,
+  ShieldCheck,
   SlidersHorizontal,
   Users,
 } from 'lucide-react';
@@ -42,6 +43,7 @@ const NAV = [
   { to: '/reports', label: '日報', icon: BookText, end: false },
   { to: '/usage', label: '利用状況', icon: DollarSign, end: false },
   { to: '/tokens', label: '認証トークン', icon: KeyRound, end: false },
+  { to: '/access', label: 'アクセス許可', icon: ShieldCheck, end: false },
   { to: '/env-vars', label: '環境変数', icon: SlidersHorizontal, end: false },
   { to: '/dropped', label: '握り潰しの跡', icon: Footprints, end: false },
   // 可観測性の最下段——`/dropped` の隣（#776）。
