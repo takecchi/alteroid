@@ -474,9 +474,15 @@ export interface ManagerSummary {
    * **この委譲が抱えている認証トークンの世代**（Issue #914 提案1）。
    *
    * 材料は `ManagerPool` の `#tokenIdentities`——このマネージャーのセッション
-   * が最後に(daemon の目から見て)起きた瞬間（`start` / 起動時の引き取り /
-   * 明示的な `resume` / `#reopenForTokenRotation` によるターン境界での
-   * 自動の畳み直し）に daemon が撒いていた現役の世代。
+   * へ daemon が最後に**実際に触れた**瞬間（`start` / 明示的な `resume` /
+   * `#reopenForTokenRotation` によるターン境界での自動の畳み直し）に daemon が
+   * 撒いていた現役の世代。
+   *
+   * **`ManagerPool#restore()` の living 枝（既に runner に生きているセッション
+   * を見つけて引き取るだけの経路）はここに含まれない（2026-09-15 Issue #978）。**
+   * あの枝はセッションの env を一切更新しないので、含めると「観測しただけの
+   * 現役の世代」を「抱えている世代」として書いてしまい、デーモンの再起動を
+   * 挟むたびに本物の食い違いが「一致」に化けていた。
    *
    * **`activeTokenGeneration` と対で運ぶ**（真下の doc）。**この委譲がまだ
    * 一度もセッションを起こしていない、またはプールを一度も使っていない
@@ -493,8 +499,12 @@ export interface ManagerSummary {
    * 状態そのものである**（2026-09-15 の実測、#914）。
    *
    * **揮発する。** `#tokenIdentities` と同じくプロセス内の Map なので、
-   * デーモンを作り直すと消え、次にこのマネージャーへ触れた時点で
-   * 記録し直される。
+   * デーモンを作り直すと消え、次にこのマネージャーへ daemon が**実際に
+   * 触れた**時点（`start` / 明示的な `resume` / `tokenRotation`）で記録し
+   * 直される。**living 枝で引き取られただけでは記録し直されない**——
+   * 触れるまでのあいだ、この欄は（一度も観測されていない委譲と同じ見た目で）
+   * 欄ごと消える。何も出さないことと「再起動をまたいで分からない」ことは、
+   * いまはこの型の上では区別されていない（Issue #978 に残した設計判断）。
    */
   tokenGeneration?: number;
   /**
@@ -4706,8 +4716,21 @@ class Pool implements ManagerPool {
           attached,
         };
         this.#records.set(job.id, record);
-        // 引き取ったセッションも、この瞬間の身元で観測を名乗る。
-        this.#rememberTokenIdentity(job.id);
+        // **ここでは呼ばない（Issue #978）。** この枝は runner に既に生きている
+        // セッションを見つけて引き取るだけで、セッションの env は一切更新しない
+        // ——認証トークンは起動時に env へ焼かれて凍る（`token-spread.ts`）ので、
+        // runner 側の実プロセスは古い世代の鍵のまま走り続けている。ここで
+        // `#rememberTokenIdentity(job.id)` を呼ぶと、**観測しただけの現役の世代**
+        // を「この委譲が抱えている世代」として書き込んでしまい、本物の食い違いが
+        // 「一致」に化ける（デーモンを再起動して生きたセッションへ繋ぎ直すたびに
+        // 起きる。#968 が入れた ⚠ が消える偽陰性）。
+        //
+        // **記録を書かないので、新しいプロセスの `#tokenIdentities` にはこの
+        // 委譲の記録が無いままになる。** `tokenGeneration` は `undefined` を返し
+        // （`summaryOf` が `activeTokenGeneration` も道連れに落とす）、
+        // `describeTokenGeneration` はこの委譲について1行も出さない——
+        // 嘘の「一致」より、正直な「材料が無い」を選んでいる
+        // （AGENTS.md「取れない軸に0の行を作る」の逆向き＝0を作らない）。
         await this.#persist(record);
         // 「runner の中で走り続けている」は `lost` にも `failed` にも言えない。
         if (attached) this.#notifyRestored(record, 'attached');
@@ -8135,13 +8158,21 @@ class Pool implements ManagerPool {
   /**
    * そのマネージャーのセッションが起きた瞬間の身元を覚える。
    *
-   * **呼び出し口は4つ**（`start` / 起動時の引き取り / 明示的な `resume` /
-   * `case 'note'` の `event.tokenRotation === true`）。**最後の1つは
-   * Issue #914 提案1で足した**——それまでは「daemon が明示的にセッションへ
-   * 触った瞬間」の3つだけで、`runner.ts` の `#reopenForTokenRotation`
-   * （認証トークンの差し替えで、ターンの境界を認めて自動で畳んで開き直す
-   * 経路）はここを一切通らず、`#tokenIdentities` は自動の追いつきを
-   * 知らないまま古い世代を名乗り続けていた。
+   * **呼び出し口は3つ**（`start` / 明示的な `resume` / `case 'note'` の
+   * `event.tokenRotation === true`）。**いずれも daemon が実際にセッションへ
+   * 触り、env を積み直した瞬間である**——`start` は新しいセッションを起こし、
+   * `resume` は `runner.resume()` が env を積み直し、`tokenRotation` は
+   * `runner.ts` の `#reopenForTokenRotation` が畳んで開き直す。
+   *
+   * **`ManagerPool#restore()` の living 枝（既に runner に生きているセッション
+   * を見つけて引き取るだけの経路）はここを呼ばない（2026-09-15 Issue #978 で
+   * 削った。以前は4つ目の呼び出し口としてここに数えていた）。** あの枝は
+   * セッションの env を一切更新しないので、ここを呼ぶと「観測しただけの現役の
+   * 世代」を「この委譲が抱えている世代」として書いてしまい、デーモンを
+   * 再起動して生きたセッションへ繋ぎ直すたびに、本物の食い違いが「一致」に
+   * 化けていた（#968 が入れた ⚠ の偽陰性）。**「daemon が明示的にセッションへ
+   * 触った瞬間」だけを数える、という本来の不変条件に合わせて呼び出し口を
+   * 3つへ戻した**——4つ目は、その不変条件を自分自身が破っていた。
    */
   #rememberTokenIdentity(managerId: string): void {
     const identity = this.#tokenIdentity?.();

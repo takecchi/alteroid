@@ -389,13 +389,22 @@ describe('デーモン再起動を挟んだ二重 restore（Issue #978）', () =
     const after1 = await summaryFor(pool2, 'mgr-gen');
     const after2 = await summaryFor(pool2, 'mgr-gen-2');
 
-    // ⚠ 現行の欠陥: living 枝が観測だけで `#tokenIdentities` を書き換えるため、
-    // 実際には runner 側が世代3のまま止まっているのに、記録上は現役（5）と
-    // 「一致」してしまう。#968 が入れた ⚠ が、再起動を挟んだだけで消える。
-    expect(after1.tokenGeneration).toBe(5);
-    expect(after1.activeTokenGeneration).toBe(5);
-    expect(after2.tokenGeneration).toBe(5);
-    expect(after2.activeTokenGeneration).toBe(5);
+    // ⚠ 旧: living 枝が観測だけで `#tokenIdentities` を書き換えるため、実際には
+    // runner 側が世代3のまま止まっているのに、記録上は現役（5）と「一致」して
+    // しまっていた。#968 が入れた ⚠ が、再起動を挟んだだけで消えていた。
+    //
+    // **2026-09-15 直した（Issue #978）。** living 枝はもう `#tokenIdentities`
+    // を書かない——新しいプロセス（POOL2）の `#tokenIdentities` にはこの委譲の
+    // 記録が無いままなので、`tokenGeneration` は `undefined` になる
+    // （`summaryOf` が `activeTokenGeneration` も道連れに落とす。`tools.ts` の
+    // `describeTokenGeneration` はこの委譲について1行も出さない）。**嘘の
+    // 「一致」が消え、正直な「材料が無い」に変わった**——ただし「材料が無い」
+    // 自体は、再起動をまたいだことを名指ししていない（この委譲が一度も
+    // 観測されていない場合と同じ見た目になる。#978 の doc に残した設計判断）。
+    expect(after1.tokenGeneration).toBeUndefined();
+    expect(after1.activeTokenGeneration).toBeUndefined();
+    expect(after2.tokenGeneration).toBeUndefined();
+    expect(after2.activeTokenGeneration).toBeUndefined();
 
     await pool2.stop();
   });
