@@ -30,6 +30,7 @@ import {
 import type { ScheduleStatus } from './schedule.js';
 import { CLONE_RUNTIME_ITEM_LABELS, describeCloneRuntime, type CloneRuntimeFacts } from './self.js';
 import type { Stores } from './store.js';
+import { UnreadableCommitmentError } from './store.js';
 import { captureStderr, createMemoryStores, failingJournalAppend } from './testing.js';
 import { buildCloneSystemPrompt } from './prompt.js';
 import {
@@ -13209,6 +13210,132 @@ describe('commitment_list は読めない行を隠さない（issue #296）', ()
     expect(line).toContain('c-broken-0');
     expect(line).not.toContain('c-broken-59');
     expect(line).toMatch(/…ほか \d+ 件は省略/);
+  });
+});
+
+/**
+ * issue #856。`commitment_open` は以前、`stores.commitments.open()` が例外を
+ * 投げなかったことだけを根拠に「台帳に載せた」と名乗っていた——書き込みが
+ * 静かに失敗しても、呼び出し側からは「例外は無かった」としか見えない。
+ * 直したのは、書いた後にストアを読み直して行の実在を確かめてから名乗る形
+ * （兄弟の経路 `Clone#commitmentNoticeFor` が既に持つ形）へ揃えることである。
+ *
+ * `createMemoryStores()` の既定の `open()`/`get()` は互いに素直に整合する
+ * （書けば読める）ので、静かな失敗を再現するには `unreadable` のテストと
+ * 同じ作法で `stores.commitments` を差し替える——`open()` は例外を投げずに
+ * 解決するが、実際には行を残さない（または読めない行として返す）。
+ */
+describe('commitment_open は「載せた」と名乗る前にストアを確かめる（issue #856）', () => {
+  it('通常どおり書けたときは名乗り、日誌にも決定を残す（回帰）', async () => {
+    const tools = createCloneTools({
+      stores: createMemoryStores(),
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+    const opened = tools.find((entry) => entry.name === 'commitment_open');
+    const result = await opened?.handler({ body: '健全な依頼' } as never, {});
+    const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+
+    expect(reply).toContain('台帳に載せた');
+    expect(reply).not.toContain('確認できなかった');
+  });
+
+  it('open() が例外を投げずに解決しても、直後の get(id) が null なら「載せた」と名乗らない', async () => {
+    const stores = createMemoryStores();
+    const silentlyLostWrite: Stores = {
+      ...stores,
+      commitments: {
+        ...stores.commitments,
+        // **#856 が観測した形そのもの** — 書き込みの呼び出しは例外を投げずに
+        // 解決するが、行は実際には残っていない（重複除去・容量超過・
+        // トランザクションの巻き戻り等、原因は問わない）。
+        async open() {
+          return true;
+        },
+        async get() {
+          return null;
+        },
+      },
+    };
+    const tools = createCloneTools({
+      stores: silentlyLostWrite,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+    const opened = tools.find((entry) => entry.name === 'commitment_open');
+    const result = await opened?.handler({ body: '静かに消える依頼' } as never, {});
+    const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+
+    // **これがこの変異試験の芯である。** 直す前は例外が無いことだけを根拠に
+    // 「台帳に載せた」と返していた。
+    expect(reply).not.toContain('台帳に載せた');
+    expect(reply).toContain('確認できなかった');
+
+    // **確認できていない書き込みを、日誌にまで「載せた」と複製しないこと。**
+    const decisions = await silentlyLostWrite.journal.list({ types: ['decision'] });
+    expect(decisions.some((entry) => entry.decision.includes('台帳に載せた'))).toBe(false);
+  });
+
+  it('open() が解決しても、直後の get(id) が UnreadableCommitmentError を投げるなら「載せた」と名乗らない', async () => {
+    const stores = createMemoryStores();
+    const unreadableAfterWrite: Stores = {
+      ...stores,
+      commitments: {
+        ...stores.commitments,
+        async open() {
+          return true;
+        },
+        async get(id) {
+          return Promise.reject(new UnreadableCommitmentError(`${id} は壊れて読めない`));
+        },
+      },
+    };
+    const tools = createCloneTools({
+      stores: unreadableAfterWrite,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+    const opened = tools.find((entry) => entry.name === 'commitment_open');
+    const result = await opened?.handler({ body: '読めなくなる依頼' } as never, {});
+    const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+
+    // **`null`（無い）と `UnreadableCommitmentError`（読めない）は型で別だが、
+    // 「名乗るかどうか」では両方とも「名乗らない」へ倒す** —— doc の1行
+    // どおりの安全側の判断であることを、ここで固定する。
+    expect(reply).not.toContain('台帳に載せた');
+    expect(reply).toContain('確認できなかった');
+
+    const decisions = await unreadableAfterWrite.journal.list({ types: ['decision'] });
+    expect(decisions.some((entry) => entry.decision.includes('台帳に載せた'))).toBe(false);
+  });
+
+  it('get(id) が UnreadableCommitmentError 以外を投げたら握り潰さずに上へ通す（器そのものの障害と取り違えない）', async () => {
+    const stores = createMemoryStores();
+    const brokenStore: Stores = {
+      ...stores,
+      commitments: {
+        ...stores.commitments,
+        async open() {
+          return true;
+        },
+        async get() {
+          throw new Error('DB接続断（器そのものの障害。テスト用）');
+        },
+      },
+    };
+    const tools = createCloneTools({
+      stores: brokenStore,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+    const opened = tools.find((entry) => entry.name === 'commitment_open');
+    await expect(opened?.handler({ body: '器が壊れている依頼' } as never, {})).rejects.toThrow(
+      'DB接続断（器そのものの障害。テスト用）',
+    );
   });
 });
 
