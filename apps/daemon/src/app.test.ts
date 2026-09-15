@@ -2039,6 +2039,63 @@ describe('HTTP API', () => {
     expect(body.entries.find((entry) => entry.id === 'cmt-new')?.respondedAt).toBeUndefined();
   });
 
+  /**
+   * 「進行中（委譲あり）」の見分け（issue #1003 段2）——`GET /commitments` が
+   * `activeManagerIds` を組み立てて返すこと。導出そのものの枝分かれは
+   * `packages/core/src/schema.test.ts` の `commitmentActiveDelegationIds` が
+   * 別に固定している。ここで見たいのは、ハンドラが `stores.jobs.listJobs()`
+   * から会話ごとの走行中マネージャーを正しく組み立てて渡していることだけ。
+   */
+  it('その会話で、行より後に始まった走行中のマネージャーが在れば activeManagerIds が付く', async () => {
+    await stores.commitments.open({
+      id: 'cmt-delegated',
+      at: '2026-01-01T00:00:00.000Z',
+      origin: 'human',
+      source: 'conv-2',
+      body: '調べておいて',
+    });
+    await stores.jobs.putJob({
+      id: 'mgr-running',
+      createdAt: '2026-01-02T00:00:00.000Z',
+      updatedAt: '2026-01-02T00:00:00.000Z',
+      status: 'running',
+      conversationId: 'conv-2',
+      summary: '調べておいて',
+    });
+
+    const list = await app.request('/commitments');
+    const body = (await list.json()) as {
+      entries: Array<{ id: string; activeManagerIds?: string[] }>;
+    };
+    expect(body.entries.find((entry) => entry.id === 'cmt-delegated')?.activeManagerIds).toEqual([
+      'mgr-running',
+    ]);
+  });
+
+  it('委譲が done/failed など終わっていれば activeManagerIds は付かない', async () => {
+    await stores.commitments.open({
+      id: 'cmt-done',
+      at: '2026-01-01T00:00:00.000Z',
+      origin: 'human',
+      source: 'conv-3',
+      body: '調べておいて',
+    });
+    await stores.jobs.putJob({
+      id: 'mgr-done',
+      createdAt: '2026-01-02T00:00:00.000Z',
+      updatedAt: '2026-01-02T00:00:00.000Z',
+      status: 'done',
+      conversationId: 'conv-3',
+      summary: '調べておいて',
+    });
+
+    const list = await app.request('/commitments');
+    const body = (await list.json()) as {
+      entries: Array<{ id: string; activeManagerIds?: string[] }>;
+    };
+    expect(body.entries.find((entry) => entry.id === 'cmt-done')?.activeManagerIds).toBeUndefined();
+  });
+
   it('積んだ側が自分で選べるのは本文と出所だけ（origin を human 以外にできない）', async () => {
     // ここを人間に選ばせると、人間が積んだものが `self` を名乗れてしまい、
     // 「人間との約束か、自分で思い立ったことか」をクローンが区別できなくなる。

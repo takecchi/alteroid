@@ -101,6 +101,17 @@ export interface ManagerStartInput {
    * 重複のいずれでも**自動配置へは落とさない**（`RunnerRegistry#select` の doc）。
    */
   runnerId?: string;
+  /**
+   * 呼び出し元のいまのターンの会話 id（issue #1003 段2・#781）。
+   *
+   * **クローンはこの欄を書かない。** `tools.ts` の `manager_start` ツール
+   * 定義に対応する引数は無い——渡すのは呼び出し元（`tools.ts` の
+   * `createCloneTools`）が `ToolContext.conversationId()` から読んだ値で、
+   * 人間発のチャットのターンでなければ `undefined` になる。ここに書くのは
+   * その値をそのまま `Job.conversationId` へ写すだけ（`Job.conversationId`
+   * の doc、`jobSchema`）。
+   */
+  conversationId?: string;
 }
 
 /**
@@ -3419,6 +3430,9 @@ class Pool implements ManagerPool {
         createdAt: at,
         updatedAt: at,
         status: 'running',
+        // **クローンが維持する欄ではない。呼び出し文脈からの自動記録**
+        // （issue #1003 段2・#781。`ManagerStartInput.conversationId` の doc）。
+        ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
         summary: brief({ request: input.request }),
         request: input.request,
         cwd,

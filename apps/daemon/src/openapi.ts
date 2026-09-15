@@ -444,12 +444,23 @@ export const scheduleListResponseSchema = z.object({ entries: z.array(scheduleSt
  * しないこと——「無い」と「見つからなかった」を区別しない値である）。導出は
  * `packages/core/src/schema.ts` の `commitmentRespondedAt` を呼ぶ
  * （`apps/daemon/src/app.ts` の `GET /commitments` ハンドラ）。
+ *
+ * **`activeManagerIds` は issue #1003 段2（「進行中（委譲あり）」）のために
+ * 足した導出値である。** `respondedAt` と同じ形の**加算のみの変更**——同じ
+ * 会話の中で、この行より後に始まって、いまも走っている（`running` /
+ * `waiting_human`）マネージャーの `managerId` を並べたもので、無ければ
+ * 欄自体が応答に現れない。**正確な1対1の紐付けではない**（同じ会話に複数の
+ * 未了行や複数の委譲が並行していれば、無関係な行にも付きうる——
+ * `packages/core/src/schema.ts` の `Job.conversationId` / `commitmentActiveDelegationIds`
+ * の doc に限界を書いた）。導出は `commitmentActiveDelegationIds` を呼ぶ
+ * （`apps/daemon/src/app.ts` の `GET /commitments` ハンドラ）。
  */
 export const commitmentListResponseSchema = z.object({
   entries: z.array(
     commitmentSchema.extend({
       updatedAt: isoDateTimeSchema,
       respondedAt: isoDateTimeSchema.optional(),
+      activeManagerIds: z.array(z.string()).optional(),
     }),
   ),
   /**

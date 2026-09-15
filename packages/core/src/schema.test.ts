@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   approvalUpdatedAt,
+  commitmentActiveDelegationIds,
   commitmentRespondedAt,
   commitmentUpdatedAt,
   inboxEventSchema,
@@ -187,6 +188,94 @@ describe('commitmentRespondedAt', () => {
       commitmentRespondedAt(
         { origin: 'human', source: undefined, at: '2026-01-01T00:00:00.000Z' },
         replies,
+      ),
+    ).toBeUndefined();
+  });
+});
+
+/**
+ * 「進行中（委譲あり）」の導出（issue #1003 段2）。
+ *
+ * `commitmentRespondedAt`（直上）と対になる関数——形と枝分かれの立て方を
+ * そのまま流用する。画面（`apps/web/app/routes/commitments.tsx`）がこの値の
+ * 有無をどう見せるかは `commitments.test.tsx` の側が持つ想定で、ここで
+ * 固定するのは `commitmentActiveDelegationIds` 単体の枝分かれである。
+ */
+describe('commitmentActiveDelegationIds', () => {
+  it('origin が human で、行の at より後に始まった走行中のマネージャーが見つかれば、その managerId を返す', () => {
+    const active = new Map([
+      ['conv-1', [{ managerId: 'mgr-1', createdAt: '2026-01-02T00:00:00.000Z' }]],
+    ]);
+    expect(
+      commitmentActiveDelegationIds(
+        { origin: 'human', source: 'conv-1', at: '2026-01-01T00:00:00.000Z' },
+        active,
+      ),
+    ).toEqual(['mgr-1']);
+  });
+
+  it('行の at より前に始まった委譲は数えない（この行より前の頼みごとに応えたもの）', () => {
+    const active = new Map([
+      ['conv-1', [{ managerId: 'mgr-old', createdAt: '2026-01-01T00:00:00.000Z' }]],
+    ]);
+    expect(
+      commitmentActiveDelegationIds(
+        { origin: 'human', source: 'conv-1', at: '2026-01-01T12:00:00.000Z' },
+        active,
+      ),
+    ).toBeUndefined();
+  });
+
+  it('同じ会話に複数の走行中のマネージャーが在れば、全部の managerId を返す', () => {
+    const active = new Map([
+      [
+        'conv-1',
+        [
+          { managerId: 'mgr-1', createdAt: '2026-01-02T00:00:00.000Z' },
+          { managerId: 'mgr-2', createdAt: '2026-01-03T00:00:00.000Z' },
+        ],
+      ],
+    ]);
+    expect(
+      commitmentActiveDelegationIds(
+        { origin: 'human', source: 'conv-1', at: '2026-01-01T00:00:00.000Z' },
+        active,
+      ),
+    ).toEqual(['mgr-1', 'mgr-2']);
+  });
+
+  it('会話 id が一致する走行中のマネージャーが無ければ undefined（＝「進行中」ではない側の残余）', () => {
+    const active = new Map([
+      ['conv-other', [{ managerId: 'mgr-1', createdAt: '2026-01-02T00:00:00.000Z' }]],
+    ]);
+    expect(
+      commitmentActiveDelegationIds(
+        { origin: 'human', source: 'conv-1', at: '2026-01-01T00:00:00.000Z' },
+        active,
+      ),
+    ).toBeUndefined();
+  });
+
+  it('origin が human でなければ、一致する会話があっても undefined（この導出の対象外）', () => {
+    const active = new Map([
+      ['conv-1', [{ managerId: 'mgr-1', createdAt: '2026-01-02T00:00:00.000Z' }]],
+    ]);
+    expect(
+      commitmentActiveDelegationIds(
+        { origin: 'self', source: 'conv-1', at: '2026-01-01T00:00:00.000Z' },
+        active,
+      ),
+    ).toBeUndefined();
+  });
+
+  it('source が無ければ undefined（会話 id を持たない human 行——POST /commitments 等）', () => {
+    const active = new Map([
+      ['conv-1', [{ managerId: 'mgr-1', createdAt: '2026-01-02T00:00:00.000Z' }]],
+    ]);
+    expect(
+      commitmentActiveDelegationIds(
+        { origin: 'human', source: undefined, at: '2026-01-01T00:00:00.000Z' },
+        active,
       ),
     ).toBeUndefined();
   });

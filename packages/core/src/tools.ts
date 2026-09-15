@@ -5966,10 +5966,16 @@ export function createCloneTools(context: ToolContext) {
       },
       async ({ request, cwd, runnerId }) => {
         if (!context.managers) return NO_POOL;
+        // **クローンには渡させない。呼び出し文脈から自動で読む**（issue #1003
+        // 段2・#781）。この道具の引数に conversationId は無い——手で維持する
+        // 欄を新しく作らないという Issue の設計要件を、ここでも守る。内部
+        // ターン（マネージャー発の確認・蒸留・timer）では undefined になる。
+        const conversationId = getConversationId();
         const started = await context.managers.start({
           request,
           ...(cwd === undefined ? {} : { cwd }),
           ...(runnerId === undefined ? {} : { runnerId }),
+          ...(conversationId === undefined ? {} : { conversationId }),
         });
         await appendJournalOrThrow(
           'manager_start',

@@ -1081,6 +1081,36 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
+  /**
+   * `ManagerStartInput.conversationId` → `Job.conversationId`（issue #1003 段2・
+   * #781）。
+   *
+   * **クローンが手で維持する欄ではないことを、経路そのもので示す。** `tools.ts`
+   * の `manager_start` ツール定義に対応する引数は無い——ここで確かめるのは
+   * `Pool#start` が受け取った値をそのまま台帳へ写すことだけで、値の出どころ
+   * （`ToolContext.conversationId()`）は `tools.test.ts` 側が別に持つ。
+   */
+  it('conversationId を渡せば JobStore へそのまま写る。省略すれば欄自体が付かない', async () => {
+    const s = setup();
+    const { managerId: withConv } = await s.pool.start({
+      request: '直して',
+      conversationId: 'conv-1',
+    });
+    const { managerId: withoutConv } = await s.pool.start({ request: '別件' });
+
+    const jobs = await s.stores.jobs.listJobs();
+    const jobWithConv = jobs.find((job) => job.id === withConv);
+    const jobWithoutConv = jobs.find((job) => job.id === withoutConv);
+
+    expect(jobWithConv?.conversationId).toBe('conv-1');
+    // **既定値へ倒さない。** 省略した回は欄そのものが無い——`undefined` を
+    // 明示で書き込むと、以後「会話に紐づかない委譲」と「まだ判定していない
+    // 委譲」が区別できなくなる。
+    expect(jobWithoutConv).not.toHaveProperty('conversationId');
+
+    await s.pool.stop();
+  });
+
   it('停止時に返事待ちを宙吊りにしない', async () => {
     const s = setup();
     await s.pool.start({ request: 'デプロイして' });

@@ -5454,7 +5454,7 @@
         "operationId": "getCommitments",
         "tags": ["commitments"],
         "summary": "引き受けたまま終わっていない仕事の一覧",
-        "description": "クローンの `commitment_list` と同じものを人間の側から読む。既定は**未了だけ**で、古い順に返る（齢が判断の材料なので、古いものから見せる）。`includeClosed=true` を付けると片付けたものが未了の後ろに新しい順で続く。順序や優先度は器が持たない。**並べ替え・絞り込みは依然として足さない（理由: 判断がクローンから器へ移る）。窓（`limit`/`cursor`）は 2026-08-25 に人間の明示の「はい」を受けて足した。**`unreadable` は台帳の行が読めなかったもの（issue #296）。**「無い」でも「片付いた」でもない第3の状態**で、0件でも欄自体は必ず返る。**窓では絶対に切らない**（issue #296 が塞いだ穴——読めない行が2頁目以降から消える——が再び開くため）。`trimmedClosed` は保持上限を超えて物理削除された片付き行の累計件数（issue #416）。`unreadable` と同じく窓では切らない。契約を守れている実装は常に `0`（`CommitmentList` の doc、`packages/core/src/store.ts`）。`limit` / `cursor` のいずれかを明示すると頁の封筒（`total` / `nextCursor`）が応答へ載る。**明示しない既定の呼びは、この変更の前と応答が1バイトも変わらない**（opt-in。`.claude/skills/listing-and-detail/SKILL.md` の考え方と同じ——足すのは能力であって、既存の呼び手に新しい欄を押し付けない）。並びは固定（未了は `at` 昇順・片付きは `closedAt` 降順で、その順に連結）で、ここでは選べない——窓はその上に頁を切るだけである（`commitmentsCursorSchema` の doc）。各行の `respondedAt` は「放置」と「進行中」を見分けるための導出値（issue #1003）——クローンから人間への返答が日誌に見つかった最初の時刻で、無ければ欄自体が無い（＝並べ替え・絞り込みの新しい軸ではなく、既存の記録から読めることを1つ増やしただけ）。`packages/core/src/schema.ts` の `commitmentRespondedAt` を参照。",
+        "description": "クローンの `commitment_list` と同じものを人間の側から読む。既定は**未了だけ**で、古い順に返る（齢が判断の材料なので、古いものから見せる）。`includeClosed=true` を付けると片付けたものが未了の後ろに新しい順で続く。順序や優先度は器が持たない。**並べ替え・絞り込みは依然として足さない（理由: 判断がクローンから器へ移る）。窓（`limit`/`cursor`）は 2026-08-25 に人間の明示の「はい」を受けて足した。**`unreadable` は台帳の行が読めなかったもの（issue #296）。**「無い」でも「片付いた」でもない第3の状態**で、0件でも欄自体は必ず返る。**窓では絶対に切らない**（issue #296 が塞いだ穴——読めない行が2頁目以降から消える——が再び開くため）。`trimmedClosed` は保持上限を超えて物理削除された片付き行の累計件数（issue #416）。`unreadable` と同じく窓では切らない。契約を守れている実装は常に `0`（`CommitmentList` の doc、`packages/core/src/store.ts`）。`limit` / `cursor` のいずれかを明示すると頁の封筒（`total` / `nextCursor`）が応答へ載る。**明示しない既定の呼びは、この変更の前と応答が1バイトも変わらない**（opt-in。`.claude/skills/listing-and-detail/SKILL.md` の考え方と同じ——足すのは能力であって、既存の呼び手に新しい欄を押し付けない）。並びは固定（未了は `at` 昇順・片付きは `closedAt` 降順で、その順に連結）で、ここでは選べない——窓はその上に頁を切るだけである（`commitmentsCursorSchema` の doc）。各行の `respondedAt` は「放置」と「進行中」を見分けるための導出値（issue #1003）——クローンから人間への返答が日誌に見つかった最初の時刻で、無ければ欄自体が無い（＝並べ替え・絞り込みの新しい軸ではなく、既存の記録から読めることを1つ増やしただけ）。`packages/core/src/schema.ts` の `commitmentRespondedAt` を参照。各行の `activeManagerIds` も同じ目的の導出値（issue #1003 段2）——同じ会話の中で、この行より後に始まって、いまも走っている委譲の `managerId` を並べたもので、無ければ欄自体が無い。正確な1対1の紐付けではない（`packages/core/src/schema.ts` の `commitmentActiveDelegationIds` を参照）。",
         "responses": {
           "200": {
             "description": "台帳の中身。",
@@ -5519,6 +5519,12 @@
                             "type": "string",
                             "format": "date-time",
                             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "activeManagerIds": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
                           }
                         },
                         "required": ["id", "at", "origin", "body", "updatedAt"]
