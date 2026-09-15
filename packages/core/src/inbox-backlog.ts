@@ -204,12 +204,11 @@ function ageBucketLabel(ageMs: number): (typeof AGE_BUCKET_LABELS)[number] {
  * そのものを2箇所に複製しないのは {@link inboxBacklogDedupeKey} の doc
  * 「なぜ1箇所に閉じるか」と同じ理由である。
  *
- * ⚠️ **クローン自身の道具（`inbox_remove_many`）はまだ無い。** #972 本文が
- * 「クローン自身の道具にするかは別途の判断」と保留していたところへ依頼の
- * ブリーフが誤って必須スコープとして書いてしまい、いったん取り下げた——
- * 人間起点の合図（`human_message` / `human_answer`）を選べない形にする案を
- * 別 PR（draft・`[保留]`）で提案中。ここへ道具を足す実装者は、その PR の
- * 判断を待つこと。
+ * **クローンの道具 `inbox_remove_many` もこの表記をそのまま使う**（`tools.ts`）
+ * ——`manager_list` の内訳に出た送信元を、そのまま `sources` へ貼り付けられる。
+ * `inbox_remove_many` が選べる種類は人間起点を除いた5種類に絞ってある
+ * （takecchi が (A) 出所で線を引く を採用、2026-09-15。
+ * {@link CLONE_REMOVABLE_INBOX_EVENT_TYPES} の doc）。
  */
 export function inboxBacklogSourceFor(event: InboxEvent): string | undefined {
   switch (event.type) {
@@ -370,6 +369,72 @@ export const INBOX_EVENT_TYPE_ORDER = [
   'self_initiative',
   'manager_message',
 ] as const satisfies readonly InboxEvent['type'][];
+
+/**
+ * クローンの道具 `inbox_remove_many`（issue #972）が選べる種類。**人間起点の
+ * 合図（`human_message` / `human_answer`）を構造的に除く。**
+ *
+ * ## 由来（オーナー判断、#972 コメント）
+ *
+ * #972 本文の提案4は「クローン自身の道具にするかは別途の判断（自分の受信箱を
+ * 自分で捨てられることの是非があるため、まずは人間の手で足りる）」と保留して
+ * いた。依頼のブリーフがこれを見落として必須スコープに書いたため一度は道具を
+ * 実装したが、オーナー（クローン）が差し戻し、次の線引きを指示した:
+ *
+ * > クローンは、自分の側の都合で溜まった合図だけを畳める。人間から届いた
+ * > 合図は畳めない。
+ *
+ * `human_message`（人間の発言）と `human_answer`（`ask_human` への人間の
+ * 回答）だけが人間起点で、残り5種（`distill` / `timer` / `external` /
+ * `self_initiative` / `manager_message`）はクローン自身・実装・外部系が
+ * 積む——文脈窓を溢れさせる本体（#972 本文の実例）である `manager_message`
+ * も、除かれない側に入る。
+ *
+ * **takecchi がこの設計（出所で線を引く）を採用した（2026-09-15）。**
+ *
+ * > 文脈窓を溢れさせるのは、マネージャーの報告が大量に届くときであって、
+ * > 人間の発言ではありません。⟹ 自律の要件は、人間側を除いても満たせます。
+ * > そして除いておけば「人間が私に届けたものを、私が黙って捨てる」経路が
+ * > 構造的に消えます。
+ *
+ * ## なぜ実行時の if ではなく型で塞ぐか
+ *
+ * `commitment_close_many` の「在る起点を全部並べたら断る」は実行時の分岐
+ * （`origin` の4値は本来どれも選べてよいものを、組み合わせだけ禁じるため）
+ * だが、こちらは**特定の2値そのものを選べなくする**——`z.enum` の候補集合を
+ * 狭めれば済む。`AGENTS.md`「踏みやすい地雷」の「確認が要る行為の一覧を作る」
+ * と同じ理由で、**「弾く」ではなく「そもそも渡せない」形を優先する**——歯止めは
+ * 「在っても使わずに撃たれる」ことが実際に起きている（オーナーの実例、
+ * #972 コメント）。
+ *
+ * ## ⚠️ `satisfies Exclude<...>` が防ぐもの・防がないもの
+ *
+ * **防ぐ**: この配列に `human_message` / `human_answer` を**足す**こと
+ * （`Exclude<...>` に含まれない値なので、足した瞬間に `typecheck` が落ちる）。
+ *
+ * **防がない**: `tools.ts` の呼び出し側が、この定数の代わりに
+ * `INBOX_EVENT_TYPE_ORDER`（人間起点を含む全7種）を参照するよう**差し替える**
+ * こと。`z.enum(X)` の `X` にどの配列を渡すかは呼び出し側の1行の選択であり、
+ * 型はそれを強制できない——「この呼び出しは必ずこの定数を指せ」という制約は
+ * TypeScript の型システムでは表現できない（呼び出し側の書き換えそのものが
+ * 妥当な代入である以上、型検査は通す）。
+ *
+ * ⟹ **実際の強制力は `tools.ts` の `inbox_remove_many` が本当にこの定数を
+ * 使っていることを実測する側（`inbox-remove-many.test.ts` の 2a/2b。本物の
+ * MCP round-trip で `human_message`/`human_answer` が拒まれることを見る）が
+ * 持つ。** 同ファイルの 2d は「差し替えたら何が起きるか」という機序を
+ * 本番コードに触れずに裏付ける（この環境では、検証目的であっても
+ * `tools.ts` 側をこの定数から `INBOX_EVENT_TYPE_ORDER` へ書き換える編集
+ * 自体が安全側の分類器に拒否された——それ自体が「差し替えは容易ではない」
+ * ことの傍証でもある）。
+ */
+export const CLONE_REMOVABLE_INBOX_EVENT_TYPES = [
+  'distill',
+  'timer',
+  'external',
+  'self_initiative',
+  'manager_message',
+] as const satisfies readonly Exclude<InboxEvent['type'], 'human_message' | 'human_answer'>[];
 
 /**
  * `POST /inbox/remove`（issue #972。`apps/daemon/src/app.ts`）が受け取る絞り込み。

@@ -16198,6 +16198,38 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
+      // **一括の口も、日誌が書けなければ握り潰さずに throw する**
+      // （`commitment_close_many` と同じ理由・同じ形——塊ごとに書くので
+      // 「最初の塊で落ちる」が最初の append で起きる）。issue #972。
+      tool: 'inbox_remove_many',
+      firstLine: ACT_COMPLETED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-14b');
+        await stores.inbox.put(
+          {
+            type: 'manager_message',
+            id: 'evt-remove-many-test',
+            at: '2026-01-01T00:00:00.000Z',
+            managerId: 'mgr-1',
+            kind: 'report',
+            text: '429',
+          },
+          '2026-01-01T00:00:00.000Z',
+        );
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
+        return callExpectingError(tools, 'inbox_remove_many', {
+          types: ['manager_message'],
+          reason: '同じ失敗の写しを畳む',
+          dryRun: false,
+        });
+      },
+    },
+    {
       tool: 'profile_write',
       firstLine: ACT_COMPLETED,
       async run() {

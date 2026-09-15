@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { CLONE_REMOVABLE_INBOX_EVENT_TYPES } from './inbox-backlog.js';
 import { runnerLivenessSchema } from './runner-protocol.js';
 import { commitmentOriginSchema } from './schema.js';
 import { RESERVED_SCHEDULE_KINDS, RESERVED_SCHEDULE_KIND_ENV_KEYS } from './schedule.js';
@@ -98,6 +99,14 @@ const SUBJECTS: readonly EnumerationSubject[] = [
     tool: 'self_status',
     label: 'CLONE_RUNTIME_ITEM_LABELS（packages/core/src/self.ts）',
     source: () => CLONE_RUNTIME_ITEM_LABELS,
+  },
+  {
+    // **この道具の説明文も「選べる5種類を全部並べた呼びは断る」と名乗る。**
+    // `commitment_close_many` の commitmentOriginSchema と同じ形——
+    // `CLONE_REMOVABLE_INBOX_EVENT_TYPES` が増減した瞬間に説明文は嘘になる。
+    tool: 'inbox_remove_many',
+    label: 'CLONE_REMOVABLE_INBOX_EVENT_TYPES（packages/core/src/inbox-backlog.ts）',
+    source: () => CLONE_REMOVABLE_INBOX_EVENT_TYPES,
   },
 ];
 

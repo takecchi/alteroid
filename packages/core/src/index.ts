@@ -428,6 +428,7 @@ export {
  * 渡す形なので、ここから出るものは I/O をしない。
  */
 export {
+  CLONE_REMOVABLE_INBOX_EVENT_TYPES,
   INBOX_BACKLOG_LOUD_THRESHOLD,
   INBOX_EVENT_TYPE_ORDER,
   inboxBacklogDedupeKey,
