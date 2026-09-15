@@ -850,6 +850,32 @@ describe('AGENTS.md の参照の形（#369）', () => {
     ).toEqual([]);
   });
 
+  it('現状: 段A（AGENTS.md 専用）の解決器 isRepoFile は裸のファイル名（schema.ts:500-503）を検出しない（#784）', () => {
+    // 経緯（#784）: 直上の歯が使っている `isRepoFile`（このファイル内の関数。
+    // リポジトリ相対パスの完全一致だけを `statSync` で確かめる）は、
+    // `clone.ts:505` のような**裸のファイル名**を1件も解決できない
+    // （#760 の実測: 30件中25件・83%が裸のファイル名）。AGENTS.md
+    // 「リポジトリの約束」節はいままさにこの形（`schema.ts:500-503`）で
+    // 過去の実測を引用しており、これが段Aの死角そのものである——本来なら
+    // `.claude/**` / `*/src/**` 等を測る段B（`isRepoFileOrBasename`。#760）
+    // なら拾える形なのに、段Aは1件も見ない。ここでは、その死角を
+    // 「いまの挙動」としていったん固定する（AGENTS.md「テストを弱めずに
+    // 直す」の「現行の欠陥を仕様として固定しているテストは反転させてよい」）。
+    //
+    // この行が実在することは、下のテストが独立に確認する
+    // （`grep -Fn -- 'schema.ts:500-503' AGENTS.md` が1件当たること）。
+    const found = findLineNumberCitations(prose, isRepoFile);
+    expect(found.some((c) => c.token === 'schema.ts:500-503')).toBe(false);
+  });
+
+  it('直上のテストが前提にしている行が、いま現物の AGENTS.md に実在する（#784）', () => {
+    // 上のテストは「見つからない」ことを主張するテストなので、対象の文言
+    // そのものが消えていても同じ結果（false）になる——それでは何も測って
+    // いないのと区別が付かない。ここで「見る対象がまだそこに在る」ことを
+    // 独立に確認する（見る対象が消えたら、こちらが先に落ちて気づける）。
+    expect(agentsMd.split('\n').filter((l) => l.includes('schema.ts:500-503')).length).toBe(1);
+  });
+
   it('「N行目」で指さない', () => {
     const found = findRowNumberCitations(prose);
     expect(
