@@ -655,10 +655,25 @@ jobs:
           NO_ATTRIBUTION_TRAILERS_PR_NUMBER: ${{ github.event.pull_request.number }}
 
   # **`no-attribution-trailers` を required contexts（`.github/required-status-checks.json`）
-  # には入れていない。** 判定は決定的（部分文字列一致）で `base-overlap` の
-  # ヒューリスティックとは性質が違うので required にする価値はあるが、
-  # required にするには branch protection 側の設定（administration 権限）が
-  # 要り、それは repo の管理者が GitHub 上で行う操作であってこの PR の範囲外
-  # である。**手順は上の `base-overlap` の「将来 required にしたくなったときの
-  # 手順」と同じ形**（protection を先に変え、宣言ファイルとこの doc を追随
-  # させる）。
+  # に入れた（2026-09-15）。** マネージャーが branch protection の
+  # `required_status_checks` を `PATCH` して `contexts` だけを触った
+  # （`strict` / `allow_force_pushes` / `allow_deletions` は動いていない）。
+  # 判定は決定的（部分文字列一致）で `base-overlap` のヒューリスティックとは
+  # 性質が違うので、required にする価値があると判断された。
+  #
+  # **戻し方（1行）:**
+  #
+  # ```
+  # $ gh api repos/takecchi/alteroid/branches/main/protection/required_status_checks \
+  #     -X PATCH -f 'contexts[]=ci' -f 'contexts[]=image'
+  # ```
+  #
+  # ⚠️ **観測された副作用**: **この門より前に枝を切った PR は、新しい run が
+  # 起きるまで required を満たせない。** 実測（2026-09-15）: PR #999
+  # （`[保留]`。マージ対象ではないので実害は無い）が
+  # `mergeable=MERGEABLE state=BLOCKED` になった。⟹ **古い枝で詰まったら
+  # push か rebase で run を起こし直すこと。**
+  #
+  # ⚠️ **確かめていないこと**: 古い枝の新しい run で、この門が実際に走るか
+  # （`success` を返すか）は未検証。`pull_request` の workflow は merge ref
+  # から取られるので走るはず、というのは推論であって実測ではない。
