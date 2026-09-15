@@ -39,7 +39,8 @@ export const memory = pgTable('memory', {
    *
    * `humanTouchedAt`: 最後に `cause:'human'` の書き込みが記録された時刻。
    * **一度立ったら降ろさない**（クローンの書き込みで null に戻さない — 更新対象
-   * に含めないことで保証する。`persona.ts` の `#updateHash` を見よ）。
+   * に含めないことで保証する。fs 版は `persona.ts` の `#writeNow` を、pg 版は
+   * 同じファイルの `write()` / `append()` を見よ）。
    */
   humanTouchedAt: timestamp('human_touched_at', { withTimezone: true, mode: 'date' }),
   /**
