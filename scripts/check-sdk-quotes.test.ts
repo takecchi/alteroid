@@ -231,6 +231,56 @@ describe('check-sdk-quotes: findQuoteDefects', () => {
     ].join('\n');
     expect(findQuoteDefects(quotes, sdkTypesText)).toEqual([]);
   });
+
+  /**
+   * #995（#793 の残り）: `UNION_ENUMERATION_PATTERN` は「引用そのものが2値以上を
+   * 自己完結で列挙している」形だけを境界チェック（`isUnionTailDrift`）に回し、
+   * **単一値だけを引く引用**（`overageDisabledReason` の実例）は対象外にする。
+   *
+   * PR #990 の時点で確かめていたのは「union の**先頭**の値1つだけを引く」実例
+   * （`overageDisabledReason` 自身）だけで、「先頭以外（中間・末尾）の値を単独で
+   * 引く形が同じように安全か」は自動テストとして固定されていなかった
+   * （申告どおり「実物での確認はこの1件のみ」）。
+   *
+   * **単一値の引用は、union のどこにあっても安全である。** 理由は主張の種類が
+   * 違うことにある——単一値の引用は「この値が union の中に存在する」という
+   * 主張（要素の存在）であって、境界チェックが守る「これが union の全部だ」
+   * という主張（集合の完結性）ではない。要素の存在は union が伸びても揺るがない
+   * ので、境界チェックを掛けなくても正しい。**その値自体が消える・改名される
+   * 場合は、単純な部分文字列一致（`findQuoteDefects` の基礎チェック）がそのまま
+   * 検出する**——ここは `isUnionTailDrift` を経由していない。
+   *
+   * 全77件を実測した結果、`overageDisabledReason` 以外に「単一値だけを引く」形の
+   * 引用は repo 内に存在しなかった（#995 の調査）。このテストは、その形が
+   * 将来もう1つ増えても安全であり続けることを、位置（先頭・中間・末尾）を
+   * 変えて固定する。
+   */
+  it.each([
+    ['先頭', "'a'"],
+    ['中間', "'c'"],
+    ['末尾', "'e'"],
+  ])(
+    '単一値の引用（union の%s の値）は union が伸びても欠陥にならない（#995）',
+    (_label, quote) => {
+      const quotes = quoteOf([`// [sdk-verbatim FakeUnion5]`, `// > ${quote}`].join('\n'));
+      const base = "export declare type FakeUnion5 = 'a' | 'b' | 'c' | 'd' | 'e';";
+
+      // 伸びる前の宣言そのもの。
+      expect(findQuoteDefects(quotes, base)).toEqual([]);
+      // 末尾に新しい値が足されても（引用した値の位置に関わらず）安全。
+      expect(findQuoteDefects(quotes, base.replace(';', " | 'f';"))).toEqual([]);
+      // 先頭に新しい値が足されても（引用した値の位置に関わらず）安全。
+      expect(findQuoteDefects(quotes, base.replace("'a'", "'z' | 'a'"))).toEqual([]);
+    },
+  );
+
+  it('⚠️ ただし引用した値そのものが消えれば、単一値の引用でも欠陥になる（#995: 部分文字列一致がそのまま拾う）', () => {
+    const quotes = quoteOf([`// [sdk-verbatim FakeUnion5]`, `// > 'c'`].join('\n'));
+    const withoutC = "export declare type FakeUnion5 = 'a' | 'b' | 'd' | 'e';";
+    const defects = findQuoteDefects(quotes, withoutC) as Defect[];
+    expect(defects).toHaveLength(1);
+    expect(defects[0].reason).toContain('当たらない');
+  });
 });
 
 describe('check-sdk-quotes: 引用行の探し方（空行を跨ぐ）', () => {
