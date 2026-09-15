@@ -12508,6 +12508,188 @@ describe('台帳で片付け済みの報告には印が付く（#391）', () => 
 });
 
 /**
+ * #394 の鏡像の穴を埋める（issue #871）: `report` だけが台帳（`commitment_close`）
+ * を見て「もう片付けた」を出しており、`question` / `permission` はそれを一切
+ * 見ていなかった —— クローンが `commitment_close` でその行を閉じても、
+ * `question` / `permission` は「返事をするまで止まっている」の全文を出し続けた。
+ *
+ * **`closedAt` には一切触れない。** ここで測るのは表示・通知の層だけであり、
+ * 「いつ台帳から消えるか」（`commitment_close` だけが閉じる、という #1003 の
+ * 保証）は変えていない —— 3本とも `commitments.get` を差し替えるだけで、
+ * `commitment_close` そのものは1度も呼んでいない。
+ *
+ * 3経路（`report` / `question` / `permission`）それぞれで、台帳が閉じていれば
+ * 通知が出ることを測る。`report` は #391 の既存の歯がそのまま守っているので、
+ * ここでは追加で「同じ土台（`storesWithGet` と同じ形）」から3経路を通す形にし、
+ * 非対称が本当に消えたことを1つの describe の中で並べて確かめる。
+ */
+describe('質問・許可確認にも、台帳で片付け済みなら印が付く（#871）', () => {
+  /** `commitments.get` だけを差し替えた `Stores`。他の面は本物のまま。 */
+  function storesWithGet(get: (id: string) => Promise<unknown>): Stores {
+    const base = createMemoryStores();
+    return {
+      ...base,
+      commitments: { ...base.commitments, get: get as Stores['commitments']['get'] },
+    };
+  }
+
+  /** 台帳の1件を組み立てる。`closedAt` を渡さなければ未了。 */
+  function commitment(fields: { closedAt?: string; closedReason?: string }) {
+    return {
+      id: 'evt-871',
+      at: '2026-09-15T00:00:00.000Z',
+      origin: 'manager' as const,
+      body: '[question] 本文',
+      ...fields,
+    };
+  }
+
+  /**
+   * `question` / `permission` の1件を投げ、届いた本文を拾う。
+   *
+   * **`manager.ts` の本物の `ManagerPool` を通す**（`setupWithManager` を
+   * 使わない）——ここで測りたいのは「マネージャーを一度も起こしていない
+   * （＝ `waiting` にその managerId 自体が居ない＝ `liveness` は `'unknown'`）
+   * 状態でも、台帳が閉じていれば印が付く」ことそのものである。`liveness` が
+   * `'settled'` の経路（#394 の既存の歯）と混ぜないための選択。
+   */
+  async function deliverConfirmation(
+    kind: 'question' | 'permission',
+    stores: Stores,
+    requestId = 'req-871',
+  ): Promise<string> {
+    const s = setup(undefined, stores);
+    s.clone.post({
+      type: 'manager_message',
+      id: 'evt-871',
+      at: new Date().toISOString(),
+      managerId: 'mgr-871',
+      kind,
+      text: `本文の前半（${kind}）。……そして後半に依頼が入っている。`,
+      requestId,
+    });
+    const inputs = (): string[] => (s.calls[0] as FakeCall).inputs;
+    const delivered = await expect
+      .poll(() => inputs().find((input) => input.includes('本文の前半')), { timeout: 3000 })
+      .toBeTruthy()
+      .then(() => inputs().find((input) => input.includes('本文の前半')) ?? '');
+    await s.clone.stop();
+    return delivered;
+  }
+
+  /**
+   * **この歯が単独で守るもの**: `question` が台帳で閉じられていれば印が付き、
+   * **答え直せとは言わない**こと（`manager_send` で答えたかどうかは問わない
+   * ——`liveness` は `'unknown'` のままで、それでも印が出る）。
+   */
+  it('閉じた question には印が付き、答え直せとは言わない', async () => {
+    const delivered = await deliverConfirmation(
+      'question',
+      storesWithGet(async (id) =>
+        id === 'evt-871'
+          ? commitment({
+              closedAt: '2026-09-15T00:05:00.000Z',
+              closedReason: 'もう要らないので閉じる',
+            })
+          : null,
+      ),
+    );
+
+    expect(delivered).toContain('この質問は台帳で既に片付けている');
+    expect(delivered).toContain('もう要らないので閉じる');
+    expect(delivered).toContain('答え直す必要は無い');
+    // 答え直せという指示（従来の「返事をするまで…止まっている」の全文）が
+    // 1文字も無いこと。
+    expect(delivered).not.toContain('返事をするまで');
+    expect(delivered).not.toContain('manager_send');
+    expect(delivered).not.toContain('ask_human');
+  });
+
+  /**
+   * **この歯が単独で守るもの**: `permission` でも同じく印が付くこと
+   * （`question` だけの特別扱いにしない）。
+   */
+  it('閉じた permission にも印が付き、答え直せとは言わない', async () => {
+    const delivered = await deliverConfirmation(
+      'permission',
+      storesWithGet(async (id) =>
+        id === 'evt-871' ? commitment({ closedAt: '2026-09-15T00:05:00.000Z' }) : null,
+      ),
+    );
+
+    expect(delivered).toContain('この実行の許可確認は台帳で既に片付けている');
+    expect(delivered).toContain('答え直す必要は無い');
+    expect(delivered).not.toContain('返事をするまで');
+  });
+
+  /**
+   * **この歯が単独で守るもの**: 閉じていない質問・許可確認には印を付けず、
+   * これまでどおり全文の指示（`manager_send` / `ask_human`）が出ること
+   * ——この変更が「常に答え直さなくてよいと言う」側へ倒れていないことを
+   * 確かめる回帰。
+   */
+  it('閉じていない question / permission には印が付かず、従来どおり全文が出る', async () => {
+    const stores = storesWithGet(async (id) => (id === 'evt-871' ? commitment({}) : null));
+
+    const question = await deliverConfirmation('question', stores, 'req-871-q');
+    expect(question).not.toContain('既に片付けている');
+    expect(question).toContain('返事をするまで');
+    expect(question).toContain('manager_send');
+
+    const permission = await deliverConfirmation('permission', stores, 'req-871-p');
+    expect(permission).not.toContain('既に片付けている');
+    expect(permission).toContain('返事をするまで');
+  });
+
+  /**
+   * **この歯が単独で守るもの**: 台帳が引けなかったら、質問・許可確認でも
+   * 安全側（雑音側）へ倒れ、印を付けないこと（#391 の同名の歯と対）。
+   */
+  it('台帳が引けなかったら question にも印を付けない（unknown は雑音側へ）', async () => {
+    const delivered = await deliverConfirmation(
+      'question',
+      storesWithGet(() => Promise.reject(new Error('台帳が読めない'))),
+    );
+
+    expect(delivered).not.toContain('既に片付けている');
+    expect(delivered).toContain('返事をするまで');
+  });
+
+  /**
+   * **この歯が単独で守るもの**: `report` 経路は今回の変更でも動き続けること
+   * ——3経路のうち、`report` だけを取り残していないかを同じ describe の中で
+   * 確かめる（#391 の既存の歯とは別に、ここでも1本持たせる）。
+   */
+  it('report 経路も同じ台帳から印を出す（3経路そろって対称）', async () => {
+    const s = setup(
+      undefined,
+      storesWithGet(async (id) =>
+        id === 'evt-871-report'
+          ? commitment({ closedAt: '2026-09-15T00:05:00.000Z', closedReason: '報告側の確認' })
+          : null,
+      ),
+    );
+    s.clone.post({
+      type: 'manager_message',
+      id: 'evt-871-report',
+      at: new Date().toISOString(),
+      managerId: 'mgr-871',
+      kind: 'report',
+      text: '本文の前半（report）。……そして後半に依頼が入っている。',
+    });
+    const inputs = (): string[] => (s.calls[0] as FakeCall).inputs;
+    const delivered = await expect
+      .poll(() => inputs().find((input) => input.includes('本文の前半')), { timeout: 3000 })
+      .toBeTruthy()
+      .then(() => inputs().find((input) => input.includes('本文の前半')) ?? '');
+    await s.clone.stop();
+
+    expect(delivered).toContain('この報告は台帳で既に片付けている');
+    expect(delivered).toContain('報告側の確認');
+  });
+});
+
+/**
  * マネージャーの報告に「受け取ってから、どれだけ経ったか」を添える（#562）。
  *
  * **実害**: 3件とも、クローンが読んだ時点で対象 PR は既に MERGED だった

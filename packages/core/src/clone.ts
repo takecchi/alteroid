@@ -4750,12 +4750,14 @@ class Clone implements CloneHost {
           event.requestId !== undefined
             ? await confirmationLiveness(this.#managers, event.managerId, event.requestId)
             : 'unknown';
-        // **報告は逆に、台帳を引く**（#391。`reportSettlement` の doc）。質問側と
-        // 材料が違うので、判定も別に取る。
-        const settlement: ReportSettlement =
-          event.kind === 'report'
-            ? await reportSettlement(this.#stores.commitments, event.id)
-            : { kind: 'unknown' };
+        // **台帳は kind を問わず引く**（#391 は `report` 限定だったが、#871 で
+        // `question` / `permission` にも広げた）。台帳の id は `event.id` その
+        // もの（`commitmentFor` の `manager_message` 分岐）で kind に依存しない
+        // ので、同じ関数がそのまま使える（`reportSettlement` の doc「#871」）。
+        const settlement: ReportSettlement = await reportSettlement(
+          this.#stores.commitments,
+          event.id,
+        );
         // **`now` はここで1度だけ取り、`managerPrompt` の中では取らない**（#562）。
         // `managerPrompt` を純関数のまま保つ ——歯に `now` を固定して渡せる形で
         // なければ、経過を測るテストが時刻に依存して揺れる。
@@ -7429,7 +7431,12 @@ export function humanTurnText(events: HumanMessage[]): string {
 type ConfirmationLiveness = 'live' | 'settled' | 'unknown';
 
 /**
- * 報告（`kind === 'report'`）が、台帳で既に片付けられているかの3値（#391）。
+ * 台帳の項目（`event.id` で引く1件）が、既に片付けられているかの3値（#391）。
+ *
+ * **当初は `kind === 'report'` 限定だったが、#871 で `question` / `permission`
+ * にも広げた。** `commitmentFor` は `manager_message` のどの `kind` でも
+ * `id: event.id` で同じ台帳行を積むので、この3値自体は kind を問わない
+ * （kind ごとに違うのは「誰がこれを見るか」であって、値の意味ではない）。
  *
  * **2値にしない**（AGENTS.md「静かに失敗する道具」——判定できない場合が
  * どちらかへ黙って倒れる）。`'unknown'` は**安全側＝雑音側**（＝ふつうに全文を
@@ -7437,7 +7444,7 @@ type ConfirmationLiveness = 'live' | 'settled' | 'unknown';
  *
  * ## `'open'` は「まだ読んでいない」を意味しない
  *
- * クローンが閉じずに読んだ報告は `'open'` のままである。**この3値が保証するのは
+ * クローンが閉じずに読んだ行は `'open'` のままである。**この3値が保証するのは
  * 「閉じたものには印が付く」までであって、「印が無ければ未読」ではない。**
  */
 type ReportSettlement =
@@ -7478,6 +7485,17 @@ const CLOSED_REASON_EXCERPT = 120;
  *
  * 追加の I/O は無い —— 台帳の id は `event.id` そのもの（{@link commitmentFor} の
  * `base`）で、`closedAt` / `closedReason` は `get(id)` の戻り値に載っている。
+ *
+ * ## #871 —— `question` / `permission` にも同じ判定を足す
+ *
+ * 質問・許可確認の「もう要らない」判定（`waiting` を見る {@link confirmationLiveness}）は
+ * `manager_send` で答えたことしか見ておらず、**クローンが `commitment_close` で
+ * その行を閉じても、何も変わらなかった**（#394 が report 側だけに付けた印の、
+ * 鏡像の穴）。材料を増やすだけで、この関数の作りは変えない —— `commitmentFor` は
+ * `manager_message` のどの `kind` でも `id: event.id` で同じ台帳行を積むので、
+ * `question` / `permission` の `event.id` を渡しても、そのまま同じ答えが返る。
+ * 呼び出し元（`managerPrompt`）が `liveness` と `settlement` の**両方**を見て、
+ * どちらかが「もう要らない」と言えば答え直せとは言わない、という形にする。
  */
 async function reportSettlement(
   commitments: Stores['commitments'],
@@ -7497,28 +7515,48 @@ async function reportSettlement(
 }
 
 /**
- * 片付け済みの報告に添える1行（#391）。**閉じた理由の先頭を一緒に運ぶ。**
- *
- * ## なぜ理由まで出すのか
+ * 「閉じた理由」の括弧書きを組み立てる（#391 / #871 共通）。
  *
  * **誤って閉じたとき、誤りは「閉じた理由」に出る。** 実例（2026-08-24、台帳
  * `801f5ee7`）: クローンが「判断は求めていない」と書いて閉じたが、**本文の後半に
  * 依頼が入っていた。** 印だけでは「片付け済みだから読まなくてよい」と読めてしまい、
  * その誤りに気づく手がかりが1つも無い。
  *
- * **ただし本文の代わりにはならない。** 上の実例でクローンが気づけたのは本文の
- * 後半を読み直したからであって、閉じた理由を見たからではない。**だから本文は
- * 短くしない**（{@link managerPrompt} の doc）。
+ * `closedReason` が無ければ空文字を返す——呼び出し側はそれを括弧ごと出さない
+ * （取れない軸に値を作らない）。
+ */
+function closedReasonParenthetical(settlement: Extract<ReportSettlement, { kind: 'closed' }>): string {
+  return settlement.closedReason === undefined
+    ? ''
+    : `（閉じた理由: 「${excerptLine(settlement.closedReason, CLOSED_REASON_EXCERPT)}」）`;
+}
+
+/**
+ * 片付け済みの報告に添える1行（#391）。**閉じた理由の先頭を一緒に運ぶ。**
  *
- * `closedReason` が無ければ括弧ごと出さない（取れない軸に値を作らない）。
+ * **ただし本文の代わりにはならない。** 上の実例（`closedReasonParenthetical` の
+ * doc）でクローンが気づけたのは本文の後半を読み直したからであって、閉じた理由を
+ * 見たからではない。**だから本文は短くしない**（{@link managerPrompt} の doc）。
  */
 function closedReportNotice(settlement: ReportSettlement): string | null {
   if (settlement.kind !== 'closed') return null;
-  const why =
-    settlement.closedReason === undefined
-      ? ''
-      : `（閉じた理由: 「${excerptLine(settlement.closedReason, CLOSED_REASON_EXCERPT)}」）`;
-  return `この報告は台帳で既に片付けている${why}。読み直す必要は無い。`;
+  return `この報告は台帳で既に片付けている${closedReasonParenthetical(settlement)}。読み直す必要は無い。`;
+}
+
+/**
+ * 片付け済みの質問・許可確認に添える1行（#871）。**`closedReportNotice` の姉妹版。**
+ *
+ * ## なぜ別の関数にするのか（文言を使い回さない）
+ *
+ * 報告の印は「読み直す必要は無い」で終わる——報告は読むものだからである。
+ * 質問・許可確認は答えるものなので、同じ語尾を使うと嘘になる。**`label`
+ * （「質問」／「実行の許可確認」）で主語を差し替え、語尾も「答え直す必要は無い」
+ * にする。** `closedReportNotice` 自身の出力・doc は変えていない——既存の
+ * report 向けの歯（#391）が保証している文言はそのまま残る。
+ */
+function closedConfirmationNotice(settlement: ReportSettlement, label: string): string | null {
+  if (settlement.kind !== 'closed') return null;
+  return `この${label}は台帳で既に片付けている${closedReasonParenthetical(settlement)}。答え直す必要は無い。`;
 }
 
 /**
@@ -7638,6 +7676,10 @@ async function confirmationLiveness(
  * `liveness` は `kind` が `question` / `permission` のときだけ意味を持つ
  * （`confirmationLiveness` の doc）。`report` では読まない。
  *
+ * `settlement` は **すべての `kind` で読む**（#871。当初は `report` 限定
+ * だった——`reportSettlement` の doc「#871 —— question / permission にも
+ * 同じ判定を足す」）。
+ *
  * `now` は `report` のときだけ意味を持つ（{@link describeReportAge}）。
  * **純関数として保つため、ここでは `new Date()` を呼ばない** ——呼び出し元
  * （`#handle` の `'manager_message'` 分岐）から渡す。既定値は本番の呼び出しを
@@ -7676,13 +7718,25 @@ function managerPrompt(
   // 二重に答え、`manager_send` が「その確認は待っていない」と弾く（実測の
   // バグそのもの）。`liveness === 'unknown'` はここへは来ない——確かめられな
   // かった側は下の「生きている」と同じ文言（安全側＝雑音）へ倒す。
-  if (liveness === 'settled') {
+  //
+  // **#871: 台帳（`settlement`）が既に閉じているときも、同じく答え直せと
+  // 言わない。** これまでこの分岐は `liveness`（`manager_send` で答えたか）
+  // しか見ておらず、クローンが `commitment_close` でこの行を閉じても
+  // 何も変わらなかった——`report` 側にだけ付いていた印（#391）の鏡像の穴
+  // （#394 の issue が名指ししたもの）。`liveness` と `settlement` は
+  // 別々の材料から来る別々の判定なので、**どちらか一方が「もう要らない」と
+  // 言えば足りる**（両方が真である必要は無い）。
+  const closedConfirmation = closedConfirmationNotice(settlement, label);
+  if (liveness === 'settled' || closedConfirmation !== null) {
     return [
       `${head}（${label}）`,
       '',
       event.text,
       '',
-      'この確認はもう待たれていない（既に解決したか、マネージャーが終わっている）。答え直す必要は無い。',
+      ...(liveness === 'settled'
+        ? ['この確認はもう待たれていない（既に解決したか、マネージャーが終わっている）。答え直す必要は無い。']
+        : []),
+      ...(closedConfirmation === null ? [] : [closedConfirmation]),
     ].join('\n');
   }
 
