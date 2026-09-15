@@ -115,6 +115,8 @@ export const KEY = {
   tokens: { type: 'tokens' } as const,
   credentials: { type: 'credentials' } as const,
   dropped: { type: 'dropped' } as const,
+  archive: { type: 'archive' } as const,
+  archiveSessions: { type: 'archiveSessions' } as const,
 };
 
 /** デーモンが応答するか。接続先が合っているかの唯一の手がかりでもある。 */
@@ -408,6 +410,27 @@ export function useCredentials() {
 export function useDropped() {
   const api = useApi();
   return useSWR(KEY.dropped, () => api.api.GET('/dropped').then(unwrap));
+}
+
+/**
+ * アーカイブ済みセッション生ログの一覧（`GET /archive`）。CLI の `/archive`
+ * と同じ口（#698）。**HTTP の口は上限を持たない**（意図——人間はブラウザで
+ * 扱えるので、ここを締めると人間側の能力が落ちる。
+ * `.claude/skills/listing-and-detail/SKILL.md`「HTTP の口は上限を持たない」）。
+ */
+export function useArchive() {
+  const api = useApi();
+  return useSWR(KEY.archive, () => api.api.GET('/archive').then(unwrap));
+}
+
+/**
+ * `sessionId` ごとの行数・使用量の集計（`GET /archive/sessions`、#698）。
+ * 「1本が何度積まれているか」を個々の大きさより先に見せる——調査の動機
+ * そのもの（`apps/cli/src/chat.ts` の `/archive sessions` と同じ口）。
+ */
+export function useArchiveSessions() {
+  const api = useApi();
+  return useSWR(KEY.archiveSessions, () => api.api.GET('/archive/sessions').then(unwrap));
 }
 
 /**

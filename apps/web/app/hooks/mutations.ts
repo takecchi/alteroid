@@ -549,3 +549,34 @@ export function useEndConversation() {
     [api, mutate],
   );
 }
+
+/**
+ * アーカイブ済み生ログの本文を1件消す（`DELETE /archive/:id`。tombstone——
+ * 行そのものは残る。CLI の `/archive remove` / クローンの道具 `archive_remove`
+ * と同じ口。#698 / #776）。
+ *
+ * **409 をここで握り潰さない。** 走行中のマネージャーの退避は既定で拒まれる
+ * ——`overrideReason` を渡さずに呼んで 409 が返ったら、`unwrap` がそのまま
+ * `ApiError`（`status === 409`、`message` はサーバの断り文言）を投げる。
+ * 呼び出し側（`routes/archive.tsx`）はそれを捕まえて理由の入力欄を出し、
+ * 理由付きでこの関数をもう一度呼ぶ——黙って失敗させないための形は画面側が持つ。
+ */
+export function useRemoveArchive() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (id: string, overrideReason?: string) => {
+      const result = await api.api
+        .DELETE('/archive/{id}', {
+          params: {
+            path: { id },
+            query: overrideReason === undefined ? {} : { overrideReason },
+          },
+        })
+        .then(unwrap);
+      await Promise.all([mutate(KEY.archive), mutate(KEY.archiveSessions)]);
+      return result;
+    },
+    [api, mutate],
+  );
+}

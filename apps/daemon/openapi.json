@@ -8534,6 +8534,13 @@
         },
         "parameters": [
           {
+            "in": "query",
+            "name": "overrideReason",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "schema": {
               "type": "string"
             },

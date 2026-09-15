@@ -1,5 +1,6 @@
 import {
   Activity,
+  Archive as ArchiveIcon,
   BellRing,
   BookText,
   Brain,
@@ -43,6 +44,8 @@ const NAV = [
   { to: '/tokens', label: '認証トークン', icon: KeyRound, end: false },
   { to: '/env-vars', label: '環境変数', icon: SlidersHorizontal, end: false },
   { to: '/dropped', label: '握り潰しの跡', icon: Footprints, end: false },
+  // 可観測性の最下段——`/dropped` の隣（#776）。
+  { to: '/archive', label: 'アーカイブ', icon: ArchiveIcon, end: false },
   { to: '/memory', label: '記憶', icon: Brain, end: false },
   { to: '/schedule', label: 'スケジュール', icon: CalendarClock, end: false },
   { to: '/settings', label: '設定', icon: Settings, end: false },

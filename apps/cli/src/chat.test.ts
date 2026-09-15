@@ -811,6 +811,10 @@ function stubClient(
     archiveReadStatus?: number;
     /** `GET /archive/:id` の応答本体（生テキスト）。既定は空文字。 */
     archiveReadBody?: string;
+    /** `DELETE /archive/:id` の応答コード。既定は 200（#776）。 */
+    archiveRemoveStatus?: number;
+    /** `DELETE /archive/:id` の応答本体。既定は成功の最小形。 */
+    archiveRemoveBody?: unknown;
   } = {},
 ) {
   const calls: { route: string; args: unknown }[] = [];
@@ -977,6 +981,19 @@ function stubClient(
             status,
             text: () => Promise.resolve(options.archiveReadBody ?? ''),
           });
+        },
+        $delete: (args: unknown) => {
+          calls.push({ route: 'DELETE /archive/:id', args });
+          const status = options.archiveRemoveStatus ?? 200;
+          return Promise.resolve(
+            reply(
+              status,
+              options.archiveRemoveBody ??
+                (status === 200
+                  ? { ok: true, id: 'sess-1.jsonl', bytes: 1, alreadyRemoved: false }
+                  : {}),
+            ),
+          );
         },
       },
     },
@@ -3153,5 +3170,112 @@ describe('chat の /archive', () => {
 
     expect(read()).toContain('RAW LOG');
     expect(calls.map((call) => call.route)).toContain('GET /archive/:id');
+  });
+
+  /**
+   * `/archive remove <id>`（#776）。HTTP（`DELETE /archive/:id`）・クローンの
+   * 道具（`archive_remove`）に在った「消す」を、人間の CLI へも出す。
+   */
+  describe('/archive remove', () => {
+    it('引数なしは使い方を出すだけで叩かない', async () => {
+      const read = captureStdout();
+      const { calls, client } = stubClient();
+
+      await runSlashCommand('/archive remove', client, emptyListed());
+
+      expect(read()).toContain('使い方');
+      expect(calls.map((call) => call.route)).not.toContain('DELETE /archive/:id');
+    });
+
+    it('消せたら結果（バイト数）を出す。理由を付けずに叩く', async () => {
+      const read = captureStdout();
+      const { calls, client } = stubClient({
+        archiveRemoveBody: { ok: true, id: 'sess-1.jsonl', bytes: 1234, alreadyRemoved: false },
+      });
+
+      await runSlashCommand('/archive remove sess-1.jsonl', client, emptyListed());
+
+      expect(read()).toContain('消しました');
+      expect(read()).toContain('1234バイト');
+      const call = calls.find((entry) => entry.route === 'DELETE /archive/:id');
+      expect(call).toBeDefined();
+      const args = call?.args as { param: { id: string }; query: Record<string, unknown> };
+      expect(args.param.id).toBe('sess-1.jsonl');
+      // 理由を書かなかったときは空文字を送らない（`/stop` と同じ約束）。
+      expect(args.query).toStrictEqual({});
+    });
+
+    it('前から消されていた（alreadyRemoved）はその旨を出す', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({
+        archiveRemoveBody: { ok: true, id: 'sess-1.jsonl', bytes: 1234, alreadyRemoved: true },
+      });
+
+      await runSlashCommand('/archive remove sess-1.jsonl', client, emptyListed());
+
+      expect(read()).toContain('前から消されていました');
+    });
+
+    it('無い id は 404。「消した」とは言わない', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({ archiveRemoveStatus: 404 });
+
+      await runSlashCommand('/archive remove no-such-id.jsonl', client, emptyListed());
+
+      const text = read();
+      expect(text).toContain('その生ログはありません');
+      expect(text).not.toContain('消しました');
+    });
+
+    /**
+     * ⭐ 依頼の中心——409（走行中マネージャーの退避）を**黙って失敗させない**。
+     * サーバの断り文言をそのまま出し、理由を付けて打ち直す形を案内する。
+     */
+    it('走行中マネージャーの退避は409。サーバの断り文言と、理由付きで打ち直す案内を出す', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({
+        archiveRemoveStatus: 409,
+        archiveRemoveBody: {
+          error:
+            '走行中のマネージャー mgr-1 の退避なので消せない（overrideReason クエリ引数に理由を書けば通せる）',
+        },
+      });
+
+      await runSlashCommand('/archive remove sess-1.jsonl', client, emptyListed());
+
+      const text = read();
+      expect(text).toContain('走行中のマネージャー mgr-1 の退避なので消せない');
+      expect(text).toContain('/archive remove sess-1.jsonl <理由>');
+      expect(text).not.toContain('消しました');
+    });
+
+    it('理由を付けて打ち直すと overrideReason を送り、override した旨を出す', async () => {
+      const read = captureStdout();
+      const { calls, client } = stubClient({
+        archiveRemoveBody: {
+          ok: true,
+          id: 'sess-1.jsonl',
+          bytes: 1234,
+          alreadyRemoved: false,
+          override: { managerId: 'mgr-1', reason: '本番障害の調査で緊急に消す必要があった' },
+        },
+      });
+
+      await runSlashCommand(
+        '/archive remove sess-1.jsonl 本番障害の調査で緊急に消す必要があった',
+        client,
+        emptyListed(),
+      );
+
+      const text = read();
+      expect(text).toContain('override');
+      expect(text).toContain('mgr-1');
+      expect(text).toContain('本番障害の調査で緊急に消す必要があった');
+      const call = calls.find((entry) => entry.route === 'DELETE /archive/:id');
+      const args = call?.args as { query: Record<string, unknown> };
+      expect(args.query).toStrictEqual({
+        overrideReason: '本番障害の調査で緊急に消す必要があった',
+      });
+    });
   });
 });

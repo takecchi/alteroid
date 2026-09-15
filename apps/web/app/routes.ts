@@ -27,6 +27,7 @@ export default [
     route('tokens', 'routes/tokens.tsx'),
     route('env-vars', 'routes/env-vars.tsx'),
     route('dropped', 'routes/dropped.tsx'),
+    route('archive', 'routes/archive.tsx'),
     route('schedule', 'routes/schedule.tsx'),
     route('settings', 'routes/settings.tsx'),
     route('*', 'routes/not-found.tsx'),

@@ -558,6 +558,20 @@ const journalStreamQuery = z.object({
   /** カンマ区切りの種別。指定しなければ全部流れる。 */
   type: z.string().optional(),
 });
+/**
+ * `DELETE /archive/:id` の override 理由（#698 / #776）。
+ *
+ * **空文字を弾かない。** `guardArchiveRemoval`（`packages/core/src/manager.ts`）
+ * 自身が `reason?.trim()` の非空をもって「override する」という意思表示として
+ * 扱う契約になっている——ここでさらに `min(1)` を掛けて 400 にすると、
+ * 「クエリ引数を付けたが空だった」という同じ入力が、契約より手前の層で
+ * 別の応答（400 ではなく 409 denied）になる形に食い違う。判定は1箇所
+ * （`guardArchiveRemoval`）に置いたままにするため、ここでは型（文字列/省略）
+ * だけを固定する。
+ */
+const archiveRemoveQuery = z.object({
+  overrideReason: z.string().optional(),
+});
 const managerMessageBody = z.object({
   text: z.string().min(1),
   /** 許可確認への回答なら付ける。複数を待っているときは省略できない。 */
@@ -4295,9 +4309,10 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
+      validator('query', archiveRemoveQuery),
       async (c) => {
         const id = c.req.param('id');
-        const overrideReason = c.req.query('overrideReason');
+        const { overrideReason } = c.req.valid('query');
         const guard = guardArchiveRemoval(clone.managers, id, overrideReason);
         if (guard.kind === 'denied') {
           return c.json(

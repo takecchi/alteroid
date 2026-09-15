@@ -244,6 +244,9 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /archive             セッションの生ログ一覧（大きさ・時刻つき）
 /archive <id>        生ログの中身
 /archive sessions    sessionId ごとの行数・使用量の集計（#698）
+/archive remove <id> [理由]  生ログの本文だけを消す（tombstone。行は残る。#776）
+                     走行中のマネージャーの退避は既定で拒まれる——理由を付けて
+                     もう一度打つと、その理由を記録した上で消せる
 /approvals           承認待ち（番号付き）
 /approvals all       回答済み・取り下げ済みも含めて見る
 /answer <番号|id> <回答>  承認待ちに答える（番号は /approvals の並び）
@@ -1000,6 +1003,56 @@ export async function runSlashCommand(
               `  ${session.firstAt} 〜 ${session.lastAt}\n`,
           );
         }
+        return 'ok';
+      }
+
+      /**
+       * 本文だけを消す（tombstone。行は残る。#698 で HTTP/クローンの道具に
+       * 入った `remove` を、人間の対話面（CLI）へも出す（#776）。
+       *
+       * **走行中のマネージャーの退避は既定で拒まれる。** `overrideReason` を
+       * 付けずに叩いて 409 が返ったら、サーバの断り文言をそのまま出し
+       * （`/done` 等と同じ「応答をそのまま出す」約束）、理由を付けて打ち直す
+       * 形を案内する——黙って失敗させない。
+       */
+      if (sub === 'remove') {
+        const removeId = rest[1];
+        if (!removeId) {
+          stdout.write('使い方: /archive remove <id> [理由]\n');
+          return 'ok';
+        }
+        const reason = rest.slice(2).join(' ').trim();
+        const response = await client.archive[':id'].$delete({
+          param: { id: removeId },
+          // 空文字を送らない（/stop と同じ約束——書かなかったことと空文字を
+          // 区別する）。
+          query: reason === '' ? {} : { overrideReason: reason },
+        });
+        if (response.status === 404) {
+          stdout.write('その生ログはありません\n');
+          return 'ok';
+        }
+        if (response.status === 409) {
+          stdout.write(
+            `${await errorDetail(response)}\n` +
+              `理由を付けて上書きするには: /archive remove ${removeId} <理由>\n`,
+          );
+          return 'ok';
+        }
+        if (!response.ok) {
+          stdout.write(`消せませんでした (${response.status})\n`);
+          return 'ok';
+        }
+        const result = await response.json();
+        const overrideNote =
+          result.override !== undefined
+            ? `（⚠️ override — 走行中のマネージャー ${result.override.managerId} の退避を、` +
+              `理由「${result.override.reason}」で消しました）`
+            : '';
+        stdout.write(
+          `${result.alreadyRemoved ? '前から消されていました' : '消しました'}` +
+            `（${result.bytes}バイト）${overrideNote}\n`,
+        );
         return 'ok';
       }
 

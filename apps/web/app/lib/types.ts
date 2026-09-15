@@ -169,3 +169,19 @@ export type EnvVarScope = EnvVarView['scope'];
  * （`apps/web` は `@alteroid/core` の値 import が禁止されているため）。
  */
 export type DroppedState = Ok<paths['/dropped']['get']>;
+
+/**
+ * セッション生ログの退避（`GET /archive`）。可観測性の最下段——CLI の
+ * `/archive` / `/archive <id>` / `/archive sessions` / `/archive remove <id>`
+ * と同じ口（#698 / #776）。
+ */
+export type ArchiveListState = Ok<paths['/archive']['get']>;
+export type ArchiveEntry = ArchiveListState['entries'][number];
+export type ArchiveSessionsState = Ok<paths['/archive/sessions']['get']>;
+export type ArchiveSessionSummary = ArchiveSessionsState['sessions'][number];
+/**
+ * `DELETE /archive/:id` が消せたときの応答。**走行中のマネージャーの退避を
+ * override で消したときだけ `override` が載る**（`archiveRemoveResponseSchema`
+ * の doc）。
+ */
+export type ArchiveRemoveResult = Ok<paths['/archive/{id}']['delete']>;
