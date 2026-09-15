@@ -748,6 +748,30 @@ git -C <main のツリー> apply --check -R /tmp/tail.patch   # 通れば main �
 - **draft PR を ready for review にする指示は、直上の「開く」以外どこにも無い。** 実測（`gh api repos/takecchi/alteroid/issues/<n>/timeline`、観測 2026-08-20T07:53Z）— PR #79: created 2026-08-19T01:10:56Z / ready_for_review 2026-08-20T06:21:18Z(takecchi) / merged 06:27:26Z(takecchi)。PR #88: created 2026-08-19T16:14:40Z / CI green は作成25分後の16:39 / ready_for_review 2026-08-20T05:49:29Z(takecchi) / merged 05:49:33Z(takecchi) — **ready からマージまで4秒**。CI green から ready までは13時間空いており、**空いていたのはレビューの時間ではなく人間が気づくまでの時間**。PR #92: created 2026-08-20T02:30:43Z / ready 06:09:11Z(takecchi) / merged 06:27:38Z(takecchi)。PR #83: created 2026-08-19T09:47:21Z / ready 2026-08-19T14:20:56Z(takecchi) / merged 14:32:03Z(takecchi)。**確認できた全件で ready_for_review の actor は `takecchi` で、自動で ready にする経路もコード上に無い**（`.github/workflows/*.yml` に該当行なし）。**⚠️ ただしこの数え上げは actor しか見ていない。** actor は層を判別しないので（上の「リポジトリの約束」）、**ここで言えるのは「人間のトークンで打たれた」までで、「人間がやった」ではない** — クローンの操作が人間として数えられている可能性がある。人間から「alteroidが作ったPR、#88 #92 #79 が長時間放置されています」という苦情が実際に出ている。**ロスを防ぐために入れたこの「最初の1回で push して draft PR を開く」が、そのまま長時間の放置に繋がっている**
   - **「終わったら ready にする」ではなく、何をもって終わりとするかを決めておく — タイミングは「CI が green であることを確認し、報告を出す直前」。** 報告の後だと依頼者は draft のまま PR を読むことになる（いまの状態と同じ）。報告の前だと、依頼者が報告を読んだ時点で PR は既に読める状態にある。**CI が赤いまま終わるときは ready にせず draft のままにし、赤いことと理由を報告する**
   - **`gh pr ready <番号>` は「自分の側の作業が終わり、依頼者が読める状態になった」という合図であって、マージの許可ではない。** マージするかどうか・誰がするかは依頼ごとに依頼者が決める — ready はその判断を待っている状態を表すだけである。**「ready にした＝マージしてよい」ではない**
+- **器に postgres 17 と pgvector が在る**（2026-09-15 から。`Dockerfile` の runtime ステージ、#965）。**apt が作る `postgres` システムユーザーは使わない** — 自分（uid 1001／`worker`）のまま、`su` も root も要らずに直に立てられる。実測は CI の `image` ジョブを `-u 1001`（root でも `postgres` でもない、マネージャー・作業者が実際に走る uid）で走らせて確認したもので、`initdb` の出力が `The files belonging to this database system will be owned by user "worker".` になることまで見ている。
+  - **使い方は `initdb` → `pg_ctl` を直に叩く。** バイナリは標準の `PATH` に無いので `PATH=/usr/lib/postgresql/17/bin:$PATH` を通す。自分が書ける場所（`/tmp` 配下など）へ都度データディレクトリを掘る。**実際に通った手順**（2026-09-15、CI `image` ジョブ、uid 1001、`alteroid:ci` の中。生ログは #965 の PR #1024 参照）:
+    ```
+    $ export PATH=/usr/lib/postgresql/17/bin:$PATH
+    $ mkdir -p /tmp/pgdata-ci
+    $ initdb -D /tmp/pgdata-ci --auth=trust
+    ...
+    Success. You can now start the database server using:
+        pg_ctl -D /tmp/pgdata-ci -l logfile start
+    $ pg_ctl -D /tmp/pgdata-ci -l /tmp/pg.log -o "-k /tmp -h 127.0.0.1 -p 5433" start
+    waiting for server to start.... done
+    server started
+    $ psql -h 127.0.0.1 -p 5433 -d postgres -c "CREATE EXTENSION vector;"
+    CREATE EXTENSION
+    $ psql -h 127.0.0.1 -p 5433 -d postgres -c "SELECT extname, extversion FROM pg_extension;"
+     extname | extversion
+    ---------+------------
+     plpgsql | 1.0
+     vector  | 0.8.0
+    $ pg_ctl -D /tmp/pgdata-ci stop
+    ```
+    `-k /tmp` で unix ソケットの置き場所を指定し、`-p 5433` のように既存と衝突しないポートを選ぶ（`-h 127.0.0.1` は tcp も併用する場合）。
+  - ⛔ **`pg_createcluster` / `pg_ctlcluster`（Debian の作法）は使えない。** `Dockerfile` が既定クラスタと一緒に `/etc/postgresql` を消している（空のクラスタをイメージへ焼かないための設計）ので、これらのラッパーが読む設定が無い。
+  - ⚠ **既定のクラスタは無い。** 自分の作業ディレクトリへ都度 `initdb` して立て、使い終わったら `pg_ctl stop`（必要ならディレクトリごと削除）する — 使い捨てる前提で、居座らせない。
 
 ## 開発手順
 
