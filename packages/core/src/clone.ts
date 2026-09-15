@@ -6701,6 +6701,12 @@ class Clone implements CloneHost {
     // 判定は provider の写しが済ませている（`claude-provider.ts` の
     // `foldClaudeMessage` ＋ `usage.ts` の `isSuccessResult`）ので、
     // `usage` が無いことがそのまま「積む値が無い」である。
+    //
+    // **⚠️ Issue #982 以降、`turnBoundary?.contextUsage` はここで一緒に
+    // 捨てても文脈占有そのものを失わない。** 呼び出し元（`case 'turn_ended'`）
+    // が `event.succeeded` を見る前に独立の `context_usage` journal 行として
+    // 既に書いてある——ここで早期 return するのは、あくまで `turn_usage`
+    // （消費の増分の行）とその欄に相乗りする `contextUsage` の写しだけである。
     if (usage === undefined) return;
 
     const snapshot: UsageSnapshot = usage;
@@ -7060,6 +7066,33 @@ class Clone implements CloneHost {
         // 3値（未観測 `null` / 試して失敗 `error` 付き / 観測できた値）を
         // `CloneRuntimeFacts.lastContextUsage` 側でも同じ形のまま保つため。
         this.#lastContextUsage = contextUsage ?? null;
+
+        // **Issue #982 — 消費の行（`turn_usage`）とは独立に、観測できたら
+        // 必ず日誌へ書く。** 委譲層（`runner.ts` の `case 'turn_ended'`、
+        // #976 / PR #980）と同じ形——下の `#recordUsage` は
+        // `usage === undefined`（失敗したターン）で早期 return するため、
+        // そこへ相乗りさせている限り失敗したターンの文脈占有はどこにも
+        // 残らなかった（`#recordUsage` の doc「積める消費が無い回はここで
+        // 終わる」）。**`event.succeeded` を見る前に、観測できた値をここで
+        // 独立にも書く**——`turn_usage`（消費の増分）とは別の行として日誌へ
+        // 残る（`schema.ts` の `context_usage` の doc、`layer: 'clone'`）。
+        //
+        // **観測そのものが `undefined`（`#query` が既に無かった等）の回は
+        // 書かない。** `#observeContextUsage` の3値（未観測 `undefined` /
+        // 試して失敗 `error` 付き / 観測できた値）のうち、書くのは後の2つ
+        // だけである——上の `#lastContextUsage` と同じ判断。
+        if (contextUsage !== undefined) {
+          await this.#journal({
+            type: 'context_usage',
+            layer: 'clone',
+            site: 'session',
+            managerId: CLONE_ACTOR_ID,
+            ...(this.#sdkSessionId === null ? {} : { sessionId: this.#sdkSessionId }),
+            turnSucceeded: event.succeeded,
+            contextUsage,
+          });
+        }
+
         // **このターンの間に起きた compaction を取り出す。** `this.#turn` は
         // `#finishTurn()` が呼ばれるまでこの後も生きているので、ここで読んでも
         // 消えない（畳むのは `#finishTurn()` が `this.#turn = null` にする形

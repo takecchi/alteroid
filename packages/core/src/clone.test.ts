@@ -8058,22 +8058,31 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
      * （#982 本文の「なぜ #980 で一緒に直さなかったか」節）。
      *
      * ⚠️ **委譲層の `runner-context-usage.test.ts` / `manager-context-usage.test.ts`
-     * と同じ役割の歯を、クローン層のこのファイルに足す。** #980 が
+     * と同じ役割の歯を、クローン層のこのファイルに足した。** #980 が
      * 独立の journal 型 `context_usage`（`layer: 'clone' | 'manager'`）を
-     * 新設しており、`layer: 'clone'` は既にスキーマ上許されている
+     * 新設しており、`layer: 'clone'` は既にスキーマ上許されていた
      * （`schema.ts` の `context_usage.layer` は `usageLayerSchema` で
-     * `'clone'` を含む）——足りないのは書き手だけである。
+     * `'clone'` を含む）——足りなかったのは書き手だけだった。
      *
      * **⚠️ 第2ラウンド（レビュー指摘で見つかった見落とし）— 最初はここに
      * 失敗ターンの分岐しか固定していなかった。** `context_usage` という
      * journal 型は、クローン層ではこの Issue が直るまで**成功・失敗を
-     * 問わず1件も書かれたことが無い**——`#recordUsage` を通る成功ターンが
+     * 問わず1件も書かれたことが無かった**——`#recordUsage` を通る成功ターンが
      * 書くのは `turn_usage` であって `context_usage` ではないためである。
      * 失敗ターンだけを固定すると、「新しい書き込みを `event.succeeded` の
      * 内側へ移す」（＝成功ターンでだけ書く形にする）という変異を、この歯は
-     * 検出できない。**ここでは両方の分岐を併せて固定する。**
+     * 検出できなかった。**ここでは両方の分岐を併せて固定していた。**
+     *
+     * **第2段（#982）でこの関門自体を直した。** `case 'turn_ended'` が
+     * `event.succeeded` を見る前に、独立の `context_usage` journal 行として
+     * 観測できた値を無条件に書くようにした（`clone.ts` の同じ箇所の doc）。
+     * `#recordUsage` の早期 return は変えていない——`turn_usage` は今も
+     * 増分が無い回（失敗したターン含む）に行を書かない。変わったのは、
+     * 文脈占有がそこにしか無かったことである。下の2本のアサーションは、
+     * この直った後の挙動（成功・失敗どちらのターンでも `context_usage` に
+     * 残る）を検算する——直す前はどちらも `toEqual([])` だった。
      */
-    it('⚠️ いまの挙動: 失敗したターンは contextUsage が context_usage としても日誌に残らない（Issue #982 で変わるはずの期待）', async () => {
+    it('失敗したターンでも contextUsage は context_usage として日誌に残る（#982 の直った後の挙動）', async () => {
       const s = setup(undefined, createMemoryStores(), {
         resultSubtype: 'error_during_execution',
         getContextUsage: () => ({
@@ -8088,20 +8097,34 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
       expect(s.events.filter(isTerminal).map((event) => event.type)).toEqual(['error']);
 
       // 失敗した result は台帳へ入らない（既存の挙動。上の「失敗した result は
-      // 台帳へ入らない」テストと同じ理由）ので、turn_usage の行そのものが無い。
+      // 台帳へ入らない」テストと同じ理由）ので、turn_usage の行そのものは今も無い
+      // ——#982 が直したのはこちらではない。
       expect(await s.stores.journal.list({ types: ['turn_usage'] })).toEqual([]);
 
-      // **⚠️ これがこの Issue の欠陥そのものである。** `#observeContextUsage`
-      // 自体は成否分岐の手前で呼ばれ値を測っているが、それを運ぶ経路が
-      // `#recordUsage` 1本しか無く、`#recordUsage` は `usage === undefined`
-      // で即座に return するため、測った contextUsage は `context_usage` に
-      // も `turn_usage` にも残らず、journal のどこにも残らない。
-      expect(await s.stores.journal.list({ types: ['context_usage'] })).toEqual([]);
+      // **⭐ ここが #982 の直した非対称である。** `#observeContextUsage` 自体は
+      // 成否分岐の手前で呼ばれ値を測っており、`context_usage` 行は
+      // `event.succeeded` を見る前に無条件で書かれる（`clone.ts` の
+      // `case 'turn_ended'`）ので、失敗したターンでも文脈占有はここへ残る
+      // ——直す前は `#recordUsage` の早期 return に巻き込まれて空だった。
+      const contextRows = await s.stores.journal.list({ types: ['context_usage'] });
+      expect(contextRows).toHaveLength(1);
+      const contextRow = contextRows[0];
+      if (contextRow?.type !== 'context_usage') throw new Error('context_usage が日誌に無い');
+      expect(contextRow.layer).toBe('clone');
+      expect(contextRow.site).toBe('session');
+      expect(contextRow.managerId).toBe(CLONE_ACTOR_ID);
+      expect(contextRow.turnSucceeded).toBe(false);
+      expect(contextRow.contextUsage).toEqual({
+        durationMs: expect.any(Number),
+        totalTokens: 12_000,
+        rawMaxTokens: 200_000,
+        percentage: 6,
+      });
 
       await s.clone.stop();
     });
 
-    it('⚠️ いまの挙動: 成功したターンでも contextUsage は context_usage として日誌に残らない（Issue #982 で変わるはずの期待。レビューで見つかった見落とし）', async () => {
+    it('成功したターンでも contextUsage は context_usage として日誌に残る（#982 の直った後の挙動。レビューで見つかった見落としの回帰）', async () => {
       const s = setup(undefined, createMemoryStores(), {
         modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
         getContextUsage: () => ({
@@ -8114,12 +8137,29 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
       s.clone.post(humanMessage('やあ'));
       await waitForDone(s.events);
 
-      // 成功して増分もある回なので turn_usage の行は書かれる（このファイルの
-      // 上の一群のテストで検算済み）。**それでも `context_usage` という独立の
-      // 型そのものが clone.ts にまだ無いので、こちらは0件のままである。**
+      // 成功して増分もある回なので turn_usage の行も引き続き書かれる
+      // （既存の読み手との互換のため——`clone.ts` の `#recordUsage` の doc）。
       const turnUsageRows = await s.stores.journal.list({ types: ['turn_usage'] });
       expect(turnUsageRows.length).toBeGreaterThan(0);
-      expect(await s.stores.journal.list({ types: ['context_usage'] })).toEqual([]);
+
+      // **⭐ ここが第2ラウンドで足りていなかった検算である。** 成功ターンでも
+      // `context_usage` が独立に1件書かれる——「`event.succeeded` の内側へ
+      // 書き込みを移す」という変異（新しい書き込みを成功ターンだけに限る形）
+      // を、この歯で検出する。
+      const contextRows = await s.stores.journal.list({ types: ['context_usage'] });
+      expect(contextRows).toHaveLength(1);
+      const contextRow = contextRows[0];
+      if (contextRow?.type !== 'context_usage') throw new Error('context_usage が日誌に無い');
+      expect(contextRow.layer).toBe('clone');
+      expect(contextRow.site).toBe('session');
+      expect(contextRow.managerId).toBe(CLONE_ACTOR_ID);
+      expect(contextRow.turnSucceeded).toBe(true);
+      expect(contextRow.contextUsage).toEqual({
+        durationMs: expect.any(Number),
+        totalTokens: 12_000,
+        rawMaxTokens: 200_000,
+        percentage: 6,
+      });
 
       await s.clone.stop();
     });
