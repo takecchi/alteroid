@@ -145,7 +145,11 @@ import {
 import type { CloneRuntimeFacts } from './self.js';
 import { EXCHANGE_WITH_VALUES, UnreadableCommitmentError } from './store.js';
 import type { JournalStore, PendingInboxEvent, Stores } from './store.js';
-import { limitRecoveryOf, limitRecoveryOfAssistantError, withRecoveryNote } from './usage-limits.js';
+import {
+  limitRecoveryOf,
+  limitRecoveryOfAssistantError,
+  withRecoveryNote,
+} from './usage-limits.js';
 import { describeInboxBacklogBreakdown, summarizeInboxBacklog } from './inbox-backlog.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 import {

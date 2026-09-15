@@ -5859,7 +5859,8 @@ describe('クローンの道具', () => {
     const target = h.running[0];
     if (!target) throw new Error('準備に失敗');
     target.lastReport =
-      '（このターンは応答を返さずに終わった: overloaded / assistant_error）\n' + 'API Error: Overloaded';
+      '（このターンは応答を返さずに終わった: overloaded / assistant_error）\n' +
+      'API Error: Overloaded';
     target.lastFailure = {
       code: 'overloaded',
       via: 'assistant_error',
