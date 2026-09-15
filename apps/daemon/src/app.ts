@@ -26,6 +26,7 @@ import {
   approvalUpdatedAt,
   chatStreamEventSchema,
   collectConversations,
+  commitmentActiveDelegationIds,
   commitmentPosition,
   commitmentRespondedAt,
   commitmentUpdatedAt,
@@ -2715,7 +2716,11 @@ export function createApp(deps: AppDeps) {
           '#1003）——クローンから人間への返答が日誌に見つかった最初の時刻で、無ければ' +
           '欄自体が無い（＝並べ替え・絞り込みの新しい軸ではなく、既存の記録から読める' +
           'ことを1つ増やしただけ）。`packages/core/src/schema.ts` の ' +
-          '`commitmentRespondedAt` を参照。',
+          '`commitmentRespondedAt` を参照。' +
+          '各行の `activeManagerIds` も同じ目的の導出値（issue #1003 段2）——同じ会話の' +
+          '中で、この行より後に始まって、いまも走っている委譲の `managerId` を並べた' +
+          'もので、無ければ欄自体が無い。正確な1対1の紐付けではない（`packages/core' +
+          '/src/schema.ts` の `commitmentActiveDelegationIds` を参照）。',
         responses: {
           200: {
             description: '台帳の中身。',
@@ -2792,6 +2797,38 @@ export function createApp(deps: AppDeps) {
           for (const list of repliesByConversation.values()) list.sort();
         }
 
+        // **「進行中（委譲あり）」の導出（issue #1003 段2）。** クローンが手で
+        // 維持する欄を足すのではなく、`manager_start` が呼び出し文脈から自動で
+        // 書いた `Job.conversationId`（#781）から読む
+        // （`commitmentActiveDelegationIds` の doc、`packages/core/src/schema.ts`）。
+        //
+        // **`stores.jobs.listJobs()` を直接読む。** `clone.managers.list()`
+        // （`ManagerSummary`）は `conversationId` を持たない——`ManagerSummary`
+        // へ足すと `summaryOf` の全呼び出し元（5箇所）を触ることになり、この
+        // 画面専用の欄のために台帳全体の型を太らせることになる。台帳
+        // （`Job`）は「デーモンが観測できたこと」の正本なので、ここではそちらを
+        // 直接読む（`respondedAt` が日誌を直接読むのと同じ判断）。
+        //
+        // **一致しうる行が1件も無ければ job 一覧は読まない。**
+        const activeManagersByConversation = new Map<
+          string,
+          { managerId: string; createdAt: string }[]
+        >();
+        if (entries.some((entry) => entry.origin === 'human' && entry.source !== undefined)) {
+          const jobs = await stores.jobs.listJobs();
+          for (const job of jobs) {
+            if (job.conversationId === undefined) continue;
+            if (job.status !== 'running' && job.status !== 'waiting_human') continue;
+            const existing = activeManagersByConversation.get(job.conversationId);
+            const entry = { managerId: job.id, createdAt: job.createdAt };
+            if (existing) {
+              existing.push(entry);
+            } else {
+              activeManagersByConversation.set(job.conversationId, [entry]);
+            }
+          }
+        }
+
         let cursorPayload: z.infer<typeof commitmentsCursorSchema> | undefined;
         if (cursor !== undefined) {
           try {
@@ -2853,6 +2890,7 @@ export function createApp(deps: AppDeps) {
             ...entry,
             updatedAt: commitmentUpdatedAt(entry),
             respondedAt: commitmentRespondedAt(entry, repliesByConversation),
+            activeManagerIds: commitmentActiveDelegationIds(entry, activeManagersByConversation),
           })),
           unreadable,
           trimmedClosed,

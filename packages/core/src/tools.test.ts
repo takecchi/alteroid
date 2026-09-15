@@ -49,7 +49,7 @@ interface Harness {
   stores: Stores;
   emitted: ChatStreamEvent[];
   sent: { managerId: string; message: string; decision?: string; requestId?: string }[];
-  started: { request: string; cwd?: string; runnerId?: string }[];
+  started: { request: string; cwd?: string; runnerId?: string; conversationId?: string }[];
   /** 人間と同じ口（ManagerPool.abort）へ届いた停止。 */
   aborted: { managerId: string; reason?: string }[];
   /**
@@ -132,6 +132,14 @@ interface Harness {
    * 必要が無い ＝ 本番でセッション中に何度も呼ばれる形をそのまま模す）。
    */
   setMemoryCause(cause: 'distill' | 'clone'): void;
+  /**
+   * `ToolContext.conversationId()` が返す値（issue #1003 段2・#781）。
+   *
+   * **呼ぶたびに評価される値。** ここで差し替えれば、次の `call()` から
+   * `ask_human` / `manager_start` の両方がその値を読む（`setMemoryCause` と
+   * 同じ作法）。既定は `undefined`（内部ターン扱い）。
+   */
+  setConversationId(id: string | undefined): void;
   call(name: string, args: Record<string, unknown>): Promise<string>;
 }
 
@@ -139,7 +147,8 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
   const stores = createMemoryStores();
   const emitted: ChatStreamEvent[] = [];
   const sent: { managerId: string; message: string; decision?: string; requestId?: string }[] = [];
-  const started: { request: string; cwd?: string; runnerId?: string }[] = [];
+  const started: { request: string; cwd?: string; runnerId?: string; conversationId?: string }[] =
+    [];
   const aborted: { managerId: string; reason?: string }[] = [];
   const abortDetails: string[] = [];
   const running: ManagerSummary[] = [];
@@ -164,6 +173,12 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
   const transcriptCalls: string[] = [];
   const runningOwners = new Map<string, string>();
   let memoryCause: 'distill' | 'clone' = 'clone';
+  // **`ToolContext.conversationId` の呼び出し文脈（issue #1003 段2・#781）。**
+  // 既定は `undefined`（内部ターン扱い）。`setConversationId` で差し替えれば、
+  // 次の `call()` から `manager_start` がその値を `managers.start()` へ渡す
+  // （本番でセッション中に何度も呼ばれる形をそのまま模す——`memoryCause` と
+  // 同じ作法）。
+  let conversationId: string | undefined;
 
   const managers: ManagerPool = {
     async start(input) {
@@ -305,11 +320,9 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     ...(runtime === undefined ? {} : { runtime }),
     ...(scheduler === undefined ? {} : { scheduler }),
     memoryCause: () => memoryCause,
-    // **既定は `undefined`（内部ターン扱い）。** どのテストも `ask_human` の
-    // 会話 id 付与そのものは検査していない——検査するのは `#toolContext()`
-    // 側の薄い closure（`clone.ts`）であって、ここではない。必須なのは
-    // 「関数を省略しないこと」だけなので、固定の accessor で足りる。
-    conversationId: () => undefined,
+    // `setConversationId` で差し替え可能（`ask_human` / `manager_start` の
+    // 両方がこれを読む）。既定は `undefined`（内部ターン扱い）。
+    conversationId: () => conversationId,
   });
 
   return {
@@ -324,6 +337,9 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     denied,
     setMemoryCause(cause) {
       memoryCause = cause;
+    },
+    setConversationId(id) {
+      conversationId = id;
     },
     setAbortOutcome(outcome, sessionGone) {
       abortOutcome = outcome;
@@ -4771,6 +4787,33 @@ describe('クローンの道具', () => {
 
     const [entry] = await h.stores.journal.list({ types: ['decision'] });
     expect(entry).toMatchObject({ decision: expect.stringContaining('mgr-1') });
+  });
+
+  /**
+   * `manager_start` が呼び出し文脈の会話 id を自動で `ManagerPool.start` へ
+   * 渡す（issue #1003 段2・#781）。
+   *
+   * **クローンには渡させない。** 道具の引数に conversationId は無い——上の
+   * 「起こして即返り」のテストが `h.started` の形をそのまま `toEqual` で
+   * 固定しているのと同じ理由で、ここでも `request` に加えて何が渡ったかを
+   * 丸ごと固定する。
+   */
+  it('manager_start は ToolContext.conversationId() の値を自動で ManagerPool.start へ渡す', async () => {
+    const h = harness();
+    h.setConversationId('conv-9');
+
+    await h.call('manager_start', { request: '会話の続きで頼む' });
+
+    expect(h.started).toEqual([{ request: '会話の続きで頼む', conversationId: 'conv-9' }]);
+  });
+
+  it('会話に紐づかないターン（内部ターン）では conversationId を渡さない（既定）', async () => {
+    const h = harness();
+
+    await h.call('manager_start', { request: '内部ターンから' });
+
+    expect(h.started).toEqual([{ request: '内部ターンから' }]);
+    expect(h.started[0]).not.toHaveProperty('conversationId');
   });
 
   /**

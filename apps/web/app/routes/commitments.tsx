@@ -653,7 +653,13 @@ function EditedBadge({ commitment }: { commitment: Commitment }) {
  *
  * **「人間の回答待ち」（3値目）はここに無い。** `PendingApproval` と
  * `Commitment` を結ぶ鍵がリポジトリに無く、結べないものは出さない
- * （issue #1003 本文）。段2（進行中）も同じ理由でまだここに無い。
+ * （issue #1003 本文）。
+ *
+ * **「進行中（委譲あり）」（4値目）は別のバッジ（`InProgressBadge`、直下）に
+ * 分けてある。** この2つは排他ではない——「クローンがまだ返答していない
+ * （未着手）が、裏では既に委譲して動いている」も「返答済みだが、さらに
+ * 別の委譲が走っている」もありうる。1つの2値バッジへ4状態を無理に畳むと、
+ * 両方が真の行を表現できなくなる。
  */
 function AnsweredStateBadge({ commitment }: { commitment: Commitment }) {
   if (commitment.origin !== 'human') return null;
@@ -663,6 +669,32 @@ function AnsweredStateBadge({ commitment }: { commitment: Commitment }) {
     );
   }
   return <Badge tone="warn">未着手</Badge>;
+}
+
+/**
+ * 未了の行に、いまも走っている委譲（マネージャー）があるかを出す
+ * （issue #1003 段2「進行中（委譲あり）」）。
+ *
+ * **`AnsweredStateBadge`（直上）と同じ制約——`origin: 'human'` のうち、実際に
+ * 一致しうるのはチャット経由の行だけである**
+ * （`packages/core/src/schema.ts` の `commitmentActiveDelegationIds` の doc）。
+ *
+ * **正確な1対1の紐付けではないことを、ラベルでも隠さない。** 同じ会話に
+ * 複数の未了行や複数の委譲が並行していれば、無関係な行にも付きうる
+ * （同 doc の限界の節）。それでも「放置」と「進行中」を見分けたいという
+ * 人間本人の不安（issue #1003 出どころ）には、この粒度で十分に応える。
+ *
+ * **⛔ この印は自動で閉じる合図ではない。** 委譲が終わって
+ * `activeManagerIds` が消えても、行は消えない・閉じない——issue #1003 が
+ * 最重要事項として禁じている「返事をしたら閉じる」と同じ形の自動化を、
+ * この状態でも作らない。「いつ消えるか」を変えるのは常に人間の
+ * `commitment_close` / `PATCH /commitments/:id/close` だけである。
+ */
+function InProgressBadge({ commitment }: { commitment: Commitment }) {
+  if (commitment.origin !== 'human') return null;
+  const ids = commitment.activeManagerIds;
+  if (ids === undefined || ids.length === 0) return null;
+  return <Badge tone="ok">進行中（委譲あり: {ids.join(', ')}）</Badge>;
 }
 
 const EDITOR_TAB_TRIGGER_CLASS =
@@ -854,6 +886,7 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
         <OriginBadge commitment={commitment} />
         <EditedBadge commitment={commitment} />
         <AnsweredStateBadge commitment={commitment} />
+        <InProgressBadge commitment={commitment} />
         <span>{formatDateTime(commitment.at)}</span>
         {/* 齢。器は優先度も締切も持たないので、急ぎ方を決める材料はこれだけである。 */}
         <span>({formatRelative(commitment.at)})</span>

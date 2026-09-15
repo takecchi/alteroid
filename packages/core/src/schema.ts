@@ -2236,6 +2236,54 @@ export function commitmentRespondedAt(
   return replies.find((at) => at > commitment.at);
 }
 
+/**
+ * まだ片付いていない台帳の行に、いまも走っている委譲（マネージャー）があるかを
+ * 導く（issue #1003 段2「進行中（委譲あり）」）。
+ *
+ * **`commitmentRespondedAt`（直上）と対になる関数。** 材料が日誌の `exchange`
+ * か台帳の `Job` かが違うだけで、形は同じ——呼び出し側（`GET /commitments`）が
+ * 会話 id ごとに1回だけ組み立てた地図を全行で使い回し、この関数は1行ぶんの
+ * 判定だけを行う。
+ *
+ * ## 対象になる行は `commitmentRespondedAt` と同じ制約を持つ
+ *
+ * `origin: 'human'` のうち、`source` が本物の会話 id として機能するのは
+ * チャット経由の行だけである（`commitmentRespondedAt` の doc の3経路の説明を
+ * 参照）。それ以外の行はここでも `undefined`（＝判定材料が無い）を返す。
+ *
+ * ## `at` より後に始まった委譲だけを数える
+ *
+ * 同じ会話の中に複数の未了行が在りうる（人間が同じ会話で何度も頼む形）ので、
+ * **その行が作られた後に始まった委譲**だけを一致とみなす——`commitmentRespondedAt`
+ * が「行より後に届いた返答」だけを見るのと同じ理由（行より前の委譲は、別の
+ * 古い頼みごとに応えたものである可能性が高い）。**これは正確な1対1の紐付けを
+ * 作るものではない** — 同じ会話の中で同じ時間帯に複数の委譲・複数の未了行が
+ * 並行していれば、無関係な行にも「進行中」が付きうる（`Job.conversationId`
+ * の doc の限界の節）。それでも「この会話では何も動いていない」と「この会話で
+ * 何かが走っている」の区別には十分に効く。
+ *
+ * @param commitment 判定したい1行。
+ * @param activeManagersByConversation 会話 id → **いま走っている**
+ *   （`status` が `running` か `waiting_human`）マネージャーの `managerId` と
+ *   `createdAt` の組。呼び出し側（`GET /commitments`）が `stores.jobs.listJobs()`
+ *   から1回だけ組み立てて全行で使い回す。
+ * @returns 一致した `managerId` の配列。1件も無ければ `undefined`
+ *   （＝「進行中」ではない側の残余）。
+ */
+export function commitmentActiveDelegationIds(
+  commitment: Pick<Commitment, 'origin' | 'source' | 'at'>,
+  activeManagersByConversation: ReadonlyMap<
+    string,
+    readonly { managerId: string; createdAt: string }[]
+  >,
+): string[] | undefined {
+  if (commitment.origin !== 'human' || commitment.source === undefined) return undefined;
+  const managers = activeManagersByConversation.get(commitment.source);
+  if (managers === undefined) return undefined;
+  const ids = managers.filter((m) => m.createdAt > commitment.at).map((m) => m.managerId);
+  return ids.length === 0 ? undefined : ids;
+}
+
 // ---------------------------------------------------------------------------
 // ジョブ・承認待ち
 // ---------------------------------------------------------------------------
@@ -2440,6 +2488,41 @@ export const jobSchema = z.object({
   createdAt: isoDateTime,
   updatedAt: isoDateTime,
   status: jobStatusSchema,
+  /**
+   * `manager_start` が呼ばれた時点の会話 id（issue #1003 段2）。
+   *
+   * ## なぜここに在るか
+   *
+   * 台帳（`Commitment`）の未了行のうち「進行中（委譲あり）」を見分けるには、
+   * その行と委譲を結ぶ鍵が要る。`commitmentId` のような専用の id はどこにも
+   * 無い（issue #1003 の実測。`commitmentId` は0件）——新しく足すと、それは
+   * **クローンが手で維持する欄**になり、この Issue が禁じている形
+   * （「クローンが手で維持する欄を足すと、クローンはそれを忘れる」）に触れる。
+   *
+   * **⟹ 代わりに、既に存在する `ToolContext.conversationId`（#768・#781）を
+   * `manager_start` の呼び出し文脈から自動で写す。** クローンは何も入力しない
+   * ——`manager_start` のツール引数にこの欄は無い（`tools.ts` を見ればよい）。
+   * `Commitment.source`（`origin: 'human'` かつチャット経由の行にだけ、本物の
+   * 会話 id が入る——`commitmentRespondedAt` の doc）とここを突き合わせれば、
+   * 「この会話の中で委譲した」を導ける。
+   *
+   * ## 限界（正確な1対1の紐付けではない）
+   *
+   * この欄が結ぶのは「同じ会話の中で起きたか」であって「この特定の未了行が
+   * この委譲を生んだか」ではない。1つの会話の中に複数の未了行や複数の委譲が
+   * 在れば、**この欄だけでは特定の行と特定の委譲を一意に結べない**
+   * （`commitmentActiveDelegationIds` の doc に判定の実装と、緩和のために
+   * 課している条件——委譲が行の `at` より後に始まっていること——を書いた）。
+   * それでも「この会話では何も動いていない」と「この会話で何かが走っている」
+   * の区別は付けられるので、issue #1003 が言う「放置」と「進行中」を見分ける
+   * には足りる。
+   *
+   * **`ToolContext.conversationId` は内部ターン（マネージャー発の確認・蒸留・
+   * timer）では `undefined` を返す**（#781）。そのときはこの欄も省略される
+   * ——「会話に紐づかない委譲」は「進行中」の判定対象から自然に外れる
+   * （偽の紐付けを作らない側に倒れる）。
+   */
+  conversationId: z.string().optional(),
   /** マネージャーの識別子。ジョブ1件 = マネージャー1本なので id と同じ値が入る。 */
   managerId: z.string().optional(),
   /** SDK のセッション id。M4 の resume の足がかり。 */
