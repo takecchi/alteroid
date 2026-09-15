@@ -13275,7 +13275,11 @@ describe('commitment_open は「載せた」と名乗る前にストアを確か
 
     // **確認できていない書き込みを、日誌にまで「載せた」と複製しないこと。**
     const decisions = await silentlyLostWrite.journal.list({ types: ['decision'] });
-    expect(decisions.some((entry) => entry.decision.includes('台帳に載せた'))).toBe(false);
+    expect(
+      decisions.some(
+        (entry) => entry.type === 'decision' && entry.decision.includes('台帳に載せた'),
+      ),
+    ).toBe(false);
   });
 
   it('open() が解決しても、直後の get(id) が UnreadableCommitmentError を投げるなら「載せた」と名乗らない', async () => {
@@ -13309,7 +13313,11 @@ describe('commitment_open は「載せた」と名乗る前にストアを確か
     expect(reply).toContain('確認できなかった');
 
     const decisions = await unreadableAfterWrite.journal.list({ types: ['decision'] });
-    expect(decisions.some((entry) => entry.decision.includes('台帳に載せた'))).toBe(false);
+    expect(
+      decisions.some(
+        (entry) => entry.type === 'decision' && entry.decision.includes('台帳に載せた'),
+      ),
+    ).toBe(false);
   });
 
   it('get(id) が UnreadableCommitmentError 以外を投げたら握り潰さずに上へ通す（器そのものの障害と取り違えない）', async () => {
