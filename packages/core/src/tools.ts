@@ -5123,9 +5123,46 @@ export function createCloneTools(context: ToolContext) {
           body,
         };
         await stores.commitments.open(entry);
+        // **「載せた」と名乗る前に、書いた後のストアを読み直して確かめる（issue
+        // #856）。** 以前はここが `open()` の呼び出しが例外を投げなかったことだけを
+        // 根拠に名乗っていた——書き込みが静かに失敗しても、呼び出し側からは
+        // 「例外は無かった」としか見えない（受信箱経由の `#commit` が同じ形で
+        // 失敗を握り潰す。`clone.ts`）。**兄弟の経路（`Clone#commitmentNoticeFor`）は
+        // 既にこの形を持っている**——書き込みの決着を待ったうえで `list()` を
+        // 読み直し、自分の id がそこに実在する行だけを「載せた」と名乗る。ここは
+        // 単票なので `list()` ではなく `get(id)` で同じ確認をする（`commitment_close`
+        // / `commitment_list id=` がこの id の存在をその場で検査する唯一の口として
+        // 既に使っている口と同じもの）。
+        //
+        // **`get(id)` の戻り値は2値である**（`null`＝無い／`UnreadableCommitmentError`
+        // ＝読めない。「一度は書けたが後で消えた」を表す第3の状態は無い、
+        // `CommitmentStore.get` の doc）。ここでは無いと読めないを取り違えない
+        // ——`instanceof` で `UnreadableCommitmentError` だけを捕まえ、それ以外
+        // （器そのものの障害）は上へ投げる——が、**名乗るかどうかの判断としては
+        // 両方とも「名乗らない」へ倒す。** どちらも「載ったと確認できていない」
+        // という点で同じであり、安全側は「わからないときに載せたと言わない」
+        // ことだからである。
+        let confirmed: Commitment | null;
+        try {
+          confirmed = await stores.commitments.get(entry.id);
+        } catch (error) {
+          if (!(error instanceof UnreadableCommitmentError)) throw error;
+          confirmed = null;
+        }
+        if (confirmed === null) {
+          return text(
+            `台帳へ書き込んだが、直後に読み直しても ${entry.id} の行を確認できなかった` +
+              '（無い、または読めない）。**「載せた」とは言えない。** ' +
+              `commitment_list id=${entry.id} で確かめ、載っていなければ同じ内容で` +
+              'もう一度 commitment_open を試すこと。',
+          );
+        }
         // **自分で決めて引き受けたことは日誌に残す。** 聞かずに動いた判断が後から
         // 否定できることが最終承認の実体である（north_star）。自動で開いたものは
         // 起点ごとに既に日誌へ載っているので、ここで残すのは `self` のぶんだけ。
+        // **ここへ来るのは、上で存在を確かめられた行だけである**——確かめられて
+        // いない書き込みを「載せた」と日誌へ残すと、台帳とは別の場所に同じ
+        // 誤った名乗りを複製することになる。
         await appendJournalOrThrow(
           'commitment_open',
           stores.journal,
