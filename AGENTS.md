@@ -411,6 +411,37 @@ git -C <main のツリー> apply --check -R /tmp/tail.patch   # 通れば main �
 
   - **⚠️ 3つ目は「`head_sha` は出所を分けて突き合わせる」（上の「依頼者の見立てを検証する」）を*別立てで*持っていれば塞げるが、rollup を待ちの判定に使う形にしていると塞げない。** 実際この一件は、その突き合わせを別立てで取っていたから気づいた側である —— 手順が「rollup が green を返したら次へ進む」だったら、**走行中の CI を green と読んで stale なままマージしていた。** 「たまたま踏まなかった」ではなく「別の歯が在ったから捕まった」側である
 
+- **`success` や `mergeStateStatus: CLEAN` が「在る」ことは、それだけでは緑の証拠にならない。正しい sha の `check-runs` を引いた後でも、3つの形で化ける**（2026-09-15 観測、#983。関連 PR #969・#975・#979・#980）。**根はどれも同じ — `CLEAN` や `success` が「在る」ことを緑と読むことである。** 直上の「これで『CI が green』の罠は3つになり」は**どの sha を見ているか**の話だったが、こちらは**正しい sha を指定した後でも**起きる。
+
+  1. **draft PR の `skipped` を緑と数えない。** draft のあいだ `ci` / `image` / `base-overlap` は `if:` の条件で `skipped` になり `completed` を返す。`ready_for_review` 後に本物の run が走ると、**同じ sha の `check-runs` に新旧2世代が並ぶ**（PR #969・#975 で観測）:
+
+     ```
+     ci            completed  success   started 23:26   ← 本物
+     image         completed  success   started 23:26
+     base-overlap  completed  success   started 23:26
+     image         completed  skipped   started 23:18   ← draft 由来の古い行
+     ci            completed  skipped   started 23:18
+     base-overlap  completed  skipped   started 23:18
+     ```
+
+     `completed` が6本並ぶので緩く読むと緑に見えるが、**`skipped` は「通った」ではなく「走っていない」。**
+
+  2. **同じ sha に `failure` と `success` が両方在りうる。`success` が在るかではなく、古い世代に引きずられていないか・全部揃っているかで見る。** PR #979（sha `13425e12`）で観測: 00:15 の run は結論が `failure` だが**ジョブを1本も実行していない**、00:45 の run は3ジョブ・16ステップを実行して `success`。**ジョブ0本の run は checkout もテストもしていないので、コードについて何も言っていない。** ⟹ `failure` が在ることだけでは赤と言えないし、`success` が在ることだけでは緑と言えない。実際に走ったかは `gh api repos/…/actions/runs/<id>/jobs` の `total_count` と実行時間で見る。
+
+  3. **⭐ `gh pr ready` が run を起こさないことがあり、そのとき GitHub は `mergeStateStatus: CLEAN` と言う（いちばん危ない）。** PR #980 で観測: push（`synchronize`。この時点ではまだ draft）に続けて同じコマンドの中で `gh pr ready` を打ったところ、`ready` は run を1本も作らず、`ci` / `image` / `base-overlap` が draft 由来の `skipped` のまま `mergeStateStatus: CLEAN` になった。**機構は分かっている** — required contexts（`.github/required-status-checks.json` の `contexts` は `ci` / `image` のみ。`base-overlap` は意図的に外してある。逐語は `grep -Fn -- '入れていない' .github/workflows/ci.yml`）について、GitHub は **`skipped` を「満たした」として扱う**（同じファイルの逐語は `grep -Fn -- '満たしたものとして扱われる' .github/workflows/ci.yml`）。**draft の間だけ節約する `if:` の設計そのものが、`ready` が run を起こし損ねた瞬間に「required が全部 skipped のまま CLEAN」という牙になる。** `.github/workflows/ci.yml` の `pull_request.types` が `ready_for_review` を明示で足しているのはまさにこの事故を防ぐためだが、**それでも push と `ready` が近すぎると取りこぼされる。**
+
+  **⟹ 判定の手順（実際に使ったもの）:**
+
+  - `head_sha` を明示して `check-runs` を引く（`gh pr view --json statusCheckRollup` は sha を返さない。上の項目）
+  - `conclusion == "success"` の行だけを数える。**`skipped` は「走っていない」**
+  - 必要なチェックが**すべて** `success` であること（`ci` / `image` は required。`base-overlap` は required ではないが、見ないと同じ穴を踏む）
+  - **同じ sha に複数の世代が在るときは、新しいほうを見る。** 古い世代の結論（`skipped` も `failure` も）に引きずられない
+  - **その run が実際にジョブを実行したか**を見る（`actions/runs/<id>/jobs` の `total_count` が0でないこと。実行時間も見る）
+  - **`mergeStateStatus` を緑の根拠にしない**
+  - `gh pr ready` の後は**本物の run が作られたことを確かめる**。作られないなら `gh pr close` → `gh pr reopen` で起こす（**枝を1バイトも触らない**ので安全。空コミットでもよい）
+
+  **⚠️ 待つループの書き方にも同じ根が出る。** 「すべての `check-runs` が `completed` になったら抜ける」というループは、**本物の run がまだ作られていない瞬間に即座に抜ける**（draft 由来の `skipped` は既に `completed` なので）。**「`skipped` 以外が必要な本数揃うまで」を条件にすること。**
+
 - **差分クエリと総数クエリの2本で1つの根拠になる** — 差分は「窓が足りているか」を答えず、総数は「相殺」を見ない（新規1件とクローズ1件が相殺すると合計は動かない）
 - **`gh api --paginate --slurp` は `--jq` と併用できない**（`gh` がエラーで拒否する）
 - **`env | cut -d= -f1` は複数行の値で破れる。** `printenv <名前>` を使う
