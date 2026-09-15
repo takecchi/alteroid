@@ -387,7 +387,7 @@ const MULTI_BLOCK_FIRST_THEN_SECOND = [
  *    判定へ渡る経路は無い（`command grep -Fn -- "isTest: true" scripts/
  *    verify-core.mjs` → test 門1本のみ。`command grep -c -- "isTest"
  *    scripts/verify-core.mjs` → 1＝ファイル全体で1箇所。`command grep -Fn --
- *    "stdio: 'inherit'" scripts/verify.mjs` → 185行、`run()` 側）。
+ *    "stdio: 'inherit'" scripts/verify.mjs` → `run()` 側）。
  * 5. root + 8パッケージの `test` スクリプト9本は全部が単発の
  *    `node …/scripts/test.mjs …` で、`&&` も `;` も `pnpm -r` も1つも無い
  *    （`package.json` を9本全部当たった）。
@@ -399,7 +399,7 @@ const MULTI_BLOCK_FIRST_THEN_SECOND = [
  *    判定し、`verify-core.mjs` / `test-guard-core.mjs` の判定関数を一度も
  *    呼んでいない（連結ログ `verify.md` は人間が読む PR 本文の材料。
  *    `command grep -n -- 'verify-core\|test-guard-core'
- *    .github/scripts/verify-for-sdk-pr.sh` → 9行目・52行目の2件のみで、
+ *    .github/scripts/verify-for-sdk-pr.sh` → 2件のみで、
  *    どちらも `#` で始まるコメント。呼び出しは0件）。
  *
  * **⟹ だから `test-guard-core.mjs` / `verify-core.mjs` は「最初」を返す実装の
