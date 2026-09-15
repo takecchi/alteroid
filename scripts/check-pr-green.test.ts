@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
-import { evaluatePrGreen, formatVerdict, pickLatestRunPerWorkflow } from './check-pr-green-core.mjs';
+import {
+  evaluatePrGreen,
+  formatVerdict,
+  pickLatestRunPerWorkflow,
+} from './check-pr-green-core.mjs';
 
 /**
  * `check-pr-green` の歯（Issue #933）。
@@ -101,7 +105,13 @@ describe('pickLatestRunPerWorkflow', () => {
 
 describe('evaluatePrGreen', () => {
   const latestRuns = [
-    { id: 34743508004, name: 'CI', created_at: '2026-09-13T06:44:54Z', status: 'completed', conclusion: 'success' },
+    {
+      id: 34743508004,
+      name: 'CI',
+      created_at: '2026-09-13T06:44:54Z',
+      status: 'completed',
+      conclusion: 'success',
+    },
   ];
 
   it('#933 の実例がそのまま green になる（4ジョブ、base-overlap を含めすべて success）', () => {
@@ -125,7 +135,13 @@ describe('evaluatePrGreen', () => {
 
   it('最新runがまだ completed でなければ pending', () => {
     const running = [
-      { id: 1, name: 'CI', created_at: '2026-09-15T00:00:00Z', status: 'in_progress', conclusion: null },
+      {
+        id: 1,
+        name: 'CI',
+        created_at: '2026-09-15T00:00:00Z',
+        status: 'in_progress',
+        conclusion: null,
+      },
     ];
     const result = evaluatePrGreen(running, {});
     expect(result.verdict).toBe('pending');
@@ -145,7 +161,9 @@ describe('evaluatePrGreen', () => {
     };
     const result = evaluatePrGreen(latestRuns, jobsByRunId);
     expect(result.verdict).toBe('red');
-    expect(result.detail.some((line: string) => line.includes('ci') && line.includes('failure'))).toBe(true);
+    expect(
+      result.detail.some((line: string) => line.includes('ci') && line.includes('failure')),
+    ).toBe(true);
   });
 
   it('鏡像ケース: 古い世代のsuccessが新しい世代のfailureに引きずられない', () => {
@@ -154,8 +172,20 @@ describe('evaluatePrGreen', () => {
     // 古いrun（先に作られた、success）と新しいrun（後に作られた、failure）が
     // 同じworkflow名で同居しても、常に新しいほうのjobsだけを見る。
     const runs = [
-      { id: 1, name: 'CI', created_at: '2026-09-15T00:00:00Z', status: 'completed', conclusion: 'success' },
-      { id: 2, name: 'CI', created_at: '2026-09-15T00:00:10Z', status: 'completed', conclusion: 'failure' },
+      {
+        id: 1,
+        name: 'CI',
+        created_at: '2026-09-15T00:00:00Z',
+        status: 'completed',
+        conclusion: 'success',
+      },
+      {
+        id: 2,
+        name: 'CI',
+        created_at: '2026-09-15T00:00:10Z',
+        status: 'completed',
+        conclusion: 'failure',
+      },
     ];
     const latest = pickLatestRunPerWorkflow(runs);
     const jobsByRunId = {
@@ -171,7 +201,9 @@ describe('formatVerdict', () => {
     expect(formatVerdict('abc123', { verdict: 'green', detail: [] })).toMatch(/OK/);
     expect(formatVerdict('abc123', { verdict: 'red', detail: [] })).toMatch(/NG/);
     expect(formatVerdict('abc123', { verdict: 'pending', detail: [] })).toMatch(/保留/);
-    expect(formatVerdict('abc123', { verdict: 'unmeasurable', detail: [] })).toMatch(/判定できなかった/);
+    expect(formatVerdict('abc123', { verdict: 'unmeasurable', detail: [] })).toMatch(
+      /判定できなかった/,
+    );
     expect(formatVerdict('abc123', { verdict: 'no-runs', detail: [] })).toMatch(/判定できなかった/);
   });
 });

@@ -42,7 +42,11 @@
 import { execFileSync } from 'node:child_process';
 import process from 'node:process';
 
-import { evaluatePrGreen, formatVerdict, pickLatestRunPerWorkflow } from './check-pr-green-core.mjs';
+import {
+  evaluatePrGreen,
+  formatVerdict,
+  pickLatestRunPerWorkflow,
+} from './check-pr-green-core.mjs';
 
 function log(text) {
   process.stdout.write(text + '\n');

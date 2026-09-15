@@ -82,7 +82,9 @@ export function evaluatePrGreen(latestRuns, jobsByRunId) {
   if (pending.length > 0) {
     return {
       verdict: 'pending',
-      detail: pending.map((r) => `${r.name} (run ${r.id}) は status=${r.status} でまだ終わっていない`),
+      detail: pending.map(
+        (r) => `${r.name} (run ${r.id}) は status=${r.status} でまだ終わっていない`,
+      ),
     };
   }
 
