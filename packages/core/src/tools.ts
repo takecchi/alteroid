@@ -6433,6 +6433,8 @@ export function createCloneTools(context: ToolContext) {
         'マネージャーを止める。人間が Web UI から押す停止と同じもので、その1本だけが止まる。',
         '暴走しているとき、報告を出したのに終わらないとき、依頼自体が要らなくなったときに使う。',
         '止めたあと本当に止まったかを確かめて返すので、返ってきた状態まで読むこと。',
+        '⚠️ いまターンの途中（running）の委譲は既定では止めない——畳むと進行中の作業が' +
+          '失われるため。それでも止めるなら force: true を渡すこと。',
       ].join(' '),
       {
         managerId: z.string().describe('manager_list に出ている id'),
@@ -6440,8 +6442,17 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe('なぜ止めたか。日誌と、その仕事の記録に残る。後から辿れるように書く'),
+        force: z
+          .boolean()
+          .optional()
+          .describe(
+            'いまターンの途中（status: running）の委譲でも止める。既定（false/省略）だと、' +
+              'running の委譲は abort を呼ばずに断って理由を返す——畳むと、そのターンが抱えて' +
+              'いる進行中の作業（未 push の実装・起こした作業者・監視中の CI）が失われるため。' +
+              '断りを読んだうえで、それでも畳んでよいと判断したら true で呼び直すこと。',
+          ),
       },
-      async ({ managerId, reason }) => {
+      async ({ managerId, reason, force }) => {
         if (!context.managers) return NO_POOL;
         const pool = context.managers;
         const find = async (): Promise<ManagerSummary | undefined> =>
@@ -6450,6 +6461,50 @@ export function createCloneTools(context: ToolContext) {
         // 止める前の状態を控える。**既に終わっていた仕事を止めたときに、それを
         // そうと言えるようにする**ため（黙って何もしないのが一番悪い）。
         const before = await find();
+
+        // **ターンの途中（running）は、既定では abort を呼ばずに断る（#1037）。**
+        //
+        // `before?.status === 'done'` の下の分岐は、止めた*後*に「もともと待機中
+        // だった」と言い分けるだけで、止める*前*には何も言わない——`running` を
+        // 畳むときも同じように何も言わずに畳んでいた。判定材料（`before.status`）
+        // はここに既に在るのに、`running` 側だけ使われていなかった。
+        //
+        // **なぜ既定で断るのか。** 人間が Web UI から止めるときは、画面にターンが
+        // 走っている様子が見えている——止める前に「いま動いている」と気づける。
+        // クローンにはその画面が無い。`before.status === 'running'` はクローンが
+        // 持てる同じ情報のクローン向けの等価物であって、それを使わずに黙って
+        // abort するのは、人間が持っている材料をクローンに渡し損ねているだけで
+        // ある（north_star 禁止1 の裏側——デグレードさせない）。
+        //
+        // **なぜ force を必ず残すのか。** 暴走している委譲を止める道を塞いでは
+        // いけない——止められなくなるほうが、誤って畳むより危険である。だから
+        // これは制限の追加（禁止2）ではなく、既定の向きを変えるだけにする。
+        // `force: true` を渡せば、この分岐は素通りしてこれまでどおり abort する。
+        //
+        // **`waiting_human` はここに含めない。** `waiting_human` はクローン自身
+        // への問い（`ask_human` 相当）で止まっている状態で、その問いを立てたのは
+        // クローン自身だから、待っていること自体は既に知っている。見えていない
+        // のは `running`（いまターンの途中で、クローンが一度も観測していない進行
+        // 中の作業）のほうである。
+        if (before?.status === 'running' && force !== true) {
+          const lastReportLine =
+            before.lastReportAt === undefined
+              ? '直近の報告は一度も届いていない（この委譲は一度もターンを終えていない）。'
+              : `直近の報告が届いたのは ${before.lastReportAt}。` +
+                'これは**最後に完了したターン**のものであって、いま走っているターンの' +
+                '中身ではない——このターンで何をしているかは、まだ報告に出ていない。';
+          return text(
+            `[${managerId}] 止めていない。**いまターンの途中である**（status: running）。\n` +
+              'ここで畳むと、そのターンが抱えている進行中の作業が失われる——失われるのは' +
+              '会話だけではない。**push していない実装・このターンが起こした作業者・監視中の' +
+              'CI** のような、まだ台帳にもファイルにも残っていないものが対象になる。\n' +
+              `${lastReportLine}\n` +
+              'ターンの中身を先に読むなら manager_report を使うこと。\n' +
+              '🔴 それでも止めるなら、manager_stop を force: true を付けて呼び直すこと' +
+              '（止める道そのものは塞いでいない）。',
+          );
+        }
+
         const result = await pool.abort(managerId, reason, 'clone');
 
         // **outcome ごとに言い分ける。** 以前は `outcome` が常に `'stopped'` で、
