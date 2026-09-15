@@ -8035,6 +8035,68 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
 
       await s.clone.stop();
     });
+
+    /**
+     * **Issue #982 — 委譲（マネージャー／ランナー）層は #976 / PR #980 で
+     * 直ったが、クローン層には同じ非対称がそのまま残っている。ここで固定
+     * するのはいまの挙動である。**
+     *
+     * `#apply` の `case 'turn_ended'`（`clone.ts` の逐語は
+     * `grep -Fn -- 'ターンの境界の文脈占有を、日誌へ1行書く前に1回だけ聞く' packages/core/src/clone.ts`）
+     * は成否分岐の**外**で `#observeContextUsage()` を呼び、その戻り値を
+     * 無条件に `#recordUsage(event.usage, 'session', 'cumulative', { contextUsage, … })`
+     * へ渡す。だが `#recordUsage` 本体（逐語は
+     * `grep -Fn -- '積める消費が無い回はここで終わる' packages/core/src/clone.ts`）
+     * は `if (usage === undefined) return;` で降りる —— 失敗したターンは
+     * `event.usage` 自体が undefined（`claude-provider.ts` の
+     * `foldClaudeMessage` が成功した result の消費だけを通すため）なので、
+     * **測った文脈占有はここで一緒に捨てられ、journal のどこにも残らない。**
+     *
+     * **`#lastContextUsage`（`self_status` の材料）は更新される**——
+     * `#recordUsage` を呼ぶ手前で無条件に `this.#lastContextUsage = contextUsage ?? null;`
+     * が走るためである。だから「記憶には残るが日誌には残らない」——
+     * プロセスが落ちれば消え、履歴を持たず、事後に振り返れない
+     * （#982 本文の「なぜ #980 で一緒に直さなかったか」節）。
+     *
+     * ⚠️ **委譲層の `runner-context-usage.test.ts` / `manager-context-usage.test.ts`
+     * と同じ役割の歯を、クローン層のこのファイルに足す。** #980 が
+     * 独立の journal 型 `context_usage`（`layer: 'clone' | 'manager'`）を
+     * 新設しており、`layer: 'clone'` は既にスキーマ上許されている
+     * （`schema.ts` の `context_usage.layer` は `usageLayerSchema` で
+     * `'clone'` を含む）——足りないのは書き手（このテストが固定する側）
+     * だけである。
+     */
+    it(
+      '⚠️ いまの挙動: 失敗したターンは contextUsage が context_usage としても' +
+        '日誌に残らない（Issue #982 で変わるはずの期待）',
+      async () => {
+        const s = setup(undefined, createMemoryStores(), {
+          resultSubtype: 'error_during_execution',
+          getContextUsage: () => ({
+            totalTokens: 12_000,
+            rawMaxTokens: 200_000,
+            percentage: 6,
+          }),
+        });
+
+        s.clone.post(humanMessage('やあ'));
+        await waitForTerminal(s.events);
+        expect(s.events.filter(isTerminal).map((event) => event.type)).toEqual(['error']);
+
+        // 失敗した result は台帳へ入らない（既存の挙動。上の「失敗した result は
+        // 台帳へ入らない」テストと同じ理由）ので、turn_usage の行そのものが無い。
+        expect(await s.stores.journal.list({ types: ['turn_usage'] })).toEqual([]);
+
+        // **⚠️ これがこの Issue の欠陥そのものである。** `#observeContextUsage`
+        // 自体は成否分岐の手前で呼ばれ値を測っているが、それを運ぶ経路が
+        // `#recordUsage` 1本しか無く、`#recordUsage` は `usage === undefined`
+        // で即座に return するため、測った contextUsage は `context_usage` に
+        // も `turn_usage` にも残らず、journal のどこにも残らない。
+        expect(await s.stores.journal.list({ types: ['context_usage'] })).toEqual([]);
+
+        await s.clone.stop();
+      },
+    );
   });
 });
 
