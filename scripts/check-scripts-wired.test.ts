@@ -87,6 +87,19 @@ interface Exemption {
 
 const EXEMPT: Exemption[] = [
   {
+    script: 'check:pr-green',
+    why:
+      '引数に sha を取る手動/エージェント用の道具であり、CI の門ではない（Issue #933）。' +
+      'STEPS（scripts/verify-core.mjs）には入れない —— `pnpm test` は offline でも走るが、' +
+      'この道具は `gh api` でネットワークへ出るので同じ理由で足せない' +
+      '（`check:required-status-checks` の免除理由と同じ形）。' +
+      'ci.yml にも足さない —— この道具が答える問いは「指定した sha の最新世代の CI が緑か」で、' +
+      '呼ぶとしたら「まさにいま走っている CI 自身」を対象にすることになり、' +
+      '自分自身の未完了を自分で問い合わせる循環になる。使うのは push 後に' +
+      '`gh pr ready` や rebase を挟んだ後、エージェントが手元で ' +
+      '`pnpm check:pr-green -- <sha>` として叩く場面である。',
+  },
+  {
     script: 'check:required-status-checks',
     why:
       'ブランチ保護の読み出しに administration 相当の権限が要り、**CI の既定の GITHUB_TOKEN には付けられない**' +

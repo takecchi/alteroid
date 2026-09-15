@@ -435,7 +435,13 @@ git -C <main のツリー> apply --check -R /tmp/tail.patch   # 通れば main �
   - `head_sha` を明示して `check-runs` を引く（`gh pr view --json statusCheckRollup` は sha を返さない。上の項目）
   - `conclusion == "success"` の行だけを数える。**`skipped` は「走っていない」**
   - 必要なチェックが**すべて** `success` であること（`ci` / `image` は required。`base-overlap` は required ではないが、見ないと同じ穴を踏む）
-  - **同じ sha に複数の世代が在るときは、新しいほうを見る。** 古い世代の結論（`skipped` も `failure` も）に引きずられない
+  - **同じ sha に複数の世代が在るときは、新しいほうを見る。⚠️ ただし「新しいほう」を `check-runs` の応答の中だけで決めないこと。** `check-runs` の各要素には世代の順序を決める信頼できるキーが無い（実測 2026-09-13〜15、#933。sha `1e619f43858160fb5d9a6b1895d236e35d4771cf`、PR #932）:
+    - **`started_at` は run をまたぐと逆転する。** 古い run（draft、06:44:48作成）の `base-overlap` の `skipped` が `started_at=06:44:57` を持ち、新しい run（ready、06:44:54作成）の `success` の `started_at=06:44:56` より**1秒あとに始まっている**。⟹ `group_by(.name) | map(sort_by(.started_at) | last)` は `skipped` を選ぶ（今回は安全側の誤りだったが、鏡像は「古い世代の `success` が新しい世代の `failure` を追い越し、赤を見落とす」）
+    - **check-run の `id` も同じ向きに逆転する。** `id` は「run が作られた順」ではなく「その check-run（＝ job）が作られた順」に振られるため、`if:` の評価が後段で遅れた job だけ id でも後ろへ回る。同じ標本で `base-overlap` は古い run の check-run の方が `id` も大きい。⟹ `group_by(.name) | map(max_by(.id))` も同じく `skipped` を選ぶ —— **`started_at` を `id` に替えても直らない**
+    - **逆転はジョブ（門）ごとに起こる。** 同じ標本の8件中、逆転したのは `base-overlap` の1門だけで、`ci` / `image` / `pr-origin` は `started_at` でも `id` でも正しく新しい世代を選ぶ。⟹ 一部の門で「この数え方は正しい」と検証しても、他の門で赤を見落としうる
+    - **クローンと委譲先が、この誤り（`started_at` で世代を選ぶ）を独立に同時に犯した**（#933）。読み手の不注意ではなく、方法そのものが順序を保証していない
+    - **対策: `check-runs` の一覧を世代選びに使わず、run の側から降りる。** `gh api "repos/<repo>/actions/runs?head_sha=<sha>&per_page=100"` で実際の run 一覧を取り、`workflow_runs` の `created_at`（run 自身が作られた実測時刻。job の `started_at` ではない）で **workflow 名ごとに**最新の run を選び（複数 workflow が同じ sha に在っても名前ごとに独立に選べば、走行中の別 workflow を丸ごと落とさない。#933 コメントの実測）、選んだ run の `gh api repos/<repo>/actions/runs/<id>/jobs` を読む。実測（2026-09-15 観測、上記 sha）: この手順は `image` / `base-overlap` / `ci` / `pr-origin` すべて `success` という正しい答えを返した。**`check-runs` の `check_suite.id` もこの標本では run の作成順と一致したが、複数 workflow・`rerun` で3世代目が生える場合は未検証**（#933 のコメント）なので根拠にしない
+    - `scripts/check-pr-green.mjs`（`pnpm check:pr-green -- <sha>`）はこの手順をそのまま実装したもの
   - **その run が実際にジョブを実行したか**を見る（`actions/runs/<id>/jobs` の `total_count` が0でないこと。実行時間も見る）
   - **`mergeStateStatus` を緑の根拠にしない**
   - `gh pr ready` の後は**本物の run が作られたことを確かめる**。作られないなら `gh pr close` → `gh pr reopen` で起こす（**枝を1バイトも触らない**ので安全。空コミットでもよい）
