@@ -196,9 +196,7 @@ describe('check-sdk-quotes: findQuoteDefects', () => {
    * 変わらないため。
    */
   it('union 末尾に値が足されたら検出する（#793: 直す前は見逃していた欠陥）', () => {
-    const quotes = quoteOf(
-      [`// [sdk-verbatim FakeUnion]`, `// > 'a' | 'b' | 'c'`].join('\n'),
-    );
+    const quotes = quoteOf([`// [sdk-verbatim FakeUnion]`, `// > 'a' | 'b' | 'c'`].join('\n'));
     // 実際の宣言は 'd' が末尾に足されて古くなっている（`FakeUnion` は
     // `SDKAssistantMessageError` が11→12値になった実例を最小化した形）。
     const newDeclaration = "export declare type FakeUnion = 'a' | 'b' | 'c' | 'd';";
@@ -211,9 +209,7 @@ describe('check-sdk-quotes: findQuoteDefects', () => {
   it('union 先頭が削られても検出する（#793 の対称形: 隣接する `|` は前後どちらも見る）', () => {
     // 引用は末尾3値のまま、実際の宣言は先頭に 'z' が増えている
     // （＝引用の直前が `|` に接続しており、union の一部にしか当たっていない）。
-    const quotes = quoteOf(
-      [`// [sdk-verbatim FakeUnion]`, `// > 'a' | 'b' | 'c'`].join('\n'),
-    );
+    const quotes = quoteOf([`// [sdk-verbatim FakeUnion]`, `// > 'a' | 'b' | 'c'`].join('\n'));
     const newDeclaration = "export declare type FakeUnion = 'z' | 'a' | 'b' | 'c';";
     const defects = findQuoteDefects(quotes, newDeclaration) as Defect[];
     expect(defects).toHaveLength(1);
@@ -221,17 +217,13 @@ describe('check-sdk-quotes: findQuoteDefects', () => {
   });
 
   it('union として閉じた引用（前後が `|` に接続しない）は依然として欠陥にならない', () => {
-    const quotes = quoteOf(
-      [`// [sdk-verbatim FakeUnion]`, `// > 'a' | 'b' | 'c'`].join('\n'),
-    );
+    const quotes = quoteOf([`// [sdk-verbatim FakeUnion]`, `// > 'a' | 'b' | 'c'`].join('\n'));
     const newDeclaration = "export declare type FakeUnion = 'a' | 'b' | 'c';";
     expect(findQuoteDefects(quotes, newDeclaration)).toEqual([]);
   });
 
   it('同じ文字列が複数箇所に出ても、1箇所でも `|` に接続しなければ欠陥にならない（誤検出を避ける）', () => {
-    const quotes = quoteOf(
-      [`// [sdk-verbatim FakeUnion]`, `// > 'a' | 'b' | 'c'`].join('\n'),
-    );
+    const quotes = quoteOf([`// [sdk-verbatim FakeUnion]`, `// > 'a' | 'b' | 'c'`].join('\n'));
     // 1箇所目は末尾に 'd' が足された古い形、2箇所目は閉じた正しい形。
     const sdkTypesText = [
       "export declare type StaleCopy = 'a' | 'b' | 'c' | 'd';",
