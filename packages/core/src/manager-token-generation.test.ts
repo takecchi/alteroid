@@ -62,6 +62,25 @@ const RUNNING_JOB: Job = {
 };
 
 /**
+ * Issue #978 の再現専用の2本目のジョブ。**「デーモン再起動を挟んだ二重
+ * restore」を測るには、生きたセッションが最低1つ要る**——`RUNNING_JOB` 1本
+ * だけでも再現できるが、「再起動後に何件が `undefined` になるか」を数える
+ * ためにもう1本並べてある（2本とも同じ runner・同じ形で living 枝に入る）。
+ */
+const RUNNING_JOB_2: Job = {
+  id: 'mgr-gen-2',
+  managerId: 'mgr-gen-2',
+  createdAt: '2026-09-15T00:00:00.000Z',
+  updatedAt: '2026-09-15T00:00:00.000Z',
+  status: 'running',
+  summary: '調べもの2',
+  request: '調べておいて2',
+  cwd: '/work/project',
+  sessionId: 'sess-2',
+  runnerId: 'runner-primary',
+};
+
+/**
  * `manager-usage-token.test.ts` の `usageRunner()` の縮小版。**縮めたのは
  * 「使わない口を空にした」ぶんだけで、判定に効く口（`connect` / `resume` /
  * `list`）は同じことをする。** `usage()` の代わりに `note()` を持つ——ここで
@@ -280,5 +299,104 @@ describe('マネージャーが抱えている認証トークンの世代（Issu
     expect(entry.activeTokenGeneration).toBe(5);
 
     await pool.stop();
+  });
+});
+
+describe('デーモン再起動を挟んだ二重 restore（Issue #978）', () => {
+  /*
+   * **これは現行の欠陥を仕様として固定したものである（Issue #978。
+   * AGENTS.md「現行の欠陥を仕様として固定しているテストは反転させてよい」）。**
+   *
+   * 上の6件は「同一プールインスタンス内の回転」しか作っていない。ここで作るのは
+   * 「デーモンを再起動して、runner に生きたままのセッションへ繋ぎ直す」——独立
+   * した2つの `ManagerPool` インスタンスで再現する（1つ目でセッションを起こして
+   * 世代3 → 回転 → 2つ目で同じ runner の生きたセッションへ再接続）。
+   *
+   * `ManagerPool#restore()` の living 枝（同じ runner に既に生きているセッション
+   * を見つけて引き取る側。`#records` へ載せた直後に `#rememberTokenIdentity` を
+   * 呼ぶ箇所）は、**セッションの env を一切更新しないのに**、その瞬間の現役の
+   * 世代を新しいプロセスの `#tokenIdentities`（プロセス内 Map。デーモンを作り
+   * 直すと空になる）へ書き込む。認証トークンは起動時に env へ焼かれて凍る
+   * （`token-spread.ts`）ので、runner 側の実プロセスは古い世代の鍵のまま走り
+   * 続けている——**記録だけが現役へ追いつき、本物の食い違いが「一致」に化ける**。
+   *
+   * トークンの身元（`tokenId`）はダミー値（`tok-a` / `tok-b`）——本物の形
+   * （メールアドレス状のラベル）ではない。実測はしない（AGENTS.md「秘密の扱い」）。
+   */
+  it('living 枝で引き取ったセッションは、runner の env を更新していないのに、デーモン再起動後は世代の食い違いが消える（偽陰性）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(RUNNING_JOB);
+    await stores.jobs.putJob(RUNNING_JOB_2);
+
+    let current: { tokenId: string; generation: number } = { tokenId: 'tok-a', generation: 3 };
+
+    // POOL1: 2本のセッションを起こす。`fake` の `alive` はまだ空なので、
+    // どちらも「resume」枝（`#resume()`）を通って `#rememberTokenIdentity` が
+    // 走る——既存の6件と同じ経路（`setup()` の注記を参照）。
+    const fake = tokenRunner();
+    const registry1 = createRunnerRegistry([fake.runner]);
+    const pool1 = createManagerPool({
+      stores,
+      post: () => {
+        /* この検証では読まない */
+      },
+      runners: registry1,
+      profile: createProfileService({ stores, runners: registry1 }),
+      tokenIdentity: () => current,
+    });
+    await pool1.restore();
+
+    const before1 = await summaryFor(pool1, 'mgr-gen');
+    const before2 = await summaryFor(pool1, 'mgr-gen-2');
+    expect(before1.tokenGeneration).toBe(3);
+    expect(before1.activeTokenGeneration).toBe(3);
+    expect(before2.tokenGeneration).toBe(3);
+    expect(before2.activeTokenGeneration).toBe(3);
+
+    // 回転（同一プロセス内、再起動なし）。runner 側のセッションはターンの
+    // 境界に一度も達していないので、抱えている世代は追いつかない——ここで
+    // ⚠ が正しく立つ（#968 が直した本来の検知そのもの）。
+    current = { tokenId: 'tok-b', generation: 5 };
+
+    const afterRotation1 = await summaryFor(pool1, 'mgr-gen');
+    const afterRotation2 = await summaryFor(pool1, 'mgr-gen-2');
+    expect(afterRotation1.tokenGeneration).toBe(3);
+    expect(afterRotation1.activeTokenGeneration).toBe(5);
+    expect(afterRotation2.tokenGeneration).toBe(3);
+    expect(afterRotation2.activeTokenGeneration).toBe(5);
+
+    await pool1.stop();
+
+    // POOL2: デーモンを作り直した相当。**新しい `ManagerPool` インスタンスなので
+    // `#tokenIdentities` は空の Map から始まる。** runner 側は生きたまま——同じ
+    // `fake.runner`（同一オブジェクト）を新しい registry へ載せて共有し、
+    // `list()` が返す `alive` の中身（pool1 の resume() が push したもの）を
+    // そのまま引き継ぐ。**runner 側の env は一度も更新していない**——実プロセスは
+    // 世代3の鍵のまま走り続けている。`tokenIdentity` は「新しいデーモンが起動時に
+    // 認識している現役の世代」（回転後の5）を返す。
+    const registry2 = createRunnerRegistry([fake.runner]);
+    const pool2 = createManagerPool({
+      stores,
+      post: () => {
+        /* この検証では読まない */
+      },
+      runners: registry2,
+      profile: createProfileService({ stores, runners: registry2 }),
+      tokenIdentity: () => current,
+    });
+    await pool2.restore();
+
+    const after1 = await summaryFor(pool2, 'mgr-gen');
+    const after2 = await summaryFor(pool2, 'mgr-gen-2');
+
+    // ⚠ 現行の欠陥: living 枝が観測だけで `#tokenIdentities` を書き換えるため、
+    // 実際には runner 側が世代3のまま止まっているのに、記録上は現役（5）と
+    // 「一致」してしまう。#968 が入れた ⚠ が、再起動を挟んだだけで消える。
+    expect(after1.tokenGeneration).toBe(5);
+    expect(after1.activeTokenGeneration).toBe(5);
+    expect(after2.tokenGeneration).toBe(5);
+    expect(after2.activeTokenGeneration).toBe(5);
+
+    await pool2.stop();
   });
 });
