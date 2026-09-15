@@ -76,8 +76,16 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+/**
+ * ここの各 `it` は**出力を読まないのに `captureStdout()` を呼ぶ。** 見るのは
+ * `sent[0].body` だけだが、`inboxRemoveCommand` は成功すれば必ず `report()` で
+ * `stdout.write` するので、張らないと本物の stdout（＝テストランナーの出力
+ * そのもの）へ流れ、根の `vitest.setup.ts` の歯（#314 / #319）が赤くする
+ * （逐語は `grep -Fn -- 'このテストが本物の stdout へ書いた' vitest.setup.ts`）。
+ */
 describe('alteroid inbox remove — 送る本文', () => {
   it('既定（--execute を渡さない）は dryRun: true を送る', async () => {
+    captureStdout();
     await inboxRemoveCommand({ types: 'manager_message', reason: '滞留の掃除' });
 
     expect(sent).toHaveLength(1);
@@ -91,6 +99,7 @@ describe('alteroid inbox remove — 送る本文', () => {
   });
 
   it('--execute を渡すと dryRun: false を送る', async () => {
+    captureStdout();
     await inboxRemoveCommand({ types: 'manager_message', reason: '滞留の掃除', execute: true });
 
     expect(sent[0]?.body).toEqual({
@@ -101,12 +110,14 @@ describe('alteroid inbox remove — 送る本文', () => {
   });
 
   it('--types はカンマ区切りで配列へ、前後の空白を落とす', async () => {
+    captureStdout();
     await inboxRemoveCommand({ types: ' manager_message , timer ', reason: 'r' });
 
     expect((sent[0]?.body as { types: string[] }).types).toEqual(['manager_message', 'timer']);
   });
 
   it('--sources / --before / --limit を渡すと本文に含める', async () => {
+    captureStdout();
     await inboxRemoveCommand({
       types: 'external',
       sources: 'external:webhook-a, external:webhook-b',
@@ -126,6 +137,7 @@ describe('alteroid inbox remove — 送る本文', () => {
   });
 
   it('--sources / --before / --limit を渡さないときは本文にキーごと含めない', async () => {
+    captureStdout();
     await inboxRemoveCommand({ types: 'external', reason: 'r' });
 
     const body = sent[0]?.body as Record<string, unknown>;
@@ -157,6 +169,10 @@ describe('alteroid inbox remove — 入力の手前での断り（fetch を呼�
     await inboxRemoveCommand({ types: 'timer', reason: 'r', limit: '0' });
 
     expect(sent).toHaveLength(0);
+    // 隣の `--limit が整数でない` と同じく、断った理由まで見る——`sent` が0件
+    // であることだけを見ると、**別の理由で fetch に届かなかった場合**（例えば
+    // `--types` の検査で先に return した）と区別できない。
+    expect(read()).toContain('--limit には1以上の整数');
   });
 });
 
@@ -183,12 +199,15 @@ describe('alteroid inbox remove — 応答の表示', () => {
     expect(text).toContain('[試算]');
     expect(text).toContain('30 件中 12 件');
     expect(text).toContain('対象 10 件');
-    expect(text).toContain('残り 2');
-    // 上限で持ち越し
+    // 上限で切って残った分は「持ち越し」として出す（実装の文言そのもの。
+    // 逐語は `grep -Fn -- '上限で持ち越し' apps/cli/src/inbox.ts`）。
+    expect(text).toContain('上限で持ち越し 2 件');
     expect(text).toContain('1件も消していません');
     // そのまま打てる次の一手（--execute 付き）を案内する
     expect(text).toContain('--execute');
-    expect(text).toContain('alteroid inbox remove --types manager_message --reason "r" --limit 10 --execute');
+    expect(text).toContain(
+      'alteroid inbox remove --types manager_message --reason "r" --limit 10 --execute',
+    );
   });
 
   it('実行（--execute）の結果は消した id を全部出す（打ち切らない）', async () => {
@@ -217,23 +236,48 @@ describe('alteroid inbox remove — 応答の表示', () => {
   });
 });
 
-describe('alteroid inbox remove — サーバの断りをそのまま出す', () => {
-  it('400（絞り込みが無いのと同じ呼び等）はサーバの error 文言をそのまま出す', async () => {
-    replies = [{ status: 400, body: { error: '絞り込みが無いのと同じ呼びは断る。1件も消していません。' } }];
-    const read = captureStdout();
-    await inboxRemoveCommand({
-      types: 'human_message,human_answer,distill,timer,external,self_initiative,manager_message',
-      reason: 'r',
-    });
+/**
+ * **失敗は例外で出る（stdout ではない）。** `index.ts` の
+ * `program.parseAsync(...).catch(...)` が受けて stderr へ出し `process.exit(1)`
+ * にするので、ここで `rejects` を測ることが「終了コードが 0 にならない」の歯に
+ * なる（逐語は `grep -Fn -- '失敗を握り潰さない' apps/cli/src/inbox.ts`）。
+ * **`resolves` で stdout を読む形へ書き戻すと、この保証が黙って消える。**
+ */
+describe('alteroid inbox remove — サーバの断りをそのまま投げる', () => {
+  it('400（絞り込みが無いのと同じ呼び等）はサーバの error 文言をそのまま投げる', async () => {
+    replies = [
+      { status: 400, body: { error: '絞り込みが無いのと同じ呼びは断る。1件も消していません。' } },
+    ];
 
-    expect(read()).toContain('絞り込みが無いのと同じ呼びは断る。1件も消していません。');
+    await expect(
+      inboxRemoveCommand({
+        types: 'human_message,human_answer,distill,timer,external,self_initiative,manager_message',
+        reason: 'r',
+      }),
+    ).rejects.toThrow('絞り込みが無いのと同じ呼びは断る。1件も消していません。');
   });
 
-  it('403 は access grant の案内を出す（describeAuthFailure と同じ文言）', async () => {
+  it('403 は access grant の案内を投げる（describeAuthFailure と同じ文言）', async () => {
     replies = [{ status: 403, body: { error: 'このアカウントには alteroid を使う許可が無い' } }];
-    const read = captureStdout();
-    await inboxRemoveCommand({ types: 'timer', reason: 'r' });
 
-    expect(read()).toContain('alteroid access grant');
+    await expect(inboxRemoveCommand({ types: 'timer', reason: 'r' })).rejects.toThrow(
+      /alteroid access grant/,
+    );
+  });
+
+  it('5xx も握り潰さずに投げる（終了コードが 0 にならない）', async () => {
+    replies = [{ status: 500, body: { error: 'internal' } }];
+
+    await expect(inboxRemoveCommand({ types: 'timer', reason: 'r' })).rejects.toThrow(
+      '受信箱を畳めませんでした（500）',
+    );
+  });
+
+  it('繋がらない（fetch そのものが失敗する）も投げる', async () => {
+    globalThis.fetch = (() => Promise.reject(new Error('fetch failed'))) as unknown as typeof fetch;
+
+    await expect(inboxRemoveCommand({ types: 'timer', reason: 'r' })).rejects.toThrow(
+      'fetch failed',
+    );
   });
 });

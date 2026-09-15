@@ -195,3 +195,17 @@ export type ArchiveSessionSummary = ArchiveSessionsState['sessions'][number];
  * の doc）。
  */
 export type ArchiveRemoveResult = Ok<paths['/archive/{id}']['delete']>;
+
+/**
+ * 受信箱（`inbox_events`）の絞り込み一括削除（`POST /inbox/remove`。issue #972）。
+ * CLI の `alteroid inbox remove` と同じ口——人間の入口なので、クローンの道具
+ * `inbox_remove_many` が構造的に除く `human_message` / `human_answer` も含めて
+ * 7種類すべてを選べる（`apps/daemon/src/openapi.ts` の
+ * `inboxRemoveManyRequestSchema` の doc）。
+ */
+export type InboxRemoveManyRequestBody = NonNullable<
+  paths['/inbox/remove']['post']['requestBody']
+>['content']['application/json'];
+/** `types` に渡せる7種類（`InboxEvent['type']` と同じ）。 */
+export type InboxEventType = InboxRemoveManyRequestBody['types'][number];
+export type InboxRemoveManyResult = Ok<paths['/inbox/remove']['post']>;

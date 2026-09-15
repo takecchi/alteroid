@@ -27,6 +27,17 @@ import { describeAuthFailure, resolveTarget, type Target } from './target.js';
  * **`types` は必須で、`commitment_close_many` / `POST /inbox/remove` と同じく
  * 「在る7種類を全部並べた呼びは断る」——サーバ側（`app.ts`）が判定するので
  * ここでは複製しない。同じ理由でエラー文言もサーバのものをそのまま出す。**
+ *
+ * **失敗は例外で上へ通す（＝終了コードが 0 でなくなる）。** 消す操作なので、
+ * 「消えたのか消えなかったのか」を終了コードから読めない形にしない（本体の
+ * `post(target, body)` を呼ぶ箇所の注釈に理由の全文が在る）。
+ *
+ * **サーバが 7 種類のうちどれを受けるかは、クローンの道具とは別である。**
+ * `inbox_remove_many`（`packages/core/src/tools.ts`）は人間起点の合図
+ * （`human_message` / `human_answer`）を構造的に除くが、**それは道具側の
+ * 線引きであって、この HTTP の口の線引きではない**（逐語は
+ * `grep -Fn -- 'この HTTP の口は' apps/daemon/src/openapi.ts`）。人間の入口
+ * である CLI / Web UI は 7 種類とも渡せる。
  */
 export interface InboxRemoveOptions {
   types: string;
@@ -56,7 +67,9 @@ export async function inboxRemoveCommand(options: InboxRemoveOptions): Promise<v
 
   const types = splitList(options.types);
   if (types.length === 0) {
-    stdout.write('--types に最低1種類を指定してください（カンマ区切り。例 --types manager_message）\n');
+    stdout.write(
+      '--types に最低1種類を指定してください（カンマ区切り。例 --types manager_message）\n',
+    );
     return;
   }
 
@@ -84,13 +97,19 @@ export async function inboxRemoveCommand(options: InboxRemoveOptions): Promise<v
   if (options.before !== undefined) body.before = options.before;
   if (limit !== undefined) body.limit = limit;
 
-  let result: InboxRemoveManyResult;
-  try {
-    result = await post(target, body);
-  } catch (caught) {
-    stdout.write(`${caught instanceof Error ? caught.message : String(caught)}\n`);
-    return;
-  }
+  // **失敗を握り潰さない——例外はそのまま上（`index.ts` の
+  // `program.parseAsync(...).catch(...)`）へ通す。** そこで stderr へ出て
+  // `process.exit(1)` になる。ここで `catch` して stdout へ書いて正常 return
+  // すると、400（絞り込みの間違い）でも 401/403（認証・許可）でも 5xx でも、
+  // そもそも繋がらなかったときでさえ**終了コードが 0** になり、スクリプトや
+  // cron から失敗を検知できない。**消す操作なので、「消えたのか消えなかった
+  // のか」が終了コードから読めない形にしない。**
+  // 既存の変更系（`reset.ts` / `access.ts` / `token.ts`）は全部この形である
+  // （逐語は `grep -Fn -- 'if (described !== null) throw new Error(described);' apps/cli/src/reset.ts`）。
+  // 読み取り専用の `dropped.ts` だけは HTTP の失敗を stdout へ書いて return
+  // するが、あちらも「繋がらない」は同じく上へ通す（逐語は
+  // `grep -Fn -- '繋がらない（ネットワークそのものの失敗）はここで握り潰さない。' apps/cli/src/dropped.ts`）。
+  const result = await post(target, body);
   report(result, dryRun, options);
 }
 
@@ -115,7 +134,9 @@ async function post(target: Target, body: Record<string, unknown>): Promise<Inbo
       // 上限超え」の3種を CLI 側で言い換えると、サーバ側の文言が変わったとき
       // ここだけ古いままになる）。
       const errorBody = (await response.json().catch(() => ({}))) as { error?: string };
-      throw new Error(errorBody.error ?? '受信箱の絞り込みが不正です（400）。1件も消していません。');
+      throw new Error(
+        errorBody.error ?? '受信箱の絞り込みが不正です（400）。1件も消していません。',
+      );
     }
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);

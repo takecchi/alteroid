@@ -15,7 +15,13 @@ import { useCallback } from 'react';
 import { useSWRConfig } from 'swr';
 
 import { expectOk, unwrap, useApi } from '~/lib/api';
-import type { AgentTokenView, ConversationSummary, EnvVarScope } from '~/lib/types';
+import type {
+  AgentTokenView,
+  ConversationSummary,
+  EnvVarScope,
+  InboxEventType,
+  InboxRemoveManyResult,
+} from '~/lib/types';
 
 import { isKeyOfType, KEY } from './queries';
 
@@ -578,5 +584,59 @@ export function useRemoveArchive() {
       return result;
     },
     [api, mutate],
+  );
+}
+
+/** `useInboxRemoveMany` に渡す絞り込み（`POST /inbox/remove` の入力そのもの）。 */
+export interface InboxRemoveManyInput {
+  types: readonly InboxEventType[];
+  sources?: readonly string[];
+  before?: string;
+  reason: string;
+  limit?: number;
+  dryRun: boolean;
+}
+
+/**
+ * 受信箱（`inbox_events`）の未読を、絞り込んでまとめて畳む（消す）。
+ * `POST /inbox/remove`——CLI の `alteroid inbox remove`（`apps/cli/src/inbox.ts`）
+ * と同じ口（issue #972）。
+ *
+ * **`dryRun` は呼び出し側が決める。** ここでは既定を持たない——「既定は試算」は
+ * 呼び出し側（`routes/inbox.tsx`）が「試算する」ボタンで `dryRun: true` を、
+ * 明示の「実行する」ボタンでだけ `dryRun: false` を渡す形で守る。CLI の
+ * `inboxRemoveCommand`（`--execute` が無ければ `dryRun: true`）と同じ役割分担。
+ *
+ * **400 の文言をそのまま投げる。** `types` に在る7種類を全部並べた呼び・
+ * `before` が ISO8601 として読めない・`limit` が上限超え、のどれも
+ * ここでは判定しない——`unwrap` がサーバの `{error}` をそのまま
+ * `ApiError.message` に載せて投げるので、呼び出し側は `ErrorNote` に渡すだけで
+ * サーバの断り文言がそのまま出る（`apps/cli/src/inbox.ts` の `post()` の
+ * コメントと同じ理由——判定を複製すると、サーバ側の文言や条件が変わったとき
+ * ここだけ古いまま残る）。
+ *
+ * **キャッシュを引き直さない。** `GET /inbox` のような一覧は無く、この画面
+ * 自身が表示するのは呼び出しの戻り値だけである。消した id は日誌にも残るが、
+ * 日誌は SSE（`use-journal-live.ts`）が別途拾うので、ここから明示的に
+ * `mutate(KEY.journal)` する必要はない。
+ */
+export function useInboxRemoveMany() {
+  const api = useApi();
+  return useCallback(
+    async (input: InboxRemoveManyInput): Promise<InboxRemoveManyResult> => {
+      return api.api
+        .POST('/inbox/remove', {
+          body: {
+            types: [...input.types],
+            ...(input.sources === undefined ? {} : { sources: [...input.sources] }),
+            ...(input.before === undefined ? {} : { before: input.before }),
+            reason: input.reason,
+            dryRun: input.dryRun,
+            ...(input.limit === undefined ? {} : { limit: input.limit }),
+          },
+        })
+        .then(unwrap);
+    },
+    [api],
   );
 }

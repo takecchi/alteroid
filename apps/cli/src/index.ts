@@ -3,6 +3,7 @@ import { realpathSync } from 'node:fs';
 import { stdout } from 'node:process';
 import { pathToFileURL } from 'node:url';
 
+import { REMOVE_MANY_LIMIT_DEFAULT, REMOVE_MANY_LIMIT_MAX } from '@alteroid/core';
 import { initWorkspace } from '@alteroid/storage-fs';
 import { Command } from 'commander';
 
@@ -229,7 +230,9 @@ program
  * （`POST /inbox/remove`、PR #1007）を CLI から叩く。既定は試算（dryRun）で
  * 1件も消さない。詳しい経緯・設計は `apps/cli/src/inbox.ts` の doc を見ること。
  */
-const inboxCommand = program.command('inbox').description('受信箱（inbox_events）— 未処理の合図の器');
+const inboxCommand = program
+  .command('inbox')
+  .description('受信箱（inbox_events）— 未処理の合図の器');
 
 inboxCommand
   .command('remove')
@@ -245,7 +248,13 @@ inboxCommand
   .option('--before <ISO8601>', 'この時刻より古い行だけを対象にする')
   .requiredOption('--reason <理由>', '日誌に残す理由')
   .option('--execute', '試算ではなく実際に消す（既定は試算）')
-  .option('--limit <N>', '1回で消す上限')
+  // 既定・上限は `@alteroid/core` の定数から組む（`usage` / `conversations` の
+  // `--limit` / `--scan` が既定と最大をヘルプに書いているのと同じ慣習だが、
+  // 数を書き写すと腐るので値そのものを参照する）。
+  .option(
+    '--limit <N>',
+    `1回で消す上限（デーモンの既定 ${REMOVE_MANY_LIMIT_DEFAULT}、最大 ${REMOVE_MANY_LIMIT_MAX}）`,
+  )
   .action(
     async (options: {
       types: string;

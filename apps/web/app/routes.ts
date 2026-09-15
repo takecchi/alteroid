@@ -29,6 +29,8 @@ export default [
     route('env-vars', 'routes/env-vars.tsx'),
     route('dropped', 'routes/dropped.tsx'),
     route('archive', 'routes/archive.tsx'),
+    // CLI の `alteroid inbox remove` と同じ口（issue #972 / #1042）。
+    route('inbox', 'routes/inbox.tsx'),
     route('schedule', 'routes/schedule.tsx'),
     route('settings', 'routes/settings.tsx'),
     route('*', 'routes/not-found.tsx'),

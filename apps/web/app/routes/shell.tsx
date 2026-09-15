@@ -7,6 +7,7 @@ import {
   CalendarClock,
   DollarSign,
   Footprints,
+  Inbox as InboxIcon,
   KeyRound,
   LayoutDashboard,
   ListChecks,
@@ -48,6 +49,9 @@ const NAV = [
   { to: '/dropped', label: '握り潰しの跡', icon: Footprints, end: false },
   // 可観測性の最下段——`/dropped` の隣（#776）。
   { to: '/archive', label: 'アーカイブ', icon: ArchiveIcon, end: false },
+  // アーカイブの隣。**どちらも人間の入口から一括削除する掃除の道具**
+  // （issue #972 / #1042）。CLI の `alteroid inbox remove` と同じ口。
+  { to: '/inbox', label: '受信箱', icon: InboxIcon, end: false },
   { to: '/memory', label: '記憶', icon: Brain, end: false },
   { to: '/schedule', label: 'スケジュール', icon: CalendarClock, end: false },
   { to: '/settings', label: '設定', icon: Settings, end: false },
