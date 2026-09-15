@@ -889,7 +889,10 @@ describe('引き受けたまま終わっていない仕事', () => {
     await waitForSettled(s.events);
 
     const input = s.calls.flatMap((call) => call.inputs).join('\n');
-    expect(input).toContain('引き受けたまま終わっていない仕事は **1 件** ある');
+    expect(input).toContain('引き受けたまま終わっていない仕事は（');
+    expect(input).toContain('**1 件** ある');
+    // **いつ数えた値かを名乗る（#960）** — `HH:MM:SSZ` の形の時刻ラベルが必ず載る
+    expect(input).toMatch(/引き受けたまま終わっていない仕事は（\d{2}:\d{2}:\d{2}Z に数えた材料）/);
     // 閉じ方が分からなければ閉じられない
     expect(input).toContain('commitment_close');
     // **器は並べ替えない。** 順序を器が決めた瞬間に「何を先にやるか」の判断が器へ移る

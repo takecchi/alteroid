@@ -71,7 +71,7 @@ import type { ProfileApplier } from './profile.js';
 import { resolveCredentialRows, type CredentialService } from './credential-service.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap } from './recent.js';
-import { describeSituation, describeSituationUnavailable } from './situation.js';
+import { describeSituation, describeSituationUnavailable, readAtLabel } from './situation.js';
 import { countSupersedingReports, describeSuperseded } from './superseded.js';
 import { describeValidity, inboxEventValidity } from './inbox-validity.js';
 import type { JobStatus } from './schema.js';
@@ -2721,6 +2721,13 @@ class Clone implements CloneHost {
    * 分が待ち行列の先頭にあと何件残っているか**。そして**1件も失われておらず、
    * 次のターンで同じ形で束ね直される**ことも言う（`#drainMergeableWithinLimit`
    * の doc の「1件も消えない」がここでも成り立つ）。
+   *
+   * **`いつ数えた値かを名乗る（#960、`situation.ts` の `readAtLabel`）。**
+   * `remainingHead` は呼び出した瞬間の待ち行列の先頭の件数であって、この節も
+   * 他の毎ターン注入節と同じく `#pushInput` で会話履歴に溜まる。時刻を
+   * 名乗らなければ、後から読み返す側は「あと何件残っている」をどのターンの
+   * ものとして読むべきか判定できない（`#commitmentNoticeFor` の doc、
+   * `readAtLabel` の doc「言い回しだけでは直らない」と同じ理由）。
    */
   #mergedBatchTruncationNoticeFor(truncation: {
     readonly limit: number;
@@ -2730,7 +2737,7 @@ class Clone implements CloneHost {
     const { limit, batchSize, remainingHead } = truncation;
     return [
       `[system] **このターンへ束ねる合図は、上限（${String(limit)} 件）で切った束である` +
-        `（この束は ${String(batchSize)} 件）。**` +
+        `（この束は ${String(batchSize)} 件。${readAtLabel(Date.now())} 時点）。**` +
         `同じ束に入るはずの合図が、待ち行列の先頭にあと ${String(remainingHead)} 件連続して残っている。`,
       '**1件も失われていない** —— 上限で止めただけで、外れた分は次のターンで同じ形でまた束ね直される。',
       '',
@@ -3280,6 +3287,14 @@ class Clone implements CloneHost {
    *
    * **読めなくても空文字を返してターンを進める。** 台帳が読めないことでターンまで
    * 止めたら、いま塞いでいる穴より広い穴になる。
+   *
+   * **見出しは`いつ数えた値か`を名乗る（#960、`situation.ts` の `readAtLabel`）。**
+   * この節も `#pushInput` で会話履歴へ連結され、ターンが N 回走れば N 個並ぶ
+   * （`readAtLabel` の doc「節は1つではない。セッションに溜まる」と同じ形）。
+   * 件数が変わらなければ、時刻を名乗らない限り古い節と新しい節が見分けられない
+   * ——これが #902 の残件として #960 が見つけた欠陥である。**「組んだ時点では」
+   * のような言い回しだけでは直らない**（`readAtLabel` の doc）ので、
+   * `situation.ts` と同じ具体的な時刻の値をそのまま使い回す。
    */
   async #commitmentNoticeFor(events: InboxEvent[]): Promise<string> {
     const event = events[0];
@@ -3307,6 +3322,10 @@ class Clone implements CloneHost {
       return '';
     }
     const open = list.entries;
+    // **この節がいつ数えた値かを名乗る（#960）。** `list()` を読み終えた直後の
+    // 値を使う——ここより後で計算しても、数えた対象（`open` / `list.unreadable`）
+    // とは無関係な遅延が乗るだけである。
+    const at = Date.now();
 
     // **まとめた件数ぶん台帳に載っている**（記帳は `post` が合図ごとに行う）。
     // 1件しか渡さないと、残りは id を渡されないまま未了として溜まる。
@@ -3318,7 +3337,8 @@ class Clone implements CloneHost {
     );
     const oldest = open[0];
     const lines = [
-      `[system] 引き受けたまま終わっていない仕事は **${open.length} 件** ある` +
+      `[system] 引き受けたまま終わっていない仕事は（${readAtLabel(at)} に数えた材料）` +
+        `**${open.length} 件** ある` +
         (oldest === undefined ? '。' : `（いちばん古いものは ${oldest.at} に受け取ったもの）。`),
       ...(mine.length === 0
         ? []

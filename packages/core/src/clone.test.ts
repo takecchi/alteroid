@@ -11810,9 +11810,10 @@ describe('クローン — 同じマネージャーの連続する report をま
     expect(truncated).toContain('上限+1テスト1本目');
     expect(truncated).toContain('上限+1テスト2本目');
     expect(truncated).not.toContain('上限+1テスト3本目');
-    expect(lineStartingWith(truncated, '[system] **このターンへ束ねる合図は、上限')).toBe(
-      '[system] **このターンへ束ねる合図は、上限（2 件）で切った束である（この束は 2 件）。**' +
-        '同じ束に入るはずの合図が、待ち行列の先頭にあと 1 件連続して残っている。',
+    // **いつ数えた値かを名乗る（#960）**: `remainingHead` は呼び出した瞬間の値なので
+    // `HH:MM:SSZ` の時刻ラベルが必ず載る（`readAtLabel` と同じ形）。
+    expect(lineStartingWith(truncated, '[system] **このターンへ束ねる合図は、上限')).toMatch(
+      /^\[system\] \*\*このターンへ束ねる合図は、上限（2 件）で切った束である（この束は 2 件。\d{2}:\d{2}:\d{2}Z 時点）。\*\*同じ束に入るはずの合図が、待ち行列の先頭にあと 1 件連続して残っている。$/,
     );
     expect(truncated).toContain(
       '**1件も失われていない** —— 上限で止めただけで、外れた分は次のターンで同じ形でまた束ね直される。',
@@ -11850,9 +11851,8 @@ describe('クローン — 同じマネージャーの連続する report をま
     const firstBatch = inputs[1] ?? '';
     expect(firstBatch).toContain('上限+2テスト1本目');
     expect(firstBatch).toContain('上限+2テスト2本目');
-    expect(lineStartingWith(firstBatch, '[system] **このターンへ束ねる合図は、上限')).toBe(
-      '[system] **このターンへ束ねる合図は、上限（2 件）で切った束である（この束は 2 件）。**' +
-        '同じ束に入るはずの合図が、待ち行列の先頭にあと 2 件連続して残っている。',
+    expect(lineStartingWith(firstBatch, '[system] **このターンへ束ねる合図は、上限')).toMatch(
+      /^\[system\] \*\*このターンへ束ねる合図は、上限（2 件）で切った束である（この束は 2 件。\d{2}:\d{2}:\d{2}Z 時点）。\*\*同じ束に入るはずの合図が、待ち行列の先頭にあと 2 件連続して残っている。$/,
     );
 
     // 2本目の束は、それ自身がちょうど上限（2件）だが、後ろに何も残っていない
@@ -11884,9 +11884,8 @@ describe('クローン — 同じマネージャーの連続する report をま
     const inputs = (s.calls[0] as FakeCall).inputs;
     expect(inputs).toHaveLength(3);
     const truncated = inputs[1] ?? '';
-    expect(lineStartingWith(truncated, '[system] **このターンへ束ねる合図は、上限')).toBe(
-      '[system] **このターンへ束ねる合図は、上限（2 件）で切った束である（この束は 2 件）。**' +
-        '同じ束に入るはずの合図が、待ち行列の先頭にあと 1 件連続して残っている。',
+    expect(lineStartingWith(truncated, '[system] **このターンへ束ねる合図は、上限')).toMatch(
+      /^\[system\] \*\*このターンへ束ねる合図は、上限（2 件）で切った束である（この束は 2 件。\d{2}:\d{2}:\d{2}Z 時点）。\*\*同じ束に入るはずの合図が、待ち行列の先頭にあと 1 件連続して残っている。$/,
     );
 
     await s.clone.stop();
@@ -12190,9 +12189,8 @@ describe('クローン — 中身の同じ external をまとめて読む（#841
     expect(inputs).toHaveLength(3);
 
     const truncated = inputs[1] ?? '';
-    expect(lineStartingWith(truncated, '[system] **このターンへ束ねる合図は、上限')).toBe(
-      '[system] **このターンへ束ねる合図は、上限（2 件）で切った束である（この束は 2 件）。**' +
-        '同じ束に入るはずの合図が、待ち行列の先頭にあと 1 件連続して残っている。',
+    expect(lineStartingWith(truncated, '[system] **このターンへ束ねる合図は、上限')).toMatch(
+      /^\[system\] \*\*このターンへ束ねる合図は、上限（2 件）で切った束である（この束は 2 件。\d{2}:\d{2}:\d{2}Z 時点）。\*\*同じ束に入るはずの合図が、待ち行列の先頭にあと 1 件連続して残っている。$/,
     );
     expect(truncated).toContain(
       '**1件も失われていない** —— 上限で止めただけで、外れた分は次のターンで同じ形でまた束ね直される。',

@@ -91,8 +91,16 @@ const SITUATION_HEAD = '[system] いまの全体';
  * 書かない。** 日付を出さないのも同じ割り切りで、**24時間ちょうど離れた2つの
  * 節は取り違えうる**（1つの文脈窓にそれが起きるとは考えていない）。
  * ⟹ どちらも**毎ターンの文字数を増やさない**ことを優先した結果である。
+ *
+ * **`clone.ts` の他の毎ターン注入節（#960）にも同じ形で使う。** #960 は
+ * `#commitmentNoticeFor` / `#mergedBatchTruncationNoticeFor` が「現在形で
+ * 断定し、時刻を1文字も名乗らない」まま残っていたのを見つけた —— 直し方は
+ * 上の「言い回しだけでは直らない」という結論のとおり、この関数が作る具体的な
+ * 時刻の値を埋めることである。**同じ判定関数を2つ持つと、片方だけ直して
+ * 忘れる形が再発する**（この関数が直したのはまさにその再発である）ので、
+ * ここから export して使い回す。
  */
-function readAtLabel(at: number): string {
+export function readAtLabel(at: number): string {
   return `${new Date(at).toISOString().slice(11, 19)}Z`;
 }
 
