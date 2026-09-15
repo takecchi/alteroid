@@ -17,30 +17,10 @@ import {
 } from '~/components/ui';
 import { useCloseCommitment, useEditCommitment, usePushCommitment } from '~/hooks/mutations';
 import { useCommitments } from '~/hooks/queries';
-import type {
-  Commitment,
-  CommitmentClosedBy,
-  CommitmentOrigin,
-  TextMarkup,
-  UnreadableCommitment,
-} from '@alteroid/core';
+import type { CommitmentClosedBy, CommitmentOrigin, TextMarkup } from '@alteroid/core';
 import { cn } from '~/lib/cn';
 import { formatDateTime, formatRelative } from '~/lib/format';
-
-/**
- * `Commitment` に `respondedAt`（issue #1003）を足したもの。
- *
- * **本来は `apps/web/app/lib/types.ts` が持つ「生成 spec から導出する」形
- * （`Ok<paths['/commitments']['get']>['entries'][number]` のような）で
- * 持つべき欄だが、`lib/types.ts` はこの PR の作業範囲に含まれていない
- * （マネージャーへ確認中。PR 本文）。ここでは `Commitment`（`@alteroid/core`）
- * へ手で1欄だけ足す — 型は `apps/daemon/src/openapi.ts` の
- * `commitmentListResponseSchema`（`respondedAt: isoDateTimeSchema.optional()`）
- * と一致させてある。`useCommitments()` が読む `GET /commitments` の応答は
- * 実際にこの欄を持つので、ここは値を作っているのではなく型を追いつかせて
- * いるだけである。
- */
-type CommitmentWithRespondedAt = Commitment & { respondedAt?: string };
+import type { Commitment, UnreadableCommitment } from '~/lib/types';
 
 /**
  * 引き受けたまま終わっていない仕事の台帳（`packages/core/src/schema.ts` の
@@ -675,7 +655,7 @@ function EditedBadge({ commitment }: { commitment: Commitment }) {
  * `Commitment` を結ぶ鍵がリポジトリに無く、結べないものは出さない
  * （issue #1003 本文）。段2（進行中）も同じ理由でまだここに無い。
  */
-function AnsweredStateBadge({ commitment }: { commitment: CommitmentWithRespondedAt }) {
+function AnsweredStateBadge({ commitment }: { commitment: Commitment }) {
   if (commitment.origin !== 'human') return null;
   if (commitment.respondedAt !== undefined) {
     return (
@@ -826,7 +806,7 @@ function CommitmentBodyEditor({
   );
 }
 
-function OpenRow({ commitment }: { commitment: CommitmentWithRespondedAt }) {
+function OpenRow({ commitment }: { commitment: Commitment }) {
   const closeCommitment = useCloseCommitment();
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);

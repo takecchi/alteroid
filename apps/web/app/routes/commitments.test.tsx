@@ -14,29 +14,34 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { Commitment, CommitmentOrigin } from '@alteroid/core';
+import type { CommitmentOrigin } from '@alteroid/core';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
+import type { Commitment } from '~/lib/types';
 
 import Commitments from './commitments';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * `respondedAt`（issue #1003）はサーバの導出値で、core の `Commitment` 型には
- * 無い（`commitments.tsx` の `CommitmentWithRespondedAt` の doc と同じ理由）。
- * ここでも同じ形で1欄だけ広げる——書き写しているのは型であって、値の生成
- * ロジックそのものはサーバ側（`packages/core/src/schema.ts` の
- * `commitmentRespondedAt`）だけが持つ。
+ * `Commitment`（`~/lib/types`。生成 spec から導出した型）は `respondedAt`
+ * （issue #1003）を含む——`GET /commitments` の応答がそのまま持つ欄なので、
+ * ここで手を加える必要は無い（以前はここでローカルに1欄だけ広げていたが、
+ * `commitments.tsx` と同じ理由でその形をやめた）。
+ *
+ * **`updatedAt` は必須欄である**（`commitmentListResponseSchema` の
+ * `entries` が持つ加算欄。`packages/core/src/schema.ts` の
+ * `commitmentUpdatedAt` と同じ導出——`closedAt ?? at`）。画面はこの値を
+ * 直接は読まないが、型を満たすためにここで組み立てる。
  */
-function commitment(over: Partial<Commitment & { respondedAt?: string }> = {}): Commitment & {
-  respondedAt?: string;
-} {
+function commitment(over: Partial<Commitment> = {}): Commitment {
+  const at = over.at ?? new Date(Date.now() - 3 * DAY_MS).toISOString();
   return {
     id: 'cmt-1',
-    at: new Date(Date.now() - 3 * DAY_MS).toISOString(),
     origin: 'human',
     body: 'ドキュメントの誤りを直す',
     ...over,
+    at,
+    updatedAt: over.updatedAt ?? over.closedAt ?? at,
   };
 }
 

@@ -27,6 +27,23 @@ export type ManagerDenial = NonNullable<ManagerSummary['denials']>[number];
 export type PendingApproval = Ok<paths['/approvals']['get']>['approvals'][number];
 
 /**
+ * 引き受けたまま終わっていない仕事の台帳の1行（`GET /commitments`）。
+ *
+ * **`respondedAt`（issue #1003）を含む。** サーバ（`apps/daemon/src/openapi.ts`
+ * の `commitmentListResponseSchema`）が `commitmentSchema` へ `updatedAt` /
+ * `respondedAt` を加算した形で返すので、ここも生成 spec からそのまま導く
+ * ——手で複製すると、サーバ側の形が変わったときに画面側だけ古いまま残り、
+ * かつ「古いままである」ことがどこにも現れない（この文書の冒頭が言う
+ * 二重管理そのもの）。
+ */
+export type Commitment = Ok<paths['/commitments']['get']>['entries'][number];
+/**
+ * 台帳の行が読めなかったもの（issue #296）。「無い」でも「片付いた」でもない
+ * 第3の状態——`GET /commitments` の `unreadable` をそのまま導く。
+ */
+export type UnreadableCommitment = Ok<paths['/commitments']['get']>['unreadable'][number];
+
+/**
  * まとめて答えたときの1件ぶんの結果（`POST /approvals/answer`）。
  *
  * **1件が駄目でも残りは進む設計なので、`ok` を畳んで成功件数だけにしない。**
