@@ -383,8 +383,12 @@ export function useRunners() {
  * 認証トークンのプールと、回す契機・冷却の設定（`GET /tokens`）。
  *
  * **alteroid を使う許可があれば読める**（2026-09-06 の同格化で `requireOperator` が
- * 外れた。それ以前は実行環境の持ち主だけだった）。読み取り専用（`PUT /tokens` は
- * この画面からは呼ばない）。
+ * 外れた。それ以前は実行環境の持ち主だけだった）。**2026-09-14 以降、この hook を
+ * 呼ぶ画面（`routes/tokens.tsx`）は `PUT /tokens` も呼ぶ**（追加・削除・
+ * 無効化/有効化——`mutations.ts` の `useAddToken` / `useRemoveToken` /
+ * `useSetTokenDisabled`）。**もう読み取り専用ではない。** 回す契機・冷却の設定
+ * （`policy`）は引き続き CLI（`alteroid token policy`）/ `PUT /tokens/policy`
+ * だけの仕事である。
  */
 export function useTokens() {
   const api = useApi();
