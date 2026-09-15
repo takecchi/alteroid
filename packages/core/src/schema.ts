@@ -410,6 +410,17 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
     text: z.string(),
     /** 人間が chat セッションを閉じたか（会話終了 = 蒸留の契機） */
     conversationId: z.string(),
+    /**
+     * この発言が置き換える、同じ会話の中の過去の人間の発言の日誌エントリ id
+     * （チャットの「メッセージを編集する」機能。#edit-message）。
+     *
+     * **受信箱の間だけの値ではない。** `Clone#record` がここから日誌の
+     * `exchange`（`journalEntrySchema` の `supersedes`。doc を見よ）へそのまま
+     * 通す——受信箱と日誌の両方に持たせているのは、どちらか片方だけが
+     * 知っている状態を作らないため（受信箱はまだ処理していない合図の器、
+     * 日誌は確定した記録）。
+     */
+    supersedes: z.string().optional(),
   }),
   z.object({
     type: z.literal('human_answer'),
@@ -811,6 +822,21 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     role: z.enum(['inbound', 'outbound']),
     text: z.string(),
     conversationId: z.string().optional(),
+    /**
+     * この発言が置き換える、**同じ会話の中の過去の人間の発言**の日誌エントリ id
+     * （チャットの「メッセージを編集する」機能。#edit-message）。
+     *
+     * **`with: 'human'` かつ `role: 'inbound'` のときだけ意味を持つ。** クローンの
+     * 応答（`role: 'outbound'`）にこの欄が付くことは無い——編集できるのは人間の
+     * 発言だけである。
+     *
+     * **日誌は追記専用のままである。** 編集は「`supersedes` を持つ新しい
+     * `exchange` の追記」として表し、旧発言の行は1件も消さない・書き換えない。
+     * 旧発言（と、それに対する応答）を既定ビューから畳んで隠す規則の側は
+     * `packages/core/src/conversation.ts` が持つ——ここは日誌の形だけを持ち、
+     * 畳み込みの解釈は持たない。
+     */
+    supersedes: z.string().optional(),
   }),
   z.object({
     type: z.literal('decision'),

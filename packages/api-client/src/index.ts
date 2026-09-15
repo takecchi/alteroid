@@ -59,6 +59,16 @@ export interface ChatInput {
   text: string;
   /** 続きから話すなら、前回の `open` で受け取った id を渡す。 */
   conversationId?: string;
+  /**
+   * 送信済みの自分の発言を編集するとき、置き換える発言の日誌エントリ id
+   * （`GET /conversations/:id` の `messages[].id`）。`conversationId` と一緒に渡す。
+   *
+   * **日誌は書き換わらない。** 編集は `supersedes` を持つ新しい発言として追記され、
+   * 旧発言は会話の既定ビューから外れるだけである（畳まれた分は
+   * `GET /conversations/:id?includeSuperseded=true` で読める）。
+   * **クローンの応答は指せない** — 指すとデーモンが 400 で弾く。
+   */
+  supersedes?: string;
 }
 
 export interface StreamOptions {
@@ -143,6 +153,7 @@ export function createAlteroidClient(options: AlteroidClientOptions): AlteroidCl
       const body = JSON.stringify({
         text: input.text,
         ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
+        ...(input.supersedes === undefined ? {} : { supersedes: input.supersedes }),
       });
       const init: RequestInit = {
         method: 'POST',

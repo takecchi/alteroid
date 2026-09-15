@@ -10571,6 +10571,233 @@ describe('humanTurnText（ターン本文の組み立て）', () => {
   it('1件も無ければ空文字（呼び出し側が先頭を仮定しない）', () => {
     expect(humanTurnText([])).toBe('');
   });
+
+  it('supersedes が無ければ、priorTexts を渡していても1文字も足さない', () => {
+    const event = message('やあ', '2026-08-20T10:00:00.000Z');
+    const priorTexts = new Map([[event.id, '無関係な本文']]);
+    expect(humanTurnText([event], priorTexts)).toBe('やあ');
+  });
+
+  it('supersedes があれば、編集である合図を前置きする（issue「チャットの送信済みメッセージを編集する」）', () => {
+    const event: HumanMessage = {
+      ...message('直した本文', '2026-08-20T10:05:00.000Z'),
+      supersedes: 'evt-old',
+    };
+    const text = humanTurnText([event]);
+    // 合図そのもの（旧本文が引けなくても、編集である事実は失わない）
+    expect(text).toContain('これは既出発言（id=evt-old）の編集である');
+    expect(text).toContain('編集前の本文は引けなかった');
+    // 新しい本文も届く
+    expect(text).toContain('直した本文');
+  });
+
+  it('supersedes があり priorTexts が引けていれば、編集前の本文も渡す', () => {
+    const event: HumanMessage = {
+      ...message('直した本文', '2026-08-20T10:05:00.000Z'),
+      supersedes: 'evt-old',
+    };
+    const priorTexts = new Map([[event.id, '元の本文']]);
+    const text = humanTurnText([event], priorTexts);
+    expect(text).toContain('これは既出発言（id=evt-old）の編集である');
+    expect(text).toContain('元の本文');
+    expect(text).toContain('直した本文');
+    // 編集前の本文が先、新しい本文が後
+    expect(text.indexOf('元の本文')).toBeLessThan(text.indexOf('直した本文'));
+  });
+
+  it('複数件のうち1件だけが編集でも、バッチの文面でどれが編集かが分かる', () => {
+    const plain = message('ふつうの発言', '2026-08-20T10:00:00.000Z');
+    const edited: HumanMessage = {
+      ...message('直した本文', '2026-08-20T10:00:09.000Z'),
+      supersedes: 'evt-old',
+    };
+    const priorTexts = new Map([[edited.id, '元の本文']]);
+    const text = humanTurnText([plain, edited], priorTexts);
+    expect(text).toContain('ふつうの発言');
+    expect(text).toContain('（既出発言の編集）');
+    expect(text).toContain('元の本文');
+    expect(text).toContain('直した本文');
+    // 編集ではない (1) 件目には合図が付かない
+    const firstBlockEnd = text.indexOf('(2)');
+    expect(text.slice(0, firstBlockEnd)).not.toContain('編集である');
+  });
+
+  it('副作用を巻き戻す指示は一切足さない（制約(B)）', () => {
+    const event: HumanMessage = {
+      ...message('直した本文', '2026-08-20T10:05:00.000Z'),
+      supersedes: 'evt-old',
+    };
+    const text = humanTurnText([event], new Map([[event.id, '元の本文']]));
+    // 「取り消す」「巻き戻す」「キャンセル」の類を一切書かない
+    expect(text).not.toMatch(/取り消|巻き戻|キャンセル/);
+  });
+});
+
+/**
+ * 編集ターン（`supersedes`）の配線 — `Clone#record` と `#runHumanTurn` /
+ * `#resolvePriorTexts`（issue「チャットの送信済みメッセージを編集する」）。
+ *
+ * `humanTurnText` 単体のテスト（上の describe）は合図の文面だけを見ている。
+ * ここは「受信箱の `human_message.supersedes` が日誌の `exchange.supersedes`
+ * まで通るか」と「`#runHumanTurn` が実際に旧エントリを引いてターン入力へ
+ * 渡すか・引けなくても落ちないか」を、クローンのループ全体を通して確かめる。
+ */
+describe('編集ターン（supersedes）—— #record と #runHumanTurn の配線', () => {
+  function setupClone(reply?: (input: string) => string) {
+    const stores = createMemoryStores();
+    const { fn, calls } = fakeSdk(reply);
+    const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
+      stores,
+      queryFn: fn,
+      env: {},
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    return { clone, stores, calls };
+  }
+
+  it('#record は human_message の supersedes を日誌の exchange へそのまま通す', async () => {
+    const { clone, stores, calls } = setupClone();
+    const original = await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '元の本文',
+      conversationId: 'conv-record',
+    });
+
+    clone.post({
+      type: 'human_message',
+      id: 'evt-edit-record',
+      at: new Date().toISOString(),
+      text: '直した本文',
+      conversationId: 'conv-record',
+      supersedes: original.id,
+    });
+
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    const entries = await stores.journal.list({ types: ['exchange'] });
+    const written = entries.find(
+      (entry) => entry.type === 'exchange' && entry.text === '直した本文',
+    );
+    expect(written).toBeDefined();
+    expect(written).toMatchObject({ supersedes: original.id, conversationId: 'conv-record' });
+  });
+
+  it('supersedes が無ければ、日誌の exchange に supersedes は付かない（取れない軸に値を作らない）', async () => {
+    const { clone, stores, calls } = setupClone();
+    clone.post({
+      type: 'human_message',
+      id: 'evt-plain-record',
+      at: new Date().toISOString(),
+      text: 'ふつうの発言',
+      conversationId: 'conv-plain-record',
+    });
+
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    const entries = await stores.journal.list({ types: ['exchange'] });
+    const written = entries.find(
+      (entry) => entry.type === 'exchange' && entry.text === 'ふつうの発言',
+    );
+    expect(written).toBeDefined();
+    expect(written).not.toHaveProperty('supersedes');
+  });
+
+  it('#runHumanTurn は旧エントリの本文を引いてターン入力へ渡す', async () => {
+    const { clone, stores, calls } = setupClone();
+    const original = await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '元の本文がここにある',
+      conversationId: 'conv-turn',
+    });
+
+    clone.post({
+      type: 'human_message',
+      id: 'evt-edit-turn',
+      at: new Date().toISOString(),
+      text: '直した本文がここにある',
+      conversationId: 'conv-turn',
+      supersedes: original.id,
+    });
+
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    const input = calls[0]?.inputs[0] ?? '';
+    expect(input).toContain(`これは既出発言（id=${original.id}）の編集である`);
+    expect(input).toContain('元の本文がここにある');
+    expect(input).toContain('直した本文がここにある');
+  });
+
+  it('旧エントリが引けなくても落ちない（編集である事実だけは伝える）', async () => {
+    const { clone, calls } = setupClone();
+
+    clone.post({
+      type: 'human_message',
+      id: 'evt-edit-missing',
+      at: new Date().toISOString(),
+      text: '直した本文（旧本文は無い）',
+      conversationId: 'conv-missing',
+      supersedes: 'evt-does-not-exist',
+    });
+
+    await waitFor(() => calls.length > 0, 'セッションが開くこと（落ちずにターンが進む）');
+    clone.stop();
+
+    const input = calls[0]?.inputs[0] ?? '';
+    expect(input).toContain('これは既出発言（id=evt-does-not-exist）の編集である');
+    expect(input).toContain('編集前の本文は引けなかった');
+    expect(input).toContain('直した本文（旧本文は無い）');
+  });
+
+  it('副作用（承認待ち等）は編集後も巻き戻されない（制約(B)）', async () => {
+    // 編集前のターンで積まれた記録（例として日誌へ直接1件積む）が、編集後の
+    // ターンを流しても1件も消えない・書き換わらないことを確かめる。
+    const { clone, stores, calls } = setupClone();
+    const original = await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '元の本文',
+      conversationId: 'conv-side-effect',
+    });
+    await stores.commitments.open({
+      id: 'commit-untouched',
+      at: new Date().toISOString(),
+      origin: 'human',
+      body: '編集前のターンが開いた依頼',
+    });
+
+    clone.post({
+      type: 'human_message',
+      id: 'evt-edit-side-effect',
+      at: new Date().toISOString(),
+      text: '直した本文',
+      conversationId: 'conv-side-effect',
+      supersedes: original.id,
+    });
+
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    const commitment = await stores.commitments.get('commit-untouched');
+    expect(commitment).not.toBeNull();
+    expect(commitment?.closedAt).toBeUndefined();
+    // 旧発言の journal エントリ自体も1件も書き換わらない・消えない
+    const stillThere = await stores.journal.get(original.id);
+    expect(stillThere?.type).toBe('exchange');
+    expect(stillThere && stillThere.type === 'exchange' ? stillThere.text : undefined).toBe(
+      '元の本文',
+    );
+  });
 });
 
 describe('クローン — 人間が待っている合図を待ち行列の先頭側へ入れる', () => {

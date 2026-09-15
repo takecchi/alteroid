@@ -1,4 +1,9 @@
-import { createAlteroidClient, type AlteroidClient } from '@alteroid/api-client';
+import {
+  createAlteroidClient,
+  readSse,
+  type AlteroidClient,
+  type ChatMessage,
+} from '@alteroid/api-client';
 import {
   createContext,
   useCallback,
@@ -318,6 +323,49 @@ export function unwrap<T>(result: { data?: T; error?: unknown; response: Respons
     throw new ApiError(result.response.status, describeError(result.error, result.response));
   }
   return result.data;
+}
+
+/**
+ * クローンに話しかけ、応答を SSE で受け取る（チャットのメッセージ編集、#1010）。
+ *
+ * **`client.chat()`（`@alteroid/api-client`）を使わない。** あちらの `ChatInput`
+ * はまだ `supersedes`（送信済みの人間の発言を編集する口）を知らない——サーバの
+ * 契約（生成 spec、`apps/daemon/openapi.json`）はもう持っているが、`api-client`
+ * の手書きの薄いラッパー（`packages/api-client/src/index.ts`）を直すのはこの
+ * 作業の担当外（`apps/web` だけを触る、他のワークスペースパッケージは変更しない
+ * という割り当てのもとで進めている）。
+ *
+ * 型付きの `client.api.POST('/chat', { parseAs: 'stream' })` を使えば、
+ * `supersedes` は生成 spec がそのまま運ぶので、手書きの型を1つも足さずに済む
+ * （AGENTS.md「型は OpenAPI 生成 spec から導出する」）。`parseAs: 'stream'` で
+ * `openapi-fetch` は応答本文を JSON へ変換せず `Response.body` をそのまま
+ * 返す（`openapi-fetch@0.17.0` の `getResponseData`）ので、そこから先の
+ * SSE の読み取りは `@alteroid/api-client` の `readSse` をそのまま使う
+ * （自前で書き直さない——`packages/api-client/src/sse.ts` の実装を二重管理
+ * しないため）。
+ */
+export async function* postChat(
+  client: AlteroidClient,
+  input: { text: string; conversationId?: string; supersedes?: string },
+  options?: { signal?: AbortSignal },
+): AsyncGenerator<ChatMessage> {
+  const result = await client.api.POST('/chat', {
+    body: {
+      text: input.text,
+      ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
+      ...(input.supersedes === undefined ? {} : { supersedes: input.supersedes }),
+    },
+    parseAs: 'stream',
+    ...(options?.signal === undefined ? {} : { signal: options.signal }),
+  });
+  const body = unwrap(result);
+  if (body === null) throw new Error('/chat の応答に本文が無い');
+  for await (const message of readSse(body)) {
+    yield {
+      event: message.event,
+      data: message.data === '' ? undefined : JSON.parse(message.data),
+    } as ChatMessage;
+  }
 }
 
 /**

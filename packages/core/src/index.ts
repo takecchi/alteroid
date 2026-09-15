@@ -276,6 +276,7 @@ export {
   CONVERSATION_PREVIEW,
   bySpeaker,
   collectConversations,
+  computeSupersededIds,
   conversationMessages,
   humanExchanges,
   preview,

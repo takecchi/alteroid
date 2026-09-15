@@ -1,4 +1,4 @@
-import { PanelLeft, Plus, Send, Square } from 'lucide-react';
+import { PanelLeft, Pencil, Plus, Send, Square } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 
@@ -8,9 +8,10 @@ import { Button, Card, Empty, ErrorNote, Spinner, Textarea } from '~/components/
 import { useEndConversation, useRecordOwnMessage } from '~/hooks/mutations';
 import { useConversation, useConversationApprovals, useConversations } from '~/hooks/queries';
 import { useIsMobile } from '~/hooks/use-is-mobile';
-import { useApi } from '~/lib/api';
+import { postChat, useApi } from '~/lib/api';
 import { cn } from '~/lib/cn';
 import { formatRelative } from '~/lib/format';
+import type { ConversationMessage } from '~/lib/types';
 
 import type { Route } from './+types/chat';
 
@@ -51,6 +52,19 @@ interface Line {
    * API の契約（`apps/daemon/openapi.json`）にも出ない。
    */
   of: string | undefined;
+  /**
+   * この行の**本物の日誌エントリ id**（`GET /conversations/:id` が返す
+   * `ConversationMessage.id`）。**サーバから確定済みの発言（`historyLines`）
+   * だけが持つ。** 送信直後の楽観行（`pendingOwnLines` に刈られる前の行。
+   * `showOwnLine` が作る）や、承認の台帳から織り込んだ `system` 行には
+   * まだ本物の id が無いので、ここは常に `undefined` のままである。
+   *
+   * **編集の入口（鉛筆）を出してよいかは、この欄の有無だけで判定する**
+   * （チャットのメッセージ編集、#1010）。送信中の楽観行に鉛筆を出さないための
+   * 唯一の根拠がこれ——`role === 'human'` だけで判定すると、まだサーバに
+   * 存在しない行にも編集の入口が出てしまう。
+   */
+  journalId?: string;
 }
 
 /**
@@ -163,6 +177,72 @@ export function pendingOwnLines(
     pending.push(line);
   }
   return pending;
+}
+
+/** 版の切り替え（`< 2/2 >`）が1つ差し出す、編集前のある版。 */
+export interface EditedVersion {
+  /** その版で実際に送った本文。 */
+  text: string;
+  /**
+   * この版のすぐ後に続いていた、いまは既定ビューから畳まれているやりとり
+   * （この版自身の発言は含まない）。古い順。
+   */
+  hiddenFollowUps: { role: 'human' | 'clone'; text: string }[];
+}
+
+/**
+ * 編集で置き換えられた発言の版を、`supersedes` / `supersededBy` の連結から
+ * 組み立てる（チャットのメッセージ編集、#1010）。
+ *
+ * **畳み込み規則そのものはここでは持たない。** 何を隠すか・どの編集が隠したか
+ * を決めるのはサーバ（`packages/core/src/conversation.ts` の
+ * `computeSupersededIds`）で、ここは `GET /conversations/:id?includeSuperseded=true`
+ * が返す結果（各発言が持つ `supersedes` / `supersededBy`）を辿って束ねるだけ
+ * である（AGENTS.md「畳み込み規則を web 側に再実装しないこと」）。
+ *
+ * `headId` は**いま既定ビューに出ている**（`supersededBy` が付いていない）
+ * 発言の id。これが `supersedes` を持たなければ「編集されていない」ので
+ * `undefined` を返す。
+ *
+ * **祖先が窓の外へ落ちていたら、そこで打ち切る**（サーバの
+ * `computeSupersededIds` が「T が窓の中に見つからなければ何も隠さない」と
+ * 防御的に振る舞うのと同じ考え方——見つからないものを無いことにはしないが、
+ * 遡れない先を捏造もしない）。
+ */
+export function buildEditVersions(
+  messages: ConversationMessage[],
+  headId: string,
+): EditedVersion[] | undefined {
+  const byId = new Map(messages.map((message) => [message.id, message]));
+  const head = byId.get(headId);
+  if (head === undefined || head.supersedes === undefined) return undefined;
+
+  // 古い順の id 列（先頭がいちばん古い版）。
+  const ids: string[] = [headId];
+  for (let cursor = head; cursor.supersedes !== undefined;) {
+    const previous = byId.get(cursor.supersedes);
+    if (previous === undefined) break;
+    ids.unshift(previous.id);
+    cursor = previous;
+  }
+  if (ids.length < 2) return undefined;
+
+  return ids.map((id, index) => {
+    const message = byId.get(id);
+    const nextId = ids[index + 1];
+    // この版のすぐ後に畳まれた分——「次の版に隠された発言」のうち、
+    // この版自身（`id`）を除いたもの（＝この版が受け取った応答など）。
+    const hiddenFollowUps: EditedVersion['hiddenFollowUps'] =
+      nextId === undefined
+        ? []
+        : messages
+            .filter((entry) => entry.supersededBy === nextId && entry.id !== id)
+            .map((entry) => ({
+              role: entry.role === 'inbound' ? ('human' as const) : ('clone' as const),
+              text: entry.text,
+            }));
+    return { text: message?.text ?? '', hiddenFollowUps };
+  });
 }
 
 export default function Chat({ loaderData }: Route.ComponentProps) {
@@ -373,6 +453,26 @@ export function ChatPane({
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
+  /**
+   * いま編集中の行の `key`（チャットのメッセージ編集、#1010）。無ければ
+   * `undefined`。**`Line.key`（サーバ確定済みの発言では日誌エントリ id と
+   * 同じ）で持つ** —— `journalId` だけで持たない理由は、`journalId` を持たない
+   * 行（楽観行・確認由来の `system` 行）はそもそも編集の入口を出さないので
+   * 区別する必要が無く、`key` のほうが `Line` 全般の一意な識別子として
+   * 素直だからである。
+   */
+  const [editingKey, setEditingKey] = useState<string | undefined>(undefined);
+  /** 編集中の textarea の下書き。確定 (`confirmEdit`) が読み、取消で捨てる。 */
+  const [editDraft, setEditDraft] = useState('');
+  /**
+   * 版の切り替え（`< 2/2 >`）がいま見せている版の添字（0始まり）。
+   * key は `Line.journalId`（編集された発言の、いま既定ビューに出ている側の
+   * 本物の id）。**無い（未操作）ときは最新の版を見せる**——`editVersions`
+   * （上）が返す配列の末尾が常に「いま既定ビューに出ている内容」と一致する
+   * ため、記録していない発言は最新を見せるのと同じ結果になる（下の render
+   * が `?? versions.length - 1` で表す）。
+   */
+  const [viewingVersionIndex, setViewingVersionIndex] = useState<Record<string, number>>({});
   const bottomRef = useRef<HTMLDivElement | null>(null);
   /** スクロールする器そのもの。「最下部にいるか」を見るのに要る（#247 の 1）。 */
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
@@ -526,6 +626,9 @@ export function ChatPane({
        * この render リセットだけでは減らない。
        */
       setFailure(undefined);
+      // 編集中の入力を別の会話へ持ち越さない（`editingKey` は `Line.key` で、
+      // 別の会話へ移ればどのみち画面に出なくなるが、下書きを残す理由も無い）。
+      setEditingKey(undefined);
     }
   }
 
@@ -568,8 +671,15 @@ export function ChatPane({
    * 満たされていなかった経路がここである）。
    *
    * 二重描画は購読をやめることではなく、下の `all` の重ね合わせで防ぐ。
+   *
+   * **`includeSuperseded: true` で読む（チャットのメッセージ編集、#1010）。**
+   * 版の切り替え（`< 2/2 >`、下の `editVersions`）を組み立てるには、編集で
+   * 畳まれた旧発言も見えている必要がある。**既定ビューに出すかどうかの
+   * 判定は下の `historyLines` が `supersededBy` を見て自分でやる**——サーバの
+   * `includeSuperseded=false` の絞り込みを、ここで型どおりに借りるのをやめた
+   * だけで、既定ビューが「畳んだ後」であること自体は変えていない。
    */
-  const history = useConversation(shownId ?? null);
+  const history = useConversation(shownId ?? null, { includeSuperseded: true });
 
   /**
    * この会話に上がった確認（`ask_human`）（issue #782 の2）。
@@ -603,15 +713,29 @@ export function ChatPane({
    * `approvalItems` 内の doc。
    */
   const historyLines = useMemo<Line[]>(() => {
-    const messageItems = (history.data?.messages ?? []).map((message) => ({
-      at: message.at,
-      line: {
-        key: message.id,
-        role: message.role === 'inbound' ? ('human' as const) : ('clone' as const),
-        text: message.text,
-        of: shownId,
-      },
-    }));
+    /*
+     * **`history` は `includeSuperseded: true` で読んでいる**（上の doc）ので、
+     * ここで既定ビュー（畳んだ後）を組み立て直す——`supersededBy` が付いた
+     * 発言（編集で隠された旧発言・その応答）は除く。サーバの
+     * `includeSuperseded=false` が返す集合と同じものを、ここで作り直して
+     * いるだけである（畳み込み規則そのものは足していない——隠すかどうかは
+     * サーバが計算した `supersededBy` の有無だけで判断する）。
+     */
+    const messageItems = (history.data?.messages ?? [])
+      .filter((message) => message.supersededBy === undefined)
+      .map((message) => ({
+        at: message.at,
+        line: {
+          key: message.id,
+          role: message.role === 'inbound' ? ('human' as const) : ('clone' as const),
+          text: message.text,
+          of: shownId,
+          // **本物の日誌エントリ id を持つのは人間の発言だけに絞る必要は無い**
+          // ——編集の入口を出すかは呼び出し側が `role === 'human'` も併せて
+          // 見るので、ここでは単に「サーバ確定済みの発言である」ことを表す。
+          journalId: message.id,
+        },
+      }));
 
     const approvalItems = (conversationApprovals.data?.approvals ?? []).flatMap((approval) => {
       const items: { at: string; line: Line }[] = [
@@ -683,6 +807,31 @@ export function ChatPane({
       .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
       .map((item) => item.line);
   }, [history.data, conversationApprovals.data, shownId]);
+
+  /**
+   * **編集された発言の版の一覧（チャットのメッセージ編集、#1010）。**
+   *
+   * `history.data.messages`（`includeSuperseded: true` で読んだ、畳まれた分も
+   * 含む全件）を1回だけ走査し、いま既定ビューに出ている（`supersededBy` の
+   * 無い）人間の発言のうち `supersedes` を持つもの（＝編集で置き換えた側）
+   * だけを入口として `buildEditVersions` に束ねさせる。
+   *
+   * key はその発言の**本物の日誌エントリ id**（`Line.journalId`）。版を持たない
+   * 発言はここに現れない——`Map.get` が `undefined` を返すので、呼び出し側
+   * （下の render）は「版がある行かどうか」をこの1点で判定できる。
+   */
+  const editVersions = useMemo(() => {
+    const messages = history.data?.messages ?? [];
+    const result = new Map<string, EditedVersion[]>();
+    for (const message of messages) {
+      if (message.role !== 'inbound') continue;
+      if (message.supersededBy !== undefined) continue; // 隠された側は入口にしない
+      if (message.supersedes === undefined) continue; // 編集していない発言
+      const chain = buildEditVersions(messages, message.id);
+      if (chain !== undefined) result.set(message.id, chain);
+    }
+    return result;
+  }, [history.data]);
 
   /**
    * **同じ会話へ繰り返し戻った分も、`lines` 自体から刈る（issue #446 の
@@ -858,7 +1007,12 @@ export function ChatPane({
    * `open` が届いた＝投函は済んだ、と言い切れる。応答は走っている方に流れてくる。
    */
   const followUp = useCallback(
-    async (text: string, running: Stream) => {
+    /**
+     * `supersedes` — この追送が送信済みの人間の発言を編集したものなら、
+     * 置き換える対象の日誌エントリ id（チャットのメッセージ編集、#1010）。
+     * 通常の追送では渡らない。
+     */
+    async (text: string, running: Stream, supersedes?: string) => {
       setFailure(undefined);
       setDraft('');
       showOwnLine(text);
@@ -869,8 +1023,9 @@ export function ChatPane({
         const conversationId = await running.opened;
         const controller = new AbortController();
         try {
-          for await (const message of api.chat(
-            { text, conversationId },
+          for await (const message of postChat(
+            api,
+            { text, conversationId, ...(supersedes === undefined ? {} : { supersedes }) },
             {
               signal: controller.signal,
             },
@@ -890,8 +1045,15 @@ export function ChatPane({
   );
 
   const send = useCallback(
-    async (text: string) => {
+    /**
+     * `options.supersedes` — 送信済みの人間の発言を編集して送り直すときだけ
+     * 渡す、置き換える対象の日誌エントリ id（チャットのメッセージ編集、
+     * #1010）。渡さない通常の送信では今までどおり `conversationId` だけを
+     * 運ぶ。
+     */
+    async (text: string, options?: { supersedes?: string }) => {
       if (text.trim() === '') return;
+      const supersedes = options?.supersedes;
 
       /*
        * **走っているストリームがあるなら、張り替えずに投函だけする。**
@@ -900,7 +1062,7 @@ export function ChatPane({
        */
       const running = streamRef.current;
       if (running !== undefined) {
-        await followUp(text, running);
+        await followUp(text, running, supersedes);
         return;
       }
 
@@ -1032,8 +1194,13 @@ export function ChatPane({
       setTransient('考えている…');
 
       try {
-        for await (const message of api.chat(
-          { text, ...(shownId === undefined ? {} : { conversationId: shownId }) },
+        for await (const message of postChat(
+          api,
+          {
+            text,
+            ...(shownId === undefined ? {} : { conversationId: shownId }),
+            ...(supersedes === undefined ? {} : { supersedes }),
+          },
           { signal: controller.signal },
         )) {
           if (message.event === 'open') {
@@ -1201,6 +1368,34 @@ export function ChatPane({
     [api, shownId, navigate, recordOwnMessage, showOwnLine, followUp],
   );
 
+  /**
+   * 編集を確定する（チャットのメッセージ編集、#1010）。
+   *
+   * **`send` をそのまま呼ぶ。** 編集後の発言は「`supersedes` を持つ、会話への
+   * 新しい送信」でしかない——サーバ側は日誌へ新しい `exchange` を追記するだけで
+   * （旧発言は1件も書き換えない）、置き換えられた側は次にサーバの履歴を読み
+   * 直した瞬間（`use-journal-live.ts` の無効化。この発言も他の送信と同じく
+   * `queued` の時点で日誌に載るので、既存の無効化がそのまま効く）に既定
+   * ビューから消える。ここで先回りして手元の `lines` から古い行を消したり
+   * しない——**楽観更新をしない**という `mutations.ts`（`useRecordOwnMessage`
+   * の doc）の方針をここでも守る。
+   *
+   * **対象は常に「いま既定ビューに出ている行」の `journalId`。** 版の切り替え
+   * （`viewingVersionIndex`）で古い版を眺めている最中でも、鉛筆は常にその
+   * 発言の最新の内容を編集対象にする（下の render が鉛筆クリック時に
+   * `editDraft` を最新の `line.text` で初期化し、`viewingVersionIndex` は
+   * 触らずに残す——古い版を見ていた状態自体は編集を終えても保たれる）。
+   */
+  const confirmEdit = useCallback(
+    async (line: Line) => {
+      const text = editDraft.trim();
+      if (text === '' || line.journalId === undefined) return;
+      setEditingKey(undefined);
+      await send(text, { supersedes: line.journalId });
+    },
+    [editDraft, send],
+  );
+
   return (
     <div className="flex min-w-0 flex-1 flex-col">
       <header className="flex shrink-0 items-center justify-between gap-4 border-b border-border py-4 pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]">
@@ -1269,58 +1464,237 @@ export function ChatPane({
           </Card>
         ) : (
           <ul aria-label="やりとり" className="flex flex-col gap-3">
-            {all.map((line) => (
-              <li
-                key={line.key}
-                className={cn('flex', line.role === 'human' ? 'justify-end' : 'justify-start')}
-              >
-                <div
+            {all.map((line) => {
+              /*
+               * **編集の入口（鉛筆）は、本物の日誌エントリ id を持つ人間の
+               * 発言だけに出す（チャットのメッセージ編集、#1010。制約C）。**
+               * `journalId` は `historyLines` にしか付かない（`Line` の doc）
+               * ので、送信直後の楽観行（`pendingOwnLines` が刈る前）には
+               * 出ない——本物の id が無いものを編集の対象にできない、という
+               * 制約をここで自然に満たす。クローンの発言（`role: 'clone'`）は
+               * `role === 'human'` の条件で最初から外れる（サーバ側の 400 と
+               * 同じ制約を、画面側は「そもそも入口を出さない」形で守る）。
+               */
+              const isEditable = line.role === 'human' && line.journalId !== undefined;
+              const isEditing = editingKey === line.key;
+              // `journalId` をこの後何度も参照するので、一度だけ絞り込んでおく
+              // （`versions` / `versionIndex` の「無ければ触らない」の根拠は
+              // すべてこの1つの束縛に依る）。
+              const journalId = line.journalId;
+              const versions = journalId === undefined ? undefined : editVersions.get(journalId);
+              const versionIndex =
+                versions === undefined || journalId === undefined
+                  ? undefined
+                  : (viewingVersionIndex[journalId] ?? versions.length - 1);
+              const viewing =
+                versions !== undefined && versionIndex !== undefined
+                  ? versions[versionIndex]
+                  : undefined;
+              // 版を切り替えていれば、その版の本文を出す。切り替えていない
+              // （＝最新を見ている）ときは `viewing.text` も `line.text` と
+              // 同じ値になる（`buildEditVersions` の doc）——常にこちらを
+              // 使っても、版を持たない発言の見え方は1文字も変わらない。
+              const displayedText = viewing?.text ?? line.text;
+              const viewingOldVersion =
+                versions !== undefined && versionIndex !== undefined
+                  ? versionIndex < versions.length - 1
+                  : false;
+
+              return (
+                <li
+                  key={line.key}
                   className={cn(
-                    // `break-words`: クローンの行は `Markdown`（components/markdown.tsx）
-                    // が自前で `min-w-0 ... break-words` を持つが、人間・システムの行は
-                    // 素のテキストを直接ここへ置くだけなので、同じ指定がここに無いと
-                    // 長い一続きの文字列（URL・パス等）で吹き出しがはみ出す。
-                    'min-w-0 max-w-[46rem] rounded-lg px-3 py-2 text-sm leading-relaxed break-words',
-                    // クローンの本文だけ Markdown で描く（下のコメント参照）。
-                    // 人間・システムの行は素のテキストのままなので、これまでどおり
-                    // 改行をそのまま見せる。
-                    line.role !== 'clone' && 'whitespace-pre-wrap',
-                    line.role === 'human' && 'bg-accent text-accent-fg',
-                    line.role === 'clone' && 'bg-surface',
-                    line.role === 'system' && 'bg-transparent text-muted italic',
+                    'group flex flex-col gap-1',
+                    line.role === 'human' ? 'items-end' : 'items-start',
                   )}
                 >
-                  {line.role === 'clone' ? (
-                    line.text === '' ? (
-                      <span className="text-muted">…</span>
-                    ) : (
-                      /*
-                       * **クローンの行だけを Markdown にする。** 人間が打った本文
-                       * （`role === 'human'`）は素のテキストのままにする —
-                       * 自分が書いた文字が勝手に化けないため。
-                       *
-                       * **受信中かどうかを見分ける信号は無い。** `Line` には
-                       * `role` / `text` / `transient` しか無く、`transient` は
-                       * 「考えている…」のような進行中の合図（`role: 'system'`）
-                       * にしか立たない。クローンの返信行（`role: 'clone'`）は
-                       * チャンクが届くたびに `text` を継ぎ足すだけで、「まだ
-                       * 受信中か」を示す専用のフィールドを持たない。信号を
-                       * 新設するには `packages/` や API 側の変更が要るが、
-                       * それは今回の対象外（画面側だけで完結させる）。
-                       *
-                       * だから毎チャンク、届いた分だけの文字列を Markdown として
-                       * パースし直すことになる。**まだ閉じていない ``` や `**`
-                       * が受信の途中では正しく解釈されず、閉じた瞬間に表示が
-                       * 変わって見える揺れが起きうる**（受信が終われば安定する）。
-                       */
-                      <Markdown>{line.text}</Markdown>
-                    )
-                  ) : (
-                    line.text
-                  )}
-                </div>
-              </li>
-            ))}
+                  <div className="flex min-w-0 max-w-full items-start gap-1">
+                    {isEditable && !isEditing && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        aria-label="発言を編集"
+                        className="mt-1 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
+                        onClick={() => {
+                          setEditingKey(line.key);
+                          setEditDraft(line.text);
+                        }}
+                      >
+                        <Pencil className="size-3.5" aria-hidden />
+                      </Button>
+                    )}
+                    <div
+                      className={cn(
+                        // `break-words`: クローンの行は `Markdown`（components/markdown.tsx）
+                        // が自前で `min-w-0 ... break-words` を持つが、人間・システムの行は
+                        // 素のテキストを直接ここへ置くだけなので、同じ指定がここに無いと
+                        // 長い一続きの文字列（URL・パス等）で吹き出しがはみ出す。
+                        'min-w-0 max-w-[46rem] rounded-lg px-3 py-2 text-sm leading-relaxed break-words',
+                        // クローンの本文だけ Markdown で描く（下のコメント参照）。
+                        // 人間・システムの行は素のテキストのままなので、これまでどおり
+                        // 改行をそのまま見せる。
+                        line.role !== 'clone' && 'whitespace-pre-wrap',
+                        line.role === 'human' && 'bg-accent text-accent-fg',
+                        line.role === 'clone' && 'bg-surface',
+                        line.role === 'system' && 'bg-transparent text-muted italic',
+                      )}
+                    >
+                      {isEditing ? (
+                        /*
+                         * **クリックで textarea になり、送信で確定する**
+                         * （チャットのメッセージ編集、#1010）。キー操作は
+                         * 既存の送信欄（下の主入力欄）と揃える —
+                         * `⌘/Ctrl + Enter` で確定、IME 変換中の Enter では
+                         * 確定しない（`chat.ime-enter.test.tsx` と同じ門）。
+                         * `Escape` で取消——編集前の内容は保存していないが、
+                         * `line.text`（サーバ確定済みの本文）は変えていない
+                         * ので、いつでも同じ下書きから開き直せる。
+                         */
+                        <div className="flex min-w-64 flex-col gap-2">
+                          <Textarea
+                            autoFocus
+                            rows={2}
+                            value={editDraft}
+                            className="text-fg"
+                            aria-label="発言を編集する下書き"
+                            onChange={(event) => setEditDraft(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (
+                                event.key === 'Enter' &&
+                                (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)
+                              ) {
+                                return;
+                              }
+                              if (event.key === 'Escape') {
+                                event.preventDefault();
+                                setEditingKey(undefined);
+                                return;
+                              }
+                              if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+                                event.preventDefault();
+                                void confirmEdit(line);
+                              }
+                            }}
+                          />
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              variant="primary"
+                              disabled={editDraft.trim() === ''}
+                              onClick={() => void confirmEdit(line)}
+                            >
+                              確定
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => setEditingKey(undefined)}
+                            >
+                              キャンセル
+                            </Button>
+                          </div>
+                        </div>
+                      ) : line.role === 'clone' ? (
+                        displayedText === '' ? (
+                          <span className="text-muted">…</span>
+                        ) : (
+                          /*
+                           * **クローンの行だけを Markdown にする。** 人間が打った本文
+                           * （`role === 'human'`）は素のテキストのままにする —
+                           * 自分が書いた文字が勝手に化けないため。
+                           *
+                           * **受信中かどうかを見分ける信号は無い。** `Line` には
+                           * `role` / `text` / `transient` しか無く、`transient` は
+                           * 「考えている…」のような進行中の合図（`role: 'system'`）
+                           * にしか立たない。クローンの返信行（`role: 'clone'`）は
+                           * チャンクが届くたびに `text` を継ぎ足すだけで、「まだ
+                           * 受信中か」を示す専用のフィールドを持たない。信号を
+                           * 新設するには `packages/` や API 側の変更が要るが、
+                           * それは今回の対象外（画面側だけで完結させる）。
+                           *
+                           * だから毎チャンク、届いた分だけの文字列を Markdown として
+                           * パースし直すことになる。**まだ閉じていない ``` や `**`
+                           * が受信の途中では正しく解釈されず、閉じた瞬間に表示が
+                           * 変わって見える揺れが起きうる**（受信が終われば安定する）。
+                           */
+                          <Markdown>{displayedText}</Markdown>
+                        )
+                      ) : (
+                        displayedText
+                      )}
+                    </div>
+                  </div>
+
+                  {/*
+                    **ChatGPT 風の版切り替え（`< 2/2 >`）。** `versions` は編集で
+                    置き換えられた発言にしか付かない（`editVersions` の doc）ので、
+                    普通の発言では何も描かれず見た目は1文字も変わらない。
+                    編集中はいったん隠す——確定前の下書きと古い版の閲覧を同時に
+                    出すと、どちらを直しているのか読みにくくなるため。
+                  */}
+                  {versions !== undefined &&
+                  versionIndex !== undefined &&
+                  journalId !== undefined &&
+                  !isEditing ? (
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center gap-1 text-[11px] text-muted">
+                        <button
+                          type="button"
+                          aria-label="前の版へ"
+                          disabled={versionIndex <= 0}
+                          className="disabled:opacity-40"
+                          onClick={() =>
+                            setViewingVersionIndex((current) => ({
+                              ...current,
+                              [journalId]: versionIndex - 1,
+                            }))
+                          }
+                        >
+                          ‹
+                        </button>
+                        <span>
+                          {versionIndex + 1}/{versions.length}
+                        </span>
+                        <button
+                          type="button"
+                          aria-label="次の版へ"
+                          disabled={versionIndex >= versions.length - 1}
+                          className="disabled:opacity-40"
+                          onClick={() =>
+                            setViewingVersionIndex((current) => ({
+                              ...current,
+                              [journalId]: versionIndex + 1,
+                            }))
+                          }
+                        >
+                          ›
+                        </button>
+                      </div>
+                      {/*
+                        **前の版へ戻ると、畳まれた発言が読める。** 古い版を見て
+                        いるあいだだけ、その版のすぐ後に隠れていた往復
+                        （`hiddenFollowUps`）も出す——ここが「前の版へ戻って
+                        読める」の本体である。
+                      */}
+                      {viewingOldVersion &&
+                        viewing !== undefined &&
+                        viewing.hiddenFollowUps.length > 0 && (
+                          <div className="flex max-w-[46rem] flex-col gap-1 rounded-lg border border-dashed border-border px-3 py-2 text-xs whitespace-pre-wrap text-muted">
+                            {viewing.hiddenFollowUps.map((entry, index) => (
+                              <p key={index}>
+                                <span className="mr-1 font-semibold">
+                                  {entry.role === 'human' ? '人間' : 'クローン'}
+                                </span>
+                                {entry.text}
+                              </p>
+                            ))}
+                          </div>
+                        )}
+                    </div>
+                  ) : null}
+                </li>
+              );
+            })}
           </ul>
         )}
         <div ref={bottomRef} />

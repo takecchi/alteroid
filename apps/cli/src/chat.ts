@@ -48,6 +48,8 @@ export async function chatCommand(): Promise<void> {
     conversations: [],
     managers: [],
     waiting: [],
+    messages: [],
+    messagesConversationId: null,
   };
 
   stdout.write('alteroid chat（Ctrl-D で終了 / /help でコマンド）\n');
@@ -63,7 +65,7 @@ export async function chatCommand(): Promise<void> {
       if (line.length === 0) continue;
 
       if (line.startsWith('/')) {
-        const handled = await runSlashCommand(line, client, listed, conversationId);
+        const handled = await runSlashCommand(line, client, listed, conversationId, target);
         if (handled === 'quit') break;
         continue;
       }
@@ -86,22 +88,37 @@ async function sendMessage(
   target: Target,
   text: string,
   conversationId: string | null,
+  /**
+   * **送信済みの人間の発言を編集する口**（issue「チャットの送信済み
+   * メッセージを編集する」）。値はその発言（自分の過去の `role: inbound`）の
+   * 日誌エントリ id。`POST /chat` の本文へそのまま載せる——新しい HTTP 経路は
+   * 足さない（案A: 既存の `/chat` に乗せる）。
+   */
+  supersedes?: string,
 ): Promise<string | null> {
   // SSE は hono/client ではなく生の fetch で受ける（EventSource は POST も
   // ヘッダ付与もできない）。認証ヘッダはここにも要る。
   const response = await fetch(`${target.baseUrl}/chat`, {
     method: 'POST',
     headers: { ...target.headers, 'content-type': 'application/json' },
-    body: JSON.stringify({ text, conversationId: conversationId ?? undefined }),
+    body: JSON.stringify({
+      text,
+      conversationId: conversationId ?? undefined,
+      ...(supersedes === undefined ? {} : { supersedes }),
+    }),
   });
 
   if (!response.ok || !response.body) {
     const described = describeAuthFailure(response.status, target);
-    stdout.write(
-      described === null
-        ? `エラー: デーモンが応答しません (${response.status})\n`
-        : `${described}\n`,
-    );
+    if (described !== null) {
+      stdout.write(`${described}\n`);
+      return conversationId;
+    }
+    // **本文の `error` をそのまま出す。** `supersedes` の検証（400）は4通り
+    // あり、どれも「次に何を打てばよいか」まで書いてある（`apps/daemon/src/app.ts`
+    // の手前検証）。ここで一律「デーモンが応答しません」に潰すと、`/edit` が
+    // クローンの応答を指したときの案内（制約(C)）が人間に届かない。
+    stdout.write(`エラー: ${await errorDetail(response)}\n`);
     return conversationId;
   }
 
@@ -229,7 +246,11 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /memory <slug>       記憶の中身（書き換えは alteroid memory edit <slug>）
 /journal [件数] [q=<語>]  日誌（新しい順）。q= はそれ以降の行末までを1つの語として扱う
 /conversations [limit=<N>] [scan=<N>]  会話の一覧（新しい順、番号付き）
-/conversation <番号|id> [scan=<N>]  その会話の中身（古い順。番号は /conversations の並び）
+/conversation <番号|id> [scan=<N>] [includeSuperseded=true]  その会話の中身（古い順。
+                     番号は /conversations の並び。includeSuperseded=true でチャットの
+                     編集で畳まれた旧発言・その応答も含めて読める）
+/edit <番号|id> <新しい本文>  送信済みの自分の発言を編集する（番号は /conversation の並び。
+                     クローンの応答は編集できない。編集前のターンの副作用は取り消さない）
 /managers [status=<s1,s2>] [limit=<N>] [after=<番号|id>]  マネージャーの一覧（番号付き）と状態
                      status= は ${jobStatusSchema.options.join(' / ')} のカンマ区切り。
                      limit= と after= で古い側へ頁を辿る（after= は直前の /managers に
@@ -302,6 +323,28 @@ export interface Listed {
   managerAnchors: Record<string, string>;
   /** `/waiting` の並び。`/reply` `/allow` `/deny` が引く。 */
   waiting: { managerId: string; requestId: string }[];
+  /**
+   * 直前の `/conversation` が振った、**人間の発言だけ**の番号→id。`/edit` が引く。
+   *
+   * **クローンの応答（outbound）には番号を振らない。** 編集できるのは人間の
+   * 発言だけという制約(C)を、番号選択の時点で自然に満たすためである
+   * （サーバ側の 400 はこれをすり抜けた——番号ではなく id を直に打った——
+   * 場合の保険であって、ここが主な防御線である）。
+   *
+   * **既に別の編集で畳まれた発言にも番号を振らない。** 畳まれた発言を再度
+   * 指すと、サーバは「既に別の編集に置き換えられている」で 400 を返す
+   * （`computeSupersededIds`）。既定の `/conversation` は畳まれた発言を表示
+   * しないので、これは自然に満たされる。
+   */
+  messages: string[];
+  /**
+   * 上の番号が属する会話 id（`/edit` が `POST /chat` の `conversationId` に
+   * 添える）。**`/edit` の対象は「いま話している会話」ではなく「直前に
+   * `/conversation` で開いた会話」である**——編集は会話内のどの過去の人間の
+   * 発言も対象にできる（直近に限らない）ので、この2つは別物として持つ。
+   * まだ何も見ていなければ `null`。
+   */
+  messagesConversationId: string | null;
 }
 
 export async function runSlashCommand(
@@ -313,6 +356,15 @@ export async function runSlashCommand(
    * まだ一言も話していなければ `null` で、そのときは source を付けない。
    */
   conversationId: string | null = null,
+  /**
+   * `/edit` が `POST /chat` を叩くのに要る（SSE は hono/client ではなく生の
+   * fetch で受けるため。`sendMessage` と同じ理由）。**この関数の他のどの
+   * 分岐にも要らない**——ここにしか無い実行時の口（`target.baseUrl` /
+   * `target.headers`）を、この1コマンドのためだけに引き回している。
+   * 呼び出し元（`chatCommand`）は常に渡すが、テストの大半は `/edit` を
+   * 試さないので省略できるよう任意にしてある。
+   */
+  target?: Target,
 ): Promise<'ok' | 'quit'> {
   const [command, ...rest] = line.split(/\s+/);
 
@@ -632,7 +684,8 @@ export async function runSlashCommand(
       const reference = rest[0];
       if (!reference) {
         stdout.write(
-          '使い方: /conversation <番号|id> [scan=<N>]（番号は /conversations の並び）\n',
+          '使い方: /conversation <番号|id> [scan=<N>] [includeSuperseded=true]' +
+            '（番号は /conversations の並び）\n',
         );
         return 'ok';
       }
@@ -644,8 +697,16 @@ export async function runSlashCommand(
       // **`scan=` で窓を広げられる**（`/conversations` と同じ `key=value` の
       // 慣習）。`limit` はこの経路には無い（1件の中身を読むだけで件数の
       // 絞り込みが要らない）。
+      //
+      // **`includeSuperseded=true` — チャットの編集で既定ビューから畳まれた
+      // 旧発言・その応答も含めて読む**（制約(A)。既定は含めない——デーモンの
+      // 既定と同じ重さを、指定しなかった呼び出し全部に配らない）。
       const rawQuery = parseKeyValueTokens(rest.slice(1));
-      const query = rawQuery.scan === undefined ? {} : { scan: rawQuery.scan };
+      const includeSuperseded = rawQuery.includeSuperseded === 'true';
+      const query = {
+        ...(rawQuery.scan === undefined ? {} : { scan: rawQuery.scan }),
+        ...(includeSuperseded ? { includeSuperseded: 'true' as const } : {}),
+      };
       const response = await client.conversations[':id'].$get({ param: { id }, query });
       if (response.status === 404) {
         // **遡り切れた場合だけ 404**（デーモン側の約束）。判定できないときは
@@ -657,7 +718,18 @@ export async function runSlashCommand(
         stdout.write('会話を読めませんでした（scan= の値を確かめてください）\n');
         return 'ok';
       }
-      const { messages, scanned, reachedStart } = await response.json();
+      const { messages, scanned, reachedStart, supersededCount } = await response.json();
+      /**
+       * **番号を振り直す。`/edit` がこの並びを引く。**
+       *
+       * 対象は「まだ畳まれていない、人間の発言」だけである——クローンの
+       * 応答は編集できず（制約C）、既に別の編集に置き換えられた発言も
+       * サーバの4つ目の検証で弾かれるので、番号選択の時点でどちらも自然に
+       * 除ける（`--include-superseded` 相当を付けて畳まれた発言を表示した
+       * ときも、その行には番号を振らない）。
+       */
+      listed.messages.length = 0;
+      listed.messagesConversationId = id;
       if (messages.length === 0) {
         stdout.write(
           reachedStart
@@ -668,7 +740,18 @@ export async function runSlashCommand(
       } else {
         for (const message of messages) {
           const speaker = message.role === 'inbound' ? '人間' : 'クローン';
-          stdout.write(`  [${message.at}] ${speaker}: ${message.text}\n`);
+          const editable = message.role === 'inbound' && message.supersededBy === undefined;
+          if (editable) listed.messages.push(message.id);
+          const label = editable ? `[${listed.messages.length}]` : '   ';
+          // **どれが畳まれた版で、どの編集に置き換えられたかを読める形に
+          // する。** `includeSuperseded=true` のときだけ、どちらかが付きうる。
+          const edit =
+            message.supersededBy !== undefined
+              ? `  [畳まれた版 → ${message.supersededBy} に置き換えられた]`
+              : message.supersedes !== undefined
+                ? `  [編集後の発言 — ${message.supersedes} を置き換えた]`
+                : '';
+          stdout.write(`  ${label} [${message.at}] ${speaker}: ${message.text}${edit}\n`);
         }
       }
       stdout.write(
@@ -678,6 +761,73 @@ export async function runSlashCommand(
               '残っているかもしれません — /conversation <番号|id> scan=<N>（または ' +
               'alteroid conversations show --scan）で広げられます）\n',
       );
+      // **`includeSuperseded` の値によらず常に出す（0件なら出さない）。**
+      // 制約(A)——出ないと、この会話に編集で畳まれた版が在ることに、人間の
+      // 側の器も気づけなくなる。
+      if (supersededCount > 0) {
+        stdout.write(
+          `  （この会話にはチャットの編集で畳まれた版が ${supersededCount} 件ある。中身を読むには ` +
+            '/conversation <番号|id> includeSuperseded=true で広げられます）\n',
+        );
+      }
+      if (listed.messages.length > 0) {
+        stdout.write('  /edit <番号|id> <新しい本文> で自分の発言を編集できます\n');
+      }
+      return 'ok';
+    }
+
+    /**
+     * 送信済みの自分（人間）の発言を編集する（issue「チャットの送信済み
+     * メッセージを編集する」）。Web UI のチャット画面の鉛筆アイコンと同じ能力
+     * を CLI にも出す（north_star「入口の等価性」——画面にしかできないことを
+     * 作らない）。
+     *
+     * **番号は直前の `/conversation` が振ったものだけを引く。** `/conversation`
+     * は人間の発言（かつ、まだ畳まれていないもの）にしか番号を振らないので
+     * （`Listed.messages` の doc）、番号で指す限り**クローンの応答を編集対象に
+     * できない**——制約(C)の主な防御線はここである。id を直に打った場合は
+     * この防御を素通りしうるが、そのときはサーバの4種の検証（`apps/daemon/src/app.ts`
+     * の `POST /chat`）が 400 で弾き、その理由（`errorDetail`）をそのまま出す。
+     *
+     * **`conversationId` は「いま話している会話」ではなく「直前に `/conversation`
+     * で開いた会話」を使う。** 編集は会話内のどの過去の人間の発言も対象にでき
+     * （直近に限らない）、その会話は今の対話中の会話と別物でありうるため
+     * （`Listed.messagesConversationId` の doc）。
+     *
+     * **副作用は一切巻き戻さない（制約B）。** ここは `supersedes` を積んだ
+     * `POST /chat` を打つだけで、編集前のターンが起こした記憶・承認待ち・
+     * マネージャー・台帳の行には触れない——巻き戻しのロジックは無い。
+     */
+    case '/edit': {
+      const [reference, ...bodyParts] = rest;
+      const text = bodyParts.join(' ');
+      if (!reference || text.length === 0) {
+        stdout.write(
+          '使い方: /edit <番号|id> <新しい本文>（番号は /conversation の並び。' +
+            '編集できるのは自分（人間）の発言だけです — クローンの応答は指せません）\n',
+        );
+        return 'ok';
+      }
+      const id = resolveListedId(reference, listed.messages);
+      if (id === null) {
+        stdout.write(
+          `[${reference}] は直前の /conversation の一覧にありません` +
+            '（番号は、その会話でまだ畳まれていない自分の発言だけに振られています）\n',
+        );
+        return 'ok';
+      }
+      const owningConversationId = listed.messagesConversationId;
+      if (owningConversationId === null) {
+        stdout.write('先に /conversation <番号|id> でその発言が含まれる会話を開いてください\n');
+        return 'ok';
+      }
+      if (target === undefined) {
+        // **実運用では常に渡る**（`chatCommand` が渡す）。防御的な分岐——
+        // このコマンドだけが要る実行時の口（`target`）が無い呼び出しに備える。
+        stdout.write('編集を送れませんでした（接続先が分かりません）\n');
+        return 'ok';
+      }
+      await sendMessage(target, text, owningConversationId, id);
       return 'ok';
     }
 

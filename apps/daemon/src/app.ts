@@ -5,6 +5,7 @@ import type {
   ChatStreamEvent,
   CloneHost,
   CredentialService,
+  Exchange,
   JobStatus,
   JournalEntry,
   JournalEntryType,
@@ -32,6 +33,7 @@ import {
   commitmentUpdatedAt,
   compareApprovalPagingKey,
   compareCommitmentPosition,
+  computeSupersededIds,
   conversationMessages,
   createAuthProviderRegistry,
   createAuthService,
@@ -317,9 +319,20 @@ export function parseAllowedOrigins(raw: string | undefined): {
   return { origins, rejected };
 }
 
+/**
+ * `supersedes`: 送信済みの人間の発言を編集するチャットの口
+ * （issue「チャットの送信済みメッセージを編集する」）。
+ *
+ * **形だけをここで固定する。** 「その id が本当に編集できる対象か」（窓の中に
+ * 在るか・この会話のものか・人間の発言か・既に別の編集に置き換えられていないか）
+ * の判定は、このスキーマの外——ハンドラの手書き検証（`GET /journal` の
+ * `afterId`/`afterAt` と同じ作法）が持つ。`min(1)` だけを課すのは、空文字列を
+ * 「編集」として受け付けると `conversationId` に空文字を許すのと同じ穴になるため。
+ */
 const chatBody = z.object({
   text: z.string().min(1),
   conversationId: z.string().min(1).optional(),
+  supersedes: z.string().min(1).optional(),
 });
 
 const memoryBody = z.object({ content: z.string() });
@@ -534,8 +547,17 @@ const conversationsQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(20),
   scan: z.coerce.number().int().min(1).max(10000).default(2000),
 });
+/**
+ * `includeSuperseded`: 編集で畳まれた旧発言・その応答も含めて返すか
+ * （issue「チャットの送信済みメッセージを編集する」）。
+ *
+ * **`z.coerce.boolean()` を使わない。** 上の `commitmentsQuery.includeClosed` と
+ * 同じ理由——`?includeSuperseded=false` が true になる（＝既定は編集後の版だけ、
+ * という約束が黙って壊れる）。`.enum(['true', 'false'])` に揃える。
+ */
 const conversationQuery = z.object({
   scan: z.coerce.number().int().min(1).max(10000).default(2000),
+  includeSuperseded: z.enum(['true', 'false']).default('false'),
 });
 /**
  * 利用状況の照会。
@@ -1351,7 +1373,13 @@ export function createApp(deps: AppDeps) {
           '**発言が日誌に載るのも `queued` の時点である**ので、`GET /conversations` には' +
           'ターンの順番を待たずに現れる。**コメント行（`:` で始まる行）の heartbeat が' +
           '周期的に流れる。SSE の仕様上クライアントは読み捨ててよい**（無音のまま死んだ' +
-          '接続を掃除するための送信でもある）。',
+          '接続を掃除するための送信でもある）。' +
+          '**`supersedes` — 送信済みの人間の発言を編集する。** この会話の中の、自分の' +
+          '過去の発言（`role: inbound`）の id を渡すと、その発言は既定ビュー・' +
+          '`conversation_read` から畳まれ、この発言が編集後の版として応答を受ける' +
+          '（編集前のターンで起きた副作用——承認待ち・記憶・マネージャー・台帳の行——は' +
+          '一切取り消さない）。`conversationId` と併せて渡すこと。編集できるのは' +
+          '**人間の発言だけ**（クローンの応答は指せない）。',
         responses: {
           200: {
             description: 'SSE ストリーム。',
@@ -1360,7 +1388,11 @@ export function createApp(deps: AppDeps) {
             },
           },
           400: {
-            description: '`text` が空、または本文が JSON として不正。',
+            description:
+              '`text` が空、または本文が JSON として不正。または `supersedes` の検証に' +
+              '落ちた——`conversationId` が無いのに `supersedes` がある、指した id が' +
+              '見つからない・この会話のものではない、クローンの応答（outbound）を指して' +
+              'いる、既に別の編集に置き換えられている、のいずれか。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
@@ -1369,7 +1401,79 @@ export function createApp(deps: AppDeps) {
         error: 'text が空、または本文の形が不正' + (where === '' ? '' : `: ${where}`),
       })),
       async (c) => {
-        const { text, conversationId: given } = c.req.valid('json');
+        const { text, conversationId: given, supersedes } = c.req.valid('json');
+
+        /*
+         * **送信済みの人間の発言を編集する口の検証。** `clone.post` を呼ぶ前に
+         * ここで弾く——弾いたときは日誌に何も積まない（`GET /journal` の
+         * `afterId`/`afterAt` の手書き検証と同じ作法。手前で `if` を並べて
+         * 400 を返す）。
+         */
+        if (supersedes !== undefined) {
+          // (1) conversationId が無いのに supersedes がある。
+          if (given === undefined) {
+            return c.json(
+              { error: 'supersedes を指定するには conversationId が要る' as const },
+              400,
+            );
+          }
+          // 対象は `journal.get` で直接引く——`scan`/窓には縛られない、日誌
+          // そのものへの厳密な問い合わせである（`conversation_read id=<id>` の
+          // 全文モードと同じ考え方）。
+          const target = await stores.journal.get(supersedes);
+          // (2) 指した id が窓の中に無い / その会話のものでない。
+          if (
+            target === null ||
+            target.type !== 'exchange' ||
+            target.with !== 'human' ||
+            target.conversationId !== given
+          ) {
+            return c.json(
+              {
+                error:
+                  `supersedes が指す発言 ${supersedes} は見つからないか、この会話のものではない` as const,
+              },
+              400,
+            );
+          }
+          // (3) 指した id が `role: 'outbound'`（クローンの応答）——制約(C)。
+          // 編集できるのは人間の発言だけである。
+          if (target.role === 'outbound') {
+            return c.json(
+              { error: 'supersedes はクローンの応答ではなく人間の発言だけを指せる' as const },
+              400,
+            );
+          }
+          // (4) 指した id が既に別の編集に置き換えられている。
+          //
+          // **畳み込み規則（`computeSupersededIds`）でしか判定できない**ので、
+          // この会話の全履歴を読む。`commitmentRespondedAt` の判定
+          // （この下の `/commitments` ハンドラ）と同じ理由で、ここは「会話を
+          // 1本表示する窓」ではなく「置き換え済みかどうかを判定するための
+          // 全履歴」が要るため、`scan` に事実上の無制限を渡す。
+          const fullHistory = await readConversationWindow(stores.journal, {
+            scan: Number.MAX_SAFE_INTEGER,
+          });
+          const chronological = fullHistory
+            .filter(
+              (entry): entry is Exchange =>
+                entry.type === 'exchange' &&
+                entry.with === 'human' &&
+                entry.conversationId === given,
+            )
+            .reverse();
+          const supersededIds = computeSupersededIds(chronological);
+          if (supersededIds.has(supersedes)) {
+            return c.json(
+              {
+                error:
+                  `supersedes が指す発言 ${supersedes} は既に別の編集に置き換えられている` as const,
+              },
+              400,
+            );
+          }
+        }
+
         const conversationId = given ?? randomUUID();
 
         return streamSSE(c, async (stream) => {
@@ -1423,6 +1527,7 @@ export function createApp(deps: AppDeps) {
                 at: new Date().toISOString(),
                 text,
                 conversationId,
+                ...(supersedes === undefined ? {} : { supersedes }),
               });
 
               await stream.writeSSE({ event: 'open', data: JSON.stringify({ conversationId }) });
@@ -1585,7 +1690,11 @@ export function createApp(deps: AppDeps) {
           '**黙って打ち切らない** — `scanned`（人間との往復を何件遡ったか。マネージャー' +
           'との往復・内部ターンは数えない。issue #418）でどこまで遡ったか、' +
           '`reachedStart` で窓が日誌の先頭に届いたかを返す。`404` は `reachedStart` が' +
-          '真のときだけ返る（「無い」と「遡り切れていない」を同じ応答にしないため）。',
+          '真のときだけ返る（「無い」と「遡り切れていない」を同じ応答にしないため）。' +
+          '**既定（`includeSuperseded` を渡さない）では、チャットで編集され既定ビューから' +
+          '畳まれた旧発言・その応答を除く。** 応答の `supersededCount` に畳まれた件数を' +
+          '常に含める（0件でも含める）。`includeSuperseded=true` を渡すと畳まれた分も' +
+          '含めて返し、各発言に編集の関係（`supersedes` / `supersededBy`）が付く。',
         responses: {
           200: {
             description:
@@ -1610,7 +1719,8 @@ export function createApp(deps: AppDeps) {
       validator('query', conversationQuery),
       async (c) => {
         const id = c.req.param('id');
-        const { scan } = c.req.valid('query');
+        const { scan, includeSuperseded: includeSupersededRaw } = c.req.valid('query');
+        const includeSuperseded = includeSupersededRaw === 'true';
         // 窓の組み立ては `readConversationWindow` 1か所に閉じる（上の
         // `GET /conversations` と同じ理由。issue #418）。
         const entries = await readConversationWindow(stores.journal, { scan });
@@ -1618,16 +1728,30 @@ export function createApp(deps: AppDeps) {
          * 絞り込みと並べ直しは `@alteroid/core` の `conversationMessages` が持つ
          * （クローンの `conversation_read` と同じ関数である。上の一覧と同じ理由）。
          *
+         * **常に `includeSuperseded: true` で1回だけ呼ぶ。** 既定の応答でも
+         * `supersededCount`（畳まれた件数）を数える必要があるため、まず畳まれた分も
+         * 含めて取り、既定ビューに戻すかどうかはここで自分でふるう
+         * （`conversation_read` と同じ考え方。`packages/core/src/tools.ts`）。
+         *
          * **応答に載せる項目はここで選び直す。** 共有の型は `conversationId` も
          * 持っているが、この口の応答スキーマ（`conversationMessageSchema`）は
-         * 4項目だけなので、**移設で応答が1項目増えることのないよう**明示して写す。
+         * 明示した項目だけなので、**移設で応答が1項目増えることのないよう**明示して写す。
          */
-        const messages = conversationMessages(entries, id).map((message) => ({
+        const allMessages = conversationMessages(entries, id, { includeSuperseded: true });
+        const supersededCount = allMessages.filter(
+          (message) => message.supersededBy !== undefined,
+        ).length;
+        const visible = includeSuperseded
+          ? allMessages
+          : allMessages.filter((message) => message.supersededBy === undefined);
+        const messages = visible.map((message) => ({
           id: message.id,
           at: message.at,
           /** `inbound` = 人間の発言 / `outbound` = クローンの返答。 */
           role: message.role,
           text: message.text,
+          ...(message.supersedes === undefined ? {} : { supersedes: message.supersedes }),
+          ...(message.supersededBy === undefined ? {} : { supersededBy: message.supersededBy }),
         }));
 
         /*
@@ -1674,6 +1798,12 @@ export function createApp(deps: AppDeps) {
           /** 人間との往復を何件遡ったか（`scanned` の意味は上のコメントに書いた）。 */
           scanned: entries.length,
           reachedStart: reached,
+          /**
+           * この会話で、編集によって既定ビューから畳まれた発言の件数
+           * （`includeSuperseded` の値によらず常に含める。⚠️ 制約(A)——出ないと
+           * クローンだけでなく人間の側の器も畳まれた版の存在に気づけない）。
+           */
+          supersededCount,
         });
       },
     )

@@ -6,11 +6,11 @@ import { z } from 'zod';
 import {
   bySpeaker,
   collectConversations,
+  conversationMessages,
   humanExchanges,
   reachedStart,
   readConversationWindow,
   searchExchanges,
-  toMessage,
 } from './conversation.js';
 import {
   commitmentPosition,
@@ -7295,6 +7295,9 @@ export function createCloneTools(context: ToolContext) {
         '人間自身の発言だけを見るなら speaker: "human" を指定する',
         '（既定 both は人間とクローンの両方の発言を含む）。',
         '一覧の本文は抜粋で、全文が要る1件は id を渡して取る。',
+        '人間は送信済みの発言を編集できる（チャットの「メッセージを編集する」機能）。' +
+          'conversationId を指定した既定の応答は編集後の版だけを返すが、畳まれた版が' +
+          '在れば件数を注記する。旧版と旧版への応答も読むには includeSuperseded: true を指定する。',
         '**ここに出ないもの**（知らずに引くと「無かった」と読むので、先に言う）:',
         '① **ask_human への人間の回答は、この道具では出ない。**',
         '回答の本文は日誌の escalation にしか無いので journal_read types=["escalation"] で読むこと',
@@ -7355,6 +7358,14 @@ export function createCloneTools(context: ToolContext) {
           .min(0)
           .optional()
           .describe('id で全文を読むとき、何文字目から読むか'),
+        includeSuperseded: z
+          .boolean()
+          .optional()
+          .describe(
+            '既定 false。true にすると、チャットで編集され既定ビューから畳まれた旧発言・' +
+              'それに対する応答も conversationId のときに含めて返す（各発言に supersedes / ' +
+              'supersededBy が付く）。false のままでも、畳まれた版が在れば件数を注記する',
+          ),
       },
       async ({
         conversationId,
@@ -7366,6 +7377,7 @@ export function createCloneTools(context: ToolContext) {
         limit,
         id,
         offset = 0,
+        includeSuperseded = false,
       }) => {
         // --- 全文モード（発言1件） ---
         if (id !== undefined) {
@@ -7427,16 +7439,41 @@ export function createCloneTools(context: ToolContext) {
               : 'この窓より古いものは見ていない。scan を増やすか until で窓をずらすこと）');
 
         // --- 会話の中身（conversationId 指定、古い順） ---
+        //
+        // **畳み込み込みの正本（`conversationMessages`）を経由する。** かつてはここで
+        // `humanExchanges` → `bySpeaker` → `toMessage`/`searchExchanges` を手で
+        // 組んでおり、編集で畳まれた旧発言・その応答が既定ビューにも素通しで
+        // 出ていた。畳み込み規則（`supersedes` を持つ発言による既定ビューからの
+        // 除外）を持つのは `conversation.ts` の1か所だけにする（モジュール冒頭の
+        // doc「畳み込み規則を持つのも、ここ1か所である」）。
+        //
+        // **常に `includeSuperseded: true` で1回だけ呼ぶ。** 既定ビュー（`false`）
+        // でも「畳まれた版が何件あるか」を数える必要があるため（下の `supersededCount`。
+        // ⚠️ 制約(A) — ここが出ないとクローンは畳まれた版の存在に気づけない）、
+        // まず畳まれた分も含めて取り、既定ビューに戻すかどうかはここで自分でふるう。
         if (conversationId !== undefined) {
-          const exchanges = bySpeaker(
-            humanExchanges(entries).filter((entry) => entry.conversationId === conversationId),
-            speaker,
-          );
-          const matched = (
-            q === undefined ? exchanges.map(toMessage) : searchExchanges(exchanges, q)
-          )
-            .slice()
-            .reverse(); // 新しい順で来た窓を、会話としては古い順に直す
+          const allMessages = conversationMessages(entries, conversationId, {
+            includeSuperseded: true,
+          });
+          const supersededCount = allMessages.filter(
+            (message) => message.supersededBy !== undefined,
+          ).length;
+          const visible = includeSuperseded
+            ? allMessages
+            : allMessages.filter((message) => message.supersededBy === undefined);
+          const speakerFiltered =
+            speaker === 'both'
+              ? visible
+              : visible.filter(
+                  (message) => message.role === (speaker === 'human' ? 'inbound' : 'outbound'),
+                );
+          const needle = q?.toLowerCase();
+          const matched =
+            needle === undefined
+              ? speakerFiltered
+              : speakerFiltered.filter((message) => message.text.toLowerCase().includes(needle));
+          // `conversationMessages` は既に古い順（chronological）で返すので、ここでの
+          // reverse は要らない。
           if (matched.length === 0) {
             return text(
               (reached
@@ -7446,13 +7483,28 @@ export function createCloneTools(context: ToolContext) {
           }
           const lines = matched.map(
             (message) =>
-              `${message.at} [${roleLabel(message.role)}] id=${message.id}\n` +
-              `  ${excerptLine(message.text, CONVERSATION_EXCHANGE_EXCERPT)}`,
+              `${message.at} [${roleLabel(message.role)}] id=${message.id}` +
+              (message.supersededBy === undefined
+                ? ''
+                : `（畳み込み済み。編集後は id=${message.supersededBy}）`) +
+              `\n  ${excerptLine(message.text, CONVERSATION_EXCHANGE_EXCERPT)}`,
           );
           // **会話は新しい側から積む。** 表示は古い順のままだが、予算で切れるときに
           // 落とすのは古い側である（会話を開く動機はたいてい直近の続きを思い出すこと
           // で、人が chat の履歴を開くと末尾が見えているのと同じ形にしてある）。
           // 積む形そのものは `renderListingFromEnd` が持つ（一覧ごとに手で書かない）。
+          //
+          // **予算の断り書き（`omitted`）とは別の行として畳み込みの注記を出す。**
+          // 前者は「予算で切った」、後者は「畳み込みで意図的に隠した」で、別の事実
+          // である（AGENTS.md 地雷表と同じ理由——取れない事実を1つの行に混ぜない）。
+          const supersededNote =
+            supersededCount === 0
+              ? undefined
+              : includeSuperseded
+                ? `（この会話には畳まれた版が ${supersededCount} 件あり、includeSuperseded=true ` +
+                  'なので含めて表示している）'
+                : `（この会話には畳まれた版が ${supersededCount} 件ある。読むには ` +
+                  `conversation_read conversationId=${conversationId} includeSuperseded=true を指定する）`;
           return text(
             [
               renderListingFromEnd(lines, {
@@ -7464,6 +7516,7 @@ export function createCloneTools(context: ToolContext) {
                   `新しい側から ${shown} 件だけ出した）。古い側を見るには until で窓を古い方へずらすこと。`,
               }),
               '（本文は抜粋。全文は conversation_read id=<id> で取れる）',
+              ...(supersededNote === undefined ? [] : [supersededNote]),
               scanNote,
             ].join('\n'),
           );

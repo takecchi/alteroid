@@ -163,7 +163,7 @@
         "operationId": "postChat",
         "tags": ["chat"],
         "summary": "クローンと話す（SSE）",
-        "description": "人間の発言をクローンの受信箱へ積み、クローンの応答を SSE で流す。**SSE。** `event:` にイベント名（`open` / `queued` / `text` / `thinking` / `tool` / `ask_human` / `done` / `error`）、`data:` に対応する JSON が入る。`data:` の 形は下記スキーマ（`open` は `{conversationId}` のみで別枠、他は `chatStreamEventSchema` の各枝）。人間が chat を閉じてもクローンのターンは走り続ける（人間の不在で止まるのは承認待ちの仕事だけ）。**`queued` と `thinking` は別の状態である。** `queued` は受信箱に積んだ（受理したが順番待ち。先客のターンが走っていれば、ここで数分待つことがある）、`thinking` は入力がモデルへ渡って最初の出力を待っている。前者の後に後者が来る。**発言が日誌に載るのも `queued` の時点である**ので、`GET /conversations` にはターンの順番を待たずに現れる。**コメント行（`:` で始まる行）の heartbeat が周期的に流れる。SSE の仕様上クライアントは読み捨ててよい**（無音のまま死んだ接続を掃除するための送信でもある）。",
+        "description": "人間の発言をクローンの受信箱へ積み、クローンの応答を SSE で流す。**SSE。** `event:` にイベント名（`open` / `queued` / `text` / `thinking` / `tool` / `ask_human` / `done` / `error`）、`data:` に対応する JSON が入る。`data:` の 形は下記スキーマ（`open` は `{conversationId}` のみで別枠、他は `chatStreamEventSchema` の各枝）。人間が chat を閉じてもクローンのターンは走り続ける（人間の不在で止まるのは承認待ちの仕事だけ）。**`queued` と `thinking` は別の状態である。** `queued` は受信箱に積んだ（受理したが順番待ち。先客のターンが走っていれば、ここで数分待つことがある）、`thinking` は入力がモデルへ渡って最初の出力を待っている。前者の後に後者が来る。**発言が日誌に載るのも `queued` の時点である**ので、`GET /conversations` にはターンの順番を待たずに現れる。**コメント行（`:` で始まる行）の heartbeat が周期的に流れる。SSE の仕様上クライアントは読み捨ててよい**（無音のまま死んだ接続を掃除するための送信でもある）。**`supersedes` — 送信済みの人間の発言を編集する。** この会話の中の、自分の過去の発言（`role: inbound`）の id を渡すと、その発言は既定ビュー・`conversation_read` から畳まれ、この発言が編集後の版として応答を受ける（編集前のターンで起きた副作用——承認待ち・記憶・マネージャー・台帳の行——は一切取り消さない）。`conversationId` と併せて渡すこと。編集できるのは**人間の発言だけ**（クローンの応答は指せない）。",
         "responses": {
           "200": {
             "description": "SSE ストリーム。",
@@ -275,7 +275,7 @@
             }
           },
           "400": {
-            "description": "`text` が空、または本文が JSON として不正。",
+            "description": "`text` が空、または本文が JSON として不正。または `supersedes` の検証に落ちた——`conversationId` が無いのに `supersedes` がある、指した id が見つからない・この会話のものではない、クローンの応答（outbound）を指している、既に別の編集に置き換えられている、のいずれか。",
             "content": {
               "application/json": {
                 "schema": {
@@ -303,6 +303,10 @@
                     "minLength": 1
                   },
                   "conversationId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "supersedes": {
                     "type": "string",
                     "minLength": 1
                   }
@@ -493,7 +497,7 @@
         "operationId": "getConversationsById",
         "tags": ["conversations"],
         "summary": "1つの会話の中身（古い順）",
-        "description": "1つの会話の中身（古い順）。器を替えても続きから話せるための口。**黙って打ち切らない** — `scanned`（人間との往復を何件遡ったか。マネージャーとの往復・内部ターンは数えない。issue #418）でどこまで遡ったか、`reachedStart` で窓が日誌の先頭に届いたかを返す。`404` は `reachedStart` が真のときだけ返る（「無い」と「遡り切れていない」を同じ応答にしないため）。",
+        "description": "1つの会話の中身（古い順）。器を替えても続きから話せるための口。**黙って打ち切らない** — `scanned`（人間との往復を何件遡ったか。マネージャーとの往復・内部ターンは数えない。issue #418）でどこまで遡ったか、`reachedStart` で窓が日誌の先頭に届いたかを返す。`404` は `reachedStart` が真のときだけ返る（「無い」と「遡り切れていない」を同じ応答にしないため）。**既定（`includeSuperseded` を渡さない）では、チャットで編集され既定ビューから畳まれた旧発言・その応答を除く。** 応答の `supersededCount` に畳まれた件数を常に含める（0件でも含める）。`includeSuperseded=true` を渡すと畳まれた分も含めて返し、各発言に編集の関係（`supersedes` / `supersededBy`）が付く。",
         "responses": {
           "200": {
             "description": "会話の中身。`reachedStart` が偽なら、窓の外に続きが残っている可能性がある。`messages` が空でこれが偽の場合は「無い」ではなく**判定できない**。",
@@ -522,6 +526,12 @@
                           },
                           "text": {
                             "type": "string"
+                          },
+                          "supersedes": {
+                            "type": "string"
+                          },
+                          "supersededBy": {
+                            "type": "string"
                           }
                         },
                         "required": ["id", "at", "role", "text"]
@@ -534,9 +544,20 @@
                     },
                     "reachedStart": {
                       "type": "boolean"
+                    },
+                    "supersededCount": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
                     }
                   },
-                  "required": ["conversationId", "messages", "scanned", "reachedStart"]
+                  "required": [
+                    "conversationId",
+                    "messages",
+                    "scanned",
+                    "reachedStart",
+                    "supersededCount"
+                  ]
                 }
               }
             }
@@ -592,6 +613,15 @@
             }
           },
           {
+            "in": "query",
+            "name": "includeSuperseded",
+            "schema": {
+              "default": "false",
+              "type": "string",
+              "enum": ["true", "false"]
+            }
+          },
+          {
             "schema": {
               "type": "string"
             },
@@ -642,6 +672,9 @@
                           "type": "string"
                         },
                         "conversationId": {
+                          "type": "string"
+                        },
+                        "supersedes": {
                           "type": "string"
                         }
                       },
@@ -2509,6 +2542,9 @@
                                 "type": "string"
                               },
                               "conversationId": {
+                                "type": "string"
+                              },
+                              "supersedes": {
                                 "type": "string"
                               }
                             },

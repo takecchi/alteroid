@@ -19,6 +19,15 @@
  * 人間の会話が窓の外へ落ちていた。**窓の条件（`types` / `with` / `since` /
  * `until`）を持つのはこの関数だけで、状態は持たない** — 呼ぶたびにストアへ
  * 素通しするだけである。
+ *
+ * **畳み込み規則を持つのも、ここ1か所である**（`computeSupersededIds`。
+ * チャットの「メッセージを編集する」機能）。編集は日誌に「`supersedes` を
+ * 持つ新しい `exchange` の追記」として残り（`schema.ts` の `journalEntrySchema`
+ * の `exchange.supersedes` の doc）、日誌のレコード自体は1件も変わらない —
+ * ここが計算するのは**射影**（どの id を既定ビューから隠すか）だけである。
+ * `conversationMessages` と `collectConversations` の両方がこの1つの関数を
+ * 通す。手で書き直した場所ができるたびに、窓の絞り込み（上）と同じ形の欠陥
+ * — 片方だけ規則を直し忘れる余地 — が生まれる。
  */
 
 import type { JournalEntry } from './schema.js';
@@ -62,6 +71,72 @@ export interface ConversationMessage {
   role: 'inbound' | 'outbound';
   text: string;
   conversationId: string | undefined;
+  /**
+   * この発言が置き換える、過去の人間の発言の id（編集後の発言が持つ。
+   * `schema.ts` の `exchange.supersedes` をそのまま写す）。
+   */
+  supersedes?: string;
+  /**
+   * この発言を隠している編集の id（畳み込みで隠された側だけが持つ）。
+   * **既定ビュー（`includeSuperseded` を渡さない呼び出し）には現れない** —
+   * 隠された発言そのものが返り値から除かれるため。`includeSuperseded: true`
+   * で取り出したときにだけ、どの編集がこれを隠したかを示す。
+   */
+  supersededBy?: string;
+}
+
+/**
+ * `supersedes` を持つ発言による畳み込み（チャットの「メッセージを編集する」
+ * 機能）で、どの発言を隠すか・どの編集が隠したかを計算する。
+ *
+ * **`conversationMessages` と `collectConversations` の両方がこの関数を通す**
+ * （モジュール冒頭の doc「畳み込み規則を持つのも、ここ1か所である」）。
+ *
+ * **入力は1つの会話ぶんの発言を古い順に並べたものである**（呼び出し側の
+ * 責任。並びが古い順でなければ結果は保証しない）。会話をまたいだ配列を渡しても、
+ * `conversationId` が違えば下の防御的条件でスキップされるが、そもそも
+ * 意図した使い方ではない。
+ *
+ * 規則（issue「チャットの送信済みメッセージを編集する」の「畳み込み規則」）:
+ * - `supersedes: T` を持つ発言 E について、T の位置 `i` と E の位置 `j` を
+ *   探す。`i` 以上 `j` 未満の**すべて**（旧発言 T と、それに対する応答、
+ *   およびそれ以降 E までの往復）を隠す
+ * - 隠す集合は**全編集の和集合**として計算する — 編集の編集（連鎖）が
+ *   自然に畳まれるのはこのためである
+ * - **T が見つからない**（`scan` の窓の外へ落ちた）、**T が E より後ろにある**
+ *   （順序が逆）、**T の会話が E と違う**——このいずれかに当たる編集は
+ *   **何も隠さない**（防御的に無視する。落ちてはいけない）
+ *
+ * 戻り値は「隠された発言の id」→「どの編集がそれを隠したか（E の id）」の
+ * 対応。**先に付いた理由を優先し、上書きしない** — 連鎖編集で同じ発言が
+ * 複数回範囲に入ることは無い（各編集の隠す範囲は互いに素になる）はずだが、
+ * 万一重なってもここで最初の理由を保つ。
+ */
+export function computeSupersededIds(chronological: Exchange[]): Map<string, string> {
+  const indexById = new Map<string, number>();
+  chronological.forEach((entry, index) => indexById.set(entry.id, index));
+
+  const supersededBy = new Map<string, string>();
+  chronological.forEach((entry, j) => {
+    const target = entry.supersedes;
+    if (target === undefined) return;
+    const i = indexById.get(target);
+    if (i === undefined) return; // T が窓の中に見つからない — 何も隠さない
+    if (i >= j) return; // T が E と同じか後ろ（順序が逆）— 防御的にスキップ
+    const supersededEntry = chronological[i];
+    // `i` は上の `indexById` から取れた、この配列自身の添字なので必ず存在する。
+    // `noUncheckedIndexedAccess` は添字アクセスそのものからは境界を証明できないため、
+    // ここだけ非null断定で通す。
+    if (supersededEntry === undefined || supersededEntry.conversationId !== entry.conversationId) {
+      return; // 会話違い — 防御的にスキップ
+    }
+    for (let k = i; k < j; k += 1) {
+      const hiddenId = chronological[k]?.id;
+      if (hiddenId !== undefined && !supersededBy.has(hiddenId))
+        supersededBy.set(hiddenId, entry.id);
+    }
+  });
+  return supersededBy;
 }
 
 /**
@@ -125,40 +200,82 @@ export function bySpeaker(exchanges: Exchange[], speaker: 'human' | 'clone' | 'b
  * **`at` で並べ直さない。** 同じミリ秒に並んだ発言の前後は時刻からは決められない
  * ので、追記専用の記録が持っている順序のほうが、後から組み立てた順序より正しい
  * （`app.ts` の `/conversations` と同じ判断）。
+ *
+ * **`preview` と `messages` は畳んだ後で数える**（`computeSupersededIds` の
+ * doc）。編集で隠された旧発言が一覧の抜粋・件数に出続けるのは誤りなので、
+ * 会話ごとに古い順へ組み直してから畳み込みを適用し、残った発言だけで
+ * `startedAt` / `updatedAt` / `messages` / `preview` を数える。
  */
 export function collectConversations(entries: JournalEntry[]): ConversationSummary[] {
-  const conversations = new Map<string, ConversationSummary>();
+  // 会話ごとに、新しい順のまま束ねる（`order` は「最初に出会った」＝最新発言の
+  // 順を保つ——元の Map 実装と同じ並びにするため）。
+  const byConversation = new Map<string, Exchange[]>();
+  const order: string[] = [];
   for (const entry of humanExchanges(entries)) {
     const id = entry.conversationId;
     if (id === undefined) continue;
-    const found = conversations.get(id);
-    if (found === undefined) {
-      // 最初に出会うのが最新の発言（＝この会話の updatedAt と抜粋）
-      conversations.set(id, {
-        conversationId: id,
-        startedAt: entry.at,
-        updatedAt: entry.at,
-        messages: 1,
-        preview: preview(entry.text),
-      });
-      continue;
+    let bucket = byConversation.get(id);
+    if (bucket === undefined) {
+      bucket = [];
+      byConversation.set(id, bucket);
+      order.push(id);
     }
-    // 以降は古い方へ遡るので、開始時刻だけを更新していく
-    found.startedAt = entry.at;
-    found.messages += 1;
+    bucket.push(entry);
   }
-  return [...conversations.values()];
+
+  const summaries: ConversationSummary[] = [];
+  for (const id of order) {
+    const newestFirst = byConversation.get(id);
+    if (newestFirst === undefined) continue; // 型のための防御（起こらない）
+    const chronological = [...newestFirst].reverse();
+    const supersededBy = computeSupersededIds(chronological);
+    const visible = chronological.filter((entry) => !supersededBy.has(entry.id));
+    if (visible.length === 0) continue; // 畳んだ結果、残る発言が無い（起こらないはずだが防御的に）
+    // 直前の `length === 0` 判定で非空は分かっているが、`noUncheckedIndexedAccess`
+    // は添字アクセスからは境界を証明できないため非null断定で通す。
+    const first = visible[0]!;
+    const last = visible[visible.length - 1]!;
+    summaries.push({
+      conversationId: id,
+      startedAt: first.at,
+      updatedAt: last.at,
+      messages: visible.length,
+      preview: preview(last.text),
+    });
+  }
+  return summaries;
 }
 
-/** 1つの会話の中身を古い順に取り出す。 */
+/**
+ * 1つの会話の中身を古い順に取り出す。
+ *
+ * **既定（`includeSuperseded` を渡さない）では畳んだ後を返す。** 編集で
+ * 隠された旧発言・その応答は除かれ、残った発言には `supersedes` /
+ * `supersededBy` が付く（畳み込み規則は `computeSupersededIds` を見よ）。
+ *
+ * **`includeSuperseded: true` を渡すと、畳まれた分も含めて古い順で返す。**
+ * 隠された発言には `supersededBy`（どの編集が隠したか）が付く。「(A)
+ * `conversation_read` から畳まれた版へ届くこと」を満たすための取り出し口
+ * ——呼び出し側（HTTP API / CLI / クローンの道具）は、この配列から
+ * `supersededBy !== undefined` を数えれば「畳まれた版が何件あるか」を言える。
+ */
 export function conversationMessages(
   entries: JournalEntry[],
   conversationId: string,
+  options: { includeSuperseded?: boolean } = {},
 ): ConversationMessage[] {
-  return humanExchanges(entries)
+  const chronological = humanExchanges(entries)
     .filter((entry) => entry.conversationId === conversationId)
-    .reverse()
-    .map(toMessage);
+    .reverse();
+  const supersededBy = computeSupersededIds(chronological);
+  const messages = chronological.map((entry) => {
+    const hiddenBy = supersededBy.get(entry.id);
+    return hiddenBy === undefined
+      ? toMessage(entry)
+      : { ...toMessage(entry), supersededBy: hiddenBy };
+  });
+  if (options.includeSuperseded) return messages;
+  return messages.filter((message) => message.supersededBy === undefined);
 }
 
 /**
@@ -173,7 +290,13 @@ export function searchExchanges(exchanges: Exchange[], query: string): Conversat
   return exchanges.filter((entry) => entry.text.toLowerCase().includes(needle)).map(toMessage);
 }
 
-/** `exchange` を発言1件へ落とす。 */
+/**
+ * `exchange` を発言1件へ落とす。
+ *
+ * **`supersedes` は在るときだけ付ける。** 無いのに `undefined` のキーを
+ * 持たせると、`toEqual` での比較や JSON 化のときに「持っているが空」と
+ * 「持っていない」が混ざる（AGENTS.md「取れない軸に 0 の行を作る」と同じ形）。
+ */
 export function toMessage(entry: Exchange): ConversationMessage {
   return {
     id: entry.id,
@@ -181,6 +304,7 @@ export function toMessage(entry: Exchange): ConversationMessage {
     role: entry.role,
     text: entry.text,
     conversationId: entry.conversationId,
+    ...(entry.supersedes === undefined ? {} : { supersedes: entry.supersedes }),
   };
 }
 

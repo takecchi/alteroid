@@ -4395,7 +4395,7 @@ describe('POST /runners/vacate（#485 PR-2）', () => {
  */
 describe('会話・出来事・マネージャーへの手出し', () => {
   async function exchange(conversationId: string, role: 'inbound' | 'outbound', text: string) {
-    await stores.journal.append({ type: 'exchange', with: 'human', role, text, conversationId });
+    return stores.journal.append({ type: 'exchange', with: 'human', role, text, conversationId });
   }
 
   it('会話の一覧が新しい順に返る（器を替えても続きが見つかる）', async () => {
@@ -4872,6 +4872,218 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     expect((await app.request('/memory/missing', { method: 'DELETE' })).status).toBe(404);
     // 形が不正なものは 400（無いのか、そもそも名前として成立しないのかを分ける）
     expect((await app.request('/memory/居ない', { method: 'DELETE' })).status).toBe(400);
+  });
+});
+
+/**
+ * `POST /chat` の `supersedes` — 送信済みの人間の発言を編集する
+ * （issue「チャットの送信済みメッセージを編集する」）。
+ *
+ * **弾いたときは `clone.post` を呼ばない**（日誌に何も積まない）ことを、
+ * 4つの 400 条件それぞれで確かめる。正常系は `clone.post` へ `supersedes`
+ * がそのまま渡ることを確かめる。
+ */
+describe('POST /chat — supersedes（送信済みの人間の発言を編集する）', () => {
+  it('conversationId が無いのに supersedes があると 400 で弾き、clone.post を呼ばない', async () => {
+    const response = await app.request('/chat', json({ text: '直した本文', supersedes: 'evt-1' }));
+
+    expect(response.status).toBe(400);
+    expect(fake.posted).toEqual([]);
+  });
+
+  it('supersedes が指す id が存在しないと 400 で弾き、clone.post を呼ばない', async () => {
+    const response = await app.request(
+      '/chat',
+      json({ text: '直した本文', conversationId: 'conv-1', supersedes: 'evt-does-not-exist' }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(fake.posted).toEqual([]);
+  });
+
+  it('supersedes が指す id が別の会話のものだと 400 で弾く', async () => {
+    const original = await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '元の発言',
+      conversationId: 'conv-other',
+    });
+
+    const response = await app.request(
+      '/chat',
+      json({ text: '直した本文', conversationId: 'conv-1', supersedes: original.id }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(fake.posted).toEqual([]);
+  });
+
+  it('supersedes がクローンの応答（outbound）を指すと 400 で弾く（制約C）', async () => {
+    const outbound = await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: 'クローンの応答',
+      conversationId: 'conv-1',
+    });
+
+    const response = await app.request(
+      '/chat',
+      json({ text: '直した本文', conversationId: 'conv-1', supersedes: outbound.id }),
+    );
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('人間の発言だけを指せる');
+    expect(fake.posted).toEqual([]);
+  });
+
+  it('supersedes が既に別の編集に置き換えられている id を指すと 400 で弾く', async () => {
+    const original = await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '元の発言',
+      conversationId: 'conv-1',
+    });
+    // 1回目の編集で original は既に畳まれている。
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '1回目の編集',
+      conversationId: 'conv-1',
+      supersedes: original.id,
+    });
+
+    const response = await app.request(
+      '/chat',
+      json({ text: '2回目の編集のつもり', conversationId: 'conv-1', supersedes: original.id }),
+    );
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('既に別の編集に置き換えられている');
+    expect(fake.posted).toEqual([]);
+  });
+
+  it('正しい supersedes は clone.post へそのまま渡る', async () => {
+    const original = await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '元の発言',
+      conversationId: 'conv-1',
+    });
+
+    const response = await app.request(
+      '/chat',
+      json({ text: '直した本文', conversationId: 'conv-1', supersedes: original.id }),
+    );
+    await response.text();
+
+    expect(response.status).toBe(200);
+    expect(fake.posted[0]).toMatchObject({
+      type: 'human_message',
+      text: '直した本文',
+      conversationId: 'conv-1',
+      supersedes: original.id,
+    });
+  });
+});
+
+/**
+ * `GET /conversations/:id` の `includeSuperseded` — チャットの
+ * 「メッセージを編集する」機能で畳まれた版へ届く口（制約(A)）。
+ */
+describe('GET /conversations/:id — includeSuperseded（編集で畳まれた版）', () => {
+  async function exchange(conversationId: string, role: 'inbound' | 'outbound', text: string) {
+    return stores.journal.append({ type: 'exchange', with: 'human', role, text, conversationId });
+  }
+
+  it('既定は畳んだ後の発言だけを返し、supersededCount を含める', async () => {
+    const original = await exchange('conv-edit', 'inbound', '元の質問');
+    await exchange('conv-edit', 'outbound', '元の回答');
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '直した質問',
+      conversationId: 'conv-edit',
+      supersedes: original.id,
+    });
+    await exchange('conv-edit', 'outbound', '直した回答');
+
+    const body = (await (await app.request('/conversations/conv-edit')).json()) as {
+      messages: { text: string }[];
+      supersededCount: number;
+    };
+
+    expect(body.messages.map((m) => m.text)).toEqual(['直した質問', '直した回答']);
+    expect(body.supersededCount).toBe(2);
+  });
+
+  it('supersededCount は畳まれた版が無ければ 0（取れない軸に値を作らない）', async () => {
+    await exchange('conv-plain', 'inbound', '質問');
+    await exchange('conv-plain', 'outbound', '回答');
+
+    const body = (await (await app.request('/conversations/conv-plain')).json()) as {
+      supersededCount: number;
+    };
+
+    expect(body.supersededCount).toBe(0);
+  });
+
+  it('includeSuperseded=true で畳まれた分も含めて返し、各発言に supersedes/supersededBy が付く', async () => {
+    const original = await exchange('conv-edit-2', 'inbound', '元の質問');
+    const oldReply = await exchange('conv-edit-2', 'outbound', '元の回答');
+    const edited = await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '直した質問',
+      conversationId: 'conv-edit-2',
+      supersedes: original.id,
+    });
+    await exchange('conv-edit-2', 'outbound', '直した回答');
+
+    const response = await app.request('/conversations/conv-edit-2?includeSuperseded=true');
+    const body = (await response.json()) as {
+      messages: { id: string; text: string; supersedes?: string; supersededBy?: string }[];
+      supersededCount: number;
+    };
+
+    expect(body.messages.map((m) => m.text)).toEqual([
+      '元の質問',
+      '元の回答',
+      '直した質問',
+      '直した回答',
+    ]);
+    expect(body.supersededCount).toBe(2);
+    expect(body.messages.find((m) => m.id === original.id)?.supersededBy).toBe(edited.id);
+    expect(body.messages.find((m) => m.id === oldReply.id)?.supersededBy).toBe(edited.id);
+    expect(body.messages.find((m) => m.id === edited.id)?.supersedes).toBe(original.id);
+  });
+
+  it('?includeSuperseded=false は既定と同じ（z.coerce.boolean() の穴を踏まない）', async () => {
+    const original = await exchange('conv-edit-3', 'inbound', '元の質問');
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '直した質問',
+      conversationId: 'conv-edit-3',
+      supersedes: original.id,
+    });
+
+    const body = (await (
+      await app.request('/conversations/conv-edit-3?includeSuperseded=false')
+    ).json()) as {
+      messages: { text: string }[];
+    };
+
+    expect(body.messages.map((m) => m.text)).toEqual(['直した質問']);
   });
 });
 

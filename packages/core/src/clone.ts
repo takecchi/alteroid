@@ -2806,7 +2806,41 @@ class Clone implements CloneHost {
 
     const head = events[0];
     if (head === undefined) return;
-    await this.#runTurn(head.conversationId, humanTurnText(events));
+    const priorTexts = await this.#resolvePriorTexts(events);
+    await this.#runTurn(head.conversationId, humanTurnText(events, priorTexts));
+  }
+
+  /**
+   * 編集ターン（`supersedes` を持つ発言）のために、置き換えられた側の本文を引く。
+   *
+   * **`humanTurnText` は pure/sync な関数なのでストアへは触れない。** ここ
+   * （`async` でストアへ届く唯一の呼び出し元）が先に引き、解決済みの文字列
+   * として渡す。
+   *
+   * **引けなくても落ちない。** 旧エントリが無い・型が `exchange`/`with: 'human'`
+   * ではない・取得そのものが失敗した——いずれの場合もその発言の id をマップへ
+   * 入れない。`humanTurnText` 側は「引けなかった」として扱い、編集である事実
+   * 自体はそれでも伝える（`editedTurnBody` の doc）。
+   *
+   * **⚠️ ここは本文を読むだけである。** 編集前のターンが開いた承認待ち・
+   * 起こしたマネージャー・書いた記憶・開閉した台帳の行には一切触れない——
+   * 「編集されたから取り消す」ロジックはここにも他のどこにも無い（制約(B)）。
+   */
+  async #resolvePriorTexts(events: HumanMessage[]): Promise<Map<string, string>> {
+    const priorTexts = new Map<string, string>();
+    for (const event of events) {
+      if (event.supersedes === undefined) continue;
+      try {
+        const entry = await this.#stores.journal.get(event.supersedes);
+        if (entry !== null && entry.type === 'exchange' && entry.with === 'human') {
+          priorTexts.set(event.id, entry.text);
+        }
+      } catch {
+        // 引けなかったこと自体は致命ではない——`humanTurnText` が「引けなかった」
+        // として扱う（doc 参照）。ここでターンを止めない。
+      }
+    }
+    return priorTexts;
   }
 
   /**
@@ -3211,6 +3245,13 @@ class Clone implements CloneHost {
     if (event.type !== 'human_message') return;
 
     // 前の発言の追記が器へ入ってから次を渡す（`#recordChain` の理由）。
+    //
+    // **`supersedes` はそのまま日誌へ通すだけである。** 受信箱の `human_message`
+    // が持つ「この発言が置き換える過去の人間の発言の id」を、日誌の `exchange`
+    // へそのまま写す（`schema.ts` の `exchange.supersedes` の doc）。畳み込みの
+    // 解釈（どれを既定ビューから隠すか）はここでは一切しない——それは
+    // `conversation.ts` の `computeSupersededIds` が持つ射影であって、記録の
+    // 時点で何かを取り消す・巻き戻すものではない（制約(B)）。
     const written = this.#recordChain.then(() =>
       this.#journal({
         type: 'exchange',
@@ -3218,6 +3259,7 @@ class Clone implements CloneHost {
         role: 'inbound',
         text: event.text,
         conversationId: event.conversationId,
+        ...(event.supersedes === undefined ? {} : { supersedes: event.supersedes }),
       }),
     );
     // 列そのものは失敗で切らない。**1本書けなかったことで以後の発言の記録まで
@@ -7402,11 +7444,22 @@ function isExternalEvent(event: InboxEvent): event is ExternalEvent {
  * 上限に当たった回に偽になるが、後者はこの束の件数を言っているだけなので、
  * 上限に当たったかどうかに関わらず常に真である。切ったという事実そのものは
  * `#mergedBatchTruncationNotice`（別の断り書き）が言う——ここで重ねて言わない。
+ *
+ * **`supersedes` を持つ発言（チャットの「メッセージを編集する」機能）には、
+ * 編集であると分かる合図を前置きする。** 断り書きを足さないという上の方針は
+ * 「普通の一往復」の話であって、編集は普通の一往復ではない——合図が無いと
+ * クローンは「先ほど述べたとおり」と噛み合わない応答をする（issue「チャットの
+ * 送信済みメッセージを編集する」）。**逆に `supersedes` が無い発言には1文字も
+ * 足さない**（この関数はまだ pure/sync であり、ストアへは一切触れない——
+ * 編集前の本文は呼び出し側が `priorTexts` として解決済みで渡す）。
  */
-export function humanTurnText(events: HumanMessage[]): string {
+export function humanTurnText(
+  events: HumanMessage[],
+  priorTexts: ReadonlyMap<string, string> = new Map(),
+): string {
   const head = events[0];
   if (head === undefined) return '';
-  if (events.length === 1) return head.text;
+  if (events.length === 1) return editedTurnBody(head, priorTexts.get(head.id));
 
   return [
     `[system] 前のターンを処理しているあいだに人間から届いた発言を、続けて **${events.length} 件** ` +
@@ -7416,8 +7469,40 @@ export function humanTurnText(events: HumanMessage[]): string {
     '',
     '---',
     '',
-    ...events.map((event, index) => `**(${index + 1}) ${event.at}**\n\n${event.text}\n`),
+    ...events.map(
+      (event, index) =>
+        `**(${index + 1}) ${event.at}**` +
+        `${event.supersedes === undefined ? '' : '（既出発言の編集）'}` +
+        `\n\n${editedTurnBody(event, priorTexts.get(event.id))}\n`,
+    ),
   ].join('\n');
+}
+
+/**
+ * 1件ぶんの本文に、必要なら編集の合図を前置きする。
+ *
+ * **`supersedes` が無ければ、素通しである。** `head.text` をそのまま返す
+ * （`humanTurnText` の doc「普通の一往復のたびに読ませるものが増える」を
+ * 1件の場合にも守るため）。
+ *
+ * **`priorText` が引けなかったとき（`undefined`）も、編集である事実だけは
+ * 伝える。** 旧エントリが窓の外に落ちた・日誌に無い、いずれの場合でも
+ * 「これは編集である」という合図自体は失わない——本文が引けないことと、
+ * 編集だという事実が分からないことは別の欠落である。
+ *
+ * **副作用の巻き戻しは一切指示しない（制約(B)）。** ここが言うのは「これは
+ * 既出発言の編集であり、編集前の本文はこれである」までで、「だから前のターンの
+ * 承認待ち・記憶・台帳の行を取り消せ」とは書かない——書けば、いま存在しない
+ * ロジックをプロンプト側から作ることになる。
+ */
+function editedTurnBody(event: HumanMessage, priorText: string | undefined): string {
+  if (event.supersedes === undefined) return event.text;
+  const notice =
+    priorText === undefined
+      ? `[system] これは既出発言（id=${event.supersedes}）の編集である。` +
+        '（編集前の本文は引けなかった。）'
+      : `[system] これは既出発言（id=${event.supersedes}）の編集である。編集前の本文:\n\n${priorText}`;
+  return `${notice}\n\n---\n\n${event.text}`;
 }
 
 /**

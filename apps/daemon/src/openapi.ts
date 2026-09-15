@@ -259,6 +259,19 @@ const conversationMessageSchema = z.object({
   /** `inbound` = 人間の発言 / `outbound` = クローンの返答。 */
   role: z.enum(['inbound', 'outbound']),
   text: z.string(),
+  /**
+   * この発言が置き換える、過去の人間の発言の id（編集後の発言が持つ。
+   * `includeSuperseded` の値によらず、編集後の発言自身がこの欄を持てば付く）。
+   * チャットの「メッセージを編集する」機能（issue #edit-message）。
+   */
+  supersedes: z.string().optional(),
+  /**
+   * この発言を隠している編集の id（畳み込みで既定ビューから隠された側だけが
+   * 持つ）。**既定（`includeSuperseded=false`）の応答には現れない**——隠された
+   * 発言そのものが `messages` から除かれるため。`includeSuperseded=true` の
+   * ときにだけ、どの編集がこれを隠したかを示す。
+   */
+  supersededBy: z.string().optional(),
 });
 
 export const conversationDetailResponseSchema = z.object({
@@ -280,6 +293,14 @@ export const conversationDetailResponseSchema = z.object({
    * 場合が黙ってどちらかへ倒れる）。`scan` を増やせば窓は広がる。
    */
   reachedStart: z.boolean(),
+  /**
+   * この会話で、編集によって既定ビューから畳まれた発言の件数
+   * （チャットの「メッセージを編集する」機能）。**`includeSuperseded` の値に
+   * よらず常に含める**（0件でも含める）——出ないと、この会話に編集で隠された
+   * 版が在ることに気づく手段が無くなる。畳まれた版を読むには
+   * `includeSuperseded=true` を指定する。
+   */
+  supersededCount: z.number().int(),
 });
 
 // ---------------------------------------------------------------------------

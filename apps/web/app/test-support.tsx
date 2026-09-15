@@ -313,8 +313,18 @@ export interface FetchStub {
   /**
    * 叩かれた記録。**資格情報を付けているかを確かめる**ために header も控える
    * （鍵を捨てたはずなのに付け続けていないか、は URL だけでは見えない）。
+   *
+   * **`request` は本物の `Request`（来たときだけ）。** 本文（`supersedes` の
+   * ような、送った JSON の中身）を確かめたいテストは `entry.request?.clone()
+   * .json()` で読む——`clone()` するのは、この後さらに読む相手（本物の
+   * fetch 実装は無いのでここでは無い）がいても本文を取り合わないため。
+   * `openapi-fetch` は常に `Request` を組み立てて `fetch` へ渡す
+   * （`openapi-fetch@0.17.0` の `baseFetch` の呼び出し箇所）ので、この
+   * リポジトリの経路（`ApiProvider` 経由）ではほぼ常に `Request` になるが、
+   * 素の `init` で来る呼び方（SSE 側の手組みの `fetch` 呼び出し）もあるので
+   * 型は `undefined` を許す。
    */
-  entries: { url: string; authorization: string | null }[];
+  entries: { url: string; authorization: string | null; request: Request | undefined }[];
   /** 応答の仕方を差し替える（接続先を直したあとの挙動を作るため）。 */
   setRoute(route: Route): void;
 }
@@ -322,7 +332,7 @@ export interface FetchStub {
 /** `globalThis.fetch` を差し替える。後片付けは呼ぶ側（`afterEach`）。 */
 export function stubFetch(initial: Route): FetchStub {
   const calls: string[] = [];
-  const entries: { url: string; authorization: string | null }[] = [];
+  const entries: FetchStub['entries'] = [];
   let route = initial;
 
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
@@ -331,7 +341,11 @@ export function stubFetch(initial: Route): FetchStub {
     // `Request` で来ることも、素の init で来ることもある（SSE は後者）。
     const headers =
       input instanceof Request ? input.headers : new Headers(init?.headers ?? undefined);
-    entries.push({ url, authorization: headers.get('authorization') });
+    entries.push({
+      url,
+      authorization: headers.get('authorization'),
+      request: input instanceof Request ? input : undefined,
+    });
     const response = route(url, init);
     if (response === undefined) {
       // 知らない URL は「繋がらない」。握り潰すと、経路の書き忘れが

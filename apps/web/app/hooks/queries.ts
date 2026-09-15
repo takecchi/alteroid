@@ -110,7 +110,17 @@ export const KEY = {
   memory: { type: 'memory' } as const,
   memoryDoc: (slug: string) => ({ type: 'memoryDoc', slug }) as const,
   conversations: (limit: number) => ({ type: 'conversations', limit }) as const,
-  conversation: (id: string) => ({ type: 'conversation', id }) as const,
+  /**
+   * **`includeSuperseded` をキーに含める（チャットのメッセージ編集、#1010）。**
+   *
+   * `chat.tsx`（版の切り替えを組み立てるため `includeSuperseded: true` で読む）と
+   * `approvals.tsx`（既定ビューだけでよい）が同じ会話 id を別の形で読むので、
+   * キーを分けないと SWR のキャッシュが1枠を取り合い、後勝ちの形が先勝ちを
+   * 上書きする——`isKeyOfType(key, 'conversation')`（`use-journal-live.ts` の
+   * 無効化）は `type` だけを見るので、この欄を足しても無効化の束ね方は変わらない。
+   */
+  conversation: (id: string, includeSuperseded = false) =>
+    ({ type: 'conversation', id, includeSuperseded }) as const,
   runners: { type: 'runners' } as const,
   tokens: { type: 'tokens' } as const,
   credentials: { type: 'credentials' } as const,
@@ -365,11 +375,28 @@ export function useConversations(limit = 30) {
   );
 }
 
-/** `null` なら取りに行かない（まだ会話 id が無い＝新しい会話）。 */
-export function useConversation(id: string | null) {
+/**
+ * `null` なら取りに行かない（まだ会話 id が無い＝新しい会話）。
+ *
+ * **`includeSuperseded`（チャットのメッセージ編集、#1010）。** 既定は `false`
+ * （編集で畳まれた旧発言とその応答を含めない、サーバの既定と同じ）。`chat.tsx`
+ * は版の切り替え（`< 2/2 >`）を組み立てるために `true` で読む——**畳み込み
+ * 規則そのものは画面側で再実装しない**（サーバの `supersedes` / `supersededBy`
+ * をそのまま束ねるだけ。`packages/core/src/conversation.ts` の
+ * `computeSupersededIds` が正本）。
+ */
+export function useConversation(id: string | null, options: { includeSuperseded?: boolean } = {}) {
   const api = useApi();
-  return useSWR(id === null ? null : KEY.conversation(id), ({ id }) =>
-    api.api.GET('/conversations/{id}', { params: { path: { id } } }).then(unwrap),
+  const includeSuperseded = options.includeSuperseded ?? false;
+  return useSWR(id === null ? null : KEY.conversation(id, includeSuperseded), ({ id }) =>
+    api.api
+      .GET('/conversations/{id}', {
+        params: {
+          path: { id },
+          query: { includeSuperseded: includeSuperseded ? 'true' : 'false' },
+        },
+      })
+      .then(unwrap),
   );
 }
 

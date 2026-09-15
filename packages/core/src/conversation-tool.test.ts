@@ -542,3 +542,154 @@ describe('conversation_read — 効かなかった指定を黙らない', () => 
     expect(reply).not.toContain('効いていない');
   });
 });
+
+/**
+ * `includeSuperseded` — チャットの「メッセージを編集する」機能
+ * （issue「チャットの送信済みメッセージを編集する」）。
+ *
+ * **⚠️ 制約(A)。** ここが最重要——既定の応答の文面に「畳まれた版が N 件ある」
+ * ことを必ず出す（0件なら出さない）。出ないとクローンは畳まれた版の存在に
+ * 気づけない。畳み込み規則そのもの（何を隠すか）は `conversation.test.ts` の
+ * `computeSupersededIds` / `conversationMessages` が別に固定しているので、
+ * ここで測るのは「その規則を経由した結果が、道具の応答にどう出るか」だけである。
+ */
+describe('conversation_read — includeSuperseded（編集で畳まれた版）', () => {
+  it('既定は編集後の版だけを返し、畳まれた版の件数を注記する（制約A）', async () => {
+    const stores = createMemoryStores();
+    const original = await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '元の質問',
+      conversationId: 'conv-edit',
+    });
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: '元の回答',
+      conversationId: 'conv-edit',
+    });
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '直した質問',
+      conversationId: 'conv-edit',
+      supersedes: original.id,
+    });
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: '直した回答',
+      conversationId: 'conv-edit',
+    });
+    const call = tools(stores);
+
+    const reply = await call('conversation_read', { conversationId: 'conv-edit' });
+
+    expect(reply).toContain('直した質問');
+    expect(reply).toContain('直した回答');
+    // 旧発言・その応答は既定ビューから畳まれて出ない。
+    expect(reply).not.toContain('元の質問');
+    expect(reply).not.toContain('元の回答');
+    // ⚠️ 制約(A) の逐語。件数（旧発言1件＋その応答1件＝2件）と、
+    // includeSuperseded で読める旨の両方を出す。
+    expect(reply).toContain('畳まれた版が 2 件ある');
+    expect(reply).toContain('includeSuperseded=true');
+  });
+
+  it('畳まれた版が無ければ、その注記は出ない（0件なら出さない）', async () => {
+    const stores = createMemoryStores();
+    await humanTurn(stores, 'conv-plain', '質問', '回答');
+    const call = tools(stores);
+
+    const reply = await call('conversation_read', { conversationId: 'conv-plain' });
+
+    expect(reply).not.toContain('畳まれた版');
+  });
+
+  it('includeSuperseded: true で、畳まれた旧発言・その応答も含めて返す', async () => {
+    const stores = createMemoryStores();
+    const original = await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '元の質問',
+      conversationId: 'conv-edit-2',
+    });
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: '元の回答',
+      conversationId: 'conv-edit-2',
+    });
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '直した質問',
+      conversationId: 'conv-edit-2',
+      supersedes: original.id,
+    });
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: '直した回答',
+      conversationId: 'conv-edit-2',
+    });
+    const call = tools(stores);
+
+    const reply = await call('conversation_read', {
+      conversationId: 'conv-edit-2',
+      includeSuperseded: true,
+    });
+
+    expect(reply).toContain('元の質問');
+    expect(reply).toContain('元の回答');
+    expect(reply).toContain('直した質問');
+    expect(reply).toContain('直した回答');
+    // includeSuperseded=true のときの注記は「含めて表示している」側の文面になる。
+    expect(reply).toContain('畳まれた版が 2 件あり');
+  });
+
+  it('speaker での絞りと両立する（畳み込みを解いた後で speaker=human を掛ける）', async () => {
+    const stores = createMemoryStores();
+    const original = await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '元の質問トマト',
+      conversationId: 'conv-edit-3',
+    });
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: '元の回答トマト',
+      conversationId: 'conv-edit-3',
+    });
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '直した質問トマト',
+      conversationId: 'conv-edit-3',
+      supersedes: original.id,
+    });
+    const call = tools(stores);
+
+    const reply = await call('conversation_read', {
+      conversationId: 'conv-edit-3',
+      includeSuperseded: true,
+      speaker: 'human',
+    });
+
+    expect(reply).toContain('元の質問トマト');
+    expect(reply).toContain('直した質問トマト');
+    expect(reply).not.toContain('元の回答トマト');
+  });
+});

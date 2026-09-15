@@ -158,7 +158,11 @@ conversationsCommand
   .command('show <id>')
   .description('1つの会話の中身（古い順）')
   .option('--scan <n>', '日誌をどこまで遡って探すか（デーモンの既定 2000、最大 10000）')
-  .action(async (id: string, options: { scan?: string }) => {
+  .option(
+    '--include-superseded',
+    'チャットの編集で既定ビューから畳まれた旧発言・その応答も含めて読む（既定は含めない）',
+  )
+  .action(async (id: string, options: { scan?: string; includeSuperseded?: boolean }) => {
     await conversationsShowCommand(id, options);
   });
 

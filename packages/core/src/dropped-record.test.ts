@@ -1232,6 +1232,25 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
           "（逐語は `command grep -Fn -- '同じ値の扱いを2か所で' packages/core/src/dropped-record.ts`）。" +
           '足すなら2か所同時、`tag()` は禁止。',
       },
+      // チャットの「メッセージを編集する」機能で足した欄（#edit-message）。
+      // `conversationId` と同じ判断へ倒す——`POST /chat` の `supersedes` は
+      // アプリ層（`apps/daemon/src/app.ts`）が「窓の中にある・同じ会話・
+      // outbound でない・既に置き換え済みでない」を確かめてから journal.append
+      // へ渡す想定だが、この関数が呼ばれるのは低レベルの schema 検査
+      // （`journalEntrySchema.safeParse`）が失敗した*後*の経路であり、
+      // `supersedes` 自体は `z.string().optional()`（書式の実行時検査を
+      // 持たない）——アプリ層の確認を経ずにここへ来る値が無い保証は無い。
+      // `conversationId` と同じ理由（値を決めるのが呼び出し側であり、
+      // この関数の外にある）なので `never` へ倒す。載せるなら、対になる
+      // `inboxEventShape` の `human_message.supersedes` と同時に。
+      supersedes: {
+        emit: 'never',
+        why:
+          '`conversationId`（直上）と同じ判断。値を決めるのは呼び出し側' +
+          '（アプリ層の検証を経て `POST /chat` の `supersedes` から渡る）で、' +
+          'この関数はその検証の外に立つ。足すなら `inboxEventShape` の' +
+          '`human_message.supersedes` と2か所同時、`tag()` は禁止。',
+      },
     },
     decision: {
       decision: { emit: 'size', token: 'decision' },
@@ -1400,6 +1419,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       role: 'inbound',
       text: SECRET,
       conversationId: SECRET,
+      supersedes: SECRET,
     },
     decision: {
       type: 'decision',

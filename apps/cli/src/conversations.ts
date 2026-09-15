@@ -37,6 +37,16 @@ export interface ConversationMessage {
   /** `inbound` = 人間の発言 / `outbound` = クローンの返答。 */
   role: 'inbound' | 'outbound';
   text: string;
+  /**
+   * この発言が置き換える、過去の人間の発言の id（編集後の発言が持つ）。
+   * チャットの「メッセージを編集する」機能（issue #edit-message）。
+   */
+  supersedes?: string;
+  /**
+   * この発言を隠している編集の id（`includeSuperseded=true` のときだけ、
+   * 畳まれた側に付く）。
+   */
+  supersededBy?: string;
 }
 
 export interface ConversationsListOptions {
@@ -144,6 +154,13 @@ export interface ConversationsShowOptions {
    * マネージャーとの往復・内部ターンは数えない（issue #418）。
    */
   scan?: string;
+  /**
+   * チャットの編集で既定ビューから畳まれた旧発言・その応答も含めて読むか
+   * （issue「チャットの送信済みメッセージを編集する」。制約(A)——`conversation_read`
+   * だけでなく、この口からも畳まれた版へ届く必要がある）。既定は含めない
+   * （デーモンの既定と同じ）。
+   */
+  includeSuperseded?: boolean;
 }
 
 export async function conversationsShowCommand(
@@ -154,7 +171,12 @@ export async function conversationsShowCommand(
   if (client === null) return;
   const response = await client.conversations[':id'].$get({
     param: { id },
-    query: options.scan === undefined ? {} : { scan: options.scan },
+    query: {
+      ...(options.scan === undefined ? {} : { scan: options.scan }),
+      // **`true` のときだけ渡す。** デーモンの既定（`false`）と1バイトも
+      // 違わない応答を、渡さなかった呼び出し全部に配り続ける。
+      ...(options.includeSuperseded === true ? { includeSuperseded: 'true' as const } : {}),
+    },
   });
   if (response.status === 404) {
     // **遡り切れている場合だけ 404 が返る**（デーモン側の約束）。判定できない
@@ -166,10 +188,12 @@ export async function conversationsShowCommand(
     stdout.write('会話を読めませんでした（--scan の値を確かめてください）\n');
     return;
   }
-  const { messages, scanned, reachedStart } = await response.json();
+  const { messages, scanned, reachedStart, supersededCount } = await response.json();
   // `renderConversationDetail` も改行で終わらずに返す（理由は上の
   // `renderConversationsList` の呼び出しと同じ。#326）。
-  stdout.write(`${renderConversationDetail(id, messages, scanned, reachedStart)}\n`);
+  stdout.write(
+    `${renderConversationDetail(id, messages, scanned, reachedStart, supersededCount)}\n`,
+  );
 }
 
 /**
@@ -178,12 +202,17 @@ export async function conversationsShowCommand(
  * **「無い」と「判定できない」を混ぜない。** `messages` が空でも `reachedStart`
  * が偽なら、それは「発言が無かった」ではなく「この窓では見えなかった」である
  * （デーモン側の `conversationDetailResponseSchema` の注記どおり）。
+ *
+ * **`supersededCount` は `--include-superseded` の値によらず常に出す**
+ * （0件なら出さない）。制約(A)——出ないと、この会話に編集で畳まれた版が
+ * 在ることに、人間の側の器も気づけなくなる。
  */
 export function renderConversationDetail(
   id: string,
   messages: ConversationMessage[],
   scanned: number,
   reachedStart: boolean,
+  supersededCount: number,
 ): string {
   const lines: string[] = [`── 会話 ${id} ──`];
   if (messages.length === 0) {
@@ -196,7 +225,18 @@ export function renderConversationDetail(
   } else {
     for (const message of messages) {
       const speaker = message.role === 'inbound' ? '人間' : 'クローン';
-      lines.push(`  [${message.at}] ${speaker}: ${message.text}`);
+      // **どれが畳まれた版で、どの編集に置き換えられたかを読める形にする。**
+      // `--include-superseded` を付けたときだけ、どちらかが付きうる
+      // （デーモン側の約束。両方付くことは無い——`supersedes` は編集後の
+      // 発言、`supersededBy` は畳まれた側が持つ）。
+      const edit =
+        message.supersededBy !== undefined
+          ? `  [畳まれた版 — ${message.supersededBy} に置き換えられた]`
+          : message.supersedes !== undefined
+            ? `  [編集後の発言 — ${message.supersedes} を置き換えた]`
+            : '';
+      // **id を出す。** 編集（`supersedes`）の対象を指すのに要る。
+      lines.push(`  [${message.at}] ${speaker} (id: ${message.id}): ${message.text}${edit}`);
     }
   }
   lines.push('');
@@ -206,6 +246,12 @@ export function renderConversationDetail(
       : `（人間との往復を ${scanned} 件遡ったが、先頭には届いていない。これより古い発言が残っている` +
           'かもしれない — 広げるには --scan）',
   );
+  if (supersededCount > 0) {
+    lines.push(
+      `（この会話にはチャットの編集で畳まれた版が ${supersededCount} 件ある。中身を読むには ` +
+        '--include-superseded を付けてください）',
+    );
+  }
   return lines.join('\n');
 }
 

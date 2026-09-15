@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   bySpeaker,
   collectConversations,
+  computeSupersededIds,
   conversationMessages,
   humanExchanges,
   reachedStart,
@@ -319,5 +320,325 @@ describe('readConversationWindow（issue #418）', () => {
     await readConversationWindow(stub, { scan: 10 });
     expect(calls[1]).not.toHaveProperty('since');
     expect(calls[1]).not.toHaveProperty('until');
+  });
+});
+
+/**
+ * `supersedes` による畳み込み（チャットの「メッセージを編集する」機能）。
+ *
+ * **`computeSupersededIds` を直接測る歯（防御的条件）と、
+ * `conversationMessages` / `collectConversations` を通して測る歯（実際の
+ * 使われ方）の両方を置く。** 前者は「隠す・隠さないの境界そのもの」を、
+ * 後者は「その境界が2つの呼び出し口で同じ結果になること」を保証する
+ * ——別々に測らないと、境界だけ正しくて配線を忘れる／配線だけ揃っていて
+ * 境界が緩い、のどちらかを見落とす。
+ */
+describe('computeSupersededIds（畳み込みの境界そのもの）', () => {
+  it('T が見つからない（scan の窓の外）ときは何も隠さない', () => {
+    const chronological: Exchange[] = [
+      exchange({
+        id: 'edit',
+        at: '2026-08-20T00:01:00.000Z',
+        conversationId: 'c1',
+        supersedes: 'not-in-window',
+      }),
+    ];
+
+    expect(computeSupersededIds(chronological)).toEqual(new Map());
+  });
+
+  it('T が E より後ろにある（順序が逆）ときは何も隠さない', () => {
+    const chronological: Exchange[] = [
+      exchange({
+        id: 'edit',
+        at: '2026-08-20T00:01:00.000Z',
+        conversationId: 'c1',
+        supersedes: 'later',
+      }),
+      exchange({ id: 'later', at: '2026-08-20T00:02:00.000Z', conversationId: 'c1' }),
+    ];
+
+    expect(computeSupersededIds(chronological)).toEqual(new Map());
+  });
+
+  it('T の会話が E と違うときは何も隠さない', () => {
+    const chronological: Exchange[] = [
+      exchange({ id: 'other-conv', at: '2026-08-20T00:00:00.000Z', conversationId: 'c2' }),
+      exchange({
+        id: 'edit',
+        at: '2026-08-20T00:01:00.000Z',
+        conversationId: 'c1',
+        supersedes: 'other-conv',
+      }),
+    ];
+
+    expect(computeSupersededIds(chronological)).toEqual(new Map());
+  });
+
+  it('見つかり・順序も会話も正しいときは、T 以上 E 未満を隠す', () => {
+    const chronological: Exchange[] = [
+      exchange({ id: 'h1', at: '2026-08-20T00:00:00.000Z', conversationId: 'c1' }),
+      exchange({
+        id: 'c1r',
+        at: '2026-08-20T00:00:30.000Z',
+        conversationId: 'c1',
+        role: 'outbound',
+      }),
+      exchange({
+        id: 'h2',
+        at: '2026-08-20T00:01:00.000Z',
+        conversationId: 'c1',
+        supersedes: 'h1',
+      }),
+    ];
+
+    expect(computeSupersededIds(chronological)).toEqual(
+      new Map([
+        ['h1', 'h2'],
+        ['c1r', 'h2'],
+      ]),
+    );
+  });
+});
+
+describe('conversationMessages（supersedes を畳む）', () => {
+  it('単純な編集: 旧発言とその応答が畳まれ、編集後の発言が残る', () => {
+    // journal 順（新しい順）で渡す — 実際の呼び出しと同じ形。
+    const entries: JournalEntry[] = [
+      exchange({
+        id: 'c2',
+        at: '2026-08-20T00:03:00.000Z',
+        conversationId: 'c1',
+        role: 'outbound',
+        text: '編集後への返答',
+      }),
+      exchange({
+        id: 'h2',
+        at: '2026-08-20T00:02:00.000Z',
+        conversationId: 'c1',
+        text: '編集後の発言',
+        supersedes: 'h1',
+      }),
+      exchange({
+        id: 'c1r',
+        at: '2026-08-20T00:01:00.000Z',
+        conversationId: 'c1',
+        role: 'outbound',
+        text: '旧発言への返答',
+      }),
+      exchange({
+        id: 'h1',
+        at: '2026-08-20T00:00:00.000Z',
+        conversationId: 'c1',
+        text: '旧発言',
+      }),
+    ];
+
+    const messages = conversationMessages(entries, 'c1');
+
+    expect(messages.map((m) => m.id)).toEqual(['h2', 'c2']);
+    expect(messages.map((m) => m.text)).toEqual(['編集後の発言', '編集後への返答']);
+    // 編集後の発言は supersedes をそのまま持つ。
+    expect(messages[0]).toMatchObject({ id: 'h2', supersedes: 'h1' });
+  });
+
+  it('編集の連鎖（編集をさらに編集）が正しく畳まれる', () => {
+    const entries: JournalEntry[] = [
+      exchange({
+        id: 'c3',
+        at: '2026-08-20T00:05:00.000Z',
+        conversationId: 'c1',
+        role: 'outbound',
+      }),
+      exchange({
+        id: 'h3',
+        at: '2026-08-20T00:04:00.000Z',
+        conversationId: 'c1',
+        text: '2度目の編集',
+        supersedes: 'h2',
+      }),
+      exchange({
+        id: 'c2',
+        at: '2026-08-20T00:03:00.000Z',
+        conversationId: 'c1',
+        role: 'outbound',
+      }),
+      exchange({
+        id: 'h2',
+        at: '2026-08-20T00:02:00.000Z',
+        conversationId: 'c1',
+        text: '1度目の編集',
+        supersedes: 'h1',
+      }),
+      exchange({
+        id: 'c1r',
+        at: '2026-08-20T00:01:00.000Z',
+        conversationId: 'c1',
+        role: 'outbound',
+      }),
+      exchange({
+        id: 'h1',
+        at: '2026-08-20T00:00:00.000Z',
+        conversationId: 'c1',
+        text: '最初の発言',
+      }),
+    ];
+
+    // 既定（畳んだ後）は最後の編集とその返答だけが残る。
+    const visible = conversationMessages(entries, 'c1');
+    expect(visible.map((m) => m.id)).toEqual(['h3', 'c3']);
+
+    // 畳まれた分も含めれば、和集合として全4件が隠れている理由を持つ。
+    const all = conversationMessages(entries, 'c1', { includeSuperseded: true });
+    expect(all.map((m) => m.id)).toEqual(['h1', 'c1r', 'h2', 'c2', 'h3', 'c3']);
+    expect(all.map((m) => m.supersededBy)).toEqual(['h2', 'h2', 'h3', 'h3', undefined, undefined]);
+  });
+
+  it('編集の後ろに続く往復は残る（畳まれるのは旧発言から編集の直前まで）', () => {
+    const entries: JournalEntry[] = [
+      exchange({
+        id: 'c3',
+        at: '2026-08-20T00:05:00.000Z',
+        conversationId: 'c1',
+        role: 'outbound',
+      }),
+      exchange({
+        id: 'h3',
+        at: '2026-08-20T00:04:00.000Z',
+        conversationId: 'c1',
+        text: '編集ではない、続きの発言',
+      }),
+      exchange({
+        id: 'c2',
+        at: '2026-08-20T00:03:00.000Z',
+        conversationId: 'c1',
+        role: 'outbound',
+      }),
+      exchange({
+        id: 'h2',
+        at: '2026-08-20T00:02:00.000Z',
+        conversationId: 'c1',
+        text: '編集後の発言',
+        supersedes: 'h1',
+      }),
+      exchange({
+        id: 'c1r',
+        at: '2026-08-20T00:01:00.000Z',
+        conversationId: 'c1',
+        role: 'outbound',
+      }),
+      exchange({ id: 'h1', at: '2026-08-20T00:00:00.000Z', conversationId: 'c1', text: '旧発言' }),
+    ];
+
+    const messages = conversationMessages(entries, 'c1');
+
+    // h1 / c1r（旧発言とその応答）だけが畳まれ、h2 以降の往復はすべて残る。
+    expect(messages.map((m) => m.id)).toEqual(['h2', 'c2', 'h3', 'c3']);
+  });
+
+  it('対象が窓の外にあるときに何も畳まれず落ちない', () => {
+    // h1（supersedes の対象）が scan の窓に入っておらず、この会話には h2 しか無い。
+    const entries: JournalEntry[] = [
+      exchange({
+        id: 'c2',
+        at: '2026-08-20T00:02:00.000Z',
+        conversationId: 'c1',
+        role: 'outbound',
+      }),
+      exchange({
+        id: 'h2',
+        at: '2026-08-20T00:01:00.000Z',
+        conversationId: 'c1',
+        text: '編集後の発言（旧発言は窓の外）',
+        supersedes: 'h1-not-in-window',
+      }),
+    ];
+
+    expect(() => conversationMessages(entries, 'c1')).not.toThrow();
+    const messages = conversationMessages(entries, 'c1');
+    expect(messages.map((m) => m.id)).toEqual(['h2', 'c2']);
+  });
+
+  it('日誌のレコード自体は一切変わらない（射影だけが畳む）', () => {
+    const entries: JournalEntry[] = [
+      exchange({
+        id: 'c2',
+        at: '2026-08-20T00:02:00.000Z',
+        conversationId: 'c1',
+        role: 'outbound',
+      }),
+      exchange({
+        id: 'h2',
+        at: '2026-08-20T00:01:00.000Z',
+        conversationId: 'c1',
+        text: '編集後の発言',
+        supersedes: 'h1',
+      }),
+      exchange({
+        id: 'c1r',
+        at: '2026-08-20T00:00:30.000Z',
+        conversationId: 'c1',
+        role: 'outbound',
+      }),
+      exchange({ id: 'h1', at: '2026-08-20T00:00:00.000Z', conversationId: 'c1', text: '旧発言' }),
+    ];
+    // 個々のエントリを凍結する — この関数群が1バイトでも書き換えようとすれば
+    // strict mode で即座に例外になる（追記専用の記録に対する射影であることの歯）。
+    for (const entry of entries) Object.freeze(entry);
+    Object.freeze(entries);
+    const before = JSON.stringify(entries);
+
+    conversationMessages(entries, 'c1');
+    conversationMessages(entries, 'c1', { includeSuperseded: true });
+    collectConversations(entries);
+
+    expect(JSON.stringify(entries)).toBe(before);
+  });
+});
+
+describe('collectConversations（supersedes を畳んだ後で preview / messages を数える）', () => {
+  it('畳んだ後の件数・最新発言で preview / messages / updatedAt を数える', () => {
+    const entries: JournalEntry[] = [
+      exchange({
+        id: 'c2',
+        at: '2026-08-20T00:03:00.000Z',
+        conversationId: 'c1',
+        role: 'outbound',
+        text: '編集後への返答',
+      }),
+      exchange({
+        id: 'h2',
+        at: '2026-08-20T00:02:00.000Z',
+        conversationId: 'c1',
+        text: '編集後の発言',
+        supersedes: 'h1',
+      }),
+      exchange({
+        id: 'c1r',
+        at: '2026-08-20T00:01:00.000Z',
+        conversationId: 'c1',
+        role: 'outbound',
+        text: '旧発言への返答',
+      }),
+      exchange({
+        id: 'h1',
+        at: '2026-08-20T00:00:00.000Z',
+        conversationId: 'c1',
+        text: '旧発言（一覧の抜粋に出てはいけない）',
+      }),
+    ];
+
+    const result = collectConversations(entries);
+
+    expect(result).toHaveLength(1);
+    // 畳む前なら messages は4件・startedAt は h1・preview は「旧発言…」になりうるが、
+    // 畳んだ後は h2/c2 の2件だけが残る。
+    expect(result[0]).toMatchObject({
+      conversationId: 'c1',
+      startedAt: '2026-08-20T00:02:00.000Z',
+      updatedAt: '2026-08-20T00:03:00.000Z',
+      messages: 2,
+      preview: '編集後への返答',
+    });
   });
 });

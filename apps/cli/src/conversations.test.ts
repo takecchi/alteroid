@@ -309,6 +309,107 @@ describe('alteroid conversations show', () => {
   });
 
   /**
+   * 制約(A) — `supersededCount` は `--include-superseded` を渡さなくても
+   * 常に出す（0件なら出さない）。出ないと、この会話に編集で畳まれた版が
+   * 在ることに人間の側の器も気づけなくなる
+   * （issue「チャットの送信済みメッセージを編集する」）。
+   */
+  it('チャットの編集で畳まれた版があれば、--include-superseded を付けなくても件数を言う', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: {
+        conversationId: 'conv-1',
+        messages: [{ id: 'm2', at: '2026-08-16T10:02:00.000Z', role: 'inbound', text: '直した文' }],
+        scanned: 5,
+        reachedStart: true,
+        supersededCount: 2,
+      },
+    });
+
+    await conversationsShowCommand('conv-1');
+
+    // **既定では `includeSuperseded` を渡さない。** サーバ既定（false）と
+    // 1バイトも違わない応答を、指定しなかった呼び出し全部に配らない。
+    const url = new URL(sent[0]?.url ?? '');
+    expect(url.searchParams.get('includeSuperseded')).toBeNull();
+    expect(read()).toContain('畳まれた版が 2 件ある');
+  });
+
+  it('畳まれた版が0件なら、その注記は出ない', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: {
+        conversationId: 'conv-1',
+        messages: [
+          { id: 'm1', at: '2026-08-16T10:00:00.000Z', role: 'inbound', text: '設計どうする？' },
+        ],
+        scanned: 5,
+        reachedStart: true,
+        supersededCount: 0,
+      },
+    });
+
+    await conversationsShowCommand('conv-1');
+
+    expect(read()).not.toContain('畳まれた版が');
+  });
+
+  /**
+   * `--include-superseded` を付けると、畳まれた発言も含めて返る
+   * （デーモン側の約束）。**どれが畳まれた版でどの編集に置き換えられたかが
+   * 読める**（`supersededBy` / `supersedes` の表示）ことと、**発言の id が
+   * 読める**（編集の対象を指すのに要る）ことの両方をここで固定する。
+   */
+  it('--include-superseded を付けると畳まれた発言も出し、置き換え関係と id が読める', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: {
+        conversationId: 'conv-1',
+        messages: [
+          {
+            id: 'm1',
+            at: '2026-08-16T10:00:00.000Z',
+            role: 'inbound',
+            text: '元の文',
+            supersededBy: 'm3',
+          },
+          {
+            id: 'm2',
+            at: '2026-08-16T10:01:00.000Z',
+            role: 'outbound',
+            text: '元の応答',
+            supersededBy: 'm3',
+          },
+          {
+            id: 'm3',
+            at: '2026-08-16T10:02:00.000Z',
+            role: 'inbound',
+            text: '直した文',
+            supersedes: 'm1',
+          },
+        ],
+        scanned: 5,
+        reachedStart: true,
+        supersededCount: 2,
+      },
+    });
+
+    await conversationsShowCommand('conv-1', { includeSuperseded: true });
+
+    const url = new URL(sent[0]?.url ?? '');
+    expect(url.searchParams.get('includeSuperseded')).toBe('true');
+    const text = read();
+    expect(text).toContain('id: m1');
+    expect(text).toContain('id: m3');
+    expect(text).toContain('元の文');
+    expect(text).toContain('畳まれた版 — m3 に置き換えられた');
+    expect(text).toContain('編集後の発言 — m1 を置き換えた');
+  });
+
+  /**
    * **「無い」と「判定できない」を混ぜない。** `messages` が空でも `reachedStart`
    * が偽なら、それは発言が無かったのではなく窓の外に残っているかもしれない、である
    * （`apps/daemon/src/app.ts` の `conversationDetailResponseSchema` の約束）。

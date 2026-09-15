@@ -11,6 +11,7 @@ import {
   runSlashCommand,
   type Listed,
 } from './chat.js';
+import type { Target } from './target.js';
 import { captureStdout } from './test-support.js';
 
 type ManagerListItem = Parameters<typeof renderManagerList>[0][number];
@@ -669,6 +670,8 @@ interface ConversationMessageLike {
   at: string;
   role: 'inbound' | 'outbound';
   text: string;
+  supersedes?: string;
+  supersededBy?: string;
 }
 
 interface AnswersRequest {
@@ -763,6 +766,7 @@ function stubClient(
       messages: ConversationMessageLike[];
       scanned: number;
       reachedStart: boolean;
+      supersededCount?: number;
     };
     /** `POST /approvals/answer` の応答コード。既定は 200。 */
     approvalsAnswerStatus?: number;
@@ -916,6 +920,7 @@ function stubClient(
                 messages: [],
                 scanned: 0,
                 reachedStart: true,
+                supersededCount: 0,
               },
             ),
           );
@@ -1016,6 +1021,8 @@ function emptyListed(): Listed {
     managers: [],
     managerAnchors: {},
     waiting: [],
+    messages: [],
+    messagesConversationId: null,
   };
 }
 
@@ -2353,6 +2360,274 @@ describe('chat の /conversations と /conversation', () => {
     const text = read();
     expect(text).toContain('/conversations');
     expect(text).toContain('/conversation <番号|id>');
+    expect(text).toContain('/edit <番号|id>');
+  });
+
+  /**
+   * 制約(A) — `supersededCount` は `includeSuperseded` を渡さなくても常に出す
+   * （0件なら出さない）。`conversations.test.ts` の CLI サブコマンド側と同じ
+   * 保証を、chat の REPL 側でも固定する（入口の等価性）。
+   */
+  it('チャットの編集で畳まれた版があれば、付けなくても件数を言う', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      conversationDetailBody: {
+        conversationId: 'conv-1',
+        messages: [{ id: 'm2', at: '2026-08-16T10:02:00.000Z', role: 'inbound', text: '直した文' }],
+        scanned: 5,
+        reachedStart: true,
+        supersededCount: 1,
+      },
+    });
+
+    await runSlashCommand('/conversation conv-1', client, emptyListed());
+
+    expect(read()).toContain('畳まれた版が 1 件ある');
+  });
+
+  it('畳まれた版が0件なら、その注記は出ない', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      conversationDetailBody: {
+        conversationId: 'conv-1',
+        messages: [
+          { id: 'm1', at: '2026-08-16T10:00:00.000Z', role: 'inbound', text: '設計どうする？' },
+        ],
+        scanned: 5,
+        reachedStart: true,
+        supersededCount: 0,
+      },
+    });
+
+    await runSlashCommand('/conversation conv-1', client, emptyListed());
+
+    expect(read()).not.toContain('畳まれた版が');
+  });
+
+  /**
+   * `includeSuperseded=true` を渡すと、畳まれた発言も含めて返る
+   * （デーモン側の約束）。**どれが畳まれた版でどの編集に置き換えられたかが
+   * 読める**（`supersededBy` / `supersedes` の表示）ことと、**畳まれた発言・
+   * クローンの応答には番号を振らない**（`/edit` の対象から自然に外れる。
+   * 制約C の主な防御線）ことの両方をここで固定する。
+   */
+  it('includeSuperseded=true で畳まれた発言も出し、置き換え関係が読める', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient({
+      conversationDetailBody: {
+        conversationId: 'conv-1',
+        messages: [
+          {
+            id: 'm1',
+            at: '2026-08-16T10:00:00.000Z',
+            role: 'inbound',
+            text: '元の文',
+            supersededBy: 'm3',
+          },
+          {
+            id: 'm2',
+            at: '2026-08-16T10:01:00.000Z',
+            role: 'outbound',
+            text: '元の応答',
+            supersededBy: 'm3',
+          },
+          {
+            id: 'm3',
+            at: '2026-08-16T10:02:00.000Z',
+            role: 'inbound',
+            text: '直した文',
+            supersedes: 'm1',
+          },
+        ],
+        scanned: 5,
+        reachedStart: true,
+        supersededCount: 2,
+      },
+    });
+    const listed = emptyListed();
+
+    await runSlashCommand('/conversation conv-1 includeSuperseded=true', client, listed);
+
+    const query = calls.find((call) => call.route === 'GET /conversations/:id')?.args as {
+      query: Record<string, string>;
+    };
+    expect(query.query.includeSuperseded).toBe('true');
+    const text = read();
+    expect(text).toContain('元の文');
+    expect(text).toContain('畳まれた版 → m3 に置き換えられた');
+    expect(text).toContain('編集後の発言 — m1 を置き換えた');
+    // **番号は m3（畳まれていない人間の発言）にしか振らない。**
+    // m1（畳まれた側）・m2（クローンの応答）は対象から外れる。
+    expect(listed.messages).toEqual(['m3']);
+  });
+});
+
+/**
+ * `/edit <番号|id> <新しい本文>` — Web UI の鉛筆アイコンと同じ能力を CLI にも
+ * 出す（issue「チャットの送信済みメッセージを編集する」。north_star「入口の
+ * 等価性」）。
+ *
+ * **`sendMessage` と同じ経路（生の `fetch` による `POST /chat`）を通る**ので、
+ * `hono/client` ではなく `globalThis.fetch` を差し替える
+ * （`conversations.test.ts` と同じ形）。SSE の応答は「何も表示しない
+ * `done` だけの1件」に固定し、ここで見たいのは送った本文（`supersedes` が
+ * 乗っているか）であって応答の表示ではない。
+ */
+describe('chat の /edit（送信済みの自分の発言を編集する）', () => {
+  const target: Target = {
+    baseUrl: 'http://127.0.0.1:4517',
+    headers: { authorization: 'Bearer token' },
+    remote: false,
+    note: null,
+  };
+
+  let originalFetch: typeof fetch;
+  let sent: { url: string; body: unknown }[];
+
+  /** `reply` が 2xx なら SSE の最小応答、そうでなければ JSON のエラー本文を返す。 */
+  function stubEditFetch(reply: { status: number; body?: unknown }): void {
+    originalFetch = globalThis.fetch;
+    sent = [];
+    globalThis.fetch = ((input: unknown, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : String(input);
+      const body: unknown = init?.body === undefined ? undefined : JSON.parse(String(init.body));
+      sent.push({ url, body });
+      const ok = reply.status >= 200 && reply.status < 300;
+      const text = ok ? 'event: done\ndata: {"type":"done"}\n\n' : JSON.stringify(reply.body);
+      return Promise.resolve(
+        new Response(text, {
+          status: reply.status,
+          headers: { 'content-type': ok ? 'text/event-stream' : 'application/json' },
+        }),
+      );
+    }) as typeof fetch;
+  }
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  function conversationWithMessages() {
+    return stubClient({
+      conversationDetailBody: {
+        conversationId: 'conv-1',
+        messages: [
+          { id: 'm1', at: '2026-08-16T10:00:00.000Z', role: 'inbound', text: '前の文' },
+          { id: 'm2', at: '2026-08-16T10:01:00.000Z', role: 'outbound', text: '応答' },
+        ],
+        scanned: 5,
+        reachedStart: true,
+        supersededCount: 0,
+      },
+    });
+  }
+
+  it('番号を id へ解決し、supersedes 付きで POST /chat を叩く', async () => {
+    stubEditFetch({ status: 200 });
+    const { client } = conversationWithMessages();
+    const listed = emptyListed();
+    captureStdout();
+
+    // /conversation で番号を振ってから、その番号で /edit する
+    // （番号は人間の発言 m1 だけに振られる——/edit がクローンの応答 m2 を
+    // 指せない、という制約(C)の主な防御線がここである）。
+    await runSlashCommand('/conversation conv-1', client, listed);
+    expect(listed.messages).toEqual(['m1']);
+    await runSlashCommand('/edit 1 直した文', client, listed, null, target);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.url).toBe('http://127.0.0.1:4517/chat');
+    expect(sent[0]?.body).toEqual({
+      text: '直した文',
+      conversationId: 'conv-1',
+      supersedes: 'm1',
+    });
+  });
+
+  it('id をそのまま指しても解決する（番号を経由しなくてよい）', async () => {
+    stubEditFetch({ status: 200 });
+    const { client } = conversationWithMessages();
+    const listed = emptyListed();
+    captureStdout();
+
+    await runSlashCommand('/conversation conv-1', client, listed);
+    await runSlashCommand('/edit m1 直した文', client, listed, null, target);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.body).toMatchObject({ supersedes: 'm1' });
+  });
+
+  /**
+   * `/conversation` はクローンの応答（m2）に番号を振らないので、番号だけを
+   * 使う通常の操作では制約(C)を CLI 側で満たせている。**それでも id を
+   * 直に打てば、番号の防御はすり抜けられる** — そのときサーバの400（4つ目の
+   * 検証）が最後の砦になる。ここでは、その理由がそのまま人間に出ることを
+   * 固定する（`sendMessage` の失敗分岐が本文の `error` を読むようになった
+   * 理由そのもの）。
+   */
+  it('クローンの応答を指すと（id を直に打っても）、サーバの理由がそのまま出る', async () => {
+    stubEditFetch({
+      status: 400,
+      body: { error: 'supersedes はクローンの応答ではなく人間の発言だけを指せる' },
+    });
+    const { client } = conversationWithMessages();
+    const listed = emptyListed();
+    const read = captureStdout();
+
+    await runSlashCommand('/conversation conv-1', client, listed);
+    // 番号は m1 だけ——m2（クローンの応答）には振られていない。
+    expect(listed.messages).toEqual(['m1']);
+
+    await runSlashCommand('/edit m2 それでも編集を試す', client, listed, null, target);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.body).toMatchObject({ supersedes: 'm2' });
+    expect(read()).toContain('クローンの応答ではなく人間の発言だけを指せる');
+  });
+
+  it('番号が /conversation の一覧に無ければ、送らずに案内する', async () => {
+    stubEditFetch({ status: 200 });
+    const { client } = conversationWithMessages();
+    const listed = emptyListed();
+    const read = captureStdout();
+
+    await runSlashCommand('/conversation conv-1', client, listed);
+    await runSlashCommand('/edit 9 直した文', client, listed, null, target);
+
+    expect(sent).toHaveLength(0);
+    expect(read()).toContain('一覧にありません');
+  });
+
+  it('まだ /conversation を開いていなければ、先に開くよう案内する', async () => {
+    stubEditFetch({ status: 200 });
+    const read = captureStdout();
+
+    await runSlashCommand(
+      '/edit m1 直した文',
+      {} as unknown as Parameters<typeof runSlashCommand>[1],
+      emptyListed(),
+      null,
+      target,
+    );
+
+    expect(sent).toHaveLength(0);
+    expect(read()).toContain('/conversation');
+  });
+
+  it('本文が無ければ使い方を出す', async () => {
+    stubEditFetch({ status: 200 });
+    const read = captureStdout();
+
+    await runSlashCommand(
+      '/edit 1',
+      {} as unknown as Parameters<typeof runSlashCommand>[1],
+      emptyListed(),
+      null,
+      target,
+    );
+
+    expect(sent).toHaveLength(0);
+    expect(read()).toContain('使い方: /edit');
   });
 });
 
