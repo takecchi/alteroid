@@ -4,6 +4,7 @@ import {
   agentTokenViewSchema,
   commitmentSchema,
   createMemoryStores,
+  INBOX_EVENT_TYPE_ORDER,
   jobSchema,
   jobStatusSchema,
   journalEntrySchema,
@@ -1440,6 +1441,46 @@ export const archiveRemovedResponseSchema = z.object({
   removedAt: z.string(),
   bytes: z.number().int(),
   archiveId: z.string().optional(),
+});
+
+// ---------------------------------------------------------------------------
+// 受信箱（/inbox）— issue #972
+// ---------------------------------------------------------------------------
+
+/**
+ * `POST /inbox/remove` の入力。クローンの道具 `inbox_remove_many`
+ * （`packages/core/src/tools.ts`）と同じ絞り込み（種類・送信元・齢）・同じ
+ * 既定（`dryRun` を省略すると試算）を、人間の入口からも叩けるようにする
+ * （issue #972 提案4「人間の入口から叩けること」）。
+ *
+ * **`types` は必須で空にできない。** ハンドラ側（`app.ts`）で「在る7種類を
+ * 全部並べた呼びは断る」を判定する——ここでは判定しない（`z.array` に
+ * 「特定の組み合わせを禁じる」制約は素直に書けないため。`commitment_close_many`
+ * と同じ役割分担）。
+ */
+export const inboxRemoveManyRequestSchema = z.object({
+  types: z.array(z.enum(INBOX_EVENT_TYPE_ORDER)).min(1),
+  sources: z.array(z.string().min(1)).min(1).optional(),
+  before: z.string().min(1).optional(),
+  reason: z.string().min(1),
+  dryRun: z.boolean().optional(),
+  limit: z.number().int().min(1).optional(),
+});
+
+/**
+ * `POST /inbox/remove` の応答。**`removedIds` は打ち切らない**
+ * （クローンの道具側は文脈窓のために先頭20件で切るが、JSON の応答は人間・
+ * スクリプトが読むものでその制約が無い——`inbox_remove_many` の
+ * `REMOVE_MANY_IDS_SHOWN` の doc と対になる判断）。
+ */
+export const inboxRemoveManyResponseSchema = z.object({
+  ok: z.literal(true),
+  dryRun: z.boolean(),
+  totalPending: z.number().int(),
+  matched: z.number().int(),
+  targeted: z.number().int(),
+  removedIds: z.array(z.string()),
+  remaining: z.number().int(),
 });
 
 // ---------------------------------------------------------------------------

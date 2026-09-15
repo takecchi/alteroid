@@ -39,11 +39,13 @@ import {
   droppedTraceLedgerSince,
   findUnrecordedManagers,
   guardArchiveRemoval,
+  INBOX_EVENT_TYPE_ORDER,
   isAccountGranted,
   isDailyReport,
   jobStatusSchema,
   journalEntrySchema,
   localDayRange,
+  matchesInboxRemoveManyFilter,
   memorySlugSchema,
   fingerprintOf,
   noteDroppedRecord,
@@ -51,6 +53,10 @@ import {
   readConversationWindow,
   RECENT_TRACE_LIMIT,
   recentDroppedTraces,
+  chunkIdsByChars,
+  REMOVE_MANY_JOURNAL_ID_CHARS,
+  REMOVE_MANY_LIMIT_DEFAULT,
+  REMOVE_MANY_LIMIT_MAX,
   reportRunnerRevision,
   resetWorkspaceState,
   resolveBuildRevision,
@@ -66,6 +72,7 @@ import {
   type ApprovalPagingKey,
   type AuthAccount,
   type AuthService,
+  type InboxRemoveManyFilter,
 } from '@alteroid/core';
 
 import { bearerOf, isOperator, type AuthPlan, type AuthVariables, type Principal } from './auth.js';
@@ -99,6 +106,8 @@ import {
   errorResponseSchema,
   eventAcceptedResponseSchema,
   healthResponseSchema,
+  inboxRemoveManyRequestSchema,
+  inboxRemoveManyResponseSchema,
   journalListResponseSchema,
   loginClaimResponseSchema,
   loginStartResponseSchema,
@@ -4389,6 +4398,167 @@ export function createApp(deps: AppDeps) {
             ...(guard.kind === 'allowed-with-override'
               ? { override: { managerId: guard.managerId, reason: guard.reason } }
               : {}),
+          }),
+        );
+      },
+    )
+
+    // --- 受信箱（/inbox） ---------------------------------------------------
+    // issue #972: 同じ失敗の写しが数千件積もると、クローン側は `remove()` の
+    // 1ターン1件のペースでしか排出できず、排出そのものが文脈窓を食い潰す。
+    // 唯一の既存手段は `POST /reset`（記憶ごと全部消す）で、それでは使えない
+    // （#972 本文）。ここはクローンの道具 `inbox_remove_many`
+    // （`packages/core/src/tools.ts`）と**同じ絞り込みの判定**
+    // （`matchesInboxRemoveManyFilter`。SQL 側にも道具側にも判定を複製しない
+    // ——`inboxBacklogDedupeKey` の doc「なぜ1箇所に閉じるか」と同じ理由）を
+    // 人間の入口からも叩けるようにする（#972 提案4）。
+
+    /**
+     * 人間が、受信箱の未読を絞り込んでまとめて消す。
+     *
+     * **クローンの道具 `inbox_remove_many` の人間版。** 既定・絞り込みの
+     * 軸・「全部消すを1回で撃てる形は作らない」制約まで同じにしてある——
+     * 片方だけ緩いと、緩い側からなら事故で全部消せてしまう
+     * （north_star 禁止1「能力の追加制限」の逆——ここは強さを揃える側）。
+     *
+     * **資格は `authenticate` だけ（`requireOperator` は付けない）。**
+     * `POST /commitments/:id/close` `DELETE /archive/:id` と同じ強さ——
+     * これらも台帳・退避の中身を操作するが `requireOperator` を要求していない。
+     * `/profile` `/runners/credentials` のように鍵そのものを扱う口だけが
+     * その一段上の強さを持つ。
+     */
+    .post(
+      '/inbox/remove',
+      describeRoute({
+        tags: ['inbox'],
+        summary: '受信箱の未読を、絞り込みを渡してまとめて畳む（消す）',
+        description:
+          'クローンの `inbox_remove_many` と同じものを人間の手から（issue #972）。' +
+          '同じ失敗の写しが数千件積もると、クローン側は1ターン1件のペースでしか' +
+          '排出できず、排出それ自体が文脈窓を食い潰す——人間はこの口から直接' +
+          'まとめて消せる。**既定は試算（`dryRun` を省略すると true）で、1件も' +
+          '消さない。** ' +
+          `\`types\` は必須で、在る7種類（${INBOX_EVENT_TYPE_ORDER.join(' / ')}）を` +
+          '全部並べた呼びは断る（「全部消す」を1回で撃てる形は作らない——それは' +
+          '`POST /reset`（記憶ごと全部消す）の役目である）。行は台帳の close とは' +
+          '違い**物理的に消える**——`InboxStore` は「まだ処理し終えていない」という' +
+          '事実だけを持つ器で、片付いた後の記録を残す場所ではない。' +
+          '**消した id は全部日誌に残る。**',
+        responses: {
+          200: {
+            description: '試算、または実際に消した結果。',
+            content: { 'application/json': { schema: resolver(inboxRemoveManyResponseSchema) } },
+          },
+          400: {
+            description:
+              '本文が不正、または `types` が在る7種類を全部並べている（絞り込みが無いのと同じ）、' +
+              'または `before` が ISO8601 として読めない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      jsonBody(inboxRemoveManyRequestSchema),
+      async (c) => {
+        const { types, sources, before, reason, dryRun, limit } = c.req.valid('json');
+
+        // 🔴 絞り込みの無い呼びを断る（`inbox_remove_many` と同じ判定・同じ理由）。
+        if (INBOX_EVENT_TYPE_ORDER.every((known) => types.includes(known))) {
+          return c.json(
+            {
+              error:
+                `types に在る7種類（${INBOX_EVENT_TYPE_ORDER.join(', ')}）を全部並べた呼びは` +
+                '断る——それは絞り込みが無いのと同じで、1回で受信箱を空にできてしまう。' +
+                '消したい種類だけを名指しすること（例 types: ["manager_message"]）。' +
+                '**1件も消していない。**',
+            },
+            400,
+          );
+        }
+        if (before !== undefined && Number.isNaN(Date.parse(before))) {
+          return c.json(
+            {
+              error:
+                `before に渡された「${before}」は ISO8601 として読めない` +
+                '（例 2026-09-15T00:00:00.000Z）。**1件も消していない。**',
+            },
+            400,
+          );
+        }
+        if (limit !== undefined && limit > REMOVE_MANY_LIMIT_MAX) {
+          return c.json(
+            { error: `limit は ${REMOVE_MANY_LIMIT_MAX} 件までである。**1件も消していない。**` },
+            400,
+          );
+        }
+
+        const filter: InboxRemoveManyFilter = {
+          types,
+          ...(sources === undefined ? {} : { sources }),
+          ...(before === undefined ? {} : { before }),
+        };
+        // **絞りはここで当てる**（`matchesInboxRemoveManyFilter` の doc——
+        // SQL 側に同じ判定を複製しない）。`peekPending()` は古い順で返すので、
+        // filter は順序を変えず、matched もそのまま古い順になる。
+        const allPending = await stores.inbox.peekPending();
+        const matched = allPending.filter((row) => matchesInboxRemoveManyFilter(row, filter));
+
+        const effectiveLimit = limit ?? REMOVE_MANY_LIMIT_DEFAULT;
+        // 古い側から消す（`peekPending()` の契約「古い順」をそのまま使う）。
+        const targets = matched.slice(0, effectiveLimit);
+        const remaining = matched.length - targets.length;
+
+        if (dryRun !== false) {
+          return c.json(
+            inboxRemoveManyResponseSchema.parse({
+              ok: true,
+              dryRun: true,
+              totalPending: allPending.length,
+              matched: matched.length,
+              targeted: targets.length,
+              removedIds: targets.map((row) => row.event.id),
+              remaining,
+            }),
+          );
+        }
+
+        // 塊ごとに「消す → その塊の id を日誌へ書く」を交互に回す
+        // （`inbox_remove_many` / `commitment_close_many` と同じ理由——
+        // まとめて消してから日誌を書くと、その間にデーモンが落ちたとき
+        // 「消えたのに記録が無い行」が最大 `REMOVE_MANY_LIMIT_DEFAULT` 件できる）。
+        const chunks = chunkIdsByChars(
+          targets.map((row) => row.event.id),
+          REMOVE_MANY_JOURNAL_ID_CHARS,
+        );
+        const removedIds: string[] = [];
+        for (const [index, chunk] of chunks.entries()) {
+          const removed = await stores.inbox.removeMany(chunk);
+          removedIds.push(...removed);
+          if (removed.length === 0) continue;
+          const filterText = [
+            `types=[${types.join(', ')}]`,
+            ...(sources === undefined ? [] : [`sources=[${sources.join(', ')}]（完全一致）`]),
+            ...(before === undefined ? [] : [`before=${before}`]),
+          ].join(' / ');
+          await stores.journal.append({
+            type: 'decision',
+            decision:
+              `人間が受信箱の未読を絞り込みで一括して畳んだ（消した）` +
+              `（${index + 1}/${chunks.length} 塊目、この塊は ${removed.length} 件）: ${reason}\n` +
+              `絞り込み: ${filterText}\n` +
+              `消した id: ${removed.join(' ')}`,
+            grounds: '人間が直接 API から操作した',
+          });
+        }
+
+        return c.json(
+          inboxRemoveManyResponseSchema.parse({
+            ok: true,
+            dryRun: false,
+            totalPending: allPending.length,
+            matched: matched.length,
+            targeted: targets.length,
+            removedIds,
+            remaining,
           }),
         );
       },

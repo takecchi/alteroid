@@ -2737,6 +2737,75 @@ describe('FsInboxStore', () => {
       note: '日本語も',
     });
   });
+
+  describe('removeMany（issue #972。絞り込んで一括で畳む口）', () => {
+    it('渡した id をまとめて消し、実際に消えた id を返す', async () => {
+      await stores.inbox.put(
+        human('evt-1', '2026-08-10T00:00:00.000Z', '1件目'),
+        '2026-08-10T00:00:00.000Z',
+      );
+      await stores.inbox.put(
+        human('evt-2', '2026-08-11T00:00:00.000Z', '2件目'),
+        '2026-08-11T00:00:00.000Z',
+      );
+      await stores.inbox.put(
+        human('evt-3', '2026-08-12T00:00:00.000Z', '3件目'),
+        '2026-08-12T00:00:00.000Z',
+      );
+
+      const removed = await stores.inbox.removeMany(['evt-1', 'evt-3']);
+
+      expect([...removed].sort()).toEqual(['evt-1', 'evt-3']);
+      const rest = await stores.inbox.peekPending();
+      expect(rest.map((r) => r.event.id)).toEqual(['evt-2']);
+    });
+
+    it('存在しない id は戻り値に含めない', async () => {
+      await stores.inbox.put(
+        human('evt-1', '2026-08-10T00:00:00.000Z', '本文'),
+        '2026-08-10T00:00:00.000Z',
+      );
+
+      const removed = await stores.inbox.removeMany(['evt-1', '居ない']);
+
+      expect(removed).toEqual(['evt-1']);
+    });
+
+    it('重複した id を渡しても二重に数えない（戻り値にも1回しか現れない）', async () => {
+      await stores.inbox.put(
+        human('evt-1', '2026-08-10T00:00:00.000Z', '本文'),
+        '2026-08-10T00:00:00.000Z',
+      );
+
+      const removed = await stores.inbox.removeMany(['evt-1', 'evt-1']);
+
+      expect(removed).toEqual(['evt-1']);
+    });
+
+    it('空配列を渡すと何も消さずに空配列を返す（ファイルへ書かない）', async () => {
+      await stores.inbox.put(
+        human('evt-1', '2026-08-10T00:00:00.000Z', '本文'),
+        '2026-08-10T00:00:00.000Z',
+      );
+
+      expect(await stores.inbox.removeMany([])).toEqual([]);
+      expect(await stores.inbox.pending()).toEqual({
+        count: 1,
+        oldestAt: '2026-08-10T00:00:00.000Z',
+      });
+    });
+
+    it('消えた行は claimPending でも peekPending でも二度と返らない', async () => {
+      await stores.inbox.put(
+        human('evt-1', '2026-08-10T00:00:00.000Z', '本文'),
+        '2026-08-10T00:00:00.000Z',
+      );
+      await stores.inbox.removeMany(['evt-1']);
+
+      expect(await stores.inbox.claimPending()).toEqual([]);
+      expect(await stores.inbox.peekPending()).toEqual([]);
+    });
+  });
 });
 
 describe('FsTranscriptArchive', () => {

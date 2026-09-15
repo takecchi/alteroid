@@ -4,8 +4,10 @@ import {
   INBOX_BACKLOG_LOUD_THRESHOLD,
   describeInboxBacklogBreakdown,
   inboxBacklogDedupeKey,
+  matchesInboxRemoveManyFilter,
   summarizeInboxBacklog,
   type InboxBacklogBreakdown,
+  type InboxRemoveManyFilter,
 } from './inbox-backlog.js';
 import type { InboxEvent } from './schema.js';
 import type { PendingInboxEvent } from './store.js';
@@ -813,5 +815,122 @@ describe('observedAt（#910 追補2 — 齢の基準点）', () => {
 describe('INBOX_BACKLOG_LOUD_THRESHOLD', () => {
   it('50 である（#562 の28件の倍を超えたら「詰まり」では説明が付かない、という線）', () => {
     expect(INBOX_BACKLOG_LOUD_THRESHOLD).toBe(50);
+  });
+});
+
+describe('matchesInboxRemoveManyFilter（issue #972）', () => {
+  it('types に無い種類は当たらない', () => {
+    const filter: InboxRemoveManyFilter = { types: ['manager_message'] };
+    expect(
+      matchesInboxRemoveManyFilter(
+        row(SAMPLE_EVENTS.manager_message, '2026-09-11T00:00:00.000Z'),
+        filter,
+      ),
+    ).toBe(true);
+    expect(
+      matchesInboxRemoveManyFilter(
+        row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z'),
+        filter,
+      ),
+    ).toBe(false);
+  });
+
+  it.each(ALL_TYPES)(
+    '%s: types に自分の型が入っていれば当たる（source/before を渡さないとき）',
+    (type) => {
+      const filter: InboxRemoveManyFilter = { types: [type] };
+      expect(
+        matchesInboxRemoveManyFilter(row(SAMPLE_EVENTS[type], '2026-09-11T00:00:00.000Z'), filter),
+      ).toBe(true);
+    },
+  );
+
+  it('sources: inboxBacklogSourceFor と同じ表記（external:<source>）の完全一致だけ当たる', () => {
+    const filter: InboxRemoveManyFilter = { types: ['external'], sources: ['external:webhook-a'] };
+    expect(
+      matchesInboxRemoveManyFilter(row(SAMPLE_EVENTS.external, '2026-09-11T00:00:00.000Z'), filter),
+    ).toBe(true);
+    const other: InboxEvent = { ...SAMPLE_EVENTS.external, id: 'e-2', source: 'webhook-b' };
+    expect(matchesInboxRemoveManyFilter(row(other, '2026-09-11T00:00:00.000Z'), filter)).toBe(
+      false,
+    );
+  });
+
+  it('sources: manager_message は manager:<managerId> の表記で当てる', () => {
+    const filter: InboxRemoveManyFilter = {
+      types: ['manager_message'],
+      sources: ['manager:mgr-1'],
+    };
+    expect(
+      matchesInboxRemoveManyFilter(
+        row(SAMPLE_EVENTS.manager_message, '2026-09-11T00:00:00.000Z'),
+        filter,
+      ),
+    ).toBe(true);
+    const other: InboxEvent = { ...SAMPLE_EVENTS.manager_message, id: 'e-2', managerId: 'mgr-2' };
+    expect(matchesInboxRemoveManyFilter(row(other, '2026-09-11T00:00:00.000Z'), filter)).toBe(
+      false,
+    );
+  });
+
+  it('sources: 送信元を言えない型（human_message 等）は sources を渡すと必ず対象から外れる', () => {
+    const filter: InboxRemoveManyFilter = {
+      types: ['human_message'],
+      // human_message は絶対に持ちえない表記をあえて渡す
+      sources: ['external:webhook-a'],
+    };
+    expect(
+      matchesInboxRemoveManyFilter(
+        row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z'),
+        filter,
+      ),
+    ).toBe(false);
+  });
+
+  it('before: at <= before の行だけ当たる（その瞬間ちょうども含む）', () => {
+    const filter: InboxRemoveManyFilter = {
+      types: ['human_message'],
+      before: '2026-09-11T00:00:00.000Z',
+    };
+    expect(
+      matchesInboxRemoveManyFilter(
+        row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z'),
+        filter,
+      ),
+    ).toBe(true);
+    expect(
+      matchesInboxRemoveManyFilter(
+        row(SAMPLE_EVENTS.human_message, '2026-09-10T23:59:59.999Z'),
+        filter,
+      ),
+    ).toBe(true);
+    expect(
+      matchesInboxRemoveManyFilter(
+        row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.001Z'),
+        filter,
+      ),
+    ).toBe(false);
+  });
+
+  it('3軸は AND で効く（すべて満たしたときだけ当たる）', () => {
+    const filter: InboxRemoveManyFilter = {
+      types: ['manager_message'],
+      sources: ['manager:mgr-1'],
+      before: '2026-09-11T00:00:00.000Z',
+    };
+    // 種類・送信元は当たるが齢で外れる
+    expect(
+      matchesInboxRemoveManyFilter(
+        row(SAMPLE_EVENTS.manager_message, '2026-09-12T00:00:00.000Z'),
+        filter,
+      ),
+    ).toBe(false);
+    // 3軸とも当たる
+    expect(
+      matchesInboxRemoveManyFilter(
+        row(SAMPLE_EVENTS.manager_message, '2026-09-10T00:00:00.000Z'),
+        filter,
+      ),
+    ).toBe(true);
   });
 });

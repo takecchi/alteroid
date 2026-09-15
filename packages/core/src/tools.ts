@@ -154,7 +154,6 @@ import {
 import {
   describeInboxBacklogBreakdown,
   INBOX_EVENT_TYPE_ORDER,
-  inboxBacklogSourceFor,
   matchesInboxRemoveManyFilter,
   summarizeInboxBacklog,
 } from './inbox-backlog.js';
@@ -1163,10 +1162,18 @@ const CLOSE_MANY_SOURCES_SHOWN = 8;
  *
  * **`REMOVE_MANY_JOURNAL_ID_CHARS` の意味も同じ**——#972 の要求（「消した id
  * は全部日誌に残す」）を「予算は件数ではなく文字数」の形で満たす。
+ *
+ * **export している。** `commitment_close_many` の同名の定数は export して
+ * いない（HTTP 側に対応する口が無いため）。こちらは `apps/daemon/src/app.ts`
+ * の `POST /inbox/remove`（人間の入口）が同じ上限を使う——絞り込みの判定を
+ * `matchesInboxRemoveManyFilter` の1箇所に閉じているのと同じ理由で、
+ * 「1回の呼びで動かしてよい量」もクローンの道具と人間の入口とで別の値に
+ * 分かれる理由が無い（分かれると「HTTP なら2,000件まで一気に消せるが
+ * 道具からは500件までしか見えない」というだけの能力差になる）。
  */
-const REMOVE_MANY_LIMIT_DEFAULT = 500;
-const REMOVE_MANY_LIMIT_MAX = 2_000;
-const REMOVE_MANY_JOURNAL_ID_CHARS = 3_600;
+export const REMOVE_MANY_LIMIT_DEFAULT = 500;
+export const REMOVE_MANY_LIMIT_MAX = 2_000;
+export const REMOVE_MANY_JOURNAL_ID_CHARS = 3_600;
 /** 一括削除の戻り値に並べる id の件数の上限（`CLOSE_MANY_IDS_SHOWN` と同じ理由）。 */
 const REMOVE_MANY_IDS_SHOWN = 20;
 /**
@@ -5594,7 +5601,8 @@ export function createCloneTools(context: ToolContext) {
         '数千件積もると、1ターン1件のペースでの排出それ自体が文脈窓を食い潰す（issue #972）。',
         '**既定は試算（dryRun）で、1件も消さない。** 実際に消すには `dryRun: false` を明示すること——',
         '消した合図を戻す道具はこの器に無いので、撃ち間違えは道具では戻せない。',
-        '**`types` は必須で、在る7種類を全部並べた呼びは断る**' +
+        `**\`types\` は必須で、在る7種類（${INBOX_EVENT_TYPE_ORDER.join(' / ')}）を` +
+          '全部並べた呼びは断る**' +
           '（「全部消す」を1回で撃てる形は作らない——それは `POST /reset` の役目である）。',
         '**行は消える。** `commitment_close_many` の「閉じる（closedAt を付けるだけで行は残る）」とは違い、',
         '受信箱は「まだ処理し終えていない」という事実だけを持つ器で、片付いた後の記録を残す場所ではない',
@@ -5694,11 +5702,11 @@ export function createCloneTools(context: ToolContext) {
         if (matched.length === 0) {
           let why: string;
           if (allPending.length === 0) {
-            why = '受信箱に未読が1件も無い。**絞り込みの問題ではない**（消すべきものがそもそも無い）。';
+            why =
+              '受信箱に未読が1件も無い。**絞り込みの問題ではない**（消すべきものがそもそも無い）。';
           } else {
             const breakdown = INBOX_EVENT_TYPE_ORDER.map(
-              (known) =>
-                `${known} ${allPending.filter((row) => row.event.type === known).length}`,
+              (known) => `${known} ${allPending.filter((row) => row.event.type === known).length}`,
             ).join(' / ');
             why =
               `未読 ${allPending.length} 件のうち絞り込みに当たる行が0件——**絞り込みが外れている。**` +

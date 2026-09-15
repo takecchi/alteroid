@@ -1177,6 +1177,209 @@ describe('HTTP API', () => {
     expect(response.status).toBe(409);
   });
 
+  /**
+   * `POST /inbox/remove`（issue #972）。クローンの道具 `inbox_remove_many`
+   * （`packages/core/src/tools.test.ts`）と同じ絞り込み・同じ既定を、人間の
+   * 入口からも叩けることを見る。
+   */
+  describe('POST /inbox/remove', () => {
+    const managerReport = (id: string, at: string, managerId = 'mgr-1'): InboxEvent => ({
+      type: 'manager_message',
+      id,
+      at,
+      managerId,
+      kind: 'report',
+      text: '429（同じ失敗の写し）',
+    });
+    const humanMsg = (id: string, at: string): InboxEvent => ({
+      type: 'human_message',
+      id,
+      at,
+      text: '人間の発言',
+      conversationId: 'conv-1',
+    });
+
+    it('既定（dryRun省略）は試算だけで1件も消さない', async () => {
+      await stores.inbox.put(
+        managerReport('evt-1', '2026-08-10T00:00:00.000Z'),
+        '2026-08-10T00:00:00.000Z',
+      );
+      await stores.inbox.put(
+        managerReport('evt-2', '2026-08-11T00:00:00.000Z'),
+        '2026-08-11T00:00:00.000Z',
+      );
+
+      const response = await app.request(
+        '/inbox/remove',
+        json({ types: ['manager_message'], reason: '同じ失敗の写しを畳む' }),
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        ok: true,
+        dryRun: true,
+        totalPending: 2,
+        matched: 2,
+        targeted: 2,
+        removedIds: ['evt-1', 'evt-2'],
+        remaining: 0,
+      });
+
+      // 本当に1件も消えていない。
+      expect(await stores.inbox.pending()).toEqual({
+        count: 2,
+        oldestAt: '2026-08-10T00:00:00.000Z',
+      });
+    });
+
+    it('dryRun: false で実際に消し、消した id を返す。行は日誌にも残る', async () => {
+      await stores.inbox.put(
+        managerReport('evt-1', '2026-08-10T00:00:00.000Z'),
+        '2026-08-10T00:00:00.000Z',
+      );
+      await stores.inbox.put(
+        humanMsg('evt-2', '2026-08-11T00:00:00.000Z'),
+        '2026-08-11T00:00:00.000Z',
+      );
+
+      const response = await app.request(
+        '/inbox/remove',
+        json({ types: ['manager_message'], reason: '同じ失敗の写しを畳む', dryRun: false }),
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        ok: true,
+        dryRun: false,
+        totalPending: 2,
+        matched: 1,
+        targeted: 1,
+        removedIds: ['evt-1'],
+        remaining: 0,
+      });
+
+      // manager_message だけが消え、human_message は残る。
+      const rest = await stores.inbox.peekPending();
+      expect(rest.map((r) => r.event.id)).toEqual(['evt-2']);
+
+      const journalEntries = (await stores.journal.list({ types: ['decision'] })) as {
+        type: 'decision';
+        decision: string;
+        grounds: string;
+      }[];
+      expect(journalEntries.some((e) => e.decision.includes('evt-1'))).toBe(true);
+      expect(journalEntries.some((e) => e.grounds === '人間が直接 API から操作した')).toBe(true);
+    });
+
+    it('types に在る7種類を全部並べると400で断り、1件も消さない', async () => {
+      await stores.inbox.put(
+        managerReport('evt-1', '2026-08-10T00:00:00.000Z'),
+        '2026-08-10T00:00:00.000Z',
+      );
+
+      const response = await app.request(
+        '/inbox/remove',
+        json({
+          types: [
+            'human_message',
+            'human_answer',
+            'distill',
+            'timer',
+            'external',
+            'self_initiative',
+            'manager_message',
+          ],
+          reason: '全部消したい',
+          dryRun: false,
+        }),
+      );
+      expect(response.status).toBe(400);
+      expect(await stores.inbox.pending()).toEqual({
+        count: 1,
+        oldestAt: '2026-08-10T00:00:00.000Z',
+      });
+    });
+
+    it('types が空配列だと400（zod の min(1) が弾く）', async () => {
+      const response = await app.request('/inbox/remove', json({ types: [], reason: 'x' }));
+      expect(response.status).toBe(400);
+    });
+
+    it('types に知らない種類が混ざると400（zod の enum が弾く）', async () => {
+      const response = await app.request(
+        '/inbox/remove',
+        json({ types: ['not_a_real_type'], reason: 'x' }),
+      );
+      expect(response.status).toBe(400);
+    });
+
+    it('before が ISO8601 として読めなければ400', async () => {
+      const response = await app.request(
+        '/inbox/remove',
+        json({ types: ['manager_message'], reason: 'x', before: '来週のどこか' }),
+      );
+      expect(response.status).toBe(400);
+    });
+
+    it('sources で送信元の完全一致に絞れる（manager_list と同じ表記）', async () => {
+      await stores.inbox.put(
+        managerReport('evt-a', '2026-08-10T00:00:00.000Z', 'mgr-a'),
+        '2026-08-10T00:00:00.000Z',
+      );
+      await stores.inbox.put(
+        managerReport('evt-b', '2026-08-11T00:00:00.000Z', 'mgr-b'),
+        '2026-08-11T00:00:00.000Z',
+      );
+
+      const response = await app.request(
+        '/inbox/remove',
+        json({
+          types: ['manager_message'],
+          sources: ['manager:mgr-a'],
+          reason: 'mgr-a だけ畳む',
+          dryRun: false,
+        }),
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        matched: 1,
+        targeted: 1,
+        removedIds: ['evt-a'],
+      });
+
+      const rest = await stores.inbox.peekPending();
+      expect(rest.map((r) => r.event.id)).toEqual(['evt-b']);
+    });
+
+    it('limit で古い側から切り、残りを remaining で言う', async () => {
+      await stores.inbox.put(
+        managerReport('evt-1', '2026-08-10T00:00:00.000Z'),
+        '2026-08-10T00:00:00.000Z',
+      );
+      await stores.inbox.put(
+        managerReport('evt-2', '2026-08-11T00:00:00.000Z'),
+        '2026-08-11T00:00:00.000Z',
+      );
+      await stores.inbox.put(
+        managerReport('evt-3', '2026-08-12T00:00:00.000Z'),
+        '2026-08-12T00:00:00.000Z',
+      );
+
+      const response = await app.request(
+        '/inbox/remove',
+        json({ types: ['manager_message'], reason: '古い方から2件', limit: 2, dryRun: false }),
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        matched: 3,
+        targeted: 2,
+        removedIds: ['evt-1', 'evt-2'],
+        remaining: 1,
+      });
+
+      const rest = await stores.inbox.peekPending();
+      expect(rest.map((r) => r.event.id)).toEqual(['evt-3']);
+    });
+  });
+
   it('manager_id から一覧・状態・生ログへ降りられる（可観測性の下2層）', async () => {
     fake.managerList.push({
       managerId: 'mgr-1234',
