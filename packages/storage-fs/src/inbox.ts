@@ -107,6 +107,35 @@ export class FsInboxStore implements InboxStore {
       .map((entry) => ({ event: entry.event, at: entry.at, deliveries: entry.deliveries }));
   }
 
+  /**
+   * 絞り込みで選んだ複数件をまとめて消す（`InboxStore.removeMany` の doc、
+   * issue #972）。
+   *
+   * `FsCommitmentStore.closeMany` と同じ筋——`#update` の排他区間を1回だけ
+   * 使い、対象の行を全部その中で処理する。`remove()` を `ids` の件数だけ
+   * 呼ぶ形（＝ `#update` を件数分呼ぶ形）にしないのがこのメソッドの存在
+   * 理由そのもの（`InboxStore.removeMany` の doc）。
+   *
+   * `ids` を `Set` にしてから見るので、重複があっても対象の判定は変わらない
+   * ——同じ行が複数回消えることも、戻り値に同じ id が複数回入ることも無い。
+   *
+   * `ids` が空なら `#update` を呼ばずに `[]` を返す（`FsCommitmentStore
+   * .closeMany` と同じ理由——ファイルの中身が1バイトも変わらない）。
+   */
+  async removeMany(ids: readonly string[]): Promise<string[]> {
+    if (ids.length === 0) return [];
+    const targets = new Set(ids);
+    return this.#update((file) => {
+      const removedIds: string[] = [];
+      const events = file.events.filter((entry) => {
+        if (!targets.has(entry.event.id)) return true;
+        removedIds.push(entry.event.id);
+        return false;
+      });
+      return { next: { events }, result: removedIds };
+    });
+  }
+
   /** 全件を消す（`InboxStore.clear` の doc）。 */
   async clear(): Promise<number> {
     return this.#update((file) => ({ next: { events: [] }, result: file.events.length }));

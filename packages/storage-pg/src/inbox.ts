@@ -1,6 +1,6 @@
 import { inboxEventSchema } from '@alteroid/core';
 import type { InboxEvent, InboxStore, PendingInboxEvent } from '@alteroid/core';
-import { eq, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { stripNulls, toIso } from './db.js';
@@ -114,6 +114,27 @@ export class PgInboxStore implements InboxStore {
       }))
       .sort((a, b) => a.at.getTime() - b.at.getTime())
       .map((entry) => ({ event: entry.event, at: toIso(entry.at), deliveries: entry.deliveries }));
+  }
+
+  /**
+   * 絞り込みで選んだ複数件をまとめて消す（`InboxStore.removeMany` の doc、
+   * issue #972）。
+   *
+   * `PgCommitmentStore.closeMany` と同じ筋——`inArray` を使った DELETE 1本
+   * へ複数 id を畳む。絞り込み（種類・送信元・齢）はここでは判定しない
+   * （呼び出し側が `peekPending()` の結果へ当ててから id を渡す）。
+   *
+   * `ids` が空なら SQL を撃たずに `[]` を返す（`inArray` に空配列を渡すと
+   * 方言によって挙動が割れうるため、`PgCommitmentStore.closeMany` と同じ
+   * 理由でここで先に弾く）。
+   */
+  async removeMany(ids: readonly string[]): Promise<string[]> {
+    if (ids.length === 0) return [];
+    const removed = await this.#db
+      .delete(inboxEvents)
+      .where(inArray(inboxEvents.id, [...ids]))
+      .returning({ id: inboxEvents.id });
+    return removed.map((row) => row.id);
   }
 
   /** 全件を消す（`InboxStore.clear` の doc）。 */

@@ -429,10 +429,14 @@ export {
  */
 export {
   INBOX_BACKLOG_LOUD_THRESHOLD,
+  INBOX_EVENT_TYPE_ORDER,
   inboxBacklogDedupeKey,
+  inboxBacklogSourceFor,
   summarizeInboxBacklog,
   describeInboxBacklogBreakdown,
+  matchesInboxRemoveManyFilter,
   type InboxBacklogBreakdown,
+  type InboxRemoveManyFilter,
 } from './inbox-backlog.js';
 /**
  * 「この委譲から、この合図より後に報告が届いている」の判定と文面

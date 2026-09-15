@@ -1246,6 +1246,13 @@ function createMemoryInboxStore(): InboxStore {
       // （`InboxStore.peekPending` の doc。`pending()` と同じ倒れ先）。
       return [...unread.values()].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
     },
+    async removeMany(ids: readonly string[]): Promise<string[]> {
+      const removedIds: string[] = [];
+      for (const id of ids) {
+        if (unread.delete(id)) removedIds.push(id);
+      }
+      return removedIds;
+    },
     async clear(): Promise<number> {
       const removed = unread.size;
       unread.clear();

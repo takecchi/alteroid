@@ -836,6 +836,38 @@ export interface InboxStore {
   peekPending(): Promise<PendingInboxEvent[]>;
 
   /**
+   * 絞り込みで選んだ複数件を、まとめて消す（issue #972）。
+   *
+   * **`remove()` を `ids.length` 回ループしてはいけない理由がこのメソッドの
+   * 出所である。** `storage-fs`（`FsInboxStore`）は `remove()` のたびに
+   * `inbox.json` 全体を tmp へ書いて置き換える器（`CommitmentStore.closeMany`
+   * の doc と同じ理由）なので、3,000件を `remove()` のループで消せば3,000回の
+   * 全体書き直しになる。`removeMany` は実装ごとに複数件を1回の排他区間・
+   * 1回の更新へ畳む口を持つ——`storage-pg` は `inArray` を使った DELETE 1本、
+   * `storage-fs` は `#update` の排他区間を1回だけ使う（各実装の doc を見よ）。
+   *
+   * **どの id を対象にするかはここでは決めない。** 種類・送信元・齢での絞り
+   * 込みは `peekPending()` が返した行に対して呼び出し側
+   * （`tools.ts` の `inbox_remove_many`）が当てる。`inboxBacklogDedupeKey`
+   * （`inbox-backlog.ts` の doc「なぜ1箇所に閉じるか」）と同じ理由で、この
+   * 判定を SQL 側にも複製しない——1箇所（`inbox-backlog.ts` の
+   * `matchesInboxRemoveManyFilter`）に保つ。ここが保証するのは「渡された id を
+   * まとめて消す」ことだけである（`CommitmentStore.closeMany` が `ids` を
+   * 受け取るだけで絞り込みの判定を持たないのと同じ役割分担）。
+   *
+   * **戻り値は実際に消えた（存在した）id の配列であって件数ではない。**
+   * `remove()` が個別に返さない理由（何も返さない）とは違い、集合の操作
+   * なので「実際に何を消したか」を呼び出し側が日誌へ残せるようにする
+   * （`CommitmentStore.closeMany` の doc と同じ理由）。存在しない id は
+   * 含まない。
+   *
+   * `ids` に重複があっても、対象は id ごとに高々1行なので二重に数えない
+   * （戻り値にも同じ id は1回しか現れない）。`ids` が空なら何も書かずに
+   * `[]` を返す。
+   */
+  removeMany(ids: readonly string[]): Promise<string[]>;
+
+  /**
    * 全件を消す（ワークスペースのリセット専用。#workspace-reset）。配達回数
    * （`deliveries`）ごと消える——残すべき理由が無い（次に同じ合図が来ても
    * 初回として配ればよい）。

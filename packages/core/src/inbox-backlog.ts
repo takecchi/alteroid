@@ -195,8 +195,16 @@ function ageBucketLabel(ageMs: number): (typeof AGE_BUCKET_LABELS)[number] {
  *
  * `external` と `manager_message` の名前空間が衝突しないよう、種類の接頭辞を
  * 付ける（同じ文字列の `source` と `managerId` が同じ行に畳まれないため）。
+ *
+ * **export している。**（issue #972）`tools.ts` の `inbox_remove_many` が
+ * 「送信元」で絞り込むとき、ここと同じ判定・同じ表記（`external:<source>` /
+ * `manager:<managerId>`）を使う——`manager_list` の内訳（`bySource`）に出る
+ * 値と、絞り込みに渡す値が同じ字面になるので、クローンは一覧で見た送信元の
+ * 表記をそのまま `inbox_remove_many` の引数へ貼り付けられる。判定そのものを
+ * 2箇所に複製しないのは {@link inboxBacklogDedupeKey} の doc「なぜ1箇所に
+ * 閉じるか」と同じ理由である。
  */
-function inboxBacklogSourceFor(event: InboxEvent): string | undefined {
+export function inboxBacklogSourceFor(event: InboxEvent): string | undefined {
   switch (event.type) {
     case 'external':
       return `external:${event.source}`;
@@ -336,8 +344,16 @@ function topByCount<T extends { readonly count: number }>(
   return limit === undefined ? sorted : sorted.slice(0, limit);
 }
 
-/** `InboxEvent['type']` の並び順（`schema.ts` の `inboxEventSchema` の判別子の並びと揃える）。 */
-const INBOX_EVENT_TYPE_ORDER: readonly InboxEvent['type'][] = [
+/**
+ * `InboxEvent['type']` の並び順（`schema.ts` の `inboxEventSchema` の判別子の並びと揃える）。
+ *
+ * **export している。**（issue #972）`tools.ts` の `inbox_remove_many` が
+ * 「渡された `types` が全7種を覆っているか」（＝絞り込みが無いのと同じ呼び）
+ * を判定するのに、この配列の**全件数**を基準にする——`commitment_close_many`
+ * が `commitmentOriginSchema.options` を同じ目的で使うのと同じ形。数を
+ * ここに書き写すと足したときに腐るので、`.length` を直接見る側へ倒す。
+ */
+export const INBOX_EVENT_TYPE_ORDER = [
   'human_message',
   'human_answer',
   'distill',
@@ -345,7 +361,64 @@ const INBOX_EVENT_TYPE_ORDER: readonly InboxEvent['type'][] = [
   'external',
   'self_initiative',
   'manager_message',
-];
+] as const satisfies readonly InboxEvent['type'][];
+
+/**
+ * `inbox_remove_many`（issue #972）が受け取る絞り込み。
+ *
+ * **種類は必須で空にできない。** `commitment_close_many` の `origin` と同じ
+ * 理由——「絞り込みを何も渡さない」呼びを型で作れなくする。`types` が
+ * {@link INBOX_EVENT_TYPE_ORDER} の全件を覆う呼びは、`tools.ts` 側で
+ * 「絞り込みが無いのと同じ」として断る（ここでは断らない——このファイルは
+ * 純粋な述語だけを持ち、拒否のような対話的な判断は道具層に置く）。
+ *
+ * `sources` / `before` は任意で、渡せばさらに絞る（AND）。
+ */
+export interface InboxRemoveManyFilter {
+  readonly types: readonly InboxEvent['type'][];
+  /**
+   * {@link inboxBacklogSourceFor} が返す表記（`external:<source>` /
+   * `manager:<managerId>`）の完全一致。渡さなければ送信元では絞らない。
+   *
+   * **送信元を言えない型（`inboxBacklogSourceFor` が `undefined` を返す5型）
+   * は、`sources` を渡すと必ず対象から外れる**——「送信元不明」を「一致した」
+   * 側へ含めると、絞り込んだはずの一括削除が申告より広い範囲を消す（黙って
+   * 広がる方向の誤りは、狭くなる方向の誤りより高くつく）。
+   */
+  readonly sources?: readonly string[];
+  /**
+   * この時刻**以前**（`at <= before`）に積まれた行だけを対象にする
+   * （ISO8601）。`commitment_close_many` の `until` と同じ意味・同じ向き
+   * ——「古いものを畳む」という #972 の主目的にまっすぐ合わせてある。
+   */
+  readonly before?: string;
+}
+
+/**
+ * `row` が `filter` に当たるかを判定する（issue #972）。
+ *
+ * **このリポジトリで、この判定をするのはここ1箇所だけである。** SQL 側
+ * （`storage-pg` / `storage-fs`）に同じ判定を複製しないこと——理由は
+ * {@link inboxBacklogDedupeKey} の doc「なぜ1箇所に閉じるか」と同じで、
+ * 増える側（`summarizeInboxBacklog` が見せる内訳）と消す側（この述語）が
+ * 別々の判定を持つと、クローンが一覧で見た件数と実際に消える件数が
+ * 食い違いうる。`inboxBacklogSourceFor` を両方から呼ぶことで、それを防ぐ。
+ *
+ * 純関数（I/O をしない）。呼び出し側（`tools.ts`）が `peekPending()` の
+ * 結果へ `Array.prototype.filter` で当てる。
+ */
+export function matchesInboxRemoveManyFilter(
+  row: PendingInboxEvent,
+  filter: InboxRemoveManyFilter,
+): boolean {
+  if (!filter.types.includes(row.event.type)) return false;
+  if (filter.sources !== undefined) {
+    const source = inboxBacklogSourceFor(row.event);
+    if (source === undefined || !filter.sources.includes(source)) return false;
+  }
+  if (filter.before !== undefined && Date.parse(row.at) > Date.parse(filter.before)) return false;
+  return true;
+}
 
 /**
  * `peekPending()` が返した行から内訳を作る（純関数。I/O をしない）。
