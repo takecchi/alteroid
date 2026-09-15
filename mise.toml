@@ -7,6 +7,15 @@
 #   - package.json の `engines.node` / `packageManager`
 #   - Dockerfile の `FROM node:`（build / runtime の2箇所）
 #   - pnpm-workspace.yaml の catalog `@types/node`
+#
+# ⚠ Vercel（apps/web の本番）はこの一本化の外に在る。Node の版は管理画面
+# （Project Settings）側の設定で、repo からは変えられない（オーナーの手が
+# 要る）。実測 2026-09-11、オーナーが管理画面を読んだ値は 24.x（この
+# mise.toml は 22 系。major がずれている）。違反ではない — package.json の
+# `engines.node` は ">=22" で上限を持たないため、Vercel が 24 を選ぶことは
+# 許されている。ただし CI が本番の Web の実 major を一度も踏んでいないこと
+# は解消しない（この追記は記述であって解決ではない。Issue #791）。catalog
+# の `@types/node` は ^22.20.1（22系）で実機（24.x）より古い（安全側）。
 [tools]
 node = "22.23.2"
 pnpm = "11.21.0"
