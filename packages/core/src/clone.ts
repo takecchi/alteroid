@@ -3293,6 +3293,22 @@ class Clone implements CloneHost {
    * （起こされたことそのものではなく、渡してきた相手が最初から居ない）、型では
    * なく `source` で決まる点も違うが、行き着く先（台帳を開かない）は同じである。
    *
+   * **マネージャー起因の重複は、開く前に畳む（Issue #954 提案3）。** 429 などの
+   * 合流窓（`manager.ts` の `SynthesizedNoticeStreak` / `isCrossWindowStreakEligible`）
+   * は `turn_failed` 単独の束にしか掛からないので、すり抜けた同文の連投——
+   * あるいは合流窓を持たない別の経路からの同文連投——が起きても、台帳側に
+   * もう一段の壁を置く。**同一マネージャー（`origin: 'manager'` かつ同じ
+   * `source`）× 同一本文 × まだ開いている行**が既にあれば、新しい行を増やさず
+   * 既存の行に任せる（{@link hasOpenManagerDuplicate}）。**対象は台帳だけ**——
+   * 受信箱（`#remember`）はここより前で既に書き終えているので、この畳み込みで
+   * 減るのは台帳の行数だけである（受信箱側の膨張は別の穴。Issue #954 コメント
+   * `the-phage-dev` 2026-09-14T18:03:28Z）。
+   *
+   * **重複確認そのものが失敗しても、開く側へ倒す。** `list()` が読めないことは
+   * 「開かない」理由にしない——確認できずに依頼を1件黙って落とすほうが、まれに
+   * 重複を見逃すより高くつく（`#stores.commitments.open` 自体の失敗は、直後の
+   * `.then` の失敗経路がこれまでどおり拾う）。
+   *
    * **失敗しても post を落とさない**（`#remember` と同じ理由。跡は stderr へ1行）。
    */
   #commit(event: InboxEvent): void {
@@ -3300,12 +3316,18 @@ class Clone implements CloneHost {
     if (entry === null) return;
     this.#committed.set(
       event.id,
-      this.#stores.commitments.open(entry).then(
-        () => undefined,
-        (error: unknown) => {
-          noteDroppedRecord('未了の記帳', inboxEventShape(event), error);
-        },
-      ),
+      this.#stores.commitments.list().then(
+        (list) => hasOpenManagerDuplicate(list.entries, entry),
+        () => false,
+      ).then((duplicate) => {
+        if (duplicate) return undefined;
+        return this.#stores.commitments.open(entry).then(
+          () => undefined,
+          (error: unknown) => {
+            noteDroppedRecord('未了の記帳', inboxEventShape(event), error);
+          },
+        );
+      }),
     );
   }
 
@@ -8332,6 +8354,45 @@ export function commitmentFor(event: InboxEvent): Commitment | null {
     case 'distill':
       return null;
   }
+}
+
+/**
+ * `entry` と同じマネージャー（`origin: 'manager'` かつ同じ `source`）× 同じ
+ * `body` の未了行が、`entries` の中に既にあるか（Issue #954 提案3。`#commit`
+ * が開く前に呼ぶ）。
+ *
+ * **対象はマネージャー起因の行だけに絞る。** 実測（Issue #954）が示した無限
+ * 連投の形——同一マネージャーの合成通知（`turn_failed` 等）が同文のまま連投
+ * される——は `origin: 'manager'` の行にしか出ない。人間の発言・人間の回答・
+ * 外部イベントまで同じ基準で畳むと、たまたま同じ文言になった別々の発言
+ * （例: 2人の人間が同じ一言を別の会話で送る）まで1件に潰しかねない——
+ * その保証を弱める理由がここには無い。
+ *
+ * **`source` が無い行（`undefined`）どうしは重複と数えない。** `manager_message`
+ * の `commitmentFor` は必ず `source: event.managerId` を持つので、`source`
+ * が `undefined` になるのは他の origin だけだが、`entry.origin !== 'manager'`
+ * を先に弾いているのでここへは来ない——念のための防御である。
+ *
+ * **`entries` は未了だけを渡すこと。** `CommitmentStore.list()`（`includeClosed`
+ * を省いた既定の呼び方）が返す形を想定しているが、念のため `closedAt ===
+ * undefined` もここで自分で確かめる——`list()` の契約に頼り切らない。
+ *
+ * **閉じたあとの同文は畳まない。** 一度閉じれば「未了」ではなくなるので、
+ * 同じマネージャーが同じ文言をもう一度報告してきても、それは新しい未了として
+ * 台帳に載る——「二度と報告できなくなる」側には倒れない。
+ */
+export function hasOpenManagerDuplicate(
+  entries: readonly Commitment[],
+  entry: Commitment,
+): boolean {
+  if (entry.origin !== 'manager') return false;
+  return entries.some(
+    (existing) =>
+      existing.closedAt === undefined &&
+      existing.origin === 'manager' &&
+      existing.source === entry.source &&
+      existing.body === entry.body,
+  );
 }
 
 /**
