@@ -154,6 +154,7 @@ import {
 import {
   CLONE_REMOVABLE_INBOX_EVENT_TYPES,
   describeInboxBacklogBreakdown,
+  inboxRemoveManyTypesSchema,
   matchesInboxRemoveManyFilter,
   summarizeInboxBacklog,
 } from './inbox-backlog.js';
@@ -5624,16 +5625,18 @@ export function createCloneTools(context: ToolContext) {
         '（`InboxStore` の doc）。**消した id は全部日誌に残る。**',
       ].join(''),
       {
-        types: z
-          .array(z.enum(CLONE_REMOVABLE_INBOX_EVENT_TYPES))
-          .min(1)
-          .describe(
-            '消す対象の種類（必須）。選べる5種類 ' +
-              `(${CLONE_REMOVABLE_INBOX_EVENT_TYPES.join(' / ')}) を全部並べると断られる。` +
-              '人間起点の human_message / human_answer はここに無い——選べない' +
-              '（自分の受信箱から人間の発言・回答を自分の判断で畳むことはできない）。' +
-              '例: 委譲先の429の写しを畳むなら manager_message だけを狙う',
-          ),
+        // **`inboxRemoveManyTypesSchema` をそのまま使う（自分で組み立て直さない）。**
+        // `inbox-backlog.ts` の doc「なぜ切り出したか」——ここが本当に使っている
+        // スキーマそのものを `inbox-remove-many.test.ts` の 2d が直接検査できる
+        // ようにするため。ここで `z.array(z.enum(...))` を再構築すると、テストが
+        // 検証する対象と実際に道具が使う対象が別の値に戻ってしまう。
+        types: inboxRemoveManyTypesSchema.describe(
+          '消す対象の種類（必須）。選べる5種類 ' +
+            `(${CLONE_REMOVABLE_INBOX_EVENT_TYPES.join(' / ')}) を全部並べると断られる。` +
+            '人間起点の human_message / human_answer はここに無い——選べない' +
+            '（自分の受信箱から人間の発言・回答を自分の判断で畳むことはできない）。' +
+            '例: 委譲先の429の写しを畳むなら manager_message だけを狙う',
+        ),
         sources: z
           .array(z.string().min(1))
           .min(1)

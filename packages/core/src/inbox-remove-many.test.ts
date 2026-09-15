@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto';
 
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
 
-import { CLONE_REMOVABLE_INBOX_EVENT_TYPES, INBOX_EVENT_TYPE_ORDER } from './inbox-backlog.js';
+import {
+  buildInboxEventTypesSchema,
+  INBOX_EVENT_TYPE_ORDER,
+  inboxRemoveManyTypesSchema,
+} from './inbox-backlog.js';
 import type { InboxEvent } from './schema.js';
 import type { PendingInboxEvent, Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
@@ -276,43 +279,49 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
     });
 
     /**
-     * 🔴 2d. 【変異試験・機序の裏付け】
+     * 🔴 2d. 【本物の schema を直接検査する】
      *
-     * 2a/2b が守っているのは「道具の `types` の zod スキーマが
-     * `CLONE_REMOVABLE_INBOX_EVENT_TYPES` を指していること」1行である
-     * （`tools.ts` の該当箇所を `z.enum(INBOX_EVENT_TYPE_ORDER)`
-     * ——人間起点を含む全7種——へ差し替えたら、2a/2b は赤くなる）。
+     * `correctSchema` は `inboxRemoveManyTypesSchema`——`tools.ts` の
+     * `inbox_remove_many` が `types` の検査に**実際に使っている、まさに
+     * その値**である（コピーではない。`inbox-backlog.ts` の
+     * `buildInboxEventTypesSchema` の doc「なぜ切り出したか」）。
      *
-     * **その「差し替えたら赤くなる」を、実際に `tools.ts` を書き換えて確かめる
-     * ことはこの器ではできない**——差し替えること自体がこの保護を弱める操作
-     * そのものであり、たとえ検証のための一時的な変更でも、この環境の安全側の
-     * 分類器が「セキュリティを弱める編集」として拒否する（実測: `tools.ts`
-     * の `z.enum(CLONE_REMOVABLE_INBOX_EVENT_TYPES)` を
-     * `z.enum(INBOX_EVENT_TYPE_ORDER)` へ書き換えようとしたところ、Edit が
-     * `[Security Weaken]` で拒否された。元に戻す方向の編集は通った）。
+     * ⟹ **この束縛（`inboxRemoveManyTypesSchema = buildInboxEventTypesSchema
+     * (CLONE_REMOVABLE_INBOX_EVENT_TYPES)`）が将来
+     * `INBOX_EVENT_TYPE_ORDER`（人間起点を含む全7種）を渡すよう書き換えられ
+     * たら、`tools.ts` 側は何も変えなくてもこの行が赤くなる**——2a/2b が
+     * 本物の MCP round-trip で踏んでいるのと同じ境界を、ここではスキーマの
+     * オブジェクトを直接叩いて確かめる。
      *
-     * ⟹ **ここでは同じ zod のセマンティクスを、本番コードに触れずに再現して
-     * 示す。** `CLONE_REMOVABLE_INBOX_EVENT_TYPES` と `INBOX_EVENT_TYPE_ORDER`
-     * は両方とも export された実装の値そのもの（ベタ書きしていない）なので、
-     * **どちらかの定義が変われば、この歯もそれに追随して測り直す**。
-     * 「差し替えたら何が起きるか」という機序の理解が正しいことを、ここで
-     * 固定する——「実際に tools.ts がどちらを使っているか」は 2a/2b/2c
-     * （本物の MCP round-trip）が保証する側であり、ここでは保証しない。
+     * **`mutatedSchema` は同じ組み立て関数
+     * （`buildInboxEventTypesSchema`）へ `INBOX_EVENT_TYPE_ORDER` を渡した
+     * 対照。** 2つの schema が同じ関数を通ることで、`.min(1)` のような
+     * 付随条件がテストの側だけで食い違う心配がない——「もし全7種類を
+     * 許していたら」を、本番コードを1行も書き換えずに、同じ組み立て
+     * ロジックで確かめられる。
+     *
+     * ⚠️ **旧版（この設計変更の前）はここで `z.enum(...)` を独自に組み直して
+     * いた。** それだと「2つの定数の zod の挙動が違う」ことは示せても、
+     * 「道具が実際に正しい側を使っている」ことは示せなかった——`tools.ts`
+     * が参照を差し替えても、独自に組み直したコピーは何も気づかず緑のまま
+     * だった。この設計変更（`buildInboxEventTypesSchema` /
+     * `inboxRemoveManyTypesSchema` の切り出し）が、その欠落を埋める。
      */
-    it('2d. 【変異試験の裏付け】schema を INBOX_EVENT_TYPE_ORDER へ差し替えていたら human_message/human_answer は通ってしまう（本番コードは書き換えていない。機序の証明）', () => {
-      const correctSchema = z.enum(CLONE_REMOVABLE_INBOX_EVENT_TYPES);
-      const mutatedSchema = z.enum(INBOX_EVENT_TYPE_ORDER);
+    it('2d. 道具が実際に使う schema（inboxRemoveManyTypesSchema）を直接検査する——差し替えたらここが赤くなる', () => {
+      const correctSchema = inboxRemoveManyTypesSchema;
+      const mutatedSchema = buildInboxEventTypesSchema(INBOX_EVENT_TYPE_ORDER);
 
-      // いまの実装（CLONE_REMOVABLE_INBOX_EVENT_TYPES）は人間起点を拒む。
-      expect(correctSchema.safeParse('human_message').success).toBe(false);
-      expect(correctSchema.safeParse('human_answer').success).toBe(false);
+      // いまの実装（CLONE_REMOVABLE_INBOX_EVENT_TYPES で組んだ本物の schema）
+      // は人間起点を拒む。
+      expect(correctSchema.safeParse(['human_message']).success).toBe(false);
+      expect(correctSchema.safeParse(['human_answer']).success).toBe(false);
       // 選べる5種類は通す（拒んでいるのは人間起点の2種だけであることの対照）。
-      expect(correctSchema.safeParse('manager_message').success).toBe(true);
+      expect(correctSchema.safeParse(['manager_message']).success).toBe(true);
 
-      // もし INBOX_EVENT_TYPE_ORDER（全7種）へ差し替えていたら、
+      // 同じ組み立て関数へ INBOX_EVENT_TYPE_ORDER（全7種）を渡した対照では、
       // 人間起点も通ってしまう——これが 2a/2b が実際に踏んでいる境界である。
-      expect(mutatedSchema.safeParse('human_message').success).toBe(true);
-      expect(mutatedSchema.safeParse('human_answer').success).toBe(true);
+      expect(mutatedSchema.safeParse(['human_message']).success).toBe(true);
+      expect(mutatedSchema.safeParse(['human_answer']).success).toBe(true);
     });
   });
 

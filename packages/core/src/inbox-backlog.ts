@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import type { InboxEvent } from './schema.js';
 import type { PendingInboxEvent } from './store.js';
 
@@ -435,6 +437,48 @@ export const CLONE_REMOVABLE_INBOX_EVENT_TYPES = [
   'self_initiative',
   'manager_message',
 ] as const satisfies readonly Exclude<InboxEvent['type'], 'human_message' | 'human_answer'>[];
+
+/**
+ * 種類の配列から「1件以上」を要求する zod スキーマを組み立てる。**どの種類を
+ * 許すかはここでは決めない**——渡された配列をそのまま `z.enum` へ渡すだけの
+ * 薄い関数である（issue #972）。
+ *
+ * ## なぜ切り出したか
+ *
+ * 以前は `tools.ts`（`inbox_remove_many` の `types` 引数）と
+ * `inbox-remove-many.test.ts`（変異試験）が、それぞれ独立に
+ * `z.array(z.enum(...)).min(1)` を組み立てていた。**2つの式は字面が同じに
+ * 見えても、別々の値である**——テストが検証していたのは「同じ形にコピーした
+ * スキーマ」であって「道具が実際に使っているスキーマ」ではなかった。片方だけ
+ * 書き換えられても、もう片方は何も気づかない。
+ *
+ * **ここへ1箇所へ寄せ、`tools.ts` は {@link inboxRemoveManyTypesSchema}
+ * （この関数を `CLONE_REMOVABLE_INBOX_EVENT_TYPES` で呼んだ、ただ1つの
+ * 値）を import して使う——どの配列を渡すかを呼び出し側で選ばせない。**
+ * テスト（`inbox-remove-many.test.ts` の 2d）は
+ * {@link inboxRemoveManyTypesSchema} を直接 `safeParse` するので、
+ * **道具が実際に使っているスキーマそのものを検査する**。この関数自体は、
+ * テストが「もし全7種類を許していたら」という対照（`INBOX_EVENT_TYPE_ORDER`
+ * を渡した場合）を、同じ組み立てロジックで作るためにも export してある
+ * ——比較の両側が同じ関数を通ることで、`.min(1)` のような付随条件の
+ * 有無がテストの側で食い違う心配がない。
+ */
+export function buildInboxEventTypesSchema(allowed: readonly InboxEvent['type'][]) {
+  return z.array(z.enum(allowed)).min(1);
+}
+
+/**
+ * `inbox_remove_many`（`tools.ts`）が実際に使う `types` のスキーマ、まさに
+ * その値。**人間起点を除いた {@link CLONE_REMOVABLE_INBOX_EVENT_TYPES} で
+ * 固定してある**——`tools.ts` 側はこれを import するだけで、渡す配列を
+ * 選べない。この束縛自体が {@link INBOX_EVENT_TYPE_ORDER}（人間起点を含む
+ * 全7種）へ書き換えられたら、同じ値を直接検査している
+ * `inbox-remove-many.test.ts` の 2d が赤くなる（{@link buildInboxEventTypesSchema}
+ * の doc）。
+ */
+export const inboxRemoveManyTypesSchema = buildInboxEventTypesSchema(
+  CLONE_REMOVABLE_INBOX_EVENT_TYPES,
+);
 
 /**
  * `POST /inbox/remove`（issue #972。`apps/daemon/src/app.ts`）が受け取る絞り込み。
