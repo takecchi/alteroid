@@ -107,6 +107,15 @@ function nonEmpty(value: unknown): string | undefined {
  * 歯で留めてある**（`sdk-failure.test.ts` の describe
  * 「`cloud_credential_error` — 回復の見込みを名乗らない」）。
  *
+ * **追記（#809）。** `usage-limits.ts` の `limitRecoveryOfAssistantError`
+ * （語 → 回復の見込みの軸）は、この語を明示的に `unknown` と判断している
+ * ——直上の測定（SDK 自身の印が割れている）が理由で、`action` にも `time`
+ * にも倒せないという**決めた `unknown`**である。文言側（`limitRecoveryOf`）の
+ * 「当たらなかったからの `unknown`」とは出どころが違うが、`tools.ts` の
+ * `describeManagerFailure` はどちらの経路でも最終的に `unknown` を返す
+ * ——結論（何も足さない）は変わらない。
+ *
+
  * ## `verification_required`（0.3.268 で増えた）は `cloud_credential_error` と逆で、印が揃っている
  *
  * **こちらは「Anthropic の API が断った」側そのものである。** HTTP 403 で、
@@ -167,8 +176,21 @@ function nonEmpty(value: unknown): string | undefined {
  * **測れば人間側だと分かっているが、それを名乗る口が無い**——だから
  * `unknown` になる。**これは分類の放棄ではなく、構造の欠落である。**
  * `usage-limits.ts` に「`error` の語 → 回復の見込み」の軸を新設するかどうかは
- * この変更の範囲外（`usage-limits.ts` には触れていない）。
+ * この変更の範囲外だった（`usage-limits.ts` には触れていない）。
  *
+ * **追記（#809 で解消）。** `usage-limits.ts` に
+ * `limitRecoveryOfAssistantError`（`SDKAssistantMessageError` の語 →
+ * `LimitRecovery` の軸）を新設し、`tools.ts` の `describeManagerFailure` が
+ * 「`limitRecoveryOf`（文言）が `unknown` を返したときだけ、この軸へ落ちる」
+ * 形で組み合わせるようにした。**この関数（`limitRecoveryOf`）自体は1文字も
+ * 変えていない**——直上の「`verification_required` の実際の本文は12接頭辞の
+ * どれとも一致しない」は今も真であり、`limitRecoveryOf` は今も `'unknown'`
+ * を返す。変わったのは、その `'unknown'` を受け取った**呼び出し側**が、
+ * 語ベースの軸（`verification_required` → `action`。根拠は
+ * `usage-limits.ts` の `limitRecoveryOfAssistantError` の doc）へ
+ * フォールバックするようになったことである。
+ *
+
  * **歯は2段構えにしてある**（`sdk-failure.test.ts` の describe
  * 「`verification_required` — 回復の見込みを名乗らない」）——「`time` を
  * 名乗らないこと」（`limitRecoveryOf(...) === 'unknown'`）と「**`unknown` に
@@ -185,7 +207,9 @@ function nonEmpty(value: unknown): string | undefined {
  * この語の本文がそこへ落ちるようになったという合図である（失敗メッセージに
  * 次に確かめる手順を書いてある。この語の扱いを `LIMIT_RECOVERY_BY_PREFIX` へ
  * 足すのと同時に決めること。（`error` の語 → 回復の見込みという軸そのものが
- * この実装に無いこと自体は #809 に落とした）。
+ * この実装に無いこと自体は #809 に落とし、`usage-limits.ts` の
+ * `limitRecoveryOfAssistantError` として解消した。この語は同表で `action`
+ * と判断してある）。
  *
  * **この写しは数え上げなので腐る。** 腐ったことを `tsc` に言わせる歯は
  * `sdk-failure.test.ts` の `SDK_ASSISTANT_ERROR_CODES` にあり、SDK が語を増やすと

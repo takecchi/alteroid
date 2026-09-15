@@ -5800,8 +5800,20 @@ describe('クローンの道具', () => {
    * 「分からないから」ではない。
    *
    * **この期待値は #809 の実装（語の軸）が入ると反転する。**
+   *
+   * ---
+   *
+   * **反転（#809 の実装が入った）。** `describeManagerFailure` はいま、
+   * 文言側（`limitRecoveryOf(lastReport)`）が `unknown` を返したときに限り
+   * `failure.code`（`via === 'assistant_error'` のときだけ）を
+   * `limitRecoveryOfAssistantError` へ通す。`verification_required` は
+   * `usage-limits.ts` の `LIMIT_RECOVERY_BY_ASSISTANT_ERROR` で `action` と
+   * 判断してある（根拠は同表の doc）ので、いまは `⚠` 行の末尾に回復の見込みが
+   * 添えられる。**上のコメント（欠陥の固定）は経緯として残す**——文言側の軸に
+   * 手を入れたのではなく、語ベースの軸をフォールバックとして足したことで
+   * この期待値が変わった。
    */
-  it('manager_list は verification_required では、語の軸が無いのでいまは何も足さない（#809 の欠陥を固定）', async () => {
+  it('manager_list は verification_required では、語の軸から回復の見込み（action）を添える（#809）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
     const target = h.running[0];
@@ -5819,8 +5831,8 @@ describe('クローンの道具', () => {
     const reply = await h.call('manager_list', {});
 
     expect(reply).toContain('⚠ 直近のターンは報告ではなく失敗で終わっている');
-    // **いまはここに何も足されない。** 軸が無いことの直接の裏付け。
-    expect(reply).not.toContain('回復の見込み');
+    // **いまはここに語ベースの回復の見込みが足される。** 軸が入ったことの裏付け。
+    expect(reply).toContain('（回復の見込み: 人間が動かないと戻らない（action））');
   });
 
   /**
@@ -5833,8 +5845,15 @@ describe('クローンの道具', () => {
    * 無回答のまま取り残される。
    *
    * **この期待値も #809 の実装（語の軸）が入ると反転する。**
+   *
+   * ---
+   *
+   * **反転（#809 の実装が入った）。** `overloaded` は
+   * `LIMIT_RECOVERY_BY_ASSISTANT_ERROR` で `time` と判断してある
+   * （一時的な過負荷。根拠は同表の doc）ので、いまは `⚠` 行の末尾に
+   * `time` の回復の見込みが添えられる。
    */
-  it('manager_list は overloaded では、語の軸が無いのでいまは何も足さない（#809 の欠陥を固定）', async () => {
+  it('manager_list は overloaded では、語の軸から回復の見込み（time）を添える（#809）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
     const target = h.running[0];
@@ -5850,7 +5869,7 @@ describe('クローンの道具', () => {
     const reply = await h.call('manager_list', {});
 
     expect(reply).toContain('⚠ 直近のターンは報告ではなく失敗で終わっている');
-    expect(reply).not.toContain('回復の見込み');
+    expect(reply).toContain('（回復の見込み: 時間で戻る（time））');
   });
 
   /**

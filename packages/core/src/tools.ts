@@ -145,7 +145,7 @@ import {
 import type { CloneRuntimeFacts } from './self.js';
 import { EXCHANGE_WITH_VALUES, UnreadableCommitmentError } from './store.js';
 import type { JournalStore, PendingInboxEvent, Stores } from './store.js';
-import { limitRecoveryOf, withRecoveryNote } from './usage-limits.js';
+import { limitRecoveryOf, limitRecoveryOfAssistantError, withRecoveryNote } from './usage-limits.js';
 import { describeInboxBacklogBreakdown, summarizeInboxBacklog } from './inbox-backlog.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 import {
@@ -1671,6 +1671,19 @@ function denialLine(denials: ManagerDenial[]): string | null {
  * は1文字も変えない**——`withRecoveryNote` が末尾に1行足すだけで、
  * `unknown`（`lastFailure` の原因が上限とは無関係な回。billing_error 以外の
  * 大半）のときは何も足さない。
+ *
+ * **`failure.code`（`SDKAssistantMessageError` の語）からも見込みを引く
+ * （Issue #809）。** 上の文言ベースの軸は `USAGE_LIMIT_ERROR_PREFIXES`
+ * （実質 `billing_error` の本文）にしか当たらないので、`authentication_failed`
+ * や `verification_required` のような他の語は、`via` が `assistant_error` で
+ * あってもこれまで一度も判定材料にならなかった（`usage-limits.ts` の
+ * `limitRecoveryOfAssistantError` の doc）。**優先順位は文言側が先。**
+ * `billing_error` のように同じ語でも文言によって答えが違う（`individual` vs
+ * `org's monthly` spend limit）場合、文言側のほうがより測られた判断なので、
+ * 文言側が `unknown` を返したときだけ語ベースへ落ちる。`via` が
+ * `assistant_error` でなければ `code` は `SDKAssistantMessageError` の語彙
+ * ではない（`result_subtype` / `result_is_error` の `code` は `subtype` 文字列）
+ * ので、語ベースの軸を当てない。
  */
 function describeManagerFailure(
   failure: ManagerSummary['lastFailure'],
@@ -1685,7 +1698,14 @@ function describeManagerFailure(
     '（status が done のままなのはそのためで、この委譲が死んだという意味ではない）。' +
     '**先に manager_start で起こし直さないこと** — 同じ仕事が2本になる。';
   if (lastReport === undefined) return base;
-  return withRecoveryNote(base, limitRecoveryOf(lastReport));
+  const fromText = limitRecoveryOf(lastReport);
+  const recovery =
+    fromText !== 'unknown'
+      ? fromText
+      : failure.via === 'assistant_error'
+        ? limitRecoveryOfAssistantError(failure.code)
+        : 'unknown';
+  return withRecoveryNote(base, recovery);
 }
 
 /**

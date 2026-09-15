@@ -4,8 +4,10 @@ import { describe, expect, it } from 'vitest';
 import {
   classifyUsageNotice,
   describeUsageNotice,
+  knownAssistantErrorRecoveryCodes,
   knownLimitRecoveryPrefixes,
   limitRecoveryOf,
+  limitRecoveryOfAssistantError,
   longestMatchingPrefix,
   matchedUsageLimitPrefix,
   mergeRateLimitFacts,
@@ -467,6 +469,67 @@ describe('回復の見込みの表（12件を機械的に生成する歯）', ()
     expect(DIRECT_VALUE_CASES.length + distinctRefinedPrefixes.size).toBe(
       USAGE_LIMIT_ERROR_PREFIXES.length,
     );
+  });
+});
+
+/**
+ * `SDKAssistantMessageError` の語 → 回復の見込み（Issue #809）。
+ *
+ * `limitRecoveryOf`（上の describe）は文言（`USAGE_LIMIT_ERROR_PREFIXES`）を
+ * 見るだけで、実質 `billing_error` にしか当たらない。ここは**語そのもの**から
+ * 回復の見込みを引く別の軸で、13語全部を対象にする
+ * （`usage-limits.ts` の `limitRecoveryOfAssistantError` の doc に各語の根拠）。
+ */
+describe('SDKAssistantMessageError の語から回復の見込みを読む（limitRecoveryOfAssistantError）', () => {
+  /** `[語, 期待する LimitRecovery]`。13語全部を1本ずつ固定する。 */
+  const ASSISTANT_ERROR_CASES: ReadonlyArray<[code: string, expected: LimitRecovery]> = [
+    ['authentication_failed', 'action'],
+    ['oauth_org_not_allowed', 'action'],
+    ['account_on_hold', 'action'],
+    ['verification_required', 'action'],
+    ['billing_error', 'unknown'],
+    ['rate_limit', 'time'],
+    ['overloaded', 'time'],
+    ['invalid_request', 'unknown'],
+    ['model_not_found', 'unknown'],
+    ['server_error', 'time'],
+    ['unknown', 'unknown'],
+    ['max_output_tokens', 'unknown'],
+    ['cloud_credential_error', 'unknown'],
+  ];
+
+  it.each(ASSISTANT_ERROR_CASES)('%s → %s', (code, expected) => {
+    expect(limitRecoveryOfAssistantError(code)).toBe(expected);
+  });
+
+  /**
+   * **この歯が無いと、表そのものが SDK の13件を覆っていなくても緑になる。**
+   * `回復の見込みの表（12件を機械的に生成する歯）`の同名の歯と同じ理由——
+   * SDK が語を1つ足しても、この一覧を更新し忘れれば `it.each` は今までの
+   * 件数のまま緑を返し続ける。`knownAssistantErrorRecoveryCodes()`
+   * （実装の表の鍵）と突き合わせる。SDK の union との一致は
+   * `sdk-failure.test.ts` の `SDK_ASSISTANT_ERROR_CODES`（型で縛った別の歯）が
+   * 見ているので、ここで測るべきは「このテストの一覧が実装の表を覆っているか」
+   * である。
+   */
+  it('この一覧（ASSISTANT_ERROR_CASES）は knownAssistantErrorRecoveryCodes() を1つ残さず覆う', () => {
+    const covered = ASSISTANT_ERROR_CASES.map(([code]) => code).sort();
+    const known = [...knownAssistantErrorRecoveryCodes()].sort();
+    expect(covered).toEqual(known);
+  });
+
+  /**
+   * **実行時の安全側。** 型は13語すべてを要求するが、`code` は
+   * `assistantFailureOf` が「空でない文字列なら何でも通す」作りなので、
+   * 実行時にはこの型の保証が効かない場面がある——将来 SDK が14番目の語を
+   * 増やした直後（この表がまだ追いついていない一瞬）や、デーモンと Web UI が
+   * 別の版の `packages/core` を積んでいる場合（AGENTS.md「型で塞いだ分岐にも、
+   * 実行時の倒れ先の歯を足す」）。**そのときに `time` でも `action` でもなく
+   * `unknown` を返すこと（＝データを捏造しないこと）をここで固定する。**
+   */
+  it('表に無い語（将来の14番目・版のずれ）では unknown を返す（実行時の倒れ先）', () => {
+    expect(limitRecoveryOfAssistantError('a_future_14th_word_not_yet_classified')).toBe('unknown');
+    expect(limitRecoveryOfAssistantError('')).toBe('unknown');
   });
 });
 

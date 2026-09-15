@@ -114,6 +114,7 @@ export {
   describeUsageNotice,
   knownLimitRecoveryPrefixes,
   limitRecoveryOf,
+  limitRecoveryOfAssistantError,
   limitRecoverySchema,
   longestMatchingPrefix,
   matchedUsageLimitPrefix,

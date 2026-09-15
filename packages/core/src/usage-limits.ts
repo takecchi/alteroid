@@ -1,3 +1,4 @@
+import type { SDKAssistantMessageError } from '@anthropic-ai/claude-agent-sdk';
 import {
   ORG_POLICY_LIMIT_PREFIXES,
   USAGE_LIMIT_ERROR_PREFIXES,
@@ -361,6 +362,157 @@ export function withRecoveryNote(base: string, recovery: LimitRecovery): string 
   if (recovery === 'unknown') return base;
   const label = recovery === 'time' ? '時間で戻る（time）' : '人間が動かないと戻らない（action）';
   return `${base}\n（回復の見込み: ${label}）`;
+}
+
+// ---------------------------------------------------------------------------
+// SDKAssistantMessageError の語 → 回復の見込み（Issue #809）
+// ---------------------------------------------------------------------------
+
+/**
+ * `SDKAssistantMessageError`（`assistant.error` に付く13語。`sdk-failure.ts` の
+ * `assistantFailureOf` の doc に逐語がある）を、文言を経由せず**語そのものから**
+ * 回復の見込みへ写す。
+ *
+ * ## なぜ上の文言ベースの軸（{@link LIMIT_RECOVERY_BY_PREFIX}）だけでは足りないのか
+ *
+ * 上の軸が見るのは `USAGE_LIMIT_ERROR_PREFIXES` の接頭辞で、これは実質
+ * `billing_error` の本文にしか当たらない。**残り12語の本文は最初からこの
+ * 12接頭辞のどれとも一致しない形をしている**——`authentication_failed` は
+ * 「login required」、`verification_required` はサーバの `error.message` を
+ * そのまま通したもの、`rate_limit` は「rate limited」等、語ごとに文面が違う。
+ * ⟹ 文言側の軸は`これらの語に対して原理的に`当たらない。当たらなかった
+ * ときの倒れ先は `unknown`（{@link limitRecoveryOf} の doc）で、これは
+ * 「分からない」と「まだ測っていない」のどちらとも読める——実際にはただ
+ * **この軸がこれらの語を見ていないだけ**である。
+ *
+ * `sdk-failure.ts` の `verification_required` の doc が言うとおり、これは
+ * 「分類の放棄ではなく、構造の欠落」である。この関数がその構造を足す。
+ *
+ * ## 13語すべてに明示の値を持たせる（新しい語だけを特別扱いしない）
+ *
+ * 下の {@link LIMIT_RECOVERY_BY_ASSISTANT_ERROR} は
+ * `Record<SDKAssistantMessageError, LimitRecovery>` で、**13語全部が
+ * キーとして必須**である。SDK が14番目の語を増やせば、この表は
+ * コンパイルで落ちる（`sdk-failure.test.ts` の `SDK_ASSISTANT_ERROR_CODES` と
+ * 同じ仕組み。型に名前を付けてあるのも同じ理由——名前がそのまま `tsc` の
+ * エラー文に出る）。
+ *
+ * ## ここに書いた判定は alteroid 自身の判断であって、SDK の分類の書き写しではない
+ *
+ * Issue #809 が測った SDK 内部の2つの switch（人へ見せる側 / `/goal` の回復
+ * 可否）は、同じ13語に対して**違う群分け**をしている——たとえば
+ * `model_not_found` は片方では `unknown` と見分けが付かない `default` に
+ * 落ち、もう片方では専用の値 `"model_unavailable"` を持つ。**どちらか一方を
+ * そのまま輸入すると、SDK 側のその switch が持つ取りこぼしごと写る。** だから
+ * ここでは SDK のどちらの switch にも寄せず、alteroid 自身が「この語が指す
+ * 状況は時間で開くか・人間が動く必要があるか・どちらとも言えないか」を
+ * 語ごとに独立して判断する。以下、13語それぞれの根拠:
+ *
+ * - `authentication_failed` → `action`: 認証切れ。人間が `/login` を打ち直す
+ *   までは何度リトライしても開かない
+ * - `oauth_org_not_allowed` → `action`: 組織が OAuth を無効化している。API
+ *   キーへの切り替えか管理者の設定変更が要る（時間では開かない）
+ * - `account_on_hold` → `action`: 「hold」は人間（アカウント側）が解除する
+ *   までという意味がそのまま語に出ている
+ * - `verification_required` → `action`: Issue #809 が測った6つの間接証拠
+ *   （403・`permission_error`、専用クラス名 `VerificationRequiredError`、
+ *   "blocked"固定文言、`/goal` の回復不能群、専用の箱、`apiErrorIsTransient`
+ *   不在）が同じ向きを指している（`sdk-failure.ts` の doc に詳細がある）
+ * - `billing_error` → `unknown`: **語だけでは決まらない、というのが
+ *   alteroid の判断そのものである。** 同じ `billing_error` の本文でも
+ *   `individual spend limit`（管理者が上げるまで開かない＝`action`）と
+ *   `org's monthly spend limit`（請求期間が変われば開く＝`time`）の両方が
+ *   実測されている（{@link refineHitYourFamilyRecovery} の doc）。**この
+ *   語の実際の答えは常に文言側の軸（{@link limitRecoveryOf}）のほうが持って
+ *   いる**ので、語ベースの既定値をここで断定しない——`unknown` は「まだ
+ *   分からない」ではなく「この語だけでは決められないと判断した」印である
+ * - `rate_limit` → `time`: 定義そのものが「枠の時間窓が明ければ戻る」。
+ *   人へ見せる側の文言も「wait and retry」である
+ * - `overloaded` → `time`: 一時的な過負荷。人へ見せる側の文言も同じく
+ *   「wait and retry」で、SDK 自身も無条件で transient 扱いにしている
+ *   （`sdk-failure.ts` の `cloud_credential_error` の doc に引いた `VRt` の
+ *   逐語）。**ここは SDK の判定と alteroid の判断がたまたま一致しているだけ**
+ *   であって、`apiErrorIsTransient` の値を鵜呑みにした結果ではない（この
+ *   関数はそのフィールドを一度も参照しない）
+ * - `invalid_request` → `unknown`: 同じ内容のリクエストを送り続ける限り
+ *   `time` は成り立たない（待っても同じ理由で失敗し続ける）。かといって
+ *   「人間が動く」の定義（入金・管理者の設定・座席種別の変更）にも当たらない
+ *   ——直す主体はリクエストを組み立てた側（クローン）であって、この2値の
+ *   どちらにも当てはまらない
+ * - `model_not_found` → `unknown`: 設定の誤り（存在しないモデル ID）で、
+ *   時間経過では直らないが、これも「人間が動かないと戻らない」の定義（入金・
+ *   管理者の設定・座席種別）には当たらない——alteroid のこの軸が問うている
+ *   のは token/枠の回復可能性であって、汎用のエラー分類ではない
+ * - `server_error` → `time`: 汎用の5xx。人へ見せる側の文言も「retry」の
+ *   み（`overloaded` と同じ理由でここに置くが、これも SDK のフラグを見て
+ *   いない独立の判断である）
+ * - `unknown`（語） → `unknown`: SDK 自身が「分からない」と言っている語を
+ *   `time` や `action` と偽らない
+ * - `max_output_tokens` → `unknown`: 出力上限に当たっただけで、枠や資格情報の
+ *   状態とは無関係（`context-window-failure.ts` の doc と同じ理由 ——
+ *   `stop_reason` 側の文脈窓超過と同じ印を共有することがあるが、いずれも
+ *   「時間」でも「人間の対応」でもない、リクエスト設計側の問題である）
+ * - `cloud_credential_error` → `unknown`: SDK 自身の印が割れている
+ *   （`apiErrorIsTransient:!0` で一時的だと言いながら、人へ見せる側は
+ *   「人が動け」と言い、詰まりを上げる分岐では「上げない」側に置かれている
+ *   ——`sdk-failure.ts` の doc に3つの逐語を引いた）。alteroid 側でも
+ *   どちらかに決め打つ材料が無い
+ *
+ * ## `time` 3 / `action` 4 / `unknown` 6 —— 迷ったら `unknown` へ倒す
+ *
+ * {@link LimitRecovery} の doc が言うとおり、`time` と読み違えたときの代償は
+ * 「もう一度冷やし直すだけ」だが、`action` と読み違えたときの代償は「まだ
+ * 戻るトークンを捨てる」ことである。⟹ 上の判断でも、確信が持てない語は
+ * `action` ではなく `unknown` へ倒してある（`invalid_request` /
+ * `model_not_found` / `max_output_tokens` はどれも「時間では開かない」ことは
+ * 分かっていても `action` へは倒していない）。
+ */
+type SDKAssistantMessageErrorの語が増えたらこの表と_usage_limits_ts_の_doc_へ足して同じ_PR_で緑にする =
+  Record<SDKAssistantMessageError, LimitRecovery>;
+
+const LIMIT_RECOVERY_BY_ASSISTANT_ERROR: SDKAssistantMessageErrorの語が増えたらこの表と_usage_limits_ts_の_doc_へ足して同じ_PR_で緑にする =
+  {
+    authentication_failed: 'action',
+    oauth_org_not_allowed: 'action',
+    account_on_hold: 'action',
+    verification_required: 'action',
+    billing_error: 'unknown',
+    rate_limit: 'time',
+    overloaded: 'time',
+    invalid_request: 'unknown',
+    model_not_found: 'unknown',
+    server_error: 'time',
+    unknown: 'unknown',
+    max_output_tokens: 'unknown',
+    cloud_credential_error: 'unknown',
+  };
+
+/**
+ * `assistant.error` の語から回復の見込みを読む。**当てはまらなければ
+ * `unknown`。**
+ *
+ * **型では13語すべてが埋まっている（上の表）が、実行時にはその保証が無い。**
+ * `code` は `sdk-failure.ts` の `assistantFailureOf` が「空でない文字列」で
+ * あれば何でも通す作り（doc の「知らない語も印になる」）なので、ここへ来る
+ * 値が必ず13語のどれかである保証は無い——将来 SDK が14番目の語を増やした
+ * 直後（この表がまだ追いついていない一瞬）や、デーモンと Web UI が別の版の
+ * `packages/core` を積んでいる場合（AGENTS.md「型で塞いだ分岐にも、実行時の
+ * 倒れ先の歯を足す」）がそれである。**そのときは安全側（`unknown`）へ倒す**
+ * ——`time` でも `action` でもなく、材料が無いことをそのまま返す。
+ */
+export function limitRecoveryOfAssistantError(code: string): LimitRecovery {
+  return Object.prototype.hasOwnProperty.call(LIMIT_RECOVERY_BY_ASSISTANT_ERROR, code)
+    ? LIMIT_RECOVERY_BY_ASSISTANT_ERROR[code as SDKAssistantMessageError]
+    : 'unknown';
+}
+
+/**
+ * テストが SDK の13語と突き合わせるための、この表の鍵の一覧。
+ * {@link knownLimitRecoveryPrefixes} と同じ役目——実装の表と離れた場所に
+ * 別の一覧を手で書くと、表を直してもテストの一覧が古いまま緑になる。
+ */
+export function knownAssistantErrorRecoveryCodes(): SDKAssistantMessageError[] {
+  return Object.keys(LIMIT_RECOVERY_BY_ASSISTANT_ERROR) as SDKAssistantMessageError[];
 }
 
 // ---------------------------------------------------------------------------

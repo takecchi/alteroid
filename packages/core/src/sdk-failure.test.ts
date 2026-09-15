@@ -321,7 +321,17 @@ describe('cloud_credential_error — 回復の見込みを名乗らない', () =
  * 通したもの——下の doc 参照）はこの12接頭辞のどれとも一致しない形をしている。
  * ⟹ **これは「測れば分かっているのに、それを運ぶ軸がこの実装に無い」という構造の
  * 欠落であって、判定を保留しているわけではない。** その軸を新設するかどうかは
- * この歯の範囲外（`usage-limits.ts` には触れていない）。
+ * この歯の範囲外だった（`usage-limits.ts` には触れていない）。
+ *
+ * **追記（#809 で軸を新設した）。** 下の歯が固定しているのは今も
+ * `limitRecoveryOf`（文言だけを見る軸）単体の挙動で、**この関数自体は
+ * 1文字も変えていない**ので、下のアサーションはそのまま真であり続ける。
+ * 語ベースの軸（`usage-limits.ts` の `limitRecoveryOfAssistantError`。この語は
+ * `action` と判断した）は別の関数として新設し、`tools.ts` の
+ * `describeManagerFailure` が「文言側が `unknown` のときだけ語ベースへ
+ * 落ちる」形で組み合わせている——組み合わせた結果の歯は `tools.test.ts` の
+ * 「manager_list は verification_required では、語の軸から回復の見込み
+ * （action）を添える（#809）」にある。
  */
 describe('verification_required — 回復の見込みを名乗らない', () => {
   /**
@@ -413,7 +423,8 @@ describe('verification_required — 回復の見込みを名乗らない', () =>
         '（＝ここで当たった接頭辞そのもの）を確認すること。この語は実測で「人間（または ' +
         '組織の管理者）が動くまで開かない」側だと分かっているので、当たった接頭辞を ' +
         'LIMIT_RECOVERY_BY_PREFIX へ足すときはこの語の扱いも一緒に決めること' +
-        '（軸そのものの欠落は #809）。',
+        '（#809 で新設した usage-limits.ts の limitRecoveryOfAssistantError は、この語を ' +
+        '既に action と判断してある。矛盾する値を LIMIT_RECOVERY_BY_PREFIX 側へ足さないこと）。',
     ).toBeUndefined();
   });
 });
