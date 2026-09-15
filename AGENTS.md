@@ -460,6 +460,21 @@ git -C <main のツリー> apply --check -R /tmp/tail.patch   # 通れば main �
   - **⚠️ 観測に `process.stdout.write` を使わないこと（#314 以降）。** 直上の「横取りを通らず、通っても落ちても出る」はいまも事実で、**出ること自体は変わっていない** — 歯は握り潰さず本物の stdout へ通すし、失敗の差分にも書いた内容が出る。**変わったのは、そのテストが赤くなることである。** `vitest.setup.ts` の歯が「テストが spy を張らずに本物の stdout へ書いた」として `afterEach` で落とす。**変異試験ではこの赤が「変異を検出した」に化ける**（生存＝テストが通った、なので）。実測と、残っている観測手段は `.claude/skills/mutation-testing/SKILL.md`
   - **最も重く出るのは変異試験である** — 生存＝テストが通ったなので、**証拠が要るときにだけ消える。** 詳細は `.claude/skills/mutation-testing/`
 - **CI が Linux だけなので、OS 固有の振る舞いは「緑」として観測される** — macOS は CoreFoundation が `__CF_USER_TEXT_ENCODING` を**どの子プロセスへも**注ぐ（`env -i` でも入る）。子の env を親と比べて差分を取る形は、これを「その処理が置いた」と報告する。**環境を数え上げて捨てる形にしないこと** — 注ぐ主体は OS と shell と node の版で変わる。**同じ条件で対象を通さない1回を走らせ、その実測を基準に引く**（`packages/core/src/profile.ts` の `evaluateProfile`）。テストも OS の注入をあてにせず、注入する側を自分で用意して**どの OS でも落ちる形**にする
+- **`gh pr merge --delete-branch` は、その枝を base にしている PR を閉じる。しかも戻せない。** ⚠️ **`gh pr merge` はそれを言わない** — マージの出力は成功だけを返し、巻き添えで閉じた PR は別の PR なので、マージした側の出力には1文字も出ない。実測（2026-09-15T07:3xZ、PR #1008 と #1010。#1010（#1003 段2）は #1008（#781）の枝の上に積んであった stacked PR）:
+
+  ```
+  $ gh pr merge 1008 --squash --delete-branch
+  $ gh pr view 1008 --json state,mergeCommit
+  state=MERGED commit=6623d38a
+  $ gh pr view 1010 --json state,baseRefName
+  state=CLOSED base=fix/781-toolcontext-conversationid-required   ← 何も言わずに閉じた
+  $ gh pr reopen 1010
+  API call failed: GraphQL: Could not open the pull request. (reopenPullRequest)
+  $ gh pr edit 1010 --base main
+  GraphQL: Cannot change the base branch of a closed pull request. (updatePullRequest)
+  ```
+
+  **⟹ 取り返しが付くのは枝を消す前だけである。** 閉じたあとは `reopen` も `--base` の付け替えも、base の枝が無いのでどちらも拒まれる（上の生出力）。**⭐ ただし成果そのものは失われない** — head の枝はリモートに残る（`git ls-remote --heads origin <head>` で確認できる）ので、rebase して新しい PR を開き直せば復帰できる。**⚠️ ただし base 側が squash マージされていると、head の枝が抱えている base 側のコミットは main の祖先ではない**ので、**rebase せずに出し直すと base 側の変更が二重に載った差分になる**。**対策: 積んだ PR が在るあいだは `--delete-branch` を付けない。** 先に依存側の base を `gh pr edit <N> --base main` で付け替えてから、base 側をマージする（**付け替えは base の枝が在るうちにしかできない**）
 
 ## 時刻の扱い
 
