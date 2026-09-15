@@ -2157,6 +2157,85 @@ export function commitmentUpdatedAt(entry: Pick<Commitment, 'at' | 'closedAt'>):
   return entry.closedAt ?? entry.at;
 }
 
+/**
+ * まだ片付いていない台帳の行に、クローンから人間への返答が日誌に見つかるかを
+ * 導く（issue #1003「放置」と「進行中」が同じ顔をしている問題）。
+ *
+ * **⭐ 設計の要（issue #1003）: 状態はクローンが申告するのではなく、既に在る
+ * 記録から導く。** クローンが手で維持する欄を新しく足すと、クローンはそれを
+ * 忘れる——この Issue の発端そのものが「返答したら閉じる」という既存の規則を
+ * クローンが忘れていたことなので、新しい欄を足せば同じ形の失敗をもう一度
+ * 作ることになる。だからここは新しい状態を「書く」場所を作らず、既存の
+ * `exchange`（日誌）を読むだけにしてある。返す値も、`updatedAt` /
+ * `commitmentUpdatedAt` と同じで**加算のみ**（既存の欄は1つも変えない）。
+ *
+ * ## `origin: 'human'` のうち、実際に一致するのはチャット発の行だけである
+ *
+ * `origin: 'human'` の `commitment.source` は、生まれた経路によって中身の
+ * 意味が違う（`commitmentFor`、`packages/core/src/clone.ts`）:
+ *
+ * 1. **チャット**（`human_message`）— `source` は本物の会話 id。
+ *    `inboxEventSchema` の `human_message.conversationId` は必須（省略できない）
+ *    ので、この経路の行は必ず会話 id を持つ
+ * 2. **承認待ちへの回答**（`human_answer`）— `source` は `approvalId` である。
+ *    会話 id ではない
+ * 3. **人間が API/CLI から直接積んだもの**（`POST /commitments` の
+ *    `commitmentBody.source`）— 呼び出し側が渡した任意の文字列（省略もできる）。
+ *    会話 id とは限らない
+ *
+ * この3つを見分ける専用の欄は無い。だから2・3の行は、`source` を会話 id として
+ * 引いても日誌の会話に一致せず、この関数は `undefined` を返す——**これは欠陥
+ * ではない。** `source` が実際に会話 id として機能する行（1）にだけこの導出を
+ * 当てた結果であり、2・3の行は「導出できる材料が無い」側に残るだけで、新しく
+ * 誤ったラベル（「放置されている」）を主張することはない。
+ *
+ * ## `人間の回答待ち`（3値目）はここに含めない
+ *
+ * `PendingApproval`（`ask_human` の承認待ち）と `Commitment` を結ぶ id は
+ * リポジトリのどこにも無い（`commitmentId` は0件。issue #1003 の実測）。
+ * 結べないものを出すと判定を丸めた嘘になる——issue が明示している線
+ * （「結べないなら『人間の回答待ち』は出さない」）どおり、この関数は
+ * 「未着手」と「返答済み・未クローズ」の2値だけを扱う。
+ *
+ * ## `exchange.conversationId` が無い行について
+ *
+ * `journalEntrySchema` の `exchange.conversationId` は型としては optional
+ * である。ただし現行のすべての書き込み経路
+ * （`packages/core/src/clone.ts` の `#record` / `#reportFailure` /
+ * `turn_ended` の3か所——`with: 'human'` を書くのはこの3か所だけ）は、
+ * `with: 'human'` の行に限っては必ず `conversationId` を添えて書く
+ * （`conversationId === null` のときは `with: 'self'` へ倒れ、`'human'` には
+ * ならない設計になっている）。**これは今のコードについて言えることであって、
+ * 過去に書かれた行や将来の書き手についての保証ではない**——`conversationId`
+ * を持たない `with: 'human'` の行が万一在れば、この関数はそれを日誌の会話に
+ * 一致させられず「未着手」側へ残るので、静かに「返答済み」を取りこぼす形は
+ * まだ理論上ありうる（PR 本文に書いた確認の範囲を参照）。
+ *
+ * @param commitment 判定したい1行（`origin` / `source` / `at` だけで足りる）。
+ * @param humanOutboundRepliesByConversation 会話 id → その会話でクローンが
+ *   人間へ返した `exchange`（`with: 'human'`, `role: 'outbound'`）の `at` を
+ *   **昇順に並べたもの**。呼び出し側（`GET /commitments`）が日誌から1回だけ
+ *   組み立てて全行で使い回す——行ごとに日誌を読み直さない
+ *   （`.claude/skills/listing-and-detail/SKILL.md` と同じ「一覧ごとに手で
+ *   書かない」発想）。
+ * @returns 一致した最初の返答時刻（ISO 8601）。無ければ `undefined`
+ *   （＝「未着手」側の残余に落ちる——`未着手` は別の状態として書き込まれる
+ *   ものではなく、この関数が `undefined` を返したときの残余として画面側が
+ *   決める）。
+ */
+export function commitmentRespondedAt(
+  commitment: Pick<Commitment, 'origin' | 'source' | 'at'>,
+  humanOutboundRepliesByConversation: ReadonlyMap<string, readonly string[]>,
+): string | undefined {
+  if (commitment.origin !== 'human' || commitment.source === undefined) return undefined;
+  const replies = humanOutboundRepliesByConversation.get(commitment.source);
+  if (replies === undefined) return undefined;
+  // **昇順である前提で、`at` を初めて超えた時刻を返す。** 並びの契約は上の
+  // JSDoc（呼び出し側が組み立てる）が持つので、ここで並べ直さない——
+  // ソートは1回、組み立て側だけで行う。
+  return replies.find((at) => at > commitment.at);
+}
+
 // ---------------------------------------------------------------------------
 // ジョブ・承認待ち
 // ---------------------------------------------------------------------------
