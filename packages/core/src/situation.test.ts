@@ -831,7 +831,7 @@ describe('状況の1行に受信箱の滞留が載る（#783 段0）', () => {
     // この1行は滞留が閾値を超えている間 `distill` 以外の全ターンに載るので、
     // ここが古い名前（`配達回数`）を名乗ると、クローンは `manager_list` を引く
     // 前にその名前を覚える。逐語の出所は
-    // `grep -Fn -- '器の入れ替え回数: 0回（＝未配達）' packages/core/src/inbox-backlog.ts`。
+    // `grep -Fn -- '器の入れ替え回数: 0回＝いまの器になってから積まれた' packages/core/src/inbox-backlog.ts`。
     expect(out).toContain('器の入れ替え回数');
     expect(out).not.toContain('配達回数');
   });
