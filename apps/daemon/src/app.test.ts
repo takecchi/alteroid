@@ -1178,9 +1178,11 @@ describe('HTTP API', () => {
   });
 
   /**
-   * `POST /inbox/remove`（issue #972）。クローンの道具 `inbox_remove_many`
-   * （`packages/core/src/tools.test.ts`）と同じ絞り込み・同じ既定を、人間の
-   * 入口からも叩けることを見る。
+   * `POST /inbox/remove`（issue #972）。`commitment_close_many`（#844）を
+   * 参照モデルにした、人間の入口からの絞り込み一括削除。⚠️ クローン自身の
+   * 道具（`inbox_remove_many`）はまだ無い——#972 本文の保留（「クローン自身の
+   * 道具にするかは別途の判断」）を尊重し、いったん取り下げた（別 PR で
+   * draft 提案中）。
    */
   describe('POST /inbox/remove', () => {
     const managerReport = (id: string, at: string, managerId = 'mgr-1'): InboxEvent => ({

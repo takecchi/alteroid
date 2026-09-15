@@ -848,12 +848,12 @@ export interface InboxStore {
    *
    * **どの id を対象にするかはここでは決めない。** 種類・送信元・齢での絞り
    * 込みは `peekPending()` が返した行に対して呼び出し側
-   * （`tools.ts` の `inbox_remove_many`）が当てる。`inboxBacklogDedupeKey`
-   * （`inbox-backlog.ts` の doc「なぜ1箇所に閉じるか」）と同じ理由で、この
-   * 判定を SQL 側にも複製しない——1箇所（`inbox-backlog.ts` の
-   * `matchesInboxRemoveManyFilter`）に保つ。ここが保証するのは「渡された id を
-   * まとめて消す」ことだけである（`CommitmentStore.closeMany` が `ids` を
-   * 受け取るだけで絞り込みの判定を持たないのと同じ役割分担）。
+   * （`apps/daemon/src/app.ts` の `POST /inbox/remove`）が当てる。
+   * `inboxBacklogDedupeKey`（`inbox-backlog.ts` の doc「なぜ1箇所に閉じるか」）
+   * と同じ理由で、この判定を SQL 側にも複製しない——1箇所（`inbox-backlog.ts`
+   * の `matchesInboxRemoveManyFilter`）に保つ。ここが保証するのは「渡された
+   * id をまとめて消す」ことだけである（`CommitmentStore.closeMany` が `ids`
+   * を受け取るだけで絞り込みの判定を持たないのと同じ役割分担）。
    *
    * **戻り値は実際に消えた（存在した）id の配列であって件数ではない。**
    * `remove()` が個別に返さない理由（何も返さない）とは違い、集合の操作

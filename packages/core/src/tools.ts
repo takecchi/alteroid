@@ -151,13 +151,7 @@ import {
   limitRecoveryOfAssistantError,
   withRecoveryNote,
 } from './usage-limits.js';
-import {
-  describeInboxBacklogBreakdown,
-  INBOX_EVENT_TYPE_ORDER,
-  matchesInboxRemoveManyFilter,
-  summarizeInboxBacklog,
-} from './inbox-backlog.js';
-import type { InboxRemoveManyFilter } from './inbox-backlog.js';
+import { describeInboxBacklogBreakdown, summarizeInboxBacklog } from './inbox-backlog.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 import {
   ACCOUNT_USAGE_TITLE,
@@ -340,7 +334,6 @@ export const CLONE_TOOL_NAMES = [
   'commitment_close',
   'commitment_close_many',
   'commitment_edit',
-  'inbox_remove_many',
   'profile_read',
   'profile_write',
   'token_list',
@@ -395,7 +388,6 @@ export const SELF_JOURNALING_CLONE_TOOLS = [
   'commitment_close',
   'commitment_close_many',
   'commitment_edit',
-  'inbox_remove_many',
   'profile_write',
   'manager_start',
   'manager_send',
@@ -1147,35 +1139,34 @@ const CLOSE_MANY_IDS_SHOWN = 20;
 /** 0件だったときに「実在する source」を挙げて見せる件数の上限（同じ理由）。 */
 const CLOSE_MANY_SOURCES_SHOWN = 8;
 /**
- * `inbox_remove_many`（絞り込みでの一括削除、issue #972）の上限4つ。
+ * 受信箱（inbox_events）の絞り込み一括削除（issue #972）が共有する上限3つ。
  *
- * **`commitment_close_many` の同名の定数と値を使い回さない。** 値が同じでも
- * 出所が違う（`AGENTS.md`「値が同じでも使い回さない」）——こちらは台帳の行
- * ではなく受信箱の合図が対象で、上限を上げ下げする理由も別に生まれうる。
+ * **いまはクローンの道具を持たない。** `apps/daemon/src/app.ts` の
+ * `POST /inbox/remove`（人間の入口）だけがこの上限を使う——#972 本文が
+ * 「クローン自身の道具にするかは別途の判断（自分の受信箱を自分で捨てられる
+ * ことの是非があるため、まずは人間の手で足りる）」と保留していたのに、
+ * 依頼のブリーフが誤ってこれを必須スコープへ書き換えていたため、いったん
+ * クローンの道具は取り下げた。**取り下げた案（人間起点の合図 `human_message`
+ * / `human_answer` を選べない形にする）は別 PR（draft・`[保留]`）で提案中**
+ * ——ここに定数だけ残しているのは、その PR がこの値をそのまま再利用できる
+ * ようにするため。値を決め直す理由は無い（`commitment_close_many` の同名の
+ * 定数と値を使い回さないのと同じ判断——ここは台帳の行ではなく受信箱の合図が
+ * 対象で、上限を上げ下げする理由も別に生まれうるので export した独立の値と
+ * している）。
  *
  * **`REMOVE_MANY_LIMIT_DEFAULT` / `REMOVE_MANY_LIMIT_MAX` の意味は
  * `CLOSE_MANY_LIMIT_DEFAULT` / `CLOSE_MANY_LIMIT_MAX` の doc と同じ**
  * ——1回の呼びが背負うもの（ストアへの書き込み・日誌の件数・戻り値の長さ）
  * を抑える上限と、呼ぶ側が指定できる上限の上限。**行を消す操作は台帳の
  * `close` と違って取り消せない**（`InboxStore` に reopen は無い）ので、
- * `dryRun` の既定（下のツール本体）と合わせて2段構えにしてある。
+ * `dryRun` の既定（`POST /inbox/remove` の実装）と合わせて2段構えにしてある。
  *
  * **`REMOVE_MANY_JOURNAL_ID_CHARS` の意味も同じ**——#972 の要求（「消した id
  * は全部日誌に残す」）を「予算は件数ではなく文字数」の形で満たす。
- *
- * **export している。** `commitment_close_many` の同名の定数は export して
- * いない（HTTP 側に対応する口が無いため）。こちらは `apps/daemon/src/app.ts`
- * の `POST /inbox/remove`（人間の入口）が同じ上限を使う——絞り込みの判定を
- * `matchesInboxRemoveManyFilter` の1箇所に閉じているのと同じ理由で、
- * 「1回の呼びで動かしてよい量」もクローンの道具と人間の入口とで別の値に
- * 分かれる理由が無い（分かれると「HTTP なら2,000件まで一気に消せるが
- * 道具からは500件までしか見えない」というだけの能力差になる）。
  */
 export const REMOVE_MANY_LIMIT_DEFAULT = 500;
 export const REMOVE_MANY_LIMIT_MAX = 2_000;
 export const REMOVE_MANY_JOURNAL_ID_CHARS = 3_600;
-/** 一括削除の戻り値に並べる id の件数の上限（`CLOSE_MANY_IDS_SHOWN` と同じ理由）。 */
-const REMOVE_MANY_IDS_SHOWN = 20;
 /**
  * `profile_write` が返す配布先の一覧（`配った先` / `配れなかった先`）を
  * 抜粋する厚み（#409）。
@@ -5576,237 +5567,6 @@ export function createCloneTools(context: ToolContext) {
                 ]),
             ...restNote,
             ...unreadableNote,
-          ].join('\n'),
-        );
-      },
-    ),
-
-    // --- 受信箱（未処理の合図） ----------------------------------------------
-    //
-    // issue #972: 同じ失敗の写しが数千件積もると、1ターン1件でしか排出できない
-    // `InboxStore.remove()` では排出そのものが文脈窓を食い潰す。設計は
-    // `commitment_close_many`（#844）を参照モデルにするが、**絞り込みの判定は
-    // ここ（`inbox-backlog.ts` の `matchesInboxRemoveManyFilter`）に閉じ、
-    // ストア（`storage-pg` / `storage-fs`）には複製しない**——`peekPending()`
-    // が既に全件を返す口を持っており、`summarizeInboxBacklog`（`manager_list`
-    // の内訳）も同じ全件走査の上に立っているので、SQL 側へ同じ判定を書くと
-    // 「一覧に見えている件数」と「実際に消える件数」が別の実装を持つことになる
-    // （`inboxBacklogDedupeKey` の doc「なぜ1箇所に閉じるか」と同じ理由）。
-
-    tool(
-      'inbox_remove_many',
-      [
-        '受信箱（`InboxStore`）の未読を、**絞り込みを渡してまとめて畳む（消す）**。',
-        '1件ずつ消す道具（内部の `remove()`）はこの器から呼べない——同じ失敗の写しが',
-        '数千件積もると、1ターン1件のペースでの排出それ自体が文脈窓を食い潰す（issue #972）。',
-        '**既定は試算（dryRun）で、1件も消さない。** 実際に消すには `dryRun: false` を明示すること——',
-        '消した合図を戻す道具はこの器に無いので、撃ち間違えは道具では戻せない。',
-        `**\`types\` は必須で、在る7種類（${INBOX_EVENT_TYPE_ORDER.join(' / ')}）を` +
-          '全部並べた呼びは断る**' +
-          '（「全部消す」を1回で撃てる形は作らない——それは `POST /reset` の役目である）。',
-        '**行は消える。** `commitment_close_many` の「閉じる（closedAt を付けるだけで行は残る）」とは違い、',
-        '受信箱は「まだ処理し終えていない」という事実だけを持つ器で、片付いた後の記録を残す場所ではない',
-        '（`InboxStore` の doc）。**消した id は全部日誌に残る。**',
-      ].join(''),
-      {
-        types: z
-          .array(z.enum(INBOX_EVENT_TYPE_ORDER))
-          .min(1)
-          .describe(
-            '消す対象の種類（必須）。在る7種類 ' +
-              `(${INBOX_EVENT_TYPE_ORDER.join(' / ')}) を全部並べると断られる。` +
-              '例: 委譲先の429の写しを畳むなら manager_message だけを狙う',
-          ),
-        sources: z
-          .array(z.string().min(1))
-          .min(1)
-          .optional()
-          .describe(
-            '送信元の**完全一致**。`manager_list` の内訳（送信元）に出る表記' +
-              '（例 "external:token-pool" / "manager:mgr-xxx"）をそのまま渡す。' +
-              '送信元を言えない種類（human_message / human_answer / distill / timer / ' +
-              'self_initiative）の行は、これを渡すと必ず対象から外れる',
-          ),
-        before: z
-          .string()
-          .min(1)
-          .optional()
-          .describe(
-            'この時刻**以前**（ISO8601、その瞬間ちょうども含む）に積まれた行だけを対象にする。' +
-              '消している最中に届いた新しい行を巻き込まないために使う',
-          ),
-        reason: z
-          .string()
-          .min(1)
-          .describe(
-            '何をもってこの絞り込みに当たる行を畳んでよいとしたか。人間はこれを読んで後から否定する',
-          ),
-        dryRun: z
-          .boolean()
-          .optional()
-          .describe(
-            '省略すると true（何件当たるかを数えるだけで1件も消さない）。実際に消すときだけ false を明示する',
-          ),
-        limit: z
-          .number()
-          .int()
-          .min(1)
-          .max(REMOVE_MANY_LIMIT_MAX)
-          .optional()
-          .describe(
-            '1回の呼びで消す上限（省略すると 500）。**古い側から**消す。' +
-              '残りは同じ絞り込みでもう一度呼べば続けられる',
-          ),
-      },
-      async ({ types, sources, before, reason, dryRun, limit }) => {
-        // 🔴 **絞り込みの無い呼びを断る（#972。commitment_close_many の origin と同じ形）。**
-        if (INBOX_EVENT_TYPE_ORDER.every((known) => types.includes(known))) {
-          return text(
-            `types に在る7種類（${INBOX_EVENT_TYPE_ORDER.join(', ')}）を全部並べた呼びは断る——` +
-              'それは絞り込みが無いのと同じで、1回で受信箱を空にできてしまう。' +
-              '消したい種類だけを名指しすること（例 types: ["manager_message"]）。**1件も消していない。**',
-          );
-        }
-        // **読めない `before` を「絞り込みが当たらなかった」に混ぜない**
-        // （`commitment_close_many` の `until` と同じ理由）。
-        if (
-          before !== undefined &&
-          !z.string().datetime({ offset: true }).safeParse(before).success
-        ) {
-          return text(
-            `before に渡された「${before}」は ISO8601 として読めない` +
-              '（例 2026-09-15T00:00:00.000Z）。**1件も消していない。**',
-          );
-        }
-
-        const filter: InboxRemoveManyFilter = {
-          types,
-          ...(sources === undefined ? {} : { sources }),
-          ...(before === undefined ? {} : { before }),
-        };
-        // **絞りはツール層で当てる**（`matchesInboxRemoveManyFilter` の doc——
-        // SQL 側に同じ判定を複製しない）。`peekPending()` は古い順で返すので、
-        // filter は順序を変えず、matched もそのまま古い順になる。
-        const allPending = await stores.inbox.peekPending();
-        const matched = allPending.filter((row) => matchesInboxRemoveManyFilter(row, filter));
-
-        const filterText = [
-          `types=[${types.join(', ')}]`,
-          ...(sources === undefined ? [] : [`sources=[${sources.join(', ')}]（完全一致）`]),
-          ...(before === undefined ? [] : [`before=${before}`]),
-        ].join(' / ');
-        // **漏斗を必ず出す。** 「0件だった」と「絞り込みが間違っていて当たらなかった」は
-        // 区別できないと次の判断ができない（`commitment_close_many` と同じ理由）。
-        const funnel = `未読 ${allPending.length} 件 → 絞り込みで ${matched.length} 件`;
-
-        if (matched.length === 0) {
-          let why: string;
-          if (allPending.length === 0) {
-            why =
-              '受信箱に未読が1件も無い。**絞り込みの問題ではない**（消すべきものがそもそも無い）。';
-          } else {
-            const breakdown = INBOX_EVENT_TYPE_ORDER.map(
-              (known) => `${known} ${allPending.filter((row) => row.event.type === known).length}`,
-            ).join(' / ');
-            why =
-              `未読 ${allPending.length} 件のうち絞り込みに当たる行が0件——**絞り込みが外れている。**` +
-              ` いま未読に在る種類の内訳: ${breakdown}`;
-          }
-          return text(
-            ['絞り込みに当たる未読は0件だった。**1件も消していない。**', funnel, why].join('\n'),
-          );
-        }
-
-        const effectiveLimit = limit ?? REMOVE_MANY_LIMIT_DEFAULT;
-        // **古い側から消す。** `peekPending()` の契約が「古い順」なので、先頭から
-        // 取ればそうなる（並べ替えない）。#972 が困っているのは古い側が文脈窓を
-        // 埋めることなので、減らす向きもそちらから。
-        const targets = matched.slice(0, effectiveLimit);
-        const rest = matched.length - targets.length;
-        const restNote =
-          rest === 0
-            ? []
-            : [
-                `1回の上限（${effectiveLimit} 件）に当たったので、残り ${rest} 件は対象にしていない。` +
-                  '**同じ絞り込みでもう一度呼べば続きを消せる。**',
-              ];
-
-        if (dryRun !== false) {
-          // **省略された `dryRun` は試算。** 消した合図を戻す道具がこの器に無い
-          // （`InboxStore` に `put` の再送以外の復元手段は無い）ので、既定は
-          // 「何も起きない側」に倒す。
-          const shown = targets.slice(0, REMOVE_MANY_IDS_SHOWN).map((row) => row.event.id);
-          const hidden = targets.length - shown.length;
-          return text(
-            [
-              `**試算（dryRun）。1件も消していない。** 実際に消すには dryRun: false を渡すこと。`,
-              funnel,
-              `絞り込み: ${filterText}`,
-              `この呼びで消すのは ${targets.length} 件（当たったのは ${matched.length} 件）。` +
-                `いちばん古いのは ${targets[0]?.at ?? '不明'}、いちばん新しいのは ${
-                  targets[targets.length - 1]?.at ?? '不明'
-                }。`,
-              `対象の id（先頭 ${shown.length} 件）: ${shown.join(', ')}${
-                hidden > 0 ? ` …ほか ${hidden} 件は省略` : ''
-              }`,
-              ...restNote,
-            ].join('\n'),
-          );
-        }
-
-        // **塊ごとに「消す → その塊の id を日誌へ書く」を交互に回す**
-        // （`commitment_close_many` と同じ理由——まとめて消してから日誌を書くと、
-        // その間に器が落ちたとき「消えたのに記録が無い行」が最大
-        // `REMOVE_MANY_LIMIT_DEFAULT` 件できる）。
-        const chunks = chunkIdsByChars(
-          targets.map((row) => row.event.id),
-          REMOVE_MANY_JOURNAL_ID_CHARS,
-        );
-        const removedIds: string[] = [];
-        for (const [index, chunk] of chunks.entries()) {
-          const removed = await stores.inbox.removeMany(chunk);
-          removedIds.push(...removed);
-          // **1件も消せなかった塊では日誌へ書かない**（他の経路——別セッションの
-          // `remove()` や再起動をまたいだ処理——が先に消していた場合に起きる）。
-          if (removed.length === 0) continue;
-          await appendJournalOrThrow(
-            'inbox_remove_many',
-            stores.journal,
-            {
-              type: 'decision',
-              decision:
-                `受信箱の未読を絞り込みで一括して畳んだ（消した）` +
-                `（${index + 1}/${chunks.length} 塊目、この塊は ${removed.length} 件）: ${reason}\n` +
-                `絞り込み: ${filterText}\n` +
-                `消した id: ${removed.join(' ')}`,
-              grounds:
-                'クローン自身が inbox_remove_many で絞り込んで消した（人間はこれを読んで後から否定する）',
-            },
-            'act-completed',
-          );
-        }
-
-        // **当たったのに消せなかった分を黙らせない**（`commitment_close_many` と同じ理由）。
-        const raced = targets.length - removedIds.length;
-        const shownRemoved = removedIds.slice(0, REMOVE_MANY_IDS_SHOWN);
-        const hiddenRemoved = removedIds.length - shownRemoved.length;
-        return text(
-          [
-            `**${removedIds.length} 件を畳んだ（消した）**（理由: ${reason}）。`,
-            funnel,
-            `絞り込み: ${filterText}`,
-            `消した id（先頭 ${shownRemoved.length} 件）: ${shownRemoved.join(', ')}${
-              hiddenRemoved > 0
-                ? ` …ほか ${hiddenRemoved} 件は省略（**全 id は日誌に ${chunks.length} 件に分けて残してある**）`
-                : ''
-            }`,
-            ...(raced === 0
-              ? []
-              : [
-                  `⚠ 対象 ${targets.length} 件のうち ${raced} 件は消せなかった` +
-                    '（この呼びの最中に他の経路が先に消した）。',
-                ]),
-            ...restNote,
           ].join('\n'),
         );
       },

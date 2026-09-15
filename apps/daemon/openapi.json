@@ -8562,7 +8562,7 @@
         "operationId": "postInboxRemove",
         "tags": ["inbox"],
         "summary": "受信箱の未読を、絞り込みを渡してまとめて畳む（消す）",
-        "description": "クローンの `inbox_remove_many` と同じものを人間の手から（issue #972）。同じ失敗の写しが数千件積もると、クローン側は1ターン1件のペースでしか排出できず、排出それ自体が文脈窓を食い潰す——人間はこの口から直接まとめて消せる。**既定は試算（`dryRun` を省略すると true）で、1件も消さない。** `types` は必須で、在る7種類（human_message / human_answer / distill / timer / external / self_initiative / manager_message）を全部並べた呼びは断る（「全部消す」を1回で撃てる形は作らない——それは`POST /reset`（記憶ごと全部消す）の役目である）。行は台帳の close とは違い**物理的に消える**——`InboxStore` は「まだ処理し終えていない」という事実だけを持つ器で、片付いた後の記録を残す場所ではない。**消した id は全部日誌に残る。**",
+        "description": "人間の入口から、受信箱の未読を絞り込んでまとめて消す（issue #972）。同じ失敗の写しが数千件積もると、クローン側は1ターン1件のペースでしか排出できず、排出それ自体が文脈窓を食い潰す——人間はこの口から直接まとめて消せる。**既定は試算（`dryRun` を省略すると true）で、1件も消さない。** `types` は必須で、在る7種類（human_message / human_answer / distill / timer / external / self_initiative / manager_message）を全部並べた呼びは断る（「全部消す」を1回で撃てる形は作らない——それは`POST /reset`（記憶ごと全部消す）の役目である）。行は台帳の close とは違い**物理的に消える**——`InboxStore` は「まだ処理し終えていない」という事実だけを持つ器で、片付いた後の記録を残す場所ではない。**消した id は全部日誌に残る。**",
         "responses": {
           "200": {
             "description": "試算、または実際に消した結果。",

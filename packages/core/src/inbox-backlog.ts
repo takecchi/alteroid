@@ -196,13 +196,20 @@ function ageBucketLabel(ageMs: number): (typeof AGE_BUCKET_LABELS)[number] {
  * `external` と `manager_message` の名前空間が衝突しないよう、種類の接頭辞を
  * 付ける（同じ文字列の `source` と `managerId` が同じ行に畳まれないため）。
  *
- * **export している。**（issue #972）`tools.ts` の `inbox_remove_many` が
- * 「送信元」で絞り込むとき、ここと同じ判定・同じ表記（`external:<source>` /
- * `manager:<managerId>`）を使う——`manager_list` の内訳（`bySource`）に出る
- * 値と、絞り込みに渡す値が同じ字面になるので、クローンは一覧で見た送信元の
- * 表記をそのまま `inbox_remove_many` の引数へ貼り付けられる。判定そのものを
- * 2箇所に複製しないのは {@link inboxBacklogDedupeKey} の doc「なぜ1箇所に
- * 閉じるか」と同じ理由である。
+ * **export している。**（issue #972）`apps/daemon/src/app.ts` の
+ * `POST /inbox/remove`（人間の入口。`matchesInboxRemoveManyFilter` を経由して
+ * 使う）が「送信元」で絞り込むとき、ここと同じ判定・同じ表記
+ * （`external:<source>` / `manager:<managerId>`）を使う——`manager_list` の
+ * 内訳（`bySource`）に出る値と、絞り込みに渡す値が同じ字面になる。判定
+ * そのものを2箇所に複製しないのは {@link inboxBacklogDedupeKey} の doc
+ * 「なぜ1箇所に閉じるか」と同じ理由である。
+ *
+ * ⚠️ **クローン自身の道具（`inbox_remove_many`）はまだ無い。** #972 本文が
+ * 「クローン自身の道具にするかは別途の判断」と保留していたところへ依頼の
+ * ブリーフが誤って必須スコープとして書いてしまい、いったん取り下げた——
+ * 人間起点の合図（`human_message` / `human_answer`）を選べない形にする案を
+ * 別 PR（draft・`[保留]`）で提案中。ここへ道具を足す実装者は、その PR の
+ * 判断を待つこと。
  */
 export function inboxBacklogSourceFor(event: InboxEvent): string | undefined {
   switch (event.type) {
@@ -347,11 +354,12 @@ function topByCount<T extends { readonly count: number }>(
 /**
  * `InboxEvent['type']` の並び順（`schema.ts` の `inboxEventSchema` の判別子の並びと揃える）。
  *
- * **export している。**（issue #972）`tools.ts` の `inbox_remove_many` が
- * 「渡された `types` が全7種を覆っているか」（＝絞り込みが無いのと同じ呼び）
- * を判定するのに、この配列の**全件数**を基準にする——`commitment_close_many`
- * が `commitmentOriginSchema.options` を同じ目的で使うのと同じ形。数を
- * ここに書き写すと足したときに腐るので、`.length` を直接見る側へ倒す。
+ * **export している。**（issue #972）`apps/daemon/src/app.ts` の
+ * `POST /inbox/remove` が「渡された `types` が全7種を覆っているか」
+ * （＝絞り込みが無いのと同じ呼び）を判定するのに、この配列の**全件数**を
+ * 基準にする——`commitment_close_many` が `commitmentOriginSchema.options`
+ * を同じ目的で使うのと同じ形。数をここに書き写すと足したときに腐るので、
+ * `.length` を直接見る側へ倒す。
  */
 export const INBOX_EVENT_TYPE_ORDER = [
   'human_message',
@@ -364,13 +372,14 @@ export const INBOX_EVENT_TYPE_ORDER = [
 ] as const satisfies readonly InboxEvent['type'][];
 
 /**
- * `inbox_remove_many`（issue #972）が受け取る絞り込み。
+ * `POST /inbox/remove`（issue #972。`apps/daemon/src/app.ts`）が受け取る絞り込み。
  *
  * **種類は必須で空にできない。** `commitment_close_many` の `origin` と同じ
  * 理由——「絞り込みを何も渡さない」呼びを型で作れなくする。`types` が
- * {@link INBOX_EVENT_TYPE_ORDER} の全件を覆う呼びは、`tools.ts` 側で
- * 「絞り込みが無いのと同じ」として断る（ここでは断らない——このファイルは
- * 純粋な述語だけを持ち、拒否のような対話的な判断は道具層に置く）。
+ * {@link INBOX_EVENT_TYPE_ORDER} の全件を覆う呼びは、呼び出し側（いまは
+ * `app.ts` のハンドラだけ）で「絞り込みが無いのと同じ」として断る（ここでは
+ * 断らない——このファイルは純粋な述語だけを持ち、拒否のような対話的な判断は
+ * 呼び出し側に置く）。
  *
  * `sources` / `before` は任意で、渡せばさらに絞る（AND）。
  */

@@ -1448,10 +1448,17 @@ export const archiveRemovedResponseSchema = z.object({
 // ---------------------------------------------------------------------------
 
 /**
- * `POST /inbox/remove` の入力。クローンの道具 `inbox_remove_many`
- * （`packages/core/src/tools.ts`）と同じ絞り込み（種類・送信元・齢）・同じ
- * 既定（`dryRun` を省略すると試算）を、人間の入口からも叩けるようにする
- * （issue #972 提案4「人間の入口から叩けること」）。
+ * `POST /inbox/remove` の入力（issue #972 提案4「人間の入口から叩けること」）。
+ * 絞り込み（種類・送信元・齢）・既定（`dryRun` を省略すると試算）は
+ * `commitment_close_many`（#844）を参照モデルにした。
+ *
+ * ⚠️ **クローン自身の道具（`inbox_remove_many`）はまだ無い。** #972 本文が
+ * 「クローン自身の道具にするかは別途の判断」と保留していたところへ依頼の
+ * ブリーフが誤って必須スコープに書いてしまったため、いったん取り下げた
+ * ——人間起点の合図（`human_message` / `human_answer`）を選べない形にする案を
+ * 別 PR（draft・`[保留]`）で提案中。この HTTP の口は `types` に7種類のどれも
+ * 制限なく渡せる（人間が直接操作する入口なので、自分自身の発言を巻き込む
+ * ことの是非は道具の場合と条件が異なる）。
  *
  * **`types` は必須で空にできない。** ハンドラ側（`app.ts`）で「在る7種類を
  * 全部並べた呼びは断る」を判定する——ここでは判定しない（`z.array` に
@@ -1468,10 +1475,9 @@ export const inboxRemoveManyRequestSchema = z.object({
 });
 
 /**
- * `POST /inbox/remove` の応答。**`removedIds` は打ち切らない**
- * （クローンの道具側は文脈窓のために先頭20件で切るが、JSON の応答は人間・
- * スクリプトが読むものでその制約が無い——`inbox_remove_many` の
- * `REMOVE_MANY_IDS_SHOWN` の doc と対になる判断）。
+ * `POST /inbox/remove` の応答。**`removedIds` は打ち切らない**——JSON の
+ * 応答は人間・スクリプトが読むもので、クローンの道具の文脈窓のような制約が
+ * 無い。
  */
 export const inboxRemoveManyResponseSchema = z.object({
   ok: z.literal(true),

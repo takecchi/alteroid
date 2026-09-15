@@ -4407,19 +4407,25 @@ export function createApp(deps: AppDeps) {
     // issue #972: 同じ失敗の写しが数千件積もると、クローン側は `remove()` の
     // 1ターン1件のペースでしか排出できず、排出そのものが文脈窓を食い潰す。
     // 唯一の既存手段は `POST /reset`（記憶ごと全部消す）で、それでは使えない
-    // （#972 本文）。ここはクローンの道具 `inbox_remove_many`
-    // （`packages/core/src/tools.ts`）と**同じ絞り込みの判定**
-    // （`matchesInboxRemoveManyFilter`。SQL 側にも道具側にも判定を複製しない
-    // ——`inboxBacklogDedupeKey` の doc「なぜ1箇所に閉じるか」と同じ理由）を
-    // 人間の入口からも叩けるようにする（#972 提案4）。
+    // （#972 本文）。ここは人間の入口として、絞り込みでまとめて消す口を持つ
+    // （#972 提案4）。絞り込みの判定（`matchesInboxRemoveManyFilter`）は
+    // SQL 側に複製しない——`inboxBacklogDedupeKey` の doc「なぜ1箇所に閉じる
+    // か」と同じ理由。
+    //
+    // ⚠️ **クローン自身の道具（`inbox_remove_many`）はまだ無い。** #972 本文が
+    // 「クローン自身の道具にするかは別途の判断（自分の受信箱を自分で捨てられ
+    // ることの是非があるため、まずは人間の手で足りる）」と保留していたところへ
+    // 依頼のブリーフが誤って必須スコープに書いてしまい、いったん取り下げた。
+    // 人間起点の合図（`human_message` / `human_answer`）を選べない形にする案を
+    // 別 PR（draft・`[保留]`）で提案中——ここへ道具を足す実装者は、その PR の
+    // 判断（takecchi）を待つこと。
 
     /**
      * 人間が、受信箱の未読を絞り込んでまとめて消す。
      *
-     * **クローンの道具 `inbox_remove_many` の人間版。** 既定・絞り込みの
-     * 軸・「全部消すを1回で撃てる形は作らない」制約まで同じにしてある——
-     * 片方だけ緩いと、緩い側からなら事故で全部消せてしまう
-     * （north_star 禁止1「能力の追加制限」の逆——ここは強さを揃える側）。
+     * **`commitment_close_many`（#844）と同じ設計を踏襲する。** 既定・絞り
+     * 込みの軸・「全部消すを1回で撃てる形は作らない」制約——事故で受信箱を
+     * 1回で空にできる形を作らない。
      *
      * **資格は `authenticate` だけ（`requireOperator` は付けない）。**
      * `POST /commitments/:id/close` `DELETE /archive/:id` と同じ強さ——
@@ -4433,7 +4439,7 @@ export function createApp(deps: AppDeps) {
         tags: ['inbox'],
         summary: '受信箱の未読を、絞り込みを渡してまとめて畳む（消す）',
         description:
-          'クローンの `inbox_remove_many` と同じものを人間の手から（issue #972）。' +
+          '人間の入口から、受信箱の未読を絞り込んでまとめて消す（issue #972）。' +
           '同じ失敗の写しが数千件積もると、クローン側は1ターン1件のペースでしか' +
           '排出できず、排出それ自体が文脈窓を食い潰す——人間はこの口から直接' +
           'まとめて消せる。**既定は試算（`dryRun` を省略すると true）で、1件も' +
@@ -4461,7 +4467,7 @@ export function createApp(deps: AppDeps) {
       async (c) => {
         const { types, sources, before, reason, dryRun, limit } = c.req.valid('json');
 
-        // 🔴 絞り込みの無い呼びを断る（`inbox_remove_many` と同じ判定・同じ理由）。
+        // 🔴 絞り込みの無い呼びを断る（`commitment_close_many` と同じ判定・同じ理由）。
         if (INBOX_EVENT_TYPE_ORDER.every((known) => types.includes(known))) {
           return c.json(
             {
@@ -4522,7 +4528,7 @@ export function createApp(deps: AppDeps) {
         }
 
         // 塊ごとに「消す → その塊の id を日誌へ書く」を交互に回す
-        // （`inbox_remove_many` / `commitment_close_many` と同じ理由——
+        // （`commitment_close_many` と同じ理由——
         // まとめて消してから日誌を書くと、その間にデーモンが落ちたとき
         // 「消えたのに記録が無い行」が最大 `REMOVE_MANY_LIMIT_DEFAULT` 件できる）。
         const chunks = chunkIdsByChars(
