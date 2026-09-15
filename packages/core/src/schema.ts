@@ -2734,6 +2734,32 @@ export const jobSchema = z.object({
    * 回では消える」のと同じ理由。下ろす条件は `case 'report'` 側の doc）。
    */
   lastSystemError: systemErrorFactsSchema.extend({ at: isoDateTime }).optional(),
+  /**
+   * この委譲が**枠（利用上限）で止まった**印が立った時刻（Issue #914 段2）。
+   *
+   * `manager.ts` の `case 'usage_notice'`（`event.notice.kind === 'reached'`）が
+   * 立て、{@link Pool.resumeStoppedByUsage}（の `#clearUsageStoppedMark`
+   * ヘルパー経由）が消費して下ろす——**プロセス内の `#usageStopped`（`Set`）の
+   * 永続化された側**である。
+   *
+   * ## なぜ台帳にも要るか
+   *
+   * `#usageStopped` は `Set<string>` なのでデーモンが作り直されると消える。
+   * 消えて困るのは「起こし直す相手を1本忘れる」ことだが、**この欄が無かった
+   * 頃**は、デーモンが入れ替わった時点で台帳が `done` / `failed` / `lost` の
+   * 委譲は誰にも起こされないまま座り続けた（起動時の引き取り `#restoreJobs`
+   * は `running` / `waiting_human` だけを続きへ戻すので、既に終端している
+   * 委譲はそもそも対象に入らない）。この欄が `#restoreJobs` の写しとして
+   * 生き残ることで、次の起動でも `#usageStopped` を組み直せる。
+   *
+   * ## `undefined` の意味は2つある
+   *
+   * この仕組みより前に作られたジョブ（保存は Job 丸ごとの JSON なので移行は
+   * 要らないが、古い行にこの欄は無い）と、単に止まっていないジョブの両方が
+   * `undefined` になる。**見分ける必要は無い**——どちらも「起こし直す対象では
+   * ない」という同じ結論になるためである。
+   */
+  usageStoppedAt: isoDateTime.optional(),
 });
 
 export type Job = z.infer<typeof jobSchema>;
