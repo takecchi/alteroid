@@ -1,0 +1,125 @@
+{
+  // Renovate の設定（Issue #880）。依存の定期更新をここで一本化する。
+  //
+  // 入れ方は Mend Renovate GitHub App（ホスト型）である。セルフホスト
+  // （renovatebot/github-action）を採らなかったのは、あちらが PR 作成用の
+  // トークンを要求し、`GITHUB_TOKEN` で作った PR には `pull_request` の CI が
+  // 付かないという既知の制約を抱えるからである —— それは #867 で
+  // `update-claude-sdk.yml` が現に踏んでいる穴と同じものであり、塞ぐ前に口を
+  // 増やすことになる。App が作る PR は `renovate[bot]` という別のアクターなので
+  // この制約の対象ではない。
+  //
+  // ⚠ この設定ファイルだけでは Renovate は動かない。App のインストールは
+  // リポジトリのオーナーの手が要る（https://github.com/apps/renovate）。
+  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
+
+  extends: [
+    'config:recommended',
+    // 規約は `<type>: <description>` の1行だけである。既定のままだと
+    // `chore(deps): ...` のように scope が付くので外す。
+    ':semanticCommitScopeDisabled',
+    // 既定（config:recommended の :semanticPrefixFixDepsChoreOthers）は本番
+    // 依存の更新に `fix:` を使うが、何も直していないものを `fix:` と呼ぶのは
+    // 履歴として嘘になるので、全部 `chore:` に寄せる。
+    ':semanticCommitTypeAll(chore)',
+  ],
+
+  timezone: 'Asia/Tokyo',
+  // 週1・JST の土曜未明。PR が増えることは #880 の唯一の判断軸だったので、
+  // 頻度をここで絞る。
+  schedule: ['before 6am on saturday'],
+
+  // 自動マージしない。CI が緑でも、マージするかは人間かクローンが決める。
+  automerge: false,
+  dependencyDashboard: true,
+  prConcurrentLimit: 5,
+
+  // pnpm 既定の `minimumReleaseAge: 1440`（24時間）より長く取る。
+  // Renovate は lockfile を非 frozen の解決で作るので、公開直後の版を
+  // 持ってくると pnpm が `pnpm-workspace.yaml` の `minimumReleaseAgeExclude` へ
+  // 勝手に追記して続行する（PR #999 の実測）。そうなると意図しない差分が
+  // PR に混ざる。Renovate 側で 24 時間より手前の版を提案させなければ起きない。
+  minimumReleaseAge: '3 days',
+
+  // 脆弱性由来の更新は待たせない（上の schedule と minimumReleaseAge の外に置く）。
+  vulnerabilityAlerts: {
+    enabled: true,
+    minimumReleaseAge: null,
+    schedule: ['at any time'],
+  },
+
+  packageRules: [
+    // 後の規則が前を上書きする。だから「まとめる」を先に、「止める」を後に置く。
+
+    // major 以外は1本の PR にまとめる。
+    //
+    // dev と本番で分けていないのは、このリポジトリが依存のほぼ全部を
+    // `pnpm-workspace.yaml` の `catalog:` に集約しているからである。catalog の
+    // depType は `pnpm.catalog.<name>` になり、`devDependencies` では当たらない
+    // ので、dev/本番で切る線がそもそも引けない。
+    {
+      matchUpdateTypes: ['minor', 'patch', 'pin', 'digest'],
+      groupName: 'non-major dependencies',
+    },
+
+    // ワークフローの actions は別に1本。
+    {
+      matchManagers: ['github-actions'],
+      groupName: 'github actions',
+    },
+
+    // Node は `mise.toml` / `Dockerfile` の `FROM node:` / `package.json` の
+    // `engines.node` に散っているので、1本の PR へ束ねる。
+    {
+      matchDepNames: ['node'],
+      groupName: 'node',
+    },
+
+    // pnpm は `mise.toml` と `package.json` の `packageManager` の2箇所に在り、
+    // 片方だけ動くと corepack と mise が食い違う。必ず束ねる。
+    {
+      matchDepNames: ['pnpm'],
+      groupName: 'pnpm',
+    },
+
+    // --- ここから下は「止める」規則 ---
+
+    // Node の major は手で上げる。`mise.toml` 冒頭の注記のとおり、major を
+    // 動かすときは `package.json` の `engines.node` / `packageManager`、
+    // `Dockerfile` の `FROM node:`（2箇所）、catalog の `@types/node` を
+    // 一緒に見る必要があり、Renovate はこれを1つの PR で保証しない。
+    // さらに apps/web の本番（Vercel）の Node の版は管理画面側に在って
+    // repo から動かせない（Issue #791）。
+    {
+      matchDepNames: ['node'],
+      matchUpdateTypes: ['major'],
+      enabled: false,
+    },
+
+    // `@types/node` は実行系（Node 22）に合わせてあるので major を追わない。
+    {
+      matchPackageNames: ['@types/node'],
+      matchUpdateTypes: ['major'],
+      enabled: false,
+    },
+
+    // TypeScript は 6 固定である（typescript-eslint が TS 7 のネイティブ
+    // コンパイラに未対応。逐語は `pnpm-workspace.yaml` の catalog の注記）。
+    {
+      matchPackageNames: ['typescript'],
+      matchUpdateTypes: ['major'],
+      enabled: false,
+    },
+
+    // Claude SDK（本体＋プラットフォーム別8パッケージ）は
+    // `.github/workflows/update-claude-sdk.yml` という専用の経路が既に在る。
+    // Renovate にも触らせると経路が二重になるので、こちらからは外す。
+    //
+    // `ignoreDeps` は完全一致しか受け付けない（glob 不可）ので、こちらで
+    // 正規表現で外す。
+    {
+      matchPackageNames: ['/^@anthropic-ai\\/claude-agent-sdk/'],
+      enabled: false,
+    },
+  ],
+}
