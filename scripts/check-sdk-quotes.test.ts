@@ -173,6 +173,35 @@ describe('check-sdk-quotes: findQuoteDefects', () => {
       1,
     );
   });
+
+  /**
+   * Issue #793: 素の部分文字列一致（`sdkTypesText.includes(q.quote)`）は、
+   * union の末尾に値が足された変更を検出できない —— 古い引用（末尾の値まで）は、
+   * 値が増えた新しい宣言行の**接頭辞**としてそのまま当たり続ける。
+   *
+   * 実測（Issue 本文、2026-09-10、SDK 0.3.267）: `SDKAssistantMessageError` が
+   * 11値 → 12値（`cloud_credential_error` が末尾に追加）になったとき、
+   * `context-window-failure.ts` の `[sdk-verbatim SDKAssistantMessageError]` の
+   * 引用は11値のまま（末尾に `;` を持たない形）だったが、`check:sdk-quotes` は
+   * 緑のままだった。**この盲点は「ドリフトが実際に起きる形」（union は値が
+   * ほぼ必ず末尾に追記される）とちょうど重なっている。**
+   *
+   * ⚠️ **このテストは現行の欠陥を仕様として固定したものである。** 直す前の
+   * `findQuoteDefects` はこの形を検出できないので、検出できないこと
+   * （`defects` が空になること）をそのまま通るテストとして書く。
+   * 直したら、このテストの期待値を反転させる（AGENTS.md「テストを弱めずに直す」―
+   * 「現行の欠陥を仕様として固定しているテストは反転させてよい」）。
+   */
+  it('⚠️ 現行の欠陥として固定する: union 末尾に値が足されても、末尾に「;」を持たない引用は検出できない（#793）', () => {
+    const quotes = quoteOf(
+      [`// [sdk-verbatim FakeUnion]`, `// > 'a' | 'b' | 'c'`].join('\n'),
+    );
+    // 実際の宣言は 'd' が末尾に足されて古くなっている（`FakeUnion` は
+    // `SDKAssistantMessageError` が11→12値になった実例を最小化した形）。
+    const newDeclaration = "export declare type FakeUnion = 'a' | 'b' | 'c' | 'd';";
+    // 直す前: 空（＝古い引用が「当たる」と誤判定される。これが盲点そのもの）。
+    expect(findQuoteDefects(quotes, newDeclaration)).toEqual([]);
+  });
 });
 
 describe('check-sdk-quotes: 引用行の探し方（空行を跨ぐ）', () => {
