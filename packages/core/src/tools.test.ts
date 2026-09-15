@@ -4884,7 +4884,15 @@ describe('クローンの道具', () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
 
-    const reply = await h.call('manager_stop', { managerId: 'mgr-1', reason: '暴走した' });
+    // **`force: true` はこの歯の主題ではなく、主題へ到達するための前提である**
+    // （#1037）。running を force 無しで止めようとすると `abort()` の手前で断ら
+    // れるので、abort の**先**（outcome ごとの言い分け）を測るここでは force で
+    // 素通りさせる。⚠️ 断りそのものを緩めたのではない——ガードは専用の歯が測る。
+    const reply = await h.call('manager_stop', {
+      managerId: 'mgr-1',
+      reason: '暴走した',
+      force: true,
+    });
 
     expect(h.aborted).toEqual([{ managerId: 'mgr-1', reason: '暴走した' }]);
     // **「受理した」で終わらせない。** 止めたあとの実際の状態を読み直して返す。
@@ -4932,7 +4940,15 @@ describe('クローンの道具', () => {
     await h.call('manager_start', { request: 'A' });
     h.setAbortOutcome('not_stopped');
 
-    const reply = await h.call('manager_stop', { managerId: 'mgr-1', reason: '暴走した' });
+    // **`force: true` はこの歯の主題ではなく、主題へ到達するための前提である**
+    // （#1037）。running を force 無しで止めようとすると `abort()` の手前で断ら
+    // れるので、abort の**先**（outcome ごとの言い分け）を測るここでは force で
+    // 素通りさせる。⚠️ 断りそのものを緩めたのではない——ガードは専用の歯が測る。
+    const reply = await h.call('manager_stop', {
+      managerId: 'mgr-1',
+      reason: '暴走した',
+      force: true,
+    });
 
     expect(
       withoutRunnerDetail(h, reply),
@@ -4951,7 +4967,15 @@ describe('クローンの道具', () => {
     await h.call('manager_start', { request: 'A' });
     h.setAbortOutcome('unknown');
 
-    const reply = await h.call('manager_stop', { managerId: 'mgr-1', reason: '暴走した' });
+    // **`force: true` はこの歯の主題ではなく、主題へ到達するための前提である**
+    // （#1037）。running を force 無しで止めようとすると `abort()` の手前で断ら
+    // れるので、abort の**先**（outcome ごとの言い分け）を測るここでは force で
+    // 素通りさせる。⚠️ 断りそのものを緩めたのではない——ガードは専用の歯が測る。
+    const reply = await h.call('manager_stop', {
+      managerId: 'mgr-1',
+      reason: '暴走した',
+      force: true,
+    });
 
     expect(
       withoutRunnerDetail(h, reply),
@@ -5037,6 +5061,36 @@ describe('クローンの道具', () => {
 
     expect(h.aborted).toEqual([{ managerId: 'mgr-1' }]);
     expect(reply).toContain('待機中（done）');
+  });
+
+  /**
+   * **`waiting_human` をガードに含めないのは意図した判断であって、書き忘れでは
+   * ない**——ハンドラのコメントがそう書いている（`waiting_human` はクローン自身
+   * への問いで止まっている状態で、その問いを立てたのはクローン自身だから、
+   * 待っていること自体は既に知っている）。
+   *
+   * **その判断がコメントにしか無いと、後から `waiting_human` をガードへ足しても
+   * 何も赤くならない。** 足した側は「`running` と同じ穴を塞いだ」つもりで、実際
+   * には「クローンが自分で立てた問いの返事待ちを、自分では畳めない」状態を作る
+   * ——`ask_human` を出したまま要らなくなった委譲が片付かなくなる。ここで固定
+   * するのは文言ではなく、**`abort()` がそのまま呼ばれること**である。
+   */
+  it('manager_stop は waiting_human なら force 無しでも止まる（ガードの対象は running だけ）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.status = 'waiting_human';
+
+    const reply = await h.call('manager_stop', {
+      managerId: 'mgr-1',
+      reason: '依頼が要らなくなった',
+    });
+
+    expect(h.aborted).toEqual([{ managerId: 'mgr-1', reason: '依頼が要らなくなった' }]);
+    expect(reply, 'running 用の断りが waiting_human まで巻き込んでいる').not.toContain(
+      '止めていない',
+    );
   });
 
   it('manager_list は状態と返事待ちを返す', async () => {
