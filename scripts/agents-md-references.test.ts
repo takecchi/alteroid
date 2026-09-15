@@ -886,11 +886,17 @@ describe('AGENTS.md の参照の形（#369）', () => {
     // 完全一致のみ）から `isRepoFileOrBasename`（裸のファイル名も解決する。
     // #760 が `.claude/**` 等の段Bで使っているものと同じ関数）へ差し替えた。
     // 直した理由と経緯は直下の「現状」テスト（いまは反転済み）にある。
-    const found = findLineNumberCitations(prose, isRepoFileOrBasename);
-    const skipped = new Set(AGENTS_MD_LINE_NUMBER_CITATION_EXEMPTIONS.map((e) => e.token));
-    const hits = found.filter((c) => !skipped.has(c.token));
+    //
+    // フィルタは自前で書かず、段Bが使っている `collectWidenedLineNumberCitations`
+    // （合成 fixture で skip の挙動を確認済み。#785）をそのまま再利用する——
+    // 出力の形（`file:line token`）もこの関数がそのまま作る。
+    const hits = collectWidenedLineNumberCitations(
+      [{ file: 'AGENTS.md', text: agentsMd }],
+      isRepoFileOrBasename,
+      AGENTS_MD_LINE_NUMBER_CITATION_EXEMPTIONS.map((e) => ({ file: 'AGENTS.md', token: e.token })),
+    );
     expect(
-      hits.map((c) => `AGENTS.md:${c.line} ${c.token}`),
+      hits,
       '行番号は腐り、腐ったことが読む側から分からない（開いた人には「そこに無い」としか見えず、' +
         "移動したのか消えたのかが区別できない）。逐語（`grep -Fn -- '<逐語>' <path>`）かシンボル名で指すこと。" +
         '直せない理由（出典ではなく証拠）があるなら AGENTS_MD_LINE_NUMBER_CITATION_EXEMPTIONS へ理由つきで足すこと。',
