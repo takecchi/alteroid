@@ -291,6 +291,17 @@ git -C <main のツリー> apply --check -R /tmp/tail.patch   # 通れば main �
 **並んでいるのは全部「失敗が成功として観測される」形のものである。** 落ちてくれる失敗は自分で気づくので、ここに書く価値が無い。
 
 - **パイプの終了コードは、既定で最後のコマンドのものである** — `tail` / `grep` / `jq` / `wc` は入力が空でも成功する。上流の結果が要るなら `PIPESTATUS` を見る
+- **⭐ `grep -c` の終了コードで検査を繋ぐと、両方向に壊れる（実測2件、2026-09-15、同じ日に向きだけ変えて2回踏んだ）。** `grep -c` は「該当なし」を **exit 1** で返す。**数えた件数と、数えられたかどうかは別のことである。**
+  - **1回目（fail-open。履歴に焼けた）**: マージ前の検査を `gh pr view <N> --json body | command grep -c -- '<語>' ; gh pr merge <N> --squash && …` と `;` で繋いだ。**`grep -c` は1件見つけて `1` を出力しながら exit 0 を返す**ので、`;` の後段のマージがそのまま走り、**PR 本文のトレーラが squash でコミットメッセージへ焼かれた**（`main` の `63a33dd`。Issue #1020）
+  - **2回目（fail-closed。止まった）**: 直したつもりで `HITS=$(… | command grep -c -- '<語>') && echo … && test "$HITS" -eq 0 && gh pr merge …` と打った。**0件だと `grep -c` は exit 1 を返し**、コマンド置換を受けた代入の終了コードも1になる**ので `&&` の連鎖がそこで切れ、マージも `echo` も走らなかった。** 全部 `&&` で繋いでいたので出力そのものが1行も出ず、**沈黙を「エラーが出ていない＝マージできた」と読みかけた**（`gh pr view --json state,mergeStateStatus` を引き直して `state=OPEN` を見て気づいた）
+  - **⟹ 正しい形（実際に使ってマージが通った）:**
+
+    ```sh
+    HITS=$(gh pr view <N> --json body --jq .body | { command grep -c -- '<語>' || true; })
+    if [ "$HITS" -eq 0 ]; then gh pr merge <N> --squash; else echo "REFUSED: $HITS"; fi
+    ```
+
+    **`|| true` で「0件」を正常終了へ直し、判定は `if` で明示する。**
 - **⚠️ `pnpm verify` は、ツリーが前回と同じなら何も測らずに exit 0 を返す** — `verify: skipped (tree unchanged since …)` と1行出して終わる（`scripts/verify.mjs` の `decideSkip`。指紋は `verify-core.mjs` の `fingerprint`）。⛔ **これは欠陥ではない**（意図した最適化で、逃げ道も `--force` として在る）。**壊れるのは、その上に乗せた*測り方*のほうである** — 「**2回走らせて `Test Files N` の一致を見る**」を素朴にやると、**1回目でツリーが確定するので2回目は測定にならない**（2回とも exit 0 だが、測ったのは1回だけ）。⟹ **反復で確かめるときだけ `pnpm verify --force -- --maxWorkers=4` を使い、2回目の `Test Files N` の行が実際に出たことを目で確かめること**（`skipped` の1行しか出ていないなら測っていない）。⚠️ **ただし `--force` を常用しないこと** — `verify.mjs` 自身が逐語で「**`--force` を毎回打つ人が出たら、それは指紋が信用されていない合図である**」と書いている。⟹ ⭐ **一般形: 「同じことを2回やって一致を見る」は、道具が2回目を省略する権利を持っているときには成立しない。**反復で確かめるなら、**2回目が実際に走ったことを別の出力で確かめる**（実測 2026-09-12、PR #887 の門で委譲先が踏んだ）
 - **⚠️ その前に — `grep` と打っても GNU grep が走るとは限らない。この器では走らない。** Claude Code が profile で `grep` という bash 関数を注入していて、実体は `claude` バイナリを `ARGV0=ugrep` で起こしたもの（`ugrep`、固定引数 `-G --ignore-files --hidden -I --exclude-dir=.git …`）である。`type -a grep` で見える。**本物の GNU grep は `command grep` で呼ぶ。** そして **node / dash / CI から呼ぶと GNU grep に戻る**（bash の profile を通らないため）。⟹ **同じ `grep …` が、打つ主体で別の道具になる** — Bash で打つ AI（ugrep）／歯や CI が spawn したもの（GNU grep）／人間の端末（**未確認**）の3つに分かれる。**正規表現の方言も既定のオプションも違うので、下の5つを読む前に「いま自分はどちらを打っているか」を決めること**（実測 2026-08-25 観測、`ugrep 7.8.4` / `GNU grep 3.8`）
 - **`grep` が静かに取りこぼす形は6つある。1と3と5と6は探し方を変えても見つからない（道具が見ていない／嘘をつく）。2と4は探し方を変えれば見つかる（見ているのに探し方の側で取りこぼす）。前者は道具の話、後者は注意の話である。⚠️ そして3と5と6は道具を替えれば見つかる — 直上の「どの grep か」の軸である**
@@ -463,6 +474,34 @@ git -C <main のツリー> apply --check -R /tmp/tail.patch   # 通れば main �
   - `gh pr ready` の後は**本物の run が作られたことを確かめる**。作られないなら `gh pr close` → `gh pr reopen` で起こす（**枝を1バイトも触らない**ので安全。空コミットでもよい）
 
   **⚠️ 待つループの書き方にも同じ根が出る。** 「すべての `check-runs` が `completed` になったら抜ける」というループは、**本物の run がまだ作られていない瞬間に即座に抜ける**（draft 由来の `skipped` は既に `completed` なので）。**「`skipped` 以外が必要な本数揃うまで」を条件にすること。**
+
+- **draft の run が `conclusion: success` を名乗るようになった —— draft でも走る門が1本増えたせいで、run 全体の結論が緑に見える。** `.github/workflows/ci.yml` の `no-attribution-trailers` ジョブは、`ci` / `image` / `base-overlap` と違って draft の間も skip しない（`if: github.event_name == 'pull_request'` のみで、他の3ジョブが持つ draft 判定を持たない）。⟹ **この1本が `success` を返すだけで、`ci` / `image` / `base-overlap` が全部 `skipped` のままでも run 全体の `conclusion` は `success` になる。** 実測（2026-09-15 観測、PR #1021 の draft 中の run `34970519704`。自分で取り直した）:
+
+  ```
+  $ gh api repos/takecchi/alteroid/actions/runs/34970519704 --jq '{conclusion, status}'
+  {"conclusion":"success","status":"completed"}
+  $ gh api repos/takecchi/alteroid/actions/runs/34970519704/jobs --jq '.total_count, (.jobs[] | "\(.name) \(.conclusion) steps=\(.steps|length)")'
+  4
+  no-attribution-trailers success steps=6
+  base-overlap skipped steps=0
+  image skipped steps=0
+  ci skipped steps=0
+  ```
+
+  ⟹ **`run.conclusion == "success"` は、これまで以上に緑の根拠にならない。** 直上の「その run が実際にジョブを実行したか」（`total_count` が0でないこと）だけでは足りない——**今回は `total_count` が4で「実行した」を通過したあとにも化ける形**である。⛔ **ジョブの内訳（`actions/runs/<id>/jobs`）まで降り、必要な各ジョブ（`ci` / `image`）の `conclusion` を個別に見ること。**
+
+- **`gh api repos/…/rules/branches/<枝>` が `[]` を返しても「無保護」ではない。** あれは ruleset だけを見ており、classic branch protection（`branches/<枝>/protection`）は別口である。実測（2026-09-15 観測、自分で取り直した）:
+
+  ```
+  $ gh api repos/takecchi/alteroid/rules/branches/main
+  []
+  $ gh api repos/takecchi/alteroid/branches/main/protection --jq '.required_status_checks.contexts, .allow_force_pushes.enabled, .allow_deletions.enabled'
+  ["ci","image"]
+  false
+  false
+  ```
+
+  **⟹ `[]` は「無い」ではなく「この見方では見えない」。**⭐ **そして向きが危ない** —— 保護の話でこれを踏むと、**無保護だと誤認する側**へ倒れる（要らない歯止めを足す／人間へ誤った緊急度を上げる）。**classic（`branches/<枝>/protection`）と ruleset（`rulesets`）の両方を見ること。**
 
 - **差分クエリと総数クエリの2本で1つの根拠になる** — 差分は「窓が足りているか」を答えず、総数は「相殺」を見ない（新規1件とクローズ1件が相殺すると合計は動かない）
 - **`gh api --paginate --slurp` は `--jq` と併用できない**（`gh` がエラーで拒否する）
