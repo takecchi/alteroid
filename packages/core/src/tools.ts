@@ -3968,14 +3968,21 @@ export function createCloneTools(context: ToolContext) {
 
         // --- 一覧モード ---
         //
-        // ⚠️ **ここに `sort` を足す前に Issue #757 を読むこと。** この口は並べ直しを
-        // 1行も持たない ——「古い順」を作っているのはストアの実装であって、
-        // 実装ごとに違う（pg は `orderBy(asc(approvals.createdAt))`、fs と
+        // ⚠️ **#757 で直した。** 以前はここに `sort` が1行も無く、並びをストアの
+        // 実装へ丸投げしていた——「古い順」を作っているのがストアの実装で、
+        // 実装ごとに違っていた（pg は `orderBy(asc(approvals.createdAt))`、fs と
         // インメモリは挿入順）。**この一覧は予算で切って一部しか出さない**ので、
-        // 並びが変わると「切り落とされる側」が変わる。⟹ 並べ直しは挙動の変更で
-        // あり、同着（同じ createdAt）をどう扱うかまで決めないと全順序にならない
-        // （#757 に、起きたときどう壊れるかを書いてある）。
-        const pending = await stores.jobs.listApprovals({ pendingOnly: true });
+        // 並びが変わると「切り落とされる側」が構成によって変わる、という欠陥
+        // だった（#757 の「起きたときどう壊れるか」）。
+        // **ここで全順序にする** — `createdAt` 昇順、同着（同じ createdAt）は
+        // `id` 昇順。`usageAxisEntries`（下）の「費用降順 → ラベル昇順」と同じ
+        // 作法（全順序にして、ページングの前提を壊さない）。
+        // ⚠️ **ストア側の `orderBy`（`storage-pg/src/jobs.ts`）は消さないこと** —
+        // 消すと pg が大きな表を未整列のまま全件返してから、ここで並べることに
+        // なる（#757 の注記）。
+        const pending = [...(await stores.jobs.listApprovals({ pendingOnly: true }))].sort(
+          (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+        );
         if (pending.length === 0) return text('（人間の回答待ちは無い）');
         const items = pending.map((approval) =>
           renderListingEntry({
@@ -4003,18 +4010,17 @@ export function createCloneTools(context: ToolContext) {
             renderListing(items, {
               budget: APPROVAL_LIST_BUDGET,
               omitted: ({ rest, shown, total }) =>
-                // **#756 で精密化。** ここは「古い順に」と断言していたが、
-                // このハンドラは並べ直しを1行も持たない —— 並びを決めているのは
-                // ストアの実装である（pg は `orderBy(asc(approvals.createdAt))`、
-                // fs とインメモリは挿入順）。**並べ直しをここで足すのは別の変更
-                // なので、文言を実装が保証している通りへ寄せる。**
-                `…ほか ${rest} 件は省略（回答待ちは ${total} 件あり、先頭から ${shown} 件だけ出した）。`,
+                // **#756 で「並べ直していない」と精密化した文言を、#757 で
+                // 「並べ直す」実装に合わせてもう一段進めた。** 並びはもう
+                // ストアの実装依存ではなく、ここが作成が古い順（同着は id 昇順）
+                // に並べ直したものなので、断言してよい。
+                `…ほか ${rest} 件は省略（回答待ちは ${total} 件あり、作成が古い順に先頭から ${shown} 件だけ出した）。`,
             }),
             '（質問は抜粋。全文は approvals_list id=<id> で取れる。答えが付いた件・取り下げた件も id で開けて、回答/取り下げ理由もそこに出る）',
             '（更新＝この1件が最後に変わった時刻。回答待ちだけを出す一覧なので、常に作成と同じになる）',
-            // **並びを保証しているのはこの口ではない。** 並べ直しを1行も持たない
-            // ので、出る順は保存先が返した順である（#756）。
-            '（並び順はこの口では作っていない——保存先が返した順に出る。本番の台帳は作成時刻の昇順で返すが、同時刻どうしの順序は決まっていない）',
+            // **#757 で並びをこの口が保証する形にした。** 以前はここで
+            // 「並べ直しは1行も持たない」と申告していたが、いまは持つ。
+            '（並び順: 作成時刻の昇順。同じ作成時刻なら id の昇順で全順序にしてある。保存先の実装には依存しない）',
           ].join('\n'),
         );
       },
