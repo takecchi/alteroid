@@ -1488,20 +1488,16 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * `#967` でクローン層とマネージャー／ランナー層の共有スキーマへ
      * 括り出した）を見よ——二重に書かない。
      *
-     * ここに残すのは `turn_usage` という行の単位に特有の注意だけである。
-     *
-     * **観測は `#recordUsage`（クローン層）/ `case 'turn_ended'`
-     * （マネージャー／ランナー層）が、行を書く直前に1回だけ行う。**
-     *
-     * **⚠️ この行が無くても「増分ゼロだった」と読めるとは限らない。**
-     * 増分が空の回・`usage` が `undefined` の回（失敗したターン）は
-     * `turn_usage` の行自体を書かない（`models` の doc「行が無い理由は
-     * 3つある」）。**その回は観測を呼んでいても、結果は行ごと捨てる**
-     * —— 文脈占有を聞くこと自体は成功しても、増分が無ければ載せる場所
-     * （`turn_usage` の行）が無いためである。つまりこの行の有無だけでは
-     * 「その回は観測しなかった」のか「観測はしたが増分ゼロで行自体が
-     * 無い」のかを区別できない —— 区別が要るなら `exchange` 等の他の跡と
-     * 突き合わせること。
+     * **⚠️ Issue #976 以降、これはもう文脈占有の唯一の置き場ではない。**
+     * `turn_usage` の行は消費の増分がある回（＝ターンが成功し、`fold.delta`
+     * が非空の回）にしか書かれないため、ここへ相乗りさせている限り、
+     * 増分が無い回（失敗したターン・増分がゼロだった回）は文脈占有も
+     * ろとも落ちていた——それが #976 の欠陥である。**独立の
+     * `context_usage`（このファイルの下のほう）が、観測できた回すべてを
+     * 無条件に残す。** この欄は既存の読み手（`journal_read`・Web の日誌
+     * フィード）との互換のため、「成功して増分もあった回」に限り従来どおり
+     * 書き続ける——2つの型のうち `context_usage` のほうが完全な記録で、
+     * こちらはその部分集合（重複あり）だと考えてよい。
      */
     contextUsage: contextUsageObservationSchema.optional(),
     /**
@@ -1588,6 +1584,61 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
       })
       .optional(),
   }),
+  /**
+   * ターンの境界で聞いた文脈窓の占有を、**消費（`turn_usage`）とは独立に**
+   * 必ず残す記録（Issue #976）。
+   *
+   * ## なぜ `turn_usage` に相乗りさせないか
+   *
+   * `turn_usage` の行は消費の増分が実際にある回にしか書かれない
+   * （上の `models` の doc「行が無い理由は3つある」）。文脈占有は消費とは
+   * 別の観測軸なので、消費の行に相乗りしている限り、消費が無い回
+   * （ターンが失敗して終わった回・増分がゼロだった回）で文脈占有もろとも
+   * 落ちる——それが #976 の欠陥そのものである。
+   *
+   * ## いつ書くか
+   *
+   * `#observeContextUsage()` が値を返した回（`error` 付きの「試して失敗
+   * した」を含む）は、**ターンの成否にも消費の増分の有無にも関係なく必ず
+   * 書く。** 書かないのは観測そのものが `undefined`（`Query` が既に無かった
+   * 等）の回だけである（`contextUsageObservationSchema` の doc の3値と
+   * 同じ区別）。
+   *
+   * ## 既存の `turn_usage.contextUsage` との関係
+   *
+   * **この型は `turn_usage.contextUsage` を置き換えない。追加である。**
+   * ターンが成功して増分もあった回（＝ `turn_usage` の行が書かれる回）は、
+   * 引き続き `turn_usage.contextUsage` にも同じ値が載る——既存の読み手
+   * （`journal_read`・Web の日誌フィード）を壊さないため。**この型が
+   * 実際に増やすのは、そこから漏れていた2つの回**（ターンが失敗した回・
+   * 増分がゼロだった回）だけである。1ターンで両方の行が書かれることは
+   * あるが（成功して増分もあった回）、それは意図した重複であって欠陥では
+   * ない——`turn_usage` 側は「消費と一緒に見たいとき」、この型は
+   * 「文脈占有だけを取りこぼしなく辿りたいとき」に使う。
+   */
+  z.object({
+    type: z.literal('context_usage'),
+    id: z.string(),
+    at: isoDateTime,
+    /** どの層か。`turn_usage` と同じ語を使う（`usage.ts` の `usageLayerSchema`）。 */
+    layer: usageLayerSchema,
+    /** どの `query()` 呼び出しか。`turn_usage.site` と同じ軸。 */
+    site: usageSiteSchema,
+    /** 誰の分か（マネージャーの id か `CLONE_ACTOR_ID`）。台帳・`turn_usage` と同じ値。 */
+    managerId: z.string(),
+    /** SDK のセッション id（取れたときだけ）。生ログへ降りる鍵。 */
+    sessionId: z.string().optional(),
+    /**
+     * そのターンが成功したか（`usage.ts` の `isSuccessResult`）。
+     *
+     * **`false` の行こそがこの型の存在理由である。** #976 が直すまで、
+     * 失敗したターンの文脈占有はどこにも残らなかった——#931 が必要として
+     * いるのは、まさにこの `false` の行である。
+     */
+    turnSucceeded: z.boolean(),
+    /** 形と各欄の doc は {@link contextUsageObservationSchema} を見よ。二重に書かない。 */
+    contextUsage: contextUsageObservationSchema,
+  }),
 ]);
 
 export type JournalEntry = z.infer<typeof journalEntrySchema>;
@@ -1634,6 +1685,7 @@ const journalEntryTypeNames = {
   turn_usage: true,
   token_rotation: true,
   subagent_stall: true,
+  context_usage: true,
 } satisfies Record<JournalEntryType, true>;
 
 export const JOURNAL_ENTRY_TYPES = Object.keys(journalEntryTypeNames) as [

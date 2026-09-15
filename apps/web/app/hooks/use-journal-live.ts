@@ -189,6 +189,11 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
     // 取り直す必要はない。
     case 'turn_usage':
       break;
+    // **`turn_usage` と同じ理由で落とす先が無い（Issue #976）。** 文脈占有は
+    // 消費の増分（`turn_usage`）とは独立の観測なので別の型として届くが、
+    // 落とすべき画面・SWR キーが無いのは `turn_usage` と同じである。
+    case 'context_usage':
+      break;
     // **プールの状態（`GET /tokens`）を取り直す。** `/tokens` 画面
     // （`routes/tokens.tsx`）が現役の指名・冷却・失効をそのまま出しているので、
     // 回った直後に開いたままの画面を放置すると「前のトークンを現役として

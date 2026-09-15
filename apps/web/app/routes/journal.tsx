@@ -33,6 +33,9 @@ const TONE: Record<JournalEntryType, 'neutral' | 'ok' | 'warn' | 'danger' | 'acc
   external_event: 'warn',
   worker_wait: 'neutral',
   turn_usage: 'neutral',
+  // `turn_usage` と同じ理由——失敗したターンの観測も含むが、それ自体は
+  // 「その場で壊れて動いていない」ことを表す種別ではない（Issue #976）。
+  context_usage: 'neutral',
   // **`warn` にしてある。** この種別が出るのは枠に当たったときで、`rotated` でも
   // 「撒いた（走行中には届いていない）」までしか意味しない。`neutral` にすると
   // `exhausted`（全層が止まる）が普通の行と同じ色で並ぶ。**色は種別ごとに1つしか

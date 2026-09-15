@@ -7976,6 +7976,26 @@ type ContextUsageRow = NonNullable<Extract<JournalEntry, { type: 'turn_usage' }>
  * プロンプト` の側に入る。** ここでは SDK の語をそのまま使わず、取り違えない
  * 語で出す。
  */
+/**
+ * `contextUsage` の1件を「\n文脈: …」の1行に畳む（先頭に改行を含む。
+ * 無ければ空文字）。`turn_usage`（欄が `.optional()`）と `context_usage`
+ * （欄が必須）の両方の `renderJournalEntry` から呼ぶ共通部分——**書き方を
+ * 2箇所で複製しない**（#976 で `context_usage` を足すときに揃えた）。
+ */
+function describeContextLine(context: ContextUsageRow | undefined): string {
+  if (context === undefined) return '';
+  if (context.error !== undefined) return `\n文脈: 測れなかった（${context.error}）。`;
+  return (
+    `\n文脈: ${context.totalTokens?.toLocaleString('en-US') ?? '不明'} トークン` +
+    (context.rawMaxTokens === undefined
+      ? ''
+      : ` / ${context.rawMaxTokens.toLocaleString('en-US')}`) +
+    (context.percentage === undefined ? '' : `（${context.percentage}%）`) +
+    '。' +
+    describeContextBreakdown(context)
+  );
+}
+
 function describeContextBreakdown(context: ContextUsageRow): string {
   const parts: string[] = [];
   if (context.systemPromptTokens !== undefined) {
@@ -8137,19 +8157,13 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
       // PostgreSQL へ直接 SQL を投げるしかなかった。**
       //
       // **取れているのに読めない、は「取れていない」と同じである。**
+      //
+      // **⚠️ Issue #976 以降、これは唯一の経路ではない。** 独立した
+      // `context_usage`（下のケース）が、失敗したターン・増分がゼロだった
+      // ターンも含めて必ず残す——この欄は「成功して増分もあった回」に限り
+      // 従来どおり載る（既存の読み手との互換のため）。
       const context = entry.contextUsage;
-      const contextLine =
-        context === undefined
-          ? ''
-          : context.error !== undefined
-            ? `\n文脈: 測れなかった（${context.error}）。`
-            : `\n文脈: ${context.totalTokens?.toLocaleString('en-US') ?? '不明'} トークン` +
-              (context.rawMaxTokens === undefined
-                ? ''
-                : ` / ${context.rawMaxTokens.toLocaleString('en-US')}`) +
-              (context.percentage === undefined ? '' : `（${context.percentage}%）`) +
-              '。' +
-              describeContextBreakdown(context);
+      const contextLine = describeContextLine(context);
       const compactionLine =
         entry.compactions === undefined || entry.compactions.length === 0
           ? ''
@@ -8167,6 +8181,19 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
           (entry.reset === undefined ? '' : ' ⚠reset') +
           (context?.percentage === undefined ? '' : ` 文脈 ${context.percentage}%`),
         body: `${modelLines}${resetLine}${contextLine}${compactionLine}`,
+      };
+    }
+    case 'context_usage': {
+      // **消費（`turn_usage`）とは独立の行（Issue #976）。** 失敗したターン
+      // （`turnSucceeded: false`）こそがこの型の存在理由——#976 より前は
+      // どこにも残らなかった値である。
+      const context = entry.contextUsage;
+      return {
+        head:
+          `[context_usage ${entry.layer}/${entry.site} ${entry.managerId} ` +
+          `${entry.turnSucceeded ? '成功' : '失敗'}]` +
+          (context.percentage === undefined ? '' : ` 文脈 ${context.percentage}%`),
+        body: describeContextLine(context).replace(/^\n/, ''),
       };
     }
     case 'token_rotation': {

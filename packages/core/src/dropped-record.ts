@@ -969,6 +969,19 @@ export function journalEntryShape(entry: JournalEntryInput): string {
         ` wakeupCount=${entry.wakeupCount} outcome=${tag(entry.outcome)}` +
         ` ${size(entry.text)}`
       );
+    // `layer`/`site`/`managerId`/`sessionId` は `turn_usage` と同じ判定基準。
+    // `turnSucceeded` は runner 自身が決める真偽値なのでそのまま載せる。
+    // **`contextUsage`（構造化された欄）は載せない**——`turn_usage.contextUsage`
+    // と同じ判断（PR #709 が別判断へ回した欄。このファイル冒頭の
+    // `journalEntryShape` の doc の「唯一の例外」と同じ理由ではなく、単に
+    // この関数がまだ入れ子の中まで踏み込む形を持っていない）。
+    case 'context_usage':
+      return (
+        `context_usage layer=${tag(entry.layer)} site=${tag(entry.site)} ` +
+        `managerId=${tag(entry.managerId)}` +
+        (entry.sessionId === undefined ? '' : ` sessionId=${tag(entry.sessionId)}`) +
+        ` turnSucceeded=${entry.turnSucceeded}`
+      );
   }
 }
 

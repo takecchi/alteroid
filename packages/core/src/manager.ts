@@ -7200,6 +7200,12 @@ class Pool implements ManagerPool {
         // ある。**増分が空の回は上と同じ理由で行自体を書かないので、
         // その回に観測できていても一緒に捨てる**（`runner-protocol.ts` の
         // `usage` イベントの `contextUsage` の doc と同じ非対称）。
+        //
+        // **⚠️ Issue #976 以降、この非対称は「唯一の欠陥」ではなくなった。**
+        // `runner.ts` が独立の `context_usage` イベントも emit するので
+        // （下の `case 'context_usage'`）、失敗した回・増分が空の回の
+        // 文脈占有はそちらへ残る。ここは「成功して増分もあった回」に
+        // 限られる旧来の経路として維持する（既存の読み手の互換のため）。
         if (Object.keys(fold.delta).length > 0) {
           await this.#journal({
             type: 'turn_usage',
@@ -7231,6 +7237,25 @@ class Pool implements ManagerPool {
               'resume か /clear で SDK 側の累積が 0 から始まったため。記録済みの分は保持している。',
           });
         }
+        return;
+      }
+
+      case 'context_usage': {
+        // **消費の行（`turn_usage`）とは独立に、観測できたら必ず書く**
+        // （Issue #976）。`turn_usage` は増分が無い回・ターンが失敗した回に
+        // 行そのものを書かない（上の `case 'usage'` の「取れない軸に0の行を
+        // 作らない」）ので、文脈占有だけを別の行として残す——ここが消費の
+        // 有無・ターンの成否に関わらず必ず書かれる唯一の場所である
+        // （`schema.ts` の `context_usage` の doc）。
+        await this.#journal({
+          type: 'context_usage',
+          layer: 'manager',
+          site: 'session',
+          managerId: event.managerId,
+          ...(event.sessionId === undefined ? {} : { sessionId: event.sessionId }),
+          turnSucceeded: event.turnSucceeded,
+          contextUsage: event.contextUsage,
+        });
         return;
       }
 

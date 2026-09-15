@@ -1242,17 +1242,43 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * `schema.ts` の `contextUsageObservationSchema` を1箇所で共有する。
      * #967。
      *
+     * **⚠️ Issue #976 以降、これは文脈占有の唯一の経路ではない。** `usage`
+     * イベント自体が `event.succeeded` の内側でしか emit されないため
+     * （この直後の doc）、ここへ相乗りさせている限り失敗したターンの
+     * 文脈占有はどこにも残らなかった——それが #976 の欠陥である。**独立の
+     * `context_usage` イベント（このファイルの下のほう）が、観測できた
+     * 回すべてを無条件に送る。** この欄は既存の読み手（`manager.ts` の
+     * `turn_usage.contextUsage`）との互換のため、「成功して増分もあった
+     * 回」に限り従来どおり送り続ける。
+     *
      * **この欄が付くのは `case 'turn_ended'` から emit される回だけである。**
      * `#flushUsage`（セッションを畳む直前の best-effort な読み取り）は
      * ターンの境界ではないので付けない——`clone.ts` の
      * `#flushSessionUsage` が `turnBoundary` を渡さないのと同じ理由
      * （あちらの doc に理由の全文がある）。
-     *
-     * **`.optional()` にしてあるのは、この欄を送らない古い runner を
-     * 1つも壊さないため。** 受け取る側（`manager.ts` の `case 'usage'`）は
-     * 無ければ何も書かない。
      */
     contextUsage: contextUsageObservationSchema.optional(),
+  }),
+  /**
+   * ターンの境界で聞いた文脈窓の占有を、**消費（`usage`）とは独立に**必ず
+   * emit する（Issue #976）。
+   *
+   * **`usage` と違い、`event.succeeded` の外（`case 'turn_ended'` の
+   * 先頭）から無条件に emit される。** `#observeContextUsage()` が値を
+   * 返した回（`error` 付きの「試して失敗した」を含む）だけを送る——
+   * 観測そのものが `undefined`（`Query` が既に無かった等）の回は送らない。
+   *
+   * 受け取る側（`manager.ts` の `case 'context_usage'`）は消費の増分の
+   * 有無に関わらず、観測できたら必ず `context_usage` として日誌へ書く
+   * （`schema.ts` の同名の型の doc）。
+   */
+  z.object({
+    type: z.literal('context_usage'),
+    managerId: z.string(),
+    sessionId: z.string().optional(),
+    /** そのターンが成功したか（`usage.ts` の `isSuccessResult`）。`false` の行こそが #976 の狙いである。 */
+    turnSucceeded: z.boolean(),
+    contextUsage: contextUsageObservationSchema,
   }),
   /**
    * 上限に関する SDK の文言（当たった / 課金枠へ移った / 近づいている / 組織方針）。

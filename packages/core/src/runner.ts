@@ -2496,6 +2496,25 @@ class RunnerSession {
         // （#931 が実測した5連続 429 の側）の文脈占有が測れなくなる。
         const contextUsage = await this.#observeContextUsage();
 
+        // **測った値を、成否分岐の外で無条件に emit する（Issue #976）。**
+        // 下の `usage` イベント（`event.succeeded` の内側でしか emit
+        // されない）に相乗りさせる経路は残したままだが、それだけでは
+        // 失敗したターンの文脈占有はどこにも残らない——上のコメントが
+        // 「測る位置」で防ごうとした事態が、出口側の関門でそのまま起きて
+        // いた。**`event.succeeded` を見る前に、観測できた値をここで
+        // 独立にも送る**——`turn_usage`（消費の増分）とは別の行として
+        // 日誌へ残る（`manager.ts` の `case 'context_usage'`、`schema.ts`
+        // の `context_usage` の doc）。
+        if (contextUsage !== undefined) {
+          this.#emit({
+            type: 'context_usage',
+            managerId: this.#id,
+            sessionId: this.#sessionId,
+            turnSucceeded: event.succeeded,
+            contextUsage,
+          });
+        }
+
         // ターンの区切りで必ず畳む。持ち越すと、前のターンの本文が次の報告に
         // 混ざって「言っていないことを言った」ことになる。
         const said = this.#said;
@@ -2592,6 +2611,13 @@ class RunnerSession {
               // 「observe できなかった」だけでなく「`this.#query` が既に
               // 無かった」も含む——`contextUsageObservationSchema` の doc の
               // 3値の使い分けと同じ。
+              //
+              // **⚠️ Issue #976 以降、ここは唯一の経路ではない。** 上で
+              // `context_usage` イベントとして独立にも送ってある——こちらは
+              // 「成功して増分もあった回」に限られる旧来の経路で、後方互換と
+              // 既存の読み手（`manager.ts` の `turn_usage.contextUsage`）の
+              // ために残す。失敗した回・増分がゼロの回は `context_usage` の
+              // 側でしか観測できない（これが #976 の直した非対称そのもの）。
               ...(contextUsage === undefined ? {} : { contextUsage }),
             });
           }

@@ -1364,6 +1364,19 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       // agentId は z.string()（実行時の書式検査は無い）なので毒を運べる。
       text: { emit: 'size-unnamed', poisonableTagField: 'agentId' },
     },
+    context_usage: {
+      layer: { emit: 'tag', token: 'layer' },
+      site: { emit: 'tag', token: 'site' },
+      managerId: { emit: 'tag', token: 'managerId' },
+      sessionId: { emit: 'tag', token: 'sessionId' },
+      turnSucceeded: { emit: 'raw', token: 'turnSucceeded' },
+      // `turn_usage.contextUsage` と同じ判断（PR #709 が別判断へ回した、
+      // 構造化された欄）。この関数はまだ入れ子の中まで踏み込まない。
+      contextUsage: {
+        emit: 'never',
+        why: '`turn_usage.contextUsage` と同じ判断（PR #709 が別判断へ回した構造化された欄）。',
+      },
+    },
   } satisfies { [T in JournalEntryType]: Record<ShapedFieldsOf<T>, FieldPlan> };
 
   const SECRET = 'ghp_222222222222222222222222222222222222';
@@ -1494,6 +1507,15 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       wakeupCount: 1,
       outcome: 'woken',
       text: SECRET,
+    },
+    context_usage: {
+      type: 'context_usage',
+      layer: 'manager',
+      site: 'session',
+      managerId: 'mgr-1',
+      sessionId: 'sess-1',
+      turnSucceeded: false,
+      contextUsage: { durationMs: 100 },
     },
   };
 

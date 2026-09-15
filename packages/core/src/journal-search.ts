@@ -105,8 +105,14 @@ const SEARCHABLE_FIELDS_BY_TYPE = {
   external_event: ['summary'],
   /** 自由文の欄を持たない（本文は数から組み立てた文である）。 */
   worker_wait: [],
-  /** 同上。 */
+  /**
+   * 同上。**`contextUsage.error` は自由文だが、ネストした欄なのでここには
+   * 入れない**——この定数はトップレベルの素の文字列だけを想定している
+   * （直上 `tool_use` の doc「jsonb のテキスト化と `JSON.stringify` の不一致」）。
+   */
   turn_usage: [],
+  /** 同上（`context_usage.contextUsage.error` も同じ理由でネストしているため対象外）。 */
+  context_usage: [],
 } as const satisfies Record<JournalEntryType, readonly string[]>;
 
 /**

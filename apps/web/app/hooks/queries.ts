@@ -410,6 +410,23 @@ export function useDropped() {
   return useSWR(KEY.dropped, () => api.api.GET('/dropped').then(unwrap));
 }
 
+/**
+ * `contextUsage` から「 文脈 X%（Y トークン）」の断片を作る（先頭に半角
+ * スペースを含む。無ければ空文字）。`turn_usage`（欄が optional）と
+ * `context_usage`（欄が必須）の両方の `summarizeJournalEntry` から呼ぶ
+ * 共通部分——書き方を2箇所で複製しない（#976 で `context_usage` を
+ * 足すときに揃えた）。
+ */
+function contextUsageNote(
+  context: { percentage?: number; totalTokens?: number } | undefined,
+): string {
+  if (context === undefined || context.percentage === undefined) return '';
+  return (
+    ` 文脈 ${context.percentage}%` +
+    (context.totalTokens === undefined ? '' : `（${context.totalTokens} トークン）`)
+  );
+}
+
 /** 日誌エントリを人間が読む1行に潰す（一覧と通知で同じ文言を使うため）。 */
 export function summarizeJournalEntry(entry: JournalEntry): string {
   switch (entry.type) {
@@ -483,18 +500,11 @@ export function summarizeJournalEntry(entry: JournalEntry): string {
         0,
       );
       const cacheRead = models.reduce((sum, [, totals]) => sum + totals.cacheReadInputTokens, 0);
-      // **文脈の占有と compaction も1行に出す。** 日誌には在るのに、この画面も
-      // クローンの `journal_read` も出していなかった欄である（`schema.ts` の
-      // `turn_usage.contextUsage`）。「消費が増え続けている」の原因が
-      // 「毎ターンの文脈が育っている」なのかを、**この画面だけで見分けられる
-      // ようにする**——出さないでいると、答えるのに DB へ直接 SQL を投げる
-      // ことになる（2026-09-08 に実際にそうなった）。
-      const context = entry.contextUsage;
-      const contextNote =
-        context === undefined || context.percentage === undefined
-          ? ''
-          : ` 文脈 ${context.percentage}%` +
-            (context.totalTokens === undefined ? '' : `（${context.totalTokens} トークン）`);
+      // **⚠️ Issue #976 以降、これは唯一の経路ではない。** 独立した
+      // `context_usage`（下のケース）が、失敗したターン・増分がゼロだった
+      // ターンも含めて必ず残す——この欄は「成功して増分もあった回」に限り
+      // 従来どおり載る（既存の読み手との互換のため）。
+      const contextNote = contextUsageNote(entry.contextUsage);
       const compactionNote =
         entry.compactions === undefined || entry.compactions.length === 0
           ? ''
@@ -506,6 +516,18 @@ export function summarizeJournalEntry(entry: JournalEntry): string {
         compactionNote +
         (entry.reset === undefined ? '' : ' ⚠ 数え直しを挟んだ回（models は差分ではない）')
       );
+    }
+    case 'context_usage': {
+      // **消費（`turn_usage`）とは独立の行（Issue #976）。** 失敗したターン
+      // （`turnSucceeded: false`）こそがこの型の存在理由——#976 より前は
+      // どこにも残らなかった値である。
+      const context = entry.contextUsage;
+      const status = entry.turnSucceeded ? '成功' : '失敗';
+      const note =
+        context.error !== undefined
+          ? `測れなかった（${context.error}）`
+          : contextUsageNote(context).trim() || '（詳細なし）';
+      return `[${entry.layer}/${entry.site}] ${entry.managerId} ターン${status}: ${note}`;
     }
     case 'token_rotation':
       // **`text` をそのまま出す。** ここで組み直すと、同じ事実を読む4つの面

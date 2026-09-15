@@ -151,11 +151,15 @@ export function isDistillSucceededEntry(entry: JournalEntry): boolean {
  * ## 数えないもの と その理由
  *
  * `decision` / `escalation` / `tool_use` / `memory_update` / `daily_report` /
- * `worker_wait` / `token_rotation` / `subagent_stall` /
+ * `worker_wait` / `token_rotation` / `subagent_stall` / `context_usage` /
  * `exchange`(`with: 'self'`) / `turn_usage`(`site: 'distill'`)。**どれも蒸留の
  * ターンそのものか、器の記帳が書きうる型である。** 数に入れると、正常に蒸留して
  * 静かに落ちただけの器でも毎回「ずれが在る」と言うことになる ＝ 断り書きが
  * 毎回出て、意味を失う。
+ *
+ * **`context_usage`（#976）も器の記帳である。** `runner.ts` /
+ * `manager.ts` が観測できたら無条件に書く機構上の記録で、`subagent_stall`
+ * と同じ性質（「ターンが1本走った」ことそのものの痕跡ではない）。
  *
  * **`subagent_stall` も器の記帳である。** `runner.ts` の `#onSubagentStop` が
  * 作業者のターンの外側で機構的に書くもので、`token_rotation` と同じ性質
@@ -186,6 +190,9 @@ export function countsAsUndistilledActivity(entry: JournalEntry): boolean {
     // 数えないことを決めた（上の doc）ことを、次に種別が増えたときの読み手に
     // 見える形で残す。
     case 'subagent_stall':
+      return false;
+    // 同上（#976。上の doc「`context_usage` も器の記帳である」）。
+    case 'context_usage':
       return false;
     default:
       return false;
