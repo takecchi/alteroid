@@ -1,0 +1,69 @@
+version: 2
+
+updates:
+  # pnpm workspace（package.json 群 + pnpm-lock.yaml。ecosystem 名は "npm" だが
+  # pnpm workspace はここでカバーされる — pnpm-workspace.yaml の `packages:`
+  # （packages/* / apps/*）から全ワークスペースを検出する）。
+  #
+  # 背景（Issue #880）: このリポジトリで定期更新されているのは
+  # `@anthropic-ai/claude-agent-sdk` だけで（`.github/workflows/update-claude-sdk.yml`）、
+  # それ以外の依存は Dependabot alert が鳴ってから人が `pnpm-workspace.yaml` の
+  # `overrides` へ個別に押し込む形になっていた（実例: PR #797）。ここからは
+  # 通常の更新を Dependabot に任せ、alert が鳴る前に上げる。
+  - package-ecosystem: 'npm'
+    directory: '/'
+    schedule:
+      # 毎日ではなく毎週にする。PR が溢れて誰も読まなくなる形を避けるため
+      # （Issue #880 のコメントが挙げた懸念そのもの — 「PR が増えることを、
+      # 見届けきれるか」）。曜日は週明けに固定し、週末を挟んで積み残さない。
+      interval: 'weekly'
+      day: 'monday'
+    # 同時に開く PR の上限。無制限にすると、alert 対応で individual に
+    # 押し込んできた運用より PR 数が増えて読まれなくなる。
+    open-pull-requests-limit: 5
+    groups:
+      # minor/patch はまとめて1本にする。個別に理由を書く価値があるのは
+      # major や security 対応（alert 経由で別に動く）であって、日常の
+      # 追随を1本ずつ PR にすると読み切れない数になる。
+      minor-and-patch:
+        update-types:
+          - 'minor'
+          - 'patch'
+    ignore:
+      # ⚠️ Claude SDK は対象外。専用の経路が既に在る
+      # （`.github/workflows/update-claude-sdk.yml` が毎日見て、上がっていれば
+      # 1本の PR（`automation/claude-agent-sdk`）に積み直す。マージは人間）。
+      # AGENTS.md は「版を手で上げに行かないこと」と明記しており、Dependabot が
+      # 同じ依存へ別の PR を出すと経路が二重になる。ワイルドカードは
+      # `pnpm-workspace.yaml` の `minimumReleaseAgeExclude` が使っている
+      # パターンに揃えた（SDK 本体＋プラットフォーム別パッケージ8つを含む）。
+      - dependency-name: '@anthropic-ai/claude-agent-sdk*'
+      # esbuild は意図的にここへ足していない。残っている Dependabot alert
+      # （severity: low, advisory: 開発サーバーを Windows で動かしたときの
+      # 任意ファイル読み取り）は、`esbuild` が直接依存ではなく `tsup`（`bundle-require`
+      # 経由）の推移的依存としてのみ入っているため、Dependabot の通常の
+      # version-update では上がらない（`pnpm why esbuild -r` で確認済み。
+      # 経路は tsup@8.5.1 → bundle-require@5.1.0 → esbuild@0.27.7 の1本のみ）。
+      # 上げるには `overrides` で `tsup` の宣言レンジ（`^0.27.0`。patched
+      # 0.28.1 はその外）を踏み越える必要があり、この repo は Linux 実行・
+      # `tsup`/`rolldown` ビルドで開発サーバーの脆弱性が成立しないため、
+      # 上げる利益より `tsup` との非互換で build が壊れる risk を採った
+      # （既存の記録: `pnpm-workspace.yaml` の `# - \`esbuild\`: 親の \`tsup\` の
+      # 宣言が` で始まる注記。今回この repo で改めて実測して現状も一致することを
+      # 確認した）。上流（`tsup`）が esbuild の宣言を `^0.28` に上げ直したら、
+      # 手動の `overrides` で解消する（Dependabot はここに `ignore` を足しても
+      # 足さなくても、直接依存でない以上どのみち提案してこない）。
+
+  # GitHub Actions（ワークフローが pin しているアクションの版）。
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+    open-pull-requests-limit: 5
+    groups:
+      # アクションの更新は1本にまとめる。3本のワークフローが使うアクションは
+      # 少数で、個別レビューの価値がある変更ではない。
+      github-actions:
+        patterns:
+          - '*'
