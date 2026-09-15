@@ -12246,7 +12246,9 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
 
   /**
    * **概要が在るか。** 作成/更新のペアを取り除いたうえで、
-   * (a) 1行目より後ろに何か書いてある行が残っているか（P2: 3行目の概要）、
+   * (a) **3行目そのもの**（`renderListingEntry` が固定する並び
+   *     `[id+title, 作成/更新, summary, ...extra]` の3番目）に何か書いてあるか
+   *     （P2 と同じ位置を見る。詳細は下）、
    * (b) 1行目の中に `—`（概要の区切り）に続く非空のテキストがあるか
    *     （P1: `memory_list` は同じ行に `— <概要>` で続ける）
    * のどちらかで判定する。**タイトルを取り除いていないので、この判定は
@@ -12256,11 +12258,34 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
    * （`— …` が現れず正しく落ちる）。ただし片方の形の中で「タイトルの
    * 一部を残し概要だけ削る」ような変異までは分離できない（タイトルと
    * 概要が同じ行に同居する P1 の構造上の限界。詳細は PR 本文）。
+   *
+   * **⚠️ #993 で直した: 以前は (a) を「1行目より後ろのどこかの行に何か
+   * 書いてあるか」（`lines.slice(1).some(...)`）で判定していた。**
+   * `renderListingEntry` は `summary` の後ろへ `extra`（`approvals_list` の
+   * 「宛先: …」、`schedule_list` の「前回動いた時刻: …」等）を続けて積む
+   * 一覧が5本ある（`approvals_list` / `schedule_list` / `commitment_list` /
+   * `token_list` / `manager_list`。全て `STRICT_SHAPE_SWEPT`）。**この5本
+   * 全てで、`summary` を空文字へ変異させても `extra` の行が「概要が在る」の
+   * 代役になり、P1 は緑のまま検出できなかった**（変異試験で確認。5本とも
+   * 再現。#993 のコメントに生ログがある）。**suite 全体では P2
+   * （`matchesStrictBlockShape`、同じく3行目を直接見る）が独立に赤くなる
+   * ため実害は無かったが、P1 単体は「概要」を検算しておらず「タイムスタンプ
+   * より後ろの何か」を検算していただけだった** —— `title` が `id` へ
+   * すり替わっても検出できなかった #284 と同型の穴である。
+   *
+   * **直し方: `lines.slice(1).some(...)` を `lines[2]` の名指しへ替える。**
+   * `renderListingEntry` の並びは固定なので、位置0=id+title・位置1=作成/更新
+   * （置換で空文字になった行。行そのものは残る）・位置2=summary・位置3以降=
+   * extra、で必ず揃う。**`memory_list` はこの並びを持たない**（1行1件で
+   * `lines.length === 1`）ので `lines[2]` は常に `undefined` になり、
+   * この枝は常に偽——**変わらず `hasInlineSummary` 側だけで判定される**
+   * （直下の `memory_list` 名指しの歯が、この経路が壊れていないことを
+   * 引き続き測る）。
    */
   function hasSummaryBeyondTimestamps(entry: string): boolean {
     const withoutTimestamps = entry.replace(TIMESTAMP_PAIR_PATTERN, '');
     const lines = withoutTimestamps.split('\n');
-    const hasSummaryLine = lines.slice(1).some((line) => line.trim().length > 0);
+    const hasSummaryLine = (lines[2] ?? '').trim().length > 0;
     const hasInlineSummary = /—\s*\S/.test(lines[0] ?? '');
     return hasSummaryLine || hasInlineSummary;
   }
