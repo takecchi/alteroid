@@ -323,12 +323,22 @@ jobs:
 
       # **Issue #965 段2。「入れた」で終わらせない。** パッケージが apt の依存解決を
       # 通ることと、initdb して拡張が実際に使えることは別の主張である。ここで
-      # 使い捨てのクラスタを立て、`CREATE EXTENSION vector` まで確かめる —
-      # 作業者が実際にやることと同じ手順（Dockerfile のコメント参照）。
+      # 使い捨てのクラスタを立て、`CREATE EXTENSION vector` まで確かめる。
       #
-      # postgres は apt が作る `postgres` システムユーザーで動かす（Debian の
-      # 作法どおり）。データディレクトリはイメージへ焼かず、この使い捨て
-      # コンテナの `/tmp` に都度作る。
+      # **⚠️ `-u 1001` で走らせる。root でも `postgres` システムユーザーでもない。**
+      # `1001` は `Dockerfile` の `ENV ALTEROID_RUNNER_CHILD_UID`（`useradd --uid
+      # 1001 ... worker`）そのもので、この repo でマネージャー・作業者が実際に
+      # 走る主体と同じ値である（このジョブの直前のステップ「マネージャーの道具が
+      # 揃っているか」も同じ `-u 1001` を使っている）。**最初の実装は `-u 0` +
+      # `su postgres` で通していたが、それは作業者が自分の器で postgres を
+      # 立てられることを1文字も証明していなかった**（作業者は root でも
+      # `postgres` でもなく `worker`／uid 1001 で、`su` も使えない）。
+      # ⟹ 作業者と同じ非 root uid のまま、自分の作業ディレクトリへ直に
+      # `initdb` することを見る形に直した。`initdb` は root では動かないので、
+      # 非 root で直に叩くほうがむしろ素直である。
+      #
+      # データディレクトリはイメージへ焼かず、この使い捨てコンテナの `/tmp`
+      # （uid 1001 が書ける）に都度作る。
       #
       # **`pids.current` も同じ実行の中で before/after を取る**（#965 の3つ目の
       # 条件 — postgres を立てた状態でもう一度測ること）。⚠️ **ここは GitHub
@@ -338,9 +348,9 @@ jobs:
       # こと —— 比べてよいのはこの実行の中の「差分」だけである。**あの実測は
       # コンテナ全体のもので、他テナントが軽い時間帯の観測である**という段1の
       # 但し書きもそのまま生きている。
-      - name: 使い捨て postgres で CREATE EXTENSION vector が通るか（+ pids の before/after）
+      - name: 使い捨て postgres で CREATE EXTENSION vector が通るか（作業者と同じ uid 1001 / 非 root、+ pids の before/after）
         run: |
-          docker run --rm -u 0 alteroid:ci sh -eu -c '
+          docker run --rm -u 1001 alteroid:ci sh -eu -c '
             export PATH=/usr/lib/postgresql/17/bin:$PATH
             PGDATA=/tmp/pgdata-ci
 
@@ -351,21 +361,21 @@ jobs:
               echo "pids.current: このコンテナには /sys/fs/cgroup/pids.current が無い(cgroup v2 未使用か、権限が無い)"
             fi
 
-            install -d -m 0700 -o postgres -g postgres "$PGDATA"
-            su -s /bin/sh postgres -c "initdb -D $PGDATA --auth=trust" \
+            mkdir -p "$PGDATA"
+            initdb -D "$PGDATA" --auth=trust \
               || { echo "initdb が失敗した" >&2; exit 1; }
-            su -s /bin/sh postgres -c "pg_ctl -D $PGDATA -l /tmp/pg.log -o \"-k /tmp -h 127.0.0.1 -p 5433\" start" \
+            pg_ctl -D "$PGDATA" -l /tmp/pg.log -o "-k /tmp -h 127.0.0.1 -p 5433" start \
               || { echo "pg_ctl start が失敗した:" >&2; cat /tmp/pg.log >&2; exit 1; }
 
             if [ -r /sys/fs/cgroup/pids.current ]; then
               echo "pids.current(postgres起動後、このコンテナ内、GitHub Actions runner): $(cat /sys/fs/cgroup/pids.current)"
             fi
 
-            su -s /bin/sh postgres -c "psql -h 127.0.0.1 -p 5433 -d postgres -c \"CREATE EXTENSION vector;\"" \
-              || { echo "CREATE EXTENSION vector が失敗した:" >&2; cat /tmp/pg.log >&2; su -s /bin/sh postgres -c "pg_ctl -D $PGDATA stop" || true; exit 1; }
-            su -s /bin/sh postgres -c "psql -h 127.0.0.1 -p 5433 -d postgres -c \"SELECT extname, extversion FROM pg_extension;\""
+            psql -h 127.0.0.1 -p 5433 -d postgres -c "CREATE EXTENSION vector;" \
+              || { echo "CREATE EXTENSION vector が失敗した:" >&2; cat /tmp/pg.log >&2; pg_ctl -D "$PGDATA" stop || true; exit 1; }
+            psql -h 127.0.0.1 -p 5433 -d postgres -c "SELECT extname, extversion FROM pg_extension;"
 
-            su -s /bin/sh postgres -c "pg_ctl -D $PGDATA stop"
+            pg_ctl -D "$PGDATA" stop
           '
 
       # **「渡したつもり」で終わらせない。** 上のビルドで `ALTEROID_BUILD_REV=

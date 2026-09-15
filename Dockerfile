@@ -95,6 +95,15 @@ FROM node:22-trixie-slim AS runtime
 # 自分の作業ディレクトリへ都度立てるための「道具」である — マネージャーの道具と
 # 同じ扱い（上のコメント参照）。
 #
+# **実際に立てるのは uid 1001（`worker`。下の `ENV ALTEROID_RUNNER_CHILD_UID`）
+# であって、root でも `postgres` システムユーザーでもない。** apt が作る
+# `postgres` システムユーザーは Debian の作法（`pg_createcluster` 経由）の
+# ためのもので、ここでは使わない — `/etc/postgresql` を焼いていないので
+# `pg_createcluster` / `pg_ctlcluster` はそもそも使えない（下で消す）。
+# **作業者は `initdb` / `pg_ctl` を非 root のまま自分の作業ディレクトリで直に
+# 叩く。** 実際に通る手順は `AGENTS.md`「自分が走っている器」に書く（机上では
+# なく、CI の `image` ジョブで uid 1001 のまま通したものを転記する）。
+#
 # **外部の apt 出所は要らない。** `postgresql-17` / `postgresql-17-pgvector` は
 # どちらも Debian trixie の main（= このイメージが最初から使っている
 # `deb.debian.org` のソース）に在る。PGDG のような別ソース・別鍵は足していない
@@ -133,7 +142,7 @@ RUN set -eux; \
   rm -rf /var/lib/apt/lists/*; \
   gh --version; \
   tini --version; \
-  su postgres -c '/usr/lib/postgresql/17/bin/postgres --version'
+  /usr/lib/postgresql/17/bin/postgres --version
 
 # git の資格情報は `gh` から借りる（人間が `gh auth setup-git` でやることと同じ）。
 # **鍵をイメージに焼かない。** ここにあるのは経路だけである。
