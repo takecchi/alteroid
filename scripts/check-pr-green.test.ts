@@ -101,6 +101,57 @@ describe('pickLatestRunPerWorkflow', () => {
     const testBackend = latest.find((r) => r.name === 'Test Backend');
     expect(testBackend?.status).toBe('in_progress');
   });
+
+  it('#933 コメントの追加実測（PR #997、sha 5de558f6b2ca5e89ed2efac7b8d677f56cabb879）: jobの completed_at が started_at より前でも、run自身の created_at で新しいほうを選ぶ', () => {
+    // 実測（観測 2026-09-15T04:40Z、UTC）: draft世代 run 34929697970 の `image`
+    // job は started_at=04:40:04 completed_at=04:39:57（completed_at が7秒
+    // "前"）という、started_at 単独の逆転（Issue本文）とは別の壊れ方をしていた。
+    // 「started_at が駄目なら completed_at を使う」という代替案も、この実測で
+    // 塞がれている —— job 側のどちらの時刻も世代の順序を決める根拠にならない。
+    // この道具はそもそも job の started_at/completed_at を一度も読まない
+    // （下の jobsByRunId は conclusion/status しか持たない）ので、この異常は
+    // pickLatestRunPerWorkflow にも evaluatePrGreen にも一切入力されない。
+    const runs = [
+      {
+        id: 34929697970,
+        name: 'CI',
+        created_at: '2026-09-15T04:39:56Z',
+        status: 'completed',
+        conclusion: 'skipped',
+      },
+      {
+        id: 34929744708,
+        name: 'CI',
+        created_at: '2026-09-15T04:40:39Z',
+        status: 'completed',
+        conclusion: 'success',
+      },
+    ];
+    const latest = pickLatestRunPerWorkflow(runs);
+    expect(latest).toEqual([
+      {
+        id: 34929744708,
+        name: 'CI',
+        created_at: '2026-09-15T04:40:39Z',
+        status: 'completed',
+        conclusion: 'success',
+      },
+    ]);
+
+    // 実測: gh api repos/takecchi/alteroid/actions/runs/34929744708/jobs
+    // （新しい世代のjobsのみ。古い世代の image の completed_at<started_at は
+    // ここには一切現れない —— pickLatestRunPerWorkflow の時点で run ごと
+    // 落ちているため）
+    const jobsByRunId = {
+      34929744708: [
+        { name: 'ci', status: 'completed', conclusion: 'success' },
+        { name: 'base-overlap', status: 'completed', conclusion: 'success' },
+        { name: 'image', status: 'completed', conclusion: 'success' },
+      ],
+    };
+    const result = evaluatePrGreen(latest, jobsByRunId);
+    expect(result.verdict).toBe('green');
+  });
 });
 
 describe('evaluatePrGreen', () => {
