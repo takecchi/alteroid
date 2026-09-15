@@ -205,8 +205,8 @@ function allIndicesOf(haystack, needle) {
  * 形かを見る。先頭に `field?: ` / `field: ` を許し、末尾に `;` を許す。
  *
  * **この形のときだけ境界チェック（`isUnionTailDrift`）を掛ける。** 理由は実測で
- * 見つかった反例（`packages/core/src/usage-limits.ts:167`）——
- * `[sdk-verbatim SDKRateLimitInfo.overageDisabledReason]` の引用は
+ * 見つかった反例（`packages/core/src/usage-limits.ts` の
+ * `[sdk-verbatim SDKRateLimitInfo.overageDisabledReason]`）——この引用は
  * `overageDisabledReason?: 'overage_not_provisioned'` と**値を1つだけ**引いており、
  * すぐ隣のコメントが「…で始まる行」と明言するとおり、**意図して union の先頭だけを
  * 証拠として引用している**（全部を書き写すと SDK が値を増やすたびに追随が要る
