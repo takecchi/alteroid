@@ -6360,8 +6360,16 @@ describe('runner の一覧（ManagerPool.runners）', () => {
 
     // 台帳にしか無く `sessionId` も無いので戻る先が無い（`isLive()`）。
     // **`status` は `running` のままである** — だからこそ `live` が要る。
+    // **`tokenGenerationUnknownReason: 'pool-not-wired'` が付く**（Issue #988）
+    // ——この `pool` は `tokenIdentity` を渡していないので、全マネージャーに
+    // 共通で立つ理由である（`TokenGenerationUnknownReason` の doc）。
     expect(overview.runners.find((r) => r.label === 'runner-a')?.managers).toEqual([
-      { managerId: 'mgr-no-session', status: 'running', live: false },
+      {
+        managerId: 'mgr-no-session',
+        status: 'running',
+        live: false,
+        tokenGenerationUnknownReason: 'pool-not-wired',
+      },
     ]);
 
     await pool.stop();
@@ -6394,7 +6402,14 @@ describe('runner の一覧（ManagerPool.runners）', () => {
     expect(overview.unassigned).toEqual([
       // `live: false` — 台帳にしか無く `sessionId` も持たないので戻る先が無い
       // （`isLive()`）。**`status` と一緒に必ず運ぶ**（`RunnerManagerEntry` の doc）。
-      { managerId: 'mgr-legacy', status: 'done', live: false },
+      // `tokenGenerationUnknownReason: 'pool-not-wired'` — この `pool` は
+      // `tokenIdentity` を渡していない（Issue #988）。
+      {
+        managerId: 'mgr-legacy',
+        status: 'done',
+        live: false,
+        tokenGenerationUnknownReason: 'pool-not-wired',
+      },
     ]);
 
     await pool.stop();
@@ -8197,8 +8212,15 @@ describe('宛先の器が黙ったことを live が見る', () => {
 
     const overview = await pool.runners();
 
+    // `tokenGenerationUnknownReason: 'pool-not-wired'` — この `pool` は
+    // `tokenIdentity` を渡していない（Issue #988）。
     expect(overview.runners.find((r) => r.runnerId === 'runner-a')?.managers).toEqual([
-      { managerId: 'mgr-orphan', status: 'running', live: false },
+      {
+        managerId: 'mgr-orphan',
+        status: 'running',
+        live: false,
+        tokenGenerationUnknownReason: 'pool-not-wired',
+      },
     ]);
 
     await pool.stop();

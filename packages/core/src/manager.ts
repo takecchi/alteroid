@@ -188,9 +188,7 @@ export interface ManagerAwaitingBackground {
  * ない軸に0の行を作らない」と同じ理由——測れているのに理由を出す形は作らない）。
  */
 export type TokenGenerationUnknownReason =
-  | 'pool-not-wired'
-  | 'not-yet-observed'
-  | 'reattached-across-restart';
+  'pool-not-wired' | 'not-yet-observed' | 'reattached-across-restart';
 
 export interface ManagerSummary {
   managerId: string;
