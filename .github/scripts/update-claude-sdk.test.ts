@@ -912,9 +912,7 @@ fi
       ]);
       const commentCall = calls.find((c) => c[0] === 'pr' && c[1] === 'comment');
       expect(commentCall).toBeDefined();
-      expect(commentCall).toEqual(
-        expect.arrayContaining(['pr', 'comment', '77', '--body-file']),
-      );
+      expect(commentCall).toEqual(expect.arrayContaining(['pr', 'comment', '77', '--body-file']));
       const bodyFileArgIndex = commentCall!.indexOf('--body-file') + 1;
       const commentBodyPath = commentCall![bodyFileArgIndex];
       const commentBody = readFileSync(commentBodyPath, 'utf8');
