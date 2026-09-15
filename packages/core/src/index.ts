@@ -503,6 +503,7 @@ export {
   guardArchiveRemoval,
   type ArchiveRemovalGuard,
   type SessionMissingKind,
+  type TokenGenerationUnknownReason,
   type RunnerFleetOverview,
   type RunnerManagerEntry,
   type RunnerOverview,

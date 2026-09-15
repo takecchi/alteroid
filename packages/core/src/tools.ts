@@ -74,6 +74,7 @@ import type {
   RunnerBacklogSnapshot,
   RunnerManagerEntry,
   RunnerPushOutcome,
+  TokenGenerationUnknownReason,
 } from './manager.js';
 import {
   applyMemoryFrontmatterPatch,
@@ -2021,19 +2022,73 @@ function describeToolUseStall(manager: ManagerSummary): string | null {
 }
 
 /**
+ * `TokenGenerationUnknownReason` の網羅性を型で強制する（`assertNever*` の系）。
+ */
+function assertNeverTokenGenerationUnknownReason(reason: never): never {
+  throw new Error(`未知の認証トークン世代の不明理由: ${JSON.stringify(reason)}`);
+}
+
+/**
+ * `tokenGeneration` が `undefined` のときに、なぜ分からないかを言う
+ * （Issue #988。`TokenGenerationUnknownReason` の doc）。
+ *
+ * **#968 と同じ形にする** — ⚠ を出す・出さないの判定は計器（この関数）が
+ * 握らず、読み手へ渡す。ここでは「材料が無い」で終わらせず、**なぜ無いのか・
+ * 読み手に何ができるのか**まで名乗る。`'reattached-across-restart'` だけが
+ * `manager_stop` → `manager_start` という対処を持つ——他の2つに同じ対処を
+ * 書くと、効かない手順を読み手に勧めることになる。
+ */
+function describeTokenGenerationUnknownReason(reason: TokenGenerationUnknownReason): string {
+  switch (reason) {
+    case 'pool-not-wired':
+      return (
+        '  認証トークンの世代: 分からない（このデプロイは認証トークンの世代そのものを' +
+        '配線していない構成。全ての委譲について同じ理由で分からない——この委譲固有の' +
+        '問題ではなく、manager_stop → manager_start で起こし直しても変わらない）。'
+      );
+    case 'not-yet-observed':
+      return (
+        '  認証トークンの世代: 分からない（この委譲のセッションが、いまのデーモンの' +
+        'プロセスではまだ一度も起きていない。start・明示的な resume・認証トークンの' +
+        '回転のどれかが起きれば次の一覧から埋まる——いま何もしなくてよい）。'
+      );
+    case 'reattached-across-restart':
+      return (
+        '  認証トークンの世代: 分からない（デーモンの再起動をまたいで、runner に生きた' +
+        'ままのセッションを引き取った。引き取っただけではこのセッションの環境変数に' +
+        '触れていないので、抱えている世代を確かめる材料が無い——一致でも不一致でもない、' +
+        '正直な「分からない」である）。この委譲へ daemon が次に明示的に触れば' +
+        '（送信・回転のどちらでも）自動で埋まるが、429 が続くなど気になるようなら' +
+        'manager_stop → manager_start で起こし直すこと（新しいプロセスなので新しい鍵で' +
+        '走る。ただし会話は失われる）。'
+      );
+    default:
+      return assertNeverTokenGenerationUnknownReason(reason);
+  }
+}
+
+/**
  * この委譲が抱えている認証トークンの世代を言う（Issue #914 提案1）。
  * `manager_list` と `runner_list`（`runnerManagerTag`）の2つで生成元を
  * 揃えてある——同じ判定を2箇所へ別々に書くと、いつか字面が割れる
  * （`systemErrorLine` の doc と同じ理由）。
  *
- * **材料が無ければ `null`**（`manager.tokenGeneration === undefined`。
- * プールを一度も使っていない構成・このマネージャーがまだ観測されて
- * いない）。**健全（世代が一致）でも `null` は返さない**——他の ⚠ 系の行
- * （`describeToolUseStall` 等）と違い、この道具の説明文で「出す」と
- * 約束している値そのものなので、一致していることも材料が在る限り言う。
+ * **材料が無くても `null` を返すとは限らない**（Issue #988で変更）。
+ * `manager.tokenGeneration === undefined` の場合、`manager.
+ * tokenGenerationUnknownReason` が理由を名乗っていればその1行を返す
+ * （`describeTokenGenerationUnknownReason`）。**名乗っていない
+ * （`undefined` のまま）ときだけ `null`**——理由づけ前のこの関数と同じ
+ * 「何も言わない」を保つ。**健全（世代が一致）でも `null` は返さない**——
+ * 他の ⚠ 系の行（`describeToolUseStall` 等）と違い、この道具の説明文で
+ * 「出す」と約束している値そのものなので、一致していることも材料が在る限り
+ * 言う。
  */
 function describeTokenGeneration(manager: ManagerSummary): string | null {
-  if (manager.tokenGeneration === undefined) return null;
+  if (manager.tokenGeneration === undefined) {
+    return manager.tokenGenerationUnknownReason === undefined
+      ? null
+      : describeTokenGenerationUnknownReason(manager.tokenGenerationUnknownReason);
+  }
   if (manager.activeTokenGeneration === undefined) {
     // **比べる相手がいま取れない。** プールへ一度も撒いていない・現役の
     // 身元をまだ確認できていない、のどちらか——`ManagerSummary.
@@ -6232,7 +6287,9 @@ export function createCloneTools(context: ToolContext) {
           'この委譲が最後に起こした／自動で開き直した時点の世代と、いまの現役の世代を比べられる。' +
           '⚠ が付いていれば世代が食い違っている——回した直後の短い遅れなら自然に消える。' +
           '429 が続いたまま消えないなら、manager_stop → manager_start で起こし直すこと' +
-          '（会話は失われる）。プールを使っていない構成や、まだ観測していない委譲では行ごと出ない。',
+          '（会話は失われる）。世代が測れていないときも行は出る——' +
+          '「分からない」の理由（プール未配線／未観測／デーモンの再起動をまたいだ引き取り）を' +
+          '名乗る（Issue #988）。再起動をまたいだ場合だけ manager_stop → manager_start が効く。',
       ].join(' '),
       {
         // **人間の入口（`GET /managers`）にだけ在った絞りを、クローンにも渡す**
@@ -6610,9 +6667,10 @@ export function createCloneTools(context: ToolContext) {
               describeToolUseStall(manager),
               // **Issue #914 提案1**: この委譲が抱えている認証トークンの
               // 世代と、現役の世代が食い違っていないかを添える
-              // （`describeTokenGeneration` の doc）。**材料が無ければ
-              // `null` を返し、1文字も増えない**——プールを使っていない
-              // 構成・観測前の器では出ない。
+              // （`describeTokenGeneration` の doc）。**⚠️ Issue #988で変わった
+              // — 世代が測れていないときも `null` にはならず、なぜ測れて
+              // いないか（プール未配線／未観測／再起動をまたいだ引き取り）
+              // を名乗る行が出る**（`TokenGenerationUnknownReason` の doc）。
               describeTokenGeneration(manager),
             ],
           }),

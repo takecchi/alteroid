@@ -158,6 +158,40 @@ export interface ManagerAwaitingBackground {
   since: string;
 }
 
+/**
+ * `ManagerSummary.tokenGeneration` が `undefined` になっている理由（Issue #988）。
+ *
+ * **この欄が無かった間は、3つとも「欄ごと消える」という同じ見た目で出ていた。**
+ * 読み手はそこから「この委譲は世代を測れていない」としか読めず、対処のある
+ * 状態（`manager_stop` → `manager_start` で起こし直せば新しい鍵で走る）に
+ * 辿り着けなかった。#968 が ⚠ に理由（「回した直後は普通に起こる——それ自体は
+ * 症状ではない」）を添えて判定を読み手へ渡したのと同じ形にする——
+ * `describeTokenGeneration` の doc「材料が無ければ `null`」を置き換えるのでは
+ * なく、その `null` に理由を持たせる。
+ *
+ * - `'pool-not-wired'`: このデプロイが認証トークンの世代そのものを配線して
+ *   いない（`ManagerPool` の `tokenIdentity` を渡していない構成）。**このマネー
+ *   ジャーに固有の理由ではない**——同じデプロイの他の委譲でも同じ理由が立つ。
+ *   `manager_stop` → `manager_start` では直らない。
+ * - `'not-yet-observed'`: プールは配線されているが、この委譲のセッションが
+ *   まだ一度もこのプロセスで「起きて」いない（`start` / 明示的な `resume` /
+ *   `tokenRotation` のどれも、daemon がこの委譲へ触った瞬間として通っていない。
+ *   `#rememberTokenIdentity` の doc の3つの呼び出し口）。始まればすぐ埋まる。
+ * - `'reattached-across-restart'`: `ManagerPool#restore()` の living 枝が、
+ *   runner に既に生きているセッションを見つけて引き取っただけで、この
+ *   プロセスの `#tokenIdentities` にはまだこの委譲の記録が無い（2026-09-15
+ *   Issue #978／#987。`tokenGeneration` の doc）。**唯一、対処のある理由**——
+ *   `manager_stop` → `manager_start` で起こし直せば、次はこのプロセス自身が
+ *   `start` を呼ぶので新しい鍵で記録し直される（会話は失われる）。
+ *
+ * **`tokenGeneration` が定義されているときは欄ごと消える**（AGENTS.md「取れ
+ * ない軸に0の行を作らない」と同じ理由——測れているのに理由を出す形は作らない）。
+ */
+export type TokenGenerationUnknownReason =
+  | 'pool-not-wired'
+  | 'not-yet-observed'
+  | 'reattached-across-restart';
+
 export interface ManagerSummary {
   managerId: string;
   status: JobStatus;
@@ -502,9 +536,13 @@ export interface ManagerSummary {
    * デーモンを作り直すと消え、次にこのマネージャーへ daemon が**実際に
    * 触れた**時点（`start` / 明示的な `resume` / `tokenRotation`）で記録し
    * 直される。**living 枝で引き取られただけでは記録し直されない**——
-   * 触れるまでのあいだ、この欄は（一度も観測されていない委譲と同じ見た目で）
-   * 欄ごと消える。何も出さないことと「再起動をまたいで分からない」ことは、
-   * いまはこの型の上では区別されていない（Issue #978 に残した設計判断）。
+   * 触れるまでのあいだ、この欄は欄ごと消える。
+   *
+   * **⟹ 欄ごと消えたとき、なぜ消えたかは {@link ManagerSummary.tokenGenerationUnknownReason}
+   * が言う（Issue #988。#978 が「区別されていない」と残した設計判断はここで
+   * 埋めた）。** `undefined` それ自体は3つの理由（プール未配線・未観測・
+   * 再起動をまたいだ引き取り）のどれからでも出るので、区別したいときは
+   * こちらではなくあちらを読むこと。
    */
   tokenGeneration?: number;
   /**
@@ -521,6 +559,16 @@ export interface ManagerSummary {
    * `runner_list` の描画）が2つの数を比べる。ここに出すのは材料だけである。
    */
   activeTokenGeneration?: number;
+  /**
+   * **`tokenGeneration` が `undefined` になっている理由**（doc は
+   * {@link TokenGenerationUnknownReason}。Issue #988）。
+   *
+   * **`tokenGeneration` が定義されているときは欄ごと消える。** `activeTokenGeneration`
+   * と対称に、「測れているのに理由を出す」形は作らない——比べる相手が要る
+   * `activeTokenGeneration` とは逆に、こちらは `tokenGeneration` が**無い**
+   * ときにしか意味を持たない材料である。
+   */
+  tokenGenerationUnknownReason?: TokenGenerationUnknownReason;
 }
 
 /**
@@ -675,6 +723,13 @@ export interface RunnerManagerEntry {
    * 写し。Issue #914 提案1）。`tokenGeneration` と対で運ぶ——真上と同じ理由。
    */
   activeTokenGeneration?: number;
+  /**
+   * `tokenGeneration` が `undefined` になっている理由（`ManagerSummary.
+   * tokenGenerationUnknownReason` の写し。Issue #988）。**同じ理由でここにも
+   * 運ぶ**——運ばないと `runner_list` の側だけ、3つの理由が「欄が消える」に
+   * 潰れて戻る。
+   */
+  tokenGenerationUnknownReason?: TokenGenerationUnknownReason;
 }
 
 /**
@@ -1841,6 +1896,23 @@ interface ManagerRecord {
    * 探しに行く）。`kind` はこの2つを取り違えないための専用の欄である。
    */
   leaseRefusal?: { detail: string; claimableAt?: number; kind: LeaseRefusalKind };
+  /**
+   * **`ManagerPool#restore()` の living 枝で引き取られ、まだこのプロセスで
+   * `#rememberTokenIdentity` を通っていないこと**（Issue #988）。
+   *
+   * living 枝はセッションの env を一切更新しないので（`ManagerSummary.
+   * tokenGeneration` の doc）、この委譲の `#tokenIdentities` はデーモンが
+   * 実際に触れる（`start` / 明示的な `resume` / `tokenRotation`）まで空の
+   * ままである。**この印は、その空白の理由を `tokenGenerationUnknownReason`
+   * へ渡すためだけに在る**——`#rememberTokenIdentity` が実際に触れた瞬間に
+   * 消す（`sessionMissingSince` / `sessionMissingKind` と同じ、対で立ち対で
+   * 消える作法）。
+   *
+   * **プロセス内の像にしか置かない**（`Job` へは書かない）。デーモンを作り
+   * 直せばまた living 枝から始まるので、失っても嘘は残らない——次の
+   * `#restoreJobs` が同じ照合をやり直す。
+   */
+  reattachedAcrossRestart?: true;
 }
 
 /**
@@ -3416,6 +3488,7 @@ class Pool implements ManagerPool {
       this.#awaitingBackgroundOf(record.job.id),
       this.#tokenIdentities.get(record.job.id)?.generation,
       this.#tokenIdentity?.()?.generation,
+      this.#tokenIdentity !== undefined,
     );
   }
 
@@ -3836,6 +3909,10 @@ class Pool implements ManagerPool {
     // ——`#tokenIdentities` を読み直さない理由（このファイル冒頭の doc）と
     // 同じ筋で、1回だけ引いて使い回す。
     const activeTokenGeneration = this.#tokenIdentity?.()?.generation;
+    // **同じ理由で1回だけ引く**（Issue #988）。真下の「配線しているか」は
+    // `activeTokenGeneration` と違って回転では動かないが、同じ応答の中で
+    // 呼び出しごとに読み直さないという作法自体は揃えておく。
+    const tokenGenerationPoolWired = this.#tokenIdentity !== undefined;
     const known = new Map<string, ManagerSummary>();
     for (const record of this.#records.values()) {
       known.set(
@@ -3853,6 +3930,7 @@ class Pool implements ManagerPool {
           this.#awaitingBackgroundOf(record.job.id),
           this.#tokenIdentities.get(record.job.id)?.generation,
           activeTokenGeneration,
+          tokenGenerationPoolWired,
         ),
       );
     }
@@ -3880,6 +3958,7 @@ class Pool implements ManagerPool {
           this.#awaitingBackgroundOf(job.id),
           this.#tokenIdentities.get(job.id)?.generation,
           activeTokenGeneration,
+          tokenGenerationPoolWired,
         ),
       );
     }
@@ -3937,6 +4016,11 @@ class Pool implements ManagerPool {
         ...(manager.activeTokenGeneration === undefined
           ? {}
           : { activeTokenGeneration: manager.activeTokenGeneration }),
+        // **同上（Issue #988）。** `list()` が既に計算済み——ここでも往復は
+        // 増えない。
+        ...(manager.tokenGenerationUnknownReason === undefined
+          ? {}
+          : { tokenGenerationUnknownReason: manager.tokenGenerationUnknownReason }),
       };
       if (manager.runnerId === undefined) {
         unassigned.push(item);
@@ -4714,6 +4798,11 @@ class Pool implements ManagerPool {
           },
           waiting: living.state.waiting,
           attached,
+          // **Issue #988。** この枝で引き取ったことそのものが、真下で呼ばない
+          // 理由であり、`tokenGeneration` が欄ごと消える理由でもある——その
+          // 理由を `tokenGenerationUnknownReason` へ渡すための印（doc は
+          // `ManagerRecord.reattachedAcrossRestart`）。
+          reattachedAcrossRestart: true,
         };
         this.#records.set(job.id, record);
         // **ここでは呼ばない（Issue #978）。** この枝は runner に既に生きている
@@ -4731,6 +4820,9 @@ class Pool implements ManagerPool {
         // `describeTokenGeneration` はこの委譲について1行も出さない——
         // 嘘の「一致」より、正直な「材料が無い」を選んでいる
         // （AGENTS.md「取れない軸に0の行を作る」の逆向き＝0を作らない）。
+        // **ただし材料が無い理由は名乗る**（Issue #988）——真上で立てた
+        // `reattachedAcrossRestart` が、`summaryOf` を経由して
+        // `tokenGenerationUnknownReason: 'reattached-across-restart'` になる。
         await this.#persist(record);
         // 「runner の中で走り続けている」は `lost` にも `failed` にも言えない。
         if (attached) this.#notifyRestored(record, 'attached');
@@ -4748,6 +4840,7 @@ class Pool implements ManagerPool {
             this.#awaitingBackgroundOf(record.job.id),
             this.#tokenIdentities.get(record.job.id)?.generation,
             this.#tokenIdentity?.()?.generation,
+            this.#tokenIdentity !== undefined,
           ),
         );
         continue;
@@ -4854,6 +4947,7 @@ class Pool implements ManagerPool {
             this.#awaitingBackgroundOf(record.job.id),
             this.#tokenIdentities.get(record.job.id)?.generation,
             this.#tokenIdentity?.()?.generation,
+            this.#tokenIdentity !== undefined,
           ),
         );
       } catch (error) {
@@ -8173,11 +8267,20 @@ class Pool implements ManagerPool {
    * 化けていた（#968 が入れた ⚠ の偽陰性）。**「daemon が明示的にセッションへ
    * 触った瞬間」だけを数える、という本来の不変条件に合わせて呼び出し口を
    * 3つへ戻した**——4つ目は、その不変条件を自分自身が破っていた。
+   *
+   * **living 枝が立てた `reattachedAcrossRestart` の印を、ここで消す**
+   * （Issue #988）。ここまで来た＝daemon がいまこの委譲へ実際に触った瞬間
+   * なので、「再起動をまたいで引き取った」はもう当てはまらない——
+   * `sessionMissingSince` / `sessionMissingKind` と同じ、対で立て対で消す
+   * 作法である（消さなくても `tokenGeneration` が定義される以上この印は
+   * 読まれなくなるが、状態を古いまま残さない）。
    */
   #rememberTokenIdentity(managerId: string): void {
     const identity = this.#tokenIdentity?.();
     if (identity === undefined) return;
     this.#tokenIdentities.set(managerId, identity);
+    const record = this.#records.get(managerId);
+    if (record !== undefined) record.reattachedAcrossRestart = undefined;
   }
 
   /**
@@ -9354,6 +9457,25 @@ function isLive(record: ManagerRecord, silentRunners: ReadonlyMap<string, string
 }
 
 /**
+ * `tokenGeneration` が `undefined` になっている理由を1つに決める（Issue #988。
+ * doc は {@link TokenGenerationUnknownReason}）。
+ *
+ * **優先順位は「デプロイ全体の話」→「この委譲固有の話」の順。** プールそのもの
+ * が配線されていなければ、living 枝を経由していようがいまいがこの委譲について
+ * 言えることは無い——`reattachedAcrossRestart` の印より先に見る。
+ */
+function tokenGenerationUnknownReasonOf(
+  tokenGeneration: number | undefined,
+  poolWired: boolean,
+  reattachedAcrossRestart: true | undefined,
+): TokenGenerationUnknownReason | undefined {
+  if (tokenGeneration !== undefined) return undefined;
+  if (!poolWired) return 'pool-not-wired';
+  if (reattachedAcrossRestart === true) return 'reattached-across-restart';
+  return 'not-yet-observed';
+}
+
+/**
  * `live` に既定値を置かないのは、**省略した側が黙って「繋がっている」と名乗る**
  * からである。呼び出しを足す人は `live` のことを考えていないのが普通で、既定が
  * 肯定側にあると、考えなかったことが「繋がっている」という主張になって外へ出る
@@ -9374,8 +9496,17 @@ function summaryOf(
   awaitingBackground: ManagerAwaitingBackground | undefined,
   tokenGeneration: number | undefined,
   activeTokenGeneration: number | undefined,
+  // **`live` と同じ作法で引数にする（Issue #988）。** プールが配線されている
+  // かは `this.#tokenIdentity !== undefined` でしか分からず、`record` からは
+  // 読めないプロセス内の状態なので、呼ぶ側に必ず書かせる。
+  tokenGenerationPoolWired: boolean,
 ): ManagerSummary {
   const { job } = record;
+  const tokenGenerationUnknownReason = tokenGenerationUnknownReasonOf(
+    tokenGeneration,
+    tokenGenerationPoolWired,
+    record.reattachedAcrossRestart,
+  );
   return {
     managerId: job.id,
     status: job.status,
@@ -9467,7 +9598,10 @@ function summaryOf(
     // プロセス内の像なので、引数で受ける。`tokenGeneration` が無ければ
     // `activeTokenGeneration` も出さない（比べる相手が無い判定を作らない）。
     ...(tokenGeneration === undefined
-      ? {}
+      ? // **測れていないときだけ、なぜ測れていないかを添える**（Issue #988）。
+        tokenGenerationUnknownReason === undefined
+        ? {}
+        : { tokenGenerationUnknownReason }
       : {
           tokenGeneration,
           ...(activeTokenGeneration === undefined ? {} : { activeTokenGeneration }),
