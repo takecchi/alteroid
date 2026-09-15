@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import type { Commitment } from './schema.js';
+import { commitmentFor } from './clone.js';
+import type { Commitment, InboxEvent } from './schema.js';
 import type { CommitmentList } from './store.js';
 import { countSupersedingReports, describeSuperseded } from './superseded.js';
 
@@ -250,6 +251,70 @@ describe('countSupersedingReports', () => {
         '沈黙の意味を決め直せ。',
     ].join('\n');
     expect(decision.kind, message).toBe('uncountable');
+  });
+});
+
+/**
+ * `commitmentFor`（`clone.ts`、`manager_message` 分岐）から `report` 種別の
+ * イベントを1つ作るための最小のヘルパ。**このファイルの `report()` / `question()`
+ * / `permission()` とは役割が違う** —— あちらは `Commitment` を直接（接頭辞を
+ * 手で書いて）組むフィクスチャで、こちらは `commitmentFor` の入力
+ * （`InboxEvent`）を組む。`Commitment` を作るのは呼び出し側で `commitmentFor`
+ * 自身にやらせる。
+ */
+function managerReportEvent(
+  id: string,
+  at: string,
+  managerId: string = MANAGER,
+  text = '終わった',
+): InboxEvent {
+  return { type: 'manager_message', id, at, managerId, kind: 'report', text };
+}
+
+/**
+ * issue #872: `commitmentFor` が組む `body` の接頭辞（`clone.ts` の
+ * `` body: `[${event.kind}] ${event.text}` `` ）と、`countSupersedingReports`
+ * が読む接頭辞（`entry.body.startsWith('[report] ')`）が一致していることを
+ * 確かめる歯。
+ *
+ * **なぜこの歯が要るか。** このファイルの `report()` / `question()` /
+ * `permission()` を含め、`superseded.test.ts` / `clone-superseded-notice.test.ts`
+ * / `commitment.test.ts` / `tools.test.ts` / `clone.test.ts` /
+ * `commitments.test.tsx` の全フィクスチャは `commitmentFor` を経由せず、
+ * `'[report] '` 等の接頭辞を**手で書き写している**（issue #872 の実測）。
+ * ⟹ `commitmentFor` の接頭辞の組み立てが将来変わっても、それらのテストは
+ * 1本も赤くならない —— 書く側と読む側が同じ文字列をそれぞれ独立に持っている
+ * だけで、両者を突き合わせていないため。**この歯だけが、`commitmentFor` の
+ * 実際の出力を `countSupersedingReports` へ通す。** 次にこの歯を「他と重複
+ * している」と思って消さないこと —— 他のテストを何本読んでも、この確認の
+ * 代わりにはならない（接頭辞がずれても、それらは緑のままである）。
+ */
+describe('commitmentFor と countSupersedingReports の接頭辞の一致（issue #872）', () => {
+  it('commitmentFor が組んだ report 行を countSupersedingReports が superseded として数える', () => {
+    const commitment = commitmentFor(managerReportEvent('r1', '2026-09-09T12:00:00Z'));
+    expect(commitment).not.toBeNull();
+
+    const decision = countSupersedingReports({
+      list: list([commitment as Commitment]),
+      managerId: MANAGER,
+      afterAts: AFTER_ATS,
+      excludeIds: new Set(),
+    });
+
+    const message = [
+      'この歯は commitmentFor（clone.ts）が組む body の接頭辞と、',
+      'countSupersedingReports（superseded.ts）が読む接頭辞が一致していることを守っている。',
+      '他のテストは全部 [report] 接頭辞を手で書き写したフィクスチャを使っており、',
+      'commitmentFor の接頭辞の組み立てが変わってもそちらは赤くならない。',
+      '',
+      `実測: decision = ${JSON.stringify(decision)}`,
+      '',
+      'この歯が赤いなら、commitmentFor と countSupersedingReports の接頭辞が食い違った。',
+    ].join('\n');
+    expect(decision.kind, message).toBe('superseded');
+    if (decision.kind !== 'superseded') throw new Error('unreachable');
+    expect(decision.reports, message).toBe(1);
+    expect(decision.latestAt, message).toBe('2026-09-09T12:00:00Z');
   });
 });
 
