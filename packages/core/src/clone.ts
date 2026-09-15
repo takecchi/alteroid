@@ -7525,7 +7525,9 @@ async function reportSettlement(
  * `closedReason` が無ければ空文字を返す——呼び出し側はそれを括弧ごと出さない
  * （取れない軸に値を作らない）。
  */
-function closedReasonParenthetical(settlement: Extract<ReportSettlement, { kind: 'closed' }>): string {
+function closedReasonParenthetical(
+  settlement: Extract<ReportSettlement, { kind: 'closed' }>,
+): string {
   return settlement.closedReason === undefined
     ? ''
     : `（閉じた理由: 「${excerptLine(settlement.closedReason, CLOSED_REASON_EXCERPT)}」）`;
@@ -7734,7 +7736,9 @@ function managerPrompt(
       event.text,
       '',
       ...(liveness === 'settled'
-        ? ['この確認はもう待たれていない（既に解決したか、マネージャーが終わっている）。答え直す必要は無い。']
+        ? [
+            'この確認はもう待たれていない（既に解決したか、マネージャーが終わっている）。答え直す必要は無い。',
+          ]
         : []),
       ...(closedConfirmation === null ? [] : [closedConfirmation]),
     ].join('\n');
