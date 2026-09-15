@@ -1988,6 +1988,57 @@ describe('HTTP API', () => {
     expect(await stores.journal.list({ types: ['decision'] })).toHaveLength(1);
   });
 
+  /**
+   * 「放置」と「進行中」の見分け（issue #1003）——`GET /commitments` が
+   * `respondedAt` を組み立てて返すこと。導出そのものの枝分かれ（昇順の並び・
+   * `origin` / `source` のガード）は `packages/core/src/schema.test.ts` の
+   * `commitmentRespondedAt` が別に固定している。ここで見たいのは、ハンドラが
+   * 日誌から会話ごとの返答時刻を正しく組み立てて渡していることだけである。
+   */
+  it('チャットで積んだ行に、その会話への返答が日誌にあれば respondedAt が付く', async () => {
+    await stores.commitments.open({
+      id: 'cmt-answered',
+      at: '2026-01-01T00:00:00.000Z',
+      origin: 'human',
+      source: 'conv-1',
+      body: '直してほしい',
+    });
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: '直しました',
+      conversationId: 'conv-1',
+    });
+
+    const list = await app.request('/commitments');
+    const body = (await list.json()) as { entries: Array<{ id: string; respondedAt?: string }> };
+    expect(body.entries.find((entry) => entry.id === 'cmt-answered')?.respondedAt).toBeDefined();
+  });
+
+  it('返答が commitment.at より前にしか無ければ respondedAt は付かない（別の依頼への返答）', async () => {
+    // 先に返答が積まれ、その後で同じ会話に新しい依頼が積まれた形——古い返答は
+    // この新しい行への返答ではない。
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: '前の依頼への返信',
+      conversationId: 'conv-1',
+    });
+    await stores.commitments.open({
+      id: 'cmt-new',
+      at: new Date(Date.now() + 60_000).toISOString(),
+      origin: 'human',
+      source: 'conv-1',
+      body: '新しい依頼',
+    });
+
+    const list = await app.request('/commitments');
+    const body = (await list.json()) as { entries: Array<{ id: string; respondedAt?: string }> };
+    expect(body.entries.find((entry) => entry.id === 'cmt-new')?.respondedAt).toBeUndefined();
+  });
+
   it('積んだ側が自分で選べるのは本文と出所だけ（origin を human 以外にできない）', async () => {
     // ここを人間に選ばせると、人間が積んだものが `self` を名乗れてしまい、
     // 「人間との約束か、自分で思い立ったことか」をクローンが区別できなくなる。

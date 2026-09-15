@@ -28,6 +28,21 @@ import { cn } from '~/lib/cn';
 import { formatDateTime, formatRelative } from '~/lib/format';
 
 /**
+ * `Commitment` に `respondedAt`（issue #1003）を足したもの。
+ *
+ * **本来は `apps/web/app/lib/types.ts` が持つ「生成 spec から導出する」形
+ * （`Ok<paths['/commitments']['get']>['entries'][number]` のような）で
+ * 持つべき欄だが、`lib/types.ts` はこの PR の作業範囲に含まれていない
+ * （マネージャーへ確認中。PR 本文）。ここでは `Commitment`（`@alteroid/core`）
+ * へ手で1欄だけ足す — 型は `apps/daemon/src/openapi.ts` の
+ * `commitmentListResponseSchema`（`respondedAt: isoDateTimeSchema.optional()`）
+ * と一致させてある。`useCommitments()` が読む `GET /commitments` の応答は
+ * 実際にこの欄を持つので、ここは値を作っているのではなく型を追いつかせて
+ * いるだけである。
+ */
+type CommitmentWithRespondedAt = Commitment & { respondedAt?: string };
+
+/**
  * 引き受けたまま終わっていない仕事の台帳（`packages/core/src/schema.ts` の
  * `commitmentSchema`）。CLI の `/commitments` `/commit` `/done` と同じものを見る。
  *
@@ -637,6 +652,39 @@ function EditedBadge({ commitment }: { commitment: Commitment }) {
   return <Badge tone="neutral">編集済み（{formatDateTime(commitment.editedAt)}）</Badge>;
 }
 
+/**
+ * 未了の行に、クローンが答えているかどうかを出す（issue #1003）。
+ *
+ * **人間の発言（`会話した内容が…溜まってる気がする』）を出どころに持つ行にだけ
+ * 出す。** `origin: 'human'` はチャット・承認待ちへの回答・`POST /commitments`
+ * の3経路が共有していて、このうち実際に「返答が見つかる」ことがありうるのは
+ * チャット経由だけである（`packages/core/src/schema.ts` の
+ * `commitmentRespondedAt` の doc）。それ以外の origin（`self` / `manager` /
+ * `external`）には「クローンが人間へ返答したか」という概念自体が無いので、
+ * この印を出さない——出すと「未着手」という強い言葉を、当てはまらない行にも
+ * 貼ることになる。
+ *
+ * **「返答済み・未クローズ」が出ないからといって「放置」だと断定しない。**
+ * `commitmentRespondedAt` が `undefined` を返す行には、チャット以外の経路
+ * （承認待ちへの回答・API からの直接積み）も混ざっている——それらは最初から
+ * この導出の対象外である（同 doc）。それでも「未着手」の残余バッジを出す
+ * のは、依頼者（マネージャー）の指示どおり、issue #1003 の3状態表が
+ * 「未着手 = 返答済みが偽」をそのまま導出可能としているためである。
+ *
+ * **「人間の回答待ち」（3値目）はここに無い。** `PendingApproval` と
+ * `Commitment` を結ぶ鍵がリポジトリに無く、結べないものは出さない
+ * （issue #1003 本文）。段2（進行中）も同じ理由でまだここに無い。
+ */
+function AnsweredStateBadge({ commitment }: { commitment: CommitmentWithRespondedAt }) {
+  if (commitment.origin !== 'human') return null;
+  if (commitment.respondedAt !== undefined) {
+    return (
+      <Badge tone="accent">返答済み・未クローズ（{formatDateTime(commitment.respondedAt)}）</Badge>
+    );
+  }
+  return <Badge tone="warn">未着手</Badge>;
+}
+
 const EDITOR_TAB_TRIGGER_CLASS =
   'border-b-2 border-transparent px-2 py-1 text-xs font-medium text-muted transition-colors hover:text-fg';
 const EDITOR_TAB_TRIGGER_ACTIVE_CLASS = 'border-accent text-fg';
@@ -778,7 +826,7 @@ function CommitmentBodyEditor({
   );
 }
 
-function OpenRow({ commitment }: { commitment: Commitment }) {
+function OpenRow({ commitment }: { commitment: CommitmentWithRespondedAt }) {
   const closeCommitment = useCloseCommitment();
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
@@ -825,6 +873,7 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
       <div className="mb-1.5 flex flex-wrap items-center gap-2 text-[11px] text-muted">
         <OriginBadge commitment={commitment} />
         <EditedBadge commitment={commitment} />
+        <AnsweredStateBadge commitment={commitment} />
         <span>{formatDateTime(commitment.at)}</span>
         {/* 齢。器は優先度も締切も持たないので、急ぎ方を決める材料はこれだけである。 */}
         <span>({formatRelative(commitment.at)})</span>

@@ -27,6 +27,7 @@ import {
   chatStreamEventSchema,
   collectConversations,
   commitmentPosition,
+  commitmentRespondedAt,
   commitmentUpdatedAt,
   compareApprovalPagingKey,
   compareCommitmentPosition,
@@ -2695,7 +2696,12 @@ export function createApp(deps: AppDeps) {
           '（opt-in。`.claude/skills/listing-and-detail/SKILL.md` の考え方と同じ——足すのは' +
           '能力であって、既存の呼び手に新しい欄を押し付けない）。並びは固定（未了は `at` ' +
           '昇順・片付きは `closedAt` 降順で、その順に連結）で、ここでは選べない——' +
-          '窓はその上に頁を切るだけである（`commitmentsCursorSchema` の doc）。',
+          '窓はその上に頁を切るだけである（`commitmentsCursorSchema` の doc）。' +
+          '各行の `respondedAt` は「放置」と「進行中」を見分けるための導出値（issue ' +
+          '#1003）——クローンから人間への返答が日誌に見つかった最初の時刻で、無ければ' +
+          '欄自体が無い（＝並べ替え・絞り込みの新しい軸ではなく、既存の記録から読める' +
+          'ことを1つ増やしただけ）。`packages/core/src/schema.ts` の ' +
+          '`commitmentRespondedAt` を参照。',
         responses: {
           200: {
             description: '台帳の中身。',
@@ -2734,6 +2740,43 @@ export function createApp(deps: AppDeps) {
         // **`total` は窓を当てる前の件数。** opt-in していないときは応答に載せない
         // ので、ここで数えておくだけで並べ替えは行わない。
         const total = entries.length;
+
+        // **「返答済み・未クローズ」の導出（issue #1003）。** クローンが手で
+        // 維持する欄を足すのではなく、既に在る日誌の `exchange` から読む
+        // （`commitmentRespondedAt` の doc、`packages/core/src/schema.ts`）。
+        // 会話 id → 返答（`with: 'human', role: 'outbound'`）の `at` を昇順に
+        // 並べたものを1回だけ組み立て、行ごとに日誌を読み直さない。
+        //
+        // **一致しうる行が1件も無ければ日誌へは問い合わせない。** `origin`
+        // が `human` で `source` を持つ行が無いなら、`commitmentRespondedAt`
+        // はどの行でも `undefined` にしかならない。
+        //
+        // **窓の組み立ては `readConversationWindow`（`@alteroid/core`）を通す。**
+        // `types: ['exchange'], with: ['human']` を手組みし直すと、issue #418
+        // の症状（`with` の絞りを1か所直し忘れる余地）を再び作る——
+        // `scripts/conversation-window-single-source.test.ts` がこれを歯として
+        // 測っている。ここは「会話を1本表示する窓」ではなく「返答済みを判定する
+        // ための全履歴」が要るので、`scan` に事実上の無制限
+        // （`Number.MAX_SAFE_INTEGER`。`packages/storage-pg/src/journal.ts` が
+        // `limit` 省略時に使うのと同じ値）を渡す。
+        const repliesByConversation = new Map<string, string[]>();
+        if (entries.some((entry) => entry.origin === 'human' && entry.source !== undefined)) {
+          const humanExchanges = await readConversationWindow(stores.journal, {
+            scan: Number.MAX_SAFE_INTEGER,
+          });
+          for (const exchange of humanExchanges) {
+            if (exchange.type !== 'exchange') continue;
+            if (exchange.role !== 'outbound' || exchange.conversationId === undefined) continue;
+            const existing = repliesByConversation.get(exchange.conversationId);
+            if (existing) {
+              existing.push(exchange.at);
+            } else {
+              repliesByConversation.set(exchange.conversationId, [exchange.at]);
+            }
+          }
+          // `commitmentRespondedAt` の契約は「昇順」——ここで1回だけ並べる。
+          for (const list of repliesByConversation.values()) list.sort();
+        }
 
         let cursorPayload: z.infer<typeof commitmentsCursorSchema> | undefined;
         if (cursor !== undefined) {
@@ -2792,7 +2835,11 @@ export function createApp(deps: AppDeps) {
           total?: number;
           nextCursor?: string;
         } = {
-          entries: page.map((entry) => ({ ...entry, updatedAt: commitmentUpdatedAt(entry) })),
+          entries: page.map((entry) => ({
+            ...entry,
+            updatedAt: commitmentUpdatedAt(entry),
+            respondedAt: commitmentRespondedAt(entry, repliesByConversation),
+          })),
           unreadable,
           trimmedClosed,
         };

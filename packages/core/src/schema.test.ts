@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   approvalUpdatedAt,
+  commitmentRespondedAt,
   commitmentUpdatedAt,
   inboxEventSchema,
   pendingApprovalSchema,
@@ -115,6 +116,79 @@ describe('commitmentUpdatedAt', () => {
         closedAt: '2026-01-02T00:00:00.000Z',
       }),
     ).toBe('2026-01-02T00:00:00.000Z');
+  });
+});
+
+/**
+ * 「返答済み・未クローズ」の導出（issue #1003）。
+ *
+ * ここで固定するのは `commitmentRespondedAt` 単体の枝分かれである。
+ * 画面（`apps/web/app/routes/commitments.tsx`）がこの値の有無をどう見せる
+ * かは `commitments.test.tsx` の「返答済み・未クローズ / 未着手」が別に持つ
+ * ——役割が違うので、あちらは書き換えていない。
+ */
+describe('commitmentRespondedAt', () => {
+  it('origin が human で、返答（with:human, role:outbound）が at より後に見つかれば、その時刻を返す', () => {
+    const replies = new Map([['conv-1', ['2026-01-02T00:00:00.000Z']]]);
+    expect(
+      commitmentRespondedAt(
+        { origin: 'human', source: 'conv-1', at: '2026-01-01T00:00:00.000Z' },
+        replies,
+      ),
+    ).toBe('2026-01-02T00:00:00.000Z');
+  });
+
+  it('昇順の並びの中で、at を初めて超えた時刻を返す（それより前の返答は無視する）', () => {
+    const replies = new Map([
+      [
+        'conv-1',
+        ['2026-01-01T00:00:00.000Z', '2026-01-01T12:00:00.000Z', '2026-01-03T00:00:00.000Z'],
+      ],
+    ]);
+    // 最初の返答（00:00）はこの行の `at`（12:00）より前——この行への返答では
+    // ありえない。それより後（1/3）が「返答済み」の時刻になる。
+    expect(
+      commitmentRespondedAt(
+        { origin: 'human', source: 'conv-1', at: '2026-01-01T12:00:00.000Z' },
+        replies,
+      ),
+    ).toBe('2026-01-03T00:00:00.000Z');
+  });
+
+  it('会話 id が一致する返答が無ければ undefined（＝「未着手」側の残余）', () => {
+    const replies = new Map([['conv-other', ['2026-01-02T00:00:00.000Z']]]);
+    expect(
+      commitmentRespondedAt(
+        { origin: 'human', source: 'conv-1', at: '2026-01-01T00:00:00.000Z' },
+        replies,
+      ),
+    ).toBeUndefined();
+  });
+
+  it('origin が human でなければ、一致する会話があっても undefined（この導出の対象外）', () => {
+    const replies = new Map([['conv-1', ['2026-01-02T00:00:00.000Z']]]);
+    expect(
+      commitmentRespondedAt(
+        { origin: 'self', source: 'conv-1', at: '2026-01-01T00:00:00.000Z' },
+        replies,
+      ),
+    ).toBeUndefined();
+  });
+
+  /**
+   * `origin: 'human'` の `source` は、承認待ちへの回答（`human_answer`）では
+   * `approvalId`、`POST /commitments` では呼び出し側の任意文字列——会話 id
+   * とは限らない（`commitmentRespondedAt` の doc）。`source` が無い行
+   * （`POST /commitments` は省略可）はこの導出の対象外になる。
+   */
+  it('source が無ければ undefined（会話 id を持たない human 行——POST /commitments 等）', () => {
+    const replies = new Map([['conv-1', ['2026-01-02T00:00:00.000Z']]]);
+    expect(
+      commitmentRespondedAt(
+        { origin: 'human', source: undefined, at: '2026-01-01T00:00:00.000Z' },
+        replies,
+      ),
+    ).toBeUndefined();
   });
 });
 

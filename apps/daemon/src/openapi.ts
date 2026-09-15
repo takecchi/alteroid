@@ -436,9 +436,22 @@ export const scheduleListResponseSchema = z.object({ entries: z.array(scheduleSt
  * サーバ側で一度だけ行うことで受け手にやらせるのをやめる変更である。導出は
  * `packages/core/src/schema.ts` の `commitmentUpdatedAt` を呼ぶ（#269）。
  * **ここで `??` を書き直さない。**
+ *
+ * **`respondedAt` は issue #1003（「放置」と「進行中」の見分け）のために足した
+ * 導出値である。** `updatedAt` と同じ形の**加算のみの変更**——クローンから
+ * 人間への返答が日誌の `exchange` に見つかった最初の時刻で、見つからなければ
+ * 欄自体が応答に現れない（`undefined` であって `null` ではない。`??` の対象に
+ * しないこと——「無い」と「見つからなかった」を区別しない値である）。導出は
+ * `packages/core/src/schema.ts` の `commitmentRespondedAt` を呼ぶ
+ * （`apps/daemon/src/app.ts` の `GET /commitments` ハンドラ）。
  */
 export const commitmentListResponseSchema = z.object({
-  entries: z.array(commitmentSchema.extend({ updatedAt: isoDateTimeSchema })),
+  entries: z.array(
+    commitmentSchema.extend({
+      updatedAt: isoDateTimeSchema,
+      respondedAt: isoDateTimeSchema.optional(),
+    }),
+  ),
   /**
    * 読めなかった行（issue #296）。**「無い」でも「片付いた」でもない第3の状態。**
    *
