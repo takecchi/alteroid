@@ -8036,6 +8036,78 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
       await s.clone.stop();
     });
   });
+
+  /**
+   * **Issue #982 — クローン層にも #976 の非対称が残っている。** 委譲層
+   * （マネージャー／ランナー）は #976 / PR #980 で直った——`runner.ts` が
+   * `#observeContextUsage()` を成否分岐の**手前**で呼び、測った値を
+   * `event.succeeded` を見る前に独立の `context_usage` journal エントリと
+   * して無条件に emit するようになった。**クローン層（`clone.ts`）は
+   * 同じ形の呼び出し順序（`case 'turn_ended'` の先頭で `#observeContextUsage()`
+   * を呼ぶ）を持ちながら、その値が外へ出る経路は `#recordUsage`
+   * （`clone.ts:6704` の `if (usage === undefined) return;` で降りる）しか
+   * 無く、`context_usage` エントリを1つも emit していない。**
+   *
+   * ⟹ **失敗したターンでは、`#lastContextUsage`（in-memory。プロセスが
+   * 落ちれば消え、履歴も持たない）にしか残らず、日誌には何も残らない。**
+   *
+   * この節は、まだ直っていないいまの挙動——**成功したターンでも失敗した
+   * ターンでも、クローン層は `context_usage` を1件も書かない**——を固定
+   * する（実装は1行も変えていない）。#980 の第1段（#977）と同じ構成。
+   */
+  describe('クローン層の context_usage 配線（Issue #982。まだ直っていない挙動を固定する）', () => {
+    async function contextUsageRows(stores: Stores) {
+      const entries = await stores.journal.list({ types: ['context_usage'] });
+      return entries.flatMap((entry) => (entry.type === 'context_usage' ? [entry] : []));
+    }
+
+    it('成功したターンでも context_usage は1件も書かれない（いまの挙動。#982 が直す前）', async () => {
+      const s = setup(undefined, createMemoryStores(), {
+        modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
+        getContextUsage: () => ({
+          totalTokens: 12_000,
+          rawMaxTokens: 200_000,
+          percentage: 6,
+        }),
+      });
+
+      s.clone.post(humanMessage('やあ'));
+      await waitForDone(s.events);
+
+      // 成功ターンなので `turn_usage.contextUsage` には値が載る（既存の
+      // 経路。上のテスト群で確認済み）。**それとは独立のはずの
+      // `context_usage` は、いまはまだ配線されていないので0件のままである。**
+      expect(await contextUsageRows(s.stores)).toHaveLength(0);
+
+      await s.clone.stop();
+    });
+
+    it('⭐ 失敗したターンでは context_usage も turn_usage も1件も残らない（#982 が直す非対称そのもの）', async () => {
+      const s = setup(undefined, createMemoryStores(), {
+        resultSubtype: 'error_during_execution',
+        getContextUsage: () => ({
+          totalTokens: 12_000,
+          rawMaxTokens: 200_000,
+          percentage: 6,
+        }),
+      });
+
+      s.clone.post(humanMessage('やあ'));
+      await waitForTerminal(s.events);
+      expect(s.events.filter(isTerminal).map((event) => event.type)).toEqual(['error']);
+
+      // `usage` が undefined になる（`isSuccessResult` が偽）ので `#recordUsage`
+      // が早期 return し、`turn_usage` は元から1件も書かれない。
+      expect(await s.stores.journal.list({ types: ['turn_usage'] })).toHaveLength(0);
+      // **⚠️ ここが直すべき穴である。** `#observeContextUsage()` 自体は
+      // 成否分岐の手前で呼ばれ値を測れているが（`self_status` の
+      // `#lastContextUsage` からは読める——このテストでは日誌だけを見る）、
+      // 独立の `context_usage` エントリが無いので、日誌には**何も残らない**。
+      expect(await contextUsageRows(s.stores)).toHaveLength(0);
+
+      await s.clone.stop();
+    });
+  });
 });
 
 /**
