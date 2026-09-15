@@ -88,6 +88,34 @@ FROM node:22-trixie-slim AS runtime
 # 確かめない** — 版が何マイナーも戻ってもビルドは緑のままで、壊れるのは実行時
 # である。取得元（`apt-cache policy gh` 等）まで検査する歯を足す案はビルドに1段
 # 乗るので、入れるかどうかは費用対効果を見て別に判断する。
+#
+# **`postgresql-17` / `postgresql-17-pgvector` も同じ RUN に足す（#965 段2）。**
+# 委譲先の器には docker も postgres も無く、DB を要る検証（mnemora #247 が典型）が
+# 「判定不能」で止まっていた。ここに足すのは、作業者が使い捨てのクラスタを
+# 自分の作業ディレクトリへ都度立てるための「道具」である — マネージャーの道具と
+# 同じ扱い（上のコメント参照）。
+#
+# **外部の apt 出所は要らない。** `postgresql-17` / `postgresql-17-pgvector` は
+# どちらも Debian trixie の main（= このイメージが最初から使っている
+# `deb.debian.org` のソース）に在る。PGDG のような別ソース・別鍵は足していない
+# （実測は #965 と、この行を足した PR の本文に書く）。
+#
+# **`postgresql-17-pgvector` の依存 `postgresql-17-jit-llvm (>= 19)` は、
+# パッケージとしては存在しない（`apt-cache show` で確認できない）が、
+# `postgresql-17` 自身がその名前を仮想パッケージとして provide しており
+# （`Provides: postgresql-17-jit-llvm (= 19)`）、依存は解決する。** 一見
+# 壊れて見える依存なので、ここに書いておく。
+#
+# **`locales` を明示で足す。** `postgresql-17` の Depends は `locales |
+# locales-all` という選択式で、`locales-all`（≈231MiB）は `locales`
+# （≈15MiB）の15倍太い。どちらも入っていない器では apt が先に書かれた方を
+# 選ぶ実装が多いが、選ぶ根拠を apt の内部ヒューリスティックに委ねたくないので、
+# 欲しい方（`locales`）をここで名指しして固定する。
+#
+# **既定クラスタは焼かない。** `postgresql-common` の postinst が
+# `/var/lib/postgresql/17/main` を initdb 済みで自動生成するが、これは
+# 使われないまま太りだけを増やす（イメージには空のクラスタではなく道具だけを
+# 置きたい）。同じ RUN の中で消し、層に残さない。
 RUN set -eux; \
   apt-get update; \
   apt-get install -y --no-install-recommends ca-certificates curl; \
@@ -98,10 +126,14 @@ RUN set -eux; \
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
     > /etc/apt/sources.list.d/github-cli.list; \
   apt-get update; \
-  apt-get install -y --no-install-recommends git ripgrep jq gh tini; \
+  apt-get install -y --no-install-recommends \
+    git ripgrep jq gh tini \
+    locales postgresql-17 postgresql-17-pgvector; \
+  rm -rf /etc/postgresql /var/lib/postgresql/17/main; \
   rm -rf /var/lib/apt/lists/*; \
   gh --version; \
-  tini --version
+  tini --version; \
+  su postgres -c '/usr/lib/postgresql/17/bin/postgres --version'
 
 # git の資格情報は `gh` から借りる（人間が `gh auth setup-git` でやることと同じ）。
 # **鍵をイメージに焼かない。** ここにあるのは経路だけである。

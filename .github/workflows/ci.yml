@@ -321,6 +321,53 @@ jobs:
             cd /tmp && git clone --depth 1 -q https://github.com/cli/cli.git probe
           '
 
+      # **Issue #965 段2。「入れた」で終わらせない。** パッケージが apt の依存解決を
+      # 通ることと、initdb して拡張が実際に使えることは別の主張である。ここで
+      # 使い捨てのクラスタを立て、`CREATE EXTENSION vector` まで確かめる —
+      # 作業者が実際にやることと同じ手順（Dockerfile のコメント参照）。
+      #
+      # postgres は apt が作る `postgres` システムユーザーで動かす（Debian の
+      # 作法どおり）。データディレクトリはイメージへ焼かず、この使い捨て
+      # コンテナの `/tmp` に都度作る。
+      #
+      # **`pids.current` も同じ実行の中で before/after を取る**（#965 の3つ目の
+      # 条件 — postgres を立てた状態でもう一度測ること）。⚠️ **ここは GitHub
+      # Actions の runner であって、alteroid が実際に走っている Railway の
+      # runner ではない。** #965 段1・その派生コメントが測った `pids.max=1000`
+      # の cgroup とは別物なので、この2つの絶対値をそちらの余り（716）と比べない
+      # こと —— 比べてよいのはこの実行の中の「差分」だけである。**あの実測は
+      # コンテナ全体のもので、他テナントが軽い時間帯の観測である**という段1の
+      # 但し書きもそのまま生きている。
+      - name: 使い捨て postgres で CREATE EXTENSION vector が通るか（+ pids の before/after）
+        run: |
+          docker run --rm -u 0 alteroid:ci sh -eu -c '
+            export PATH=/usr/lib/postgresql/17/bin:$PATH
+            PGDATA=/tmp/pgdata-ci
+
+            if [ -r /sys/fs/cgroup/pids.current ]; then
+              echo "pids.current(postgres起動前、このコンテナ内、GitHub Actions runner): $(cat /sys/fs/cgroup/pids.current)"
+              [ -r /sys/fs/cgroup/pids.max ] && echo "pids.max(同上): $(cat /sys/fs/cgroup/pids.max)"
+            else
+              echo "pids.current: このコンテナには /sys/fs/cgroup/pids.current が無い(cgroup v2 未使用か、権限が無い)"
+            fi
+
+            install -d -m 0700 -o postgres -g postgres "$PGDATA"
+            su -s /bin/sh postgres -c "initdb -D $PGDATA --auth=trust" \
+              || { echo "initdb が失敗した" >&2; exit 1; }
+            su -s /bin/sh postgres -c "pg_ctl -D $PGDATA -l /tmp/pg.log -o \"-k /tmp -h 127.0.0.1 -p 5433\" start" \
+              || { echo "pg_ctl start が失敗した:" >&2; cat /tmp/pg.log >&2; exit 1; }
+
+            if [ -r /sys/fs/cgroup/pids.current ]; then
+              echo "pids.current(postgres起動後、このコンテナ内、GitHub Actions runner): $(cat /sys/fs/cgroup/pids.current)"
+            fi
+
+            su -s /bin/sh postgres -c "psql -h 127.0.0.1 -p 5433 -d postgres -c \"CREATE EXTENSION vector;\"" \
+              || { echo "CREATE EXTENSION vector が失敗した:" >&2; cat /tmp/pg.log >&2; su -s /bin/sh postgres -c "pg_ctl -D $PGDATA stop" || true; exit 1; }
+            su -s /bin/sh postgres -c "psql -h 127.0.0.1 -p 5433 -d postgres -c \"SELECT extname, extversion FROM pg_extension;\""
+
+            su -s /bin/sh postgres -c "pg_ctl -D $PGDATA stop"
+          '
+
       # **「渡したつもり」で終わらせない。** 上のビルドで `ALTEROID_BUILD_REV=
       # github.sha` を渡したが、それが実際に焼き込まれ、`resolveBuildRevision()`
       # が `commit === github.sha` かつ `source === 'build'` を返すことまで見る。
