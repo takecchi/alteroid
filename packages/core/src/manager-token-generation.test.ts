@@ -81,6 +81,28 @@ const RUNNING_JOB_2: Job = {
 };
 
 /**
+ * Issue #988 の「一度も観測されていない委譲」専用のジョブ。**`status: 'done'`
+ * にしてあるのは、`#restoreJobs` が running / waiting_human 以外の状態では
+ * resume を試みない（`#resumeOnce` を呼ばない）ためである。** `alive`（runner
+ * に生きているセッション）にも居ないので living 枝も通らない——結果として
+ * `#records` へは載る（session_id を持つので）が、`#tokenIdentities` には
+ * 一度も触れられない。プールは配線されている（他の委譲では観測できる）のに、
+ * この委譲だけがまだ起きていない、という組み合わせを作るための最小形。
+ */
+const DONE_JOB: Job = {
+  id: 'mgr-gen-done',
+  managerId: 'mgr-gen-done',
+  createdAt: '2026-09-15T00:00:00.000Z',
+  updatedAt: '2026-09-15T00:00:00.000Z',
+  status: 'done',
+  summary: '調べもの3',
+  request: '調べておいて3',
+  cwd: '/work/project',
+  sessionId: 'sess-3',
+  runnerId: 'runner-primary',
+};
+
+/**
  * `manager-usage-token.test.ts` の `usageRunner()` の縮小版。**縮めたのは
  * 「使わない口を空にした」ぶんだけで、判定に効く口（`connect` / `resume` /
  * `list`）は同じことをする。** `usage()` の代わりに `note()` を持つ——ここで
@@ -203,6 +225,33 @@ describe('マネージャーが抱えている認証トークンの世代（Issu
 
     expect(summary.tokenGeneration).toBeUndefined();
     expect(summary.activeTokenGeneration).toBeUndefined();
+    // **Issue #988。** 欄が消える理由が「プールを配線していない」だと名乗る
+    // ——「一度も観測されていない」「再起動をまたいだ引き取り」とは別の理由。
+    expect(summary.tokenGenerationUnknownReason).toBe('pool-not-wired');
+
+    await pool.stop();
+  });
+
+  /**
+   * **Issue #988。** プールは配線されているのに、この委譲**固有**の理由——
+   * まだ一度もこのプロセスで起きていない——で欄が消えるケース。直上の
+   * テスト（プール未配線。全マネージャー共通の理由）とは別の材料で立てる。
+   */
+  it('プールは配線されているが、まだ一度も起きていない委譲は「一度も観測されていない」と名乗る', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(DONE_JOB);
+    const { pool } = await setup({
+      stores,
+      tokenIdentity: () => ({ tokenId: 'tok-a', generation: 3 }),
+    });
+
+    // 対照: 同じプールで RUNNING_JOB（setup() が起こす）は観測済みになる。
+    const observed = await summaryFor(pool, 'mgr-gen');
+    expect(observed.tokenGeneration).toBe(3);
+
+    const summary = await summaryFor(pool, 'mgr-gen-done');
+    expect(summary.tokenGeneration).toBeUndefined();
+    expect(summary.tokenGenerationUnknownReason).toBe('not-yet-observed');
 
     await pool.stop();
   });
@@ -398,13 +447,84 @@ describe('デーモン再起動を挟んだ二重 restore（Issue #978）', () =
     // 記録が無いままなので、`tokenGeneration` は `undefined` になる
     // （`summaryOf` が `activeTokenGeneration` も道連れに落とす。`tools.ts` の
     // `describeTokenGeneration` はこの委譲について1行も出さない）。**嘘の
-    // 「一致」が消え、正直な「材料が無い」に変わった**——ただし「材料が無い」
-    // 自体は、再起動をまたいだことを名指ししていない（この委譲が一度も
-    // 観測されていない場合と同じ見た目になる。#978 の doc に残した設計判断）。
+    // 「一致」が消え、正直な「材料が無い」に変わった。**
     expect(after1.tokenGeneration).toBeUndefined();
     expect(after1.activeTokenGeneration).toBeUndefined();
     expect(after2.tokenGeneration).toBeUndefined();
     expect(after2.activeTokenGeneration).toBeUndefined();
+    // **2026-09-15 Issue #988 で埋めた。** 「材料が無い」自体は一度も観測されて
+    // いない場合と同じ見た目だったが、いまはその理由を名乗る——living 枝で
+    // 引き取ったことそのものが `tokenGenerationUnknownReason` に残る。
+    expect(after1.tokenGenerationUnknownReason).toBe('reattached-across-restart');
+    expect(after2.tokenGenerationUnknownReason).toBe('reattached-across-restart');
+
+    await pool2.stop();
+  });
+
+  /**
+   * **Issue #988。** 理由の印は living 枝で立てたきりではなく、デーモンが
+   * 実際にこの委譲へ触れた瞬間（ここでは `runner.ts` が送る
+   * `note.tokenRotation: true` の形）に消える——`#rememberTokenIdentity` の
+   * doc の3つの呼び出し口と同じ理由。**片方だけ触れたら、触れていないほうの
+   * 印は残ったままであること**も確かめる（印がマネージャーごとに独立して
+   * いるという確認——グローバルな旗ではない）。
+   */
+  it('再起動後に daemon がこの委譲へ実際に触れば、「再起動をまたいだ」の印は消える', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(RUNNING_JOB);
+    await stores.jobs.putJob(RUNNING_JOB_2);
+
+    let current: { tokenId: string; generation: number } = { tokenId: 'tok-a', generation: 3 };
+
+    const fake = tokenRunner();
+    const registry1 = createRunnerRegistry([fake.runner]);
+    const pool1 = createManagerPool({
+      stores,
+      post: () => {
+        /* この検証では読まない */
+      },
+      runners: registry1,
+      profile: createProfileService({ stores, runners: registry1 }),
+      tokenIdentity: () => current,
+    });
+    await pool1.restore();
+    current = { tokenId: 'tok-b', generation: 5 };
+    await pool1.stop();
+
+    const registry2 = createRunnerRegistry([fake.runner]);
+    const pool2 = createManagerPool({
+      stores,
+      post: () => {
+        /* この検証では読まない */
+      },
+      runners: registry2,
+      profile: createProfileService({ stores, runners: registry2 }),
+      tokenIdentity: () => current,
+    });
+    await pool2.restore();
+
+    // 再起動直後は両方とも「再起動をまたいだ」——前のテストと同じ前提。
+    expect((await summaryFor(pool2, 'mgr-gen')).tokenGenerationUnknownReason).toBe(
+      'reattached-across-restart',
+    );
+    expect((await summaryFor(pool2, 'mgr-gen-2')).tokenGenerationUnknownReason).toBe(
+      'reattached-across-restart',
+    );
+
+    // daemon が mgr-gen にだけ実際に触れる（`runner.ts` の
+    // `#reopenForTokenRotation` が送る形そのもの）。
+    fake.note(true);
+
+    const touched = await summaryFor(pool2, 'mgr-gen');
+    const untouched = await summaryFor(pool2, 'mgr-gen-2');
+
+    // 触れたほうは世代が埋まり、理由の印は消える（欄ごと消えるので
+    // `tokenGenerationUnknownReason` 自体が無い）。
+    expect(touched.tokenGeneration).toBe(5);
+    expect(touched.tokenGenerationUnknownReason).toBeUndefined();
+    // 触れていないほうは、印が残ったまま——グローバルな旗ではない。
+    expect(untouched.tokenGeneration).toBeUndefined();
+    expect(untouched.tokenGenerationUnknownReason).toBe('reattached-across-restart');
 
     await pool2.stop();
   });

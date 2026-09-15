@@ -6255,6 +6255,62 @@ describe('クローンの道具', () => {
       expect(reply).not.toContain('認証トークンの世代');
     });
 
+    /**
+     * **Issue #988。** `tokenGeneration === undefined` は3つの別々の理由から
+     * 出ていて、以前はどれも「欄ごと消える」という同じ見た目だった。
+     * `tokenGenerationUnknownReason` が理由を名乗れば、行が出て理由が読める
+     * ——直上のテスト（理由も名乗っていない場合）とは別の経路である。
+     */
+    it('プール未配線が理由なら、その理由を名乗り、起こし直しても変わらないと言う', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.tokenGenerationUnknownReason = 'pool-not-wired';
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('認証トークンの世代: 分からない');
+      expect(reply).toContain('配線していない');
+      expect(reply).toContain('起こし直しても変わらない');
+      expect(reply).not.toContain('⚠ 認証トークンの世代');
+      expect(reply).not.toContain('一致');
+    });
+
+    it('一度も観測されていないことが理由なら、始まればすぐ埋まると言い、起こし直せとは言わない', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.tokenGenerationUnknownReason = 'not-yet-observed';
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('認証トークンの世代: 分からない');
+      expect(reply).toContain('まだ一度も起きていない');
+      expect(reply).not.toContain('manager_stop → manager_start');
+      expect(reply).not.toContain('⚠ 認証トークンの世代');
+    });
+
+    /**
+     * **これが対処のある唯一の理由である**（#978／#987 で新設。Issue #988 の
+     * 本題）。他の2つと違い、`manager_stop` → `manager_start` を案内する。
+     */
+    it('デーモン再起動をまたいだ引き取りが理由なら、その理由と対処を言う', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.tokenGenerationUnknownReason = 'reattached-across-restart';
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('認証トークンの世代: 分からない');
+      expect(reply).toContain('デーモンの再起動をまたいで');
+      expect(reply).toContain('manager_stop → manager_start');
+      expect(reply).not.toContain('⚠ 認証トークンの世代');
+    });
+
     it('世代が一致していれば、一致していると言う（⚠ は出さない）', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -7861,6 +7917,43 @@ describe('runner_list（器の一覧）', () => {
             since: '2026-01-01T00:00:00.000Z',
             runnerId: 'runner-a',
             managers: [{ managerId: 'mgr-1', status: 'running', live: true }],
+          },
+        ],
+        unassigned: [],
+        daemonRevision: { status: 'unknown' },
+      });
+
+      const reply = await h.call('runner_list', {});
+
+      expect(reply).toContain('mgr-1[running]');
+      expect(reply).not.toContain('⚠世代');
+      expect(reply).not.toContain('世代');
+    });
+
+    /**
+     * **理由（`tokenGenerationUnknownReason`）が名乗っていても、`tokenGeneration`
+     * 自体が無ければこの一覧では1文字も足さない**（Issue #988）。詳しい理由の
+     * 文面は `manager_list` に任せる——この関数の doc「圧縮表現」のとおり、
+     * ⚠ の1件だけを名指しする作法を理由の有無では変えない。
+     */
+    it('理由だけ名乗っていても、tokenGeneration が無ければ印を1文字も足さない', async () => {
+      const h = harness();
+      h.setRunnersOverview({
+        runners: [
+          {
+            label: 'runner-a',
+            revision: { status: 'unheard' },
+            state: 'connected',
+            since: '2026-01-01T00:00:00.000Z',
+            runnerId: 'runner-a',
+            managers: [
+              {
+                managerId: 'mgr-1',
+                status: 'running',
+                live: true,
+                tokenGenerationUnknownReason: 'reattached-across-restart',
+              },
+            ],
           },
         ],
         unassigned: [],

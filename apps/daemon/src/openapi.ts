@@ -766,6 +766,28 @@ export const managerSummarySchema = z.object({
    * 出ない（比べる相手が無い判定を作らない）。
    */
   activeTokenGeneration: z.number().int().nonnegative().optional(),
+  /**
+   * `tokenGeneration` が `undefined` になっている理由（Issue #988。
+   * `packages/core/src/manager.ts` の `ManagerSummary.tokenGenerationUnknownReason`
+   * / `TokenGenerationUnknownReason`）。
+   *
+   * - `pool-not-wired` — このデプロイが認証トークンの世代そのものを配線して
+   *   いない（全マネージャーで共通の理由）
+   * - `not-yet-observed` — プールは配線されているが、この委譲のセッションが
+   *   まだ一度もこのプロセスで起きていない
+   * - `reattached-across-restart` — デーモンの再起動をまたいで、runner に
+   *   生きているセッションを見つけて引き取っただけ。**唯一、対処
+   *   （manager_stop → manager_start）を持つ理由**
+   *
+   * **`tokenGeneration` が定義されているときは欄ごと消える。**
+   *
+   * **ここに宣言しないと、値が在っても黙って落ちる**（真上の
+   * `activeTokenGeneration` と同じ断り。落ちると CLI と Web の両方が
+   * 同時に盲目になり、クローンの `manager_list` にだけ理由が出る形になる）。
+   */
+  tokenGenerationUnknownReason: z
+    .enum(['pool-not-wired', 'not-yet-observed', 'reattached-across-restart'])
+    .optional(),
   waiting: z.array(managerWaitingSchema),
   /**
    * 確認へ上がらずに止められた道具と件数（**古い順**）。
