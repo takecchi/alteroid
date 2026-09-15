@@ -623,3 +623,42 @@ jobs:
   # 塞いだ上で入れる）。この3つは順番も含めて揃える必要がある——`(a)` だけ先に
   # やると `check-required-status-checks` が drift として赤くなり、`(b)` だけ
   # 先にやっても protection は変わらないので何も強制されない。
+
+  # **この PR の本文と、この PR のコミットメッセージのどちらにも AI 生成の
+  # 帰属トレーラ（`Co-Authored-By:` / 🤖 Generated with）が残っていないことを
+  # 確かめる（Issue #1020）。** 判定ロジックは
+  # `scripts/check-no-attribution-trailers-core.mjs` が正本（fail-closed の理由・
+  # repo のファイルを走査しない理由（#785 と同じ自己参照の族）・大小文字を
+  # 無視する理由の実測はあちらの doc）。ここは呼び出しだけ。
+  #
+  # **今日の実害（63a33dd）は squash マージが PR 本文をコミットメッセージへ
+  # 写す経路で入った。** だから本文とコミットメッセージの両方を見る——片方だけ
+  # だと、まさに今日踏んだ経路を塞がない。
+  no-attribution-trailers:
+    # **`base-overlap` と違い、draft でも skip しない。** `ci` / `image` のように
+    # `if:` で節約すると、draft 由来の `skipped` が「満たした」として扱われる
+    # 罠（`AGENTS.md`「静かに失敗する道具」、`gh pr ready` が run を起こし損ねる
+    # 事故）を持ち込む。この検査は `gh api` を1回叩くだけで軽く、節約する理由が
+    # 無い。**だから draft のあいだも毎回走らせ、その種類の罠を最初から作らない。**
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v4
+      - run: pnpm check:no-attribution-trailers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          NO_ATTRIBUTION_TRAILERS_PR_NUMBER: ${{ github.event.pull_request.number }}
+
+  # **`no-attribution-trailers` を required contexts（`.github/required-status-checks.json`）
+  # には入れていない。** 判定は決定的（部分文字列一致）で `base-overlap` の
+  # ヒューリスティックとは性質が違うので required にする価値はあるが、
+  # required にするには branch protection 側の設定（administration 権限）が
+  # 要り、それは repo の管理者が GitHub 上で行う操作であってこの PR の範囲外
+  # である。**手順は上の `base-overlap` の「将来 required にしたくなったときの
+  # 手順」と同じ形**（protection を先に変え、宣言ファイルとこの doc を追随
+  # させる）。
