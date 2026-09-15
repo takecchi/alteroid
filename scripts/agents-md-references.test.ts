@@ -780,6 +780,46 @@ export const CAPTURED_OUTPUT_NON_CITATIONS: readonly CapturedOutputNonCitation[]
   },
 ];
 
+export interface AgentsMdLineNumberCitationExemption {
+  /** `findLineNumberCitations` が返す `token`（例: `schema.ts:500-503`）。完全一致で照合する。 */
+  readonly token: string;
+  /** **非空であること**（下の歯が測る）。 */
+  readonly why: string;
+}
+
+/**
+ * **`AGENTS.md` 専用（段A）の line-number citation 免除表（#784）。**
+ *
+ * #784: 段A（直下の describe 内、AGENTS.md 専用）の解決器を `isRepoFile`
+ * （リポジトリ相対パスの完全一致のみ）から `isRepoFileOrBasename`（裸の
+ * ファイル名も解決する。#760）へ差し替えたところ、新たに1件が検出される
+ * ようになった——`schema.ts:500-503`。
+ *
+ * ⛔ **これは出典ではなく証拠なので、免除する。** AGENTS.md「リポジトリの
+ * 約束」節が、この文書がかつて `schema.ts:500-503`（現物は
+ * `packages/core/src/schema.ts`）という出典を書いていて行番号が腐った、
+ * という**過去の実測そのもの**を逐語で引用している箇所である
+ * （実例(2026-08-23) の段落）。書き換えると、腐った過去の実測という証拠が
+ * 消える（AGENTS.md「生の出力（スタックトレース・過去の実測）の中の行番号は
+ * 書き換えない。あれは出典ではなく証拠である」）。
+ *
+ * ⚠️ ここへ足してよいのは、この1件と同じ形（過去の実測・証拠の引用）だけ
+ * である。出典として書かれた `path:行番号` はここへ免除せず、逐語か
+ * シンボル名へ書き直すこと（`WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS` の
+ * doc comment と同じ考え方）。
+ */
+export const AGENTS_MD_LINE_NUMBER_CITATION_EXEMPTIONS: readonly AgentsMdLineNumberCitationExemption[] =
+  [
+    {
+      token: 'schema.ts:500-503',
+      why:
+        '出典ではなく証拠。AGENTS.md「リポジトリの約束」の実例(2026-08-23) が、' +
+        'この文書がかつて `schema.ts:500-503`（現物は packages/core/src/schema.ts）' +
+        'という出典を書いていて行番号が腐った、という過去の実測を逐語で引用している' +
+        '箇所。書き換えると証拠そのものが消える（#784）。',
+    },
+  ];
+
 const TRACKED_FILES = listTrackedFiles();
 const WIDENED_SCOPE_FILES = excludeCitationScopeSelf(TRACKED_FILES.filter(isWidenedScopeFile));
 const isRepoFileOrBasename = buildBasenameAwareRepoFileResolver(TRACKED_FILES);
@@ -841,17 +881,50 @@ describe('AGENTS.md の参照の形（#369）', () => {
     expect(proseLinesWithFenceState(agentsMd).unterminated).toBe(false);
   });
 
-  it('リポジトリ内のファイルを `path:行番号` で指さない', () => {
-    const found = findLineNumberCitations(prose, isRepoFile);
+  it('リポジトリ内のファイルを `path:行番号`（裸のファイル名を含む）で指さない（#784）', () => {
+    // #784: 段A（AGENTS.md 専用）の解決器を `isRepoFile`（リポジトリ相対パスの
+    // 完全一致のみ）から `isRepoFileOrBasename`（裸のファイル名も解決する。
+    // #760 が `.claude/**` 等の段Bで使っているものと同じ関数）へ差し替えた。
+    // 直した理由と経緯は直下の「現状」テスト（いまは反転済み）にある。
+    const found = findLineNumberCitations(prose, isRepoFileOrBasename);
+    const skipped = new Set(AGENTS_MD_LINE_NUMBER_CITATION_EXEMPTIONS.map((e) => e.token));
+    const hits = found.filter((c) => !skipped.has(c.token));
     expect(
-      found.map((c) => `AGENTS.md:${c.line} ${c.token}`),
+      hits.map((c) => `AGENTS.md:${c.line} ${c.token}`),
       '行番号は腐り、腐ったことが読む側から分からない（開いた人には「そこに無い」としか見えず、' +
-        "移動したのか消えたのかが区別できない）。逐語（`grep -Fn -- '<逐語>' <path>`）かシンボル名で指すこと。",
+        "移動したのか消えたのかが区別できない）。逐語（`grep -Fn -- '<逐語>' <path>`）かシンボル名で指すこと。" +
+        '直せない理由（出典ではなく証拠）があるなら AGENTS_MD_LINE_NUMBER_CITATION_EXEMPTIONS へ理由つきで足すこと。',
+    ).toEqual([]);
+  });
+
+  it('AGENTS_MD_LINE_NUMBER_CITATION_EXEMPTIONS の why が全部、非空である（#784）', () => {
+    const blank = AGENTS_MD_LINE_NUMBER_CITATION_EXEMPTIONS.filter(
+      (e) => e.why.trim().length === 0,
+    ).map((e) => e.token);
+    expect(
+      blank,
+      '免除の理由が空である。なぜ規約の対象から外すのかを書くこと（空欄を許すと免除表は数合わせの場所になる）。',
+    ).toEqual([]);
+  });
+
+  it('AGENTS_MD_LINE_NUMBER_CITATION_EXEMPTIONS に載っている token が、いまも実際に検出される現物と一致する（幽霊免除が無い。#784）', () => {
+    // #785 / #786 と同じ考え方——免除の対象が既に直っている／消えているのに
+    // 免除表にだけ残る形は「守っていないのに守っているように見える」ので、
+    // 歯自体で防ぐ。
+    const stillDetected = new Set(
+      findLineNumberCitations(prose, isRepoFileOrBasename).map((c) => c.token),
+    );
+    const ghosts = AGENTS_MD_LINE_NUMBER_CITATION_EXEMPTIONS.filter(
+      (e) => !stillDetected.has(e.token),
+    ).map((e) => e.token);
+    expect(
+      ghosts,
+      '免除表に載っている token が、もう検出されない（直った/消えた）。免除表からこの行を消すこと。',
     ).toEqual([]);
   });
 
   it('現状: 段A（AGENTS.md 専用）の解決器 isRepoFile は裸のファイル名（schema.ts:500-503）を検出しない（#784）', () => {
-    // 経緯（#784）: 直上の歯が使っている `isRepoFile`（このファイル内の関数。
+    // 経緯（#784）: 直上の歯が使っていた `isRepoFile`（このファイル内の関数。
     // リポジトリ相対パスの完全一致だけを `statSync` で確かめる）は、
     // `clone.ts:505` のような**裸のファイル名**を1件も解決できない
     // （#760 の実測: 30件中25件・83%が裸のファイル名）。AGENTS.md
@@ -864,8 +937,15 @@ describe('AGENTS.md の参照の形（#369）', () => {
     //
     // この行が実在することは、下のテストが独立に確認する
     // （`grep -Fn -- 'schema.ts:500-503' AGENTS.md` が1件当たること）。
-    const found = findLineNumberCitations(prose, isRepoFile);
-    expect(found.some((c) => c.token === 'schema.ts:500-503')).toBe(false);
+    //
+    // 【直した後の追記（#784）】直上の本題の歯の解決器を isRepoFileOrBasename へ
+    // 差し替えたので、いまはこの token を検出する——期待値を反転する。検出
+    // されても本題の歯が違反として鳴らないのは、
+    // AGENTS_MD_LINE_NUMBER_CITATION_EXEMPTIONS で明示的に免除しているからで
+    // ある（この token は出典ではなく証拠なので、免除する。上の const の doc
+    // comment 参照）。
+    const found = findLineNumberCitations(prose, isRepoFileOrBasename);
+    expect(found.some((c) => c.token === 'schema.ts:500-503')).toBe(true);
   });
 
   it('直上のテストが前提にしている行が、いま現物の AGENTS.md に実在する（#784）', () => {
