@@ -451,6 +451,9 @@ git -C <main のツリー> apply --check -R /tmp/tail.patch   # 通れば main �
 
 - **差分クエリと総数クエリの2本で1つの根拠になる** — 差分は「窓が足りているか」を答えず、総数は「相殺」を見ない（新規1件とクローズ1件が相殺すると合計は動かない）
 - **`gh api --paginate --slurp` は `--jq` と併用できない**（`gh` がエラーで拒否する）
+- **`gh issue view <N> --comments` は本文を出さない。コメントだけに差し替える。** ⟹ **コメントが0件の Issue では出力が0バイト・exit 0 になる**（実測 2026-09-15T06:0xZ: `gh issue view 1003 --comments | wc -c` が `0`、同じ Issue の `--json body` は 4031 文字）。**「Issue とコメントを全部読め」のつもりでこれを渡すと、受け手は本文を1文字も見ない。** そして**落ちないので、渡した側も受け手も気づかない** —— 0バイトは「コメントが無い」とも「引けなかった」とも読めるので、**受け手が疑う契機が無い。**
+  - **⟹ 本文とコメントの両方が要るなら `gh issue view <N> --json body,comments` を使う**（1回で両方が取れる。`--jq` で整形してよい）。2回に分けて `gh issue view <N>` と `gh issue view <N> --comments` を打つ形でもよいが、**前者を省くと本文が落ちる**
+  - **⚠️ これは委譲文に書き写されて増える種類の誤りである。** 実際に 2026-09-15、あるマネージャーが1日のうちに複数の委譲文へ `gh issue view <N> --comments` と書き、**受け手が Issue 本文を読めていなかった可能性を後から自分で見つけた。** 手順の1行は、間違っていても書き写され続ける
 - **`env | cut -d= -f1` は複数行の値で破れる。** `printenv <名前>` を使う
 - **テストの中の `console.log` は、そのテストが通ると出力に出ない。** vitest の既定の reporter は console を横取りし、**通ったぶんを捨てる**（落ちたぶんは `stdout | <ファイル> > <テスト名>` の形で出る）。実測（2026-08-22T04:28Z 観測、`vitest@4.1.10`。この repo の `vitest.config.ts` は `reporters` / `silent` / `onConsoleLog` / `disableConsoleIntercept` のどれも指定していないので既定のままである）。**`console.error` も同じで、`process.stdout.write` だけは横取りを通らず、通っても落ちても出る。** 「`HERE` が出ないからこの分岐は通っていない」は、**通っていても同じ見た目になる**
   - **効いているかを「1回落として確かめる」と必ず誤る。** 落ちたぶんは出るので「出た＝ちゃんと出る」と読める。**確かめるなら通るテストで確かめること。** 出すなら `pnpm test --reporter=verbose`（`console.log` が通ったテストでも `stdout | …` として出る）か `process.stderr.write`（既定の reporter のままで出る）
