@@ -181,11 +181,86 @@ export function collectMarkedQuotes(files) {
 }
 
 /**
+ * `haystack` の中で `needle` が現れる**すべての**開始位置を返す（重なりなし）。
+ *
+ * union 末尾ドリフト（#793）の判定に使う。1箇所だけを見て「隣が `|` だから古い」と
+ * 決めると、たまたま同じ文字列が別の場所（正しく閉じている宣言）にも出現する場合に
+ * 誤って赤くする。**だから全出現を見て、1つでも「隣が `|` でない」当たりが在れば
+ * 欠陥にしない。**
+ */
+function allIndicesOf(haystack, needle) {
+  const indices = [];
+  let from = 0;
+  for (;;) {
+    const at = haystack.indexOf(needle, from);
+    if (at === -1) break;
+    indices.push(at);
+    from = at + 1;
+  }
+  return indices;
+}
+
+/**
+ * 引用そのものが「2値以上の pipe 区切り union を、まるごと自己完結で列挙している」
+ * 形かを見る。先頭に `field?: ` / `field: ` を許し、末尾に `;` を許す。
+ *
+ * **この形のときだけ境界チェック（`isUnionTailDrift`）を掛ける。** 理由は実測で
+ * 見つかった反例（`packages/core/src/usage-limits.ts:167`）——
+ * `[sdk-verbatim SDKRateLimitInfo.overageDisabledReason]` の引用は
+ * `overageDisabledReason?: 'overage_not_provisioned'` と**値を1つだけ**引いており、
+ * すぐ隣のコメントが「…で始まる行」と明言するとおり、**意図して union の先頭だけを
+ * 証拠として引用している**（全部を書き写すと SDK が値を増やすたびに追随が要る
+ * ため）。この引用は「隣に `|` が続く」のが正しい姿であり、境界チェックを
+ * 一律に掛けると誤って赤くする。
+ *
+ * **区別する軸は「引用そのものが独立した pipe 列挙か」である。** 独立した
+ * pipe 列挙（2値以上を `|` で並べている）は「これが union の全部だ」という
+ * 主張を運んでいるので、境界がその主張どおり閉じているかを確かめる意味がある。
+ * 値を1つだけ引く形は「union の中にこの値がある」という主張しか運んでおらず、
+ * 隣に何が続いていても主張は揺るがない。
+ */
+const UNION_ENUMERATION_PATTERN = /^(?:[\w$]+\??:\s*)?'[^']*'(?:\s*\|\s*'[^']*')+;?$/;
+
+/**
+ * 一致箇所の直前・直後（空白は読み飛ばす）が `|` に接続しているかを見る。
+ *
+ * #793: union の末尾に値が足されても、古い引用（末尾の値まで）は新しい宣言行の
+ * **接頭辞**として素の部分文字列一致には当たり続ける——`'a' | 'b' | 'c'` は
+ * `'a' | 'b' | 'c' | 'd'` の中にそのまま存在する。**当たった箇所の外側が
+ * `|` へ続いているなら、それは「union の全部」ではなく「union の一部」に
+ * 当たっただけである。** 同じ理屈で先頭が削られた形（`|` の直後に当たる）も拾う。
+ *
+ * **呼ぶのは `UNION_ENUMERATION_PATTERN` に当たる引用だけに限ること**
+ * （`findQuoteDefects` 側の呼び出し条件）。値を1つだけ引く意図的な部分引用まで
+ * 対象にすると誤検出になる（上のコメント参照）。
+ */
+function isUnionTailDrift(sdkTypesText, index, quoteLength) {
+  let before = index - 1;
+  while (before >= 0 && /\s/.test(sdkTypesText[before])) before -= 1;
+  const beforeChar = before >= 0 ? sdkTypesText[before] : null;
+
+  let after = index + quoteLength;
+  while (after < sdkTypesText.length && /\s/.test(sdkTypesText[after])) after += 1;
+  const afterChar = after < sdkTypesText.length ? sdkTypesText[after] : null;
+
+  return beforeChar === '|' || afterChar === '|';
+}
+
+/**
  * 集めた引用を `sdk.d.ts` の本文へ当てる。返すのは**落ちた分だけ**の配列。
  *
  * 当て方は素の `String.includes`（＝ `grep -F`）である。正規化しない。
  * **正規化を入れると「当たったことにする」余地が生まれ、`grep -Fn` で確かめられる
  * という repo の作法（引用の検算方法そのもの）と食い違う。**
+ *
+ * **ただし「当たる」だけでは union 末尾ドリフト（#793）を見逃す。** 部分文字列一致は
+ * 「引用の文字列が sdk.d.ts のどこかに存在するか」しか見ておらず、その両隣が
+ * `|` で union の続きに繋がっていても「当たった」と判定してしまう。**だから
+ * 引用そのものが「2値以上の union をまるごと列挙している」形（`UNION_ENUMERATION_PATTERN`）
+ * のときだけ、当たった箇所ごとに両隣が `|` に接続していないかを別途確かめる。**
+ * 全出現箇所が「`|` に接続している」ときだけ欠陥にする（`isUnionTailDrift`）。
+ * **1値だけを引く意図的な部分引用（`overageDisabledReason` の実例）はこの追加
+ * チェックの対象外**——`UNION_ENUMERATION_PATTERN` に当たらないため。
  */
 export function findQuoteDefects(quotes, sdkTypesText) {
   const defects = [];
@@ -212,10 +287,27 @@ export function findQuoteDefects(quotes, sdkTypesText) {
       });
       continue;
     }
-    if (!sdkTypesText.includes(q.quote)) {
+    const occurrences = allIndicesOf(sdkTypesText, q.quote);
+    if (occurrences.length === 0) {
       defects.push({
         ...q,
         reason: '逐語が sdk.d.ts に当たらない（文言が変わったか、折り返しが混ざっている）',
+      });
+      continue;
+    }
+    if (!UNION_ENUMERATION_PATTERN.test(q.quote)) {
+      // 1値だけを引く意図的な部分引用など、union をまるごと列挙していない引用は
+      // 部分文字列一致だけで判定する（#793 の追加チェックはここでは掛けない）。
+      continue;
+    }
+    const hasCleanOccurrence = occurrences.some(
+      (at) => !isUnionTailDrift(sdkTypesText, at, q.quote.length),
+    );
+    if (!hasCleanOccurrence) {
+      defects.push({
+        ...q,
+        reason:
+          '逐語は sdk.d.ts の一部として当たるが、当たった箇所の隣が `|` に接続しており union の一部にしか当たっていない（末尾に値が足された、または先頭が削られた可能性がある。#793）',
       });
     }
   }

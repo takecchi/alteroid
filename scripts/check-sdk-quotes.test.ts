@@ -186,21 +186,58 @@ describe('check-sdk-quotes: findQuoteDefects', () => {
    * 緑のままだった。**この盲点は「ドリフトが実際に起きる形」（union は値が
    * ほぼ必ず末尾に追記される）とちょうど重なっている。**
    *
-   * ⚠️ **このテストは現行の欠陥を仕様として固定したものである。** 直す前の
-   * `findQuoteDefects` はこの形を検出できないので、検出できないこと
-   * （`defects` が空になること）をそのまま通るテストとして書く。
-   * 直したら、このテストの期待値を反転させる（AGENTS.md「テストを弱めずに直す」―
-   * 「現行の欠陥を仕様として固定しているテストは反転させてよい」）。
+   * ⚠️ **このテストは当初、現行の欠陥を仕様として固定したものだった**
+   * （`defects` が空になることをそのまま通す形）。**その後 `findQuoteDefects` に
+   * 「当たった箇所の隣が `|` に接続していないか」を見る境界チェック
+   * （`isUnionTailDrift`）を足したので、ここで期待値を反転する**
+   * （AGENTS.md「テストを弱めずに直す」―「現行の欠陥を仕様として固定している
+   * テストは反転させてよい」）。**このテストは消さず、経緯だけをこのコメントへ
+   * 追記した** —— 盲点の実測（Issue 本文の11→12値の話）は直した後も読む価値が
+   * 変わらないため。
    */
-  it('⚠️ 現行の欠陥として固定する: union 末尾に値が足されても、末尾に「;」を持たない引用は検出できない（#793）', () => {
+  it('union 末尾に値が足されたら検出する（#793: 直す前は見逃していた欠陥）', () => {
     const quotes = quoteOf(
       [`// [sdk-verbatim FakeUnion]`, `// > 'a' | 'b' | 'c'`].join('\n'),
     );
     // 実際の宣言は 'd' が末尾に足されて古くなっている（`FakeUnion` は
     // `SDKAssistantMessageError` が11→12値になった実例を最小化した形）。
     const newDeclaration = "export declare type FakeUnion = 'a' | 'b' | 'c' | 'd';";
-    // 直す前: 空（＝古い引用が「当たる」と誤判定される。これが盲点そのもの）。
+    // 直した後: 1件（＝古い引用が union の一部にしか当たっていないと検出される）。
+    const defects = findQuoteDefects(quotes, newDeclaration) as Defect[];
+    expect(defects).toHaveLength(1);
+    expect(defects[0].reason).toContain('#793');
+  });
+
+  it('union 先頭が削られても検出する（#793 の対称形: 隣接する `|` は前後どちらも見る）', () => {
+    // 引用は末尾3値のまま、実際の宣言は先頭に 'z' が増えている
+    // （＝引用の直前が `|` に接続しており、union の一部にしか当たっていない）。
+    const quotes = quoteOf(
+      [`// [sdk-verbatim FakeUnion]`, `// > 'a' | 'b' | 'c'`].join('\n'),
+    );
+    const newDeclaration = "export declare type FakeUnion = 'z' | 'a' | 'b' | 'c';";
+    const defects = findQuoteDefects(quotes, newDeclaration) as Defect[];
+    expect(defects).toHaveLength(1);
+    expect(defects[0].reason).toContain('#793');
+  });
+
+  it('union として閉じた引用（前後が `|` に接続しない）は依然として欠陥にならない', () => {
+    const quotes = quoteOf(
+      [`// [sdk-verbatim FakeUnion]`, `// > 'a' | 'b' | 'c'`].join('\n'),
+    );
+    const newDeclaration = "export declare type FakeUnion = 'a' | 'b' | 'c';";
     expect(findQuoteDefects(quotes, newDeclaration)).toEqual([]);
+  });
+
+  it('同じ文字列が複数箇所に出ても、1箇所でも `|` に接続しなければ欠陥にならない（誤検出を避ける）', () => {
+    const quotes = quoteOf(
+      [`// [sdk-verbatim FakeUnion]`, `// > 'a' | 'b' | 'c'`].join('\n'),
+    );
+    // 1箇所目は末尾に 'd' が足された古い形、2箇所目は閉じた正しい形。
+    const sdkTypesText = [
+      "export declare type StaleCopy = 'a' | 'b' | 'c' | 'd';",
+      "export declare type FakeUnion = 'a' | 'b' | 'c';",
+    ].join('\n');
+    expect(findQuoteDefects(quotes, sdkTypesText)).toEqual([]);
   });
 });
 
