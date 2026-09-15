@@ -848,8 +848,104 @@ fi
       // 存在チェックだけでは script 側の push と区別できない）
       expect(remoteRef(s.originPath, `refs/heads/${BRANCH}`)).toBe(beforeSha);
       expect(pushCount(s.pushLog)).toBe(beforeCount);
-      expect(existsSync(s.ghLog)).toBe(false);
+      // **反転（#991 対応で追記）。** この行はかつて
+      // `expect(existsSync(s.ghLog)).toBe(false)` だった——「gh を一切呼ばない」
+      // という保証だった。#991（この停止が赤い定時 run 以外のどこにも出ない）
+      // への対応で、停止時に「開いている PR があるか」を見るため `gh pr list`
+      // を呼ぶようになった（下の「#991」describe 参照）。何を変えたか:
+      // 「gh を一切呼ばない」から「PR を作成・書き換え・ready 化しない」へ
+      // 保証を移した。なぜ必要になったか: 停止の事実を読まれる場所へ出すには、
+      // 停止した経路自身が `gh pr list` を呼ばざるを得ない。なぜ保証が弱く
+      // なっていないか: この経路が「force push しない」「PR の中身を書き換え
+      // ない」という本来の安全性は変わらず保っており、新たに増えたのは
+      // 「（開いている PR があれば）通知のコメントを足す」という読み取り専用に
+      // 近い副作用だけである。
+      expect(existsSync(s.ghLog)).toBe(true);
+      const calls = parseGhCalls(s.ghLog);
+      expect(calls.some((c) => c[0] === 'pr' && c[1] === 'create')).toBe(false);
+      expect(calls.some((c) => c[0] === 'pr' && c[1] === 'edit')).toBe(false);
+      expect(calls.some((c) => c[0] === 'pr' && c[1] === 'ready')).toBe(false);
       expect(result.stderr).toContain('human@example.com');
+    });
+  });
+
+  // ==========================================================================
+  // 人間の直接コミットで止まったとき、既存の PR へコメントする（#991）
+  // ==========================================================================
+  //
+  // 直上の「force push 前の『bot 以外のコミットが無いか』チェック」自体は
+  // 正しく動いていた（#991 はバグ報告ではない）。問題は、この停止が
+  // 赤い定時 run（`gh run list` の `conclusion=failure`）以外のどこにも
+  // 出なかったことだった。#867 の CI未起動警告は「PR の本文を書く/書き換える」
+  // 経路の中に実装されているが、この停止はその経路そのものに入る前に起きるので
+  // 通らない。ここでは「開いている PR があれば、そこへ通知コメントを足す」と
+  // いう独立した経路を確かめる。
+  describe('リモートに人間のコミットがあって止まったとき、開いている PR へ通知する（#991）', () => {
+    it('開いている PR が在るとき、その PR 番号へ gh pr comment が呼ばれ、本文に作者と #991 が含まれる', () => {
+      const s = setup();
+      pushExistingBranch(s.seedPath, 'human@example.com', 'A Human');
+
+      writeFileSync(
+        join(s.workdir, 'pnpm-workspace.yaml'),
+        "catalog:\n  '@anthropic-ai/claude-agent-sdk': ^0.3.239\n",
+      );
+      const result = run(
+        s,
+        { FAKE_GH_PR_NUMBER: '77', SDK_VERIFY_OK: 'true' },
+        { allowFailure: true },
+      );
+
+      expect(result.exitCode).not.toBe(0);
+      const calls = parseGhCalls(s.ghLog);
+      // 1回目は在るかどうかを見るための pr list、2回目がそのコメント。
+      expect(calls[0]).toEqual([
+        'pr',
+        'list',
+        '--head',
+        BRANCH,
+        '--state',
+        'open',
+        '--json',
+        'number',
+        '--jq',
+        '.[0].number // empty',
+      ]);
+      const commentCall = calls.find((c) => c[0] === 'pr' && c[1] === 'comment');
+      expect(commentCall).toBeDefined();
+      expect(commentCall).toEqual(
+        expect.arrayContaining(['pr', 'comment', '77', '--body-file']),
+      );
+      const bodyFileArgIndex = commentCall!.indexOf('--body-file') + 1;
+      const commentBodyPath = commentCall![bodyFileArgIndex];
+      const commentBody = readFileSync(commentBodyPath, 'utf8');
+      expect(commentBody).toContain('human@example.com');
+      expect(commentBody).toContain('#991');
+      // PR の中身そのもの（create/edit/ready）は一切呼ばれていない。
+      expect(calls.some((c) => c[0] === 'pr' && c[1] === 'create')).toBe(false);
+      expect(calls.some((c) => c[0] === 'pr' && c[1] === 'edit')).toBe(false);
+      expect(calls.some((c) => c[0] === 'pr' && c[1] === 'ready')).toBe(false);
+    });
+
+    it('開いている PR が無いとき、gh pr list は呼ぶが gh pr comment は呼ばれない（既知の隙間。詳細は #991）', () => {
+      const s = setup();
+      pushExistingBranch(s.seedPath, 'human@example.com', 'A Human');
+
+      writeFileSync(
+        join(s.workdir, 'pnpm-workspace.yaml'),
+        "catalog:\n  '@anthropic-ai/claude-agent-sdk': ^0.3.239\n",
+      );
+      const result = run(
+        s,
+        { FAKE_GH_PR_NUMBER: '', SDK_VERIFY_OK: 'true' },
+        { allowFailure: true },
+      );
+
+      expect(result.exitCode).not.toBe(0);
+      const calls = parseGhCalls(s.ghLog);
+      expect(calls).toHaveLength(1);
+      expect(calls[0][0]).toBe('pr');
+      expect(calls[0][1]).toBe('list');
+      expect(calls.some((c) => c[0] === 'pr' && c[1] === 'comment')).toBe(false);
     });
   });
 

@@ -16,6 +16,14 @@
 # 「このブランチにある `$base` 以外のコミットが、全部この bot のものか」を見て、
 # 違うものが1つでもあれば止める。**他のブランチへ force しないこと。**
 #
+# **この停止が、赤い定時 run 以外のどこにも出ないという穴があった（#991）。**
+# 安全装置自体は設計どおりに働いていたが、止まった事実は `gh run list` の
+# `conclusion=failure` としてしか観測できず、PR 本文にも `::warning::` にも
+# 出ていなかった（#867 の CI未起動警告は PR を書き換える経路の中にあるが、
+# この停止はその手前で起きるので、その経路をそもそも通らない）。いまは
+# 開いている PR があれば、そこへコメントで知らせる（下の「force push 前の
+# 『bot 以外のコミットが無いか』チェック」の実装を見よ）。
+#
 # ## draft で出す条件
 #
 # 検証（build / typecheck / lint / format:check / test）が落ちたら draft にする。
@@ -157,12 +165,54 @@ if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
     grep -v -x -F "$bot_email" || true)"
   if [ -n "$foreign" ]; then
     outcome='リモートのブランチに bot 以外のコミットがあるので force push せずに止めた'
+    foreign_authors="$(printf '%s\n' "$foreign" | sort -u)"
     {
       echo "::error::$branch に $bot_email 以外が積んだコミットがある。"
       echo '上書きすると人間の作業が消えるので止める。中身を人間が回収してから、'
       echo 'ブランチを消すか、このコミットを取り込むこと。作者:'
-      printf '%s\n' "$foreign" | sort -u
+      printf '%s\n' "$foreign_authors"
     } >&2
+
+    # **この停止を、赤い定時 run 以外の場所にも出す（#991）。**
+    #
+    # 上の `::error::` は Actions のログの中にしか出ず、そこは誰も見に行かない
+    # （#867 が確立した観測と同じ形——理由が「書いてある」ことと「読まれる場所に
+    # 出ている」ことは別である）。この停止は PR が作られる/書き換わるより前に
+    # 起きるので、#867 の `SDK_CI_TRIGGERED` 警告（本文の先頭へ差し込む経路。
+    # 上の「CI が起きない回の扱い」）はそもそも通らない。だから別経路が要る。
+    #
+    # **既存の open な PR があれば、そこへコメントする。** この automation が
+    # 持つ権限は `contents: write` / `pull-requests: write` だけで
+    # （`update-claude-sdk.yml` の `permissions:`）、コメントはその範囲で
+    # 収まる。**開いている PR が無いとき（この停止がその枝の最初の実行で
+    # 起きた場合）は何もしない** —— 新しく Issue を起こすには `issues: write`
+    # が要り、それはオーナーの手番に触れる権限の追加になる（#867 の
+    # `open-claude-sdk-pr.sh` 冒頭のコメントで「ラベルは採らない」とした
+    # のと同じ理由）。この隙間は既知のまま残す（詳細は #991）。
+    stop_pr_number="$($GH pr list --head "$branch" --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+    if [ -n "$stop_pr_number" ]; then
+      comment_file="$(mktemp)"
+      {
+        echo '> [!WARNING]'
+        echo "> **この枝（\`$branch\`）に自動化以外のコミットがあったため、今回の SDK 更新は行われなかった。**"
+        echo '>'
+        echo "> \`$bot_email\` 以外の作者のコミットを検出したため、\`open-claude-sdk-pr.sh\` の安全装置が"
+        echo '> force push を止めた（人間の作業を消さないため。これはバグではなく設計どおりの動作）。'
+        echo '>'
+        echo '> 作者:'
+        printf '%s\n' "$foreign_authors" | sed 's/^/> - /'
+        echo '>'
+        echo '> このままだと、次に SDK の新しい版が出ても、この枝には積まれない'
+        echo '> （force push が毎晩失敗し続ける）。直すには、上のコミットの内容を'
+        echo '> レビューして取り込むか、このブランチを削除すること'
+        echo '> （削除すれば次回の実行で新しく作り直される）。'
+        echo '>'
+        echo '> 詳細: #991'
+      } >"$comment_file"
+      $GH pr comment "$stop_pr_number" --body-file "$comment_file" ||
+        echo '::error::この停止を PR へコメントすることにも失敗した' >&2
+    fi
+
     exit 1
   fi
 fi
