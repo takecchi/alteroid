@@ -46,8 +46,9 @@ export interface CommitmentPosition {
 /**
  * `Commitment` から位置を取り出す。
  *
- * `apps/daemon/src/app.ts` の `commitmentPos` と同じ規則
- * （逐語で当たる: `grep -Fn -- 'function commitmentPos' apps/daemon/src/app.ts`）。
+ * **かつて `apps/daemon/src/app.ts` に `commitmentPos` という同名の実装が
+ * 別途在ったが、ここ（`@alteroid/core`）へ移設済み**（移設の経緯は同ファイルの
+ * 逐語で当たる: `grep -Fn -- 'ここに `commitmentPos` / `compareCommitmentPos` という1バイト違わない実装が' apps/daemon/src/app.ts`）。
  */
 export function commitmentPosition(
   entry: Pick<Commitment, 'id' | 'at' | 'closedAt'>,
@@ -62,8 +63,9 @@ export function commitmentPosition(
  * `open` の中は `key`（`at`）昇順 → 同値は `id` 昇順。`closed` の中は `key`
  * （`closedAt`）降順 → 同値は `id` 昇順。
  *
- * `apps/daemon/src/app.ts` の `compareCommitmentPos` と同じ規則
- * （逐語で当たる: `grep -Fn -- 'function compareCommitmentPos' apps/daemon/src/app.ts`）。
+ * **かつて `apps/daemon/src/app.ts` に `compareCommitmentPos` という同名の実装が
+ * 別途在ったが、ここ（`@alteroid/core`）へ移設済み**（移設の経緯は同ファイルの
+ * 逐語で当たる: `grep -Fn -- 'ここに `commitmentPos` / `compareCommitmentPos` という1バイト違わない実装が' apps/daemon/src/app.ts`）。
  */
 export function compareCommitmentPosition(a: CommitmentPosition, b: CommitmentPosition): number {
   if (a.segment !== b.segment) return a.segment === 'open' ? -1 : 1;
