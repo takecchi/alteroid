@@ -15266,6 +15266,73 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
       ).not.toContain('古い順に');
     });
   });
+
+  /**
+   * **Issue #757 の固定歯。** 直上の C-7（#756）は「アプリは並べ直さない」ことだけを
+   * 固定していたが、その帰結——(1) `createdAt` そのものの順序すら保証しない
+   * （ここが使うインメモリ実装は `filter` だけで `sort` 無しなので、挿入順が
+   * `createdAt` の新旧と無関係になりうる） (2) 同着（同じ `createdAt`）の相対順は
+   * `id` では決まらず挿入順のまま——はまだ歯を持っていなかった。
+   *
+   * **ここでは現行の欠陥をいったん仕様として固定する。** #757 の「直すなら」節が
+   * 挙げる最小修正（ハンドラ側で `createdAt` 昇順＋同着は `id` 昇順に並べ直す）を
+   * 入れたら、このテスト2本の期待値は反転する——反転させてよい
+   * （`AGENTS.md`「テストを弱めずに直す」の「現行の欠陥を仕様として固定している
+   * テストは反転させてよい」の条件に合わせ、反転する側で経緯をここに追記する）。
+   */
+  describe('approvals_list は createdAt の順序も同着の順序も保証しない（#757 の固定歯）', () => {
+    it('現状: createdAt が新しい方を先に積むと、挿入順のまま先頭に出る（createdAt 昇順になっていない）', async () => {
+      const h = harness();
+      await h.stores.jobs.putApproval({
+        id: 'apr-new',
+        createdAt: '2026-02-01T00:00:00.000Z',
+        question: 'new',
+      });
+      await h.stores.jobs.putApproval({
+        id: 'apr-old',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        question: 'old',
+      });
+
+      const reply = await h.call('approvals_list', {});
+
+      // 正の対照: 両方が一覧に出ている。
+      expect(reply).toContain('apr-new');
+      expect(reply).toContain('apr-old');
+      // 【現行の欠陥として固定】createdAt が新しい apr-new を先に積んだのに、
+      // 挿入順のまま先頭へ出ている＝ createdAt 昇順になっていない。
+      expect(
+        reply.indexOf('apr-new'),
+        '【赤の意味】createdAt 昇順に並び替わった（＝ #757 が直った）。' +
+          'このテストは反転対象——期待値を反転し、この行の上に経緯を追記すること。',
+      ).toBeLessThan(reply.indexOf('apr-old'));
+    });
+
+    it('現状: 同じ createdAt の同着は id 昇順ではなく挿入順で決まる', async () => {
+      const h = harness();
+      await h.stores.jobs.putApproval({
+        id: 'apr-z',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        question: 'z',
+      });
+      await h.stores.jobs.putApproval({
+        id: 'apr-a',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        question: 'a',
+      });
+
+      const reply = await h.call('approvals_list', {});
+
+      expect(reply).toContain('apr-z');
+      expect(reply).toContain('apr-a');
+      // 【現行の欠陥として固定】id 昇順なら apr-a が先だが、挿入順（apr-z が先）で出ている。
+      expect(
+        reply.indexOf('apr-z'),
+        '【赤の意味】同着が id 昇順に並び替わった（＝ #757 が直った）。' +
+          'このテストは反転対象——期待値を反転し、この行の上に経緯を追記すること。',
+      ).toBeLessThan(reply.indexOf('apr-a'));
+    });
+  });
 });
 
 /**
