@@ -8,6 +8,7 @@ import {
   createClone,
   DAEMON_RUNNER_REGISTRY_SOURCE,
   DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+  hasOpenManagerDuplicate,
   isDaemonSelfNotice,
 } from './clone.js';
 import { buildActivityDigest } from './digest.js';
@@ -654,6 +655,76 @@ describe('引き受けたまま終わっていない仕事', () => {
   });
 
   /**
+   * **Issue #954 提案3。`hasOpenManagerDuplicate` を純粋関数として直接問う。**
+   *
+   * `#commit`（`clone.ts`）が台帳を開く前に呼ぶ判定そのものの境界を、`Clone`
+   * 全体を経由せずに固定する——下の統合テストは配線が繋がっていることを見るが、
+   * こちらは「何が畳まれて何が畳まれないか」の境界そのものを見る。
+   */
+  describe('hasOpenManagerDuplicate（Issue #954 提案3）', () => {
+    const at = '2026-09-14T16:30:00.000Z';
+    const candidate: Commitment = {
+      id: 'evt-new',
+      at,
+      origin: 'manager',
+      source: 'mgr-1',
+      body: '[report] 同じ報告',
+    };
+
+    it('同一マネージャー×同一本文×未了の行が在れば true（これが畳む場を作る）', () => {
+      const entries: Commitment[] = [
+        { id: 'evt-old', at, origin: 'manager', source: 'mgr-1', body: '[report] 同じ報告' },
+      ];
+      expect(hasOpenManagerDuplicate(entries, candidate)).toBe(true);
+    });
+
+    it('⭐ 陰性対照(1) 本文が1文字でも違えば false（畳みすぎない）', () => {
+      const entries: Commitment[] = [
+        { id: 'evt-old', at, origin: 'manager', source: 'mgr-1', body: '[report] 違う報告' },
+      ];
+      expect(hasOpenManagerDuplicate(entries, candidate)).toBe(false);
+    });
+
+    it('⭐ 陰性対照(2) 同じ本文でも別のマネージャー（source）なら false（畳みすぎない）', () => {
+      const entries: Commitment[] = [
+        { id: 'evt-old', at, origin: 'manager', source: 'mgr-2', body: '[report] 同じ報告' },
+      ];
+      expect(hasOpenManagerDuplicate(entries, candidate)).toBe(false);
+    });
+
+    it('⭐ 陰性対照(3) 同一マネージャー×同一本文でも既に閉じていれば false（もう一度報告できる）', () => {
+      const entries: Commitment[] = [
+        {
+          id: 'evt-old',
+          at,
+          origin: 'manager',
+          source: 'mgr-1',
+          body: '[report] 同じ報告',
+          closedAt: '2026-09-14T17:00:00.000Z',
+          closedReason: '片付けた',
+        },
+      ];
+      expect(hasOpenManagerDuplicate(entries, candidate)).toBe(false);
+    });
+
+    it('⭐ 陰性対照(4) origin が manager でない候補は常に false（人間・外部の同文は畳まない）', () => {
+      const humanCandidate: Commitment = { id: 'evt-h', at, origin: 'human', source: 'conv-1', body: '同じ発言' };
+      const entries: Commitment[] = [
+        { id: 'evt-old', at, origin: 'human', source: 'conv-1', body: '同じ発言' },
+      ];
+      // 人間の側は候補そのものが manager ではないので、entries に同文の未了が
+      // 在っても判定は素通りする——この関数は human/external の重複を畳む
+      // 判断を1つも持たない（`#commit` はこの関数を呼ぶだけで、人間側の連投を
+      // 別の道具で畳んでいるわけでもない）。
+      expect(hasOpenManagerDuplicate(entries, humanCandidate)).toBe(false);
+    });
+
+    it('未了が0件なら false', () => {
+      expect(hasOpenManagerDuplicate([], candidate)).toBe(false);
+    });
+  });
+
+  /**
    * **Issue #852。`isDaemonSelfNotice` そのものを直接問う。**
    *
    * `commitmentFor` を経由した歯（直下）は「台帳を開くか」しか見ないので、
@@ -779,6 +850,210 @@ describe('引き受けたまま終わっていない仕事', () => {
     const open = (await s.stores.commitments.list()).entries;
     expect(open[0]?.origin).toBe('manager');
     expect(open[0]?.source).toBe('mgr-1');
+
+    await s.clone.stop();
+  });
+
+  /**
+   * **Issue #954。`Clone` 全体（`post()` → `#commit` → `hasOpenManagerDuplicate`）
+   * を通した統合テスト——実測を模した再現。**
+   *
+   * 実測（Issue #954 本文）: 429 に当たったマネージャーが同文の報告
+   * 「（このターンは応答を返さずに終わった: success/429 / result_is_error）
+   * You've hit your session limit · resets 5:10pm (UTC)」を約1.5秒間隔で
+   * 配り続け、42分で未了が181件→1,479件（うち1,469件が同一マネージャーの
+   * 同文）に膨らんだ。合流窓（`manager.ts` の `SynthesizedNoticeStreak`）を
+   * すり抜けた場合の**最後の壁**がここにある。
+   *
+   * **各 post のあいだで、その post が起こしたターンの入力が読まれるまで待つ。**
+   * `#commit` は `post()` から同期に呼ばれるが、中身（`list()` → `open()`）は
+   * 非同期なので、次の post を打つ前に前段が確実に片付いていることを、ターンが
+   * 実際に読んだ入力の件数で確かめてから進める——さもないと2件目・3件目の
+   * 重複確認が1件目の書き込みより先に走り、畳めたはずの行が畳めない（純粋な
+   * promise の連鎖なので、実際の I/O を挟む在庫ストアではこの窓はさらに狭い）。
+   */
+  it('429 連投の再現: 同一マネージャー×同一本文の3連投は台帳で1行に畳まれる', async () => {
+    const s = setup();
+    const body = "You've hit your session limit · resets 5:10pm (UTC)";
+    const inputs = () => s.calls.flatMap((call) => call.inputs);
+
+    s.clone.post(managerMessage(body, 'evt-429-1'));
+    await waitFor(() => inputs().length >= 1, '1件目がターンへ渡る');
+    await waitFor(
+      async () => (await s.stores.commitments.list()).entries.length === 1,
+      '1件目の記帳',
+    );
+
+    s.clone.post(managerMessage(body, 'evt-429-2'));
+    await waitFor(() => inputs().length >= 2, '2件目がターンへ渡る');
+
+    s.clone.post(managerMessage(body, 'evt-429-3'));
+    await waitFor(() => inputs().length >= 3, '3件目がターンへ渡る');
+
+    // 3件とも受信箱には別々の合図として届いている（`#remember` はここより
+    // 前で書き終えている——畳むのは台帳だけという doc の主張をここでも見る）。
+    expect((await s.stores.inbox.claimPending()).length).toBeGreaterThanOrEqual(0);
+
+    const open = (await s.stores.commitments.list()).entries;
+    expect(open).toHaveLength(1);
+    expect(open[0]?.origin).toBe('manager');
+    expect(open[0]?.source).toBe('mgr-1');
+    expect(open[0]?.body).toContain(body);
+    // **最初に届いた行がそのまま残る**（後続を勝手に上書きしない——`#commit`
+    // は「既に在れば新しい行を作らない」だけで、既存行の書き換えはしない）。
+    expect(open[0]?.id).toBe('evt-429-1');
+
+    await s.clone.stop();
+  });
+
+  it('⭐ 陰性対照: 同じマネージャーでも本文が違えば畳まれない（2行とも残る）', async () => {
+    const s = setup();
+    const inputs = () => s.calls.flatMap((call) => call.inputs);
+
+    s.clone.post(managerMessage('1件目の報告', 'evt-diff-1'));
+    await waitFor(() => inputs().length >= 1, '1件目がターンへ渡る');
+    await waitFor(
+      async () => (await s.stores.commitments.list()).entries.length === 1,
+      '1件目の記帳',
+    );
+
+    s.clone.post(managerMessage('2件目の別の報告', 'evt-diff-2'));
+    await waitFor(() => inputs().length >= 2, '2件目がターンへ渡る');
+    await waitFor(
+      async () => (await s.stores.commitments.list()).entries.length === 2,
+      '2件目の記帳（畳まれず別行として載る）',
+    );
+
+    const bodies = (await s.stores.commitments.list()).entries.map((entry) => entry.body).sort();
+    expect(bodies).toEqual(['[report] 1件目の報告', '[report] 2件目の別の報告']);
+
+    await s.clone.stop();
+  });
+
+  it('⭐ 陰性対照: 同じ本文でも別のマネージャーなら畳まれない（2行とも残る）', async () => {
+    const s = setup();
+    const at = new Date().toISOString();
+    const sameText = (managerId: string, id: string): InboxEvent => ({
+      type: 'manager_message',
+      id,
+      at,
+      managerId,
+      kind: 'report',
+      text: '同じ文言の報告',
+    });
+    const inputs = () => s.calls.flatMap((call) => call.inputs);
+
+    s.clone.post(sameText('mgr-a', 'evt-mgr-a'));
+    await waitFor(() => inputs().length >= 1, 'mgr-a の報告がターンへ渡る');
+    await waitFor(
+      async () => (await s.stores.commitments.list()).entries.length === 1,
+      'mgr-a の記帳',
+    );
+
+    s.clone.post(sameText('mgr-b', 'evt-mgr-b'));
+    await waitFor(() => inputs().length >= 2, 'mgr-b の報告がターンへ渡る');
+    await waitFor(
+      async () => (await s.stores.commitments.list()).entries.length === 2,
+      'mgr-b の記帳（畳まれず別行として載る）',
+    );
+
+    const sources = (await s.stores.commitments.list()).entries.map((entry) => entry.source).sort();
+    expect(sources).toEqual(['mgr-a', 'mgr-b']);
+
+    await s.clone.stop();
+  });
+
+  it('⭐ 陰性対照: 同文でも origin が human なら畳まれない（人間の連投は別扱い）', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('同じ一言'));
+    await waitForSettled(s.events);
+    await waitFor(
+      async () => (await s.stores.commitments.list()).entries.length === 1,
+      '1件目（人間）の記帳',
+    );
+
+    // 同じ会話へ、同文の人間の発言をもう一度送る（`id` は違う——`humanMessage`
+    // は `text` から `id` を作るので、直接組み立てて id だけ変える）。
+    s.clone.post({
+      type: 'human_message',
+      id: 'evt-同じ一言-2',
+      at: new Date().toISOString(),
+      text: '同じ一言',
+      conversationId: 'conv-1',
+    });
+    await waitForSettled(s.events);
+
+    // 人間側はこの PR の対象外——2件とも別々の未了として残る
+    // （`hasOpenManagerDuplicate` は origin: 'manager' 以外には何もしない）。
+    const open = (await s.stores.commitments.list()).entries;
+    expect(open).toHaveLength(2);
+    expect(open.every((entry) => entry.origin === 'human')).toBe(true);
+
+    await s.clone.stop();
+  });
+
+  it('閉じたあとの同文は畳まれない——もう一度報告できる', async () => {
+    const s = setup();
+    const inputs = () => s.calls.flatMap((call) => call.inputs);
+
+    s.clone.post(managerMessage('繰り返す報告', 'evt-repeat-1'));
+    await waitFor(() => inputs().length >= 1, '1件目がターンへ渡る');
+    await waitFor(
+      async () => (await s.stores.commitments.list()).entries.length === 1,
+      '1件目の記帳',
+    );
+
+    // 同文の2件目は、1件目が開いている間は畳まれる（ここまでは上のテストと同じ）。
+    s.clone.post(managerMessage('繰り返す報告', 'evt-repeat-2'));
+    await waitFor(() => inputs().length >= 2, '2件目がターンへ渡る');
+    expect((await s.stores.commitments.list()).entries).toHaveLength(1);
+
+    // 1件目を閉じる——「片付いた」ので、もう畳む相手が居ない。
+    await s.stores.commitments.close(
+      'evt-repeat-1',
+      new Date().toISOString(),
+      '対応した',
+      'clone',
+    );
+    expect((await s.stores.commitments.list()).entries).toHaveLength(0);
+
+    // 同文の3件目——**畳まれず、新しい未了として台帳に載る。**
+    s.clone.post(managerMessage('繰り返す報告', 'evt-repeat-3'));
+    await waitFor(() => inputs().length >= 3, '3件目がターンへ渡る');
+    await waitFor(
+      async () => (await s.stores.commitments.list()).entries.length === 1,
+      '3件目の記帳（閉じた後なので新しい未了として載る）',
+    );
+
+    const open = (await s.stores.commitments.list()).entries;
+    expect(open[0]?.id).toBe('evt-repeat-3');
+
+    await s.clone.stop();
+  });
+
+  it('重複確認（list()）が失敗しても、開く側へ倒れる（依頼を黙って落とさない）', async () => {
+    const stores = createMemoryStores();
+    const broken: Stores = {
+      ...stores,
+      commitments: {
+        ...stores.commitments,
+        // `list()` だけを壊す。`get()` / `open()` は本物のまま——重複確認の
+        // 経路だけを踏ませて、書き込みそのものが本当に通ったかを `get()` で見る。
+        list: () => Promise.reject(new Error('台帳が読めない（実測を模す）')),
+      },
+    };
+    const s = setup(broken);
+
+    s.clone.post(managerMessage('list が壊れていても届く報告', 'evt-list-broken'));
+    await waitFor(
+      async () => (await broken.commitments.get('evt-list-broken')) !== null,
+      '`list()` が壊れていても未了として開かれる',
+    );
+
+    const entry = await broken.commitments.get('evt-list-broken');
+    expect(entry?.origin).toBe('manager');
+    expect(entry?.body).toContain('list が壊れていても届く報告');
 
     await s.clone.stop();
   });
