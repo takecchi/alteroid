@@ -385,7 +385,7 @@ const MULTI_BLOCK_FIRST_THEN_SECOND = [
  * 4. `verify.mjs` は9門のうち `isTest: true` の1本（`pnpm test`）だけを `runTest`
  *    で捕まえ、他8門は `stdio: 'inherit'` で出力を捨てる——門の出力が連結されて
  *    判定へ渡る経路は無い（`command grep -Fn -- "isTest: true" scripts/
- *    verify-core.mjs` → 296行の test 門1本のみ。`command grep -c -- "isTest"
+ *    verify-core.mjs` → test 門1本のみ。`command grep -c -- "isTest"
  *    scripts/verify-core.mjs` → 1＝ファイル全体で1箇所。`command grep -Fn --
  *    "stdio: 'inherit'" scripts/verify.mjs` → 185行、`run()` 側）。
  * 5. root + 8パッケージの `test` スクリプト9本は全部が単発の

@@ -697,5 +697,5 @@ git -C <main のツリー> apply --check -R /tmp/tail.patch   # 通れば main �
 - 新しい依存の追加はバージョンを catalog（`pnpm-workspace.yaml`）に寄せられるか先に検討する
 - CI はイメージ（`runtime` ステージ）も焼き、**uid 1001＝マネージャーが実際に走る主体**で道具が揃っているかを見る（`.github/workflows/ci.yml` の `image`）。マネージャーの道具は版を固定していないので、上流の変化で壊れたことに気づく場所はここしかない。手元で同じことをするなら `docker build --target runtime -t alteroid:ci .`
 - **Claude 本体（`@anthropic-ai/claude-agent-sdk`）の版を手で上げに行かないこと。** `.github/workflows/update-claude-sdk.yml` が毎日見て、上がっていれば1本の PR（`automation/claude-agent-sdk`）に積み直す。マージするのは人間である
-  - **この SDK の版はモデルの版でもある。** エイリアス（`fable` / `opus` / `sonnet`）から具体のモデル id への対応表が SDK のバンドルに焼かれているので（`sdk.mjs` の `aliases` / `latest_per_family`）、**止めると新しいモデルが層に届かない。** コード側に具体のモデル id は1つも無い（`CLONE_MODEL` / `MANAGER_MODEL` / `WORKER_MODEL` はエイリアス）ので、**遅れはここにしか現れない**
+  - **この SDK の版はモデルの版でもある。** エイリアス（`fable` / `opus` / `sonnet`）から具体のモデル id への対応表が SDK のバンドルに焼かれているので（`sdk.mjs` の `aliases`）、**止めると新しいモデルが層に届かない。** コード側に具体のモデル id は1つも無い（`CLONE_MODEL` / `MANAGER_MODEL` / `WORKER_MODEL` はエイリアス）ので、**遅れはここにしか現れない**
   - `minimumReleaseAgeExclude`（`pnpm-workspace.yaml`）に**版番号を書かない。** pnpm 11 の既定は `minimumReleaseAge: 1440` で、SDK は公開直後に取りに行きたい側である。版を併記すると上げるたびに書き直しが要り、忘れた回だけ静かに1日古い版で止まる（実際に 0.3.228 で止まっていた）
