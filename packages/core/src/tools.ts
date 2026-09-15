@@ -6487,21 +6487,18 @@ export function createCloneTools(context: ToolContext) {
         // のは `running`（いまターンの途中で、クローンが一度も観測していない進行
         // 中の作業）のほうである。
         if (before?.status === 'running' && force !== true) {
+          // **要点を先頭・短くする（#1037 コメント）。** 「⚠ の1行を足す」形の
+          // 断りは読まれても流される実例が在る——読み飛ばせない形にするには、
+          // 長い説明の奥に核心（force で止まる）を埋めないことが要る。
           const lastReportLine =
             before.lastReportAt === undefined
-              ? '直近の報告は一度も届いていない（この委譲は一度もターンを終えていない）。'
-              : `直近の報告が届いたのは ${before.lastReportAt}。` +
-                'これは**最後に完了したターン**のものであって、いま走っているターンの' +
-                '中身ではない——このターンで何をしているかは、まだ報告に出ていない。';
+              ? '直近の報告は一度も届いていない。'
+              : `直近の報告は ${before.lastReportAt}` +
+                '（最後に終えたターンのもの。いま走っているターンの中身ではない）。';
           return text(
-            `[${managerId}] 止めていない。**いまターンの途中である**（status: running）。\n` +
-              'ここで畳むと、そのターンが抱えている進行中の作業が失われる——失われるのは' +
-              '会話だけではない。**push していない実装・このターンが起こした作業者・監視中の' +
-              'CI** のような、まだ台帳にもファイルにも残っていないものが対象になる。\n' +
-              `${lastReportLine}\n` +
-              'ターンの中身を先に読むなら manager_report を使うこと。\n' +
-              '🔴 それでも止めるなら、manager_stop を force: true を付けて呼び直すこと' +
-              '（止める道そのものは塞いでいない）。',
+            `[${managerId}] 止めていない。**いまターンの途中**（running）— 畳むと未 push の実装・` +
+              '起こした作業者・監視中の CI が失われる。🔴 force: true で止まる。\n' +
+              `${lastReportLine} ターンの中身は manager_report で先に読めること。`,
           );
         }
 
