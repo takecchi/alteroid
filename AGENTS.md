@@ -476,6 +476,20 @@ git -C <main のツリー> apply --check -R /tmp/tail.patch   # 通れば main �
 
   **⟹ 取り返しが付くのは枝を消す前だけである。** 閉じたあとは `reopen` も `--base` の付け替えも、base の枝が無いのでどちらも拒まれる（上の生出力）。**⭐ ただし成果そのものは失われない** — head の枝はリモートに残る（`git ls-remote --heads origin <head>` で確認できる）ので、rebase して新しい PR を開き直せば復帰できる。**⚠️ ただし base 側が squash マージされていると、head の枝が抱えている base 側のコミットは main の祖先ではない**ので、**rebase せずに出し直すと base 側の変更が二重に載った差分になる**。**対策: 積んだ PR が在るあいだは `--delete-branch` を付けない。** 先に依存側の base を `gh pr edit <N> --base main` で付け替えてから、base 側をマージする（**付け替えは base の枝が在るうちにしかできない**）
 
+  **⚠️ 対策はもっと単純かもしれない——ただし2標本からの推定で、機構はコードで確かめていない。** 同じ日（2026-09-15）の別の1組（PR #1007 と、それを base にしていた #1013）で、`--delete-branch` を**付けずに**マージしたところ、依存側の PR は閉じずに残り、しかも base が自動で `main` へ付け替わった:
+
+  ```
+  $ gh pr merge 1007 --squash            ← --delete-branch を付けていない
+  $ gh pr view 1007 --json state,mergeCommit
+  state=MERGED commit=be721e77
+  $ gh pr view 1013 --json state,baseRefName,isDraft
+  state=OPEN base=main draft=true        ← 生きていて、base も main へ付け替わっている
+  $ gh api repos/takecchi/alteroid --jq .delete_branch_on_merge
+  true                                    ← 枝自体はリポジトリ設定で自動的に消えた
+  ```
+
+  **⟹ 枝が消えること自体は #1008/#1010 の組と同じ（`delete_branch_on_merge=true`）。違うのは「誰が・いつ消したか」に見える。** `--delete-branch` を明示すると `gh pr merge` 自身が（依存側の付け替えより先に）枝を消すように見えるのに対し、明示しなければ GitHub 側の自動削除に任せる形になり、そちらは依存 PR の base を付け替えてから消しているように見える。**⚠️ これは実測2件（#1008/#1010 が閉じた組、#1007/#1013 が生き残った組）から見えた違いであって、GitHub 側の削除処理の実装を確認したわけではない。** 断定はしない——**「`--delete-branch` を付けない」だけで足りる可能性は高いが、確認できているのは「上の `gh pr edit --base main` を先にやる対策なら確実に安全」というところまでである。** 急ぐ理由が無ければ、確実な方（先に付け替える）を使うこと。
+
 ## 時刻の扱い
 
 - **セッション context に渡される「今日の日付」は JST、`date -u` は UTC で、この2つは9時間ずれる。** 食い違って見えても時計は壊れていない — `2026-08-18T20:48Z` と `2026-08-19` は同じ瞬間である（20:48Z ＝ JST 翌日 05:48）。**ここを時計のずれと読むと、解消しようのない不確実性を抱えたまま報告することになる**（実際にそうなった。観測も「判断できない」と断ったのも正しかったのに、原因の当てだけが外れた）
