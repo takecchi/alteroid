@@ -529,7 +529,7 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
      * — 人間が停止理由に自由記述を打った回で、`*` や `#`
      * を含んでいても化けないようにするため。
      *
-     * もう1つは `packages/core/src/manager.ts` の `#onRunnerEvent` の
+     * もう1つは `packages/core/src/manager.ts` の `#onEvent` の
      * `case 'ask'` ——`kind === 'permission'` のときにだけ `'none'` を立てる
      * （issue #287 / PR #559）。**`kind === 'question'` には立てない** —
      * そちらの `text` は `describeQuestions(input)` が返す、モデル自身が
@@ -553,7 +553,7 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
      * だけである。**
      *
      * **散文（`text`）の `status=...` とは別の量である。** `text` に
-     * `status=${status}` を埋めている箇所（`manager.ts` の `#onRunnerEvent`
+     * `status=${status}` を埋めている箇所（`manager.ts` の `#onEvent`
      * `case 'closed'`）は表示のための飾りで、正本はこの構造化欄のほう
      * ——`#124`（`d2ff50c`）が固定した「判定は構造化された印で行い、文言は
      * 表示にだけ使う」をここでも踏襲する。**文言の判定に戻らないこと**
