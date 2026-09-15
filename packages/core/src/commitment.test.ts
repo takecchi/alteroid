@@ -199,7 +199,12 @@ describe('引き受けたまま終わっていない仕事', () => {
     const id = beforeClose[0]?.id ?? '';
 
     // クローンが道具で閉じたときだけ閉じる
-    const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+    const tools = createCloneTools({
+      stores,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
     const close = tools.find((entry) => entry.name === 'commitment_close');
     await close?.handler({ id, reason: '直してマージした' } as never, {} as never);
 
@@ -336,7 +341,12 @@ describe('引き受けたまま終わっていない仕事', () => {
   describe('commitment_edit（クローンが自分の行の本文を直す。issue #580 の (B)）', () => {
     /** その `stores` に配線した `commitment_edit` を呼ぶ関数を返す。 */
     function editor(stores: Stores) {
-      const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+      const tools = createCloneTools({
+        stores,
+        emit: () => undefined,
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
       const found = tools.find((entry) => entry.name === 'commitment_edit');
       // 道具そのものが無ければ、下の検査は全部「直せなかった」に倒れて緑に
       // 見えうる。**その状態を「直せないことを確かめた」と読み替えないこと。**
@@ -481,7 +491,12 @@ describe('引き受けたまま終わっていない仕事', () => {
   describe('commitment_close（クローンが自分で片付けたことを日誌に残す。issue #585）', () => {
     /** その `stores` に配線した `commitment_close` を呼ぶ関数を返す。 */
     function closer(stores: Stores) {
-      const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+      const tools = createCloneTools({
+        stores,
+        emit: () => undefined,
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
       const found = tools.find((entry) => entry.name === 'commitment_close');
       expect(found, 'commitment_close という道具が無い').toBeDefined();
       return async (args: { id: string; reason: string }) => {
@@ -492,7 +507,12 @@ describe('引き受けたまま終わっていない仕事', () => {
 
     /** その `stores` に配線した `journal_read` を呼ぶ関数を返す（issue #585 の終了条件——クローンの読み口から辿れること）。 */
     function journalReader(stores: Stores) {
-      const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+      const tools = createCloneTools({
+        stores,
+        emit: () => undefined,
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
       const found = tools.find((entry) => entry.name === 'journal_read');
       expect(found, 'journal_read という道具が無い').toBeDefined();
       return async (args: Record<string, unknown>) => {

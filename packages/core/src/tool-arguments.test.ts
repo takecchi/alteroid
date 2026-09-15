@@ -43,6 +43,7 @@ async function connect(stores: ReturnType<typeof createMemoryStores>): Promise<R
     stores,
     emit: () => undefined,
     memoryCause: () => 'clone',
+    conversationId: () => undefined,
   });
   const pending = new Map<number, (message: Record<string, unknown>) => void>();
   let deliver: ((message: unknown) => void) | undefined;

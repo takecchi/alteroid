@@ -192,6 +192,7 @@ function descriptionOf(tool: string): string {
     stores: createMemoryStores(),
     emit: () => undefined,
     memoryCause: () => 'clone',
+    conversationId: () => undefined,
   });
   return tools.find((entry) => entry.name === tool)?.description ?? '';
 }

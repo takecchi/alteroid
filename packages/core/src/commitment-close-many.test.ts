@@ -23,7 +23,12 @@ import { chunkIdsByChars, createCloneTools } from './tools.js';
 
 /** その `stores` に配線した `commitment_close_many` を呼ぶ関数を返す。 */
 function closer(stores: Stores) {
-  const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+  const tools = createCloneTools({
+    stores,
+    emit: () => undefined,
+    memoryCause: () => 'clone',
+    conversationId: () => undefined,
+  });
   const found = tools.find((entry) => entry.name === 'commitment_close_many');
   expect(found, 'commitment_close_many という道具が無い').toBeDefined();
   return async (args: Record<string, unknown>) => {

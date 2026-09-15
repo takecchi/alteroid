@@ -305,6 +305,11 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     ...(runtime === undefined ? {} : { runtime }),
     ...(scheduler === undefined ? {} : { scheduler }),
     memoryCause: () => memoryCause,
+    // **既定は `undefined`（内部ターン扱い）。** どのテストも `ask_human` の
+    // 会話 id 付与そのものは検査していない——検査するのは `#toolContext()`
+    // 側の薄い closure（`clone.ts`）であって、ここではない。必須なのは
+    // 「関数を省略しないこと」だけなので、固定の accessor で足りる。
+    conversationId: () => undefined,
   });
 
   return {
@@ -1306,7 +1311,12 @@ describe('クローンの道具', () => {
      */
     it('説明文は「premise は全文が焼き込まれる」と言わず、要旨＋節の目次と開く口（memory_section_read）を言う', () => {
       const stores = createMemoryStores();
-      const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+      const tools = createCloneTools({
+        stores,
+        emit: () => undefined,
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
       const description = tools.find((entry) => entry.name === 'memory_list')?.description ?? '';
 
       expect(description).not.toContain('premise はプロンプトへ全文が焼き込まれている');
@@ -1349,7 +1359,12 @@ describe('クローンの道具', () => {
      */
     it('実装の値（本文が焼かれるか）と説明文の主張を、それぞれ現在の正しい値へ釘で留める', () => {
       const stores = createMemoryStores();
-      const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+      const tools = createCloneTools({
+        stores,
+        emit: () => undefined,
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
       const description = tools.find((entry) => entry.name === 'memory_list')?.description ?? '';
 
       const marker = 'MARKER-BODY-7f3a2c';
@@ -1438,6 +1453,7 @@ describe('クローンの道具', () => {
     } as never;
     const tools = createCloneTools({
       memoryCause: () => 'clone',
+      conversationId: () => undefined,
       stores: h.stores,
       emit: () => undefined,
       profile: createProfileService({ stores: h.stores, runners }),
@@ -1471,6 +1487,7 @@ describe('クローンの道具', () => {
     // クローンの判断ではない（日誌の decision を汚さない）。
     const tools = createCloneTools({
       memoryCause: () => 'clone',
+      conversationId: () => undefined,
       stores: h.stores,
       emit: () => undefined,
       profile: createProfileService({
@@ -3722,6 +3739,7 @@ describe('クローンの道具', () => {
           stores,
           emit: () => undefined,
           memoryCause: () => 'clone',
+          conversationId: () => undefined,
         });
         const description =
           tools.find((entry) => entry.name === 'memory_section_move')?.description ?? '';
@@ -3829,6 +3847,7 @@ describe('クローンの道具', () => {
           stores: createMemoryStores(),
           emit: () => undefined,
           memoryCause: () => 'clone',
+          conversationId: () => undefined,
         });
         const description =
           tools.find((entry) => entry.name === 'memory_section_move')?.description ?? '';
@@ -4214,8 +4233,87 @@ describe('クローンの道具', () => {
         stores: createMemoryStores(),
         emit: () => undefined,
         memoryCause: () => 'clone',
+        conversationId: () => undefined,
       });
       expect(tools.length).toBeGreaterThan(0);
+    });
+  });
+
+  /**
+   * `ToolContext.conversationId` が必須であることの歯（#781）。
+   *
+   * **`memoryCause` の歯（直上）と同じ形。** 測っているのは「配線を忘れたときに
+   * 閉じるか」であって「明示したときに通るか」ではない。**`memoryCause` との
+   * 違いを測る対照も要る** —— 関数を渡さないこと（必須違反）と、渡した関数が
+   * `undefined` を返すこと（内部ターンとして正当）は別である。後者まで
+   * 落としたら能力を削ることになる。
+   */
+  describe('ToolContext.conversationId は必須（配線を忘れた口が守りを素通りしない）', () => {
+    /** 型の抜け道から来た呼びを再現した `ToolContext`（`conversationId` が無い）。 */
+    const wiringForgotten = () =>
+      ({
+        stores: createMemoryStores(),
+        emit: () => undefined,
+        memoryCause: () => 'clone',
+      }) as unknown as ToolContext;
+
+    it('⭐ 型の抜け道から conversationId を省いて渡すと、既定へ倒さずに落ちる', () => {
+      expect(() => createCloneTools(wiringForgotten())).toThrow();
+    });
+
+    it('落ちるときのメッセージが、何を配線し忘れたかを名指しする', () => {
+      expect(() => createCloneTools(wiringForgotten())).toThrow(/conversationId/);
+      expect(() => createCloneTools(wiringForgotten())).toThrow(/ToolContext/);
+    });
+
+    /**
+     * ⭐ **型の側の歯。** `@ts-expect-error` の作法は直上の `memoryCause` の歯と
+     * 同じ（`grep -Fn -- '「不要な抑制」として' packages/core/src/prompt.test.ts`）。
+     * ⟹ **`conversationId` を optional に戻すと、ここが `pnpm typecheck` を落とす。**
+     */
+    it('⭐ 型の側: conversationId を省いた ToolContext は、そもそも型として組めない', () => {
+      const wontTypeCheck = () =>
+        // @ts-expect-error conversationId は必須。省いた形は型として組めない。
+        createCloneTools({
+          stores: createMemoryStores(),
+          emit: () => undefined,
+          memoryCause: () => 'clone',
+        });
+      // 実行はしない（実行時に落ちることは上の2本が測っている）。ここが測るのは
+      // **型として組めないこと**だけである。
+      expect(typeof wontTypeCheck).toBe('function');
+    });
+
+    it('対照: conversationId を明示すれば、従来どおり道具が組める', () => {
+      const tools = createCloneTools({
+        stores: createMemoryStores(),
+        emit: () => undefined,
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
+      expect(tools.length).toBeGreaterThan(0);
+    });
+
+    /**
+     * ⚠️ 対照。**能力を消していないこと**を測る —— `memoryCause` とは違い、
+     * 関数が呼ばれて `undefined` を返すこと自体は正当（内部ターン）で、
+     * ここまで必須にしてはいない。`ask_human` が積む承認から `conversationId`
+     * が消えることで確かめる（`context: undefined ? {} : {...}` の形と同じ
+     * 省略の作法 —— `tools.ts` の `ask_human` ハンドラ）。
+     */
+    it('対照: conversationId が undefined を返しても、能力は削れていない（内部ターン扱い）', async () => {
+      const stores = createMemoryStores();
+      const tools = createCloneTools({
+        stores,
+        emit: () => undefined,
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
+      const askHuman = tools.find((t) => t.name === 'ask_human');
+      expect(askHuman).toBeDefined();
+      await askHuman?.handler({ question: '質問' } as never, {});
+      const [pending] = await stores.jobs.listApprovals({ pendingOnly: true });
+      expect(pending?.conversationId).toBeUndefined();
     });
   });
 
@@ -4586,6 +4684,7 @@ describe('クローンの道具', () => {
         stores: createMemoryStores(),
         emit: () => {},
         memoryCause: () => 'clone',
+        conversationId: () => undefined,
       });
       const description = tools.find((t) => t.name === 'ask_human')?.description ?? '';
       expect(description).toContain('approval_withdraw');
@@ -4649,6 +4748,7 @@ describe('クローンの道具', () => {
       stores: createMemoryStores(),
       emit: () => undefined,
       memoryCause: () => 'clone',
+      conversationId: () => undefined,
     });
     const found = tools.find((entry) => entry.name === 'self_read');
 
@@ -6091,7 +6191,12 @@ describe('クローンの道具', () => {
      */
     it('道具の説明文が「印が無い＝手が空いている」ではないと断る', () => {
       const stores = createMemoryStores();
-      const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+      const tools = createCloneTools({
+        stores,
+        emit: () => undefined,
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
       const description = tools.find((entry) => entry.name === 'manager_list')?.description;
 
       expect(description).toContain('done/背景処理待ち×N');
@@ -6365,7 +6470,12 @@ describe('クローンの道具', () => {
     /** 道具の説明文にも書く（JSDoc はクローンに届かない）。 */
     it('道具の説明文が世代の食い違いの意味と次の一手を説明する', () => {
       const stores = createMemoryStores();
-      const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+      const tools = createCloneTools({
+        stores,
+        emit: () => undefined,
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
       const description = tools.find((entry) => entry.name === 'manager_list')?.description;
 
       expect(description).toContain('認証トークンの世代');
@@ -6811,7 +6921,12 @@ describe('クローンの道具', () => {
    */
   it('manager_list の説明文に、warm の契機（runner_list resources: true）と cold が既定であることが読める', () => {
     const stores = createMemoryStores();
-    const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+    const tools = createCloneTools({
+      stores,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
     const found = tools.find((entry) => entry.name === 'manager_list');
 
     expect(found?.description).toContain('resources: true');
@@ -6829,7 +6944,12 @@ describe('クローンの道具', () => {
    */
   it('manager_list の説明文に、10秒ごとの生存確認からも自動で warm することが読める（(b-1) の cold 前提を上書きした証拠）', () => {
     const stores = createMemoryStores();
-    const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+    const tools = createCloneTools({
+      stores,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
     const found = tools.find((entry) => entry.name === 'manager_list');
 
     expect(found?.description).toContain('生存確認');
@@ -6851,7 +6971,12 @@ describe('クローンの道具', () => {
    */
   it('manager_list の説明文に、#572 の ⚠（tool_result 未着 / 閾値なし / 返事待ちには出さない）が読める', () => {
     const stores = createMemoryStores();
-    const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+    const tools = createCloneTools({
+      stores,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
     const found = tools.find((entry) => entry.name === 'manager_list');
 
     expect(found?.description).toContain('tool_result');
@@ -6874,7 +6999,12 @@ describe('クローンの道具', () => {
    */
   it('manager_list の説明文に、#579（10秒ごとの生存確認から「セッションが無い」が立つ）が読める', () => {
     const stores = createMemoryStores();
-    const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+    const tools = createCloneTools({
+      stores,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
     const found = tools.find((entry) => entry.name === 'manager_list');
 
     expect(found?.description).toContain('10秒ごとの生存確認');
@@ -6885,7 +7015,12 @@ describe('クローンの道具', () => {
 
   it('委譲先が無い場面（蒸留の内部ターン）は、黙らずにそう返す', async () => {
     const stores = createMemoryStores();
-    const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+    const tools = createCloneTools({
+      stores,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
     const found = tools.find((entry) => entry.name === 'manager_start');
     const result = await found?.handler({ request: 'x' } as never, {});
 
@@ -7243,7 +7378,12 @@ describe('runner_list（器の一覧）', () => {
    */
   it('説明文が state を実装と同じ値・同じ数で名乗り、vacating が何かを添える', () => {
     const stores = createMemoryStores();
-    const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+    const tools = createCloneTools({
+      stores,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
     const description = tools.find((entry) => entry.name === 'runner_list')?.description ?? '';
     // **⭐ 出所から導出する（この歯自身が3枚目の写しにならないように）。**
     // ここに6値を書き並べていた頃は、doc が「実装（`runnerLivenessSchema`）と
@@ -7970,7 +8110,12 @@ describe('runner_list（器の一覧）', () => {
     /** 道具の説明文にも書く（JSDoc はクローンに届かない）。 */
     it('道具の説明文が ⚠世代N≠現役M の意味を説明する', () => {
       const stores = createMemoryStores();
-      const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+      const tools = createCloneTools({
+        stores,
+        emit: () => undefined,
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
       const description = tools.find((entry) => entry.name === 'runner_list')?.description;
 
       expect(description).toContain('⚠世代N≠現役M');
@@ -9242,7 +9387,12 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
   it('managers が配線されていない場面では、安全側に倒して消させない', async () => {
     const stores = createMemoryStores();
     const archiveId = (await stores.archive.archive('sess-no-pool', 'BODY\n')).id;
-    const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+    const tools = createCloneTools({
+      stores,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
     const found = tools.find((entry) => entry.name === 'archive_remove');
     if (!found) throw new Error('archive_remove が無い');
 
@@ -9823,7 +9973,12 @@ describe('usage_read の台帳に1行も無い委譲（Issue #98）', () => {
       at: '2026-08-14T10:00:00.000Z',
       snapshot: { models },
     });
-    const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+    const tools = createCloneTools({
+      stores,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
     const found = tools.find((t) => t.name === 'usage_read');
     const result = await found!.handler({} as never, {} as never);
     const reply = result.content.map((part) => ('text' in part ? part.text : '')).join('\n');
@@ -10008,6 +10163,7 @@ describe('usage_read はアカウント全体の残りも返す（人間と同�
       emit: () => undefined,
       accountUsage,
       memoryCause: () => 'clone',
+      conversationId: () => undefined,
     });
     return async (args: Record<string, unknown> = {}) => {
       const found = tools.find((t) => t.name === 'usage_read');
@@ -10173,6 +10329,7 @@ describe('self_status（いま自分がどう走っているか）', () => {
       stores: createMemoryStores(),
       emit: () => undefined,
       memoryCause: () => 'clone',
+      conversationId: () => undefined,
     });
     const found = tools.find((entry) => entry.name === 'self_status');
     if (!found) throw new Error('self_status が無い');
@@ -12897,6 +13054,7 @@ describe('commitment_list は読めない行を隠さない（issue #296）', ()
       stores: withUnreadable,
       emit: () => undefined,
       memoryCause: () => 'clone',
+      conversationId: () => undefined,
     });
     const found = tools.find((entry) => entry.name === 'commitment_list');
 
@@ -12919,6 +13077,7 @@ describe('commitment_list は読めない行を隠さない（issue #296）', ()
       stores: createMemoryStores(),
       emit: () => undefined,
       memoryCause: () => 'clone',
+      conversationId: () => undefined,
     });
     const opened = tools.find((entry) => entry.name === 'commitment_open');
     await opened?.handler({ body: '健全な依頼' } as never, {});
@@ -12953,6 +13112,7 @@ describe('commitment_list は読めない行を隠さない（issue #296）', ()
       stores: withUnreadable,
       emit: () => undefined,
       memoryCause: () => 'clone',
+      conversationId: () => undefined,
     });
     const found = tools.find((entry) => entry.name === 'commitment_list');
     const result = await found?.handler({} as never, {});
@@ -12993,6 +13153,7 @@ describe('commitment_list は読めない行を隠さない（issue #296）', ()
       stores: withUnreadable,
       emit: () => undefined,
       memoryCause: () => 'clone',
+      conversationId: () => undefined,
     });
     const found = tools.find((entry) => entry.name === 'commitment_list');
     const result = await found?.handler({} as never, {});
@@ -13036,6 +13197,7 @@ describe('commitment_list は物理削除された片付き行を隠さない（
       stores: withTrimmed,
       emit: () => undefined,
       memoryCause: () => 'clone',
+      conversationId: () => undefined,
     });
     const opened = tools.find((entry) => entry.name === 'commitment_open');
     await opened?.handler({ body: '健全な依頼' } as never, {});
@@ -13068,6 +13230,7 @@ describe('commitment_list は物理削除された片付き行を隠さない（
       stores: withTrimmed,
       emit: () => undefined,
       memoryCause: () => 'clone',
+      conversationId: () => undefined,
     });
     const found = tools.find((entry) => entry.name === 'commitment_list');
     const result = await found?.handler({} as never, {});
@@ -13082,6 +13245,7 @@ describe('commitment_list は物理削除された片付き行を隠さない（
       stores: createMemoryStores(),
       emit: () => undefined,
       memoryCause: () => 'clone',
+      conversationId: () => undefined,
     });
     const opened = tools.find((entry) => entry.name === 'commitment_open');
     await opened?.handler({ body: '健全な依頼' } as never, {});
@@ -14000,6 +14164,7 @@ describe('commitment_list に origin の絞りを足す（issue #426）', () => 
       stores: withUnreadable,
       emit: () => undefined,
       memoryCause: () => 'clone',
+      conversationId: () => undefined,
     });
     const found = tools.find((entry) => entry.name === 'commitment_list');
     const result = await found?.handler({ origin: ['manager'] } as never, {});
@@ -14780,7 +14945,12 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
       clearRecentTracesForTesting();
       const stores = failingJournalAppend(createMemoryStores(), 'boom-act-completed');
       await stores.persona.write('temp-note', '消される文書\n');
-      const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+      const tools = createCloneTools({
+        stores,
+        emit: () => {},
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
 
       const { isError, text } = await callExpectingError(tools, 'memory_delete', {
         slug: 'temp-note',
@@ -14811,7 +14981,12 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
     it('act-not-performed（journal_write）: 日誌への記録そのものが行為。副作用は無く「やり直してよい」と返る', async () => {
       clearRecentTracesForTesting();
       const stores = failingJournalAppend(createMemoryStores(), 'boom-act-not-performed');
-      const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+      const tools = createCloneTools({
+        stores,
+        emit: () => {},
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
 
       const { isError, text } = await callExpectingError(tools, 'journal_write', {
         decision: '判断した',
@@ -14836,7 +15011,12 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
     it('act-not-performed（daily_report_write）: こちらも記録そのものが行為で、副作用は無い', async () => {
       clearRecentTracesForTesting();
       const stores = failingJournalAppend(createMemoryStores(), 'boom-daily-report');
-      const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+      const tools = createCloneTools({
+        stores,
+        emit: () => {},
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
 
       const { isError, text } = await callExpectingError(tools, 'daily_report_write', {
         body: '今日の報告',
@@ -14857,7 +15037,12 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
       clearRecentTracesForTesting();
       const stores = failingJournalAppend(createMemoryStores(), 'boom-partial');
       await stores.persona.write('from-doc', '# 表紙\n\n芯\n\n## 節A\n\n本文\n');
-      const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+      const tools = createCloneTools({
+        stores,
+        emit: () => {},
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
 
       const outlineResult = await callExpectingError(tools, 'memory_outline', {
         slug: 'from-doc',
@@ -14911,7 +15096,12 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
     it('act-completed（ask_human）: 承認は実在し（approvals_list から読める）、跡も残る。isError のまま「やり直し禁止」が返る', async () => {
       clearRecentTracesForTesting();
       const stores = failingJournalAppend(createMemoryStores(), 'boom-ask-human');
-      const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+      const tools = createCloneTools({
+        stores,
+        emit: () => {},
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
 
       // ⚠️ 秘密の扱い: 質問文に秘密（鍵・トークン等）を書かない。中身は
       // 人工の無害な文言で足りる——ここで測るのは実在と跡であって、内容の
@@ -14981,6 +15171,7 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
       emit: () => {},
       profile: createProfileService({ stores, runners }),
       memoryCause: () => 'clone',
+      conversationId: () => undefined,
     });
 
     let result: { isError: boolean; text: string } | undefined;
@@ -15062,6 +15253,7 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
       stores: createMemoryStores(),
       emit: () => undefined,
       memoryCause: () => 'clone',
+      conversationId: () => undefined,
     });
     return tools.find((entry) => entry.name === tool)?.description ?? '';
   }
@@ -15647,7 +15839,12 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       firstLine: ACT_COMPLETED,
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-01');
-        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
         return callExpectingError(tools, 'memory_write', {
           slug: 'doc-write',
           content: '本文',
@@ -15660,7 +15857,12 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       firstLine: ACT_COMPLETED,
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-02');
-        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
         return callExpectingError(tools, 'memory_append', {
           slug: 'doc-append',
           content: '追記',
@@ -15674,7 +15876,12 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-03');
         await stores.persona.write('doc-to-delete', '消される文書\n');
-        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
         return callExpectingError(tools, 'memory_delete', {
           slug: 'doc-to-delete',
           summary: '整理',
@@ -15687,7 +15894,12 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-04');
         await stores.persona.write('doc-fm', '---\ntype: premise\n---\n# 表紙\n本文');
-        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
         return callExpectingError(tools, 'memory_frontmatter_set', {
           slug: 'doc-fm',
           description: '新しい要旨',
@@ -15703,7 +15915,12 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-05');
         await stores.persona.write('from-doc-mi', '# 表紙\n\n芯\n\n## 節A\n\n本文\n');
-        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
         const outline = await callExpectingError(tools, 'memory_outline', { slug: 'from-doc-mi' });
         const sectionId = firstSectionId(outline.text);
         return callExpectingError(tools, 'memory_section_move', {
@@ -15723,7 +15940,12 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       async run() {
         const stores = failingJournalAppendAtCall(createMemoryStores(), 2, 'boom-case-06');
         await stores.persona.write('from-doc-mo', '# 表紙\n\n芯\n\n## 節A\n\n本文\n');
-        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
         const outline = await callExpectingError(tools, 'memory_outline', { slug: 'from-doc-mo' });
         const sectionId = firstSectionId(outline.text);
         return callExpectingError(tools, 'memory_section_move', {
@@ -15739,7 +15961,12 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       firstLine: ACT_NOT_PERFORMED,
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-07');
-        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
         return callExpectingError(tools, 'journal_write', {
           decision: '判断した',
           grounds: '根拠',
@@ -15751,7 +15978,12 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       firstLine: ACT_COMPLETED,
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-08');
-        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
         return callExpectingError(tools, 'ask_human', { question: '質問' });
       },
     },
@@ -15768,7 +16000,12 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
           createdAt: '2026-01-01T00:00:00.000Z',
           question: '取り下げられる質問',
         });
-        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
         return callExpectingError(tools, 'approval_withdraw', {
           id: 'ap-withdraw-test',
           reason: '不要になった',
@@ -15780,7 +16017,12 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       firstLine: ACT_NOT_PERFORMED,
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-09');
-        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
         return callExpectingError(tools, 'daily_report_write', { body: '今日の報告' });
       },
     },
@@ -15789,7 +16031,12 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       firstLine: ACT_COMPLETED,
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-10');
-        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
         return callExpectingError(tools, 'schedule_create', {
           kind: 'watch-test',
           request: 'いつもの見回り',
@@ -15809,7 +16056,12 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
           createdAt: '2026-01-01T00:00:00.000Z',
           updatedAt: '2026-01-01T00:00:00.000Z',
         });
-        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
         return callExpectingError(tools, 'schedule_remove', { kind: 'watch-test' });
       },
     },
@@ -15818,7 +16070,12 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       firstLine: ACT_COMPLETED,
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-12');
-        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
         return callExpectingError(tools, 'commitment_open', { body: '宿題を引き受けた' });
       },
     },
@@ -15833,7 +16090,12 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
           origin: 'self',
           body: '片付ける件',
         });
-        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
         return callExpectingError(tools, 'commitment_close', {
           id: 'c-close-test',
           reason: '終わった',
@@ -15856,7 +16118,12 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
           source: 'token-pool',
           body: '知らせ',
         });
-        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
         return callExpectingError(tools, 'commitment_close_many', {
           origin: ['external'],
           reason: '知らせなので引き受ける対象が無い',
@@ -15875,7 +16142,12 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
           origin: 'self',
           body: '直す前の本文',
         });
-        const tools = createCloneTools({ stores, emit: () => {}, memoryCause: () => 'clone' });
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
         return callExpectingError(tools, 'commitment_edit', {
           id: 'c-edit-test',
           body: '直した後の本文',
@@ -15913,6 +16185,7 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
           emit: () => {},
           profile: createProfileService({ stores, runners }),
           memoryCause: () => 'clone',
+          conversationId: () => undefined,
         });
         return callExpectingError(tools, 'profile_write', {
           script: 'export A=1',
@@ -15945,6 +16218,7 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
           emit: () => {},
           managers,
           memoryCause: () => 'clone',
+          conversationId: () => undefined,
         });
         return callExpectingError(tools, 'manager_start', { request: '調査' });
       },
@@ -15962,6 +16236,7 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
           emit: () => {},
           managers,
           memoryCause: () => 'clone',
+          conversationId: () => undefined,
         });
         return callExpectingError(tools, 'archive_remove', {
           archiveId,

@@ -887,6 +887,7 @@ describe('runner_list の説明文が名乗る点数の式（#712 / C-3）', () 
       stores: createMemoryStores(),
       emit: () => undefined,
       memoryCause: () => 'clone',
+      conversationId: () => undefined,
     });
     const description = tools.find((entry) => entry.name === 'runner_list')?.description ?? '';
     expect(

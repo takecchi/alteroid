@@ -116,6 +116,7 @@ function handsOf(stores: Stores, managers: ManagerPool) {
     emit: () => undefined,
     managers,
     memoryCause: () => 'clone',
+    conversationId: () => undefined,
   });
   const call = async (name: string, args: Record<string, unknown>) => {
     const tool = tools.find((entry) => entry.name === name);

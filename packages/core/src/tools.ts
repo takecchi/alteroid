@@ -190,21 +190,35 @@ export interface ToolContext {
   /**
    * いまのターンの会話 id（#768）。`ask_human` が `PendingApproval.conversationId`
    * を埋めるために読む。マネージャー発の確認・蒸留・timer など内部ターンでは
-   * 会話へ紐づいていないので `undefined` を返す。
+   * 会話へ紐づいていないので、**呼んだ結果として** `undefined` を返してよい
+   * （返り値までは必須にしない——下で `memoryCause` との違いを書く）。
    *
-   * ## なぜ optional か（`memoryCause` とは違う判断）
+   * ## ⛔ 必須である。省略できない（既定値を持たない）
    *
-   * `ToolContext.memoryCause` は「⛔ 必須である。省略できない」と書いてある
-   * ——渡し忘れが静かに落ちる（記録される `cause` が嘘になる）のを防ぐためで、
-   * 同じ理由はここにも効く（渡し忘れれば承認は会話 id を持てず、この Issue が
-   * 直そうとしている穴そのものが再発する）。**それでも必須にしなかった** ——
-   * 必須化すると `packages/core/src/tools.test.ts` の `ToolContext` 組み立て
-   * 55 箇所（`memoryCause` を書く行は 66 箇所）が typecheck で落ち、そのファイルは
-   * この変更のスコープ外（別の委譲が同日に触っている）。**これは設計上の妥協で
-   * ある** ——「たまたま塞げていない側」として扱うこと。本番の構築点は
-   * `clone.ts` の `#toolContext()` の1箇所だけで、そこでは明示している。
+   * **かつてこれは optional だった。** `ToolContext.memoryCause` は「⛔ 必須で
+   * ある。省略できない」と書いてあり——渡し忘れが静かに落ちる（承認が会話 id
+   * を持てなくなる）のを防ぐためで、**同じ理由はここにも同じだけ効く**（#781）。
+   * optional のままだと、`context.conversationId?.()` は渡し忘れても型検査を
+   * 通り、承認は黙って会話に紐づかなくなる——#768 が直した穴の再発である。
+   *
+   * **かつて必須化を止めていた理由（`packages/core/src/tools.test.ts` の
+   * `ToolContext` 組み立てが typecheck で落ちる）は #781 の時点で解消済み。**
+   * ⛔ **「本番の構築点は1箇所だから安全」というコメントで済ませない** ——
+   * 本番の構築点は実際には2箇所ある（`clone.ts` の `#toolContext()` と
+   * `#distillFromTranscript` のインライン context）。`memoryCause` はすでに
+   * 両方へ明示しており、`conversationId` もそれに揃える。
+   *
+   * **⟹ 必須にして、型の抜け道から届かなかったときは throw する**
+   * （`createCloneTools` の中。倒れ先を作らない）。
+   *
+   * **⚠️ `memoryCause` との違い —— 必須なのは「関数を渡すこと」であって
+   * 「関数が値を返すこと」ではない。** `memoryCause` は返り値そのものが必須
+   * （常に `'distill' | 'clone'` のどちらかを返す）だが、`conversationId` は
+   * **関数を省略しないこと**だけが必須で、渡された関数が呼ばれて
+   * `undefined` を返すことは内部ターンとして正当である。返り値の型は
+   * `string | undefined` のまま変えていない。
    */
-  conversationId?: () => string | undefined;
+  conversationId: () => string | undefined;
   /**
    * 委譲先。省略できるのは蒸留用の短命セッションのためで、そこでは
    * マネージャーを起こさない（記憶へ移すだけの内部ターン）。
@@ -2558,6 +2572,19 @@ export function createCloneTools(context: ToolContext) {
     );
   }
   const memoryCause = context.memoryCause;
+  // **`conversationId` も同じ理由で倒れ先を作らない（#781）。** 型は必須だが、
+  // 型の抜け道（`as unknown as ToolContext` / JS からの呼び）では届かない
+  // ことがありうる。**関数が無いことと、関数が `undefined` を返すことは別**
+  // ——後者（内部ターン）は許す。ここで落とすのは前者だけ
+  // （`ToolContext.conversationId` の doc）。
+  if (typeof context.conversationId !== 'function') {
+    throw new Error(
+      'conversationId が届いていない。ToolContext を組む側で明示すること' +
+        '（既定値へ倒すと、ask_human が積む承認が会話 id を持てなくなり、' +
+        '#768 の穴が再発する）。',
+    );
+  }
+  const getConversationId = context.conversationId;
 
   return [
     // --- 記憶 -----------------------------------------------------------
@@ -3961,10 +3988,11 @@ export function createCloneTools(context: ToolContext) {
       },
       async ({ question, context: background, managerId, requestId }) => {
         // **いまのターンの会話 id を積む（#768）。** マネージャー発の確認・蒸留・
-        // timer など内部ターンでは `context.conversationId` 自体が省略されている
-        // か `undefined` を返すので、その場合はここも undefined のままになる
-        // （= 今までどおり `self` へ積まれる。挙動を変えない）。
-        const conversationId = context.conversationId?.();
+        // timer など内部ターンでは呼んだ結果が `undefined` になるので、その場合は
+        // ここも undefined のままになる（= 今までどおり `self` へ積まれる。
+        // 挙動を変えない）。`conversationId` 自体の省略は上の関数冒頭の
+        // 歯（`typeof context.conversationId !== 'function'`）が落とす。
+        const conversationId = getConversationId();
         const approval: PendingApproval = {
           id: randomUUID(),
           createdAt: new Date().toISOString(),

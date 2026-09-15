@@ -18,7 +18,12 @@ import { createCloneTools } from './tools.js';
  */
 
 function tools(stores: Stores) {
-  const list = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+  const list = createCloneTools({
+    stores,
+    emit: () => undefined,
+    memoryCause: () => 'clone',
+    conversationId: () => undefined,
+  });
   return async (name: string, args: Record<string, unknown>): Promise<string> => {
     const found = list.find((entry) => entry.name === name);
     if (!found) throw new Error(`道具 ${name} が無い`);
@@ -489,6 +494,7 @@ describe('conversation_read — 出ないものを説明文が名指ししてい
   it('ask_human の回答が出ないことと、その行き先が書いてある', () => {
     const found = createCloneTools({
       memoryCause: () => 'clone',
+      conversationId: () => undefined,
       stores: createMemoryStores(),
       emit: () => undefined,
     }).find((entry) => entry.name === 'conversation_read');

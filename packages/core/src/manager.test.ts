@@ -4404,6 +4404,7 @@ describe('#flushUnreported の印が manager_list / manager_report の見出し�
       emit: () => undefined,
       managers: s.pool,
       memoryCause: () => 'clone',
+      conversationId: () => undefined,
     });
     const list = tools.find((entry) => entry.name === 'manager_list');
     const report = tools.find((entry) => entry.name === 'manager_report');
@@ -4447,6 +4448,7 @@ describe('#flushUnreported の印が manager_list / manager_report の見出し�
       emit: () => undefined,
       managers: s.pool,
       memoryCause: () => 'clone',
+      conversationId: () => undefined,
     });
     const list = tools.find((entry) => entry.name === 'manager_list');
     const report = tools.find((entry) => entry.name === 'manager_report');

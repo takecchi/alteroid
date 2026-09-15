@@ -5889,6 +5889,13 @@ class Clone implements CloneHost {
    * だけで、`#distillFromTranscript` 側は自分のインライン context に
    * `memoryCause: () => 'distill'` を固定で持たせている（あちらは常に
    * 蒸留のターンなので、`#turn` を読む必要が無い）。
+   *
+   * **`conversationId` も必須（#781）で、両方の構築点が明示している。** ここは
+   * `this.#turn?.conversationId`（無ければ undefined）を返す薄い closure、
+   * `#distillFromTranscript` 側は常に内部ターンなので `() => undefined` を
+   * 固定で持たせている。**どちらも関数そのものは省略していない** ——
+   * 省略すると `createCloneTools` の歯（`ToolContext.conversationId` の doc）
+   * が throw する。
    */
   #toolContext(): ToolContext {
     return {
@@ -6516,10 +6523,13 @@ class Clone implements CloneHost {
           // 既定の `'clone'` に落ち、蒸留が書いた記憶なのに `cause: 'clone'`
           // と名乗る**（`ToolContext.memoryCause` の doc の「渡し忘れ」）。
           memoryCause: () => 'distill',
-          // **`conversationId` は渡さない（#768）。** `emit` を `() => undefined`
-          // にしているのと同じ判断 —— サイドクエリは常に内部ターンで、
-          // 人間の会話には紐づいていない。渡さなければ `ask_human` 側の
-          // `context.conversationId?.()` は呼ばれず undefined 扱いになる。
+          // **`conversationId` は明示する（#768・#781）。** かつては省略していたが、
+          // いまは `ToolContext.conversationId` が必須（省略すると
+          // `createCloneTools` が throw する）。値そのものの判断は変えていない
+          // —— `emit` を `() => undefined` にしているのと同じ判断で、
+          // サイドクエリは常に内部ターンで人間の会話には紐づいていないので、
+          // 関数は渡すが常に `undefined` を返す。
+          conversationId: () => undefined,
         }),
         systemPrompt: buildCloneSystemPrompt({
           memory,

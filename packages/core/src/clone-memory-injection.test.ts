@@ -320,6 +320,7 @@ describe('通しの歯 — memory_write の見込み文字数と、次のター�
       stores,
       emit: (event) => emitted.push(event),
       memoryCause: () => 'clone',
+      conversationId: () => undefined,
     });
     const memoryWrite = tools.find((entry) => entry.name === 'memory_write');
     if (memoryWrite === undefined) throw new Error('memory_write が無い（足場の欠陥）');
@@ -509,6 +510,7 @@ describe('通しの歯 — 既に見ている premise への追記は、追記�
       stores,
       emit: () => undefined,
       memoryCause: () => 'clone',
+      conversationId: () => undefined,
     });
     const memoryAppend = tools.find((entry) => entry.name === 'memory_append');
     if (memoryAppend === undefined) throw new Error('memory_append が無い（足場の欠陥）');
