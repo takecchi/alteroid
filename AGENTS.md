@@ -424,6 +424,23 @@ git -C <main のツリー> apply --check -R /tmp/tail.patch   # 通れば main �
 
   **⟹ 代わりに `git log --perl-regexp --grep="#${N}(?!\d)" origin/main` を使う**（`(?!\d)` が無いと `#213` が `#2131` にも当たる）。⚠️ **こちらにも限界がある** — コミット本文の文字列一致であって GitHub の issue リンク機構そのものではない。PR の説明から番号を後で消した等の経路は拾えない（そういう例が実在するかは確認していない）。⚠️ **もう1つ** — この repo の squash コミットの件名は末尾に `(#PR番号)` が付くので、素朴な `--grep '#<N>'` は PR 自身の番号にも当たりうる（除くには「件名末尾の `(#…)` を外した残り＋本文に `#N` が在るか」を見る）。⭐ ただし今回の標本（open issue 50件・生ヒット計106件、2026-09-15 観測）ではこの衝突は0件だった——機構として在るが、この標本では実害は出ていない
 
+- **`git log --grep` は既定で大小文字を区別する ⟹ トレーラの数え上げで、大半が窓から静かに落ちる。** 実測（2026-09-15T17:01:19Z 観測、自分で取り直した）:
+
+  ```
+  $ git log --format=%H --grep='Co-Authored-By' origin/main | wc -l
+  8            ← 完全一致。ここで止めると「この族は少ない」と読める
+  $ git log --format=%H -i --grep='co-authored-by' origin/main | wc -l
+  93           ← -i を付けるとこうなる
+  ```
+
+  **なぜ落ちるのか**: GitHub や各種ツールが既定で付けるのは `Co-authored-by:`（`a` が小文字）である。⟹ `Co-Authored-By` の完全一致で数えると、その大半が窓の外に出る。
+
+  🔑 **⟹ この項目の芯**: **エラーは出ない。小さい数が返るだけである。**⟹ 「この族は少ない」という*間違った安心*が返ってくる。⭐ 他の項目と同じ族（`grep -vc` が「該当なし」を作る向きにしか壊れないのと同型）。
+
+  ⚠ **併せて書く（混同を防ぐため）**: 門そのものは無事だった。`scripts/check-no-attribution-trailers-core.mjs` は大小文字を無視する判定になっており（`grep -Fn -- '大小文字を区別しない' scripts/check-no-attribution-trailers-core.mjs`）、実装者が `main` の実コミット `6a74c9d` に `Co-Authored-By:` と `Co-authored-by:` が同居していることを確認したうえでそう決めている。⟹ 壊れていたのは*数え方*であって、門の挙動ではない。
+
+  ⭐ 同じ日の実測: 同じ「トレーラの数」という言葉で2人が別の式を使い、85 と 86 に分かれた（`🤖 Generated with` の数え方の違い。Issue #1020 コメント）。⟹ 数字を渡すときは*式と窓*（ref・母集団・対象）を一緒に渡すと、差は15秒で解ける。
+
 - **`gh pr view --json statusCheckRollup` は「どの sha の結果か」を返さない。force-push の直後は、古い head の結果を green として返す。** 実測（2026-08-23T06:34:13Z 観測、PR #292）: rebase して force-push（`7814d58` → `7b26a58`）した直後に CI 待ちのポーリングを始めたところ、**1回目で即座に `ci:COMPLETED:SUCCESS image:COMPLETED:SUCCESS` が返った。** 同じ時刻に sha を明示して引き直すと、実際の head はまだ走っていた:
 
   ```
