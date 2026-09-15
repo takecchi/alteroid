@@ -24,7 +24,7 @@ import type { RunnerEvent } from './runner-protocol.js';
  * PR #454 の本文（`git log -1 --format=%B d27a90f`）が「1回目は3本とも何も
  * 測っていなかった」と書いている——共有の `fakeSdk`（`for await` で1件ずつ処理し、
  * ターン中に入力ストリームへ次を要求しない）では、`#inputStream` の境界判定が
- * 「ターンが走っている」状態で一度も発火しない。**ここでは `clone.ts` の
+ * 「ターンが走っている」状態で一度も発火しない。**ここでは `clone.test.ts` の
  * `lookaheadSdk` / `abortOnStreamEndSdk` と同じ形**（出力側が `prompt` の
  * イテレータを直接読み、結果を出す前に次の入力を読み先行しておく）を、
  * RunnerSession が持つ追加の軸（確認待ち・背景処理・session_id の有無）を
@@ -58,9 +58,9 @@ interface FakeManagerSession {
 /**
  * **読み先行し、必要なら入力の口が閉じたらターンを捨てる偽 SDK。**
  *
- * - `abortOnInputClose: false`（既定）—— `clone.ts` の `lookaheadSdk` と同じ。
+ * - `abortOnInputClose: false`（既定）—— `clone.test.ts` の `lookaheadSdk` と同じ。
  *   入力が尽きても、そのターンの結果は必ず出す。
- * - `abortOnInputClose: true` —— `clone.ts` の `abortOnStreamEndSdk` と同じ。
+ * - `abortOnInputClose: true` —— `clone.test.ts` の `abortOnStreamEndSdk` と同じ。
  *   入力の口が閉じたら、そのとき組み立て中のターンを結果を出さずに捨てる。
  *   「ターンの途中で畳んでいないか」を検出するのに使う——途中で畳んでいれば、
  *   `finish()` が積んだ `result` がそもそも生成側へ届かない。
@@ -182,7 +182,7 @@ function fakeSdk(opts: { abortOnInputClose?: boolean; skipInit?: boolean } = {})
         inputs.push(String(current.value.message.content));
 
         // **読み先行。** このターンの結果を出す前に、次の入力を要求しておく
-        // （`clone.ts` の `lookaheadSdk` と同じ理由——`#inputStream` の境界判定が
+        // （`clone.test.ts` の `lookaheadSdk` と同じ理由——`#inputStream` の境界判定が
         // 「ターンが走っている」状態で実際に発火するのは、この形のときだけ）。
         const lookahead = iterator.next();
 
