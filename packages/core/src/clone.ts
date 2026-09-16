@@ -62,6 +62,7 @@ import {
   noteBackgroundFailure,
   noteDroppedInboxEvent,
   noteDroppedRecord,
+  noteInboxEventKeptInMemoryOnly,
   noteUnreadableRecord,
   reasonOf,
 } from './dropped-record.js';
@@ -514,6 +515,24 @@ const SCHEDULE_STORE_RETRY_MS = 200;
  */
 const FORGET_RETRY_ATTEMPTS = 3;
 const FORGET_RETRY_MS = 200;
+
+/**
+ * `#remember` が `stores.inbox.put` を拾い直す回数と間隔（issue #1085）。
+ *
+ * **`FORGET_RETRY_ATTEMPTS` と対になる——同じストア（`stores.inbox`）への
+ * 書き込みで、向きが逆（書く／消す）なだけである。** これも回数制限ではない
+ * （`SCHEDULE_STORE_ATTEMPTS` と同じ理由）。器の一瞬の揺れで書けなかっただけの
+ * 合図を、次の起動を待たずに同じプロセスの中で書き込むための拾い直しであって、
+ * 諦めた合図を切り捨てるものではない——全部失敗しても合図は失われない
+ * （メモリの待ち行列には残る。`#remember` の doc）。
+ *
+ * **有界にする。** ここを無限に粘る形にすると、器が詰まったまま合図が届き
+ * 続けるたびに終わらない待ちが積み上がる。尽きたら諦めて跡だけ残す
+ * （`noteInboxEventKeptInMemoryOnly`）——「諦める」が指すのは**この起動での
+ * 書き込み**だけで、合図そのものではない。
+ */
+const REMEMBER_RETRY_ATTEMPTS = 3;
+const REMEMBER_RETRY_MS = 200;
 
 /**
  * 版が入れ替わっていたときに読み直す回数。
@@ -3734,23 +3753,59 @@ class Clone implements CloneHost {
    * 含めば数分から数十分）が入っていた。
    *
    * **失敗しても post を落とさない。** 未読を書けないことでその合図の処理まで
-   * 止めたら、いま直そうとしているものより広い穴になる。跡は stderr へ1行だけ残す
-   * （本文を出さない理由は `dropped-record.ts`。ここへ来る合図には人間の発言・
-   * webhook の本文・マネージャーの報告が入り、テスト出力（`railway/setup.test.ts`
-   * の差分アサーション）に `GH_TOKEN` が全文で出た前例がある。#52）。
+   * 止めたら、いま直そうとしているものより広い穴になる。
+   *
+   * **一時的な失敗は `REMEMBER_RETRY_ATTEMPTS` 回まで拾い直す（issue #1085）。**
+   * `#forget` の `inbox.remove` の拾い直しと対になる形——同じストアへの
+   * 書き込みで、器の瞬断だけで即座に諦めない。**有界にする。** 尽きても
+   * この約束（`#unread` に積むもの）は reject しない——reject すると
+   * `#forget` の `await written` が例外で終わり、消し込みそのものが止まる。
+   * 拾い直しても書けなかった最後だけ跡を残す（`noteInboxEventKeptInMemoryOnly`）。
+   * **その跡は「書けなかった」であって「合図を失った」ではない**——`post()` は
+   * この呼びの直後に `#inbox.push` するので、このプロセスが生きているあいだは
+   * 配達される。失うのは器が入れ替わったとき（`#restoreUnread` はストアから
+   * しか拾い直せないため）だけである。跡は stderr へ1行だけ残す（本文を出さない
+   * 理由は `dropped-record.ts`。ここへ来る合図には人間の発言・webhook の本文・
+   * マネージャーの報告が入り、テスト出力（`railway/setup.test.ts` の差分
+   * アサーション）に `GH_TOKEN` が全文で出た前例がある。#52）。
    *
    * **`arrived`（Issue #783 段0）はここで、書き込みの成否を問わずに数える。**
    * `inbox_flow.arrived` の doc が言う「受理した瞬間であって書けた時刻ではない」
-   * を体現している場所そのもの——`.catch` の中ではなく関数の入口で数える。
+   * を体現している場所そのもの——拾い直しの結果を待たず関数の入口で数える。
    */
   #remember(event: InboxEvent): void {
     this.#bumpInboxFlow(this.#inboxFlowArrived, event.type);
-    this.#unread.set(
-      event.id,
-      this.#stores.inbox.put(event, event.at).catch((error: unknown) => {
-        noteDroppedRecord('未読の合図', inboxEventShape(event), error);
-      }),
-    );
+    this.#unread.set(event.id, this.#persistUnread(event));
+  }
+
+  /**
+   * `#remember` の書き込みを、一時的な失敗なら `REMEMBER_RETRY_ATTEMPTS` 回まで
+   * 拾い直す（issue #1085）。
+   *
+   * **`#forget` の `inbox.remove` の拾い直しと同じ形。** 間隔は
+   * `REMEMBER_RETRY_MS * attempt`（線形に伸ばす）で、`FORGET_RETRY_MS` と
+   * 同じ値を使う——同じストアの同じ種類の瞬断（一瞬の詰まり・接続の瞬断）に
+   * 対して、書く側と消す側で待ち方を変える理由が無い。
+   *
+   * **尽きても reject しない。** 呼び出し元（`#remember`）がこの約束を
+   * `#unread` へそのまま積み、`#forget` が `await written` で待つ——ここで
+   * reject すると、書けなかった合図の消し込みまで例外で止まってしまう
+   * （`#forget` の doc）。尽きたら跡だけ残して正常に終える。
+   */
+  async #persistUnread(event: InboxEvent): Promise<void> {
+    let last: unknown;
+    for (let attempt = 0; attempt < REMEMBER_RETRY_ATTEMPTS; attempt += 1) {
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, REMEMBER_RETRY_MS * attempt));
+      }
+      try {
+        await this.#stores.inbox.put(event, event.at);
+        return;
+      } catch (error) {
+        last = error;
+      }
+    }
+    noteInboxEventKeptInMemoryOnly(inboxEventShape(event), last);
   }
 
   /**

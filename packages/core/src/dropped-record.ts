@@ -33,6 +33,42 @@ export function noteDroppedRecord(what: string, detail: string, error: unknown):
 }
 
 /**
+ * 未読の合図を、有界の拾い直し（`clone.ts` の `REMEMBER_RETRY_ATTEMPTS`）が
+ * 尽きたあともストアへ書けなかったことを stderr へ1行残す（issue #1085）。
+ *
+ * **`noteDroppedRecord` を流用しないのは、あれが「記録できませんでした」だけで
+ * 終わり、合図がまだ生きていることを言わないからである。** `#remember`
+ * （`clone.ts`）がここへ来るのは拾い直しが尽きた後だが、その合図は
+ * **失われていない** —— `post()` はこの呼びの直後に `#inbox.push` するので、
+ * **このプロセスが生きているあいだは配達される。** 失うのは、配達より先に
+ * 器が入れ替わった（再起動・デプロイ）ときだけである（`#restoreUnread` は
+ * ストアからしか拾い直せないため）。「記録できませんでした」だけで終わると、
+ * この生死の分かれ目 —— このプロセスが生きている限りは配られるという事実と、
+ * 器が入れ替われば失われるという本当の帰結 —— のどちらも伝わらない。
+ *
+ * **`noteManagerIdCollision` / `noteWithheldReportsDiscarded` と同じ理由で
+ * 専用の文言を持つ。** どちらも「失敗でも読み出し漏れでもない、第三の状況」
+ * だから別の関数にしてある（このファイルの該当 doc）。ここも同じ形 ——
+ * 「書けなかった」と「合図を失った」は別の状態であり、後者だと名乗ると
+ * 実際より悲観的に読める一方で、本当の帰結（器の入れ替えで失われる）が
+ * 伝わらない。
+ *
+ * **本文は出さない。** 理由は `noteDroppedRecord` と同じ（#52）。
+ *
+ * @param detail 本文を含まない見分け（`inboxEventShape` で作る）
+ * @param error 最後の拾い直しで実際に投げられたエラー
+ */
+export function noteInboxEventKeptInMemoryOnly(detail: string, error: unknown): void {
+  const tail = detail === '' ? '' : `（${detail}）`;
+  note(
+    `未読の合図をストアへ書けませんでした${tail}: ${reasonOf(error)}。` +
+      'ただし失ってはいない —— メモリの待ち行列には残っており、このプロセスが' +
+      '生きているあいだは配達される。器が入れ替われば（再起動・デプロイ）、' +
+      'この合図は失われる。',
+  );
+}
+
+/**
  * 記録の**読み出し**に失敗したことを stderr へ1行だけ残す。
  *
  * **書けなかった側（`noteDroppedRecord`）と対になる。** あちらの理由がそのまま
