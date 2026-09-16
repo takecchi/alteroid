@@ -44,7 +44,7 @@ import { createMemoryStores } from './testing.js';
  * 全台へ `resources()` を聞いて回る——**この2本の経路が同じ答えを出すことを、
  * どこも突き合わせていなかった。**
  *
- * ここで固定するのは3つの面である。
+ * ここで固定するのは4つの面である。
  *
  * 1. **配置の規約**——「常に置き先を返す・定員で断らない」ことと、上の2経路
  *    （N=1 の即答 / N>1 の資源計算）が同じ勝者を選ぶこと
@@ -56,11 +56,22 @@ import { createMemoryStores } from './testing.js';
  *    `text` / `managers` の数）が、1台構成と3台構成で**直接** `toEqual` できる
  *    ことを固定する（定数と照合するだけでは、両方が同じ値へ揃って壊れる形を
  *    見落とす）。
+ * 4. **移送を跨いだ等価性**（Issue #1022）——受け入れ基準4（1台停止→別 runner
+ *    で継続）の体験の等価性。`ManagerPool#vacate` / `#relocateFrom`
+ *    （移送、#614〜#616）を経由しても、能力・プロトコルが移送なしの1台構成と
+ *    一致すること、および `vacate` した器が置き先（`RunnerRegistry#select`）
+ *    から外れることを、上の3節と同じ「実セッション・直接 `toEqual`」の作法で
+ *    固定する。
  *
- * **書かないもの**（移送 PR5 待ち。比べる対象がまだ存在しない）——受け入れ基準4
- * （1台停止→別 runner で継続）の体験の等価性、workspace locator が
- * shared-volume / git のときの等価性。MCP の口（`manager_start` /
- * `manager_send` / `runner_list`）の等価性も、上の3つを優先し、ここでは扱わない。
+ * **かつて「書かないもの」に「受け入れ基準4の体験の等価性」を挙げ、理由を
+ * 「移送 PR5 待ち。比べる対象がまだ存在しない」としていた。** 移送
+ * （#614〜#616）は本ファイル（PR7 / #610）の約12時間後に着地し、以後2週間
+ * `main` に在る——保留の理由（比べる対象が無い）はとうに解けている。上の4が
+ * その保留を解いた節である。
+ *
+ * **いまも書かないもの**——workspace locator が shared-volume / git のときの
+ * 等価性、MCP の口（`manager_start` / `manager_send` / `runner_list`）の
+ * 等価性。これらは上の4つを優先し、ここでは扱わない。
  */
 
 // ---------------------------------------------------------------------------
@@ -693,5 +704,278 @@ describe('能力・プロトコルの等価性（M5 ゴール本文 / PR7）', (
       expect(result.protocol.managersCount).toBe(1);
       expect(result.protocol.lastReport).toBe('デプロイした');
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4. 移送を跨いだ等価性（Issue #1022 / #614〜#616）
+// ---------------------------------------------------------------------------
+
+/**
+ * `LocalRunner` は同一プロセス構成なので `identity()` を実装しない
+ * （`RunnerClient.instanceId` の doc の逐語「省略している runner
+ * （`LocalRunner` 等）では両方 `undefined`」）。だが移送の貸し出し解放
+ * （`ManagerPool#confirmStoppedAndReleaseLease`）は、貸した瞬間の
+ * `instanceId` といま応えている側の `instanceId` が一致することを条件に
+ * している——`LocalRunner` のまま複数台をつなぐと、この一致が一度も
+ * 成立せず、**貸し出しが永久に解放されない**（実測: 下の固定値を足す前は
+ * `expect.poll` が2秒でタイムアウトした）。
+ *
+ * だから、本物の `HttpRunner`（`apps/daemon/src/runner-client.ts`）が
+ * `/health` から返す `instanceId` の役目を、固定値で肩代わりする。**中身
+ * （`connect` / `resume` / `send` 等）は本物の `LocalRunner` のまま**——
+ * 変わるのは `instanceId` という1個の読み取り専用プロパティだけである。
+ */
+function withFixedInstanceId(client: RunnerClient, instanceId: string): RunnerClient {
+  return new Proxy(client, {
+    get(target, prop, receiver) {
+      if (prop === 'instanceId') return instanceId;
+      const value = Reflect.get(target, prop, receiver);
+      // クラスメソッドは prototype に載っており、`this` が Proxy のままだと
+      // private field（`#host` 等）へのアクセスで失敗する。**本物の対象へ
+      // bind し直す**——`get` トラップが返す関数を呼ぶ主体は Proxy だが、
+      // 中身は元のインスタンスとして動かす。
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  }) as RunnerClient;
+}
+
+/**
+ * `runDelegationOn(count)` と同じ配線（本物の `createLocalRunner` +
+ * 本物の `buildManagerSessionOptions`）を使うが、委譲を起こした直後に
+ * その宛先を `pool.vacate()` で空け、**別の器（本物の LocalRunner）へ
+ * 移送されたあと**の能力・プロトコルを取り出す。
+ *
+ * **候補は空ける1台＋控え1台の2台に絞る。** `relocateFrom` は空けた器
+ * 以外の `connected` な器**全部**へ `#reattach` を起こす（`relocateFrom`
+ * 宣言側の doc）。候補が2台以上だと、どちらが実際に resume を掴むかは
+ * ジョブ単位のロック（`#resuming`）の早い者勝ちで決まる——本番の
+ * フェンシングはそれで1台に絞るが、この歯が確かめたいのは「移送**先**の
+ * 能力・プロトコルが1台構成と一致する」ことであって「複数候補のうち
+ * どちらが勝つか」ではない。後者を持ち込むと、この歯の成否が
+ * `#resuming` の取り合いのタイミングに依存してしまう——`manager-relocate.
+ * test.ts` が競合を避けるため偽の `RunnerRegistry` で候補を1台に絞って
+ * いるのと同じ理由で、ここでも2台に絞る。
+ *
+ * **`registry.register()` を使う（`createRunnerRegistry(fleet.map(...))`
+ * ではない）。** 後者（`Registry#adopt`）は `instanceId` を一切読まない
+ * ——`#noteInstance` を通るのは `register()` が起こす `#open()` の経路だけ
+ * である（`Registry#open` の doc）。`instanceId` を接続の瞬間に名簿へ
+ * 載せないと、上の `withFixedInstanceId` を足しても意味が無い。
+ */
+async function runDelegationWithRelocation(): Promise<
+  EquivalenceResult & { originalRunnerId: string; relocatedRunnerId: string }
+> {
+  const fleet = Array.from({ length: 2 }, (_, index) => {
+    const runnerId = `runner-relocate-${index}`;
+    const { fn, sessions } = fakeSdkForOptions();
+    const runner = withFixedInstanceId(
+      createLocalRunner({
+        runnerId,
+        workspacePath: '/work/project',
+        queryFn: fn,
+        env: EQUIVALENCE_ENV,
+      }),
+      `inst-${runnerId}`,
+    );
+    return { runner, sessions };
+  });
+  const registry = createRunnerRegistry();
+  for (const entry of fleet) {
+    await registry.register({ label: entry.runner.runnerId, open: async () => entry.runner });
+  }
+  const stores = createMemoryStores();
+  const inbox: InboxEvent[] = [];
+  const pool = createManagerPool({
+    stores,
+    post: (event) => inbox.push(event),
+    runners: registry,
+    // **本番と同じ1本道を通す**（`runDelegationOn` と同じ理由）。
+    profile: createProfileService({ stores, runners: registry }),
+  });
+
+  const { managerId } = await pool.start({ request: 'デプロイして' });
+  const originalIndex = fleet.findIndex((entry) => entry.sessions.length > 0);
+  if (originalIndex === -1) {
+    throw new Error('委譲がどの runner のセッションも受けていない');
+  }
+  const originalRunnerId = `runner-relocate-${originalIndex}`;
+  const backupIndex = originalIndex === 0 ? 1 : 0;
+  const backup = fleet[backupIndex];
+  if (backup === undefined) throw new Error('内部整合性エラー: 控えの runner が無い');
+  const relocatedRunnerId = `runner-relocate-${backupIndex}`;
+
+  // **これが本題。** 空けた器の委譲を、控えの器へ移送させる
+  // （`ManagerPool#vacate` → `#relocateFrom` → `#reattach` の1本道。
+  // `registry.vacate()` を直接は呼ばない——M3 の変異は `ManagerPool.vacate`
+  // の中に在るので、直接呼ぶと歯が届かない）。
+  await pool.vacate(originalRunnerId);
+
+  // 控えの器に新しいセッションが立つまで待つ（`#reattach` は非同期に走る）。
+  await expect.poll(() => backup.sessions.length, { timeout: 2000 }).toBeGreaterThan(0);
+
+  const session = backup.sessions[backup.sessions.length - 1];
+  if (session === undefined) throw new Error('内部整合性エラー: 移送先のセッションが無い');
+
+  // **台帳の宛先が付け替わったことも見る**（Issue #1022 の主張そのもの——
+  // 移送は「別の runner で継続する」ことなので、台帳が古い宛先を指したままでは
+  // 継続していない）。
+  const job = (await stores.jobs.listJobs()).find((entry) => entry.id === managerId);
+  expect(job?.runnerId).toBe(relocatedRunnerId);
+
+  const asked = session.ask('Bash', { command: 'git push' }, 'req-equiv');
+  await tick();
+  const waiting = (await pool.list()).find((m) => m.managerId === managerId)?.waiting;
+  const managersCount = (await pool.list()).length;
+
+  const sendResult = await pool.send(managerId, '許可します', {
+    requestId: 'req-equiv',
+    decision: 'allow',
+  });
+  const askOutcome = (await asked).behavior;
+
+  await session.report('デプロイした');
+  const [summary] = await pool.list();
+
+  const result = {
+    capability: capabilitySnapshot(session.options),
+    protocol: {
+      askOutcome,
+      questionText: waiting?.[0]?.summary,
+      answerOutcome: sendResult.outcome,
+      managersCount,
+      lastReport: summary?.lastReport,
+    },
+    originalRunnerId,
+    relocatedRunnerId,
+  };
+
+  await pool.stop();
+  await registry.stop();
+  return result;
+}
+
+describe('移送を跨いだ等価性（Issue #1022 / #614〜#616 を等価性の対象に含める）', () => {
+  it('委譲→vacate→移送→許可確認→回答→報告を通しても、1台構成と移送後の結果は直接一致する', async () => {
+    const at1 = await runDelegationOn(1);
+    const relocated = await runDelegationWithRelocation();
+
+    // **本題。** 別の器へ実際に移ったことを、宛先の名前そのもので固定する。
+    expect(relocated.relocatedRunnerId).not.toBe(relocated.originalRunnerId);
+
+    // 移送先で新しく組まれた Options / プロトコルの結果が、1台構成（移送なし）
+    // の結果と**直接**一致することを固定する——定数と照合するだけでは、両方が
+    // 同じ誤った値へ揃って壊れる形を見落とす（3節の「これが本題。」と同じ論法）。
+    expect(relocated.capability).toEqual(at1.capability);
+    expect(relocated.protocol).toEqual(at1.protocol);
+
+    // 能力側・プロトコル側の個別の値も、3節と同じ突き合わせ項目で照合する
+    // （ここだけ緩めると、上の直接比較が「たまたま両方とも壊れている」場合を
+    // 見落とす——3節の対の assertion と同じ理由）。
+    for (const result of [at1, relocated]) {
+      expect(result.capability.model).toBe(MANAGER_MODEL);
+      expect(result.capability.tools).toBeUndefined();
+      expect(result.capability.permissionMode).toBe('default');
+      expect(result.capability.settingSources).toEqual(['user', 'project', 'local']);
+      expect(result.capability.worker?.model).toBe(WORKER_MODEL);
+
+      expect(result.protocol.askOutcome).toBe('allow');
+      expect(result.protocol.questionText).toBe('Bash の実行許可: {"command":"git push"}');
+      expect(result.protocol.answerOutcome).toBe('answered');
+      // **1本しか委譲していないので、台数によらず一覧は常に1本。**
+      expect(result.protocol.managersCount).toBe(1);
+      expect(result.protocol.lastReport).toBe('デプロイした');
+    }
+  });
+});
+
+/**
+ * `placementRegistryOf`（1節）に `ManagerPool` を重ねる。**`pool.vacate()`
+ * を実際に通すには `RunnerRegistry` 単体ではなく `ManagerPool` が要る**——
+ * M3 の変異は `ManagerPool.vacate` の中に在るので、`registry.vacate()` を
+ * 直接呼ぶと歯が届かない。
+ */
+async function placementFleetWithPool(...runners: PlacementFakeRunner[]): Promise<{
+  pool: ReturnType<typeof createManagerPool>;
+  registry: RunnerRegistry;
+  close: () => Promise<void>;
+}> {
+  const registry = await placementRegistryOf(...runners);
+  const stores = createMemoryStores();
+  const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+  return {
+    pool,
+    registry,
+    close: async () => {
+      await pool.stop();
+      await registry.stop();
+    },
+  };
+}
+
+describe('vacate した器は、即答経路でも資源計算経路でも置き先から外れる（Issue #1022）', () => {
+  it('3台構成: 明らかに最良の器を pool.vacate しても、資源計算経路（#place）はそれを選ばない。置き先は必ず返る', async () => {
+    // 資源の値は1節（配置の規約）の3台構成と同じ形——best が明らかに最良。
+    const bestReport: RunnerPlacementResources = {
+      memory: { limitBytes: 32_000_000_000, usedBytes: 1_000_000_000, source: 'cgroup' },
+      managers: 0,
+    };
+    const decoyTightReport: RunnerPlacementResources = {
+      memory: { limitBytes: 32_000_000_000, usedBytes: 31_000_000_000, source: 'cgroup' },
+      managers: 5,
+    };
+    const decoyBusyReport: RunnerPlacementResources = {
+      memory: { limitBytes: 32_000_000_000, usedBytes: 20_000_000_000, source: 'cgroup' },
+      managers: 9,
+    };
+    const best = new PlacementFakeRunner('runner-best', bestReport);
+    const decoyTight = new PlacementFakeRunner('runner-decoy-tight', decoyTightReport);
+    const decoyBusy = new PlacementFakeRunner('runner-decoy-busy', decoyBusyReport);
+
+    const { pool, registry, close } = await placementFleetWithPool(decoyTight, decoyBusy, best);
+
+    // **pool.vacate 経由。** `registry.vacate()` を直接呼ばない——上の doc の
+    // とおり、M3 の変異は `ManagerPool.vacate` の中に在る。
+    await pool.vacate('runner-best');
+
+    const chosen = await registry.select({});
+    // **本題。** 明らかに最良でも、空けた器は選ばれない。
+    expect(chosen.runnerId).not.toBe('runner-best');
+    // 資源計算経路を通ったこと自体の裏付け——残り2台へ同時に聞く
+    // （1節の同じ assertion と同じ形）。
+    expect([decoyTight.asked, decoyBusy.asked]).toEqual([1, 1]);
+    // **best が聞かれていないことも見る。** `vacate` は `list()` の時点で
+    // 外れる（`RunnerRegistry#list` の doc）ので、資源計算（`#place`）にも
+    // 一度も渡っていないはずである。
+    expect(best.asked).toBe(0);
+
+    await close();
+  });
+
+  it('2台構成: 空けると残り1台になり即答経路（open.length === 1）へ入る。それでも空けた器は選ばれない', async () => {
+    const bestReport: RunnerPlacementResources = {
+      memory: { limitBytes: 32_000_000_000, usedBytes: 1_000_000_000, source: 'cgroup' },
+      managers: 0,
+    };
+    const otherReport: RunnerPlacementResources = {
+      memory: { limitBytes: 32_000_000_000, usedBytes: 20_000_000_000, source: 'cgroup' },
+      managers: 3,
+    };
+    const best = new PlacementFakeRunner('runner-best', bestReport);
+    const other = new PlacementFakeRunner('runner-other', otherReport);
+
+    const { pool, registry, close } = await placementFleetWithPool(best, other);
+
+    await pool.vacate('runner-best');
+
+    const chosen = await registry.select({});
+    // **本題そのもの。** ここが即答経路（`open.length === 1`）である——資源
+    // 計算を通っていれば `other.asked` は1になるはずだが、即答は聞きに行かない
+    // （1節「即答経路であることの裏付け」と同じ assertion）。
+    expect(other.asked).toBe(0);
+    expect(chosen.runnerId).toBe('runner-other');
+    expect(chosen.runnerId).not.toBe('runner-best');
+
+    await close();
   });
 });
