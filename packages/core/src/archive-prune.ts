@@ -8,7 +8,7 @@ import type { ArchiveEntry } from './store.js';
  * `REMOVE_MANY_LIMIT_MAX`（`inbox_remove_many` が使う値）とは値が同じでも
  * 出所が違うので使い回さない**（`commitment_close_many` の同名の定数を
  * `inbox_remove_many` が使い回さなかったのと同じ理由。逐語:
- * `grep -Fn -- '「`commitment_close_many` の同名の定数と値を使い回さ' packages/core/src/tools.ts`）。
+ * `grep -Fn -- '`commitment_close_many` の同名の定数と値を使い回さ' packages/core/src/tools.ts`）。
  * `archive` の一括除去はこのファイルが定義を持ち、HTTP 層・道具層はここから
  * import するだけにすること——値を書き写すと、片方だけ変えたときに黙って
  * 食い違う。
@@ -274,10 +274,13 @@ export function selectArchiveRemovalTargets(
     group.sort(compareOldestFirst);
     const n = group.length;
     if (n === 0) continue;
-    newestIds.add(group[n - 1].id);
+    const newest = group[n - 1];
+    if (newest === undefined) continue;
+    newestIds.add(newest.id);
     let coveredBySurvivor = false;
     for (let i = n - 1; i >= 0; i -= 1) {
       const row = group[i];
+      if (row === undefined) continue;
       coveredById.set(row.id, coveredBySurvivor);
       if (row.continuity === 'continues') {
         coveredBySurvivor = coveredBySurvivor || row.removedAt === undefined;

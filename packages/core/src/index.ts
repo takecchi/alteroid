@@ -380,6 +380,22 @@ export {
   type ArchiveContinuity,
 } from './archive-continuity.js';
 /**
+ * `archive` を絞り込んで一括で tombstone する対象を選ぶ純関数（#698）。
+ *
+ * **外へ出しているのは純関数だけである。** `TranscriptArchive.list()` で
+ * 取った `ArchiveEntry[]` を渡す形なので、ここから出るものは I/O を
+ * しない・本文（`body`）にも触れない（`archive-prune.ts` の doc）。
+ */
+export {
+  ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT,
+  ARCHIVE_REMOVE_MANY_LIMIT_MAX,
+  matchesArchiveRemoveManyFilter,
+  selectArchiveRemovalTargets,
+  type ArchiveRemoveManyFilter,
+  type ArchiveRemovalSelection,
+  type ArchiveRemovalSelectionOptions,
+} from './archive-prune.js';
+/**
  * クローンの自己認識。正典（`docs/*.md`）の全文はビルド時に焼き込まれる
  * （`packages/core/scripts/write-canon.mjs`）。要約を手書きしないこと — docs と
  * 二重管理になる。
