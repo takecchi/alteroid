@@ -15209,6 +15209,14 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
     // 連続して台帳へ積まれ（同一 origin: manager）、閉じられないまま先頭を
     // 占め続けた。その後にオーナーの依頼（origin: human）が届く——旧い
     // 実装ではこれが予算からあふれ、かつ到達する口が無かった。
+    //
+    // **⚠️ 本文に連番を入れてあるのは #1041 のためである。** 実害のときは
+    // 25件がバイト単位で同一だったが、**その状態はもう `open()` から作れない**
+    // ——同一マネージャー×同一本文×未了は1行に畳まれる（`findOpenManagerDuplicate`）。
+    // ⟹ 本文を同一にすると台帳が1行になり、この歯は cursor の頁送りを1つも
+    // 踏まなくなる。**測りたいのは「25件の未了が先頭を占めたときに、後から来た
+    // 人間の依頼へ cursor で到達できるか」**であって、その25件が同文かどうか
+    // ではないので、畳まれない形（連番）で25件積む。
     const h = harness();
     const long = 'あ'.repeat(500);
     for (let index = 0; index < 25; index += 1) {
@@ -15217,7 +15225,7 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
         at: `2026-09-04T22:33:${String(index).padStart(2, '0')}.000Z`,
         origin: 'manager',
         source: 'mgr-1',
-        body: `Poller draining. No change. ${long}`,
+        body: `Poller draining. No change. #${index} ${long}`,
       });
     }
     await h.stores.commitments.open({
