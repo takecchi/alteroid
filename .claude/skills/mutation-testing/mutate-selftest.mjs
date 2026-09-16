@@ -151,37 +151,147 @@ function scenarioBackupCorruption() {
 
 // ── 2. 歯が弱い ─────────────────────────────────────────────────────
 //
-// 実在の関数: apps/cli/src/conversations.ts の renderConversationDetail。
-// 複数行の message.text をそのまま出す ——「全文」と「1行目＋継続行」は
-// 行へ潰すと区別が消える構造である。
+// **このシナリオは、リポジトリの実ソースを1バイトも指していない（#1096）。**
+// 変異の対象も、それを測る2本の歯も、全部このファイルが書いて、走らせて、
+// 消す。
 //
-// target: null — apps/cli 自身のテストは同じパッケージの source を直接
-// import しており（`./conversations.js` → `conversations.ts`）、dist 境界を
-// 跨がない。だからこの demo では build/artifact 検査は「対象外」になる
-// （本番でパッケージ境界を跨ぐ変異には spec.target を必ず設定すること）。
-// **⚠️ このシナリオのフィクスチャが腐っていたのを、足場対照の導入が見つけた
-// （2026-09-09、実測）。** 「強い歯」の期待文字列の末尾は
-// `（日誌を 1 件遡り、…）` のままだったが、実装側の文言は #423 / #427 で
-// `（人間との往復を 1 件遡り、…）` に変わっていた。⟹ **この歯は変異の有無に
-// 関わらず赤く**、旧い判定（集計行の `failed` の文字だけを見る）はそれを
-// 「検出」と読んでいた —— このシナリオが実演するはずだった「弱い歯＝生存 /
-// 強い歯＝検出」の対比は、**強い歯の側が偽の「検出」で成立していた。**
-// 足場対照を取ると同じ赤が対照にも出るので差し引かれ、判定が `生存` に変わって
-// 露見した。逐語の証拠:
-//   $ npx vitest run apps/cli/src/conversations.selftest-strong.test --maxWorkers=2
-//   - （日誌を 1 件遡り、この会話の先頭まで届いた）
-//   + （人間との往復を 1 件遡り、この会話の先頭まで届いた）
-// **フィクスチャの側を現物へ合わせた**（歯を緩めたのではない —— 全文の
-// 突き合わせという主張はそのままで、比べる相手を正した）。
+// **なぜそう直したか（#1096）。** 以前は `apps/cli/src/conversations.ts` の
+// `renderConversationDetail` を実際に変異させていた。**そのせいで2度腐った:**
+// - **1度目（2026-09-09、実測）**: 「強い歯」の期待文字列の末尾が
+//   `（日誌を 1 件遡り、…）` のままで、実装側は #423 / #427 で
+//   `（人間との往復を 1 件遡り、…）` に変わっていた。⟹ **この歯は変異の有無に
+//   関わらず赤く**、旧い判定（集計行の `failed` の文字だけを見る）はそれを
+//   「検出」と読んでいた —— このシナリオが実演するはずだった「弱い歯＝生存 /
+//   強い歯＝検出」の対比は、**強い歯の側が偽の「検出」で成立していた。**
+//   足場対照を取ると同じ赤が対照にも出るので差し引かれ、判定が `生存` に
+//   変わって露見した。逐語の証拠:
+//     $ npx vitest run apps/cli/src/conversations.selftest-strong.test --maxWorkers=2
+//     - （日誌を 1 件遡り、この会話の先頭まで届いた）
+//     + （人間との往復を 1 件遡り、この会話の先頭まで届いた）
+// - **2度目（#1096）**: 変異が指す文言 ``${message.text}`);`` そのものが実装から
+//   消えた（現在の実装は `${message.text}${edit}` の形）。**歯3/6（書く前に
+//   件数を数え、`expect` と不一致なら書かない）が正しく仕事をして止めた**ので
+//   止まり方は安全側だったが、**このシナリオは誰にも気づかれないまま落ち続けた**
+//   —— `SELFTEST_SCENARIOS` が CI から呼ばれていないためである。
+//
+// **1度目はフィクスチャ側を現物へ合わせて直した。それは同じ入口を残す直し方で、
+// 2度目が同じ入口から入ってきた。** ⟹ 今度は入口そのものを塞ぐ —— このシナリオ
+// が触る文言を**全部この関数の中へ持ってくる。** 実ソースが動いても、このシナリオ
+// は1文字も影響を受けない。
+//
+// **⚠️ 歯を1本も弱めていない。** 対比の主張（弱い歯はこの変異を通す＝`生存` /
+// 強い歯は捕まえる＝`検出`）はそのままで、**むしろ強くした** ——
+// `assertWeakToothOutcomes` を足して、その2つの判定が実際に出たことを機械で
+// 突き合わせるようにした。以前は判定を JSON で印字するだけだったので、
+// **判定が両方 `生存` に化けても exit 0 のままだった**（`cmdSelftest` は
+// `JSON.stringify(r)` を log するだけで、中身を1つも検査しない）。
+//
+// target: null — この使い捨てフィクスチャは同じパッケージの中で直接 import
+// されるので dist 境界を跨がない。だからこの demo では build/artifact 検査は
+// 「対象外」になる（本番でパッケージ境界を跨ぐ変異には spec.target を必ず
+// 設定すること）。
+
+/**
+ * 変異が当たる場所。**この定数はフィクスチャ本体の組み立てにもそのまま使う**
+ * （下の `WEAK_TOOTH_MODULE_BODY`）。⟹ 「spec が探す文言」と「対象の中身」が
+ * 同じ1つの定数から出るので、**片方だけがずれることが構造的に起こらない。**
+ * これが #1096 の直しの本体である。
+ */
+const WEAK_TOOTH_ANCHOR = '${message.text}';
+/** 変異後の形。継続行を落とす（＝「全文」と「1行目」の区別が消える）。 */
+const WEAK_TOOTH_MUTATED = "${message.text.split('\\n')[0]}";
+
+const WEAK_TOOTH_MODULE_REL = 'apps/cli/src/mutation-selftest-render.ts';
+
+const WEAK_TOOTH_MODULE_BODY = [
+  '// selftest 用の使い捨てフィクスチャ（mutation-testing ハーネスの自己検証）。',
+  '// 実行後に削除する。**リポジトリの実ソースを1バイトも指していない**（#1096）。',
+  '',
+  'export interface SelftestMessage {',
+  '  at: string;',
+  '  text: string;',
+  '}',
+  '',
+  'export function renderSelftestDetail(id: string, messages: SelftestMessage[]): string {',
+  '  const lines: string[] = [`── 会話 ${id} ──`];',
+  '  for (const message of messages) {',
+  '    lines.push(`  [${message.at}] 人間: ' + WEAK_TOOTH_ANCHOR + '`);',
+  '  }',
+  "  lines.push('');",
+  "  lines.push('（この会話の先頭まで届いた）');",
+  "  return lines.join('\\n');",
+  '}',
+  '',
+].join('\n');
+
+/** このシナリオが書く使い捨てファイル（フィクスチャ本体 + 歯2本）。 */
+const WEAK_TOOTH_TEMP_FILES = [
+  WEAK_TOOTH_MODULE_REL,
+  'apps/cli/src/mutation-selftest-weak.test.ts',
+  'apps/cli/src/mutation-selftest-strong.test.ts',
+];
+
+/**
+ * 前回の走行が途中で死んで置き去りにしたファイルが在ったら、**上書きせずに拒む。**
+ * `ensureFixtureClean` と同じ考え方 —— 置き去りを黙って踏み潰すと、何が起きて
+ * いたのかが消える。
+ */
+function requireNoLeftoverWeakToothFiles() {
+  const leftovers = WEAK_TOOTH_TEMP_FILES.filter((rel) => fs.existsSync(absPath(rel)));
+  if (leftovers.length > 0) {
+    throw new HarnessError(
+      'weak-tooth: 前回の selftest が置き去りにした使い捨てファイルが在る。上書きしない。\n' +
+        `${leftovers.map((rel) => `  - ${rel}`).join('\n')}\n` +
+        '中身を確認してから消して、再実行すること（このシナリオが書くもの以外に同名の' +
+        'ファイルを置いていないことも見ること）。',
+    );
+  }
+}
+
+/**
+ * **このシナリオの主張そのものを機械で突き合わせる（#1096）。**
+ *
+ * `cmdSelftest` は各シナリオの戻り値を `JSON.stringify` して log するだけで、
+ * 中身を1つも検査しない ⟹ **判定が化けても exit 0 のままである。** シナリオを
+ * CI から呼んでも、ここが無ければ「腐ったら赤くなる」にはならない。
+ *
+ * **倒れる向きは厳しい側に決める** —— 期待と1つでも違ったら `HarnessError` を
+ * 投げて落とす。「判定を出せなかった」（`category` が null）も違反として扱う。
+ */
+function assertWeakToothOutcomes(outcomes) {
+  const expected = { 弱い歯: '生存', 強い歯: '検出' };
+  const violations = [];
+  for (const [label, want] of Object.entries(expected)) {
+    const got = outcomes[label]?.category ?? null;
+    if (got !== want) {
+      violations.push(
+        `  - ${label}: 期待 ${JSON.stringify(want)} / 実際 ${JSON.stringify(got)}` +
+          `（判定行: ${outcomes[label]?.judgement ?? '(無し)'}）`,
+      );
+    }
+  }
+  if (violations.length > 0) {
+    throw new HarnessError(
+      'weak-tooth: このシナリオが実演するはずの対比（弱い歯＝生存 / 強い歯＝検出）が' +
+        '出ていない。\n' +
+        `${violations.join('\n')}\n` +
+        'なぜ落とすか: この対比が崩れているとき、崩れ方は2つある——(a) ハーネスの判定が' +
+        '壊れた (b) このシナリオのフィクスチャが壊れた。どちらであっても「変異試験の' +
+        '判定はこう出る」という実演は成り立っていないので、緑にしない（#1096）。',
+    );
+  }
+}
+
 function scenarioWeakTooth() {
-  section('selftest: 2. 歯が弱い（apps/cli/src/conversations.ts の renderConversationDetail）');
+  section('selftest: 2. 歯が弱い（使い捨てフィクスチャ。実ソースは1バイトも指さない）');
   requireNoMarker('weak-tooth');
+  requireNoLeftoverWeakToothFiles();
 
   const spec = {
     id: 'selftest-weak-strong-tooth',
-    file: 'apps/cli/src/conversations.ts',
-    from: '${message.text}`);',
-    to: "${message.text.split('\\n')[0]}`);",
+    file: WEAK_TOOTH_MODULE_REL,
+    from: WEAK_TOOTH_ANCHOR,
+    to: WEAK_TOOTH_MUTATED,
     expect: 1,
     target: null,
   };
@@ -189,70 +299,49 @@ function scenarioWeakTooth() {
   const cases = [
     {
       label: '弱い歯',
-      testRel: 'apps/cli/src/conversations.selftest-weak.test.ts',
+      testRel: 'apps/cli/src/mutation-selftest-weak.test.ts',
       // #993: mustFail は「狙いの歯」の宣言であって「実際に落ちる保証」では
       // ない——このシナリオの主張そのものが「弱い歯はこの変異を捕まえない
       // （＝生存する）」なので、狙いを宣言してもここでは緑のままで、判定は
       // 宣言を見るまでもなく「生存」で確定する（`surviving` が空になる）。
       mustFailName:
-        'apps/cli/src/conversations.selftest-weak.test.ts > 弱い歯（selftest） > 1行目が出ていることだけを見る',
+        'apps/cli/src/mutation-selftest-weak.test.ts > 弱い歯（selftest） > 1行目が出ていることだけを見る',
       body: `import { describe, expect, it } from 'vitest';
-import { renderConversationDetail } from './conversations.js';
+import { renderSelftestDetail } from './mutation-selftest-render.js';
 
 // selftest 用の一時テスト（mutation-testing ハーネスの自己検証）。実行後に削除する。
-// 弱い歯: 出力を split('\\n') した「1行目」の存在だけを見る。
-// 「全文」と「1行目＋継続行」を区別できないので、継続行が消える変異を通す。
+// 弱い歯: 出力を split('\\n') した中に「1行目」が在ることだけを見る。
+// 「全文」と「1行目だけ」を区別できないので、継続行が消える変異を通す。
 describe('弱い歯（selftest）', () => {
   it('1行目が出ていることだけを見る', () => {
-    const rendered = renderConversationDetail(
-      'conv-1',
-      [
-        {
-          id: 'm1',
-          at: '2026-01-01T00:00:00.000Z',
-          role: 'inbound',
-          text: '1行目\\n2行目\\n3行目',
-        },
-      ],
-      1,
-      true,
-    );
-    const lines = rendered.split('\\n');
-    expect(lines.some((l) => l.includes('1行目'))).toBe(true);
+    const rendered = renderSelftestDetail('conv-1', [
+      { at: '2026-01-01T00:00:00.000Z', text: '1行目\\n2行目\\n3行目' },
+    ]);
+    expect(rendered.split('\\n').some((l) => l.includes('1行目'))).toBe(true);
   });
 });
 `,
     },
     {
       label: '強い歯',
-      testRel: 'apps/cli/src/conversations.selftest-strong.test.ts',
+      testRel: 'apps/cli/src/mutation-selftest-strong.test.ts',
       // #993: このシナリオの主張は「強い歯はこの変異を捕まえる（＝検出）」
       // なので、実際に落ちる歯そのものを狙いとして宣言する。
       mustFailName:
-        'apps/cli/src/conversations.selftest-strong.test.ts > 強い歯（selftest） > 全文（継続行を含む）を突き合わせる',
+        'apps/cli/src/mutation-selftest-strong.test.ts > 強い歯（selftest） > 全文（継続行を含む）を突き合わせる',
       body: `import { describe, expect, it } from 'vitest';
-import { renderConversationDetail } from './conversations.js';
+import { renderSelftestDetail } from './mutation-selftest-render.js';
 
 // selftest 用の一時テスト（mutation-testing ハーネスの自己検証）。実行後に削除する。
 // 強い歯: 全文を1つの文字列として突き合わせる。継続行が消えれば必ず落ちる。
-// **⚠️ 末尾の1行は実装の文言そのものである。** 実装側の文言が変わるとこの歯は
-// 変異の有無に関わらず赤くなり、このシナリオは「強い歯が変異を捕まえた」ではなく
-// 「腐ったフィクスチャが落ちた」を見ることになる（実際に起きた。下の注記）。
+// **⚠️ 期待文字列は、同じ selftest が書くフィクスチャ（WEAK_TOOTH_MODULE_BODY）の
+// 出力である。** リポジトリの実ソースの文言は1つも入っていない——以前はここに
+// apps/cli の実装の文言をそのまま書いていて、2度腐った（#1096）。
 describe('強い歯（selftest）', () => {
   it('全文（継続行を含む）を突き合わせる', () => {
-    const rendered = renderConversationDetail(
-      'conv-1',
-      [
-        {
-          id: 'm1',
-          at: '2026-01-01T00:00:00.000Z',
-          role: 'inbound',
-          text: '1行目\\n2行目\\n3行目',
-        },
-      ],
-      1,
-      true,
-    );
+    const rendered = renderSelftestDetail('conv-1', [
+      { at: '2026-01-01T00:00:00.000Z', text: '1行目\\n2行目\\n3行目' },
+    ]);
     expect(rendered).toBe(
       [
         '── 会話 conv-1 ──',
@@ -260,7 +349,7 @@ describe('強い歯（selftest）', () => {
         '2行目',
         '3行目',
         '',
-        '（人間との往復を 1 件遡り、この会話の先頭まで届いた）',
+        '（この会話の先頭まで届いた）',
       ].join('\\n'),
     );
   });
@@ -270,11 +359,15 @@ describe('強い歯（selftest）', () => {
   ];
 
   const outcomes = {};
-  for (const { label, testRel, body, mustFailName } of cases) {
-    log('');
-    log(`== ${label}: ${testRel} を書いて、この変異だけを当てて run する ==`);
-    writeRepoFile(testRel, body);
-    try {
+  try {
+    for (const { label, testRel, body, mustFailName } of cases) {
+      log('');
+      log(`== ${label}: ${testRel} を書いて、この変異だけを当てて run する ==`);
+      // **フィクスチャ本体は毎回書き直す。** 前の case の変異は `restoreMutation`
+      // で戻っているが、戻っていること自体をここで当てにしない（当てにすると、
+      // 復元が壊れたときに「2本目だけ静かに結果が変わる」形になる）。
+      writeRepoFile(WEAK_TOOTH_MODULE_REL, WEAK_TOOTH_MODULE_BODY);
+      writeRepoFile(testRel, body);
       const thisSpec = {
         ...spec,
         id: `${spec.id}-${label}`,
@@ -317,11 +410,15 @@ describe('強い歯（selftest）', () => {
         filesLine: testResult.filesLine,
       };
       restoreMutation();
-    } finally {
-      fs.rmSync(absPath(testRel), { force: true });
     }
+  } finally {
+    // **使い捨てファイルは、判定が出たかどうかに関わらず消す。** 変異が当たった
+    // ままのフィクスチャが残っても、次の走行は上書きで書き直すが——置き去りの
+    // 検査（`requireNoLeftoverWeakToothFiles`）に引っかかるほうを正とする。
+    for (const rel of WEAK_TOOTH_TEMP_FILES) fs.rmSync(absPath(rel), { force: true });
   }
 
+  assertWeakToothOutcomes(outcomes);
   return { scenario: 'weak-tooth', outcomes };
 }
 

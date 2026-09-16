@@ -233,6 +233,50 @@ jobs:
       - run: pnpm format:check
       - run: pnpm test
 
+      # **変異試験ハーネスの自己検査（#1096）。** 本体の変異試験ではなく、
+      # `mutate-selftest.mjs` のシナリオ（ハーネス自身の受け入れ条件と、
+      # レビューで見つかった欠陥の回帰確認）だけを回す。
+      #
+      # **なぜ足したか。** `SELFTEST_SCENARIOS` はどの門からも呼ばれておらず、
+      # **シナリオが腐っても誰も赤くならなかった。** 実際に `weak-tooth` が
+      # 壊れたまま通っていた —— PR #1026（`98fb25a`、2026-09-15T16:37Z）が
+      # シナリオの指す文言と実装の間へ別の式を割り込ませたが、**その PR は
+      # 緑のまま着地した。** 見つかったのは、別件（#993）の作業で誰かが手で
+      # `selftest` を打ったからである（#1096 の起票は 2026-09-16T12:04Z）——
+      # **門が見つけたのではない。**
+      # **在るのに効いていない道具は静かに失敗する**（`AGENTS.md`「静かに失敗する
+      # 道具」。この節のすぐ上の `check:sdk-quotes` がまったく同じ理由で足された）。
+      #
+      # **⚠️ 変異試験の本体（`mutate.mjs run`）は回していない。** あちらは対象ごとに
+      # vitest を丸ごと走らせるので CI に載る重さではない。ここで回すのは
+      # ハーネスの自己検査だけである。
+      #
+      # **重さの実測（2026-09-16、この repo・この器で全11シナリオを1本ずつ計測）**:
+      # backup-corruption 0s / weak-tooth 2s / interrupted 1s /
+      # interrupted-wrong-order 0s / delivery 16s / judgement-id-integrity 8s /
+      # rebuild-failure 10s / spec-validation 0s /
+      # judgement-forbidden-word-boundary 18s / restore-status-comparison 0s /
+      # judgement-undelivered-gate 0s ⟹ **合計およそ55秒。**
+      # 同じ日に測った `ci` ジョブの所要は中央値 542 秒 / 最大 581 秒
+      # （直近の run 10本のうち、ジョブが実際に走った8本）なので、**増分はおよそ
+      # 1割**である。⚠️ 実測は手元の器のものなので、runner での秒数は別に測ること。
+      #
+      # **最後に置く理由。** シナリオは走行中に実ソース（`packages/core/src/excerpt.ts`
+      # / `apps/cli/src/conversations.ts`）へ変異を当てて戻し、`restore-status-comparison`
+      # は git の index も一時的に動かす。**戻し損ねたときに他の検査を巻き込まない**
+      # 位置はここである（戻せているかはシナリオ自身が 12b/12c/12d で見る）。
+      #
+      # **⚠️ `pnpm verify` の STEPS には足していない。** あちらが回るのは編集中の
+      # ツリーである。この PR で `weak-tooth` は実ソースから切り離したが、
+      # **残る3本（`delivery` / `judgement-id-integrity` /
+      # `judgement-forbidden-word-boundary`）はまだ実ソースの文言に依存する**
+      # （`packages/core/src/excerpt.ts` と `apps/cli/src/conversations.ts`）⟹
+      # その文言を触っている最中の人に無関係な赤が出る。加えて `scripts/verify.mjs` は「走行中にツリーが動いた」
+      # ことを検出して記録を捨てる作りで、このハーネスは**意図的にツリーを動かす**
+      # —— その組み合わせは測っていない。**測らずに足さない**（#1096 の積み残しとして
+      # Issue に落とす）。
+      - run: node .claude/skills/mutation-testing/mutate.mjs selftest --scenario all
+
   # イメージもここで焼く。**マネージャーの道具は版を固定していない**（人間の手元より
   # 古い `gh` を配らないため）ので、上流が変わって壊れたことに気づく場所が要る。
   # ここが無いと、気づくのがデプロイ時になる。

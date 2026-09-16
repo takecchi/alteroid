@@ -32,13 +32,21 @@ import {
  * 分岐する類）を作らない」）、上書きの有無に関わらず実効の ROOT を毎回
  * 出力へ1行出す。
  *
- * **ここに置く理由（CI で走らせるため）**: `mutate-selftest.mjs` の
- * `SELFTEST_SCENARIOS` を CI から呼ぶ箇所は無い（`.github/workflows/*.yml` /
+ * **ここに置く理由（CI で走らせるため）**: （当時）`mutate-selftest.mjs` の
+ * `SELFTEST_SCENARIOS` を CI から呼ぶ箇所は無かった（`.github/workflows/*.yml` /
  * `package.json` / `scripts/` を `grep -rFn` で全走査して確認済み——ゼロ件）。
- * `mutate-selftest.mjs` だけに歯を置くと CI では1本も走らない。
+ * `mutate-selftest.mjs` だけに歯を置くと CI では1本も走らなかった。
  * `vitest.config.ts` の `include` に `scripts` 配下の `*.test.ts` を拾うパターンが在り、
  * `scripts/mutate-max-workers.test.ts` / `scripts/mutate-core-strip-ansi.test.ts`
  * が先例（同じ「素の .mjs を plain import する」形）なので、それに揃える。
+ *
+ * **⚠️ 2026-09-16（#1096）に前提が1つ変わった —— `SELFTEST_SCENARIOS` は
+ * CI から呼ばれるようになった**（`.github/workflows/ci.yml` の
+ * `node .claude/skills/mutation-testing/mutate.mjs selftest --scenario all`）。
+ * **それでもこの歯をここから動かさない。** 理由は2つ: (a) `scripts/*.test.ts` は
+ * `pnpm test` で走るので、selftest の重い走行を待たずに赤が出る (b) selftest は
+ * シナリオ（端から端まで）を回すもので、ここが測っているのは `--root` の
+ * 上書きという**部品**である。**測っている粒度が違う。**
  */
 
 const __filename = fileURLToPath(import.meta.url);

@@ -336,6 +336,38 @@ repo の `test` スクリプトが `vitest run && pnpm -r --if-present run test 
 
 **回帰は `mutate-selftest.mjs` の `judgement-forbidden-word-boundary` シナリオが見る。** `bypass` を含む自然な id が通ることに加えて、`token-ok` / `m1-ok` のように語として単独で禁止語に一致する id が**依然として拒否される**ことも確認する — 前者だけでは「検査を丸ごと外した」実装でも緑になるため。
 
+## selftest は CI から回る。シナリオは実ソースの文言を指さない（#1096）
+
+**`SELFTEST_SCENARIOS` はどの門からも呼ばれていなかった。** ⟹ シナリオが腐っても誰も赤くならない。実際に `weak-tooth` が壊れたまま通っていた —— PR #1026（`98fb25a`、2026-09-15T16:37Z）がシナリオの指す文言と実装の間へ別の式を割り込ませたが、**その PR は緑のまま着地した。** 見つかったのは別件（#993）の作業で誰かが手で `selftest` を打ったからで、**門が見つけたのではない。**
+
+### 塞ぎ方は3つで、どれか1つでは足りない
+
+1. **シナリオが実ソースの文言を指すのをやめる（`weak-tooth`）。** 変異の対象になるフィクスチャ本体も、それを測る歯2本も、`scenarioWeakTooth` が書いて走らせて消す。**変異が探す文言（`WEAK_TOOTH_ANCHOR`）は、フィクスチャ本体の組み立てにも同じ定数として使う** ⟹ 「spec が探す文言」と「対象の中身」が同じ1つの定数から出るので、**片方だけがずれることが構造的に起こらない。**
+   - **1度目の腐り（2026-09-09）はフィクスチャ側を現物へ合わせて直した。それは同じ入口を残す直し方で、2度目（#1096）が同じ入口から入ってきた。** ⟹ 入口そのものを塞ぐ
+2. **シナリオの主張を機械で突き合わせる（`assertWeakToothOutcomes`）。** `cmdSelftest` は各シナリオの戻り値を `JSON.stringify` して log するだけで、**中身を1つも検査しない** ⟹ 判定が両方 `生存` に化けても exit 0 のままだった。CI から呼ぶだけでは「腐ったら赤くなる」にならない
+3. **CI から回す**（`.github/workflows/ci.yml` の `ci` ジョブの最後のステップ）。`pnpm test` の後に `selftest --scenario all` を打つ
+
+### 重さの実測（2026-09-16、全11シナリオを1本ずつ）
+
+| シナリオ                | 秒  |     | シナリオ                          | 秒         |
+| ----------------------- | --- | --- | --------------------------------- | ---------- |
+| backup-corruption       | 0   |     | rebuild-failure                   | 10         |
+| weak-tooth              | 2   |     | spec-validation                   | 0          |
+| interrupted             | 1   |     | judgement-forbidden-word-boundary | 18         |
+| interrupted-wrong-order | 0   |     | restore-status-comparison         | 0          |
+| delivery                | 16  |     | judgement-undelivered-gate        | 0          |
+| judgement-id-integrity  | 8   |     | **合計**                          | **約55秒** |
+
+同じ日の `ci` ジョブは中央値 542 秒 / 最大 581 秒（直近の run 10本のうち、ジョブが実際に走った8本）⟹ **増分はおよそ1割。** ⚠️ 手元の器での実測なので、runner での秒数は別に測ること。
+
+**⚠️ 変異試験の本体（`mutate.mjs run`）は CI に載せていない。** あちらは対象ごとに vitest を丸ごと走らせるので重さの桁が違う。CI に載っているのは**ハーネスの自己検査だけ**である。
+
+### ⚠️ 残っていること
+
+- **残る3本（`delivery` / `judgement-id-integrity` / `judgement-forbidden-word-boundary`）は、まだ実ソースの文言に依存する**（`packages/core/src/excerpt.ts` と `apps/cli/src/conversations.ts`）。`weak-tooth` と同じ形で腐りうる —— ただし**今度は CI が赤くする**ので、静かには腐らない
+- **`weak-tooth` 以外のシナリオの主張は、まだ機械で突き合わせていない。** 落ちるのは例外を投げたときだけである
+- **`pnpm verify` の STEPS には足していない**（理由は `ci.yml` の当該ステップのコメント）
+
 ## 「判定が甘い」の向き —— 甘いのは「検出」側である（#1087）
 
 **このハーネスの記述の中で「判定が甘い」と書いてあったら、それは「`検出` へ倒れる側」を指す。逆ではない。** 逆向きに読める記述が5箇所に散っていたので（#1087）、向きをここで1度だけ決める。**正典は `decideJudgementCategory` の doc の「「判定が甘い」の向き」**（逐語は `grep -Fn -- '## 「判定が甘い」の向き' .claude/skills/mutation-testing/mutate-core.mjs`）。

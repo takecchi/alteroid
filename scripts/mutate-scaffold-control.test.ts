@@ -44,9 +44,11 @@ import {
  * （`decideJudgementCategory` の門4。いまの門番号では、後から
  * 挟んだ「Errors 行」の門2で繰り下がった）。
  *
- * **ここに置く理由（CI で走らせるため）**: `mutate-selftest.mjs` の
- * `SELFTEST_SCENARIOS` を CI から呼ぶ箇所は無い。`scripts/mutate-*.test.ts` が
+ * **ここに置く理由（CI で走らせるため）**: （当時）`mutate-selftest.mjs` の
+ * `SELFTEST_SCENARIOS` を CI から呼ぶ箇所は無かった。`scripts/mutate-*.test.ts` が
  * 先例（経緯は `scripts/mutate-root-override.test.ts` の doc に在る）。
+ * **⚠️ 2026-09-16（#1096）に `SELFTEST_SCENARIOS` は CI から呼ばれるように
+ * なったが、この歯はここに残す**（理由は同じ doc の続き）。
  *
  * **⚠️ この歯が測っていないこと**: 「実 ROOT で印を置くと S1〜S3 が赤くなる」
  * ことそのものは測れない —— 実 ROOT へ印を置く歯は、それ自体が並行して走る
