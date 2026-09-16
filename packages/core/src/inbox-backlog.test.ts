@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -12,6 +13,7 @@ import {
   inboxBacklogDedupeKey,
   inboxCollapseKey,
   matchesInboxRemoveManyFilter,
+  removeInboxEventsAndStopDelivery,
   summarizeInboxBacklog,
   type InboxBacklogBreakdown,
   type InboxRemoveManyFilter,
@@ -1399,5 +1401,92 @@ describe('matchesInboxRemoveManyFilter（issue #972）', () => {
         filter,
       ),
     ).toBe(true);
+  });
+});
+
+/**
+ * `removeInboxEventsAndStopDelivery`（issue #1049）。**器から消すのと、
+ * クローンの配達を止めるのを、1つの呼びから分けられない形にする関数**である。
+ */
+describe('removeInboxEventsAndStopDelivery（消して、配達も止める。issue #1049）', () => {
+  /** 呼ばれた順を1本の配列へ記録する偽物。 */
+  function recorder(removed: string[]) {
+    const order: string[] = [];
+    return {
+      order,
+      inbox: {
+        async removeMany(ids: readonly string[]): Promise<string[]> {
+          order.push(`removeMany(${ids.join(',')})`);
+          return removed;
+        },
+      },
+      delivery: {
+        async dropQueuedInboxEvents(ids: readonly string[]): Promise<number> {
+          order.push(`drop(${ids.join(',')})`);
+          return ids.length;
+        },
+      },
+    };
+  }
+
+  it('器から消してから配達を止める（順序が逆だと、削除に失敗した回に静かな喪失が出る）', async () => {
+    const r = recorder(['a', 'b']);
+
+    const out = await removeInboxEventsAndStopDelivery(r.inbox, r.delivery, ['a', 'b']);
+
+    expect(out).toEqual({ removedIds: ['a', 'b'], droppedFromDelivery: 2 });
+    // 🔴 順序そのものが主題である。
+    expect(r.order).toEqual(['removeMany(a,b)', 'drop(a,b)']);
+  });
+
+  it('配達を止めるのは「実際に消えた id」だけ（器に残っている行の配達を止めない）', async () => {
+    // 'b' は他の経路が先に消していて `removeMany` が返さなかった、という状況。
+    const r = recorder(['a']);
+
+    const out = await removeInboxEventsAndStopDelivery(r.inbox, r.delivery, ['a', 'b']);
+
+    expect(out.removedIds).toEqual(['a']);
+    // 🔴 渡した ['a','b'] ではなく、消えた ['a'] だけが配達停止へ回る。
+    expect(r.order).toEqual(['removeMany(a,b)', 'drop(a)']);
+  });
+
+  it('1件も消えなければ配達停止を呼ばない', async () => {
+    const r = recorder([]);
+
+    const out = await removeInboxEventsAndStopDelivery(r.inbox, r.delivery, ['a']);
+
+    expect(out).toEqual({ removedIds: [], droppedFromDelivery: 0 });
+    expect(r.order).toEqual(['removeMany(a)']);
+  });
+
+  /**
+   * **`InboxStore.removeMany` を直に呼ぶ本番コードは、この共有ヘルパの中だけ
+   * である**（issue #1049）。
+   *
+   * ## なぜ「関数に寄せた」だけでは足りないか
+   *
+   * #1049 は**消す口が2つあって、どちらもメモリ側に届いていなかった**事故で
+   * ある。⟹ 3つ目の消し込み経路がヘルパを通さずに書かれたら、**同じ穴が同じ
+   * 形で戻る。そして戻ったことは赤くならない** —— 消えた行は消えているので、
+   * 応答もカウンタも正しく見える。**だから「作法」ではなく歯で見張る。**
+   *
+   * ⚠️ **測っているのは呼び出しの形だけで、正しさではない。** ヘルパを通して
+   * いても引数を間違えていれば、この歯は何も言わない（それは上の3本が測る）。
+   */
+  it('removeMany を直に呼ぶ本番コードは、この共有ヘルパの中だけである', () => {
+    const targets = ['../../../packages/core/src/tools.ts', '../../../apps/daemon/src/app.ts'];
+
+    const offenders = targets.filter((rel) => {
+      const source = readFileSync(new URL(rel, import.meta.url), 'utf8');
+      return source
+        .split('\n')
+        .some((line) => !line.trimStart().startsWith('//') && line.includes('inbox.removeMany('));
+    });
+
+    expect(
+      offenders,
+      'removeInboxEventsAndStopDelivery を通さずに inbox.removeMany を呼んでいる。' +
+        '器の行だけが消えて配達は続く（issue #1049）。',
+    ).toEqual([]);
   });
 });

@@ -1990,3 +1990,114 @@ describe('消した合図は配達されない（issue #1049）', () => {
     await clone.stop();
   });
 });
+
+/**
+ * SDK の代わり。**1ターン目だけ枠（利用上限）に当たり、以降は普通に返す。**
+ *
+ * 枠で失敗した合図は `#forget` されずに `Clone` の `#deferred` へ保持され、
+ * **次の合図が届いたときに待ち行列の先頭へ戻される**（`#pump` の解除）。⟹
+ * 保持されている間に消された合図を落とし損ねると、解除で配達されてしまう。
+ */
+function usageLimitedFirstTurnSdk(): Fake {
+  const inputs: string[] = [];
+  let turn = 0;
+
+  const fn = ((params: { prompt: unknown; options?: Options }) => {
+    async function* generate(): AsyncGenerator<SDKMessage, void> {
+      yield {
+        type: 'system',
+        subtype: 'init',
+        session_id: 'sess-fake',
+        uuid: 'uuid-init',
+      } as unknown as SDKMessage;
+
+      for await (const message of params.prompt as AsyncIterable<{
+        message: { content: unknown };
+      }>) {
+        inputs.push(String(message.message.content));
+        const limited = turn === 0;
+        turn += 1;
+        if (limited) {
+          yield {
+            type: 'rate_limit_event',
+            rate_limit_info: { status: 'rejected', rateLimitType: 'five_hour' },
+            session_id: 'sess-fake',
+            uuid: 'uuid-ratelimit',
+          } as unknown as SDKMessage;
+          yield {
+            type: 'result',
+            subtype: 'error_during_execution',
+            result: '（結果なし。rate_limit_event だけが上限の理由を運ぶ）',
+            session_id: 'sess-fake',
+            uuid: 'uuid-result-limited',
+          } as unknown as SDKMessage;
+          continue;
+        }
+        yield {
+          type: 'assistant',
+          message: { content: [{ type: 'text', text: 'ok' }] },
+          parent_tool_use_id: null,
+          session_id: 'sess-fake',
+          uuid: 'uuid-assistant',
+        } as unknown as SDKMessage;
+        yield {
+          type: 'result',
+          subtype: 'success',
+          result: 'ok',
+          session_id: 'sess-fake',
+          uuid: 'uuid-result',
+        } as unknown as SDKMessage;
+      }
+    }
+
+    const generator = generate();
+    return Object.assign(generator, {
+      close: () => undefined,
+      interrupt: async () => undefined,
+    }) as unknown as Query;
+  }) as unknown as typeof sdkQuery;
+
+  return { fn, inputs };
+}
+
+describe('枠で保持している合図も落とす（issue #1049。#deferred の経路）', () => {
+  it('枠で保持されているあいだに消された合図は、解除されても配達されない', async () => {
+    const stores = createMemoryStores();
+    const fake = usageLimitedFirstTurnSdk();
+    const clone = createClone({
+      stores,
+      queryFn: fake.fn,
+      env: {},
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+      redeliveryGate: ALWAYS_REDELIVER,
+    });
+
+    // 1件目は枠に当たり、`#forget` されずに保持される。
+    clone.post(report('枠で保持される報告', 'evt-held'));
+    await waitFor(() => fake.inputs.length > 0, '1件目が処理に入る');
+    await waitFor(() => clone.usageBlocked, '枠が閉じる');
+
+    const before = fake.inputs.length;
+
+    // **保持されている間に消す。** 待ち行列にはもう居ない（取り出された後）ので、
+    // `#deferred` を見なければ1件も落ちない。
+    const removed = await stores.inbox.removeMany(['evt-held']);
+    expect(removed).toEqual(['evt-held']);
+    expect(await clone.dropQueuedInboxEvents(removed)).toBe(1);
+
+    // 次の合図が枠の解除を起こし、保持分が待ち行列の先頭へ戻る（`#pump`）。
+    clone.post(report('解除を起こす報告', 'evt-trigger'));
+    await waitFor(
+      () => fake.inputs.slice(before).some((t) => t.includes('解除を起こす報告')),
+      '解除後の合図が配達される',
+    );
+    await idle();
+
+    // 🔴 保持分から落とし損ねていたら、解除でここへ出てくる。
+    expect(fake.inputs.slice(before).some((t) => t.includes('枠で保持される報告'))).toBe(false);
+
+    await clone.stop();
+  });
+});

@@ -541,3 +541,72 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
     }
   });
 });
+
+/**
+ * **消した合図の配達も止まること**（issue #1049）。この道具はかつて器
+ * （`InboxStore`）の行しか消さず、それでも「消した」と名乗っていた ——
+ * クローンのメモリ上の待ち行列へ既に載った合図は配られ続けた。
+ *
+ * ⚠️ **ここが測るのは「配達を止める口へ、消えた id が渡ったか」までである。**
+ * 実際に配達されなくなることは `inbox-persistence.test.ts` の
+ * 「消した合図は配達されない（issue #1049）」がクローンを動かして測る。
+ */
+describe('消した合図の配達も止める（issue #1049）', () => {
+  it('実際に消えた id が、そのまま配達停止の口へ渡る', async () => {
+    const stores = createMemoryStores();
+    for (let i = 0; i < 3; i += 1) {
+      const event = managerEvent(i);
+      await stores.inbox.put(event, event.at);
+    }
+    const seen: string[][] = [];
+
+    const reply = await remover(stores, async (ids) => {
+      seen.push([...ids]);
+      return ids.length;
+    })({ types: ['manager_message'], reason: '配達も止める', dryRun: false });
+
+    expect(seen).toEqual([['evt-0', 'evt-1', 'evt-2']]);
+    expect(soleLineWith(reply, '配達の待ち行列からも外したのは')).toContain('3 件');
+  });
+
+  it('試算（dryRun）では配達停止の口を1度も呼ばない（1件も消していないので止める対象が無い）', async () => {
+    const stores = createMemoryStores();
+    const event = managerEvent(0);
+    await stores.inbox.put(event, event.at);
+    const seen: string[][] = [];
+
+    await remover(stores, async (ids) => {
+      seen.push([...ids]);
+      return ids.length;
+    })({ types: ['manager_message'], reason: '試算' });
+
+    expect(seen).toEqual([]);
+  });
+
+  /**
+   * 🔴 **配線が欠けたら、消さずに断る。**
+   *
+   * 消せても配達に届かないなら、この道具は「消した」と名乗りながら配達を
+   * 続ける —— **それがまさに #1049 の事故である。行を消した状態で配達だけが
+   * 続くほうが、1件も消さないより悪い**（クローンは掃除できたと誤解し、
+   * カウンタもそう言うのに、ターンは起き続ける）。⟹ **倒れ先を「消さない」
+   * 側に置いてある。**
+   */
+  it('配達を止める口が配線されていなければ、1件も消さずに断る', async () => {
+    const stores = createMemoryStores();
+    for (let i = 0; i < 3; i += 1) {
+      const event = managerEvent(i);
+      await stores.inbox.put(event, event.at);
+    }
+
+    const reply = await remover(stores, null)({
+      types: ['manager_message'],
+      reason: '配線が無い',
+      dryRun: false,
+    });
+
+    expect(reply).toContain('1件も消していない');
+    // 🔴 文言ではなく実状態で測る（このファイルの作法）。
+    expect(await stores.inbox.pending()).toMatchObject({ count: 3 });
+  });
+});

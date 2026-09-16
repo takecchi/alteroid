@@ -1426,6 +1426,56 @@ describe('HTTP API', () => {
       const rest = await stores.inbox.peekPending();
       expect(rest.map((r) => r.event.id)).toEqual(['evt-3']);
     });
+
+    /**
+     * **消した合図の配達も止める**（issue #1049）。この口はかつて器
+     * （`InboxStore`）の行しか消さず、それでも応答は `removedIds` を並べて
+     * 「消した」と名乗っていた —— クローンのメモリ上の待ち行列へ既に載った
+     * 合図は配られ続けた。
+     *
+     * ⭐ **応答のフィールドだけを見て終わりにしない**（同じ describe の
+     * `POST /archive/remove` が置いている作法と同じ）。**クローンの口が実際に
+     * 呼ばれた実物**（`fake.droppedFromDelivery`）で測る。
+     */
+    it('消した id を、クローンの配達停止の口へ実際に渡す（応答にも件数が出る）', async () => {
+      await stores.inbox.put(
+        managerReport('evt-1', '2026-08-10T00:00:00.000Z'),
+        '2026-08-10T00:00:00.000Z',
+      );
+      await stores.inbox.put(
+        managerReport('evt-2', '2026-08-11T00:00:00.000Z'),
+        '2026-08-11T00:00:00.000Z',
+      );
+
+      const response = await app.request(
+        '/inbox/remove',
+        json({ types: ['manager_message'], reason: '配達も止める', dryRun: false }),
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        removedIds: ['evt-1', 'evt-2'],
+        droppedFromDelivery: 2,
+      });
+      // 🔴 器から消すだけで終わっていないことを、呼ばれた実物で測る。
+      expect(fake.droppedFromDelivery).toEqual([['evt-1', 'evt-2']]);
+    });
+
+    it('試算（dryRun）では配達停止の口を1度も呼ばず、droppedFromDelivery は 0 を返す', async () => {
+      await stores.inbox.put(
+        managerReport('evt-1', '2026-08-10T00:00:00.000Z'),
+        '2026-08-10T00:00:00.000Z',
+      );
+
+      const response = await app.request(
+        '/inbox/remove',
+        json({ types: ['manager_message'], reason: '試算' }),
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ dryRun: true, droppedFromDelivery: 0 });
+      expect(fake.droppedFromDelivery).toEqual([]);
+    });
   });
 
   /**
