@@ -2487,6 +2487,58 @@ function describeTokenGeneration(manager: ManagerSummary): string | null {
 }
 
 /**
+ * 429の文言の`resets`時刻を、プールの各鍵の`cooldownUntil`と突き合わせた
+ * 結果を言う（Issue #914 オーナー提案(2)。材料は
+ * `ManagerSummary.resetTimeSkewMatch`——判定は`matchNoticeResetAgainstPool`）。
+ *
+ * **`describeTokenGeneration` と同じ行で⚠を二重に鳴らさない。** 提案1
+ * （世代番号の直接比較）が既に食い違いを名指ししているとき（両方の世代が
+ * 取れていて不一致）は、ここでは何も言わない——同じ結論を読み手が2回読む
+ * ことになる。**提案1が測れていない（`tokenGeneration === undefined`）、
+ * または一致を言っている（両方が揃って同じ値）ときだけ、この独立の材料を
+ * 出す価値がある**——`tokenGeneration` は daemon のプロセス内記憶が前提だが、
+ * こちらは429の文言そのものと DB 正本だけを見るので、前者が測れていない
+ * 場面（プール未配線・未観測・再起動をまたいだ引き取り）でも独立に効く。
+ *
+ * - `'stale'`: ⚠ 世代ずれの疑い——このセッションは古い鍵を掴んだまま走って
+ *   いる可能性がある（鍵が戻っても、このセッション自身は起こし直すまで
+ *   戻らない）
+ * - `'active'`: 待てば戻る。⚠ ではない——現役自身がいま冷却中なだけで、
+ *   対処（起こし直し）は要らない
+ * - 材料が無い（`undefined`）: 何も言わない（`null`）。**「判定できない」を
+ *   「世代ずれではない」へ倒さない**——`resetTimeSkewMatch` が無いのは
+ *   「まだ`reached`通知が届いていない」「文言・プールのどちらとも一致
+ *   しなかった」のどちらかで、どちらも「健全」の証明ではない。
+ */
+function describeResetTimeSkew(manager: ManagerSummary): string | null {
+  if (
+    manager.tokenGeneration !== undefined &&
+    manager.activeTokenGeneration !== undefined &&
+    manager.tokenGeneration !== manager.activeTokenGeneration
+  ) {
+    // 提案1が既に同じ結論（世代の食い違い）を名指ししている。二重に鳴らさない。
+    return null;
+  }
+  if (manager.resetTimeSkewMatch === 'stale') {
+    return (
+      '  ⚠ 認証トークンの世代ずれの疑い（429の文言に書かれていた resets 時刻が、' +
+      '現役ではない鍵の冷却期限と一致した）。このセッションは古い鍵を掴んだまま' +
+      '走っている可能性がある——鍵が通る状態へ戻っても、このセッション自身は' +
+      'ターンの境界に達するまで戻らない。この行が消えないまま 429 が続くようなら、' +
+      'manager_stop → manager_start で起こし直すこと（新しいプロセスなので新しい鍵で' +
+      '走る。ただし会話は失われる）。'
+    );
+  }
+  if (manager.resetTimeSkewMatch === 'active') {
+    return (
+      '  認証トークン: 429の文言に書かれていた resets 時刻が、現役の鍵自身の' +
+      '冷却期限と一致した——世代ずれではなく、待てば戻る。'
+    );
+  }
+  return null;
+}
+
+/**
  * `runner_list`（器ごとの内訳・`unassigned` の両方）が積む1行の末尾に足す、
  * 認証トークンの世代の食い違いだけの短い印（Issue #914 提案1）。
  *
@@ -7270,6 +7322,21 @@ export function createCloneTools(context: ToolContext) {
           '（会話は失われる）。世代が測れていないときも行は出る——' +
           '「分からない」の理由（プール未配線／未観測／デーモンの再起動をまたいだ引き取り）を' +
           '名乗る（Issue #988）。再起動をまたいだ場合だけ manager_stop → manager_start が効く。',
+        // **Issue #914 オーナー提案(2)。** 世代番号の直接比較（提案1）は
+        // daemon 側の記憶（bookkeeping）が前提だが、その記憶が「分からない」
+        // 側に落ちる場面（プール未配線／未観測／再起動をまたいだ引き取り）
+        // では提案1は何も言えない。この行はそこを埋める独立の材料——
+        // 429 の文言そのもの（SDK の生の事実）とトークンプール（DB 正本）
+        // だけを見るので、daemon の bookkeeping が追いついていなくても効く。
+        '429 で落ちたとき、SDK が返す文言に書かれていた resets 時刻を、認証トークンの' +
+          'プールの各鍵の冷却期限と突き合わせた行も出ることがある。「世代ずれの疑い」なら、' +
+          'この委譲は現役ではない古い鍵を掴んだまま走っている可能性が高い——鍵が通る状態へ' +
+          '戻っても、このセッション自身は起こし直すまで戻らない。' +
+          '「待てば戻る」なら、現役の鍵自身がいま冷却中なだけで世代ずれではなく、対処は要らない。' +
+          '行が出ないのは「健全」ではなく「まだ判定できない」という意味である——' +
+          '429 の通知がまだ届いていないか、文言・プールのどちらとも一致しなかったかのどちらか。' +
+          '世代番号の比較（提案1）が既に食い違いを名指ししているときは、二重に鳴らさないので' +
+          'この行は出ない。',
       ].join(' '),
       {
         // **人間の入口（`GET /managers`）にだけ在った絞りを、クローンにも渡す**
@@ -7670,6 +7737,12 @@ export function createCloneTools(context: ToolContext) {
               // いないか（プール未配線／未観測／再起動をまたいだ引き取り）
               // を名乗る行が出る**（`TokenGenerationUnknownReason` の doc）。
               describeTokenGeneration(manager),
+              // **Issue #914 オーナー提案(2)**: 429の文言のresets時刻を、
+              // プールのcooldownUntilと突き合わせた結果を添える
+              // （`describeResetTimeSkew` の doc）。**提案1が既に同じ結論を
+              // 出しているときは二重に鳴らさない**——同じ関数がその判定も
+              // 兼ねる。
+              describeResetTimeSkew(manager),
             ],
           });
         });
