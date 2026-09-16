@@ -1,3 +1,4 @@
+import { COMMITMENT_APPRAISAL_DECISION_PREFIX, describeAppraisal } from '@alteroid/core';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -103,6 +104,27 @@ function fakeClone() {
         };
       }
       return { outcome: sendOutcome, detail: '届けた' };
+    },
+    /**
+     * 評定（#1054）。**本物と同じところまで動かす** —— 「無い id は `absent`」と
+     * 「前の値を返す」と「理由を渡さなければ前の理由を消す」の3つに、HTTP の
+     * 応答と日誌の本文が依存している。
+     */
+    async appraise(managerId, appraisal, by, reason) {
+      const found = managerList.find((entry) => entry.managerId === managerId);
+      if (!found) {
+        return { outcome: 'absent' as const, detail: `${managerId} は居ない`, previous: null };
+      }
+      const previous = describeAppraisal(found);
+      found.appraisal = appraisal;
+      found.appraisedBy = by;
+      delete found.appraisalReason;
+      if (reason !== undefined) found.appraisalReason = reason;
+      return {
+        outcome: 'appraised' as const,
+        detail: `${managerId} の評定を ${appraisal} にした。`,
+        previous,
+      };
     },
     async abort(managerId, reason) {
       if (!managerList.some((entry) => entry.managerId === managerId)) {
@@ -2312,6 +2334,141 @@ describe('HTTP API', () => {
     expect(response.status).toBe(200);
     expect((await stores.commitments.list()).entries).toMatchObject([{ origin: 'human' }]);
     expect((await stores.commitments.list()).entries[0]?.id).not.toBe('なりすまし');
+  });
+
+  /**
+   * 評定（#1054。自己改善の段1）。**この口の本題は「人間が覆せること」である。**
+   */
+  it('人間が評定を付けられ、片付いた行にも未了の行にも通る', async () => {
+    const opened = await app.request('/commitments', json({ body: '評定される件' }));
+    const { id } = (await opened.json()) as { id: string };
+
+    // 未了のまま付く（「片付いてから」を器が強制しない）
+    const first = await app.request(
+      `/commitments/${id}/appraise`,
+      json({ appraisal: 'unclear', reason: 'まだ材料が無い' }),
+    );
+    expect(first.status).toBe(200);
+    expect(await stores.commitments.get(id)).toMatchObject({
+      appraisal: 'unclear',
+      appraisedBy: 'human',
+      appraisalReason: 'まだ材料が無い',
+    });
+    // 評定は行を閉じない（片付いたかどうかとは別の軸である）
+    expect((await stores.commitments.get(id))?.closedAt).toBeUndefined();
+
+    await app.request(`/commitments/${id}/close`, json({ reason: '終わった' }));
+    // 片付いた行にも通る（上書き）
+    expect(
+      (await app.request(`/commitments/${id}/appraise`, json({ appraisal: 'good' }))).status,
+    ).toBe(200);
+    expect(await stores.commitments.get(id)).toMatchObject({ appraisal: 'good' });
+    // **理由を渡さない上書きは、前の理由を消す。** 残すと「うまくいった」の理由が
+    // 「まだ材料が無い」になる（値だけ入れ替わって説明が前の書き手のものになる）。
+    expect((await stores.commitments.get(id))?.appraisalReason).toBeUndefined();
+  });
+
+  it('覆した事実は日誌に残る（前の値が本文に入る＝較正の材料）', async () => {
+    const opened = await app.request('/commitments', json({ body: '覆される件' }));
+    const { id } = (await opened.json()) as { id: string };
+
+    // クローンが付けた体で1回書き、人間が覆す
+    await stores.commitments.appraise(id, '2026-01-01T00:00:00.000Z', 'good', 'clone', '通った');
+    expect(
+      (
+        await app.request(
+          `/commitments/${id}/appraise`,
+          json({ appraisal: 'bad', reason: '差し戻し' }),
+        )
+      ).status,
+    ).toBe(200);
+
+    const entries = await stores.journal.list({ types: ['decision'] });
+    const appraisal = entries.filter((entry) =>
+      entry.type === 'decision'
+        ? entry.decision.startsWith(COMMITMENT_APPRAISAL_DECISION_PREFIX)
+        : false,
+    );
+    expect(appraisal).toHaveLength(1);
+    const decision = appraisal[0]?.type === 'decision' ? appraisal[0].decision : '';
+    expect(decision).toContain('bad');
+    // **前の値が入っていること。** 行は「いまの値」しか持たないので、ここに
+    // 落ちていなければ「クローンは good と言っていた」がどこにも残らない。
+    expect(decision).toContain('うまくいった');
+    expect(decision).toContain('通った');
+  });
+
+  it('台帳に無い id は 404（評定は「書けた」と嘘をつかない）', async () => {
+    expect(
+      (await app.request('/commitments/nope/appraise', json({ appraisal: 'good' }))).status,
+    ).toBe(404);
+  });
+
+  it('既知でない評定は 400（3値は器が持つ）', async () => {
+    const opened = await app.request('/commitments', json({ body: '不正な評定' }));
+    const { id } = (await opened.json()) as { id: string };
+    expect(
+      (await app.request(`/commitments/${id}/appraise`, json({ appraisal: 'brilliant' }))).status,
+    ).toBe(400);
+  });
+
+  /**
+   * 委譲の評定（#1054）。**クローンの `manager_appraise` と同じ `ManagerPool.appraise`
+   * を通る** —— 人間に出来てクローンに出来ないことも、その逆も作らない。
+   */
+  it('人間が委譲に評定を付けられる（上書きでき、理由を渡さなければ前の理由が消える）', async () => {
+    fake.managerList.push({
+      managerId: 'mgr-rate',
+      status: 'done',
+      live: false,
+      cwd: '/work',
+      request: '調べて',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      waiting: [],
+    });
+
+    expect(
+      (
+        await app.request(
+          '/managers/mgr-rate/appraise',
+          json({ appraisal: 'good', reason: '一発で通った' }),
+        )
+      ).status,
+    ).toBe(200);
+    expect(fake.managerList.find((m) => m.managerId === 'mgr-rate')).toMatchObject({
+      appraisal: 'good',
+      appraisedBy: 'human',
+      appraisalReason: '一発で通った',
+    });
+
+    // 理由を渡さない覆しは前の理由を消す（残すと説明が前の書き手のものになる）。
+    expect(
+      (await app.request('/managers/mgr-rate/appraise', json({ appraisal: 'bad' }))).status,
+    ).toBe(200);
+    const after = fake.managerList.find((m) => m.managerId === 'mgr-rate');
+    expect(after?.appraisal).toBe('bad');
+    expect(after?.appraisalReason).toBeUndefined();
+  });
+
+  it('台帳に居ないマネージャーは 404、既知でない評定は 400', async () => {
+    expect(
+      (await app.request('/managers/mgr-nope/appraise', json({ appraisal: 'good' }))).status,
+    ).toBe(404);
+    fake.managerList.push({
+      managerId: 'mgr-rate-400',
+      status: 'done',
+      live: false,
+      cwd: '/work',
+      request: '調べて',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      waiting: [],
+    });
+    expect(
+      (await app.request('/managers/mgr-rate-400/appraise', json({ appraisal: 'brilliant' })))
+        .status,
+    ).toBe(400);
   });
 
   it('片付けたものは既定の一覧から消え、includeClosed=true でだけ出る', async () => {

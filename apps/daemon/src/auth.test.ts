@@ -36,6 +36,7 @@ function stubClone(): CloneHost {
     start: () => Promise.reject(new Error('起こさない')),
     send: () => Promise.reject(new Error('送らない')),
     abort: () => Promise.reject(new Error('止めない')),
+    appraise: () => Promise.reject(new Error('評定しない')),
     list: () => Promise.resolve([]),
     denials: () => [],
     runnerBacklog: () => [],

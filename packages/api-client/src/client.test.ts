@@ -36,6 +36,9 @@ function fakeClone(stores: Stores) {
     async abort() {
       return { outcome: 'unknown' as const, detail: '居ない' };
     },
+    async appraise() {
+      return { outcome: 'absent' as const, detail: '評定しない', previous: null };
+    },
     async list() {
       return [];
     },

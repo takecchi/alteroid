@@ -50,7 +50,10 @@ import type {
   RunnerWaiting,
 } from './runner-protocol.js';
 import { brief } from './runner.js';
+import { describeAppraisal, JOB_APPRAISAL_DECISION_PREFIX } from './schema.js';
 import type {
+  AppraisalValue,
+  AppraisedBy,
   InboxEvent,
   Job,
   JobStatus,
@@ -421,6 +424,21 @@ export interface ManagerSummary {
   startedAt: string;
   updatedAt: string;
   sessionId?: string;
+  /**
+   * **その委譲がどうだったか**（#1054）。台帳（`Job`）をそのまま写すだけで、
+   * 書き込みは `ManagerPool.appraise` の1箇所に閉じている。
+   *
+   * **`status` とは別の軸である**（`Job.appraisal` の doc）。とくに
+   * `digest.ts` の `judgement`（`isManagerAwaitingJudgement` ＝ `lost` 1値、
+   * 意味は「終わったかどうかを観測していない」）と取り違えないこと。
+   *
+   * **無いことは「まだ評定していない」であって「普通」ではない。** 数えるときに
+   * `good` 側にも `bad` 側にも寄せない。
+   */
+  appraisal?: string;
+  appraisedAt?: string;
+  appraisedBy?: string;
+  appraisalReason?: string;
   lastReport?: string;
   /**
    * `lastReport` を**デーモンが受け取った時刻**（#358。`jobSchema.lastReportAt`
@@ -1102,6 +1120,24 @@ export interface ManagerAbortResult {
   sessionGone?: boolean;
 }
 
+/**
+ * `ManagerPool.appraise` の結果。
+ *
+ * - `'appraised'` — 書けた（上書きを含む）。`previous` は**覆す前の字面**
+ *   （`describeAppraisal` の出力。初めて付けたなら `null`）
+ * - `'absent'` — その委譲が台帳に居ない。**`abort` の `'absent'` と同じ意味**で、
+ *   HTTP では 404 になる
+ *
+ * **「書けなかった」を `'appraised'` に畳まない。** 畳むと、台帳から消えた委譲へ
+ * 付けた評定が「付いた」として返り、読み手には確かめる術が無くなる。
+ */
+export interface ManagerAppraiseResult {
+  outcome: 'appraised' | 'absent';
+  detail: string;
+  /** 覆す前の評定の字面。初めて付けたなら `null`。 */
+  previous: string | null;
+}
+
 export interface ManagerPool {
   start(input: ManagerStartInput): Promise<ManagerSummary>;
   send(
@@ -1123,6 +1159,41 @@ export interface ManagerPool {
    * 食い違う。
    */
   abort(managerId: string, reason?: string, by?: ManagerStopActor): Promise<ManagerAbortResult>;
+  /**
+   * **その委譲がどうだったか**を記録する（#1054。自己改善の段1の後半）。
+   *
+   * ## ⭐ なぜ `JobStore` へ直に書かず、ここを通すのか
+   *
+   * **走行中の委譲の `Job` は、このプールがプロセス内の像（`#records`）として
+   * 握っている。`#persist` は `record.job` を丸ごと書く。** ⟹ ストアの側から
+   * 評定だけ足すと、**次の `#persist` が黙って踏み消す** —— 書けたように見えて
+   * 消える、という「静かに失敗する道具」そのものである（AGENTS.md）。
+   *
+   * だから所有者を通す。像が在るなら像を書き換えてから永続化し、無いなら
+   * （`#retire()` 済み ＝ 終端した委譲）台帳へ直に書く。
+   *
+   * ## ⚠️ `abort()` と違い `#load()` を使わない
+   *
+   * `#load()` は**読んだ像を `#records` に登録する**（`this.#records.set(...)`）。
+   * `abort()` はこれから触る相手なのでそれでよいが、**評定は何日も前に終わった
+   * 委譲にも付く** —— そのたびに終端済みの像を живой な地図へ戻すと、`#records`
+   * が単調に太り、`list()` など「いま抱えているもの」を見る側の意味も変わる。
+   * ⟹ ここは台帳を読むだけにして、`#records` を汚さない。
+   *
+   * ## 走行中を断らない
+   *
+   * 「片付いてから」を器が強制しない（台帳の `CommitmentStore.appraise` と同じ
+   * 線）。走っている委譲に人間が印を付ける経路を塞ぐ理由が無い。
+   *
+   * **覆した事実は日誌に残す。** 行が持つのは「いまの値」だけなので、前の値が
+   * ここで落ちないと**評価する側を較正する材料が消える**（PRD「要件: 自己改善」）。
+   */
+  appraise(
+    managerId: string,
+    appraisal: AppraisalValue,
+    by: AppraisedBy,
+    reason?: string,
+  ): Promise<ManagerAppraiseResult>;
   list(): Promise<ManagerSummary[]>;
   /**
    * このマネージャーで拒否された道具と件数を、**古い順**で返す。
@@ -3027,15 +3098,33 @@ class Pool implements ManagerPool {
    * あちらはアカウント単位の事実で、**誰が止まったかを言わない。** 鍵が通る状態へ
    * 戻ったときに起こし直す相手を決めるには、**どの委譲がそれで止まったか**が要る。
    *
-   * ## 揮発してよい（デーモンを作り直したら消える）
+   * ## 台帳にも写しを持つ（Issue #914 段2。旧設計は「揮発してよい」だった）
    *
-   * 消えて困るのは「起こし直す相手を1本忘れる」ことだが、デーモンが作り直された
-   * 回は起動時の引き取り（`#restoreJobs`）が走り、台帳に `running` /
-   * `waiting_human` で残っている分はそちらが続きへ戻す。**残るのは
-   * 「台帳が `done` / `failed` で、しかもデーモンが入れ替わった」場合だけ**で、
-   * そこはクローンの判断（枠に当たった報告は受信箱に残っている）へ落ちる。
-   * **台帳の欄にしないのは、この印がプロセスの寿命より長く意味を持たないためで
-   * ある**（次に起こすかどうかは、その時点の台帳の状態から決まる）。
+   * **かつてここには「揮発してよい（デーモンを作り直したら消える）」と書いて
+   * あった。** 論拠は「デーモンが作り直された回は起動時の引き取り
+   * （`#restoreJobs`）が走り、台帳に `running` / `waiting_human` で残っている
+   * 分はそちらが続きへ戻す。残るのは『台帳が `done` / `failed` で、しかも
+   * デーモンが入れ替わった』場合だけで、そこはクローンの判断（枠に当たった
+   * 報告は受信箱に残っている）へ落ちる」——つまり「起こし直す相手を1本忘れる」
+   * ことはあっても、それはクローンが拾える範囲だという想定だった。
+   *
+   * **その想定は誤りだった（Issue #914）。** 「台帳が `done` / `failed` /
+   * `lost` で、しかもデーモンが入れ替わった」委譲は、**クローンが気づいて
+   * `manager_send` で起こさない限り、次の鍵の回転（`resumeStoppedByUsage`）
+   * でも二度と拾われない**——`#restoreJobs` はそれらの status を「続きへ戻す」
+   * 対象にしていない（対象は `running` / `waiting_human` だけ）ので、印が
+   * 消えた分は永久に座ったままになる。「クローンの判断へ落ちる」は
+   * 「クローンが毎回手で拾い直す」の言い換えでしかなく、この機構
+   * （{@link Pool.resumeStoppedByUsage}）が自動化しようとしていたことそのものが
+   * 抜け落ちていた。
+   *
+   * **⟹ いまの読み方:** 印はプロセス内の `Set`（ここ）と台帳の
+   * `Job.usageStoppedAt`（`schema.ts`）の2箇所に在り、**`Set` が真の参照で、
+   * 台帳側はデーモンの寿命を跨ぐための写しである。** 起動時の `#restoreJobs`
+   * が、ジョブ走査の中で `job.usageStoppedAt !== undefined` を見て `Set` を
+   * 組み直す——`done` / `failed` / `lost` のどれで座っていても、写しさえ
+   * 残っていれば次の起動後の回転で拾える。下ろす箇所（`#clearUsageStoppedMark`
+   * が畳んでいる3+1箇所）は `Set` と台帳の両方を同じタイミングで下ろす。
    */
   readonly #usageStopped = new Set<string>();
   /**
@@ -4522,17 +4611,44 @@ class Pool implements ManagerPool {
       // 終わった時点（`case 'report'` / `case 'closed'`）に起きる。
       if (outcome === 'still-running') continue;
       /*
-       * **挑むのは1回きり。届かなくても印を下ろす。**
+       * **`'skipped'`（届かなかった）は印を残す。下ろすのは `'nudged'`（届いた）と
+       * `'gone'`（起こす相手がもう居ない／起こしてはいけない）だけである
+       * （Issue #914 最終段）。
        *
-       * 残す形にすると、戻れない委譲（`lost` で生ログも無い等）が**回転のたびに
-       * 一言を投げられ続ける**——鍵が回る頻度は枠の単位（5時間）で決まるので
-       * 暴走はしないが、失敗が並ぶだけの行が増える。
+       * ## なぜ以前は1回きりだったか、なぜいまは変えられるか
+       *
+       * **以前ここには「挑むのは1回きり。届かなくても印を下ろす」と書いてあった。**
+       * 論拠は「残す形にすると、戻れない委譲（`lost` で生ログも無い等）が回転の
+       * たびに一言を投げられ続ける」——鍵の回転は枠の単位（5時間）で決まるので
+       * 暴走はしないが、無駄な一言が並ぶ、というものだった。
+       *
+       * **その論拠は、いまは成り立たない。** `case 'resume_failed'` の「回復
+       * しなかった」枝（`event.recovered === false`）が、戻れないと確定した
+       * 委譲を `lost` へ落とすのと**同じタイミングで** `#usageWakeOwed` と印
+       * （`Set` ＋台帳の写し）も一緒に畳む（`#clearUsageStoppedMark` の doc）。
+       * ⟹ 「戻れない委譲に回転のたびに投げ続ける」口は既に閉じている——回転が
+       * 一言を投げるのは、まだ `done` / `failed` / `lost` のまま台帳に残っている
+       * （＝いつか戻るかもしれない）委譲だけである。
+       *
+       * **そして残さない側に倒すと、Issue #914 の症状そのものに落ちる。**
+       * 空振り（`send()` が届かない・投げる）が一度でも起きると、印が無ければ
+       * その委譲が次に拾われるには**新しい `usage_notice`（`kind === 'reached'`）
+       * が要り、それにはその委譲自身がターンを回す必要がある**——回すには
+       * 誰かが起こす必要があり、起こす手段がまさにこの機構である。⟹ 空振り
+       * 1回で「クローンが手で `manager_send` を打つまで戻らない」に落ちる。
+       * 印を残せば、次の鍵の回転でもう一度この委譲を挑戦の対象に含められる。
+       *
+       * **回数上限・時間間隔は置かない。** 暴走が構造で抑えられているのは
+       * 上と同じ理由（鍵の回転の契機は枠の単位で決まる／戻れない委譲は
+       * `resume_failed` で畳まれる）で、実測なしに数を決めない
+       * （AGENTS.md「踏みやすい地雷」）。
        *
        * **落としているのではない。** 起こせなかったことは日誌に残り、枠に当たった
        * 報告そのものはクローンの受信箱に残っている（`case 'usage_notice'` が
-       * `#emit` する）ので、判断はクローンの側に在る。
+       * `#emit` する）ので、判断はクローンの側にも在る。
        */
-      this.#usageStopped.delete(managerId);
+      if (outcome === 'skipped') continue;
+      await this.#clearUsageStoppedMark(managerId);
       this.#usageWakeOwed.delete(managerId);
       if (outcome === 'nudged') nudged.push(managerId);
     }
@@ -4543,11 +4659,18 @@ class Pool implements ManagerPool {
    * 枠で止まっていた1本へ、続きを促す一言を投げる。**印と借りは呼び出し側が
    * 下ろす**（呼び出し元によって下ろす条件が違う）。
    *
-   * | 戻り値 | 意味 |
-   * | --- | --- |
-   * | `'nudged'` | 届いた（同じ会話の続きとして流れた） |
-   * | `'still-running'` | まだ走っている・人間の回答待ち ⟹ いまは起こせない |
-   * | `'skipped'` | 起こす相手が居ない・止められている・届かなかった |
+   * | 戻り値 | 意味 | 呼び出し元（`resumeStoppedByUsage`）は印をどうするか |
+   * | --- | --- | --- |
+   * | `'nudged'` | 届いた（同じ会話の続きとして流れた） | **下ろす** |
+   * | `'still-running'` | まだ走っている・人間の回答待ち ⟹ いまは起こせない | 残す（`continue`。借りは別に控えてある） |
+   * | `'gone'` | 起こす相手がもう居ない／起こしてはいけない（台帳から消えている・`stopped`） | **下ろす**（残しても次も同じ結果） |
+   * | `'skipped'` | 相手は居るが、届かなかった（`send()` が失敗・投げた） | **残す**（次の鍵の回転でもう一度挑む） |
+   *
+   * **`'gone'` と `'skipped'` を分けるのはここが理由である。** 前者（台帳に
+   * 居ない・`stopped`）は印を残しても次に挑んでも同じ結果にしかならないので
+   * 無害だが無意味——下ろしてよい。後者（`send()` が届かない）は次に挑めば
+   * 結果が変わりうる——人間・クローンが止めたわけではない委譲の印を下ろすと、
+   * 次の鍵の回転でも二度と拾われなくなる（Issue #914 の症状そのもの）。
    *
    * **起こすのは「もう走っていない」委譲だけである。**
    *
@@ -4567,11 +4690,13 @@ class Pool implements ManagerPool {
    * 委譲が誰にも起こされないまま残る（`#restoreJobs` のジョブループが同じ理由で
    * 同じ形にしてある）。
    */
-  async #nudgeForUsageRotation(managerId: string): Promise<'nudged' | 'still-running' | 'skipped'> {
+  async #nudgeForUsageRotation(
+    managerId: string,
+  ): Promise<'nudged' | 'still-running' | 'gone' | 'skipped'> {
     try {
       const record = this.#records.get(managerId) ?? (await this.#load(managerId));
-      // 台帳から消えている（人間が消した等）。起こす相手が居ない。
-      if (record === null) return 'skipped';
+      // 台帳から消えている（人間が消した等）。起こす相手が居ない ⟹ `'gone'`。
+      if (record === null) return 'gone';
       const status = record.job.status;
       if (status === 'running' || status === 'waiting_human') return 'still-running';
       if (status !== 'done' && status !== 'failed' && status !== 'lost') {
@@ -4584,7 +4709,8 @@ class Pool implements ManagerPool {
             `（status=${status}）。`,
           grounds: '人間・クローンが止めた委譲を、鍵が戻ったことを理由に甦らせない。',
         });
-        return 'skipped';
+        // 起こしてはいけない相手 ⟹ `'gone'`（`'skipped'` とは違い、印は下ろしてよい）。
+        return 'gone';
       }
       /*
        * **`send()` に相乗りする（新しい経路を作らない）。** 生きたセッションが
@@ -4633,8 +4759,57 @@ class Pool implements ManagerPool {
       return;
     }
     this.#usageWakeOwed.delete(managerId);
+    /*
+     * **印を下ろすのは、起こせたと分かってからである**（Issue #914 最終段。
+     * 判定は `resumeStoppedByUsage()` のループと同じ規則にしてある）。
+     *
+     * **ここは以前、起こす前に印を下ろしていた。** そうすると空振り
+     * （`'skipped'` ＝ 相手は居るのに `send()` が届かない・投げた）が一度でも
+     * 起きた時点で印が消え、**その委譲は次の鍵の回転でも拾われなくなる**
+     * ——そこから戻るには新しい `usage_notice` が要り、それにはその委譲自身が
+     * ターンを回す必要があり、回すには起こす必要がある（あちらのループの doc に
+     * 同じ袋小路を書いた）。**そしてこの経路のほうが普通に通る側である**
+     * （枠に当たったのはこの委譲自身なので、回し手を起こしたのもこの委譲である
+     * ——直上の doc）。⟹ 片方だけ直しても、いちばん通る口が開いたままになる。
+     */
+    const outcome = await this.#nudgeForUsageRotation(managerId);
+    if (outcome === 'skipped' || outcome === 'still-running') return;
+    await this.#clearUsageStoppedMark(managerId);
+  }
+
+  /**
+   * 枠で止まった印を、プロセス内の `Set`（`#usageStopped`）と台帳の写し
+   * （`Job.usageStoppedAt`）の両方から下ろす（Issue #914 段2）。
+   *
+   * ## なぜ1本にまとめるか
+   *
+   * 下ろす箇所は元々3つ散っていた（`resumeStoppedByUsage()` の1回きりの挑戦・
+   * `#settleUsageWake` の枠での完走・`case 'resume_failed'` の回復しなかった枝）。
+   * それぞれで手書きすると、いつか1箇所だけ `Set` は下ろすが台帳の写しを
+   * 消し忘れる、という食い違いが起きうる——**まさにこの食い違い（`#usageWakeOwed`
+   * 側）が Issue #914 段2 で見つかったので、同じ形を写しの側に作らない。**
+   *
+   * `case 'report'` の自力完走の枝はこのヘルパーを呼ばない——あちらは直後に
+   * `#persist(record)` が控えているので、そこに乗せて二重書きを避ける
+   * （`delete record.job.usageStoppedAt` を直接書いている）。
+   *
+   * ## 投げない
+   *
+   * `#nudgeForUsageRotation` と同じ理由——呼び出し元はイベント処理の終盤や
+   * 走査の途中に居るので、ここで投げると `#retire()` などの後片付けが走らない
+   * まま処理が終わる。
+   */
+  async #clearUsageStoppedMark(managerId: string): Promise<void> {
     this.#usageStopped.delete(managerId);
-    await this.#nudgeForUsageRotation(managerId);
+    try {
+      const record = this.#records.get(managerId) ?? (await this.#load(managerId));
+      if (record === null) return;
+      if (record.job.usageStoppedAt === undefined) return;
+      delete record.job.usageStoppedAt;
+      await this.#persist(record);
+    } catch (error) {
+      noteDroppedRecord('枠で止まった印の解除', `managerId=${managerId}`, error);
+    }
   }
 
   async reattachRunner(runnerId: string): Promise<void> {
@@ -4763,6 +4938,19 @@ class Pool implements ManagerPool {
     const resumed: ManagerSummary[] = [];
     for (const job of await this.#stores.jobs.listJobs()) {
       if (this.#records.has(job.id)) continue;
+
+      /*
+       * **台帳の写しから `#usageStopped` を組み直す（Issue #914 段2）。**
+       * プロセス内の像に既に載っている分（上の `continue`）は印も正しく
+       * 生きているので触らない——ここに来るのは、このデーモンにとって
+       * 「まだ知らない」委譲だけである。
+       *
+       * **この位置なら、下で `continue` される `lost` のジョブも拾える。**
+       * `lost` は `#nudgeForUsageRotation` のホワイトリストに載っている
+       * （起こす対象）ので、それでよい——ここで印を組み直さないと、
+       * `resumeStoppedByUsage()` がこの委譲を回転の対象にすら入れない。
+       */
+      if (job.usageStoppedAt !== undefined) this.#usageStopped.add(job.id);
 
       const living = alive.get(job.id);
       if (living) {
@@ -5089,6 +5277,56 @@ class Pool implements ManagerPool {
     }
 
     return { outcome, stopError, sessionGone };
+  }
+
+  /** `ManagerPool.appraise` の doc に、なぜここを通すのかが在る。 */
+  async appraise(
+    managerId: string,
+    appraisal: AppraisalValue,
+    by: AppraisedBy,
+    reason?: string,
+  ): Promise<ManagerAppraiseResult> {
+    const at = new Date(this.#now()).toISOString();
+    // **像が在るなら像を書く（所有者が書く）。** `#load()` は使わない —— あれは
+    // 読んだ像を `#records` へ登録するので、終端済みの委譲を評定するたびに
+    // 地図が太る（この関数の doc）。
+    const record = this.#records.get(managerId);
+    const job = record?.job ?? (await this.#stores.jobs.listJobs()).find((e) => e.id === managerId);
+    if (job === undefined) {
+      return {
+        outcome: 'absent',
+        detail: `${managerId} というマネージャーは台帳に居ない。`,
+        previous: null,
+      };
+    }
+    const previous = describeAppraisal(job);
+
+    job.appraisal = appraisal;
+    job.appraisedAt = at;
+    job.appraisedBy = by;
+    // **理由を渡さなかったら前の理由を消す。** 残すと、理由無しで覆したときに
+    // **前の書き手の理由が新しい値の理由として残る**（台帳側と同じ穴。
+    // `CommitmentStore.appraise` の doc）。
+    delete job.appraisalReason;
+    if (reason !== undefined) job.appraisalReason = reason;
+    job.updatedAt = at;
+    await this.#stores.jobs.putJob(job);
+
+    const who = by === 'clone' ? 'クローン' : '人間';
+    await this.#journal({
+      type: 'decision',
+      decision:
+        `${JOB_APPRAISAL_DECISION_PREFIX}（${managerId}）: ${appraisal}` +
+        `${reason === undefined ? '' : ` — ${reason}`}` +
+        `${previous === null ? '' : `（前: ${previous}）`}`,
+      grounds: `${who}が付けた（人間はこれを読んで後から覆す）`,
+    });
+
+    return {
+      outcome: 'appraised',
+      detail: `${managerId} の評定を ${appraisal} にした。`,
+      previous,
+    };
   }
 
   async abort(
@@ -6719,6 +6957,11 @@ class Pool implements ManagerPool {
            * たい相手そのものである。
            */
           this.#usageStopped.delete(event.managerId);
+          // **台帳の写しも同じ枝で下ろす（Issue #914 段2）。** この少し下に
+          // `await this.#persist(record)` が控えているので、そこへ乗せる——
+          // 専用のヘルパー（`#clearUsageStoppedMark`）を呼ぶと二重に書き込む
+          // ことになるため、ここは直接 `delete` する。
+          delete record.job.usageStoppedAt;
         } else {
           record.job.lastFailure = { ...event.failure, at: new Date().toISOString() };
         }
@@ -7417,7 +7660,43 @@ class Pool implements ManagerPool {
          * （`#observeForTokenRotation` を手前へ置いてある理由と同じで、#666 が
          * 回し手の側で踏んだ形そのものである）。
          */
-        if (event.notice.kind === 'reached') this.#usageStopped.add(event.managerId);
+        if (event.notice.kind === 'reached') {
+          this.#usageStopped.add(event.managerId);
+          /*
+           * **台帳にも写す（Issue #914 段2）。** `#usageStopped` はプロセス内の
+           * `Set` なので、デーモンが作り直されると消える——`record.job.status`
+           * が `done` / `failed` / `lost` のまま入れ替わりを跨いだ委譲は、写しが
+           * 無いと次の回転（`resumeStoppedByUsage`）でも二度と起こされない
+           * （`#usageStopped` の doc に経緯を書いた）。
+           *
+           * **代入自体は上の `Set.add` と同じ同期の位置に置く。** ここで
+           * `await` を挟むと、直上のコメントが言う並行の `report` に先を越されて
+           * 「自力で終えた委譲に印が残る」を再現しうる——`Set` と台帳の写しは
+           * 同時に真になるべきで、片方だけ遅れて真になる窓を作らない。
+           * `await this.#persist(record)` はこの代入より後で構わない
+           * （I/O 自体は `Set`／欄の値に影響しない）。
+           *
+           * **欄が既に立っているなら persist しない。** `usage_notice` は
+           * ターンごとに何度も届きうるので、そのたびに書き込むと無駄な書き込みが
+           * 積み上がる。
+           *
+           * **⚠️ 書き込みの失敗で、この下を巻き添えにしない。** ここより下に
+           * 回し手への受け渡し（`#observeForTokenRotation`）が在り、それが
+           * **鍵を回す契機そのもの**である——台帳が書けなかったという理由で
+           * ここが投げると、枠に当たったことが回し手へ届かず、**鍵が回らないまま
+           * 全員が止まる。** 印の永続化が足しているのは「次のデーモンでも拾える」
+           * であって、**いま回すことより優先しない**——書けなければ、この欄が
+           * 無かった頃と同じ（プロセス内の `Set` だけ）へ落ちるだけである。
+           */
+          if (record.job.usageStoppedAt === undefined) {
+            record.job.usageStoppedAt = new Date(this.#now()).toISOString();
+            try {
+              await this.#persist(record);
+            } catch (error) {
+              noteDroppedRecord('枠で止まった印の永続化', `managerId=${event.managerId}`, error);
+            }
+          }
+        }
 
         // **ここは `report` / `ask` / `closed` / `resume_failed` と違い、`stopped`
         // ガードを意図的に足していない。** あの4つが運ぶのは**このマネージャー
@@ -7759,6 +8038,22 @@ class Pool implements ManagerPool {
         record.waiting = [];
         await this.#persist(record);
         this.#notifyUnresumable(record, event.reason, 'session');
+        /*
+         * **この枝が台帳を `lost` へ落とすのは、諦めを再起動の向こう側まで
+         * 持たせるためだった**（直上のコメント）。枠の印（`#usageStopped` /
+         * `Job.usageStoppedAt`）を**台帳に**残したままここを通ると、その意図の
+         * 真逆を作ってしまう——**次のデプロイでまた同じ死体を起こしに行き、また
+         * 失敗し、また忘れる**（Issue #914 段2）。台帳への永続化（この変更）が
+         * 無ければ印はどのみちプロセスと一緒に消えていたので存在しなかった穴だが、
+         * 永続化した以上はここでも一緒に畳む必要がある。
+         *
+         * **人間・クローンの明示的な `manager_send` は塞がない。** `#unresumable`
+         * は `send()` を止める材料にしていない（直上の `#unresumable.add` の
+         * コメントが言う「見られていない」）——ここで印を下ろしても、明示の
+         * 話しかけによる resume の経路は変わらない。
+         */
+        this.#usageWakeOwed.delete(event.managerId);
+        await this.#clearUsageStoppedMark(event.managerId);
         this.#retire(event.managerId);
         return;
       }
@@ -9561,6 +9856,11 @@ function summaryOf(
     updatedAt: job.updatedAt,
     waiting: [...record.waiting],
     ...(job.sessionId === undefined ? {} : { sessionId: job.sessionId }),
+    // **評定は台帳をそのまま写すだけ**（#1054）。書き込みは `appraise()` の1箇所。
+    ...(job.appraisal === undefined ? {} : { appraisal: job.appraisal }),
+    ...(job.appraisedAt === undefined ? {} : { appraisedAt: job.appraisedAt }),
+    ...(job.appraisedBy === undefined ? {} : { appraisedBy: job.appraisedBy }),
+    ...(job.appraisalReason === undefined ? {} : { appraisalReason: job.appraisalReason }),
     ...(job.lastReport === undefined ? {} : { lastReport: job.lastReport }),
     // **`lastReport` と対で運ぶ**（#358）。台帳をそのまま写すだけ——書き込みは
     // `#onEvent` の `case 'report'` の1箇所に閉じている。

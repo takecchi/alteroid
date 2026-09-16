@@ -227,6 +227,34 @@ export function useCloseCommitment() {
 }
 
 /**
+ * 評定を付ける／覆す（`POST /commitments/:id/appraise`。#1054）。
+ *
+ * **片付いた行にも未了の行にも通る。** サーバが断るのは無い id だけである
+ * （`CommitmentStore.appraise` の doc）。⟹ **ここで「片付いた行だけ」のような
+ * 先回りの判定を書かないこと** — `useEditCommitment` と同じ理由で、サーバの線を
+ * 画面へ写すと、線が変わった日に画面だけが黙ってずれる。
+ *
+ * **`reason` は任意。** 画面のボタン1つで付けられる経路を塞がないため
+ * （そのぶん、なぜその評定なのかは書かれないことがある）。
+ */
+export function useAppraiseCommitment() {
+  const api = useApi();
+  const refresh = useRefreshCommitments();
+  return useCallback(
+    async (id: string, appraisal: 'good' | 'bad' | 'unclear', reason?: string) => {
+      expectOk(
+        await api.api.POST('/commitments/{id}/appraise', {
+          params: { path: { id } },
+          body: reason === undefined ? { appraisal } : { appraisal, reason },
+        }),
+      );
+      await refresh();
+    },
+    [api, refresh],
+  );
+}
+
+/**
  * 台帳の本文を後から直す（人間の直接編集、`PATCH /commitments/:id`）。
  *
  * **可否の判定はサーバに聞く。** ここで先回りして弾かない。画面
@@ -280,6 +308,32 @@ export function useSendManagerMessage() {
  * **本文が要る**（`DELETE` だがサーバ側に json バリデータが付いている）。理由が
  * 無くても `{}` を送る必要があり、忘れると 400 になる。
  */
+/**
+ * 委譲に評定を付ける／覆す（`POST /managers/:id/appraise`。#1054）。
+ *
+ * **走行中の委譲にも終端した委譲にも通る。** サーバが断るのは台帳に居ない id だけ
+ * である（`ManagerPool.appraise` の doc）。⟹ ここで「終端したものだけ」のような
+ * 先回りの判定を書かないこと（`useEditCommitment` と同じ理由 —— サーバの線を画面へ
+ * 写すと、線が変わった日に画面だけが黙ってずれる）。
+ */
+export function useAppraiseManager() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (id: string, appraisal: 'good' | 'bad' | 'unclear', reason?: string) => {
+      expectOk(
+        await api.api.POST('/managers/{id}/appraise', {
+          params: { path: { id } },
+          body: reason === undefined ? { appraisal } : { appraisal, reason },
+        }),
+      );
+      // **一覧と詳細の両方を取り直す。** 評定は両方に出る（`ManagerSummary` が運ぶ）。
+      await Promise.all([mutate((key) => isKeyOfType(key, 'managers')), mutate(KEY.manager(id))]);
+    },
+    [api, mutate],
+  );
+}
+
 export function useAbortManager() {
   const api = useApi();
   const { mutate } = useSWRConfig();

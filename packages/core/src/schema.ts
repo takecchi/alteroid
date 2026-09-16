@@ -633,6 +633,38 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
 export type InboxEvent = z.infer<typeof inboxEventSchema>;
 export type InboxEventType = InboxEvent['type'];
 
+/**
+ * `journalEntrySchema` の `inbox_flow`（Issue #783 段0）が種類別の内訳
+ * （`arrived` / `delivered` / `settled`）に使う形。
+ *
+ * **ここだけ `inboxEventSchema` の判別子を手で列挙している。** `inboxEventSchema`
+ * は判別可能ユニオンで、7種の `type` はそれぞれ別の `z.object` の中に居るため、
+ * ここから機械的に導出すると型があいまいになる（`z.discriminatedUnion` の
+ * `.options` から `.shape.type.value` を拾う形は書けるが、`InboxEvent['type']`
+ * との対応を静的に保証できず、かえって読みにくい）。**7種という数はここでも
+ * 育ちうる**——`inboxEventSchema` に型を足したら、ここの `z.enum` も手で足す
+ * こと（忘れても `byType.type` の型検査で `InboxEvent['type']` と食い違って
+ * 落ちる——`journalEntryTypeNames` の `satisfies Record<JournalEntryType, true>`
+ * と同じ、足し忘れを型で塞ぐ作り）。
+ */
+const inboxFlowByTypeCountSchema = z.object({
+  total: z.number().int().nonnegative(),
+  byType: z.array(
+    z.object({
+      type: z.enum([
+        'human_message',
+        'human_answer',
+        'distill',
+        'timer',
+        'external',
+        'self_initiative',
+        'manager_message',
+      ]) satisfies z.ZodType<InboxEvent['type']>,
+      count: z.number().int().nonnegative(),
+    }),
+  ),
+});
+
 // ---------------------------------------------------------------------------
 // 日誌エントリ
 // ---------------------------------------------------------------------------
@@ -1665,6 +1697,120 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     /** 形と各欄の doc は {@link contextUsageObservationSchema} を見よ。二重に書かない。 */
     contextUsage: contextUsageObservationSchema,
   }),
+  /**
+   * 受信箱（`InboxStore` / `Inbox`）の到着・配達・消し込み・滞留を、ターンの
+   * 境界で1行にして日誌へ残す（Issue #783 段0「測るだけ」）。
+   *
+   * ## なぜ在るか
+   *
+   * #783 が名指しした穴はこうである——**#703 が着地した後に受信箱の重複が
+   * 実際に減ったか**、推移を測る経路がどこにも無い。`describeInboxBacklog`
+   * （`inbox-backlog.ts`）が出す内訳は**その1ターンでクローンが見るだけの
+   * 一過性の文字列**で、どこにも残らない——日誌の `tool_use` 行は `input`
+   * しか持たず、道具の出力を1文字も書かない。⟹ いま在るのはスナップショット
+   * だけで、`journal_read` で辿れる**推移**がどこにも無かった。
+   *
+   * この型は1行が1つの窓（前回この型の行を書いてから今回まで）を語る。
+   * 複数行を時系列に辿れば、到着・配達・消し込みの推移になる。
+   *
+   * ## 4つの軸は、別のものを数えている——食い違いは欠陥ではない
+   *
+   * - **`arrived`** — この窓に `Clone#post` が**受理**した数
+   *   （`clone.ts` の `#remember` ＝ `InboxStore.put` を呼んだ回数）。
+   *   **「受理した瞬間」であって「書けた時刻」ではない**（`post()` の doc
+   *   「受理した時点で未読として書き出す」——書き込み自体は非同期で、失敗
+   *   しても post は落とさない。受理と永続化の成功の間には窓が残る）。
+   * - **`delivered`** — この窓に**メモリ上の待ち行列（`Inbox`）へ実際に
+   *   載った**数（`#inbox.push` の呼び出し回数）。クローンのターンを
+   *   起こしうる数、という意味で `arrived` とは別の軸である。
+   * - **`settled`** — この窓に `#forget`（＝ `InboxStore.remove` が成功した
+   *   回）を通った数。**「ターンが処理し終えて消した」だけを数えていない**
+   *   ——`#forget` は同じ tick の重複を畳んで吸収したとき・拾い直した合図が
+   *   もう意味を持たないと判定して捨てたとき（`inbox-staleness.ts` の
+   *   `restoredInboxEventVerdict`）にも呼ばれる。この欄が答えるのは
+   *   「ストアから消えた回数」であって「ターンで処理された回数」ではない。
+   * - **`pending`** — 窓の**終わりの1点**（`InboxStore.pending()` の戻り値
+   *   そのまま）。窓の中の最大でも平均でもない。
+   *
+   * ## `delivered` が `arrived` / `pending` と食い違う理由（Issue #1049）
+   *
+   * 3つは別のものを数えているので、一致しないことがある。既知の経路:
+   *
+   * - `#restoreUnread`（器の入れ替えを跨いだ拾い直し）が配る分は、**この窓に
+   *   `arrived` していない**のに `delivered` には入る——受理は前の器（か、
+   *   もっと前）の窓で既に数えられていて、いま数えられるのは配達だけである。
+   * - `redeliveryGate` が「いま配る意味が無い」と畳んだ分は `delivered` に
+   *   **入らない**（`#inbox.push` を呼ばない ＝ ターンを起こさない。
+   *   `#foldGatedRedelivery` が跡を残す側）。
+   * - `inbox_remove_many`（`POST /inbox/remove`。`InboxStore.removeMany` を
+   *   直接呼ぶ一括削除）で消えた行が、消えた後もメモリ上の待ち行列に残って
+   *   いれば、**ストアには無いのに `delivered` には数えられる**——Issue
+   *   #1049 はこの経路そのものを疑っている（実測: 02:54:59Z に27件を
+   *   `inbox_remove_many` で消した16分後、そのうち2件に対応する合図が
+   *   「配り直しである（1回目の配達）」として届いた。その間ずっと
+   *   `pending` は「未処理1件」のままだった）。
+   *
+   * ⟹ **読み方**: `delivered` が `arrived` を継続して上回り、かつ `pending`
+   * が小さいままなら、待ち行列（`Inbox`）とストア（`InboxStore`）が食い違って
+   * いる疑いがある（#1049）。**ただしこの行だけでは断定できない**——配達
+   * された行が本当にストアから消えていたか（＝#1049 の核心）は、この行は
+   * 見ていない。見ているのは「メモリ上の待ち行列へ何回載せたか」という数
+   * だけである。
+   *
+   * ## `settled` を数える場所は1箇所（`#forget` の内側）だが、呼び出し元は3箇所ある
+   *
+   * `clone.ts` の `#forget` はここでは唯一の消し込み経路で、そこで1回だけ
+   * 数える（呼び出し元ごとに数えると、1箇所でも足し忘れれば静かに過小評価
+   * になる）。呼び出し元は3つ——同じ tick の重複を畳んで吸収したとき／
+   * ターンが処理し終えたとき（`#settleInboxEvent`）／拾い直した合図が
+   * `stale` と判定されたとき（`#restoreUnread`）。**このうち実際に1ターン
+   * 分の処理をして消したと言えるのは2番目だけである**——それでも欄の名前を
+   * 割らずに1本の `settled` で持たせているのは、この型の目的が「受信箱
+   * ストアの滞留がどれだけ減ったか」であって「ターンが何を処理したか」では
+   * ないため。後者を測る型は別に要るなら、それはこの型の役目ではない。
+   *
+   * ## `delivered` を数える場所は `#inbox.push` の3箇所（`Inbox#unshift` は数えない）
+   *
+   * `post()`（通常の受理経路）／`#postAndWait`（蒸留の割り込み）／
+   * `#restoreUnread`（器を跨いだ拾い直し）。**`Inbox#unshift`（枠の解除で
+   * 保持分を待ち行列の先頭へ戻す経路）は数えに入れない**——戻される合図は
+   * 保持される前に既に一度 `push` で数えられているので、数え直すと枠で
+   * 保持されて後から解除された分だけ二重に計上される。
+   *
+   * ## 窓は永続化しない
+   *
+   * `arrived` / `delivered` / `settled` のカウンタはクローンのインメモリ
+   * 状態で、**器が入れ替わると0から始まる。** だから `windowStartedAt` を
+   * 必ず持たせる——無いと、写した先で「いつからの数か」が消え、器の入れ替え
+   * を跨いだ比較が壊れる。
+   *
+   * ## いつ書くか
+   *
+   * ターンの境界（`case 'turn_ended'`）で毎回1行書く——`context_usage` と
+   * 同じ境界を使う。別の境界を選ぶと、2つの型を突き合わせて読みたいときに
+   * 窓がずれる。**`InboxStore.pending()` が読めなければこの窓は書かない**
+   * （カウンタも戻さない——次のターンへ持ち越せば、この窓ぶんの到着・配達・
+   * 消し込みは失わずに済む。跡は `noteDroppedRecord` が残す）。
+   */
+  z.object({
+    type: z.literal('inbox_flow'),
+    id: z.string(),
+    at: isoDateTime,
+    /** この行が数えた窓の始まり。前回この行を書いた時刻（器が入れ替わった
+     * 直後は器が立ち上がった時刻）。 */
+    windowStartedAt: isoDateTime,
+    /** この窓に `Clone#post` が受理した数（`#remember`）。種類別。 */
+    arrived: inboxFlowByTypeCountSchema,
+    /** この窓にメモリ上の待ち行列（`Inbox`）へ実際に載った数（`#inbox.push`）。種類別。 */
+    delivered: inboxFlowByTypeCountSchema,
+    /** この窓に `#forget`（＝ `InboxStore.remove` の成功）を通った数。種類別。 */
+    settled: inboxFlowByTypeCountSchema,
+    /** 窓の終わりの1点（`InboxStore.pending()` の戻り値そのまま）。 */
+    pending: z.object({
+      count: z.number().int().nonnegative(),
+      oldestAt: isoDateTime.optional(),
+    }),
+  }),
 ]);
 
 export type JournalEntry = z.infer<typeof journalEntrySchema>;
@@ -1712,6 +1858,7 @@ const journalEntryTypeNames = {
   token_rotation: true,
   subagent_stall: true,
   context_usage: true,
+  inbox_flow: true,
 } satisfies Record<JournalEntryType, true>;
 
 export const JOURNAL_ENTRY_TYPES = Object.keys(journalEntryTypeNames) as [
@@ -1948,6 +2095,66 @@ export const commitmentClosedBySchema = z.enum(['clone', 'human']);
 export const commitmentEditedBySchema = z.enum(['clone', 'human']);
 
 /**
+ * その仕事が**どうだったか**（#1054。自己改善の段1）。
+ *
+ * ## なぜ `closedReason` だけでは足りないのか
+ *
+ * `closedReason` は自由記述なので、**数え上げられない** — 「この種類の仕事は
+ * 直近20件でどうだったか」が引けない。PRD「自己改善」が要求する「仕事の結末は
+ * 測られ」は、測った値が**集計できる形**で残ることを含む。
+ *
+ * **`closedReason` を置き換えるものではない。** あちらは「どう片付いたか」
+ * （経緯）で、こちらは「うまくいったか」（良し悪し）である。両方残す。
+ *
+ * ## ⛔ これは「評価基準」ではない。ラベルの**形**である
+ *
+ * 何を `good` とするかは**記憶**にあり、ここには無い（`docs/north_star.md` の
+ * `grep -Fn -- '「何を良い結果とするか」を設定項目や評価項目の一覧で表そうとしていないか' docs/north_star.md`、
+ * および `docs/PRD.md` の「要件: 自己改善」）。**ここに評価項目を増やしていくと、
+ * それが「評価基準の一覧」になり、権限境界が禁じた「行為の一覧」と同じ形になる。**
+ * 軸を足したくなったら、まず `appraisalReason` に同じ軸が繰り返し現れているかを
+ * 見ること。
+ *
+ * ## 3値。`unclear` を落とさないこと
+ *
+ * - `good` — うまくいった
+ * - `bad` — うまくいかなかった
+ * - `unclear` — **見たが判定できない**（材料が無い・どちらとも言える）
+ *
+ * **`unclear` と「欄が無い（まだ評定していない）」は別物である。** 前者は見た
+ * 結果で、後者は見ていない。2値に畳むと、判定できない場合がどちらかへ黙って
+ * 倒れる（AGENTS.md「判定できないという3つ目の状態を持つ」）。そして**未評定を
+ * `good` 側にも `bad` 側にも混ぜない** — 混ぜた瞬間、測っていないことが出力から
+ * 消える（同「取れない軸に 0 の行を作る」）。
+ *
+ * ## 履歴は持たない。持つのは**いまの値**だけである
+ *
+ * 「クローンが `good` と言い、人間が `bad` に覆した」は**日誌**から読む（追記
+ * 専用なので上書きされない）。行の側に履歴を積むと、台帳の1行が伸び続ける。
+ * これは `MemoryProtectionStatus` と同じ非対称で、**実体は日誌にあり、ここに
+ * 在るのはその時点の値**である。
+ */
+export const appraisalSchema = z.enum(['good', 'bad', 'unclear']);
+export type AppraisalValue = z.infer<typeof appraisalSchema>;
+
+/**
+ * 評定を**誰が付けたか**。
+ *
+ * **`commitmentClosedBySchema` / `commitmentEditedBySchema` と値は同じ
+ * （`'clone' | 'human'`）だが、別の enum として置く。** 書き手ごとの規則が違う
+ * ためである — `editedBy` は「書き換えられるのは常に自分自身の言葉だけ」という
+ * 線を持つが（`commitmentEditedBySchema` の doc）、**評定はどの行にも両者が
+ * 付けられる。人間がクローンの評定を覆せることが要件そのものである**（#1054）。
+ * 共用すると、片方の線を動かしたときにもう片方が黙って一緒に動く。
+ *
+ * **保存された行を読む側（`commitmentSchema.appraisedBy`）はこの enum を直接
+ * 使わない。** 理由は `commitmentClosedBySchema` の doc と全く同じである — 未知の
+ * enum 値1つで台帳の一覧が丸ごと読めなくなる側へ倒さない。
+ */
+export const appraisedBySchema = z.enum(['clone', 'human']);
+export type AppraisedBy = z.infer<typeof appraisedBySchema>;
+
+/**
  * 引き受けたまま終わっていない仕事1件（PRD「自律」の器を、単発の依頼へ広げたもの）。
  *
  * **なぜ受信箱と日誌だけでは足りないか。** 受信箱の未読はプロセスが死んでも残るが、
@@ -2064,6 +2271,38 @@ export const commitmentSchema = z.object({
    * **`origin: 'manager'` 以外では立たない。** `commitmentFor` の他の
    * `case` は `bodyMarkup` を書かないので、`undefined` のままである。
    */
+  /**
+   * **いまの評定**（#1054。`appraisalSchema` の doc に3値の意味と、
+   * なぜ履歴をここに積まないかが書いてある）。
+   *
+   * **無いことは「まだ評定していない」であって、「普通」でも「良くない」でも
+   * ない。** 数えるときに `good` 側にも `bad` 側にも寄せないこと。
+   *
+   * **型は `z.string()` で緩く持つ**（`closedBy` / `bodyMarkup` と同じ理由 —
+   * 未知の値1つで台帳の一覧が丸ごと読めなくなる側へ倒さない）。書き込み側は
+   * `CommitmentStore.appraise` の引数の型で `appraisalSchema` に
+   * 縛ってあるので、**この器が書く値は3つに限られる。**
+   */
+  appraisal: z.string().optional(),
+  /** 評定を付けた（または覆した）時刻。評定が在れば必ず在る。 */
+  appraisedAt: isoDateTime.optional(),
+  /**
+   * 評定を**誰が付けたか**（既知の値は `appraisedBySchema`）。
+   *
+   * **人間がクローンの評定を覆すと、この欄は `'human'` になる。** 覆される前に
+   * クローンが何と言っていたかは**日誌**に残る（追記専用）— 評価する側を較正
+   * する材料はそちらにあり、ここではない（`docs/PRD.md`「要件: 自己改善」の
+   * 「評価する側も誤りうる前提で作る」）。
+   */
+  appraisedBy: z.string().optional(),
+  /**
+   * 評定の理由（1行）。
+   *
+   * **`closedReason` とは別の欄である。** あちらは「どう片付いたか」で、
+   * こちらは「なぜその評定なのか」である。**軸を足したくなったらここを先に
+   * 読むこと**（`appraisalSchema` の doc）。
+   */
+  appraisalReason: z.string().optional(),
   bodyMarkup: z.string().optional(),
   /**
    * `body` を最後に直した時刻。編集していなければ無い。
@@ -2181,6 +2420,93 @@ export type UnreadableCommitment = z.infer<typeof unreadableCommitmentSchema>;
  */
 export function commitmentUpdatedAt(entry: Pick<Commitment, 'at' | 'closedAt'>): string {
   return entry.closedAt ?? entry.at;
+}
+
+/**
+ * 評定を書いた日誌行（`type: 'decision'`）の先頭に必ず置く印（#1054）。
+ *
+ * **なぜ専用の日誌の種類（`journalEntrySchema` の新しい枝）にしないのか。**
+ * 段1で要るのは「覆した事実が残り、**読める**こと」までで、数え上げは段4の
+ * 較正が要求する（#1055）。専用の枝を足すと、この repo の4箇所の分岐
+ * （`tools.ts` / `dropped-record.ts` / `apps/web` の2つ）を同時に開けることに
+ * なり、段1の範囲を越える。
+ *
+ * **先例がある。** `distill-gap.ts` の `DISTILL_SUCCEEDED_DECISION_PREFIX` が
+ * 同じ形で、`decision` の本文の先頭一致で拾っている。
+ *
+ * ⚠️ **段4でここを専用の枝へ格上げするときは、この定数の参照を全部辿ること。**
+ * 先頭一致は型では守られない —— 文言を変えた瞬間に、過去の行が拾えなくなる。
+ */
+export const COMMITMENT_APPRAISAL_DECISION_PREFIX = '引き受けた仕事に評定を付けた';
+
+/**
+ * 評定の3値の日本語ラベル。**字面の生成元はここ1箇所である** —— MCP の説明文・
+ * 一覧の1行・画面のボタンが同じ語で呼ぶ。
+ *
+ * **`Record<AppraisalValue, string>` にしてあるので、値を1つ足すと
+ * `tsc` がここで落ちる。** 落ちない形（`Partial` や添字アクセス）にすると、
+ * 足した値だけラベルが無いまま画面に生の `appraisal` が出る —— それは
+ * `MemoryProtectionStatus` の網羅性を `never` で強制しているのと同じ理由で
+ * 避ける。
+ */
+export const APPRAISAL_LABELS: Record<AppraisalValue, string> = {
+  good: 'うまくいった',
+  bad: 'うまくいかなかった',
+  unclear: '判定できない',
+};
+
+/**
+ * 委譲に評定を書いた日誌行（`type: 'decision'`）の先頭に必ず置く印（#1054）。
+ *
+ * **台帳の `COMMITMENT_APPRAISAL_DECISION_PREFIX` とは別の印である。** 同じ印に
+ * すると、段2（同じ種類の仕事の直近 N 件を束ねる）で「台帳の行の評定」と「委譲の
+ * 評定」が同じ束に混ざる —— 片方は人間との約束の始末で、もう片方はマネージャーに
+ * 出した仕事の出来なので、**数え上げの分母が別物になる。**
+ *
+ * 専用の日誌の枝にしない理由は台帳側と同じ（`COMMITMENT_APPRAISAL_DECISION_PREFIX`
+ * の doc）。
+ */
+export const JOB_APPRAISAL_DECISION_PREFIX = '委譲に評定を付けた';
+
+/**
+ * 評定を1行の字面にする（#1054）。**評定が無ければ `null` —— 1文字も増やさない。**
+ *
+ * **字面の生成元はここ1箇所である。** MCP（`tools.ts`）・HTTP の応答を描く画面
+ * （`apps/web/app/routes/commitments.tsx`）・CLI（`apps/cli/src/chat.ts`）の3面が
+ * これを呼ぶ。`commitmentUpdatedAt` と同じ理由でここへ寄せてある（導出が各実装の
+ * 側にあると、書き忘れても何も落ちない）。
+ *
+ * **`null` を返すことが「未評定」の表し方である。** 一覧に「未評定」と刷らないのは
+ * 文字数の予算のためで（`excerpt.ts` の約束。`digest.ts` の `describeUnobservedOutcome`
+ * が健全な委譲で `null` を返すのと同じ判断）、**印が無い＝まだ評定していない**を
+ * 読み手の側の規則にする。⚠️ **この規則は、呼ぶ側が道具の説明・画面の凡例に
+ * 書いておくこと** —— 書かないと「未評定」と「良い」が同じ顔で並ぶ。
+ *
+ * **未知の値は捨てずにそのまま出す。** 保存層は `z.string()` で緩く持っているので
+ * （`commitmentSchema.appraisal` の doc）、将来の書き手が増えた値がここへ来うる。
+ * 落とすと、読み手には未評定と区別が付かなくなる。
+ */
+/**
+ * 評定を持つもの（台帳の1行・委譲の1本）が最低限そなえる欄。**構造で受ける** ——
+ * `Commitment` と `Job` のどちらも通るようにするためで、どちらかを名指しすると
+ * もう一方が同じ字面を別の関数で作ることになる（この repo が「導出が各実装の側に
+ * あって、書き忘れても何も落ちない」形で繰り返し踏んだもの。`commitmentUpdatedAt`
+ * の doc）。
+ */
+export interface AppraisedEntry {
+  appraisal?: string;
+  appraisedBy?: string;
+  appraisalReason?: string;
+}
+
+export function describeAppraisal(entry: AppraisedEntry): string | null {
+  if (entry.appraisal === undefined) return null;
+  // 未知の値はラベルが無いので、生の値をそのまま出す（落とさない）。
+  const known = appraisalSchema.safeParse(entry.appraisal);
+  const label = known.success ? APPRAISAL_LABELS[known.data] : entry.appraisal;
+  const by = entry.appraisedBy === undefined ? '' : `・${entry.appraisedBy}`;
+  const reason = entry.appraisalReason === undefined ? '' : `: ${entry.appraisalReason}`;
+  return `評定: ${label}（${entry.appraisal}${by}）${reason}`;
 }
 
 /**
@@ -2663,6 +2989,38 @@ export const jobSchema = z.object({
    */
   lastReportAt: z.string().optional(),
   /**
+   * **その委譲がどうだったか**（#1054。自己改善の段1の後半）。値の意味・4状態の
+   * 数え方・なぜ履歴をここに積まないかは `appraisalSchema` の doc が持つ
+   * （台帳の `Commitment.appraisal` と**同じ軸・同じ3値**である）。
+   *
+   * ## ⚠️ `status` とは別の軸である。混ぜないこと
+   *
+   * `status` の終端4値（`done` / `failed` / `lost` / `stopped`）が答えるのは
+   * **どう終わったか**であって、**良かったか**ではない —— `done` は「マネージャーの
+   * セッションが終わった」の意味でしかない（#1054 の出発点そのもの）。
+   *
+   * **とくに `digest.ts` の `judgement`（`isManagerAwaitingJudgement`）と取り違え
+   * ないこと。** あちらは `lost` 1値を指す語で、意味は**「終わったかどうかを観測
+   * していない」** —— この欄とはほぼ正反対である。
+   *
+   * ## 書く経路は1つだけ（`ManagerPool.appraise`）
+   *
+   * **`JobStore` へ直に書かないこと。** 走行中の委譲の `Job` は `ManagerPool` が
+   * プロセス内の像として握っていて、`#persist` は `record.job` を丸ごと書く ——
+   * 外から1欄だけ足すと**次の `#persist` が黙って踏み消す。** 所有者を通す理由は
+   * `ManagerPool.appraise` の doc に在る。
+   */
+  appraisal: z.string().optional(),
+  /** 評定を付けた（または覆した）時刻。評定が在れば必ず在る。 */
+  appraisedAt: isoDateTime.optional(),
+  /**
+   * 評定を**誰が付けたか**（既知の値は `appraisedBySchema`）。人間がクローンの
+   * 評定を覆すとここが `'human'` になり、覆される前の値は**日誌**に残る。
+   */
+  appraisedBy: z.string().optional(),
+  /** 評定の理由（1行）。**`lastReport` とは別の欄である**（あちらは委譲側の報告）。 */
+  appraisalReason: z.string().optional(),
+  /**
    * 直近の報告が**報告ではなく失敗**だったこと（SDK が「これは応答ではない」と
    * 言った回）。応答として終わった回では消える。
    *
@@ -2734,6 +3092,32 @@ export const jobSchema = z.object({
    * 回では消える」のと同じ理由。下ろす条件は `case 'report'` 側の doc）。
    */
   lastSystemError: systemErrorFactsSchema.extend({ at: isoDateTime }).optional(),
+  /**
+   * この委譲が**枠（利用上限）で止まった**印が立った時刻（Issue #914 段2）。
+   *
+   * `manager.ts` の `case 'usage_notice'`（`event.notice.kind === 'reached'`）が
+   * 立て、{@link Pool.resumeStoppedByUsage}（の `#clearUsageStoppedMark`
+   * ヘルパー経由）が消費して下ろす——**プロセス内の `#usageStopped`（`Set`）の
+   * 永続化された側**である。
+   *
+   * ## なぜ台帳にも要るか
+   *
+   * `#usageStopped` は `Set<string>` なのでデーモンが作り直されると消える。
+   * 消えて困るのは「起こし直す相手を1本忘れる」ことだが、**この欄が無かった
+   * 頃**は、デーモンが入れ替わった時点で台帳が `done` / `failed` / `lost` の
+   * 委譲は誰にも起こされないまま座り続けた（起動時の引き取り `#restoreJobs`
+   * は `running` / `waiting_human` だけを続きへ戻すので、既に終端している
+   * 委譲はそもそも対象に入らない）。この欄が `#restoreJobs` の写しとして
+   * 生き残ることで、次の起動でも `#usageStopped` を組み直せる。
+   *
+   * ## `undefined` の意味は2つある
+   *
+   * この仕組みより前に作られたジョブ（保存は Job 丸ごとの JSON なので移行は
+   * 要らないが、古い行にこの欄は無い）と、単に止まっていないジョブの両方が
+   * `undefined` になる。**見分ける必要は無い**——どちらも「起こし直す対象では
+   * ない」という同じ結論になるためである。
+   */
+  usageStoppedAt: isoDateTime.optional(),
 });
 
 export type Job = z.infer<typeof jobSchema>;

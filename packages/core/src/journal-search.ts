@@ -113,6 +113,13 @@ const SEARCHABLE_FIELDS_BY_TYPE = {
   turn_usage: [],
   /** 同上（`context_usage.contextUsage.error` も同じ理由でネストしているため対象外）。 */
   context_usage: [],
+  /**
+   * 自由文の欄を持たない——`arrived` / `delivered` / `settled` / `pending` は
+   * すべて数と種別の列挙（`inboxFlowByTypeCountSchema` の `type` は
+   * `InboxEvent['type']` の列挙で、上の「識別子・列挙値の欄」の線に当たる）
+   * で、素の文字列の自由記述を持たない（`schema.ts` の `inbox_flow` の doc）。
+   */
+  inbox_flow: [],
 } as const satisfies Record<JournalEntryType, readonly string[]>;
 
 /**

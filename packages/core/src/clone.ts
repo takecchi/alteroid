@@ -46,7 +46,11 @@ import {
   DAEMON_TOKEN_POOL_REOPENED_SOURCE,
   isDaemonSelfNotice,
 } from './daemon-self-notice.js';
-import { inboxBacklogDedupeKey, inboxCollapseKey } from './inbox-backlog.js';
+import {
+  inboxBacklogDedupeKey,
+  inboxCollapseKey,
+  INBOX_EVENT_TYPE_ORDER,
+} from './inbox-backlog.js';
 import {
   inboxEventShape,
   journalEntryShape,
@@ -54,6 +58,7 @@ import {
   noteDroppedInboxEvent,
   noteDroppedRecord,
   noteUnreadableRecord,
+  reasonOf,
 } from './dropped-record.js';
 import type { CloneHost } from './host.js';
 import { createRunnerRegistry, type RunnerClient } from './runner-protocol.js';
@@ -296,6 +301,33 @@ export function resolveCloneHumanPriority(env: NodeJS.ProcessEnv = process.env):
  */
 export function isHumanOriginated(event: InboxEvent): boolean {
   return event.type === 'human_message' || event.type === 'human_answer';
+}
+
+/**
+ * 受信箱の流量（Issue #783 段0）の生カウンタを、日誌の `inbox_flow` が持つ
+ * `{ total, byType }` の形に整える純関数。
+ *
+ * **0件の型は載せない。足すと必ず `total` に一致する**
+ * （`inbox-backlog.ts` の `byType` と同じ作法——`counts` に無い型を作らないので、
+ * 算術で「省いた型は0だった」と読める）。
+ *
+ * **並びは `order` が決める。** 呼び出し側（`Clone#writeInboxFlow`）は
+ * `INBOX_EVENT_TYPE_ORDER`（`inbox-backlog.ts`）を渡し、`journal_read` で
+ * 複数行を並べたときに型の順序が揺れないようにする。
+ *
+ * 副作用を持たない——数える場所（`#remember` / `#inbox.push` / `#forget`）
+ * とここを分けてあるので、足場を組まずにこの整形だけを直接検算できる
+ * （`inbox-backlog.ts` と同じ「判定と副作用を分ける」作法）。
+ */
+export function buildInboxFlowCount(
+  counts: ReadonlyMap<InboxEvent['type'], number>,
+  order: readonly InboxEvent['type'][],
+): { total: number; byType: { type: InboxEvent['type']; count: number }[] } {
+  const byType = order
+    .map((type) => ({ type, count: counts.get(type) ?? 0 }))
+    .filter((entry) => entry.count > 0);
+  const total = byType.reduce((sum, entry) => sum + entry.count, 0);
+  return { total, byType };
 }
 
 /** 環境変数を見てクローンの権限モードを決める。空・空白なら既定（`auto`）。 */
@@ -936,6 +968,41 @@ type TurnOutcome =
       heldForUsage: boolean;
     };
 
+/**
+ * `Clone#commit`（1件の合図を台帳へ開こうとする内部処理）が実際に何をしたか。
+ *
+ * **Issue #856 で足した。** 台帳を読み直しても id が見当たらないとき、
+ * `'folded'`（Issue #954 提案3・`hasOpenManagerDuplicate` の重複判定で、開く前に
+ * 既存行へ任せた——正常系）と、`'failed'`（`open()` 自体が例外を投げた）を
+ * 区別できないと、`#commitmentNoticeFor` は前者まで「載せ損なった」として
+ * 断ることになり、畳んだだけのターンにも毎回嘘の警告が出る。逆に区別を
+ * 持たなければ後者を`'folded'`と取り違えて黙って見逃す——どちらの取り違えも
+ * 許さないために、値として持たせてある。
+ *
+ * **`'existed'` は Issue #856 のレビューで追加した4つ目の値である。**
+ * `CommitmentStore.open` は `boolean` を返す（`store.ts` の doc「同じ id が
+ * 既に在れば何もしない（開いたら `true`）」）——**この戻り値を捨てて例外の
+ * 有無だけで `'opened'` / `'failed'` に振り分けると、`open()` が `false`
+ * （＝既に在ったので何もしなかった）を返した回まで `'opened'` と記録される。**
+ * `open()` の doc が名指しで警告している事故そのもの（受信箱の合図は配り
+ * 直されうるので、その id をそのまま使う自動 open は同じ id で二度呼ばれる）
+ * が起きたとき——**二度目の呼びは `false` を返す**——それを `'opened'` と
+ * 記録すると、`#commitmentNoticeFor` は再読した一覧（未了だけ）にその id が
+ * 無いことを「載せ損なった」と誤って断り、「`commitment_open` で載せ直せ」と
+ * 促す。**促した先の `commitment_open` はまた `open()` を呼ぶだけなので、
+ * 一度片付けた仕事が配り直しのたびに開き直る**——`open()` の doc が警告する
+ * まさにその事故がここから起きる。
+ *
+ * **`'folded'` と `'existed'` は意味が違う。** `'folded'` は `open()` を呼ぶ
+ * 前に（`hasOpenManagerDuplicate` で）**呼ばないと決めた**——台帳には手を
+ * 触れていない。`'existed'` は `open()` を実際に呼んだが、**呼んだ先が「既に
+ * 在る」と答えた**——行が開いているか閉じているかは問わない（`open()` の
+ * 契約はどちらも区別せず `false` を返す）。**どちらも「載せ損なった」ではない
+ * ので `#commitmentNoticeFor` の `missing` からは同じく除くが、除く理由は
+ * 別である。**
+ */
+type CommitOutcome = 'opened' | 'existed' | 'folded' | 'failed';
+
 export function createClone(options: CloneOptions): CloneHost {
   return new Clone(options);
 }
@@ -1207,6 +1274,22 @@ class Clone implements CloneHost {
   readonly #listeners = new Map<string, Set<Listener>>();
   /** 受信箱に積んだイベントの処理完了を待つための約束。 */
   readonly #completions = new Map<string, () => void>();
+
+  /**
+   * 受信箱の到着・配達・消し込みの窓を測るカウンタ（Issue #783 段0）。
+   *
+   * **永続化しない。** 器が入れ替わると0から始まる——`#writeInboxFlow` が
+   * 書く `windowStartedAt` が、いつからの数かを常に添えるので、写した先で
+   * 「この窓の長さ」が消えることはない。
+   *
+   * 3本に分けているのは、数える場所がそれぞれ別だからである
+   * （`arrived` は `#remember`、`delivered` は `#inbox.push` の3箇所、
+   * `settled` は `#forget`。`schema.ts` の `inbox_flow` の doc）。
+   */
+  #inboxFlowWindowStartedAt = new Date().toISOString();
+  readonly #inboxFlowArrived = new Map<InboxEvent['type'], number>();
+  readonly #inboxFlowDelivered = new Map<InboxEvent['type'], number>();
+  readonly #inboxFlowSettled = new Map<InboxEvent['type'], number>();
 
   /**
    * 枠（利用上限）が閉じていると分かっているときの理由。`null` なら閉じていない。
@@ -1486,8 +1569,18 @@ class Clone implements CloneHost {
    * 短いターンでは `commitment_close` が open を追い越し、**クローンが閉じたつもりの
    * 未了が後から開いて残り続ける**。順序を見るためだけのもので、書けたかどうかは
    * ターンの条件にしない。
+   *
+   * **Issue #856 で `Promise<void>` から `Promise<CommitOutcome>` へ広げた。**
+   * かつては「待ち終えたかどうか」しか見えず、`#commitmentNoticeFor` は
+   * `list()` を読み直して見つかった id だけを名乗っていた——**見つからなかった
+   * 理由**（#1035 の重複として意図的に畳んだのか、`open()` が「既に在る」と
+   * 答えたのか、書き込みそのものが失敗したのか）は、この約束の中身からは
+   * 区別できなかった。いまは `#commit` が自分の分岐（畳んだ／既に在った／
+   * 開けた／落ちた）をそのまま値として返すので、`#commitmentNoticeFor` は
+   * 「畳んだ・既に在ったから見つからない（どちらも正常）」と「載せ損なったのに
+   * 見つからない（異常）」を区別できる。
    */
-  readonly #committed = new Map<string, Promise<void>>();
+  readonly #committed = new Map<string, Promise<CommitOutcome>>();
   /**
    * いま処理している合図の未了 id と、台帳の全体像。ターンの本文の先頭に載る。
    *
@@ -2041,6 +2134,10 @@ class Clone implements CloneHost {
     // **走行中のターンは止めない。** 止めれば掛かった分が捨てられる。できるのは
     // 「次に読むものを人間にする」までで、人間の待ちは「いま回っているターンの
     // 残り」に縮む（それ以上は縮まない）。
+    // **`delivered`（Issue #783 段0）はここで数える。** メモリ上の待ち行列へ
+    // 実際に載った回であり、`arrived` とは別の軸（`schema.ts` の `inbox_flow`
+    // の doc）。
+    this.#bumpInboxFlow(this.#inboxFlowDelivered, event.type);
     this.#inbox.push(
       event,
       this.#humanPriority && isHumanOriginated(event) ? isHumanOriginated : undefined,
@@ -2283,6 +2380,11 @@ class Clone implements CloneHost {
     if (this.#stopped || this.#inbox.closed) return Promise.resolve();
     return new Promise<void>((resolve) => {
       this.#completions.set(event.id, resolve);
+      // `delivered`（Issue #783 段0）。この経路（蒸留の割り込み）は `#remember`
+      // を通らないので、この event は `arrived` には数えられない——蒸留は
+      // `stores.inbox.put` の対象ですらない（`#forget` の doc「器に置いて
+      // いない合図（`#postAndWait` の蒸留）は消すものが無い」）。
+      this.#bumpInboxFlow(this.#inboxFlowDelivered, event.type);
       this.#inbox.push(
         event,
         interrupt && this.#humanPriority
@@ -3329,6 +3431,11 @@ class Clone implements CloneHost {
   // 未読の永続化（プロセスが死んでも判断の材料を失わない）
   // -------------------------------------------------------------------------
 
+  /** `#inboxFlow*` の Map を1件だけ増やす（Issue #783 段0）。 */
+  #bumpInboxFlow(counter: Map<InboxEvent['type'], number>, type: InboxEvent['type']): void {
+    counter.set(type, (counter.get(type) ?? 0) + 1);
+  }
+
   /**
    * `post()` が受理した合図を、`#pendingCollapse`（同アイテムの doc）に
    * 照らして畳んでよいか判定し、畳めたならその場で片付ける。
@@ -3504,8 +3611,13 @@ class Clone implements CloneHost {
    * （本文を出さない理由は `dropped-record.ts`。ここへ来る合図には人間の発言・
    * webhook の本文・マネージャーの報告が入り、テスト出力（`railway/setup.test.ts`
    * の差分アサーション）に `GH_TOKEN` が全文で出た前例がある。#52）。
+   *
+   * **`arrived`（Issue #783 段0）はここで、書き込みの成否を問わずに数える。**
+   * `inbox_flow.arrived` の doc が言う「受理した瞬間であって書けた時刻ではない」
+   * を体現している場所そのもの——`.catch` の中ではなく関数の入口で数える。
    */
   #remember(event: InboxEvent): void {
+    this.#bumpInboxFlow(this.#inboxFlowArrived, event.type);
     this.#unread.set(
       event.id,
       this.#stores.inbox.put(event, event.at).catch((error: unknown) => {
@@ -3608,7 +3720,29 @@ class Clone implements CloneHost {
    * 重複を見逃すより高くつく（`#stores.commitments.open` 自体の失敗は、直後の
    * `.then` の失敗経路がこれまでどおり拾う）。
    *
-   * **失敗しても post を落とさない**（`#remember` と同じ理由。跡は stderr へ1行）。
+   * **失敗しても post を落とさない**（`#remember` と同じ理由。跡は stderr へ1行、
+   * かつ #856 以降は日誌にも1行——下の分岐を見よ）。
+   *
+   * **戻り値（{@link CommitOutcome}）は Issue #856 で足した。** 台帳を実際に
+   * 開けたか（`'opened'`）、`open()` を呼んだが既に在ったか（`'existed'`）、
+   * 開く前に畳んだか（`'folded'`）、開こうとして落ちたか（`'failed'`）を
+   * 区別して `#committed` に残す。**区別する理由は `#commitmentNoticeFor` 側に
+   * ある** — 再読した台帳に id が見当たらないとき、「畳んだから見当たらない
+   * （既存行に任せた——正常）」「既に在ったから見当たらない（`open()` の
+   * 冪等性そのもの——正常。配り直された合図が閉じた行に当たった場合を含む）」
+   * と「載せ損なったから見当たらない（異常）」を見分けられないと、前2つを
+   * 黙って「載せ損なった」と誤って断ることになる。
+   *
+   * **`'existed'` を区別しないと何が起きるか（Issue #856 のレビューで見つかった
+   * 欠陥）。** `CommitmentStore.open` は `boolean` を返す——`false` は
+   * 「同じ id が既に在ったので何もしなかった」を意味する（`store.ts` の doc）。
+   * この戻り値を見ずに「例外を投げなければ `'opened'`」と一律に記録すると、
+   * **配り直された合図が既に閉じている行に当たったとき**（`open()` は
+   * `false` を返す）も `'opened'` と記録され、`#commitmentNoticeFor` は
+   * 再読した一覧（未了だけ）にその id が無いことを「載せ損なった」と誤って
+   * 断る。断り書きは `commitment_open` で載せ直すことを促すが、**それは
+   * `open()` をもう一度呼ぶだけ**——`open()` の doc が名指しで警告している
+   * 事故（一度片付けた仕事が配り直しのたびに開き直る）がそのまま起きる。
    */
   #commit(event: InboxEvent): void {
     const entry = commitmentFor(event);
@@ -3621,12 +3755,27 @@ class Clone implements CloneHost {
           (list) => hasOpenManagerDuplicate(list.entries, entry),
           () => false,
         )
-        .then((duplicate) => {
-          if (duplicate) return undefined;
+        .then((duplicate): Promise<CommitOutcome> | CommitOutcome => {
+          if (duplicate) return 'folded';
           return this.#stores.commitments.open(entry).then(
-            () => undefined,
-            (error: unknown) => {
+            (opened): CommitOutcome => (opened ? 'opened' : 'existed'),
+            (error: unknown): Promise<CommitOutcome> => {
               noteDroppedRecord('未了の記帳', inboxEventShape(event), error);
+              // **Issue #856 (B)。** `noteDroppedRecord` の跡は stderr の1行
+              // だけで、クローンはこれを読む手段を持たない（`dropped-record.ts`
+              // の doc）。`noteDroppedRecord` 自身の「本文を出さない」契約は
+              // 変えず、ここから別に日誌へも1件残す——`#journal` は
+              // best-effort で失敗を吸収するので、これが失敗しても post は
+              // 落ちない（`#journal` の doc）。
+              return this.#journal({
+                type: 'exchange',
+                with: 'self',
+                role: 'outbound',
+                text:
+                  `未了の記帳に失敗した（id: ${event.id}）。台帳に載っていない可能性が` +
+                  'あるので、必要なら `commitment_open` で載せ直すこと' +
+                  `（理由: ${reasonOf(error)}）。`,
+              }).then((): CommitOutcome => 'failed');
             },
           );
         }),
@@ -3674,7 +3823,17 @@ class Clone implements CloneHost {
     // この合図の記帳が済んでから読む（読んだ一覧に自分が居ないことを防ぐ）。
     // **まとめて読む分は全部待つ** — 1件でも飛ばすと、そのぶんだけが一覧に
     // 間に合わず、閉じ方（id）を渡せない未了が黙って混じる。
-    for (const pending of events) await this.#committed.get(pending.id);
+    //
+    // **Issue #856。** 待つだけでなく、`#commit` が実際に何をしたか
+    // （{@link CommitOutcome}）も控える——`commitmentFor` が非 null を返す
+    // 合図（＝台帳を開くつもりだった合図）だけがここに載る。載らない合図
+    // （`commitmentFor` が最初から `null` を返す型・`isDaemonSelfNotice`）は
+    // 台帳と無関係なので、後段の「載っていない」判定からも除かれる。
+    const outcomes = new Map<string, CommitOutcome>();
+    for (const pending of events) {
+      const outcome = await this.#committed.get(pending.id);
+      if (outcome !== undefined) outcomes.set(pending.id, outcome);
+    }
 
     // **`list()` は `CommitmentList`（`{ entries, unreadable }`）を返す
     // （issue #296）。`entries` のことをここでは従来どおり `open` と呼ぶが、
@@ -3701,6 +3860,30 @@ class Clone implements CloneHost {
       mine.map((entry) => `\`${entry.id}\``).join(', '),
       CLONE_ID_LIST_EXCERPT,
     );
+    // **Issue #856 受け入れ基準2。** 台帳を開くつもりだった合図
+    // （`outcomes.has(...)`）が、再読した一覧（`mine`）に見当たらないとき、
+    // 黙って消さない——ただし `'folded'`（Issue #954 提案3。開く前に既存行へ
+    // 任せた——台帳としては正常）と `'existed'`（`open()` を呼んだが「既に
+    // 在る」と答えた——`CommitmentStore.open` の冪等性そのもの。配り直された
+    // 合図が既に閉じている行に当たった場合を含む）は除く。**この2つは
+    // `open()` 自身が「台帳には触っていない」「もう手当て済み」と言っている
+    // ので、除かずに「載っていない」と断ると、重複を畳んだだけ・既に片付いた
+    // だけの正常なターンにも毎回嘘の警告が出る**（後者を除かなかった場合の
+    // 事故は {@link CommitOutcome} の doc）。
+    const mineIds = new Set(mine.map((entry) => entry.id));
+    const missing = events.filter((pending) => {
+      const outcome = outcomes.get(pending.id);
+      return (
+        outcome !== undefined &&
+        outcome !== 'folded' &&
+        outcome !== 'existed' &&
+        !mineIds.has(pending.id)
+      );
+    });
+    const missingIdList = excerptLine(
+      missing.map((pending) => `\`${pending.id}\``).join(', '),
+      CLONE_ID_LIST_EXCERPT,
+    );
     const oldest = open[0];
     const lines = [
       `[system] 引き受けたまま終わっていない仕事は（${readAtLabel(at)} に数えた材料）` +
@@ -3715,6 +3898,26 @@ class Clone implements CloneHost {
                 '**まとめて1つの応答で答えても、閉じるのは id ごとである。**') +
               '**片付いたら `commitment_close` で閉じること** — 返事をしただけでは閉じない。' +
               '雑談や、その場で答えて終わる話なら、答えたうえですぐ閉じてよい。',
+          ]),
+      // **Issue #856 受け入れ基準2。** 載せるつもりで載らなかった合図を、
+      // ここで名指しで断る。**「畳んだ」「既に在った」（上の `missing` の
+      // doc）はここに出ない** — 対象は「書き込みが失敗した」か「書けたはずが
+      // 読み直しても見当たらない」のどちらかだけである。後者は #856 本体の
+      // 症状そのもの——機序は特定できていないので「直った」とは言わないが、
+      // 発生すればここで必ず名乗る。
+      //
+      // **分母は `outcomes.size`（台帳を開くつもりだった合図の数）である。**
+      // `events.length` を分母にしていた版が誤り——`events` には
+      // `commitmentFor` が最初から `null` を返す型・`isDaemonSelfNotice` の
+      // ような、台帳と無関係な合図も混じる。それらは `outcomes` に載らない
+      // （上の `outcomes` を組む doc）ので、`events.length` を使うと母数が
+      // 実際より大きくなり、「このうち何件」の比率が薄まって嘘になる。
+      ...(missing.length === 0
+        ? []
+        : [
+            `**⚠️ 台帳を開くつもりだったこの ${outcomes.size} 件のうち ${missing.length} 件は` +
+              `台帳に載っていない（id: ${missingIdList}）。重複として畳んだのでも、既に在った` +
+              'のでもない。** **載せ直しが要る**（`commitment_open` で開き直すこと）。',
           ]),
       // **読めない行が在ることを、ここでも断る（issue #296）。** `open.length`
       // には読めない行は数えられていない（`entries` だけの件数）ので、
@@ -4038,6 +4241,11 @@ class Clone implements CloneHost {
         // その合図が次の起動で配り直される側なので、索引に残しておくほうが
         // 正しい（残しておけば、そのあいだに届く同文はこの行へ畳まれる）。
         this.#dropPendingCollapse(event);
+        // **`settled`（Issue #783 段0）。成功した回だけ1回数える** —— この
+        // `for` は失敗を再試行するが、`return` するのはここだけなので、
+        // 同じ event で2回数えることは無い（`schema.ts` の `inbox_flow` の
+        // doc「`settled` を数える場所は1箇所」）。
+        this.#bumpInboxFlow(this.#inboxFlowSettled, event.type);
         return;
       } catch (error) {
         last = error;
@@ -4235,6 +4443,12 @@ class Clone implements CloneHost {
       // それでも `post` が効かせている人間優先（`insertAfterLast`）まで
       // 一緒に落としてはいけない——`post` を通さない選択は「畳み込み」だけを
       // 避けるためのもので、割り込みの規則まで避ける理由にはならない。
+      //
+      // **`delivered`（Issue #783 段0。Issue #1049 が名指しした軸）。** ここは
+      // 器の入れ替えを跨いだ拾い直しなので、**この窓に `arrived` していない**
+      // ものが `delivered` に入る（`schema.ts` の `inbox_flow` の doc「`arrived`
+      // / `pending` と食い違う理由」）。
+      this.#bumpInboxFlow(this.#inboxFlowDelivered, record.event.type);
       this.#inbox.push(
         record.event,
         this.#humanPriority && isHumanOriginated(record.event) ? isHumanOriginated : undefined,
@@ -7523,6 +7737,13 @@ class Clone implements CloneHost {
           });
         }
 
+        // **受信箱の流量（Issue #783 段0）も、同じターンの境界で1行書く。**
+        // `context_usage` と同じ境界を使う——`event.succeeded` を見る前、
+        // ターンの成否・消費の増分の有無とは無関係に毎回呼ぶ（そうしないと
+        // `journal_read` で辿れる推移に穴が空く。`schema.ts` の `inbox_flow`
+        // の doc「いつ書くか」）。
+        await this.#writeInboxFlow();
+
         // **このターンの間に起きた compaction を取り出す。** `this.#turn` は
         // `#finishTurn()` が呼ばれるまでこの後も生きているので、ここで読んでも
         // 消えない（畳むのは `#finishTurn()` が `this.#turn = null` にする形
@@ -7703,6 +7924,46 @@ class Clone implements CloneHost {
         return;
       }
     }
+  }
+
+  /**
+   * 受信箱の到着・配達・消し込み・滞留を、ターンの境界で1行にして日誌へ残す
+   * （Issue #783 段0。欄の意味は `schema.ts` の `inbox_flow` の doc）。
+   *
+   * **`InboxStore.pending()` が読めなければこの窓は書かない。カウンタも
+   * 戻さない** — 次のターンへ持ち越せば、この窓ぶんの到着・配達・消し込みは
+   * 失わずに済む（`windowStartedAt` が正しく「その分だけ長くなった窓」を
+   * 名乗る）。跡は `noteDroppedRecord` が残す（`#situationNoticeFor` の
+   * `pending()` の扱いと同じ向き——読めないことでターンは落とさない）。
+   *
+   * **日誌への追記自体は `#journal` が best-effort で引き受ける**（失敗しても
+   * 例外を投げ返さず、stderr へ跡を残すだけ）。ここでは追記の成否を問わず
+   * 窓を空にする——`#journal` の失敗は既にそこで跡が残っており、この型だけ
+   * 再送を試みる仕組みは持たない（他の journal 書き手と同じ「1回だけ試す」
+   * 作法。`#journal` 自身の doc）。
+   */
+  async #writeInboxFlow(): Promise<void> {
+    let pending: { count: number; oldestAt?: string };
+    try {
+      pending = await this.#stores.inbox.pending();
+    } catch (error) {
+      noteDroppedRecord('受信箱の流量（inbox_flow）', '', error);
+      return;
+    }
+
+    await this.#journal({
+      type: 'inbox_flow',
+      windowStartedAt: this.#inboxFlowWindowStartedAt,
+      arrived: buildInboxFlowCount(this.#inboxFlowArrived, INBOX_EVENT_TYPE_ORDER),
+      delivered: buildInboxFlowCount(this.#inboxFlowDelivered, INBOX_EVENT_TYPE_ORDER),
+      settled: buildInboxFlowCount(this.#inboxFlowSettled, INBOX_EVENT_TYPE_ORDER),
+      pending,
+    });
+
+    this.#inboxFlowArrived.clear();
+    this.#inboxFlowDelivered.clear();
+    this.#inboxFlowSettled.clear();
+    this.#inboxFlowWindowStartedAt = new Date().toISOString();
   }
 
   /** 日誌の書き込み失敗でクローンのセッションを殺さない。 */

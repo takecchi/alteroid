@@ -113,10 +113,13 @@ import {
 } from './schedule.js';
 import type { ScheduleStatus } from './schedule.js';
 import {
+  COMMITMENT_APPRAISAL_DECISION_PREFIX,
   JOURNAL_ENTRY_TYPES,
   approvalUpdatedAt,
+  appraisalSchema,
   commitmentOriginSchema,
   commitmentUpdatedAt,
+  describeAppraisal,
   jobStatusSchema,
   scheduleKindSchema,
   scheduleSpecSchema,
@@ -124,6 +127,7 @@ import {
 import type {
   ChatStreamEvent,
   Commitment,
+  AppraisalValue,
   CommitmentOrigin,
   JobStatus,
   JournalEntry,
@@ -341,6 +345,7 @@ export const CLONE_TOOL_NAMES = [
   'commitment_close',
   'commitment_close_many',
   'commitment_edit',
+  'commitment_appraise',
   'inbox_remove_many',
   'profile_read',
   'profile_write',
@@ -350,6 +355,7 @@ export const CLONE_TOOL_NAMES = [
   'self_dropped',
   'manager_start',
   'manager_send',
+  'manager_appraise',
   'manager_stop',
   'manager_list',
   'manager_report',
@@ -396,10 +402,12 @@ export const SELF_JOURNALING_CLONE_TOOLS = [
   'commitment_close',
   'commitment_close_many',
   'commitment_edit',
+  'commitment_appraise',
   'inbox_remove_many',
   'profile_write',
   'manager_start',
   'manager_send',
+  'manager_appraise',
   'manager_stop',
   'archive_remove',
 ] as const satisfies readonly CloneToolName[];
@@ -1611,6 +1619,47 @@ function formatJournalNotRecordedMessage(
  *   何を意味するか（{@link JournalFailureOutcome}）。副作用がどこまで
  *   進んでいるかは呼び出し元にしか分からないので、呼び出し元が渡す。
  */
+/**
+ * 評定を書いて、日誌へ1行残す（#1054）。**書き込みと記録の生成元はここ1箇所で
+ * ある** —— `commitment_close`（片付けと同時に付ける）と `commitment_appraise`
+ * （後から付ける・付け直す）の2つが呼ぶ。2箇所に書き下ろすと、片方だけ直した
+ * ときに黙ってずれる（`digest.ts` が字面の生成元を1つにしているのと同じ判断）。
+ *
+ * **返すのは人間（クローン）へ返す1文である。** 呼び出し側はこれを連結する。
+ *
+ * **前の評定を日誌へ添える。** 行の側は「いまの値」しか持たないので
+ * （`appraisalSchema` の doc）、前の値がどこにも残らないと「誰がどう
+ * 言っていたか」を突き合わせる材料が消える —— それは PRD「要件: 自己改善」の
+ * 「評価する側も誤りうる前提で作る」が要求している較正そのものを不可能にする。
+ * **前が無かった回も残す**（初回か付け直しかは、数え上げるときに要る区別である）。
+ */
+async function writeAppraisal(
+  stores: Stores,
+  id: string,
+  value: AppraisalValue,
+  reason: string | undefined,
+): Promise<string> {
+  const before = await stores.commitments.get(id);
+  const previous = before === null ? null : describeAppraisal(before);
+  if (!(await stores.commitments.appraise(id, new Date().toISOString(), value, 'clone', reason))) {
+    return `（評定は付けられなかった —— ${id} が台帳に無い）`;
+  }
+  await appendJournalOrThrow(
+    'commitment_appraise',
+    stores.journal,
+    {
+      type: 'decision',
+      decision:
+        `${COMMITMENT_APPRAISAL_DECISION_PREFIX}（${id}）: ${value}` +
+        `${reason === undefined ? '' : ` — ${reason}`}` +
+        `${previous === null ? '' : `（前: ${previous}）`}`,
+      grounds: 'クローン自身が付けた評定（人間はこれを読んで後から覆す）',
+    },
+    'act-completed',
+  );
+  return `評定を ${value} にした。`;
+}
+
 async function appendJournalOrThrow(
   tool: CloneToolName,
   journal: JournalStore,
@@ -4819,10 +4868,14 @@ export function createCloneTools(context: ToolContext) {
           // 後ろに置くと `page()` の2ページ目へ落ちて、**いちばん要る1行が
           // 最初の呼びで出てこない。** 読み順としては逆だが、切れる側に
           // 落ちてよい欄ではない。
+          // **評定は在るときだけ出す**（`describeAppraisal` は無ければ
+          // `null`）。印が無い＝まだ評定していない、が読み手の側の規則である。
+          const appraisal = describeAppraisal(entry);
           const body = [
             ...(entry.closedAt === undefined
               ? []
               : [`片付けたとした理由: ${entry.closedReason ?? '（理由の記録なし）'}`]),
+            ...(appraisal === null ? [] : [appraisal]),
             `依頼（全文）: ${entry.body}`,
           ].join('\n\n');
           const part = page(body, offset, COMMITMENT_PAGE);
@@ -4947,6 +5000,12 @@ export function createCloneTools(context: ToolContext) {
               entry.closedAt === undefined
                 ? '  状態: 未了'
                 : `  状態: ${entry.closedAt} に片付けた（${excerptLine(entry.closedReason ?? '', 120)}）`,
+              // **評定が在る行だけ1行増える。** 一覧は文字数の予算に張り付いて
+              // いるので（`describeManagerFailure` の doc と同じ理由）、未評定の
+              // 行に「未評定」と刷らない —— 印が無いことがその状態である。
+              ...(describeAppraisal(entry) === null
+                ? []
+                : [`  ${excerptLine(describeAppraisal(entry) ?? '', 120)}`]),
             ],
           }),
         );
@@ -5183,6 +5242,7 @@ export function createCloneTools(context: ToolContext) {
         '引き受けた仕事が片付いたことを記録する。**返事をしただけでは閉じない。**',
         '委譲したなら、マネージャーが報告を返して始末がつくまでは開いたままにしておくこと。',
         'やらないと決めたのなら、それも片付いたうちである（理由にそう書いて閉じる）。',
+        '**片付けると同時に、うまくいったかの評定（`good` / `bad` / `unclear`）も付けられる。** 書かなければ「まだ評定していない」として残る。',
       ].join(' '),
       {
         id: z.string().describe('commitment_list に出ている id'),
@@ -5193,8 +5253,20 @@ export function createCloneTools(context: ToolContext) {
             '何をもって片付いたとするか（やったこと、あるいはやらないと決めた理由）。' +
               '人間はこれを読んで後から否定する',
           ),
+        appraisal: appraisalSchema
+          .optional()
+          .describe(
+            '**うまくいったか**（reason とは別の軸である。あちらは「どう片付いたか」）。' +
+              'good=うまくいった / bad=うまくいかなかった / unclear=見たが判定できない。' +
+              '**迷ったら unclear。** good と bad へ無理に寄せると、測れていないものが測れたことになる。' +
+              '書かなければ「まだ評定していない」として残り、後から commitment_appraise で付けられる',
+          ),
+        appraisalReason: z
+          .string()
+          .optional()
+          .describe('なぜその評定なのか（1行）。appraisal を書いたなら、これも書くこと'),
       },
-      async ({ id, reason }) => {
+      async ({ id, reason, appraisal, appraisalReason }) => {
         const existing = await stores.commitments.get(id);
         if (existing === null) return text(`引き受けた仕事 ${id} は台帳に無い。`);
         if (existing.closedAt !== undefined) {
@@ -5235,7 +5307,49 @@ export function createCloneTools(context: ToolContext) {
           },
           'act-completed',
         );
-        return text(`${id} を片付けた。`);
+        if (appraisal === undefined) {
+          return text(
+            `${id} を片付けた。**評定はまだ付いていない** —— どうだったかは commitment_appraise で付けられる。`,
+          );
+        }
+        // **評定の書き込みと日誌は `commitment_appraise` と同じ経路を通す。**
+        // 2箇所に書き下ろすと、片方だけ直したときに黙ってずれる（`digest.ts` の
+        // `describeUnobservedOutcome` が字面の生成元を1つにしているのと同じ判断）。
+        return text(
+          `${id} を片付けた。` + (await writeAppraisal(stores, id, appraisal, appraisalReason)),
+        );
+      },
+    ),
+
+    tool(
+      'commitment_appraise',
+      [
+        '台帳の行に**うまくいったかどうか**の評定を付ける（後から付け直してもよい）。',
+        '**`commitment_close` の `appraisal` を書き忘れたとき・報告が後から届いて見立てが変わったときに使う。**',
+        '片付いた行にも未了の行にも付けられる。',
+        '評定は `good`（うまくいった）/ `bad`（うまくいかなかった）/ `unclear`（見たが判定できない）の3つで、**迷ったら `unclear`**。',
+        '**人間がこれを覆すことがある。** 覆された事実は日誌に残り、評定そのものを較正する材料になる（`docs/PRD.md`「要件: 自己改善」）。',
+      ].join(' '),
+      {
+        id: z.string().describe('commitment_list に出ている id'),
+        appraisal: appraisalSchema.describe(
+          'good=うまくいった / bad=うまくいかなかった / unclear=見たが判定できない。' +
+            '**迷ったら unclear を選ぶこと。** good と bad へ無理に寄せると、' +
+            '測れていないものが測れたことになる',
+        ),
+        reason: z
+          .string()
+          .optional()
+          .describe(
+            'なぜその評定なのか（1行）。**書くこと。** ここに同じ軸が繰り返し' +
+              '現れるかどうかが、評定に軸を足すかどうかの唯一の判断材料である',
+          ),
+      },
+      async ({ id, appraisal, reason }) => {
+        const existing = await stores.commitments.get(id);
+        if (existing === null) return text(`引き受けた仕事 ${id} は台帳に無い。`);
+        // 書き込みと日誌は `writeAppraisal` が持つ（`commitment_close` と同じ経路）。
+        return text(`${id} の${await writeAppraisal(stores, id, appraisal, reason)}`);
       },
     ),
 
@@ -6427,6 +6541,39 @@ export function createCloneTools(context: ToolContext) {
      * クローン側にしか配線が無い）。マネージャーが自分や隣の仕事を止められる
      * ようになると、M4 の制御面分離が意味を失う。
      */
+    tool(
+      'manager_appraise',
+      [
+        '**委譲がうまくいったかどうか**の評定を付ける（後から付け直してもよい）。',
+        '**`manager_report` で報告を読んだら、そのまま付けること。**',
+        '評定は `good`（うまくいった）/ `bad`（うまくいかなかった）/ `unclear`（見たが判定できない）の3つで、**迷ったら `unclear`**。',
+        '⚠️ **`status` とは別の軸である** —— `done` は「セッションが終わった」であって「良かった」ではない。',
+        '走行中の委譲にも付けられる。**人間がこれを覆すことがあり、覆された事実は評定そのものを較正する材料になる。**',
+      ].join(' '),
+      {
+        managerId: z.string().describe('manager_list に出ている id'),
+        appraisal: appraisalSchema.describe(
+          'good=うまくいった / bad=うまくいかなかった / unclear=見たが判定できない。' +
+            '**迷ったら unclear を選ぶこと。** good と bad へ無理に寄せると、' +
+            '測れていないものが測れたことになる',
+        ),
+        reason: z
+          .string()
+          .optional()
+          .describe(
+            'なぜその評定なのか（1行）。**書くこと。** ここに同じ軸が繰り返し' +
+              '現れるかどうかが、評定に軸を足すかどうかの唯一の判断材料である',
+          ),
+      },
+      async ({ managerId, appraisal, reason }) => {
+        if (!context.managers) return NO_POOL;
+        // **日誌も「前の値」も `ManagerPool.appraise` が持つ。** ここで書き下ろすと、
+        // 人間の口（HTTP）と2箇所になり、片方だけ直したときに黙ってずれる。
+        const result = await context.managers.appraise(managerId, appraisal, 'clone', reason);
+        return text(result.detail);
+      },
+    ),
+
     tool(
       'manager_stop',
       [
@@ -8817,6 +8964,28 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
         // （`token_rotation` と同じ設計 — 人間が読む面の言い方の持ち主は
         // `runner.ts` の `#onSubagentStop` 1つである）。
         body: entry.text,
+      };
+    }
+    case 'inbox_flow': {
+      // **見出しに4つの総数を出す。** クローンがこの種別で絞ったとき、まず
+      // 見たいのは窓ごとの推移（`schema.ts` の `inbox_flow` の doc）で、
+      // 種類別の内訳は本文へ回す——`inbox-backlog.ts` の
+      // `describeInboxBacklogBreakdown` と同じ「総数は見出し、内訳は本文」
+      // の分け方。
+      const byTypeText = (count: { byType: { type: string; count: number }[] }): string =>
+        count.byType.length === 0
+          ? '（無し）'
+          : count.byType.map((e) => `${e.type} ${e.count}`).join(' / ');
+      return {
+        head:
+          `[inbox_flow arrived=${entry.arrived.total} delivered=${entry.delivered.total} ` +
+          `settled=${entry.settled.total} pending=${entry.pending.count}]`,
+        body:
+          `窓: ${entry.windowStartedAt} 〜 ${entry.at}\n` +
+          `到着: ${byTypeText(entry.arrived)}\n` +
+          `配達: ${byTypeText(entry.delivered)}\n` +
+          `消し込み: ${byTypeText(entry.settled)}` +
+          (entry.pending.oldestAt === undefined ? '' : `\n最古の滞留: ${entry.pending.oldestAt}`),
       };
     }
   }
