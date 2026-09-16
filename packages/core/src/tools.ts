@@ -1679,6 +1679,63 @@ function formatJournalNotRecordedMessage(
  *   進んでいるかは呼び出し元にしか分からないので、呼び出し元が渡す。
  */
 /**
+ * `commitment_list id=` が「その id は台帳に無い」と言うときの1文（issue #1028）。
+ *
+ * **「いま無い」と「id が違う」は同じことではない。** 直前の `get(id)` が `null`
+ * を返したという事実から言えるのは前者までで、後者（＝最初から無かった、打ち
+ * 間違いである）はそこから出てこない —— **一度は書けた行が後で消える経路が
+ * 実在する。** `storage-fs` は `CLOSED_HISTORY_LIMIT` を超えた古い片付き行を
+ * 物理削除する（`packages/storage-fs/src/commitments.ts` の `close` の doc、
+ * issue #416）。直上の `entry` の分岐が「無い」と「読めない」を混ぜないのと
+ * **同じ理由を、もう一歩先まで延ばしたものである。**
+ *
+ * **⚠️ 消えた id そのものは、どの実装も持っていない。** fs 版がディスクへ持ち
+ * 回るのは累計件数（`trimmedClosedCount`）だけで、どの id を消したかは残らない
+ * （`rawFileSchema` の doc）。⟹ **ここで名乗れるのは「消えた」ではなく「最初
+ * から無かったとは言い切れない」までである。** issue #1028 が言う「第3の状態」
+ * を `CommitmentStore.get` の戻り値へ足さないのはこのためで、足しても**どの
+ * 実装もそれを名乗れない**（測った結果は #1028 のコメントに置いた）。名乗れる
+ * のは AGENTS.md の言う「判定できない」のほうであり、その材料は
+ * `CommitmentList.trimmedClosed` として**既に在る** —— 一覧モードは既にこれを
+ * 断っている（`trimmedClosed > 0` の分岐）のに、単票モードだけが持っていな
+ * かった、というのがこの直しの中身である。
+ *
+ * **削除を1件も申告しないストアでは、返る文が1文字も変わらない。**
+ * `storage-pg` は片付いた行を物理削除する経路を1つも持たず `trimmedClosed` は
+ * 常に 0 なので（`packages/storage-pg/src/commitments.ts` の `list` の doc）、
+ * そこでは従来どおり「id が違う」と言い切ってよい——言い切れる根拠が在る。
+ *
+ * **⚠️ 数えられなかった回を 0 と混ぜない。** 台帳を読み直せなかったときに
+ * 「削除は0件だった」へ倒すと、**この関数が塞ごうとしている取り違えを、この
+ * 関数自身が作る**（観測を足す実装が、観測しようとしている穴と同じ形の穴を
+ * 開ける）。⟹ 読めなかったときは読めなかったと名乗る。**投げ直さない**のは、
+ * ここが「無い」と答えるための文を組み立てているだけの場所で、投げると単票の
+ * 照会そのものが道具の故障として落ちるからである。
+ */
+async function describeMissingCommitment(stores: Stores, id: string): Promise<string> {
+  let trimmedClosed: number | null;
+  try {
+    trimmedClosed = (await stores.commitments.list()).trimmedClosed;
+  } catch {
+    trimmedClosed = null;
+  }
+  if (trimmedClosed === null) {
+    return (
+      `引き受けた仕事 ${id} は、いま台帳に無い。` +
+      '**この記憶ストアが片付き行を物理削除しているかどうかは読めなかった。** ' +
+      'id の打ち間違いなのか、一度は在った行が消えたのかは、ここでは決められない。'
+    );
+  }
+  if (trimmedClosed === 0) return `引き受けた仕事 ${id} は無い（id が違う）。`;
+  return (
+    `引き受けた仕事 ${id} は、いま台帳に無い。**「id が違う」とは言い切れない。** ` +
+    `この記憶ストアは保持上限を超えた片付き行を物理削除しており、累計 ${trimmedClosed} 件ある。` +
+    'この id がその中に在ったかどうかは、どこにも残っていない（消えた件数は数えているが、id は控えていない）。' +
+    '日誌側の記録が唯一の手掛かりになる。'
+  );
+}
+
+/**
  * 評定を書いて、日誌へ1行残す（#1054）。**書き込みと記録の生成元はここ1箇所で
  * ある** —— `commitment_close`（片付けと同時に付ける）と `commitment_appraise`
  * （後から付ける・付け直す）の2つが呼ぶ。2箇所に書き下ろすと、片方だけ直した
@@ -5017,7 +5074,12 @@ export function createCloneTools(context: ToolContext) {
           }
           // **黙って空を返さない。** 「無い」と「読めない」を混ぜると、id の
           // 打ち間違いが「その仕事は存在しなかった」として片付く。
-          if (!entry) return text(`引き受けた仕事 ${id} は無い（id が違う）。`);
+          //
+          // **同じ理由がもう一歩先にも掛かる（issue #1028）。** 「いま無い」から
+          // 「id が違う」へ渡れるのは、**一度は書けた行が後で消える経路がこの
+          // ストアに無いと言えるとき**だけである（`storage-fs` には在る。#416）。
+          // 言い切ってよいかの判定は `describeMissingCommitment` が持つ。
+          if (!entry) return text(await describeMissingCommitment(stores, id));
           const head = [
             `${entry.id} ${commitmentOriginBadge(entry)}`,
             `作成: ${entry.at} / 更新: ${commitmentUpdatedAt(entry)}`,
