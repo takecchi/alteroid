@@ -656,11 +656,10 @@ function describeSituationInboxBacklog(
  *
  * **通常は、同じ合図が両方に数えられている。** `clone.ts` の `#remember`
  * （`post()` の中）は型を問わず全部の合図を配達より前に器へ書き、消す
- * `#forget` はターンが終わってからしか呼ばれない（`clone.ts` の逐語:
- * `grep -Fn -- '`#remember`' packages/core/src/clone.ts` が当たる
- * `#situationNoticeFor` の doc「`inbox.put()` していて、消す `#forget()` は
- * この後（`#handle` の完了後）にしか呼ばれない」）。⟹ **メモリの待ち行列に
- * 居る合図は、ふつう器にも行を持っている。**
+ * `#forget` はターンが終わってからしか呼ばれない —— 出典は
+ * `grep -Fn -- '消す `#forget()` はこの後' packages/core/src/clone.ts` が当たる
+ * `#situationNoticeFor` の doc である。⟹ **メモリの待ち行列に居る合図は、
+ * ふつう器にも行を持っている。**
  *
  * **⛔ だから足しても引いても意味が無い。** この行が「別の実体」とだけ名乗る
  * と、読む側は互いに素な2つの箱だと読み、**合計を取って負荷を倍に見積もる**
