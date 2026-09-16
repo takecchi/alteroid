@@ -2222,6 +2222,9 @@ describe('クローン — マネージャーの確認がいまも待たれて�
       transcript: () => {
         throw new Error('not implemented');
       },
+      unpushedWork: () => {
+        throw new Error('not implemented');
+      },
       runningManagerOwning: () => undefined,
       restore: () => Promise.resolve([]),
       resumeStoppedByUsage: () => Promise.resolve([]),
@@ -3425,6 +3428,9 @@ describe('クローン — 自律（人間以外の起点）', () => {
         throw new Error('not implemented');
       },
       transcript: () => {
+        throw new Error('not implemented');
+      },
+      unpushedWork: () => {
         throw new Error('not implemented');
       },
       runningManagerOwning: () => undefined,
