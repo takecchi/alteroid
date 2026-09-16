@@ -1005,6 +1005,21 @@ type TurnOutcome =
  * `open()` の中へ移ったので、**いまは `open()` を呼んだうえで、その中で畳まれた**
  * である（`CommitmentOpenResult.folded`）。`#commitmentNoticeFor` から見た扱いは
  * 変わらない（どちらも `missing` から除く）。
+ *
+ * **⚠️ Issue #1088 / #1110 —— この値は「`#commit` が呼ばれた瞬間」の
+ * スナップショットであって、その後の台帳の変化を映さない。** `'opened'` と
+ * 記録された後、`#commit` を呼び直さないまま（＝この合図がまだ一度も
+ * 配達されていないうちに、他のターンで `commitment_close` /
+ * `commitment_close_many` が直接ストアを操作して）行が閉じられることが
+ * ある。この場合も値はいつまでも `'opened'` のままで古びる——`'existed'`
+ * とは違い、`open()` を呼び直していないので`open()` 自身の冪等性の恩恵を
+ * 受けない。**だから `#commitmentNoticeFor` は、この値だけで「載せ損なった」
+ * と断定しない** —— 台帳に行が実在するかどうか（開いているか閉じているかを
+ * 問わず）を別に読み直して確かめる（`#commitmentNoticeFor` の `ledgerIds` の
+ * doc）。値そのものは直さない——`#commit` を呼び直すたびに正しい値へ更新される
+ * 性質は変えたくない（`#restoreUnreadPass` の再 `#commit` がまさにそれで
+ * 直る経路であり、そちらは今回も直している）。直すのは「この値だけを見て
+ * 断定する」側である。
  */
 type CommitOutcome = 'opened' | 'existed' | 'folded' | 'failed';
 
@@ -4019,14 +4034,21 @@ class Clone implements CloneHost {
     // （issue #296）。`entries` のことをここでは従来どおり `open` と呼ぶが、
     // 読めない行が在れば `unreadable` として別に断る（下）——件数だけを見て
     // 読めない行を握り潰さない。
+    //
+    // **⚠️ Issue #1088 / #1110。`includeClosed: true` で読む。** 件数・
+    // いちばん古いもの・「いま届いた分も載せた」の文言は、これまでどおり
+    // 未了（`closedAt` が無い行）だけを対象にする——下の `open` がそれを
+    // 選び直す。**`includeClosed` を足すのは、この直後の `missing` 判定の
+    // ためだけである**（`missing` の doc）。1回の読み出しで両方を賄うのは、
+    // 台帳を2回読み直すと「いつ数えた値か」（`at`）が2つに割れるからである。
     let list: CommitmentList;
     try {
-      list = await this.#stores.commitments.list();
+      list = await this.#stores.commitments.list({ includeClosed: true });
     } catch (error) {
       noteDroppedRecord('未了の読み出し', inboxEventShape(event), error);
       return '';
     }
-    const open = list.entries;
+    const open = list.entries.filter((entry) => entry.closedAt === undefined);
     // **この節がいつ数えた値かを名乗る（#960）。** `list()` を読み終えた直後の
     // 値を使う——ここより後で計算しても、数えた対象（`open` / `list.unreadable`）
     // とは無関係な遅延が乗るだけである。
@@ -4041,8 +4063,8 @@ class Clone implements CloneHost {
       CLONE_ID_LIST_EXCERPT,
     );
     // **Issue #856 受け入れ基準2。** 台帳を開くつもりだった合図
-    // （`outcomes.has(...)`）が、再読した一覧（`mine`）に見当たらないとき、
-    // 黙って消さない——ただし `'folded'`（Issue #954 提案3。開く前に既存行へ
+    // （`outcomes.has(...)`）が、再読した一覧に見当たらないとき、黙って
+    // 消さない——ただし `'folded'`（Issue #954 提案3。開く前に既存行へ
     // 任せた——台帳としては正常）と `'existed'`（`open()` を呼んだが「既に
     // 在る」と答えた——`CommitmentStore.open` の冪等性そのもの。配り直された
     // 合図が既に閉じている行に当たった場合を含む）は除く。**この2つは
@@ -4050,14 +4072,33 @@ class Clone implements CloneHost {
     // ので、除かずに「載っていない」と断ると、重複を畳んだだけ・既に片付いた
     // だけの正常なターンにも毎回嘘の警告が出る**（後者を除かなかった場合の
     // 事故は {@link CommitOutcome} の doc）。
-    const mineIds = new Set(mine.map((entry) => entry.id));
+    //
+    // **⚠️ Issue #1088 / #1110。「見当たらない」は `mine`（未了だけ）ではなく
+    // `list.entries`（`includeClosed: true` で読んだ全行）で判定する。**
+    // `#committed` に控わる `outcome` は `#commit` が `open()` から返ってきた
+    // 瞬間のスナップショットで、その後の変化（`commitment_close` /
+    // `commitment_close_many` が直接ストアを閉じる）を映さない——`#commit`
+    // を呼び直さない限り更新されない。**`#commit` を呼び直すのは `post()`
+    // が同じ id をもう一度受理したときと `#restoreUnread` の拾い直しだけ**
+    // （下の doc・`#restoreUnreadPass` の `#commit` 呼び直し）で、それ以外の
+    // 経路——この合図がまだ一度も配達されていないうちに、他のターンで
+    // `commitment_close_many` により先に閉じられる、など——では `outcome`
+    // が `'opened'` のまま古びる。この場合、行は台帳に**実在する**（閉じた
+    // 状態で）——`reportSettlement`（本ファイル下部）が「この報告は台帳で
+    // 既に片付けている」と正しく言えているのと同じ材料（`get`/`list` が
+    // 返す行そのもの）で見れば、「載っていない」ではなく「もう閉じている」
+    // だと分かる。`mine`（未了だけ）で判定すると、この閉じた行が視野から
+    // 消えて「載っていない」に誤って落ちる——`list.entries` は開いているか
+    // 閉じているかを問わず台帳に**行があるかどうか**だけを見るので、この
+    // 誤りを起こさない。
+    const ledgerIds = new Set(list.entries.map((entry) => entry.id));
     const missing = events.filter((pending) => {
       const outcome = outcomes.get(pending.id);
       return (
         outcome !== undefined &&
         outcome !== 'folded' &&
         outcome !== 'existed' &&
-        !mineIds.has(pending.id)
+        !ledgerIds.has(pending.id)
       );
     });
     const missingIdList = excerptLine(

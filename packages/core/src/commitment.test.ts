@@ -1616,6 +1616,67 @@ describe('Issue #856: 台帳に載らなかった合図の観測', () => {
 
     await s.clone.stop();
   });
+
+  /**
+   * **⭐ 陰性対照3（Issue #1088 / #1110）。** 陰性対照2が塞いだのは
+   * 「`#commit` が同じ id で**もう一度**呼ばれ、`open()` が `existed` を
+   * 返す」経路である。だが #1088（クローン teto が `commitment_close` で
+   * 閉じた20秒後に**同じ合図が再配達され、`#commit` は呼び直されていない**
+   * まま「台帳に載っていない」と断られた）と #1110（`commitment_close_many`
+   * で27件閉じた後、`inbox_remove_many` で消したはずの id について警告が
+   * ターンごとに出続けた）は、どちらも `#commit` を**呼び直さずに**
+   * 閉じられた行を、その合図自身の（最初で唯一の）配達で踏む形である——
+   * `#committed` に控わる `outcome` は `#commit` が呼ばれた瞬間
+   * （`open()` が返した直後）のスナップショットのままで、その後
+   * `commitment_close` / `commitment_close_many` が直接ストアを閉じても
+   * 更新されない。
+   *
+   * ここでは `commitments.open` を差し替えて、**`open()` が返った直後・
+   * この合図がターンへ渡って `#commitmentNoticeFor` が台帳を読み直すより
+   * 前**に、同じ行を閉じる（`commitment_close_many` 相当）。`open()` 自体は
+   * 成功する（`outcome` は `'opened'`）ので、陰性対照2とは別の経路で
+   * 「載っていない」が誤って立つかどうかを測る。
+   */
+  it('⭐ 陰性対照3: 配達より先に（commitment_close_many 相当で）閉じられていても「台帳に載っていない」と断らない（Issue #1088 / #1110）', async () => {
+    const stores = createMemoryStores();
+    const targetId = 'evt-closed-before-notice';
+    const wrapped: Stores = {
+      ...stores,
+      commitments: {
+        ...stores.commitments,
+        open: async (entry) => {
+          const result = await stores.commitments.open(entry);
+          if (entry.id === targetId) {
+            // #1088 / #1110 が実測した順序——台帳を開いた直後、この合図が
+            // 実際にターンへ渡って `#commitmentNoticeFor` が読み直すより前に、
+            // 別の経路（`commitment_close_many`）が同じ行を閉じる。
+            await stores.commitments.close(
+              entry.id,
+              new Date().toISOString(),
+              'commitment_close_many 相当で配達より先に片付けた',
+              'clone',
+            );
+          }
+          return result;
+        },
+      },
+    };
+    const s = setup(wrapped);
+    const inputs = () => s.calls.flatMap((call) => call.inputs);
+
+    s.clone.post(managerMessage('配達より先に閉じられる報告', targetId));
+    await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
+
+    // 台帳には実在する——閉じた状態で。「載っていない」のではなく「もう閉じている」。
+    const closedRow = await stores.commitments.get(targetId);
+    expect(closedRow?.closedAt).toBeDefined();
+
+    const turn = inputs()[0] ?? '';
+    expect(turn).not.toContain('台帳に載っていない');
+    expect(turn).not.toContain('載せ直しが要る');
+
+    await s.clone.stop();
+  });
 });
 
 describe('未了の見え方', () => {
