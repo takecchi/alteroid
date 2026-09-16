@@ -4235,6 +4235,69 @@ describe('report の冪等化（#206）', () => {
 });
 
 /**
+ * **Issue #1038（設計判断）: 応答として終わった回では、古い `lastFoldedTurn`
+ * を下ろす。** `lastFailure` / `lastUnreported` と同じ「応答として終わった
+ * 回では消える」を守るため——下ろさないと、止めた委譲を再開して普通に報告
+ * し始めた後も、古い畳んだ本文が居座って `manager_report` / `manager_list`
+ * の見出し（「停止後に届いた、畳まれたターンの中身」）を誤らせる。
+ *
+ * Issue 本文にこの下ろす仕様が明記されているわけではない——`lastFailure` /
+ * `lastUnreported` との一貫性を優先した実装側の判断である（PR 本文に3点
+ * セットとして明記）。
+ */
+describe('lastFoldedTurn は応答として終わった回では下ろす（Issue #1038）', () => {
+  const job = {
+    id: 'mgr-folded-then-resumed',
+    managerId: 'mgr-folded-then-resumed',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T01:00:00.000Z',
+    status: 'running' as const,
+    summary: '調べ物',
+    request: '調べて',
+    cwd: '/work/project',
+    sessionId: 'sess-folded-then-resumed',
+    runnerId: 'runner-primary',
+    // **前回止めたときに残った、古い畳んだ本文。** 再開して今回の report が
+    // 正常に届いたら、これは下ろされているべきである。
+    lastFoldedTurn: { text: '前回止めたときの畳まれた本文', at: '2026-08-01T00:30:00.000Z' },
+  };
+
+  it('通常の report が届くと、古い lastFoldedTurn は台帳から下ろされる', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job);
+    const fake = swappableRunner();
+    fake.state.alive.push({
+      managerId: job.id,
+      status: 'running',
+      cwd: job.cwd,
+      request: job.request,
+      waiting: [],
+      sessionId: job.sessionId,
+    });
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+    await vi.waitFor(() => {
+      if (s.inbox.length === 0) throw new Error('reattach の知らせがまだ届いていない');
+    });
+
+    fake.report(job.id, '再開後の正常な報告', 'done');
+
+    await vi.waitFor(async () => {
+      const current = (await s.stores.jobs.listJobs()).find((j) => j.id === job.id);
+      if (current?.lastReport !== '再開後の正常な報告') throw new Error('台帳がまだ更新されていない');
+    });
+
+    const current = (await s.stores.jobs.listJobs()).find((j) => j.id === job.id);
+    expect(current?.lastFoldedTurn).toBeUndefined();
+    expect(Object.hasOwn(current as object, 'lastFoldedTurn')).toBe(false);
+    // ついでに新しい欄（Issue #1036）も書かれていることを確かめる。
+    expect(current?.lastReportStatus).toBe('done');
+
+    await s.pool.stop();
+  });
+});
+
+/**
  * **`#reportedOf` が「古い順に」と書く日誌の中身を測る（recent.ts の doc / #409）。**
  *
  * `manager.ts` の `#reportedOf` は、上限に達して忘れた id を
@@ -5209,6 +5272,52 @@ describe('止めたマネージャーの後続イベント（R4）', () => {
     // status は stopped から動かない。
     const listed = (await s.pool.list()).find((m) => m.managerId === job.id);
     expect(listed?.status).toBe('stopped');
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **Issue #1038: 畳んだターンの本文は、日誌だけでなく台帳（`lastFoldedTurn`）
+   * にも残す。** これが無いと `manager_stop` の応答にも `manager_report` にも
+   * 1文字も出ず、誤って止めたことに気づく契機が止めた直後には無い（#1038 の
+   * 実害）。
+   *
+   * **保証は3つに割って測る**（上の2本と同じ理由——1つの `it()` に重ねると、
+   * どの保証が壊れたのかが区別できなくなる）:
+   * (a) `lastFoldedTurn` へ本文が書かれ、`#persist` される（＝台帳の永続化先
+   *     `stores.jobs` まで届く。像 `#records` だけに留まっていない）
+   * (b) `status` は `stopped` のまま動かない（R4 の固定）
+   * (c) 受信箱へは配られない（`#emit` されない。R4 の固定）
+   *
+   * (b)(c) は既存の2本（`report イベントは日誌には残る` /
+   * `report イベントはクローンへは回らず、status も動かない`）が既に固定して
+   * いるが、`lastFoldedTurn` を書く変更がそれを覆していないことをここでも
+   * 併記して確かめる——R4 を壊す変異（`#emit()` を呼ぶ／`status` を書き換える）
+   * が、この新しい歯を足したことで「新しい欄だけ書いて R4 は無視してよい」に
+   * ならないようにする。
+   */
+  it('report イベントは status===stopped でも、畳んだ本文を lastFoldedTurn へ台帳ごと残す（Issue #1038）', async () => {
+    const { s, fake } = await stopped();
+    const postedBefore = s.inbox.length;
+
+    fake.report(job.id, '止めたはずなのに報告してきた（畳まれた本文）', 'done');
+    await settleAfterJournal(s, '止めたはずなのに報告してきた（畳まれた本文）', ['exchange']);
+
+    // (a) 像（`s.pool.list()`）にも、永続化先（`stores.jobs`）にも載っている。
+    const listed = (await s.pool.list()).find((m) => m.managerId === job.id);
+    expect(listed?.lastFoldedTurn?.text).toBe('止めたはずなのに報告してきた（畳まれた本文）');
+    expect(typeof listed?.lastFoldedTurn?.at).toBe('string');
+    const persistedJobs = await s.stores.jobs.listJobs();
+    const persisted = persistedJobs.find((j) => j.id === job.id);
+    expect(
+      persisted?.lastFoldedTurn?.text,
+      '#persist されていること（像だけでなく永続化先にも載っている）',
+    ).toBe('止めたはずなのに報告してきた（畳まれた本文）');
+
+    // (b) status は stopped のまま動かない（R4）。
+    expect(listed?.status).toBe('stopped');
+    // (c) 受信箱へは配られない（R4）。
+    expect(s.inbox.length).toBe(postedBefore);
 
     await s.pool.stop();
   });

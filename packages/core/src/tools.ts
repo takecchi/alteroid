@@ -7398,7 +7398,12 @@ export function createCloneTools(context: ToolContext) {
         const reportAgeStatus =
           part === 'request'
             ? ''
-            : ` — 直近の報告の受信: ${found.lastReportAt ?? '一度も届いていない'} / いまの status: \`${found.status}\``;
+            : // **文言に「直近の報告」を含めない。** `label` が「直近のターンの
+              // 中身」へ切り替わった回（`isFoldedTurnReport` / `foldedTurn`）で
+              // ここに「直近の報告」という字面が混ざると、見出しを切り替えた
+              // 意味（Issue #714 / #917 / #1038）が薄れる——読む側が「結局
+              // 直近の報告ではないか」と読める。
+              ` — lastReportAt: ${found.lastReportAt ?? '一度も届いていない'} / いまの status: \`${found.status}\``;
         const head = `マネージャー ${managerId} の${label}（${describePage(part1)}）${reportAgeStatus}`;
         // **焼いた status といまの status が食い違えば ⚠ を出す（Issue
         // #1036）。** 生成元は `describeReportDrift` 1箇所——`manager_list`
