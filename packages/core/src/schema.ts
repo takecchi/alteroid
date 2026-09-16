@@ -2456,6 +2456,19 @@ export const APPRAISAL_LABELS: Record<AppraisalValue, string> = {
 };
 
 /**
+ * 委譲に評定を書いた日誌行（`type: 'decision'`）の先頭に必ず置く印（#1054）。
+ *
+ * **台帳の `COMMITMENT_APPRAISAL_DECISION_PREFIX` とは別の印である。** 同じ印に
+ * すると、段2（同じ種類の仕事の直近 N 件を束ねる）で「台帳の行の評定」と「委譲の
+ * 評定」が同じ束に混ざる —— 片方は人間との約束の始末で、もう片方はマネージャーに
+ * 出した仕事の出来なので、**数え上げの分母が別物になる。**
+ *
+ * 専用の日誌の枝にしない理由は台帳側と同じ（`COMMITMENT_APPRAISAL_DECISION_PREFIX`
+ * の doc）。
+ */
+export const JOB_APPRAISAL_DECISION_PREFIX = '委譲に評定を付けた';
+
+/**
  * 評定を1行の字面にする（#1054）。**評定が無ければ `null` —— 1文字も増やさない。**
  *
  * **字面の生成元はここ1箇所である。** MCP（`tools.ts`）・HTTP の応答を描く画面
@@ -2975,6 +2988,38 @@ export const jobSchema = z.object({
    * `report` が来たときだけ上書きされる。台帳を消す操作ではない）。
    */
   lastReportAt: z.string().optional(),
+  /**
+   * **その委譲がどうだったか**（#1054。自己改善の段1の後半）。値の意味・4状態の
+   * 数え方・なぜ履歴をここに積まないかは `appraisalSchema` の doc が持つ
+   * （台帳の `Commitment.appraisal` と**同じ軸・同じ3値**である）。
+   *
+   * ## ⚠️ `status` とは別の軸である。混ぜないこと
+   *
+   * `status` の終端4値（`done` / `failed` / `lost` / `stopped`）が答えるのは
+   * **どう終わったか**であって、**良かったか**ではない —— `done` は「マネージャーの
+   * セッションが終わった」の意味でしかない（#1054 の出発点そのもの）。
+   *
+   * **とくに `digest.ts` の `judgement`（`isManagerAwaitingJudgement`）と取り違え
+   * ないこと。** あちらは `lost` 1値を指す語で、意味は**「終わったかどうかを観測
+   * していない」** —— この欄とはほぼ正反対である。
+   *
+   * ## 書く経路は1つだけ（`ManagerPool.appraise`）
+   *
+   * **`JobStore` へ直に書かないこと。** 走行中の委譲の `Job` は `ManagerPool` が
+   * プロセス内の像として握っていて、`#persist` は `record.job` を丸ごと書く ——
+   * 外から1欄だけ足すと**次の `#persist` が黙って踏み消す。** 所有者を通す理由は
+   * `ManagerPool.appraise` の doc に在る。
+   */
+  appraisal: z.string().optional(),
+  /** 評定を付けた（または覆した）時刻。評定が在れば必ず在る。 */
+  appraisedAt: isoDateTime.optional(),
+  /**
+   * 評定を**誰が付けたか**（既知の値は `appraisedBySchema`）。人間がクローンの
+   * 評定を覆すとここが `'human'` になり、覆される前の値は**日誌**に残る。
+   */
+  appraisedBy: z.string().optional(),
+  /** 評定の理由（1行）。**`lastReport` とは別の欄である**（あちらは委譲側の報告）。 */
+  appraisalReason: z.string().optional(),
   /**
    * 直近の報告が**報告ではなく失敗**だったこと（SDK が「これは応答ではない」と
    * 言った回）。応答として終わった回では消える。

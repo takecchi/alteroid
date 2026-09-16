@@ -1683,6 +1683,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     abort() {
       throw new Error('spec 生成専用のスタブ: マネージャーは止めない');
     },
+    appraise() {
+      throw new Error('spec 生成専用のスタブ: 評定は書かない');
+    },
     list() {
       throw new Error('spec 生成専用のスタブ: マネージャー一覧は持たない');
     },

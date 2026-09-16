@@ -50,7 +50,10 @@ import type {
   RunnerWaiting,
 } from './runner-protocol.js';
 import { brief } from './runner.js';
+import { describeAppraisal, JOB_APPRAISAL_DECISION_PREFIX } from './schema.js';
 import type {
+  AppraisalValue,
+  AppraisedBy,
   InboxEvent,
   Job,
   JobStatus,
@@ -421,6 +424,21 @@ export interface ManagerSummary {
   startedAt: string;
   updatedAt: string;
   sessionId?: string;
+  /**
+   * **その委譲がどうだったか**（#1054）。台帳（`Job`）をそのまま写すだけで、
+   * 書き込みは `ManagerPool.appraise` の1箇所に閉じている。
+   *
+   * **`status` とは別の軸である**（`Job.appraisal` の doc）。とくに
+   * `digest.ts` の `judgement`（`isManagerAwaitingJudgement` ＝ `lost` 1値、
+   * 意味は「終わったかどうかを観測していない」）と取り違えないこと。
+   *
+   * **無いことは「まだ評定していない」であって「普通」ではない。** 数えるときに
+   * `good` 側にも `bad` 側にも寄せない。
+   */
+  appraisal?: string;
+  appraisedAt?: string;
+  appraisedBy?: string;
+  appraisalReason?: string;
   lastReport?: string;
   /**
    * `lastReport` を**デーモンが受け取った時刻**（#358。`jobSchema.lastReportAt`
@@ -1102,6 +1120,24 @@ export interface ManagerAbortResult {
   sessionGone?: boolean;
 }
 
+/**
+ * `ManagerPool.appraise` の結果。
+ *
+ * - `'appraised'` — 書けた（上書きを含む）。`previous` は**覆す前の字面**
+ *   （`describeAppraisal` の出力。初めて付けたなら `null`）
+ * - `'absent'` — その委譲が台帳に居ない。**`abort` の `'absent'` と同じ意味**で、
+ *   HTTP では 404 になる
+ *
+ * **「書けなかった」を `'appraised'` に畳まない。** 畳むと、台帳から消えた委譲へ
+ * 付けた評定が「付いた」として返り、読み手には確かめる術が無くなる。
+ */
+export interface ManagerAppraiseResult {
+  outcome: 'appraised' | 'absent';
+  detail: string;
+  /** 覆す前の評定の字面。初めて付けたなら `null`。 */
+  previous: string | null;
+}
+
 export interface ManagerPool {
   start(input: ManagerStartInput): Promise<ManagerSummary>;
   send(
@@ -1123,6 +1159,41 @@ export interface ManagerPool {
    * 食い違う。
    */
   abort(managerId: string, reason?: string, by?: ManagerStopActor): Promise<ManagerAbortResult>;
+  /**
+   * **その委譲がどうだったか**を記録する（#1054。自己改善の段1の後半）。
+   *
+   * ## ⭐ なぜ `JobStore` へ直に書かず、ここを通すのか
+   *
+   * **走行中の委譲の `Job` は、このプールがプロセス内の像（`#records`）として
+   * 握っている。`#persist` は `record.job` を丸ごと書く。** ⟹ ストアの側から
+   * 評定だけ足すと、**次の `#persist` が黙って踏み消す** —— 書けたように見えて
+   * 消える、という「静かに失敗する道具」そのものである（AGENTS.md）。
+   *
+   * だから所有者を通す。像が在るなら像を書き換えてから永続化し、無いなら
+   * （`#retire()` 済み ＝ 終端した委譲）台帳へ直に書く。
+   *
+   * ## ⚠️ `abort()` と違い `#load()` を使わない
+   *
+   * `#load()` は**読んだ像を `#records` に登録する**（`this.#records.set(...)`）。
+   * `abort()` はこれから触る相手なのでそれでよいが、**評定は何日も前に終わった
+   * 委譲にも付く** —— そのたびに終端済みの像を живой な地図へ戻すと、`#records`
+   * が単調に太り、`list()` など「いま抱えているもの」を見る側の意味も変わる。
+   * ⟹ ここは台帳を読むだけにして、`#records` を汚さない。
+   *
+   * ## 走行中を断らない
+   *
+   * 「片付いてから」を器が強制しない（台帳の `CommitmentStore.appraise` と同じ
+   * 線）。走っている委譲に人間が印を付ける経路を塞ぐ理由が無い。
+   *
+   * **覆した事実は日誌に残す。** 行が持つのは「いまの値」だけなので、前の値が
+   * ここで落ちないと**評価する側を較正する材料が消える**（PRD「要件: 自己改善」）。
+   */
+  appraise(
+    managerId: string,
+    appraisal: AppraisalValue,
+    by: AppraisedBy,
+    reason?: string,
+  ): Promise<ManagerAppraiseResult>;
   list(): Promise<ManagerSummary[]>;
   /**
    * このマネージャーで拒否された道具と件数を、**古い順**で返す。
@@ -5206,6 +5277,56 @@ class Pool implements ManagerPool {
     }
 
     return { outcome, stopError, sessionGone };
+  }
+
+  /** `ManagerPool.appraise` の doc に、なぜここを通すのかが在る。 */
+  async appraise(
+    managerId: string,
+    appraisal: AppraisalValue,
+    by: AppraisedBy,
+    reason?: string,
+  ): Promise<ManagerAppraiseResult> {
+    const at = new Date(this.#now()).toISOString();
+    // **像が在るなら像を書く（所有者が書く）。** `#load()` は使わない —— あれは
+    // 読んだ像を `#records` へ登録するので、終端済みの委譲を評定するたびに
+    // 地図が太る（この関数の doc）。
+    const record = this.#records.get(managerId);
+    const job = record?.job ?? (await this.#stores.jobs.listJobs()).find((e) => e.id === managerId);
+    if (job === undefined) {
+      return {
+        outcome: 'absent',
+        detail: `${managerId} というマネージャーは台帳に居ない。`,
+        previous: null,
+      };
+    }
+    const previous = describeAppraisal(job);
+
+    job.appraisal = appraisal;
+    job.appraisedAt = at;
+    job.appraisedBy = by;
+    // **理由を渡さなかったら前の理由を消す。** 残すと、理由無しで覆したときに
+    // **前の書き手の理由が新しい値の理由として残る**（台帳側と同じ穴。
+    // `CommitmentStore.appraise` の doc）。
+    delete job.appraisalReason;
+    if (reason !== undefined) job.appraisalReason = reason;
+    job.updatedAt = at;
+    await this.#stores.jobs.putJob(job);
+
+    const who = by === 'clone' ? 'クローン' : '人間';
+    await this.#journal({
+      type: 'decision',
+      decision:
+        `${JOB_APPRAISAL_DECISION_PREFIX}（${managerId}）: ${appraisal}` +
+        `${reason === undefined ? '' : ` — ${reason}`}` +
+        `${previous === null ? '' : `（前: ${previous}）`}`,
+      grounds: `${who}が付けた（人間はこれを読んで後から覆す）`,
+    });
+
+    return {
+      outcome: 'appraised',
+      detail: `${managerId} の評定を ${appraisal} にした。`,
+      previous,
+    };
   }
 
   async abort(
@@ -9735,6 +9856,11 @@ function summaryOf(
     updatedAt: job.updatedAt,
     waiting: [...record.waiting],
     ...(job.sessionId === undefined ? {} : { sessionId: job.sessionId }),
+    // **評定は台帳をそのまま写すだけ**（#1054）。書き込みは `appraise()` の1箇所。
+    ...(job.appraisal === undefined ? {} : { appraisal: job.appraisal }),
+    ...(job.appraisedAt === undefined ? {} : { appraisedAt: job.appraisedAt }),
+    ...(job.appraisedBy === undefined ? {} : { appraisedBy: job.appraisedBy }),
+    ...(job.appraisalReason === undefined ? {} : { appraisalReason: job.appraisalReason }),
     ...(job.lastReport === undefined ? {} : { lastReport: job.lastReport }),
     // **`lastReport` と対で運ぶ**（#358）。台帳をそのまま写すだけ——書き込みは
     // `#onEvent` の `case 'report'` の1箇所に閉じている。

@@ -2209,6 +2209,9 @@ describe('クローン — マネージャーの確認がいまも待たれて�
       abort: () => {
         throw new Error('not implemented');
       },
+      appraise: () => {
+        throw new Error('not implemented');
+      },
       list: () => {
         throw new Error('list() が壊れている（実測を模す）');
       },
@@ -3414,6 +3417,9 @@ describe('クローン — 自律（人間以外の起点）', () => {
         throw new Error('not implemented');
       },
       abort: () => {
+        throw new Error('not implemented');
+      },
+      appraise: () => {
         throw new Error('not implemented');
       },
       list: () => Promise.resolve([summaryOf('mgr-alive', true), summaryOf('mgr-dead', false)]),

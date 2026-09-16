@@ -22,7 +22,10 @@ import { measureMemoryFloor, renderMemoryDocuments, scanMemorySections } from '.
 import { createProfileService } from './profile-service.js';
 import { heuristicChars, type HeuristicChars } from './quantity.js';
 import {
+  describeAppraisal,
   journalEntrySchema,
+  type AppraisalValue,
+  type AppraisedBy,
   type ChatStreamEvent,
   type InboxEvent,
   type JobStatus,
@@ -181,6 +184,14 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
   // 同じ作法）。
   let conversationId: string | undefined;
 
+  /** `appraise()` に渡された引数（古い順）。道具の歯が数え上げる。 */
+  const appraised: {
+    managerId: string;
+    appraisal: AppraisalValue;
+    by: AppraisedBy;
+    reason?: string;
+  }[] = [];
+
   const managers: ManagerPool = {
     async start(input) {
       started.push(input);
@@ -240,6 +251,38 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     relocateFrom() {},
     // drain の契機は HTTP 側（`POST /runners/vacate`）にある。クローンの道具は呼ばない。
     async vacate() {},
+    /**
+     * 評定（#1054）。**本物と同じところまで動かす** —— 「無い id は `'absent'`」と
+     * 「前の値を返す」と「理由を渡さなければ前の理由を消す」の3つは、道具の側の
+     * 振る舞い（何を返すか・何を日誌に書くか）がそれに依存している。
+     */
+    async appraise(managerId: string, appraisal: AppraisalValue, by: AppraisedBy, reason?: string) {
+      const found = running.find((manager) => manager.managerId === managerId);
+      if (!found) {
+        return {
+          outcome: 'absent' as const,
+          detail: `${managerId} というマネージャーは台帳に居ない。`,
+          previous: null,
+        };
+      }
+      const previous = describeAppraisal(found);
+      appraised.push({
+        managerId,
+        appraisal,
+        by,
+        ...(reason === undefined ? {} : { reason }),
+      });
+      found.appraisal = appraisal;
+      found.appraisedBy = by;
+      delete found.appraisalReason;
+      if (reason !== undefined) found.appraisalReason = reason;
+      return {
+        outcome: 'appraised' as const,
+        detail: `${managerId} の評定を ${appraisal} にした。`,
+        previous,
+      };
+    },
+
     async abort(managerId: string, reason?: string) {
       aborted.push({ managerId, ...(reason === undefined ? {} : { reason }) });
       const found = running.find((manager) => manager.managerId === managerId);

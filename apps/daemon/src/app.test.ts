@@ -1,4 +1,4 @@
-import { COMMITMENT_APPRAISAL_DECISION_PREFIX } from '@alteroid/core';
+import { COMMITMENT_APPRAISAL_DECISION_PREFIX, describeAppraisal } from '@alteroid/core';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -104,6 +104,27 @@ function fakeClone() {
         };
       }
       return { outcome: sendOutcome, detail: '届けた' };
+    },
+    /**
+     * 評定（#1054）。**本物と同じところまで動かす** —— 「無い id は `absent`」と
+     * 「前の値を返す」と「理由を渡さなければ前の理由を消す」の3つに、HTTP の
+     * 応答と日誌の本文が依存している。
+     */
+    async appraise(managerId, appraisal, by, reason) {
+      const found = managerList.find((entry) => entry.managerId === managerId);
+      if (!found) {
+        return { outcome: 'absent' as const, detail: `${managerId} は居ない`, previous: null };
+      }
+      const previous = describeAppraisal(found);
+      found.appraisal = appraisal;
+      found.appraisedBy = by;
+      delete found.appraisalReason;
+      if (reason !== undefined) found.appraisalReason = reason;
+      return {
+        outcome: 'appraised' as const,
+        detail: `${managerId} の評定を ${appraisal} にした。`,
+        previous,
+      };
     },
     async abort(managerId, reason) {
       if (!managerList.some((entry) => entry.managerId === managerId)) {

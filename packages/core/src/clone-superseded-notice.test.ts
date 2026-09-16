@@ -100,6 +100,7 @@ function stubPool(managers: ManagerSummary[]): ManagerPool {
     start: notImplemented,
     send: notImplemented,
     abort: notImplemented,
+    appraise: notImplemented,
     list: () => Promise.resolve(managers),
     denials: () => [],
     pushHealthOf: () => undefined,
