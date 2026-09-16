@@ -506,6 +506,7 @@ export {
   type ManagerStopActor,
   type ManagerSummary,
   type ManagerTranscript,
+  type ManagerUnpushedWork,
   guardArchiveRemoval,
   type ArchiveRemovalGuard,
   type SessionMissingKind,

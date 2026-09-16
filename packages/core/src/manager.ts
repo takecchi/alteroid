@@ -48,6 +48,7 @@ import type {
   RunnerRegistry,
   RunnerRevisionStatus,
   RunnerWaiting,
+  UnpushedWorkResult,
 } from './runner-protocol.js';
 import { brief } from './runner.js';
 import type {
@@ -609,6 +610,19 @@ export type ManagerTranscript =
       readonly bytes: number;
     }
   | { readonly kind: 'missing' };
+
+/**
+ * `ManagerPool.unpushedWork()` の戻り値（Issue #1039）。
+ *
+ * **`undefined` へ畳まない。** `kind: 'unavailable'` は「確かめられなかった」
+ * ことそのものを名乗る——`manager_stop` はこれを 0 と混ぜてはいけない
+ * （AGENTS.md「取れない軸に0の行を作る」）。理由（`reason`）は人間・クローンが
+ * 読む文言に直接使うので、`RunnerHttpError` の文言のような機微を含まない範囲で
+ * 短く書く。
+ */
+export type ManagerUnpushedWork =
+  | { readonly kind: 'ok'; readonly result: UnpushedWorkResult }
+  | { readonly kind: 'unavailable'; readonly reason: string };
 
 /**
  * 「確認へ上がらずに止められた」件数（道具・層ごと）。
@@ -1248,6 +1262,28 @@ export interface ManagerPool {
   runnerIdOf(managerId: string): Promise<string | undefined>;
   /** manager_id からセッションの生ログへ降りる（可観測性の最下段）。 */
   transcript(managerId: string): Promise<ManagerTranscript>;
+  /**
+   * `manager_stop` の running 断りが「畳むと何が失われるか」を実物の数字で
+   * 言うためだけに呼ぶ（Issue #1039）。**`manager_list` からは呼ばない**——
+   * この一覧のために自動で往復を足さない、という既存の作法（`runners()` の
+   * doc）と同じ理由。**`force: true` の経路からも呼ばない**（もう決めた後
+   * なので、往復を払う意味が無い）。
+   *
+   * **この呼び出しが失敗しても、呼び出し元（`manager_stop`）が止まっては
+   * いけない。** だからこのメソッド自体は例外を投げない——runner が答えな
+   * かった・この口を持たない・像を持っていない、どの理由でも
+   * `{ kind: 'unavailable', reason }` を返す。呼び出し元はこれを「確かめ
+   * られなかった」として扱い、0 とは混ぜない。
+   *
+   * **省略可能（`?`）にしない。** `runnerBacklog()` の doc と同じ理由——
+   * 省略可能にすると「この口を持たない」と「観測できなかった」が同じ形に
+   * 潰れる。spec 生成専用のスタブ（`apps/daemon/src/openapi.ts`）へは1行
+   * 足すだけで済む。
+   */
+  unpushedWork(
+    managerId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<ManagerUnpushedWork>;
   /**
    * この archive id が、いまデーモンが走行中として抱えている（`#records` に
    * 居る）マネージャーのどれかの退避なら、その managerId を返す（#698）。
@@ -4261,6 +4297,42 @@ class Pool implements ManagerPool {
     // セッション等）に本文が残っていれば、そちらのほうが有用なので優先する
     // ——tombstone の事実は「他のどこにも無かったとき」の最後の説明である。
     return removed !== undefined ? { kind: 'removed', ...removed } : { kind: 'missing' };
+  }
+
+  async unpushedWork(
+    managerId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<ManagerUnpushedWork> {
+    // **`#records` にしか見ない。** `manager_stop` の running 断りから呼ばれる
+    // ときは常に走行中なので像が在るはずだが、念のため無ければ「確かめられ
+    // なかった」を返す（台帳まで降りて再構築するほどの用途ではない——
+    // `transcript()` と違ってここは可観測性の最下段ではない）。
+    const record = this.#records.get(managerId);
+    if (record === undefined) {
+      return { kind: 'unavailable', reason: 'この委譲はいま像を持っていない（走行中ではない）。' };
+    }
+    const runner = await this.#runnerOf(record);
+    if (runner === null) {
+      return { kind: 'unavailable', reason: '宛先の runner がいま開いていない。' };
+    }
+    if (runner.unpushedWork === undefined) {
+      return {
+        kind: 'unavailable',
+        reason: 'この runner はこの口を持たない（古い版、またはテストの偽物）。',
+      };
+    }
+    try {
+      const result = await runner.unpushedWork(managerId, options);
+      if (result === undefined) {
+        return {
+          kind: 'unavailable',
+          reason: 'runner が答えなかった（セッションが無い・期限切れ・古い版のいずれか）。',
+        };
+      }
+      return { kind: 'ok', result };
+    } catch (error) {
+      return { kind: 'unavailable', reason: `runner への問い合わせが失敗した: ${String(error)}` };
+    }
   }
 
   runningManagerOwning(archiveId: string): string | undefined {

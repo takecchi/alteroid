@@ -71,6 +71,7 @@ import type {
   ManagerPool,
   ManagerSummary,
   ManagerTranscript,
+  ManagerUnpushedWork,
   RunnerBacklogSnapshot,
   RunnerManagerEntry,
   RunnerPushOutcome,
@@ -2590,6 +2591,66 @@ function describeMemorySectionLookupFailure(
     default:
       return assertNeverMemorySectionLookup(lookup);
   }
+}
+
+/**
+ * `manager_stop` の running 断り（#1037）が呼ぶ `pool.unpushedWork()` の期限
+ * （Issue #1039）。
+ *
+ * ⚠️ **実測に基づく値ではない。** Issue #1039 が測った「1本 6ms 強 / 8本
+ * 49〜51ms」は器の中のローカルな `git` の実行時間だけで、daemon ↔ runner の
+ * HTTP 往復と別 UID の子プロセス起動は含んでいない。ここは安全側に短く
+ * 取った未検証の既定値である——`manager_stop` 自体の応答が長々と待たされる
+ * ことのほうが実害なので、`pool.unpushedWork()` が失敗しても構わない設計
+ * （下記）に頼って短めに切ってある。
+ */
+const MANAGER_STOP_UNPUSHED_WORK_TIMEOUT_MS = 5_000;
+
+/**
+ * `manager_stop` の running 断りへ、未 push の実装と未コミットの変更を実物の
+ * 数字で足す（Issue #1039）。
+ *
+ * ⛔ **ここで組み立てる文言にファイル名・差分の中身・コミットメッセージ・
+ * author を一切含めないこと。** `ManagerUnpushedWork` / `UnpushedWorkResult`
+ * はそれらの欄自体を持たない（`unpushedWorkTreeSchema` の doc）ので、
+ * 書き足さない限り漏れようがない——ここでも同じ線をなぞって出すだけにする。
+ */
+function describeUnpushedWork(probe: ManagerUnpushedWork): string {
+  if (probe.kind === 'unavailable') {
+    return `未 push の実装・未コミットの変更: **確かめられなかった**（${probe.reason}）。`;
+  }
+  const { result } = probe;
+  if (result.worktrees.length === 0) {
+    return `未 push の実装・未コミットの変更: 作業ツリーが見つからなかった（${result.cwd} の下を探索した）。`;
+  }
+  const lines = result.worktrees.map((worktree) => {
+    const branch = worktree.branch ?? '(枝を指していない、または確かめられなかった)';
+    const unpushed =
+      worktree.unpushedCommitCount === undefined
+        ? `未 push: 確かめられなかった（${worktree.unpushedCommitCountUnknown ?? '理由不明'}）`
+        : `未 push ${String(worktree.unpushedCommitCount)}本`;
+    const uncommitted =
+      worktree.uncommittedChangeCount === undefined
+        ? `未コミット: 確かめられなかった（${worktree.uncommittedChangeCountUnknown ?? '理由不明'}）`
+        : `未コミット ${String(worktree.uncommittedChangeCount)}件`;
+    return `  - ${worktree.relativePath}（枝: ${branch}）: ${unpushed} / ${uncommitted}`;
+  });
+  const truncatedNote =
+    result.truncatedAtCount === undefined
+      ? ''
+      : `\n  ⚠️ 作業ツリーの探索は${String(result.truncatedAtCount)}件で打ち切った——さらに在る可能性がある。`;
+  const stoppedEarlyNote =
+    result.stoppedEarly === true
+      ? '\n  ⚠️ 呼び出し元の期限切れで、一部の作業ツリーは調べる前に打ち切った（各行の理由を見よ）。'
+      : '';
+  return (
+    `未 push の実装・未コミットの変更（${result.cwd} の下、${String(result.worktrees.length)}本の作業ツリー）:\n` +
+    lines.join('\n') +
+    truncatedNote +
+    stoppedEarlyNote +
+    '\n  ⚠️ 未 push の数は fetch していない remote-tracking ref を基準にしており、' +
+    '実際には push 済みでも多めに出ることがある（安全側の誤り）。'
+  );
 }
 
 /** ツール定義そのもの。MCP の配線を通さずに単体テストできるよう分けてある。 */
@@ -6495,10 +6556,29 @@ export function createCloneTools(context: ToolContext) {
               ? '直近の報告は一度も届いていない。'
               : `直近の報告は ${before.lastReportAt}` +
                 '（最後に終えたターンのもの。いま走っているターンの中身ではない）。';
+
+          // **「畳むと未 push の実装が失われる」を一般論から実物へ替える
+          // （#1039）。⛔ この調べものが失敗しても、この断り（＝止める道が
+          // 塞がっていないこと）は必ず返す** ——`pool.unpushedWork()` は
+          // 自分自身は例外を投げない設計だが、念のためここでも捕まえる。
+          // `force: true` の経路（この if の外）と `manager_list` からは
+          // 呼ばない。
+          const unpushedWork = await pool
+            .unpushedWork(managerId, {
+              signal: AbortSignal.timeout(MANAGER_STOP_UNPUSHED_WORK_TIMEOUT_MS),
+            })
+            .catch(
+              (error: unknown): ManagerUnpushedWork => ({
+                kind: 'unavailable',
+                reason: `確かめようとして例外が飛んだ: ${String(error)}`,
+              }),
+            );
+
           return text(
             `[${managerId}] 止めていない。**いまターンの途中**（running）— 畳むと未 push の実装・` +
               '起こした作業者・監視中の CI が失われる。🔴 force: true で止まる。\n' +
-              `${lastReportLine} ターンの中身は manager_report で先に読めること。`,
+              `${lastReportLine} ターンの中身は manager_report で先に読めること。\n` +
+              describeUnpushedWork(unpushedWork),
           );
         }
 

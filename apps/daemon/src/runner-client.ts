@@ -14,6 +14,7 @@ import type {
   RunnerRevisionReport,
   RunnerSetCredentialsCommand,
   RunnerStartCommand,
+  UnpushedWorkResult,
 } from '@alteroid/core';
 import { request as httpRequest } from 'node:http';
 import { Readable } from 'node:stream';
@@ -34,6 +35,7 @@ import {
   runnerExecutionResourcesSchema,
   runnerManagerStateSchema,
   runnerPlacementResourcesSchema,
+  unpushedWorkResultSchema,
 } from '@alteroid/core';
 
 // **失敗の種別は口の定義（`@alteroid/core`）が持つ。** この経路だけの都合にすると、
@@ -1692,6 +1694,36 @@ class HttpRunner implements RunnerClient {
       return await response.text();
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * 未 push の実装と未コミットの変更（Issue #1039）。**取れなければ
+   * `undefined`**——`transcript()` と同じ「取れなかった」の扱いで、404・
+   * 期限切れ・古い runner（この口をまだ持たない）・応答が
+   * `unpushedWorkResultSchema` に合わなかった場合のどれもここでは同じ形に
+   * なる。呼び出し側（`ManagerPool.unpushedWork`）はこれを「確かめられ
+   * なかった」として扱い、0 とは混ぜない。
+   *
+   * `options.signal` はこの HTTP 呼び出し自体の期限——`#call` の既定
+   * （{@link RUNNER_CALL_DEADLINE_MS}）より短く切りたい呼び出し側のためにある
+   * （`list()` が `signal` を受けているのと同じ形）。
+   */
+  async unpushedWork(
+    managerId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<UnpushedWorkResult | undefined> {
+    try {
+      const response = await this.#call(
+        'GET',
+        `/managers/${encodeURIComponent(managerId)}/unpushed-work`,
+        undefined,
+        options?.signal,
+      );
+      const parsed = unpushedWorkResultSchema.safeParse(await response.json());
+      return parsed.success ? parsed.data : undefined;
+    } catch {
+      return undefined;
     }
   }
 
