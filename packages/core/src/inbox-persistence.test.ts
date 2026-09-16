@@ -617,9 +617,7 @@ describe('未読の永続化', () => {
       // 普通に成功する——台帳は実際に開けているので、これは正しい。この歯が
       // 固定したいのは「人間の発言の本文」の消え方であって、機械の記録の
       // 有無ではない。
-      expect(
-        await stores.journal.list({ types: ['exchange'], with: ['human'] }),
-      ).toEqual([]);
+      expect(await stores.journal.list({ types: ['exchange'], with: ['human'] })).toEqual([]);
 
       // 2つ目の器。記憶ストアだけが生き残っている。
       const reborn = bootClone(stores);
