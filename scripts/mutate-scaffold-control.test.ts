@@ -19,6 +19,7 @@ import {
   parseDeclaredFailureCount,
   parseFailedTestNames,
   SCAFFOLD_CONTROL_STAGE,
+  validateSpec,
 } from '../.claude/skills/mutation-testing/mutate-core.mjs';
 
 /**
@@ -277,12 +278,9 @@ describe('mutate-core: decideJudgementCategory の門4（落ちた歯の名前�
     // 名乗れるのは宣言した歯が surviving（対照を差し引いた残り）に居るときだけ
     // ——ここで実際に残る歯は REAL_SINGLE_FAILURE_NAME なので、それを宣言する。
     expect(
-      decideJudgementCategory(
-        NOT_CHECKED,
-        testResult,
-        measuredControl(SCAFFOLD_NAMES),
-        [REAL_SINGLE_FAILURE_NAME],
-      ),
+      decideJudgementCategory(NOT_CHECKED, testResult, measuredControl(SCAFFOLD_NAMES), [
+        REAL_SINGLE_FAILURE_NAME,
+      ]),
     ).toBe('検出');
   });
 
@@ -377,6 +375,171 @@ describe('mutate-core: decideJudgementCategory の門4（落ちた歯の名前�
         measuredControl([]),
       ),
     ).toThrow(/複数/);
+  });
+});
+
+// ── 門5（#993）: 落ちた歯が、測っていた歯とは限らない ─────────────────
+//
+// `surviving`（対照を差し引いた残りの赤）が非空になった後、宣言した歯
+// （`mustFail`）との交差で「検出」と「身代わり」を分ける。SKILL.md
+// 「落ちた歯が、測っていた歯とは限らない（偽の『検出』。判定を拒む門その5。
+// #993）」の表がそのまま歯になったもの。
+
+describe('mutate-core: decideJudgementCategory の門5（宣言した歯の名前で「検出」/「身代わり」を分ける。#993）', () => {
+  it('⭐ 宣言した歯が落ちていれば「検出」', () => {
+    const testResult = testResultFrom(
+      makeRawWithFailures([...SCAFFOLD_NAMES, REAL_SINGLE_FAILURE_NAME]),
+    );
+    expect(
+      decideJudgementCategory(NOT_CHECKED, testResult, measuredControl(SCAFFOLD_NAMES), [
+        REAL_SINGLE_FAILURE_NAME,
+      ]),
+    ).toBe('検出');
+  });
+
+  it('⭐ 宣言した歯が落ちておらず、別の歯だけが落ちていれば「身代わり」', () => {
+    const testResult = testResultFrom(
+      makeRawWithFailures([...SCAFFOLD_NAMES, REAL_SINGLE_FAILURE_NAME]),
+    );
+    // surviving（対照を差し引いた残り）は REAL_SINGLE_FAILURE_NAME の1本だけ
+    // ——それとは別の名前を「狙い」として宣言する。旧実装（件数だけを見る）
+    // なら surviving.length > 0 なので無条件に「検出」だった。ここが #993 の本体。
+    expect(
+      decideJudgementCategory(NOT_CHECKED, testResult, measuredControl(SCAFFOLD_NAMES), [
+        'packages/core/src/excerpt.test.ts > P1 > fiveFieldViolations は非アンカーで作成/更新を見る',
+      ]),
+    ).toBe('身代わり');
+  });
+
+  it('🔴 狙いの歯が宣言されていなければ「検出」とも「身代わり」とも言わない', () => {
+    const testResult = testResultFrom(
+      makeRawWithFailures([...SCAFFOLD_NAMES, REAL_SINGLE_FAILURE_NAME]),
+    );
+    expect(() =>
+      decideJudgementCategory(NOT_CHECKED, testResult, measuredControl(SCAFFOLD_NAMES)),
+    ).toThrow(HarnessError);
+    let message = '';
+    try {
+      decideJudgementCategory(NOT_CHECKED, testResult, measuredControl(SCAFFOLD_NAMES));
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    // 「なぜ拒むか」と「何を書けばよいか」——mustFail という具体的な鍵の名前と、
+    // 名前の拾い方の案内が入っていること。
+    expect(message).toContain('mustFail');
+    expect(message).toContain('名前の拾い方');
+    expect(message).toContain('[残った]');
+    expect(message).toContain('FAIL');
+  });
+
+  // ── 一方向性: 宣言は「検出」を狭めるだけで、赤を1本も差し引かない ──
+
+  it('⭐ 一方向性: すべて緑なら、何を宣言しても「生存」のまま', () => {
+    // 宣言（mustFail）で 生存 → 検出 へ動かせないこと。testsAllPassed の分岐は
+    // surviving を見る前に「生存」で返るので、対照（scaffoldControl）すら要らない。
+    expect(decideJudgementCategory(NOT_CHECKED, ALL_PASSED, undefined, ['なんでもいい名前'])).toBe(
+      '生存',
+    );
+    expect(
+      decideJudgementCategory(NOT_CHECKED, ALL_PASSED, measuredControl([]), [
+        REAL_SINGLE_FAILURE_NAME,
+      ]),
+    ).toBe('生存');
+  });
+
+  it('⭐ 一方向性: 足場対照で落ちた歯しか落ちていなければ、それを宣言しても「生存」', () => {
+    // 対照（印だけ・無変異）で赤くなった歯だけが落ちている状態。surviving は
+    // 差し引かれて空になるので、対照の名前そのものを「狙い」だと宣言しても
+    // 「検出」へは動かない——宣言は差し引きを覆せない。
+    const testResult = testResultFrom(makeRawWithFailures(SCAFFOLD_NAMES));
+    expect(
+      decideJudgementCategory(NOT_CHECKED, testResult, measuredControl(SCAFFOLD_NAMES), [
+        SCAFFOLD_NAMES[0],
+      ]),
+    ).toBe('生存');
+  });
+
+  it('⭐ 一方向性: 宣言しても [残った] から名前が1本も消えない（diffScaffoldFailures は mustFail を受け取らない）', () => {
+    const testResult = testResultFrom(
+      makeRawWithFailures([...SCAFFOLD_NAMES, REAL_SINGLE_FAILURE_NAME]),
+    );
+    const control = measuredControl(SCAFFOLD_NAMES);
+    // 証跡（[残った]）は judge の外——formatScaffoldSubtractionReport が
+    // 別に作る。この関数は mustFail を引数に取らない（下の
+    // `grep -Fn -- 'export function formatScaffoldSubtractionReport'` で
+    // シグネチャを確認できる）ので、宣言する前に1回だけ取っておく。
+    const reportBeforeDeclaring = formatScaffoldSubtractionReport(testResult, control);
+    expect(reportBeforeDeclaring).toContain(`[残った] ${REAL_SINGLE_FAILURE_NAME}`);
+
+    // 同じ testResult / control を、宣言だけ変えて2回 judge する。
+    const detected = judge(
+      { id: 'm-direction-detected', mustFail: [REAL_SINGLE_FAILURE_NAME] },
+      NOT_CHECKED,
+      testResult,
+      control,
+    );
+    const bystander = judge(
+      { id: 'm-direction-bystander', mustFail: ['宣言してもここには居ない歯の名前'] },
+      NOT_CHECKED,
+      testResult,
+      control,
+    );
+    expect(detected.category).toBe('検出');
+    expect(bystander.category).toBe('身代わり');
+
+    // カテゴリが変わっても、証跡（[残った]）は1文字も動いていない——宣言は
+    // surviving（＝ diffScaffoldFailures の結果）を1本も減らさない。
+    const reportAfterDeclaring = formatScaffoldSubtractionReport(testResult, control);
+    expect(reportAfterDeclaring).toBe(reportBeforeDeclaring);
+    expect(reportAfterDeclaring).toContain(`[残った] ${REAL_SINGLE_FAILURE_NAME}`);
+  });
+});
+
+describe('mutate-core: validateSpec は mustFail を必須にする（走らせる前に拒む。#993）', () => {
+  it('🔴 mustFail の無い spec を拒む', () => {
+    const specWithoutMustFail = {
+      id: 'm-no-mustfail',
+      file: 'target.txt',
+      from: 'hello',
+      to: 'HELLO',
+      expect: 1,
+      target: null,
+    };
+    expect(() => validateSpec(specWithoutMustFail)).toThrow(HarnessError);
+    let message = '';
+    try {
+      validateSpec(specWithoutMustFail);
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain('mustFail');
+    expect(message).toContain('狙いの歯');
+  });
+
+  it('空配列も、空文字列を含む配列も拒む（非空文字列が1本以上、の検査そのもの）', () => {
+    const base = {
+      id: 'm-x',
+      file: 'target.txt',
+      from: 'hello',
+      to: 'HELLO',
+      expect: 1,
+      target: null,
+    };
+    expect(() => validateSpec({ ...base, mustFail: [] })).toThrow(HarnessError);
+    expect(() => validateSpec({ ...base, mustFail: ['  '] })).toThrow(HarnessError);
+    expect(() => validateSpec({ ...base, mustFail: [123] })).toThrow(HarnessError);
+  });
+
+  it('非空文字列が1本以上あれば通る（他のフィールドが正しい前提で）', () => {
+    const base = {
+      id: 'm-x',
+      file: 'target.txt',
+      from: 'hello',
+      to: 'HELLO',
+      expect: 1,
+      target: null,
+    };
+    expect(() => validateSpec({ ...base, mustFail: ['a.test.ts > s > t'] })).not.toThrow();
   });
 });
 
@@ -620,6 +783,33 @@ describe('mutate.mjs run: 足場の赤を差し引いて判定する（端から
     expect(out).toContain(`[残った] ${REAL_TOOTH}`);
     expect(out).toContain('差し引いた足場の赤 1本');
     expect(out).toContain('残った赤 1本');
+    expect(fs.existsSync(path.join(root, 'MUTATION-IN-PROGRESS.json'))).toBe(false);
+  });
+
+  it('⭐ CLI 統合: 宣言した歯とは別の歯だけが落ちれば「身代わり」（#993 の本体）', () => {
+    const root = makeTmpGitRepo();
+    const { status, out } = runPlan(root, [
+      {
+        id: 'm-hello-upcase-bystander',
+        file: 'target.txt',
+        from: 'hello',
+        to: 'HELLO',
+        expect: 1,
+        target: null,
+        // この変異が実際に落とすのは REAL_TOOTH（上のテストと同じ変異）だが、
+        // ここでは別の名前を「狙い」として宣言する——測っていたつもりの歯は
+        // 緑のまま、無関係な歯が代わりに落ちている状態を作る。
+        mustFail: [
+          'fake/other.test.ts > 別の歯 > これは実際には落ちない（宣言の打ち間違いを模す）',
+        ],
+      },
+    ]);
+    expect(status).toBe(0);
+    expect(out).toContain('変異 m-hello-upcase-bystander: 身代わり');
+    expect(out).toContain('次にやること: 証跡の [残った] を読む');
+    expect(out).toContain(`[差し引いた] ${SCAFFOLD_TOOTH}`);
+    // 宣言と無関係に、実際に落ちた歯の名前は証跡に出ている（黙って消えない）。
+    expect(out).toContain(`[残った] ${REAL_TOOTH}`);
     expect(fs.existsSync(path.join(root, 'MUTATION-IN-PROGRESS.json'))).toBe(false);
   });
 
