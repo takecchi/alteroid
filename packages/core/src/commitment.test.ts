@@ -995,12 +995,24 @@ describe('引き受けたまま終わっていない仕事', () => {
     a.clone.post(managerMessage(body, 'evt-1041-a'));
     b.clone.post(managerMessage(body, 'evt-1041-b'));
 
+    // **固定の待ち（`setTimeout`）は使わない。** 競合を測る歯が時間で揺れると、
+    // 次に赤くなったときに「本物か、揺れか」が分からなくなる——競合そのものと
+    // 同じ形の不確かさを、それを測る道具の側へ持ち込むことになる。
+    //
+    // 代わりに**両方のインスタンスのターンが実際に入力を読んだこと**を条件に
+    // する。ターンは入力を組み立てる前に自分の記帳の決着を待つので
+    // （逐語は `grep -Fn -- 'const outcome = await this.#committed.get(pending.id);'
+    // packages/core/src/clone.ts`）、**両方の `calls` に入力が載った時点で、
+    // 両方の `#commit` は決着している。**
+    //
+    // ⚠ **台帳の件数を条件にしてはいけない。** 「2件になるまで待つ」は競合が
+    // 直った後に待ち続けて時間切れになり、「1件以上になるまで待つ」は1件目が
+    // 開いた瞬間に抜けて2件目の決着を見ない。⟹ 条件は**競合が直っていても
+    // 直っていなくても同じように成立する**ものでなければならない。
     await waitFor(
-      async () => (await stores.commitments.list()).entries.length >= 1,
-      '少なくとも1件目の記帳',
+      () => a.calls.length > 0 && b.calls.length > 0,
+      '2つのインスタンスのターンが両方とも入力を読むこと',
     );
-    // レースの窓は短いので、もう少し待って決着させる。
-    await new Promise((resolve) => setTimeout(resolve, 50));
 
     const open = (await stores.commitments.list()).entries;
 
