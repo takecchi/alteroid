@@ -11,7 +11,7 @@ description: ログイン・アクセス許可（alteroid login / access grant�
 
 - マルチユーザーではない（PRD 非ゴール）。**持ち主が複数の端末・複数のログイン手段から入れるようにするための層**であって、利用者ごとにデータを分けない
   - **⚠️ 非ゴールが禁じているのは「データを分けること」であって「入口の数」ではない。** 許可は複数のアカウントへ出せる（下の項目）。**境界はデータの側に在る** — 「アカウントごとの記憶」「アカウントごとの日誌」を作りたくなったら、そこが越えてはいけない線である（逐語は `grep -Fn -- '境界はデータの側に在る' docs/PRD.md`）
-- **通る資格は2種類**。①`Authorization: Bearer <アクセストークン>`（`alteroid login` で発行。許可されたアカウントのものだけ通る）②`Authorization: Bearer <state/daemon.json の token>`（＝**実行環境の持ち主**。CLI が使う）。**`/access/*` と `/tokens` は①②のどちらでも叩ける**（2026-09-06 のオーナー決定で同格にした）。**②でなければ叩けないのは `/profile` の2本だけである**
+- **通る資格は2種類**。①`Authorization: Bearer <アクセストークン>`（`alteroid login` で発行。許可されたアカウントのものだけ通る）②`Authorization: Bearer <state/daemon.json の token>`（＝**実行環境の持ち主**。CLI が使う）。**`/access/*` と `/tokens` は①②のどちらでも叩ける**（2026-09-06 のオーナー決定で同格にした）。**②でなければ叩けない経路の一覧を持つのは歯である** —— 数え上げの持ち主は `scripts/require-operator-routes.test.ts` の `EXPECTED_OPERATOR_ROUTES` で、配線と一覧の一致を測っている（逐語は `grep -Fn -- 'const EXPECTED_OPERATOR_ROUTES' scripts/require-operator-routes.test.ts`）
   - ②が「最初の1人を誰が通すか」の出口である。守っているのは**ファイルの許可**であって新しい秘密ではない。これが無いと誰も `access grant` を実行できない
 - **既定では認証を要求しない。** `ALTEROID_GOOGLE_CLIENT_ID` と `ALTEROID_GOOGLE_CLIENT_SECRET` が揃うと自動で有効になり、`ALTEROID_AUTH=off` で明示的に切れる。設定していない人の `alteroid chat` が突然通らなくなるのは、境界の導入が実質のデグレードになる典型なので、**既定を「要求する」に倒さないこと**
 - **ログインしただけでは使えない。** `alteroid access list` で見て `alteroid access grant <id>` で通す。取り消しは `revoke` で、**発行済みトークンを消さなくても即座に効く**（許可はリクエストごとに見ている）

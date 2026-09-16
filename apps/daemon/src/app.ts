@@ -1272,9 +1272,11 @@ export function createApp(deps: AppDeps) {
    * 実行環境の持ち主だけに絞る門。**⚠️ 2026-09-06 のオーナー決定で、`/tokens`
    * `/access/*` はここを外れ `authenticate` だけになった**（alteroid を使う許可
    * ＝ `access grant` 済みのアカウントを、実行環境の持ち主と同格に扱う）。
-   * いま実際にこの門を通るのは `GET /profile` `PUT /profile` の2経路だけ
-   * （下の doc に開けない理由がある）。定義そのものはこの決定でも変えていない
-   * ——変えたのは経路ごとの配線（どこへ引数として渡すか）である。
+   * いまこの門を通る経路の一覧を持つのは歯である。**本数をここで数え直さないこと**
+   * —— 数え上げの持ち主は `scripts/require-operator-routes.test.ts` の
+   * `EXPECTED_OPERATOR_ROUTES` で、そこは配線と一覧の一致を測っている。定義
+   * そのものはこの決定でも変えていない——変えたのは経路ごとの配線（どこへ
+   * 引数として渡すか）である。
    */
   const requireOperator = createMiddleware<{ Variables: AuthVariables }>(async (c, next) => {
     if (c.get('principal').kind !== 'operator') {
