@@ -9,7 +9,7 @@
  * （既存に足す）は同じ `railway` を叩くので、偽物を2つ持つと片方だけが本物の
  * 応答の形に追いつく。追いつけていない側は**緑のまま嘘を確かめる**。
  */
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -223,8 +223,19 @@ export function childEnv(
   return { PATH: `${bin}:${parent.PATH ?? ''}`, ...extra };
 }
 
-/** スクリプトを1回走らせ、投げられた入力と終了状態を返す。 */
-export function runScript(options: RunOptions): Run {
+type Prepared = {
+  dir: string;
+  bin: string;
+  envFile: string;
+  env: Record<string, string>;
+};
+
+/**
+ * `runScript` / `runScriptAsync` に共通する下ごしらえ（一時ディレクトリ・偽 CLI・
+ * `.env`・引き継ぐ環境）。**プロセスをどう起こすか（同期 `spawnSync` か非同期
+ * `spawn` か）だけが両者で違う**ので、それ以外はここと下の `finish` に寄せてある。
+ */
+function prepare(options: RunOptions): Prepared {
   const dir = mkdtempSync(join(tmpdir(), 'alteroid-railway-test.'));
   const bin = join(dir, 'bin');
   mkdirSync(bin);
@@ -242,26 +253,23 @@ export function runScript(options: RunOptions): Run {
   const envFile = join(dir, '.env');
   if (options.envFile !== undefined) writeFileSync(envFile, options.envFile);
 
-  // **`spawnSync` である（`execFileSync` ではない）。** `execFileSync` は成功したときに
-  // stdout しか返さず、stderr は例外の中にしか入らない。この2つのスクリプトは進捗も
-  // 警告も**全部 stderr へ出す**（値を `$(…)` で受けるため）ので、成功した実行の
-  // stderr が取れないと「何をすると言ったか」を確かめるテストが**空文字と比べて
-  // 静かに通る**（`--dry-run` が何も出していなくても緑になる、が実際に出た）
-  const result = spawnSync('bash', [join(RAILWAY_DIR, options.script), ...options.args], {
-    env: childEnv(process.env, bin, {
-      // **本物の .env を触らせない。** 既定は リポジトリ直下の .env である
-      ALTEROID_ENV_FILE: envFile,
-      FAKE_STATE: dir,
-      ...(options.extraEnv ?? {}),
-    }),
-    stdio: ['ignore', 'pipe', 'pipe'],
-    encoding: 'utf8',
+  const env = childEnv(process.env, bin, {
+    // **本物の .env を触らせない。** 既定は リポジトリ直下の .env である
+    ALTEROID_ENV_FILE: envFile,
+    FAKE_STATE: dir,
+    ...(options.extraEnv ?? {}),
   });
-  options.onEnvFile?.(envFile);
 
-  if (result.error) throw result.error;
-  const exitCode = result.status ?? 1;
-  const stderr = result.stderr ?? '';
+  return { dir, bin, envFile, env };
+}
+
+/**
+ * 子プロセスが終わった後、投げられた入力と終了状態を `Run` へ組み立てる
+ * （`runScript` / `runScriptAsync` 共通）。
+ */
+function finish(options: RunOptions, prepared: Prepared, exitCode: number, stderr: string): Run {
+  options.onEnvFile?.(prepared.envFile);
+
   if (exitCode !== 0 && !options.allowFailure) {
     // 落ちた理由（stderr）を握り潰すと、CI でだけ落ちたときに手掛かりが無くなる
     throw new Error(`${options.script} が ${exitCode} で終わった\n${stderr}`);
@@ -269,7 +277,7 @@ export function runScript(options: RunOptions): Run {
 
   const read = (name: string): string => {
     try {
-      return readFileSync(join(dir, name), 'utf8');
+      return readFileSync(join(prepared.dir, name), 'utf8');
     } catch {
       return '';
     }
@@ -305,4 +313,88 @@ export function runScript(options: RunOptions): Run {
     stderr,
     exitCode,
   };
+}
+
+/**
+ * スクリプトを1回走らせ、投げられた入力と終了状態を返す（同期）。
+ *
+ * ⚠️ **`scale-runners.test.ts` はこちらを使い続けている。** 非同期版
+ * （`runScriptAsync`、下）を足したのは `setup.test.ts` の準備段を並行化するため
+ * で、同期版を無くす理由にはならない——呼び出し側を書き換えるのはそちら側の
+ * 仕事であって、この足場の役目ではない。
+ */
+export function runScript(options: RunOptions): Run {
+  const prepared = prepare(options);
+
+  // **`spawnSync` である（`execFileSync` ではない）。** `execFileSync` は成功したときに
+  // stdout しか返さず、stderr は例外の中にしか入らない。この2つのスクリプトは進捗も
+  // 警告も**全部 stderr へ出す**（値を `$(…)` で受けるため）ので、成功した実行の
+  // stderr が取れないと「何をすると言ったか」を確かめるテストが**空文字と比べて
+  // 静かに通る**（`--dry-run` が何も出していなくても緑になる、が実際に出た）
+  const result = spawnSync('bash', [join(RAILWAY_DIR, options.script), ...options.args], {
+    env: prepared.env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    encoding: 'utf8',
+  });
+
+  if (result.error) throw result.error;
+  return finish(options, prepared, result.status ?? 1, result.stderr ?? '');
+}
+
+/**
+ * `runScript` の非同期版（`spawn`）。**足した理由は `setup.test.ts` の準備段（28回
+ * ぶんの `setup.sh` 実行）を直列ではなく並行に走らせるため**である（#1093 —
+ * 直列に起こすと、器が混んでいる時間だけ `it` の所要時間が伸びて
+ * `testTimeout` を超える）。
+ *
+ * 下ごしらえ（`prepare`）と結果の組み立て（`finish`）は同期版と共有する。
+ * 違うのは子プロセスをどう待つかだけである。
+ */
+export function runScriptAsync(options: RunOptions): Promise<Run> {
+  const prepared = prepare(options);
+  return new Promise((resolve, reject) => {
+    const child = spawn('bash', [join(RAILWAY_DIR, options.script), ...options.args], {
+      env: prepared.env,
+      // stdout は誰も読まない（同期版でも `result.stdout` は使っていない）ので
+      // 'ignore' で捨てる——'pipe' のまま誰も drain しないと、OS のパイプが
+      // 埋まって子プロセスを止めてしまう
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      try {
+        resolve(finish(options, prepared, code ?? 1, stderr));
+      } catch (err) {
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    });
+  });
+}
+
+/**
+ * 並行数を `limit` で頭打ちにして非同期タスクを走らせる小さなプール。
+ * 無制限に並べると器の CPU を使い切る（`setup.test.ts` の準備段が
+ * `runScriptAsync` を28回ぶん投げるのに使う）。
+ */
+export async function runLimited<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const size = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(
+    Array.from({ length: size }, async () => {
+      for (let i = next++; i < items.length; i = next++) {
+        results[i] = await fn(items[i]);
+      }
+    }),
+  );
+  return results;
 }
