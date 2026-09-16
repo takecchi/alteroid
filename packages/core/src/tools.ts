@@ -63,7 +63,7 @@ import {
   renderListingEntry,
   renderListingFromEnd,
 } from './excerpt.js';
-import { classifyManagerActivity } from './manager-activity.js';
+import { classifyManagerActivity, describeReportDrift } from './manager-activity.js';
 import type { ManagerActivityInput } from './manager-activity.js';
 import { guardArchiveRemoval } from './manager.js';
 import type {
@@ -6490,11 +6490,28 @@ export function createCloneTools(context: ToolContext) {
           // **要点を先頭・短くする（#1037 コメント）。** 「⚠ の1行を足す」形の
           // 断りは読まれても流される実例が在る——読み飛ばせない形にするには、
           // 長い説明の奥に核心（force で止まる）を埋めないことが要る。
+          //
+          // **文言の生成元は `describeReportDrift`（Issue #1036）。** ここで
+          // 自前に「N分前・いま走っているターンの中身ではない」を組まない
+          // ——`manager_report` / `manager_list` と同じ1箇所から取る（#1043 が
+          // ここへ書いていた文言を、この PR で差し替えた）。
+          const drift = describeReportDrift({
+            managerId,
+            lastReportAt: before.lastReportAt,
+            lastReportStatus: before.lastReportStatus,
+            status: before.status,
+            now: new Date(),
+          });
+          // **drift が言えない回（報告が一度も無い／記録した status が無い古い
+          // 行／`unchanged` の稀な回）は、ここだけの generic な一言で埋める。**
+          // `describeReportDrift` の doc が書くとおり、この字面はここでしか
+          // 使わない——`describeReportDrift` 側の文言とは重複しない。
           const lastReportLine =
-            before.lastReportAt === undefined
-              ? '直近の報告は一度も届いていない。'
-              : `直近の報告は ${before.lastReportAt}` +
-                '（最後に終えたターンのもの。いま走っているターンの中身ではない）。';
+            drift === ''
+              ? before.lastReportAt === undefined
+                ? '直近の報告は一度も届いていない。'
+                : '直近の報告は manager_report で読めること。'
+              : drift;
           return text(
             `[${managerId}] 止めていない。**いまターンの途中**（running）— 畳むと未 push の実装・` +
               '起こした作業者・監視中の CI が失われる。🔴 force: true で止まる。\n' +
