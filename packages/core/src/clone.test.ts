@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ALWAYS_REDELIVER,
   CLONE_MODEL,
+  DAEMON_TOKEN_POOL_REOPENED_SOURCE,
   CLONE_MODEL_ENV_KEY,
   CLONE_PERMISSION_MODE_ENV_KEY,
   createClone,
@@ -9842,6 +9843,127 @@ describe('usageBlocked（クローンがいま枠で止まっているかを読�
     clone.post(humanMessage('トリガー', 'conv-2'));
     await waitFor(() => !clone.usageBlocked, '枠が解除される');
     expect(clone.usageBlocked).toBe(false);
+
+    await clone.stop();
+  });
+});
+
+/**
+ * **`usageReleasePending`（Issue #1051）**: 枠の解除を試す印
+ * （`#releaseRequested`）が、まだ使われずに立っているかを読む窓
+ * （`CloneHost.usageReleasePending`）。
+ *
+ * ## これが何を支えているか
+ *
+ * `apps/daemon/src/index.ts` の門（`worthDeliveringNow`）は、**この印が立って
+ * いる間は「通る状態に戻った」の合図を配らない。** その判断が成り立つ根拠は
+ * 1つだけである —— **合図の効果は `post()` の中のこの印を立てることだけで、
+ * 既に立っているならもう一度立てても状態は1文字も動かない。**
+ *
+ * ⟹ **ここで測るのはその根拠そのものである。** 門の側の歯（`index.test.ts`）は
+ * 引数の真偽表しか見られないので、**引数が現実と結びついていることは、ここで
+ * しか固定できない。**
+ */
+/**
+ * 「認証トークンが通る状態に戻った」の合図を1件作る（`apps/daemon/src/index.ts` の
+ * `wake()` が出すものと同じ型・同じ `source`）。
+ *
+ * **本文は呼び手が変えられるようにしてある。** 同一本文にすると受信箱の
+ * 畳み込み（Issue #954 / `inboxCollapseKey`）まで一緒に効いてしまい、測りたい
+ * `#releaseRequested` の話と混ざる——**別の本文でも印の挙動は同じ**であることを
+ * 見るほうが、測っているものが1つに絞れる。
+ */
+function tokenPoolReopened(text: string): InboxEvent {
+  return {
+    type: 'external',
+    id: `evt-${text}`,
+    at: '2026-09-16T01:39:52.172Z',
+    source: DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+    payload: { text },
+  };
+}
+
+describe('usageReleasePending（再開の印がまだ使われずに立っているか。Issue #1051）', () => {
+  const spendLimitMessage = "You've hit your individual spend limit for this account.";
+
+  it('枠に当たっていない間は false（印を立てる条件そのものが無い）', () => {
+    const s = setup();
+    expect(s.clone.usageReleasePending).toBe(false);
+  });
+
+  it('🔴 枠で止まっている間、1件目の合図で印が立ち、2件目は何も動かさない', async () => {
+    let releaseGateOpen = false;
+    const { fn } = fakeSdk(undefined, {
+      resultFor: () =>
+        releaseGateOpen
+          ? undefined
+          : { subtype: 'error_during_execution', text: spendLimitMessage },
+    });
+    const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
+      stores: createMemoryStores(),
+      queryFn: fn,
+      env: {},
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    const { events } = wireEvents(clone, 'conv-1');
+
+    clone.post(humanMessage('やあ'));
+    await waitForTerminal(events);
+    await waitFor(() => clone.usageBlocked, '枠に当たって保持される');
+
+    // **止まった直後、印はまだ立っていない。** ここが「配る意味が在る」窓である。
+    expect(clone.usageReleasePending).toBe(false);
+
+    // 1件目の「通る状態に戻った」の合図。
+    clone.post(tokenPoolReopened('1件目'));
+    expect(clone.usageReleasePending).toBe(true);
+
+    // **2件目以降は、立っている印をもう一度立てるだけである。** ＝ 門がここを
+    // 畳んでも、クローンの状態は1文字も違わない（Issue #1051 の根拠）。
+    const before = { blocked: clone.usageBlocked, pending: clone.usageReleasePending };
+    clone.post(tokenPoolReopened('2件目'));
+    clone.post(tokenPoolReopened('3件目'));
+    expect({ blocked: clone.usageBlocked, pending: clone.usageReleasePending }).toEqual(before);
+
+    await clone.stop();
+  });
+
+  it('🔴 印は再試行で消費される ⟹ 次の回復はまた配られる（起こし損ねを作らない）', async () => {
+    let releaseGateOpen = false;
+    const { fn } = fakeSdk(undefined, {
+      resultFor: () =>
+        releaseGateOpen
+          ? undefined
+          : { subtype: 'error_during_execution', text: spendLimitMessage },
+    });
+    const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
+      stores: createMemoryStores(),
+      queryFn: fn,
+      env: {},
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    const { events } = wireEvents(clone, 'conv-1');
+
+    clone.post(humanMessage('やあ'));
+    await waitForTerminal(events);
+    await waitFor(() => clone.usageBlocked, '枠に当たって保持される');
+
+    clone.post(tokenPoolReopened('1件目'));
+    expect(clone.usageReleasePending).toBe(true);
+
+    // **印は `#pump` の先頭で必ず消費される**（「印だけ立って誰も見ない」が
+    // 起きない理由は `clone.ts` の解除ブロックの doc に在る）。
+    await waitFor(() => !clone.usageReleasePending, '再開の印が消費される');
+
+    // ⟹ **門の条件（`blocked && !releasePending`）は、次の回復をまた通す。**
+    // 畳んだぶんは「遅れ」ではなく「重複」だった、ということがここで閉じる。
+    expect(clone.usageReleasePending).toBe(false);
 
     await clone.stop();
   });

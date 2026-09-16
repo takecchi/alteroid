@@ -13,6 +13,7 @@ import {
   TOKEN_POOL_REOPENED_SOURCE,
   worthDeliveringNow,
 } from './index.js';
+import type { CloneWakeGate } from './index.js';
 
 /**
  * 認証トークン回りの日誌1行を stdout/stderr のどちらへ出すかの分類
@@ -733,5 +734,124 @@ describe('recovered の日誌行は、受信箱へ配ったかどうかと無関
     ).toEqual([]);
     expect(closeAt).toBeLessThan(appendAt);
     expect(reopenedBlockStart).toBeLessThan(closeAt);
+  });
+});
+
+/**
+ * **🔴 Issue #1051: 1回の再開の機会につき、配る合図は1件**
+ *
+ * ## なぜ真偽表では足りないか
+ *
+ * 上の `createCloneWakeGate` の describe が測っているのは `decide` の**引数**で
+ * ある。**引数が現実のどの状態に対応するかは、そこからは分からない** ——
+ * 「常に `fold` を返す」実装も、引数の並べ方を間違えた歯なら通ってしまう。
+ *
+ * ⟹ **ここでは、クローンの状態のほうを本物と同じ順序で動かす。** 動かし方が
+ * 本物と一致していることは `packages/core/src/clone.test.ts` の
+ * 「usageReleasePending（…Issue #1051）」が実物の `Clone` で固定している
+ * （1件目の `post` で印が立ち、2件目は何も動かさず、印は `#pump` が消費する）。
+ *
+ * | このファイルの歯 | 測るもの |
+ * | --- | --- |
+ * | `createCloneWakeGate` | `decide` の引数と返り値の対応 |
+ * | **ここ** | **本物と同じ順序で状態を動かしたとき、配る件数がいくつになるか** |
+ * | `clone.test.ts` の `usageReleasePending` | その順序が実物の `Clone` と一致すること |
+ */
+describe('🔴 #1051: 1回の再開の機会につき、配る合図は1件', () => {
+  /**
+   * クローンの2つの窓（`usageBlocked` / `usageReleasePending`）を、本物と同じ
+   * 遷移だけで動かす最小の模型。
+   *
+   * **勝手な遷移を足さないこと。** ここに無い動き方をさせると、測っているのは
+   * 本物ではなくこの模型になる。
+   */
+  function fakeClone() {
+    let blocked = false;
+    let pending = false;
+    return {
+      get usageBlocked() {
+        return blocked;
+      },
+      get usageReleasePending() {
+        return pending;
+      },
+      /** 枠で落ちた（`#usageBlocked` が立つ）。 */
+      hitUsageLimit() {
+        blocked = true;
+      },
+      /** 合図が届いた（`post()` の中の1文。止まっているときだけ印が立つ）。 */
+      receiveNotice() {
+        if (blocked) pending = true;
+      },
+      /** `#pump` の先頭 —— 印を消費して枠を降ろし、再試行へ入る。 */
+      consumeRelease() {
+        pending = false;
+        blocked = false;
+      },
+    };
+  }
+
+  /** 門を通して、配ったなら合図をクローンへ渡す（`wake()` と同じ並び）。 */
+  function emit(gate: CloneWakeGate, clone: ReturnType<typeof fakeClone>, tokenId: string) {
+    const decision = gate.decide(tokenId, clone.usageBlocked, clone.usageReleasePending);
+    if (decision.kind === 'wake') clone.receiveNotice();
+    return decision.kind;
+  }
+
+  it('回復が2回続けて検出されても、配るのは1件だけ（往復のぶんを畳む）', () => {
+    const gate = createCloneWakeGate();
+    const clone = fakeClone();
+    clone.hitUsageLimit();
+
+    // 429 → 成功 → 429 → 成功 …の往復で、回し手は「戻った」を何度でも立てる
+    // （`packages/core/src/token-rotator.test.ts` の #1051 の describe が実測）。
+    const kinds = [emit(gate, clone, 'tok-a'), emit(gate, clone, 'tok-a')];
+
+    expect(kinds).toEqual(['wake', 'fold']);
+  });
+
+  it('何十件届いても、再試行が始まるまでは1件しか配らない', () => {
+    const gate = createCloneWakeGate();
+    const clone = fakeClone();
+    clone.hitUsageLimit();
+
+    const kinds = Array.from({ length: 30 }, () => emit(gate, clone, 'tok-a'));
+
+    expect(kinds.filter((kind) => kind === 'wake')).toEqual(['wake']);
+    expect(kinds.filter((kind) => kind === 'fold')).toHaveLength(29);
+  });
+
+  it('🔴 回復 → 枠に入る → また回復 なら2件とも配る（起こし損ねを作らない）', () => {
+    const gate = createCloneWakeGate();
+    const clone = fakeClone();
+
+    // 1回目: 枠で止まって、戻った。
+    clone.hitUsageLimit();
+    const first = emit(gate, clone, 'tok-a');
+
+    // クローンが印を使って再試行に入り、また枠で落ちた。
+    clone.consumeRelease();
+    clone.hitUsageLimit();
+
+    // 2回目の「戻った」。**畳んではいけない** —— 前の印はもう使われている。
+    const second = emit(gate, clone, 'tok-a');
+
+    expect([first, second]).toEqual(['wake', 'wake']);
+  });
+
+  it('別のトークンが戻った回は、前のトークンの印に巻き込まれない', () => {
+    const gate = createCloneWakeGate();
+    const clone = fakeClone();
+    clone.hitUsageLimit();
+
+    expect(emit(gate, clone, 'tok-a')).toBe('wake');
+    // **同じクローンの印が立っているので、これは畳む。** トークンが違っても
+    // 立てる印は同じ1つで、既に立っている ⟹ 2件目が動かすものは無い。
+    expect(emit(gate, clone, 'tok-b')).toBe('fold');
+
+    // 再試行が入って、また枠で落ちたなら配る。
+    clone.consumeRelease();
+    clone.hitUsageLimit();
+    expect(emit(gate, clone, 'tok-b')).toBe('wake');
   });
 });
