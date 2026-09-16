@@ -55,6 +55,11 @@ function fakeClone() {
   const ended: string[] = [];
   const answered: { id: string; answer: string }[] = [];
   const posted: InboxEvent[] = [];
+  /**
+   * `CloneHost.dropQueuedInboxEvents` が受け取った id の塊（issue #1049）。
+   * **塊ごとに1要素**（`POST /inbox/remove` は id を塊に分けて回す）。
+   */
+  const droppedFromDelivery: string[][] = [];
   let reply: ChatStreamEvent[] = [{ type: 'text', text: 'やあ' }, { type: 'done' }];
 
   const emit = (conversationId: string, event: ChatStreamEvent) => {
@@ -238,6 +243,13 @@ function fakeClone() {
     async answerApproval(id, answer) {
       answered.push({ id, answer });
     },
+    // 消した合図の配達を止める（issue #1049）。**何を渡されたかを記録する** ——
+    // `POST /inbox/remove` が器から消すだけで終わっていないことを、応答の文言
+    // ではなく「この口が実際に呼ばれた実物」で測るため。
+    async dropQueuedInboxEvents(ids) {
+      droppedFromDelivery.push([...ids]);
+      return ids.length;
+    },
     async stop() {},
   };
 
@@ -246,6 +258,7 @@ function fakeClone() {
     ended,
     answered,
     posted,
+    droppedFromDelivery,
     managerList,
     managerDenials,
     transcripts,

@@ -24,13 +24,25 @@ import { chunkIdsByChars, createCloneMcpServer, createCloneTools } from './tools
  * 合図は畳めない」）を、型（zod の enum）で塞いでいることを実際に通して測る。
  */
 
-/** その `stores` に配線した `inbox_remove_many` を呼ぶ関数を返す。 */
-function remover(stores: Stores) {
+/**
+ * その `stores` に配線した `inbox_remove_many` を呼ぶ関数を返す。
+ *
+ * **`dropQueuedInboxEvents`（issue #1049）は既定で配線する。** 本番の
+ * `ToolContext` は2箇所とも渡しており、渡さない形は配線の不備だからである
+ * （渡さない側の挙動＝1件も消さずに断る、は専用の歯が別に測る）。**渡した
+ * 引数をここで記録しない** —— 記録が要るテストは第2引数で自分の偽物を渡す。
+ */
+function remover(
+  stores: Stores,
+  dropQueuedInboxEvents: ((ids: readonly string[]) => Promise<number>) | null = async (ids) =>
+    ids.length,
+) {
   const tools = createCloneTools({
     stores,
     emit: () => undefined,
     memoryCause: () => 'clone',
     conversationId: () => undefined,
+    ...(dropQueuedInboxEvents === null ? {} : { dropQueuedInboxEvents }),
   });
   const found = tools.find((entry) => entry.name === 'inbox_remove_many');
   expect(found, 'inbox_remove_many という道具が無い').toBeDefined();
@@ -141,6 +153,8 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
         emit: () => undefined,
         memoryCause: () => 'clone',
         conversationId: () => undefined,
+        // 本番と同じく配線する（issue #1049。`remover` の doc と同じ理由）。
+        dropQueuedInboxEvents: async (ids) => ids.length,
       });
       const pending = new Map<number, (message: Record<string, unknown>) => void>();
       let deliver: ((message: unknown) => void) | undefined;

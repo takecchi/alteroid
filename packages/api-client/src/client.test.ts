@@ -99,6 +99,10 @@ function fakeClone(stores: Stores) {
     recycleSessionForToken() {},
     // クローンへ配るか畳むか（Issue #783）。この歯では触らない。
     usageBlocked: false,
+    // 消した合図の配達停止（issue #1049）。この歯では触らない。
+    async dropQueuedInboxEvents() {
+      return 0;
+    },
     post(event) {
       if (event.type !== 'human_message') return;
       const conversationId = event.conversationId;

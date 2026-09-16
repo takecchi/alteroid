@@ -42,6 +42,10 @@ function fakeCloneHost(stores: Stores): CloneHost {
     subscribe: () => () => {},
     async endConversation() {},
     async answerApproval() {},
+    // 消した合図の配達停止（issue #1049）。この歯は一度も呼ばない。
+    async dropQueuedInboxEvents() {
+      return 0;
+    },
     managers: createManagerPool({ stores, post: () => {}, runners: createRunnerRegistry() }),
     // クローンへ配るか畳むか（Issue #783）。このテストは一度も読まない。
     usageBlocked: false,
