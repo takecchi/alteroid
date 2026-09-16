@@ -707,6 +707,20 @@ export const managerSummarySchema = z.object({
   startedAt: z.string(),
   updatedAt: z.string(),
   sessionId: z.string().optional(),
+  /**
+   * **その委譲がどうだったか**（#1054）。台帳（`Job.appraisal`）をそのまま写す。
+   *
+   * **`status` とは別の軸である** —— `done` は「セッションが終わった」であって
+   * 「良かった」ではない。無いことは「まだ評定していない」であって「普通」では
+   * ないので、読む側は `good` にも `bad` にも寄せないこと。
+   *
+   * **型は `z.string()` で緩い**（既知の値は `appraisalSchema`）。台帳の
+   * `Job.appraisal` と同じ理由で、未知の値1つで応答が丸ごと壊れる側へ倒さない。
+   */
+  appraisal: z.string().optional(),
+  appraisedAt: z.string().optional(),
+  appraisedBy: z.string().optional(),
+  appraisalReason: z.string().optional(),
   lastReport: z.string().optional(),
   /**
    * `lastReport` を**デーモンが受け取った時刻**（#358）。
@@ -1682,6 +1696,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     },
     abort() {
       throw new Error('spec 生成専用のスタブ: マネージャーは止めない');
+    },
+    appraise() {
+      throw new Error('spec 生成専用のスタブ: 評定は書かない');
     },
     list() {
       throw new Error('spec 生成専用のスタブ: マネージャー一覧は持たない');

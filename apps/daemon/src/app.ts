@@ -31,9 +31,9 @@ import {
   commitmentPosition,
   commitmentRespondedAt,
   COMMITMENT_APPRAISAL_DECISION_PREFIX,
-  commitmentAppraisalSchema,
+  appraisalSchema,
   commitmentUpdatedAt,
-  describeCommitmentAppraisal,
+  describeAppraisal,
   compareApprovalPagingKey,
   compareCommitmentPosition,
   computeSupersededIds,
@@ -653,13 +653,23 @@ const commitmentCloseBody = z.object({ reason: z.string().min(1) });
  * 評定（#1054）。**`reason` は任意である** —— 画面のボタン1つで付けられる経路を
  * 塞がないため（`CommitmentStore.appraise` の doc）。
  *
- * **`appraisal` は `commitmentAppraisalSchema` をそのまま使う。** ここで
+ * **`appraisal` は `appraisalSchema` をそのまま使う。** ここで
  * `z.enum(['good', ...])` を書き直すと、値が増えたときに黙ってずれる口が1つ
  * 増える（この repo が「実装が持つ一覧を説明文が数え直す」形で繰り返し踏んだ
  * のと同じ穴。`packages/core/src/tool-description-enumeration.test.ts` の doc）。
  */
 const commitmentAppraiseBody = z.object({
-  appraisal: commitmentAppraisalSchema,
+  appraisal: appraisalSchema,
+  reason: z.string().min(1).optional(),
+});
+
+/**
+ * 委譲の評定（#1054）。**`commitmentAppraiseBody` と同じ形だが、別の口である** ——
+ * 台帳の行と委譲は別の軸で数えるので（`JOB_APPRAISAL_DECISION_PREFIX` の doc）、
+ * 本文の型まで共有すると片方だけ広げたときに黙って両方が動く。
+ */
+const managerAppraiseBody = z.object({
+  appraisal: appraisalSchema,
   reason: z.string().min(1).optional(),
 });
 
@@ -3236,7 +3246,7 @@ export function createApp(deps: AppDeps) {
         // 取れず、覆した事実が日誌から消える。
         const before = await stores.commitments.get(id);
         if (before === null) return c.json({ error: 'not found' as const }, 404);
-        const previous = describeCommitmentAppraisal(before);
+        const previous = describeAppraisal(before);
         if (
           !(await stores.commitments.appraise(
             id,
@@ -3694,6 +3704,52 @@ export function createApp(deps: AppDeps) {
         // 文言が届き、人間には 500 しか届かないという非対称ができていた。
         if (result.outcome === 'unknown') return c.json({ error: result.detail }, 404);
         return c.json({ outcome: result.outcome, detail: result.detail });
+      },
+    )
+
+    /**
+     * 人間が委譲1本に評定を付ける（#1054。自己改善の段1の後半）。
+     *
+     * **`ManagerPool.appraise` を通す。** 走行中の委譲の `Job` はプールが握って
+     * いて、ストアへ直に書くと次の `#persist` が黙って踏み消す（あちらの doc）。
+     * ⟹ **クローンの `manager_appraise` とまったく同じ経路である** —— 人間に
+     * 出来てクローンに出来ないことも、その逆も作らない。
+     */
+    .post(
+      '/managers/:id/appraise',
+      describeRoute({
+        tags: ['managers'],
+        summary: '委譲に評定（うまくいったか）を付ける',
+        description:
+          'クローンの `manager_appraise` と同じものを人間の手から。**走行中の委譲にも' +
+          '終端した委譲にも付けられ、何度でも上書きできる。** クローンが付けた評定を人間が' +
+          '覆したときは、覆す前の値が日誌に残る（評定そのものを較正する材料になる）。' +
+          '**⚠️ `status` とは別の軸である** —— `done` は「セッションが終わった」であって' +
+          '「良かった」ではない。',
+        responses: {
+          200: {
+            description: '付けた（上書きを含む）。',
+            content: { 'application/json': { schema: resolver(okResponseSchema) } },
+          },
+          400: {
+            description: '本文が JSON として不正（`appraisal` が既知の値でない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description: 'そのマネージャーは台帳に居ない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      jsonBody(managerAppraiseBody, (where) => ({
+        error: 'appraisal の形が不正' + (where === '' ? '' : `: ${where}`),
+      })),
+      async (c) => {
+        const id = c.req.param('id');
+        const { appraisal, reason } = c.req.valid('json');
+        const result = await clone.managers.appraise(id, appraisal, 'human', reason);
+        if (result.outcome === 'absent') return c.json({ error: 'not found' as const }, 404);
+        return c.json(okResponseSchema.parse({ ok: true }));
       },
     )
 

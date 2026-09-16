@@ -194,6 +194,14 @@ export function countsAsUndistilledActivity(entry: JournalEntry): boolean {
     // 同上（#976。上の doc「`context_usage` も器の記帳である」）。
     case 'context_usage':
       return false;
+    // 同上（#783 段0）。`inbox_flow` は `context_usage` と同じ境界
+    // （`case 'turn_ended'`）で機構が無条件に書く記帳で、「ターンが1本走った」
+    // ことそのものの痕跡ではない——受信箱の到着・配達・消し込みが0件の窓でも
+    // `pending()` が読めた回は必ず1行書く（`schema.ts` の `inbox_flow` の doc
+    // 「いつ書くか」）。数えると、何も起きていない窓まで「まだ記憶へ移って
+    // いない活動」に数えてしまう。
+    case 'inbox_flow':
+      return false;
     default:
       return false;
   }

@@ -1,8 +1,8 @@
 import { commitmentSchema, UnreadableCommitmentError } from '@alteroid/core';
 import type {
   Commitment,
-  CommitmentAppraisal,
-  CommitmentAppraisedBy,
+  AppraisalValue,
+  AppraisedBy,
   CommitmentClosedBy,
   CommitmentEditedBy,
   CommitmentList,
@@ -286,8 +286,8 @@ export class PgCommitmentStore implements CommitmentStore {
   async appraise(
     id: string,
     at: string,
-    value: CommitmentAppraisal,
-    by: CommitmentAppraisedBy,
+    value: AppraisalValue,
+    by: AppraisedBy,
     reason?: string,
   ): Promise<boolean> {
     const base = sql`jsonb_set(jsonb_set(jsonb_set(${commitments.commitment}, '{appraisal}', ${JSON.stringify(value)}::jsonb, true), '{appraisedAt}', ${JSON.stringify(at)}::jsonb, true), '{appraisedBy}', ${JSON.stringify(by)}::jsonb, true)`;

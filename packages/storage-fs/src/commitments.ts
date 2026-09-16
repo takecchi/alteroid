@@ -8,8 +8,8 @@ import {
 } from '@alteroid/core';
 import type {
   Commitment,
-  CommitmentAppraisal,
-  CommitmentAppraisedBy,
+  AppraisalValue,
+  AppraisedBy,
   CommitmentClosedBy,
   CommitmentEditedBy,
   CommitmentList,
@@ -442,8 +442,8 @@ export class FsCommitmentStore implements CommitmentStore {
   async appraise(
     id: string,
     at: string,
-    value: CommitmentAppraisal,
-    by: CommitmentAppraisedBy,
+    value: AppraisalValue,
+    by: AppraisedBy,
     reason?: string,
   ): Promise<boolean> {
     return this.#update((file) => {

@@ -6,6 +6,7 @@ import {
   captureStderr,
   renderMemoryDocuments,
   verifyCommitmentAppraisalContract,
+  verifyStoreIsolationContract,
   verifyJournalStoreOrderContract,
   verifyJournalStoreQueryEdgeContract,
   verifyJournalStoreSearchContract,
@@ -1409,6 +1410,10 @@ describe('FsJournalStore', () => {
 
     it('評定の契約（#1054。3実装で同じことを測る）', async () => {
       await verifyCommitmentAppraisalContract(stores.commitments);
+    });
+
+    it('ストアが返す値は書いた側の握りと別物である（#1072。3実装で同じことを測る）', async () => {
+      await verifyStoreIsolationContract(stores);
     });
 
     /**

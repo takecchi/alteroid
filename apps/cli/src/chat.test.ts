@@ -748,6 +748,9 @@ function stubClient(
   options: {
     commitments?: Commitment[];
     closeStatus?: number;
+    /** `PATCH /commitments/:id` の応答。既定は 200（直せた）。 */
+    editStatus?: number;
+    editBody?: unknown;
     /** `DELETE /managers/:id` の応答。既定は「止めた」。 */
     abortStatus?: number;
     abortBody?: unknown;
@@ -893,6 +896,11 @@ function stubClient(
             calls.push({ route: 'POST /commitments/:id/close', args });
             return Promise.resolve(reply(options.closeStatus ?? 200, {}));
           },
+        },
+        $patch: (args: unknown) => {
+          calls.push({ route: 'PATCH /commitments/:id', args });
+          const status = options.editStatus ?? 200;
+          return Promise.resolve(reply(status, options.editBody ?? (status === 200 ? {} : {})));
         },
       },
     },
@@ -1278,6 +1286,60 @@ describe('chat の台帳コマンド', () => {
     const { reason } = (close?.args as { json: { reason: string } }).json;
     expect(reason.length).toBeGreaterThan(0);
     expect(reason).toContain('/done');
+  });
+
+  it('/commit-edit は番号を id へ引き直し、新しい本文を PATCH で送る（#1058）', async () => {
+    captureStdout();
+    const { calls, client } = stubClient({
+      commitments: [commitment({ id: 'cmt-1' }), commitment({ id: 'cmt-2' })],
+    });
+    const listed = emptyListed();
+
+    await runSlashCommand('/commitments', client, listed);
+    await runSlashCommand('/commit-edit 2 言い直した本文', client, listed);
+
+    const edit = calls.find((call) => call.route === 'PATCH /commitments/:id');
+    expect(edit).toBeDefined();
+    expect((edit?.args as { param: { id: string } }).param).toEqual({ id: 'cmt-2' });
+    expect((edit?.args as { json: { body: string } }).json.body).toBe('言い直した本文');
+  });
+
+  /**
+   * **断りの文面は CLI が持たない。** 403 の本文はサーバが書いていて、その行の
+   * `origin` を名指しして理由と出口まで入っている（`apps/daemon/src/app.ts` が
+   * 「ここが『なぜ押せないか』の唯一の持ち主である」と逐語で言っている）。
+   * **CLI が言い換えると、その案内が消える。**
+   */
+  it('/commit-edit は断られた理由をサーバの文言のまま出す（言い換えない。#1058）', async () => {
+    const out = captureStdout();
+    const { client } = stubClient({
+      commitments: [commitment({ id: 'cmt-1' })],
+      editStatus: 403,
+      editBody: {
+        error:
+          "cmt-1 は origin:'self' で、クローンやマネージャーが立てた行は人間からは直せない（この行はクローンが自分で載せたもの。チャットでクローンに頼めば直せる——クローンには commitment_edit が在る）",
+      },
+    });
+    const listed = emptyListed();
+
+    await runSlashCommand('/commitments', client, listed);
+    await runSlashCommand('/commit-edit 1 直したい', client, listed);
+
+    expect(out()).toContain("origin:'self'");
+    // **出口まで届いていること**（ここが消えると、人間は「直せない」としか読めない）。
+    expect(out()).toContain('commitment_edit');
+  });
+
+  it('/commit-edit は本文が無ければ何も送らず、使い方を出す', async () => {
+    const out = captureStdout();
+    const { calls, client } = stubClient({ commitments: [commitment({ id: 'cmt-1' })] });
+    const listed = emptyListed();
+
+    await runSlashCommand('/commitments', client, listed);
+    await runSlashCommand('/commit-edit 1', client, listed);
+
+    expect(calls.some((call) => call.route === 'PATCH /commitments/:id')).toBe(false);
+    expect(out()).toContain('使い方');
   });
 
   it('/done は書かれた理由をそのまま送る', async () => {

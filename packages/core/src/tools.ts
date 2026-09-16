@@ -117,10 +117,10 @@ import {
   COMMITMENT_APPRAISAL_DECISION_PREFIX,
   JOURNAL_ENTRY_TYPES,
   approvalUpdatedAt,
-  commitmentAppraisalSchema,
+  appraisalSchema,
   commitmentOriginSchema,
   commitmentUpdatedAt,
-  describeCommitmentAppraisal,
+  describeAppraisal,
   jobStatusSchema,
   scheduleKindSchema,
   scheduleSpecSchema,
@@ -128,7 +128,7 @@ import {
 import type {
   ChatStreamEvent,
   Commitment,
-  CommitmentAppraisal,
+  AppraisalValue,
   CommitmentOrigin,
   JobStatus,
   JournalEntry,
@@ -356,6 +356,7 @@ export const CLONE_TOOL_NAMES = [
   'self_dropped',
   'manager_start',
   'manager_send',
+  'manager_appraise',
   'manager_stop',
   'manager_list',
   'manager_report',
@@ -407,6 +408,7 @@ export const SELF_JOURNALING_CLONE_TOOLS = [
   'profile_write',
   'manager_start',
   'manager_send',
+  'manager_appraise',
   'manager_stop',
   'archive_remove',
 ] as const satisfies readonly CloneToolName[];
@@ -1627,7 +1629,7 @@ function formatJournalNotRecordedMessage(
  * **返すのは人間（クローン）へ返す1文である。** 呼び出し側はこれを連結する。
  *
  * **前の評定を日誌へ添える。** 行の側は「いまの値」しか持たないので
- * （`commitmentAppraisalSchema` の doc）、前の値がどこにも残らないと「誰がどう
+ * （`appraisalSchema` の doc）、前の値がどこにも残らないと「誰がどう
  * 言っていたか」を突き合わせる材料が消える —— それは PRD「要件: 自己改善」の
  * 「評価する側も誤りうる前提で作る」が要求している較正そのものを不可能にする。
  * **前が無かった回も残す**（初回か付け直しかは、数え上げるときに要る区別である）。
@@ -1635,11 +1637,11 @@ function formatJournalNotRecordedMessage(
 async function writeAppraisal(
   stores: Stores,
   id: string,
-  value: CommitmentAppraisal,
+  value: AppraisalValue,
   reason: string | undefined,
 ): Promise<string> {
   const before = await stores.commitments.get(id);
-  const previous = before === null ? null : describeCommitmentAppraisal(before);
+  const previous = before === null ? null : describeAppraisal(before);
   if (!(await stores.commitments.appraise(id, new Date().toISOString(), value, 'clone', reason))) {
     return `（評定は付けられなかった —— ${id} が台帳に無い）`;
   }
@@ -4927,9 +4929,9 @@ export function createCloneTools(context: ToolContext) {
           // 後ろに置くと `page()` の2ページ目へ落ちて、**いちばん要る1行が
           // 最初の呼びで出てこない。** 読み順としては逆だが、切れる側に
           // 落ちてよい欄ではない。
-          // **評定は在るときだけ出す**（`describeCommitmentAppraisal` は無ければ
+          // **評定は在るときだけ出す**（`describeAppraisal` は無ければ
           // `null`）。印が無い＝まだ評定していない、が読み手の側の規則である。
-          const appraisal = describeCommitmentAppraisal(entry);
+          const appraisal = describeAppraisal(entry);
           const body = [
             ...(entry.closedAt === undefined
               ? []
@@ -5062,9 +5064,9 @@ export function createCloneTools(context: ToolContext) {
               // **評定が在る行だけ1行増える。** 一覧は文字数の予算に張り付いて
               // いるので（`describeManagerFailure` の doc と同じ理由）、未評定の
               // 行に「未評定」と刷らない —— 印が無いことがその状態である。
-              ...(describeCommitmentAppraisal(entry) === null
+              ...(describeAppraisal(entry) === null
                 ? []
-                : [`  ${excerptLine(describeCommitmentAppraisal(entry) ?? '', 120)}`]),
+                : [`  ${excerptLine(describeAppraisal(entry) ?? '', 120)}`]),
             ],
           }),
         );
@@ -5312,7 +5314,7 @@ export function createCloneTools(context: ToolContext) {
             '何をもって片付いたとするか（やったこと、あるいはやらないと決めた理由）。' +
               '人間はこれを読んで後から否定する',
           ),
-        appraisal: commitmentAppraisalSchema
+        appraisal: appraisalSchema
           .optional()
           .describe(
             '**うまくいったか**（reason とは別の軸である。あちらは「どう片付いたか」）。' +
@@ -5391,7 +5393,7 @@ export function createCloneTools(context: ToolContext) {
       ].join(' '),
       {
         id: z.string().describe('commitment_list に出ている id'),
-        appraisal: commitmentAppraisalSchema.describe(
+        appraisal: appraisalSchema.describe(
           'good=うまくいった / bad=うまくいかなかった / unclear=見たが判定できない。' +
             '**迷ったら unclear を選ぶこと。** good と bad へ無理に寄せると、' +
             '測れていないものが測れたことになる',
@@ -6600,6 +6602,39 @@ export function createCloneTools(context: ToolContext) {
      * クローン側にしか配線が無い）。マネージャーが自分や隣の仕事を止められる
      * ようになると、M4 の制御面分離が意味を失う。
      */
+    tool(
+      'manager_appraise',
+      [
+        '**委譲がうまくいったかどうか**の評定を付ける（後から付け直してもよい）。',
+        '**`manager_report` で報告を読んだら、そのまま付けること。**',
+        '評定は `good`（うまくいった）/ `bad`（うまくいかなかった）/ `unclear`（見たが判定できない）の3つで、**迷ったら `unclear`**。',
+        '⚠️ **`status` とは別の軸である** —— `done` は「セッションが終わった」であって「良かった」ではない。',
+        '走行中の委譲にも付けられる。**人間がこれを覆すことがあり、覆された事実は評定そのものを較正する材料になる。**',
+      ].join(' '),
+      {
+        managerId: z.string().describe('manager_list に出ている id'),
+        appraisal: appraisalSchema.describe(
+          'good=うまくいった / bad=うまくいかなかった / unclear=見たが判定できない。' +
+            '**迷ったら unclear を選ぶこと。** good と bad へ無理に寄せると、' +
+            '測れていないものが測れたことになる',
+        ),
+        reason: z
+          .string()
+          .optional()
+          .describe(
+            'なぜその評定なのか（1行）。**書くこと。** ここに同じ軸が繰り返し' +
+              '現れるかどうかが、評定に軸を足すかどうかの唯一の判断材料である',
+          ),
+      },
+      async ({ managerId, appraisal, reason }) => {
+        if (!context.managers) return NO_POOL;
+        // **日誌も「前の値」も `ManagerPool.appraise` が持つ。** ここで書き下ろすと、
+        // 人間の口（HTTP）と2箇所になり、片方だけ直したときに黙ってずれる。
+        const result = await context.managers.appraise(managerId, appraisal, 'clone', reason);
+        return text(result.detail);
+      },
+    ),
+
     tool(
       'manager_stop',
       [
@@ -9007,6 +9042,28 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
         // （`token_rotation` と同じ設計 — 人間が読む面の言い方の持ち主は
         // `runner.ts` の `#onSubagentStop` 1つである）。
         body: entry.text,
+      };
+    }
+    case 'inbox_flow': {
+      // **見出しに4つの総数を出す。** クローンがこの種別で絞ったとき、まず
+      // 見たいのは窓ごとの推移（`schema.ts` の `inbox_flow` の doc）で、
+      // 種類別の内訳は本文へ回す——`inbox-backlog.ts` の
+      // `describeInboxBacklogBreakdown` と同じ「総数は見出し、内訳は本文」
+      // の分け方。
+      const byTypeText = (count: { byType: { type: string; count: number }[] }): string =>
+        count.byType.length === 0
+          ? '（無し）'
+          : count.byType.map((e) => `${e.type} ${e.count}`).join(' / ');
+      return {
+        head:
+          `[inbox_flow arrived=${entry.arrived.total} delivered=${entry.delivered.total} ` +
+          `settled=${entry.settled.total} pending=${entry.pending.count}]`,
+        body:
+          `窓: ${entry.windowStartedAt} 〜 ${entry.at}\n` +
+          `到着: ${byTypeText(entry.arrived)}\n` +
+          `配達: ${byTypeText(entry.delivered)}\n` +
+          `消し込み: ${byTypeText(entry.settled)}` +
+          (entry.pending.oldestAt === undefined ? '' : `\n最古の滞留: ${entry.pending.oldestAt}`),
       };
     }
   }

@@ -144,7 +144,7 @@ describe('/commitments 画面', () => {
    *
    * **⚠️ ここで固定したいのは「未評定が『普通』に見えないこと」である。** 何も
    * 選ばれていない状態は「まだ測っていない」という観測そのものなので
-   * （`commitmentAppraisalSchema` の doc）、既定で選ばれたボタンを作らない。
+   * （`appraisalSchema` の doc）、既定で選ばれたボタンを作らない。
    */
   it('評定していない行は「まだ評定していない」と出る（未評定を「普通」として描かない）', async () => {
     stubCommitments([commitment()]);

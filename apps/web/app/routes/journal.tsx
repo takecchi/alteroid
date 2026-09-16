@@ -52,6 +52,11 @@ const TONE: Record<JournalEntryType, 'neutral' | 'ok' | 'warn' | 'danger' | 'acc
   // `exhausted`（全層が止まる、こちらのほうが重い）ですら `warn` に留めている
   // 釣り合いに合わせた。
   subagent_stall: 'warn',
+  // **`neutral` にしてある。** この種別は器の記帳（受信箱の流量の計測。
+  // Issue #783 段0）で、それ自体は「壊れている」ことを表さない —— 値が
+  // 何を意味するかは読んだ人が窓どうしを並べて決めることで、行の色では
+  // 言えない（`turn_usage` / `context_usage` と同じ理由）。
+  inbox_flow: 'neutral',
 };
 
 /**
