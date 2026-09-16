@@ -1402,6 +1402,63 @@ describe('Issue #856: 台帳に載らなかった合図の観測', () => {
 
     await s.clone.stop();
   });
+
+  /**
+   * **⭐ 陰性対照2（欠陥1の歯）。`CommitmentStore.open` の doc が名指しで
+   * 警告している事故そのものを再現する。**
+   *
+   * 受信箱の合図は配り直されうるので、その id をそのまま使う自動 open
+   * （`#commit`）は同じ id で二度呼ばれることがある（`store.ts` の `open` の
+   * doc）。1度目で開いた未了を片付けた（`commitment_close`）後、**同じ id**
+   * の合図がもう一度届くと、`open()` は「同じ id が既に在るので何もしない」
+   * として `false` を返す（`open()` の契約。in-memory 実装は
+   * `commitments.has(entry.id)` の真偽だけを見るので、行が開いているか
+   * 閉じているかを問わない）。
+   *
+   * **これを `'opened'` と取り違えると壊れる。** `list()` は未了しか返さない
+   * ので、片付いたこの id は再読した一覧（`mine`）に出てこない——`'opened'`
+   * のまま扱うと `missing` に入り、「台帳に載っていない。`commitment_open` で
+   * 載せ直せ」と誤って断る。促された `commitment_open` はまた `open()` を
+   * 呼ぶだけなので、**一度片付けた仕事が配り直しのたびに開き直る**——
+   * `open()` の doc が警告する事故そのものである。
+   */
+  it('⭐ 陰性対照2: 片付けた後に同じ id が配り直されても「台帳に載っていない」と断らない（open() の冪等性）', async () => {
+    const s = setup();
+    const inputs = () => s.calls.flatMap((call) => call.inputs);
+
+    s.clone.post(managerMessage('片付ける報告', 'evt-redeliver-1'));
+    await waitFor(() => inputs().length >= 1, '1件目がターンへ渡る');
+    await waitFor(
+      async () => (await s.stores.commitments.list()).entries.length === 1,
+      '1件目の記帳',
+    );
+
+    // 片付ける——台帳としては正常な閉じ方（クローンの `commitment_close` と
+    // 同じ形。`stores.commitments.close` を直接呼ぶ）。
+    await s.stores.commitments.close(
+      'evt-redeliver-1',
+      new Date().toISOString(),
+      '対応した',
+      'clone',
+    );
+    expect((await s.stores.commitments.list()).entries).toHaveLength(0);
+
+    // **同じ id** で、もう一度届く（受信箱の配り直しを模す。`#restoreUnread`
+    // 経由の再起動を待たずに、同一プロセス内で同じ id が二度 `post` される
+    // 形——`#closedRedeliveryNoticeFor` の短絡はここには掛からない。あちらが
+    // 見るのは `#restoreUnread` が拾い直した分だけである）。
+    s.clone.post(managerMessage('片付ける報告', 'evt-redeliver-1'));
+    await waitFor(() => inputs().length >= 2, '配り直された2件目がターンへ渡る');
+
+    // open() は「既に在る」ので何もしない——台帳はいまも0件のままである。
+    expect((await s.stores.commitments.list()).entries).toHaveLength(0);
+
+    const secondTurn = inputs()[1] ?? '';
+    expect(secondTurn).not.toContain('台帳に載っていない');
+    expect(secondTurn).not.toContain('載せ直しが要る');
+
+    await s.clone.stop();
+  });
 });
 
 describe('未了の見え方', () => {

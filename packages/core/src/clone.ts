@@ -907,8 +907,30 @@ type TurnOutcome =
  * 断ることになり、畳んだだけのターンにも毎回嘘の警告が出る。逆に区別を
  * 持たなければ後者を`'folded'`と取り違えて黙って見逃す——どちらの取り違えも
  * 許さないために、値として持たせてある。
+ *
+ * **`'existed'` は Issue #856 のレビューで追加した4つ目の値である。**
+ * `CommitmentStore.open` は `boolean` を返す（`store.ts` の doc「同じ id が
+ * 既に在れば何もしない（開いたら `true`）」）——**この戻り値を捨てて例外の
+ * 有無だけで `'opened'` / `'failed'` に振り分けると、`open()` が `false`
+ * （＝既に在ったので何もしなかった）を返した回まで `'opened'` と記録される。**
+ * `open()` の doc が名指しで警告している事故そのもの（受信箱の合図は配り
+ * 直されうるので、その id をそのまま使う自動 open は同じ id で二度呼ばれる）
+ * が起きたとき——**二度目の呼びは `false` を返す**——それを `'opened'` と
+ * 記録すると、`#commitmentNoticeFor` は再読した一覧（未了だけ）にその id が
+ * 無いことを「載せ損なった」と誤って断り、「`commitment_open` で載せ直せ」と
+ * 促す。**促した先の `commitment_open` はまた `open()` を呼ぶだけなので、
+ * 一度片付けた仕事が配り直しのたびに開き直る**——`open()` の doc が警告する
+ * まさにその事故がここから起きる。
+ *
+ * **`'folded'` と `'existed'` は意味が違う。** `'folded'` は `open()` を呼ぶ
+ * 前に（`hasOpenManagerDuplicate` で）**呼ばないと決めた**——台帳には手を
+ * 触れていない。`'existed'` は `open()` を実際に呼んだが、**呼んだ先が「既に
+ * 在る」と答えた**——行が開いているか閉じているかは問わない（`open()` の
+ * 契約はどちらも区別せず `false` を返す）。**どちらも「載せ損なった」ではない
+ * ので `#commitmentNoticeFor` の `missing` からは同じく除くが、除く理由は
+ * 別である。**
  */
-type CommitOutcome = 'opened' | 'folded' | 'failed';
+type CommitOutcome = 'opened' | 'existed' | 'folded' | 'failed';
 
 export function createClone(options: CloneOptions): CloneHost {
   return new Clone(options);
@@ -1405,11 +1427,12 @@ class Clone implements CloneHost {
    * **Issue #856 で `Promise<void>` から `Promise<CommitOutcome>` へ広げた。**
    * かつては「待ち終えたかどうか」しか見えず、`#commitmentNoticeFor` は
    * `list()` を読み直して見つかった id だけを名乗っていた——**見つからなかった
-   * 理由**（#1035 の重複として意図的に畳んだのか、書き込みそのものが失敗した
-   * のか）は、この約束の中身からは区別できなかった。いまは `#commit` が
-   * 自分の分岐（畳んだ／開けた／落ちた）をそのまま値として返すので、
-   * `#commitmentNoticeFor` は「畳んだから見つからない」と「載せ損なったのに
-   * 見つからない」を区別できる。
+   * 理由**（#1035 の重複として意図的に畳んだのか、`open()` が「既に在る」と
+   * 答えたのか、書き込みそのものが失敗したのか）は、この約束の中身からは
+   * 区別できなかった。いまは `#commit` が自分の分岐（畳んだ／既に在った／
+   * 開けた／落ちた）をそのまま値として返すので、`#commitmentNoticeFor` は
+   * 「畳んだ・既に在ったから見つからない（どちらも正常）」と「載せ損なったのに
+   * 見つからない（異常）」を区別できる。
    */
   readonly #committed = new Map<string, Promise<CommitOutcome>>();
   /**
@@ -3336,12 +3359,25 @@ class Clone implements CloneHost {
    * かつ #856 以降は日誌にも1行——下の分岐を見よ）。
    *
    * **戻り値（{@link CommitOutcome}）は Issue #856 で足した。** 台帳を実際に
-   * 開けたか（`'opened'`）、開く前に畳んだか（`'folded'`）、開こうとして
-   * 落ちたか（`'failed'`）を区別して `#committed` に残す。**この3つを区別する
-   * 理由は `#commitmentNoticeFor` 側にある** — 再読した台帳に id が見当たら
-   * ないとき、「畳んだから見当たらない（既存行に任せた——正常）」と「載せ
-   * 損なったから見当たらない（異常）」を見分けられないと、後者を黙って見逃す
-   * ことになる。
+   * 開けたか（`'opened'`）、`open()` を呼んだが既に在ったか（`'existed'`）、
+   * 開く前に畳んだか（`'folded'`）、開こうとして落ちたか（`'failed'`）を
+   * 区別して `#committed` に残す。**区別する理由は `#commitmentNoticeFor` 側に
+   * ある** — 再読した台帳に id が見当たらないとき、「畳んだから見当たらない
+   * （既存行に任せた——正常）」「既に在ったから見当たらない（`open()` の
+   * 冪等性そのもの——正常。配り直された合図が閉じた行に当たった場合を含む）」
+   * と「載せ損なったから見当たらない（異常）」を見分けられないと、前2つを
+   * 黙って「載せ損なった」と誤って断ることになる。
+   *
+   * **`'existed'` を区別しないと何が起きるか（Issue #856 のレビューで見つかった
+   * 欠陥）。** `CommitmentStore.open` は `boolean` を返す——`false` は
+   * 「同じ id が既に在ったので何もしなかった」を意味する（`store.ts` の doc）。
+   * この戻り値を見ずに「例外を投げなければ `'opened'`」と一律に記録すると、
+   * **配り直された合図が既に閉じている行に当たったとき**（`open()` は
+   * `false` を返す）も `'opened'` と記録され、`#commitmentNoticeFor` は
+   * 再読した一覧（未了だけ）にその id が無いことを「載せ損なった」と誤って
+   * 断る。断り書きは `commitment_open` で載せ直すことを促すが、**それは
+   * `open()` をもう一度呼ぶだけ**——`open()` の doc が名指しで警告している
+   * 事故（一度片付けた仕事が配り直しのたびに開き直る）がそのまま起きる。
    */
   #commit(event: InboxEvent): void {
     const entry = commitmentFor(event);
@@ -3357,7 +3393,7 @@ class Clone implements CloneHost {
         .then((duplicate): Promise<CommitOutcome> | CommitOutcome => {
           if (duplicate) return 'folded';
           return this.#stores.commitments.open(entry).then(
-            (): CommitOutcome => 'opened',
+            (opened): CommitOutcome => (opened ? 'opened' : 'existed'),
             (error: unknown): Promise<CommitOutcome> => {
               noteDroppedRecord('未了の記帳', inboxEventShape(event), error);
               // **Issue #856 (B)。** `noteDroppedRecord` の跡は stderr の1行
@@ -3462,12 +3498,22 @@ class Clone implements CloneHost {
     // **Issue #856 受け入れ基準2。** 台帳を開くつもりだった合図
     // （`outcomes.has(...)`）が、再読した一覧（`mine`）に見当たらないとき、
     // 黙って消さない——ただし `'folded'`（Issue #954 提案3。開く前に既存行へ
-    // 任せた——台帳としては正常）は除く。畳んだものまで「載っていない」と
-    // 断ると、重複を畳んだだけの正常なターンにも毎回嘘の警告が出る。
+    // 任せた——台帳としては正常）と `'existed'`（`open()` を呼んだが「既に
+    // 在る」と答えた——`CommitmentStore.open` の冪等性そのもの。配り直された
+    // 合図が既に閉じている行に当たった場合を含む）は除く。**この2つは
+    // `open()` 自身が「台帳には触っていない」「もう手当て済み」と言っている
+    // ので、除かずに「載っていない」と断ると、重複を畳んだだけ・既に片付いた
+    // だけの正常なターンにも毎回嘘の警告が出る**（後者を除かなかった場合の
+    // 事故は {@link CommitOutcome} の doc）。
     const mineIds = new Set(mine.map((entry) => entry.id));
     const missing = events.filter((pending) => {
       const outcome = outcomes.get(pending.id);
-      return outcome !== undefined && outcome !== 'folded' && !mineIds.has(pending.id);
+      return (
+        outcome !== undefined &&
+        outcome !== 'folded' &&
+        outcome !== 'existed' &&
+        !mineIds.has(pending.id)
+      );
     });
     const missingIdList = excerptLine(
       missing.map((pending) => `\`${pending.id}\``).join(', '),
@@ -3489,17 +3535,24 @@ class Clone implements CloneHost {
               '雑談や、その場で答えて終わる話なら、答えたうえですぐ閉じてよい。',
           ]),
       // **Issue #856 受け入れ基準2。** 載せるつもりで載らなかった合図を、
-      // ここで名指しで断る。**「畳んだ」（既存行に任せた。上の `missing` の
+      // ここで名指しで断る。**「畳んだ」「既に在った」（上の `missing` の
       // doc）はここに出ない** — 対象は「書き込みが失敗した」か「書けたはずが
       // 読み直しても見当たらない」のどちらかだけである。後者は #856 本体の
       // 症状そのもの——機序は特定できていないので「直った」とは言わないが、
       // 発生すればここで必ず名乗る。
+      //
+      // **分母は `outcomes.size`（台帳を開くつもりだった合図の数）である。**
+      // `events.length` を分母にしていた版が誤り——`events` には
+      // `commitmentFor` が最初から `null` を返す型・`isDaemonSelfNotice` の
+      // ような、台帳と無関係な合図も混じる。それらは `outcomes` に載らない
+      // （上の `outcomes` を組む doc）ので、`events.length` を使うと母数が
+      // 実際より大きくなり、「このうち何件」の比率が薄まって嘘になる。
       ...(missing.length === 0
         ? []
         : [
-            `**⚠️ いま届いたこの ${events.length} 件のうち ${missing.length} 件は台帳に` +
-              `載っていない（id: ${missingIdList}）。重複として畳んだのではない。** ` +
-              '**載せ直しが要る**（`commitment_open` で開き直すこと）。',
+            `**⚠️ 台帳を開くつもりだったこの ${outcomes.size} 件のうち ${missing.length} 件は` +
+              `台帳に載っていない（id: ${missingIdList}）。重複として畳んだのでも、既に在った` +
+              'のでもない。** **載せ直しが要る**（`commitment_open` で開き直すこと）。',
           ]),
       // **読めない行が在ることを、ここでも断る（issue #296）。** `open.length`
       // には読めない行は数えられていない（`entries` だけの件数）ので、
