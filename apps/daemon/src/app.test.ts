@@ -1532,6 +1532,101 @@ describe('HTTP API', () => {
       expect(await read.text()).toBe('A');
     });
 
+    /**
+     * ⭐ **数の帳尻そのものを撃つ歯**（#698 欠陥1・欠陥3）。
+     *
+     * 応答の欄を1つずつ確かめる歯は「その欄が正しいか」しか言わない。
+     * **1行が0回または2回数えられている**という壊れ方は、欄を個別に見ても
+     * 見つからない——実際、guard で飛ばした行を `targeted` と
+     * `skipped.inUse` の両方で数える欠陥は、既存の歯を全部通り抜けていた。
+     * ⟹ **等式そのものを不変条件として撃つ。**
+     */
+    it('数の不変条件: matched === targeted + remaining + skipped5欄（下見でも実行でも）', async () => {
+      // 5つの欄が全部1以上になるように仕込む。
+      const idOld = (await stores.archive.archive('sess-inv-chain', 'A')).id; // 消せる
+      await stores.archive.archive('sess-inv-chain', 'AB'); // このセッションの最新 → newest
+      const idRunning = (await stores.archive.archive('sess-inv-run', 'R')).id;
+      await stores.archive.archive('sess-inv-run', 'RR'); // newest
+      fake.runningOwners.set(idRunning, 'mgr-inv'); // → inUse
+      const idGone = (await stores.archive.archive('sess-inv-gone', 'G')).id;
+      await stores.archive.archive('sess-inv-gone', 'GG'); // newest
+      await stores.archive.remove(idGone); // → alreadyRemoved
+      await stores.archive.archive('sess-inv-div', 'XYZ'); // 前方一致しない → notContained
+      await stores.archive.archive('sess-inv-div', 'QQQ'); // newest
+
+      const check = async (dryRun: boolean) => {
+        const response = await app.request(
+          '/archive/remove',
+          json({ minStoredBytes: 0, reason: '不変条件を撃つ', dryRun }),
+        );
+        expect(response.status).toBe(200);
+        const body = (await response.json()) as {
+          matched: number;
+          targeted: number;
+          remaining: number;
+          removedIds: string[];
+          raced: number;
+          skipped: Record<string, number>;
+        };
+        const skippedTotal =
+          body.skipped.protected +
+          body.skipped.alreadyRemoved +
+          body.skipped.newest +
+          body.skipped.notContained +
+          body.skipped.inUse;
+        // 🔑 これが本体。1行は必ず1回だけ数えられる。
+        expect(body.targeted + body.remaining + skippedTotal).toBe(body.matched);
+        // 仕込んだ4つの理由が実際に1件以上ずつ立っていること——立っていないと
+        // 「等式は成り立ったが、そもそもどの欄も0だった」という空振りになる。
+        expect(body.skipped.newest).toBeGreaterThan(0);
+        expect(body.skipped.alreadyRemoved).toBeGreaterThan(0);
+        expect(body.skipped.notContained).toBeGreaterThan(0);
+        expect(body.skipped.inUse).toBeGreaterThan(0);
+        return body;
+      };
+
+      const preview = await check(true);
+      const executed = await check(false);
+      // `targeted === removedIds.length + raced`（実行時のみ。#698 欠陥3）。
+      expect(executed.removedIds.length + executed.raced).toBe(executed.targeted);
+      expect(idOld).toBeDefined();
+      expect(preview.targeted).toBeGreaterThan(0);
+    });
+
+    /**
+     * ⭐ **下見が実行の予告になっていることを撃つ歯**（#698 欠陥2）。
+     *
+     * この口は「下見を既定にして、見てから押す」ことを設計の中心に置いている。
+     * 下見が guard を評価していないと、下見は「N件消える」と言い、実行は
+     * 走行中の委譲のぶんだけ少なく消す——**しかも減った理由は実行するまで
+     * 見えない。** それでは中心が成り立たない。
+     */
+    it('下見と実行が同じ targeted / skipped.inUse を返す（走行中の委譲が混ざっていても）', async () => {
+      const idRunning = (await stores.archive.archive('sess-preview', 'P')).id;
+      const idFree = (await stores.archive.archive('sess-preview-free', 'F')).id;
+      await stores.archive.archive('sess-preview', 'PP'); // newest
+      await stores.archive.archive('sess-preview-free', 'FF'); // newest
+      fake.runningOwners.set(idRunning, 'mgr-preview');
+
+      const ask = async (dryRun: boolean) =>
+        (await (
+          await app.request(
+            '/archive/remove',
+            json({ minStoredBytes: 0, reason: '下見と実行を突き合わせる', dryRun }),
+          )
+        ).json()) as { targeted: number; skipped: { inUse: number }; removedIds: string[] };
+
+      const preview = await ask(true);
+      const executed = await ask(false);
+
+      expect(preview.targeted).toBe(executed.targeted);
+      expect(preview.skipped.inUse).toBe(executed.skipped.inUse);
+      // 下見が名指しした id が、実行で実際に消えた id と一致すること。
+      expect(preview.removedIds).toEqual(executed.removedIds);
+      expect(preview.removedIds).toContain(idFree);
+      expect(preview.removedIds).not.toContain(idRunning);
+    });
+
     it('冪等: 同じ呼びを2回実行しても2回目は removedBytes を二重に数えず例外も出ない', async () => {
       const idA = (await stores.archive.archive('sess-idempotent', 'A')).id;
       await stores.archive.archive('sess-idempotent', 'AB'); // newest

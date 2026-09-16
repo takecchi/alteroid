@@ -9134,7 +9134,7 @@
         "operationId": "postArchiveRemove",
         "tags": ["archive"],
         "summary": "アーカイブ済み生ログを絞り込んでまとめて tombstone する",
-        "description": "人間の入口から、アーカイブ済み生ログの本文を絞り込んでまとめて消す（issue #698）。**既定は試算（`dryRun` を省略すると true）で、1件も消さない。** `sessionIds` / `before` / `minStoredBytes` のどれも渡さない呼びは断る——絞り込みが無いのと同じで、1回でアーカイブを空にできてしまう。走行中のマネージャーの退避（`skipped.inUse`）とセッションの最新行（`skipped.newest`）は一括では開けない——開放が要るなら対象を1件ずつ名指しして `DELETE /archive/:id` の`overrideReason` を使うこと。含有が証明できない行（`skipped.notContained`）は `requireContainment: false` を明示しない限り既定で守る。まだ記憶へ蒸留していない区間の墓標は`requireContainment` に関わらず常に守る（`skipped.protected`）。本文だけを落とす（tombstone）——行そのものは消えない。",
+        "description": "人間の入口から、アーカイブ済み生ログの本文を絞り込んでまとめて消す（issue #698）。**既定は試算（`dryRun` を省略すると true）で、1件も消さない。** `sessionIds` / `before` / `minStoredBytes` のどれも渡さない呼びは断る——絞り込みが無いのと同じで、1回でアーカイブを空にできてしまう。走行中のマネージャーの退避（`skipped.inUse`）とセッションの最新行（`skipped.newest`）は一括では開けない——開放が要るなら対象を1件ずつ名指しして `DELETE /archive/:id` の`overrideReason` を使うこと。含有が証明できない行（`skipped.notContained`）は `requireContainment: false` を明示しない限り既定で守る。まだ記憶へ蒸留していない区間の墓標は`requireContainment` に関わらず常に守る（`skipped.protected`）。本文だけを落とす（tombstone）——行そのものは消えない。**下見（既定）でも走行中の委譲の判定は評価する**——`targeted` /`skipped.inUse` は下見と実行で同じ値になる。下見が返さない実行だけの事実は `removedBytes`（下見は常に0）と `raced`（下見は常に0。`remove()` 自体を呼ばないので測れない）だけである。",
         "responses": {
           "200": {
             "description": "試算、または実際に消した結果。",
@@ -9211,6 +9211,11 @@
                         }
                       },
                       "required": ["newest", "alreadyRemoved", "notContained", "protected", "inUse"]
+                    },
+                    "raced": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
                     }
                   },
                   "required": [
@@ -9222,7 +9227,8 @@
                     "removedIds",
                     "removedBytes",
                     "remaining",
-                    "skipped"
+                    "skipped",
+                    "raced"
                   ]
                 }
               }
