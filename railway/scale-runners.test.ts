@@ -180,6 +180,22 @@ describe('1台から3台へ増やすとき', () => {
     expect(r.apiLog).not.toContain('"startCommand":"alteroidd"');
   });
 
+  it('set_config_file の呼び出しは、GraphQL の埋め込み改行があっても1要素のまま割れない（#1101 の回帰）', () => {
+    // lib.sh の set_config_file は `railway api '<複数行の GraphQL>'` を投げる
+    // （引数の中にリテラルな改行を含む）。割れていれば「api mutation($serviceId」と
+    // 「serviceInstanceUpdate(serviceId」は別々の calls[] 要素に分かれ、同じ要素の
+    // 中に両方が現れることは無い——`some(...)` / `includes(...)` 系の歯は、割れていても
+    // 素通りする（各断片だけを見れば「含む」が言えてしまう）。ここは1要素の中に
+    // 両方が揃っているかを見ることで、割れを直接測る。
+    const configCalls = r.calls.filter(
+      (c) => c.includes('api mutation($serviceId') && c.includes('serviceInstanceUpdate(serviceId'),
+    );
+    // 写した2台（runner-2 / runner-3）ぶん、それぞれ1要素ずつ
+    expect(configCalls).toHaveLength(2);
+    expect(configCalls.some((c) => c.includes('raw-var serviceId=id-runner-2'))).toBe(true);
+    expect(configCalls.some((c) => c.includes('raw-var serviceId=id-runner-3'))).toBe(true);
+  });
+
   it('繋ぐ枝は release/prod（1台だけ main を見ると、そこだけマージで畳まれる）', () => {
     const connects = r.calls.filter((c) => c.includes('source connect'));
     expect(connects).toHaveLength(2);

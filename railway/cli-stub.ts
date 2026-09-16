@@ -30,7 +30,13 @@ const path = require('path');
 const T = process.env.FAKE_STATE;
 const args = process.argv.slice(2);
 const at = (f) => path.join(T, f);
-fs.appendFileSync(at('calls.log'), args.join(' ') + '\\n');
+// **1行1呼び出しの JSONL で書く（argv をそのまま）。** かつては
+// \`args.join(' ') + '\\n'\` で書いていたが、引数にリテラルな改行が入ると
+// （\`railway api '<複数行の GraphQL>'\` がそれである）1回の呼び出しが複数行に
+// 割れ、読む側の \`split('\\n')\` が呼び出し回数を実際より多く数えていた（#1101）。
+// JSON.stringify は改行を \`\\n\`（2文字）へエスケープするので、1呼び出しは
+// 必ず1行になる。
+fs.appendFileSync(at('calls.log'), JSON.stringify(args) + '\\n');
 
 const services = () => {
   try {
@@ -93,7 +99,10 @@ switch (args[0]) {
   case 'api': {
     const v = args.find((a) => a.startsWith('@'));
     if (v) fs.appendFileSync(at('payloads.jsonl'), fs.readFileSync(v.slice(1), 'utf8') + '\\n');
-    fs.appendFileSync(at('api.log'), args.join(' ') + '\\n');
+    // api.log も calls.log と同じ理由・同じ形で JSONL にする（#1101 —
+    // \`args.join(' ') + '\\n'\` のままでは、ここに来る GraphQL の埋め込み改行が
+    // 同じように行を割る）。
+    fs.appendFileSync(at('api.log'), JSON.stringify(args) + '\\n');
     // ワークスペース一覧の問い合わせ。**既定は1つ**（テストが明示しない限り、
     // 複数ワークスペースの分岐に無関係なテストを巻き込まない）
     if (args.some((a) => a.includes('workspaces'))) {
@@ -168,6 +177,18 @@ export type Run = {
   upsertedServices: string[];
   /** `railway ssh -- alteroid credential set` で置かれた順（`set_credential`）。 */
   credentials: { service: string | undefined; name: string | undefined; value: string }[];
+  /**
+   * 呼び出しごとに1要素（`args.join(' ')`）。**1要素＝1回の CLI 起動**で、
+   * 引数にリテラルな改行が入っていても割れない。
+   *
+   * ⚠️ **かつては違った（#1101）。** 偽 CLI が `calls.log` を `args.join(' ') + '\n'`
+   * で書き、読む側が `split('\n')` するだけだったため、`railway api '<GraphQL>'` の
+   * ように引数の中に改行を含む呼び出し（`lib.sh` の `set_config_file`）が複数行に
+   * 割れ、`calls` の件数が実際の起動回数より多く出ていた（実測: 32行 / 実際28回）。
+   * いまは偽 CLI 側が JSONL（`JSON.stringify(args) + '\n'`）で書き、ここで1行＝1回
+   * として読み直すので、要素の文字列自体は以前と1バイトも変わらない
+   * （`args.join(' ')`）まま、割れなくなった。
+   */
   calls: string[];
   apiLog: string;
   stderr: string;
@@ -308,8 +329,23 @@ function finish(options: RunOptions, prepared: Prepared, exitCode: number, stder
     touched: (serviceId) => payloads.some((p) => p.serviceId === serviceId),
     upsertedServices: payloads.map((p) => p.serviceId),
     credentials,
-    calls: read('calls.log').split('\n').filter(Boolean),
-    apiLog: read('api.log'),
+    // JSONL（1行1呼び出し）を読み戻す。各要素の文字列は旧形式（`args.join(' ')`）と
+    // 1バイトも変わらない——変わるのは「改行を含む呼び出しでも割れない」ことだけ
+    // （上の `calls` の doc コメント、#1101）。
+    calls: read('calls.log')
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => (JSON.parse(line) as string[]).join(' ')),
+    // `apiLog` は `toContain` / `match` で丸ごと1つの文字列として使われているので、
+    // 復元した中身は旧形式（各呼び出しを `args.join(' ')` にして `\n` で繋ぎ、
+    // 空でなければ末尾に `\n`）と1バイトも変わらないようにする。
+    apiLog: (() => {
+      const records = read('api.log')
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => (JSON.parse(line) as string[]).join(' '));
+      return records.length > 0 ? records.join('\n') + '\n' : '';
+    })(),
     stderr,
     exitCode,
   };
