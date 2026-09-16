@@ -9892,7 +9892,8 @@ describe('usageReleasePending（再開の印がまだ使われずに立ってい
   });
 
   it('🔴 枠で止まっている間、1件目の合図で印が立ち、2件目は何も動かさない', async () => {
-    let releaseGateOpen = false;
+    // **枠は開けない。** ここで測るのは印の立ち方だけで、解除までは追わない。
+    const releaseGateOpen = false;
     const { fn } = fakeSdk(undefined, {
       resultFor: () =>
         releaseGateOpen
@@ -9932,7 +9933,8 @@ describe('usageReleasePending（再開の印がまだ使われずに立ってい
   });
 
   it('🔴 印は再試行で消費される ⟹ 次の回復はまた配られる（起こし損ねを作らない）', async () => {
-    let releaseGateOpen = false;
+    // **枠は開けない。** ここで測るのは印の立ち方だけで、解除までは追わない。
+    const releaseGateOpen = false;
     const { fn } = fakeSdk(undefined, {
       resultFor: () =>
         releaseGateOpen
