@@ -267,6 +267,32 @@ describe('computeUnpushedWork — 出す粒度（ファイル名・差分の中�
   });
 });
 
+describe('computeUnpushedWork — Issue #1067（他人の作業ツリーで git を撃つ）', () => {
+  it('起こす全ての git 呼び出しの env に GIT_OPTIONAL_LOCKS=0 と GIT_TERMINAL_PROMPT=0 が載る', async () => {
+    initRepo(join(root, 'r1'));
+    commitFile(join(root, 'r1'), 'a.txt', 'x\n', 'x');
+    initRepo(join(root, 'r2'));
+    commitFile(join(root, 'r2'), 'a.txt', 'x\n', 'x');
+
+    const recordedEnvs: Record<string, string | undefined>[] = [];
+    const spyingSpawn: ProcessSpawnFn = (options) => {
+      recordedEnvs.push(options.env);
+      return realSpawn(options);
+    };
+
+    await computeUnpushedWork(root, { spawn: spyingSpawn, env: process.env });
+
+    // 見つかった2ツリー × 3コマンド（branch / unpushed / uncommitted）で
+    // 少なくとも6回は起こっているはず——「全部」を検査するので、1本でも
+    // 漏れていたら落ちる。
+    expect(recordedEnvs.length).toBeGreaterThanOrEqual(6);
+    for (const env of recordedEnvs) {
+      expect(env.GIT_OPTIONAL_LOCKS).toBe('0');
+      expect(env.GIT_TERMINAL_PROMPT).toBe('0');
+    }
+  });
+});
+
 describe('computeUnpushedWork — タイムアウト', () => {
   it('git コマンドが止まっていても、期限で切り上げて「確かめられなかった」と名乗る', async () => {
     initRepo(root);

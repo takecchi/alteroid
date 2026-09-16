@@ -33,6 +33,45 @@ import type { UnpushedWorkResult, UnpushedWorkTree } from './runner-protocol.js'
  * その起動関数を注入で受け取るだけの純粋なロジックにしてある——出力・挙動は
  * 1文字も変えず、実際の子プロセス起動から判定ロジックを剥がしただけである
  * （AGENTS.md「テストが書けない構造は、テストが無いのと同じ」）。
+ *
+ * ## この探索自身が Issue #1067 の形を持っていた
+ *
+ * この探索は `job.cwd` の下に見つかった**全ツリー**——多くは他人（走行中の
+ * 作業者）が使っている作業ツリー——の中で `git` を撃つ。**このファイルが
+ * 撃つ3コマンドのうち、素の `git status --porcelain` だけが `.git/index` を
+ * 書く**（実測: git 2.47.3、`.git/index` の mtime を 2020-01-01 へ落として
+ * から1コマンド打ち、mtime が動くかを見た。`git status --porcelain` は
+ * 動く＝書く。`git --no-optional-locks status --porcelain` では 2020-01-01
+ * のまま動かない＝書かない。`git rev-list --count HEAD --not --remotes=origin`
+ * と `git rev-parse --abbrev-ref HEAD`（このファイルが撃つ残り2本）は
+ * どちらも動かない＝元から書いていない。`git diff HEAD` /
+ * `git ls-files --others --exclude-standard` / `git log --oneline -1` も
+ * 動かない＝書かない——後述の「退避」の設計判断はここに乗っている）。
+ * **また `git status --porcelain` は差分の有無に関係なく毎回書く**（実測:
+ * `commit` 直後の何も変更が無いツリーで mtime を落として3回連続で打ち、
+ * 3回とも現在時刻になった。「差分が在るときだけ」ではなく無条件である）。
+ * ⟹ **未 push を数えるこの機構自身が、「マネージャーと作業者が同じ作業ツリーを
+ * 共有する」という Issue #1067 の形をそのまま持っていた**——持ち主でない層が
+ * 他人の生きたツリーの `.git/index` を書いていた。
+ *
+ * だから `runGit` は全コマンドの env に `GIT_OPTIONAL_LOCKS: '0'` を渡す。
+ * **効くのはこの3本のうち1本（`git status --porcelain`）だけだが、引数
+ * ではなく env に一括で置く**（`--no-optional-locks` という引数ではなく env
+ * にしたのは、この先ここへ git コマンドが1本足されたときに引数方式だと
+ * 静かに漏れるため——env は `runGit` を通る全コマンドに効くので、次に足す
+ * コマンドが index を書く種類であっても塞げる。git のドキュメントは
+ * `GIT_OPTIONAL_LOCKS=0` と `--no-optional-locks` を等価だと明記している）。
+ *
+ * ⛔ **測っていないこと**: この書き込みが実際に作業者の git 操作を落とした
+ * 観測は無い。塞いだのは「書く」ことであって「落ちた」ことではない
+ * ——`index.lock` が既に在る状態で素の `git status` を打っても exit 0 で
+ * 返る（実測）ので、**衝突は失敗として現れるとは限らない**。**`git push` が
+ * index を動かさないことも未測定である**（リモートが要るので使い捨て
+ * リポジトリでは確かめていない）。
+ *
+ * ⚠️ **`GIT_OPTIONAL_LOCKS=0` が塞ぐのは index への書き込みだけである。**
+ * HEAD・作業ツリーの中身を動かす git（`checkout` / `commit` / `reset` 等）は
+ * この探索からは1つも撃っていないので、そもそも対象外である。
  */
 
 /** `spawnAsUser` / 素の `spawn` のどちらも満たせる、最小の起動口。 */
@@ -142,7 +181,9 @@ async function runGit(
       cwd,
       // **ネットワークを一切使わないコマンドしかここからは呼ばない**が、
       // 万一のプロンプト待ちで固まらないよう念のため塞ぐ。
-      env: { ...env, GIT_TERMINAL_PROMPT: '0' },
+      // `GIT_OPTIONAL_LOCKS: '0'` は Issue #1067 対応——このファイル冒頭の
+      // doc「この探索自身が Issue #1067 の形を持っていた」を見よ。
+      env: { ...env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' },
       signal: controller.signal,
     });
     let stdout = '';
