@@ -50,6 +50,8 @@ import {
   droppedTraceLedgerSince,
   journalEntryShape,
   noteDroppedRecord,
+  noteUnreadableRecord,
+  reasonOf,
   RECENT_TRACE_LIMIT,
   recentDroppedTraces,
 } from './dropped-record.js';
@@ -1774,6 +1776,67 @@ async function writeAppraisal(
     'act-completed',
   );
   return `評定を ${value} にした。`;
+}
+
+/**
+ * `commitment_close` が「台帳に無い」と答えるときの文面を組み立てる
+ * （Issue #1060 段3）。
+ *
+ * **なぜ `commitment_close` だけを直すのか。** 同じ「引き受けた仕事 ${id} は
+ * 台帳に無い。」という文言は `commitment_appraise` / `commitment_edit` にも
+ * ある（`existing === null` の枝）が、**この Issue が扱っているのは
+ * 「片付けようとして初めて『無い』に気づく」という #856 の症状そのもの**
+ * ——それが起きる場所は `commitment_close` だけである。他の道具の同じ枝は
+ * 触らない（触る理由が無い変更は、範囲を「気づいた順」で膨らませるだけ。
+ * AGENTS.md「範囲外でも気づいたことは上げる」）。
+ *
+ * **「台帳に無い」という事実だけでは、2つの別の事態が同じ顔をしている**
+ * ——「id を取り違えた」のか「台帳に載った後にその行が消えた」（#856 本体）
+ * のか、答える側にも読む側にも区別が付かない。この関数は、`#commit`（段1・
+ * `clone.ts`）が台帳に開いた瞬間に残す機械側の記録（`exchange/self/outbound`
+ * かつ本文に id を素の形で含む1行）を `q: id` で引き、**3つの状態を混ぜずに**
+ * 返す（AGENTS.md「静かに失敗する道具」「判定できないという3つ目の状態を
+ * 持つ」）。
+ *
+ * **`q` は部分一致である**（`JournalQuery.q` の doc）ので、この id を含む
+ * 別の行（例えば過去に別件で `commitment_close` が書いた `decision` の本文に
+ * 同じ id が偶然含まれる場合）にも当たりうる。**それでも「機械側にこの id の
+ * 記録が在る」という判定としては正しい**——どの経路であれ、機械がその id を
+ * 書いた事実に変わりはないので、ここでは問題にしない。
+ *
+ * **⚠️ この記録は #1060 より前に開いた行には無い。** 段1 が入った時点より
+ * 前に開いて、まだ片付いていない行（あるいは既に片付いて #416 の保持上限で
+ * 物理削除された行）は、機械が実際に名乗っていても記録が見つからない。
+ * だから「記録が無い」の文面は「名乗っていない」と断定せず、「取り違えた
+ * 可能性がある」に留める（下の2番目の分岐）。
+ */
+async function describeCommitmentNotOnLedger(stores: Stores, id: string): Promise<string> {
+  const notOnLedger = `引き受けた仕事 ${id} は台帳に無い。`;
+  let recorded: JournalEntry[];
+  try {
+    recorded = await stores.journal.list({ q: id, limit: 1 });
+  } catch (error) {
+    // **3つ目の状態: 判定できない。** 握り潰して「記録が在った」「記録が
+    // 無かった」のどちらかへ倒さない（AGENTS.md「判定できないという3つ目の
+    // 状態を持つ」）。日誌が読めなかった理由そのものは `noteDroppedRecord`
+    // 経由で stderr にも残る——ここで返すのは、クローンが読める範囲での
+    // 理由（`reasonOf`）である。
+    noteUnreadableRecord('機械が名乗った id の記帳（commitment_close の read-through）', id, error);
+    return `${notOnLedger}**どちらかは判定できない**（日誌を読めなかった: ${reasonOf(error)}）。`;
+  }
+  if (recorded.length > 0) {
+    return (
+      `${notOnLedger}**ただしこの id を機械が名乗った記録は日誌に在る**` +
+      `（${recorded[0]?.at} の行）。⟹ 台帳に載った後に行が消えたということである（#856 本体）。` +
+      'id の取り違えではない。'
+    );
+  }
+  return (
+    `${notOnLedger}**そしてこの id を機械が名乗った記録も日誌に無い** ⟹ id を取り違えた` +
+    '可能性がある（`commitment_list` で実在する id を確かめること）。' +
+    '⚠️ **ただし「記録が無い」は「名乗っていない」と同義ではない** —— 記録自体が落ちた場合と、' +
+    '記録を残すようになる前に開いた行の場合がある。'
+  );
 }
 
 async function appendJournalOrThrow(
@@ -5489,7 +5552,7 @@ export function createCloneTools(context: ToolContext) {
       },
       async ({ id, reason, appraisal, appraisalReason }) => {
         const existing = await stores.commitments.get(id);
-        if (existing === null) return text(`引き受けた仕事 ${id} は台帳に無い。`);
+        if (existing === null) return text(await describeCommitmentNotOnLedger(stores, id));
         if (existing.closedAt !== undefined) {
           return text(
             `${id} は既に ${existing.closedAt} に片付けてある（${existing.closedReason ?? ''}）。`,

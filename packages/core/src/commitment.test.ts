@@ -1679,6 +1679,151 @@ describe('Issue #856: 台帳に載らなかった合図の観測', () => {
   });
 });
 
+/**
+ * **Issue #1060 段1。** 受信箱の合図から自動で台帳を開いた（`#commit`）その
+ * 瞬間に、開いた id を機械自身の言葉で日誌へ1行残すことを見る。
+ *
+ * #856 と同じ根から出た欠陥——名乗る経路は3つ（`commitment_open` ツール・
+ * `commitment_close` ツール・この受信箱経由の自動 open）あるうち、**自動
+ * open だけが名乗った id を機械側の記録にまったく残していなかった。**
+ * ここではその記録を足すことだけを見る——#856 本体の機序（なぜ台帳の行が
+ * 消えることがあるか）はこの PR の範囲外である。
+ */
+describe('Issue #1060 段1: 受信箱から自動で台帳を開いた id を、機械が日誌へ残す', () => {
+  it('`journal.list({ q: id })` でその id を含む行が引ける（`append` が呼ばれた、だけでは測らない）', async () => {
+    const s = setup();
+    const inputs = () => s.calls.flatMap((call) => call.inputs);
+
+    s.clone.post(managerMessage('段1で記録される報告', 'evt-1060-recorded'));
+    await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
+    await waitFor(
+      async () => (await s.stores.commitments.list()).entries.length === 1,
+      '台帳に開く',
+    );
+
+    // **`commitment_close`（段3）が実際に使う口と同じ口で引く。** `append` が
+    // 呼ばれたことをスパイで数えるだけでは、段3 が動く保証にならない
+    // （書いた内容が `q` で当たらなければ、段3 からは見えない記録になる）。
+    await waitFor(async () => {
+      const rows = await s.stores.journal.list({ q: 'evt-1060-recorded' });
+      return rows.length > 0;
+    }, '機械が名乗った記録が q で引ける');
+
+    const rows = await s.stores.journal.list({ q: 'evt-1060-recorded' });
+    const recorded = rows.find(
+      (row) => row.type === 'exchange' && row.with === 'self' && row.role === 'outbound',
+    );
+    expect(recorded).toBeDefined();
+    expect(recorded?.type === 'exchange' ? recorded.text : '').toContain(
+      '台帳に開いた（id: evt-1060-recorded）',
+    );
+
+    await s.clone.stop();
+  });
+
+  /**
+   * **量の上限の歯。** `opened: true` のときにしか書かないので、量の上限は
+   * 「台帳に開いた行1本につき日誌1行」である——受信箱の合図の本数には
+   * 比例しない（#954/#783 の膨張はそのまま乗らない）。ここでは畳まれた
+   * （`'folded'`）2件目が記録を増やさないことを見る。
+   */
+  it('量の上限は「台帳に開いた行1本につき日誌1行」——畳んだ（folded）id は記録が増えない', async () => {
+    const s = setup();
+    const inputs = () => s.calls.flatMap((call) => call.inputs);
+    const body = '同じ報告（畳む対象、#1060用）';
+
+    s.clone.post(managerMessage(body, 'evt-1060-fold-1'));
+    await waitFor(() => inputs().length >= 1, '1件目がターンへ渡る');
+    await waitFor(
+      async () => (await s.stores.commitments.list()).entries.length === 1,
+      '1件目の記帳',
+    );
+
+    s.clone.post(managerMessage(body, 'evt-1060-fold-2'));
+    await waitFor(() => inputs().length >= 2, '2件目がターンへ渡る（畳まれる）');
+
+    // 台帳は1行のまま——2件目は開く前に既存行へ畳まれた（#1035）。
+    expect((await s.stores.commitments.list()).entries).toHaveLength(1);
+
+    // 1件目は実際に開けたので、機械の記録が在る。
+    const openedRows = await s.stores.journal.list({ q: 'evt-1060-fold-1' });
+    expect(
+      openedRows.some((row) => row.type === 'exchange' && row.text.includes('台帳に開いた')),
+    ).toBe(true);
+
+    // **2件目は畳まれた（台帳には触れていない）ので、記録は無い。**
+    const foldedRows = await s.stores.journal.list({ q: 'evt-1060-fold-2' });
+    expect(
+      foldedRows.some((row) => row.type === 'exchange' && row.text.includes('台帳に開いた')),
+    ).toBe(false);
+
+    await s.clone.stop();
+  });
+});
+
+/**
+ * **Issue #1060 段2。** 「記録を残す」という観測を足す実装自体が、それが
+ * 塞ごうとしている穴と同じ形の穴を開けうる——`journal.append` が失敗すると
+ * 跡は stderr の1行だけに沈み、クローンには見えない。ここでは (a) それでも
+ * ターンが落ちないこと、(b) 断り書きに「記録を残せなかった」という専用の
+ * 1行が出ることを見る。
+ */
+describe('Issue #1060 段2: 記録そのものが落ちたことを黙らせない', () => {
+  it('journal.append が失敗しても、ターンは落ちない（`unrecorded` が post を落とさない）', async () => {
+    const stores = createMemoryStores();
+    const broken: Stores = {
+      ...stores,
+      journal: {
+        ...stores.journal,
+        append: () => Promise.reject(new Error('日誌が書けない（テスト用）')),
+      },
+    };
+    // **`humanMessage` を使う。** `managerMessage` は `conv-1` の `events`
+    // 購読へ終端（`done`/`error`）を出さない内部ターンなので、`waitForSettled`
+    // では測れない（`s.calls` の `inputs` でしか完走を見られない）。ここは
+    // 「ターンが落ちない」こと自体を測りたいので、終端が観測できる人間発言の
+    // 経路を使う。
+    const s = setup(broken);
+
+    s.clone.post(humanMessage('記録が落ちる報告'));
+    await waitForSettled(s.events);
+
+    expect(s.events.some((event) => event.type === 'done')).toBe(true);
+    expect(s.events.some((event) => event.type === 'error')).toBe(false);
+
+    await s.clone.stop();
+  });
+
+  it('断り書きに「機械が名乗った記録を日誌に残せなかった」の1行が出る（`missing` とは別の断り）', async () => {
+    const stores = createMemoryStores();
+    const broken: Stores = {
+      ...stores,
+      journal: {
+        ...stores.journal,
+        append: () => Promise.reject(new Error('日誌が書けない（テスト用）')),
+      },
+    };
+    const s = setup(broken);
+    const inputs = () => s.calls.flatMap((call) => call.inputs);
+
+    s.clone.post(managerMessage('記録が落ちる報告', 'evt-1060-unrecorded-2'));
+    await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
+
+    // 台帳への書き込み自体は成功している——落ちたのは記録の追記だけ。
+    expect(await stores.commitments.get('evt-1060-unrecorded-2')).not.toBeNull();
+
+    const turn = inputs()[0] ?? '';
+    expect(turn).toContain('機械が名乗った記録を');
+    expect(turn).toContain('日誌に残せなかった');
+    expect(turn).toContain('evt-1060-unrecorded-2');
+    // **台帳には実際に開けているので、`missing`（載っていない）の断りとは別の
+    // 軸である。** 再読した一覧に見つかるので `missing` には入らない。
+    expect(turn).not.toContain('台帳に載っていない');
+
+    await s.clone.stop();
+  });
+});
+
 describe('未了の見え方', () => {
   it('digest には期間によらず載る（24時間の窓で切ると、放置された依頼だけが落ちる）', async () => {
     const stores = createMemoryStores();

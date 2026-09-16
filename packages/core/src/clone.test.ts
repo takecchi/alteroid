@@ -549,7 +549,12 @@ describe('クローン', () => {
       .join('');
     expect(shown).toBe('こんにちは');
 
-    const exchanges = await s.stores.journal.list({ types: ['exchange'] });
+    // **`with: ['human']` で絞る（Issue #1060）。** 受信箱から自動で台帳を
+    // 開いた合図には、いまは機械自身の記録（`exchange with=self`）が別途
+    // 1行増える（`#commit` 段1）——**人間との往復そのものを測るこの歯とは
+    // 別の軸**なので、絞って混ぜない（`with` を付けなければ3行に増え、
+    // この歯が測りたい「人間との往復」の形が読み取れなくなる）。
+    const exchanges = await s.stores.journal.list({ types: ['exchange'], with: ['human'] });
     expect(exchanges.map((e) => (e as { role: string }).role)).toEqual(['outbound', 'inbound']);
 
     await s.clone.stop();
@@ -6541,8 +6546,14 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
     await waitForDone(s.events);
 
     // `list` は新しい順。
+    // **`with: ['human']` で絞る（Issue #1060）。** `#commit` 段1 が足す
+    // `exchange with=self` の1行と混ざると、この歯が測りたい「人間との往復の
+    // 着順」が読み取れなくなる（上の「人間の発言に応答し、往復が日誌に残る」の
+    // 歯と同じ理由）。
     const roles = (
-      (await s.stores.journal.list({ types: ['exchange'] })) as { role: string }[]
+      (await s.stores.journal.list({ types: ['exchange'], with: ['human'] })) as {
+        role: string;
+      }[]
     ).map((entry) => entry.role);
     expect(roles).toEqual(['outbound', 'inbound']);
 

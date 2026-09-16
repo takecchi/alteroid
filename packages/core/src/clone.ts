@@ -1020,8 +1020,31 @@ type TurnOutcome =
  * 性質は変えたくない（`#restoreUnreadPass` の再 `#commit` がまさにそれで
  * 直る経路であり、そちらは今回も直している）。直すのは「この値だけを見て
  * 断定する」側である。
+ *
+ * **`'unrecorded'` は Issue #1060 で足した5つ目の値である。** 台帳には
+ * 実際に新しい行を開けた（`open()` が `opened: true` を返した）のに、
+ * その id を機械自身が名乗った記録を日誌へ残せなかった、という状態を指す
+ * （`#commit` の doc「Issue #1060 (段2)」）。**`'failed'` とは別の失敗である**
+ * ——`'failed'` は台帳への書き込みそのものが失敗した（開けていない）のに対し、
+ * `'unrecorded'` は台帳への書き込みは成功した後、その事実を日誌へ書き写す
+ * 追記だけが失敗している。台帳の状態としては `'opened'` と同じである。
+ *
+ * **`#commitmentNoticeFor` の `missing` の絞りは、`'unrecorded'` を素通り
+ * させる（`'folded'` / `'existed'` だけを除く現行の条件をそのまま使う）。**
+ * これは意図的である——台帳には実際に開いているので、読み直した台帳
+ * （`ledgerIds`。すぐ上の Issue #1088 / #1110 の段落）にこの id が見当たら
+ * なければ、それは #856 本体の症状（載った後に行が消えた）であって、この段が
+ * 新しく作った異常ではない。**そのうえで `'unrecorded'` はもう1つ別のことも
+ * 言っている**——たとえ読み直しで見つかったとしても（＝ `missing` には
+ * 現れなくても）、機械が名乗った記録そのものは日誌に無い。この2つ目の事実は
+ * `missing` の集合とは独立に断る必要があるので、`#commitmentNoticeFor` は
+ * `missing` とは別に `'unrecorded'` の id を集めて名指しする（下）。
+ * **同じ id が両方の断り書きに重複して出ることは許容する**——「載った後に
+ * 消えたかもしれない」（`missing`）と「名乗った記録を残せなかった」
+ * （`unrecorded` の断り）は別のことを言っているので、片方が出たから
+ * もう片方を隠す理由が無い。
  */
-type CommitOutcome = 'opened' | 'existed' | 'folded' | 'failed';
+type CommitOutcome = 'opened' | 'existed' | 'folded' | 'failed' | 'unrecorded';
 
 export function createClone(options: CloneOptions): CloneHost {
   return new Clone(options);
@@ -3946,6 +3969,66 @@ class Clone implements CloneHost {
    * 断る。断り書きは `commitment_open` で載せ直すことを促すが、**それは
    * `open()` をもう一度呼ぶだけ**——`open()` の doc が名指しで警告している
    * 事故（一度片付けた仕事が配り直しのたびに開き直る）がそのまま起きる。
+   *
+   * **Issue #1060 (段1)。台帳に新しい行を実際に開けた（`opened: true`）とき、
+   * 開いた id を機械自身の言葉で日誌へ1行残す。** 現状、名乗る経路は3つ
+   * ある（`commitment_open` ツール・`commitment_close` ツール・この受信箱
+   * 経由の自動 open）が、**このうち自動 open だけが名乗った id を機械側の
+   * 記録にまったく残していなかった**——`#commitmentNoticeFor` が本文の
+   * 先頭に載せる「いま届いたこの一件も台帳に載せた（id: X）」は会話履歴には
+   * 残るが日誌には残らず、`#journalIncomingBody` が書くのは合図の**本文**
+   * だけで id は1文字も書かない。**その結果、後で `commitment_close` が
+   * 「台帳に無い」と答えたとき、「台帳に載った後にその行が消えた」（#856
+   * 本体）のか「クローンが id を書き写し間違えた」のかが原理的に区別
+   * できなかった。** この1行がその区別の材料になる（実際に使う側は
+   * `commitment_close` ツールの段3。`tools.ts` の doc）。
+   *
+   * **種別は `decision` にしない。** `decision` は「クローンが自分で決めて
+   * 引き受けた判断」の面を持つ（`commitment_open` ツールの doc「自分で
+   * 決めて引き受けたことは日誌に残す」）——器が受信箱の合図から自動で
+   * 開いた行をここへ混ぜると、その面の意味が変わる（自分で決めたのでは
+   * なく、受信箱の合図に応じて器が機械的に開いただけである）。すぐ下の
+   * **失敗**経路が既に `exchange/self/outbound` を使っているので、同じ
+   * 経路の成否を同じ種別で揃える。**検索（`journal_read` の `q`）は種別を
+   * 跨いで当たる**（`journal-search.ts` の `SEARCHABLE_FIELDS_BY_TYPE` が
+   * 決めているのは「`exchange` の対象欄は `text`」だけで、種別自体を絞る
+   * 仕組みではない）ので、種別を揃えなくても突き合わせには支障が無い。
+   *
+   * **`text` に id を素の形で必ず含める。** これが唯一の目的である——
+   * `journal_read` の `q: <id>` で本文検索したとき当たるようにするため
+   * （`journal-search.ts` の `SEARCHABLE_FIELDS_BY_TYPE` で `exchange` は
+   * `['text']` が対象）。
+   *
+   * **量の上限は「台帳に開いた行1本につき日誌1行」である。** `opened: true`
+   * のときにしか書かないので、`'existed'` / `'folded'`（配り直された合図・
+   * 畳んだ合図）では1行も増えない。**⟹ 受信箱の合図の本数には比例しない**
+   * ——#954 / #783 が数えている合図側の膨張はそのまま乗らない。乗るのは
+   * 台帳の行の生成数で、これは `commitment_open` ツールが既に1行ずつ
+   * 払っているのと同じ量である。
+   *
+   * **記録は名乗りより先に済む。** この追記は、この `.then()` チェーン
+   * そのもの——`#committed` に控えるプロミスの鎖——の中で行う。
+   * `#commitmentNoticeFor` はこの鎖（`this.#committed.get(pending.id)`）を
+   * `await` してから初めて `list()` で再読し、名乗る文面を組み立てる
+   * （下の `#commitmentNoticeFor` 冒頭のコメント「この合図の記帳が済んで
+   * から読む」）。**⟹ 「記録してから名乗る」という順序は、気をつけて書く
+   * 運用上の約束ではなく、この鎖の構造そのものによって強制される。**
+   * 途中の経路を素通りする書き方（例: 追記を待たずに `'opened'` を先に
+   * 確定させる）に変えると、この保証は消える。
+   *
+   * **Issue #1060 (段2)。「記録を残す」という観測を足す実装自体が、それが
+   * 塞ごうとしている穴と同じ形の穴を開けうる。** この追記が通常の `#journal`
+   * を経由すると、失敗は stderr の1行（`noteDroppedRecord`）だけに沈み、
+   * クローンには一切見えない——**記録が黙って落ちれば、後から「記録が無い」
+   * を「機械は名乗っていない」と誤読することになる。それはまさに、この段が
+   * 塞ごうとしている穴と同じ形である。** だからここでは `#journal` を経由
+   * せず `this.#stores.journal.append(...)` を直接 `try`/`catch` する（跡は
+   * 同じく `noteDroppedRecord`。`#journal` 自身の doc が禁じている「日誌の
+   * 失敗から日誌へ書き直す」循環は、ここでは作らない——失敗しても日誌へは
+   * 一切書き直さず、`CommitOutcome` の値だけで下流へ事実を渡す）。失敗したら
+   * `'unrecorded'`（台帳には開けたが、開いた id の機械側の記録を残せ
+   * なかった）を返す。`CommitOutcome` はこのファイルの中で閉じているので、
+   * 型を見れば枝を使う箇所をすべて洗い出せる。
    */
   #commit(event: InboxEvent): void {
     const entry = commitmentFor(event);
@@ -3953,8 +4036,33 @@ class Clone implements CloneHost {
     this.#committed.set(
       event.id,
       this.#stores.commitments.open(entry).then(
-        (result): CommitOutcome =>
-          result.opened ? 'opened' : result.folded ? 'folded' : 'existed',
+        async (result): Promise<CommitOutcome> => {
+          if (!result.opened) return result.folded ? 'folded' : 'existed';
+          // **Issue #1060 (段1)。** 上の doc を見よ——`#journal` を経由せず
+          // 直接 append する（失敗を日誌へ書き直す循環を作らないため）。
+          try {
+            await this.#stores.journal.append({
+              type: 'exchange',
+              with: 'self',
+              role: 'outbound',
+              text:
+                `受信箱の合図から、引き受けた仕事として台帳に開いた（id: ${event.id}）。` +
+                `合図: ${inboxEventShape(event)}`,
+            });
+          } catch (error) {
+            // **Issue #1060 (段2)。** ここから `#journal` を呼び直さない
+            // （`#journal` 自身の doc が禁じる循環と同じ形になる）。跡は
+            // stderr の1行のみ——`'unrecorded'` を返すことで、記録の欠落
+            // そのものを `#commitmentNoticeFor` の断り書きへ伝える。
+            noteDroppedRecord(
+              '機械が名乗った id の記帳（#commit 成功時）',
+              inboxEventShape(event),
+              error,
+            );
+            return 'unrecorded';
+          }
+          return 'opened';
+        },
         (error: unknown): Promise<CommitOutcome> => {
           noteDroppedRecord('未了の記帳', inboxEventShape(event), error);
           // **Issue #856 (B)。** `noteDroppedRecord` の跡は stderr の1行
@@ -4105,6 +4213,18 @@ class Clone implements CloneHost {
       missing.map((pending) => `\`${pending.id}\``).join(', '),
       CLONE_ID_LIST_EXCERPT,
     );
+    // **Issue #1060 (段2)。** `'unrecorded'`（台帳には開けたが、その id を
+    // 機械が名乗った記録を日誌へ残せなかった）を、`missing` とは別に集めて
+    // 名指しで断る。**この2つの集合は重ならないとは限らない**——`missing` は
+    // 「再読して見当たらない」を測り、`unrecorded` は「記録の追記そのものが
+    // 落ちた」を測る、別の軸である。同じ id が両方に出ることがあるが、
+    // それぞれ別のことを言っているので、片方の行がもう片方を隠す理由は
+    // 無い（`CommitOutcome` の `'unrecorded'` の doc）。
+    const unrecorded = events.filter((pending) => outcomes.get(pending.id) === 'unrecorded');
+    const unrecordedIdList = excerptLine(
+      unrecorded.map((pending) => `\`${pending.id}\``).join(', '),
+      CLONE_ID_LIST_EXCERPT,
+    );
     const oldest = open[0];
     const lines = [
       `[system] 引き受けたまま終わっていない仕事は（${readAtLabel(at)} に数えた材料）` +
@@ -4139,6 +4259,19 @@ class Clone implements CloneHost {
             `**⚠️ 台帳を開くつもりだったこの ${outcomes.size} 件のうち ${missing.length} 件は` +
               `台帳に載っていない（id: ${missingIdList}）。重複として畳んだのでも、既に在った` +
               'のでもない。** **載せ直しが要る**（`commitment_open` で開き直すこと）。',
+          ]),
+      // **Issue #1060 (段2)。** 台帳には開けたが、機械が名乗った記録を日誌へ
+      // 残せなかった id を名指しで断る。**`missing` とは別の軸なので、
+      // `missing` に出た id がここにも出ることがある**（上の `unrecorded` の
+      // doc）。この断りが無いと、記録の欠落そのものが黙って消え、後から
+      // 「機械がこの id を名乗ったか」を突き合わせる材料が最初から無かった
+      // ことになる——それは #1060 が塞ごうとしている穴と同じ形である。
+      ...(unrecorded.length === 0
+        ? []
+        : [
+            `**⚠️ この ${unrecorded.length} 件は台帳には開けたが、機械が名乗った記録を` +
+              `日誌に残せなかった（id: ${unrecordedIdList}）。** 後から「機械がこの id を` +
+              '名乗ったか」を突き合わせられない。',
           ]),
       // **読めない行が在ることを、ここでも断る（issue #296）。** `open.length`
       // には読めない行は数えられていない（`entries` だけの件数）ので、

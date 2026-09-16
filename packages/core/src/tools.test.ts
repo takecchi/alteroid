@@ -14055,6 +14055,128 @@ describe('commitment_open は「載せた」と名乗る前にストアを確か
 });
 
 /**
+ * **Issue #1060 段3。** `commitment_close` が「台帳に無い」と答えるとき、
+ * それだけでは「id を取り違えた」のか「台帳に載った後にその行が消えた」
+ * （#856 本体）のかが区別できない。`#commit`（`clone.ts`、段1）が台帳に
+ * 開いた瞬間に残す機械側の記録（`exchange/self/outbound` かつ本文に id を
+ * 素の形で含む1行）を `journal.list({ q: id })` で引き、3つの状態を
+ * 混ぜずに返すことを見る。
+ *
+ * **段1（`clone.ts` の `#commit`）を経由せず、日誌への書き込みを直接模す。**
+ * ここは `commitment_close` 単体の分岐だけを見たいので、`Clone` 全体を
+ * セットアップしない——段1 自体が実際に同じ形の行を書くことは
+ * `commitment.test.ts` の「Issue #1060」で別に見る。
+ */
+describe('commitment_close が「台帳に無い」と答えるとき、機械側の記録の有無で言い分ける（issue #1060）', () => {
+  it('機械が名乗った記録が日誌に在れば、「載った後に消えた」（#856 本体）と言う', async () => {
+    const stores = createMemoryStores();
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text:
+        '受信箱の合図から、引き受けた仕事として台帳に開いた（id: c-vanished）。' +
+        '合図: manager_message kind=report',
+    });
+    const tools = createCloneTools({
+      stores,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+    const close = tools.find((entry) => entry.name === 'commitment_close');
+    const result = await close?.handler(
+      { id: 'c-vanished', reason: '片付けようとした' } as never,
+      {},
+    );
+    const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+
+    expect(reply).toContain('台帳に無い');
+    expect(reply).toContain('機械が名乗った記録は日誌に在る');
+    expect(reply).toContain('#856 本体');
+    expect(reply).toContain('id の取り違えではない');
+  });
+
+  it('機械が名乗った記録も日誌に無ければ、id の取り違えの可能性を言う（「名乗っていない」とは断定しない）', async () => {
+    const stores = createMemoryStores();
+    const tools = createCloneTools({
+      stores,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+    const close = tools.find((entry) => entry.name === 'commitment_close');
+    const result = await close?.handler(
+      { id: 'c-typo-xyz', reason: '片付けようとした' } as never,
+      {},
+    );
+    const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+
+    expect(reply).toContain('台帳に無い');
+    expect(reply).toContain('機械が名乗った記録も日誌に無い');
+    expect(reply).toContain('取り違えた可能性がある');
+    // ⚠️ 「記録が無い」を「名乗っていない」の同義語として断定しない。
+    expect(reply).toContain('記録自体が落ちた場合と');
+  });
+
+  it('日誌が読めなければ「判定できない」と言い、握り潰して他の2つへ倒さない', async () => {
+    const stores = createMemoryStores();
+    const broken: Stores = {
+      ...stores,
+      journal: {
+        ...stores.journal,
+        list: () => Promise.reject(new Error('DB接続断（テスト用）')),
+      },
+    };
+    const tools = createCloneTools({
+      stores: broken,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+    const close = tools.find((entry) => entry.name === 'commitment_close');
+    const result = await close?.handler(
+      { id: 'c-unreadable', reason: '片付けようとした' } as never,
+      {},
+    );
+    const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+
+    expect(reply).toContain('台帳に無い');
+    expect(reply).toContain('どちらかは判定できない');
+    expect(reply).toContain('DB接続断（テスト用）');
+    // ⛔ 握り潰して「在った」「無かった」のどちらか一方へ倒れていない。
+    expect(reply).not.toContain('機械が名乗った記録は日誌に在る');
+    expect(reply).not.toContain('機械が名乗った記録も日誌に無い');
+  });
+
+  it('⚠️ 対象は commitment_close だけである（commitment_appraise / commitment_edit の同じ枝は変えない）', async () => {
+    const stores = createMemoryStores();
+    const tools = createCloneTools({
+      stores,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+    const appraise = tools.find((entry) => entry.name === 'commitment_appraise');
+    const appraiseResult = await appraise?.handler(
+      { id: 'c-none', appraisal: 'good' } as never,
+      {},
+    );
+    const appraiseReply = (appraiseResult?.content ?? [])
+      .map((b) => (b.type === 'text' ? b.text : ''))
+      .join('');
+    expect(appraiseReply).toBe('引き受けた仕事 c-none は台帳に無い。');
+
+    const edit = tools.find((entry) => entry.name === 'commitment_edit');
+    const editResult = await edit?.handler({ id: 'c-none', body: '書き換え' } as never, {});
+    const editReply = (editResult?.content ?? [])
+      .map((b) => (b.type === 'text' ? b.text : ''))
+      .join('');
+    expect(editReply).toBe('引き受けた仕事 c-none は台帳に無い。');
+  });
+});
+
+/**
  * issue #416（1点目：「合図が無い」）。`storage-fs` は保持上限を超えた古い
  * 片付き行を物理削除するのに、その事実を運ぶ場所が出力にも型にも無かった。
  * `CommitmentList.trimmedClosed` を足したので、`commitment_list` の一覧末尾に

@@ -610,8 +610,16 @@ describe('未読の永続化', () => {
       await idle();
       dying.clone.post(humanMessage('MSG-BODY', 'conv-1'));
       await waitFor(() => dying.inputs.length > 0, '発言が処理に入る');
-      // 落ちた側は日誌に何も残していない。
-      expect(await stores.journal.list({ types: ['exchange'] })).toEqual([]);
+      // **落ちた側は、人間の発言としては日誌に何も残していない。**
+      // **`with: ['human']` で絞る（Issue #1060）。** 落としたのは受理の瞬間の
+      // 追記（`#record`。1本目）だけであり、`#commit` 段1 の記録
+      // （`exchange with=self`）は独立した2本目の呼び出しなので、これは
+      // 普通に成功する——台帳は実際に開けているので、これは正しい。この歯が
+      // 固定したいのは「人間の発言の本文」の消え方であって、機械の記録の
+      // 有無ではない。
+      expect(
+        await stores.journal.list({ types: ['exchange'], with: ['human'] }),
+      ).toEqual([]);
 
       // 2つ目の器。記憶ストアだけが生き残っている。
       const reborn = bootClone(stores);
