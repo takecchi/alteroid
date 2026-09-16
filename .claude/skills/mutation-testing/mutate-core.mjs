@@ -16,6 +16,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -199,7 +200,8 @@ const JUDGEMENT_TEMPLATES = {
   不明: (mutationId) => `変異 ${mutationId}: 不明 — 変異が成果物へ届いていない（生存ではない）`,
   身代わり: (mutationId) =>
     `変異 ${mutationId}: 身代わり — 赤くなったのは宣言した歯ではない（検出ではない）\n` +
-    `次にやること: 証跡の [残った] を読む。宣言した歯はこの変異を測れていない`,
+    `次にやること: 証跡の [残った] と [宣言] を読む。宣言した歯はこの変異を測れていない` +
+    `（狙いの歯がこの走行で実際に落ちなかったことは census で確認済み。#993 段2）`,
 };
 
 function assertNoForbiddenWords(text, contextLabel) {
@@ -403,7 +405,7 @@ function undeliveredGatePassed(artifactResult) {
  * 生存/検出/不明のどれかを、成果物検査・テスト結果・**足場対照**から決める
  * （id とは無関係）。
  *
- * ## 判定を出さない門が4つ在る。順序がそのまま設計である
+ * ## 判定を出さない門が在る。順序がそのまま設計である
  *
  * | 門 | 拒む条件 | 出所 |
  * | --- | --- | --- |
@@ -411,6 +413,15 @@ function undeliveredGatePassed(artifactResult) {
  * | 2 | ⭐ **`Errors` 行が出ている（未処理の例外/rejection。集計行が緑でも赤でも拒む）** | `assertNoUnhandledErrorsLine` |
  * | 3 | 集計行そのものが無い（落ちたのか1本も走らなかったのか区別できない） | `HarnessError` |
  * | 4 | ⭐ **落ちた歯が在るのに、その名前を判定に使えない** | 下記 |
+ * | (5) | 落ちた歯が在るのに、狙いの歯（`mustFail`）が宣言されていない | `requireDeclaredTargetTeeth`（#993） |
+ * | 6 | ⭐ **交差検算: テキスト由来の落ちた歯の集合と census 由来の集合が食い違う（#993 段2）** | `requireCensusAgreesWithTextFailures` |
+ * | 7 | ⭐ **宣言した名前が census に実在しない（打ち間違い。#993 段2 の本体）** | `requireDeclaredNamesExistInCensus` |
+ *
+ * **⚠️ 番号は「実装した順」であって「1本の直線上の連番」ではない。** (5) は
+ * #993（段1）で足された門で、6・7 は #993 段2 で新設した。それぞれの節の見出し
+ * （「門その2」「門その4」「門その5」等）は足された時点の呼び名をそのまま残して
+ * あるので、この表の番号と食い違って見える箇所がある——`grep` で該当関数を
+ * 直接引くほうが確実である。
  *
  * ## 門2（`Errors` 行——集計行の緑を疑う）
  *
@@ -524,6 +535,179 @@ export function requireDeclaredTargetTeeth(mustFail, contextLabel) {
   return new Set(mustFail);
 }
 
+/**
+ * ⭐ 門6（新設, #993 段2）: `mustFail` に宣言した各名前が、この走行の census
+ * （`testResult.census`。`runTests` が読む JSON レポータの副回線）に実在するかを
+ * 検算する。
+ *
+ * **なぜ要るか。** 門5（`requireDeclaredTargetTeeth`）は `mustFail` が「形として
+ * 正しい配列」であることしか見ておらず、書いた名前が実際にこの走行へ実在した
+ * かどうかは見ていなかった。テキスト解析（`extractFailedTeeth` /
+ * `diffScaffoldFailures`）は**落ちた歯の名前しか持たない**ので、`mustFail` に
+ * 打ち間違いを書いても、その名前が「そもそも実在しない」ことを検出する手段が
+ * 無かった——実在しない名前は決して `surviving` に現れないので、恒久的に
+ * 「身代わり」が出続ける（打ち間違いと、本物の「身代わり」が区別できない。
+ * #993 の issue 本文）。
+ *
+ * **census だけがこれを検算できる。** JSON レポータは `passed` の歯も
+ * `assertionResults` に含むため、宣言した名前が「そもそもこの走行に存在したか」
+ * を、落ちたかどうかとは独立に確認できる。
+ *
+ * **census が取れていなければ判定を出さない（fail-closed）。**「実在するかを
+ * 確認できない」ことは「実在する」ことにも「実在しない」ことにもならない
+ * ——`AGENTS.md`「判定できないという3つ目の状態を持つ」と同じ向き。
+ */
+export function requireDeclaredNamesExistInCensus(declaredNames, census, contextLabel) {
+  if (!isCensusAvailable(census)) {
+    throw new HarnessError(
+      `${contextLabel}: 宣言した歯（mustFail）の実在を検算できないので判定を出さない` +
+        `（census が取れていない: ${census?.reason ?? '(理由不明。testResult.census が無い)'}）。\n` +
+        'なぜ拒むか: このハーネスは vitest の JSON レポータ（副回線）を読み、宣言した名前が' +
+        'この走行に実在したかを検算する。それが読めない状態のまま「身代わり」を出すと、' +
+        '「打ち間違えた宣言」と「本物の身代わり」が区別できない（#993 段2の本体）。\n' +
+        '次にやること: 生ログの直前に census 読み込みの失敗理由が出ているはず。vitest が' +
+        '正常に起動したか確認すること（`--outputFile` は vitest 自身の起動に失敗すると' +
+        '一切書かれない）。',
+    );
+  }
+  const missing = [...declaredNames].filter((name) => !census.byName.has(name));
+  if (missing.length > 0) {
+    throw new HarnessError(
+      `${contextLabel}: mustFail に実在しない名前が${missing.length}本ある。判定を出さない。\n` +
+        `実在しない名前:\n${missing.map((n) => `  - ${JSON.stringify(n)}`).join('\n')}\n` +
+        'なぜ拒むか: 実在しない名前を宣言すると、その歯は決して落ちないので、恒久的に' +
+        '「身代わり」が出続ける——本物の身代わり（宣言した歯は緑のまま、別の歯が落ちた）と、' +
+        '宣言の打ち間違い（そもそもそんな名前の歯が無い）が区別できなくなる（#993 段2）。\n' +
+        '正しい名前の拾い方: 一度走らせて、証跡の区画「足場対照との差し引き」に出る' +
+        ' `[残った]` の行、または生ログの " FAIL " 行をそのまま写すこと。',
+    );
+  }
+}
+
+/**
+ * 「身代わり」の実測化（#993 段2）。census で「狙いの歯が実際に `passed`
+ * だった」ことを見てから、初めて「身代わり」と言う。
+ *
+ * **なぜ要るか。** 段1 までは、宣言した歯が `surviving`（対照を差し引いた
+ * 残りの赤）に居ないことだけを見て「身代わり」と言っていた——「居ない理由」
+ * を一度も確認していない。居ない理由は2つありうる: (a) 実際に緑だった
+ * （本物の身代わり） (b) そもそも実在しない名前だった（門6 が既に塞ぐ）。
+ * 門6 を通った後（実在は確認済み）でも、まだ3つ目の可能性が残る:
+ * (c) 実行されたが `passed` でも `failed` でもない状態（`skipped` / `todo` 等）。
+ *
+ * **⚠️ pending / todo / skip を、黙って passed 扱いにしない。** 宣言した歯の
+ * census 上の状態が `passed` でなければ、「狙いの歯が緑だった」とは言い切れない
+ * ——実行されなかった歯を「身代わり」の証拠にすると、実際には「宣言した歯が
+ * 走っていない」だけかもしれない状態を隠す。**倒れる向きは厳しい側に決める**:
+ * `passed` 以外は判定を出さない（`HarnessError`）。理由は、`skipped`/`todo` を
+ * 緑寄りに読むと、テストが実行されずに素通りしている状態を「身代わり」という
+ * 確定的な判定の下に隠せてしまうため——`不明` 側にも倒せるが、このハーネスは
+ * 既存の「判定できないという3つ目の状態を持つ」設計にならい、`HarnessError`
+ * （判定そのものを出さない）を選ぶ。
+ */
+export function requireDeclaredTeethActuallyPassed(declaredNames, census, contextLabel) {
+  // 実在の確認は `requireDeclaredNamesExistInCensus` が既に済ませている前提
+  // （この関数はその後に呼ぶ）——ここでは `census.byName.get(name)` が
+  // `undefined` にならないことを前提にしない（呼び出し順を守らない誤用への
+  // 保険として、`undefined` も「passed ではない」側でまとめて扱う）。
+  const notPassed = [...declaredNames]
+    .filter((name) => census.byName.get(name) !== 'passed')
+    .map((name) => `${name}（census 上の状態: ${JSON.stringify(census.byName.get(name) ?? null)}）`);
+  if (notPassed.length > 0) {
+    throw new HarnessError(
+      `${contextLabel}: 「身代わり」と言う前に、宣言した歯が実際にこの走行で落ちなかったことを` +
+        'census で確認できなかった。判定を出さない。\n' +
+        `対象:\n${notPassed.map((n) => `  - ${n}`).join('\n')}\n` +
+        'なぜ拒むか: 宣言した歯が pending / todo / skip のまま実行されていない可能性がある' +
+        '状態を、黙って「緑だった（身代わり）」として扱わない（#993 段2）。',
+    );
+  }
+}
+
+/**
+ * 判定行の外——証跡の区画——へ、宣言した歯（`mustFail`）と、census 上での
+ * 状態を並べる（#993 段2: 段1 の積み残し「判定行に宣言した歯の名前そのものを
+ * 載せる」）。
+ *
+ * **判定行（`formatJudgement` が返す text）の中には入れない。** 判定行の
+ * 追記部（`context.scaffoldNote` 等）は禁止語検査（`assertNoForbiddenWords`）を
+ * 通るため、外から来た文字列（落ちた歯の名前・宣言した歯の名前）を混ぜると、
+ * 自然なテスト名に含まれる `pass` / `ok` / `緑` で判定が拒否される
+ * （`formatJudgement` の doc の「`scaffoldNote` にも同じ制約が掛かる」と同じ形。
+ * #348 の欠陥の再生産になる）。だから宣言した名前は、`[残った]` と同じ
+ * 「証跡」の区画（`mutate.mjs` が判定行とは別に log する）へ出す。
+ */
+export function formatDeclaredTargetReport(mustFail, testResult) {
+  if (!Array.isArray(mustFail) || mustFail.length === 0) {
+    return '宣言した歯（mustFail）: 無し（この走行はすべて緑だったので判定に使っていない）';
+  }
+  const census = testResult?.census;
+  const lines = ['宣言した歯（mustFail）:'];
+  for (const name of mustFail) {
+    const status = isCensusAvailable(census)
+      ? (census.byName.get(name) ?? '(census に実在しない)')
+      : '(census が取れていない)';
+    lines.push(`  [宣言] ${name}（census 上の状態: ${JSON.stringify(status)}）`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * ⭐ 交差検算（新設, #993 段2）: テキスト由来の落ちた歯の集合（`extractFailedTeeth`
+ * が読む `FAIL` 行）と、census（JSON レポータ）由来の `failed` 集合が食い違ったら
+ * 判定を出さない。
+ *
+ * **実装前に実測で裏を取った（issue #993 のコメント、2026-09-17）。** 素朴に
+ * `assertionResults` の `status === 'failed'` だけを集めると、**スイートの
+ * 読み込みそのものが失敗したファイル**（`generated/canon.ts` が無い等）を
+ * 見落とす——実測（`packages/core/src` を未 build のツリーで走らせた）で
+ * 80本中77本が「テキストにしか無い」という食い違いになった。原因は、
+ * 読み込み失敗ファイルが JSON では `assertionResults: []` かつ
+ * `status: 'failed'` という**ファイル単位**の形で表れ、`assertionResults` の
+ * 集計だけでは拾えないことだった。**`censusEntriesForFile` がこの形
+ * （`<file> [ <file> ]`）も含めて名前を作るように直したところ、同じ走行・
+ * 別の走行（S1〜S3 の足場対照を実 ROOT で再現したもの）の両方で、突き合わせは
+ * 完全に一致した（食い違い0件、2本の実走行で確認）。** ⟹ この形を含めた
+ * 上での交差検算は、実測で裏が取れている。
+ *
+ * **⚠️ 呼ぶ場所は「すべて緑」を早期に返す経路より後——`mustFail` を使う判定
+ * （検出/身代わり）の手前でだけ効く。** 全部緑の判定（`生存`）や、落ちた歯が
+ * 全部足場対照由来だった判定（同じく `生存`）は、これまでどおり対照無し・
+ * census 無しで済む（1文字も変えていない）。**測っていないこと**: 「すべて
+ * 緑」の経路で census が実際にテキストと一致するかは、ここでは検算していない
+ * ——その経路は今までも census を要求していなかったので、要求を新たに増やさ
+ * ないという判断である。
+ */
+export function requireCensusAgreesWithTextFailures(textFailedNames, census, contextLabel) {
+  if (!isCensusAvailable(census)) {
+    throw new HarnessError(
+      `${contextLabel}: テキスト由来の落ちた歯の集合と census 由来の集合を突き合わせられない` +
+        `（census が取れていない: ${census?.reason ?? '(理由不明。testResult.census が無い)'}）。\n` +
+        '次にやること: vitest が正常に起動したか確認すること（`--outputFile` は起動失敗時には' +
+        '一切書かれない）。',
+    );
+  }
+  const jsonFailed = new Set();
+  for (const [name, status] of census.byName) {
+    if (status === 'failed') jsonFailed.add(name);
+  }
+  const textFailed = new Set(textFailedNames);
+  const onlyText = [...textFailed].filter((n) => !jsonFailed.has(n));
+  const onlyJson = [...jsonFailed].filter((n) => !textFailed.has(n));
+  if (onlyText.length > 0 || onlyJson.length > 0) {
+    throw new HarnessError(
+      `${contextLabel}: テキスト由来の落ちた歯の集合と census 由来の集合が食い違う。判定を出さない。\n` +
+        `テキストにしか無い（${onlyText.length}本）:\n` +
+        `${onlyText.map((n) => `  - ${JSON.stringify(n)}`).join('\n') || '  (無し)'}\n` +
+        `census にしか無い（${onlyJson.length}本）:\n` +
+        `${onlyJson.map((n) => `  - ${JSON.stringify(n)}`).join('\n') || '  (無し)'}\n` +
+        'なぜ拒むか: 2つの独立した解析（vitest の生テキストと JSON レポータ）が同じ走行に' +
+        'ついて違う答えを出している。どちらかの名前の作り方がこの走行の形と合っていない疑いが' +
+        'あり、判定の根拠にできない。',
+    );
+  }
+}
+
 export function decideJudgementCategory(artifactResult, testResult, scaffoldControl, mustFail) {
   if (artifactResult.artifactState === 'undelivered' && !undeliveredGatePassed(artifactResult)) {
     return '不明';
@@ -595,7 +779,22 @@ export function decideJudgementCategory(artifactResult, testResult, scaffoldCont
   // 下は交差を1度取るだけである（`requireDeclaredTargetTeeth` の doc の
   // 「一方向性は構造で保つ」）。
   const declared = requireDeclaredTargetTeeth(mustFail, 'decideJudgementCategory');
-  return diff.surviving.some((name) => declared.has(name)) ? '検出' : '身代わり';
+
+  // ⭐ 交差検算（新設, #993 段2）。テキスト由来の落ちた歯の集合と census 由来の
+  // 集合が食い違ったら、ここから先の名前ベースの判定そのものを疑う。
+  requireCensusAgreesWithTextFailures(diff.failed.names, testResult.census, 'decideJudgementCategory');
+
+  // ⭐ 門6（新設, #993 段2）。宣言した名前が、この走行の census に実在するかを
+  // 検算する。実在しない名前（打ち間違い）は、ここで判定を拒む——「身代わり」
+  // を恒久的に名乗り続けさせない。
+  requireDeclaredNamesExistInCensus(declared, testResult.census, 'decideJudgementCategory');
+
+  if (diff.surviving.some((name) => declared.has(name))) return '検出';
+
+  // ⭐ 身代わりの実測化（#993 段2）。「身代わり」と言う前に、宣言した歯が
+  // 実際にこの走行で `passed` だったことを census で確認する。
+  requireDeclaredTeethActuallyPassed(declared, testResult.census, 'decideJudgementCategory');
+  return '身代わり';
 }
 
 // ── 印 ──────────────────────────────────────────────────────────────
@@ -1238,6 +1437,121 @@ export function assertNoUnhandledErrorsLine(rawOutput, contextLabel) {
   );
 }
 
+// ── census（#993 段2）: JSON レポータを副回線として足す ──────────────────
+//
+// **テキスト解析は1行も外さない。** 門1〜4 と `extractFailedTeeth` /
+// `parseDeclaredFailureCount` はそのまま残る。ここで足すのは、テキストからは
+// 絶対に取れないもの——**その走行の全歯の名前と結果**（緑の歯も含む）——だけ
+// である。段1（#993 の1つ前の修正）は `mustFail`（狙いの歯の名前）を必須に
+// したが、ハーネスは打ち間違いと本物の「身代わり」を区別できなかった
+// （`FAIL` 行しか解析しておらず、緑の歯の名前を1本も持っていなかったため）。
+//
+// **JSON への全面移行ではない。** 実測（Issue #993 のコメント）:
+// `vitest 4.1.11` で、未処理の rejection を撒くが歯そのものは緑という走行を
+// 作ると、テキストは `Errors  1 error` という3本目の集計行を出すのに、JSON は
+// `success: true` / `numFailedTests: 0` としか言わない——JSON のスキーマに
+// 門2（`assertNoUnhandledErrorsLine`）に相当する情報が無い。⟹ 門2 が守っている
+// 「集計行が緑でも壊れている走行を拒む」という防御は、JSON だけでは再現できない。
+// だから門1〜4 はテキストのまま残し、JSON は「census」としてだけ使う。
+
+/** census を書き出す一時ファイルのパスを組み立てる。呼び出しごとに一意にする
+ * ——前回の走行の残骸を今回の census として読まないため（`runTests` が
+ * 走らせる前に明示的に消すのと合わせて、二重に守る）。*/
+export function buildCensusOutputPath() {
+  return path.join(os.tmpdir(), `alteroid-mutate-census-${crypto.randomUUID()}.json`);
+}
+
+/** `runTests` が `pnpm test` へ足す、JSON レポータ用の引数。**既定レポータは
+ * 落とさない**——`--reporter=default` を明示して人間向けの出力（`scripts/
+ * test-guard-core.mjs` が解析する生テキストでもある）を維持したまま、
+ * `--reporter=json --outputFile=<path>` を併用する（実測: 両立できる。stdout
+ * は今までどおりの人間向け出力のままで、JSON は指定した path にだけ書かれ、
+ * stdout には混ざらない）。*/
+export function buildCensusReporterArgs(outputFilePath) {
+  return ['--reporter=default', '--reporter=json', `--outputFile=${outputFilePath}`];
+}
+
+/** census（`loadCensus` の戻り値）が、判定に使ってよい形をしているか。 */
+export function isCensusAvailable(census) {
+  return (
+    typeof census === 'object' &&
+    census !== null &&
+    census.available === true &&
+    census.byName instanceof Map
+  );
+}
+
+/**
+ * vitest の JSON レポータの1ファイル分（`testResults[]` の1要素）から、
+ * その走行で「名乗った歯」を `{name, status}` の配列として取り出す。
+ *
+ * **`fullName` をそのまま使わない。** 実測（Issue #993 のコメント）: JSON の
+ * `fullName` は空白区切り・ファイル名なしで（例 `"外 内 赤の歯"`）、`mustFail`
+ * が使う「`<ファイル> > <describe> > <it>`」（テキストの `FAIL` 行と同じ形）
+ * とは別物である。`path.relative(ROOT, testResults[].name)` と
+ * `[...assertionResults[].ancestorTitles, .title]` を ` > ` で繋ぎ直すと
+ * `FAIL` 行と一致する（実測で確認済み）。
+ *
+ * **スイート自体の読み込みに失敗した場合（`assertionResults` が空）を、
+ * 個々のテストの失敗と取り違えない。** 実測（2026-09-17、`packages/core/src`
+ * を未 build のツリーで走らせた）: `generated/canon.ts` が無いために読み込み
+ * そのものが失敗したファイルは、JSON では `assertionResults: []` かつ
+ * `status: 'failed'`、`message` にロードエラーが入る形で表れる。このとき
+ * テキストの `FAIL` 行は `<file> [ <file> ]` という形（vitest 既定 reporter の
+ * 形）を取るので、ここでも同じ形の名前を作ることで、テキスト由来の名前と
+ * 突き合わせられる（`requireCensusAgreesWithTextFailures` が使う）。
+ */
+function censusEntriesForFile(fileResult) {
+  const rel = path.relative(ROOT, fileResult.name);
+  const assertions = Array.isArray(fileResult.assertionResults) ? fileResult.assertionResults : [];
+  if (assertions.length === 0) {
+    return [{ name: `${rel} [ ${rel} ]`, status: fileResult.status ?? 'unknown' }];
+  }
+  return assertions.map((a) => ({
+    name: [rel, ...(Array.isArray(a.ancestorTitles) ? a.ancestorTitles : []), a.title].join(' > '),
+    status: a.status,
+  }));
+}
+
+/**
+ * census（JSON レポータの出力）を読む。**「取れない」を緑にしない**——ファイルが
+ * 無い・JSON として parse できない・形が想定と違う、のどれであっても
+ * `available: false` を返し、理由を `reason` に入れる（呼び出し側が
+ * `HarnessError` にするかどうかを決める。ここでは投げない——`loadCensus` 自体は
+ * `runTests` から常に呼ばれるので、ここで投げると census を使わない既存の
+ * 消費者（`baseline` 等）まで巻き込む）。
+ */
+export function loadCensus(jsonOutputPath) {
+  let raw;
+  try {
+    raw = fs.readFileSync(jsonOutputPath, 'utf8');
+  } catch (err) {
+    return { available: false, reason: `census ファイルが読めない（${jsonOutputPath}）: ${err.message}` };
+  }
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (err) {
+    return { available: false, reason: `census ファイル（JSON）が壊れていて読めない: ${err.message}` };
+  }
+  if (!data || !Array.isArray(data.testResults)) {
+    return { available: false, reason: 'census の形が想定と違う（testResults が配列でない）' };
+  }
+  const byName = new Map();
+  for (const fileResult of data.testResults) {
+    if (typeof fileResult?.name !== 'string') {
+      return {
+        available: false,
+        reason: 'census の形が想定と違う（testResults[].name が文字列でない要素がある）',
+      };
+    }
+    for (const entry of censusEntriesForFile(fileResult)) {
+      byName.set(entry.name, entry.status);
+    }
+  }
+  return { available: true, byName };
+}
+
 /** 手順10: テストを走らせ、`Test Files ... passed` と `Tests ... passed` の
  * 両方の行を読む。行の不在は「走っていない」であって「通った/落ちた」ではない。
  * `maxWorkers` を渡さなければ `DEFAULT_MAX_WORKERS`（＝これまでどおり `4`）で走る。
@@ -1246,16 +1560,31 @@ export function assertNoUnhandledErrorsLine(rawOutput, contextLabel) {
  * `Tests N passed (N)` のような加工前の証跡もログへ残す — フラグが壊れても事後に
  * derive し直せる」を要求している（`SKILL.md`）。**剥がすのは判定に使う側
  * （`filesLine` / `testsLine`）だけである。**
+ *
+ * **#993 段2: census（JSON レポータの副回線）も一緒に読む。** `raw` /
+ * `filesLine` / `testsLine` は1文字も変えていない——既存の消費者
+ * （`cmdBaseline` / `measureScaffoldControl` 等）は全部そこにぶら下がっている。
+ * `census` は新しいフィールドとして足すだけである。
  */
 export function runTests(extraArgs = [], maxWorkers = DEFAULT_MAX_WORKERS) {
-  const result = spawnSync('pnpm', buildTestSpawnArgs(extraArgs, maxWorkers), {
+  const censusPath = buildCensusOutputPath();
+  // 走らせる前に消す——前回の残骸を今回の結果として読まないため。
+  fs.rmSync(censusPath, { force: true });
+  const args = [
+    ...buildTestSpawnArgs(extraArgs, maxWorkers),
+    ...buildCensusReporterArgs(censusPath),
+  ];
+  const result = spawnSync('pnpm', args, {
     cwd: ROOT,
     encoding: 'utf8',
     maxBuffer: 200 * 1024 * 1024,
   });
   const combined = (result.stdout ?? '') + (result.stderr ?? '');
   const { filesLine, testsLine } = parseAggregateLines(combined);
-  return { exitCode: result.status, raw: combined, filesLine, testsLine };
+  const census = loadCensus(censusPath);
+  // 後片づけ。読めた後も読めなかった後も、一時ファイルを残さない。
+  fs.rmSync(censusPath, { force: true });
+  return { exitCode: result.status, raw: combined, filesLine, testsLine, census };
 }
 
 export function testsRanCleanly(testResult) {

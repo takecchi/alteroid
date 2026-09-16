@@ -98,17 +98,45 @@ function makeRawWithFailures(names: string[]): string {
   ].join('\n');
 }
 
+interface CensusLike {
+  available: true;
+  byName: Map<string, string>;
+}
+
 interface TestResultLike {
   exitCode: number;
   raw: string;
   filesLine: string | null;
   testsLine: string | null;
+  census?: CensusLike;
 }
 
-function testResultFrom(raw: string): TestResultLike {
+/**
+ * `raw` から合成した testResult を作る。**#993 段2: census も自動で作る。**
+ *
+ * `parseFailedTestNames(raw)` で拾える名前（＝ `raw` の中の ` FAIL ` 行）を
+ * すべて `failed` として census へ載せる——テキスト由来の落ちた歯の集合と
+ * census 由来の集合を必ず一致させる（`requireCensusAgreesWithTextFailures`、
+ * #993 段2 の交差検算がここで食い違って誤爆しないようにするため）。
+ *
+ * `extraPassedNames` は「身代わり」を測る歯だけが使う——宣言（`mustFail`）が
+ * 指す名前が、実際にはこの走行で `passed` だったことを census 上でも示すため
+ * （`requireDeclaredTeethActuallyPassed` が読む）。`raw` の FAIL 行には現れない
+ * 名前をここへ足すことで、「実在するが緑だった」という census の形を作る。
+ */
+function testResultFrom(raw: string, extraPassedNames: string[] = []): TestResultLike {
   const filesLine = /^\s*Test Files\s+.+$/m.exec(raw)?.[0].trim() ?? null;
   const testsLine = /^\s*Tests\s+.+$/m.exec(raw)?.[0].trim() ?? null;
-  return { exitCode: filesLine?.includes('failed') ? 1 : 0, raw, filesLine, testsLine };
+  const byName = new Map<string, string>();
+  for (const n of parseFailedTestNames(raw)) byName.set(n, 'failed');
+  for (const n of extraPassedNames) byName.set(n, 'passed');
+  return {
+    exitCode: filesLine?.includes('failed') ? 1 : 0,
+    raw,
+    filesLine,
+    testsLine,
+    census: { available: true, byName },
+  };
 }
 
 const ALL_PASSED = testResultFrom(
@@ -398,15 +426,22 @@ describe('mutate-core: decideJudgementCategory の門5（宣言した歯の名�
   });
 
   it('⭐ 宣言した歯が落ちておらず、別の歯だけが落ちていれば「身代わり」', () => {
+    // #993 段2: 「身代わり」と言うには、宣言した名前が census に実在し、かつ
+    // `passed` だったことが要る（門6・身代わりの実測化）。この名前は raw の
+    // FAIL 行には現れない（＝実際には落ちなかった）ので、census には
+    // `extraPassedNames` として明示的に `passed` で載せる。
+    const declaredName =
+      'packages/core/src/excerpt.test.ts > P1 > fiveFieldViolations は非アンカーで作成/更新を見る';
     const testResult = testResultFrom(
       makeRawWithFailures([...SCAFFOLD_NAMES, REAL_SINGLE_FAILURE_NAME]),
+      [declaredName],
     );
     // surviving（対照を差し引いた残り）は REAL_SINGLE_FAILURE_NAME の1本だけ
     // ——それとは別の名前を「狙い」として宣言する。旧実装（件数だけを見る）
     // なら surviving.length > 0 なので無条件に「検出」だった。ここが #993 の本体。
     expect(
       decideJudgementCategory(NOT_CHECKED, testResult, measuredControl(SCAFFOLD_NAMES), [
-        'packages/core/src/excerpt.test.ts > P1 > fiveFieldViolations は非アンカーで作成/更新を見る',
+        declaredName,
       ]),
     ).toBe('身代わり');
   });
@@ -460,8 +495,13 @@ describe('mutate-core: decideJudgementCategory の門5（宣言した歯の名�
   });
 
   it('⭐ 一方向性: 宣言しても [残った] から名前が1本も消えない（diffScaffoldFailures は mustFail を受け取らない）', () => {
+    // #993 段2: 「身代わり」側の宣言（'宣言してもここには居ない歯の名前'）も
+    // census に実在し、かつ passed でなければならない（門6・身代わりの実測化）
+    // ——実際にはこの走行の FAIL 行に現れないので、extraPassedNames で明示する。
+    const bystanderDeclaredName = '宣言してもここには居ない歯の名前';
     const testResult = testResultFrom(
       makeRawWithFailures([...SCAFFOLD_NAMES, REAL_SINGLE_FAILURE_NAME]),
+      [bystanderDeclaredName],
     );
     const control = measuredControl(SCAFFOLD_NAMES);
     // 証跡（[残った]）は judge の外——formatScaffoldSubtractionReport が
@@ -479,7 +519,7 @@ describe('mutate-core: decideJudgementCategory の門5（宣言した歯の名�
       control,
     );
     const bystander = judge(
-      { id: 'm-direction-bystander', mustFail: ['宣言してもここには居ない歯の名前'] },
+      { id: 'm-direction-bystander', mustFail: [bystanderDeclaredName] },
       NOT_CHECKED,
       testResult,
       control,
@@ -661,14 +701,73 @@ describe('mutate-core: 足場対照の印は自分が暫定物であることを
 // 別々の結果を返す状態を作れる。**偽の `pnpm` は本物の歯の代わりであって、
 // 判定の側は1文字も差し替えていない。**
 
+// #993 段2: --outputFile=<path> が渡されていれば、vitest の JSON レポータを
+// 模した census も書く。**歯のロジック（上の2行、markerHere / target.includes
+// による failed の判定）は1文字も変えない**——census が使う真偽もこの同じ2つの
+// 判定から作る（judge する側の真偽と、census が言う真偽がずれると、この
+// フィクスチャ自身が #993 段2 の交差検算（門6の直前）に食い違いとして拒まれる。
+// このフィクスチャは3本目の歯（OTHER_TOOTH）も持つ——変異にもマーカーにも
+// 反応せず常に `passed` の、正しく宣言できる「狙いの歯」を1本用意しないと、
+// 「身代わり」を測る CLI テストが宣言できる実在の名前を持てないため
+// （実在しない名前を宣言すると、それは「身代わり」ではなく門6が拒む「打ち間違い」
+// になる——それこそが #993 段2 の本体である）。OTHER_TOOTH は text 側の
+// FAIL 行には一度も出さない（常に緑なので出す理由が無い）。
 const FAKE_PNPM_BODY = `#!/usr/bin/env node
 const fs = require('node:fs');
+const path = require('node:path');
 const markerHere = fs.existsSync('MUTATION-IN-PROGRESS.json');
 const target = fs.existsSync('target.txt') ? fs.readFileSync('target.txt', 'utf8') : '';
 const failed = [];
 if (markerHere) failed.push('fake/scaffold.test.ts > 足場の歯 > 印が置かれていると落ちる');
 if (target.includes('HELLO')) failed.push('fake/real.test.ts > 本物の歯 > hello が大文字になっていると落ちる');
 const TOTAL = 12;
+
+const outputArg = process.argv.find((a) => a.startsWith('--outputFile='));
+if (outputArg) {
+  const outputPath = outputArg.slice('--outputFile='.length);
+  const census = {
+    testResults: [
+      {
+        name: path.join(process.cwd(), 'fake/scaffold.test.ts'),
+        assertionResults: [
+          {
+            ancestorTitles: ['足場の歯'],
+            title: '印が置かれていると落ちる',
+            fullName: '足場の歯 印が置かれていると落ちる',
+            status: markerHere ? 'failed' : 'passed',
+          },
+        ],
+      },
+      {
+        name: path.join(process.cwd(), 'fake/real.test.ts'),
+        assertionResults: [
+          {
+            ancestorTitles: ['本物の歯'],
+            title: 'hello が大文字になっていると落ちる',
+            fullName: '本物の歯 hello が大文字になっていると落ちる',
+            status: target.includes('HELLO') ? 'failed' : 'passed',
+          },
+        ],
+      },
+      {
+        name: path.join(process.cwd(), 'fake/other.test.ts'),
+        assertionResults: [
+          {
+            ancestorTitles: ['別の歯'],
+            title: 'これは変異にもマーカーにも反応せず常に通る（正しく宣言できる狙いの歯）',
+            fullName: '別の歯 これは変異にもマーカーにも反応せず常に通る（正しく宣言できる狙いの歯）',
+            status: 'passed',
+          },
+        ],
+      },
+    ],
+    success: failed.length === 0,
+    numTotalTests: 3,
+    numFailedTests: failed.length,
+  };
+  fs.writeFileSync(outputPath, JSON.stringify(census));
+}
+
 if (failed.length === 0) {
   process.stdout.write(' Test Files  2 passed (2)\\n      Tests  ' + TOTAL + ' passed (' + TOTAL + ')\\n');
   process.exit(0);
@@ -683,6 +782,8 @@ process.exit(1);
 
 const SCAFFOLD_TOOTH = 'fake/scaffold.test.ts > 足場の歯 > 印が置かれていると落ちる';
 const REAL_TOOTH = 'fake/real.test.ts > 本物の歯 > hello が大文字になっていると落ちる';
+const OTHER_TOOTH =
+  'fake/other.test.ts > 別の歯 > これは変異にもマーカーにも反応せず常に通る（正しく宣言できる狙いの歯）';
 
 describe('mutate.mjs run: 足場の赤を差し引いて判定する（端から端まで）', () => {
   const tempDirs: string[] = [];
@@ -797,20 +898,71 @@ describe('mutate.mjs run: 足場の赤を差し引いて判定する（端から
         expect: 1,
         target: null,
         // この変異が実際に落とすのは REAL_TOOTH（上のテストと同じ変異）だが、
-        // ここでは別の名前を「狙い」として宣言する——測っていたつもりの歯は
-        // 緑のまま、無関係な歯が代わりに落ちている状態を作る。
-        mustFail: [
-          'fake/other.test.ts > 別の歯 > これは実際には落ちない（宣言の打ち間違いを模す）',
-        ],
+        // ここでは別の名前を「狙い」として宣言する——測っていたつもりの歯
+        // （OTHER_TOOTH。census 上に実在し、変異にもマーカーにも反応せず常に
+        // `passed`）は緑のまま、無関係な歯（REAL_TOOTH）が代わりに落ちている
+        // 状態を作る。#993 段2: OTHER_TOOTH は census に実在するので門6（実在
+        // 検査）を通り、かつ `passed` なので身代わりの実測化も通る——これは
+        // 「打ち間違い」ではなく本物の身代わりである（下の別テストが打ち間違い
+        // そのものを測る）。
+        mustFail: [OTHER_TOOTH],
       },
     ]);
     expect(status).toBe(0);
     expect(out).toContain('変異 m-hello-upcase-bystander: 身代わり');
-    expect(out).toContain('次にやること: 証跡の [残った] を読む');
+    // #993 段2: 宣言した歯（OTHER_TOOTH）が census 上で実際に passed だった
+    // ことが証跡に出ている（黙って「緑だったはず」と決め打ちしていない）。
+    expect(out).toContain(`[宣言] ${OTHER_TOOTH}`);
+    expect(out).toContain('census 上の状態: "passed"');
+    expect(out).toContain('次にやること: 証跡の [残った] と [宣言] を読む');
     expect(out).toContain(`[差し引いた] ${SCAFFOLD_TOOTH}`);
     // 宣言と無関係に、実際に落ちた歯の名前は証跡に出ている（黙って消えない）。
     expect(out).toContain(`[残った] ${REAL_TOOTH}`);
     expect(fs.existsSync(path.join(root, 'MUTATION-IN-PROGRESS.json'))).toBe(false);
+  });
+
+  it('⭐⭐ CLI 統合: 門6（新設, #993 段2）— mustFail の打ち間違いは HarnessError で、「身代わり」ではない', () => {
+    // #993 段2 の本体そのもの。実在しない名前を mustFail に宣言したとき、
+    // 段1 まではこれを「身代わり」と区別できずに恒久的に「身代わり」を出し
+    // 続けていた（打ち間違いなので、宣言した名前は decl も surviving にも
+    // 絶対に現れない）。段2 はこれを census で検算し、「身代わり」ではなく
+    // 「判定を出せない」（HarnessError）に倒す。
+    const root = makeTmpGitRepo();
+    const typoName = 'fake/typo.test.ts > 打ち間違えた describe > 打ち間違えた it（実在しない）';
+    const { status, out } = runPlan(root, [
+      {
+        id: 'm-hello-upcase-typo',
+        file: 'target.txt',
+        from: 'hello',
+        to: 'HELLO',
+        expect: 1,
+        target: null,
+        // この名前は census（fake pnpm が書く JSON）のどこにも無い。
+        mustFail: [typoName],
+      },
+    ]);
+    // CLI プロセス自体は判定を1件出せなかっただけで異常終了はしない
+    // （`cmdRun` は `judge()` の失敗を `judge-error` として結果に積むだけで、
+    // プロセスの exit code はここでは変えていない——既存の「検出」「身代わり」
+    // の CLI テストと同じ status: 0 の形）。
+    expect(status).toBe(0);
+    // ⭐ ここが本体: 判定行としては「身代わり」を1本も出していない
+    // （エラー本文が「本物の身代わりと区別できない」と*説明のために*
+    // 「身代わり」という語を使うのは正当なので、判定の言い回し
+    // `変異 <id>: 身代わり` が出ていないことを見る——語の有無ではなく
+    // 判定そのものの有無で見る）。
+    expect(out).not.toContain('変異 m-hello-upcase-typo: 身代わり');
+    expect(out).not.toContain('変異 m-hello-upcase-typo: 検出');
+    expect(out).toContain('判定を出せない');
+    expect(out).toContain('実在しない名前が1本ある');
+    expect(out).toContain(typoName);
+    expect(out).toContain('#993 段2');
+    // まとめ行も判定カテゴリではなく judge-error を名乗る。
+    expect(out).toContain('変異 m-hello-upcase-typo: judge-error');
+    // 変異は打ち間違いとは無関係に、きちんと復元されている
+    // （判定が出せなかったことと、ファイルの後始末は別の話）。
+    expect(fs.existsSync(path.join(root, 'MUTATION-IN-PROGRESS.json'))).toBe(false);
+    expect(fs.readFileSync(path.join(root, 'target.txt'), 'utf8')).toBe('hello world\n');
   });
 
   it('🔴 spec に「既知の失敗」を宣言する項目を書いても無視される（人が宣言できる形が無い）', () => {

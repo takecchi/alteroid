@@ -323,6 +323,14 @@ describe('mutate-core: decideJudgementCategory（判定の入口1/3）', () => {
       {
         raw: SINGLE_BLOCK_WITH_FAILURE,
         ...parseAggregateLines(SINGLE_BLOCK_WITH_FAILURE),
+        // #993 段2: 門6（実在検査）・交差検算が census を要求する。この歯が
+        // 測りたいのは「集計ブロックが1個なら判定できる」ことで、census の
+        // 有無はその前提と無関係なので、FAIL 行と一致する census をここで
+        // 合成して渡す（テキスト由来の落ちた歯の集合と食い違わせない）。
+        census: {
+          available: true,
+          byName: new Map([['probe.test.ts > 単一ブロック > 1本だけ落ちた', 'failed']]),
+        },
       },
       // 赤い歯が在るときの判定には足場対照が要る（門4）。ここは差し引く
       // 集合が空の対照を渡す——測っているのは集計ブロックの側である。

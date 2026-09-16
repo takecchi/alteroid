@@ -1261,6 +1261,13 @@ const GATE_TESTS_RED = {
     'Test Files  1 failed | 152 passed (153)\nTests  1 failed | 3094 passed (3095)\n',
   filesLine: 'Test Files  1 failed | 152 passed (153)',
   testsLine: 'Tests  1 failed | 3094 passed (3095)',
+  // #993 段2: 門6（実在検査）・交差検算（門7）が census を要求する。この
+  // シナリオが測りたいのは #444 の gate（`artifactResult` 側の分岐）なので、
+  // census は raw の FAIL 行と一致する最小限のものを合成する。
+  census: {
+    available: true,
+    byName: new Map([['packages/core/src/gate.test.ts > gate > 偽の歯が1本落ちた', 'failed']]),
+  },
 };
 
 // #993: GATE_TESTS_RED が落とす唯一の歯の名前。gate を通って門5 まで到達する

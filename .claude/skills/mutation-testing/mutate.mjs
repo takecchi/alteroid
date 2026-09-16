@@ -76,6 +76,7 @@ import {
   buildAndCheckArtifact,
   checkJudgementVocabulary,
   describeRunScope,
+  formatDeclaredTargetReport,
   formatScaffoldSubtractionReport,
   judge,
   markerExists,
@@ -326,6 +327,13 @@ function runOneMutation(spec, maxWorkers, scaffoldControlFor) {
     log('--- 足場対照との差し引き ここから ---');
     log(formatScaffoldSubtractionReport(testResult, scaffoldControl));
     log('--- 足場対照との差し引き ここまで ---');
+    // #993 段2: 宣言した歯（mustFail）と census 上の状態を、判定より前に証跡として
+    // 出す（段1 の積み残し「判定行に宣言した歯の名前そのものを載せる」）。判定行
+    // 自身（禁止語検査を通る）には外から来た名前を混ぜられないので、ここに置く
+    // （`formatDeclaredTargetReport` の doc）。
+    log('--- 宣言した歯 (mustFail) ここから ---');
+    log(formatDeclaredTargetReport(spec.mustFail, testResult));
+    log('--- 宣言した歯 (mustFail) ここまで ---');
     judgement = judge(spec, artifactResult, testResult, scaffoldControl);
   } catch (err) {
     judgeError = err.message;
