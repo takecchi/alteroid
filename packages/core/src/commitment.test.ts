@@ -1264,6 +1264,146 @@ describe('引き受けたまま終わっていない仕事', () => {
   });
 });
 
+/**
+ * **Issue #856 受け入れ基準2。「載せた」と名乗った id が引けなかったとき、
+ * それが観測できること。**
+ *
+ * #856 本体の症状（台帳に載せたはずの id が `commitment_list` で引けない）は
+ * 機序が特定できていない——この PR はそれを直すものではなく、**次に起きたときに
+ * 黙って消えないようにする**ものである。ここで測るのは3つ:
+ *
+ * 1. 記帳（`open()`）そのものが失敗したら、断り書きが名指しで断り、日誌にも
+ *    跡が残る（(A) と (B)）
+ * 2. **`open()` は成功したのに、直後の読み直し（`list()`）では見当たらない**
+ *    ——#856 本体の症状そのものの形——でも同じく断る（`#commit` の成否だけを
+ *    見ていたら、この形は捕まえられない）
+ * 3. **畳んだ（Issue #954/#1035 の重複）は「載っていない」と断らない**——
+ *    区別できないと、正常に畳んだだけのターンにも毎回嘘の警告が出る
+ */
+describe('Issue #856: 台帳に載らなかった合図の観測', () => {
+  it('記帳（open）自体が失敗すると、断り書きが名指しで断り、日誌にも跡が残る', async () => {
+    const stores = createMemoryStores();
+    const broken: Stores = {
+      ...stores,
+      commitments: {
+        ...stores.commitments,
+        // 対象の id だけを落とす。他の合図の記帳には影響しない。
+        open: (entry) =>
+          entry.id === 'evt-open-fail'
+            ? Promise.reject(new Error('書き込みが落ちた（実測を模す）'))
+            : stores.commitments.open(entry),
+      },
+    };
+    const s = setup(broken);
+    const inputs = () => s.calls.flatMap((call) => call.inputs);
+
+    const lines = await captureStderr(async () => {
+      s.clone.post(managerMessage('落ちる報告', 'evt-open-fail'));
+      await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
+    });
+
+    // 台帳には載っていない（open() が失敗しているので当然）。
+    expect(await broken.commitments.get('evt-open-fail')).toBeNull();
+    // 既存の跡（stderr）は変わらず残る。
+    expect(lines.join('')).toContain('未了の記帳');
+
+    // **(A)** ターンの断り書きが、畳んだのではなく載せ損なったことを名指しで断る。
+    const turn = inputs()[0] ?? '';
+    expect(turn).toContain('台帳に載っていない');
+    expect(turn).toContain('evt-open-fail');
+    expect(turn).toContain('載せ直しが要る');
+
+    // **(B)** stderr だけでなく、日誌にも跡が残る（クローンが読める場所）。
+    await waitFor(async () => {
+      const rows = await stores.journal.list();
+      return rows.some(
+        (row) => row.type === 'exchange' && row.text.includes('未了の記帳に失敗した'),
+      );
+    }, '日誌に失敗の跡が残る');
+    const rows = await stores.journal.list();
+    const failureRow = rows.find(
+      (row) => row.type === 'exchange' && row.text.includes('未了の記帳に失敗した'),
+    );
+    expect(failureRow?.type).toBe('exchange');
+    const failureText = failureRow?.type === 'exchange' ? failureRow.text : '';
+    expect(failureText).toContain('evt-open-fail');
+
+    await s.clone.stop();
+  });
+
+  /**
+   * **#856 本体の症状そのものの形を再現する。** `open()` は成功して行は
+   * 実在する（`get()` で引ける）のに、直後に読み直した `list()` の一覧には
+   * 出てこない——実測（#856）の「載せたと名乗った id が `commitment_list`
+   * で引けない」を、原因を特定せずに形だけ模したもの。
+   *
+   * **`#commit` 自身の成否（`open()` が例外を投げたか）だけを見ていたら、この
+   * 形は捕まえられない。** ここでは `open()` は投げていないので、その意味では
+   * 「成功」している——それでも `#commitmentNoticeFor` は読み直した一覧に
+   * 実在しない id を「載せた」と名乗ってはいけない。
+   */
+  it('open() は成功したのに、直後の読み直しでは見当たらない場合も断る（#856 本体の症状の形）', async () => {
+    const stores = createMemoryStores();
+    const ghosted = new Set(['evt-ghost']);
+    const broken: Stores = {
+      ...stores,
+      commitments: {
+        ...stores.commitments,
+        list: async (options) => {
+          const result = await stores.commitments.list(options);
+          return { ...result, entries: result.entries.filter((entry) => !ghosted.has(entry.id)) };
+        },
+      },
+    };
+    const s = setup(broken);
+    const inputs = () => s.calls.flatMap((call) => call.inputs);
+
+    s.clone.post(managerMessage('幽霊になる報告', 'evt-ghost'));
+    await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
+
+    // open() 自体は成功している —— get() では引ける（消えたのは list() の
+    // 一覧からだけ）。
+    expect(await stores.commitments.get('evt-ghost')).not.toBeNull();
+
+    const turn = inputs()[0] ?? '';
+    expect(turn).toContain('台帳に載っていない');
+    expect(turn).toContain('evt-ghost');
+    expect(turn).toContain('載せ直しが要る');
+
+    await s.clone.stop();
+  });
+
+  /**
+   * **陰性対照。** Issue #954/#1035 で意図的に畳んだ（既存の未了行へ任せた）
+   * ものは、載せ損なったのではない——これを「載っていない」と断ると、
+   * 正常に畳んだだけのターンにも毎回嘘の警告が出る。
+   */
+  it('⭐ 陰性対照: 畳んだ（#954/#1035 の重複）は「台帳に載っていない」と断らない', async () => {
+    const s = setup();
+    const inputs = () => s.calls.flatMap((call) => call.inputs);
+    const body = '同じ報告（畳む対象）';
+
+    s.clone.post(managerMessage(body, 'evt-fold-1'));
+    await waitFor(() => inputs().length >= 1, '1件目がターンへ渡る');
+    await waitFor(
+      async () => (await s.stores.commitments.list()).entries.length === 1,
+      '1件目の記帳',
+    );
+
+    s.clone.post(managerMessage(body, 'evt-fold-2'));
+    await waitFor(() => inputs().length >= 2, '2件目がターンへ渡る');
+
+    // 台帳は1行のまま——2件目は開く前に既存行へ畳まれた（#1035）。
+    expect((await s.stores.commitments.list()).entries).toHaveLength(1);
+
+    const secondTurn = inputs()[1] ?? '';
+    expect(secondTurn).not.toContain('台帳に載っていない');
+    expect(secondTurn).not.toContain('載せ直しが要る');
+
+    await s.clone.stop();
+  });
+});
+
 describe('未了の見え方', () => {
   it('digest には期間によらず載る（24時間の窓で切ると、放置された依頼だけが落ちる）', async () => {
     const stores = createMemoryStores();
