@@ -2293,6 +2293,22 @@ export function commitmentUpdatedAt(entry: Pick<Commitment, 'at' | 'closedAt'>):
 export const COMMITMENT_APPRAISAL_DECISION_PREFIX = '引き受けた仕事に評定を付けた';
 
 /**
+ * 評定の3値の日本語ラベル。**字面の生成元はここ1箇所である** —— MCP の説明文・
+ * 一覧の1行・画面のボタンが同じ語で呼ぶ。
+ *
+ * **`Record<CommitmentAppraisal, string>` にしてあるので、値を1つ足すと
+ * `tsc` がここで落ちる。** 落ちない形（`Partial` や添字アクセス）にすると、
+ * 足した値だけラベルが無いまま画面に生の `appraisal` が出る —— それは
+ * `MemoryProtectionStatus` の網羅性を `never` で強制しているのと同じ理由で
+ * 避ける。
+ */
+export const COMMITMENT_APPRAISAL_LABELS: Record<CommitmentAppraisal, string> = {
+  good: 'うまくいった',
+  bad: 'うまくいかなかった',
+  unclear: '判定できない',
+};
+
+/**
  * 評定を1行の字面にする（#1054）。**評定が無ければ `null` —— 1文字も増やさない。**
  *
  * **字面の生成元はここ1箇所である。** MCP（`tools.ts`）・HTTP の応答を描く画面
@@ -2314,14 +2330,9 @@ export function describeCommitmentAppraisal(
   entry: Pick<Commitment, 'appraisal' | 'appraisedBy' | 'appraisalReason'>,
 ): string | null {
   if (entry.appraisal === undefined) return null;
-  const label =
-    entry.appraisal === 'good'
-      ? 'うまくいった'
-      : entry.appraisal === 'bad'
-        ? 'うまくいかなかった'
-        : entry.appraisal === 'unclear'
-          ? '判定できない'
-          : entry.appraisal;
+  // 未知の値はラベルが無いので、生の値をそのまま出す（落とさない）。
+  const known = commitmentAppraisalSchema.safeParse(entry.appraisal);
+  const label = known.success ? COMMITMENT_APPRAISAL_LABELS[known.data] : entry.appraisal;
   const by = entry.appraisedBy === undefined ? '' : `・${entry.appraisedBy}`;
   const reason = entry.appraisalReason === undefined ? '' : `: ${entry.appraisalReason}`;
   return `評定: ${label}（${entry.appraisal}${by}）${reason}`;

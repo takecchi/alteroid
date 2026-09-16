@@ -642,14 +642,11 @@ export function createMemoryStores(): Stores {
     async appraise(id, at, value: CommitmentAppraisal, by: CommitmentAppraisedBy, reason) {
       const existing = commitments.get(id);
       if (!existing) return false;
-      const { appraisalReason: _previous, ...rest } = existing;
-      commitments.set(id, {
-        ...rest,
-        appraisal: value,
-        appraisedAt: at,
-        appraisedBy: by,
-        ...(reason === undefined ? {} : { appraisalReason: reason }),
-      });
+      // `delete` で落とす理由は fs 版と同じ（捨て変数を eslint が許さない）。
+      const next: Commitment = { ...existing, appraisal: value, appraisedAt: at, appraisedBy: by };
+      delete next.appraisalReason;
+      if (reason !== undefined) next.appraisalReason = reason;
+      commitments.set(id, next);
       return true;
     },
     // **`origin` の判定はしない**（`CommitmentStore.editBody` の doc）。呼び出し側

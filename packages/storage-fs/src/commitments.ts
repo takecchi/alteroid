@@ -455,15 +455,18 @@ export class FsCommitmentStore implements CommitmentStore {
         next: {
           entries: file.entries.map((entry) => {
             if (entry.id !== id) return entry;
-            // 前の理由は必ず落としてから、渡されたときだけ書き直す（上の doc）
-            const { appraisalReason: _previous, ...rest } = entry;
-            return {
-              ...rest,
+            // 前の理由は必ず落としてから、渡されたときだけ書き直す（上の doc）。
+            // **`delete` で落とす。** 分割代入で捨てる書き方（`{ appraisalReason: _x, ...rest }`）
+            // は、この repo の eslint（`no-unused-vars`）が捨て変数を許さない。
+            const next: Commitment = {
+              ...entry,
               appraisal: value,
               appraisedAt: at,
               appraisedBy: by,
-              ...(reason === undefined ? {} : { appraisalReason: reason }),
             };
+            delete next.appraisalReason;
+            if (reason !== undefined) next.appraisalReason = reason;
+            return next;
           }),
           unreadable: file.unreadable,
           trimmedClosedCount: file.trimmedClosedCount,

@@ -30,7 +30,10 @@ import {
   commitmentActiveDelegationIds,
   commitmentPosition,
   commitmentRespondedAt,
+  COMMITMENT_APPRAISAL_DECISION_PREFIX,
+  commitmentAppraisalSchema,
   commitmentUpdatedAt,
+  describeCommitmentAppraisal,
   compareApprovalPagingKey,
   compareCommitmentPosition,
   computeSupersededIds,
@@ -645,6 +648,20 @@ const commitmentBody = z.object({
  * 受け付けてはいけない（`commitmentSchema` の `closedReason` の注記）。
  */
 const commitmentCloseBody = z.object({ reason: z.string().min(1) });
+
+/**
+ * 評定（#1054）。**`reason` は任意である** —— 画面のボタン1つで付けられる経路を
+ * 塞がないため（`CommitmentStore.appraise` の doc）。
+ *
+ * **`appraisal` は `commitmentAppraisalSchema` をそのまま使う。** ここで
+ * `z.enum(['good', ...])` を書き直すと、値が増えたときに黙ってずれる口が1つ
+ * 増える（この repo が「実装が持つ一覧を説明文が数え直す」形で繰り返し踏んだ
+ * のと同じ穴。`packages/core/src/tool-description-enumeration.test.ts` の doc）。
+ */
+const commitmentAppraiseBody = z.object({
+  appraisal: commitmentAppraisalSchema,
+  reason: z.string().min(1).optional(),
+});
 
 /**
  * 編集後の本文。**空を許さない**（`commitmentBody.body` と同じ制約——空文字を
@@ -3167,6 +3184,77 @@ export function createApp(deps: AppDeps) {
           type: 'decision',
           decision: `人間が引き受けた仕事を片付けた（${id}）: ${reason}`,
           grounds: '人間が直接 API から閉じた',
+        });
+        return c.json(okResponseSchema.parse({ ok: true }));
+      },
+    )
+
+    /**
+     * 人間が1件に評定を付ける（#1054。自己改善の段1）。
+     *
+     * **`close` と違い、片付いた行にも未了の行にも付く。** 断るのは無い id だけ
+     * である（`CommitmentStore.appraise` の doc）。
+     *
+     * **⭐ この口の本題は「覆せること」である。** クローンが付けた評定を人間が
+     * 上書きでき、**覆した事実が日誌に残る** —— 行の側は「いまの値」しか
+     * 持たないので、前の値がここで日誌へ落ちないと、**評価する側を較正する
+     * 材料が消える**（`docs/PRD.md`「要件: 自己改善」の「評価する側も誤りうる
+     * 前提で作る」）。
+     */
+    .post(
+      '/commitments/:id/appraise',
+      describeRoute({
+        tags: ['commitments'],
+        summary: '引き受けた仕事に評定（うまくいったか）を付ける',
+        description:
+          'クローンの `commitment_appraise` と同じものを人間の手から。**片付いた行にも' +
+          '未了の行にも付けられ、何度でも上書きできる。** クローンが付けた評定を人間が' +
+          '覆したときは、覆す前の値が日誌に残る（評定そのものを較正する材料になる）。' +
+          '**`reason` は任意** — 画面のボタン1つで付けられる経路を塞がないため。',
+        responses: {
+          200: {
+            description: '付けた（上書きを含む）。',
+            content: { 'application/json': { schema: resolver(okResponseSchema) } },
+          },
+          400: {
+            description: '本文が JSON として不正（`appraisal` が既知の値でない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description: 'その id は台帳に無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      jsonBody(commitmentAppraiseBody, (where) => ({
+        error: 'appraisal の形が不正' + (where === '' ? '' : `: ${where}`),
+      })),
+      async (c) => {
+        const id = c.req.param('id');
+        const { appraisal, reason } = c.req.valid('json');
+        // **前の評定は書き換える前に読む。** 後から読むと自分が書いた値しか
+        // 取れず、覆した事実が日誌から消える。
+        const before = await stores.commitments.get(id);
+        if (before === null) return c.json({ error: 'not found' as const }, 404);
+        const previous = describeCommitmentAppraisal(before);
+        if (
+          !(await stores.commitments.appraise(
+            id,
+            new Date().toISOString(),
+            appraisal,
+            'human',
+            reason,
+          ))
+        ) {
+          return c.json({ error: 'not found' as const }, 404);
+        }
+        await stores.journal.append({
+          type: 'decision',
+          decision:
+            `${COMMITMENT_APPRAISAL_DECISION_PREFIX}（${id}）: ${appraisal}` +
+            `${reason === undefined ? '' : ` — ${reason}`}` +
+            `${previous === null ? '' : `（前: ${previous}）`}`,
+          grounds: '人間が直接 API から付けた（クローンの評定を覆したならその前の値も上に在る）',
         });
         return c.json(okResponseSchema.parse({ ok: true }));
       },
