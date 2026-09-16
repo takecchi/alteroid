@@ -23,7 +23,7 @@ export const ARCHIVE_REMOVE_MANY_LIMIT_MAX = 2_000;
  * ここでは判断しない。** このファイルは純粋な述語・選定だけを持ち、
  * 拒否のような対話的な判断は呼び出し側（HTTP ハンドラ）に置く
  * （`matchesInboxRemoveManyFilter` の doc と同じ境界線。逐語:
- * `grep -Fn -- 'ここでは断らない——このファイルは純粋な述語だけを持ち' packages/core/src/inbox-backlog.ts`）。
+ * `grep -Fn -- '断らない——このファイルは純粋な述語だけを持ち' packages/core/src/inbox-backlog.ts`）。
  */
 export interface ArchiveRemoveManyFilter {
   /** `ArchiveEntry.sessionId` の完全一致。省略＝全セッション。 */
