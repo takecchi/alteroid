@@ -2081,6 +2081,28 @@ describe('PgCommitmentStore の畳み込みの索引（#1041。pg だけが持�
    * 全文へ直した瞬間にここが落ちる。代償（md5 の衝突）は
    * `PgCommitmentStore.open` の doc に全文で書いてある。
    */
+  /**
+   * **索引が無い DB でも、畳み込みそのものは効く（#1041）。**
+   *
+   * `migrate` は既存の重複行が在ると索引を作らずに進む（`ensureOpenManagerBodyIndex`
+   * の doc）。⟹ **索引の在る DB と無い DB が両方ありうる。** そのとき台帳が
+   * #1035 以前（畳み込みが1つも無い状態）へ戻るなら、重複を持つ DB だけが静かに
+   * 悪化することになる。
+   *
+   * ⟹ **索引を落としたうえで、3実装に当てているのと同じ契約をもう一度当てる。**
+   * ここが緑である限り、`open()` の中の `where not exists`（直列に来た同文の
+   * 畳み込み）は索引と独立に効いている。
+   *
+   * ⚠️ **索引が在る状態では、この契約は `where not exists` を1行も踏まなくても
+   * 通ってしまう**（索引が弾いた回を `on conflict do nothing` が吸い、`existing`
+   * が畳んだ先を返すため）—— 実際に `where not exists` を消す実験をして、
+   * 索引が在る側の歯は1本も落ちないことを確かめた。**この歯だけがそれを落とす。**
+   */
+  it('⭐ 索引を落としても、畳み込みの契約は満たされる（where not exists が索引と独立に効いている）', async () => {
+    await db.execute(sql.raw('drop index commitments_open_manager_body_idx'));
+    await verifyCommitmentFoldContract(stores.commitments);
+  });
+
   it('⭐ 8000 文字の本文でも開ける（鍵が md5 でなければ落ちる）', async () => {
     const long = 'x'.repeat(8_000);
     expect(await stores.commitments.open(managerEntry('idx-long', long))).toEqual({
