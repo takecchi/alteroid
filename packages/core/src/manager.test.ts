@@ -4284,7 +4284,8 @@ describe('lastFoldedTurn は応答として終わった回では下ろす（Issu
 
     await vi.waitFor(async () => {
       const current = (await s.stores.jobs.listJobs()).find((j) => j.id === job.id);
-      if (current?.lastReport !== '再開後の正常な報告') throw new Error('台帳がまだ更新されていない');
+      if (current?.lastReport !== '再開後の正常な報告')
+        throw new Error('台帳がまだ更新されていない');
     });
 
     const current = (await s.stores.jobs.listJobs()).find((j) => j.id === job.id);

@@ -5106,7 +5106,10 @@ describe('クローンの道具', () => {
     // `report` イベントが `abort()` とは別経路で後から届くが、この偽物の
     // `abort()` は `lastFoldedTurn` に触らないので、事前にセットしておけば
     // 「読み直した時点で既に載っていた」を模せる。
-    target.lastFoldedTurn = { text: 'push 完了。PR #313 を出した。', at: '2026-09-16T00:10:00.000Z' };
+    target.lastFoldedTurn = {
+      text: 'push 完了。PR #313 を出した。',
+      at: '2026-09-16T00:10:00.000Z',
+    };
 
     const reply = await h.call('manager_stop', {
       managerId: 'mgr-1',
@@ -5795,9 +5798,10 @@ describe('クローンの道具', () => {
     const reply = await h.call('manager_report', { managerId: target.managerId });
 
     expect(reply).not.toContain('⚠');
-    expect(reply, '一致・比較不能な回は describeValidity の changed/unknowable 文言を出さない').not.toContain(
-      '前提は動いています',
-    );
+    expect(
+      reply,
+      '一致・比較不能な回は describeValidity の changed/unknowable 文言を出さない',
+    ).not.toContain('前提は動いています');
   });
 
   it('manager_report は lastReportStatus が無い（比較できない）行では ⚠ を出さない（Issue #1036）', async () => {
