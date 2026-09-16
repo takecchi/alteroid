@@ -231,6 +231,21 @@ export const commitments = pgTable(
     index('commitments_open_idx')
       .on(table.at)
       .where(sql`closed_at is null`),
+    /**
+     * 同一マネージャー×同一本文×未了を **DB が拒む**（issue #1041）。
+     *
+     * **⚠️ この索引だけは `migrate` が無条件には作らない。** 既存の重複行が在ると
+     * 作成そのものが落ち、起動のたびに通る `STATEMENTS` に置けば**デーモンが二度と
+     * 上がらなくなる**ので、`ensureOpenManagerBodyIndex` が重複を数えてから作る
+     * （在れば作らずに警告して進む）。⟹ **在る DB と無い DB が両方ありうる。**
+     * `PgCommitmentStore.open` はどちらでも正しく動くように書いてある。
+     *
+     * 鍵が `md5(body)` なのは btree の索引行のサイズ上限のためで、その代償は
+     * `PgCommitmentStore.open` の doc に全文で書いてある。
+     */
+    uniqueIndex('commitments_open_manager_body_idx')
+      .on(sql`(${table.commitment}->>'source')`, sql`md5(${table.commitment}->>'body')`)
+      .where(sql`closed_at is null and commitment->>'origin' = 'manager'`),
   ],
 );
 

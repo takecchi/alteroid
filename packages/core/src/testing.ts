@@ -58,7 +58,11 @@ import type {
   TranscriptArchive,
   UsageStore,
 } from './store.js';
-import { ensureTrailingNewline, JournalAnchorNotFoundError } from './store.js';
+import {
+  ensureTrailingNewline,
+  findOpenManagerDuplicate,
+  JournalAnchorNotFoundError,
+} from './store.js';
 import {
   DEFAULT_TOKEN_ROTATION_SETTINGS,
   type ActiveAgentToken,
@@ -637,10 +641,16 @@ export function createMemoryStores(): Stores {
       const found = commitments.get(id);
       return found === undefined ? null : isolate(found);
     },
+    // **判定と書き込みのあいだに `await` を1つも挟まないこと（issue #1041）。**
+    // ここが原子なのは「同期のまま最後まで書く」からであって、`async` が
+    // 守ってくれるからではない——途中に `await` を入れた瞬間、同じストアを
+    // 共有する2つの `Clone` のあいだで本物の器と同じ競合が生まれる。
     async open(entry) {
-      if (commitments.has(entry.id)) return false;
+      if (commitments.has(entry.id)) return { opened: false, folded: false };
+      const duplicate = findOpenManagerDuplicate([...commitments.values()], entry);
+      if (duplicate !== undefined) return { opened: false, folded: true, foldedInto: duplicate.id };
       commitments.set(entry.id, isolate(entry));
-      return true;
+      return { opened: true, folded: false };
     },
     async close(id, at, reason, by: CommitmentClosedBy) {
       const existing = commitments.get(id);

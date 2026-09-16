@@ -13958,7 +13958,7 @@ describe('commitment_open は「載せた」と名乗る前にストアを確か
         // 解決するが、行は実際には残っていない（重複除去・容量超過・
         // トランザクションの巻き戻り等、原因は問わない）。
         async open() {
-          return true;
+          return { opened: true, folded: false };
         },
         async get() {
           return null;
@@ -13996,7 +13996,7 @@ describe('commitment_open は「載せた」と名乗る前にストアを確か
       commitments: {
         ...stores.commitments,
         async open() {
-          return true;
+          return { opened: true, folded: false };
         },
         async get(id) {
           return Promise.reject(new UnreadableCommitmentError(`${id} は壊れて読めない`));
@@ -14034,7 +14034,7 @@ describe('commitment_open は「載せた」と名乗る前にストアを確か
       commitments: {
         ...stores.commitments,
         async open() {
-          return true;
+          return { opened: true, folded: false };
         },
         async get() {
           throw new Error('DB接続断（器そのものの障害。テスト用）');

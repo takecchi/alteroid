@@ -530,8 +530,124 @@ export const STATEMENTS = [
   `alter table approvals add column if not exists withdrawn_at timestamptz`,
 ] as const;
 
-export async function migrate(db: Db): Promise<void> {
+/** `ensureOpenManagerBodyIndex` が作る部分 unique 索引の名前（issue #1041）。 */
+export const OPEN_MANAGER_BODY_INDEX = 'commitments_open_manager_body_idx';
+
+/**
+ * 同一マネージャー×同一本文×未了を **DB が拒む**ようにする索引（issue #1041）。
+ *
+ * **`STATEMENTS` に置いていないのは、無条件に当ててはいけない唯一の文だからである。**
+ * 既存の重複行が1組でも在ると `could not create unique index` で落ち、この配列は
+ * 起動のたびに頭から通るので、**デーモンが二度と上がらなくなる**（2026-08-25 に
+ * `usage_daily_key_idx` で実際に踏んだのと同じ形。このファイル冒頭の doc）。
+ *
+ * **鍵は `md5(body)` である。** 生の `body` は btree の索引行のサイズ上限
+ * （約2.7KB）を超えうるので、長い報告だけが記帳できなくなる。代償は
+ * `PgCommitmentStore.open` の doc に全文で書いてある。
+ */
+const CREATE_OPEN_MANAGER_BODY_INDEX = `create unique index if not exists ${OPEN_MANAGER_BODY_INDEX}
+   on commitments ((commitment->>'source'), md5(commitment->>'body'))
+   where closed_at is null and commitment->>'origin' = 'manager'`;
+
+/** `ensureOpenManagerBodyIndex` が見つけた、索引を作れなくする重複の1組。 */
+export interface OpenManagerBodyDuplicate {
+  readonly source: string;
+  readonly ids: readonly string[];
+}
+
+function rowsOf(result: unknown): unknown[] {
+  return Array.isArray(result) ? result : ((result as { rows?: unknown[] }).rows ?? []);
+}
+
+/**
+ * 索引を作れなくする重複（同一 `source` × 同じ `md5(body)` の未了が2行以上）を数える。
+ *
+ * **`export` しているのはテストのためだけではない** —— 運用側が「いま索引を作れる
+ * 状態か」を、索引を作りにいかずに確かめられる口が要る。
+ */
+export async function findOpenManagerBodyDuplicates(db: Db): Promise<OpenManagerBodyDuplicate[]> {
+  const result = await db.execute(sql`
+    select
+      commitment->>'source' as source,
+      array_agg(id order by at asc, id asc) as ids
+    from commitments
+    where closed_at is null and commitment->>'origin' = 'manager'
+    group by commitment->>'source', md5(commitment->>'body')
+    having count(*) > 1
+    order by count(*) desc, min(at) asc
+  `);
+  return rowsOf(result).map((row) => {
+    const value = row as { source: string | null; ids: string[] };
+    return { source: value.source ?? '', ids: value.ids };
+  });
+}
+
+/**
+ * 索引を作る。**ただし既存の重複が在るなら作らず、逐語で警告して進む。**
+ *
+ * ## ⛔ 重複を黙って畳まない
+ *
+ * 「索引が作れるように、古い1件を残して残りを閉じる」という直し方が最初に思い付く
+ * が、**採らない。** 台帳は「引き受けたまま終わっていない仕事」の唯一の在り処で、
+ * **クローンが閉じていない行を器が閉じたら、クローンはそれに気づけない**——閉じた
+ * 行は未了の一覧から消えるからである。器がクローンの記憶を書き換える形は、
+ * この製品がいちばん避けるものである。
+ *
+ * ## ⛔ かといって落とさない（起動を止めない）
+ *
+ * ここで投げれば `migrate` が落ち、**デーモンが上がらなくなる**。重複行が在ること
+ * 自体は危険ではない（そこに在るだけである）。**データの状態を、製品ぜんぶの停止へ
+ * 変換しない。**
+ *
+ * ## ⟹ 索引を作らずに警告して進む
+ *
+ * このとき何が失われるかを正確に言う：**`PgCommitmentStore.open` の
+ * `where not exists`（直列に来た同文の畳み込み）は効いたままで、DB が拒む段だけが
+ * 無くなる。**⟹ 台帳は #1035 以前へは戻らず、**同時に来た2件目だけがすり抜ける。**
+ *
+ * **警告には件数と id を逐語で載せる。** 「重複がある」とだけ言われても、運用側は
+ * どの行を見ればよいか分からない——**人間がその行を読んで、自分で閉じるか直すかを
+ * 決められる材料**をここで渡す。次の起動で重複が無くなっていれば、索引は黙って作られる。
+ */
+export async function ensureOpenManagerBodyIndex(
+  db: Db,
+  warn: (line: string) => void,
+): Promise<void> {
+  const duplicates = await findOpenManagerBodyDuplicates(db);
+  if (duplicates.length === 0) {
+    await db.execute(sql.raw(CREATE_OPEN_MANAGER_BODY_INDEX));
+    return;
+  }
+  const rows = duplicates.reduce((total, group) => total + group.ids.length, 0);
+  warn(
+    `alteroid: 台帳に同一マネージャー×同一本文の未了が重複している` +
+      `（${duplicates.length} 組 / ${rows} 行）。` +
+      `${OPEN_MANAGER_BODY_INDEX} を作らずに起動する（#1041）。` +
+      `同時に開かれた2件目を DB が拒む段だけが無い状態になる。` +
+      `重複を人間が閉じるか直せば、次の起動で索引は作られる。\n`,
+  );
+  for (const group of duplicates) {
+    warn(`alteroid:   source=${group.source} ids=${group.ids.join(', ')}\n`);
+  }
+}
+
+/**
+ * スキーマを用意する。**起動のたびに通る。**
+ *
+ * `STATEMENTS` を頭から当てたあと、**無条件には当てられない1文**だけを
+ * {@link ensureOpenManagerBodyIndex} が条件付きで当てる（issue #1041。既存の
+ * 重複行が在ると索引が作れず、作りにいけば起動そのものが落ちる）。
+ *
+ * **`warn` を差し替えられるのはテストのためである。** 既定は stderr
+ * （`index.ts` の接続エラーと同じ口）。警告が出たことと、その逐語を歯で測れないと、
+ * 「索引が作られなかった」という状態が誰にも見えないまま運用へ出る。
+ */
+export async function migrate(
+  db: Db,
+  warn: (line: string) => void = (line) => process.stderr.write(line),
+): Promise<void> {
   for (const statement of STATEMENTS) {
     await db.execute(sql.raw(statement));
   }
+  await ensureOpenManagerBodyIndex(db, warn);
 }

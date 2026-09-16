@@ -114,6 +114,7 @@ import type {
 } from './schema.js';
 import { resolveBuildRevision } from './revision.js';
 import type { CloneRuntimeFacts, SelfFacts } from './self.js';
+import { findOpenManagerDuplicate } from './store.js';
 import type { CommitmentList, PendingInboxEvent, Stores } from './store.js';
 import { cloneToolJournalsItself, createCloneMcpServer, type ToolContext } from './tools.js';
 import { turnInputEntry } from './turn-input.js';
@@ -973,13 +974,18 @@ type TurnOutcome =
  * 一度片付けた仕事が配り直しのたびに開き直る**——`open()` の doc が警告する
  * まさにその事故がここから起きる。
  *
- * **`'folded'` と `'existed'` は意味が違う。** `'folded'` は `open()` を呼ぶ
- * 前に（`hasOpenManagerDuplicate` で）**呼ばないと決めた**——台帳には手を
- * 触れていない。`'existed'` は `open()` を実際に呼んだが、**呼んだ先が「既に
- * 在る」と答えた**——行が開いているか閉じているかは問わない（`open()` の
- * 契約はどちらも区別せず `false` を返す）。**どちらも「載せ損なった」ではない
+ * **`'folded'` と `'existed'` は意味が違う。** `'folded'` は `open()` が
+ * **同一マネージャー×同一本文の未了を見つけて、その行へ任せた**
+ * （{@link findOpenManagerDuplicate}）。`'existed'` は**同じ id の行が既に在った**
+ * ——行が開いているか閉じているかは問わない。**どちらも「載せ損なった」ではない
  * ので `#commitmentNoticeFor` の `missing` からは同じく除くが、除く理由は
  * 別である。**
+ *
+ * **⚠️ Issue #1041 で、`'folded'` の意味が少しずれた。** かつては「`open()` を
+ * **呼ぶ前に**呼ばないと決めた＝台帳には手を触れていない」だったが、判定が
+ * `open()` の中へ移ったので、**いまは `open()` を呼んだうえで、その中で畳まれた**
+ * である（`CommitmentOpenResult.folded`）。`#commitmentNoticeFor` から見た扱いは
+ * 変わらない（どちらも `missing` から除く）。
  */
 type CommitOutcome = 'opened' | 'existed' | 'folded' | 'failed';
 
@@ -1439,9 +1445,9 @@ class Clone implements CloneHost {
    *
    * ## なぜ在るか — 台帳側の壁（#1035）は受信箱を守らない
    *
-   * `#commit`（台帳を開く側）は開く**前**に {@link hasOpenManagerDuplicate}
-   * で同一マネージャー×同一本文の未了が無いかを確かめるが、`#commit` が
-   * 呼ばれる時点で受信箱への書き込み（`#remember`）は**既に終わっている**
+   * `#commit`（台帳を開く側）は同一マネージャー×同一本文の未了を畳むが
+   * （Issue #1041 以降はストアの `open()` の中で。{@link findOpenManagerDuplicate}）、
+   * `#commit` が呼ばれる時点で受信箱への書き込み（`#remember`）は**既に終わっている**
    * （`#commit` の doc「受信箱はここより前で既に書き終えているので、この
    * 畳み込みで減るのは台帳の行数だけである」）。429 の無限連投のような形は、
    * 台帳を1行に畳んでも受信箱の行が連投の回数だけ増え続ける——これがこの
@@ -3825,21 +3831,27 @@ class Clone implements CloneHost {
    * （起こされたことそのものではなく、渡してきた相手が最初から居ない）、型では
    * なく `source` で決まる点も違うが、行き着く先（台帳を開かない）は同じである。
    *
-   * **マネージャー起因の重複は、開く前に畳む（Issue #954 提案3）。** 429 などの
+   * **マネージャー起因の重複は畳む（Issue #954 提案3）。** 429 などの
    * 合流窓（`manager.ts` の `SynthesizedNoticeStreak` / `isCrossWindowStreakEligible`）
    * は `turn_failed` 単独の束にしか掛からないので、すり抜けた同文の連投——
    * あるいは合流窓を持たない別の経路からの同文連投——が起きても、台帳側に
    * もう一段の壁を置く。**同一マネージャー（`origin: 'manager'` かつ同じ
    * `source`）× 同一本文 × まだ開いている行**が既にあれば、新しい行を増やさず
-   * 既存の行に任せる（{@link hasOpenManagerDuplicate}）。**対象は台帳だけ**——
+   * 既存の行に任せる。**対象は台帳だけ**——
    * 受信箱（`#remember`）はここより前で既に書き終えているので、この畳み込みで
    * 減るのは台帳の行数だけである（受信箱側の膨張は別の穴。Issue #954 コメント
    * `the-phage-dev` 2026-09-14T18:03:28Z）。
    *
-   * **重複確認そのものが失敗しても、開く側へ倒す。** `list()` が読めないことは
-   * 「開かない」理由にしない——確認できずに依頼を1件黙って落とすほうが、まれに
-   * 重複を見逃すより高くつく（`#stores.commitments.open` 自体の失敗は、直後の
-   * `.then` の失敗経路がこれまでどおり拾う）。
+   * **⭐ 畳むのはここではない。`CommitmentStore.open` の中である（Issue #1041）。**
+   * かつてここは `list()` を読み、{@link hasOpenManagerDuplicate} を当て、畳まないと
+   * 決めたら `open()` を呼んでいた——**読みと書きのあいだを排他するものが無いので、
+   * 同じストアを指す2つのデーモンが同時に post すると両方が「重複なし」と読んで
+   * 両方が開き、台帳が2行に割れた**（#1041。PR #1089 の歯がこれを決定的に赤くした）。
+   * **判定と書き込みを1操作へ畳んだので、ここに `list()` は無い。**
+   *
+   * ⛔ **読んでから書く形へ戻さないこと。** どこにアプリ層の壁を置いても、
+   * プロセスを跨いだ瞬間に同じ穴が開く——排他はプロセスの中にしか置けないが、
+   * この欠陥は**2つのプロセスのあいだ**に在る。
    *
    * **失敗しても post を落とさない**（`#remember` と同じ理由。跡は stderr へ1行、
    * かつ #856 以降は日誌にも1行——下の分岐を見よ）。
@@ -3870,36 +3882,28 @@ class Clone implements CloneHost {
     if (entry === null) return;
     this.#committed.set(
       event.id,
-      this.#stores.commitments
-        .list()
-        .then(
-          (list) => hasOpenManagerDuplicate(list.entries, entry),
-          () => false,
-        )
-        .then((duplicate): Promise<CommitOutcome> | CommitOutcome => {
-          if (duplicate) return 'folded';
-          return this.#stores.commitments.open(entry).then(
-            (opened): CommitOutcome => (opened ? 'opened' : 'existed'),
-            (error: unknown): Promise<CommitOutcome> => {
-              noteDroppedRecord('未了の記帳', inboxEventShape(event), error);
-              // **Issue #856 (B)。** `noteDroppedRecord` の跡は stderr の1行
-              // だけで、クローンはこれを読む手段を持たない（`dropped-record.ts`
-              // の doc）。`noteDroppedRecord` 自身の「本文を出さない」契約は
-              // 変えず、ここから別に日誌へも1件残す——`#journal` は
-              // best-effort で失敗を吸収するので、これが失敗しても post は
-              // 落ちない（`#journal` の doc）。
-              return this.#journal({
-                type: 'exchange',
-                with: 'self',
-                role: 'outbound',
-                text:
-                  `未了の記帳に失敗した（id: ${event.id}）。台帳に載っていない可能性が` +
-                  'あるので、必要なら `commitment_open` で載せ直すこと' +
-                  `（理由: ${reasonOf(error)}）。`,
-              }).then((): CommitOutcome => 'failed');
-            },
-          );
-        }),
+      this.#stores.commitments.open(entry).then(
+        (result): CommitOutcome =>
+          result.opened ? 'opened' : result.folded ? 'folded' : 'existed',
+        (error: unknown): Promise<CommitOutcome> => {
+          noteDroppedRecord('未了の記帳', inboxEventShape(event), error);
+          // **Issue #856 (B)。** `noteDroppedRecord` の跡は stderr の1行
+          // だけで、クローンはこれを読む手段を持たない（`dropped-record.ts`
+          // の doc）。`noteDroppedRecord` 自身の「本文を出さない」契約は
+          // 変えず、ここから別に日誌へも1件残す——`#journal` は
+          // best-effort で失敗を吸収するので、これが失敗しても post は
+          // 落ちない（`#journal` の doc）。
+          return this.#journal({
+            type: 'exchange',
+            with: 'self',
+            role: 'outbound',
+            text:
+              `未了の記帳に失敗した（id: ${event.id}）。台帳に載っていない可能性が` +
+              'あるので、必要なら `commitment_open` で載せ直すこと' +
+              `（理由: ${reasonOf(error)}）。`,
+          }).then((): CommitOutcome => 'failed');
+        },
+      ),
     );
   }
 
@@ -9101,14 +9105,7 @@ export function hasOpenManagerDuplicate(
   entries: readonly Commitment[],
   entry: Commitment,
 ): boolean {
-  if (entry.origin !== 'manager') return false;
-  return entries.some(
-    (existing) =>
-      existing.closedAt === undefined &&
-      existing.origin === 'manager' &&
-      existing.source === entry.source &&
-      existing.body === entry.body,
-  );
+  return findOpenManagerDuplicate(entries, entry) !== undefined;
 }
 
 /**

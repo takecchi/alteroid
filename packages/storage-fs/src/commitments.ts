@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 import {
   commitmentSchema,
+  findOpenManagerDuplicate,
   UnreadableCommitmentError,
   unreadableCommitmentSchema,
 } from '@alteroid/core';
@@ -13,6 +14,7 @@ import type {
   CommitmentClosedBy,
   CommitmentEditedBy,
   CommitmentList,
+  CommitmentOpenResult,
   CommitmentStore,
   UnreadableCommitment,
 } from '@alteroid/core';
@@ -288,22 +290,42 @@ export class FsCommitmentStore implements CommitmentStore {
    * 開き直すと、`toDiskShape` が生の値をそのまま書き戻す一方で新しい行も足すことに
    * なり、同じ id が2行（壊れた生の値＋新しい読める値）並ぶ状態になる。それは
    * どちらが「本物」か誰にも判定できない状態を自分で作ることになるので避ける。
+   *
+   * **同一マネージャー×同一本文×未了も開かない（issue #1041）。** 判定は
+   * `findOpenManagerDuplicate`（`@alteroid/core`）——**3実装で同じ規則を持つため、
+   * ここで書き直さない。** 置き場所は `#update` の閉包の中である必要がある：
+   * 閉包は `#chain` の内側で `#read()` し直すので、**ここへ置いたときだけ読みと
+   * 書きが同じ排他区間に入る**（外で `list()` してから `open()` を呼ぶ形が
+   * #1041 そのものである）。
+   *
+   * **⚠️ ただしこの器の排他はプロセスの中にしか無い。** `#chain` は promise の
+   * 連鎖であってファイルロックではないので、**同じディレクトリを2つのプロセスが
+   * 指せば、この畳み込みも id の冪等性も同時に破れる。** それは #1041 が作った穴
+   * ではなく（id 判定にも最初から在る）、この段では直していない——本番の記憶
+   * ストアは PostgreSQL で、そちらは DB の制約で守っている
+   * （`PgCommitmentStore.open`）。
    */
-  async open(entry: Commitment): Promise<boolean> {
-    return this.#update((file) => {
+  async open(entry: Commitment): Promise<CommitmentOpenResult> {
+    return this.#update<CommitmentOpenResult>((file) => {
       // 閉じた行・読めない行も含めて見る（片付いたものを開き直さない／
       // 読めない行と同じ id を二重に持たない）
       const known =
         file.entries.some((existing) => existing.id === entry.id) ||
         file.unreadable.some((row) => row.id === entry.id);
-      if (known) return { next: file, result: false };
+      if (known) return { next: file, result: { opened: false, folded: false } };
+      const duplicate = findOpenManagerDuplicate(file.entries, entry);
+      if (duplicate !== undefined)
+        return {
+          next: file,
+          result: { opened: false, folded: true, foldedInto: duplicate.id },
+        };
       return {
         next: trimClosed({
           entries: [...file.entries, commitmentSchema.parse(entry)],
           unreadable: file.unreadable,
           trimmedClosedCount: file.trimmedClosedCount,
         }),
-        result: true,
+        result: { opened: true, folded: false },
       };
     });
   }

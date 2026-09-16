@@ -595,6 +595,87 @@ export interface CommitmentList {
  * **省略可能にしないこと**（`schedules` / `inbox` と同じ理由）。ここが任意だと、
  * 片方の器でだけ依頼が黙って消えるという能力差が生まれる（north_star 禁止1）。
  */
+/**
+ * `CommitmentStore.open` が実際に何をしたか（issue #1041）。
+ *
+ * **`boolean` から変えた。** 開かなかった理由が2つに増えたためである——「同じ id が
+ * 既に在った」（`open` の冪等性そのもの）と「同一マネージャー×同一本文の未了が
+ * 既に在ったので、その行へ任せた」（{@link findOpenManagerDuplicate}）。**この2つを
+ * 1つの `false` へ潰すと、`Clone` 側の {@link https://github.com/takecchi/alteroid/issues/856 issue #856}
+ * の区別（`CommitOutcome` の `'existed'` と `'folded'`）が器の側で失われる。**
+ *
+ * **⚠️ 文字列の union（`'opened' | 'existed' | 'folded'`）にはしない。** `'existed'`
+ * も `'folded'` も truthy なので、`if (await store.open(entry))` と書いてある
+ * 呼び出しが**型検査を通ったまま意味を反転させる**——`open` の呼び出しは
+ * テストを含めて180件を超えており、型が守ってくれない変更をここへ入れない。
+ */
+export interface CommitmentOpenResult {
+  /** 新しい行を開いたか。 */
+  readonly opened: boolean;
+  /**
+   * 同一マネージャー×同一本文の未了へ任せたか（＝畳んだか）。
+   *
+   * **`opened` が `true` なら必ず `false` である。** 両方 `false` なら「同じ id が
+   * 既に在った」を意味する。
+   */
+  readonly folded: boolean;
+  /**
+   * 畳んだ先の行の id。
+   *
+   * **⚠️ 畳んだのに分からないことがある。** `storage-pg` は「既存の行を探す」と
+   * 「入れる」を1文に畳んでいるので、**同じ文が同時に走って DB の制約側で弾かれた
+   * 場合**、その文が見ている読み取りスナップショットにはまだ相手の行が無い——
+   * 畳んだことは分かるが、畳んだ先は分からない。**そこで嘘の id を埋めないために
+   * 任意にしてある**（分からないことを分からないまま返す）。fs と in-memory は
+   * 常に持つ。
+   */
+  readonly foldedInto?: string;
+}
+
+/**
+ * `entry` と同じマネージャー（`origin: 'manager'` かつ同じ `source`）× 同じ
+ * `body` の**未了**行を `entries` から探す（issue #954 提案3 / issue #1041）。
+ *
+ * **判定の規則をここに1本だけ置く理由。** 同じ規則を3実装（fs / pg / in-memory）が
+ * それぞれ持つと、必ずずれる。fs と in-memory はこの関数をそのまま呼び、
+ * `storage-pg` だけは同じ規則を SQL で書き直す（DB の制約にしないと
+ * プロセスを跨げないため）——**だから3実装が同じ答えを返すことを契約の歯で測る**
+ * （`commitment-fold-contract.ts`）。
+ *
+ * **対象はマネージャー起因の行だけに絞る。** 実測（issue #954）が示した無限連投の
+ * 形——同一マネージャーの合成通知（`turn_failed` 等）が同文のまま連投される——は
+ * `origin: 'manager'` の行にしか出ない。人間の発言・人間の回答・外部イベントまで
+ * 同じ基準で畳むと、たまたま同じ文言になった別々の発言（例: 2人の人間が同じ一言を
+ * 別の会話で送る）まで1件に潰しかねない——その保証を弱める理由がここには無い。
+ *
+ * **`source` が無い行（`undefined`）どうしは重複と数えない。** `manager_message`
+ * の `commitmentFor` は必ず `source` を持つので、`source` が `undefined` になるのは
+ * 他の origin だけだが、`entry.origin !== 'manager'` を先に弾いているのでここへは
+ * 来ない——念のための防御である。
+ *
+ * **閉じたあとの同文は畳まない。** 一度閉じれば「未了」ではなくなるので、同じ
+ * マネージャーが同じ文言をもう一度報告してきても、それは新しい未了として台帳に
+ * 載る——「二度と報告できなくなる」側には倒れない。
+ *
+ * **見つかった行を返す**（`boolean` ではない）。呼び出し側は
+ * {@link CommitmentOpenResult.foldedInto} へその id を載せる義務がある——「畳んだ」
+ * とだけ言われても、どの行へ任せたのかが分からなければ、クローンはその仕事を
+ * 閉じる手段を持たない。
+ */
+export function findOpenManagerDuplicate(
+  entries: readonly Commitment[],
+  entry: Commitment,
+): Commitment | undefined {
+  if (entry.origin !== 'manager') return undefined;
+  return entries.find(
+    (existing) =>
+      existing.closedAt === undefined &&
+      existing.origin === 'manager' &&
+      existing.source === entry.source &&
+      existing.body === entry.body,
+  );
+}
+
 export interface CommitmentStore {
   /**
    * 台帳を返す。**未了は古い順**（齢が判断の材料なので、古いものから見せる）、
@@ -619,14 +700,31 @@ export interface CommitmentStore {
   get(id: string): Promise<Commitment | null>;
 
   /**
-   * 未了として開く。**同じ id が既に在れば何もしない**（開いたら `true`）。
+   * 未了として開く。**同じ id が既に在れば何もしない**（開いたら `opened: true`）。
    *
    * **冪等であることがこの器の要である。** 受信箱の合図は配り直されうるので
    * （`InboxStore` の取引）、その id をそのまま使う自動 open は同じ id で二度呼ばれる。
    * 上書きしてしまうと、**一度片付けた仕事が配り直しのたびに開き直る** — 器が落ちる
    * たびに終わったはずの依頼が蘇り、クローンが同じ仕事を二度起こす。
+   *
+   * **⭐ 同一マネージャー×同一本文×未了も開かない（issue #1041）。** 判定の規則は
+   * {@link findOpenManagerDuplicate} に1本だけ置いてある。**この判定を呼び出し側
+   * （読んでから書く形）へ戻さないこと** — それが #1041 そのものであり、
+   * `Clone#commit` が `list()` → 判定 → `open()` と割っていたために、同じストアを
+   * 指す2つのデーモンが同時に post すると台帳が2行に割れた。
+   *
+   * **⚠️ 「読みと書きを同じ排他区間に入れる」だけでは足りない実装がある。**
+   * fs（`FsCommitmentStore`）と in-memory（`packages/core/src/testing.ts`）の
+   * 排他はプロセスの中にしか無く（前者は promise の連鎖、後者はそもそも同じ
+   * プロセスの `Map`）、**同じストアを2つのプロセスが指した瞬間に効かなくなる。**
+   * `storage-pg`（`PgCommitmentStore`）だけが DB の制約で守っており、そこだけが
+   * プロセスを跨いでも原子である。**本番の記憶ストアは PostgreSQL なので、
+   * 毎日のデプロイで開く窓はそこで閉じている**（fs の跨ぎは別件。同じ穴は
+   * `open` の id 判定にも最初から在る）。**3実装の契約の歯
+   * （`commitment-fold-contract.ts`）が名乗れるのは「プロセス内で原子」までで、
+   * それ以上を名乗らせないこと。**
    */
-  open(entry: Commitment): Promise<boolean>;
+  open(entry: Commitment): Promise<CommitmentOpenResult>;
 
   /**
    * 片付いたことを記録する。閉じたら `true`、無い id と既に閉じているものは `false`。

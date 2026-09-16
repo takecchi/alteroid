@@ -6,6 +6,7 @@ import type {
   CommitmentClosedBy,
   CommitmentEditedBy,
   CommitmentList,
+  CommitmentOpenResult,
   CommitmentStore,
   UnreadableCommitment,
 } from '@alteroid/core';
@@ -89,6 +90,31 @@ function splitReadableRows(rows: { id: string; at: Date; commitment: unknown }[]
  * fs 版と同じ IF を満たすための別の器であって、器の違いで能力差を作らない
  * （クラウドでだけ引き受けた仕事を忘れる、が起きない）。
  */
+/** `PgCommitmentStore.open` の1文が返す3列（その doc に読み方がある）。 */
+interface OpenProbeRow {
+  inserted: string | null;
+  folded_into: string | null;
+  id_seen: boolean;
+}
+
+/**
+ * `db.execute` の戻りは**ドライバによって形が違う**（node-postgres は `{ rows }`、
+ * 他は配列そのもの）。`Db` はドライバを問わない型なので（`db.ts` の doc）、
+ * ここで両方を受ける。
+ *
+ * **1行も返らないことは無い** —— `open` の `select` は3つの副問い合わせを並べた
+ * 単独の行である。それでも黙って既定値へ倒さずに投げるのは、**「判定できない」を
+ * 静かに「既に在った」へ倒さないため**である（倒すと、記帳に失敗した回が
+ * `'existed'` として記録され、`#commitmentNoticeFor` の警告も出ない）。
+ */
+function readOpenProbeRow(result: unknown): OpenProbeRow {
+  const rows = Array.isArray(result) ? result : ((result as { rows?: unknown[] }).rows ?? []);
+  const row = rows[0];
+  if (row === undefined)
+    throw new Error('台帳への open が1行も返さなかった（ドライバの戻りの形が想定外）');
+  return row as OpenProbeRow;
+}
+
 export class PgCommitmentStore implements CommitmentStore {
   readonly #db: Db;
 
@@ -143,7 +169,7 @@ export class PgCommitmentStore implements CommitmentStore {
   }
 
   /**
-   * 未了として開く。**冪等性は SQL 側で強制する。**
+   * 未了として開く。**冪等性も重複の畳み込みも SQL 側で強制する。**
    *
    * 「select して既に在るか見てから insert」に割ると、同じ id の並行 open が両方
    * 「無い」を読んですり抜け、後の書き込みが先の行を上書きする。受信箱の合図は
@@ -151,22 +177,92 @@ export class PgCommitmentStore implements CommitmentStore {
    * 二度呼ばれるのが普通**であり、上書きすれば一度片付けた仕事が開き直る。
    * `on conflict do nothing` は判定と書き込みが1操作なので、割り込む隙間が無い。
    *
-   * 実際に入ったかは `returning` の行数で見る（衝突した回は0行で返る）。
+   * ## ⭐ 同一マネージャー×同一本文×未了も開かない（issue #1041）
+   *
+   * **ここだけがプロセスを跨いでも原子である。** fs と in-memory の排他はプロセスの
+   * 中にしか無いが（`CommitmentStore.open` の doc）、本番の記憶ストアは PostgreSQL
+   * であり、**デプロイが重なって2つのデーモンが同じ DB を指す窓は毎日開く。**
+   *
+   * **⛔ トランザクションを張っても直らない。** PostgreSQL の既定（READ COMMITTED）
+   * では `select`（重複が在るか）→ `insert` は、2つのセッションが同時にやれば
+   * **両方とも「無い」を読んで両方が insert する**——トランザクションが与えるのは
+   * 原子性と可視性であって、**まだ存在しない行に対する排他ではない。** だから
+   * ここは2段構えにしてある：
+   *
+   * 1. **`where not exists`（この文の中）** — 直列に来た同文を畳む。判定と挿入が
+   *    1文なので、呼び出し側が読んでから書く形（#1041 そのもの）にはならない。
+   *    **比較は `body` の全文**で、fs / in-memory（`findOpenManagerDuplicate`）と
+   *    1文字も違わない
+   * 2. **部分 unique 索引 `commitments_open_manager_body_idx`（`migrate.ts`）** —
+   *    1 をすり抜けた**同時**の2件目を DB が拒む。`on conflict do nothing` が
+   *    それを吸うので、呼び出し側から見れば「畳まれた」になる
+   *
+   * **⚠️ 索引の鍵は `md5(body)` である（全文ではない）。** btree の索引行には
+   * サイズ上限（約2.7KB）があり、生の `body` を鍵にすると**長い報告だけが
+   * 記帳できなくなる**（insert が落ちる）。代償は **md5 が衝突したら別々の本文が
+   * 1行に畳まれる ＝ 依頼を黙って1件落とす**ことで、**これは歯で測れない**
+   * （衝突する2つの本文を作れない）。⭐ ただし**衝突が実害になるのは 2 の経路だけ**
+   * である——1 は全文で比べているので、直列に来た別本文がここで畳まれることはない。
+   * ⟹ 「同時に来て、かつ md5 が衝突する」2件でしか起きない。**それでも0ではない。
+   * 鍵を変えるなら、この代償ごと読み直すこと。**
+   *
+   * **⚠️ 索引が無い DB でも、この文はそのまま正しく動く**（1 だけが効く＝直列の
+   * 畳み込みは守られ、同時の2件目だけがすり抜ける）。`migrate` は既存の重複行が
+   * 在ると索引を作らずに警告して進むので（`ensureOpenManagerBodyIndex`）、
+   * **その状態でも台帳は #1035 以前へは戻らない。**
+   *
+   * 何が起きたかは `returning` と2つの補助列で見分ける：
+   *
+   * - `inserted` が非 null ⟹ opened
+   * - `folded_into` が非 null ⟹ folded（1 が効いた。畳んだ先も分かる）
+   * - どちらも null で `id_seen` が真 ⟹ 同じ id が既に在った
+   * - どちらも null で `id_seen` が偽 ⟹ 2 が効いた ＝ **畳まれたが、畳んだ先は
+   *   分からない**（この文の読み取りスナップショットには相手の行がまだ無い）。
+   *   `foldedInto` を空のまま返す——**嘘の id を埋めない**
    */
-  async open(entry: Commitment): Promise<boolean> {
+  async open(entry: Commitment): Promise<CommitmentOpenResult> {
     // 依頼の本文は人間かクローンが書いた自由文なので NUL が混ざりうる
     const value = stripNulls(commitmentSchema.parse(entry));
-    const inserted = await this.#db
-      .insert(commitments)
-      .values({
-        id: value.id,
-        at: new Date(value.at),
-        closedAt: value.closedAt === undefined ? null : new Date(value.closedAt),
-        commitment: value,
-      })
-      .onConflictDoNothing({ target: commitments.id })
-      .returning({ id: commitments.id });
-    return inserted.length > 0;
+    // 畳み込みの対象はマネージャー起因の行だけである（`findOpenManagerDuplicate`）。
+    // **同じ絞りをここで書き直しているのは、SQL でしか DB の制約にできないため**
+    // ——だから3実装が同じ答えを返すことを契約の歯で測る
+    // （`commitment-fold-contract.ts`）。
+    const foldable = value.origin === 'manager' && value.source !== undefined;
+    const closedAt = value.closedAt === undefined ? null : new Date(value.closedAt);
+    const result = await this.#db.execute(sql`
+      with existing as (
+        select id from ${commitments}
+        where ${sql.raw(foldable ? 'true' : 'false')}
+          and closed_at is null
+          and commitment->>'origin' = 'manager'
+          and commitment->>'source' = ${value.source ?? ''}
+          and commitment->>'body' = ${value.body}
+        limit 1
+      ),
+      ins as (
+        insert into ${commitments} (id, at, closed_at, commitment)
+        select
+          ${value.id}::text,
+          ${new Date(value.at)}::timestamptz,
+          ${closedAt}::timestamptz,
+          ${JSON.stringify(value)}::jsonb
+        where not exists (select 1 from existing)
+        on conflict do nothing
+        returning id
+      )
+      select
+        (select id from ins) as inserted,
+        (select id from existing) as folded_into,
+        exists (select 1 from ${commitments} where id = ${value.id}) as id_seen
+    `);
+    const row = readOpenProbeRow(result);
+    if (row.inserted !== null) return { opened: true, folded: false };
+    if (row.folded_into !== null)
+      return { opened: false, folded: true, foldedInto: row.folded_into };
+    if (row.id_seen) return { opened: false, folded: false };
+    // 索引が弾いた＝同時に来た2件目である。畳んだことは分かるが、畳んだ先は
+    // この文からは見えない（doc の最後の分岐）。
+    return { opened: false, folded: true };
   }
 
   /**
