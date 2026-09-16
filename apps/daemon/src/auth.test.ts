@@ -48,6 +48,9 @@ function stubClone(): CloneHost {
     // 空スタブで足りる）。
     pushHealthOf: () => undefined,
     transcript: () => Promise.resolve({ kind: 'missing' as const }),
+    // 認証境界の検証では触らない（#1039 の口は manager_stop からしか呼ばれない。
+    // 型を満たすだけの空スタブで足りる）。
+    unpushedWork: () => Promise.resolve({ kind: 'unavailable' as const, reason: '(この検証では未使用)' }),
     runningManagerOwning: () => undefined,
     restore: () => Promise.resolve([]),
     resumeStoppedByUsage: () => Promise.resolve([]),
