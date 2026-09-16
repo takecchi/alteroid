@@ -9340,6 +9340,11 @@
                         "type": "string"
                       }
                     },
+                    "droppedFromDelivery": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
                     "remaining": {
                       "type": "integer",
                       "minimum": -9007199254740991,
@@ -9353,6 +9358,7 @@
                     "matched",
                     "targeted",
                     "removedIds",
+                    "droppedFromDelivery",
                     "remaining"
                   ]
                 }

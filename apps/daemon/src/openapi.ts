@@ -1565,13 +1565,17 @@ export const archiveRemoveManyResponseSchema = z.object({
  * 絞り込み（種類・送信元・齢）・既定（`dryRun` を省略すると試算）は
  * `commitment_close_many`（#844）を参照モデルにした。
  *
- * ⚠️ **クローン自身の道具（`inbox_remove_many`）はまだ無い。** #972 本文が
- * 「クローン自身の道具にするかは別途の判断」と保留していたところへ依頼の
- * ブリーフが誤って必須スコープに書いてしまったため、いったん取り下げた
- * ——人間起点の合図（`human_message` / `human_answer`）を選べない形にする案を
- * 別 PR（draft・`[保留]`）で提案中。この HTTP の口は `types` に7種類のどれも
- * 制限なく渡せる（人間が直接操作する入口なので、自分自身の発言を巻き込む
- * ことの是非は道具の場合と条件が異なる）。
+ * **クローン自身の道具（`inbox_remove_many`）は在る**（`packages/core/src/tools.ts`）。
+ * ⚠️ **ここには「まだ無い」と書いてあったが、いまは嘘である**（#1049 の PR で
+ * 直した。経緯は #972 本文が「クローン自身の道具にするかは別途の判断」と保留
+ * していたところへ依頼のブリーフが誤って必須スコープに書き、いったん取り下げ、
+ * その後に入った——詳しい経緯は `tools.ts` の `inbox_remove_many` の側にある）。
+ *
+ * **選べる種類は道具と HTTP で違う。** 道具は
+ * `CLONE_REMOVABLE_INBOX_EVENT_TYPES`（人間起点の合図を選べない）に絞るが、
+ * この HTTP の口は `types` に在る7種類のどれも制限なく渡せる（人間が直接操作
+ * する入口なので、自分自身の発言を巻き込むことの是非は道具の場合と条件が
+ * 異なる）。
  *
  * **`types` は必須で空にできない。** ハンドラ側（`app.ts`）で「在る7種類を
  * 全部並べた呼びは断る」を判定する——ここでは判定しない（`z.array` に
@@ -1591,6 +1595,22 @@ export const inboxRemoveManyRequestSchema = z.object({
  * `POST /inbox/remove` の応答。**`removedIds` は打ち切らない**——JSON の
  * 応答は人間・スクリプトが読むもので、クローンの道具の文脈窓のような制約が
  * 無い。
+ *
+ * ## `droppedFromDelivery`（issue #1049）
+ *
+ * **消した合図のうち、クローンの配達待ちからも外せた件数。** この口はかつて
+ * 器（`InboxStore`）の行しか消さず、**既にクローンのメモリ上の待ち行列へ載った
+ * 合図はそのまま配られ続けた**のに、応答は `removedIds` を並べて「消した」と
+ * 名乗っていた。⟹ **消えた件数だけを返すと、その名乗りに戻る。**
+ *
+ * **`removedIds.length` より小さいのが普通である。** 器に在っても、まだ待ち
+ * 行列へ載っていない合図（`#restoreUnread` がこれから拾う分）が在るので。
+ * ⚠️ **既に取り出して処理中の1件は取り消せない**ので、ここにも数えない
+ * （`Clone#dropQueuedInboxEvents` の doc）。
+ *
+ * **`dryRun: true` の回は常に 0 である**（1件も消していないので、止める対象が
+ * 無い）。**欄を省かずに 0 を返す** —— 省くと「配達を止める機構が無い版」と
+ * 「試算だったから 0」が応答から区別できなくなる。
  */
 export const inboxRemoveManyResponseSchema = z.object({
   ok: z.literal(true),
@@ -1599,6 +1619,7 @@ export const inboxRemoveManyResponseSchema = z.object({
   matched: z.number().int(),
   targeted: z.number().int(),
   removedIds: z.array(z.string()),
+  droppedFromDelivery: z.number().int(),
   remaining: z.number().int(),
 });
 
@@ -1845,6 +1866,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     },
     post() {
       throw new Error('spec 生成専用のスタブ: 受信箱には積まない');
+    },
+    dropQueuedInboxEvents() {
+      throw new Error('spec 生成専用のスタブ: 配達の待ち行列は無い');
     },
     subscribe() {
       throw new Error('spec 生成専用のスタブ: 購読は無い');

@@ -444,8 +444,17 @@ export {
 /**
  * 受信箱（`InboxStore`）の滞留の内訳（doc は `inbox-backlog.ts`）。
  *
- * **外へ出しているのは純関数だけである。** `peekPending()` で取った行を
- * 渡す形なので、ここから出るものは I/O をしない。
+ * **内訳と絞り込みの側は純関数だけである。** `peekPending()` で取った行を
+ * 渡す形なので、そちらから出るものは I/O をしない。
+ *
+ * **⚠️ 例外が1つある — `removeInboxEventsAndStopDelivery` は I/O をする**
+ * （issue #1049）。ここには「外へ出しているのは純関数だけである」と書いてあったが、
+ * **この1本でそれは成り立たなくなった。** 消し込みの経路をわざとここへ置いている
+ * ——器から消す操作とクローンの配達を止める操作を**1つの呼びから分けられない**
+ * 形にするためで、`tools.ts`（クローンの道具）と `apps/daemon/src/app.ts`
+ * （人間の HTTP）の両方がこの1本を通す。⟹ **純粋さより、2箇所に割れないこと
+ * を採った**（割れたまま残すと、片方だけ直っている形が再生産される。それが
+ * #1049 そのものだった）。
  */
 export {
   CLONE_REMOVABLE_INBOX_EVENT_TYPES,
@@ -456,7 +465,9 @@ export {
   summarizeInboxBacklog,
   describeInboxBacklogBreakdown,
   matchesInboxRemoveManyFilter,
+  removeInboxEventsAndStopDelivery,
   type InboxBacklogBreakdown,
+  type InboxDeliveryStopper,
   type InboxRemoveManyFilter,
 } from './inbox-backlog.js';
 /**

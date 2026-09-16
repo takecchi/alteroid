@@ -830,6 +830,69 @@ export function matchesInboxRemoveManyFilter(
 }
 
 /**
+ * 消した合図の配達を止められる主体（`CloneHost` / `Clone` がこれを満たす）。
+ *
+ * **`CloneHost` 型そのものを受けない。** ここが要るのは1つのメソッドだけで、
+ * 面全体を要求すると `inbox-backlog.ts`（いまは純関数と述語だけのファイル）が
+ * `host.ts` に依存し始める。テストからも1メソッドの偽物で足りる。
+ */
+export interface InboxDeliveryStopper {
+  dropQueuedInboxEvents(ids: readonly string[]): Promise<number>;
+}
+
+/**
+ * **器から消して、同じ合図の配達も止める**（issue #1049）。
+ * `inbox_remove_many`（`tools.ts`）と `POST /inbox/remove`
+ * （`apps/daemon/src/app.ts`）が消し込みに使う**唯一の口**である。
+ *
+ * ## なぜ関数1本に寄せてあるのか —— #1049 は「2箇所のうち片方」の事故だった
+ *
+ * 消す口は初めから2つあり（クローンの道具と人間の HTTP）、**どちらも
+ * `stores.inbox.removeMany()` を直に呼んでいた。** 器の行しか消えないので、
+ * 既にクローンのメモリ上の待ち行列へ載った合図はそのまま配られ続けた。
+ *
+ * ⟹ **配達を止める呼びを「消す側の作法」として足すと、2箇所のうち1箇所を
+ * 直し忘れた瞬間に同じ穴が戻る。** しかも戻ったことは赤くならない（消えた行は
+ * 消えているので、カウンタも応答も正しく見える）。**だから作法ではなく関数に
+ * する** —— 器から消す操作とメモリから落とす操作が、1つの呼びから分けられない。
+ *
+ * **歯が在る**（`inbox-backlog.test.ts` の「`removeMany` を直に呼ぶ本番コードは
+ * この関数の中だけである」）。新しい消し込みの経路がこの関数を通さずに書かれたら
+ * そこで落ちる。
+ *
+ * ## ⚠️ 順序は「器から消す」→「配達を止める」である。逆にしないこと
+ *
+ * 逆にすると、**配達を止めた直後に器の削除が失敗した**回に、その合図は
+ * **配られもせず器にも残らない**（メモリ側からは落ちており、器の行は残るが、
+ * 次の起動の `#restoreUnread` まで誰も触らない）——いちばん避けたい「静かな
+ * 喪失」である。この順なら、削除が成功して配達停止が失敗した回の倒れ先は
+ * 「消えた行が1回配られる」＝**雑音**であって喪失ではない。
+ * **`docs/` と AGENTS.md が置いている「消えるより配り直す」の向きに揃えてある。**
+ *
+ * ## 渡すのは「実際に消えた id」だけである
+ *
+ * `removeMany` が返さなかった id（既に他の経路で消えていた分）へは配達停止を
+ * 掛けない。**器に行が残っているものの配達を止めてはいけない** —— 止めた分は
+ * どこからも配られないのに未読として残り、`#restoreUnread` が次の起動で拾う
+ * までのあいだ、**誰も処理しない仕事**になる。
+ *
+ * @returns `removedIds` は器から実際に消えた id。`droppedFromDelivery` は
+ *   そのうち配達待ち（待ち行列＋枠で保持していた分）からも落とせた件数。
+ *   **前者より小さいのが普通である** —— 器に在っても、まだメモリの待ち行列へ
+ *   載っていない合図（`#restoreUnread` がこれから拾う分）が在るので。
+ */
+export async function removeInboxEventsAndStopDelivery(
+  inbox: { removeMany(ids: readonly string[]): Promise<string[]> },
+  delivery: InboxDeliveryStopper,
+  ids: readonly string[],
+): Promise<{ removedIds: string[]; droppedFromDelivery: number }> {
+  const removedIds = await inbox.removeMany(ids);
+  if (removedIds.length === 0) return { removedIds, droppedFromDelivery: 0 };
+  const droppedFromDelivery = await delivery.dropQueuedInboxEvents(removedIds);
+  return { removedIds, droppedFromDelivery };
+}
+
+/**
  * `peekPending()` が返した行から内訳を作る（純関数。I/O をしない）。
  *
  * @param now 齢バケツの基準時刻（epoch ミリ秒）。呼び出し側が渡す

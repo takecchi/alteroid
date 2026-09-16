@@ -162,6 +162,7 @@ import {
   describeInboxBacklogBreakdown,
   inboxRemoveManyTypesSchema,
   matchesInboxRemoveManyFilter,
+  removeInboxEventsAndStopDelivery,
   summarizeInboxBacklog,
 } from './inbox-backlog.js';
 import type { InboxRemoveManyFilter } from './inbox-backlog.js';
@@ -315,6 +316,29 @@ export interface ToolContext {
    * 呼び出し時に1回だけ評価すると、セッション中ずっと最初の値のまま固定される。
    */
   scheduler?: () => ScheduleStatus[];
+  /**
+   * **消した合図の配達を止める口**（issue #1049。`CloneHost.dropQueuedInboxEvents`）。
+   * `inbox_remove_many` が `removeInboxEventsAndStopDelivery`
+   * （`inbox-backlog.ts`）へ渡す。
+   *
+   * ## ⚠️ optional だが「渡し忘れても静かに壊れる」側ではない
+   *
+   * **`conversationId` が #781 で必須化された理由（`context.conversationId?.()`
+   * が渡し忘れても型検査を通り、承認が黙って会話に紐づかなくなる）は、ここには
+   * 当てはまらない。** 渡らなかったとき `inbox_remove_many` は**1件も消さずに
+   * 断る**（`dryRun` の試算だけは通す。何も消さないので配達を止める必要が無い）。
+   * ⟹ 渡し忘れは**消えない**という形で即座に表に出る。「消えたのに配られる」
+   * （#1049 そのもの）へは倒れない。
+   *
+   * **⟹ 倒れ先が逆なので、必須化して全テストの `ToolContext` 実体へ1行ずつ
+   * 足す取引を選ばなかった。** ⛔ **これを「optional でよい」の一般則として
+   * 読まないこと** —— 分かれ目は「渡らなかったときに静かに間違うか、うるさく
+   * 止まるか」であって、`?` の有無ではない。
+   *
+   * **本番の配線は2箇所とも渡している**（`clone.ts` の `#toolContext()` と
+   * 蒸留のサイドクエリのインライン context）。⟹ 断る枝は本番では通らない。
+   */
+  dropQueuedInboxEvents?: (ids: readonly string[]) => Promise<number>;
 }
 
 export function qualifiedToolName(name: string): string {
@@ -6069,6 +6093,28 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
+        // **配達を止める口が無ければ1件も消さない**（issue #1049）。
+        //
+        // 消せてもメモリ上の待ち行列へ届かないなら、この道具は「消した」と
+        // 名乗りながら配達を続ける——それがまさに #1049 の事故である。**行を
+        // 消した状態で配達だけが続くほうが、1件も消さないより悪い**（クローンは
+        // 掃除できたと誤解し、カウンタもそう言うのに、ターンは起き続ける）。
+        // ⟹ 消す前に断る。
+        const stopDelivery = context.dropQueuedInboxEvents;
+        if (stopDelivery === undefined) {
+          return text(
+            [
+              '**1件も消していない。** 配達の待ち行列から落とす口が渡されていないので、' +
+                'この道具は消し込みを拒んだ。',
+              '消しても、既にクローンのメモリ上の待ち行列へ載った合図は配られ続ける' +
+                '（issue #1049）。「消した」と名乗って配達が続く状態を作らないために、' +
+                'ここで止めている。',
+              '⚠️ これは配線の不備である（本番の `ToolContext` は2箇所とも' +
+                '`dropQueuedInboxEvents` を渡している）。人間へ上げること。',
+            ].join('\n'),
+          );
+        }
+
         // **塊ごとに「消す → その塊の id を日誌へ書く」を交互に回す**
         // （`commitment_close_many` と同じ理由——まとめて消してから日誌を書くと、
         // その間に器が落ちたとき「消えたのに記録が無い行」が最大
@@ -6078,8 +6124,18 @@ export function createCloneTools(context: ToolContext) {
           REMOVE_MANY_JOURNAL_ID_CHARS,
         );
         const removedIds: string[] = [];
+        let droppedFromDelivery = 0;
         for (const [index, chunk] of chunks.entries()) {
-          const removed = await stores.inbox.removeMany(chunk);
+          // **器から消すのと配達を止めるのを、1つの呼びで行う**（issue #1049）。
+          // `stores.inbox.removeMany` を直に呼ばないこと——`POST /inbox/remove`
+          // と同じ関数を通す（`removeInboxEventsAndStopDelivery` の doc）。
+          const outcome = await removeInboxEventsAndStopDelivery(
+            stores.inbox,
+            { dropQueuedInboxEvents: stopDelivery },
+            chunk,
+          );
+          const removed = outcome.removedIds;
+          droppedFromDelivery += outcome.droppedFromDelivery;
           removedIds.push(...removed);
           // **1件も消せなかった塊では日誌へ書かない**（他の経路——別セッションの
           // `remove()` や再起動をまたいだ処理——が先に消していた場合に起きる）。
@@ -6115,6 +6171,12 @@ export function createCloneTools(context: ToolContext) {
                 ? ` …ほか ${hiddenRemoved} 件は省略（**全 id は日誌に ${chunks.length} 件に分けて残してある**）`
                 : ''
             }`,
+            // **配達の側にも届いたことを名乗る**（issue #1049）。この道具は
+            // かつて器の行しか消さず、それでも「消した」と名乗っていた。⟹
+            // **消えた件数だけを出すと、同じ名乗りに戻る。**
+            `配達の待ち行列からも外したのは ${droppedFromDelivery} 件` +
+              `（残りは器に在っただけで、まだ配達待ちには載っていなかった分である。` +
+              `**既に取り出して処理中のものは取り消せない。**）`,
             ...(raced === 0
               ? []
               : [

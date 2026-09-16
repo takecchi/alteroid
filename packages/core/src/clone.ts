@@ -6680,6 +6680,9 @@ class Clone implements CloneHost {
       ...(this.#scheduler === undefined ? {} : { scheduler: this.#scheduler }),
       runtime: () => this.#runtimeFacts(),
       memoryCause: () => (this.#turn?.kind === 'distill' ? 'distill' : 'clone'),
+      // **消した合図の配達を止める口**（issue #1049）。これを渡さないと
+      // `inbox_remove_many` は1件も消さずに断る（`ToolContext` のその doc）。
+      dropQueuedInboxEvents: (ids) => this.dropQueuedInboxEvents(ids),
       // **`ask_human` が `PendingApproval.conversationId` を埋めるための口（#768）。**
       // `emit` の1行上と同じ薄い closure —— `#turn?.conversationId` が無ければ
       // （マネージャー発の確認・蒸留・timer など内部ターン）undefined を返す。
@@ -7296,6 +7299,11 @@ class Clone implements CloneHost {
           // 既定の `'clone'` に落ち、蒸留が書いた記憶なのに `cause: 'clone'`
           // と名乗る**（`ToolContext.memoryCause` の doc の「渡し忘れ」）。
           memoryCause: () => 'distill',
+          // **蒸留のサイドクエリにも渡す**（issue #1049）。この層で
+          // `inbox_remove_many` を打つ場面は想定していないが、**渡さない側を
+          // 選ぶと「蒸留のターンだけ消せない」という層ごとの能力差になる**
+          // （north_star 禁止2）。渡す実体は本セッションと同一である。
+          dropQueuedInboxEvents: (ids) => this.dropQueuedInboxEvents(ids),
           // **`conversationId` は明示する（#768・#781）。** かつては省略していたが、
           // いまは `ToolContext.conversationId` が必須（省略すると
           // `createCloneTools` が throw する）。値そのものの判断は変えていない

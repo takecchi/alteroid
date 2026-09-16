@@ -55,6 +55,7 @@ import {
   journalEntrySchema,
   localDayRange,
   matchesInboxRemoveManyFilter,
+  removeInboxEventsAndStopDelivery,
   memorySlugSchema,
   fingerprintOf,
   noteDroppedRecord,
@@ -5094,6 +5095,8 @@ export function createApp(deps: AppDeps) {
               matched: matched.length,
               targeted: targets.length,
               removedIds: targets.map((row) => row.event.id),
+              // **試算では常に 0**（1件も消していない。schema の doc）。
+              droppedFromDelivery: 0,
               remaining,
             }),
           );
@@ -5108,8 +5111,16 @@ export function createApp(deps: AppDeps) {
           REMOVE_MANY_JOURNAL_ID_CHARS,
         );
         const removedIds: string[] = [];
+        let droppedFromDelivery = 0;
         for (const [index, chunk] of chunks.entries()) {
-          const removed = await stores.inbox.removeMany(chunk);
+          // **器から消すのと配達を止めるのを、1つの呼びで行う**（issue #1049）。
+          // `stores.inbox.removeMany` を直に呼ばないこと——クローンの道具
+          // （`inbox_remove_many`）と同じ関数を通す。**2箇所に割れたまま残すと、
+          // 片方だけ直っている形が再生産される**（それがまさに #1049 だった。
+          // `removeInboxEventsAndStopDelivery` の doc）。
+          const outcome = await removeInboxEventsAndStopDelivery(stores.inbox, clone, chunk);
+          const removed = outcome.removedIds;
+          droppedFromDelivery += outcome.droppedFromDelivery;
           removedIds.push(...removed);
           if (removed.length === 0) continue;
           const filterText = [
@@ -5136,6 +5147,7 @@ export function createApp(deps: AppDeps) {
             matched: matched.length,
             targeted: targets.length,
             removedIds,
+            droppedFromDelivery,
             remaining,
           }),
         );
