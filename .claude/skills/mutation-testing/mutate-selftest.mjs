@@ -89,6 +89,10 @@ function scenarioBackupCorruption() {
     to: 'LINE-TWO-MUTATED',
     expect: 1,
     target: null,
+    // #993: validateSpec が mustFail を必須にした。このシナリオは judge を
+    // 呼ばない（apply → 控えの汚染 → restore の往復だけを測る）ので、中身は
+    // プレースホルダでよい。
+    mustFail: ['selftest-backup-corruption はこの歯で judge を呼ばない'],
   };
 
   log('-- 1a. 通常どおり変異を当てる --');
@@ -186,6 +190,12 @@ function scenarioWeakTooth() {
     {
       label: '弱い歯',
       testRel: 'apps/cli/src/conversations.selftest-weak.test.ts',
+      // #993: mustFail は「狙いの歯」の宣言であって「実際に落ちる保証」では
+      // ない——このシナリオの主張そのものが「弱い歯はこの変異を捕まえない
+      // （＝生存する）」なので、狙いを宣言してもここでは緑のままで、判定は
+      // 宣言を見るまでもなく「生存」で確定する（`surviving` が空になる）。
+      mustFailName:
+        'apps/cli/src/conversations.selftest-weak.test.ts > 弱い歯（selftest） > 1行目が出ていることだけを見る',
       body: `import { describe, expect, it } from 'vitest';
 import { renderConversationDetail } from './conversations.js';
 
@@ -216,6 +226,10 @@ describe('弱い歯（selftest）', () => {
     {
       label: '強い歯',
       testRel: 'apps/cli/src/conversations.selftest-strong.test.ts',
+      // #993: このシナリオの主張は「強い歯はこの変異を捕まえる（＝検出）」
+      // なので、実際に落ちる歯そのものを狙いとして宣言する。
+      mustFailName:
+        'apps/cli/src/conversations.selftest-strong.test.ts > 強い歯（selftest） > 全文（継続行を含む）を突き合わせる',
       body: `import { describe, expect, it } from 'vitest';
 import { renderConversationDetail } from './conversations.js';
 
@@ -256,7 +270,7 @@ describe('強い歯（selftest）', () => {
   ];
 
   const outcomes = {};
-  for (const { label, testRel, body } of cases) {
+  for (const { label, testRel, body, mustFailName } of cases) {
     log('');
     log(`== ${label}: ${testRel} を書いて、この変異だけを当てて run する ==`);
     writeRepoFile(testRel, body);
@@ -265,6 +279,9 @@ describe('強い歯（selftest）', () => {
         ...spec,
         id: `${spec.id}-${label}`,
         testFilter: testRel.replace(/\.ts$/, ''),
+        // #993: 狙いの歯を宣言する。「弱い歯」側は宣言しても実際には落ちない
+        // （このシナリオの主張どおり、生存のまま）。
+        mustFail: [mustFailName],
       };
       // **足場対照は変異を当てる前に取る**（走行範囲はこの変異の走行と揃える）。
       // 赤い歯が在るときの判定は、対照が無いと拒まれる（`decideJudgementCategory`
@@ -329,6 +346,10 @@ function scenarioInterrupted() {
     to: 'LINE-TWO-INTERRUPTED',
     expect: 1,
     target: null,
+    // #993: このシナリオは judge を呼ばない（apply → 中断を模す → status/
+    // baseline/restore の確認だけ）ので、mustFail は validateSpec を通すため
+    // のプレースホルダでよい。
+    mustFail: ['selftest-interrupted はこの歯で judge を呼ばない'],
   };
 
   log(
@@ -462,6 +483,10 @@ function scenarioDelivery() {
     expect: 1,
     target: '@alteroid/core',
     artifact: { file: 'packages/core/dist/index.js', contains: 'SELFTEST_MUTATED' },
+    // #993: このシナリオは judge を呼ばない（apply → build → restore の往復
+    // で dist への到達だけを測る）ので、mustFail は validateSpec を通すため
+    // のプレースホルダでよい。
+    mustFail: ['selftest-delivery はこの歯で judge を呼ばない'],
   };
 
   log('-- 4a. 変異前: いま dist に SELFTEST_MUTATED が無いことを確認する（当然） --');
@@ -540,6 +565,11 @@ function scenarioJudgementIdIntegrity() {
     expect: 1,
     target: null,
     testFilter: 'apps/cli/src/conversations',
+    // #993: 生存想定なので、この宣言が実際に落ちることはない
+    // （surviving が空で「生存」が確定し、門5 には到達しない）。
+    mustFail: [
+      'apps/cli/src/conversations.test.ts > alteroid conversations list > 空でも、そう言う（黙って何も出さない形にしない）',
+    ],
   };
   // M6: 既存の実テスト（conversations.test.ts の
   // `expect(read()).toContain('会話はまだありません')`）が捕まえる実在の文言を
@@ -552,6 +582,10 @@ function scenarioJudgementIdIntegrity() {
     expect: 1,
     target: null,
     testFilter: 'apps/cli/src/conversations',
+    // #993: 実際に落ちる歯そのものを狙いとして宣言する。
+    mustFail: [
+      'apps/cli/src/conversations.test.ts > alteroid conversations list > 空でも、そう言う（黙って何も出さない形にしない）',
+    ],
   };
 
   const results = {};
@@ -671,6 +705,10 @@ function scenarioRebuildFailure() {
     expect: 1,
     target: '@alteroid/core',
     artifact: { file: 'packages/core/dist/index.js', contains: 'REBUILDCHECK_MUTATED' },
+    // #993: このシナリオは judge を呼ばない（apply → 後始末の build 失敗 →
+    // status/restore の確認だけ）ので、mustFail は validateSpec を通すため
+    // のプレースホルダでよい。
+    mustFail: ['selftest-rebuild-failure はこの歯で judge を呼ばない'],
   };
 
   log('-- 6a. 変異を当てる --');
@@ -771,16 +809,23 @@ function scenarioRebuildFailure() {
   };
 }
 
-// ── 7. spec の形の検査（#301） ───────────────────────────────────────
+// ── 7. spec の形の検査（#301・#993） ─────────────────────────────────
 //
-// 受け入れ条件: id / file / from / to / expect が欠けている・型が違う・
-// （id については）パス区切りや .. を含む spec は、すべて applyMutation の
-// 入口（validateSpec）で拒否されること。**そして「落ちたこと」だけでなく
-// 「何も書かれていないこと」も見る** — 拒否のたびに、控えディレクトリの
-// ファイル数・印の有無・対象ファイルの md5 が変化していないことを確認する。
-// 最後に、正しい spec は変わらず通ることも確認する（検査が過剰でないこと）。
+// 受け入れ条件: id / file / from / to / expect / mustFail が欠けている・
+// 型が違う・（id については）パス区切りや .. を含む spec は、すべて
+// applyMutation の入口（validateSpec）で拒否されること。**そして
+// 「落ちたこと」だけでなく「何も書かれていないこと」も見る** — 拒否の
+// たびに、控えディレクトリのファイル数・印の有無・対象ファイルの md5 が
+// 変化していないことを確認する。最後に、正しい spec は変わらず通ることも
+// 確認する（検査が過剰でないこと）。
+//
+// **mustFail（#993）は、このシナリオが judge を呼ばないため実際の判定には
+// 使われない** —— `applyMutation` → `restoreMutation` の往復だけを確認して
+// いて、テストは1回も走らせない。だから中身は validateSpec を通すための
+// プレースホルダでよい（judge の側の実質は
+// `scripts/mutate-scaffold-control.test.ts` の門5 の歯が持つ）。
 function scenarioSpecValidation() {
-  section('selftest: 7. spec の形の検査（#301）');
+  section('selftest: 7. spec の形の検査（#301・#993）');
   requireNoMarker('spec-validation');
   ensureFixtureClean();
 
@@ -791,6 +836,7 @@ function scenarioSpecValidation() {
     to: 'LINE-TWO-SPECVALID',
     expect: 1,
     target: null,
+    mustFail: ['selftest-spec-validation はこの歯で judge を呼ばない（apply/restore のみ）'],
   };
 
   const invalidCases = [
@@ -812,6 +858,11 @@ function scenarioSpecValidation() {
     { label: 'expect が無い', spec: { ...baseValid, expect: undefined } },
     { label: 'expect が0', spec: { ...baseValid, expect: 0 } },
     { label: 'expect が非整数（1.5）', spec: { ...baseValid, expect: 1.5 } },
+    // #993: mustFail の3パターン（無い／空配列／空文字列だけの配列）も、
+    // 他のフィールドと同じ扱いで拒否されること。
+    { label: 'mustFail が無い', spec: { ...baseValid, mustFail: undefined } },
+    { label: 'mustFail が空配列', spec: { ...baseValid, mustFail: [] } },
+    { label: 'mustFail が空文字列だけの配列', spec: { ...baseValid, mustFail: ['   '] } },
     { label: 'spec が null', spec: null },
     { label: 'spec が配列', spec: [] },
   ];
@@ -913,6 +964,13 @@ function scenarioJudgementForbiddenWordBoundary() {
       expect: 1,
       target: null,
       testFilter: 'apps/cli/src/conversations',
+      // #993: この変異は M6 と同じ文言を狙うので、実際に落ちる歯も同じ
+      // ——それを宣言する。これが無いと decideJudgementCategory が門5より
+      // 前（宣言が無い）で拒み、この歯が測りたい禁止語検査（id の部分文字列）
+      // まで到達できない。
+      mustFail: [
+        'apps/cli/src/conversations.test.ts > alteroid conversations list > 空でも、そう言う（黙って何も出さない形にしない）',
+      ],
     };
     log('');
     log(`== id="${id}" を通す ==`);
@@ -1038,6 +1096,10 @@ function scenarioRestoreStatusComparison() {
     to: 'LINE-TWO-321TEST',
     expect: 1,
     target: null,
+    // #993: このシナリオは judge を呼ばない（apply → restore の往復と、
+    // 12c の git status 比較だけを測る）ので、mustFail は validateSpec を
+    // 通すためのプレースホルダでよい。
+    mustFail: ['selftest-321-foreign-change はこの歯で judge を呼ばない'],
   };
   applyMutation(spec);
   log('-- 9b. apply → restore を通す。対象ファイルへの無関係な変更があっても復元は成功するはず --');
@@ -1201,6 +1263,10 @@ const GATE_TESTS_RED = {
   testsLine: 'Tests  1 failed | 3094 passed (3095)',
 };
 
+// #993: GATE_TESTS_RED が落とす唯一の歯の名前。gate を通って門5 まで到達する
+// ケース（expectCategory: '検出'）は、これを mustFail として宣言する。
+const GATE_RED_TOOTH = 'packages/core/src/gate.test.ts > gate > 偽の歯が1本落ちた';
+
 /** 足場対照の代わり（このシナリオは `judge()` を純関数として測るので、
  * 対照も合成する）。**差し引く集合は空**にしてある —— gate の分岐を測るのに
  * 差し引きを混ぜない。 */
@@ -1279,6 +1345,8 @@ function scenarioJudgementUndeliveredGate() {
       testResult: GATE_TESTS_RED,
       expectCategory: '検出',
       expectGateNote: true,
+      // #993: gate を通って門5 まで到達するので、実際に落ちる歯を宣言する。
+      mustFail: [GATE_RED_TOOTH],
     },
     {
       id: 'selftest-gate-open-green',
@@ -1316,6 +1384,8 @@ function scenarioJudgementUndeliveredGate() {
       testResult: GATE_TESTS_RED,
       expectCategory: '検出',
       expectGateNote: false,
+      // #993: gate に触れず門5 まで到達するので、実際に落ちる歯を宣言する。
+      mustFail: [GATE_RED_TOOTH],
     },
     {
       id: 'selftest-gate-delivered-green',
@@ -1332,6 +1402,8 @@ function scenarioJudgementUndeliveredGate() {
       testResult: GATE_TESTS_RED,
       expectCategory: '検出',
       expectGateNote: false,
+      // #993: gate に触れず門5 まで到達するので、実際に落ちる歯を宣言する。
+      mustFail: [GATE_RED_TOOTH],
     },
     {
       id: 'selftest-gate-not-applicable',
@@ -1378,7 +1450,14 @@ function scenarioJudgementUndeliveredGate() {
     let text = null;
     let error = null;
     try {
-      const judgement = judge({ id: c.id }, c.artifactResult, c.testResult, GATE_SCAFFOLD_CONTROL);
+      const judgement = judge(
+        // #993: mustFail は各ケースが宣言する（無い場合は undefined のまま
+        // ——gate/不明/エラー系のケースは門5 まで到達しないので要らない）。
+        { id: c.id, mustFail: c.mustFail },
+        c.artifactResult,
+        c.testResult,
+        GATE_SCAFFOLD_CONTROL,
+      );
       category = judgement.category;
       text = judgement.text;
     } catch (err) {
