@@ -1,0 +1,116 @@
+name: No attribution trailers
+
+# **この PR の本文と、この PR のコミットメッセージのどちらにも AI 生成の帰属
+# トレーラ（`Co-Authored-By:` / 🤖 Generated with）が残っていないことだけを見る
+# 門**（Issue #1020）。判定ロジックは `scripts/check-no-attribution-trailers-core.mjs`
+# が正本（fail-closed の理由・repo のファイルを走査しない理由（#785 と同じ
+# 自己参照の族）・大小文字を無視する理由の実測はあちらの doc）。ここは呼び出し
+# だけ。
+#
+# **実害（`main` の `63a33dd`）は squash マージが PR 本文をコミットメッセージへ
+# 写す経路で入った。** だから本文とコミットメッセージの両方を見る——片方だけ
+# だと、まさにその経路を塞がない。
+#
+# **元は `ci.yml` の1ジョブだった。#1108 でここへ出した。**
+
+# ## なぜ `ci.yml` の中に置かず、別の workflow にしたか
+#
+# **`edited` が要るからである。** PR 本文は後から編集できるので、`opened` だけの
+# 門は素通りする——**実際に踏んだ**（#1108）: PR #1106 で本文の引用が禁止トレーラ
+# を含んでいて門が正しく赤くしたが、記述に直しても緑にならず、枝を1バイトも
+# 触らずに `close` → `reopen` で run を起こし直す必要があった。ところが `ci.yml`
+# の `pull_request.types` は `edited` を含まない（`grep -Fn -- 'types: [opened, synchronize, reopened, ready_for_review]' .github/workflows/ci.yml`）。
+#
+# そこへ `edited` を足すと、**PR 本文を1文字直すたびに `ci` と `image`（どちらも
+# required）が焼き直される。** `ci.yml` の各ジョブの `if:` は `github.event.action`
+# を1文字も見ないので（見るのは `github.event_name` と `draft` の2つだけ）、
+# `edited` を足せば draft でない PR では `ci` / `image` / `base-overlap` が
+# そのままフルに走る。節約のために `if:` で抑えると、今度は required の文脈に
+# `skipped` が入る —— `AGENTS.md`「静かに失敗する道具」と、`ci.yml` が
+# `ready_for_review` を types へ足した理由そのものの罠を持ち込むことになる。
+#
+# **実測（#1108 の Issue コメント、2026-09-16T20:17Z〜20:22Z 観測、`ci.yml` の
+# 直近10 run）**: `ci` は4分01秒〜9分40秒、`image` は3分11秒〜5分47秒。対して
+# この検査（当時は `ci.yml` の1ジョブだった）は15秒〜23秒。⟹ **20秒で済む
+# 判定のために7〜15分を焼き直すことになる。**
+#
+# **これは `pr-title.yml` が #1097 で既に採った線への合流である。** あちらの
+# 冒頭 doc が同じ理由を先に逐語で持っている（
+# `grep -Fn -- 'なぜ `ci.yml` の中に置かず、別の workflow にしたか' .github/workflows/pr-title.yml`）。
+# ⟹ **タイトル検査とこの検査の両方が、`ci.yml` の外に出た形になる。**
+on:
+  pull_request:
+    # **`edited` がこの門の要である**（PR 本文の後からの編集を捕まえる。#1108）。
+    #
+    # **`synchronize` も必須である。** required status check は head sha ごとに
+    # 要るので、push で sha が変わったのに run が起きないと、その PR は**永久に
+    # 満たせなくなる**（`ci.yml` が記録している「draft のまま一生 skip される」
+    # 事故と同じ族）。`reopened` / `ready_for_review` も同じ理由で足してある。
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+# `ci.yml` と同じ形（理由の逐語は
+# `grep -Fn -- '同じ PR に続けて push したとき、古い実行を残さない' .github/workflows/ci.yml`）。
+# ここでは `pull_request` しか起きないので `head_ref` は必ず入るが、**`||` の側は
+# 落とさない** —— 空文字のキーで全 PR が1つの群に入る形を作らないため。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  # **ジョブ名がそのまま required status check の名前になる**
+  # （正本は `.github/required-status-checks.json`。**ここに値を書き写さない**）。
+  # `ci.yml` に在ったときと同じ名前を保つ —— 変えると branch protection の
+  # required contexts と食い違う。
+  no-attribution-trailers:
+    # **`base-overlap` と違い、draft でも skip しない。** `ci` / `image` のように
+    # `if:` で節約すると、draft 由来の `skipped` が「満たした」として扱われる
+    # 罠（`AGENTS.md`「静かに失敗する道具」、`gh pr ready` が run を起こし損ねる
+    # 事故）を持ち込む。この検査は `gh api` を1回叩くだけで軽く、節約する理由が
+    # 無い。**だから draft のあいだも毎回走らせ、その種類の罠を最初から作らない。**
+    #
+    # ⚠️ **`if:` を1文字も付けない。** trigger が `pull_request` の1本だけなので
+    # 要らない（`pr-title.yml` と同じ）。
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v4
+      - run: pnpm check:no-attribution-trailers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          NO_ATTRIBUTION_TRAILERS_PR_NUMBER: ${{ github.event.pull_request.number }}
+
+  # **`no-attribution-trailers` を required contexts（`.github/required-status-checks.json`）
+  # に入れた（2026-09-15）。** マネージャーが branch protection の
+  # `required_status_checks` を `PATCH` して `contexts` だけを触った
+  # （`strict` / `allow_force_pushes` / `allow_deletions` は動いていない）。
+  # 判定は決定的（部分文字列一致）で `base-overlap` のヒューリスティックとは
+  # 性質が違うので、required にする価値があると判断された。
+  #
+  # **戻し方（1行）:**
+  #
+  # ```
+  # $ gh api repos/takecchi/alteroid/branches/main/protection/required_status_checks \
+  #     -X PATCH -f 'contexts[]=ci' -f 'contexts[]=image'
+  # ```
+  #
+  # ⚠️ **観測された副作用**: **この門より前に枝を切った PR は、新しい run が
+  # 起きるまで required を満たせない。** 実測(2026-09-15): PR #999
+  # （`[保留]`。マージ対象ではないので実害は無い）が
+  # `mergeable=MERGEABLE state=BLOCKED` になった。⟹ **古い枝で詰まったら
+  # push か rebase で run を起こし直すこと。**
+  #
+  # ⚠️ **確かめていないこと**: 古い枝の新しい run で、この門が実際に走るか
+  # （`success` を返すか）は未検証。`pull_request` の workflow は merge ref
+  # から取られるので走るはず、というのは推論であって実測ではない。
+  #
+  # **追記（#1108）**: このジョブを `ci.yml` から独立した workflow ファイルへ
+  # 移した変更そのものが、上の「古い枝の新しい run で走るか」を実地で踏む形
+  # になる——移した直後は、この workflow ファイルを持たない古い枝にとって
+  # 「まだ存在しない workflow」と同じだからである。#1108 の実装 PR 自身で、
+  # 新しい run が実際に `success` を返すかを測った。生の出力は PR の報告に残す
+  # （このコメント自体は書き換えず、実測結果は報告側に置く——ここは「何を
+  # 確かめていないと言っていたか」の記録であって、実測ログの置き場ではない）。
