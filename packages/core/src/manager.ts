@@ -1469,6 +1469,93 @@ export interface ManagerPool {
    */
   flushWithheldReports(): Promise<void>;
   /**
+   * **枠で止まった委譲のうち、借り（`#usageWakeOwed`）だけが立って永久に
+   * 返らなくなったものを、`probeTurnEnds()` の助言を使って起こす**
+   * （Issue #914 最終段）。戻り値は実際に一言が届いた managerId。
+   *
+   * ## 埋める穴
+   *
+   * `resumeStoppedByUsage()` は、鍵が戻った時点でまだ `running` だった委譲を
+   * 借りへ載せて見送る（`#nudgeForUsageRotation` が `'still-running'` を
+   * 返すため）。その借りを返す口は `case 'report'` と `case 'closed'` の
+   * 2箇所しかない——**そのセッションが二度と `report` も `closed` も出さない
+   * まま黙った場合**（429 でターンが終わったのにデーモンまで届かない等）、
+   * 借りは永久に返らず、台帳の `status` は `running` のまま固まる（Issue
+   * #914 の 2026-09-14T20:19Z のコメント、2026-09-16 の再発）。
+   *
+   * ## なぜこれが `probeTurnEnds` の「知らせるだけ」を破っていないか
+   *
+   * `probeTurnEnds()`（Issue #567）の約束は「切らない・殺さない・止めない
+   * ——`status` は動かさず、どの委譲も abort しない、貸し出し期限も縮めない」
+   * である（interface の doc）。**ここが持つのはその読み手であって、探り
+   * 自身の判定ではない。** `ManagerSummary.turnEndedAt` の doc が明示する
+   * とおり、判定は読む側が `turnEndedAt` と `lastReportAt`（`record.job.
+   * lastReportAt` = デーモンが report イベントを受け取った時刻）を突き合わせて
+   * 行うもので、ここはその読み手の1つでしかない。起こす行為は既存の一言
+   * （`#nudgeForUsageRotation` の `send()`）だけで、**`record.job.status` は
+   * 書き換えない・`#retire()` しない・`abort()` しない・貸し出しにも触らない**
+   * （`send()` の中で status が動くのはあちらの既存の挙動であって、ここが
+   * 動かすのではない）。禁じられているのは探り自身が判定して切る・殺す・
+   * 止めることであって、読み手が突き合わせて判断することではない。
+   *
+   * ## 4条件全部が揃ったときだけ発火する（1つでも欠けたら何もしない）
+   *
+   * 1. `#usageWakeOwed` に載っている——鍵が戻ったと回し手が言った時点で、
+   *    この委譲はまだ走っていた（借りが立っている）。立っていない委譲には
+   *    何もしない（「鍵が戻ったと誰も言っていないなら起こさない」の歯を
+   *    壊さない）。
+   * 2. `#usageStopped` に載っている——枠（`usage_notice` の `reached`）で
+   *    止まったことが分かっている。これが無いと**一般の停滞検知**になる。
+   * 3. `record.job.status === 'running'`（`waiting_human` は含めない——
+   *    待っているのは枠ではなく人間の回答である）。
+   * 4. `record.turnEndedAt !== undefined` かつ（`record.job.lastReportAt`
+   *    が無い、または `turnEndedAt` がそれより後）。時刻の比較は
+   *    `Date.parse` で行い、どちらかが `NaN`（解釈できない）なら発火しない。
+   *
+   * **なぜ4つ全部が要るか——1つでも外すと、走っている委譲を死んだと見なして
+   * 1ターン焼き、会話へ嘘の文脈を入れる側の危険に落ちる。** これは
+   * `manager_stop` が進行中のターンを「止まっている」と誤読して止めた事故
+   * （Issue #1037。429 の再試行を止まっていると誤読し、うち1本は未 push の
+   * 実装を抱えたまま畳まれた）と同じ種類の危険である。
+   *
+   * **`turnEndedAt` が無いときに発火しない理由——`ManagerSummary.turnEndedAt`
+   * の doc が明示するとおり、この欄が無い状態は「ターンは終わっていない」
+   * ではなく「判定できない」である。** 分からないものを症状に化けさせない
+   * （interface の他の doc と同じ向き）。
+   *
+   * **`lastReportAt` は握り潰された報告でも進むので偽陽性にならない。**
+   * `case 'report'` は `record.job.lastReportAt` を、`contentless` /
+   * `awaitingBackground` による早い `return` より手前で書いている——中身の
+   * 無い報告・背景処理待ちで畳んだ報告でも、デーモンが report を受け取った
+   * 事実そのものは `lastReportAt` に反映される。
+   *
+   * ## 発火したときの動き（`#settleUsageWake` と同じ規則。新しい梯子は作らない）
+   *
+   * - 借り（`#usageWakeOwed`）は**挑む前に下ろす**——同じ委譲を毎分掃き
+   *   続けないため。
+   * - `#nudgeForUsageRotation` を `allowRunning: true` で呼ぶ——既定は
+   *   `status === 'running'` を `'still-running'` として弾くので、そこを
+   *   通す（`waiting_human` は `allowRunning` が真でも通さない）。
+   * - 印（`#usageStopped` と台帳の写し `Job.usageStoppedAt`）は
+   *   `#clearUsageStoppedMark` で下ろすが、**下ろすのは `'nudged'` /
+   *   `'gone'` のときだけ。`'skipped'`（届かなかった）なら印は残す**——
+   *   次の鍵の回転（`resumeStoppedByUsage`）が拾い直す（`#nudgeForUsageRotation`
+   *   の doc の表と同じ規則）。
+   * - **回数上限・時間間隔のような新しい数は置かない。** 周期は既存の
+   *   ポーラー（60秒。`apps/daemon/src/manager-poller.ts`）に相乗りし、
+   *   借りを挑む前に下ろすことで「毎分掃き続ける」を止めている。
+   *
+   * ## 呼ぶ場所
+   *
+   * `apps/daemon/src/manager-poller.ts` から、`probeTurnEnds()` →
+   * `flushWithheldReports()` の後ろに並べる——**`probeTurnEnds()` より
+   * 必ず後**（同じ回で計算し直した `turnEndedAt` をその場で読むため）。
+   * `probeTurnEnds` の中には入れない（費用の門を持つ別の関心事である）。
+   *
+   * **1件の失敗で残りを止めない**（`probeTurnEnds` と同じ形）。
+   */
+  settleStalledUsageWakes(): Promise<string[]>;
+  /**
    * このプールを止める。
    *
    * **機構が合成した知らせの合流窓（`#synthesizedNotices`）に残っている積みを
@@ -4655,6 +4742,59 @@ class Pool implements ManagerPool {
     return nudged;
   }
 
+  async settleStalledUsageWakes(): Promise<string[]> {
+    if (this.#stopped) return [];
+    const nudged: string[] = [];
+    // **`#usageWakeOwed` ではなく `#records` を起点に走査する。** 借りに
+    // 載っている managerId が `#records` に残っているとは限らない（`abort()` /
+    // `#retire()` で先に消えることがある）ので、`record.turnEndedAt` /
+    // `record.job` を読める側（`#records`）を起点にする——`#usageWakeOwed` は
+    // 条件1として突き合わせるだけである（interface の doc「4条件全部」）。
+    for (const [managerId, record] of [...this.#records]) {
+      if (this.#stopped) break;
+      try {
+        // 条件1: 借りが立っている（鍵が戻ったと回し手が言った時点でまだ走っていた）。
+        if (!this.#usageWakeOwed.has(managerId)) continue;
+        // 条件2: 枠で止まったことが分かっている（一般の停滞検知にしない門）。
+        if (!this.#usageStopped.has(managerId)) continue;
+        // 条件3: いまも `running`（`waiting_human` は含めない——待っているのは
+        // 枠ではなく人間の回答である）。
+        if (record.job.status !== 'running') continue;
+        // 条件4: `turnEndedAt` が在り、`lastReportAt` より後——「分からない」を
+        // 症状へ倒さない（`turnEndedAt` が無ければ発火しない）。
+        if (record.turnEndedAt === undefined) continue;
+        const turnEndedAt = Date.parse(record.turnEndedAt);
+        if (Number.isNaN(turnEndedAt)) continue;
+        if (record.job.lastReportAt !== undefined) {
+          const lastReportAt = Date.parse(record.job.lastReportAt);
+          if (Number.isNaN(lastReportAt)) continue;
+          if (turnEndedAt <= lastReportAt) continue;
+        }
+
+        // **借りは挑む前に下ろす**（同じ委譲を毎分掃き続けないため。interface の doc）。
+        this.#usageWakeOwed.delete(managerId);
+        const outcome = await this.#nudgeForUsageRotation(managerId, { allowRunning: true });
+        /*
+         * **`#settleUsageWake` / `resumeStoppedByUsage()` と同じ規則。** `'nudged'`
+         * （届いた）と `'gone'`（起こす相手がもう居ない・起こしてはいけない）は
+         * 印を下ろす。`'skipped'`（届かなかった）は印を残し、次の鍵の回転
+         * （`resumeStoppedByUsage`）が拾い直す。`'still-running'` は条件3で
+         * `running` に絞ったうえ `allowRunning: true` で呼んでいるので、
+         * `waiting_human` に化けていない限り実際には返らない——念のため同じ
+         * 規則（残す）で受ける。
+         */
+        if (outcome === 'nudged' || outcome === 'gone') {
+          await this.#clearUsageStoppedMark(managerId);
+        }
+        if (outcome === 'nudged') nudged.push(managerId);
+      } catch {
+        // **1件の失敗で残りを止めない**（`probeTurnEnds` / `resumeStoppedByUsage`
+        // と同じ形）。
+      }
+    }
+    return nudged;
+  }
+
   /**
    * 枠で止まっていた1本へ、続きを促す一言を投げる。**印と借りは呼び出し側が
    * 下ろす**（呼び出し元によって下ろす条件が違う）。
@@ -4685,6 +4825,16 @@ class Pool implements ManagerPool {
    * とき、既定が「起こす」＝1ターン焼く側へ倒れるのを避ける（`#restoreJobs` の
    * `attached` 判定と同じ論法）。
    *
+   * ## `options.allowRunning`（`settleStalledUsageWakes` 専用。Issue #914 最終段）
+   *
+   * **既定（省略時）の振る舞いは1文字も変えない。** `allowRunning` が真の
+   * ときだけ、`status === 'running'` を `'still-running'` として弾かずに
+   * 起こす対象へ通す——呼び出し元（`settleStalledUsageWakes`）が既に
+   * `turnEndedAt` と `lastReportAt` の突き合わせで「ターンは終わっているが
+   * 借りが返っていない」と確認した後だけ渡す。**`waiting_human` は
+   * `allowRunning` が真でも通さない**——待っているのは枠ではなく人間の回答
+   * なので、鍵が戻ったことは無関係である。
+   *
    * **投げない。** `send()` の先には実 I/O（runner への HTTP・ストアへの書き込み）が
    * 在り、落ちうる——呼び出し元は走査の途中なので、ここで投げると後ろに並んだ
    * 委譲が誰にも起こされないまま残る（`#restoreJobs` のジョブループが同じ理由で
@@ -4692,14 +4842,18 @@ class Pool implements ManagerPool {
    */
   async #nudgeForUsageRotation(
     managerId: string,
+    options?: { readonly allowRunning?: boolean },
   ): Promise<'nudged' | 'still-running' | 'gone' | 'skipped'> {
     try {
       const record = this.#records.get(managerId) ?? (await this.#load(managerId));
       // 台帳から消えている（人間が消した等）。起こす相手が居ない ⟹ `'gone'`。
       if (record === null) return 'gone';
       const status = record.job.status;
-      if (status === 'running' || status === 'waiting_human') return 'still-running';
-      if (status !== 'done' && status !== 'failed' && status !== 'lost') {
+      const allowRunning = options?.allowRunning === true;
+      // `waiting_human` は `allowRunning` が真でも通さない（直上の doc）。
+      if (status === 'waiting_human') return 'still-running';
+      if (status === 'running' && !allowRunning) return 'still-running';
+      if (status !== 'running' && status !== 'done' && status !== 'failed' && status !== 'lost') {
         // **何もしなかったことを判断として残す。** 「起こさなかった」は日誌から
         // 消えやすいが、これは欠落ではなく判断である（根拠も一緒に残す）。
         await this.#journal({
