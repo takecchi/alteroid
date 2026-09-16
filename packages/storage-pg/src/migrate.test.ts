@@ -4,7 +4,12 @@ import { drizzle } from 'drizzle-orm/pglite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
-import { migrate, OPEN_MANAGER_BODY_INDEX, STATEMENTS } from './migrate.js';
+import {
+  ensureOpenManagerBodyIndex,
+  migrate,
+  OPEN_MANAGER_BODY_INDEX,
+  STATEMENTS,
+} from './migrate.js';
 import { archive, commitments } from './schema.js';
 
 /**
@@ -169,6 +174,39 @@ describe('migrate（台帳の畳み込みの索引。#1041）', () => {
     await migrate(db, (line) => warnings.push(line));
     expect(await indexExists()).toBe(true);
     expect(warnings).toEqual([]);
+  }, 30_000);
+
+  /**
+   * **索引が在るなら、台帳を1行も走査しない。**
+   *
+   * `migrate` は起動のたびに通る。`findOpenManagerBodyDuplicates` は未了の全行を
+   * group by するので、索引が在る（＝重複はもう作れない）状態でも毎回走らせると、
+   * **起動の費用が台帳の齢に比例して増える。** 実際、全体を並列で回したときに
+   * `beforeEach`（`new PGlite()` + `migrate`）が既定の 10s を超えて落ちた。
+   *
+   * **測り方は「走査する問い合わせを発行したら落ちる `db`」を渡すことである。**
+   * 「速いこと」を時間で測ると器の混み具合で揺れるので、**発行そのものの有無**を
+   * 見る（揺れない）。
+   */
+  it('⭐ 索引が在るなら、重複を数える問い合わせを発行しない（起動の費用を台帳の齢に比例させない）', async () => {
+    await migrate(db);
+
+    let scanned = false;
+    const watched = {
+      ...db,
+      execute: (query: unknown) => {
+        // 走査の問い合わせだけを見分ける（`pg_class` を引くほうは通す）
+        const text = JSON.stringify(query);
+        if (text.includes('group by')) {
+          scanned = true;
+          throw new Error('索引が在るのに台帳を走査した');
+        }
+        return db.execute(query as never);
+      },
+    } as unknown as Db;
+
+    await ensureOpenManagerBodyIndex(watched, () => undefined);
+    expect(scanned).toBe(false);
   }, 30_000);
 
   it('⭐ 既存の重複行が在っても migrate は落ちない —— 索引を作らず、件数と id を逐語で警告する', async () => {

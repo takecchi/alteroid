@@ -565,6 +565,14 @@ function rowsOf(result: unknown): unknown[] {
  * **`export` しているのはテストのためだけではない** —— 運用側が「いま索引を作れる
  * 状態か」を、索引を作りにいかずに確かめられる口が要る。
  */
+/** 索引が既に在るか（`pg_class` を1行引くだけ。台帳には触らない）。 */
+async function hasOpenManagerBodyIndex(db: Db): Promise<boolean> {
+  const result = await db.execute(
+    sql`select 1 from pg_class where relname = ${OPEN_MANAGER_BODY_INDEX}`,
+  );
+  return rowsOf(result).length > 0;
+}
+
 export async function findOpenManagerBodyDuplicates(db: Db): Promise<OpenManagerBodyDuplicate[]> {
   const result = await db.execute(sql`
     select
@@ -613,6 +621,11 @@ export async function ensureOpenManagerBodyIndex(
   db: Db,
   warn: (line: string) => void,
 ): Promise<void> {
+  // **索引が既に在るなら、台帳を1行も走査しない。** ここは起動のたびに通るので、
+  // `findOpenManagerBodyDuplicates`（未了の全行を group by する）を毎回走らせると
+  // 起動の費用が台帳の齢に比例して増える —— 索引が在る＝重複はもう作れないので、
+  // 数える意味そのものが無い。
+  if (await hasOpenManagerBodyIndex(db)) return;
   const duplicates = await findOpenManagerBodyDuplicates(db);
   if (duplicates.length === 0) {
     await db.execute(sql.raw(CREATE_OPEN_MANAGER_BODY_INDEX));
