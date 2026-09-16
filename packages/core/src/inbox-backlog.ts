@@ -501,6 +501,21 @@ export function inboxCollapseKey(event: InboxEvent): string | undefined {
  * 「`managerId` を跨いで畳んだらどう見えるか」を `distinct` と並べて読める
  * ようにするために、鍵をもう1つ用意するだけである。
  *
+ * **⚠️ 訂正（2026-09-16、#954 の受信箱側を実装した側から）。** 直上の
+ * 「直すのは issue #954」は、**#954 が `managerId` を跨いで畳む、とは読まない
+ * こと。** #954 の受信箱側（{@link inboxCollapseKey}）は **`managerId` を鍵に
+ * 含めて畳む＝跨がない**形で着地した。理由は2つある —— (1) 台帳側の壁
+ * （`hasOpenManagerDuplicate`、PR #1035）が `source`＝`managerId` を見ており、
+ * **受信箱と台帳で鍵の粗さが違うと同じ入力に対する畳み方が食い違う**。
+ * (2) 跨いで畳むと「どの委譲が落ちたか」が消えるが、落ちた委譲は名指しで
+ * `manager_send` して起こす対象なので、名前が消えると次の手が打てなくなる
+ * （＝能力の削除。AGENTS.md の地雷表）。**実測でも跨ぐ必要は支持されなかった**
+ * —— ある起動が拾い直した未読 3,326 件の内訳は大半が `external`（`token-pool`）
+ * で、`manager_message` は 27 件（委譲5本ぶん）だった。跨いで得られるのは数件で、
+ * 失うのは名指しである。**必要が出たら粗くするほうが後から効く**ので、細かい側
+ * で入れてある。⟹ この関数が作る「跨いだ鍵」は、いまも**計器**
+ * （`distinctAcrossManagers` を並べて読むためのもの）のままである。
+ *
  * ## 鍵の作り方
  *
  * `manager_message` は `[type, kind, text]`（`managerId` を落とす）を
