@@ -2,6 +2,8 @@ import type { ChildProcess } from 'node:child_process';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 
+import type { UnpushedWorkResult, UnpushedWorkTree } from './runner-protocol.js';
+
 /**
  * `manager_stop` が「running を畳むと何が失われるか」を一般論ではなく実物の
  * 数字で言うための下請け（Issue #1039）。
@@ -168,36 +170,13 @@ async function runGit(
  * コミットメッセージ・author は一切含めない（Issue #1039。
  * `apps/runner/src/tasks.ts` が生きているプロセスの素性について引いている線
  * ——`cmdline` / `cwd` / `environ` を読まない——と同じ強さの線をここに引く）。
+ *
+ * **型そのものは `runner-protocol.ts` の `unpushedWorkTreeSchema` /
+ * `unpushedWorkResultSchema` から輸入する**（ここで再定義しない）——
+ * デーモン・runner の境界を跨ぐ値の形は、その境界を持つファイルが1か所で
+ * 決める（AGENTS.md「リポジトリの約束」の数え上げの持ち主を1か所にする、と
+ * 同じ理由）。ここは輸入した形に沿って値を作るだけである。
  */
-export interface UnpushedWorkTree {
-  /** 探索の起点（`job.cwd`）からの相対パス。絶対パスそのものは出さない。 */
-  readonly relativePath: string;
-  /** いまの枝名。detached HEAD、または確かめられなかったときは `null`。 */
-  readonly branch: string | null;
-  /**
-   * `git rev-list --count HEAD --not --remotes=origin`。
-   *
-   * ⚠️ **多めに出る側の誤差である**（fetch していない remote-tracking ref を
-   * 基準にするため）。省略時は `unpushedCommitCountUnknown` に理由がある。
-   */
-  readonly unpushedCommitCount?: number;
-  /** `unpushedCommitCount` を確かめられなかった理由（省略 = 確かめられた）。 */
-  readonly unpushedCommitCountUnknown?: string;
-  /** `git status --porcelain` の行数（＝未コミットの変更の件数）。 */
-  readonly uncommittedChangeCount?: number;
-  /** `uncommittedChangeCount` を確かめられなかった理由（省略 = 確かめられた）。 */
-  readonly uncommittedChangeCountUnknown?: string;
-}
-
-export interface UnpushedWorkResult {
-  /** 探索の起点。 */
-  readonly cwd: string;
-  /** 見つかった作業ツリー全部。 */
-  readonly worktrees: readonly UnpushedWorkTree[];
-  /** `.git` の探索を件数の上限で打ち切ったときだけ載る（値は上限）。 */
-  readonly truncatedAtCount?: number;
-}
-
 async function probeBranch(
   spawnFn: ProcessSpawnFn,
   repoRoot: string,
@@ -269,6 +248,20 @@ export interface ComputeUnpushedWorkOptions {
   maxWorktrees?: number;
   /** 1 git コマンドあたりのタイムアウト（既定 {@link DEFAULT_GIT_COMMAND_TIMEOUT_MS}）。 */
   gitCommandTimeoutMs?: number;
+  /**
+   * 呼び出し元（デーモン）がもう待っていないことを伝える期限。
+   *
+   * **中断しても、走っている git コマンドは止めない**（`apps/daemon/src/
+   * runner-client.ts` の `#call` と同じ「相手は止めない」作法。期限は待つのを
+   * やめるためだけにある）。ここで見るのは**次の作業ツリーへ進む前**だけ——
+   * 既に始めた1本の3コマンドを取りやめにはしない。
+   *
+   * 中断が見つかった時点で、**残りの作業ツリーも一覧からは落とさない**
+   * （見つかった `.git` を全部返す、という約束を打ち切りでも破らない）。
+   * その代わり、まだ調べていない旨を理由付きで載せる（`stoppedEarly` も
+   * `true` になる）。
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -287,23 +280,32 @@ export async function computeUnpushedWork(
   });
   const timeoutMs = options.gitCommandTimeoutMs ?? DEFAULT_GIT_COMMAND_TIMEOUT_MS;
   const worktrees: UnpushedWorkTree[] = [];
+  let stoppedEarly = false;
   for (const repoRoot of found.paths) {
+    const relativePath = path.relative(cwd, repoRoot);
+    const relative = relativePath.length === 0 ? '.' : relativePath;
+    if (options.signal?.aborted === true) {
+      stoppedEarly = true;
+      const reason = '確かめられなかった（呼び出し元の期限切れで、この作業ツリーへ進む前に打ち切った）';
+      worktrees.push({
+        relativePath: relative,
+        branch: null,
+        unpushedCommitCountUnknown: reason,
+        uncommittedChangeCountUnknown: reason,
+      });
+      continue;
+    }
     const [branch, unpushed, uncommitted] = await Promise.all([
       probeBranch(options.spawn, repoRoot, options.env, timeoutMs),
       probeUnpushedCommitCount(options.spawn, repoRoot, options.env, timeoutMs),
       probeUncommittedChangeCount(options.spawn, repoRoot, options.env, timeoutMs),
     ]);
-    const relativePath = path.relative(cwd, repoRoot);
-    worktrees.push({
-      relativePath: relativePath.length === 0 ? '.' : relativePath,
-      branch,
-      ...unpushed,
-      ...uncommitted,
-    });
+    worktrees.push({ relativePath: relative, branch, ...unpushed, ...uncommitted });
   }
   return {
     cwd,
     worktrees,
     ...(found.truncatedAtCount === undefined ? {} : { truncatedAtCount: found.truncatedAtCount }),
+    ...(stoppedEarly ? { stoppedEarly: true } : {}),
   };
 }
