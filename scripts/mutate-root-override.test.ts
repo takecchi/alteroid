@@ -207,6 +207,12 @@ describe('mutate.mjs CLI: --root（回帰・上書き・fail-closed・実効 ROO
           to: 'HELLO',
           expect: 1,
           target: null,
+          // #993: validateSpec は mustFail（狙いの歯の宣言）を必須にした。
+          // この歯は apply/restore が --root のツリーを正しく使うかだけを
+          // 測っていて、judge（検出/身代わりの判定）はここでは呼ばない
+          // ——この tmp リポジトリに実テストは無い。だから中身は判定に使われず、
+          // validateSpec を通すためのプレースホルダでよい。
+          mustFail: ['root-override-probe はこの歯で judge を呼ばない（apply/restore のみを測る）'],
         }),
       );
 

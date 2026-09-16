@@ -327,6 +327,12 @@ describe('mutate-core: decideJudgementCategory（判定の入口1/3）', () => {
       // 赤い歯が在るときの判定には足場対照が要る（門4）。ここは差し引く
       // 集合が空の対照を渡す——測っているのは集計ブロックの側である。
       EMPTY_SCAFFOLD_CONTROL,
+      // #993: decideJudgementCategory の第4引数に mustFail が増えた。
+      // 「検出」を名乗れるのは宣言した歯が surviving に居るときだけなので、
+      // SINGLE_BLOCK_WITH_FAILURE が実際に落とす歯の名前をそのまま宣言する
+      // （上の FAIL 行と同じ文字列）。この歯が測りたいのは相変わらず
+      // 「集計ブロックが1個なら判定できる」ことで、宣言はその前提を壊さない。
+      ['probe.test.ts > 単一ブロック > 1本だけ落ちた'],
     );
     expect(category).toBe('検出');
   });

@@ -273,9 +273,17 @@ describe('mutate-core: decideJudgementCategory の門4（落ちた歯の名前�
     const testResult = testResultFrom(
       makeRawWithFailures([...SCAFFOLD_NAMES, REAL_SINGLE_FAILURE_NAME]),
     );
-    expect(decideJudgementCategory(NOT_CHECKED, testResult, measuredControl(SCAFFOLD_NAMES))).toBe(
-      '検出',
-    );
+    // #993: decideJudgementCategory の第4引数に mustFail が増えた。「検出」を
+    // 名乗れるのは宣言した歯が surviving（対照を差し引いた残り）に居るときだけ
+    // ——ここで実際に残る歯は REAL_SINGLE_FAILURE_NAME なので、それを宣言する。
+    expect(
+      decideJudgementCategory(
+        NOT_CHECKED,
+        testResult,
+        measuredControl(SCAFFOLD_NAMES),
+        [REAL_SINGLE_FAILURE_NAME],
+      ),
+    ).toBe('検出');
   });
 
   it('🔴 対照が取れていなければ「検出」とも「生存」とも言わない', () => {
@@ -342,7 +350,12 @@ describe('mutate-core: decideJudgementCategory の門4（落ちた歯の名前�
 
   it('差し引く集合が空の対照では、赤い歯はそのまま「検出」（差し引きが過剰でないこと）', () => {
     const testResult = testResultFrom(makeRawWithFailures([REAL_SINGLE_FAILURE_NAME]));
-    expect(decideJudgementCategory(NOT_CHECKED, testResult, measuredControl([]))).toBe('検出');
+    // #993: 宣言（mustFail）が要る。surviving に残る唯一の歯を宣言する。
+    expect(
+      decideJudgementCategory(NOT_CHECKED, testResult, measuredControl([]), [
+        REAL_SINGLE_FAILURE_NAME,
+      ]),
+    ).toBe('検出');
   });
 
   it('回帰: 門1（集計ブロックが複数）は門4より先に効く', () => {
@@ -417,11 +430,18 @@ describe('mutate-core: judge の判定行（走行範囲を名乗る／外から
 
   it('絞り込み走行の判定行は「走らなかった歯について何も言っていない」と名乗る', () => {
     const testResult = testResultFrom(makeRawWithFailures([REAL_SINGLE_FAILURE_NAME]));
-    const { text } = judge({ id: 'm-scaffold-filtered' }, NOT_CHECKED, testResult, {
-      ...measuredControl([]),
-      scope: '絞り込み',
-      extraArgs: ['profile.test'],
-    });
+    // #993: judge は spec.mustFail を decideJudgementCategory へそのまま渡す。
+    // ここで surviving に残る唯一の歯を宣言する。
+    const { text } = judge(
+      { id: 'm-scaffold-filtered', mustFail: [REAL_SINGLE_FAILURE_NAME] },
+      NOT_CHECKED,
+      testResult,
+      {
+        ...measuredControl([]),
+        scope: '絞り込み',
+        extraArgs: ['profile.test'],
+      },
+    );
     expect(text).toContain('走行範囲: 絞り込み');
     expect(text).toContain('走らなかった歯について何も言っていない');
   });
@@ -431,12 +451,20 @@ describe('mutate-core: judge の判定行（走行範囲を名乗る／外から
     // `bypass` はこの repo でいちばん測りたい変異の名前（歯を迂回する変異）で
     // あり、走行の絞り込みにもそのまま現れる。判定行の禁止語検査へ外から来た
     // 文字列を混ぜると、ここで拒否される（#348 の欠陥の再生産）。
+    // #993: mustFail を宣言しないと decideJudgementCategory が先に拒むので、
+    // ここで測りたい「pass を含む絞り込み文字列でも判定行を作れる」に到達
+    // できるよう、surviving に残る唯一の歯を宣言する。
     expect(() =>
-      judge({ id: 'm-guard-bypass' }, NOT_CHECKED, testResult, {
-        ...measuredControl([]),
-        scope: '絞り込み',
-        extraArgs: ['guard-bypass.test'],
-      }),
+      judge(
+        { id: 'm-guard-bypass', mustFail: [REAL_SINGLE_FAILURE_NAME] },
+        NOT_CHECKED,
+        testResult,
+        {
+          ...measuredControl([]),
+          scope: '絞り込み',
+          extraArgs: ['guard-bypass.test'],
+        },
+      ),
     ).not.toThrow();
   });
 });
@@ -547,6 +575,12 @@ describe('mutate.mjs run: 足場の赤を差し引いて判定する（端から
         to: 'WORLD',
         expect: 1,
         target: null,
+        // #993: validateSpec は mustFail を必須にした。この変異は「生存」を
+        // 測る歯なので、実際には何も残らない（surviving が空で門5 は呼ばれ
+        // ない）。それでも spec 検査を通すために、この fixture で変異に反応
+        // する唯一の歯（REAL_TOOTH。"hello" → "HELLO" にしか反応しない）を
+        // 狙いとして宣言しておく——狙っても実際には落ちない、が正しい形。
+        mustFail: [REAL_TOOTH],
       },
     ]);
     expect(status).toBe(0);
@@ -575,6 +609,9 @@ describe('mutate.mjs run: 足場の赤を差し引いて判定する（端から
         to: 'HELLO',
         expect: 1,
         target: null,
+        // #993: この変異が実際に落とすのは REAL_TOOTH（surviving に残る唯一の
+        // 歯）。それを狙いとして宣言する。
+        mustFail: [REAL_TOOTH],
       },
     ]);
     expect(status).toBe(0);
@@ -592,6 +629,14 @@ describe('mutate.mjs run: 足場の赤を差し引いて判定する（端から
     // それらしい名前の項目を足しても判定は1文字も動かない —— ここが弱くなると
     // 「これは既知の失敗です」と宣言して「検出」を消せる（＝判定を甘くできる）
     // 形になる。
+    //
+    // #993 で mustFail が増えたが、この4鍵（knownFailures / allowFailures /
+    // expectedFailures / scaffoldFailures）とは別物である。mustFail は
+    // 「検出」と名乗れる条件を狭めるだけで、赤を1本も差し引かない
+    // （`requireDeclaredTargetTeeth` の doc）。だから validateSpec を通すために
+    // mustFail を足しても、この歯が測りたい主張——**4鍵は依然として無視される**
+    // ——は1文字も変わらない。むしろ mustFail を足したことで「別の鍵を足しても
+    // 4鍵は無視される」がそのまま測れる形になっている。
     const { status, out } = runPlan(root, [
       {
         id: 'm-hello-upcase-with-declared',
@@ -604,6 +649,7 @@ describe('mutate.mjs run: 足場の赤を差し引いて判定する（端から
         allowFailures: [REAL_TOOTH],
         expectedFailures: [REAL_TOOTH],
         scaffoldFailures: [REAL_TOOTH],
+        mustFail: [REAL_TOOTH],
       },
     ]);
     expect(status).toBe(0);
