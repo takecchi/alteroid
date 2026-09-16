@@ -1161,14 +1161,35 @@ describe('引き受けたまま終わっていない仕事', () => {
     await s.clone.stop();
   });
 
-  it('重複確認（list()）が失敗しても、開く側へ倒れる（依頼を黙って落とさない）', async () => {
+  /**
+   * **⚠️ Issue #1041 でこの歯の意味が変わった。読み直すこと。**
+   *
+   * かつて `#commit` は `list()` を読んで重複を判定してから `open()` を呼んでいた。
+   * この歯はそこを踏んでおり、「**重複確認が失敗しても開く側へ倒す**（確認できずに
+   * 依頼を1件黙って落とすほうが、まれに重複を見逃すより高くつく）」を測っていた。
+   *
+   * **いま `#commit` は `list()` を呼ばない。** 判定は `CommitmentStore.open` の
+   * 中（＝書き込みと同じ1操作）へ移った。⟹ **`list()` を壊しても `#commit` の
+   * 判定経路は踏まれない** —— このまま置くと、名前が測っていないことを名乗る歯に
+   * なる（緑なのは壊した先を通らなくなったからで、倒れ方が正しいからではない）。
+   *
+   * **⟹ 2つに書き直した。どちらも #1041 の後でも live である。**
+   *
+   * 1. **台帳の読みが壊れていても、記帳そのものは通る。** `list()` はターンの
+   *    断り書き（`#commitmentNoticeFor`）が読むので、壊れれば断り書きは出ない
+   *    ——**それでも依頼は台帳へ載る。** 読めないことでターンまで止めない
+   * 2. **⭐ 読みが壊れていても、畳み込みは効く。** これが #1041 の直しそのもの
+   *    である —— 畳み込みが `list()` に依存していた頃は、`list()` が壊れた瞬間に
+   *    壁が消えて同文が2行になった。いまは `open()` の中で判定するので、
+   *    **`list()` が1バイトも読めなくても1行に畳まれる**
+   */
+  it('台帳の読み（list()）が壊れていても、記帳は通り、畳み込みも効く（#1041 で意味が変わった歯）', async () => {
     const stores = createMemoryStores();
     const broken: Stores = {
       ...stores,
       commitments: {
         ...stores.commitments,
-        // `list()` だけを壊す。`get()` / `open()` は本物のまま——重複確認の
-        // 経路だけを踏ませて、書き込みそのものが本当に通ったかを `get()` で見る。
+        // `list()` だけを壊す。`get()` / `open()` は本物のまま。
         list: () => Promise.reject(new Error('台帳が読めない（実測を模す）')),
       },
     };
@@ -1184,7 +1205,15 @@ describe('引き受けたまま終わっていない仕事', () => {
     expect(entry?.origin).toBe('manager');
     expect(entry?.body).toContain('list が壊れていても届く報告');
 
+    // 2. **読みが壊れていても畳み込みは効く。** 別のインスタンスから同文を
+    //    打つ（同一インスタンスでは受信箱側の壁が先に畳むため。#1077）。
+    const other = setup(broken);
+    other.clone.post(managerMessage('list が壊れていても届く報告', 'evt-list-broken-2'));
+    await waitFor(() => other.calls.length > 0, '2つ目のインスタンスのターンが入力を読むこと');
+    expect(await broken.commitments.get('evt-list-broken-2')).toBeNull();
+
     await s.clone.stop();
+    await other.clone.stop();
   });
 
   /**
