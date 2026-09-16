@@ -1510,10 +1510,21 @@ describe('HTTP API', () => {
         // targeted は選定（selectArchiveRemovalTargets）が選んだ件数——
         // 走行中で実行時に弾かれた分もここには数える。実際に消せたかは
         // removedIds / skipped.inUse を見ること。
-        targeted: 1,
+        //
+        // ⚠️ 2026-09-16 反転（#698 欠陥1）: 上のコメントが固定していた
+        // `targeted: 1` は、guard で飛ばした行を `targeted` と
+        // `skipped.inUse` の両方で数える壊れた不変条件
+        // （`matched === targeted + skipped5欄 + remaining` が
+        // 1 ≠ 2 で破れる）をそのまま仕様として固定していた。
+        // `targeted` は「guard を通った後の件数」（＝実際に消しにいった
+        // 件数）に直した——guard で飛ばした行は `skipped.inUse` だけに
+        // 数える。あわせて欠陥3（missing の行がどの欄にも現れない）を
+        // 直す `raced` を応答に足したので、ここでも0を明示して撃つ。
+        targeted: 0,
         removedIds: [],
         removedBytes: 0,
         skipped: expect.objectContaining({ inUse: 1 }),
+        raced: 0,
       });
 
       const read = await app.request(`/archive/${idA}`);

@@ -4712,10 +4712,36 @@ export function createApp(deps: AppDeps) {
      * 対象を1件ずつ名指しして既存の単発 `DELETE /archive/:id` の
      * `overrideReason` を使うこと。
      *
+     * **この guard は `dryRun` の分岐より前で回す。** `guardArchiveRemoval`
+     * はプロセス内の像を読むだけでネットワークを叩かないので下見でも安い
+     * ——下見でも回さないと、下見が返す `targeted` / `skipped.inUse` が
+     * 実行時と食い違う（下見が実行の予告にならない）。
+     *
      * **実行は `stores.archive.remove(id)` を1件ずつ。** 一括 UPDATE には
      * しない——`packages/storage-pg` / `packages/storage-fs` を1文字も
      * 変えていない理由と同じ（設計文書が「1行1トランザクション、
      * `WHERE removed_at IS NULL` で冪等、再開可能」と明記している）。
+     *
+     * **不変条件（歯で撃つこと。5欄で1行は必ず1回だけ数える）:**
+     * ```
+     * matched === targeted + remaining + (skipped.protected + skipped.alreadyRemoved
+     *            + skipped.newest + skipped.notContained + skipped.inUse)
+     * targeted === removedIds.length + raced        // dryRun:false のときのみ
+     * ```
+     * `targeted` は **guard を通った後の件数**（＝実際に消しにいく件数）で
+     * あって `selectArchiveRemovalTargets` が選んだ件数ではない——guard で
+     * 飛ばした行を `targeted` にも `skipped.inUse` にも数えると2回数える
+     * ことになり、上の等式が壊れる。`removedIds` も guard を通った後の
+     * ものだけ。`raced` は「guard までは通ったが、実際に `remove()` する
+     * までの間に他経路が先に消していた」行（`result.kind === 'missing'`）
+     * ——0件でも欄を省かない。
+     *
+     * **`limit` は guard より前に効く。** `selectArchiveRemovalTargets` が
+     * `limit` を適用した後の集合に対して guard を回すので、guard で
+     * 飛ばした行も `limit` の枠を1つ使い切っている。⟹ `targeted` が
+     * `limit` に届いていないのに `remaining` が残っていることがあるが、
+     * それはバグではない（guard で減った分がそのまま `targeted` から
+     * 抜けただけ）。
      */
     .post(
       '/archive/remove',
@@ -4734,7 +4760,11 @@ export function createApp(deps: AppDeps) {
           '（`skipped.notContained`）は `requireContainment: false` を明示' +
           'しない限り既定で守る。まだ記憶へ蒸留していない区間の墓標は' +
           '`requireContainment` に関わらず常に守る（`skipped.protected`）。' +
-          '本文だけを落とす（tombstone）——行そのものは消えない。',
+          '本文だけを落とす（tombstone）——行そのものは消えない。' +
+          '**下見（既定）でも走行中の委譲の判定は評価する**——`targeted` /' +
+          '`skipped.inUse` は下見と実行で同じ値になる。下見が返さない実行だけの' +
+          '事実は `removedBytes`（下見は常に0）と `raced`（下見は常に0。' +
+          '`remove()` 自体を呼ばないので測れない）だけである。',
         responses: {
           200: {
             description: '試算、または実際に消した結果。',
@@ -4816,24 +4846,19 @@ export function createApp(deps: AppDeps) {
           protectedIds,
         });
 
-        if (dryRun !== false) {
-          return c.json(
-            archiveRemoveManyResponseSchema.parse({
-              ok: true,
-              dryRun: true,
-              totalRows: selection.totalRows,
-              matched: selection.matched,
-              targeted: selection.targets.length,
-              removedIds: selection.targets.map((row) => row.id),
-              removedBytes: 0,
-              remaining: selection.remaining,
-              skipped: { ...selection.skipped, inUse: 0 },
-            }),
-          );
-        }
-
         // **走行中の委譲が抱えている行は一括では開けない**（上の doc）。
         // `denied` / `unknown` はどちらも安全側に倒して飛ばす。
+        //
+        // ⚠️ **この guard ループは dryRun 分岐より前で回す**（#698 欠陥2の
+        // 修正）。`guardArchiveRemoval` は `ManagerPool` のプロセス内の像
+        // （`this.#records`）を読むだけでネットワークを叩かない
+        // （`grep -Fn -- 'プロセス内の像' packages/core/src/manager.ts`）ので、
+        // dry run で回しても安い。ここを dryRun 分岐より後ろに置くと、
+        // 下見が「guard で減る前」の数（`selection.targets.length`）を、
+        // 実行が「guard で減った後」の数を返すことになり、同じ条件で
+        // 下見→実行と打っても `targeted` / `skipped.inUse` が食い違う
+        // ——下見が「実行の予告」にならなくなる。この口は「下見を既定にして、
+        // 見てから押す」ことが設計の中心なので、これは致命的である。
         const removableTargets: ArchiveEntry[] = [];
         let skippedInUse = 0;
         for (const target of selection.targets) {
@@ -4843,6 +4868,43 @@ export function createApp(deps: AppDeps) {
             continue;
           }
           removableTargets.push(target);
+        }
+
+        // **`targeted` は guard を通った後の件数**（＝実際に消しにいく件数）
+        // にする（#698 欠陥1の修正）。`selection.targets.length`（guard 前）
+        // のままだと、guard で飛ばした行が `targeted` と `skipped.inUse` の
+        // 両方に数えられ、`matched === targeted + remaining + skipped5欄の
+        // 総和` が破れる（1行を2回数える）。`removedIds` も guard を
+        // 通った後のものだけを載せる——この2つの帳尻は下で
+        // `targeted === removedIds.length + raced` としても撃つ。
+        //
+        // **`limit` は guard より前に効く**——`selection`（`limit` を適用
+        // 済み）に対して guard を回しているので、guard で飛ばした行も
+        // `limit` の枠を1つ使ったことになる。⟹ 「`targeted` が `limit` に
+        // 届いていないのに `remaining` が残っている」は起こりうる——それは
+        // バグではなく、guard で減った分がそのまま `targeted` から抜けた
+        // だけである。
+        const targeted = removableTargets.length;
+
+        if (dryRun !== false) {
+          return c.json(
+            archiveRemoveManyResponseSchema.parse({
+              ok: true,
+              dryRun: true,
+              totalRows: selection.totalRows,
+              matched: selection.matched,
+              targeted,
+              // 下見の `removedIds` は「これから消す id」（guard 通過後）。
+              removedIds: removableTargets.map((row) => row.id),
+              removedBytes: 0,
+              remaining: selection.remaining,
+              skipped: { ...selection.skipped, inUse: skippedInUse },
+              // **dryRun は `remove()` を呼ばないので raced は測れない**
+              // ——値そのものは作るが（欄を省くと「測っていない」と区別が
+              // つかなくなる）、常に0であることの理由はここに書く。
+              raced: 0,
+            }),
+          );
         }
 
         // 塊ごとに「消す → その塊の id を日誌へ書く」を交互に回す
@@ -4856,13 +4918,24 @@ export function createApp(deps: AppDeps) {
         );
         const removedIds: string[] = [];
         let removedBytes = 0;
+        let raced = 0;
         for (const [index, chunk] of chunks.entries()) {
           const chunkIds = new Set(chunk);
           const chunkTargets = removableTargets.filter((row) => chunkIds.has(row.id));
           const removedThisChunk: string[] = [];
           for (const target of chunkTargets) {
             const result = await stores.archive.remove(target.id);
-            if (result.kind === 'missing') continue; // list() の後に消えても数えない
+            if (result.kind === 'missing') {
+              // list() で見つかり guard も通ったのに、実際に remove() する
+              // までの間に他経路が先に消していた（#698 欠陥3）。`targeted`
+              // には数えているのでここで黙って `continue` すると
+              // `removedIds` にも `skipped` にも現れない行ができ、
+              // `targeted === removedIds.length + raced` が破れる——
+              // 隠さず `raced` へ数える（受信箱側の「raced を隠さない」
+              // 作法と同じ）。
+              raced += 1;
+              continue;
+            }
             removedThisChunk.push(target.id);
             // `already`（冪等な再実行）はバイト数を二重に数えない。
             if (result.kind === 'removed') removedBytes += result.bytes;
@@ -4891,11 +4964,12 @@ export function createApp(deps: AppDeps) {
             dryRun: false,
             totalRows: selection.totalRows,
             matched: selection.matched,
-            targeted: selection.targets.length,
+            targeted,
             removedIds,
             removedBytes,
             remaining: selection.remaining,
             skipped: { ...selection.skipped, inUse: skippedInUse },
+            raced,
           }),
         );
       },

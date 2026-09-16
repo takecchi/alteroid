@@ -1512,7 +1512,30 @@ export const archiveRemoveManyRequestSchema = z.object({
  *
  * `remaining` は絞り込みに当たったが `limit` に溢れて対象にすら
  * ならなかった件数（`selectArchiveRemovalTargets` の `remaining` を
- * そのまま写す）。
+ * そのまま写す）。**`limit` は guard（`inUse`）より前に効く**——
+ * `selectArchiveRemovalTargets` が `limit` を適用した後の集合に guard を
+ * 回すので、guard で飛ばした行も `limit` の枠を1つ使い切っている。⟹
+ * `targeted` が `limit` に届いていないのに `remaining` が残っていることが
+ * あるが、それはバグではない（`apps/daemon/src/app.ts` の
+ * `POST /archive/remove` の doc）。
+ *
+ * `raced` は、guard までは通ったが実際に `stores.archive.remove()` する
+ * までの間に他経路が先に消していた（`result.kind === 'missing'`）件数——
+ * `dryRun: true` では `remove()` 自体を呼ばないので常に0（測れないことを
+ * 隠さず0の理由を明記する。0件でも欄は省かない）。
+ *
+ * **不変条件（5欄で1行は必ず1回だけ数える。歯で撃つこと）:**
+ * ```
+ * matched === targeted + remaining + (skipped.protected + skipped.alreadyRemoved
+ *            + skipped.newest + skipped.notContained + skipped.inUse)
+ * targeted === removedIds.length + raced   // dryRun: false のときのみ
+ * ```
+ * `targeted` は **guard を通った後の件数**（＝実際に消しにいく件数）で
+ * あって、`selectArchiveRemovalTargets` が選んだ件数そのものではない
+ * ——guard で飛ばした行を `targeted` と `skipped.inUse` の両方に数えると
+ * 1行を2回数えることになり、上の等式が壊れる。**`dryRun: true` でも
+ * guard を評価するので、`targeted` / `skipped.inUse` は下見と実行で
+ * 同じ値になる**（下見が実行の予告になっている、ということ）。
  */
 export const archiveRemoveManyResponseSchema = z.object({
   ok: z.literal(true),
@@ -1530,6 +1553,7 @@ export const archiveRemoveManyResponseSchema = z.object({
     protected: z.number().int(),
     inUse: z.number().int(),
   }),
+  raced: z.number().int(),
 });
 
 // ---------------------------------------------------------------------------
