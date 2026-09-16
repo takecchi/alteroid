@@ -8,6 +8,8 @@ import {
 } from '@alteroid/core';
 import type {
   Commitment,
+  CommitmentAppraisal,
+  CommitmentAppraisedBy,
   CommitmentClosedBy,
   CommitmentEditedBy,
   CommitmentList,
@@ -429,6 +431,50 @@ export class FsCommitmentStore implements CommitmentStore {
     });
   }
 
+  /**
+   * 評定を書く（`CommitmentStore.appraise` の doc）。**断るのは「無い id」だけ**
+   * —— `close` / `editBody` と違い、**片付いた行にも未了の行にも付く。**
+   *
+   * **⚠️ `reason` を渡さなかったら、前の理由を消すこと。** 残すと、人間が理由
+   * 無しで覆したときに**クローンが `good` と書いた理由が `bad` の理由として
+   * 残る** —— 値だけ入れ替わって、説明が前の書き手のものになる。
+   */
+  async appraise(
+    id: string,
+    at: string,
+    value: CommitmentAppraisal,
+    by: CommitmentAppraisedBy,
+    reason?: string,
+  ): Promise<boolean> {
+    return this.#update((file) => {
+      const found = file.entries.find((entry) => entry.id === id);
+      if (found === undefined) {
+        return { next: file, result: false };
+      }
+      return {
+        next: {
+          entries: file.entries.map((entry) => {
+            if (entry.id !== id) return entry;
+            // 前の理由は必ず落としてから、渡されたときだけ書き直す（上の doc）。
+            // **`delete` で落とす。** 分割代入で捨てる書き方（`{ appraisalReason: _x, ...rest }`）
+            // は、この repo の eslint（`no-unused-vars`）が捨て変数を許さない。
+            const next: Commitment = {
+              ...entry,
+              appraisal: value,
+              appraisedAt: at,
+              appraisedBy: by,
+            };
+            delete next.appraisalReason;
+            if (reason !== undefined) next.appraisalReason = reason;
+            return next;
+          }),
+          unreadable: file.unreadable,
+          trimmedClosedCount: file.trimmedClosedCount,
+        },
+        result: true,
+      };
+    });
+  }
   /**
    * `body` を書き換える。**`open` / `close` と同じ排他区間（`#update`）で行う**
    * — 読んでから書く形にすると、並行編集や「編集」と「片付け」の競合で

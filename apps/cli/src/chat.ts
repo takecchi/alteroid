@@ -3,7 +3,9 @@ import { stdin, stdout } from 'node:process';
 
 import {
   approvalUpdatedAt,
+  commitmentAppraisalSchema,
   commitmentUpdatedAt,
+  describeCommitmentAppraisal,
   describeManagerState,
   describeSessionMissingKind,
   jobStatusSchema,
@@ -278,6 +280,8 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /commitments all     片付けたものも含めて見る
 /commit <本文>       引き受けたことを台帳へ積む
 /done <番号|id> [理由]  片付けたことを記録する（番号は /commitments の並び）
+/rate <番号|id> <good|bad|unclear> [理由]  うまくいったかの評定を付ける・覆す
+                     （片付いた行にも未了の行にも付く。何度でも上書きできる）
 /usage [from=YYYY-MM-DD] [to=YYYY-MM-DD] [manager=<id>]  利用状況（いくら使ったか）
 /schedule            時間起点のジョブ・継続中の依頼と次の発火
 /schedule <kind> <HH:MM|30m|cron 0 10 * * 1> <依頼>  継続する依頼を仕込む
@@ -1436,6 +1440,7 @@ export async function runSlashCommand(
       stdout.write(`${text}\n`);
       if (ids.length > 0) {
         stdout.write('  /done <番号> [理由] で片付けたことを記録できます\n');
+        stdout.write('  /rate <番号> <good|bad|unclear> [理由] で評定を付け直せます\n');
       }
       return 'ok';
     }
@@ -1498,6 +1503,58 @@ export async function runSlashCommand(
             : response.status === 404
               ? 'その id は台帳にありません'
               : `記録できませんでした (${response.status})`
+        }\n`,
+      );
+      return 'ok';
+    }
+
+    /**
+     * 評定を付ける／覆す（#1054）。**`/done` とは別の口である** —— あちらは
+     * 「片付いたか」で、こちらは「うまくいったか」。片付いた行にも未了の行にも
+     * 付けられ、何度でも上書きできる。
+     *
+     * **Web UI と同じ口（`POST /commitments/:id/appraise`）を叩く。** 入口の
+     * 等価性（PRD「インターフェース」）は、同じ口を叩くことでしか保てない。
+     */
+    case '/rate': {
+      const [reference, value, ...reasonParts] = rest;
+      if (!reference || !value) {
+        stdout.write(
+          '使い方: /rate <番号|id> <good|bad|unclear> [理由]（番号は /commitments の並び）\n',
+        );
+        return 'ok';
+      }
+      const id = resolveListedId(reference, listed.commitments);
+      if (id === null) {
+        stdout.write(`[${reference}] は /commitments の一覧にありません\n`);
+        return 'ok';
+      }
+      // **ここで3値を数え直さない。** 器の `commitmentAppraisalSchema` に聞く
+      // ——写すと、値が増えた日に CLI だけが黙って古いままになる。
+      const parsedValue = commitmentAppraisalSchema.safeParse(value);
+      if (!parsedValue.success) {
+        stdout.write(
+          `評定は ${commitmentAppraisalSchema.options.join(' / ')} のどれかです（渡されたのは ${value}）\n`,
+        );
+        return 'ok';
+      }
+      const reason = reasonParts.join(' ');
+      const response = await client.commitments[':id'].appraise.$post({
+        param: { id },
+        json:
+          reason.length === 0
+            ? { appraisal: parsedValue.data }
+            : { appraisal: parsedValue.data, reason },
+      });
+      if (response.ok) {
+        stdout.write(`評定を ${parsedValue.data} にしました\n`);
+        return 'ok';
+      }
+      stdout.write(
+        `${
+          response.status === 404
+            ? 'その id は台帳にありません'
+            : `記録できませんでした (${response.status})`
         }\n`,
       );
       return 'ok';
@@ -2467,6 +2524,10 @@ export function renderCommitments(
         `      片付けた: ${commitment.closedAt ?? ''}  ${summarizeText(commitment.closedReason ?? '')}`,
       );
     }
+    // **評定は在るときだけ出す**（`describeCommitmentAppraisal` は無ければ `null`）。
+    // 未評定に「未評定」と刷らない —— 印が無いことがその状態である（MCP の一覧と同じ規則）。
+    const appraisal = describeCommitmentAppraisal(commitment);
+    if (appraisal !== null) lines.push(`      ${appraisal}`);
   });
 
   return { text: lines.join('\n'), ids };

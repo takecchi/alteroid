@@ -227,6 +227,34 @@ export function useCloseCommitment() {
 }
 
 /**
+ * 評定を付ける／覆す（`POST /commitments/:id/appraise`。#1054）。
+ *
+ * **片付いた行にも未了の行にも通る。** サーバが断るのは無い id だけである
+ * （`CommitmentStore.appraise` の doc）。⟹ **ここで「片付いた行だけ」のような
+ * 先回りの判定を書かないこと** — `useEditCommitment` と同じ理由で、サーバの線を
+ * 画面へ写すと、線が変わった日に画面だけが黙ってずれる。
+ *
+ * **`reason` は任意。** 画面のボタン1つで付けられる経路を塞がないため
+ * （そのぶん、なぜその評定なのかは書かれないことがある）。
+ */
+export function useAppraiseCommitment() {
+  const api = useApi();
+  const refresh = useRefreshCommitments();
+  return useCallback(
+    async (id: string, appraisal: 'good' | 'bad' | 'unclear', reason?: string) => {
+      expectOk(
+        await api.api.POST('/commitments/{id}/appraise', {
+          params: { path: { id } },
+          body: reason === undefined ? { appraisal } : { appraisal, reason },
+        }),
+      );
+      await refresh();
+    },
+    [api, refresh],
+  );
+}
+
+/**
  * 台帳の本文を後から直す（人間の直接編集、`PATCH /commitments/:id`）。
  *
  * **可否の判定はサーバに聞く。** ここで先回りして弾かない。画面

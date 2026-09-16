@@ -9,6 +9,8 @@ import { deriveMemoryFrontmatter, nextDescribedState } from './memory.js';
 import { matchesJournalSearch } from './journal-search.js';
 import type {
   Commitment,
+  CommitmentAppraisal,
+  CommitmentAppraisedBy,
   CommitmentClosedBy,
   CommitmentEditedBy,
   InboxEvent,
@@ -633,6 +635,19 @@ export function createMemoryStores(): Stores {
         closedIds.push(id);
       }
       return closedIds;
+    },
+    // **片付いた行にも未了の行にも付く**（`CommitmentStore.appraise` の doc）。
+    // 断るのは無い id だけ。**`reason` を渡さなければ前の理由を消す**——残すと
+    // 覆したあとに前の書き手の理由が新しい値の理由として残る（本物2つと同じ）。
+    async appraise(id, at, value: CommitmentAppraisal, by: CommitmentAppraisedBy, reason) {
+      const existing = commitments.get(id);
+      if (!existing) return false;
+      // `delete` で落とす理由は fs 版と同じ（捨て変数を eslint が許さない）。
+      const next: Commitment = { ...existing, appraisal: value, appraisedAt: at, appraisedBy: by };
+      delete next.appraisalReason;
+      if (reason !== undefined) next.appraisalReason = reason;
+      commitments.set(id, next);
+      return true;
     },
     // **`origin` の判定はしない**（`CommitmentStore.editBody` の doc）。呼び出し側
     // （`apps/daemon/src/app.ts` の `PATCH /commitments/:id`）が確かめてから呼ぶ。

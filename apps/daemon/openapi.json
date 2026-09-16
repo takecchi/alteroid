@@ -5534,6 +5534,20 @@
                             "description": "既知の値は 'clone' | 'human'（commitmentClosedBySchema）。無いこともある（この欄が入る前の行）。台帳の完全性より由来の注記の厳密さを優先しないため、型としては任意の文字列を許す。",
                             "type": "string"
                           },
+                          "appraisal": {
+                            "type": "string"
+                          },
+                          "appraisedAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "appraisedBy": {
+                            "type": "string"
+                          },
+                          "appraisalReason": {
+                            "type": "string"
+                          },
                           "bodyMarkup": {
                             "type": "string"
                           },
@@ -5821,6 +5835,96 @@
                   }
                 },
                 "required": ["reason"]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      }
+    },
+    "/commitments/{id}/appraise": {
+      "post": {
+        "operationId": "postCommitmentsByIdAppraise",
+        "tags": ["commitments"],
+        "summary": "引き受けた仕事に評定（うまくいったか）を付ける",
+        "description": "クローンの `commitment_appraise` と同じものを人間の手から。**片付いた行にも未了の行にも付けられ、何度でも上書きできる。** クローンが付けた評定を人間が覆したときは、覆す前の値が日誌に残る（評定そのものを較正する材料になる）。**`reason` は任意** — 画面のボタン1つで付けられる経路を塞がないため。",
+        "responses": {
+          "200": {
+            "description": "付けた（上書きを含む）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": ["ok"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が JSON として不正（`appraisal` が既知の値でない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "その id は台帳に無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "appraisal": {
+                    "type": "string",
+                    "enum": ["good", "bad", "unclear"]
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": ["appraisal"]
               }
             }
           }

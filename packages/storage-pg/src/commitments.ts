@@ -1,6 +1,8 @@
 import { commitmentSchema, UnreadableCommitmentError } from '@alteroid/core';
 import type {
   Commitment,
+  CommitmentAppraisal,
+  CommitmentAppraisedBy,
   CommitmentClosedBy,
   CommitmentEditedBy,
   CommitmentList,
@@ -263,6 +265,43 @@ export class PgCommitmentStore implements CommitmentStore {
       .where(and(inArray(commitments.id, [...ids]), isNull(commitments.closedAt)))
       .returning({ id: commitments.id });
     return updated.map((row) => row.id);
+  }
+
+  /**
+   * 評定を書く（`CommitmentStore.appraise` の doc）。
+   *
+   * **`close()` / `editBody()` と違い `closed_at is null` で絞らない** ——
+   * 評定は片付いた行に付くのが通例で、未了の行にも付けられる。**断るのは
+   * 「無い id」だけである**（`returning` が空なら `false`）。
+   *
+   * **⚠️ `reason` を渡さなかったら、前の理由を消す（`- 'appraisalReason'`）。**
+   * 残すと、人間が理由無しで覆したときに**クローンが `good` と書いた理由が
+   * `bad` の理由として残る** —— 値だけ入れ替わって、説明が前の書き手のものに
+   * なる。`jsonb_set` は「渡さなければ触らない」ので、**消す側を明示的に
+   * 書かないとこの穴が開く。**
+   *
+   * 理由は人間が書いた自由文なので、`open()` と同じ理由で `stripNulls` を
+   * 通す（NUL が混ざりうる）。
+   */
+  async appraise(
+    id: string,
+    at: string,
+    value: CommitmentAppraisal,
+    by: CommitmentAppraisedBy,
+    reason?: string,
+  ): Promise<boolean> {
+    const base = sql`jsonb_set(jsonb_set(jsonb_set(${commitments.commitment}, '{appraisal}', ${JSON.stringify(value)}::jsonb, true), '{appraisedAt}', ${JSON.stringify(at)}::jsonb, true), '{appraisedBy}', ${JSON.stringify(by)}::jsonb, true)`;
+    const appraised =
+      reason === undefined
+        ? sql`(${base}) - 'appraisalReason'`
+        : sql`jsonb_set(${base}, '{appraisalReason}', ${JSON.stringify(stripNulls(reason))}::jsonb, true)`;
+
+    const updated = await this.#db
+      .update(commitments)
+      .set({ commitment: appraised })
+      .where(eq(commitments.id, id))
+      .returning({ id: commitments.id });
+    return updated.length > 0;
   }
 
   /**
