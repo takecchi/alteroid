@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -17,7 +17,7 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
  *
  * `package.json` の `scripts` に `check:*` を足しても、それだけでは何も検査
  * しない——`scripts/verify-core.mjs` の `STEPS`（`pnpm verify` / `pnpm test` 前の
- * 手元の一式）か `.github/workflows/ci.yml`（CI）のどちらかに `run:` / `args`
+ * 手元の一式）か `.github/workflows/` 配下のどれかに `run:` / `args`
  * として書かない限り、その道具は一度も実行されない。`check:sdk-quotes`
  * （#646）と `check:web-css-comment-classnames`（#317）は、どちらも実装が
  * 揃ってから配線されるまで期間が空いた。**「実装した」と「配線した」は別の
@@ -30,12 +30,12 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
  * 陳腐化する）、各名前が次のどれかに載っているかを見る。
  *
  * - `scripts/verify-core.mjs` の `STEPS` の `args` に `check:<name>` が在る
- * - `.github/workflows/ci.yml` に `run: pnpm check:<name>` の行が在る
+ * - `.github/workflows/` 配下の**どれか**に `run: pnpm check:<name>` の行が在る
  * - 下の `EXEMPT`（理由付きの免除表）に載っている
  *
  * ## この歯が測っていないこと
  *
- * - **`STEPS` / `ci.yml` に載っていることは見るが、実行されることまでは見ない。**
+ * - **`STEPS` / workflow に載っていることは見るが、実行されることまでは見ない。**
  *   `if:` 条件で実行されない形に変わっても、この歯は「書いてある」を見て緑を
  *   返す（`.github/scripts/verify-for-sdk-pr.test.ts` の同種の断りと同じ形）。
  * - **`EXEMPT` の `why` が正しいかは測っていない。** 非空の文字列が在ることしか
@@ -60,18 +60,48 @@ function wiredInVerifySteps(): Set<string> {
   return wired;
 }
 
-const CI_YML_TEXT = readFileSync(path.join(ROOT, '.github/workflows/ci.yml'), 'utf8');
+const WORKFLOWS_DIR = path.join(ROOT, '.github/workflows');
 
 /**
- * `ci.yml` の中に `run: pnpm check:<name>` の形で実際に呼ぶ行が在るか。
+ * `.github/workflows/` 配下の workflow ファイル全部。
  *
- * **単なる文字列の出現ではなく `run:` の行を見る。** `ci.yml` はこの検査自身の
+ * **⚠️ ここはかつて `ci.yml` 1本だけを読んでいた。** それは「門はすべて
+ * `ci.yml` の中に在る」という前提に乗っていて、**その前提は 2026-09-16 に崩れた**
+ * —— Issue #1097 の `pr-title-type` は、PR タイトルの後からの書き換えを捕まえる
+ * ために `pull_request.types` へ `edited` が要り、それを `ci.yml` へ足すと
+ * required な `ci` / `image` が本文の編集ごとに焼き直される。だから別 workflow
+ * （`.github/workflows/pr-title.yml`）へ置いた。
+ *
+ * ⟹ **`ci.yml` だけを見る形のままだと、この歯は「配線されているのに配線されて
+ * いない」と言う。** そして残る直し方は `EXEMPT` へ載せることだけで、それは
+ * **免除表に嘘を書く**ことになる（実際には呼ばれているのだから）。**免除表が嘘を
+ * 持つと、本物の穴——その workflow ごと消えて本当に呼ばれなくなった回——を
+ * この歯が二度と捕まえられない。**
+ *
+ * ⟹ 走査を `.github/workflows/` 全体へ広げる。**これは緩和ではなく、この歯の
+ * 元の意図（「どの門からも呼ばれていない穴を作らない」）そのものである** ——
+ * 門が `ci.yml` の中に在るかどうかは、その意図に一度も含まれていなかった。
+ */
+export const WORKFLOW_FILES: string[] = readdirSync(WORKFLOWS_DIR)
+  .filter((name) => name.endsWith('.yml') || name.endsWith('.yaml'))
+  .sort();
+
+const WORKFLOW_TEXTS: string[] = WORKFLOW_FILES.map((name) =>
+  readFileSync(path.join(WORKFLOWS_DIR, name), 'utf8'),
+);
+
+/**
+ * `.github/workflows/` 配下のどれかに `run: pnpm check:<name>` の形で実際に
+ * 呼ぶ行が在るか。
+ *
+ * **単なる文字列の出現ではなく `run:` の行を見る。** workflow はこの検査自身の
  * doc コメントの中で他の `check:*` の名前に触れることがあるので、コメント中の
  * 言及を「呼ばれている」と誤読しないよう、実行行の形に絞る。
  */
-function wiredInCiYml(name: string): boolean {
+function wiredInWorkflows(name: string): boolean {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(String.raw`run:\s*pnpm ${escaped}(?:\s|$)`, 'm').test(CI_YML_TEXT);
+  const pattern = new RegExp(String.raw`run:\s*pnpm ${escaped}(?:\s|$)`, 'm');
+  return WORKFLOW_TEXTS.some((text) => pattern.test(text));
 }
 
 /**
@@ -137,17 +167,33 @@ describe('check:* がどの門からも呼ばれていない穴を作らない�
     }
   });
 
-  it('どの check:* も、STEPS・ci.yml・免除表のどれかに載っている', () => {
+  /**
+   * **走査が空・1本だけ、を「該当なし」として静かに通さない。**
+   *
+   * `WORKFLOW_FILES` が0本になれば `wiredInWorkflows` は常に false を返し、
+   * 全部の `check:*` が「配線されていない」側へ倒れる——これは赤くなるので
+   * 気付ける。**気付けないのは逆で、走査が `ci.yml` 1本へ戻ったとき**である:
+   * そのとき落ちるのは「別 workflow に置かれた門」だけなので、`EXEMPT` へ
+   * 載せて黙らせる圧力が生まれる（上の `WORKFLOW_FILES` の doc を見よ）。
+   * **⟹ 走査が複数本を見ていることそのものを歯にする。**
+   */
+  it('走査対象の workflow が ci.yml 1本ではない（別 workflow の門を見落とさない）', () => {
+    expect(WORKFLOW_FILES).toContain('ci.yml');
+    expect(WORKFLOW_FILES).toContain('pr-title.yml');
+    expect(WORKFLOW_FILES.length).toBeGreaterThan(1);
+  });
+
+  it('どの check:* も、STEPS・workflow・免除表のどれかに載っている', () => {
     const exempt = new Set(EXEMPT.map((e) => e.script));
     const uncovered = checkScripts.filter(
-      (name) => !wiredSteps.has(name) && !wiredInCiYml(name) && !exempt.has(name),
+      (name) => !wiredSteps.has(name) && !wiredInWorkflows(name) && !exempt.has(name),
     );
     expect(
       uncovered,
       `【赤の意味】次の check:* が、scripts/verify-core.mjs の STEPS にも ` +
-        '.github/workflows/ci.yml の run: にも免除表にも載っていない: ' +
+        '.github/workflows/ 配下のどの run: にも免除表にも載っていない: ' +
         `${uncovered.join(' / ')}\n` +
-        '足した check:* は、STEPS（scripts/verify-core.mjs）へ足すか ci.yml の run: へ足すか、' +
+        '足した check:* は、STEPS（scripts/verify-core.mjs）へ足すか .github/workflows/ のどれかの run: へ足すか、' +
         'この歯（scripts/check-scripts-wired.test.ts）の EXEMPT へ理由付きで載せること。',
     ).toEqual([]);
   });
