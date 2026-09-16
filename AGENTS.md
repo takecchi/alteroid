@@ -441,6 +441,24 @@ git -C <main のツリー> apply --check -R /tmp/tail.patch   # 通れば main �
 
   ⭐ 同じ日の実測: 同じ「トレーラの数」という言葉で2人が別の式を使い、85 と 86 に分かれた（`🤖 Generated with` の数え方の違い。Issue #1020 コメント）。⟹ 数字を渡すときは*式と窓*（ref・母集団・対象）を一緒に渡すと、差は15秒で解ける。
 
+- **`git worktree` は `.git/config` を共有する ⟹ 設定に依存する検査は、worktree を分けても切り分けられない。** 実測（2026-09-16 観測）: `railway/setup.test.ts` の1件（`GIT_AUTHOR_* が無ければ GH_TOKEN だけ置く（身元が空なら置かない）`）が落ちた。自分の変更が壊したのかを切り分けるため、`git worktree add /tmp/base-main origin/main` で**素の main の作業ツリー**を作って同じテストを回したところ、**そこでも落ちた** ⟹ 「既存の失敗である（自分の変更とは無関係）」と結論しかけた。
+
+  🔴 **その切り分けは汚染されていた。** `git worktree` が作るツリーは**同じ `.git` を共有する**ので、`git config --local` で入れた設定が main 側の実行にも同じように効く。⟹ **両方が同じ原因で落ちていたのであって、「main でも落ちる」は「自分のせいではない」の根拠にならなかった。**
+
+  現物を読んで原因を特定 —— `railway/setup.sh` が身元を `git config user.name` にフォールバックしていた（逐語は `grep -Fn -- 'git config user.name' railway/setup.sh`。実測では288行目 — ⚠️ 行番号は動くので、逐語の grep を書くこと）:
+
+  ```
+  GIT_AUTHOR_NAME_VALUE="$(ask 'コミットの名前 (GIT_AUTHOR_NAME)' "$(git config user.name 2>/dev/null || true)")"
+  ```
+
+  `git config --unset user.name` / `git config --unset user.email` → **64/64 緑。**
+
+  🔑 **⟹ 言えること**: `git worktree` で作ったツリーは `.git/config`（`--local` の設定）を共有する。⟹ **設定に依存する検査は、worktree を分けても切り分けられない。**
+
+  ⚠ **言えないこと**: worktree が*何もかも*共有するわけではない（作業ツリーの中身・`HEAD`・index は別）。⟹ 「worktree は使うな」ではなく、**「設定に依存する検査の切り分けには使えない」まで。**
+
+  ⭐ **切り分けたいときの手**: 別ディレクトリへ**新しく clone する**（`.git` ごと別になる）か、疑っている設定を実際に外して回す。
+
 - **`gh pr view --json statusCheckRollup` は「どの sha の結果か」を返さない。force-push の直後は、古い head の結果を green として返す。** 実測（2026-08-23T06:34:13Z 観測、PR #292）: rebase して force-push（`7814d58` → `7b26a58`）した直後に CI 待ちのポーリングを始めたところ、**1回目で即座に `ci:COMPLETED:SUCCESS image:COMPLETED:SUCCESS` が返った。** 同じ時刻に sha を明示して引き直すと、実際の head はまだ走っていた:
 
   ```
