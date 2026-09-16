@@ -132,6 +132,10 @@ describe('migrate（archive の指紋・連続性列。#698）', () => {
  * ので、クローンはそれに気づけない。
  */
 describe('migrate（台帳の畳み込みの索引。#1041）', () => {
+  // **既定の 5s では足りない。** 他の migrate の歯は `beforeEach`（hookTimeout は
+  // 10s）で1周目を通すが、ここは警告の逐語と索引の在り無しを制御するため
+  // `migrate` を本体で通す。PGlite の起動と migrate を全体の並列実行の中で
+  // 走らせると 5s を超えることがあり、実際に全体を回して踏んだ。
   let client: PGlite;
   let db: Db;
 
@@ -165,7 +169,7 @@ describe('migrate（台帳の畳み込みの索引。#1041）', () => {
     await migrate(db, (line) => warnings.push(line));
     expect(await indexExists()).toBe(true);
     expect(warnings).toEqual([]);
-  });
+  }, 30_000);
 
   it('⭐ 既存の重複行が在っても migrate は落ちない —— 索引を作らず、件数と id を逐語で警告する', async () => {
     // 1周目は空の DB なので索引が作られる。**その索引を消してから重複を積む**
@@ -195,7 +199,7 @@ describe('migrate（台帳の畳み込みの索引。#1041）', () => {
       .from(commitments)
       .where(isNull(commitments.closedAt));
     expect(open).toHaveLength(3);
-  });
+  }, 30_000);
 
   it('⭐ 重複が片付けば、次の起動で索引は黙って作られる', async () => {
     await migrate(db);
@@ -215,7 +219,7 @@ describe('migrate（台帳の畳み込みの索引。#1041）', () => {
     await migrate(db, (line) => warnings.push(line));
     expect(await indexExists()).toBe(true);
     expect(warnings).toEqual([]);
-  });
+  }, 30_000);
 
   /**
    * **2周目でだけ壊れる状態を挟む**（`migrate.ts` 冒頭の doc と、直上の
@@ -228,5 +232,5 @@ describe('migrate（台帳の畳み込みの索引。#1041）', () => {
     await managerRow('row-2', '二言め');
     await migrate(db);
     expect(await indexExists()).toBe(true);
-  });
+  }, 30_000);
 });
