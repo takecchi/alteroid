@@ -193,10 +193,13 @@ export const FORBIDDEN_IN_JUDGEMENT = [
 
 /** 判定の種別ごとの文面テンプレート。`mutationId` を差し込んで完成させる。 */
 const JUDGEMENT_TEMPLATES = {
-  検出: (mutationId) => `変異 ${mutationId}: 検出 — この歯はこの変異を捕まえた`,
+  検出: (mutationId) => `変異 ${mutationId}: 検出 — 宣言した歯がこの変異を捕まえた`,
   生存: (mutationId) =>
     `変異 ${mutationId}: 生存 — この歯はこの変異を検出できない\n次にやること: 歯を強める。緩めるのではない`,
   不明: (mutationId) => `変異 ${mutationId}: 不明 — 変異が成果物へ届いていない（生存ではない）`,
+  身代わり: (mutationId) =>
+    `変異 ${mutationId}: 身代わり — 赤くなったのは宣言した歯ではない（検出ではない）\n` +
+    `次にやること: 証跡の [残った] を読む。宣言した歯はこの変異を測れていない`,
 };
 
 function assertNoForbiddenWords(text, contextLabel) {
@@ -470,7 +473,58 @@ function undeliveredGatePassed(artifactResult) {
  * という事実そのものを理由に拒む。詳細と理由は `assertAggregateBlocksUnambiguous`
  * の doc。
  */
-export function decideJudgementCategory(artifactResult, testResult, scaffoldControl) {
+/**
+ * 変異 spec が宣言した「狙いの歯」（`mustFail`）を検査して Set にして返す。
+ *
+ * **なぜ宣言させるか（#993）。** 判定はこれまで `surviving` を**件数**へ潰していた
+ * ——「何本落ちたか」だけを見て「**どの歯が落ちたか**」を見ていない。だから
+ * **測っていた歯が緑のままでも、無関係な歯が1本赤くなれば「検出」と名乗った。**
+ * 実測（2026-09-16、#993）: `packages/core/src/excerpt.ts` の3行ブロック2行目の
+ * 末尾へ半角スペースを1つ足す変異で、P1（`fiveFieldViolations`）は緑のまま
+ * P2 系の7本だけが赤くなり、判定は「検出」だった。**P1 を測るつもりでこれを
+ * 撃った人は「P1 は効く」と読む。P1 は1度も反応していない。**
+ *
+ * **⚠️ これは「差し引く集合を人が宣言する」形ではない。** そちらは意図して
+ * 禁じられている（`measureScaffoldControl` の doc と、
+ * `scripts/mutate-scaffold-control.test.ts` の「spec に「既知の失敗」を宣言する
+ * 項目を書いても無視される」の歯）。**区別は向きである:**
+ * - 禁じられている向き: 宣言が**赤を差し引く**（`検出` → `生存`、または対照の
+ *   実測を宣言で置き換える）＝ **判定を甘くできる口**
+ * - ここで足す向き: 宣言は `surviving` を1本も減らさず、**`検出` を名乗れる条件を
+ *   狭めるだけ**（`検出` → `身代わり`）＝ **厳しくする側にしか動かない**
+ *
+ * **一方向性は構造で保つ。** 宣言した集合は `surviving` が確定した**後**に、
+ * 交差を1度取るためだけに使う。`scaffoldSet` にも `diffScaffoldFailures` にも
+ * 渡さない。⟹ **何を宣言しても `生存` が `検出` へ変わることはなく、証跡の
+ * `[残った]` から名前が消えることもない**（歯が固定している）。
+ *
+ * **宣言が無ければ判定を出さない（fail-closed）。** 「宣言が無い」ことは
+ * 「どの歯でもよい」ことではない —— 門4 の「差し引く集合が不明であることは、
+ * 差し引く集合が0本であることとは違う」と同じ向きである。
+ */
+export function requireDeclaredTargetTeeth(mustFail, contextLabel) {
+  const declaredOk =
+    Array.isArray(mustFail) &&
+    mustFail.length > 0 &&
+    mustFail.every((name) => typeof name === 'string' && name.trim().length > 0);
+  if (!declaredOk) {
+    throw new HarnessError(
+      `落ちた歯が在るが、狙いの歯（mustFail）が宣言されていないので判定を出さない（${contextLabel}）。\n` +
+        'なぜ要るか: この判定は「何本落ちたか」ではなく「どの歯が落ちたか」で決める。' +
+        '宣言が無いと、測っていた歯が緑のままでも、無関係な歯の赤を「検出」と数える（#993）。\n' +
+        '書き方: 変異 spec に mustFail を足す。名前は vitest の FAIL 行と同じ' +
+        '「<ファイル> > <describe> > <it>」の形を、そのまま1本の文字列で書く。実例:\n' +
+        '  "mustFail": ["packages/core/src/excerpt.test.ts > 3行ブロック > 2行目は 作成 / 更新 の並びである"]\n' +
+        '名前の拾い方: 一度走らせて、証跡の区画「足場対照との差し引き」に出る' +
+        ' `[残った] <名前>` の行をそのまま写すこと（生ログの "FAIL " 行にも同じ文字列が出る）。\n' +
+        '⚠️ これは「既知の失敗」の宣言ではない。ここに書いた名前は赤を1本も差し引かない' +
+        '——「検出」と名乗れる条件を狭めるだけである。',
+    );
+  }
+  return new Set(mustFail);
+}
+
+export function decideJudgementCategory(artifactResult, testResult, scaffoldControl, mustFail) {
   if (artifactResult.artifactState === 'undelivered' && !undeliveredGatePassed(artifactResult)) {
     return '不明';
   }
@@ -531,7 +585,17 @@ export function decideJudgementCategory(artifactResult, testResult, scaffoldCont
         '"FAIL" で検索し、落ちた歯の名前を目で数えること。',
     );
   }
-  return diff.surviving.length === 0 ? '生存' : '検出';
+  // 差し引いた結果、この変異に起因する赤が1本も無い。宣言は要らない
+  // ——「どの歯が落ちたか」を問う前に、落ちた歯そのものが無い。
+  if (diff.surviving.length === 0) return '生存';
+
+  // ⭐ 門5（#993）。ここから先が「名前で決める」側である。**件数ではない。**
+  // 宣言した歯が `surviving` に居れば「検出」、居なければ「身代わり」。
+  // **宣言は `surviving` を1本も減らさない** —— 上の行で確定した配列へ、
+  // 下は交差を1度取るだけである（`requireDeclaredTargetTeeth` の doc の
+  // 「一方向性は構造で保つ」）。
+  const declared = requireDeclaredTargetTeeth(mustFail, 'decideJudgementCategory');
+  return diff.surviving.some((name) => declared.has(name)) ? '検出' : '身代わり';
 }
 
 // ── 印 ──────────────────────────────────────────────────────────────
@@ -628,6 +692,24 @@ export function validateSpec(spec) {
 
   if (!Number.isInteger(spec.expect) || spec.expect < 1) {
     problems.push(`expect は1以上の整数でなければならない（実際: ${JSON.stringify(spec.expect)}）`);
+  }
+
+  // ⭐ 狙いの歯の宣言（#993）。**無ければここで拒む——走らせる前に。**
+  // 判定側（門5）も同じ検査を持つが、そちらまで行くとテストを1回走らせた
+  // 後になる。宣言の不足は spec を読んだ時点で分かるので、最も早い場所で
+  // 返す（「何も書き込んでいない」段階のまま止める）。
+  // **これは「既知の失敗」の宣言ではない**——赤を1本も差し引かず、「検出」と
+  // 名乗れる条件を狭めるだけである（`requireDeclaredTargetTeeth` の doc）。
+  if (
+    !Array.isArray(spec.mustFail) ||
+    spec.mustFail.length === 0 ||
+    !spec.mustFail.every((name) => typeof name === 'string' && name.trim().length > 0)
+  ) {
+    problems.push(
+      'mustFail は1本以上の非空文字列の配列でなければならない（狙いの歯の名前を' +
+        '「<ファイル> > <describe> > <it>」の形で書く。証跡の `[残った]` 行か生ログの' +
+        ` "FAIL " 行から写す）。実際: ${JSON.stringify(spec.mustFail)}`,
+    );
   }
 
   if (problems.length > 0) {
@@ -1619,7 +1701,7 @@ export function measureScaffoldControl({ extraArgs = [], maxWorkers = DEFAULT_MA
  * `describeScaffoldSubtraction` の doc）。
  */
 export function judge(spec, artifactResult, testResult, scaffoldControl) {
-  const category = decideJudgementCategory(artifactResult, testResult, scaffoldControl);
+  const category = decideJudgementCategory(artifactResult, testResult, scaffoldControl, spec.mustFail);
   const text = formatJudgement(category, spec.id, {
     artifactState: artifactResult.artifactState,
     gateNote: describeUndeliveredTestResultGate(artifactResult),
