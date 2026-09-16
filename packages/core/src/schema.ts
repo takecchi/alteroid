@@ -1948,6 +1948,66 @@ export const commitmentClosedBySchema = z.enum(['clone', 'human']);
 export const commitmentEditedBySchema = z.enum(['clone', 'human']);
 
 /**
+ * その仕事が**どうだったか**（#1054。自己改善の段1）。
+ *
+ * ## なぜ `closedReason` だけでは足りないのか
+ *
+ * `closedReason` は自由記述なので、**数え上げられない** — 「この種類の仕事は
+ * 直近20件でどうだったか」が引けない。PRD「自己改善」が要求する「仕事の結末は
+ * 測られ」は、測った値が**集計できる形**で残ることを含む。
+ *
+ * **`closedReason` を置き換えるものではない。** あちらは「どう片付いたか」
+ * （経緯）で、こちらは「うまくいったか」（良し悪し）である。両方残す。
+ *
+ * ## ⛔ これは「評価基準」ではない。ラベルの**形**である
+ *
+ * 何を `good` とするかは**記憶**にあり、ここには無い（`docs/north_star.md` の
+ * `grep -Fn -- '「何を良い結果とするか」を設定項目や評価項目の一覧で表そうとしていないか' docs/north_star.md`、
+ * および `docs/PRD.md` の「要件: 自己改善」）。**ここに評価項目を増やしていくと、
+ * それが「評価基準の一覧」になり、権限境界が禁じた「行為の一覧」と同じ形になる。**
+ * 軸を足したくなったら、まず `appraisalReason` に同じ軸が繰り返し現れているかを
+ * 見ること。
+ *
+ * ## 3値。`unclear` を落とさないこと
+ *
+ * - `good` — うまくいった
+ * - `bad` — うまくいかなかった
+ * - `unclear` — **見たが判定できない**（材料が無い・どちらとも言える）
+ *
+ * **`unclear` と「欄が無い（まだ評定していない）」は別物である。** 前者は見た
+ * 結果で、後者は見ていない。2値に畳むと、判定できない場合がどちらかへ黙って
+ * 倒れる（AGENTS.md「判定できないという3つ目の状態を持つ」）。そして**未評定を
+ * `good` 側にも `bad` 側にも混ぜない** — 混ぜた瞬間、測っていないことが出力から
+ * 消える（同「取れない軸に 0 の行を作る」）。
+ *
+ * ## 履歴は持たない。持つのは**いまの値**だけである
+ *
+ * 「クローンが `good` と言い、人間が `bad` に覆した」は**日誌**から読む（追記
+ * 専用なので上書きされない）。行の側に履歴を積むと、台帳の1行が伸び続ける。
+ * これは `MemoryProtectionStatus` と同じ非対称で、**実体は日誌にあり、ここに
+ * 在るのはその時点の値**である。
+ */
+export const commitmentAppraisalSchema = z.enum(['good', 'bad', 'unclear']);
+export type CommitmentAppraisal = z.infer<typeof commitmentAppraisalSchema>;
+
+/**
+ * 評定を**誰が付けたか**。
+ *
+ * **`commitmentClosedBySchema` / `commitmentEditedBySchema` と値は同じ
+ * （`'clone' | 'human'`）だが、別の enum として置く。** 書き手ごとの規則が違う
+ * ためである — `editedBy` は「書き換えられるのは常に自分自身の言葉だけ」という
+ * 線を持つが（`commitmentEditedBySchema` の doc）、**評定はどの行にも両者が
+ * 付けられる。人間がクローンの評定を覆せることが要件そのものである**（#1054）。
+ * 共用すると、片方の線を動かしたときにもう片方が黙って一緒に動く。
+ *
+ * **保存された行を読む側（`commitmentSchema.appraisedBy`）はこの enum を直接
+ * 使わない。** 理由は `commitmentClosedBySchema` の doc と全く同じである — 未知の
+ * enum 値1つで台帳の一覧が丸ごと読めなくなる側へ倒さない。
+ */
+export const commitmentAppraisedBySchema = z.enum(['clone', 'human']);
+export type CommitmentAppraisedBy = z.infer<typeof commitmentAppraisedBySchema>;
+
+/**
  * 引き受けたまま終わっていない仕事1件（PRD「自律」の器を、単発の依頼へ広げたもの）。
  *
  * **なぜ受信箱と日誌だけでは足りないか。** 受信箱の未読はプロセスが死んでも残るが、
@@ -2064,6 +2124,38 @@ export const commitmentSchema = z.object({
    * **`origin: 'manager'` 以外では立たない。** `commitmentFor` の他の
    * `case` は `bodyMarkup` を書かないので、`undefined` のままである。
    */
+  /**
+   * **いまの評定**（#1054。`commitmentAppraisalSchema` の doc に3値の意味と、
+   * なぜ履歴をここに積まないかが書いてある）。
+   *
+   * **無いことは「まだ評定していない」であって、「普通」でも「良くない」でも
+   * ない。** 数えるときに `good` 側にも `bad` 側にも寄せないこと。
+   *
+   * **型は `z.string()` で緩く持つ**（`closedBy` / `bodyMarkup` と同じ理由 —
+   * 未知の値1つで台帳の一覧が丸ごと読めなくなる側へ倒さない）。書き込み側は
+   * `CommitmentStore.appraise` の引数の型で `commitmentAppraisalSchema` に
+   * 縛ってあるので、**この器が書く値は3つに限られる。**
+   */
+  appraisal: z.string().optional(),
+  /** 評定を付けた（または覆した）時刻。評定が在れば必ず在る。 */
+  appraisedAt: isoDateTime.optional(),
+  /**
+   * 評定を**誰が付けたか**（既知の値は `commitmentAppraisedBySchema`）。
+   *
+   * **人間がクローンの評定を覆すと、この欄は `'human'` になる。** 覆される前に
+   * クローンが何と言っていたかは**日誌**に残る（追記専用）— 評価する側を較正
+   * する材料はそちらにあり、ここではない（`docs/PRD.md`「要件: 自己改善」の
+   * 「評価する側も誤りうる前提で作る」）。
+   */
+  appraisedBy: z.string().optional(),
+  /**
+   * 評定の理由（1行）。
+   *
+   * **`closedReason` とは別の欄である。** あちらは「どう片付いたか」で、
+   * こちらは「なぜその評定なのか」である。**軸を足したくなったらここを先に
+   * 読むこと**（`commitmentAppraisalSchema` の doc）。
+   */
+  appraisalReason: z.string().optional(),
   bodyMarkup: z.string().optional(),
   /**
    * `body` を最後に直した時刻。編集していなければ無い。
