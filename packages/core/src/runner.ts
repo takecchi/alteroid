@@ -316,9 +316,10 @@ export interface RunnerHost {
    * ⛔ ネットワークを一切使わない。出す粒度は有無・件数・枝名まで
    * （`unpushedWorkResultSchema` の doc）。
    */
-  unpushedWork(managerId: string, options?: { signal?: AbortSignal }): Promise<
-    UnpushedWorkResult | undefined
-  >;
+  unpushedWork(
+    managerId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<UnpushedWorkResult | undefined>;
   /** 全セッションを畳む。プロセスが消えるときだけ呼ぶ。 */
   shutdown(): Promise<void>;
   /**

@@ -183,7 +183,13 @@ async function probeBranch(
   env: Record<string, string | undefined>,
   timeoutMs: number,
 ): Promise<string | null> {
-  const result = await runGit(spawnFn, ['rev-parse', '--abbrev-ref', 'HEAD'], repoRoot, env, timeoutMs);
+  const result = await runGit(
+    spawnFn,
+    ['rev-parse', '--abbrev-ref', 'HEAD'],
+    repoRoot,
+    env,
+    timeoutMs,
+  );
   if (result.timedOut || result.exitCode !== 0) return null;
   const branch = result.stdout.trim();
   // `HEAD` はそのものが detached HEAD の印（`git rev-parse --abbrev-ref HEAD`
@@ -216,7 +222,9 @@ async function probeUnpushedCommitCount(
   }
   const parsed = Number.parseInt(result.stdout.trim(), 10);
   if (!Number.isFinite(parsed)) {
-    return { unpushedCommitCountUnknown: '確かめられなかった（git の出力を数値として読めなかった）' };
+    return {
+      unpushedCommitCountUnknown: '確かめられなかった（git の出力を数値として読めなかった）',
+    };
   }
   return { unpushedCommitCount: parsed };
 }
@@ -286,7 +294,8 @@ export async function computeUnpushedWork(
     const relative = relativePath.length === 0 ? '.' : relativePath;
     if (options.signal?.aborted === true) {
       stoppedEarly = true;
-      const reason = '確かめられなかった（呼び出し元の期限切れで、この作業ツリーへ進む前に打ち切った）';
+      const reason =
+        '確かめられなかった（呼び出し元の期限切れで、この作業ツリーへ進む前に打ち切った）';
       worktrees.push({
         relativePath: relative,
         branch: null,

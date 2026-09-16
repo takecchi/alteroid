@@ -1280,10 +1280,7 @@ export interface ManagerPool {
    * 潰れる。spec 生成専用のスタブ（`apps/daemon/src/openapi.ts`）へは1行
    * 足すだけで済む。
    */
-  unpushedWork(
-    managerId: string,
-    options?: { signal?: AbortSignal },
-  ): Promise<ManagerUnpushedWork>;
+  unpushedWork(managerId: string, options?: { signal?: AbortSignal }): Promise<ManagerUnpushedWork>;
   /**
    * この archive id が、いまデーモンが走行中として抱えている（`#records` に
    * 居る）マネージャーのどれかの退避なら、その managerId を返す（#698）。

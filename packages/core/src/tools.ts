@@ -6679,12 +6679,10 @@ export function createCloneTools(context: ToolContext) {
             .unpushedWork(managerId, {
               signal: AbortSignal.timeout(MANAGER_STOP_UNPUSHED_WORK_TIMEOUT_MS),
             })
-            .catch(
-              (error: unknown): ManagerUnpushedWork => ({
-                kind: 'unavailable',
-                reason: `確かめようとして例外が飛んだ: ${String(error)}`,
-              }),
-            );
+            .catch((error: unknown): ManagerUnpushedWork => ({
+              kind: 'unavailable',
+              reason: `確かめようとして例外が飛んだ: ${String(error)}`,
+            }));
 
           return text(
             `[${managerId}] 止めていない。**いまターンの途中**（running）— 畳むと未 push の実装・` +
