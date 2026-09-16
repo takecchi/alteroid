@@ -1426,6 +1426,40 @@ export function flakyInboxRemove(
   };
 }
 
+/**
+ * `inbox.put` を最初の `failCount` 回だけ失敗させ、それ以降は本物へ委ねる。
+ *
+ * **`#remember` の拾い直し（issue #1085、`REMEMBER_RETRY_ATTEMPTS`）を試す
+ * ためのもの。** `flakyInboxRemove` の書き込み版——`#remember` は一時的な
+ * 失敗を拾い直せば実際に書ける、というのを黒箱（`stores.inbox` の中身）
+ * から確かめる。呼ばれた event の `id` は `calls` に積む。
+ */
+export function flakyInboxPut(
+  stores: Stores,
+  failCount: number,
+  reason: string,
+): { stores: Stores; calls: string[] } {
+  const calls: string[] = [];
+  let remaining = failCount;
+  return {
+    calls,
+    stores: {
+      ...stores,
+      inbox: {
+        ...stores.inbox,
+        put: (event, at) => {
+          calls.push(event.id);
+          if (remaining > 0) {
+            remaining -= 1;
+            return Promise.reject(new Error(reason));
+          }
+          return stores.inbox.put(event, at);
+        },
+      },
+    },
+  };
+}
+
 /** ジョブ台帳の書き込みだけを失敗させる（読みは通す）。 */
 export function failingJobWrite(stores: Stores, reason: string): Stores {
   return {

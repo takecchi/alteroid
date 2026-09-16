@@ -494,7 +494,9 @@ describe('未読の永続化', () => {
     await clone.stop();
   });
 
-  it('未読を書けなくても post は落ちない。跡は stderr に1行で、本文は出ない', async () => {
+  it('未読を書けなくても post は落ちない。有界の拾い直しが尽きたあと、跡が stderr に1行残る（本文は出ない、issue #1085）', async () => {
+    // `failingInboxPut` は無条件で失敗させ続けるので、`REMEMBER_RETRY_ATTEMPTS`
+    // （3回）を使い切って諦める側を通す。
     const stores = failingInboxPut(createMemoryStores(), '器が閉じている');
     const secret = 'GH_TOKEN=ghp_000000000000000000000000000000000000';
 
@@ -503,19 +505,26 @@ describe('未読の永続化', () => {
       // 未読を書けないことでその合図の処理まで止めない（塞ぐべき穴より広くなる）。
       clone.post(humanMessage(secret));
       await waitFor(() => inputs.length > 0, '合図が処理に入る');
+      // 拾い直しの間隔（`REMEMBER_RETRY_MS` × (1+2) ≒ 600ms）ぶん待って
+      // 諦めきるのを待つ。
+      await new Promise((resolve) => setTimeout(resolve, 1000));
       await clone.stop();
     });
 
-    const trace = lines.filter((line) => line.includes('未読の合図を記録できませんでした'));
+    // **`noteDroppedRecord`（「記録できませんでした」）ではなく専用の跡。**
+    // 「落とした」と名乗らず、実際の帰結（このプロセスが生きているあいだは
+    // 配達され、器が入れ替われば失われる）が読める（issue #1085）。
+    const trace = lines.filter((line) => line.includes('未読の合図をストアへ書けませんでした'));
     expect(trace).toHaveLength(1);
     expect(trace[0]).toContain('器が閉じている');
+    expect(trace[0]).toContain('器が入れ替われば');
     // 本文は出さない（テスト出力に GH_TOKEN が全文で出た前例がある。
     // railway/setup.test.ts の差分アサーション、#52）。
     expect(lines.join('')).not.toContain(secret);
     expect(lines.join('')).not.toContain('ghp_');
     // 長さだけは出す（「空だった」と「書けなかった」の区別が付く）。
     expect(trace[0]).toContain(`chars=${secret.length}`);
-  });
+  }, 10_000);
 
   it('消し込みが書き込みを追い越さない（追い越すと永久に配り直される）', async () => {
     const base = createMemoryStores();

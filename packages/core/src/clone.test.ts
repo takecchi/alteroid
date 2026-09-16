@@ -52,7 +52,9 @@ import type { ToolContext } from './tools.js';
 import {
   captureStderr,
   createMemoryStores,
+  failingInboxPut,
   failingJournalAppend,
+  flakyInboxPut,
   flakyInboxRemove,
   humanMessage,
   seedFingerprintlessArchiveRow,
@@ -4840,6 +4842,67 @@ describe('クローン — commitment_close と inbox.remove の消し込み（i
     const pending = await stores.inbox.claimPending();
     expect(pending.some((p) => p.event.id === event.id)).toBe(true);
     expect(calls.length).toBe(3);
+
+    await s.clone.stop();
+  }, 10_000);
+});
+
+/**
+ * `#remember` の `inbox.put` 拾い直し（issue #1085）。
+ *
+ * `#forget`（直上の #256）の書く側の対——`put()` の一時的な失敗を
+ * `REMEMBER_RETRY_ATTEMPTS` 回まで拾い直し、尽きても `post` を落とさず、
+ * 「落とした」ではなく実際の帰結（このプロセスが生きているあいだは配達
+ * される・器が入れ替われば失われる）が読める跡を残す。
+ */
+describe('クローン — #remember の inbox.put 拾い直し（issue #1085）', () => {
+  it('put() が一過性に失敗しても、拾い直して DB に書かれる', async () => {
+    const base = createMemoryStores();
+    // 最初の2回だけ失敗させ、3回目（REMEMBER_RETRY_ATTEMPTS の最後）で成功させる。
+    const { stores, calls } = flakyInboxPut(base, 2, '瞬断');
+    // ターンをゆっくり終わらせ、`#forget`（拾い直しの完了を待ってから消す）が
+    // 先に動いて DB から消してしまう前に、書けたことを観測する窓を作る。
+    const s = setup(() => 'わかった', stores, { delayMs: 1500 });
+
+    const event = humanMessage('やあ');
+    s.clone.post(event);
+
+    await waitFor(async () => {
+      const pending = await stores.inbox.claimPending();
+      return pending.some((p) => p.event.id === event.id);
+    }, '拾い直した末に DB へ書かれる');
+    expect(calls.length).toBe(3);
+
+    await waitForDone(s.events);
+    await s.clone.stop();
+  }, 10_000);
+
+  it('拾い直しても書けなければ、post は落ちずに配達は続き、跡は「落とした」と名乗らない', async () => {
+    const stores = failingInboxPut(createMemoryStores(), '恒久的な障害');
+    const s = setup(() => 'わかった', stores);
+
+    const event = humanMessage('やあ');
+    const lines = await captureStderr(async () => {
+      s.clone.post(event);
+      // 未読を書けないことでその合図の処理まで止めない——ターンは走り切る。
+      await waitForDone(s.events);
+      // 拾い直しの間隔（`REMEMBER_RETRY_MS` × (1+2) ≒ 600ms）ぶん待って
+      // 諦めきるのを待つ。
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+    });
+
+    // **post は落ちていない**——ターンは最後まで走り、`done` が届いている
+    // （直上の `waitForDone` がそれを確かめている）。
+    //
+    // **跡は「記録できませんでした」だけで終わらない。** 実際には失っていない
+    // （このプロセスが生きているあいだは配達される）ことと、本当の帰結
+    // （器が入れ替われば失われる）の両方が読める。
+    const trace = lines.filter((line) => line.includes('未読の合図をストアへ書けませんでした'));
+    expect(trace).toHaveLength(1);
+    expect(trace[0]).toContain('恒久的な障害');
+    expect(trace[0]).not.toContain('落とし');
+    expect(trace[0]).toContain('失ってはいない');
+    expect(trace[0]).toContain('器が入れ替われば');
 
     await s.clone.stop();
   }, 10_000);
