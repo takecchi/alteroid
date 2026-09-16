@@ -16684,7 +16684,7 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
    * `SELF_JOURNALING_CLONE_TOOLS`（`archive_remove` は #698 で加わった）
    * から導いた期待値と突き合わせる。
    *
-   * `manager_send` / `manager_stop` を除く理由: この2本は `ManagerPool` の
+   * `manager_send` / `manager_stop` / `manager_appraise` を除く理由: この3本は `ManagerPool` の
    * ガード付き `#journal`（`clone.ts`）を通るので `appendJournalOrThrow` を
    * 呼ばない——`SELF_JOURNALING_CLONE_TOOLS` に載っているのは「自前で日誌へ
    * 書く」という性質の名簿であって、その書き方が `appendJournalOrThrow`
@@ -16694,9 +16694,9 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
    * `SELF_JOURNALING_CLONE_TOOLS` に足されたとき、`CASES` にケースを
    * 足し忘れるとこの歯が「ケースが足りない」と言って赤くなる。
    */
-  it('CASES の道具名の集合は、SELF_JOURNALING_CLONE_TOOLS から manager_send / manager_stop を除いたものと一致する', () => {
+  it('CASES の道具名の集合は、SELF_JOURNALING_CLONE_TOOLS から manager_send / manager_stop / manager_appraise を除いたものと一致する', () => {
     const EXPECTED_TOOLS = SELF_JOURNALING_CLONE_TOOLS.filter(
-      (name) => name !== 'manager_send' && name !== 'manager_stop',
+      (name) => name !== 'manager_send' && name !== 'manager_stop' && name !== 'manager_appraise',
     );
     const actualTools = [...new Set(CASES.map((c) => c.tool))];
     expect(actualTools.sort()).toEqual([...EXPECTED_TOOLS].sort());

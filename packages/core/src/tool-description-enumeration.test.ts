@@ -108,6 +108,11 @@ const SUBJECTS: readonly EnumerationSubject[] = [
     source: () => appraisalSchema.options,
   },
   {
+    tool: 'manager_appraise',
+    label: 'appraisalSchema の値（packages/core/src/schema.ts）',
+    source: () => appraisalSchema.options,
+  },
+  {
     tool: 'self_status',
     label: 'CLONE_RUNTIME_ITEM_LABELS（packages/core/src/self.ts）',
     source: () => CLONE_RUNTIME_ITEM_LABELS,

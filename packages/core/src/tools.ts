@@ -355,6 +355,7 @@ export const CLONE_TOOL_NAMES = [
   'self_dropped',
   'manager_start',
   'manager_send',
+  'manager_appraise',
   'manager_stop',
   'manager_list',
   'manager_report',
@@ -406,6 +407,7 @@ export const SELF_JOURNALING_CLONE_TOOLS = [
   'profile_write',
   'manager_start',
   'manager_send',
+  'manager_appraise',
   'manager_stop',
   'archive_remove',
 ] as const satisfies readonly CloneToolName[];
@@ -6539,6 +6541,39 @@ export function createCloneTools(context: ToolContext) {
      * クローン側にしか配線が無い）。マネージャーが自分や隣の仕事を止められる
      * ようになると、M4 の制御面分離が意味を失う。
      */
+    tool(
+      'manager_appraise',
+      [
+        '**委譲がうまくいったかどうか**の評定を付ける（後から付け直してもよい）。',
+        '**`manager_report` で報告を読んだら、そのまま付けること。**',
+        '評定は `good`（うまくいった）/ `bad`（うまくいかなかった）/ `unclear`（見たが判定できない）の3つで、**迷ったら `unclear`**。',
+        '⚠️ **`status` とは別の軸である** —— `done` は「セッションが終わった」であって「良かった」ではない。',
+        '走行中の委譲にも付けられる。**人間がこれを覆すことがあり、覆された事実は評定そのものを較正する材料になる。**',
+      ].join(' '),
+      {
+        managerId: z.string().describe('manager_list に出ている id'),
+        appraisal: appraisalSchema.describe(
+          'good=うまくいった / bad=うまくいかなかった / unclear=見たが判定できない。' +
+            '**迷ったら unclear を選ぶこと。** good と bad へ無理に寄せると、' +
+            '測れていないものが測れたことになる',
+        ),
+        reason: z
+          .string()
+          .optional()
+          .describe(
+            'なぜその評定なのか（1行）。**書くこと。** ここに同じ軸が繰り返し' +
+              '現れるかどうかが、評定に軸を足すかどうかの唯一の判断材料である',
+          ),
+      },
+      async ({ managerId, appraisal, reason }) => {
+        if (!context.managers) return NO_POOL;
+        // **日誌も「前の値」も `ManagerPool.appraise` が持つ。** ここで書き下ろすと、
+        // 人間の口（HTTP）と2箇所になり、片方だけ直したときに黙ってずれる。
+        const result = await context.managers.appraise(managerId, appraisal, 'clone', reason);
+        return text(result.detail);
+      },
+    ),
+
     tool(
       'manager_stop',
       [

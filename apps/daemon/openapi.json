@@ -6447,6 +6447,18 @@
                           "sessionId": {
                             "type": "string"
                           },
+                          "appraisal": {
+                            "type": "string"
+                          },
+                          "appraisedAt": {
+                            "type": "string"
+                          },
+                          "appraisedBy": {
+                            "type": "string"
+                          },
+                          "appraisalReason": {
+                            "type": "string"
+                          },
                           "lastReport": {
                             "type": "string"
                           },
@@ -6829,6 +6841,18 @@
                           "type": "string"
                         },
                         "sessionId": {
+                          "type": "string"
+                        },
+                        "appraisal": {
+                          "type": "string"
+                        },
+                        "appraisedAt": {
+                          "type": "string"
+                        },
+                        "appraisedBy": {
+                          "type": "string"
+                        },
+                        "appraisalReason": {
                           "type": "string"
                         },
                         "lastReport": {
@@ -7368,6 +7392,96 @@
                   }
                 },
                 "required": ["text"]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      }
+    },
+    "/managers/{id}/appraise": {
+      "post": {
+        "operationId": "postManagersByIdAppraise",
+        "tags": ["managers"],
+        "summary": "委譲に評定（うまくいったか）を付ける",
+        "description": "クローンの `manager_appraise` と同じものを人間の手から。**走行中の委譲にも終端した委譲にも付けられ、何度でも上書きできる。** クローンが付けた評定を人間が覆したときは、覆す前の値が日誌に残る（評定そのものを較正する材料になる）。**⚠️ `status` とは別の軸である** —— `done` は「セッションが終わった」であって「良かった」ではない。",
+        "responses": {
+          "200": {
+            "description": "付けた（上書きを含む）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": ["ok"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が JSON として不正（`appraisal` が既知の値でない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "そのマネージャーは台帳に居ない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "appraisal": {
+                    "type": "string",
+                    "enum": ["good", "bad", "unclear"]
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": ["appraisal"]
               }
             }
           }
