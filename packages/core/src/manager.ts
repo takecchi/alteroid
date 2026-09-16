@@ -4540,16 +4540,43 @@ class Pool implements ManagerPool {
       // 終わった時点（`case 'report'` / `case 'closed'`）に起きる。
       if (outcome === 'still-running') continue;
       /*
-       * **挑むのは1回きり。届かなくても印を下ろす。**
+       * **`'skipped'`（届かなかった）は印を残す。下ろすのは `'nudged'`（届いた）と
+       * `'gone'`（起こす相手がもう居ない／起こしてはいけない）だけである
+       * （Issue #914 最終段）。
        *
-       * 残す形にすると、戻れない委譲（`lost` で生ログも無い等）が**回転のたびに
-       * 一言を投げられ続ける**——鍵が回る頻度は枠の単位（5時間）で決まるので
-       * 暴走はしないが、失敗が並ぶだけの行が増える。
+       * ## なぜ以前は1回きりだったか、なぜいまは変えられるか
+       *
+       * **以前ここには「挑むのは1回きり。届かなくても印を下ろす」と書いてあった。**
+       * 論拠は「残す形にすると、戻れない委譲（`lost` で生ログも無い等）が回転の
+       * たびに一言を投げられ続ける」——鍵の回転は枠の単位（5時間）で決まるので
+       * 暴走はしないが、無駄な一言が並ぶ、というものだった。
+       *
+       * **その論拠は、いまは成り立たない。** `case 'resume_failed'` の「回復
+       * しなかった」枝（`event.recovered === false`）が、戻れないと確定した
+       * 委譲を `lost` へ落とすのと**同じタイミングで** `#usageWakeOwed` と印
+       * （`Set` ＋台帳の写し）も一緒に畳む（`#clearUsageStoppedMark` の doc）。
+       * ⟹ 「戻れない委譲に回転のたびに投げ続ける」口は既に閉じている——回転が
+       * 一言を投げるのは、まだ `done` / `failed` / `lost` のまま台帳に残っている
+       * （＝いつか戻るかもしれない）委譲だけである。
+       *
+       * **そして残さない側に倒すと、Issue #914 の症状そのものに落ちる。**
+       * 空振り（`send()` が届かない・投げる）が一度でも起きると、印が無ければ
+       * その委譲が次に拾われるには**新しい `usage_notice`（`kind === 'reached'`）
+       * が要り、それにはその委譲自身がターンを回す必要がある**——回すには
+       * 誰かが起こす必要があり、起こす手段がまさにこの機構である。⟹ 空振り
+       * 1回で「クローンが手で `manager_send` を打つまで戻らない」に落ちる。
+       * 印を残せば、次の鍵の回転でもう一度この委譲を挑戦の対象に含められる。
+       *
+       * **回数上限・時間間隔は置かない。** 暴走が構造で抑えられているのは
+       * 上と同じ理由（鍵の回転の契機は枠の単位で決まる／戻れない委譲は
+       * `resume_failed` で畳まれる）で、実測なしに数を決めない
+       * （AGENTS.md「踏みやすい地雷」）。
        *
        * **落としているのではない。** 起こせなかったことは日誌に残り、枠に当たった
        * 報告そのものはクローンの受信箱に残っている（`case 'usage_notice'` が
-       * `#emit` する）ので、判断はクローンの側に在る。
+       * `#emit` する）ので、判断はクローンの側にも在る。
        */
+      if (outcome === 'skipped') continue;
       await this.#clearUsageStoppedMark(managerId);
       this.#usageWakeOwed.delete(managerId);
       if (outcome === 'nudged') nudged.push(managerId);
@@ -4561,11 +4588,18 @@ class Pool implements ManagerPool {
    * 枠で止まっていた1本へ、続きを促す一言を投げる。**印と借りは呼び出し側が
    * 下ろす**（呼び出し元によって下ろす条件が違う）。
    *
-   * | 戻り値 | 意味 |
-   * | --- | --- |
-   * | `'nudged'` | 届いた（同じ会話の続きとして流れた） |
-   * | `'still-running'` | まだ走っている・人間の回答待ち ⟹ いまは起こせない |
-   * | `'skipped'` | 起こす相手が居ない・止められている・届かなかった |
+   * | 戻り値 | 意味 | 呼び出し元（`resumeStoppedByUsage`）は印をどうするか |
+   * | --- | --- | --- |
+   * | `'nudged'` | 届いた（同じ会話の続きとして流れた） | **下ろす** |
+   * | `'still-running'` | まだ走っている・人間の回答待ち ⟹ いまは起こせない | 残す（`continue`。借りは別に控えてある） |
+   * | `'gone'` | 起こす相手がもう居ない／起こしてはいけない（台帳から消えている・`stopped`） | **下ろす**（残しても次も同じ結果） |
+   * | `'skipped'` | 相手は居るが、届かなかった（`send()` が失敗・投げた） | **残す**（次の鍵の回転でもう一度挑む） |
+   *
+   * **`'gone'` と `'skipped'` を分けるのはここが理由である。** 前者（台帳に
+   * 居ない・`stopped`）は印を残しても次に挑んでも同じ結果にしかならないので
+   * 無害だが無意味——下ろしてよい。後者（`send()` が届かない）は次に挑めば
+   * 結果が変わりうる——人間・クローンが止めたわけではない委譲の印を下ろすと、
+   * 次の鍵の回転でも二度と拾われなくなる（Issue #914 の症状そのもの）。
    *
    * **起こすのは「もう走っていない」委譲だけである。**
    *
@@ -4585,11 +4619,13 @@ class Pool implements ManagerPool {
    * 委譲が誰にも起こされないまま残る（`#restoreJobs` のジョブループが同じ理由で
    * 同じ形にしてある）。
    */
-  async #nudgeForUsageRotation(managerId: string): Promise<'nudged' | 'still-running' | 'skipped'> {
+  async #nudgeForUsageRotation(
+    managerId: string,
+  ): Promise<'nudged' | 'still-running' | 'gone' | 'skipped'> {
     try {
       const record = this.#records.get(managerId) ?? (await this.#load(managerId));
-      // 台帳から消えている（人間が消した等）。起こす相手が居ない。
-      if (record === null) return 'skipped';
+      // 台帳から消えている（人間が消した等）。起こす相手が居ない ⟹ `'gone'`。
+      if (record === null) return 'gone';
       const status = record.job.status;
       if (status === 'running' || status === 'waiting_human') return 'still-running';
       if (status !== 'done' && status !== 'failed' && status !== 'lost') {
@@ -4602,7 +4638,8 @@ class Pool implements ManagerPool {
             `（status=${status}）。`,
           grounds: '人間・クローンが止めた委譲を、鍵が戻ったことを理由に甦らせない。',
         });
-        return 'skipped';
+        // 起こしてはいけない相手 ⟹ `'gone'`（`'skipped'` とは違い、印は下ろしてよい）。
+        return 'gone';
       }
       /*
        * **`send()` に相乗りする（新しい経路を作らない）。** 生きたセッションが
@@ -7507,10 +7544,22 @@ class Pool implements ManagerPool {
            * **欄が既に立っているなら persist しない。** `usage_notice` は
            * ターンごとに何度も届きうるので、そのたびに書き込むと無駄な書き込みが
            * 積み上がる。
+           *
+           * **⚠️ 書き込みの失敗で、この下を巻き添えにしない。** ここより下に
+           * 回し手への受け渡し（`#observeForTokenRotation`）が在り、それが
+           * **鍵を回す契機そのもの**である——台帳が書けなかったという理由で
+           * ここが投げると、枠に当たったことが回し手へ届かず、**鍵が回らないまま
+           * 全員が止まる。** 印の永続化が足しているのは「次のデーモンでも拾える」
+           * であって、**いま回すことより優先しない**——書けなければ、この欄が
+           * 無かった頃と同じ（プロセス内の `Set` だけ）へ落ちるだけである。
            */
           if (record.job.usageStoppedAt === undefined) {
             record.job.usageStoppedAt = new Date(this.#now()).toISOString();
-            await this.#persist(record);
+            try {
+              await this.#persist(record);
+            } catch (error) {
+              noteDroppedRecord('枠で止まった印の永続化', `managerId=${event.managerId}`, error);
+            }
           }
         }
 

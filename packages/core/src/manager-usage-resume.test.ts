@@ -50,11 +50,21 @@ const JOB: Job = {
  * `resume` の中身を控える**（この検証はそこを測る）。`list()` は引き取りの相手に
  * なるので、本物と同じく「いま載っているセッション」を返す。
  */
+/**
+ * **`send()` を空振りさせるための切り替え**（`'skipped'` を作る側の細工）。
+ *
+ * `'ok'` が既定で、これまでどおり届く。`'throw'` にすると `runner.send()` が
+ * 例外を投げる——`#sendDetectingMissingSession` は `RunnerHttpError`（404）
+ * だけを値へ変えるので、それ以外の例外は `Pool.send()` を素通りして
+ * `#nudgeForUsageRotation` の `catch` へ落ち、`'skipped'` になる（resume
+ * 経路には入らない。届かなかったことだけを作るための最小の細工）。
+ */
 function nudgeRunner() {
   let emit: ((event: RunnerEvent) => void) | null = null;
   const alive: RunnerManagerState[] = [];
   const sends: { managerId: string; text: string }[] = [];
   const resumes: RunnerResumeCommand[] = [];
+  const behavior: { sendMode: 'ok' | 'throw' } = { sendMode: 'ok' };
 
   const runner: RunnerClient = {
     runnerId: 'runner-primary',
@@ -79,6 +89,9 @@ function nudgeRunner() {
       });
     },
     async send(managerId, text) {
+      if (behavior.sendMode === 'throw') {
+        throw new Error('この検証が仕込んだ送信エラー（空振りを作るための細工）');
+      }
       sends.push({ managerId, text });
       return true;
     },
@@ -121,6 +134,7 @@ function nudgeRunner() {
     runner,
     sends,
     resumes,
+    behavior,
     push(event: RunnerEvent): void {
       if (emit === null) throw new Error('connect されていない（名乗る前に流している）');
       emit(event);
@@ -281,13 +295,17 @@ describe('枠で止まった委譲を、鍵が通る状態へ戻った時点で�
     expect(s.fake.sends).toHaveLength(0);
   });
 
-  it('人間・クローンが止めた委譲は甦らせない（R4。判断は日誌に残る）', async () => {
+  it('⚠️ 陰性対照: 人間・クローンが止めた委譲は甦らせず、印も永久には残らない（R4。判断は日誌に残る）', async () => {
     const s = await setup();
     s.fake.push(reached());
     await settle();
     await s.pool.abort('mgr-usage');
     s.fake.sends.length = 0;
     s.fake.resumes.length = 0;
+
+    // 止めた時点では、印（台帳の写し）はまだ立ったままである。
+    const beforeAbortResume = await s.stores.jobs.listJobs();
+    expect(beforeAbortResume[0]?.usageStoppedAt).toBeDefined();
 
     const nudged = await s.pool.resumeStoppedByUsage();
 
@@ -298,6 +316,13 @@ describe('枠で止まった委譲を、鍵が通る状態へ戻った時点で�
     // （届かなかった・像が無かった）で起きなかった回と区別できない。
     const jobs = await s.stores.jobs.listJobs();
     expect(jobs[0]?.status).toBe('stopped');
+    /*
+     * **これが `'skipped'`（届かなかった）とは違う分岐であることの固定。**
+     * `'skipped'` なら印を残すが、`stopped` は `'gone'`（起こしてはいけない
+     * 相手）に分類され、印を下ろす——残すと、人間・クローンが止めた委譲の
+     * 印が台帳に永久に残ってしまう（Issue #914 最終段）。
+     */
+    expect(jobs[0]?.usageStoppedAt).toBeUndefined();
     const entries = await s.stores.journal.list({ limit: 200 });
     expect(
       entries.some(
@@ -407,7 +432,7 @@ describe('枠で止まった委譲を、鍵が通る状態へ戻った時点で�
     expect(s.fake.resumes[0]?.sessionId).toBe('sess-1');
   });
 
-  it('挑むのは1回きり。2度目の回転で同じ委譲へ二重に投げない', async () => {
+  it('⚠️ 陰性対照: 届いた回はこれまでどおり1回きり（`nudged` は印を下ろすので、二度目の回転で二重に投げない）', async () => {
     const s = await setup();
     s.fake.push(reached());
     s.fake.push(failedReport());
@@ -416,6 +441,67 @@ describe('枠で止まった委譲を、鍵が通る状態へ戻った時点で�
     expect(await s.pool.resumeStoppedByUsage()).toEqual(['mgr-usage']);
     expect(await s.pool.resumeStoppedByUsage()).toEqual([]);
     expect(s.fake.sends).toHaveLength(1);
+  });
+
+  /**
+   * **⭐ Issue #914 最終段の本題。** 空振り（`send()` が届かない・投げる）は
+   * `'skipped'` を返し、`'nudged'`（届いた）や `'gone'`（起こす相手がもう
+   * 居ない・`stopped`）とは違って印を残す——残さないと、この委譲が次に拾われる
+   * には新しい `usage_notice`（`kind === 'reached'`）が要り、それにはこの委譲
+   * 自身がターンを回す必要がある。回すには誰かが起こす必要があり、起こす手段が
+   * まさにこの機構である ⟹ 空振り1回で「クローンが手で `manager_send` を打つ
+   * まで戻らない」に落ちる。ここが対象になるのは `done` / `failed` / `lost` の
+   * どれで座っていても同じである（{@link Pool.#nudgeForUsageRotation} のホワイト
+   * リスト）。
+   */
+  it('⭐ 空振りしても印が残り、次の回転で起こされる（`skipped` は下ろさない）', async () => {
+    const s = await setup();
+    s.fake.push(reached());
+    s.fake.push(failedReport()); // status → 'done'。usageStoppedAt が台帳に立つ。
+    await settle();
+
+    // **1回目は届かない**（`send()` が例外を投げる細工）。
+    s.fake.behavior.sendMode = 'throw';
+    const first = await s.pool.resumeStoppedByUsage();
+    expect(first).toEqual([]);
+    expect(s.fake.sends).toHaveLength(0);
+    expect(s.fake.resumes).toHaveLength(0);
+
+    // **印（台帳の写し）が残っている。** 空振りは `'gone'` ではない。
+    const mid = await s.stores.jobs.listJobs();
+    expect(mid[0]?.usageStoppedAt).toBeDefined();
+
+    // **2回目は届く** ⟹ 残っていた印のおかげで、この委譲がまだ対象に入る。
+    s.fake.behavior.sendMode = 'ok';
+    const second = await s.pool.resumeStoppedByUsage();
+    expect(second).toEqual(['mgr-usage']);
+    expect(s.fake.sends).toHaveLength(1);
+
+    // 実際に届いた後は、これまでどおり印が下りる。
+    const after = await s.stores.jobs.listJobs();
+    expect(after[0]?.usageStoppedAt).toBeUndefined();
+  });
+
+  it('⭐ 空振りの後にデーモンが入れ替わっても、写しが残っているので新しい Pool が起こす', async () => {
+    const s = await setup();
+    s.fake.push(reached());
+    s.fake.push(failedReport());
+    await settle();
+
+    // 空振り。印は同じデーモンのプロセス内にも、台帳の写しにも残る。
+    s.fake.behavior.sendMode = 'throw';
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([]);
+
+    // **デーモンの入れ替わり。** 新しい Pool はプロセス内の `Set` を持たない
+    // ——台帳の写し（`Job.usageStoppedAt`）だけが頼りである（Issue #914 段2と
+    // 同じ仕組みを、空振りを跨いだ場合について固定する）。
+    const s2 = await reopen(s.stores);
+    const nudged = await s2.pool.resumeStoppedByUsage();
+
+    expect(nudged).toEqual(['mgr-usage']);
+    // 新しい Pool には生きたセッションが無いので resume 経由で届く。
+    expect(s2.fake.resumes).toHaveLength(1);
+    expect(s2.fake.resumes[0]?.sessionId).toBe('sess-1');
   });
 });
 
