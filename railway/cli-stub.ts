@@ -9,7 +9,7 @@
  * （既存に足す）は同じ `railway` を叩くので、偽物を2つ持つと片方だけが本物の
  * 応答の形に追いつく。追いつけていない側は**緑のまま嘘を確かめる**。
  */
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -252,9 +252,11 @@ type Prepared = {
 };
 
 /**
- * `runScript` / `runScriptAsync` に共通する下ごしらえ（一時ディレクトリ・偽 CLI・
- * `.env`・引き継ぐ環境）。**プロセスをどう起こすか（同期 `spawnSync` か非同期
- * `spawn` か）だけが両者で違う**ので、それ以外はここと下の `finish` に寄せてある。
+ * `runScriptAsync` の下ごしらえ（一時ディレクトリ・偽 CLI・`.env`・引き継ぐ環境）。
+ * ⚠️ **かつては同期版 `runScript`（`spawnSync`）ともここを共有していた**——
+ * プロセスをどう起こすかだけが両者で違う形にしてあったが、同期版は #1100 の後で
+ * 呼ぶ場所が無くなり削った（`runScriptAsync` の直前のコメントに詳しい）。
+ * `finish`（下）と合わせて、いまは1つの呼び出し元しか無い。
  */
 function prepare(options: RunOptions): Prepared {
   const dir = mkdtempSync(join(tmpdir(), 'alteroid-railway-test.'));
@@ -285,8 +287,10 @@ function prepare(options: RunOptions): Prepared {
 }
 
 /**
- * 子プロセスが終わった後、投げられた入力と終了状態を `Run` へ組み立てる
- * （`runScript` / `runScriptAsync` 共通）。
+ * 子プロセスが終わった後、投げられた入力と終了状態を `Run` へ組み立てる。
+ * ⚠️ かつては `runScript`（同期版）とも共有していたが、その関数自体を
+ * 削った（`runScriptAsync` の直前のコメント）ので、いまの呼び出し元は
+ * `runScriptAsync` だけである。
  */
 function finish(options: RunOptions, prepared: Prepared, exitCode: number, stderr: string): Run {
   options.onEnvFile?.(prepared.envFile);
@@ -352,39 +356,22 @@ function finish(options: RunOptions, prepared: Prepared, exitCode: number, stder
 }
 
 /**
- * スクリプトを1回走らせ、投げられた入力と終了状態を返す（同期）。
+ * スクリプトを1回走らせ、投げられた入力と終了状態を返す（非同期、`spawn`）。
  *
- * ⚠️ **`scale-runners.test.ts` はこちらを使い続けている。** 非同期版
- * （`runScriptAsync`、下）を足したのは `setup.test.ts` の準備段を並行化するため
- * で、同期版を無くす理由にはならない——呼び出し側を書き換えるのはそちら側の
- * 仕事であって、この足場の役目ではない。
- */
-export function runScript(options: RunOptions): Run {
-  const prepared = prepare(options);
-
-  // **`spawnSync` である（`execFileSync` ではない）。** `execFileSync` は成功したときに
-  // stdout しか返さず、stderr は例外の中にしか入らない。この2つのスクリプトは進捗も
-  // 警告も**全部 stderr へ出す**（値を `$(…)` で受けるため）ので、成功した実行の
-  // stderr が取れないと「何をすると言ったか」を確かめるテストが**空文字と比べて
-  // 静かに通る**（`--dry-run` が何も出していなくても緑になる、が実際に出た）
-  const result = spawnSync('bash', [join(RAILWAY_DIR, options.script), ...options.args], {
-    env: prepared.env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    encoding: 'utf8',
-  });
-
-  if (result.error) throw result.error;
-  return finish(options, prepared, result.status ?? 1, result.stderr ?? '');
-}
-
-/**
- * `runScript` の非同期版（`spawn`）。**足した理由は `setup.test.ts` の準備段（28回
- * ぶんの `setup.sh` 実行）を直列ではなく並行に走らせるため**である（#1093 —
- * 直列に起こすと、器が混んでいる時間だけ `it` の所要時間が伸びて
- * `testTimeout` を超える）。
+ * **足した理由は `setup.test.ts` の準備段（28回ぶんの `setup.sh` 実行）を
+ * 直列ではなく並行に走らせるため**である（#1093 — 直列に起こすと、器が
+ * 混んでいる時間だけ `it` の所要時間が伸びて `testTimeout` を超える）。
  *
- * 下ごしらえ（`prepare`）と結果の組み立て（`finish`）は同期版と共有する。
- * 違うのは子プロセスをどう待つかだけである。
+ * ⚠️ **かつては同期版（旧 `runScript`、`spawnSync` を使うもの）も在った。**
+ * `scale-runners.test.ts` が `it` の中で直接スクリプトを起こしていた間は
+ * そちらを使い続けていたが、#1100 でその呼び出しを全部 `prepareScenarios`
+ * （`runLimited` による並行実行）へ寄せたことで、**同期版を呼ぶ箇所が
+ * リポジトリ全体から無くなった**（削る直前の実測 2026-09-16: 呼び出し側の
+ * 検索は0件、当たったのは定義行そのものだけだった）。使う側が無いまま残すと
+ * 「使われている」という嘘の手がかりを次に読む人へ渡すことになるので、ここで
+ * 削った。**下ごしらえ（`prepare`）と結果の組み立て（`finish`）は元から同期版と
+ * 非同期版で共有していたヘルパーで、削ったのは `spawnSync` を呼ぶ薄い皮だけ
+ * である**——挙動の変更は無い。
  */
 export function runScriptAsync(options: RunOptions): Promise<Run> {
   const prepared = prepare(options);
