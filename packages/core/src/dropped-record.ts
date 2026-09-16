@@ -802,6 +802,16 @@ export function setStderrSinkForTesting(sink: ((line: string) => void) | null): 
  * ついても出す**（「空だった」と「書けなかった」の区別が付く。型によって出したり
  * 出さなかったりすると、跡の読み方が型ごとに変わる）。
  *
+ * **入れ子オブジェクト（`turn_usage.contextUsage` / `context_usage.contextUsage`
+ * のような、それ自体が構造を持つ欄）の中へは踏み込まない。** この関数が扱うのは
+ * 各エントリの第1階層までで、入れ子の中に新しい自由文が増えても、この関数の
+ * 判定はその増分を知らない——だから増やすときは、その入れ子を持つ `case` の側で
+ * 個別に「載せる／載せない」を決める（`case 'context_usage'` の `contextUsage` の
+ * doc を見よ）。**「入れ子は全部同じ規則で再帰的に判定する」という一般化はして
+ * いない**——schema の版が動く場所（SDK 由来の入れ子）ほど既定を「出ない」側に
+ * 置きたく、alteroid 自身が決める入れ子（`inbox_flow` の `arrived`/`delivered`
+ * 等）は総数・件数だけを出す、というように入れ子ごとに判断が違うためである。
+ *
  * **⚠️ 唯一の例外は `tool_use` の `input` である。長さも出さない。** 理由は2つ
  * とも `size()` を使わない側に倒す:
  *
@@ -899,6 +909,11 @@ export function journalEntryShape(entry: JournalEntryInput): string {
     // 自由文を経由して秘密が混ざる経路が無い。それでも中身の数値までは
     // 載せない（跡はここまでで十分 — どのモデルで何件かが分かれば、ストアが
     // 書ける状態に戻してから読める）。
+    //
+    // `contextUsage`（`turn_usage.contextUsage`）には、下の `case
+    // 'context_usage'` と**同じ判断**が掛かる——同じ schema
+    // （`contextUsageObservationSchema`）なので、決めた理由もそちらに
+    // 書く（二重に書かない）。
     case 'turn_usage':
       return (
         `turn_usage layer=${tag(entry.layer)} site=${tag(entry.site)} ` +
@@ -971,10 +986,36 @@ export function journalEntryShape(entry: JournalEntryInput): string {
       );
     // `layer`/`site`/`managerId`/`sessionId` は `turn_usage` と同じ判定基準。
     // `turnSucceeded` は runner 自身が決める真偽値なのでそのまま載せる。
-    // **`contextUsage`（構造化された欄）は載せない**——`turn_usage.contextUsage`
-    // と同じ判断（PR #709 が別判断へ回した欄。このファイル冒頭の
-    // `journalEntryShape` の doc の「唯一の例外」と同じ理由ではなく、単に
-    // この関数がまだ入れ子の中まで踏み込む形を持っていない）。
+    //
+    // **`contextUsage`（構造化された欄）は載せない。中身は、入れ子のどの
+    // 階層も跡へ出さない——これは保留ではなく #981 で決めた判断である。**
+    //
+    // 中に在る自由文は3つだけ（`error` / `categories[].name` /
+    // `categories[].kind`）。**どれも値を決めるのは SDK 側であって
+    // alteroid ではない**——この関数の判定基準（「自由文かどうか」ではなく
+    // 「値を誰が決めるか」）で見ても、そのまま載せてよい側には来ない。
+    //
+    // **`error` は「伏せ字済み」ではない。** `usage-probe.ts` の
+    // `describeProbeError` が通す `redactEnvSecrets` は `env` の値の
+    // **完全一致の文字列置換だけ**で、その doc 自身が「単純な文字列置換
+    // なので、値が変形されて出てきた場合までは塞げない」と明記している。
+    // ⟹ 「伏せ字済みだから載せてよい」という理由では通らない。
+    //
+    // **⚠️ この判断は非対称である。** 跡の行き先は日誌ではなく stderr＝
+    // ホスティング先のログで、このファイル冒頭の doc が言うとおり
+    // 「日誌はまだ持ち主しか読まないが、stderr は器の外へ出ていく」。
+    // **出さない→出すは後から広げられるが、逆は戻せない。**
+    //
+    // `categories` の要素まで含めて、入れ子の欄が増えたら
+    // `dropped-record.test.ts` の名簿（`CONTEXT_USAGE_SHAPE_PLAN` /
+    // `CONTEXT_USAGE_CATEGORY_SHAPE_PLAN`。#981 で足した）の歯が赤くなる。
+    //
+    // **`size()` へ逃がして長さだけ出す案（この関数の他の全ケースの作法）
+    // は検討して採らなかった。** この関数が走るのは日誌への書き込みが
+    // **既に失敗した後**で、そこで観測の成否を知って変わる手が無い
+    // （疑うべきはストアの側）。得が小さく、かつ戻せない側の変更を広げる
+    // ことになるので採らなかった。**禁止ではない**——実際に掘れなかった
+    // 実例を1つ持ってきたら、そのときに広げてよい。
     case 'context_usage':
       return (
         `context_usage layer=${tag(entry.layer)} site=${tag(entry.site)} ` +
