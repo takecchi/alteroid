@@ -116,10 +116,10 @@ import {
   COMMITMENT_APPRAISAL_DECISION_PREFIX,
   JOURNAL_ENTRY_TYPES,
   approvalUpdatedAt,
-  commitmentAppraisalSchema,
+  appraisalSchema,
   commitmentOriginSchema,
   commitmentUpdatedAt,
-  describeCommitmentAppraisal,
+  describeAppraisal,
   jobStatusSchema,
   scheduleKindSchema,
   scheduleSpecSchema,
@@ -127,7 +127,7 @@ import {
 import type {
   ChatStreamEvent,
   Commitment,
-  CommitmentAppraisal,
+  AppraisalValue,
   CommitmentOrigin,
   JobStatus,
   JournalEntry,
@@ -1626,7 +1626,7 @@ function formatJournalNotRecordedMessage(
  * **返すのは人間（クローン）へ返す1文である。** 呼び出し側はこれを連結する。
  *
  * **前の評定を日誌へ添える。** 行の側は「いまの値」しか持たないので
- * （`commitmentAppraisalSchema` の doc）、前の値がどこにも残らないと「誰がどう
+ * （`appraisalSchema` の doc）、前の値がどこにも残らないと「誰がどう
  * 言っていたか」を突き合わせる材料が消える —— それは PRD「要件: 自己改善」の
  * 「評価する側も誤りうる前提で作る」が要求している較正そのものを不可能にする。
  * **前が無かった回も残す**（初回か付け直しかは、数え上げるときに要る区別である）。
@@ -1634,11 +1634,11 @@ function formatJournalNotRecordedMessage(
 async function writeAppraisal(
   stores: Stores,
   id: string,
-  value: CommitmentAppraisal,
+  value: AppraisalValue,
   reason: string | undefined,
 ): Promise<string> {
   const before = await stores.commitments.get(id);
-  const previous = before === null ? null : describeCommitmentAppraisal(before);
+  const previous = before === null ? null : describeAppraisal(before);
   if (!(await stores.commitments.appraise(id, new Date().toISOString(), value, 'clone', reason))) {
     return `（評定は付けられなかった —— ${id} が台帳に無い）`;
   }
@@ -4866,9 +4866,9 @@ export function createCloneTools(context: ToolContext) {
           // 後ろに置くと `page()` の2ページ目へ落ちて、**いちばん要る1行が
           // 最初の呼びで出てこない。** 読み順としては逆だが、切れる側に
           // 落ちてよい欄ではない。
-          // **評定は在るときだけ出す**（`describeCommitmentAppraisal` は無ければ
+          // **評定は在るときだけ出す**（`describeAppraisal` は無ければ
           // `null`）。印が無い＝まだ評定していない、が読み手の側の規則である。
-          const appraisal = describeCommitmentAppraisal(entry);
+          const appraisal = describeAppraisal(entry);
           const body = [
             ...(entry.closedAt === undefined
               ? []
@@ -5001,9 +5001,9 @@ export function createCloneTools(context: ToolContext) {
               // **評定が在る行だけ1行増える。** 一覧は文字数の予算に張り付いて
               // いるので（`describeManagerFailure` の doc と同じ理由）、未評定の
               // 行に「未評定」と刷らない —— 印が無いことがその状態である。
-              ...(describeCommitmentAppraisal(entry) === null
+              ...(describeAppraisal(entry) === null
                 ? []
-                : [`  ${excerptLine(describeCommitmentAppraisal(entry) ?? '', 120)}`]),
+                : [`  ${excerptLine(describeAppraisal(entry) ?? '', 120)}`]),
             ],
           }),
         );
@@ -5251,7 +5251,7 @@ export function createCloneTools(context: ToolContext) {
             '何をもって片付いたとするか（やったこと、あるいはやらないと決めた理由）。' +
               '人間はこれを読んで後から否定する',
           ),
-        appraisal: commitmentAppraisalSchema
+        appraisal: appraisalSchema
           .optional()
           .describe(
             '**うまくいったか**（reason とは別の軸である。あちらは「どう片付いたか」）。' +
@@ -5330,7 +5330,7 @@ export function createCloneTools(context: ToolContext) {
       ].join(' '),
       {
         id: z.string().describe('commitment_list に出ている id'),
-        appraisal: commitmentAppraisalSchema.describe(
+        appraisal: appraisalSchema.describe(
           'good=うまくいった / bad=うまくいかなかった / unclear=見たが判定できない。' +
             '**迷ったら unclear を選ぶこと。** good と bad へ無理に寄せると、' +
             '測れていないものが測れたことになる',

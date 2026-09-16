@@ -3,9 +3,9 @@ import { stdin, stdout } from 'node:process';
 
 import {
   approvalUpdatedAt,
-  commitmentAppraisalSchema,
+  appraisalSchema,
   commitmentUpdatedAt,
-  describeCommitmentAppraisal,
+  describeAppraisal,
   describeManagerState,
   describeSessionMissingKind,
   jobStatusSchema,
@@ -1529,12 +1529,12 @@ export async function runSlashCommand(
         stdout.write(`[${reference}] は /commitments の一覧にありません\n`);
         return 'ok';
       }
-      // **ここで3値を数え直さない。** 器の `commitmentAppraisalSchema` に聞く
+      // **ここで3値を数え直さない。** 器の `appraisalSchema` に聞く
       // ——写すと、値が増えた日に CLI だけが黙って古いままになる。
-      const parsedValue = commitmentAppraisalSchema.safeParse(value);
+      const parsedValue = appraisalSchema.safeParse(value);
       if (!parsedValue.success) {
         stdout.write(
-          `評定は ${commitmentAppraisalSchema.options.join(' / ')} のどれかです（渡されたのは ${value}）\n`,
+          `評定は ${appraisalSchema.options.join(' / ')} のどれかです（渡されたのは ${value}）\n`,
         );
         return 'ok';
       }
@@ -2524,9 +2524,9 @@ export function renderCommitments(
         `      片付けた: ${commitment.closedAt ?? ''}  ${summarizeText(commitment.closedReason ?? '')}`,
       );
     }
-    // **評定は在るときだけ出す**（`describeCommitmentAppraisal` は無ければ `null`）。
+    // **評定は在るときだけ出す**（`describeAppraisal` は無ければ `null`）。
     // 未評定に「未評定」と刷らない —— 印が無いことがその状態である（MCP の一覧と同じ規則）。
-    const appraisal = describeCommitmentAppraisal(commitment);
+    const appraisal = describeAppraisal(commitment);
     if (appraisal !== null) lines.push(`      ${appraisal}`);
   });
 

@@ -1,4 +1,4 @@
-import { describeCommitmentAppraisal } from './schema.js';
+import { describeAppraisal } from './schema.js';
 import type { CommitmentStore } from './store.js';
 
 /**
@@ -52,7 +52,7 @@ export async function verifyCommitmentAppraisalContract(store: CommitmentStore):
   if (fresh === null) fail('開いた直後の行が読めない');
   if (fresh?.appraisal !== undefined)
     fail(`評定していない行に appraisal が在る: ${fresh.appraisal}`);
-  if (describeCommitmentAppraisal(fresh ?? {}) !== null) {
+  if (describeAppraisal(fresh ?? {}) !== null) {
     fail('未評定の行が字面を持っている（印が無いことが未評定の表し方である）');
   }
 

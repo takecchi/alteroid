@@ -31,9 +31,9 @@ import {
   commitmentPosition,
   commitmentRespondedAt,
   COMMITMENT_APPRAISAL_DECISION_PREFIX,
-  commitmentAppraisalSchema,
+  appraisalSchema,
   commitmentUpdatedAt,
-  describeCommitmentAppraisal,
+  describeAppraisal,
   compareApprovalPagingKey,
   compareCommitmentPosition,
   computeSupersededIds,
@@ -653,13 +653,13 @@ const commitmentCloseBody = z.object({ reason: z.string().min(1) });
  * 評定（#1054）。**`reason` は任意である** —— 画面のボタン1つで付けられる経路を
  * 塞がないため（`CommitmentStore.appraise` の doc）。
  *
- * **`appraisal` は `commitmentAppraisalSchema` をそのまま使う。** ここで
+ * **`appraisal` は `appraisalSchema` をそのまま使う。** ここで
  * `z.enum(['good', ...])` を書き直すと、値が増えたときに黙ってずれる口が1つ
  * 増える（この repo が「実装が持つ一覧を説明文が数え直す」形で繰り返し踏んだ
  * のと同じ穴。`packages/core/src/tool-description-enumeration.test.ts` の doc）。
  */
 const commitmentAppraiseBody = z.object({
-  appraisal: commitmentAppraisalSchema,
+  appraisal: appraisalSchema,
   reason: z.string().min(1).optional(),
 });
 
@@ -3236,7 +3236,7 @@ export function createApp(deps: AppDeps) {
         // 取れず、覆した事実が日誌から消える。
         const before = await stores.commitments.get(id);
         if (before === null) return c.json({ error: 'not found' as const }, 404);
-        const previous = describeCommitmentAppraisal(before);
+        const previous = describeAppraisal(before);
         if (
           !(await stores.commitments.appraise(
             id,

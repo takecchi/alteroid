@@ -23,7 +23,7 @@ import {
 } from '~/hooks/mutations';
 import { useCommitments } from '~/hooks/queries';
 import type {
-  CommitmentAppraisal,
+  AppraisalValue,
   CommitmentClosedBy,
   CommitmentOrigin,
   TextMarkup,
@@ -970,7 +970,7 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
  *
  * **`@alteroid/core` から実行時の値を import しない。** この画面の他のラベル
  * （`ORIGIN_LABEL` / `originLabel`）と同じ作法で、**網羅性は `never` で強制する**
- * （下の `assertAppraisalHandled`）。器の `commitmentAppraisalSchema` に値が
+ * （下の `assertAppraisalHandled`）。器の `appraisalSchema` に値が
  * 1つ足されると、`appraisalLabel` の `switch` がその値を決めるまで `tsc` が
  * 通らない。
  *
@@ -978,13 +978,13 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
  * → `unclear` の順は「良い・悪い・分からない」で、**`unclear` を端に置くこと
  * 自体に意味がある** —— 真ん中に置くと「中間の評価」に見えるが、これは
  * 中間ではなく**測れなかった**という別の軸の値である
- * （`commitmentAppraisalSchema` の doc）。
+ * （`appraisalSchema` の doc）。
  */
-const APPRAISAL_CHOICES: readonly CommitmentAppraisal[] = ['good', 'bad', 'unclear'];
+const APPRAISAL_CHOICES: readonly AppraisalValue[] = ['good', 'bad', 'unclear'];
 
 /**
  * **網羅性チェック専用（ビルド時）。** `assertOriginHandled` / `assertClosedByHandled`
- * と同型。`commitmentAppraisalSchema` に値が足されたのに `APPRAISAL_CHOICES` が
+ * と同型。`appraisalSchema` に値が足されたのに `APPRAISAL_CHOICES` が
  * 追いついていないと、ここが型エラーになる。
  *
  * **呼ぶこと自体が保証であって、戻り値は使わない**（`never` 型の変数をそのまま
@@ -997,11 +997,11 @@ function assertAppraisalHandled(value: never): void {
 /**
  * `APPRAISAL_CHOICES` が3値を全部持っていることを、**型で**言う。
  *
- * `commitmentAppraisalSchema` に値を足すと `CommitmentAppraisal` が広がり、
+ * `appraisalSchema` に値を足すと `AppraisalValue` が広がり、
  * この関数の `switch` がその値を返さないので `assertAppraisalHandled` の
  * 引数が `never` にならず、**`pnpm typecheck` がここで落ちる。**
  */
-function appraisalLabel(value: CommitmentAppraisal): string {
+function appraisalLabel(value: AppraisalValue): string {
   switch (value) {
     case 'good':
       return 'うまくいった';
@@ -1023,7 +1023,7 @@ function appraisalLabel(value: CommitmentAppraisal): string {
  * （`docs/PRD.md`「要件: 自己改善」）。
  *
  * **⚠️ 「未評定」を「普通」として描かないこと。** 何も選ばれていない状態は
- * **まだ測っていない**という観測そのものである（`commitmentAppraisalSchema` の
+ * **まだ測っていない**という観測そのものである（`appraisalSchema` の
  * doc）。だから既定で選ばれているボタンを作らず、選ばれていないことがそのまま
  * 見えるようにしてある。
  *
@@ -1033,10 +1033,10 @@ function appraisalLabel(value: CommitmentAppraisal): string {
 function AppraisalControl({ commitment }: { commitment: Commitment }) {
   const appraise = useAppraiseCommitment();
   const [reason, setReason] = useState('');
-  const [busy, setBusy] = useState<CommitmentAppraisal | null>(null);
+  const [busy, setBusy] = useState<AppraisalValue | null>(null);
   const [failure, setFailure] = useState<unknown>(undefined);
 
-  async function submit(value: CommitmentAppraisal) {
+  async function submit(value: AppraisalValue) {
     setBusy(value);
     setFailure(undefined);
     try {

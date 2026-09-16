@@ -6,8 +6,8 @@ import type { CredentialEntry } from './credentials.js';
 import type { ActiveAgentToken, AgentToken, TokenRotationSettings } from './token-pool.js';
 import type {
   Commitment,
-  CommitmentAppraisal,
-  CommitmentAppraisedBy,
+  AppraisalValue,
+  AppraisedBy,
   CommitmentClosedBy,
   CommitmentEditedBy,
   InboxEvent,
@@ -659,7 +659,7 @@ export interface CommitmentStore {
    *
    * **上書きしてよい。** 人間がクローンの評定を覆せることが要件そのものである
    * （`docs/PRD.md`「要件: 自己改善」）。覆される前の値は**日誌**に残るので、
-   * 行の側は常に「いまの値」だけを持つ（`commitmentAppraisalSchema` の doc）。
+   * 行の側は常に「いまの値」だけを持つ（`appraisalSchema` の doc）。
    *
    * **未了の行にも付けられる。** 「片付いてから」を器の側で強制しない — 人間が
    * 走っている最中に「これは駄目そうだ」と印を付ける経路を塞ぐ理由が無い
@@ -676,8 +676,8 @@ export interface CommitmentStore {
   appraise(
     id: string,
     at: string,
-    value: CommitmentAppraisal,
-    by: CommitmentAppraisedBy,
+    value: AppraisalValue,
+    by: AppraisedBy,
     reason?: string,
   ): Promise<boolean>;
 
