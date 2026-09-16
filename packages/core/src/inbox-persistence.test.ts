@@ -141,6 +141,82 @@ function report(text: string, id = 'evt-report'): InboxEvent {
   };
 }
 
+/**
+ * `fakeSdk` の親戚。**1ターン目だけ、外から解くまで止まる**（issue #1049）。
+ *
+ * **なぜ `hang` では足りないか** —— あちらは永久に返らないので、後ろに積んだ
+ * 合図が「配られなかった」のか「まだ順番が来ていない」のかを区別できない。
+ * こちらは解いた後に続きが流れるので、**「消した合図だけが出てこない」**を、
+ * 後続の合図が実際に届いたことと対にして測れる（届かないことの証明を、
+ * 時間切れではなく他の合図の到着で取る）。
+ */
+function gatedSdk(): Fake & { release: () => void } {
+  const inputs: string[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let firstDone = false;
+
+  const fn = ((params: { prompt: unknown; options?: Options }) => {
+    async function* generate(): AsyncGenerator<SDKMessage, void> {
+      yield {
+        type: 'system',
+        subtype: 'init',
+        session_id: 'sess-fake',
+        uuid: 'uuid-init',
+      } as unknown as SDKMessage;
+
+      for await (const message of params.prompt as AsyncIterable<{
+        message: { content: unknown };
+      }>) {
+        inputs.push(String(message.message.content));
+        if (!firstDone) {
+          firstDone = true;
+          await gate;
+        }
+        yield {
+          type: 'assistant',
+          message: { content: [{ type: 'text', text: 'ok' }] },
+          parent_tool_use_id: null,
+          session_id: 'sess-fake',
+          uuid: 'uuid-assistant',
+        } as unknown as SDKMessage;
+        yield {
+          type: 'result',
+          subtype: 'success',
+          result: 'ok',
+          session_id: 'sess-fake',
+          uuid: 'uuid-result',
+        } as unknown as SDKMessage;
+      }
+    }
+
+    const generator = generate();
+    return Object.assign(generator, {
+      close: () => undefined,
+      interrupt: async () => undefined,
+    }) as unknown as Query;
+  }) as unknown as typeof sdkQuery;
+
+  return { fn, inputs, release };
+}
+
+/** `gatedSdk` を差した `Clone`。`bootClone` と同じ形で組む。 */
+function bootGatedClone(stores: Stores): Fake & { clone: CloneHost; release: () => void } {
+  const fake = gatedSdk();
+  const clone = createClone({
+    stores,
+    queryFn: fake.fn,
+    env: {},
+    runners: createRunnerRegistry([
+      createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+    ]),
+    redeliveryGate: ALWAYS_REDELIVER,
+  });
+  return { ...fake, clone };
+}
+
 async function waitFor(predicate: () => boolean, label: string): Promise<void> {
   const started = Date.now();
   for (;;) {
@@ -1784,5 +1860,133 @@ describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #fol
     const pending = await stores.inbox.peekPending();
     expect(pending).toHaveLength(1);
     expect(pending[0]?.event.id).toBe('evt-stopped-1');
+  });
+});
+
+/**
+ * **消した合図が、消した後も配達されてくる**（issue #1049）。
+ *
+ * #1049 の実測は「02:54:59Z に 27 件を `inbox_remove_many` で消した16分後、
+ * そのうち2件が『配り直しである』として届いた。その間ずっとカウンタは
+ * 『受信箱の未処理 1 件』のままだった」というもので、機序は **`Clone` が
+ * `stores.inbox`（器）とは別に持つメモリ上の待ち行列**である。消す口は器の行
+ * しか消さないので、既に待ち行列へ載った合図はそのまま配られていた。
+ *
+ * **ここは文言ではなく「モデルに何が届いたか」（`inputs`）で測る。** 応答の
+ * 文言や器の件数だけを見ると、まさに #1049 で起きた「消したと名乗るのに配達は
+ * 続く」を再現できない —— 器もカウンタも正しく減っていたのが、あの事故である。
+ */
+describe('消した合図は配達されない（issue #1049）', () => {
+  it('既に待ち行列へ載った合図でも、器から消して配達を止めれば、モデルには届かない', async () => {
+    const stores = createMemoryStores();
+    const { clone, inputs, release } = bootGatedClone(stores);
+
+    // 1件目でターンを止める（この間に後続が待ち行列へ積み上がる）。
+    clone.post(report('先客', 'evt-blocker'));
+    await waitFor(() => inputs.length > 0, '1件目が処理に入る');
+
+    clone.post(report('消される報告', 'evt-doomed'));
+    clone.post(report('残る報告', 'evt-kept'));
+    await idle();
+
+    // **器から消して、配達も止める**（`inbox_remove_many` がやることと同じ）。
+    const removed = await stores.inbox.removeMany(['evt-doomed']);
+    expect(removed).toEqual(['evt-doomed']);
+    expect(await clone.dropQueuedInboxEvents(removed)).toBe(1);
+
+    release();
+    // **「残る報告」が届いたことを待つ。** 消した側が届かないことを時間切れでは
+    // なく、後続の到着で測るための対照である。
+    await waitFor(() => inputs.some((t) => t.includes('残る報告')), '後続が配達される');
+    await idle();
+
+    expect(inputs.some((t) => t.includes('先客'))).toBe(true);
+    expect(inputs.some((t) => t.includes('残る報告'))).toBe(true);
+    // 🔴 これが #1049 の核心。消したのに配られていたら、ここが真になる。
+    expect(inputs.some((t) => t.includes('消される報告'))).toBe(false);
+
+    await clone.stop();
+  });
+
+  it('消していない合図は配達され続ける（消す口が配達を止めすぎていないことの対照）', async () => {
+    const stores = createMemoryStores();
+    const { clone, inputs, release } = bootGatedClone(stores);
+
+    clone.post(report('先客', 'evt-blocker'));
+    await waitFor(() => inputs.length > 0, '1件目が処理に入る');
+    clone.post(report('無関係な報告', 'evt-other'));
+    await idle();
+
+    // **当たらない id を渡す。** 1件も落ちてはいけない。
+    expect(await clone.dropQueuedInboxEvents(['evt-not-here'])).toBe(0);
+
+    release();
+    await waitFor(() => inputs.some((t) => t.includes('無関係な報告')), '後続が配達される');
+
+    await clone.stop();
+  });
+
+  it('拾い直しの最中に消された合図は、待ち行列へ積まれない（器の入れ替えを跨いだ経路）', async () => {
+    const stores = createMemoryStores();
+    // 前の器が終えられなかった未読を3件、器へ直接置く（`post` を通さない）。
+    for (const id of ['evt-r1', 'evt-r2', 'evt-r3']) {
+      const event = report(`拾い直し ${id}`, id);
+      await stores.inbox.put(event, event.at);
+    }
+
+    // **拾い直しループを途中で止める。** `#restoreUnread` は1件ごとに日誌を
+    // 書く（`await`）ので、その最初の書き込みで待たせれば「まだ積んでいない
+    // 合図が在る」状態を作れる —— #1049 の事故は、まさにこのループが 3,326 件を
+    // 流し込んでいる最中に消し込みが走った形である。
+    let releaseJournal!: () => void;
+    const journalGate = new Promise<void>((resolve) => {
+      releaseJournal = resolve;
+    });
+    let gated = false;
+    const inner = stores.journal.append.bind(stores.journal);
+    const gatedStores: Stores = {
+      ...stores,
+      journal: {
+        ...stores.journal,
+        async append(entry) {
+          if (!gated) {
+            gated = true;
+            await journalGate;
+          }
+          return inner(entry);
+        },
+      },
+    };
+
+    const fake = gatedSdk();
+    const clone = createClone({
+      stores: gatedStores,
+      queryFn: fake.fn,
+      env: {},
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+      redeliveryGate: ALWAYS_REDELIVER,
+    });
+
+    await waitFor(() => gated, '拾い直しが1件目の日誌で止まる');
+
+    // **ここで消す。** この時点で evt-r3 はまだ待ち行列に載っていない
+    // （待ち行列から外すだけの実装では取りこぼす窓が、ここである）。
+    const removed = await stores.inbox.removeMany(['evt-r3']);
+    expect(removed).toEqual(['evt-r3']);
+    await clone.dropQueuedInboxEvents(removed);
+
+    releaseJournal();
+    fake.release();
+    await waitFor(() => fake.inputs.some((t) => t.includes('拾い直し evt-r2')), '残りが配達される');
+    await idle();
+
+    expect(fake.inputs.some((t) => t.includes('拾い直し evt-r1'))).toBe(true);
+    expect(fake.inputs.some((t) => t.includes('拾い直し evt-r2'))).toBe(true);
+    // 🔴 拾い直しの最中に消された分。積まれていたら配達されてしまう。
+    expect(fake.inputs.some((t) => t.includes('拾い直し evt-r3'))).toBe(false);
+
+    await clone.stop();
   });
 });
