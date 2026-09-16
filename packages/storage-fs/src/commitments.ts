@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -19,6 +19,9 @@ import type {
   UnreadableCommitment,
 } from '@alteroid/core';
 import { z } from 'zod';
+
+import { writeFileAtomic } from './atomic.js';
+import { withPathLock } from './file-lock.js';
 
 /**
  * ディスク上の生の形。**要素は `z.unknown()` で受ける**（issue #296 以降）。
@@ -204,7 +207,6 @@ export const CLOSED_HISTORY_LIMIT = 500;
 export class FsCommitmentStore implements CommitmentStore {
   readonly #dir: string;
   readonly #path: string;
-  #chain: Promise<unknown> = Promise.resolve();
 
   constructor(dir: string) {
     this.#dir = dir;
@@ -294,16 +296,17 @@ export class FsCommitmentStore implements CommitmentStore {
    * **同一マネージャー×同一本文×未了も開かない（issue #1041）。** 判定は
    * `findOpenManagerDuplicate`（`@alteroid/core`）——**3実装で同じ規則を持つため、
    * ここで書き直さない。** 置き場所は `#update` の閉包の中である必要がある：
-   * 閉包は `#chain` の内側で `#read()` し直すので、**ここへ置いたときだけ読みと
-   * 書きが同じ排他区間に入る**（外で `list()` してから `open()` を呼ぶ形が
-   * #1041 そのものである）。
+   * 閉包は `withPathLock`（`file-lock.ts`）の区間の内側で `#read()` し直すので、
+   * **ここへ置いたときだけ読みと書きが同じ排他区間に入る**（外で `list()` して
+   * から `open()` を呼ぶ形が #1041 そのものである）。
    *
-   * **⚠️ ただしこの器の排他はプロセスの中にしか無い。** `#chain` は promise の
-   * 連鎖であってファイルロックではないので、**同じディレクトリを2つのプロセスが
-   * 指せば、この畳み込みも id の冪等性も同時に破れる。** それは #1041 が作った穴
-   * ではなく（id 判定にも最初から在る）、この段では直していない——本番の記憶
-   * ストアは PostgreSQL で、そちらは DB の制約で守っている
-   * （`PgCommitmentStore.open`）。
+   * **⚠️ プロセスを跨いだ排他は issue #1113 で足したが、advisory（勧告的）である。**
+   * `#update` は `withPathLock` で `${this.#path}.lock` を取り合うので、**同じ
+   * このクラスを経由して書く別プロセスに対しては**この畳み込みも id の冪等性も
+   * 保たれる。**保たれないのは、ロックを見ない書き手が同じファイルを直接触った
+   * 場合**（`withPathLock` の doc）——そこは DB の制約で守る `storage-pg` の
+   * `PgCommitmentStore.open` とは強さが違う。本番の記憶ストアは PostgreSQL
+   * なので、そちらは常に DB 側の保証で閉じている。
    */
   async open(entry: Commitment): Promise<CommitmentOpenResult> {
     return this.#update<CommitmentOpenResult>((file) => {
@@ -559,7 +562,9 @@ export class FsCommitmentStore implements CommitmentStore {
   }
 
   /**
-   * read-modify-write を直列化する（デーモン1プロセス前提の最小の排他）。
+   * read-modify-write を直列化する（issue #1113 / #1050 — `withPathLock` で
+   * プロセス内・プロセス間の両方を排他する。advisory の強さは `withPathLock`
+   * の doc を見よ）。
    *
    * `mutate` は書き込む内容と、呼び出し側へ返す値の両方を決める。**読んだ結果に
    * 基づいて書くかどうかを決める操作**（`open` / `close`）を、この区間の外へ出さないこと。
@@ -577,16 +582,12 @@ export class FsCommitmentStore implements CommitmentStore {
   async #update<T>(
     mutate: (file: CommitmentFile) => { next: CommitmentFile; result: T },
   ): Promise<T> {
-    const run = this.#chain.then(async () => {
+    return withPathLock(this.#path, async () => {
       const { next, result } = mutate(await this.#read());
       await mkdir(this.#dir, { recursive: true });
-      const tmp = `${this.#path}.tmp`;
-      await writeFile(tmp, `${JSON.stringify(toDiskShape(next), null, 2)}\n`, 'utf8');
-      await rename(tmp, this.#path);
+      await writeFileAtomic(this.#path, `${JSON.stringify(toDiskShape(next), null, 2)}\n`);
       return result;
     });
-    this.#chain = run.catch(() => undefined);
-    return run;
   }
 }
 

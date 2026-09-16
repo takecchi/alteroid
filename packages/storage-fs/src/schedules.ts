@@ -1,9 +1,12 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { schedulePhaseSchema, scheduledRequestSchema } from '@alteroid/core';
 import type { SchedulePhase, ScheduleStore, ScheduledRequest } from '@alteroid/core';
 import { z } from 'zod';
+
+import { writeFileAtomic } from './atomic.js';
+import { withPathLock } from './file-lock.js';
 
 const fileSchema = z.object({
   schedules: z.array(scheduledRequestSchema).default([]),
@@ -28,7 +31,6 @@ type ScheduleFile = z.infer<typeof fileSchema>;
 export class FsScheduleStore implements ScheduleStore {
   readonly #dir: string;
   readonly #path: string;
-  #chain: Promise<unknown> = Promise.resolve();
 
   constructor(dir: string) {
     this.#dir = dir;
@@ -154,21 +156,19 @@ export class FsScheduleStore implements ScheduleStore {
   }
 
   /**
-   * read-modify-write を直列化する（デーモン1プロセス前提の最小の排他）。
+   * read-modify-write を直列化する（issue #1113 / #1050 — `withPathLock` で
+   * プロセス内・プロセス間の両方を排他する。advisory の強さは `file-lock.ts`
+   * の doc を見よ）。
    *
    * `mutate` は書き込む内容と、呼び出し側へ返す値の両方を決める。**読んだ結果に
    * 基づいて書くかどうかを決める操作**（`claimRun`）を、この区間の外へ出さないこと。
    */
   async #update<T>(mutate: (file: ScheduleFile) => { next: ScheduleFile; result: T }): Promise<T> {
-    const run = this.#chain.then(async () => {
+    return withPathLock(this.#path, async () => {
       const { next, result } = mutate(await this.#read());
       await mkdir(this.#dir, { recursive: true });
-      const tmp = `${this.#path}.tmp`;
-      await writeFile(tmp, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
-      await rename(tmp, this.#path);
+      await writeFileAtomic(this.#path, `${JSON.stringify(next, null, 2)}\n`);
       return result;
     });
-    this.#chain = run.catch(() => undefined);
-    return run;
   }
 }

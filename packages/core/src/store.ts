@@ -713,16 +713,23 @@ export interface CommitmentStore {
    * `Clone#commit` が `list()` → 判定 → `open()` と割っていたために、同じストアを
    * 指す2つのデーモンが同時に post すると台帳が2行に割れた。
    *
-   * **⚠️ 「読みと書きを同じ排他区間に入れる」だけでは足りない実装がある。**
-   * fs（`FsCommitmentStore`）と in-memory（`packages/core/src/testing.ts`）の
-   * 排他はプロセスの中にしか無く（前者は promise の連鎖、後者はそもそも同じ
-   * プロセスの `Map`）、**同じストアを2つのプロセスが指した瞬間に効かなくなる。**
-   * `storage-pg`（`PgCommitmentStore`）だけが DB の制約で守っており、そこだけが
-   * プロセスを跨いでも原子である。**本番の記憶ストアは PostgreSQL なので、
-   * 毎日のデプロイで開く窓はそこで閉じている**（fs の跨ぎは別件。同じ穴は
-   * `open` の id 判定にも最初から在る）。**3実装の契約の歯
-   * （`commitment-fold-contract.ts`）が名乗れるのは「プロセス内で原子」までで、
-   * それ以上を名乗らせないこと。**
+   * **⚠️ 「読みと書きを同じ排他区間に入れる」だけでは、実装によって足りうる強さが違う。**
+   * in-memory（`packages/core/src/testing.ts`）の排他はプロセスの中の `Map`
+   * でしかなく、**同じストアを2つのプロセスが指した瞬間に効かなくなる。**
+   * fs（`FsCommitmentStore`）は issue #1113 / #1050 で `withPathLock`
+   * （`packages/storage-fs/src/file-lock.ts`）による advisory（勧告的）な
+   * ファイルロックを足し、**このクラスを経由して書く別プロセス同士のあいだ
+   * では**排他がプロセスを跨ぐようになった——ただしロックを見ない書き手が
+   * 同じファイルを直接触れば守れず、`staleMs` を過ぎた古いロックの回収は
+   * lease（元の持ち主と新しい持ち主が同時に区間へ入りうる）なので、
+   * `storage-pg`（`PgCommitmentStore`）が持つ DB の制約と同じ強さではない。
+   * **`storage-pg` だけが、書き手が何であっても拒む強さでプロセスを跨いで
+   * 原子である。** 本番の記憶ストアは PostgreSQL なので、毎日のデプロイで
+   * 開く窓はそこで閉じている（fs の advisory ロックは別件。同じ穴は `open`
+   * の id 判定にも最初から在る）。**3実装の契約の歯
+   * （`commitment-fold-contract.ts`）が測っているのはいまも同一プロセスの
+   * 同期区間までで、それ以上（プロセスを跨いだ強さの違い）をこの歯だけで
+   * 名乗らせないこと。**
    */
   open(entry: Commitment): Promise<CommitmentOpenResult>;
 

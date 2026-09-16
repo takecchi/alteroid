@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -19,6 +19,8 @@ import type {
   MemoryProtectionStatus,
   PersonaStore,
 } from '@alteroid/core';
+
+import { writeFileAtomic } from './atomic.js';
 
 /**
  * 保護状態（human guard）の派生値と、要旨の鮮度の派生値、1文書ぶん。
@@ -164,12 +166,15 @@ export class FsPersonaStore implements PersonaStore {
     return this.#rebuildIndex();
   }
 
-  /** 一時ファイル経由で置き換える（`.md` と同じ作法。壊れた途中経過を見せない）。 */
+  /**
+   * 一時ファイル経由で置き換える（`.md` と同じ作法。壊れた途中経過を見せない）。
+   *
+   * **`writeFileAtomic`（`atomic.ts`）を使う** — tmp 名が固定だと、同じ
+   * ディレクトリを向いた書き手が2つ在ると互いの tmp を踏む（issue #1050）。
+   */
   async #writeIndex(index: MemoryIndex): Promise<void> {
     await mkdir(this.#dir, { recursive: true });
-    const tmp = `${this.#indexPath()}.tmp`;
-    await writeFile(tmp, JSON.stringify(index), 'utf8');
-    await rename(tmp, this.#indexPath());
+    await writeFileAtomic(this.#indexPath(), JSON.stringify(index));
   }
 
   /** 同時に来た複数の呼び出しを、進行中の組み直し1本へ束ねる。 */
@@ -338,9 +343,9 @@ export class FsPersonaStore implements PersonaStore {
     const before = await this.read(slug);
     const path = this.#path(slug);
     await mkdir(this.#dir, { recursive: true });
-    const tmp = `${path}.tmp`;
-    await writeFile(tmp, ensureTrailingNewline(content), 'utf8');
-    await rename(tmp, path);
+    // **`writeFileAtomic`（`atomic.ts`）を使う** — tmp 名が固定だと、同じ
+    // ディレクトリを向いた書き手が2つ在ると互いの tmp を踏む（issue #1050）。
+    await writeFileAtomic(path, ensureTrailingNewline(content));
     const written = await this.read(slug);
     if (!written) throw new Error(`記憶の書き込みに失敗: ${slug}`);
     // **書いた直後のハッシュを記録する。** ここが write() と append() の唯一の

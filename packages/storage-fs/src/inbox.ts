@@ -1,9 +1,12 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { inboxEventSchema } from '@alteroid/core';
 import type { InboxEvent, InboxStore, PendingInboxEvent } from '@alteroid/core';
 import { z } from 'zod';
+
+import { writeFileAtomic } from './atomic.js';
+import { withPathLock } from './file-lock.js';
 
 const inboxEntrySchema = z.object({
   event: inboxEventSchema,
@@ -22,12 +25,12 @@ type InboxFile = z.infer<typeof fileSchema>;
  * まだ処理し終えていない受信箱の合図 = 1枚の JSON（`store.ts` の `InboxStore`）。
  *
  * ジョブ台帳・継続中の依頼（`FsScheduleStore`）と同じディレクトリに置き、同じ作法
- * （`#chain` による直列化、`rename` による原子的な書き込み）を踏襲する。
+ * （`withPathLock` による直列化、`writeFileAtomic` による原子的な書き込み）を
+ * 踏襲する。
  */
 export class FsInboxStore implements InboxStore {
   readonly #dir: string;
   readonly #path: string;
-  #chain: Promise<unknown> = Promise.resolve();
 
   constructor(dir: string) {
     this.#dir = dir;
@@ -62,7 +65,7 @@ export class FsInboxStore implements InboxStore {
    * 残っている未読を古い順に返し、**同時に配達回数を1つ進める**。
    *
    * `ScheduleStore.claimRun` と同じ作法で、読みと書きを `#update` の1区間へ閉じる
-   * （`#chain` による直列化がそのまま排他になる）。返す `deliveries` は進めた後の値。
+   * （`withPathLock` による排他がそのまま効く）。返す `deliveries` は進めた後の値。
    */
   async claimPending(): Promise<PendingInboxEvent[]> {
     return this.#update((file) => {
@@ -152,22 +155,19 @@ export class FsInboxStore implements InboxStore {
   }
 
   /**
-   * read-modify-write を直列化する（`FsScheduleStore#update` と同じ最小の排他）。
+   * read-modify-write を直列化する（`FsScheduleStore#update` と同じ `withPathLock`
+   * ベースの排他。issue #1113 / #1050）。
    *
    * `mutate` は書き込む内容と、呼び出し側へ返す値の両方を決める。**読んだ結果に
    * 基づいて書くかどうか・何を進めるかを決める操作**（`claimPending`）を、この
    * 区間の外へ出さないこと。
    */
   async #update<T>(mutate: (file: InboxFile) => { next: InboxFile; result: T }): Promise<T> {
-    const run = this.#chain.then(async () => {
+    return withPathLock(this.#path, async () => {
       const { next, result } = mutate(await this.#read());
       await mkdir(this.#dir, { recursive: true });
-      const tmp = `${this.#path}.tmp`;
-      await writeFile(tmp, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
-      await rename(tmp, this.#path);
+      await writeFileAtomic(this.#path, `${JSON.stringify(next, null, 2)}\n`);
       return result;
     });
-    this.#chain = run.catch(() => undefined);
-    return run;
   }
 }

@@ -1,9 +1,12 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { jobSchema, pendingApprovalSchema } from '@alteroid/core';
 import type { Job, JobStore, PendingApproval } from '@alteroid/core';
 import { z } from 'zod';
+
+import { writeFileAtomic } from './atomic.js';
+import { withPathLock } from './file-lock.js';
 
 const fileSchema = z.object({
   jobs: z.array(jobSchema).default([]),
@@ -21,7 +24,6 @@ type JobFile = z.infer<typeof fileSchema>;
 export class FsJobStore implements JobStore {
   readonly #dir: string;
   readonly #path: string;
-  #chain: Promise<unknown> = Promise.resolve();
 
   constructor(dir: string) {
     this.#dir = dir;
@@ -83,16 +85,16 @@ export class FsJobStore implements JobStore {
     }
   }
 
-  /** read-modify-write を直列化する（デーモン1プロセス前提の最小の排他）。 */
+  /**
+   * read-modify-write を直列化する（issue #1113 / #1050 — `withPathLock` で
+   * プロセス内・プロセス間の両方を排他する。advisory の強さは `file-lock.ts`
+   * の doc を見よ）。
+   */
   async #update(mutate: (file: JobFile) => JobFile): Promise<void> {
-    const run = this.#chain.then(async () => {
+    await withPathLock(this.#path, async () => {
       const next = mutate(await this.#read());
       await mkdir(this.#dir, { recursive: true });
-      const tmp = `${this.#path}.tmp`;
-      await writeFile(tmp, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
-      await rename(tmp, this.#path);
+      await writeFileAtomic(this.#path, `${JSON.stringify(next, null, 2)}\n`);
     });
-    this.#chain = run.catch(() => undefined);
-    await run;
   }
 }

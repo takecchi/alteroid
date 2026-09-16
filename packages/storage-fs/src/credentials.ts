@@ -1,9 +1,12 @@
-import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { CREDENTIAL_NAME, type CredentialEntry, type StoredCredential } from '@alteroid/core';
 import type { CredentialVaultStore } from '@alteroid/core';
 import { z } from 'zod';
+
+import { writeFileAtomic } from './atomic.js';
+import { withPathLock } from './file-lock.js';
 
 /**
  * 正本1行のスキーマ。**`value` は素の文字列のまま保存する**——ここが正本を持つ
@@ -49,7 +52,6 @@ const EMPTY: CredentialFile = { credentials: [] };
 export class FsCredentialVaultStore implements CredentialVaultStore {
   readonly #dir: string;
   readonly #path: string;
-  #chain: Promise<unknown> = Promise.resolve();
 
   constructor(path: string) {
     this.#path = path;
@@ -98,18 +100,17 @@ export class FsCredentialVaultStore implements CredentialVaultStore {
     }
   }
 
-  /** read-modify-write を直列化する（`FsTokenPoolStore#update` と同じ最小の排他）。 */
+  /**
+   * read-modify-write を直列化する（`FsTokenPoolStore#update` と同じ
+   * `withPathLock` ベースの排他。issue #1113 / #1050）。
+   */
   async #update(mutate: (file: CredentialFile) => CredentialFile): Promise<void> {
-    const run = this.#chain.then(async () => {
+    await withPathLock(this.#path, async () => {
       const next = mutate(await this.#read());
       await mkdir(this.#dir, { recursive: true });
-      const tmp = `${this.#path}.tmp`;
-      // 一時ファイルの時点で 0600。rename 後に絞ると、その隙間で他人が読める。
-      await writeFile(tmp, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-      await chmod(tmp, 0o600);
-      await rename(tmp, this.#path);
+      // 一時ファイルの時点で 0600（`writeFileAtomic` の `mode`）。rename 後に
+      // 絞ると、その隙間で他人が読める。
+      await writeFileAtomic(this.#path, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
     });
-    this.#chain = run.catch(() => undefined);
-    return run;
   }
 }

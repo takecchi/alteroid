@@ -1,8 +1,9 @@
-import { randomUUID } from 'node:crypto';
-import { mkdir, rename, rm, stat, readFile, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, rm, stat, readFile, utimes } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import type { EnvProfile, ProfileStore } from '@alteroid/core';
+
+import { writeFileAtomic } from './atomic.js';
 
 /**
  * 実行環境プロファイルの置き場（既定 `~/.alteroid/profile.sh`）。
@@ -41,21 +42,14 @@ export class FsProfileStore implements ProfileStore {
     }
 
     await mkdir(dirname(this.#path), { recursive: true });
-    // **呼び出しごとに一意にする。** 固定名だと、重なった書き込みで片方の rename の
-    // 後にもう片方が ENOENT で落ちたり、意図と違う本文が rename されたりする。
-    // 上位（`ProfileService`）が直列化しているが、置き場の側だけを見ても壊れない
-    // 形にしておく（守りを1枚に寄せない）。
-    const staging = `${this.#path}.${randomUUID().slice(0, 8)}`;
-    // **受け取ったものをそのまま書く。** ここで改行を足すと、読み直したときの
-    // 指紋が書いたときの指紋と変わり、「届いているか」を見る道具が嘘をつく
-    // （形を決めるのは入口の `normalizeProfileScript` ただ1か所）。
-    await writeFile(staging, script, { encoding: 'utf8', mode: 0o600 });
-    try {
-      await rename(staging, this.#path);
-    } catch (error) {
-      await rm(staging, { force: true }).catch(() => undefined);
-      throw error;
-    }
+    // **`writeFileAtomic`（`atomic.ts`）に括り出した。** ここが先例だった
+    // （呼び出しごとに一意な staging 名、rename 失敗時の `rm` 後始末）——
+    // 同じ形が `commitments.ts` 等9箇所に散っていたので共有関数へ寄せた
+    // （issue #1050）。**受け取ったものをそのまま書く約束は変わらない。**
+    // ここで改行を足すと、読み直したときの指紋が書いたときの指紋と変わり、
+    // 「届いているか」を見る道具が嘘をつく（形を決めるのは入口の
+    // `normalizeProfileScript` ただ1か所）。**mode 0600 も変わらない。**
+    await writeFileAtomic(this.#path, script, { mode: 0o600 });
     return { script, updatedAt: at };
   }
 

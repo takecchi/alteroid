@@ -1,4 +1,4 @@
-import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -16,6 +16,9 @@ import type {
   LoginRequest,
 } from '@alteroid/core';
 import { z } from 'zod';
+
+import { writeFileAtomic } from './atomic.js';
+import { withPathLock } from './file-lock.js';
 
 const fileSchema = z.object({
   accounts: z.array(authAccountSchema).default([]),
@@ -44,7 +47,6 @@ const LOGIN_REQUEST_RETENTION_MS = 24 * 60 * 60 * 1000;
 export class FsAuthStore implements AuthStore {
   readonly #dir: string;
   readonly #path: string;
-  #chain: Promise<unknown> = Promise.resolve();
 
   constructor(dir: string) {
     this.#dir = dir;
@@ -230,7 +232,11 @@ export class FsAuthStore implements AuthStore {
     }
   }
 
-  /** read-modify-write を直列化する（デーモン1プロセス前提の最小の排他）。 */
+  /**
+   * read-modify-write を直列化する（issue #1113 / #1050 — `withPathLock` で
+   * プロセス内・プロセス間の両方を排他する。advisory の強さは `file-lock.ts`
+   * の doc を見よ）。
+   */
   async #update(mutate: (file: AuthFile) => AuthFile): Promise<void> {
     await this.#mutate((file) => ({ next: mutate(file), result: undefined }));
   }
@@ -242,18 +248,14 @@ export class FsAuthStore implements AuthStore {
    * ある（分けた瞬間に一度きりの保証が壊れる）。`next` が `null` なら書かない。
    */
   async #mutate<T>(mutate: (file: AuthFile) => { next: AuthFile | null; result: T }): Promise<T> {
-    const run = this.#chain.then(async () => {
+    return withPathLock(this.#path, async () => {
       const { next, result } = mutate(await this.#read());
       if (next === null) return result;
       await mkdir(this.#dir, { recursive: true });
-      const tmp = `${this.#path}.tmp`;
-      // 一時ファイルの時点で 0600。rename 後に絞ると、その隙間で他人が読める。
-      await writeFile(tmp, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-      await chmod(tmp, 0o600);
-      await rename(tmp, this.#path);
+      // 一時ファイルの時点で 0600（`writeFileAtomic` の `mode`）。rename 後に
+      // 絞ると、その隙間で他人が読める。
+      await writeFileAtomic(this.#path, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
       return result;
     });
-    this.#chain = run.catch(() => undefined);
-    return run;
   }
 }
