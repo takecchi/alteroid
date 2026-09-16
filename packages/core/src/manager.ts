@@ -4688,8 +4688,22 @@ class Pool implements ManagerPool {
       return;
     }
     this.#usageWakeOwed.delete(managerId);
+    /*
+     * **印を下ろすのは、起こせたと分かってからである**（Issue #914 最終段。
+     * 判定は `resumeStoppedByUsage()` のループと同じ規則にしてある）。
+     *
+     * **ここは以前、起こす前に印を下ろしていた。** そうすると空振り
+     * （`'skipped'` ＝ 相手は居るのに `send()` が届かない・投げた）が一度でも
+     * 起きた時点で印が消え、**その委譲は次の鍵の回転でも拾われなくなる**
+     * ——そこから戻るには新しい `usage_notice` が要り、それにはその委譲自身が
+     * ターンを回す必要があり、回すには起こす必要がある（あちらのループの doc に
+     * 同じ袋小路を書いた）。**そしてこの経路のほうが普通に通る側である**
+     * （枠に当たったのはこの委譲自身なので、回し手を起こしたのもこの委譲である
+     * ——直上の doc）。⟹ 片方だけ直しても、いちばん通る口が開いたままになる。
+     */
+    const outcome = await this.#nudgeForUsageRotation(managerId);
+    if (outcome === 'skipped' || outcome === 'still-running') return;
     await this.#clearUsageStoppedMark(managerId);
-    await this.#nudgeForUsageRotation(managerId);
   }
 
   /**
