@@ -933,6 +933,87 @@ describe('引き受けたまま終わっていない仕事', () => {
     await s.clone.stop();
   });
 
+  /**
+   * **Issue #1041。段0 —— 赤い歯（わざと落ちる）。原子化はまだ入れていない。**
+   *
+   * **上の「429 連投の再現」が測っていないもの。** あの歯は**1つの `Clone`
+   * インスタンス**に対して `post()` を同期区間で3連投するが、`post()` の
+   * 中の `#foldIntoPendingCollapse`（Issue #954 続き・`inboxCollapseKey`）が
+   * 同一インスタンス内で `#commit` へ届く前に同文を1件へ畳んでしまうので、
+   * `#commit`（台帳側。`list()` → `open()`）は実質1回しか走らない——
+   * `#foldIntoPendingCollapse` 自身の doc がそう明言している:
+   *
+   * > 「在るか調べてから登録する」という手順に、台帳側で #1041 が挙げるような
+   * > `list()` と `open()` の間の TOCTOU は構造的に生まれない（#1041 そのもの
+   * > を直したとは主張しない — あれは台帳側の話であり、ここは最初からその種の
+   * > 隙間を持たない、という違いである）。
+   *
+   * （逐語は `grep -Fn -- '台帳側で #1041 が挙げるような' packages/core/src/clone.ts`。
+   * `#pendingCollapse` の doc 側にも同じ趣旨の断りがもう1箇所在る——
+   * `grep -Fn -- '#1041 が台帳側（' packages/core/src/clone.ts`）
+   *
+   * ⟹ **`#commit` の TOCTOU（Issue #1041 本題）そのものは、単一インスタンスの
+   * `Clone#post()` からは到達できない。** `#pendingCollapse`（畳み込みの索引）が
+   * プロセス内メモリにしか無く、`post()` は同期関数なので、同一インスタンス内で
+   * 同文の manager_message が2回 `#commit` に届くことは構造的に無い（`kind` は
+   * `z.enum(['report', 'question', 'permission'])` の固定3値で、どの2つも
+   * 互いのプレフィックスにならないため、`inboxCollapseKey`（`managerId`+`kind`+
+   * `text`、NUL区切りで曖昧さが無い）が異なるのに `commitmentFor` の `body`
+   * （`` `[${kind}] ${text}` ``、区切りなしの連結）だけが一致する組み合わせも
+   * 作れない——確かめた。`#restoreUnread`（前の器が拾い直す経路）も、直接
+   * ストアへ2件の重複行を仕込んでから起動させて確かめたが、ループの `await`
+   * が十分に直列化し、インメモリストアでは畳まれた（1行）——この経路も
+   * 到達できなかった（探索用の使い捨てスクリプトでの確認で、この歯の一部
+   * ではない）。
+   *
+   * **それでも `#commit` 自体の欠陥（`list()` と `open()` を排他するものが
+   * コード上どこにも無い）は現存する。** それを見せるには、**同一の
+   * ストアを共有する2つの `Clone` インスタンス**（＝2つのデーモンプロセスが
+   * 同じ記憶ストアを指す状態。`#pendingCollapse` はインスタンスごとの
+   * インメモリなので、互いの書き込みを知らない）が同時に `post()` する形を
+   * 使う。**これは「単一プロセスの通常経路」ではない**——しかし記憶ストア
+   * （fs なら `~/.alteroid/`、pg なら DB）自体は複数プロセスから同時に
+   * 触られうる資源であり、誤って（または再起動の重なりで）2つの `alteroidd`
+   * が同じストアを指せば、この形がそのまま起きる。**「これが日常的に起きる」
+   * とは主張しない**——ここでは `#commit` の TOCTOU が実在することだけを示す。
+   */
+  it('🔴 Issue #1041 段0: 同一ストアを共有する2つの Clone インスタンスが同時に post すると、台帳が2行に割れる（#commit の list/open 間に排他が無い）', async () => {
+    const stores = createMemoryStores();
+    const body = "You've hit your session limit · resets 5:10pm (UTC)";
+
+    // 2つの独立した Clone インスタンス（＝2つのデーモンプロセスを模す）が
+    // 同じストアを共有する。`#pendingCollapse` はインスタンスごとの
+    // インメモリ索引なので、互いの post を知らない。
+    const a = setup(stores);
+    const b = setup(stores);
+
+    // **await を挟まない。** 2つのインスタンスの `#commit`（`list()` →
+    // `open()` の非同期チェーン）を同じ同期区間から起こすことで、
+    // 「重複確認が互いの書き込みより先に走る」窓を作る（Issue #1041 の
+    // 「同じ本文の通知が、前段の書き込みが終わる前に2件目の重複確認に到達
+    // すると、両方が『重複なし』と判定して両方が開く」そのもの）。
+    a.clone.post(managerMessage(body, 'evt-1041-a'));
+    b.clone.post(managerMessage(body, 'evt-1041-b'));
+
+    await waitFor(
+      async () => (await stores.commitments.list()).entries.length >= 1,
+      '少なくとも1件目の記帳',
+    );
+    // レースの窓は短いので、もう少し待って決着させる。
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const open = (await stores.commitments.list()).entries;
+
+    // **同一マネージャー×同一本文×未了は台帳で1行に畳まれるはずである**
+    // （`hasOpenManagerDuplicate`、PR #1035／#954 提案3）。現状のコードでは
+    // `list()` と `open()` の間に排他が無いため、この assertion は落ちる
+    // （2行になる）——それが Issue #1041 の言う TOCTOU である。
+    expect(open).toHaveLength(1);
+
+    await a.clone.stop();
+    await b.clone.stop();
+  });
+
   it('⭐ 陰性対照: 同じマネージャーでも本文が違えば畳まれない（2行とも残る）', async () => {
     const s = setup();
     const inputs = () => s.calls.flatMap((call) => call.inputs);
