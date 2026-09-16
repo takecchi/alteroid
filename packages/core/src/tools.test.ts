@@ -12888,8 +12888,15 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     if (!CREATED_AT_PATTERN.test(entry)) violations.push('作成 が無い');
     if (!UPDATED_AT_PATTERN.test(entry)) violations.push('更新 が無い');
     if (!ID_AND_NAME_PATTERN.test(firstLine)) violations.push('id + 名前 が先頭行に無い');
+    // **⚠️ 括弧の中は、この関数が実際に見ているものと揃えること（#993）。**
+    // #1034 が判定を「作成/更新を除いた残り全行のどこか」から
+    // 「3行目そのもの（＋1行目の `—` の後ろ）」の名指しへ狭めたが、
+    // **この文言だけが古い判定の説明のまま残っていた。** 括弧の中は偽で
+    // さえあった——3行目が空でも `extra` が在れば「本文」は残るので、
+    // 「本文が残らない」は成り立たない。**次に読む人がこの説明に合わせて
+    // 実装を「直す」と、身代わりの穴がそのまま戻る。**
     if (!hasSummaryBeyondTimestamps(entry))
-      violations.push('概要 が無い（作成/更新を除いても本文が残らない）');
+      violations.push('概要 が無い（3行目も、1行目の — の後ろも空）');
     return violations;
   }
 
@@ -13441,7 +13448,7 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     const withoutDescription = entries.find((entry) => entry.includes('doc-b'))!;
     expect(fiveFieldViolations(withDescription)).toEqual([]);
     expect(fiveFieldViolations(withoutDescription)).toContain(
-      '概要 が無い（作成/更新を除いても本文が残らない）',
+      '概要 が無い（3行目も、1行目の — の後ろも空）',
     );
   });
 });
