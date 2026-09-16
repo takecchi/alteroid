@@ -22,7 +22,11 @@ import {
   type DroppedTraceOrigin,
 } from './dropped-record.js';
 import type { RunnerEvent } from './runner-protocol.js';
-import { contextUsageObservationSchema, JOURNAL_ENTRY_TYPES, journalEntrySchema } from './schema.js';
+import {
+  contextUsageObservationSchema,
+  JOURNAL_ENTRY_TYPES,
+  journalEntrySchema,
+} from './schema.js';
 import type {
   ContextUsageObservation,
   InboxEvent,
@@ -1370,17 +1374,28 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       sessionId: { emit: 'tag', token: 'sessionId' },
       models: { emit: 'raw', token: 'models' },
       reset: { emit: 'raw', token: 'reset' },
+      // **#981 で「保留」から「決めた」へ変わった欄。** 下の
+      // `context_usage.contextUsage` と同じ schema なので、決めた理由は
+      // `dropped-record.ts` の `case 'context_usage'` の doc に1箇所だけ書いて
+      // ある（二重に書かない）。入れ子の中身は `CONTEXT_USAGE_SHAPE_PLAN`
+      // （このファイルの下のほう）が見張る。
       contextUsage: {
         emit: 'never',
-        why: 'PR #709 が別判断へ回した欄（上の `escalation.answeredAt` と同じ）。',
+        why: "#981 で決めた（入れ子のどの階層も跡へ出さない）。理由は `dropped-record.ts` の `case 'context_usage'` の doc に1箇所だけ書いてある。",
       },
+      // ⚠️ **こちらの2つは、いまも PR #709 の保留のままである**——#981 が
+      // 決めたのは `contextUsage` だけである。ただし #981 の調査で、**この2つ
+      // には自由文が1つも無い**ことは確かめた（`compactions[]` は `trigger`
+      // （enum）と整数2つ、`mainLoopUsage` は整数4つ）。⟹ 秘密が載る経路が
+      // 無いので、`contextUsage` と違って「出すと戻せない」側の危険は無い。
+      // **残っているのは「出す価値があるか」の判断だけである。**
       compactions: {
         emit: 'never',
-        why: 'PR #709 が別判断へ回した欄（上の `escalation.answeredAt` と同じ）。',
+        why: 'PR #709 が別判断へ回した欄（上の `escalation.answeredAt` と同じ）。#981 で「自由文を1つも持たない」ことは確かめたので、残るのは出す価値の判断だけである。',
       },
       mainLoopUsage: {
         emit: 'never',
-        why: 'PR #709 が別判断へ回した欄（上の `escalation.answeredAt` と同じ）。',
+        why: 'PR #709 が別判断へ回した欄（上の `escalation.answeredAt` と同じ）。#981 で「自由文を1つも持たない」ことは確かめたので、残るのは出す価値の判断だけである。',
       },
     },
     token_rotation: {
@@ -1416,16 +1431,23 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       managerId: { emit: 'tag', token: 'managerId' },
       sessionId: { emit: 'tag', token: 'sessionId' },
       turnSucceeded: { emit: 'raw', token: 'turnSucceeded' },
-      // `turn_usage.contextUsage` と同じ判断（PR #709 が別判断へ回した、
-      // 構造化された欄）。この関数はまだ入れ子の中まで踏み込まない。
+      // **#981 で決めた欄である（保留ではない）。** 入れ子のどの階層も跡へ
+      // 出さない——理由は `dropped-record.ts` の `case 'context_usage'` の doc
+      // に書いてある（要点: 中の自由文3つは値を決めるのが SDK 側であり、
+      // `error` の伏せ字は `env` の値の完全一致の置換だけで保証にならず、
+      // 跡の行き先は器の外へ出ていく stderr なので広げると戻せない）。
+      // **中身は下の `CONTEXT_USAGE_SHAPE_PLAN` /
+      // `CONTEXT_USAGE_CATEGORY_SHAPE_PLAN` が見張る**——この第1階層の名簿
+      // だけでは、入れ子に欄が増えても赤くならない。
       contextUsage: {
         emit: 'never',
-        why: '`turn_usage.contextUsage` と同じ判断（PR #709 が別判断へ回した構造化された欄）。',
+        why: "#981 で決めた（入れ子のどの階層も跡へ出さない）。理由は `dropped-record.ts` の `case 'context_usage'` の doc に1箇所だけ書いてある。",
       },
     },
     // Issue #783 段0。**`arrived`/`delivered`/`settled`/`pending` は
     // `contextUsage`（直上）とは違う判断——`never` へ倒していない。** あちらは
-    // 「PR #709 が別判断へ回した」という保留だが、こちらは
+    // 「出すと戻せないので出さない」と #981 で決めた側（それ以前は PR #709 の
+    // 保留だった）だが、こちらは
     // `journalEntryShape`（`dropped-record.ts` の `case 'inbox_flow'`）が
     // 実際に欄の中身（`.total` / `.count`）を跡へ出す実装になっている。
     // 出しているのは総数・件数だけで自由文は1文字も含まない
