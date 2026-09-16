@@ -6,7 +6,7 @@ import { rename, rm, writeFile } from 'node:fs/promises';
  *
  * **先例は `profile.ts` の `write()` である。** あちらは `${this.#path}.
  * ${randomUUID().slice(0, 8)}` という書き手ごとに一意な staging 名と、rename
- * 失敗時の `rm` 後方互換の後始末を先に持っていた。ここへ括り出したのは、同じ形
+ * 失敗時の `rm` による後始末を先に持っていた。ここへ括り出したのは、同じ形
  * （tmp 名が `${path}.tmp` 固定）が `commitments.ts` / `jobs.ts` / `schedules.ts` /
  * `inbox.ts` / `auth.ts` / `credentials.ts` / `token-pool.ts` / `usage.ts` /
  * `persona.ts` の9箇所に散っていたためである——同じ穴（同じディレクトリを

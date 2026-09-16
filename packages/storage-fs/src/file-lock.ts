@@ -70,7 +70,10 @@ export class LockTimeoutError extends Error {
  * （ロックファイルが既に無い、または回収できた）。`'contended'` は「まだ
  * 生きている持ち主が居る」——呼び出し側はバックオフしてから再試行する。
  */
-async function tryReclaimStale(lockPath: string, staleMs: number): Promise<'retry-now' | 'contended'> {
+async function tryReclaimStale(
+  lockPath: string,
+  staleMs: number,
+): Promise<'retry-now' | 'contended'> {
   let info;
   try {
     info = await stat(lockPath);
@@ -93,7 +96,11 @@ async function tryReclaimStale(lockPath: string, staleMs: number): Promise<'retr
   return 'retry-now';
 }
 
-async function acquireFileLock(lockPath: string, timeoutMs: number, staleMs: number): Promise<string> {
+async function acquireFileLock(
+  lockPath: string,
+  timeoutMs: number,
+  staleMs: number,
+): Promise<string> {
   const token = randomUUID();
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -146,6 +153,14 @@ async function acquireFileLock(lockPath: string, timeoutMs: number, staleMs: num
  * **`token` が一致するときだけ `unlink` する。** 一致しなければ、`staleMs` を
  * 過ぎて誰か他人に回収され、その他人が既に持っている——ここで消すと他人の
  * ロックを奪うことになる。`ENOENT`（既に無い）は握りつぶす。
+ *
+ * **⚠️ `readLockPayload` で読んでから `unlink` するまでの間に、別の主体が
+ * `staleMs` を過ぎたと判定して回収することは理屈上ありうる。** その窓に
+ * 割り込まれれば、ここで一致を確認した token はもう自分のものではなくなって
+ * おり、他人のロックを消すことになりうる——`tryReclaimStale` と同じ
+ * TOCTOU で、ここだけを直しても消えない。最終的な安全は、この窓が
+ * `staleMs` の見積もり（「これより長く1回の区間がかかることは無い」）より
+ * 十分短いことに寄りかかっている。
  */
 async function releaseFileLock(lockPath: string, token: string): Promise<void> {
   const payload = await readLockPayload(lockPath);
