@@ -1566,7 +1566,13 @@ describe('HTTP API', () => {
           remaining: number;
           removedIds: string[];
           raced: number;
-          skipped: Record<string, number>;
+          skipped: {
+            protected: number;
+            alreadyRemoved: number;
+            newest: number;
+            notContained: number;
+            inUse: number;
+          };
         };
         const skippedTotal =
           body.skipped.protected +
