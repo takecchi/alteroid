@@ -1,3 +1,6 @@
+import { describeValidity, statusValidity } from './inbox-validity.js';
+import type { JobStatus } from './schema.js';
+
 /**
  * マネージャーが「止まっているのか進んでいるのか」の判定を1箇所へ切り出す
  * 純関数（台帳 `028ee442` の指摘）。
@@ -182,4 +185,87 @@ export function describeManagerActivityForFlush(kind: ManagerActivityKind): stri
       throw new Error(`未知の ManagerActivityKind: ${JSON.stringify(exhaustive)}`);
     }
   }
+}
+
+/**
+ * `lastReport` が記録した「書いた瞬間の status」（`Job.lastReportStatus`）と
+ * いまの `status` を突き合わせ、「この報告は古い」ことを言う唯一の場所
+ * （Issue #1036）。`manager_report` / `manager_list` の両方がここを呼ぶ——
+ * 「この報告は N 分前のもので、いま走っているターンの中身ではない」を組む
+ * 文言の生成元を1つに保つ。
+ *
+ * ## ⚠ を出す条件
+ *
+ * **「drift が在るとき」＝ `lastReportStatus`（記録した status）といまの
+ * `status` が違うとき**（依頼者の判断。#1036 コメント）。`running` /
+ * `waiting_human` のような status の名簿は作らない——判定は
+ * {@link statusValidity}（`inbox-validity.ts`）の `changed` をそのまま使う。
+ *
+ * **健全な回（drift 無し）では空文字を返す。** `manager_list` /
+ * `manager_report` はこれを「1文字も足さない」の合図として使う
+ * （`describeTurnEnd` 等、この repo の他の `describe*` と同じ約束）。
+ *
+ * **記録した status が無い古い行（この欄を足す前に書かれた行）・報告が一度も
+ * 届いていない回は比較できないので空文字。** `describeValidity` の
+ * `unclaimed` が空文字を返すのと同じ約束（AGENTS.md「取れない軸に0の行を
+ * 作る」）。
+ *
+ * ## この関数が集中する範囲（#1036 コメント）
+ *
+ * ここが直すのは「出ていないもの」——`manager_report` / `manager_list` が
+ * 齢も status も1文字も出していなかった純粋な欠落——である。**受信箱の
+ * 断り書き（`describeValidity`）はもう発火していたのにクローンが読み飛ばした、
+ * という別の問題（#1036 コメントの (2)）はここでは直さない。** その答えは
+ * #1037（`manager_stop` を行為の側で断る。PR #1043）のほうであり、この関数は
+ * その代わりにはならない——⚠ の1行を増やすことが (2) の答えだとは名乗らない。
+ *
+ * ## 純関数のまま保つ
+ *
+ * `now` を引数で受け取る（`new Date()` を直接呼ばない）。`clone.ts` の
+ * `describeReportAge` と同じ作法。
+ */
+export function describeReportDrift(input: {
+  readonly managerId: string;
+  readonly lastReportAt?: string;
+  readonly lastReportStatus?: JobStatus;
+  readonly status: JobStatus;
+  readonly now: Date;
+}): string {
+  if (input.lastReportAt === undefined) return '';
+  const validity = statusValidity(input.lastReportStatus, { status: input.status });
+  if (validity.kind !== 'changed') return '';
+  const elapsedMs = input.now.getTime() - Date.parse(input.lastReportAt);
+  // **`NaN`・未来向きの経過は「分からない」へ倒す（症状ではない、へは倒さない）。**
+  // `age` を言えないだけで、`describeValidity` が既に確かめた drift そのものは
+  // 揺るがない——age 抜きの短い文で drift だけを言う。
+  const ageClause =
+    Number.isNaN(elapsedMs) || elapsedMs < 0
+      ? 'この報告は'
+      : `この報告は${formatMinutesAgo(elapsedMs)}のもので、`;
+  return (
+    `${describeValidity(validity, input.managerId, '台帳へ書かれた')} ` +
+    `${ageClause}いま走っているターンの中身ではない。`
+  );
+}
+
+/**
+ * 経過ミリ秒を「N分前」のような字面にする（{@link describeReportDrift} 専用）。
+ *
+ * `clone.ts` の `formatElapsed` と役目は似るが、あちらはそのファイルに閉じた
+ * private 関数で export されていない。**新しい I/O を増やさない**という
+ * このファイル冒頭の約束の下では、他ファイルの private 関数を export させに
+ * 行く（＝依存を増やす）よりも、ここに小さく複製するほうが安い——丸め方の
+ * 粒度が違うので（あちらは秒単位から、こちらは分単位から丸める）、共通化
+ * すると字面が変わる。
+ */
+function formatMinutesAgo(elapsedMs: number): string {
+  const minutes = Math.floor(elapsedMs / 60000);
+  if (minutes < 1) return '1分未満前';
+  if (minutes < 60) return `${minutes}分前`;
+  const hours = Math.floor(minutes / 60);
+  const remainderMinutes = minutes % 60;
+  if (hours < 24) return `${hours}時間${remainderMinutes}分前`;
+  const days = Math.floor(hours / 24);
+  const remainderHours = hours % 24;
+  return `${days}日${remainderHours}時間前`;
 }

@@ -12,12 +12,14 @@ import type {
   ManagerDenial,
   ManagerPool,
   ManagerSummary,
+  ManagerUnpushedWork,
   RunnerBacklogSnapshot,
   RunnerFleetOverview,
 } from './manager.js';
 import { commitmentFor } from './clone.js';
 import { runnerLivenessSchema } from './runner-protocol.js';
 import { CLONE_ACTOR_ID } from './usage.js';
+import { STALE_TOKEN_RECOVERY_CAVEAT } from './usage-limits.js';
 import { measureMemoryFloor, renderMemoryDocuments, scanMemorySections } from './memory.js';
 import { createProfileService } from './profile-service.js';
 import { heuristicChars, type HeuristicChars } from './quantity.js';
@@ -126,6 +128,24 @@ interface Harness {
    * もので、中身の差し替えは `setTranscript` / `setTranscriptFailure` の仕事。
    */
   transcriptCalls: string[];
+  /**
+   * `manager_stop` の running 断りが読む `ManagerPool.unpushedWork()` の
+   * 返り値を差し替える（#1039）。設定しなければ既定で
+   * `{ kind: 'unavailable', reason: '(テストの既定: 未設定)' }`。
+   */
+  setUnpushedWork(managerId: string, value: ManagerUnpushedWork): void;
+  /**
+   * `managers.unpushedWork()` を呼ぶと、代わりに例外を投げさせる（`pool` 自身が
+   * 例外を投げない設計であっても、呼び出し側（`tools.ts`）の `.catch` が本当に
+   * 効いているかを確かめるためにある）。
+   */
+  setUnpushedWorkThrows(managerId: string, message: string): void;
+  /**
+   * `managers.unpushedWork(managerId)` が呼ばれるたびに積む（#1039）。
+   * **`manager_list` や `force: true` の経路から呼ばれていないこと**を、
+   * この配列が空のままであることで確かめる。
+   */
+  unpushedWorkCalls: { managerId: string; hasSignal: boolean }[];
   /** `runners()` に渡された引数（`fingerprints` / `resources` を渡したかどうかの検査用）。 */
   runnersCalls: { fingerprints?: boolean; resources?: boolean }[];
   /**
@@ -175,6 +195,9 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
   const transcripts = new Map<string, TranscriptState>();
   const transcriptErrors = new Map<string, string>();
   const transcriptCalls: string[] = [];
+  const unpushedWorkResults = new Map<string, ManagerUnpushedWork>();
+  const unpushedWorkErrors = new Map<string, string>();
+  const unpushedWorkCalls: { managerId: string; hasSignal: boolean }[] = [];
   const runningOwners = new Map<string, string>();
   let memoryCause: 'distill' | 'clone' = 'clone';
   // **`ToolContext.conversationId` の呼び出し文脈（issue #1003 段2・#781）。**
@@ -234,6 +257,17 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
       const failure = transcriptErrors.get(managerId);
       if (failure !== undefined) throw new Error(failure);
       return transcripts.get(managerId) ?? { kind: 'missing' as const };
+    },
+    async unpushedWork(managerId: string, options?: { signal?: AbortSignal }) {
+      unpushedWorkCalls.push({ managerId, hasSignal: options?.signal !== undefined });
+      const failure = unpushedWorkErrors.get(managerId);
+      if (failure !== undefined) throw new Error(failure);
+      return (
+        unpushedWorkResults.get(managerId) ?? {
+          kind: 'unavailable' as const,
+          reason: '(テストの既定: 未設定)',
+        }
+      );
     },
     runningManagerOwning(archiveId: string) {
       return runningOwners.get(archiveId);
@@ -329,6 +363,10 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     // クローンの道具はこの口を呼ばない（#567 の計算はデーモンのポーラーが起こす）。
     async probeTurnEnds() {},
     async flushWithheldReports() {},
+    // クローンの道具はこの口を呼ばない（清算の契機はデーモンのポーラーにある）。
+    async settleStalledUsageWakes() {
+      return [];
+    },
     async stop() {},
   };
 
@@ -421,6 +459,13 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
       if (managerId === undefined) runningOwners.delete(archiveId);
       else runningOwners.set(archiveId, managerId);
     },
+    setUnpushedWork(managerId, value) {
+      unpushedWorkResults.set(managerId, value);
+    },
+    setUnpushedWorkThrows(managerId, message) {
+      unpushedWorkErrors.set(managerId, message);
+    },
+    unpushedWorkCalls,
     transcriptCalls,
     runnersCalls,
     async call(name, args) {
@@ -5073,6 +5118,98 @@ describe('クローンの道具', () => {
     expect(reply, '止まっていないのに「止めた」と言い切っている').not.toContain('止めた。');
   });
 
+  /**
+   * **`manager_stop` の running 断りは、未 push の実装・未コミットの変更を
+   * 実物の数字で言う（Issue #1039）。** 「畳むと未 push の実装…が失われる」
+   * という一般論を、実際の作業ツリーの件数へ替えるのが本題である。
+   *
+   * ここでは**複数の作業ツリーが在るとき、全部が応答に出る**ことを固定する
+   * ——1本目だけを返す実装ではこの歯が赤くなる（マネージャーが作業者へ別
+   * ツリーを切る運用を AGENTS.md が許容しているため、1本とは限らない）。
+   */
+  it('manager_stop の running 断りは、見つかった作業ツリーを全部出す', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.setUnpushedWork('mgr-1', {
+      kind: 'ok',
+      result: {
+        cwd: '/workspace',
+        worktrees: [
+          {
+            relativePath: 'mgr-1/repo',
+            branch: 'main',
+            unpushedCommitCount: 4,
+            uncommittedChangeCount: 0,
+          },
+          {
+            relativePath: 'mgr-1/wt-a',
+            branch: 'feat/x',
+            unpushedCommitCount: 0,
+            uncommittedChangeCount: 2,
+          },
+        ],
+      },
+    });
+
+    const reply = await h.call('manager_stop', { managerId: 'mgr-1', reason: '確認' });
+
+    expect(reply).toContain('mgr-1/repo');
+    expect(reply).toContain('mgr-1/wt-a');
+    expect(reply).toContain('4');
+    expect(reply).toContain('feat/x');
+    expect(h.aborted).toEqual([]);
+  });
+
+  /**
+   * **🔴 不変条件: この調べものが失敗しても、`manager_stop` は止まる道を
+   * 塞がない。** runner が答えられなかった（`pool.unpushedWork()` が例外を
+   * 投げた）場合でも、断り本文（force で止まるという案内）はそのまま返る
+   * ——「確かめられなかった」と名乗るだけで、0本だったとは言わない。
+   */
+  it('manager_stop は unpushedWork が失敗しても断りを返し、確かめられなかったと名乗る', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.setUnpushedWorkThrows('mgr-1', 'runner が応答しなかった（模擬）');
+
+    const reply = await h.call('manager_stop', { managerId: 'mgr-1', reason: '確認' });
+
+    expect(reply, '止める道（force の案内）が塞がっている').toContain('force');
+    expect(reply, '止めていない、という断りの本題が消えている').toContain('止めていない');
+    expect(reply).toContain('確かめられなかった');
+    expect(reply, '失敗を0件と混ぜている').not.toMatch(/未 push.*0本/);
+    expect(h.aborted, '調べものの失敗で abort が呼ばれてしまっている').toEqual([]);
+  });
+
+  it('manager_stop は unpushedWork が「確かめられなかった」を返しても断りを返す', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.setUnpushedWork('mgr-1', { kind: 'unavailable', reason: 'この runner はこの口を持たない' });
+
+    const reply = await h.call('manager_stop', { managerId: 'mgr-1', reason: '確認' });
+
+    expect(reply).toContain('確かめられなかった');
+    expect(reply).toContain('この runner はこの口を持たない');
+    expect(reply).toContain('force');
+  });
+
+  it('manager_stop は force: true のとき unpushedWork を呼ばない（往復を払わない）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+
+    await h.call('manager_stop', { managerId: 'mgr-1', reason: '確認', force: true });
+
+    expect(h.unpushedWorkCalls).toEqual([]);
+  });
+
+  it('manager_list は unpushedWork を呼ばない（一覧の側から自動で往復を足さない）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+
+    await h.call('manager_list', {});
+
+    expect(h.unpushedWorkCalls).toEqual([]);
+  });
+
   it('manager_stop は running でも force: true なら止める', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -5134,6 +5271,53 @@ describe('クローンの道具', () => {
     expect(reply, 'running 用の断りが waiting_human まで巻き込んでいる').not.toContain(
       '止めていない',
     );
+  });
+
+  /**
+   * **Issue #1038: 畳んだターンの本文へ、止めた直後に到達できること。**
+   * `abort()` 後に読み直した像（`after`）へ `lastFoldedTurn` が載っていれば、
+   * その抜粋を応答へ出す。
+   */
+  it('manager_stop は畳んだ本文が届いていれば抜粋を出す（Issue #1038）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0]!;
+    // **`abort()` の**後**に読み直す像にだけ載っていればよい。** 本物では
+    // `report` イベントが `abort()` とは別経路で後から届くが、この偽物の
+    // `abort()` は `lastFoldedTurn` に触らないので、事前にセットしておけば
+    // 「読み直した時点で既に載っていた」を模せる。
+    target.lastFoldedTurn = {
+      text: 'push 完了。PR #313 を出した。',
+      at: '2026-09-16T00:10:00.000Z',
+    };
+
+    const reply = await h.call('manager_stop', {
+      managerId: 'mgr-1',
+      reason: '429 の再試行',
+      force: true,
+    });
+
+    expect(reply).toContain('push 完了。PR #313 を出した。');
+    expect(reply).toContain('2026-09-16T00:10:00.000Z');
+    expect(reply, '全文の在り処（manager_report）を案内すること').toContain('manager_report');
+  });
+
+  it('manager_stop は畳んだ本文がまだ届いていなければ manager_report への案内を出す（Issue #1038）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    // `lastFoldedTurn` を一切セットしない——届いていない状態を模す。
+
+    const reply = await h.call('manager_stop', {
+      managerId: 'mgr-1',
+      reason: '429 の再試行',
+      force: true,
+    });
+
+    expect(reply, '届いていない本文を待って応答を止めていないこと（そのまま返っている）').toContain(
+      'stopped',
+    );
+    expect(reply).toContain('まだ台帳に届いていない');
+    expect(reply, '案内先は manager_report であること').toContain('manager_report');
   });
 
   it('manager_list は状態と返事待ちを返す', async () => {
@@ -5611,6 +5795,50 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * **Issue #1036: 焼いた status（`lastReportStatus`）といまの `status` が
+   * 食い違えば、行を新しく増やさずに既存の「（… 受信）」の中へ印を足す。**
+   *
+   * **行数が変わらないことそのものを測る**——文言が出ることだけを測ると、
+   * 行を1本増やす実装でも緑になってしまう（依頼の要求どおり）。
+   */
+  it('manager_list は焼いた status といまの status の食い違いを、行を増やさずに印で出す（Issue #1036）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.lastReport = '終わった';
+    target.lastReportAt = '2026-09-16T00:00:00.000Z';
+    target.status = 'stopped';
+
+    target.lastReportStatus = 'stopped'; // 一致——drift 無し
+    const clean = await h.call('manager_list', {});
+
+    target.lastReportStatus = 'running'; // 食い違い
+    const withDrift = await h.call('manager_list', {});
+
+    expect(clean.split('\n').length, '印は既存行の中へ足すので行数は変わらない').toBe(
+      withDrift.split('\n').length,
+    );
+    expect(withDrift).toContain('⚠');
+    expect(clean, '一致している回は1文字も増えない').not.toContain('⚠');
+  });
+
+  it('manager_list は lastReportStatus が無い（比較できない）行に何も足さない（Issue #1036）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.lastReport = '終わった';
+    target.lastReportAt = '2026-09-16T00:00:00.000Z';
+    target.status = 'done';
+    // lastReportStatus はセットしない（この欄を持たない古い行を模す）。
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).not.toContain('⚠');
+  });
+
+  /**
    * **取れない軸に0の行を作らない**（AGENTS.md の地雷表）。`lastReportAt` が
    * 無い（版のずれ・古いデータ）行に「未受信」のような文言を作らない——
    * `lastReport` の行はそのまま出るだけで、時刻の断片は付かない。
@@ -5696,6 +5924,141 @@ describe('クローンの道具', () => {
     expect(reply).not.toContain('⚠ 直近のターンは報告ではなく失敗で終わっている');
     expect(reply).not.toContain('完遂して畳んだと読まないこと');
     expect(reply).not.toContain('原因が解ければ manager_send で続きから進む');
+  });
+
+  /**
+   * **Issue #1036 の本題。** `manager_report` は以前 `lastReportAt` も
+   * `status` も1文字も出していなかった——読み手は直近に完了したターンの
+   * 中身を、いまの状態として読むしかなかった（#1036 の事故）。
+   */
+  it('manager_report は lastReportAt といまの status を見出しに出す（Issue #1036）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0]!;
+    target.lastReport = '報告本文';
+    target.lastReportAt = '2026-09-16T00:00:00.000Z';
+    target.status = 'done';
+
+    const reply = await h.call('manager_report', { managerId: target.managerId });
+
+    expect(reply).toContain('2026-09-16T00:00:00.000Z');
+    expect(reply).toContain('`done`');
+  });
+
+  /**
+   * **Issue #1036: 焼いた status（`lastReportStatus`）といまの `status` が
+   * 食い違えば ⚠ を出す。** `running` に限定しない——焼いた値といまの値が
+   * 違えば常に出す（依頼で明示された条件）。
+   */
+  it('manager_report は焼いた status といまの status が食い違うとき ⚠ を出す（Issue #1036）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0]!;
+    target.lastReport = '報告本文';
+    target.lastReportAt = '2026-09-16T00:00:00.000Z';
+    target.lastReportStatus = 'running';
+    target.status = 'stopped';
+
+    const reply = await h.call('manager_report', { managerId: target.managerId });
+
+    expect(reply).toContain('⚠');
+    expect(reply).toContain('running');
+    expect(reply).toContain('stopped');
+  });
+
+  it('manager_report は焼いた status といまの status が一致していれば1文字も増えない（Issue #1036）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0]!;
+    target.lastReport = '報告本文';
+    target.lastReportAt = '2026-09-16T00:00:00.000Z';
+    target.status = 'done';
+    target.lastReportStatus = 'done'; // 一致
+
+    const reply = await h.call('manager_report', { managerId: target.managerId });
+
+    expect(reply).not.toContain('⚠');
+    expect(
+      reply,
+      '一致・比較不能な回は describeValidity の changed/unknowable 文言を出さない',
+    ).not.toContain('前提は動いています');
+  });
+
+  it('manager_report は lastReportStatus が無い（比較できない）行では ⚠ を出さない（Issue #1036）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0]!;
+    target.lastReport = '報告本文';
+    target.lastReportAt = '2026-09-16T00:00:00.000Z';
+    target.status = 'stopped';
+    // lastReportStatus はセットしない（この欄を持たない古い行を模す）。
+
+    const reply = await h.call('manager_report', { managerId: target.managerId });
+
+    expect(reply).not.toContain('⚠');
+  });
+
+  /**
+   * **`part: 'request'` では齢も status も ⚠ も出さない**——依頼文はそもそも
+   * 報告ではない（`failure` / `systemError` / `denied` / `unobserved` と
+   * 同じ線。Issue #1036）。
+   */
+  it('manager_report は part=request では齢も status も ⚠ も出さない（Issue #1036）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '依頼の本文' });
+    const target = h.running[0]!;
+    target.lastReport = '報告本文';
+    target.lastReportAt = '2026-09-16T00:00:00.000Z';
+    target.lastReportStatus = 'running';
+    target.status = 'stopped'; // 食い違いを作ってあるので、出れば必ず検出できる
+
+    const reply = await h.call('manager_report', {
+      managerId: target.managerId,
+      part: 'request',
+    });
+
+    expect(reply).not.toContain('2026-09-16T00:00:00.000Z');
+    expect(reply).not.toContain('いまの status');
+    expect(reply).not.toContain('⚠');
+  });
+
+  /**
+   * **Issue #1038: 停止後に届いた本文へ、`manager_report` から到達できること。**
+   * `lastFoldedTurn` は `lastReport` より後に届いた内容なので、在れば優先して
+   * 見せ、見出しで「これは停止後に届いた、畳まれたターンの中身である」と
+   * 言い分ける。
+   */
+  it('manager_report は lastFoldedTurn を lastReport より優先して見せ、見出しを言い分ける（Issue #1038）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0]!;
+    target.lastReport = '停止前の完遂した報告';
+    target.status = 'stopped';
+    target.lastFoldedTurn = {
+      text: '停止後に届いた畳まれた本文',
+      at: '2026-09-16T00:20:00.000Z',
+    };
+
+    const reply = await h.call('manager_report', { managerId: target.managerId });
+
+    expect(reply).toContain('停止後に届いた畳まれた本文');
+    expect(reply).toContain('停止後に届いた、畳まれたターンの中身');
+    expect(reply).toContain('2026-09-16T00:20:00.000Z');
+    // 優先して見せる——完遂した古い報告の本文は、この応答の中心には出ない。
+    expect(reply).not.toContain('停止前の完遂した報告');
+  });
+
+  it('manager_report は lastFoldedTurn が無ければ従来どおり lastReport を見せる（Issue #1038）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0]!;
+    target.lastReport = '完遂した報告';
+    // lastFoldedTurn はセットしない。
+
+    const reply = await h.call('manager_report', { managerId: target.managerId });
+
+    expect(reply).toContain('完遂した報告');
+    expect(reply).not.toContain('停止後に届いた');
   });
 
   /**
@@ -6008,6 +6371,74 @@ describe('クローンの道具', () => {
     expect(reply).toContain('完遂して畳んだと読まないこと');
     // **末尾に回復の見込みが添えられる。**
     expect(reply).toContain('（回復の見込み: 時間で戻る（time））');
+  });
+
+  /**
+   * **同じ1件の中で、2つの行が逆の助言を出さないこと**（Issue #931）。
+   *
+   * `manager_list` の `extra` には `failureLine` と
+   * `describeTokenGeneration` が**同じ配列で並ぶ**。世代が食い違っている
+   * 委譲では、後者が「`manager_stop` → `manager_start` で起こし直せ」と
+   * 言い、前者が「時間で戻る（time）」と言う——**読み手はどちらに従えばよいか
+   * を、この一覧からは決められない。**
+   *
+   * ⛔ **これはコードから読める食い違いであって、実害を観測したものではない。**
+   * #931 が実測した5連続 429 のセッションの日誌は既に残っていない（同 Issue の
+   * 2026-09-15T01:17:30Z のコメント）ので、**当時この形だったかは確かめられない。**
+   * 測っているのは構造だけである。
+   */
+  it('manager_list は世代が食い違う委譲に「時間で戻る」だけを出さない（#931）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.lastReport =
+      '（このターンは応答を返さずに終わった: billing_error / assistant_error）\n' +
+      "You've hit your org's monthly spend limit";
+    target.lastFailure = {
+      code: 'billing_error',
+      via: 'assistant_error',
+      at: '2026-09-09T01:23:45.000Z',
+    };
+    target.tokenGeneration = 3;
+    target.activeTokenGeneration = 5;
+
+    const reply = await h.call('manager_list', {});
+
+    // 既存の2行はどちらも無傷で出る（**但し書きは足すものであって、
+    // どちらかを消すものではない**）。
+    expect(reply).toContain('（回復の見込み: 時間で戻る（time））');
+    expect(reply).toContain('⚠ 認証トークンの世代が食い違っている');
+    // そして「枠の話であって、この委譲が戻る話ではない」が添う。
+    expect(reply).toContain(STALE_TOKEN_RECOVERY_CAVEAT);
+  });
+
+  /**
+   * **陰性対照。** 世代が一致している大多数の委譲では1文字も増えない
+   * ——増えるなら、予算に張り付いている一覧へノイズを足したことになる
+   * （`describeManagerFailure` の doc「健全なマネージャーでは `null`」と
+   * 同じ向き）。
+   */
+  it('manager_list は世代が一致していれば但し書きを足さない（#931 の陰性対照）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.lastReport =
+      '（このターンは応答を返さずに終わった: billing_error / assistant_error）\n' +
+      "You've hit your org's monthly spend limit";
+    target.lastFailure = {
+      code: 'billing_error',
+      via: 'assistant_error',
+      at: '2026-09-09T01:23:45.000Z',
+    };
+    target.tokenGeneration = 5;
+    target.activeTokenGeneration = 5;
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('（回復の見込み: 時間で戻る（time））');
+    expect(reply).not.toContain(STALE_TOKEN_RECOVERY_CAVEAT);
   });
 
   it('manager_list は失敗の⚠行に回復の見込み（action）を添える（#393）', async () => {

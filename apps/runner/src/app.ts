@@ -1176,6 +1176,22 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       const body = await host.transcript(c.req.param('id'));
       if (body === null) return c.json({ error: 'not found' as const }, 404);
       return c.text(body);
+    })
+
+    /**
+     * この managerId の作業ツリーが抱えている、未 push の実装と未コミットの
+     * 変更（Issue #1039）。`manager_stop` の running 断りだけが呼ぶ——
+     * `manager_list` からは呼ばれない（デーモン側の作法。`ManagerPool.
+     * unpushedWork` の doc）。
+     *
+     * `c.req.raw.signal` を下へ渡す。**接続が切れても走っている git は
+     * 止めない**——`computeUnpushedWork` の `signal` の doc と同じ「相手は
+     * 止めない」作法で、次の作業ツリーへ進む前にだけ見る。
+     */
+    .get('/managers/:id/unpushed-work', async (c) => {
+      const result = await host.unpushedWork(c.req.param('id'), { signal: c.req.raw.signal });
+      if (result === undefined) return c.json({ error: 'not found' as const }, 404);
+      return c.json(result);
     });
 
   return app;

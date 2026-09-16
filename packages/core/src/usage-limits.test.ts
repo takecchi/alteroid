@@ -11,6 +11,7 @@ import {
   longestMatchingPrefix,
   matchedUsageLimitPrefix,
   mergeRateLimitFacts,
+  STALE_TOKEN_RECOVERY_CAVEAT,
   toRateLimitFacts,
   usageTransitionOf,
   withRecoveryNote,
@@ -562,5 +563,55 @@ describe('回復の見込みを添える（withRecoveryNote）', () => {
     // ここへ来ても `unknown` になる）。毎回1行足すと大半にノイズが増えるので、
     // 分かったときだけ出す設計にしてある（`withRecoveryNote` の doc）。
     expect(withRecoveryNote(base, 'unknown')).toBe(base);
+  });
+});
+
+/**
+ * **「枠は戻る」と「この委譲が戻る」を1つの語で兼ねない**（Issue #931）。
+ *
+ * 認証トークンの世代が食い違ったまま走っているセッションは、**枠がリセット
+ * されても古い鍵で叩き続ける。** ⟹ `time` だけを出すと「待てばこの委譲は
+ * 戻る」と読まれ、#931 が実測した「突いて確かめる」（＝診断が枠を食う）側へ
+ * 読み手を押し出す。
+ *
+ * ⛔ **これはコードから読める食い違いであって、実害を観測したものではない。**
+ * #931 が実測した5連続 429 のセッションの日誌はもう残っていない（同 Issue の
+ * 2026-09-15T01:17:30Z のコメント）ので、この形が当時起きていたかは確かめられ
+ * ない。**ここで測っているのは「2つの行が矛盾した助言を同時に出しうる」と
+ * いう構造だけである。**
+ *
+ * **陰性対照を対で置く**（このリポジトリの歯の作法）——`staleToken` が
+ * 偽・`action`・`unknown` のときに1文字も増えないことを確かめる。増えると、
+ * 「分かったときだけ出す」という既存の設計を壊したことになる。
+ */
+describe('世代が食い違う委譲には「時間で戻る」だけを出さない（withRecoveryNote の staleToken）', () => {
+  const base = '⚠ 直近のターンは報告ではなく失敗で終わっている: SOME CODE';
+
+  it('time かつ staleToken のときだけ但し書きを足す', () => {
+    const decorated = withRecoveryNote(base, 'time', { staleToken: true });
+    // 既存の2行は無傷で残る（但し書きは**足す**ものであって書き換えではない）。
+    expect(decorated.startsWith(base)).toBe(true);
+    expect(decorated).toContain('（回復の見込み: 時間で戻る（time））');
+    expect(decorated).toContain(STALE_TOKEN_RECOVERY_CAVEAT);
+  });
+
+  it('staleToken が偽なら、いままでと1文字も変わらない', () => {
+    // **既定の形を動かしていないことの歯である。** ここが赤くなるなら、
+    // 世代の食い違っていない大多数の委譲にまでノイズを足したことになる。
+    expect(withRecoveryNote(base, 'time', { staleToken: false })).toBe(
+      withRecoveryNote(base, 'time'),
+    );
+    expect(withRecoveryNote(base, 'time', {})).toBe(withRecoveryNote(base, 'time'));
+  });
+
+  it('action には足さない（既に「待っても戻らない」と言っている）', () => {
+    // 同じことを2行で言うだけになるため（`withRecoveryNote` の doc）。
+    expect(withRecoveryNote(base, 'action', { staleToken: true })).toBe(
+      withRecoveryNote(base, 'action'),
+    );
+  });
+
+  it('unknown には足さない（1文字も増やさない側を保つ）', () => {
+    expect(withRecoveryNote(base, 'unknown', { staleToken: true })).toBe(base);
   });
 });

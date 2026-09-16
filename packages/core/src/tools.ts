@@ -63,7 +63,7 @@ import {
   renderListingEntry,
   renderListingFromEnd,
 } from './excerpt.js';
-import { classifyManagerActivity } from './manager-activity.js';
+import { classifyManagerActivity, describeReportDrift } from './manager-activity.js';
 import type { ManagerActivityInput } from './manager-activity.js';
 import { guardArchiveRemoval } from './manager.js';
 import type {
@@ -71,6 +71,7 @@ import type {
   ManagerPool,
   ManagerSummary,
   ManagerTranscript,
+  ManagerUnpushedWork,
   RunnerBacklogSnapshot,
   RunnerManagerEntry,
   RunnerPushOutcome,
@@ -518,6 +519,16 @@ const LIST_REPORT_EXCERPT = 240;
  * （`manager.ts`、400字）で、ここはそれを一覧向けにさらに切る。
  */
 const LIST_TURN_END_TAIL_EXCERPT = 160;
+/**
+ * `manager_stop` の応答に、畳んだターンの本文（`lastFoldedTurn`。Issue
+ * #1038）の抜粋を添えるときの厚み。
+ *
+ * **`LIST_REPORT_EXCERPT` を使い回さない**（`LIST_TURN_END_TAIL_EXCERPT` の
+ * doc と同じ理由——用途ごとに別に置く。値がいま同じ桁でも、片方だけを
+ * 直したくなったときに一緒に動いてしまう）。全文は `manager_report` で読める
+ * ので、ここは「誤って止めたことに気づく」ために十分な長さがあればよい。
+ */
+const MANAGER_STOP_FOLDED_TURN_EXCERPT = 240;
 /**
  * 返事待ち1件の要約の厚み。
  *
@@ -1794,10 +1805,24 @@ function denialLine(denials: ManagerDenial[]): string | null {
  * `assistant_error` でなければ `code` は `SDKAssistantMessageError` の語彙
  * ではない（`result_subtype` / `result_is_error` の `code` は `subtype` 文字列）
  * ので、語ベースの軸を当てない。
+ *
+ * **`staleToken` は「枠は戻るが、この委譲は戻らない」を言うための口である
+ * （Issue #931）。** 認証トークンの世代が食い違ったまま走っているセッションは、
+ * 枠がリセットされても古い鍵で叩き続けるので、`time`（時間で戻る）だけを
+ * 出すと**待てばこの委譲が戻ると読まれる**。⟹ そのときは
+ * `withRecoveryNote` がもう1行足す（`STALE_TOKEN_RECOVERY_CAVEAT`）。
+ * **判定は {@link tokenGenerationMismatched} の1箇所から受け取るだけで、
+ * ここでは決めない。**
+ *
+ * ⚠️ **同じ矛盾は受信箱の側にも残っている。** `manager.ts` の
+ * `case 'usage_notice'` も `withRecoveryNote` を呼ぶが、あちらは合図が
+ * 届いた瞬間の文言で、世代の行を並べて出していないので、ここでは触っていない
+ * （Issue #931 に残した）。
  */
 function describeManagerFailure(
   failure: ManagerSummary['lastFailure'],
   lastReport: string | undefined,
+  staleToken = false,
 ): string | null {
   if (failure === undefined) return null;
   const base =
@@ -1815,7 +1840,7 @@ function describeManagerFailure(
       : failure.via === 'assistant_error'
         ? limitRecoveryOfAssistantError(failure.code)
         : 'unknown';
-  return withRecoveryNote(base, recovery);
+  return withRecoveryNote(base, recovery, { staleToken });
 }
 
 /**
@@ -1824,12 +1849,19 @@ function describeManagerFailure(
  * `extra` の行は `  `（空白2つ）で始める約束である（`excerpt.ts` の
  * `renderListingEntry` の doc）。**字面そのものはここで作らない**——作ると
  * `manager_report` と割れる。
+ *
+ * **`ManagerSummary` ごと受け取る（Issue #931）。** 以前は
+ * `lastFailure` と `lastReport` の2つだけを渡していたが、
+ * {@link tokenGenerationMismatched} を当てるのに同じ委譲の世代が要る。
+ * **2つの欄だけを渡す形に戻さないこと**——戻すと、呼び出し側が判定を
+ * 組み立て直すことになり、`manager_report` 側と割れる。
  */
-function failureLine(
-  failure: ManagerSummary['lastFailure'],
-  lastReport: string | undefined,
-): string | null {
-  const note = describeManagerFailure(failure, lastReport);
+function failureLine(manager: ManagerSummary): string | null {
+  const note = describeManagerFailure(
+    manager.lastFailure,
+    manager.lastReport,
+    tokenGenerationMismatched(manager),
+  );
   return note === null ? null : `  ${note}`;
 }
 
@@ -2188,6 +2220,25 @@ function describeTokenGenerationUnknownReason(reason: TokenGenerationUnknownReas
  * 「出す」と約束している値そのものなので、一致していることも材料が在る限り
  * 言う。
  */
+/**
+ * **この委譲が抱えている認証トークンの世代が、現役と食い違っているか**
+ * （Issue #914 提案1 の判定そのもの。Issue #931 で2つ目の読み手が付いた）。
+ *
+ * **判定を2箇所へ書かないためだけに在る。** {@link describeTokenGeneration}
+ * が ⚠ の行を出すかどうかと、{@link failureLine} が回復の見込みに但し書きを
+ * 足すかどうかは、**同じ1つの事実**である——別々に書くと、いつか片方だけが
+ * 直って「世代は食い違っているのに『時間で戻る』とだけ出る」形に戻る。
+ *
+ * **どちらかが `undefined` なら偽である。** 比べる相手が居ないときに
+ * 食い違いを捏造しない（`ManagerSummary.activeTokenGeneration` の doc と
+ * 同じ理由）。
+ */
+function tokenGenerationMismatched(manager: ManagerSummary): boolean {
+  if (manager.tokenGeneration === undefined) return false;
+  if (manager.activeTokenGeneration === undefined) return false;
+  return manager.tokenGeneration !== manager.activeTokenGeneration;
+}
+
 function describeTokenGeneration(manager: ManagerSummary): string | null {
   if (manager.tokenGeneration === undefined) {
     return manager.tokenGenerationUnknownReason === undefined
@@ -2200,7 +2251,7 @@ function describeTokenGeneration(manager: ManagerSummary): string | null {
     // activeTokenGeneration` の doc と同じ理由で、0 や「一致」を捏造しない。
     return `  認証トークンの世代: ${manager.tokenGeneration}（現役は不明——比べられない）`;
   }
-  if (manager.tokenGeneration === manager.activeTokenGeneration) {
+  if (!tokenGenerationMismatched(manager)) {
     return `  認証トークンの世代: ${manager.tokenGeneration}（現役と一致）`;
   }
   return (
@@ -2639,6 +2690,66 @@ function describeMemorySectionLookupFailure(
     default:
       return assertNeverMemorySectionLookup(lookup);
   }
+}
+
+/**
+ * `manager_stop` の running 断り（#1037）が呼ぶ `pool.unpushedWork()` の期限
+ * （Issue #1039）。
+ *
+ * ⚠️ **実測に基づく値ではない。** Issue #1039 が測った「1本 6ms 強 / 8本
+ * 49〜51ms」は器の中のローカルな `git` の実行時間だけで、daemon ↔ runner の
+ * HTTP 往復と別 UID の子プロセス起動は含んでいない。ここは安全側に短く
+ * 取った未検証の既定値である——`manager_stop` 自体の応答が長々と待たされる
+ * ことのほうが実害なので、`pool.unpushedWork()` が失敗しても構わない設計
+ * （下記）に頼って短めに切ってある。
+ */
+const MANAGER_STOP_UNPUSHED_WORK_TIMEOUT_MS = 5_000;
+
+/**
+ * `manager_stop` の running 断りへ、未 push の実装と未コミットの変更を実物の
+ * 数字で足す（Issue #1039）。
+ *
+ * ⛔ **ここで組み立てる文言にファイル名・差分の中身・コミットメッセージ・
+ * author を一切含めないこと。** `ManagerUnpushedWork` / `UnpushedWorkResult`
+ * はそれらの欄自体を持たない（`unpushedWorkTreeSchema` の doc）ので、
+ * 書き足さない限り漏れようがない——ここでも同じ線をなぞって出すだけにする。
+ */
+function describeUnpushedWork(probe: ManagerUnpushedWork): string {
+  if (probe.kind === 'unavailable') {
+    return `未 push の実装・未コミットの変更: **確かめられなかった**（${probe.reason}）。`;
+  }
+  const { result } = probe;
+  if (result.worktrees.length === 0) {
+    return `未 push の実装・未コミットの変更: 作業ツリーが見つからなかった（${result.cwd} の下を探索した）。`;
+  }
+  const lines = result.worktrees.map((worktree) => {
+    const branch = worktree.branch ?? '(枝を指していない、または確かめられなかった)';
+    const unpushed =
+      worktree.unpushedCommitCount === undefined
+        ? `未 push: 確かめられなかった（${worktree.unpushedCommitCountUnknown ?? '理由不明'}）`
+        : `未 push ${String(worktree.unpushedCommitCount)}本`;
+    const uncommitted =
+      worktree.uncommittedChangeCount === undefined
+        ? `未コミット: 確かめられなかった（${worktree.uncommittedChangeCountUnknown ?? '理由不明'}）`
+        : `未コミット ${String(worktree.uncommittedChangeCount)}件`;
+    return `  - ${worktree.relativePath}（枝: ${branch}）: ${unpushed} / ${uncommitted}`;
+  });
+  const truncatedNote =
+    result.truncatedAtCount === undefined
+      ? ''
+      : `\n  ⚠️ 作業ツリーの探索は${String(result.truncatedAtCount)}件で打ち切った——さらに在る可能性がある。`;
+  const stoppedEarlyNote =
+    result.stoppedEarly === true
+      ? '\n  ⚠️ 呼び出し元の期限切れで、一部の作業ツリーは調べる前に打ち切った（各行の理由を見よ）。'
+      : '';
+  return (
+    `未 push の実装・未コミットの変更（${result.cwd} の下、${String(result.worktrees.length)}本の作業ツリー）:\n` +
+    lines.join('\n') +
+    truncatedNote +
+    stoppedEarlyNote +
+    '\n  ⚠️ 未 push の数は fetch していない remote-tracking ref を基準にしており、' +
+    '実際には push 済みでも多めに出ることがある（安全側の誤り）。'
+  );
 }
 
 /** ツール定義そのもの。MCP の配線を通さずに単体テストできるよう分けてある。 */
@@ -6642,10 +6753,27 @@ export function createCloneTools(context: ToolContext) {
               ? '直近の報告は一度も届いていない。'
               : `直近の報告は ${before.lastReportAt}` +
                 '（最後に終えたターンのもの。いま走っているターンの中身ではない）。';
+
+          // **「畳むと未 push の実装が失われる」を一般論から実物へ替える
+          // （#1039）。⛔ この調べものが失敗しても、この断り（＝止める道が
+          // 塞がっていないこと）は必ず返す** ——`pool.unpushedWork()` は
+          // 自分自身は例外を投げない設計だが、念のためここでも捕まえる。
+          // `force: true` の経路（この if の外）と `manager_list` からは
+          // 呼ばない。
+          const unpushedWork = await pool
+            .unpushedWork(managerId, {
+              signal: AbortSignal.timeout(MANAGER_STOP_UNPUSHED_WORK_TIMEOUT_MS),
+            })
+            .catch((error: unknown): ManagerUnpushedWork => ({
+              kind: 'unavailable',
+              reason: `確かめようとして例外が飛んだ: ${String(error)}`,
+            }));
+
           return text(
             `[${managerId}] 止めていない。**いまターンの途中**（running）— 畳むと未 push の実装・` +
               '起こした作業者・監視中の CI が失われる。🔴 force: true で止まる。\n' +
-              `${lastReportLine} ターンの中身は manager_report で先に読めること。`,
+              `${lastReportLine} ターンの中身は manager_report で先に読めること。\n` +
+              describeUnpushedWork(unpushedWork),
           );
         }
 
@@ -6709,6 +6837,26 @@ export function createCloneTools(context: ToolContext) {
           after === undefined
             ? '一覧からも消えている。'
             : `いまの状態: ${describeManagerState(after.status, after.live, after.awaitingBackground)}。`,
+        );
+        // **畳んだターンの本文へ、止めた直後に到達できるようにする（Issue
+        // #1038）。** 誤って止めたことに気づく契機が、止めた直後には無かった
+        // のが実害——件数と時刻しか言わない `withheld` の案内（すぐ下と別物）
+        // とは違い、ここは**いま畳んだターンの中身そのもの**を扱う。
+        //
+        // ⛔ **届いていない本文を待ってこの応答を止めない。** `abort()` は
+        // `runner.stop()` を待った直後に `status` を書くが、この report
+        // イベントは HTTP 越しの runner では別経路で後から届く
+        // （`schema.ts` の `lastFoldedTurn` の doc「順序の注意」）——
+        // `manager_stop` の応答を組む時点でまだ届いていないことは普通にある。
+        // **2段にする**: 届いていれば抜粋を、届いていなければ
+        // `manager_report` への案内を出す。
+        lines.push(
+          after?.lastFoldedTurn === undefined
+            ? '畳んだターンの本文はまだ台帳に届いていない（別経路で後から届くことがある）。' +
+                `届けば台帳へ残るので、manager_report ${managerId} で後から読めること。`
+            : `畳んだターンの本文（${after.lastFoldedTurn.at} 受信）: ` +
+                `${excerptLine(after.lastFoldedTurn.text, MANAGER_STOP_FOLDED_TURN_EXCERPT)} ` +
+                `全文は manager_report ${managerId} で読めること。`,
         );
         return text(lines.join('\n'));
       },
@@ -6891,6 +7039,10 @@ export function createCloneTools(context: ToolContext) {
       async ({ status, cursor }) => {
         if (!context.managers) return NO_POOL;
         const managers = await context.managers.list();
+        // **この一覧ぜんぶで同じ「いま」を使う（Issue #1036）。** 行ごとに
+        // `new Date()` を呼ぶと、同じ応答の中で判定の基準がずれる
+        // （`describeReportDrift` に渡す `now`）。
+        const now = new Date();
         // **デーモン→クローンの脚（受信箱）の滞留は、マネージャーの本数と無関係**
         // （#358）。マネージャーが1本も居なくても、受信箱には既に合図が溜まって
         // いることがあるので、早期リターンの前に確かめる。
@@ -7028,8 +7180,22 @@ export function createCloneTools(context: ToolContext) {
         // **予算を先に決めて、入るところまで積む。** 件数から出力量を決めると、
         // 何件で壊れるかが運任せになる。切ったなら必ずそう言う。
         // 積む形そのものは `renderListing` が持つ（一覧ごとに手で書かない）。
-        const items = paged.map((manager) =>
-          renderListingEntry({
+        const items = paged.map((manager) => {
+          // **焼いた status といまの status が食い違えば印を1つ足す（Issue
+          // #1036）。** 行を新しく増やさない——直下の「（… 受信）」という
+          // 既存の行へ添えるだけ（このすぐ下のコメントが書くとおり、行を
+          // 1本増やすと予算に張り付いている一覧では出る件数が減る）。
+          // 判定のコピーは作らない——生成元は `describeReportDrift` 1箇所で、
+          // `manager_report` と同じ字面の元から取る（真偽だけをここで使う）。
+          const drift = describeReportDrift({
+            managerId: manager.managerId,
+            lastReportAt: manager.lastReportAt,
+            lastReportStatus: manager.lastReportStatus,
+            status: manager.status,
+            now,
+          });
+          const driftMark = drift === '' ? '' : '、⚠ status 食い違い（manager_report で詳細）';
+          return renderListingEntry({
             id: manager.managerId,
             // **第3引数まで通す（#621 / #643）。** `status: 'done'` は
             // 「手が空いた」と「背景処理の完了を待って畳んだ」を潰している——
@@ -7189,7 +7355,7 @@ export function createCloneTools(context: ToolContext) {
               // エラー文（`lastReport`）を先に読んでから「実は報告ではない」と
               // 分かる順になる。人間の CLI が同じ順で置いてある
               // （`apps/cli/src/chat.ts` の「**失敗は報告の**上**に置く。**」）。
-              failureLine(manager.lastFailure, manager.lastReport),
+              failureLine(manager),
               // **セッションそのものが `failed` として畳まれた落ち方も、同じ
               // 「失敗は報告の上」の順で置く（Issue #713 段3）。** `lastFailure`
               // の行（すぐ上）とは別の軸なので別行——**両方が同時に出ることは
@@ -7217,7 +7383,7 @@ export function createCloneTools(context: ToolContext) {
                   // `直近のターンの中身`）——同じ台帳の欄を2つの面が別の語で
                   // 呼ぶと、面をまたいで読む人間がそこで詰まる。判定は
                   // `isFoldedTurnReport` に寄せてある（その doc を参照）。
-                  `  ${isFoldedTurnReport(manager) ? '直近のターンの中身' : '直近の報告'}${manager.lastReportAt === undefined ? '' : `（${manager.lastReportAt} 受信）`}: ${excerptLine(manager.lastReport, LIST_REPORT_EXCERPT)}`,
+                  `  ${isFoldedTurnReport(manager) ? '直近のターンの中身' : '直近の報告'}${manager.lastReportAt === undefined ? '' : `（${manager.lastReportAt} 受信${driftMark}）`}: ${excerptLine(manager.lastReport, LIST_REPORT_EXCERPT)}`,
               // **Issue #567**: ターンが終わっているらしいのに報告が届いて
               // いない可能性を、条件つきで添える（`describeTurnEnd` の doc）。
               // **健全なマネージャーでは `null` を返し、1文字も増えない**——
@@ -7241,8 +7407,8 @@ export function createCloneTools(context: ToolContext) {
               // を名乗る行が出る**（`TokenGenerationUnknownReason` の doc）。
               describeTokenGeneration(manager),
             ],
-          }),
-        );
+          });
+        });
         return text(
           [
             // **本数は一覧の外に出す。** 一覧は予算で打ち切られる（すぐ下の
@@ -7390,7 +7556,16 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        const body = part === 'request' ? found.request : found.lastReport;
+        // **停止後に届いた、畳まれたターンの本文（Issue #1038）。**
+        // `part === 'request'` では扱わない——依頼文の話ではない。**在れば
+        // `lastReport`（完遂した報告）より優先して見せる**——`lastFoldedTurn`
+        // は `lastReport` より後に届いた内容だからである（`case 'report'` は
+        // `record.job.status === 'stopped'` の間だけここへ書き、`lastReport`
+        // は触らない）。これが無いと、「停止後に届いた本文に到達できること」
+        // （#1038 の要件）が満たせない——`lastReport` の陰に隠れたまま
+        // `manager_report` からは一生読めなくなる。
+        const foldedTurn = part === 'request' ? undefined : found.lastFoldedTurn;
+        const body = part === 'request' ? found.request : (foldedTurn?.text ?? found.lastReport);
         if (body === undefined || body.length === 0) {
           if (part === 'request') {
             return text(`マネージャー ${managerId} の依頼文が記録に無い。`);
@@ -7442,7 +7617,13 @@ export function createCloneTools(context: ToolContext) {
         // **`part === 'request'` では何もしない。** 依頼文はそもそも報告では
         // ないので、失敗の有無で呼び方が変わる欄ではない。
         const failure =
-          part === 'request' ? null : describeManagerFailure(found.lastFailure, found.lastReport);
+          part === 'request'
+            ? null
+            : describeManagerFailure(
+                found.lastFailure,
+                found.lastReport,
+                tokenGenerationMismatched(found),
+              );
         // **セッションそのものが `failed` として畳まれた落ち方も同じ場所で
         // 掘れる（Issue #713 段3）。** `manager_list` の `systemErrorLine` と
         // 同じ材料——`part === 'request'` では出さない（依頼文はそもそも
@@ -7468,11 +7649,49 @@ export function createCloneTools(context: ToolContext) {
         const label =
           part === 'request'
             ? '依頼文'
-            : isFoldedTurnReport(found)
-              ? '直近のターンの中身'
-              : '直近の報告';
+            : // **Issue #1038: 停止後に届いた本文は別の見出しで言い分ける。**
+              // `isFoldedTurnReport`（`lastFailure` / `lastUnreported`）とは
+              // 別の畳まれ方——「これは停止後に届いた、畳まれたターンの中身
+              // である」とその場で名乗る。受信時刻もここへ添える（`manager_list`
+              // の「（… 受信）」と同じ形）。
+              foldedTurn !== undefined
+              ? `停止後に届いた、畳まれたターンの中身（${foldedTurn.at} 受信）`
+              : isFoldedTurnReport(found)
+                ? '直近のターンの中身'
+                : '直近の報告';
         const part1 = page(body, offset, REPORT_PAGE);
-        const head = `マネージャー ${managerId} の${label}（${describePage(part1)}）`;
+        // **齢といまの status を見出しに添える（Issue #1036）。** これが本題
+        // ——`manager_report` は以前 `lastReportAt` も `status` も1文字も
+        // 出していなかった（読み手は直近に完了したターンの中身を、いまの
+        // 状態として読むしかなかった）。**`part === 'request'` では出さない**
+        // ——依頼文はそもそも報告ではない（`failure` / `systemError` /
+        // `denied` / `unobserved` と同じ線）。
+        const reportAgeStatus =
+          part === 'request'
+            ? ''
+            : // **文言に「直近の報告」を含めない。** `label` が「直近のターンの
+              // 中身」へ切り替わった回（`isFoldedTurnReport` / `foldedTurn`）で
+              // ここに「直近の報告」という字面が混ざると、見出しを切り替えた
+              // 意味（Issue #714 / #917 / #1038）が薄れる——読む側が「結局
+              // 直近の報告ではないか」と読める。
+              ` — lastReportAt: ${found.lastReportAt ?? '一度も届いていない'} / いまの status: \`${found.status}\``;
+        const head = `マネージャー ${managerId} の${label}（${describePage(part1)}）${reportAgeStatus}`;
+        // **焼いた status といまの status が食い違えば ⚠ を出す（Issue
+        // #1036）。** 生成元は `describeReportDrift` 1箇所——`manager_list`
+        // と割れない。一致している回・比較できない回（この欄を持たない古い
+        // 行・報告が一度も無い回）は1文字も増えない。`part === 'request'`
+        // では出さない（同上）。
+        const drift =
+          part === 'request'
+            ? ''
+            : describeReportDrift({
+                managerId,
+                lastReportAt: found.lastReportAt,
+                lastReportStatus: found.lastReportStatus,
+                status: found.status,
+                now: new Date(),
+              });
+        const driftNote = drift === '' ? '' : `${drift}\n\n`;
         // **失敗は本文の`上`に置く**（`manager_list` と同じ順。人間の CLI も
         // 同じ順である）。下に置くと、包まれたエラー文を先に読んでから「実は
         // 報告ではない」と分かる順になる。**失敗していない回は1文字も増えない。**
@@ -7501,7 +7720,7 @@ export function createCloneTools(context: ToolContext) {
         const footer =
           '\n\n（さらに掘るなら manager_transcript managerId=' + managerId + ' で生ログへ）';
         return text(
-          `${head}\n\n${failureNote}${systemErrorNote}${denialNote}${unobservedNote}${part1.body}${tail}${footer}`,
+          `${head}\n\n${driftNote}${failureNote}${systemErrorNote}${denialNote}${unobservedNote}${part1.body}${tail}${footer}`,
         );
       },
     ),

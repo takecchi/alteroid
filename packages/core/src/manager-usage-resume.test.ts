@@ -65,6 +65,11 @@ function nudgeRunner() {
   const sends: { managerId: string; text: string }[] = [];
   const resumes: RunnerResumeCommand[] = [];
   const behavior: { sendMode: 'ok' | 'throw' } = { sendMode: 'ok' };
+  // **`settleStalledUsageWakes()` の検証専用**（Issue #914 最終段）。既定は
+  // `manager-turn-end.test.ts` の `TranscriptRunner` と同じく `null`
+  // （生ログが無い）——`setTranscript` を呼ばない既存の検証には1文字も
+  // 効かない。
+  const transcripts = new Map<string, string | null>();
 
   const runner: RunnerClient = {
     runnerId: 'runner-primary',
@@ -110,8 +115,8 @@ function nudgeRunner() {
     async list() {
       return [...alive];
     },
-    async transcript() {
-      return null;
+    async transcript(managerId: string) {
+      return transcripts.get(managerId) ?? null;
     },
     async credentials() {
       return [];
@@ -138,6 +143,9 @@ function nudgeRunner() {
     push(event: RunnerEvent): void {
       if (emit === null) throw new Error('connect されていない（名乗る前に流している）');
       emit(event);
+    },
+    setTranscript(managerId: string, body: string | null): void {
+      transcripts.set(managerId, body);
     },
   };
 }
@@ -227,6 +235,65 @@ async function settle(): Promise<void> {
   for (let i = 0; i < 20; i += 1) await Promise.resolve();
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
+
+/**
+ * **`ManagerPool#settleStalledUsageWakes()` の検証専用の足場。**
+ *
+ * `setup()`（直上）と同じ構成だが、`now` を差し替え可能にする——
+ * `probeTurnEnds()` の費用の門（`updatedAt` から10分の静止）を跨ぐには、
+ * 時計を進められる `now` が要る（`manager-turn-end.test.ts` の
+ * `harnessOf()` と同じ作法。あちらから読んで倣った）。
+ */
+async function setupWithClock() {
+  let clock = Date.now();
+  const stores = createMemoryStores();
+  await stores.jobs.putJob(JOB);
+  const fake = nudgeRunner();
+  const registry = createRunnerRegistry([fake.runner]);
+  const inbox: InboxEvent[] = [];
+  const pool = createManagerPool({
+    stores,
+    post: (event) => inbox.push(event),
+    runners: registry,
+    profile: createProfileService({ stores, runners: registry }),
+    now: () => clock,
+  });
+  await pool.restore();
+  fake.resumes.length = 0;
+  fake.sends.length = 0;
+  return {
+    pool,
+    fake,
+    stores,
+    inbox,
+    advance: (ms: number): void => {
+      clock += ms;
+    },
+  };
+}
+
+/**
+ * JSONL の1行（assistant、本文つき、`stop_reason: end_turn`）。
+ * `manager-turn-end.test.ts` の `assistantTextLine` と同じ形——この観点
+ * だけに使う最小の複製で、シンボルを import して結合を増やさない
+ * （あちらは同ファイル内のローカル関数で export されていない）。
+ */
+function turnEndLine(text: string, timestamp: string): string {
+  return JSON.stringify({
+    type: 'assistant',
+    isSidechain: false,
+    timestamp,
+    message: {
+      role: 'assistant',
+      id: 'msg_settle_probe',
+      content: [{ type: 'text', text }],
+      stop_reason: 'end_turn',
+    },
+  });
+}
+
+/** `probeTurnEnds()` の費用の門（`updatedAt` から10分の静止）を跨ぐ猶予。 */
+const PAST_QUIET_GATE_MS = 11 * 60_000;
 
 describe('枠で止まった委譲を、鍵が通る状態へ戻った時点で続きから起こす', () => {
   it('枠でターンが死んだ委譲へ、続きを促す一言が生きたセッションへ届く（新しいセッションを開かない）', async () => {
@@ -694,5 +761,285 @@ describe('枠で止まった印を台帳へ持たせ、デーモンの入れ替�
     const after = await s.stores.jobs.listJobs();
     expect(after[0]?.status).toBe('running');
     expect(after[0]?.usageStoppedAt).toBeDefined();
+  });
+});
+
+/**
+ * **`ManagerPool#settleStalledUsageWakes()`（Issue #914 最終段）。**
+ *
+ * ## 埋める穴
+ *
+ * `resumeStoppedByUsage()` は、鍵が戻った時点でまだ `running` だった委譲を
+ * 借り（`#usageWakeOwed`）へ載せて見送る。その借りを返す口は `case 'report'`
+ * と `case 'closed'` の2箇所しかない —— **そのセッションが二度と `report` も
+ * `closed` も出さないまま黙った場合**（429 でターンが終わったのにデーモンまで
+ * 届かない等）、借りは永久に返らず、台帳の `status` は `running` のまま固まる
+ * （Issue #914 の 2026-09-14T20:19Z のコメント、2026-09-16 の再発）。
+ *
+ * `ManagerPool#probeTurnEnds()`（Issue #567）が計算し直す `turnEndedAt` を、
+ * `record.job.lastReportAt` と突き合わせて「ターンは終わっているのに、その
+ * 報告がまだ届いていない」と読めたときだけ、既存の一言（`#nudgeForUsageRotation`
+ * の `send()`）を1本だけ届ける。
+ *
+ * ## 4条件（1つでも欠けたら発火しない）
+ *
+ * 1. `#usageWakeOwed` に借りが立っている
+ * 2. `#usageStopped` の印（枠で止まった）が立っている
+ * 3. `record.job.status === 'running'`（`waiting_human` は含めない）
+ * 4. `record.turnEndedAt` が在り、`record.job.lastReportAt` が無いか
+ *    それより後
+ *
+ * **何が対象になり、何がならないかを固定する。** 各 `it` の名前がその軸を
+ * 名指しする。
+ */
+describe('ManagerPool#settleStalledUsageWakes — report/closed を二度と出さないまま固まった借りを清算する（Issue #914 最終段）', () => {
+  it('⭐ 4条件が揃うと一言が届く。record.job.status は書き換えない（stopped/lost に落ちない）', async () => {
+    const s = await setupWithClock();
+    s.fake.push(reached());
+    await settle();
+
+    // 鍵が戻った。まだ走っている ⟹ 借りが立つ（このターンでは起こせない）。
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([]);
+    expect(s.fake.sends).toHaveLength(0);
+
+    /*
+     * **このセッションは、この後 report も closed も二度と出さない**
+     * （429 でターンが終わったのにデーモンまで届かない、という想定そのもの）。
+     * `probeTurnEnds()` だけが「ターンは終わっているらしい」と気づく。
+     */
+    s.fake.setTranscript(
+      'mgr-usage',
+      turnEndLine('ここでターンが枠の壁に当たって切れた', '2026-09-07T02:00:00.000Z'),
+    );
+    s.advance(PAST_QUIET_GATE_MS);
+    await s.pool.probeTurnEnds();
+
+    const probed = (await s.pool.list()).find((entry) => entry.managerId === 'mgr-usage');
+    expect(probed?.turnEndedAt).toBe('2026-09-07T02:00:00.000Z');
+    expect(probed?.status).toBe('running');
+    // 条件4の「lastReportAt が無い」側——report は一度も届いていない。
+    const before = await s.stores.jobs.listJobs();
+    expect(before[0]?.lastReportAt).toBeUndefined();
+
+    const nudged = await s.pool.settleStalledUsageWakes();
+
+    expect(nudged).toEqual(['mgr-usage']);
+    expect(s.fake.sends).toHaveLength(1);
+    expect(s.fake.sends[0]?.text).toContain('通る鍵に戻った');
+    // **同じ会話の続きである。** 新しいセッションを起こしていないこと。
+    expect(s.fake.resumes).toHaveLength(0);
+
+    // **`record.job.status` を勝手に書き換えていない。** `send()` の中で
+    // status が動くのは既存の挙動（届いた委譲は 'running' のまま）だが、
+    // `stopped` / `lost` へは落ちていない。
+    const after = await s.stores.jobs.listJobs();
+    expect(after[0]?.status).toBe('running');
+    // 起こせたと分かったので、枠の印は下りる。
+    expect(after[0]?.usageStoppedAt).toBeUndefined();
+  });
+
+  it('⚠️ 陰性対照: turnEndedAt が無ければ発火しない（「分からない」を症状へ倒さない）', async () => {
+    const s = await setupWithClock();
+    s.fake.push(reached());
+    await settle();
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([]); // 借りが立つ
+
+    // **`probeTurnEnds()` を一度も呼んでいない** ⟹ `turnEndedAt` は付かない。
+    const probed = (await s.pool.list()).find((entry) => entry.managerId === 'mgr-usage');
+    expect(probed?.turnEndedAt).toBeUndefined();
+
+    const nudged = await s.pool.settleStalledUsageWakes();
+
+    expect(nudged).toEqual([]);
+    expect(s.fake.sends).toHaveLength(0);
+    // 印は残ったまま——清算されていない。
+    const after = await s.stores.jobs.listJobs();
+    expect(after[0]?.status).toBe('running');
+    expect(after[0]?.usageStoppedAt).toBeDefined();
+  });
+
+  it('⚠️ 陰性対照: turnEndedAt が lastReportAt 以前なら発火しない（報告は届いている）', async () => {
+    const s = await setupWithClock();
+    s.fake.push(reached());
+    await settle();
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([]); // 1回目の借り
+
+    /*
+     * **報告は実際に届いている（`lastReportAt` が進む）。** ただし `status` は
+     * `running` のまま続く——枠に当たったまま作業自体は続いている、という
+     * やや作為的な形だが、ここで確かめたいのは「`lastReportAt` が在れば
+     * `turnEndedAt` と正しく突き合わせられる」ことだけである。この報告で
+     * `#settleUsageWake` が呼ばれ、1回目の借りはここで消費される
+     * （`status: 'running'` なので `'still-running'` に落ちて何も起こさない）。
+     */
+    s.fake.push({
+      type: 'report',
+      managerId: 'mgr-usage',
+      text: '進捗の途中経過（まだ続く）',
+      status: 'running',
+      failure: { code: 'usage_limit', via: 'result' },
+    } as RunnerEvent);
+    await settle();
+
+    const midJobs = await s.stores.jobs.listJobs();
+    const lastReportAt = midJobs[0]?.lastReportAt;
+    expect(lastReportAt).toBeDefined();
+    expect(s.fake.sends).toHaveLength(0);
+
+    // 1回目の借りはこの報告で消費された。もう一度、走っている最中に鍵が
+    // 回ったことにして借りを立て直す（条件1を満たすためだけの操作。
+    // `lastReportAt` には触れない）。
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([]);
+
+    // `turnEndedAt` を `lastReportAt` より前にする。
+    const before = new Date(Date.parse(lastReportAt!) - 60_000).toISOString();
+    s.fake.setTranscript('mgr-usage', turnEndLine('まだ届いていた頃のテール', before));
+    s.advance(PAST_QUIET_GATE_MS);
+    await s.pool.probeTurnEnds();
+
+    const probed = (await s.pool.list()).find((entry) => entry.managerId === 'mgr-usage');
+    expect(probed?.turnEndedAt).toBe(before);
+
+    const nudged = await s.pool.settleStalledUsageWakes();
+
+    expect(nudged).toEqual([]);
+    expect(s.fake.sends).toHaveLength(0);
+  });
+
+  it('⚠️ 陰性対照: 借りが立っていなければ発火しない（鍵が戻ったと誰も言っていない）', async () => {
+    const s = await setupWithClock();
+    s.fake.push(reached());
+    await settle();
+    // **`resumeStoppedByUsage()` を一度も呼んでいない** ⟹ 借り
+    // （`#usageWakeOwed`）が立たない。
+
+    s.fake.setTranscript(
+      'mgr-usage',
+      turnEndLine('壁に当たって切れた', '2026-09-07T02:00:00.000Z'),
+    );
+    s.advance(PAST_QUIET_GATE_MS);
+    await s.pool.probeTurnEnds();
+    const probed = (await s.pool.list()).find((entry) => entry.managerId === 'mgr-usage');
+    expect(probed?.turnEndedAt).toBeDefined();
+
+    const nudged = await s.pool.settleStalledUsageWakes();
+
+    expect(nudged).toEqual([]);
+    expect(s.fake.sends).toHaveLength(0);
+  });
+
+  it('⚠️ 陰性対照: 枠の印（usageStopped）が無ければ発火しない（枠以外の理由で長く走っている委譲を掃かない）', async () => {
+    const s = await setupWithClock();
+    // **`reached()` を一度も流していない。** 枠とは無関係に長く走っているだけ。
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([]); // 借りは status=running なので立つ
+
+    s.fake.setTranscript(
+      'mgr-usage',
+      turnEndLine('枠以外の理由で長く働いているだけ', '2026-09-07T02:00:00.000Z'),
+    );
+    s.advance(PAST_QUIET_GATE_MS);
+    await s.pool.probeTurnEnds();
+    const probed = (await s.pool.list()).find((entry) => entry.managerId === 'mgr-usage');
+    expect(probed?.turnEndedAt).toBeDefined();
+
+    const nudged = await s.pool.settleStalledUsageWakes();
+
+    // **一般の停滞検知になっていないことの固定。** 借り・turnEndedAt が
+    // 揃っていても、枠の印（`usageStopped`）が無ければ何もしない。
+    expect(nudged).toEqual([]);
+    expect(s.fake.sends).toHaveLength(0);
+  });
+
+  it('⚠️ 陰性対照: waiting_human は起こさない（待っているのは枠ではなく人間の回答である）', async () => {
+    const s = await setupWithClock();
+    s.fake.push(reached());
+    await settle();
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([]); // 借りが立つ（running）
+
+    // **`turnEndedAt` は running のうちに立てておく**（`probeTurnEnds()` の
+    // 費用の門は `status === 'running'` だけを引くので、`waiting_human` に
+    // なった後では立てられない——条件3だけを切り出して確かめるための順序）。
+    s.fake.setTranscript(
+      'mgr-usage',
+      turnEndLine('壁に当たって切れた', '2026-09-07T02:00:00.000Z'),
+    );
+    s.advance(PAST_QUIET_GATE_MS);
+    await s.pool.probeTurnEnds();
+    const probedBefore = (await s.pool.list()).find((entry) => entry.managerId === 'mgr-usage');
+    expect(probedBefore?.turnEndedAt).toBeDefined();
+
+    // ここで人間の回答待ちへ移る。
+    s.fake.push({
+      type: 'ask',
+      managerId: 'mgr-usage',
+      requestId: 'req-1',
+      kind: 'question',
+      summary: '続けてよいか確認したい',
+    } as RunnerEvent);
+    await settle();
+    const waiting = await s.stores.jobs.listJobs();
+    expect(waiting[0]?.status).toBe('waiting_human');
+
+    const nudged = await s.pool.settleStalledUsageWakes();
+
+    expect(nudged).toEqual([]);
+    expect(s.fake.sends).toHaveLength(0);
+  });
+
+  /**
+   * **⭐ Issue #914 最終段の本題そのもの。** 空振り（`send()` が届かない）は
+   * `resumeStoppedByUsage()` の規則と同じで、借りは（挑む前に）下ろすが印
+   * （`#usageStopped` / `Job.usageStoppedAt`）は残す——残さないと、次の鍵の
+   * 回転（`resumeStoppedByUsage()`）が再び借りを立てても、この委譲がもう
+   * 拾えなくなる（枠の印そのものが無ければ、`settleStalledUsageWakes()` は
+   * 条件2で弾く）。
+   */
+  it('空振り（send() が届かない）のとき、借りは下りるが印は残る（次の鍵の回転が拾い直す）', async () => {
+    const s = await setupWithClock();
+    s.fake.push(reached());
+    await settle();
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([]); // 借りが立つ
+
+    s.fake.setTranscript(
+      'mgr-usage',
+      turnEndLine('壁に当たって切れた', '2026-09-07T02:00:00.000Z'),
+    );
+    s.advance(PAST_QUIET_GATE_MS);
+    await s.pool.probeTurnEnds();
+
+    // **空振りを作る細工**（`nudgeRunner()` の doc）。
+    s.fake.behavior.sendMode = 'throw';
+    const first = await s.pool.settleStalledUsageWakes();
+
+    expect(first).toEqual([]);
+    expect(s.fake.sends).toHaveLength(0);
+
+    // **印（台帳の写し）は残っている。** 空振りは `'gone'` ではない。
+    const mid = await s.stores.jobs.listJobs();
+    expect(mid[0]?.usageStoppedAt).toBeDefined();
+    expect(mid[0]?.status).toBe('running');
+
+    // **借りは挑む前に下ろしてある**——同じ回では二度と対象に入らない
+    // （条件1が外れる）。
+    const again = await s.pool.settleStalledUsageWakes();
+    expect(again).toEqual([]);
+    expect(s.fake.sends).toHaveLength(0);
+
+    /*
+     * **次の鍵の回転**（`resumeStoppedByUsage()`。実際の token rotation の
+     * 契機）が来ると、借りが立て直される——印がまだ残っているおかげで、
+     * この委譲はまだ対象である。`resumeStoppedByUsage()` 自身は `running`
+     * を起こさない（ホワイトリストが素通しにするのは `done` / `failed` /
+     * `lost` だけ）ので、実際に届けるのは次の `settleStalledUsageWakes()`
+     * である。
+     */
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([]);
+    s.fake.behavior.sendMode = 'ok';
+    const recovered = await s.pool.settleStalledUsageWakes();
+
+    expect(recovered).toEqual(['mgr-usage']);
+    expect(s.fake.sends).toHaveLength(1);
+    const after = await s.stores.jobs.listJobs();
+    expect(after[0]?.usageStoppedAt).toBeUndefined();
   });
 });

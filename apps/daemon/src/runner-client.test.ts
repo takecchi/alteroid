@@ -23,7 +23,11 @@ import {
 import { createRunnerApp, Outbox } from '@alteroid/runner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { createHttpRunner, type RunnerDroppedEventReport } from './runner-client.js';
 
@@ -619,6 +623,61 @@ describe('デーモン ↔ manager-runner（HTTP 境界）', () => {
 
     await revived.stop();
     await host.shutdown();
+  });
+
+  /**
+   * **`HttpRunner.unpushedWork()` が本物の HTTP 境界（`apps/runner/src/app.ts`
+   * の新しい口）越しに、実際の `git` の答えを運ぶこと**（Issue #1039）。
+   *
+   * `LocalRunner` 側の等価な歯（`manager.test.ts`）と対にしてある——**片方だけ
+   * 実装すると2実装が静かに乖離する**という Issue 自身の警告どおり、境界の
+   * 両側を別々に固定する。
+   */
+  it('unpushedWork は境界越しに未 push のコミット数を運ぶ（#1039）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'alteroid-runner-client-unpushed-'));
+    try {
+      const git = (args: string[]): string =>
+        execFileSync('git', args, {
+          cwd: dir,
+          encoding: 'utf8',
+          env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+        });
+      git(['init', '-q', '-b', 'main']);
+      git(['config', 'user.email', 'test@example.com']);
+      git(['config', 'user.name', 'Test']);
+      writeFileSync(join(dir, 'a.txt'), 'first\n');
+      git(['add', 'a.txt']);
+      git(['commit', '-q', '-m', 'first']);
+      writeFileSync(join(dir, 'b.txt'), 'second\n');
+      git(['add', 'b.txt']);
+      git(['commit', '-q', '-m', 'second']); // upstream 無し。2本とも「未 push」。
+
+      const r = await open();
+      const { managerId } = await r.pool.start({ request: '確認', cwd: dir });
+      await expect.poll(() => r.sessions.length, { timeout: 2000 }).toBe(1);
+
+      const probe = await r.pool.unpushedWork(managerId);
+
+      expect(probe.kind).toBe('ok');
+      if (probe.kind !== 'ok') throw new Error('unreachable');
+      expect(probe.result.worktrees).toHaveLength(1);
+      expect(probe.result.worktrees[0]).toMatchObject({
+        relativePath: '.',
+        branch: 'main',
+        unpushedCommitCount: 2,
+        uncommittedChangeCount: 0,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('unpushedWork はセッションが無い managerId には「確かめられなかった」を返す', async () => {
+    const r = await open();
+
+    const probe = await r.pool.unpushedWork('mgr-does-not-exist');
+
+    expect(probe.kind).toBe('unavailable');
   });
 });
 

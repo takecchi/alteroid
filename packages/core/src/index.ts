@@ -508,6 +508,7 @@ export {
   type ManagerStopActor,
   type ManagerSummary,
   type ManagerTranscript,
+  type ManagerUnpushedWork,
   guardArchiveRemoval,
   type ArchiveRemovalGuard,
   type SessionMissingKind,
@@ -725,6 +726,8 @@ export {
   runnerSetProfileCommandSchema,
   runnerStartCommandSchema,
   runnerWaitingSchema,
+  unpushedWorkResultSchema,
+  unpushedWorkTreeSchema,
   waitingKindSchema,
   type RunnerAnswerCommand,
   type RunnerAnswerOutcome,
@@ -750,8 +753,25 @@ export {
   type RunnerSetProfileCommand,
   type RunnerStartCommand,
   type RunnerWaiting,
+  type UnpushedWorkResult,
+  type UnpushedWorkTree,
   type WaitingKind,
 } from './runner-protocol.js';
+/**
+ * `manager_stop` が「running を畳むと何が失われるか」を実物の数字で言うための
+ * 下請け（Issue #1039）。`git` の起動は呼び出し側（`runner.ts`）が別 UID で
+ * 行うので、ここは純粋な探索・判定ロジックだけを持つ。
+ */
+export {
+  computeUnpushedWork,
+  DEFAULT_GIT_COMMAND_TIMEOUT_MS,
+  DEFAULT_MAX_DEPTH,
+  DEFAULT_MAX_WORKTREES,
+  findGitDirs,
+  type ComputeUnpushedWorkOptions,
+  type FindGitDirsResult,
+  type ProcessSpawnFn,
+} from './unpushed-work.js';
 /**
  * 実行環境の資源の読み方（cgroup v2）。**`os` モジュールで代用しないこと**
  * （理由と実測は `runner-resources.ts` にある）。

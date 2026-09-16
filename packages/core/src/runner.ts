@@ -55,7 +55,9 @@ import type {
   RunnerProfileResult,
   RunnerResumeCommand,
   RunnerStartCommand,
+  UnpushedWorkResult,
 } from './runner-protocol.js';
+import { computeUnpushedWork } from './unpushed-work.js';
 import type { ContextUsageObservation, JobStatus } from './schema.js';
 // **クローン（`clone.ts`）と同じ判定を呼ぶ。** 「これは応答ではない」の見分けを
 // 層ごとに書くと、片方だけが印を見落として非対称になる（実際に
@@ -307,6 +309,17 @@ export interface RunnerHost {
   stop(managerId: string): Promise<void>;
   list(): RunnerManagerState[];
   transcript(managerId: string): Promise<string | null>;
+  /**
+   * この managerId の作業ツリーが抱えている、未 push の実装と未コミットの
+   * 変更を数える（Issue #1039）。セッションが無ければ `undefined`。
+   *
+   * ⛔ ネットワークを一切使わない。出す粒度は有無・件数・枝名まで
+   * （`unpushedWorkResultSchema` の doc）。
+   */
+  unpushedWork(
+    managerId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<UnpushedWorkResult | undefined>;
   /** 全セッションを畳む。プロセスが消えるときだけ呼ぶ。 */
   shutdown(): Promise<void>;
   /**
@@ -633,6 +646,15 @@ class Host implements RunnerHost {
 
   async transcript(managerId: string): Promise<string | null> {
     return (await this.#sessions.get(managerId)?.transcript()) ?? null;
+  }
+
+  async unpushedWork(
+    managerId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<UnpushedWorkResult | undefined> {
+    const session = this.#sessions.get(managerId);
+    if (session === undefined) return undefined;
+    return session.unpushedWork(options);
   }
 
   async shutdown(): Promise<void> {
@@ -1675,6 +1697,51 @@ class RunnerSession {
   async transcript(): Promise<string | null> {
     const result = await this.#readTranscript();
     return result.status === 'ok' ? result.body : null;
+  }
+
+  /**
+   * `Host#unpushedWork(managerId)` から呼ばれる（Issue #1039）。探索の起点は
+   * `this.#cwd`——これは `manager_start` の時点でデーモンから渡された
+   * `job.cwd` と同じ値なので、呼び出し側（デーモン）から改めて渡す必要が無い
+   * （「runner 側が名乗り、デーモンは中身を解釈せず中継する」という #1039 の
+   * 採用案(A)そのもの）。
+   *
+   * git の起動は SDK の子プロセスと同じ `#spawnAsChildUser` を通す
+   * （`childUser` が無い構成——ローカル実行——では素の `spawn` を使う）。
+   * **⚠️ これで UID の問題が解けるかは未検証。**
+   */
+  async unpushedWork(options?: { signal?: AbortSignal }): Promise<UnpushedWorkResult> {
+    const spawnFn =
+      this.#childUser === undefined
+        ? (spawnOptions: {
+            command: string;
+            args: string[];
+            cwd?: string;
+            env: Record<string, string | undefined>;
+            signal: AbortSignal;
+          }) =>
+            spawn(spawnOptions.command, spawnOptions.args, {
+              ...(spawnOptions.cwd === undefined ? {} : { cwd: spawnOptions.cwd }),
+              env: spawnOptions.env,
+              signal: spawnOptions.signal,
+              stdio: ['ignore', 'pipe', 'pipe'],
+            })
+        : (spawnOptions: {
+            command: string;
+            args: string[];
+            cwd?: string;
+            env: Record<string, string | undefined>;
+            signal: AbortSignal;
+          }) => this.#spawnAsChildUser(spawnOptions);
+    // **`options.signal` は「次の作業ツリーへ進む前」だけを止める。** 既に
+    // 始めた1本の git 呼び出しは、`computeUnpushedWork` 自身のタイムアウトが
+    // 満ちるまで走らせる——`apps/daemon/src/runner-client.ts` の `#call` と
+    // 同じ「相手は止めない」作法（期限は待つのをやめるためだけにある）。
+    return computeUnpushedWork(this.#cwd, {
+      spawn: spawnFn,
+      env: this.#childEnv(),
+      ...(options?.signal === undefined ? {} : { signal: options.signal }),
+    });
   }
 
   /**

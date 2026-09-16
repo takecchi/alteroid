@@ -1561,6 +1561,68 @@ export function assertNeverRunnerLegStatus(status: never): never {
 }
 
 /**
+ * `RunnerClient.unpushedWork()` が1本の作業ツリーについて返す値（Issue #1039）。
+ *
+ * ⛔ **出してよいのは有無・件数・枝名までである。ファイル名・差分の中身・
+ * コミットメッセージ・author は一切含めない。** `apps/runner/src/tasks.ts` が
+ * 生きているプロセスの素性について引いている線（`cmdline` / `cwd` / `environ`
+ * を絶対に読まない）と同じ強さで、ここにも線を引く——**本人の情報を、本人を
+ * 止める文脈で、本人を止めようとしている側へ出す。それ以外の口からは引けない。**
+ */
+export const unpushedWorkTreeSchema = z.object({
+  /** 探索の起点（`job.cwd`）からの相対パス。絶対パスそのものは出さない。 */
+  relativePath: z.string(),
+  /** いまの枝名。detached HEAD、または確かめられなかったときは `null`。 */
+  branch: z.string().nullable(),
+  /**
+   * `git rev-list --count HEAD --not --remotes=origin`。
+   *
+   * **`@{u}` ではなくこの式を使う。** upstream 未設定の枝（一度も push
+   * されていない枝）でも検出できる——実測（#1039）で8本中2本が該当し、
+   * `@{u}` 方式は `fatal` で落ちていた。
+   *
+   * ⚠️ **多めに出る側の誤差である。** このプローブは `fetch` も
+   * `git ls-remote` もしない（ネットワークを一切使わない）ので、`origin/*` の
+   * remote-tracking ref は古びうる——実際には push 済みのコミットが「未 push」
+   * と数えられることがある。安全側（失われるものを多めに言う）の誤りであって、
+   * その逆（実際に未 push なのに 0 と出る）は起きない。
+   */
+  unpushedCommitCount: z.number().int().nonnegative().optional(),
+  /** `unpushedCommitCount` を確かめられなかった理由（省略 = 確かめられた）。 */
+  unpushedCommitCountUnknown: z.string().optional(),
+  /** `git status --porcelain` の行数（＝未コミットの変更の件数）。 */
+  uncommittedChangeCount: z.number().int().nonnegative().optional(),
+  /** `uncommittedChangeCount` を確かめられなかった理由（省略 = 確かめられた）。 */
+  uncommittedChangeCountUnknown: z.string().optional(),
+});
+export type UnpushedWorkTree = z.infer<typeof unpushedWorkTreeSchema>;
+
+/**
+ * `RunnerClient.unpushedWork()` の戻り値（Issue #1039）。`job.cwd` の下に
+ * 見つかった作業ツリー全部を持つ——1本目だけを返さない（マネージャーが
+ * 作業者へ別ツリーを切る運用を AGENTS.md が許容しているため）。
+ */
+export const unpushedWorkResultSchema = z.object({
+  /** 探索の起点（`job.cwd`）。 */
+  cwd: z.string(),
+  worktrees: z.array(unpushedWorkTreeSchema),
+  /**
+   * `.git` の探索を件数の上限で打ち切ったときだけ載る（値は上限そのもの）。
+   * **省略できるが、黙って切ったことにはしない**（AGENTS.md「取れない軸に
+   * 0の行を作る」の裏——打ち切ったことをここに書かないと「全部見つかった」に
+   * 見えてしまう）。
+   */
+  truncatedAtCount: z.number().int().positive().optional(),
+  /**
+   * 呼び出し元の期限切れで、見つかった作業ツリーの一部を調べる前に打ち切った
+   * ときだけ `true`。**それでも `worktrees` からは落とさない**——見つかった
+   * 分は全部載せ、調べられなかった分は各欄の `*Unknown` に理由が付く。
+   */
+  stoppedEarly: z.literal(true).optional(),
+});
+export type UnpushedWorkResult = z.infer<typeof unpushedWorkResultSchema>;
+
+/**
  * runner への口。HTTP でも同一プロセスでも、デーモンはこれしか知らない。
  *
  * **デーモンは特定 runner の実装やローカルパスを前提にしない。** ローカル実行の
@@ -1867,6 +1929,28 @@ export interface RunnerClient {
   list(options?: { signal?: AbortSignal }): Promise<RunnerManagerState[]>;
   /** runner のローカルにある生ログ。無ければ null。 */
   transcript(managerId: string): Promise<string | null>;
+  /**
+   * この委譲の作業ツリーが抱えている、未 push の実装と未コミットの変更を数える
+   * （Issue #1039）。`manager_stop` が「running を畳むと何が失われるか」を
+   * 一般論ではなく実物の数字で言うためだけの口——**`manager_list` からは
+   * 呼ばない**（`manager_list` の doc「この一覧のために」を見よ。一覧の側から
+   * 自動で往復を足さない）。**`force: true` の経路からも呼ばない**（もう決めた
+   * 後なので、往復を払う意味が無い）。
+   *
+   * ⛔ **ネットワークを一切使わない**（`fetch` も `git ls-remote` もしない。
+   * 費用の性質を変えないため——#1039 実測「daemon ↔ runner の HTTP 往復と
+   * 別 UID の子プロセス起動は測っていない」を安全側で守る）。
+   *
+   * **省略できる**（`resources` と同じ理由）。答えられない実装（この口を
+   * まだ持たない runner・テストの偽物）に「0件でした」という嘘を書かせない
+   * ——呼び出し側は戻り値が `undefined` のときを「確かめられなかった」として
+   * 扱い、0 とは混ぜない。実装していても、セッションを持たない managerId・
+   * 内部でタイムアウトした場合などは `undefined` を返してよい。
+   */
+  unpushedWork?(
+    managerId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<UnpushedWorkResult | undefined>;
   /**
    * いま runner が配っている鍵の指紋。**値は返らない。**
    *

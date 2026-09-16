@@ -48,6 +48,7 @@ import type {
   RunnerRegistry,
   RunnerRevisionStatus,
   RunnerWaiting,
+  UnpushedWorkResult,
 } from './runner-protocol.js';
 import { brief } from './runner.js';
 import { describeAppraisal, JOB_APPRAISAL_DECISION_PREFIX } from './schema.js';
@@ -454,6 +455,17 @@ export interface ManagerSummary {
    */
   lastReportAt?: string;
   /**
+   * `lastReport` を台帳へ書いた瞬間の status（`jobSchema.lastReportStatus`。
+   * Issue #1036）。**書いた瞬間**は `record.job.status` の書き換え**後**の
+   * 値（＝この report の `event.status`）——詳しい理由は `schema.ts` の
+   * `lastReportStatus` の doc。
+   *
+   * いまの `status` と突き合わせて「この報告は古い」を言うのは
+   * `manager-activity.ts` の `describeReportDrift` の役目——ここは値を運ぶ
+   * だけで判定は持たない。
+   */
+  lastReportStatus?: JobStatus;
+  /**
    * 直近の1ターンが**報告ではなく失敗**で終わったこと（`jobSchema.lastFailure`）。
    *
    * **台帳に載っているのに要約へ載っていなかった。** 台帳（`Job`）は `lastFailure` を
@@ -482,6 +494,15 @@ export interface ManagerSummary {
    * ままにすると、Issue #714 が塞いだのと同じ穴が開く。
    */
   lastUnreported?: NonNullable<Job['lastUnreported']>;
+  /**
+   * `manager_stop` で畳まれたターンの本文（`jobSchema.lastFoldedTurn`。
+   * Issue #1038）。**`lastReport` とは別の欄——`schema.ts` の doc を参照。**
+   *
+   * `manager_stop` の応答・`manager_report` の両方がここを読む。届いていない
+   * ことはある（`schema.ts` の doc の「順序の注意」）——`undefined` は
+   * 「畳んだ本文が無い」と「まだ届いていない」のどちらもありうる。
+   */
+  lastFoldedTurn?: NonNullable<Job['lastFoldedTurn']>;
   /**
    * セッションが `failed` として畳まれたときの、器の資源による落ち方の分類
    * （`jobSchema.lastSystemError`。#713 段3）。
@@ -627,6 +648,19 @@ export type ManagerTranscript =
       readonly bytes: number;
     }
   | { readonly kind: 'missing' };
+
+/**
+ * `ManagerPool.unpushedWork()` の戻り値（Issue #1039）。
+ *
+ * **`undefined` へ畳まない。** `kind: 'unavailable'` は「確かめられなかった」
+ * ことそのものを名乗る——`manager_stop` はこれを 0 と混ぜてはいけない
+ * （AGENTS.md「取れない軸に0の行を作る」）。理由（`reason`）は人間・クローンが
+ * 読む文言に直接使うので、`RunnerHttpError` の文言のような機微を含まない範囲で
+ * 短く書く。
+ */
+export type ManagerUnpushedWork =
+  | { readonly kind: 'ok'; readonly result: UnpushedWorkResult }
+  | { readonly kind: 'unavailable'; readonly reason: string };
 
 /**
  * 「確認へ上がらずに止められた」件数（道具・層ごと）。
@@ -1320,6 +1354,25 @@ export interface ManagerPool {
   /** manager_id からセッションの生ログへ降りる（可観測性の最下段）。 */
   transcript(managerId: string): Promise<ManagerTranscript>;
   /**
+   * `manager_stop` の running 断りが「畳むと何が失われるか」を実物の数字で
+   * 言うためだけに呼ぶ（Issue #1039）。**`manager_list` からは呼ばない**——
+   * この一覧のために自動で往復を足さない、という既存の作法（`runners()` の
+   * doc）と同じ理由。**`force: true` の経路からも呼ばない**（もう決めた後
+   * なので、往復を払う意味が無い）。
+   *
+   * **この呼び出しが失敗しても、呼び出し元（`manager_stop`）が止まっては
+   * いけない。** だからこのメソッド自体は例外を投げない——runner が答えな
+   * かった・この口を持たない・像を持っていない、どの理由でも
+   * `{ kind: 'unavailable', reason }` を返す。呼び出し元はこれを「確かめ
+   * られなかった」として扱い、0 とは混ぜない。
+   *
+   * **省略可能（`?`）にしない。** `runnerBacklog()` の doc と同じ理由——
+   * 省略可能にすると「この口を持たない」と「観測できなかった」が同じ形に
+   * 潰れる。spec 生成専用のスタブ（`apps/daemon/src/openapi.ts`）へは1行
+   * 足すだけで済む。
+   */
+  unpushedWork(managerId: string, options?: { signal?: AbortSignal }): Promise<ManagerUnpushedWork>;
+  /**
    * この archive id が、いまデーモンが走行中として抱えている（`#records` に
    * 居る）マネージャーのどれかの退避なら、その managerId を返す（#698）。
    *
@@ -1468,6 +1521,93 @@ export interface ManagerPool {
    * **1件の失敗で残りを止めない**（`probeTurnEnds` と同じ形）。
    */
   flushWithheldReports(): Promise<void>;
+  /**
+   * **枠で止まった委譲のうち、借り（`#usageWakeOwed`）だけが立って永久に
+   * 返らなくなったものを、`probeTurnEnds()` の助言を使って起こす**
+   * （Issue #914 最終段）。戻り値は実際に一言が届いた managerId。
+   *
+   * ## 埋める穴
+   *
+   * `resumeStoppedByUsage()` は、鍵が戻った時点でまだ `running` だった委譲を
+   * 借りへ載せて見送る（`#nudgeForUsageRotation` が `'still-running'` を
+   * 返すため）。その借りを返す口は `case 'report'` と `case 'closed'` の
+   * 2箇所しかない——**そのセッションが二度と `report` も `closed` も出さない
+   * まま黙った場合**（429 でターンが終わったのにデーモンまで届かない等）、
+   * 借りは永久に返らず、台帳の `status` は `running` のまま固まる（Issue
+   * #914 の 2026-09-14T20:19Z のコメント、2026-09-16 の再発）。
+   *
+   * ## なぜこれが `probeTurnEnds` の「知らせるだけ」を破っていないか
+   *
+   * `probeTurnEnds()`（Issue #567）の約束は「切らない・殺さない・止めない
+   * ——`status` は動かさず、どの委譲も abort しない、貸し出し期限も縮めない」
+   * である（interface の doc）。**ここが持つのはその読み手であって、探り
+   * 自身の判定ではない。** `ManagerSummary.turnEndedAt` の doc が明示する
+   * とおり、判定は読む側が `turnEndedAt` と `lastReportAt`（`record.job.
+   * lastReportAt` = デーモンが report イベントを受け取った時刻）を突き合わせて
+   * 行うもので、ここはその読み手の1つでしかない。起こす行為は既存の一言
+   * （`#nudgeForUsageRotation` の `send()`）だけで、**`record.job.status` は
+   * 書き換えない・`#retire()` しない・`abort()` しない・貸し出しにも触らない**
+   * （`send()` の中で status が動くのはあちらの既存の挙動であって、ここが
+   * 動かすのではない）。禁じられているのは探り自身が判定して切る・殺す・
+   * 止めることであって、読み手が突き合わせて判断することではない。
+   *
+   * ## 4条件全部が揃ったときだけ発火する（1つでも欠けたら何もしない）
+   *
+   * 1. `#usageWakeOwed` に載っている——鍵が戻ったと回し手が言った時点で、
+   *    この委譲はまだ走っていた（借りが立っている）。立っていない委譲には
+   *    何もしない（「鍵が戻ったと誰も言っていないなら起こさない」の歯を
+   *    壊さない）。
+   * 2. `#usageStopped` に載っている——枠（`usage_notice` の `reached`）で
+   *    止まったことが分かっている。これが無いと**一般の停滞検知**になる。
+   * 3. `record.job.status === 'running'`（`waiting_human` は含めない——
+   *    待っているのは枠ではなく人間の回答である）。
+   * 4. `record.turnEndedAt !== undefined` かつ（`record.job.lastReportAt`
+   *    が無い、または `turnEndedAt` がそれより後）。時刻の比較は
+   *    `Date.parse` で行い、どちらかが `NaN`（解釈できない）なら発火しない。
+   *
+   * **なぜ4つ全部が要るか——1つでも外すと、走っている委譲を死んだと見なして
+   * 1ターン焼き、会話へ嘘の文脈を入れる側の危険に落ちる。** これは
+   * `manager_stop` が進行中のターンを「止まっている」と誤読して止めた事故
+   * （Issue #1037。429 の再試行を止まっていると誤読し、うち1本は未 push の
+   * 実装を抱えたまま畳まれた）と同じ種類の危険である。
+   *
+   * **`turnEndedAt` が無いときに発火しない理由——`ManagerSummary.turnEndedAt`
+   * の doc が明示するとおり、この欄が無い状態は「ターンは終わっていない」
+   * ではなく「判定できない」である。** 分からないものを症状に化けさせない
+   * （interface の他の doc と同じ向き）。
+   *
+   * **`lastReportAt` は握り潰された報告でも進むので偽陽性にならない。**
+   * `case 'report'` は `record.job.lastReportAt` を、`contentless` /
+   * `awaitingBackground` による早い `return` より手前で書いている——中身の
+   * 無い報告・背景処理待ちで畳んだ報告でも、デーモンが report を受け取った
+   * 事実そのものは `lastReportAt` に反映される。
+   *
+   * ## 発火したときの動き（`#settleUsageWake` と同じ規則。新しい梯子は作らない）
+   *
+   * - 借り（`#usageWakeOwed`）は**挑む前に下ろす**——同じ委譲を毎分掃き
+   *   続けないため。
+   * - `#nudgeForUsageRotation` を `allowRunning: true` で呼ぶ——既定は
+   *   `status === 'running'` を `'still-running'` として弾くので、そこを
+   *   通す（`waiting_human` は `allowRunning` が真でも通さない）。
+   * - 印（`#usageStopped` と台帳の写し `Job.usageStoppedAt`）は
+   *   `#clearUsageStoppedMark` で下ろすが、**下ろすのは `'nudged'` /
+   *   `'gone'` のときだけ。`'skipped'`（届かなかった）なら印は残す**——
+   *   次の鍵の回転（`resumeStoppedByUsage`）が拾い直す（`#nudgeForUsageRotation`
+   *   の doc の表と同じ規則）。
+   * - **回数上限・時間間隔のような新しい数は置かない。** 周期は既存の
+   *   ポーラー（60秒。`apps/daemon/src/manager-poller.ts`）に相乗りし、
+   *   借りを挑む前に下ろすことで「毎分掃き続ける」を止めている。
+   *
+   * ## 呼ぶ場所
+   *
+   * `apps/daemon/src/manager-poller.ts` から、`probeTurnEnds()` →
+   * `flushWithheldReports()` の後ろに並べる——**`probeTurnEnds()` より
+   * 必ず後**（同じ回で計算し直した `turnEndedAt` をその場で読むため）。
+   * `probeTurnEnds` の中には入れない（費用の門を持つ別の関心事である）。
+   *
+   * **1件の失敗で残りを止めない**（`probeTurnEnds` と同じ形）。
+   */
+  settleStalledUsageWakes(): Promise<string[]>;
   /**
    * このプールを止める。
    *
@@ -4352,6 +4492,42 @@ class Pool implements ManagerPool {
     return removed !== undefined ? { kind: 'removed', ...removed } : { kind: 'missing' };
   }
 
+  async unpushedWork(
+    managerId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<ManagerUnpushedWork> {
+    // **`#records` にしか見ない。** `manager_stop` の running 断りから呼ばれる
+    // ときは常に走行中なので像が在るはずだが、念のため無ければ「確かめられ
+    // なかった」を返す（台帳まで降りて再構築するほどの用途ではない——
+    // `transcript()` と違ってここは可観測性の最下段ではない）。
+    const record = this.#records.get(managerId);
+    if (record === undefined) {
+      return { kind: 'unavailable', reason: 'この委譲はいま像を持っていない（走行中ではない）。' };
+    }
+    const runner = await this.#runnerOf(record);
+    if (runner === null) {
+      return { kind: 'unavailable', reason: '宛先の runner がいま開いていない。' };
+    }
+    if (runner.unpushedWork === undefined) {
+      return {
+        kind: 'unavailable',
+        reason: 'この runner はこの口を持たない（古い版、またはテストの偽物）。',
+      };
+    }
+    try {
+      const result = await runner.unpushedWork(managerId, options);
+      if (result === undefined) {
+        return {
+          kind: 'unavailable',
+          reason: 'runner が答えなかった（セッションが無い・期限切れ・古い版のいずれか）。',
+        };
+      }
+      return { kind: 'ok', result };
+    } catch (error) {
+      return { kind: 'unavailable', reason: `runner への問い合わせが失敗した: ${String(error)}` };
+    }
+  }
+
   runningManagerOwning(archiveId: string): string | undefined {
     // **`#records` に居るかどうかだけで判定する。** 台帳（job store）へは
     // 降りない——`#retire()` 済みの委譲（`#records` から消えている）は
@@ -4655,6 +4831,64 @@ class Pool implements ManagerPool {
     return nudged;
   }
 
+  async settleStalledUsageWakes(): Promise<string[]> {
+    if (this.#stopped) return [];
+    const nudged: string[] = [];
+    // **`#usageWakeOwed` ではなく `#records` を起点に走査する。** 借りに
+    // 載っている managerId が `#records` に残っているとは限らない（`abort()` /
+    // `#retire()` で先に消えることがある）ので、`record.turnEndedAt` /
+    // `record.job` を読める側（`#records`）を起点にする——`#usageWakeOwed` は
+    // 条件1として突き合わせるだけである（interface の doc「4条件全部」）。
+    for (const [managerId, record] of [...this.#records]) {
+      if (this.#stopped) break;
+      try {
+        // 条件1: 借りが立っている（鍵が戻ったと回し手が言った時点でまだ走っていた）。
+        if (!this.#usageWakeOwed.has(managerId)) continue;
+        // 条件2: 枠で止まったことが分かっている（一般の停滞検知にしない門）。
+        if (!this.#usageStopped.has(managerId)) continue;
+        // 条件3: いまも `running`（`waiting_human` は含めない——待っているのは
+        // 枠ではなく人間の回答である）。
+        if (record.job.status !== 'running') continue;
+        // 条件4: `turnEndedAt` が在り、`lastReportAt` より後——「分からない」を
+        // 症状へ倒さない（`turnEndedAt` が無ければ発火しない）。
+        if (record.turnEndedAt === undefined) continue;
+        const turnEndedAt = Date.parse(record.turnEndedAt);
+        if (Number.isNaN(turnEndedAt)) continue;
+        if (record.job.lastReportAt !== undefined) {
+          const lastReportAt = Date.parse(record.job.lastReportAt);
+          if (Number.isNaN(lastReportAt)) continue;
+          if (turnEndedAt <= lastReportAt) continue;
+        }
+
+        // **借りは挑む前に下ろす**（同じ委譲を毎分掃き続けないため。interface の doc）。
+        this.#usageWakeOwed.delete(managerId);
+        const outcome = await this.#nudgeForUsageRotation(managerId, { allowRunning: true });
+        /*
+         * **`#settleUsageWake` / `resumeStoppedByUsage()` と同じ規則。** `'nudged'`
+         * （届いた）と `'gone'`（起こす相手がもう居ない・起こしてはいけない）は
+         * 印を下ろす。`'skipped'`（届かなかった）は印を残し、次の鍵の回転
+         * （`resumeStoppedByUsage`）が拾い直す。`'still-running'` は条件3で
+         * `running` に絞ったうえ `allowRunning: true` で呼んでいるので、
+         * `waiting_human` に化けていない限り実際には返らない——念のため同じ
+         * 規則（残す）で受ける。
+         */
+        if (outcome === 'nudged' || outcome === 'gone') {
+          await this.#clearUsageStoppedMark(managerId);
+        }
+        if (outcome === 'nudged') nudged.push(managerId);
+      } catch (error) {
+        // **1件の失敗で残りを止めない**（`probeTurnEnds` / `resumeStoppedByUsage`
+        // と同じ形）。**ただし黙って握らない** —— ここまで来る例外は
+        // `#nudgeForUsageRotation` / `#clearUsageStoppedMark` の中の catch を
+        // すり抜けたものだけなので本来は起きないはずで、**起きないはずのものが
+        // 起きたことが跡に残らないと、この掃きが1本も動いていない回と
+        // 「対象が無かった」回が見分けられない。**
+        noteDroppedRecord('枠で止まった借りの清算', `managerId=${managerId}`, error);
+      }
+    }
+    return nudged;
+  }
+
   /**
    * 枠で止まっていた1本へ、続きを促す一言を投げる。**印と借りは呼び出し側が
    * 下ろす**（呼び出し元によって下ろす条件が違う）。
@@ -4685,6 +4919,16 @@ class Pool implements ManagerPool {
    * とき、既定が「起こす」＝1ターン焼く側へ倒れるのを避ける（`#restoreJobs` の
    * `attached` 判定と同じ論法）。
    *
+   * ## `options.allowRunning`（`settleStalledUsageWakes` 専用。Issue #914 最終段）
+   *
+   * **既定（省略時）の振る舞いは1文字も変えない。** `allowRunning` が真の
+   * ときだけ、`status === 'running'` を `'still-running'` として弾かずに
+   * 起こす対象へ通す——呼び出し元（`settleStalledUsageWakes`）が既に
+   * `turnEndedAt` と `lastReportAt` の突き合わせで「ターンは終わっているが
+   * 借りが返っていない」と確認した後だけ渡す。**`waiting_human` は
+   * `allowRunning` が真でも通さない**——待っているのは枠ではなく人間の回答
+   * なので、鍵が戻ったことは無関係である。
+   *
    * **投げない。** `send()` の先には実 I/O（runner への HTTP・ストアへの書き込み）が
    * 在り、落ちうる——呼び出し元は走査の途中なので、ここで投げると後ろに並んだ
    * 委譲が誰にも起こされないまま残る（`#restoreJobs` のジョブループが同じ理由で
@@ -4692,14 +4936,18 @@ class Pool implements ManagerPool {
    */
   async #nudgeForUsageRotation(
     managerId: string,
+    options?: { readonly allowRunning?: boolean },
   ): Promise<'nudged' | 'still-running' | 'gone' | 'skipped'> {
     try {
       const record = this.#records.get(managerId) ?? (await this.#load(managerId));
       // 台帳から消えている（人間が消した等）。起こす相手が居ない ⟹ `'gone'`。
       if (record === null) return 'gone';
       const status = record.job.status;
-      if (status === 'running' || status === 'waiting_human') return 'still-running';
-      if (status !== 'done' && status !== 'failed' && status !== 'lost') {
+      const allowRunning = options?.allowRunning === true;
+      // `waiting_human` は `allowRunning` が真でも通さない（直上の doc）。
+      if (status === 'waiting_human') return 'still-running';
+      if (status === 'running' && !allowRunning) return 'still-running';
+      if (status !== 'running' && status !== 'done' && status !== 'failed' && status !== 'lost') {
         // **何もしなかったことを判断として残す。** 「起こさなかった」は日誌から
         // 消えやすいが、これは欠落ではなく判断である（根拠も一緒に残す）。
         await this.#journal({
@@ -6891,6 +7139,14 @@ class Pool implements ManagerPool {
             role: 'inbound',
             text: `[${event.managerId}] （停止済みのため受信箱へは回さない）${event.text}`,
           });
+          // **本文だけは台帳にも残す（Issue #1038）。** 日誌にしか残らないと、
+          // 誤って止めたことに気づく契機が止めた直後に無い——`manager_stop` の
+          // 応答にも `manager_report` にも1文字も出ない、という #1038 の実害。
+          // **`record.job.status` は動かさない。`#emit()` もしない**（R4 は
+          // 覆さない。すぐ上のコメントと同じ理由）。上書き（前回の畳んだ本文を
+          // 消して最新のものに差し替える）でよい——古いほうを残す理由が無い。
+          record.job.lastFoldedTurn = { text: event.text, at: new Date().toISOString() };
+          await this.#persist(record);
           return;
         }
         // **reportId で冪等に（#206）。** `ask` の `requestId`（直後の
@@ -6916,6 +7172,19 @@ class Pool implements ManagerPool {
         // 瞬間として `new Date().toISOString()` を直接使う。
         record.job.lastReportAt = new Date().toISOString();
         record.job.status = event.status;
+        // **「書いた瞬間」は書き換え後の値（Issue #1036）。** `event.status`
+        // を直接使う——`record.job.status` を読み直しても同じ値だが、直上の
+        // 代入と同じ値であることを1目で分かるようにするため直接使う。
+        // **既定値は作らない**（`schema.ts` の `lastReportStatus` の doc）。
+        record.job.lastReportStatus = event.status;
+        // **止めた後に畳んだ本文（Issue #1038）は、応答として終わった回では
+        // 消す。** ここへ来られたのは `record.job.status === 'stopped'` の
+        // 早期リターン（このすぐ上の分岐）を通らなかった回——つまりこの
+        // report は完遂した報告として台帳へ書かれる。古い畳んだ本文を残すと、
+        // 次に `manager_report` を読む側が「これは畳まれた途中経過だ」と
+        // 誤読する（`lastFailure` / `lastUnreported` を応答として終わった回で
+        // 消すのと同じ理由——`schema.ts` の `lastFoldedTurn` の doc）。
+        delete record.job.lastFoldedTurn;
         /*
          * **古びさせない（#713 段3）。** `case 'report'` が届く時点で、この
          * セッションは新しいターンの出力を返している——`lastSystemError` が
@@ -9865,6 +10134,9 @@ function summaryOf(
     // **`lastReport` と対で運ぶ**（#358）。台帳をそのまま写すだけ——書き込みは
     // `#onEvent` の `case 'report'` の1箇所に閉じている。
     ...(job.lastReportAt === undefined ? {} : { lastReportAt: job.lastReportAt }),
+    // **`lastReportAt` と対で運ぶ（Issue #1036）。** 台帳をそのまま写すだけ
+    // ——書き込みは `#onEvent` の `case 'report'` の1箇所に閉じている。
+    ...(job.lastReportStatus === undefined ? {} : { lastReportStatus: job.lastReportStatus }),
     // **`lastReport` と同じ行で運ぶ。** 片方だけを載せると、読む側は「報告が来た」
     // と「エラーで死んだ」を本文の文言で判定するしかなくなる（塞いだ穴がここで
     // 開き直る）。応答として終わった回では台帳側で消えているので、ここは台帳を
@@ -9873,6 +10145,11 @@ function summaryOf(
     // **`lastFailure` と同じ行で運ぶ（Issue #917）。** 台帳をそのまま写すだけ
     // ——書き込みは `#onEvent` の `case 'report'` の1箇所に閉じている。
     ...(job.lastUnreported === undefined ? {} : { lastUnreported: job.lastUnreported }),
+    // **止めた後に畳んだ本文（Issue #1038）。** 台帳をそのまま写すだけ——
+    // 書き込みは `#onEvent` の `case 'report'` の `status === 'stopped'`
+    // 分岐（立てる）と、通常の報告として処理される分岐（`delete` で下ろす）
+    // に閉じている。
+    ...(job.lastFoldedTurn === undefined ? {} : { lastFoldedTurn: job.lastFoldedTurn }),
     // **台帳をそのまま写すだけ**（#713 段3）。書き込みは `#onEvent` の
     // `case 'closed'`（立てる）と `case 'report'`（下ろす）に閉じている。
     ...(job.lastSystemError === undefined ? {} : { lastSystemError: job.lastSystemError }),

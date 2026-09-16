@@ -152,6 +152,18 @@ export function describeUsageNotice(notice: UsageLimitNotice): string {
  * - `action`: 人間が動かないと戻らない（入金・管理者の設定・座席種別の変更）
  * - `unknown`: どちらとも言えない。**`action` の同義語ではない**（下記）
  *
+ * ## ⚠️ この軸は**枠**について答える。**その委譲が戻るか**は答えない（Issue #931）
+ *
+ * `time` は「枠がリセットされれば通るようになる」までしか言わない。**枠が
+ * 戻っても動き出せない委譲が在る**——認証トークンの世代が食い違ったまま走って
+ * いるセッションは、リセット後も古い鍵で叩き続ける（Issue #914 提案1 が
+ * `manager_list` へ出している ⚠ の行がそれである）。⟹ この2つを1つの語で
+ * 兼ねると、読み手は `time` を「待てばこの委譲は戻る」と読む。
+ * {@link withRecoveryNote} の `options.staleToken` は、そう読まれる場面でだけ
+ * 但し書きを足すための口である。**軸そのものは増やしていない**——
+ * `limitRecoverySchema` の3値は台帳・受信箱に載る値なので、ここへ4つ目を
+ * 足すと、誰も書き込まない値を読む側だけが持つことになる。
+ *
  * ## `unknown` を「捨てる」側へ倒さないこと
  *
  * この値の消費者（Issue #393 PR3 の回し手）にとって、`action` と読むことは
@@ -339,6 +351,18 @@ export function limitRecoveryOf(text: string): LimitRecovery {
 }
 
 /**
+ * `time`（時間で戻る）が**この委譲には当てにならない**ときに添える但し書き
+ * （Issue #931）。
+ *
+ * **字面の生成元はここ1箇所である**（`describeTokenGeneration` の doc と同じ
+ * 理由——同じ事実を2つの口が別の語で呼ぶと、面をまたいで読む人が詰まる）。
+ */
+export const STALE_TOKEN_RECOVERY_CAVEAT =
+  '⚠ ただしこの見込みは**枠のほうの話**であって、この委譲が戻ることを意味しない' +
+  '——認証トークンの世代が食い違っているので、枠がリセットされても' +
+  'このセッションは古い鍵のまま走り続ける（上の世代の行を見ること）。';
+
+/**
  * {@link limitRecoveryOf} の判定を、人が読む文言へ**添える**（Issue #393 の
  * 判定を、初めてクローンの受信箱・`manager_list` / `manager_report` の ⚠ 行へ
  * 運ぶ経路。PR #718 の作法を踏襲する）。
@@ -357,11 +381,33 @@ export function limitRecoveryOf(text: string): LimitRecovery {
  * 出す**——このリポジトリが繰り返し選んでいる「取れない軸に0の行を作らない」
  * （AGENTS.md 地雷表）と同じ向きの判断である。ここで書いているのは「どう
  * 運ぶか」だけで、`LIMIT_RECOVERY_BY_PREFIX` の分類の正誤は扱わない。
+ *
+ * ## `options.staleToken` —— 「枠は戻る」と「この委譲が戻る」は別である（Issue #931）
+ *
+ * **この軸が答えているのは枠のほうの問いだけである**（{@link LimitRecovery} の
+ * doc「この軸は枠について答える」）。認証トークンの世代が食い違ったまま走って
+ * いる委譲では、**枠がリセットされても、そのセッションは古い鍵のまま走り続ける**
+ * ので、`time` を読んだ人が「待てばこの委譲は戻る」と読むと待ち続けることに
+ * なる。⟹ `staleToken` が真のときだけ {@link STALE_TOKEN_RECOVERY_CAVEAT} を
+ * もう1行足す。
+ *
+ * **判定そのものはここでしない。** 世代が食い違っているかを決めるのは
+ * `tools.ts` の `tokenGenerationMismatched`（Issue #914 提案1 で着地した
+ * `describeTokenGeneration` と**同じ1つの判定**）で、ここは受け取った真偽を
+ * 運ぶだけである——判定のコピーを2つ作らない。
  */
-export function withRecoveryNote(base: string, recovery: LimitRecovery): string {
+export function withRecoveryNote(
+  base: string,
+  recovery: LimitRecovery,
+  options?: { readonly staleToken?: boolean },
+): string {
   if (recovery === 'unknown') return base;
   const label = recovery === 'time' ? '時間で戻る（time）' : '人間が動かないと戻らない（action）';
-  return `${base}\n（回復の見込み: ${label}）`;
+  const note = `${base}\n（回復の見込み: ${label}）`;
+  // **`action` には足さない。** あちらは既に「待っても戻らない」と言って
+  // いるので、同じことを2行で言うだけになる（この節の doc）。
+  if (options?.staleToken !== true || recovery !== 'time') return note;
+  return `${note}\n${STALE_TOKEN_RECOVERY_CAVEAT}`;
 }
 
 // ---------------------------------------------------------------------------

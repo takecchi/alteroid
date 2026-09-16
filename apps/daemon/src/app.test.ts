@@ -175,6 +175,13 @@ function fakeClone() {
       const body = transcripts.get(managerId);
       return body === undefined ? { kind: 'missing' as const } : { kind: 'body' as const, body };
     },
+    // このテストダブルの主題は #1039 ではない。この HTTP 面（daemon の
+    // 公開 app.ts）に unpushedWork の口は無い（Issue #1039 が触るのは
+    // apps/runner/src/app.ts と manager_stop の道具だけ）ので、呼ばれない
+    // 前提で置く——呼ばれたら歯が落ちる形にして、静かに乖離させない。
+    async unpushedWork() {
+      throw new Error('この検証では呼ばれないはず（#1039 は daemon の公開 HTTP 面を触らない）');
+    },
     runningManagerOwning(archiveId) {
       return runningOwners.get(archiveId);
     },
@@ -198,6 +205,9 @@ function fakeClone() {
     // HTTP 境界の検証では触らない（#567 の計算はデーモンのポーラーが起こす）。
     async probeTurnEnds() {},
     async flushWithheldReports() {},
+    async settleStalledUsageWakes() {
+      return [];
+    },
     async stop() {},
   };
 
