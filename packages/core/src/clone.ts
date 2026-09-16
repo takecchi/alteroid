@@ -142,6 +142,34 @@ import {
 export { DAEMON_RUNNER_REGISTRY_SOURCE, DAEMON_TOKEN_POOL_REOPENED_SOURCE, isDaemonSelfNotice };
 
 /**
+ * `Clone#post()` が、受理した合図を畳み込みの索引（`#pendingCollapse`）に
+ * 照らした結果（Issue #954 続き）。
+ *
+ * **3値である理由は、畳む先が2つに分かれるからである。** 受信箱・台帳への
+ * 「行」と、クローンの「ターン」は別のもので、同文の連投に対してどちらを
+ * 畳んでよいかは合図の種類で違う。
+ *
+ * - `pass` … 畳まない。この鍵の代表（最初の1件）か、そもそも畳める型では
+ *   ない（人間の発言・外から渡された `external` など。`inboxCollapseKey`）。
+ *   呼び出し側はこれまでどおり `#remember` / `#record` / `#commit` /
+ *   `#inbox.push` を全部通す。
+ * - `folded` … **行もターンも畳む。** `manager_message`（429 の連投など）が
+ *   これ。同じ委譲からの同じ本文は、読まれる前の2件目以降に新しい情報が
+ *   1ビットも無く、**件数はマネージャー側（PR #946 の窓またぎ抑制）が次の
+ *   配達の末尾に載せて別途クローンへ届ける**ので、ここで待ち行列まで畳んで
+ *   よい。呼び出し側は4つとも呼ばずに return する。
+ * - `row-folded` … **行だけ畳み、待ち行列へは入れる。** デーモン自身が出す
+ *   `external`（`token-pool` の復帰通知など）がこれ。**issue #841 が
+ *   「中身の同じ `external` が複数届いたら、1ターンへ束ねて件数と全件の
+ *   届いた時刻を本文に載せる」ことを受け入れ基準にしている**
+ *   （`#mergedExternalBatch` の doc）ので、待ち行列から抜くとその能力が
+ *   消える（AGENTS.md 地雷「能力の削除」）。⟹ ここで畳むのは永続化する行
+ *   だけにし、ターンの側の畳み込みは #841 の束ね読みへ任せる —— **2つの
+ *   機構は別の軸を守っており、どちらかに寄せると片方の保証が落ちる。**
+ */
+type PendingCollapseVerdict = 'pass' | 'folded' | 'row-folded';
+
+/**
  * クローン = デーモン内の長寿命 SDK セッション1本（docs/architecture.md）。
  *
  * - model の既定は `fable`。役割とモデル帯の対応は設計判断であり、変更には
@@ -1901,7 +1929,13 @@ class Clone implements CloneHost {
       // 片付け中かどうかは理由にならない。**代表側（最初の1件）はこれまで
       // どおり `#remember` / `#commit` / `noteDroppedInboxEvent` を通す** —
       // 畳んだかどうかで代表の扱いを変えない。
-      if (this.#foldIntoPendingCollapse(event)) return;
+      //
+      // **ここは `canQueue: false` で呼ぶ。** この窓の合図は待ち行列へ入らず
+      // （`#inbox.push` はこの下に無い）、そのまま跡だけ残して落ちるので、
+      // `external` でも「行だけ畳んでターンは #841 へ任せる」が成り立たない
+      // ——任せる先のターンがそもそも起きない。⟹ 本文を日誌へ残す役目も
+      // `#foldIntoPendingCollapse` 側が引き受ける（`PendingCollapseVerdict`）。
+      if (this.#foldIntoPendingCollapse(event, { canQueue: false }) !== 'pass') return;
       this.#remember(event);
       this.#commit(event);
       noteDroppedInboxEvent(event);
@@ -1965,24 +1999,37 @@ class Clone implements CloneHost {
     // （`token-pool` の復帰通知など）——`isTick` の畳み込みより後に置く。
     // こちらは中身を持つ合図の話であって、tick の「読まれる前の重複には
     // 情報が無い」とは理由が違う（あちらは中身が無いから畳めるが、こちらは
-    // 中身が同じだから畳んでよい、という別の判定である）。畳めば
-    // `#remember` / `#record` / `#commit` / `#inbox.push` のどれも呼ばずに
-    // 戻る——**受信箱の行も台帳の行もクローンのターンも増えない。**
-    if (this.#foldIntoPendingCollapse(event)) return;
+    // 中身が同じだから畳んでよい、という別の判定である）。
+    //
+    // **畳み先は種類で2つに分かれる**（`PendingCollapseVerdict` の doc）——
+    // `manager_message` は行もターンも畳み（`folded`。ここで return する）、
+    // デーモン自身の `external` は**行だけ**畳んで待ち行列へは入れる
+    // （`row-folded`）。後者を待ち行列から抜くと、issue #841 の「中身の同じ
+    // `external` を1ターンへ束ね、件数と全件の届いた時刻を本文に載せる」能力
+    // が消える（`#mergedExternalBatch` の doc）。
+    const collapse = this.#foldIntoPendingCollapse(event, { canQueue: true });
+    if (collapse === 'folded') return;
 
     // **受理した時点で未読として書き出す。** 境界を「queue に入った時点」に置いては
     // いけない — クローンが暇なときに届いた合図は `Inbox#push` の waiter 経路を
     // 通って queue を素通りするので、queue を吐き出す形の永続化はその経路を1件も
     // 救わない。ここに置けば、どちらの経路でも必ず1度は通る。
-    this.#remember(event);
-    // 受理した瞬間に日誌へ載せて合図を出す。**器へ書くのと同じ場所である**
-    // （`#remember` の隣）。
-    this.#record(event);
-    // 頼まれたことを未了として開くのも同じ場所である。**ターンの中に置かないこと** —
-    // ターンが例外で落ちた合図は `#forget` されて二度と来ないので（`#pump` の
-    // `finally`）、ターンの中で開く形にすると、いちばん落としてはいけない
-    // 「処理に失敗した依頼」だけが台帳に載らない。
-    this.#commit(event);
+    //
+    // **`row-folded` のときだけ、この3つを飛ばす。** 同じ本文の未読が既に器に
+    // 在るので、行を増やしても「まだ片付いていない仕事」は1件のままである
+    // （増えるのは、器の入れ替えのたびに拾い直される行数だけ）。待ち行列へは
+    // 下で入れるので、クローンがこの合図を読み落とすことはない。
+    if (collapse === 'pass') {
+      this.#remember(event);
+      // 受理した瞬間に日誌へ載せて合図を出す。**器へ書くのと同じ場所である**
+      // （`#remember` の隣）。
+      this.#record(event);
+      // 頼まれたことを未了として開くのも同じ場所である。**ターンの中に置かないこと** —
+      // ターンが例外で落ちた合図は `#forget` されて二度と来ないので（`#pump` の
+      // `finally`）、ターンの中で開く形にすると、いちばん落としてはいけない
+      // 「処理に失敗した依頼」だけが台帳に載らない。
+      this.#commit(event);
+    }
     // **人間が待っている合図は、待ち行列の人間の最後尾へ入れる**（`Inbox#push` の
     // `insertAfterLast`）。人間どうしは追い越さず、人間以外は飛び越す。
     //
@@ -3286,16 +3333,32 @@ class Clone implements CloneHost {
    * `post()` が受理した合図を、`#pendingCollapse`（同アイテムの doc）に
    * 照らして畳んでよいか判定し、畳めたならその場で片付ける。
    *
-   * **返り値が `true` のとき、呼び出し側は `#remember` / `#record` /
-   * `#commit` / `#inbox.push` のどれも呼ばずにそのまま return すること。**
-   * この関数自身がその4つの代わりに要ることを済ませる——具体的には
-   * `#journalIncomingBody` で生の本文を、日誌へ畳んだ旨の1行を、それぞれ
-   * `#journal` で残す（下）。
+   * **返り値の3値の意味は {@link PendingCollapseVerdict} の doc に在る。**
+   * `folded` なら呼び出し側は `#remember` / `#record` / `#commit` /
+   * `#inbox.push` のどれも呼ばずにそのまま return すること——この関数自身が
+   * その4つの代わりに要ることを済ませる（`#journalIncomingBody` で生の本文
+   * を、日誌へ畳んだ旨の1行を、それぞれ `#journal` で残す）。`row-folded`
+   * なら前3つだけを飛ばし、`#inbox.push` は通すこと。
+   *
+   * ## `external` は行だけ畳む（ターンは #841 の束ね読みへ残す）
+   *
+   * デーモン自身が出す `external`（`token-pool` の復帰通知など）を待ち行列
+   * からも抜くと、issue #841 が受け入れ基準にしている「中身の同じ
+   * `external` が複数届いたら1ターンへ束ね、**件数と全件の届いた時刻**を
+   * 本文に載せる」が起きなくなる（`#mergedExternalBatch` の doc）。**同じ
+   * 入力に対して2つの機構が働くが、守っている軸が違う** —— こちらは
+   * 「器に永続化される行を1件に保つ」（器の入れ替えのたびに拾い直される量
+   * を決めるのはこちら）、#841 は「クローンのターンを1本に保ちつつ、何件
+   * 届いたかを本文で伝える」。**片方へ寄せると、もう片方の保証が黙って
+   * 落ちる**（実際に一度落として #841 の受け入れ基準テストが赤くなった）。
+   * ⟹ `canQueue` が真で `event.type === 'external'` のときだけ `row-folded`
+   * を返す。`canQueue` が偽の呼び出し（停止中の枝。待ち行列へ入らない）は
+   * 任せる先のターンがそもそも起きないので、`folded` と同じ扱いにする。
    *
    * ## 畳めるのは `manager_message` と「デーモン自身の `external`」だけ
    *
    * `inboxCollapseKey` が `undefined` を返す型・行（人間の発言・回答、外部
-   * から渡された `external` を含む）は、ここを通っても常に `false` を
+   * から渡された `external` を含む）は、ここを通っても常に `pass` を
    * 返す——つまり普段どおり受理させる。線の引き方は `inboxCollapseKey` の
    * doc にある（alteroid 自身が合成した知らせだけを畳み、外から渡されたもの
    * は畳まない）。
@@ -3325,19 +3388,40 @@ class Clone implements CloneHost {
    * 台帳側の話であり、ここは最初からその種の隙間を持たない、という違いで
    * ある）。
    */
-  #foldIntoPendingCollapse(event: InboxEvent): boolean {
+  #foldIntoPendingCollapse(
+    event: InboxEvent,
+    options: { readonly canQueue: boolean },
+  ): PendingCollapseVerdict {
     const key = inboxCollapseKey(event);
-    if (key === undefined) return false;
+    if (key === undefined) return 'pass';
 
     const existing = this.#pendingCollapse.get(key);
     if (existing === undefined) {
       // **この鍵の代表になる。** 代表自身はここでは何もせず（呼び出し側が
       // これまでどおり `#remember` 以下を通す）、索引にだけ載せる。
       this.#pendingCollapse.set(key, { id: event.id, at: event.at, collapsed: 0 });
-      return false;
+      return 'pass';
     }
 
     existing.collapsed += 1;
+
+    // **`external` は待ち行列まで畳まない**（上の doc「`external` は行だけ畳む」）。
+    // 待ち行列へ入れる回は、本文も届いた時刻も `#841` の束ね読みが1ターンの中で
+    // 書くので、ここで `#journalIncomingBody` を呼ぶと同じ本文が日誌に二重に載る
+    // —— だから跡は「行を畳んだ」の1行だけにする。
+    if (options.canQueue && event.type === 'external') {
+      void this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text:
+          `alteroid 自身が合成した同一本文の未読が既に受信箱にあるので、受信箱の行は増やさずに` +
+          `畳んだ（本文と届いた時刻はこのあと束ね読み（#841）が1ターンの中で渡す）: ` +
+          `${inboxEventShape(event)}`,
+      });
+      return 'row-folded';
+    }
+
     // **生の本文は畳んだ回もここで残す**（上の doc）。`post` を待たせない
     // ため、ここでも待たない — 失敗は `#journal` 自身が握る。
     void this.#journalIncomingBody(event);
@@ -3350,7 +3434,7 @@ class Clone implements CloneHost {
         `積まずに畳んだ（モデルへは1文字も渡していない。本文は直前の行に残してある）: ` +
         `${inboxEventShape(event)}`,
     });
-    return true;
+    return 'folded';
   }
 
   /**
