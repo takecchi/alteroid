@@ -50,7 +50,12 @@ import {
   inboxBacklogDedupeKey,
   inboxCollapseKey,
   INBOX_EVENT_TYPE_ORDER,
+  isHumanOriginated,
 } from './inbox-backlog.js';
+// **再 export する。** この判定の元の置き場所は `clone.ts` で、外（`index.ts`）は
+// ここから取っている。実装を移したのは循環を消すためで（#917。移設の理由は
+// `inbox-backlog.ts` 側の doc）、公開の口まで動かす理由は無い。
+export { isHumanOriginated };
 import {
   inboxEventShape,
   journalEntryShape,
@@ -270,37 +275,6 @@ export function resolveCloneHumanPriority(env: NodeJS.ProcessEnv = process.env):
   const raw = env[CLONE_HUMAN_PRIORITY_ENV_KEY]?.trim().toLowerCase();
   if (raw === undefined || raw === '') return true;
   return !['0', 'false', 'off', 'no'].includes(raw);
-}
-
-/**
- * 待ち行列で割り込んでよい合図か ＝ 人間が返事を待っている合図か。
- *
- * **2種類ある。** `human_message`（発言）と `human_answer`（承認待ちへの回答）で、
- * どちらも**人間が画面の前で止まっている**。後者を外すと、「答えたのに止まった
- * マネージャーへ返らない」という既知の壊れ方（`commitmentFor` の `human_answer`
- * の doc）が、待ち時間の側からもう一度出る。
- *
- * **タイマー・発意・外部イベント・マネージャーからの一件・蒸留は含まない。**
- * どれも人間が待っている合図ではない。
- *
- * ## なぜこれで人間以外が餓死しないのか
- *
- * **理由は「割り込みの量が有界だから」であって、実装が何かを保証しているから
- * ではない。** 割り込めるのは人間が実際に打った発言だけで、**人間の速さでしか
- * 来ない。** 5件まとめて送られれば5件ぶん遅れて、そのあと必ず進む。
- *
- * **だから機械が人間を名乗る形を作らないこと。** ここに `external`（webhook）や
- * `timer` を足した瞬間、割り込みの量が機械の速さで決まるようになり、**有界性の
- * 根拠が消えて本当に餓死する。** `isHumanOriginated` が2つしか返さないのは、
- * 数が少ないからではなく**ここが有界性の全体だから**である。
- *
- * **テストが測っているのは餓死しないことではない**（それは上の有界性の話で、
- * 有限のテストでは示せない）。**測っているのは「人間を挟んでも人間以外が1件も
- * 消えず、人間以外どうしの到着順も保たれる」＝ 順序の保存と非喪失**である。
- * 歯の名前もそう書いてある。**名前が中身より多くを約束しないこと。**
- */
-export function isHumanOriginated(event: InboxEvent): boolean {
-  return event.type === 'human_message' || event.type === 'human_answer';
 }
 
 /**

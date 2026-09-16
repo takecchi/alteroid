@@ -6,6 +6,7 @@ import {
 } from './daemon-self-notice.js';
 import {
   INBOX_BACKLOG_LOUD_THRESHOLD,
+  describeHumanOriginatedInboxAlert,
   describeInboxBacklogBreakdown,
   inboxBacklogCrossManagerDedupeKey,
   inboxBacklogDedupeKey,
@@ -853,6 +854,85 @@ describe('summarizeInboxBacklog', () => {
     expect(bucketOf(24 * HOUR_MS_FOR_TEST)).toBe('24時間以上');
     expect(bucketOf(24 * HOUR_MS_FOR_TEST - 1)).toBe('6〜24時間');
   });
+
+  /**
+   * Issue #917 (B): `humanOriginated`（`human_message` / `human_answer` の
+   * 滞留だけを数える軸）。既存の1周の走査の中で数えている（`byType` などと
+   * 同じループ）——ここでは「走査を増やしていないこと」は暗黙に信頼せず、
+   * 数字そのものが正しいことだけを測る。
+   */
+  it('humanOriginated: 人間起点が無ければ total/undelivered が0、byType は空、oldestAt を持たない', () => {
+    const rows = [
+      row(SAMPLE_EVENTS.manager_message, '2026-09-11T00:00:00.000Z'),
+      row(SAMPLE_EVENTS.external, '2026-09-11T00:00:00.000Z'),
+    ];
+    const b = summarizeInboxBacklog(rows, NOW);
+    expect(b.humanOriginated.total).toBe(0);
+    expect(b.humanOriginated.byType).toEqual([]);
+    expect(b.humanOriginated.undelivered).toBe(0);
+    expect(b.humanOriginated).not.toHaveProperty('oldestAt');
+  });
+
+  it('humanOriginated: human_message だけのとき、件数・種類・最古時刻が出る', () => {
+    const rows = [
+      row(SAMPLE_EVENTS.human_message, '2026-09-11T05:00:00.000Z'),
+      row({ ...SAMPLE_EVENTS.human_message, id: 'e2' }, '2026-09-10T00:00:00.000Z'),
+      // 人間起点でない行が混ざっていても、この軸には数えない。
+      row(SAMPLE_EVENTS.manager_message, '2026-09-11T00:00:00.000Z'),
+    ];
+    const b = summarizeInboxBacklog(rows, NOW);
+    expect(b.humanOriginated.total).toBe(2);
+    expect(b.humanOriginated.byType).toEqual([{ type: 'human_message', count: 2 }]);
+    expect(b.humanOriginated.oldestAt).toBe('2026-09-10T00:00:00.000Z');
+  });
+
+  it('humanOriginated: human_answer だけのとき、件数・種類・最古時刻が出る', () => {
+    const rows = [
+      row(SAMPLE_EVENTS.human_answer, '2026-09-11T05:00:00.000Z'),
+      row({ ...SAMPLE_EVENTS.human_answer, id: 'e2' }, '2026-09-10T00:00:00.000Z'),
+    ];
+    const b = summarizeInboxBacklog(rows, NOW);
+    expect(b.humanOriginated.total).toBe(2);
+    expect(b.humanOriginated.byType).toEqual([{ type: 'human_answer', count: 2 }]);
+    expect(b.humanOriginated.oldestAt).toBe('2026-09-10T00:00:00.000Z');
+  });
+
+  it('humanOriginated: human_message / human_answer が混在すると、両方の内訳が出て足すと total に一致する', () => {
+    const rows = [
+      row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z'),
+      row({ ...SAMPLE_EVENTS.human_message, id: 'e2' }, '2026-09-11T00:00:00.000Z'),
+      row(SAMPLE_EVENTS.human_answer, '2026-09-11T00:00:00.000Z'),
+    ];
+    const b = summarizeInboxBacklog(rows, NOW);
+    expect(b.humanOriginated.total).toBe(3);
+    // human_message が human_answer より先（INBOX_EVENT_TYPE_ORDER と同じ並び）。
+    expect(b.humanOriginated.byType).toEqual([
+      { type: 'human_message', count: 2 },
+      { type: 'human_answer', count: 1 },
+    ]);
+    expect(b.humanOriginated.byType.reduce((sum, e) => sum + e.count, 0)).toBe(
+      b.humanOriginated.total,
+    );
+  });
+
+  /**
+   * ⭐ `deliveries === 0` に絞らないことを直接測る歯——`total` は配達済み
+   * （`deliveries >= 1`）の人間起点の行も数えるが、`undelivered` はその
+   * サブセット（0回のもの）だけを別に持つ。
+   */
+  it('humanOriginated: deliveries が0のものと1以上のものが混ざると、total と undelivered が別々に正しい', () => {
+    const rows = [
+      row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z', 0),
+      row({ ...SAMPLE_EVENTS.human_message, id: 'e2' }, '2026-09-11T00:00:00.000Z', 2),
+      row(SAMPLE_EVENTS.human_answer, '2026-09-11T00:00:00.000Z', 1),
+    ];
+    const b = summarizeInboxBacklog(rows, NOW);
+    // 3件とも「滞留している人間起点」として total に数える——配達済みでも
+    // 「人間が言ったのに返事をしていない」ことに変わりはないため。
+    expect(b.humanOriginated.total).toBe(3);
+    // 0回（いまの器になってから積まれ、まだ片付いていない）のは1件だけ。
+    expect(b.humanOriginated.undelivered).toBe(1);
+  });
 });
 
 /**
@@ -866,6 +946,110 @@ function lineStartingWith(text: string, prefix: string): string {
   expect(matches).toHaveLength(1);
   return matches[0]!;
 }
+
+describe('describeHumanOriginatedInboxAlert（Issue #917 (B)）', () => {
+  it('人間起点が0件なら空文字を返す（1文字も足さない）', () => {
+    const b = summarizeInboxBacklog(
+      [
+        row(SAMPLE_EVENTS.manager_message, '2026-09-11T00:00:00.000Z'),
+        row(SAMPLE_EVENTS.external, '2026-09-11T00:00:00.000Z'),
+      ],
+      NOW,
+    );
+    expect(describeHumanOriginatedInboxAlert(b)).toBe('');
+  });
+
+  it('human_message だけのとき、件数・種類・最古の受理時刻・0回の件数を出す', () => {
+    const b = summarizeInboxBacklog(
+      [
+        row(SAMPLE_EVENTS.human_message, '2026-09-11T05:00:00.000Z', 0),
+        row({ ...SAMPLE_EVENTS.human_message, id: 'e2' }, '2026-09-10T00:00:00.000Z', 0),
+      ],
+      NOW,
+    );
+    const text = describeHumanOriginatedInboxAlert(b);
+    expect(text).toContain('人間起点');
+    expect(text).toContain('2 件ある');
+    expect(text).toContain('human_message 2');
+    expect(text).toContain('2026-09-10T00:00:00.000Z');
+    expect(text).toContain('片付いていない分が 2 件');
+  });
+
+  it('human_answer だけのとき、件数・種類が出る', () => {
+    const b = summarizeInboxBacklog(
+      [row(SAMPLE_EVENTS.human_answer, '2026-09-11T00:00:00.000Z', 0)],
+      NOW,
+    );
+    const text = describeHumanOriginatedInboxAlert(b);
+    expect(text).toContain('1 件ある');
+    expect(text).toContain('human_answer 1');
+  });
+
+  it('human_message / human_answer が混在すると、両方の内訳が出る', () => {
+    const b = summarizeInboxBacklog(
+      [
+        row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z', 0),
+        row(SAMPLE_EVENTS.human_answer, '2026-09-11T00:00:00.000Z', 0),
+      ],
+      NOW,
+    );
+    const text = describeHumanOriginatedInboxAlert(b);
+    expect(text).toContain('2 件ある');
+    expect(text).toContain('human_message 1');
+    expect(text).toContain('human_answer 1');
+  });
+
+  /**
+   * ⭐ `undelivered` は `deliveries === 0` の分だけを数える——配達済み
+   * （`deliveries >= 1`）でも `total` には入るが、この数字には入らない。
+   */
+  it('deliveries が混在するとき、total と「片付いていない」件数が別々に出る', () => {
+    const b = summarizeInboxBacklog(
+      [
+        row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z', 0),
+        row({ ...SAMPLE_EVENTS.human_message, id: 'e2' }, '2026-09-11T00:00:00.000Z', 3),
+      ],
+      NOW,
+    );
+    const text = describeHumanOriginatedInboxAlert(b);
+    expect(text).toContain('2 件ある');
+    expect(text).toContain('片付いていない分が 1 件');
+  });
+
+  /**
+   * 名乗ってよいことの線（`InboxBacklogBreakdown.humanOriginated` の doc）
+   * ——「配達されていない」と断定しないこと、「未配達」という旧い語を
+   * 使わないこと、経過時間（「書かれてから N 分」）を計算しないことを
+   * 出力そのもので固定する。
+   */
+  it('「未配達」と名乗らず、「配達されていない」を断定でなく打ち消しの形でしか使わない', () => {
+    const b = summarizeInboxBacklog(
+      [row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z', 0)],
+      NOW,
+    );
+    const text = describeHumanOriginatedInboxAlert(b);
+    expect(text).not.toContain('未配達');
+    // 「配達されていない」という字面は使ってよいが、必ず打ち消し（「とは言えない」）
+    // を伴う——断定の形（「配達されていない。」のような言い切り）を作らない。
+    expect(text).toContain('配達されていないとは言えない');
+    // 経過時間の計算はしない——「N 分」のような相対時間の文言を作らない。
+    expect(text).not.toMatch(/\d+\s*分/);
+  });
+
+  it('本文（text の中身）を1文字も含まない', () => {
+    const b = summarizeInboxBacklog(
+      [
+        row(
+          { ...SAMPLE_EVENTS.human_message, text: '絶対に外へ出てはいけない本文XYZ' },
+          '2026-09-11T00:00:00.000Z',
+          0,
+        ),
+      ],
+      NOW,
+    );
+    expect(describeHumanOriginatedInboxAlert(b)).not.toContain('絶対に外へ出てはいけない本文XYZ');
+  });
+});
 
 describe('describeInboxBacklogBreakdown', () => {
   it('必ず total を出す', () => {

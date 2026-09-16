@@ -225,6 +225,95 @@ export interface InboxBacklogBreakdown {
    * （`Date.now()` はここでも呼ばない——純関数のままである）。
    */
   readonly observedAt: string;
+  /**
+   * 滞留している行のうち、**人間起点**（`isHumanOriginated`。`human_message` /
+   * `human_answer` の2種、`clone.ts` から import——上の import のコメント参照）の
+   * ものだけを数えたもの（Issue #917 (B)）。
+   *
+   * ## なぜ足したか
+   *
+   * #917 が名指しした欠陥は、`未配達 4301` のような**大きい数字**と、
+   * `human_message 1`（`undeliveredByType` の1行）のような**行動を要する
+   * 数字**が、出力上まったく同じ字の大きさ・同じ場所（内訳の奥）に並んで
+   * いることだった。クローンは大きいほうを先に読み、7行目に埋もれた
+   * `human_message 1` を読み飛ばした。**この欄は対策ではなく、行動を要する
+   * 数字だけを別の軸として取り出す計器である**——`describeHumanOriginatedInboxAlert`
+   * （このファイル）が、これを内訳より前・単独の行として出す。
+   *
+   * ## `deliveries === 0` に絞らない理由
+   *
+   * `total` / `byType` は**滞留している人間起点の行を全部**数える。**一度
+   * 配達された（`deliveries >= 1`）が、まだ受信箱から消えていない人間の発言も
+   * 「人間が言ったのに返事をしていない」ことに変わりはない**——`deliveries`
+   * は器が入れ替わった回数であって処理が終わった回数ではない
+   * （`InboxBacklogBreakdown.undelivered` の doc、#910）。⟹ 人間起点を
+   * `deliveries === 0` だけに絞ると、「配達はされたが、まだ応答していない」
+   * 人間の発言を計器から静かに落とすことになる。
+   *
+   * **`undelivered` はそれとは別に持つ。** #917 が実際に観測した軸
+   * （`manager_list` の内訳が見せていたのは0回の桶）を、`total` と並べて
+   * 両方読めるようにするため。`undelivered <= total` が常に成り立つ。
+   *
+   * ## `byType` / `total` の算術
+   *
+   * `byType` は件数0の型を載せない。足すと必ず `total` に一致する
+   * （`human_message` と `human_answer` の2型のどちらかに全行が必ず入るため
+   * ——`isHumanOriginated` が真を返す行しかここに来ない）。
+   *
+   * ## 0件のときは欄ごと持たせない軸・持たせる軸
+   *
+   * `oldestAt` は0件のとき持たせない（`InboxBacklogBreakdown.oldestAt` と
+   * 同じ作法）。`total` / `byType` / `undelivered` は0件でも実際に数え切れて
+   * いる値なので、`InboxBacklogBreakdown` の「0を出す軸と、値を作らない軸」の
+   * doc が言うとおり0のまま出す（`byType` は空配列、`total`/`undelivered` は
+   * `0`）。
+   */
+  readonly humanOriginated: {
+    readonly total: number;
+    readonly byType: readonly {
+      readonly type: 'human_message' | 'human_answer';
+      readonly count: number;
+    }[];
+    readonly oldestAt?: string;
+    readonly undelivered: number;
+  };
+}
+
+/**
+ * 待ち行列で割り込んでよい合図か ＝ 人間が返事を待っている合図か。
+ *
+ * **2種類ある。** `human_message`（発言）と `human_answer`（承認待ちへの回答）で、
+ * どちらも**人間が画面の前で止まっている**。後者を外すと、「答えたのに止まった
+ * マネージャーへ返らない」という既知の壊れ方（`commitmentFor` の `human_answer`
+ * の doc）が、待ち時間の側からもう一度出る。
+ *
+ * **タイマー・発意・外部イベント・マネージャーからの一件・蒸留は含まない。**
+ * どれも人間が待っている合図ではない。
+ *
+ * ## なぜこれで人間以外が餓死しないのか
+ *
+ * **理由は「割り込みの量が有界だから」であって、実装が何かを保証しているから
+ * ではない。** 割り込めるのは人間が実際に打った発言だけで、**人間の速さでしか
+ * 来ない。** 5件まとめて送られれば5件ぶん遅れて、そのあと必ず進む。
+ *
+ * **だから機械が人間を名乗る形を作らないこと。** ここに `external`（webhook）や
+ * `timer` を足した瞬間、割り込みの量が機械の速さで決まるようになり、**有界性の
+ * 根拠が消えて本当に餓死する。** `isHumanOriginated` が2つしか返さないのは、
+ * 数が少ないからではなく**ここが有界性の全体だから**である。
+ *
+ * **テストが測っているのは餓死しないことではない**（それは上の有界性の話で、
+ * 有限のテストでは示せない）。**測っているのは「人間を挟んでも人間以外が1件も
+ * 消えず、人間以外どうしの到着順も保たれる」＝ 順序の保存と非喪失**である。
+ * 歯の名前もそう書いてある。**名前が中身より多くを約束しないこと。**
+ *
+ * **置き場所はここである（`clone.ts` ではない）。** `clone.ts` は既に
+ * `inbox-backlog.ts` から `inboxBacklogDedupeKey` / `INBOX_EVENT_TYPE_ORDER` を
+ * import しているので、逆向きに import すると循環になる。判定そのものは
+ * 受信箱の合図を型で分類するだけで `Clone` の状態を1つも読まないから、
+ * 分類の語彙が集まっているこちら側が本来の置き場所である（#917）。
+ */
+export function isHumanOriginated(event: InboxEvent): boolean {
+  return event.type === 'human_message' || event.type === 'human_answer';
 }
 
 /** {@link summarizeInboxBacklog} が並べる齢バケツの境界と順序。 */
@@ -771,6 +860,13 @@ export function summarizeInboxBacklog(
   // を返す5型）の行数。`bySource` の算術（`InboxBacklogBreakdown` の doc）を
   // 成り立たせる3つの数のうちの1つ。
   let bySourceUnknownCount = 0;
+  // 人間起点（`human_message` / `human_answer`）の集計（Issue #917 (B)）。
+  // `InboxBacklogBreakdown.humanOriginated` の doc のとおり `deliveries` では
+  // 絞らない——`undelivered` だけを別に持つ。
+  const humanOriginatedByTypeCounts = new Map<'human_message' | 'human_answer', number>();
+  let humanOriginatedTotal = 0;
+  let humanOriginatedUndelivered = 0;
+  let humanOriginatedOldestAt: string | undefined;
 
   for (const row of rows) {
     byTypeCounts.set(row.event.type, (byTypeCounts.get(row.event.type) ?? 0) + 1);
@@ -795,6 +891,22 @@ export function summarizeInboxBacklog(
     const ageMs = now - new Date(row.at).getTime();
     const bucket = ageBucketLabel(ageMs);
     ageBucketCounts.set(bucket, (ageBucketCounts.get(bucket) ?? 0) + 1);
+
+    if (isHumanOriginated(row.event)) {
+      humanOriginatedTotal += 1;
+      // `isHumanOriginated` が真を返すのは `human_message` / `human_answer` の
+      // 2型だけ（`clone.ts` の `isHumanOriginated` の doc）——絞り込み済みなので
+      // ここでの narrowing は安全である。
+      const humanType = row.event.type as 'human_message' | 'human_answer';
+      humanOriginatedByTypeCounts.set(
+        humanType,
+        (humanOriginatedByTypeCounts.get(humanType) ?? 0) + 1,
+      );
+      if (humanOriginatedOldestAt === undefined || row.at < humanOriginatedOldestAt) {
+        humanOriginatedOldestAt = row.at;
+      }
+      if (row.deliveries === 0) humanOriginatedUndelivered += 1;
+    }
   }
 
   const byType = INBOX_EVENT_TYPE_ORDER.filter((type) => (byTypeCounts.get(type) ?? 0) > 0).map(
@@ -821,6 +933,16 @@ export function summarizeInboxBacklog(
     (label) => ({ label, count: ageBucketCounts.get(label) ?? 0 }),
   );
 
+  // `INBOX_EVENT_TYPE_ORDER` の並び（human_message が human_answer より先）を
+  // そのまま使う。件数0の型は載せない——`total` と合わせると足して一致する
+  // （`InboxBacklogBreakdown.humanOriginated` の doc）。
+  const humanOriginatedByType = INBOX_EVENT_TYPE_ORDER.filter(
+    (type): type is 'human_message' | 'human_answer' =>
+      type === 'human_message' || type === 'human_answer',
+  )
+    .filter((type) => (humanOriginatedByTypeCounts.get(type) ?? 0) > 0)
+    .map((type) => ({ type, count: humanOriginatedByTypeCounts.get(type) ?? 0 }));
+
   return {
     total,
     ...(oldestAt === undefined ? {} : { oldestAt }),
@@ -839,6 +961,13 @@ export function summarizeInboxBacklog(
     ageBuckets,
     // **齢の基準点を落とさずに持たせる**（#910 追補。{@link InboxBacklogBreakdown.observedAt}）。
     observedAt: new Date(now).toISOString(),
+    // Issue #917 (B)。{@link InboxBacklogBreakdown.humanOriginated} の doc。
+    humanOriginated: {
+      total: humanOriginatedTotal,
+      byType: humanOriginatedByType,
+      ...(humanOriginatedOldestAt === undefined ? {} : { oldestAt: humanOriginatedOldestAt }),
+      undelivered: humanOriginatedUndelivered,
+    },
   };
 }
 
@@ -980,6 +1109,67 @@ export function summarizeInboxBacklog(
  * （{@link InboxBacklogBreakdown.distinctAcrossManagers} の doc「これが
  * 言えないこと」）。
  */
+/**
+ * 人間起点（`human_message` / `human_answer`）の滞留だけを、**単独の行**として
+ * 描く（Issue #917 (B)）。
+ *
+ * ## なぜ在るのか —— #917 が名指しした症状
+ *
+ * オーナーがクローンへ出した指示が47分間まるごと配達されなかった。クローンが
+ * それに気づいたのは、`manager_list` の内訳の**7行目**に出ていた
+ * `human_message 1`（`undeliveredByType` の1行）を自分で拾ったからだった。
+ * 同じ日の午後、クローンは同じ計器を読んで**この行を読み飛ばした**——そのとき
+ * 目に入ったのは `⚠ クローンの受信箱に未処理の合図が 4301 件ある` だった。
+ *
+ * > 大きい数字と、行動を要する数字が、同じ字の大きさで並んでいる。大きい
+ * > ほうが先に来て、目立つ。
+ *
+ * **この関数は対策（配達の挙動）を1ミリも変えない。行動を要る数字（人間起点の
+ * 滞留）だけを、大きい数字より先・単独の行として取り出す計器である。**
+ *
+ * ## 呼び出し側の並び（必ず守ること）
+ *
+ * `tools.ts` の `describeInboxBacklog` は、この行を**内訳より前**——
+ * `⚠ クローンの受信箱に未処理の合図が N 件ある` の行より**前**に出す。この
+ * 関数自身は並び順を強制しない（「前に置く」のは呼び出し側1行の責務）ので、
+ * 並びは `tools.ts` 側の歯（`manager_list` を呼ぶテスト）で固定する。
+ *
+ * ## 名乗ってよいことの線（このファイルの既存 doc と同じ規律）
+ *
+ * - **`oldestAt` は `Clone#post()` が受理した時刻であって、人間が実際に書いた
+ *   時刻ではない**（`store.ts` の `PendingInboxEvent.at` の doc「`post` が
+ *   受理した時刻」）。⟹ 「書かれてから N 分」のような経過時間は計算しない
+ *   ——絶対時刻（ISO 8601）と、それが何の時刻かだけを言う
+ * - **「配達されていない」とは断定しない。** ここが見ているのは**ストアに
+ *   残っている行**であって、メモリ上の待ち行列ではない（#1049 / PR #1052 の
+ *   `inbox_flow` の doc）。言えるのは「片付いていない」（受信箱にまだ残って
+ *   いる）までである
+ *
+ * ## 0件なら1文字も返さない
+ *
+ * `InboxBacklogBreakdown` の「0を出す軸と、値を作らない軸」と同じ作法——
+ * ただしこちらは**行そのもの**を作らない（空文字列を返す）。呼び出し側
+ * （`tools.ts`）は空文字列を出力へ混ぜない。
+ */
+export function describeHumanOriginatedInboxAlert(b: InboxBacklogBreakdown): string {
+  const h = b.humanOriginated;
+  if (h.total === 0) return '';
+
+  const byTypeText = h.byType.map((e) => `${e.type} ${e.count}`).join(' / ');
+  const oldestText =
+    h.oldestAt === undefined
+      ? ''
+      : `最も古いものは ${h.oldestAt} に受理された` +
+        '（Clone#post が受理した時刻——人間が書いた時刻ではない。PendingInboxEvent.at の doc）。';
+
+  return (
+    `⚠ 人間起点（human_message / human_answer）の滞留が ${h.total} 件ある（${byTypeText}）。` +
+    `${oldestText}` +
+    `そのうち、いまの器になってから積まれ、まだ片付いていない分が ${h.undelivered} 件` +
+    '（ストアに残っている行を見ているだけで、配達されていないとは言えない）。'
+  );
+}
+
 export function describeInboxBacklogBreakdown(b: InboxBacklogBreakdown): string {
   const byTypeText =
     b.byType.length === 0 ? '（無し）' : b.byType.map((e) => `${e.type} ${e.count}`).join(' / ');

@@ -158,6 +158,7 @@ import {
 } from './usage-limits.js';
 import {
   CLONE_REMOVABLE_INBOX_EVENT_TYPES,
+  describeHumanOriginatedInboxAlert,
   describeInboxBacklogBreakdown,
   inboxRemoveManyTypesSchema,
   matchesInboxRemoveManyFilter,
@@ -646,13 +647,36 @@ function describeAskedAt(askedAt: ManagerWaitingItem['askedAt']): string {
  * `peekPending()`（全行を読んで zod で1件ずつ parse する）を読む。
  * `manager_list` は同じ呼びの中で `listJobs()` が既に台帳の全件を読んでいる
  * ので**桁は変わらない**が、`pending()` の頃より重いことは事実である。
+ *
+ * ## Issue #917 (B): 人間起点の行を、大きい数字より前・単独の行で出す
+ *
+ * #917 が名指しした症状: 大きい数字（`⚠ … が N 件ある`）と、行動を要する
+ * 数字（`human_message 1` のような人間起点の1行）が、内訳の中で同じ字の
+ * 大きさ・同じ深さに並んでいた。クローンは大きいほうを先に読み、内訳
+ * 7行目に埋もれた人間起点の行を2回とも読み飛ばした（47分間の未達、同じ日の
+ * 午後の再発——issue 本文の逐語）。
+ *
+ * **⟹ 人間起点（`human_message` / `human_answer`）の滞留が1件でもあれば、
+ * `describeHumanOriginatedInboxAlert`（`inbox-backlog.ts`）の1行を、この
+ * 大きい数字の行より前に出す。** 0件なら空文字列が返るので、そのときは
+ * 1文字も増えない（既存の0件文言・既存の内訳の並びは変えない）。
+ *
+ * **配達の挙動は1ミリも変えていない。** ここは `summarizeInboxBacklog` が
+ * 既に集計している値（`InboxBacklogBreakdown.humanOriginated`）を描き直す
+ * だけの、純粋な表示側の変更である。
  */
 function describeInboxBacklog(rows: readonly PendingInboxEvent[], now: number): string {
   if (rows.length === 0) return 'クローンの受信箱に未処理の合図は無い。';
   const breakdown = summarizeInboxBacklog(rows, now);
   const oldest =
     breakdown.oldestAt === undefined ? '' : `（最も古いものは ${breakdown.oldestAt} から）`;
+  // #917 (B): 人間起点の行を、大きい数字（次の行）より先に出す。0件なら
+  // `describeHumanOriginatedInboxAlert` が空文字列を返すので、その回は
+  // 1文字も増えない。
+  const humanOriginatedAlert = describeHumanOriginatedInboxAlert(breakdown);
+  const humanOriginatedLine = humanOriginatedAlert === '' ? '' : `${humanOriginatedAlert}\n`;
   return (
+    `${humanOriginatedLine}` +
     `⚠ クローンの受信箱に未処理の合図が ${breakdown.total} 件ある${oldest}\n` +
     describeInboxBacklogBreakdown(breakdown)
   );

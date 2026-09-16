@@ -7273,6 +7273,90 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * Issue #917 (B): 大きい数字（`⚠ クローンの受信箱に未処理の合図が N 件ある`）と
+   * 行動を要する数字（人間起点の滞留）が同じ字の大きさで並び、大きいほうが
+   * 先に来て目立つせいで、クローンが人間起点の行を2回とも読み飛ばした
+   * （47分間の未達、同じ日の午後の再発——issue 本文）。
+   *
+   * ⟹ 人間起点（`human_message` / `human_answer`）の滞留が1件でもあれば、
+   * その行を**大きい数字の行より前**に単独で出す。**並び順そのもの**を
+   * 固定する（`toContain` だけでは「後ろに付いた」形の巻き戻しを見逃す）。
+   */
+  it('manager_list は人間起点の滞留を、大きい数字（⚠ クローンの受信箱…）より前に単独の行で出す（#917 (B)）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    await h.stores.inbox.put(
+      {
+        type: 'human_message',
+        id: 'evt-human',
+        at: '2026-08-24T00:00:00.000Z',
+        text: '未処理の発言',
+        conversationId: 'conv-1',
+      },
+      '2026-08-24T00:00:00.000Z',
+    );
+    await h.stores.inbox.put(
+      {
+        type: 'manager_message',
+        id: 'evt-manager',
+        at: '2026-08-24T01:00:00.000Z',
+        managerId: 'mgr-a',
+        kind: 'report',
+        text: '終わった',
+      },
+      '2026-08-24T01:00:00.000Z',
+    );
+
+    const reply = await h.call('manager_list', {});
+    const lines = reply.split('\n');
+    const humanLineIndex = lines.findIndex((line) => line.startsWith('⚠ 人間起点'));
+    const bigNumberLineIndex = lines.findIndex((line) => line.startsWith('⚠ クローンの受信箱'));
+
+    // 両方とも出ていること（見つからなければ -1 のまま比較が壊れるので、
+    // 先に「見つかったこと」自体を固定する）。
+    expect(humanLineIndex).toBeGreaterThanOrEqual(0);
+    expect(bigNumberLineIndex).toBeGreaterThanOrEqual(0);
+    // ⭐ #917 (B) の核心: 人間起点の行が、大きい数字の行より**前**に来る。
+    expect(humanLineIndex).toBeLessThan(bigNumberLineIndex);
+
+    const humanLine = lines[humanLineIndex]!;
+    expect(humanLine).toContain('human_message 1');
+    expect(humanLine).toContain('2026-08-24T00:00:00.000Z');
+    expect(humanLine).toContain('片付いていない分が 1 件');
+    // manager_message（人間起点でない）はこの行の件数に混ざらない。
+    expect(humanLine).not.toContain('manager_message');
+    // 本文は載らない。
+    expect(reply).not.toContain('未処理の発言');
+  });
+
+  /**
+   * 陰性対照。人間起点の合図が1件も無ければ、#917 (B) の行を1文字も足さない
+   * ——`manager_message` だけが積んでも大きい数字（受信箱の件数）は出るが、
+   * 人間起点の行は出ない。
+   */
+  it('manager_list は人間起点の滞留が無ければ、#917 (B) の行を追加しない', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    await h.stores.inbox.put(
+      {
+        type: 'manager_message',
+        id: 'evt-manager',
+        at: '2026-08-24T01:00:00.000Z',
+        managerId: 'mgr-a',
+        kind: 'report',
+        text: '終わった',
+      },
+      '2026-08-24T01:00:00.000Z',
+    );
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).not.toContain('⚠ 人間起点');
+    // 大きい数字の行そのものは変わらず出る（対策は打っていない——読む順だけ）。
+    expect(reply).toContain('⚠ クローンの受信箱');
+  });
+
+  /**
    * runner→デーモンの脚（`Outbox` の滞留）は `ManagerPool.runnerBacklog()`
    * （キャッシュ）が読む（#358 案b。デーモン→クローンの脚は上の受信箱の3本）。
    * **`manager_list` は `resources()` を自動で呼ばない**——`runnerBacklog()`
