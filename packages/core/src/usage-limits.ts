@@ -351,6 +351,18 @@ export function limitRecoveryOf(text: string): LimitRecovery {
 }
 
 /**
+ * `time`（時間で戻る）が**この委譲には当てにならない**ときに添える但し書き
+ * （Issue #931）。
+ *
+ * **字面の生成元はここ1箇所である**（`describeTokenGeneration` の doc と同じ
+ * 理由——同じ事実を2つの口が別の語で呼ぶと、面をまたいで読む人が詰まる）。
+ */
+export const STALE_TOKEN_RECOVERY_CAVEAT =
+  '⚠ ただしこの見込みは**枠のほうの話**であって、この委譲が戻ることを意味しない' +
+  '——認証トークンの世代が食い違っているので、枠がリセットされても' +
+  'このセッションは古い鍵のまま走り続ける（上の世代の行を見ること）。';
+
+/**
  * {@link limitRecoveryOf} の判定を、人が読む文言へ**添える**（Issue #393 の
  * 判定を、初めてクローンの受信箱・`manager_list` / `manager_report` の ⚠ 行へ
  * 運ぶ経路。PR #718 の作法を踏襲する）。
@@ -384,18 +396,6 @@ export function limitRecoveryOf(text: string): LimitRecovery {
  * `describeTokenGeneration` と**同じ1つの判定**）で、ここは受け取った真偽を
  * 運ぶだけである——判定のコピーを2つ作らない。
  */
-/**
- * `time`（時間で戻る）が**この委譲には当てにならない**ときに添える但し書き
- * （Issue #931）。
- *
- * **字面の生成元はここ1箇所である**（`describeTokenGeneration` の doc と同じ
- * 理由——同じ事実を2つの口が別の語で呼ぶと、面をまたいで読む人が詰まる）。
- */
-export const STALE_TOKEN_RECOVERY_CAVEAT =
-  '⚠ ただしこの見込みは**枠のほうの話**であって、この委譲が戻ることを意味しない' +
-  '——認証トークンの世代が食い違っているので、枠がリセットされても' +
-  'このセッションは古い鍵のまま走り続ける（上の世代の行を見ること）。';
-
 export function withRecoveryNote(
   base: string,
   recovery: LimitRecovery,

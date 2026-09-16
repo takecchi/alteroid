@@ -18,6 +18,7 @@ import type {
 import { commitmentFor } from './clone.js';
 import { runnerLivenessSchema } from './runner-protocol.js';
 import { CLONE_ACTOR_ID } from './usage.js';
+import { STALE_TOKEN_RECOVERY_CAVEAT } from './usage-limits.js';
 import { measureMemoryFloor, renderMemoryDocuments, scanMemorySections } from './memory.js';
 import { createProfileService } from './profile-service.js';
 import { heuristicChars, type HeuristicChars } from './quantity.js';
@@ -6238,6 +6239,74 @@ describe('クローンの道具', () => {
     expect(reply).toContain('完遂して畳んだと読まないこと');
     // **末尾に回復の見込みが添えられる。**
     expect(reply).toContain('（回復の見込み: 時間で戻る（time））');
+  });
+
+  /**
+   * **同じ1件の中で、2つの行が逆の助言を出さないこと**（Issue #931）。
+   *
+   * `manager_list` の `extra` には `failureLine` と
+   * `describeTokenGeneration` が**同じ配列で並ぶ**。世代が食い違っている
+   * 委譲では、後者が「`manager_stop` → `manager_start` で起こし直せ」と
+   * 言い、前者が「時間で戻る（time）」と言う——**読み手はどちらに従えばよいか
+   * を、この一覧からは決められない。**
+   *
+   * ⛔ **これはコードから読める食い違いであって、実害を観測したものではない。**
+   * #931 が実測した5連続 429 のセッションの日誌は既に残っていない（同 Issue の
+   * 2026-09-15T01:17:30Z のコメント）ので、**当時この形だったかは確かめられない。**
+   * 測っているのは構造だけである。
+   */
+  it('manager_list は世代が食い違う委譲に「時間で戻る」だけを出さない（#931）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.lastReport =
+      '（このターンは応答を返さずに終わった: billing_error / assistant_error）\n' +
+      "You've hit your org's monthly spend limit";
+    target.lastFailure = {
+      code: 'billing_error',
+      via: 'assistant_error',
+      at: '2026-09-09T01:23:45.000Z',
+    };
+    target.tokenGeneration = 3;
+    target.activeTokenGeneration = 5;
+
+    const reply = await h.call('manager_list', {});
+
+    // 既存の2行はどちらも無傷で出る（**但し書きは足すものであって、
+    // どちらかを消すものではない**）。
+    expect(reply).toContain('（回復の見込み: 時間で戻る（time））');
+    expect(reply).toContain('⚠ 認証トークンの世代が食い違っている');
+    // そして「枠の話であって、この委譲が戻る話ではない」が添う。
+    expect(reply).toContain(STALE_TOKEN_RECOVERY_CAVEAT);
+  });
+
+  /**
+   * **陰性対照。** 世代が一致している大多数の委譲では1文字も増えない
+   * ——増えるなら、予算に張り付いている一覧へノイズを足したことになる
+   * （`describeManagerFailure` の doc「健全なマネージャーでは `null`」と
+   * 同じ向き）。
+   */
+  it('manager_list は世代が一致していれば但し書きを足さない（#931 の陰性対照）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.lastReport =
+      '（このターンは応答を返さずに終わった: billing_error / assistant_error）\n' +
+      "You've hit your org's monthly spend limit";
+    target.lastFailure = {
+      code: 'billing_error',
+      via: 'assistant_error',
+      at: '2026-09-09T01:23:45.000Z',
+    };
+    target.tokenGeneration = 5;
+    target.activeTokenGeneration = 5;
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('（回復の見込み: 時間で戻る（time））');
+    expect(reply).not.toContain(STALE_TOKEN_RECOVERY_CAVEAT);
   });
 
   it('manager_list は失敗の⚠行に回復の見込み（action）を添える（#393）', async () => {
