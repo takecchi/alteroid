@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -27,10 +27,11 @@ import { describe, expect, it } from 'vitest';
  * 3. `on.pull_request.types` に `ready_for_review` が在る（罠3。GitHub の既定
  *    `[opened, synchronize, reopened]` にはこれが無く、無いと draft → ready の
  *    遷移そのものが `pull_request` イベントを起こさない）。
- * 4. required contexts（`ci` / `image`）が ci.yml の実在のジョブ名にすべて対応
- *    しており、かつ「draft のあいだだけ skip が許される」という主張——
- *    `ready_for_review` が `types` に在ること **と** `draft == false` の
- *    `pull_request` 文脈で required な全ジョブが走ること——を1本の歯で結び付ける。
+ * 4. required contexts が **`.github/workflows/` 配下の**実在のジョブ名にすべて
+ *    対応しており、かつ「draft のあいだだけ skip が許される」という主張——
+ *    **そのジョブを載せている workflow の** `types` に `ready_for_review` が
+ *    在ること **と** `draft == false` の `pull_request` 文脈で required な
+ *    全ジョブが走ること——を1本の歯で結び付ける。
  *
  * **罠1（いちばん危ない書き方）**: `github.event.pull_request.draft == false` だけを
  * 条件にすると、`push` / `schedule` / `workflow_dispatch` では `github.event.pull_request`
@@ -446,12 +447,72 @@ const JOB_IF_EXPRESSIONS = new Map<string, string | null>(
   }),
 );
 
+/**
+ * `.github/workflows/` 配下の**全** workflow から、ジョブ名 →（載っている
+ * workflow・ジョブレベルの `if:`・その workflow の `on.pull_request.types`）を引く表。
+ *
+ * **⚠️ ここはかつて `ci.yml` 1本だけを読んでいた。** それは「required な門は
+ * すべて `ci.yml` の中に在る」という前提に乗っていて、**その前提は 2026-09-16 に
+ * 崩れた** —— Issue #1097 の `pr-title-type` は `pull_request.types` に `edited`
+ * が要り、それを `ci.yml` へ足すと required な `ci` / `image` が PR 本文の編集
+ * ごとに焼き直される。だから別 workflow（`.github/workflows/pr-title.yml`）へ置いた。
+ *
+ * ⟹ **`ci.yml` だけを見る形のままだと、この歯は required context を「実在しない
+ * ジョブ」と呼ぶ。** そして黙らせる方法は「宣言から外す」しか無く、それは
+ * **required なのに誰も検査していない門**を作る——この歯が塞ごうとしている穴
+ * そのものである。
+ *
+ * **範囲を広げても主張は1文字も弱まっていない。** むしろ強くなっている——
+ * `ready_for_review` の検査が、かつては `ci.yml` の `types` を1回見るだけ
+ * だったのに対し、いまは **required な各ジョブが載っている workflow それぞれ**の
+ * `types` を見る（下の「固定その4」）。
+ *
+ * **同じジョブ名が2つの workflow に在ったら投げる。** どちらを指しているのか
+ * 決められない状態で片方を黙って採ると、この歯は「測れていない」を「緑」として
+ * 返すことになる。
+ */
+interface JobSite {
+  readonly workflow: string;
+  readonly ifExpr: string | null;
+  readonly pullRequestTypes: string[] | null;
+}
+
+const WORKFLOWS_DIR = path.join(ROOT, '.github/workflows');
+
+const WORKFLOW_FILE_NAMES: string[] = readdirSync(WORKFLOWS_DIR)
+  .filter((name) => name.endsWith('.yml') || name.endsWith('.yaml'))
+  .sort();
+
+const ALL_WORKFLOW_JOBS: Map<string, JobSite> = (() => {
+  const map = new Map<string, JobSite>();
+  for (const file of WORKFLOW_FILE_NAMES) {
+    const text = readFileSync(path.join(WORKFLOWS_DIR, file), 'utf8');
+    const section = extractJobsSection(text);
+    const types = extractPullRequestTypes(text);
+    for (const name of extractJobNames(section)) {
+      const existing = map.get(name);
+      if (existing !== undefined) {
+        throw new Error(
+          `ジョブ名 "${name}" が ${existing.workflow} と ${file} の両方に在る —— ` +
+            'required context がどちらを指すか決められない（ジョブ名は repo 全体で一意にすること）',
+        );
+      }
+      const block = extractJobBlock(section, name);
+      if (block === null) throw new Error(`ジョブ "${name}"（${file}）の本文を抽出できなかった`);
+      map.set(name, { workflow: file, ifExpr: extractJobIf(block), pullRequestTypes: types });
+    }
+  }
+  return map;
+})();
+
 /** ジョブが指定した文脈で走るかどうか。`if:` が無いジョブは常に走る。 */
 function jobRuns(jobName: string, ctx: GithubEventContext): boolean {
-  const expr = JOB_IF_EXPRESSIONS.get(jobName);
-  if (expr === undefined) throw new Error(`ジョブ "${jobName}" が ci.yml に見つからない`);
-  if (expr === null) return true;
-  return evaluateGithubExpression(expr, ctx);
+  const site = ALL_WORKFLOW_JOBS.get(jobName);
+  if (site === undefined) {
+    throw new Error(`ジョブ "${jobName}" が .github/workflows/ のどの workflow にも見つからない`);
+  }
+  if (site.ifExpr === null) return true;
+  return evaluateGithubExpression(site.ifExpr, ctx);
 }
 
 /**
@@ -640,12 +701,25 @@ describe('固定その3: on.pull_request.types に ready_for_review が在る（
 });
 
 describe('固定その4: required contexts の実在対応 と「skip は draft のあいだだけ」の結び付け', () => {
-  it('required contexts（ci / image）は ci.yml の実在するジョブ名にすべて対応している', () => {
+  it('required contexts は .github/workflows/ の実在するジョブ名にすべて対応している', () => {
     for (const name of REQUIRED_CONTEXTS) {
-      expect(jobNames, `required context "${name}" に対応するジョブが ci.yml に無い`).toContain(
-        name,
-      );
+      expect(
+        [...ALL_WORKFLOW_JOBS.keys()],
+        `required context "${name}" に対応するジョブが .github/workflows/ のどこにも無い`,
+      ).toContain(name);
     }
+  });
+
+  /**
+   * **走査が `ci.yml` 1本へ戻ったことを検出する。** 戻ると、別 workflow に置いた
+   * required な門（`pr-title-type`）だけが「実在しない」と言われ、**宣言から
+   * 外して黙らせる**圧力が生まれる（＝ required なのに誰も検査していない門）。
+   * ⟹ 複数本を見ていることそのものを歯にする。
+   */
+  it('走査対象の workflow が ci.yml 1本ではない（別 workflow の required な門を見落とさない）', () => {
+    expect(WORKFLOW_FILE_NAMES).toContain('ci.yml');
+    expect(WORKFLOW_FILE_NAMES).toContain('pr-title.yml');
+    expect(ALL_WORKFLOW_JOBS.get('pr-title-type')?.workflow).toBe('pr-title.yml');
   });
 
   /**
@@ -661,11 +735,25 @@ describe('固定その4: required contexts の実在対応 と「skip は draft 
    * 2 だけなら「イベントがそもそも起きない」を見逃す。
    */
   it('ready_for_review が在り、かつ draft==false で required な全ジョブが走る（skip は draft のあいだだけ）', () => {
-    const types = extractPullRequestTypes(ciYmlText);
-    expect(types).not.toBeNull();
-    expect(types).toContain('ready_for_review');
-
     for (const name of REQUIRED_CONTEXTS) {
+      const site = ALL_WORKFLOW_JOBS.get(name);
+      expect(site, `required context "${name}" に対応するジョブが無い`).toBeDefined();
+
+      // **required なジョブが載っている workflow それぞれについて見る。**
+      // `ci.yml` の `types` を1回見るだけでは、別 workflow に置いた required な
+      // 門が `ready_for_review` を欠いていても緑になる（＝ draft → ready の遷移で
+      // その門の run が起きず、古い skip が「満たした」として残り続ける）。
+      expect(
+        site?.pullRequestTypes,
+        `required job "${name}" を載せている ${site?.workflow} に on.pull_request.types が無い` +
+          '（＝ GitHub の既定 [opened, synchronize, reopened] のまま。' +
+          'ready_for_review が無いと draft → ready の遷移そのものが pull_request イベントを起こさない）',
+      ).not.toBeNull();
+      expect(
+        site?.pullRequestTypes,
+        `required job "${name}" を載せている ${site?.workflow} の types に ready_for_review が無い`,
+      ).toContain('ready_for_review');
+
       expect(
         jobRuns(name, PR_READY_CONTEXT),
         `required job "${name}" は ready（draft==false）で走る必要がある`,
