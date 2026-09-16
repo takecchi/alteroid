@@ -102,7 +102,9 @@ describe('mutate-core: loadCensus（census が「取れない」を緑にしな�
   });
 
   it('⭐ testResults[].name が文字列でない要素があれば available: false', () => {
-    const p = writeCensusFile(JSON.stringify({ testResults: [{ name: 123, assertionResults: [] }] }));
+    const p = writeCensusFile(
+      JSON.stringify({ testResults: [{ name: 123, assertionResults: [] }] }),
+    );
     const census = loadCensus(p);
     expect(census.available).toBe(false);
     expect(census.reason).toContain('name が文字列でない');
@@ -181,13 +183,19 @@ describe('mutate-core: requireCensusAgreesWithTextFailures（交差検算。新�
       requireCensusAgreesWithTextFailures(['a.test.ts > s > t'], undefined, 'test'),
     ).toThrow(HarnessError);
     expect(() =>
-      requireCensusAgreesWithTextFailures(['a.test.ts > s > t'], { available: false, reason: 'x' }, 'test'),
+      requireCensusAgreesWithTextFailures(
+        ['a.test.ts > s > t'],
+        { available: false, reason: 'x' },
+        'test',
+      ),
     ).toThrow(/census が取れていない/);
   });
 
   it('一致していれば何も投げない', () => {
     const census = { available: true, byName: new Map([['a.test.ts > s > t', 'failed']]) };
-    expect(() => requireCensusAgreesWithTextFailures(['a.test.ts > s > t'], census, 'test')).not.toThrow();
+    expect(() =>
+      requireCensusAgreesWithTextFailures(['a.test.ts > s > t'], census, 'test'),
+    ).not.toThrow();
   });
 
   it('⭐ テキストにしか無い名前が在れば投げる（テキスト解析が census より広い）', () => {
@@ -199,7 +207,9 @@ describe('mutate-core: requireCensusAgreesWithTextFailures（交差検算。新�
 
   it('⭐ census にしか無い名前が在れば投げる（census が広い）', () => {
     const census = { available: true, byName: new Map([['a.test.ts > s > t', 'failed']]) };
-    expect(() => requireCensusAgreesWithTextFailures([], census, 'test')).toThrow(/census にしか無い/);
+    expect(() => requireCensusAgreesWithTextFailures([], census, 'test')).toThrow(
+      /census にしか無い/,
+    );
   });
 });
 
@@ -221,7 +231,11 @@ describe('mutate-core: requireDeclaredNamesExistInCensus（門6。#993 段2 の�
     const census = { available: true, byName: new Map([['a.test.ts > s > t', 'passed']]) };
     let message = '';
     try {
-      requireDeclaredNamesExistInCensus(new Set(['typo.test.ts > x > y']), census, 'decideJudgementCategory');
+      requireDeclaredNamesExistInCensus(
+        new Set(['typo.test.ts > x > y']),
+        census,
+        'decideJudgementCategory',
+      );
     } catch (err) {
       message = (err as Error).message;
     }
@@ -283,7 +297,9 @@ describe('mutate-core: decideJudgementCategory に census を通した端から�
       testsLine: 'Tests  1 failed (1)',
     };
     expect(() =>
-      decideJudgementCategory(NOT_CHECKED, testResult, EMPTY_SCAFFOLD_CONTROL, ['a.test.ts > s > t']),
+      decideJudgementCategory(NOT_CHECKED, testResult, EMPTY_SCAFFOLD_CONTROL, [
+        'a.test.ts > s > t',
+      ]),
     ).toThrow(/census が取れていない/);
   });
 
@@ -316,7 +332,9 @@ describe('mutate-core: decideJudgementCategory に census を通した端から�
       census: { available: true, byName: new Map([['a.test.ts > s > t', 'failed']]) },
     };
     expect(
-      decideJudgementCategory(NOT_CHECKED, testResult, EMPTY_SCAFFOLD_CONTROL, ['a.test.ts > s > t']),
+      decideJudgementCategory(NOT_CHECKED, testResult, EMPTY_SCAFFOLD_CONTROL, [
+        'a.test.ts > s > t',
+      ]),
     ).toBe('検出');
   });
 
@@ -335,7 +353,9 @@ describe('mutate-core: decideJudgementCategory に census を通した端から�
       },
     };
     expect(
-      decideJudgementCategory(NOT_CHECKED, testResult, EMPTY_SCAFFOLD_CONTROL, ['b.test.ts > u > v']),
+      decideJudgementCategory(NOT_CHECKED, testResult, EMPTY_SCAFFOLD_CONTROL, [
+        'b.test.ts > u > v',
+      ]),
     ).toBe('身代わり');
   });
 
@@ -354,7 +374,9 @@ describe('mutate-core: decideJudgementCategory に census を通した端から�
       },
     };
     expect(() =>
-      decideJudgementCategory(NOT_CHECKED, testResult, EMPTY_SCAFFOLD_CONTROL, ['b.test.ts > u > v']),
+      decideJudgementCategory(NOT_CHECKED, testResult, EMPTY_SCAFFOLD_CONTROL, [
+        'b.test.ts > u > v',
+      ]),
     ).toThrow(/実際にこの走行で落ちなかったこと/);
   });
 });

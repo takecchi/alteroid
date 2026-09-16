@@ -612,7 +612,9 @@ export function requireDeclaredTeethActuallyPassed(declaredNames, census, contex
   // 保険として、`undefined` も「passed ではない」側でまとめて扱う）。
   const notPassed = [...declaredNames]
     .filter((name) => census.byName.get(name) !== 'passed')
-    .map((name) => `${name}（census 上の状態: ${JSON.stringify(census.byName.get(name) ?? null)}）`);
+    .map(
+      (name) => `${name}（census 上の状態: ${JSON.stringify(census.byName.get(name) ?? null)}）`,
+    );
   if (notPassed.length > 0) {
     throw new HarnessError(
       `${contextLabel}: 「身代わり」と言う前に、宣言した歯が実際にこの走行で落ちなかったことを` +
@@ -782,7 +784,11 @@ export function decideJudgementCategory(artifactResult, testResult, scaffoldCont
 
   // ⭐ 交差検算（新設, #993 段2）。テキスト由来の落ちた歯の集合と census 由来の
   // 集合が食い違ったら、ここから先の名前ベースの判定そのものを疑う。
-  requireCensusAgreesWithTextFailures(diff.failed.names, testResult.census, 'decideJudgementCategory');
+  requireCensusAgreesWithTextFailures(
+    diff.failed.names,
+    testResult.census,
+    'decideJudgementCategory',
+  );
 
   // ⭐ 門6（新設, #993 段2）。宣言した名前が、この走行の census に実在するかを
   // 検算する。実在しない名前（打ち間違い）は、ここで判定を拒む——「身代わり」
@@ -1526,13 +1532,19 @@ export function loadCensus(jsonOutputPath) {
   try {
     raw = fs.readFileSync(jsonOutputPath, 'utf8');
   } catch (err) {
-    return { available: false, reason: `census ファイルが読めない（${jsonOutputPath}）: ${err.message}` };
+    return {
+      available: false,
+      reason: `census ファイルが読めない（${jsonOutputPath}）: ${err.message}`,
+    };
   }
   let data;
   try {
     data = JSON.parse(raw);
   } catch (err) {
-    return { available: false, reason: `census ファイル（JSON）が壊れていて読めない: ${err.message}` };
+    return {
+      available: false,
+      reason: `census ファイル（JSON）が壊れていて読めない: ${err.message}`,
+    };
   }
   if (!data || !Array.isArray(data.testResults)) {
     return { available: false, reason: 'census の形が想定と違う（testResults が配列でない）' };
