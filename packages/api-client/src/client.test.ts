@@ -61,6 +61,11 @@ function fakeClone(stores: Stores) {
     async transcript() {
       return { kind: 'missing' as const };
     },
+    // この検証の主題ではない（#1039 は manager_stop の道具からしか呼ばれない）。
+    // 型を満たすだけの空スタブで足りる。
+    async unpushedWork() {
+      return { kind: 'unavailable' as const, reason: '(この検証では未使用)' };
+    },
     runningManagerOwning() {
       return undefined;
     },
