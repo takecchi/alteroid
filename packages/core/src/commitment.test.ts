@@ -12,13 +12,14 @@ import {
   isDaemonSelfNotice,
 } from './clone.js';
 import { verifyCommitmentAppraisalContract } from './commitment-appraisal-contract.js';
+import { verifyStoreIsolationContract } from './store-isolation-contract.js';
 import { buildActivityDigest } from './digest.js';
 import type { CloneHost } from './host.js';
 import { renderMemoryDocuments } from './memory.js';
 import { buildCloneSystemPrompt } from './prompt.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
-import { describeCommitmentAppraisal } from './schema.js';
+import { describeAppraisal } from './schema.js';
 import type { ChatStreamEvent, Commitment, InboxEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { captureStderr, createMemoryStores, humanMessage } from './testing.js';
@@ -1863,12 +1864,16 @@ describe('台帳の評定', () => {
     await verifyCommitmentAppraisalContract(stores.commitments);
   });
 
+  it('ストアが返す値は書いた側の握りと別物である（#1072。3実装で同じことを測る）', async () => {
+    await verifyStoreIsolationContract(createMemoryStores());
+  });
+
   it('未評定の行は字面を持たない（印が無いことが「まだ評定していない」である）', () => {
-    expect(describeCommitmentAppraisal({})).toBeNull();
+    expect(describeAppraisal({})).toBeNull();
   });
 
   it('未知の値も落とさずにそのまま出す（未評定と区別が付かなくならないため）', () => {
     // 保存層は `z.string()` で緩く持っているので、将来の書き手が増えた値が来うる。
-    expect(describeCommitmentAppraisal({ appraisal: 'brilliant' })).toContain('brilliant');
+    expect(describeAppraisal({ appraisal: 'brilliant' })).toContain('brilliant');
   });
 });

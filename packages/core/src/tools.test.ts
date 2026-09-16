@@ -22,7 +22,10 @@ import { measureMemoryFloor, renderMemoryDocuments, scanMemorySections } from '.
 import { createProfileService } from './profile-service.js';
 import { heuristicChars, type HeuristicChars } from './quantity.js';
 import {
+  describeAppraisal,
   journalEntrySchema,
+  type AppraisalValue,
+  type AppraisedBy,
   type ChatStreamEvent,
   type InboxEvent,
   type JobStatus,
@@ -181,6 +184,14 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
   // 同じ作法）。
   let conversationId: string | undefined;
 
+  /** `appraise()` に渡された引数（古い順）。道具の歯が数え上げる。 */
+  const appraised: {
+    managerId: string;
+    appraisal: AppraisalValue;
+    by: AppraisedBy;
+    reason?: string;
+  }[] = [];
+
   const managers: ManagerPool = {
     async start(input) {
       started.push(input);
@@ -240,6 +251,38 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     relocateFrom() {},
     // drain の契機は HTTP 側（`POST /runners/vacate`）にある。クローンの道具は呼ばない。
     async vacate() {},
+    /**
+     * 評定（#1054）。**本物と同じところまで動かす** —— 「無い id は `'absent'`」と
+     * 「前の値を返す」と「理由を渡さなければ前の理由を消す」の3つは、道具の側の
+     * 振る舞い（何を返すか・何を日誌に書くか）がそれに依存している。
+     */
+    async appraise(managerId: string, appraisal: AppraisalValue, by: AppraisedBy, reason?: string) {
+      const found = running.find((manager) => manager.managerId === managerId);
+      if (!found) {
+        return {
+          outcome: 'absent' as const,
+          detail: `${managerId} というマネージャーは台帳に居ない。`,
+          previous: null,
+        };
+      }
+      const previous = describeAppraisal(found);
+      appraised.push({
+        managerId,
+        appraisal,
+        by,
+        ...(reason === undefined ? {} : { reason }),
+      });
+      found.appraisal = appraisal;
+      found.appraisedBy = by;
+      delete found.appraisalReason;
+      if (reason !== undefined) found.appraisalReason = reason;
+      return {
+        outcome: 'appraised' as const,
+        detail: `${managerId} の評定を ${appraisal} にした。`,
+        previous,
+      };
+    },
+
     async abort(managerId: string, reason?: string) {
       aborted.push({ managerId, ...(reason === undefined ? {} : { reason }) });
       const found = running.find((manager) => manager.managerId === managerId);
@@ -16867,7 +16910,7 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
    * `SELF_JOURNALING_CLONE_TOOLS`（`archive_remove` は #698 で加わった）
    * から導いた期待値と突き合わせる。
    *
-   * `manager_send` / `manager_stop` を除く理由: この2本は `ManagerPool` の
+   * `manager_send` / `manager_stop` / `manager_appraise` を除く理由: この3本は `ManagerPool` の
    * ガード付き `#journal`（`clone.ts`）を通るので `appendJournalOrThrow` を
    * 呼ばない——`SELF_JOURNALING_CLONE_TOOLS` に載っているのは「自前で日誌へ
    * 書く」という性質の名簿であって、その書き方が `appendJournalOrThrow`
@@ -16877,9 +16920,9 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
    * `SELF_JOURNALING_CLONE_TOOLS` に足されたとき、`CASES` にケースを
    * 足し忘れるとこの歯が「ケースが足りない」と言って赤くなる。
    */
-  it('CASES の道具名の集合は、SELF_JOURNALING_CLONE_TOOLS から manager_send / manager_stop を除いたものと一致する', () => {
+  it('CASES の道具名の集合は、SELF_JOURNALING_CLONE_TOOLS から manager_send / manager_stop / manager_appraise を除いたものと一致する', () => {
     const EXPECTED_TOOLS = SELF_JOURNALING_CLONE_TOOLS.filter(
-      (name) => name !== 'manager_send' && name !== 'manager_stop',
+      (name) => name !== 'manager_send' && name !== 'manager_stop' && name !== 'manager_appraise',
     );
     const actualTools = [...new Set(CASES.map((c) => c.tool))];
     expect(actualTools.sort()).toEqual([...EXPECTED_TOOLS].sort());

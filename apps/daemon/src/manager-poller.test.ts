@@ -28,6 +28,9 @@ function fakeManagers(
     send: () => {
       throw new Error('not implemented');
     },
+    appraise: () => {
+      throw new Error('not implemented');
+    },
     abort: () => {
       throw new Error('not implemented');
     },

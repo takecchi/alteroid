@@ -982,6 +982,18 @@ export function journalEntryShape(entry: JournalEntryInput): string {
         (entry.sessionId === undefined ? '' : ` sessionId=${tag(entry.sessionId)}`) +
         ` turnSucceeded=${entry.turnSucceeded}`
       );
+    // **自由文を持たない**（`schema.ts` の `inbox_flow` の doc）——`byType` の
+    // `type` は `InboxEvent['type']` の列挙、残りは全部数。秘密が載る経路が
+    // 無いので、他の型のように長さだけに削らず、総数と滞留までそのまま出す。
+    case 'inbox_flow':
+      return (
+        `inbox_flow windowStartedAt=${tag(entry.windowStartedAt)} ` +
+        `arrived=${entry.arrived.total} delivered=${entry.delivered.total} ` +
+        `settled=${entry.settled.total} pending=${entry.pending.count}` +
+        (entry.pending.oldestAt === undefined
+          ? ''
+          : ` pendingOldestAt=${tag(entry.pending.oldestAt)}`)
+      );
   }
 }
 

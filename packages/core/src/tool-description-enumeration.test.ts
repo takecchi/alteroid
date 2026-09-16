@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { CLONE_REMOVABLE_INBOX_EVENT_TYPES } from './inbox-backlog.js';
 import { runnerLivenessSchema } from './runner-protocol.js';
-import { commitmentAppraisalSchema, commitmentOriginSchema } from './schema.js';
+import { appraisalSchema, commitmentOriginSchema } from './schema.js';
 import { RESERVED_SCHEDULE_KINDS, RESERVED_SCHEDULE_KIND_ENV_KEYS } from './schedule.js';
 import { CLONE_RUNTIME_ITEM_LABELS } from './self.js';
 import { createMemoryStores } from './testing.js';
@@ -99,13 +99,18 @@ const SUBJECTS: readonly EnumerationSubject[] = [
     // **評定の3値を数え直している説明文は2本ある**（片付けと同時に付ける口と、
     // 後から付ける口）。値が1つ増えたら両方が嘘になるので、両方をここへ載せる。
     tool: 'commitment_appraise',
-    label: 'commitmentAppraisalSchema の値（packages/core/src/schema.ts）',
-    source: () => commitmentAppraisalSchema.options,
+    label: 'appraisalSchema の値（packages/core/src/schema.ts）',
+    source: () => appraisalSchema.options,
   },
   {
     tool: 'commitment_close',
-    label: 'commitmentAppraisalSchema の値（packages/core/src/schema.ts）',
-    source: () => commitmentAppraisalSchema.options,
+    label: 'appraisalSchema の値（packages/core/src/schema.ts）',
+    source: () => appraisalSchema.options,
+  },
+  {
+    tool: 'manager_appraise',
+    label: 'appraisalSchema の値（packages/core/src/schema.ts）',
+    source: () => appraisalSchema.options,
   },
   {
     tool: 'self_status',

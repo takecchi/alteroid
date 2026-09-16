@@ -632,5 +632,20 @@ export function summarizeJournalEntry(entry: JournalEntry): string {
         outcome
       );
     }
+    case 'inbox_flow': {
+      // **4つの総数を1行に並べる（Issue #783 段0）。** この種別の読み方は
+      // 窓どうしを並べた推移で、1行に潰すときも**4つの軸を混ぜない**こと
+      // ——`arrived`（受理）・`delivered`（待ち行列へ載った）・`settled`
+      // （ストアから消えた）・`pending`（窓の終わりの1点）は別のものを
+      // 数えており、食い違いそのものが読む材料である（`schema.ts` の
+      // `inbox_flow` の doc）。種類別の内訳はここでは落とす —— 一覧の1行に
+      // 収まらないので、詳細は日誌の本文側で読む。
+      const oldest =
+        entry.pending.oldestAt === undefined ? '' : `（最古 ${entry.pending.oldestAt}）`;
+      return (
+        `受信箱 到着${entry.arrived.total} / 配達${entry.delivered.total} / ` +
+        `消し込み${entry.settled.total} / 滞留${entry.pending.count}${oldest}`
+      );
+    }
   }
 }

@@ -211,6 +211,11 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
     // `subagent_stall` はマネージャーの詳細や生ログの中身を変える出来事ではない。
     case 'subagent_stall':
       break;
+    // **落とす先が無い（Issue #783 段0）。** `turn_usage` / `context_usage` と
+    // 同じ理由 —— 受信箱の流量は器の記帳で、この種別専用の画面・SWR キーは
+    // 無い。冒頭で束にした日誌一覧の無効化だけで足りる。
+    case 'inbox_flow':
+      break;
     default: {
       // 網羅性チェック本体。ここへ来る値があれば、上の case が
       // `JournalEntryType` の全種別を尽くしていない（型エラーになる）。

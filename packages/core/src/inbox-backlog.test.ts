@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   INBOX_BACKLOG_LOUD_THRESHOLD,
   describeInboxBacklogBreakdown,
+  inboxBacklogCrossManagerDedupeKey,
   inboxBacklogDedupeKey,
   matchesInboxRemoveManyFilter,
   summarizeInboxBacklog,
@@ -312,6 +313,45 @@ describe('inboxBacklogDedupeKey', () => {
   });
 });
 
+describe('inboxBacklogCrossManagerDedupeKey（#783 段0 追補 / issue #954）', () => {
+  it('manager_message: managerId が違っても同じ鍵になる（managerId を落とす）', () => {
+    const a = SAMPLE_EVENTS.manager_message;
+    const b: InboxEvent = { ...a, id: 'id-b', managerId: 'mgr-2' };
+    expect(inboxBacklogCrossManagerDedupeKey(a)).toBe(inboxBacklogCrossManagerDedupeKey(b));
+  });
+
+  it('manager_message: kind / text が違えば別の鍵（managerId 以外は inboxBacklogDedupeKey と同じ感度）', () => {
+    const a = SAMPLE_EVENTS.manager_message;
+    const byKind: InboxEvent = { ...a, id: 'id-b', kind: 'question' };
+    const byText: InboxEvent = { ...a, id: 'id-c', text: '別の報告' };
+    const key = inboxBacklogCrossManagerDedupeKey(a);
+    expect(inboxBacklogCrossManagerDedupeKey(byKind)).not.toBe(key);
+    expect(inboxBacklogCrossManagerDedupeKey(byText)).not.toBe(key);
+  });
+
+  /**
+   * 仕様3: `manager_message` 以外の6型では、`inboxBacklogCrossManagerDedupeKey`
+   * は `inboxBacklogDedupeKey` と完全に同じ値を返す（実装を複製せず委譲する
+   * 形になっていることを、7型のうち残り6型すべてで直接確かめる）。
+   */
+  it.each(ALL_TYPES.filter((type) => type !== 'manager_message'))(
+    '%s: manager_message 以外は inboxBacklogDedupeKey と完全に同じ値を返す',
+    (type) => {
+      const event = SAMPLE_EVENTS[type];
+      expect(inboxBacklogCrossManagerDedupeKey(event)).toBe(inboxBacklogDedupeKey(event));
+    },
+  );
+
+  /**
+   * `inboxBacklogDedupeKey` への委譲を通じて、未知の type でも黙って畳まず
+   * 例外を投げる（複製ではなく委譲であることの裏取り）。
+   */
+  it('未知の type は（inboxBacklogDedupeKey への委譲を通じて）例外を投げる', () => {
+    const unknown = { type: 'not_a_real_type', id: 'x', at: '2026-09-11T00:00:00.000Z' };
+    expect(() => inboxBacklogCrossManagerDedupeKey(unknown as unknown as InboxEvent)).toThrow();
+  });
+});
+
 describe('summarizeInboxBacklog', () => {
   it('0件のとき、total は0で oldestAt は持たない（値を作らない）', () => {
     const b = summarizeInboxBacklog([], NOW);
@@ -321,6 +361,7 @@ describe('summarizeInboxBacklog', () => {
     expect(b.bySource).toEqual([]);
     expect(b.ageBuckets).toEqual([]);
     expect(b.distinct).toBe(0);
+    expect(b.distinctAcrossManagers).toBe(0);
   });
 
   it('最古の at を oldestAt にする', () => {
@@ -482,6 +523,92 @@ describe('summarizeInboxBacklog', () => {
     const b = summarizeInboxBacklog(rows, NOW);
     expect(b.total).toBe(3);
     expect(b.distinct).toBe(2);
+  });
+
+  /**
+   * #783 段0 追補 / issue #954: `distinctAcrossManagers` の主眼——同じ壁
+   * （枠・429 など）に複数の委譲が同時に当たって同文の `manager_message` が
+   * N 本届いても、`managerId` を無視して数えれば1件だと言える。
+   */
+  it('distinctAcrossManagers: 同文・別managerId の manager_message が3件 → distinct は3、distinctAcrossManagers は1', () => {
+    const rows = [
+      row(SAMPLE_EVENTS.manager_message, '2026-09-11T00:00:00.000Z'),
+      row(
+        { ...SAMPLE_EVENTS.manager_message, id: 'e2', managerId: 'mgr-2' },
+        '2026-09-11T00:00:00.000Z',
+      ),
+      row(
+        { ...SAMPLE_EVENTS.manager_message, id: 'e3', managerId: 'mgr-3' },
+        '2026-09-11T00:00:00.000Z',
+      ),
+    ];
+    const b = summarizeInboxBacklog(rows, NOW);
+    expect(b.total).toBe(3);
+    expect(b.distinct).toBe(3);
+    expect(b.distinctAcrossManagers).toBe(1);
+  });
+
+  it('distinctAcrossManagers: 同文・同managerId の manager_message は distinct・distinctAcrossManagers ともに1', () => {
+    const rows = [
+      row(SAMPLE_EVENTS.manager_message, '2026-09-11T00:00:00.000Z'),
+      row({ ...SAMPLE_EVENTS.manager_message, id: 'e2' }, '2026-09-11T05:00:00.000Z'),
+    ];
+    const b = summarizeInboxBacklog(rows, NOW);
+    expect(b.total).toBe(2);
+    expect(b.distinct).toBe(1);
+    expect(b.distinctAcrossManagers).toBe(1);
+  });
+
+  it('distinctAcrossManagers: manager_message を含まない内訳では distinct と完全に一致する（残り6型は鍵が同じであるため）', () => {
+    const rows = [
+      row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z'),
+      row(
+        { ...SAMPLE_EVENTS.human_message, id: 'e2', text: '別の発言' },
+        '2026-09-11T00:00:00.000Z',
+      ),
+      row(SAMPLE_EVENTS.external, '2026-09-11T00:00:00.000Z'),
+      row(SAMPLE_EVENTS.timer, '2026-09-11T00:00:00.000Z'),
+    ];
+    const b = summarizeInboxBacklog(rows, NOW);
+    expect(b.distinctAcrossManagers).toBe(b.distinct);
+  });
+
+  /**
+   * ⭐ 不変条件そのものを固定する歯: `distinctAcrossManagers <= distinct <= total`。
+   * `manager_message`（同文・別managerId が3件＋別文1件）と `human_message`
+   * （2件とも別文）を混ぜ、3つの数がすべて別の値になる入力で撃つ。
+   *
+   * 内訳: manager_message 同文（mgr-1/mgr-2/mgr-3）が3件・別文（mgr-1）が1件、
+   * human_message が別文2件 → `distinct` は6件すべてが別鍵（6）、
+   * `distinctAcrossManagers` は同文3件が1つに畳まれて4（1+1+2）。
+   */
+  it('⭐ 不変条件: distinctAcrossManagers <= distinct <= total', () => {
+    const rows = [
+      row(SAMPLE_EVENTS.manager_message, '2026-09-11T00:00:00.000Z'),
+      row(
+        { ...SAMPLE_EVENTS.manager_message, id: 'e2', managerId: 'mgr-2' },
+        '2026-09-11T00:00:00.000Z',
+      ),
+      row(
+        { ...SAMPLE_EVENTS.manager_message, id: 'e3', managerId: 'mgr-3' },
+        '2026-09-11T00:00:00.000Z',
+      ),
+      row(
+        { ...SAMPLE_EVENTS.manager_message, id: 'e4', text: '別の報告' },
+        '2026-09-11T00:00:00.000Z',
+      ),
+      row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z'),
+      row(
+        { ...SAMPLE_EVENTS.human_message, id: 'e6', text: '別の発言' },
+        '2026-09-11T00:00:00.000Z',
+      ),
+    ];
+    const b = summarizeInboxBacklog(rows, NOW);
+    expect(b.total).toBe(6);
+    expect(b.distinct).toBe(6);
+    expect(b.distinctAcrossManagers).toBe(4);
+    expect(b.distinctAcrossManagers).toBeLessThanOrEqual(b.distinct);
+    expect(b.distinct).toBeLessThanOrEqual(b.total);
   });
 
   it('配達回数: 0 / 1 / 2以上の3分割と最大値', () => {
@@ -732,6 +859,39 @@ describe('describeInboxBacklogBreakdown', () => {
       '同一本文（id/at を除いた中身）を畳むと 2 件 ⚠ 本文が同じでも別々に起きた出来事である。' +
         'この数は上下どちらへもぶれる（向きと理由は inboxBacklogDedupeKey の doc）',
     );
+  });
+
+  /**
+   * #783 段0 追補 / issue #954: `distinctAcrossManagers` は `distinct` と
+   * **同じ値のときは1文字も足さない**——上の歯（`human_message` だけの入力）が
+   * それを裏取りする陰性側。こちらは陽性側で、`manager_message` を
+   * `managerId` 違いで3件届けて値がずれる入力を撃つ。「畳める」
+   * 「捨てられる」とは名乗らないことも併せて確かめる。
+   */
+  it('同一本文の行: distinctAcrossManagers が distinct と違うときだけ、参考値が添えられる', () => {
+    const rows = [
+      row(SAMPLE_EVENTS.manager_message, '2026-09-11T00:00:00.000Z'),
+      row(
+        { ...SAMPLE_EVENTS.manager_message, id: 'e2', managerId: 'mgr-2' },
+        '2026-09-11T00:00:00.000Z',
+      ),
+      row(
+        { ...SAMPLE_EVENTS.manager_message, id: 'e3', managerId: 'mgr-3' },
+        '2026-09-11T00:00:00.000Z',
+      ),
+    ];
+    const b = summarizeInboxBacklog(rows, NOW);
+    expect(b.distinct).toBe(3);
+    expect(b.distinctAcrossManagers).toBe(1);
+    const line = lineStartingWith(describeInboxBacklogBreakdown(b), '同一本文');
+    expect(line).toBe(
+      '同一本文（id/at を除いた中身）を畳むと 3 件 ⚠ 本文が同じでも別々に起きた出来事である。' +
+        'この数は上下どちらへもぶれる（向きと理由は inboxBacklogDedupeKey の doc） ／ ' +
+        '同じ本文がマネージャーを跨いで 1 件（managerId を無視して数え直した参考値。' +
+        'inboxBacklogCrossManagerDedupeKey の doc）',
+    );
+    expect(line).not.toContain('畳める');
+    expect(line).not.toContain('捨てられる');
   });
 
   it('器の入れ替え回数の行: 軸名が「配達回数」ではなく、0回が何を意味するかを名乗る', () => {

@@ -308,6 +308,32 @@ export function useSendManagerMessage() {
  * **本文が要る**（`DELETE` だがサーバ側に json バリデータが付いている）。理由が
  * 無くても `{}` を送る必要があり、忘れると 400 になる。
  */
+/**
+ * 委譲に評定を付ける／覆す（`POST /managers/:id/appraise`。#1054）。
+ *
+ * **走行中の委譲にも終端した委譲にも通る。** サーバが断るのは台帳に居ない id だけ
+ * である（`ManagerPool.appraise` の doc）。⟹ ここで「終端したものだけ」のような
+ * 先回りの判定を書かないこと（`useEditCommitment` と同じ理由 —— サーバの線を画面へ
+ * 写すと、線が変わった日に画面だけが黙ってずれる）。
+ */
+export function useAppraiseManager() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (id: string, appraisal: 'good' | 'bad' | 'unclear', reason?: string) => {
+      expectOk(
+        await api.api.POST('/managers/{id}/appraise', {
+          params: { path: { id } },
+          body: reason === undefined ? { appraisal } : { appraisal, reason },
+        }),
+      );
+      // **一覧と詳細の両方を取り直す。** 評定は両方に出る（`ManagerSummary` が運ぶ）。
+      await Promise.all([mutate((key) => isKeyOfType(key, 'managers')), mutate(KEY.manager(id))]);
+    },
+    [api, mutate],
+  );
+}
+
 export function useAbortManager() {
   const api = useApi();
   const { mutate } = useSWRConfig();
