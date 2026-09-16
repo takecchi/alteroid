@@ -259,6 +259,8 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
                      出た番号か id）。何も付けなければ全件（従来どおり）
 /manager <番号|id>    そのマネージャーのセッション生ログ（番号は /managers の並び）
 /stop <番号|id> [理由]  その仕事だけをやめさせる（止めた事実は日誌に残る）
+/rate-manager <番号|id> <good|bad|unclear> [理由]  委譲の評定（うまくいったか）を付ける・覆す
+                     （番号は /managers の並び。status とは別の軸である）
 /waiting             マネージャーの返事待ち一覧（番号付き）
 /msg <番号|id> <本文>  マネージャーへ追加指示を送る（質問への回答としては扱われない）
 /reply <番号|requestId> <本文>  マネージャーの質問に自分の言葉で答える（番号は /waiting の並び）
@@ -980,6 +982,57 @@ export async function runSlashCommand(
       // （既に終わっていた等）を返しても同じ顔になる。
       const { outcome, detail } = await response.json();
       stdout.write(`${outcome}: ${detail}\n`);
+      return 'ok';
+    }
+
+    /**
+     * 委譲の評定（#1054）。**台帳の `/rate` とは別の口である** —— 番号の置き場が
+     * 違う（`/managers` の並び vs `/commitments` の並び）。この repo は番号の
+     * 置き場を面ごとに分けてあり（`listed` の doc）、1本にまとめると
+     * 「`/managers` の直後の `/rate 1`」が台帳の行を指す形になる。
+     *
+     * Web UI と同じ口（`POST /managers/:id/appraise`）を叩く。
+     */
+    case '/rate-manager': {
+      const [reference, value, ...reasonParts] = rest;
+      if (!reference || !value) {
+        stdout.write(
+          '使い方: /rate-manager <番号|id> <good|bad|unclear> [理由]（番号は /managers の並び）\n',
+        );
+        return 'ok';
+      }
+      const id = resolveListedId(reference, listed.managers);
+      if (id === null) {
+        stdout.write(`[${reference}] は /managers の一覧にありません\n`);
+        return 'ok';
+      }
+      // **3値をここで数え直さない**（器の `appraisalSchema` に聞く）。
+      const parsedValue = appraisalSchema.safeParse(value);
+      if (!parsedValue.success) {
+        stdout.write(
+          `評定は ${appraisalSchema.options.join(' / ')} のどれかです（渡されたのは ${value}）\n`,
+        );
+        return 'ok';
+      }
+      const reason = reasonParts.join(' ');
+      const response = await client.managers[':id'].appraise.$post({
+        param: { id },
+        json:
+          reason.length === 0
+            ? { appraisal: parsedValue.data }
+            : { appraisal: parsedValue.data, reason },
+      });
+      if (response.ok) {
+        stdout.write(`評定を ${parsedValue.data} にしました\n`);
+        return 'ok';
+      }
+      stdout.write(
+        `${
+          response.status === 404
+            ? 'そのマネージャーは台帳にいません'
+            : `記録できませんでした (${response.status})`
+        }\n`,
+      );
       return 'ok';
     }
 
@@ -1812,6 +1865,10 @@ export function renderManagerList(managers: ManagerListItem[]): string {
     // **作成と更新。** 値は `GET /managers` が既に返していて、ここが出して
     // いなかっただけである（クローンの `manager_list` には #208 から出ている）。
     lines.push(`      作成: ${manager.startedAt}  更新: ${manager.updatedAt}`);
+    // **評定は在るときだけ出す**（`describeAppraisal` は無ければ `null`）。
+    // 未評定に「未評定」と刷らない —— 印が無いことがその状態である（MCP・画面と同じ規則）。
+    const managerAppraisal = describeAppraisal(manager);
+    if (managerAppraisal !== null) lines.push(`      ${managerAppraisal}`);
     // **`live: false` の理由を、分かる分だけ名指しする。** 状態名だけだと
     // 「セッションが終わった」のか「宛先の器が消えた」のかが読めず、人間の
     // 打つ手（起こし直すのか、器の側を見るのか）が決まらない。

@@ -15,10 +15,12 @@ import {
   Spinner,
   Textarea,
 } from '~/components/ui';
-import { useAbortManager, useSendManagerMessage } from '~/hooks/mutations';
+import { useAbortManager, useAppraiseManager, useSendManagerMessage } from '~/hooks/mutations';
 import { useManager, useManagerTranscript } from '~/hooks/queries';
+import { cn } from '~/lib/cn';
 import { formatDateTime, formatRelative } from '~/lib/format';
 
+import type { AppraisalValue } from '@alteroid/core';
 import type { ManagerDenial, ManagerStatus, ManagerSummary } from '~/lib/types';
 
 import type { Route } from './+types/manager-detail';
@@ -322,6 +324,7 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
             </Card>
           )}
 
+          <AppraisalCard manager={manager} />
           <SendMessage id={id} live={manager.live} sessionId={manager.sessionId} />
           <Transcript id={id} />
         </div>
@@ -349,6 +352,110 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
  * ことが多く、潰すと読めない。Markdown として解釈はしない — ここに出したいのは
  * クローンが渡した文字列そのものであって、その整形結果ではない。
  */
+/**
+ * 委譲の評定（#1054）。**台帳の画面（`commitments.tsx` の `AppraisalControl`）と
+ * 同じ形・同じ規則で描く。**
+ *
+ * **⚠️ 「未評定」を「普通」として描かないこと。** 何も選ばれていない状態は「まだ
+ * 測っていない」という観測そのものなので、既定で選ばれているボタンを作らない。
+ *
+ * **⚠️ `status` と同じ列に並べないこと。** `done` は「セッションが終わった」で
+ * あって「良かった」ではない —— 隣に置くと同じ軸に見える（AGENTS.md「報告の形」の
+ * 「測った列と判定した列を分ける」と同じ話である）。
+ */
+function AppraisalCard({ manager }: { manager: ManagerSummary }) {
+  const appraise = useAppraiseManager();
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState<AppraisalValue | null>(null);
+  const [failure, setFailure] = useState<unknown>(undefined);
+
+  async function submit(value: AppraisalValue) {
+    setBusy(value);
+    setFailure(undefined);
+    try {
+      await appraise(manager.managerId, value, reason.trim() === '' ? undefined : reason.trim());
+      setReason('');
+    } catch (caught) {
+      setFailure(caught);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader
+        title="評定（うまくいったか）"
+        subtitle="status とは別の軸である。done は「セッションが終わった」であって「良かった」ではない"
+      />
+      <div className="px-4 py-3">
+        <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+          {APPRAISAL_CHOICES.map((value) => (
+            <button
+              key={value}
+              type="button"
+              disabled={busy !== null}
+              className={cn(
+                'rounded border px-1.5 py-0.5',
+                manager.appraisal === value
+                  ? 'border-fg text-fg'
+                  : 'border-border text-muted hover:text-fg',
+              )}
+              onClick={() => void submit(value)}
+            >
+              {appraisalLabel(value)}
+            </button>
+          ))}
+          {manager.appraisal === undefined ? (
+            <span className="text-muted">（まだ評定していない）</span>
+          ) : (
+            <span className="text-muted">
+              {manager.appraisedBy === undefined ? '' : `${manager.appraisedBy} が付けた`}
+              {manager.appraisalReason === undefined ? '' : `: ${manager.appraisalReason}`}
+            </span>
+          )}
+        </div>
+        <div className="mt-2">
+          <Input
+            value={reason}
+            placeholder="なぜその評定か（任意。ここに同じ軸が繰り返し出るなら、軸を足す合図）"
+            onChange={(event) => setReason(event.target.value)}
+          />
+        </div>
+        <ErrorNote error={failure} className="mt-2" />
+      </div>
+    </Card>
+  );
+}
+
+/**
+ * 評定の3値と画面のラベル。**`@alteroid/core` から実行時の値を import しない**
+ * （`commitments.tsx` と同じ作法）。網羅性は `never` で強制する。
+ *
+ * ⚠️ **`unclear` を端に置くこと自体に意味がある** —— 真ん中に置くと「中間の評価」
+ * に見えるが、これは中間ではなく**測れなかった**という別の軸の値である。
+ */
+const APPRAISAL_CHOICES: readonly AppraisalValue[] = ['good', 'bad', 'unclear'];
+
+/** **網羅性チェック専用（ビルド時）。** `commitments.tsx` の同名の関数と同型。 */
+function assertAppraisalHandled(value: never): void {
+  console.warn(`manager-detail.tsx: APPRAISAL_CHOICES が決めていない評定: ${String(value)}`);
+}
+
+function appraisalLabel(value: AppraisalValue): string {
+  switch (value) {
+    case 'good':
+      return 'うまくいった';
+    case 'bad':
+      return 'うまくいかなかった';
+    case 'unclear':
+      return '判定できない';
+    default:
+      assertAppraisalHandled(value);
+      return String(value);
+  }
+}
+
 function RequestCard({ request }: { request: string }) {
   return (
     <Card className="min-w-0">
