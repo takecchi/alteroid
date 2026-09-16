@@ -1,6 +1,8 @@
+import { execFile } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 
 import type {
   query as sdkQuery,
@@ -2191,6 +2193,47 @@ describe('デーモン再起動後（M4）', () => {
     });
 
     await s.pool.stop();
+  });
+
+  /**
+   * **`LocalRunner.unpushedWork()` が実際の `git` の答えを運ぶこと**
+   * （Issue #1039）。`HttpRunner` 側の等価な歯
+   * （`apps/daemon/src/runner-client.test.ts`）と対にしてある——**片方だけ
+   * 実装すると2実装が静かに乖離する**という Issue 自身の警告どおり、
+   * 境界の両側を別々に固定する。
+   */
+  it('unpushedWork は同一プロセスでも実際の git の答えを運ぶ（#1039）', async () => {
+    const run = promisify(execFile);
+    const dir = await mkdtemp(join(tmpdir(), 'alteroid-manager-unpushed-'));
+    try {
+      const git = (args: string[]) =>
+        run('git', args, { cwd: dir, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+      await git(['init', '-q', '-b', 'main']);
+      await git(['config', 'user.email', 'test@example.com']);
+      await git(['config', 'user.name', 'Test']);
+      await writeFile(join(dir, 'a.txt'), 'first\n');
+      await git(['add', 'a.txt']);
+      await git(['commit', '-q', '-m', 'first']); // upstream 無し。1本とも「未 push」。
+
+      const s = setup(undefined, { stores: createMemoryStores() });
+      const { managerId } = await s.pool.start({ request: '確認', cwd: dir });
+
+      const probe = await s.pool.unpushedWork(managerId);
+
+      expect(probe.kind).toBe('ok');
+      if (probe.kind !== 'ok') throw new Error('unreachable');
+      expect(probe.result.worktrees).toHaveLength(1);
+      expect(probe.result.worktrees[0]).toMatchObject({
+        relativePath: '.',
+        branch: 'main',
+        unpushedCommitCount: 1,
+        uncommittedChangeCount: 0,
+      });
+
+      await s.pool.stop();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 
