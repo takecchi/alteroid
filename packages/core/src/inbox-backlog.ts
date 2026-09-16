@@ -120,6 +120,55 @@ export interface InboxBacklogBreakdown {
   /** `inboxBacklogDedupeKey` で畳んだ後の件数。 */
   readonly distinct: number;
   /**
+   * {@link inboxBacklogCrossManagerDedupeKey}（`manager_message` は
+   * `managerId` を鍵から落として畳む）で畳んだ後の件数（#783 段0 追補）。
+   *
+   * ## 何のために足したか
+   *
+   * `distinct`（{@link inboxBacklogDedupeKey}）は `manager_message` を
+   * `managerId` ごと分けて畳む。⟹ **同じ壁（枠・429 など）に複数の委譲が
+   * 同時に当たって同文の報告が N 本届くと、`distinct` は N のまま減らない**
+   * ——一方、上流（`manager.ts` の `#rateLimits` / `#usageNotices`）には
+   * `managerId` を跨いで畳む別の畳み込みが既に在り、そちらは逆に「畳み
+   * すぎる」方向の欠陥として PR #703 の本文が名指ししている。**畳み込みの
+   * 鍵が2つの逆向きに割れている**という状態そのものを、対策を打たずに
+   * まず数として読めるようにするのがこの値である（対策そのものは issue
+   * #954 として別途切り出してある。ここでは絶対に手を出さない）。
+   *
+   * ## これが言えること
+   *
+   * - `distinct` と並べて読むことで、「本文ベースの畳み込みを `managerId`
+   *   の有無で行うと、いまの受信箱の内訳としてどれだけ違って見えるか」を
+   *   数字で言える
+   *
+   * ## これが言えないこと（必ず併せて読むこと）
+   *
+   * - **これは受信箱に残っている行を数えたものであって、上流で既に畳まれて
+   *   届かなかった分は入らない。** `#rateLimits` / `#usageNotices` が積む前に
+   *   畳んだ件数は最初からここに現れない ⟹ `distinctAcrossManagers` が
+   *   小さいからといって「上流の畳み込みは効いている」とは言えないし、
+   *   大きいからといって「効いていない」とも言えない。ここは積まれた
+   *   *後*の行しか見ていない
+   * - **「この数まで減らせる」ではない。** `managerId` を無視して畳んで
+   *   よいかどうかは、この計器の外側の判断であり、この変更は畳み込みの
+   *   挙動を1ミリも変えていない——数える軸を1つ増やしただけである
+   * - **`distinctAcrossManagers <= distinct` が常に成り立つ**（鍵が
+   *   `managerId` を落として粗くなる方向にしか動かないため、同じか、
+   *   より多くの行が同じ鍵へ畳まれる）。したがって
+   *   `distinctAcrossManagers <= distinct <= total` が常に成り立つ
+   *   （テストで固定してある）
+   *
+   * ## なぜ `inboxBacklogDedupeKey` 自体を変えないか
+   *
+   * `distinct` の意味（`managerId` を含めて畳む）を動かすと、この値を
+   * 前提にしている既存の呼び出し側・doc・テストが黙って意味を変える。
+   * ここでの目的は「2つの畳み込みの鍵の向きが違う」という事実そのものを
+   * **並べて読める**形にすることであって、どちらかを正解として置き換える
+   * ことではない——だから鍵を作る関数を分け、`distinct` はそのまま、
+   * 新しい軸だけを足す。
+   */
+  readonly distinctAcrossManagers: number;
+  /**
    * `deliveries === 0`。
    *
    * ⚠️ **「まだ配っていない」ではない**（#910 追補）。`post()` は受理した瞬間に
@@ -337,6 +386,45 @@ export function inboxBacklogDedupeKey(event: InboxEvent): string {
       throw new Error(`未知の受信箱イベント種別（dedupeKey）: ${JSON.stringify(exhaustive)}`);
     }
   }
+}
+
+/**
+ * {@link inboxBacklogDedupeKey} と同じ「同じ本文か」を畳む鍵だが、
+ * `manager_message` だけ `managerId` を落とす（#783 段0 追補 / issue #954）。
+ *
+ * ## 何のためか
+ *
+ * `manager.ts` の `#rateLimits` / `#usageNotices` は、同じ「畳み込み」という
+ * 操作を2つの別々の鍵（枠の種類・Pool全体で1つ／`managerId` ごと）で行って
+ * いる——{@link inboxBacklogDedupeKey} の doc「なぜ1箇所に閉じるか」が
+ * 名指しした欠陥の実例である。**この関数はその割れそのものを直しはしない**
+ * （直すのは issue #954。ここでは絶対に手を出さない）。ここでするのは、
+ * 「`managerId` を跨いで畳んだらどう見えるか」を `distinct` と並べて読める
+ * ようにするために、鍵をもう1つ用意するだけである。
+ *
+ * ## 鍵の作り方
+ *
+ * `manager_message` は `[type, kind, text]`（`managerId` を落とす）を
+ * {@link DEDUPE_SEPARATOR} で繋ぐ。**それ以外の6型は
+ * {@link inboxBacklogDedupeKey} へそのまま委譲する**——実装を複製すると、
+ * 片方だけ直されて2つが食い違う経路を作ってしまう（同じ理由が
+ * {@link inboxBacklogDedupeKey} の doc にもある）。
+ *
+ * ## 不変条件
+ *
+ * `manager_message` の鍵は {@link inboxBacklogDedupeKey} が返す鍵から
+ * `managerId` のフィールドを1つ削っただけなので、必ず**同じか、より粗い**
+ * ——これで畳んだ異なり数（`distinctAcrossManagers`）は
+ * {@link inboxBacklogDedupeKey} で畳んだ異なり数（`distinct`）を超えない
+ * （`summarizeInboxBacklog` / `InboxBacklogBreakdown.distinctAcrossManagers`
+ * の doc）。
+ *
+ * **export している。** テストがこの関数を直接撃てるようにするため
+ * （`inboxBacklogDedupeKey` を export している理由と同じ）。
+ */
+export function inboxBacklogCrossManagerDedupeKey(event: InboxEvent): string {
+  if (event.type !== 'manager_message') return inboxBacklogDedupeKey(event);
+  return [event.type, event.kind, event.text].join(DEDUPE_SEPARATOR);
 }
 
 /** 上位N件・同数は名前順で安定させる、共通の並べ替え。 */
@@ -558,6 +646,7 @@ export function summarizeInboxBacklog(
   const byTypeCounts = new Map<InboxEvent['type'], number>();
   const bySourceCounts = new Map<string, number>();
   const dedupeKeys = new Set<string>();
+  const crossManagerDedupeKeys = new Set<string>();
   const ageBucketCounts = new Map<string, number>();
   const undeliveredByTypeCounts = new Map<InboxEvent['type'], number>();
   let undelivered = 0;
@@ -577,6 +666,7 @@ export function summarizeInboxBacklog(
     else bySourceUnknownCount += 1;
 
     dedupeKeys.add(inboxBacklogDedupeKey(row.event));
+    crossManagerDedupeKeys.add(inboxBacklogCrossManagerDedupeKey(row.event));
 
     if (row.deliveries === 0) {
       undelivered += 1;
@@ -626,6 +716,7 @@ export function summarizeInboxBacklog(
     bySourceOverflowCount,
     bySourceUnknownCount,
     distinct: dedupeKeys.size,
+    distinctAcrossManagers: crossManagerDedupeKeys.size,
     undelivered,
     deliveredOnce,
     redelivered,
@@ -758,6 +849,22 @@ export function summarizeInboxBacklog(
  * 向きに中立な事実（「上下どちらへもぶれる」）と**機構が書いてある場所の名前**を
  * 載せ、機構そのものは doc に置く —— クローンが doc へ辿る経路を、出力の側から
  * 作るためである。
+ *
+ * ## `distinctAcrossManagers`（#783 段0 追補 / issue #954）は差が無ければ1文字も足さない
+ *
+ * `distinct` と `distinctAcrossManagers`（{@link InboxBacklogBreakdown} の doc）
+ * が同じ値なら、`manager_message` に複数の `managerId` がそもそも混ざって
+ * いないか、混ざっていても本文が揃っていないかのどちらかで、読み手に新しく
+ * 言えることが無い——「0を出す軸と、値を作らない軸」（`InboxBacklogBreakdown`
+ * の doc）と同じ作法で、**同値のときは行を増やさない。**
+ *
+ * **差が出たときだけ**、`同一本文` の行へ添えて足す——独立の行を新設すると、
+ * 2つの数がどちらも「同一本文を畳んだら何件か」を数えたものであることが
+ * 読み手に伝わりにくくなるため、同じ行に並べて置く。**「畳める」「捨てられる」
+ * とは名乗らない。** `distinctAcrossManagers` を数えること自体は `managerId`
+ * を無視して数え直しただけで、実際に畳んでよいかは別の判断だからである
+ * （{@link InboxBacklogBreakdown.distinctAcrossManagers} の doc「これが
+ * 言えないこと」）。
  */
 export function describeInboxBacklogBreakdown(b: InboxBacklogBreakdown): string {
   const byTypeText =
@@ -774,12 +881,18 @@ export function describeInboxBacklogBreakdown(b: InboxBacklogBreakdown): string 
     b.ageBuckets.length === 0
       ? '（無し）'
       : b.ageBuckets.map((e) => `${e.label} ${e.count}`).join(' / ');
+  // `distinct` と同じ値のときは1文字も足さない（describeInboxBacklogBreakdown
+  // の doc「distinctAcrossManagers は差が無ければ1文字も足さない」）。
+  const crossManagerText =
+    b.distinctAcrossManagers === b.distinct
+      ? ''
+      : ` ／ 同じ本文がマネージャーを跨いで ${b.distinctAcrossManagers} 件（managerId を無視して数え直した参考値。inboxBacklogCrossManagerDedupeKey の doc）`;
 
   return [
     `内訳（計 ${b.total} 件）:`,
     `種類: ${byTypeText}`,
     `送信元（上位5件。source/managerIdを持つ型のみ。溢れ ${b.bySourceOverflowKinds} 種 ${b.bySourceOverflowCount} 件 / source を言えない型 ${b.bySourceUnknownCount} 件）: ${bySourceText}`,
-    `同一本文（id/at を除いた中身）を畳むと ${b.distinct} 件 ⚠ 本文が同じでも別々に起きた出来事である。この数は上下どちらへもぶれる（向きと理由は inboxBacklogDedupeKey の doc）`,
+    `同一本文（id/at を除いた中身）を畳むと ${b.distinct} 件 ⚠ 本文が同じでも別々に起きた出来事である。この数は上下どちらへもぶれる（向きと理由は inboxBacklogDedupeKey の doc）${crossManagerText}`,
     `器の入れ替え回数: 0回＝いまの器になってから積まれた ${b.undelivered} / 1回 ${b.deliveredOnce} / 2回以上 ${b.redelivered}（最大 ${b.maxDeliveries}）⚠ 配られた回数ではない — 門が畳んだ行はターンが1度も起きないまま数だけ増える`,
     `いまの器になってから積まれた分（0回）の内訳（種類別）: ${undeliveredByTypeText}`,
     `齢（観測 ${b.observedAt} 時点。齢は相対値なので、この行を写すときは基準点も一緒に写すこと）: ${ageBucketsText}`,
