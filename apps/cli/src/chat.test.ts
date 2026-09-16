@@ -1,4 +1,4 @@
-import { jobStatusSchema, type Commitment } from '@alteroid/core';
+import { appraisalSchema, jobStatusSchema, type Commitment } from '@alteroid/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -750,6 +750,8 @@ function stubClient(
     closeStatus?: number;
     /** `PATCH /commitments/:id` の応答。既定は 200（直せた）。 */
     editStatus?: number;
+    /** `POST /commitments/:id/appraise` / `POST /managers/:id/appraise` の応答。既定 200。 */
+    appraiseStatus?: number;
     editBody?: unknown;
     /** `DELETE /managers/:id` の応答。既定は「止めた」。 */
     abortStatus?: number;
@@ -857,6 +859,12 @@ function stubClient(
             ),
           );
         },
+        appraise: {
+          $post: (args: unknown) => {
+            calls.push({ route: 'POST /managers/:id/appraise', args });
+            return Promise.resolve(reply(options.appraiseStatus ?? 200, {}));
+          },
+        },
         messages: {
           $post: (args: unknown) => {
             calls.push({ route: 'POST /managers/:id/messages', args });
@@ -895,6 +903,12 @@ function stubClient(
           $post: (args: unknown) => {
             calls.push({ route: 'POST /commitments/:id/close', args });
             return Promise.resolve(reply(options.closeStatus ?? 200, {}));
+          },
+        },
+        appraise: {
+          $post: (args: unknown) => {
+            calls.push({ route: 'POST /commitments/:id/appraise', args });
+            return Promise.resolve(reply(options.appraiseStatus ?? 200, {}));
           },
         },
         $patch: (args: unknown) => {
@@ -3614,5 +3628,117 @@ describe('chat の /archive', () => {
         overrideReason: '本番障害の調査で緊急に消す必要があった',
       });
     });
+  });
+});
+
+/**
+ * 評定のスラッシュコマンド（#1054）。**器（`CommitmentStore` / `ManagerPool` / HTTP）
+ * の側には歯が在ったが、CLI の口そのものには無かった**（#1058 の作業中に気づいた）。
+ *
+ * ## ⭐ ここでいちばん守りたいもの —— 番号の置き場が混ざらないこと
+ *
+ * `/rate` は `listed.commitments`、`/rate-manager` は `listed.managers` を引く。
+ * **1本にまとめると「`/managers` の直後の `/rate 1`」がマネージャーの id を台帳の
+ * 口へ送る。** 同じ形の歯が既に在る（この下の `/reply` の項）ので、それに揃えてある。
+ */
+describe('chat の /rate と /rate-manager（評定）', () => {
+  it('/rate は番号を台帳の id へ引き直し、評定と理由を送る', async () => {
+    captureStdout();
+    const { calls, client } = stubClient({
+      commitments: [commitment({ id: 'cmt-1' }), commitment({ id: 'cmt-2' })],
+    });
+    const listed = emptyListed();
+
+    await runSlashCommand('/commitments', client, listed);
+    await runSlashCommand('/rate 2 good 一発で通った', client, listed);
+
+    const call = calls.find((c) => c.route === 'POST /commitments/:id/appraise');
+    expect(call).toBeDefined();
+    expect((call?.args as { param: { id: string } }).param).toEqual({ id: 'cmt-2' });
+    expect((call?.args as { json: { appraisal: string; reason?: string } }).json).toEqual({
+      appraisal: 'good',
+      reason: '一発で通った',
+    });
+  });
+
+  /**
+   * **理由を書かなければ `reason` を送らない。** 空文字で埋めると、器の側は
+   * 「理由が在る」として受け取る（`min(1)` を通らないので 400 にもなる）。
+   * 書かなかったことと空で書いたことを混ぜない。
+   */
+  it('/rate は理由を書かなければ reason を送らない', async () => {
+    captureStdout();
+    const { calls, client } = stubClient({ commitments: [commitment({ id: 'cmt-1' })] });
+    const listed = emptyListed();
+
+    await runSlashCommand('/commitments', client, listed);
+    await runSlashCommand('/rate 1 unclear', client, listed);
+
+    const call = calls.find((c) => c.route === 'POST /commitments/:id/appraise');
+    expect((call?.args as { json: Record<string, unknown> }).json).toEqual({
+      appraisal: 'unclear',
+    });
+  });
+
+  /**
+   * **3値は器（`appraisalSchema`）が持つ。** CLI が数え直していたら、値が増えた日に
+   * ここだけ古くなる。断りの文面に3値が全部出ることで、写していないことを固定する。
+   */
+  it('/rate は既知でない評定を送らず、器が持つ3値を並べて断る', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient({ commitments: [commitment({ id: 'cmt-1' })] });
+    const listed = emptyListed();
+
+    await runSlashCommand('/commitments', client, listed);
+    await runSlashCommand('/rate 1 brilliant', client, listed);
+
+    expect(calls.some((c) => c.route === 'POST /commitments/:id/appraise')).toBe(false);
+    const text = read();
+    for (const value of appraisalSchema.options) expect(text).toContain(value);
+  });
+
+  it('/rate-manager は番号を委譲の id へ引き直して送る', async () => {
+    captureStdout();
+    const { calls, client } = stubClient({
+      managers: [manager({ managerId: 'mgr-a' }), manager({ managerId: 'mgr-b' })],
+    });
+    const listed = emptyListed();
+
+    await runSlashCommand('/managers', client, listed);
+    await runSlashCommand('/rate-manager 2 bad 手戻りが多い', client, listed);
+
+    const call = calls.find((c) => c.route === 'POST /managers/:id/appraise');
+    expect((call?.args as { param: { id: string } }).param).toEqual({ id: 'mgr-b' });
+    expect((call?.args as { json: { appraisal: string } }).json.appraisal).toBe('bad');
+  });
+
+  /**
+   * ⭐ **番号の置き場が混ざらない。** `listed.managers` に値が在っても `/rate` は
+   * それを見ない（`listed.commitments` だけを引く）——1本にまとめていたら、ここで
+   * マネージャーの id が台帳の口へ送られる。
+   */
+  it('/managers の直後に /rate 1 を打っても、マネージャーの id が台帳の口へ行かない', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient({ managers: [manager({ managerId: 'mgr-a' })] });
+    const listed = emptyListed();
+
+    await runSlashCommand('/managers', client, listed);
+    await runSlashCommand('/rate 1 good', client, listed);
+
+    expect(calls.some((c) => c.route === 'POST /commitments/:id/appraise')).toBe(false);
+    expect(read()).toContain('/commitments の一覧にありません');
+  });
+
+  /** 裏返しも同じ（台帳の番号が委譲の口へ行かない）。 */
+  it('/commitments の直後に /rate-manager 1 を打っても、台帳の id が委譲の口へ行かない', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient({ commitments: [commitment({ id: 'cmt-1' })] });
+    const listed = emptyListed();
+
+    await runSlashCommand('/commitments', client, listed);
+    await runSlashCommand('/rate-manager 1 good', client, listed);
+
+    expect(calls.some((c) => c.route === 'POST /managers/:id/appraise')).toBe(false);
+    expect(read()).toContain('/managers の一覧にありません');
   });
 });

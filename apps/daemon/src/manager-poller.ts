@@ -1,8 +1,9 @@
 import type { ManagerPool } from '@alteroid/core';
 
 /**
- * `ManagerPool` の2つの関心事を定期的に回す——`probeTurnEnds()`
- * （Issue #567）と `flushWithheldReports()`。
+ * `ManagerPool` の3つの関心事を定期的に回す——`probeTurnEnds()`
+ * （Issue #567）・`flushWithheldReports()`・`settleStalledUsageWakes()`
+ * （Issue #914 最終段）。
  *
  * **`packages/core/src/runner-protocol.ts` の `Registry#beat()`（10秒周期）に
  * 相乗りしない。** あそこは軽い `identity()` を投げるだけの場所で、コメントに
@@ -21,6 +22,13 @@ import type { ManagerPool } from '@alteroid/core';
  * の `event.awaitingBackground`）、次の本物の報告が来ればそれが自動で
  * 上書きするが、来なかった場合の逃げ道がここでしか作れない
  * （デーモン常駐のポーラーの外に、時間で必ず何かを起こす場所が無いため）。
+ *
+ * **`ManagerPool#settleStalledUsageWakes()` は `flushWithheldReports()` の
+ * さらに後ろに並べる。** `probeTurnEnds()` より後に置くのは必須——
+ * `settleStalledUsageWakes()` が読む `record.turnEndedAt` は、同じ回の
+ * `probeTurnEnds()` が計算し直した値でなければ古い助言のまま判定することに
+ * なる（`settleStalledUsageWakes()` の doc）。`flushWithheldReports()` と
+ * どちらが先でも安全だが、`probeTurnEnds()` の直後という並びに揃えてある。
  */
 export const MANAGER_POLL_INTERVAL_MS = 60_000;
 
@@ -73,6 +81,15 @@ export function startManagerPolling(options: ManagerPollerOptions): ManagerPolle
       // 前者が例外で終わっても後者は走る——別の関心事なので、片方の失敗が
       // もう片方を道連れにしない。
       .then(() => options.managers.flushWithheldReports().catch(() => undefined))
+      // **さらにその後ろに `settleStalledUsageWakes()`。** 同じ理由で
+      // `.catch()` で二重に握る——`settleStalledUsageWakes()` 自身も1件の
+      // 失敗でループを止めない設計だが（`manager.ts` の doc）、契約が将来
+      // 変わってもこのポーラーが原因でデーモンごと落ちることはない。
+      .then(() => options.managers.settleStalledUsageWakes().catch(() => undefined))
+      // **戻り値（起こせた managerId の一覧）はこのポーラーからは捨てる。**
+      // `probe()` の型は `Promise<void>` で揃えてある——呼び出し元
+      // （テストの `refresh()`）は「1周した」ことだけを知ればよい。
+      .then(() => undefined)
       .finally(() => {
         inFlight = null;
       });

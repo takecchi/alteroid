@@ -62,6 +62,7 @@ function stubClone(): CloneHost {
     vacate: () => Promise.resolve(),
     probeTurnEnds: () => Promise.resolve(),
     flushWithheldReports: () => Promise.resolve(),
+    settleStalledUsageWakes: () => Promise.resolve([]),
     stop: () => Promise.resolve(),
   };
   return {

@@ -63,7 +63,7 @@ import {
   renderListingEntry,
   renderListingFromEnd,
 } from './excerpt.js';
-import { classifyManagerActivity } from './manager-activity.js';
+import { classifyManagerActivity, describeReportDrift } from './manager-activity.js';
 import type { ManagerActivityInput } from './manager-activity.js';
 import { guardArchiveRemoval } from './manager.js';
 import type {
@@ -519,6 +519,16 @@ const LIST_REPORT_EXCERPT = 240;
  * （`manager.ts`、400字）で、ここはそれを一覧向けにさらに切る。
  */
 const LIST_TURN_END_TAIL_EXCERPT = 160;
+/**
+ * `manager_stop` の応答に、畳んだターンの本文（`lastFoldedTurn`。Issue
+ * #1038）の抜粋を添えるときの厚み。
+ *
+ * **`LIST_REPORT_EXCERPT` を使い回さない**（`LIST_TURN_END_TAIL_EXCERPT` の
+ * doc と同じ理由——用途ごとに別に置く。値がいま同じ桁でも、片方だけを
+ * 直したくなったときに一緒に動いてしまう）。全文は `manager_report` で読める
+ * ので、ここは「誤って止めたことに気づく」ために十分な長さがあればよい。
+ */
+const MANAGER_STOP_FOLDED_TURN_EXCERPT = 240;
 /**
  * 返事待ち1件の要約の厚み。
  *
@@ -6788,6 +6798,26 @@ export function createCloneTools(context: ToolContext) {
             ? '一覧からも消えている。'
             : `いまの状態: ${describeManagerState(after.status, after.live, after.awaitingBackground)}。`,
         );
+        // **畳んだターンの本文へ、止めた直後に到達できるようにする（Issue
+        // #1038）。** 誤って止めたことに気づく契機が、止めた直後には無かった
+        // のが実害——件数と時刻しか言わない `withheld` の案内（すぐ下と別物）
+        // とは違い、ここは**いま畳んだターンの中身そのもの**を扱う。
+        //
+        // ⛔ **届いていない本文を待ってこの応答を止めない。** `abort()` は
+        // `runner.stop()` を待った直後に `status` を書くが、この report
+        // イベントは HTTP 越しの runner では別経路で後から届く
+        // （`schema.ts` の `lastFoldedTurn` の doc「順序の注意」）——
+        // `manager_stop` の応答を組む時点でまだ届いていないことは普通にある。
+        // **2段にする**: 届いていれば抜粋を、届いていなければ
+        // `manager_report` への案内を出す。
+        lines.push(
+          after?.lastFoldedTurn === undefined
+            ? '畳んだターンの本文はまだ台帳に届いていない（別経路で後から届くことがある）。' +
+                `届けば台帳へ残るので、manager_report ${managerId} で後から読めること。`
+            : `畳んだターンの本文（${after.lastFoldedTurn.at} 受信）: ` +
+                `${excerptLine(after.lastFoldedTurn.text, MANAGER_STOP_FOLDED_TURN_EXCERPT)} ` +
+                `全文は manager_report ${managerId} で読めること。`,
+        );
         return text(lines.join('\n'));
       },
     ),
@@ -6969,6 +6999,10 @@ export function createCloneTools(context: ToolContext) {
       async ({ status, cursor }) => {
         if (!context.managers) return NO_POOL;
         const managers = await context.managers.list();
+        // **この一覧ぜんぶで同じ「いま」を使う（Issue #1036）。** 行ごとに
+        // `new Date()` を呼ぶと、同じ応答の中で判定の基準がずれる
+        // （`describeReportDrift` に渡す `now`）。
+        const now = new Date();
         // **デーモン→クローンの脚（受信箱）の滞留は、マネージャーの本数と無関係**
         // （#358）。マネージャーが1本も居なくても、受信箱には既に合図が溜まって
         // いることがあるので、早期リターンの前に確かめる。
@@ -7106,8 +7140,22 @@ export function createCloneTools(context: ToolContext) {
         // **予算を先に決めて、入るところまで積む。** 件数から出力量を決めると、
         // 何件で壊れるかが運任せになる。切ったなら必ずそう言う。
         // 積む形そのものは `renderListing` が持つ（一覧ごとに手で書かない）。
-        const items = paged.map((manager) =>
-          renderListingEntry({
+        const items = paged.map((manager) => {
+          // **焼いた status といまの status が食い違えば印を1つ足す（Issue
+          // #1036）。** 行を新しく増やさない——直下の「（… 受信）」という
+          // 既存の行へ添えるだけ（このすぐ下のコメントが書くとおり、行を
+          // 1本増やすと予算に張り付いている一覧では出る件数が減る）。
+          // 判定のコピーは作らない——生成元は `describeReportDrift` 1箇所で、
+          // `manager_report` と同じ字面の元から取る（真偽だけをここで使う）。
+          const drift = describeReportDrift({
+            managerId: manager.managerId,
+            lastReportAt: manager.lastReportAt,
+            lastReportStatus: manager.lastReportStatus,
+            status: manager.status,
+            now,
+          });
+          const driftMark = drift === '' ? '' : '、⚠ status 食い違い（manager_report で詳細）';
+          return renderListingEntry({
             id: manager.managerId,
             // **第3引数まで通す（#621 / #643）。** `status: 'done'` は
             // 「手が空いた」と「背景処理の完了を待って畳んだ」を潰している——
@@ -7295,7 +7343,7 @@ export function createCloneTools(context: ToolContext) {
                   // `直近のターンの中身`）——同じ台帳の欄を2つの面が別の語で
                   // 呼ぶと、面をまたいで読む人間がそこで詰まる。判定は
                   // `isFoldedTurnReport` に寄せてある（その doc を参照）。
-                  `  ${isFoldedTurnReport(manager) ? '直近のターンの中身' : '直近の報告'}${manager.lastReportAt === undefined ? '' : `（${manager.lastReportAt} 受信）`}: ${excerptLine(manager.lastReport, LIST_REPORT_EXCERPT)}`,
+                  `  ${isFoldedTurnReport(manager) ? '直近のターンの中身' : '直近の報告'}${manager.lastReportAt === undefined ? '' : `（${manager.lastReportAt} 受信${driftMark}）`}: ${excerptLine(manager.lastReport, LIST_REPORT_EXCERPT)}`,
               // **Issue #567**: ターンが終わっているらしいのに報告が届いて
               // いない可能性を、条件つきで添える（`describeTurnEnd` の doc）。
               // **健全なマネージャーでは `null` を返し、1文字も増えない**——
@@ -7319,8 +7367,8 @@ export function createCloneTools(context: ToolContext) {
               // を名乗る行が出る**（`TokenGenerationUnknownReason` の doc）。
               describeTokenGeneration(manager),
             ],
-          }),
-        );
+          });
+        });
         return text(
           [
             // **本数は一覧の外に出す。** 一覧は予算で打ち切られる（すぐ下の
@@ -7468,7 +7516,16 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        const body = part === 'request' ? found.request : found.lastReport;
+        // **停止後に届いた、畳まれたターンの本文（Issue #1038）。**
+        // `part === 'request'` では扱わない——依頼文の話ではない。**在れば
+        // `lastReport`（完遂した報告）より優先して見せる**——`lastFoldedTurn`
+        // は `lastReport` より後に届いた内容だからである（`case 'report'` は
+        // `record.job.status === 'stopped'` の間だけここへ書き、`lastReport`
+        // は触らない）。これが無いと、「停止後に届いた本文に到達できること」
+        // （#1038 の要件）が満たせない——`lastReport` の陰に隠れたまま
+        // `manager_report` からは一生読めなくなる。
+        const foldedTurn = part === 'request' ? undefined : found.lastFoldedTurn;
+        const body = part === 'request' ? found.request : (foldedTurn?.text ?? found.lastReport);
         if (body === undefined || body.length === 0) {
           if (part === 'request') {
             return text(`マネージャー ${managerId} の依頼文が記録に無い。`);
@@ -7546,11 +7603,49 @@ export function createCloneTools(context: ToolContext) {
         const label =
           part === 'request'
             ? '依頼文'
-            : isFoldedTurnReport(found)
-              ? '直近のターンの中身'
-              : '直近の報告';
+            : // **Issue #1038: 停止後に届いた本文は別の見出しで言い分ける。**
+              // `isFoldedTurnReport`（`lastFailure` / `lastUnreported`）とは
+              // 別の畳まれ方——「これは停止後に届いた、畳まれたターンの中身
+              // である」とその場で名乗る。受信時刻もここへ添える（`manager_list`
+              // の「（… 受信）」と同じ形）。
+              foldedTurn !== undefined
+              ? `停止後に届いた、畳まれたターンの中身（${foldedTurn.at} 受信）`
+              : isFoldedTurnReport(found)
+                ? '直近のターンの中身'
+                : '直近の報告';
         const part1 = page(body, offset, REPORT_PAGE);
-        const head = `マネージャー ${managerId} の${label}（${describePage(part1)}）`;
+        // **齢といまの status を見出しに添える（Issue #1036）。** これが本題
+        // ——`manager_report` は以前 `lastReportAt` も `status` も1文字も
+        // 出していなかった（読み手は直近に完了したターンの中身を、いまの
+        // 状態として読むしかなかった）。**`part === 'request'` では出さない**
+        // ——依頼文はそもそも報告ではない（`failure` / `systemError` /
+        // `denied` / `unobserved` と同じ線）。
+        const reportAgeStatus =
+          part === 'request'
+            ? ''
+            : // **文言に「直近の報告」を含めない。** `label` が「直近のターンの
+              // 中身」へ切り替わった回（`isFoldedTurnReport` / `foldedTurn`）で
+              // ここに「直近の報告」という字面が混ざると、見出しを切り替えた
+              // 意味（Issue #714 / #917 / #1038）が薄れる——読む側が「結局
+              // 直近の報告ではないか」と読める。
+              ` — lastReportAt: ${found.lastReportAt ?? '一度も届いていない'} / いまの status: \`${found.status}\``;
+        const head = `マネージャー ${managerId} の${label}（${describePage(part1)}）${reportAgeStatus}`;
+        // **焼いた status といまの status が食い違えば ⚠ を出す（Issue
+        // #1036）。** 生成元は `describeReportDrift` 1箇所——`manager_list`
+        // と割れない。一致している回・比較できない回（この欄を持たない古い
+        // 行・報告が一度も無い回）は1文字も増えない。`part === 'request'`
+        // では出さない（同上）。
+        const drift =
+          part === 'request'
+            ? ''
+            : describeReportDrift({
+                managerId,
+                lastReportAt: found.lastReportAt,
+                lastReportStatus: found.lastReportStatus,
+                status: found.status,
+                now: new Date(),
+              });
+        const driftNote = drift === '' ? '' : `${drift}\n\n`;
         // **失敗は本文の`上`に置く**（`manager_list` と同じ順。人間の CLI も
         // 同じ順である）。下に置くと、包まれたエラー文を先に読んでから「実は
         // 報告ではない」と分かる順になる。**失敗していない回は1文字も増えない。**
@@ -7579,7 +7674,7 @@ export function createCloneTools(context: ToolContext) {
         const footer =
           '\n\n（さらに掘るなら manager_transcript managerId=' + managerId + ' で生ログへ）';
         return text(
-          `${head}\n\n${failureNote}${systemErrorNote}${denialNote}${unobservedNote}${part1.body}${tail}${footer}`,
+          `${head}\n\n${driftNote}${failureNote}${systemErrorNote}${denialNote}${unobservedNote}${part1.body}${tail}${footer}`,
         );
       },
     ),

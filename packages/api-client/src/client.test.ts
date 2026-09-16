@@ -87,6 +87,9 @@ function fakeClone(stores: Stores) {
     async vacate() {},
     async probeTurnEnds() {},
     async flushWithheldReports() {},
+    async settleStalledUsageWakes() {
+      return [];
+    },
     async stop() {},
   };
 

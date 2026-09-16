@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   classifyManagerActivity,
   describeManagerActivityForFlush,
+  describeReportDrift,
   type ManagerActivityInput,
   type ManagerActivityKind,
 } from './manager-activity.js';
@@ -212,5 +213,82 @@ describe('describeManagerActivityForFlush — flush が配る短い1行', () => 
     for (const kind of kinds) {
       expect(describeManagerActivityForFlush(kind)).not.toBe('');
     }
+  });
+});
+
+/**
+ * **{@link describeReportDrift}（Issue #1036）**: `lastReportStatus`
+ * （焼いた status）といまの `status` の食い違いを言う唯一の場所。
+ */
+describe('describeReportDrift', () => {
+  const NOW = new Date('2026-09-16T01:00:00.000Z');
+
+  it('焼いた status といまの status が食い違えば ⚠ を出す（running に限定しない）', () => {
+    const text = describeReportDrift({
+      managerId: 'mgr-1',
+      lastReportAt: '2026-09-16T00:00:00.000Z',
+      lastReportStatus: 'running',
+      status: 'stopped',
+      now: NOW,
+    });
+    expect(text).toContain('⚠');
+    expect(text).toContain('running');
+    expect(text).toContain('stopped');
+    expect(text).toContain('いま走っているターンの中身ではない');
+  });
+
+  it('waiting_human → done のような running を含まない組み合わせでも ⚠ を出す（4値の設計をそのまま踏襲）', () => {
+    const text = describeReportDrift({
+      managerId: 'mgr-1',
+      lastReportAt: '2026-09-16T00:00:00.000Z',
+      lastReportStatus: 'waiting_human',
+      status: 'done',
+      now: NOW,
+    });
+    expect(text).toContain('⚠');
+    expect(text).toContain('waiting_human');
+    expect(text).toContain('done');
+  });
+
+  it('一致していれば空文字（1文字も増えない）', () => {
+    const text = describeReportDrift({
+      managerId: 'mgr-1',
+      lastReportAt: '2026-09-16T00:00:00.000Z',
+      lastReportStatus: 'done',
+      status: 'done',
+      now: NOW,
+    });
+    expect(text).toBe('');
+  });
+
+  it('lastReportStatus が無い（この欄を持たない古い行）と空文字', () => {
+    const text = describeReportDrift({
+      managerId: 'mgr-1',
+      lastReportAt: '2026-09-16T00:00:00.000Z',
+      status: 'running',
+      now: NOW,
+    });
+    expect(text).toBe('');
+  });
+
+  it('lastReportAt が無い（報告が一度も届いていない）と空文字', () => {
+    const text = describeReportDrift({
+      managerId: 'mgr-1',
+      lastReportStatus: 'running',
+      status: 'stopped',
+      now: NOW,
+    });
+    expect(text).toBe('');
+  });
+
+  it('経過時間を「N分前」の形で言う', () => {
+    const text = describeReportDrift({
+      managerId: 'mgr-1',
+      lastReportAt: '2026-09-16T00:55:00.000Z',
+      lastReportStatus: 'running',
+      status: 'done',
+      now: NOW,
+    });
+    expect(text).toContain('5分前');
   });
 });

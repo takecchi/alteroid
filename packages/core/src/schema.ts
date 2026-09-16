@@ -2989,6 +2989,54 @@ export const jobSchema = z.object({
    */
   lastReportAt: z.string().optional(),
   /**
+   * `lastReport` を台帳へ書いた瞬間の status（Issue #1036）。
+   *
+   * ## なぜ在るのか
+   *
+   * `manager_report` / `manager_list` は「この報告がいつのものか」
+   * （`lastReportAt`）は持てても、「その時点で状態が何だったか」を持って
+   * いなかった。読み手は直近に**完了した**ターンの中身を、**いまの状態**
+   * として読んでしまう——クローンが走行中の委譲3本を「止まっている」と
+   * 誤読して停止させた実害（Issue #1036 の事故）。
+   *
+   * ⚠️ **これだけで #1036 の事故そのものが止まるとは名乗らない。** 事故を
+   * 起こしたクローンは、同じ突き合わせを既に受信箱の断り書き
+   * （`inbox-validity.ts` の `describeValidity`）で読んでいたが、それでも
+   * 数えなかった（#1036 コメント）。**行為の側で止めるのは #1037
+   * （`manager_stop` が running を既定で断る。PR #1043）である。** この欄が
+   * 埋めるのは「`manager_report` / `manager_list` が齢も status も1文字も
+   * 出していなかった」という別の——そして純粋な——欠落のほうである。
+   *
+   * ## 何を書くか——「書いた瞬間」は前ではなく後
+   *
+   * `case 'report':`（`manager.ts`）はこの欄と同じ瞬間に `record.job.status`
+   * を `event.status` へ書き換える。**ここに書くのは書き換え後の値
+   * （＝`event.status`）である**——書き換え前の値（この report が届く直前
+   * まで台帳が名乗っていた status。多くは `running`）ではない。理由は、
+   * 突き合わせたい問いが「この報告が運んだ内容は、どの status に対応する
+   * ものか」だからである。`report` イベントの `status` は「このターンを
+   * 終えて、いまはこの状態で待っている」を意味する。前者（書き換え前）を
+   * 採ると、この欄はほぼ常に `running` になり、比較はほぼ常に「違う」から
+   * 始まってしまう。
+   *
+   * ## 何のために読まれるか
+   *
+   * 読む側（`manager-activity.ts` の `describeReportDrift`）は、この欄と
+   * 「いまの `status`」を突き合わせ、違えば「この報告が名乗った前提は
+   * 動いている」と言う。**新しい status の名簿は作らない**——`running` に
+   * 限定せず、焼いた値といまの値が違えば常に出す（比較は
+   * `inbox-validity.ts` の `statusValidity` にそのまま乗せ、`changed` /
+   * `unchanged` の4値の設計をここでも踏襲する）。
+   *
+   * ## 欠けているとき
+   *
+   * **既定値は作らない。** この欄を持たない古い行（この変更より前に書かれた
+   * 行）は比較できないので、`describeReportDrift` は何も足さない
+   * （`describeValidity` の `unclaimed` が空文字を返すのと同じ約束。
+   * AGENTS.md「取れない軸に 0 の行を作る」）。
+   */
+  lastReportStatus: jobStatusSchema.optional(),
+  /**
    * **その委譲がどうだったか**（#1054。自己改善の段1の後半）。値の意味・4状態の
    * 数え方・なぜ履歴をここに積まないかは `appraisalSchema` の doc が持つ
    * （台帳の `Commitment.appraisal` と**同じ軸・同じ3値**である）。
@@ -3066,6 +3114,50 @@ export const jobSchema = z.object({
   lastUnreported: z
     .object({
       reason: z.string(),
+      at: isoDateTime,
+    })
+    .optional(),
+  /**
+   * `manager_stop` で畳まれたターンの本文（Issue #1038）。
+   *
+   * ## `lastReport` とは別の欄にする理由
+   *
+   * `case 'report'`（`manager.ts`）は `record.job.status === 'stopped'` の回
+   * （止めたマネージャーから後から届いた report）を、日誌へは残すが
+   * `lastReport` へは書かずに `return` する（R4「止めた後は受信箱へ回さない」
+   * ——`#emit()` もしない。この判断そのものは覆さない）。**その分岐が、台帳にも
+   * 何も残さないという副作用まで巻き込んでいた**のが #1038 の指す穴——本文は
+   * 日誌にしか残らず、`manager_stop` の応答にも `manager_report` にも1文字も
+   * 出ない。誤って止めたことに気づく契機が、止めた直後には無かった。
+   *
+   * `lastReport` は「完遂した報告」の欄である。畳まれた本文を混ぜると、次に
+   * 読む側は「完遂した報告」と「止めた後に打ち切られた途中経過」を区別できなく
+   * なる——`lastUnreported`（`result` を受け取らないまま畳まれた回）と同じ
+   * 「同じ欄に混ぜない」の理由。
+   *
+   * ## いつ書くか
+   *
+   * `case 'report'` の `record.job.status === 'stopped'` 分岐でだけ書く。
+   * **`record.job.status` は動かさない。`#emit()` もしない**（R4 は覆さない）。
+   *
+   * 通常どおり処理される回（`status === 'stopped'` の早期リターンを通らない
+   * 回）では、`delete` で下ろす——`lastFailure` / `lastUnreported` と同じ
+   * 「応答として終わった回では消える」を守るため。下ろさないと、止めた委譲を
+   * 再開して普通に報告し始めた後も、古い畳まれた本文が居座って
+   * `manager_report` / `manager_list` の見出しを誤らせる。
+   *
+   * ## 順序の注意（`manager_stop` の応答を組む時点では、まだ届いていないことがある）
+   *
+   * `abort()` は `runner.stop()` を待った直後に `record.job.status = 'stopped'`
+   * を書く。一方この report イベントは、HTTP 越しの runner では**別経路で
+   * 後から届く**——`manager_stop` の応答を組む時点でこの欄がまだ埋まっていない
+   * ことは普通にある。**その待ちのために `manager_stop` を止めないこと**
+   * （止まらない委譲を止めたい場面でその待ちが効く）。届けばこの欄へ残るので、
+   * `manager_report` で後から読める。
+   */
+  lastFoldedTurn: z
+    .object({
+      text: z.string(),
       at: isoDateTime,
     })
     .optional(),
