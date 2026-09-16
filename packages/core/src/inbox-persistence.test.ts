@@ -1471,3 +1471,318 @@ describe('manager_message.statusAtDelivery は #restoreUnread を通っても積
     ).toBe(claimedStatus);
   });
 });
+
+/**
+ * `waitFor`（このファイル冒頭）は同期の述語しか取らない——下の新しい歯は
+ * `stores.inbox.peekPending()` のような非同期の値を条件にしたいので、
+ * 述語が `Promise<boolean>` を返せる別名の変種を足す（既存の `waitFor` の
+ * 型は変えない——他の呼び出し元すべてが同期の述語を渡している前提を壊さない
+ * ため）。
+ */
+async function waitForCondition(
+  predicate: () => Promise<boolean> | boolean,
+  label: string,
+): Promise<void> {
+  const started = Date.now();
+  for (;;) {
+    if (await predicate()) return;
+    if (Date.now() - started > 3000) throw new Error(`${label} が起きない`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+/**
+ * `Clone` 全体を通した Issue #954 続き（受信箱側の畳み込み）の再現試験。
+ *
+ * ## 置き場をここに決めた理由
+ *
+ * `inboxCollapseKey`（純関数）の単体試験は `inbox-backlog.test.ts` に置いた
+ * ——鍵の計算だけを見るならそれで十分だが、実際に `Clone#post()` が受信箱・
+ * 台帳への書き込みを畳むかどうかは、`Clone` を通してしか測れない。**この
+ * ファイル自体が「受信箱の永続化を `Clone` 越しに測る」という同じ主題を
+ * 既に持っている**（冒頭の doc）ので、ここへ寄せた。`commitment.test.ts` は
+ * 台帳（`hasOpenManagerDuplicate`、Issue #954 提案3）を主題にしており、
+ * 受信箱側の主題とは層が違う——住み分けはそのまま保つ。
+ *
+ * `bootClone` / `report` / `waitFor` / `idle` / `waitForNoUnread` /
+ * `waitForCommitment` はどれもこのファイルが既に持つヘルパーで、自前の
+ * 足場を新しく組まない（AGENTS.md「自前スタブを書いてはいけない理由」と
+ * 同じ筋）。
+ */
+describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #foldIntoPendingCollapse）', () => {
+  it('429 の再現: 同一マネージャー×同一本文の manager_message を3連投しても、受信箱の未読は1件・台帳も1件のまま', async () => {
+    const stores = createMemoryStores();
+    const { clone } = bootClone(stores, 'hang');
+    await idle();
+
+    const body = "You've hit your session limit · resets 5:10pm (UTC)";
+    // **3連投は同じ同期区間で行う（`await` を挟まない）。** `post()` は同期
+    // 関数で、`#pendingCollapse` の照会・登録もその中で完結する
+    // （`#foldIntoPendingCollapse` の doc「索引の照会と書き込みは同じ刻みの
+    // 中で不可分」）——ここで `await` を挟むと、実装ではなくこのテストの
+    // 都合で畳み込みの窓が閉じてしまう。
+    clone.post(report(body, 'evt-429-1'));
+    clone.post(report(body, 'evt-429-2'));
+    clone.post(report(body, 'evt-429-3'));
+
+    await waitForCommitment(stores, 'evt-429-1');
+
+    const pending = await stores.inbox.peekPending();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.event.id).toBe('evt-429-1');
+
+    const open = (await stores.commitments.list()).entries;
+    expect(open).toHaveLength(1);
+    expect(open[0]?.id).toBe('evt-429-1');
+  });
+
+  it('token-pool の再現: 同一 payload の external（source: token-pool）を3連投しても、受信箱の未読は1件', async () => {
+    const stores = createMemoryStores();
+    const { clone } = bootClone(stores, 'hang');
+    await idle();
+
+    const tokenPoolNotice = (id: string): InboxEvent => ({
+      type: 'external',
+      id,
+      at: '2026-09-01T00:00:00.000Z',
+      source: DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+      payload: { text: '枠が開いた' },
+    });
+    clone.post(tokenPoolNotice('evt-tp-1'));
+    clone.post(tokenPoolNotice('evt-tp-2'));
+    clone.post(tokenPoolNotice('evt-tp-3'));
+
+    await waitForCondition(
+      async () => (await stores.inbox.peekPending()).some((r) => r.event.id === 'evt-tp-1'),
+      '代表（1件目）が受信箱に残る',
+    );
+    await idle();
+
+    const pending = await stores.inbox.peekPending();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.event.id).toBe('evt-tp-1');
+  });
+
+  it('陰性対照: external（source: webhook。デーモン自身の合図ではない）の同文3連投は畳まない（3件とも残る）', async () => {
+    const stores = createMemoryStores();
+    const { clone } = bootClone(stores, 'hang');
+    await idle();
+
+    const webhookNotice = (id: string): InboxEvent => ({
+      type: 'external',
+      id,
+      at: '2026-09-01T00:00:00.000Z',
+      source: 'webhook',
+      payload: { text: '外から届いた同文' },
+    });
+    clone.post(webhookNotice('evt-wh-1'));
+    clone.post(webhookNotice('evt-wh-2'));
+    clone.post(webhookNotice('evt-wh-3'));
+
+    await waitForCondition(
+      async () => (await stores.inbox.peekPending()).length === 3,
+      '3件とも受信箱に残る',
+    );
+
+    const pending = await stores.inbox.peekPending();
+    expect(pending.map((r) => r.event.id).sort()).toEqual(['evt-wh-1', 'evt-wh-2', 'evt-wh-3']);
+  });
+
+  it('陰性対照: human_message の同文2連投は畳まない（2件とも残る）', async () => {
+    const stores = createMemoryStores();
+    const { clone } = bootClone(stores, 'hang');
+    await idle();
+
+    // **`humanMessage()`（`testing.ts`）は `id: \`evt-${text}\`` を自動で
+    // 振るので、同文2連投にそのまま使うと id まで衝突し、`stores.inbox.put`
+    // が同じ id を上書きして「1件になった」ように見えてしまう——それは
+    // 畳み込みではなく id 衝突である。実際の人間の発言は同文でも id は
+    // 必ず別なので、ここは手で id を振って区別する。
+    const at = new Date().toISOString();
+    clone.post({
+      type: 'human_message',
+      id: 'evt-human-1',
+      at,
+      text: '同じ発言',
+      conversationId: 'conv-1',
+    });
+    clone.post({
+      type: 'human_message',
+      id: 'evt-human-2',
+      at,
+      text: '同じ発言',
+      conversationId: 'conv-1',
+    });
+
+    await waitForCondition(
+      async () => (await stores.inbox.peekPending()).length === 2,
+      '2件とも受信箱に残る',
+    );
+  });
+
+  it('陰性対照: manager_message は managerId が違えば畳まない（2件とも残る）', async () => {
+    const stores = createMemoryStores();
+    const { clone } = bootClone(stores, 'hang');
+    await idle();
+
+    const body = '同じ本文';
+    const at = new Date(0).toISOString();
+    clone.post({
+      type: 'manager_message',
+      id: 'evt-mgr-a',
+      at,
+      managerId: 'mgr-a',
+      kind: 'report',
+      text: body,
+    });
+    clone.post({
+      type: 'manager_message',
+      id: 'evt-mgr-b',
+      at,
+      managerId: 'mgr-b',
+      kind: 'report',
+      text: body,
+    });
+
+    await waitForCondition(
+      async () => (await stores.inbox.peekPending()).length === 2,
+      '2件とも受信箱に残る',
+    );
+  });
+
+  it('陰性対照: manager_message は本文が違えば畳まない（2件とも残る）', async () => {
+    const stores = createMemoryStores();
+    const { clone } = bootClone(stores, 'hang');
+    await idle();
+
+    clone.post(report('本文A', 'evt-text-a'));
+    clone.post(report('本文B', 'evt-text-b'));
+
+    await waitForCondition(
+      async () => (await stores.inbox.peekPending()).length === 2,
+      '2件とも受信箱に残る',
+    );
+  });
+
+  it('日誌は畳まない: 3連投しても、生の本文は日誌に3件ぶん残る（429の文言を1文字も失わない）', async () => {
+    const stores = createMemoryStores();
+    const { clone, inputs } = bootClone(stores, 'hang');
+    await idle();
+
+    const body = "You've hit your session limit · resets 5:10pm (UTC)";
+    clone.post(report(body, 'evt-j-1'));
+    clone.post(report(body, 'evt-j-2'));
+    clone.post(report(body, 'evt-j-3'));
+
+    // 代表（1件目）は実際にターンへ渡る（`#handle` の `manager_message` 分岐が
+    // `#journalIncomingBody` を呼んでから `#runTurn` する）。
+    await waitFor(() => inputs.length > 0, '代表がターンへ渡る');
+
+    async function bodyCount(): Promise<number> {
+      const exchanges = await stores.journal.list({ types: ['exchange'] });
+      return exchanges.filter(
+        (entry) =>
+          entry.type === 'exchange' && entry.with === 'manager' && entry.text.includes(body),
+      ).length;
+    }
+
+    // 畳んだ2件（evt-j-2 / evt-j-3）は `#foldIntoPendingCollapse` がその場で
+    // 日誌へ書く。3件そろうまで待つ。
+    await waitForCondition(async () => (await bodyCount()) >= 3, '日誌に3件ぶんの本文が残る');
+
+    expect(await bodyCount()).toBe(3);
+    // **これがこの歯を #954 固有にする条件。** `manager_message`（`kind: 'report'`）
+    // は同じ `managerId` でありさえすれば中身が違っても束ねる既存の別機構
+    // （issue #391。`#mergedManagerReportBatch` は `body` を見ない）があり、
+    // それが束ねてから件数ぶん日誌へ書いても `bodyCount() === 3` は同じく
+    // 満たしてしまう——つまり上の1行だけでは #954 の畳み込みを固有に測れて
+    // いない（`#foldIntoPendingCollapse` を無効化しても #391 経路で緑になる
+    // ことを実測済み）。**#391 は受信箱への書き込み自体は減らさない**ので、
+    // 受信箱が1件のままであることを併せて見れば、束ねる側（#391）ではなく
+    // 畳む側（#954）が効いたことを区別できる。
+    expect(await stores.inbox.peekPending()).toHaveLength(1);
+  });
+
+  it('⭐ 鍵が落ちること: 代表が片付いて受信箱から消えたあと、同じ本文がもう1件届けば新しく1件積まれる（畳み込みが「二度と受け取らない」になっていないことの歯）', async () => {
+    const stores = createMemoryStores();
+    // **'reply' で起こす。** 代表の処理が終わって `#forget` が実際に走り、
+    // `#pendingCollapse` の鍵が落ちることを見るのが要点なので、ターンが
+    // 完了する必要がある（'hang' では永遠に片付かない）。
+    const { clone, inputs } = bootClone(stores, 'reply');
+    await idle();
+
+    const body = '片付いたあとにもう一度届く本文';
+    clone.post(report(body, 'evt-drop-1'));
+    await waitFor(() => inputs.length > 0, '1件目がターンへ渡る');
+    // 片付く（受信箱から消える）まで待つ——鍵が落ちるのはこの後（`#forget` の中、
+    // `#dropPendingCollapse` の doc「呼べるのは代表の合図が実際に片付いて
+    // remove が確定したときだけ」）。
+    await waitForNoUnread(stores);
+
+    // 同じ本文がもう一度届く。**鍵がまだ生きていれば畳まれて0件のまま**
+    // ——それは「二度と受け取らない」という能力の削除であり、この歯は
+    // それを検出する。
+    clone.post(report(body, 'evt-drop-2'));
+    await waitForCondition(
+      async () => (await stores.inbox.peekPending()).some((r) => r.event.id === 'evt-drop-2'),
+      '2件目が新しく受信箱に積まれる',
+    );
+
+    const pending = await stores.inbox.peekPending();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.event.id).toBe('evt-drop-2');
+
+    await clone.stop();
+  });
+
+  it('器の入れ替えを跨いでも畳む: 未読が残った状態で Clone を作り直しても（#restoreUnread が索引を作り直す）、同じ本文が来れば畳まれる', async () => {
+    const stores = createMemoryStores();
+    const body = '器の入れ替えを跨ぐ本文';
+
+    // 1つ目の器。報告を受け取ったところで死ぬ（stop を呼ばない＝片付けを通ら
+    // ない——このファイル冒頭の doc「器の死は Clone を止めずに捨てて、同じ
+    // Stores から作り直すで再現する」）。
+    const dying = bootClone(stores, 'hang');
+    await idle();
+    dying.clone.post(report(body, 'evt-cross-1'));
+    await waitForCondition(
+      async () => (await stores.inbox.peekPending()).length === 1,
+      '1件目が受信箱に残る',
+    );
+
+    // 2つ目の器。記憶ストアだけが生き残っている。`#restoreUnread` が拾い直した
+    // 未読から `#pendingCollapse` の索引を作り直す（`#restoreUnread` の doc
+    // 「器の入れ替えを跨ぐと空になる」）。**'hang' で起こす** ——'reply' だと
+    // 拾い直した1件目がすぐ片付いて鍵が落ち、直後の同文が新しい代表になって
+    // しまい、この歯が測りたい「索引の再構築」ではなく直上の「鍵が落ちる」歯
+    // と同じものを測ることになる。
+    const reborn = bootClone(stores, 'hang');
+    await waitFor(() => reborn.inputs.length > 0, '#restoreUnread が拾い直した合図が処理に入る');
+
+    // 索引が再構築されているので、同じ本文がもう一度届いても畳まれる。
+    reborn.clone.post(report(body, 'evt-cross-2'));
+    await idle();
+
+    const pending = await stores.inbox.peekPending();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.event.id).toBe('evt-cross-1');
+  });
+
+  it('停止中の枝でも畳む: stop() 後に同文が2件届いても、受信箱の行は1件しか増えない', async () => {
+    const stores = createMemoryStores();
+    const { clone } = bootClone(stores, 'reply');
+    // 何も処理させないまま停止する——`#query` が無いので `stop()` は蒸留を
+    // 投げずに即座に片付く（`stop()` の doc「`if (this.#query)` の中でだけ
+    // 蒸留を投げる」）。
+    await clone.stop();
+
+    const body = '停止中に届いた同文';
+    clone.post(report(body, 'evt-stopped-1'));
+    clone.post(report(body, 'evt-stopped-2'));
+
+    await idle();
+    const pending = await stores.inbox.peekPending();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.event.id).toBe('evt-stopped-1');
+  });
+});

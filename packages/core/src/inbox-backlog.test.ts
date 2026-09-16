@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  DAEMON_RUNNER_REGISTRY_SOURCE,
+  DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+} from './daemon-self-notice.js';
+import {
   INBOX_BACKLOG_LOUD_THRESHOLD,
   describeInboxBacklogBreakdown,
   inboxBacklogDedupeKey,
+  inboxCollapseKey,
   matchesInboxRemoveManyFilter,
   summarizeInboxBacklog,
   type InboxBacklogBreakdown,
@@ -309,6 +314,124 @@ describe('inboxBacklogDedupeKey', () => {
     };
 
     expect(inboxBacklogDedupeKey(a)).not.toBe(inboxBacklogDedupeKey(b));
+  });
+});
+
+describe('inboxCollapseKey（Issue #954 続き。`Clone#post()` が受信箱で畳んでよいかを決める鍵）', () => {
+  it('manager_message: managerId・kind・text が同じなら同じ鍵（id・at は無視する）', () => {
+    const a: InboxEvent = {
+      ...SAMPLE_EVENTS.manager_message,
+      id: 'id-a',
+      at: '2026-09-11T00:00:00.000Z',
+    };
+    const b: InboxEvent = {
+      ...SAMPLE_EVENTS.manager_message,
+      id: 'id-b',
+      at: '2026-09-11T05:00:00.000Z',
+    };
+    expect(inboxCollapseKey(a)).toBe(inboxCollapseKey(b));
+    expect(inboxCollapseKey(a)).toBeDefined();
+  });
+
+  it('manager_message: managerId が違えば別の鍵（陰性対照）', () => {
+    const a = SAMPLE_EVENTS.manager_message;
+    const b: InboxEvent = { ...a, id: 'id-b', managerId: 'mgr-2' };
+    expect(inboxCollapseKey(a)).not.toBe(inboxCollapseKey(b));
+  });
+
+  it('manager_message: kind が違えば別の鍵（陰性対照）', () => {
+    const a = SAMPLE_EVENTS.manager_message;
+    const b: InboxEvent = { ...a, id: 'id-b', kind: 'question' };
+    expect(inboxCollapseKey(a)).not.toBe(inboxCollapseKey(b));
+  });
+
+  it('manager_message: text が違えば別の鍵（陰性対照）', () => {
+    const a = SAMPLE_EVENTS.manager_message;
+    const b: InboxEvent = { ...a, id: 'id-b', text: '別の報告' };
+    expect(inboxCollapseKey(a)).not.toBe(inboxCollapseKey(b));
+  });
+
+  it('external + source: token-pool（DAEMON_TOKEN_POOL_REOPENED_SOURCE）: 同一 payload なら同じ鍵', () => {
+    const a: InboxEvent = {
+      type: 'external',
+      id: 'id-a',
+      at: '2026-09-11T00:00:00.000Z',
+      source: DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+      payload: { text: '認証トークンが通る状態に戻った' },
+    };
+    const b: InboxEvent = {
+      ...a,
+      id: 'id-b',
+      at: '2026-09-11T00:00:00.100Z',
+      payload: { text: '認証トークンが通る状態に戻った' },
+    };
+    expect(inboxCollapseKey(a)).toBe(inboxCollapseKey(b));
+    expect(inboxCollapseKey(a)).toBeDefined();
+  });
+
+  it('external + source: token-pool: payload が違えば別の鍵（陰性対照）', () => {
+    const a: InboxEvent = {
+      type: 'external',
+      id: 'id-a',
+      at: '2026-09-11T00:00:00.000Z',
+      source: DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+      payload: { text: '（この間に同じ合図が3件届き、1件にまとめた）' },
+    };
+    const b: InboxEvent = {
+      ...a,
+      id: 'id-b',
+      payload: { text: '（この間に同じ合図が5件届き、1件にまとめた）' },
+    };
+    expect(inboxCollapseKey(a)).not.toBe(inboxCollapseKey(b));
+  });
+
+  it('external + source: runner-registry（DAEMON_RUNNER_REGISTRY_SOURCE）も畳む対象で、同一 payload なら同じ鍵', () => {
+    const a: InboxEvent = {
+      type: 'external',
+      id: 'id-a',
+      at: '2026-09-11T00:00:00.000Z',
+      source: DAEMON_RUNNER_REGISTRY_SOURCE,
+      payload: { detail: 'runner が登録に失敗した' },
+    };
+    const b: InboxEvent = { ...a, id: 'id-b', payload: { detail: 'runner が登録に失敗した' } };
+    expect(inboxCollapseKey(a)).toBe(inboxCollapseKey(b));
+    expect(inboxCollapseKey(a)).toBeDefined();
+  });
+
+  /**
+   * ⚠️ ここが肝——`isDaemonSelfNotice` が偽を返す `external`（外から
+   * `POST /events` 経由で渡されたもの）は畳んではいけない。畳んで同一鍵に
+   * なると、`Clone#post()` 側は「alteroid 自身が合成した知らせ」と誤って
+   * 受信箱・台帳への書き込みを飛ばし、外から届いた本物の別イベントを
+   * 1件失うのと同じ結果になる。
+   */
+  it('陰性対照: external + source: webhook（デーモン自身の合図ではない）は undefined', () => {
+    const event: InboxEvent = SAMPLE_EVENTS.external;
+    expect(event.type === 'external' && event.source).toBe('webhook-a');
+    expect(inboxCollapseKey(event)).toBeUndefined();
+  });
+
+  it.each(
+    ALL_TYPES.filter((type) => type !== 'manager_message' && type !== 'external') as Exclude<
+      InboxEvent['type'],
+      'manager_message' | 'external'
+    >[],
+  )('陰性対照: %s は畳む対象ではないので常に undefined', (type) => {
+    expect(inboxCollapseKey(SAMPLE_EVENTS[type])).toBeUndefined();
+  });
+
+  it('external: payload が直列化できない（循環参照）なら畳まない側へフェイルオープンし undefined を返す', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const circular: any = { text: 'x' };
+    circular.self = circular;
+    const event: InboxEvent = {
+      type: 'external',
+      id: 'id-a',
+      at: '2026-09-11T00:00:00.000Z',
+      source: DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+      payload: circular,
+    };
+    expect(inboxCollapseKey(event)).toBeUndefined();
   });
 });
 

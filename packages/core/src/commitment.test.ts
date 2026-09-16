@@ -877,6 +877,22 @@ describe('引き受けたまま終わっていない仕事', () => {
    * 実際に読んだ入力の件数で確かめてから進める——さもないと2件目・3件目の
    * 重複確認が1件目の書き込みより先に走り、畳めたはずの行が畳めない（純粋な
    * promise の連鎖なので、実際の I/O を挟む在庫ストアではこの窓はさらに狭い）。
+   *
+   * ⚠️ **この待ち方そのものが、受信箱側の畳み込み（#954 続き。
+   * `#foldIntoPendingCollapse` / `inboxCollapseKey`）を素通りさせる。** 1件目の
+   * ターンが完全に終わって `#forget` が `#pendingCollapse` の鍵を落とすまで
+   * （`fakeSdk` の `reply` は応答が速く、`#forget` は数 ms で終わる）、
+   * `waitFor` は複数回ポーリングするだけの猶予を与えてしまう——実測では
+   * 2件目・3件目を post する時点で1件目は**受信箱からもう消えている**
+   * （`#stores.inbox.peekPending()` は毎回 `[]`。`#foldIntoPendingCollapse` の
+   * 先頭を `return false` に固定して同じ場所を測っても同じく `[]` になることを
+   * 確認済み——つまりこの位置では畳み込みの有無を1文字も測れていない）。
+   * ⟹ **ここで測れるのは「連投しても台帳が1行のまま」（#1035
+   * `hasOpenManagerDuplicate`）だけであって、受信箱側の畳み込みではない。**
+   * 受信箱側の畳み込みは、連投どうしのあいだに待ちを挟まない歯
+   * （`packages/core/src/inbox-persistence.test.ts` の
+   * 「429 の再現: 同一マネージャー×同一本文の manager_message を3連投しても、
+   * 受信箱の未読は1件・台帳も1件のまま」）が別に持つ。
    */
   it('429 連投の再現: 同一マネージャー×同一本文の3連投は台帳で1行に畳まれる', async () => {
     const s = setup();
@@ -896,9 +912,11 @@ describe('引き受けたまま終わっていない仕事', () => {
     s.clone.post(managerMessage(body, 'evt-429-3'));
     await waitFor(() => inputs().length >= 3, '3件目がターンへ渡る');
 
-    // 3件とも受信箱には別々の合図として届いている（`#remember` はここより
-    // 前で書き終えている——畳むのは台帳だけという doc の主張をここでも見る）。
-    expect((await s.stores.inbox.claimPending()).length).toBeGreaterThanOrEqual(0);
+    // **待ちを挟んだこの cadence では、1件目は既に処理を終えて受信箱から
+    // 消えている**（上の doc）。`toBeGreaterThanOrEqual(0)` という常に真の
+    // 式ではなく、実測どおりの `toHaveLength(0)` に固定する——ここが `1`
+    // であるべきという主張はしない（それは別の歯の役目。上の doc）。
+    expect(await s.stores.inbox.peekPending()).toHaveLength(0);
 
     const open = (await s.stores.commitments.list()).entries;
     expect(open).toHaveLength(1);
