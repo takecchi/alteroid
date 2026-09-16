@@ -30,37 +30,6 @@ import { createMemoryStores } from './testing.js';
  * 1周目と2周目のあいだに「2周目でだけ壊れる状態」を挟むこと、と同じ形である。
  */
 
-/**
- * **`listJobs()` が写しを返す `JobStore`**（fs / pg と同じ振る舞い）。
- *
- * ## ⚠️ なぜこれが要るのか —— インメモリの器は、この歯が測りたい穴を隠す
- *
- * `createMemoryStores()` の `JobStore` は **`putJob` が受け取った参照をそのまま
- * `Map` に入れ、`listJobs()` がその参照を返す**（実測: `read === job` が `true`）。
- * ⟹ 「台帳から読んで書き換える」形のコードが、**プールの像をも同時に書き換えて
- * しまう** —— 踏み消しのバグが在っても、インメモリの上では起きない。
- *
- * **fs / pg は JSON を経由するので必ず写しになる。** ⟹ 本番でだけ壊れる。
- *
- * **実測（変異試験、2026-09-16）:** この写しを噛ませる前は、`ManagerPool.appraise`
- * を「像を見ずに台帳から読む」形（＝踏み消される形）へ変異させても、この歯は
- * **6件とも緑のまま**だった。噛ませた後は⭐の1件が赤くなる。
- *
- * ⟹ **インメモリの器をそのまま使う歯は、「台帳の写しと像が別物である」ことに
- * 依存する性質を測れない。** 同じ形の歯を書く人はここを読むこと。
- */
-function copyingJobStore(inner: Stores['jobs']): Stores['jobs'] {
-  return {
-    ...inner,
-    async listJobs() {
-      return (await inner.listJobs()).map((job) => structuredClone(job));
-    },
-    async putJob(job) {
-      await inner.putJob(structuredClone(job));
-    },
-  };
-}
-
 const START = '2026-09-01T00:00:00.000Z';
 
 interface Fake {
@@ -139,10 +108,12 @@ async function setup(managerId = 'mgr-appraise'): Promise<Setup> {
     sessionId: `sess-${managerId}`,
     runnerId: 'runner-primary',
   };
-  const base = createMemoryStores();
-  // **写しを返す器で回す**（`copyingJobStore` の doc）。素のインメモリだと、
-  // この歯が測りたい踏み消しが起きない。
-  const stores: Stores = { ...base, jobs: copyingJobStore(base.jobs) };
+  // **素の `createMemoryStores()` で足りる（#1072 以降）。** それまでは
+  // ここに写しを取る器を噛ませていた —— 偽物の `JobStore` が `putJob` の参照を
+  // そのまま返していたので、**この歯が測りたい踏み消しが起きなかった**
+  // （変異を当てても6件とも緑）。器の側を直したので、その手当ては要らない
+  // （契約は `store-isolation-contract.ts` が持つ）。
+  const stores = createMemoryStores();
   await stores.jobs.putJob(job);
 
   const fake = fakeRunner();

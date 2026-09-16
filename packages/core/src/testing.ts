@@ -441,13 +441,15 @@ export function createMemoryStores(): Stores {
     async append(input: JournalEntryInput) {
       const entry = { ...input, id: nextId(), at: new Date().toISOString() } as JournalEntry;
       entries.push(entry);
-      return entry;
+      // **返すのは写しである**（#1072）。返した行を呼び出し元が書き換えると、
+      // fs / pg では店は汚れないが、ここでは汚れていた。
+      return isolate(entry);
     },
     async list(query: JournalQuery = {}) {
       // **`order` は全順序を決めるところで最初に効かせる。** 既定 `desc` は
       // 従来どおり push の逆順（新しい順）。`asc` は push 順そのまま。
       const order = query.order ?? 'desc';
-      let found = order === 'desc' ? [...entries].reverse() : [...entries];
+      let found = (order === 'desc' ? [...entries].reverse() : [...entries]).map(isolate);
 
       // **`after` は `types` / `with` / `since` / `until` / `limit` より前に
       // 効かせる**（`JournalQuery.after` の doc、issue #432 の2本目）。錨の
@@ -503,25 +505,48 @@ export function createMemoryStores(): Stores {
     },
   };
 
+  /**
+   * **境界で写しを取る**（#1072）。
+   *
+   * ## なぜ偽物にこれが要るのか
+   *
+   * **fs / pg は JSON を経由するので必ず写しになる**（ファイルへ書いて読み直す /
+   * jsonb へ入れて取り出す）。この偽物が `Map` に参照をそのまま入れていたあいだ、
+   * **「台帳から読んで書き換える」形のコードが、呼び出し元が握っている同じ
+   * オブジェクトまで書き換えていた** —— ⟹ その差に依存するバグが、歯の上では
+   * 起きない。**本番でだけ壊れる。**
+   *
+   * ⭐ **実際に歯を殺した（#1054 の作業中に変異試験で発見）。**
+   * `ManagerPool.appraise` の踏み消しを測る歯へ、わざと壊す変異を当てても
+   * **6件とも緑のまま**だった。契約は `store-isolation-contract.ts` が持つ。
+   *
+   * **`structuredClone` を使う。** ここに入るのは zod を通った素のデータだけで
+   * （関数も class も入らない）、`JSON.parse(JSON.stringify(...))` と違って
+   * `undefined` の欄を落とさない —— 落とすと「無い」と「undefined として在る」の
+   * 区別が偽物の側だけで消える。
+   */
+  const isolate = <T>(value: T): T => structuredClone(value);
+
   const jobStore: JobStore = {
     async listJobs() {
-      return [...jobs.values()];
+      return [...jobs.values()].map(isolate);
     },
     async putJob(job) {
-      jobs.set(job.id, job);
+      jobs.set(job.id, isolate(job));
     },
     async listApprovals(options = {}) {
-      const all = [...approvals.values()];
+      const all = [...approvals.values()].map(isolate);
       // 未回答かつ未取り下げだけを「保留」とする（#963。3実装で揃える）。
       return options.pendingOnly
         ? all.filter((a) => a.answeredAt === undefined && a.withdrawnAt === undefined)
         : all;
     },
     async getApproval(id) {
-      return approvals.get(id) ?? null;
+      const found = approvals.get(id);
+      return found === undefined ? null : isolate(found);
     },
     async putApproval(approval) {
-      approvals.set(approval.id, approval);
+      approvals.set(approval.id, isolate(approval));
     },
     async clear() {
       const removed = { jobs: jobs.size, approvals: approvals.size };
@@ -533,13 +558,14 @@ export function createMemoryStores(): Stores {
 
   const scheduleStore: ScheduleStore = {
     async list() {
-      return [...schedules.values()].sort((a, b) => a.kind.localeCompare(b.kind));
+      return [...schedules.values()].sort((a, b) => a.kind.localeCompare(b.kind)).map(isolate);
     },
     async get(kind) {
-      return schedules.get(kind) ?? null;
+      const found = schedules.get(kind);
+      return found === undefined ? null : isolate(found);
     },
     async put(entry) {
-      schedules.set(entry.kind, entry);
+      schedules.set(entry.kind, isolate(entry));
     },
     async remove(kind) {
       schedules.delete(kind);
@@ -585,7 +611,7 @@ export function createMemoryStores(): Stores {
    */
   const commitmentStore: CommitmentStore = {
     async list(options) {
-      const all = [...commitments.values()];
+      const all = [...commitments.values()].map(isolate);
       const open = all
         .filter((entry) => entry.closedAt === undefined)
         .sort((a, b) => a.at.localeCompare(b.at));
@@ -608,11 +634,12 @@ export function createMemoryStores(): Stores {
       return { entries: [...open, ...closed], unreadable: [], trimmedClosed: 0 };
     },
     async get(id) {
-      return commitments.get(id) ?? null;
+      const found = commitments.get(id);
+      return found === undefined ? null : isolate(found);
     },
     async open(entry) {
       if (commitments.has(entry.id)) return false;
-      commitments.set(entry.id, entry);
+      commitments.set(entry.id, isolate(entry));
       return true;
     },
     async close(id, at, reason, by: CommitmentClosedBy) {

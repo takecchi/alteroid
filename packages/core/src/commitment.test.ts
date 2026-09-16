@@ -12,6 +12,7 @@ import {
   isDaemonSelfNotice,
 } from './clone.js';
 import { verifyCommitmentAppraisalContract } from './commitment-appraisal-contract.js';
+import { verifyStoreIsolationContract } from './store-isolation-contract.js';
 import { buildActivityDigest } from './digest.js';
 import type { CloneHost } from './host.js';
 import { renderMemoryDocuments } from './memory.js';
@@ -1861,6 +1862,10 @@ describe('台帳の評定', () => {
   it('評定の契約（#1054。3実装で同じことを測る）', async () => {
     const stores = createMemoryStores();
     await verifyCommitmentAppraisalContract(stores.commitments);
+  });
+
+  it('ストアが返す値は書いた側の握りと別物である（#1072。3実装で同じことを測る）', async () => {
+    await verifyStoreIsolationContract(createMemoryStores());
   });
 
   it('未評定の行は字面を持たない（印が無いことが「まだ評定していない」である）', () => {
