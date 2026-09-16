@@ -6,6 +6,7 @@ import {
   captureStderr,
   renderMemoryDocuments,
   verifyCommitmentAppraisalContract,
+  verifyCommitmentFoldContract,
   verifyStoreIsolationContract,
   verifyJournalStoreOrderContract,
   verifyJournalStoreQueryEdgeContract,
@@ -1412,6 +1413,10 @@ describe('FsJournalStore', () => {
       await verifyCommitmentAppraisalContract(stores.commitments);
     });
 
+    it('畳み込みの契約（#1041。3実装で同じことを測る。⚠ 名乗れるのはプロセス内で原子であることまで）', async () => {
+      await verifyCommitmentFoldContract(stores.commitments);
+    });
+
     it('ストアが返す値は書いた側の握りと別物である（#1072。3実装で同じことを測る）', async () => {
       await verifyStoreIsolationContract(stores);
     });
@@ -2265,12 +2270,13 @@ describe('FsCommitmentStore', () => {
   it('同じ id で二度 open しても上書きされない（1回目の本文が残る）', async () => {
     expect(
       await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', '最初の依頼')),
-    ).toBe(true);
+    ).toEqual({ opened: true, folded: false });
 
     // 受信箱の合図は配り直されうるので、同じ id の自動 open は普通に二度来る
     expect(
+      // **`folded` は偽である**（#1041）—— 畳んだのではなく「同じ id が既に在る」。
       await stores.commitments.open(commitment('c-1', '2026-08-14T00:00:00.000Z', '別の本文')),
-    ).toBe(false);
+    ).toEqual({ opened: false, folded: false });
 
     const entry = await stores.commitments.get('c-1');
     expect(entry?.body).toBe('最初の依頼');
@@ -2285,7 +2291,7 @@ describe('FsCommitmentStore', () => {
     // 器が落ちて合図が配り直された、を模す
     expect(
       await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す')),
-    ).toBe(false);
+    ).toEqual({ opened: false, folded: false });
 
     expect(await stores.commitments.list()).toEqual({
       entries: [],

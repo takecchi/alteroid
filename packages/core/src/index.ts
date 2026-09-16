@@ -366,6 +366,7 @@ export {
  */
 export { verifyTranscriptArchiveContract } from './archive-contract.js';
 export { verifyCommitmentAppraisalContract } from './commitment-appraisal-contract.js';
+export { verifyCommitmentFoldContract } from './commitment-fold-contract.js';
 export { verifyStoreIsolationContract } from './store-isolation-contract.js';
 /**
  * `archive()` が積む瞬間に判定する、直前の退避との連続性(#698)。畳まない

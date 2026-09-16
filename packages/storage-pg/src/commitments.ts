@@ -233,6 +233,9 @@ export class PgCommitmentStore implements CommitmentStore {
       with existing as (
         select id from ${commitments}
         where ${sql.raw(foldable ? 'true' : 'false')}
+          -- **自分自身を畳む相手にしない。** 同じ id の2回目は「畳んだ」ではなく
+          -- 「既に在る」である（in-memory / fs は id を先に見るので最初からこの順）。
+          and id <> ${value.id}
           and closed_at is null
           and commitment->>'origin' = 'manager'
           and commitment->>'source' = ${value.source ?? ''}
@@ -257,9 +260,13 @@ export class PgCommitmentStore implements CommitmentStore {
     `);
     const row = readOpenProbeRow(result);
     if (row.inserted !== null) return { opened: true, folded: false };
+    // **`id_seen` を `folded_into` より先に見る。** 同じ id が既に在るなら、たまたま
+    // 同文の別の行が在っても答えは「既に在る」である —— in-memory / fs は id の
+    // 判定を先に置いているので、順序を揃えないとここだけ違う答えを返す
+    // （`commitment-fold-contract.ts` の 6 がこのずれを落とす）。
+    if (row.id_seen) return { opened: false, folded: false };
     if (row.folded_into !== null)
       return { opened: false, folded: true, foldedInto: row.folded_into };
-    if (row.id_seen) return { opened: false, folded: false };
     // 索引が弾いた＝同時に来た2件目である。畳んだことは分かるが、畳んだ先は
     // この文からは見えない（doc の最後の分岐）。
     return { opened: false, folded: true };

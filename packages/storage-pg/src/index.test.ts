@@ -4,6 +4,7 @@ import {
   createRunnerRegistry,
   renderMemoryDocuments,
   verifyCommitmentAppraisalContract,
+  verifyCommitmentFoldContract,
   verifyStoreIsolationContract,
   verifyJournalStoreOrderContract,
   verifyJournalStoreQueryEdgeContract,
@@ -1252,6 +1253,10 @@ describe('PgJournalStore', () => {
       await verifyCommitmentAppraisalContract(stores.commitments);
     });
 
+    it('畳み込みの契約（#1041。3実装で同じことを測る。⚠ 名乗れるのはプロセス内で原子であることまで）', async () => {
+      await verifyCommitmentFoldContract(stores.commitments);
+    });
+
     it('ストアが返す値は書いた側の握りと別物である（#1072。3実装で同じことを測る）', async () => {
       await verifyStoreIsolationContract(stores);
     });
@@ -2351,12 +2356,13 @@ describe('PgCommitmentStore', () => {
   it('同じ id で二度 open しても上書きされない（1回目の本文が残る）', async () => {
     expect(
       await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', '最初の依頼')),
-    ).toBe(true);
+    ).toEqual({ opened: true, folded: false });
 
     // 受信箱の合図は配り直されうるので、同じ id の自動 open は普通に二度来る
     expect(
+      // **`folded` は偽である**（#1041）—— 畳んだのではなく「同じ id が既に在る」。
       await stores.commitments.open(commitment('c-1', '2026-08-14T00:00:00.000Z', '別の本文')),
-    ).toBe(false);
+    ).toEqual({ opened: false, folded: false });
 
     const entry = await stores.commitments.get('c-1');
     expect(entry?.body).toBe('最初の依頼');
@@ -2371,7 +2377,7 @@ describe('PgCommitmentStore', () => {
     // 器が落ちて合図が配り直された、を模す
     expect(
       await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す')),
-    ).toBe(false);
+    ).toEqual({ opened: false, folded: false });
 
     expect(await stores.commitments.list()).toEqual({
       entries: [],
@@ -2433,8 +2439,12 @@ describe('PgCommitmentStore', () => {
       stores.commitments.open(commitment('c-1', '2026-08-12T00:00:02.000Z', '三度目')),
     ]);
 
-    // 「いま自分が開いた」と言えるのは1本だけ
-    expect(results.filter(Boolean)).toHaveLength(1);
+    // 「いま自分が開いた」と言えるのは1本だけ。**`filter(Boolean)` で数えないこと**
+    // （#1041）—— `open` の戻りはオブジェクトになったので、開けなかった回も truthy
+    // である。数えるのは `opened` そのものでなければならない。
+    expect(results.filter((result) => result.opened)).toHaveLength(1);
+    // 同じ id の衝突は「畳んだ」ではない（畳み込みは本文で決まる）
+    expect(results.filter((result) => result.folded)).toHaveLength(0);
     const rows = (await stores.commitments.list()).entries;
     expect(rows).toHaveLength(1);
     // 後から来たものが先の行を上書きしていない（上書きすると片付いた仕事が蘇る）

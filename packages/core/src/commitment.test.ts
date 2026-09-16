@@ -12,6 +12,7 @@ import {
   isDaemonSelfNotice,
 } from './clone.js';
 import { verifyCommitmentAppraisalContract } from './commitment-appraisal-contract.js';
+import { verifyCommitmentFoldContract } from './commitment-fold-contract.js';
 import { verifyStoreIsolationContract } from './store-isolation-contract.js';
 import { buildActivityDigest } from './digest.js';
 import type { CloneHost } from './host.js';
@@ -230,11 +231,19 @@ describe('引き受けたまま終わっていない仕事', () => {
     const stores = createMemoryStores();
     const event = humanMessage('一度だけやる仕事');
 
-    expect(await stores.commitments.open(commitmentFor(event) as Commitment)).toBe(true);
+    expect(await stores.commitments.open(commitmentFor(event) as Commitment)).toEqual({
+      opened: true,
+      folded: false,
+    });
     await stores.commitments.close(event.id, new Date().toISOString(), '済んだ', 'clone');
 
-    // 配り直し = 同じ id でもう一度開こうとする
-    expect(await stores.commitments.open(commitmentFor(event) as Commitment)).toBe(false);
+    // 配り直し = 同じ id でもう一度開こうとする。**`folded` は偽である**（#1041）——
+    // 畳んだのではなく「同じ id が既に在る」のであって、この2つを取り違えると
+    // `#commitmentNoticeFor` が断る理由も取り違える（`CommitOutcome` の doc）。
+    expect(await stores.commitments.open(commitmentFor(event) as Commitment)).toEqual({
+      opened: false,
+      folded: false,
+    });
 
     expect((await stores.commitments.list()).entries).toHaveLength(0);
   });
@@ -1973,6 +1982,11 @@ describe('台帳の評定', () => {
   it('評定の契約（#1054。3実装で同じことを測る）', async () => {
     const stores = createMemoryStores();
     await verifyCommitmentAppraisalContract(stores.commitments);
+  });
+
+  it('畳み込みの契約（#1041。3実装で同じことを測る。⚠ 名乗れるのはプロセス内で原子であることまで）', async () => {
+    const stores = createMemoryStores();
+    await verifyCommitmentFoldContract(stores.commitments);
   });
 
   it('ストアが返す値は書いた側の握りと別物である（#1072。3実装で同じことを測る）', async () => {
