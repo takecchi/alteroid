@@ -2825,3 +2825,142 @@ describe('exhausted は何も撒かない（器の環境変数へのフォール
     expect(h.spreadCalls).toEqual([]);
   });
 });
+
+/**
+ * **`recovered` は記録に対してはエッジだが、通知の層から見るとレベルである**
+ * （Issue #1051）。
+ *
+ * ## 何を測っているか —— 「なぜ同じ本文が数千件出たか」の機構そのもの
+ *
+ * 実運用で「認証トークンが通る状態に戻った」の**完全に同一の本文**が 35 ミリ秒に
+ * 3件、24時間で 3297 件積まれた。起票時の推測は「回復の検出がポーリングで、
+ * 回復状態が続く限り毎回発行している」だったが、**それは外れている** —— 下の
+ * 1本目が示すとおり、同じ回復は1回しか立たない。
+ *
+ * **本当の機構は往復である。** `recovered` が立つ条件は `hasRejection`
+ * （`lastRejectedAt` か `cooldownUntil` が在る）で、立った回にその記録は
+ * `markTokenUsable` が消す。⟹ **記録に対してはエッジ。** ところが枠に当たって
+ * いる間は、**別の層が 429 を踏むたびにその記録がまた書かれる** —— 次に
+ * どこかのターンが成功した瞬間、また1件立つ。層が何本も走っていれば、この
+ * 往復はミリ秒間隔で回る。
+ *
+ * ## ⚠️ ここは「直すべき欠陥」を固定しているのではない
+ *
+ * **回し手の側は正しい。** 往復が起きている間、記録の上では回復が本当に N 回
+ * 起きており、`recovered` の日誌行はその N 回を残すべきものである（隣の
+ * describe「recovered の日誌行は、受信箱へ配ったかどうかと無関係に必ず出る」
+ * ——`apps/daemon/src/index.test.ts`——と同じ立場）。**減らすのは日誌でも母数でも
+ * なく、クローンへ配る回数だけである。**
+ *
+ * ⟹ **この2本が固定しているのは「畳み込みをここへ置かない」という判断のほうで
+ * ある。** ここが黙って畳み始めたら、日誌から往復が消える。畳むのは
+ * `apps/daemon/src/index.ts` の門（`worthDeliveringNow`）で、その歯は
+ * `apps/daemon/src/index.test.ts` に在る。
+ */
+describe('#1051: recovered は記録に対してエッジだが、429 が記録を撃ち直すと何度でも立つ', () => {
+  /** 現役が「止まった記録」を持っている状態から始める（プールは2本）。 */
+  async function seedBlockedActive(h: Harness): Promise<void> {
+    await h.stores.tokens.replace([
+      {
+        id: 'tok-a',
+        label: 'first',
+        value: 'value-a',
+        order: 0,
+        lastRejectedAt: '2026-08-25T02:00:00.000Z',
+        lastRejectedReason: 'reached',
+        cooldownUntil: Date.parse('2026-08-25T08:00:00.000Z'),
+        cooldownSource: 'default',
+      },
+      { id: 'tok-b', label: 'second', value: 'value-b', order: 1 },
+    ]);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: AT });
+  }
+
+  /** いまの世代を名乗る「ターンが成功した」の観測。 */
+  const turnSucceeded = {
+    reason: 'turn_succeeded' as const,
+    current: {
+      verdict: { verdict: 'usable' as const },
+      origin: {
+        source: 'turn_success' as const,
+        observedBy: { tokenId: 'tok-a', generation: 1 },
+      },
+    },
+  };
+
+  it('記録が撃ち直されなければ、同じ回復は1回しか立たない（＝記録に対してはエッジ）', async () => {
+    const h = harness();
+    await seedBlockedActive(h);
+
+    const first = await h.rotator.reconsider(turnSucceeded);
+    const second = await h.rotator.reconsider(turnSucceeded);
+    const third = await h.rotator.reconsider(turnSucceeded);
+
+    // 1本目だけが「戻った」を運ぶ。
+    expect(first).toMatchObject({
+      kind: 'ignored',
+      recovered: { tokenId: 'tok-a', label: 'first', source: 'turn_success' },
+    });
+    // **`recovered` の欄そのものが無いことを見る。** `toMatchObject` は
+    // 「無い」を測れないので、欄を直接読む。
+    expect('recovered' in second ? second.recovered : undefined).toBeUndefined();
+    expect('recovered' in third ? third.recovered : undefined).toBeUndefined();
+    // 記録は1本目で消えている（2本目以降が立たない理由がこれである）。
+    expect(await isCooling(h, 'tok-a')).toBe(false);
+  });
+
+  it('🔴 429 の観測とターンの成功が交互に届くと、「戻った」は届いた回数だけ立つ', async () => {
+    const h = harness();
+    // **プールは1本だけにする。** 候補が在ると `observe` が回してしまい、
+    // 現役が入れ替わって往復にならない（実運用で同じ本文が並んだのは、
+    // 回らずに同じ鍵のまま往復していたからである）。
+    await h.stores.tokens.replace([{ id: 'tok-a', label: 'first', value: 'value-a', order: 0 }]);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: AT });
+
+    const recovered: unknown[] = [];
+    for (let round = 0; round < 3; round += 1) {
+      // どこかの層が 429 を踏んだ ⟹ 現役の行にまた冷却が書かれる。
+      const rejected = await h.rotator.observe({
+        notice: reached,
+        observedBy: { tokenId: 'tok-a', generation: 1 },
+      });
+      expect(rejected.kind).toBe('exhausted');
+      expect(await isCooling(h, 'tok-a')).toBe(true);
+
+      // 別の層のターンが成功した ⟹ 記録が消え、「戻った」が立つ。
+      const outcome = await h.rotator.reconsider(turnSucceeded);
+      recovered.push('recovered' in outcome ? outcome.recovered : undefined);
+    }
+
+    // **3周とも立つ。** これが「同一本文が数千件」の機構である。
+    expect(recovered).toEqual([
+      { tokenId: 'tok-a', label: 'first', source: 'turn_success' },
+      { tokenId: 'tok-a', label: 'first', source: 'turn_success' },
+      { tokenId: 'tok-a', label: 'first', source: 'turn_success' },
+    ]);
+  });
+
+  it('冷却明け（#833 の reopened）も記録に対してエッジである（毎分の目盛りで撃ち続けない）', async () => {
+    const h = harness();
+    await h.stores.tokens.replace([
+      {
+        id: 'tok-a',
+        label: 'first',
+        value: 'value-a',
+        order: 0,
+        lastRejectedAt: '2026-08-24T20:00:00.000Z',
+        // `AT`（2026-08-25T03:00:00Z）より前 ＝ 既に明けている。
+        cooldownUntil: Date.parse('2026-08-25T01:00:00.000Z'),
+        cooldownSource: 'default',
+      },
+      { id: 'tok-b', label: 'second', value: 'value-b', order: 1 },
+    ]);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: AT });
+
+    const first = await h.rotator.reconsider({ reason: 'tick' });
+    const second = await h.rotator.reconsider({ reason: 'tick' });
+
+    expect(first).toMatchObject({ kind: 'ignored', reopened: { tokenId: 'tok-a' } });
+    expect('reopened' in second ? second.reopened : undefined).toBeUndefined();
+  });
+});
