@@ -445,7 +445,7 @@ git -C <main のツリー> apply --check -R /tmp/tail.patch   # 通れば main �
 
   🔴 **その切り分けは汚染されていた。** `git worktree` が作るツリーは**同じ `.git` を共有する**ので、`git config --local` で入れた設定が main 側の実行にも同じように効く。⟹ **両方が同じ原因で落ちていたのであって、「main でも落ちる」は「自分のせいではない」の根拠にならなかった。**
 
-  現物を読んで原因を特定 —— `railway/setup.sh` が身元を `git config user.name` にフォールバックしていた（逐語は `grep -Fn -- 'git config user.name' railway/setup.sh`。実測では288行目 — ⚠️ 行番号は動くので、逐語の grep を書くこと）:
+  現物を読んで原因を特定 —— `railway/setup.sh` が身元を `git config user.name` にフォールバックしていた（逐語は `grep -Fn -- 'git config user.name' railway/setup.sh`。⚠️ 行番号は動くので、ここには書かない —— 出典は逐語の grep で残す）:
 
   ```
   GIT_AUTHOR_NAME_VALUE="$(ask 'コミットの名前 (GIT_AUTHOR_NAME)' "$(git config user.name 2>/dev/null || true)")"
