@@ -2276,6 +2276,58 @@ export function commitmentUpdatedAt(entry: Pick<Commitment, 'at' | 'closedAt'>):
 }
 
 /**
+ * 評定を書いた日誌行（`type: 'decision'`）の先頭に必ず置く印（#1054）。
+ *
+ * **なぜ専用の日誌の種類（`journalEntrySchema` の新しい枝）にしないのか。**
+ * 段1で要るのは「覆した事実が残り、**読める**こと」までで、数え上げは段4の
+ * 較正が要求する（#1055）。専用の枝を足すと、この repo の4箇所の分岐
+ * （`tools.ts` / `dropped-record.ts` / `apps/web` の2つ）を同時に開けることに
+ * なり、段1の範囲を越える。
+ *
+ * **先例がある。** `distill-gap.ts` の `DISTILL_SUCCEEDED_DECISION_PREFIX` が
+ * 同じ形で、`decision` の本文の先頭一致で拾っている。
+ *
+ * ⚠️ **段4でここを専用の枝へ格上げするときは、この定数の参照を全部辿ること。**
+ * 先頭一致は型では守られない —— 文言を変えた瞬間に、過去の行が拾えなくなる。
+ */
+export const COMMITMENT_APPRAISAL_DECISION_PREFIX = '引き受けた仕事に評定を付けた';
+
+/**
+ * 評定を1行の字面にする（#1054）。**評定が無ければ `null` —— 1文字も増やさない。**
+ *
+ * **字面の生成元はここ1箇所である。** MCP（`tools.ts`）・HTTP の応答を描く画面
+ * （`apps/web/app/routes/commitments.tsx`）・CLI（`apps/cli/src/chat.ts`）の3面が
+ * これを呼ぶ。`commitmentUpdatedAt` と同じ理由でここへ寄せてある（導出が各実装の
+ * 側にあると、書き忘れても何も落ちない）。
+ *
+ * **`null` を返すことが「未評定」の表し方である。** 一覧に「未評定」と刷らないのは
+ * 文字数の予算のためで（`excerpt.ts` の約束。`digest.ts` の `describeUnobservedOutcome`
+ * が健全な委譲で `null` を返すのと同じ判断）、**印が無い＝まだ評定していない**を
+ * 読み手の側の規則にする。⚠️ **この規則は、呼ぶ側が道具の説明・画面の凡例に
+ * 書いておくこと** —— 書かないと「未評定」と「良い」が同じ顔で並ぶ。
+ *
+ * **未知の値は捨てずにそのまま出す。** 保存層は `z.string()` で緩く持っているので
+ * （`commitmentSchema.appraisal` の doc）、将来の書き手が増えた値がここへ来うる。
+ * 落とすと、読み手には未評定と区別が付かなくなる。
+ */
+export function describeCommitmentAppraisal(
+  entry: Pick<Commitment, 'appraisal' | 'appraisedBy' | 'appraisalReason'>,
+): string | null {
+  if (entry.appraisal === undefined) return null;
+  const label =
+    entry.appraisal === 'good'
+      ? 'うまくいった'
+      : entry.appraisal === 'bad'
+        ? 'うまくいかなかった'
+        : entry.appraisal === 'unclear'
+          ? '判定できない'
+          : entry.appraisal;
+  const by = entry.appraisedBy === undefined ? '' : `・${entry.appraisedBy}`;
+  const reason = entry.appraisalReason === undefined ? '' : `: ${entry.appraisalReason}`;
+  return `評定: ${label}（${entry.appraisal}${by}）${reason}`;
+}
+
+/**
  * まだ片付いていない台帳の行に、クローンから人間への返答が日誌に見つかるかを
  * 導く（issue #1003「放置」と「進行中」が同じ顔をしている問題）。
  *

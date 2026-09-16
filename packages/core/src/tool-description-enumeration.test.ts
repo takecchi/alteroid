@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { CLONE_REMOVABLE_INBOX_EVENT_TYPES } from './inbox-backlog.js';
 import { runnerLivenessSchema } from './runner-protocol.js';
-import { commitmentOriginSchema } from './schema.js';
+import { commitmentAppraisalSchema, commitmentOriginSchema } from './schema.js';
 import { RESERVED_SCHEDULE_KINDS, RESERVED_SCHEDULE_KIND_ENV_KEYS } from './schedule.js';
 import { CLONE_RUNTIME_ITEM_LABELS } from './self.js';
 import { createMemoryStores } from './testing.js';
@@ -96,6 +96,18 @@ const SUBJECTS: readonly EnumerationSubject[] = [
     source: () => commitmentOriginSchema.options,
   },
   {
+    // **評定の3値を数え直している説明文は2本ある**（片付けと同時に付ける口と、
+    // 後から付ける口）。値が1つ増えたら両方が嘘になるので、両方をここへ載せる。
+    tool: 'commitment_appraise',
+    label: 'commitmentAppraisalSchema の値（packages/core/src/schema.ts）',
+    source: () => commitmentAppraisalSchema.options,
+  },
+  {
+    tool: 'commitment_close',
+    label: 'commitmentAppraisalSchema の値（packages/core/src/schema.ts）',
+    source: () => commitmentAppraisalSchema.options,
+  },
+  {
     tool: 'self_status',
     label: 'CLONE_RUNTIME_ITEM_LABELS（packages/core/src/self.ts）',
     source: () => CLONE_RUNTIME_ITEM_LABELS,
@@ -165,7 +177,6 @@ const EXEMPT: readonly Exemption[] = [
     why: '台帳へ自動で載る出所は clone.ts の commitmentFor の switch が持ち、配列ではない。ふるまいを走らせる歯を tools.test.ts に置いた',
   },
   { tool: 'commitment_open', why: '実装側に、説明文が数え直すような一覧が無い' },
-  { tool: 'commitment_close', why: '実装側に、説明文が数え直すような一覧が無い' },
   {
     tool: 'commitment_edit',
     why: '直せる行の条件（origin: self）は1値であって一覧ではない',

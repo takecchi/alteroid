@@ -16423,6 +16423,32 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
+      // **評定も日誌が書けなければ握り潰さずに throw する。** 行の側は「いまの値」
+      // しか持たないので、日誌が落ちると**前の評定がどこにも残らない** ——
+      // 較正の材料がそのまま消える（`writeAppraisal` の doc）。
+      tool: 'commitment_appraise',
+      firstLine: ACT_COMPLETED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-appraise');
+        await stores.commitments.open({
+          id: 'c-appraise-test',
+          at: '2026-01-01T00:00:00.000Z',
+          origin: 'self',
+          body: '評定する件',
+        });
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
+        return callExpectingError(tools, 'commitment_appraise', {
+          id: 'c-appraise-test',
+          appraisal: 'good',
+        });
+      },
+    },
+    {
       // **一括の口も、日誌が書けなければ握り潰さずに throw する。** 単票の
       // `commitment_close` と同じ性質だが、こちらは塊ごとに書くので
       // **「最初の塊で落ちる」が最初の append で起きる**（`failingJournalAppend`
