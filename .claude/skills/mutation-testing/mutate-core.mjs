@@ -1701,7 +1701,12 @@ export function measureScaffoldControl({ extraArgs = [], maxWorkers = DEFAULT_MA
  * `describeScaffoldSubtraction` の doc）。
  */
 export function judge(spec, artifactResult, testResult, scaffoldControl) {
-  const category = decideJudgementCategory(artifactResult, testResult, scaffoldControl, spec.mustFail);
+  const category = decideJudgementCategory(
+    artifactResult,
+    testResult,
+    scaffoldControl,
+    spec.mustFail,
+  );
   const text = formatJudgement(category, spec.id, {
     artifactState: artifactResult.artifactState,
     gateNote: describeUndeliveredTestResultGate(artifactResult),
