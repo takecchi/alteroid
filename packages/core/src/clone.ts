@@ -41,7 +41,12 @@ import {
   distillSucceededEntry,
 } from './distill-gap.js';
 import { excerptLine } from './excerpt.js';
-import { inboxBacklogDedupeKey } from './inbox-backlog.js';
+import {
+  DAEMON_RUNNER_REGISTRY_SOURCE,
+  DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+  isDaemonSelfNotice,
+} from './daemon-self-notice.js';
+import { inboxBacklogDedupeKey, inboxCollapseKey } from './inbox-backlog.js';
 import {
   inboxEventShape,
   journalEntryShape,
@@ -128,6 +133,13 @@ import {
   describeContextWindowFailure,
   type ContextWindowFailure,
 } from './context-window-failure.js';
+
+// **正本は `daemon-self-notice.ts` へ移した**（循環参照を避けるため。
+// `daemon-self-notice.ts` 冒頭の doc）。既存の呼び出し元（`apps/daemon/src/index.ts` /
+// `packages/core/src/inbox-staleness.ts` / `packages/core/src/index.ts`）は
+// どれも `from './clone.js'` で import しているので、ここで re-export して
+// その import 元を変えずに済ませる。
+export { DAEMON_RUNNER_REGISTRY_SOURCE, DAEMON_TOKEN_POOL_REOPENED_SOURCE, isDaemonSelfNotice };
 
 /**
  * クローン = デーモン内の長寿命 SDK セッション1本（docs/architecture.md）。
@@ -1298,6 +1310,65 @@ class Clone implements CloneHost {
    */
   readonly #unread = new Map<string, Promise<void>>();
   /**
+   * 「alteroid 自身が合成した同一本文の未読」を畳むための索引（Issue #954
+   * 続き。受信箱側）。`inboxCollapseKey` の鍵 → その鍵を最初に受理した合図
+   * （代表）の `id` / `at` と、代表に畳み込んだ件数。
+   *
+   * ## なぜ在るか — 台帳側の壁（#1035）は受信箱を守らない
+   *
+   * `#commit`（台帳を開く側）は開く**前**に {@link hasOpenManagerDuplicate}
+   * で同一マネージャー×同一本文の未了が無いかを確かめるが、`#commit` が
+   * 呼ばれる時点で受信箱への書き込み（`#remember`）は**既に終わっている**
+   * （`#commit` の doc「受信箱はここより前で既に書き終えているので、この
+   * 畳み込みで減るのは台帳の行数だけである」）。429 の無限連投のような形は、
+   * 台帳を1行に畳んでも受信箱の行が連投の回数だけ増え続ける——これがこの
+   * 索引で塞ぐ穴である。
+   *
+   * **429（`manager_message`）だけの穴ではなかった。** クローンの日誌の
+   * 実測（直近24時間）では、`external` / `source: 'token-pool'`（デーモン
+   * 自身が「認証トークンが通る状態に戻った」と自分に出す知らせ）のほうが
+   * 桁で多く積まれていた——`inboxCollapseKey` はその両方を畳む（同関数の
+   * doc）。
+   *
+   * ## `post()` の中だけで閉じる
+   *
+   * `post()` は同期関数なので、この索引の照会（鍵が在るか）と書き込み
+   * （代表を登録する／`collapsed` を進める）は**同じイベントループの刻みの
+   * 中で不可分に起きる**。⟹ #1041 が台帳側（`list()` と `open()` の間）で
+   * 指摘する TOCTOU は、この経路には構造的に存在しない——ここは #1041 を
+   * 直したものではなく、台帳側とは別の場所に同じ形の穴が無いことを最初から
+   * 保証している、という違いである。
+   *
+   * ## 鍵が落ちるとき
+   *
+   * 代表の合図が実際に片付いて `#forget`（受信箱からの消し込み）が
+   * `stores.inbox.remove` を確定させたときに、`#dropPendingCollapse` が
+   * ここから鍵を落とす。**落とし忘れると、片付いた合図の「影」が永久に
+   * 残り、次に同じ内容の合図が来ても二度と積まれなくなる**（畳み込みでは
+   * なく能力の削除になる）ので、`#forget` が実際に消せた分岐でしか落とさない
+   * （`#dropPendingCollapse` の doc）。
+   *
+   * ## 器の入れ替えを跨ぐと空になる
+   *
+   * ここはメモリ上にしか無いので、プロセスの再起動でいったん空になる。
+   * `#restoreUnread` が拾い直した未読からこの索引を作り直す（同メソッドの
+   * 「索引を拾い直した未読から作り直す」の節）——作り直さないと、器が
+   * 入れ替わるたびに畳み込みが白紙に戻り、同じ本文がまた1件積まれる。
+   *
+   * ## 日誌（`#journal`）は畳まない
+   *
+   * 畳んだ合図も、その生の本文（`#journalIncomingBody`）と「畳んだ」という
+   * 事実は1件ずつ日誌へ残す——**受信箱・台帳が「まだ片付いていない仕事」の
+   * 待ち行列であるのに対し、日誌は追記専用の「何が起きたか」の記録である。**
+   * この2つを分けるのがこの索引の設計の肝で、#914 / #931 が診断に使う生の
+   * 429 文言（`resets` 時刻など）を、畳んだ回についても1文字も失わないため
+   * の保証になっている（`#foldIntoPendingCollapse` の doc）。
+   */
+  readonly #pendingCollapse = new Map<
+    string,
+    { readonly id: string; readonly at: string; collapsed: number }
+  >();
+  /**
    * 受理した瞬間に日誌へ書いた発言。id → その追記の約束。
    *
    * **応答がこの追記を追い越さないために持つ。** `post` は同期なので追記は
@@ -1823,6 +1894,14 @@ class Clone implements CloneHost {
     // `#stopped` だけで判定すると、閉じた受信箱へ `push` して投げる**（`Inbox#push`）。
     // ここが「読み切りが必ず終わる」根拠そのものでもある（`stop()` の doc）。
     if (this.#stopped || this.#inbox.closed) {
+      // **ここでも畳む。** この窓は `#remember` が実際にストアへ書く経路その
+      // ものなので、畳まなければ「片付け中に届いた同文の連投」がそのまま
+      // ディスクへ行の増殖として残る——これは通常経路（下の
+      // `#foldIntoPendingCollapse`）が塞ぐのとまったく同じ形の穴で、窓が
+      // 片付け中かどうかは理由にならない。**代表側（最初の1件）はこれまで
+      // どおり `#remember` / `#commit` / `noteDroppedInboxEvent` を通す** —
+      // 畳んだかどうかで代表の扱いを変えない。
+      if (this.#foldIntoPendingCollapse(event)) return;
       this.#remember(event);
       this.#commit(event);
       noteDroppedInboxEvent(event);
@@ -1878,6 +1957,18 @@ class Clone implements CloneHost {
     // （`#mergedHumanBatch`）は**捨てない** — 全文が届いた順に渡り、合図は件数ぶん
     // 器に残り、後始末も件数ぶん通る。だからそちらはこの `return` の側に足さないこと。
     if (isTick(event) && this.#inbox.hasPending((queued) => isSameTick(queued, event))) return;
+
+    // **alteroid 自身が合成した同一本文の未読が既に在れば、ここで畳む**
+    // （Issue #954 続き。受信箱側 — `#pendingCollapse` の doc、
+    // `#foldIntoPendingCollapse` の doc、`inboxCollapseKey` の doc）。対象は
+    // `manager_message`（429 などの連投）と、デーモン自身の `external`
+    // （`token-pool` の復帰通知など）——`isTick` の畳み込みより後に置く。
+    // こちらは中身を持つ合図の話であって、tick の「読まれる前の重複には
+    // 情報が無い」とは理由が違う（あちらは中身が無いから畳めるが、こちらは
+    // 中身が同じだから畳んでよい、という別の判定である）。畳めば
+    // `#remember` / `#record` / `#commit` / `#inbox.push` のどれも呼ばずに
+    // 戻る——**受信箱の行も台帳の行もクローンのターンも増えない。**
+    if (this.#foldIntoPendingCollapse(event)) return;
 
     // **受理した時点で未読として書き出す。** 境界を「queue に入った時点」に置いては
     // いけない — クローンが暇なときに届いた合図は `Inbox#push` の waiter 経路を
@@ -3192,6 +3283,130 @@ class Clone implements CloneHost {
   // -------------------------------------------------------------------------
 
   /**
+   * `post()` が受理した合図を、`#pendingCollapse`（同アイテムの doc）に
+   * 照らして畳んでよいか判定し、畳めたならその場で片付ける。
+   *
+   * **返り値が `true` のとき、呼び出し側は `#remember` / `#record` /
+   * `#commit` / `#inbox.push` のどれも呼ばずにそのまま return すること。**
+   * この関数自身がその4つの代わりに要ることを済ませる——具体的には
+   * `#journalIncomingBody` で生の本文を、日誌へ畳んだ旨の1行を、それぞれ
+   * `#journal` で残す（下）。
+   *
+   * ## 畳めるのは `manager_message` と「デーモン自身の `external`」だけ
+   *
+   * `inboxCollapseKey` が `undefined` を返す型・行（人間の発言・回答、外部
+   * から渡された `external` を含む）は、ここを通っても常に `false` を
+   * 返す——つまり普段どおり受理させる。線の引き方は `inboxCollapseKey` の
+   * doc にある（alteroid 自身が合成した知らせだけを畳み、外から渡されたもの
+   * は畳まない）。
+   *
+   * ## 畳んだ分も1件ずつ日誌へ残す
+   *
+   * **⚠️ `#record` では代われない。** `#record` は `human_message` にしか
+   * 効かない（`event.type !== 'human_message'` で早期 return する）ので、
+   * `manager_message` / `external` を畳んだときに本文を残す役目は、この
+   * 関数が `#journalIncomingBody` を呼ぶことで引き受ける（あちらは
+   * `manager_message` と `external` の両方に本文を書く）。**受信箱・台帳は
+   * 「まだ片付いていない仕事」の待ち行列で、日誌は追記専用の「何が起きたか」
+   * の記録である——ここを分けるのがこの畳み込みの設計の肝であり、#914 /
+   * #931 が診断に使う生の 429 文言（`resets` 時刻など）や token-pool の
+   * 復帰通知の全文が、畳んだ回についても1文字も失われないことの保証でも
+   * ある。** 日誌への書き込みは `post()` から見て非同期（`#journal` は
+   * 待たない・失敗もここで握る）だが、それは `#remember` / `#record` /
+   * `#commit` が既にそうしているのと同じ割り切りである。
+   *
+   * ## 索引の照会と書き込みは同じ刻みの中で不可分
+   *
+   * `post()` は同期関数なので、`#pendingCollapse.get` と
+   * `#pendingCollapse.set` はこの関数の中で並び、間に他の `post()` 呼び出し
+   * が割り込む余地が無い。⟹ 「在るか調べてから登録する」という手順に、
+   * 台帳側で #1041 が挙げるような `list()` と `open()` の間の TOCTOU は
+   * 構造的に生まれない（#1041 そのものを直したとは主張しない — あれは
+   * 台帳側の話であり、ここは最初からその種の隙間を持たない、という違いで
+   * ある）。
+   */
+  #foldIntoPendingCollapse(event: InboxEvent): boolean {
+    const key = inboxCollapseKey(event);
+    if (key === undefined) return false;
+
+    const existing = this.#pendingCollapse.get(key);
+    if (existing === undefined) {
+      // **この鍵の代表になる。** 代表自身はここでは何もせず（呼び出し側が
+      // これまでどおり `#remember` 以下を通す）、索引にだけ載せる。
+      this.#pendingCollapse.set(key, { id: event.id, at: event.at, collapsed: 0 });
+      return false;
+    }
+
+    existing.collapsed += 1;
+    // **生の本文は畳んだ回もここで残す**（上の doc）。`post` を待たせない
+    // ため、ここでも待たない — 失敗は `#journal` 自身が握る。
+    void this.#journalIncomingBody(event);
+    void this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text:
+        `alteroid 自身が合成した同一本文の未読が既に受信箱にあるので、受信箱にも台帳にも` +
+        `積まずに畳んだ（モデルへは1文字も渡していない。本文は直前の行に残してある）: ` +
+        `${inboxEventShape(event)}`,
+    });
+    return true;
+  }
+
+  /**
+   * `#pendingCollapse` から鍵を落とす。**呼べるのは、代表の合図が実際に
+   * 片付いて `#stores.inbox.remove` が確定したときだけである**
+   * （`#forget` の中、`remove` が成功した直後）。
+   *
+   * ## なぜ「片付いたとき」でなければならないか
+   *
+   * 索引が指しているのは「いまこの鍵で待ち行列に居る合図」である。代表が
+   * まだ受信箱に残っているうちに鍵を落とすと、次に届いた同文がまた新しい
+   * 代表として受信箱・台帳に積まれてしまい、畳み込みが二重・三重になる
+   * （＝畳めていたはずの行が畳めなくなる）。逆に、片付いた後も鍵を残せば
+   * ——「片付いた合図の影」が永久に残り、次に届く同じ内容の合図が二度と
+   * 積まれなくなる（畳み込みではなく能力の削除になる。`#pendingCollapse`
+   * の doc）。**このファイルで `stores.inbox.remove` を呼ぶのは `#forget`
+   * の1箇所だけ**（`grep -Fn -- 'this.#stores.inbox.remove(' packages/core/src/clone.ts`
+   * で確認済み）なので、鍵を落とす場所もここ1箇所に閉じる。
+   *
+   * ## 代表以外の合図では何もしない
+   *
+   * 畳まれた側（代表ではないほう）は `#remember` / `#inbox.push` を一度も
+   * 通らないので、器にも待ち行列にも載らず、`#pump` に拾われることも
+   * `#forget` が呼ばれることも無い。⟹ この関数が呼ばれる `event` は、
+   * その鍵についていつも代表だけである——念のため `existing.id ===
+   * event.id` で確かめ、一致しなければ何もしない（他の代表の索引を誤って
+   * 落とさないための防御）。
+   *
+   * ## 畳んだ件数が1件以上あれば要約を1行残す
+   *
+   * 生の本文はすでに `#foldIntoPendingCollapse` が畳んだ回ごとに残して
+   * あるので、ここでは件数の要約だけを書く——1件ずつの重複した断り書きに
+   * しない。
+   */
+  #dropPendingCollapse(event: InboxEvent): void {
+    const key = inboxCollapseKey(event);
+    if (key === undefined) return;
+
+    const existing = this.#pendingCollapse.get(key);
+    if (existing === undefined || existing.id !== event.id) return;
+    this.#pendingCollapse.delete(key);
+
+    if (existing.collapsed > 0) {
+      void this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text:
+          `alteroid 自身が合成した同一本文の未読を ${existing.collapsed} 件、受信箱にも台帳にも` +
+          `積まずに畳んだ（本文はそれぞれ畳んだ時点で直前の行に残してある。この合図が` +
+          `片付いたので数え終える）: ${inboxEventShape(event)}`,
+      });
+    }
+  }
+
+  /**
    * 受け取った合図を未読として器に置く。
    *
    * **`post` は同期で返り値を持たない**（7種類の起点すべてがそう呼ぶ）ので、書き
@@ -3733,6 +3948,12 @@ class Clone implements CloneHost {
         this.#unread.delete(event.id);
         this.#redelivered.delete(event.id);
         this.#redeliveredClosed.delete(event.id);
+        // **畳み込みの索引も、器から消えたここで落とす**（Issue #954 続き。
+        // `#dropPendingCollapse` の doc）。`remove` が確定した後でしか落とさ
+        // ないのが肝である —— 消せずに下の `noteDroppedRecord` へ抜ける回は、
+        // その合図が次の起動で配り直される側なので、索引に残しておくほうが
+        // 正しい（残しておけば、そのあいだに届く同文はこの行へ畳まれる）。
+        this.#dropPendingCollapse(event);
         return;
       } catch (error) {
         last = error;
@@ -3772,6 +3993,32 @@ class Clone implements CloneHost {
     // 「回数が何を測っているか」を名乗るために要る。**ここでしか数えられない** —
     // `#redelivered` は1件ずつ積まれるので、後から見ても「同時だったか」は分からない。
     this.#restoredCohort = pending.length;
+
+    // **索引を拾い直した未読から作り直す**（Issue #954 続き。`#pendingCollapse`
+    // の doc「器の入れ替えを跨ぐと空になる」）。`#pendingCollapse` はメモリ上
+    // にしか無いので、器の入れ替え（プロセスの再起動）を跨ぐと空になる——
+    // 何もしなければ、直前の起動で畳んでいた本文がここで「初めて見る本文」に
+    // 戻り、これから届く同文がまた新しい代表として受信箱・台帳に積まれて
+    // しまう（実測: ある起動は拾い直した未読 3,326 件のほぼ全部が
+    // `external`/`token-pool` の同一本文だった——依頼者の日誌の集計）。
+    //
+    // **先に見つかった行を代表にする。** ここでは「これから届く同文を積み
+    // 増さない」ための索引の再構築に留め、この直しの前に既に積まれていた
+    // バックログ（同じ鍵を持つ行が複数、というありうる状態）そのものを
+    // 畳み込みはしない——それは `#forget` を伴う別の後始末になり、この
+    // ループが1件ごとに配るか消すかを決める判定（下）を横取りしてしまう。
+    // 索引は「これ以上増やさない」ための壁であって、既存のバックログを
+    // 遡って畳む道具ではない。
+    for (const record of pending) {
+      const key = inboxCollapseKey(record.event);
+      if (key === undefined) continue;
+      if (this.#pendingCollapse.has(key)) continue;
+      this.#pendingCollapse.set(key, {
+        id: record.event.id,
+        at: record.event.at,
+        collapsed: 0,
+      });
+    }
 
     // **日誌の側も同じ材料で名乗り分ける**（判定は `#redeliveryNoticeFor` と同一）。
     // #700 はモデルへ渡す側だけを直したので、クローンが `journal_read` で逐語に
@@ -8220,71 +8467,6 @@ function retrievalHintFor(event: InboxEvent): string {
     case 'distill':
       return '';
   }
-}
-
-/**
- * `apps/daemon/src/index.ts` の `wake()` が
- * `clone.post({ type: 'external', source: DAEMON_TOKEN_POOL_REOPENED_SOURCE, ... })`
- * で出す送信元名（正本）。
- *
- * **正本をここ（`packages/core`）に置く理由。** `apps/daemon/src/index.ts` の
- * `TOKEN_POOL_REOPENED_SOURCE` の doc は、リテラルを発行側（`post` の呼び出し）と
- * 判定側（`isTokenPoolReopenedNotice`）の2箇所に直書きすると、どちらかを直し
- * 忘れたときに黙ってずれる、という理由で定数へ括ってあった。**この PR でその
- * 判定側がもう1つ増える** — `commitmentFor`（下）の `external` 分岐が、台帳を
- * 開くかどうかにこの同じ文字列を使う。だが `packages/core` は `apps/daemon` に
- * 依存できない（`packages/core/package.json` の deps に daemon は無く、
- * `apps/daemon/package.json` が `@alteroid/core` を依存する片方向だけがある）
- * ので、定数を daemon 側に置いたまま core が import することはできない。
- * **だから正本をこちらへ移し、daemon 側の `TOKEN_POOL_REOPENED_SOURCE` はこの
- * 値をそのまま指す形にしてある。**
- */
-export const DAEMON_TOKEN_POOL_REOPENED_SOURCE = 'token-pool';
-
-/**
- * `apps/daemon/src/index.ts` の `postToClone`（runner の登録・接続まわりの
- * 不具合をクローンへ知らせる経路）が使う送信元名（正本）。
- *
- * **かつては `postToClone` の中に直書きのリテラルだった** — 判定側
- * （`commitmentFor`）がこの文字列を見るようになったので、
- * {@link DAEMON_TOKEN_POOL_REOPENED_SOURCE} と同じ理由でここへ括った。
- */
-export const DAEMON_RUNNER_REGISTRY_SOURCE = 'runner-registry';
-
-/**
- * `event` が、デーモン自身が自分の受信箱へ出した合図か。
- *
- * **対象はいまのところ2つ** — {@link DAEMON_TOKEN_POOL_REOPENED_SOURCE}
- * （`wake()` が出す「認証トークンが通る状態に戻った」通知）と
- * {@link DAEMON_RUNNER_REGISTRY_SOURCE}（`postToClone` が出す runner 登録の
- * 不具合通知）。どちらも `apps/daemon/src/index.ts` が **自分で作って自分の
- * クローンへ渡す** `external` の合図であって、外の誰か・何かがクローンへ渡して
- * きたものではない。
- *
- * **`commitmentFor`（下）の `external` 分岐がこれを見て台帳を開かないよう絞る。**
- * `isTokenPoolReopenedNotice`（`apps/daemon/src/index.ts`）とは別物である —
- * あちらは「枠が開いたら配り直しを待たせるか」の判定（`token-pool` だけを見る）
- * で、こちらは「台帳を開くべき相手が居るか」の判定（2つとも見る）である。
- * 対象が重なるからといって同じ関数に寄せない——問う相手が違う。
- *
- * **⚠️ 払っている代償。** `source` は自由文字列である
- * （`schema.ts` の `inboxEventSchema` の `external` 枝、`source: z.string()`）。
- * `POST /events` / `POST /events/:source`（`apps/daemon/src/app.ts`）から
- * 外部の呼び手が `source: "token-pool"` あるいは `"runner-registry"` を送れば、
- * その本物の外部イベントも台帳に載らなくなる——この関数は合図の中身
- * （型と `source` の文字列）しか見えず、発行元がデーモン自身か外部かを区別する
- * 手段を持たない。**それでも受け入れているのは、この2つがデーモンが自分の
- * 名として使う予約語であり、外から同じ名を名乗るのは名前空間の衝突だと
- * 考えているからである。** 衝突を見分ける手段を `commitmentFor` は持てない
- * ——持たせるなら受信箱か API の入口に「デーモン自身が出した」印を足す
- * ことになり、それはこの関数の——延いては #852 の——範囲を超える。
- */
-export function isDaemonSelfNotice(event: InboxEvent): boolean {
-  return (
-    event.type === 'external' &&
-    (event.source === DAEMON_TOKEN_POOL_REOPENED_SOURCE ||
-      event.source === DAEMON_RUNNER_REGISTRY_SOURCE)
-  );
 }
 
 /**

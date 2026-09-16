@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { isDaemonSelfNotice } from './daemon-self-notice.js';
 import type { InboxEvent } from './schema.js';
 import type { PendingInboxEvent } from './store.js';
 
@@ -337,6 +338,104 @@ export function inboxBacklogDedupeKey(event: InboxEvent): string {
       throw new Error(`未知の受信箱イベント種別（dedupeKey）: ${JSON.stringify(exhaustive)}`);
     }
   }
+}
+
+/**
+ * `Clone#post()` が受理の時点で「同一本文の未読が既に在るか」を畳んでよいかを
+ * 決めるための鍵（Issue #954 続き。受信箱側）。
+ *
+ * ## これまでの畳み込みが塞いでいなかった穴
+ *
+ * PR #946（`manager.ts` の合流窓）は `turn_failed` 単独の束にしか掛からず、
+ * PR #1035（{@link hasOpenManagerDuplicate}）は**台帳**が開く前の壁でしか
+ * ない——`Clone#post()` の `#remember`（受信箱への書き込み）は台帳を開く
+ * *前*に必ず同期で走るので、台帳側の壁は受信箱の行の増殖を1件も防げない
+ * （`hasOpenManagerDuplicate` の doc「対象は台帳だけ」）。この関数は、その
+ * 手前——受信箱へ書く前——に同じ形の壁をもう1枚足すためのものである。
+ *
+ * **実測（クローンの日誌、直近24時間）が示した比率はむしろ逆だった。** 429
+ * の `manager_message` 連投より、`external` / `source: 'token-pool'`
+ * （デーモン自身が「認証トークンが通る状態に戻った」と自分の受信箱へ出す
+ * 知らせ）のほうが桁で多い——ある起動が名乗った「拾い直した未読 3,326 件」
+ * の正体はほぼこれで、同一本文が数ミリ秒間隔（`.172Z` / `.198Z` / `.207Z`）
+ * で積まれていた。⟹ この鍵が畳む対象は `manager_message` だけでは足りない。
+ *
+ * ## 畳めるのは2つだけ — `manager_message` と「デーモン自身の `external`」
+ *
+ * **それ以外は必ず `undefined` を返す。** 残り5種（`human_message` /
+ * `human_answer` / `timer` / `self_initiative` / `distill`）と、
+ * `external` のうち {@link isDaemonSelfNotice} が偽を返すもの（webhook
+ * など外から渡された `external`）は、この関数を通しても絶対に畳まれない。
+ *
+ * **線を引く基準は「起点がクローン自身の外側にある、alteroid 自身が合成した
+ * 知らせか」である。** 畳んでよいのは、alteroid 自身（マネージャーの合成
+ * 通知・デーモン自身の `wake()`）が自分に宛てて作った知らせだけで、**外から
+ * 渡されたものは畳まない**——人間の発言・人間の回答はもちろん、`external`
+ * でも `POST /events` 経由で外の誰かが投げたものは対象外にする。外から来た
+ * 同文の2件は「1つの出来事が2回届いた」のか「同じ形の出来事が2回起きた」の
+ * かを受け手には区別する手段が無いが、alteroid 自身が合成した知らせには
+ * その曖昧さが無い（起きたことそのものではなく、alteroid が「起きた」と
+ * 判断して自分に書いた文だから、同じ判断が繰り返されているだけだと言える）。
+ * **人間の発言・回答を畳まない判断は**、`CLONE_REMOVABLE_INBOX_EVENT_TYPES`
+ * が「クローンは自分の側の都合で溜まった合図だけを畳める。人間から届いた
+ * 合図は畳めない」と定めた線引き（takecchi、2026-09-15）と同じ理由に立つ。
+ *
+ * ## 鍵の計算は二重に書かない
+ *
+ * - **`manager_message`**: 畳んでよいかを決める軸は `managerId` + `kind` +
+ *   `text` の3つ——{@link hasOpenManagerDuplicate} が台帳側で見ている
+ *   `source`（= `managerId`）+ `body`（= `` `[${kind}] ${text}` ``）と対称な
+ *   組で、{@link inboxBacklogDedupeKey} の `manager_message` 分岐が作る鍵
+ *   （`event.type` を先頭に足しただけの同じ3項）とも一致する。**だから鍵
+ *   そのものは {@link inboxBacklogDedupeKey} へ委譲し、ここで2本目の
+ *   `switch` を書かない**——同じ「同一本文か」の判定が2箇所に分かれると、
+ *   増える側（積む判定）と減る側（消す・数える判定）が食い違いうるという、
+ *   `inboxBacklogDedupeKey` の doc「なぜ1箇所に閉じるか」が名指しした #783
+ *   の症状の形そのものを、この関数自身が再現することになる。
+ * - **`external`（`isDaemonSelfNotice` が真のときだけ）**: 軸は `source` +
+ *   `payload`。{@link inboxBacklogDedupeKey} の `external` 分岐と同じ2項
+ *   だが、**ここでは委譲しない**——あちらは `JSON.stringify` の失敗（循環
+ *   参照など）をそのまま投げる作りで、計器（`summarizeInboxBacklog`）の
+ *   純関数としてはそれでよい（呼び出し側が全部 try 済みの行しか渡さない）が、
+ *   こちらは `Clone#post()` から同期で直接呼ばれる制御の鍵なので、投げると
+ *   `post()` 自体が落ちる——だから直列化できない場合は「畳まない」側へ
+ *   フェイルオープンする（下の実装）。
+ *
+ * ## この鍵の用途は「畳む・畳まない」の制御であって、計器ではない
+ *
+ * {@link inboxBacklogDedupeKey} は7型すべてに対して「同じ本文か」を答える
+ * **計器**（`distinct` を数えるためだけの純関数で、`summarizeInboxBacklog`
+ * の`## 限界`が言うとおり偏りを持つ）である。こちらは `Clone#post()` が
+ * **実際に受信箱・台帳への書き込みを畳むかどうかを決める制御の鍵**であり、
+ * 意味が違うので別の名前・別のエクスポートにしてある——計器と制御を同じ
+ * 関数に載せると、計器側の偏り（同じ限界を参照）がそのまま制御側の挙動の
+ * 揺れになる。
+ *
+ * ## 払っている代償は新しくない
+ *
+ * {@link isDaemonSelfNotice} の doc が言うとおり、`source` は自由文字列
+ * なので外部の呼び手が `"token-pool"` / `"runner-registry"` を名乗れば
+ * 同じ扱いになる——**この関数はその代償をそのまま引き継ぐだけで、新しい
+ * 代償を作っていない**（`commitmentFor` が台帳側で既に同じ代償を払っている
+ * のと同じ判断に乗っている）。
+ */
+export function inboxCollapseKey(event: InboxEvent): string | undefined {
+  if (event.type === 'manager_message') return inboxBacklogDedupeKey(event);
+
+  if (event.type === 'external' && isDaemonSelfNotice(event)) {
+    let serializedPayload: string;
+    try {
+      serializedPayload = JSON.stringify(event.payload ?? null);
+    } catch {
+      // **直列化できない payload（循環参照など）は畳まない側へ倒す**
+      // （fail-open）。畳めなければ受信箱の行は増えるが、それは直しの前と
+      // 同じ状態に留まるだけで、黙って合図を落とすよりはるかに安全である。
+      return undefined;
+    }
+    return [event.type, event.source, serializedPayload].join(DEDUPE_SEPARATOR);
+  }
+
+  return undefined;
 }
 
 /** 上位N件・同数は名前順で安定させる、共通の並べ替え。 */
