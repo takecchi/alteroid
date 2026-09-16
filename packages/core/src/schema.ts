@@ -633,6 +633,38 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
 export type InboxEvent = z.infer<typeof inboxEventSchema>;
 export type InboxEventType = InboxEvent['type'];
 
+/**
+ * `journalEntrySchema` の `inbox_flow`（Issue #783 段0）が種類別の内訳
+ * （`arrived` / `delivered` / `settled`）に使う形。
+ *
+ * **ここだけ `inboxEventSchema` の判別子を手で列挙している。** `inboxEventSchema`
+ * は判別可能ユニオンで、7種の `type` はそれぞれ別の `z.object` の中に居るため、
+ * ここから機械的に導出すると型があいまいになる（`z.discriminatedUnion` の
+ * `.options` から `.shape.type.value` を拾う形は書けるが、`InboxEvent['type']`
+ * との対応を静的に保証できず、かえって読みにくい）。**7種という数はここでも
+ * 育ちうる**——`inboxEventSchema` に型を足したら、ここの `z.enum` も手で足す
+ * こと（忘れても `byType.type` の型検査で `InboxEvent['type']` と食い違って
+ * 落ちる——`journalEntryTypeNames` の `satisfies Record<JournalEntryType, true>`
+ * と同じ、足し忘れを型で塞ぐ作り）。
+ */
+const inboxFlowByTypeCountSchema = z.object({
+  total: z.number().int().nonnegative(),
+  byType: z.array(
+    z.object({
+      type: z.enum([
+        'human_message',
+        'human_answer',
+        'distill',
+        'timer',
+        'external',
+        'self_initiative',
+        'manager_message',
+      ]) satisfies z.ZodType<InboxEvent['type']>,
+      count: z.number().int().nonnegative(),
+    }),
+  ),
+});
+
 // ---------------------------------------------------------------------------
 // 日誌エントリ
 // ---------------------------------------------------------------------------
@@ -1665,6 +1697,120 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     /** 形と各欄の doc は {@link contextUsageObservationSchema} を見よ。二重に書かない。 */
     contextUsage: contextUsageObservationSchema,
   }),
+  /**
+   * 受信箱（`InboxStore` / `Inbox`）の到着・配達・消し込み・滞留を、ターンの
+   * 境界で1行にして日誌へ残す（Issue #783 段0「測るだけ」）。
+   *
+   * ## なぜ在るか
+   *
+   * #783 が名指しした穴はこうである——**#703 が着地した後に受信箱の重複が
+   * 実際に減ったか**、推移を測る経路がどこにも無い。`describeInboxBacklog`
+   * （`inbox-backlog.ts`）が出す内訳は**その1ターンでクローンが見るだけの
+   * 一過性の文字列**で、どこにも残らない——日誌の `tool_use` 行は `input`
+   * しか持たず、道具の出力を1文字も書かない。⟹ いま在るのはスナップショット
+   * だけで、`journal_read` で辿れる**推移**がどこにも無かった。
+   *
+   * この型は1行が1つの窓（前回この型の行を書いてから今回まで）を語る。
+   * 複数行を時系列に辿れば、到着・配達・消し込みの推移になる。
+   *
+   * ## 4つの軸は、別のものを数えている——食い違いは欠陥ではない
+   *
+   * - **`arrived`** — この窓に `Clone#post` が**受理**した数
+   *   （`clone.ts` の `#remember` ＝ `InboxStore.put` を呼んだ回数）。
+   *   **「受理した瞬間」であって「書けた時刻」ではない**（`post()` の doc
+   *   「受理した時点で未読として書き出す」——書き込み自体は非同期で、失敗
+   *   しても post は落とさない。受理と永続化の成功の間には窓が残る）。
+   * - **`delivered`** — この窓に**メモリ上の待ち行列（`Inbox`）へ実際に
+   *   載った**数（`#inbox.push` の呼び出し回数）。クローンのターンを
+   *   起こしうる数、という意味で `arrived` とは別の軸である。
+   * - **`settled`** — この窓に `#forget`（＝ `InboxStore.remove` が成功した
+   *   回）を通った数。**「ターンが処理し終えて消した」だけを数えていない**
+   *   ——`#forget` は同じ tick の重複を畳んで吸収したとき・拾い直した合図が
+   *   もう意味を持たないと判定して捨てたとき（`inbox-staleness.ts` の
+   *   `restoredInboxEventVerdict`）にも呼ばれる。この欄が答えるのは
+   *   「ストアから消えた回数」であって「ターンで処理された回数」ではない。
+   * - **`pending`** — 窓の**終わりの1点**（`InboxStore.pending()` の戻り値
+   *   そのまま）。窓の中の最大でも平均でもない。
+   *
+   * ## `delivered` が `arrived` / `pending` と食い違う理由（Issue #1049）
+   *
+   * 3つは別のものを数えているので、一致しないことがある。既知の経路:
+   *
+   * - `#restoreUnread`（器の入れ替えを跨いだ拾い直し）が配る分は、**この窓に
+   *   `arrived` していない**のに `delivered` には入る——受理は前の器（か、
+   *   もっと前）の窓で既に数えられていて、いま数えられるのは配達だけである。
+   * - `redeliveryGate` が「いま配る意味が無い」と畳んだ分は `delivered` に
+   *   **入らない**（`#inbox.push` を呼ばない ＝ ターンを起こさない。
+   *   `#foldGatedRedelivery` が跡を残す側）。
+   * - `inbox_remove_many`（`POST /inbox/remove`。`InboxStore.removeMany` を
+   *   直接呼ぶ一括削除）で消えた行が、消えた後もメモリ上の待ち行列に残って
+   *   いれば、**ストアには無いのに `delivered` には数えられる**——Issue
+   *   #1049 はこの経路そのものを疑っている（実測: 02:54:59Z に27件を
+   *   `inbox_remove_many` で消した16分後、そのうち2件に対応する合図が
+   *   「配り直しである（1回目の配達）」として届いた。その間ずっと
+   *   `pending` は「未処理1件」のままだった）。
+   *
+   * ⟹ **読み方**: `delivered` が `arrived` を継続して上回り、かつ `pending`
+   * が小さいままなら、待ち行列（`Inbox`）とストア（`InboxStore`）が食い違って
+   * いる疑いがある（#1049）。**ただしこの行だけでは断定できない**——配達
+   * された行が本当にストアから消えていたか（＝#1049 の核心）は、この行は
+   * 見ていない。見ているのは「メモリ上の待ち行列へ何回載せたか」という数
+   * だけである。
+   *
+   * ## `settled` を数える場所は1箇所（`#forget` の内側）だが、呼び出し元は3箇所ある
+   *
+   * `clone.ts` の `#forget` はここでは唯一の消し込み経路で、そこで1回だけ
+   * 数える（呼び出し元ごとに数えると、1箇所でも足し忘れれば静かに過小評価
+   * になる）。呼び出し元は3つ——同じ tick の重複を畳んで吸収したとき／
+   * ターンが処理し終えたとき（`#settleInboxEvent`）／拾い直した合図が
+   * `stale` と判定されたとき（`#restoreUnread`）。**このうち実際に1ターン
+   * 分の処理をして消したと言えるのは2番目だけである**——それでも欄の名前を
+   * 割らずに1本の `settled` で持たせているのは、この型の目的が「受信箱
+   * ストアの滞留がどれだけ減ったか」であって「ターンが何を処理したか」では
+   * ないため。後者を測る型は別に要るなら、それはこの型の役目ではない。
+   *
+   * ## `delivered` を数える場所は `#inbox.push` の3箇所（`Inbox#unshift` は数えない）
+   *
+   * `post()`（通常の受理経路）／`#postAndWait`（蒸留の割り込み）／
+   * `#restoreUnread`（器を跨いだ拾い直し）。**`Inbox#unshift`（枠の解除で
+   * 保持分を待ち行列の先頭へ戻す経路）は数えに入れない**——戻される合図は
+   * 保持される前に既に一度 `push` で数えられているので、数え直すと枠で
+   * 保持されて後から解除された分だけ二重に計上される。
+   *
+   * ## 窓は永続化しない
+   *
+   * `arrived` / `delivered` / `settled` のカウンタはクローンのインメモリ
+   * 状態で、**器が入れ替わると0から始まる。** だから `windowStartedAt` を
+   * 必ず持たせる——無いと、写した先で「いつからの数か」が消え、器の入れ替え
+   * を跨いだ比較が壊れる。
+   *
+   * ## いつ書くか
+   *
+   * ターンの境界（`case 'turn_ended'`）で毎回1行書く——`context_usage` と
+   * 同じ境界を使う。別の境界を選ぶと、2つの型を突き合わせて読みたいときに
+   * 窓がずれる。**`InboxStore.pending()` が読めなければこの窓は書かない**
+   * （カウンタも戻さない——次のターンへ持ち越せば、この窓ぶんの到着・配達・
+   * 消し込みは失わずに済む。跡は `noteDroppedRecord` が残す）。
+   */
+  z.object({
+    type: z.literal('inbox_flow'),
+    id: z.string(),
+    at: isoDateTime,
+    /** この行が数えた窓の始まり。前回この行を書いた時刻（器が入れ替わった
+     * 直後は器が立ち上がった時刻）。 */
+    windowStartedAt: isoDateTime,
+    /** この窓に `Clone#post` が受理した数（`#remember`）。種類別。 */
+    arrived: inboxFlowByTypeCountSchema,
+    /** この窓にメモリ上の待ち行列（`Inbox`）へ実際に載った数（`#inbox.push`）。種類別。 */
+    delivered: inboxFlowByTypeCountSchema,
+    /** この窓に `#forget`（＝ `InboxStore.remove` の成功）を通った数。種類別。 */
+    settled: inboxFlowByTypeCountSchema,
+    /** 窓の終わりの1点（`InboxStore.pending()` の戻り値そのまま）。 */
+    pending: z.object({
+      count: z.number().int().nonnegative(),
+      oldestAt: isoDateTime.optional(),
+    }),
+  }),
 ]);
 
 export type JournalEntry = z.infer<typeof journalEntrySchema>;
@@ -1712,6 +1858,7 @@ const journalEntryTypeNames = {
   token_rotation: true,
   subagent_stall: true,
   context_usage: true,
+  inbox_flow: true,
 } satisfies Record<JournalEntryType, true>;
 
 export const JOURNAL_ENTRY_TYPES = Object.keys(journalEntryTypeNames) as [

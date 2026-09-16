@@ -8167,6 +8167,154 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
 });
 
 /**
+ * 受信箱の到着・配達・消し込み・滞留を、ターンの境界で `inbox_flow` として
+ * 日誌へ残す（Issue #783 段0「測るだけ」）。欄の意味は `schema.ts` の
+ * `inbox_flow` の doc、数える場所は `clone.ts` の `#remember` / `#inbox.push`
+ * （3箇所）/ `#forget` を見よ。
+ *
+ * ## `settled` は同じ窓には乗らないことがある（重要な非対称）
+ *
+ * この型は `context_usage` と同じ境界（`case 'turn_ended'`）で書く。だが
+ * `#forget`（＝ `settled` を数える場所）は、その書き込みより**後**——
+ * `#pump` の `finally`（`#handle` が返ってから）でしか呼ばれない
+ * （`clone.ts` の `#pump` のループ本体）。⟹ **1件の人間の発言を処理した
+ * その回の `inbox_flow` 行には、その発言自身の `settled` はまだ乗らない**
+ * ——次にもう1件処理があったとき、その回の行に「前回ぶんの `settled`」が
+ * 乗る（下の「2件目の窓には、1件目の消し込みが型別で載る」がこれを固定
+ * する）。**データが失われるのではなく、窓が1つずれるだけである。**
+ */
+describe('inbox_flow（受信箱の到着・配達・消し込み・滞留を日誌へ残す。Issue #783 段0）', () => {
+  it('人間の発言を1件処理すると、その窓の arrived / delivered に human_message が型別で載る', async () => {
+    const s = setup(() => 'わかった');
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const rows = await s.stores.journal.list({ types: ['inbox_flow'] });
+    expect(rows).toHaveLength(1);
+    const row = rows[0];
+    if (row?.type !== 'inbox_flow') throw new Error('inbox_flow が日誌に無い');
+    expect(row.arrived).toEqual({ total: 1, byType: [{ type: 'human_message', count: 1 }] });
+    expect(row.delivered).toEqual({ total: 1, byType: [{ type: 'human_message', count: 1 }] });
+    // **この窓ではまだ乗らない**（上のクラス docstring「`settled` は同じ窓には
+    // 乗らないことがある」）。
+    expect(row.settled).toEqual({ total: 0, byType: [] });
+    expect(typeof row.windowStartedAt).toBe('string');
+
+    await s.clone.stop();
+  });
+
+  it('2件目の窓には、1件目の消し込みが型別で載る（`settled` が1窓遅れて現れることの固定）', async () => {
+    const s = setup(() => 'わかった');
+    s.clone.post(humanMessage('1件目'));
+    await waitForDone(s.events);
+    // 2件目は1件目が終わってから届くので、まとめ読み（`#mergedHumanBatch`）に
+    // 束ねられず、独立したもう1回の pump 反復＝もう1つの窓になる。
+    s.clone.post(humanMessage('2件目'));
+    await waitFor(
+      async () => (await s.stores.journal.list({ types: ['inbox_flow'] })).length >= 2,
+      '2本目の inbox_flow 行',
+    );
+
+    // **`order: 'asc'` を明示する。** `JournalStore.list()` の既定は `desc`
+    // （新しい順）なので、既定のまま `[first, second]` と受けると**窓の順序が
+    // 逆になる**——「1件目の窓」と信じた行が実際には2件目の窓になり、`settled`
+    // が1窓ずれて現れることの固定がそのまま裏返る（この取り違えを実際に踏んだ）。
+    const rows = await s.stores.journal.list({ types: ['inbox_flow'], order: 'asc' });
+    expect(rows).toHaveLength(2);
+    const [first, second] = rows;
+    if (first?.type !== 'inbox_flow' || second?.type !== 'inbox_flow') {
+      throw new Error('inbox_flow が日誌に無い');
+    }
+
+    // 1件目の窓: 到着・配達はあるが、まだ消し込みは乗らない。
+    expect(first.arrived.total).toBe(1);
+    expect(first.settled).toEqual({ total: 0, byType: [] });
+
+    // **2件目の窓が、1件目を型別で消し込み済みとして持ち越す。** 同時に
+    // 2件目自身の到着・配達も同じ行に型別で載る——「到着→消し込みの後に
+    // 窓を書くと、arrived と settled の両方に型別で載る」を、時系列で
+    // 満たす形（同時に起きるとは限らないので、2窓に分けて固定する）。
+    expect(second.arrived).toEqual({ total: 1, byType: [{ type: 'human_message', count: 1 }] });
+    expect(second.delivered).toEqual({ total: 1, byType: [{ type: 'human_message', count: 1 }] });
+    expect(second.settled).toEqual({ total: 1, byType: [{ type: 'human_message', count: 1 }] });
+
+    // **カウンタは持ち越されない**（窓を書いた直後に次の窓が空から始まる）。
+    // 2件目の窓の `arrived.total` が1件目ぶんまで足された「2」にはならない
+    // ——上のアサーションそのものがこれを固定している（累積なら2になるはず）。
+
+    await s.clone.stop();
+  });
+
+  it('拾い直しの配達があると delivered が arrived を上回る（Issue #1049。器を跨いだ拾い直しは、この窓には arrived していない）', async () => {
+    const stores = createMemoryStores();
+    // 前の器が残した「未読のまま」の合図を、post() を経由せずに直接ストアへ
+    // 置く——`#remember`（＝ arrived を数える唯一の場所）を通っていないので、
+    // 新しく起こすクローンの窓ではこの1件は1度も arrived していない。
+    const leftover = humanMessage('前の器の置き土産');
+    await stores.inbox.put(leftover, '2026-09-01T00:00:00.000Z');
+
+    const s = setup(() => 'わかった', stores);
+    // `#restoreUnread`（起動直後の拾い直し）がこの1件を配る。ターンが1本
+    // 走って初めて `case 'turn_ended'` が inbox_flow を書くので、その完了を待つ。
+    await waitForDone(s.events);
+
+    const rows = await s.stores.journal.list({ types: ['inbox_flow'] });
+    expect(rows.length).toBeGreaterThanOrEqual(1);
+    const row = rows[0];
+    if (row?.type !== 'inbox_flow') throw new Error('inbox_flow が日誌に無い');
+
+    // **配達はされている**（`#restoreUnread` が `#inbox.push` した）。
+    expect(row.delivered).toEqual({ total: 1, byType: [{ type: 'human_message', count: 1 }] });
+    // **だがこの窓には arrived していない**——受理（`#remember`）は前の器の
+    // 出来事で、いまの器はそれを見ていない。
+    expect(row.arrived).toEqual({ total: 0, byType: [] });
+    // ⟹ delivered(1) > arrived(0)。2つが別物を数えていることの数での固定。
+    expect(row.delivered.total).toBeGreaterThan(row.arrived.total);
+
+    await s.clone.stop();
+  });
+
+  it('`InboxStore.pending()` が読めない窓は書かず、カウンタも失わない（次の窓へ持ち越す）', async () => {
+    const stores = createMemoryStores();
+    const originalPending = stores.inbox.pending.bind(stores.inbox);
+    let fail = true;
+    stores.inbox.pending = async () => {
+      if (fail) throw new Error('inbox.pending が壊れている');
+      return originalPending();
+    };
+
+    const lines = await captureStderr(async () => {
+      const s = setup(() => 'わかった', stores);
+      s.clone.post(humanMessage('1件目'));
+      await waitForDone(s.events);
+
+      // この窓は pending() が壊れているので書かれない。
+      expect(await s.stores.journal.list({ types: ['inbox_flow'] })).toEqual([]);
+
+      // 直ってから2件目を処理すると、1件目ぶんのカウンタが持ち越されて
+      // 一緒に出る（データを失っていない）。
+      fail = false;
+      s.clone.post(humanMessage('2件目'));
+      await waitFor(
+        async () => (await s.stores.journal.list({ types: ['inbox_flow'] })).length >= 1,
+        'inbox_flow 行',
+      );
+
+      const rows = await s.stores.journal.list({ types: ['inbox_flow'] });
+      expect(rows).toHaveLength(1);
+      const row = rows[0];
+      if (row?.type !== 'inbox_flow') throw new Error('inbox_flow が日誌に無い');
+      // 1件目・2件目の両方ぶんの到着・配達が、持ち越されて1行にまとまって出る。
+      expect(row.arrived).toEqual({ total: 2, byType: [{ type: 'human_message', count: 2 }] });
+      expect(row.delivered).toEqual({ total: 2, byType: [{ type: 'human_message', count: 2 }] });
+
+      await s.clone.stop();
+    });
+    expect(lines.some((line) => line.includes('受信箱の流量（inbox_flow）'))).toBe(true);
+  });
+});
+
+/**
  * 枠（利用上限）に当たったら、合図を捨てずに保持し、次の合図が来たときに
  * 試し直す（`clone.ts` の `#usageBlocked` / `#deferred`）。
  *

@@ -1396,6 +1396,28 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
         why: '`turn_usage.contextUsage` と同じ判断（PR #709 が別判断へ回した構造化された欄）。',
       },
     },
+    // Issue #783 段0。**`arrived`/`delivered`/`settled`/`pending` は
+    // `contextUsage`（直上）とは違う判断——`never` へ倒していない。** あちらは
+    // 「PR #709 が別判断へ回した」という保留だが、こちらは
+    // `journalEntryShape`（`dropped-record.ts` の `case 'inbox_flow'`）が
+    // 実際に欄の中身（`.total` / `.count`）を跡へ出す実装になっている。
+    // 出しているのは総数・件数だけで自由文は1文字も含まない
+    // （`byType[].type` は `InboxEvent['type']` の列挙、`count` は整数）ので、
+    // 「跡に出してよいか」を悩む理由が無い。
+    inbox_flow: {
+      windowStartedAt: { emit: 'tag', token: 'windowStartedAt' },
+      // 4つとも入れ子の構造体だが、`journalEntryShape` が跡へ出すのは
+      // `.total`（`pending` だけ `.count`）という数だけである——`raw` の
+      // 判定（`toContain('<token>=')`）はそれで満たせる。**内訳
+      // （`byType`）そのものは跡に出ていない**——`journalEntryShape` は
+      // 日誌への書き込みが失敗した後の見分けのための1行で、内訳まで
+      // 再現する役目を持たない（`context_usage.contextUsage` が入れ子へ
+      // 踏み込まないのと同じ理由）。
+      arrived: { emit: 'raw', token: 'arrived' },
+      delivered: { emit: 'raw', token: 'delivered' },
+      settled: { emit: 'raw', token: 'settled' },
+      pending: { emit: 'raw', token: 'pending' },
+    },
   } satisfies { [T in JournalEntryType]: Record<ShapedFieldsOf<T>, FieldPlan> };
 
   const SECRET = 'ghp_222222222222222222222222222222222222';
@@ -1536,6 +1558,14 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       sessionId: 'sess-1',
       turnSucceeded: false,
       contextUsage: { durationMs: 100 },
+    },
+    inbox_flow: {
+      type: 'inbox_flow',
+      windowStartedAt: '2026-09-16T00:00:00.000Z',
+      arrived: { total: 1, byType: [{ type: 'human_message', count: 1 }] },
+      delivered: { total: 1, byType: [{ type: 'human_message', count: 1 }] },
+      settled: { total: 0, byType: [] },
+      pending: { count: 2, oldestAt: '2026-09-15T00:00:00.000Z' },
     },
   };
 

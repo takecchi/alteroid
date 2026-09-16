@@ -8931,6 +8931,28 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
         body: entry.text,
       };
     }
+    case 'inbox_flow': {
+      // **見出しに4つの総数を出す。** クローンがこの種別で絞ったとき、まず
+      // 見たいのは窓ごとの推移（`schema.ts` の `inbox_flow` の doc）で、
+      // 種類別の内訳は本文へ回す——`inbox-backlog.ts` の
+      // `describeInboxBacklogBreakdown` と同じ「総数は見出し、内訳は本文」
+      // の分け方。
+      const byTypeText = (count: { byType: { type: string; count: number }[] }): string =>
+        count.byType.length === 0
+          ? '（無し）'
+          : count.byType.map((e) => `${e.type} ${e.count}`).join(' / ');
+      return {
+        head:
+          `[inbox_flow arrived=${entry.arrived.total} delivered=${entry.delivered.total} ` +
+          `settled=${entry.settled.total} pending=${entry.pending.count}]`,
+        body:
+          `窓: ${entry.windowStartedAt} 〜 ${entry.at}\n` +
+          `到着: ${byTypeText(entry.arrived)}\n` +
+          `配達: ${byTypeText(entry.delivered)}\n` +
+          `消し込み: ${byTypeText(entry.settled)}` +
+          (entry.pending.oldestAt === undefined ? '' : `\n最古の滞留: ${entry.pending.oldestAt}`),
+      };
+    }
   }
 }
 
