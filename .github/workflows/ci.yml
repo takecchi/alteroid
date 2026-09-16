@@ -257,6 +257,8 @@ jobs:
       # rebuild-failure 10s / spec-validation 0s /
       # judgement-forbidden-word-boundary 18s / restore-status-comparison 0s /
       # judgement-undelivered-gate 0s ⟹ **合計およそ55秒。**
+      # **`--scenario all`（CI が実際に打つ形）を通しで1回**、この枝の中身で
+      # 測り直した: **52秒・exit 0・ツリーは clean・印も残っていない**（2026-09-16）。
       # 同じ日に測った `ci` ジョブの所要は中央値 542 秒 / 最大 581 秒
       # （直近の run 10本のうち、ジョブが実際に走った8本）なので、**増分はおよそ
       # 1割**である。⚠️ 実測は手元の器のものなので、runner での秒数は別に測ること。
