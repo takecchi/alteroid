@@ -2412,6 +2412,65 @@ describe('HTTP API', () => {
     ).toBe(400);
   });
 
+  /**
+   * 委譲の評定（#1054）。**クローンの `manager_appraise` と同じ `ManagerPool.appraise`
+   * を通る** —— 人間に出来てクローンに出来ないことも、その逆も作らない。
+   */
+  it('人間が委譲に評定を付けられる（上書きでき、理由を渡さなければ前の理由が消える）', async () => {
+    fake.managerList.push({
+      managerId: 'mgr-rate',
+      status: 'done',
+      live: false,
+      cwd: '/work',
+      request: '調べて',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      waiting: [],
+    });
+
+    expect(
+      (
+        await app.request(
+          '/managers/mgr-rate/appraise',
+          json({ appraisal: 'good', reason: '一発で通った' }),
+        )
+      ).status,
+    ).toBe(200);
+    expect(fake.managerList.find((m) => m.managerId === 'mgr-rate')).toMatchObject({
+      appraisal: 'good',
+      appraisedBy: 'human',
+      appraisalReason: '一発で通った',
+    });
+
+    // 理由を渡さない覆しは前の理由を消す（残すと説明が前の書き手のものになる）。
+    expect(
+      (await app.request('/managers/mgr-rate/appraise', json({ appraisal: 'bad' }))).status,
+    ).toBe(200);
+    const after = fake.managerList.find((m) => m.managerId === 'mgr-rate');
+    expect(after?.appraisal).toBe('bad');
+    expect(after?.appraisalReason).toBeUndefined();
+  });
+
+  it('台帳に居ないマネージャーは 404、既知でない評定は 400', async () => {
+    expect(
+      (await app.request('/managers/mgr-nope/appraise', json({ appraisal: 'good' }))).status,
+    ).toBe(404);
+    fake.managerList.push({
+      managerId: 'mgr-rate-400',
+      status: 'done',
+      live: false,
+      cwd: '/work',
+      request: '調べて',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      waiting: [],
+    });
+    expect(
+      (await app.request('/managers/mgr-rate-400/appraise', json({ appraisal: 'brilliant' })))
+        .status,
+    ).toBe(400);
+  });
+
   it('片付けたものは既定の一覧から消え、includeClosed=true でだけ出る', async () => {
     const opened = await app.request('/commitments', json({ body: '日報の体裁を直す' }));
     const { id } = (await opened.json()) as { id: string };
