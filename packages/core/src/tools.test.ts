@@ -12,6 +12,7 @@ import type {
   ManagerDenial,
   ManagerPool,
   ManagerSummary,
+  ManagerUnpushedWork,
   RunnerBacklogSnapshot,
   RunnerFleetOverview,
 } from './manager.js';
@@ -123,6 +124,24 @@ interface Harness {
    * もので、中身の差し替えは `setTranscript` / `setTranscriptFailure` の仕事。
    */
   transcriptCalls: string[];
+  /**
+   * `manager_stop` の running 断りが読む `ManagerPool.unpushedWork()` の
+   * 返り値を差し替える（#1039）。設定しなければ既定で
+   * `{ kind: 'unavailable', reason: '(テストの既定: 未設定)' }`。
+   */
+  setUnpushedWork(managerId: string, value: ManagerUnpushedWork): void;
+  /**
+   * `managers.unpushedWork()` を呼ぶと、代わりに例外を投げさせる（`pool` 自身が
+   * 例外を投げない設計であっても、呼び出し側（`tools.ts`）の `.catch` が本当に
+   * 効いているかを確かめるためにある）。
+   */
+  setUnpushedWorkThrows(managerId: string, message: string): void;
+  /**
+   * `managers.unpushedWork(managerId)` が呼ばれるたびに積む（#1039）。
+   * **`manager_list` や `force: true` の経路から呼ばれていないこと**を、
+   * この配列が空のままであることで確かめる。
+   */
+  unpushedWorkCalls: { managerId: string; hasSignal: boolean }[];
   /** `runners()` に渡された引数（`fingerprints` / `resources` を渡したかどうかの検査用）。 */
   runnersCalls: { fingerprints?: boolean; resources?: boolean }[];
   /**
@@ -172,6 +191,9 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
   const transcripts = new Map<string, TranscriptState>();
   const transcriptErrors = new Map<string, string>();
   const transcriptCalls: string[] = [];
+  const unpushedWorkResults = new Map<string, ManagerUnpushedWork>();
+  const unpushedWorkErrors = new Map<string, string>();
+  const unpushedWorkCalls: { managerId: string; hasSignal: boolean }[] = [];
   const runningOwners = new Map<string, string>();
   let memoryCause: 'distill' | 'clone' = 'clone';
   // **`ToolContext.conversationId` の呼び出し文脈（issue #1003 段2・#781）。**
@@ -223,6 +245,17 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
       const failure = transcriptErrors.get(managerId);
       if (failure !== undefined) throw new Error(failure);
       return transcripts.get(managerId) ?? { kind: 'missing' as const };
+    },
+    async unpushedWork(managerId: string, options?: { signal?: AbortSignal }) {
+      unpushedWorkCalls.push({ managerId, hasSignal: options?.signal !== undefined });
+      const failure = unpushedWorkErrors.get(managerId);
+      if (failure !== undefined) throw new Error(failure);
+      return (
+        unpushedWorkResults.get(managerId) ?? {
+          kind: 'unavailable' as const,
+          reason: '(テストの既定: 未設定)',
+        }
+      );
     },
     runningManagerOwning(archiveId: string) {
       return runningOwners.get(archiveId);
@@ -378,6 +411,13 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
       if (managerId === undefined) runningOwners.delete(archiveId);
       else runningOwners.set(archiveId, managerId);
     },
+    setUnpushedWork(managerId, value) {
+      unpushedWorkResults.set(managerId, value);
+    },
+    setUnpushedWorkThrows(managerId, message) {
+      unpushedWorkErrors.set(managerId, message);
+    },
+    unpushedWorkCalls,
     transcriptCalls,
     runnersCalls,
     async call(name, args) {
@@ -5028,6 +5068,98 @@ describe('クローンの道具', () => {
     expect(reply).toContain('running');
     expect(reply, '断りの本文に force という逃げ道が案内されていない').toContain('force');
     expect(reply, '止まっていないのに「止めた」と言い切っている').not.toContain('止めた。');
+  });
+
+  /**
+   * **`manager_stop` の running 断りは、未 push の実装・未コミットの変更を
+   * 実物の数字で言う（Issue #1039）。** 「畳むと未 push の実装…が失われる」
+   * という一般論を、実際の作業ツリーの件数へ替えるのが本題である。
+   *
+   * ここでは**複数の作業ツリーが在るとき、全部が応答に出る**ことを固定する
+   * ——1本目だけを返す実装ではこの歯が赤くなる（マネージャーが作業者へ別
+   * ツリーを切る運用を AGENTS.md が許容しているため、1本とは限らない）。
+   */
+  it('manager_stop の running 断りは、見つかった作業ツリーを全部出す', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.setUnpushedWork('mgr-1', {
+      kind: 'ok',
+      result: {
+        cwd: '/workspace',
+        worktrees: [
+          {
+            relativePath: 'mgr-1/repo',
+            branch: 'main',
+            unpushedCommitCount: 4,
+            uncommittedChangeCount: 0,
+          },
+          {
+            relativePath: 'mgr-1/wt-a',
+            branch: 'feat/x',
+            unpushedCommitCount: 0,
+            uncommittedChangeCount: 2,
+          },
+        ],
+      },
+    });
+
+    const reply = await h.call('manager_stop', { managerId: 'mgr-1', reason: '確認' });
+
+    expect(reply).toContain('mgr-1/repo');
+    expect(reply).toContain('mgr-1/wt-a');
+    expect(reply).toContain('4');
+    expect(reply).toContain('feat/x');
+    expect(h.aborted).toEqual([]);
+  });
+
+  /**
+   * **🔴 不変条件: この調べものが失敗しても、`manager_stop` は止まる道を
+   * 塞がない。** runner が答えられなかった（`pool.unpushedWork()` が例外を
+   * 投げた）場合でも、断り本文（force で止まるという案内）はそのまま返る
+   * ——「確かめられなかった」と名乗るだけで、0本だったとは言わない。
+   */
+  it('manager_stop は unpushedWork が失敗しても断りを返し、確かめられなかったと名乗る', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.setUnpushedWorkThrows('mgr-1', 'runner が応答しなかった（模擬）');
+
+    const reply = await h.call('manager_stop', { managerId: 'mgr-1', reason: '確認' });
+
+    expect(reply, '止める道（force の案内）が塞がっている').toContain('force');
+    expect(reply, '止めていない、という断りの本題が消えている').toContain('止めていない');
+    expect(reply).toContain('確かめられなかった');
+    expect(reply, '失敗を0件と混ぜている').not.toMatch(/未 push.*0本/);
+    expect(h.aborted, '調べものの失敗で abort が呼ばれてしまっている').toEqual([]);
+  });
+
+  it('manager_stop は unpushedWork が「確かめられなかった」を返しても断りを返す', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.setUnpushedWork('mgr-1', { kind: 'unavailable', reason: 'この runner はこの口を持たない' });
+
+    const reply = await h.call('manager_stop', { managerId: 'mgr-1', reason: '確認' });
+
+    expect(reply).toContain('確かめられなかった');
+    expect(reply).toContain('この runner はこの口を持たない');
+    expect(reply).toContain('force');
+  });
+
+  it('manager_stop は force: true のとき unpushedWork を呼ばない（往復を払わない）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+
+    await h.call('manager_stop', { managerId: 'mgr-1', reason: '確認', force: true });
+
+    expect(h.unpushedWorkCalls).toEqual([]);
+  });
+
+  it('manager_list は unpushedWork を呼ばない（一覧の側から自動で往復を足さない）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+
+    await h.call('manager_list', {});
+
+    expect(h.unpushedWorkCalls).toEqual([]);
   });
 
   it('manager_stop は running でも force: true なら止める', async () => {
