@@ -6,6 +6,8 @@ import type { CredentialEntry } from './credentials.js';
 import type { ActiveAgentToken, AgentToken, TokenRotationSettings } from './token-pool.js';
 import type {
   Commitment,
+  CommitmentAppraisal,
+  CommitmentAppraisedBy,
   CommitmentClosedBy,
   CommitmentEditedBy,
   InboxEvent,
@@ -650,6 +652,34 @@ export interface CommitmentStore {
    * 決めていない呼び出しはコンパイルエラーで立ち止まる（issue #286）。
    */
   close(id: string, at: string, reason: string, by: CommitmentClosedBy): Promise<boolean>;
+
+  /**
+   * **その仕事がどうだったか**を記録する（#1054。自己改善の段1）。行が在れば
+   * `true`、無い id は `false`。
+   *
+   * **上書きしてよい。** 人間がクローンの評定を覆せることが要件そのものである
+   * （`docs/PRD.md`「要件: 自己改善」）。覆される前の値は**日誌**に残るので、
+   * 行の側は常に「いまの値」だけを持つ（`commitmentAppraisalSchema` の doc）。
+   *
+   * **未了の行にも付けられる。** 「片付いてから」を器の側で強制しない — 人間が
+   * 走っている最中に「これは駄目そうだ」と印を付ける経路を塞ぐ理由が無い
+   * （`close` が「既に閉じている」を `false` で断るのとは性質が違う。あちらは
+   * 二重に閉じると `closedAt` が後の時刻へずれるが、評定は上書きが正しい）。
+   *
+   * **`by` は `close` と同じ理由で必須である**（issue #286）。呼び出し元は
+   * 常に誰が付けたかを知っている。
+   *
+   * **`reason` は任意。** 書けない評定（画面のボタン1つ）を塞がないため。
+   * ただし**書かせる側（道具・画面）は書くよう促すこと** — 軸を足すかどうかの
+   * 判断材料はここにしか無い（`commitmentSchema.appraisalReason` の doc）。
+   */
+  appraise(
+    id: string,
+    at: string,
+    value: CommitmentAppraisal,
+    by: CommitmentAppraisedBy,
+    reason?: string,
+  ): Promise<boolean>;
 
   /**
    * 複数件を1回でまとめて片付いたことを記録する（issue #844）。

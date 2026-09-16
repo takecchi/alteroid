@@ -139,6 +139,37 @@ describe('/commitments 画面', () => {
    * 器は行を消さない（「何を片付けたか」は日報の材料である）。読む手立てが画面に
    * 無いと、その事実へ人間が到達できない。既定で出さないのは未了が埋もれるため。
    */
+  /**
+   * 評定（#1054。自己改善の段1）。
+   *
+   * **⚠️ ここで固定したいのは「未評定が『普通』に見えないこと」である。** 何も
+   * 選ばれていない状態は「まだ測っていない」という観測そのものなので
+   * （`commitmentAppraisalSchema` の doc）、既定で選ばれたボタンを作らない。
+   */
+  it('評定していない行は「まだ評定していない」と出る（未評定を「普通」として描かない）', async () => {
+    stubCommitments([commitment()]);
+    renderPage();
+
+    expect(await screen.findByText('ドキュメントの誤りを直す')).toBeTruthy();
+    expect(screen.getByText('（まだ評定していない）')).toBeTruthy();
+    // 3値のボタンは出ているが、どれも選ばれていない
+    expect(screen.getByRole('button', { name: 'うまくいった' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'うまくいかなかった' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '判定できない' })).toBeTruthy();
+  });
+
+  it('評定が在る行は「まだ評定していない」と出さず、誰が付けたかと理由を出す', async () => {
+    stubCommitments([
+      commitment({ appraisal: 'good', appraisedBy: 'clone', appraisalReason: '一発で通った' }),
+    ]);
+    renderPage();
+
+    expect(await screen.findByText('ドキュメントの誤りを直す')).toBeTruthy();
+    expect(screen.queryByText('（まだ評定していない）')).toBeNull();
+    expect(screen.getByText(/clone が付けた/)).toBeTruthy();
+    expect(screen.getByText(/一発で通った/)).toBeTruthy();
+  });
+
   it('片付けたものは、押されたときだけ includeClosed=true で取りに行く', async () => {
     const stub = stubCommitments(
       [commitment({ id: 'open-1', body: 'まだ終わっていない' })],
