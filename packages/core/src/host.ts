@@ -12,6 +12,26 @@ export interface CloneHost {
   post(event: InboxEvent): void;
 
   /**
+   * **器から消した合図の配達を止める**（issue #1049）。戻り値は実際に配達待ち
+   * から落とせた件数。⛔ **器（`stores.inbox`）から行を消すのはこの口ではない**
+   * —— 消した呼び手が、同じ id でこれを呼ぶ。
+   *
+   * ## なぜこの面が太るのか
+   *
+   * ここに並んでいる他の口は**積む・読む・止める**であって、**待ち行列から
+   * 特定の合図を抜く**口は無かった。`inbox_remove_many`（`POST /inbox/remove`）
+   * が消すのは `InboxStore` の行だけで、**配達はクローンのメモリ上の待ち行列
+   * から出る** ⟹ 消した後も配られ続けた。この面に口が無いことが、そのまま
+   * #1049 の穴だった（`tools.ts` からは型の上で到達する経路が1つも無く、
+   * `app.ts` は `clone` に届くのに呼べる操作が無かった）。
+   *
+   * **⚠️ 直に呼ばないこと。** 呼び手は `removeInboxEventsAndStopDelivery`
+   * （`inbox-backlog.ts`）1本に寄せてある —— 器から消す操作とこの呼びが離れると、
+   * **片方だけ直っている形**が戻る。詳細は `Clone#dropQueuedInboxEvents` の doc。
+   */
+  dropQueuedInboxEvents(ids: readonly string[]): Promise<number>;
+
+  /**
    * ある会話に対するクローンの出力を購読する。
    * 戻り値を呼ぶと購読を解除する。
    */

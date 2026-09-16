@@ -1294,6 +1294,38 @@ class Clone implements CloneHost {
    */
   readonly #deferred: InboxEvent[] = [];
   /**
+   * いま `#restoreUnread` の拾い直しが走っているか（issue #1049）。
+   *
+   * **`#droppedWhileRestoring` の窓を開けるためだけに在る。** 真のあいだ
+   * `dropQueuedInboxEvents` は「消された id」を墓標として覚え、偽になった
+   * 時点でその集合を捨てる（`#restoreUnread` の `finally`）。
+   */
+  #restoringUnread = false;
+  /**
+   * **拾い直しが走っているあいだに `inbox_remove_many` で消された合図の id**
+   * （issue #1049）。`#restoreUnread` が待ち行列へ積む直前に読む。
+   *
+   * ## なぜ待ち行列から外すだけでは足りないか —— 競合の向きが逆である
+   *
+   * `dropQueuedInboxEvents` は「**いま**待ち行列に居るもの」を外す。ところが
+   * `#restoreUnread` は `claimPending()` した集合を1件ずつ（あいだに日誌の
+   * 書き込みと台帳の照会の `await` を挟みながら）**これから**積んでいく。⟹
+   * **消した後に積まれる**という順序がありうる —— 外す操作はその合図に一度も
+   * 触れないまま、あとから配達待ちへ戻ってくる。
+   *
+   * **実際に踏んだのがこの形である。** #1049 の事故は拾い直した未読が 3,326 件
+   * あった起動で起きており、クローンが消したのはそのループが走っている最中
+   * だった。⟹ **「消したのに配られた」は、この窓を塞がないと残る。**
+   *
+   * ## 無限に育たない —— 窓はループの寿命そのものである
+   *
+   * 溜まるのは `#restoringUnread` が真のあいだに消された id だけで、ループが
+   * 抜けた時点で（成功でも例外でも。`finally`）まるごと捨てる。**残る必要が
+   * 無い** —— ループが終わった後に消された合図は、もう積まれる側に居ないので
+   * `dropQueuedInboxEvents` の待ち行列側の処理だけで足りる。
+   */
+  readonly #droppedWhileRestoring = new Set<string>();
+  /**
    * 一度でも枠で保持した合図の id。**まとめ読み（`#mergedHumanBatch`）から外すため**
    * だけに持つ。
    *
@@ -2116,6 +2148,103 @@ class Clone implements CloneHost {
       event,
       this.#humanPriority && isHumanOriginated(event) ? isHumanOriginated : undefined,
     );
+  }
+
+  /**
+   * **消した合図の配達を止める**（issue #1049）。器（`stores.inbox`）から行を
+   * 消した呼び手が、**同じ id をメモリ側からも落とすために呼ぶ。**
+   * 戻り値は実際にこちらから落とせた件数。
+   *
+   * ## なぜ消す側から呼ばせるのか —— ストアは `Clone` を知らない
+   *
+   * `InboxStore` の3実装（`storage-fs` / `storage-pg` / `testing.ts` の
+   * インメモリ）はどれも `Clone` も `Inbox` も import しておらず、**依存の向きは
+   * ストア → Clone ではない。** 逆向きに繋ぐと、行を消すだけの器が配達の待ち
+   * 行列を知ることになる。⟹ **繋ぎ目は呼び手の側に置く。**
+   *
+   * **⚠️ 呼び手は1つにまとめてある。** `inbox_remove_many`（`tools.ts`）と
+   * `POST /inbox/remove`（`apps/daemon/src/app.ts`）は、どちらも
+   * `removeInboxEventsAndStopDelivery`（`inbox-backlog.ts`）を通す —— **2箇所に
+   * 割れたまま残すと、片方だけ直っている形が再生産される**（それがまさに
+   * #1049 である。器の行を消す口が2つあって、どちらもメモリ側に届いていなかった）。
+   * **歯が在る**（`inbox-backlog.test.ts` の「`removeMany` を直に呼ぶ本番コードは
+   * 共有ヘルパの中だけである」）。
+   *
+   * ## どこから落とすか —— 配達に戻ってこられる場所を全部
+   *
+   * 1. **待ち行列**（`Inbox#removeWhere`）。次に配られるもの
+   * 2. **枠（利用上限）で保持している分**（`#deferred`）。**忘れると静かに漏れる**
+   *    —— ここに居る合図は枠の解除で待ち行列の**先頭へ**戻される
+   *    （`#pump` の `Inbox#unshift`）ので、落とさなければそのまま配られる
+   * 3. 付随する索引（`#unread` / `#redelivered` / `#redeliveredClosed` /
+   *    `#pendingCollapse`）。**`#pendingCollapse` を落とすのが特に要る** ——
+   *    残すと、消えた行を代表として指したままになり、**これから届く同じ本文が
+   *    その幻へ畳まれて永久に消える**（`#dropPendingCollapse` の doc）
+   *
+   * ## ⛔ 取り消せないものが1つある —— いま処理中の1件
+   *
+   * 待ち行列から**既に取り出されて**ターンが走っている合図には届かない。**届か
+   * せないほうを選んでいる** —— 走っているターンを止めれば、そこまでに掛かった
+   * 分が捨てられる（`post` の「走行中のターンは止めない」と同じ判断）。⟹
+   * **この口が約束するのは「まだ配っていないものは配らない」までである。**
+   * 戻り値が渡した件数より小さいのはその場合で、欠陥ではない。
+   *
+   * ## 消し込み（`#forget`）は呼ばない
+   *
+   * 呼び手が既に器から消している。ここで `#forget` を呼ぶと
+   * `stores.inbox.remove` が空振りし、`settled`（`inbox_flow`）を二重に数える
+   * （`schema.ts` の「`settled` を数える場所は1箇所」）。
+   */
+  async dropQueuedInboxEvents(ids: readonly string[]): Promise<number> {
+    if (ids.length === 0) return 0;
+    const targets = new Set(ids);
+
+    // **拾い直しの最中なら、先に墓標を残す**（`#droppedWhileRestoring` の doc）。
+    // **待ち行列を外すより前に置くこと** —— 後に置くと、この関数の中で `await`
+    // を挟んだ隙にループが1件積む窓ができる。
+    if (this.#restoringUnread) for (const id of targets) this.#droppedWhileRestoring.add(id);
+
+    const fromQueue = this.#inbox.removeWhere((event) => targets.has(event.id));
+
+    // 枠で保持している分（`#deferred`）も落とす。**後ろから外す**（前から
+    // splice すると1件外すごとに次を読み飛ばす。`Inbox#removeWhere` と同じ）。
+    const fromHeld: InboxEvent[] = [];
+    for (let i = this.#deferred.length - 1; i >= 0; i--) {
+      const held = this.#deferred[i];
+      if (held === undefined || !targets.has(held.id)) continue;
+      this.#deferred.splice(i, 1);
+      fromHeld.push(held);
+    }
+    fromHeld.reverse();
+
+    for (const event of [...fromQueue, ...fromHeld]) {
+      this.#unread.delete(event.id);
+      this.#redelivered.delete(event.id);
+      this.#redeliveredClosed.delete(event.id);
+      this.#dropPendingCollapse(event);
+    }
+
+    const dropped = fromQueue.length + fromHeld.length;
+    if (dropped === 0) return 0;
+
+    // **跡を残す。** 「消した」と名乗った操作が、配達の側にも届いたことを後から
+    // 数えられるようにする —— #1049 は「名乗りと実体の食い違い」の事故なので、
+    // 名乗りだけを増やして実体を残さない形にはしない。
+    //
+    // **id をここに並べない。** 消した id は呼び手が既に自分の記録へ書いている
+    // （`inbox_remove_many` の日誌・`POST /inbox/remove` の応答）。ここが足すのは
+    // 「そのうち何件が**配達待ちにも居た**か」という、呼び手が持っていない数だけ
+    // である。並べると、3,000 件規模の消し込みでこの1行が日誌を埋める。
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text:
+        `器から消された合図 ${ids.length} 件のうち、${dropped} 件を配達の待ち行列からも外した` +
+        `（待ち行列 ${fromQueue.length} 件、枠で保持していた分 ${fromHeld.length} 件）。` +
+        '既に取り出して処理中のものは取り消していない。',
+    });
+    return dropped;
   }
 
   subscribe(conversationId: string, listener: Listener): () => void {
@@ -4246,6 +4375,28 @@ class Clone implements CloneHost {
    * 抜粋ではなく全文で、断り書き付きで届く。
    */
   async #restoreUnread(): Promise<void> {
+    // **墓標の窓をここで開いて、必ず閉じる**（issue #1049。
+    // `#droppedWhileRestoring` の doc）。本体を別の関数へ分けてあるのは、
+    // **本体が途中の `return` で何箇所からも抜ける**（片付けの検知・読み取りの
+    // 失敗）ためである —— `try` で包まずに `return` の手前で印を降ろす形にすると、
+    // 1箇所足し忘れた回だけ印が立ったまま残り、**その後の消し込みが永久に墓標へ
+    // 溜まる**（しかも赤くならない）。⛔ **「無駄な間接層だ」と思って畳まない
+    // こと。** 畳むなら本体を `try` で包む形にすること（印の降ろしを分岐ごとに
+    // 書く形へは戻さない）。
+    this.#restoringUnread = true;
+    try {
+      await this.#restoreUnreadPass();
+    } finally {
+      this.#restoringUnread = false;
+      this.#droppedWhileRestoring.clear();
+    }
+  }
+
+  /**
+   * `#restoreUnread` の本体。**分けた理由は `#restoreUnread` の側に書いてある**
+   * （印を必ず降ろすため）。呼ぶのは `#restoreUnread` だけである。
+   */
+  async #restoreUnreadPass(): Promise<void> {
     let pending: PendingInboxEvent[];
     try {
       pending = await this.#stores.inbox.claimPending();
@@ -4422,6 +4573,40 @@ class Clone implements CloneHost {
       // 器の入れ替えを跨いだ拾い直しなので、**この窓に `arrived` していない**
       // ものが `delivered` に入る（`schema.ts` の `inbox_flow` の doc「`arrived`
       // / `pending` と食い違う理由」）。
+      // **拾い直しているあいだに消された合図は、積まない**（issue #1049）。
+      //
+      // **`dropQueuedInboxEvents` だけでは届かない窓がここである。** あちらが
+      // 外せるのは「その瞬間に待ち行列に居るもの」で、このループは `claimPending()`
+      // した集合を**これから**1件ずつ積んでいく —— あいだに日誌の書き込みと台帳の
+      // 照会の `await` が挟まるので、**消された後に積む**順序が普通に起きる
+      // （#1049 の事故は拾い直しが 3,326 件あった起動で、消し込みはそのループの
+      // 最中だった）。
+      //
+      // **門（`redeliveryGate`）より後ろに置く。** あちらは「いま配る意味が
+      // 在るか」を `usageBlocked` で決めて**行を残す**が、こちらは器の行が既に
+      // 無い ⟹ 残す先が無い。順序を逆にすると、消された合図に対して
+      // `#foldGatedRedelivery`（「次の起動でまた拾う」と書く跡）が残り、**次の
+      // 起動では拾えないのに拾えると書く**ことになる。
+      //
+      // **`#forget` は呼ばない。** 器の行は消し込んだ側が既に消している
+      // （`dropQueuedInboxEvents` の doc「消し込みは呼ばない」と同じ理由 ——
+      // 空振りの `remove` で `settled` を二重に数える）。
+      if (this.#droppedWhileRestoring.has(record.event.id)) {
+        this.#unread.delete(record.event.id);
+        this.#redelivered.delete(record.event.id);
+        this.#redeliveredClosed.delete(record.event.id);
+        this.#dropPendingCollapse(record.event);
+        await this.#journal({
+          type: 'exchange',
+          with: 'self',
+          role: 'outbound',
+          text:
+            '拾い直している最中に器から消された合図なので、配らずに畳んだ' +
+            `（配り直しの対象だったが、消し込みが先に届いた）: ${inboxEventShape(record.event)}`,
+        });
+        continue;
+      }
+
       this.#bumpInboxFlow(this.#inboxFlowDelivered, record.event.type);
       this.#inbox.push(
         record.event,
