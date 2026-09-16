@@ -1,11 +1,11 @@
 import { PGlite } from '@electric-sql/pglite';
-import { eq } from 'drizzle-orm';
+import { eq, isNull, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
-import { migrate, STATEMENTS } from './migrate.js';
-import { archive } from './schema.js';
+import { migrate, OPEN_MANAGER_BODY_INDEX, STATEMENTS } from './migrate.js';
+import { archive, commitments } from './schema.js';
 
 /**
  * **`migrate` の配列そのものを構造で見る歯。**
@@ -111,5 +111,122 @@ describe('migrate（archive の指紋・連続性列。#698）', () => {
     expect(rows).toEqual([
       { bodyChars: 5, bodyMd5: 'deadbeefdeadbeefdeadbeefdeadbeef', continuity: 'continues' },
     ]);
+  });
+});
+
+/**
+ * **`commitments_open_manager_body_idx`（#1041）だけは無条件に当てられない。**
+ *
+ * `STATEMENTS` は起動のたびに頭から通る。既存の重複行が1組でも在ると
+ * `create unique index` は `could not create unique index` で落ちるので、この文を
+ * 配列へ置けば**デーモンが二度と上がらなくなる**（2026-08-25 に `usage_daily_key_idx`
+ * で実際に起きた形。`migrate.ts` 冒頭の doc）。だから `ensureOpenManagerBodyIndex`
+ * が重複を数えてから作る。
+ *
+ * **ここで測るのは「落ちないこと」だけではない。** 索引を作らずに進んだことが
+ * **逐語で外へ出ている**ことまで測る —— 出ていなければ、DB が拒む段が無い状態で
+ * 運用へ出たことに誰も気づけない。
+ *
+ * ⚠️ **「重複を器が畳んで索引を作る」形は採っていない**（`ensureOpenManagerBodyIndex`
+ * の doc）。クローンが閉じていない行を器が閉じたら、閉じた行は未了の一覧から消える
+ * ので、クローンはそれに気づけない。
+ */
+describe('migrate（台帳の畳み込みの索引。#1041）', () => {
+  let client: PGlite;
+  let db: Db;
+
+  const managerRow = (id: string, body: string, source = 'mgr-1') =>
+    db.insert(commitments).values({
+      id,
+      at: new Date('2026-09-17T00:00:00.000Z'),
+      closedAt: null,
+      commitment: { id, at: '2026-09-17T00:00:00.000Z', origin: 'manager', source, body },
+    });
+
+  const indexExists = async (): Promise<boolean> => {
+    const result = await db.execute(
+      sql`select 1 from pg_class where relname = ${OPEN_MANAGER_BODY_INDEX}`,
+    );
+    const rows = Array.isArray(result) ? result : ((result as { rows?: unknown[] }).rows ?? []);
+    return rows.length > 0;
+  };
+
+  beforeEach(async () => {
+    client = new PGlite();
+    db = drizzle(client);
+  });
+
+  afterEach(async () => {
+    await client.close();
+  });
+
+  it('重複が無ければ索引を作る（警告は出さない）', async () => {
+    const warnings: string[] = [];
+    await migrate(db, (line) => warnings.push(line));
+    expect(await indexExists()).toBe(true);
+    expect(warnings).toEqual([]);
+  });
+
+  it('⭐ 既存の重複行が在っても migrate は落ちない —— 索引を作らず、件数と id を逐語で警告する', async () => {
+    // 1周目は空の DB なので索引が作られる。**その索引を消してから重複を積む**
+    // ——「#1035 以前に積まれた重複を持つ DB が、この変更を初めて受け取る」を模す。
+    await migrate(db);
+    await db.execute(sql.raw(`drop index ${OPEN_MANAGER_BODY_INDEX}`));
+    await managerRow('dup-a', '同じ一言');
+    await managerRow('dup-b', '同じ一言');
+    await managerRow('single', '別の一言');
+
+    const warnings: string[] = [];
+    await migrate(db, (line) => warnings.push(line));
+
+    // 落ちない。しかし索引は作られていない。
+    expect(await indexExists()).toBe(false);
+    // **件数と id が逐語で出ている**（人間がその行を読んで自分で決める材料）。
+    expect(warnings.join('')).toContain('1 組 / 2 行');
+    expect(warnings.join('')).toContain('dup-a, dup-b');
+    expect(warnings.join('')).toContain(OPEN_MANAGER_BODY_INDEX);
+    // 重複していない行は警告に出さない（読む側の材料を薄めない）
+    expect(warnings.join('')).not.toContain('single');
+    // ⛔ 器が勝手に閉じていない（3行とも未了のまま）
+    const rows = await db.select({ id: commitments.id }).from(commitments);
+    expect(rows).toHaveLength(3);
+    const open = await db
+      .select({ id: commitments.id })
+      .from(commitments)
+      .where(isNull(commitments.closedAt));
+    expect(open).toHaveLength(3);
+  });
+
+  it('⭐ 重複が片付けば、次の起動で索引は黙って作られる', async () => {
+    await migrate(db);
+    await db.execute(sql.raw(`drop index ${OPEN_MANAGER_BODY_INDEX}`));
+    await managerRow('dup-a', '同じ一言');
+    await managerRow('dup-b', '同じ一言');
+    await migrate(db, () => undefined);
+    expect(await indexExists()).toBe(false);
+
+    // 人間が片方を閉じた、を模す（器ではなく人間が決めた）
+    await db
+      .update(commitments)
+      .set({ closedAt: new Date('2026-09-18T00:00:00.000Z') })
+      .where(eq(commitments.id, 'dup-b'));
+
+    const warnings: string[] = [];
+    await migrate(db, (line) => warnings.push(line));
+    expect(await indexExists()).toBe(true);
+    expect(warnings).toEqual([]);
+  });
+
+  /**
+   * **2周目でだけ壊れる状態を挟む**（`migrate.ts` 冒頭の doc と、直上の
+   * `archive` の歯と同じ作法）。索引が既に在る DB に、その索引が許した行
+   * （＝同じ source の別本文）を積んでから、もう一度 `migrate` を通す。
+   */
+  it('索引が在る DB に行を積んでから2周目を通しても落ちない', async () => {
+    await migrate(db);
+    await managerRow('row-1', '一言め');
+    await managerRow('row-2', '二言め');
+    await migrate(db);
+    expect(await indexExists()).toBe(true);
   });
 });

@@ -20,7 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb, migrate, seedPgWorkspace, type PgStores } from './index.js';
-import { agentTokens, archive, jobs as jobsTable, memory } from './schema.js';
+import { agentTokens, archive, commitments, jobs as jobsTable, memory } from './schema.js';
 
 /**
  * pg ドライバの受け入れ確認。
@@ -1983,6 +1983,111 @@ describe('PgScheduleStore', () => {
 
     // 「無い」ことだけが null である
     expect(await stores.schedules.get('しらない')).toBeNull();
+  });
+});
+
+describe('PgCommitmentStore の畳み込みの索引（#1041。pg だけが持つ段）', () => {
+  const managerEntry = (id: string, body: string, source = 'mgr-1'): Commitment => ({
+    id,
+    at: '2026-09-17T00:00:00.000Z',
+    origin: 'manager',
+    source,
+    body,
+  });
+
+  /** `open()` の `where not exists` を経由しない、素の insert。 */
+  const rawInsert = async (entry: Commitment): Promise<void> => {
+    await db.insert(commitments).values({
+      id: entry.id,
+      at: new Date(entry.at),
+      closedAt: null,
+      commitment: entry,
+    });
+  };
+
+  /**
+   * **ここで測るのは `open()` の `where not exists` ではなく、DB の制約そのもの
+   * である。**
+   *
+   * `open()` の中の `where not exists` は**直列に**来た同文しか畳めない。同時に来た
+   * 2件は互いの行を読み取りスナップショットに持たないので、両方ともすり抜ける——
+   * それが #1041 の欠陥であり、**トランザクションを張っても直らない**（READ
+   * COMMITTED の select → insert は排他しない。`PgCommitmentStore.open` の doc）。
+   * 最後に残るのは索引だけである。
+   *
+   * ⚠️ **その「同時」そのものは、この repo では再現できない。** PGlite は単一接続
+   * なので2つのセッションを同時に走らせられない。**だから競合を再現する代わりに、
+   * 制約が在ることを直接測る** —— `where not exists` を経由しない insert は、
+   * 同時に来た2件目が見る世界とちょうど同じものである（相手の行がまだ見えない）。
+   * ⟹ **「同時に来たら DB が拒む」は、この歯と `open()` の doc の読み合わせで
+   * しか言えない。歯そのものが言えるのは「素の insert を DB が拒む」までである。**
+   */
+  /** drizzle は元の例外を `cause` に包む（外側は `Failed query: ...` の1行）。 */
+  const reasonChain = (error: unknown): string => {
+    const lines: string[] = [];
+    for (let current = error; current instanceof Error; current = current.cause)
+      lines.push(current.message);
+    return lines.join('\n');
+  };
+
+  it('⭐ 同一マネージャー×同一本文×未了の2件目は、素の insert なら DB が拒む', async () => {
+    await stores.commitments.open(managerEntry('idx-a', '同じ一言'));
+    const rejection = await rawInsert(managerEntry('idx-b', '同じ一言')).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    if (rejection === null) throw new Error('素の insert が通ってしまった（索引が効いていない）');
+    // **索引の名前まで見る。** 主キー（id）で弾かれたのでは、本文の重複を拒んだ
+    // ことにならない —— 測りたいのは #1041 が足した索引そのものである。
+    expect(reasonChain(rejection)).toContain('commitments_open_manager_body_idx');
+  });
+
+  it('⭐ 陰性対照: source が違う同文は、素の insert でも通る', async () => {
+    await stores.commitments.open(managerEntry('idx-a', '同じ一言'));
+    await rawInsert(managerEntry('idx-c', '同じ一言', 'mgr-2'));
+    expect((await stores.commitments.list()).entries).toHaveLength(2);
+  });
+
+  it('⭐ 陰性対照: 閉じた行と同文は、素の insert でも通る', async () => {
+    await stores.commitments.open(managerEntry('idx-a', '同じ一言'));
+    await stores.commitments.close('idx-a', '2026-09-18T00:00:00.000Z', '片付けた', 'clone');
+    await rawInsert(managerEntry('idx-d', '同じ一言'));
+    expect((await stores.commitments.list()).entries).toHaveLength(1);
+  });
+
+  it('⭐ 陰性対照: origin が manager でなければ、同文でも素の insert で通る', async () => {
+    await stores.commitments.open({
+      id: 'idx-h1',
+      at: '2026-09-17T00:00:00.000Z',
+      origin: 'human',
+      source: 'conv-1',
+      body: '人間の同じ一言',
+    });
+    await rawInsert({
+      id: 'idx-h2',
+      at: '2026-09-17T00:00:00.000Z',
+      origin: 'human',
+      source: 'conv-1',
+      body: '人間の同じ一言',
+    });
+    expect((await stores.commitments.list()).entries).toHaveLength(2);
+  });
+
+  /**
+   * **索引の鍵が `md5(body)` であることを、この歯が固定する。**
+   *
+   * 生の `body` を鍵にすると btree の索引行のサイズ上限（約2.7KB）を超え、
+   * **長い報告だけが記帳できなくなる**（insert が落ちる）。⟹ 鍵を「素直に」
+   * 全文へ直した瞬間にここが落ちる。代償（md5 の衝突）は
+   * `PgCommitmentStore.open` の doc に全文で書いてある。
+   */
+  it('⭐ 8000 文字の本文でも開ける（鍵が md5 でなければ落ちる）', async () => {
+    const long = 'x'.repeat(8_000);
+    expect(await stores.commitments.open(managerEntry('idx-long', long))).toEqual({
+      opened: true,
+      folded: false,
+    });
+    expect((await stores.commitments.get('idx-long'))?.body).toHaveLength(8_000);
   });
 });
 
