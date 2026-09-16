@@ -1732,14 +1732,15 @@ class RunnerSession {
             env: Record<string, string | undefined>;
             signal: AbortSignal;
           }) => this.#spawnAsChildUser(spawnOptions);
-    // **呼び出し側（デーモン）の期限で全体を打ち切る。** 個々の git コマンドは
-    // `computeUnpushedWork` が自前のタイムアウトを持つが、この `signal` は
-    // それとは別に「呼び出し側がもう待っていない」を伝える経路である——
-    // ただし現時点では abort しても走っている `git` を止めはしない
-    // （`apps/daemon/src/runner-client.ts` の `#call` と同じ「相手は止めない」
-    // 作法。期限は待つのをやめるためだけにある）。
-    void options?.signal;
-    return computeUnpushedWork(this.#cwd, { spawn: spawnFn, env: this.#childEnv() });
+    // **`options.signal` は「次の作業ツリーへ進む前」だけを止める。** 既に
+    // 始めた1本の git 呼び出しは、`computeUnpushedWork` 自身のタイムアウトが
+    // 満ちるまで走らせる——`apps/daemon/src/runner-client.ts` の `#call` と
+    // 同じ「相手は止めない」作法（期限は待つのをやめるためだけにある）。
+    return computeUnpushedWork(this.#cwd, {
+      spawn: spawnFn,
+      env: this.#childEnv(),
+      ...(options?.signal === undefined ? {} : { signal: options.signal }),
+    });
   }
 
   /**

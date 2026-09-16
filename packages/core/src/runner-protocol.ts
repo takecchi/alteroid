@@ -1613,6 +1613,12 @@ export const unpushedWorkResultSchema = z.object({
    * 見えてしまう）。
    */
   truncatedAtCount: z.number().int().positive().optional(),
+  /**
+   * 呼び出し元の期限切れで、見つかった作業ツリーの一部を調べる前に打ち切った
+   * ときだけ `true`。**それでも `worktrees` からは落とさない**——見つかった
+   * 分は全部載せ、調べられなかった分は各欄の `*Unknown` に理由が付く。
+   */
+  stoppedEarly: z.literal(true).optional(),
 });
 export type UnpushedWorkResult = z.infer<typeof unpushedWorkResultSchema>;
 
