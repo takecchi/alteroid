@@ -55,32 +55,59 @@ export type InboxEventValidity =
   | { readonly kind: 'unknowable'; readonly claimed: JobStatus; readonly detail: string };
 
 /**
- * {@link InboxEventValidity} を型ごとに答える純関数。
+ * {@link InboxEventValidity} の核——`InboxEvent` を経由せず、素の値
+ * （`claimed` / `now`）だけで呼べる（Issue #1036）。
+ *
+ * ## なぜ切り出したか
+ *
+ * `inboxEventValidity` は左辺を `event.statusAtDelivery` に固定しているので、
+ * `InboxEvent` を持たない呼び出し元（`Job.lastReportStatus` を突き合わせたい
+ * `manager-activity.ts` の `describeReportDrift`）から呼べない。**判定の
+ * ロジック（`claimed` と `now` を4値に振り分ける）そのものは `InboxEvent` に
+ * 何も依存していない**——依存しているのは `inboxEventValidity` 側の
+ * 「`claimed` をどこから取るか」（`event.statusAtDelivery`）だけである。
+ *
+ * **判定のコピーを2つ作らない。** `inboxEventValidity` はこの核を呼ぶだけの
+ * 薄い層にし、`describeReportDrift` も同じ核を呼ぶ——4値への振り分け方を
+ * 2箇所に書かない。
  *
  * `now` は呼び手が引いた「いまの状態」。**引けなかったときは `undefined`
  * ではなく `detail` を渡すこと**——`undefined` だと「引けなかった」と
  * 「そんな委譲は無い」が同じ顔になる。
+ */
+export function statusValidity(
+  claimed: JobStatus | undefined,
+  now: { readonly status: JobStatus } | { readonly detail: string },
+): InboxEventValidity {
+  // **名乗っていない回は、そこで止める。** 既定値を作ってはいけない
+  // （`schema.ts` の `statusAtDelivery` / `lastReportStatus` の doc「取れない
+  // 軸に 0 の行を作る」と同じ約束）。
+  if (claimed === undefined) return { kind: 'unclaimed' };
+  if ('detail' in now) return { kind: 'unknowable', claimed, detail: now.detail };
+  return now.status === claimed
+    ? { kind: 'unchanged', status: claimed }
+    : { kind: 'changed', claimed, now: now.status };
+}
+
+/**
+ * {@link InboxEventValidity} を型ごとに答える純関数。
  *
  * **網羅性を型で強制する。** `switch (event.type)` で書き、`default` の
  * 倒れ先で `never` を受ける——新しい合図の型が足されたら `typecheck` が
  * 落ちる（`inboxBacklogDedupeKey` / `restoredInboxEventVerdict` と同じ作法）。
+ *
+ * **出力は {@link statusValidity} を切り出す前と1バイトも変えていない。**
+ * `manager_message` の枝は「`claimed`（＝`event.statusAtDelivery`）を取り出して
+ * 核へ渡す」だけの薄い層になった——`claimed === undefined` の早期リターンも
+ * 含めて判定は核の内側で行うので、ここで二重に書かない。
  */
 export function inboxEventValidity(
   event: InboxEvent,
   now: { readonly status: JobStatus } | { readonly detail: string },
 ): InboxEventValidity {
   switch (event.type) {
-    case 'manager_message': {
-      const claimed = event.statusAtDelivery;
-      // **名乗っていない回は、そこで止める。** `statusAtDelivery` は任意欄で、
-      // `manager.ts` が像を持てなかった回は**キーごと省かれる**（その doc
-      // 「取れない軸に 0 の行を作る」）。既定値を作ってはいけない。
-      if (claimed === undefined) return { kind: 'unclaimed' };
-      if ('detail' in now) return { kind: 'unknowable', claimed, detail: now.detail };
-      return now.status === claimed
-        ? { kind: 'unchanged', status: claimed }
-        : { kind: 'changed', claimed, now: now.status };
-    }
+    case 'manager_message':
+      return statusValidity(event.statusAtDelivery, now);
     // **他の6型は状態を名乗らない。** `statusAtDelivery` は
     // `manager_message` にしか無い（`schema.ts` の `inboxEventSchema`）。
     case 'human_message':
@@ -103,18 +130,30 @@ export function inboxEventValidity(
  *
  * ⛔ **判定も助言もしない。**「こうしろ」はクローンが決めることで、ここが
  * 言えるのは**測った事実**だけである（`describeSuperseded` と同じ向き）。
+ *
+ * **`subject` は主語（「いつ・どこで名乗ったか」）だけを差し替える（Issue
+ * #1036）。** 既定値 `'受信箱へ積まれた'` は元の呼び出し元（`clone.ts` の
+ * `#validityNoticeFor`）が引く形と1バイトも変えていない——省略すれば以前と
+ * 同じ文言になる。`manager-activity.ts` の `describeReportDrift` は
+ * `'台帳へ書かれた'` を渡す——**主語だけが違い、それ以外の言い回し
+ * （「この断り書きを組んだ時点では」等）は共有する**。文言の生成元を
+ * 2つに割らないための唯一の場所である。
  */
-export function describeValidity(validity: InboxEventValidity, managerId: string): string {
+export function describeValidity(
+  validity: InboxEventValidity,
+  managerId: string,
+  subject: string = '受信箱へ積まれた',
+): string {
   switch (validity.kind) {
     case 'changed':
       return (
-        `⚠️ この報告が受信箱へ積まれた時点で ${managerId} は \`${validity.claimed}\` でしたが、` +
+        `⚠️ この報告が${subject}時点で ${managerId} は \`${validity.claimed}\` でしたが、` +
         `この断り書きを組んだ時点では \`${validity.now}\` です（報告が名乗った前提は動いています。` +
         `中身が要らなくなったとは限りません）。`
       );
     case 'unknowable':
       return (
-        `⚠️ この報告が受信箱へ積まれた時点で ${managerId} は \`${validity.claimed}\` でしたが、` +
+        `⚠️ この報告が${subject}時点で ${managerId} は \`${validity.claimed}\` でしたが、` +
         `この断り書きを組む時点の状態を引けませんでした（${validity.detail}）。` +
         `**「変わっていない」ではなく「確かめられなかった」です。**`
       );

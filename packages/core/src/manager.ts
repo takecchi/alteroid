@@ -436,6 +436,17 @@ export interface ManagerSummary {
    */
   lastReportAt?: string;
   /**
+   * `lastReport` を台帳へ書いた瞬間の status（`jobSchema.lastReportStatus`。
+   * Issue #1036）。**書いた瞬間**は `record.job.status` の書き換え**後**の
+   * 値（＝この report の `event.status`）——詳しい理由は `schema.ts` の
+   * `lastReportStatus` の doc。
+   *
+   * いまの `status` と突き合わせて「この報告は古い」を言うのは
+   * `manager-activity.ts` の `describeReportDrift` の役目——ここは値を運ぶ
+   * だけで判定は持たない。
+   */
+  lastReportStatus?: JobStatus;
+  /**
    * 直近の1ターンが**報告ではなく失敗**で終わったこと（`jobSchema.lastFailure`）。
    *
    * **台帳に載っているのに要約へ載っていなかった。** 台帳（`Job`）は `lastFailure` を
@@ -464,6 +475,15 @@ export interface ManagerSummary {
    * ままにすると、Issue #714 が塞いだのと同じ穴が開く。
    */
   lastUnreported?: NonNullable<Job['lastUnreported']>;
+  /**
+   * `manager_stop` で畳まれたターンの本文（`jobSchema.lastFoldedTurn`。
+   * Issue #1038）。**`lastReport` とは別の欄——`schema.ts` の doc を参照。**
+   *
+   * `manager_stop` の応答・`manager_report` の両方がここを読む。届いていない
+   * ことはある（`schema.ts` の doc の「順序の注意」）——`undefined` は
+   * 「畳んだ本文が無い」と「まだ届いていない」のどちらもありうる。
+   */
+  lastFoldedTurn?: NonNullable<Job['lastFoldedTurn']>;
   /**
    * セッションが `failed` として畳まれたときの、器の資源による落ち方の分類
    * （`jobSchema.lastSystemError`。#713 段3）。
@@ -6653,6 +6673,14 @@ class Pool implements ManagerPool {
             role: 'inbound',
             text: `[${event.managerId}] （停止済みのため受信箱へは回さない）${event.text}`,
           });
+          // **本文だけは台帳にも残す（Issue #1038）。** 日誌にしか残らないと、
+          // 誤って止めたことに気づく契機が止めた直後に無い——`manager_stop` の
+          // 応答にも `manager_report` にも1文字も出ない、という #1038 の実害。
+          // **`record.job.status` は動かさない。`#emit()` もしない**（R4 は
+          // 覆さない。すぐ上のコメントと同じ理由）。上書き（前回の畳んだ本文を
+          // 消して最新のものに差し替える）でよい——古いほうを残す理由が無い。
+          record.job.lastFoldedTurn = { text: event.text, at: new Date().toISOString() };
+          await this.#persist(record);
           return;
         }
         // **reportId で冪等に（#206）。** `ask` の `requestId`（直後の
@@ -6678,6 +6706,19 @@ class Pool implements ManagerPool {
         // 瞬間として `new Date().toISOString()` を直接使う。
         record.job.lastReportAt = new Date().toISOString();
         record.job.status = event.status;
+        // **「書いた瞬間」は書き換え後の値（Issue #1036）。** `event.status`
+        // を直接使う——`record.job.status` を読み直しても同じ値だが、直上の
+        // 代入と同じ値であることを1目で分かるようにするため直接使う。
+        // **既定値は作らない**（`schema.ts` の `lastReportStatus` の doc）。
+        record.job.lastReportStatus = event.status;
+        // **止めた後に畳んだ本文（Issue #1038）は、応答として終わった回では
+        // 消す。** ここへ来られたのは `record.job.status === 'stopped'` の
+        // 早期リターン（このすぐ上の分岐）を通らなかった回——つまりこの
+        // report は完遂した報告として台帳へ書かれる。古い畳んだ本文を残すと、
+        // 次に `manager_report` を読む側が「これは畳まれた途中経過だ」と
+        // 誤読する（`lastFailure` / `lastUnreported` を応答として終わった回で
+        // 消すのと同じ理由——`schema.ts` の `lastFoldedTurn` の doc）。
+        delete record.job.lastFoldedTurn;
         /*
          * **古びさせない（#713 段3）。** `case 'report'` が届く時点で、この
          * セッションは新しいターンの出力を返している——`lastSystemError` が
@@ -9565,6 +9606,9 @@ function summaryOf(
     // **`lastReport` と対で運ぶ**（#358）。台帳をそのまま写すだけ——書き込みは
     // `#onEvent` の `case 'report'` の1箇所に閉じている。
     ...(job.lastReportAt === undefined ? {} : { lastReportAt: job.lastReportAt }),
+    // **`lastReportAt` と対で運ぶ（Issue #1036）。** 台帳をそのまま写すだけ
+    // ——書き込みは `#onEvent` の `case 'report'` の1箇所に閉じている。
+    ...(job.lastReportStatus === undefined ? {} : { lastReportStatus: job.lastReportStatus }),
     // **`lastReport` と同じ行で運ぶ。** 片方だけを載せると、読む側は「報告が来た」
     // と「エラーで死んだ」を本文の文言で判定するしかなくなる（塞いだ穴がここで
     // 開き直る）。応答として終わった回では台帳側で消えているので、ここは台帳を
@@ -9573,6 +9617,11 @@ function summaryOf(
     // **`lastFailure` と同じ行で運ぶ（Issue #917）。** 台帳をそのまま写すだけ
     // ——書き込みは `#onEvent` の `case 'report'` の1箇所に閉じている。
     ...(job.lastUnreported === undefined ? {} : { lastUnreported: job.lastUnreported }),
+    // **止めた後に畳んだ本文（Issue #1038）。** 台帳をそのまま写すだけ——
+    // 書き込みは `#onEvent` の `case 'report'` の `status === 'stopped'`
+    // 分岐（立てる）と、通常の報告として処理される分岐（`delete` で下ろす）
+    // に閉じている。
+    ...(job.lastFoldedTurn === undefined ? {} : { lastFoldedTurn: job.lastFoldedTurn }),
     // **台帳をそのまま写すだけ**（#713 段3）。書き込みは `#onEvent` の
     // `case 'closed'`（立てる）と `case 'report'`（下ろす）に閉じている。
     ...(job.lastSystemError === undefined ? {} : { lastSystemError: job.lastSystemError }),
