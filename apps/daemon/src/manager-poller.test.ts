@@ -5,21 +5,25 @@ import { startManagerPolling } from './manager-poller.js';
 
 /**
  * `ManagerPool` の全メソッドを実装するが、このポーラーが呼ぶのは
- * `probeTurnEnds()` / `flushWithheldReports()` だけ——それ以外は呼ばれない
- * 前提で投げる（`usage-poller.test.ts` と同じ足場の作法）。
+ * `probeTurnEnds()` / `flushWithheldReports()` / `settleStalledUsageWakes()`
+ * だけ——それ以外は呼ばれない前提で投げる（`usage-poller.test.ts` と同じ
+ * 足場の作法）。
  */
 function fakeManagers(
   run: () => Promise<void> | void,
   flush: () => Promise<void> | void = () => undefined,
+  settle: () => Promise<void> | void = () => undefined,
 ): {
   managers: ManagerPool;
   calls: () => number;
   flushCalls: () => number;
-  /** どちらが先に呼ばれたか記録する（順序を固定する試験用）。 */
+  settleCalls: () => number;
+  /** どちらが先に呼ばれたか記録する(順序を固定する試験用)。 */
   order: () => readonly string[];
 } {
   let calls = 0;
   let flushCalls = 0;
+  let settleCalls = 0;
   const order: string[] = [];
   const managers: ManagerPool = {
     start: () => {
@@ -67,9 +71,21 @@ function fakeManagers(
       order.push('flushWithheldReports');
       await flush();
     },
+    async settleStalledUsageWakes() {
+      settleCalls += 1;
+      order.push('settleStalledUsageWakes');
+      await settle();
+      return [];
+    },
     stop: () => Promise.resolve(),
   };
-  return { managers, calls: () => calls, flushCalls: () => flushCalls, order: () => order };
+  return {
+    managers,
+    calls: () => calls,
+    flushCalls: () => flushCalls,
+    settleCalls: () => settleCalls,
+    order: () => order,
+  };
 }
 
 describe('ターン終了の助言を定期的に取り直す（Issue #567）', () => {
@@ -141,7 +157,7 @@ describe('ターン終了の助言を定期的に取り直す（Issue #567）', 
     expect(calls()).toBeGreaterThanOrEqual(1);
     expect(flushCalls()).toBeGreaterThanOrEqual(1);
     // **順序そのものが要点**（`probeTurnEnds` の中に入れていないこと）。
-    expect(order()).toEqual(['probeTurnEnds', 'flushWithheldReports']);
+    expect(order()).toEqual(['probeTurnEnds', 'flushWithheldReports', 'settleStalledUsageWakes']);
 
     poller.stop();
   });
@@ -166,6 +182,62 @@ describe('ターン終了の助言を定期的に取り直す（Issue #567）', 
       () => undefined,
       () => {
         throw new Error('配り直せなかった（模擬）');
+      },
+    );
+    const poller = startManagerPolling({ managers, intervalMs: 10_000 });
+
+    await expect(poller.refresh()).resolves.toBeUndefined();
+    expect(calls()).toBeGreaterThanOrEqual(1);
+
+    poller.stop();
+  });
+
+  /**
+   * `settleStalledUsageWakes()`（Issue #914 最終段。枠で止まった委譲のうち
+   * `report` / `closed` を二度と出さないまま借りだけが残ったものを清算する）
+   * が、この周期の**さらに後ろ**に相乗りすることを固定する
+   * （`manager-poller.ts` の doc。`probeTurnEnds()` より後でなければ、
+   * 同じ回で計算し直した `turnEndedAt` を読めない）。
+   */
+  it('flushWithheldReports() の後ろで settleStalledUsageWakes() も呼ぶ', async () => {
+    const { calls, flushCalls, settleCalls, managers, order } = fakeManagers(
+      () => undefined,
+      () => undefined,
+      () => undefined,
+    );
+    const poller = startManagerPolling({ managers, intervalMs: 10_000 });
+
+    await poller.refresh();
+    expect(calls()).toBeGreaterThanOrEqual(1);
+    expect(flushCalls()).toBeGreaterThanOrEqual(1);
+    expect(settleCalls()).toBeGreaterThanOrEqual(1);
+    expect(order()).toEqual(['probeTurnEnds', 'flushWithheldReports', 'settleStalledUsageWakes']);
+
+    poller.stop();
+  });
+
+  it('flushWithheldReports() が投げても settleStalledUsageWakes() は走る', async () => {
+    const { managers, settleCalls } = fakeManagers(
+      () => undefined,
+      () => {
+        throw new Error('配り直せなかった（模擬）');
+      },
+      () => undefined,
+    );
+    const poller = startManagerPolling({ managers, intervalMs: 10_000 });
+
+    await expect(poller.refresh()).resolves.toBeUndefined();
+    expect(settleCalls()).toBeGreaterThanOrEqual(1);
+
+    poller.stop();
+  });
+
+  it('settleStalledUsageWakes() が投げても、ポーラー自身は落ちない', async () => {
+    const { managers, calls } = fakeManagers(
+      () => undefined,
+      () => undefined,
+      () => {
+        throw new Error('清算に失敗した（模擬）');
       },
     );
     const poller = startManagerPolling({ managers, intervalMs: 10_000 });

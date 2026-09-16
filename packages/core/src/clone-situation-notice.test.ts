@@ -139,6 +139,7 @@ function stubPool(input: {
     vacate: notImplemented,
     probeTurnEnds: () => Promise.resolve(),
     flushWithheldReports: () => Promise.resolve(),
+    settleStalledUsageWakes: () => Promise.resolve([]),
     stop: () => Promise.resolve(),
   };
 }

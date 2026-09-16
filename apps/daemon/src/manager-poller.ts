@@ -86,6 +86,10 @@ export function startManagerPolling(options: ManagerPollerOptions): ManagerPolle
       // 失敗でループを止めない設計だが（`manager.ts` の doc）、契約が将来
       // 変わってもこのポーラーが原因でデーモンごと落ちることはない。
       .then(() => options.managers.settleStalledUsageWakes().catch(() => undefined))
+      // **戻り値（起こせた managerId の一覧）はこのポーラーからは捨てる。**
+      // `probe()` の型は `Promise<void>` で揃えてある——呼び出し元
+      // （テストの `refresh()`）は「1周した」ことだけを知ればよい。
+      .then(() => undefined)
       .finally(() => {
         inFlight = null;
       });

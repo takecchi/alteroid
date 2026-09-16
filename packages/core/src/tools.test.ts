@@ -329,6 +329,10 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     // クローンの道具はこの口を呼ばない（#567 の計算はデーモンのポーラーが起こす）。
     async probeTurnEnds() {},
     async flushWithheldReports() {},
+    // クローンの道具はこの口を呼ばない（清算の契機はデーモンのポーラーにある）。
+    async settleStalledUsageWakes() {
+      return [];
+    },
     async stop() {},
   };
 
