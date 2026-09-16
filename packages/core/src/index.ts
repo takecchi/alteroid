@@ -387,6 +387,7 @@ export {
  * しない・本文（`body`）にも触れない（`archive-prune.ts` の doc）。
  */
 export {
+  ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS,
   ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT,
   ARCHIVE_REMOVE_MANY_LIMIT_MAX,
   matchesArchiveRemoveManyFilter,

@@ -9129,6 +9129,169 @@
         ]
       }
     },
+    "/archive/remove": {
+      "post": {
+        "operationId": "postArchiveRemove",
+        "tags": ["archive"],
+        "summary": "アーカイブ済み生ログを絞り込んでまとめて tombstone する",
+        "description": "人間の入口から、アーカイブ済み生ログの本文を絞り込んでまとめて消す（issue #698）。**既定は試算（`dryRun` を省略すると true）で、1件も消さない。** `sessionIds` / `before` / `minStoredBytes` のどれも渡さない呼びは断る——絞り込みが無いのと同じで、1回でアーカイブを空にできてしまう。走行中のマネージャーの退避（`skipped.inUse`）とセッションの最新行（`skipped.newest`）は一括では開けない——開放が要るなら対象を1件ずつ名指しして `DELETE /archive/:id` の`overrideReason` を使うこと。含有が証明できない行（`skipped.notContained`）は `requireContainment: false` を明示しない限り既定で守る。まだ記憶へ蒸留していない区間の墓標は`requireContainment` に関わらず常に守る（`skipped.protected`）。本文だけを落とす（tombstone）——行そのものは消えない。",
+        "responses": {
+          "200": {
+            "description": "試算、または実際に消した結果。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "dryRun": {
+                      "type": "boolean"
+                    },
+                    "totalRows": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "matched": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "targeted": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "removedIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "removedBytes": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "remaining": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "skipped": {
+                      "type": "object",
+                      "properties": {
+                        "newest": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "alreadyRemoved": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "notContained": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "protected": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "inUse": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": ["newest", "alreadyRemoved", "notContained", "protected", "inUse"]
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "dryRun",
+                    "totalRows",
+                    "matched",
+                    "targeted",
+                    "removedIds",
+                    "removedBytes",
+                    "remaining",
+                    "skipped"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "絞り込みが1つも無い、`before` が ISO8601 として読めない、`limit` が2000 を超える、または requireContainment: false なのに sessionIds が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sessionIds": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "before": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minStoredBytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "requireContainment": {
+                    "type": "boolean"
+                  },
+                  "dryRun": {
+                    "type": "boolean"
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": ["reason"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/inbox/remove": {
       "post": {
         "operationId": "postInboxRemove",

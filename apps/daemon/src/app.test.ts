@@ -20,6 +20,7 @@ import type {
   UsageProbeQuery,
 } from '@alteroid/core';
 import {
+  ARCHIVE_REMOVE_MANY_LIMIT_MAX,
   captureStderr,
   clearRecentTracesForTesting,
   createAuthProviderRegistry,
@@ -1411,6 +1412,226 @@ describe('HTTP API', () => {
 
       const rest = await stores.inbox.peekPending();
       expect(rest.map((r) => r.event.id)).toEqual(['evt-3']);
+    });
+  });
+
+  /**
+   * `POST /archive/remove`（issue #698）。`POST /inbox/remove`（#972）と同じ
+   * 設計——絞り込み・既定（`dryRun` 省略で試算）・「絞り込みの無い呼びを断る」・
+   * 塊ごとに日誌を交互に書く。
+   *
+   * ⭐ #1049（「消した」と名乗った応答の後もクローンへ配達され続けた事故）と
+   * 同じ形を撃つ——**応答の `dryRun` / `ok` フィールドだけを見て終わりにせず、
+   * 実際に読む口（`GET /archive/:id` / `GET /archive`）で確かめる。**
+   */
+  describe('POST /archive/remove', () => {
+    it('既定（dryRun省略）は試算だけで1件も消さない（GET /archive/:id が本文を返し続ける）', async () => {
+      const idA = (await stores.archive.archive('sess-dry', 'A')).id;
+      await stores.archive.archive('sess-dry', 'AB'); // newest, idA を含む(前方一致)
+
+      const response = await app.request(
+        '/archive/remove',
+        json({ minStoredBytes: 0, reason: '試算のつもり' }),
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ ok: true, dryRun: true, targeted: 1 });
+
+      // ⭐ 応答の dryRun:true を見て終わりにせず、読む口そのもので確かめる。
+      const read = await app.request(`/archive/${idA}`);
+      expect(read.status).toBe(200);
+      expect(await read.text()).toBe('A');
+    });
+
+    it('dryRun:false で実行後、GET /archive/:id は410になり、GET /archive には removedAt/removedBytes 付きで残る', async () => {
+      const idA = (await stores.archive.archive('sess-exec', 'A')).id;
+      const idB = (await stores.archive.archive('sess-exec', 'AB')).id; // newest
+
+      const response = await app.request(
+        '/archive/remove',
+        json({ minStoredBytes: 0, reason: '本当に消す', dryRun: false }),
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        ok: true,
+        dryRun: false,
+        targeted: 1,
+        removedIds: [idA],
+        removedBytes: Buffer.byteLength('A', 'utf8'),
+      });
+
+      // 読む口そのもので「消えたことが後から分かる」ことを確かめる。
+      const read = await app.request(`/archive/${idA}`);
+      expect(read.status).toBe(410);
+      expect(await read.json()).toMatchObject({ error: 'removed' });
+
+      const list = (await (await app.request('/archive')).json()) as {
+        entries: { id: string; removedAt?: string; removedBytes?: number }[];
+      };
+      const rowA = list.entries.find((e) => e.id === idA);
+      expect(rowA).toMatchObject({
+        removedAt: expect.any(String),
+        removedBytes: Buffer.byteLength('A', 'utf8'),
+      });
+      // idB(最新行)は行そのものは変わらず残る（removedAt が付かない）。
+      const rowB = list.entries.find((e) => e.id === idB);
+      expect(rowB?.removedAt).toBeUndefined();
+    });
+
+    it('セッションの最新行は、絞り込みに当たっても消えない', async () => {
+      const idOnly = (await stores.archive.archive('sess-newest-only', 'ONLY')).id;
+
+      const response = await app.request(
+        '/archive/remove',
+        json({ minStoredBytes: 0, reason: '最新行しか無い', dryRun: false }),
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        targeted: 0,
+        removedIds: [],
+        skipped: expect.objectContaining({ newest: 1 }),
+      });
+
+      const read = await app.request(`/archive/${idOnly}`);
+      expect(read.status).toBe(200);
+      expect(await read.text()).toBe('ONLY');
+    });
+
+    it('走行中の委譲が抱えている行は消えず skipped.inUse に数えられ、本文が読めたまま', async () => {
+      const idA = (await stores.archive.archive('sess-running', 'A')).id;
+      await stores.archive.archive('sess-running', 'AB'); // newest
+      fake.runningOwners.set(idA, 'mgr-running-archive');
+
+      const response = await app.request(
+        '/archive/remove',
+        json({ minStoredBytes: 0, reason: '走行中は消せないはず', dryRun: false }),
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        // targeted は選定（selectArchiveRemovalTargets）が選んだ件数——
+        // 走行中で実行時に弾かれた分もここには数える。実際に消せたかは
+        // removedIds / skipped.inUse を見ること。
+        targeted: 1,
+        removedIds: [],
+        removedBytes: 0,
+        skipped: expect.objectContaining({ inUse: 1 }),
+      });
+
+      const read = await app.request(`/archive/${idA}`);
+      expect(read.status).toBe(200);
+      expect(await read.text()).toBe('A');
+    });
+
+    it('冪等: 同じ呼びを2回実行しても2回目は removedBytes を二重に数えず例外も出ない', async () => {
+      const idA = (await stores.archive.archive('sess-idempotent', 'A')).id;
+      await stores.archive.archive('sess-idempotent', 'AB'); // newest
+
+      const filter = json({ minStoredBytes: 0, reason: '2回叩く', dryRun: false });
+      const first = await app.request('/archive/remove', filter);
+      expect(first.status).toBe(200);
+      expect(await first.json()).toMatchObject({
+        removedIds: [idA],
+        removedBytes: Buffer.byteLength('A', 'utf8'),
+      });
+
+      const second = await app.request('/archive/remove', filter);
+      expect(second.status).toBe(200);
+      expect(await second.json()).toMatchObject({
+        targeted: 0,
+        removedIds: [],
+        removedBytes: 0,
+        skipped: expect.objectContaining({ alreadyRemoved: 1 }),
+      });
+
+      // 二重に消してもバイト数の帳尻・応答のどちらも壊れていない。
+      const read = await app.request(`/archive/${idA}`);
+      expect(read.status).toBe(410);
+      expect(await read.json()).toMatchObject({ bytes: Buffer.byteLength('A', 'utf8') });
+    });
+
+    /**
+     * 400の4通り。**実行前後で `GET /archive` が変わらないこと**まで見る
+     * ——応答が400でも、その手前で何かを消してしまっていないかを確かめる。
+     */
+    describe('400（絞り込みの無い呼び／不正な入力）— どれも1件も消さない', () => {
+      const snapshot = async () => (await (await app.request('/archive')).json()) as unknown;
+
+      it('sessionIds / before / minStoredBytes のどれも渡さない呼びは400', async () => {
+        await stores.archive.archive('sess-400-a', 'A');
+        const before = await snapshot();
+
+        const response = await app.request('/archive/remove', json({ reason: '絞り込み無し' }));
+        expect(response.status).toBe(400);
+        const body = (await response.json()) as { error: string };
+        expect(body.error).toContain('1件も消していない');
+        expect(await snapshot()).toEqual(before);
+      });
+
+      it('before が ISO8601 として読めなければ400', async () => {
+        await stores.archive.archive('sess-400-b', 'A');
+        const before = await snapshot();
+
+        const response = await app.request(
+          '/archive/remove',
+          json({ minStoredBytes: 0, before: '来週のどこか', reason: 'x', dryRun: false }),
+        );
+        expect(response.status).toBe(400);
+        expect(await snapshot()).toEqual(before);
+      });
+
+      it('limit が上限を超えると400', async () => {
+        await stores.archive.archive('sess-400-c', 'A');
+        const before = await snapshot();
+
+        const response = await app.request(
+          '/archive/remove',
+          json({
+            minStoredBytes: 0,
+            limit: ARCHIVE_REMOVE_MANY_LIMIT_MAX + 1,
+            reason: 'x',
+            dryRun: false,
+          }),
+        );
+        expect(response.status).toBe(400);
+        expect(await snapshot()).toEqual(before);
+      });
+
+      it('requireContainment: false なのに sessionIds が無いと400', async () => {
+        await stores.archive.archive('sess-400-d', 'A');
+        const before = await snapshot();
+
+        const response = await app.request(
+          '/archive/remove',
+          json({
+            minStoredBytes: 0,
+            requireContainment: false,
+            reason: 'x',
+            dryRun: false,
+          }),
+        );
+        expect(response.status).toBe(400);
+        expect(await snapshot()).toEqual(before);
+      });
+    });
+
+    it('日誌に理由と消した id が残る', async () => {
+      const idA = (await stores.archive.archive('sess-journal', 'A')).id;
+      await stores.archive.archive('sess-journal', 'AB'); // newest
+
+      await app.request(
+        '/archive/remove',
+        json({ minStoredBytes: 0, reason: '日誌に残るはず', dryRun: false }),
+      );
+
+      const journalEntries = (await stores.journal.list({ types: ['decision'] })) as {
+        type: 'decision';
+        decision: string;
+        grounds: string;
+      }[];
+      const entry = journalEntries.find((e) => e.decision.includes(idA));
+      expect(entry).toBeDefined();
+      expect(entry?.decision).toContain('日誌に残るはず');
+      expect(entry?.decision).toContain(idA);
+      expect(entry?.grounds).toBe('人間が直接 API から操作した');
     });
   });
 

@@ -15,6 +15,13 @@ import type { ArchiveEntry } from './store.js';
  */
 export const ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT = 500;
 export const ARCHIVE_REMOVE_MANY_LIMIT_MAX = 2_000;
+/**
+ * `POST /archive/remove`（issue #698）が日誌へ id を書くときの、塊ごとの
+ * 文字数予算（`chunkIdsByChars` に渡す）。**`packages/core/src/tools.ts` の
+ * `REMOVE_MANY_JOURNAL_ID_CHARS`（`inbox_remove_many` が使う値）とは値が
+ * 同じでも出所が違うので使い回さない**——上の2定数と同じ理由。
+ */
+export const ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS = 3_600;
 
 /**
  * `POST /archive/remove` / `archive_remove_many`（issue #698）が受け取る絞り込み。

@@ -1478,6 +1478,60 @@ export const archiveRemovedResponseSchema = z.object({
   archiveId: z.string().optional(),
 });
 
+/**
+ * `POST /archive/remove` の入力（issue #698）。`POST /inbox/remove`
+ * （#972）と同じ設計を踏襲する——絞り込み・既定（`dryRun` を省略すると
+ * 試算）・`reason` 必須。
+ *
+ * **絞り込みの3項（`sessionIds` / `before` / `minStoredBytes`）はどれも
+ * 任意だが、1つも渡さない呼びはハンドラ側（`app.ts`）が 400 で断る**
+ * ——`@alteroid/core` の `ArchiveRemoveManyFilter` の doc と同じ役割分担で、
+ * このスキーマ自身は「絞り込みが無い」を特別扱いしない。
+ *
+ * `requireContainment` の既定は `true`（`selectArchiveRemovalTargets` と
+ * 同じ既定を踏襲する）。`false` を渡すのは、`continuity` を持たない既存の
+ * 残骸を、内容が失われることを承知の上で人間が明示的に畳むときだけ。
+ */
+export const archiveRemoveManyRequestSchema = z.object({
+  sessionIds: z.array(z.string().min(1)).min(1).optional(),
+  before: z.string().min(1).optional(),
+  minStoredBytes: z.number().int().min(0).optional(),
+  requireContainment: z.boolean().optional(),
+  dryRun: z.boolean().optional(),
+  limit: z.number().int().min(1).optional(),
+  reason: z.string().min(1),
+});
+
+/**
+ * `POST /archive/remove` の応答（issue #698）。`skipped` の5つの理由は
+ * `ArchiveRemovalSelection.skipped` の4つ（`newest` / `alreadyRemoved` /
+ * `notContained` / `protected`）に、この HTTP 層だけが持つ5つ目
+ * `inUse`（走行中のマネージャーの退避で `guardArchiveRemoval` が
+ * `denied` / `unknown` を返した件数）を足したもの——`skipped` は0件でも
+ * 欄を省かない（`ArchiveRemovalSelection` の doc と同じ理由）。
+ *
+ * `remaining` は絞り込みに当たったが `limit` に溢れて対象にすら
+ * ならなかった件数（`selectArchiveRemovalTargets` の `remaining` を
+ * そのまま写す）。
+ */
+export const archiveRemoveManyResponseSchema = z.object({
+  ok: z.literal(true),
+  dryRun: z.boolean(),
+  totalRows: z.number().int(),
+  matched: z.number().int(),
+  targeted: z.number().int(),
+  removedIds: z.array(z.string()),
+  removedBytes: z.number().int(),
+  remaining: z.number().int(),
+  skipped: z.object({
+    newest: z.number().int(),
+    alreadyRemoved: z.number().int(),
+    notContained: z.number().int(),
+    protected: z.number().int(),
+    inUse: z.number().int(),
+  }),
+});
+
 // ---------------------------------------------------------------------------
 // 受信箱（/inbox）— issue #972
 // ---------------------------------------------------------------------------
