@@ -4787,9 +4787,14 @@ class Pool implements ManagerPool {
           await this.#clearUsageStoppedMark(managerId);
         }
         if (outcome === 'nudged') nudged.push(managerId);
-      } catch {
+      } catch (error) {
         // **1件の失敗で残りを止めない**（`probeTurnEnds` / `resumeStoppedByUsage`
-        // と同じ形）。
+        // と同じ形）。**ただし黙って握らない** —— ここまで来る例外は
+        // `#nudgeForUsageRotation` / `#clearUsageStoppedMark` の中の catch を
+        // すり抜けたものだけなので本来は起きないはずで、**起きないはずのものが
+        // 起きたことが跡に残らないと、この掃きが1本も動いていない回と
+        // 「対象が無かった」回が見分けられない。**
+        noteDroppedRecord('枠で止まった借りの清算', `managerId=${managerId}`, error);
       }
     }
     return nudged;
