@@ -281,6 +281,8 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /commitments         引き受けたまま終わっていない仕事（番号付き）
 /commitments all     片付けたものも含めて見る
 /commit <本文>       引き受けたことを台帳へ積む
+/commit-edit <番号|id> <新しい本文>  台帳の本文を後から直す（番号は /commitments の並び。
+                     直せるのは自分が積んだ未了の行だけ——断りの理由はサーバが返す）
 /done <番号|id> [理由]  片付けたことを記録する（番号は /commitments の並び）
 /rate <番号|id> <good|bad|unclear> [理由]  うまくいったかの評定を付ける・覆す
                      （片付いた行にも未了の行にも付く。何度でも上書きできる）
@@ -1558,6 +1560,48 @@ export async function runSlashCommand(
               : `記録できませんでした (${response.status})`
         }\n`,
       );
+      return 'ok';
+    }
+
+    /**
+     * 台帳の本文を後から直す（#1058。`PATCH /commitments/:id`）。
+     *
+     * **⚠️ `/edit` に相乗りさせていない。** あれは**自分のチャット発言**の編集で、
+     * 引く番号の置き場が違う（`listed.conversation` vs `listed.commitments`）。
+     * この repo は番号の置き場を面ごとに分けてあり、混ぜると
+     * 「`/commitments` の直後の `/edit 1`」が会話の発言を指す。
+     *
+     * ## ⛔ 直せる行の条件をここへ写さないこと
+     *
+     * 断るのはサーバで、403 の本文が**その行の `origin` を名指しして理由と出口まで
+     * 書く**（`apps/daemon/src/app.ts` の `PATCH /commitments/:id` が「ここが
+     * 『なぜ押せないか』の唯一の持ち主である」と逐語で言っている）。**Web UI も
+     * 断りの文面を1文字も持っていない。** ⟹ CLI も持たない —— `errorDetail()` で
+     * サーバの文をそのまま出す。写すと、サーバ側の線が動いた日に CLI だけが
+     * 静かに嘘になる。
+     */
+    case '/commit-edit': {
+      const [reference, ...bodyParts] = rest;
+      const body = bodyParts.join(' ').trim();
+      if (!reference || body.length === 0) {
+        stdout.write('使い方: /commit-edit <番号|id> <新しい本文>（番号は /commitments の並び）\n');
+        return 'ok';
+      }
+      const id = resolveListedId(reference, listed.commitments);
+      if (id === null) {
+        stdout.write(`[${reference}] は /commitments の一覧にありません\n`);
+        return 'ok';
+      }
+      const response = await client.commitments[':id'].$patch({
+        param: { id },
+        json: { body },
+      });
+      if (response.ok) {
+        stdout.write('本文を直しました（直す前の本文は日誌に逐語で残っています）\n');
+        return 'ok';
+      }
+      // **サーバの文をそのまま出す**（上の doc）。状態コードで言い換えない。
+      stdout.write(`${await errorDetail(response)}\n`);
       return 'ok';
     }
 
