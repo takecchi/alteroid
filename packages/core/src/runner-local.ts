@@ -16,6 +16,7 @@ import type {
   RunnerResumeCommand,
   RunnerSetCredentialsCommand,
   RunnerStartCommand,
+  UnpushedWorkResult,
 } from './runner-protocol.js';
 import { readExecutionResources } from './runner-resources.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
@@ -169,6 +170,19 @@ class LocalRunner implements RunnerClient {
 
   async transcript(managerId: string): Promise<string | null> {
     return this.#host.transcript(managerId);
+  }
+
+  /**
+   * 未 push の実装と未コミットの変更（Issue #1039）。**同一プロセスなので、
+   * `Host#unpushedWork` をそのまま返す**——`HttpRunner` と違ってここに
+   * HTTP の失敗の種類（404・期限切れ）は存在しない。セッションが無ければ
+   * `Host` 自身が `undefined` を返す。
+   */
+  async unpushedWork(
+    managerId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<UnpushedWorkResult | undefined> {
+    return this.#host.unpushedWork(managerId, options);
   }
 
   async credentials(): Promise<RunnerCredentialFingerprint[]> {

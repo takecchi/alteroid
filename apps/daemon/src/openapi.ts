@@ -1704,6 +1704,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     transcript() {
       throw new Error('spec 生成専用のスタブ: 生ログは持たない');
     },
+    unpushedWork() {
+      throw new Error('spec 生成専用のスタブ: 未 push の実装は数えない');
+    },
     runningManagerOwning() {
       throw new Error('spec 生成専用のスタブ: 走行中の像は持たない');
     },
