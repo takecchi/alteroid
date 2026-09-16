@@ -57,15 +57,9 @@ describe('matchesArchiveRemoveManyFilter', () => {
 
   it('before は排他（at がちょうど before の行は当たらない）', () => {
     const e = entry({ id: 'a', sessionId: 's1', minute: 5 });
-    expect(
-      matchesArchiveRemoveManyFilter(e, { before: '2026-01-01T00:06:00.000Z' }),
-    ).toBe(true);
-    expect(
-      matchesArchiveRemoveManyFilter(e, { before: '2026-01-01T00:05:00.000Z' }),
-    ).toBe(false);
-    expect(
-      matchesArchiveRemoveManyFilter(e, { before: '2026-01-01T00:04:00.000Z' }),
-    ).toBe(false);
+    expect(matchesArchiveRemoveManyFilter(e, { before: '2026-01-01T00:06:00.000Z' })).toBe(true);
+    expect(matchesArchiveRemoveManyFilter(e, { before: '2026-01-01T00:05:00.000Z' })).toBe(false);
+    expect(matchesArchiveRemoveManyFilter(e, { before: '2026-01-01T00:04:00.000Z' })).toBe(false);
   });
 
   it('minStoredBytes は以上（>=）', () => {
@@ -252,11 +246,7 @@ describe('selectArchiveRemovalTargets', () => {
       entry({ id: 'a4', sessionId: 's1', minute: 3, continuity: 'continues' }), // newest
     ];
     // a1, a2, a3 は生存する後続に含まれ全部消せる候補（a4 は newest で除外）。
-    const selection = selectArchiveRemovalTargets(
-      rows,
-      { minStoredBytes: 0 },
-      { limit: 2 },
-    );
+    const selection = selectArchiveRemovalTargets(rows, { minStoredBytes: 0 }, { limit: 2 });
     expect(selection.targets.map((t) => t.id)).toEqual(['a1', 'a2']); // 古い順に2件
     expect(selection.remaining).toBe(1); // a3 が溢れる
     assertInvariant(selection);
@@ -264,7 +254,12 @@ describe('selectArchiveRemovalTargets', () => {
 
   it('既定の limit は ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT である', () => {
     const rows = Array.from({ length: 3 }, (_, i) =>
-      entry({ id: `a${i}`, sessionId: 's1', minute: i, continuity: i === 0 ? 'first' : 'continues' }),
+      entry({
+        id: `a${i}`,
+        sessionId: 's1',
+        minute: i,
+        continuity: i === 0 ? 'first' : 'continues',
+      }),
     );
     const selection = selectArchiveRemovalTargets(rows, { minStoredBytes: 0 });
     expect(selection.remaining).toBe(0);
