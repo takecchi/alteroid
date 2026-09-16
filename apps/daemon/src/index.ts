@@ -487,14 +487,32 @@ type ReopenedToken = { tokenId: string; label: string; how: ReopenedHow };
  * の一段だけである。**この PR ではマネージャー側は実装しない**（別の委譲に
  * 出る）。
  *
- * ## 中身
+ * ## 中身 —— 2つを見る（Issue #1051 で1つ増えた）
  *
- * いまのところ `blocked` をそのまま返すだけである。**それでも独立した名前を
- * 持たせる**——呼び手のどちらかへ埋め込むと、もう一方がまた同じ1行を書き写す
- * ことになる。
+ * | 見るもの | 偽のとき配らない理由 |
+ * | --- | --- |
+ * | `blocked` | 止まっていなければ、この合図は `#usageBlocked` を1文字も動かさない（上） |
+ * | `releasePending` | **もう起こしてある。** 印（`#releaseRequested`）が立っている間は、2件目が立てるものが1つも無い |
+ *
+ * **後者が Issue #1051 の本体である。** 枠に当たっている間、ある層が 429 を
+ * 踏むと現役の記録にまた冷却が書かれ、別の層のターンが成功した瞬間にそれが
+ * 消えて「戻った」が1件立つ——この往復はミリ秒間隔で回る（歯は
+ * `packages/core/src/token-rotator.test.ts` の「#1051: recovered は記録に対して
+ * エッジだが、429 が記録を撃ち直すと何度でも立つ」）。往復のあいだ `blocked` は
+ * ずっと真なので、**`blocked` だけを見る門はその全部を通していた**（実運用で
+ * 同一本文が 35 ミリ秒に3件・24時間で 3297 件）。
+ *
+ * **⚠️ 「回復を1回に丸めている」のではない。** 記録の上では回復が本当に N 回
+ * 起きており、日誌の `recovered` 行はその N 回を残す（下の describe「recovered の
+ * 日誌行は…」）。ここが削るのは**クローンへ配る回数だけ**で、削ってよい根拠は
+ * 「印が既に立っている」という**証明可能な無効性**である。
+ *
+ * **起こし損ねは作らない。** `#releaseRequested` は `#pump` の先頭で必ず
+ * 消費される（`CloneHost.usageReleasePending` の doc）⟹ 配る回数は
+ * 「クローンが実際に再試行できる回数」ちょうどに落ちる。
  */
-export function worthDeliveringNow(blocked: boolean): boolean {
-  return blocked;
+export function worthDeliveringNow(blocked: boolean, releasePending: boolean): boolean {
+  return blocked && !releasePending;
 }
 
 /**
@@ -581,6 +599,9 @@ export interface CloneWakeGate {
   /**
    * @param tokenId 起こす／畳む対象のトークン id（{@link ReopenedToken.tokenId}）。
    * @param cloneBlocked いまのクローンの状態（`CloneHost.usageBlocked`）。
+   * @param releasePending **もう起こしてあるか**（`CloneHost.usageReleasePending`。
+   *   Issue #1051）。真なら畳む——印が立っている間、2件目の合図が立てるものは
+   *   1つも無い。
    * @returns
    *   - `{ kind: 'wake' }` —— 配る。`folded` はここまで畳んだ回数
    *     （まだ0回なら0。この呼び出しでカウンタは0へ戻る）
@@ -589,6 +610,7 @@ export interface CloneWakeGate {
   decide(
     tokenId: string,
     cloneBlocked: boolean,
+    releasePending: boolean,
   ): { kind: 'wake'; folded: number } | { kind: 'fold' };
 }
 
@@ -596,8 +618,8 @@ export interface CloneWakeGate {
 export function createCloneWakeGate(): CloneWakeGate {
   const folded = new Map<string, number>();
   return {
-    decide(tokenId, cloneBlocked) {
-      if (!worthDeliveringNow(cloneBlocked)) {
+    decide(tokenId, cloneBlocked, releasePending) {
+      if (!worthDeliveringNow(cloneBlocked, releasePending)) {
         folded.set(tokenId, (folded.get(tokenId) ?? 0) + 1);
         return { kind: 'fold' };
       }
@@ -1347,8 +1369,8 @@ export async function main(): Promise<void> {
      * 判定し直す——それ以外の型（人間の発言・マネージャーの報告など）は常に配る
      * （`true`）。
      */
-    redeliveryGate: (event, { usageBlocked }) =>
-      isTokenPoolReopenedNotice(event) ? worthDeliveringNow(usageBlocked) : true,
+    redeliveryGate: (event, { usageBlocked, releasePending }) =>
+      isTokenPoolReopenedNotice(event) ? worthDeliveringNow(usageBlocked, releasePending) : true,
   });
 
   /**
@@ -1479,12 +1501,24 @@ export async function main(): Promise<void> {
         // この判定より前に計算済みで、この後の日誌への追記はここで畳んでも
         // 変わらず通る——母数は日誌の `recovered` 行に残る（隣の describe
         // 「recovered の日誌行は、受信箱へ配ったかどうかと無関係に必ず出る」）。
-        const decision = cloneWakeGate.decide(reopened.tokenId, clone.usageBlocked);
+        const decision = cloneWakeGate.decide(
+          reopened.tokenId,
+          clone.usageBlocked,
+          clone.usageReleasePending,
+        );
         if (decision.kind === 'fold') {
           // **安く跡を残す**（Issue #783）。永続化はしない——`schema.ts` の
           // enum を触る判断は人間が持つ。既存の口（標準出力）へ1行だけ足す。
+          // **畳んだ理由を言い分ける（Issue #1051）。** 2つは読む側が次に
+          // 確かめるものが違う——前者は「クローンは動いている」、後者は
+          // 「クローンは止まっているが、もう起こしてある（まだ試していない）」。
+          // 潰すと、往復（#1051）が起きているのか本当に静かなのかが跡から
+          // 読めなくなる。
+          const why = clone.usageBlocked
+            ? 'クローンは枠で止まっているが、再開の印が既に立っている（もう起こしてあるので重ねない）'
+            : 'クローンは枠で止まっていないので起こさない';
           process.stdout.write(
-            `alteroidd: 認証トークンが通る状態に戻った合図を畳んだ（クローンは枠で止まっていないので起こさない）: ` +
+            `alteroidd: 認証トークンが通る状態に戻った合図を畳んだ（${why}）: ` +
               `「${reopened.label}」（id ${reopened.tokenId}）\n`,
           );
         } else {

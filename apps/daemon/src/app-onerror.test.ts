@@ -49,6 +49,7 @@ function fakeCloneHost(stores: Stores): CloneHost {
     managers: createManagerPool({ stores, post: () => {}, runners: createRunnerRegistry() }),
     // クローンへ配るか畳むか（Issue #783）。このテストは一度も読まない。
     usageBlocked: false,
+    usageReleasePending: false,
     async stop() {},
   };
 }

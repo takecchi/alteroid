@@ -645,13 +645,19 @@ const CONTEXT_WINDOW_FOLD_HELD_NOTICE =
  *   `#restoreUnread` のループは1件ごとに `await` するので、この値は前の記事の
  *   評価時から変わっていることがある——呼び手はループの外で1回だけ読んで使い
  *   回してはいけない。
+ * @param context.releasePending **呼ばれた瞬間の**
+ *   {@link CloneHost.usageReleasePending}（Issue #1051）。`usageBlocked` と
+ *   同じ理由で、1件ごとに読み直すこと。
  * @returns 真なら配る（`#inbox.push` する）。偽なら畳む
  *   （`#foldGatedRedelivery` — ターンを起こさないが、受信箱の行も台帳の行も
  *   消さない。日誌には型ごとの本文と「畳んだ」の1行を残す）。
  *   **判定できない（投げた）ときの倒れ先は呼び手の外——`#restoreUnread` 側で
  *   真として扱う**（雑音であって喪失ではない側へ倒す。既存の catch と同じ向き）。
  */
-export type RedeliveryGate = (event: InboxEvent, context: { usageBlocked: boolean }) => boolean;
+export type RedeliveryGate = (
+  event: InboxEvent,
+  context: { usageBlocked: boolean; releasePending: boolean },
+) => boolean;
 
 /**
  * {@link RedeliveryGate} の名前付きの既定——常に真を返す（＝畳まず全件配る）。
@@ -1993,6 +1999,18 @@ class Clone implements CloneHost {
    */
   get usageBlocked(): boolean {
     return this.#usageBlocked !== null;
+  }
+
+  /**
+   * 枠（利用上限）の解除を試す印（`#releaseRequested`）が、**まだ使われずに
+   * 立っているか**（Issue #1051）。
+   *
+   * **`CloneHost.usageReleasePending` の実装。** doc は `host.ts` 側に在る
+   * ——ここは `#releaseRequested` を読むだけの薄い窓で、判定を持たない
+   * （{@link Clone.usageBlocked} と同じ形）。
+   */
+  get usageReleasePending(): boolean {
+    return this.#releaseRequested;
   }
 
   // -------------------------------------------------------------------------
@@ -4546,6 +4564,7 @@ class Clone implements CloneHost {
       try {
         worthRedelivering = this.#redeliveryGate(record.event, {
           usageBlocked: this.usageBlocked,
+          releasePending: this.usageReleasePending,
         });
       } catch (error) {
         // **判定できないときは配る側へ倒す**（直前の「台帳が読めなければ

@@ -224,6 +224,7 @@ function fakeClone() {
     // クローンへ配るか畳むか（Issue #783）。HTTP 境界の検証では触らない
     // （門の判定はデーモンの配線側 `wake()` にある）。
     usageBlocked: false,
+    usageReleasePending: false,
     post(event) {
       posted.push(event);
       if (event.type !== 'human_message') return;

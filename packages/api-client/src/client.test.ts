@@ -99,6 +99,8 @@ function fakeClone(stores: Stores) {
     recycleSessionForToken() {},
     // クローンへ配るか畳むか（Issue #783）。この歯では触らない。
     usageBlocked: false,
+    // 再開の印がまだ使われずに立っているか（Issue #1051）。この歯では触らない。
+    usageReleasePending: false,
     // 消した合図の配達停止（issue #1049）。この歯では触らない。
     async dropQueuedInboxEvents() {
       return 0;
