@@ -17089,6 +17089,10 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
           emit: () => {},
           memoryCause: () => 'clone',
           conversationId: () => undefined,
+          // **本番と同じく配線する**（issue #1049）。渡さないと
+          // `inbox_remove_many` は消し込みそのものを断るので、この歯が測りたい
+          // 「日誌が落ちたときの応答」へ到達しない。
+          dropQueuedInboxEvents: async (ids) => ids.length,
         });
         return callExpectingError(tools, 'inbox_remove_many', {
           types: ['manager_message'],

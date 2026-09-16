@@ -599,7 +599,10 @@ describe('消した合図の配達も止める（issue #1049）', () => {
       await stores.inbox.put(event, event.at);
     }
 
-    const reply = await remover(stores, null)({
+    const reply = await remover(
+      stores,
+      null,
+    )({
       types: ['manager_message'],
       reason: '配線が無い',
       dryRun: false,
