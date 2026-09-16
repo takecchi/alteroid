@@ -4247,6 +4247,22 @@ class Clone implements CloneHost {
         active: pool[1],
         at: Date.now(),
         backlog: pool[2],
+        // **メモリの配達待ち行列（issue #1084）。** `pool[2]`（器の行数）とは
+        // 別の実体を数える——`situation.ts` の `describeSituationInboxBacklog`
+        // の doc「メモリの配達待ち行列は別の軸である」。
+        //
+        // **同期の getter だけで組む。** `Inbox#size` も `#deferred.length` も
+        // 失敗しうる操作を経由しないので、DB の軸のように `.then(value,
+        // onRejected)` で個別に catch する必要が無い
+        // （`describeSituationInboxQueued` の doc「`undefined` は
+        // 『読めなかった』ではない」）。
+        //
+        // **このターン自身（`events` / `batch`）は引かない——引く必要が無い。**
+        // `#pump` は `next()` / `drainWhile()` で `this.#inbox` から取り出して
+        // からここへ来るので、`#inbox.size` は既にこのターンの分を含まない
+        // （DB 側の `Math.max(0, backlog.count - events.length)` に対応する
+        // 補正が要らない理由——引く前の値が既に「これを除いた残り」である）。
+        queuedInMemory: this.#inbox.size + this.#deferred.length,
       });
     } catch (error) {
       return describeSituationUnavailable(error);

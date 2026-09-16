@@ -513,3 +513,96 @@ describe('状況の節に受信箱の滞留の行が載る（#783 段0）', () =
     await s.clone.stop();
   });
 });
+
+/**
+ * **メモリの配達待ち行列が毎ターンの状況へ載る配線**（issue #1084）。
+ *
+ * `describeSituation` 自体（軸の字面・省略/0の扱い）は `situation.test.ts`
+ * が別に測る。ここが測るのは**クローンが実際に `Clone#inbox`（メモリの
+ * FIFO）のサイズを渡していること**——直上の節（DB の行数）と対になる配線の
+ * 歯である。
+ *
+ * ## なぜ「先客の処理中に届いた分」で測るのか
+ *
+ * この軸の存在理由は「器（DB）の行数と、メモリの待ち行列は別の実体である」
+ * こと（issue #1049）。**同じ数を返す形でも配線は測れてしまう**——常に
+ * `#inbox.size` を経由するとは限らない実装（例えば誤って `pending()` を
+ * 2回読んで両方に渡す）でも、DB とメモリが同時に動く通常のケースでは同じ
+ * 値になり、この歯は区別できない。**区別が付く場面を選ぶ**——`managerId` を
+ * 別々にした2件を、1件目の処理中に届かせる。`#mergedManagerReportBatch` は
+ * 同じ `managerId` の連続分しか束ねない（`clone.ts` の同関数の doc）ので、
+ * 2件はどちらも `Inbox#drainWhile` に取られず、1件目のターンの時点で
+ * **`#inbox` にだけ**残る（DB にも当然残っているが、この歯はメモリの軸の値
+ * だけを見る）。
+ */
+describe('状況の節にメモリの配達待ち行列の行が載る（issue #1084）', () => {
+  it('先客の処理中に積み上がった分が、メモリの配達待ち行列として載る', async () => {
+    const s = bootClone(createMemoryStores(), busyPool());
+
+    // **A**: 受信箱が空なので `#pump` の待ち手へ直接渡る（`Inbox#push` の
+    // waiter 経路）——これが最初のターンになる。
+    s.clone.post({
+      type: 'manager_message',
+      id: 'evt-a',
+      at: AT,
+      managerId: 'mgr-a',
+      kind: 'report',
+      text: 'A',
+    });
+    // **B・C**: A の処理を継続する `#pump` はマイクロタスクの先でまだ
+    // 走っていない（`post` は同期関数——ここまで `await` を1つも挟んで
+    // いない）ので、待ち手はもう居らず、両方とも実際に `#inbox` の
+    // `#queue` へ積まれる。`managerId` を B・C・A の3つとも別にして、
+    // どの2つも束ねられないようにする。
+    s.clone.post({
+      type: 'manager_message',
+      id: 'evt-b',
+      at: AT,
+      managerId: 'mgr-b',
+      kind: 'report',
+      text: 'B',
+    });
+    s.clone.post({
+      type: 'manager_message',
+      id: 'evt-c',
+      at: AT,
+      managerId: 'mgr-c',
+      kind: 'report',
+      text: 'C',
+    });
+
+    await waitFor(() => s.inputs.length > 0, 'A のターンが走ること');
+
+    // **A 自身のターンの本文で確かめる。** `#situationNoticeFor` が材料を
+    // 組んだ瞬間、B・C はまだ配達されておらず `#inbox` に残っている
+    // （2件）。
+    const text = s.inputs[0] ?? '';
+    expect(text).toContain('メモリの配達待ち行列 2 件');
+
+    await s.clone.stop();
+  });
+
+  /**
+   * **足した軸自身が数え損ねていないかの裏（陰性側）**——`#situationNoticeFor`
+   * の doc「このターン自身は引かない——引く必要が無い」が本当かを確かめる。
+   * 誤って `#pump` が取り出す**前**の `#inbox.size`（＝このイベント自身を
+   * 含む）を読む実装だったら、これは「1件」と出てしまう。
+   */
+  it('他に何も積まれていなければ行が出ない（このターン自身を数えない）', async () => {
+    const s = bootClone(createMemoryStores(), busyPool());
+
+    s.clone.post({
+      type: 'manager_message',
+      id: 'evt-solo',
+      at: AT,
+      managerId: 'mgr-run',
+      kind: 'report',
+      text: '終わった',
+    });
+    await waitFor(() => s.inputs.length > 0, 'ターンが走ること');
+
+    expect(s.inputs.join('\n')).not.toContain('メモリの配達待ち行列');
+
+    await s.clone.stop();
+  });
+});
