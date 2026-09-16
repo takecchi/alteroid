@@ -93,7 +93,7 @@ export interface ArchiveRemovalSelectionOptions {
  * **`skipped` は0件でも欄を省かない。** 省くと「その理由では1件も飛ばして
  * いない」と「その理由を測っていない」が区別できなくなる
  * （`inbox-backlog.ts` の `bySourceOverflowCount` と同じ理由。逐語:
- * `grep -Fn -- 'skipped` は0件でも欄を省かない' /home/worker/mgr-c541ffb4/SPEC.md`）。
+ * `grep -Fn -- '0のときに省くと「省いた＝0だった」という他の軸と同じ形に見えて' packages/core/src/inbox-backlog.ts`）。
  *
  * **不変条件（歯で撃つこと）:**
  * `matched === targets.length + skipped.newest + skipped.alreadyRemoved
@@ -144,8 +144,13 @@ function compareOldestFirst(a: ArchiveEntry, b: ArchiveEntry): number {
  * 純関数。I/O をしない——本文（`body`）にも触れない。渡された `ArchiveEntry`
  * が持つ `sessionId` / `at` / `storedBytes` / `continuity` / `removedAt` の
  * 5列だけで判定が閉じる（設計文書 §設計B-2 が使う `md5(substr(newest, …))`
- * のような本文照合はしない——追補4「本文を読まないことの実測上の根拠」。
- * 逐語: `grep -Fn -- 'shared hit=1 / 0.25ms' /home/worker/mgr-c541ffb4/SPEC.md`）。
+ * のような本文照合はしない——本文を読まないことの実測上の根拠は次の通り:
+ * **本番相当の EXPLAIN 実測**では、`body` に触れない走査は `shared hit=1 /
+ * 0.25ms`、`length(body)` を足すと `shared hit=156 / 304ms`。⟹ 危ないのは
+ * 索引の不在ではなく「消す対象の確認で `body` まで取得する」運用のほうで
+ * ある。**この実測は `main` に無い調査枝に在る**（逐語:
+ * `git show origin/investigate/698-archive-stage1:STAGE1-698-FINDINGS.md`
+ * を `grep -F -- '消す対象の確認で'`）。
  *
  * ## 全体の流れ（この順で処理する。⛔ 順序を変えない）
  *
@@ -224,6 +229,53 @@ function compareOldestFirst(a: ArchiveEntry, b: ArchiveEntry): number {
  * ⟹ 既存の残骸はこの既定では1行も消えない。これは欠陥ではなく線引きで
  * ある（追補4）。
  *
+ * ### 🔑 対象に入れた行どうしが互いの証明を支え合っていて安全か（健全性の論証）
+ *
+ * 「鎖が切れたら、それより古い行は全部 `notContained` になる」は誤りである
+ * ——実際に切れた箇所の直前1行だけが `notContained` に落ちる（上の歯
+ * 「鎖が切れると、切れた箇所の直前の行だけが notContained になる」）。
+ * **アルゴリズム自体は正しい。**ただし、なぜ安全なのかが非自明なので
+ * ここに書き残す。
+ *
+ * **危ないのは「対象に入れた行が、別の対象行の証明の錨になっている」
+ * 場合である。実際に起きる。** 例: 古い順に
+ * `a1(first) a2(continues) a3(continues) a4(diverged, 最新)` という並びでは
+ * `targets = [a1, a2]` になる（`a3` は `a4` が `diverged` なので
+ * `notContained`）。**`a2` は対象（＝この一括で本文が消える）であると同時に、
+ * `a1` の証明の錨でもある**——`coveredById.get('a1')` が `true` になるのは
+ * 「`a2` が `continues` かつ生きている（`removedAt` 無し）」からであって、
+ * その `a2` 自身がこの一括の対象に入っている。「錨がいなくなるのに証明は
+ * 有効なのか」が非自明な点である。
+ *
+ * それでも安全である理由:
+ *
+ * - `removable[i]`（上のコードの `coveredById.get(r[i].id)`）が真になるのは
+ *   「`r[i+1..j]` が全部 `continuity === 'continues'` で、`r[j]` が生きている」
+ *   ような `j`（`j >= i+1`）が存在するときだけである。
+ * - その鎖を**新しい側へ辿れるだけ辿った終点** `m` を取る——`r[m+1]` が
+ *   存在しない（`m` が最新行）か、`r[m+1].continuity !== 'continues'` に
+ *   なるところまで進んだ `j` の極大値。
+ * - **`m` は必ずこの一括で生き残る**——`m` が最新行なら安全弁（優先順位3
+ *   `skipped.newest`）で無条件に守られる。`m` が最新行でないなら
+ *   `r[m+1].continuity !== 'continues'` なので、`removable[m]` は
+ *   （`m` を `i` とみなしたとき）`r[m+1]` から鎖が始まらず偽になり、
+ *   `requireContainment` の下で `m` 自身は `notContained` に落ちて残る
+ *   （上の例の `a3` がまさにこの `m` である——`a1`, `a2` の鎖は `a3` で
+ *   止まり、`a3` は消えずに残る）。
+ * - 前方一致（`continues`）は推移する——`r[i]` が `r[i+1]` に含まれ、
+ *   `r[i+1]` が `r[i+2]` に含まれるなら、`r[i]` は `r[i+2]` にも含まれる。
+ *   ⟹ `r[i] ⊆ r[i+1] ⊆ … ⊆ r[m]`。**対象に入れた行（`r[i]`）の中身は、
+ *   必ずこの一括で生き残る行（`r[m]`）から読める**——たとえその途中の
+ *   `r[i+1], …, r[m-1]` が同じ一括で対象に入っていても、それらは単なる
+ *   「まだ生きている間だけ機能した中継地点」であって、`r[m]` に中身ごと
+ *   吸収されている。
+ *
+ * ⟹ **不変条件**: `targets` に入れたどの行についても、同じセッションの
+ * より新しい側に「この一括では消されない行」（`targets` にも既存の
+ * `removedAt` にも入っていない行）が存在し、そこまでの `continuity` の鎖が
+ * 全部 `continues` である。歯「健全性の不変条件そのものを撃つ歯」が
+ * これを直接検査する。
+ *
  * ## 振り分けの優先順（1行が複数の理由に当てはまりうる）
  *
  * `matched`（`filter` に当たった）行を、次の順で最初に当てはまった理由へ
@@ -246,9 +298,11 @@ function compareOldestFirst(a: ArchiveEntry, b: ArchiveEntry): number {
  *
  * 候補（上の5に落ちた行）をセッションをまたいで古い順に並べ直し、`limit`
  * 件まで `targets` に採る。**「いちばん遡りたいものから失う」を避けるため
- * 新しい順ではなく古い順に採る**（SPEC.md の背景「齢で切ると効かない」の
- * 裏返し——一括で溢れさせるときも、古い行を優先して確実に対象へ入れる）。
- * 溢れた件数は `remaining`。
+ * 新しい順ではなく古い順に採る**——`main` に無い調査枝の設計文書が「齢
+ * （保持期間）で切る」を退けた理由の裏返しである（逐語:
+ * `git show origin/investigate/698-stage0-mechanism:DESIGN-698-STAGE2.md`
+ * を `grep -F -- 'いちばん遡りたいものから失う'`）。一括で溢れさせるときも、
+ * 古い行を優先して確実に対象へ入れる。溢れた件数は `remaining`。
  */
 export function selectArchiveRemovalTargets(
   entries: readonly ArchiveEntry[],
