@@ -1804,10 +1804,24 @@ function denialLine(denials: ManagerDenial[]): string | null {
  * `assistant_error` でなければ `code` は `SDKAssistantMessageError` の語彙
  * ではない（`result_subtype` / `result_is_error` の `code` は `subtype` 文字列）
  * ので、語ベースの軸を当てない。
+ *
+ * **`staleToken` は「枠は戻るが、この委譲は戻らない」を言うための口である
+ * （Issue #931）。** 認証トークンの世代が食い違ったまま走っているセッションは、
+ * 枠がリセットされても古い鍵で叩き続けるので、`time`（時間で戻る）だけを
+ * 出すと**待てばこの委譲が戻ると読まれる**。⟹ そのときは
+ * `withRecoveryNote` がもう1行足す（`STALE_TOKEN_RECOVERY_CAVEAT`）。
+ * **判定は {@link tokenGenerationMismatched} の1箇所から受け取るだけで、
+ * ここでは決めない。**
+ *
+ * ⚠️ **同じ矛盾は受信箱の側にも残っている。** `manager.ts` の
+ * `case 'usage_notice'` も `withRecoveryNote` を呼ぶが、あちらは合図が
+ * 届いた瞬間の文言で、世代の行を並べて出していないので、ここでは触っていない
+ * （Issue #931 に残した）。
  */
 function describeManagerFailure(
   failure: ManagerSummary['lastFailure'],
   lastReport: string | undefined,
+  staleToken = false,
 ): string | null {
   if (failure === undefined) return null;
   const base =
@@ -1825,7 +1839,7 @@ function describeManagerFailure(
       : failure.via === 'assistant_error'
         ? limitRecoveryOfAssistantError(failure.code)
         : 'unknown';
-  return withRecoveryNote(base, recovery);
+  return withRecoveryNote(base, recovery, { staleToken });
 }
 
 /**
@@ -1834,12 +1848,19 @@ function describeManagerFailure(
  * `extra` の行は `  `（空白2つ）で始める約束である（`excerpt.ts` の
  * `renderListingEntry` の doc）。**字面そのものはここで作らない**——作ると
  * `manager_report` と割れる。
+ *
+ * **`ManagerSummary` ごと受け取る（Issue #931）。** 以前は
+ * `lastFailure` と `lastReport` の2つだけを渡していたが、
+ * {@link tokenGenerationMismatched} を当てるのに同じ委譲の世代が要る。
+ * **2つの欄だけを渡す形に戻さないこと**——戻すと、呼び出し側が判定を
+ * 組み立て直すことになり、`manager_report` 側と割れる。
  */
-function failureLine(
-  failure: ManagerSummary['lastFailure'],
-  lastReport: string | undefined,
-): string | null {
-  const note = describeManagerFailure(failure, lastReport);
+function failureLine(manager: ManagerSummary): string | null {
+  const note = describeManagerFailure(
+    manager.lastFailure,
+    manager.lastReport,
+    tokenGenerationMismatched(manager),
+  );
   return note === null ? null : `  ${note}`;
 }
 
@@ -2198,6 +2219,25 @@ function describeTokenGenerationUnknownReason(reason: TokenGenerationUnknownReas
  * 「出す」と約束している値そのものなので、一致していることも材料が在る限り
  * 言う。
  */
+/**
+ * **この委譲が抱えている認証トークンの世代が、現役と食い違っているか**
+ * （Issue #914 提案1 の判定そのもの。Issue #931 で2つ目の読み手が付いた）。
+ *
+ * **判定を2箇所へ書かないためだけに在る。** {@link describeTokenGeneration}
+ * が ⚠ の行を出すかどうかと、{@link failureLine} が回復の見込みに但し書きを
+ * 足すかどうかは、**同じ1つの事実**である——別々に書くと、いつか片方だけが
+ * 直って「世代は食い違っているのに『時間で戻る』とだけ出る」形に戻る。
+ *
+ * **どちらかが `undefined` なら偽である。** 比べる相手が居ないときに
+ * 食い違いを捏造しない（`ManagerSummary.activeTokenGeneration` の doc と
+ * 同じ理由）。
+ */
+function tokenGenerationMismatched(manager: ManagerSummary): boolean {
+  if (manager.tokenGeneration === undefined) return false;
+  if (manager.activeTokenGeneration === undefined) return false;
+  return manager.tokenGeneration !== manager.activeTokenGeneration;
+}
+
 function describeTokenGeneration(manager: ManagerSummary): string | null {
   if (manager.tokenGeneration === undefined) {
     return manager.tokenGenerationUnknownReason === undefined
@@ -2210,7 +2250,7 @@ function describeTokenGeneration(manager: ManagerSummary): string | null {
     // activeTokenGeneration` の doc と同じ理由で、0 や「一致」を捏造しない。
     return `  認証トークンの世代: ${manager.tokenGeneration}（現役は不明——比べられない）`;
   }
-  if (manager.tokenGeneration === manager.activeTokenGeneration) {
+  if (!tokenGenerationMismatched(manager)) {
     return `  認証トークンの世代: ${manager.tokenGeneration}（現役と一致）`;
   }
   return (
@@ -7237,7 +7277,7 @@ export function createCloneTools(context: ToolContext) {
               // エラー文（`lastReport`）を先に読んでから「実は報告ではない」と
               // 分かる順になる。人間の CLI が同じ順で置いてある
               // （`apps/cli/src/chat.ts` の「**失敗は報告の**上**に置く。**」）。
-              failureLine(manager.lastFailure, manager.lastReport),
+              failureLine(manager),
               // **セッションそのものが `failed` として畳まれた落ち方も、同じ
               // 「失敗は報告の上」の順で置く（Issue #713 段3）。** `lastFailure`
               // の行（すぐ上）とは別の軸なので別行——**両方が同時に出ることは
@@ -7499,7 +7539,13 @@ export function createCloneTools(context: ToolContext) {
         // **`part === 'request'` では何もしない。** 依頼文はそもそも報告では
         // ないので、失敗の有無で呼び方が変わる欄ではない。
         const failure =
-          part === 'request' ? null : describeManagerFailure(found.lastFailure, found.lastReport);
+          part === 'request'
+            ? null
+            : describeManagerFailure(
+                found.lastFailure,
+                found.lastReport,
+                tokenGenerationMismatched(found),
+              );
         // **セッションそのものが `failed` として畳まれた落ち方も同じ場所で
         // 掘れる（Issue #713 段3）。** `manager_list` の `systemErrorLine` と
         // 同じ材料——`part === 'request'` では出さない（依頼文はそもそも
