@@ -11,12 +11,14 @@ import {
   hasOpenManagerDuplicate,
   isDaemonSelfNotice,
 } from './clone.js';
+import { verifyCommitmentAppraisalContract } from './commitment-appraisal-contract.js';
 import { buildActivityDigest } from './digest.js';
 import type { CloneHost } from './host.js';
 import { renderMemoryDocuments } from './memory.js';
 import { buildCloneSystemPrompt } from './prompt.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
+import { describeCommitmentAppraisal } from './schema.js';
 import type { ChatStreamEvent, Commitment, InboxEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { captureStderr, createMemoryStores, humanMessage } from './testing.js';
@@ -1650,5 +1652,26 @@ describe('closedRedeliveryNotice の closedBy 4状態（人間が閉じた commi
     const notice = closedRedeliveryNotice(baseEvent, commitmentWith(longRaw));
     expect(notice).not.toContain(longRaw);
     expect(notice).toMatch(/…（\d[\d,]* 文字省略/);
+  });
+});
+
+/**
+ * 評定（#1054。自己改善の段1）。**契約そのものは `commitment-appraisal-contract.ts`
+ * が持ち、3実装（インメモリ / fs / pg）が同じものを呼ぶ。** ここはインメモリ版
+ * （`packages/core/src/testing.ts`）の呼び出し口である。
+ */
+describe('台帳の評定', () => {
+  it('評定の契約（#1054。3実装で同じことを測る）', async () => {
+    const stores = createMemoryStores();
+    await verifyCommitmentAppraisalContract(stores.commitments);
+  });
+
+  it('未評定の行は字面を持たない（印が無いことが「まだ評定していない」である）', () => {
+    expect(describeCommitmentAppraisal({})).toBeNull();
+  });
+
+  it('未知の値も落とさずにそのまま出す（未評定と区別が付かなくならないため）', () => {
+    // 保存層は `z.string()` で緩く持っているので、将来の書き手が増えた値が来うる。
+    expect(describeCommitmentAppraisal({ appraisal: 'brilliant' })).toContain('brilliant');
   });
 });

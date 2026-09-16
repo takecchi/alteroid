@@ -1,3 +1,4 @@
+import { COMMITMENT_APPRAISAL_DECISION_PREFIX } from '@alteroid/core';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -2312,6 +2313,82 @@ describe('HTTP API', () => {
     expect(response.status).toBe(200);
     expect((await stores.commitments.list()).entries).toMatchObject([{ origin: 'human' }]);
     expect((await stores.commitments.list()).entries[0]?.id).not.toBe('なりすまし');
+  });
+
+  /**
+   * 評定（#1054。自己改善の段1）。**この口の本題は「人間が覆せること」である。**
+   */
+  it('人間が評定を付けられ、片付いた行にも未了の行にも通る', async () => {
+    const opened = await app.request('/commitments', json({ body: '評定される件' }));
+    const { id } = (await opened.json()) as { id: string };
+
+    // 未了のまま付く（「片付いてから」を器が強制しない）
+    const first = await app.request(
+      `/commitments/${id}/appraise`,
+      json({ appraisal: 'unclear', reason: 'まだ材料が無い' }),
+    );
+    expect(first.status).toBe(200);
+    expect(await stores.commitments.get(id)).toMatchObject({
+      appraisal: 'unclear',
+      appraisedBy: 'human',
+      appraisalReason: 'まだ材料が無い',
+    });
+    // 評定は行を閉じない（片付いたかどうかとは別の軸である）
+    expect((await stores.commitments.get(id))?.closedAt).toBeUndefined();
+
+    await app.request(`/commitments/${id}/close`, json({ reason: '終わった' }));
+    // 片付いた行にも通る（上書き）
+    expect(
+      (await app.request(`/commitments/${id}/appraise`, json({ appraisal: 'good' }))).status,
+    ).toBe(200);
+    expect(await stores.commitments.get(id)).toMatchObject({ appraisal: 'good' });
+    // **理由を渡さない上書きは、前の理由を消す。** 残すと「うまくいった」の理由が
+    // 「まだ材料が無い」になる（値だけ入れ替わって説明が前の書き手のものになる）。
+    expect((await stores.commitments.get(id))?.appraisalReason).toBeUndefined();
+  });
+
+  it('覆した事実は日誌に残る（前の値が本文に入る＝較正の材料）', async () => {
+    const opened = await app.request('/commitments', json({ body: '覆される件' }));
+    const { id } = (await opened.json()) as { id: string };
+
+    // クローンが付けた体で1回書き、人間が覆す
+    await stores.commitments.appraise(id, '2026-01-01T00:00:00.000Z', 'good', 'clone', '通った');
+    expect(
+      (
+        await app.request(
+          `/commitments/${id}/appraise`,
+          json({ appraisal: 'bad', reason: '差し戻し' }),
+        )
+      ).status,
+    ).toBe(200);
+
+    const entries = await stores.journal.list({ types: ['decision'] });
+    const appraisal = entries.filter((entry) =>
+      entry.type === 'decision'
+        ? entry.decision.startsWith(COMMITMENT_APPRAISAL_DECISION_PREFIX)
+        : false,
+    );
+    expect(appraisal).toHaveLength(1);
+    const decision = appraisal[0]?.type === 'decision' ? appraisal[0].decision : '';
+    expect(decision).toContain('bad');
+    // **前の値が入っていること。** 行は「いまの値」しか持たないので、ここに
+    // 落ちていなければ「クローンは good と言っていた」がどこにも残らない。
+    expect(decision).toContain('うまくいった');
+    expect(decision).toContain('通った');
+  });
+
+  it('台帳に無い id は 404（評定は「書けた」と嘘をつかない）', async () => {
+    expect(
+      (await app.request('/commitments/nope/appraise', json({ appraisal: 'good' }))).status,
+    ).toBe(404);
+  });
+
+  it('既知でない評定は 400（3値は器が持つ）', async () => {
+    const opened = await app.request('/commitments', json({ body: '不正な評定' }));
+    const { id } = (await opened.json()) as { id: string };
+    expect(
+      (await app.request(`/commitments/${id}/appraise`, json({ appraisal: 'brilliant' }))).status,
+    ).toBe(400);
   });
 
   it('片付けたものは既定の一覧から消え、includeClosed=true でだけ出る', async () => {
