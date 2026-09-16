@@ -895,7 +895,7 @@ export function summarizeInboxBacklog(
     if (isHumanOriginated(row.event)) {
       humanOriginatedTotal += 1;
       // `isHumanOriginated` が真を返すのは `human_message` / `human_answer` の
-      // 2型だけ（`clone.ts` の `isHumanOriginated` の doc）——絞り込み済みなので
+      // 2型だけ（同じファイルの `isHumanOriginated` の doc）——絞り込み済みなので
       // ここでの narrowing は安全である。
       const humanType = row.event.type as 'human_message' | 'human_answer';
       humanOriginatedByTypeCounts.set(
