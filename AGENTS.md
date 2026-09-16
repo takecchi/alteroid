@@ -532,6 +532,8 @@ git -C <main のツリー> apply --check -R /tmp/tail.patch   # 通れば main �
 
   ⟹ **`run.conclusion == "success"` は、これまで以上に緑の根拠にならない。** 直上の「その run が実際にジョブを実行したか」（`total_count` が0でないこと）だけでは足りない——**今回は `total_count` が4で「実行した」を通過したあとにも化ける形**である。⛔ **ジョブの内訳（`actions/runs/<id>/jobs`）まで降り、必要な各ジョブ（`ci` / `image`）の `conclusion` を個別に見ること。**
 
+  **⟹ この形そのものは #1108 で解消した。** `no-attribution-trailers` ジョブを `ci.yml` から独立した `.github/workflows/no-attribution-trailers.yml` へ出したので、draft 中の `ci.yml` の run は `ci` / `image` / `base-overlap` の3ジョブが全部 `skipped` になり、**もう `no-attribution-trailers` と同じ run には混ざらない**（あれが緑を持ち込んでいたのは、同じ run の中の1ジョブだったからである）。**⚠️ ただし「draft でも走る門が run を緑に見せる」という形そのものが消えたとは言えない** —— `no-attribution-trailers.yml` は意図して draft でも skip しない設計をそのまま引き継いでいるので（`.github/workflows/no-attribution-trailers.yml` の逐語は `grep -Fn -- 'draft のあいだも毎回走らせ' .github/workflows/no-attribution-trailers.yml`）、**あちら自身の run は draft のあいだも `success` を返す。** 見るべき対象が「`ci.yml` の1つの run」から「`ci.yml` の run と `no-attribution-trailers.yml` の run の2本」に分かれただけであり、直上の結論（`run.conclusion` 単独では緑の根拠にならない、ジョブの内訳まで降りること）はどちらの workflow にも変わらず当てはまる。⚠️ **`ci.yml` 側で全ジョブが `skipped` のときに run 自身の `conclusion` が何を返すかは、この変更の作業では確かめていない。**
+
 - **`gh api repos/…/rules/branches/<枝>` が `[]` を返しても「無保護」ではない。** あれは ruleset だけを見ており、classic branch protection（`branches/<枝>/protection`）は別口である。実測（2026-09-15 観測、自分で取り直した）:
 
   ```

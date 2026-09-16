@@ -10,8 +10,9 @@ name: PR title
 # タイトルに型が無ければ `main` の件名から型が消える。実測（#1097、
 # 2026-09-16）: `main` 直近200本中 **14本**が型を持たない。
 #
-# **`ci.yml` と同じ機構の、反対側の漏れである。** あちらには
-# `no-attribution-trailers`（PR **本文** → コミットメッセージ、#1020）が在るが、
+# **squash マージが件名を焼く同じ機構の、反対側の漏れである。** 同じ機構を見る
+# `no-attribution-trailers`（PR **本文** → コミットメッセージ、#1020。#1108 で
+# `ci.yml` から独立した `no-attribution-trailers.yml` へ出た）が既に在ったが、
 # PR **タイトル** → 件名の側には門が無かった。
 
 # ## なぜ `ci.yml` の中に置かず、別の workflow にしたか
@@ -25,8 +26,9 @@ name: PR title
 # 文脈に `skipped` が入る —— `AGENTS.md`「静かに失敗する道具」と、`ci.yml` が
 # `ready_for_review` を types へ足した理由そのものの罠を持ち込むことになる。
 #
-# ⟹ **タイトル検査だけを持つこの workflow にだけ `edited` を付け、`ci.yml` の
-# trigger は1文字も触らない。**
+# ⟹ **タイトル検査を持つこの workflow に `edited` を付け、`ci.yml` の trigger は
+# 1文字も触らない。**（#1108 で `no-attribution-trailers.yml` も同じ形で合流した
+# ——「この workflow にだけ」ではなくなったが、「`ci.yml` には付けない」は変わらない。）
 on:
   pull_request:
     # **`edited` がこの門の要である**（タイトルの後からの書き換えを捕まえる）。
