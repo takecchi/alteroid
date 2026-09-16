@@ -191,6 +191,84 @@ describe('Inbox', () => {
     expect(inbox.size).toBe(2);
   });
 
+  it('removeWhere は条件に一致するものを全部外し、残りは並んでいた順のまま残る（issue #1049）', async () => {
+    const inbox = new Inbox();
+    for (const t of ['a', 'b', 'c', 'd', 'e']) inbox.push(humanMessage(t));
+
+    const dropped = inbox.removeWhere((event) => ['evt-b', 'evt-d'].includes(event.id));
+
+    // 外したものは**待ち行列に並んでいた順**で返る（実装は後ろから外すので、
+    // 並べ直しを忘れると ['evt-d', 'evt-b'] になる）。
+    expect(dropped.map((event) => event.id)).toEqual(['evt-b', 'evt-d']);
+    expect(inbox.size).toBe(3);
+
+    inbox.close();
+    const left = [];
+    for await (const event of inbox) left.push(event.id);
+    expect(left).toEqual(['evt-a', 'evt-c', 'evt-e']);
+  });
+
+  it('removeWhere は飛び越えて外す（先頭が一致しなくても後ろを外す。drainWhile とはここが逆）', async () => {
+    const inbox = new Inbox();
+    inbox.push({ type: 'timer', id: 'evt-timer', at: new Date(0).toISOString(), kind: 'daily' });
+    inbox.push(humanMessage('a'));
+
+    // 同じ述語を drainWhile へ渡すと、先頭（timer）で止まるので0件である。
+    expect(inbox.countWhile((event) => event.type === 'human_message')).toBe(0);
+
+    const dropped = inbox.removeWhere((event) => event.type === 'human_message');
+
+    expect(dropped.map((event) => event.id)).toEqual(['evt-a']);
+    expect(inbox.size).toBe(1);
+    expect((await inbox.next())?.id).toBe('evt-timer');
+  });
+
+  it('removeWhere は一致が無ければ1件も外さず、空を返す', () => {
+    const inbox = new Inbox();
+    inbox.push(humanMessage('a'));
+    inbox.push(humanMessage('b'));
+
+    expect(inbox.removeWhere((event) => event.id === 'evt-zzz')).toEqual([]);
+    expect(inbox.size).toBe(2);
+  });
+
+  it('removeWhere は取り出しの最中に呼んでも、イテレータが飛ばしも二度読みもしない', async () => {
+    const inbox = new Inbox();
+    for (const t of ['a', 'b', 'c', 'd']) inbox.push(humanMessage(t));
+    inbox.close();
+
+    const read = [];
+    for await (const event of inbox) {
+      read.push(event.id);
+      // **回っている最中に、まだ読んでいない先の1件を抜く。**
+      if (event.id === 'evt-a') inbox.removeWhere((queued) => queued.id === 'evt-c');
+    }
+
+    // 抜いた evt-c だけが落ち、前後（b / d）はどちらも1度ずつ読まれている。
+    expect(read).toEqual(['evt-a', 'evt-b', 'evt-d']);
+  });
+
+  it('removeWhere は待っている取り出しを奪わない（queue が空なら0件）', async () => {
+    const inbox = new Inbox();
+    const pending = inbox.next();
+
+    expect(inbox.removeWhere(() => true)).toEqual([]);
+
+    // 待ち手はまだ生きているので、後から積めばそのまま渡る。
+    inbox.push(humanMessage('later'));
+    expect((await pending)?.id).toBe('evt-later');
+  });
+
+  it('removeWhere は閉じた受信箱でも投げない（push / unshift とは違い、減らす操作なので失うものが無い）', () => {
+    const inbox = new Inbox();
+    inbox.push(humanMessage('a'));
+    inbox.close();
+
+    expect(() => inbox.push(humanMessage('b'))).toThrow('受信箱は既に閉じている');
+    expect(inbox.removeWhere((event) => event.id === 'evt-a').map((e) => e.id)).toEqual(['evt-a']);
+    expect(inbox.size).toBe(0);
+  });
+
   it('起点の種類を問わず同じ口から入る（4つの起点が同じ受信箱を通る）', async () => {
     const inbox = new Inbox();
     inbox.push({ type: 'timer', id: 'evt-timer', at: new Date(0).toISOString(), kind: 'daily' });
