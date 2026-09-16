@@ -22,8 +22,13 @@ import {
   type DroppedTraceOrigin,
 } from './dropped-record.js';
 import type { RunnerEvent } from './runner-protocol.js';
-import { JOURNAL_ENTRY_TYPES, journalEntrySchema } from './schema.js';
-import type { InboxEvent, JournalEntryInput, JournalEntryType } from './schema.js';
+import { contextUsageObservationSchema, JOURNAL_ENTRY_TYPES, journalEntrySchema } from './schema.js';
+import type {
+  ContextUsageObservation,
+  InboxEvent,
+  JournalEntryInput,
+  JournalEntryType,
+} from './schema.js';
 import { captureStderr } from './testing.js';
 
 /**
@@ -1132,6 +1137,28 @@ describe('droppedTraceLedgerSince（帳面が数え始めた時刻）', () => {
  *    入れ子オブジェクトの中に、新しく自由文（例: `contextUsage.detail`）が
  *    足されても、**この歯は赤くならない。** 名簿もフィクスチャも
  *    `contextUsage` という1つの欄までしか見ていない。
+ *
+ *    **（このPRで追記。#981 で `contextUsage` についてはこの穴を塞いだ。
+ *    ただし全部ではない。）** 下の `CONTEXT_USAGE_SHAPE_PLAN` /
+ *    `CONTEXT_USAGE_CATEGORY_SHAPE_PLAN` と、それを使う `it`（このファイル
+ *    末尾、`journalEntryShape の名簿` の中）が、`turn_usage.contextUsage` /
+ *    `context_usage.contextUsage` と、その `categories[]` の要素という
+ *    **2階層だけ**を追加で守る——`contextUsageObservationSchema` の全欄を
+ *    zod から機械的に引いて名簿と両方向に一致させ、`FULL_CONTEXT_USAGE`
+ *    （`Required<>`）へ秘密と目印の値を仕込んで、跡に漏れないことを別の歯で
+ *    測る。
+ *
+ *    **塞いだのはこの2階層だけである。** `turn_usage.compactions` /
+ *    `turn_usage.mainLoopUsage`、`inbox_flow` の
+ *    `arrived`/`delivered`/`settled`/`pending`（の `byType[]`）といった
+ *    **他の入れ子は、いまも第1階層までしか見ていない。** 上の見出し文
+ *    （「数えるのは第1階層の欄だけ」）はその意味で消していない——読み替え
+ *    ず、`contextUsage` の分だけ例外が増えたと読むこと。
+ *
+ *    **一般形として「入れ子ごとに名簿を足す」形であって、再帰的に自動で
+ *    辿る仕組みではない。** 自動で辿る形にしなかったのは #981 の選択肢
+ *    (B)（門を再帰的に掛ける）を採らなかったのと同じ理由——新しい欄が
+ *    「黙って出る」側へ倒れる形を作らないためである。
  * 3. **13欄すべての保証は、いまも既存の `toBe` 1本が単独で持っている。**
  *    `token_rotation` の3つの変異（`recoveredSource` / `generation` /
  *    `noticeText` を落とす）で赤くなったのは、足場の印に反応した歯を差し引くと
@@ -1420,17 +1447,173 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
     },
   } satisfies { [T in JournalEntryType]: Record<ShapedFieldsOf<T>, FieldPlan> };
 
+  /**
+   * `contextUsageObservationSchema`（`schema.ts`）の名簿——上の
+   * `JOURNAL_SHAPE_PLAN` が守るのは各エントリの第1階層までで、
+   * `turn_usage.contextUsage` / `context_usage.contextUsage` という**入れ子の
+   * 中**は守っていなかった（このクラス docstring の項目2が申告する静かな
+   * 穴）。#981 で、この入れ子を1つの名簿として個別に守ることにした。
+   *
+   * **全欄 `never` である。** #981 で決めたのは「`contextUsage` の中身は、
+   * 入れ子のどの階層も跡へ出さない」——`dropped-record.ts` の `case
+   * 'context_usage'` の直上のコメントに決めた理由が書いてある（二重に
+   * 書かない）。自由文（`error`）は値を決めるのが SDK であって alteroid では
+   * なく、残りの数値・真偽値は「出して害は無い」が「入れ子を丸ごと出さない」
+   * という一段上の判断が先に掛かる。
+   */
+  const CONTEXT_USAGE_SHAPE_PLAN = {
+    durationMs: {
+      emit: 'never',
+      why:
+        '出して害の無い数値だが、#981 で「contextUsage は入れ子のどの階層も' +
+        '跡へ出さない」と決めた——その判断が先に掛かる。単独で広げるなら、' +
+        'error/categories[].name/categories[].kind とは別に判断すること。',
+    },
+    totalTokens: { emit: 'never', why: '同上（durationMs と同じ判断）。' },
+    rawMaxTokens: { emit: 'never', why: '同上（durationMs と同じ判断）。' },
+    percentage: { emit: 'never', why: '同上（durationMs と同じ判断）。' },
+    autoCompactThreshold: { emit: 'never', why: '同上（durationMs と同じ判断）。' },
+    isAutoCompactEnabled: { emit: 'never', why: '同上（durationMs と同じ判断。真偽値も対象）。' },
+    categories: {
+      emit: 'never',
+      why:
+        '構造化された欄そのもの。要素の中身は `CONTEXT_USAGE_CATEGORY_SHAPE_PLAN`' +
+        '（このファイルの下）が別に守る。この欄自体（配列であること・件数）を' +
+        '出す判断も #981 の対象——`contextUsage` を丸ごと出さないという判断に' +
+        '含めた。',
+    },
+    categoriesOmitted: { emit: 'never', why: '同上（durationMs と同じ判断）。' },
+    mcpToolTokens: { emit: 'never', why: '同上（durationMs と同じ判断）。' },
+    mcpToolCount: { emit: 'never', why: '同上（durationMs と同じ判断）。' },
+    memoryFileTokens: { emit: 'never', why: '同上（durationMs と同じ判断）。' },
+    memoryFileCount: { emit: 'never', why: '同上（durationMs と同じ判断）。' },
+    systemPromptTokens: { emit: 'never', why: '同上（durationMs と同じ判断）。' },
+    systemPromptSectionCount: { emit: 'never', why: '同上（durationMs と同じ判断）。' },
+    error: {
+      emit: 'never',
+      why:
+        '値を決めるのは SDK 側であって alteroid ではない——`usage-probe.ts` の' +
+        '`describeProbeError` が通す `redactEnvSecrets` は env 値の完全一致の' +
+        '文字列置換だけで、その doc 自身が「値が変形されて出てきた場合までは' +
+        '塞げない」と明記している。「伏せ字済みだから載せてよい」は成り立たない。',
+    },
+  } satisfies Record<keyof Required<ContextUsageObservation>, FieldPlan>;
+
+  /**
+   * `contextUsageObservationSchema.shape.categories` の要素（配列の中身）の
+   * 名簿。`CONTEXT_USAGE_SHAPE_PLAN` と同じ理由で全欄 `never`。
+   */
+  const CONTEXT_USAGE_CATEGORY_SHAPE_PLAN = {
+    name: {
+      emit: 'never',
+      why:
+        'SDK 側の表示名（`System prompt` / `Tools` 等）——値を決めるのは SDK で、' +
+        '版が上がれば変わりうるし、変わっても赤くならない（schema.ts の doc）。',
+    },
+    tokens: {
+      emit: 'never',
+      why:
+        '出して害の無い数値だが、#981 で「contextUsage は入れ子のどの階層も' +
+        '跡へ出さない」と決めた——その判断が先に掛かる（`CONTEXT_USAGE_SHAPE_PLAN`' +
+        'の `durationMs` と同じ）。',
+    },
+    kind: {
+      emit: 'never',
+      why:
+        'SDK が名乗る分類文字列——`z.enum` ではなく `z.string()` にしてあるのは、' +
+        'SDK が将来5つ目の値を足しても書き込みが壊れないようにするためで' +
+        '（schema.ts の doc）、値を決めるのは SDK である。',
+    },
+  } satisfies Record<
+    keyof Required<NonNullable<ContextUsageObservation['categories']>[number]>,
+    FieldPlan
+  >;
+
   const SECRET = 'ghp_222222222222222222222222222222222222';
+
+  /**
+   * `contextUsage` の入れ子（#981）が跡に漏れないことを測るための目印。
+   * それぞれ他のどの欄の値とも衝突しない、使っていない桁を割り当てる
+   * （`durationMs=100` のような小さい値だと他の欄と衝突しうるため）。
+   */
+  const CU_DURATION_MS = 910001;
+  const CU_TOTAL_TOKENS = 910002;
+  const CU_RAW_MAX_TOKENS = 910003;
+  const CU_PERCENTAGE = 910004;
+  const CU_AUTO_COMPACT_THRESHOLD = 910005;
+  const CU_CATEGORIES_OMITTED = 910006;
+  const CU_MCP_TOOL_TOKENS = 910007;
+  const CU_MCP_TOOL_COUNT = 910008;
+  const CU_MEMORY_FILE_TOKENS = 910009;
+  const CU_MEMORY_FILE_COUNT = 910010;
+  const CU_SYSTEM_PROMPT_TOKENS = 910011;
+  const CU_SYSTEM_PROMPT_SECTION_COUNT = 910012;
+  const CU_CATEGORY_TOKENS = 910013;
+
+  /** 上の目印を1本の配列で持つ（漏れ検査で1本ずつ回すため）。 */
+  const CONTEXT_USAGE_NUMBER_MARKERS: readonly number[] = [
+    CU_DURATION_MS,
+    CU_TOTAL_TOKENS,
+    CU_RAW_MAX_TOKENS,
+    CU_PERCENTAGE,
+    CU_AUTO_COMPACT_THRESHOLD,
+    CU_CATEGORIES_OMITTED,
+    CU_MCP_TOOL_TOKENS,
+    CU_MCP_TOOL_COUNT,
+    CU_MEMORY_FILE_TOKENS,
+    CU_MEMORY_FILE_COUNT,
+    CU_SYSTEM_PROMPT_TOKENS,
+    CU_SYSTEM_PROMPT_SECTION_COUNT,
+    CU_CATEGORY_TOKENS,
+  ];
+
+  /** `contextUsageObservationSchema.shape.categories` の要素を全欄埋めた見本。 */
+  const FULL_CONTEXT_USAGE_CATEGORY: Required<
+    NonNullable<ContextUsageObservation['categories']>[number]
+  > = {
+    name: SECRET,
+    tokens: CU_CATEGORY_TOKENS,
+    kind: SECRET,
+  };
+
+  /**
+   * `contextUsageObservationSchema` を全欄埋めた見本。**`Required<>` で
+   * 受ける**——schema に欄が増えるとこのリテラルが型を満たせなくなり、
+   * `pnpm typecheck` が落ちる（`FULL_FIXTURES` と同じ仕掛け）。自由文3箇所
+   * （`error`/`categories[].name`/`categories[].kind`）には `SECRET` を、
+   * それ以外の数値・真偽値には上の目印を入れる——`contextUsage` を丸ごと
+   * 出さない（#981）ことを、秘密と目印の両方で測るため。
+   */
+  const FULL_CONTEXT_USAGE: Required<ContextUsageObservation> = {
+    durationMs: CU_DURATION_MS,
+    totalTokens: CU_TOTAL_TOKENS,
+    rawMaxTokens: CU_RAW_MAX_TOKENS,
+    percentage: CU_PERCENTAGE,
+    autoCompactThreshold: CU_AUTO_COMPACT_THRESHOLD,
+    isAutoCompactEnabled: true,
+    categories: [FULL_CONTEXT_USAGE_CATEGORY],
+    categoriesOmitted: CU_CATEGORIES_OMITTED,
+    mcpToolTokens: CU_MCP_TOOL_TOKENS,
+    mcpToolCount: CU_MCP_TOOL_COUNT,
+    memoryFileTokens: CU_MEMORY_FILE_TOKENS,
+    memoryFileCount: CU_MEMORY_FILE_COUNT,
+    systemPromptTokens: CU_SYSTEM_PROMPT_TOKENS,
+    systemPromptSectionCount: CU_SYSTEM_PROMPT_SECTION_COUNT,
+    error: SECRET,
+  };
 
   /**
    * 全欄を埋めた見本。**`Required<>` で optional も必須になる**ので、schema に
    * 欄が増えると（このオブジェクトリテラルが `Required<>` を満たせなくなり）
    * ここでも型が落ちる。値が跡に出ない欄（`size`/`size-unnamed`/`never`）の
    * うち文字列型のものには `SECRET` を入れ、下の「値が出ない欄」テストで
-   * 漏れないことを測る。`contextUsage`/`compactions`/`mainLoopUsage`
-   * （構造化された `never` 欄）には秘密を仕込んでいない——この歯は第1階層
-   * までしか見ないので、入れ子の中の自由文は別の限界として上のコメントに
-   * 明記してある。
+   * 漏れないことを測る。`compactions`/`mainLoopUsage`（構造化された `never`
+   * 欄）には秘密を仕込んでいない——この歯は第1階層までしか見ないので、
+   * その入れ子の中の自由文は別の限界として上のコメントに明記してある。
+   * **`contextUsage`（`turn_usage`/`context_usage` 側の入れ子）だけは例外**
+   * ——#981 でこの入れ子専用の名簿（`CONTEXT_USAGE_SHAPE_PLAN` /
+   * `CONTEXT_USAGE_CATEGORY_SHAPE_PLAN`。上）を足したので、
+   * `FULL_CONTEXT_USAGE`（秘密と目印を全欄に仕込んだ見本。上）で受ける。
    */
   const FULL_FIXTURES: {
     [T in JournalEntryType]: Required<Extract<JournalEntryInput, { type: T }>>;
@@ -1515,7 +1698,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
         },
       },
       reset: { fromCostUsd: 5, toCostUsd: 3 },
-      contextUsage: { durationMs: 100 },
+      contextUsage: FULL_CONTEXT_USAGE,
       compactions: [{ trigger: 'manual', preTokens: 1000 }],
       mainLoopUsage: {
         inputTokens: 1,
@@ -1557,7 +1740,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       managerId: 'mgr-1',
       sessionId: 'sess-1',
       turnSucceeded: false,
-      contextUsage: { durationMs: 100 },
+      contextUsage: FULL_CONTEXT_USAGE,
     },
     inbox_flow: {
       type: 'inbox_flow',
@@ -1689,6 +1872,96 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
     for (const type of JOURNAL_ENTRY_TYPES) {
       const shape = journalEntryShape(FULL_FIXTURES[type]);
       expect(shape, type).not.toContain(SECRET);
+    }
+  });
+
+  /**
+   * #981 が塞ぐ静かな穴の本体——`CONTEXT_USAGE_SHAPE_PLAN` の名簿が
+   * `contextUsageObservationSchema` の実装側の欄と両方向に一致することを、
+   * zod から実行時に機械的に引いて測る。**片方向だけでは足りない**——
+   * 名簿だけを見ると schema から欄が消えた側は気づけない（逆に schema へ
+   * 足された側は `toEqual` の両方向比較で拾う）。
+   *
+   * 走査が空振りして0件のまま緑になる形を作らないよう、既存の
+   * `名簿のキー集合は journalEntrySchema の実装側の欄と両方向に一致する`
+   * と同じガード（`expect(...).toBeGreaterThan(0)`）を置く。
+   */
+  it('CONTEXT_USAGE_SHAPE_PLAN のキー集合は contextUsageObservationSchema の実装側の欄と両方向に一致する（zod から機械的に引く）', () => {
+    const implementedFields = new Set(Object.keys(contextUsageObservationSchema.shape));
+    expect(implementedFields.size).toBeGreaterThan(0);
+
+    const plannedFields = new Set(Object.keys(CONTEXT_USAGE_SHAPE_PLAN));
+    expect(plannedFields).toEqual(implementedFields);
+  });
+
+  /**
+   * 同じ測り方を `categories[]` の要素（`contextUsageObservationSchema.shape.
+   * categories` は `ZodOptional<ZodArray<ZodObject>>`）にも適用する。
+   * `.unwrap()` で `ZodOptional` を外し、`.element` で配列要素の
+   * `ZodObject` を取り、`.shape` でその欄を引く——実測して確かめた形
+   * （`node` で `contextUsageObservationSchema.shape.categories.unwrap().
+   * element.shape` を直接呼び、キーが `name`/`tokens`/`kind` になることを
+   * 確認済み）。
+   */
+  it('CONTEXT_USAGE_CATEGORY_SHAPE_PLAN のキー集合は categories[] の要素の実装側の欄と両方向に一致する（zod から機械的に引く）', () => {
+    const categoriesField = contextUsageObservationSchema.shape.categories;
+    const categoryShape = categoriesField.unwrap().element.shape;
+    const implementedFields = new Set(Object.keys(categoryShape));
+    expect(implementedFields.size).toBeGreaterThan(0);
+
+    const plannedFields = new Set(Object.keys(CONTEXT_USAGE_CATEGORY_SHAPE_PLAN));
+    expect(plannedFields).toEqual(implementedFields);
+  });
+
+  /**
+   * `turn_usage.contextUsage` / `context_usage.contextUsage` の跡に、入れ子の
+   * 中身が一切現れないことを直接測る（#981）。既存の「値が出ない欄…」
+   * （このファイルの直上）は第1階層の `SECRET` しか見ていない——
+   * `FULL_FIXTURES.turn_usage.contextUsage` / `.context_usage.contextUsage`
+   * が `{ durationMs: 100 }` のような空疎な値だった間は、`contextUsage` の
+   * 中に秘密や目印を仕込む先が無かった。このPRで `FULL_CONTEXT_USAGE`
+   * （全欄を埋めた見本）に差し替えたことで、ここが**新しい保証**になる。
+   *
+   * 3つを測る:
+   * 1. 自由文3箇所（`error`/`categories[].name`/`categories[].kind`）に
+   *    仕込んだ `SECRET` を含まないこと
+   * 2. 数値・真偽値の欄に仕込んだ目印（`CONTEXT_USAGE_NUMBER_MARKERS`）を
+   *    1つも含まないこと（`String(value)` で測る）
+   * 3. 入れ子の各欄の**名前**を含まないこと
+   *
+   * ⚠️ **3は名前による判定なので、短い語（`name`/`kind`）は跡の他の部分に
+   * たまたま現れうる——名前による判定は短すぎる語では当てにならない。**
+   * 実際に現在の跡の文字列を目で確認した（`turn_usage`: `turn_usage
+   * layer=... site=... managerId=... sessionId=... models=... reset=...`、
+   * `context_usage`: `context_usage layer=... site=... managerId=...
+   * sessionId=... turnSucceeded=...`）——どちらも `name`/`kind` は現れて
+   * いないので、いまはこの判定も安全に使えるが、**主たる保証は1と2
+   * （SECRET と目印の値）である。** 3は「足し忘れの目印」としての補助に
+   * 留め、当てにならないと分かっている短い語（`name`/`kind`）も含めて
+   * 全欄名を回す——1・2が本命であることをここに明記したうえで、
+   * 「測れているふりをしない」側を優先する。
+   */
+  it('turn_usage.contextUsage / context_usage.contextUsage の入れ子は、秘密・目印・欄名のどれも跡に現れない（#981）', () => {
+    const contextUsageFieldNames = [
+      ...Object.keys(CONTEXT_USAGE_SHAPE_PLAN),
+      ...Object.keys(CONTEXT_USAGE_CATEGORY_SHAPE_PLAN),
+    ];
+
+    for (const type of ['turn_usage', 'context_usage'] as const) {
+      const shape = journalEntryShape(FULL_FIXTURES[type]);
+
+      // 1. 自由文（SECRET）。
+      expect(shape, `${type}: contextUsage 配下の自由文（SECRET）`).not.toContain(SECRET);
+
+      // 2. 数値・真偽値の目印。
+      for (const marker of CONTEXT_USAGE_NUMBER_MARKERS) {
+        expect(shape, `${type}: contextUsage の目印（${marker}）`).not.toContain(String(marker));
+      }
+
+      // 3. 欄名（上の doc のとおり、name/kind は判定力が弱いことを承知の上で回す）。
+      for (const field of contextUsageFieldNames) {
+        expect(shape, `${type}: contextUsage の欄名（${field}）`).not.toContain(field);
+      }
     }
   });
 });
