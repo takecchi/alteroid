@@ -5606,6 +5606,29 @@ export function createApp(deps: AppDeps) {
       },
     )
 
+    /**
+     * デーモンを止める（`alteroid daemon stop` の受け口）。
+     *
+     * **資格は `authenticate` だけ（`requireOperator` は付けない）。**
+     * `POST /commitments/:id/close` `DELETE /archive/:id` `POST /inbox/remove`
+     * と同じ強さである——**基準は「壊すかどうか」ではない。** 上の
+     * `POST /inbox/remove` の doc が逐語で線を引いており、`/profile`
+     * `/runners/credentials` のように**鍵そのものを扱う口だけ**がその一段上の
+     * 強さを持つ。ここは鍵を扱わず、記憶も台帳も1行も消さない——**止めた後に
+     * 起動し直せば元に戻る**ので、`POST /reset`（記憶そのものを消す）とは
+     * 取り返しのつき方が違う。⟹ `access grant` を通しただけのアカウントにも
+     * 開いてよい強さである。
+     *
+     * **⚠️ `deliberateClient` は「誰が叩いてよいか」の門ではない。** あれは
+     * `content-type` を要求してブラウザの単純リクエストを止めるもの（下の
+     * `requestBody` の doc）で、資格の話とは層が違う。**ここに資格の門が
+     * 見当たらないのを「付け忘れ」と読まないこと。**
+     *
+     * **CLI が実行環境の持ち主として名乗るのは、ここが要求しているからでは
+     * ない**（`apps/cli/src/daemon.ts` の `stop()` は状態ファイルの token を
+     * 送る）。手元の常駐を止めるのに使える資格が、たまたま強いほうだという
+     * だけである。
+     */
     .post(
       '/shutdown',
       describeRoute({
