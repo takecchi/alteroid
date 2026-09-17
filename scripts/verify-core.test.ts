@@ -1,22 +1,30 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtemp, rm, writeFile, mkdir, chmod, symlink, unlink } from 'node:fs/promises';
-import { writeFileSync, statSync } from 'node:fs';
+import { writeFileSync, readFileSync, statSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
 // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 import {
   classifyTest,
+  classifyTestScope,
+  decideRecord,
   decideSkip,
   envForStep,
   fingerprint,
+  recordFor,
   recordPathFor,
   splitVerifyArgs,
   STEPS,
   testRan,
 } from './verify-core.mjs';
+
+/** このテストファイル自身のディレクトリ（`scripts/`）。C5 の統合の歯が
+ * `verify.mjs` / `verify-core.mjs` を一時 repo へコピーするために使う。 */
+const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url));
 
 /**
  * `pnpm verify` の「無料で返す」判定の歯。
@@ -53,8 +61,16 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
   }
 
   const record = (dir: string) => join(dir, '.git', 'alteroid-verify.json');
-  const save = (dir: string, fp: string) =>
-    writeFileSync(record(dir), JSON.stringify({ fingerprint: fp, at: '2026-08-22T00:00:00.000Z' }));
+  /** 記録の日付は固定（`'2026-08-22'`）にしてある。**実行日（壁時計）に依存させない
+   * ため** — Issue #1191 で `decideSkip` に `today` を足した後、`saved.fingerprint`
+   * が一致していても `saved.day` が呼び出し側の `today` と一致しなければ
+   * `stale-day` になる。だからこの固定日を使う歯は、`decideSkip` を呼ぶ側でも
+   * 同じ `today: '2026-08-22'` を明示して「指紋も日も一致している」状態を作る。 */
+  const save = (dir: string, fp: string, day = '2026-08-22') =>
+    writeFileSync(
+      record(dir),
+      JSON.stringify({ fingerprint: fp, at: '2026-08-22T00:00:00.000Z', day }),
+    );
 
   it('歯②: ツリーが動いていなければ、無料で返す（緑を名乗る）', async () => {
     const dir = await makeRepo();
@@ -62,7 +78,7 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
     expect(fp).not.toBeNull();
     save(dir, fp);
 
-    const decided = decideSkip({ repo: dir, recordPath: record(dir) });
+    const decided = decideSkip({ repo: dir, recordPath: record(dir), today: '2026-08-22' });
     expect(decided.skip).toBe(true);
     expect(decided.reason).toBe('unchanged');
     // 領収書に載せる時刻が読めていること（**畳んだと記録に残す**ため）。
@@ -100,7 +116,79 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
 
     await mkdir(join(dir, 'ignored'), { recursive: true });
     await writeFile(join(dir, 'ignored', 'x'), 'noise\n');
-    expect(decideSkip({ repo: dir, recordPath: record(dir) })).toMatchObject({ skip: true });
+    expect(decideSkip({ repo: dir, recordPath: record(dir), today: '2026-08-22' })).toMatchObject({
+      skip: true,
+    });
+  });
+
+  /**
+   * Issue #1191（②）: 指紋が一致していても、**記録した日（`day`）が今日と違えば
+   * 走る**。C4 の本体。
+   */
+  describe('指紋が一致していても、記録した日が違えば畳まない（Issue #1191）', () => {
+    it('指紋も日も一致（対照）→ skip:true', async () => {
+      const dir = await makeRepo();
+      const fp = fingerprint(dir) as string;
+      save(dir, fp, '2026-08-22');
+      expect(decideSkip({ repo: dir, recordPath: record(dir), today: '2026-08-22' })).toMatchObject(
+        { skip: true, reason: 'unchanged' },
+      );
+    });
+
+    it('指紋は一致・日が違う（昨日）→ skip:false, reason:stale-day', async () => {
+      const dir = await makeRepo();
+      const fp = fingerprint(dir) as string;
+      save(dir, fp, '2026-08-21'); // 記録は8/21、今日は8/22 のつもり
+      expect(decideSkip({ repo: dir, recordPath: record(dir), today: '2026-08-22' })).toMatchObject(
+        { skip: false, reason: 'stale-day', day: '2026-08-21' },
+      );
+    });
+
+    it('記録が旧形式（day を持たない）→ skip:false, reason:stale-day（安全側）', async () => {
+      const dir = await makeRepo();
+      const fp = fingerprint(dir) as string;
+      // 旧形式そのもの（`day` フィールドが無い）。
+      writeFileSync(
+        record(dir),
+        JSON.stringify({ fingerprint: fp, at: '2026-08-22T00:00:00.000Z' }),
+      );
+      expect(decideSkip({ repo: dir, recordPath: record(dir), today: '2026-08-22' })).toMatchObject(
+        { skip: false, reason: 'stale-day' },
+      );
+    });
+
+    it('day が文字列でない（壊れた形）も stale-day へ倒す', async () => {
+      const dir = await makeRepo();
+      const fp = fingerprint(dir) as string;
+      writeFileSync(
+        record(dir),
+        JSON.stringify({ fingerprint: fp, at: '2026-08-22T00:00:00.000Z', day: 20260822 }),
+      );
+      expect(decideSkip({ repo: dir, recordPath: record(dir), today: '2026-08-22' })).toMatchObject(
+        { skip: false, reason: 'stale-day' },
+      );
+    });
+
+    it('指紋が違えば、日が一致していても changed のまま（day は指紋一致の後にしか見ない）', async () => {
+      const dir = await makeRepo();
+      save(dir, fingerprint(dir) as string, '2026-08-22');
+      await writeFile(join(dir, 'a.txt'), 'two\n');
+      expect(decideSkip({ repo: dir, recordPath: record(dir), today: '2026-08-22' })).toMatchObject(
+        { skip: false, reason: 'changed' },
+      );
+    });
+
+    it('today の既定引数は呼ぶたびに UTC の今日を作る（I/O 層でだけ new Date() を呼ぶ約束の確認）', async () => {
+      const dir = await makeRepo();
+      const fp = fingerprint(dir) as string;
+      const today = new Date().toISOString().slice(0, 10);
+      save(dir, fp, today);
+      // today を明示しない呼び出し。既定引数が実際の今日（UTC）を作っていること。
+      expect(decideSkip({ repo: dir, recordPath: record(dir) })).toMatchObject({
+        skip: true,
+        reason: 'unchanged',
+      });
+    });
   });
 
   it('記録が無い・壊れている・--force のときは、必ず走る側へ倒す', async () => {
@@ -537,5 +625,312 @@ describe('pnpm verify — 引数の宛先（#362）', () => {
       'PNPM_CONFIG_WORKSPACE_CONCURRENCY' in env,
       'test の手順の env に並列度が漏れている',
     ).toBe(false);
+  });
+});
+
+/**
+ * `recordFor`（Issue #1191）: 書き込む記録そのものの組み立て。
+ *
+ * **`at` と `day` が同じ `now` から作られることを1箇所で保証する**歯。2箇所で
+ * 別々に `new Date()` を呼ぶ実装に戻すと、ミリ秒単位でずれた瞬間から `at` と
+ * `day` が作られうる（`at` が前日の23:59:59.999、`day` が当日、のような形）。
+ */
+describe('recordFor（Issue #1191）: 記録の組み立て', () => {
+  it('day は at の日付部分と一致する', () => {
+    const now = new Date('2026-09-16T23:59:59.999Z');
+    const rec = recordFor('abc123', now);
+    expect(rec).toEqual({
+      fingerprint: 'abc123',
+      at: '2026-09-16T23:59:59.999Z',
+      day: rec.at.slice(0, 10),
+    });
+    expect(rec.day).toBe('2026-09-16');
+  });
+
+  it('境界: UTC で日をまたぐ瞬間でも day は at から一貫して切り出される', () => {
+    const now = new Date('2026-09-17T00:00:00.000Z');
+    const rec = recordFor('xyz', now);
+    expect(rec.day).toBe(rec.at.slice(0, 10));
+    expect(rec.day).toBe('2026-09-17');
+  });
+
+  it('既定引数は new Date() を呼ぶ（呼び出し時点の day を返す）', () => {
+    const before = new Date().toISOString().slice(0, 10);
+    const rec = recordFor('fp');
+    expect(rec.day).toBe(before);
+  });
+});
+
+/**
+ * `classifyTestScope`（Issue #1191）: `pnpm test` へ渡る引数（`passthrough`）が
+ * 実行範囲を絞り込む形かどうかの判定。
+ *
+ * **C1 の本体。** `TEST_ARGS_THAT_DO_NOT_NARROW` に載っている形（値の有無を含む）
+ * だけを「絞り込まない」側へ倒し、それ以外はすべて絞り込みとして扱う
+ * （許可リストである理由は `verify-core.mjs` の `TEST_ARGS_THAT_DO_NOT_NARROW`
+ * の doc: 知らない引数は安全側＝絞り込む側へ倒す）。
+ */
+describe('classifyTestScope（Issue #1191）: 絞り込みかどうかの判定', () => {
+  it('引数なし → full', () => {
+    expect(classifyTestScope([])).toEqual({ full: true, narrowing: [] });
+  });
+
+  it('--maxWorkers=4（= の形）→ full', () => {
+    expect(classifyTestScope(['--maxWorkers=4'])).toEqual({ full: true, narrowing: [] });
+  });
+
+  it('--maxWorkers 4（空白区切り、値を1要素飛ばす）→ full', () => {
+    expect(classifyTestScope(['--maxWorkers', '4'])).toEqual({ full: true, narrowing: [] });
+  });
+
+  it('--reporter verbose（値ありの別フラグ）→ full', () => {
+    expect(classifyTestScope(['--reporter', 'verbose'])).toEqual({ full: true, narrowing: [] });
+  });
+
+  it('テストファイルのパス → not full（narrowing に入る）', () => {
+    expect(classifyTestScope(['scripts/x.test.ts'])).toEqual({
+      full: false,
+      narrowing: ['scripts/x.test.ts'],
+    });
+  });
+
+  it('-t 名前（vitest の名前フィルタ）→ not full', () => {
+    const result = classifyTestScope(['-t', '名前']);
+    expect(result.full).toBe(false);
+    // `-t` は許可リストに無いので、値らしき次要素も飛ばさず両方 narrowing に入る
+    // （どちらも「絞り込みかもしれないもの」として扱う——安全側）。
+    expect(result.narrowing).toContain('-t');
+  });
+
+  it('--maxWorkers=4 とパス指定の組み合わせ → not full（許可された引数は narrowing に混ざらない）', () => {
+    expect(classifyTestScope(['--maxWorkers=4', 'scripts/x.test.ts'])).toEqual({
+      full: false,
+      narrowing: ['scripts/x.test.ts'],
+    });
+  });
+
+  it('--changed（絞り込みの一種）→ not full', () => {
+    expect(classifyTestScope(['--changed'])).toEqual({ full: false, narrowing: ['--changed'] });
+  });
+
+  it('--bail=1 → not full', () => {
+    expect(classifyTestScope(['--bail=1'])).toEqual({ full: false, narrowing: ['--bail=1'] });
+  });
+
+  /**
+   * **陰性対照（測っていない軸）。** `classifyTestScope` は引数の**形**だけを見る
+   * ——実在しないパスでも「絞り込みの形」として扱う。**実際に絞り込みが効いたか
+   * （vitest が何本選んだか）はこの関数の責務ではなく、測っていない**
+   * （`verify-core.mjs` の `classifyTestScope` の doc に明記）。
+   */
+  it('陰性対照: 存在しないパスでも形だけで not full と判定する（実際に絞り込みが効くかは見ていない）', () => {
+    expect(classifyTestScope(['does/not/exist.test.ts'])).toEqual({
+      full: false,
+      narrowing: ['does/not/exist.test.ts'],
+    });
+  });
+});
+
+/**
+ * `decideRecord`（Issue #1191）: 全体の成功記録を書いてよいかの判定。
+ *
+ * 優先順位（`moved` → `narrowed` → `no-record-path` → `ok`）を固定する。
+ */
+describe('decideRecord（Issue #1191）: 全体の成功記録を書いてよいか', () => {
+  const fullScope = { full: true, narrowing: [] as string[] };
+  const narrowScope = { full: false, narrowing: ['scripts/x.test.ts'] };
+
+  it('絞った（narrowed）→ record:false', () => {
+    expect(
+      decideRecord({ scope: narrowScope, moved: false, recordPath: '/tmp/x.json' }),
+    ).toMatchObject({ record: false, reason: 'narrowed', narrowing: ['scripts/x.test.ts'] });
+  });
+
+  it('走行中にツリーが動いた（moved）→ record:false（絞っていなくても）', () => {
+    expect(
+      decideRecord({ scope: fullScope, moved: true, recordPath: '/tmp/x.json' }),
+    ).toMatchObject({ record: false, reason: 'tree-moved' });
+  });
+
+  it('moved が narrowed より優先される（両方真なら tree-moved）', () => {
+    expect(
+      decideRecord({ scope: narrowScope, moved: true, recordPath: '/tmp/x.json' }),
+    ).toMatchObject({ record: false, reason: 'tree-moved' });
+  });
+
+  it('記録の置き場が取れない（recordPath が null）→ record:false', () => {
+    expect(decideRecord({ scope: fullScope, moved: false, recordPath: null })).toMatchObject({
+      record: false,
+      reason: 'no-record-path',
+    });
+  });
+
+  it('full かつ動いていない → record:true（キャッシュが死んでいないことの対照）', () => {
+    expect(
+      decideRecord({ scope: fullScope, moved: false, recordPath: '/tmp/x.json' }),
+    ).toMatchObject({ record: true, reason: 'ok' });
+  });
+});
+
+/**
+ * **統合の歯（Issue #1191, C5）。** 本物の `scripts/verify.mjs` を子プロセスで
+ * 走らせる——ここまでの単体の歯（`classifyTestScope` / `decideRecord` /
+ * `decideSkip` の `today`）は、**それぞれ正しくても `verify.mjs` の配線が
+ * 間違っていれば元の欠陥のまま**である。実際、元の欠陥は「判定関数が無い」
+ * のではなく「`verify.mjs` が `passthrough` を記録に一切渡していない」
+ * 配線の穴だった。単体の歯だけでは、この配線の穴を検出できない。
+ *
+ * `pnpm` / `git` / `build` を本物では動かさない——**遅い上に、この歯が
+ * 測りたいのは「絞り込み」と「日付」の配線であって、各手順の中身ではない。**
+ * `pnpm` は偽物（`fake-bin/pnpm`）に差し替え、`build` 等はすべて即 exit 0、
+ * `test` のときだけ vitest の集計行を出す。
+ */
+describe('pnpm verify — 統合の歯（Issue #1191, C5）', () => {
+  const made: string[] = [];
+
+  afterEach(async () => {
+    for (const dir of made.splice(0)) await rm(dir, { recursive: true, force: true });
+  });
+
+  /** 使い捨ての git リポジトリ（`verify.mjs` / `verify-core.mjs` のコピー込み）。 */
+  async function makeE2eRepo(): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), 'verify-e2e-repo-'));
+    made.push(dir);
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
+    git('init', '-q');
+    git('config', 'user.email', 'test@example.invalid');
+    git('config', 'user.name', 'test');
+    await mkdir(join(dir, 'scripts'), { recursive: true });
+    // **`verify.mjs` は自分の `import.meta.url` から REPO を決める**ので、
+    // コピーすればこの一時ディレクトリが対象になる（`verify.mjs` 冒頭の
+    // `const REPO = dirname(dirname(fileURLToPath(import.meta.url)));`）。
+    copyFileSync(join(SCRIPTS_DIR, 'verify.mjs'), join(dir, 'scripts', 'verify.mjs'));
+    copyFileSync(join(SCRIPTS_DIR, 'verify-core.mjs'), join(dir, 'scripts', 'verify-core.mjs'));
+    await writeFile(join(dir, 'a.txt'), 'one\n');
+    git('add', '-A');
+    git('commit', '-qm', 'init');
+    return dir;
+  }
+
+  /** 偽の `pnpm`（別ディレクトリ。**repo の外**——さもないと呼び出しの記録
+   * ファイル自身が repo の指紋に混ざり、毎回ツリーが「動いた」ことになる）。 */
+  async function makeFakePnpm(): Promise<{ toolsDir: string; logPath: string; binDir: string }> {
+    const toolsDir = await mkdtemp(join(tmpdir(), 'verify-e2e-tools-'));
+    made.push(toolsDir);
+    const binDir = join(toolsDir, 'bin');
+    await mkdir(binDir, { recursive: true });
+    const logPath = join(toolsDir, 'pnpm-calls.log');
+    const script =
+      '#!/usr/bin/env node\n' +
+      "const fs = require('node:fs');\n" +
+      'const logPath = process.env.FAKE_PNPM_LOG;\n' +
+      "fs.appendFileSync(logPath, JSON.stringify(process.argv.slice(2)) + '\\n');\n" +
+      "if (process.argv[2] === 'test') {\n" +
+      "  process.stdout.write('\\n RUN  v0.0.0 (fake)\\n\\n' +\n" +
+      "    ' Test Files  1 passed (1)\\n' +\n" +
+      "    '      Tests  1 passed (1)\\n');\n" +
+      '}\n' +
+      'process.exit(0);\n';
+    writeFileSync(join(binDir, 'pnpm'), script);
+    await chmod(join(binDir, 'pnpm'), 0o755);
+    return { toolsDir, logPath, binDir };
+  }
+
+  function runVerify(repoDir: string, binDir: string, logPath: string, args: string[]) {
+    return spawnSync('node', [join(repoDir, 'scripts', 'verify.mjs'), ...args], {
+      cwd: repoDir,
+      env: { ...process.env, PATH: binDir + ':' + process.env.PATH, FAKE_PNPM_LOG: logPath },
+      // ⛔ 'inherit' にしないこと — vitest.setup.ts の歯（本物の stdout へ
+      // 直書きしたテストを赤にする）を避けるため、必ず 'pipe' で受ける。
+      stdio: 'pipe',
+      encoding: 'utf8',
+    });
+  }
+
+  const recordPath = (repoDir: string) => join(repoDir, '.git', 'alteroid-verify.json');
+  const logLines = (logPath: string) => readFileSync(logPath, 'utf8').split('\n').filter(Boolean);
+
+  it('A（絞った）: 記録を作らない。次も必ず走る', async () => {
+    const repoDir = await makeE2eRepo();
+    const { binDir, logPath } = await makeFakePnpm();
+    writeFileSync(logPath, '');
+
+    const result = runVerify(repoDir, binDir, logPath, ['some.test.ts']);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain('実行範囲を絞ったので');
+
+    const calls = logLines(logPath);
+    expect(calls.some((line) => JSON.parse(line).includes('some.test.ts'))).toBe(true);
+    expect(calls.some((line) => JSON.parse(line)[0] === 'test')).toBe(true);
+
+    // **記録が作られていないこと**が本体である。
+    expect(() => readFileSync(recordPath(repoDir))).toThrow();
+  });
+
+  it('B（絞らない）: 記録を作る。day を持つ（対照）', async () => {
+    const repoDir = await makeE2eRepo();
+    const { binDir, logPath } = await makeFakePnpm();
+    writeFileSync(logPath, '');
+
+    const result = runVerify(repoDir, binDir, logPath, []);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain('verify: recorded');
+
+    const saved = JSON.parse(readFileSync(recordPath(repoDir), 'utf8'));
+    expect(saved.fingerprint).toEqual(expect.any(String));
+    expect(saved.day).toBe(new Date().toISOString().slice(0, 10));
+  });
+
+  it('C（B の直後にもう1回）: skipped が出る（対照）', async () => {
+    const repoDir = await makeE2eRepo();
+    const { binDir, logPath } = await makeFakePnpm();
+    writeFileSync(logPath, '');
+
+    const first = runVerify(repoDir, binDir, logPath, []);
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+
+    const second = runVerify(repoDir, binDir, logPath, []);
+    expect(second.status, second.stdout + second.stderr).toBe(0);
+    expect(second.stdout).toContain('skipped');
+  });
+
+  it('D（B の記録の day を昨日へ書き換えてもう1回）: skipped が出ず、実際に走る', async () => {
+    const repoDir = await makeE2eRepo();
+    const { binDir, logPath } = await makeFakePnpm();
+    writeFileSync(logPath, '');
+
+    const first = runVerify(repoDir, binDir, logPath, []);
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    const callsAfterFirst = logLines(logPath).length;
+    expect(callsAfterFirst).toBeGreaterThan(0);
+
+    // **記録の day だけを過去へ書き換える。** ツリーは1バイトも動かしていない
+    // （fingerprint は不変のまま）。実行日を確実に過去にするため、固定の
+    // 日付（実行日が絶対に追い付かない過去）を使う——「昨日」の計算は UTC の
+    // 日跨ぎの実装ミスに弱いので避ける。
+    const saved = JSON.parse(readFileSync(recordPath(repoDir), 'utf8'));
+    writeFileSync(recordPath(repoDir), JSON.stringify({ ...saved, day: '2000-01-01' }, null, 2));
+
+    const second = runVerify(repoDir, binDir, logPath, []);
+    expect(second.status, second.stdout + second.stderr).toBe(0);
+    expect(second.stdout).not.toContain('skipped');
+    expect(second.stdout).toContain('記録された日=2000-01-01');
+
+    const callsAfterSecond = logLines(logPath).length;
+    expect(
+      callsAfterSecond,
+      '記録の day が古いのに、実際には走っていない（pnpm-calls.log が伸びていない）',
+    ).toBeGreaterThan(callsAfterFirst);
+  });
+
+  it('openapi の手順（git diff）は、一時 repo に対象パスが無くても 0 で通る', async () => {
+    // 上の4本すべてがここを暗黙に通っているが、**明示で確かめる**
+    // （依頼の「念のため生出力で確かめること」に対応）。
+    const repoDir = await makeE2eRepo();
+    const { binDir, logPath } = await makeFakePnpm();
+    writeFileSync(logPath, '');
+    const result = runVerify(repoDir, binDir, logPath, []);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).not.toContain('!! openapi');
   });
 });

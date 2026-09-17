@@ -67,6 +67,37 @@
  * **`--force` で必ず走る。** そして**`--force` を毎回打つ人が出たら、それは指紋が
  * 信用されていない合図である** — そのときは指紋の範囲を疑うこと。
  *
+ * ## 記録が答えているのは何か（Issue #1191）
+ *
+ * **記録が言っているのは「このツリーは検証済み」ではない。**「**このツリーを、
+ * この範囲で、この日に検証した**」である。3つの軸のうち、最初の版が持っていた
+ * のは「このツリー」（指紋）だけだった。
+ *
+ * **範囲（絞り込み）**: `pnpm verify -- scripts/foo.test.ts` のように実行範囲を
+ * 絞った成功は、**全体の成功として記録しない。** `splitVerifyArgs` の
+ * `passthrough` が絞り込みの形（既知の「絞り込まない」引数の許可リストに
+ * 無いもの。`verify-core.mjs` の `TEST_ARGS_THAT_DO_NOT_NARROW` /
+ * `classifyTestScope`）を含んでいたら、`decideRecord` が `record: false`
+ * （`reason: 'narrowed'`）を返し、この回は記録しない——次の `pnpm verify` は
+ * 必ず走る。
+ *
+ * **日（キャッシュの有効期限は「日」単位）**: `decideSkip` は指紋が一致しても、
+ * **記録した日（`day`、UTC）が今日と違えば走る側へ倒す**（`reason: 'stale-day'`）。
+ * これは「日付依存の検査を数え上げてキャッシュ判定の外で毎回実行する」という
+ * 案（takecchi の提案の2つ目）を採らなかった結果である——**その数え上げが
+ * 閉じないことが実測で分かった。** `scripts/test-guard-core.test.ts` の
+ * 「`today` を渡さなければ既定値（現在時刻）で回る」は、**vitest のスイート
+ * の内側に在る日付依存の判定**であり、`test` という1つの手順（`STEPS` の
+ * 粒度）の中に何本の日付依存テストが在るかを外側から数え切ることは原理的に
+ * できない。だから**個々の検査を数え上げず、「記録した日」と「いま」を
+ * 突き合わせる**形にした。**粒度は日までである** — 同じ日の中で判定が変わる
+ * 検査（時刻単位で倒れるもの）には効かない。いまの一式にそれが在るとは
+ * 確かめていない（詳細は `verify-core.mjs` の `decideSkip` / `todayUtc` の doc）。
+ *
+ * **費用**: ツリーが1文字も変わらないまま日を跨いだだけでも、1日1回は一式が
+ * 余分に走る。**それでよい** — 直そうとしているのは「落ちるはずの検証が緑に
+ * 見える」ことであって、余分な1回はその代償として軽い。
+ *
  * ## 並列度を外から渡す（#362）
  *
  * `pnpm verify -- --maxWorkers=4` は `pnpm test` へ、`pnpm verify -- --workspace-concurrency=2`
@@ -105,9 +136,12 @@ import { fileURLToPath } from 'node:url';
 
 import {
   classifyTest,
+  classifyTestScope,
+  decideRecord,
   decideSkip,
   envForStep,
   fingerprint,
+  recordFor,
   recordPathFor,
   splitVerifyArgs,
   STEPS,
@@ -270,6 +304,23 @@ if (decided.skip) {
   process.exit(0);
 }
 
+// **`stale-day` も1行出す（Issue #1191）。** 畳まなかった理由の大半（`changed` /
+// `no-record` / `broken-record` / `force` 等）は、走り始めればすぐ結果で分かる。
+// だが `stale-day` は指紋が一致しているので、黙っていると「なぜこの回はキャッシュが
+// 効かないのか」を確かめる手段が使う側に無い（`verify-core.mjs` の `decideSkip` の
+// doc に書いてある「日が変わったら走る」という挙動そのものを、出力からも読めるようにする）。
+if (decided.reason === 'stale-day') {
+  const today = new Date().toISOString().slice(0, 10);
+  process.stdout.write(
+    'verify: 記録はあるが検証した日が今日ではないので畳まない' +
+      '（記録された日=' +
+      (decided.day ?? '(旧形式の記録。day を持たない)') +
+      ', 今日=' +
+      today +
+      '）。実行する。\n',
+  );
+}
+
 const results = [];
 for (const step of STEPS) {
   if (!step.isTest) {
@@ -359,14 +410,18 @@ for (const step of STEPS) {
 const after = fingerprint(REPO);
 const moved = after === null || after !== decided.fingerprint;
 
-if (!moved && RECORD !== null) {
+// **絞り込んだ実行では、全体の成功記録を作らない（Issue #1191）。** 判定は
+// すべて `decideRecord`（`verify-core.mjs`）に寄せてある — ここでは呼んで
+// 結果に従うだけ。`scope` は「テストの手順へ渡した引数（`passthrough`）」の
+// 形だけを見る（`splitVerifyArgs` の doc、`classifyTestScope` の doc）。
+const scope = classifyTestScope(passthrough);
+const recordDecision = decideRecord({ scope, moved, recordPath: RECORD });
+
+if (recordDecision.record) {
   // **記録の失敗で一式を落とさない。** ここまでで検証は全部通っている。記録は
   // 次回を速くするためのものなので、書けなかったら「書けなかった」と言って 0 で返す。
   try {
-    writeFileSync(
-      RECORD,
-      JSON.stringify({ fingerprint: after, at: new Date().toISOString() }, null, 2) + '\n',
-    );
+    writeFileSync(RECORD, JSON.stringify(recordFor(after), null, 2) + '\n');
   } catch (error) {
     process.stdout.write('（指紋を記録できなかった: ' + error.message + '。次も必ず走る）\n');
   }
@@ -376,10 +431,16 @@ process.stdout.write(
   '\n=== 検証一式: 全部通った（' +
     results.join(' / ') +
     '）\n' +
-    (moved
+    (recordDecision.reason === 'tree-moved'
       ? '⚠️ 走行中にツリーが動いたので記録していない（次も必ず走る）。\n' +
         '   **通ったのは走り始めた時点のツリーである。** いまのツリーは検証されていない。\n'
-      : RECORD === null
-        ? '（記録の置き場を取れなかったので記録していない。次も必ず走る）\n'
-        : 'verify: recorded (' + after.slice(0, 12) + ')\n'),
+      : recordDecision.reason === 'narrowed'
+        ? '⚠️ 実行範囲を絞ったので、全体の成功として記録していない（次も必ず走る）。\n' +
+          '   絞り込みと判定した引数: ' +
+          recordDecision.narrowing.join(' ') +
+          '\n' +
+          '   **通ったのはこの範囲だけである。** 通常の `pnpm verify` は全部を走らせる。\n'
+        : recordDecision.reason === 'no-record-path'
+          ? '（記録の置き場を取れなかったので記録していない。次も必ず走る）\n'
+          : 'verify: recorded (' + after.slice(0, 12) + ')\n'),
 );

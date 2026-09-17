@@ -128,13 +128,40 @@ export function recordPathFor(repo) {
 }
 
 /**
+ * 今日の日付を `'YYYY-MM-DD'`（UTC）で作る。**I/O 層でだけ呼ぶ**
+ * （`scripts/test-guard-core.mjs` の `todayUtc` と同じ作法）——`decideSkip` の
+ * 既定引数の中だけで使い、それ以外の場所（`decideRecord` / `recordFor` の
+ * 純粋なロジック）では絶対に `new Date()` を呼ばない。理由は Issue #1191:
+ * 「日付依存の検査を数え上げてキャッシュ判定の外へ出す」形は、**vitest の
+ * スイートの内側に在る日付依存のテスト（`scripts/test-guard-core.test.ts` の
+ * 「`today` を渡さなければ既定値（現在時刻）で回る」）まで数え上げないと
+ * 閉じない**——それは原理的に不可能である（歯Cの単体テストが、歯C自身の
+ * 判定対象である `today` を固定引数で確かめている以上、`test` という1つの
+ * 手順の中に日付依存が何本在るかを外側から数え切ることはできない）。
+ * だから「日付依存の検査を列挙する」のではなく、**「記録した日」と「いま」を
+ * 突き合わせて、日が変わったら指紋が一致しても走り直す**形にした。
+ */
+function todayUtc() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/**
  * 無料で返してよいか。
  *
  * **倒す先は常に「走る」である。** 指紋が取れない・記録が無い・記録が壊れている・
  * `--force` — どれも `skip: false` になる。**「判定できない」を「変わっていない」へ
  * 倒さないこと**（倒すと、いちばん危ないときに黙って緑を名乗る）。
+ *
+ * **`today` を追加した（Issue #1191）。** 指紋が一致しても、記録した日
+ * （`saved.day`）が今日と違えば走る（`reason: 'stale-day'`）。**旧形式の記録
+ * （`day` を持たない・文字列でない）も同じ側へ倒す**——安全側であり、次に
+ * 一式が通れば `recordFor` が新形式で書き直すので自然に入れ替わる。
+ *
+ * **粒度は日までである。** 同じ日の中で判定が変わる検査（時刻単位で倒れる
+ * もの）には効かない。いまの一式にそれが在るとは確かめていない
+ * （`verify.mjs` 冒頭 doc の「指紋が見ていないもの」と同じ性質の限界）。
  */
-export function decideSkip({ repo, recordPath, force = false }) {
+export function decideSkip({ repo, recordPath, force = false, today = todayUtc() }) {
   const current = fingerprint(repo);
   if (force) return { skip: false, reason: 'force', fingerprint: current };
   if (current === null) return { skip: false, reason: 'no-fingerprint', fingerprint: null };
@@ -146,6 +173,15 @@ export function decideSkip({ repo, recordPath, force = false }) {
   try {
     const saved = JSON.parse(readFileSync(recordPath, 'utf8'));
     if (saved.fingerprint === current) {
+      if (typeof saved.day !== 'string' || saved.day !== today) {
+        return {
+          skip: false,
+          reason: 'stale-day',
+          fingerprint: current,
+          at: saved.at,
+          day: saved.day,
+        };
+      }
       return { skip: true, reason: 'unchanged', fingerprint: current, at: saved.at };
     }
     return { skip: false, reason: 'changed', fingerprint: current };
@@ -399,4 +435,100 @@ export function splitVerifyArgs(argv) {
 export function envForStep(step, { workspaceConcurrency, baseEnv }) {
   if (workspaceConcurrency === undefined || step.workspaceConcurrencyEnv !== true) return baseEnv;
   return { ...baseEnv, PNPM_CONFIG_WORKSPACE_CONCURRENCY: String(workspaceConcurrency) };
+}
+
+// ── Issue #1191: 「範囲を絞った成功」を「全体の成功」として記録しない ──────
+
+/**
+ * `pnpm test` へ渡す引数のうち、**絞り込みにならないと分かっているもの**の許可リスト。
+ * `{ flag, takesValue }` の並び。
+ *
+ * **これは許可リストであって拒否リストではない。** 理由は Issue #1191:
+ * **知らない引数は「絞る」側へ倒す**——`classifyTestScope` が `narrowing` へ入れて
+ * 記録しない側（＝安全側）にする。ここが腐って（vitest が新しいフラグを足して）
+ * 見逃しても、帰結は「余分に一式を走らせる」だけで、**緑の側へは絶対に倒れない**。
+ * 逆に拒否リストにすると、知らない引数が黙って「絞り込まない」側へ回り、
+ * 実際には絞り込んでいるのに全体の成功として記録されうる——それは直そうと
+ * している当の欠陥そのものである。
+ *
+ * 最小で始める。**vitest のフラグ全部を調べたわけではない**（Issue #1191
+ * 「確かめていないこと」）。
+ */
+export const TEST_ARGS_THAT_DO_NOT_NARROW = [
+  { flag: '--maxWorkers', takesValue: true },
+  { flag: '--minWorkers', takesValue: true },
+  { flag: '--reporter', takesValue: true },
+  { flag: '--silent', takesValue: false },
+  { flag: '--no-color', takesValue: false },
+  { flag: '--color', takesValue: false },
+];
+
+/**
+ * `pnpm test` へ渡る引数（`splitVerifyArgs` の `passthrough`）が、実行範囲を
+ * **絞り込む形か**を判定する。
+ *
+ * **`--flag=値` は `=` の前で引く。** 値ありのフラグが `--flag 値` の形で単体で
+ * 来たら、**次の要素も一緒に飛ばす**（`--maxWorkers 4` の `4` を、絞り込みの
+ * パス指定と読み違えないため）。それ以外の引数はすべて `narrowing` へ入る
+ * （テストファイルのパス・`-t`（名前フィルタ）・`--changed`・`--bail` など）。
+ *
+ * `full = narrowing.length === 0`。**「絞り込みが実際に効いたか（vitest が
+ * 実際に何本選んだか）は見ていない。** 見ているのは引数の**形**だけである**
+ * ——`splitVerifyArgs` が引数の宛先を形だけで決めているのと同じ制約。
+ */
+export function classifyTestScope(passthrough) {
+  const narrowing = [];
+  for (let i = 0; i < passthrough.length; i += 1) {
+    const arg = passthrough[i];
+    const eqIdx = arg.indexOf('=');
+    const head = eqIdx === -1 ? arg : arg.slice(0, eqIdx);
+    const known = TEST_ARGS_THAT_DO_NOT_NARROW.find((entry) => entry.flag === head);
+    if (known === undefined) {
+      narrowing.push(arg);
+      continue;
+    }
+    // `--flag=値` の形は、この1要素で完結している（値を飛ばす必要が無い）。
+    if (eqIdx !== -1) continue;
+    // `--flag 値` の形（値ありで `=` を使っていない）。次の要素（値）も飛ばす。
+    if (known.takesValue) i += 1;
+  }
+  return { full: narrowing.length === 0, narrowing };
+}
+
+/**
+ * 全体の成功記録を書いてよいか。**判定はすべてここへ寄せる**
+ * （このファイル冒頭 doc の方針どおり。`verify.mjs` は呼ぶだけにする）。
+ *
+ * 優先順（先に当たったものを返す）:
+ * 1. `moved`（走行中にツリーが動いた） → `'tree-moved'`
+ * 2. `!scope.full`（実行範囲を絞った） → `'narrowed'`（Issue #1191 の核心）
+ * 3. `recordPath` が無い（置き場が取れない器） → `'no-record-path'`
+ * 4. それ以外 → 記録してよい（`'ok'`）
+ *
+ * **`moved` を最優先にするのは意図である。** 絞り込んでいなくても、走行中に
+ * 誰かがツリーを直していたら、それは「検証していないものを検証済みとして
+ * 記録する」という、この一式がいちばん恐れている形である（`verify.mjs` の
+ * 該当 doc と同じ理由）。
+ */
+export function decideRecord({ scope, moved, recordPath }) {
+  if (moved) return { record: false, reason: 'tree-moved' };
+  if (!scope.full) return { record: false, reason: 'narrowed', narrowing: scope.narrowing };
+  if (recordPath === null || recordPath === undefined) {
+    return { record: false, reason: 'no-record-path' };
+  }
+  return { record: true, reason: 'ok' };
+}
+
+/**
+ * 書き込む記録そのものを組み立てる。**`at`（時刻）と `day`（日付）を同じ
+ * `now` から作ることを1箇所で保証する**——2箇所で別々に `new Date()` を
+ * 呼ぶと、ミリ秒単位でずれた `now` から作られた `at` と `day` が理論上
+ * 矛盾しうる（`at` は昨日の23:59:59.999、`day` は今日、のような形）。
+ *
+ * `now` は引数で受ける（既定値だけが `new Date()` を呼ぶ）。純粋なロジック
+ * （`decideRecord` 等）からは呼ばれない——`verify.mjs` が一式の終わりに
+ * 一度だけ呼ぶ想定。
+ */
+export function recordFor(fingerprint, now = new Date()) {
+  return { fingerprint, at: now.toISOString(), day: now.toISOString().slice(0, 10) };
 }
