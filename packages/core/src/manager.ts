@@ -72,6 +72,7 @@ import {
   usageTransitionOf,
   withRecoveryNote,
   type RateLimitFacts,
+  type UsageLimitNotice,
 } from './usage-limits.js';
 import type { TokenRotatorObservation } from './token-rotator.js';
 import { usageDate } from './usage.js';
@@ -5088,6 +5089,54 @@ class Pool implements ManagerPool {
   }
 
   /**
+   * **429 の文言の `resets` 時刻を、プールの各鍵の `cooldownUntil` と突き合わせて
+   * 覚える**（Issue #914 オーナー提案(2)。判定は {@link matchNoticeResetAgainstPool}、
+   * 置き場は {@link Pool.#resetTimeSkewMatches}）。
+   *
+   * **材料は `#tokenIdentity`（プロセス内記憶）ではなく `this.#stores.tokens`
+   * （DB 正本）から読む。** `tokenGeneration` が `undefined` になる3つの理由
+   * （プール未配線・未観測・再起動をまたいだ引き取り）のどれでも、こちらは独立に
+   * 判定できるようにするため——bookkeeping が追いついていない場面ほど、この計器の
+   * 価値が高い。
+   *
+   * **⚠️ 呼ぶ位置は `case 'usage_notice'` の最後である。速さの都合ではない。**
+   * 同じ `case` の冒頭の doc が書いているとおり、`usage_notice` と `report` は
+   * `void this.#onEvent(event)` で**並行に走る**——この handler に `await` を
+   * 1つ足すと、後から届いた `report` 側との勝ち負けが変わり、**配達の順そのものが
+   * 動く。** 実際、この読みを `#observeForTokenRotation` の手前に置いていたときは、
+   * 合流窓が知らせと報告を1本に畳み、`runner-failure.test.ts` の「assistant.error が
+   * 付いた本文は報告に混ぜず、失敗として包んで上げる」が落ちた。⟹ **読み取り専用の
+   * 計器は、配達の臨界路の後ろへ置く。**
+   *
+   * **失敗しても投げない。** 落ちたら「今回は判定できなかった」に落ちるだけでよい
+   * ——`#resetTimeSkewMatches` の欄は `undefined` で消える（`undefined` は
+   * 「世代ずれではない」ではなく「判定できなかった」である。doc は
+   * {@link ManagerSummary.resetTimeSkewMatch}）。
+   */
+  async #rememberResetTimeSkew(event: {
+    managerId: string;
+    notice: UsageLimitNotice;
+  }): Promise<void> {
+    if (event.notice.kind !== 'reached') return;
+    try {
+      const [active, pool] = await Promise.all([
+        this.#stores.tokens.readActive(),
+        this.#stores.tokens.list(),
+      ]);
+      const match = matchNoticeResetAgainstPool(event.notice.text, active?.tokenId, pool, {
+        at: this.#now(),
+      });
+      if (match === undefined) {
+        this.#resetTimeSkewMatches.delete(event.managerId);
+      } else {
+        this.#resetTimeSkewMatches.set(event.managerId, match);
+      }
+    } catch (error) {
+      noteDroppedRecord('resets時刻の突き合わせ', `managerId=${event.managerId}`, error);
+    }
+  }
+
+  /**
    * 枠で止まった印を、プロセス内の `Set`（`#usageStopped`）と台帳の写し
    * （`Job.usageStoppedAt`）の両方から下ろす（Issue #914 段2）。
    *
@@ -8036,40 +8085,6 @@ class Pool implements ManagerPool {
               noteDroppedRecord('枠で止まった印の永続化', `managerId=${event.managerId}`, error);
             }
           }
-
-          /*
-           * **429の文言のresets時刻を、プールのcooldownUntilと突き合わせる**
-           * （Issue #914 オーナー提案(2)。`#resetTimeSkewMatches` の doc）。
-           *
-           * **材料は`#tokenIdentity`（プロセス内記憶）ではなく`this.#stores.tokens`
-           * （DB正本）から読む。** `readActive()`/`list()`は`ManagerPoolOptions`の
-           * 新しい配線を要らない——`stores`は既にこのプールが持っている必須の
-           * フィールドである。DB正本を読む理由は、`tokenGeneration`が`undefined`
-           * になる3つの理由（プール未配線・未観測・再起動をまたいだ引き取り）の
-           * どれでも、こちらは独立に判定できるようにするため——bookkeeping が
-           * 追いついていない場面ほど、この計器の価値が高い。
-           *
-           * **失敗しても投げない。** 直上の台帳への書き込みと同じ理由——ここで
-           * 投げると、この下に控える`#observeForTokenRotation`（鍵を回す契機
-           * そのもの）に届かないまま全員が止まる。読み取り専用の計器なので、
-           * 落ちたら「今回は判定できなかった」に落ちるだけでよい。
-           */
-          try {
-            const [active, pool] = await Promise.all([
-              this.#stores.tokens.readActive(),
-              this.#stores.tokens.list(),
-            ]);
-            const match = matchNoticeResetAgainstPool(event.notice.text, active?.tokenId, pool, {
-              at: this.#now(),
-            });
-            if (match === undefined) {
-              this.#resetTimeSkewMatches.delete(event.managerId);
-            } else {
-              this.#resetTimeSkewMatches.set(event.managerId, match);
-            }
-          } catch (error) {
-            noteDroppedRecord('resets時刻の突き合わせ', `managerId=${event.managerId}`, error);
-          }
         }
 
         // **ここは `report` / `ask` / `closed` / `resume_failed` と違い、`stopped`
@@ -8160,6 +8175,9 @@ class Pool implements ManagerPool {
               `[${event.managerId}] （配達済みの知らせなので受信箱へは回さない。` +
               `この種類で ${memory.folded} 件目）${text}`,
           });
+          // **畳んだ回も計器は回す**（配達しないだけで、枠に当たった事実は同じ）。
+          // 位置が配達より後ろである理由は、下のもう一方の呼び出しの doc に在る。
+          await this.#rememberResetTimeSkew(event);
           return;
         }
         memory.delivered.set(event.notice.text, true);
@@ -8185,6 +8203,14 @@ class Pool implements ManagerPool {
             : `${text}\n（前にこの種類を知らせてから、配達済みの同じ文言を ` +
                 `${folded} 件畳んでいる。全件は日誌に残っている。）`,
         );
+        // **計器（#914 提案(2)）はここで最後に回す。配達より後ろである。**
+        // 理由はこの `case` の冒頭の doc と同じ——`usage_notice` と `report` は
+        // 並行に走るので、**この handler に `await` を1つ足すと配達の順そのものが
+        // 動く。** 実際、この読みを配達の手前に置いていたときは
+        // `runner-failure.test.ts` の「assistant.error が付いた本文は報告に混ぜず、
+        // 失敗として包んで上げる」が落ちた（合流窓が知らせと報告を1本に畳んだ）。
+        // ⟹ **読み取り専用の計器を、配達の臨界路へ置かない。**
+        await this.#rememberResetTimeSkew(event);
         return;
       }
 
