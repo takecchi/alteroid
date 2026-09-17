@@ -1,8 +1,42 @@
-import type { LostSessionGrave, SessionRegistry, TranscriptGrave } from '@alteroid/core';
+import {
+  noteSessionMaterialUnreadable,
+  type LostSessionGrave,
+  type SessionRegistry,
+  type TranscriptGrave,
+} from '@alteroid/core';
 import { eq } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { daemonState } from './schema.js';
+
+/**
+ * 保存された JSON 文字列を読む。**行が無いのと違い、ここへ来るのは
+ * 「行は在るのに読めなかった」場合だけである**（issue #1147）。
+ *
+ * `JSON.parse` が投げたときも、`parse` がスキーマ不一致で `null` を返した
+ * ときも、`noteSessionMaterialUnreadable` で跡を残したうえで `null` を
+ * 返す——**壊れた1行で起動を止めない**という判断（`getTranscriptGrave` /
+ * `getLostSessionGrave` の doc）そのものは変えない。変えるのは「黙って倒すか、
+ * 跡を残して倒すか」だけである。
+ */
+function parseStoredJson<T>(
+  raw: string,
+  what: string,
+  parse: (value: unknown) => T | null,
+): T | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    noteSessionMaterialUnreadable(what, error);
+    return null;
+  }
+  const result = parse(parsed);
+  if (result === null) {
+    noteSessionMaterialUnreadable(what, new Error('JSON としては読めたが、スキーマに合わない'));
+  }
+  return result;
+}
 
 const CLONE_SESSION_KEY = 'clone_session_id';
 /**
@@ -61,15 +95,13 @@ export class PgSessionRegistry implements SessionRegistry {
     const raw = rows[0]?.value ?? null;
     if (raw === null) return null;
     // **壊れた1行で起動を止めない。** ここは resume 素材と同じ族（消えても記憶から
-    // 戻る）なので、読めなければ「無い」へ倒す。
-    try {
-      const parsed: unknown = JSON.parse(raw);
+    // 戻る）なので、読めなければ「無い」へ倒す。**ただし跡は残す**
+    // （`parseStoredJson` の doc、issue #1147）。
+    return parseStoredJson(raw, '生ログの墓標（clone_transcript_grave）', (parsed) => {
       if (typeof parsed !== 'object' || parsed === null) return null;
       const archiveId = (parsed as { archiveId?: unknown }).archiveId;
       return typeof archiveId === 'string' && archiveId.length > 0 ? { archiveId } : null;
-    } catch {
-      return null;
-    }
+    });
   }
 
   async setTranscriptGrave(grave: TranscriptGrave | null): Promise<void> {
@@ -92,9 +124,9 @@ export class PgSessionRegistry implements SessionRegistry {
       .limit(1);
     const raw = rows[0]?.value ?? null;
     if (raw === null) return null;
-    // **壊れた1行で起動を止めない**（`getTranscriptGrave` と同じ理由）。
-    try {
-      const parsed: unknown = JSON.parse(raw);
+    // **壊れた1行で起動を止めない**（`getTranscriptGrave` と同じ理由。
+    // 跡を残すのも同じ、issue #1147）。
+    return parseStoredJson(raw, '再開素材を捨てた回の墓標（clone_lost_session）', (parsed) => {
       if (typeof parsed !== 'object' || parsed === null) return null;
       const { projectKey, sessionId } = parsed as {
         projectKey?: unknown;
@@ -103,9 +135,7 @@ export class PgSessionRegistry implements SessionRegistry {
       if (typeof projectKey !== 'string' || projectKey.length === 0) return null;
       if (typeof sessionId !== 'string' || sessionId.length === 0) return null;
       return { projectKey, sessionId };
-    } catch {
-      return null;
-    }
+    });
   }
 
   async setLostSessionGrave(grave: LostSessionGrave | null): Promise<void> {
