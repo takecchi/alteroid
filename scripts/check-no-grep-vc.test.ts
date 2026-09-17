@@ -34,6 +34,9 @@ import { describe, expect, it } from 'vitest';
  *   `grep -vc` を含むためで、**危険を書き残すことを禁じる歯は、歯が無いより悪い**。
  *   （`CLAUDE.md` は `AGENTS.md` への symlink なので `git ls-files` に別名で
  *   挙がるが、中身は同じものである）
+ * - **`.claude/skills/grep-counting/SKILL.md` も走査しない。** `AGENTS.md` から
+ *   この欠陥の実測を丸ごと移設した先である（2026-09-17）。中身は同じものなので、
+ *   除外する理由も同じ（**危険を書き残すことを禁じる歯は、歯が無いより悪い**）。
  * - **この検査自身も走査しない**（下の fixture が引っかかるため）
  * - **行を跨いだ `grep` の呼び**（`\` で継続した形）は見ない
  * - **`command grep` / `/usr/bin/grep` / `/bin/grep` / `git grep` / `rg` は許す。**
@@ -43,7 +46,12 @@ import { describe, expect, it } from 'vitest';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 /** 走査しないパス。理由は上の doc に書いてある。 */
-export const EXCLUDED = ['AGENTS.md', 'CLAUDE.md', 'scripts/check-no-grep-vc.test.ts'];
+export const EXCLUDED = [
+  'AGENTS.md',
+  'CLAUDE.md',
+  '.claude/skills/grep-counting/SKILL.md',
+  'scripts/check-no-grep-vc.test.ts',
+];
 
 /** シェルとして「そこでコマンドが切れる」と読むトークン。 */
 const SEPARATORS = new Set(['|', '||', '&&', ';', '&', '(', ')', '{', '}', '`', '|&']);

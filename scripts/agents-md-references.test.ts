@@ -350,8 +350,22 @@ export const FENCE_COVERAGE_MAX_DROPPED_RATIO = 0.4;
  */
 export const FENCE_COVERAGE_MIN_DROPPED_LINES = 40;
 
-/** ⭐ いまは0件（実測。閾値を超えるファイルが1つも無い）。1件でも足すなら理由つきで。 */
-export const FENCE_COVERAGE_EXEMPTIONS: readonly FenceCoverageExemption[] = [];
+/**
+ * ⭐ 2026-09-17 に2件。どちらも `AGENTS.md` から**逐語のまま切り出した**節で、
+ * 切り出した対象がまさに「生の実測コマンドと出力」だったために、フェンスの割合が
+ * 元ファイル（18.54%）より高く出ている。**(a) フェンスの対応ずれではないことを確かめた**
+ * —— どちらもフェンス記号の数が偶数で、落とした区間の開始行がすべて開きフェンスに一致する。
+ */
+export const FENCE_COVERAGE_EXEMPTIONS: readonly FenceCoverageExemption[] = [
+  {
+    file: '.claude/skills/grep-counting/SKILL.md',
+    why: 'AGENTS.md「grep が静かに取りこぼす形は6つある」を逐語で移設した先（2026-09-17）。6形のうち5形が shim / GNU grep / rg の出力を並べて見せる形なので、本文がフェンスで占められる。フェンス記号10本＝5対で対応は揃っており、落とした区間の開始行はすべて開きフェンスである（(a) の形ではない）。',
+  },
+  {
+    file: '.claude/skills/pr-green/SKILL.md',
+    why: 'AGENTS.md「statusCheckRollup」〜「draft の run が conclusion: success を名乗る」を逐語で移設した先（2026-09-17）。check-runs / actions/runs / jobs の生の応答を世代ごとに並べて比べる節なので、本文がフェンスで占められる。フェンス記号16本＝8対で対応は揃っており、落とした区間の開始行はすべて開きフェンスである（(a) の形ではない）。',
+  },
+];
 
 // ---------------------------------------------------------------------------
 // 旧実装（#796 より前）との食い違い（#786 残り）—— 「被覆の歯が
