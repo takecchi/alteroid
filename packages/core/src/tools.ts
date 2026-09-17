@@ -228,12 +228,13 @@ const MISSING_ARG_HINT =
  * - **モデルへ広告される JSON Schema は1バイトも変わらない**（実測: `z.toJSONSchema`
  *   の出力が複製の前後で完全一致）。変わるのは欠落時の断り文だけである
  */
-function withMissingArgHint<Shape extends Record<string, z.ZodTypeAny>>(shape: Shape): Shape {
-  const hinted = Object.entries(shape).map(([key, schema]) => {
-    const def = (schema as { _zod?: { def?: unknown } })._zod?.def;
-    if (!def) return [key, schema];
+function withMissingArgHint<Shape extends object>(shape: Shape): Shape {
+  const hinted = Object.entries(shape).map(([key, value]) => {
+    const schema = value as z.ZodTypeAny & { _zod?: { def?: object } };
+    const def = schema?._zod?.def;
+    if (!def || typeof schema.clone !== 'function') return [key, value];
     const cloned = schema.clone({
-      ...(def as object),
+      ...def,
       error: (iss: { input?: unknown }) => (iss.input === undefined ? MISSING_ARG_HINT : undefined),
     } as never);
     return [key, schema.description === undefined ? cloned : cloned.describe(schema.description)];
@@ -247,13 +248,7 @@ function withMissingArgHint<Shape extends Record<string, z.ZodTypeAny>>(shape: S
  * 道具の定義ごとの関心事ではないので、1か所で掛ける。
  */
 const tool: typeof sdkTool = (name, description, inputSchema, handler, extras) =>
-  sdkTool(
-    name,
-    description,
-    withMissingArgHint(inputSchema as Record<string, z.ZodTypeAny>) as typeof inputSchema,
-    handler,
-    extras,
-  );
+  sdkTool(name, description, withMissingArgHint(inputSchema), handler, extras);
 
 export const MCP_SERVER_NAME = 'alteroid';
 

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 
 import {
   clearRecentTracesForTesting,
@@ -17655,5 +17656,81 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
 
     expect(reply).toContain('⚠ 前のセッションへ戻れなかった');
     expect(reply).toContain('終端までに本文が1文字も届いていない');
+  });
+});
+
+/**
+ * **引数が欠けて見えるときの断り文（#1141）。**
+ *
+ * 既定の zod の文（`Invalid input: expected string, received undefined`）は
+ * 嘘ではない。⚠️ **しかし呼ぶ側から見ると「道具が落とした」「私が送っていない」
+ * 「送ったつもりの呼び出しがそもそも壊れた形で組み立てられていた」の3つが
+ * 区別できず、いちばん当たりの高い3つ目へ進めない。**実測で同じ誤診が
+ * 11回 / 4回 / 7回 と3度再発し、うち2回は偽のバグ報告の寸前まで進んだ。
+ *
+ * ここで測るのは **`createCloneTools` が実際に返す道具の schema** である
+ * （JSDoc ではなく、MCP が実際に `safeParse` に掛けるもの）。
+ */
+describe('引数が欠けたときの断り文（#1141）', () => {
+  const toolsForShape = () =>
+    createCloneTools({
+      stores: createMemoryStores(),
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+
+  const shapeOf = (name: string) =>
+    toolsForShape().find((entry) => entry.name === name)?.inputSchema as
+      Record<string, z.ZodTypeAny> | undefined;
+
+  /** 歯A（本体）。欠けているときの文が、呼び出しの生の形を疑えと言う。 */
+  it('必須の引数が欠けたら、呼び出しの生の形を疑えと言う（zod の既定文のままにしない）', () => {
+    const shape = shapeOf('journal_write');
+    expect(shape).toBeDefined();
+    const result = z.object(shape!).safeParse({});
+    expect(result.success).toBe(false);
+    const messages = result.error!.issues.map((issue) => issue.message);
+
+    // 既定文のままなら、この歯が落ちる
+    expect(messages).not.toContain('Invalid input: expected string, received undefined');
+    for (const message of messages) {
+      expect(message).toContain('呼び出しの生の形');
+    }
+  });
+
+  /**
+   * 歯B。**欠落以外の文まで潰していないこと。** 型違いは既定の文のほうが正確
+   * （何が来たかを名乗る）なので、そちらは zod に委ねたままにしてある。
+   */
+  it('型が違うだけのときは、zod の既定の文を残す（何が来たかを名乗るのはあちらが正確）', () => {
+    const shape = shapeOf('journal_write');
+    const result = z.object(shape!).safeParse({ decision: 123, grounds: 'g' });
+    expect(result.success).toBe(false);
+    const message = result.error!.issues[0]!.message;
+    expect(message).toContain('expected string');
+    expect(message).not.toContain('呼び出しの生の形');
+  });
+
+  /**
+   * 歯C。**`.describe()` を落としていないこと。** 断り文は schema を複製して
+   * 付けているが、説明はレジストリ側に紐づくので**複製すると落ちる**。
+   * モデルが読むのはこの説明なので、落とすと道具の意味が静かに削れる。
+   */
+  it('説明（describe）を落としていない —— モデルが読むのはこちらである', () => {
+    const shape = shapeOf('journal_write');
+    expect(shape!.decision!.description).toBe('何を判断し、何をしたか');
+    expect(shape!.grounds!.description).toBe(
+      '記憶のどこに根拠があったか。無いなら「根拠なし」と書く',
+    );
+  });
+
+  /** 歯D。**任意の引数は素通りする**（欠けていて正常なので、断り文が出る余地が無い）。 */
+  it('任意の引数が無いだけなら、何も言わずに通る', () => {
+    const shape = shapeOf('journal_read');
+    expect(shape).toBeDefined();
+    // 欄が0個だと「素通りした」が自明に成立してしまう（空振りの歯にしない）
+    expect(Object.keys(shape!).length).toBeGreaterThan(0);
+    expect(z.object(shape!).safeParse({}).success).toBe(true);
   });
 });
