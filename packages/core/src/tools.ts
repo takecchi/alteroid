@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
+import { createSdkMcpServer, tool as sdkTool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 
 import {
@@ -197,6 +197,64 @@ import {
  *
  * モデルから見える名前は `mcp__alteroid__<tool>` になる。
  */
+/**
+ * **引数が欠けて見えるときの断り文（#1141）。**
+ *
+ * 既定の zod の文（`Invalid input: expected string, received undefined`）は
+ * **正しい**。実際に引数は届いていないのだから、嘘はついていない。⚠️ **問題は、
+ * 正しい文が、いちばん当たりの高い原因へ呼ぶ側を導かないことである** ——
+ * 呼ぶ側からは「道具が落とした」「私が送っていない」「送ったつもりの呼び出しが
+ * そもそも壊れた形で組み立てられていた」の3つが区別できない。
+ *
+ * 実測（#1141）: この断り方のもとで、同じ誤診が **11回 / 4回 / 7回** と3度再発し、
+ * うち2回は**呼ぶ側が自分の誤りを alteroid の欠陥だと誤診して偽の Issue を立てる
+ * 寸前まで**進んだ。真因はいずれも呼び出し側のタグ破損（接頭辞の脱落）で、
+ * **引数の並びも長さも無関係だった。**
+ */
+const MISSING_ARG_HINT =
+  '引数が届いていない（この道具からは「送られていない」ことしか見えない）。書いたつもりなら、まず呼び出しの生の形を疑うこと —— タグの接頭辞の脱落など、呼び出しの組み立てが壊れていると引数は静かに落ちる。決定的な対照: 引数の並びも長さも1文字も変えず、タグだけ正しく書いて1回送り直す。それで通れば、原因は呼び出しの形であって、この道具でも引数の中身でもない';
+
+/**
+ * 生シェイプの各欄に「**欠けているときだけ**」上の断り文を付け直す（#1141）。
+ *
+ * - **欠落以外の文は既定のまま残す** —— 型違い（`received number`）は元の文の
+ *   ほうが正確なので、`iss.input === undefined` のときだけ独自の文を返し、
+ *   それ以外は `undefined` を返して zod の既定へ委ねる
+ * - **任意の欄（`.optional()`）は素通りする** —— 欠けていても正常なので断り文が
+ *   出る余地が無い
+ * - ⚠️ **`.describe()` は `clone()` で落ちる**（説明は schema の実体に紐づく
+ *   レジストリ側に在り、複製は別の実体になるため）。**モデルが読むのはこの説明
+ *   なので、落とすと道具の意味が静かに削れる。**必ず貼り直すこと
+ * - **モデルへ広告される JSON Schema は1バイトも変わらない**（実測: `z.toJSONSchema`
+ *   の出力が複製の前後で完全一致）。変わるのは欠落時の断り文だけである
+ */
+function withMissingArgHint<Shape extends Record<string, z.ZodTypeAny>>(shape: Shape): Shape {
+  const hinted = Object.entries(shape).map(([key, schema]) => {
+    const def = (schema as { _zod?: { def?: unknown } })._zod?.def;
+    if (!def) return [key, schema];
+    const cloned = schema.clone({
+      ...(def as object),
+      error: (iss: { input?: unknown }) => (iss.input === undefined ? MISSING_ARG_HINT : undefined),
+    } as never);
+    return [key, schema.description === undefined ? cloned : cloned.describe(schema.description)];
+  });
+  return Object.fromEntries(hinted) as Shape;
+}
+
+/**
+ * SDK の `tool()` に、欠落時の断り文だけを足して被せたもの（#1141）。
+ * **42 箇所ある `tool(...)` の呼び出し側は1文字も変えない** —— 断り文は
+ * 道具の定義ごとの関心事ではないので、1か所で掛ける。
+ */
+const tool: typeof sdkTool = (name, description, inputSchema, handler, extras) =>
+  sdkTool(
+    name,
+    description,
+    withMissingArgHint(inputSchema as Record<string, z.ZodTypeAny>) as typeof inputSchema,
+    handler,
+    extras,
+  );
+
 export const MCP_SERVER_NAME = 'alteroid';
 
 export interface ToolContext {
