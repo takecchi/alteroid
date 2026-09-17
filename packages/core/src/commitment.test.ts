@@ -1680,6 +1680,141 @@ describe('Issue #856: 台帳に載らなかった合図の観測', () => {
 });
 
 /**
+ * **Issue #1148。** fs 実装（`storage-fs/src/commitments.ts` の `trimClosed`）は
+ * 片付いた行を `CLOSED_HISTORY_LIMIT`（500件）を超えると物理削除する。
+ * `#commitmentNoticeFor` の `missing` 判定（上の Issue #856 のテスト群）は
+ * 「開くつもりで、いま読み直しても台帳に見当たらない」しか見ないので、trim で
+ * 消えた行もそのまま「載っていない。`commitment_open` で載せ直せ」と断って
+ * しまう——だがそれは既に片付いた仕事で、載せ直せばクローンが自分でその
+ * 仕事を作り直すことになる。
+ *
+ * ここでは `list()` を差し替えて `trimmedClosed` と、いま残っている片付き行
+ * （`closedAt` 付き）を模す——実装（`clone.ts` の `#commitmentNoticeFor`）は
+ * この2つだけを材料に、`event.at` が「残存する片付き行の `closedAt` の
+ * 最小値」より新しいかどうかで、断定してよいか・第3の状態へ回すべきかを
+ * 判定する。
+ */
+function managerMessageAt(text: string, id: string, at: string): InboxEvent {
+  return {
+    type: 'manager_message',
+    id,
+    at,
+    managerId: 'mgr-1',
+    kind: 'report',
+    text,
+  };
+}
+
+/** `trimmedClosed` と、残っている片付き行を差し替えた `Stores` を組む。 */
+function withTrimmedView(
+  stores: Stores,
+  targetId: string,
+  options: { trimmedClosed: number; remainingClosedAt?: string },
+): Stores {
+  return {
+    ...stores,
+    commitments: {
+      ...stores.commitments,
+      list: async (listOptions) => {
+        const result = await stores.commitments.list(listOptions);
+        // **trim を模す。** 実際に物理削除されたなら、この id は `list()` の
+        // `entries` のどこにも出てこない——`open()` 自体は成功しているので
+        // `get()` では引ける（`#856` の「幽霊」テストと同じ手口）。
+        const entries = result.entries.filter((entry) => entry.id !== targetId);
+        if (options.remainingClosedAt !== undefined) {
+          entries.push({
+            id: 'evt-remaining-closed',
+            at: options.remainingClosedAt,
+            origin: 'human',
+            body: '残っている片付いた行（trim で消されなかった側）',
+            closedAt: options.remainingClosedAt,
+            closedReason: '片付けた',
+          });
+        }
+        return { entries, unreadable: result.unreadable, trimmedClosed: options.trimmedClosed };
+      },
+    },
+  };
+}
+
+describe('Issue #1148: trim による物理削除と本当の欠落を区別する', () => {
+  it(
+    '⭐ trimmedClosed > 0 でも、event.at が残存最古 closedAt より新しければ、' +
+      'これまでどおり断定する（#856 受け入れ基準2を守る）',
+    async () => {
+      const stores = createMemoryStores();
+      const targetId = 'evt-1148-newer-than-trim';
+      const wrapped = withTrimmedView(stores, targetId, {
+        trimmedClosed: 3,
+        remainingClosedAt: '2020-01-02T00:00:00.000Z',
+      });
+      const s = setup(wrapped);
+      const inputs = () => s.calls.flatMap((call) => call.inputs);
+
+      // event.at は「いま」——残存する片付き行の closedAt（2020年）より新しい。
+      s.clone.post(managerMessageAt('trim より新しい報告', targetId, new Date().toISOString()));
+      await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
+
+      const turn = inputs()[0] ?? '';
+      expect(turn).toContain('台帳に載っていない');
+      expect(turn).toContain(targetId);
+      expect(turn).toContain('載せ直しが要る');
+      expect(turn).toContain('commitment_open');
+
+      await s.clone.stop();
+    },
+  );
+
+  it(
+    '⭐ trimmedClosed > 0 で event.at が残存最古 closedAt より古ければ、' +
+      '断定せず第3の状態を名乗る（`載せ直しが要る` と `commitment_open` は出ない）',
+    async () => {
+      const stores = createMemoryStores();
+      const targetId = 'evt-1148-older-than-trim';
+      const wrapped = withTrimmedView(stores, targetId, {
+        trimmedClosed: 3,
+        remainingClosedAt: '2020-01-02T00:00:00.000Z',
+      });
+      const s = setup(wrapped);
+      const inputs = () => s.calls.flatMap((call) => call.inputs);
+
+      // event.at は残存する片付き行の closedAt（2020-01-02）より古い
+      // ——trim による消失と本当の欠落を区別できない側。
+      s.clone.post(managerMessageAt('trim より古い報告', targetId, '2019-01-01T00:00:00.000Z'));
+      await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
+
+      const turn = inputs()[0] ?? '';
+      // **断定はしない。** 既存の断り書きの逐語が出ないことを確かめる。
+      expect(turn).not.toContain('載せ直しが要る');
+      expect(turn).not.toContain('commitment_open');
+      // それでも黙って消さず、id を名指しで第3の状態として名乗る。
+      expect(turn).toContain(targetId);
+      expect(turn).toContain('区別できない');
+
+      await s.clone.stop();
+    },
+  );
+
+  it('⭐ trimmedClosed === 0 なら、これまでどおり断定する（既存の挙動は変わっていない）', async () => {
+    const stores = createMemoryStores();
+    const targetId = 'evt-1148-no-trim';
+    const wrapped = withTrimmedView(stores, targetId, { trimmedClosed: 0 });
+    const s = setup(wrapped);
+    const inputs = () => s.calls.flatMap((call) => call.inputs);
+
+    s.clone.post(managerMessageAt('trim していない台帳の報告', targetId, new Date().toISOString()));
+    await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
+
+    const turn = inputs()[0] ?? '';
+    expect(turn).toContain('台帳に載っていない');
+    expect(turn).toContain(targetId);
+    expect(turn).toContain('載せ直しが要る');
+
+    await s.clone.stop();
+  });
+});
+
+/**
  * **Issue #1060 段1。** 受信箱の合図から自動で台帳を開いた（`#commit`）その
  * 瞬間に、開いた id を機械自身の言葉で日誌へ1行残すことを見る。
  *

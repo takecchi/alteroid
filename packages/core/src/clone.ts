@@ -4249,8 +4249,80 @@ class Clone implements CloneHost {
         !ledgerIds.has(pending.id)
       );
     });
+    // **Issue #1148。** `missing` は「開くつもりで、いま読み直しても台帳に
+    // 見当たらない」を測るだけで、見当たらない理由までは区別しない。fs 実装
+    // （`storage-fs/src/commitments.ts` の `trimClosed`）は片付いた行を
+    // `CLOSED_HISTORY_LIMIT`（500件）を超えると**物理削除する**——`missing`
+    // はその削除された行も「載っていない」として拾ってしまい、下の断り書きは
+    // 「載せ直しが要る（`commitment_open` で開き直すこと）」と促す。だが
+    // trim で消えた行は**既に片付いた仕事**であって、載せ直せばその仕事を
+    // クローンが自分でもう一度作ることになる——警告を消すのではなく、
+    // **断定できるときだけ断定する**ように割る。
+    //
+    // **材料は2つとも、この関数が既に読んでいる `list` に在る。新しい I/O は
+    // 要らない。**
+    //   1. `list.trimmedClosed` — `trimClosed` が物理削除した累計件数
+    //      （issue #416）。**`0` は「削除を数えていない」ではなく「削除が
+    //      起きていない」を意味する**（`store.ts` の `CommitmentList.trimmedClosed`
+    //      の doc）。pg と in-memory は常にこの値を `0` で返す契約なので、
+    //      下の分岐は常に「全部これまでどおり断定する」側を通り、本番の
+    //      挙動は1文字も変わらない。
+    //   2. `list.entries` のうち、いま残っている片付いた行の `closedAt` の
+    //      最小値——**いま残っている片付き行のいちばん古い時刻**。
+    //
+    // **⛔ この判定でも塞げない穴が1つ残る。** `trimmedClosedCount`
+    // （`storage-fs/src/commitments.ts`）は issue #416（2026-08-19〜08-26）で
+    // 足した欄で、それより前に運用されていた fs ファイルは、その時点までに
+    // 物理削除していた行があっても `trimmedClosedCount: 0` のまま生まれている
+    // （`rawFileSchema` の `.default(0)`）。**この欄が足される前に既に trim
+    // されていた行は、いまも `trimmedClosed === 0` のまま——ここより下の分岐は
+    // 「削除は起きていない」側を通り、この Issue の直し（trim による欠落を
+    // 第3の状態へ回す）は効かない。** 過去の削除を遡って数え直す材料はどこにも
+    // 残っていないので、この直しでは救えない。
+    //
+    // **判定の根拠（`trimClosed` を読んで確かめてある）。** `trimClosed` は
+    // `closedAt` の降順に並べて新しい `CLOSED_HISTORY_LIMIT` 件を残し、
+    // それより古い側を物理削除する。⟹ **消された行の `closedAt` は、いま
+    // 残っている片付き行のどれよりも古い。** 境界は単調に新しくなる
+    // （消すのは常に古い側で、後から足されるのは新しい行だけ）ので、過去の
+    // trim の境界も現在の最小値以下である——**現在の最小値だけで過去の
+    // 全 trim を排除できる。**
+    //
+    // 行が閉じられるのは開かれた後なので `closedAt >= entry.at`、そして
+    // `entry.at` は合図の `event.at` そのもの（`commitmentFor` の
+    // `const base = { id: event.id, at: event.at }`）。⟹ **`event.at` が
+    // 「残存する片付き行の `closedAt` の最小値」より新しければ、その行は
+    // trim では説明できない——断定してよい。** そうでなければ（それより
+    // 古い・等しい、または残存する片付き行が1行も無く境界そのものが
+    // 決まらない場合）、trim による消失と本物の欠落を区別できない——
+    // 断定せず第3の状態（`unreadable` が「無い」でも「片付いた」でもない
+    // 第3の状態として在るのと同じ形）へ回す。
+    //
+    // **時刻の比較は `localeCompare`。** ISO 8601 の文字列比較で時系列順が
+    // 保たれる前提は `trimClosed` 自身がソートに使っている前提と同じ
+    // （`storage-fs/src/commitments.ts` の `.sort((a, b) => a.at.localeCompare(b.at))`）。
+    let oldestRemainingClosedAt: string | undefined;
+    for (const entry of list.entries) {
+      if (entry.closedAt === undefined) continue;
+      if (
+        oldestRemainingClosedAt === undefined ||
+        entry.closedAt.localeCompare(oldestRemainingClosedAt) < 0
+      ) {
+        oldestRemainingClosedAt = entry.closedAt;
+      }
+    }
+    const explainableByTrim = (pending: InboxEvent): boolean =>
+      list.trimmedClosed > 0 &&
+      (oldestRemainingClosedAt === undefined ||
+        pending.at.localeCompare(oldestRemainingClosedAt) <= 0);
+    const missingConfirmed = missing.filter((pending) => !explainableByTrim(pending));
+    const missingUnexplained = missing.filter((pending) => explainableByTrim(pending));
     const missingIdList = excerptLine(
-      missing.map((pending) => `\`${pending.id}\``).join(', '),
+      missingConfirmed.map((pending) => `\`${pending.id}\``).join(', '),
+      CLONE_ID_LIST_EXCERPT,
+    );
+    const missingUnexplainedIdList = excerptLine(
+      missingUnexplained.map((pending) => `\`${pending.id}\``).join(', '),
       CLONE_ID_LIST_EXCERPT,
     );
     // **Issue #1060 (段2)。** `'unrecorded'`（台帳には開けたが、その id を
@@ -4293,12 +4365,32 @@ class Clone implements CloneHost {
       // ような、台帳と無関係な合図も混じる。それらは `outcomes` に載らない
       // （上の `outcomes` を組む doc）ので、`events.length` を使うと母数が
       // 実際より大きくなり、「このうち何件」の比率が薄まって嘘になる。
-      ...(missing.length === 0
+      ...(missingConfirmed.length === 0
         ? []
         : [
-            `**⚠️ 台帳を開くつもりだったこの ${outcomes.size} 件のうち ${missing.length} 件は` +
+            `**⚠️ 台帳を開くつもりだったこの ${outcomes.size} 件のうち ${missingConfirmed.length} 件は` +
               `台帳に載っていない（id: ${missingIdList}）。重複として畳んだのでも、既に在った` +
               'のでもない。** **載せ直しが要る**（`commitment_open` で開き直すこと）。',
+          ]),
+      // **Issue #1148。** trim（物理削除）で説明できてしまう `missing` は、
+      // 上と同じ断定をしない——捨てられただけの行を「載せ直せ」と促すと、
+      // 片付いた仕事をクローンが自分で作り直すことになる（この Issue の
+      // 実害そのもの）。**`commitment_open` で開き直せとは言わない**し、
+      // **`commitment_list` で確かめよとも言わない**（trim で消えていれば
+      // `commitment_list` にも同じく載らないので、確かめる手段にならない
+      // ——無い手段を案内しない）。名乗るのは「何が分からないか」だけ。
+      ...(missingUnexplained.length === 0
+        ? []
+        : [
+            `**⚠️ 台帳を開くつもりだったこの ${outcomes.size} 件のうち ${missingUnexplained.length} 件は` +
+              `台帳に見当たらない（id: ${missingUnexplainedIdList}）。この台帳は片付いた古い行を` +
+              `物理削除しており（累計 ${list.trimmedClosed} 件）、この id が届いた時刻は、いま残って` +
+              'いる片付いた行の中でいちばん古いもの' +
+              (oldestRemainingClosedAt === undefined
+                ? 'が無い（片付いた行が1件も残っていない）'
+                : `（${oldestRemainingClosedAt} に閉じたもの）`) +
+              'より前である。** **すでに片付いて捨てられた後なのか、そもそも台帳に書けなかったのかを、' +
+              'この情報だけでは区別できない。**',
           ]),
       // **Issue #1060 (段2)。** 台帳には開けたが、機械が名乗った記録を日誌へ
       // 残せなかった id を名指しで断る。**`missing` とは別の軸なので、
