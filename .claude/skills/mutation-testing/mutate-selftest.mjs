@@ -703,9 +703,7 @@ function scenarioDelivery() {
   try {
     log('');
     log('-- 4c. build をまだ呼ばずに、いまの dist をもう一度読む --');
-    const distAfterMutationNoBuild = fs.existsSync(distAbs)
-      ? fs.readFileSync(distAbs, 'utf8')
-      : '';
+    const distAfterMutationNoBuild = fs.existsSync(distAbs) ? fs.readFileSync(distAbs, 'utf8') : '';
     deliveredBeforeBuild = distAfterMutationNoBuild.includes('SELFTEST_MUTATED');
     log(`build 前（ソースは変異済み）の dist に含まれるか: ${deliveredBeforeBuild}`);
     log(
