@@ -225,8 +225,13 @@ const GAP_SOURCE = '(?:\\s*:\\s*|\\s+)';
  * 参照の形。`#123` / `GH-123` / `owner/repo#123` / issue の URL。
  * **`GH-123` と URL は公式 doc に記述が無い**（doc の doc コメントを見よ）。
  * 長い（より具体的な）形を先に置く。
+ *
+ * **export しているのは `issue-intent-hint-core.mjs`（#1134）が使い回すため。**
+ * 参照の形は「閉じるキーワード」と「日本語の閉じる意思」のどちらでも同じでなければ
+ * ならない——GitHub が読む対象そのものが同じだからである。2箇所に正規表現を
+ * 持たない。
  */
-const REFERENCE_SOURCE =
+export const REFERENCE_SOURCE =
   '(?:https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/\\d+' +
   '|[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#\\d+' +
   '|GH-\\d+' +
@@ -263,11 +268,19 @@ const PURE_LINE_PATTERN = new RegExp(
 /** フェンス区切り行（`` ``` `` を3つ以上、先頭の空白は許す）。 */
 const FENCE_DELIMITER_PATTERN = /^\s*`{3,}/;
 
-/** 引用行（先頭の空白を許した上で `>` で始まる）。 */
-const QUOTE_LINE_PATTERN = /^\s*>/;
+/**
+ * 引用行（先頭の空白を許した上で `>` で始まる）。
+ * **export しているのは `issue-intent-hint-core.mjs`（#1134）が使い回すため**
+ * ——引用行を見ないという判断はこの門と同じでなければならない。
+ */
+export const QUOTE_LINE_PATTERN = /^\s*>/;
 
-/** 行ごとの開始オフセット（`text.split('\n')` した各要素が全体の何文字目から始まるか）。 */
-function computeLineStarts(lines) {
+/**
+ * 行ごとの開始オフセット（`text.split('\n')` した各要素が全体の何文字目から
+ * 始まるか）。**export しているのは `issue-intent-hint-core.mjs`（#1134）が
+ * 使い回すため。**
+ */
+export function computeLineStarts(lines) {
   const starts = [];
   let offset = 0;
   for (const line of lines) {
@@ -280,8 +293,10 @@ function computeLineStarts(lines) {
 /**
  * フェンスコードブロックの区間（絶対オフセット）。開いたまま閉じられていない
  * フェンスは、テキストの末尾までを fail-closed でコードとして扱う。
+ * **export しているのは `issue-intent-hint-core.mjs`（#1134）が使い回すため**
+ * ——フェンスの中を見ないという判断はこの門と同じでなければならない。
  */
-function computeFenceIntervals(lines, lineStarts) {
+export function computeFenceIntervals(lines, lineStarts) {
   const intervals = [];
   let inFence = false;
   let openStart = null;
@@ -308,8 +323,9 @@ function computeFenceIntervals(lines, lineStarts) {
  * （Markdown のインラインコードは通常1行内で閉じるので、この単純化で足りる。
  * 二重バッククォート `` `` `` のような区切りの入れ子は対応していない——未対応の
  * まま緩めるより、単一バッククォートの形だけを確実に拾うほうを選んだ）。
+ * **export しているのは `issue-intent-hint-core.mjs`（#1134）が使い回すため。**
  */
-function computeInlineCodeIntervals(lines, lineStarts) {
+export function computeInlineCodeIntervals(lines, lineStarts) {
   const intervals = [];
   const re = /`[^`\n]*`/g;
   for (let i = 0; i < lines.length; i++) {
@@ -327,8 +343,9 @@ function computeInlineCodeIntervals(lines, lineStarts) {
  * HTML コメントの区間（絶対オフセット）。複数行に跨る `<!-- ... -->` も拾う
  * （`[\s\S]*?` で改行を含めて非貪欲に一致させる）。閉じられていないコメントは
  * 一致しない（`-->` が最後まで現れない限り、この regex は一致を作らない）。
+ * **export しているのは `issue-intent-hint-core.mjs`（#1134）が使い回すため。**
  */
-function computeCommentIntervals(text) {
+export function computeCommentIntervals(text) {
   const intervals = [];
   const re = /<!--[\s\S]*?-->/g;
   let m;

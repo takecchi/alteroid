@@ -43,6 +43,23 @@
  * | `found` | 1 |
  * | `unreadable` | 1 |
  * | （引数不足） | 1 |
+ *
+ * ## この道具は #1134 の案3（散文の閉じる意思のヒント）もここから配線する
+ *
+ * この门（#1109）と #1134 は根が同じ（GitHub の閉じるキーワードパーサに閉じる
+ * 意思を預けたときの2つの倒れ方）だが、**判定は完全に独立している。**
+ * `issue-intent-hint-core.mjs`（正本）が「日本語の散文＋参照＋trailer 無し」を
+ * 見て `evaluateIssueIntentHint` を返す。ここでは新しい workflow も新しい
+ * `check:*` script も足していない——この runner が既に `gh pr view --json
+ * title,body,commits` で必要なものを1回で取っており、呼び出し元の workflow
+ * （`.github/workflows/pr-closing-keywords.yml`）は既に `edited` でも起きるので、
+ * 配線の追加費用がゼロだった。
+ *
+ * **⛔ このヒントは上の終了コードの表を1文字も変えない。** `hint` が出ても
+ * 常に exit 0（`ok` の場合）または 1（`found`/`unreadable`/引数不足の場合。
+ * ただしその1はヒントが理由ではなく元の verdict が理由）のままである
+ * ——#1134 が「PR を落とすのではなく警告して trailer を促す」「门は hard
+ * fail にせず降りられる口を必ず付けること」と明記しているため。
  */
 
 import { execFileSync } from 'node:child_process';
@@ -55,6 +72,17 @@ import process from 'node:process';
 // export されている以上、重複させる理由が無い。
 import { commitFullMessage } from './check-no-attribution-trailers-core.mjs';
 import { evaluatePrClosingKeywords, formatVerdict } from './check-pr-closing-keywords-core.mjs';
+// **`issue-intent-hint-core.mjs`（Issue #1134 の案3）をここから配線する。**
+// 新しい workflow も新しい `check:*` script も足さない——この runner は既に
+// `gh pr view --json title,body,commits` で title/body を1回で取っており、
+// 呼び出し元の workflow（`pr-closing-keywords.yml`）は `edited` でも起きるので、
+// 配線の追加費用がゼロである。**このヒントは終了コードに一切関わらない**
+// （下の `main` の呼び出し箇所を見よ——`process.exitCode` は既存の
+// `evaluatePrClosingKeywords` の verdict だけで決まる）。
+import {
+  evaluateIssueIntentHint,
+  formatIssueIntentHintEvaluation,
+} from './issue-intent-hint-core.mjs';
 
 function log(text) {
   process.stdout.write(text + '\n');
@@ -62,6 +90,36 @@ function log(text) {
 
 function logError(text) {
   process.stderr.write(text + '\n');
+}
+
+/**
+ * `issue-intent-hint-core.mjs` の判定を出力する。**終了コードには関わらない**
+ * （呼び出し側で `process.exitCode` を一切書かない）。
+ *
+ * Actions の上（`GITHUB_ACTIONS` が真）では GitHub の警告注釈
+ * （`::warning::` 形式）でも出す。`::warning::` は改行をそのまま扱えない
+ * ため、注釈は1行に畳んだ要約にし、詳細（各文の逐語）は通常の出力にも
+ * 別に印字する——注釈だけを見た人にも「詳細は下のログにある」ことが
+ * 分かるようにする。手元（`GITHUB_ACTIONS` が無い）では素のテキストだけを
+ * 出す。
+ */
+function logIssueIntentHint(result) {
+  if (result.verdict !== 'hint') return;
+
+  const text = formatIssueIntentHintEvaluation(result);
+
+  if (process.env.GITHUB_ACTIONS === 'true') {
+    const summary = result.findings
+      .map((f) => `${f.source}「${f.sentence}」`)
+      .join(' / ')
+      .replace(/\r?\n/g, ' ');
+    log(
+      `::warning::issue-intent-hint: 閉じる意思の文が見つかったが Alteroid-Issue-Done ` +
+        `trailer が無い（${result.findings.length}件。詳細は下のログ）: ${summary}`,
+    );
+  }
+
+  log(text);
 }
 
 /** `--flag value` と `--flag=value` の両方を受ける（`check-no-attribution-trailers.mjs` と同じ）。 */
@@ -164,8 +222,15 @@ function main() {
   const result = evaluatePrClosingKeywords({ title, body, commits });
   const text = formatVerdict(prRaw, result);
 
+  // **ここは既存の判定・出力・終了コードを一切変えない。** `found` の時も
+  // ヒントは出してよいが（#1134）、`ok` / `found` / `unreadable` の分岐と
+  // `process.exitCode` の決め方は変えていない——ヒントは常にこの分岐の外
+  // （下の `logIssueIntentHint` 呼び出し）で、分岐のどのパスでも同じ形で足す。
+  const intentHint = evaluateIssueIntentHint({ title, body });
+
   if (result.verdict === 'ok') {
     log(text);
+    logIssueIntentHint(intentHint);
     return;
   }
 
@@ -173,6 +238,7 @@ function main() {
   if (result.verdict === 'unreadable') {
     for (const detail of fetchErrors) logError(`  ${detail}`);
   }
+  logIssueIntentHint(intentHint);
   process.exitCode = 1;
 }
 
