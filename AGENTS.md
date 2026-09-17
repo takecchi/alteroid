@@ -532,6 +532,44 @@ git -C <main のツリー> apply --check -R /tmp/tail.patch   # 通れば main �
 
   ⟹ **`run.conclusion == "success"` は、これまで以上に緑の根拠にならない。** 直上の「その run が実際にジョブを実行したか」（`total_count` が0でないこと）だけでは足りない——**今回は `total_count` が4で「実行した」を通過したあとにも化ける形**である。⛔ **ジョブの内訳（`actions/runs/<id>/jobs`）まで降り、必要な各ジョブ（`ci` / `image`）の `conclusion` を個別に見ること。**
 
+  **⭐ この形は #1108（PR #1115、2026-09-16T21:15:17Z マージ）で解消した。ただし上の結論は1文字も変わらない。** `no-attribution-trailers` は `ci.yml` から独立した workflow（`.github/workflows/no-attribution-trailers.yml`）へ出たので、**`CI` の run の中に draft でも走るジョブはもう無い。** ⟹ draft のあいだ `CI` の run 自身の `conclusion` は `skipped` に戻った。実測（2026-09-17T02:14Z 観測、自分で取り直した。**#1108 のマージより後に作られた run 3本**）:
+
+  ```
+  $ for r in 35151392371 35151922022 35152153308; do
+      gh api repos/takecchi/alteroid/actions/runs/$r --jq '"name=\(.name) head_sha=\(.head_sha) created=\(.created_at) status=\(.status) conclusion=\(.conclusion)"'
+      gh api repos/takecchi/alteroid/actions/runs/$r/jobs --jq '"total_count=\(.total_count)", (.jobs[] | "  \(.name)\t\(.conclusion)\tsteps=\(.steps|length)")'
+    done
+  name=CI head_sha=2f50b7630b3f16e9cd724398994388fcc2176193 created=2026-09-16T21:15:54Z status=completed conclusion=skipped
+  total_count=3
+    image	skipped	steps=0
+    ci	skipped	steps=0
+    base-overlap	skipped	steps=0
+  name=CI head_sha=94e35f55725c4764794f57770d1ec83f1401ce64 created=2026-09-16T21:21:27Z status=completed conclusion=skipped
+  total_count=3
+    base-overlap	skipped	steps=0
+    image	skipped	steps=0
+    ci	skipped	steps=0
+  name=CI head_sha=16b5d284d74b9f0495a174fa6c56a647529983c0 created=2026-09-16T21:23:54Z status=completed conclusion=skipped
+  total_count=3
+    ci	skipped	steps=0
+    image	skipped	steps=0
+    base-overlap	skipped	steps=0
+  ```
+
+  **3/3。** ⚠ **「その3本が draft だった」は現在の `isDraft` からは取れない**（3本とも後から ready になっている）。**見るのは timeline である** —— PR #1116 の `ready_for_review` は `2026-09-16T21:34:13Z` で、run の作成（`21:15:54Z`）の **18分19秒後**である。
+
+  **⟹ 変わったのは結論ではなく、見るべき run の本数である。** 同じ draft の PR（head `2f50b763`）で run は3本に分かれ、**`CI` 以外の2本は draft でも `success` を返す**（同じ観測）:
+
+  ```
+  $ gh api "repos/takecchi/alteroid/actions/runs?head_sha=2f50b7630b3f16e9cd724398994388fcc2176193&per_page=100" \
+      --jq '.workflow_runs[] | "\(.id)\t\(.name)\tcreated=\(.created_at)\tconclusion=\(.conclusion)"'
+  35151392371	CI	created=2026-09-16T21:15:54Z	conclusion=skipped
+  35151392373	No attribution trailers	created=2026-09-16T21:15:54Z	conclusion=success
+  35151392383	PR title	created=2026-09-16T21:15:54Z	conclusion=success
+  ```
+
+  この2本が draft でも skip しないのは**意図である**（逐語は `grep -Fn -- 'draft のあいだも毎回走らせ' .github/workflows/no-attribution-trailers.yml` と `grep -Fn -- '同じく draft でも skip しない' .github/workflows/pr-title.yml`）。⟹ ⭐ **「緑の run が在る」は `ci` が走ったことを意味しない、はそのまま効く。** 化け方が「1本の run の中で `conclusion` が緑になる」から「**緑の run が別に在る**」へ移っただけである。**ジョブの内訳まで降りろ**も変わらない —— `scripts/check-pr-green.mjs` は workflow 名ごとに最新の run を選ぶので、3本に分かれても正しく答える（#1108 で実測）。
+
 - **`gh api repos/…/rules/branches/<枝>` が `[]` を返しても「無保護」ではない。** あれは ruleset だけを見ており、classic branch protection（`branches/<枝>/protection`）は別口である。実測（2026-09-15 観測、自分で取り直した）:
 
   ```
