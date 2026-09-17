@@ -1,0 +1,89 @@
+name: PR vanished footprint
+
+# **この PR が途中のコミットで触ったのに最終差分から消えたファイル（「消えた
+# 足跡」）を、本文が名指ししていないかだけを見る門**（Issue #1130）。判定ロジックは
+# `scripts/check-pr-vanished-footprint-core.mjs` が正本（判定の芯・動詞判定を入れ
+# ない理由・required にしない理由・この門が拾えない族の実測はあちらの doc）。
+# ここは呼び出しだけ。
+#
+# **実物: `888724a2`（PR #1115、2026-09-16T21:15:17Z マージ）。** 本文は
+# 「`AGENTS.md` の…項に…追記」と書いたが、途中のコミットで追記した後に別のコミット
+# で取り消しており、最終差分に `AGENTS.md` は入っていなかった。squash マージで
+# その古い主張が `main` のコミット本文へそのまま焼かれた。
+#
+# **Issue #1130 の実測（150本のマージ済み PR）**: 本文の主張全体を差分と突き合わせる
+# 素朴な形（動詞に縛っても）は 32.0%（48/150）が赤くなり、そのうち本物は1件
+# （適合率 ≈1.1%）——門として使えない。**この門（U\F の消えた足跡 × 名指し）**は
+# 分母を「このPRが実際に触って消したファイル」だけに絞ることで、同じ150本で
+# 赤くなるのは1本（0.7%）、その1本が本物（#1115）だった。
+
+# ## なぜ `ci.yml` の中に置かず、別の workflow にしたか
+#
+# **`edited` が要るからである**（`pr-title.yml` / `no-attribution-trailers.yml` と
+# 同じ理由）。PR 本文は後から編集できるので、`opened` だけの門は素通りする。ところが
+# `ci.yml` の `pull_request.types` は `edited` を含まない
+# （`grep -Fn -- 'types: [opened, synchronize, reopened, ready_for_review]' .github/workflows/ci.yml`）。
+#
+# そこへ `edited` を足すと、**PR 本文を1文字直すたびに `ci` と `image`（どちらも
+# required）が焼き直される。** 節約のために `if:` で抑えると、今度は required の
+# 文脈に `skipped` が入る —— `AGENTS.md`「静かに失敗する道具」と、`ci.yml` が
+# `ready_for_review` を types へ足した理由そのものの罠を持ち込むことになる。
+#
+# ⟹ **この検査だけを持つこの workflow にだけ `edited` を付け、`ci.yml` の
+# trigger は1文字も触らない。**
+on:
+  pull_request:
+    # **`edited` がこの門の要である**（PR 本文の後からの書き換えを捕まえる。
+    # #1108 が同じ経路を塞いだ理由そのもの——本文を直しても再判定されなければ、
+    # 赤いまま直しようがなくなる）。
+    #
+    # **`synchronize` も必須である。** required status check ではないが（下の
+    # 「required にしない」）、head sha が変わるたびに push 時点の内容を判定し
+    # 直さないと、古い sha の判定結果のまま新しい push の内容を見落とす。
+    # `reopened` / `ready_for_review` も同じ理由で足してある。
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+# `pr-title.yml` / `no-attribution-trailers.yml` と同じ形（理由の逐語は
+# `grep -Fn -- '同じ PR に続けて push したとき、古い実行を残さない' .github/workflows/ci.yml`）。
+# ここでは `pull_request` しか起きないので `head_ref` は必ず入るが、**`||` の側は
+# 落とさない** —— 空文字のキーで全 PR が1つの群に入る形を作らないため。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  # **ジョブ名 `pr-vanished-footprint`。**
+  #
+  # **⚠️ この門は required にしない（決定。変えない）。**
+  #
+  # - **`pr-closing-keywords` と同じ理由——この門も書いた側の意図を読めない。**
+  #   `V`（消えた足跡）が非空で本文が名指ししていても、本文が正しいことはありうる
+  #   （PR #1007 の実測がその実例——「このPRではやらず別Issueへ送る」という文脈で
+  #   パスが名指しされているだけで、動詞を判定しないためこの門では赤くなる）。
+  #   required にするなら、逃げ道（ラベル等での例外）を同時に設計しなければ
+  #   ならず、それはこの PR の範囲外の判断である。
+  # - **required contexts を変えるのは GitHub のブランチ保護の設定変更であり、
+  #   この PR の権限の外である。** `.github/required-status-checks.json`
+  #   （protection の宣言。正本はあちら）は1文字も触らない。
+  pr-vanished-footprint:
+    # **`no-attribution-trailers` / `pr-title-type` / `pr-closing-keywords` と
+    # 同じく draft でも skip しない。** `if:` で節約すると、draft 由来の
+    # `skipped` が「満たした」として扱われる罠（`AGENTS.md`「静かに失敗する
+    # 道具」）を持ち込む。この検査は `gh api` を数回叩くだけで軽く、節約する
+    # 理由が無い。**だから draft のあいだも毎回走らせ、その種類の罠を最初から
+    # 作らない。**
+    #
+    # ⚠️ **`if:` を1文字も付けない。** trigger が `pull_request` の1本だけなので
+    # 要らない（`pr-title.yml` と同じ）。
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v4
+      - run: pnpm check:pr-vanished-footprint
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_VANISHED_FOOTPRINT_PR_NUMBER: ${{ github.event.pull_request.number }}
