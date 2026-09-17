@@ -211,7 +211,8 @@ export function formatReport(candidates, thresholdSeconds = DEFAULT_THRESHOLD_SE
 
   const sorted = [...candidates].sort((a, b) => (a.closedAt < b.closedAt ? 1 : -1));
   for (const c of sorted) {
-    const via = c.matchedVia === 'commit-id' ? 'commit_idがマージコミットと一致' : 'マージ直後のタイミング';
+    const via =
+      c.matchedVia === 'commit-id' ? 'commit_idがマージコミットと一致' : 'マージ直後のタイミング';
     const prPart = c.prNumber !== null ? `PR #${c.prNumber}` : '対応する merged PR は不明';
     const secondsPart =
       c.secondsAfterMerge !== null ? `マージの${c.secondsAfterMerge}秒後` : '（時間差は不明）';

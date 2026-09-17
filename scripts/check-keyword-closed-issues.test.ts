@@ -24,12 +24,36 @@ describe('findKeywordClosedCandidates — Issue #1128 が挙げた既知の5件�
   // 実測（2026-09-17、`gh api repos/takecchi/alteroid/issues/<N>/timeline` と
   // `gh pr view <N> --json mergedAt,mergeCommit` を実行して検算した値）。
   const mergedPRs = [
-    { number: 912, mergedAt: '2026-09-13T01:03:46Z', mergeCommitOid: '5acf817fe6d0a274dd4f750053619991add70960' },
-    { number: 1095, mergedAt: '2026-09-16T12:11:28Z', mergeCommitOid: '5edc44c892704ed59be0ac4fb99568b3eedf75b3' },
-    { number: 1107, mergedAt: '2026-09-16T16:46:17Z', mergeCommitOid: 'f942230870358b137499f7a52613cd0f4cdfb0a0' },
-    { number: 868, mergedAt: '2026-09-12T02:12:10Z', mergeCommitOid: 'e24e363a90efb89ddaa711be048d2b9485210253' },
-    { number: 915, mergedAt: '2026-09-12T20:41:02Z', mergeCommitOid: '1a2d8bbf9ab240a6a01a8697dd41d49d65560db0' },
-    { number: 1112, mergedAt: '2026-09-16T19:32:08Z', mergeCommitOid: '8ff27bbdd270895bd5b7c26592a569fb9f28ea01' },
+    {
+      number: 912,
+      mergedAt: '2026-09-13T01:03:46Z',
+      mergeCommitOid: '5acf817fe6d0a274dd4f750053619991add70960',
+    },
+    {
+      number: 1095,
+      mergedAt: '2026-09-16T12:11:28Z',
+      mergeCommitOid: '5edc44c892704ed59be0ac4fb99568b3eedf75b3',
+    },
+    {
+      number: 1107,
+      mergedAt: '2026-09-16T16:46:17Z',
+      mergeCommitOid: 'f942230870358b137499f7a52613cd0f4cdfb0a0',
+    },
+    {
+      number: 868,
+      mergedAt: '2026-09-12T02:12:10Z',
+      mergeCommitOid: 'e24e363a90efb89ddaa711be048d2b9485210253',
+    },
+    {
+      number: 915,
+      mergedAt: '2026-09-12T20:41:02Z',
+      mergeCommitOid: '1a2d8bbf9ab240a6a01a8697dd41d49d65560db0',
+    },
+    {
+      number: 1112,
+      mergedAt: '2026-09-16T19:32:08Z',
+      mergeCommitOid: '8ff27bbdd270895bd5b7c26592a569fb9f28ea01',
+    },
   ];
 
   const closeEvents = [
@@ -91,7 +115,15 @@ describe('findKeywordClosedCandidates — Issue #1128 が挙げた既知の5件�
     // 「意図どおり」というラベルはどこにも無い —— candidate のキーを全部見ても
     // 意図か事故かを表すフィールドは存在しない。
     expect(Object.keys(c).sort()).toEqual(
-      ['actor', 'closedAt', 'issueNumber', 'matchedVia', 'mergedAt', 'prNumber', 'secondsAfterMerge'].sort(),
+      [
+        'actor',
+        'closedAt',
+        'issueNumber',
+        'matchedVia',
+        'mergedAt',
+        'prNumber',
+        'secondsAfterMerge',
+      ].sort(),
     );
   });
 });
@@ -101,41 +133,57 @@ describe('findKeywordClosedCandidates — 偽陽性を作らない側（実測�
     // PR #367 の本文は `Fixes #254` / `Fixes #362` とだけ書き、#204 は「関連」として
     // 番号だけ挙げていた（閉じるキーワードの対象ではない）。#204 の timeline は
     // close の直前に commented → renamed が在り、人が手で閉じた形だった。
-    const mergedPRs = [{ number: 367, mergedAt: '2026-08-23T21:32:11Z', mergeCommitOid: 'e24e363a' }];
-    const closeEvents = [{ issueNumber: 204, closedAt: '2026-08-23T21:32:32Z', commitId: null, actor: 'takecchi' }];
+    const mergedPRs = [
+      { number: 367, mergedAt: '2026-08-23T21:32:11Z', mergeCommitOid: 'e24e363a' },
+    ];
+    const closeEvents = [
+      { issueNumber: 204, closedAt: '2026-08-23T21:32:32Z', commitId: null, actor: 'takecchi' },
+    ];
     const result = findKeywordClosedCandidates({ mergedPRs, closeEvents });
     expect(result).toEqual([]);
   });
 
   it('同じ実測の#234（35秒後）も候補に出ない', () => {
-    const mergedPRs = [{ number: 367, mergedAt: '2026-08-23T21:32:11Z', mergeCommitOid: 'e24e363a' }];
-    const closeEvents = [{ issueNumber: 234, closedAt: '2026-08-23T21:32:46Z', commitId: null, actor: 'takecchi' }];
+    const mergedPRs = [
+      { number: 367, mergedAt: '2026-08-23T21:32:11Z', mergeCommitOid: 'e24e363a' },
+    ];
+    const closeEvents = [
+      { issueNumber: 234, closedAt: '2026-08-23T21:32:46Z', commitId: null, actor: 'takecchi' },
+    ];
     const result = findKeywordClosedCandidates({ mergedPRs, closeEvents });
     expect(result).toEqual([]);
   });
 
   it('本文に言及すら無い実測（PR #1136 → #1087、51秒後の偶然）も候補に出ない', () => {
     const mergedPRs = [{ number: 1136, mergedAt: '2026-09-17T01:59:07Z', mergeCommitOid: 'aaa' }];
-    const closeEvents = [{ issueNumber: 1087, closedAt: '2026-09-17T01:59:58Z', commitId: null, actor: 'takecchi' }];
+    const closeEvents = [
+      { issueNumber: 1087, closedAt: '2026-09-17T01:59:58Z', commitId: null, actor: 'takecchi' },
+    ];
     const result = findKeywordClosedCandidates({ mergedPRs, closeEvents });
     expect(result).toEqual([]);
   });
 
   it('直前にマージが1件も無ければ候補に出ない', () => {
     const mergedPRs: never[] = [];
-    const closeEvents = [{ issueNumber: 1, closedAt: '2026-09-17T00:00:01Z', commitId: null, actor: 'takecchi' }];
+    const closeEvents = [
+      { issueNumber: 1, closedAt: '2026-09-17T00:00:01Z', commitId: null, actor: 'takecchi' },
+    ];
     expect(findKeywordClosedCandidates({ mergedPRs, closeEvents })).toEqual([]);
   });
 
   it('closedAt がマージより前（あり得ない順序）なら、そのマージは候補にしない', () => {
     const mergedPRs = [{ number: 1, mergedAt: '2026-09-17T00:00:10Z', mergeCommitOid: 'aaa' }];
-    const closeEvents = [{ issueNumber: 1, closedAt: '2026-09-17T00:00:00Z', commitId: null, actor: 'takecchi' }];
+    const closeEvents = [
+      { issueNumber: 1, closedAt: '2026-09-17T00:00:00Z', commitId: null, actor: 'takecchi' },
+    ];
     expect(findKeywordClosedCandidates({ mergedPRs, closeEvents })).toEqual([]);
   });
 
   it('数時間〜数日後に手で閉じた通常の Issue は候補に出ない（60分後の例）', () => {
     const mergedPRs = [{ number: 1, mergedAt: '2026-09-17T00:00:00Z', mergeCommitOid: 'aaa' }];
-    const closeEvents = [{ issueNumber: 1, closedAt: '2026-09-17T01:00:00Z', commitId: null, actor: 'takecchi' }];
+    const closeEvents = [
+      { issueNumber: 1, closedAt: '2026-09-17T01:00:00Z', commitId: null, actor: 'takecchi' },
+    ];
     expect(findKeywordClosedCandidates({ mergedPRs, closeEvents })).toEqual([]);
   });
 });
@@ -146,17 +194,31 @@ describe('findKeywordClosedCandidates — commit_id がマージコミットの�
     // （core の doc: 「一致そのものが証拠である」）。
     const mergedPRs = [{ number: 5, mergedAt: '2026-09-17T00:00:00Z', mergeCommitOid: 'deadbeef' }];
     const closeEvents = [
-      { issueNumber: 42, closedAt: '2026-09-17T00:05:00Z', commitId: 'deadbeef', actor: 'takecchi' },
+      {
+        issueNumber: 42,
+        closedAt: '2026-09-17T00:05:00Z',
+        commitId: 'deadbeef',
+        actor: 'takecchi',
+      },
     ];
     const result = findKeywordClosedCandidates({ mergedPRs, closeEvents });
     expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({ prNumber: 5, matchedVia: 'commit-id', secondsAfterMerge: 300 });
+    expect(result[0]).toMatchObject({
+      prNumber: 5,
+      matchedVia: 'commit-id',
+      secondsAfterMerge: 300,
+    });
   });
 
   it('commit_id が既知のどの merged PR の mergeCommitOid とも一致しなければ、PR番号は不明のまま候補に残す（握り潰さない）', () => {
     const mergedPRs = [{ number: 5, mergedAt: '2026-09-17T00:00:00Z', mergeCommitOid: 'deadbeef' }];
     const closeEvents = [
-      { issueNumber: 42, closedAt: '2026-09-17T00:05:00Z', commitId: 'unknown-sha', actor: 'takecchi' },
+      {
+        issueNumber: 42,
+        closedAt: '2026-09-17T00:05:00Z',
+        commitId: 'unknown-sha',
+        actor: 'takecchi',
+      },
     ];
     const result = findKeywordClosedCandidates({ mergedPRs, closeEvents });
     expect(result).toHaveLength(1);
@@ -168,19 +230,25 @@ describe('findKeywordClosedCandidates — 境界（閾値のちょうど上と�
   const mergedPRs = [{ number: 1, mergedAt: '2026-09-17T00:00:00Z', mergeCommitOid: 'aaa' }];
 
   it('閾値ちょうど（既定10秒）は候補に含む', () => {
-    const closeEvents = [{ issueNumber: 1, closedAt: '2026-09-17T00:00:10Z', commitId: null, actor: null }];
+    const closeEvents = [
+      { issueNumber: 1, closedAt: '2026-09-17T00:00:10Z', commitId: null, actor: null },
+    ];
     const result = findKeywordClosedCandidates({ mergedPRs, closeEvents });
     expect(result).toHaveLength(1);
     expect(result[0].secondsAfterMerge).toBe(10);
   });
 
   it('閾値+1秒は候補から外れる', () => {
-    const closeEvents = [{ issueNumber: 1, closedAt: '2026-09-17T00:00:11Z', commitId: null, actor: null }];
+    const closeEvents = [
+      { issueNumber: 1, closedAt: '2026-09-17T00:00:11Z', commitId: null, actor: null },
+    ];
     expect(findKeywordClosedCandidates({ mergedPRs, closeEvents })).toEqual([]);
   });
 
   it('カスタム閾値を渡せば境界が動く（thresholdSeconds=60 なら45秒後も拾う）', () => {
-    const closeEvents = [{ issueNumber: 1, closedAt: '2026-09-17T00:00:45Z', commitId: null, actor: null }];
+    const closeEvents = [
+      { issueNumber: 1, closedAt: '2026-09-17T00:00:45Z', commitId: null, actor: null },
+    ];
     const result = findKeywordClosedCandidates({ mergedPRs, closeEvents, thresholdSeconds: 60 });
     expect(result).toHaveLength(1);
     expect(result[0].secondsAfterMerge).toBe(45);
@@ -197,7 +265,9 @@ describe('findKeywordClosedCandidates — 複数の merged PR から正しく最
       { number: 1, mergedAt: '2026-09-17T00:00:00Z', mergeCommitOid: 'aaa' },
       { number: 2, mergedAt: '2026-09-17T00:00:08Z', mergeCommitOid: 'bbb' },
     ];
-    const closeEvents = [{ issueNumber: 9, closedAt: '2026-09-17T00:00:09Z', commitId: null, actor: null }];
+    const closeEvents = [
+      { issueNumber: 9, closedAt: '2026-09-17T00:00:09Z', commitId: null, actor: null },
+    ];
     const result = findKeywordClosedCandidates({ mergedPRs, closeEvents });
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({ prNumber: 2, secondsAfterMerge: 1 });

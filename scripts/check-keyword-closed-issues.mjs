@@ -175,7 +175,9 @@ function main() {
   const { repo, threshold } = parseArgs(process.argv.slice(2));
 
   if (!Number.isFinite(threshold) || threshold < 0) {
-    logError(`check-keyword-closed-issues: --threshold は0以上の数でなければならない: ${threshold}`);
+    logError(
+      `check-keyword-closed-issues: --threshold は0以上の数でなければならない: ${threshold}`,
+    );
     process.exitCode = 1;
     return;
   }
@@ -190,13 +192,19 @@ function main() {
 
   const { data: closeEvents, error: eventsError } = fetchIssueCloseEvents(repo);
   if (closeEvents === null) {
-    logError('check-keyword-closed-issues: 判定できなかった —— Issue の closed イベント一覧を読めない');
+    logError(
+      'check-keyword-closed-issues: 判定できなかった —— Issue の closed イベント一覧を読めない',
+    );
     logError(`  gh の出力: ${eventsError}`);
     process.exitCode = 1;
     return;
   }
 
-  const candidates = findKeywordClosedCandidates({ mergedPRs, closeEvents, thresholdSeconds: threshold });
+  const candidates = findKeywordClosedCandidates({
+    mergedPRs,
+    closeEvents,
+    thresholdSeconds: threshold,
+  });
   log(formatReport(candidates, threshold));
 }
 
