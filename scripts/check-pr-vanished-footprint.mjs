@@ -94,7 +94,10 @@ function parseArgs(argv) {
 
 function runGh(args) {
   try {
-    const stdout = execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    const stdout = execFileSync('gh', args, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     return { stdout, error: null };
   } catch (error) {
     const detail =

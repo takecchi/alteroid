@@ -212,7 +212,7 @@ export function findNamedMentions(vanished, body) {
       const kind = matchNamedCandidate(file, span.content);
       if (kind === null) continue;
       const excerpt = truncateExcerpt(span.line);
-      const key = `${kind} ${excerpt}`;
+      const key = JSON.stringify([kind, excerpt]);
       if (seen.has(key)) continue;
       seen.add(key);
       hits.push({ kind, candidate: span.content, excerpt });

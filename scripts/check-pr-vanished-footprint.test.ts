@@ -42,7 +42,10 @@ describe('computeUnion', () => {
   });
 
   it('files が無い / 空のコミットも壊れない', () => {
-    const union = computeUnion([{ parentCount: 1, files: [] }, { parentCount: 0, files: undefined as never }]);
+    const union = computeUnion([
+      { parentCount: 1, files: [] },
+      { parentCount: 0, files: undefined as never },
+    ]);
     expect([...union]).toEqual([]);
   });
 });
@@ -157,10 +160,7 @@ describe('findNamedMentions', () => {
   });
 
   it('V が複数件のとき、名指しされたものだけを返す（名指しされないものは含まれない）', () => {
-    const result = findNamedMentions(
-      ['a.ts', 'b.ts'],
-      '`a.ts` だけに触れる本文。',
-    );
+    const result = findNamedMentions(['a.ts', 'b.ts'], '`a.ts` だけに触れる本文。');
     expect(result.map((r) => r.file)).toEqual(['a.ts']);
   });
 });
@@ -197,7 +197,9 @@ describe('evaluatePrVanishedFootprint — 判定の芯', () => {
     expect(result.mentions).toEqual([
       {
         file: 'vanished.ts',
-        hits: [{ kind: 'exact', candidate: 'vanished.ts', excerpt: '- `vanished.ts` を追記した。' }],
+        hits: [
+          { kind: 'exact', candidate: 'vanished.ts', excerpt: '- `vanished.ts` を追記した。' },
+        ],
       },
     ]);
   });
@@ -247,7 +249,11 @@ describe('実測: PR #1115（本物。Issue #1130 コメント 2026-09-17T02:48:
     },
     {
       parentCount: 1,
-      files: ['.github/workflows/pr-title.yml', 'AGENTS.md', 'scripts/check-no-attribution-trailers.mjs'],
+      files: [
+        '.github/workflows/pr-title.yml',
+        'AGENTS.md',
+        'scripts/check-no-attribution-trailers.mjs',
+      ],
     },
     { parentCount: 1, files: ['AGENTS.md'] },
   ];
@@ -361,7 +367,9 @@ describe('formatVerdict', () => {
     const text = formatVerdict('1', {
       verdict: 'found',
       vanished: ['x.ts'],
-      mentions: [{ file: 'x.ts', hits: [{ kind: 'exact', candidate: 'x.ts', excerpt: '`x.ts` の話。' }] }],
+      mentions: [
+        { file: 'x.ts', hits: [{ kind: 'exact', candidate: 'x.ts', excerpt: '`x.ts` の話。' }] },
+      ],
     });
     expect(text).toContain('required ではない');
     expect(text).toContain('`x.ts`');
