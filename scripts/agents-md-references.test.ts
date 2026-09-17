@@ -882,8 +882,15 @@ describe('AGENTS.md の参照の形（#369）', () => {
   it('本文がフェンスの中身を含まない（この歯が何を見ているかの確認）', () => {
     // フェンスの中にしか無い逐語。落ちたら proseLines が壊れている＝下の3本が
     // 「見ていないから0件」になりうるので、先にここで止める。
-    expect(agentsMd).toContain('error occurred in dts build');
-    expect(prose.map((l) => l.text).join('\n')).not.toContain('error occurred in dts build');
+    // ⚠ この逐語は 2026-09-17 に差し替えた。前は `error occurred in dts build` だったが、
+    // それを含む節（`pnpm build` の競合）が `.claude/skills/build-contention/` へ移設されて
+    // AGENTS.md から消えた ⟹ **この歯が落ちたのは正しい**（見張り役の逐語が実在しなくなった）。
+    // 差し替え先は「`gh pr merge --delete-branch`」の節の生出力で、AGENTS.md のフェンスの中に
+    // だけ在ることを確かめてある。**節ごと移設されればまた落ちる。そのときも同じ直し方をする。**
+    expect(agentsMd).toContain('Cannot change the base branch of a closed pull request');
+    expect(prose.map((l) => l.text).join('\n')).not.toContain(
+      'Cannot change the base branch of a closed pull request',
+    );
     expect(prose.length).toBeGreaterThan(100);
   });
 
