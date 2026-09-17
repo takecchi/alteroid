@@ -529,6 +529,35 @@ git -C <main のツリー> apply --check -R /tmp/tail.patch   # 通れば main �
       - **⚠️ 「最新世代が `cancelled`」という状態自体は実在する**（実測 2026-09-17T02:20Z、直近1000 run の窓で **33件**。全部 `CI` の run で、`ci` と `image` は required である）。**ただしそのとき GitHub が required を満たしたと見なすかは測れていない** —— 経緯と、測るのに要る費用は #1155 に在る
   - **その run が実際にジョブを実行したか**を見る（`actions/runs/<id>/jobs` の `total_count` が0でないこと。実行時間も見る）
   - **`mergeStateStatus` を緑の根拠にしない**
+    - **⚠️ とはいえ `mergeStateStatus` は required を満たしたかどうかを見分けている。`BLOCKED` と `UNSTABLE` は別の値である。** 実測（2026-09-17T02:57Z 観測、PR #1154。**required の4本が全部 `success` で、required に入っていない `base-overlap` だけが `failure`** の状態）:
+
+      ```
+      $ gh api repos/takecchi/alteroid/commits/457429037910998f0106ccb913479e772134c66b/check-runs \
+          --jq '.check_runs[] | "\(.name)\t\(.conclusion)"'
+      pr-closing-keywords	success
+      no-attribution-trailers	success
+      pr-title-type	success
+      image	success
+      ci	success
+      base-overlap	failure
+      $ gh pr view 1154 --json mergeable,mergeStateStatus
+      mergeable=MERGEABLE mergeStateStatus=UNSTABLE
+      ```
+
+      ⟹ **`BLOCKED`＝required が満たされていない / `UNSTABLE`＝required は満たしたが、ほかに赤が在る。** **緑の根拠にはならないが、「required を満たしたか」を読む用には使える** —— 直上の「緑の根拠にしない」と矛盾しない（あれが言っているのは**満たしたことを緑と読むな**であって、値が何も見分けていないという意味ではない）。
+
+    - **⚠️ そして run 全体の `conclusion` は、逆向きにも当てにならない。** 同じ標本で **`CI` の run の `conclusion` は `failure`** だが、**その run の中の required なジョブ（`ci` / `image`）は2本とも `success`** である（落ちているのは required ではない `base-overlap` 1本）。
+
+      ```
+      $ gh api repos/takecchi/alteroid/actions/runs/35175534722 --jq '"conclusion=\(.conclusion)"'
+      conclusion=failure
+      $ gh api repos/takecchi/alteroid/actions/runs/35175534722/jobs --jq '.jobs[] | "\(.name)\t\(.conclusion)"'
+      base-overlap	failure
+      ci	success
+      image	success
+      ```
+
+      ⟹ **上の項が持つ「`run.conclusion == "success"` は緑の根拠にならない」には鏡像が在る —— `run.conclusion == "failure"` も「マージが止まる」の根拠にならない。** どちらの向きでも、**ジョブの内訳まで降りないと required の状態は読めない。**
   - `gh pr ready` の後は**本物の run が作られたことを確かめる**。作られないなら `gh pr close` → `gh pr reopen` で起こす（**枝を1バイトも触らない**ので安全。空コミットでもよい）
     - **⚠️ ただし「作られていない」を、早すぎる問い合わせで自分から作らないこと。** 実測（2026-09-17、PR #1154）: `gh pr ready` と**同じ1呼びの中で** `gh api "repos/…/actions/runs?head_sha=<sha>"` を打つと、**新しい run は1本も返らない。** timeline の `ready_for_review` は `02:44:06Z`、run 4本の `created_at` は `02:44:08Z` で、**22秒後（`02:44:28Z`）に引き直したら4本とも見えた。** ⟹ **0本は「起きていない」ではなく「まだ見えていない」ことがある。**
       - **⚠️ そしてここで `close` → `reopen` を打つと、同じ concurrency group に2世代目が生まれて1世代目が切られる**（`cancel-in-progress: true`）。**この帰結そのものは測っていない —— 機構からの推論である。** 言えるのは「間を置いてもう一度引いてから判断すること」までである
