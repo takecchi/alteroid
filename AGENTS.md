@@ -25,7 +25,7 @@
 - **載せる設定そのものは渡っている。** `settingSources: ['user', 'project', 'local']` は `Options` を組み立てる3つの口すべてに在る（`packages/core/src/claude-provider.ts` の `buildCloneSessionOptions` / `buildCloneDistillOptions` / `buildManagerSessionOptions`）。**効いていないのは配置のほうである** — `settingSources` の `'project'` が解決する先はセッションの `cwd` であって、この文書の在り処ではない
 - **クローン**: `cwd` は `paths.root`＝`ALTEROID_HOME`（`apps/daemon/src/index.ts` の `createClone({ cwd: paths.root })`、`Dockerfile` の `ENV ALTEROID_HOME=/data/alteroid`）。**そこにこの文書は無いので、載らない。これはバグではなく設計である** — 同じ箇所に「クローン自身の cwd は workspace とは別に渡す。クローンへ渡している `cwd` と同じ値でなければ、自己認識が嘘になる」と逐語で書いてある。**だから「cwd を repo にすれば直る」はクローンには当てられない**
 - **マネージャー**: `cwd` は `runner.workspacePath`＝`ALTEROID_WORKSPACE`（`apps/runner/src/index.ts`、`Dockerfile` の `ENV ALTEROID_WORKSPACE=/workspace`、`manager.ts` の `input.cwd ?? runner.workspacePath`）。**この文書は `/workspace/<マネージャーID>/repo/` の中で、`cwd` の直下ではない。だからセッション開始時には載らない。** ただし**後から載る導線が別に在る**（次の項目）
-- **作業者**: マネージャーと同じ導線で届く（作業者自身の直接観測）。`buildWorkerPrompt()`（`packages/core/src/prompt.ts`）は固定の4行を返すだけで本文を1文字も含まないので、**作業者へ届く経路はこの導線だけである**
+- **作業者**: マネージャーと同じ導線で届く（作業者自身の直接観測）。`buildWorkerPrompt()`（`packages/core/src/prompt.ts`）は定型文を返すだけで本文を1文字も含まないので、**作業者へ届く経路はこの導線だけである**
 - **後から載る導線とは何か。** SDK の型定義に `InstructionsLoaded` フックが在り、`InstructionsLoadedHookInput` の `load_reason` は次の5値を取る（`@anthropic-ai/claude-agent-sdk@0.3.261` 同梱の `sdk.d.ts`）。
 
   > [sdk-verbatim InstructionsLoadedHookInput.load_reason]
