@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -649,9 +650,64 @@ describe('runObservationGuard（I/O込みの合成。実リポジトリに対し
     }
   });
 
-  it('today を渡さなければ既定値（現在時刻）で回る——例外を投げず、実在の ROOT で合格になる', async () => {
-    const result = await runObservationGuard(ROOT);
-    expect(result.ok).toBe(true);
+  /**
+   * **実リポジトリの状態をアサートしない**（#1200）。ここは `today` の既定値だけを
+   * 測る場所である——以前はここで `runObservationGuard(ROOT)` の `ok` が true である
+   * ことを見ていたが、それは「いまの `main` に見直し期限を過ぎた観測用テストが1本も
+   * 無い」という**リポジトリの状態**のアサートだった。観測用テストの期限が来た日に
+   * 最初に赤くなるのがこの `expected false to be true` になり、**vitest が非0で終わる
+   * ので `test.mjs` は歯Cを1回も回さない**（`code !== 0` で早期 return する）。⟹ 期限
+   * が来た人が最初に見るのは何も説明しないアサーションで、歯Cが用意した3択
+   * （基準へ書き換える／捨てる／延ばす）にはたどり着けない。
+   *
+   * 代わりに**合成ルート**（tmpdir に最小の `vitest.config.ts` と観測用テスト1本だけ）
+   * を作り、`today` を渡さずに回す。見直し期限を**昨日**に置いた根では期限超過になり、
+   * **今日**に置いた根では合格になる（歯Cは期限当日はまだ赤くしない）——この2本で
+   * 既定値が「今日（UTC）」であることを両側から挟める。**旧テストは「例外を投げずに
+   * 合格した」しか見ていなかったので、既定値が去年の日付でも緑だった。測る対象は
+   * 減っていない、増えている。**
+   *
+   * 限界: UTC の日付がこの1本の実行中に変わると、測定の前提そのものが崩れる
+   * （その回だけ偽の赤になりうる）。
+   */
+  const utcDay = (offsetDays: number) =>
+    new Date(Date.now() + offsetDays * 86_400_000).toISOString().slice(0, 10);
+
+  /** tmpdir に「最小の `vitest.config.ts` ＋ 観測用テスト1本」だけを持つ根を作る。 */
+  function makeObservationRoot(deadline: string) {
+    const dir = mkdtempSync(join(tmpdir(), 'test-guard-observation-'));
+    writeFileSync(
+      join(dir, 'vitest.config.ts'),
+      "export default { test: { include: ['**/*.test.ts'] } };\n",
+    );
+    writeFileSync(
+      join(dir, 'fixture.observed.test.ts'),
+      [
+        '/**',
+        ' * 終了条件: この合成ルートは既定引数を測るためだけに在る',
+        ` * 見直し期限: ${deadline}`,
+        ' */',
+        '',
+      ].join('\n'),
+    );
+    return dir;
+  }
+
+  it('today を渡さなければ既定値が「今日（UTC）」になる——期限が昨日の根では期限超過、今日の根では合格', async () => {
+    const dueRoot = makeObservationRoot(utcDay(-1));
+    const notYetRoot = makeObservationRoot(utcDay(0));
+    try {
+      const due = await runObservationGuard(dueRoot);
+      expect(due.ok).toBe(false);
+      if (!due.ok) {
+        expect(due.exitCode).toBe(EXIT_OBSERVATION_DUE);
+      }
+      const notYet = await runObservationGuard(notYetRoot);
+      expect(notYet.ok).toBe(true);
+    } finally {
+      rmSync(dueRoot, { recursive: true, force: true });
+      rmSync(notYetRoot, { recursive: true, force: true });
+    }
   });
 });
 
