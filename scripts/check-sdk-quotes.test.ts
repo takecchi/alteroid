@@ -5,7 +5,6 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-// @ts-expect-error -- 素の .mjs（型宣言を持たない検査スクリプト）を読む
 import {
   collectMarkedQuotes,
   EXCLUDED_PREFIXES,
@@ -14,6 +13,7 @@ import {
   MARKER,
   resolveSdkTypes,
   SCANNED_EXTENSIONS,
+  // @ts-expect-error -- 素の .mjs（型宣言を持たない検査スクリプト）を読む
 } from './check-sdk-quotes-core.mjs';
 
 /**
@@ -63,8 +63,8 @@ describe('check-sdk-quotes: collectMarkedQuotes', () => {
     ].join('\n');
     const quotes = collectMarkedQuotes([{ path: 'a.ts', content }]) as Quote[];
     expect(quotes).toHaveLength(1);
-    expect(quotes[0].symbol).toBe('SDKBackgroundTasksChangedMessage.ambient');
-    expect(quotes[0].quote).toBe(
+    expect(quotes[0]!.symbol).toBe('SDKBackgroundTasksChangedMessage.ambient');
+    expect(quotes[0]!.quote).toBe(
       'True for tasks that are not activity (every skip_transcript task, plus every live-update watcher, requested or auto-started); hosts should exclude them from activity indicators.',
     );
   });
@@ -74,8 +74,8 @@ describe('check-sdk-quotes: collectMarkedQuotes', () => {
       '// `ambient` の欄も逐語で引く: 「True for tasks that are not activity (every skip_transcript task, plus every live-update watcher, requested or auto-started); hosts should exclude them from activity indicators.」 [sdk-verbatim ambient]';
     const quotes = collectMarkedQuotes([{ path: 'a.ts', content }]) as Quote[];
     expect(quotes).toHaveLength(1);
-    expect(quotes[0].quote?.startsWith('True for tasks that are not activity')).toBe(true);
-    expect(quotes[0].quote?.endsWith('activity indicators.')).toBe(true);
+    expect(quotes[0]!.quote?.startsWith('True for tasks that are not activity')).toBe(true);
+    expect(quotes[0]!.quote?.endsWith('activity indicators.')).toBe(true);
   });
 
   it('⚠️ シンボルを書き忘れた印は、読み飛ばさずに欠陥として返す', () => {
@@ -83,7 +83,7 @@ describe('check-sdk-quotes: collectMarkedQuotes', () => {
       { path: 'a.ts', content: `// [sdk-verbatim]\n// > True for tasks that are not activity` },
     ]) as (Quote & { defect: string })[];
     expect(quotes).toHaveLength(1);
-    expect(quotes[0].defect).toBe('missing-symbol');
+    expect(quotes[0]!.defect).toBe('missing-symbol');
   });
 
   it('⚠️ 印の後ろに中身が無ければ、読み飛ばさずに欠陥として返す', () => {
@@ -91,7 +91,7 @@ describe('check-sdk-quotes: collectMarkedQuotes', () => {
       { path: 'a.ts', content: `// [sdk-verbatim Options.env]\n\n\n` },
     ]) as (Quote & { defect: string })[];
     expect(quotes).toHaveLength(1);
-    expect(quotes[0].defect).toBe('empty-quote');
+    expect(quotes[0]!.defect).toBe('empty-quote');
   });
 
   it('⚠️ 引用を書き忘れて次がコードなら、その行を引用として取る（＝ 当たらないので落ちる）', () => {
@@ -100,7 +100,8 @@ describe('check-sdk-quotes: collectMarkedQuotes', () => {
     const quotes = collectMarkedQuotes([
       { path: 'a.ts', content: `// [sdk-verbatim Options.env]\nconst a = 1;` },
     ]) as Quote[];
-    expect(quotes[0].quote).toBe('const a = 1;');
+    expect(quotes).toHaveLength(1);
+    expect(quotes[0]!.quote).toBe('const a = 1;');
     expect(findQuoteDefects(quotes, FAKE_SDK)).toHaveLength(1);
   });
 });
@@ -128,7 +129,7 @@ describe('check-sdk-quotes: findQuoteDefects', () => {
     );
     const defects = findQuoteDefects(quotes, FAKE_SDK) as Defect[];
     expect(defects).toHaveLength(1);
-    expect(defects[0].reason).toContain('当たらない');
+    expect(defects[0]!.reason).toContain('当たらない');
   });
 
   it('⚠️ 引用に取るのは印の次の1行だけ（折り返した2行目は見ない ＝ 引用は1行に収めること）', () => {
@@ -140,7 +141,7 @@ describe('check-sdk-quotes: findQuoteDefects', () => {
       ].join('\n'),
     ) as Quote[];
     expect(quotes).toHaveLength(1);
-    expect(quotes[0].quote).toBe(
+    expect(quotes[0]!.quote).toBe(
       'True for tasks that are not activity (every skip_transcript task, plus every',
     );
   });
@@ -164,7 +165,7 @@ describe('check-sdk-quotes: findQuoteDefects', () => {
     );
     const defects = findQuoteDefects(quotes, FAKE_SDK) as Defect[];
     expect(defects).toHaveLength(1);
-    expect(defects[0].reason).toContain('sdk.d.ts に無い');
+    expect(defects[0]!.reason).toContain('sdk.d.ts に無い');
   });
 
   it('シンボルを書き忘れた印・引用の取れない印も落ちる', () => {
@@ -203,7 +204,7 @@ describe('check-sdk-quotes: findQuoteDefects', () => {
     // 直した後: 1件（＝古い引用が union の一部にしか当たっていないと検出される）。
     const defects = findQuoteDefects(quotes, newDeclaration) as Defect[];
     expect(defects).toHaveLength(1);
-    expect(defects[0].reason).toContain('#793');
+    expect(defects[0]!.reason).toContain('#793');
   });
 
   it('union 先頭が削られても検出する（#793 の対称形: 隣接する `|` は前後どちらも見る）', () => {
@@ -213,7 +214,7 @@ describe('check-sdk-quotes: findQuoteDefects', () => {
     const newDeclaration = "export declare type FakeUnion = 'z' | 'a' | 'b' | 'c';";
     const defects = findQuoteDefects(quotes, newDeclaration) as Defect[];
     expect(defects).toHaveLength(1);
-    expect(defects[0].reason).toContain('#793');
+    expect(defects[0]!.reason).toContain('#793');
   });
 
   it('union として閉じた引用（前後が `|` に接続しない）は依然として欠陥にならない', () => {
@@ -279,7 +280,7 @@ describe('check-sdk-quotes: findQuoteDefects', () => {
     const withoutC = "export declare type FakeUnion5 = 'a' | 'b' | 'd' | 'e';";
     const defects = findQuoteDefects(quotes, withoutC) as Defect[];
     expect(defects).toHaveLength(1);
-    expect(defects[0].reason).toContain('当たらない');
+    expect(defects[0]!.reason).toContain('当たらない');
   });
 });
 
@@ -292,7 +293,7 @@ describe('check-sdk-quotes: 引用行の探し方（空行を跨ぐ）', () => {
     ].join('\n');
     const quotes = collectMarkedQuotes([{ path: 'AGENTS.md', content }]) as Quote[];
     expect(quotes).toHaveLength(1);
-    expect(quotes[0].quote?.startsWith('True for tasks that are not activity')).toBe(true);
+    expect(quotes[0]!.quote?.startsWith('True for tasks that are not activity')).toBe(true);
   });
 
   it('⚠️ 跨ぐ幅は狭い — 遠くの英文を拾って「たまたま当たる」ことがない', () => {
@@ -307,7 +308,7 @@ describe('check-sdk-quotes: 引用行の探し方（空行を跨ぐ）', () => {
       defect: string;
     })[];
     expect(quotes).toHaveLength(1);
-    expect(quotes[0].defect).toBe('empty-quote');
+    expect(quotes[0]!.defect).toBe('empty-quote');
   });
 });
 

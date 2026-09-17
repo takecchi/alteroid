@@ -496,6 +496,24 @@ fi
       .filter((call) => call.length > 0);
   }
 
+  /**
+   * `arr[index]` の境界検査。テストが期待する呼び出し・引数がそこに実在する
+   * ことを前提にしている箇所向けで、無ければ「無かった」ことを明示して投げる
+   * （noUncheckedIndexedAccess の下で `string | undefined` のまま扱わない）。
+   */
+  function at<T>(arr: readonly T[], index: number): T {
+    const value = arr[index];
+    if (value === undefined) {
+      throw new Error(`index ${index} が範囲外（長さ: ${arr.length}）`);
+    }
+    return value;
+  }
+
+  /** 呼び出しの引数配列から `--title` の直後の値を取り出す。 */
+  function titleArgOf(call: readonly string[]): string {
+    return at(call, call.indexOf('--title') + 1);
+  }
+
   function remoteRef(originPath: string, ref: string): string {
     try {
       return execFileSync('git', ['--git-dir', originPath, 'rev-parse', ref], {
@@ -763,7 +781,7 @@ fi
       expect(result.exitCode).toBe(0);
       const calls = parseGhCalls(s.ghLog);
       expect(calls[1]).toContain('--title');
-      expect(calls[1][calls[1].indexOf('--title') + 1]).toBe(lockfileOnlyTitle);
+      expect(titleArgOf(at(calls, 1))).toBe(lockfileOnlyTitle);
       // commit message にも同じタイトルが載る
       const subject = git(s.workdir, ['log', '-1', '--format=%s']).trim();
       expect(subject).toBe(lockfileOnlyTitle);
@@ -784,7 +802,7 @@ fi
 
       expect(result.exitCode).toBe(0);
       const calls = parseGhCalls(s.ghLog);
-      expect(calls[1][calls[1].indexOf('--title') + 1]).toBe(TITLE);
+      expect(titleArgOf(at(calls, 1))).toBe(TITLE);
       const subject = git(s.workdir, ['log', '-1', '--format=%s']).trim();
       expect(subject).toBe(TITLE);
     });
@@ -914,7 +932,7 @@ fi
       expect(commentCall).toBeDefined();
       expect(commentCall).toEqual(expect.arrayContaining(['pr', 'comment', '77', '--body-file']));
       const bodyFileArgIndex = commentCall!.indexOf('--body-file') + 1;
-      const commentBodyPath = commentCall![bodyFileArgIndex];
+      const commentBodyPath = at(commentCall!, bodyFileArgIndex);
       const commentBody = readFileSync(commentBodyPath, 'utf8');
       expect(commentBody).toContain('human@example.com');
       expect(commentBody).toContain('#991');
@@ -941,8 +959,8 @@ fi
       expect(result.exitCode).not.toBe(0);
       const calls = parseGhCalls(s.ghLog);
       expect(calls).toHaveLength(1);
-      expect(calls[0][0]).toBe('pr');
-      expect(calls[0][1]).toBe('list');
+      expect(at(calls, 0)[0]).toBe('pr');
+      expect(at(calls, 0)[1]).toBe('list');
       expect(calls.some((c) => c[0] === 'pr' && c[1] === 'comment')).toBe(false);
     });
   });
@@ -1079,7 +1097,7 @@ fi
         expect(body).toContain('本文');
         expect(body.indexOf(WARNING_MARK)).toBeLessThan(body.indexOf('本文'));
         const calls = parseGhCalls(s.ghLog);
-        expect(calls[1][calls[1].indexOf('--title') + 1]).toBe(PREFIXED_TITLE);
+        expect(titleArgOf(at(calls, 1))).toBe(PREFIXED_TITLE);
         expect(result.stderr).toContain('::warning::');
       });
 
@@ -1101,7 +1119,7 @@ fi
         // 本文は元のまま。警告ブロックの追記は一切無い。
         expect(body).toBe('本文\n');
         const calls = parseGhCalls(s.ghLog);
-        expect(calls[1][calls[1].indexOf('--title') + 1]).toBe(TITLE);
+        expect(titleArgOf(at(calls, 1))).toBe(TITLE);
         expect(calls[1]).not.toContain(PREFIXED_TITLE);
         expect(result.stderr).not.toContain('::warning::');
       });
@@ -1120,7 +1138,7 @@ fi
         const body = readFileSync(s.bodyFile, 'utf8');
         expect(body.startsWith(WARNING_MARK)).toBe(true);
         const calls = parseGhCalls(s.ghLog);
-        expect(calls[1][calls[1].indexOf('--title') + 1]).toBe(PREFIXED_TITLE);
+        expect(titleArgOf(at(calls, 1))).toBe(PREFIXED_TITLE);
       });
 
       it('未設定（キー自体が無い）も「起きない」側へ倒れる（陽性側と同じ扱い）', () => {
@@ -1149,7 +1167,7 @@ fi
         const body = readFileSync(s.bodyFile, 'utf8');
         expect(body.startsWith(WARNING_MARK)).toBe(true);
         const calls = parseGhCalls(s.ghLog);
-        expect(calls[1][calls[1].indexOf('--title') + 1]).toBe(PREFIXED_TITLE);
+        expect(titleArgOf(at(calls, 1))).toBe(PREFIXED_TITLE);
       });
     });
 
@@ -1230,9 +1248,9 @@ fi
         const calls = parseGhCalls(s.ghLog);
         const editCalls = calls.filter((c) => c[0] === 'pr' && c[1] === 'edit');
         expect(editCalls).toHaveLength(2);
-        const lastEdit = editCalls[1];
+        const lastEdit = at(editCalls, 1);
         // タイトルは毎回ゼロから組み立てられるので、前夜の接頭は残らない
-        expect(lastEdit[lastEdit.indexOf('--title') + 1]).toBe(TITLE);
+        expect(titleArgOf(lastEdit)).toBe(TITLE);
         const bodyAfterSecond = readFileSync(s.bodyFile, 'utf8');
         expect(bodyAfterSecond).not.toContain('WARNING');
         expect(bodyAfterSecond).toBe('本文\n');

@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-// @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 import {
   evaluatePrGreen,
   formatVerdict,
   pickLatestRunPerWorkflow,
+  // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 } from './check-pr-green-core.mjs';
 
 /**
@@ -97,8 +97,11 @@ describe('pickLatestRunPerWorkflow', () => {
       },
     ];
     const latest = pickLatestRunPerWorkflow(runs);
-    expect(latest.map((r) => r.name)).toEqual(['Guardrail Check', 'Test Backend']);
-    const testBackend = latest.find((r) => r.name === 'Test Backend');
+    expect(latest.map((r: { name: string }) => r.name)).toEqual([
+      'Guardrail Check',
+      'Test Backend',
+    ]);
+    const testBackend = latest.find((r: { name: string }) => r.name === 'Test Backend');
     expect(testBackend?.status).toBe('in_progress');
   });
 

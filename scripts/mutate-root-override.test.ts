@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-// @ts-expect-error -- 素の .mjs（型宣言を持たない変異試験ハーネス）を読む
 import {
   BACKUP_DIR,
   DEFAULT_ROOT,
@@ -15,6 +14,7 @@ import {
   readRootArg,
   ROOT,
   setRootOverride,
+  // @ts-expect-error -- 素の .mjs（型宣言を持たない変異試験ハーネス）を読む
 } from '../.claude/skills/mutation-testing/mutate-core.mjs';
 
 /**

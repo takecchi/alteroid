@@ -4,11 +4,11 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-// @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 import {
   compareRequiredStatusChecks,
   contextsFromProtection,
   formatComparison,
+  // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 } from './check-required-status-checks-core.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));

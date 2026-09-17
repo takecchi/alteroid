@@ -4,12 +4,12 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-// @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 import {
   evaluateIssueDoneTrailer,
   extractIssueDoneTrailerLines,
   formatEvaluation,
   TRAILER_NAME,
+  // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 } from './issue-done-trailer-core.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -36,13 +36,13 @@ describe('evaluateIssueDoneTrailer — 番号を閉じる形', () => {
   it('番号複数（カンマ区切り）', () => {
     const result = evaluateIssueDoneTrailer('Alteroid-Issue-Done: 1072, 1085');
     expect(result.verdict).toBe('close');
-    expect(result.issues.map((i) => i.number)).toEqual([1072, 1085]);
+    expect(result.issues.map((i: { number: number }) => i.number)).toEqual([1072, 1085]);
   });
 
   it('番号複数（空白区切り）', () => {
     const result = evaluateIssueDoneTrailer('Alteroid-Issue-Done: 1072 1085');
     expect(result.verdict).toBe('close');
-    expect(result.issues.map((i) => i.number)).toEqual([1072, 1085]);
+    expect(result.issues.map((i: { number: number }) => i.number)).toEqual([1072, 1085]);
   });
 
   it('# 付きの番号も受ける', () => {
@@ -54,7 +54,7 @@ describe('evaluateIssueDoneTrailer — 番号を閉じる形', () => {
   it('# 付きと無しが混在してもよい', () => {
     const result = evaluateIssueDoneTrailer('Alteroid-Issue-Done: #1072, 1085');
     expect(result.verdict).toBe('close');
-    expect(result.issues.map((i) => i.number)).toEqual([1072, 1085]);
+    expect(result.issues.map((i: { number: number }) => i.number)).toEqual([1072, 1085]);
   });
 
   it('重複する番号は1つに畳む（最初に述べた行を sourceLine に残す）', () => {
@@ -156,7 +156,7 @@ describe('extractIssueDoneTrailerLines — 降りる口2: フェンス・引用�
     ].join('\n');
     const result = evaluateIssueDoneTrailer(body);
     expect(result.verdict).toBe('close');
-    expect(result.issues.map((i) => i.number)).toEqual([1072]);
+    expect(result.issues.map((i: { number: number }) => i.number)).toEqual([1072]);
   });
 
   it('閉じられていないフェンスは fail-closed で末尾までコードとして扱う', () => {

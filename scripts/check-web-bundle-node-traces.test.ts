@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-// @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 import {
   findNodeTraceHits,
   NODE_SPECIFIER,
   PATTERNS,
+  // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 } from './check-web-bundle-node-traces-core.mjs';
 
 /**

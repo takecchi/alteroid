@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-// @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 import {
   CONVENTION_TYPES,
   evaluatePrTitleType,
   formatVerdict,
   stripLeadingMarkers,
+  // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 } from './check-pr-title-type-core.mjs';
 
 /**

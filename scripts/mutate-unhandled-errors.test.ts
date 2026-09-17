@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-// @ts-expect-error -- 素の .mjs（型宣言を持たない変異試験ハーネス）を読む
 import {
   assertNoUnhandledErrorsLine,
   decideJudgementCategory,
@@ -14,6 +13,7 @@ import {
   parseAggregateLines,
   parseErrorsLine,
   ROOT,
+  // @ts-expect-error -- 素の .mjs（型宣言を持たない変異試験ハーネス）を読む
 } from '../.claude/skills/mutation-testing/mutate-core.mjs';
 
 /**

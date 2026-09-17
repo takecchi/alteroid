@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.base.json",
+  "include": ["vitest.config.ts", "vitest.setup.ts"],
+  "compilerOptions": {
+    // vitest.setup.ts は `typeof window === 'undefined'` で jsdom 環境かどうかを
+    // 判定する（apps/web の `.tsx` テストは jsdom、それ以外は node）。
+    // tsconfig.base.json の lib は Node 前提（ES2023 のみ）で `window` を
+    // 宣言していないので、apps/web/tsconfig.json と同じく DOM を足す。
+    "lib": ["ES2023", "DOM", "DOM.Iterable"]
+  }
+}

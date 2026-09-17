@@ -123,7 +123,8 @@ function tokenize(expr: string): Token[] {
   const tokens: Token[] = [];
   let i = 0;
   while (i < expr.length) {
-    const c = expr[i];
+    // `i < expr.length` を while で保証しているので範囲内。undefined にはならない。
+    const c = expr.charAt(i);
     if (/\s/.test(c)) {
       i++;
       continue;
@@ -326,14 +327,20 @@ function isInsideYamlComment(text: string, index: number): boolean {
 function extractPullRequestTypes(ciYml: string): string[] | null {
   const blockMatch = /\n {2}pull_request:\n([\s\S]*?)(?=\n {2}[A-Za-z_]+:)/.exec(ciYml);
   if (!blockMatch) return null;
+  // グループ1は正規表現上つねに一致する（`?` を持たない必須グループ）ので
+  // ここに来た時点で undefined にはならないが、noUncheckedIndexedAccess は
+  // それを型から読めないので明示的に検査する。
   const block = blockMatch[1];
+  if (block === undefined) return null;
 
   // フロースタイル（1行）。**改行を跨がせない**（この repo の実際の書き方は
   // 常に1行）ことと、**一致した行が YAML コメントの中でないこと**の両方を
   // 確かめてから採用する（上の `isInsideYamlComment` の doc を見よ）。
   for (const m of block.matchAll(/types:\s*\[([^\]\n]*)\]/g)) {
     if (isInsideYamlComment(block, m.index ?? 0)) continue;
-    return m[1]
+    const captured = m[1];
+    if (captured === undefined) continue;
+    return captured
       .split(',')
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
@@ -341,7 +348,11 @@ function extractPullRequestTypes(ciYml: string): string[] | null {
 
   for (const m of block.matchAll(/types:\s*\n((?:[ \t]*-\s*\S+\n?)+)/g)) {
     if (isInsideYamlComment(block, m.index ?? 0)) continue;
-    return [...m[1].matchAll(/-\s*(\S+)/g)].map((x) => x[1]);
+    const captured = m[1];
+    if (captured === undefined) continue;
+    return [...captured.matchAll(/-\s*(\S+)/g)]
+      .map((x) => x[1])
+      .filter((s): s is string => s !== undefined);
   }
 
   return null;
@@ -357,7 +368,9 @@ function extractJobsSection(ciYml: string): string {
 
 /** `jobs:` 直下のジョブ名（2-space インデントの見出し）を全部返す。 */
 function extractJobNames(jobsSection: string): string[] {
-  return [...jobsSection.matchAll(/^ {2}([A-Za-z0-9_-]+):/gm)].map((m) => m[1]);
+  return [...jobsSection.matchAll(/^ {2}([A-Za-z0-9_-]+):/gm)]
+    .map((m) => m[1])
+    .filter((s): s is string => s !== undefined);
 }
 
 /** 指定したジョブの本文（次のジョブの手前まで）を返す。無ければ `null`。 */
@@ -365,13 +378,15 @@ function extractJobBlock(jobsSection: string, jobName: string): string | null {
   const padded = `\n${jobsSection}`;
   const re = new RegExp(`\\n {2}${jobName}:\\n([\\s\\S]*?)(?=\\n {2}[A-Za-z0-9_-]+:|$)`);
   const m = re.exec(padded);
-  return m ? m[1] : null;
+  // グループ1は必須グループなので m が在れば undefined にはならないが、上と
+  // 同じ理由で明示的に検査する。
+  return m ? (m[1] ?? null) : null;
 }
 
 /** ジョブ本文からジョブレベルの `if:` の値を抽出する。無ければ `null`（＝常に走る）。 */
 function extractJobIf(jobBlock: string): string | null {
   const m = /^\s*if:\s*(.+)$/m.exec(jobBlock);
-  return m ? m[1].trim() : null;
+  return m ? (m[1] ?? '').trim() : null;
 }
 
 // ============================================================================

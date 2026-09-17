@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-// @ts-expect-error -- 素の .mjs（型宣言を持たない変異試験ハーネス）を読む
 import {
   assertAggregateBlocksUnambiguous as harnessAssertAggregateBlocksUnambiguous,
   HarnessError,
   parseAggregateLines as harnessParseAggregateLines,
   stripAnsi,
+  // @ts-expect-error -- 素の .mjs（型宣言を持たない変異試験ハーネス）を読む
 } from '../.claude/skills/mutation-testing/mutate-core.mjs';
 // @ts-expect-error -- 素の .mjs（型宣言を持たない test-guard の中核）を読む
 import { parseAggregateLines as guardParseAggregateLines } from './test-guard-core.mjs';

@@ -38,7 +38,11 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
+// @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 import { STEPS } from '../../scripts/verify-core.mjs';
+
+/** `scripts/verify-core.mjs` の `STEPS` 各要素の形（doc コメントから）。 */
+type Step = { name: string; cmd: string; args: string[] };
 
 const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(SCRIPTS_DIR, 'verify-for-sdk-pr.sh');
@@ -85,7 +89,9 @@ function extractGateNamesFromVerifyMd(verifyMd: string): string[] {
   const names: string[] = [];
   for (const line of verifyMd.split('\n')) {
     const m = /^### `([^`]+)` — /.exec(line);
-    if (m) names.push(m[1]);
+    // グループ1は必須グループ（`?` を持たない）なので m が在れば undefined には
+    // ならないが、noUncheckedIndexedAccess はそれを型から読めないので検査する。
+    if (m && m[1] !== undefined) names.push(m[1]);
   }
   return names;
 }
@@ -175,7 +181,7 @@ describe('verify-for-sdk-pr.sh', () => {
     const names = extractGateNamesFromVerifyMd(verifyMd);
     // **左辺は実行結果（verify.md）から抜いたもの。右辺は STEPS を import したもの。**
     // どちらもソースを目視で数えていない。
-    expect(names).toEqual(STEPS.map((step) => step.name));
+    expect(names).toEqual((STEPS as Step[]).map((step) => step.name));
 
     const out = parseGithubOutput(s.outputFile);
     expect(out.ok).toBe('true');
@@ -190,9 +196,13 @@ describe('verify-for-sdk-pr.sh', () => {
     const calls = readFileSync(s.pnpmLog, 'utf8')
       .split('\n')
       .filter((l) => l.length > 0);
-    const expectedPnpmSteps = STEPS.filter((step) => step.cmd === 'pnpm').map(
-      (step) => step.args[0],
-    );
+    const expectedPnpmSteps = (STEPS as Step[])
+      .filter((step) => step.cmd === 'pnpm')
+      // `args[0]` は各 STEPS の要素がつねに1つ以上の args を持つ（サブコマンド名）
+      // ことが前提。undefined の要素が紛れ込んだらここで検出したいので、
+      // 黙って通す `?? ''` ではなく非 undefined だけを残すフィルタにする。
+      .map((step) => step.args[0])
+      .filter((arg): arg is string => arg !== undefined);
     expect(calls).toEqual(expectedPnpmSteps);
     // openapi は git 門なので pnpm には現れない。
     expect(calls).not.toContain('diff');

@@ -1,11 +1,22 @@
 import { describe, expect, it } from 'vitest';
 
-// @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 import {
   DEFAULT_THRESHOLD_SECONDS,
   findKeywordClosedCandidates,
   formatReport,
+  // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 } from './check-keyword-closed-issues-core.mjs';
+
+/** `findKeywordClosedCandidates` が返す候補の形（core の doc コメントから）。 */
+type Candidate = {
+  issueNumber: number;
+  closedAt: string;
+  prNumber: number | null;
+  mergedAt: string | null;
+  secondsAfterMerge: number | null;
+  matchedVia: 'commit-id' | 'timing';
+  actor: string | null;
+};
 
 /**
  * `check-keyword-closed-issues` の歯（Issue #1128）。
@@ -80,14 +91,14 @@ describe('findKeywordClosedCandidates — Issue #1128 が挙げた既知の5件�
   ];
 
   it('6件すべてが候補に出る（#993 は2回とも別々の候補として）', () => {
-    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents });
+    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents }) as Candidate[];
     const issueNumbers = result.map((c) => c.issueNumber).sort((a, b) => a - b);
     expect(issueNumbers).toEqual([866, 910, 913, 993, 993, 1041]);
     expect(result).toHaveLength(6);
   });
 
   it('#910 は timing 一致で、PR #912・1秒後と分かる', () => {
-    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents });
+    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents }) as Candidate[];
     const c = result.find((r) => r.issueNumber === 910)!;
     expect(c.matchedVia).toBe('timing');
     expect(c.prNumber).toBe(912);
@@ -95,7 +106,7 @@ describe('findKeywordClosedCandidates — Issue #1128 が挙げた既知の5件�
   });
 
   it('#993 の2回目は commit-id 一致で、PR #1107 と分かる（時間差も一致する）', () => {
-    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents });
+    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents }) as Candidate[];
     const matches = result.filter((r) => r.issueNumber === 993);
     expect(matches).toHaveLength(2);
     const commitMatch = matches.find((m) => m.matchedVia === 'commit-id')!;
@@ -107,7 +118,7 @@ describe('findKeywordClosedCandidates — Issue #1128 が挙げた既知の5件�
   });
 
   it('#1041（意図どおりの閉じ方とされる例）も、区別されずに同じ形で拾われる', () => {
-    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents });
+    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents }) as Candidate[];
     const c = result.find((r) => r.issueNumber === 1041)!;
     expect(c.matchedVia).toBe('timing');
     expect(c.prNumber).toBe(1112);
@@ -139,7 +150,7 @@ describe('findKeywordClosedCandidates — 偽陽性を作らない側（実測�
     const closeEvents = [
       { issueNumber: 204, closedAt: '2026-08-23T21:32:32Z', commitId: null, actor: 'takecchi' },
     ];
-    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents });
+    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents }) as Candidate[];
     expect(result).toEqual([]);
   });
 
@@ -150,7 +161,7 @@ describe('findKeywordClosedCandidates — 偽陽性を作らない側（実測�
     const closeEvents = [
       { issueNumber: 234, closedAt: '2026-08-23T21:32:46Z', commitId: null, actor: 'takecchi' },
     ];
-    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents });
+    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents }) as Candidate[];
     expect(result).toEqual([]);
   });
 
@@ -159,7 +170,7 @@ describe('findKeywordClosedCandidates — 偽陽性を作らない側（実測�
     const closeEvents = [
       { issueNumber: 1087, closedAt: '2026-09-17T01:59:58Z', commitId: null, actor: 'takecchi' },
     ];
-    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents });
+    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents }) as Candidate[];
     expect(result).toEqual([]);
   });
 
@@ -201,7 +212,7 @@ describe('findKeywordClosedCandidates — commit_id がマージコミットの�
         actor: 'takecchi',
       },
     ];
-    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents });
+    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents }) as Candidate[];
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({
       prNumber: 5,
@@ -220,7 +231,7 @@ describe('findKeywordClosedCandidates — commit_id がマージコミットの�
         actor: 'takecchi',
       },
     ];
-    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents });
+    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents }) as Candidate[];
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({ prNumber: null, matchedVia: 'commit-id' });
   });
@@ -233,9 +244,9 @@ describe('findKeywordClosedCandidates — 境界（閾値のちょうど上と�
     const closeEvents = [
       { issueNumber: 1, closedAt: '2026-09-17T00:00:10Z', commitId: null, actor: null },
     ];
-    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents });
+    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents }) as Candidate[];
     expect(result).toHaveLength(1);
-    expect(result[0].secondsAfterMerge).toBe(10);
+    expect(result[0]!.secondsAfterMerge).toBe(10);
   });
 
   it('閾値+1秒は候補から外れる', () => {
@@ -249,9 +260,13 @@ describe('findKeywordClosedCandidates — 境界（閾値のちょうど上と�
     const closeEvents = [
       { issueNumber: 1, closedAt: '2026-09-17T00:00:45Z', commitId: null, actor: null },
     ];
-    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents, thresholdSeconds: 60 });
+    const result = findKeywordClosedCandidates({
+      mergedPRs,
+      closeEvents,
+      thresholdSeconds: 60,
+    }) as Candidate[];
     expect(result).toHaveLength(1);
-    expect(result[0].secondsAfterMerge).toBe(45);
+    expect(result[0]!.secondsAfterMerge).toBe(45);
   });
 
   it('DEFAULT_THRESHOLD_SECONDS は実測の根拠（9秒の真陽性/21秒の偽陽性の間）と整合する10である', () => {
@@ -268,7 +283,7 @@ describe('findKeywordClosedCandidates — 複数の merged PR から正しく最
     const closeEvents = [
       { issueNumber: 9, closedAt: '2026-09-17T00:00:09Z', commitId: null, actor: null },
     ];
-    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents });
+    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents }) as Candidate[];
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({ prNumber: 2, secondsAfterMerge: 1 });
   });

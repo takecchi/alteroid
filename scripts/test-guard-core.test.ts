@@ -4,7 +4,6 @@ import { join, resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-// @ts-expect-error -- 素の .mjs（型宣言を持たない test-guard の中核）を読む
 import {
   EXIT_OBSERVATION_DUE,
   EXIT_OBSERVATION_UNDECLARED,
@@ -28,6 +27,7 @@ import {
   readObservationDeclaration,
   runObservationGuard,
   runStaticSkipGuard,
+  // @ts-expect-error -- 素の .mjs（型宣言を持たない test-guard の中核）を読む
 } from './test-guard-core.mjs';
 
 /**
@@ -175,8 +175,11 @@ describe('findUnconditionalSkips（歯B: ソースの側）', () => {
       '\n',
     );
     const hits = findUnconditionalSkips([{ path: 'f.test.ts', content }]);
-    expect(hits.map((h) => h.matched)).toEqual([`it${dotSkip()}`, `test${dotSkip()}`]);
-    expect(hits.map((h) => h.line)).toEqual([1, 2]);
+    expect(hits.map((h: { matched: string }) => h.matched)).toEqual([
+      `it${dotSkip()}`,
+      `test${dotSkip()}`,
+    ]);
+    expect(hits.map((h: { line: number }) => h.line)).toEqual([1, 2]);
   });
 
   it('.skip.each のような派生も検出する', () => {
@@ -216,7 +219,11 @@ describe('findUnconditionalSkips（歯B: ソースの側）', () => {
       { path: 'b.test.ts', content: b },
     ]);
     expect(hits).toHaveLength(3);
-    expect(hits.map((h) => h.path)).toEqual(['a.test.ts', 'b.test.ts', 'b.test.ts']);
+    expect(hits.map((h: { path: string }) => h.path)).toEqual([
+      'a.test.ts',
+      'b.test.ts',
+      'b.test.ts',
+    ]);
   });
 
   it('スキップが無ければ空配列', () => {

@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.base.json",
+  "include": [
+    "apps/cli/tsup.config.ts",
+    "apps/daemon/tsup.config.ts",
+    "apps/runner/tsup.config.ts",
+    "packages/api-client/tsup.config.ts",
+    "packages/core/tsup.config.ts",
+    "packages/storage-fs/tsup.config.ts",
+    "packages/storage-pg/tsup.config.ts"
+  ]
+}

@@ -4,7 +4,6 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-// @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 import {
   attributeOverlapFiles,
   decideVerdict,
@@ -18,6 +17,7 @@ import {
   IDENTITY_STATEMENT,
   intersectFiles,
   relativeImportsOf,
+  // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 } from './check-base-overlap-core.mjs';
 
 /**

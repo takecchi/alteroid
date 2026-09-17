@@ -23,9 +23,13 @@ function readWorkspaceGlobs(): string[] {
   }
   const globs: string[] = [];
   for (let i = start + 1; i < lines.length; i++) {
-    const m = lines[i].match(/^\s+-\s+(\S+)\s*$/);
+    // `i < lines.length` を for で保証しているので範囲内。undefined にはならない。
+    const line = lines[i] ?? '';
+    const m = line.match(/^\s+-\s+(\S+)\s*$/);
     if (!m) break; // インデントされた `- ` の並びが終わったら打ち切る
-    globs.push(m[1]);
+    const value = m[1];
+    if (value === undefined) break; // 正規表現上つねに一致する必須グループだが、念のため
+    globs.push(value);
   }
   if (globs.length === 0) {
     throw new Error('pnpm-workspace.yaml の `packages:` が空に見える');
@@ -41,10 +45,15 @@ function expandWorkspaceDirs(globs: string[]): string[] {
     if (!m) {
       throw new Error(`このテストが対応していない workspace glob 形式: ${glob}`);
     }
-    const base = path.join(ROOT, m[1]);
+    const prefix = m[1];
+    if (prefix === undefined) {
+      // 正規表現上つねに一致する必須グループだが、念のため。
+      throw new Error(`このテストが対応していない workspace glob 形式: ${glob}`);
+    }
+    const base = path.join(ROOT, prefix);
     for (const entry of readdirSync(base, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
-      const pkgDir = `${m[1]}/${entry.name}`;
+      const pkgDir = `${prefix}/${entry.name}`;
       if (existsSync(path.join(ROOT, pkgDir, 'package.json'))) {
         dirs.push(pkgDir);
       }
@@ -136,7 +145,7 @@ describe('workspace の test script が同じ穴を開けていないか（#246�
       `${pkgDir} の test script の形が想定外: ${JSON.stringify(script)}`,
     ).not.toBeNull();
 
-    const filterPath = match![1];
+    const filterPath = match![1]!; // 必須グループ（末尾 \S+）。match! と同じ理由で確定
     const pointsToOwnPackage = filterPath === pkgDir || filterPath.startsWith(`${pkgDir}/`);
     expect(
       pointsToOwnPackage,
@@ -157,7 +166,7 @@ describe('workspace の test script が同じ穴を開けていないか（#246�
         `${pkgDir} の test script の形が想定外: ${JSON.stringify(script)}`,
       ).toBeTruthy();
 
-      const filterPath = match![1];
+      const filterPath = match![1]!; // 必須グループ（末尾 \S+）。match! と同じ理由で確定
       const matched = testFiles.filter((f) => f === filterPath || f.startsWith(`${filterPath}/`));
       expect(
         matched.length,

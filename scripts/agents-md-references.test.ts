@@ -159,8 +159,15 @@ export function proseLinesWithFenceState(markdown: string): {
         continue;
       }
       const marker = m[1];
-      const markerChar = marker[0] as '`' | '~';
       const rest = m[2];
+      // 両方とも openRe の必須グループ（`?` を持たない）なので、m が在れば
+      // undefined にはならないが、noUncheckedIndexedAccess はそれを型から
+      // 読めないので明示的に検査する。
+      if (marker === undefined || rest === undefined) {
+        out.push({ line: i + 1, text });
+        continue;
+      }
+      const markerChar = marker[0] as '`' | '~';
       if (markerChar === '`' && rest.includes('`')) {
         // info string にバックティックを含む ⟹ フェンスの開きではなく
         // インラインのコードスパン（#786 の欠陥A: 1行に開閉が両方在る行）。
@@ -1977,7 +1984,13 @@ export function findCanonPathCitations(lines: readonly ProseLine[]): CanonPathCi
   const re = /(?<![\w.\-/:])(?:\.\/)?(docs\/[A-Za-z0-9_.\-/]*[A-Za-z0-9_-]\.md)/g;
   const out: CanonPathCitation[] = [];
   for (const { line, text } of lines) {
-    for (const m of text.matchAll(re)) out.push({ line, token: m[1] });
+    for (const m of text.matchAll(re)) {
+      // 必須グループ（`?` を持たない）なので m が在れば undefined にはならないが、
+      // noUncheckedIndexedAccess はそれを型から読めないので明示的に検査する。
+      const token = m[1];
+      if (token === undefined) continue;
+      out.push({ line, token });
+    }
   }
   return out;
 }

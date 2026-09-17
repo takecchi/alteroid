@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-// @ts-expect-error -- 素の .mjs（型宣言を持たない変異試験ハーネス）を読む
 import {
   buildScaffoldControlMarker,
   decideJudgementCategory,
@@ -20,6 +19,7 @@ import {
   parseFailedTestNames,
   SCAFFOLD_CONTROL_STAGE,
   validateSpec,
+  // @ts-expect-error -- 素の .mjs（型宣言を持たない変異試験ハーネス）を読む
 } from '../.claude/skills/mutation-testing/mutate-core.mjs';
 
 /**
@@ -83,7 +83,12 @@ const REAL_SINGLE_FAILURE_NAME =
   'packages/core/src/profile.test.ts > 器に置く形 > 入れ子のシェルで本文を二度読まない（無限再帰しない）';
 
 /** 印だけ・無変異で赤くなった3本（S1・S2・S3）の実測の名前。 */
-const SCAFFOLD_NAMES = [
+// 固定長タプルとして宣言する — 3件の要素数を固定にすると、
+// noUncheckedIndexedAccess の下でも SCAFFOLD_NAMES[0..2] が
+// `string | undefined` ではなく `string` として扱われる（要素数が
+// 変わらない前提のプレーンな `string[]` だと、境界が保証されていても
+// 型からは読めない）。
+const SCAFFOLD_NAMES: [string, string, string] = [
   'scripts/mutate-aggregate-blocks.test.ts > mutate.mjs CLI: baseline / run の先頭 baseline 確認（判定の入口2,3/3） > baseline: 複数ブロックのとき exit 1 で拒否し、生ログが判定より前に出る',
   'scripts/mutate-aggregate-blocks.test.ts > mutate.mjs CLI: baseline / run の先頭 baseline 確認（判定の入口2,3/3） > run: baseline 確認で複数ブロックのとき exit 1 で拒否する（run: baseline というラベル）',
   'scripts/mutate-root-override.test.ts > mutate.mjs CLI: --root（回帰・上書き・fail-closed・実効 ROOT の出力） > 歯1: --root <path> を渡すと apply/restore が MARKER_PATH / BACKUP_DIR も含めてそのツリーを使う',

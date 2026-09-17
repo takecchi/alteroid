@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 
-// @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 import {
   computeUnion,
   computeVanishedFootprint,
@@ -10,6 +9,7 @@ import {
   formatVerdict,
   matchNamedCandidate,
   truncateExcerpt,
+  // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 } from './check-pr-vanished-footprint-core.mjs';
 
 /**
@@ -112,11 +112,17 @@ describe('matchNamedCandidate — 3つの当たり方', () => {
 describe('extractInlineCodeSpans', () => {
   it('複数行から複数のスパンを拾う', () => {
     const body = ['`a.ts` の話。', '`b.ts` と `c.ts` の話。'].join('\n');
-    expect(extractInlineCodeSpans(body).map((s) => s.content)).toEqual(['a.ts', 'b.ts', 'c.ts']);
+    expect(extractInlineCodeSpans(body).map((s: { content: string }) => s.content)).toEqual([
+      'a.ts',
+      'b.ts',
+      'c.ts',
+    ]);
   });
 
   it('空のスパンは候補にしない', () => {
-    expect(extractInlineCodeSpans('`` と `a.ts`').map((s) => s.content)).toEqual(['a.ts']);
+    expect(
+      extractInlineCodeSpans('`` と `a.ts`').map((s: { content: string }) => s.content),
+    ).toEqual(['a.ts']);
   });
 
   it('スパンは行を跨がない', () => {
@@ -173,7 +179,7 @@ describe('findNamedMentions', () => {
 
   it('V が複数件のとき、名指しされたものだけを返す（名指しされないものは含まれない）', () => {
     const result = findNamedMentions(['a.ts', 'b.ts'], '`a.ts` だけに触れる本文。');
-    expect(result.map((r) => r.file)).toEqual(['a.ts']);
+    expect(result.map((r: { file: string }) => r.file)).toEqual(['a.ts']);
   });
 });
 

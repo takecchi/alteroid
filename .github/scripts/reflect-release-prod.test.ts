@@ -164,7 +164,13 @@ function buildScenario(kind: ScenarioKind): ScenarioSetup {
   const { seedPath, shas } = initSeed(root, 3);
   git(seedPath, ['remote', 'add', 'origin', originPath]);
   git(seedPath, ['push', '-q', 'origin', 'main']);
+  // initSeed(root, 3) は必ず3件の sha を返す（commitCount ぶんループで push
+  // する）ので shas は空にならないが、noUncheckedIndexedAccess はそれを型から
+  // 読めないので明示的に検査する。
   const mainSha = shas[shas.length - 1];
+  if (mainSha === undefined) {
+    throw new Error('initSeed が shas を1件も返さなかった');
+  }
 
   let prodShaBefore = '';
   switch (kind) {
@@ -174,10 +180,15 @@ function buildScenario(kind: ScenarioKind): ScenarioSetup {
       git(seedPath, ['push', '-q', 'origin', 'main:refs/heads/release/prod']);
       prodShaBefore = mainSha;
       break;
-    case 'ancestor':
-      prodShaBefore = shas[0];
+    case 'ancestor': {
+      const firstSha = shas[0];
+      if (firstSha === undefined) {
+        throw new Error('initSeed が shas を1件も返さなかった');
+      }
+      prodShaBefore = firstSha;
       git(seedPath, ['push', '-q', 'origin', `${prodShaBefore}:refs/heads/release/prod`]);
       break;
+    }
     case 'diverged':
       // main と共通の祖先を持たない orphan branch を作り、それを release/prod へ置く
       git(seedPath, ['checkout', '-q', '--orphan', 'stray']);
