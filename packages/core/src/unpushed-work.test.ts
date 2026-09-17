@@ -5,6 +5,7 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { unpushedWorkTreeSchema } from './runner-protocol.js';
 import {
   computeUnpushedWork,
   DEFAULT_MAX_DEPTH,
@@ -252,8 +253,7 @@ describe('computeUnpushedWork — 出す粒度（ファイル名・差分の中�
     }
   });
 
-  it('unpushedWorkTreeSchema が持つ欄は、有無・件数・枝名までに限られる（形そのものの固定）', async () => {
-    const { unpushedWorkTreeSchema } = await import('./runner-protocol.js');
+  it('unpushedWorkTreeSchema が持つ欄は、有無・件数・枝名までに限られる（形そのものの固定）', () => {
     expect(Object.keys(unpushedWorkTreeSchema.shape).sort()).toEqual(
       [
         'relativePath',
