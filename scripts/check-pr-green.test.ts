@@ -401,3 +401,5 @@ describe('formatVerdict', () => {
     expect(formatVerdict('abc123', { verdict: 'skipped', detail: [] })).toMatch(/draft/);
   });
 });
+
+// 計測用の一時的な行（Issue #1155。この PR はマージしない）。
