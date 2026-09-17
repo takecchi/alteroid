@@ -24,7 +24,7 @@ import { join } from 'node:path';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import { childEnv, RAILWAY_DIR, type Run, runLimited, runScriptAsync } from './cli-stub.js';
+import { childEnv, RAILWAY_DIR, type Run, runScriptAsync, scenarioCollector } from './cli-stub.js';
 
 type Options = {
   /** `railway domain` をこけさせる */
@@ -166,14 +166,20 @@ let scenarios: Scenarios;
  *    結果は変わらない。並行度は `os.cpus().length` で頭打ちにする——無制限に
  *    並べると器の CPU を使い切るため
  *
+ * **シナリオは `scenarioCollector` で集める（#1150）。** 素直に `tasks.push` で
+ * 集めて `Promise` をそのまま待つと、`allowFailure` を付けていないシナリオが1つ
+ * 想定外に死んだだけで `beforeAll` 全体が reject し、**ファイル内の64本が一括で
+ * skip になる**（＝「どの保証が壊れたか」がテスト名から読めなくなる）。
+ * `scenarioCollector` は失敗を名前の下へしまい、**その名前を引いた側だけに**
+ * 投げ直すので、壊れたシナリオを引く `it` / `describe` だけが赤くなる。
+ *
  * **この関数自体の timeout（第2引数）の根拠は、呼び出し側（下の `beforeAll`）に
  * 逐語で書いてある。**
  */
 async function prepareScenarios(): Promise<Scenarios> {
-  const s = {} as Scenarios;
-  const tasks: Array<() => Promise<void>> = [];
+  const { value: s, task, settle } = scenarioCollector<Scenarios>();
 
-  tasks.push(async () => {
+  task('varsAllocation', async () => {
     s.varsAllocation = await run(
       [
         MINIMAL,
@@ -184,18 +190,18 @@ async function prepareScenarios(): Promise<Scenarios> {
       ].join('\n'),
     );
   });
-  tasks.push(async () => {
+  task('envRoundtripWritten', async () => {
     let written = '';
     await run(MINIMAL, { onEnvFile: (path) => (written = readFileSync(path, 'utf8')) });
     s.envRoundtripWritten = written;
   });
-  tasks.push(async () => {
+  task('envOverride', async () => {
     s.envOverride = await run(
       [MINIMAL, 'ALTEROID_ALLOWED_ORIGINS=https://mine.example', ''].join('\n'),
     );
   });
 
-  tasks.push(async () => {
+  task('credentialsFull', async () => {
     s.credentialsFull = await run(
       [
         MINIMAL,
@@ -208,19 +214,19 @@ async function prepareScenarios(): Promise<Scenarios> {
       ].join('\n'),
     );
   });
-  tasks.push(async () => {
+  task('credentialsGhOnly', async () => {
     s.credentialsGhOnly = await run([MINIMAL, 'GH_TOKEN=github_pat_test', ''].join('\n'));
   });
-  tasks.push(async () => {
+  task('credentialsNone', async () => {
     s.credentialsNone = await run(MINIMAL);
   });
-  tasks.push(async () => {
+  task('credentialsSshFails', async () => {
     s.credentialsSshFails = await run([MINIMAL, 'GH_TOKEN=github_pat_test', ''].join('\n'), {
       sshCredentialFails: true,
       allowFailure: true,
     });
   });
-  tasks.push(async () => {
+  task('credentialsRunners2', async () => {
     s.credentialsRunners2 = await run(
       [
         MINIMAL,
@@ -233,10 +239,10 @@ async function prepareScenarios(): Promise<Scenarios> {
     );
   });
 
-  tasks.push(async () => {
+  task('runners3', async () => {
     s.runners3 = await run([MINIMAL, 'GH_TOKEN=github_pat_test', ''].join('\n'), { runners: 3 });
   });
-  tasks.push(async () => {
+  task('runnersBad', async () => {
     s.runnersBad = await Promise.all(
       ['0', 'two', '-1'].map((bad) =>
         run(MINIMAL, { runners: bad as unknown as number, allowFailure: true }),
@@ -244,11 +250,11 @@ async function prepareScenarios(): Promise<Scenarios> {
     );
   });
 
-  tasks.push(async () => {
+  task('setupOrder', async () => {
     s.setupOrder = await run(MINIMAL);
   });
 
-  tasks.push(async () => {
+  task('googleEnabled', async () => {
     s.googleEnabled = await run(
       [
         MINIMAL,
@@ -258,7 +264,7 @@ async function prepareScenarios(): Promise<Scenarios> {
       ].join('\n'),
     );
   });
-  tasks.push(async () => {
+  task('googleDomainFails', async () => {
     s.googleDomainFails = await run(
       [
         MINIMAL,
@@ -270,7 +276,7 @@ async function prepareScenarios(): Promise<Scenarios> {
     );
   });
 
-  tasks.push(async () => {
+  task('publicUrlStale', async () => {
     let envAfter = '';
     const r = await run(
       [
@@ -285,7 +291,7 @@ async function prepareScenarios(): Promise<Scenarios> {
     s.publicUrlStale = { r, envAfter };
   });
 
-  tasks.push(async () => {
+  task('domainNotAttached', async () => {
     s.domainNotAttached = await run(
       [
         MINIMAL,
@@ -297,7 +303,7 @@ async function prepareScenarios(): Promise<Scenarios> {
       { allowFailure: true },
     );
   });
-  tasks.push(async () => {
+  task('domainAttached', async () => {
     s.domainAttached = await run(
       [
         MINIMAL,
@@ -309,7 +315,7 @@ async function prepareScenarios(): Promise<Scenarios> {
       { domainList: JSON.stringify([{ domain: 'alteroid.example' }]) },
     );
   });
-  tasks.push(async () => {
+  task('domainSimilar', async () => {
     // **似た名前を「在る」と読まない。** JSON を素通しに `grep -F` で探すと
     // `alteroid.example` が `my-alteroid.example` に当たり、届かない口に対して
     // 公開 URL と Google の鍵と待ち受けを置いて 0 で終わる
@@ -330,7 +336,7 @@ async function prepareScenarios(): Promise<Scenarios> {
     );
     s.domainSimilar = Object.fromEntries(attachedDomains.map((d, i) => [d, results[i]]));
   });
-  tasks.push(async () => {
+  task('domainUnreadable', async () => {
     s.domainUnreadable = await run(
       [
         MINIMAL,
@@ -342,7 +348,7 @@ async function prepareScenarios(): Promise<Scenarios> {
       { domainList: 'not json', allowFailure: true },
     );
   });
-  tasks.push(async () => {
+  task('domainNested', async () => {
     s.domainNested = await run(
       [
         MINIMAL,
@@ -360,10 +366,10 @@ async function prepareScenarios(): Promise<Scenarios> {
     );
   });
 
-  tasks.push(async () => {
+  task('workspaceSolo', async () => {
     s.workspaceSolo = await run(MINIMAL, { workspaces: ['solo'] });
   });
-  tasks.push(async () => {
+  task('workspaceExplicit', async () => {
     s.workspaceExplicit = await runScriptAsync({
       script: 'setup.sh',
       args: [
@@ -381,20 +387,20 @@ async function prepareScenarios(): Promise<Scenarios> {
       extraEnv: { FAKE_WORKSPACES: JSON.stringify(['a', 'b', 'c']) },
     });
   });
-  tasks.push(async () => {
+  task('workspaceMultipleYes', async () => {
     s.workspaceMultipleYes = await run(MINIMAL, {
       workspaces: ['ws-a', 'ws-b'],
       allowFailure: true,
     });
   });
-  tasks.push(async () => {
+  task('workspaceMultipleInteractive', async () => {
     s.workspaceMultipleInteractive = await run(MINIMAL, {
       workspaces: ['ws-a', 'ws-b'],
       yes: false,
       allowFailure: true,
     });
   });
-  tasks.push(async () => {
+  task('workspaceEmpty', async () => {
     s.workspaceEmpty = await run(MINIMAL, { workspaces: [] });
   });
 
@@ -406,14 +412,14 @@ async function prepareScenarios(): Promise<Scenarios> {
   // ⚠️ ネットワーク待ちが乗る分の余裕は、下の `PREP_TIMEOUT` の側に見てある
   // （このシナリオはかつて、このためだけに `it` 側で 15_000ms の個別 timeout を
   // 持っていた）。
-  tasks.push(async () => {
+  task('branchDefault', async () => {
     s.branchDefault = await run(MINIMAL, { branch: null, workspaces: ['test'] });
   });
 
   // **数え上げの持ち主は railway/ そのものである。** readdirSync 自体はプロセスを
   // 起こさないのでここで直接呼んでよい——重いのは中身を `config_input` へ通す方
   const configs = readdirSync(RAILWAY_DIR).filter((f) => f.endsWith('.json'));
-  tasks.push(async () => {
+  task('configResults', async () => {
     const entries = await Promise.all(
       configs.map(async (name): Promise<[string, ConfigInputResult]> => {
         const config = JSON.parse(readFileSync(join(RAILWAY_DIR, name), 'utf8'));
@@ -422,30 +428,29 @@ async function prepareScenarios(): Promise<Scenarios> {
     );
     s.configResults = Object.fromEntries(entries);
   });
-  tasks.push(async () => {
+  task('configUnknownKey', async () => {
     s.configUnknownKey = await configInputAsync({
       build: { zzz: 1 },
       deploy: { startCommand: 'x' },
     });
   });
-  tasks.push(async () => {
+  task('configUnknownSection', async () => {
     s.configUnknownSection = await configInputAsync({ zzz: {}, deploy: { startCommand: 'x' } });
   });
-  tasks.push(async () => {
+  task('configNonDockerfileBuilder', async () => {
     s.configNonDockerfileBuilder = await configInputAsync({
       build: { builder: 'NIXPACKS' },
       deploy: { startCommand: 'x' },
     });
   });
-  tasks.push(async () => {
+  task('configMissingStartCommand', async () => {
     s.configMissingStartCommand = await configInputAsync({
       build: { dockerfilePath: 'Dockerfile' },
       deploy: {},
     });
   });
 
-  await runLimited(tasks, cpus().length, (task) => task());
-  return s;
+  return settle(cpus().length);
 }
 
 /**
