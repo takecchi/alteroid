@@ -1227,3 +1227,49 @@ export function noteSessionMaterialUnreadable(what: string, error: unknown): voi
       'ただし本当に無かったのか読めなかっただけなのかを区別できるのは、この行だけである。',
   );
 }
+
+/**
+ * クローンのセッション id を器へ控えられなかったことを stderr へ1行残す
+ * （issue #1157）。
+ *
+ * **`noteDroppedRecord` を流用しないのは、あれが「記録できませんでした」で
+ * 終わり、本当の帰結を言わないからである**（`noteInboxEventKeptInMemoryOnly` /
+ * `noteInboxEventLost` / `noteSessionMaterialUnreadable` と同じ判断——
+ * 「第三の状況には専用の文言を持たせる」）。ここでの帰結は2段に分かれていて、
+ * **どちらか一方だけを言うと必ず誤って読まれる。**
+ *
+ * 1. **いま走っているセッションは失っていない。** 控えを読むのは
+ *    `#ensureQuery` が `this.#query === null` のときだけで（＝起動時と、
+ *    畳んで作り直すとき）、走っているセッションはメモリ上の `#query` が
+ *    持っている。⟹ このプロセスが生きているあいだ、この失敗は1文字も表に
+ *    出ない。**「セッションが落ちた」と読ませないこと。**
+ * 2. **器が入れ替われば（再起動・デプロイ）、このセッションは resume されない。**
+ *    次の起動の `getCloneSessionId()` は控え損ねた id を返せないので、
+ *    クローンは新しいセッションを始める。
+ *
+ * **⭐ そしてその始まり方は、正常な経路と1文字も違わない。** `null` は
+ * 「まだ一度も控えていない」（初回起動）とも「意図して捨てた」
+ * （`setCloneSessionId(null)`）とも同じ値であり、**resume を諦めたことは
+ * 「素材が無かった」という正常な経路として通る。** ⟹ **この行だけが、その
+ * 3つを区別する材料を持つ**——それがこの関数の存在理由である。
+ *
+ * **投げない。** ここは `#apply` の `session_started` の延長で、**控えに失敗した
+ * ことでセッションそのものを殺してはいけない**（文脈を失うほうが高くつく。
+ * `noteDroppedRecord` 冒頭の doc と同じ判断であり、同じファイルの
+ * `#noteContextWindowFold` が `setCloneSessionId(null)` について
+ * 「投げない」と決めているのと同じ向きである）。
+ *
+ * **本文は出さない。** セッション id そのものを載せない——理由は
+ * `noteDroppedRecord` と同じ（#52。stderr は器の外へ出ていく）。
+ *
+ * @param error `SessionRegistry.setCloneSessionId` が実際に投げた理由。
+ */
+export function noteCloneSessionIdNotRecorded(error: unknown): void {
+  note(
+    `クローンのセッション id を控えられませんでした: ${reasonOf(error)}。` +
+      'いま走っているセッションは失っていない —— このプロセスが生きているあいだは' +
+      'そのまま続く。器が入れ替われば（再起動・デプロイ）、このセッションは' +
+      'resume されず新しいセッションが始まる。⟹ 次の起動では resume 素材が' +
+      '「無い」ように見えるが、それは初回だからでも意図して捨てたからでもない。',
+  );
+}

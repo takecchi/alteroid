@@ -63,6 +63,7 @@ import {
   noteDroppedInboxEvent,
   noteDroppedRecord,
   noteInboxEventKeptInMemoryOnly,
+  noteCloneSessionIdNotRecorded,
   noteInboxEventLost,
   noteUnreadableRecord,
   reasonOf,
@@ -8063,7 +8064,15 @@ class Clone implements CloneHost {
         // `null` で、`#salvageTranscript` は何もしない）。⟹ `TranscriptGrave` の側では
         // 拾えない。材料は pg に預けた生ログだけである。
         await this.#noteLostSession(this.#resumedFrom);
-        await this.#stores.sessions.setCloneSessionId(null).catch(() => undefined);
+        // **捨て損ねたことを黙らせない**（issue #1157）。ここで投げると失敗の報告
+        // そのものが失敗するので投げないが、跡は残す —— **同じ操作を打つ
+        // `#noteContextWindowFold` が既にこの形で跡を残しており、こちらだけが
+        // 黙っていた。** 捨て損ねると、次の起動が腐った id をもう一度 resume
+        // しに行く（この分岐へ戻ってくるので自己回復はするが、その1周は無駄に
+        // なる）。
+        await this.#stores.sessions.setCloneSessionId(null).catch((error: unknown) => {
+          noteDroppedRecord('resume 素材の破棄', 'clone', error);
+        });
       }
     } finally {
       if (!this.#stopped) {
@@ -8118,7 +8127,14 @@ class Clone implements CloneHost {
     switch (event.type) {
       case 'session_started': {
         this.#sawInit = true;
-        await this.#stores.sessions.setCloneSessionId(event.sessionId).catch(() => undefined);
+        // **控え損ねたことを黙らせない**（issue #1157）。**投げない** —— 控えに
+        // 失敗したことでセッションそのものを殺さない。**だが跡は残す**:
+        // 控えられなければ次の起動で resume を諦めるが、その諦め方は
+        // 「素材が無かった」という正常な経路と1文字も違わない
+        // （`noteCloneSessionIdNotRecorded` の doc）。
+        await this.#stores.sessions.setCloneSessionId(event.sessionId).catch((error: unknown) => {
+          noteCloneSessionIdNotRecorded(error);
+        });
         this.#captureInitFacts(event.runtime);
         return;
       }
