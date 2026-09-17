@@ -429,9 +429,83 @@ describe('judgeStaticSkipScan（歯B: 0ファイル/検出/合格の3値）', ()
 });
 
 describe('runStaticSkipGuard（I/O込みの合成。実リポジトリに対して回す）', () => {
-  it('実在の ROOT に対して回すと合格になる（このブランチのソースに無条件skipは無い前提）', async () => {
+  /**
+   * **実リポジトリの状態をアサートしない**（#1206。歯Cの側と同じ理由）。以前は
+   * ここで `runStaticSkipGuard(ROOT)` の `ok` が true であることを見ていたが、それは
+   * 「いまのこの枝のソースに無条件 skip が1本も無い」という**リポジトリの状態**の
+   * アサートだった。誰かが無条件 skip を1本置いた瞬間に最初に赤くなるのがこの
+   * `expected false to be true` になり、**vitest が非0で終わるので `test.mjs` は歯Bを
+   * 1回も回さない**（`code !== 0` で早期 return する）。⟹ 置いた人が最初に見るのは
+   * 何も説明しないアサーションで、歯Bが用意した次の手（戻し忘れなら消す／意図的に
+   * 止めたいなら skipIf で条件を書く）には1文字もたどり着けない。
+   *
+   * **実測（2026-09-18、`main` = `93482b5`）**: `it` + `.skip` のテストを1本置いて
+   * `pnpm test` を回すと、赤くなったのはこの1本だけで、歯Bの文言
+   * （`無条件の静的 skip が N 件見つかった`）の出現回数は **0 回**、exit code は
+   * 歯Bの `EXIT_STATIC_SKIP` ではなく vitest の 1 だった。
+   *
+   * **リポジトリの状態を見る仕事は落としていない** —— `scripts/test.mjs` が本番経路で
+   * `runStaticSkipGuard(ROOT)` を回しており、そちらは歯Bの文言と exit code を出す。
+   * ここが見ていたのはその重複であって、しかも先に走って本番経路を潰していた。
+   *
+   * ここに残すのは**リポジトリの状態に依らない部分**だけである —— 実 ROOT の
+   * `vitest.config.ts` から include を読めて、走査対象が1件以上在ること（＝ glob の
+   * 配線が生きていること）。無条件 skip が在るかどうかは見ない。
+   */
+  it('実在の ROOT に対して回すと「判定できない」へ倒れない（走査の配線だけを見る。状態はアサートしない）', async () => {
     const result = await runStaticSkipGuard(ROOT);
-    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.scanned).toBeGreaterThan(0);
+    } else {
+      expect(result.exitCode).not.toBe(EXIT_SCAN_EMPTY);
+    }
+  });
+
+  /** tmpdir に「最小の `vitest.config.ts` ＋ テスト1本」だけを持つ根を作る。 */
+  function makeStaticSkipRoot(body: string) {
+    const dir = mkdtempSync(join(tmpdir(), 'test-guard-static-skip-'));
+    writeFileSync(
+      join(dir, 'vitest.config.ts'),
+      "export default { test: { include: ['**/*.test.ts'] } };\n",
+    );
+    writeFileSync(join(dir, 'fixture.test.ts'), body);
+    return dir;
+  }
+
+  /**
+   * 上で落とした「合格になる」側を、**実リポジトリの状態に依らない形**で測り直す。
+   * ⭐ 検出側（`EXIT_STATIC_SKIP` と歯Bの文言）が `runStaticSkipGuard` の I/O 合成を
+   * 通って出ることは、これまで**どのテストも見ていなかった**——純粋関数
+   * （`judgeStaticSkipScan` / `formatSkipGuardMessage`）の段までしか歯が無く、
+   * I/O 込みの側は「合格になる」1本だけだった。⟹ 測る対象は減っていない、増えている。
+   */
+  it('合成ルート: 無条件 skip が1件在ると EXIT_STATIC_SKIP と歯Bの文言が返る', async () => {
+    const root = makeStaticSkipRoot(`it${dotSkip()}('止めたまま', () => {});\n`);
+    try {
+      const result = await runStaticSkipGuard(root);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.exitCode).toBe(EXIT_STATIC_SKIP);
+        expect(result.message).toContain('無条件の静的 skip が 1 件見つかった');
+        expect(result.message).toContain('fixture.test.ts:1');
+        expect(result.message).toContain('skipIf');
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('合成ルート: 無条件 skip が無ければ合格になる（走査は1ファイル）', async () => {
+    const root = makeStaticSkipRoot("it('動く', () => {});\n");
+    try {
+      const result = await runStaticSkipGuard(root);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.scanned).toBe(1);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('存在しないルートを渡すと「判定できない」に倒れる（0ファイル、EXIT_SCAN_EMPTY）', async () => {
@@ -641,9 +715,41 @@ describe('formatObservationGuardMessage', () => {
 });
 
 describe('runObservationGuard（I/O込みの合成。実リポジトリに対して回す）', () => {
-  it('実在の ROOT に対して回すと合格になる（main に観測用テストが無い前提。#396 要件6の確認そのもの）', async () => {
+  /**
+   * **実リポジトリの状態をアサートしない**（#1206）。以前はここで
+   * `runObservationGuard(ROOT, '2026-08-27')` の `ok` が true であることを見ていた。
+   * `today` を固定してあるので**見直し期限超過では動かない**（#1200 / PR #1205 で
+   * 塞いだのはそちら）が、**申告不備**（名乗ったのに `終了条件` / `見直し期限` が
+   * 無い、または書式が壊れている）は日付に依らないので、**このアサートが赤くなる。**
+   * ⟹ vitest が非0で終わり、`test.mjs` は `code !== 0` で早期 return するので、
+   * **歯Cの `申告不備` の文言は1回も出ない。**
+   *
+   * **実測（2026-09-18、`main` = `93482b5`。`pnpm build` 済みの木で測った）**:
+   * 名乗るだけで2項目を書いていない観測用テストを1本置いて `pnpm test` を回すと、
+   * 赤くなったのはこの1本だけで、`申告不備` の出現回数は **0 回**、exit code は
+   * 歯Cの `EXIT_OBSERVATION_UNDECLARED` ではなく vitest の 1 だった。
+   *
+   * ⚠ **この `it` の旧い名前は `#396 要件6の確認そのもの` と名乗っていたが、
+   * その「要件6」はどの記録にも存在しない。** #396 の本文・コメント・歯Cを入れた
+   * PR #542 の本文のいずれにも番号付きの要件一覧が無く、repo 全体で `要件6` に
+   * 当たるのはこの行だけだった（`git log -L` でこの行を入れたのが #542 と特定済み）。
+   * ⟹ 「要件6 がリポジトリの状態そのものを要求していたのか」は**史料からは決まらない**
+   * ので、**アサートを落とす代わりに、それが見ていた仕事を落とさない形**を採った。
+   *
+   * **リポジトリの状態を見る仕事は落としていない** —— `scripts/test.mjs` が本番経路で
+   * `runObservationGuard(ROOT)` を回しており、そちらは歯Cの文言と exit code（6/7）を
+   * 出す。ここが見ていたのはその重複であって、しかも先に走って本番経路を潰していた。
+   *
+   * ここに残すのは**リポジトリの状態に依らない部分**だけである —— 実 ROOT の
+   * `vitest.config.ts` から include を読めて、走査対象が1件以上在ること。
+   */
+  it('実在の ROOT に対して回すと「判定できない」へ倒れない（走査の配線だけを見る。状態はアサートしない）', async () => {
     const result = await runObservationGuard(ROOT, '2026-08-27');
-    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.scanned).toBeGreaterThan(0);
+    } else {
+      expect(result.exitCode).not.toBe(EXIT_SCAN_EMPTY);
+    }
   });
 
   it('存在しないルートを渡すと「判定できない」に倒れる（0ファイル、EXIT_SCAN_EMPTY）', async () => {
@@ -699,6 +805,50 @@ describe('runObservationGuard（I/O込みの合成。実リポジトリに対し
     );
     return dir;
   }
+
+  /** 名乗ってはいるが2項目を書いていない観測用テスト1本だけを持つ根を作る（#1206）。 */
+  function makeUndeclaredObservationRoot() {
+    const dir = mkdtempSync(join(tmpdir(), 'test-guard-observation-undeclared-'));
+    writeFileSync(
+      join(dir, 'vitest.config.ts'),
+      "export default { test: { include: ['**/*.test.ts'] } };\n",
+    );
+    writeFileSync(
+      join(dir, 'fixture.observed.test.ts'),
+      ['/**', ' * 名乗ってはいるが、終了条件も見直し期限も書いていない。', ' */', ''].join('\n'),
+    );
+    return dir;
+  }
+
+  /**
+   * 上で落とした「合格になる」側（申告不備の検出）を、**実リポジトリの状態に依らない
+   * 形**で測り直す（#1206）。⭐ 申告不備が `runObservationGuard` の I/O 合成を通って
+   * `EXIT_OBSERVATION_UNDECLARED` と文言になることは、これまで**どのテストも見ていな
+   * かった** —— 純粋関数（`findObservationDebts` / `judgeObservationScan` /
+   * `formatObservationGuardMessage`）の段までしか歯が無く、I/O 込みの側は実 ROOT に
+   * 対する「合格になる」1本だけだったからである。⟹ 測る対象は減っていない、増えている。
+   *
+   * ⭐ そして**この経路こそ #1206 が「文言が1回も出ない」と言っていたもの**である。
+   * ここで文言の中身まで見ておくことで、`test.mjs` が本番経路で出す案内（2項目を
+   * 書くこと／SKILL.md への導線）が壊れたら、合成ルート側が赤くなる。
+   */
+  it('合成ルート: 申告不備は EXIT_OBSERVATION_UNDECLARED と歯Cの文言（2項目と SKILL.md への導線）になる', async () => {
+    const root = makeUndeclaredObservationRoot();
+    try {
+      const result = await runObservationGuard(root, '2026-08-27');
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.exitCode).toBe(EXIT_OBSERVATION_UNDECLARED);
+        expect(result.message).toContain('申告不備');
+        expect(result.message).toContain('fixture.observed.test.ts:1');
+        expect(result.message).toContain('終了条件');
+        expect(result.message).toContain('見直し期限');
+        expect(result.message).toContain('.claude/skills/observation-tests/SKILL.md');
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   it('today を渡さなければ既定値が「今日（UTC）」になる——期限が昨日の根では期限超過、今日の根では合格', async () => {
     const dueRoot = makeObservationRoot(utcDay(-1));
