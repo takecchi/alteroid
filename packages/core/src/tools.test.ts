@@ -12,6 +12,7 @@ import {
 import type {
   ManagerDenial,
   ManagerPool,
+  ManagerSendResult,
   ManagerSummary,
   ManagerUnpushedWork,
   RunnerBacklogSnapshot,
@@ -90,6 +91,11 @@ interface Harness {
    * 見るための状態を作れる。
    */
   setAutoRunnerId(runnerId: string | undefined): void;
+  /**
+   * `manager_send` が読む `ManagerPool.send()` の返り値を差し替える（#1170）。
+   * 既定は `answered` のまま——`outcome` ごとに言い分ける枝を測るために要る。
+   */
+  setSendResult(result: ManagerSendResult): void;
   /** `runner_list` が読む `ManagerPool.runners()` の返り値を差し替える。 */
   setRunnersOverview(overview: RunnerFleetOverview): void;
   /**
@@ -189,6 +195,10 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
   // **指名しなかったときに Pool.start() が返す runnerId。** 本物は資源で選んだ
   // 器の runnerId を返す——ここでは差し替え可能な既定値でそれを真似る。
   let autoRunnerId: string | undefined = 'runner-test';
+  // **`send()` が返す `outcome` を差し替えられるようにする（#1170）。** 既定は
+  // これまでどおり `answered` で、`manager_send` の道具は `outcome` ごとに
+  // 言い分けるので、`delivered` の枝を測るには本物と同じ4値を作れる必要がある。
+  let sendResult: ManagerSendResult = { outcome: 'answered', detail: '回答した。' };
   let runnersOverview: RunnerFleetOverview = {
     runners: [],
     unassigned: [],
@@ -250,7 +260,7 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     },
     async send(managerId, message, options = {}) {
       sent.push({ managerId, message, ...options });
-      return { outcome: 'answered', detail: '回答した。' };
+      return sendResult;
     },
     async list() {
       // 本物の `list()` は毎回作り直した写しを返す（`summaryOf`）。同じ物を返すと、
@@ -450,6 +460,9 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     },
     setAutoRunnerId(runnerId) {
       autoRunnerId = runnerId;
+    },
+    setSendResult(result) {
+      sendResult = result;
     },
     setRunnersOverview(overview) {
       runnersOverview = overview;
@@ -4958,6 +4971,41 @@ describe('クローンの道具', () => {
     const reply = await h.call('manager_start', { request: '記録が無い場合' });
 
     expect(reply).toContain('未記録');
+  });
+
+  /**
+   * **`delivered` が保証している範囲は「resume の口を叩いた」までである（#1170）。**
+   *
+   * `detail`（「追加指示として届けた。」）は嘘ではない。**本当のことを、読み手が
+   * 必要とする粒度より粗く言っている**——日本語として「読んで動いた」に読める。
+   * 実害はそこで出た（2026-09-17T01:4xZ の観測）: 送った直後の `manager_list` が
+   * `lost` のままだったので、クローンは2本ぶんの指示を失ったと判断し、**内容を
+   * 写して新しい委譲として出し直した。**
+   *
+   * **⛔ 送信を塞ぐ歯ではない。** 黙った器（`state: 'lost'`）に載っている委譲へも
+   * `send()` は実際に届く（`manager.ts` の `isLive()` の doc の実測）。塞ぐと
+   * north_star 禁止1 に当たる——前例の `ba4053d`（#67）でも直したのは注記であって
+   * 送信ボタンではない。**この歯が守るのは言い方だけである。**
+   */
+  it('manager_send の delivered は、保証の範囲と「同じ本文で立て直さない」を言う', async () => {
+    const h = harness();
+    h.setSendResult({ outcome: 'delivered', detail: '追加指示として届けた。' });
+
+    const reply = await h.call('manager_send', { managerId: 'mgr-1', message: '続けて' });
+
+    // `detail` は落とさない（何が起きたかの1次情報はこちらである）。
+    expect(reply).toContain('追加指示として届けた。');
+    // **保証の範囲を名乗る。** 「叩いた」までと「読んで動いた」を分ける。
+    expect(reply).toContain('「読んで動いた」ではない');
+    expect(reply).toContain('読んだかは1度も見ていない');
+    // **直後の lost を「届かなかった」と読ませない**（実害の出た読み替え）。
+    expect(reply).toContain('「届かなかった」の証拠にはならない');
+    // **歯止め。** これが無いと一番自然な次の一手が「出し直す」になる。
+    expect(reply).toContain('同じ本文で新しい委譲を立てないこと');
+    // 確かめる綴りを渡す（読み手が次に打てる手を1つ持って帰れるようにする）。
+    expect(reply).toContain('manager_report');
+    // ⛔ **送信が塞がれたと読める字面を出さない。** 実測で届いている。
+    expect(reply).not.toContain('届かない');
   });
 
   it('manager_send は decision と requestId を添えて、宛先を指して答えられる', async () => {
