@@ -8059,12 +8059,9 @@ class Pool implements ManagerPool {
               this.#stores.tokens.readActive(),
               this.#stores.tokens.list(),
             ]);
-            const match = matchNoticeResetAgainstPool(
-              event.notice.text,
-              active?.tokenId,
-              pool,
-              { at: this.#now() },
-            );
+            const match = matchNoticeResetAgainstPool(event.notice.text, active?.tokenId, pool, {
+              at: this.#now(),
+            });
             if (match === undefined) {
               this.#resetTimeSkewMatches.delete(event.managerId);
             } else {

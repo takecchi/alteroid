@@ -186,7 +186,11 @@ describe('Issue #914 オーナー提案(2): resets時刻の突き合わせによ
     };
     const active: AgentToken = { id: 'tok-09', label: 'alteroid09', order: 1 };
     await stores.tokens.replace([dropped, active]);
-    await stores.tokens.writeActive({ tokenId: 'tok-09', generation: 2, rotatedAt: '2026-09-14T20:00:00.000Z' });
+    await stores.tokens.writeActive({
+      tokenId: 'tok-09',
+      generation: 2,
+      rotatedAt: '2026-09-14T20:00:00.000Z',
+    });
 
     fake.push(reached());
     await settle();
@@ -211,7 +215,11 @@ describe('Issue #914 オーナー提案(2): resets時刻の突き合わせによ
       cooldownSource: 'quota_reset',
     };
     await stores.tokens.replace([active]);
-    await stores.tokens.writeActive({ tokenId: 'tok-09', generation: 1, rotatedAt: '2026-09-14T20:00:00.000Z' });
+    await stores.tokens.writeActive({
+      tokenId: 'tok-09',
+      generation: 1,
+      rotatedAt: '2026-09-14T20:00:00.000Z',
+    });
 
     fake.push(reached());
     await settle();
@@ -246,7 +254,11 @@ describe('Issue #914 オーナー提案(2): resets時刻の突き合わせによ
     };
     const active: AgentToken = { id: 'tok-09', label: 'alteroid09', order: 1 };
     await stores.tokens.replace([dropped, active]);
-    await stores.tokens.writeActive({ tokenId: 'tok-09', generation: 2, rotatedAt: '2026-09-14T20:00:00.000Z' });
+    await stores.tokens.writeActive({
+      tokenId: 'tok-09',
+      generation: 2,
+      rotatedAt: '2026-09-14T20:00:00.000Z',
+    });
 
     fake.push(reached());
     await settle();

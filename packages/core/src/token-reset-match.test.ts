@@ -40,13 +40,19 @@ describe('Issue #914 提案(2): 429文言のresets時刻とプールのcooldownU
   it('⭐ 降りた鍵のcooldownUntilと一致したら「世代ずれ」(stale)と名指しする', () => {
     const dropped = tokenOf({ id: 'tok-08', cooldownUntil: TARGET, cooldownSource: 'quota_reset' });
     const active = tokenOf({ id: 'tok-09' }); // 現役は新品。cooldownUntil を持たない。
-    const result = matchNoticeResetAgainstPool(NOTICE_TEXT, 'tok-09', [dropped, active], { at: AT });
+    const result = matchNoticeResetAgainstPool(NOTICE_TEXT, 'tok-09', [dropped, active], {
+      at: AT,
+    });
     expect(result).toBe('stale');
   });
 
   it('⚠️ 陰性対照: 現役のcooldownUntilと一致したら「待てば戻る」(active)——世代ずれではない', () => {
     const active = tokenOf({ id: 'tok-09', cooldownUntil: TARGET, cooldownSource: 'quota_reset' });
-    const other = tokenOf({ id: 'tok-08', cooldownUntil: TARGET + 60_000 * 999, cooldownSource: 'quota_reset' });
+    const other = tokenOf({
+      id: 'tok-08',
+      cooldownUntil: TARGET + 60_000 * 999,
+      cooldownSource: 'quota_reset',
+    });
     const result = matchNoticeResetAgainstPool(NOTICE_TEXT, 'tok-09', [other, active], { at: AT });
     expect(result).toBe('active');
   });
@@ -58,7 +64,9 @@ describe('Issue #914 提案(2): 429文言のresets時刻とプールのcooldownU
       cooldownSource: 'quota_reset',
     });
     const active = tokenOf({ id: 'tok-09' });
-    const result = matchNoticeResetAgainstPool(NOTICE_TEXT, 'tok-09', [dropped, active], { at: AT });
+    const result = matchNoticeResetAgainstPool(NOTICE_TEXT, 'tok-09', [dropped, active], {
+      at: AT,
+    });
     expect(result).toBeUndefined();
   });
 
@@ -77,14 +85,18 @@ describe('Issue #914 提案(2): 429文言のresets時刻とプールのcooldownU
   it('⚠️ 推測（notice_text）由来のcooldownUntilは、数値が一致していても比べない', () => {
     const dropped = tokenOf({ id: 'tok-08', cooldownUntil: TARGET, cooldownSource: 'notice_text' });
     const active = tokenOf({ id: 'tok-09' });
-    const result = matchNoticeResetAgainstPool(NOTICE_TEXT, 'tok-09', [dropped, active], { at: AT });
+    const result = matchNoticeResetAgainstPool(NOTICE_TEXT, 'tok-09', [dropped, active], {
+      at: AT,
+    });
     expect(result).toBeUndefined();
   });
 
   it('⚠️ 推測（default）由来のcooldownUntilは、数値が一致していても比べない', () => {
     const active = tokenOf({ id: 'tok-09', cooldownUntil: TARGET, cooldownSource: 'default' });
     const dropped = tokenOf({ id: 'tok-08' });
-    const result = matchNoticeResetAgainstPool(NOTICE_TEXT, 'tok-09', [dropped, active], { at: AT });
+    const result = matchNoticeResetAgainstPool(NOTICE_TEXT, 'tok-09', [dropped, active], {
+      at: AT,
+    });
     expect(result).toBeUndefined();
   });
 
@@ -102,16 +114,28 @@ describe('Issue #914 提案(2): 429文言のresets時刻とプールのcooldownU
   });
 
   it('分未満のずれは丸めて同一視する（文言は分までしか無いため）', () => {
-    const dropped = tokenOf({ id: 'tok-08', cooldownUntil: TARGET + 42_137, cooldownSource: 'quota_reset' });
+    const dropped = tokenOf({
+      id: 'tok-08',
+      cooldownUntil: TARGET + 42_137,
+      cooldownSource: 'quota_reset',
+    });
     const active = tokenOf({ id: 'tok-09' });
-    const result = matchNoticeResetAgainstPool(NOTICE_TEXT, 'tok-09', [dropped, active], { at: AT });
+    const result = matchNoticeResetAgainstPool(NOTICE_TEXT, 'tok-09', [dropped, active], {
+      at: AT,
+    });
     expect(result).toBe('stale');
   });
 
   it('分を跨ぐずれは一致とみなさない（丸めの幅を超えて拡張していないことの確認）', () => {
-    const dropped = tokenOf({ id: 'tok-08', cooldownUntil: TARGET + 60_000, cooldownSource: 'quota_reset' });
+    const dropped = tokenOf({
+      id: 'tok-08',
+      cooldownUntil: TARGET + 60_000,
+      cooldownSource: 'quota_reset',
+    });
     const active = tokenOf({ id: 'tok-09' });
-    const result = matchNoticeResetAgainstPool(NOTICE_TEXT, 'tok-09', [dropped, active], { at: AT });
+    const result = matchNoticeResetAgainstPool(NOTICE_TEXT, 'tok-09', [dropped, active], {
+      at: AT,
+    });
     expect(result).toBeUndefined();
   });
 
@@ -120,6 +144,11 @@ describe('Issue #914 提案(2): 429文言のresets時刻とプールのcooldownU
     // `'default' | 'notice_text'` を手で持っている（実行時の判定に具体の文字列が
     // 要るため）。値が増えたらこの歯が赤くなり、`hasAuthoritativeCooldown` を
     // 見直す契機になる。
-    expect(cooldownSourceSchema.options).toEqual(['quota_reset', 'overage_reset', 'notice_text', 'default']);
+    expect(cooldownSourceSchema.options).toEqual([
+      'quota_reset',
+      'overage_reset',
+      'notice_text',
+      'default',
+    ]);
   });
 });
