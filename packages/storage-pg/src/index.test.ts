@@ -3564,6 +3564,90 @@ describe('PgSessionRegistry', () => {
     await stores.sessions.setCloneSessionId(null);
     expect(await stores.sessions.getProjectKey()).toBe('-workspace');
   });
+
+  /**
+   * issue #1147: fs 側だけでなく pg 側にも「無い」と「読めなかった」の区別を
+   * 入れた。**行が無い（陰性対照）**と**行は在るが読めない**を対で測る——
+   * 跡が常に出る実装でも緑になる歯にしないため（`journal.list()` の同種の
+   * テストと同じ組み立て。`db.execute` で `daemon_state` へ直接、API を
+   * 経由しない壊れた行を差し込む）。
+   */
+  describe('読み出し不能の跡（#1147）', () => {
+    it('行が無いときは跡を残さず null を返す（getTranscriptGrave、陰性対照）', async () => {
+      let value: unknown = 'sentinel';
+      const lines = await captureStderr(async () => {
+        value = await stores.sessions.getTranscriptGrave();
+      });
+      expect(value).toBeNull();
+      expect(lines).toHaveLength(0);
+    });
+
+    it('千切れた JSON の行を読んだときは跡を残して null を返す（getTranscriptGrave）', async () => {
+      await db.execute(
+        sql`insert into daemon_state (key, value) values ('clone_transcript_grave', '{"archiveId":"arc-1')`,
+      );
+
+      let value: unknown = 'sentinel';
+      const lines = await captureStderr(async () => {
+        value = await stores.sessions.getTranscriptGrave();
+      });
+      expect(value).toBeNull();
+      const joined = lines.join('');
+      expect(joined).toContain('生ログの墓標');
+      expect(joined).toContain('読み出せませんでした');
+    });
+
+    it('JSON としては読めるがスキーマに合わない行も、跡を残して null を返す（getTranscriptGrave）', async () => {
+      // archiveId が無い——`typeof archiveId === 'string'` に合わない。
+      await db.execute(
+        sql`insert into daemon_state (key, value) values ('clone_transcript_grave', '{}')`,
+      );
+
+      let value: unknown = 'sentinel';
+      const lines = await captureStderr(async () => {
+        value = await stores.sessions.getTranscriptGrave();
+      });
+      expect(value).toBeNull();
+      expect(lines.join('')).toContain('生ログの墓標');
+    });
+
+    it('行が無いときは跡を残さず null を返す（getLostSessionGrave、陰性対照）', async () => {
+      let value: unknown = 'sentinel';
+      const lines = await captureStderr(async () => {
+        value = await stores.sessions.getLostSessionGrave();
+      });
+      expect(value).toBeNull();
+      expect(lines).toHaveLength(0);
+    });
+
+    it('千切れた JSON の行を読んだときは跡を残して null を返す（getLostSessionGrave）', async () => {
+      await db.execute(
+        sql`insert into daemon_state (key, value) values ('clone_lost_session', '{"projectKey":"proj-1","sessionId":"sess-1')`,
+      );
+
+      let value: unknown = 'sentinel';
+      const lines = await captureStderr(async () => {
+        value = await stores.sessions.getLostSessionGrave();
+      });
+      expect(value).toBeNull();
+      const joined = lines.join('');
+      expect(joined).toContain('再開素材を捨てた回の墓標');
+      expect(joined).toContain('読み出せませんでした');
+    });
+
+    it('本文（値そのもの）は跡に乗らない', async () => {
+      const secret = 'ghp_000000000000000000000000000000000000';
+      await db.execute(
+        sql`insert into daemon_state (key, value)
+            values ('clone_transcript_grave', ${`{"archiveId":"${secret}`})`,
+      );
+
+      const lines = await captureStderr(async () => {
+        await stores.sessions.getTranscriptGrave();
+      });
+      expect(lines.join('')).not.toContain(secret);
+    });
+  });
 });
 
 describe('PgSessionStore（SDK のセッション永続化）', () => {
