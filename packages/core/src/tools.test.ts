@@ -6442,6 +6442,81 @@ describe('クローンの道具', () => {
     expect(reply).not.toContain(STALE_TOKEN_RECOVERY_CAVEAT);
   });
 
+  /**
+   * **表示側（クローンが実際に読む行）を測る**（Issue #914 オーナー提案(2)）。
+   *
+   * 判定そのもの（`matchNoticeResetAgainstPool`）と結線（`ManagerSummary.resetTimeSkewMatch`）
+   * には歯が在ったが、**その結果を `manager_list` の本文にするところは1本も測られて
+   * いなかった** —— `describeResetTimeSkew` を丸ごと `return null` へ変える変異を当てても
+   * `tools.test.ts` の 690 件が全部緑のまま通った（2026-09-17 の実測）。⟹ ここで塞ぐ。
+   */
+  it('manager_list は resets 時刻が降りた鍵と一致したら世代ずれの疑いを出す（#914 提案(2)）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    // **提案1（世代番号の直接比較）は測れていない**状態を作る——この行が独立に
+    // 効くのはまさにその場面である（プール未配線／未観測／再起動をまたいだ引き取り）。
+    target.resetTimeSkewMatch = 'stale';
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('認証トークンの世代ずれの疑い');
+    expect(reply).toContain('現役ではない鍵の冷却期限と一致した');
+  });
+
+  it('manager_list は resets 時刻が現役自身と一致したら「待てば戻る」と言う（⚠ を立てない）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.resetTimeSkewMatch = 'active';
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('世代ずれではなく、待てば戻る');
+    // **⚠ ではない。** 対処（起こし直し）を勧める行が立ってはいけない。
+    expect(reply).not.toContain('認証トークンの世代ずれの疑い');
+  });
+
+  /**
+   * **陰性対照1: 提案1 が既に同じ結論を名乗っているときは、二重に鳴らさない。**
+   * 読み手が同じ結論を2回読む形を作らない（`describeResetTimeSkew` の doc）。
+   */
+  it('manager_list は提案1が既に食い違いを名乗っていれば resets の行を出さない（#914 提案(2) の陰性対照）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.tokenGeneration = 3;
+    target.activeTokenGeneration = 5;
+    target.resetTimeSkewMatch = 'stale';
+
+    const reply = await h.call('manager_list', {});
+
+    // 提案1 の行は出る。
+    expect(reply).toContain('⚠ 認証トークンの世代が食い違っている');
+    // 提案(2) の行は出ない（同じ結論を2回言わない）。
+    expect(reply).not.toContain('認証トークンの世代ずれの疑い');
+  });
+
+  /**
+   * **陰性対照2: 材料が無ければ1文字も足さない。** `resetTimeSkewMatch` が
+   * `undefined` なのは「判定できなかった」であって「健全」ではないので、
+   * 何も言わないのが正しい——予算に張り付く一覧へノイズを足さない側の歯でもある。
+   */
+  it('manager_list は resetTimeSkewMatch が無ければ何も足さない（#914 提案(2) の陰性対照）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).not.toContain('認証トークンの世代ずれの疑い');
+    expect(reply).not.toContain('世代ずれではなく、待てば戻る');
+  });
+
   it('manager_list は失敗の⚠行に回復の見込み（action）を添える（#393）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
