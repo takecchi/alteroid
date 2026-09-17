@@ -70,6 +70,78 @@ function requireNoMarker(scenarioName) {
   }
 }
 
+// ── 判定シナリオ（5・8）が共有する使い捨てフィクスチャ（#1166） ────────
+//
+// `judgement-id-integrity` の M6 と `judgement-forbidden-word-boundary` は、
+// どちらも実ソース（apps/cli/src/conversations.ts の「会話はまだありません。」
+// + conversations.test.ts の同名テスト）へ依存していた。文言が変われば
+// また腐る —— `weak-tooth` が #1096 で2度踏んだのと同じ入口である。
+// #1119 の型（変異が探す文言を、フィクスチャ本体の組み立てにも同じ定数
+// として使う）をここへ当てる。⟹ 「spec が探す文言」と「対象の中身」が
+// 同じ1つの定数から出るので、片方だけがずれることが構造的に起こらない。
+//
+// `weak-tooth` と条件が違う点: このフィクスチャは dist 境界を跨がない
+// （両シナリオとも `target: null`）ので、`delivery`（`target: '@alteroid/core'`）
+// が抱える懸念（フィクスチャ化で dist 到達の検査そのものが消えるかもしれない）
+// はここには当たらない。
+const JUDGEMENT_FIXTURE_ANCHOR = 'このリストは空です。';
+const JUDGEMENT_FIXTURE_MODULE_REL = 'apps/cli/src/mutation-selftest-judgement-render.ts';
+const JUDGEMENT_FIXTURE_TEST_REL = 'apps/cli/src/mutation-selftest-judgement-render.test.ts';
+const JUDGEMENT_FIXTURE_TEMP_FILES = [JUDGEMENT_FIXTURE_MODULE_REL, JUDGEMENT_FIXTURE_TEST_REL];
+const JUDGEMENT_FIXTURE_TEST_FULL_NAME =
+  'apps/cli/src/mutation-selftest-judgement-render.test.ts > selftest judgement fixture > ' +
+  '空でも、そう言う（黙って何も出さない形にしない）';
+
+const JUDGEMENT_FIXTURE_MODULE_BODY = [
+  '// selftest 用の使い捨てフィクスチャ（mutation-testing ハーネスの自己検証）。',
+  '// 実行後に削除する。リポジトリの実ソースを1バイトも指していない（#1166）。',
+  '',
+  'export function renderSelftestJudgementList(items: string[]): string {',
+  '  if (items.length === 0) {',
+  `    return '${JUDGEMENT_FIXTURE_ANCHOR}';`,
+  '  }',
+  "  return items.join(', ');",
+  '}',
+  '',
+].join('\n');
+
+const JUDGEMENT_FIXTURE_TEST_BODY = [
+  "import { describe, expect, it } from 'vitest';",
+  "import { renderSelftestJudgementList } from './mutation-selftest-judgement-render.js';",
+  '',
+  '// selftest 用の一時テスト（mutation-testing ハーネスの自己検証）。実行後に削除する。',
+  "describe('selftest judgement fixture', () => {",
+  "  it('空でも、そう言う（黙って何も出さない形にしない）', () => {",
+  `    expect(renderSelftestJudgementList([])).toContain('${JUDGEMENT_FIXTURE_ANCHOR}');`,
+  '  });',
+  '});',
+  '',
+].join('\n');
+
+/**
+ * 前回の走行が途中で死んで置き去りにしたフィクスチャが在ったら、上書きせずに拒む
+ * （`requireNoLeftoverWeakToothFiles` と同じ考え方）。
+ */
+function requireNoLeftoverJudgementFixtureFiles(scenarioName) {
+  const leftovers = JUDGEMENT_FIXTURE_TEMP_FILES.filter((rel) => fs.existsSync(absPath(rel)));
+  if (leftovers.length > 0) {
+    throw new HarnessError(
+      `${scenarioName}: 前回の selftest が置き去りにした使い捨てファイルが在る。上書きしない。\n` +
+        `${leftovers.map((rel) => `  - ${rel}`).join('\n')}\n` +
+        '中身を確認してから消して、再実行すること。',
+    );
+  }
+}
+
+function writeJudgementFixtureFiles() {
+  writeRepoFile(JUDGEMENT_FIXTURE_MODULE_REL, JUDGEMENT_FIXTURE_MODULE_BODY);
+  writeRepoFile(JUDGEMENT_FIXTURE_TEST_REL, JUDGEMENT_FIXTURE_TEST_BODY);
+}
+
+function removeJudgementFixtureFiles() {
+  for (const rel of JUDGEMENT_FIXTURE_TEMP_FILES) fs.rmSync(absPath(rel), { force: true });
+}
+
 // ── 1. 控えの汚染 ───────────────────────────────────────────────────
 //
 // 受け入れ条件: 照合2が復元を止めること。止めたあと印が残っていること、
@@ -762,6 +834,7 @@ function scenarioJudgementIdIntegrity() {
   section('selftest: 5. 判定行の id 取り違えを検出する確認（マネージャーの実測の回帰確認）');
   requireNoMarker('judgement-id-integrity');
   ensureFixtureClean();
+  requireNoLeftoverJudgementFixtureFiles('judgement-id-integrity');
 
   // M4: どこからも参照されない固定ファイルを変異させる → 生存想定。
   const survivingSpec = {
@@ -778,87 +851,93 @@ function scenarioJudgementIdIntegrity() {
       'apps/cli/src/conversations.test.ts > alteroid conversations list > 空でも、そう言う（黙って何も出さない形にしない）',
     ],
   };
-  // M6: 既存の実テスト（conversations.test.ts の
-  // `expect(read()).toContain('会話はまだありません')`）が捕まえる実在の文言を
-  // 変異させる → 検出想定。
+  // M6: 検出想定。**#1166 より前は実テスト（conversations.test.ts の
+  // `expect(read()).toContain('会話はまだありません')`）が捕まえる実ソースの
+  // 文言を直接変異させていた。** ここでは使い捨てフィクスチャ
+  // （`JUDGEMENT_FIXTURE_MODULE_REL` + `JUDGEMENT_FIXTURE_TEST_REL`）へ差し替え、
+  // 「検出想定」という主張そのものは変えていない——実演する対比（M4=生存 /
+  // M6=検出）は同じまま、依存先だけを実ソースから使い捨てフィクスチャへ移した。
   const detectedSpec = {
     id: 'M6',
-    file: 'apps/cli/src/conversations.ts',
-    from: '会話はまだありません。',
-    to: 'M6_MUTATED。',
+    file: JUDGEMENT_FIXTURE_MODULE_REL,
+    from: JUDGEMENT_FIXTURE_ANCHOR,
+    to: 'M6_MUTATED',
     expect: 1,
     target: null,
-    testFilter: 'apps/cli/src/conversations',
+    testFilter: JUDGEMENT_FIXTURE_TEST_REL.replace(/\.ts$/, ''),
     // #993: 実際に落ちる歯そのものを狙いとして宣言する。
-    mustFail: [
-      'apps/cli/src/conversations.test.ts > alteroid conversations list > 空でも、そう言う（黙って何も出さない形にしない）',
-    ],
+    mustFail: [JUDGEMENT_FIXTURE_TEST_FULL_NAME],
   };
 
   const results = {};
-  for (const spec of [survivingSpec, detectedSpec]) {
-    log('');
-    log(`== spec.id=${spec.id} を通す（testFilter=${spec.testFilter}） ==`);
-    // 足場対照を先に取る（`decideJudgementCategory` の門4。走行範囲を揃える）。
-    const scaffoldControl = measureScaffoldControl({ extraArgs: [spec.testFilter] });
-    log(`足場対照: ${scaffoldControl.reason}`);
-    applyMutation(spec);
-    // **投げる箇所が複数ある（判定失敗／spec.id の型検査／id 取り違え）。**
-    // 復元せずに投げると、ソースが変異したまま・印も残ったまま次の spec・
-    // 次の scenario へ進み、本当の原因（ここでの assertion）が後続の
-    // `requireNoMarker(...)`（「印が既にある」）の失敗に化ける——これは
-    // 依頼者から「setup の失敗に本題が隠れる形に自分で入るな」と渡された
-    // ものと同じ形である（マネージャーの指摘、2026-08-23。以前はここだけ
-    // `restoreMutation()` を通さず投げていた）。`applyMutation` の後を
-    // まるごと try/finally で包み、`restoreMutation()` を finally で1回だけ
-    // 呼ぶ形に統一する——投げても投げなくても、次のイテレーション・次の
-    // scenario へ変異したツリーを持ち越さない。
-    try {
-      const artifactResult = buildAndCheckArtifact(spec);
-      const testResult = runTests([spec.testFilter]);
-      log('--- test 生ログ ここから ---');
-      log(testResult.raw);
-      log('--- test 生ログ ここまで ---');
-      let judgement;
+  writeJudgementFixtureFiles();
+  try {
+    for (const spec of [survivingSpec, detectedSpec]) {
+      log('');
+      log(`== spec.id=${spec.id} を通す（testFilter=${spec.testFilter}） ==`);
+      // 足場対照を先に取る（`decideJudgementCategory` の門4。走行範囲を揃える）。
+      const scaffoldControl = measureScaffoldControl({ extraArgs: [spec.testFilter] });
+      log(`足場対照: ${scaffoldControl.reason}`);
+      applyMutation(spec);
+      // **投げる箇所が複数ある（判定失敗／spec.id の型検査／id 取り違え）。**
+      // 復元せずに投げると、ソースが変異したまま・印も残ったまま次の spec・
+      // 次の scenario へ進み、本当の原因（ここでの assertion）が後続の
+      // `requireNoMarker(...)`（「印が既にある」）の失敗に化ける——これは
+      // 依頼者から「setup の失敗に本題が隠れる形に自分で入るな」と渡された
+      // ものと同じ形である（マネージャーの指摘、2026-08-23。以前はここだけ
+      // `restoreMutation()` を通さず投げていた）。`applyMutation` の後を
+      // まるごと try/finally で包み、`restoreMutation()` を finally で1回だけ
+      // 呼ぶ形に統一する——投げても投げなくても、次のイテレーション・次の
+      // scenario へ変異したツリーを持ち越さない。
       try {
-        judgement = judge(spec, artifactResult, testResult, scaffoldControl);
-      } catch (err) {
-        throw new HarnessError(`spec.id=${spec.id} の判定に失敗した: ${err.message}`);
+        const artifactResult = buildAndCheckArtifact(spec);
+        const testResult = runTests([spec.testFilter]);
+        log('--- test 生ログ ここから ---');
+        log(testResult.raw);
+        log('--- test 生ログ ここまで ---');
+        let judgement;
+        try {
+          judgement = judge(spec, artifactResult, testResult, scaffoldControl);
+        } catch (err) {
+          throw new HarnessError(`spec.id=${spec.id} の判定に失敗した: ${err.message}`);
+        }
+        log(`判定行: ${judgement.text}`);
+        // **この比較を書くときの一般形の注意（#301 で見つかった）**: 両側が同じ
+        // 経路で同じ文字列へ強制されると、比較そのものが恒真になる。
+        // `judgement.text` 側は `formatJudgement` が `spec.id` をテンプレート
+        // リテラルへ差し込む（`${mutationId}` → 非文字列も `String()` で強制）。
+        // もし `spec.id` の型を確かめずに `.includes(spec.id)` を呼べば、`.includes`
+        // に渡す引数も同じ強制を受ける。`spec.id` が `undefined` のとき、差し込む
+        // 側は文字列 `"undefined"` になり、比べる側の引数も `"undefined"` へ
+        // 強制されるので、**両側が一致してしまう**。この歯は「id 取り違えの回帰」
+        // を捕まえるために在るのに、**いちばん名前が壊れている場合（id が無い）に
+        // だけ鳴らない**という形になる——見た目は歯があるのに、最悪のケースで
+        // だけ穴が開く。#301 の後は `applyMutation` の入り口（`validateSpec`）が
+        // 非文字列・空文字の `id` を弾くので `judgement.text` 側にはもう
+        // `undefined` は来ないはずだが、この歯自身も強制に頼らない形にしておく
+        // ——次にここを触る人が、確認済みのはずの前提を静かに壊さないように。
+        if (typeof spec.id !== 'string' || spec.id.length === 0) {
+          throw new HarnessError(
+            `spec.id が非空文字列でない（実際: ${JSON.stringify(spec.id)}）。この歯は文字列比較を` +
+              '前提にしており、型を確かめずに includes へ渡すと強制に頼った恒真比較になる。',
+          );
+        }
+        const mentionsOwnId = judgement.text.includes(spec.id);
+        log(`判定行が spec.id (${spec.id}) を正しく名乗っているか: ${mentionsOwnId}`);
+        if (!mentionsOwnId) {
+          // この確認自体が回帰を検出する口である。ここで投げれば selftest 全体が
+          // 非0で終わり、取り違えが起きていることが exit code からも分かる。
+          throw new HarnessError(
+            `判定行が spec.id を名乗っていない（id 取り違えの回帰）: ${judgement.text}`,
+          );
+        }
+        results[spec.id] = { category: judgement.category, text: judgement.text, mentionsOwnId };
+      } finally {
+        restoreMutation();
       }
-      log(`判定行: ${judgement.text}`);
-      // **この比較を書くときの一般形の注意（#301 で見つかった）**: 両側が同じ
-      // 経路で同じ文字列へ強制されると、比較そのものが恒真になる。
-      // `judgement.text` 側は `formatJudgement` が `spec.id` をテンプレート
-      // リテラルへ差し込む（`${mutationId}` → 非文字列も `String()` で強制）。
-      // もし `spec.id` の型を確かめずに `.includes(spec.id)` を呼べば、`.includes`
-      // に渡す引数も同じ強制を受ける。`spec.id` が `undefined` のとき、差し込む
-      // 側は文字列 `"undefined"` になり、比べる側の引数も `"undefined"` へ
-      // 強制されるので、**両側が一致してしまう**。この歯は「id 取り違えの回帰」
-      // を捕まえるために在るのに、**いちばん名前が壊れている場合（id が無い）に
-      // だけ鳴らない**という形になる——見た目は歯があるのに、最悪のケースで
-      // だけ穴が開く。#301 の後は `applyMutation` の入り口（`validateSpec`）が
-      // 非文字列・空文字の `id` を弾くので `judgement.text` 側にはもう
-      // `undefined` は来ないはずだが、この歯自身も強制に頼らない形にしておく
-      // ——次にここを触る人が、確認済みのはずの前提を静かに壊さないように。
-      if (typeof spec.id !== 'string' || spec.id.length === 0) {
-        throw new HarnessError(
-          `spec.id が非空文字列でない（実際: ${JSON.stringify(spec.id)}）。この歯は文字列比較を` +
-            '前提にしており、型を確かめずに includes へ渡すと強制に頼った恒真比較になる。',
-        );
-      }
-      const mentionsOwnId = judgement.text.includes(spec.id);
-      log(`判定行が spec.id (${spec.id}) を正しく名乗っているか: ${mentionsOwnId}`);
-      if (!mentionsOwnId) {
-        // この確認自体が回帰を検出する口である。ここで投げれば selftest 全体が
-        // 非0で終わり、取り違えが起きていることが exit code からも分かる。
-        throw new HarnessError(
-          `判定行が spec.id を名乗っていない（id 取り違えの回帰）: ${judgement.text}`,
-        );
-      }
-      results[spec.id] = { category: judgement.category, text: judgement.text, mentionsOwnId };
-    } finally {
-      restoreMutation();
     }
+  } finally {
+    removeJudgementFixtureFiles();
   }
 
   log('');
@@ -1186,23 +1265,27 @@ function scenarioJudgementForbiddenWordBoundary() {
   section('selftest: 8. 判定の禁止語検査が id の部分文字列に当たらないこと（#348）');
   requireNoMarker('judgement-forbidden-word-boundary');
   ensureFixtureClean();
+  requireNoLeftoverJudgementFixtureFiles('judgement-forbidden-word-boundary');
 
+  // #1166: 以前は `judgement-id-integrity` の M6 と同じ実ソース（conversations.ts
+  // の「会話はまだありません。」+ conversations.test.ts）を直接変異させていた。
+  // ここでも同じ使い捨てフィクスチャへ差し替える——どの id でも「実際に落ちる
+  // 歯」が要る（禁止語検査まで到達するには、まず判定そのものが「検出」の手前
+  // まで進む必要がある）という条件は変えていない。
   function runJudgementFor(id) {
     const spec = {
       id,
-      file: 'apps/cli/src/conversations.ts',
-      from: '会話はまだありません。',
-      to: `SELFTEST_348_${id.replace(/[^A-Za-z0-9]/g, '_')}_MUTATED。`,
+      file: JUDGEMENT_FIXTURE_MODULE_REL,
+      from: JUDGEMENT_FIXTURE_ANCHOR,
+      to: `SELFTEST_348_${id.replace(/[^A-Za-z0-9]/g, '_')}_MUTATED`,
       expect: 1,
       target: null,
-      testFilter: 'apps/cli/src/conversations',
-      // #993: この変異は M6 と同じ文言を狙うので、実際に落ちる歯も同じ
-      // ——それを宣言する。これが無いと decideJudgementCategory が門5より
-      // 前（宣言が無い）で拒み、この歯が測りたい禁止語検査（id の部分文字列）
-      // まで到達できない。
-      mustFail: [
-        'apps/cli/src/conversations.test.ts > alteroid conversations list > 空でも、そう言う（黙って何も出さない形にしない）',
-      ],
+      testFilter: JUDGEMENT_FIXTURE_TEST_REL.replace(/\.ts$/, ''),
+      // #993: この変異は judgement-id-integrity の M6 と同じフィクスチャを
+      // 狙うので、実際に落ちる歯も同じ——それを宣言する。これが無いと
+      // decideJudgementCategory が門5より前（宣言が無い）で拒み、この歯が
+      // 測りたい禁止語検査（id の部分文字列）まで到達できない。
+      mustFail: [JUDGEMENT_FIXTURE_TEST_FULL_NAME],
     };
     log('');
     log(`== id="${id}" を通す ==`);
@@ -1233,16 +1316,20 @@ function scenarioJudgementForbiddenWordBoundary() {
   //     禁止語（ok / pass）は英数字に挟まれている。通るはず。
   const naturalIds = ['m318a-01-guard-bypass', 'm-broken-guard', 'lookup-drop'];
   const naturalResults = {};
-  for (const id of naturalIds) {
-    naturalResults[id] = runJudgementFor(id);
-  }
-
   // (b) 単独の語として ok / pass が現れる id — `-` や文字列の端で区切られて
   //     いる。禁止語検査が生きているなら拒否されるはず。
   const boundaryIds = ['token-ok', 'm1-ok'];
   const boundaryResults = {};
-  for (const id of boundaryIds) {
-    boundaryResults[id] = runJudgementFor(id);
+  writeJudgementFixtureFiles();
+  try {
+    for (const id of naturalIds) {
+      naturalResults[id] = runJudgementFor(id);
+    }
+    for (const id of boundaryIds) {
+      boundaryResults[id] = runJudgementFor(id);
+    }
+  } finally {
+    removeJudgementFixtureFiles();
   }
 
   for (const id of naturalIds) {

@@ -383,9 +383,17 @@ repo の `test` スクリプトが `vitest run && pnpm -r --if-present run test 
 
 ### ⚠️ 残っていること
 
-- **残る3本（`delivery` / `judgement-id-integrity` / `judgement-forbidden-word-boundary`）は、まだ実ソースの文言に依存する**（`packages/core/src/excerpt.ts` と `apps/cli/src/conversations.ts`）。`weak-tooth` と同じ形で腐りうる —— ただし**今度は CI が赤くする**ので、静かには腐らない
+- **残る3本（`delivery` / `judgement-id-integrity` / `judgement-forbidden-word-boundary`）は、まだ実ソースの文言に依存する**（`packages/core/src/excerpt.ts` と `apps/cli/src/conversations.ts`）。`weak-tooth` と同じ形で腐りうる —— ただし**今度は CI が赤くする**ので、静かには腐らない。**⚠️ 訂正（#1166）: このうち `judgement-id-integrity` と `judgement-forbidden-word-boundary` の2本は下の節でフィクスチャ化した。残るのは `delivery` だけである（詳細は下）**
 - **`weak-tooth` 以外のシナリオの主張は、まだ機械で突き合わせていない。** 落ちるのは例外を投げたときだけである
 - **`pnpm verify` の STEPS には足していない**（理由は `ci.yml` の当該ステップのコメント）
+
+### #1166 —— judgement 系2本をフィクスチャ化した。`delivery`（と `rebuild-failure`）は測った上で残した
+
+**#1119 の型（`weak-tooth`）を残り3本へ当てられるかを、1本ずつ測って1本ずつ決めた。3本まとめて同じ結論にはならなかった。**
+
+- **`judgement-id-integrity`（M6）と `judgement-forbidden-word-boundary` はフィクスチャ化した。** どちらも `target: null`（dist 境界を跨がない）で、`weak-tooth` と同じ「新規ファイルを書いて読んで消すだけ」の孤立した足場が成り立つ——共有の実ファイルを一時的に書き換える必要が無い。2本が共有する使い捨てフィクスチャ（`JUDGEMENT_FIXTURE_MODULE_REL` = `apps/cli/src/mutation-selftest-judgement-render.ts` + 同名の `.test.ts`）を `mutate-selftest.mjs` に足し、変異が探す文言（`JUDGEMENT_FIXTURE_ANCHOR`）をフィクスチャ本体の組み立てにも同じ定数として使う——`weak-tooth` の `WEAK_TOOTH_ANCHOR` と同じ形である。**実際に仕込んで確かめた**（2026-09-18）: `apps/cli/src/conversations.ts` の「会話はまだありません。」を「会話はまだ0件です。」へ変え、対応するテストの文言も揃えて更新したうえで、直す前の版の `judgement-id-integrity` を回すと `エラー: [5] 歯3/6 違反: 一致件数が期待と不一致（実際 0 / 期待 1）。書き込みは行わない。` で exit 1 になった（無関係な文言変更が selftest を落とす——ただし**歯3/6 が安全側に止めるので、これは「緑のまま通ってしまう」形ではなく「無関係な理由で赤くなる」形である**。#1096 の `weak-tooth` のときと同じ止まり方）。同じ変更のもとで直した後の版（このフィクスチャ化後）は `judgement-id-integrity` / `judgement-forbidden-word-boundary` とも exit 0 のままだった——結合が実際に切れたことの現物である。
+- **`delivery` はフィクスチャ化を測ったうえで見送った。** 懸念（Issue #1166 が明示していたもの）は「フィクスチャ化すると dist 到達の検査そのものが消えるかもしれない」だったが、**実測ではその懸念は外れた**——`packages/core/src/index.ts` の末尾へ使い捨てのマーカー定数（`export const __SELFTEST_DELIVERY_EXPERIMENT__ = '...'`）を一時的に追記し、`pnpm --filter @alteroid/core build` を回すと `packages/core/dist/index.js` に1件だけ現れ、マーカーの値を変えて再 build すると新しい値だけが現れる（旧い値は0件）ことを確認した（実験後は `index.ts` を元へ戻し、再 build して dist からマーカーが消えたことも確認済み）。**⟹ dist 到達の検査は、フィクスチャでも技術的には保存できる。** それでも見送ったのは別の理由——`weak-tooth` / 判定系2本は「新規ファイルを書いて消すだけ」で足場が完結するのに対し、`delivery` で dist 境界を跨ぐには**共有の実ファイル**（`index.ts` の barrel か `tsup.config.ts` の entry 一覧）を一時的に書き換える足場がどうしても要る——リスク・実装量とも上の2本より一段重い。**現状のこの結合は #1096 のときと同じく安全側（CI が赤くする。静かに緑のまま通らない）ので**、この足場を今回のこの PR で作る優先度は無いと判断した。**この判断は「フィクスチャ化できない」ではなく「フィクスチャ化はできるが、いまはコストに見合わないと判断した」である**——次にここへ来る人は #1166 のこの節と PR 本文の実測を読んで、同じ結論をなぞらず自分で判断し直すこと。
+- **Issue が名指ししていなかった `rebuild-failure` にも同じ結合がある。** `packages/core/src/excerpt.ts` の同じ文言（`'文字省略。全'`）を使い、`target: '@alteroid/core'` で同じ artifact 検査をしている——`delivery` と全く同じ形の懸念・同じ結論（測れば技術的には切り離せるはずだが、この PR では見送った）が当てはまる。#1166 の「残る3本」の数え上げには入っていなかった（症状は同じでも、Issue の列挙から漏れていた）。
 
 ## 「判定が甘い」の向き —— 甘いのは「検出」側である（#1087）
 

@@ -274,19 +274,29 @@ jobs:
       # （直近の run 10本のうち、ジョブが実際に走った8本）なので、**増分はおよそ
       # 1割**である。⚠️ 実測は手元の器のものなので、runner での秒数は別に測ること。
       #
-      # **最後に置く理由。** シナリオは走行中に実ソース（`packages/core/src/excerpt.ts`
-      # / `apps/cli/src/conversations.ts`）へ変異を当てて戻し、`restore-status-comparison`
-      # は git の index も一時的に動かす。**戻し損ねたときに他の検査を巻き込まない**
-      # 位置はここである（戻せているかはシナリオ自身が 12b/12c/12d で見る）。
+      # **最後に置く理由。** シナリオは走行中に実ソース（`packages/core/src/excerpt.ts`）
+      # へ変異を当てて戻し、`restore-status-comparison` は git の index も一時的に
+      # 動かす。**戻し損ねたときに他の検査を巻き込まない**位置はここである
+      # （戻せているかはシナリオ自身が 12b/12c/12d で見る）。
       #
       # **⚠️ `pnpm verify` の STEPS には足していない。** あちらが回るのは編集中の
-      # ツリーである。この PR で `weak-tooth` は実ソースから切り離したが、
-      # **残る3本（`delivery` / `judgement-id-integrity` /
-      # `judgement-forbidden-word-boundary`）はまだ実ソースの文言に依存する**
-      # （`packages/core/src/excerpt.ts` と `apps/cli/src/conversations.ts`）⟹
-      # その文言を触っている最中の人に無関係な赤が出る。加えて `scripts/verify.mjs` は「走行中にツリーが動いた」
-      # ことを検出して記録を捨てる作りで、このハーネスは**意図的にツリーを動かす**
-      # —— その組み合わせは測っていない。**測らずに足さない**（#1096 の積み残しとして
+      # ツリーである。#1166 で `judgement-id-integrity` / `judgement-forbidden-word-boundary`
+      # は実ソース（`apps/cli/src/conversations.ts`）から使い捨てフィクスチャへ
+      # 切り離した（`weak-tooth` と同じ型 —— #1119）。**`delivery`（と、Issue が
+      # 名指ししていなかったが同じ形の `rebuild-failure`）は、測った結果あえて
+      # 切り離していない** —— `target: '@alteroid/core'` で dist 到達そのものを
+      # 測るシナリオなので、フィクスチャ化には dist を生む実 entry
+      # （`packages/core/src/index.ts` の barrel か `tsup.config.ts` の
+      # entry 一覧）を一時的に書き換える足場が要り、weak-tooth のような
+      # 「新規ファイルの読み書きだけで閉じる」孤立が効かない（#1166 で実測——
+      # 使い捨てマーカーを `index.ts` へ一時的に足せば dist へ届くことは
+      # 確認できたが、共有の barrel を足場にする分だけ weak-tooth より
+      # リスク・複雑さが増える）。**⟹ `packages/core/src/excerpt.ts` への
+      # 実ソース依存は、`delivery` / `rebuild-failure` の2本にまだ残っている**
+      # ので、その文言を触っている最中の人に無関係な赤が出る条件は消えていない。
+      # 加えて `scripts/verify.mjs` は「走行中にツリーが動いた」ことを検出して
+      # 記録を捨てる作りで、このハーネスは**意図的にツリーを動かす**——その組み合わせは
+      # 依然として測っていない。**測らずに足さない**（#1166 の積み残しとして
       # Issue に落とす）。
       - run: node .claude/skills/mutation-testing/mutate.mjs selftest --scenario all
 
