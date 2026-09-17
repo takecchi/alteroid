@@ -34,9 +34,23 @@ const VERB_PATTERN = new RegExp(
 );
 
 const NEGATIONS = ['していない', 'ません', 'なかった', 'いない', '不要', 'せず', 'ない', 'ず', 'ぬ'];
-const NEGATION_PATTERN = new RegExp(
-  NEGATIONS.slice().sort((a, b) => b.length - a.length).map(escapeRegExp).join('|')
-);
+// 2周目(iv-b/iv-c)で足す否定語。1周目で漏れたと報告した「なし」「そのまま」「てある」等。
+// 依頼文の逐語どおり。base と重複する部分（「ない」を含む語）があっても、そのまま両方保持する
+// （足したことで純増する語がどれかは、依頼文の意図どおり on/off の差分で測る）。
+const EXTRA_NEGATIONS = [
+  'なし', '無し', 'そのまま', 'てある', 'ておく', 'ていない', '得ない', 'わけではない', 'ものではない',
+];
+
+function buildNegationPattern(extra) {
+  const words = extra ? NEGATIONS.concat(EXTRA_NEGATIONS) : NEGATIONS;
+  return new RegExp(words.slice().sort((a, b) => b.length - a.length).map(escapeRegExp).join('|'));
+}
+
+// 2周目(iv-c)で1つだけ足す名詞用法の除外。動詞の直後がこの助詞で、かつ動詞が
+// このリストのものだけ、名詞用法（「実装が」「変更は」等）とみなして主張から除く。
+// 依頼文の逐語どおり、狭く切る（本物のずれまで落とさないため）。
+const NOUN_EXCLUDE_VERBS = new Set(['実装', '変更', '更新', '削除', '修正', '追加']);
+const NOUN_FOLLOW_CHARS = new Set(['が', 'は', 'の', 'を', 'も', 'に']);
 
 const SENTENCE_DELIMS = ['。', '\n', '！', '？'];
 
@@ -97,14 +111,18 @@ function findSentenceStart(text, uptoIndex) {
  * @param {object} opts
  * @param {boolean} opts.requireVerb 動詞に縛るか（false なら素朴案 = パス出現だけで主張とみなす）
  * @param {boolean} opts.stripQuotes 行頭 '>' の引用を落とすか
+ * @param {boolean} opts.extraNegations (iv-b/iv-c) 否定語リストを拡充するか。動詞リスト・窓は変えない
+ * @param {boolean} opts.excludeNounForm (iv-c) 動詞直後が助詞で、動詞が名詞化しやすい6語のときだけ除外するか
  * @returns {{path: string, verb: string|null, sentence: string}[]}
  */
 export function extractClaims(body, opts = {}) {
-  const { requireVerb = true, stripQuotes = false } = opts;
+  const { requireVerb = true, stripQuotes = false, extraNegations = false, excludeNounForm = false } = opts;
 
   let text = stripFences(body);
   text = stripHtmlComments(text);
   if (stripQuotes) text = stripBlockquotes(text);
+
+  const negationPattern = buildNegationPattern(extraNegations);
 
   const claims = [];
   const codeSpanRe = /`([^`\n]+)`/g;
@@ -131,12 +149,21 @@ export function extractClaims(body, opts = {}) {
     let vm;
     while ((vm = VERB_PATTERN.exec(window)) !== null) {
       const verbEnd = vm.index + vm[0].length;
+
       const afterWindow = window.slice(verbEnd, verbEnd + 8);
-      if (NEGATION_PATTERN.test(afterWindow)) {
+      if (negationPattern.test(afterWindow)) {
         continue; // 否定が続くので、この動詞は主張にしない
       }
+
+      if (excludeNounForm && NOUN_EXCLUDE_VERBS.has(vm[0])) {
+        const nextChar = window.charAt(verbEnd);
+        if (NOUN_FOLLOW_CHARS.has(nextChar)) {
+          continue; // 名詞用法（「実装が」等）とみなして除外
+        }
+      }
+
       matchedVerb = vm[0];
-      break; // 最初に見つかった非否定の動詞を採る
+      break; // 最初に見つかった非否定・非名詞用法の動詞を採る
     }
 
     if (matchedVerb) {
