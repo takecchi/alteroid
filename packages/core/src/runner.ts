@@ -3467,9 +3467,7 @@ class RunnerSession {
     if (hook.tool_name !== 'Bash') return { continue: true };
 
     const toolInput = hook.tool_input as
-      | { command?: unknown; run_in_background?: unknown }
-      | null
-      | undefined;
+      { command?: unknown; run_in_background?: unknown } | null | undefined;
     const command = toolInput?.command;
     if (typeof command !== 'string') return { continue: true };
 

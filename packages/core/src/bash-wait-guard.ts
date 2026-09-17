@@ -75,11 +75,7 @@
  */
 
 /** 弾いた形の種別。テストと呼び出し側の note 文言がここへ分岐する。 */
-export type WaitGuardForm =
-  | 'until-sleep'
-  | 'while-sleep'
-  | 'tail-f'
-  | 'gh-run-watch-background';
+export type WaitGuardForm = 'until-sleep' | 'while-sleep' | 'tail-f' | 'gh-run-watch-background';
 
 export type WaitGuardVerdict =
   { blocked: false } | { blocked: true; form: WaitGuardForm; reason: string };
