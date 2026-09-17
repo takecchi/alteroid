@@ -165,6 +165,12 @@ interface Harness {
    * 同じ作法）。既定は `undefined`（内部ターン扱い）。
    */
   setConversationId(id: string | undefined): void;
+  /**
+   * `ToolContext.queuedInMemory` が返す値（issue #1133）。既定は `undefined`
+   * （渡さないと決めた——本番の配線は必ず渡すが、他のテストの挙動を変えない
+   * ためにここでは省略が既定）。`manager_list` の受信箱の行がこの値を読む。
+   */
+  setQueuedInMemory(value: number | undefined): void;
   call(name: string, args: Record<string, unknown>): Promise<string>;
 }
 
@@ -207,6 +213,10 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
   // （本番でセッション中に何度も呼ばれる形をそのまま模す——`memoryCause` と
   // 同じ作法）。
   let conversationId: string | undefined;
+  // **`ToolContext.queuedInMemory`（issue #1133）。** 既定は `undefined`
+  // （省略——他のテストの挙動を変えない）。`setQueuedInMemory` で差し替えれば
+  // 次の `call()` から `manager_list` の受信箱の行がその値を読む。
+  let queuedInMemory: number | undefined;
 
   /** `appraise()` に渡された引数（古い順）。道具の歯が数え上げる。 */
   const appraised: {
@@ -406,6 +416,9 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     // `setConversationId` で差し替え可能（`ask_human` / `manager_start` の
     // 両方がこれを読む）。既定は `undefined`（内部ターン扱い）。
     conversationId: () => conversationId,
+    // `setQueuedInMemory` で差し替え可能（issue #1133）。既定は `undefined`
+    // （省略）。
+    queuedInMemory: () => queuedInMemory,
   });
 
   return {
@@ -423,6 +436,9 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     },
     setConversationId(id) {
       conversationId = id;
+    },
+    setQueuedInMemory(value) {
+      queuedInMemory = value;
     },
     setAbortOutcome(outcome, sessionGone) {
       abortOutcome = outcome;
@@ -7253,6 +7269,61 @@ describe('クローンの道具', () => {
     expect(reply).toContain('無い');
     // 滞留0は警告ではない——⚠ は「未処理がある」ときだけの印にする。
     expect(reply).not.toContain('⚠ クローンの受信箱');
+  });
+
+  /**
+   * issue #1133: 器の行は0件でも、メモリの配達待ち行列に残りがあれば
+   * 「クローンの受信箱に未処理の合図は無い。」と**言い切らない**。
+   *
+   * `context.queuedInMemory` を渡さない（省略。上のテストと同じ状態）ときは
+   * 引き続き旧来の文言のままであることも、対の陰性側として確かめる。
+   */
+  it('manager_list は、器の行が0件でもメモリの配達待ち行列に残りがあれば「無い」と言い切らない（issue #1133）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.setQueuedInMemory(3326);
+
+    const reply = await h.call('manager_list', {});
+
+    // ⛔ 「両方空」を騙る旧来の0件文言は出ない。
+    expect(reply).not.toContain('クローンの受信箱に未処理の合図は無い。');
+    expect(reply).toContain('器の行に未処理の合図は無い');
+    expect(reply).toContain('メモリの配達待ち行列 3326 件');
+  });
+
+  it('manager_list は、queuedInMemory を渡さない（省略）呼びでは旧来の0件文言のまま（回帰対策）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    // `setQueuedInMemory` を呼ばない——既定は `undefined`。
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('クローンの受信箱に未処理の合図は無い。');
+    expect(reply).not.toContain('メモリの配達待ち行列');
+  });
+
+  it('manager_list は、器の行が在るときもメモリの配達待ち行列を内訳の後ろに添える（issue #1133）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    await h.stores.inbox.put(
+      {
+        type: 'human_message',
+        id: 'evt-both',
+        at: '2026-08-24T00:00:00.000Z',
+        text: '未処理の発言',
+        conversationId: 'conv-1',
+      },
+      '2026-08-24T00:00:00.000Z',
+    );
+    h.setQueuedInMemory(7);
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('⚠ クローンの受信箱に未処理の合図が 1 件ある');
+    expect(reply).toContain('メモリの配達待ち行列 7 件');
+    // **足しても引いても意味が無い、の断り書きごと出る**
+    // （`describeInboxBacklogQueuedInMemory` の doc）。
+    expect(reply).toContain('足しても引いても意味が無い');
   });
 
   it('manager_list は受信箱に未処理があれば、件数と最も古い時刻を1行で出す', async () => {

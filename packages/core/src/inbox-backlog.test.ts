@@ -7,8 +7,11 @@ import {
 } from './daemon-self-notice.js';
 import {
   INBOX_BACKLOG_LOUD_THRESHOLD,
+  INBOX_BACKLOG_LOUD_TYPE_FOLD_AT,
   describeHumanOriginatedInboxAlert,
   describeInboxBacklogBreakdown,
+  describeInboxBacklogQueuedInMemory,
+  foldInboxBacklogByType,
   inboxBacklogCrossManagerDedupeKey,
   inboxBacklogDedupeKey,
   inboxCollapseKey,
@@ -1278,6 +1281,86 @@ describe('observedAt（#910 追補2 — 齢の基準点）', () => {
     expect(lineStartingWith(describeInboxBacklogBreakdown(b), '齢')).toBe(
       '齢（観測 2026-09-11T12:00:00.000Z 時点。齢は相対値なので、この行を写すときは基準点も一緒に写すこと）: （無し）',
     );
+  });
+});
+
+/**
+ * `describeInboxBacklogQueuedInMemory`（issue #1084 / #1133）。**この関数は
+ * `situation.ts` の `describeSituation` と `tools.ts` の `describeInboxBacklog`
+ * の両方から呼ばれる**——2つの呼び出し口が同じ計算・同じ文言を通ることを
+ * 保証するのがこの1本の関数の存在理由（doc「2つの呼び出し口が、同じ計算・
+ * 同じ文言を通る」）。ここでは字面そのものを固定する。
+ */
+describe('foldInboxBacklogByType（issue #1140）', () => {
+  it('空なら「（無し）」を返す', () => {
+    expect(foldInboxBacklogByType([])).toBe('（無し）');
+  });
+
+  it('foldAt 件以下なら、畳まずに件数の降順で並べる（同数は型名の昇順）', () => {
+    const byType = [
+      { type: 'timer' as const, count: 2 },
+      { type: 'human_message' as const, count: 5 },
+      { type: 'distill' as const, count: 2 },
+    ];
+    expect(foldInboxBacklogByType(byType, 3)).toBe('human_message 5 / distill 2 / timer 2');
+  });
+
+  it('foldAt を超えたら、上位 foldAt 件 + 「他 N 種 M 件」に畳む', () => {
+    const byType = [
+      { type: 'external' as const, count: 40 },
+      { type: 'manager_message' as const, count: 30 },
+      { type: 'timer' as const, count: 20 },
+      { type: 'self_initiative' as const, count: 6 },
+      { type: 'distill' as const, count: 4 },
+    ];
+    const line = foldInboxBacklogByType(byType, 3);
+    expect(line).toBe('external 40 / manager_message 30 / timer 20 / 他 2 種 10 件');
+  });
+
+  it('既定の foldAt は INBOX_BACKLOG_LOUD_TYPE_FOLD_AT（3）である', () => {
+    const byType = [
+      { type: 'external' as const, count: 4 },
+      { type: 'manager_message' as const, count: 3 },
+      { type: 'timer' as const, count: 2 },
+      { type: 'distill' as const, count: 1 },
+    ];
+    expect(foldInboxBacklogByType(byType)).toBe(
+      foldInboxBacklogByType(byType, INBOX_BACKLOG_LOUD_TYPE_FOLD_AT),
+    );
+    expect(foldInboxBacklogByType(byType)).toContain('他 1 種 1 件');
+  });
+
+  it('上位N件 + 畳んだ残りの合計は、渡した byType の合計に一致する（算術）', () => {
+    const b = summarizeInboxBacklog(
+      [
+        row(SAMPLE_EVENTS.human_message, '2026-09-11T11:00:00.000Z'),
+        row(SAMPLE_EVENTS.timer, '2026-09-11T11:00:00.000Z'),
+        row(SAMPLE_EVENTS.distill, '2026-09-11T11:00:00.000Z'),
+        row(SAMPLE_EVENTS.self_initiative, '2026-09-11T11:00:00.000Z'),
+      ],
+      NOW,
+    );
+    const totalInByType = b.byType.reduce((sum, e) => sum + e.count, 0);
+    expect(totalInByType).toBe(b.total);
+    const line = foldInboxBacklogByType(b.byType, 2);
+    // 上位2件 + 「他 2 種 2 件」——4種類×1件ずつなので、上位2件(各1件)+残り2種2件。
+    expect(line).toContain('他 2 種 2 件');
+  });
+});
+
+describe('describeInboxBacklogQueuedInMemory（issue #1084 / #1133）', () => {
+  it('undefined なら行を出さない（省略——読めなかったこととは違う）', () => {
+    expect(describeInboxBacklogQueuedInMemory(undefined)).toBeNull();
+  });
+
+  it('0 件でも行を出さない（この軸に「読めなかった」は無いので、0 は本物の0）', () => {
+    expect(describeInboxBacklogQueuedInMemory(0)).toBeNull();
+  });
+
+  it('1件以上なら、件数と「足しても引いても意味が無い」の断り書きを持つ行を出す', () => {
+    const line = describeInboxBacklogQueuedInMemory(3326);
+    expect(line).toContain('メモリの配達待ち行列 3326 件');
+    expect(line).toContain('足しても引いても意味が無い');
   });
 });
 

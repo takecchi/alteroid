@@ -2,7 +2,12 @@
 // 置いた同じ形の述語から取る——`manager_list` の並び（`tools.ts`）も同じものを
 // 見るので、2箇所に `status === 'lost'` を書くと *分け方* が割れる（あちらの doc）。
 import { isManagerAwaitingJudgement } from './digest.js';
-import { INBOX_BACKLOG_LOUD_THRESHOLD } from './inbox-backlog.js';
+import {
+  INBOX_BACKLOG_LOUD_THRESHOLD,
+  describeInboxBacklogQueuedInMemory,
+  foldInboxBacklogByType,
+} from './inbox-backlog.js';
+import type { InboxBacklogBreakdown } from './inbox-backlog.js';
 import type { ManagerSummary } from './manager.js';
 import type { RunnerLiveness } from './runner-protocol.js';
 import type { CooldownSource } from './token-pool.js';
@@ -565,12 +570,44 @@ function tokenStateOf(
  * である（あのときは「器は空、メモリは数千件」だった。合算していたら
  * 「数千件」としか見えず、器側が本当に空だという事実が消える）。
  *
- * ## 何を数え、何を数えていないか（{@link describeSituationInboxQueued} の doc）
+ * ## 何を数え、何を数えていないか（{@link describeInboxBacklogQueuedInMemory}（`inbox-backlog.ts`）の doc）
  *
  * 材料・除外の詳細はそちらへ集約する——ここに書き写すと2箇所がずれる。
+ *
+ * ## 閾値超えの回だけ、種類の内訳を持つ（issue #1140）
+ *
+ * `backlog.typeBreakdown` は**閾値（{@link INBOX_BACKLOG_LOUD_THRESHOLD}）を
+ * 超えた回だけ**、呼び出し側（`clone.ts` の `#situationNoticeFor`）が埋める。
+ * ⚠ **重い `peekPending()`（全行を zod で parse する）は、その回にしか
+ * 呼ばれない**——平常時は安い `pending()`（`count(*)` / `min(at)`）だけを
+ * 読む（`clone-situation-notice.test.ts` の歯がこれを固定する）。暴発
+ * （#1140 本文の実例: `external:token-pool` が 3809 件・`manager_message` が
+ * 39 件）を読み解きたいのは、まさに件数が閾値を超えた回だからである。
+ *
+ * **⚠️ `typeBreakdown.total` と、この行の見出しの件数はずれうる。** 見出しの
+ * `backlog.count` は「このターン自身が処理中の分」（`events.length`）を
+ * 引いた値だが、`typeBreakdown`（`summarizeInboxBacklog` が `peekPending()`
+ * の生の行を集計したもの）は引いていない——`tools.ts` の
+ * `describeInboxBacklog` と同じ数え方（`manager_list` はこの引き算をしない）
+ * にわざと揃えてある。⟹ **両者は最大 `events.length` 件（通常1件）ずれる
+ * ことがある**——このずれを1文字も言わずに2つの数を並べると、依頼者が
+ * 実際に踏んだ「`chars=340` が現物と合わない」のと同じ形の混乱を生む
+ * （依頼者の注文）ので、行の文言そのものに明記する。
+ *
+ * **本文は載せない。** 送信元・同一本文・器の入れ替え回数・齢は、この行には
+ * 出さない——`manager_list` に委ねる（この行が肥大しないための線引き。
+ * `foldInboxBacklogByType` の doc「なぜ畳むか」と同じ理由）。
  */
 function describeSituationInboxBacklog(
-  backlog: { readonly count: number; readonly oldestAt?: string } | 'unreadable' | undefined,
+  backlog:
+    | {
+        readonly count: number;
+        readonly oldestAt?: string;
+        /** 閾値超えの回だけ埋まる（このファイル doc「閾値超えの回だけ」）。 */
+        readonly typeBreakdown?: InboxBacklogBreakdown;
+      }
+    | 'unreadable'
+    | undefined,
 ): string | null {
   if (backlog === undefined) return null;
   if (backlog === 'unreadable') {
@@ -588,102 +625,35 @@ function describeSituationInboxBacklog(
   // クローンは `manager_list` を引く前にその名前を覚える —— 実際に、誤った名前で
   // 読んだ数字から2つの誤った結論が立ち、その筋で委譲が1本出ている（#910）。
   // 逐語の出所は `grep -Fn -- '器の入れ替え回数: 0回＝いまの器になってから積まれた' packages/core/src/inbox-backlog.ts`。
+  if (backlog.typeBreakdown === undefined) {
+    // **内訳が届かなかった回**（`peekPending()` が失敗した、あるいは呼び出し
+    // 側が省略した）。件数自体は数え切れているので `base` は出したまま、
+    // 内訳は `manager_list` へ誘導する（issue #783 段0 以来の既定の文言）。
+    return (
+      `⚠ ${base}` + '内訳（種類 / 同一本文 / 器の入れ替え回数 / 齢）は `manager_list` で割れる。'
+    );
+  }
+  // issue #1140: 種類の内訳（上位 N 件 + 他）を添える。数え方のずれは
+  // このファイル doc「閾値超えの回だけ、種類の内訳を持つ」に明記済み。
+  const typeLine = foldInboxBacklogByType(backlog.typeBreakdown.byType);
   return (
-    `⚠ ${base}` + '内訳（種類 / 同一本文 / 器の入れ替え回数 / 齢）は `manager_list` で割れる。'
+    `⚠ ${base}種類: ${typeLine}` +
+    `（器の生の行 ${backlog.typeBreakdown.total} 件を数えた——このターン自身の分は` +
+    '引いていないので、上の件数と1件前後ずれることがある。本文は載せない。' +
+    '残り（送信元 / 同一本文 / 器の入れ替え回数 / 齢）は `manager_list` で見る）。'
   );
 }
 
 /**
  * 受信箱の**メモリの配達待ち行列**の1行（issue #1084）。
  *
- * `describeSituationInboxBacklog`（器の行数）とは別の軸——{@link
- * describeSituationInboxBacklog} の doc「メモリの配達待ち行列は別の軸である」
- * を先に読むこと。
- *
- * ## 何を数えるか
- *
- * `clone.ts` の `#situationNoticeFor` が渡す値は、**`Clone#inbox`（配達を
- * 待つ FIFO。`inbox.ts` の `Inbox#size`）と `#deferred`（枠＝利用上限で
- * 保持している分）を足したもの**である。**両方が「配達待ち」に数える理由**:
- * `#deferred` に居る合図は枠が開けば `Clone#inbox` の先頭へ戻され
- * （`clone.ts` の `#pump` の解除ブロック、`Inbox#unshift`）、その時点で
- * また配達される——まだ処理し終えていない、という点で `Clone#inbox` の中身と
- * 変わらない（`clone.ts` の `dropQueuedInboxEvents` が消すときにこの2つを
- * 両方とも落としているのと同じ理由——`grep -Fn -- '枠（利用上限）で保持している分'
- * packages/core/src/clone.ts`）。
- *
- * ## 何を数えていないか（⚠️ ここが要点——数えていないと、この行を読む側が
- * 「これで全部」と誤読する）
- *
- * 1. **いま処理中のこの1件（このターンの `batch` そのもの）。** `Clone#inbox`
- *    からは `#pump` が `next()` / `drainWhile()` で既に取り出した後なので、
- *    構造上ここには入らない——DB 側の軸のように `events.length` を引く補正は
- *    要らない（引く前の値が既に「これを除いた残り」になっている）。
- * 2. **`Clone#inbox` が待ち手へ直接渡した分。** `Inbox#push` は待ち手（`next()`
- *    で待っている `#pump`）が居ればその場で渡し、`#queue` を素通りする
- *    （`inbox.ts` の `push` の doc「待ち手が居るときは順序の話にならない」）。
- *    この経路を通った合図は1度も `#queue` に載らないので、`size` はそれを
- *    最初から知らない——ただしこれは「これから処理される1件」であって
- *    「取り残された合図」ではない（上の1と同じ理由で、そもそも数える対象では
- *    ない）。
- * 3. **もう配り終えて `#handle` の中を実行中の合図が、その実行の途中で新しい
- *    合図（サブ依頼・ツール呼び出し）を作ることがあっても、それは
- *    `InboxEvent` として `Clone#inbox` を経由しない**（別の経路——委譲・
- *    ツール呼び出し——であって受信箱の合図ではない）ので、この軸の対象にすら
- *    ならない。
- *
- * **⟹ 言えるのは「配達を待って、いまメモリに載っている分」までである。**
- * 「クローンにこれから起きる仕事の総量」ではない——走っているターン自身の分
- * （1・2）は、走っている以上どのみち仕事として数える必要が無い。
- *
- * ## `undefined` は「省略」——0 と見分けが付く必要は無い
- *
- * DB の軸と違って、この値は非同期の読み取りを経ない（`Inbox#size` /
- * `#deferred.length` はどちらも同期の getter / 配列長で、失敗しうる操作を
- * 経由しない）。⟹ 「読もうとして読めなかった」という状態がそもそも無い
- * ——`'unreadable'` に対応する型を持たないのはこのためであり、**手抜きでは
- * ない**。`undefined` が意味するのは「呼び出し側が渡さないと決めた」（既存の
- * 呼び出しを壊さないための省略。`tokens` / `backlog` と同じ作法）だけである。
- *
- * ## 0 のときは行を出さない
- *
- * 上の理由（読めない状態が無い）により、`0` は常に「数え切れて0件だった」を
- * 意味する——DB の軸で問題になった「0 が『数えられなかった』を覆い隠す」は
- * ここでは構造的に起きない。⟹ 0 を隠しても情報は失われないので、DB の軸と
- * 同じ「0 なら行を出さない」を採ってよい。
- *
- * ## ⚠️ 2つの軸は**重なる**——「別の軸」を「互いに素」と読ませないこと
- *
- * **通常は、同じ合図が両方に数えられている。** `clone.ts` の `#remember`
- * （`post()` の中）は型を問わず全部の合図を配達より前に器へ書き、消す
- * `#forget` はターンが終わってからしか呼ばれない —— 出典は
- * `grep -Fn -- '消す `#forget()` はこの後' packages/core/src/clone.ts` が当たる
- * `#situationNoticeFor` の doc である。⟹ **メモリの待ち行列に居る合図は、
- * ふつう器にも行を持っている。**
- *
- * **⛔ だから足しても引いても意味が無い。** この行が「別の実体」とだけ名乗る
- * と、読む側は互いに素な2つの箱だと読み、**合計を取って負荷を倍に見積もる**
- * （あるいは差を取って「どちらかが漏れている」と読む）。**2つは同じものを
- * 別の数え方で見た値で、意味を持つのは食い違ったときだけである**——器が空で
- * メモリに残っていれば、それが issue #1049 の形そのものである。
- *
- * **⟹ 行の文言に「足し引きしないこと」と「食い違いが何を意味するか」を
- * 書く。** 添えるのではなく行の中に置く（`AGENTS.md`「報告の形」——断り書き
- * は読み手がそこを通ったときにしか効かない）。
+ * **実体は `inbox-backlog.ts` の `describeInboxBacklogQueuedInMemory`。**
+ * issue #1133 で、`tools.ts` の `describeInboxBacklog`（`manager_list` 側）が
+ * このメモリの軸を1文字も読んでいなかったことが分かり、**2つの呼び出し口が
+ * 同じ計算・同じ文言を通る**ようにそちらへ寄せた。`describeSituationInboxBacklog`
+ * （器の行数、このファイル内）とは別の軸である——doc の全文は
+ * {@link describeInboxBacklogQueuedInMemory}（`inbox-backlog.ts`）を読むこと。
  */
-function describeSituationInboxQueued(queued: number | undefined): string | null {
-  if (queued === undefined || queued === 0) return null;
-  // **DB の軸と合算しない、足し算もしない。** 独立した1行として並べる——
-  // {@link describeSituationInboxBacklog} の doc「片方へ畳まない」。
-  return (
-    `メモリの配達待ち行列 ${queued} 件` +
-    '（配達を待ってプロセスのメモリに載っている分。器の行数（上）とは' +
-    '**同じ合図を別の数え方で見た値**で、ふつう両方に数えられている——' +
-    '**足しても引いても意味が無い。**食い違ったときだけ、器と配達がずれて' +
-    'いる印である。内訳を割る口は無い）。'
-  );
-}
-
 export function describeSituation(input: {
   readonly managers: readonly ManagerSummary[];
   readonly runners: readonly { readonly state: RunnerLiveness }[];
@@ -700,15 +670,27 @@ export function describeSituation(input: {
    * 作法）。**`'unreadable'` は「省略」とは別の状態**（読もうとして読めな
    * かった）——両方とも `undefined` へ潰すと「0件」と見分けが付かなくなる。
    * {@link describeSituationInboxBacklog} の doc を見る。
+   *
+   * `typeBreakdown` は issue #1140 で足した——**閾値超えの回だけ**呼び出し側
+   * （`clone.ts`）が埋める。詳細・数え方のずれは
+   * {@link describeSituationInboxBacklog} の doc「閾値超えの回だけ、種類の
+   * 内訳を持つ」を見る。
    */
   readonly backlog?:
-    { readonly count: number; readonly oldestAt?: string } | 'unreadable' | undefined;
+    | {
+        readonly count: number;
+        readonly oldestAt?: string;
+        readonly typeBreakdown?: InboxBacklogBreakdown;
+      }
+    | 'unreadable'
+    | undefined;
   /**
    * 受信箱の**メモリの配達待ち行列**の長さ（issue #1084）。**省略できる** ——
    * 省略すると行が出ない（既存の呼び出しを1つも壊さない。`backlog` と同じ
    * 作法）。**`backlog` とは別の軸——足し合わせない**（{@link
    * describeSituationInboxBacklog} の doc「メモリの配達待ち行列は別の軸で
-   * ある」）。材料と除外は {@link describeSituationInboxQueued} の doc を見る。
+   * ある」）。材料と除外は {@link describeInboxBacklogQueuedInMemory}
+   * （`inbox-backlog.ts`）の doc を見る。
    */
   readonly queuedInMemory?: number | undefined;
 }): string {
@@ -718,7 +700,7 @@ export function describeSituation(input: {
     .map(([state, count]) => `${state} ${count}`)
     .join(' / ');
   const inboxBacklogLine = describeSituationInboxBacklog(input.backlog);
-  const inboxQueuedLine = describeSituationInboxQueued(input.queuedInMemory);
+  const inboxQueuedLine = describeInboxBacklogQueuedInMemory(input.queuedInMemory);
   // **`at` はここでも使う（#902）。** かつてこの値はトークンの行の判定にしか
   // 渡っておらず、**節の本体は自分がいつの値かを1文字も名乗らなかった。**
   // {@link readAtLabel} の doc（節は会話履歴に溜まる）。
@@ -762,7 +744,7 @@ export function describeSituation(input: {
     // **メモリの配達待ち行列は、器の行数の直後に置く**（issue #1084）。同じ
     // 「受信箱」という話題の中で隣に並べることで、2つが別の実体だと読める形に
     // する——離れた場所に置くと、器の行数の1行だけが「受信箱の全部」に見える。
-    // 0件・省略時は行を出さない（`describeSituationInboxQueued` の doc）。
+    // 0件・省略時は行を出さない（`describeInboxBacklogQueuedInMemory` の doc）。
     ...(inboxQueuedLine === null ? [] : [inboxQueuedLine]),
     // **鍵の行は最後に置く。** 数えた材料（委譲・器）の後に、判断を縛る不変条件が
     // 来る順にしてある（{@link describeTokenSituation}）。**省略した呼びでは出ない。**

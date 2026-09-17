@@ -162,6 +162,7 @@ import {
   CLONE_REMOVABLE_INBOX_EVENT_TYPES,
   describeHumanOriginatedInboxAlert,
   describeInboxBacklogBreakdown,
+  describeInboxBacklogQueuedInMemory,
   inboxRemoveManyTypesSchema,
   matchesInboxRemoveManyFilter,
   removeInboxEventsAndStopDelivery,
@@ -394,6 +395,45 @@ export interface ToolContext {
    * 蒸留のサイドクエリのインライン context）。⟹ 断る枝は本番では通らない。
    */
   dropQueuedInboxEvents?: (ids: readonly string[]) => Promise<number>;
+  /**
+   * **メモリの配達待ち行列の長さ**（issue #1084 / #1133。`Clone#inbox` の
+   * `size` + `#deferred` の長さ）。`manager_list` の受信箱の行
+   * （`describeInboxBacklog`、このファイル下方）が読む。
+   *
+   * ## なぜ足したか —— issue #1133
+   *
+   * `manager_list` の受信箱の行は、これまで**器（DB / ファイル）の行数
+   * だけ**を読んでいた。一方、毎ターンの状況の節（`situation.ts` の
+   * `describeSituation`）は #1084 でメモリの配達待ち行列の軸を既に持って
+   * いる——⟹ **同じクローンが、同じターンの中で、「受信箱の滞留」という
+   * 同じ言葉に対して2つの違う定義を読む**ことになっていた。器の行が0件
+   * なら `manager_list` は「クローンの受信箱に未処理の合図は無い。」と
+   * 言い切るが、メモリの待ち行列に残りがあってもそれを1文字も反映しない。
+   *
+   * **⟹ ここで渡し、`describeInboxBacklog` が0件の文言を「両方空」だと
+   * 騙らないようにする。** 計算・文言の生成元は `inbox-backlog.ts` の
+   * `describeInboxBacklogQueuedInMemory` の1箇所——`situation.ts` と
+   * ここが同じ関数を呼ぶ。
+   *
+   * ## `undefined` は「省略」——読めなかったことにはならない
+   *
+   * `Inbox#size` / `#deferred.length` はどちらも同期の getter / 配列長で、
+   * 失敗しうる操作を経由しない（`describeInboxBacklogQueuedInMemory` の
+   * doc）。⟹ `undefined` が意味するのは「呼び出し側が渡さないと決めた」
+   * （テストのための省略。`scheduler` / `runtime` と同じ作法）だけである。
+   *
+   * **本番の配線は2箇所とも渡している**（`clone.ts` の `#toolContext()` と
+   * 蒸留のサイドクエリのインライン context）——`dropQueuedInboxEvents` と
+   * 同じ2箇所で、同じ `#queuedInMemoryCount()` を経由する。
+   *
+   * **関数自体は `number | undefined` を返せる。** 省略できるのはフィールド
+   * そのもの（`?`）であって、渡した関数がターンごとに `undefined` を返す
+   * ことも許す——`tools.test.ts` の `Harness.setQueuedInMemory` が「まだ
+   * 差し替えていない既定状態」を表すのに使う。本番の配線
+   * （`clone.ts` の `#queuedInMemoryCount()`）は常に具体的な数を返すので、
+   * 本番でこの分岐は通らない。
+   */
+  queuedInMemory?: () => number | undefined;
 }
 
 export function qualifiedToolName(name: string): string {
@@ -743,9 +783,40 @@ function describeAskedAt(askedAt: ManagerWaitingItem['askedAt']): string {
  * **配達の挙動は1ミリも変えていない。** ここは `summarizeInboxBacklog` が
  * 既に集計している値（`InboxBacklogBreakdown.humanOriginated`）を描き直す
  * だけの、純粋な表示側の変更である。
+ *
+ * ## Issue #1133: メモリの配達待ち行列も渡し、0件の文言が「両方空」を騙らないようにする
+ *
+ * **この道具は、器（DB / ファイル）の行だけを読んで受信箱の滞留を語っていた。**
+ * 一方、毎ターンの状況の節（`situation.ts` の `describeSituation`）は #1084 で
+ * メモリの配達待ち行列（`Clone#inbox` の `size` + `#deferred`）の軸を既に
+ * 持っている——⟹ **同じクローンが、同じターンの中で、「受信箱の滞留」という
+ * 同じ言葉に対して2つの違う定義を読んでいた。**
+ *
+ * `#1086`（issue #1049 の修正）以降、この2つは通常一致する（`#forget` が
+ * 呼ばれるまでどちらの実体にも合図が残る）。それでも**この関数は「一致する
+ * はず」を前提にしない**——器が0件でもメモリの待ち行列に残りがあれば、その
+ * 事実を1行で名乗る。**「クローンの受信箱に未処理の合図は無い。」という
+ * 0件の文言は、両方が0件のときにしか出さない。**
+ *
+ * 計算・文言の生成元は `inbox-backlog.ts` の
+ * `describeInboxBacklogQueuedInMemory`——`situation.ts` の `describeSituation`
+ * と同じ関数を呼ぶ。渡し方（`queuedInMemory` 引数）が省略（`undefined`）
+ * されたとき（テストなど）は、この軸を1文字も足さない——本番の配線
+ * （`clone.ts` の `#toolContext()`）は必ず渡す。
  */
-function describeInboxBacklog(rows: readonly PendingInboxEvent[], now: number): string {
-  if (rows.length === 0) return 'クローンの受信箱に未処理の合図は無い。';
+function describeInboxBacklog(
+  rows: readonly PendingInboxEvent[],
+  now: number,
+  queuedInMemory: number | undefined,
+): string {
+  const queuedLine = describeInboxBacklogQueuedInMemory(queuedInMemory);
+  if (rows.length === 0) {
+    if (queuedLine === null) return 'クローンの受信箱に未処理の合図は無い。';
+    // **器の行は0だが、メモリの配達待ち行列には残っている**——issue #1133 が
+    // 名指しした形そのもの。「クローンの受信箱に未処理の合図は無い。」という
+    // 「両方空」を騙る文言は出さない。
+    return `器の行に未処理の合図は無い（メモリの配達待ち行列は別の軸——下）。\n${queuedLine}`;
+  }
   const breakdown = summarizeInboxBacklog(rows, now);
   const oldest =
     breakdown.oldestAt === undefined ? '' : `（最も古いものは ${breakdown.oldestAt} から）`;
@@ -754,10 +825,14 @@ function describeInboxBacklog(rows: readonly PendingInboxEvent[], now: number): 
   // 1文字も増えない。
   const humanOriginatedAlert = describeHumanOriginatedInboxAlert(breakdown);
   const humanOriginatedLine = humanOriginatedAlert === '' ? '' : `${humanOriginatedAlert}\n`;
+  // issue #1133: メモリの配達待ち行列は、器の内訳の後ろに置く。0件・省略時は
+  // 1文字も足さない（`describeInboxBacklogQueuedInMemory` の doc）。
+  const queuedSuffix = queuedLine === null ? '' : `\n${queuedLine}`;
   return (
     `${humanOriginatedLine}` +
     `⚠ クローンの受信箱に未処理の合図が ${breakdown.total} 件ある${oldest}\n` +
-    describeInboxBacklogBreakdown(breakdown)
+    describeInboxBacklogBreakdown(breakdown) +
+    queuedSuffix
   );
 }
 
@@ -7390,6 +7465,11 @@ export function createCloneTools(context: ToolContext) {
         const inboxBacklog = describeInboxBacklog(
           await context.stores.inbox.peekPending(),
           Date.now(),
+          // issue #1133: 器の行だけでなく、メモリの配達待ち行列も渡す
+          // （`ToolContext.queuedInMemory` の doc）。省略された呼び（テスト等）は
+          // `undefined` のまま——`describeInboxBacklog` 側で「読めなかった」
+          // ではなく「渡さないと決めた」として扱う。
+          context.queuedInMemory?.(),
         );
         // runner→デーモンの脚も同じ理由で本数と無関係（#358 案b）。
         // `runnerBacklog()` はキャッシュを読むだけ——ここでも往復は増えない。

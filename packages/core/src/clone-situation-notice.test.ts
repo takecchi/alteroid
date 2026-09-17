@@ -8,6 +8,8 @@ import type { RunnerLiveness } from './runner-protocol.js';
 import type { JobStatus } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
+import { createCloneMcpServer } from './tools.js';
+import type { ToolContext } from './tools.js';
 
 /**
  * 「いまの全体」がターンの入口（`clone.ts` の `#runTurn`）に**実際に載る**か
@@ -515,6 +517,127 @@ describe('状況の節に受信箱の滞留の行が載る（#783 段0）', () =
 });
 
 /**
+ * **閾値を超えた回だけ `peekPending()` を呼ぶ**（issue #1140）。
+ *
+ * `describeSituationInboxBacklog`（`situation.ts`）の doc「閾値超えの回だけ、
+ * 種類の内訳を持つ」が言う費用の境界そのものを、実際に `InboxStore` の
+ * どちらのメソッドが呼ばれたかで固定する——文言だけを見るテストでは
+ * 「呼ばなかったこと」は測れない（呼んでも呼ばなくても内訳が無ければ
+ * 同じ文言になりうる、という取り違えを避けるため）。
+ */
+describe('受信箱の内訳（種類）は、閾値を超えた回だけ組む（issue #1140）', () => {
+  /** `INBOX_BACKLOG_LOUD_THRESHOLD`（50）と同じ値を直書きしない——輸入して使う。 */
+  async function putBacklogRows(
+    stores: Stores,
+    count: number,
+    type: 'human_message' | 'external' = 'human_message',
+  ): Promise<void> {
+    for (let i = 0; i < count; i += 1) {
+      const at = new Date(Date.parse(AT) - (count - i) * 1000).toISOString();
+      if (type === 'human_message') {
+        await stores.inbox.put(
+          {
+            type: 'human_message',
+            id: `evt-loud-${i}`,
+            at,
+            text: `本文${i}`,
+            conversationId: 'conv-loud',
+          },
+          at,
+        );
+      } else {
+        await stores.inbox.put(
+          { type: 'external', id: `evt-loud-${i}`, at, source: 'load-test', payload: { i } },
+          at,
+        );
+      }
+    }
+  }
+
+  it('閾値ちょうど（50件）では peekPending() を呼ばず、内訳の行も出ない', async () => {
+    const stores = createMemoryStores();
+    const s = bootClone(stores, busyPool());
+    // **境界値**: `#situationNoticeFor` はこのターン自身（1件）を引くので、
+    // 直に50件置いた状態で1件処理させると `count` はちょうど50になる
+    // （`INBOX_BACKLOG_LOUD_THRESHOLD` と同値 ⟹ `count <= threshold` の
+    // 分岐——境界は「超え」ではなく「以下」側）。
+    await putBacklogRows(stores, 50);
+    let peekCalls = 0;
+    const originalPeekPending = stores.inbox.peekPending.bind(stores.inbox);
+    stores.inbox.peekPending = async () => {
+      peekCalls += 1;
+      return originalPeekPending();
+    };
+
+    s.clone.post({
+      type: 'manager_message',
+      id: 'evt-trigger',
+      at: AT,
+      managerId: 'mgr-run',
+      kind: 'report',
+      text: 'trigger',
+    });
+    await waitFor(() => s.inputs.length > 0, 'ターンが走ること');
+
+    const text = s.inputs.join('\n');
+    expect(text).toContain('受信箱の未処理 50 件');
+    // ⭐ 平常時（閾値以下）は `peekPending()` を1回も呼ばない。
+    expect(peekCalls).toBe(0);
+    // **閾値以下（詰まっていない）は ⚠ も内訳への誘導も出ない**——
+    // `describeSituationInboxBacklog` は `count <= INBOX_BACKLOG_LOUD_THRESHOLD`
+    // で `base`（件数だけの1行）を返して打ち切る。
+    expect(text).not.toContain('種類:');
+    expect(text).not.toContain('⚠ 受信箱の未処理');
+    expect(text).not.toContain(
+      '内訳（種類 / 同一本文 / 器の入れ替え回数 / 齢）は `manager_list` で割れる',
+    );
+
+    await s.clone.stop();
+  });
+
+  it('閾値を超えたら（51件）peekPending() を呼び、種類の内訳（上位3件＋他）が状況の節に載る', async () => {
+    const stores = createMemoryStores();
+    const s = bootClone(stores, busyPool());
+    // 51件を human_message で置き、境界を1件超えさせる。
+    await putBacklogRows(stores, 51);
+    let peekCalls = 0;
+    const originalPeekPending = stores.inbox.peekPending.bind(stores.inbox);
+    stores.inbox.peekPending = async () => {
+      peekCalls += 1;
+      return originalPeekPending();
+    };
+
+    s.clone.post({
+      type: 'manager_message',
+      id: 'evt-trigger',
+      at: AT,
+      managerId: 'mgr-run',
+      kind: 'report',
+      text: 'trigger',
+    });
+    await waitFor(() => s.inputs.length > 0, 'ターンが走ること');
+
+    const text = s.inputs.join('\n');
+    expect(text).toContain('受信箱の未処理 51 件');
+    // ⭐ 閾値を超えた回は、実際に重い方（peekPending）を呼ぶ。
+    expect(peekCalls).toBeGreaterThan(0);
+    // **`peekPending()` の生の行は52件**（直に置いた51件 + いま処理中の
+    // `evt-trigger`（`manager_message`）自身の1件——`typeBreakdown` はこの
+    // 1件を引かない、というこの節の doc どおりの数え方）。
+    expect(text).toContain('種類: human_message 51 / manager_message 1');
+    // **数え方のずれを明記した文言が出ている**（依頼者の注文）。見出しは
+    // 51件（このターン自身を引いた数）、内訳は52件（引いていない生の行）——
+    // ちょうど1件のずれが実際に起きている。
+    expect(text).toContain('器の生の行 52 件を数えた');
+    expect(text).toContain(
+      'このターン自身の分は引いていないので、上の件数と1件前後ずれることがある',
+    );
+
+    await s.clone.stop();
+  });
+});
+
+/**
  * **メモリの配達待ち行列が毎ターンの状況へ載る配線**（issue #1084）。
  *
  * `describeSituation` 自体（軸の字面・省略/0の扱い）は `situation.test.ts`
@@ -604,5 +727,122 @@ describe('状況の節にメモリの配達待ち行列の行が載る（issue #
     expect(s.inputs.join('\n')).not.toContain('メモリの配達待ち行列');
 
     await s.clone.stop();
+  });
+});
+
+/**
+ * **2つの呼び出し口が、同じ数を読んでいるか**（issue #1133）。
+ *
+ * #1133 が名指しした欠陥は「`situation.ts`（状況の節）と `tools.ts`
+ * （`manager_list` の受信箱の行）が、メモリの配達待ち行列について**別々の
+ * 定義**を読む」ことだった。直し方は `clone.ts` の `#queuedInMemoryCount()`
+ * を両方の呼び出し口（`#situationNoticeFor` と `#toolContext()`）が通る形に
+ * 寄せることだったが、**寄せたことそのものは、2つの呼び出し口を両方
+ * 動かして同じ値が出ることを見なければ歯にならない**——`require-operator-
+ * routes.test.ts` が「2つの門が同じ関数を通っている」ことを配線から直接
+ * 測っているのと同じ動機である。
+ *
+ * ここでは `mcpServerFactory` を差し替えて `#toolContext()` そのもの
+ * （`ToolContext`）を捕まえる。**`captured.queuedInMemory()` は `this` を
+ * 閉じ込めた closure なので、呼ぶたびに「いま」の `#queuedInMemoryCount()`
+ * を返す**——B・C はすぐ後続のターンで配達され尽くすので、`waitFor` で
+ * ポーリングした後に呼ぶと、A の状況の節を組んだ瞬間より後の値（0件）を
+ * 読んでしまう。⟹ **A のターンの本文が SDK へ渡った、まさにその同期区間の
+ * 中で** `queuedInMemory()` を呼ぶよう、`fakeSdk` を使わずその場に薄い
+ * 生成器を書く（`inputs.push` の直後、`await` を1つも挟まない行に置く）。
+ */
+describe('状況の節と manager_list は、メモリの配達待ち行列を同じ関数から読む（issue #1133）', () => {
+  it('#toolContext().queuedInMemory() は、状況の節が名乗った数と一致する', async () => {
+    const inputs: string[] = [];
+    const queuedInMemorySamples: (number | undefined)[] = [];
+    let captured: ToolContext | undefined;
+    const fn = ((params: { prompt: unknown; options?: Options }) => {
+      async function* generate(): AsyncGenerator<SDKMessage, void> {
+        yield {
+          type: 'system',
+          subtype: 'init',
+          session_id: 'sess-fake',
+          uuid: 'uuid-init',
+        } as unknown as SDKMessage;
+        for await (const message of params.prompt as AsyncIterable<{
+          message: { content: unknown };
+        }>) {
+          inputs.push(String(message.message.content));
+          // **同じ同期区間で読む。** `captured` はこの時点で既に
+          // `#situationNoticeFor` が組み終えた本文（`inputs` の最後の要素）と
+          // 同じ `#queuedInMemoryCount()` を指している——ここより後に
+          // `await` を挟むと、後続のターン（B・C の配達）が先に進んでしまう。
+          queuedInMemorySamples.push(captured?.queuedInMemory?.());
+          yield {
+            type: 'assistant',
+            message: { content: [{ type: 'text', text: 'ok' }] },
+            parent_tool_use_id: null,
+            session_id: 'sess-fake',
+            uuid: 'uuid-assistant',
+          } as unknown as SDKMessage;
+          yield {
+            type: 'result',
+            subtype: 'success',
+            result: 'ok',
+            session_id: 'sess-fake',
+            uuid: 'uuid-result',
+          } as unknown as SDKMessage;
+        }
+      }
+      const generator = generate();
+      return Object.assign(generator, {
+        close: () => undefined,
+        interrupt: async () => undefined,
+      }) as unknown as Query;
+    }) as unknown as typeof sdkQuery;
+
+    const clone = createClone({
+      stores: createMemoryStores(),
+      queryFn: fn,
+      env: {},
+      managers: busyPool(),
+      redeliveryGate: ALWAYS_REDELIVER,
+      mcpServerFactory: (context) => {
+        captured = context;
+        return createCloneMcpServer(context);
+      },
+    });
+
+    // **A・B・C は上の「先客の処理中に積み上がった分」の歯と同じ組み方**
+    // （`managerId` を3つとも別にして、どの2つも束ねられないようにする）。
+    clone.post({
+      type: 'manager_message',
+      id: 'evt-a',
+      at: AT,
+      managerId: 'mgr-a',
+      kind: 'report',
+      text: 'A',
+    });
+    clone.post({
+      type: 'manager_message',
+      id: 'evt-b',
+      at: AT,
+      managerId: 'mgr-b',
+      kind: 'report',
+      text: 'B',
+    });
+    clone.post({
+      type: 'manager_message',
+      id: 'evt-c',
+      at: AT,
+      managerId: 'mgr-c',
+      kind: 'report',
+      text: 'C',
+    });
+
+    await waitFor(() => inputs.length > 0, 'A のターンが走ること');
+
+    const text = inputs[0] ?? '';
+    expect(text).toContain('メモリの配達待ち行列 2 件');
+
+    // **A のターンと同じ同期区間で読んだ値も、同じ 2 件になる。**
+    expect(queuedInMemorySamples[0]).toBe(2);
+
+    await clone.stop();
   });
 });

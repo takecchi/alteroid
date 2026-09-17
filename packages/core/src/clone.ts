@@ -49,9 +49,12 @@ import {
 import {
   inboxBacklogDedupeKey,
   inboxCollapseKey,
+  INBOX_BACKLOG_LOUD_THRESHOLD,
   INBOX_EVENT_TYPE_ORDER,
   isHumanOriginated,
+  summarizeInboxBacklog,
 } from './inbox-backlog.js';
+import type { InboxBacklogBreakdown } from './inbox-backlog.js';
 // **再 export する。** この判定の元の置き場所は `clone.ts` で、外（`index.ts`）は
 // ここから取っている。実装を移したのは循環を消すためで（#917。移設の理由は
 // `inbox-backlog.ts` 側の doc）、公開の口まで動かす理由は無い。
@@ -4506,6 +4509,28 @@ class Clone implements CloneHost {
    * 受信箱の行は「数えられなかった」と名乗る専用の1行になり、委譲・器の行は
    * そのまま出る。
    */
+  /**
+   * メモリの配達待ち行列の長さ（issue #1084 / #1133）。**`Clone#inbox`（配達を
+   * 待つ FIFO）のサイズと `#deferred`（枠＝利用上限で保持している分）を足す
+   * だけ**——2つとも同期の getter / 配列長で、失敗しうる操作を経由しない
+   * （`inbox-backlog.ts` の `describeInboxBacklogQueuedInMemory` の doc）。
+   *
+   * ## なぜ1本のメソッドに切り出したか —— issue #1133
+   *
+   * この数を読む口は2つある。**毎ターンの状況の節**（`#situationNoticeFor` が
+   * `describeSituation` へ渡す）と、**`manager_list` の受信箱の行**
+   * （`#toolContext()` が `ToolContext.queuedInMemory` として道具へ渡し、
+   * `tools.ts` の `describeInboxBacklog` が読む）である。**式
+   * `this.#inbox.size + this.#deferred.length` を2箇所に書き写すと、
+   * どちらかだけを直して忘れた瞬間に2つの数字が食い違いうる**——同じ
+   * クローンが同じターンの中で読む2つの「受信箱の滞留」が、また別の理由で
+   * 割れることになる。**この1本を両方が通ることで、その割れ方そのものを
+   * 構造的に作れなくする。**
+   */
+  #queuedInMemoryCount(): number {
+    return this.#inbox.size + this.#deferred.length;
+  }
+
   async #situationNoticeFor(events: InboxEvent[]): Promise<string> {
     const event = events[0];
     if (event === undefined) return '';
@@ -4565,17 +4590,45 @@ class Clone implements CloneHost {
         // 古く、`oldestAt` を歪めない。件数が0まで落ちた回は `oldestAt` ごと
         // 消す（0件のときに値を作らない、というこの節全体の作法どおり）。
         this.#stores.inbox.pending().then(
-          (backlog): { count: number; oldestAt?: string } => {
+          async (
+            backlog,
+          ): Promise<{
+            count: number;
+            oldestAt?: string;
+            typeBreakdown?: InboxBacklogBreakdown;
+          }> => {
             const count = Math.max(0, backlog.count - events.length);
             if (count === 0) return { count: 0 };
             // **`...(x === undefined ? {} : { x })` の形に揃える**
             // （`pending()` 自身の実装がこの形を採っている）。素に
             // `oldestAt: backlog.oldestAt` と書くと、値が `undefined` でも
             // キー自体は生えてしまう。
-            return {
+            const base = {
               count,
               ...(backlog.oldestAt === undefined ? {} : { oldestAt: backlog.oldestAt }),
             };
+            // **閾値を超えた回だけ、重い `peekPending()` を呼ぶ**（issue #1140）。
+            // ⚠️ 平常時はここへ来ない——`situation.ts` の
+            // `describeSituationInboxBacklog` の doc「閾値超えの回だけ、種類の
+            // 内訳を持つ」が言うとおり、この道具の費用は「詰まっている」と
+            // 既に分かった回にしか掛けない。`clone-situation-notice.test.ts`
+            // の歯がこの境界（閾値以下では `peekPending` を1回も呼ばない）を
+            // 固定する。
+            if (count <= INBOX_BACKLOG_LOUD_THRESHOLD) return base;
+            try {
+              const rows = await this.#stores.inbox.peekPending();
+              // **`Date.now()` をここで固定する。** `summarizeInboxBacklog` の
+              // 齢バケツは使わない（この行は種類しか描かない）が、関数の契約
+              // として基準時刻を渡す必要があるので、他の材料と同じ「呼んだ
+              // 時点」を渡す。
+              return { ...base, typeBreakdown: summarizeInboxBacklog(rows, Date.now()) };
+            } catch {
+              // **内訳が読めなくても、件数自体は取れているので base のまま
+              // 返す。** `situation.ts` 側は `typeBreakdown` が無い回、既存の
+              // 「`manager_list` で割れる」の文言のまま——`base` を返す限り
+              // 件数の行そのものは消えない。
+              return base;
+            }
           },
           (): 'unreadable' => 'unreadable',
         ),
@@ -4594,15 +4647,22 @@ class Clone implements CloneHost {
         // **同期の getter だけで組む。** `Inbox#size` も `#deferred.length` も
         // 失敗しうる操作を経由しないので、DB の軸のように `.then(value,
         // onRejected)` で個別に catch する必要が無い
-        // （`describeSituationInboxQueued` の doc「`undefined` は
-        // 『読めなかった』ではない」）。
+        // （`describeInboxBacklogQueuedInMemory`（`inbox-backlog.ts`）の doc
+        // 「`undefined` は『読めなかった』ではない」）。
         //
         // **このターン自身（`events` / `batch`）は引かない——引く必要が無い。**
         // `#pump` は `next()` / `drainWhile()` で `this.#inbox` から取り出して
         // からここへ来るので、`#inbox.size` は既にこのターンの分を含まない
         // （DB 側の `Math.max(0, backlog.count - events.length)` に対応する
         // 補正が要らない理由——引く前の値が既に「これを除いた残り」である）。
-        queuedInMemory: this.#inbox.size + this.#deferred.length,
+        //
+        // **`#queuedInMemoryCount()` を経由する（issue #1133）。** `manager_list`
+        // 側（`tools.ts` の `describeInboxBacklog`）が同じ数を読む口
+        // （`#toolContext()` の `queuedInMemory`）も、この下の1本のメソッドを
+        // 通す——件数の出どころを1箇所にすることで、2つの呼び出し口が
+        // 別々の式（`this.#inbox.size + this.#deferred.length` を2箇所に
+        // 書き写す形）に割れて食い違う経路を構造的に作らない。
+        queuedInMemory: this.#queuedInMemoryCount(),
       });
     } catch (error) {
       return describeSituationUnavailable(error);
@@ -7123,6 +7183,11 @@ class Clone implements CloneHost {
       // **消した合図の配達を止める口**（issue #1049）。これを渡さないと
       // `inbox_remove_many` は1件も消さずに断る（`ToolContext` のその doc）。
       dropQueuedInboxEvents: (ids) => this.dropQueuedInboxEvents(ids),
+      // **`manager_list` の受信箱の行に、メモリの配達待ち行列を渡す口**
+      // （issue #1133）。`#situationNoticeFor` が読むのと同じ
+      // `#queuedInMemoryCount()` を経由する——式を2箇所に書き写さない
+      // （そのメソッドの doc「なぜ1本のメソッドに切り出したか」）。
+      queuedInMemory: () => this.#queuedInMemoryCount(),
       // **`ask_human` が `PendingApproval.conversationId` を埋めるための口（#768）。**
       // `emit` の1行上と同じ薄い closure —— `#turn?.conversationId` が無ければ
       // （マネージャー発の確認・蒸留・timer など内部ターン）undefined を返す。
@@ -7744,6 +7809,9 @@ class Clone implements CloneHost {
           // 選ぶと「蒸留のターンだけ消せない」という層ごとの能力差になる**
           // （north_star 禁止2）。渡す実体は本セッションと同一である。
           dropQueuedInboxEvents: (ids) => this.dropQueuedInboxEvents(ids),
+          // **同じ理由で渡す**（issue #1133）。`#toolContext()` と同じ
+          // `#queuedInMemoryCount()` を経由する。
+          queuedInMemory: () => this.#queuedInMemoryCount(),
           // **`conversationId` は明示する（#768・#781）。** かつては省略していたが、
           // いまは `ToolContext.conversationId` が必須（省略すると
           // `createCloneTools` が throw する）。値そのものの判断は変えていない

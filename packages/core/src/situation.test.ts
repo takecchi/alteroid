@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { INBOX_BACKLOG_LOUD_THRESHOLD } from './inbox-backlog.js';
+import {
+  INBOX_BACKLOG_LOUD_THRESHOLD,
+  summarizeInboxBacklog,
+  type InboxBacklogBreakdown,
+} from './inbox-backlog.js';
 import type { ManagerSummary } from './manager.js';
 import type { RunnerLiveness } from './runner-protocol.js';
-import type { JobStatus } from './schema.js';
+import type { InboxEvent, JobStatus } from './schema.js';
 import {
   countManagerSituation,
   countRunnerStates,
@@ -834,6 +838,71 @@ describe('状況の1行に受信箱の滞留が載る（#783 段0）', () => {
     // `grep -Fn -- '器の入れ替え回数: 0回＝いまの器になってから積まれた' packages/core/src/inbox-backlog.ts`。
     expect(out).toContain('器の入れ替え回数');
     expect(out).not.toContain('配達回数');
+  });
+
+  /**
+   * issue #1140: `backlog.typeBreakdown` を渡すと、種類の内訳（上位3件＋他）を
+   * 添える。**渡さない（閾値超えでも `typeBreakdown` が無い）回は、既存の
+   * 「`manager_list` で割れる」の文言のまま**であることも対で測る——
+   * `describeSituation` 自体はどちらの回でも件数の行を落とさない。
+   */
+  it('閾値超え・typeBreakdown 在りは、種類の内訳（上位3件＋他）を添える', () => {
+    const count = ABOVE_THRESHOLD;
+    const external = (
+      id: string,
+      at: string,
+    ): { event: InboxEvent; at: string; deliveries: number } => ({
+      event: { type: 'external', id, at, source: 'token-pool', payload: {} },
+      at,
+      deliveries: 0,
+    });
+    const managerMessage = (
+      id: string,
+      at: string,
+    ): { event: InboxEvent; at: string; deliveries: number } => ({
+      event: { type: 'manager_message', id, at, managerId: 'mgr-x', kind: 'report', text: '本文' },
+      at,
+      deliveries: 0,
+    });
+    const typeBreakdown: InboxBacklogBreakdown = summarizeInboxBacklog(
+      [
+        external('e1', '2026-09-16T18:15:00.000Z'),
+        external('e2', '2026-09-16T18:16:00.000Z'),
+        managerMessage('m1', '2026-09-16T18:17:00.000Z'),
+      ],
+      Date.parse('2026-09-16T18:23:22.000Z'),
+    );
+    const out = describeSituation({
+      managers: [],
+      runners: [],
+      backlog: { count, typeBreakdown },
+    });
+
+    expect(out).toContain(`⚠ 受信箱の未処理 ${count} 件`);
+    expect(out).toContain('種類: external 2 / manager_message 1');
+    // **数え方のずれの明記**（依頼者の注文）——見出しは引き算後、内訳は
+    // `typeBreakdown.total`（引いていない生の行）。ここでは3件で揃えている
+    // ので数字自体は一致するが、文言は「引いていない」という事実を必ず言う。
+    expect(out).toContain('器の生の行 3 件を数えた');
+    expect(out).toContain(
+      'このターン自身の分は引いていないので、上の件数と1件前後ずれることがある',
+    );
+    expect(out).toContain('本文は載せない');
+  });
+
+  it('閾値超え・typeBreakdown 無しは、従来どおり manager_list への案内のまま', () => {
+    const count = ABOVE_THRESHOLD;
+    const out = describeSituation({
+      managers: [],
+      runners: [],
+      backlog: { count },
+    });
+
+    expect(out).toContain(`⚠ 受信箱の未処理 ${count} 件`);
+    expect(out).not.toContain('種類:');
+    expect(out).toContain(
+      '内訳（種類 / 同一本文 / 器の入れ替え回数 / 齢）は `manager_list` で割れる',
+    );
   });
 
   it('指図を書かない（「〜せよ」の類が1文字も無い）', () => {

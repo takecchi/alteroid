@@ -644,6 +644,62 @@ function topByCount<T extends { readonly count: number }>(
 }
 
 /**
+ * 毎ターンの状況の節（`situation.ts`）が、受信箱の未処理 N 件の内訳
+ * （種類だけ）を「上位 {@link INBOX_BACKLOG_LOUD_TYPE_FOLD_AT} 件 + 他 N 種
+ * M 件」に畳むときの折り返し数（issue #1140）。
+ *
+ * ## 3 にした根拠（実測して決めたものではない）
+ *
+ * `InboxEvent['type']` は最大7種類（{@link INBOX_EVENT_TYPE_ORDER}）。動機に
+ * なった実例（issue #1140 本文）では有意だったのは `external:token-pool`
+ * （3809件）と `manager_message`（39件）の2種類だけだった——2件でも
+ * その実例は覆えたが、**この計器を1件の標本だけで決めるのは危うい**（他の
+ * 標本では3種目が意味を持つことがありうる）ので、1件だけ余裕を持たせて
+ * 3件にした。**行の長さの実害（#1140 本文が明言する「測っていないこと」）も
+ * 実測していない**ので、次にこの数を見直す人は根拠のこの薄さごと引き継ぐ
+ * こと。
+ */
+export const INBOX_BACKLOG_LOUD_TYPE_FOLD_AT = 3;
+
+/**
+ * `InboxBacklogBreakdown.byType` を「上位 {@link INBOX_BACKLOG_LOUD_TYPE_FOLD_AT}
+ * 件 + 他 N 種 M 件」に畳んだ1行にする（issue #1140）。
+ *
+ * ## 何を数えているか（依頼者の注文——数え方を doc に書く）
+ *
+ * 材料は呼び出し側が渡す `byType`（{@link summarizeInboxBacklog} が
+ * `peekPending()` で読んだ行を集計したもの）そのもの——ここでは新しい観測を
+ * 1つもしない。並べ替えは {@link topByCount}（件数の降順、同数は型名の昇順）
+ * を使う——`bySource` の上位5件と同じ並べ替えを、型の上位 N 件にも使い回す。
+ *
+ * ## `total` との算術
+ *
+ * `byType` は0件の型を含まない（{@link InboxBacklogBreakdown} の doc）ので、
+ * 上位 N 件の件数 + 畳んだ残りの件数（`他 N 種 M 件` の `M`）は、必ず渡された
+ * `byType` の合計に一致する——省いた行は「畳んだ」と明示するので、算術で
+ * 「見えない行があった」と読める（{@link InboxBacklogBreakdown} の doc
+ * 「`bySource` はそれだけでは `total` に届かない」と同じ配慮）。
+ *
+ * ## 空配列
+ *
+ * `byType` が空なら `'（無し）'` を返す——`describeInboxBacklogBreakdown` の
+ * 既存の書式（`種類: （無し）`）と揃える。
+ */
+export function foldInboxBacklogByType(
+  byType: readonly { readonly type: InboxEvent['type']; readonly count: number }[],
+  foldAt: number = INBOX_BACKLOG_LOUD_TYPE_FOLD_AT,
+): string {
+  if (byType.length === 0) return '（無し）';
+  const sorted = topByCount(byType, (entry) => entry.type);
+  const top = sorted.slice(0, foldAt);
+  const rest = sorted.slice(foldAt);
+  const topText = top.map((entry) => `${entry.type} ${entry.count}`).join(' / ');
+  if (rest.length === 0) return topText;
+  const restTotal = rest.reduce((sum, entry) => sum + entry.count, 0);
+  return `${topText} / 他 ${rest.length} 種 ${restTotal} 件`;
+}
+
+/**
  * `InboxEvent['type']` の並び順（`schema.ts` の `inboxEventSchema` の判別子の並びと揃える）。
  *
  * **export している。**（issue #972）`apps/daemon/src/app.ts` の
@@ -1230,6 +1286,120 @@ export function describeHumanOriginatedInboxAlert(b: InboxBacklogBreakdown): str
     `${oldestText}` +
     `そのうち、いまの器になってから積まれ、まだ片付いていない分が ${h.undelivered} 件` +
     '（ストアに残っている行を見ているだけで、配達されていないとは言えない）。'
+  );
+}
+
+/**
+ * 受信箱の**メモリの配達待ち行列**の1行（issue #1084 / #1133）。
+ *
+ * ## 2つの呼び出し口が、同じ計算・同じ文言を通る（issue #1133）
+ *
+ * **かつてこの関数は `situation.ts` の中に private な
+ * `describeSituationInboxQueued` として在り、`tools.ts` の
+ * `describeInboxBacklog`（`manager_list` の末尾に必ず出る、受信箱の滞留を
+ * 読むもう1つの口）はメモリの待ち行列を1文字も知らなかった。** ⟹ 同じ
+ * クローンが、同じターンの中で、「受信箱の滞留」という同じ言葉に対して
+ * 2つの違う定義を読むことになっていた——器の行が0件なら `manager_list` は
+ * 「クローンの受信箱に未処理の合図は無い。」と言い切るが、メモリの待ち
+ * 行列に数千件残っていてもそれは1文字も反映しない（issue #1133 本文）。
+ *
+ * **⟹ この関数をここ1箇所へ寄せ、`situation.ts` の `describeSituation` と
+ * `tools.ts` の `describeInboxBacklog` の両方がこれを呼ぶ。** 計算・文言の
+ * 生成元が1つになったので、2つの呼び出し口が食い違えようがない
+ * （どちらかだけを直して忘れる、という形そのものが構造的に作れない）。
+ *
+ * `situation.ts` の `describeSituationInboxBacklog`、`tools.ts` の
+ * `describeInboxBacklog` の**どちらも器の行数の1行とは別の軸**として、この
+ * 関数が返す行を隣に置く——{@link describeSituationInboxBacklog}
+ * （`situation.ts`）の doc「メモリの配達待ち行列は別の軸である」を先に
+ * 読むこと。
+ *
+ * ## 何を数えるか
+ *
+ * 呼び出し側（`clone.ts` の `#queuedInMemoryCount`。`#situationNoticeFor` と
+ * `#toolContext()` の両方がこれ経由で渡す——issue #1133 が「件数の出どころは
+ * 1つにする」と求めた形）が渡す値は、**`Clone#inbox`（配達を待つ FIFO。
+ * `inbox.ts` の `Inbox#size`）と `#deferred`（枠＝利用上限で保持している分）
+ * を足したもの**である。**両方が「配達待ち」に数える理由**: `#deferred` に
+ * 居る合図は枠が開けば `Clone#inbox` の先頭へ戻され（`clone.ts` の `#pump` の
+ * 解除ブロック、`Inbox#unshift`）、その時点でまた配達される——まだ処理し
+ * 終えていない、という点で `Clone#inbox` の中身と変わらない（`clone.ts` の
+ * `dropQueuedInboxEvents` が消すときにこの2つを両方とも落としているのと
+ * 同じ理由——`grep -Fn -- '枠（利用上限）で保持している分' packages/core/src/clone.ts`）。
+ *
+ * ## 何を数えていないか（⚠️ ここが要点——数えていないと、この行を読む側が
+ * 「これで全部」と誤読する）
+ *
+ * 1. **いま処理中のこの1件（このターンの `batch` そのもの）。** `Clone#inbox`
+ *    からは `#pump` が `next()` / `drainWhile()` で既に取り出した後なので、
+ *    構造上ここには入らない——DB 側の軸のように `events.length` を引く補正は
+ *    要らない（引く前の値が既に「これを除いた残り」になっている）。
+ * 2. **`Clone#inbox` が待ち手へ直接渡した分。** `Inbox#push` は待ち手（`next()`
+ *    で待っている `#pump`）が居ればその場で渡し、`#queue` を素通りする
+ *    （`inbox.ts` の `push` の doc「待ち手が居るときは順序の話にならない」）。
+ *    この経路を通った合図は1度も `#queue` に載らないので、`size` はそれを
+ *    最初から知らない——ただしこれは「これから処理される1件」であって
+ *    「取り残された合図」ではない（上の1と同じ理由で、そもそも数える対象では
+ *    ない）。
+ * 3. **もう配り終えて `#handle` の中を実行中の合図が、その実行の途中で新しい
+ *    合図（サブ依頼・ツール呼び出し）を作ることがあっても、それは
+ *    `InboxEvent` として `Clone#inbox` を経由しない**（別の経路——委譲・
+ *    ツール呼び出し——であって受信箱の合図ではない）ので、この軸の対象にすら
+ *    ならない。
+ * 4. **`tools.ts` から呼ばれた回に限り、`context.queuedInMemory` を渡さない
+ *    呼び出し側（テスト等）が居れば `undefined` になる。** 本番の配線
+ *    （`clone.ts` の `#toolContext()`）は必ず渡す——`runtime` / `scheduler`
+ *    と同じ「省略はテストのためだけ」という作法（`ToolContext` の doc）。
+ *
+ * **⟹ 言えるのは「配達を待って、いまメモリに載っている分」までである。**
+ * 「クローンにこれから起きる仕事の総量」ではない——走っているターン自身の分
+ * （1・2）は、走っている以上どのみち仕事として数える必要が無い。
+ *
+ * ## `undefined` は「省略」——0 と見分けが付く必要は無い
+ *
+ * DB の軸と違って、この値は非同期の読み取りを経ない（`Inbox#size` /
+ * `#deferred.length` はどちらも同期の getter / 配列長で、失敗しうる操作を
+ * 経由しない）。⟹ 「読もうとして読めなかった」という状態がそもそも無い
+ * ——`'unreadable'` に対応する型を持たないのはこのためであり、**手抜きでは
+ * ない**。`undefined` が意味するのは「呼び出し側が渡さないと決めた」（既存の
+ * 呼び出しを壊さないための省略。`tokens` / `backlog` と同じ作法）だけである。
+ *
+ * ## 0 のときは行を出さない
+ *
+ * 上の理由（読めない状態が無い）により、`0` は常に「数え切れて0件だった」を
+ * 意味する——DB の軸で問題になった「0 が『数えられなかった』を覆い隠す」は
+ * ここでは構造的に起きない。⟹ 0 を隠しても情報は失われないので、DB の軸と
+ * 同じ「0 なら行を出さない」を採ってよい。
+ *
+ * ## ⚠️ 2つの軸は**重なる**——「別の軸」を「互いに素」と読ませないこと
+ *
+ * **通常は、同じ合図が両方に数えられている。** `clone.ts` の `#remember`
+ * （`post()` の中）は型を問わず全部の合図を配達より前に器へ書き、消す
+ * `#forget` はターンが終わってからしか呼ばれない —— 出典は
+ * `grep -Fn -- '消す `#forget()` はこの後' packages/core/src/clone.ts` が当たる
+ * `#situationNoticeFor` の doc である。⟹ **メモリの待ち行列に居る合図は、
+ * ふつう器にも行を持っている。**
+ *
+ * **⛔ だから足しても引いても意味が無い。** この行が「別の実体」とだけ名乗る
+ * と、読む側は互いに素な2つの箱だと読み、**合計を取って負荷を倍に見積もる**
+ * （あるいは差を取って「どちらかが漏れている」と読む）。**2つは同じものを
+ * 別の数え方で見た値で、意味を持つのは食い違ったときだけである**——器が空で
+ * メモリに残っていれば、それが issue #1049 の形そのものである。
+ *
+ * **⟹ 行の文言に「足し引きしないこと」と「食い違いが何を意味するか」を
+ * 書く。** 添えるのではなく行の中に置く（`AGENTS.md`「報告の形」——断り書き
+ * は読み手がそこを通ったときにしか効かない）。
+ */
+export function describeInboxBacklogQueuedInMemory(queued: number | undefined): string | null {
+  if (queued === undefined || queued === 0) return null;
+  // **器の行数と合算しない、足し算もしない。** 独立した1行として並べる——
+  // 上の doc「2つの軸は重なる」。
+  return (
+    `メモリの配達待ち行列 ${queued} 件` +
+    '（配達を待ってプロセスのメモリに載っている分。器の行数（上）とは' +
+    '**同じ合図を別の数え方で見た値**で、ふつう両方に数えられている——' +
+    '**足しても引いても意味が無い。**食い違ったときだけ、器と配達がずれて' +
+    'いる印である。内訳を割る口は無い）。'
   );
 }
 
