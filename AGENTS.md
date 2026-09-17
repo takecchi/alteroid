@@ -511,9 +511,27 @@ git -C <main のツリー> apply --check -R /tmp/tail.patch   # 通れば main �
     - **クローンと委譲先が、この誤り（`started_at` で世代を選ぶ）を独立に同時に犯した**（#933）。読み手の不注意ではなく、方法そのものが順序を保証していない
     - **対策: `check-runs` の一覧を世代選びに使わず、run の側から降りる。** `gh api "repos/<repo>/actions/runs?head_sha=<sha>&per_page=100"` で実際の run 一覧を取り、`workflow_runs` の `created_at`（run 自身が作られた実測時刻。job の `started_at` ではない）で **workflow 名ごとに**最新の run を選び（複数 workflow が同じ sha に在っても名前ごとに独立に選べば、走行中の別 workflow を丸ごと落とさない。#933 コメントの実測）、選んだ run の `gh api repos/<repo>/actions/runs/<id>/jobs` を読む。実測（2026-09-15 観測、上記 sha）: この手順は `image` / `base-overlap` / `ci` / `pr-origin` すべて `success` という正しい答えを返した。**`check-runs` の `check_suite.id` もこの標本では run の作成順と一致したが、複数 workflow・`rerun` で3世代目が生える場合は未検証**（#933 のコメント）なので根拠にしない
     - `scripts/check-pr-green.mjs`（`pnpm check:pr-green -- <sha>`）はこの手順をそのまま実装したもの
+    - **⚠️ `created_at` が同じ秒で並ぶ標本が実在する。そのとき順序を決めているのは `id` の tiebreak である。** 実測（2026-09-17T02:12Z 観測、head `94e35f55…`。⚠️ この sha は既にマージ済みの PR #1126 のものなので、引き直せば同じものが出る）:
+
+      ```
+      $ gh api "repos/takecchi/alteroid/actions/runs?head_sha=94e35f55725c4764794f57770d1ec83f1401ce64&per_page=100" \
+          --jq '.workflow_runs[] | "\(.id)\t\(.name)\tcreated=\(.created_at)\tconclusion=\(.conclusion)"' | sort -k2
+      35152357266	No attribution trailers	created=2026-09-16T21:26:04Z	conclusion=cancelled
+      35152358088	No attribution trailers	created=2026-09-16T21:26:04Z	conclusion=success
+      35152357318	PR title	created=2026-09-16T21:26:04Z	conclusion=cancelled
+      35152358166	PR title	created=2026-09-16T21:26:04Z	conclusion=success
+      ```
+
+      **`created_at` だけでは決まらない。** 決めているのは `id` の大小である（逐語は `grep -Fn -- 'return a.id > b.id ? a : b;' scripts/check-pr-green-core.mjs`）。`check-runs` 側の `started_at` も同じ向きを指す（`cancelled` が `21:26:04Z`、`success` が `21:26:08Z`）。
+
+    - **⟹ `check-runs` の一覧に見える `conclusion=cancelled` の行は、最新世代とは限らない。** 上の2世代は `cancel-in-progress: true` が作ったもので（`.github/workflows/` のうち `CI` / `No attribution trailers` / `PR title` / `PR closing keywords` の4本が持つ。逐語は `grep -Fn -- 'cancel-in-progress: true' .github/workflows/ci.yml`）、**同じ枝へ短い間に2つのイベントが飛ぶと、push が無くても同じ sha の上に世代が2つ生まれて先の世代が切られる。**
+      - **実際に1人が誤読した**（2026-09-16 観測）。`check-runs` の `cancelled` の行を見て「required の門が `cancelled` の世代を持っている」と読み、**最新世代は `success` だった。** ⚠️ **誤りの向きは赤の側なので、この回は実害が出ていない。鏡像（古い世代の `success` を最新と読んで赤を見落とす）は、上の `started_at` / `id` の逆転の項が扱っている。**
+      - **⚠️ 「最新世代が `cancelled`」という状態自体は実在する**（実測 2026-09-17T02:20Z、直近1000 run の窓で **33件**。全部 `CI` の run で、`ci` と `image` は required である）。**ただしそのとき GitHub が required を満たしたと見なすかは測れていない** —— 経緯と、測るのに要る費用は #1155 に在る
   - **その run が実際にジョブを実行したか**を見る（`actions/runs/<id>/jobs` の `total_count` が0でないこと。実行時間も見る）
   - **`mergeStateStatus` を緑の根拠にしない**
   - `gh pr ready` の後は**本物の run が作られたことを確かめる**。作られないなら `gh pr close` → `gh pr reopen` で起こす（**枝を1バイトも触らない**ので安全。空コミットでもよい）
+    - **⚠️ ただし「作られていない」を、早すぎる問い合わせで自分から作らないこと。** 実測（2026-09-17、PR #1154）: `gh pr ready` と**同じ1呼びの中で** `gh api "repos/…/actions/runs?head_sha=<sha>"` を打つと、**新しい run は1本も返らない。** timeline の `ready_for_review` は `02:44:06Z`、run 4本の `created_at` は `02:44:08Z` で、**22秒後（`02:44:28Z`）に引き直したら4本とも見えた。** ⟹ **0本は「起きていない」ではなく「まだ見えていない」ことがある。**
+      - **⚠️ そしてここで `close` → `reopen` を打つと、同じ concurrency group に2世代目が生まれて1世代目が切られる**（`cancel-in-progress: true`）。**この帰結そのものは測っていない —— 機構からの推論である。** 言えるのは「間を置いてもう一度引いてから判断すること」までである
 
   **⚠️ 待つループの書き方にも同じ根が出る。** 「すべての `check-runs` が `completed` になったら抜ける」というループは、**本物の run がまだ作られていない瞬間に即座に抜ける**（draft 由来の `skipped` は既に `completed` なので）。**「`skipped` 以外が必要な本数揃うまで」を条件にすること。**
 
