@@ -109,6 +109,20 @@ function wiredInWorkflows(name: string): boolean {
  *
  * **`why` は非空でなければならない**（下の歯が測る）。「あとで配線する」を
  * 空文字で表せると、免除表は数合わせの場所になる。
+ *
+ * **⛔ `why` に「他の `check:*` は一般にこう扱われている」と書かないこと。**
+ * 引くのは**実在する先例の名前と、その具体の理由**だけにする。上の doc が
+ * 言うとおり、**この歯は `why` の中身が正しいかを測っていない**——誤った
+ * 一般則を書いても赤くならず、次に `why` を書く人はここを根拠に判断する。
+ *
+ * 実例（2026-09-17、`check:keyword-closed-issues` を足したとき）: 最初の
+ * `why` は「required にしない以上 workflow から呼ぶ理由も無い
+ * （`check:pr-closing-keywords` と同じ理由）」と書いていた。**どちらも誤り
+ * だった**——`check:pr-closing-keywords` はこの免除表に載っておらず、
+ * `.github/workflows/pr-closing-keywords.yml` から呼ばれている。⟹
+ * **required でない門が workflow から呼ばれている実例が同じ repo に在り、
+ * 「required でない ⟹ workflow から呼ばない」という一般則はその時点で
+ * 偽だった。** 人のレビューで見つかるまで、どの歯も鳴らなかった。
  */
 interface Exemption {
   readonly script: string;
