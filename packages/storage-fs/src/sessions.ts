@@ -1,8 +1,15 @@
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import type { LostSessionGrave, SessionRegistry, TranscriptGrave } from '@alteroid/core';
+import {
+  noteSessionMaterialUnreadable,
+  type LostSessionGrave,
+  type SessionRegistry,
+  type TranscriptGrave,
+} from '@alteroid/core';
 import { z } from 'zod';
+
+import { writeFileAtomic } from './atomic.js';
 
 const stateSchema = z.object({ cloneSessionId: z.string().nullable().default(null) });
 const graveSchema = z.object({ archiveId: z.string().min(1) });
@@ -13,11 +20,60 @@ const lostSessionSchema = z.object({
 });
 
 /**
+ * 4つの読み手（`getCloneSessionId` 等）が共有する読み出しの形（issue #1147）。
+ *
+ * **「無い（`ENOENT`）」と「在ったのに読めなかった」を分ける。** 前者は正常な
+ * 状態なので跡を残さず `null` を返す。後者（読み込みそのものの失敗・
+ * `JSON.parse` の失敗・zod のスキーマ不一致）も `null` を返す点は変えない
+ * （握り潰しをやめて例外を投げると、クローンの起動そのものが止まる——
+ * `storage-pg` 側の「壊れた1行で起動を止めない」という既存の判断と揃える）
+ * が、**`noteSessionMaterialUnreadable` で跡だけを残す。**
+ *
+ * @param path 読む先。
+ * @param what 何を読もうとしたか（`noteSessionMaterialUnreadable` へそのまま渡す固定文言）。
+ * @param parse 読めた本文から値を作る（`JSON.parse` + zod の検証）。ここが
+ *   投げた例外も「在ったのに読めなかった」側として扱う。
+ */
+async function readSessionMaterial<T>(
+  path: string,
+  what: string,
+  parse: (raw: string) => T,
+): Promise<T | null> {
+  let raw: string;
+  try {
+    raw = await readFile(path, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    noteSessionMaterialUnreadable(what, error);
+    return null;
+  }
+  try {
+    return parse(raw);
+  } catch (error) {
+    noteSessionMaterialUnreadable(what, error);
+    return null;
+  }
+}
+
+/**
  * クローンのセッション id の置き場。
  *
  * これは「同一性の置き場」ではない。同一性は記憶に宿る（architecture.md
  * 「寿命モデル」）。ここにあるのは resume を試みるための再開素材にすぎず、
  * 失われてもクローンは記憶から再構成される。
+ *
+ * **4つの書き込み（`setCloneSessionId` / `setTranscriptGrave` /
+ * `setLostSessionGrave` / `setProjectKey`）は `writeFileAtomic`（tmp へ書いて
+ * `rename`）を経由する（issue #1147）。** 素の `writeFile` は宛先を truncate
+ * してから書くので、書き込みの途中でその宛先を読む読み手が切れた（不正な
+ * JSON の）本文を見る窓が在った。
+ *
+ * **`withPathLock`（`file-lock.ts`）は足していない。** 4つとも呼び出し側が
+ * 渡した値で全置換するだけで、既存の内容を読んでから書き戻す
+ * read-modify-write ではない——だからロックで守るべき「読んでから書くまでの
+ * 間に他人が割り込む」隙が、そもそも存在しない。足しても
+ * `~/.alteroid/` に要らない lock ファイルが増えるだけである（issue #1147 の
+ * 「直すなら」節、決定済み）。
  */
 export class FsSessionRegistry implements SessionRegistry {
   readonly #dir: string;
@@ -47,12 +103,11 @@ export class FsSessionRegistry implements SessionRegistry {
   }
 
   async getCloneSessionId(): Promise<string | null> {
-    try {
-      const raw = await readFile(this.#path, 'utf8');
-      return stateSchema.parse(JSON.parse(raw)).cloneSessionId;
-    } catch {
-      return null;
-    }
+    return readSessionMaterial(
+      this.#path,
+      'クローンのセッション id（session.json）',
+      (raw) => stateSchema.parse(JSON.parse(raw)).cloneSessionId,
+    );
   }
 
   async setCloneSessionId(sessionId: string | null): Promise<void> {
@@ -61,15 +116,13 @@ export class FsSessionRegistry implements SessionRegistry {
       return;
     }
     await mkdir(this.#dir, { recursive: true });
-    await writeFile(this.#path, `${JSON.stringify({ cloneSessionId: sessionId })}\n`, 'utf8');
+    await writeFileAtomic(this.#path, `${JSON.stringify({ cloneSessionId: sessionId })}\n`);
   }
 
   async getTranscriptGrave(): Promise<TranscriptGrave | null> {
-    try {
-      return graveSchema.parse(JSON.parse(await readFile(this.#gravePath, 'utf8')));
-    } catch {
-      return null;
-    }
+    return readSessionMaterial(this.#gravePath, '生ログの墓標（transcript-grave.json）', (raw) =>
+      graveSchema.parse(JSON.parse(raw)),
+    );
   }
 
   async setTranscriptGrave(grave: TranscriptGrave | null): Promise<void> {
@@ -78,15 +131,15 @@ export class FsSessionRegistry implements SessionRegistry {
       return;
     }
     await mkdir(this.#dir, { recursive: true });
-    await writeFile(this.#gravePath, `${JSON.stringify(grave)}\n`, 'utf8');
+    await writeFileAtomic(this.#gravePath, `${JSON.stringify(grave)}\n`);
   }
 
   async getLostSessionGrave(): Promise<LostSessionGrave | null> {
-    try {
-      return lostSessionSchema.parse(JSON.parse(await readFile(this.#lostSessionPath, 'utf8')));
-    } catch {
-      return null;
-    }
+    return readSessionMaterial(
+      this.#lostSessionPath,
+      '再開素材を捨てた回の墓標（lost-session-grave.json）',
+      (raw) => lostSessionSchema.parse(JSON.parse(raw)),
+    );
   }
 
   async setLostSessionGrave(grave: LostSessionGrave | null): Promise<void> {
@@ -95,21 +148,20 @@ export class FsSessionRegistry implements SessionRegistry {
       return;
     }
     await mkdir(this.#dir, { recursive: true });
-    await writeFile(this.#lostSessionPath, `${JSON.stringify(grave)}\n`, 'utf8');
+    await writeFileAtomic(this.#lostSessionPath, `${JSON.stringify(grave)}\n`);
   }
 
   async getProjectKey(): Promise<string | null> {
-    try {
-      return projectKeySchema.parse(JSON.parse(await readFile(this.#projectKeyPath, 'utf8')))
-        .projectKey;
-    } catch {
-      return null;
-    }
+    return readSessionMaterial(
+      this.#projectKeyPath,
+      'SDK が生ログを預ける scope（project-key.json）',
+      (raw) => projectKeySchema.parse(JSON.parse(raw)).projectKey,
+    );
   }
 
   async setProjectKey(projectKey: string): Promise<void> {
     await mkdir(this.#dir, { recursive: true });
-    await writeFile(this.#projectKeyPath, `${JSON.stringify({ projectKey })}\n`, 'utf8');
+    await writeFileAtomic(this.#projectKeyPath, `${JSON.stringify({ projectKey })}\n`);
   }
 
   /** 4つの欄を全部消す（`SessionRegistry.clear` の doc）。 */
