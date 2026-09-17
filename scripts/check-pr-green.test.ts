@@ -217,6 +217,146 @@ describe('evaluatePrGreen', () => {
     ).toBe(true);
   });
 
+  it('Issue #1197 の再現: pushのrun（マージ直後のmain）で ci=success/image=success/base-overlap=skipped は out-of-scope（NGではない）', () => {
+    // 実測を模した合成標本: PR #1193 マージ後の main（939e775）で
+    // pnpm check:pr-green を打つと、base-overlap（pull_request 専用）が
+    // skipped のまま残り、従来の判定は NG（red）に丸めていた。
+    const runs = [
+      {
+        id: 1,
+        name: 'CI',
+        event: 'push',
+        created_at: '2026-09-17T12:00:00Z',
+        status: 'completed',
+        conclusion: 'success',
+      },
+    ];
+    const latest = pickLatestRunPerWorkflow(runs);
+    const jobsByRunId = {
+      1: [
+        { name: 'ci', status: 'completed', conclusion: 'success' },
+        { name: 'image', status: 'completed', conclusion: 'success' },
+        { name: 'base-overlap', status: 'completed', conclusion: 'skipped' },
+      ],
+    };
+    const result = evaluatePrGreen(latest, jobsByRunId);
+    expect(result.verdict).toBe('out-of-scope');
+    expect(result.detail.some((line: string) => line.includes('base-overlap'))).toBe(true);
+  });
+
+  it('out-of-scopeの標本にciのfailureが混じると red になる（out-of-scopeが赤を隠さない）', () => {
+    const runs = [
+      {
+        id: 1,
+        name: 'CI',
+        event: 'push',
+        created_at: '2026-09-17T12:00:00Z',
+        status: 'completed',
+        conclusion: 'failure',
+      },
+    ];
+    const latest = pickLatestRunPerWorkflow(runs);
+    const jobsByRunId = {
+      1: [
+        { name: 'ci', status: 'completed', conclusion: 'failure' },
+        { name: 'image', status: 'completed', conclusion: 'success' },
+        { name: 'base-overlap', status: 'completed', conclusion: 'skipped' },
+      ],
+    };
+    const result = evaluatePrGreen(latest, jobsByRunId);
+    expect(result.verdict).toBe('red');
+  });
+
+  it('pull_requestのrunで ci=skipped は skipped（draftのtrap。緑にもout-of-scopeにもしない）', () => {
+    const runs = [
+      {
+        id: 1,
+        name: 'CI',
+        event: 'pull_request',
+        created_at: '2026-09-17T12:00:00Z',
+        status: 'completed',
+        conclusion: 'skipped',
+      },
+    ];
+    const latest = pickLatestRunPerWorkflow(runs);
+    const jobsByRunId = {
+      1: [
+        { name: 'ci', status: 'completed', conclusion: 'skipped' },
+        { name: 'image', status: 'completed', conclusion: 'skipped' },
+        { name: 'base-overlap', status: 'completed', conclusion: 'skipped' },
+      ],
+    };
+    const result = evaluatePrGreen(latest, jobsByRunId);
+    expect(result.verdict).toBe('skipped');
+  });
+
+  it('cancelledだけが在れば cancelled（赤ではない）', () => {
+    const jobsByRunId = {
+      34743508004: [
+        { name: 'image', status: 'completed', conclusion: 'success' },
+        { name: 'ci', status: 'completed', conclusion: 'cancelled' },
+      ],
+    };
+    const result = evaluatePrGreen(latestRuns, jobsByRunId);
+    expect(result.verdict).toBe('cancelled');
+  });
+
+  it('failureとcancelledが同居すると red（cancelledがredを隠さない）', () => {
+    const jobsByRunId = {
+      34743508004: [
+        { name: 'image', status: 'completed', conclusion: 'failure' },
+        { name: 'ci', status: 'completed', conclusion: 'cancelled' },
+      ],
+    };
+    const result = evaluatePrGreen(latestRuns, jobsByRunId);
+    expect(result.verdict).toBe('red');
+  });
+
+  it('pushのrunで全jobがskippedなら unmeasurable（out-of-scopeと名乗らない。scheduleでの偽の安心を防ぐ詰め）', () => {
+    const runs = [
+      {
+        id: 1,
+        name: 'CI',
+        event: 'push',
+        created_at: '2026-09-17T12:00:00Z',
+        status: 'completed',
+        conclusion: 'skipped',
+      },
+    ];
+    const latest = pickLatestRunPerWorkflow(runs);
+    const jobsByRunId = {
+      1: [
+        { name: 'ci', status: 'completed', conclusion: 'skipped' },
+        { name: 'image', status: 'completed', conclusion: 'skipped' },
+        { name: 'base-overlap', status: 'completed', conclusion: 'skipped' },
+      ],
+    };
+    const result = evaluatePrGreen(latest, jobsByRunId);
+    expect(result.verdict).toBe('unmeasurable');
+  });
+
+  it('eventが無いrunでskippedが在れば skipped（安全側。out-of-scopeを名乗らない）', () => {
+    const runs = [
+      {
+        id: 1,
+        name: 'CI',
+        // event を持たない（古い呼び出し・試験の既定を模す）
+        created_at: '2026-09-17T12:00:00Z',
+        status: 'completed',
+        conclusion: 'success',
+      },
+    ];
+    const latest = pickLatestRunPerWorkflow(runs);
+    const jobsByRunId = {
+      1: [
+        { name: 'ci', status: 'completed', conclusion: 'success' },
+        { name: 'base-overlap', status: 'completed', conclusion: 'skipped' },
+      ],
+    };
+    const result = evaluatePrGreen(latest, jobsByRunId);
+    expect(result.verdict).toBe('skipped');
+  });
+
   it('鏡像ケース: 古い世代のsuccessが新しい世代のfailureに引きずられない', () => {
     // Issue #933「今回は安全側に外れたが、鏡像は古い世代のsuccessが新しい世代の
     // failureをstarted_atで追い越す」を、created_atベースの選択で再現する。
@@ -256,5 +396,8 @@ describe('formatVerdict', () => {
       /判定できなかった/,
     );
     expect(formatVerdict('abc123', { verdict: 'no-runs', detail: [] })).toMatch(/判定できなかった/);
+    expect(formatVerdict('abc123', { verdict: 'cancelled', detail: [] })).toMatch(/中断された job/);
+    expect(formatVerdict('abc123', { verdict: 'out-of-scope', detail: [] })).toMatch(/対象外/);
+    expect(formatVerdict('abc123', { verdict: 'skipped', detail: [] })).toMatch(/draft/);
   });
 });

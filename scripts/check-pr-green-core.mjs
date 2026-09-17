@@ -65,8 +65,14 @@ export function pickLatestRunPerWorkflow(runs) {
 
 /**
  * 選んだ最新 run 群と、それぞれの jobs から、この sha の CI が緑と言えるかを
- * 判定する。**5値で答える。** 2値にすると「まだ走っている」と「実は赤」が
- * 同じ側へ丸まる（`AGENTS.md`「静かに失敗する道具」の3値の原則と同じ形）。
+ * 判定する。**8値で答える**（`green` / `red` / `cancelled` / `out-of-scope` /
+ * `skipped` / `pending` / `unmeasurable` / `no-runs`）。2値にすると「まだ
+ * 走っている」と「実は赤」が同じ側へ丸まる（`AGENTS.md`「静かに失敗する道具」
+ * の3値の原則と同じ形）。Issue #1197 以降は非 success をさらに
+ * `red` / `cancelled` / `out-of-scope` / `skipped` の4本へ分ける——
+ * `conclusion !== 'success'` の1本判定は、マージ直後の main（push の run。
+ * `base-overlap` は pull_request 専用で設計どおり skipped）を「壊した」と
+ * 読ませていた。
  *
  * @param {{name:string,id:number,status:string,conclusion:string|null}[]} latestRuns
  *   `pickLatestRunPerWorkflow` の戻り値
@@ -94,6 +100,7 @@ export function evaluatePrGreen(latestRuns, jobsByRunId) {
   if (noJobs.length > 0) {
     return {
       verdict: 'unmeasurable',
+      reason: 'no-jobs',
       detail: noJobs.map(
         (r) => `${r.name} (run ${r.id}) は jobs が0件 —— 実際に実行されたか確認できない`,
       ),
@@ -104,20 +111,70 @@ export function evaluatePrGreen(latestRuns, jobsByRunId) {
     (jobsByRunId[r.id] ?? []).map((j) => ({ ...j, workflow: r.name, runId: r.id })),
   );
 
-  const failing = jobs.filter((j) => j.conclusion !== 'success');
-  if (failing.length > 0) {
+  const toDetail = (list) =>
+    list.map(
+      (j) => `${j.name}（workflow=${j.workflow}, run=${j.runId}）= ${j.conclusion ?? j.status}`,
+    );
+
+  const nonSuccessJobs = jobs.filter((j) => j.conclusion !== 'success');
+  if (nonSuccessJobs.length === 0) {
     return {
-      verdict: 'red',
-      detail: failing.map(
-        (j) => `${j.name}（workflow=${j.workflow}, run=${j.runId}）= ${j.conclusion ?? j.status}`,
-      ),
+      verdict: 'green',
+      detail: jobs.map((j) => `${j.name}（workflow=${j.workflow}, run=${j.runId}）= success`),
     };
   }
 
-  return {
-    verdict: 'green',
-    detail: jobs.map((j) => `${j.name}（workflow=${j.workflow}, run=${j.runId}）= success`),
-  };
+  // Issue #1197: 従来はここで `conclusion !== 'success'` の1本判定に丸め、
+  // failure / cancelled / skipped を全部同じ「NG」へ落としていた。それが
+  // マージ直後の main（push の run。base-overlap は pull_request 専用なので
+  // 設計どおり skipped）を「壊した」と読ませた。ここから先は非 success を
+  // 4本の枝へ分ける。**detail にはどの枝でも非 success の job を全部並べる
+  // （隠さない）——赤を skip や cancelled の陰に隠さないため。**
+
+  // 1. red —— cancelled でも skipped でもない非 success
+  //    （failure / timed_out / action_required / startup_failure / stale 等）
+  //    が1本でも在れば、それだけで赤と言い切れる。優先度は最上位——
+  //    cancelled や skipped が同居していても red が勝つ。
+  const redJobs = nonSuccessJobs.filter(
+    (j) => j.conclusion !== 'cancelled' && j.conclusion !== 'skipped',
+  );
+  if (redJobs.length > 0) {
+    return { verdict: 'red', detail: toDetail(nonSuccessJobs) };
+  }
+
+  // 2. cancelled —— red が無く、cancelled が1本以上。「赤ではない、走り
+  //    切っていない」。skipped が同居していても cancelled を名乗る
+  //    （何かが実際に中断されたという情報のほうが強い）。
+  const cancelledJobs = nonSuccessJobs.filter((j) => j.conclusion === 'cancelled');
+  if (cancelledJobs.length > 0) {
+    return { verdict: 'cancelled', detail: toDetail(nonSuccessJobs) };
+  }
+
+  // ここから先、nonSuccessJobs は全部 skipped。
+  const nonSkippedJobs = jobs.filter((j) => j.conclusion !== 'skipped');
+  // `pickLatestRunPerWorkflow` は run オブジェクトをそのまま通す（フィールドを
+  // 絞らない）ので、`gh api actions/runs` が返す `event`（"push" /
+  // "pull_request" / "schedule" 等）もここでそのまま読める。
+  const allEventsKnown = latestRuns.every((r) => r.event !== undefined);
+  const anyPullRequestRun = latestRuns.some((r) => r.event === 'pull_request');
+
+  // 3. out-of-scope —— 最新 run のどれもが pull_request イベントではないと
+  //    分かっている（event が読めている）とき、pull_request 専用 job の
+  //    skip は設計どおりである。この道具は PR 用であり、対象外だと名乗る。
+  //    ⚠ 「skip 以外はすべて success」が空虚な主張にならないよう、実行された
+  //    （skipped でない）job が1本も無いとき（例: schedule で `ci` が丸ごと
+  //    skip される run）は out-of-scope と名乗らず unmeasurable へ落とす。
+  if (allEventsKnown && !anyPullRequestRun) {
+    if (nonSkippedJobs.length === 0) {
+      return { verdict: 'unmeasurable', reason: 'all-skipped', detail: toDetail(nonSuccessJobs) };
+    }
+    return { verdict: 'out-of-scope', detail: toDetail(nonSuccessJobs) };
+  }
+
+  // 4. skipped —— pull_request の run が在る（または event が undefined で
+  //    pull_request ではないと判定できない——安全側）。draft 由来の skip の
+  //    疑いを含むので、ここは絶対に緑にしない。
+  return { verdict: 'skipped', detail: toDetail(nonSuccessJobs) };
 }
 
 /**
@@ -130,13 +187,30 @@ export function formatVerdict(sha, result) {
       return `${header} 判定できなかった —— この sha に workflow run が1つも無い`;
     case 'pending':
       return [`${header} 保留 —— まだ完了していない run が在る`, ...result.detail].join('\n  ');
-    case 'unmeasurable':
-      return [
-        `${header} 判定できなかった —— jobs が0件の run が在り、実行されたか確認できない`,
-        ...result.detail,
-      ].join('\n  ');
+    case 'unmeasurable': {
+      const reasonText =
+        result.reason === 'all-skipped'
+          ? 'job がすべて skipped で、success だったと言える job が1本も無い'
+          : 'jobs が0件の run が在り、実行されたか確認できない';
+      return [`${header} 判定できなかった —— ${reasonText}`, ...result.detail].join('\n  ');
+    }
     case 'red':
       return [`${header} NG —— success ではない job が在る`, ...result.detail].join('\n  ');
+    case 'cancelled':
+      return [
+        `${header} 判定できなかった —— 中断された job が在る（赤ではない。走り切っていない）`,
+        ...result.detail,
+      ].join('\n  ');
+    case 'out-of-scope':
+      return [
+        `${header} 対象外 —— この道具は PR 用である。対象 sha は PR の run を持たない（event=push 等）。pull_request 専用の job は設計どおり skip される。skip 以外の job はすべて success だった`,
+        ...result.detail,
+      ].join('\n  ');
+    case 'skipped':
+      return [
+        `${header} NG —— skipped の job が在る（draft 由来の skip の疑いがある。緑と数えない）`,
+        ...result.detail,
+      ].join('\n  ');
     case 'green':
       return [`${header} OK —— 最新世代の job がすべて success`, ...result.detail].join('\n  ');
     default:
