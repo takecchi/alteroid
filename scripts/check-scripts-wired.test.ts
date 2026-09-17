@@ -120,11 +120,18 @@ const EXEMPT: Exemption[] = [
     script: 'check:keyword-closed-issues',
     why:
       '「閉じるキーワードで閉じた疑いのある Issue」を後から一覧する報告ツールであって、CI の門ではない' +
-      '（Issue #1128）。何を赤くするかの基準（閾値の確からしさ）を確定させる機構が無いため required にせず、' +
-      'required にしない以上 workflow から呼ぶ理由も無い（`check:pr-closing-keywords` と同じ理由）。' +
-      'STEPS（scripts/verify-core.mjs）にも入れない —— `pnpm test` は offline でも走るが、この道具は ' +
-      '`gh api` / `gh pr list` でネットワークへ出るので同じ理由で足せない（`check:pr-green` の免除理由と同じ形）。' +
-      '使うのは人（またはエージェント）が手元で `pnpm check:keyword-closed-issues` として叩く場面である。',
+      '（Issue #1128）。何を赤くするかの基準（閾値の確からしさ）を確定させる機構が無いため required にはしない。' +
+      'STEPS（scripts/verify-core.mjs）にも入れない —— `gh api` / `gh pr list` でネットワークへ出るため' +
+      '（`check:pr-green` の免除理由と同じ形。あちらも「引数を取る手動/エージェント用の道具」として' +
+      'STEPS からも workflow からも意図的に外れている）。' +
+      '非 required の schedule workflow（門ではなく警報の回。`check:required-status-checks` の免除欄が' +
+      '挙げている置き場所）から呼ぶ形も考えられるが、いまは足していない —— ' +
+      '(1) 出力先（コメント/新規 Issue/Slack 等）を1つも決めておらず、この repo は出自の刻印（#893）のような' +
+      '自動投稿の仕組みを「使われていない」として明示的にやめた前例を持つ（新しい自動投稿の宛先を無断で作らない）。' +
+      '(2) `issues/events` の全履歴走査は呼ぶたびにネットワーク費用が掛かる。' +
+      '(3) 依頼の時点でこの道具は「手で走らせる報告ツール」として明示的に切り出されている' +
+      '（Issue #1128 本文も「報告の形が合うかもしれない」と言うだけで、自動配信までは要求していない）。' +
+      'schedule 経由に広げるかどうかは人間の判断であり、この PR の範囲外。',
   },
   {
     script: 'check:pr-green',
