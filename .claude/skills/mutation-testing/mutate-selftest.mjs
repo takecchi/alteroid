@@ -431,6 +431,39 @@ describe('強い歯（selftest）', () => {
 //   - 印から原文が復元できる（このシナリオでは控えもわざと使えなくして、
 //     マーカー単独での復元を裏取りする）
 //   - 印が残った状態では、測定を始めずに落ちる（baseline/run の入口チェック）
+//
+// #1138: `cmdSelftest` は戻り値を JSON.stringify して log するだけで中身を
+// 検査しない（`weak-tooth` の `assertWeakToothOutcomes` 以外は未検査だった）。
+// このシナリオの核心の主張は、上のコメントが数える3点＋αをすべて満たすこと
+// ——`assertWeakToothOutcomes` と同じ形で、`undefined`/`null`（＝測れていない）
+// も違反として落とす。
+function assertInterruptedOutcomes(result) {
+  const expected = {
+    markerPresentAfterInterruption: true,
+    statusReportedProblem: true,
+    baselineBlockedWhileMarkerPresent: true,
+    recoveredFromMarkerOnly: true,
+    restoredCorrectly: true,
+  };
+  const violations = [];
+  for (const [key, want] of Object.entries(expected)) {
+    const got = result[key] ?? null;
+    if (got !== want) {
+      violations.push(`  - ${key}: 期待 ${JSON.stringify(want)} / 実際 ${JSON.stringify(got)}`);
+    }
+  }
+  if (violations.length > 0) {
+    throw new HarnessError(
+      'interrupted: このシナリオが実演するはずの主張（印が残る・status が問題を' +
+        '報告する・印が残った状態では baseline が測定を始めずに落ちる・印だけから' +
+        '正しく復元できる）が出ていない。\n' +
+        `${violations.join('\n')}\n` +
+        'なぜ落とすか: 戻り値を検査しなければ、判定が化けても緑のまま残る（#1138。' +
+        '#1119 が weak-tooth に見つけた欠陥と同じ形——「繋いだが効いていない」）。',
+    );
+  }
+}
+
 function scenarioInterrupted() {
   section('selftest: 3. 中断（正しい順序: 印 → 変異）');
   requireNoMarker('interrupted');
@@ -512,7 +545,7 @@ function scenarioInterrupted() {
   log(`復元後の中身が原文と一致: ${restoredCorrectly}`);
   log(`復元後、印は残っているか（無いはず）: ${markerExists()}`);
 
-  return {
+  const result = {
     scenario: 'interrupted',
     order: 'correct',
     markerPresentAfterInterruption: markerPresent,
@@ -521,6 +554,8 @@ function scenarioInterrupted() {
     recoveredFromMarkerOnly,
     restoredCorrectly,
   };
+  assertInterruptedOutcomes(result);
+  return result;
 }
 
 // ── 3'. 中断（誤った順序との対比） ──────────────────────────────────
@@ -529,6 +564,33 @@ function scenarioInterrupted() {
 // を呼ばず、ここだけで直線的に「変異を先に書き、印はまだ置かない」という
 // 誤った順序を再現する。本体に順序を切り替えるフラグは無い — 抜け道は
 // 次の穴になるので置かない。
+//
+// #1138: このシナリオの核心の主張は `scenarioInterrupted` と鏡像である
+// ——誤った順序では印が残らない（＝次に来た人が復元できる材料を持たない）
+// のに、`status` はそれを「印は無い」＝問題なしと誤読する。この対比が
+// 崩れたら、このシナリオは何も実演していない。
+function assertInterruptedWrongOrderOutcomes(result) {
+  const expected = {
+    markerPresentAfterInterruption: false,
+    statusReportedNoProblem: true,
+  };
+  const violations = [];
+  for (const [key, want] of Object.entries(expected)) {
+    const got = result[key] ?? null;
+    if (got !== want) {
+      violations.push(`  - ${key}: 期待 ${JSON.stringify(want)} / 実際 ${JSON.stringify(got)}`);
+    }
+  }
+  if (violations.length > 0) {
+    throw new HarnessError(
+      'interrupted-wrong-order: このシナリオが実演するはずの対比（誤った順序では' +
+        '印が残らない・status はそれを問題なしと誤読する）が出ていない。\n' +
+        `${violations.join('\n')}\n` +
+        'なぜ落とすか: 戻り値を検査しなければ、判定が化けても緑のまま残る（#1138）。',
+    );
+  }
+}
+
 function scenarioInterruptedWrongOrder() {
   section('selftest: 3´. 中断との対比（誤った順序: 変異 → 印。ハーネス本体には存在しない経路）');
   requireNoMarker('interrupted-wrong-order');
@@ -559,15 +621,48 @@ function scenarioInterruptedWrongOrder() {
   const statusAfterCleanup = gitStatusPorcelainFor(FIXTURE_REL);
   log(`cleanup 後の git status --porcelain: ${JSON.stringify(statusAfterCleanup)}`);
 
-  return {
+  const result = {
     scenario: 'interrupted-wrong-order',
     order: 'wrong',
     markerPresentAfterInterruption: markerPresent,
     statusReportedNoProblem: /印は無い/.test(statusResult),
   };
+  assertInterruptedWrongOrderOutcomes(result);
+  return result;
 }
 
 // ── 4. 変異が成果物へ届いたか ────────────────────────────────────────
+//
+// #1138: このシナリオの核心の主張は「build 前には dist へ届いていない・
+// build 後には届く・復元後は消えている」という対比である。build/restore が
+// 途中で壊れても exit code は 0 でありうる（`buildAndCheckArtifact` は
+// build の終了コードでは判定しない設計 — [9] のログ参照）ので、戻り値の
+// 中身を実際に突き合わせないと、この対比が崩れても緑のまま残る。
+function assertDeliveryOutcomes(result) {
+  const expected = {
+    deliveredBeforeBuild: false,
+    deliveredAfterBuild: true,
+    buildExitCodeAfterBuild: 0,
+    postRestoreRebuildOk: true,
+    distCleanAfterRestore: true,
+  };
+  const violations = [];
+  for (const [key, want] of Object.entries(expected)) {
+    const got = result[key] ?? null;
+    if (got !== want) {
+      violations.push(`  - ${key}: 期待 ${JSON.stringify(want)} / 実際 ${JSON.stringify(got)}`);
+    }
+  }
+  if (violations.length > 0) {
+    throw new HarnessError(
+      'delivery: このシナリオが実演するはずの対比（build 前には届いていない・' +
+        'build 後には届く・復元後は消えている）が出ていない。\n' +
+        `${violations.join('\n')}\n` +
+        'なぜ落とすか: 戻り値を検査しなければ、判定が化けても緑のまま残る（#1138）。',
+    );
+  }
+}
+
 function scenarioDelivery() {
   section('selftest: 4. 変異が成果物へ届いたか（packages/core/src/excerpt.ts）');
   requireNoMarker('delivery');
@@ -640,7 +735,7 @@ function scenarioDelivery() {
   const distMatchesRestoredSource = !distAfterRestore.includes('SELFTEST_MUTATED');
   log(`後始末後、dist に変異が残っていないか（残っていないはず）: ${distMatchesRestoredSource}`);
 
-  return {
+  const result = {
     scenario: 'delivery',
     deliveredBeforeBuild,
     deliveredAfterBuild: artifactResult.artifactState === 'delivered',
@@ -650,6 +745,8 @@ function scenarioDelivery() {
     postRestoreRebuildReason: rebuildCheck.reason,
     distCleanAfterRestore: distMatchesRestoredSource,
   };
+  assertDeliveryOutcomes(result);
+  return result;
 }
 
 // ── 5. 判定行の id 取り違えを検出する確認 ───────────────────────────
