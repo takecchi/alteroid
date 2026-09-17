@@ -5586,6 +5586,27 @@ class Clone implements CloneHost {
             '⚠️ この区間は記憶へ移せていない）'
           : `記憶へ移せていない区間の退避が見つからないので、印を下ろした: ${grave.archiveId}` +
             '（器を作り直した、あるいはそもそも積まれなかった。⚠️ この区間は記憶へ移せていない）';
+      // **⚠️ 引き直してから下ろす**（issue #1157 段2）。**蒸留に成功した側
+      // （この関数の末尾）は元からそうしている。こちらだけが素で `null` を
+      // 書いていた** —— しかも `archive.read` と日誌の書き込みを跨ぐぶん、
+      // **あちらより窓が広い。** 拾っている間に `#salvageTranscript` が新しい
+      // 印を立てると、素の `null` はその新しい方を消す ⟹ **その区間は二度と
+      // 拾われない。**
+      const current = await this.#stores.sessions.getTranscriptGrave();
+      if (current?.archiveId !== grave.archiveId) {
+        // **下ろさない。そして「下ろした」とは書かない** —— 跡が嘘をつく側へ
+        // 倒れる（#1157 が塞いでいるのと同じ族である）。拾えなかったこと自体は
+        // 失われるので、別の文で残す。
+        await this.#journal({
+          type: 'exchange',
+          with: 'self',
+          role: 'outbound',
+          text:
+            `記憶へ移せていない区間の退避を拾えなかったが、拾っている間に新しい印が立ったので、印は下ろさなかった: ${grave.archiveId}` +
+            `（いまの印: ${current?.archiveId ?? 'なし'}）`,
+        });
+        return;
+      }
       await this.#journal({
         type: 'exchange',
         with: 'self',
@@ -5680,6 +5701,21 @@ class Clone implements CloneHost {
     if (transcript === null) {
       // 預けた生ログが1件も無い（そのセッションは何も預けずに終わった）。
       // **印だけを残さない** —— 残すと、拾えないものを起動のたびに引きに行く。
+      // **⚠️ 引き直してから下ろす**（issue #1157 段2。この関数の末尾と同じ形で、
+      // こちらだけが素で `null` を書いていた。理由は
+      // `#pickUpTranscriptGrave` の同じ分岐に書いた）。
+      const current = await this.#stores.sessions.getLostSessionGrave();
+      if (current?.sessionId !== grave.sessionId) {
+        await this.#journal({
+          type: 'exchange',
+          with: 'self',
+          role: 'outbound',
+          text:
+            `捨てたセッションの生ログが1件も無かったが、拾っている間に新しい印が立ったので、印は下ろさなかった: ${grave.sessionId}` +
+            `（いまの印: ${current?.sessionId ?? 'なし'}）`,
+        });
+        return;
+      }
       await this.#journal({
         type: 'exchange',
         with: 'self',

@@ -141,7 +141,10 @@ describe('拾い上げが新しい印を消す（#1157 段2）', () => {
     const fake = fakeSdk();
     const clone = bootClone(stores, fake);
     clone.post(report('起動する'));
-    await waitForJournal(stores, '印を下ろした');
+    // **待つ文言は、下ろした側と下ろさなかった側の両方に共通する部分にする。**
+    // 片方だけの文言で待つと、直した実装では永遠に待つ（＝赤の理由が
+    // アサーションではなくタイムアウトに化ける）。
+    await waitForJournal(stores, '記憶へ移せていない区間の退避');
     await clone.stop();
 
     // **新しい印は生き残っていなければならない** —— その区間はまだ記憶へ
@@ -167,12 +170,46 @@ describe('拾い上げが新しい印を消す（#1157 段2）', () => {
     const fake = fakeSdk();
     const clone = bootClone(stores, fake);
     clone.post(report('起動する'));
-    await waitForJournal(stores, '印を下ろした');
+    await waitForJournal(stores, '捨てたセッションの生ログが1件も無');
     await clone.stop();
 
     expect(await base.sessions.getLostSessionGrave()).toEqual({
       projectKey: 'proj',
       sessionId: 'sess-new',
     });
+  });
+
+  it('⛔ 陰性対照: 新しい印が立たなければ、退避が無い印はちゃんと下ろされる', async () => {
+    const stores = createMemoryStores();
+    await stores.sessions.setTranscriptGrave({ archiveId: 'arc-old' });
+
+    const fake = fakeSdk();
+    const clone = bootClone(stores, fake);
+    clone.post(report('起動する'));
+    await waitForJournal(stores, '記憶へ移せていない区間の退避');
+    await clone.stop();
+
+    // **「一切下ろさない」実装ならここで落ちる。** 下ろさないと、拾えないものを
+    // 起動のたびに引きに行くことになる（元の doc「印だけを残さない」）。
+    expect(await stores.sessions.getTranscriptGrave()).toBeNull();
+  });
+
+  it('⛔ 陰性対照: 新しい印が立たなければ、生ログが無い印もちゃんと下ろされる', async () => {
+    const base = createMemoryStores();
+    await base.sessions.setLostSessionGrave({ projectKey: 'proj', sessionId: 'sess-old' });
+    const stores: Stores = {
+      ...base,
+      sessionTranscriptTail: {
+        readTail: () => Promise.resolve(null),
+      } as unknown as Stores['sessionTranscriptTail'],
+    };
+
+    const fake = fakeSdk();
+    const clone = bootClone(stores, fake);
+    clone.post(report('起動する'));
+    await waitForJournal(stores, '捨てたセッションの生ログが1件も無');
+    await clone.stop();
+
+    expect(await base.sessions.getLostSessionGrave()).toBeNull();
   });
 });
