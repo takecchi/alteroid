@@ -699,8 +699,14 @@ jobs:
           BASE_OVERLAP_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           BASE_OVERLAP_PR_NUMBER: ${{ github.event.pull_request.number }}
 
-  # **`base-overlap` を required contexts（`ci` / `image`、2026-09-12実測）には
-  # 入れていない。**
+  # **`base-overlap` を required contexts には入れていない。**
+  #
+  # ⚠️ **`contexts` の中身をここに数え上げない —— 増えるたびに腐る。** ここには
+  # 「`ci` / `image`（2026-09-12実測）」と書いてあったが、実測 2026-09-17 で
+  # `["ci","image","no-attribution-trailers","pr-title-type"]` の4本だった。
+  # **持ち主は `.github/required-status-checks.json` と
+  # `pnpm check:required-status-checks`（protection と突き合わせる）である。**
+  # 取り直すには `gh api repos/takecchi/alteroid/branches/main/protection --jq '.required_status_checks.contexts'` を打つ。
   #
   # 1. **この歯は GitHub API とファイルパスの積集合というヒューリスティックに
   #    依存する。** 誤検知（無関係な同名変更・偶然のパス一致）が required だと、
