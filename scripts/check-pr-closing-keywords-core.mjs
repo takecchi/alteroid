@@ -489,6 +489,8 @@ export function formatVerdict(prNumber, result) {
         '  次の一手:',
         '   - 参照だけしたいなら番号だけ書く（キーワードを同じ行に置かない）',
         '   - 閉じたいならキーワードと参照だけの行にする、または手で閉じる（gh issue close <N>）',
+        '   - GitHub のパーサに預けずに閉じたいなら `Alteroid-Issue-Done: <番号>` を' +
+          ' PR 本文へ書く（書式は scripts/issue-done-trailer-core.mjs の doc。#1134）',
         '  ⚠️ バッククォートで囲んでも GitHub は閉じる',
       ].join('\n');
     case 'ok':

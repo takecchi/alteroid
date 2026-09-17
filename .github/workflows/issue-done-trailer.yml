@@ -1,0 +1,89 @@
+name: Issue done trailer
+
+# **マージされた PR の本文に書かれた `Alteroid-Issue-Done` trailer を読み、
+# 対応する Issue を close する**（Issue #1134。#1109 の裏返し——散文の「閉じる」
+# 意思は GitHub のクローズキーワードパーサに届かず、直った Issue が open の
+# まま残ることがある。PR #1073 の「**#1072 を閉じる。**」が実例で、#1072 は
+# 人間が手で閉じるまで約1日 open のままだった）。
+#
+# **GitHub のパーサに一切預けない。** trailer の書式・名前をキーワード9語の
+# どれとも重ならないよう選んだ理由・降りる口（`none` / フェンス・引用の除外）
+# の設計は `scripts/issue-done-trailer-core.mjs` の doc が正本。`gh` を叩く層は
+# `scripts/issue-done-trailer.mjs`。ここは呼び出しだけ。
+#
+# ## 既定は dry-run。実際に閉じるのは `ISSUE_DONE_TRAILER_APPLY=1` を渡す
+#     このジョブだけ
+#
+# `scripts/issue-done-trailer.mjs` は環境変数 `ISSUE_DONE_TRAILER_APPLY=1`
+# （または `--apply`）が無い限り `gh issue close` を一切呼ばない。手元で
+# `pnpm issue-done-trailer` を誤って叩いても何も閉じない——実際に閉じる
+# 経路はこの workflow がその環境変数を渡す1本だけである。
+#
+# ## なぜ `pull_request: types: [closed]` か（`ci.yml` / `pr-title.yml` /
+#     `pr-closing-keywords.yml` とは trigger の性質が違う）
+#
+# 他の門（`pr-title-type` / `pr-closing-keywords` / `no-attribution-trailers`）は
+# 「PR が開いているあいだ、内容が変わるたびに」判定し直す必要があるので
+# `edited` / `synchronize` を持つ。**この workflow は逆——マージという1回きりの
+# 事実にしか反応しない。** `closed` イベントで、実際にマージされたか
+# （`github.event.pull_request.merged == true`）を job の `if:` で見分ける
+# （`closed` イベントは「閉じた」の全部を1本で受け、マージも普通のクローズも
+# 区別しないので、ここで絞る）。
+#
+# ## なぜ base が default branch のときだけ走るか
+#
+# stacked PR やリリース枝向けの中継 PR が default branch 以外へマージされる
+# ことがある（`AGENTS.md`「リポジトリの約束」の `--delete-branch` の項が記録
+# している stacked PR の実例と同じ族）。**Issue を閉じてよいと言えるのは
+# default branch（`main`）へ実際に着地したときだけ**なので、
+# `github.event.pull_request.base.ref == github.event.repository.default_branch`
+# も job の `if:` に含める。
+#
+# ## fork からの PR（測っていない。正直に書く）
+#
+# `pull_request` イベントは fork からの PR に対して write 権限のトークンを
+# 渡さない（`GITHUB_TOKEN` が read-only になる）。`pull_request_target` を使えば
+# write は取れるが、fork 側のコードを default branch の権限で走らせることに
+# なり安全ではないので**採らない**。**⟹ fork からの PR では、この workflow は
+# `gh issue close` に失敗する可能性が高い**（`issues: write` が要るため）。
+# **実際には確かめていない**——この repo はいまのところ takecchi の単独運用で
+# fork からの PR が来ていないので、当面問題にならないという判断のうえで
+# 先送りしている。fork 運用が始まったら測り直すこと。
+on:
+  pull_request:
+    types: [closed]
+
+# `pr-closing-keywords.yml` と同じ形（理由の逐語は
+# `grep -Fn -- '同じ PR に続けて push したとき、古い実行を残さない' .github/workflows/ci.yml`）。
+# この workflow は `closed` の1回しか起きないはずだが、`synchronize` 由来の
+# 多重実行が無いことを前提にしないため、同じ安全策を揃えておく。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  # **required contexts（`.github/required-status-checks.json`）には入れない。**
+  # マージ後にしか走らない workflow を required にしても、マージ前の PR は
+  # 永遠にその状態を満たせない——required の定義そのものと相性が悪い。
+  issue-done-trailer:
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    permissions:
+      # **`issues: write` が要る**（`gh issue close` / `--comment`）。
+      contents: read
+      issues: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v4
+      - run: pnpm issue-done-trailer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          ISSUE_DONE_TRAILER_PR_NUMBER: ${{ github.event.pull_request.number }}
+          # **ここが唯一の実際に close する経路である。** 手元で
+          # `pnpm issue-done-trailer` を叩いてもこの変数が立たないので
+          # dry-run のままである。
+          ISSUE_DONE_TRAILER_APPLY: '1'
