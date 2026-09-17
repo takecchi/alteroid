@@ -205,7 +205,7 @@ export function buildIssueBody({ workflowName, headSha, runId, runUrl, key, extr
     '## 閉じてよいとき',
     '',
     '**直したら手で閉じてよい。** この仕掛けは Issue を自動では閉じない',
-    '（理由の逐語は `grep -Fn -- \'閉じるのは人である\' scripts/main-ci-alarm-core.mjs`）。',
+    "（理由の逐語は `grep -Fn -- '閉じるのは人である' scripts/main-ci-alarm-core.mjs`）。",
     '同じ sha で同じ workflow がまた落ちた場合は、新しい Issue ではなく',
     'この Issue へコメントが足される。**`main` が進めば別の Issue になる。**',
     '',

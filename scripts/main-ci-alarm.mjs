@@ -233,16 +233,10 @@ function main() {
       log(body);
       return;
     }
-    const { stdout, error } = gh([
-      'issue',
-      'create',
-      '--repo',
-      repo,
-      '--title',
-      title,
-      '--body-file',
-      '-',
-    ], { input: body });
+    const { stdout, error } = gh(
+      ['issue', 'create', '--repo', repo, '--title', title, '--body-file', '-'],
+      { input: body },
+    );
     if (stdout === null) {
       logError('main-ci-alarm: gh issue create が失敗した');
       logError(`  gh の出力: ${error}`);
@@ -259,15 +253,10 @@ function main() {
     log(comment);
     return;
   }
-  const { stdout, error } = gh([
-    'issue',
-    'comment',
-    String(action.issueNumber),
-    '--repo',
-    repo,
-    '--body-file',
-    '-',
-  ], { input: comment });
+  const { stdout, error } = gh(
+    ['issue', 'comment', String(action.issueNumber), '--repo', repo, '--body-file', '-'],
+    { input: comment },
+  );
   if (stdout === null) {
     logError(`main-ci-alarm: gh issue comment が失敗した（#${action.issueNumber}）`);
     logError(`  gh の出力: ${error}`);

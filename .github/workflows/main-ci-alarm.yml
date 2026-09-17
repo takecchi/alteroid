@@ -1,0 +1,97 @@
+name: main の赤を知らせる
+
+# **`main` で workflow が落ちたことを、この repo の Issue として知らせる**（Issue #1207）。
+#
+# ## なぜ要るか
+#
+# #1207 の実測（2026-08-18〜09-17 の28日）: `main` の post-merge CI（`workflow=CI`、
+# `event=push`）は **6回**落ちている。それなのに `.github/workflows/` の8本のどこにも
+# `if: failure()` の step も、失敗に反応する workflow も無かった。⟹ **落ちたことを
+# 誰かへ送る経路が repo の中に1本も無い。**
+#
+# ⚠️ **「誰も気づかない」とまでは言えない。** GitHub は既定で、失敗した run を**起こした
+# 人**へメールを送る設定を持つ。有効かどうかはアカウント側の設定なので、repo からは
+# 見えない。**言えるのは「repo の中に自動の経路は1本も無い」までである** —— これが
+# その1本目である。
+#
+# ## ⛔ これは警報であって門ではない
+#
+# **ここが何をしても、マージも反映も止まらない。** 赤い `main` が `release/prod` へ
+# 流れるのを止めるのは `.github/scripts/reflect-release-prod.sh` の側の仕事である。
+# ⟹ **2つで1組である。** 止めるだけだと止まったことが誰にも見えず、知らせるだけだと
+# 誰も見ていない夜に流れる。**片方だけで「塞いだ」と言わないこと。**
+#
+# ## なぜ `workflow_run` か
+#
+# **この repo で `workflow_run` を使うのはここが最初である**（2026-09-18 時点で
+# `grep -Frn -- 'workflow_run' .github/workflows/` は0件だった）。倣える先例が repo の
+# 中に無いので、選んだ理由を残す:
+#
+# - `ci.yml` に `if: failure()` の step を足す形は**採らない。** あれは `ci` ジョブの
+#   中にしか置けず、**`ci` ジョブ自体が起きなかった回（`if:` が偽・runner が落ちた・
+#   `startup_failure`）を拾えない。** run の外から run の結末を見る `workflow_run` は
+#   そこを拾える
+# - 監視対象を**名前で**並べる。`CI` と `release/prod へ反映` の2本
+#   （⚠️ **workflow の `name:` を変えたらここも変わる。** 名前で紐付いているので、
+#   片方だけ直すと静かに鳴らなくなる）
+#
+# ## ⚠️ この workflow は PR では試せない
+#
+# `workflow_run` で起きる workflow は、**default branch に在るファイルだけが使われる。**
+# ⟹ **この PR のブランチに置いてあるあいだ、1度も発火しない。** 実際に鳴るかどうかは
+# **マージした後にしか確かめられない。** テスト（`scripts/main-ci-alarm.test.ts`）が
+# 固定しているのは判定の側だけで、**発火そのものは固定できていない。**
+on:
+  workflow_run:
+    workflows:
+      - CI
+      - release/prod へ反映
+    types: [completed]
+
+# **同じ run に対して二重に走らせない。** `workflow_run` は再実行でも起きる。
+# 走っている方は止めない（途中で切ると Issue を立てる途中で終わる）。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  # **required contexts（`.github/required-status-checks.json`）には入れない。**
+  # `workflow_run` は PR のチェックではないので、required にしても PR は永遠に
+  # その状態を満たせない（`issue-done-trailer.yml` と同じ理由）。
+  alarm:
+    # **失敗した回だけ起こす。** 成功でも起こす形（緑に戻ったら Issue を閉じる）は
+    # 検討して**採らなかった** —— `main` へのマージは実測で16時間に30回あり
+    # （2026-09-17）、警報1回のために毎回の成功で器を立てるのは釣り合わない。
+    # 理由の逐語は `grep -Fn -- '閉じるのは人である' scripts/main-ci-alarm-core.mjs`。
+    #
+    # **`head_branch` で PR の run を落とす。** PR の赤は PR の画面に出ているので
+    # 警報の対象ではない —— 知らせる経路が無いのは `main` のほうである。
+    # ⚠️ `release/prod へ反映` を `main` 以外の枝から `workflow_dispatch` で
+    # 起こした回はここで落ちる（押すのは `main` だが `head_branch` は起こした枝に
+    # なる）。**その回は手で起こしているので、起こした人が結果を見ている。**
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.head_branch == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    permissions:
+      # **`issues: write` が要る**（`gh issue create` / `gh issue comment`）。
+      # 読むだけの `contents: read` は checkout に要る。他は要らない。
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v4
+      - run: pnpm main-ci-alarm
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          MAIN_CI_ALARM_WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          MAIN_CI_ALARM_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          MAIN_CI_ALARM_RUN_ID: ${{ github.event.workflow_run.id }}
+          MAIN_CI_ALARM_RUN_URL: ${{ github.event.workflow_run.html_url }}
+          MAIN_CI_ALARM_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          MAIN_CI_ALARM_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          MAIN_CI_ALARM_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          # **ここが唯一の実際に書く経路である。** 手元で `pnpm main-ci-alarm` を
+          # 叩いてもこの変数が立たないので dry-run のままである。
+          MAIN_CI_ALARM_APPLY: '1'
