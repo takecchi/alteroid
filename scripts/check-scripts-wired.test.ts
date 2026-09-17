@@ -117,6 +117,16 @@ interface Exemption {
 
 const EXEMPT: Exemption[] = [
   {
+    script: 'check:keyword-closed-issues',
+    why:
+      '「閉じるキーワードで閉じた疑いのある Issue」を後から一覧する報告ツールであって、CI の門ではない' +
+      '（Issue #1128）。何を赤くするかの基準（閾値の確からしさ）を確定させる機構が無いため required にせず、' +
+      'required にしない以上 workflow から呼ぶ理由も無い（`check:pr-closing-keywords` と同じ理由）。' +
+      'STEPS（scripts/verify-core.mjs）にも入れない —— `pnpm test` は offline でも走るが、この道具は ' +
+      '`gh api` / `gh pr list` でネットワークへ出るので同じ理由で足せない（`check:pr-green` の免除理由と同じ形）。' +
+      '使うのは人（またはエージェント）が手元で `pnpm check:keyword-closed-issues` として叩く場面である。',
+  },
+  {
     script: 'check:pr-green',
     why:
       '引数に sha を取る手動/エージェント用の道具であり、CI の門ではない（Issue #933）。' +
