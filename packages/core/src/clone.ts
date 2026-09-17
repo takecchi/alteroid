@@ -4144,8 +4144,17 @@ class Clone implements CloneHost {
    * **ここが古くなると、クローンは「器は並べ替えない」と読み続ける。****一覧そのものは載せない** — 件数に比例して伸びるものを毎ターン
    * 積むと、溜まっているときほどターンが重くなる。全文は `commitment_list` で取れる。
    *
-   * **読めなくても空文字を返してターンを進める。** 台帳が読めないことでターンまで
-   * 止めたら、いま塞いでいる穴より広い穴になる。
+   * **読めなくてもターンは進める。** 台帳が読めないことでターンまで止めたら、
+   * いま塞いでいる穴より広い穴になる。**⚠️ ただし黙って消さない（Issue #1145）。**
+   * かつてはここで空文字を返していた——その回に組むはずだった断り書きが
+   * `missing`（載せたはずが再読で見当たらない）も `unrecorded`（台帳には開けたが
+   * 機械が名乗った記録を日誌へ残せなかった）も**道連れに消え**、⟹ **「台帳が
+   * 読めなかった回」と「異常が1件も無かった回」が、クローンから見て同じ無言に
+   * なっていた。断り書きは、読めなかったときにこそ要るものである。** いまは
+   * (a) 読めなかったこと自体を名乗る行を返し、(b) 台帳の再読を1バイトも必要と
+   * しない `unrecorded` の断りは、再読の失敗とは無関係に生き残らせる
+   * （`#situationNoticeFor` の `describeSituationUnavailable` と同じ向き——
+   * 「判定できない」を 0 件にも「異常なし」にも潰さない）。
    *
    * **見出しは`いつ数えた値か`を名乗る（#960、`situation.ts` の `readAtLabel`）。**
    * この節も `#pushInput` で会話履歴へ連結され、ターンが N 回走れば N 個並ぶ
@@ -4190,12 +4199,53 @@ class Clone implements CloneHost {
     // 選び直す。**`includeClosed` を足すのは、この直後の `missing` 判定の
     // ためだけである**（`missing` の doc）。1回の読み出しで両方を賄うのは、
     // 台帳を2回読み直すと「いつ数えた値か」（`at`）が2つに割れるからである。
+    // **Issue #1060 (段2) / Issue #1145。** `'unrecorded'`（台帳には開けたが、
+    // その id を機械が名乗った記録を日誌へ残せなかった）を、`missing` とは別に
+    // 集めて名指しで断る。**この2つの集合は重ならないとは限らない**——`missing`
+    // は「再読して見当たらない」を測り、`unrecorded` は「記録の追記そのものが
+    // 落ちた」を測る、別の軸である。同じ id が両方に出ることがあるが、それぞれ
+    // 別のことを言っているので、片方の行がもう片方を隠す理由は無い
+    // （`CommitOutcome` の `'unrecorded'` の doc）。
+    //
+    // **⚠️ 組むのは台帳の再読（`list()`）より前である（Issue #1145）。** この断りは
+    // `outcomes` だけで決まり、**台帳の再読を1バイトも必要としない**——再読の
+    // 失敗で消える理由が無い。下の `catch` はこの行を持って抜ける。
+    const unrecorded = events.filter((pending) => outcomes.get(pending.id) === 'unrecorded');
+    const unrecordedIdList = excerptLine(
+      unrecorded.map((pending) => `\`${pending.id}\``).join(', '),
+      CLONE_ID_LIST_EXCERPT,
+    );
+    const unrecordedLines =
+      unrecorded.length === 0
+        ? []
+        : [
+            `**⚠️ この ${unrecorded.length} 件は台帳には開けたが、機械が名乗った記録を` +
+              `日誌に残せなかった（id: ${unrecordedIdList}）。** 後から「機械がこの id を` +
+              '名乗ったか」を突き合わせられない。',
+          ];
+
     let list: CommitmentList;
     try {
       list = await this.#stores.commitments.list({ includeClosed: true });
     } catch (error) {
       noteDroppedRecord('未了の読み出し', inboxEventShape(event), error);
-      return '';
+      // **Issue #1145。** かつてはここで空文字を返していた ＝ **「読めなかった」と
+      // 「異常なし」が同じ無言になっていた。** いまは読めなかったこと自体を名乗る
+      // （`#situationNoticeFor` が `describeSituationUnavailable` で倒す向きと
+      // 同じ）。**件数は名乗らない**——0 件と書けば「全部片付いている」と読め、
+      // いちばん見落としたい向きへ倒れる。`unrecorded` の断りは台帳の再読と
+      // 無関係に組めるので、この回も必ず連れて出る。
+      return [
+        `[system] **台帳を読めなかった（${readAtLabel(Date.now())} に試みた材料。` +
+          `理由: ${reasonOf(error)}）。** ⟹ **引き受けたまま終わっていない仕事が何件` +
+          'あるかも、いま届いた分が台帳に載ったかどうかも、この回は判定できていない' +
+          '——0 件だったのでも、異常が無かったのでもない。** 読み直す手は ' +
+          '`commitment_list` である（同じ理由で失敗するなら、失敗として返る）。',
+        ...unrecordedLines,
+        '',
+        '---',
+        '',
+      ].join('\n');
     }
     const open = list.entries.filter((entry) => entry.closedAt === undefined);
     // **この節がいつ数えた値かを名乗る（#960）。** `list()` を読み終えた直後の
@@ -4326,18 +4376,6 @@ class Clone implements CloneHost {
       missingUnexplained.map((pending) => `\`${pending.id}\``).join(', '),
       CLONE_ID_LIST_EXCERPT,
     );
-    // **Issue #1060 (段2)。** `'unrecorded'`（台帳には開けたが、その id を
-    // 機械が名乗った記録を日誌へ残せなかった）を、`missing` とは別に集めて
-    // 名指しで断る。**この2つの集合は重ならないとは限らない**——`missing` は
-    // 「再読して見当たらない」を測り、`unrecorded` は「記録の追記そのものが
-    // 落ちた」を測る、別の軸である。同じ id が両方に出ることがあるが、
-    // それぞれ別のことを言っているので、片方の行がもう片方を隠す理由は
-    // 無い（`CommitOutcome` の `'unrecorded'` の doc）。
-    const unrecorded = events.filter((pending) => outcomes.get(pending.id) === 'unrecorded');
-    const unrecordedIdList = excerptLine(
-      unrecorded.map((pending) => `\`${pending.id}\``).join(', '),
-      CLONE_ID_LIST_EXCERPT,
-    );
     const oldest = open[0];
     const lines = [
       `[system] 引き受けたまま終わっていない仕事は（${readAtLabel(at)} に数えた材料）` +
@@ -4399,13 +4437,7 @@ class Clone implements CloneHost {
       // doc）。この断りが無いと、記録の欠落そのものが黙って消え、後から
       // 「機械がこの id を名乗ったか」を突き合わせる材料が最初から無かった
       // ことになる——それは #1060 が塞ごうとしている穴と同じ形である。
-      ...(unrecorded.length === 0
-        ? []
-        : [
-            `**⚠️ この ${unrecorded.length} 件は台帳には開けたが、機械が名乗った記録を` +
-              `日誌に残せなかった（id: ${unrecordedIdList}）。** 後から「機械がこの id を` +
-              '名乗ったか」を突き合わせられない。',
-          ]),
+      ...unrecordedLines,
       // **読めない行が在ることを、ここでも断る（issue #296）。** `open.length`
       // には読めない行は数えられていない（`entries` だけの件数）ので、
       // ここが無いと読めない行は完全に見えなくなる — digest / commitment_list
@@ -4457,8 +4489,9 @@ class Clone implements CloneHost {
    *
    * ## 読めなくても行を消さない
    *
-   * `#commitmentNoticeFor` は読めなければ空文字を返す（節が消える）が、**こちらは
-   * 消さない。** 0 で埋めるのも消すのも「全部片付いている」と読める側へ倒れる——
+   * **こちらは消さない。** 0 で埋めるのも消すのも「全部片付いている」と読める側へ
+   * 倒れる——（`#commitmentNoticeFor` も Issue #1145 以降は同じ向きで、台帳が
+   * 読めなかった回は節ごと消さずに「判定できていない」と名乗る）
    * `describeSituationUnavailable` が「数えられなかった」と名乗る
    * （`situation.ts` の doc）。
    *

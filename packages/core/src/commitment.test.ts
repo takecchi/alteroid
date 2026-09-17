@@ -1959,6 +1959,88 @@ describe('Issue #1060 段2: 記録そのものが落ちたことを黙らせな�
   });
 });
 
+/**
+ * **Issue #1145。** 台帳の再読（`commitments.list()`）が失敗した回は、断り書きが
+ * 丸ごと消えていた —— `missing` も `unrecorded` も1行も出ず、⟹ **「台帳が読めな
+ * かった回」と「異常が1件も無かった回」がクローンから見て同じ無言になる。**
+ * 断り書きは読めなかったときにこそ要るものなので、いまは (a) 読めなかったこと
+ * 自体を名乗り、(b) 台帳の再読を必要としない `unrecorded` の断りを生き残らせる。
+ */
+describe('Issue #1145: 台帳を読めなかった回に、断り書きが丸ごと消えない', () => {
+  /** `list()` だけが落ちるストア（`open()` と `get()` は本物のまま）。 */
+  function withUnreadableList(stores: Stores, reason = '台帳が読めない（テスト用）'): Stores {
+    return {
+      ...stores,
+      commitments: {
+        ...stores.commitments,
+        list: () => Promise.reject(new Error(reason)),
+      },
+    };
+  }
+
+  it('「台帳を読めなかった」と名乗る —— 無言にも、0 件にもならない', async () => {
+    const stores = createMemoryStores();
+    const s = setup(withUnreadableList(stores));
+    const inputs = () => s.calls.flatMap((call) => call.inputs);
+
+    s.clone.post(managerMessage('台帳が読めない回の報告', 'evt-1145-1'));
+    await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
+
+    const turn = inputs()[0] ?? '';
+    expect(turn).toContain('台帳を読めなかった');
+    expect(turn).toContain('判定できていない');
+    // **0 件だったのでも、異常が無かったのでもない。** 件数の行そのものを
+    // 出さない（出せば「全部片付いている」と読める側へ倒れる）。
+    expect(turn).not.toContain('引き受けたまま終わっていない仕事は');
+
+    await s.clone.stop();
+  });
+
+  it('台帳が読めない回でも、`unrecorded`（記録を残せなかった）の断りは生き残る', async () => {
+    const stores = createMemoryStores();
+    const broken: Stores = {
+      ...withUnreadableList(stores),
+      journal: {
+        ...stores.journal,
+        append: () => Promise.reject(new Error('日誌が書けない（テスト用）')),
+      },
+    };
+    const s = setup(broken);
+    const inputs = () => s.calls.flatMap((call) => call.inputs);
+
+    s.clone.post(managerMessage('記録も台帳の再読も落ちる報告', 'evt-1145-2'));
+    await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
+
+    // 台帳への書き込み自体は成功している——落ちたのは記録の追記と、再読だけ。
+    expect(await stores.commitments.get('evt-1145-2')).not.toBeNull();
+
+    const turn = inputs()[0] ?? '';
+    // **この断りは `outcomes` だけで組める（台帳の再読を1バイトも要らない）。**
+    // 再読の失敗に道連れにされる理由が無い、というのがこの歯の要である。
+    expect(turn).toContain('機械が名乗った記録を');
+    expect(turn).toContain('日誌に残せなかった');
+    expect(turn).toContain('evt-1145-2');
+    expect(turn).toContain('台帳を読めなかった');
+
+    await s.clone.stop();
+  });
+
+  it('台帳が読める回の断り書きは、これまでどおり件数から始まる（回帰）', async () => {
+    const s = setup();
+    const inputs = () => s.calls.flatMap((call) => call.inputs);
+
+    s.clone.post(managerMessage('普通の報告', 'evt-1145-3'));
+    await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
+
+    const turn = inputs()[0] ?? '';
+    expect(turn).toContain('引き受けたまま終わっていない仕事は');
+    expect(turn).toContain('いま届いたこの一件も台帳に載せた');
+    expect(turn).not.toContain('台帳を読めなかった');
+
+    await s.clone.stop();
+  });
+});
+
 describe('未了の見え方', () => {
   it('digest には期間によらず載る（24時間の窓で切ると、放置された依頼だけが落ちる）', async () => {
     const stores = createMemoryStores();
