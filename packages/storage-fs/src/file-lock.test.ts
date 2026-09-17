@@ -11,6 +11,8 @@ import { writeFileAtomic } from './atomic.js';
 import { FsCommitmentStore } from './commitments.js';
 import { LockTimeoutError, withPathLock } from './file-lock.js';
 import { FsJobStore } from './jobs.js';
+import { FsJournalStore } from './journal.js';
+import { FsPersonaStore } from './persona.js';
 
 let root: string;
 
@@ -262,6 +264,31 @@ describe('ストア越し（#1113 / #1050 が言っている形）', () => {
 
     const jobs = await storeA.listJobs();
     expect(jobs.map((job) => job.id).sort()).toEqual(['job-a', 'job-b']);
+  });
+
+  /**
+   * persona.ts の #serialize が #chain（プロセス内直列化のみ）のままだった
+   * 漏れへの応答（#1113 / #1050。他8ストアは既に withPathLock へ移行済み）。
+   *
+   * **`append` を選ぶ理由**: 「読んで、足して、全置換」という read-modify-write
+   * の中でいちばん壊れやすい形である。2インスタンスが同じディレクトリへ
+   * 向いていて、かつ真に排他されていなければ——両方が同じ「元の本文」を
+   * 読んでから書くので、後勝ちの書き込みが先の追記を踏み消す（取りこぼれる）。
+   * 排他が効いていれば、片方が読む時点でもう片方の追記が既に反映されている
+   * ので、最終本文に両方が残る。
+   */
+  it('同じディレクトリを向いた FsPersonaStore を2つ作り、並行に append しても取りこぼれない（両方の追記が最終本文に載る）', async () => {
+    const journal = new FsJournalStore(join(root, 'journal'));
+    const storeA = new FsPersonaStore(join(root, 'memory'), journal);
+    const storeB = new FsPersonaStore(join(root, 'memory'), journal);
+
+    await storeA.write('notes', '# メモ\n\n最初の行\n');
+
+    await Promise.all([storeA.append('notes', '追記A'), storeB.append('notes', '追記B')]);
+
+    const doc = await storeA.read('notes');
+    expect(doc?.content).toContain('追記A');
+    expect(doc?.content).toContain('追記B');
   });
 });
 

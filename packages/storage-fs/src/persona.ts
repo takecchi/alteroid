@@ -21,6 +21,7 @@ import type {
 } from '@alteroid/core';
 
 import { writeFileAtomic } from './atomic.js';
+import { withPathLock } from './file-lock.js';
 
 /**
  * 保護状態（human guard）の派生値と、要旨の鮮度の派生値、1文書ぶん。
@@ -106,8 +107,6 @@ type MemoryIndex = Record<string, MemoryIndexEntry>;
 export class FsPersonaStore implements PersonaStore {
   readonly #dir: string;
   readonly #journal: JournalStore;
-  /** 書き込みを直列化する。蒸留は同じ文書へ並行に追記しうる。 */
-  #chain: Promise<unknown> = Promise.resolve();
   /**
    * 索引の組み直しが進行中なら、その Promise。**同時に複数の組み直しを
    * 走らせない**（かつ、組み直しを知らせる日誌エントリを1件だけにする）ための
@@ -122,11 +121,27 @@ export class FsPersonaStore implements PersonaStore {
     this.#journal = journal;
   }
 
-  /** read-modify-write が取りこぼさないよう、書き込みを1本に並べる。 */
+  /**
+   * read-modify-write を直列化する（issue #1113 / #1050 — `withPathLock` で
+   * プロセス内・プロセス間の両方を排他する。advisory の強さは `withPathLock`
+   * の doc を見よ）。
+   *
+   * **ロック対象は常に `#indexPath()`（`.index.json`）1本——ストア全体で共有する。**
+   * `append()` は `.md` の read-modify-write に見えるが、同じ操作が
+   * `#writeNow` 経由で `.index.json` も読み書きするので、実際は**2ファイルに
+   * またがる1つの操作**である。ファイルごとに別のロック（`.md.lock` /
+   * `.index.json.lock`）を取る形にすると、取得順序の違いでデッドロックしうる
+   * ——だから最初から1本のロックへ寄せる。`.index.json.lock` 自体は `list()`
+   * が `*.md` しか見ないので拾われない（`#indexPath` の doc）。
+   *
+   * **⚠️ ここで `mkdir` を先に呼んではいけない。** `withPathLock`
+   * を呼んだ時点で同期的にプロセス内 FIFO へ並ぶことに依存している
+   * （`file-lock.ts` の `acquireFileLock` の `ENOENT` 分岐の doc）。
+   * `mkdir` は各操作（`#writeNow` 等）の中——`withPathLock` の区間の
+   * 内側でだけ呼ぶ。
+   */
   async #serialize<T>(task: () => Promise<T>): Promise<T> {
-    const run = this.#chain.then(task);
-    this.#chain = run.catch(() => undefined);
-    return run;
+    return withPathLock(this.#indexPath(), task);
   }
 
   #path(slug: string): string {
@@ -150,6 +165,39 @@ export class FsPersonaStore implements PersonaStore {
    * （distill が何も畳めず、クローンには「守られている」としか見えない
    * ——静かに凍る）。起動時の backfill だけでは、走行中に索引が消えた場合に
    * 次の再起動まで凍ったままになるので、読み出しのその場で直す。
+   *
+   * **⚠️ 残る穴（この PR では塞いでいない）——`read()` / `list()` はこの
+   * メソッドを通るが `#serialize`（`withPathLock`）を通らない。** ⟹ 索引が
+   * 無い・壊れているときにここから走る `#rebuildIndex()` → `#doRebuildIndex()`
+   * → `#writeIndex()` は、`withPathLock` の区間の**外側**で `.index.json` を
+   * 書く。この PR が閉じたのは `write` / `append` / `remove` /
+   * `markHumanTouched` / `markCreatedAt` / `clear`（＝ `#serialize` を通る経路）
+   * だけで、この経路は以前から（この PR より前から）ロックの外側にある——
+   * この変更が新しく作った穴ではない。
+   *
+   * **直そうとして `#doRebuildIndex` の中で `withPathLock(this.#indexPath(), …)`
+   * を取ってはいけない。** `#writeNow`（`#serialize` の内側 ＝ 既に
+   * `withPathLock` の区間の中）は `read()` を呼び、`read()` は `#readIndex()`
+   * を呼ぶ——索引が失われている状態でこの経路を通ると、`#serialize` の区間の
+   * **内側から** `#rebuildIndex()` が呼ばれ、その中で同じ `this.#indexPath()`
+   * をもう一度 `withPathLock` しようとする。`withPathLock` は再入可能ではない
+   * （`file-lock.ts` の `processChains` は同じ `lockPath` への呼び出しを
+   * 待ち行列に並べるだけで、呼び出し元が既に保持者かは見ない）ので、
+   * 自分自身の解放を自分で待つ形になり、デッドロックする。
+   *
+   * **組み直しが重なって書いても内容は収束するか——確かめた範囲ではそう言える
+   * が、確かめていない条件が残る。** `#doRebuildIndex` が書く値は
+   * `deriveHumanTouchedAtFromJournal(journal)`（`journal.list()` の純粋な
+   * 集計）と `#listRawContents()`（`readdir` した名前を `sort()` してから
+   * 中身をハッシュ化するだけの純粋な走査）だけから決まり、同じ入力
+   * （同じ時点の日誌・同じ時点の `.md` 群）に対しては常に同じ `MemoryIndex`
+   * を計算する——ここまではコードを読んで確かめた。**ただし「組み直しの
+   * 実行中に別の書き込みが割り込んで日誌や `.md` が変わった場合」に、2つの
+   * 組み直しが実際に同じ値へ収束するかは確かめていない**（`#listRawContents`
+   * の2回の `readdir`/`readFile` が同じ瞬間を切り取る保証は無い）。それでも
+   * 書き込み自体は `writeFileAtomic`（tmp + rename）なので、**途中経過が
+   * 混ざって壊れた JSON になることは無い**——最悪でも「どちらか一方の、
+   * 内部的には一貫した索引」が残る。
    */
   async #readIndex(): Promise<MemoryIndex> {
     try {
