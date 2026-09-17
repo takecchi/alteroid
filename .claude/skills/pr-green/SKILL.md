@@ -164,4 +164,3 @@ description: PR が本当に緑かを判定するとき、CI の完了を待つ�
   ```
 
   この2本が draft でも skip しないのは**意図である**（逐語は `grep -Fn -- 'draft のあいだも毎回走らせ' .github/workflows/no-attribution-trailers.yml` と `grep -Fn -- '同じく draft でも skip しない' .github/workflows/pr-title.yml`）。⟹ ⭐ **「緑の run が在る」は `ci` が走ったことを意味しない、はそのまま効く。** 化け方が「1本の run の中で `conclusion` が緑になる」から「**緑の run が別に在る**」へ移っただけである。**ジョブの内訳まで降りろ**も変わらない —— `scripts/check-pr-green.mjs` は workflow 名ごとに最新の run を選ぶので、3本に分かれても正しく答える（#1108 で実測）。
-
