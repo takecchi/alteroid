@@ -39,7 +39,13 @@
  *   - **完全一致**: `p === v`
  *   - **末尾一致**: `v` が `'/' + p` で終わる（`tools.ts` が
  *     `packages/core/src/tools.ts` に当たる）
- *   - **ディレクトリ前方一致**: `v` が `p` または `p + '/'` で始まる
+ *   - **ディレクトリ前方一致**: `v` が `p + '/'` で始まる（`packages/core` が
+ *     `packages/core/src/tools.ts` に当たる。**`/` の境界を要求する**——境界の
+ *     無い単純な `v.startsWith(p)` だと `p="packages/core"` が無関係な
+ *     `v="packages/core-extra/foo.ts"` にも当たってしまう。当初の仕様案は
+ *     境界を要求していなかったが、実装時にその誤りが見つかり修正した
+ *     ——`p === v` は既に `exact` が取っているので、境界を要求しても本物の
+ *     取りこぼしは増えない）
  * - **`V` が非空 かつ 名指しが1件以上 ⟹ 赤（`found`）。それ以外は緑（`ok`）。**
  *
  * ## ⛔ 動詞の判定を入れない（決定。変えない）
@@ -144,8 +150,12 @@ export function computeVanishedFootprint(union, finalFiles) {
  * 1つの候補パス `p` が `v` を名指ししているかを判定する。当たれば分類
  * （`exact` / `suffix` / `subpath`）を返し、当たらなければ `null`。
  *
- * 優先順位は完全一致 → 末尾一致 → ディレクトリ前方一致——`p === v` は
- * `v.startsWith(p)` にも該当するが、より具体的な `exact` を先に確定させる。
+ * 優先順位は完全一致 → 末尾一致 → ディレクトリ前方一致。ディレクトリ前方一致は
+ * `v.startsWith(p + '/')`（`/` の境界を要求する）だけを見る——`v.startsWith(p)`
+ * （境界無し）は使わない。境界が無いと `p="packages/core"` が無関係な
+ * `v="packages/core-extra/foo.ts"` にも当たってしまうため（マネージャーの
+ * 差し戻し、2026-09-17。`p === v` は既に `exact` が取っているので、`exact` を
+ * 先に見る限り境界を要求しても本物の取りこぼしは増えない）。
  *
  * @param {string} v
  * @param {string} p
@@ -154,7 +164,12 @@ export function computeVanishedFootprint(union, finalFiles) {
 export function matchNamedCandidate(v, p) {
   if (p === v) return 'exact';
   if (v.endsWith('/' + p)) return 'suffix';
-  if (v.startsWith(p) || v.startsWith(p + '/')) return 'subpath';
+  // `/` の境界を要求する。`v.startsWith(p)`（境界無し）を混ぜると、
+  // `p="packages/core"` が `v="packages/core-extra/foo.ts"` にも当たってしまう
+  // （マネージャーの差し戻し。2026-09-17）。`p === v` は既に `exact` が
+  // 取っているので、ここは `p + '/'` の一形だけで足りる——本物の取りこぼしは
+  // 増えない（ディレクトリ参照は必ず `/` の境界を持つ）。
+  if (v.startsWith(p + '/')) return 'subpath';
   return null;
 }
 

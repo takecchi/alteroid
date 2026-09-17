@@ -76,24 +76,36 @@ describe('matchNamedCandidate — 3つの当たり方', () => {
     expect(matchNamedCandidate('packages/core/src/tools.ts', 'tools.ts')).toBe('suffix');
   });
 
-  it('ディレクトリ前方一致（subpath）: packages/core が packages/core/src/tools.ts に当たる', () => {
-    expect(matchNamedCandidate('packages/core/src/tools.ts', 'packages/core')).toBe('subpath');
+  it('ディレクトリ前方一致（subpath）: packages/core が packages/core/foo.ts に当たる', () => {
+    expect(matchNamedCandidate('packages/core/foo.ts', 'packages/core')).toBe('subpath');
   });
 
-  it('ディレクトリ前方一致（subpath）: 末尾スラッシュ付きの候補も当たる', () => {
-    expect(matchNamedCandidate('packages/core/src/tools.ts', 'packages/core/')).toBe('subpath');
+  it('ディレクトリ前方一致（subpath）: packages/core が packages/core/src/tools.ts に当たる（深い階層でも）', () => {
+    expect(matchNamedCandidate('packages/core/src/tools.ts', 'packages/core')).toBe('subpath');
   });
 
   it('当たらない場合は null', () => {
     expect(matchNamedCandidate('packages/core/src/tools.ts', 'unrelated.ts')).toBeNull();
   });
 
-  it('⚠️ ディレクトリ前方一致は単純な startsWith——境界の無い誤爆がありうる（仕様どおり）', () => {
-    // "packages/core-extra/foo.ts" は候補 "packages/core"（末尾スラッシュ無し）にも
-    // startsWith で当たってしまう。実装の不具合ではなく仕様（「v が p で始まる」を
-    // 文字どおり実装した帰結）——過剰な精緻化（境界判定の追加）より単純さを取る
-    // という、この門全体の設計判断（doc の「⛔ 動詞の判定を入れない」）と同じ向き。
-    expect(matchNamedCandidate('packages/core-extra/foo.ts', 'packages/core')).toBe('subpath');
+  it(
+    '⛔ 差し戻し（2026-09-17）: packages/core が packages/core-extra/foo.ts に当たらない' +
+      '（境界の無い startsWith を混ぜていたことによる誤爆。`/` の境界を要求する形に直した）',
+    () => {
+      expect(matchNamedCandidate('packages/core-extra/foo.ts', 'packages/core')).toBeNull();
+    },
+  );
+
+  it(
+    '⛔ 差し戻し（2026-09-17）: 1文字の候補 `a` が apps/web/foo.ts に当たらない' +
+      '（この repo の本文に頻出する短い断片が、v の先頭に偶然一致するだけで当たらないこと）',
+    () => {
+      expect(matchNamedCandidate('apps/web/foo.ts', 'a')).toBeNull();
+    },
+  );
+
+  it('短い断片でも `/` の境界を跨げば当たる（例: apps が apps/web/foo.ts に当たる）', () => {
+    expect(matchNamedCandidate('apps/web/foo.ts', 'apps')).toBe('subpath');
   });
 });
 
