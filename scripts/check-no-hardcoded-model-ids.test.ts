@@ -34,14 +34,20 @@ import { describe, expect, it } from 'vitest';
  *   引数ではない
  * - **この検査自身**（`scripts/check-no-hardcoded-model-ids.test.ts`）。下の
  *   fixture 配列がまさに具体の id を含む文字列を持つため
- * - **Markdown / docs / `.claude/**`**。散文は id に言及してよい——
- *   `AGENTS.md`「開発手順」の記述自体が具体の id（`claude-agent-sdk` の版に
- *   紐づくモデル群）に触れている。加えて `.claude/` は別の担当（設定の新設）
- *   が同時に触っている領域であり、この歯の対象ではない
- * - **行頭が `//` / `*` / `/*` / `#` のコメント行**。理由: コメントの中の id は
+ * - **Markdown / docs / `.claude/**`**。散文は id に言及してよい——この規約
+ *   （エイリアスで書く）が縛るのは**コードが SDK へ渡すもの**であって、文書が
+ *   例として挙げる名前ではない。⚠️ 実測（2026-09-17）では `.md` 側のヒットは
+ *   0件であり、外しているのは「将来の言及を赤くしないため」である。加えて
+ *   `.claude/` は別の担当（設定の新設）が同時に触っている領域であり、この歯の
+ *   対象ではない
+ * - **行頭が `//` / `*` / `/*` のコメント行**。理由: コメントの中の id は
  *   実行時に SDK へは届かない。**⚠️ これは同時にこの歯の穴でもある** — コメント
  *   の中に書かれた具体の id は、この歯には一切見えない（下の「この歯の
- *   弱さ」）
+ *   弱さ」）。⚠️ **`#` は除外に含めない。** 走査するのは JS/TS だけで、そこでの
+ *   行頭の `#` はコメントではなく **private フィールドの記法**である
+ *   （`#model = 'claude-opus-5';`）——コメントとして飛ばすと、その1行がそのまま
+ *   この歯の抜け道になる。`.mjs` の shebang（`#!/usr/bin/env node`）が誤検出に
+ *   なることは無い（モデル id を含みようがない）
  *
  * ## 実測（2026-09-17、自分で数え直した）
  *
@@ -87,15 +93,16 @@ const SELF_PATH = 'scripts/check-no-hardcoded-model-ids.test.ts';
 /** 具体のモデル id を探す正規表現。エイリアス4語 + 数字で始まる版番号。 */
 export const MODEL_ID_PATTERN = /claude-(opus|sonnet|haiku|fable)-\d/;
 
-/** コメント行かどうか（行頭が `//` / `*` / `/*` / `#`）。 */
+/**
+ * コメント行かどうか（行頭が `//` / `*` / `/*`）。
+ *
+ * ⛔ **`#` を足さないこと。** 走査対象は JS/TS だけで、そこでの行頭の `#` は
+ * コメントではなく private フィールド（`#model = 'claude-opus-5';`）である。
+ * コメント扱いにすると、その記法がそのままこの歯の抜け道になる。
+ */
 export function isCommentLine(line: string): boolean {
   const trimmed = line.trim();
-  return (
-    trimmed.startsWith('//') ||
-    trimmed.startsWith('/*') ||
-    trimmed.startsWith('*') ||
-    trimmed.startsWith('#')
-  );
+  return trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('*');
 }
 
 /** 1行に具体のモデル id が（コメント行を除いて）書かれているか。 */
@@ -130,6 +137,8 @@ describe('具体のモデル id の直書き', () => {
       "if (id === 'claude-haiku-4') return true;",
       'const FABLE = `claude-fable-3`;',
       '  claude-opus-41 // 版が2桁でも当たる',
+      // `#` はコメントではなく private フィールドの記法である（JS/TS）
+      "  #model = 'claude-opus-5';",
     ];
     for (const line of broken) expect(hasHardcodedModelId(line), line).toBe(true);
   });
@@ -140,7 +149,6 @@ describe('具体のモデル id の直書き', () => {
       "const label = 'claude-opus'; // 数字が無い版はエイリアスの一部として許す",
       '// claude-opus-5 のような具体の id が SDK 側の対応表に焼かれている',
       '* claude-sonnet-5 は例として挙げているだけ',
-      '# claude-haiku-3 は CLI ヘルプの文字列（コメント扱いの行）',
     ];
     for (const line of fine) expect(hasHardcodedModelId(line), line).toBe(false);
   });
