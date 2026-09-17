@@ -22,7 +22,7 @@
     "check:web-bundle-size": "node ./scripts/check-web-bundle-size.mjs",
     "check:web-css-comment-classnames": "node ./scripts/check-web-css-comment-classnames.mjs",
     "issue-done-trailer": "node ./scripts/issue-done-trailer.mjs",
-    "typecheck": "pnpm -r typecheck",
+    "typecheck": "pnpm -r typecheck && tsc --noEmit -p tsconfig.railway.json && tsc --noEmit -p tsconfig.docker.json",
     "lint": "eslint .",
     "test": "node ./scripts/test.mjs",
     "format": "prettier --write .",
@@ -31,6 +31,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@types/node": "catalog:",
     "eslint": "^10.8.1",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-react-hooks": "^7.1.1",

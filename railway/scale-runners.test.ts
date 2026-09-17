@@ -478,7 +478,11 @@ describe('もう3台あるとき（回し直し）', () => {
     const r = scenarios.rerunMissingDest;
     expect(r.exitCode).toBe(0);
     expect(r.calls.some((c) => c.startsWith('add'))).toBe(false);
-    expect(r.vars('id-app').ALTEROID_RUNNER_URLS.split(',')).toHaveLength(3);
+    // noUncheckedIndexedAccess: `vars()` は Record<string, string> を返すため、
+    // プロパティアクセスも `string | undefined` になる。このアサーション自体が
+    // 「3台ぶん繋がっている」ことを検査しているので、undefined なら `.split` が
+    // 例外を投げてテストは落ちる——弱めてはいない。
+    expect(r.vars('id-app').ALTEROID_RUNNER_URLS!.split(',')).toHaveLength(3);
     expect(r.calls.some((c) => c.includes('redeploy') && c.includes('--service app'))).toBe(true);
   });
 });

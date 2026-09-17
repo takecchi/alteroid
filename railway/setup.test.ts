@@ -334,7 +334,12 @@ async function prepareScenarios(): Promise<Scenarios> {
         ),
       ),
     );
-    s.domainSimilar = Object.fromEntries(attachedDomains.map((d, i) => [d, results[i]]));
+    // noUncheckedIndexedAccess: `results[i]` は添字アクセスなので型上は `Run | undefined`
+    // になるが、`results` は `attachedDomains.map` と同じ長さ・同じ順序で作っているため
+    // `i` の範囲は保証されている。
+    s.domainSimilar = Object.fromEntries(
+      attachedDomains.map((d, i): [string, Run] => [d, results[i]!]),
+    );
   });
   task('domainUnreadable', async () => {
     s.domainUnreadable = await run(
@@ -418,6 +423,11 @@ async function prepareScenarios(): Promise<Scenarios> {
 
   // **数え上げの持ち主は railway/ そのものである。** readdirSync 自体はプロセスを
   // 起こさないのでここで直接呼んでよい——重いのは中身を `config_input` へ通す方
+  // ⚠️ この sweep は `railway/*.json` を無条件に Railway の Service 設定として読む
+  // （#1171）。だから **`railway/` の直下に Service 設定以外の `.json` を置かない
+  // こと**——`tsconfig.json` を置いたところ、この sweep がそれを拾って
+  // `config_input` へ通し「知らない節: extends」で落ちた。型検査用の tsconfig は
+  // 根の `tsconfig.railway.json`（`include: ["railway/**/*.ts"]`）に置いてある。
   const configs = readdirSync(RAILWAY_DIR).filter((f) => f.endsWith('.json'));
   task('configResults', async () => {
     const entries = await Promise.all(
@@ -936,7 +946,9 @@ describe('.env に持ち込みのドメインがあるとき', () => {
     ['前に何か付いている', 'my-alteroid.example'],
     ['後ろに何か付いている', 'alteroid.example.invalid'],
   ])('似た名前だけが繋がっているとき（%s）は非0で終わり、鍵を置かない', (_name, attached) => {
-    const r = scenarios.domainSimilar[attached];
+    // noUncheckedIndexedAccess: `attached` は直上の `it.each` の配列そのままで、
+    // `domainSimilar` を作った `attachedDomains` と同じ2値なので存在は保証されている。
+    const r = scenarios.domainSimilar[attached]!;
     expect(r.exitCode).not.toBe(0);
     const app = r.vars('id-app');
     expect(app).not.toHaveProperty('ALTEROID_PUBLIC_URL');
@@ -1043,7 +1055,10 @@ describe('railway/*.json を Service の設定へ写す', () => {
     const configs = readdirSync(RAILWAY_DIR).filter((f) => f.endsWith('.json'));
     expect(configs.length).toBeGreaterThanOrEqual(2);
     for (const name of configs) {
-      const r = scenarios.configResults[name];
+      // noUncheckedIndexedAccess: `configs` はここと `task('configResults', ...)` の
+      // どちらも同じ `readdirSync(RAILWAY_DIR)` から作っているため、`name` は必ず
+      // `configResults` の鍵として存在する。
+      const r = scenarios.configResults[name]!;
       expect(r.stderr).toBe('');
       expect(r.status).toBe(0);
       const input = JSON.parse(r.stdout);

@@ -415,7 +415,9 @@ export async function runLimited<T, R>(
   await Promise.all(
     Array.from({ length: size }, async () => {
       for (let i = next++; i < items.length; i = next++) {
-        results[i] = await fn(items[i]);
+        // noUncheckedIndexedAccess は添字アクセスそのものからは境界を証明できないが、
+        // 直上のループ条件 `i < items.length` が範囲を保証している。
+        results[i] = await fn(items[i]!);
       }
     }),
   );
