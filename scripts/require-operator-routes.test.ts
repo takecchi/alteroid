@@ -9,10 +9,16 @@ import { describe, expect, it } from 'vitest';
  * **`requireOperator` が配線されている経路の集合を、決め打ちのリテラル一覧と
  * 突き合わせる歯。**
  *
- * `apps/daemon/src/app.ts` の入口の門は2段ある——`authenticate`（ログイン済みで
- * あれば通す）と `requireOperator`（実行環境の持ち主だけに絞る、より強い門）。
- * どの経路が後者を通るかは配線（`.get(...)` / `.put(...)` の引数）そのものに
- * しか正本が無いので、**配線を直接読んで、期待と食い違ったら落ちる**歯を置く。
+ * `apps/daemon/src/app.ts` の入口の門は**3段ある**——`authenticate`（ログイン済みで
+ * あれば通す）、`requireOperatorOrDirectGrant`（実行環境の持ち主＋持ち主が端末から
+ * 直に許可したアカウント。issue #1195 で足した）、`requireOperator`（実行環境の
+ * 持ち主だけに絞る、いちばん強い門）。どの経路がどれを通るかは配線
+ * （`.get(...)` / `.put(...)` の引数）そのものにしか正本が無いので、**配線を直接
+ * 読んで、期待と食い違ったら落ちる**歯を置く。
+ *
+ * **⚠️ 強い門から弱い門へ経路が移ることは「緩めた」である。** 一覧が2つになったので、
+ * 片方から消えて片方に現れる差分は**合計本数を見ても分からない**——
+ * `EXPECTED_OPERATOR_ROUTES` と `EXPECTED_OWNER_ROUTES` の**両方**を同時に見ること。
  *
  * ## なぜ正規表現ではなく TypeScript の AST を読むか
  *
@@ -67,13 +73,25 @@ const APP_TS_PATH = path.join(ROOT, 'apps/daemon/src/app.ts');
 /** `requireOperator` の実際の名前。テスト内で1箇所にしておく（typo で歯自体が死ぬのを防ぐ）。 */
 const OPERATOR_MIDDLEWARE_NAME = 'requireOperator';
 
+/**
+ * **一段弱い門の名前**（issue #1195 で足した）。実行環境の持ち主①に加えて、
+ * 持ち主が端末から直に許可したアカウント（`grantedBy === 'operator'`）②も通す。
+ *
+ * **⚠️ 名前が `requireOperator` を接頭辞として含む。** 抽出は Identifier の
+ * **完全一致**で行っているので混ざらないが、これは選んだ実装に依存する性質である
+ * ——「`startsWith`／正規表現へ変えたら、2つの門が1つに畳まれて `/profile` が
+ * 緩んだように見える（あるいはその逆）」という壊れ方をする。**下の
+ * 「2つの門の名前を取り違えない」テストがそこを直接撃っている。**
+ */
+const OWNER_MIDDLEWARE_NAME = 'requireOperatorOrDirectGrant';
+
 /** Hono のチェーンとして経路の宣言とみなす、プロパティ名の集合。 */
 const HTTP_METHOD_NAMES = new Set(['get', 'post', 'put', 'delete', 'patch']);
 
 export interface RouteDeclaration {
   /** `` `${METHOD} ${path}` ``（例 `GET /profile`）。 */
   route: string;
-  /** 引数のいずれかが `requireOperator` という名前の Identifier だったか。 */
+  /** 引数のいずれかが `middlewareName` という名前の Identifier だったか。 */
   wired: boolean;
 }
 
@@ -97,7 +115,11 @@ function parseSource(sourceText: string, fileName: string): ts.SourceFile {
  * その CallExpression の引数のいずれかが `requireOperator` という名前の
  * Identifier であれば `wired: true`。
  */
-export function findRouteDeclarations(sourceText: string, fileName = 'app.ts'): RouteDeclaration[] {
+export function findRouteDeclarations(
+  sourceText: string,
+  fileName = 'app.ts',
+  middlewareName: string = OPERATOR_MIDDLEWARE_NAME,
+): RouteDeclaration[] {
   const sourceFile = parseSource(sourceText, fileName);
   const routes: RouteDeclaration[] = [];
 
@@ -110,8 +132,10 @@ export function findRouteDeclarations(sourceText: string, fileName = 'app.ts'): 
       const method = node.expression.name.text;
       const firstArg = node.arguments[0];
       if (firstArg !== undefined && ts.isStringLiteral(firstArg) && firstArg.text.startsWith('/')) {
+        // **完全一致であること。** `requireOperatorOrDirectGrant` は
+        // `requireOperator` を接頭辞に持つので、前方一致に変えると2つの門が畳まれる。
         const wired = node.arguments.some(
-          (arg) => ts.isIdentifier(arg) && arg.text === OPERATOR_MIDDLEWARE_NAME,
+          (arg) => ts.isIdentifier(arg) && arg.text === middlewareName,
         );
         routes.push({ route: `${method.toUpperCase()} ${firstArg.text}`, wired });
       }
@@ -124,7 +148,14 @@ export function findRouteDeclarations(sourceText: string, fileName = 'app.ts'): 
 
 /** `findRouteDeclarations` のうち `requireOperator` が配線されているものだけ。 */
 export function findOperatorWiredRoutes(sourceText: string, fileName = 'app.ts'): string[] {
-  return findRouteDeclarations(sourceText, fileName)
+  return findRouteDeclarations(sourceText, fileName, OPERATOR_MIDDLEWARE_NAME)
+    .filter((entry) => entry.wired)
+    .map((entry) => entry.route);
+}
+
+/** `findRouteDeclarations` のうち `requireOperatorOrDirectGrant` が配線されているものだけ。 */
+export function findOwnerWiredRoutes(sourceText: string, fileName = 'app.ts'): string[] {
+  return findRouteDeclarations(sourceText, fileName, OWNER_MIDDLEWARE_NAME)
     .filter((entry) => entry.wired)
     .map((entry) => entry.route);
 }
@@ -138,12 +169,16 @@ export function findOperatorWiredRoutes(sourceText: string, fileName = 'app.ts')
  * 理由そのものを裏から支える性質である（fixture の「コメントの中の
  * `requireOperator` を拾わない」テストがこれを直接確かめる）。
  */
-export function countRequireOperatorReferences(sourceText: string, fileName = 'app.ts'): number {
+export function countRequireOperatorReferences(
+  sourceText: string,
+  fileName = 'app.ts',
+  middlewareName: string = OPERATOR_MIDDLEWARE_NAME,
+): number {
   const sourceFile = parseSource(sourceText, fileName);
   let count = 0;
 
   const visit = (node: ts.Node): void => {
-    if (ts.isIdentifier(node) && node.text === OPERATOR_MIDDLEWARE_NAME) {
+    if (ts.isIdentifier(node) && node.text === middlewareName) {
       const isDeclarationName = ts.isVariableDeclaration(node.parent) && node.parent.name === node;
       if (!isDeclarationName) count++;
     }
@@ -166,12 +201,21 @@ export function countRequireOperatorReferences(sourceText: string, fileName = 'a
  * （`grep -Fn -- '`docs/` は正典。**AI が単独で書き換えない。**' AGENTS.md`）。
  * **人間へ上げること。**
  */
-const EXPECTED_OPERATOR_ROUTES = [
-  'GET /profile',
-  'POST /reset',
-  'PUT /credentials',
-  'PUT /profile',
-];
+const EXPECTED_OPERATOR_ROUTES = ['GET /profile', 'PUT /profile'];
+
+/**
+ * `requireOperatorOrDirectGrant` が配線されている経路のリテラル一覧（issue #1195）。
+ *
+ * **⚠️ この2本は 2026-09-17 まで `EXPECTED_OPERATOR_ROUTES` に在った。** 移したので
+ * あって、資格を落としたのではない —— `authenticate` だけの経路とは別の門を通る。
+ *
+ * **ここへ経路を足すのは、`requireOperator` から外すのと同じ重さの判断である。**
+ * ⟹ 足す前に `docs/architecture.md` の「実行環境の持ち主だけ」の段落と食い違わないかを
+ * **人間へ上げること**（`docs/` は正典で、AI が単独で書き換えない）。
+ *
+ * **⚠️ この歯は doc を検査していない**（`EXPECTED_OPERATOR_ROUTES` と同じ）。
+ */
+const EXPECTED_OWNER_ROUTES = ['POST /reset', 'PUT /credentials'];
 
 /** 比較を配線順（AST の訪問順）に依存させないための整列。 */
 function sorted(values: readonly string[]): string[] {
@@ -298,7 +342,41 @@ export const app = base
   );
 `;
 
-describe('requireOperator が配線されている経路が、決め打ちの一覧と一致する', () => {
+/**
+ * **2つの門が両方配線されているソース。** `requireOperatorOrDirectGrant` は
+ * `requireOperator` を接頭辞として含むので、**抽出が完全一致でなければ2つが畳まれる。**
+ * 畳まれた側は「`/profile` も緩んだ」「`/credentials` も締まった」のどちらにも化けうる
+ * ——どちらの向きでも、読んだ人は配線ではなく歯のほうを疑わない。
+ */
+const FIXTURE_BOTH_GATES = `
+import { createMiddleware } from 'hono/factory';
+import { Hono } from 'hono';
+
+const base = new Hono();
+const authenticate = createMiddleware(async (c, next) => { await next(); });
+const requireOperator = createMiddleware(async (c, next) => { await next(); });
+const requireOperatorOrDirectGrant = createMiddleware(async (c, next) => { await next(); });
+
+export const app = base
+  .use('*', authenticate)
+  .get(
+    '/profile',
+    requireOperator,
+    (c) => c.json({}),
+  )
+  .put(
+    '/credentials',
+    requireOperatorOrDirectGrant,
+    (c) => c.json({}),
+  )
+  .post(
+    '/reset',
+    requireOperatorOrDirectGrant,
+    (c) => c.json({}),
+  );
+`;
+
+describe('2つの門（requireOperator / requireOperatorOrDirectGrant）の配線が、決め打ちの一覧と一致する', () => {
   const appTsSource = readFileSync(APP_TS_PATH, 'utf8');
 
   it('前提: apps/daemon/src/app.ts が読める', () => {
@@ -368,5 +446,70 @@ describe('requireOperator が配線されている経路が、決め打ちの一
     // 宣言1つだけが存在し、配線としての参照はゼロ——正規表現ならコメント中の
     // 出現を拾って `wiredCount` と食い違いかねないところを、AST は数えない。
     expect(countRequireOperatorReferences(FIXTURE_COMMENT_ONLY)).toBe(0);
+  });
+
+  /**
+   * **issue #1195 で門が2つになった。** 以下は `requireOperatorOrDirectGrant`
+   * （実行環境の持ち主①＋持ち主が端末から直に許可したアカウント②）の側。
+   */
+  it('本物: requireOperatorOrDirectGrant の配線がリテラル一覧と一致する', () => {
+    const extracted = sorted(findOwnerWiredRoutes(appTsSource));
+    const expected = sorted(EXPECTED_OWNER_ROUTES);
+
+    const missing = expected.filter((route) => !extracted.includes(route));
+    const extra = extracted.filter((route) => !expected.includes(route));
+
+    expect(
+      { extracted, missing, extra },
+      missing.length === 0 && extra.length === 0
+        ? ''
+        : [
+            missing.length > 0
+              ? `リテラル一覧に在るが配線から消えた経路: ${missing.join(', ')}`
+              : '',
+            extra.length > 0
+              ? `配線に新しく現れたがリテラル一覧に無い経路: ${extra.join(', ')}`
+              : '',
+            'この門を1本増やすことは、requireOperator から1本外すのと同じ重さの判断である。' +
+              'EXPECTED_OWNER_ROUTES を直す前に、docs/architecture.md の「実行環境の持ち主だけ」の' +
+              '段落と食い違わないかを人間へ確認すること（この歯は doc を検査していない）。',
+          ]
+            .filter((line) => line.length > 0)
+            .join('\n'),
+    ).toEqual({ extracted: expected, missing: [], extra: [] });
+  });
+
+  it('本物: requireOperatorOrDirectGrant の参照数（宣言を除く）が、経路へ紐付けられた数と一致する（抽出漏れの検算）', () => {
+    const wiredCount = findOwnerWiredRoutes(appTsSource).length;
+    const referenceCount = countRequireOperatorReferences(
+      appTsSource,
+      'app.ts',
+      'requireOperatorOrDirectGrant',
+    );
+
+    expect(
+      referenceCount,
+      `requireOperatorOrDirectGrant の参照数（${referenceCount}）と、経路として拾えた数` +
+        `（${wiredCount}）が一致しない。配線が在るのに経路として拾えていない可能性が高い。`,
+    ).toBe(wiredCount);
+  });
+
+  /**
+   * **⭐ 2つの門の名前を取り違えない。** `requireOperatorOrDirectGrant` は
+   * `requireOperator` を接頭辞として含むので、抽出が完全一致でなくなった瞬間に
+   * 2つが畳まれる。**畳まれても本数の合計は変わらないので、上の2つの「一覧と一致」
+   * だけでは鳴らない場合がある**——ここは*どちらの一覧にどちらが入るか*を撃つ。
+   */
+  it('合成 fixture: requireOperator と requireOperatorOrDirectGrant を取り違えない（接頭辞の衝突）', () => {
+    expect(findOperatorWiredRoutes(FIXTURE_BOTH_GATES)).toEqual(['GET /profile']);
+    expect(sorted(findOwnerWiredRoutes(FIXTURE_BOTH_GATES))).toEqual([
+      'POST /reset',
+      'PUT /credentials',
+    ]);
+    // 参照数も分かれていること（前方一致なら requireOperator 側が 3 になる）。
+    expect(countRequireOperatorReferences(FIXTURE_BOTH_GATES)).toBe(1);
+    expect(
+      countRequireOperatorReferences(FIXTURE_BOTH_GATES, 'app.ts', 'requireOperatorOrDirectGrant'),
+    ).toBe(2);
   });
 });

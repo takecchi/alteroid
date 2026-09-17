@@ -1,5 +1,10 @@
 import type { AuthAccount, CloneHost, ManagerPool, OAuthProvider, Stores } from '@alteroid/core';
-import { createAuthProviderRegistry, createAuthService, createMemoryStores } from '@alteroid/core';
+import {
+  createAuthProviderRegistry,
+  createAuthService,
+  createCredentialService,
+  createMemoryStores,
+} from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
@@ -340,6 +345,12 @@ describe('認証が有効なとき', () => {
     // 使う許可」と同格にしたので、`requireOperator` の 403 を**産む経路はこの
     // `/profile` の2本しか残っていない**（他は `authenticate` の「許可が無い」403 に
     // なる）。⟹ **唯一の生産者なので、ここが壊れても他に気づく者が居ない。**
+    //
+    // **⚠️ 2026-09-17、同じ本文を産む門がもう1つできた**（`requireOperatorOrDirectGrant`。
+    // issue #1195）。**`requireOperator` の唯一の生産者であることは変わらない**が、
+    // *文言の*唯一の生産者ではなくなった。⟹ **本文を固定する歯は両方に要る**
+    // ——下の describe「実行環境の持ち主本人（…）は /credentials と /reset を通る」の
+    // ③④が、もう一方の門の側で同じ本文を固定している。
     //
     // そして CLI はこの本文を見て「デーモンと同じ器の中で実行してください」と案内を
     // 選ぶ（`apps/cli/src/target.ts` の `forbiddenKindOf`）。文言がずれると案内は
@@ -735,5 +746,205 @@ describe('宣言と実物の一致（/auth・/access）', () => {
     const declaredKeys = Object.keys(accountWithIdentitiesSchema.shape).sort();
     const actualKeys = Object.keys(account as Record<string, unknown>).sort();
     expect(actualKeys).toEqual(declaredKeys);
+  });
+});
+
+/**
+ * **実行環境の持ち主本人は、Web UI からも環境変数を置けるしリセットもできる**
+ * （issue #1195。`requireOperatorOrDirectGrant`）。
+ *
+ * ## なぜこの describe が要るのか
+ *
+ * 人間（箱の持ち主）が Web UI から `PUT /credentials` と `POST /reset` を叩いて
+ * 403 で弾かれた、という報告が出どころである。**ブラウザは `requireOperator` を
+ * *構造的に*通れない** —— ①（実行環境の持ち主）は「サーバ上のファイルを読めること」
+ * であって提示できる秘密ではないからである（`isOperator`）。⟹ Web UI にボタンは
+ * 在るのに、押すと必ず 403 になっていた。
+ *
+ * ## 4方向を撃つ（片方だけでは、緩めすぎた事故を検出できない）
+ *
+ * ①持ち主が端末から直に許可したアカウントは**通る** ②資格が無い相手は**通らない**
+ * ③**許可が伝播した相手（別のアカウントが通した）は通らない** ④`/profile` は
+ * 持ち主本人でも**通らないまま**。
+ *
+ * **③がいちばん大事である。** ここが緩むと「オーナー本人」の近似
+ * （`isAccountGrantedByOperator`。issue #1198）が壊れたときに誰も気づかない
+ * —— 許可の伝播（A が B を、B が C を）がそのまま資格の伝播になる。
+ *
+ * **④は「意図した非対称」の証拠である。** `PUT /credentials` は**置けるが
+ * 読み出せない**（一覧が返すのは指紋）。`GET /profile` は本文に鍵が丸ごと載る口で、
+ * 2026-09-06 の同格化でも名指しで外された。⟹ ここが一緒に緩んだら、それは
+ * この変更が線を踏み越えたということである。
+ *
+ * **本文まで固定するのは①ではなく②③の側である。** `requireOperator` の 403 と
+ * 1文字も違えない —— CLI が本文を複製して案内を分けており
+ * （`apps/cli/src/target.ts` の `forbiddenKindOf`）、ずれると案内が `'unknown'` 側へ
+ * 黙って倒れる。**値はここへ複製してある**（import すると、文言がずれても歯まで
+ * 一緒にずれて自己整合し、ずれを検出できなくなる）。
+ */
+describe('実行環境の持ち主本人（端末から直に許可されたアカウント）は /credentials と /reset を通る', () => {
+  const NOT_OPERATOR_ERROR = '実行環境の持ち主だけが操作できる';
+
+  /**
+   * `credentials` の器を渡した app。**渡さないと `PUT /credentials` は門を通った後で
+   * 503 になる**（「置いていない」と「口が無い」を分けるため。`app.test.ts` の
+   * 「器が無ければ 503」）——それでは「門を通ったこと」を 200 で示せない。
+   */
+  function buildAppWithVault() {
+    stores = createMemoryStores();
+    nextSubject = 'sub-1';
+    const resolved: AuthPlan = {
+      enabled: true,
+      providers: [FAKE_PROVIDER],
+      publicBaseUrl: 'http://127.0.0.1:4517',
+      tokenTtlDays: 30,
+      description: 'テスト',
+    };
+    return createApp({
+      clone: stubClone(),
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      credentials: createCredentialService({ stores, withheldEnvKeys: [] }),
+      auth: {
+        plan: resolved,
+        service: createAuthService({
+          store: stores.auth,
+          providers: createAuthProviderRegistry(resolved.providers),
+        }),
+      },
+    });
+  }
+
+  let vaultApp: ReturnType<typeof createApp>;
+
+  beforeEach(() => {
+    vaultApp = buildAppWithVault();
+  });
+
+  const putCredential = (headers: Record<string, string>) =>
+    vaultApp.request('/credentials', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', ...headers },
+      body: JSON.stringify({ credentials: [{ name: 'GIT_AUTHOR_NAME', value: 'takecchi' }] }),
+    });
+
+  const postReset = (headers: Record<string, string>) =>
+    vaultApp.request('/reset', {
+      ...post,
+      headers: { ...post.headers, ...headers },
+      body: JSON.stringify({ confirm: true }),
+    });
+
+  /** ログインさせて、実行環境の持ち主として（＝端末から直に）許可する。 */
+  async function ownerToken(): Promise<{ token: string; accountId: string }> {
+    const claimed = await loginThrough(vaultApp);
+    const granted = await vaultApp.request(`/access/${claimed.account.id}/grant`, {
+      ...post,
+      headers: { ...post.headers, ...OPERATOR },
+    });
+    expect(granted.status).toBe(200);
+    // **前提を測っておく。** これが `'operator'` でなければ、以下の①は
+    // 「通った」ではなく「別の理由で通った」になる。
+    const body = (await granted.json()) as { account: { grantedBy: string | null } };
+    expect(body.account.grantedBy).toBe('operator');
+    return { token: claimed.token, accountId: claimed.account.id };
+  }
+
+  it('① 端末から直に許可されたアカウントは PUT /credentials を通る（200）', async () => {
+    const owner = await ownerToken();
+    const response = await putCredential({ authorization: `Bearer ${owner.token}` });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { credentials: { name: string }[] };
+    expect(body.credentials.map((entry) => entry.name)).toEqual(['GIT_AUTHOR_NAME']);
+  });
+
+  it('① 端末から直に許可されたアカウントは POST /reset を通る（200）', async () => {
+    const owner = await ownerToken();
+    const response = await postReset({ authorization: `Bearer ${owner.token}` });
+    expect(response.status).toBe(200);
+  });
+
+  it('① 実行環境の持ち主そのものは今日どおり通る（能力を消したのではない）', async () => {
+    expect((await putCredential({ ...OPERATOR })).status).toBe(200);
+    expect((await postReset({ ...OPERATOR })).status).toBe(200);
+  });
+
+  it('② 資格が無ければ 401 のまま（門を緩めたことが未ログインへ漏れていない）', async () => {
+    expect((await putCredential({})).status).toBe(401);
+    expect((await postReset({})).status).toBe(401);
+  });
+
+  it('② ログインしただけ（未許可）は 403 のまま', async () => {
+    const claimed = await loginThrough(vaultApp);
+    const auth = { authorization: `Bearer ${claimed.token}` };
+    expect((await putCredential(auth)).status).toBe(403);
+    expect((await postReset(auth)).status).toBe(403);
+  });
+
+  /**
+   * **⭐ この歯がいちばん大事である。** 近似（`grantedBy === 'operator'`）が
+   * 「許可されていれば誰でも」へ崩れたときに鳴る唯一の場所である。
+   */
+  it('③ 許可が伝播したアカウント（別のアカウントが通した）は 403（近似が広がっていない）', async () => {
+    const owner = await ownerToken();
+
+    nextSubject = 'sub-2';
+    const second = await loginThrough(vaultApp);
+    const granted = await vaultApp.request(`/access/${second.account.id}/grant`, {
+      ...post,
+      headers: { ...post.headers, authorization: `Bearer ${owner.token}` },
+    });
+    expect(granted.status).toBe(200);
+    const grantedBody = (await granted.json()) as { account: { grantedBy: string | null } };
+    // 前提: 伝播した許可である（`operator` ではなく、通したアカウントの id）。
+    expect(grantedBody.account.grantedBy).toBe(owner.accountId);
+
+    const auth = { authorization: `Bearer ${second.token}` };
+    // alteroid は使える（記憶には触れる）。
+    expect((await vaultApp.request('/memory', { headers: auth })).status).toBe(200);
+
+    // それでも環境変数とリセットは通らない。
+    const forbidden = await putCredential(auth);
+    expect(forbidden.status).toBe(403);
+    expect(await forbidden.json()).toEqual({ error: NOT_OPERATOR_ERROR });
+    expect((await postReset(auth)).status).toBe(403);
+  });
+
+  it('③ 許可を取り消すと、元は端末から直に許可されていても通らなくなる', async () => {
+    const owner = await ownerToken();
+    const revoked = await vaultApp.request(`/access/${owner.accountId}/revoke`, {
+      ...post,
+      headers: { ...post.headers, ...OPERATOR },
+    });
+    expect(revoked.status).toBe(200);
+
+    const auth = { authorization: `Bearer ${owner.token}` };
+    // ここは `authenticate` の「許可が無い」403 に落ちる（門より手前）。
+    expect((await putCredential(auth)).status).toBe(403);
+    expect((await postReset(auth)).status).toBe(403);
+  });
+
+  it('④ /profile は端末から直に許可されたアカウントでも 403 のまま（意図した非対称）', async () => {
+    const owner = await ownerToken();
+    const auth = { authorization: `Bearer ${owner.token}` };
+
+    const forbidden = await vaultApp.request('/profile', { headers: auth });
+    expect(forbidden.status).toBe(403);
+    // **本文まで固定する。** `requireOperator` の 403 と1文字も違えない。
+    expect(await forbidden.json()).toEqual({ error: NOT_OPERATOR_ERROR });
+
+    expect(
+      (
+        await vaultApp.request('/profile', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json', ...auth },
+          body: JSON.stringify({ script: 'env' }),
+        })
+      ).status,
+    ).toBe(403);
+
+    // 実行環境の持ち主は今日どおり読める（締めたのではなく、緩めなかっただけである）。
+    expect((await vaultApp.request('/profile', { headers: OPERATOR })).status).toBe(200);
   });
 });

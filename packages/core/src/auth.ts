@@ -280,6 +280,50 @@ export function isAccountGranted(account: AuthAccount): boolean {
   return account.grantedAt !== null;
 }
 
+/**
+ * `grantedBy` に入る「実行環境の持ち主が許可した」の印。
+ *
+ * **ここが唯一の正本である。** 書く側（デーモンの `actorOf`）と読む側
+ * （`isAccountGrantedByOperator`）が同じ値を別々に書いていると、片方の打ち間違いが
+ * 「オーナーではない」へ黙って倒れる —— 通らなくなる側なので**壊れても誰も
+ * 気づかない**。⟹ 両方をここから引く。
+ *
+ * **アカウント id とは衝突しない。** id は `randomToken(16)` の base64url（22文字）で、
+ * この値になりようがない（`createAuthService` の `newId`）。⟹ 「`grantedBy` が
+ * `'operator'` である」は「アカウントではなく実行環境の持ち主が許可した」と同値である。
+ */
+export const OPERATOR_ACTOR = 'operator';
+
+/**
+ * **実行環境の持ち主が、端末から直に許可したアカウントか。**
+ *
+ * **⚠️ これは「オーナー本人」の近似である**（issue #1198）。本来は `AuthAccount` に
+ * owner の欄を持つべきで、ここは `grantedBy` からの導出に留めてある。**近似が破れるのは、
+ * 実行環境の持ち主が本人以外のアカウントへ直に `alteroid access grant` を実行したときである。**
+ *
+ * **採った理由は人間の報告の逐語である**（issue #1195）——
+ * *「少なくとも承認するためには CLI にはいって許可のコマンド打ってるユーザーなんですよね」*。
+ * ⟹ 「端末から直に許可した相手」という定義そのもので、別の定義を持ち込む理由が無かった。
+ * **明示的な欄にすると、直すために本人が CLI を1コマンド打たねばならず、報告
+ * （「Web UI のボタンが弾かれる」）の半分が残る。**
+ *
+ * **⚠️ 伝播した許可（A が B を通した）は含まない。** その場合 `grantedBy` はアカウントの
+ * id になる。含めると、許可の伝播がそのまま資格の伝播になり、近似が破れる条件が
+ * 「持ち主が誰かを直に通したとき」から「許可が1回でも伝播したとき」まで広がる。
+ *
+ * **⚠️ `authService.owners()` の `owner` とは別物である。** あちらは許可済みアカウント
+ * 全部を指す古い名前（持ち主が高々1人だった頃の名残）で、ここが見ているのは
+ * 「誰が許可したか」である。
+ *
+ * **許可が取り消されていないことも見る。** `revoke` は `grantedAt` と `grantedBy` を
+ * 同時に落とす（`auth-service.ts` の `revoke`）ので、実際には片方だけが残る行は生まれない。
+ * **それでもここで両方見るのは、その不変条件が崩れた日に資格の側が緩まないようにするため
+ * である** —— 守りは、守られている前提が壊れたときにこそ要る。
+ */
+export function isAccountGrantedByOperator(account: AuthAccount): boolean {
+  return isAccountGranted(account) && account.grantedBy === OPERATOR_ACTOR;
+}
+
 export function isAccessTokenUsable(token: AccessTokenRecord, now: Date): boolean {
   if (token.revokedAt !== null) return false;
   if (token.expiresAt !== null && Date.parse(token.expiresAt) <= now.getTime()) return false;

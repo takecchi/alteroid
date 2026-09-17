@@ -351,9 +351,12 @@ function ResetSummaryView({ cleared }: { cleared: WorkspaceResetSummary }) {
  * ないという重さの違いによる。**`reset` という語を打たせる**（`y` 1文字の
  * 誤打で通らないようにするため。CLI の `resetCommand` の確認と同じ判断）。
  *
- * **ボタンは常に出す。** 実行環境の持ち主でなければ `POST /reset` が 403 を
+ * **ボタンは常に出す。** 実行環境の持ち主本人でなければ `POST /reset` が 403 を
  * 返すが、隠さない——隠すと「なぜ押せないか」が消える
  * （`hooks/mutations.ts` の `useRemoveSchedule` の doc と同じ判断）。
+ *
+ * **⚠️ 2026-09-17 まで、ここは押すと必ず 403 だった**（issue #1195。`env-vars.tsx`
+ * と同じ機序）。いまは持ち主が端末から直に許可したアカウントも通る。
  */
 function ResetWorkspace() {
   const resetWorkspace = useResetWorkspace();

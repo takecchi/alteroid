@@ -247,22 +247,28 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
   if (!response.ok) {
     if (response.status === 403) {
       /**
-       * **`PUT /credentials` は実行環境の持ち主だけである**（`PUT /profile` と
-       * 同じ強さ。任意の名前で任意の値を、これから起こすマネージャーの環境へ
-       * 永続的に置ける口だから）。
+       * **`PUT /credentials` は実行環境の持ち主本人だけである**（任意の名前で任意の
+       * 値を、これから起こすマネージャーの環境へ永続的に置ける口だから）。
+       *
+       * **⚠️ 2026-09-17、ここは一段緩んだ**（issue #1195）。持ち主が**端末から直に**
+       * 許可したアカウント（`grantedBy === 'operator'`）も通る。⟹ 案内も2つになった
+       * ——「器の中で実行する」だけでなく「持ち主に端末から許可してもらう」でも直る。
        *
        * **403 は「持ち主でない」以外の理由でも返る**（ログイン済みだが未 grant）。
        * 本文を見ずに固定の文言を出すと、`access grant` で直る人へ「器の中で
        * 実行しろ」と案内してしまう（`apps/cli/src/token.ts` の同じ分岐と同じ
-       * 理由）。
+       * 理由）。**デーモンの 403 の本文は2つの門で同じなので、ここは
+       * `forbiddenKindOf` の結果だけを見ればよい**（本文で門を見分けようとしないこと）。
        */
       const body = await response.json().catch(() => ({}));
       const kind = forbiddenKindOf(body);
       if (kind === 'not_operator') {
         throw new Error(
-          'マネージャーへ降ろす環境変数を置けるのは、その実行環境の持ち主だけです。\n' +
-            'デーモンが動いているのと同じ環境で実行してください:\n' +
-            '  docker compose exec app alteroid credential list\n',
+          'マネージャーへ降ろす環境変数を置けるのは、その実行環境の持ち主本人だけです。\n' +
+            'デーモンが動いているのと同じ環境で実行するか:\n' +
+            '  docker compose exec app alteroid credential list\n' +
+            'または、持ち主に同じ環境から許可してもらってください:\n' +
+            '  docker compose exec app alteroid access grant <アカウント id>\n',
         );
       }
       if (kind === 'not_granted') {

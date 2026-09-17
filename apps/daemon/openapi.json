@@ -8341,7 +8341,7 @@
             }
           },
           "403": {
-            "description": "実行環境の持ち主ではない。",
+            "description": "実行環境の持ち主本人ではない（持ち主が端末から直に許可したアカウントなら通る）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -10820,7 +10820,7 @@
             }
           },
           "403": {
-            "description": "実行環境の持ち主ではない。",
+            "description": "実行環境の持ち主本人ではない（持ち主が端末から直に許可したアカウントなら通る）。",
             "content": {
               "application/json": {
                 "schema": {
