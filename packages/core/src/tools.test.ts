@@ -6465,6 +6465,38 @@ describe('クローンの道具', () => {
     expect(reply).toContain('現役ではない鍵の冷却期限と一致した');
   });
 
+  /**
+   * **助言の手前に前提が立っていること**（#1063 / #914 の 2026-09-15T21:01:54Z）。
+   *
+   * すぐ下の助言（`manager_stop → manager_start で起こし直すこと（…ただし会話は
+   * 失われる）`）は、#914 のコメントが「**失われるものを過小に言っている**」と
+   * 名指ししたものである——実際にこの助言どおり走行中の委譲3本が止められ、うち
+   * 1本は未 push の実装を抱えていた。
+   *
+   * ⛔ **助言そのものは書き換えない**（同じ文言が提案1・`manager_stop` の断りにも
+   * 在り、揃える判断は3箇所まとめてすべきである）。⟹ **測るのは「先に確かめろ」が
+   * 助言より前に在ること**だけである。**在るかどうかだけでなく順序も測る**——
+   * 後ろに付いていたら前提として読まれない。
+   */
+  it('manager_list の世代ずれの行は、起こし直しの助言より前に「止める前に確かめろ」を置く（#1063）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.resetTimeSkewMatch = 'stale';
+
+    const reply = await h.call('manager_list', {});
+
+    const premise = reply.indexOf('止める前に、その委譲がターンの途中かどうか');
+    const advice = reply.indexOf('manager_stop → manager_start で起こし直すこと');
+    expect(premise).toBeGreaterThanOrEqual(0);
+    expect(advice).toBeGreaterThanOrEqual(0);
+    // **順序そのものを測る。** 前提は助言の手前に在る。
+    expect(premise).toBeLessThan(advice);
+    // 未 push の実物がどこで見られるかを名指ししている（#1063 の口）。
+    expect(reply).toContain('未 push・未コミットの実物が出る');
+  });
+
   it('manager_list は resets 時刻が現役自身と一致したら「待てば戻る」と言う（⚠ を立てない）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
