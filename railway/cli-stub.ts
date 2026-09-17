@@ -421,3 +421,58 @@ export async function runLimited<T, R>(
   );
   return results;
 }
+
+/**
+ * **準備段のシナリオを集める足場。1つが死んでも他を道連れにしない（#1150）。**
+ *
+ * `setup.test.ts` / `scale-runners.test.ts` は `it` から起動コストを追い出すため、
+ * 全シナリオを1つの `beforeAll`（`prepareScenarios`）へ寄せてある（#1093 / #1100）。
+ * ⚠️ **素直に書くとその `beforeAll` が「1つでも死んだら全部落ちる」形になる** ——
+ * `allowFailure` を付けていないシナリオが想定外に非0で終わると `finish()` が投げ、
+ * `beforeAll` 全体が reject し、**ファイル内の全テストが一括で skip になる。**
+ * CI は赤くなるので見逃しは起きないが、**「どの保証が壊れたか」がテスト名から
+ * 一切読めなくなる**（実測 2026-09-17: `scale-runners` で26本中0本が個別名で赤、
+ * `setup` で64本中0本。どちらも `Failed Suites 1` と skip 件数しか出なかった）。
+ *
+ * だからここでは**失敗を握り潰さず、引いた時点まで遅らせる**:
+ *
+ * - `task(name, fn)` は `fn` の例外を捕まえて `name` の下に**しまう**（他のタスクは走り続ける）
+ * - `settle()` が返す表は、**しまった例外を持つ名前を引いた瞬間にそれを投げる**
+ *
+ * ⟹ 死んだシナリオを引く `it`（や describe の `beforeAll`）だけが赤くなり、
+ * **他のシナリオを引く `it` は自分の保証を測り続ける。**
+ *
+ * ⚠️ **握り潰しではない。** 引かれない例外は消えるように見えるが、シナリオは
+ * 必ずどこかの `it` が引くために作られている（引かないシナリオは作る意味が無い）。
+ * 引く側が消えたときに黙るのが嫌なら、それは「使われていないシナリオを検出する」
+ * 別の歯の仕事であって、この足場の役目ではない。
+ */
+export function scenarioCollector<S extends object>() {
+  const value = {} as S;
+  const failures = new Map<PropertyKey, unknown>();
+  const tasks: Array<() => Promise<void>> = [];
+
+  /** 1シナリオぶんの準備を登録する。`fn` が投げたら `name` の下へしまう。 */
+  const task = (name: keyof S, fn: () => Promise<void>): void => {
+    tasks.push(async () => {
+      try {
+        await fn();
+      } catch (error) {
+        failures.set(name, error);
+      }
+    });
+  };
+
+  /** 全タスクを `limit` 本まで並行に走らせ、引いた時点で投げる表を返す。 */
+  const settle = async (limit: number): Promise<S> => {
+    await runLimited(tasks, limit, (t) => t());
+    return new Proxy(value, {
+      get(target, prop, receiver) {
+        if (failures.has(prop)) throw failures.get(prop);
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+  };
+
+  return { value, task, settle };
+}

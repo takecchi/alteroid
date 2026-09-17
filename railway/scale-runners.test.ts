@@ -28,7 +28,7 @@ import { cpus } from 'node:os';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import { type Run, runLimited, runScriptAsync } from './cli-stub.js';
+import { type Run, runScriptAsync, scenarioCollector } from './cli-stub.js';
 
 /** いま本番に在るもの（app / Postgres / runner の3つ）。 */
 const EXISTING = [
@@ -125,20 +125,26 @@ let scenarios: Scenarios;
  *    結果は変わらない。並行度は `os.cpus().length` で頭打ちにする——無制限に
  *    並べると器の CPU を使い切るため
  *
+ * **シナリオは `scenarioCollector` で集める（#1150）。** 素直に `tasks.push` で
+ * 集めて `Promise` をそのまま待つと、`allowFailure` を付けていないシナリオが1つ
+ * 想定外に死んだだけで `beforeAll` 全体が reject し、**ファイル内の26本が一括で
+ * skip になる**（＝「どの保証が壊れたか」がテスト名から読めなくなる）。
+ * `scenarioCollector` は失敗を名前の下へしまい、**その名前を引いた側だけに**
+ * 投げ直すので、壊れたシナリオを引く `it` / `describe` だけが赤くなる。
+ *
  * **この関数自体の timeout（第2引数）の根拠は、呼び出し側（下の `beforeAll`）に
  * 逐語で書いてある。**
  */
 async function prepareScenarios(): Promise<Scenarios> {
-  const s = {} as Scenarios;
-  const tasks: Array<() => Promise<void>> = [];
+  const { value: s, task, settle } = scenarioCollector<Scenarios>();
 
-  tasks.push(async () => {
+  task('scaleUpTo3', async () => {
     s.scaleUpTo3 = await run({ total: 3 });
   });
 
   // **これは運用の間違いではなく実装のバグである。** 写して増やすと、割った意味が
   // 消えた状態が台数ぶん増える。だから写さないだけでなく、そこで止まる
-  tasks.push(async () => {
+  task('memoryKeyOnRunner', async () => {
     s.memoryKeyOnRunner = await run({
       total: 3,
       runnerVars: { ...RUNNER_VARS, ALTEROID_DATABASE_URL: 'postgres://user:pw@host/db' },
@@ -149,7 +155,7 @@ async function prepareScenarios(): Promise<Scenarios> {
   // 台数を減らす操作は、その器で走っているマネージャーを移送できて初めて安全になる
   // （fencing → 移送。roadmap M5 PR4 → PR5）。**黙って何もしないのでも、勝手に
   // 消すのでもなく、できないと言う**
-  tasks.push(async () => {
+  task('scaleDown', async () => {
     s.scaleDown = await run({
       total: 1,
       services: [
@@ -165,7 +171,7 @@ async function prepareScenarios(): Promise<Scenarios> {
     { id: 'id-runner-2', name: 'runner-2', source: { repo: 'takecchi/alteroid', image: null } },
     { id: 'id-runner-3', name: 'runner-3', source: { repo: 'takecchi/alteroid', image: null } },
   ];
-  tasks.push(async () => {
+  task('rerunAlreadyAttached', async () => {
     s.rerunAlreadyAttached = await run({
       total: 3,
       services: rerunAttached,
@@ -175,7 +181,7 @@ async function prepareScenarios(): Promise<Scenarios> {
       },
     });
   });
-  tasks.push(async () => {
+  task('rerunMissingDest', async () => {
     s.rerunMissingDest = await run({
       total: 3,
       services: rerunAttached,
@@ -201,7 +207,7 @@ async function prepareScenarios(): Promise<Scenarios> {
       'http://${{runner-3.RAILWAY_PRIVATE_DOMAIN}}:4518',
     ].join(','),
   };
-  tasks.push(async () => {
+  task('unresolvedVarRefs', async () => {
     s.unresolvedVarRefs = await run({
       total: 3,
       services: unresolvedAttached,
@@ -210,11 +216,11 @@ async function prepareScenarios(): Promise<Scenarios> {
     });
   });
 
-  tasks.push(async () => {
+  task('dryRun', async () => {
     s.dryRun = await run({ total: 3, args: ['--dry-run'] });
   });
 
-  tasks.push(async () => {
+  task('noRunnerService', async () => {
     s.noRunnerService = await run({
       total: 3,
       services: EXISTING.filter((svc) => svc.name !== 'runner'),
@@ -222,8 +228,7 @@ async function prepareScenarios(): Promise<Scenarios> {
     });
   });
 
-  await runLimited(tasks, cpus().length, (task) => task());
-  return s;
+  return settle(cpus().length);
 }
 
 /**
