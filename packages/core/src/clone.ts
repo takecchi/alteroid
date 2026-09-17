@@ -4466,6 +4466,28 @@ class Clone implements CloneHost {
   }
 
   /**
+   * メモリの配達待ち行列の長さ（issue #1084 / #1133）。**`Clone#inbox`（配達を
+   * 待つ FIFO）のサイズと `#deferred`（枠＝利用上限で保持している分）を足す
+   * だけ**——2つとも同期の getter / 配列長で、失敗しうる操作を経由しない
+   * （`inbox-backlog.ts` の `describeInboxBacklogQueuedInMemory` の doc）。
+   *
+   * ## なぜ1本のメソッドに切り出したか —— issue #1133
+   *
+   * この数を読む口は2つある。**毎ターンの状況の節**（`#situationNoticeFor` が
+   * `describeSituation` へ渡す）と、**`manager_list` の受信箱の行**
+   * （`#toolContext()` が `ToolContext.queuedInMemory` として道具へ渡し、
+   * `tools.ts` の `describeInboxBacklog` が読む）である。**式
+   * `this.#inbox.size + this.#deferred.length` を2箇所に書き写すと、
+   * どちらかだけを直して忘れた瞬間に2つの数字が食い違いうる**——同じ
+   * クローンが同じターンの中で読む2つの「受信箱の滞留」が、また別の理由で
+   * 割れることになる。**この1本を両方が通ることで、その割れ方そのものを
+   * 構造的に作れなくする。**
+   */
+  #queuedInMemoryCount(): number {
+    return this.#inbox.size + this.#deferred.length;
+  }
+
+  /**
    * ターンの本文の先頭に載せる、「いまの全体」の節（doc の本体は `situation.ts`）。
    *
    * ## 何を読むか（`ManagerPool` を2回読む理由）
@@ -4509,28 +4531,6 @@ class Clone implements CloneHost {
    * 受信箱の行は「数えられなかった」と名乗る専用の1行になり、委譲・器の行は
    * そのまま出る。
    */
-  /**
-   * メモリの配達待ち行列の長さ（issue #1084 / #1133）。**`Clone#inbox`（配達を
-   * 待つ FIFO）のサイズと `#deferred`（枠＝利用上限で保持している分）を足す
-   * だけ**——2つとも同期の getter / 配列長で、失敗しうる操作を経由しない
-   * （`inbox-backlog.ts` の `describeInboxBacklogQueuedInMemory` の doc）。
-   *
-   * ## なぜ1本のメソッドに切り出したか —— issue #1133
-   *
-   * この数を読む口は2つある。**毎ターンの状況の節**（`#situationNoticeFor` が
-   * `describeSituation` へ渡す）と、**`manager_list` の受信箱の行**
-   * （`#toolContext()` が `ToolContext.queuedInMemory` として道具へ渡し、
-   * `tools.ts` の `describeInboxBacklog` が読む）である。**式
-   * `this.#inbox.size + this.#deferred.length` を2箇所に書き写すと、
-   * どちらかだけを直して忘れた瞬間に2つの数字が食い違いうる**——同じ
-   * クローンが同じターンの中で読む2つの「受信箱の滞留」が、また別の理由で
-   * 割れることになる。**この1本を両方が通ることで、その割れ方そのものを
-   * 構造的に作れなくする。**
-   */
-  #queuedInMemoryCount(): number {
-    return this.#inbox.size + this.#deferred.length;
-  }
-
   async #situationNoticeFor(events: InboxEvent[]): Promise<string> {
     const event = events[0];
     if (event === undefined) return '';
