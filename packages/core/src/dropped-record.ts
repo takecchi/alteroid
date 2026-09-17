@@ -1175,3 +1175,55 @@ function size(text: string, name?: string): string {
 function clip(text: string, limit: number): string {
   return text.length > limit ? `${text.slice(0, limit)}…` : text;
 }
+
+/**
+ * クローンの再開素材（`FsSessionRegistry` / `PgSessionRegistry` の4欄——
+ * `cloneSessionId` / `TranscriptGrave` / `LostSessionGrave` / `projectKey`）を
+ * 読み出そうとして、**ファイルが無い・行が無い以外の理由**で読めなかった
+ * ことを stderr へ1行だけ残す（issue #1147）。
+ *
+ * **`noteDroppedRecord` を流用しないのは、あれが「記録できませんでした」
+ * という書き込み失敗の文言で、ここは読み出しだからである**
+ * （`noteInboxEventKeptInMemoryOnly` の doc と同じ判断——「第三の状況には
+ * 専用の文言を持たせる」）。
+ *
+ * **既存の `noteUnreadableRecord`（読み出し失敗の汎用の跡）へも寄せなかった。**
+ * あちらは「読めなかった」ことは言うが、この4欄に固有の2点までは言わない
+ * ——ここではその2点を**必ず**言う必要がある。
+ *
+ * 1. **「無い」として扱ったので起動は止めていないこと。** 4つの読み手
+ *    （`getCloneSessionId` 等）はどれも、読めなかったときに例外を投げず
+ *    `null` を返す。クローンの起動を止めない、という判断そのものを行へ
+ *    書いておかないと、跡だけを見た読み手は「読めなかったのに黙って
+ *    先へ進んだのか、それとも起動そのものが止まったのか」を跡から
+ *    判定できない。
+ * 2. **⭐ この行だけが「無かった」と「読めなかった」を区別できること。**
+ *    これがこの関数の存在理由そのものである（#1147 の本体）。呼び出し側は
+ *    ファイルが無い（`ENOENT`）・pg に該当行が無い場合はここを呼ばない
+ *    ——**ここへ来るのは「在ったのに読めなかった」場合だけ**なので、この
+ *    行が出ているという事実そのものが「無かった」を否定する。逆にこの行が
+ *    出ていなければ、`null` は「無かった」を意味する。これまでは両者が
+ *    同じ `null` に潰れていて外からは見分けが付かず、クローンが resume を
+ *    諦めて新しいセッションを始めても「正常な経路」として通っていた。
+ *
+ * **例外は投げない。** 呼び出し側（`FsSessionRegistry` / `PgSessionRegistry`
+ * の4つの読み手）は、この関数を呼んだ後もそのまま `null` を返す——
+ * 「握り潰しをやめたら起動しなくなった」が最悪の着地であることは
+ * `storage-pg` 側の「壊れた1行で起動を止めない」という既存の判断
+ * （`packages/storage-pg/src/sessions.ts`）と同じである。
+ *
+ * **本文（ファイルの中身・行の値そのもの）は出さない。** 理由は
+ * `noteDroppedRecord` と同じ（#52）——`what` は呼び出し側が書く固定文言、
+ * `reasonOf(error)` が返すのは例外の1行目だけである。
+ *
+ * @param what 何を読もうとしたか（固定文言。呼び出し側が書く）。
+ * @param error 読み出し（`readFile` / `JSON.parse` / zod の検証 / pg の
+ *   クエリ）が実際に投げた理由。
+ */
+export function noteSessionMaterialUnreadable(what: string, error: unknown): void {
+  note(
+    `${what}を読み出せませんでした: ${reasonOf(error)}。` +
+      '「無い」として扱ったので起動は止めていない —— ' +
+      'ただし本当に無かったのか読めなかっただけなのかを区別できるのは、この行だけである。',
+  );
+}

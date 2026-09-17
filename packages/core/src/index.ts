@@ -880,6 +880,7 @@ export {
   noteDroppedJournalRow,
   noteDroppedJournalRowsSummary,
   noteDroppedRecord,
+  noteSessionMaterialUnreadable,
   noteUncaught,
   reasonOf,
   RECENT_TRACE_LIMIT,
