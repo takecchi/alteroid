@@ -478,7 +478,10 @@ describe('もう3台あるとき（回し直し）', () => {
     const r = scenarios.rerunMissingDest;
     expect(r.exitCode).toBe(0);
     expect(r.calls.some((c) => c.startsWith('add'))).toBe(false);
-    expect(r.vars('id-app').ALTEROID_RUNNER_URLS.split(',')).toHaveLength(3);
+    // 直前の assert（`add` を呼んでいない）が既に3台在ることを確かめているので、
+    // `ALTEROID_RUNNER_URLS` は必ず置かれている（#1171 で typecheck の網に入れて
+    // 表面化した `noUncheckedIndexedAccess` の指摘）
+    expect(r.vars('id-app').ALTEROID_RUNNER_URLS!.split(',')).toHaveLength(3);
     expect(r.calls.some((c) => c.includes('redeploy') && c.includes('--service app'))).toBe(true);
   });
 });

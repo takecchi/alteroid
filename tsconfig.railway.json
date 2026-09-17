@@ -1,0 +1,20 @@
+{
+  // #1171: railway/ はワークスペースのパッケージではない（package.json を持たない）ので
+  // `pnpm -r typecheck` の網に1ファイルも入っていなかった。根の `typecheck` から
+  // `tsc -p tsconfig.railway.json` として直接呼び、この隙間を埋める。
+  //
+  // **`railway/tsconfig.json`（issue #1171 の候補(1)が挙げた素直な置き場所）ではなく
+  // ここ（根）に置く。** `railway/setup.test.ts` は `RAILWAY_DIR` の `*.json` を
+  // 「Railway の Service 設定である」という前提で全件 readdirSync → 走査している
+  // （「数え上げの持ち主は railway/ そのものである。名前を並べると、役を足した回だけ
+  // 静かに素通りする」——同ファイルのコメント。`readdirSync(RAILWAY_DIR).filter((f) =>
+  // f.endsWith('.json'))`）。`railway/` の中に tsconfig.json を置くと、この列挙が
+  // それも「Railway の Service 設定」として拾い、`configInputAsync` に食わせて
+  // JSON.parse から落ちる（実測: 2026-09-17、`railway/tsconfig.json` を試しに置いた
+  // ところ `SyntaxError: Expected property name or '}' in JSON at position 4` で
+  // `現物の2つを写せる（役が startCommand で決まる）` が赤くなった）。この列挙の
+  // 意図（新しい役の設定を足し忘れずに検査する）を壊さずに済むよう、tsconfig は
+  // `railway/` の外に置く。
+  "extends": "./tsconfig.base.json",
+  "include": ["railway/*.ts"]
+}

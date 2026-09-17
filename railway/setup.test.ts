@@ -334,7 +334,10 @@ async function prepareScenarios(): Promise<Scenarios> {
         ),
       ),
     );
-    s.domainSimilar = Object.fromEntries(attachedDomains.map((d, i) => [d, results[i]]));
+    // `results` は `attachedDomains` を map しただけなので、同じ添字 `i` は必ず
+    // 存在する（#1171 で typecheck の網に入れて表面化した `noUncheckedIndexedAccess`
+    // の指摘）
+    s.domainSimilar = Object.fromEntries(attachedDomains.map((d, i) => [d, results[i]!]));
   });
   task('domainUnreadable', async () => {
     s.domainUnreadable = await run(
@@ -936,7 +939,9 @@ describe('.env に持ち込みのドメインがあるとき', () => {
     ['前に何か付いている', 'my-alteroid.example'],
     ['後ろに何か付いている', 'alteroid.example.invalid'],
   ])('似た名前だけが繋がっているとき（%s）は非0で終わり、鍵を置かない', (_name, attached) => {
-    const r = scenarios.domainSimilar[attached];
+    // `attached` は `it.each` の2件どちらも `domainSimilar` タスクが埋めた
+    // キーそのものなので必ず存在する（#1171 の `noUncheckedIndexedAccess` 指摘）
+    const r = scenarios.domainSimilar[attached]!;
     expect(r.exitCode).not.toBe(0);
     const app = r.vars('id-app');
     expect(app).not.toHaveProperty('ALTEROID_PUBLIC_URL');
@@ -1043,7 +1048,10 @@ describe('railway/*.json を Service の設定へ写す', () => {
     const configs = readdirSync(RAILWAY_DIR).filter((f) => f.endsWith('.json'));
     expect(configs.length).toBeGreaterThanOrEqual(2);
     for (const name of configs) {
-      const r = scenarios.configResults[name];
+      // `configResults` は同じ `configs` 一覧を走査して埋めたものなので、
+      // ここでの `name` に対応する値は必ず存在する（#1171 の
+      // `noUncheckedIndexedAccess` 指摘）
+      const r = scenarios.configResults[name]!;
       expect(r.stderr).toBe('');
       expect(r.status).toBe(0);
       const input = JSON.parse(r.stdout);

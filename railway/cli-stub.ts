@@ -415,7 +415,10 @@ export async function runLimited<T, R>(
   await Promise.all(
     Array.from({ length: size }, async () => {
       for (let i = next++; i < items.length; i = next++) {
-        results[i] = await fn(items[i]);
+        // ループ条件 `i < items.length` が非 undefined を保証する（`noUncheckedIndexedAccess`
+        // は添字アクセスの型からはこの不変条件を読めない）。#1171 で typecheck の網に
+        // 入れて初めて表面化した
+        results[i] = await fn(items[i]!);
       }
     }),
   );
