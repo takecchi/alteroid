@@ -3430,7 +3430,7 @@ class RunnerSession {
    *
    * ## `Bash` 以外・`command` が文字列でない入力は素通しする
    *
-   * `inspectBashCommand` は `Bash` のコマンド文字列だけを見る判定器であって、
+   * `inspectBashCommand` は `Bash` の呼び出しだけを見る判定器であって、
    * 他のツールの入力の形を知らない。**ここで弾くのは `Bash` だけである** —
    * 他のツールまで巻き込むと、この PreToolUse が「何でも弾きうる門」に
    * 見えてしまい、地雷表「確認が要る行為の一覧を作る」に近づく。
@@ -3466,10 +3466,20 @@ class RunnerSession {
 
     if (hook.tool_name !== 'Bash') return { continue: true };
 
-    const command = (hook.tool_input as { command?: unknown } | null | undefined)?.command;
+    const toolInput = hook.tool_input as
+      | { command?: unknown; run_in_background?: unknown }
+      | null
+      | undefined;
+    const command = toolInput?.command;
     if (typeof command !== 'string') return { continue: true };
 
-    const verdict = inspectBashCommand(command);
+    // **`run_in_background` はコマンド文字列に現れない。** 背景へ置いたことを
+    // 判定器へ渡せる経路はここだけである（`bash-wait-guard.ts` の
+    // `isBackgroundedGhRunWatch` の doc）。**`=== true` で受ける** —— 欠けていても
+    // 形が崩れていても `false`（＝前景）になり、通す側へ倒れる。
+    const verdict = inspectBashCommand(command, {
+      backgrounded: toolInput?.run_in_background === true,
+    });
     if (!verdict.blocked) return { continue: true };
 
     const actor =

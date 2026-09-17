@@ -75,7 +75,11 @@
  */
 
 /** 弾いた形の種別。テストと呼び出し側の note 文言がここへ分岐する。 */
-export type WaitGuardForm = 'until-sleep' | 'while-sleep' | 'tail-f';
+export type WaitGuardForm =
+  | 'until-sleep'
+  | 'while-sleep'
+  | 'tail-f'
+  | 'gh-run-watch-background';
 
 export type WaitGuardVerdict =
   { blocked: false } | { blocked: true; form: WaitGuardForm; reason: string };
@@ -89,7 +93,7 @@ export type WaitGuardVerdict =
 const ALTERNATIVES =
   '代わりに次のいずれかを使うこと: ' +
   '(1) 起動した処理の完了を待つなら、待ち自体が終わる呼び出しにする ' +
-  '（例: `gh run watch <id> --exit-status`）。 ' +
+  '（例: `gh run watch <id> --exit-status` を**前景で**）。 ' +
   '(2) 待ちに上限が要るなら `timeout <秒> <コマンド>` で自分から終わらせる。 ' +
   '(3) 完了通知を待つのではなく、成果物が在るかを前景の呼び出しで見に行く。';
 
@@ -148,16 +152,105 @@ function isBoundedLoop(keyword: 'until' | 'while', cond: string, body: string): 
 }
 
 /**
+ * `gh run watch` を背景へ置く形（AGENTS.md「CI の完了を待つ形」）。
+ *
+ * ## なぜこの形だけ別に見るのか
+ *
+ * 他の3つの形（`until`/`while` + `sleep`・`tail -f`）は**コマンド自身が
+ * 終わらない**。こちらは違う —— `gh run watch` は run が終われば返る。
+ * 害は「終わらないこと」ではなく、**背景へ置くと待ちが自分の手から外れる**
+ * ことのほうである。実測（2026-09-17、AGENTS.md「CI の完了を待つ形」に逐語）:
+ * 作業者2人が同じ形で止まった。背景処理を残したまま作業者が畳むと、
+ * 起こし直しの上限（`runner.ts` の `SUBAGENT_WAKEUP_LIMIT_PER_AGENT`）に
+ * 達して**委譲そのものが停止する** —— しかも依頼側からは「まだ走っている」と
+ * 区別が付かない。
+ *
+ * ## 「背景へ置く」の2つの形を両方見る
+ *
+ * 1. **コマンド文字列の `&`**（`gh run watch 1 &`）。
+ * 2. ⭐ **`Bash` ツールの `run_in_background: true`**。こちらが実測で踏まれた
+ *    ほうである —— AGENTS.md が記録した2本の実物はどちらも `&` を持たない。
+ *    **この形はコマンド文字列に1文字も現れない** ⟹ 文字列だけを読む機械
+ *    （`.claude/settings.json` のフック等）では原理的に検出できない。だから
+ *    `invocation.backgrounded` として呼び出し側から受け取る（`runner.ts` の
+ *    `#onPreToolUse` が `tool_input.run_in_background` を渡す）。
+ *
+ * ## ⚠️ この検出器が弾かないと分かっている形
+ *
+ * - **前景の `gh run watch`。** `Bash` の既定 120 秒を越えると器が自分で
+ *   背景へ移すので、AGENTS.md は前景も危ういと書いている。**それはここでは
+ *   弾かない** —— 弾くと `ALTERNATIVES` (1) が勧めている当の形を自分で
+ *   禁じることになり、代替の無い拒否になる（このファイル冒頭「単独の
+ *   `sleep` を弾かない理由」と同じ判断）。上限が要るなら `timeout` で包む。
+ * - **`timeout` に包まれた背景の `gh run watch`。** このモジュールの約束
+ *   （「全体が `timeout N ...` に包まれていれば有界と読む」）を新しい形の
+ *   ためだけに崩さない。⟹ **意図して開けてある逃げ道である。**
+ */
+const GH_RUN_WATCH_RE = /\bgh\b(?:(?!;|&&|\|\||\||\n).)*?\brun\s+watch\b/;
+
+/**
+ * 直後に最初に現れる制御演算子が「背景化の `&`」かを見る。
+ *
+ * `&` は `2>&1`（直前が `>`）と `&&`（直前か直後が `&`）にも現れるので、
+ * 単純な `&` の検索では誤爆する。lookbehind と lookahead でその2つを外す。
+ * `;` / 改行が先に来たなら、その `gh run watch` は背景化されていない。
+ */
+const FIRST_CONTROL_OPERATOR_RE = /[;\n]|(?<![>&])&(?!&)/;
+
+function isBackgroundedGhRunWatch(trimmed: string, backgrounded: boolean): boolean {
+  const match = GH_RUN_WATCH_RE.exec(trimmed);
+  if (match === null) return false;
+  // ツール側の背景指定は、コマンド文字列のどこに在っても背景である。
+  if (backgrounded) return true;
+  const rest = trimmed.slice(match.index + match[0].length);
+  const operator = FIRST_CONTROL_OPERATOR_RE.exec(rest);
+  return operator !== null && operator[0] === '&';
+}
+
+/**
+ * `Bash` ツールの呼び出しのうち、コマンド文字列に現れない事実。
+ *
+ * **省略時は「背景ではない」に倒す**（fail-open）。呼び出し側が形の崩れた
+ * 入力を受け取ったときも、ここへ `undefined` が来て**通す**側へ倒れる。
+ */
+export interface BashInvocation {
+  /** `Bash` ツールの `run_in_background` が真であるか。 */
+  readonly backgrounded?: boolean;
+}
+
+/**
  * `Bash` の `command` 文字列を検査する。
  *
  * **純関数。** I/O もプロセスの状態も見ない —— 文字列だけを見て判定する。
  */
-export function inspectBashCommand(command: string): WaitGuardVerdict {
+export function inspectBashCommand(
+  command: string,
+  invocation: BashInvocation = {},
+): WaitGuardVerdict {
   const trimmed = command.trim();
   if (trimmed.length === 0) return { blocked: false };
 
   // 全体が timeout に包まれていれば、中身がどんな形でも有界だと読める。
   if (isTimeoutWrapped(trimmed)) return { blocked: false };
+
+  if (isBackgroundedGhRunWatch(trimmed, invocation.backgrounded === true)) {
+    return {
+      blocked: true,
+      form: 'gh-run-watch-background',
+      reason:
+        '`gh run watch` を背景へ置いている' +
+        '（`&` か `Bash` の `run_in_background`）。**待ちが自分の手から外れる形**で、' +
+        '背景処理を残したまま作業者が畳むと起こし直しの上限に達して委譲そのものが止まる' +
+        '（実測 2026-09-17: 作業者2人が同じ形で停止した）。' +
+        '代わりに次のいずれかを使うこと: ' +
+        '(1) 前景で `timeout <秒> gh run watch <id> --exit-status` と書き、待ち自体に上限を持たせる。 ' +
+        '(2) 上限付きのポーリングで確かめる' +
+        '（`gh api repos/<owner>/<repo>/commits/<head_sha>/check-runs` を回数の上限を先に決めて叩く。' +
+        '**head sha を明示すること** — PR 番号だけで引くと draft 中の `skipped` を緑と読む）。 ' +
+        '⚠️ どちらでも `| tail` / `| head` をチェーンの末尾に置かないこと —— ' +
+        'パイプの終了コードは既定で最後のものなので、`gh run watch` が 404 で即死しても成功の顔で返る。',
+    };
+  }
 
   if (hasUnboundedTailFollow(trimmed)) {
     return {

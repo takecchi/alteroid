@@ -151,3 +151,120 @@ describe('inspectBashCommand — 弾いてはいけないもの（有界と読�
     expect(inspectBashCommand('').blocked).toBe(false);
   });
 });
+
+/**
+ * `gh run watch` を背景へ置く形（AGENTS.md「CI の完了を待つ形」）。
+ *
+ * **2群に分けるのは上の2つと同じだが、比重が逆である。** 上の2群は「弾く
+ * べきもの」が実測の逐語から来ていた。こちらは **⭐ 弾いてはいけないものの
+ * ほうを厚くする** —— この判定器はこの repo で走る全てのマネージャーと
+ * 作業者の `Bash` に効くので、**偽陽性のほうが偽陰性より高い。** 普通の
+ * コマンド（`git status` / `pnpm -v` / `gh pr list` / パイプ / 日本語）が
+ * 通ることを、`backgrounded` の両方の値で測る。
+ */
+describe('inspectBashCommand — gh run watch を背景へ置く形', () => {
+  // ⭐ AGENTS.md「CI の完了を待つ形」が逐語で記録した実物2本。**どちらも
+  // `&` を持たない** —— 背景化は `Bash` ツールの `run_in_background` 側で
+  // 起きていた。だから文字列だけを読む機械では、この2本は検出できない。
+  it('実測1: worker a25a28c41 の形を、run_in_background なら弾く', () => {
+    const command =
+      'gh run watch 35196482974 --repo takecchi/alteroid --exit-status 2>&1 | tail -60';
+    const verdict = inspectBashCommand(command, { backgrounded: true });
+    expect(verdict.blocked).toBe(true);
+    if (!verdict.blocked) throw new Error('unreachable');
+    expect(verdict.form).toBe('gh-run-watch-background');
+  });
+
+  it('実測2: worker a86fd5bd3 の形を、run_in_background なら弾く', () => {
+    const command =
+      'gh run watch 35195863856 --repo takecchi/alteroid --exit-status 2>&1 | tail -40';
+    expect(inspectBashCommand(command, { backgrounded: true }).blocked).toBe(true);
+  });
+
+  it('コマンド文字列の末尾の & でも弾く', () => {
+    const verdict = inspectBashCommand('gh run watch 12345 --exit-status &');
+    expect(verdict.blocked).toBe(true);
+    if (!verdict.blocked) throw new Error('unreachable');
+    expect(verdict.form).toBe('gh-run-watch-background');
+  });
+
+  it('パイプライン全体を & で背景へ置く形も弾く', () => {
+    expect(inspectBashCommand('gh run watch 123 2>&1 | tail -60 &').blocked).toBe(true);
+  });
+
+  it('nohup + & も弾く', () => {
+    expect(inspectBashCommand('nohup gh run watch 123 --exit-status &').blocked).toBe(true);
+  });
+
+  // 拒否は必ず代替と対にする（このファイル冒頭「単独の `sleep` を弾かない理由」）。
+  it('理由に代替が3つとも載る（前景 timeout / 上限付きポーリング / head sha の明示）', () => {
+    const verdict = inspectBashCommand('gh run watch 123 &');
+    if (!verdict.blocked) throw new Error('unreachable');
+    expect(verdict.reason).toContain('timeout');
+    expect(verdict.reason).toContain('check-runs');
+    expect(verdict.reason).toContain('head sha を明示');
+    expect(verdict.reason).toContain('| tail');
+  });
+});
+
+describe('inspectBashCommand — 背景の判定で誤爆しない（⭐ 偽陽性のほうが高い）', () => {
+  // ⭐ 依頼者が名指しで要求した5つ。**`backgrounded` の両方の値で測る** ——
+  // 背景指定そのものを禁止にしてしまうと、この repo の全員の手が止まる。
+  const ordinaryCommands = [
+    ['git status', 'git status'],
+    ['pnpm -v', 'pnpm -v'],
+    ['gh pr list', 'gh pr list --state all --limit 1000'],
+    ['パイプを含む', "gh run list --limit 10 | head -5 | awk '{print $1}'"],
+    ['日本語を含む', 'echo "検証が緑になりました" && git log --oneline -1'],
+    ['gh run list の背景実行', 'gh run list --repo takecchi/alteroid --limit 50 &'],
+    ['pnpm test の背景実行', 'pnpm test --maxWorkers=4 > /tmp/test.log 2>&1 &'],
+  ] as const;
+
+  for (const [label, command] of ordinaryCommands) {
+    it(`${label}: 前景でも背景でも通す`, () => {
+      expect(inspectBashCommand(command).blocked).toBe(false);
+      expect(inspectBashCommand(command, { backgrounded: true }).blocked).toBe(false);
+    });
+  }
+
+  // ⭐ ここがいちばん効く歯である —— `2>&1` の `&` を背景化と読むと、
+  // リダイレクトを書いた全てのコマンドが止まる。
+  it('2>&1 のリダイレクトを背景化と読まない（前景の gh run watch は通す）', () => {
+    expect(inspectBashCommand('gh run watch 123 --exit-status 2>&1 | tail -60').blocked).toBe(
+      false,
+    );
+  });
+
+  it('&& の連鎖を背景化と読まない', () => {
+    expect(inspectBashCommand('gh run watch 123 --exit-status && echo ok').blocked).toBe(false);
+  });
+
+  it('前景の gh run watch は通す（ALTERNATIVES が勧めている当の形）', () => {
+    expect(inspectBashCommand('gh run watch 12345 --exit-status').blocked).toBe(false);
+  });
+
+  it('後続の別コマンドだけが背景なら通す', () => {
+    expect(inspectBashCommand('gh run watch 123 --exit-status; echo done &').blocked).toBe(false);
+  });
+
+  // 意図して開けてある逃げ道（`bash-wait-guard.ts` の doc「弾かないと分かっている形」）。
+  it('timeout に包まれていれば背景でも通す（このモジュールの約束を崩さない）', () => {
+    expect(inspectBashCommand('timeout 600 gh run watch 123 --exit-status &').blocked).toBe(false);
+    expect(
+      inspectBashCommand('timeout 600 gh run watch 123 --exit-status', { backgrounded: true })
+        .blocked,
+    ).toBe(false);
+  });
+
+  it('gh の別サブコマンドは watch という語を含んでいても通す', () => {
+    expect(inspectBashCommand('gh api repos/o/r/actions/runs --jq .workflow_runs &').blocked).toBe(
+      false,
+    );
+    expect(inspectBashCommand('gh run list | grep watch &').blocked).toBe(false);
+  });
+
+  // fail-open の形そのもの: 呼び出し側が何も渡さなくても既定で前景に倒れる。
+  it('invocation を省いても落ちず、前景として扱う', () => {
+    expect(inspectBashCommand('gh run watch 123 --exit-status').blocked).toBe(false);
+  });
+});

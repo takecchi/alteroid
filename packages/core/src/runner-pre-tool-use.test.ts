@@ -260,3 +260,82 @@ describe('Bash の有界な形は通す', () => {
     });
   }
 });
+
+/**
+ * `run_in_background` の配線（AGENTS.md「CI の完了を待つ形」）。
+ *
+ * **ここでしか測れないものが1つある** —— `tool_input.run_in_background` は
+ * コマンド文字列に1文字も現れないので、`bash-wait-guard.test.ts` 側は
+ * 「渡されたら弾く」までしか固定できない。**渡っていること自体を測るのは
+ * ここである。**
+ */
+describe('run_in_background を判定器へ渡す', () => {
+  it('背景の gh run watch を deny し、note に形を書く', async () => {
+    const { started, events } = await startSession();
+    const result = await firePreToolUse(started.options, {
+      ...PRE_TOOL_USE_BASE,
+      tool_name: 'Bash',
+      tool_input: {
+        command: 'gh run watch 35196482974 --repo takecchi/alteroid --exit-status 2>&1 | tail -60',
+        run_in_background: true,
+      },
+    });
+
+    const asRecord = result as { hookSpecificOutput?: Record<string, unknown> };
+    expect(asRecord.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(String(asRecord.hookSpecificOutput?.permissionDecisionReason)).toContain('check-runs');
+
+    const notes = waitGuardNotes(events);
+    expect(notes.length).toBe(1);
+    expect(notes[0]?.text).toContain('形=gh-run-watch-background');
+    expect(notes[0]?.escalate).toBeUndefined();
+  });
+
+  // ⭐ 同じコマンドが、前景なら通る。**この対が「弾いているのは形であって
+  // コマンドではない」ことを固定する。**
+  it('同じコマンドでも run_in_background が無ければ通す', async () => {
+    const { started, events } = await startSession();
+    const result = await firePreToolUse(started.options, {
+      ...PRE_TOOL_USE_BASE,
+      tool_name: 'Bash',
+      tool_input: {
+        command: 'gh run watch 35196482974 --repo takecchi/alteroid --exit-status 2>&1 | tail -60',
+      },
+    });
+    expect(result).toEqual({ continue: true });
+    expect(waitGuardNotes(events).length).toBe(0);
+  });
+
+  // fail-open: 形が崩れた入力は「背景ではない」へ倒れる（`#onPreToolUse` の
+  // `=== true`）。⛔ 迷ったら止める、にしない。
+  it('run_in_background が真偽値でなければ前景として扱う', async () => {
+    const { started, events } = await startSession();
+    const result = await firePreToolUse(started.options, {
+      ...PRE_TOOL_USE_BASE,
+      tool_name: 'Bash',
+      tool_input: { command: 'gh run watch 123 --exit-status', run_in_background: 'yes' },
+    });
+    expect(result).toEqual({ continue: true });
+    expect(waitGuardNotes(events).length).toBe(0);
+  });
+
+  // ⭐ 偽陽性の側。**背景指定そのものを禁止にしていないこと**を固定する。
+  it('背景でも、普通のコマンドは通す', async () => {
+    const { started, events } = await startSession();
+    for (const command of [
+      'git status',
+      'pnpm -v',
+      'gh pr list --state all --limit 1000',
+      'pnpm test --maxWorkers=4 > /tmp/test.log 2>&1',
+      'echo "検証が緑になりました"',
+    ]) {
+      const result = await firePreToolUse(started.options, {
+        ...PRE_TOOL_USE_BASE,
+        tool_name: 'Bash',
+        tool_input: { command, run_in_background: true },
+      });
+      expect(result).toEqual({ continue: true });
+    }
+    expect(waitGuardNotes(events).length).toBe(0);
+  });
+});
