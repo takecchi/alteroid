@@ -63,6 +63,7 @@ import {
   noteDroppedInboxEvent,
   noteDroppedRecord,
   noteInboxEventKeptInMemoryOnly,
+  noteInboxEventLost,
   noteUnreadableRecord,
   reasonOf,
 } from './dropped-record.js';
@@ -523,13 +524,20 @@ const FORGET_RETRY_MS = 200;
  * 書き込みで、向きが逆（書く／消す）なだけである。** これも回数制限ではない
  * （`SCHEDULE_STORE_ATTEMPTS` と同じ理由）。器の一瞬の揺れで書けなかっただけの
  * 合図を、次の起動を待たずに同じプロセスの中で書き込むための拾い直しであって、
- * 諦めた合図を切り捨てるものではない——全部失敗しても合図は失われない
- * （メモリの待ち行列には残る。`#remember` の doc）。
+ * 諦めた合図を切り捨てるものではない——**ただしこれが成り立つのは
+ * `canQueue: true`（この呼びの直後に必ず `#inbox.push` する通常経路）に
+ * 限る。** 全部失敗しても合図は失われない（メモリの待ち行列には残る。
+ * `#remember` の doc）。
  *
- * **有界にする。** ここを無限に粘る形にすると、器が詰まったまま合図が届き
- * 続けるたびに終わらない待ちが積み上がる。尽きたら諦めて跡だけ残す
- * （`noteInboxEventKeptInMemoryOnly`）——「諦める」が指すのは**この起動での
- * 書き込み**だけで、合図そのものではない。
+ * **⚠️ `canQueue: false`（`post()` の片付けの窓）では、この「失われない」は
+ * 成り立たない（issue #1144）。** その窓は `#inbox.push` を一度も通らない
+ * ので、拾い直しが尽きるとその合図はストアにもメモリの待ち行列にも無く、
+ * 本当に失われる。**有界にする理由は変わらない**——ここを無限に粘る形に
+ * すると、器が詰まったまま合図が届き続けるたびに終わらない待ちが積み
+ * 上がる。尽きたら諦めて跡だけ残す。**跡の文言は経路で分かれる**——
+ * `canQueue: true` なら `noteInboxEventKeptInMemoryOnly`、`canQueue: false`
+ * なら `noteInboxEventLost`（「諦める」が指すのは**この起動での書き込み**
+ * だけで、合図そのものではない、という前提は前者にしか当てはまらない）。
  */
 const REMEMBER_RETRY_ATTEMPTS = 3;
 const REMEMBER_RETRY_MS = 200;
@@ -2093,7 +2101,11 @@ class Clone implements CloneHost {
       // ——任せる先のターンがそもそも起きない。⟹ 本文を日誌へ残す役目も
       // `#foldIntoPendingCollapse` 側が引き受ける（`PendingCollapseVerdict`）。
       if (this.#foldIntoPendingCollapse(event, { canQueue: false }) !== 'pass') return;
-      this.#remember(event);
+      // **同じ `canQueue: false` を `#remember` へも流す（issue #1144）。**
+      // この窓は `#inbox.push` を一度も通らないので、`#remember` の拾い直しが
+      // 尽きたときの跡は「失った」と名乗るべきで、「メモリの待ち行列に残る」
+      // という通常経路の跡（`canQueue: true`）を使うと嘘になる。
+      this.#remember(event, { canQueue: false });
       this.#commit(event);
       noteDroppedInboxEvent(event);
       return;
@@ -2177,7 +2189,11 @@ class Clone implements CloneHost {
     // （増えるのは、器の入れ替えのたびに拾い直される行数だけ）。待ち行列へは
     // 下で入れるので、クローンがこの合図を読み落とすことはない。
     if (collapse === 'pass') {
-      this.#remember(event);
+      // **同じ `canQueue: true` を `#remember` へも流す（issue #1144）。** この
+      // 経路はこの下で必ず `#inbox.push` するので、拾い直しが尽きても合図は
+      // メモリの待ち行列に残る——通常経路の跡（`noteInboxEventKeptInMemoryOnly`）
+      // が正しいのはここだけである。
+      this.#remember(event, { canQueue: true });
       // 受理した瞬間に日誌へ載せて合図を出す。**器へ書くのと同じ場所である**
       // （`#remember` の隣）。
       this.#record(event);
@@ -3775,22 +3791,32 @@ class Clone implements CloneHost {
    * 書き込みで、器の瞬断だけで即座に諦めない。**有界にする。** 尽きても
    * この約束（`#unread` に積むもの）は reject しない——reject すると
    * `#forget` の `await written` が例外で終わり、消し込みそのものが止まる。
-   * 拾い直しても書けなかった最後だけ跡を残す（`noteInboxEventKeptInMemoryOnly`）。
-   * **その跡は「書けなかった」であって「合図を失った」ではない**——`post()` は
-   * この呼びの直後に `#inbox.push` するので、このプロセスが生きているあいだは
-   * 配達される。失うのは器が入れ替わったとき（`#restoreUnread` はストアから
-   * しか拾い直せないため）だけである。跡は stderr へ1行だけ残す（本文を出さない
-   * 理由は `dropped-record.ts`。ここへ来る合図には人間の発言・webhook の本文・
-   * マネージャーの報告が入り、テスト出力（`railway/setup.test.ts` の差分
-   * アサーション）に `GH_TOKEN` が全文で出た前例がある。#52）。
+   * 拾い直しても書けなかった最後だけ跡を残す。
+   *
+   * **その跡の文言は `canQueue` で分かれる（issue #1144）。** `canQueue: true`
+   * （呼び出し元がこの呼びの直後に必ず `#inbox.push` する通常経路）なら
+   * 「書けなかった」であって「合図を失った」ではない——このプロセスが
+   * 生きているあいだは配達される。失うのは器が入れ替わったとき
+   * （`#restoreUnread` はストアからしか拾い直せないため）だけである。
+   * `canQueue: false`（`post()` の片付けの窓——`#inbox.push` を一度も
+   * 通らない）なら、その合図はストアにもメモリの待ち行列にも無く、
+   * **本当に失われている**——跡はそう名乗る（`noteInboxEventLost`）。
+   * 呼び出し元（`post()`）が自分がどちらの経路に居るかを知っているので、
+   * ここへ引数として渡させる（`#foldIntoPendingCollapse` が既に持つ同名の
+   * 区別をそのまま流用する——新しい概念を発明しない）。
+   *
+   * 跡は stderr へ1行だけ残す（本文を出さない理由は `dropped-record.ts`。
+   * ここへ来る合図には人間の発言・webhook の本文・マネージャーの報告が入り、
+   * テスト出力（`railway/setup.test.ts` の差分アサーション）に `GH_TOKEN` が
+   * 全文で出た前例がある。#52）。
    *
    * **`arrived`（Issue #783 段0）はここで、書き込みの成否を問わずに数える。**
    * `inbox_flow.arrived` の doc が言う「受理した瞬間であって書けた時刻ではない」
    * を体現している場所そのもの——拾い直しの結果を待たず関数の入口で数える。
    */
-  #remember(event: InboxEvent): void {
+  #remember(event: InboxEvent, options: { readonly canQueue: boolean }): void {
     this.#bumpInboxFlow(this.#inboxFlowArrived, event.type);
-    this.#unread.set(event.id, this.#persistUnread(event));
+    this.#unread.set(event.id, this.#persistUnread(event, options));
   }
 
   /**
@@ -3806,8 +3832,12 @@ class Clone implements CloneHost {
    * `#unread` へそのまま積み、`#forget` が `await written` で待つ——ここで
    * reject すると、書けなかった合図の消し込みまで例外で止まってしまう
    * （`#forget` の doc）。尽きたら跡だけ残して正常に終える。
+   *
+   * **`options.canQueue` は跡の文言だけを分ける（issue #1144）。** 拾い直しの
+   * 回数・間隔・「尽きても reject しない」という挙動そのものは経路によらず
+   * 同じ——変わるのは、尽きたときに何を stderr へ残すかだけである。
    */
-  async #persistUnread(event: InboxEvent): Promise<void> {
+  async #persistUnread(event: InboxEvent, options: { readonly canQueue: boolean }): Promise<void> {
     let last: unknown;
     for (let attempt = 0; attempt < REMEMBER_RETRY_ATTEMPTS; attempt += 1) {
       if (attempt > 0) {
@@ -3820,7 +3850,11 @@ class Clone implements CloneHost {
         last = error;
       }
     }
-    noteInboxEventKeptInMemoryOnly(inboxEventShape(event), last);
+    if (options.canQueue) {
+      noteInboxEventKeptInMemoryOnly(inboxEventShape(event), last);
+    } else {
+      noteInboxEventLost(inboxEventShape(event), last);
+    }
   }
 
   /**

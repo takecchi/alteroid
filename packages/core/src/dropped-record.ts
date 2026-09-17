@@ -34,7 +34,10 @@ export function noteDroppedRecord(what: string, detail: string, error: unknown):
 
 /**
  * 未読の合図を、有界の拾い直し（`clone.ts` の `REMEMBER_RETRY_ATTEMPTS`）が
- * 尽きたあともストアへ書けなかったことを stderr へ1行残す（issue #1085）。
+ * 尽きたあともストアへ書けなかったことを stderr へ1行残す（issue #1085。
+ * ⚠️ **`canQueue: true` の経路専用** —— 使い分けは issue #1144 で分けた。
+ * `canQueue: false`（`post()` の片付けの窓）は {@link noteInboxEventLost} を
+ * 使うこと）。
  *
  * **`noteDroppedRecord` を流用しないのは、あれが「記録できませんでした」だけで
  * 終わり、合図がまだ生きていることを言わないからである。** `#remember`
@@ -53,6 +56,14 @@ export function noteDroppedRecord(what: string, detail: string, error: unknown):
  * 実際より悲観的に読める一方で、本当の帰結（器の入れ替えで失われる）が
  * 伝わらない。
  *
+ * **⚠️ ここで名乗る「失ってはいない」は無条件ではない。** `post()` には
+ * `#remember` を呼びながら `#inbox.push` を一度も通らない経路
+ * （`this.#stopped || this.#inbox.closed` の片付けの窓）が在る。その経路で
+ * この関数を使うと、通らないはずの `#inbox.push` を通ったことにして
+ * 名乗ってしまう —— それが issue #1144 の指摘そのものである。**この関数は
+ * 呼び出し元が `canQueue: true`（＝この呼びの直後に必ず `#inbox.push` する
+ * ことが確定している）と分かっているときにしか使わないこと。**
+ *
  * **本文は出さない。** 理由は `noteDroppedRecord` と同じ（#52）。
  *
  * @param detail 本文を含まない見分け（`inboxEventShape` で作る）
@@ -65,6 +76,44 @@ export function noteInboxEventKeptInMemoryOnly(detail: string, error: unknown): 
       'ただし失ってはいない —— メモリの待ち行列には残っており、このプロセスが' +
       '生きているあいだは配達される。器が入れ替われば（再起動・デプロイ）、' +
       'この合図は失われる。',
+  );
+}
+
+/**
+ * 未読の合図を、有界の拾い直し（`clone.ts` の `REMEMBER_RETRY_ATTEMPTS`）が
+ * 尽きたあともストアへ書けず、しかも受信箱の待ち行列にも一度も積まれな
+ * かったことを stderr へ1行残す（issue #1144）。
+ *
+ * **`noteInboxEventKeptInMemoryOnly` を流用しないのは、あれが「メモリの
+ * 待ち行列には残っており、このプロセスが生きているあいだは配達される」と
+ * 無条件に名乗るからである。** その主張は `post()` がこの呼びの直後に
+ * `#inbox.push` する経路（`canQueue: true`）でしか成り立たない。`post()` の
+ * 片付けの窓（`this.#stopped || this.#inbox.closed`）は `#remember` を
+ * 呼びながら `#inbox.push` を一度も通らない（`post()` 自身のコメントに
+ * 逐語で在る：「この窓の合図は待ち行列へ入らず（`#inbox.push` はこの下に
+ * 無い）、そのまま跡だけ残して落ちる」）。⟹ この経路（`canQueue: false`）で
+ * 拾い直しが尽きると、その合図はストアにも無く、メモリの待ち行列にも一度も
+ * 載っていない —— **本当に失われている。**
+ *
+ * **`noteInboxEventKeptInMemoryOnly` と同じ理由で専用の文言を持つ。**
+ * 「書けなかった」と「合図を失った」は別の状態であり、あちらの文言を
+ * この経路にも使うと**実際より楽観的に読める**。#1144 が指摘したのは
+ * まさにこの逆転である —— #1085 は通常経路で悲観的すぎた
+ * `noteDroppedRecord` を弱める直しだったが、この片付けの窓に限っては
+ * 旧来の「落とした」のほうが真実で、`noteInboxEventKeptInMemoryOnly` の
+ * 「失ってはいない」が嘘になっていた。
+ *
+ * **本文は出さない。** 理由は `noteDroppedRecord` と同じ（#52）。
+ *
+ * @param detail 本文を含まない見分け（`inboxEventShape` で作る）
+ * @param error 最後の拾い直しで実際に投げられたエラー
+ */
+export function noteInboxEventLost(detail: string, error: unknown): void {
+  const tail = detail === '' ? '' : `（${detail}）`;
+  note(
+    `未読の合図をストアへ書けませんでした${tail}: ${reasonOf(error)}。` +
+      'この合図は失われた —— 受信箱を閉じた後の片付けの窓では ' +
+      '`#inbox.push` を一度も通らないため、メモリの待ち行列にも載っていない。',
   );
 }
 

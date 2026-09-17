@@ -6314,6 +6314,48 @@ describe('クローン — 考えている合図（thinking）', () => {
     // 本文は器の中には**入る**（拾い直せなければ意味が無い）。出さないのは stderr の側だけ
     expect(open[0]?.body).toContain('ghp_');
   });
+
+  /**
+   * **片付けの窓（止まった後）でストアへの拾い直しが尽きたら、跡は
+   * 「失われた」と名乗ること（issue #1144）。**
+   *
+   * 直上の歯（`ghp_…` の2件）は `stores.inbox.put` が成功する前提で、
+   * 「器へは残る」ところまでしか確かめていない。ここは `put` そのものを
+   * 無条件で失敗させ、`REMEMBER_RETRY_ATTEMPTS` を使い切らせる——この窓
+   * （`this.#stopped || this.#inbox.closed`）は `#inbox.push` を一度も
+   * 通らないので、拾い直しが尽きた合図はストアにもメモリの待ち行列にも
+   * 無く、本当に失われる。PR #1118（issue #1085）はこの経路でも
+   * 通常経路と同じ「ただし失ってはいない」を名乗っていた——それが嘘に
+   * なることが issue #1144 の指摘であり、ここが直った証拠になる。
+   */
+  it('片付けの窓（止まった後）で書き込みが尽きたら、跡は「失われた」と名乗る（issue #1144）', async () => {
+    const stores = failingInboxPut(createMemoryStores(), '器が閉じている');
+    const s = setup(undefined, stores);
+    await s.clone.stop();
+
+    const secret = 'GH_TOKEN=ghp_000000000000000000000000000000000000';
+    const lines = await captureStderr(async () => {
+      s.clone.post(humanMessage(secret));
+      // 拾い直しの間隔（`REMEMBER_RETRY_MS` × (1+2) ≒ 600ms）ぶん待って
+      // 諦めきるのを待つ（`inbox-persistence.test.ts` の issue #1085 の歯と
+      // 同じ待ち方）。
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    });
+
+    const trace = lines.filter((line) => line.includes('未読の合図をストアへ書けませんでした'));
+    expect(trace).toHaveLength(1);
+    expect(trace[0]).toContain('器が閉じている');
+    // **通常経路の文言は使わない。** この窓は `#inbox.push` を一度も通らない
+    // ので、「メモリの待ち行列には残っており」は嘘になる（issue #1144）。
+    expect(trace[0]).not.toContain('ただし失ってはいない');
+    expect(trace[0]).not.toContain('メモリの待ち行列には残って');
+    expect(trace[0]).toContain('この合図は失われた');
+    // 本文は出さない（テスト出力に GH_TOKEN が全文で出た前例がある。#52）。
+    expect(lines.join('')).not.toContain(secret);
+    expect(lines.join('')).not.toContain('ghp_');
+    // 長さだけは出す（「空だった」と「書けなかった」の区別が付く）。
+    expect(trace[0]).toContain(`chars=${secret.length}`);
+  }, 10_000);
 });
 
 /**
