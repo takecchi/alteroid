@@ -230,7 +230,20 @@ describe('クローンの道具に渡した引数は、長さと位置によら�
    * 引数が本当に届かなかったとき、応答は `received undefined` と言う。
    * `undefined` は「鍵ごと無かった」という意味で、道具が受け取ってから
    * 落としたのではなく、**呼び出しの JSON にその鍵が最初から無かった**ことを指す。
-   * 道具の側でこの文言を作れる箇所は無い（入力検査より手前で加工する層が無い）。
+   *
+   * ⚠️ **かつてここには「道具の側でこの文言を作れる箇所は無い（入力検査より
+   * 手前で加工する層が無い）」と書いてあったが、#1141 でそれは成り立たなくなった。**
+   * いまは `tools.ts` の `MISSING_ARG_HINT` が、欠落時の文言を alteroid 側で
+   * 作っている。⟹ **「この文言は alteroid には作れないから信用できる」という
+   * 根拠の立て方は、もう使えない。**
+   *
+   * **ただし信号そのものは死んでいない。** 文言は alteroid のものになったが、
+   * **それが出る条件（`iss.input === undefined`）を判定しているのは依然として
+   * zod であり、判定の場所も入力検査の境界のままである。**⟹ 「鍵が最初から
+   * 無かった」という事実を立てているのは変わらず検査側で、alteroid が変えたのは
+   * その事実の**言い方**だけである。この歯が `received undefined` を要求し続ける
+   * のは、**その言い方から機械が読める目印を落とさせない**ためである（#1141 の
+   * 断り文は、この目印を含んだうえで原因の当たりを足している）。
    */
   it('引数が本当に欠けたときは、欠けた引数を名指しして received undefined と返る', async () => {
     const rpc = await connect(createMemoryStores());
@@ -239,6 +252,27 @@ describe('クローンの道具に渡した引数は、長さと位置によら�
     expect(result.isError).toBe(true);
     expect(result.text).toContain('grounds');
     expect(result.text).toContain('received undefined');
+  });
+
+  /**
+   * **断り文が本物の MCP の往復を通って呼ぶ側まで届くこと（#1141）。**
+   *
+   * ⚠️ これを上の歯と別に置くのは、**測っているものが違う**からである ——
+   * 上は「機械が読める目印（`received undefined`）が落ちていないこと」、
+   * こちらは「人が読む当たり（呼び出しの生の形を疑え）が届いていること」。
+   * 片方だけでは、もう片方が静かに消えても赤くならない。
+   *
+   * ⭐ **そしてこの経路は、実際に JSON-RPC の往復と入力検査を通っている。**
+   * `tools.test.ts` 側の歯は schema を直に `safeParse` して見るだけなので、
+   * 「MCP が独自文をそのまま通すか」までは測れていない。ここが測っている。
+   */
+  it('欠落の断り文は、MCP の往復を通って呼ぶ側まで届く（#1141）', async () => {
+    const rpc = await connect(createMemoryStores());
+    const result = await callTool(rpc, 'journal_write', { decision: SHORT });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('呼び出しの生の形');
+    expect(result.text).toContain('タグの接頭辞の脱落');
   });
 
   /**
