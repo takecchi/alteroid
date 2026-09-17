@@ -4293,7 +4293,19 @@ class Clone implements CloneHost {
     // 消えて「載っていない」に誤って落ちる——`list.entries` は開いているか
     // 閉じているかを問わず台帳に**行があるかどうか**だけを見るので、この
     // 誤りを起こさない。
-    const ledgerIds = new Set(list.entries.map((entry) => entry.id));
+    //
+    // **Issue #1186。`list.unreadable` の id も足す。** `entries` だけを見ると、
+    // 行が実在するのに読めないだけ（`UnreadableCommitment`。issue #296）の id が
+    // 「見当たらない」に落ちて、「重複として畳んだのでも、既に在ったのでもない。
+    // 載せ直しが要る」と誤って断ってしまう——だがその行は台帳に**在る**。無いのは
+    // 読める中身だけであって、`missing` が測ろうとしている「台帳に行そのものが
+    // 無い」とは別の話である。`UnreadableCommitment.id` は任意（fs 版で本体が id を
+    // 持たない形のときは取れない）なので、取れた分だけを足す——取れなければこれまで
+    // どおり「見当たらない」側に残るが、それは足す前と同じ挙動であって悪化はしない。
+    const ledgerIds = new Set([
+      ...list.entries.map((entry) => entry.id),
+      ...list.unreadable.flatMap((entry) => (entry.id === undefined ? [] : [entry.id])),
+    ]);
     const missing = events.filter((pending) => {
       const outcome = outcomes.get(pending.id);
       return (

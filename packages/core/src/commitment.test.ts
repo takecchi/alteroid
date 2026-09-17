@@ -1677,6 +1677,61 @@ describe('Issue #856: 台帳に載らなかった合図の観測', () => {
 
     await s.clone.stop();
   });
+
+  /**
+   * **⭐ 陰性対照4（Issue #1186）。** 陰性対照3までは「行は `list.entries` に
+   * 実在するが、`mine`（未了だけ）には見えない」形を塞いだ。ここで塞ぐのは
+   * それとは別の消え方——**行が読めなくなって `list.entries` からも落ち、
+   * `list.unreadable` 側に回る**形である（issue #296。zod の `safeParse` が
+   * 失敗する・fs 版で本体が壊れている、など）。
+   *
+   * `#commitmentNoticeFor` の `ledgerIds` はこれまで `list.entries` の id だけ
+   * から作っていた。行が実在するのに読めないだけでも、`entries` には出てこない
+   * ので `ledgerIds` に入らず、「台帳に見当たらない。重複として畳んだのでも、
+   * 既に在ったのでもない。載せ直しが要る」と誤って断ってしまう——だが
+   * その行は台帳に**在る**。無いのは読める中身だけである。
+   *
+   * ここでは `list()` を差し替えて、対象の id を `entries` から取り除き、
+   * 同じ id を持つ `unreadable` 行を1つ加える（id が取れているケース。
+   * `UnreadableCommitment.id` は任意なので、id が取れない場合まではここでは
+   * 固定しない——その場合は直す前と同じ「見当たらない」のままで悪化はしない）。
+   */
+  it('⭐ 陰性対照4: entries から消えても list.unreadable に同じ id が在れば「台帳に載っていない」と断らない（Issue #1186）', async () => {
+    const stores = createMemoryStores();
+    const targetId = 'evt-unreadable';
+    const wrapped: Stores = {
+      ...stores,
+      commitments: {
+        ...stores.commitments,
+        list: async (options) => {
+          const result = await stores.commitments.list(options);
+          const target = result.entries.find((entry) => entry.id === targetId);
+          if (target === undefined) return result;
+          return {
+            ...result,
+            entries: result.entries.filter((entry) => entry.id !== targetId),
+            unreadable: [
+              ...result.unreadable,
+              { id: target.id, at: target.at, reason: '読めなくなった（実測を模す）' },
+            ],
+          };
+        },
+      },
+    };
+    const s = setup(wrapped);
+    const inputs = () => s.calls.flatMap((call) => call.inputs);
+
+    s.clone.post(managerMessage('読めなくなる報告', targetId));
+    await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
+
+    const turn = inputs()[0] ?? '';
+    expect(turn).not.toContain('台帳に載っていない');
+    expect(turn).not.toContain('載せ直しが要る');
+    // 読めない行が在ること自体は、別の断り（`list.unreadable` の件数）で名乗る。
+    expect(turn).toContain('読めない行が');
+
+    await s.clone.stop();
+  });
 });
 
 /**
