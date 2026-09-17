@@ -3488,6 +3488,47 @@ describe('PgTokenPoolStore', () => {
 });
 
 describe('PgSessionRegistry', () => {
+  /**
+   * 墓標の compare-and-set（issue #1157 段2）。
+   *
+   * **pg はここがいちばん強い** —— `clearTranscriptGraveIf` は
+   * `delete … where key = ? and value = ?` の1文なので、読みと書きの間に
+   * 別の書き手が入る窓そのものが存在しない（`clearLostSessionGraveIf` は
+   * 欄が2つあるので `for update` を取った1トランザクションの中で行う）。
+   */
+  describe('墓標の compare-and-set（#1157）', () => {
+    it('一致すれば下ろして true', async () => {
+      await stores.sessions.setTranscriptGrave({ archiveId: 'arc-1' });
+      expect(await stores.sessions.clearTranscriptGraveIf('arc-1')).toBe(true);
+      expect(await stores.sessions.getTranscriptGrave()).toBeNull();
+    });
+
+    it('⛔ 入れ替わっていたら下ろさず false（新しい墓標を消さない）', async () => {
+      await stores.sessions.setTranscriptGrave({ archiveId: 'arc-new' });
+      expect(await stores.sessions.clearTranscriptGraveIf('arc-old')).toBe(false);
+      expect(await stores.sessions.getTranscriptGrave()).toEqual({ archiveId: 'arc-new' });
+    });
+
+    it('そもそも無ければ false', async () => {
+      expect(await stores.sessions.clearTranscriptGraveIf('arc-1')).toBe(false);
+    });
+
+    it('捨てた回の墓標も同じ形', async () => {
+      await stores.sessions.setLostSessionGrave({ projectKey: 'proj', sessionId: 'sess-1' });
+      expect(await stores.sessions.clearLostSessionGraveIf('sess-1')).toBe(true);
+      expect(await stores.sessions.getLostSessionGrave()).toBeNull();
+    });
+
+    it('⛔ 捨てた回の墓標も、入れ替わっていたら下ろさず false', async () => {
+      await stores.sessions.setLostSessionGrave({ projectKey: 'proj', sessionId: 'sess-new' });
+      expect(await stores.sessions.clearLostSessionGraveIf('sess-old')).toBe(false);
+      expect(await stores.sessions.getLostSessionGrave()).toEqual({
+        projectKey: 'proj',
+        sessionId: 'sess-new',
+      });
+    });
+  });
+
   it('セッション id を覚えて忘れられる', async () => {
     expect(await stores.sessions.getCloneSessionId()).toBeNull();
 

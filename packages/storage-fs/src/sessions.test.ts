@@ -250,3 +250,65 @@ describe('clear() は変わらず4欄を消す（回帰確認）', () => {
     expect(await readdir(dir)).toEqual([]);
   });
 });
+
+/**
+ * 墓標の compare-and-set（issue #1157 段2）。
+ *
+ * **判定と書き込みを1操作へ畳んである** —— 拾い上げが `get` → 比較 → `set(null)`
+ * と書くと、引き直しの後・下ろす書き込みが効く前に新しい墓標が landing したとき、
+ * その新しい方を消す（`SessionRegistry.clearTranscriptGraveIf` の doc）。
+ *
+ * **fs では `withPathLock` で読みと書きを同じ排他区間へ入れている** ⟹ 別プロセス
+ * （このクラスを経由する書き手）に対しても判定と書き込みが割れない。
+ */
+describe('墓標の compare-and-set（#1157）', () => {
+  it('一致すれば下ろして true', async () => {
+    const registry = new FsSessionRegistry(dir);
+    await registry.setTranscriptGrave({ archiveId: 'arc-1' });
+    expect(await registry.clearTranscriptGraveIf('arc-1')).toBe(true);
+    expect(await registry.getTranscriptGrave()).toBeNull();
+  });
+
+  it('⛔ 入れ替わっていたら下ろさず false（新しい墓標を消さない）', async () => {
+    const registry = new FsSessionRegistry(dir);
+    await registry.setTranscriptGrave({ archiveId: 'arc-new' });
+    expect(await registry.clearTranscriptGraveIf('arc-old')).toBe(false);
+    // **新しい方は生き残っていなければならない。** ここが穴の本体である。
+    expect(await registry.getTranscriptGrave()).toEqual({ archiveId: 'arc-new' });
+  });
+
+  it('そもそも無ければ false', async () => {
+    const registry = new FsSessionRegistry(dir);
+    expect(await registry.clearTranscriptGraveIf('arc-1')).toBe(false);
+  });
+
+  it('捨てた回の墓標も同じ形（一致すれば下ろして true）', async () => {
+    const registry = new FsSessionRegistry(dir);
+    await registry.setLostSessionGrave({ projectKey: 'proj', sessionId: 'sess-1' });
+    expect(await registry.clearLostSessionGraveIf('sess-1')).toBe(true);
+    expect(await registry.getLostSessionGrave()).toBeNull();
+  });
+
+  it('⛔ 捨てた回の墓標も、入れ替わっていたら下ろさず false', async () => {
+    const registry = new FsSessionRegistry(dir);
+    await registry.setLostSessionGrave({ projectKey: 'proj', sessionId: 'sess-new' });
+    expect(await registry.clearLostSessionGraveIf('sess-old')).toBe(false);
+    expect(await registry.getLostSessionGrave()).toEqual({
+      projectKey: 'proj',
+      sessionId: 'sess-new',
+    });
+  });
+
+  it('⭐ 同じディレクトリを向いた2つのインスタンスから同時に下ろしても、下ろせるのは1つだけ', async () => {
+    const a = new FsSessionRegistry(dir);
+    const b = new FsSessionRegistry(dir);
+    await a.setTranscriptGrave({ archiveId: 'arc-1' });
+    const [ra, rb] = await Promise.all([
+      a.clearTranscriptGraveIf('arc-1'),
+      b.clearTranscriptGraveIf('arc-1'),
+    ]);
+    // **両方が true を返したら、判定と書き込みが割れている。**
+    expect([ra, rb].filter(Boolean)).toHaveLength(1);
+    expect(await a.getTranscriptGrave()).toBeNull();
+  });
+});

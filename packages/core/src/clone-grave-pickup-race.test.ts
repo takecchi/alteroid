@@ -212,4 +212,56 @@ describe('拾い上げが新しい印を消す（#1157 段2）', () => {
 
     expect(await base.sessions.getLostSessionGrave()).toBeNull();
   });
+
+  /**
+   * **ここが「残った窓を閉じた」ことの現物である。**
+   *
+   * ⚠️ 引き直して比べる形（`get` → 比較 → `set(null)`）は、**引き直しの後・
+   * 下ろす書き込みが効く前**に新しい印が landing すると破れる。実測で再現した
+   * ——`setTranscriptGrave(null)` の呼びの中で新しい印を landing させると、
+   * 直す前の実装は新しい方を消した。
+   *
+   * ⛔ **そして、閉じたことを「窓へ割り込んでも消えない」という形では測れない。**
+   * 正しい実装にはその窓が無いので、割り込む先が無い（黒箱からは、窓の無い実装と
+   * 「割り込みに強い」実装を区別できない）。⟹ **測るのは「素の `set(null)` を
+   * 一度も打たない」という、窓が生まれない形そのものである。**
+   */
+  it('⭐ 拾い上げは印を素の set(null) では下ろさない（判定と書き込みが1操作である）', async () => {
+    const base = createMemoryStores();
+    await base.sessions.setTranscriptGrave({ archiveId: 'arc-old' });
+    await base.sessions.setLostSessionGrave({ projectKey: 'proj', sessionId: 'sess-old' });
+
+    const nullWrites: string[] = [];
+    const stores: Stores = {
+      ...base,
+      sessionTranscriptTail: {
+        readTail: () => Promise.resolve(null),
+      } as unknown as Stores['sessionTranscriptTail'],
+      sessions: {
+        ...base.sessions,
+        setTranscriptGrave: async (g) => {
+          if (g === null) nullWrites.push('transcript');
+          return base.sessions.setTranscriptGrave(g);
+        },
+        setLostSessionGrave: async (g) => {
+          if (g === null) nullWrites.push('lost');
+          return base.sessions.setLostSessionGrave(g);
+        },
+      },
+    };
+
+    const fake = fakeSdk();
+    const clone = bootClone(stores, fake);
+    clone.post(report('起動する'));
+    await waitForJournal(stores, '記憶へ移せていない区間の退避');
+    await waitForJournal(stores, '捨てたセッションの生ログが1件も無');
+    await clone.stop();
+
+    // 印は下りている（＝その経路を実際に通った）。
+    expect(await base.sessions.getTranscriptGrave()).toBeNull();
+    expect(await base.sessions.getLostSessionGrave()).toBeNull();
+    // **なのに素の `set(null)` は一度も打たれていない** —— 下ろしたのは
+    // `clearTranscriptGraveIf` / `clearLostSessionGraveIf` である。
+    expect(nullWrites).toEqual([]);
+  });
 });

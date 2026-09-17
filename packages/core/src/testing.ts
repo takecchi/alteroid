@@ -851,11 +851,25 @@ export function createMemoryStores(): Stores {
     async setTranscriptGrave(grave) {
       transcriptGrave = grave;
     },
+    // **判定と書き込みの間に `await` を置かない**（`SessionRegistry.clearTranscriptGraveIf`
+    // の doc）。この器はプロセスの中の変数なので、同期で読んで同期で消せば
+    // 割り込まれる窓そのものが無い——**`await` を挟んだ瞬間に窓が生まれる。**
+    async clearTranscriptGraveIf(archiveId) {
+      if (transcriptGrave?.archiveId !== archiveId) return false;
+      transcriptGrave = null;
+      return true;
+    },
     async getLostSessionGrave() {
       return lostSessionGrave;
     },
     async setLostSessionGrave(grave) {
       lostSessionGrave = grave;
+    },
+    /** 形と理由は `clearTranscriptGraveIf` と同じである。 */
+    async clearLostSessionGraveIf(sessionId) {
+      if (lostSessionGrave?.sessionId !== sessionId) return false;
+      lostSessionGrave = null;
+      return true;
     },
     async getProjectKey() {
       return projectKey;

@@ -1555,6 +1555,29 @@ export interface SessionRegistry {
   getTranscriptGrave(): Promise<TranscriptGrave | null>;
   setTranscriptGrave(grave: TranscriptGrave | null): Promise<void>;
   /**
+   * **いま立っているのが `archiveId` の墓標であるときにだけ下ろす**（issue #1157）。
+   * 下ろしたら `true`、既に別の墓標へ入れ替わっていたら `false`。
+   *
+   * ## なぜ `get` → 比較 → `set(null)` では足りないのか
+   *
+   * 拾い上げ（`Clone#pickUpTranscriptGrave`）は `#pump` から待たれずに走るので、
+   * **拾っている間に新しい墓標が立つ**（文脈窓で畳む回はいつでも起きる）。素で
+   * `null` を書くとその新しい方を消す ⟹ **その区間は二度と拾われない。**
+   *
+   * **⚠️ 呼び出し側で引き直して比べる形は、窓を狭めるだけで閉じない。** 読みと
+   * 書きが別々の `await` なので、**引き直しの後・下ろす書き込みが効く前**に
+   * 新しい墓標が landing しうる —— **プロセスを跨がなくても起きる**（単一
+   * プロセスの中で割り込める）。実測で再現した（`clone-grave-pickup-race.test.ts`）。
+   *
+   * ⟹ **判定と書き込みを1操作へ畳む。** これは `CommitmentStore.open` が
+   * #1041 で採ったのと同じ形であり、同じ理由である —— **直す場所は呼び出し側
+   * ではなくストア自身でなければならない。**
+   *
+   * ⛔ **呼び出し側の壁（ロック）では代わりにならない。** ストアのロックは1回の
+   * 呼び出しの中にしか掛からず、この区間は2回の呼び出しに跨がっている。
+   */
+  clearTranscriptGraveIf(archiveId: string): Promise<boolean>;
+  /**
    * **resume 素材を捨てた回の墓標**（#564 E1b。`TranscriptGrave` とは別の欄）。
    *
    * ## なぜ `TranscriptGrave` と同じ欄にしないのか
@@ -1568,6 +1591,11 @@ export interface SessionRegistry {
    */
   getLostSessionGrave(): Promise<LostSessionGrave | null>;
   setLostSessionGrave(grave: LostSessionGrave | null): Promise<void>;
+  /**
+   * **いま立っているのが `sessionId` の墓標であるときにだけ下ろす**（issue #1157）。
+   * 理由と形は {@link SessionRegistry.clearTranscriptGraveIf} と同じである。
+   */
+  clearLostSessionGraveIf(sessionId: string): Promise<boolean>;
   /**
    * SDK が生ログを預けるときの scope（`SessionKey.projectKey`）を、**器を跨いで**覚える。
    *

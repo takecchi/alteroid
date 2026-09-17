@@ -4,7 +4,7 @@ import {
   type SessionRegistry,
   type TranscriptGrave,
 } from '@alteroid/core';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { daemonState } from './schema.js';
@@ -116,6 +116,30 @@ export class PgSessionRegistry implements SessionRegistry {
       .onConflictDoUpdate({ target: daemonState.key, set: { value } });
   }
 
+  /**
+   * `SessionRegistry.clearTranscriptGraveIf` の doc のとおり、**判定と削除を
+   * 1文へ畳む。** `delete … where key = ? and value = ?` は DB の側で原子なので、
+   * 読みと書きの間に別の書き手が入る窓そのものが存在しない——**ここが3実装の
+   * 中でいちばん強い**（`PgCommitmentStore.open` と同じ理由）。
+   *
+   * **比べるのは保存してある生の文字列そのものである。** `setTranscriptGrave` が
+   * `JSON.stringify(grave)` で書くので、同じ形を作って突き合わせる——
+   * `TranscriptGrave` の欄は `archiveId` ひとつなので、これで一意に決まる
+   * （欄が増えたらここも見直すこと）。
+   */
+  async clearTranscriptGraveIf(archiveId: string): Promise<boolean> {
+    const removed = await this.#db
+      .delete(daemonState)
+      .where(
+        and(
+          eq(daemonState.key, CLONE_TRANSCRIPT_GRAVE_KEY),
+          eq(daemonState.value, JSON.stringify({ archiveId })),
+        ),
+      )
+      .returning({ key: daemonState.key });
+    return removed.length > 0;
+  }
+
   async getLostSessionGrave(): Promise<LostSessionGrave | null> {
     const rows = await this.#db
       .select({ value: daemonState.value })
@@ -148,6 +172,35 @@ export class PgSessionRegistry implements SessionRegistry {
       .insert(daemonState)
       .values({ key: CLONE_LOST_SESSION_KEY, value })
       .onConflictDoUpdate({ target: daemonState.key, set: { value } });
+  }
+
+  /**
+   * 形と理由は {@link PgSessionRegistry.clearTranscriptGraveIf} と同じである。
+   *
+   * ⚠️ **`LostSessionGrave` は欄が2つある**（`projectKey` / `sessionId`）ので、
+   * 生の文字列では突き合わせられない——`projectKey` は呼び出し側が持っていない。
+   * ⟹ ここだけは**読んでから条件付きで消す**が、**同じ1つのトランザクションの
+   * 中で行う**ので、読みと削除の間に別の書き手は入らない。
+   */
+  async clearLostSessionGraveIf(sessionId: string): Promise<boolean> {
+    return this.#db.transaction(async (tx) => {
+      const rows = await tx
+        .select({ value: daemonState.value })
+        .from(daemonState)
+        .where(eq(daemonState.key, CLONE_LOST_SESSION_KEY))
+        .for('update')
+        .limit(1);
+      const raw = rows[0]?.value ?? null;
+      if (raw === null) return false;
+      const parsed = parseStoredJson(raw, '再開素材を捨てた回の墓標（clone_lost_session）', (v) => {
+        if (typeof v !== 'object' || v === null) return null;
+        const id = (v as { sessionId?: unknown }).sessionId;
+        return typeof id === 'string' && id.length > 0 ? { sessionId: id } : null;
+      });
+      if (parsed?.sessionId !== sessionId) return false;
+      await tx.delete(daemonState).where(eq(daemonState.key, CLONE_LOST_SESSION_KEY));
+      return true;
+    });
   }
 
   async getProjectKey(): Promise<string | null> {

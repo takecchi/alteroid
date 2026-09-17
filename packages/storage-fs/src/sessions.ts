@@ -10,6 +10,7 @@ import {
 import { z } from 'zod';
 
 import { writeFileAtomic } from './atomic.js';
+import { withPathLock } from './file-lock.js';
 
 const stateSchema = z.object({ cloneSessionId: z.string().nullable().default(null) });
 const graveSchema = z.object({ archiveId: z.string().min(1) });
@@ -134,6 +135,29 @@ export class FsSessionRegistry implements SessionRegistry {
     await writeFileAtomic(this.#gravePath, `${JSON.stringify(grave)}\n`);
   }
 
+  /**
+   * `SessionRegistry.clearTranscriptGraveIf` の doc のとおり、**読みと書きを
+   * 同じ排他区間へ入れる。** `withPathLock`（`file-lock.js`。issue #1113 /
+   * #1050 で足した）で囲むので、**同じディレクトリを向いた別プロセスに対しても
+   * 判定と書き込みが割れない**——ただし advisory なので、ロックを見ない書き手が
+   * 同じファイルを直接触れば守れない（そちらの doc）。
+   *
+   * ⛔ **読みをロックの外へ出さないこと。** 出した瞬間、この関数は呼び出し側で
+   * `get` → 比較 → `set` と書くのと同じものになり、直そうとしていた窓が戻る。
+   */
+  async clearTranscriptGraveIf(archiveId: string): Promise<boolean> {
+    return withPathLock(this.#gravePath, async () => {
+      const current = await readSessionMaterial(
+        this.#gravePath,
+        '生ログの墓標（transcript-grave.json）',
+        (raw) => graveSchema.parse(JSON.parse(raw)),
+      );
+      if (current?.archiveId !== archiveId) return false;
+      await rm(this.#gravePath, { force: true });
+      return true;
+    });
+  }
+
   async getLostSessionGrave(): Promise<LostSessionGrave | null> {
     return readSessionMaterial(
       this.#lostSessionPath,
@@ -149,6 +173,20 @@ export class FsSessionRegistry implements SessionRegistry {
     }
     await mkdir(this.#dir, { recursive: true });
     await writeFileAtomic(this.#lostSessionPath, `${JSON.stringify(grave)}\n`);
+  }
+
+  /** 形と理由は {@link FsSessionRegistry.clearTranscriptGraveIf} と同じである。 */
+  async clearLostSessionGraveIf(sessionId: string): Promise<boolean> {
+    return withPathLock(this.#lostSessionPath, async () => {
+      const current = await readSessionMaterial(
+        this.#lostSessionPath,
+        '再開素材を捨てた回の墓標（lost-session-grave.json）',
+        (raw) => lostSessionSchema.parse(JSON.parse(raw)),
+      );
+      if (current?.sessionId !== sessionId) return false;
+      await rm(this.#lostSessionPath, { force: true });
+      return true;
+    });
   }
 
   async getProjectKey(): Promise<string | null> {
