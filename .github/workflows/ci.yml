@@ -137,6 +137,17 @@ jobs:
           key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: ${{ runner.os }}-pnpm-
       - run: pnpm install --frozen-lockfile
+
+      # **AGENTS.md のバイト数にラチェットを置く歯（Issue #1192）。** 静的検査
+      # （ビルド済み成果物を読まない）なので、`pnpm build` より前に置く——
+      # 落ちるなら他の重い検査より先に、速く落ちるべきである。
+      #
+      # **`pnpm verify`（`scripts/verify-core.mjs` の STEPS）には足していない。**
+      # あちらは #1191 で別の担当が改修中で、この PR ではその中身を1バイトも
+      # 変えない分担にしてある。verify への組み込みは #1191 が着地した後の
+      # 別便にする——いまはこの ci.yml の1行だけが門である。
+      - run: pnpm check:agents-md-size
+
       - run: pnpm build
 
       # **`apps/web` の生成物に Node 専用の痕跡が無いことを見る（結果側の歯）。**
