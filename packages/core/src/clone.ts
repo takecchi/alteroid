@@ -3554,8 +3554,8 @@ class Clone implements CloneHost {
    * `#usageBlocked` は初期値である——この値は器を跨いで持ち越さない（宣言の
    * 逐語 `#usageBlocked: UsageLimitNotice | null = null;`）。⟹ 門の実体
    * （`apps/daemon/src/index.ts` の `worthDeliveringNow`。逐語
-   * `export function worthDeliveringNow(blocked: boolean): boolean`）は起動の
-   * たびに偽を返し、**器の入れ替えを跨いだ `token-pool` の合図はここで畳まれ
+   * `export function worthDeliveringNow(blocked: boolean, releasePending: boolean): boolean`）
+   * は起動のたびに偽を返し、**器の入れ替えを跨いだ `token-pool` の合図はここで畳まれ
    * 続け、消す経路（`#forget`）を一度も通らない。** 唯一の例外は、このループ
    * が1件ごとに `await` するあいだに並行する `#pump` が枠に当たって
    * `#usageBlocked` が立った窓だけである。
