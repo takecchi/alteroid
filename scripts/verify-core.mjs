@@ -180,6 +180,10 @@ export function decideSkip({ repo, recordPath, force = false, today = todayUtc()
           fingerprint: current,
           at: saved.at,
           day: saved.day,
+          // **判定に使った `today` を返す。** 呼ぶ側が表示のために自分で
+          // `new Date()` を引き直すと、真夜中を跨いだ瞬間に「判定が使った日」と
+          // 「表示した日」が食い違いうる（出力だけが嘘になる形）。
+          today,
         };
       }
       return { skip: true, reason: 'unchanged', fingerprint: current, at: saved.at };

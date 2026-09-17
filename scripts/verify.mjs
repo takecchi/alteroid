@@ -310,13 +310,12 @@ if (decided.skip) {
 // 効かないのか」を確かめる手段が使う側に無い（`verify-core.mjs` の `decideSkip` の
 // doc に書いてある「日が変わったら走る」という挙動そのものを、出力からも読めるようにする）。
 if (decided.reason === 'stale-day') {
-  const today = new Date().toISOString().slice(0, 10);
   process.stdout.write(
     'verify: 記録はあるが検証した日が今日ではないので畳まない' +
       '（記録された日=' +
       (decided.day ?? '(旧形式の記録。day を持たない)') +
       ', 今日=' +
-      today +
+      decided.today +
       '）。実行する。\n',
   );
 }

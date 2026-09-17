@@ -140,7 +140,10 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
       const fp = fingerprint(dir) as string;
       save(dir, fp, '2026-08-21'); // 記録は8/21、今日は8/22 のつもり
       expect(decideSkip({ repo: dir, recordPath: record(dir), today: '2026-08-22' })).toMatchObject(
-        { skip: false, reason: 'stale-day', day: '2026-08-21' },
+        // **判定に使った today も返す。** 呼ぶ側が表示のために現在時刻を引き直すと、
+        // 真夜中を跨いだ瞬間に「判定が使った日」と「表示した日」が食い違いうる
+        // （判定は正しいまま、出力だけが嘘になる形）。
+        { skip: false, reason: 'stale-day', day: '2026-08-21', today: '2026-08-22' },
       );
     });
 
