@@ -111,17 +111,22 @@ async function post(target: Target): Promise<unknown> {
   if (!response.ok) {
     if (response.status === 403) {
       /**
-       * **`POST /reset` は実行環境の持ち主だけである**（`PUT /profile` `PUT
-       * /credentials` と同じ強さ）。403 の理由を本文から判別する
+       * **`POST /reset` は実行環境の持ち主本人だけである**（`PUT /credentials` と
+       * 同じ強さ）。403 の理由を本文から判別する
        * （`apps/cli/src/credential.ts` の同じ分岐と同じ理由）。
+       *
+       * **⚠️ 2026-09-17、ここは一段緩んだ**（issue #1195）。持ち主が**端末から直に**
+       * 許可したアカウントも通る。⟹ 案内も2つになった。
        */
       const body = await response.json().catch(() => ({}));
       const kind = forbiddenKindOf(body);
       if (kind === 'not_operator') {
         throw new Error(
-          'ワークスペースをリセットできるのは、その実行環境の持ち主だけです。\n' +
-            'デーモンが動いているのと同じ環境で実行してください:\n' +
-            '  docker compose exec app alteroid reset\n',
+          'ワークスペースをリセットできるのは、その実行環境の持ち主本人だけです。\n' +
+            'デーモンが動いているのと同じ環境で実行するか:\n' +
+            '  docker compose exec app alteroid reset\n' +
+            'または、持ち主に同じ環境から許可してもらってください:\n' +
+            '  docker compose exec app alteroid access grant <アカウント id>\n',
         );
       }
       if (kind === 'not_granted') {

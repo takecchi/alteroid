@@ -50,6 +50,7 @@ import {
   guardArchiveRemoval,
   INBOX_EVENT_TYPE_ORDER,
   isAccountGranted,
+  isAccountGrantedByOperator,
   isDailyReport,
   jobStatusSchema,
   journalEntrySchema,
@@ -1277,6 +1278,12 @@ export function createApp(deps: AppDeps) {
    * `EXPECTED_OPERATOR_ROUTES` で、そこは配線と一覧の一致を測っている。定義
    * そのものはこの決定でも変えていない——変えたのは経路ごとの配線（どこへ
    * 引数として渡すか）である。
+   *
+   * **⚠️ 2026-09-17、この門から `PUT /credentials` と `POST /reset` が外れた**
+   * （issue #1195）。外れた先は「無し」ではなく、下の `requireOperatorOrDirectGrant`
+   * ——**一段弱いが `authenticate` よりは強い**門である。⟹ **ここに残っているのは
+   * `/profile` の読み書き2本だけで、それは応答本文に鍵が丸ごと載る口だからである**
+   * （2026-09-06 の同格化でも名指しで外された。逐語は `git show f285737 --format=%B -s`）。
    */
   const requireOperator = createMiddleware<{ Variables: AuthVariables }>(async (c, next) => {
     if (c.get('principal').kind !== 'operator') {
@@ -1284,6 +1291,47 @@ export function createApp(deps: AppDeps) {
     }
     await next();
   });
+
+  /**
+   * **実行環境の持ち主本人だけに絞る門。**（issue #1195）
+   *
+   * 通すのは2つ —— ①実行環境の持ち主（状態ファイルの token を提示できる）
+   * ②**その持ち主が端末から直に許可したアカウント**（`grantedBy === 'operator'`）。
+   *
+   * **なぜ `requireOperator` と分けるのか。** ブラウザは絶対に①になれない
+   * （①は「サーバ上のファイルを読めること」であって、秘密の提示ではない
+   * —— `auth.ts` の `isOperator`）。⟹ **Web UI にログインした人間は、それが箱の
+   * 持ち主本人であっても `requireOperator` を構造的に通れない。** 実際に人間が
+   * 環境変数の操作とリセットで弾かれた（#1195）。
+   *
+   * **なぜ「許可されている」では足りないのか。** 正典が線を引いている —— 逐語は
+   * `grep -Fn -- '実行環境そのものを差し替える資格までは含めない' docs/architecture.md`。
+   * ⟹ 2026-09-06 の同格化（`/tokens` `/access/*`）をそのままこの門へ広げることは
+   * しない。**足したのは「単に許可された」より一段強い資格のほうである。**
+   *
+   * **⚠️ ②は近似である**（issue #1198。`isAccountGrantedByOperator` の doc が理由と
+   * 破れる条件を持つ。**ここへ書き写さないこと**）。
+   *
+   * **403 の本文は `requireOperator` と1文字も違えない。** CLI が本文を複製して案内を
+   * 分けており（`apps/cli/src/target.ts` の `forbiddenKindOf`）、ずれると案内が
+   * `'unknown'` 側へ黙って倒れる。**弾かれた相手から見て理由は同じ**（実行環境の
+   * 持ち主として扱われなかった）なので、文言を分ける利得も無い。
+   *
+   * **この門を通る経路の一覧を持つのは歯である。本数をここで数え直さないこと**
+   * —— 数え上げの持ち主は `scripts/require-operator-routes.test.ts` の
+   * `EXPECTED_OWNER_ROUTES` で、そこは配線と一覧の一致を測っている。
+   */
+  const requireOperatorOrDirectGrant = createMiddleware<{ Variables: AuthVariables }>(
+    async (c, next) => {
+      const principal = c.get('principal');
+      const allowed =
+        principal.kind === 'operator' || isAccountGrantedByOperator(principal.account);
+      if (!allowed) {
+        return c.json({ error: '実行環境の持ち主だけが操作できる' as const }, 403);
+      }
+      await next();
+    },
+  );
 
   const base = new Hono<{ Variables: AuthVariables }>();
 
@@ -4247,10 +4295,22 @@ export function createApp(deps: AppDeps) {
      * あちらは受け取って走っている runner へ降ろすだけ（器を作り直すと消える）。
      * ここは正本へ置くので、**器が入れ替わっても `hello` のときに降り直す。**
      *
-     * **実行環境の持ち主だけ**（`requireOperator`。`PUT /profile` と同じ強さ）。
-     * 任意の名前で任意の値を、これから起こすマネージャーの環境へ永続的に置ける口で
-     * あり、**`PATH` のような名前も置ける**——`access grant` を通っただけの
-     * アカウントに渡す強さではない（`PUT /profile` の doc と同じ判断）。
+     * **実行環境の持ち主本人だけ**（`requireOperatorOrDirectGrant`）。任意の名前で
+     * 任意の値を、これから起こすマネージャーの環境へ永続的に置ける口であり、
+     * **`PATH` のような名前も置ける**——`access grant` を通っただけのアカウントに
+     * 渡す強さではない。
+     *
+     * **⚠️ 2026-09-17、ここは `requireOperator` から一段緩めた**（issue #1195）。
+     * 持ち主が端末から直に許可したアカウント（`grantedBy === 'operator'`）も通る
+     * ——**ブラウザは `requireOperator` を構造的に通れないので、そのままでは箱の
+     * 持ち主本人が Web UI から自分の環境変数を置けなかった。** 伝播した許可
+     * （A が B を通した）は通らない。理由と近似の限界は
+     * `requireOperatorOrDirectGrant` の doc にある。
+     *
+     * **⚠️ `GET /profile` `PUT /profile` は緩めていない。** あちらは応答本文に鍵が
+     * 丸ごと載る口で、こちらは**置けるが読み出せない**（一覧が返すのは指紋である）。
+     * ⟹ **意図した非対称である** —— ここの資格が漏れて起きるのは「今後の鍵が
+     * 書き換わる」で、「いま在る鍵が流出する」ではない。
      *
      * **⚠️ `POST /runners/credentials` の資格（`authenticate` だけ）はこの PR では
      * 変えていない。** あちらの緩さは以前から在るもので、締めるかどうかは方針の
@@ -4280,7 +4340,8 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           403: {
-            description: '実行環境の持ち主ではない。',
+            description:
+              '実行環境の持ち主本人ではない（持ち主が端末から直に許可したアカウントなら通る）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           503: {
@@ -4289,7 +4350,7 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      requireOperator,
+      requireOperatorOrDirectGrant,
       /**
        * **既定の 400 を使わない**（`POST /runners/credentials` と同じ理由）。
        * 鍵を1本 `name` の形式ミスで書き間違えただけで、その回に送った*全部*の鍵の
@@ -5664,9 +5725,15 @@ export function createApp(deps: AppDeps) {
      * `TRUNCATE` を行った（2026-09-14）。ここはその「同条件」を alteroid
      * 自身の機能として持たせたもの。
      *
-     * **実行環境の持ち主だけ**（`requireOperator`。`PUT /profile` `PUT
+     * **実行環境の持ち主本人だけ**（`requireOperatorOrDirectGrant`。`PUT
      * /credentials` と同じ強さ）——`access grant` だけのアカウントに、記憶
      * そのものを消せる資格までは渡さない。
+     *
+     * **⚠️ 2026-09-17、ここは `requireOperator` から一段緩めた**（issue #1195）。
+     * 持ち主が端末から直に許可したアカウント（`grantedBy === 'operator'`）も通る
+     * ——**下の「Web UI の確認ダイアログ」は、そのままでは押しても必ず 403 に
+     * なっていた**（`apps/web/app/routes/settings.tsx` の `ResetWorkspace`）。
+     * 伝播した許可（A が B を通した）は通らない。
      *
      * **`confirm: true` を必須にする**（`resetRequestSchema` の doc）。CLI・
      * Web UI の確認ダイアログは呼ぶ前の話で、この口自体にも確認の印を要求する
@@ -5698,12 +5765,13 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           403: {
-            description: '実行環境の持ち主ではない。',
+            description:
+              '実行環境の持ち主本人ではない（持ち主が端末から直に許可したアカウントなら通る）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
       }),
-      requireOperator,
+      requireOperatorOrDirectGrant,
       jsonBody(resetRequestSchema, () => ({
         error: '`confirm: true` を伴っていない（取り消せない操作なので確認を必須にしてある）',
       })),

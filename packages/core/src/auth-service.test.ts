@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { decodeState, isAccountGranted, type AuthStore } from './auth.js';
+import {
+  decodeState,
+  isAccountGranted,
+  isAccountGrantedByOperator,
+  OPERATOR_ACTOR,
+  type AuthAccount,
+  type AuthStore,
+} from './auth.js';
 import {
   createAuthProviderRegistry,
   type OAuthProfile,
@@ -455,5 +462,58 @@ describe('createAuthService', () => {
   it('でたらめなトークンでは認証されない', async () => {
     expect(await service.authenticate('alt_でたらめ')).toBeNull();
     expect(await service.authenticate('接頭辞すら違う')).toBeNull();
+  });
+});
+
+/**
+ * **「オーナー本人」の近似**（`isAccountGrantedByOperator`。issue #1195 / #1198）。
+ *
+ * ここで固定するのは3つ。**①持ち主が端末から直に許可した相手だけが真**、
+ * **②伝播した許可（アカウントが通した相手）は偽**、**③許可が落ちていれば偽**。
+ *
+ * **③は現物では起こらない組み合わせである** —— `revoke` は `grantedAt` と
+ * `grantedBy` を同時に落とす。**それでも撃つのは、判定がその不変条件に寄りかかって
+ * いないことを示すためである。** 寄りかかった実装（`grantedBy` だけを見る）は、
+ * 不変条件が崩れた日に**資格を配る側**へ倒れる。
+ *
+ * **値を `auth.ts` から import しない形は採れない。** `OPERATOR_ACTOR` は
+ * 「書く側と読む側が同じ値を引く」ことそのものが不変条件なので、ここで別の文字列を
+ * 書き写すと、**定数を書き換えたときに歯が一緒にずれずに落ちてくれる**——のではなく、
+ * `grantedBy` を作る側（デーモンの `actorOf`）との一致が測れなくなる。
+ * ⟹ **その一致を測るのはデーモン側の歯である**（`apps/daemon/src/auth.test.ts`）。
+ * ここは純関数の枝だけを見る。
+ */
+describe('isAccountGrantedByOperator（オーナー本人の近似）', () => {
+  const base: AuthAccount = {
+    id: 'acc-1',
+    displayName: null,
+    email: null,
+    createdAt: '2026-09-17T00:00:00.000Z',
+    lastLoginAt: null,
+    grantedAt: null,
+    grantedBy: null,
+  };
+
+  it('① 実行環境の持ち主が端末から直に許可した相手なら真', () => {
+    const account = { ...base, grantedAt: '2026-09-17T01:00:00.000Z', grantedBy: OPERATOR_ACTOR };
+    expect(isAccountGrantedByOperator(account)).toBe(true);
+    // 前提: そもそも許可されている（近似は「許可」の上に乗る一段強い資格である）。
+    expect(isAccountGranted(account)).toBe(true);
+  });
+
+  it('② 許可が伝播した相手（別のアカウントが通した）は偽', () => {
+    const account = { ...base, grantedAt: '2026-09-17T01:00:00.000Z', grantedBy: 'acc-someone' };
+    expect(isAccountGranted(account)).toBe(true);
+    expect(isAccountGrantedByOperator(account)).toBe(false);
+  });
+
+  it('② ログインしただけ（未許可）は偽', () => {
+    expect(isAccountGrantedByOperator(base)).toBe(false);
+  });
+
+  it('③ 許可が落ちていれば、grantedBy が operator のままでも偽（不変条件へ寄りかからない）', () => {
+    // `revoke` は両方を落とすので現物では生まれない行だが、**判定の側はそれを当てにしない**。
+    const account = { ...base, grantedAt: null, grantedBy: OPERATOR_ACTOR };
+    expect(isAccountGrantedByOperator(account)).toBe(false);
   });
 });

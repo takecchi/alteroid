@@ -496,7 +496,8 @@ export function useResetWorkspace() {
  * 省略すると前回の値を引き継ぐ。`secret` を既存行と違う値で渡すとサーバが
  * 400 で拒否する——`apps/cli/src/credential.ts` と同じ資格・同じ制約）。
  *
- * **`requireOperator`。** 実行環境の持ち主でなければ 403 が返る——呼び出し側
+ * **`requireOperatorOrDirectGrant`。** 実行環境の持ち主本人（持ち主そのもの、または
+ * 持ち主が端末から直に許可したアカウント）でなければ 403 が返る——呼び出し側
  * （`env-vars.tsx`）はボタンを隠さず、失敗を `ErrorNote` で見せること
  * （`settings.tsx` の `ResetWorkspace` と同じ「隠さない」方針）。
  */
