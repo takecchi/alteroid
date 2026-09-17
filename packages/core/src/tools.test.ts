@@ -2375,6 +2375,39 @@ describe('クローンの道具', () => {
         expect((await h.stores.persona.read('values'))?.content).toBe(original);
       });
 
+      /**
+       * ⭐ Issue #1213 の核心。断りが「改行を含む」としか言わないと、渡した
+       * 値に本当は改行が無いのに（例えば長さの都合で別の道具に断られた場合）
+       * 呼び手が改行を探し続けて直し方を誤る。ここでは断りの応答が、呼び手が
+       * 自分の側で照合できる証拠（渡した値の全文字数・改行の位置・前後の
+       * 抜粋）を実際に名乗ることを確かめる。
+       */
+      it('description の断りには、全文字数・改行の位置・前後の抜粋（証拠）が出る（#1213）', async () => {
+        const h = harness();
+        const original = `---\ndescription: 旧\n---\n${longBody}`;
+        await h.stores.persona.write('values', original);
+
+        const before = 'あ'.repeat(10);
+        const after = 'い'.repeat(10);
+        const value = `${before}\n${after}`; // 全21文字、11文字目が \n
+
+        const reply = await h.call('memory_frontmatter_set', {
+          slug: 'values',
+          description: value,
+          summary: '混ぜようとした',
+        });
+
+        expect(reply).toContain('description');
+        // 全文字数。
+        expect(reply).toContain(`${value.length}`);
+        expect(reply).toContain('21');
+        // 改行の位置（1始まり）。
+        expect(reply).toContain('11');
+        // 前後の抜粋——エスケープされた \n が見え、生の改行は含まない。
+        expect(reply).toContain(`${before}\\n${after}`);
+        expect(reply).not.toMatch(/[\r\n]/);
+      });
+
       it('parent に改行を含む値も断る（frontmatter も本文も1文字も変わっていない）', async () => {
         const h = harness();
         const original = `---\ndescription: 旧\nparent: root\n---\n${longBody}`;
@@ -2403,6 +2436,34 @@ describe('クローンの道具', () => {
 
         expect(reply).toContain('更新した');
         expect((await h.stores.persona.read('values'))?.description).toBe('a---b（1行のまま）');
+      });
+
+      /**
+       * ⭐⭐ Issue #1213 が明示的に求める回帰確認（核心そのもの）。
+       *
+       * 報告者は「改行を1文字も含まない長い description」を渡して改行の
+       * 断りを受けたと主張していた。現物を確かめると、断りが見ているのは
+       * `containsMemoryFrontmatterLineBreak`（`/[\r\n]/` の有無）だけで、
+       * 長さは1バイトも見ていない——だからこの形は本来ここでは断られない
+       * はずである。**それを機械で固定する。**
+       */
+      it('改行を1文字も含まない長い description（約400文字）は断られず、応答に「改行」という語も出ない（#1213）', async () => {
+        const h = harness();
+        await h.stores.persona.write('values', `---\ndescription: 旧\n---\n${longBody}`);
+
+        const longDescription = '⭐ ⚠ ⟹ ／ 〜 長い要旨のための繰り返し文である。'.repeat(20);
+        expect(longDescription.length).toBeGreaterThan(400);
+        expect(longDescription).not.toMatch(/[\r\n]/);
+
+        const reply = await h.call('memory_frontmatter_set', {
+          slug: 'values',
+          description: longDescription,
+          summary: '長い要旨に差し替えた',
+        });
+
+        expect(reply).toContain('更新した');
+        expect(reply).not.toContain('改行');
+        expect((await h.stores.persona.read('values'))?.description).toBe(longDescription);
       });
     });
 

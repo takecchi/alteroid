@@ -83,13 +83,13 @@ import {
   applyMemoryFrontmatterPatch,
   assertNeverMemoryDocKind,
   assertNeverMemoryProtectionStatus,
-  containsMemoryFrontmatterLineBreak,
   cutMemorySections,
   describeMemoryFloor,
   describeMemoryPremiseRanking,
   describeMemoryReinjectionEstimate,
   describeMemorySessionDelta,
   describeMemoryWriteDiff,
+  findMemoryFrontmatterLineBreak,
   findOverlappingMemorySections,
   formatMemoryCreatedAt,
   isKnownMemoryDocKind,
@@ -3455,9 +3455,15 @@ export function createCloneTools(context: ToolContext) {
      * 閉じの `---`・本文の1行目として紛れ込む（本文そのものは失われない
      * ——古い `content` から取るだけなので1バイトも消えない。だが値の
      * 続きが「本文の先頭」として現れる）。**だから改行を含む値は入口で
-     * 断る**（`containsMemoryFrontmatterLineBreak`）。上の段落（切断が
+     * 断る**（`findMemoryFrontmatterLineBreak`）。上の段落（切断が
      * 起こりえないこと）と、この段落（混入が起こりえないこと）は独立した
      * 2つの保証であり、どちらか片方の歯でもう片方も測ったことにしない。
+     *
+     * **⚠️ 断る判断そのものは変えない。断るときに何を名乗るかだけを変える
+     * （#1213）。** 文言が「改行を含む」としか言わないと、渡した値に本当は
+     * 改行が無いのに（実際は長さで別の理由で断られた等）呼び手が改行を
+     * 探し続けて直し方を誤る——だから文字数・改行の位置・種類・前後の抜粋を
+     * 名乗り、呼び手が自分の側で照合できるようにする。
      *
      * **既に在る文書にしか使えない。** ここは「文書を直す口」であって
      * 「作る口」ではない（`memory_delete` が存在しない slug を成功にしない
@@ -3514,26 +3520,33 @@ export function createCloneTools(context: ToolContext) {
         // **frontmatter の値は1キー1行で書く約束である。** 改行（\n / \r）を
         // 含む値をそのまま書くと、`serializeMemoryFrontmatter` がそれを
         // そのまま行として並べるので、値の続きが別の行——他のキー・閉じの
-        // `---`・本文の1行目——として紛れ込む（`containsMemoryFrontmatterLineBreak`
+        // `---`・本文の1行目——として紛れ込む（`findMemoryFrontmatterLineBreak`
         // の doc）。**本文そのものは失われない**（古い `content` から取るだけ）
         // が、値から本文へ文字列が混ざる経路ができてしまう。ここで断ることで
         // その経路を構造的に塞ぐ——`type` の検査と同じ位置（ストアを読む前）
         // に置き、断りの前に副作用が入る余地を作らない。
+        //
+        // **⚠️ 断りには証拠を名乗らせる（#1213）。** 「改行を含む」としか
+        // 言わないと、要旨の表示予算（`MEMORY_PROMPT_DESCRIPTION_BUDGET`）で
+        // 断られたかのように見分けが付かず、渡した値に改行が実は無いのに
+        // 呼び手が探し続けて直し方を誤る——文字数・改行の位置・種類・前後の
+        // 抜粋を名乗り、呼び手が自分の側で照合できるようにする。
         const lineBreakInputs: readonly ['description' | 'type' | 'parent', string | undefined][] =
           [
             ['description', description],
             ['type', type],
             ['parent', parent],
           ];
-        const lineBreakEntry = lineBreakInputs.find(
-          ([, value]) => value !== undefined && containsMemoryFrontmatterLineBreak(value),
-        );
-        if (lineBreakEntry !== undefined) {
-          const [lineBreakKey] = lineBreakEntry;
+        for (const [lineBreakKey, value] of lineBreakInputs) {
+          if (value === undefined) continue;
+          const lineBreak = findMemoryFrontmatterLineBreak(value);
+          if (lineBreak === null) continue;
+          const charLabel = lineBreak.char === '\r' ? '\\r' : '\\n';
           return text(
             `記憶 ${slug} の frontmatter を更新できない——${lineBreakKey} に改行（\\n / \\r）を含む値は渡せない` +
               '（frontmatter は1キー1行で書く約束なので、改行が入ると値の続きが本文や他のキーと混ざる）。' +
-              '何も変わっていない。',
+              `渡された ${lineBreakKey} は全 ${value.length} 文字、${lineBreak.position} 文字目に ${charLabel} が在る` +
+              `（前後の抜粋: "${lineBreak.excerpt}"）。何も変わっていない。`,
           );
         }
 

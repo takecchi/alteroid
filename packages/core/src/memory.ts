@@ -478,6 +478,28 @@ function serializeMemoryFrontmatter(fields: MemoryFrontmatterPatch): string {
   return lines.join('\n');
 }
 
+/** `findMemoryFrontmatterLineBreak` が見つけた最初の改行の証拠。 */
+export interface MemoryFrontmatterLineBreak {
+  /** 最初に見つかった改行の位置（1始まりの文字目）。 */
+  position: number;
+  /** 見つかった改行の種類。 */
+  char: '\n' | '\r';
+  /**
+   * 改行の前後の短い抜粋。**エスケープ済みで、生の改行を1文字も含まない**
+   * （見つかった改行自体も含め、窓の中の `\n` / `\r` はすべて `\n` / `\r`
+   * という見える形に変えてある）。窓の外は省いた側に `…` を付ける。
+   */
+  excerpt: string;
+}
+
+/** 前後の抜粋に使う窓の半径（文字数）。前後合わせて `2 * 20 + 1` 文字まで。 */
+const MEMORY_LINE_BREAK_EXCERPT_RADIUS = 20;
+
+/** 抜粋の中の生の改行を、見える形（`\n` / `\r` という文字列）へ変える。 */
+function escapeMemoryLineBreaksForDisplay(value: string): string {
+  return value.replace(/\r\n/g, '\\r\\n').replace(/\r/g, '\\r').replace(/\n/g, '\\n');
+}
+
 /**
  * `serializeMemoryFrontmatter` は各キーを `key: value` の1行として並べる。
  * `value` に改行（`\n` / `\r`）が入ると、その行から先が別の行として現れる
@@ -493,9 +515,42 @@ function serializeMemoryFrontmatter(fields: MemoryFrontmatterPatch): string {
  *
  * `\r` も検査する——`\r\n` は `\n` だけでも捕まるが、単独の `\r` は
  * 目次の1行（`renderMemoryToc` 等）にそのまま残り、読めない行を作る。
+ *
+ * **断る判断そのものはここが持つ**（#1213）。断るときに何を根拠として
+ * 名乗るかは `findMemoryFrontmatterLineBreak` が持つ——名乗り方を分けた
+ * のは、文字数の上限（`MEMORY_PROMPT_DESCRIPTION_BUDGET`）とこの検査が
+ * 同じ「渡せない」という文言に見え、呼び手が自分の側で反証できずに長さの
+ * せいだと誤認したためである（Issue の実例）。
  */
 export function containsMemoryFrontmatterLineBreak(value: string): boolean {
-  return /[\r\n]/.test(value);
+  return findMemoryFrontmatterLineBreak(value) !== null;
+}
+
+/**
+ * `value` の中で最初に見つかった改行の位置・種類・前後の抜粋を返す
+ * （無ければ `null`）。**判定そのもの（`/[\r\n]/`）は
+ * `containsMemoryFrontmatterLineBreak` と1文字も変えていない**——こちらは
+ * 存在の有無に加えて、断るときに名乗る証拠を組み立てる（#1213）。
+ *
+ * **なぜ要るか。** 断りの文言が「改行を含む」としか言わないと、呼び手は
+ * 自分が渡した値のどこに改行が在るかを確かめる手段が無い（意図した文字列を
+ * 何度探しても見つからない——渡した生の JSON を呼び手自身が見返せない
+ * ため）。位置・種類・前後の抜粋を名乗れば、呼び手はそれを自分が意図した
+ * 文字列と照合できる。
+ */
+export function findMemoryFrontmatterLineBreak(value: string): MemoryFrontmatterLineBreak | null {
+  const match = /[\r\n]/.exec(value);
+  if (match === null) return null;
+  const index = match.index;
+  const char = match[0] as '\n' | '\r';
+  const start = Math.max(0, index - MEMORY_LINE_BREAK_EXCERPT_RADIUS);
+  const end = Math.min(value.length, index + 1 + MEMORY_LINE_BREAK_EXCERPT_RADIUS);
+  const before = escapeMemoryLineBreaksForDisplay(value.slice(start, index));
+  const breakMark = escapeMemoryLineBreaksForDisplay(char);
+  const after = escapeMemoryLineBreaksForDisplay(value.slice(index + 1, end));
+  const excerpt =
+    (start > 0 ? '…' : '') + before + breakMark + after + (end < value.length ? '…' : '');
+  return { position: index + 1, char, excerpt };
 }
 
 /**

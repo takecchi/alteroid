@@ -32,6 +32,7 @@ import {
   describeMemoryReinjectionEstimate,
   describeMemorySessionDelta,
   describeMemoryWriteDiff,
+  findMemoryFrontmatterLineBreak,
   findOverlappingMemorySections,
   isKnownMemoryDocKind,
   lookupMemorySection,
@@ -583,6 +584,66 @@ describe('containsMemoryFrontmatterLineBreak — 改行を含む値の検出', (
     expect(injected).toContain('b\ntype: fact\n---\n# 見出し');
     // これが `containsMemoryFrontmatterLineBreak` が入口で断るべき理由である。
     expect(containsMemoryFrontmatterLineBreak('a\n---\nb')).toBe(true);
+  });
+});
+
+/**
+ * `findMemoryFrontmatterLineBreak` — #1213。断る判断そのものは
+ * `containsMemoryFrontmatterLineBreak` と1文字も変えていない
+ * （`/[\r\n]/` をそのまま流用する）。ここで測るのは、断るときに名乗る
+ * 証拠（位置・種類・前後の抜粋）が正しく組まれることだけである。
+ */
+describe('findMemoryFrontmatterLineBreak — 断りに名乗る証拠（位置・種類・抜粋）', () => {
+  it('改行が無ければ null（containsMemoryFrontmatterLineBreak が false を返す値と同じ）', () => {
+    expect(findMemoryFrontmatterLineBreak('a')).toBeNull();
+    expect(findMemoryFrontmatterLineBreak('a---b')).toBeNull();
+    expect(findMemoryFrontmatterLineBreak('')).toBeNull();
+  });
+
+  it('\\n の位置（1始まり）と種類を返す', () => {
+    const found = findMemoryFrontmatterLineBreak('ab\ncd');
+    expect(found?.position).toBe(3);
+    expect(found?.char).toBe('\n');
+  });
+
+  it('単独の \\r も検出し、種類を \\r と返す（\\r\\n だけでなく）', () => {
+    const found = findMemoryFrontmatterLineBreak('ab\rcd');
+    expect(found?.position).toBe(3);
+    expect(found?.char).toBe('\r');
+  });
+
+  it('\\r\\n は最初の \\r を位置として返す（/[\\r\\n]/ が \\r に先に当たるため）', () => {
+    const found = findMemoryFrontmatterLineBreak('ab\r\ncd');
+    expect(found?.position).toBe(3);
+    expect(found?.char).toBe('\r');
+  });
+
+  it('複数の改行が在っても、最初の1つだけを返す', () => {
+    const found = findMemoryFrontmatterLineBreak('a\nb\nc');
+    expect(found?.position).toBe(2);
+  });
+
+  it('抜粋は前後の短い窓を持ち、改行そのものは \\n / \\r という見える形になる（生の改行を含まない）', () => {
+    const found = findMemoryFrontmatterLineBreak('前置き\n後書き');
+    expect(found?.excerpt).toBe('前置き\\n後書き');
+    // 生の改行は1文字も残っていない。
+    expect(found?.excerpt).not.toMatch(/[\r\n]/);
+  });
+
+  it('窓の外は省略記号 `…` が付く（前後どちらも）', () => {
+    const before = 'あ'.repeat(30);
+    const after = 'い'.repeat(30);
+    const found = findMemoryFrontmatterLineBreak(`${before}\n${after}`);
+    expect(found?.excerpt.startsWith('…')).toBe(true);
+    expect(found?.excerpt.endsWith('…')).toBe(true);
+    // 窓の中身は改行の前後20文字ずつ。
+    expect(found?.excerpt).toBe(`…${'あ'.repeat(20)}\\n${'い'.repeat(20)}…`);
+  });
+
+  it('窓の中に別の改行が在っても、それもエスケープされる（抜粋そのものに生の改行が残らない）', () => {
+    const found = findMemoryFrontmatterLineBreak('a\nb\nc');
+    expect(found?.excerpt).not.toMatch(/[\r\n]/);
+    expect(found?.excerpt).toBe('a\\nb\\nc');
   });
 });
 
