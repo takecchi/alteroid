@@ -349,10 +349,24 @@ interface Setup {
  * の両方が同じ配線を要るので、ここへ1本にまとめる（`Setup.waitForEvents`
  * の doc 参照）。
  */
-function wireEvents(
-  clone: CloneHost,
-  conversationId: string,
-): { events: ChatStreamEvent[]; waitForEvents: Setup['waitForEvents'] } {
+/**
+ * 出来事を溜める配列と、**その配列へ届いた瞬間に同期で解決する待ち**を組にして
+ * 返す（#1220）。
+ *
+ * **なぜ `wireEvents` から切り出したのか。** 購読の仕方は1つではない ——
+ * `wireEvents` は張りっぱなしにするが、実物の SSE を模した聞き手
+ * （`subscribeLikeChatEndpoint`）は**終端で購読を外す**。そちらを `wireEvents` へ
+ * 寄せると、**測っている当のもの（接続が外れること）が消える。**
+ *
+ * ⟹ **配線の形は呼ぶ側に任せ、観測の部品だけを共有する。** こうしておけば、
+ * どんな購読の仕方をしても `waitForDone` / `waitForTerminal` が壁時計を使わずに
+ * 済む。⛔ 逆に、ここを通さずに配列を作ると `waitForEventsOf` が拒む（fail-closed）。
+ */
+function createEventSink(): {
+  events: ChatStreamEvent[];
+  push: (event: ChatStreamEvent) => void;
+  waitForEvents: Setup['waitForEvents'];
+} {
   const events: ChatStreamEvent[] = [];
   const waiters: {
     predicate: (events: readonly ChatStreamEvent[]) => boolean;
@@ -367,10 +381,6 @@ function wireEvents(
       }
     }
   }
-  clone.subscribe(conversationId, (event) => {
-    events.push(event);
-    notifyWaiters();
-  });
   function waitForEvents(
     predicate: (events: readonly ChatStreamEvent[]) => boolean,
   ): Promise<void> {
@@ -380,6 +390,22 @@ function wireEvents(
     });
   }
   eventWaiters.set(events, waitForEvents);
+  return {
+    events,
+    push: (event) => {
+      events.push(event);
+      notifyWaiters();
+    },
+    waitForEvents,
+  };
+}
+
+function wireEvents(
+  clone: CloneHost,
+  conversationId: string,
+): { events: ChatStreamEvent[]; waitForEvents: Setup['waitForEvents'] } {
+  const { events, push, waitForEvents } = createEventSink();
+  clone.subscribe(conversationId, push);
   return { events, waitForEvents };
 }
 
@@ -564,9 +590,10 @@ async function waitFor(check: () => Promise<boolean> | boolean, label: string): 
  * 即座に真になるので、追い越しの窓も無い。
  */
 function waitForDone(events: ChatStreamEvent[]): Promise<void> {
-  return waitForEventsOf(events, 'done の待ち')((seen) =>
-    seen.some((event) => event.type === 'done'),
-  );
+  return waitForEventsOf(
+    events,
+    'done の待ち',
+  )((seen) => seen.some((event) => event.type === 'done'));
 }
 
 /** ターンの終端（`done` または `error`）。失敗したターンを見るテストで使う。 */
@@ -4796,7 +4823,10 @@ describe('クローン — 壊れ方の回帰', () => {
     await expect
       .poll(() => s.events.some((event) => event.type === 'error'), { timeout: 3000 })
       .toBe(true);
-    await waitFor(async () => (await stores.sessions.getCloneSessionId()) === null, 'session id が消える');
+    await waitFor(
+      async () => (await stores.sessions.getCloneSessionId()) === null,
+      'session id が消える',
+    );
     expect(await stores.sessions.getCloneSessionId()).toBeNull();
 
     await s.clone.stop();
@@ -7546,7 +7576,10 @@ describe('クローン — 捨てた resume 素材の区間を拾い直す（#56
     const s = setup(undefined, stores, { failWith: 'No conversation found with session ID' });
     s.clone.post(humanMessage('やあ'));
 
-    await waitFor(async () => (await stores.sessions.getCloneSessionId()) === null, 'session id が消える');
+    await waitFor(
+      async () => (await stores.sessions.getCloneSessionId()) === null,
+      'session id が消える',
+    );
     expect(await stores.sessions.getCloneSessionId()).toBeNull();
     expect(await stores.sessions.getLostSessionGrave()).toEqual({
       projectKey: '-workspace',
@@ -7570,7 +7603,10 @@ describe('クローン — 捨てた resume 素材の区間を拾い直す（#56
     const s = setup(undefined, stores, { failWith: 'No conversation found with session ID' });
     s.clone.post(humanMessage('やあ'));
 
-    await waitFor(async () => (await stores.sessions.getCloneSessionId()) === null, 'session id が消える');
+    await waitFor(
+      async () => (await stores.sessions.getCloneSessionId()) === null,
+      'session id が消える',
+    );
     expect(await stores.sessions.getCloneSessionId()).toBeNull();
     expect(await stores.sessions.getLostSessionGrave()).toBeNull();
 
@@ -10230,9 +10266,12 @@ describe('クローン — 枠が回復した後の返信は、人間の側か�
    * 要点** — 実物の SSE 購読はここで終わる。
    */
   function subscribeLikeChatEndpoint(clone: CloneHost, conversationId: string): ChatStreamEvent[] {
-    const events: ChatStreamEvent[] = [];
+    // **終端で購読を外すのがこの聞き手の本体である**（実物の SSE と同じ）。だから
+    // `wireEvents`（張りっぱなし）へは寄せられない —— 寄せると測っている当のものが
+    // 消える。観測の部品（`createEventSink`）だけを共有して、外し方は自分で持つ。
+    const { events, push } = createEventSink();
     const unsubscribe = clone.subscribe(conversationId, (event) => {
-      events.push(event);
+      push(event);
       if (event.type === 'done' || event.type === 'error') unsubscribe();
     });
     return events;
