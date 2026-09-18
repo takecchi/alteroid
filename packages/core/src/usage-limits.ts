@@ -683,10 +683,7 @@ export function toRateLimitFacts(value: unknown): RateLimitFacts | undefined {
  * **区切りに NUL を使う。** `tokenId` も `kind` も NUL を含まないので、
  * 「`a` と `b:c`」と「`a:b` と `c`」が同じ鍵に化ける事故が起きない。
  */
-export function rateLimitMemoryKey(
-  tokenId: string | undefined,
-  kind: string | undefined,
-): string {
+export function rateLimitMemoryKey(tokenId: string | undefined, kind: string | undefined): string {
   return `${tokenId ?? ''} ${kind ?? ''}`;
 }
 
