@@ -10,7 +10,7 @@ import type {
   Query,
   SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   ALWAYS_REDELIVER,
@@ -379,7 +379,36 @@ function wireEvents(
       waiters.push({ predicate, resolve });
     });
   }
+  eventWaiters.set(events, waitForEvents);
   return { events, waitForEvents };
+}
+
+/**
+ * `wireEvents` が配線した `events` 配列から、その配列を見張る `waitForEvents`
+ * を引く台帳（#1220）。
+ *
+ * **なぜ台帳を挟むのか。** `waitForDone` / `waitForTerminal` は呼び出し側から
+ * `events` 配列しか受け取らない（159 箇所）。配列だけでは「誰が push しているか」
+ * が分からないので、従来は**壁時計でポーリングするしかなかった**。配線した側で
+ * 登録しておけば、呼び出し側を1文字も書き換えずに、**出来事が届いた瞬間に同期で
+ * 解決する形**（`Setup.waitForEvents` の doc）へ載せ替えられる。
+ *
+ * **⛔ 引けなかったら壁時計へ落とさない。** 落とすと、この Issue が塞いだ穴が
+ * 「引けなかったとき限定」で静かに戻る（`AGENTS.md`「判定できないという3つ目の
+ * 状態を持つ」）。配線されていないことは判定できるので、そのまま拒む。
+ */
+const eventWaiters = new WeakMap<ChatStreamEvent[], Setup['waitForEvents']>();
+
+function waitForEventsOf(events: ChatStreamEvent[], label: string): Setup['waitForEvents'] {
+  const waitForEvents = eventWaiters.get(events);
+  if (waitForEvents === undefined) {
+    throw new Error(
+      `${label}: この events 配列は wireEvents が配線したものではないので、出来事を` +
+        '直接つかむ待ち方ができない。壁時計のポーリングへは落とさない（#1220）。' +
+        'events は wireEvents / setup / setupScripted が返したものを渡すこと。',
+    );
+  }
+  return waitForEvents;
 }
 
 function setup(
@@ -440,44 +469,104 @@ function lastSessionCall(calls: FakeCall[]): FakeCall {
 }
 
 /**
- * `waitFor` / `waitForDone` の打ち切り。**⛔ ここを伸ばして歯を黙らせないこと**
- * （#890）。この budget は本来の所要（実測 36〜53ms）の 60 倍以上あり、
- * **使い切る回は「遅い」ではなく「起きていない」である。**
+ * ⛔ **待ちの打ち切りを壁時計で持たない**（#1220）。
+ *
+ * ## 何が起きていたか
+ *
+ * ここには `WAIT_BUDGET_MS = 3000` が在り、`waitFor` / `waitForDone` は
+ * 「3000ms 経ったら諦める」形だった。**2026-09-12T17:46:25Z、`main` の CI が
+ * それで落ちた**（`3ca6397` = PR #909 のマージ。誰も気づかず、直した PR も無い）。
+ * 本来の所要は実測 36〜53ms なので budget は 60 倍以上あったが、**器が混めば
+ * 60 倍は埋まる。** 埋まったとき、歯は「実装が壊れた」と名乗る。
+ *
+ * ## なぜ「3000 を大きくする」で直さないのか
+ *
+ * 確率を下げるだけで、同じ賭けを CI の遅さと引き換えに続けることになる
+ * （Issue #1220 の逐語）。⟹ **締め切りそのものを持たない。**
+ *
+ * ## なぜ「tick 数で締め切る」でも直さないのか（測って落とした案）
+ *
+ * 壁時計の ms ではなく macrotask の tick 数で締め切れば負荷に依らない、と考えたが、
+ * **この歯は本物のタイマーを跨ぐ** —— `fakeSdk` の `delayMs` は 60 / 120 / 150 /
+ * 200 / 250 / 1500 ms が実在し、`setTimeout` で本物の遅延を作る
+ * （`grep -Fn -- 'delayMs: 1500' packages/core/src/clone.test.ts`）。tick で回すと、
+ * タイマーが発火するまで tick を空回りで使い切る。
+ *
+ * ## いま残っている締め切りは何か（⚠ 賭けが消えたのではなく、1本に集約された）
+ *
+ * **vitest 自身の `testTimeout`（`vitest.config.ts` に指定が無いので既定の 5000ms）
+ * だけである。** ⟹ 200 本を超える「隠れた 3000ms の賭け」が、**見える 1 本の設定**に
+ * なった。⛔ **ここへ新しい締め切りを足し戻さないこと。**
+ *
+ * ## 諦めたときに何が分かるか
+ *
+ * 締め切りを外したので、`label` を載せた例外はもう出ない。代わりに**解けていない
+ * 待ちの `label` を `afterEach` が stderr へ出す**（下）。⚠️ `process.stdout.write`
+ * は使えない —— `vitest.setup.ts` の歯がテストを落とす（#314）。
  */
-const WAIT_BUDGET_MS = 3000;
+type PendingWait = { readonly label: string };
+
+const pendingWaits = new Set<PendingWait>();
+
+/**
+ * テストの区切り。**待ちの取り消しに使う**（時間ではなく「テストが終わったか」で切る）。
+ *
+ * 締め切りを外した副作用として、解けない待ちは `setTimeout` を積み続ける ——
+ * テストが終わっても回り続けると、次のテストの器を無駄に食う。`afterEach` で
+ * 1つ進めておけば、**次の poll で必ず抜ける**（打ち切りの根拠が壁時計ではなく
+ * テストの寿命になる）。
+ */
+let testEpoch = 0;
+
+afterEach(() => {
+  testEpoch += 1;
+  if (pendingWaits.size === 0) return;
+  const labels = [...pendingWaits].map((wait) => wait.label);
+  pendingWaits.clear();
+  // **stderr であることに意味がある。** 既定の reporter でも出るうえ、
+  // `vitest.setup.ts` の stdout の歯を通らない（あちらの doc に逐語で在る）。
+  process.stderr.write(
+    `⚠️ このテストが終わった時点で、解けていない待ちが ${labels.length} 本ある。` +
+      'テストが testTimeout で落ちたなら、落ちた理由はこれである可能性が高い' +
+      '（#1220 で壁時計の打ち切りを外したので、待ち自身はもう例外を投げない）:\n' +
+      labels.map((label) => `  - ${label}\n`).join(''),
+  );
+});
 
 /** 非同期の書き込みが器へ届くまで待つ（`post` は同期で返るので待てない）。 */
 async function waitFor(check: () => Promise<boolean> | boolean, label: string): Promise<void> {
-  const started = Date.now();
-  for (;;) {
-    if (await check()) return;
-    // **「起きない」と言い切らない**（#890）。ここで言えるのは「budget の内に
-    // 起きなかった」までで、**「起きなかった」と「まだ起きていない」は別である。**
-    // 潰すと、次に読む人がこの1行から「そもそも起きない」と読む ⟹ 実際に
-    // #890 でその誤診が出ている。
-    if (Date.now() - started > WAIT_BUDGET_MS) {
-      throw new Error(`${label} が ${WAIT_BUDGET_MS}ms 以内に起きなかった`);
+  if (await check()) return;
+  const epoch = testEpoch;
+  const wait: PendingWait = { label };
+  pendingWaits.add(wait);
+  try {
+    for (;;) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      // **「起きない」と言い切らない**（#890）。ここで言えるのは「テストが終わる
+      // までに起きなかった」までで、**「起きなかった」と「まだ起きていない」は
+      // 別である。** 潰すと、次に読む人がこの1行から「そもそも起きない」と読む
+      // ⟹ 実際に #890 でその誤診が出ている。
+      if (testEpoch !== epoch) {
+        throw new Error(`${label} を待っている途中でテストが終わった（待ちは解けていない）`);
+      }
+      if (await check()) return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 5));
+  } finally {
+    pendingWaits.delete(wait);
   }
 }
 
-/** chat の1往復が終わる（done が届く）まで待つ。 */
+/**
+ * chat の1往復が終わる（done が届く）まで待つ。
+ *
+ * **壁時計を1つも使わない** —— `clone.subscribe` の callback から同期で解決する
+ * （`Setup.waitForEvents` の doc）。待ち始める前に既に `done` が届いていても
+ * 即座に真になるので、追い越しの窓も無い。
+ */
 function waitForDone(events: ChatStreamEvent[]): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const started = Date.now();
-    const tick = setInterval(() => {
-      if (events.some((event) => event.type === 'done')) {
-        clearInterval(tick);
-        resolve();
-      } else if (Date.now() - started > WAIT_BUDGET_MS) {
-        clearInterval(tick);
-        reject(
-          new Error(`done が ${WAIT_BUDGET_MS}ms 以内に来なかった: ${JSON.stringify(events)}`),
-        );
-      }
-    }, 5);
-  });
+  return waitForEventsOf(events, 'done の待ち')((seen) =>
+    seen.some((event) => event.type === 'done'),
+  );
 }
 
 /** ターンの終端（`done` または `error`）。失敗したターンを見るテストで使う。 */
@@ -497,7 +586,9 @@ const isTerminal = (event: ChatStreamEvent): boolean =>
  * とは一致せず**アサーション不一致で落ちる**（タイムアウトでは落ちない）。
  */
 async function waitForTerminal(events: ChatStreamEvent[]): Promise<void> {
-  await expect.poll(() => events.some(isTerminal), { timeout: 3000 }).toBe(true);
+  // **壁時計を持たない**（#1220）。`expect.poll` の `timeout` は 3000ms の
+  // 打ち切りそのものだったので、`waitForEvents` へ載せ替えてある。
+  await waitForEventsOf(events, '終端の待ち')((seen) => seen.some(isTerminal));
 }
 
 /**
