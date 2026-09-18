@@ -471,7 +471,7 @@ function undeliveredGatePassed(artifactResult) {
  *   `身代わり`、証跡の `[残った]` をそのまま写した宣言では `検出` になった。
  *   **宣言を広げるほど `検出` になりやすい向きには、門が1つも無かった。**
  *
- * ⭐ **門7（`requireNoDeclaredTargetMisses`）がその向きを塞いだ（#1137）。** 宣言に
+ * ⭐ **門8（`requireNoDeclaredTargetMisses`）がその向きを塞いだ（#1137）。** 宣言に
  * 落ちていない歯が混ざると `検出` は通らなくなる ⟹ **基準2 でも成り立つ。**
  * ⚠️ **注意書きだけでは止まらなかった** —— この段落は #1119 の時点で「基準を書いて
  * おくこと」として既に在り、それでも穴はそのまま残った（#1192 の指摘そのもの）。
@@ -778,7 +778,9 @@ export function requireCensusAgreesWithTextFailures(textFailedNames, census, con
 }
 
 /**
- * ⭐ 門7（新設, #1137）: 「検出」と名乗る前に、宣言した歯が **1本残らず**
+ * ⭐ 門8（新設, #1137）: 「検出」と名乗る前に、宣言した歯が **1本残らず**
+ * （⚠️ 番号は `SKILL.md` の数え方に合わせてある —— あちらは交差検算を7と数えて
+ * 「門4・(5)・6・7」と書いている。既存の番号は1つも動かしていない。）
  * `surviving`（この変異に起因する赤）に居ることを確かめる。
  *
  * **なぜ要るか —— 判定が自己成就していた。** 門5 までは「宣言のうち **1本でも**
@@ -914,7 +916,7 @@ export function decideJudgementCategory(artifactResult, testResult, scaffoldCont
   // を恒久的に名乗り続けさせない。
   requireDeclaredNamesExistInCensus(declared, testResult.census, 'decideJudgementCategory');
 
-  // ⭐ 門7（#1137）。ここは以前「宣言のうち1本でも surviving に居れば 検出」だった
+  // ⭐ 門8（#1137）。ここは以前「宣言のうち1本でも surviving に居れば 検出」だった
   // ——**宣言を広く書くほど 検出 になりやすい**、という向きの穴である。交差が1本でも
   // 在るなら、**残りが空振りしていないこと**まで確かめてから「検出」と名乗る。
   const survivingSet = new Set(diff.surviving);
