@@ -138,6 +138,7 @@ import {
   classifyUsageNotice,
   describeUsageNotice,
   mergeRateLimitFacts,
+  rateLimitMemoryKey,
   usageTransitionOf,
   type RateLimitFacts,
   type UsageLimitNotice,
@@ -1888,11 +1889,17 @@ class Clone implements CloneHost {
    */
   #sessionTokenIdentity: { tokenId: string; generation: number } | undefined;
   /**
-   * 枠の事実を枠の種類ごとに覚える（`ManagerPool#onEvent` と同じ形）。
+   * 枠の事実を覚える（`ManagerPool#onEvent` と同じ形）。**鍵は「トークンの身元 ×
+   * 枠の種類」である**（`usage-limits.ts` の `rateLimitMemoryKey`）。
    *
    * **`rate_limit_event` はターンの頭ごとに来る。** 状態をそのまま回し手へ流すと
    * 「同じ `rejected` で毎ターン回そうとする」になるので、`usageTransitionOf` が
    * 遷移と認めた1回だけを渡す。
+   *
+   * ⚠️ **かつてここには「枠の種類ごとに覚える」と書いてあった。** 枠の事実は
+   * アカウントごとのもので、この repo のアカウントは1つではない（トークンの
+   * プール）ので、`kind` だけを鍵にすると別々のアカウントの事実が同じ欄を
+   * 踏み合う。両方向の壊れ方と実測は `rateLimitMemoryKey` の doc に在る。
    */
   readonly #rateLimits = new Map<string, RateLimitFacts>();
   readonly #profile: ProfileApplier | undefined;
@@ -8295,16 +8302,33 @@ class Clone implements CloneHost {
         // する。覚えるのは**重ねた形**（`mergeRateLimitFacts`）——届いた1件で
         // 丸ごと置き換えると、`status` を運んでいない観測が「もう知らせた」と
         // いう記憶を消す（あちらの doc）。
+        //
+        // **覚える欄は「トークンの身元 × 枠の種類」で分ける**（`usage-limits.ts` の
+        // `rateLimitMemoryKey`）。`kind` だけで引いていた版には、別々のアカウントの
+        // 事実が同じ欄を踏み合う穴が在った（Issue #1222 / #668。両方向の帰結は
+        // あちらの doc）。⚠️ **身元はこのセッションを起こした瞬間のもの
+        // （`#sessionTokenIdentity`）を使い、`#tokenIdentity?.()` を読み直さない**
+        // —— 読み直さない理由は `UsageStore.record` の `tokenId` の doc と同じで、
+        // 回った直後に届いた**前の鍵の観測**が新しい鍵の欄へ入るからである。
         const kind = facts.kind ?? '';
-        const previous = this.#rateLimits.get(kind);
+        const memoryKey = rateLimitMemoryKey(this.#sessionTokenIdentity?.tokenId, kind);
+        const previous = this.#rateLimits.get(memoryKey);
         const transition = usageTransitionOf(previous, facts);
         const merged = mergeRateLimitFacts(previous, facts);
-        this.#rateLimits.set(kind, merged);
-        // **⚠️ 遷移が取れなかった回も渡す（#668）。** 遷移だけを渡していたので、
-        // 同じ `kind` の `rejected` が**別のトークンで**再発しても回し手へ1度も
-        // 届かなかった —— `#rateLimits` は**このインスタンスの寿命ぶん**残るので、
-        // `usageTransitionOf` は2度目以降 `undefined` を返す。⟹ 記録は `ready` の
-        // まま、実際は 429（実運用で観測済み。2026-09-07）。
+        this.#rateLimits.set(memoryKey, merged);
+        // **⚠️ 遷移が取れなかった回も渡す（#668）。**
+        //
+        // ⚠️ **ここに書いてあった理由は、いまは成り立たない（消さずに残す）。**
+        // かつては「遷移だけを渡していたので、同じ `kind` の `rejected` が**別の
+        // トークンで**再発しても回し手へ1度も届かなかった —— `#rateLimits` は
+        // **このインスタンスの寿命ぶん**残るので、`usageTransitionOf` は2度目以降
+        // `undefined` を返す。⟹ 記録は `ready` のまま、実際は 429」と書いてあった
+        // （実運用で観測済み。2026-09-07）。**その筋は記憶の鍵をトークンごとに
+        // 分けたことで閉じた**（`rateLimitMemoryKey`。Issue #1222）。
+        //
+        // **⭐ それでもこの形は要る。** 同じ鍵で `rejected` が続いているあいだは
+        // 遷移が立たず、その回し手の契機は門の後ろでは拾えない。⟹ 理由が1つ
+        // 減っただけで、渡す条件は動かさない。
         //
         // **`statusNow` は重ねる前の生の1件から取る**（`merged` からではない）。
         // 重ねた形の `status` はアカウントを跨いで残るので、回す契機の材料にすると
