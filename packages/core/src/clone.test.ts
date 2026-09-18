@@ -10,7 +10,7 @@ import type {
   Query,
   SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ALWAYS_REDELIVER,
@@ -2706,7 +2706,7 @@ describe('クローン — self_status（runtime facts の配線）', () => {
     // `#buildOptions`（→ `mcpServerFactory`）は `#ensureQuery` の中、init が
     // 届くより前に走る。ここで context が控えられるのを待つ（init はまだ
     // `initGate` で止めてある）。
-    await expect.poll(() => captured !== undefined, { timeout: 3000 }).toBe(true);
+    await waitFor(() => captured !== undefined, '値が捕まる');
 
     if (captured === undefined) throw new Error('ToolContext がまだ捕まっていない');
     const tools = createCloneTools(captured);
@@ -2879,7 +2879,8 @@ describe('クローン — self_status（runtime facts の配線）', () => {
     // 2本目 — セッションが落ちたので開き直る（`calls` が2本になるまで待つ）。
     events.length = 0;
     clone.post(humanMessage('もう一度'));
-    await expect.poll(() => calls.length, { timeout: 3000 }).toBe(2);
+    await waitFor(() => calls.length === 2, '2本目の呼び出し');
+    expect(calls.length).toBe(2);
     await waitForDone(events);
 
     const second = await selfStatus();
@@ -3702,7 +3703,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
         at: new Date().toISOString(),
         reason: '1本目',
       });
-      await expect.poll(() => (call()?.inputs.length ?? 0) === 1, { timeout: 3000 }).toBe(true);
+      await waitFor(() => (call()?.inputs.length ?? 0) === 1, '1本目の入力');
       const firstText = call()?.inputs[0] ?? '';
       expect(firstText).toContain(
         '前回の tick が無いので差分は出せない（このプロセスでの最初の tick）。',
@@ -3731,7 +3732,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
         at: new Date().toISOString(),
         reason: '2本目',
       });
-      await expect.poll(() => (call()?.inputs.length ?? 0) === 2, { timeout: 3000 }).toBe(true);
+      await waitFor(() => (call()?.inputs.length ?? 0) === 2, '2本目の入力');
       const secondText = call()?.inputs[1] ?? '';
       expect(secondText).toContain(
         `前回の tick から +${expectedDiff.toLocaleString('en-US')} 文字。`,
@@ -3762,7 +3763,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
         at: new Date().toISOString(),
         reason: '1本目',
       });
-      await expect.poll(() => (call()?.inputs.length ?? 0) === 1, { timeout: 3000 }).toBe(true);
+      await waitFor(() => (call()?.inputs.length ?? 0) === 1, '1本目の入力');
 
       const baseline = measureMemoryFloor(await stores.persona.documents()).totalChars;
       // 基準から +5% ぶんだけ増やす（線 = +10% の半分。確実に超えない）。
@@ -3779,7 +3780,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
         at: new Date().toISOString(),
         reason: '2本目',
       });
-      await expect.poll(() => (call()?.inputs.length ?? 0) === 2, { timeout: 3000 }).toBe(true);
+      await waitFor(() => (call()?.inputs.length ?? 0) === 2, '2本目の入力');
       const secondText = call()?.inputs[1] ?? '';
       // 差分そのものは出るが、線の印は出ない。
       expect(secondText).toMatch(/前回の tick から \+\d/);
@@ -3820,7 +3821,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
         at: new Date().toISOString(),
         reason: '1本目',
       });
-      await expect.poll(() => (call()?.inputs.length ?? 0) === 1, { timeout: 3000 }).toBe(true);
+      await waitFor(() => (call()?.inputs.length ?? 0) === 1, '1本目の入力');
 
       // 1本目の tick が組んだセッションの基準。
       const baseline = measureMemoryFloor(await stores.persona.documents()).totalChars;
@@ -3840,7 +3841,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
         at: new Date().toISOString(),
         reason: '2本目',
       });
-      await expect.poll(() => (call()?.inputs.length ?? 0) === 2, { timeout: 3000 }).toBe(true);
+      await waitFor(() => (call()?.inputs.length ?? 0) === 2, '2本目の入力');
       expect(call()?.inputs[1] ?? '').toContain(
         '⚠️ 線（セッション構築時点から +10%）に達している。',
       );
@@ -3878,7 +3879,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
         at: new Date().toISOString(),
         reason: '定期 tick',
       });
-      await expect.poll(() => (s.calls[0]?.inputs.length ?? 0) === 1, { timeout: 3000 }).toBe(true);
+      await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '1本目の入力');
 
       const text = s.calls[0]?.inputs[0] ?? '';
       expect(text).toContain(
@@ -3961,7 +3962,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
       payload: { repo: 'alteroid', status: 'failure' },
     });
 
-    await expect.poll(() => inputsOf(s)().includes('"failure"'), { timeout: 3000 }).toBe(true);
+    await waitFor(() => inputsOf(s)().includes('"failure"'), 'failure の入力が届く');
     expect(inputsOf(s)()).toContain('source: ci');
 
     const externals = (await s.stores.journal.list({ types: ['external_event'] })) as {
@@ -4287,7 +4288,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
     // 1回目の起動: 過ぎた予定を拾って発火するが、記録できないので動かない
     await scheduler.refresh();
     scheduler.start();
-    await expect.poll(() => posted.length >= 1, { timeout: 3000 }).toBe(true);
+    await waitFor(() => posted.length >= 1, '1件目の投稿');
     scheduler.stop();
     await expect
       .poll(
@@ -4310,7 +4311,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
     await second.refresh();
     second.start();
 
-    await expect.poll(() => inputsOf(s)().includes('見張って進める'), { timeout: 3000 }).toBe(true);
+    await waitFor(() => inputsOf(s)().includes('見張って進める'), '見張りの入力が届く');
     second.stop();
 
     // 実際に走ったのは1回だけ
@@ -4645,7 +4646,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
       kind: 'しらない仕込み',
     });
 
-    await expect.poll(() => inputsOf(s)().includes('記憶にある'), { timeout: 3000 }).toBe(true);
+    await waitFor(() => inputsOf(s)().includes('記憶にある'), '記憶の入力が届く');
 
     await s.clone.stop();
   });
@@ -4666,7 +4667,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
       reason: '定期 tick',
     });
 
-    await expect.poll(() => (s.calls[0]?.inputs ?? []).length > 0, { timeout: 3000 }).toBe(true);
+    await waitFor(() => (s.calls[0]?.inputs ?? []).length > 0, '最初の入力');
     // 保留は保留のまま（回答待ちを勝手に片付けない）
     expect(await stores.jobs.listApprovals({ pendingOnly: true })).toHaveLength(1);
     // それでも発意 tick は状況を見て動いている
@@ -4795,7 +4796,8 @@ describe('クローン — 壊れ方の回帰', () => {
     await expect
       .poll(() => s.events.some((event) => event.type === 'error'), { timeout: 3000 })
       .toBe(true);
-    await expect.poll(() => stores.sessions.getCloneSessionId(), { timeout: 3000 }).toBeNull();
+    await waitFor(async () => (await stores.sessions.getCloneSessionId()) === null, 'session id が消える');
+    expect(await stores.sessions.getCloneSessionId()).toBeNull();
 
     await s.clone.stop();
   });
@@ -6560,7 +6562,8 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
       at: new Date().toISOString(),
       reason: '先客のターン',
     });
-    await expect.poll(() => (gated.calls[0]?.inputs ?? []).length, { timeout: 3000 }).toBe(1);
+    await waitFor(() => (gated.calls[0]?.inputs ?? []).length === 1, '1本目の入力');
+    expect((gated.calls[0]?.inputs ?? []).length).toBe(1);
   }
 
   /**
@@ -6601,7 +6604,11 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
     gated.clone.post(humanMessage('MSG-WAITING', 'conv-2'));
 
     // 先客のターンは握ったまま。**ここで載ることがこの直しの主題である。**
-    await expect.poll(() => inboundTexts(gated.stores), { timeout: 3000 }).toContain('MSG-WAITING');
+    await waitFor(
+      async () => (await inboundTexts(gated.stores)).includes('MSG-WAITING'),
+      'MSG-WAITING が台帳へ届く',
+    );
+    expect(await inboundTexts(gated.stores)).toContain('MSG-WAITING');
     // 載ったのは順番が来たからではない（この発言はまだモデルへ渡っていない）。
     expect(gated.calls[0]?.inputs).toHaveLength(1);
 
@@ -6719,7 +6726,11 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
 
     s.clone.post(humanMessage('MSG-FAILED', 'conv-9'));
 
-    await expect.poll(() => inboundTexts(stores), { timeout: 3000 }).toContain('MSG-FAILED');
+    await waitFor(
+      async () => (await inboundTexts(stores)).includes('MSG-FAILED'),
+      'MSG-FAILED が台帳へ届く',
+    );
+    expect(await inboundTexts(stores)).toContain('MSG-FAILED');
 
     await s.clone.stop();
   });
@@ -6970,7 +6981,7 @@ describe('クローンの消費が台帳に載る（誰が・どこで）', () =
     expect(s.events.filter(isTerminal).map((event) => event.type)).toEqual(['error']);
 
     s.clone.post(humanMessage('2回目'));
-    await expect.poll(() => s.events.filter(isTerminal).length === 2, { timeout: 3000 }).toBe(true);
+    await waitFor(() => s.events.filter(isTerminal).length === 2, '終端が2つ揃う');
     expect(s.events.filter(isTerminal).map((event) => event.type)).toEqual(['error', 'error']);
 
     await s.clone.stop();
@@ -7535,7 +7546,8 @@ describe('クローン — 捨てた resume 素材の区間を拾い直す（#56
     const s = setup(undefined, stores, { failWith: 'No conversation found with session ID' });
     s.clone.post(humanMessage('やあ'));
 
-    await expect.poll(() => stores.sessions.getCloneSessionId(), { timeout: 3000 }).toBeNull();
+    await waitFor(async () => (await stores.sessions.getCloneSessionId()) === null, 'session id が消える');
+    expect(await stores.sessions.getCloneSessionId()).toBeNull();
     expect(await stores.sessions.getLostSessionGrave()).toEqual({
       projectKey: '-workspace',
       sessionId: 'stale-session-id',
@@ -7558,7 +7570,8 @@ describe('クローン — 捨てた resume 素材の区間を拾い直す（#56
     const s = setup(undefined, stores, { failWith: 'No conversation found with session ID' });
     s.clone.post(humanMessage('やあ'));
 
-    await expect.poll(() => stores.sessions.getCloneSessionId(), { timeout: 3000 }).toBeNull();
+    await waitFor(async () => (await stores.sessions.getCloneSessionId()) === null, 'session id が消える');
+    expect(await stores.sessions.getCloneSessionId()).toBeNull();
     expect(await stores.sessions.getLostSessionGrave()).toBeNull();
 
     await s.clone.stop();
@@ -15386,5 +15399,105 @@ describe('CloneOptions.redeliveryGate は必須 — 省いた形は型として�
     expect(() =>
       createClone({ stores: createMemoryStores(), redeliveryGate: ALWAYS_REDELIVER }),
     ).not.toThrow();
+  });
+});
+
+describe('待ちの経路に壁時計が無い（#1220）', () => {
+  /**
+   * ⭐ **この2本が、この Issue の「再発を止める門」である。**
+   *
+   * #1192 で takecchi が「**注意書きを増やすことと、再発を防ぐことが別になり始めて
+   * いる**」と指摘した。実際、ここには既に「⛔ ここを伸ばして歯を黙らせないこと」と
+   * 書いてあったのに、**壁時計の打ち切りは残り、2026-09-12 に `main` の CI を落とした。**
+   * ⟹ 注意書きでは止まらない。**測る。**
+   *
+   * ## なぜ偽タイマーで測るのか
+   *
+   * 「壁時計に依存しない」は、**時計を止めれば直接測れる**。ポーリングの形へ戻すと
+   * `setTimeout` / `setInterval` が発火しないので、下の1本目は必ず赤くなる。
+   * 打ち切りを足し戻すと、2本目が必ず赤くなる。**どちらも実時間を1ミリ秒も使わない。**
+   *
+   * ⚠️ `vi.useRealTimers()` は `finally` で必ず戻すこと。偽の時計を掛けたまま
+   * テストを抜けると、`vitest.setup.ts` が逐語で言うとおり「誰も進めないので永久に
+   * 返らない」状態が後続へ漏れる。
+   */
+  function fakeHost(): { host: CloneHost; emit: (event: ChatStreamEvent) => void } {
+    let listener: ((event: ChatStreamEvent) => void) | undefined;
+    const host = {
+      subscribe: (_conversationId: string, callback: (event: ChatStreamEvent) => void) => {
+        listener = callback;
+        return () => {
+          listener = undefined;
+        };
+      },
+    } as unknown as CloneHost;
+    return {
+      host,
+      emit: (event) => {
+        if (listener === undefined) throw new Error('subscribe されていない');
+        listener(event);
+      },
+    };
+  }
+
+  /** マイクロタスクだけを有界に流す。**時計は1ミリ秒も進めない。** */
+  async function flushMicrotasks(): Promise<void> {
+    for (let i = 0; i < 50; i += 1) await Promise.resolve();
+  }
+
+  it('⭐ 出来事の待ちは、時計を1ミリ秒も進めずに解ける（ポーリングへ戻すと赤くなる）', async () => {
+    vi.useFakeTimers();
+    try {
+      const { host, emit } = fakeHost();
+      const { events } = wireEvents(host, 'conv-1');
+      let settled = false;
+      void waitForDone(events).then(() => {
+        settled = true;
+      });
+      emit({ type: 'done' } as ChatStreamEvent);
+      await flushMicrotasks();
+      expect(
+        settled,
+        'done の待ちが、時計を進めないと解けなかった。' +
+          '⟹ 待ちが壁時計のポーリング（setTimeout / setInterval / expect.poll の timeout）へ' +
+          '戻っている。出来事そのものを観測する形（wireEvents の waitForEvents）へ戻すこと（#1220）。',
+      ).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('⭐ waitFor は壁時計で諦めない（30秒進めても失敗しない）', async () => {
+    vi.useFakeTimers();
+    try {
+      let arrived = false;
+      let rejection: unknown;
+      let resolved = false;
+      const waiting = waitFor(() => arrived, 'テスト用の待ち').then(
+        () => {
+          resolved = true;
+        },
+        (error: unknown) => {
+          rejection = error;
+        },
+      );
+
+      // **古い打ち切り（3000ms）の10倍。**条件は偽のままにしておく。
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(
+        rejection,
+        'waitFor が壁時計で諦めた。⟹ 打ち切りが足し戻されている。' +
+          '「3000 を伸ばす」も同じ賭けを続けるだけなので、締め切りそのものを持たないこと（#1220）。',
+      ).toBeUndefined();
+      expect(resolved).toBe(false);
+
+      // 条件が真になれば、ちゃんと解ける（空振りしていないことの対照）。
+      arrived = true;
+      await vi.advanceTimersByTimeAsync(10);
+      await waiting;
+      expect(resolved).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
