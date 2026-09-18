@@ -79,6 +79,7 @@ describe('resetWorkspaceState', () => {
       lastLoginAt: null,
       grantedAt: '2026-01-01T00:00:00.000Z',
       grantedBy: 'operator',
+      ownerDeclaredAt: null,
     });
 
     const summary = await resetWorkspaceState(stores);

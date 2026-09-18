@@ -62,6 +62,19 @@ export const authAccountSchema = z.object({
    * **固定値を書かないこと。** ここが常に同じ値なら、この欄は情報を運ばない。
    */
   grantedBy: z.string().nullable(),
+  /**
+   * **実行環境の持ち主として宣言されたのはいつか。**（issue #1198）
+   *
+   * `null` なら誰も owner ではない。**立てられるのは operator トークンだけ**
+   * （`AuthStore.setAccountOwner`）。`grantedBy === 'operator'`（旧
+   * `isAccountGrantedByOperator` の近似）とは独立に持つ — 許可した事実と、
+   * 持ち主本人であると宣言された事実は別のことである。
+   *
+   * **`.default(null)` は必須である。** 既存の fs の JSON にはこの鍵が無い。
+   * 無ければ `authAccountSchema.parse` が失敗し、起動できなくなる —— 新しい
+   * 欄を足すたびに、既存データがその欄を持たないことを既定値で吸収する。
+   */
+  ownerDeclaredAt: isoDateTime.nullable().default(null),
 });
 
 /**
@@ -218,10 +231,35 @@ export interface AuthStore {
    * 勝たせ、後から来た側にはその結果を返す。
    */
   grantAccess(accountId: string, at: string, by: string): Promise<GrantOutcome>;
+
+  /**
+   * この account を「実行環境の持ち主として宣言された」状態にする、または解く（1操作）。
+   *
+   * **不変条件「宣言 ⟹ 許可済み」はここで強制する。** `declaredAt !== null` で
+   * 呼ぶのに行が未許可（`grantedAt === null`）なら `not_granted` を返し、何も
+   * 書かない。**「読む → 検査 → 書く」に割ってはいけない** — 割ると、検査と
+   * 書き込みの間に許可が取り消された行へ宣言が乗る窓ができる（`.claude/skills/
+   * auth-and-access/SKILL.md`「不変条件はストアの1操作に閉じること。ここは
+   * 同じ失敗を3度踏んでいる場所である」）。
+   *
+   * **取り消し（`declaredAt === null`）は行が在れば常に通る。** 許可を取り消した
+   * 後に宣言だけを取り消す（`AuthService.revoke` が両方を落とす）ケースがあるので、
+   * 取り消し側に「許可済みであること」は要求しない。
+   *
+   * ドライバはそれぞれの器で強制する — fs は既存のロック区間の内側、pg は
+   * `where granted_at is not null` を伴う条件付き UPDATE。
+   */
+  setAccountOwner(accountId: string, declaredAt: string | null): Promise<OwnerOutcome>;
 }
 
 /** 許可の付与の結果。 */
 export type GrantOutcome = { status: 'granted'; account: AuthAccount } | { status: 'not_found' };
+
+/** `setAccountOwner` の結果。 */
+export type OwnerOutcome =
+  | { status: 'ok'; account: AuthAccount }
+  | { status: 'not_found' }
+  | { status: 'not_granted' };
 
 // ---------------------------------------------------------------------------
 // 乱数・ハッシュ
@@ -281,47 +319,24 @@ export function isAccountGranted(account: AuthAccount): boolean {
 }
 
 /**
- * `grantedBy` に入る「実行環境の持ち主が許可した」の印。
+ * **実行環境の持ち主として宣言されたアカウントか。**（issue #1198。本来の形）
  *
- * **ここが唯一の正本である。** 書く側（デーモンの `actorOf`）と読む側
- * （`isAccountGrantedByOperator`）が同じ値を別々に書いていると、片方の打ち間違いが
- * 「オーナーではない」へ黙って倒れる —— 通らなくなる側なので**壊れても誰も
- * 気づかない**。⟹ 両方をここから引く。
+ * `ownerDeclaredAt` は operator トークンだけが立てられる（`AuthStore.
+ * setAccountOwner`）ので、真になるのは「ホストのファイルを読める者が明示的に
+ * 宣言した」ときだけである。**旧 `isAccountGrantedByOperator`（`grantedBy ===
+ * 'operator'` による近似。#1195 の PR #1199 が採った形）はここで置き換える** —
+ * あちらは「端末から直に許可した」という別の事実からの推測で、宣言していない
+ * 相手をここが見ることはない。
  *
- * **アカウント id とは衝突しない。** id は `randomToken(16)` の base64url（22文字）で、
- * この値になりようがない（`createAuthService` の `newId`）。⟹ 「`grantedBy` が
- * `'operator'` である」は「アカウントではなく実行環境の持ち主が許可した」と同値である。
+ * **許可が外れていないことも見る。** `AuthStore.setAccountOwner` は未許可の行に
+ * 宣言を立てさせないが、`AuthService.revoke` は許可の取り消しと同時に
+ * `ownerDeclaredAt` も `null` に落とすため、実際には「宣言はあるが未許可」の
+ * 行は生まれない。**それでもここで両方見るのは、その不変条件が崩れた日に
+ * 資格の側が緩まないようにするためである** —— 守りは、守られている前提が
+ * 壊れたときにこそ要る。
  */
-export const OPERATOR_ACTOR = 'operator';
-
-/**
- * **実行環境の持ち主が、端末から直に許可したアカウントか。**
- *
- * **⚠️ これは「オーナー本人」の近似である**（issue #1198）。本来は `AuthAccount` に
- * owner の欄を持つべきで、ここは `grantedBy` からの導出に留めてある。**近似が破れるのは、
- * 実行環境の持ち主が本人以外のアカウントへ直に `alteroid access grant` を実行したときである。**
- *
- * **採った理由は人間の報告の逐語である**（issue #1195）——
- * *「少なくとも承認するためには CLI にはいって許可のコマンド打ってるユーザーなんですよね」*。
- * ⟹ 「端末から直に許可した相手」という定義そのもので、別の定義を持ち込む理由が無かった。
- * **明示的な欄にすると、直すために本人が CLI を1コマンド打たねばならず、報告
- * （「Web UI のボタンが弾かれる」）の半分が残る。**
- *
- * **⚠️ 伝播した許可（A が B を通した）は含まない。** その場合 `grantedBy` はアカウントの
- * id になる。含めると、許可の伝播がそのまま資格の伝播になり、近似が破れる条件が
- * 「持ち主が誰かを直に通したとき」から「許可が1回でも伝播したとき」まで広がる。
- *
- * **⚠️ `authService.owners()` の `owner` とは別物である。** あちらは許可済みアカウント
- * 全部を指す古い名前（持ち主が高々1人だった頃の名残）で、ここが見ているのは
- * 「誰が許可したか」である。
- *
- * **許可が取り消されていないことも見る。** `revoke` は `grantedAt` と `grantedBy` を
- * 同時に落とす（`auth-service.ts` の `revoke`）ので、実際には片方だけが残る行は生まれない。
- * **それでもここで両方見るのは、その不変条件が崩れた日に資格の側が緩まないようにするため
- * である** —— 守りは、守られている前提が壊れたときにこそ要る。
- */
-export function isAccountGrantedByOperator(account: AuthAccount): boolean {
-  return isAccountGranted(account) && account.grantedBy === OPERATOR_ACTOR;
+export function isDeclaredOwner(account: AuthAccount): boolean {
+  return isAccountGranted(account) && account.ownerDeclaredAt !== null;
 }
 
 export function isAccessTokenUsable(token: AccessTokenRecord, now: Date): boolean {
