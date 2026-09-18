@@ -2553,8 +2553,7 @@ describe('クローン — self_status（runtime facts の配線）', () => {
         return createCloneMcpServer(context);
       },
     });
-    const events: ChatStreamEvent[] = [];
-    clone.subscribe('conv-1', (event) => events.push(event));
+    const { events } = wireEvents(clone, 'conv-1');
 
     return {
       clone,
@@ -2701,8 +2700,7 @@ describe('クローン — self_status（runtime facts の配線）', () => {
         return createCloneMcpServer(context);
       },
     });
-    const events: ChatStreamEvent[] = [];
-    clone.subscribe('conv-1', (event) => events.push(event));
+    const { events } = wireEvents(clone, 'conv-1');
 
     clone.post(humanMessage('やあ'));
     // `#buildOptions`（→ `mcpServerFactory`）は `#ensureQuery` の中、init が
@@ -2856,8 +2854,7 @@ describe('クローン — self_status（runtime facts の配線）', () => {
         return createCloneMcpServer(context);
       },
     });
-    const events: ChatStreamEvent[] = [];
-    clone.subscribe('conv-1', (event) => events.push(event));
+    const { events } = wireEvents(clone, 'conv-1');
 
     async function selfStatus(): Promise<string> {
       if (captured === undefined) throw new Error('ToolContext がまだ捕まっていない');
@@ -2918,8 +2915,7 @@ describe('クローン — self_status（runtime facts の配線）', () => {
 
     // 人間が記憶を大きく書き換える（載せ直しが起きる量にする）
     await stores.persona.write('values', `# 価値観\n\n${'い'.repeat(5000)}\n`);
-    const events: ChatStreamEvent[] = [];
-    s.clone.subscribe('conv-2', (event) => events.push(event));
+    const { events } = wireEvents(s.clone, 'conv-2');
     s.clone.post(humanMessage('2回目', 'conv-2'));
     await waitForDone(events);
     // 載せ直しが実際に起きたことを確かめてから、動いていないことを見る
@@ -4782,8 +4778,7 @@ describe('クローン — 壊れ方の回帰', () => {
     expect(s.events.some((event) => event.type === 'done')).toBe(true);
 
     // 以後も普通に応答できる
-    const events: ChatStreamEvent[] = [];
-    s.clone.subscribe('conv-2', (event) => events.push(event));
+    const { events } = wireEvents(s.clone, 'conv-2');
     s.clone.post(humanMessage('MSG-B', 'conv-2'));
     await waitForDone(events);
 
@@ -4828,8 +4823,7 @@ describe('クローン — 壊れ方の回帰', () => {
     await stores.persona.write('values', '# 価値観\n\nNEW-VALUE\n');
     const after = await memoryCardOutlineLines(stores, 'values');
 
-    const events: ChatStreamEvent[] = [];
-    s.clone.subscribe('conv-2', (event) => events.push(event));
+    const { events } = wireEvents(s.clone, 'conv-2');
     s.clone.post(humanMessage('2回目', 'conv-2'));
     await waitForDone(events);
 
@@ -5056,8 +5050,7 @@ describe('クローン — 記憶を二重に載せない', () => {
 
   /** 2ターン目を同じセッションへ流し、その入力を返す。 */
   async function secondTurn(s: Setup): Promise<string> {
-    const events: ChatStreamEvent[] = [];
-    s.clone.subscribe('conv-2', (event) => events.push(event));
+    const { events } = wireEvents(s.clone, 'conv-2');
     s.clone.post(humanMessage('2回目', 'conv-2'));
     await waitForDone(events);
     return (s.calls[0] as FakeCall).inputs[1] ?? '';
@@ -5238,8 +5231,7 @@ describe('クローン — 記憶を二重に載せない', () => {
     // **版の見分けは本文ではなくカードの行で行う**（`memoryCardOutlineLines`）。
     // 節id が中身のハッシュなので、V1 / V2 / V3 は別々の行になる。
     const v2Card = await memoryCardOutlineLines(stores, 'values');
-    const events: ChatStreamEvent[] = [];
-    first.clone.subscribe('conv-2', (event) => events.push(event));
+    const { events } = wireEvents(first.clone, 'conv-2');
     first.clone.post(humanMessage('2回目', 'conv-2'));
     await waitForDone(events);
     for (const line of v2Card) expect((first.calls[0] as FakeCall).inputs[1] ?? '').toContain(line);
@@ -5606,8 +5598,7 @@ describe('クローン — ターンの失敗の跡', () => {
           createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
         ]),
       });
-      const events: ChatStreamEvent[] = [];
-      clone.subscribe('conv-1', (event) => events.push(event));
+      const { events } = wireEvents(clone, 'conv-1');
       return { clone, stores, calls, events, failFrom: () => (failNext = true) };
     }
 
@@ -6099,8 +6090,7 @@ describe('クローン — ターンの失敗の跡', () => {
       const s = setup(undefined, stores, { failWith: `クエリが失敗した params=["${secret}"]` });
       // 失敗が `#reportFailure` まで届いたことは chat 側の `error` で見る
       // （日誌は落ちるので、そちらでは待てない）。
-      const seen: ChatStreamEvent[] = [];
-      s.clone.subscribe('conv-9', (event) => seen.push(event));
+      const { events: seen } = wireEvents(s.clone, 'conv-9');
       s.clone.post(humanMessage('やあ', 'conv-9'));
       await expect
         .poll(() => seen.some((event) => event.type === 'error'), { timeout: 3000 })
@@ -6643,8 +6633,7 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
 
   it('順番待ちのあいだ `thinking` は来ない（2つの状態を1つの語に潰していない）', async () => {
     const gated = setupGated();
-    const events: ChatStreamEvent[] = [];
-    gated.clone.subscribe('conv-2', (event) => events.push(event));
+    const { events } = wireEvents(gated.clone, 'conv-2');
     await occupy(gated);
 
     gated.clone.post(humanMessage('MSG-QUEUED', 'conv-2'));
@@ -14599,8 +14588,7 @@ describe('recycleSessionForToken（回した後のセッション作り直し）
         createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
       ]),
     });
-    const events: ChatStreamEvent[] = [];
-    clone.subscribe('conv-1', (event) => events.push(event));
+    const { events } = wireEvents(clone, 'conv-1');
 
     say(clone);
     await waitFor(() => events.some((e) => e.type === 'done'), '1本目が通ること');
@@ -15096,8 +15084,7 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
 
     await firePreCompact(s);
 
-    const events: ChatStreamEvent[] = [];
-    s.clone.subscribe('conv-2', (event) => events.push(event));
+    const { events } = wireEvents(s.clone, 'conv-2');
     s.clone.post(humanMessage('2回目', 'conv-2'));
     await waitForDone(events);
 
@@ -15121,13 +15108,11 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
 
     await firePreCompact(s);
 
-    const second: ChatStreamEvent[] = [];
-    s.clone.subscribe('conv-2', (event) => second.push(event));
+    const { events: second } = wireEvents(s.clone, 'conv-2');
     s.clone.post(humanMessage('2回目', 'conv-2'));
     await waitForDone(second);
 
-    const third: ChatStreamEvent[] = [];
-    s.clone.subscribe('conv-3', (event) => third.push(event));
+    const { events: third } = wireEvents(s.clone, 'conv-3');
     s.clone.post(humanMessage('3回目', 'conv-3'));
     await waitForDone(third);
 
@@ -15152,8 +15137,7 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
       '---\ntype: premise\ndescription: 価値観の要旨\n---\n## VALUES-HEAD-NEW\n本文\n',
     );
 
-    const events: ChatStreamEvent[] = [];
-    s.clone.subscribe('conv-2', (event) => events.push(event));
+    const { events } = wireEvents(s.clone, 'conv-2');
     s.clone.post(humanMessage('2回目', 'conv-2'));
     await waitForDone(events);
 
@@ -15284,8 +15268,7 @@ describe('クローン — 文脈窓で畳む前の退避は diverged/unknown �
         createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
       ]),
     });
-    const events: ChatStreamEvent[] = [];
-    clone.subscribe('conv-1', (event) => events.push(event));
+    const { events } = wireEvents(clone, 'conv-1');
     return { clone, stores, calls, events };
   }
 
