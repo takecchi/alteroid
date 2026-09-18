@@ -34,9 +34,15 @@ on:
   # 次の夜まで待てない場合の口（本番が壊れている / 直した欠陥をいま確かめたい）。
   workflow_dispatch:
 
-# release/prod を動かすためだけに要る。他は要らない。
+# release/prod を動かすためだけなら contents: write で足りるが、この workflow は
+# 反映の後に「本番へ出た sha の CI」を記録する step も持つ（Issue #1207 の (3)。
+# 下の「main の CI を記録する（止める門ではない）」を見よ）。その記録が
+# `actions/runs` を読む（`actions: read`）のと、赤の晩に既存の警報 Issue へ
+# コメントを足す（`issues: write`）ぶんを足してある。他は要らない。
 permissions:
   contents: write
+  actions: read
+  issues: write
 
 # 定時実行と手動起動が重なっても、release/prod を2つの実行が同時に動かさない。
 # 走っている方は止めない（途中で切ると push の途中で終わる）。
@@ -57,4 +63,36 @@ jobs:
         with:
           ref: main
       - name: main を release/prod へ反映する
+        id: reflect
         run: .github/scripts/reflect-release-prod.sh
+      # ## main の CI を記録する（止める門ではない）——Issue #1207 の (3)
+      #
+      # **「赤なら止める」門は作らない。** 実測が全部不利だからである
+      # （観測期間28日、2026-08-18〜09-17）: 門が発動する場面（赤い main の
+      # まま夜間反映が走る）は**0回**。仮に発動していたとしても、赤くなった
+      # 6件のうち**5件は flaky による誤停止**で翌日には緑へ戻っている。
+      # **唯一の本物の障害（Issue #734）はこの門では拾えない**（CI 自体は
+      # 緑のまま本番だけが壊れた）。それでも門を作れば、発動時の空白は
+      # 反映が夜1回しか無いぶん**最長で丸1日**になる。⟹ 止めるコストが
+      # 拾えなかった1件より高い。判断の出典は Issue #1207 のコメント群。
+      #
+      # やるのは記録だけ。反映した sha の CI 判定を機械可読な1行として残し、
+      # 赤いときだけ `main-ci-alarm.yml` が立てた警報 Issue（open のもの）へ
+      # 「この赤は本番へ出た」と足す。**次にここを読んで「やっぱり赤なら
+      # 止めよう」を足しに来ないこと**——上の数字が変わらない限り、その判断は
+      # 既に検討されて却下されている。
+      #
+      # `if: always()` と `continue-on-error: true` の両方で「記録の失敗が
+      # 反映の成否に影響しない」を構造として保証する——`reflect` step が
+      # 失敗しても記録は走り（何が起きたかを残すため）、記録側が失敗しても
+      # この job 全体は成功のまま終わる（`record-release-prod-ci.mjs` 自身も
+      # process.exitCode を立てない二重の保証だが、workflow 側にも置く）。
+      - name: 反映した sha の main CI を記録する
+        if: always()
+        continue-on-error: true
+        run: node .github/scripts/record-release-prod-ci.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RECORD_REFLECT_OUTCOME: ${{ steps.reflect.outcome }}
+          RECORD_RELEASE_PROD_CI_APPLY: '1'
