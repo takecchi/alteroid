@@ -87,9 +87,10 @@ export interface ArchiveRemovalSelectionOptions {
   /**
    * 対象から除く id（issue #698 追補3の「墓標」など、呼び出し側が名指しで
    * 守れと言っている行）。**「墓標」という語・概念はこのファイルへ持ち込まない**
-   * ——`TranscriptGrave.archiveId` を見るのは HTTP 層の仕事で、ここは渡された
-   * id をただ守るだけにする（この選定ロジックを他の「守るべき id」の理由
-   * からも再利用できるようにするため）。
+   * ——`TranscriptGrave.archiveId` を見るのは呼び出し側（`app.ts` の
+   * `POST /archive/remove` と `tools.ts` の `archive_remove_many`）の仕事で、
+   * ここは渡された id をただ守るだけにする（この選定ロジックを他の
+   * 「守るべき id」の理由からも再利用できるようにするため）。
    */
   readonly protectedIds?: readonly string[];
 }
