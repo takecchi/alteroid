@@ -74,6 +74,61 @@ describe('pickLatestRunPerWorkflow', () => {
     expect(pickLatestRunPerWorkflow([newer, older])).toEqual([newer]);
   });
 
+  it('Issue #1225 の実例: 同じsha に同じ名前の push run と schedule run が同居しても、pushの run を落とさない', () => {
+    // 実測: gh api 'repos/takecchi/alteroid/actions/runs?head_sha=3ca63973b7dae66b48b033a962a92e19c7e73e63'
+    // sha 3ca63973b7dae66b48b033a962a92e19c7e73e63 に `CI` の run が2本同居した——
+    // push の run 34709221407（06:46:25作成、conclusion=failure。ci=failure）と、
+    // その2分後にできた schedule の run 34709324541（06:48:26作成、
+    // conclusion=success。drift運転でciを丸ごとskip）。旧実装（名前だけで
+    // まとめてcreated_atの新しいほうを残す）は schedule の run が push の run を
+    // 追い出し、ci=failure が評価から消えて out-of-scope に化けた。
+    const runs = [
+      {
+        id: 34709221407,
+        name: 'CI',
+        event: 'push',
+        created_at: '2026-09-12T17:46:25Z',
+        status: 'completed',
+        conclusion: 'failure',
+      },
+      {
+        id: 34709324541,
+        name: 'CI',
+        event: 'schedule',
+        created_at: '2026-09-12T17:48:26Z',
+        status: 'completed',
+        conclusion: 'success',
+      },
+    ];
+    const latest = pickLatestRunPerWorkflow(runs);
+    // 名前だけでは1本に潰されず、event が違う2本ともが残る。
+    expect(latest.map((r: { id: number }) => r.id).sort((a: number, b: number) => a - b)).toEqual([
+      34709221407, 34709324541,
+    ]);
+
+    // 実測: gh api repos/takecchi/alteroid/actions/runs/<id>/jobs
+    const jobsByRunId = {
+      34709221407: [
+        { name: 'ci', status: 'completed', conclusion: 'failure' },
+        { name: 'pr-origin', status: 'completed', conclusion: 'skipped' },
+        { name: 'base-overlap', status: 'completed', conclusion: 'skipped' },
+      ],
+      34709324541: [
+        { name: 'ci', status: 'completed', conclusion: 'skipped' },
+        { name: 'pr-origin', status: 'completed', conclusion: 'skipped' },
+        { name: 'base-overlap', status: 'completed', conclusion: 'skipped' },
+      ],
+    };
+    const result = evaluatePrGreen(latest, jobsByRunId);
+    expect(result.verdict).toBe('red');
+    expect(
+      result.detail.some(
+        (line: string) =>
+          line.includes('ci') && line.includes('failure') && line.includes('34709221407'),
+      ),
+    ).toBe(true);
+  });
+
   it('別workflowの実例（Issue #933コメント、virchamate PR #564）: 複数workflowを両方とも残す', () => {
     // 実測: 同じsha に `Test Backend`（走行中）と `Guardrail Check`（success、
     // 1ジョブだけ）という別workflowの run が同居。「run を1本だけ選ぶ」直し方は

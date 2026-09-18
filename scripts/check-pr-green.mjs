@@ -19,9 +19,10 @@
  * - **言えないこと**: **これが最後の世代だという保証。** 呼んだ直後にもう1本
  *   run が作られうる（`gh pr ready` が新しい run を起こす、再実行される、
  *   等）。緑は「いま見た時点でそうだった」だけを言う。
- * - **測っていないこと**: 同じ workflow 名で `workflow_dispatch` と
- *   `pull_request` が混ざる sha、再実行（`rerun`）で3世代目が生える sha は
- *   実測していない（`check-pr-green-core.mjs` の doc）。
+ * - **測っていないこと**: 再実行（`rerun`）で3世代目が生える sha、`pull_request`
+ *   と `workflow_dispatch` が混ざる sha は実測していない（同じ名前で `push` と
+ *   `schedule` が混ざる sha は Issue #1225 で実測し、対処した。
+ *   `check-pr-green-core.mjs` の doc）。
  * - **書き換えない。** 読むだけである。
  *
  * ## 使い方

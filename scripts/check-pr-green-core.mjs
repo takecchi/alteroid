@@ -24,9 +24,22 @@
  * **その run 自身の `actions/runs/<id>/jobs` を読む**。
  *
  * ⚠️ **これで「確定」ではない。** 実測できたのは1 sha・2世代・1 workflow・
- * 4ジョブの標本だけである（`check-pr-green.test.ts` のコメント参照）。同じ
- * workflow 名で `workflow_dispatch` と `pull_request` が混ざる場合、
- * 再実行（`rerun`）で3世代目が生える場合は測っていない。
+ * 4ジョブの標本だけである（`check-pr-green.test.ts` のコメント参照）。
+ * 再実行（`rerun`）で3世代目が生える場合、`pull_request` と
+ * `workflow_dispatch` が混ざる場合は測っていない。
+ *
+ * ⛔ **同じ workflow 名で `event` が違う run が同じ sha に同居する場合は
+ * 実測済みで、`created_at` だけでまとめると赤を見落とす（Issue #1225）。**
+ * 実測: sha `3ca63973b7dae66b48b033a962a92e19c7e73e63` に `CI` の run が2本
+ * 同居した —— `push` の run `34709221407`（`ci=failure`、06:46:25作成）と、
+ * その2分後にできた `schedule` の run `34709324541`（drift 運転で `ci` を
+ * 丸ごと skip し `image` だけ走らせる。`ci=skipped`、06:48:26作成）。
+ * workflow 名だけでまとめて `created_at` の新しいほうを1本残す旧実装は、
+ * 新しい `schedule` の run が古い `push` の run を追い出し、`ci=failure` が
+ * 評価から消える（`red` になるはずが `out-of-scope` に化ける）。⟹
+ * **まとめる鍵を「名前」だけでなく「名前 ＋ `event`」にする** —— `push` と
+ * `schedule` は別の鍵になるので互いを隠さない。#933 が解いた draft/ready の
+ * 同居（どちらも `event: pull_request` で同じ鍵）はそのまま解ける。
  */
 
 /**
@@ -47,20 +60,36 @@ function newerRun(a, b) {
 }
 
 /**
- * `actions/runs?head_sha=` の `workflow_runs` から、workflow 名ごとに最新の
- * run を1本選ぶ。**同じ sha に複数 workflow が在っても、名前ごとに独立に選ぶ
- * ので他の workflow を落とさない。**
+ * `actions/runs?head_sha=` の `workflow_runs` から、**workflow 名 ＋ `event`**
+ * ごとに最新の run を1本選ぶ。**同じ sha に複数 workflow が在っても、鍵ごとに
+ * 独立に選ぶので他の workflow を落とさない。** 名前だけでまとめると、同じ
+ * 名前で `event` が違う run（`push` と `schedule` 等）が同居したとき、後から
+ * 作られたほうが先の run を追い出して隠してしまう（Issue #1225。実例は
+ * このファイル冒頭の doc）。`event` を鍵に含めることで、`push` と `schedule`
+ * のように互いに設計が違う run 同士は隠し合わない。
  *
- * `runs` の各要素は `{ id, name, created_at, status, conclusion }` を持つ
- * ことを前提にする（`gh api actions/runs` の実フィールドのサブセット）。
+ * 一方、#933 が解いた draft→ready の世代交代は、どちらも `event: pull_request`
+ * なので鍵が同じになり、これまでどおり `created_at` の新しいほうが選ばれる。
+ * `event` が読めない標本（テストの既定値等）は `''` として扱い、同じ名前なら
+ * 同じ鍵にまとまる（安全側 —— 知らない event を別物と決めつけて run を余計に
+ * 増やさない）。
+ *
+ * `runs` の各要素は `{ id, name, event, created_at, status, conclusion }` を
+ * 持つことを前提にする（`gh api actions/runs` の実フィールドのサブセット。
+ * `event` を持たない古い呼び出し元・テストとの互換のため `undefined` も許す）。
  */
 export function pickLatestRunPerWorkflow(runs) {
-  const byName = new Map();
+  const byKey = new Map();
   for (const run of runs) {
-    const prev = byName.get(run.name);
-    byName.set(run.name, prev === undefined ? run : newerRun(prev, run));
+    const key = `${run.name}\u0000${run.event ?? ''}`;
+    const prev = byKey.get(key);
+    byKey.set(key, prev === undefined ? run : newerRun(prev, run));
   }
-  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+  return [...byKey.values()].sort((a, b) => {
+    const byName = a.name.localeCompare(b.name);
+    if (byName !== 0) return byName;
+    return (a.event ?? '').localeCompare(b.event ?? '');
+  });
 }
 
 /**
