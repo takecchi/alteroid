@@ -67,6 +67,12 @@ import {
 } from './excerpt.js';
 import { classifyManagerActivity, describeReportDrift } from './manager-activity.js';
 import type { ManagerActivityInput } from './manager-activity.js';
+import {
+  ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS,
+  ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT,
+  selectArchiveRemovalTargets,
+} from './archive-prune.js';
+import type { ArchiveRemoveManyFilter } from './archive-prune.js';
 import { guardArchiveRemoval } from './manager.js';
 import type {
   ManagerDenial,
@@ -152,7 +158,7 @@ import {
 } from './self.js';
 import type { CloneRuntimeFacts } from './self.js';
 import { EXCHANGE_WITH_VALUES, UnreadableCommitmentError } from './store.js';
-import type { JournalStore, PendingInboxEvent, Stores } from './store.js';
+import type { ArchiveEntry, JournalStore, PendingInboxEvent, Stores } from './store.js';
 import {
   limitRecoveryOf,
   limitRecoveryOfAssistantError,
@@ -482,6 +488,7 @@ export const CLONE_TOOL_NAMES = [
   'manager_report',
   'manager_transcript',
   'archive_remove',
+  'archive_remove_many',
   'runner_list',
 ] as const;
 
@@ -491,7 +498,7 @@ export type CloneToolName = (typeof CLONE_TOOL_NAMES)[number];
  * `CLONE_TOOL_NAMES` の道具のうち、**ハンドラが自前で日誌へ書く側**
  * （`memory_write` は `memory_update`、`journal_write` は本文、`manager_start`
  * は台帳と `tool_use`、という形で自分の跡を残す。`archive_remove` は #698 で
- * 加わった）。
+ * 加わった。`archive_remove_many` も同じ issue の残タスクとして #698 で加わった）。
  *
  * `clone.ts` の `#journalToolUse` は、この名簿に載る道具の `tool_use` を
  * 重ねて書かない（`clone.ts`「なぜ*自前で日誌へ書く道具だけ*を除くのか」参照）。
@@ -531,6 +538,7 @@ export const SELF_JOURNALING_CLONE_TOOLS = [
   'manager_appraise',
   'manager_stop',
   'archive_remove',
+  'archive_remove_many',
 ] as const satisfies readonly CloneToolName[];
 
 /**
@@ -1402,6 +1410,19 @@ export const REMOVE_MANY_LIMIT_MAX = 2_000;
 export const REMOVE_MANY_JOURNAL_ID_CHARS = 3_600;
 /** 一括削除の戻り値に並べる id の件数の上限（`CLOSE_MANY_IDS_SHOWN` と同じ理由）。 */
 const REMOVE_MANY_IDS_SHOWN = 20;
+/**
+ * `archive_remove_many`（issue #698 の残タスク）の戻り値に並べる id の件数の
+ * 上限。**`REMOVE_MANY_IDS_SHOWN` / `CLOSE_MANY_IDS_SHOWN` と同じ理由**——
+ * 消した件数に比例して伸びる列挙をそのまま返さない。全 id は日誌側に残る。
+ *
+ * **`ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT` / `_MAX` / `_JOURNAL_ID_CHARS` と
+ * 違い、これは HTTP 層と共有しない値である**——`POST /archive/remove` は
+ * JSON で `removedIds` を切らずに全件返すので、表示の間引きはこの道具
+ * （テキスト応答）だけが必要とする関心事である。だからこの定数は
+ * `archive-prune.ts` へは置かない（あちらは HTTP 層とこの道具が両方使う値
+ * だけを持つ——`ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT` の doc）。
+ */
+const ARCHIVE_REMOVE_MANY_IDS_SHOWN = 20;
 /**
  * `profile_write` が返す配布先の一覧（`配った先` / `配れなかった先`）を
  * 抜粋する厚み（#409）。
@@ -8764,6 +8785,344 @@ export function createCloneTools(context: ToolContext) {
         return text(
           `アーカイブ ${archiveId} の本文を消した（${result.bytes.toLocaleString('ja-JP')} バイト）。` +
             `行そのものは残っている（list には引き続き出る）。${overrideNote}`,
+        );
+      },
+    ),
+
+    /**
+     * アーカイブ済みセッション生ログの本文を、絞り込んでまとめて tombstone
+     * する（issue #698 の残タスク）。
+     *
+     * **人間には `POST /archive/remove` が既に在る（PR #1078）。** 人間に
+     * できることがクローンにできないのは north_star 禁止1 に反するので、
+     * こちらにも同じ口を渡す。
+     *
+     * **雛形は `inbox_remove_many` / `commitment_close_many` である。** 既定
+     * （`dryRun` を省略すると true）・絞り込みの無い呼びを断る・塊ごとに
+     * 「消す → その塊の id を日誌へ書く」を交互に回す形は、どちらも同じ
+     * 設計を踏襲している。
+     *
+     * **対象の選定は `selectArchiveRemovalTargets`（純関数、`archive-prune.ts`）
+     * に閉じる。** ロジックを書き写さない——`ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT` /
+     * `ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS` もそこから import する
+     * （`archive-prune.ts` の `ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT` の doc
+     * 「値を書き写すと、片方だけ変えたときに黙って食い違う」）。ここは絞り込み
+     * の拒否判定・墓標の保護・走行中の委譲の扱い・実際の `stores.archive.remove()`
+     * 呼び出しと日誌だけを持つ——`POST /archive/remove`（`app.ts`）と同じ
+     * 役割分担である。
+     *
+     * **墓標（`TranscriptGrave`）を守る**（issue #698 追補3。`app.ts` の
+     * `POST /archive/remove` の doc「なぜ冗長に見えるか」と同じ理由）。
+     * `stores.sessions.getTranscriptGrave()` はツール層からも読める
+     * （`Stores.sessions: SessionRegistry`）ので、`app.ts` と同じ材料を
+     * そのまま渡せる。
+     *
+     * **⚠️ ここが `POST /archive/remove` と違う点——`overrideReason` を持つ。**
+     * `POST /archive/remove` は一括の入力に `overrideReason` を持たない
+     * （「一括で複数件を無条件に開ける形は事故の芽が大きい」という理由。
+     * `app.ts` の doc）。この道具は逆に持つ——雛形は `archive_remove`（単発）
+     * である。理由: (1) 単発の `archive_remove` は既に `overrideReason` を
+     * 持ち、クローンにはその能力が既にある。一括だけそれを持たないのは
+     * 「1件ずつなら開けるが、まとめてだと開けない」という、人間には無い
+     * 追加制限になる（north_star 禁止2）。(2) `guardArchiveRemoval` 自体が
+     * 1件ずつ独立に判定する関数なので、一括で回しても「1件ずつ手で開ける」
+     * のと安全性は変わらない——`overrideReason` は理由の文字列そのものが
+     * 引き金で、真偽値と分離できないので「うっかり一括開放」は起きない
+     * （`guardArchiveRemoval` の doc）。**この判断は依頼元から明示された
+     * 要件であり、`POST /archive/remove` 側の判断を覆すものではない**——
+     * 人間の入口とクローンの入口とで、この一点だけ意図して分かれている。
+     * override したときは、理由と対象ごとの走行中マネージャー id を日誌へ
+     * 残す（黙って通さない。`archive_remove` と同じ作法）。
+     *
+     * **走行中でないマネージャーの退避、および `managers` が配線されていない
+     * 内部ターン（`guard.kind === 'unknown'`）は、override があっても開けない**
+     * ——`guardArchiveRemoval` 自身がそう作ってある（`managers === undefined`
+     * を先に見て `overrideReason` を見ない）。
+     *
+     * **`limit` / `requireContainment` は引数に持たない**（`POST /archive/remove`
+     * との差分）。`selectArchiveRemovalTargets` の既定（`limit`:
+     * `ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT`、`requireContainment: true`）を
+     * そのまま使う——依頼元の要件が引数として挙げていないので、まずは既定の
+     * 安全側のまま実装する。溢れた分は `remaining` として名乗るので、
+     * `sessionIds` / `before` を絞ってもう一度呼べば続きに届く。
+     *
+     * **実行は `stores.archive.remove(id)` を1件ずつ**（`POST /archive/remove`
+     * と同じ理由——一括 UPDATE にしない）。
+     */
+    tool(
+      'archive_remove_many',
+      [
+        'アーカイブ済みセッション生ログの本文を、絞り込んでまとめて消す（tombstone。',
+        '行そのものは残る——archive の一覧には引き続き出る。DELETE ではない）。',
+        '**既定は試算（dryRun を省略すると true）で、1件も消さない。**',
+        'sessionIds / before / minStoredBytes のどれも渡さない呼びは断る——',
+        '絞り込みが無いのと同じで、1回でアーカイブを空にできてしまう。',
+        '3つは AND で効く（全部渡せば全部に当たった行だけが対象になる）。',
+        'セッションの最新行・含有が証明できない行・墓標（まだ記憶へ蒸留していない区間）は',
+        '既定で守る（overrideReason があっても開けない——名指しで守る行と、',
+        '走行中の委譲の保護は別の理由である）。',
+        '走行中のマネージャーが使っている退避は既定では消せない（拒む。skipped.inUse に数える）。',
+        'それでも消す必要があるなら overrideReason にその理由を書く——渡すと通り、',
+        '「override で消した」事実と理由・対象・走行中だったマネージャー id が日誌に残る',
+        '（黙って通る経路は無い）。managers が配線されていない内部ターンでは',
+        'overrideReason を渡しても開けない（安全側に倒す）。',
+        '消した id は全部日誌に残る（塊に分けて書く。応答には先頭だけを出す）。',
+      ].join(' '),
+      {
+        sessionIds: z
+          .array(z.string().min(1))
+          .min(1)
+          .optional()
+          .describe('対象セッションの完全一致。省略すると全セッションが対象になりうる'),
+        before: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'この時刻より前（ISO8601、排他）に積まれた行だけを対象にする' +
+              '（例 2026-09-15T00:00:00.000Z）',
+          ),
+        minStoredBytes: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe('storedBytes がこれ以上の行だけを対象にする'),
+        summary: z.string().min(1).describe('なぜ消したかの一行要約（日誌に残る。本文は残らない）'),
+        dryRun: z
+          .boolean()
+          .optional()
+          .describe(
+            '省略すると true（何件当たるかを数えるだけで1件も消さない）。実際に消すときだけ false を明示する',
+          ),
+        overrideReason: z
+          .string()
+          .optional()
+          .describe(
+            '走行中のマネージャーの退避を、それでも消す理由。渡さなければ拒否される' +
+              '（省略時は既定の拒否のまま）。渡すと対象・理由・走行中だったマネージャー id ごと日誌に残る。' +
+              'managers が配線されていない内部ターンでは、渡しても開かない。',
+          ),
+      },
+      async ({ sessionIds, before, minStoredBytes, summary, dryRun, overrideReason }) => {
+        // 🔴 絞り込みの無い呼びを断る（`POST /archive/remove` と同じ判定・同じ理由）。
+        if (sessionIds === undefined && before === undefined && minStoredBytes === undefined) {
+          return text(
+            'sessionIds / before / minStoredBytes のどれも渡さない呼びは断る' +
+              '——それは絞り込みが無いのと同じで、1回でアーカイブを空にできてしまう。' +
+              '**1件も消していない。**',
+          );
+        }
+        if (before !== undefined && Number.isNaN(Date.parse(before))) {
+          return text(
+            `before に渡された「${before}」は ISO8601 として読めない` +
+              '（例 2026-09-15T00:00:00.000Z）。**1件も消していない。**',
+          );
+        }
+
+        // **墓標を守る**（issue #698 追補3。`app.ts` の `POST /archive/remove` の
+        // doc「なぜ冗長に見えるか」と同じ理由）。
+        const grave = await stores.sessions.getTranscriptGrave();
+        const protectedIds: string[] = grave === null ? [] : [grave.archiveId];
+
+        const filter: ArchiveRemoveManyFilter = {
+          ...(sessionIds === undefined ? {} : { sessionIds }),
+          ...(before === undefined ? {} : { before }),
+          ...(minStoredBytes === undefined ? {} : { minStoredBytes }),
+        };
+        const filterText = [
+          ...(sessionIds === undefined ? [] : [`sessionIds=[${sessionIds.join(', ')}]`]),
+          ...(before === undefined ? [] : [`before=${before}`]),
+          ...(minStoredBytes === undefined ? [] : [`minStoredBytes=${minStoredBytes}`]),
+        ].join(' / ');
+
+        // **絞りと選定は `selectArchiveRemovalTargets` に閉じる**——ロジックを
+        // ここで書き写さない（`archive-prune.ts` の doc）。
+        const allRows = await stores.archive.list();
+        const selection = selectArchiveRemovalTargets(allRows, filter, { protectedIds });
+        const funnel = `アーカイブ全 ${selection.totalRows} 行 → 絞り込みで ${selection.matched} 件`;
+
+        if (selection.matched === 0) {
+          const why =
+            selection.totalRows === 0
+              ? 'アーカイブそのものに行が無い。**絞り込みの問題ではない**（消すべきものがそもそも無い）。'
+              : '絞り込みに当たる行が0件——**絞り込みが外れている。**';
+          return text(
+            ['絞り込みに当たる行は0件だった。**1件も消していない。**', funnel, why].join('\n'),
+          );
+        }
+
+        // **走行中の委譲が抱えている行は `guardArchiveRemoval` で判定する**
+        // （`archive_remove`（単発）・`POST /archive/remove` と同じ関数を
+        // 1箇所だけ通す。`manager.ts` の doc「2箇所に書くと片方だけ直る形
+        // になる」）。⚠️ **ここは `POST /archive/remove` と違い、
+        // `overrideReason` をそのまま渡す**——一括でも `overrideReason` を
+        // 持つと決めた理由は、この道具本体の doc に書いてある。
+        //
+        // **この guard は `dryRun` の分岐より前で回す**（`POST /archive/remove`
+        // と同じ理由——下見でも走行中の判定を評価しないと、下見が返す
+        // `targeted` / `skipped.inUse` が実行時と食い違う）。
+        const removableTargets: ArchiveEntry[] = [];
+        const overriddenById = new Map<string, { managerId: string; reason: string }>();
+        let skippedInUse = 0;
+        for (const target of selection.targets) {
+          const guard = guardArchiveRemoval(context.managers, target.id, overrideReason);
+          if (guard.kind === 'denied' || guard.kind === 'unknown') {
+            skippedInUse += 1;
+            continue;
+          }
+          removableTargets.push(target);
+          if (guard.kind === 'allowed-with-override') {
+            overriddenById.set(target.id, { managerId: guard.managerId, reason: guard.reason });
+          }
+        }
+        // **`targeted` は guard を通った後の件数**（＝実際に消しにいく件数）
+        // にする——`POST /archive/remove` の doc「guard で飛ばした行を
+        // `targeted` にも `skipped.inUse` にも数えると2回数えることになる」
+        // と同じ理由。
+        const targeted = removableTargets.length;
+
+        const skippedLine =
+          `skipped: protected(墓標) ${selection.skipped.protected} / ` +
+          `alreadyRemoved ${selection.skipped.alreadyRemoved} / newest ${selection.skipped.newest} / ` +
+          `notContained ${selection.skipped.notContained} / inUse(走行中) ${skippedInUse}`;
+        const remainingLine = `remaining（limit に溢れて対象にすらならなかった件数）: ${selection.remaining}`;
+
+        if (dryRun !== false) {
+          // **省略された `dryRun` は試算。** `archive_remove_many` / `archive_remove`
+          // ともに消した本文を戻す道具はこの器に無いので、既定は「何も起きない側」
+          // に倒す。
+          const shown = removableTargets
+            .slice(0, ARCHIVE_REMOVE_MANY_IDS_SHOWN)
+            .map((row) => row.id);
+          const hidden = removableTargets.length - shown.length;
+          const overrideNote =
+            overriddenById.size === 0
+              ? []
+              : [
+                  '⚠️ override — 走行中のマネージャーの退避だったが、下見時点の判定では通る対象がある: ' +
+                    [...overriddenById.entries()]
+                      .map(([id, info]) => `${id}（マネージャー ${info.managerId}）`)
+                      .join(', '),
+                ];
+          return text(
+            [
+              '**試算（dryRun）。1件も消していない。** 実際に消すには dryRun: false を渡すこと。',
+              funnel,
+              `絞り込み: ${filterText}`,
+              `この呼びで消すのは ${targeted} 件（当たったのは ${selection.matched} 件。` +
+                `1回の上限 ${ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT} 件）。`,
+              skippedLine,
+              remainingLine,
+              `対象の id（先頭 ${shown.length} 件）: ${shown.join(', ')}${
+                hidden > 0 ? ` …ほか ${hidden} 件は省略` : ''
+              }`,
+              ...overrideNote,
+            ].join('\n'),
+          );
+        }
+
+        // 塊ごとに「消す → その塊の id を日誌へ書く」を交互に回す
+        // （`POST /archive/remove` と同じ理由——まとめて消してから日誌を書くと、
+        // その間にデーモンが落ちたとき「消えたのに記録が無い行」ができる）。
+        // 実行は `stores.archive.remove(id)` を1件ずつ（一括 UPDATE にしない）。
+        const chunks = chunkIdsByChars(
+          removableTargets.map((row) => row.id),
+          ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS,
+        );
+        const removedIds: string[] = [];
+        let removedBytes = 0;
+        let raced = 0;
+        for (const [index, chunk] of chunks.entries()) {
+          const chunkIds = new Set(chunk);
+          const chunkTargets = removableTargets.filter((row) => chunkIds.has(row.id));
+          const removedThisChunk: string[] = [];
+          for (const target of chunkTargets) {
+            const result = await stores.archive.remove(target.id);
+            if (result.kind === 'missing') {
+              // list() で見つかり guard も通ったのに、実際に remove() する
+              // までの間に他経路が先に消していた——`raced` へ数える（`POST
+              // /archive/remove` と同じ理由。隠さない）。
+              raced += 1;
+              continue;
+            }
+            removedThisChunk.push(target.id);
+            if (result.kind === 'removed') removedBytes += result.bytes;
+          }
+          removedIds.push(...removedThisChunk);
+          // **1件も消せなかった塊では日誌へ書かない**（`inbox_remove_many` /
+          // `commitment_close_many` と同じ理由）。
+          if (removedThisChunk.length === 0) continue;
+
+          const overriddenInChunk = removedThisChunk
+            .map((id) => ({ id, info: overriddenById.get(id) }))
+            .filter(
+              (entry): entry is { id: string; info: { managerId: string; reason: string } } =>
+                entry.info !== undefined,
+            );
+          const overrideNote =
+            overriddenInChunk.length === 0
+              ? ''
+              : '\n⚠️ override — 走行中のマネージャーの退避だったが、消した: ' +
+                overriddenInChunk
+                  .map(
+                    (e) => `${e.id}（マネージャー ${e.info.managerId}、理由「${e.info.reason}」）`,
+                  )
+                  .join(' / ');
+
+          await appendJournalOrThrow(
+            'archive_remove_many',
+            stores.journal,
+            {
+              type: 'decision',
+              decision:
+                `退避済み生ログの本文を絞り込みで一括して tombstone した` +
+                `（${index + 1}/${chunks.length} 塊目、この塊は ${removedThisChunk.length} 件）: ${summary}\n` +
+                `絞り込み: ${filterText}\n` +
+                `消した id: ${removedThisChunk.join(' ')}` +
+                overrideNote,
+              grounds: overriddenInChunk.length === 0 ? summary : `${summary}／${overrideNote}`,
+            },
+            'act-completed',
+          );
+        }
+
+        const shownRemoved = removedIds.slice(0, ARCHIVE_REMOVE_MANY_IDS_SHOWN);
+        const hiddenRemoved = removedIds.length - shownRemoved.length;
+        const overrideSummary =
+          overriddenById.size === 0
+            ? []
+            : [
+                '⚠️ override — 走行中のマネージャーの退避だったが理由付きで消した: ' +
+                  [...overriddenById.entries()]
+                    .map(
+                      ([id, info]) =>
+                        `${id}（マネージャー ${info.managerId}、理由「${info.reason}」）`,
+                    )
+                    .join(' / '),
+              ];
+        return text(
+          [
+            `**${removedIds.length} 件の本文を tombstone した**（理由: ${summary}）。` +
+              '行そのものは残っている（list には引き続き出る）。',
+            funnel,
+            `絞り込み: ${filterText}`,
+            skippedLine,
+            remainingLine,
+            `消したバイト数（直前の合計）: ${removedBytes.toLocaleString('ja-JP')}`,
+            `消した id（先頭 ${shownRemoved.length} 件）: ${shownRemoved.join(', ')}${
+              hiddenRemoved > 0
+                ? ` …ほか ${hiddenRemoved} 件は省略（**全 id は日誌に ${chunks.length} 件に分けて残してある**）`
+                : ''
+            }`,
+            ...(raced === 0
+              ? []
+              : [
+                  `⚠ 対象 ${targeted} 件のうち ${raced} 件は消せなかった` +
+                    '（この呼びの最中に他の経路が先に消した）。',
+                ]),
+            ...overrideSummary,
+          ].join('\n'),
         );
       },
     ),
