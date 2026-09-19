@@ -191,6 +191,17 @@ x-shared-env: &shared-env
   # 差し替える。**未設定なら既定を使う**——読むのは `env[WITHHELD_REPORT_FLUSH_MS_ENV_KEY]`
   # で、空・空白は数値として読めずに既定へ倒れる（`resolveWithheldReportFlushMs` の doc）。
   ALTEROID_WITHHELD_REPORT_FLUSH_MS: ${ALTEROID_WITHHELD_REPORT_FLUSH_MS:-}
+  # 退避済み生ログの古い写しを自動で畳む周期（分）。issue #698。**未設定なら
+  # 既定を使う**（`apps/daemon/src/archive-folder.ts` の
+  # `DEFAULT_ARCHIVE_FOLD_EVERY_MINUTES`）——空・空白は分数として読めずに
+  # 既定へ倒れる（`readArchiveFoldConfig` の doc）。`off` 系の綴りで止められる
+  # （`ALTEROID_INITIATIVE_EVERY` と同じ形の OFF 集合）。
+  # ⚠️ **この変数は DB 正本の環境変数の袋（`alteroid credential set` で
+  # 走行中に直せる仕組み）には乗せていない**——`ALTEROID_MEMORY_TIDY_AT` 等と
+  # 違い `packages/core/src/env-vars-boot.ts` の `APP_ENV_VAR_DEFAULTS` には
+  # 加えておらず、直すには器を焼き直す必要がある（issue #698 の実装時点の
+  # 判断。理由は PR 本文）。
+  ALTEROID_ARCHIVE_FOLD_EVERY: ${ALTEROID_ARCHIVE_FOLD_EVERY:-}
   TZ: ${TZ:-Asia/Tokyo}
   # 入口の認証（誰がこの HTTP API を叩いてよいか）。**人間が置くのはここ1か所**で、
   # **走っている runner には残らない** — `docker/alteroid-runner` が `exec` の前に
