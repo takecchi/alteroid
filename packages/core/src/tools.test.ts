@@ -16503,6 +16503,213 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
 });
 
 /**
+ * #1230: **`memory_section_move` の半完了からのやり直しを冪等にする。**
+ *
+ * Issue が測れと言っているのは「重複した文書を置いたら断る」（それは既に
+ * `lookupMemorySection` の `ambiguous` の歯が測っている）ではなく、**「半完了
+ * → やり直し → 状態」を通しで測ること**である。だからここでは同じ
+ * `memory_section_move` 呼び出しを、`journal.append` が最初の1回だけ落ちる
+ * 模擬ストアへ**2回**投げ、1回目で生まれる半完了（移し先への追記だけが済み、
+ * 出どころの切り取りが止まった状態）を、2回目（同じ引数でのやり直し）が
+ * 「移し先に重複を増やさずに」決着させることを確かめる。
+ *
+ * **`journal.append` は「最初の1回だけ」失敗させる。** 実際の窓（#1229）は
+ * 断続的で、いつ塞がるか呼び手には分からない——2回目の呼び出しの時点では
+ * 窓が閉じている、という状況を模している。
+ */
+describe('#1230 memory_section_move: 半完了 → やり直し → 状態（通しの歯）', () => {
+  /** 上の describe の同名関数と同じもの（複製）。既存側は1文字も変えない。 */
+  async function callExpectingError(
+    tools: ReturnType<typeof createCloneTools>,
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<{ isError: boolean; text: string }> {
+    const found = tools.find((entry) => entry.name === name);
+    if (!found) throw new Error(`ツール ${name} が無い`);
+    try {
+      const result = await found.handler(args as never, {});
+      const text = (result.content ?? [])
+        .map((block) => (block.type === 'text' ? block.text : ''))
+        .join('');
+      return { isError: result.isError === true, text };
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error);
+      return { isError: true, text };
+    }
+  }
+
+  /** 上の describe の同名関数と同じもの（複製）。既存側は1文字も変えない。 */
+  function firstSectionId(outline: string): string {
+    const match = /^\s*\[([0-9a-f]{8}-[0-9a-f]{8})\]/m.exec(outline);
+    if (match === null) throw new Error(`節idが目次に無い:\n${outline}`);
+    return match[1] as string;
+  }
+
+  /**
+   * 目次から、見出しの文字列で指定した節idを拾う（上の「⭐ memory_section_move
+   * は、移動元・移動先の両方ぶんの合計を1つの数で返す」歯と同じ手口）。
+   *
+   * `firstSectionId`（配列の最初の1件）ではなく見出しで狙い撃つ理由:
+   * `scanMemorySections` は LIFO の閉じ順で並ぶ（`memory.ts` の
+   * `scanMemorySections` の doc）ので、入れ子のある文書（`# 表紙` の下に
+   * `## 節A` / `## 節B` を持つ）では「表紙」自身も1つの節として数えられ、
+   * 最初の1件が子（節A）とは限らない。ここは複数節をまとめて渡す歯なので、
+   * 狙った見出しをそれぞれ名指しで取る。
+   */
+  function sectionIdFor(outline: string, heading: string): string {
+    const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const match = new RegExp(`\\[([0-9a-f]{8}-[0-9a-f]{8})\\] ${escaped} — `).exec(outline);
+    if (match === null) throw new Error(`見出し「${heading}」の節idが目次に無い:\n${outline}`);
+    return match[1] as string;
+  }
+
+  /**
+   * `journal.append` を、**最初の1回だけ**失敗させる（2回目以降は本物へ委ねる）。
+   *
+   * `failingJournalAppendAtCall`（隣の describe。N回目「だけ」を落とす汎用版）
+   * とは別に、この describe に閉じてもう1本用意する——依頼者の指示
+   * （「この describe の中に閉じて定義する」）に倣い、共有へは昇格させない。
+   */
+  function journalAppendFailsOnce(stores: Stores, reason: string): Stores {
+    let calls = 0;
+    return {
+      ...stores,
+      journal: {
+        ...stores.journal,
+        append: (entry) => {
+          calls += 1;
+          if (calls === 1) return Promise.reject(new Error(reason));
+          return stores.journal.append(entry);
+        },
+      },
+    };
+  }
+
+  it('半完了 → 同じ呼び出しをやり直す → 移し先に重複が増えない・出どころから切れている（journal.append が1回だけ落ちる）', async () => {
+    clearRecentTracesForTesting();
+    const stores = journalAppendFailsOnce(createMemoryStores(), 'boom-1230-once');
+    await stores.persona.write(
+      'from-doc-1230',
+      '# 表紙\n\n芯\n\n## 節A\n\n節Aの本文\n\n## 節B\n\n節Bの本文\n',
+    );
+    const tools = createCloneTools({
+      stores,
+      emit: () => {},
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+
+    const outline = await callExpectingError(tools, 'memory_outline', {
+      slug: 'from-doc-1230',
+    });
+    expect(outline.isError).toBe(false);
+    const sectionIds = [
+      sectionIdFor(outline.text, '## 節A'),
+      sectionIdFor(outline.text, '## 節B'),
+    ];
+
+    const args = {
+      fromSlug: 'from-doc-1230',
+      sections: sectionIds,
+      toSlug: 'to-doc-1230',
+      summary: '節A・節Bをまとめる',
+    };
+
+    // (1) 1回目: journal.append の1回目（move_in）で落ちる ⟹ 半完了。
+    const first = await callExpectingError(tools, 'memory_section_move', args);
+    expect(first.isError).toBe(true);
+    expect(first.text.split('\n')[0]).toBe('⚠⚠ 一部完了・未記録・やり直し禁止');
+    expect(first.text).toContain('重複しているが、失われてはいない');
+
+    const fromAfterFirst = await stores.persona.read('from-doc-1230');
+    const toAfterFirst = await stores.persona.read('to-doc-1230');
+    // 出どころは1文字も変わっていない——切り取りより前に落ちている。
+    expect(fromAfterFirst?.content).toContain('## 節A');
+    expect(fromAfterFirst?.content).toContain('## 節B');
+    // 移し先には追記済み——ここで「重複しているが失われていない」が実体を持つ。
+    expect(toAfterFirst?.content).toContain('## 節A');
+    expect(toAfterFirst?.content).toContain('## 節B');
+    // journal.append 自体が例外を投げたので、本物のストアには何も残っていない。
+    expect(await stores.journal.list({})).toHaveLength(0);
+
+    // (2) 2回目: 同じ呼び出しをそのままやり直す。journal.append はもう落ちない
+    // （最初の1回だけ落ちる模擬ストアなので、2回目の呼び出し全体は通る）。
+    const second = await callExpectingError(tools, 'memory_section_move', args);
+    expect(second.isError).toBe(false);
+
+    // ⭐ 黙って握らない: 応答本文が「追記しなかった」ことを名乗っている。
+    expect(second.text).toContain('既に在ったため、追記していない');
+
+    // (3) 状態: 移し先に重複が増えていない・出どころから切れている。
+    const fromAfterSecond = await stores.persona.read('from-doc-1230');
+    const toAfterSecond = await stores.persona.read('to-doc-1230');
+    expect(fromAfterSecond).not.toBeNull();
+    expect(toAfterSecond).not.toBeNull();
+
+    // 出どころから切れている——節A・節Bの見出しはもう出てこない。
+    expect(fromAfterSecond?.content).not.toContain('## 節A');
+    expect(fromAfterSecond?.content).not.toContain('## 節B');
+
+    // 移し先に重複が無い——`scanMemorySections` の節idの集合で見る（文字列の
+    // 出現回数ではなく、この Issue が壊れると言っている性質そのもので測る）。
+    const destSections = scanMemorySections(toAfterSecond?.content ?? '').sections;
+    const destIds = destSections.map((section) => section.id);
+    expect(destIds).toHaveLength(new Set(destIds).size); // id が全部ユニーク
+    expect(destSections.filter((section) => section.heading === '## 節A')).toHaveLength(1);
+    expect(destSections.filter((section) => section.heading === '## 節B')).toHaveLength(1);
+
+    // 日誌: move_in は出ていない（今回は何も追記していない）。move_out が
+    // ちょうど1件——「全部が既に移し先に在る場合でも出どころの切り取りは
+    // 走る」がここで実際に確かめられている。summary にも名乗りが乗る。
+    const all = await stores.journal.list({});
+    expect(all).toHaveLength(1);
+    expect(all[0]).toMatchObject({ type: 'memory_update', action: 'move_out' });
+    expect((all[0] as { summary: string }).summary).toContain('既に');
+  });
+
+  it('半完了 → やり直しを繰り返しても、3回目以降も重複が増えない（一度決着した後は通常どおり）', async () => {
+    const stores = journalAppendFailsOnce(createMemoryStores(), 'boom-1230-repeat');
+    await stores.persona.write('from-doc-1230b', '# 表紙\n\n芯\n\n## 節C\n\n節Cの本文\n');
+    const tools = createCloneTools({
+      stores,
+      emit: () => {},
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+
+    const outline = await callExpectingError(tools, 'memory_outline', {
+      slug: 'from-doc-1230b',
+    });
+    const sectionId = firstSectionId(outline.text);
+    const args = {
+      fromSlug: 'from-doc-1230b',
+      sections: [sectionId],
+      toSlug: 'to-doc-1230b',
+      summary: '節Cを移す',
+    };
+
+    await callExpectingError(tools, 'memory_section_move', args); // 半完了
+    const settled = await callExpectingError(tools, 'memory_section_move', args); // 決着
+    expect(settled.isError).toBe(false);
+
+    // 決着後、出どころには節Cを指す節idがもう存在しない——同じ id・同じ引数で
+    // もう一度呼ぶと「その id は無い」（absent）で断られる。**「曖昧」（ambiguous）
+    // ではない**——これが「曖昧の連鎖に落ちない」の実体である。この断りは
+    // 例外ではなく通常の応答なので isError は false のままである（他の
+    // memory_section_move の断りと同じ形。上の「journal.append が例外を
+    // 投げたとき」の各 it とは違う経路）。
+    const third = await callExpectingError(tools, 'memory_section_move', args);
+    expect(third.isError).toBe(false);
+    expect(third.text).toContain('の節は無い');
+    expect(third.text).not.toContain('曖昧');
+
+    const toContent = (await stores.persona.read('to-doc-1230b'))?.content ?? '';
+    const destSections = scanMemorySections(toContent).sections;
+    expect(destSections.filter((section) => section.heading === '## 節C')).toHaveLength(1);
+  });
+});
+
+/**
  * ⭐⭐ **説明文が実装のふるまいを数え直している箇所を、ふるまいの側から留める。**
  *
  * ## なぜ表駆動の歯（`tool-description-enumeration.test.ts`）と別に要るのか

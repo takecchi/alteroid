@@ -4199,35 +4199,110 @@ export function createCloneTools(context: ToolContext) {
           stores.persona.read(toSlug),
           stores.persona.documents(),
         ]);
-        const toWritten = await stores.persona.append(toSlug, cut);
-        await appendJournalOrThrow(
-          'memory_section_move',
-          stores.journal,
-          {
-            type: 'memory_update',
-            slug: toSlug,
-            cause,
-            action: 'move_in',
-            bytesBefore: toBefore === null ? 0 : Buffer.byteLength(toBefore.content, 'utf8'),
-            bytesAfter: Buffer.byteLength(toWritten.content, 'utf8'),
-            summary,
-          },
-          'act-partially-completed',
+
+        /**
+         * **移動を冪等にする（#1230）。**
+         *
+         * 半完了（移し先への追記だけが済み、出どころの切り取りが日誌の失敗で
+         * 止まった状態）から同じ呼び出しをそのままやり直すと、素直に作れば
+         * 移し先に同じ節がもう1つ増える。増えた時点で `lookupMemorySection`
+         * の `ambiguous` が成立し、その節id は二度と `memory_section_move`
+         * で指せなくなる（Issue の中身そのもの）。
+         *
+         * だから、移し先（`toBefore`）に**同じ節idの節が既に在る**ものは、
+         * 追記の対象から外す。**判定は節idの一致だけで足りる**——
+         * `memorySectionId` は見出しと中身のハッシュの連結で、位置
+         * （オフセット）を持たない（`memory.ts` の `memorySectionId` の
+         * doc）。だから同じ見出し・同じ中身の節は、それがどこに在っても
+         * 必ず同じ id になり、見出し＋本文を別途比べ直す必要が無い。
+         *
+         * **「消失より重複」という一次判断は変えない。** 出どころの切り取りは
+         * これまでどおり移し先への書き込みの後に行う。変えるのは「移し先へ
+         * 何を足すか」だけで、「どちらを先に書くか」の順序には触れない。
+         */
+        const destIds = new Set(
+          toBefore === null ? [] : scanMemorySections(toBefore.content).sections.map((s) => s.id),
         );
+        const toAppend = ordered.filter((section) => !destIds.has(section.id));
+        const alreadyAtDestination = ordered.filter((section) => destIds.has(section.id));
+
+        let toWritten: Awaited<ReturnType<Stores['persona']['append']>>;
+        let appendedChars = 0;
+        if (toAppend.length > 0) {
+          const appendText = toAppend
+            .map((section) => existing.content.slice(section.start, section.end))
+            .join('');
+          appendedChars = appendText.length;
+          toWritten = await stores.persona.append(toSlug, appendText);
+          await appendJournalOrThrow(
+            'memory_section_move',
+            stores.journal,
+            {
+              type: 'memory_update',
+              slug: toSlug,
+              cause,
+              action: 'move_in',
+              bytesBefore: toBefore === null ? 0 : Buffer.byteLength(toBefore.content, 'utf8'),
+              bytesAfter: Buffer.byteLength(toWritten.content, 'utf8'),
+              summary:
+                alreadyAtDestination.length > 0
+                  ? `${summary}（${alreadyAtDestination.length} 節は ${toSlug} に既に在ったため追記しなかった）`
+                  : summary,
+            },
+            'act-partially-completed',
+          );
+        } else {
+          // **全節が既に移し先に在る（冪等な再実行）。** ここに来るのは
+          // `destIds` が空でないとき、つまり `toBefore` が存在するときだけ
+          // ——`toBefore` が null なら `destIds` は空集合で、`ordered` の
+          // どの節も `toAppend` から漏れない（この分岐には来ない）。
+          if (toBefore === null) {
+            throw new Error(
+              '到達しないはずの分岐: toBefore が無いのに toAppend が0件になった' +
+                '（#1230 の冪等化ロジックの前提が崩れている）。',
+            );
+          }
+          // **追記そのものを行わない。** 空文字列を `persona.append` に渡すと
+          // fs/pg どちらの実装も無条件に書き込みを起こす（末尾に空行が
+          // 増える・`updatedAt` が進む）——「何もしていない」を実際に
+          // 何もしない形にする。だから move_in の日誌エントリも出さない
+          // （書いていない書き込みを「一部完了」として名乗る理由が無い）。
+          // ⟹ 「既に在ったので足さなかった」ことは、この後の move_out の
+          // summary と、応答本文の両方で名乗る（黙って握らない。AGENTS.md
+          // 「報告の形」）。
+          toWritten = toBefore;
+        }
 
         let fromWritten;
         try {
           fromWritten = await stores.persona.write(fromSlug, nextContent);
         } catch (error) {
-          // **ここで嘘をつかない。** 「移した」と返すと、呼び手は重複に
-          // 気づけない。落ちたのは2手目なので、1手目（移し先への追記）は
-          // 済んでいる＝**同じ節が両方に在る。何も失われていない。**
+          const reason = error instanceof Error ? error.message : String(error);
+          if (toAppend.length > 0) {
+            // **ここで嘘をつかない。** 「移した」と返すと、呼び手は重複に
+            // 気づけない。落ちたのは2手目なので、1手目（移し先への追記）は
+            // 済んでいる＝**同じ節が両方に在る。何も失われていない。**
+            const dedupNote =
+              alreadyAtDestination.length > 0
+                ? ` このうち ${alreadyAtDestination.length} 節は ${toSlug} に既に在ったため、今回は追記していない（重複は増えていない）。`
+                : '';
+            return text(
+              `⚠ ${toAppend.length} 節（合計 ${appendedChars.toLocaleString('en-US')} 文字）を ${toSlug} の末尾へ足すところまでは済んだが、` +
+                `${fromSlug} からの切り取りに失敗した（${reason}）。` +
+                `いま同じ ${toAppend.length} 節が ${fromSlug} と ${toSlug} の両方に在る——**重複しているが、失われてはいない。**` +
+                `${dedupNote}` +
+                `${fromSlug} 側は1文字も変わっていない。memory_outline で ${fromSlug} を読み直し、` +
+                '同じ操作をやり直すか、重複したままにするかを決めること。',
+            );
+          }
+          // **全節が既に移し先に在り、今回は何も追記していない。** それでも
+          // 出どころの切り取りには失敗した——前回までに生まれた重複は
+          // そのまま残るが、今回の呼び出しで新しく増えたものは無い。
           return text(
-            `⚠ ${ordered.length} 節（合計 ${cut.length.toLocaleString('en-US')} 文字）を ${toSlug} の末尾へ足すところまでは済んだが、` +
-              `${fromSlug} からの切り取りに失敗した（${error instanceof Error ? error.message : String(error)}）。` +
-              `いま同じ ${ordered.length} 節が ${fromSlug} と ${toSlug} の両方に在る——**重複しているが、失われてはいない。**` +
-              `${fromSlug} 側は1文字も変わっていない。memory_outline で ${fromSlug} を読み直し、` +
-              '同じ操作をやり直すか、重複したままにするかを決めること。',
+            `${ordered.length} 節は ${toSlug} に既に同じ節id の節が在ったため、今回は何も追記していない。` +
+              `そのうえで ${fromSlug} からの切り取りを試みたが失敗した（${reason}）。` +
+              `${fromSlug} 側は1文字も変わっていない。重複は増えていない——前回までの重複があるなら、それがそのまま残っている状態である。` +
+              `memory_outline で ${fromSlug} と ${toSlug} を読み直してから、同じ操作をやり直すこと。`,
           );
         }
         await appendJournalOrThrow(
@@ -4240,7 +4315,10 @@ export function createCloneTools(context: ToolContext) {
             action: 'move_out',
             bytesBefore: Buffer.byteLength(existing.content, 'utf8'),
             bytesAfter: Buffer.byteLength(fromWritten.content, 'utf8'),
-            summary,
+            summary:
+              toAppend.length === 0 && alreadyAtDestination.length > 0
+                ? `${summary}（${alreadyAtDestination.length} 節は ${toSlug} に既に在ったため追記しなかった。切り取りのみ行った）`
+                : summary,
           },
           'act-completed',
         );
@@ -4302,11 +4380,27 @@ export function createCloneTools(context: ToolContext) {
           },
         );
 
+        // **黙って握らない（#1230）。** 移し先に既に同じ節id の節が在ったので
+        // 追記しなかった分は、応答の本文でも名乗る——冪等にした結果が
+        // 「何も起きなかったように見える」だけの応答になると、この Issue が
+        // 嫌っている静かさと同じ形になる。
+        const idempotentNote =
+          alreadyAtDestination.length > 0
+            ? [
+                '',
+                `⭐ このうち ${alreadyAtDestination.length} 節は ${toSlug} に同じ節id の節が既に在ったため、追記していない` +
+                  `（今回 ${toSlug} へ新しく足したのは ${toAppend.length} 節）。重複は増えていない——` +
+                  '半完了から同じ呼び出しをやり直しても、移し先の節は増えない。' +
+                  `どの節が既に在ったかは memory_outline slug=${toSlug} で確かめられる。`,
+              ]
+            : [];
+
         return text(
           [
             `記憶 ${fromSlug} から ${ordered.length} 節（合計 ${cut.length.toLocaleString('en-US')} 文字）を ${toSlug} の末尾へ移した。`,
             '',
             listing,
+            ...idempotentNote,
             '',
             `移した先 ${toSlug}:`,
             describeMemoryWriteDiff(toBefore === null ? null : toBefore.content, toWritten.content),
