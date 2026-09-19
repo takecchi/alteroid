@@ -67,6 +67,16 @@
  * 変えていない**——`main()` は `import.meta.url` が直接起動されたときの
  * エントリポイントと一致するときだけ呼ぶ（`node:url` の `pathToFileURL` で
  * 比較する。import されただけでは走らない）。
+ *
+ * ## 追記: `events` という任意の絞り口を足した（自己参照バグの修正）
+ *
+ * `record-release-prod-ci.mjs` が `judgeSha` をそのまま呼ぶと、自分自身が
+ * 走っている `release-prod.yml` の run が判定対象に混ざり、構造的に
+ * `pending` を返し続ける欠陥があった。塞ぐには「どの run を含めるか」を
+ * 絞る口が要るが、**CLI（`main()`）や他の既存の呼び出し元の挙動は変えたく
+ * ない**。⟹ `judgeSha({ sha, repo, events })` に任意の第3引数 `events` を
+ * 足し、渡さなければ（`undefined`）これまでどおり絞らない。`events` の
+ * 中身と絞る理由は `check-pr-green-core.mjs` の `filterRunsByEvent` を見よ。
  */
 
 import { execFileSync } from 'node:child_process';
@@ -75,6 +85,7 @@ import { pathToFileURL } from 'node:url';
 
 import {
   evaluatePrGreen,
+  filterRunsByEvent,
   formatVerdict,
   pickLatestRunPerWorkflow,
 } from './check-pr-green-core.mjs';
@@ -126,7 +137,18 @@ function ghApiJson(path) {
  * `error`（人が読める文字列）を返す。呼び出し側（`main()` と
  * `record-release-prod-ci.mjs`）はここから先を自分の出力形式へ整形する。
  *
- * @param {{ sha: string, repo: string }} input
+ * ## `events`（任意。Issue #1207 の (3) の自己参照バグ対策）
+ *
+ * `head_sha` だけで引くと、その sha を名乗るあらゆる event の run
+ * （`push` / `schedule` / `workflow_dispatch` / `workflow_run` …）が
+ * 一緒に返る。**既定（`events` を渡さない）ではこれまでどおり絞らない**
+ * ——CLI（`main()`）を含む既存の呼び出し元の挙動は1ミリも変えない。
+ * `events` に配列（例: `['push']`）を渡した呼び出し元だけ、対応する
+ * event の run だけを判定に含める。絞り込みの理由と、なぜ
+ * `GITHUB_RUN_ID` で自分1本だけを除く案では足りないかは
+ * `check-pr-green-core.mjs` の `filterRunsByEvent` の doc を見よ。
+ *
+ * @param {{ sha: string, repo: string, events?: string[] }} input
  * @returns {{
  *   result: import('./check-pr-green-core.mjs').EvaluatePrGreenResult | null,
  *   latestRuns: object[],
@@ -134,7 +156,7 @@ function ghApiJson(path) {
  *   error: string | null,
  * }}
  */
-export function judgeSha({ sha, repo }) {
+export function judgeSha({ sha, repo, events }) {
   const runsPath = `repos/${repo}/actions/runs?head_sha=${sha}&per_page=100`;
   const { data: runsData, error: runsError } = ghApiJson(runsPath);
   if (runsData === null) {
@@ -147,7 +169,8 @@ export function judgeSha({ sha, repo }) {
   }
 
   const runs = Array.isArray(runsData.workflow_runs) ? runsData.workflow_runs : [];
-  const latestRuns = pickLatestRunPerWorkflow(runs);
+  const scopedRuns = filterRunsByEvent(runs, events);
+  const latestRuns = pickLatestRunPerWorkflow(scopedRuns);
 
   const jobsByRunId = {};
   for (const run of latestRuns) {

@@ -7,9 +7,25 @@
  * 作らずに記録だけにしたのか、`out-of-scope` がなぜ「異常なし」なのか、
  * 赤のときのコメントがなぜ警報 Issue の鍵を再利用するのかは、あちらの doc に
  * 書いてある。**CI が本当に緑かの判定ロジックも自分では持たない**——
- * `scripts/check-pr-green.mjs` の `judgeSha` をそのまま呼ぶ。ここはネット
- * ワーク（`git` / `gh`）を持ち、結果を出力し、赤の晩だけ Issue へ書く、という
- * 薄い層である。
+ * `scripts/check-pr-green.mjs` の `judgeSha` を呼ぶ（**`events: ['push']` を
+ * 渡す**——理由は下の「なぜ `events: ['push']` を渡すか」。判定そのものは
+ * 一切書き換えない）。ここはネットワーク（`git` / `gh`）を持ち、結果を出力し、
+ * 赤の晩だけ Issue へ書く、という薄い層である。
+ *
+ * ## なぜ `events: ['push']` を渡すか（自己参照バグの修正。Issue #1207 の (3)）
+ *
+ * 絞らずに `judgeSha({ sha: prodSha, repo })` を呼ぶと、**この記録 step
+ * 自身が走っている `release-prod.yml` の run**（schedule/workflow_dispatch。
+ * `head_sha` はそのとき指している `main` の先端を名乗る）が判定対象に
+ * 混ざり、その run はまだ `in_progress`——`evaluatePrGreen` は未完了の run
+ * が1本でもあれば `pending` を返すので、**毎晩100%、実行するたびに
+ * 自分自身を理由に `pending` を返し続けていた。** `verdict !== 'red'` の
+ * 分岐が一度も通らず、候補Bの2本の柱（毎晩の記録・赤の晩の警報）が両方とも
+ * 機能していなかった。詳しい実測と、なぜ `GITHUB_RUN_ID` で自分1本だけを
+ * 除く案では足りないかは `scripts/check-pr-green-core.mjs` の
+ * `filterRunsByEvent` の doc を見よ。**この絞り込みは `judgeSha` の第3引数
+ * `events` を渡した呼び出し元だけに効き、`scripts/check-pr-green.mjs` の
+ * CLI 側の挙動は1ミリも変えていない。**
  *
  * ## ⛔ この道具は門ではない——`process.exitCode` をどの経路でも立てない
  *
@@ -330,7 +346,14 @@ function main() {
   }
   const prodSha = prodShaInput;
 
-  const judged = judgeSha({ sha: prodSha, repo });
+  // `events: ['push']` — この呼び出し元（release-prod.yml の記録 step）自身が
+  // 走っている `release-prod.yml`（schedule/workflow_dispatch）の run が
+  // 同じ head_sha で判定対象に混ざり、構造的に pending を返し続ける自己参照
+  // バグの修正（Issue #1207 の (3)）。絞る理由と、なぜ GITHUB_RUN_ID で
+  // 自分1本だけを除く案では足りないかは `scripts/check-pr-green-core.mjs`
+  // の `filterRunsByEvent` の doc を見よ。**CLI 側の呼び出し（`events` を
+  // 渡さない）は1ミリも変えていない。**
+  const judged = judgeSha({ sha: prodSha, repo, events: ['push'] });
   if (judged.result === null) {
     log(`record-release-prod-ci: 判定できなかった —— ${judged.error}`);
     emitRecordLine({ verdict: 'unknown', prodSha, mainSha, reflectOutcome, observedAt });

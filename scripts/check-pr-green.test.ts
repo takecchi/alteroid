@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   evaluatePrGreen,
+  filterRunsByEvent,
   formatVerdict,
   pickLatestRunPerWorkflow,
   // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
@@ -457,5 +458,83 @@ describe('formatVerdict', () => {
     expect(formatVerdict('abc123', { verdict: 'cancelled', detail: [] })).toMatch(/中断された job/);
     expect(formatVerdict('abc123', { verdict: 'out-of-scope', detail: [] })).toMatch(/対象外/);
     expect(formatVerdict('abc123', { verdict: 'skipped', detail: [] })).toMatch(/draft/);
+  });
+});
+
+describe('filterRunsByEvent（Issue #1207 の (3) 自己参照バグの修正）', () => {
+  it('events を渡さなければ（既定）1件も落とさない —— 既存の呼び出し元の挙動を変えない', () => {
+    const runs = [
+      { id: 1, name: 'CI', event: 'push' },
+      { id: 2, name: 'release/prod へ反映', event: 'schedule' },
+      { id: 3, name: '名前無し互換', event: undefined },
+    ];
+    expect(filterRunsByEvent(runs, undefined)).toEqual(runs);
+    expect(filterRunsByEvent(runs, null)).toEqual(runs);
+  });
+
+  it('events=["push"] を渡すと、push 以外（schedule / workflow_dispatch / workflow_run）を落とす', () => {
+    const runs = [
+      { id: 1, name: 'CI', event: 'push' },
+      { id: 2, name: 'release/prod へ反映', event: 'schedule' },
+      { id: 3, name: 'release/prod へ反映', event: 'workflow_dispatch' },
+      { id: 4, name: 'main の赤を知らせる', event: 'workflow_run' },
+    ];
+    expect(filterRunsByEvent(runs, ['push']).map((r: { id: number }) => r.id)).toEqual([1]);
+  });
+
+  it('空配列を渡すと全部落ちる（何も許可しない、という指定として扱う）', () => {
+    const runs = [{ id: 1, name: 'CI', event: 'push' }];
+    expect(filterRunsByEvent(runs, [])).toEqual([]);
+  });
+});
+
+describe('自己参照バグの再現と修正（Issue #1207 の (3)。実測固定値）', () => {
+  // 実測（2026-09-19T21:28:57Z 観測、release-prod.yml 記録 step のログ、
+  // sha fa9ec3e380fbe9dad8a3d1ad3e6c43c0639d5cb6）を写した最小構成。
+  // release-prod.yml の記録 step は main HEAD の sha を judgeSha に渡すが、
+  // その sha は「いま実行中の release-prod.yml 自身の run」も同じ head_sha
+  // で名乗っている（schedule/workflow_dispatch は「そのとき指している
+  // デフォルトブランチの先端」を head_sha に持つため）。
+  const runs = [
+    {
+      id: 35458661938,
+      name: 'CI',
+      event: 'push',
+      created_at: '2026-09-19T17:37:24Z',
+      status: 'completed',
+      conclusion: 'success',
+    },
+    {
+      // これが「実行するたびに自分自身を理由に pending を返す」原因——
+      // まさにこの記録 step を動かしている release-prod.yml 自身の run。
+      id: 35470533724,
+      name: 'release/prod へ反映',
+      event: 'schedule',
+      created_at: '2026-09-19T21:28:49Z',
+      status: 'in_progress',
+      conclusion: null,
+    },
+  ];
+  const jobsByRunId = {
+    35458661938: [
+      { name: 'ci', status: 'completed', conclusion: 'success' },
+      { name: 'image', status: 'completed', conclusion: 'success' },
+      { name: 'base-overlap', status: 'completed', conclusion: 'skipped' },
+    ],
+  };
+
+  it('絞らない（旧来の挙動）: 実行中の自分自身が latestRuns に混ざり、pending に化ける', () => {
+    const latest = pickLatestRunPerWorkflow(filterRunsByEvent(runs, undefined));
+    const result = evaluatePrGreen(latest, jobsByRunId);
+    expect(result.verdict).toBe('pending');
+    expect(result.detail.join('\n')).toContain('release/prod へ反映');
+  });
+
+  it('events=["push"] で絞る（修正後）: 自己参照が構造的に外れ、push の CI run だけで判定できる', () => {
+    const latest = pickLatestRunPerWorkflow(filterRunsByEvent(runs, ['push']));
+    const result = evaluatePrGreen(latest, jobsByRunId);
+    // push の run のみ ⟹ pull_request の run が無いので out-of-scope
+    // （base-overlap は pull_request 専用で設計どおり skip。ci/image は success）。
+    expect(result.verdict).toBe('out-of-scope');
   });
 });
