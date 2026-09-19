@@ -421,6 +421,13 @@ export const authAccounts = pgTable(
     lastLoginAt: timestamp('last_login_at', { withTimezone: true, mode: 'date' }),
     grantedAt: timestamp('granted_at', { withTimezone: true, mode: 'date' }),
     grantedBy: text('granted_by'),
+    /**
+     * **実行環境の持ち主として宣言された日時**（issue #1198）。`null` なら
+     * 誰も owner ではない。立てられるのは operator トークンだけ
+     * （`packages/storage-pg/src/auth.ts` の `setAccountOwner`、
+     * `where granted_at is not null` の条件付き UPDATE）。
+     */
+    ownerDeclaredAt: timestamp('owner_declared_at', { withTimezone: true, mode: 'date' }),
   },
   (table) => [
     uniqueIndex('auth_accounts_email_idx').on(table.email),

@@ -14,6 +14,7 @@ import type {
   AuthStore,
   GrantOutcome,
   LoginRequest,
+  OwnerOutcome,
 } from '@alteroid/core';
 import { z } from 'zod';
 
@@ -218,6 +219,33 @@ export class FsAuthStore implements AuthStore {
           accounts: file.accounts.map((it) => (it.id === accountId ? granted : it)),
         },
         result: { status: 'granted' as const, account: granted },
+      };
+    });
+  }
+
+  /**
+   * この account を「実行環境の持ち主として宣言された」状態にする、または解く。
+   * **1つの排他区間の中で**行う（issue #1198）。
+   *
+   * 不変条件「宣言 ⟹ 許可済み」はここで強制する。`declaredAt !== null` で
+   * 未許可の行を渡されたら書かずに `not_granted` を返す — `grantAccess` と
+   * 同じ排他区間の内側なので、検査と書き込みの間に許可が取り消される窓は無い。
+   * 取り消し（`declaredAt === null`）は行が在れば常に通す。
+   */
+  async setAccountOwner(accountId: string, declaredAt: string | null): Promise<OwnerOutcome> {
+    return this.#mutate<OwnerOutcome>((file): { next: AuthFile | null; result: OwnerOutcome } => {
+      const account = file.accounts.find((it) => it.id === accountId);
+      if (account === undefined) return { next: null, result: { status: 'not_found' as const } };
+      if (declaredAt !== null && account.grantedAt === null) {
+        return { next: null, result: { status: 'not_granted' as const } };
+      }
+      const updated = authAccountSchema.parse({ ...account, ownerDeclaredAt: declaredAt });
+      return {
+        next: {
+          ...file,
+          accounts: file.accounts.map((it) => (it.id === accountId ? updated : it)),
+        },
+        result: { status: 'ok' as const, account: updated },
       };
     });
   }
