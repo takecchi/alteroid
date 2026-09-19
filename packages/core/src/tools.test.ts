@@ -1173,6 +1173,7 @@ describe('クローンの道具', () => {
   describe('書く4口の応答に足す「セッション構築時点からの増分」と「premise の順位」（P3）', () => {
     const RUNTIME_BASE: CloneRuntimeFacts = {
       revision: { commit: null, short: null, source: null },
+      buildTime: { builtAt: null },
       declaredModel: 'fable',
       modelOverridden: false,
       modelEnvKey: 'ALTEROID_CLONE_MODEL',
@@ -11306,6 +11307,7 @@ describe('usage_read はアカウント全体の残りも返す（人間と同�
 describe('self_status（いま自分がどう走っているか）', () => {
   const RUNTIME: CloneRuntimeFacts = {
     revision: { commit: null, short: null, source: null },
+    buildTime: { builtAt: null },
     declaredModel: 'fable',
     modelOverridden: false,
     modelEnvKey: 'ALTEROID_CLONE_MODEL',
@@ -12719,6 +12721,7 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
 
   const LISTING_SWEEP_RUNTIME: CloneRuntimeFacts = {
     revision: { commit: null, short: null, source: null },
+    buildTime: { builtAt: null },
     declaredModel: 'fable',
     modelOverridden: false,
     modelEnvKey: 'ALTEROID_CLONE_MODEL',
@@ -16503,6 +16506,339 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
 });
 
 /**
+ * #1230: **`memory_section_move` の半完了からのやり直しを冪等にする。**
+ *
+ * Issue が測れと言っているのは「重複した文書を置いたら断る」（それは既に
+ * `lookupMemorySection` の `ambiguous` の歯が測っている）ではなく、**「半完了
+ * → やり直し → 状態」を通しで測ること**である。だからここでは同じ
+ * `memory_section_move` 呼び出しを、`journal.append` が最初の1回だけ落ちる
+ * 模擬ストアへ**2回**投げ、1回目で生まれる半完了（移し先への追記だけが済み、
+ * 出どころの切り取りが止まった状態）を、2回目（同じ引数でのやり直し）が
+ * 「移し先に重複を増やさずに」決着させることを確かめる。
+ *
+ * **`journal.append` は「最初の1回だけ」失敗させる。** 実際の窓（#1229）は
+ * 断続的で、いつ塞がるか呼び手には分からない——2回目の呼び出しの時点では
+ * 窓が閉じている、という状況を模している。
+ */
+describe('#1230 memory_section_move: 半完了 → やり直し → 状態（通しの歯）', () => {
+  /** 上の describe の同名関数と同じもの（複製）。既存側は1文字も変えない。 */
+  async function callExpectingError(
+    tools: ReturnType<typeof createCloneTools>,
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<{ isError: boolean; text: string }> {
+    const found = tools.find((entry) => entry.name === name);
+    if (!found) throw new Error(`ツール ${name} が無い`);
+    try {
+      const result = await found.handler(args as never, {});
+      const text = (result.content ?? [])
+        .map((block) => (block.type === 'text' ? block.text : ''))
+        .join('');
+      return { isError: result.isError === true, text };
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error);
+      return { isError: true, text };
+    }
+  }
+
+  /** 上の describe の同名関数と同じもの（複製）。既存側は1文字も変えない。 */
+  function firstSectionId(outline: string): string {
+    const match = /^\s*\[([0-9a-f]{8}-[0-9a-f]{8})\]/m.exec(outline);
+    if (match === null) throw new Error(`節idが目次に無い:\n${outline}`);
+    return match[1] as string;
+  }
+
+  /**
+   * 目次から、見出しの文字列で指定した節idを拾う（上の「⭐ memory_section_move
+   * は、移動元・移動先の両方ぶんの合計を1つの数で返す」歯と同じ手口）。
+   *
+   * `firstSectionId`（配列の最初の1件）ではなく見出しで狙い撃つ理由:
+   * `scanMemorySections` は LIFO の閉じ順で並ぶ（`memory.ts` の
+   * `scanMemorySections` の doc）ので、入れ子のある文書（`# 表紙` の下に
+   * `## 節A` / `## 節B` を持つ）では「表紙」自身も1つの節として数えられ、
+   * 最初の1件が子（節A）とは限らない。ここは複数節をまとめて渡す歯なので、
+   * 狙った見出しをそれぞれ名指しで取る。
+   */
+  function sectionIdFor(outline: string, heading: string): string {
+    const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const match = new RegExp(`\\[([0-9a-f]{8}-[0-9a-f]{8})\\] ${escaped} — `).exec(outline);
+    if (match === null) throw new Error(`見出し「${heading}」の節idが目次に無い:\n${outline}`);
+    return match[1] as string;
+  }
+
+  /**
+   * `journal.append` を、**最初の1回だけ**失敗させる（2回目以降は本物へ委ねる）。
+   *
+   * `failingJournalAppendAtCall`（隣の describe。N回目「だけ」を落とす汎用版）
+   * とは別に、この describe に閉じてもう1本用意する——依頼者の指示
+   * （「この describe の中に閉じて定義する」）に倣い、共有へは昇格させない。
+   */
+  function journalAppendFailsOnce(stores: Stores, reason: string): Stores {
+    let calls = 0;
+    return {
+      ...stores,
+      journal: {
+        ...stores.journal,
+        append: (entry) => {
+          calls += 1;
+          if (calls === 1) return Promise.reject(new Error(reason));
+          return stores.journal.append(entry);
+        },
+      },
+    };
+  }
+
+  it('半完了 → 同じ呼び出しをやり直す → 移し先に重複が増えない・出どころから切れている（journal.append が1回だけ落ちる）', async () => {
+    clearRecentTracesForTesting();
+    const stores = journalAppendFailsOnce(createMemoryStores(), 'boom-1230-once');
+    await stores.persona.write(
+      'from-doc-1230',
+      '# 表紙\n\n芯\n\n## 節A\n\n節Aの本文\n\n## 節B\n\n節Bの本文\n',
+    );
+    const tools = createCloneTools({
+      stores,
+      emit: () => {},
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+
+    const outline = await callExpectingError(tools, 'memory_outline', {
+      slug: 'from-doc-1230',
+    });
+    expect(outline.isError).toBe(false);
+    const sectionIds = [sectionIdFor(outline.text, '## 節A'), sectionIdFor(outline.text, '## 節B')];
+
+    const args = {
+      fromSlug: 'from-doc-1230',
+      sections: sectionIds,
+      toSlug: 'to-doc-1230',
+      summary: '節A・節Bをまとめる',
+    };
+
+    // (1) 1回目: journal.append の1回目（move_in）で落ちる ⟹ 半完了。
+    const first = await callExpectingError(tools, 'memory_section_move', args);
+    expect(first.isError).toBe(true);
+    expect(first.text.split('\n')[0]).toBe('⚠⚠ 一部完了・未記録・やり直し禁止');
+    expect(first.text).toContain('重複しているが、失われてはいない');
+
+    const fromAfterFirst = await stores.persona.read('from-doc-1230');
+    const toAfterFirst = await stores.persona.read('to-doc-1230');
+    // 出どころは1文字も変わっていない——切り取りより前に落ちている。
+    expect(fromAfterFirst?.content).toContain('## 節A');
+    expect(fromAfterFirst?.content).toContain('## 節B');
+    // 移し先には追記済み——ここで「重複しているが失われていない」が実体を持つ。
+    expect(toAfterFirst?.content).toContain('## 節A');
+    expect(toAfterFirst?.content).toContain('## 節B');
+    // journal.append 自体が例外を投げたので、本物のストアには何も残っていない。
+    expect(await stores.journal.list({})).toHaveLength(0);
+
+    // (2) 2回目: 同じ呼び出しをそのままやり直す。journal.append はもう落ちない
+    // （最初の1回だけ落ちる模擬ストアなので、2回目の呼び出し全体は通る）。
+    const second = await callExpectingError(tools, 'memory_section_move', args);
+    expect(second.isError).toBe(false);
+
+    // ⭐ 黙って握らない: 応答本文が「追記しなかった」ことを名乗っている。
+    expect(second.text).toContain('既に在ったため、追記していない');
+
+    // (3) 状態: 移し先に重複が増えていない・出どころから切れている。
+    const fromAfterSecond = await stores.persona.read('from-doc-1230');
+    const toAfterSecond = await stores.persona.read('to-doc-1230');
+    expect(fromAfterSecond).not.toBeNull();
+    expect(toAfterSecond).not.toBeNull();
+
+    // 出どころから切れている——節A・節Bの見出しはもう出てこない。
+    expect(fromAfterSecond?.content).not.toContain('## 節A');
+    expect(fromAfterSecond?.content).not.toContain('## 節B');
+
+    // 移し先に重複が無い——`scanMemorySections` の節idの集合で見る（文字列の
+    // 出現回数ではなく、この Issue が壊れると言っている性質そのもので測る）。
+    const destSections = scanMemorySections(toAfterSecond?.content ?? '').sections;
+    const destIds = destSections.map((section) => section.id);
+    expect(destIds).toHaveLength(new Set(destIds).size); // id が全部ユニーク
+    expect(destSections.filter((section) => section.heading === '## 節A')).toHaveLength(1);
+    expect(destSections.filter((section) => section.heading === '## 節B')).toHaveLength(1);
+
+    // 日誌: move_in は出ていない（今回は何も追記していない）。move_out が
+    // ちょうど1件——「全部が既に移し先に在る場合でも出どころの切り取りは
+    // 走る」がここで実際に確かめられている。summary にも名乗りが乗る。
+    const all = await stores.journal.list({});
+    expect(all).toHaveLength(1);
+    expect(all[0]).toMatchObject({ type: 'memory_update', action: 'move_out' });
+    expect((all[0] as { summary: string }).summary).toContain('既に');
+  });
+
+  it('半完了 → やり直しを繰り返しても、3回目以降も重複が増えない（一度決着した後は通常どおり）', async () => {
+    const stores = journalAppendFailsOnce(createMemoryStores(), 'boom-1230-repeat');
+    await stores.persona.write('from-doc-1230b', '# 表紙\n\n芯\n\n## 節C\n\n節Cの本文\n');
+    const tools = createCloneTools({
+      stores,
+      emit: () => {},
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+
+    const outline = await callExpectingError(tools, 'memory_outline', {
+      slug: 'from-doc-1230b',
+    });
+    const sectionId = firstSectionId(outline.text);
+    const args = {
+      fromSlug: 'from-doc-1230b',
+      sections: [sectionId],
+      toSlug: 'to-doc-1230b',
+      summary: '節Cを移す',
+    };
+
+    await callExpectingError(tools, 'memory_section_move', args); // 半完了
+    const settled = await callExpectingError(tools, 'memory_section_move', args); // 決着
+    expect(settled.isError).toBe(false);
+
+    // 決着後、出どころには節Cを指す節idがもう存在しない——同じ id・同じ引数で
+    // もう一度呼ぶと「その id は無い」（absent）で断られる。**「曖昧」（ambiguous）
+    // ではない**——これが「曖昧の連鎖に落ちない」の実体である。この断りは
+    // 例外ではなく通常の応答なので isError は false のままである（他の
+    // memory_section_move の断りと同じ形。上の「journal.append が例外を
+    // 投げたとき」の各 it とは違う経路）。
+    const third = await callExpectingError(tools, 'memory_section_move', args);
+    expect(third.isError).toBe(false);
+    expect(third.text).toContain('の節は無い');
+    expect(third.text).not.toContain('曖昧');
+
+    const toContent = (await stores.persona.read('to-doc-1230b'))?.content ?? '';
+    const destSections = scanMemorySections(toContent).sections;
+    expect(destSections.filter((section) => section.heading === '## 節C')).toHaveLength(1);
+  });
+});
+
+/**
+ * `ask_human` の `stores.jobs.putApproval` が失敗したとき（Issue #1229
+ * 受け入れ基準2・3）。
+ *
+ * **`journal.append` の穴（直上の describe）と対だが、別の穴だった。**
+ * `putApproval` の呼び出しは try の外に在り、投げると (1) 承認待ちキューに
+ * 1行も残らない (2) `noteDroppedRecord` を経由しないので stderr にも跡が
+ * 1つも残らない (3) 道具の応答は `isError: true` ＋生のクエリ文言だけ、
+ * という3つの穴が同時に開いていた——`journal.append` の穴と違って、
+ * **(2) は `appendJournalOrThrow` のような経由点自体が無かった**分、
+ * さらに深い。
+ *
+ * ⭐ **受け入れ基準3が逐語で言う「歯は落ちた理由が伝わることを測ること。
+ * 例外が投げられた、ではない」を、`ask_human` の実際の道具ハンドラを通して
+ * 測る。** `error-cause.test.ts` は `collapseErrorCause` 単体の契約を測って
+ * いるが、ここで測るのは「`ask_human` が実際にこの関数を使っているか」
+ * ——配線側の歯である。
+ */
+describe('ask_human の putApproval が失敗したとき（跡が消えない・SQLSTATE が両方に出る）', () => {
+  /** 上の describe の `callExpectingError` と同じもの（複製。理由も同じ）。 */
+  async function callExpectingError(
+    tools: ReturnType<typeof createCloneTools>,
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<{ isError: boolean; text: string }> {
+    const found = tools.find((entry) => entry.name === name);
+    if (!found) throw new Error(`ツール ${name} が無い`);
+    try {
+      const result = await found.handler(args as never, {});
+      const text = (result.content ?? [])
+        .map((block) => (block.type === 'text' ? block.text : ''))
+        .join('');
+      return { isError: result.isError === true, text };
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error);
+      return { isError: true, text };
+    }
+  }
+
+  /**
+   * `drizzle-orm@0.45.2` の `DrizzleQueryError` が node-postgres の
+   * `DatabaseError` を `.cause` に持つ、という実際の形を模す
+   * （`error-cause.test.ts` の同名の道具と同じ考え方。ファイルをまたいで
+   * 共有せず複製する——`journalEntryShape` 系のテスト用複製と同じ判断）。
+   */
+  function fakePgInsertError(): Error {
+    const pgError = new Error('duplicate key value violates unique constraint "approvals_pkey"');
+    Object.assign(pgError, { code: '23505', constraint: 'approvals_pkey', table: 'approvals' });
+    const drizzleError = new Error(
+      'Failed query: insert into "approvals" ("id", "created_at", "answered_at", ' +
+        '"withdrawn_at", "approval") values ($1, $2, $3, $4, $5)\n' +
+        'params: SECRET-QUESTION-VALUE-CANARY',
+    );
+    drizzleError.name = 'DrizzleQueryError';
+    (drizzleError as { cause?: unknown }).cause = pgError;
+    return drizzleError;
+  }
+
+  function storesWithFailingPutApproval(error: unknown): Stores {
+    const base = createMemoryStores();
+    return {
+      ...base,
+      jobs: {
+        ...base.jobs,
+        putApproval: () => Promise.reject(error),
+      },
+    };
+  }
+
+  it('⭐ SQLSTATE が本文にも stderr の跡にも出る。生の SQL・束縛パラメータ・質問本文は出ない', async () => {
+    clearRecentTracesForTesting();
+    const CANARY = 'CANARY-QUESTION-本文は出てはいけない';
+    const stores = storesWithFailingPutApproval(fakePgInsertError());
+    const tools = createCloneTools({
+      stores,
+      emit: () => {},
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+
+    let result: { isError: boolean; text: string } | undefined;
+    const stderrLines = await captureStderr(async () => {
+      result = await callExpectingError(tools, 'ask_human', { question: CANARY });
+    });
+
+    if (result === undefined) throw new Error('呼び出しが完了していない');
+    expect(result.isError).toBe(true);
+    // クローンへ返る本文——SQLSTATE と構造化フィールドが出る。
+    expect(result.text).toContain('code=23505');
+    expect(result.text).toContain('constraint=approvals_pkey');
+    expect(result.text).toContain('table=approvals');
+    // **束縛パラメータ（行の値そのもの）・質問本文は出ない。** SQL 文
+    // そのもの（列名・placeholder。`Failed query: insert into …`）は
+    // スキーマの形であって値ではないので、1行目としてそのまま残る
+    // （`dropped-record.test.ts` の「理由は1行目だけ・200字で切る」歯と
+    // 同じ契約——`collapseErrorCause` が切るのは2行目以降だけである）。
+    expect(result.text).not.toContain('SECRET-QUESTION-VALUE-CANARY');
+    expect(result.text).not.toContain(CANARY);
+
+    // stderr 側にも同じ理由（SQLSTATE）が残る。
+    const stderrJoined = stderrLines.join('\n');
+    expect(stderrJoined).toContain('code=23505');
+    expect(stderrJoined).not.toContain('SECRET-QUESTION-VALUE-CANARY');
+    expect(stderrJoined).not.toContain(CANARY);
+
+    // 承認待ちキューには1行も残っていない（副作用ゼロ）。
+    expect(await stores.jobs.listApprovals()).toHaveLength(0);
+    // self_dropped の帳面にも跡が実在する（(2) の穴が埋まっていることの直接証拠）。
+    const traces = recentDroppedTraces();
+    expect(traces.some((line) => line.includes('承認待ちを記録できませんでした'))).toBe(true);
+  });
+
+  it('先頭行だけで「未記録・確認は届いていない・やり直してよい」と分かる。isError のまま', async () => {
+    const stores = storesWithFailingPutApproval(new Error('boom'));
+    const tools = createCloneTools({
+      stores,
+      emit: () => {},
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+
+    const { isError, text } = await callExpectingError(tools, 'ask_human', { question: 'Q' });
+
+    expect(isError).toBe(true);
+    expect(text.split('\n')[0]).toBe('⚠⚠ 未記録・確認は人間へ届いていない・やり直してよい');
+    expect(text).toContain('やり直してよい');
+  });
+});
+
+/**
  * ⭐⭐ **説明文が実装のふるまいを数え直している箇所を、ふるまいの側から留める。**
  *
  * ## なぜ表駆動の歯（`tool-description-enumeration.test.ts`）と別に要るのか
@@ -16533,6 +16869,7 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
    */
   const RUNTIME_FOR_DESCRIPTION_TEETH: CloneRuntimeFacts = {
     revision: { commit: null, short: null, source: null },
+    buildTime: { builtAt: null },
     declaredModel: 'fable',
     modelOverridden: false,
     modelEnvKey: 'ALTEROID_CLONE_MODEL',
@@ -17609,6 +17946,32 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
         });
       },
     },
+    {
+      tool: 'archive_remove_many',
+      firstLine: ACT_COMPLETED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-18');
+        // **新しい行が古い行を前方一致で含む2行を積む**——`selectArchiveRemovalTargets`
+        // の安全弁（`isNewest`）により、古い行だけが対象になる（`archive-remove-many.test.ts`
+        // の `seedRemovableSession` と同じ組み立て）。
+        await stores.archive.archive('sess-case-18', 'AAA');
+        await stores.archive.archive('sess-case-18', 'AAABBB');
+        // `runningManagerOwning` だけを持つ最小のスタブ（この道具はそれ以外を呼ばない）。
+        const managers = { runningManagerOwning: () => undefined } as unknown as ManagerPool;
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          managers,
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
+        return callExpectingError(tools, 'archive_remove_many', {
+          sessionIds: ['sess-case-18'],
+          summary: '不要になったので消す',
+          dryRun: false,
+        });
+      },
+    },
   ];
 
   it.each(CASES)(
@@ -17625,8 +17988,8 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
 
   /**
    * ⭐⭐ 弱点の手当て: `CASES` の道具名の集合を、手で並べた一覧とではなく
-   * `SELF_JOURNALING_CLONE_TOOLS`（`archive_remove` は #698 で加わった）
-   * から導いた期待値と突き合わせる。
+   * `SELF_JOURNALING_CLONE_TOOLS`（`archive_remove` / `archive_remove_many` は
+   * どちらも #698 で加わった）から導いた期待値と突き合わせる。
    *
    * `manager_send` / `manager_stop` / `manager_appraise` を除く理由: この3本は `ManagerPool` の
    * ガード付き `#journal`（`clone.ts`）を通るので `appendJournalOrThrow` を

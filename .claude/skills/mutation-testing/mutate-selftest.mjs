@@ -46,6 +46,7 @@ export const SELFTEST_SCENARIOS = [
   'judgement-forbidden-word-boundary',
   'restore-status-comparison',
   'judgement-undelivered-gate',
+  'judgement-declaration-breadth',
   'all',
 ];
 
@@ -1881,6 +1882,151 @@ function scenarioJudgementUndeliveredGate() {
   };
 }
 
+// ── 11. 宣言の広さで判定が変わらないこと（#1137） ─────────────────────
+//
+// **測るのは向きである。** 門5 までは「宣言のうち**1本でも** `surviving` に居れば
+// `検出`」だったので、**宣言を広く書くほど「検出」になりやすい**という向きが開いて
+// いた。しかも門5 / 門6 のメッセージ自身が「`[残った]` の行をそのまま写すこと」と
+// 指示していた ⟹ 素直に従うと判定が自己成就する。
+//
+// **⚠️ 注意書きは既に在った。** #1119 が `requireDeclaredTargetTeeth` の doc と
+// `SKILL.md` へ「基準を書いておくこと（#1137）」を足していたが、**穴はそのまま
+// 残った**（takecchi の #1192 の指摘そのもの）。⟹ ここで測る。
+//
+// **走行の中身は3ケースで完全に同一**にしてある。違うのは `mustFail` に何を書いたか
+// だけで、**それが結末を変えないこと**が受け入れ条件である。
+const BREADTH_AIMED_TOOTH =
+  'packages/core/src/breadth.test.ts > breadth > 狙った歯（この走行では落ちていない）';
+const BREADTH_UNRELATED_TOOTH =
+  'packages/core/src/breadth.test.ts > breadth > 無関係な歯（この走行で落ちた）';
+
+const BREADTH_ARTIFACT_RESULT = {
+  artifactState: 'delivered',
+  buildExitCode: 0,
+  artifactFileExists: true,
+};
+
+const BREADTH_TESTS = {
+  exitCode: 1,
+  raw:
+    '⎯⎯⎯ Failed Tests 1 ⎯⎯⎯\n\n' +
+    ` FAIL  ${BREADTH_UNRELATED_TOOTH}\n\n` +
+    'Test Files  1 failed | 152 passed (153)\nTests  1 failed | 3094 passed (3095)\n',
+  filesLine: 'Test Files  1 failed | 152 passed (153)',
+  testsLine: 'Tests  1 failed | 3094 passed (3095)',
+  // **狙った歯は `passed`、落ちたのは無関係な歯だけ** —— これが Issue の合成した走行。
+  census: {
+    available: true,
+    byName: new Map([
+      [BREADTH_AIMED_TOOTH, 'passed'],
+      [BREADTH_UNRELATED_TOOTH, 'failed'],
+    ]),
+  },
+};
+
+function scenarioJudgementDeclarationBreadth() {
+  section('selftest: 11. 宣言の広さで判定が変わらない（#1137）');
+  requireNoMarker('judgement-declaration-breadth');
+
+  const cases = [
+    {
+      id: 'selftest-breadth-honest',
+      label: '狙いだけを宣言（正直な宣言）',
+      mustFail: [BREADTH_AIMED_TOOTH],
+      expectCategory: '身代わり',
+      expectThrow: false,
+    },
+    {
+      id: 'selftest-breadth-copied',
+      label: '⭐ [残った] をそのまま写した宣言（狙い + 無関係）',
+      mustFail: [BREADTH_AIMED_TOOTH, BREADTH_UNRELATED_TOOTH],
+      // **旧実装ではここが `検出` だった。**門7 は判定そのものを出さない。
+      expectCategory: null,
+      expectThrow: true,
+      expectErrorIncludes: '空振り',
+    },
+    {
+      id: 'selftest-breadth-only-red',
+      label: '落ちた歯だけを宣言（正当な形が通ることの対照）',
+      mustFail: [BREADTH_UNRELATED_TOOTH],
+      expectCategory: '検出',
+      expectThrow: false,
+    },
+  ];
+
+  const results = [];
+  for (const c of cases) {
+    let category = null;
+    let error = null;
+    try {
+      category = judge(
+        { id: c.id, mustFail: c.mustFail },
+        BREADTH_ARTIFACT_RESULT,
+        BREADTH_TESTS,
+        GATE_SCAFFOLD_CONTROL,
+      ).category;
+    } catch (err) {
+      error = err.message;
+    }
+    const threw = error !== null;
+    const throwOk = threw === c.expectThrow;
+    const messageOk =
+      c.expectThrow === true ? threw && error.includes(c.expectErrorIncludes) : true;
+    const categoryOk = category === c.expectCategory;
+    log(
+      `[${c.label}] 判定=${category ?? '(投げた)'} 期待=${c.expectCategory ?? '(投げること)'} ` +
+        `/ 投げ方=${throwOk} / 文言=${messageOk}`,
+    );
+    results.push({
+      id: c.id,
+      label: c.label,
+      mustFail: c.mustFail,
+      category,
+      expectCategory: c.expectCategory,
+      threw,
+      throwOk,
+      messageOk,
+      categoryOk,
+      error,
+    });
+  }
+
+  const bad = results.filter((r) => !r.categoryOk || !r.throwOk || !r.messageOk);
+  if (bad.length > 0) {
+    throw new HarnessError(
+      `宣言の広さで判定が変わる形が戻っている（#1137）: ${bad.length}/${results.length} 件が期待と違う。` +
+        '⟹ 「宣言を広く書くほど 検出 になりやすい」向きが開いている。' +
+        `詳細: ${JSON.stringify(bad)}`,
+    );
+  }
+
+  // **この表が「何も測っていない」形に退化していないことを、別に測る。**
+  // 3ケースとも同じ結末になったら、宣言の違いを測れていない（門7 が全部拒む／
+  // 全部通す、のどちらでも表は「揃って」しまう）。
+  const distinctOutcomes = new Set(results.map((r) => r.category ?? '(投げた)'));
+  if (distinctOutcomes.size !== 3) {
+    throw new HarnessError(
+      `3ケースの結末が ${distinctOutcomes.size} 種類しかない（期待は3種類: 身代わり / 投げた / 検出）。` +
+        '⟹ 宣言の違いを測れていない。',
+    );
+  }
+
+  const markerAfter = markerExists();
+  if (markerAfter) {
+    throw new HarnessError(
+      'このシナリオはファイルを1つも触らないはずなのに、印が生まれた。' +
+        'judge() が副作用を持つようになった疑いがある。',
+    );
+  }
+
+  return {
+    scenario: 'judgement-declaration-breadth',
+    cases: results,
+    distinctOutcomes: [...distinctOutcomes],
+    markerAfter,
+  };
+}
+
 const SCENARIO_FNS = {
   'backup-corruption': scenarioBackupCorruption,
   'weak-tooth': scenarioWeakTooth,
@@ -1893,6 +2039,7 @@ const SCENARIO_FNS = {
   'judgement-forbidden-word-boundary': scenarioJudgementForbiddenWordBoundary,
   'restore-status-comparison': scenarioRestoreStatusComparison,
   'judgement-undelivered-gate': scenarioJudgementUndeliveredGate,
+  'judgement-declaration-breadth': scenarioJudgementDeclarationBreadth,
 };
 
 export function runSelftestScenario(scenario) {

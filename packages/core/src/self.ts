@@ -22,7 +22,12 @@ import { summarizeContextCategories } from './context-usage.js';
 import { excerptLine } from './excerpt.js';
 import { CANON_DOCUMENTS, CANON_REVISION, type CanonDocument } from './generated/canon.js';
 import type { HeuristicChars } from './quantity.js';
-import { describeBuildRevision, type BuildRevision } from './revision.js';
+import {
+  describeBuildAge,
+  describeBuildRevision,
+  type BuildRevision,
+  type BuildTime,
+} from './revision.js';
 import type { JournalEntry } from './schema.js';
 
 /**
@@ -142,6 +147,21 @@ export interface CloneRuntimeFacts {
    * その値をそのまま持つ（`null` を既定値へ倒さない）。
    */
   revision: BuildRevision;
+  /**
+   * **このイメージが焼かれた時刻**（`resolveBuildTime()` の結果。#1226）。
+   *
+   * **`revision` とは別の軸である。** あちらは「どのコミットのコードか」、
+   * こちらは「そのコードがいつイメージへ焼かれたか」——コミットの時刻でも
+   * `main` から `release/prod` へ反映された時刻でもない（`write-canon.mjs` の
+   * `builtAt()` の doc）。**クローンが「自分は最新か」に気づく契機になるのは
+   * こちらである** —— #1186 は「クローンが `ahead_by: 34` の器で走っているのに
+   * 気づけなかった」実例で、リビジョン（sha）だけではクローン自身が「古いかも
+   * しれない」と判断する足がかりにならない（sha を見ても新旧は分からない）。
+   *
+   * 取れなかったときに埋めないのは `BuildTime` 側の仕事なので、ここもそのまま
+   * 持つ（`null` を既定値へ倒さない）。
+   */
+  buildTime: BuildTime;
   /** 宣言されたモデル帯（`ALTEROID_CLONE_MODEL` があればその値、無ければ既定）。 */
   declaredModel: string;
   /**
@@ -271,6 +291,7 @@ const INIT_NOT_OBSERVED = 'init 未観測';
  */
 const CLONE_RUNTIME_ITEMS = {
   revision: '自分がいま走っているコードのリビジョン',
+  buildAge: 'このイメージが焼かれた時刻とそこからの経過',
   declaredModel: '宣言されたモデル帯',
   sdkModel: 'SDK が実際に報告したモデル id',
   effort: 'effort（実効値）',
@@ -379,6 +400,37 @@ export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
     // （`tools.test.ts` が、出力の行頭の項目名と `CLONE_RUNTIME_ITEM_LABELS` を
     // 数も名前も突き合わせる）。
     `- 自分がいま走っているコードの${describeBuildRevision(facts.revision)}`,
+    // **リビジョンの行のすぐ隣に置く（#1226）。** #1186 はクローンが
+    // `ahead_by: 34` の器で走っているのに気づけなかった実例——sha だけでは
+    // 「自分は古いかもしれない」と気づく足がかりにならない。焼かれた時刻と
+    // その経過が、その契機になる。
+    //
+    // **ここも `CLONE_RUNTIME_ITEMS` を字面として使う**（`describeBuildAge` が
+    // 値だけを返すので、リビジョンの行と同じ形にできる——`revision` の行が
+    // 特殊なのは `describeBuildRevision` 自身が項目名ごと1行を返すからであって、
+    // こちらは通常の項目と同じ組み方でよい）。
+    `- ${CLONE_RUNTIME_ITEMS.buildAge}: ${describeBuildAge(facts.buildTime.builtAt)}`,
+    // **⚠️ 次の2行は `CLONE_RUNTIME_ITEMS` に無い——観測した値ではなく、仕組み
+    // そのものの説明だからである。** 行頭を `- ` にしない（`tools.test.ts` の
+    // 「行頭の項目名を CLONE_RUNTIME_ITEM_LABELS と突き合わせる」歯は
+    // `line.startsWith('- ')` で拾うので、`- ` から始めるとここが数の不一致で
+    // 落ちる）。
+    //
+    // **「これより前のものは全部入っている」とは書かない。** 反映（夜1回）と
+    // 焼き込みの間に隙間があるので、その保証はできない——言えるのは
+    // 「この時刻より後に main へ入ったものは、まだ届いていない」側だけである。
+    '  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか ' +
+      'alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いて' +
+      'いない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの' +
+      '隙間があるため）。',
+    // **数え方は渡すが、実測の数字は焼かない**（AGENTS.md「数字は腐る。腐っても
+    // 赤くならない」）。夜間反映の実際の間隔・時刻は `gh run list
+    // --workflow=release-prod.yml` で測り直すことをここでは指すだけにする。
+    `  差を数えるには \`gh api repos/takecchi/alteroid/compare/${
+      facts.revision.commit ?? '<上のリビジョン>'
+    }...main --jq .ahead_by\`（リポジトリを見るのはマネージャーの領域——デーモン` +
+      '自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list ' +
+      '--workflow=release-prod.yml` で測り直すこと）。',
     // **「既定と同じ値か」ではなく「置かれているか」を言う。** 人間が
     // \`ALTEROID_CLONE_MODEL=fable\` を明示的に置いた場合、前者では「既定のまま」と
     // 嘘になる（承認が置かれている事実が消える）。

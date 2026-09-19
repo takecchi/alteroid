@@ -10,6 +10,7 @@ import { ALWAYS_REDELIVER, CLONE_MODEL_ENV_KEY, createClone } from './clone.js';
 import { DEFAULT_PERMISSION_MODE } from './permission-mode.js';
 import { buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
 import {
+  MANAGER_AUTO_MEMORY_ENV_KEY,
   MANAGER_MODEL,
   MANAGER_MODEL_ENV_KEY,
   WORKER_AGENT_NAME,
@@ -151,6 +152,11 @@ describe('クローン本セッションへ渡す Options', () => {
     expect(options.canUseTool).toBeUndefined();
     // 初回なので resume 素材が無い（resume は null のときキーごと渡されない）。
     expect(options.resume).toBeUndefined();
+    // `settings`（auto-memory を塞ぐ口）はクローン側には無い（#1189）。
+    // `buildManagerSessionOptions` だけが持つ引数で、`buildCloneSessionOptions`
+    // は `managerAutoMemoryEnabled` を受け取らない — auto-memory が「書いた本人の
+    // 次のセッション」に届くという前提は、長寿命1本のクローンでは崩れていない。
+    expect(options.settings).toBeUndefined();
 
     await clone.stop();
   });
@@ -279,6 +285,44 @@ describe('マネージャー（runner）へ渡す Options', () => {
     // --- ⭐ 「無いこと」の固定 ---
     expect(options.tools).toBeUndefined();
     expect(options.maxTurns).toBeUndefined();
+
+    // auto-memory は既定で塞ぐ（#1189）。`autoMemoryDirectory` と違い
+    // 「Ignored if set in projectSettings」が付いていない `autoMemoryEnabled` を
+    // 「flag settings」層（`sdk.d.ts` の `Options.settings`）へ渡す。
+    expect(options.settings).toEqual({ autoMemoryEnabled: false });
+  });
+
+  it('ALTEROID_MANAGER_AUTO_MEMORY=true を置くと settings を渡さない（SDK の既定へ委ねる。#1189）', async () => {
+    const { fn, started } = fakeRunnerSdk();
+    host = createRunnerHost({
+      runnerId: 'runner-primary',
+      workspacePath: dir,
+      emit: () => undefined,
+      queryFn: fn,
+      env: { [MANAGER_AUTO_MEMORY_ENV_KEY]: 'true' },
+    });
+
+    await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const { options } = started[0] as Started;
+
+    // 塞ぐキー自体を省く（`autoMemoryEnabled: true` を明示するのではない —
+    // SDK が既定で開くのに委ねる。claude-provider.ts のコメントに理由がある）。
+    expect(options.settings).toBeUndefined();
+  });
+
+  it('ALTEROID_MANAGER_AUTO_MEMORY に true/false 以外を置くと落ちる（不正な値を黙って既定へ倒さない）', async () => {
+    const { fn } = fakeRunnerSdk();
+    host = createRunnerHost({
+      runnerId: 'runner-primary',
+      workspacePath: dir,
+      emit: () => undefined,
+      queryFn: fn,
+      env: { [MANAGER_AUTO_MEMORY_ENV_KEY]: 'yes' },
+    });
+
+    await expect(host.start({ managerId: 'mgr-1', request: '走る', cwd: dir })).rejects.toThrow(
+      MANAGER_AUTO_MEMORY_ENV_KEY,
+    );
   });
 
   it('systemPrompt.append と agents[WORKER_AGENT_NAME].prompt は、ビルダー関数の戻り値そのものである（#357 の残り1点）', async () => {
@@ -405,6 +449,9 @@ describe('クローンの蒸留サイドクエリへ渡す Options', () => {
     expect(options.hooks?.PreCompact).toBeUndefined();
     // 人間の設定と MCP 連携は本セッションと同じ形で渡す。
     expect(options.settingSources).toEqual(['user', 'project', 'local']);
+    // `buildCloneDistillOptions` も `managerAutoMemoryEnabled` を受け取らない
+    // ので `settings` は載らない（#1189。上の本セッション側と同じ理由）。
+    expect(options.settings).toBeUndefined();
 
     await clone.stop();
   });

@@ -44,6 +44,7 @@ import {
   JUDGEMENT_RANK_NOT_APPLICABLE,
 } from './digest.js';
 import {
+  approvalShape,
   describeDroppedTraceEmpty,
   describeDroppedTraceOrigin,
   describeDroppedTraceRetention,
@@ -55,6 +56,7 @@ import {
   RECENT_TRACE_LIMIT,
   recentDroppedTraces,
 } from './dropped-record.js';
+import { collapseErrorCause } from './error-cause.js';
 import { toAgentTokenView, tokenAvailabilityAt, type CooldownSource } from './token-pool.js';
 import {
   describePage,
@@ -67,6 +69,12 @@ import {
 } from './excerpt.js';
 import { classifyManagerActivity, describeReportDrift } from './manager-activity.js';
 import type { ManagerActivityInput } from './manager-activity.js';
+import {
+  ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS,
+  ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT,
+  selectArchiveRemovalTargets,
+} from './archive-prune.js';
+import type { ArchiveRemoveManyFilter } from './archive-prune.js';
 import { guardArchiveRemoval } from './manager.js';
 import type {
   ManagerDenial,
@@ -152,7 +160,7 @@ import {
 } from './self.js';
 import type { CloneRuntimeFacts } from './self.js';
 import { EXCHANGE_WITH_VALUES, UnreadableCommitmentError } from './store.js';
-import type { JournalStore, PendingInboxEvent, Stores } from './store.js';
+import type { ArchiveEntry, JournalStore, PendingInboxEvent, Stores } from './store.js';
 import {
   limitRecoveryOf,
   limitRecoveryOfAssistantError,
@@ -482,6 +490,7 @@ export const CLONE_TOOL_NAMES = [
   'manager_report',
   'manager_transcript',
   'archive_remove',
+  'archive_remove_many',
   'runner_list',
 ] as const;
 
@@ -491,7 +500,7 @@ export type CloneToolName = (typeof CLONE_TOOL_NAMES)[number];
  * `CLONE_TOOL_NAMES` の道具のうち、**ハンドラが自前で日誌へ書く側**
  * （`memory_write` は `memory_update`、`journal_write` は本文、`manager_start`
  * は台帳と `tool_use`、という形で自分の跡を残す。`archive_remove` は #698 で
- * 加わった）。
+ * 加わった。`archive_remove_many` も同じ issue の残タスクとして #698 で加わった）。
  *
  * `clone.ts` の `#journalToolUse` は、この名簿に載る道具の `tool_use` を
  * 重ねて書かない（`clone.ts`「なぜ*自前で日誌へ書く道具だけ*を除くのか」参照）。
@@ -531,6 +540,7 @@ export const SELF_JOURNALING_CLONE_TOOLS = [
   'manager_appraise',
   'manager_stop',
   'archive_remove',
+  'archive_remove_many',
 ] as const satisfies readonly CloneToolName[];
 
 /**
@@ -1403,6 +1413,19 @@ export const REMOVE_MANY_JOURNAL_ID_CHARS = 3_600;
 /** 一括削除の戻り値に並べる id の件数の上限（`CLOSE_MANY_IDS_SHOWN` と同じ理由）。 */
 const REMOVE_MANY_IDS_SHOWN = 20;
 /**
+ * `archive_remove_many`（issue #698 の残タスク）の戻り値に並べる id の件数の
+ * 上限。**`REMOVE_MANY_IDS_SHOWN` / `CLOSE_MANY_IDS_SHOWN` と同じ理由**——
+ * 消した件数に比例して伸びる列挙をそのまま返さない。全 id は日誌側に残る。
+ *
+ * **`ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT` / `_MAX` / `_JOURNAL_ID_CHARS` と
+ * 違い、これは HTTP 層と共有しない値である**——`POST /archive/remove` は
+ * JSON で `removedIds` を切らずに全件返すので、表示の間引きはこの道具
+ * （テキスト応答）だけが必要とする関心事である。だからこの定数は
+ * `archive-prune.ts` へは置かない（あちらは HTTP 層とこの道具が両方使う値
+ * だけを持つ——`ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT` の doc）。
+ */
+const ARCHIVE_REMOVE_MANY_IDS_SHOWN = 20;
+/**
  * `profile_write` が返す配布先の一覧（`配った先` / `配れなかった先`）を
  * 抜粋する厚み（#409）。
  *
@@ -1763,11 +1786,26 @@ function formatJournalNotRecordedMessage(
 ): string {
   // **秘密の扱い**: ここに載せてよいのは `tool`（コード中の固定リテラルの
   // 道具名。CloneToolName で縛ってあるので自由文が紛れ込む経路が無い）・
-  // `journalEntryShape`（本文を出さない見分け）・元の例外の `message` だけ。
-  // 道具の引数（`script` / `content` / `body` 等）を `journalEntryShape` の
-  // 外から1文字も転記しないこと。
+  // `journalEntryShape`（本文を出さない見分け）・`collapseErrorCause` が
+  // 返す理由だけ。道具の引数（`script` / `content` / `body` 等）を
+  // `journalEntryShape` の外から1文字も転記しないこと。
+  //
+  // **⚠️ 以前は `cause.message` をそのまま使っていた（Issue #1229 で修正）。**
+  // `DrizzleQueryError` の `message` は `Failed query: <sql>\nparams:
+  // <束縛パラメータ>` という2行構成で、無条件の `cause.message` は2行目
+  // （insert しようとした行の値そのもの）まで含んでいた——症状として報告
+  // された「返る文言はいつも `Failed query: …` の形」はここが作っていた。
+  // `collapseErrorCause`（`error-cause.ts`）は1行目だけを取り、かつ SQLSTATE
+  // （`code`）・`constraint` / `table` / `schema` / `column` / `routine` /
+  // `severity` だけを duck typing で拾う——**これらはスキーマの識別子で
+  // あって、クローンやマネージャーが書いた本文の値ではない**（列名・
+  // テーブル名・SQLSTATE の列挙値は、道具の引数のように自由に選べる文字列
+  // ではなくスキーマ設計者が決めた固定の語彙である）。⛔ `detail` / `hint` /
+  // `where` / `internalQuery` / `query` は拾わない——一意制約違反の
+  // `detail` は `Key (id)=(実際の値) already exists.` の形で行の値を転記
+  // するため（`error-cause.ts` の doc に詳細）。
   const shape = journalEntryShape(entry);
-  const reason = cause instanceof Error ? cause.message : String(cause);
+  const reason = collapseErrorCause(cause);
   switch (outcome) {
     case 'act-completed':
       return [
@@ -1796,6 +1834,51 @@ function formatJournalNotRecordedMessage(
         'やり直さないこと（重複がもう1つ増える）。memory_outline で現状を読み直してから決めること。',
       ].join('\n');
   }
+}
+
+/**
+ * `stores.jobs.putApproval` が失敗したとき、`ask_human` の応答として
+ * 投げ直すエラー（Issue #1229 受け入れ基準2）。
+ *
+ * **`JournalNotRecordedError` と対だが、outcome の3分類は持たない。**
+ * `ask_human` は `putApproval`（承認待ちキューへ積む）→
+ * `appendJournalOrThrow`（日誌へも残す）の順に呼ぶ。後段が落ちたときは
+ * 既存の `JournalNotRecordedError`（`act-completed`——承認は積めているので
+ * 副作用は済んでいる）がそのまま拾う。**ここが扱うのは前段、`putApproval`
+ * 自体が落ちた場合だけ**——このときは承認待ちキューに1行も残っていない
+ * （副作用ゼロ）ので、`JournalFailureOutcome` の3値のどれにも当てる必要が
+ * 無く、帰結は常に同じ「やり直してよい」になる。
+ *
+ * **なぜ要るか。** 直すまでは `putApproval` の例外が握り潰さず・跡も残さず
+ * そのまま投げ直されていた——SDK の `tool()` が `isError: true` ＋
+ * `error.message`（drizzle の生のクエリ文言）へ変換するので、症状としては
+ * `journal_write` の失敗と同じ形（Issue 本文の2つ目の観測例）だったが、
+ * **stderr 側には跡が1つも無かった**（`journal.append` は
+ * `appendJournalOrThrow` 経由で `noteDroppedRecord` を必ず呼ぶのに対し、
+ * `putApproval` の直呼びにはその経由点が無かったため）。⟹ `journal` と
+ * `approvals` が同時に塞がる窓では、**クローンへの応答（生のSQL文言）と
+ * stderr（何も無い）の両方から、人間が原因を辿る手段が失われていた。**
+ */
+class ApprovalNotRecordedError extends Error {
+  constructor(approval: PendingApproval, cause: unknown) {
+    super(formatApprovalNotRecordedMessage(approval, cause));
+    this.name = 'ApprovalNotRecordedError';
+  }
+}
+
+function formatApprovalNotRecordedMessage(approval: PendingApproval, cause: unknown): string {
+  // **秘密の扱い**: `formatJournalNotRecordedMessage` と同じ基準
+  // （このファイル内の同関数の doc）。載せてよいのは `approvalShape`
+  // （本文を出さない見分け）と `collapseErrorCause` が返す理由だけ。
+  const shape = approvalShape(approval);
+  const reason = collapseErrorCause(cause);
+  return [
+    '⚠⚠ 未記録・確認は人間へ届いていない・やり直してよい',
+    'ask_human は承認待ちキューへの記録に失敗した。人間はまだこの質問を見ていない。',
+    `記録できなかった確認: ${shape}`,
+    `理由: ${reason}`,
+    'やり直してよい（同じ内容でもう一度呼べる。id は呼ぶたびに新しく振られるので重複は起きない）。',
+  ].join('\n');
 }
 
 /**
@@ -4199,35 +4282,110 @@ export function createCloneTools(context: ToolContext) {
           stores.persona.read(toSlug),
           stores.persona.documents(),
         ]);
-        const toWritten = await stores.persona.append(toSlug, cut);
-        await appendJournalOrThrow(
-          'memory_section_move',
-          stores.journal,
-          {
-            type: 'memory_update',
-            slug: toSlug,
-            cause,
-            action: 'move_in',
-            bytesBefore: toBefore === null ? 0 : Buffer.byteLength(toBefore.content, 'utf8'),
-            bytesAfter: Buffer.byteLength(toWritten.content, 'utf8'),
-            summary,
-          },
-          'act-partially-completed',
+
+        /**
+         * **移動を冪等にする（#1230）。**
+         *
+         * 半完了（移し先への追記だけが済み、出どころの切り取りが日誌の失敗で
+         * 止まった状態）から同じ呼び出しをそのままやり直すと、素直に作れば
+         * 移し先に同じ節がもう1つ増える。増えた時点で `lookupMemorySection`
+         * の `ambiguous` が成立し、その節id は二度と `memory_section_move`
+         * で指せなくなる（Issue の中身そのもの）。
+         *
+         * だから、移し先（`toBefore`）に**同じ節idの節が既に在る**ものは、
+         * 追記の対象から外す。**判定は節idの一致だけで足りる**——
+         * `memorySectionId` は見出しと中身のハッシュの連結で、位置
+         * （オフセット）を持たない（`memory.ts` の `memorySectionId` の
+         * doc）。だから同じ見出し・同じ中身の節は、それがどこに在っても
+         * 必ず同じ id になり、見出し＋本文を別途比べ直す必要が無い。
+         *
+         * **「消失より重複」という一次判断は変えない。** 出どころの切り取りは
+         * これまでどおり移し先への書き込みの後に行う。変えるのは「移し先へ
+         * 何を足すか」だけで、「どちらを先に書くか」の順序には触れない。
+         */
+        const destIds = new Set(
+          toBefore === null ? [] : scanMemorySections(toBefore.content).sections.map((s) => s.id),
         );
+        const toAppend = ordered.filter((section) => !destIds.has(section.id));
+        const alreadyAtDestination = ordered.filter((section) => destIds.has(section.id));
+
+        let toWritten: Awaited<ReturnType<Stores['persona']['append']>>;
+        let appendedChars = 0;
+        if (toAppend.length > 0) {
+          const appendText = toAppend
+            .map((section) => existing.content.slice(section.start, section.end))
+            .join('');
+          appendedChars = appendText.length;
+          toWritten = await stores.persona.append(toSlug, appendText);
+          await appendJournalOrThrow(
+            'memory_section_move',
+            stores.journal,
+            {
+              type: 'memory_update',
+              slug: toSlug,
+              cause,
+              action: 'move_in',
+              bytesBefore: toBefore === null ? 0 : Buffer.byteLength(toBefore.content, 'utf8'),
+              bytesAfter: Buffer.byteLength(toWritten.content, 'utf8'),
+              summary:
+                alreadyAtDestination.length > 0
+                  ? `${summary}（${alreadyAtDestination.length} 節は ${toSlug} に既に在ったため追記しなかった）`
+                  : summary,
+            },
+            'act-partially-completed',
+          );
+        } else {
+          // **全節が既に移し先に在る（冪等な再実行）。** ここに来るのは
+          // `destIds` が空でないとき、つまり `toBefore` が存在するときだけ
+          // ——`toBefore` が null なら `destIds` は空集合で、`ordered` の
+          // どの節も `toAppend` から漏れない（この分岐には来ない）。
+          if (toBefore === null) {
+            throw new Error(
+              '到達しないはずの分岐: toBefore が無いのに toAppend が0件になった' +
+                '（#1230 の冪等化ロジックの前提が崩れている）。',
+            );
+          }
+          // **追記そのものを行わない。** 空文字列を `persona.append` に渡すと
+          // fs/pg どちらの実装も無条件に書き込みを起こす（末尾に空行が
+          // 増える・`updatedAt` が進む）——「何もしていない」を実際に
+          // 何もしない形にする。だから move_in の日誌エントリも出さない
+          // （書いていない書き込みを「一部完了」として名乗る理由が無い）。
+          // ⟹ 「既に在ったので足さなかった」ことは、この後の move_out の
+          // summary と、応答本文の両方で名乗る（黙って握らない。AGENTS.md
+          // 「報告の形」）。
+          toWritten = toBefore;
+        }
 
         let fromWritten;
         try {
           fromWritten = await stores.persona.write(fromSlug, nextContent);
         } catch (error) {
-          // **ここで嘘をつかない。** 「移した」と返すと、呼び手は重複に
-          // 気づけない。落ちたのは2手目なので、1手目（移し先への追記）は
-          // 済んでいる＝**同じ節が両方に在る。何も失われていない。**
+          const reason = error instanceof Error ? error.message : String(error);
+          if (toAppend.length > 0) {
+            // **ここで嘘をつかない。** 「移した」と返すと、呼び手は重複に
+            // 気づけない。落ちたのは2手目なので、1手目（移し先への追記）は
+            // 済んでいる＝**同じ節が両方に在る。何も失われていない。**
+            const dedupNote =
+              alreadyAtDestination.length > 0
+                ? ` このうち ${alreadyAtDestination.length} 節は ${toSlug} に既に在ったため、今回は追記していない（重複は増えていない）。`
+                : '';
+            return text(
+              `⚠ ${toAppend.length} 節（合計 ${appendedChars.toLocaleString('en-US')} 文字）を ${toSlug} の末尾へ足すところまでは済んだが、` +
+                `${fromSlug} からの切り取りに失敗した（${reason}）。` +
+                `いま同じ ${toAppend.length} 節が ${fromSlug} と ${toSlug} の両方に在る——**重複しているが、失われてはいない。**` +
+                `${dedupNote}` +
+                `${fromSlug} 側は1文字も変わっていない。memory_outline で ${fromSlug} を読み直し、` +
+                '同じ操作をやり直すか、重複したままにするかを決めること。',
+            );
+          }
+          // **全節が既に移し先に在り、今回は何も追記していない。** それでも
+          // 出どころの切り取りには失敗した——前回までに生まれた重複は
+          // そのまま残るが、今回の呼び出しで新しく増えたものは無い。
           return text(
-            `⚠ ${ordered.length} 節（合計 ${cut.length.toLocaleString('en-US')} 文字）を ${toSlug} の末尾へ足すところまでは済んだが、` +
-              `${fromSlug} からの切り取りに失敗した（${error instanceof Error ? error.message : String(error)}）。` +
-              `いま同じ ${ordered.length} 節が ${fromSlug} と ${toSlug} の両方に在る——**重複しているが、失われてはいない。**` +
-              `${fromSlug} 側は1文字も変わっていない。memory_outline で ${fromSlug} を読み直し、` +
-              '同じ操作をやり直すか、重複したままにするかを決めること。',
+            `${ordered.length} 節は ${toSlug} に既に同じ節id の節が在ったため、今回は何も追記していない。` +
+              `そのうえで ${fromSlug} からの切り取りを試みたが失敗した（${reason}）。` +
+              `${fromSlug} 側は1文字も変わっていない。重複は増えていない——前回までの重複があるなら、それがそのまま残っている状態である。` +
+              `memory_outline で ${fromSlug} と ${toSlug} を読み直してから、同じ操作をやり直すこと。`,
           );
         }
         await appendJournalOrThrow(
@@ -4240,7 +4398,10 @@ export function createCloneTools(context: ToolContext) {
             action: 'move_out',
             bytesBefore: Buffer.byteLength(existing.content, 'utf8'),
             bytesAfter: Buffer.byteLength(fromWritten.content, 'utf8'),
-            summary,
+            summary:
+              toAppend.length === 0 && alreadyAtDestination.length > 0
+                ? `${summary}（${alreadyAtDestination.length} 節は ${toSlug} に既に在ったため追記しなかった。切り取りのみ行った）`
+                : summary,
           },
           'act-completed',
         );
@@ -4302,11 +4463,27 @@ export function createCloneTools(context: ToolContext) {
           },
         );
 
+        // **黙って握らない（#1230）。** 移し先に既に同じ節id の節が在ったので
+        // 追記しなかった分は、応答の本文でも名乗る——冪等にした結果が
+        // 「何も起きなかったように見える」だけの応答になると、この Issue が
+        // 嫌っている静かさと同じ形になる。
+        const idempotentNote =
+          alreadyAtDestination.length > 0
+            ? [
+                '',
+                `⭐ このうち ${alreadyAtDestination.length} 節は ${toSlug} に同じ節id の節が既に在ったため、追記していない` +
+                  `（今回 ${toSlug} へ新しく足したのは ${toAppend.length} 節）。重複は増えていない——` +
+                  '半完了から同じ呼び出しをやり直しても、移し先の節は増えない。' +
+                  `どの節が既に在ったかは memory_outline slug=${toSlug} で確かめられる。`,
+              ]
+            : [];
+
         return text(
           [
             `記憶 ${fromSlug} から ${ordered.length} 節（合計 ${cut.length.toLocaleString('en-US')} 文字）を ${toSlug} の末尾へ移した。`,
             '',
             listing,
+            ...idempotentNote,
             '',
             `移した先 ${toSlug}:`,
             describeMemoryWriteDiff(toBefore === null ? null : toBefore.content, toWritten.content),
@@ -4600,7 +4777,17 @@ export function createCloneTools(context: ToolContext) {
           ...(requestId === undefined ? {} : { requestId }),
           ...(conversationId === undefined ? {} : { conversationId }),
         };
-        await stores.jobs.putApproval(approval);
+        try {
+          await stores.jobs.putApproval(approval);
+        } catch (error) {
+          // **`journal.append` と同じ形（`appendJournalOrThrow` の doc）
+          // ——ガードで飲むのではなく、跡を残してから投げ直す。** ここが
+          // 埋めるのは「承認待ちキューへの記録が落ちたのに、stderr にも
+          // クローンへの応答にも SQLSTATE 等の理由が1つも残らない」という
+          // 穴（Issue #1229 受け入れ基準2）。
+          noteDroppedRecord('承認待ち', approvalShape(approval), error);
+          throw new ApprovalNotRecordedError(approval, error);
+        }
         await appendJournalOrThrow(
           'ask_human',
           stores.journal,
@@ -8764,6 +8951,306 @@ export function createCloneTools(context: ToolContext) {
         return text(
           `アーカイブ ${archiveId} の本文を消した（${result.bytes.toLocaleString('ja-JP')} バイト）。` +
             `行そのものは残っている（list には引き続き出る）。${overrideNote}`,
+        );
+      },
+    ),
+
+    /**
+     * アーカイブ済みセッション生ログの本文を、絞り込んでまとめて tombstone
+     * する（issue #698 の残タスク）。
+     *
+     * **人間には `POST /archive/remove` が既に在る（PR #1078）。** 人間に
+     * できることがクローンにできないのは north_star 禁止1 に反するので、
+     * こちらにも同じ口を渡す。
+     *
+     * **雛形は `inbox_remove_many` / `commitment_close_many` である。** 既定
+     * （`dryRun` を省略すると true）・絞り込みの無い呼びを断る・塊ごとに
+     * 「消す → その塊の id を日誌へ書く」を交互に回す形は、どちらも同じ
+     * 設計を踏襲している。
+     *
+     * **対象の選定は `selectArchiveRemovalTargets`（純関数、`archive-prune.ts`）
+     * に閉じる。** ロジックを書き写さない——`ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT` /
+     * `ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS` もそこから import する
+     * （`archive-prune.ts` の `ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT` の doc
+     * 「値を書き写すと、片方だけ変えたときに黙って食い違う」）。ここは絞り込み
+     * の拒否判定・墓標の保護・走行中の委譲の扱い・実際の `stores.archive.remove()`
+     * 呼び出しと日誌だけを持つ——`POST /archive/remove`（`app.ts`）と同じ
+     * 役割分担である。
+     *
+     * **墓標（`TranscriptGrave`）を守る**（issue #698 追補3。`app.ts` の
+     * `POST /archive/remove` の doc「なぜ冗長に見えるか」と同じ理由）。
+     * `stores.sessions.getTranscriptGrave()` はツール層からも読める
+     * （`Stores.sessions: SessionRegistry`）ので、`app.ts` と同じ材料を
+     * そのまま渡せる。
+     *
+     * **`overrideReason` を持たない——`POST /archive/remove` と同じ判断。**
+     * `app.ts` の doc が言う通り「一括で複数件を無条件に開ける形は事故の芽が
+     * 大きい」。**これは north_star 禁止2（追加制限禁止）には反しない**——
+     * 禁止2が求めるのは「方針は設定で開けられること」であって「すべての口が
+     * 同じ強さで開くこと」ではなく、**開ける口そのものは既に在る**（単発
+     * `archive_remove` が `overrideReason` を持つ）。⟹ 走行中の委譲が使って
+     * いる行は一括の対象から外す。開放が要るなら、その id を
+     * `manager_transcript` の応答か下見（`dryRun`）の対象一覧から拾い、
+     * `archive_remove`（単発）に `overrideReason` を渡して1件ずつ名指しで
+     * 消すこと。
+     *
+     * ⚠️ **一度はこの道具にも `overrideReason` を持たせた形で書いたが、
+     * 取り下げた。**「単発が持つのに一括が持たないのは追加制限ではないか」
+     * という見立てが誤りだったため——禁止2が求めるのは開く口が在ることで、
+     * 単発の口が既に開いている以上、一括に同じ強さの開放を重ねる必要が無い。
+     * ⟹ **この形を「まだ実装していないだけ」と読んで足さないこと。**
+     *
+     * **走行中のマネージャーが使っている行、および `managers` が配線されて
+     * いない内部ターン（`guard.kind === 'unknown'`）は、どちらも
+     * `skipped.inUse` へ数えて一括の対象から外す。** 判定所は
+     * `guardArchiveRemoval` 1箇所——`archive_remove`（単発）・
+     * `POST /archive/remove` と同じ関数を通す（`manager.ts` の doc
+     * 「2箇所に書くと片方だけ直る形になる」）。この道具は常に
+     * `overrideReason: undefined` を渡す。
+     *
+     * **`limit` / `requireContainment` は引数に持たない**（`POST /archive/remove`
+     * との差分）。`selectArchiveRemovalTargets` の既定（`limit`:
+     * `ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT`、`requireContainment: true`）を
+     * そのまま使う——依頼元の要件が引数として挙げていないので、まずは既定の
+     * 安全側のまま実装する。溢れた分は `remaining` として名乗るので、
+     * `sessionIds` / `before` を絞ってもう一度呼べば続きに届く。
+     *
+     * **実行は `stores.archive.remove(id)` を1件ずつ**（`POST /archive/remove`
+     * と同じ理由——一括 UPDATE にしない）。
+     */
+    tool(
+      'archive_remove_many',
+      [
+        'アーカイブ済みセッション生ログの本文を、絞り込んでまとめて消す（tombstone。',
+        '行そのものは残る——archive の一覧には引き続き出る。DELETE ではない）。',
+        '**既定は試算（dryRun を省略すると true）で、1件も消さない。**',
+        'sessionIds / before / minStoredBytes のどれも渡さない呼びは断る——',
+        '絞り込みが無いのと同じで、1回でアーカイブを空にできてしまう。',
+        '3つは AND で効く（全部渡せば全部に当たった行だけが対象になる）。',
+        'セッションの最新行・含有が証明できない行・墓標（まだ記憶へ蒸留していない区間）は',
+        '既定で守る。',
+        '走行中のマネージャーが使っている退避は一括では消せない（拒む。skipped.inUse に数える）——',
+        'ここに override は無い。それでも消す必要があるなら、その id を manager_transcript の',
+        '応答か、この道具の下見（dryRun）が返す対象一覧から見つけて、',
+        'archive_remove（単発）に overrideReason を渡し1件ずつ名指しで消すこと。',
+        '消した id は全部日誌に残る（塊に分けて書く。応答には先頭だけを出す）。',
+      ].join(' '),
+      {
+        sessionIds: z
+          .array(z.string().min(1))
+          .min(1)
+          .optional()
+          .describe('対象セッションの完全一致。省略すると全セッションが対象になりうる'),
+        before: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'この時刻より前（ISO8601、排他）に積まれた行だけを対象にする' +
+              '（例 2026-09-15T00:00:00.000Z）',
+          ),
+        minStoredBytes: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe('storedBytes がこれ以上の行だけを対象にする'),
+        summary: z.string().min(1).describe('なぜ消したかの一行要約（日誌に残る。本文は残らない）'),
+        dryRun: z
+          .boolean()
+          .optional()
+          .describe(
+            '省略すると true（何件当たるかを数えるだけで1件も消さない）。実際に消すときだけ false を明示する',
+          ),
+      },
+      async ({ sessionIds, before, minStoredBytes, summary, dryRun }) => {
+        // 🔴 絞り込みの無い呼びを断る（`POST /archive/remove` と同じ判定・同じ理由）。
+        if (sessionIds === undefined && before === undefined && minStoredBytes === undefined) {
+          return text(
+            'sessionIds / before / minStoredBytes のどれも渡さない呼びは断る' +
+              '——それは絞り込みが無いのと同じで、1回でアーカイブを空にできてしまう。' +
+              '**1件も消していない。**',
+          );
+        }
+        if (before !== undefined && Number.isNaN(Date.parse(before))) {
+          return text(
+            `before に渡された「${before}」は ISO8601 として読めない` +
+              '（例 2026-09-15T00:00:00.000Z）。**1件も消していない。**',
+          );
+        }
+
+        // **墓標を守る**（issue #698 追補3。`app.ts` の `POST /archive/remove` の
+        // doc「なぜ冗長に見えるか」と同じ理由）。
+        const grave = await stores.sessions.getTranscriptGrave();
+        const protectedIds: string[] = grave === null ? [] : [grave.archiveId];
+
+        const filter: ArchiveRemoveManyFilter = {
+          ...(sessionIds === undefined ? {} : { sessionIds }),
+          ...(before === undefined ? {} : { before }),
+          ...(minStoredBytes === undefined ? {} : { minStoredBytes }),
+        };
+        const filterText = [
+          ...(sessionIds === undefined ? [] : [`sessionIds=[${sessionIds.join(', ')}]`]),
+          ...(before === undefined ? [] : [`before=${before}`]),
+          ...(minStoredBytes === undefined ? [] : [`minStoredBytes=${minStoredBytes}`]),
+        ].join(' / ');
+
+        // **絞りと選定は `selectArchiveRemovalTargets` に閉じる**——ロジックを
+        // ここで書き写さない（`archive-prune.ts` の doc）。
+        const allRows = await stores.archive.list();
+        const selection = selectArchiveRemovalTargets(allRows, filter, { protectedIds });
+        const funnel = `アーカイブ全 ${selection.totalRows} 行 → 絞り込みで ${selection.matched} 件`;
+
+        if (selection.matched === 0) {
+          const why =
+            selection.totalRows === 0
+              ? 'アーカイブそのものに行が無い。**絞り込みの問題ではない**（消すべきものがそもそも無い）。'
+              : '絞り込みに当たる行が0件——**絞り込みが外れている。**';
+          return text(
+            ['絞り込みに当たる行は0件だった。**1件も消していない。**', funnel, why].join('\n'),
+          );
+        }
+
+        // **走行中の委譲が抱えている行は `guardArchiveRemoval` で判定する**
+        // （`archive_remove`（単発）・`POST /archive/remove` と同じ関数を
+        // 1箇所だけ通す。`manager.ts` の doc「2箇所に書くと片方だけ直る形
+        // になる」）。**この道具は `overrideReason` を持たない**（この道具
+        // 本体の doc「`overrideReason` を持たない」）ので、常に `undefined`
+        // を渡す——`guard.kind` は `'allowed'` か `'denied'` か `'unknown'`
+        // のどれかにしかならない。
+        //
+        // **この guard は `dryRun` の分岐より前で回す**（`POST /archive/remove`
+        // と同じ理由——下見でも走行中の判定を評価しないと、下見が返す
+        // `targeted` / `skipped.inUse` が実行時と食い違う）。
+        const removableTargets: ArchiveEntry[] = [];
+        let skippedInUse = 0;
+        for (const target of selection.targets) {
+          const guard = guardArchiveRemoval(context.managers, target.id, undefined);
+          if (guard.kind === 'denied' || guard.kind === 'unknown') {
+            skippedInUse += 1;
+            continue;
+          }
+          removableTargets.push(target);
+        }
+        // **`targeted` は guard を通った後の件数**（＝実際に消しにいく件数）
+        // にする——`POST /archive/remove` の doc「guard で飛ばした行を
+        // `targeted` にも `skipped.inUse` にも数えると2回数えることになる」
+        // と同じ理由。
+        const targeted = removableTargets.length;
+
+        const skippedLine =
+          `skipped: protected(墓標) ${selection.skipped.protected} / ` +
+          `alreadyRemoved ${selection.skipped.alreadyRemoved} / newest ${selection.skipped.newest} / ` +
+          `notContained ${selection.skipped.notContained} / inUse(走行中) ${skippedInUse}`;
+        const remainingLine = `remaining（limit に溢れて対象にすらならなかった件数）: ${selection.remaining}`;
+
+        if (dryRun !== false) {
+          // **省略された `dryRun` は試算。** `archive_remove_many` / `archive_remove`
+          // ともに消した本文を戻す道具はこの器に無いので、既定は「何も起きない側」
+          // に倒す。
+          const shown = removableTargets
+            .slice(0, ARCHIVE_REMOVE_MANY_IDS_SHOWN)
+            .map((row) => row.id);
+          const hidden = removableTargets.length - shown.length;
+          return text(
+            [
+              '**試算（dryRun）。1件も消していない。** 実際に消すには dryRun: false を渡すこと。',
+              funnel,
+              `絞り込み: ${filterText}`,
+              `この呼びで消すのは ${targeted} 件（当たったのは ${selection.matched} 件。` +
+                `1回の上限 ${ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT} 件）。`,
+              skippedLine,
+              remainingLine,
+              `対象の id（先頭 ${shown.length} 件）: ${shown.join(', ')}${
+                hidden > 0 ? ` …ほか ${hidden} 件は省略` : ''
+              }`,
+              ...(skippedInUse === 0
+                ? []
+                : [
+                    '走行中のマネージャーが使っている行は一括では開けない（override は無い）。' +
+                      '開けるなら archive_remove（単発）に overrideReason を渡して1件ずつ名指しすること。',
+                  ]),
+            ].join('\n'),
+          );
+        }
+
+        // 塊ごとに「消す → その塊の id を日誌へ書く」を交互に回す
+        // （`POST /archive/remove` と同じ理由——まとめて消してから日誌を書くと、
+        // その間にデーモンが落ちたとき「消えたのに記録が無い行」ができる）。
+        // 実行は `stores.archive.remove(id)` を1件ずつ（一括 UPDATE にしない）。
+        const chunks = chunkIdsByChars(
+          removableTargets.map((row) => row.id),
+          ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS,
+        );
+        const removedIds: string[] = [];
+        let removedBytes = 0;
+        let raced = 0;
+        for (const [index, chunk] of chunks.entries()) {
+          const chunkIds = new Set(chunk);
+          const chunkTargets = removableTargets.filter((row) => chunkIds.has(row.id));
+          const removedThisChunk: string[] = [];
+          for (const target of chunkTargets) {
+            const result = await stores.archive.remove(target.id);
+            if (result.kind === 'missing') {
+              // list() で見つかり guard も通ったのに、実際に remove() する
+              // までの間に他経路が先に消していた——`raced` へ数える（`POST
+              // /archive/remove` と同じ理由。隠さない）。
+              raced += 1;
+              continue;
+            }
+            removedThisChunk.push(target.id);
+            if (result.kind === 'removed') removedBytes += result.bytes;
+          }
+          removedIds.push(...removedThisChunk);
+          // **1件も消せなかった塊では日誌へ書かない**（`inbox_remove_many` /
+          // `commitment_close_many` と同じ理由）。
+          if (removedThisChunk.length === 0) continue;
+
+          await appendJournalOrThrow(
+            'archive_remove_many',
+            stores.journal,
+            {
+              type: 'decision',
+              decision:
+                `退避済み生ログの本文を絞り込みで一括して tombstone した` +
+                `（${index + 1}/${chunks.length} 塊目、この塊は ${removedThisChunk.length} 件）: ${summary}\n` +
+                `絞り込み: ${filterText}\n` +
+                `消した id: ${removedThisChunk.join(' ')}`,
+              grounds: summary,
+            },
+            'act-completed',
+          );
+        }
+
+        const shownRemoved = removedIds.slice(0, ARCHIVE_REMOVE_MANY_IDS_SHOWN);
+        const hiddenRemoved = removedIds.length - shownRemoved.length;
+        return text(
+          [
+            `**${removedIds.length} 件の本文を tombstone した**（理由: ${summary}）。` +
+              '行そのものは残っている（list には引き続き出る）。',
+            funnel,
+            `絞り込み: ${filterText}`,
+            skippedLine,
+            remainingLine,
+            `消したバイト数（直前の合計）: ${removedBytes.toLocaleString('ja-JP')}`,
+            `消した id（先頭 ${shownRemoved.length} 件）: ${shownRemoved.join(', ')}${
+              hiddenRemoved > 0
+                ? ` …ほか ${hiddenRemoved} 件は省略（**全 id は日誌に ${chunks.length} 件に分けて残してある**）`
+                : ''
+            }`,
+            ...(raced === 0
+              ? []
+              : [
+                  `⚠ 対象 ${targeted} 件のうち ${raced} 件は消せなかった` +
+                    '（この呼びの最中に他の経路が先に消した）。',
+                ]),
+            ...(skippedInUse === 0
+              ? []
+              : [
+                  '走行中のマネージャーが使っている行は一括では開けない（override は無い）。' +
+                    '開けるなら archive_remove（単発）に overrideReason を渡して1件ずつ名指しすること。',
+                ]),
+          ].join('\n'),
         );
       },
     ),

@@ -210,6 +210,10 @@ const EXEMPT: readonly Exemption[] = [
   { tool: 'manager_report', why: '実装側に、説明文が数え直すような一覧が無い' },
   { tool: 'manager_transcript', why: '実装側に、説明文が数え直すような一覧が無い' },
   { tool: 'archive_remove', why: '実装側に、説明文が数え直すような一覧が無い' },
+  {
+    tool: 'archive_remove_many',
+    why: '実装側に、説明文が数え直すような一覧が無い（enum ではなく sessionIds / before / minStoredBytes という3つの絞り込み軸で、値の集合ではない）',
+  },
 ];
 
 function descriptionOf(tool: string): string {

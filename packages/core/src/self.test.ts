@@ -168,6 +168,7 @@ describe('CloneRuntimeFacts の整形 — 観測した値と、取れていな�
       short: 'd'.repeat(12),
       source: 'platform',
     },
+    buildTime: { builtAt: '2026-09-18T11:45:00.000Z' },
     declaredModel: 'fable',
     modelOverridden: false,
     modelEnvKey: 'ALTEROID_CLONE_MODEL',
@@ -217,6 +218,59 @@ describe('CloneRuntimeFacts の整形 — 観測した値と、取れていな�
     expect(line).toBeDefined();
     expect(line).toContain('不明');
     expect(line).not.toMatch(/[0-9a-f]{7,}/);
+  });
+
+  /**
+   * **焼かれた時刻と、そこからの経過（#1226）。** リビジョンの行のすぐ隣に
+   * 出ること・値そのものが出ていることを見る。経過の計算自体は
+   * `revision.test.ts` の `describeBuildAge` が測るので、ここでは
+   * 「その行がリビジョンの直後にある」ことまでを見る。
+   */
+  it('焼かれた時刻がリビジョンの行のすぐ隣に出る', () => {
+    const section = describeCloneRuntime(RUNTIME);
+    const lines = section.split('\n').filter((line) => line.startsWith('- '));
+    const revisionIndex = lines.findIndex((line) => line.includes('走っているコードのリビジョン'));
+    const buildAgeIndex = lines.findIndex((line) => line.includes('焼かれた時刻とそこからの経過'));
+
+    expect(revisionIndex).toBeGreaterThanOrEqual(0);
+    expect(buildAgeIndex).toBe(revisionIndex + 1);
+    expect(lines[buildAgeIndex]).toContain('2026-09-18T11:45:00.000Z');
+  });
+
+  /**
+   * **取れなかったときに「不明」に倒れる。** 古い焼き込み（`CANON_BUILT_AT` が
+   * 無い）・空文字・壊れた値のどれでも `resolveBuildTime` が `null` にする
+   * （`revision.test.ts` 側）ので、ここでは整形の側が `null` を「不明」へ倒す
+   * ことだけを見る——それらしい時刻を作らない。
+   */
+  it('焼かれた時刻が取れていなければ「不明」と言い、それらしい時刻を作らない', () => {
+    const section = describeCloneRuntime({ ...RUNTIME, buildTime: { builtAt: null } });
+    const line = section
+      .split('\n')
+      .find((entry) => entry.includes('焼かれた時刻とそこからの経過'));
+
+    expect(line).toBeDefined();
+    expect(line).toContain('不明');
+    expect(line).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
+  });
+
+  /**
+   * **「これより前のものは全部入っている」とは言わない。** 反映（夜1回）と
+   * 焼き込みの間に隙間があるため、その保証はできない——逆方向（これより後は
+   * まだ届いていない）だけを言うこと。
+   */
+  it('main の先端とは限らないことと、差の数え方を、リビジョンの行の隣に出す', () => {
+    const section = describeCloneRuntime(RUNTIME);
+
+    expect(section).toContain('main` の先端とは限らない');
+    expect(section).toContain('まだ届いていない');
+    // **「全部入っている」という語そのものは出てよい**（「とは言えない」という
+    // 否定形の一部として）。断ってはいけないのは肯定の主張のほうなので、
+    // 打ち消す言葉ごと1つの塊として出ていることを見る。
+    expect(section).toContain('全部入っている、とは言えない');
+    expect(section).toContain('gh api repos/takecchi/alteroid/compare/');
+    expect(section).toContain('--jq .ahead_by');
+    expect(section).toContain('d'.repeat(40)); // RUNTIME.revision.commit がそのまま差し込まれる
   });
 
   /**

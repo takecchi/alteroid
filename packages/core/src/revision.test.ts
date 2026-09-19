@@ -4,10 +4,12 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import {
+  describeBuildAge,
   describeBuildRevision,
   describeRevisionStatus,
   reportRunnerRevision,
   resolveBuildRevision,
+  resolveBuildTime,
 } from './revision.js';
 
 /**
@@ -168,6 +170,98 @@ describe('describeRevisionStatus', () => {
     for (const status of [{ status: 'unknown' } as const, { status: 'unheard' } as const]) {
       expect(describeRevisionStatus(status)).not.toMatch(/[0-9a-f]{7,}/);
     }
+  });
+});
+
+/**
+ * `resolveBuildTime` — このイメージが**焼かれた時刻**を解決する（#1226）。
+ *
+ * **`resolveBuildRevision` と同じ役割分担。** 出所は焼き込み（`CANON_BUILT_AT`）
+ * 1つだけで、`baked`（引数）はテストが「焼き込みが無かったら / 壊れていたら」を
+ * 再現するための DI（本番コードは渡さない——doc 参照）。
+ *
+ * **本体は「埋まらなかった・壊れていたときに『取れなかった』と出る」側である。**
+ * 古い焼き込み（`CANON_BUILT_AT` が無い＝空文字が渡る）・空白だけ・
+ * `Date.parse` が `NaN` になる壊れた文字列、の3つがすべて同じ `null` へ倒れる
+ * ことを別の `it()` で明示的に測る。
+ */
+describe('resolveBuildTime', () => {
+  it('焼き込みが無い（空文字。古い焼き込みが CANON_BUILT_AT を持たない場合と同じ形）→ builtAt は null', () => {
+    const time = resolveBuildTime('');
+
+    expect(time).toEqual({ builtAt: null });
+  });
+
+  it('空白だけの焼き込みは「無い」として扱う', () => {
+    const time = resolveBuildTime('   ');
+
+    expect(time).toEqual({ builtAt: null });
+  });
+
+  it('Date.parse が NaN になる壊れた値 → builtAt は null（それらしい時刻を作らない）', () => {
+    const time = resolveBuildTime('not-a-real-timestamp');
+
+    expect(time).toEqual({ builtAt: null });
+  });
+
+  it('妥当な ISO8601 文字列はそのまま通す', () => {
+    const time = resolveBuildTime('2026-09-18T11:45:00.000Z');
+
+    expect(time).toEqual({ builtAt: '2026-09-18T11:45:00.000Z' });
+  });
+
+  it('引数を渡さなければ実際に焼かれた CANON_BUILT_AT が使われる（build 後は必ず値を持つ）', () => {
+    // **この pnpm test は build 後に走る前提**（AGENTS.md「build が先」）。
+    // `generated/canon.ts` は `write-canon.mjs` が毎回焼くので、ビルド時刻は
+    // 必ず取れる（`builtAt()` の doc — 空になることは無い）。
+    const time = resolveBuildTime();
+
+    expect(time.builtAt).not.toBeNull();
+    expect(Number.isNaN(Date.parse(time.builtAt as string))).toBe(false);
+  });
+});
+
+describe('describeBuildAge', () => {
+  const NOW = new Date('2026-09-19T07:45:00.000Z');
+
+  it('取れなかったとき「不明」と分かる文字列を返す（それらしい時刻を作らない）', () => {
+    const text = describeBuildAge(null, NOW);
+
+    expect(text).toContain('不明');
+    expect(text).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it('壊れた値を渡されても「不明」に倒す（resolveBuildTime を経由しない呼び出しに備える）', () => {
+    const text = describeBuildAge('not-a-real-timestamp', NOW);
+
+    expect(text).toContain('不明');
+  });
+
+  it('値と経過（時間単位）の両方を含む', () => {
+    // NOW の20時間前。
+    const text = describeBuildAge('2026-09-18T11:45:00.000Z', NOW);
+
+    expect(text).toContain('2026-09-18T11:45:00.000Z');
+    expect(text).toContain('約20時間前');
+  });
+
+  it('経過が分単位のときは分で言う', () => {
+    const text = describeBuildAge('2026-09-19T07:30:00.000Z', NOW);
+
+    expect(text).toContain('約15分前');
+  });
+
+  it('経過が48時間を超えたら日単位で言う', () => {
+    const text = describeBuildAge('2026-09-15T07:45:00.000Z', NOW); // ちょうど4日前
+
+    expect(text).toContain('約4日前');
+  });
+
+  it('焼き込み時刻が now より未来なら、それらしく丸めずに申告する', () => {
+    const text = describeBuildAge('2026-09-20T00:00:00.000Z', NOW);
+
+    expect(text).toContain('未来');
+    expect(text).not.toContain('前）');
   });
 });
 

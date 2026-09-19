@@ -69,6 +69,7 @@ import {
   describeUsageNotice,
   limitRecoveryOf,
   mergeRateLimitFacts,
+  rateLimitMemoryKey,
   usageTransitionOf,
   withRecoveryNote,
   type RateLimitFacts,
@@ -1646,8 +1647,8 @@ export interface ManagerPool {
 }
 
 /**
- * `archive_remove` / `DELETE /archive/:id` が実際に消してよいかの、唯一の
- * 判定所（#698）。
+ * `archive_remove` / `archive_remove_many` / `DELETE /archive/:id` が実際に
+ * 消してよいかの、唯一の判定所（#698）。
  *
  * **既定は拒否だが、override で開けられる。** これは追加の安全機構ではなく
  * north_star の禁止2（追加制限禁止）の実装そのものである——逐語
@@ -1673,9 +1674,28 @@ export interface ManagerPool {
  *
  * **理由を記録に残すのはこの関数の外側（呼び出し側）の仕事である。** ここは
  * 「通してよいか」だけを判定し、`allowed-with-override` を返すときに
- * `managerId` と `reason` を運ぶ——呼び出し側（`tools.ts` の `archive_remove` /
- * `app.ts` の `DELETE /archive/:id`）はこれを journal のエントリへそのまま
- * 書く（「override で消した」という事実と理由を、追える形で残す）。
+ * `managerId` と `reason` を運ぶ——呼び出し側はこれを journal のエントリへ
+ * そのまま書く（「override で消した」という事実と理由を、追える形で残す）。
+ *
+ * ## 呼び出し側は4つ。**単発の口だけが override を持つ**
+ *
+ * | 呼び出し側 | `overrideReason` |
+ * | --- | --- |
+ * | `tools.ts` の `archive_remove`（単発） | 受け取る |
+ * | `app.ts` の `DELETE /archive/:id`（単発） | 受け取る |
+ * | `tools.ts` の `archive_remove_many`（一括。#698 の残タスク） | **`undefined` を渡す** |
+ * | `app.ts` の `POST /archive/remove`（一括） | **`undefined` を渡す** |
+ *
+ * 逐語:
+ * `grep -Fn -- 'guardArchiveRemoval(context.managers, target.id, undefined)' packages/core/src/tools.ts`
+ *
+ * **一括の口で理由を1本だけ書いて全件を開けると、「どの1件をなぜ開けたか」が
+ * 記録から消える。** ⟹ 開けたい回は単発の口を使う。
+ *
+ * **⚠️ 列が増えても判定所は増えていない。** 一括の口が足されたときも、判定は
+ * ここ1箇所を通したままである（`tools.ts` の逐語「`guardArchiveRemoval` 1箇所」）。
+ * **「一括だから速い経路を別に引く」をやらないこと** —— 引いた瞬間に、走行中の
+ * 委譲の退避を守る方針が片方の口からだけ消える。
  */
 export type ArchiveRemovalGuard =
   | { readonly kind: 'allowed' }
@@ -3258,10 +3278,31 @@ class Pool implements ManagerPool {
    */
   readonly #workspace: WorkspacePolicy;
   /**
-   * 直近の枠の事実（種類ごと）。**アカウント単位なのでマネージャーに紐づけない。**
+   * 直近の枠の事実。**鍵は「トークンの身元 × 枠の種類」である**
+   * （{@link rateLimitMemoryKey}）。
    *
    * 走行中は `rate_limit_event` がターンの頭ごとに来るので、ここが最新になる。
-   * 揮発してよい — デーモンを作り直したら、使い捨ての probe が取り直す。
+   *
+   * ## かつてここには「アカウント単位なのでマネージャーに紐づけない」と書いてあった
+   *
+   * **前半（アカウント単位）はいまも真だが、後半の帰結が誤っていた。** アカウントは
+   * 1つではない（トークンのプール）ので、「マネージャーに紐づけない」＝「鍵を
+   * `kind` だけにする」にすると、**別々のアカウントの事実が同じ欄を踏み合う。**
+   * ⟹ いまは委譲ごとの身元（`#tokenIdentities`）から `tokenId` を引いて鍵に混ぜる。
+   * **マネージャーに紐づけているのではない** —— 同じトークンで走る委譲は、何本
+   * 在っても同じ欄を共有する。壊れ方の実測と両方向の帰結は
+   * {@link rateLimitMemoryKey} の doc に在る（Issue #1222 / #668）。
+   *
+   * ## 揮発してよい（ただし、かつて書いてあった理由は誤っている）
+   *
+   * ここには「デーモンを作り直したら、使い捨ての probe が取り直す」と書いてあったが、
+   * **probe はこの Map を1バイトも書かない** —— 書き手はこのファイルの
+   * `case 'rate_limit'` ただ1つである（`#rateLimits` の全走査で確かめた）。probe が
+   * 取り直すのは枠の**現況**であって、「もうクローンへ知らせた」という**記憶**では
+   * ない。⟹ デーモンが入れ替わると、その記憶は本当に消える。**⚠️ そこは塞いで
+   * いない**（Issue #1222 の候補(a)。塞ぐなら台帳への写しが要る —— 隣の
+   * {@link Pool.resumeStoppedByUsage} の印が #914 で同じ「揮発してよい」を誤りと
+   * 認めて台帳の写しを入れたのと同じ形になる）。
    */
   readonly #tokenIdentity: (() => { tokenId: string; generation: number } | undefined) | undefined;
   readonly #syncRunnerToken: ((runner: RunnerClient) => Promise<void>) | undefined;
@@ -8227,11 +8268,23 @@ class Pool implements ManagerPool {
         // 置き換えると、`status` を運んでいない観測が「もう `rejected` を知らせた」
         // という記憶を消し、次の同じ `rejected` が新しい遷移として**一字一句同じ
         // 文言でもう一度配られる**（あちらの doc に理由がある）。
+        //
+        // **覚える欄は「トークンの身元 × 枠の種類」で分ける**（{@link
+        // rateLimitMemoryKey}）。`kind` だけで引いていた版には、別々のアカウントの
+        // 事実が同じ欄を踏み合う穴が在った —— 枠が尽きた鍵の `rejected` を健全な鍵の
+        // `allowed` が踏み消し、次の `rejected` が「新しい遷移」に化けて同文がもう
+        // 一度配られる（Issue #1222）。⚠️ **身元はこの委譲がセッションを起こした
+        // 瞬間のもの**（`#tokenIdentities`）を使い、いまの現役を読み直さない ——
+        // 読み直すと、回った直後に届いた**前の鍵の観測**が新しい鍵の欄へ入る。
         const factsKind = event.facts.kind ?? '';
-        const previous = this.#rateLimits.get(factsKind);
+        const memoryKey = rateLimitMemoryKey(
+          this.#tokenIdentities.get(event.managerId)?.tokenId,
+          factsKind,
+        );
+        const previous = this.#rateLimits.get(memoryKey);
         const transition = usageTransitionOf(previous, event.facts);
         const merged = mergeRateLimitFacts(previous, event.facts);
-        this.#rateLimits.set(factsKind, merged);
+        this.#rateLimits.set(memoryKey, merged);
 
         // **回し手へは事実と遷移で渡す**（通知の形へ仕立て直さない）。`rejected` は
         // 「その枠が尽きた」であって「仕事が止まった」ではないので、`reached` の
@@ -8243,11 +8296,19 @@ class Pool implements ManagerPool {
         // ものであって、回し手の契機とは別の話である —— 直上の `usage_notice` が
         // 畳みより先に回し手へ渡しているのと**同じ理由・同じ順序**である。
         //
-        // **後ろに置くと2度目の当たりが1度も届かない。** `#rateLimits` は
-        // **このインスタンスの寿命ぶん**残るので、同じ `kind` の `rejected` が
-        // **別のトークンで**再発しても `usageTransitionOf` は `undefined` を返す。
-        // ⟹ 記録は `ready` のまま、実際は 429 —— 実運用で20分以上の停止として
-        // 観測された（2026-09-07。走行中の alteroid の日誌）。
+        // **後ろに置くと2度目の当たりが1度も届かない。**
+        //
+        // ⚠️ **ここに書いてあった理由は、いまは成り立たない（消さずに残す）。**
+        // かつては「`#rateLimits` は**このインスタンスの寿命ぶん**残るので、同じ
+        // `kind` の `rejected` が**別のトークンで**再発しても `usageTransitionOf` は
+        // `undefined` を返す ⟹ 記録は `ready` のまま、実際は 429」と書いてあった
+        // （実運用で20分以上の停止として観測された。2026-09-07。走行中の alteroid の
+        // 日誌）。**その筋は記憶の鍵をトークンごとに分けたことで閉じた**
+        // （`rateLimitMemoryKey`。Issue #1222）。
+        //
+        // **⭐ それでもこの順序は要る。** `status` が `'rejected'` でも遷移が立たない
+        // 回（同じ鍵で `rejected` が続いているあいだ）が残り、その回し手の契機は門の
+        // 後ろでは拾えないからである。⟹ 理由が1つ減っただけで、置き場所は動かさない。
         //
         // **`statusNow` は重ねる前の生の1件から取る**（`merged` からではない）。
         // 重ねた形の `status` はアカウントを跨いで残るので、回す契機の材料にすると

@@ -869,6 +869,7 @@ export {
  * ストア実装や新しい起点に無防備なまま置き去りになる）。
  */
 export {
+  approvalShape,
   describeDroppedTraceEmpty,
   describeDroppedTraceOrigin,
   describeDroppedTraceRetention,
@@ -889,6 +890,14 @@ export {
   type DroppedJournalRowReason,
   type DroppedTraceOrigin,
 } from './dropped-record.js';
+
+/**
+ * `Error.prototype.cause` の連鎖を1行へ畳む（Issue #1229）。stderr の跡
+ * （`reasonOf`）にもクローンへ返す本文（`tools.ts` の
+ * `formatJournalNotRecordedMessage`）にも安全に使える——理由は
+ * `error-cause.ts` の doc を見よ。
+ */
+export { collapseErrorCause } from './error-cause.js';
 
 /**
  * `dropped-record.ts` のテスト専用フック（本番の配線には出てこない）。
