@@ -671,7 +671,7 @@ export interface CloneWakeGate {
  * **区切りに制御文字を使わず、長さを前置きする。** 見本は
  * `packages/core/src/usage-limits.ts` の `rateLimitMemoryKey`（逐語
  * `grep -Fn -- 'export function rateLimitMemoryKey' packages/core/src/usage-limits.ts`）
- * —— エスケープのつもりで書いた ` ` が実バイトとして保存され、CI の
+ * —— エスケープのつもりで書いた NUL のエスケープが実バイトとして保存され、CI の
  * `scripts/check-tracked-nul-bytes.test.ts` が実際に落ちた（#260）。**⟹ 踏みようの
  * 無い形にする。** 長さを前に置けば「`a` と `b:c`」と「`a:b` と `c`」が同じ鍵へ
  * 化けないことが、値の中身への仮定なしに決まる。
