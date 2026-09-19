@@ -111,30 +111,31 @@ async function post(target: Target): Promise<unknown> {
   if (!response.ok) {
     if (response.status === 403) {
       /**
-       * **`POST /reset` は実行環境の持ち主本人だけである**（`PUT /credentials` と
-       * 同じ強さ）。403 の理由を本文から判別する
+       * **`POST /reset` は宣言済み owner だけである**（`requireOwner`。
+       * `PUT /credentials` と同じ強さ）。403 の理由を本文から判別する
        * （`apps/cli/src/credential.ts` の同じ分岐と同じ理由）。
        *
-       * **⚠️ 2026-09-17、ここは一段緩んだ**（issue #1195）。持ち主が**端末から直に**
-       * 許可したアカウントも通る。⟹ 案内も2つになった。
+       * **⚠️ 2026-09-18、`requireOwner`（issue #1198。本来の形）へ置き換えた。**
+       * 2026-09-17〜18 の間は近似（issue #1195。`grantedBy === 'operator'`）で
+       * 通していたが、いまは `ownerDeclaredAt` の宣言を見る——立てるのは
+       * `alteroid access owner <id>`。この経路の門も `requireOwner` なので、
+       * `not_operator` の本文が返ることは無い（`credential.ts` の同じ doc）。
        */
       const body = await response.json().catch(() => ({}));
       const kind = forbiddenKindOf(body);
-      if (kind === 'not_operator') {
+      if (kind === 'not_declared_owner') {
         throw new Error(
-          'ワークスペースをリセットできるのは、その実行環境の持ち主本人だけです。\n' +
-            'デーモンが動いているのと同じ環境で実行するか:\n' +
-            '  docker compose exec app alteroid reset\n' +
-            'または、持ち主に同じ環境から許可してもらってください:\n' +
-            '  docker compose exec app alteroid access grant <アカウント id>\n',
+          describeAuthFailure(403, target, kind) ??
+            '実行環境の持ち主として宣言されたアカウントだけが操作できます。',
         );
       }
       if (kind === 'not_granted') {
         throw new Error(
-          describeAuthFailure(403, target) ??
+          describeAuthFailure(403, target, kind) ??
             'このアカウントには alteroid を使う許可がありません。',
         );
       }
+      // `not_operator`（この経路では実際には来ない）と `unknown` は同じ扱い。
       throw new Error(
         'ワークスペースのリセットへのアクセスが拒否されました（403）。' +
           '理由を判別できなかったため、次にすべきことは案内しません。',
