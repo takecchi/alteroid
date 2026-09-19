@@ -44,6 +44,7 @@ import {
   JUDGEMENT_RANK_NOT_APPLICABLE,
 } from './digest.js';
 import {
+  approvalShape,
   describeDroppedTraceEmpty,
   describeDroppedTraceOrigin,
   describeDroppedTraceRetention,
@@ -55,6 +56,7 @@ import {
   RECENT_TRACE_LIMIT,
   recentDroppedTraces,
 } from './dropped-record.js';
+import { collapseErrorCause } from './error-cause.js';
 import { toAgentTokenView, tokenAvailabilityAt, type CooldownSource } from './token-pool.js';
 import {
   describePage,
@@ -1763,11 +1765,26 @@ function formatJournalNotRecordedMessage(
 ): string {
   // **秘密の扱い**: ここに載せてよいのは `tool`（コード中の固定リテラルの
   // 道具名。CloneToolName で縛ってあるので自由文が紛れ込む経路が無い）・
-  // `journalEntryShape`（本文を出さない見分け）・元の例外の `message` だけ。
-  // 道具の引数（`script` / `content` / `body` 等）を `journalEntryShape` の
-  // 外から1文字も転記しないこと。
+  // `journalEntryShape`（本文を出さない見分け）・`collapseErrorCause` が
+  // 返す理由だけ。道具の引数（`script` / `content` / `body` 等）を
+  // `journalEntryShape` の外から1文字も転記しないこと。
+  //
+  // **⚠️ 以前は `cause.message` をそのまま使っていた（Issue #1229 で修正）。**
+  // `DrizzleQueryError` の `message` は `Failed query: <sql>\nparams:
+  // <束縛パラメータ>` という2行構成で、無条件の `cause.message` は2行目
+  // （insert しようとした行の値そのもの）まで含んでいた——症状として報告
+  // された「返る文言はいつも `Failed query: …` の形」はここが作っていた。
+  // `collapseErrorCause`（`error-cause.ts`）は1行目だけを取り、かつ SQLSTATE
+  // （`code`）・`constraint` / `table` / `schema` / `column` / `routine` /
+  // `severity` だけを duck typing で拾う——**これらはスキーマの識別子で
+  // あって、クローンやマネージャーが書いた本文の値ではない**（列名・
+  // テーブル名・SQLSTATE の列挙値は、道具の引数のように自由に選べる文字列
+  // ではなくスキーマ設計者が決めた固定の語彙である）。⛔ `detail` / `hint` /
+  // `where` / `internalQuery` / `query` は拾わない——一意制約違反の
+  // `detail` は `Key (id)=(実際の値) already exists.` の形で行の値を転記
+  // するため（`error-cause.ts` の doc に詳細）。
   const shape = journalEntryShape(entry);
-  const reason = cause instanceof Error ? cause.message : String(cause);
+  const reason = collapseErrorCause(cause);
   switch (outcome) {
     case 'act-completed':
       return [
@@ -1796,6 +1813,51 @@ function formatJournalNotRecordedMessage(
         'やり直さないこと（重複がもう1つ増える）。memory_outline で現状を読み直してから決めること。',
       ].join('\n');
   }
+}
+
+/**
+ * `stores.jobs.putApproval` が失敗したとき、`ask_human` の応答として
+ * 投げ直すエラー（Issue #1229 受け入れ基準2）。
+ *
+ * **`JournalNotRecordedError` と対だが、outcome の3分類は持たない。**
+ * `ask_human` は `putApproval`（承認待ちキューへ積む）→
+ * `appendJournalOrThrow`（日誌へも残す）の順に呼ぶ。後段が落ちたときは
+ * 既存の `JournalNotRecordedError`（`act-completed`——承認は積めているので
+ * 副作用は済んでいる）がそのまま拾う。**ここが扱うのは前段、`putApproval`
+ * 自体が落ちた場合だけ**——このときは承認待ちキューに1行も残っていない
+ * （副作用ゼロ）ので、`JournalFailureOutcome` の3値のどれにも当てる必要が
+ * 無く、帰結は常に同じ「やり直してよい」になる。
+ *
+ * **なぜ要るか。** 直すまでは `putApproval` の例外が握り潰さず・跡も残さず
+ * そのまま投げ直されていた——SDK の `tool()` が `isError: true` ＋
+ * `error.message`（drizzle の生のクエリ文言）へ変換するので、症状としては
+ * `journal_write` の失敗と同じ形（Issue 本文の2つ目の観測例）だったが、
+ * **stderr 側には跡が1つも無かった**（`journal.append` は
+ * `appendJournalOrThrow` 経由で `noteDroppedRecord` を必ず呼ぶのに対し、
+ * `putApproval` の直呼びにはその経由点が無かったため）。⟹ `journal` と
+ * `approvals` が同時に塞がる窓では、**クローンへの応答（生のSQL文言）と
+ * stderr（何も無い）の両方から、人間が原因を辿る手段が失われていた。**
+ */
+class ApprovalNotRecordedError extends Error {
+  constructor(approval: PendingApproval, cause: unknown) {
+    super(formatApprovalNotRecordedMessage(approval, cause));
+    this.name = 'ApprovalNotRecordedError';
+  }
+}
+
+function formatApprovalNotRecordedMessage(approval: PendingApproval, cause: unknown): string {
+  // **秘密の扱い**: `formatJournalNotRecordedMessage` と同じ基準
+  // （このファイル内の同関数の doc）。載せてよいのは `approvalShape`
+  // （本文を出さない見分け）と `collapseErrorCause` が返す理由だけ。
+  const shape = approvalShape(approval);
+  const reason = collapseErrorCause(cause);
+  return [
+    '⚠⚠ 未記録・確認は人間へ届いていない・やり直してよい',
+    'ask_human は承認待ちキューへの記録に失敗した。人間はまだこの質問を見ていない。',
+    `記録できなかった確認: ${shape}`,
+    `理由: ${reason}`,
+    'やり直してよい（同じ内容でもう一度呼べる。id は呼ぶたびに新しく振られるので重複は起きない）。',
+  ].join('\n');
 }
 
 /**
@@ -4600,7 +4662,17 @@ export function createCloneTools(context: ToolContext) {
           ...(requestId === undefined ? {} : { requestId }),
           ...(conversationId === undefined ? {} : { conversationId }),
         };
-        await stores.jobs.putApproval(approval);
+        try {
+          await stores.jobs.putApproval(approval);
+        } catch (error) {
+          // **`journal.append` と同じ形（`appendJournalOrThrow` の doc）
+          // ——ガードで飲むのではなく、跡を残してから投げ直す。** ここが
+          // 埋めるのは「承認待ちキューへの記録が落ちたのに、stderr にも
+          // クローンへの応答にも SQLSTATE 等の理由が1つも残らない」という
+          // 穴（Issue #1229 受け入れ基準2）。
+          noteDroppedRecord('承認待ち', approvalShape(approval), error);
+          throw new ApprovalNotRecordedError(approval, error);
+        }
         await appendJournalOrThrow(
           'ask_human',
           stores.journal,

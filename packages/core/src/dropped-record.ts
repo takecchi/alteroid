@@ -1,7 +1,8 @@
 import { writeSync } from 'node:fs';
 
+import { collapseErrorCause } from './error-cause.js';
 import type { RunnerEvent } from './runner-protocol.js';
-import type { InboxEvent, JournalEntryInput } from './schema.js';
+import type { InboxEvent, JournalEntryInput, PendingApproval } from './schema.js';
 
 /**
  * 記録の書き込みに失敗したことを stderr へ1行だけ残す。
@@ -1123,8 +1124,32 @@ export function journalEntryShape(entry: JournalEntryInput): string {
   }
 }
 
-/** 1行に収まる長さの上限（理由の側）。 */
-const REASON_LIMIT = 200;
+/**
+ * 承認待ち（`PendingApproval`。`ask_human` が積む行）の、本文を含まない
+ * 見分け（Issue #1229）。
+ *
+ * **`journalEntryShape` の `escalation` ケースと対にしてある。** `ask_human`
+ * は `stores.jobs.putApproval` → `stores.journal.append`（`type: 'escalation'`）
+ * の順に呼ぶ——後段（journal 側）が落ちたときの見分けは既に
+ * `journalEntryShape` が持っている。ここが要るのは前段（`putApproval` 自体）
+ * が落ちたときで、その時点ではまだ journal エントリを組み立てていないので、
+ * `PendingApproval` から直接見分けを作る。
+ *
+ * **本文は出さない。** `question` / `context` は自由文（人間が読む質問文・
+ * 判断の背景）なので `size()` へ逃がす。`id` / `jobId` / `requestId` は
+ * 呼び出し元が決める識別子（クローンの `randomUUID()` ／マネージャーの id）
+ * なので `tag()` でそのまま出す——`journalEntryShape` と同じ「値を誰が
+ * 決めるか」の基準。
+ */
+export function approvalShape(approval: PendingApproval): string {
+  return (
+    `escalation approvalId=${tag(approval.id)}` +
+    (approval.jobId === undefined ? '' : ` managerId=${tag(approval.jobId)}`) +
+    (approval.requestId === undefined ? '' : ` requestId=${tag(approval.requestId)}`) +
+    ` ${size(approval.question, 'question')}` +
+    (approval.context === undefined ? '' : ` ${size(approval.context, 'context')}`)
+  );
+}
 
 /** id や列挙値として載せてよい長さの上限。 */
 const TAG_LIMIT = 64;
@@ -1137,24 +1162,36 @@ const TAG_LIMIT = 64;
  * パラメータを添えてくることがある（＝本文が裏口から戻ってくる）ので、
  * **1行目だけ・長さも切る**。
  *
- * **記録の失敗をログへ出すところは、すべてここを通すこと。** 素の
- * `String(error)` を1か所でも残すと、その1か所だけストア実装に無防備なまま
- * 置き去りになる（そして誰も気づかない）。
- *
  * **⚠️ これは仮想の危険ではない。実測（2026-08-24 観測）:** `drizzle-orm@0.45.2`
  * の `PgPreparedQuery` は失敗したクエリを `DrizzleQueryError` で包み直し、その
  * `message` は `Failed query: <sql>` の**次の行**に `params: <束縛パラメータ>` を
  * 置く。PGlite に当てて確かめたところ、insert の失敗で列の値がそのまま並んだ。
  *
- * **⚠️ そして、いまここで値が落ちているのはその「2行目」という位置のおかげで
- * あって、設計上の保証ではない。** ドライバが改行の位置を変えれば破れる——それは
+ * **記録の失敗をログへ出すところは、すべてここを通すこと。** 素の
+ * `String(error)` を1か所でも残すと、その1か所だけストア実装に無防備なまま
+ * 置き去りになる（そして誰も気づかない）。
+ *
+ * **⭐ 実装は `error-cause.ts` の `collapseErrorCause` に委ねてある（Issue
+ * #1229）。** 「1行目だけ・長さも切る」という上の契約そのものは1文字も
+ * 変わっていない——`collapseErrorCause` の1段目の切り詰め幅を、ここが元々
+ * 持っていた上限（200字）と同じにしてあるので、`.cause` を持たない error
+ * （このリポジトリの大半の例外）に対する出力は前と同じである。**`.cause`
+ * を持つ error（drizzle 経由の pg エラー等）に対してだけ**、SQLSTATE
+ * （`.cause.code`）等の識別子が追加で1段目の後ろに続く——「書き込みが
+ * 失敗した理由がどの層にも出ない」という Issue #1229 の本体はここで埋まる。
+ *
+ * **⚠️ そして、この「2行目」に値が落ちているのはドライバの都合であって、
+ * 設計上の保証ではない。** ドライバが改行の位置を変えれば破れる——それは
  * こちらが制御していない。**⟹ 応答へ返す本文の安全を、この関数に肩代わりさせない
  * こと。** 返してよい例外かどうかは型で分ける（例: `token-pool.ts` の
- * `TokenPoolInputError`）。ここが受け持つのは stderr へ残す跡の側だけである。
+ * `TokenPoolInputError`）。ここが受け持つのは stderr へ残す跡の側だけである
+ * （ただし `collapseErrorCause` 自体は、`detail` 等の値を含みうる欄を
+ * 最初から拾わない作りなので、クローンへ返す側でもそのまま使える——
+ * `error-cause.ts` の doc と `tools.ts` の `formatJournalNotRecordedMessage`
+ * を見よ）。
  */
 export function reasonOf(error: unknown): string {
-  const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-  return clip(text.split('\n', 1)[0] ?? '', REASON_LIMIT);
+  return collapseErrorCause(error);
 }
 
 /** 列挙値・id を1行に収める（改行を持ち込ませない）。 */
