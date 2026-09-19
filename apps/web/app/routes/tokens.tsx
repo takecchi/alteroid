@@ -532,12 +532,20 @@ function describeRotateOn(policy: TokenRotationSettings['rotateOn']): string {
   }
 }
 
-/** `tokenRotationPolicySchema`（core）と同じ3値。ここに数え上げを増やさない——増えたら型検査が落ちる。 */
-const ROTATE_ON_OPTIONS: readonly TokenRotationSettings['rotateOn'][] = [
-  'free_exhausted',
-  'overage_exhausted',
-  'off',
-];
+/**
+ * `<select>` に出す回す契機の数え上げ（`tokenRotationPolicySchema`（core）と同じ3値）。
+ *
+ * **`satisfies Record<…, true>` で縛ってあるのは、網羅をコンパイル時に守るためである**
+ * （`packages/core/src/schema.ts` の `journalEntryTypeNames` と同じ形）。**配列リテラルに
+ * 型注釈を付けた形では守れない** —— 値が増えた日に、欠けたまま黙って通る。読み取り側
+ * （`describeRotateOn`）は `describeUnknown` で安全に倒れるが、**書き込み側は「選べない値が
+ * 在る」ことを何も言わない** —— 人間には画面が完全に見えてしまう。
+ */
+const ROTATE_ON_OPTIONS = Object.keys({
+  free_exhausted: true,
+  overage_exhausted: true,
+  off: true,
+} satisfies Record<TokenRotationSettings['rotateOn'], true>) as TokenRotationSettings['rotateOn'][];
 
 function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
   const setPolicy = useSetTokenPolicy();
