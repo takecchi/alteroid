@@ -29,16 +29,23 @@ import { settleWithin } from './usage-probe.js';
  *
  * さらに同じコメントが3つの落とし穴を明示している。
  *
- * - 「resumed sessions start fresh」 [sdk-verbatim SDKResultSuccess.total_cost_usd] — alteroid はデーモン再起動で resume する
- *   （AGENTS.md「デーモン再起動時の引き取りは2通り」）ので、**必ず踏む**
+ * - 「a resumed or forked session continues from the total its transcript saved, when it has one」 [sdk-verbatim SDKResultSuccess.total_cost_usd]
+ *   — alteroid はデーモン再起動で resume する（AGENTS.md「デーモン再起動時の引き取りは2通り」）
+ *   ので、**必ず踏む**。**0.3.277 で SDK の言い分が変わった欄である** — 0.3.275 までは
+ *   「resumed sessions start fresh」（resume すれば必ず 0 から数え直し）だった。いまは
+ *   **転写が総額を持っていればそこから累積が続く**ので、resume しても減少しない。
+ *   持っていなければ従来どおり 0 から始まる。**どちらに転んでも
+ *   {@link foldUsageSnapshot} は正しい** — 前者は素直な差分、後者は数え直しになる。
+ *   （新旧の対比のために引いている古いほうの文言には、印を付けない。）
  * - 「a mid-session /clear resets the running total」 [sdk-verbatim SDKResultSuccess.total_cost_usd]
  * - 「Crash/startup-error results may carry zeroed values」 [sdk-verbatim SDKResultSuccess.total_cost_usd]
  *
  * 最後のものが一番危ない。ゼロを「累積が 0 になった」として採用すると、記録済みの
  * 消費が消える。**失敗が成功として観測されるのと同じ形の壊れ方**である。だから
  * **成功した `result` の値しか台帳へ入れない**（`runner.ts` の呼び出し側で絞る）。
- * ここまで絞れば、残る減少は resume か `/clear` — どちらも「新しい累積が 0 から
- * 始まった」なので、{@link foldUsageSnapshot} は減少を数え直しとして扱える。
+ * ここまで絞れば、残る減少は `/clear` か「総額を持たない転写からの resume」だけで、
+ * どちらも「新しい累積が 0 から始まった」なので、{@link foldUsageSnapshot} は減少を
+ * 数え直しとして扱える。**総額を引き継いだ resume は減少しないので、そのまま差分になる。**
  *
  * ## 推定値である
  *
