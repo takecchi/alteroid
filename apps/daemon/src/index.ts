@@ -54,6 +54,7 @@ import { createApp, parseAllowedOrigins } from './app.js';
 import { startTokenRotationWatch, type TokenRotationWatch } from './token-watch.js';
 import { startUsagePolling } from './usage-poller.js';
 import { startManagerPolling } from './manager-poller.js';
+import { readArchiveFoldConfig, startArchiveFolding } from './archive-folder.js';
 import { planAuth } from './auth.js';
 import { createJournalBus } from './journal-bus.js';
 import {
@@ -122,6 +123,19 @@ export {
   runtimeFilePath,
   type DaemonRuntimeInfo,
 } from './runtime.js';
+export {
+  ARCHIVE_FOLD_EVERY_ENV,
+  ARCHIVE_FOLD_GRACE_MS,
+  DEFAULT_ARCHIVE_FOLD_EVERY_MINUTES,
+  foldArchiveOnce,
+  readArchiveFoldConfig,
+  startArchiveFolding,
+  type ArchiveFolder,
+  type ArchiveFolderOptions,
+  type ArchiveFoldConfig,
+  type FoldArchiveOnceOptions,
+  type FoldArchiveOnceResult,
+} from './archive-folder.js';
 
 /**
  * 待ち受けるアドレス。既定は 127.0.0.1 のまま。
@@ -1384,6 +1398,25 @@ export async function main(): Promise<void> {
   });
 
   /**
+   * 退避済み生ログ（`archive`）の古い写しを定期的に自動で畳む（issue #698。
+   * `archive-folder.ts`）。**`clone.managers` が要るので `clone` の後に作る**
+   * ——走行中の委譲が抱えている行を `guardArchiveRemoval` で落とすため
+   * （`managerPoller` と同じ理由）。
+   *
+   * `ALTEROID_ARCHIVE_FOLD_EVERY` が `off` 系の綴りなら周期を仕込まない
+   * （`readArchiveFoldConfig` が `null` を返し、`startArchiveFolding` は
+   * タイマーを1つも起こさない）。読めなかった設定値は `schedule` と同じ形で
+   * stderr へ流す。
+   */
+  const archiveFoldConfig = readArchiveFoldConfig();
+  for (const note of archiveFoldConfig.notes) process.stderr.write(`alteroidd: ${note}\n`);
+  const archiveFolder = startArchiveFolding({
+    stores,
+    managers: clone.managers,
+    everyMinutes: archiveFoldConfig.everyMinutes,
+  });
+
+  /**
    * 回し手が出した結果1件を片付ける。**観測から来た回と、状態から来た回で同じ
    * ここを通る**（人間の決定 2026-09-07）。
    *
@@ -1810,6 +1843,9 @@ export async function main(): Promise<void> {
     scheduler.stop();
     usagePoller.stop();
     managerPoller.stop();
+    // 自動で畳む周期も止める（止めたはずのデーモンが背景で `archive.list()` を
+    // 読み続けない。`usagePoller` / `managerPoller` と同じ理由）。
+    archiveFolder.stop();
     // **見張りも畳む。** 止めたはずのデーモンが背景で probe を焼き続けない
     // （`usagePoller` と同じ理由。`token-watch.ts`）。
     tokenWatch?.stop();
