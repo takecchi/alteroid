@@ -431,16 +431,23 @@ describe('describeSituation', () => {
         withLastFailure(summary('a', 'done', true)),
         withLastFailure(summary('b', 'done', true)),
         summary('c', 'done', true),
+        // **走行中にも1本置く（#1212）。** これが無いと `lastTurnFailed` と
+        // `lastTurnFailedIdle` が同じ数になり、**2つを取り違える変異が緑のまま
+        // 通る**（このファイルの「どの2つも同じ数にしない」と同じ理由。実際に
+        // 変異試験で確かめた——この1本を外すと、内訳の側を `lastTurnFailed` に
+        // 差し替える変異が生き残る）。
+        withLastFailure(summary('d', 'running', true)),
       ],
       runners: [],
     });
     const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
     expect(countsLine, '「委譲 全 」の行が見つからない').toBeDefined();
-    // 3本とも `done` かつ `live` なので、区分としてはこれまでどおり全部 `idle` である
+    // `done` かつ `live` の3本は、区分としてはこれまでどおり全部 `idle` である
     // （**`idle` から外さない**。外すと「置けない」と読まれる）。
     expect(countsLine).toContain('手が空いている 3');
-    // そのうち2本は、直近のターンが失敗で終わっている——**同じ行で名乗る。**
-    expect(countsLine).toContain('直近のターンが失敗で終わっているのは 2 本');
+    // 失敗で終わっているのは3本（走行中の1本を含む）、うち `idle` は2本
+    // ——**同じ行で、2つの数を別々に名乗る。**
+    expect(countsLine).toContain('直近のターンが失敗で終わっているのは 3 本');
     expect(countsLine).toContain('「手が空いている」に数えたものが 2 本');
     // 横断する軸であることを、行の中で断る（区分と足すと二重に数える）。
     expect(countsLine).toContain('上の区分とは足し合わせない');
