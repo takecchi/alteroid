@@ -1,3 +1,4 @@
+import { collapseErrorCause } from '@alteroid/core';
 import type { Stores } from '@alteroid/core';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
@@ -81,7 +82,7 @@ export interface CreatePgStoresOptions {
   /** 接続プールの上限。既定は node-postgres のまま。 */
   max?: number;
   /**
-   * 接続の異常を受け取る先。既定は stderr。
+   * 接続の異常を受け取る先。既定は stderr（{@link describePgConnectionError}）。
    *
    * **握り潰さない。** node-postgres の Pool は idle 接続のエラー（DB 再起動・
    * ネットワーク断）を `error` として投げ、受け手が居ないと Node ごと落ちる。
@@ -89,6 +90,19 @@ export interface CreatePgStoresOptions {
    * なので、記憶の器の瞬断でクローンを殺さない。
    */
   onError?: (error: Error) => void;
+}
+
+/**
+ * 既定の idle 接続エラーハンドラが書く1行（テストから直接呼べるよう分離。
+ * Issue #1229）。
+ *
+ * **`collapseErrorCause` を通す。** 以前は `error.message` をそのまま出して
+ * いたので、SQLSTATE 等の識別子が乗っていても捨てていた——`journal` /
+ * `approvals` は同じ `Pool` を共有するので、この1行が「両方の書き込みが
+ * 同時に塞がる窓」で残る唯一の跡になりうる（Issue #1229 受け入れ基準2）。
+ */
+export function describePgConnectionError(error: Error): string {
+  return `alteroid: PostgreSQL の接続でエラー: ${collapseErrorCause(error)}\n`;
 }
 
 /** 既存の drizzle ハンドルからストア一式を組む（ドライバを問わない）。 */
@@ -133,7 +147,7 @@ export async function createPgStores(options: CreatePgStoresOptions | string): P
   const onError =
     config.onError ??
     ((error: Error) => {
-      process.stderr.write(`alteroid: PostgreSQL の接続でエラー: ${error.message}\n`);
+      process.stderr.write(describePgConnectionError(error));
     });
   pool.on('error', onError);
 
