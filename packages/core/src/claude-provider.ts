@@ -322,6 +322,19 @@ export interface ManagerSessionOptionsRequest {
    * `#onPreToolUse` の doc を見よ。
    */
   onPreToolUse: HookCallback;
+  /**
+   * `ALTEROID_MANAGER_AUTO_MEMORY` を解いた結果（`runner.ts` の
+   * `resolveManagerAutoMemoryEnabled`）。**このセッションが auto-memory を
+   * 開いてよいか**であって、開いたか・使ったかの観測ではない。
+   *
+   * `false`（既定）のときだけ `settings: { autoMemoryEnabled: false }` を
+   * `Options` へ載せる（#1189）。**クローン側（`buildCloneSessionOptions` /
+   * `buildCloneDistillOptions`）には同じ引数を持たせない** — auto-memory は
+   * 「書いた本人の次のセッション」に届くという前提そのものが、使い捨てで
+   * 生成し直されるマネージャーとは違い、長寿命1本のクローンでは崩れていない
+   * （#1189 の判断）。
+   */
+  managerAutoMemoryEnabled: boolean;
 }
 
 /** マネージャーへ渡す `Options`。組み立ての知識は `runner.ts` の旧 `#buildOptions` から移した。 */
@@ -345,6 +358,7 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     onSubagentStop,
     onStop,
     onPreToolUse,
+    managerAutoMemoryEnabled,
   } = request;
 
   return {
@@ -393,6 +407,24 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     // 生ログはデーモンへ預ける。runner は永続化の器を持たない（記憶ストアの
     // 鍵を runner に置かないため）。
     sessionStore,
+    // **開いていないときだけ載せる。** `settings` は SDK の「flag settings」層
+    // ——ユーザー側で制御できる層の中で最も優先順位が高い:
+    //
+    // [sdk-verbatim Options.settings]
+    // which has the highest priority among user-controlled settings.
+    //
+    // `autoMemoryEnabled: false` は auto-memory の読み書きそのものを止める:
+    //
+    // [sdk-verbatim Settings.autoMemoryEnabled]
+    // Enable auto-memory for this project. When false, Claude will not read from or write to the auto-memory directory.
+    //
+    // **`autoMemoryDirectory` と違い、`autoMemoryEnabled` の doc には
+    // 「Ignored if set in projectSettings」が付いていない**（この否定は
+    // `check:sdk-quotes` の印では確かめられない——不在の主張なので、次に
+    // SDK を上げる側が目で見て確かめること）。人間が
+    // `ALTEROID_MANAGER_AUTO_MEMORY=true` を置いたとき（`managerAutoMemoryEnabled`）
+    // はこのキー自体を省き、SDK の既定（開く）に委ねる（#1189）。
+    ...(managerAutoMemoryEnabled ? {} : { settings: { autoMemoryEnabled: false } }),
     ...(resume === undefined ? {} : { resume }),
     // 子プロセスを別 UID へ降ろす。**能力は1つも削らない** — 道具も preset も
     // そのままで、変えるのは実行する主体だけである（実行環境の境界）。

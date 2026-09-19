@@ -63,6 +63,7 @@ function managerOptions(): Options {
     onSubagentStop: noopHook,
     onStop: noopHook,
     onPreToolUse: noopHook,
+    managerAutoMemoryEnabled: false,
   });
 }
 

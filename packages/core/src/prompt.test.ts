@@ -649,3 +649,49 @@ describe('buildDistillPrompt — 定期の棚卸しと、引き直した2つの�
     expect(prompt).toContain('主題が2つ以上在るなら割れ');
   });
 });
+
+/**
+ * auto-memory は既定で塞いである（`claude-provider.ts` の
+ * `buildManagerSessionOptions` が `settings.autoMemoryEnabled: false` を渡す、
+ * `runner.ts` の `resolveManagerAutoMemoryEnabled`）。**それでも本文の告知は削らない**
+ * — `ALTEROID_MANAGER_AUTO_MEMORY=true` を置いた器では実際に開くので、塞いだ事実と
+ * 「開いても届かない」事実の両方を本文が持つ必要がある（#1189）。
+ *
+ * ここは文字列の中身を歯で測る、このリポジトリの既存の型（#357 の
+ * `describe('バックグラウンドの完了を待つときの事実の告知（#357）', …)` と同じ形）。
+ * (a)（告げる）単独では #1192 の指摘（「注意書きを増やすことと再発を防ぐことが
+ * 別になり始めている」）に応えられないので、(c)（塞ぐ）側の歯は
+ * `agent-session-options.test.ts` に置く — こちらは文言の歯だけを持つ。
+ */
+describe('auto-memory についての事実の告知（#1189）', () => {
+  it('マネージャーに、既定で閉じていることと、開いても届かないことを告げている', () => {
+    const prompt = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
+    expect(prompt).toContain('auto-memory');
+    expect(prompt).toContain('既定で閉じてある');
+    expect(prompt).toContain(
+      'ここで書いた記憶はクローンにも次の器にも届かない。学びは報告に書くこと。',
+    );
+  });
+
+  it('作業者にも同じ事実を告げている', () => {
+    const prompt = buildWorkerPrompt();
+    expect(prompt).toContain('auto-memory');
+    expect(prompt).toContain('既定で閉じてある');
+    expect(prompt).toContain(
+      'ここで書いた記憶はクローンにも次の器にも届かない。学びは報告に書くこと。',
+    );
+  });
+
+  it('禁止・叱責の文体になっていない（読む側は次の担当であって、悪いことをした人ではない）', () => {
+    const manager = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
+    const worker = buildWorkerPrompt();
+    for (const prompt of [manager, worker]) {
+      // auto-memory の節だけを切り出して調べる（他の節に「しないこと」が
+      // 含まれていても、ここでは見たくない）。
+      const section = prompt.slice(prompt.indexOf('auto-memory'));
+      expect(section).not.toContain('禁止');
+      expect(section).not.toContain('しないこと');
+      expect(section).not.toContain('書くな');
+    }
+  });
+});

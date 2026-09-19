@@ -211,6 +211,38 @@ export function resolvePermissionMode(env: NodeJS.ProcessEnv): ManagerPermission
 }
 
 /**
+ * マネージャーの auto-memory（SDK が自動で読み書きする記憶ディレクトリ）を
+ * 開けるための環境変数。既定は閉じる、明示で開く（#1189）。
+ *
+ * **閉じるのが既定である理由。** auto-memory は人間の Claude Code では
+ * 「書いた本人の次のセッション」に届くが、マネージャー層では書いた記憶が
+ * クローンにも、次の器にも、当のマネージャー自身にも届かない
+ * （マネージャーは使い捨てで、次に起こす器は同じ `~/.claude/projects/<cwd>/memory/`
+ * を見ない）。届かない口を既定で開けておく理由が無く、実際に3人が独立に
+ * 「書いたのに消えた」と誤認した（#1189 観測4件）。
+ *
+ * **それでも塞ぎきらず、環境変数で開けられる形にする。** north_star 禁止2
+ * 「方針は設定で開けられなければならない」——ここを `ManagerSessionOptionsRequest`
+ * の固定値にすると、人間が開きたいときに開けなくなる（能力の削除になる）。
+ * 判定は `resolvePermissionModeFor` と同じ「空・空白は既定、'true'/'false' 以外は
+ * 落とす」形にしてある——閉じた2値の環境変数だからで、`model-tier.ts` の
+ * 「値を検証しない」とは事情が違う（あちらは SDK が増やす名前を人間が先取りできる
+ * 必要がある。こちらは真偽値なので増えない）。
+ */
+export const MANAGER_AUTO_MEMORY_ENV_KEY = 'ALTEROID_MANAGER_AUTO_MEMORY';
+
+/** `ALTEROID_MANAGER_AUTO_MEMORY` を読む。空・未設定なら既定で閉じる（不正な値は落とす）。 */
+export function resolveManagerAutoMemoryEnabled(env: NodeJS.ProcessEnv): boolean {
+  const given = env[MANAGER_AUTO_MEMORY_ENV_KEY]?.trim();
+  if (given === undefined || given.length === 0) return false;
+  if (given === 'true') return true;
+  if (given === 'false') return false;
+  throw new Error(
+    `${MANAGER_AUTO_MEMORY_ENV_KEY} の値が不正: ${given}（使えるのは true / false。既定は false）`,
+  );
+}
+
+/**
  * 貸し出し期限の自己失効を見張る間隔（roadmap M5 PR4）。
  *
  * **環境変数の設定項目にしないこと。** `runner-protocol.ts` の `HEARTBEAT_INTERVAL_MS`
@@ -1900,6 +1932,9 @@ class RunnerSession {
       workerModel: resolveWorkerModel(this.#env),
       cwd: this.#cwd,
       env: this.#childEnv(),
+      // 既定は閉じる。人間が `ALTEROID_MANAGER_AUTO_MEMORY=true` を置いたときだけ
+      // 開く（north_star 禁止2「方針は設定で開けられなければならない」）。
+      managerAutoMemoryEnabled: resolveManagerAutoMemoryEnabled(this.#env),
       // 生ログはデーモンへ預ける。runner は永続化の器を持たない（記憶ストアの
       // 鍵を runner に置かないため）。
       sessionStore: this.#sessionStore(),
