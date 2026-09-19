@@ -7009,7 +7009,35 @@ describe('クローンの道具', () => {
 
       const reply = await h.call('manager_list', {});
 
-      expect(reply).toContain('[done/背景処理待ち×3]');
+      expect(reply).toContain('[done/背景処理待ち×3（2026-09-05T00:00:00.000Z から）]');
+    });
+
+    /**
+     * **Issue #1104。`since` は manager_list へも通す（一覧のこの行が、
+     * `候補1`が推す「経過時間は manager_list の pull 側で名乗る」の実体である）。**
+     * ここで測るのはこの一覧の生成元が `describeManagerState` の第3引数まで
+     * `since` を落とさず渡していること——字面そのものの固定は
+     * `digest.test.ts` の歯が持つ。
+     */
+    it('since が在れば、いつから待っているかの時刻を一覧の行に添える', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.status = 'done';
+      target.awaitingBackground = {
+        tasks: 1,
+        withheldReports: 1,
+        breakdown: 'local_agent×1',
+        since: '2026-09-16T11:00:00.000Z',
+      };
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('（2026-09-16T11:00:00.000Z から）');
+      // **経過時間そのもの（「4時間半」等）は作らない。** 出すのは時刻のみで、
+      // 経過は読む側（クローン）が計算する（`describeManagerState` の doc）。
+      expect(reply).not.toMatch(/\d+時間|\d+分/);
     });
 
     /**
@@ -7050,7 +7078,7 @@ describe('クローンの道具', () => {
 
       const reply = await h.call('manager_list', {});
 
-      expect(reply).toContain('[done/背景処理待ち×3]');
+      expect(reply).toContain('[done/背景処理待ち×3（2026-09-05T00:00:00.000Z から）]');
       expect(reply).not.toContain('BREAKDOWN-MARKER-a91f');
     });
 
@@ -7069,6 +7097,9 @@ describe('クローンの道具', () => {
       const description = tools.find((entry) => entry.name === 'manager_list')?.description;
 
       expect(description).toContain('done/背景処理待ち×N');
+      // **Issue #1104。** `since` の意味（時刻であって経過時間の計算結果ではない）を
+      // 道具の説明文にも書いてあることを固定する。
+      expect(description).toContain('経過時間そのもの');
       expect(description).toContain('印が無いことを「手が空いている」と読まないこと');
     });
   });
@@ -8372,7 +8403,10 @@ describe('runner_list（器の一覧）', () => {
 
     const reply = await h.call('runner_list', {});
 
-    expect(reply).toContain('mgr-bg[done/背景処理待ち×3]');
+    // **Issue #1104。** `since` は runner_list の内訳でも manager_list と
+    // 同じ生成元（`describeManagerState`）を通るので、同じ字面（時刻の
+    // 添え）になる。
+    expect(reply).toContain('mgr-bg[done/背景処理待ち×3（2026-09-05T00:00:00.000Z から）]');
     // 陰性対照: 握り潰しの無い側には1文字も足さない。
     expect(reply).toContain('mgr-idle[done]');
   });

@@ -193,27 +193,6 @@ import {
 } from './usage.js';
 
 /**
- * `describeManagerState` の第3引数へ渡す前に `since` を落とす（Issue #1104）。
- *
- * **この一覧・簡潔な状態表示（`manager_list` / `runner_list` / `manager_stop`
- * の結果文）は、時刻で答えが変わる値を焼かない。** `ManagerAwaitingBackground`
- * の `since`（doc「時刻で答えが変わるものを一覧に焼かない」）をそのまま
- * `describeManagerState` へ渡すと、そこが `since` を描く（`digest.ts` の
- * `describeManagerState` の doc）ようになった——だから既存の呼び出し（この
- * ファイル5箇所）はここを通して `since` を落としてから渡す。**経過時間が
- * 要るなら、この一覧を何度でも引き直せばよい**（構造化データ側の
- * `awaitingBackground.since` は落としていない——落ちるのはこの1行の字面
- * だけである）。日報（`digest.ts` の `buildActivityDigest`）はこれを通さず
- * `since` をそのまま描く——あちらは1回限りの期間の要約で、引き直しの代わりが
- * 無い。
- */
-function briefAwaitingBackground(
-  awaitingBackground: { tasks: number } | undefined,
-): { tasks: number } | undefined {
-  return awaitingBackground === undefined ? undefined : { tasks: awaitingBackground.tasks };
-}
-
-/**
  * クローンの道具（インプロセス MCP）。
  *
  * **ここにあるのは「足す分」であって「持てる全部」ではない。** クローンは preset
@@ -7482,7 +7461,7 @@ export function createCloneTools(context: ToolContext) {
           return text(
             `[${managerId}] ${result.detail}\n` +
               `**止まっていない。** runner には ${managerId} のセッションがまだ残っている。` +
-              `いまの状態: ${after === undefined ? '一覧から消えている' : describeManagerState(after.status, after.live, briefAwaitingBackground(after.awaitingBackground))}。` +
+              `いまの状態: ${after === undefined ? '一覧から消えている' : describeManagerState(after.status, after.live, after.awaitingBackground)}。` +
               ' manager_list で確かめ、必要ならもう一度止めること。',
           );
         }
@@ -7514,7 +7493,7 @@ export function createCloneTools(context: ToolContext) {
         lines.push(
           after === undefined
             ? '一覧からも消えている。'
-            : `いまの状態: ${describeManagerState(after.status, after.live, briefAwaitingBackground(after.awaitingBackground))}。`,
+            : `いまの状態: ${describeManagerState(after.status, after.live, after.awaitingBackground)}。`,
         );
         // **畳んだターンの本文へ、止めた直後に到達できるようにする（Issue
         // #1038）。** 誤って止めたことに気づく契機が、止めた直後には無かった
@@ -7615,6 +7594,14 @@ export function createCloneTools(context: ToolContext) {
           '握り潰した報告の中身は manager_report と日誌（decision）に在る。' +
           '**この印は器が名乗った分にだけ立つ** — この欄を送らない古い器では、背景処理を待っていても' +
           '立たない。だから **印が無いことを「手が空いている」と読まないこと。**',
+        // **Issue #1104。** 同じ合図が繰り返し畳んで届いていた原因は「いつから
+        // 待っているか」を憶えている場所が無かったことだった——回数ではなく
+        // 経過時間で判断できるよう、その時刻をこの一覧で名乗る。
+        '背景処理待ち×N の直後に「（<時刻> から）」が付くことがある。それはこの委譲が' +
+          '最初に背景処理待ちへ入った時刻（ISO 8601、UTC）で、経過時間そのもの（「N時間」等）' +
+          'ではない——ここは呼ばれるたびに答えが変わる計算をしない場所なので、経過は' +
+          'いまの時刻と見比べて自分で出すこと。時刻が付かないのは「そう名乗られていない」' +
+          '場合であって「待ち始めていない」ではない（この印が立つ条件は直前の断りと同じ）。',
         '依頼文と報告は抜粋なので、全文が要るなら manager_report で取ること。',
         // **#579**: 「runner にセッションが無い」を、誰かが送るまで待たずに
         // 名乗れるようになった。⚠ の行そのものの字面は変えていない——変えたのは
@@ -7898,7 +7885,7 @@ export function createCloneTools(context: ToolContext) {
             // **第3引数まで通す（#621 / #643）。** `status: 'done'` は
             // 「手が空いた」と「背景処理の完了を待って畳んだ」を潰している——
             // 潰れたぶんを戻すのは `describeManagerState` 1箇所である。
-            title: `[${describeManagerState(manager.status, manager.live, briefAwaitingBackground(manager.awaitingBackground))}]`,
+            title: `[${describeManagerState(manager.status, manager.live, manager.awaitingBackground)}]`,
             createdAt: manager.startedAt,
             updatedAt: manager.updatedAt,
             summary: `依頼: ${excerptLine(manager.request, LIST_REQUEST_EXCERPT)}`,
@@ -9465,7 +9452,7 @@ export function createCloneTools(context: ToolContext) {
                 shown
                   .map(
                     (m) =>
-                      `${m.managerId}[${describeManagerState(m.status, m.live, briefAwaitingBackground(m.awaitingBackground))}]` +
+                      `${m.managerId}[${describeManagerState(m.status, m.live, m.awaitingBackground)}]` +
                       // **Issue #914 提案1。** 世代が食い違うときだけ足す短い印
                       // （`runnerManagerTokenTag` の doc）。詳細は manager_list へ。
                       runnerManagerTokenTag(m),
@@ -9636,7 +9623,7 @@ export function createCloneTools(context: ToolContext) {
               shown
                 .map(
                   (m) =>
-                    `${m.managerId}[${describeManagerState(m.status, m.live, briefAwaitingBackground(m.awaitingBackground))}]` +
+                    `${m.managerId}[${describeManagerState(m.status, m.live, m.awaitingBackground)}]` +
                     runnerManagerTokenTag(m),
                 )
                 .join(', ') +
