@@ -26,9 +26,18 @@ import type { EnvVarScope, EnvVarView } from '~/lib/types';
  * からも呼べるようにしただけである（`.claude/skills/env-profile/SKILL.md`）。
  *
  * **CLI と同じ資格。** 読み出し（一覧・指紋）は `authenticate` だけで開くが、
- * 置く・外す（`PUT /credentials`）は `requireOperator`——実行環境の持ち主
- * でなければ 403 になる。ボタンは隠さない（`settings.tsx` の
- * `ResetWorkspace` と同じ「なぜ押せないかを消さない」方針）。
+ * 置く・外す（`PUT /credentials`）は `requireOwner`——宣言済み owner でなければ
+ * 403 になる。ボタンは隠さない（`settings.tsx` の `ResetWorkspace` と同じ
+ * 「なぜ押せないかを消さない」方針）。
+ *
+ * **⚠️ 2026-09-17 まで、この画面のボタンは押すと必ず 403 だった**（issue #1195）。
+ * 資格が `requireOperator` だったためで、**ブラウザは構造的にそれを通れない**
+ * ——「実行環境の持ち主」はサーバ上のファイルを読めることであって、提示できる
+ * 秘密ではない。**2026-09-17〜18 の間は `grantedBy === 'operator'` の近似
+ * （issue #1195）で通していたが、いまは `ownerDeclaredAt` の宣言（issue #1198）
+ * へ置き換えてある**——宣言は `routes/access.tsx` から `alteroid access owner`
+ * 相当のボタンで行う。**この画面は1バイトも変えていない**——直したのは
+ * デーモン側の門だけである。
  */
 export default function EnvVars() {
   return (

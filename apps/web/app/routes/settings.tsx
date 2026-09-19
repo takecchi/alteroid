@@ -351,9 +351,14 @@ function ResetSummaryView({ cleared }: { cleared: WorkspaceResetSummary }) {
  * ないという重さの違いによる。**`reset` という語を打たせる**（`y` 1文字の
  * 誤打で通らないようにするため。CLI の `resetCommand` の確認と同じ判断）。
  *
- * **ボタンは常に出す。** 実行環境の持ち主でなければ `POST /reset` が 403 を
- * 返すが、隠さない——隠すと「なぜ押せないか」が消える
+ * **ボタンは常に出す。** 宣言済み owner（`requireOwner`。issue #1198）でなければ
+ * `POST /reset` が 403 を返すが、隠さない——隠すと「なぜ押せないか」が消える
  * （`hooks/mutations.ts` の `useRemoveSchedule` の doc と同じ判断）。
+ *
+ * **⚠️ 2026-09-17 まで、ここは押すと必ず 403 だった**（issue #1195。`env-vars.tsx`
+ * と同じ機序）。**2026-09-17〜18 の間は近似（`grantedBy === 'operator'`）で
+ * 通していたが、いまは `ownerDeclaredAt` の宣言（issue #1198。`routes/access.tsx`
+ * から行う）へ置き換えてある。**
  */
 function ResetWorkspace() {
   const resetWorkspace = useResetWorkspace();

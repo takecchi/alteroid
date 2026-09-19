@@ -51,6 +51,7 @@ import {
   INBOX_EVENT_TYPE_ORDER,
   isAccountGranted,
   isDailyReport,
+  isDeclaredOwner,
   jobStatusSchema,
   journalEntrySchema,
   localDayRange,
@@ -1277,10 +1278,62 @@ export function createApp(deps: AppDeps) {
    * `EXPECTED_OPERATOR_ROUTES` で、そこは配線と一覧の一致を測っている。定義
    * そのものはこの決定でも変えていない——変えたのは経路ごとの配線（どこへ
    * 引数として渡すか）である。
+   *
+   * **⚠️ 2026-09-17、この門から `PUT /credentials` と `POST /reset` が外れた**
+   * （issue #1195）。外れた先は「無し」ではなく、下の `requireOwner`
+   * ——**一段弱いが `authenticate` よりは強い**門である。⟹ **ここに残っているのは
+   * `/profile` の読み書き2本と、下の owner 宣言の口2本で、いずれも応答本文に鍵が
+   * 丸ごと載るか実行環境そのものを差し替える口だからである**（2026-09-06 の
+   * 同格化でも名指しで外された。逐語は `git show f285737 --format=%B -s`）。
    */
   const requireOperator = createMiddleware<{ Variables: AuthVariables }>(async (c, next) => {
     if (c.get('principal').kind !== 'operator') {
       return c.json({ error: '実行環境の持ち主だけが操作できる' as const }, 403);
+    }
+    await next();
+  });
+
+  /**
+   * **宣言済み owner だけに絞る門。**（issue #1198。本来の形）
+   *
+   * 通すのは2つ —— ①実行環境の持ち主（状態ファイルの token を提示できる）
+   * ②**`ownerDeclaredAt` が入った、許可済みのアカウント**（`isDeclaredOwner`）。
+   *
+   * **⚠️ 2026-09-18、`requireOperatorOrDirectGrant`（issue #1195。`grantedBy ===
+   * 'operator'` による近似）をここで置き換えた。** 近似は「持ち主が端末から直に
+   * 許可した」という*別の事実*からの推測で、破れる条件を持っていた（issue #1198
+   * 本文）。**ここは推測をやめ、`ownerDeclaredAt` という独立の欄を見る** ——
+   * 立てられるのは operator トークンだけ（下の `POST /access/:accountId/owner`）
+   * なので、旗を持てる者は常にホストへ到達できる者に限られる。
+   *
+   * **なぜ `requireOperator` と分けるのか。** ブラウザは絶対に①になれない
+   * （①は「サーバ上のファイルを読めること」であって、秘密の提示ではない
+   * —— `auth.ts` の `isOperator`）。⟹ **Web UI にログインした人間は、それが箱の
+   * 持ち主本人であっても `requireOperator` を構造的に通れない。** 実際に人間が
+   * 環境変数の操作とリセットで弾かれた（#1195）。
+   *
+   * **なぜ「許可されている」では足りないのか。** 正典が線を引いている —— 逐語は
+   * `grep -Fn -- '実行環境そのものを差し替える資格までは含めない' docs/architecture.md`。
+   * ⟹ 2026-09-06 の同格化（`/tokens` `/access/*`）をそのままこの門へ広げることは
+   * しない。**足したのは「単に許可された」より一段強い資格のほうである。**
+   *
+   * **403 の本文は `requireOperator` とは違える** ——「持ち主そのもの」と「持ち主
+   * として宣言されたアカウント」は別の状態であり、CLI の案内も別になる（`alteroid
+   * access owner <id>` を打てば直る、という導線が要るのはこちら側だけ）。
+   * `apps/cli/src/target.ts` の `forbiddenKindOf` が3種類目として区別する。
+   *
+   * **この門を通る経路の一覧を持つのは歯である。本数をここで数え直さないこと**
+   * —— 数え上げの持ち主は `scripts/require-operator-routes.test.ts` の
+   * `EXPECTED_OWNER_ROUTES` で、そこは配線と一覧の一致を測っている。
+   */
+  const requireOwner = createMiddleware<{ Variables: AuthVariables }>(async (c, next) => {
+    const principal = c.get('principal');
+    const allowed = principal.kind === 'operator' || isDeclaredOwner(principal.account);
+    if (!allowed) {
+      return c.json(
+        { error: '実行環境の持ち主として宣言されたアカウントだけが操作できる' as const },
+        403,
+      );
     }
     await next();
   });
@@ -4247,10 +4300,21 @@ export function createApp(deps: AppDeps) {
      * あちらは受け取って走っている runner へ降ろすだけ（器を作り直すと消える）。
      * ここは正本へ置くので、**器が入れ替わっても `hello` のときに降り直す。**
      *
-     * **実行環境の持ち主だけ**（`requireOperator`。`PUT /profile` と同じ強さ）。
-     * 任意の名前で任意の値を、これから起こすマネージャーの環境へ永続的に置ける口で
-     * あり、**`PATH` のような名前も置ける**——`access grant` を通っただけの
-     * アカウントに渡す強さではない（`PUT /profile` の doc と同じ判断）。
+     * **宣言済み owner だけ**（`requireOwner`）。任意の名前で任意の値を、これから
+     * 起こすマネージャーの環境へ永続的に置ける口であり、**`PATH` のような名前も
+     * 置ける**——`access grant` を通っただけのアカウントに渡す強さではない。
+     *
+     * **⚠️ 2026-09-17、ここは `requireOperator` から一段緩めた**（issue #1195）。
+     * 当初は「持ち主が端末から直に許可したアカウント」（`grantedBy === 'operator'`）
+     * の近似で通していたが、**2026-09-18 に `ownerDeclaredAt` の宣言へ置き換えた**
+     * （issue #1198）——**ブラウザは `requireOperator` を構造的に通れないので、
+     * そのままでは箱の持ち主本人が Web UI から自分の環境変数を置けなかった。**
+     * 伝播した許可（A が B を通した）は通らない。理由は `requireOwner` の doc にある。
+     *
+     * **⚠️ `GET /profile` `PUT /profile` は緩めていない。** あちらは応答本文に鍵が
+     * 丸ごと載る口で、こちらは**置けるが読み出せない**（一覧が返すのは指紋である）。
+     * ⟹ **意図した非対称である** —— ここの資格が漏れて起きるのは「今後の鍵が
+     * 書き換わる」で、「いま在る鍵が流出する」ではない。
      *
      * **⚠️ `POST /runners/credentials` の資格（`authenticate` だけ）はこの PR では
      * 変えていない。** あちらの緩さは以前から在るもので、締めるかどうかは方針の
@@ -4280,7 +4344,9 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           403: {
-            description: '実行環境の持ち主ではない。',
+            description:
+              '実行環境の持ち主として宣言されたアカウントではない（宣言していない' +
+              '許可済みアカウントも含む）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           503: {
@@ -4289,7 +4355,7 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      requireOperator,
+      requireOwner,
       /**
        * **既定の 400 を使わない**（`POST /runners/credentials` と同じ理由）。
        * 鍵を1本 `name` の形式ミスで書き間違えただけで、その回に送った*全部*の鍵の
@@ -5607,6 +5673,127 @@ export function createApp(deps: AppDeps) {
     )
 
     /**
+     * **実行環境の持ち主として宣言する。**（issue #1198。本来の形）
+     *
+     * **`requireOperator`。** `/access/grant` `/access/revoke` とは違い、ここは
+     * 許可されたアカウントからは叩けない——**旗を立てられる者を常にホストへ到達
+     * できる者へ限る**ことが、この機能の「伝播しない」という性質そのものである
+     * （`requireOwner` の doc）。ここへ `authenticate` だけを許す設計は取らない。
+     *
+     * **宣言できるのは許可済みのアカウントだけ。** `AuthStore.setAccountOwner` が
+     * 未許可の行への宣言を1操作で拒む（`packages/core/src/auth.ts` の doc）。
+     */
+    .post(
+      '/access/:accountId/owner',
+      describeRoute({
+        tags: ['access'],
+        summary: '実行環境の持ち主として宣言する',
+        description:
+          '宣言できるのは実行環境の持ち主（operator トークン）だけ。対象は許可済み' +
+          '（`access grant` 済み）のアカウントに限る——未許可なら 409。運ぶ情報は無い' +
+          '（`{}` を送る）。宣言済みのアカウントは `PUT /credentials` `POST /reset` を' +
+          '通る（`requireOwner`）。',
+        requestBody: noBodyPostRequestBody(
+          '**中身は読まないので `{}` を送ればよい。** 本文そのものではなく ' +
+            '`content-type: application/json` が要る。',
+        ),
+        responses: {
+          200: {
+            description: '宣言した。',
+            content: { 'application/json': { schema: resolver(accessAccountResponseSchema) } },
+          },
+          403: {
+            description: '実行環境の持ち主ではない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description: '該当するアカウントが無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          409: {
+            description: '対象のアカウントがまだ許可されていない（先に access grant が要る）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          ...noBodyPostResponses(),
+        },
+      }),
+      requireOperator,
+      deliberateClient,
+      async (c) => {
+        const result = await authService.setOwner(c.req.param('accountId'), true);
+        if (result.status === 'not_found') return c.json({ error: 'not found' as const }, 404);
+        if (result.status === 'not_granted') {
+          return c.json(
+            { error: 'このアカウントはまだ許可されていない（先に access grant が要る）' as const },
+            409,
+          );
+        }
+        // 誰を宣言したかは必ず残す（`/access/grant` と同じ理由。PRD「可観測性」）。
+        await stores.journal.append({
+          type: 'decision',
+          decision: `実行環境の持ち主として宣言: ${describeAccount(result.account)}`,
+          grounds: `${describeActor(c.get('principal'))}（alteroid access owner）`,
+        });
+        return c.json(
+          accessAccountResponseSchema.parse({ account: await accountView(stores, result.account) }),
+        );
+      },
+    )
+
+    /**
+     * **実行環境の持ち主としての宣言を取り消す。**（issue #1198）
+     *
+     * **`requireOperator`。** 取り消しは対象の許可状態を問わない
+     * （`AuthStore.setAccountOwner` の doc）——行が在れば常に通る。
+     */
+    .post(
+      '/access/:accountId/owner/revoke',
+      describeRoute({
+        tags: ['access'],
+        summary: '実行環境の持ち主としての宣言を取り消す',
+        description:
+          '宣言していなくても 200（既に取り消し済みと同じ扱い）。運ぶ情報は無い' +
+          '（`{}` を送る）。',
+        requestBody: noBodyPostRequestBody(
+          '**中身は読まないので `{}` を送ればよい。** 本文そのものではなく ' +
+            '`content-type: application/json` が要る。',
+        ),
+        responses: {
+          200: {
+            description: '取り消した（既に未宣言でも 200）。',
+            content: { 'application/json': { schema: resolver(accessAccountResponseSchema) } },
+          },
+          403: {
+            description: '実行環境の持ち主ではない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description: '該当するアカウントが無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          ...noBodyPostResponses(),
+        },
+      }),
+      requireOperator,
+      deliberateClient,
+      async (c) => {
+        const result = await authService.setOwner(c.req.param('accountId'), false);
+        if (result.status === 'not_found') return c.json({ error: 'not found' as const }, 404);
+        // `not_granted` は取り消し（declared=false）では起こらない
+        // （`AuthStore.setAccountOwner` の doc——取り消しは行が在れば常に通る）。
+        if (result.status === 'not_granted') return c.json({ error: 'not found' as const }, 404);
+        await stores.journal.append({
+          type: 'decision',
+          decision: `実行環境の持ち主としての宣言を取り消し: ${describeAccount(result.account)}`,
+          grounds: `${describeActor(c.get('principal'))}（alteroid access owner --revoke）`,
+        });
+        return c.json(
+          accessAccountResponseSchema.parse({ account: await accountView(stores, result.account) }),
+        );
+      },
+    )
+
+    /**
      * デーモンを止める（`alteroid daemon stop` の受け口）。
      *
      * **資格は `authenticate` だけ（`requireOperator` は付けない）。**
@@ -5664,9 +5851,15 @@ export function createApp(deps: AppDeps) {
      * `TRUNCATE` を行った（2026-09-14）。ここはその「同条件」を alteroid
      * 自身の機能として持たせたもの。
      *
-     * **実行環境の持ち主だけ**（`requireOperator`。`PUT /profile` `PUT
-     * /credentials` と同じ強さ）——`access grant` だけのアカウントに、記憶
-     * そのものを消せる資格までは渡さない。
+     * **宣言済み owner だけ**（`requireOwner`。`PUT /credentials` と同じ強さ）
+     * ——`access grant` だけのアカウントに、記憶そのものを消せる資格までは渡さない。
+     *
+     * **⚠️ 2026-09-17、ここは `requireOperator` から一段緩めた**（issue #1195）。
+     * 当初は「持ち主が端末から直に許可したアカウント」の近似で通していたが、
+     * **2026-09-18 に `ownerDeclaredAt` の宣言へ置き換えた**（issue #1198）
+     * ——**下の「Web UI の確認ダイアログ」は、そのままでは押しても必ず 403 に
+     * なっていた**（`apps/web/app/routes/settings.tsx` の `ResetWorkspace`）。
+     * 伝播した許可（A が B を通した）は通らない。
      *
      * **`confirm: true` を必須にする**（`resetRequestSchema` の doc）。CLI・
      * Web UI の確認ダイアログは呼ぶ前の話で、この口自体にも確認の印を要求する
@@ -5698,12 +5891,14 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           403: {
-            description: '実行環境の持ち主ではない。',
+            description:
+              '実行環境の持ち主として宣言されたアカウントではない（宣言していない' +
+              '許可済みアカウントも含む）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
       }),
-      requireOperator,
+      requireOwner,
       jsonBody(resetRequestSchema, () => ({
         error: '`confirm: true` を伴っていない（取り消せない操作なので確認を必須にしてある）',
       })),

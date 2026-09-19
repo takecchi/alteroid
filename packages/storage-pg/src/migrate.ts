@@ -528,6 +528,13 @@ export const STATEMENTS = [
   // 見るほうが `answered_at` と揃った形になる。索引は足さない（承認待ちの
   // 行数は運用の規模から見て小さく、`answered_at` にも専用の索引は無い）。
   `alter table approvals add column if not exists withdrawn_at timestamptz`,
+
+  // --- オーナー本人の宣言（#1198）------------------------------------------
+  // `null` は「宣言されていない」——既存行は全部これになるので、マージ直後も
+  // `requireOwner` を通す行は無い（今日と1ビットも変わらない）。単純な列追加
+  // なので、このファイル冒頭の「危ないのは drop index と対の create index
+  // だけ」に当たらない——2周目以降も本当の no-op である。
+  `alter table auth_accounts add column if not exists owner_declared_at timestamptz`,
 ] as const;
 
 /** `ensureOpenManagerBodyIndex` が作る部分 unique 索引の名前（issue #1041）。 */

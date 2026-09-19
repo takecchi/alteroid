@@ -958,6 +958,16 @@ export function createMemoryStores(): Stores {
       accounts.set(accountId, granted);
       return { status: 'granted', account: granted };
     },
+    async setAccountOwner(accountId, declaredAt) {
+      // 検査から書き込みまでの間に await を挟まない（他の実装と同じ理由——
+      // 挟むと「読む→検査→書く」に割れて、宣言と許可の不変条件が崩れる窓ができる）。
+      const account = accounts.get(accountId);
+      if (account === undefined) return { status: 'not_found' };
+      if (declaredAt !== null && account.grantedAt === null) return { status: 'not_granted' };
+      const updated = { ...account, ownerDeclaredAt: declaredAt };
+      accounts.set(accountId, updated);
+      return { status: 'ok', account: updated };
+    },
   };
 
   const profile: ProfileStore = {

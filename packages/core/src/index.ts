@@ -173,6 +173,7 @@ export {
   encodeState,
   isAccessTokenUsable,
   isAccountGranted,
+  isDeclaredOwner,
   isLoginRequestOpen,
   issueAccessTokenValue,
   loginRequestSchema,
@@ -186,6 +187,7 @@ export {
   type GrantOutcome,
   type LoginRequest,
   type LoginRequestStatus,
+  type OwnerOutcome,
 } from './auth.js';
 export {
   GOOGLE_PROVIDER_ID,

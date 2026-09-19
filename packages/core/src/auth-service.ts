@@ -14,6 +14,7 @@ import {
   type AuthStore,
   type GrantOutcome,
   type LoginRequest,
+  type OwnerOutcome,
 } from './auth.js';
 import type { AuthProviderRegistry } from './auth-providers.js';
 
@@ -76,6 +77,8 @@ export interface AuthService {
   authenticate(bearer: string): Promise<AuthAccount | null>;
   grant(accountId: string, by: string): Promise<GrantResult>;
   revoke(accountId: string): Promise<AuthAccount | null>;
+  /** 実行環境の持ち主として宣言する／取り消す（issue #1198）。operator トークンだけが呼ぶ。 */
+  setOwner(accountId: string, declared: boolean): Promise<OwnerOutcome>;
   listAccounts(): Promise<AuthAccount[]>;
   /**
    * いま alteroid を使える全アカウント（誰も居なければ空）。
@@ -83,8 +86,14 @@ export interface AuthService {
    * ⚠️ **2026-09-09 のオーナー決定まで `owner(): Promise<AuthAccount | null>` だった。**
    * 上限を外した以上、単数の名前はここで嘘になる（1件しか返さない実装のままだと、
    * 2人目以降が呼び出し側から静かに消える）。
+   *
+   * ⚠️ **2026-09-18、`owners()` からここへ改名した**（issue #1198）。「owner」が
+   * `ownerDeclaredAt`（実行環境の持ち主として宣言されたアカウント）と「許可された
+   * 全アカウント」の2つの意味を持つと同じ語がずれる。ここが返すのは後者（許可の
+   * 有無だけを見る）なので、意味に合わせて `grantedAccounts` へ改めた。呼び手は
+   * 自分のテスト（`auth-service.test.ts`）だけなので改名は安全である。
    */
-  owners(): Promise<AuthAccount[]>;
+  grantedAccounts(): Promise<AuthAccount[]>;
 }
 
 const DEFAULT_LOGIN_TTL_SECONDS = 600;
@@ -235,6 +244,7 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
           lastLoginAt: at,
           grantedAt: null,
           grantedBy: null,
+          ownerDeclaredAt: null,
         };
         await store.putAccount(account);
         await store.putIdentity({
@@ -346,19 +356,30 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
     async revoke(accountId) {
       const account = await store.getAccount(accountId);
       if (account === null) return null;
+      /**
+       * **許可の取り消しは、宣言済みの owner も落とす。**（issue #1198）
+       *
+       * 不変条件「宣言 ⟹ 許可済み」を保つのはストア側（`setAccountOwner`）だが、
+       * ここは反対向き — 許可が消えるなら、それに乗っていた宣言も一緒に消える
+       * 必要がある。**再 grant しても owner には戻らない** — 宣言は明示的な
+       * 行為（`alteroid access owner <id>`）でしか立たない。
+       */
       if (account.grantedAt === null) return account;
-      const updated = { ...account, grantedAt: null, grantedBy: null };
+      const updated = { ...account, grantedAt: null, grantedBy: null, ownerDeclaredAt: null };
       await store.putAccount(updated);
       return updated;
     },
 
+    setOwner: (accountId, declared) =>
+      store.setAccountOwner(accountId, declared ? now().toISOString() : null),
+
     listAccounts: () => store.listAccounts(),
-    owners: () => findOwners(store),
+    grantedAccounts: () => findGrantedAccounts(store),
   };
 }
 
 /** 許可されているアカウント（0件以上。上限は無い）。 */
-async function findOwners(store: AuthStore): Promise<AuthAccount[]> {
+async function findGrantedAccounts(store: AuthStore): Promise<AuthAccount[]> {
   const accounts = await store.listAccounts();
   return accounts.filter((account) => account.grantedAt !== null);
 }

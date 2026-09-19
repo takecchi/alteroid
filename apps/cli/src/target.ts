@@ -80,7 +80,7 @@ async function remoteTarget(baseUrl: string): Promise<Target> {
 
 /**
  * デーモンが返す 403 の本文（`apps/daemon/src/app.ts`）のうち、案内を分ける
- * 根拠にする2つの逐語。
+ * 根拠にする3つの逐語。
  *
  * **ここへ複製する。`apps/daemon` からは import しない。** import すれば
  * `forbiddenKindOf` はデーモン側の定数と自己整合するだけになり、デーモンの
@@ -91,14 +91,25 @@ async function remoteTarget(baseUrl: string): Promise<Target> {
  */
 const NOT_OPERATOR_ERROR = '実行環境の持ち主だけが操作できる';
 const NOT_GRANTED_ERROR = 'このアカウントには alteroid を使う許可が無い';
+/**
+ * `requireOwner`（issue #1198）が返す本文。`apps/daemon/src/app.ts` の
+ * `requireOwner` の逐語（`grep -Fn -- '実行環境の持ち主として宣言されたアカウントだけが操作できる' apps/daemon/src/app.ts`）。
+ * `NOT_OPERATOR_ERROR` とは別の状態を指す——こちらは「ログインして許可も
+ * 得ているが、その端末から宣言されていない」であり、直し方も別
+ * （`alteroid access owner <id>`。器の中で実行しろ、ではない）。
+ */
+const NOT_DECLARED_OWNER_ERROR = '実行環境の持ち主として宣言されたアカウントだけが操作できる';
 
 /**
  * 403 の理由。`not_operator` と `not_granted` は意味も解決策も正反対
  * （前者は「器の中で実行しろ」、後者は「持ち主に access grant してもらえ」）。
+ * `not_declared_owner` は issue #1198 で足した3つ目——`access grant` は
+ * 済んでいるが `alteroid access owner` による宣言がまだ無い状態で、
+ * `PUT /credentials` `POST /reset` のような `requireOwner` 経路だけが返す。
  * `unknown` は「本文からはどちらとも判別できない」——当てずっぽうで片方を
  * 出すと、状況によっては必ず嘘の案内になる。
  */
-export type ForbiddenKind = 'not_operator' | 'not_granted' | 'unknown';
+export type ForbiddenKind = 'not_operator' | 'not_granted' | 'not_declared_owner' | 'unknown';
 
 /**
  * 403 の応答本文から、どちらの理由で拒否されたかを判別する。
@@ -111,6 +122,7 @@ export function forbiddenKindOf(body: unknown): ForbiddenKind {
   const error = (body as { error?: unknown }).error;
   if (error === NOT_OPERATOR_ERROR) return 'not_operator';
   if (error === NOT_GRANTED_ERROR) return 'not_granted';
+  if (error === NOT_DECLARED_OWNER_ERROR) return 'not_declared_owner';
   return 'unknown';
 }
 
@@ -119,14 +131,32 @@ export function forbiddenKindOf(body: unknown): ForbiddenKind {
  *
  * 401 と 403 は意味がまるで違う（やり直せば直るのか、人間の操作が要るのか）ので、
  * 同じ「失敗しました」に潰さない。
+ *
+ * **`kind` を渡すと 403 の案内が変わる。** 省略時（`'unknown'`）は従来どおり
+ * `access grant` の案内を返す——`chat.ts` / `inbox.ts` のように `forbiddenKindOf`
+ * を呼ばずにここへ丸投げしている経路は、その挙動のままでよい（それらの経路は
+ * `authenticate` だけが門なので、403 はほぼ必ず未許可が理由である）。
  */
-export function describeAuthFailure(status: number, target: Target): string | null {
+export function describeAuthFailure(
+  status: number,
+  target: Target,
+  kind: ForbiddenKind = 'unknown',
+): string | null {
   if (status === 401) {
     return target.remote
       ? `認証されませんでした。alteroid login でログインし直してください（${target.baseUrl}）`
       : '認証されませんでした。デーモンを起動し直してください（alteroid daemon stop && alteroid chat）';
   }
   if (status === 403) {
+    if (kind === 'not_declared_owner') {
+      return (
+        '実行環境の持ち主として宣言されたアカウントだけが操作できます' +
+        '（alteroid access grant だけでは足りません）。\n' +
+        'デーモンが動いている環境で次を実行してください:\n' +
+        '  alteroid access list\n' +
+        '  alteroid access owner <アカウント id>'
+      );
+    }
     return (
       'このアカウントには alteroid を使う許可がありません。\n' +
       'デーモンが動いている環境で次を実行してください:\n' +

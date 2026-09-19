@@ -346,19 +346,71 @@ describe('alteroid credential set', () => {
     );
   });
 
-  it('403（実行環境の持ち主でない）なら、どこで打つべきかを言う', async () => {
+  /**
+   * **issue #1198 でこの経路の門が `requireOperator` から `requireOwner` へ
+   * 変わった。** 未宣言（`access grant` は済んでいるが `access owner` をまだ
+   * 打っていない）で拒まれたときの案内は、`alteroid access owner <id>` を
+   * 打つ形にする——`alteroid access list` で id を見る導線とセットである。
+   */
+  it('403（未宣言 owner）なら、access owner を打てと言う', async () => {
     const path = join(dir, 'value.txt');
     await writeFile(path, DUMMY, 'utf8');
     setReply('PUT', '/credentials', {
       status: 403,
       // **デーモンが実際に返す文言そのもの**（`forbiddenKindOf` はこの文字列で
-      // 分岐する。逐語は `grep -Fn -- '実行環境の持ち主だけが操作できる' apps/cli/src/target.ts`）。
+      // 分岐する。逐語は `grep -Fn -- '実行環境の持ち主として宣言されたアカウントだけが操作できる' apps/cli/src/target.ts`）。
+      body: { error: '実行環境の持ち主として宣言されたアカウントだけが操作できる' },
+    });
+
+    const message = await credentialSetCommand('NPM_TOKEN', { file: path }).catch(
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+
+    expect(message).toContain('alteroid access list');
+    expect(message).toContain('alteroid access owner <アカウント id>');
+    // **`access grant` は勧めない。** 既に許可されている前提での 403 なので、
+    // grant を勧めると人間が同じ操作を打ち直して「また 403」を踏む。
+    expect(message).not.toContain('access grant <アカウント id>');
+  });
+
+  it('403（未 grant）なら、access grant を打てと言う', async () => {
+    const path = join(dir, 'value.txt');
+    await writeFile(path, DUMMY, 'utf8');
+    setReply('PUT', '/credentials', {
+      status: 403,
+      body: { error: 'このアカウントには alteroid を使う許可が無い' },
+    });
+
+    const message = await credentialSetCommand('NPM_TOKEN', { file: path }).catch(
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+
+    expect(message).toContain('alteroid access grant <アカウント id>');
+  });
+
+  /**
+   * **`requireOwner` はこの経路の門であって `requireOperator` ではない。**
+   * ⟹ `not_operator` の本文はこの経路からは実際には来ない（`credential.ts` の
+   * doc）。それでも `ForbiddenKind` はこの値を持てる型なので、来た場合に
+   * 当てずっぽうの案内（旧 `docker compose exec …`）を出さないことを固定する
+   * ——「型で塞いだ分岐にも実行時の倒れ先の歯を足す」（AGENTS.md）。
+   */
+  it('403（not_operator の本文。この経路では実際には来ないはず）は、案内を出さない', async () => {
+    const path = join(dir, 'value.txt');
+    await writeFile(path, DUMMY, 'utf8');
+    setReply('PUT', '/credentials', {
+      status: 403,
       body: { error: '実行環境の持ち主だけが操作できる' },
     });
 
-    await expect(credentialSetCommand('NPM_TOKEN', { file: path })).rejects.toThrow(
-      /docker compose exec app alteroid credential list/,
+    const message = await credentialSetCommand('NPM_TOKEN', { file: path }).catch(
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
     );
+
+    expect(message).toContain('理由を判別できなかった');
+    expect(message).not.toContain('docker compose exec');
+    expect(message).not.toContain('access grant');
+    expect(message).not.toContain('access owner');
   });
 });
 

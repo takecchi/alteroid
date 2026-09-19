@@ -1,5 +1,10 @@
 import type { AuthAccount, CloneHost, ManagerPool, OAuthProvider, Stores } from '@alteroid/core';
-import { createAuthProviderRegistry, createAuthService, createMemoryStores } from '@alteroid/core';
+import {
+  createAuthProviderRegistry,
+  createAuthService,
+  createCredentialService,
+  createMemoryStores,
+} from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
@@ -338,8 +343,18 @@ describe('認証が有効なとき', () => {
 
     // **⭐ 本文まで固定する。** 2026-09-06 に `/tokens` と `/access/*` を「alteroid を
     // 使う許可」と同格にしたので、`requireOperator` の 403 を**産む経路はこの
-    // `/profile` の2本しか残っていない**（他は `authenticate` の「許可が無い」403 に
-    // なる）。⟹ **唯一の生産者なので、ここが壊れても他に気づく者が居ない。**
+    // `/profile` の2本と、下の owner 宣言の口2本（`POST /access/:accountId/owner`
+    // / `.../owner/revoke`）だけである**（他は `authenticate` の「許可が無い」403 に
+    // なる）。
+    //
+    // **⚠️ 2026-09-17〜18、`requireOwner` という別の門ができた**（issue #1195 で
+    // `requireOperatorOrDirectGrant` として入り、issue #1198 で中身を差し替えて改名
+    // した）。**この門の 403 の本文は `requireOperator` と1文字も違えていない
+    // 旧設計から一転し、意図して別の文言にしてある**（`requireOwner` の doc）——
+    // 「持ち主そのもの」と「持ち主として宣言されたアカウント」は別の状態で、CLI の
+    // 案内も別になるため。⟹ **ここの本文はいまも `requireOperator` だけの生産物**
+    // （下の describe「宣言済み owner は /credentials と /reset を通る」が、
+    // `requireOwner` 側の別の文言を固定している）。
     //
     // そして CLI はこの本文を見て「デーモンと同じ器の中で実行してください」と案内を
     // 選ぶ（`apps/cli/src/target.ts` の `forbiddenKindOf`）。文言がずれると案内は
@@ -735,5 +750,321 @@ describe('宣言と実物の一致（/auth・/access）', () => {
     const declaredKeys = Object.keys(accountWithIdentitiesSchema.shape).sort();
     const actualKeys = Object.keys(account as Record<string, unknown>).sort();
     expect(actualKeys).toEqual(declaredKeys);
+  });
+});
+
+/**
+ * **宣言済み owner は、Web UI からも環境変数を置けるしリセットもできる**
+ * （issue #1198。本来の形。`requireOwner`）。
+ *
+ * ## なぜこの describe が要るのか
+ *
+ * 人間（箱の持ち主）が Web UI から `PUT /credentials` と `POST /reset` を叩いて
+ * 403 で弾かれた、という報告が出どころである（issue #1195）。**ブラウザは
+ * `requireOperator` を*構造的に*通れない** —— ①（実行環境の持ち主）は「サーバ上の
+ * ファイルを読めること」であって提示できる秘密ではないからである（`isOperator`）。
+ * ⟹ Web UI にボタンは在るのに、押すと必ず 403 になっていた。
+ *
+ * **⚠️ この PR は #1195 が入れた近似（`grantedBy === 'operator'`）を置き換える。**
+ * 近似は「持ち主が端末から直に許可した」という事実からの推測で、破れる条件を
+ * 持っていた（issue #1198 本文）。ここでは `ownerDeclaredAt` という独立の欄を
+ * operator トークンだけが立てる——**旗を持てる者は常にホストへ到達できる者に
+ * 限られる**（`requireOwner` の doc）。
+ *
+ * ## 撃つ方向（歯を弱めないために、片方だけでは緩めすぎた事故を検出できない）
+ *
+ * ①宣言済み owner は**通る** ②宣言していない許可済みアカウントは**通らない**
+ * （広げすぎていないことの対照） ③**伝播した許可（別のアカウントが通した）は
+ * 通らない** ④`/profile` は宣言済み owner でも**通らないまま**（意図した
+ * 非対称） ⑤未ログインは401・未許可は403 ⑥`revoke` の後は宣言も落ち、
+ * 再 grant しても owner ではない ⑦**宣言の口そのもの
+ * （`POST /access/:accountId/owner`）を account トークンで叩くと403**——非伝播の
+ * 証拠で、この PR がいちばん守りたい軸なので厚めに撃つ。
+ *
+ * **②③がいちばん大事である。** ②が緩むと「許可されていれば誰でも owner」へ
+ * 広がったことに誰も気づかない。③が緩むと、許可の伝播（A が B を、B が C を）が
+ * そのまま owner 資格の伝播になる——旧近似が持っていた欠陥そのものである。
+ *
+ * **④は「意図した非対称」の証拠である。** `PUT /credentials` は**置けるが
+ * 読み出せない**（一覧が返すのは指紋）。`GET /profile` は本文に鍵が丸ごと載る口で、
+ * 2026-09-06 の同格化でも名指しで外された。⟹ ここが一緒に緩んだら、それは
+ * この変更が線を踏み越えたということである。
+ *
+ * **本文まで固定するのは①ではなく②③の側である。** `requireOwner` の 403 は
+ * `requireOperator` とは違えてある（`app.ts` の doc）——値はここへ複製してある
+ * （import すると、文言がずれても歯まで一緒にずれて自己整合し、ずれを検出
+ * できなくなる。CLI 側の複製は `apps/cli/src/target.ts` の `forbiddenKindOf`）。
+ */
+describe('宣言済み owner（ownerDeclaredAt）は /credentials と /reset を通る', () => {
+  const NOT_OWNER_ERROR = '実行環境の持ち主として宣言されたアカウントだけが操作できる';
+  const NOT_OPERATOR_ERROR = '実行環境の持ち主だけが操作できる';
+
+  /**
+   * `credentials` の器を渡した app。**渡さないと `PUT /credentials` は門を通った後で
+   * 503 になる**（「置いていない」と「口が無い」を分けるため。`app.test.ts` の
+   * 「器が無ければ 503」）——それでは「門を通ったこと」を 200 で示せない。
+   */
+  function buildAppWithVault() {
+    stores = createMemoryStores();
+    nextSubject = 'sub-1';
+    const resolved: AuthPlan = {
+      enabled: true,
+      providers: [FAKE_PROVIDER],
+      publicBaseUrl: 'http://127.0.0.1:4517',
+      tokenTtlDays: 30,
+      description: 'テスト',
+    };
+    return createApp({
+      clone: stubClone(),
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      credentials: createCredentialService({ stores, withheldEnvKeys: [] }),
+      auth: {
+        plan: resolved,
+        service: createAuthService({
+          store: stores.auth,
+          providers: createAuthProviderRegistry(resolved.providers),
+        }),
+      },
+    });
+  }
+
+  let vaultApp: ReturnType<typeof createApp>;
+
+  beforeEach(() => {
+    vaultApp = buildAppWithVault();
+  });
+
+  const putCredential = (headers: Record<string, string>) =>
+    vaultApp.request('/credentials', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', ...headers },
+      body: JSON.stringify({ credentials: [{ name: 'GIT_AUTHOR_NAME', value: 'takecchi' }] }),
+    });
+
+  const postReset = (headers: Record<string, string>) =>
+    vaultApp.request('/reset', {
+      ...post,
+      headers: { ...post.headers, ...headers },
+      body: JSON.stringify({ confirm: true }),
+    });
+
+  const postOwner = (accountId: string, headers: Record<string, string>) =>
+    vaultApp.request(`/access/${accountId}/owner`, {
+      ...post,
+      headers: { ...post.headers, ...headers },
+    });
+
+  const postOwnerRevoke = (accountId: string, headers: Record<string, string>) =>
+    vaultApp.request(`/access/${accountId}/owner/revoke`, {
+      ...post,
+      headers: { ...post.headers, ...headers },
+    });
+
+  /** ログインさせ、許可した（まだ owner 宣言はしていない）アカウント。 */
+  async function grantedAccount(): Promise<{ token: string; accountId: string }> {
+    const claimed = await loginThrough(vaultApp);
+    const granted = await vaultApp.request(`/access/${claimed.account.id}/grant`, {
+      ...post,
+      headers: { ...post.headers, ...OPERATOR },
+    });
+    expect(granted.status).toBe(200);
+    return { token: claimed.token, accountId: claimed.account.id };
+  }
+
+  /** ログイン・許可したうえで、operator が owner として宣言する。 */
+  async function ownerToken(): Promise<{ token: string; accountId: string }> {
+    const account = await grantedAccount();
+    const declared = await postOwner(account.accountId, OPERATOR);
+    expect(declared.status).toBe(200);
+    // **前提を測っておく。** ここが埋まっていなければ、以下の①は
+    // 「通った」ではなく「別の理由で通った」になる。
+    const body = (await declared.json()) as { account: { ownerDeclaredAt: string | null } };
+    expect(body.account.ownerDeclaredAt).not.toBeNull();
+    return account;
+  }
+
+  it('① 宣言済み owner は PUT /credentials を通る（200）', async () => {
+    const owner = await ownerToken();
+    const response = await putCredential({ authorization: `Bearer ${owner.token}` });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { credentials: { name: string }[] };
+    expect(body.credentials.map((entry) => entry.name)).toEqual(['GIT_AUTHOR_NAME']);
+  });
+
+  it('① 宣言済み owner は POST /reset を通る（200）', async () => {
+    const owner = await ownerToken();
+    const response = await postReset({ authorization: `Bearer ${owner.token}` });
+    expect(response.status).toBe(200);
+  });
+
+  it('① 実行環境の持ち主そのものは今日どおり通る（能力を消したのではない）', async () => {
+    expect((await putCredential({ ...OPERATOR })).status).toBe(200);
+    expect((await postReset({ ...OPERATOR })).status).toBe(200);
+  });
+
+  it('② 資格が無ければ 401 のまま（門を足したことが未ログインへ漏れていない）', async () => {
+    expect((await putCredential({})).status).toBe(401);
+    expect((await postReset({})).status).toBe(401);
+  });
+
+  it('② ログインしただけ（未許可）は 403 のまま', async () => {
+    const claimed = await loginThrough(vaultApp);
+    const auth = { authorization: `Bearer ${claimed.token}` };
+    expect((await putCredential(auth)).status).toBe(403);
+    expect((await postReset(auth)).status).toBe(403);
+  });
+
+  /**
+   * **⭐ この歯がいちばん大事である。** 「宣言済みアカウントだけが通る」が
+   * 「許可されていれば誰でも通る」へ広がったときに鳴る唯一の場所である
+   * （広げすぎていないことの陰性対照）。
+   */
+  it('② 宣言していない許可済みアカウントは 403 のまま（広げすぎていない）', async () => {
+    const account = await grantedAccount();
+    const auth = { authorization: `Bearer ${account.token}` };
+
+    // alteroid は使える（記憶には触れる）——許可はされている。
+    expect((await vaultApp.request('/memory', { headers: auth })).status).toBe(200);
+
+    // それでも宣言していないので環境変数とリセットは通らない。
+    const forbidden = await putCredential(auth);
+    expect(forbidden.status).toBe(403);
+    expect(await forbidden.json()).toEqual({ error: NOT_OWNER_ERROR });
+    expect((await postReset(auth)).status).toBe(403);
+  });
+
+  /**
+   * **旧近似（`grantedBy === 'operator'`）が壊れていた条件そのもの。** `grantedBy`
+   * を1箇所も読まない実装なら、ここは自動的に通る——読んでいたら伝播した相手が
+   * 「端末から直に許可された」と誤認されうる。
+   */
+  it('③ 許可が伝播したアカウント（別のアカウントが通した）は 403（旧近似が広がっていた条件）', async () => {
+    const owner = await ownerToken();
+
+    nextSubject = 'sub-2';
+    const second = await loginThrough(vaultApp);
+    const granted = await vaultApp.request(`/access/${second.account.id}/grant`, {
+      ...post,
+      headers: { ...post.headers, authorization: `Bearer ${owner.token}` },
+    });
+    expect(granted.status).toBe(200);
+    const grantedBody = (await granted.json()) as { account: { grantedBy: string | null } };
+    // 前提: 伝播した許可である（`operator` ではなく、通したアカウントの id）。
+    expect(grantedBody.account.grantedBy).toBe(owner.accountId);
+
+    const auth = { authorization: `Bearer ${second.token}` };
+    // alteroid は使える（記憶には触れる）。
+    expect((await vaultApp.request('/memory', { headers: auth })).status).toBe(200);
+
+    // それでも環境変数とリセットは通らない。
+    const forbidden = await putCredential(auth);
+    expect(forbidden.status).toBe(403);
+    expect(await forbidden.json()).toEqual({ error: NOT_OWNER_ERROR });
+    expect((await postReset(auth)).status).toBe(403);
+  });
+
+  it('⑥ 許可を取り消すと宣言も落ち、再 grant しても owner ではない', async () => {
+    const owner = await ownerToken();
+    const revoked = await vaultApp.request(`/access/${owner.accountId}/revoke`, {
+      ...post,
+      headers: { ...post.headers, ...OPERATOR },
+    });
+    expect(revoked.status).toBe(200);
+    const revokedBody = (await revoked.json()) as { account: { ownerDeclaredAt: string | null } };
+    expect(revokedBody.account.ownerDeclaredAt).toBeNull();
+
+    const auth = { authorization: `Bearer ${owner.token}` };
+    // ここは `authenticate` の「許可が無い」403 に落ちる（門より手前）。
+    expect((await putCredential(auth)).status).toBe(403);
+    expect((await postReset(auth)).status).toBe(403);
+
+    // 再 grant しても owner には戻らない（宣言は明示的な行為でしか立たない）。
+    const regranted = await vaultApp.request(`/access/${owner.accountId}/grant`, {
+      ...post,
+      headers: { ...post.headers, ...OPERATOR },
+    });
+    expect(regranted.status).toBe(200);
+    const regrantedBody = (await regranted.json()) as {
+      account: { ownerDeclaredAt: string | null };
+    };
+    expect(regrantedBody.account.ownerDeclaredAt).toBeNull();
+    expect((await putCredential(auth)).status).toBe(403);
+  });
+
+  it('④ /profile は宣言済み owner でも 403 のまま（意図した非対称）', async () => {
+    const owner = await ownerToken();
+    const auth = { authorization: `Bearer ${owner.token}` };
+
+    const forbidden = await vaultApp.request('/profile', { headers: auth });
+    expect(forbidden.status).toBe(403);
+    // **本文まで固定する。** `requireOperator` の 403（`NOT_OPERATOR_ERROR`）と
+    // 1文字も違えない——`/profile` は `requireOwner` ではなく `requireOperator`
+    // のままである。
+    expect(await forbidden.json()).toEqual({ error: NOT_OPERATOR_ERROR });
+
+    expect(
+      (
+        await vaultApp.request('/profile', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json', ...auth },
+          body: JSON.stringify({ script: 'env' }),
+        })
+      ).status,
+    ).toBe(403);
+
+    // 実行環境の持ち主は今日どおり読める（締めたのではなく、緩めなかっただけである）。
+    expect((await vaultApp.request('/profile', { headers: OPERATOR })).status).toBe(200);
+  });
+
+  /**
+   * **⑦ この PR がいちばん守りたい軸。** 宣言の口そのもの
+   * （`POST /access/:accountId/owner` `.../owner/revoke`）は `requireOperator`
+   * ——account トークンでは、たとえ owner 本人でも叩けない。ここが緩むと
+   * 「宣言は operator だけが立てられる旗」という前提そのものが崩れる。
+   */
+  describe('⑦ owner 宣言の口そのものは account トークンで叩けない（非伝播）', () => {
+    it('宣言していないアカウントの token では POST /access/:id/owner が 403', async () => {
+      const account = await grantedAccount();
+      const auth = { authorization: `Bearer ${account.token}` };
+      const response = await postOwner(account.accountId, auth);
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({ error: NOT_OPERATOR_ERROR });
+    });
+
+    it('宣言済み owner 自身の token でも POST /access/:id/owner が 403（自己昇格も含めて非伝播）', async () => {
+      const owner = await ownerToken();
+      nextSubject = 'sub-2';
+      const second = await loginThrough(vaultApp);
+      await vaultApp.request(`/access/${second.account.id}/grant`, {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+      });
+
+      const auth = { authorization: `Bearer ${owner.token}` };
+      const response = await postOwner(second.account.id, auth);
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({ error: NOT_OPERATOR_ERROR });
+    });
+
+    it('account token では POST /access/:id/owner/revoke も 403', async () => {
+      const owner = await ownerToken();
+      const auth = { authorization: `Bearer ${owner.token}` };
+      const response = await postOwnerRevoke(owner.accountId, auth);
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({ error: NOT_OPERATOR_ERROR });
+    });
+
+    it('未ログインでは POST /access/:id/owner が 401', async () => {
+      const account = await grantedAccount();
+      expect((await postOwner(account.accountId, {})).status).toBe(401);
+    });
+  });
+
+  it('operator が未許可のアカウントへ宣言しようとすると 409（宣言は許可済みの行にしか立たない）', async () => {
+    const claimed = await loginThrough(vaultApp);
+    const response = await postOwner(claimed.account.id, OPERATOR);
+    expect(response.status).toBe(409);
   });
 });
