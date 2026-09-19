@@ -5633,9 +5633,10 @@ class Pool implements ManagerPool {
    * 引いた宛先に `list()` を聞き直して出しているが、`Registry#get` は同じ名前を
    * 名乗る器が2台あれば先に見つかった方を返す（線形一致）。**持ち主でない器に
    * 聞いて「無い」と言われただけ**の場合に貸し出しを返すと、走り続けている委譲を
-   * 「止めた」と記録したうえで、唯一の防御まで外すことになる。だから持ち主が
-   * 応えていると言えるときだけ返す（判定できないときは返さない — 期限が来れば
-   * 引き取れる）。
+   * 「止めた」と記録したうえで、唯一の防御まで外すことになる。だから**引き取って
+   * よいと言える判定のときだけ返す** — 判定そのものは `judgeLease` /
+   * `mayClaim`（`lease.ts`）に任せ、ここでは書き直さない（#1135。下の
+   * 実装の注記に、手書きの2値判定が何を黙って落としていたかが在る）。
    */
   async #confirmStoppedAndReleaseLease(
     record: ManagerRecord,
@@ -5676,9 +5677,29 @@ class Pool implements ManagerPool {
        */
       const holder = record.job.lease;
       if (holder !== undefined) {
-        const seen = this.#sighting(holder.runnerId);
-        const sameHolder = holder.instanceId !== undefined && seen.instanceId === holder.instanceId;
-        if (sameHolder) record.job.lease = releaseLease(holder, this.#now());
+        /*
+         * **判定は `judgeLease` に委ねる（ここで2値へ潰さない）。** 以前はここに
+         * 手書きの `sameHolder`（`holder.instanceId !== undefined && seen.instanceId
+         * === holder.instanceId`）が在り、7値の `LeaseVerdict` を「一致したか」の
+         * 2値へ潰していた。**潰した先で `undecidable` が「返さない」側へ黙って
+         * 倒れる**——名乗らない runner（`LocalRunner`。`identity()` を実装しない）
+         * では `holder.instanceId` が常に `undefined` なので、この条件は
+         * **構造的に一度も成立せず**、確かめた停止なのに貸し出しが解放されなかった
+         * （#1135）。`undecidable` は「判定できない」であって「別人である」ではない
+         * （`lease.ts` の `LeaseVerdict` の doc）。
+         *
+         * **ホワイトリスト（`mayClaim`）をそのまま使う。** 断るのは `held` と
+         * `ambiguous`（＋将来足される未知の判定）で、どちらも「他の生きている器の
+         * 仕事を奪いうる」側である——`#claimForResume` の関門とまったく同じ線で
+         * ある。同じ判定を2つの式で書かない。
+         */
+        const now = this.#now();
+        const verdict = judgeLease({
+          lease: holder,
+          now,
+          answering: this.#sighting(holder.runnerId),
+        });
+        if (mayClaim(verdict)) record.job.lease = releaseLease(holder, now);
       }
     }
 
