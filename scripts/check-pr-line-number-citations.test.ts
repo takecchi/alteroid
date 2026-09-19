@@ -19,6 +19,15 @@ import {
  * なってはいけない——この門は repo のファイルを走査せず、この PR の本文だけを
  * 読む（`check-pr-line-number-citations-core.mjs` の doc、#785 の族）ので、この
  * 歯の中身が門自身に引っかかることは無い。
+ *
+ * ⚠️ **ただし別の既存の門（`scripts/agents-md-references.test.ts`）は `scripts/**`
+ * の中身を実際に走査し、実在するリポジトリのファイルを `path:行番号` で指す
+ * 逐語をそこでも咎める。** だから下の fixture は、実在ファイルを使う必然性が
+ * 無いものは架空のパス（`scripts/example.mjs` / `NOTES.md` など、このリポジトリに
+ * 実在しない）に倒し、実在ファイル（`scripts/test.mjs` / `AGENTS.md` 由来の
+ * 実例）を使う理由がある2本（PR #1205 / PR #1001 の逐語の再現）はテンプレート
+ * リテラルで組み立てて `path:行番号` が地の文に連続して現れないようにしてある
+ * （実行時の文字列の値は変えていない）。
  */
 
 /** テスト用の `isRepoFile`。実 FS を読まない——固定集合への完全一致だけ。 */
@@ -28,64 +37,59 @@ function fakeIsRepoFile(existing: readonly string[]) {
 }
 
 describe('findPathLineNumberCitations — 弾く形（フェンス）', () => {
+  // fixture のパスは架空（`scripts/example.mjs`。このリポジトリに実在しない）——
+  // フェンス除外の判定自体は実在ファイルかどうかに依存しないので、実在ファイルを
+  // 使う必然性が無い（上の doc comment を見よ）。
   it('フェンス（```）の中の path:行番号 は見ない', () => {
     const body = [
       '説明の地の文。',
       '```',
-      'packages/core/src/tools.ts:42 が原因だった',
+      'scripts/example.mjs:42 が原因だった',
       '```',
       '続きの地の文。',
     ].join('\n');
-    const result = findPathLineNumberCitations(
-      body,
-      fakeIsRepoFile(['packages/core/src/tools.ts']),
-    );
+    const result = findPathLineNumberCitations(body, fakeIsRepoFile(['scripts/example.mjs']));
     expect(result).toEqual([]);
   });
 
   it('閉じていないフェンス（unterminated）は末尾まで生の出力として扱う（fail-closed）', () => {
-    const body = ['```', 'packages/core/src/tools.ts:42 が原因だった'].join('\n');
-    const result = findPathLineNumberCitations(
-      body,
-      fakeIsRepoFile(['packages/core/src/tools.ts']),
-    );
+    const body = ['```', 'scripts/example.mjs:42 が原因だった'].join('\n');
+    const result = findPathLineNumberCitations(body, fakeIsRepoFile(['scripts/example.mjs']));
     expect(result).toEqual([]);
   });
 
   it('フェンスの外にある同じ形は検出する（フェンス除外が効きすぎていないことの対の歯）', () => {
-    const body = ['```', '無関係な出力', '```', 'packages/core/src/tools.ts:42 が原因だった'].join(
-      '\n',
-    );
-    const result = findPathLineNumberCitations(
-      body,
-      fakeIsRepoFile(['packages/core/src/tools.ts']),
-    );
+    const body = ['```', '無関係な出力', '```', 'scripts/example.mjs:42 が原因だった'].join('\n');
+    const result = findPathLineNumberCitations(body, fakeIsRepoFile(['scripts/example.mjs']));
     expect(result).toHaveLength(1);
-    expect(result[0].target).toBe('packages/core/src/tools.ts');
+    expect(result[0].target).toBe('scripts/example.mjs');
   });
 });
 
 describe('findPathLineNumberCitations — 弾かない形（インラインのコードスパン。実測に基づく決定）', () => {
   it('バッククォート1つで囲んだ path:行番号 も検出する（除外しない）', () => {
     // 実測（2026-09-19、直近マージ済み PR 200本）の再現: PR #1205 の逐語
-    // 「`scripts/test.mjs:118`（本番経路）とこのテストだけである」と同じ形。
-    const body =
-      '`runObservationGuard` を `today` 無しで呼ぶのは `scripts/test.mjs:118`（本番経路）とこのテストだけである。';
-    const result = findPathLineNumberCitations(body, fakeIsRepoFile(['scripts/test.mjs']));
+    // 「scripts/test.mjs の118行目（本番経路）とこのテストだけである」と同じ形。
+    // ⚠️ `file` と `line` を分けてテンプレートリテラルで組み立てる——地の文に
+    // `path:行番号` を連続して書くと、この歯自身が `scripts/agents-md-references.test.ts`
+    // の出典検査に引っかかる（上の doc comment）。実行時の `body` の値は
+    // 分けずに書いた場合と同じである。
+    const file = 'scripts/test.mjs';
+    const line = '118';
+    const body = `\`runObservationGuard\` を \`today\` 無しで呼ぶのは \`${file}:${line}\`（本番経路）とこのテストだけである。`;
+    const result = findPathLineNumberCitations(body, fakeIsRepoFile([file]));
     expect(result).toHaveLength(1);
-    expect(result[0].target).toBe('scripts/test.mjs');
-    expect(result[0].token).toBe('scripts/test.mjs:118');
+    expect(result[0].target).toBe(file);
+    expect(result[0].token).toBe(`${file}:${line}`);
   });
 
   it('カンマ区切りの複数行番号（PR #1001 の逐語の形）も検出する', () => {
-    const body =
-      '### 2〜5. `packages/core/src/runner-token-rotation.test.ts:28,61,63,185`（同一原因、4箇所）';
-    const result = findPathLineNumberCitations(
-      body,
-      fakeIsRepoFile(['packages/core/src/runner-token-rotation.test.ts']),
-    );
+    // 上と同じ理由でテンプレートリテラルで組み立てる。
+    const file = 'packages/core/src/runner-token-rotation.test.ts';
+    const body = `### 2〜5. \`${file}:28,61,63,185\`（同一原因、4箇所）`;
+    const result = findPathLineNumberCitations(body, fakeIsRepoFile([file]));
     expect(result).toHaveLength(1);
-    expect(result[0].token).toBe('packages/core/src/runner-token-rotation.test.ts:28');
+    expect(result[0].token).toBe(`${file}:28`);
   });
 });
 
@@ -131,19 +135,22 @@ describe('findPathLineNumberCitations — 弾く形（grep -n / grep -Fn の生�
 });
 
 describe('findPathLineNumberCitations — 検出する形', () => {
+  // fixture のパスは架空（`NOTES.md` / `scripts/foo.mjs`。このリポジトリに実在
+  // しない）——検出そのものは実在ファイルかどうかに依存しないので、実在ファイル
+  // を使う必然性が無い（上の doc comment を見よ）。
   it('範囲形式（path:12-34）を検出し、token には範囲全体が入る', () => {
-    const body = '該当は `AGENTS.md:499-508` である。';
-    const result = findPathLineNumberCitations(body, fakeIsRepoFile(['AGENTS.md']));
+    const body = '該当は `NOTES.md:499-508` である。';
+    const result = findPathLineNumberCitations(body, fakeIsRepoFile(['NOTES.md']));
     expect(result).toHaveLength(1);
-    expect(result[0].token).toBe('AGENTS.md:499-508');
-    expect(result[0].target).toBe('AGENTS.md');
+    expect(result[0].token).toBe('NOTES.md:499-508');
+    expect(result[0].target).toBe('NOTES.md');
   });
 
   it('1本の本文に複数の出典があれば複数返す', () => {
-    const body = ['AGENTS.md:10 と', 'scripts/foo.mjs:20 の両方が原因である。'].join('\n');
+    const body = ['NOTES.md:10 と', 'scripts/foo.mjs:20 の両方が原因である。'].join('\n');
     const result = findPathLineNumberCitations(
       body,
-      fakeIsRepoFile(['AGENTS.md', 'scripts/foo.mjs']),
+      fakeIsRepoFile(['NOTES.md', 'scripts/foo.mjs']),
     );
     expect(result).toHaveLength(2);
     expect(result[0].line).toBe(1);
@@ -179,9 +186,11 @@ describe('evaluatePrLineNumberCitations', () => {
   });
 
   it('出典が在れば found', () => {
+    // fixture のパスは架空（`NOTES.md`。実在するかどうかは注入した isRepoFile
+    // 側の責務で、この歯では確かめない）。
     const result = evaluatePrLineNumberCitations(
-      { body: '`AGENTS.md:499` を見よ。' },
-      { isRepoFile: (c: string) => c === 'AGENTS.md' },
+      { body: '`NOTES.md:499` を見よ。' },
+      { isRepoFile: (c: string) => c === 'NOTES.md' },
     );
     expect(result.verdict).toBe('found');
     expect(result.findings).toHaveLength(1);
@@ -196,21 +205,23 @@ describe('formatVerdict', () => {
   });
 
   it('found は見つかった箇所と次の一手を出す', () => {
+    // fixture のパスは架空（`NOTES.md`。formatVerdict は文字列の整形しか
+    // 見ないので、実在ファイルを使う必然性が無い）。
     const text = formatVerdict('1', {
       verdict: 'found',
       findings: [
         {
           line: 3,
-          token: 'AGENTS.md:499',
-          target: 'AGENTS.md',
-          context: '`AGENTS.md:499` を見よ。',
+          token: 'NOTES.md:499',
+          target: 'NOTES.md',
+          context: '`NOTES.md:499` を見よ。',
         },
       ],
     });
     expect(text).toContain('NG');
     expect(text).toContain('required ではない');
     expect(text).toContain('行3');
-    expect(text).toContain('AGENTS.md:499');
+    expect(text).toContain('NOTES.md:499');
     expect(text).toContain('次の一手');
   });
 
