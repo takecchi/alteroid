@@ -15,6 +15,7 @@
     "check:no-attribution-trailers": "node ./scripts/check-no-attribution-trailers.mjs",
     "check:pr-closing-keywords": "node ./scripts/check-pr-closing-keywords.mjs",
     "check:pr-green": "node ./scripts/check-pr-green.mjs",
+    "check:pr-line-number-citations": "node ./scripts/check-pr-line-number-citations.mjs",
     "check:pr-title-type": "node ./scripts/check-pr-title-type.mjs",
     "check:pr-vanished-footprint": "node ./scripts/check-pr-vanished-footprint.mjs",
     "check:required-status-checks": "node ./scripts/check-required-status-checks.mjs",
