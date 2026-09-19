@@ -257,9 +257,7 @@ export type GrantOutcome = { status: 'granted'; account: AuthAccount } | { statu
 
 /** `setAccountOwner` の結果。 */
 export type OwnerOutcome =
-  | { status: 'ok'; account: AuthAccount }
-  | { status: 'not_found' }
-  | { status: 'not_granted' };
+  { status: 'ok'; account: AuthAccount } | { status: 'not_found' } | { status: 'not_granted' };
 
 // ---------------------------------------------------------------------------
 // 乱数・ハッシュ

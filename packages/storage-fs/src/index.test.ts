@@ -3748,10 +3748,7 @@ describe('AuthStore', () => {
         grantedBy: 'operator',
       });
 
-      const result = await stores.auth.setAccountOwner(
-        'account-1',
-        '2026-01-03T00:00:00.000Z',
-      );
+      const result = await stores.auth.setAccountOwner('account-1', '2026-01-03T00:00:00.000Z');
       expect(result).toEqual({
         status: 'ok',
         account: {
@@ -3769,10 +3766,7 @@ describe('AuthStore', () => {
     it('未許可の行へ宣言しようとすると not_granted（不変条件「宣言 ⟹ 許可済み」）', async () => {
       await stores.auth.putAccount(account);
 
-      const result = await stores.auth.setAccountOwner(
-        'account-1',
-        '2026-01-03T00:00:00.000Z',
-      );
+      const result = await stores.auth.setAccountOwner('account-1', '2026-01-03T00:00:00.000Z');
       expect(result).toEqual({ status: 'not_granted' });
       // 書かれていないこと。
       expect((await stores.auth.getAccount('account-1'))?.ownerDeclaredAt).toBeNull();

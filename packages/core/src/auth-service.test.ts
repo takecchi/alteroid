@@ -261,7 +261,9 @@ describe('createAuthService', () => {
     if (alice.status !== 'ready' || bob.status !== 'ready') throw new Error('ログインできていない');
 
     await service.grant(alice.account.id, 'operator');
-    expect((await service.grantedAccounts()).map((account) => account.id)).toEqual([alice.account.id]);
+    expect((await service.grantedAccounts()).map((account) => account.id)).toEqual([
+      alice.account.id,
+    ]);
 
     // **2人目を落とさない。** ここが1件で止まる実装だと、画面にも CLI にも
     // 「自分しか居ない」と見えたまま、実際には2人が入れる状態になる。
@@ -271,7 +273,9 @@ describe('createAuthService', () => {
     );
 
     await service.revoke(alice.account.id);
-    expect((await service.grantedAccounts()).map((account) => account.id)).toEqual([bob.account.id]);
+    expect((await service.grantedAccounts()).map((account) => account.id)).toEqual([
+      bob.account.id,
+    ]);
   });
 
   it('検証済みメールが一致しても既存アカウントへ相乗りさせない', async () => {

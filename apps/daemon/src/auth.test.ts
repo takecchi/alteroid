@@ -851,7 +851,10 @@ describe('宣言済み owner（ownerDeclaredAt）は /credentials と /reset を
     });
 
   const postOwner = (accountId: string, headers: Record<string, string>) =>
-    vaultApp.request(`/access/${accountId}/owner`, { ...post, headers: { ...post.headers, ...headers } });
+    vaultApp.request(`/access/${accountId}/owner`, {
+      ...post,
+      headers: { ...post.headers, ...headers },
+    });
 
   const postOwnerRevoke = (accountId: string, headers: Record<string, string>) =>
     vaultApp.request(`/access/${accountId}/owner/revoke`, {
