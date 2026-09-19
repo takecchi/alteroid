@@ -714,31 +714,23 @@ describe('能力・プロトコルの等価性（M5 ゴール本文 / PR7）', (
 /**
  * `LocalRunner` は同一プロセス構成なので `identity()` を実装しない
  * （`RunnerClient.instanceId` の doc の逐語「省略している runner
- * （`LocalRunner` 等）では両方 `undefined`」）。だが移送の貸し出し解放
- * （`ManagerPool#confirmStoppedAndReleaseLease`）は、貸した瞬間の
- * `instanceId` といま応えている側の `instanceId` が一致することを条件に
- * している——`LocalRunner` のまま複数台をつなぐと、この一致が一度も
- * 成立せず、**貸し出しが永久に解放されない**（実測: 下の固定値を足す前は
- * `expect.poll` が2秒でタイムアウトした）。
+ * （`LocalRunner` 等）では両方 `undefined`」）。**以前はここに
+ * `withFixedInstanceId`（`RunnerClient` を `Proxy` で包んで `instanceId` を
+ * 固定値で補うヘルパー）が在った** — 移送の貸し出し解放
+ * （`ManagerPool#confirmStoppedAndReleaseLease`）が「貸した瞬間の
+ * `instanceId` といま応えている側の `instanceId` が一致するか」という
+ * 手書きの2値判定で、`instanceId` が両方 `undefined` でもこの条件は
+ * **構造的に成立せず**、貸し出しが永久に解放されなかったため
+ * （実測: 固定値で補う前は `expect.poll` が2秒でタイムアウトした）。
  *
- * だから、本物の `HttpRunner`（`apps/daemon/src/runner-client.ts`）が
- * `/health` から返す `instanceId` の役目を、固定値で肩代わりする。**中身
- * （`connect` / `resume` / `send` 等）は本物の `LocalRunner` のまま**——
- * 変わるのは `instanceId` という1個の読み取り専用プロパティだけである。
+ * **Issue #1135 の修正で不要になった。** 解放の判定が `judgeLease` /
+ * `mayClaim`（`lease.ts`）へ寄ったことで、`instanceId` が両方
+ * `undefined`（＝ `undecidable`）でも解放が許される側に含まれるように
+ * なった。⟹ 本物の `LocalRunner` をそのまま複数台つないでも移送が成立する
+ * ことをこの節自体が固定している（`withFixedInstanceId` を外した状態で
+ * 全節が緑であることを確認済み）ので、instanceId を肩代わりする足場は
+ * 削った。
  */
-function withFixedInstanceId(client: RunnerClient, instanceId: string): RunnerClient {
-  return new Proxy(client, {
-    get(target, prop, receiver) {
-      if (prop === 'instanceId') return instanceId;
-      const value = Reflect.get(target, prop, receiver);
-      // クラスメソッドは prototype に載っており、`this` が Proxy のままだと
-      // private field（`#host` 等）へのアクセスで失敗する。**本物の対象へ
-      // bind し直す**——`get` トラップが返す関数を呼ぶ主体は Proxy だが、
-      // 中身は元のインスタンスとして動かす。
-      return typeof value === 'function' ? value.bind(target) : value;
-    },
-  }) as RunnerClient;
-}
 
 /**
  * `runDelegationOn(count)` と同じ配線（本物の `createLocalRunner` +
@@ -757,11 +749,10 @@ function withFixedInstanceId(client: RunnerClient, instanceId: string): RunnerCl
  * test.ts` が競合を避けるため偽の `RunnerRegistry` で候補を1台に絞って
  * いるのと同じ理由で、ここでも2台に絞る。
  *
- * **`registry.register()` を使う（`createRunnerRegistry(fleet.map(...))`
- * ではない）。** 後者（`Registry#adopt`）は `instanceId` を一切読まない
- * ——`#noteInstance` を通るのは `register()` が起こす `#open()` の経路だけ
- * である（`Registry#open` の doc）。`instanceId` を接続の瞬間に名簿へ
- * 載せないと、上の `withFixedInstanceId` を足しても意味が無い。
+ * `runDelegationOn` と同じ `createRunnerRegistry(fleet.map(...))`
+ * （`Registry#adopt`）でよい——以前は `instanceId` を名簿へ載せるために
+ * `registry.register()`（`#open()` 経由）が要ったが、直上の doc のとおり
+ * `instanceId` の肩代わり自体が不要になったので、この使い分けも無くなった。
  */
 async function runDelegationWithRelocation(): Promise<
   EquivalenceResult & { originalRunnerId: string; relocatedRunnerId: string }
@@ -769,21 +760,15 @@ async function runDelegationWithRelocation(): Promise<
   const fleet = Array.from({ length: 2 }, (_, index) => {
     const runnerId = `runner-relocate-${index}`;
     const { fn, sessions } = fakeSdkForOptions();
-    const runner = withFixedInstanceId(
-      createLocalRunner({
-        runnerId,
-        workspacePath: '/work/project',
-        queryFn: fn,
-        env: EQUIVALENCE_ENV,
-      }),
-      `inst-${runnerId}`,
-    );
+    const runner = createLocalRunner({
+      runnerId,
+      workspacePath: '/work/project',
+      queryFn: fn,
+      env: EQUIVALENCE_ENV,
+    });
     return { runner, sessions };
   });
-  const registry = createRunnerRegistry();
-  for (const entry of fleet) {
-    await registry.register({ label: entry.runner.runnerId, open: async () => entry.runner });
-  }
+  const registry = createRunnerRegistry(fleet.map((entry) => entry.runner));
   const stores = createMemoryStores();
   const inbox: InboxEvent[] = [];
   const pool = createManagerPool({

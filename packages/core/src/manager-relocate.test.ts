@@ -641,6 +641,54 @@ describe('ManagerPool.vacate（#485 PR-2）', () => {
   });
 
   /**
+   * **Issue #1135。`instanceId` を名乗らない runner（`LocalRunner` 等）へ委譲
+   * した貸し出しでも、`vacate` すれば解放される。**
+   *
+   * 直上の歯とほぼ同じ形だが、`lease.instanceId` も名簿の `entry.instanceId`
+   * も**どちらも持たせない**——`identity()` を実装しない runner（本物では
+   * `LocalRunner`）が実際にこの形になる（`RunnerClient.instanceId` の doc
+   * 「省略している runner（`LocalRunner` 等）では両方 `undefined`」）。
+   *
+   * 直す前の手書きの判定（`holder.instanceId !== undefined && seen.instanceId
+   * === holder.instanceId`）は、`instanceId` が両方 `undefined` でも
+   * **構造的に `false`** になる——`undefined !== undefined` が常に偽なので、
+   * 「誰に確かめたか分からない」（`undecidable`）を「別人である」と同じ扱いに
+   * 倒し、解放しない。⟹ この歯は直す前は必ず `expect.poll`（2秒）で
+   * タイムアウトして赤くなる（`recentLease` の ttl は10分なので、期限待ちでは
+   * 2秒に絶対届かない）。
+   *
+   * 直した後は `judgeLease` が `undecidable` を返し、`mayClaim` がそれを
+   * 許す側（`#claimForResume` と同じホワイトリスト）に含めているので、
+   * 期限を待たずに解放され、移送が起きる。
+   */
+  it('instanceId を名乗らない runner でも、vacate すれば貸し出しが解放される（Issue #1135）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(
+      jobWith('mgr-vacate-lease-unnamed', 'runner-a', {
+        lease: recentLease('runner-a'),
+      }),
+    );
+    const fake = createFakeRegistry();
+    fake.entries.push(entryOf('runner-a', 'connected', 'runner-a'));
+    fake.entries.push(entryOf('runner-b', 'connected', 'runner-b'));
+    const runnerA = fakeRunner('runner-a');
+    const runnerB = fakeRunner('runner-b');
+    fake.addClient(runnerA.client);
+    fake.addClient(runnerB.client);
+    const { pool } = setup(stores, fake.registry);
+
+    await pool.vacate('runner-a');
+
+    await expect.poll(() => runnerB.resumes.length, { timeout: 2000 }).toBe(1);
+
+    const job = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-vacate-lease-unnamed');
+    expect(job?.runnerId).toBe('runner-b');
+    expect(job?.status).toBe('running');
+
+    await pool.stop();
+  });
+
+  /**
    * **名簿に無い runnerId でも投げない。** `RunnerRegistry#vacate` の doc
    * 「名簿に無い（または一致する runnerId が無い）ときは何もしない」を
    * `ManagerPool.vacate()` 越しにも固定する——`unregister` と同じ作法。
