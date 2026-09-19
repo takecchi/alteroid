@@ -8,7 +8,7 @@
  * 「403 に専用の文言がある」「追加・削除・無効化/有効化は既存の一覧を土台に
  * `PUT /tokens` を全置換で呼ぶ」の各点。文言の細部より、この規律が壊れていないかを見る。
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { formatDateTime } from '~/lib/format';
@@ -613,5 +613,142 @@ describe('/tokens 画面 — 追加・削除・無効化/有効化（2026-09-14�
 
     expect(await screen.findByText('使用可能')).toBeTruthy();
     expect(puts).toEqual([[{ id: 't-a', label: 'token-a', order: 0, disabled: false }]]);
+  });
+});
+
+/**
+ * **状態を持つ** `/tokens` + `/tokens/policy` の stub（Issue #1123 の書き込みを
+ * 検証するため）。`stubCrudScreen` と同じ理由（`openapi-fetch` が `fetch(new
+ * Request(...))` の形で呼ぶので、共有の `stubFetch` では method / 本文が
+ * 落ちる）で `globalThis.fetch` を自分で差し替える。
+ *
+ * **`/tokens/policy` を先に判定する** —— `'/tokens/policy'.includes('/tokens')`
+ * が真なので、判定の順序を逆にすると素の `/tokens` 分岐に食われる。
+ */
+function stubPolicyScreen(initial: { rotateOn: string; cooldownMs: number } = DEFAULT_SETTINGS) {
+  let settings: { rotateOn: string; cooldownMs: number } = { ...initial };
+  const puts: { rotateOn?: string; cooldownMs?: number }[] = [];
+  let failNext: { status: number; error: string } | undefined;
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = input instanceof Request ? input : null;
+    const url = request?.url ?? (typeof input === 'string' ? input : String(input));
+    const method = request?.method ?? init?.method ?? 'GET';
+
+    if (url.includes('/journal')) return json({ entries: [] });
+
+    if (url.includes('/tokens/policy')) {
+      if (method !== 'PUT') return Promise.reject(new TypeError(`unexpected method: ${method}`));
+      const body = (request !== null ? await request.json() : JSON.parse(String(init?.body))) as {
+        rotateOn?: string;
+        cooldownMs?: number;
+      };
+      puts.push(body);
+      if (failNext !== undefined) {
+        const { status, error } = failNext;
+        return json({ error }, status);
+      }
+      settings = { ...settings, ...body };
+      return json(settings);
+    }
+
+    if (url.includes('/tokens')) return json({ tokens: [], settings });
+
+    return Promise.reject(new TypeError(`Failed to fetch: ${url}`));
+  }) as typeof fetch;
+
+  return {
+    puts,
+    /** 次の `PUT /tokens/policy` をサーバの 400 として断らせる。 */
+    failNextUpdate(status: number, error: string) {
+      failNext = { status, error };
+    },
+  };
+}
+
+describe('/tokens 画面 — 回転の設定を書き込む（Issue #1123）', () => {
+  it('回す契機を変えて保存すると、その値だけで PUT /tokens/policy が呼ばれ、表示に反映される', async () => {
+    const { puts } = stubPolicyScreen();
+
+    render(
+      <Providers>
+        <Tokens />
+      </Providers>,
+    );
+    await waitForPoolLoaded();
+
+    fireEvent.change(screen.getByLabelText('回す契機を変える'), { target: { value: 'off' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    expect(await screen.findByText('回さない（記録だけする）')).toBeTruthy();
+    expect(puts).toEqual([{ rotateOn: 'off', cooldownMs: DEFAULT_SETTINGS.cooldownMs }]);
+  });
+
+  it('冷却の既定（ミリ秒）を変えて保存すると PUT /tokens/policy が呼ばれ、表示に反映される', async () => {
+    const { puts } = stubPolicyScreen();
+
+    render(
+      <Providers>
+        <Tokens />
+      </Providers>,
+    );
+    await waitForPoolLoaded();
+
+    fireEvent.change(screen.getByLabelText('冷却の既定を変える（ミリ秒）'), {
+      target: { value: '3600000' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => {
+      expect(puts).toEqual([{ rotateOn: DEFAULT_SETTINGS.rotateOn, cooldownMs: 3_600_000 }]);
+    });
+    // 表示（時間換算）にも反映される。
+    expect(await screen.findByText(/^1時間/)).toBeTruthy();
+  });
+
+  it('保存前は「変更なし」で無効、値を変えると「保存」で押せるようになる', async () => {
+    stubPolicyScreen();
+
+    render(
+      <Providers>
+        <Tokens />
+      </Providers>,
+    );
+    await waitForPoolLoaded();
+
+    expect(screen.getByRole('button', { name: '変更なし' })).toHaveProperty('disabled', true);
+
+    fireEvent.change(screen.getByLabelText('回す契機を変える'), {
+      target: { value: 'overage_exhausted' },
+    });
+
+    expect(screen.getByRole('button', { name: '保存' })).toHaveProperty('disabled', false);
+  });
+
+  /**
+   * **受け入れ基準3（Issue #1123）**: 「正の整数」等の判定を画面側で先回りして
+   * 弾かない —— 送って、サーバの 400 の本文をそのまま人間へ見せる。
+   */
+  it('サーバが 400 で断ったら、握り潰さずサーバの文言をそのまま出す', async () => {
+    const { failNextUpdate } = stubPolicyScreen();
+    failNextUpdate(400, '設定の入力の形が不正: cooldownMs は正の整数である必要がある');
+
+    render(
+      <Providers>
+        <Tokens />
+      </Providers>,
+    );
+    await waitForPoolLoaded();
+
+    fireEvent.change(screen.getByLabelText('冷却の既定を変える（ミリ秒）'), {
+      target: { value: '-1' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    expect(
+      await screen.findByText(/設定の入力の形が不正: cooldownMs は正の整数である必要がある/),
+    ).toBeTruthy();
+    // 断られた値は画面に残る（黙って元に戻さない——人間が直して再送できる）。
+    expect(screen.getByLabelText('冷却の既定を変える（ミリ秒）')).toHaveProperty('value', '-1');
   });
 });
