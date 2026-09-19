@@ -53,10 +53,25 @@
  * 事故がそのまま再発する——それが #1197 で実際に起きたことである
  * （マージ直後の main を検算して `NG` を見た担当が「マージで main を壊した」
  * と読みかけた）。
+ *
+ * ## なぜ `judgeSha` を export しているか（Issue #1207 の (3)）
+ *
+ * `.github/scripts/record-release-prod-ci.mjs`（`release/prod` へ夜間反映した
+ * sha の CI を記録するだけの道具。止める門ではない）が、**この道具とまったく
+ * 同じ判定器を使うため。** 判定ロジックを2箇所に持つと、世代選び（workflow名＋
+ * event の組・`created_at`/`id` のtiebreak）や `red`/`cancelled`/`out-of-scope`
+ * の切り分けが2つの実装でじわじわずれていく——実際 `check-pr-green-core.mjs`
+ * はこの世代選びだけで3回直っている（#933 → #1225）。⟹ ネットワーク層（`gh api`
+ * の呼び出しと結果の取りまとめ）を `judgeSha({ sha, repo })` として切り出し、
+ * `main()` もこれを呼ぶ形に寄せた。**CLI としての出力・終了コードは1文字も
+ * 変えていない**——`main()` は `import.meta.url` が直接起動されたときの
+ * エントリポイントと一致するときだけ呼ぶ（`node:url` の `pathToFileURL` で
+ * 比較する。import されただけでは走らない）。
  */
 
 import { execFileSync } from 'node:child_process';
 import process from 'node:process';
+import { pathToFileURL } from 'node:url';
 
 import {
   evaluatePrGreen,
@@ -105,21 +120,30 @@ function ghApiJson(path) {
   }
 }
 
-function main() {
-  const { sha, repo } = parseArgs(process.argv.slice(2));
-  if (sha === null || sha.trim() === '') {
-    logError('check-pr-green: 使い方: node ./scripts/check-pr-green.mjs <sha> [--repo owner/repo]');
-    process.exitCode = 1;
-    return;
-  }
-
+/**
+ * `judgeSha` はこの道具のネットワーク層＋判定を1つにまとめたものである。
+ * **例外を投げない**——`gh api` が読めなかったときは `result: null` と
+ * `error`（人が読める文字列）を返す。呼び出し側（`main()` と
+ * `record-release-prod-ci.mjs`）はここから先を自分の出力形式へ整形する。
+ *
+ * @param {{ sha: string, repo: string }} input
+ * @returns {{
+ *   result: import('./check-pr-green-core.mjs').EvaluatePrGreenResult | null,
+ *   latestRuns: object[],
+ *   jobsByRunId: Record<number, object[]>,
+ *   error: string | null,
+ * }}
+ */
+export function judgeSha({ sha, repo }) {
   const runsPath = `repos/${repo}/actions/runs?head_sha=${sha}&per_page=100`;
   const { data: runsData, error: runsError } = ghApiJson(runsPath);
   if (runsData === null) {
-    logError(`check-pr-green(${sha}): 判定できなかった —— run 一覧を読めない`);
-    logError(`  gh の出力: ${runsError}`);
-    process.exitCode = 1;
-    return;
+    return {
+      result: null,
+      latestRuns: [],
+      jobsByRunId: {},
+      error: `run 一覧を読めない\n  gh の出力: ${runsError}`,
+    };
   }
 
   const runs = Array.isArray(runsData.workflow_runs) ? runsData.workflow_runs : [];
@@ -132,15 +156,35 @@ function main() {
       `repos/${repo}/actions/runs/${run.id}/jobs?per_page=100`,
     );
     if (jobsData === null) {
-      logError(`check-pr-green(${sha}): 判定できなかった —— run ${run.id} の jobs を読めない`);
-      logError(`  gh の出力: ${jobsError}`);
-      process.exitCode = 1;
-      return;
+      return {
+        result: null,
+        latestRuns,
+        jobsByRunId,
+        error: `run ${run.id} の jobs を読めない\n  gh の出力: ${jobsError}`,
+      };
     }
     jobsByRunId[run.id] = Array.isArray(jobsData.jobs) ? jobsData.jobs : [];
   }
 
   const result = evaluatePrGreen(latestRuns, jobsByRunId);
+  return { result, latestRuns, jobsByRunId, error: null };
+}
+
+function main() {
+  const { sha, repo } = parseArgs(process.argv.slice(2));
+  if (sha === null || sha.trim() === '') {
+    logError('check-pr-green: 使い方: node ./scripts/check-pr-green.mjs <sha> [--repo owner/repo]');
+    process.exitCode = 1;
+    return;
+  }
+
+  const { result, error } = judgeSha({ sha, repo });
+  if (result === null) {
+    logError(`check-pr-green(${sha}): 判定できなかった —— ${error}`);
+    process.exitCode = 1;
+    return;
+  }
+
   const text = formatVerdict(sha, result);
 
   if (result.verdict === 'green') {
@@ -151,4 +195,9 @@ function main() {
   process.exitCode = result.verdict === 'out-of-scope' ? 2 : 1;
 }
 
-main();
+// 直接起動されたときだけ走る。import されたとき（`record-release-prod-ci.mjs`
+// からの `judgeSha` 利用や、将来のテスト）に副作用として CLI が起きないように
+// するため（`node:url` の `pathToFileURL` で自分自身の URL と argv[1] を比べる）。
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main();
+}

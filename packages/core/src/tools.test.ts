@@ -17942,6 +17942,32 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
         });
       },
     },
+    {
+      tool: 'archive_remove_many',
+      firstLine: ACT_COMPLETED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-18');
+        // **新しい行が古い行を前方一致で含む2行を積む**——`selectArchiveRemovalTargets`
+        // の安全弁（`isNewest`）により、古い行だけが対象になる（`archive-remove-many.test.ts`
+        // の `seedRemovableSession` と同じ組み立て）。
+        await stores.archive.archive('sess-case-18', 'AAA');
+        await stores.archive.archive('sess-case-18', 'AAABBB');
+        // `runningManagerOwning` だけを持つ最小のスタブ（この道具はそれ以外を呼ばない）。
+        const managers = { runningManagerOwning: () => undefined } as unknown as ManagerPool;
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          managers,
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
+        return callExpectingError(tools, 'archive_remove_many', {
+          sessionIds: ['sess-case-18'],
+          summary: '不要になったので消す',
+          dryRun: false,
+        });
+      },
+    },
   ];
 
   it.each(CASES)(
@@ -17958,8 +17984,8 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
 
   /**
    * ⭐⭐ 弱点の手当て: `CASES` の道具名の集合を、手で並べた一覧とではなく
-   * `SELF_JOURNALING_CLONE_TOOLS`（`archive_remove` は #698 で加わった）
-   * から導いた期待値と突き合わせる。
+   * `SELF_JOURNALING_CLONE_TOOLS`（`archive_remove` / `archive_remove_many` は
+   * どちらも #698 で加わった）から導いた期待値と突き合わせる。
    *
    * `manager_send` / `manager_stop` / `manager_appraise` を除く理由: この3本は `ManagerPool` の
    * ガード付き `#journal`（`clone.ts`）を通るので `appendJournalOrThrow` を
