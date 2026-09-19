@@ -16603,10 +16603,7 @@ describe('#1230 memory_section_move: 半完了 → やり直し → 状態（通
       slug: 'from-doc-1230',
     });
     expect(outline.isError).toBe(false);
-    const sectionIds = [
-      sectionIdFor(outline.text, '## 節A'),
-      sectionIdFor(outline.text, '## 節B'),
-    ];
+    const sectionIds = [sectionIdFor(outline.text, '## 節A'), sectionIdFor(outline.text, '## 節B')];
 
     const args = {
       fromSlug: 'from-doc-1230',
