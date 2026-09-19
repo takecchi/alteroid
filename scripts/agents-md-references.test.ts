@@ -135,8 +135,22 @@ export function proseLinesWithFenceState(markdown: string): {
   lines: ProseLine[];
   unterminated: boolean;
   coverage: FenceCoverage;
+  /**
+   * フェンスの中として落とした**行の中身**（#891）。`coverage.blocks` は
+   * 区間（開始行・終了行・行数）しか持たず、行の**内容**を返さない——
+   * 「落とした行をもう一度だけ見る」ことができないため、#891 のためにここへ足した。
+   * **開き・閉じのフェンス記号そのものの行（マーカー行）は含めない**——
+   * マーカー行は生の出力ではなく区切りなので、ここに数えると `path:行番号` の
+   * 検査がフェンス記号自身の周辺を誤って拾う余地を作る（実際には起きない—— 3個以上の
+   * バックティック/チルダの並びが `path:行番号` の形に一致することは無いが、
+   * 「マーカーは内容ではない」という区別そのものを保つためにここで明示的に外す）。
+   * 状態機械はここでも下と共有する——#786 が直した「対応がずれた無検査」の
+   * バグ再発を避けるため、フェンス判定を2箇所に書かない。
+   */
+  droppedLines: ProseLine[];
 } {
   const out: ProseLine[] = [];
+  const droppedLines: ProseLine[] = [];
   let inFence = false;
   let fenceChar: '`' | '~' | null = null;
   let fenceLen = 0;
@@ -190,8 +204,11 @@ export function proseLinesWithFenceState(markdown: string): {
         blocks.push({ open: blockOpen, close: i + 1, lines: i + 1 - blockOpen + 1 });
         blockOpen = null;
       }
+    } else {
+      // 閉じなかった行——マーカーではなく生の出力そのもの（#891 が見る対象）。
+      droppedLines.push({ line: i + 1, text });
     }
-    // 閉じなかった行も、閉じた行自身も、プローズには数えない。
+    // 閉じた行自身は（マーカーなので）プローズにも droppedLines にも数えない。
   }
 
   if (inFence && blockOpen !== null) {
@@ -210,6 +227,7 @@ export function proseLinesWithFenceState(markdown: string): {
     lines: out,
     unterminated: inFence,
     coverage: { total, prose, dropped, ratio, blocks },
+    droppedLines,
   };
 }
 
@@ -508,6 +526,109 @@ export function collectWidenedLineNumberCitations(
   }
   return out;
 }
+
+/**
+ * **フェンスの中として落とした行を、捨てる前にもう一度だけ見る（#891）。**
+ *
+ * 上の `collectWidenedLineNumberCitations` は `proseLines`（フェンスの外）だけを
+ * 読む——フェンスの中は「出典ではなく生の出力」として最初から視界に無い。この
+ * 関数はその**落とした側**（`proseLinesWithFenceState(...).droppedLines`）へ、
+ * 同じ `findLineNumberCitations` をもう一度だけ当てる。
+ *
+ * ## ⛔ 赤の意味は「規約違反」ではない
+ *
+ * フェンスの意味（「ここは引用なので出典として数えない」——#785 の判断）は
+ * **ここでも変えていない**。フェンスの中はいまも出典として数えない＝規約違反として
+ * 赤くしない。この関数が変えるのは「落とした行を、出典の形についてだけもう一度見て、
+ * **列挙するかどうか**」である。⟹ ここで見つかった行は、原因が次のどちらであっても
+ * **規約違反ではない**:
+ *
+ * - **(a) フェンス判定がずれている**（#786 と同じ形。対応する閉じが本来の意図と
+ *   違う位置に付き、開けるべきでない範囲までフェンスの中に巻き込まれた）
+ * - **(b) 本当に生の出力**（スタックトレース・実測コマンドの結果）を貼っていて、
+ *   たまたま `path:行番号` の形——このリポジトリの実在ファイルへ解決する形——に
+ *   一致した
+ *
+ * どちらであっても、**フェンスの中身そのものを書き換える規約は無い**
+ * （AGENTS.md「生の出力の中の行番号は書き換えない。あれは出典ではなく証拠である」）。
+ * ⟹ この歯が赤くなったら、次にすることは (a) なら該当行を開いてフェンスの対応を
+ * 確かめること、(b) なら**現物の直し方を選ぶこと**（免除ではなく、doc の例示を
+ * 架空パスへ倒す／正しくフェンスで囲み直す／`path:行番号` が地の文に連続して
+ * 現れない形へ言い換える、のいずれか——`scripts/check-pr-line-number-citations-core.mjs`
+ * が実際に採った直し方）である。免除は最後の手段でしかない。
+ *
+ * ## ⛔ ここで使わない3つの関数（測っていない範囲を、意図して測っていない）
+ *
+ * この歯が呼ぶのは `findLineNumberCitations` **だけ**である。同じファイルに在る
+ * 残り3つの検出関数は、次の理由でここへは当てない——「広げれば見つかる」を
+ * 理由に安易に広げないための線引きである（AGENTS.md「範囲を広げるなら、広げると
+ * 同時に新しい線を引くこと」）:
+ *
+ * - **`findRowNumberCitations`（「N行目」）は使わない。** `.claude/**` と
+ *   どの階層かの `src/**` と `apps/web/app/**` と `scripts/**` の path:行番号
+ *   出典を測る describe の直前に在る doc comment が実測付きで残している理由が
+ *   そのまま当てはまる——`.claude/**` とどの階層かの `src/**` へ素直に当てると
+ *   **131件**が全件誤検出だった
+ *   （コードの中の「N行目」は出典ではなく**語彙**として使われている——処理して
+ *   いるデータの何行目かを指しているだけで、ファイルを指す出典ではない）。
+ *   フェンスの中でもこの性質は変わらない理由が無い——生の出力（スタックトレース・
+ *   ログ）の中の「N行目」はなおさら語彙である可能性が高い。実測せずに広げると
+ *   同じ穴を繰り返すので、ここでは広げない。
+ * - **`findVerbatimCitations` / `findLegacyVerbatimCitations` は使わない。**
+ *   この2つが拾うのは `` `grep -Fn -- '<逐語>' <path>` ``（またはその旧形式）
+ *   という**推奨される正しい出典の形そのもの**である。#891 が問題にしているのは
+ *   「フェンスの中に、腐りうる `path:行番号` 単独の出典が紛れ込んでいないか」
+ *   であって、フェンスの中に「正しい形の出典の例」が書いてあること自体は
+ *   この Issue の主題ではない（むしろ、正しい形の書き方を説明する doc がその例を
+ *   フェンスで示すのは自然である）。
+ *
+ * ⟹ **この3つを広げるかどうかは、この PR の確認対象ではない。** 広げるなら、
+ * 広げる側が実測してから決めること。
+ */
+export function collectFencedLineNumberCitations(
+  entries: readonly { file: string; text: string }[],
+  isRepoFileLike: (candidate: string) => boolean,
+  skipped: readonly { file: string; token: string }[],
+): string[] {
+  const out: string[] = [];
+  for (const { file, text } of entries) {
+    const { droppedLines } = proseLinesWithFenceState(text);
+    for (const c of findLineNumberCitations(droppedLines, isRepoFileLike)) {
+      const isSkipped = skipped.some((s) => s.file === file && s.token === c.token);
+      if (isSkipped) continue;
+      out.push(`${file}:${c.line} ${c.token}`);
+    }
+  }
+  return out;
+}
+
+export interface FencedLineNumberCitationExemption {
+  /** `.claude/**` の中、またはどの階層かの `src/**` の中、`AGENTS.md`、`apps/web/app/**`、`scripts/**` のいずれかの、リポジトリ相対パス。 */
+  readonly file: string;
+  /** `findLineNumberCitations` が返す `token`（例: `schema.ts:532`）。完全一致で照合する。 */
+  readonly token: string;
+  /** **非空であること**（下の歯が測る）。「あとで書く」を空文字で表せない。 */
+  readonly why: string;
+}
+
+/**
+ * **#891 の免除表。空で始める。**
+ *
+ * `WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS`（上）と同じ形（`file` + `token` +
+ * 非空の `why`。#756 の免除表と同じ考え方）を再利用した——新しい仕組みは作って
+ * いない。同じ const を共用しなかったのは、2つが測っている対象が違うためである
+ * （こちらはフェンスの**中**、あちらはフェンスの**外**）——同じ token が両方の
+ * 免除表に載ることもありうるが、それぞれ別の検査を免除しているので別表にした。
+ *
+ * ⛔ **免除より現物修正を優先すること。** #891 が実測した時点でこの歯は0件
+ * （後述の PR 本文にある実測を見よ——ただし #1248 が新しく2件の出血を作ったため、
+ * この PR は免除表を使わず現物（`scripts/check-pr-line-number-citations-core.mjs`
+ * の doc コメント）を直した）。1件でも新しく免除するなら、ここへ理由つきで
+ * 足すこと——**「直せない理由」を書くこと**（直せるのに直さない理由を書かせない
+ * ため）。
+ */
+export const FENCED_LINE_NUMBER_CITATION_EXEMPTIONS: readonly FencedLineNumberCitationExemption[] =
+  [];
 
 export type RowNumberCitation = { line: number; token: string };
 
@@ -885,6 +1006,15 @@ const FENCE_COVERAGE_LIMITS: FenceCoverageLimits = {
   minDroppedLines: FENCE_COVERAGE_MIN_DROPPED_LINES,
 };
 
+// #891 の対象範囲。**既存の歯と同じ**（`AGENTS.md` + `isWidenedScopeFile` が
+// 真を返すファイル）——新しい範囲は作らない。`WIDENED_SCOPE_FILES` は
+// `excludeCitationScopeSelf` を既に経由しているので、この歯自身
+// （`scripts/agents-md-references.test.ts`）は対象に入らない。
+const FENCED_LINE_NUMBER_CITATION_ENTRIES: readonly { file: string; text: string }[] = [
+  { file: 'AGENTS.md', text: agentsMd },
+  ...WIDENED_SCOPE_FILES.map((file) => ({ file, text: readRepoFile(file) })),
+];
+
 describe('AGENTS.md の参照の形（#369）', () => {
   it('本文がフェンスの中身を含まない（この歯が何を見ているかの確認）', () => {
     // フェンスの中にしか無い逐語。落ちたら proseLines が壊れている＝下の3本が
@@ -1164,6 +1294,202 @@ describe('.claude/** と */src/** と apps/web/app/** と scripts/** の path:�
         '「フェンスの中」として無検査になっている——フェンス記号の対応' +
         '（開いた文字・長さと同じもので閉じる）を直すこと。',
     ).toEqual([]);
+  });
+});
+
+/**
+ * **フェンスの中として落とした行の path:行番号（#891。⚠ #785 の判断を部分的に覆す）。**
+ *
+ * #785 の判断（`AGENTS.md` とコードでフェンスの意味を同一視してよい）は、
+ * 「フェンスは出典として数えない印である」という前提と同時に、その決定が
+ * 古くなる条件を自分で書いていた——次に0件でなくなったら、それ自体が決定を
+ * 見直す合図である、と。**その「0件でなくなったら気づける」を実現する計器が
+ * リポジトリに1つも無かった** ⟹ フェンスの中は落とされたきり、誰も数えて
+ * いなかった。この describe はその計器を供給する——**フェンスの意味
+ * （出典として数えない＝規約違反として赤くしない）は変えない。変わるのは
+ * 「落とした行を、もう一度だけ列挙するか」だけである。**
+ *
+ * 対象範囲は上の2本と同じ（`FENCED_LINE_NUMBER_CITATION_ENTRIES` =
+ * `AGENTS.md` + `WIDENED_SCOPE_FILES`）——新しい範囲は作らない。使う検出関数は
+ * `findLineNumberCitations` だけ（`findRowNumberCitations` /
+ * `findVerbatimCitations` / `findLegacyVerbatimCitations` を使わない理由は
+ * `collectFencedLineNumberCitations` の doc comment を見よ）。
+ */
+describe('フェンスの中として落とした行の path:行番号（#891）', () => {
+  it('免除表の理由（why）が全部、非空である', () => {
+    const blank = FENCED_LINE_NUMBER_CITATION_EXEMPTIONS.filter(
+      (e) => e.why.trim().length === 0,
+    ).map((e) => `${e.file} ${e.token}`);
+    expect(
+      blank,
+      '免除の理由が空である。なぜ直せないのかを書くこと（空欄を許すと、免除表は' +
+        '数合わせの場所になる）。',
+    ).toEqual([]);
+  });
+
+  it('免除表に載っている項目が、いまも実際に検出される現物と一致する（幽霊免除が無い）', () => {
+    const stillDetected = new Set<string>();
+    for (const { file, text } of FENCED_LINE_NUMBER_CITATION_ENTRIES) {
+      const { droppedLines } = proseLinesWithFenceState(text);
+      for (const c of findLineNumberCitations(droppedLines, isRepoFileOrBasename)) {
+        stillDetected.add(`${file} ${c.token}`);
+      }
+    }
+    const ghosts = FENCED_LINE_NUMBER_CITATION_EXEMPTIONS.filter(
+      (e) => !stillDetected.has(`${e.file} ${e.token}`),
+    ).map((e) => `${e.file} ${e.token}`);
+    expect(
+      ghosts,
+      '免除表に載っている file:token が、もう検出されない（直った/消えた）。' +
+        '免除表からこの行を消すこと。',
+    ).toEqual([]);
+  });
+
+  it('フェンスの中（落とした行）に、この歯が拾う形の path:行番号 が無い（#891）', () => {
+    const skipped = FENCED_LINE_NUMBER_CITATION_EXEMPTIONS.map((e) => ({
+      file: e.file,
+      token: e.token,
+    }));
+    const hits = collectFencedLineNumberCitations(
+      FENCED_LINE_NUMBER_CITATION_ENTRIES,
+      isRepoFileOrBasename,
+      skipped,
+    );
+    expect(
+      hits,
+      [
+        'フェンスの中（生の出力として落とした行）に、この歯が拾う形の `path:行番号` が見つかった。',
+        '⚠ これは規約違反ではない——フェンスの中身は引き続き「出典として数えない」（赤くしない）。',
+        'この赤の意味は「いま誰も見ていない場所（フェンスの中）に、findLineNumberCitations が拾う形のものが入った」であり、原因は次のどちらかである:',
+        '(a) フェンス判定がずれている（開き/閉じの対応が本来の意図と違う）。落ちた行の開始位置を実際に確認すること。',
+        '(b) 本当に生の出力（スタックトレース・実測コマンドの結果）を貼っていて、たまたま実在ファイルへ解決する path:行番号 の形になっている。',
+        '次の一手: (a) ならフェンスの対応を直す。(b) なら現物修正を優先する——',
+        '  doc の例示を架空パスへ倒す／フェンスで正しく囲み直す／path:行番号 が地の文に連続して現れない形へ言い換える',
+        '  （scripts/check-pr-line-number-citations-core.mjs がこの PR で実際に採った直し方）。',
+        '直せない理由が本当にあるなら FENCED_LINE_NUMBER_CITATION_EXEMPTIONS へ理由つきで足すこと' +
+          '（scripts/agents-md-references.test.ts）。ただし免除は最後の手段——現物修正が優先である。',
+      ].join('\n'),
+    ).toEqual([]);
+  });
+});
+
+describe('proseLinesWithFenceState の droppedLines（落とした行の中身を取り出す口。#891）', () => {
+  it('フェンスの中の行を、開き・閉じのマーカー行を除いて返す', () => {
+    const fixture = [
+      'prose before',
+      '```',
+      'dropped line 1',
+      'dropped line 2',
+      '```',
+      'prose after',
+    ].join('\n');
+    const { droppedLines } = proseLinesWithFenceState(fixture);
+    expect(droppedLines).toEqual([
+      { line: 3, text: 'dropped line 1' },
+      { line: 4, text: 'dropped line 2' },
+    ]);
+  });
+
+  it('unterminated（閉じていない）フェンスでも、開いた次の行から末尾まで droppedLines に入る', () => {
+    const fixture = ['prose', '```', 'still dropped 1', 'still dropped 2'].join('\n');
+    const { droppedLines, unterminated } = proseLinesWithFenceState(fixture);
+    expect(unterminated).toBe(true);
+    expect(droppedLines).toEqual([
+      { line: 3, text: 'still dropped 1' },
+      { line: 4, text: 'still dropped 2' },
+    ]);
+  });
+
+  it('フェンスを持たない入力は droppedLines が空である', () => {
+    const { droppedLines } = proseLinesWithFenceState('a\nb\nc');
+    expect(droppedLines).toEqual([]);
+  });
+
+  it('複数のフェンス区間があれば、両方の中身を集める', () => {
+    const fixture = [
+      '```',
+      'block A line 1',
+      '```',
+      'prose between',
+      '~~~',
+      'block B line 1',
+      '~~~',
+    ].join('\n');
+    const { droppedLines } = proseLinesWithFenceState(fixture);
+    expect(droppedLines).toEqual([
+      { line: 2, text: 'block A line 1' },
+      { line: 6, text: 'block B line 1' },
+    ]);
+  });
+});
+
+describe('collectFencedLineNumberCitations（合成 fixture。#891）', () => {
+  it('フェンスの中に実在ファイルへ解決する path:行番号 があれば拾う', () => {
+    // #785 と同じ理由でテンプレートリテラルで組み立てる——地の文に
+    // `path:行番号` を連続して書くと、この歯自身が自分を誤検出する。
+    const file = 'packages/core/src/clone.ts';
+    const entries = [
+      {
+        file: 'some-doc.md',
+        text: ['本文。', '```', `${file}:505 が原因だった`, '```'].join('\n'),
+      },
+    ];
+    const resolve = buildBasenameAwareRepoFileResolver([file]);
+    expect(collectFencedLineNumberCitations(entries, resolve, [])).toEqual([
+      `some-doc.md:3 ${file}:505`,
+    ]);
+  });
+
+  it('フェンスの外に在る同じ形は拾わない（collectWidenedLineNumberCitations の役目であって、ここの役目ではない）', () => {
+    const file = 'packages/core/src/clone.ts';
+    const entries = [{ file: 'some-doc.md', text: `${file}:505 が原因だった` }];
+    const resolve = buildBasenameAwareRepoFileResolver([file]);
+    expect(collectFencedLineNumberCitations(entries, resolve, [])).toEqual([]);
+  });
+
+  it('実在しないファイルは拾わない（架空パスは #891 の対象外）', () => {
+    const entries = [
+      {
+        file: 'some-doc.md',
+        text: ['```', 'scripts/example.mjs:42 が原因だった', '```'].join('\n'),
+      },
+    ];
+    const resolve = buildBasenameAwareRepoFileResolver(['packages/core/src/clone.ts']);
+    expect(collectFencedLineNumberCitations(entries, resolve, [])).toEqual([]);
+  });
+
+  it('免除表に載せた file+token は落ちる。載せなければ落ちない（免除が「そもそも拾えていない」のではないことの確認）', () => {
+    const file = 'packages/core/src/clone.ts';
+    const entries = [{ file: 'some-doc.md', text: ['```', `${file}:505`, '```'].join('\n') }];
+    const resolve = buildBasenameAwareRepoFileResolver([file]);
+    expect(
+      collectFencedLineNumberCitations(entries, resolve, [
+        { file: 'some-doc.md', token: `${file}:505` },
+      ]),
+    ).toEqual([]);
+    expect(collectFencedLineNumberCitations(entries, resolve, [])).toEqual([
+      `some-doc.md:2 ${file}:505`,
+    ]);
+  });
+
+  it('「N行目」はフェンスの中でも拾わない（findRowNumberCitations を意図して使っていないことの確認）', () => {
+    const entries = [
+      { file: 'some-doc.md', text: ['```', 'この中の 42行目 は見ない。', '```'].join('\n') },
+    ];
+    const resolve = buildBasenameAwareRepoFileResolver([]);
+    expect(collectFencedLineNumberCitations(entries, resolve, [])).toEqual([]);
+  });
+
+  it('`grep -Fn --` の正しい形（findVerbatimCitations が拾う形）はフェンスの中でも拾わない', () => {
+    const file = 'packages/core/src/clone.ts';
+    const entries = [
+      {
+        file: 'some-doc.md',
+        text: ['```', `grep -Fn -- 'ここに在る文言' ${file}`, '```'].join('\n'),
+      },
+    ];
+    const resolve = buildBasenameAwareRepoFileResolver([file]);
+    expect(collectFencedLineNumberCitations(entries, resolve, [])).toEqual([]);
   });
 });
 
