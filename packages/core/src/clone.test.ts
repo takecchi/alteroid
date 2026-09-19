@@ -10,7 +10,7 @@ import type {
   Query,
   SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ALWAYS_REDELIVER,
@@ -349,10 +349,24 @@ interface Setup {
  * の両方が同じ配線を要るので、ここへ1本にまとめる（`Setup.waitForEvents`
  * の doc 参照）。
  */
-function wireEvents(
-  clone: CloneHost,
-  conversationId: string,
-): { events: ChatStreamEvent[]; waitForEvents: Setup['waitForEvents'] } {
+/**
+ * 出来事を溜める配列と、**その配列へ届いた瞬間に同期で解決する待ち**を組にして
+ * 返す（#1220）。
+ *
+ * **なぜ `wireEvents` から切り出したのか。** 購読の仕方は1つではない ——
+ * `wireEvents` は張りっぱなしにするが、実物の SSE を模した聞き手
+ * （`subscribeLikeChatEndpoint`）は**終端で購読を外す**。そちらを `wireEvents` へ
+ * 寄せると、**測っている当のもの（接続が外れること）が消える。**
+ *
+ * ⟹ **配線の形は呼ぶ側に任せ、観測の部品だけを共有する。** こうしておけば、
+ * どんな購読の仕方をしても `waitForDone` / `waitForTerminal` が壁時計を使わずに
+ * 済む。⛔ 逆に、ここを通さずに配列を作ると `waitForEventsOf` が拒む（fail-closed）。
+ */
+function createEventSink(): {
+  events: ChatStreamEvent[];
+  push: (event: ChatStreamEvent) => void;
+  waitForEvents: Setup['waitForEvents'];
+} {
   const events: ChatStreamEvent[] = [];
   const waiters: {
     predicate: (events: readonly ChatStreamEvent[]) => boolean;
@@ -367,10 +381,6 @@ function wireEvents(
       }
     }
   }
-  clone.subscribe(conversationId, (event) => {
-    events.push(event);
-    notifyWaiters();
-  });
   function waitForEvents(
     predicate: (events: readonly ChatStreamEvent[]) => boolean,
   ): Promise<void> {
@@ -379,7 +389,52 @@ function wireEvents(
       waiters.push({ predicate, resolve });
     });
   }
+  eventWaiters.set(events, waitForEvents);
+  return {
+    events,
+    push: (event) => {
+      events.push(event);
+      notifyWaiters();
+    },
+    waitForEvents,
+  };
+}
+
+function wireEvents(
+  clone: CloneHost,
+  conversationId: string,
+): { events: ChatStreamEvent[]; waitForEvents: Setup['waitForEvents'] } {
+  const { events, push, waitForEvents } = createEventSink();
+  clone.subscribe(conversationId, push);
   return { events, waitForEvents };
+}
+
+/**
+ * `wireEvents` が配線した `events` 配列から、その配列を見張る `waitForEvents`
+ * を引く台帳（#1220）。
+ *
+ * **なぜ台帳を挟むのか。** `waitForDone` / `waitForTerminal` は呼び出し側から
+ * `events` 配列しか受け取らない（159 箇所）。配列だけでは「誰が push しているか」
+ * が分からないので、従来は**壁時計でポーリングするしかなかった**。配線した側で
+ * 登録しておけば、呼び出し側を1文字も書き換えずに、**出来事が届いた瞬間に同期で
+ * 解決する形**（`Setup.waitForEvents` の doc）へ載せ替えられる。
+ *
+ * **⛔ 引けなかったら壁時計へ落とさない。** 落とすと、この Issue が塞いだ穴が
+ * 「引けなかったとき限定」で静かに戻る（`AGENTS.md`「判定できないという3つ目の
+ * 状態を持つ」）。配線されていないことは判定できるので、そのまま拒む。
+ */
+const eventWaiters = new WeakMap<ChatStreamEvent[], Setup['waitForEvents']>();
+
+function waitForEventsOf(events: ChatStreamEvent[], label: string): Setup['waitForEvents'] {
+  const waitForEvents = eventWaiters.get(events);
+  if (waitForEvents === undefined) {
+    throw new Error(
+      `${label}: この events 配列は wireEvents が配線したものではないので、出来事を` +
+        '直接つかむ待ち方ができない。壁時計のポーリングへは落とさない（#1220）。' +
+        'events は wireEvents / setup / setupScripted が返したものを渡すこと。',
+    );
+  }
+  return waitForEvents;
 }
 
 function setup(
@@ -440,44 +495,105 @@ function lastSessionCall(calls: FakeCall[]): FakeCall {
 }
 
 /**
- * `waitFor` / `waitForDone` の打ち切り。**⛔ ここを伸ばして歯を黙らせないこと**
- * （#890）。この budget は本来の所要（実測 36〜53ms）の 60 倍以上あり、
- * **使い切る回は「遅い」ではなく「起きていない」である。**
+ * ⛔ **待ちの打ち切りを壁時計で持たない**（#1220）。
+ *
+ * ## 何が起きていたか
+ *
+ * ここには `WAIT_BUDGET_MS = 3000` が在り、`waitFor` / `waitForDone` は
+ * 「3000ms 経ったら諦める」形だった。**2026-09-12T17:46:25Z、`main` の CI が
+ * それで落ちた**（`3ca6397` = PR #909 のマージ。誰も気づかず、直した PR も無い）。
+ * 本来の所要は実測 36〜53ms なので budget は 60 倍以上あったが、**器が混めば
+ * 60 倍は埋まる。** 埋まったとき、歯は「実装が壊れた」と名乗る。
+ *
+ * ## なぜ「3000 を大きくする」で直さないのか
+ *
+ * 確率を下げるだけで、同じ賭けを CI の遅さと引き換えに続けることになる
+ * （Issue #1220 の逐語）。⟹ **締め切りそのものを持たない。**
+ *
+ * ## なぜ「tick 数で締め切る」でも直さないのか（測って落とした案）
+ *
+ * 壁時計の ms ではなく macrotask の tick 数で締め切れば負荷に依らない、と考えたが、
+ * **この歯は本物のタイマーを跨ぐ** —— `fakeSdk` の `delayMs` は 60 / 120 / 150 /
+ * 200 / 250 / 1500 ms が実在し、`setTimeout` で本物の遅延を作る
+ * （`grep -Fn -- 'delayMs: 1500' packages/core/src/clone.test.ts`）。tick で回すと、
+ * タイマーが発火するまで tick を空回りで使い切る。
+ *
+ * ## いま残っている締め切りは何か（⚠ 賭けが消えたのではなく、1本に集約された）
+ *
+ * **vitest 自身の `testTimeout`（`vitest.config.ts` に指定が無いので既定の 5000ms）
+ * だけである。** ⟹ 200 本を超える「隠れた 3000ms の賭け」が、**見える 1 本の設定**に
+ * なった。⛔ **ここへ新しい締め切りを足し戻さないこと。**
+ *
+ * ## 諦めたときに何が分かるか
+ *
+ * 締め切りを外したので、`label` を載せた例外はもう出ない。代わりに**解けていない
+ * 待ちの `label` を `afterEach` が stderr へ出す**（下）。⚠️ `process.stdout.write`
+ * は使えない —— `vitest.setup.ts` の歯がテストを落とす（#314）。
  */
-const WAIT_BUDGET_MS = 3000;
+type PendingWait = { readonly label: string };
+
+const pendingWaits = new Set<PendingWait>();
+
+/**
+ * テストの区切り。**待ちの取り消しに使う**（時間ではなく「テストが終わったか」で切る）。
+ *
+ * 締め切りを外した副作用として、解けない待ちは `setTimeout` を積み続ける ——
+ * テストが終わっても回り続けると、次のテストの器を無駄に食う。`afterEach` で
+ * 1つ進めておけば、**次の poll で必ず抜ける**（打ち切りの根拠が壁時計ではなく
+ * テストの寿命になる）。
+ */
+let testEpoch = 0;
+
+afterEach(() => {
+  testEpoch += 1;
+  if (pendingWaits.size === 0) return;
+  const labels = [...pendingWaits].map((wait) => wait.label);
+  pendingWaits.clear();
+  // **stderr であることに意味がある。** 既定の reporter でも出るうえ、
+  // `vitest.setup.ts` の stdout の歯を通らない（あちらの doc に逐語で在る）。
+  process.stderr.write(
+    `⚠️ このテストが終わった時点で、解けていない待ちが ${labels.length} 本ある。` +
+      'テストが testTimeout で落ちたなら、落ちた理由はこれである可能性が高い' +
+      '（#1220 で壁時計の打ち切りを外したので、待ち自身はもう例外を投げない）:\n' +
+      labels.map((label) => `  - ${label}\n`).join(''),
+  );
+});
 
 /** 非同期の書き込みが器へ届くまで待つ（`post` は同期で返るので待てない）。 */
 async function waitFor(check: () => Promise<boolean> | boolean, label: string): Promise<void> {
-  const started = Date.now();
-  for (;;) {
-    if (await check()) return;
-    // **「起きない」と言い切らない**（#890）。ここで言えるのは「budget の内に
-    // 起きなかった」までで、**「起きなかった」と「まだ起きていない」は別である。**
-    // 潰すと、次に読む人がこの1行から「そもそも起きない」と読む ⟹ 実際に
-    // #890 でその誤診が出ている。
-    if (Date.now() - started > WAIT_BUDGET_MS) {
-      throw new Error(`${label} が ${WAIT_BUDGET_MS}ms 以内に起きなかった`);
+  if (await check()) return;
+  const epoch = testEpoch;
+  const wait: PendingWait = { label };
+  pendingWaits.add(wait);
+  try {
+    for (;;) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      // **「起きない」と言い切らない**（#890）。ここで言えるのは「テストが終わる
+      // までに起きなかった」までで、**「起きなかった」と「まだ起きていない」は
+      // 別である。** 潰すと、次に読む人がこの1行から「そもそも起きない」と読む
+      // ⟹ 実際に #890 でその誤診が出ている。
+      if (testEpoch !== epoch) {
+        throw new Error(`${label} を待っている途中でテストが終わった（待ちは解けていない）`);
+      }
+      if (await check()) return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 5));
+  } finally {
+    pendingWaits.delete(wait);
   }
 }
 
-/** chat の1往復が終わる（done が届く）まで待つ。 */
+/**
+ * chat の1往復が終わる（done が届く）まで待つ。
+ *
+ * **壁時計を1つも使わない** —— `clone.subscribe` の callback から同期で解決する
+ * （`Setup.waitForEvents` の doc）。待ち始める前に既に `done` が届いていても
+ * 即座に真になるので、追い越しの窓も無い。
+ */
 function waitForDone(events: ChatStreamEvent[]): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const started = Date.now();
-    const tick = setInterval(() => {
-      if (events.some((event) => event.type === 'done')) {
-        clearInterval(tick);
-        resolve();
-      } else if (Date.now() - started > WAIT_BUDGET_MS) {
-        clearInterval(tick);
-        reject(
-          new Error(`done が ${WAIT_BUDGET_MS}ms 以内に来なかった: ${JSON.stringify(events)}`),
-        );
-      }
-    }, 5);
-  });
+  return waitForEventsOf(
+    events,
+    'done の待ち',
+  )((seen) => seen.some((event) => event.type === 'done'));
 }
 
 /** ターンの終端（`done` または `error`）。失敗したターンを見るテストで使う。 */
@@ -497,7 +613,9 @@ const isTerminal = (event: ChatStreamEvent): boolean =>
  * とは一致せず**アサーション不一致で落ちる**（タイムアウトでは落ちない）。
  */
 async function waitForTerminal(events: ChatStreamEvent[]): Promise<void> {
-  await expect.poll(() => events.some(isTerminal), { timeout: 3000 }).toBe(true);
+  // **壁時計を持たない**（#1220）。`expect.poll` の `timeout` は 3000ms の
+  // 打ち切りそのものだったので、`waitForEvents` へ載せ替えてある。
+  await waitForEventsOf(events, '終端の待ち')((seen) => seen.some(isTerminal));
 }
 
 /**
@@ -2462,8 +2580,7 @@ describe('クローン — self_status（runtime facts の配線）', () => {
         return createCloneMcpServer(context);
       },
     });
-    const events: ChatStreamEvent[] = [];
-    clone.subscribe('conv-1', (event) => events.push(event));
+    const { events } = wireEvents(clone, 'conv-1');
 
     return {
       clone,
@@ -2610,14 +2727,13 @@ describe('クローン — self_status（runtime facts の配線）', () => {
         return createCloneMcpServer(context);
       },
     });
-    const events: ChatStreamEvent[] = [];
-    clone.subscribe('conv-1', (event) => events.push(event));
+    const { events } = wireEvents(clone, 'conv-1');
 
     clone.post(humanMessage('やあ'));
     // `#buildOptions`（→ `mcpServerFactory`）は `#ensureQuery` の中、init が
     // 届くより前に走る。ここで context が控えられるのを待つ（init はまだ
     // `initGate` で止めてある）。
-    await expect.poll(() => captured !== undefined, { timeout: 3000 }).toBe(true);
+    await waitFor(() => captured !== undefined, '値が捕まる');
 
     if (captured === undefined) throw new Error('ToolContext がまだ捕まっていない');
     const tools = createCloneTools(captured);
@@ -2765,8 +2881,7 @@ describe('クローン — self_status（runtime facts の配線）', () => {
         return createCloneMcpServer(context);
       },
     });
-    const events: ChatStreamEvent[] = [];
-    clone.subscribe('conv-1', (event) => events.push(event));
+    const { events } = wireEvents(clone, 'conv-1');
 
     async function selfStatus(): Promise<string> {
       if (captured === undefined) throw new Error('ToolContext がまだ捕まっていない');
@@ -2791,7 +2906,8 @@ describe('クローン — self_status（runtime facts の配線）', () => {
     // 2本目 — セッションが落ちたので開き直る（`calls` が2本になるまで待つ）。
     events.length = 0;
     clone.post(humanMessage('もう一度'));
-    await expect.poll(() => calls.length, { timeout: 3000 }).toBe(2);
+    await waitFor(() => calls.length === 2, '2本目の呼び出し');
+    expect(calls.length).toBe(2);
     await waitForDone(events);
 
     const second = await selfStatus();
@@ -2827,8 +2943,7 @@ describe('クローン — self_status（runtime facts の配線）', () => {
 
     // 人間が記憶を大きく書き換える（載せ直しが起きる量にする）
     await stores.persona.write('values', `# 価値観\n\n${'い'.repeat(5000)}\n`);
-    const events: ChatStreamEvent[] = [];
-    s.clone.subscribe('conv-2', (event) => events.push(event));
+    const { events } = wireEvents(s.clone, 'conv-2');
     s.clone.post(humanMessage('2回目', 'conv-2'));
     await waitForDone(events);
     // 載せ直しが実際に起きたことを確かめてから、動いていないことを見る
@@ -3615,7 +3730,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
         at: new Date().toISOString(),
         reason: '1本目',
       });
-      await expect.poll(() => (call()?.inputs.length ?? 0) === 1, { timeout: 3000 }).toBe(true);
+      await waitFor(() => (call()?.inputs.length ?? 0) === 1, '1本目の入力');
       const firstText = call()?.inputs[0] ?? '';
       expect(firstText).toContain(
         '前回の tick が無いので差分は出せない（このプロセスでの最初の tick）。',
@@ -3644,7 +3759,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
         at: new Date().toISOString(),
         reason: '2本目',
       });
-      await expect.poll(() => (call()?.inputs.length ?? 0) === 2, { timeout: 3000 }).toBe(true);
+      await waitFor(() => (call()?.inputs.length ?? 0) === 2, '2本目の入力');
       const secondText = call()?.inputs[1] ?? '';
       expect(secondText).toContain(
         `前回の tick から +${expectedDiff.toLocaleString('en-US')} 文字。`,
@@ -3675,7 +3790,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
         at: new Date().toISOString(),
         reason: '1本目',
       });
-      await expect.poll(() => (call()?.inputs.length ?? 0) === 1, { timeout: 3000 }).toBe(true);
+      await waitFor(() => (call()?.inputs.length ?? 0) === 1, '1本目の入力');
 
       const baseline = measureMemoryFloor(await stores.persona.documents()).totalChars;
       // 基準から +5% ぶんだけ増やす（線 = +10% の半分。確実に超えない）。
@@ -3692,7 +3807,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
         at: new Date().toISOString(),
         reason: '2本目',
       });
-      await expect.poll(() => (call()?.inputs.length ?? 0) === 2, { timeout: 3000 }).toBe(true);
+      await waitFor(() => (call()?.inputs.length ?? 0) === 2, '2本目の入力');
       const secondText = call()?.inputs[1] ?? '';
       // 差分そのものは出るが、線の印は出ない。
       expect(secondText).toMatch(/前回の tick から \+\d/);
@@ -3733,7 +3848,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
         at: new Date().toISOString(),
         reason: '1本目',
       });
-      await expect.poll(() => (call()?.inputs.length ?? 0) === 1, { timeout: 3000 }).toBe(true);
+      await waitFor(() => (call()?.inputs.length ?? 0) === 1, '1本目の入力');
 
       // 1本目の tick が組んだセッションの基準。
       const baseline = measureMemoryFloor(await stores.persona.documents()).totalChars;
@@ -3753,7 +3868,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
         at: new Date().toISOString(),
         reason: '2本目',
       });
-      await expect.poll(() => (call()?.inputs.length ?? 0) === 2, { timeout: 3000 }).toBe(true);
+      await waitFor(() => (call()?.inputs.length ?? 0) === 2, '2本目の入力');
       expect(call()?.inputs[1] ?? '').toContain(
         '⚠️ 線（セッション構築時点から +10%）に達している。',
       );
@@ -3791,7 +3906,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
         at: new Date().toISOString(),
         reason: '定期 tick',
       });
-      await expect.poll(() => (s.calls[0]?.inputs.length ?? 0) === 1, { timeout: 3000 }).toBe(true);
+      await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '1本目の入力');
 
       const text = s.calls[0]?.inputs[0] ?? '';
       expect(text).toContain(
@@ -3874,7 +3989,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
       payload: { repo: 'alteroid', status: 'failure' },
     });
 
-    await expect.poll(() => inputsOf(s)().includes('"failure"'), { timeout: 3000 }).toBe(true);
+    await waitFor(() => inputsOf(s)().includes('"failure"'), 'failure の入力が届く');
     expect(inputsOf(s)()).toContain('source: ci');
 
     const externals = (await s.stores.journal.list({ types: ['external_event'] })) as {
@@ -4200,7 +4315,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
     // 1回目の起動: 過ぎた予定を拾って発火するが、記録できないので動かない
     await scheduler.refresh();
     scheduler.start();
-    await expect.poll(() => posted.length >= 1, { timeout: 3000 }).toBe(true);
+    await waitFor(() => posted.length >= 1, '1件目の投稿');
     scheduler.stop();
     await expect
       .poll(
@@ -4223,7 +4338,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
     await second.refresh();
     second.start();
 
-    await expect.poll(() => inputsOf(s)().includes('見張って進める'), { timeout: 3000 }).toBe(true);
+    await waitFor(() => inputsOf(s)().includes('見張って進める'), '見張りの入力が届く');
     second.stop();
 
     // 実際に走ったのは1回だけ
@@ -4558,7 +4673,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
       kind: 'しらない仕込み',
     });
 
-    await expect.poll(() => inputsOf(s)().includes('記憶にある'), { timeout: 3000 }).toBe(true);
+    await waitFor(() => inputsOf(s)().includes('記憶にある'), '記憶の入力が届く');
 
     await s.clone.stop();
   });
@@ -4579,7 +4694,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
       reason: '定期 tick',
     });
 
-    await expect.poll(() => (s.calls[0]?.inputs ?? []).length > 0, { timeout: 3000 }).toBe(true);
+    await waitFor(() => (s.calls[0]?.inputs ?? []).length > 0, '最初の入力');
     // 保留は保留のまま（回答待ちを勝手に片付けない）
     expect(await stores.jobs.listApprovals({ pendingOnly: true })).toHaveLength(1);
     // それでも発意 tick は状況を見て動いている
@@ -4691,8 +4806,7 @@ describe('クローン — 壊れ方の回帰', () => {
     expect(s.events.some((event) => event.type === 'done')).toBe(true);
 
     // 以後も普通に応答できる
-    const events: ChatStreamEvent[] = [];
-    s.clone.subscribe('conv-2', (event) => events.push(event));
+    const { events } = wireEvents(s.clone, 'conv-2');
     s.clone.post(humanMessage('MSG-B', 'conv-2'));
     await waitForDone(events);
 
@@ -4709,7 +4823,11 @@ describe('クローン — 壊れ方の回帰', () => {
     await expect
       .poll(() => s.events.some((event) => event.type === 'error'), { timeout: 3000 })
       .toBe(true);
-    await expect.poll(() => stores.sessions.getCloneSessionId(), { timeout: 3000 }).toBeNull();
+    await waitFor(
+      async () => (await stores.sessions.getCloneSessionId()) === null,
+      'session id が消える',
+    );
+    expect(await stores.sessions.getCloneSessionId()).toBeNull();
 
     await s.clone.stop();
   });
@@ -4737,8 +4855,7 @@ describe('クローン — 壊れ方の回帰', () => {
     await stores.persona.write('values', '# 価値観\n\nNEW-VALUE\n');
     const after = await memoryCardOutlineLines(stores, 'values');
 
-    const events: ChatStreamEvent[] = [];
-    s.clone.subscribe('conv-2', (event) => events.push(event));
+    const { events } = wireEvents(s.clone, 'conv-2');
     s.clone.post(humanMessage('2回目', 'conv-2'));
     await waitForDone(events);
 
@@ -4965,8 +5082,7 @@ describe('クローン — 記憶を二重に載せない', () => {
 
   /** 2ターン目を同じセッションへ流し、その入力を返す。 */
   async function secondTurn(s: Setup): Promise<string> {
-    const events: ChatStreamEvent[] = [];
-    s.clone.subscribe('conv-2', (event) => events.push(event));
+    const { events } = wireEvents(s.clone, 'conv-2');
     s.clone.post(humanMessage('2回目', 'conv-2'));
     await waitForDone(events);
     return (s.calls[0] as FakeCall).inputs[1] ?? '';
@@ -5147,8 +5263,7 @@ describe('クローン — 記憶を二重に載せない', () => {
     // **版の見分けは本文ではなくカードの行で行う**（`memoryCardOutlineLines`）。
     // 節id が中身のハッシュなので、V1 / V2 / V3 は別々の行になる。
     const v2Card = await memoryCardOutlineLines(stores, 'values');
-    const events: ChatStreamEvent[] = [];
-    first.clone.subscribe('conv-2', (event) => events.push(event));
+    const { events } = wireEvents(first.clone, 'conv-2');
     first.clone.post(humanMessage('2回目', 'conv-2'));
     await waitForDone(events);
     for (const line of v2Card) expect((first.calls[0] as FakeCall).inputs[1] ?? '').toContain(line);
@@ -5515,8 +5630,7 @@ describe('クローン — ターンの失敗の跡', () => {
           createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
         ]),
       });
-      const events: ChatStreamEvent[] = [];
-      clone.subscribe('conv-1', (event) => events.push(event));
+      const { events } = wireEvents(clone, 'conv-1');
       return { clone, stores, calls, events, failFrom: () => (failNext = true) };
     }
 
@@ -6008,8 +6122,7 @@ describe('クローン — ターンの失敗の跡', () => {
       const s = setup(undefined, stores, { failWith: `クエリが失敗した params=["${secret}"]` });
       // 失敗が `#reportFailure` まで届いたことは chat 側の `error` で見る
       // （日誌は落ちるので、そちらでは待てない）。
-      const seen: ChatStreamEvent[] = [];
-      s.clone.subscribe('conv-9', (event) => seen.push(event));
+      const { events: seen } = wireEvents(s.clone, 'conv-9');
       s.clone.post(humanMessage('やあ', 'conv-9'));
       await expect
         .poll(() => seen.some((event) => event.type === 'error'), { timeout: 3000 })
@@ -6479,7 +6592,8 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
       at: new Date().toISOString(),
       reason: '先客のターン',
     });
-    await expect.poll(() => (gated.calls[0]?.inputs ?? []).length, { timeout: 3000 }).toBe(1);
+    await waitFor(() => (gated.calls[0]?.inputs ?? []).length === 1, '1本目の入力');
+    expect((gated.calls[0]?.inputs ?? []).length).toBe(1);
   }
 
   /**
@@ -6520,7 +6634,11 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
     gated.clone.post(humanMessage('MSG-WAITING', 'conv-2'));
 
     // 先客のターンは握ったまま。**ここで載ることがこの直しの主題である。**
-    await expect.poll(() => inboundTexts(gated.stores), { timeout: 3000 }).toContain('MSG-WAITING');
+    await waitFor(
+      async () => (await inboundTexts(gated.stores)).includes('MSG-WAITING'),
+      'MSG-WAITING が台帳へ届く',
+    );
+    expect(await inboundTexts(gated.stores)).toContain('MSG-WAITING');
     // 載ったのは順番が来たからではない（この発言はまだモデルへ渡っていない）。
     expect(gated.calls[0]?.inputs).toHaveLength(1);
 
@@ -6552,8 +6670,7 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
 
   it('順番待ちのあいだ `thinking` は来ない（2つの状態を1つの語に潰していない）', async () => {
     const gated = setupGated();
-    const events: ChatStreamEvent[] = [];
-    gated.clone.subscribe('conv-2', (event) => events.push(event));
+    const { events } = wireEvents(gated.clone, 'conv-2');
     await occupy(gated);
 
     gated.clone.post(humanMessage('MSG-QUEUED', 'conv-2'));
@@ -6639,7 +6756,11 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
 
     s.clone.post(humanMessage('MSG-FAILED', 'conv-9'));
 
-    await expect.poll(() => inboundTexts(stores), { timeout: 3000 }).toContain('MSG-FAILED');
+    await waitFor(
+      async () => (await inboundTexts(stores)).includes('MSG-FAILED'),
+      'MSG-FAILED が台帳へ届く',
+    );
+    expect(await inboundTexts(stores)).toContain('MSG-FAILED');
 
     await s.clone.stop();
   });
@@ -6890,7 +7011,7 @@ describe('クローンの消費が台帳に載る（誰が・どこで）', () =
     expect(s.events.filter(isTerminal).map((event) => event.type)).toEqual(['error']);
 
     s.clone.post(humanMessage('2回目'));
-    await expect.poll(() => s.events.filter(isTerminal).length === 2, { timeout: 3000 }).toBe(true);
+    await waitFor(() => s.events.filter(isTerminal).length === 2, '終端が2つ揃う');
     expect(s.events.filter(isTerminal).map((event) => event.type)).toEqual(['error', 'error']);
 
     await s.clone.stop();
@@ -7455,7 +7576,11 @@ describe('クローン — 捨てた resume 素材の区間を拾い直す（#56
     const s = setup(undefined, stores, { failWith: 'No conversation found with session ID' });
     s.clone.post(humanMessage('やあ'));
 
-    await expect.poll(() => stores.sessions.getCloneSessionId(), { timeout: 3000 }).toBeNull();
+    await waitFor(
+      async () => (await stores.sessions.getCloneSessionId()) === null,
+      'session id が消える',
+    );
+    expect(await stores.sessions.getCloneSessionId()).toBeNull();
     expect(await stores.sessions.getLostSessionGrave()).toEqual({
       projectKey: '-workspace',
       sessionId: 'stale-session-id',
@@ -7478,7 +7603,11 @@ describe('クローン — 捨てた resume 素材の区間を拾い直す（#56
     const s = setup(undefined, stores, { failWith: 'No conversation found with session ID' });
     s.clone.post(humanMessage('やあ'));
 
-    await expect.poll(() => stores.sessions.getCloneSessionId(), { timeout: 3000 }).toBeNull();
+    await waitFor(
+      async () => (await stores.sessions.getCloneSessionId()) === null,
+      'session id が消える',
+    );
+    expect(await stores.sessions.getCloneSessionId()).toBeNull();
     expect(await stores.sessions.getLostSessionGrave()).toBeNull();
 
     await s.clone.stop();
@@ -10137,9 +10266,12 @@ describe('クローン — 枠が回復した後の返信は、人間の側か�
    * 要点** — 実物の SSE 購読はここで終わる。
    */
   function subscribeLikeChatEndpoint(clone: CloneHost, conversationId: string): ChatStreamEvent[] {
-    const events: ChatStreamEvent[] = [];
+    // **終端で購読を外すのがこの聞き手の本体である**（実物の SSE と同じ）。だから
+    // `wireEvents`（張りっぱなし）へは寄せられない —— 寄せると測っている当のものが
+    // 消える。観測の部品（`createEventSink`）だけを共有して、外し方は自分で持つ。
+    const { events, push } = createEventSink();
     const unsubscribe = clone.subscribe(conversationId, (event) => {
-      events.push(event);
+      push(event);
       if (event.type === 'done' || event.type === 'error') unsubscribe();
     });
     return events;
@@ -14508,8 +14640,7 @@ describe('recycleSessionForToken（回した後のセッション作り直し）
         createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
       ]),
     });
-    const events: ChatStreamEvent[] = [];
-    clone.subscribe('conv-1', (event) => events.push(event));
+    const { events } = wireEvents(clone, 'conv-1');
 
     say(clone);
     await waitFor(() => events.some((e) => e.type === 'done'), '1本目が通ること');
@@ -15005,8 +15136,7 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
 
     await firePreCompact(s);
 
-    const events: ChatStreamEvent[] = [];
-    s.clone.subscribe('conv-2', (event) => events.push(event));
+    const { events } = wireEvents(s.clone, 'conv-2');
     s.clone.post(humanMessage('2回目', 'conv-2'));
     await waitForDone(events);
 
@@ -15030,13 +15160,11 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
 
     await firePreCompact(s);
 
-    const second: ChatStreamEvent[] = [];
-    s.clone.subscribe('conv-2', (event) => second.push(event));
+    const { events: second } = wireEvents(s.clone, 'conv-2');
     s.clone.post(humanMessage('2回目', 'conv-2'));
     await waitForDone(second);
 
-    const third: ChatStreamEvent[] = [];
-    s.clone.subscribe('conv-3', (event) => third.push(event));
+    const { events: third } = wireEvents(s.clone, 'conv-3');
     s.clone.post(humanMessage('3回目', 'conv-3'));
     await waitForDone(third);
 
@@ -15061,8 +15189,7 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
       '---\ntype: premise\ndescription: 価値観の要旨\n---\n## VALUES-HEAD-NEW\n本文\n',
     );
 
-    const events: ChatStreamEvent[] = [];
-    s.clone.subscribe('conv-2', (event) => events.push(event));
+    const { events } = wireEvents(s.clone, 'conv-2');
     s.clone.post(humanMessage('2回目', 'conv-2'));
     await waitForDone(events);
 
@@ -15193,8 +15320,7 @@ describe('クローン — 文脈窓で畳む前の退避は diverged/unknown �
         createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
       ]),
     });
-    const events: ChatStreamEvent[] = [];
-    clone.subscribe('conv-1', (event) => events.push(event));
+    const { events } = wireEvents(clone, 'conv-1');
     return { clone, stores, calls, events };
   }
 
@@ -15312,5 +15438,105 @@ describe('CloneOptions.redeliveryGate は必須 — 省いた形は型として�
     expect(() =>
       createClone({ stores: createMemoryStores(), redeliveryGate: ALWAYS_REDELIVER }),
     ).not.toThrow();
+  });
+});
+
+describe('待ちの経路に壁時計が無い（#1220）', () => {
+  /**
+   * ⭐ **この2本が、この Issue の「再発を止める門」である。**
+   *
+   * #1192 で takecchi が「**注意書きを増やすことと、再発を防ぐことが別になり始めて
+   * いる**」と指摘した。実際、ここには既に「⛔ ここを伸ばして歯を黙らせないこと」と
+   * 書いてあったのに、**壁時計の打ち切りは残り、2026-09-12 に `main` の CI を落とした。**
+   * ⟹ 注意書きでは止まらない。**測る。**
+   *
+   * ## なぜ偽タイマーで測るのか
+   *
+   * 「壁時計に依存しない」は、**時計を止めれば直接測れる**。ポーリングの形へ戻すと
+   * `setTimeout` / `setInterval` が発火しないので、下の1本目は必ず赤くなる。
+   * 打ち切りを足し戻すと、2本目が必ず赤くなる。**どちらも実時間を1ミリ秒も使わない。**
+   *
+   * ⚠️ `vi.useRealTimers()` は `finally` で必ず戻すこと。偽の時計を掛けたまま
+   * テストを抜けると、`vitest.setup.ts` が逐語で言うとおり「誰も進めないので永久に
+   * 返らない」状態が後続へ漏れる。
+   */
+  function fakeHost(): { host: CloneHost; emit: (event: ChatStreamEvent) => void } {
+    let listener: ((event: ChatStreamEvent) => void) | undefined;
+    const host = {
+      subscribe: (_conversationId: string, callback: (event: ChatStreamEvent) => void) => {
+        listener = callback;
+        return () => {
+          listener = undefined;
+        };
+      },
+    } as unknown as CloneHost;
+    return {
+      host,
+      emit: (event) => {
+        if (listener === undefined) throw new Error('subscribe されていない');
+        listener(event);
+      },
+    };
+  }
+
+  /** マイクロタスクだけを有界に流す。**時計は1ミリ秒も進めない。** */
+  async function flushMicrotasks(): Promise<void> {
+    for (let i = 0; i < 50; i += 1) await Promise.resolve();
+  }
+
+  it('⭐ 出来事の待ちは、時計を1ミリ秒も進めずに解ける（ポーリングへ戻すと赤くなる）', async () => {
+    vi.useFakeTimers();
+    try {
+      const { host, emit } = fakeHost();
+      const { events } = wireEvents(host, 'conv-1');
+      let settled = false;
+      void waitForDone(events).then(() => {
+        settled = true;
+      });
+      emit({ type: 'done' } as ChatStreamEvent);
+      await flushMicrotasks();
+      expect(
+        settled,
+        'done の待ちが、時計を進めないと解けなかった。' +
+          '⟹ 待ちが壁時計のポーリング（setTimeout / setInterval / expect.poll の timeout）へ' +
+          '戻っている。出来事そのものを観測する形（wireEvents の waitForEvents）へ戻すこと（#1220）。',
+      ).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('⭐ waitFor は壁時計で諦めない（30秒進めても失敗しない）', async () => {
+    vi.useFakeTimers();
+    try {
+      let arrived = false;
+      let rejection: unknown;
+      let resolved = false;
+      const waiting = waitFor(() => arrived, 'テスト用の待ち').then(
+        () => {
+          resolved = true;
+        },
+        (error: unknown) => {
+          rejection = error;
+        },
+      );
+
+      // **古い打ち切り（3000ms）の10倍。**条件は偽のままにしておく。
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(
+        rejection,
+        'waitFor が壁時計で諦めた。⟹ 打ち切りが足し戻されている。' +
+          '「3000 を伸ばす」も同じ賭けを続けるだけなので、締め切りそのものを持たないこと（#1220）。',
+      ).toBeUndefined();
+      expect(resolved).toBe(false);
+
+      // 条件が真になれば、ちゃんと解ける（空振りしていないことの対照）。
+      arrived = true;
+      await vi.advanceTimersByTimeAsync(10);
+      await waiting;
+      expect(resolved).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
