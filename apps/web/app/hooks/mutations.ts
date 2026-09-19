@@ -21,6 +21,7 @@ import type {
   EnvVarScope,
   InboxEventType,
   InboxRemoveManyResult,
+  TokenRotationSettings,
 } from '~/lib/types';
 
 import { isKeyOfType, KEY } from './queries';
@@ -592,6 +593,36 @@ export function useSetTokenDisabled() {
 /** 外向けの顔（値を持たない）を、次の `PUT /tokens` の入力へ変換する。 */
 function toTokenInput(token: AgentTokenView): { id: string; label: string; order: number } {
   return { id: token.id, label: token.label, order: token.order };
+}
+
+/**
+ * 回す契機・冷却の既定を変える（`PUT /tokens/policy`。Issue #1123）。
+ *
+ * **`alteroid token policy` / `PUT /tokens/policy` と同じ口・同じ資格**
+ * （`authenticate` だけ。`apps/daemon/src/app.ts` の `.put('/tokens/policy', …)`
+ * の doc）——CLI にできて画面にできないことを作らない、という PRD
+ * 「ある入口でできることが別の入口でできない状態を作らない」のための hook。
+ *
+ * **部分更新をそのまま通す。** 省略した項目はサーバ側で現状維持になる
+ * （`tokensPolicyUpdateRequestSchema` の doc）——ここで欠けた項目を補って
+ * 埋めない。
+ *
+ * **⚠️ サーバの規則（値の妥当性）をここへ写さないこと。** `useEditCommitment` /
+ * `useAppraiseManager` と同じ理由——「正の整数か」のような判定を画面側で
+ * 先回りして弾くと、サーバ側の規則が変わった日に画面だけが黙ってずれる。
+ * 呼び出し側はそのまま送り、断られたらサーバの文言をそのまま見せること。
+ */
+export function useSetTokenPolicy() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (patch: Partial<Pick<TokenRotationSettings, 'rotateOn' | 'cooldownMs'>>) => {
+      const result = await api.api.PUT('/tokens/policy', { body: patch }).then(unwrap);
+      await mutate(KEY.tokens);
+      return result;
+    },
+    [api, mutate],
+  );
 }
 
 /** 会話を終える。クローンがここで学びを蒸留する。 */
