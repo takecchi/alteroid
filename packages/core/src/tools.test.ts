@@ -16707,6 +16707,135 @@ describe('#1230 memory_section_move: 半完了 → やり直し → 状態（通
 });
 
 /**
+ * `ask_human` の `stores.jobs.putApproval` が失敗したとき（Issue #1229
+ * 受け入れ基準2・3）。
+ *
+ * **`journal.append` の穴（直上の describe）と対だが、別の穴だった。**
+ * `putApproval` の呼び出しは try の外に在り、投げると (1) 承認待ちキューに
+ * 1行も残らない (2) `noteDroppedRecord` を経由しないので stderr にも跡が
+ * 1つも残らない (3) 道具の応答は `isError: true` ＋生のクエリ文言だけ、
+ * という3つの穴が同時に開いていた——`journal.append` の穴と違って、
+ * **(2) は `appendJournalOrThrow` のような経由点自体が無かった**分、
+ * さらに深い。
+ *
+ * ⭐ **受け入れ基準3が逐語で言う「歯は落ちた理由が伝わることを測ること。
+ * 例外が投げられた、ではない」を、`ask_human` の実際の道具ハンドラを通して
+ * 測る。** `error-cause.test.ts` は `collapseErrorCause` 単体の契約を測って
+ * いるが、ここで測るのは「`ask_human` が実際にこの関数を使っているか」
+ * ——配線側の歯である。
+ */
+describe('ask_human の putApproval が失敗したとき（跡が消えない・SQLSTATE が両方に出る）', () => {
+  /** 上の describe の `callExpectingError` と同じもの（複製。理由も同じ）。 */
+  async function callExpectingError(
+    tools: ReturnType<typeof createCloneTools>,
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<{ isError: boolean; text: string }> {
+    const found = tools.find((entry) => entry.name === name);
+    if (!found) throw new Error(`ツール ${name} が無い`);
+    try {
+      const result = await found.handler(args as never, {});
+      const text = (result.content ?? [])
+        .map((block) => (block.type === 'text' ? block.text : ''))
+        .join('');
+      return { isError: result.isError === true, text };
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error);
+      return { isError: true, text };
+    }
+  }
+
+  /**
+   * `drizzle-orm@0.45.2` の `DrizzleQueryError` が node-postgres の
+   * `DatabaseError` を `.cause` に持つ、という実際の形を模す
+   * （`error-cause.test.ts` の同名の道具と同じ考え方。ファイルをまたいで
+   * 共有せず複製する——`journalEntryShape` 系のテスト用複製と同じ判断）。
+   */
+  function fakePgInsertError(): Error {
+    const pgError = new Error('duplicate key value violates unique constraint "approvals_pkey"');
+    Object.assign(pgError, { code: '23505', constraint: 'approvals_pkey', table: 'approvals' });
+    const drizzleError = new Error(
+      'Failed query: insert into "approvals" ("id", "created_at", "answered_at", ' +
+        '"withdrawn_at", "approval") values ($1, $2, $3, $4, $5)\n' +
+        'params: SECRET-QUESTION-VALUE-CANARY',
+    );
+    drizzleError.name = 'DrizzleQueryError';
+    (drizzleError as { cause?: unknown }).cause = pgError;
+    return drizzleError;
+  }
+
+  function storesWithFailingPutApproval(error: unknown): Stores {
+    const base = createMemoryStores();
+    return {
+      ...base,
+      jobs: {
+        ...base.jobs,
+        putApproval: () => Promise.reject(error),
+      },
+    };
+  }
+
+  it('⭐ SQLSTATE が本文にも stderr の跡にも出る。生の SQL・束縛パラメータ・質問本文は出ない', async () => {
+    clearRecentTracesForTesting();
+    const CANARY = 'CANARY-QUESTION-本文は出てはいけない';
+    const stores = storesWithFailingPutApproval(fakePgInsertError());
+    const tools = createCloneTools({
+      stores,
+      emit: () => {},
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+
+    let result: { isError: boolean; text: string } | undefined;
+    const stderrLines = await captureStderr(async () => {
+      result = await callExpectingError(tools, 'ask_human', { question: CANARY });
+    });
+
+    if (result === undefined) throw new Error('呼び出しが完了していない');
+    expect(result.isError).toBe(true);
+    // クローンへ返る本文——SQLSTATE と構造化フィールドが出る。
+    expect(result.text).toContain('code=23505');
+    expect(result.text).toContain('constraint=approvals_pkey');
+    expect(result.text).toContain('table=approvals');
+    // **束縛パラメータ（行の値そのもの）・質問本文は出ない。** SQL 文
+    // そのもの（列名・placeholder。`Failed query: insert into …`）は
+    // スキーマの形であって値ではないので、1行目としてそのまま残る
+    // （`dropped-record.test.ts` の「理由は1行目だけ・200字で切る」歯と
+    // 同じ契約——`collapseErrorCause` が切るのは2行目以降だけである）。
+    expect(result.text).not.toContain('SECRET-QUESTION-VALUE-CANARY');
+    expect(result.text).not.toContain(CANARY);
+
+    // stderr 側にも同じ理由（SQLSTATE）が残る。
+    const stderrJoined = stderrLines.join('\n');
+    expect(stderrJoined).toContain('code=23505');
+    expect(stderrJoined).not.toContain('SECRET-QUESTION-VALUE-CANARY');
+    expect(stderrJoined).not.toContain(CANARY);
+
+    // 承認待ちキューには1行も残っていない（副作用ゼロ）。
+    expect(await stores.jobs.listApprovals()).toHaveLength(0);
+    // self_dropped の帳面にも跡が実在する（(2) の穴が埋まっていることの直接証拠）。
+    const traces = recentDroppedTraces();
+    expect(traces.some((line) => line.includes('承認待ちを記録できませんでした'))).toBe(true);
+  });
+
+  it('先頭行だけで「未記録・確認は届いていない・やり直してよい」と分かる。isError のまま', async () => {
+    const stores = storesWithFailingPutApproval(new Error('boom'));
+    const tools = createCloneTools({
+      stores,
+      emit: () => {},
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+
+    const { isError, text } = await callExpectingError(tools, 'ask_human', { question: 'Q' });
+
+    expect(isError).toBe(true);
+    expect(text.split('\n')[0]).toBe('⚠⚠ 未記録・確認は人間へ届いていない・やり直してよい');
+    expect(text).toContain('やり直してよい');
+  });
+});
+
+/**
  * ⭐⭐ **説明文が実装のふるまいを数え直している箇所を、ふるまいの側から留める。**
  *
  * ## なぜ表駆動の歯（`tool-description-enumeration.test.ts`）と別に要るのか
