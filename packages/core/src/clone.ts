@@ -123,7 +123,7 @@ import type { CloneRuntimeFacts, SelfFacts } from './self.js';
 import { findOpenManagerDuplicate } from './store.js';
 import type { CommitmentList, PendingInboxEvent, Stores } from './store.js';
 import { cloneToolJournalsItself, createCloneMcpServer, type ToolContext } from './tools.js';
-import { turnInputEntry } from './turn-input.js';
+import { composeTurnInputText, turnInputEntry } from './turn-input.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 import {
   CLONE_ACTOR_ID,
@@ -6217,24 +6217,27 @@ class Clone implements CloneHost {
       // 配り直しと台帳の断り書きは**ここでだけ**載せる（`#redeliveryNotice` の理由）。
       // 蒸留が間に合わなかった区間の断り書きも同じ場所へ置く（起点は7か所に
       // 散っているが、ターンの入口はここ1か所しかない）。
+      // **並び順そのものは `turn-input.ts` の `composeTurnInputText` が持つ。**
+      // ここに在るのは「8本をどう作るか」だけで、「どれを先に置くか」の規則は
+      // 向こうに在る（規則が違うものを同じ場所に置かない、の doc もそちら）。
+      //
+      // ⚠️ **`distillGap` と `contextWindowFold` はこの2行で消費される。**
+      // どちらも呼ぶこと自体が遷移（自分の pending を倒す）なので、**呼び出しは
+      // ここから動かさない。** オブジェクトのプロパティは書いた順に評価されるので、
+      // この並びが元の `+` の連結と同じ順序を保つ。
       this.#pushInput(
         await this.#withFreshMemory(
-          (await this.#distillGapNotice(kind)) +
-            this.#contextWindowFoldNotice(kind) +
-            // **`#redeliveryNotice` の直後に `#supersededNotice`、その直後に
-            // `#mergedBatchTruncationNotice` を置く。** この3本は「いま配られて
-            // いるこの束の鮮度・切り方」の話で、後ろ2本（`#commitmentNotice` /
-            // `#situationNotice`）は「全体の状態」の話——規則が違うものを
-            // 同じ場所に置かない（`turn-input.ts`）。
-            this.#redeliveryNotice +
-            this.#supersededNotice +
-            // `#validityNotice` もこの組である——「この束の合図が名乗った前提が
-            // まだ生きているか」は鮮度の話で、後ろ2本の「全体の状態」ではない。
-            this.#validityNotice +
-            this.#mergedBatchTruncationNotice +
-            this.#commitmentNotice +
-            this.#situationNotice +
-            text,
+          composeTurnInputText({
+            distillGap: await this.#distillGapNotice(kind),
+            contextWindowFold: this.#contextWindowFoldNotice(kind),
+            redelivery: this.#redeliveryNotice,
+            superseded: this.#supersededNotice,
+            validity: this.#validityNotice,
+            mergedBatchTruncation: this.#mergedBatchTruncationNotice,
+            commitment: this.#commitmentNotice,
+            situation: this.#situationNotice,
+            body: text,
+          }),
         ),
       );
       // 入力がモデルへ渡った瞬間から最初の出力までは「考えている」。
