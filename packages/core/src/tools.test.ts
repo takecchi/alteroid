@@ -1173,6 +1173,7 @@ describe('クローンの道具', () => {
   describe('書く4口の応答に足す「セッション構築時点からの増分」と「premise の順位」（P3）', () => {
     const RUNTIME_BASE: CloneRuntimeFacts = {
       revision: { commit: null, short: null, source: null },
+      buildTime: { builtAt: null },
       declaredModel: 'fable',
       modelOverridden: false,
       modelEnvKey: 'ALTEROID_CLONE_MODEL',
@@ -11306,6 +11307,7 @@ describe('usage_read はアカウント全体の残りも返す（人間と同�
 describe('self_status（いま自分がどう走っているか）', () => {
   const RUNTIME: CloneRuntimeFacts = {
     revision: { commit: null, short: null, source: null },
+    buildTime: { builtAt: null },
     declaredModel: 'fable',
     modelOverridden: false,
     modelEnvKey: 'ALTEROID_CLONE_MODEL',
@@ -12719,6 +12721,7 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
 
   const LISTING_SWEEP_RUNTIME: CloneRuntimeFacts = {
     revision: { commit: null, short: null, source: null },
+    buildTime: { builtAt: null },
     declaredModel: 'fable',
     modelOverridden: false,
     modelEnvKey: 'ALTEROID_CLONE_MODEL',
@@ -16737,6 +16740,7 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
    */
   const RUNTIME_FOR_DESCRIPTION_TEETH: CloneRuntimeFacts = {
     revision: { commit: null, short: null, source: null },
+    buildTime: { builtAt: null },
     declaredModel: 'fable',
     modelOverridden: false,
     modelEnvKey: 'ALTEROID_CLONE_MODEL',

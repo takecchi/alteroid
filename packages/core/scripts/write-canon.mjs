@@ -88,6 +88,29 @@ function revision() {
 }
 
 /**
+ * このイメージが**焼かれた時刻**（ISO8601 UTC）。
+ *
+ * **名前が事実より強くならないように。** これは「コミットの時刻」でも
+ * 「本番に出た時刻」でもない——`main` へのマージから `release/prod` への反映
+ * （夜1回）、反映からこのビルドが走るまでの間隔は、どちらもここには入っていない。
+ * 言えるのは「このプロセスのコードは、少なくともこの時刻には存在していた」
+ * までである（#1226。逐語は `packages/core/src/self.ts` の `describeCloneRuntime`
+ * が焼かれた時刻の隣に置く）。
+ *
+ * **分からないことを隠さない、の裏側。** `new Date().toISOString()` はビルドを
+ * 実行できている時点で必ず成功するので、**この値そのものが空になることは無い**
+ * ——`revision()` の `''`（プレースホルダを作らない）とは事情が違う。だが
+ * **この変更より前に焼かれたイメージ（古い `write-canon.mjs` が焼いたもの）では
+ * `CANON_BUILT_AT` という定数自体が生成物に存在しない。** 読む側
+ * （`packages/core/src/revision.ts` の `resolveBuildTime`）は、定数が無い・空・
+ * 壊れた値のどれであっても同じ「不明」へ倒すこと——「取れなかった」を
+ * 「取れた」に見せない、という `revision()` と同じ約束をここでも守る。
+ */
+function builtAt() {
+  return new Date().toISOString();
+}
+
+/**
  * **`docs/` に増えた正典を黙って落とさない。**
  *
  * 上の一覧は手書きである（順序と一行説明はファイルシステムに無い情報なので、
@@ -122,6 +145,7 @@ for (const entry of CANON) {
 }
 
 const rev = revision();
+const builtAtValue = builtAt();
 
 const banner = [
   '// 生成物 — 手で書き換えない（次のビルドで消える）。',
@@ -149,6 +173,13 @@ const banner = [
   '',
   "/** `CANON_REVISION` の出所（'build' / 'workspace' / ''）。実行時の解決は `packages/core/src/revision.ts` が持つ。 */",
   `export const CANON_REVISION_SOURCE = ${JSON.stringify(rev.source)};`,
+  '',
+  '/**',
+  ' * このイメージが**焼かれた**時刻（ISO8601 UTC）。コミットの時刻でも本番へ出た',
+  ' * 時刻でもない——詳しくは write-canon.mjs の `builtAt()` の doc。実行時の解決は',
+  ' * `packages/core/src/revision.ts` の `resolveBuildTime` が持つ。',
+  ' */',
+  `export const CANON_BUILT_AT = ${JSON.stringify(builtAtValue)};`,
   '',
 ].join('\n');
 

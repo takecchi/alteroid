@@ -44,7 +44,7 @@ afterEach(async () => {
 async function runIsolated(options: {
   env?: NodeJS.ProcessEnv;
   git?: boolean;
-}): Promise<{ revision: string; source: string }> {
+}): Promise<{ revision: string; source: string; builtAt: string }> {
   const root = await mkdtemp(join(tmpdir(), 'write-canon-'));
   tmpDirs.push(root);
 
@@ -88,12 +88,17 @@ async function runIsolated(options: {
   );
   const revisionMatch = /export const CANON_REVISION = "([^"]*)";/.exec(generated);
   const sourceMatch = /export const CANON_REVISION_SOURCE = "([^"]*)";/.exec(generated);
+  const builtAtMatch = /export const CANON_BUILT_AT = "([^"]*)";/.exec(generated);
   const revision = revisionMatch?.[1];
   const source = sourceMatch?.[1];
+  const builtAt = builtAtMatch?.[1];
   if (revision === undefined || source === undefined) {
     throw new Error(`生成物に CANON_REVISION / CANON_REVISION_SOURCE が無い:\n${generated}`);
   }
-  return { revision, source };
+  if (builtAt === undefined) {
+    throw new Error(`生成物に CANON_BUILT_AT が無い:\n${generated}`);
+  }
+  return { revision, source, builtAt };
 }
 
 describe('write-canon.mjs の版の出所判定', () => {
@@ -125,5 +130,41 @@ describe('write-canon.mjs の版の出所判定', () => {
     // 化けていないことを明示する。
     expect(revision).toBe('');
     expect(source).toBe('');
+  });
+});
+
+/**
+ * `CANON_BUILT_AT` — このイメージが**焼かれた時刻**（#1226）。
+ *
+ * **`revision()` とは事情が違う。** リビジョンは `.git` が無い・
+ * `ALTEROID_BUILD_REV` も無ければ空文字に倒れるが、ビルド時刻
+ * （`new Date().toISOString()`）はビルドを実行できている時点で必ず成功する
+ * ——`git` の有無にも `ALTEROID_BUILD_REV` の有無にも依存しない。**だから
+ * ここで測る本体は「常に非空の妥当な ISO8601 文字列が焼かれる」側である**
+ * （`resolveBuildTime` 側が「定数が無い・空・壊れている」の3つを同じ `null` に
+ * 倒すことは `revision.test.ts` が測る——ここは焼く側だけを見る）。
+ */
+describe('write-canon.mjs が焼く CANON_BUILT_AT', () => {
+  it('git 作業ツリーの有無や ALTEROID_BUILD_REV の有無に関わらず、常に妥当な ISO8601 (UTC) が焼かれる', async () => {
+    const before = Date.now();
+    const { builtAt } = await runIsolated({ git: false });
+    const after = Date.now();
+
+    expect(builtAt.length).toBeGreaterThan(0);
+    expect(builtAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    const parsed = Date.parse(builtAt);
+    expect(Number.isNaN(parsed)).toBe(false);
+    // **焼いた瞬間の実時刻であること。** 固定のプレースホルダ（epoch 0 等）へ
+    // 化けていないことを、テスト実行を挟んだ現実の時刻範囲で確かめる。
+    expect(parsed).toBeGreaterThanOrEqual(before);
+    expect(parsed).toBeLessThanOrEqual(after);
+  });
+
+  it('ALTEROID_BUILD_REV があっても無くても、焼かれる時刻は変わらず取れる（リビジョンの出所とは独立した軸）', async () => {
+    const withEnv = await runIsolated({ env: { ALTEROID_BUILD_REV: 'a'.repeat(40) }, git: false });
+    const withoutEnv = await runIsolated({ git: false });
+
+    expect(Number.isNaN(Date.parse(withEnv.builtAt))).toBe(false);
+    expect(Number.isNaN(Date.parse(withoutEnv.builtAt))).toBe(false);
   });
 });

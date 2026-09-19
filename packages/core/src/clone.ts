@@ -118,7 +118,7 @@ import type {
   MemoryDocument,
   ScheduledRequest,
 } from './schema.js';
-import { resolveBuildRevision } from './revision.js';
+import { resolveBuildRevision, resolveBuildTime } from './revision.js';
 import type { CloneRuntimeFacts, SelfFacts } from './self.js';
 import { findOpenManagerDuplicate } from './store.js';
 import type { CommitmentList, PendingInboxEvent, Stores } from './store.js';
@@ -7214,6 +7214,11 @@ class Clone implements CloneHost {
       // 実行時の環境変数まで見るので、凍らせるとその経路が「起動時に在ったか」
       // しか答えられなくなる（`revision.ts`「環境変数は呼び出し時に読む」）。
       revision: resolveBuildRevision(),
+      // **呼ぶたびに解決する（構築時に凍らせない）。** `resolveBuildTime` は
+      // 焼き込みだけを見るので `resolveBuildRevision` ほど理由は強くないが、
+      // 形を揃えておく（凍らせても実害は無いが、隣で揃えないと読み手が理由の
+      // 違いを詮索することになる）。
+      buildTime: resolveBuildTime(),
       declaredModel: this.#model,
       modelOverridden: this.#modelOverridden,
       modelEnvKey: CLONE_MODEL_ENV_KEY,

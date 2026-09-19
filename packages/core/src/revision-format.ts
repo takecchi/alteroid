@@ -143,3 +143,60 @@ export function describeRevisionStatus(
       return '未確認（名乗りをまだ一度も聞けていない）';
   }
 }
+
+/**
+ * このプロセスの実行時が「焼かれた時刻」（#1226）。
+ *
+ * **`BuildRevision` とは別の軸である。** あちらは「どのコミットのコードか」、
+ * こちらは「そのコードがいつイメージへ焼かれたか」——コミットの時刻でも
+ * デプロイ（本番へ出た）時刻でもない（`write-canon.mjs` の `builtAt()` の doc、
+ * `describeBuildAge` の doc）。
+ *
+ * **`BuildRevision` の型・`buildRevisionSchema`（wire）には触れない。** ここは
+ * 新しい別の値なので、既存の `GET /health` / `openapi.json` は動かさない。
+ */
+export interface BuildTime {
+  /** ISO8601（UTC）。取れなければ `null`。 */
+  builtAt: string | null;
+}
+
+/** 経過の粒度を選ぶ（分 → 時間 → 日）。`diffMs` は負にならない前提で呼ぶ。 */
+function describeElapsed(diffMs: number): string {
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 60) return `約${minutes}分前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `約${hours}時間前`;
+  const days = Math.floor(hours / 24);
+  return `約${days}日前`;
+}
+
+/**
+ * 「焼かれた時刻と、そこからの経過」の1行（#1226）。**取れなければ「不明」に
+ * 倒すのがここの唯一の仕事**（`describeBuildRevision` と同じ役割分担）。
+ *
+ * **`builtAt` は `resolveBuildTime` を経由していない呼び出しも想定し、ここでも
+ * 自前で壊れた値を検査する**（`revision-format.ts` は実行時の依存を持たない
+ * 軽い口なので、`resolveBuildTime` 側の検査を信用の唯一の拠り所にしない）。
+ *
+ * **「これより前のものは全部入っている」とは言わないこと。** 呼び出し側
+ * （`self.ts`）が、この行の隣に「これより後に `main` へ入ったものは届いていない」
+ * とだけ書く——反映してから焼くまでの隙間があるので、逆方向の保証はできない。
+ *
+ * `now` はテストのために差し替えられる（既定は `new Date()`）。
+ */
+export function describeBuildAge(builtAt: string | null, now: Date = new Date()): string {
+  if (builtAt === null) {
+    return '不明（焼き込みが無い——古い焼き込みには存在しない定数か、値が空）';
+  }
+  const parsed = Date.parse(builtAt);
+  if (Number.isNaN(parsed)) {
+    return `不明（焼き込みの値が壊れている: ${builtAt}）`;
+  }
+  const diffMs = now.getTime() - parsed;
+  if (diffMs < 0) {
+    // 焼き込み時刻が「いま」より未来——時計がずれているか、`now` を誤って渡している。
+    // それらしく「0分前」等へ丸めず、そのまま申告する。
+    return `${builtAt}（いまより未来——時計のずれの可能性がある）`;
+  }
+  return `${builtAt}（${describeElapsed(diffMs)}）`;
+}
