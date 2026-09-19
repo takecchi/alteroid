@@ -101,11 +101,26 @@ export type ManagerAwaitingBackgroundMap = ReadonlyMap<string, ManagerAwaitingBa
  * **`live` の字面の後ろに足す。** 2つは別の軸で、同時に立つ（話しかけられない
  * まま背景処理を待っていることがある）——`done/セッション切断/背景処理待ち×3` の
  * ように両方が並ぶ形にしてあり、片方がもう片方を隠さない。
+ *
+ * ## `since`（Issue #1104）— 経過時間はここで作らず、時刻だけを渡す
+ *
+ * **この関数に時計を渡して経過を計算させない。** ここは純粋な整形であって、
+ * `since` の値そのもの（`ManagerAwaitingBackground.since` の doc）が「時刻で
+ * 答えが変わるものを一覧に焼かない」と言っている——`describeManagerState` は
+ * 呼ばれるたびに `now` が変わりうる場所（`manager_list` の一覧行）で使われる
+ * ので、ここで経過を計算すると同じ入力でも呼ぶ時刻ごとに違う文字列を返す
+ * 純関数でなくなる。**出すのは `since`（時刻）そのもの**で、経過を作るのは
+ * 読む側（クローン）である。
+ *
+ * **`since` が無いときは1バイトも変えない。** 第3引数が `{ tasks }` だけの
+ * 呼び出し（既存の呼び出し・テスト）はこれまでどおりの字面のまま——`since`
+ * を省略できることの裏返しである（`live` の3値と同じ「省略が黙って何かを
+ * 主張しない」作法）。
  */
 export function describeManagerState(
   status: JobStatus,
   live: boolean | undefined,
-  awaitingBackground?: { tasks: number },
+  awaitingBackground?: { tasks: number; since?: string },
 ): string {
   const base = describeLiveState(status, live);
   // **背景タスクの在り高だけを足す。** `breakdown`（`local_agent×3` のような内訳）はここへ
@@ -113,9 +128,10 @@ export function describeManagerState(
   // 溜まっているときほど一覧が重くなる（`listing-and-detail` の性質1）。
   // 内訳が要るなら `manager_report` / 日誌（`type: 'decision'` の `grounds`）に
   // 全文が在る。
-  return awaitingBackground === undefined
-    ? base
-    : `${base}/背景処理待ち×${awaitingBackground.tasks}`;
+  if (awaitingBackground === undefined) return base;
+  const sinceSuffix =
+    awaitingBackground.since === undefined ? '' : `（${awaitingBackground.since} から）`;
+  return `${base}/背景処理待ち×${awaitingBackground.tasks}${sinceSuffix}`;
 }
 
 /** `describeManagerState` の `live` の部分だけ（3値の分岐は1文字も変えていない）。 */
