@@ -594,10 +594,48 @@ export function isTokenPoolReopenedNotice(event: InboxEvent): boolean {
  * 回にその場でリセットする** —— 次に同じトークンで畳み始めたら 1 から
  * 数え直す。この入れ物自体がリセットの起点になるので、呼ぶ側は消し忘れを
  * 気にしなくてよい。
+ *
+ * ## 3つ目の条件 —— 前に配ったものを覚える（Issue #1223）
+ *
+ * 上の2つ（`blocked` / `releasePending`）は**クローンのいまの状態**しか見て
+ * おらず、**前にこのクローンへ何を伝えたかを1文字も覚えていない。** ⟹ 次の
+ * 輪が閉じない:
+ *
+ * 1. クローンが枠で止まっている
+ * 2. 合図が来る → `blocked && !releasePending` ⟹ **配る**（`#releaseRequested`
+ *    が立つ）
+ * 3. `#pump` が先頭でその印を消費する ⟹ `releasePending` が偽へ戻る
+ * 4. クローンは再挑戦するが、まだ止まったまま（`how: '冷却が明けた'` は**時計**
+ *    であって観測ではない —— 回した先の鍵がまた 429 のこともある）
+ * 5. 同じ鍵・同じ `how` の合図がまた来る → `blocked && !releasePending` ⟹
+ *    **また配る**
+ *
+ * ⟹ **本文までバイト単位で同一の合図が、クローンのターン1本につき1回、
+ * 無限に配られる。** 実運用（2026-09-18〜19）で同一本文が2分半に60回以上配られ、
+ * その間クローンは道具を1つも呼べず、会話ログが
+ * `prompt is too long: 4,436,374 tokens > 1,000,000` で API に弾かれた。
+ * **合流（`folded`）は効いていた** —— 各件が「この間に同じ合図が11件届き、1件に
+ * まとめた」と名乗っている。効いていなかったのは**配達済みの印**の側である。
+ *
+ * **#1051 の手当て（`releasePending`）が畳むのはターンとターンのあいだの連発
+ * だけで、ターンを跨いだ反復は1つも畳んでいない。**
+ *
+ * ⟹ **規則**: 「また通るようになった／冷却が明けた」をクローンへ配ってよいのは、
+ * **前に配ったものと違うとき**だけ。同じものをもう一度配ってよいのは、**そのあいだに
+ * 鍵が通らなくなったことを観測したとき**（{@link CloneWakeGate.observeUnusable}）
+ * だけである。
+ *
+ * **⛔ 時間の窓（「N 秒以内の同一本文は捨てる」）でも件数の上限（「N 回配ったら
+ * 止める」）でもない。** どちらも恣意的な定数で本物の合図を黙って失う＝能力の削除
+ * （`docs/north_star.md` の禁止2）である。ここが持つのは**状態**（最後に配った
+ * 合図の身元）だけで、**再武装は観測にだけ紐づく。**
  */
 export interface CloneWakeGate {
   /**
-   * @param tokenId 起こす／畳む対象のトークン id（{@link ReopenedToken.tokenId}）。
+   * @param reopened 起こす／畳む対象の合図（{@link ReopenedToken}）。**`tokenId`
+   *   だけでなく `how` も要る** —— 身元は `(tokenId, how)` の組である
+   *   （{@link ReopenedHow} の doc: 3値は根拠の強さが違い、読む側が次に確かめる
+   *   ものが違う。潰さない）。
    * @param cloneBlocked いまのクローンの状態（`CloneHost.usageBlocked`）。
    * @param releasePending **もう起こしてあるか**（`CloneHost.usageReleasePending`。
    *   Issue #1051）。真なら畳む——印が立っている間、2件目の合図が立てるものは
@@ -608,18 +646,76 @@ export interface CloneWakeGate {
    *   - `{ kind: 'fold' }` —— 配らない。カウンタを1増やして畳む
    */
   decide(
-    tokenId: string,
+    reopened: ReopenedToken,
     cloneBlocked: boolean,
     releasePending: boolean,
   ): { kind: 'wake'; folded: number } | { kind: 'fold' };
+  /**
+   * **鍵が通らなくなったことを観測した**（Issue #1223）。配達済みの印を捨てて、
+   * 同じ身元の合図をもう一度配れる状態へ戻す。
+   *
+   * **呼ぶのは `parked`（撒いた鍵はまだ通らない）と `exhausted`（通る鍵が無い）
+   * の回である**（`settleTokenOutcome`）。そこを通った後の「また通るように
+   * なった」は、同じ鍵・同じ `how` でも**本物の新しい知らせ**である。
+   *
+   * **畳み込みカウンタ（`folded`）は触らない。** あれは母数で、ここが消してよい
+   * ものは配達済みの印だけである。
+   */
+  observeUnusable(): void;
+}
+
+/**
+ * **配ったことを覚えておく身元**（Issue #1223）。`(tokenId, how)` の組を1つの
+ * 文字列にする。
+ *
+ * **区切りに制御文字を使わず、長さを前置きする。** 見本は
+ * `packages/core/src/usage-limits.ts` の `rateLimitMemoryKey`（逐語
+ * `grep -Fn -- 'export function rateLimitMemoryKey' packages/core/src/usage-limits.ts`）
+ * —— エスケープのつもりで書いた ` ` が実バイトとして保存され、CI の
+ * `scripts/check-tracked-nul-bytes.test.ts` が実際に落ちた（#260）。**⟹ 踏みようの
+ * 無い形にする。** 長さを前に置けば「`a` と `b:c`」と「`a:b` と `c`」が同じ鍵へ
+ * 化けないことが、値の中身への仮定なしに決まる。
+ */
+function deliveredIdentity(reopened: ReopenedToken): string {
+  return `${String(reopened.tokenId.length)}:${reopened.tokenId}${reopened.how}`;
 }
 
 /** {@link CloneWakeGate} を作る。呼び出しのたびに新しい状態を持つ。 */
 export function createCloneWakeGate(): CloneWakeGate {
   const folded = new Map<string, number>();
+  /**
+   * **最後に実際に配った合図の身元**（Issue #1223。{@link deliveredIdentity}）。
+   * まだ何も配っていない／再武装した後は `null`。
+   */
+  let told: string | null = null;
   return {
-    decide(tokenId, cloneBlocked, releasePending) {
+    decide(reopened, cloneBlocked, releasePending) {
+      const tokenId = reopened.tokenId;
       if (!worthDeliveringNow(cloneBlocked, releasePending)) {
+        /**
+         * **クローンが止まっていないなら、配達済みの印を捨てる**（Issue #1223）。
+         * 次に止まったときの合図は、同じ身元でも**本物の新しい知らせ**である
+         * （止まっていないあいだにクローンは実際に動けている）。
+         *
+         * **`releasePending` で畳んだ回はここへ来ない** —— あちらは「もう起こして
+         * ある」だけで、状態は何も動いていない。印を捨てると #1223 の輪がそのまま
+         * 戻る（`#pump` が印を消費するたびに再武装してしまう）。
+         */
+        if (!cloneBlocked) told = null;
+        folded.set(tokenId, (folded.get(tokenId) ?? 0) + 1);
+        return { kind: 'fold' };
+      }
+      /**
+       * **前に配ったものと同じなら畳む**（Issue #1223。3つ目の歯）。ここへ来る
+       * のは `blocked && !releasePending`、つまり「止まっていて、まだ起こして
+       * いない」回である —— #1051 の門はこれを通すので、**ターンを跨いだ反復を
+       * 止めるのはここだけである。**
+       *
+       * **畳み込みカウンタは既存と同じように1増やす。** 母数は消さない
+       * （{@link describeReopenedTokenNotice} が次に配る本文へ載せる）。
+       */
+      const identity = deliveredIdentity(reopened);
+      if (told === identity) {
         folded.set(tokenId, (folded.get(tokenId) ?? 0) + 1);
         return { kind: 'fold' };
       }
@@ -627,7 +723,11 @@ export function createCloneWakeGate(): CloneWakeGate {
       // 前回の回のぶんを引き継いでしまう。
       const count = folded.get(tokenId) ?? 0;
       folded.delete(tokenId);
+      told = identity;
       return { kind: 'wake', folded: count };
+    },
+    observeUnusable() {
+      told = null;
     },
   };
 }
@@ -1475,6 +1575,22 @@ export async function main(): Promise<void> {
      *   無関係に呼ぶ** —— マネージャーはクローンと独立に枠で止まりうるので、
      *   ここを一緒に絞ると「起こすべき委譲が起きない」壊し方になる
      */
+    /**
+     * **鍵が通らなくなったことを観測した回**（Issue #1223。
+     * {@link CloneWakeGate.observeUnusable}）。**`reopenedTokenOf` より前に呼ぶ。**
+     *
+     * `parked`（撒いた鍵はまだ通らない）と `exhausted`（通る鍵が無い）は、
+     * どちらも「鍵が通らない」を観測した回である。⟹ **そこを通った後の「また
+     * 通るようになった」は、同じ鍵・同じ `how` でも本物の新しい知らせ**なので、
+     * 配達済みの印を捨てて、もう一度配れる状態へ戻す。
+     *
+     * **この2つは `reopenedTokenOf` が `undefined` を返す側なので、下の `wake()`
+     * とは排他である** —— 同じ回に印を捨てて配る、という順序は起こらない。
+     */
+    if (outcome.kind === 'parked' || outcome.kind === 'exhausted') {
+      cloneWakeGate.observeUnusable();
+    }
+
     const reopened = reopenedTokenOf(outcome);
     if (reopened !== undefined) {
       /**
@@ -1502,21 +1618,29 @@ export async function main(): Promise<void> {
         // 変わらず通る——母数は日誌の `recovered` 行に残る（隣の describe
         // 「recovered の日誌行は、受信箱へ配ったかどうかと無関係に必ず出る」）。
         const decision = cloneWakeGate.decide(
-          reopened.tokenId,
+          reopened,
           clone.usageBlocked,
           clone.usageReleasePending,
         );
         if (decision.kind === 'fold') {
           // **安く跡を残す**（Issue #783）。永続化はしない——`schema.ts` の
           // enum を触る判断は人間が持つ。既存の口（標準出力）へ1行だけ足す。
-          // **畳んだ理由を言い分ける（Issue #1051）。** 2つは読む側が次に
-          // 確かめるものが違う——前者は「クローンは動いている」、後者は
-          // 「クローンは止まっているが、もう起こしてある（まだ試していない）」。
-          // 潰すと、往復（#1051）が起きているのか本当に静かなのかが跡から
-          // 読めなくなる。
-          const why = clone.usageBlocked
-            ? 'クローンは枠で止まっているが、再開の印が既に立っている（もう起こしてあるので重ねない）'
-            : 'クローンは枠で止まっていないので起こさない';
+          // **畳んだ理由を言い分ける（Issue #1051、#1223 で3つ目が増えた）。**
+          // 3つは読む側が次に確かめるものが違う——1つ目は「クローンは動いている」、
+          // 2つ目は「クローンは止まっているが、もう起こしてある（まだ試していない）」、
+          // 3つ目は「クローンは止まっていて、起こしてもいないが、同じ合図を既に
+          // 配ってある（クローンは受け取ったうえでまだ止まっている）」。
+          // 潰すと、往復（#1051）が起きているのか、ターンを跨いだ反復（#1223）が
+          // 起きているのか、本当に静かなのかが跡から読めなくなる。
+          //
+          // **3つ目の判定を `decision` から読まない。** `decide` が返すのは
+          // 配るか畳むかだけで、理由の内訳は持たない——ここで復元できるのは、
+          // 2つの窓が偽の場合を除いた残りが #1223 の側だからである。
+          const why = !clone.usageBlocked
+            ? 'クローンは枠で止まっていないので起こさない'
+            : clone.usageReleasePending
+              ? 'クローンは枠で止まっているが、再開の印が既に立っている（もう起こしてあるので重ねない）'
+              : '前に同じ合図（同じ鍵・同じ根拠）を配ってあり、そのあいだ鍵が通らなくなったことを観測していない';
           process.stdout.write(
             `alteroidd: 認証トークンが通る状態に戻った合図を畳んだ（${why}）: ` +
               `「${reopened.label}」（id ${reopened.tokenId}）\n`,
