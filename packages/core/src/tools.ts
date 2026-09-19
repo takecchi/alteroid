@@ -8817,27 +8817,30 @@ export function createCloneTools(context: ToolContext) {
      * （`Stores.sessions: SessionRegistry`）ので、`app.ts` と同じ材料を
      * そのまま渡せる。
      *
-     * **⚠️ ここが `POST /archive/remove` と違う点——`overrideReason` を持つ。**
-     * `POST /archive/remove` は一括の入力に `overrideReason` を持たない
-     * （「一括で複数件を無条件に開ける形は事故の芽が大きい」という理由。
-     * `app.ts` の doc）。この道具は逆に持つ——雛形は `archive_remove`（単発）
-     * である。理由: (1) 単発の `archive_remove` は既に `overrideReason` を
-     * 持ち、クローンにはその能力が既にある。一括だけそれを持たないのは
-     * 「1件ずつなら開けるが、まとめてだと開けない」という、人間には無い
-     * 追加制限になる（north_star 禁止2）。(2) `guardArchiveRemoval` 自体が
-     * 1件ずつ独立に判定する関数なので、一括で回しても「1件ずつ手で開ける」
-     * のと安全性は変わらない——`overrideReason` は理由の文字列そのものが
-     * 引き金で、真偽値と分離できないので「うっかり一括開放」は起きない
-     * （`guardArchiveRemoval` の doc）。**この判断は依頼元から明示された
-     * 要件であり、`POST /archive/remove` 側の判断を覆すものではない**——
-     * 人間の入口とクローンの入口とで、この一点だけ意図して分かれている。
-     * override したときは、理由と対象ごとの走行中マネージャー id を日誌へ
-     * 残す（黙って通さない。`archive_remove` と同じ作法）。
+     * **`overrideReason` を持たない——`POST /archive/remove` と同じ判断。**
+     * `app.ts` の doc が言う通り「一括で複数件を無条件に開ける形は事故の芽が
+     * 大きい」。**これは north_star 禁止2（追加制限禁止）には反しない**——
+     * 禁止2が求めるのは「方針は設定で開けられること」であって「すべての口が
+     * 同じ強さで開くこと」ではなく、**開ける口そのものは既に在る**（単発
+     * `archive_remove` が `overrideReason` を持つ）。⟹ 走行中の委譲が使って
+     * いる行は一括の対象から外す。開放が要るなら、その id を
+     * `manager_transcript` の応答か下見（`dryRun`）の対象一覧から拾い、
+     * `archive_remove`（単発）に `overrideReason` を渡して1件ずつ名指しで
+     * 消すこと。
      *
-     * **走行中でないマネージャーの退避、および `managers` が配線されていない
-     * 内部ターン（`guard.kind === 'unknown'`）は、override があっても開けない**
-     * ——`guardArchiveRemoval` 自身がそう作ってある（`managers === undefined`
-     * を先に見て `overrideReason` を見ない）。
+     * ⚠️ **一度はこの道具にも `overrideReason` を持たせた形で書いたが、
+     * 取り下げた。**「単発が持つのに一括が持たないのは追加制限ではないか」
+     * という見立てが誤りだったため——禁止2が求めるのは開く口が在ることで、
+     * 単発の口が既に開いている以上、一括に同じ強さの開放を重ねる必要が無い。
+     * ⟹ **この形を「まだ実装していないだけ」と読んで足さないこと。**
+     *
+     * **走行中のマネージャーが使っている行、および `managers` が配線されて
+     * いない内部ターン（`guard.kind === 'unknown'`）は、どちらも
+     * `skipped.inUse` へ数えて一括の対象から外す。** 判定所は
+     * `guardArchiveRemoval` 1箇所——`archive_remove`（単発）・
+     * `POST /archive/remove` と同じ関数を通す（`manager.ts` の doc
+     * 「2箇所に書くと片方だけ直る形になる」）。この道具は常に
+     * `overrideReason: undefined` を渡す。
      *
      * **`limit` / `requireContainment` は引数に持たない**（`POST /archive/remove`
      * との差分）。`selectArchiveRemovalTargets` の既定（`limit`:
@@ -8859,13 +8862,11 @@ export function createCloneTools(context: ToolContext) {
         '絞り込みが無いのと同じで、1回でアーカイブを空にできてしまう。',
         '3つは AND で効く（全部渡せば全部に当たった行だけが対象になる）。',
         'セッションの最新行・含有が証明できない行・墓標（まだ記憶へ蒸留していない区間）は',
-        '既定で守る（overrideReason があっても開けない——名指しで守る行と、',
-        '走行中の委譲の保護は別の理由である）。',
-        '走行中のマネージャーが使っている退避は既定では消せない（拒む。skipped.inUse に数える）。',
-        'それでも消す必要があるなら overrideReason にその理由を書く——渡すと通り、',
-        '「override で消した」事実と理由・対象・走行中だったマネージャー id が日誌に残る',
-        '（黙って通る経路は無い）。managers が配線されていない内部ターンでは',
-        'overrideReason を渡しても開けない（安全側に倒す）。',
+        '既定で守る。',
+        '走行中のマネージャーが使っている退避は一括では消せない（拒む。skipped.inUse に数える）——',
+        'ここに override は無い。それでも消す必要があるなら、その id を manager_transcript の',
+        '応答か、この道具の下見（dryRun）が返す対象一覧から見つけて、',
+        'archive_remove（単発）に overrideReason を渡し1件ずつ名指しで消すこと。',
         '消した id は全部日誌に残る（塊に分けて書く。応答には先頭だけを出す）。',
       ].join(' '),
       {
@@ -8895,16 +8896,8 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             '省略すると true（何件当たるかを数えるだけで1件も消さない）。実際に消すときだけ false を明示する',
           ),
-        overrideReason: z
-          .string()
-          .optional()
-          .describe(
-            '走行中のマネージャーの退避を、それでも消す理由。渡さなければ拒否される' +
-              '（省略時は既定の拒否のまま）。渡すと対象・理由・走行中だったマネージャー id ごと日誌に残る。' +
-              'managers が配線されていない内部ターンでは、渡しても開かない。',
-          ),
       },
-      async ({ sessionIds, before, minStoredBytes, summary, dryRun, overrideReason }) => {
+      async ({ sessionIds, before, minStoredBytes, summary, dryRun }) => {
         // 🔴 絞り込みの無い呼びを断る（`POST /archive/remove` と同じ判定・同じ理由）。
         if (sessionIds === undefined && before === undefined && minStoredBytes === undefined) {
           return text(
@@ -8955,26 +8948,23 @@ export function createCloneTools(context: ToolContext) {
         // **走行中の委譲が抱えている行は `guardArchiveRemoval` で判定する**
         // （`archive_remove`（単発）・`POST /archive/remove` と同じ関数を
         // 1箇所だけ通す。`manager.ts` の doc「2箇所に書くと片方だけ直る形
-        // になる」）。⚠️ **ここは `POST /archive/remove` と違い、
-        // `overrideReason` をそのまま渡す**——一括でも `overrideReason` を
-        // 持つと決めた理由は、この道具本体の doc に書いてある。
+        // になる」）。**この道具は `overrideReason` を持たない**（この道具
+        // 本体の doc「`overrideReason` を持たない」）ので、常に `undefined`
+        // を渡す——`guard.kind` は `'allowed'` か `'denied'` か `'unknown'`
+        // のどれかにしかならない。
         //
         // **この guard は `dryRun` の分岐より前で回す**（`POST /archive/remove`
         // と同じ理由——下見でも走行中の判定を評価しないと、下見が返す
         // `targeted` / `skipped.inUse` が実行時と食い違う）。
         const removableTargets: ArchiveEntry[] = [];
-        const overriddenById = new Map<string, { managerId: string; reason: string }>();
         let skippedInUse = 0;
         for (const target of selection.targets) {
-          const guard = guardArchiveRemoval(context.managers, target.id, overrideReason);
+          const guard = guardArchiveRemoval(context.managers, target.id, undefined);
           if (guard.kind === 'denied' || guard.kind === 'unknown') {
             skippedInUse += 1;
             continue;
           }
           removableTargets.push(target);
-          if (guard.kind === 'allowed-with-override') {
-            overriddenById.set(target.id, { managerId: guard.managerId, reason: guard.reason });
-          }
         }
         // **`targeted` は guard を通った後の件数**（＝実際に消しにいく件数）
         // にする——`POST /archive/remove` の doc「guard で飛ばした行を
@@ -8996,15 +8986,6 @@ export function createCloneTools(context: ToolContext) {
             .slice(0, ARCHIVE_REMOVE_MANY_IDS_SHOWN)
             .map((row) => row.id);
           const hidden = removableTargets.length - shown.length;
-          const overrideNote =
-            overriddenById.size === 0
-              ? []
-              : [
-                  '⚠️ override — 走行中のマネージャーの退避だったが、下見時点の判定では通る対象がある: ' +
-                    [...overriddenById.entries()]
-                      .map(([id, info]) => `${id}（マネージャー ${info.managerId}）`)
-                      .join(', '),
-                ];
           return text(
             [
               '**試算（dryRun）。1件も消していない。** 実際に消すには dryRun: false を渡すこと。',
@@ -9017,7 +8998,12 @@ export function createCloneTools(context: ToolContext) {
               `対象の id（先頭 ${shown.length} 件）: ${shown.join(', ')}${
                 hidden > 0 ? ` …ほか ${hidden} 件は省略` : ''
               }`,
-              ...overrideNote,
+              ...(skippedInUse === 0
+                ? []
+                : [
+                    '走行中のマネージャーが使っている行は一括では開けない（override は無い）。' +
+                      '開けるなら archive_remove（単発）に overrideReason を渡して1件ずつ名指しすること。',
+                  ]),
             ].join('\n'),
           );
         }
@@ -9054,22 +9040,6 @@ export function createCloneTools(context: ToolContext) {
           // `commitment_close_many` と同じ理由）。
           if (removedThisChunk.length === 0) continue;
 
-          const overriddenInChunk = removedThisChunk
-            .map((id) => ({ id, info: overriddenById.get(id) }))
-            .filter(
-              (entry): entry is { id: string; info: { managerId: string; reason: string } } =>
-                entry.info !== undefined,
-            );
-          const overrideNote =
-            overriddenInChunk.length === 0
-              ? ''
-              : '\n⚠️ override — 走行中のマネージャーの退避だったが、消した: ' +
-                overriddenInChunk
-                  .map(
-                    (e) => `${e.id}（マネージャー ${e.info.managerId}、理由「${e.info.reason}」）`,
-                  )
-                  .join(' / ');
-
           await appendJournalOrThrow(
             'archive_remove_many',
             stores.journal,
@@ -9079,9 +9049,8 @@ export function createCloneTools(context: ToolContext) {
                 `退避済み生ログの本文を絞り込みで一括して tombstone した` +
                 `（${index + 1}/${chunks.length} 塊目、この塊は ${removedThisChunk.length} 件）: ${summary}\n` +
                 `絞り込み: ${filterText}\n` +
-                `消した id: ${removedThisChunk.join(' ')}` +
-                overrideNote,
-              grounds: overriddenInChunk.length === 0 ? summary : `${summary}／${overrideNote}`,
+                `消した id: ${removedThisChunk.join(' ')}`,
+              grounds: summary,
             },
             'act-completed',
           );
@@ -9089,18 +9058,6 @@ export function createCloneTools(context: ToolContext) {
 
         const shownRemoved = removedIds.slice(0, ARCHIVE_REMOVE_MANY_IDS_SHOWN);
         const hiddenRemoved = removedIds.length - shownRemoved.length;
-        const overrideSummary =
-          overriddenById.size === 0
-            ? []
-            : [
-                '⚠️ override — 走行中のマネージャーの退避だったが理由付きで消した: ' +
-                  [...overriddenById.entries()]
-                    .map(
-                      ([id, info]) =>
-                        `${id}（マネージャー ${info.managerId}、理由「${info.reason}」）`,
-                    )
-                    .join(' / '),
-              ];
         return text(
           [
             `**${removedIds.length} 件の本文を tombstone した**（理由: ${summary}）。` +
@@ -9121,7 +9078,12 @@ export function createCloneTools(context: ToolContext) {
                   `⚠ 対象 ${targeted} 件のうち ${raced} 件は消せなかった` +
                     '（この呼びの最中に他の経路が先に消した）。',
                 ]),
-            ...overrideSummary,
+            ...(skippedInUse === 0
+              ? []
+              : [
+                  '走行中のマネージャーが使っている行は一括では開けない（override は無い）。' +
+                    '開けるなら archive_remove（単発）に overrideReason を渡して1件ずつ名指しすること。',
+                ]),
           ].join('\n'),
         );
       },

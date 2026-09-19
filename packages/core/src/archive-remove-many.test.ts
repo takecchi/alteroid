@@ -12,7 +12,8 @@ import { createCloneTools, type ToolContext } from './tools.js';
  * である。** 選定ロジック自体（`selectArchiveRemovalTargets` の安全弁・
  * 含有の証明・優先順位）は `archive-prune.test.ts` が既に固定しているので、
  * ここで測るのは**道具としてのふるまい**——既定 dryRun・絞り込み無しの拒否・
- * 走行中の委譲の扱い（`overrideReason`）・日誌への記録——だけである。
+ * 走行中の委譲の扱い（**一括からは開けない**）・数の帳尻・日誌への記録——
+ * だけである。
  *
  * ⚠️ **文言ではなく実状態で測る**（`commitment-close-many.test.ts` と同じ
  * 教訓、PR #826）。消えたかどうかは `stores.archive.read()` を読み直して
@@ -53,6 +54,23 @@ function remover(stores: Stores, managers: ManagerPool | null = NO_ONE_RUNNING) 
     const result = await found?.handler(args as never, {} as never);
     return (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
   };
+}
+
+/**
+ * `archive_remove_many` が MCP へ差し出している入力の形（zod の shape）。
+ * **JSDoc ではなく、実際に呼び出し側へ見える形**を読む（`tools.test.ts` の
+ * `shapeOf` と同じ作法）。
+ */
+function inputShape(stores: Stores): Record<string, unknown> {
+  const tools = createCloneTools({
+    stores,
+    emit: () => undefined,
+    memoryCause: () => 'clone',
+    conversationId: () => undefined,
+  });
+  const found = tools.find((entry) => entry.name === 'archive_remove_many');
+  expect(found, 'archive_remove_many という道具が無い').toBeDefined();
+  return (found?.inputSchema ?? {}) as Record<string, unknown>;
 }
 
 /** 日誌に積まれた `decision` の本文だけを取り出す。 */
@@ -146,35 +164,47 @@ describe('archive_remove_many（アーカイブ済み生ログの本文を絞り
     expect(reply).toContain('0 件');
   });
 
-  it('overrideReason があれば走行中でも通す——理由と managerId を日誌に残す', async () => {
+  /**
+   * ⭐ **「一括からは開けない」という性質そのものに歯を当てる。**
+   *
+   * `POST /archive/remove` が `overrideReason` を持たないのと同じ判断
+   * （`app.ts` の doc「一括で複数件を無条件に開ける形は事故の芽が大きい」）。
+   * ⟹ 口が無いことと、万一渡ってきても開かないことの両方を撃つ。
+   * **あわせて「黙って能力を削っていない」ことも撃つ**——断り文が、単発の
+   * `archive_remove` に `overrideReason` を渡して1件ずつ名指しせよと案内する。
+   */
+  it('一括に override の口は無い——入力の形に overrideReason が無く、渡しても開かない', async () => {
     const stores = createMemoryStores();
-    const { oldId } = await seedRemovableSession(stores, 'sess-override');
+    const { oldId } = await seedRemovableSession(stores, 'sess-no-override');
     const managers = {
       runningManagerOwning: (archiveId: string) =>
         archiveId === oldId ? 'mgr-running-2' : undefined,
     } as unknown as ManagerPool;
-    const call = remover(stores, managers);
 
-    const reply = await call({
-      sessionIds: ['sess-override'],
+    // 歯1: 入力の形そのものに口が無い（クローンからは渡しようがない）。
+    expect(Object.keys(inputShape(stores))).not.toContain('overrideReason');
+
+    // 歯2: それでも渡ってきたとき（＝ schema を迂回した最悪の形）でも開かない。
+    const reply = await remover(
+      stores,
+      managers,
+    )({
+      sessionIds: ['sess-no-override'],
       summary: '掃除',
       dryRun: false,
-      overrideReason: '本番障害の調査で緊急に消す必要があった',
+      overrideReason: '理由を書けば通ると思った',
     });
 
-    expect(reply).toContain('override');
-    expect(reply).toContain('mgr-running-2');
-    expect(await stores.archive.read(oldId)).toMatchObject({ kind: 'removed' });
-
-    const texts = await decisionTexts(stores);
-    const entry = texts.find((t) => t.includes(oldId));
-    expect(entry).toBeDefined();
-    expect(entry).toContain('override');
-    expect(entry).toContain('mgr-running-2');
-    expect(entry).toContain('本番障害の調査で緊急に消す必要があった');
+    expect(reply).toContain('inUse(走行中) 1');
+    expect(await stores.archive.read(oldId)).toEqual({ kind: 'body', body: 'AAA' });
+    // 消していないのだから日誌にも残らない。
+    expect((await decisionTexts(stores)).some((t) => t.includes(oldId))).toBe(false);
+    // **黙って能力を削ったように見せない**——開ける道は残っていると言う。
+    expect(reply).toContain('archive_remove（単発）');
+    expect(reply).toContain('overrideReason');
   });
 
-  it('managers が配線されていない場面（overrideReason があっても）は安全側に倒して消さない', async () => {
+  it('managers が配線されていない場面は安全側に倒して消さない', async () => {
     const stores = createMemoryStores();
     const { oldId } = await seedRemovableSession(stores, 'sess-no-pool');
     // `null` を明示 ＝ context.managers は undefined（配線しない場面そのもの）。
@@ -184,7 +214,6 @@ describe('archive_remove_many（アーカイブ済み生ログの本文を絞り
       sessionIds: ['sess-no-pool'],
       summary: '掃除',
       dryRun: false,
-      overrideReason: 'それでも消したい',
     });
 
     expect(reply).toContain('inUse');
@@ -221,5 +250,89 @@ describe('archive_remove_many（アーカイブ済み生ログの本文を絞り
     expect(reply).toContain('ISO8601');
     expect(reply).toContain('1件も消していない');
     expect(await stores.archive.read(oldId)).toEqual({ kind: 'body', body: 'AAA' });
+  });
+  /**
+   * ⭐ **数の帳尻そのものを撃つ歯**（`app.test.ts` の同名の歯と対。#698 欠陥1・欠陥3）。
+   *
+   * 欄を1つずつ確かめる歯は「その欄が正しいか」しか言わない。**1行が0回または
+   * 2回数えられている**という壊れ方は、欄を個別に見ても見つからない——HTTP 側では
+   * 実際に、guard で飛ばした行を `targeted` と `skipped.inUse` の両方で数える
+   * 欠陥が既存の歯を全部通り抜けていた。この道具も同じ数を自前で組み立てて
+   * 文面に出すので、**同じ等式をこちら側でも撃つ。**
+   */
+  it('数の帳尻: 当たった件数 === 対象 + remaining + skipped5欄（下見でも実行でも）', async () => {
+    const stores = createMemoryStores();
+    // newest / alreadyRemoved / notContained / inUse が全部1以上になるよう仕込む。
+    const { oldId: chainOld } = await seedRemovableSession(stores, 'sess-inv-chain');
+    const { oldId: runningOld } = await seedRemovableSession(stores, 'sess-inv-run');
+    const { oldId: goneOld } = await seedRemovableSession(stores, 'sess-inv-gone');
+    await stores.archive.remove(goneOld); // → alreadyRemoved
+    await stores.archive.archive('sess-inv-div', 'XYZ'); // 前方一致しない → notContained
+    await stores.archive.archive('sess-inv-div', 'QQQ'); // → newest
+    const managers = {
+      runningManagerOwning: (archiveId: string) =>
+        archiveId === runningOld ? 'mgr-inv' : undefined,
+    } as unknown as ManagerPool;
+    const call = remover(stores, managers);
+
+    /** 文面から数だけを取り出す（文言の確認ではなく、数の帳尻を測るため）。 */
+    const numbersOf = (reply: string) => {
+      const pick = (re: RegExp) => {
+        const hit = re.exec(reply);
+        expect(hit, `${re} が文面に無い: ${reply}`).not.toBeNull();
+        return Number(hit?.[1]);
+      };
+      const skipped =
+        /skipped: protected\(墓標\) (\d+) \/ alreadyRemoved (\d+) \/ newest (\d+) \/ notContained (\d+) \/ inUse\(走行中\) (\d+)/.exec(
+          reply,
+        );
+      expect(skipped, `skipped 行が文面に無い: ${reply}`).not.toBeNull();
+      return {
+        matched: pick(/絞り込みで (\d+) 件/),
+        remaining: pick(/対象にすらならなかった件数）: (\d+)/),
+        skipped: {
+          protected: Number(skipped?.[1]),
+          alreadyRemoved: Number(skipped?.[2]),
+          newest: Number(skipped?.[3]),
+          notContained: Number(skipped?.[4]),
+          inUse: Number(skipped?.[5]),
+        },
+      };
+    };
+    const skippedTotal = (n: ReturnType<typeof numbersOf>) =>
+      n.skipped.protected +
+      n.skipped.alreadyRemoved +
+      n.skipped.newest +
+      n.skipped.notContained +
+      n.skipped.inUse;
+
+    const preview = await call({ minStoredBytes: 0, summary: '帳尻を撃つ' });
+    const previewNumbers = numbersOf(preview);
+    const previewTargeted = Number(/この呼びで消すのは (\d+) 件/.exec(preview)?.[1]);
+    // 🔑 これが本体。1行は必ず1回だけ数えられる。
+    expect(previewTargeted + previewNumbers.remaining + skippedTotal(previewNumbers)).toBe(
+      previewNumbers.matched,
+    );
+    // 仕込んだ4つの理由が実際に立っていること（全部0で等式が成り立つ空振りを防ぐ）。
+    expect(previewNumbers.skipped.newest).toBeGreaterThan(0);
+    expect(previewNumbers.skipped.alreadyRemoved).toBeGreaterThan(0);
+    expect(previewNumbers.skipped.notContained).toBeGreaterThan(0);
+    expect(previewNumbers.skipped.inUse).toBeGreaterThan(0);
+    expect(previewTargeted).toBeGreaterThan(0);
+
+    const executed = await call({ minStoredBytes: 0, summary: '帳尻を撃つ', dryRun: false });
+    const executedNumbers = numbersOf(executed);
+    // 実行側では `targeted === 消した件数 + raced`（ここでは競合なし ＝ raced 0)。
+    const removed = Number(/\*\*(\d+) 件の本文を tombstone した\*\*/.exec(executed)?.[1]);
+    expect(executed).not.toContain('は消せなかった'); // raced が立っていない
+    expect(removed + executedNumbers.remaining + skippedTotal(executedNumbers)).toBe(
+      executedNumbers.matched,
+    );
+    // **下見は実行の予告になっている**（走行中の委譲が混ざっていても）。
+    expect(removed).toBe(previewTargeted);
+    expect(executedNumbers.skipped.inUse).toBe(previewNumbers.skipped.inUse);
+    // 実状態でも裏を取る。
+    expect(await stores.archive.read(chainOld)).toMatchObject({ kind: 'removed' });
+    expect(await stores.archive.read(runningOld)).toEqual({ kind: 'body', body: 'AAA' });
   });
 });
