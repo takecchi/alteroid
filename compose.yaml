@@ -153,6 +153,16 @@ x-shared-env: &shared-env
   ALTEROID_CLONE_MODEL: ${ALTEROID_CLONE_MODEL:-}
   ALTEROID_MANAGER_MODEL: ${ALTEROID_MANAGER_MODEL:-}
   ALTEROID_WORKER_MODEL: ${ALTEROID_WORKER_MODEL:-}
+  # マネージャーの auto-memory（SDK が自動で読み書きする記憶ディレクトリ）を開ける
+  # 口。**既定は閉じる**（#1189 —— ここへ書いた記憶はクローンにも次の器にも届かない
+  # のに、書いている側に気づく材料が1つも無い）。これは方針であって能力の削減ではなく、
+  # 「方針は設定で開けられなければならない」（north_star 禁止2）を満たすために置く。
+  #
+  # **モデル帯の3つと同じ理由でここに要る** —— 読むのは runner のプロセス自身の
+  # `process.env`（`packages/core/src/runner.ts` の `resolveManagerAutoMemoryEnabled`）
+  # なので、実行環境プロファイルでも DB 正本の環境変数でも届かない。**この行が無いと
+  # compose で建てた器では開けようが無い**（`x-shared-env` に無い変数は降りない）。
+  ALTEROID_MANAGER_AUTO_MEMORY: ${ALTEROID_MANAGER_AUTO_MEMORY:-}
   # 予約された定期ジョブの既定は環境変数で開け閉めできる。これは方針であって
   # 実行回数の制限ではない（north_star 禁止2）。
   #
