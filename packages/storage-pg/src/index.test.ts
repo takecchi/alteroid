@@ -19,7 +19,13 @@ import { drizzle } from 'drizzle-orm/pglite';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Db } from './db.js';
-import { createPgStoresFromDb, migrate, seedPgWorkspace, type PgStores } from './index.js';
+import {
+  createPgStoresFromDb,
+  describePgConnectionError,
+  migrate,
+  seedPgWorkspace,
+  type PgStores,
+} from './index.js';
 import { agentTokens, archive, commitments, jobs as jobsTable, memory } from './schema.js';
 
 /**
@@ -4121,3 +4127,46 @@ describe('AuthStore', () => {
 function neverIssued(): never {
   throw new Error('引き取れないはずの要求でトークンを作ろうとした');
 }
+
+/**
+ * 既定の idle 接続エラーハンドラ（Issue #1229）。
+ *
+ * **`createPgStores`（実接続を張る側）を直接は呼ばない。** 本物の `Pool` を
+ * 立てるには実際の PostgreSQL が要る（`.claude/skills/postgres-in-container/
+ * SKILL.md`）——ここで測りたいのは「idle 接続のエラーを受けたら何を書くか」
+ * という整形の中身だけなので、その部分を `describePgConnectionError` として
+ * 切り出してあり（`index.ts` の doc）、これを直接呼べば実接続は要らない。
+ *
+ * `journal` と `approvals` は同じ `Pool` を共有するので、この1行は
+ * 「両方の書き込みが同時に塞がる窓」で残る唯一の跡になりうる
+ * （Issue #1229 受け入れ基準2）——`error.message` だけだった以前は、
+ * SQLSTATE のような切り分け材料をここでも捨てていた。
+ */
+describe('describePgConnectionError', () => {
+  it('SQLSTATE 等の構造化フィールドが出る。detail の値は出ない', () => {
+    const pgError = new Error('duplicate key value violates unique constraint "journal_pkey"');
+    Object.assign(pgError, {
+      code: '23505',
+      constraint: 'journal_pkey',
+      table: 'journal',
+      // **detail は行の値そのものを転記する**（一意制約違反の定型文）——
+      // 出てはいけない偽の「値」をここに置く。
+      detail: 'Key (id)=(11111111-2222-3333-4444-555555555555) already exists.',
+    });
+
+    const line = describePgConnectionError(pgError);
+
+    expect(line).toContain('alteroid: PostgreSQL の接続でエラー:');
+    expect(line).toContain('code=23505');
+    expect(line).toContain('constraint=journal_pkey');
+    expect(line).toContain('table=journal');
+    expect(line).not.toContain('11111111-2222-3333-4444-555555555555');
+    expect(line.endsWith('\n')).toBe(true);
+  });
+
+  it('SQLSTATE を持たない素の Error でも落ちない（メッセージだけ出る）', () => {
+    const line = describePgConnectionError(new Error('ECONNRESET'));
+
+    expect(line).toContain('ECONNRESET');
+  });
+});
