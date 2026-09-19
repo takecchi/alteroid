@@ -2746,6 +2746,12 @@ interface WithheldReportMemory {
    * 生き残り、`ManagerAwaitingBackground.since` が動かない。次の本物の報告・
    * `case 'closed'`（＝`'full'`）が来たときにだけ在庫ごと消え、エピソードが
    * 終わる。
+   *
+   * **`#withholdBackgroundReport` はこの欄を持ち越す。** あの関数はオブジェクト
+   * を丸ごと作り直すので、持ち越さないと「もう1本畳む」だけで印が黙って
+   * 消え、フラッシュ済みの委譲がまだ本物の報告を返さないまま次のターンを
+   * 畳むたびに合図を立て直せる形に戻ってしまう——「エピソードにつき1本
+   * だけ」が壊れる。
    */
   flushedAt?: string;
 }
@@ -9247,6 +9253,15 @@ class Pool implements ManagerPool {
       // タスクを畳んだ回数だけ二重に数えることになる。`breakdown` を上書きして
       // いるのと同じ理由・同じ扱いである。
       taskCount: awaitingBackground.count,
+      // **`flushedAt`（既に合図を立てたか）は、既存の値をそのまま持ち越す
+      // （Issue #1104）。** この関数はオブジェクトを丸ごと作り直すので、
+      // ここで持ち越さないと「もう1本畳む」だけで印が黙って消え、
+      // `flushWithheldReports()` の「エピソードにつき1本だけ」が壊れる
+      // ——フラッシュ済みの委譲がまだ本物の報告を返さないまま次のターンを
+      // 畳むたびに、合図がまた立て直せる形に戻ってしまう。エピソードが
+      // 終わる（`#deliver` が `'full'` で在庫を丸ごと `delete` する）まで、
+      // `flushedAt` は生き続けるべき値である。
+      ...(existing?.flushedAt === undefined ? {} : { flushedAt: existing.flushedAt }),
     });
   }
 

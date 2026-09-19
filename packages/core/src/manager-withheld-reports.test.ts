@@ -857,9 +857,21 @@ describe('flushWithheldReports はエピソードにつき1本だけ配る（Iss
     expect(delivered.text).toContain('30分待っても届かなかった');
     const afterFirstFlush = inbox.length;
 
-    // **同じ在庫に対して、時間が経ってもポーラーが何度回っても増えない。**
-    // 実測の再現（4時間半・8回）に対応して、大きく時間を進めたうえで
-    // 複数回 `flushWithheldReports()` を呼ぶ。
+    // **`count === 0` の早期 `continue` だけでは「合図を立て直さない」を
+    // 検証したことにならない**——フラッシュ直後は在庫の `count` が 0 に
+    // 戻るので、そこだけを理由に再送が止まっていないかを混同しないため、
+    // ここでもう1本畳んで `count` を 0 から 1 へ戻す（`flushedAt` の効果
+    // だけを見る）。
+    advance(60_000);
+    fake.report('mgr-withhold', 'フラッシュ後も握り潰される回', 'done', {
+      awaitingBackground: AWAITING,
+    });
+    await waitForWithheld(pool, 'mgr-withhold', 1);
+
+    // **同じエピソード（`flushedAt` 済み）に対して、`count > 0` かつ
+    // 期限（30分）を過ぎても、時間が経ってもポーラーが何度回っても
+    // 増えない。** 実測の再現（4時間半・8回）に対応して、大きく時間を
+    // 進めたうえで複数回 `flushWithheldReports()` を呼ぶ。
     advance(4 * 60 * 60_000);
     await pool.flushWithheldReports();
     await pool.flushWithheldReports();
