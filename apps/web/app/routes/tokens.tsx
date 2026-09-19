@@ -1,8 +1,23 @@
 import { useState } from 'react';
 
 import { Page } from '~/components/page';
-import { Badge, Button, Card, CardHeader, Empty, ErrorNote, Input, Spinner } from '~/components/ui';
-import { useAddToken, useRemoveToken, useSetTokenDisabled } from '~/hooks/mutations';
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  Empty,
+  ErrorNote,
+  Input,
+  Select,
+  Spinner,
+} from '~/components/ui';
+import {
+  useAddToken,
+  useRemoveToken,
+  useSetTokenDisabled,
+  useSetTokenPolicy,
+} from '~/hooks/mutations';
 import { useJournal, useTokens } from '~/hooks/queries';
 import { ApiError } from '~/lib/api';
 import { formatDateTime, formatRelative } from '~/lib/format';
@@ -20,9 +35,11 @@ import type {
  * **追加・削除・無効化/有効化はこの画面からも行える**（2026-09-14。Issue #464
  * が埋めた「読み取り専用」の形をここで解いた——人間の決定により、CLI
  * （`alteroid token add` / `remove` / `disable` / `enable`）と同じ資格・同じ
- * `PUT /tokens`（全置換）をこの画面からも呼べるようにしてある）。回す契機・
- * 冷却の設定（`policy`）はまだこの画面からは変えられない——引き続き
- * `alteroid token policy` / `PUT /tokens/policy` の仕事である。
+ * `PUT /tokens`（全置換）をこの画面からも呼べるようにしてある）。**回す契機・
+ * 冷却の設定（`policy`）も、2026-09-20 からこの画面から変えられる**
+ * （Issue #1123。CLI（`alteroid token policy`）と同じ資格・同じ
+ * `PUT /tokens/policy` をこの画面からも呼ぶ——`mutations.ts` の
+ * `useSetTokenPolicy`）。
  *
  * **値（`value`）はどこにも出さない。** サーバ側の型（`AgentTokenView`）が
  * そもそも `value` を持たないので、この画面が「消し忘れて出す」形は作れない。
@@ -515,12 +532,62 @@ function describeRotateOn(policy: TokenRotationSettings['rotateOn']): string {
   }
 }
 
+/**
+ * `<select>` に出す回す契機の数え上げ（`tokenRotationPolicySchema`（core）と同じ3値）。
+ *
+ * **`satisfies Record<…, true>` で縛ってあるのは、網羅をコンパイル時に守るためである**
+ * （`packages/core/src/schema.ts` の `journalEntryTypeNames` と同じ形）。**配列リテラルに
+ * 型注釈を付けた形では守れない** —— 値が増えた日に、欠けたまま黙って通る。読み取り側
+ * （`describeRotateOn`）は `describeUnknown` で安全に倒れるが、**書き込み側は「選べない値が
+ * 在る」ことを何も言わない** —— 人間には画面が完全に見えてしまう。
+ */
+const ROTATE_ON_OPTIONS = Object.keys({
+  free_exhausted: true,
+  overage_exhausted: true,
+  off: true,
+} satisfies Record<TokenRotationSettings['rotateOn'], true>) as TokenRotationSettings['rotateOn'][];
+
 function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
+  const setPolicy = useSetTokenPolicy();
+
+  /**
+   * `undefined` は「まだ人間がこの欄に触っていない」——`memory-detail.tsx` の
+   * `draft` と同じ作法。触っていない間はサーバの値をそのまま映すので、SSE 経由の
+   * 無効化が再取得を回しても書きかけが消えない。触った瞬間から下書きが勝つ。
+   */
+  const [rotateOnDraft, setRotateOnDraft] = useState<TokenRotationSettings['rotateOn'] | undefined>(
+    undefined,
+  );
+  const [cooldownMsDraft, setCooldownMsDraft] = useState<string | undefined>(undefined);
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<unknown>(undefined);
+
+  const rotateOn = rotateOnDraft ?? settings.rotateOn;
+  const cooldownMsText = cooldownMsDraft ?? String(settings.cooldownMs);
+  const dirty = rotateOn !== settings.rotateOn || cooldownMsText !== String(settings.cooldownMs);
+
+  async function save() {
+    setBusy(true);
+    setFailure(undefined);
+    try {
+      // **「正の整数」等の判定をここで先回りして弾かない**（Issue #1123 受け入れ
+      // 基準3）。`Number(cooldownMsText)` が変な値（負数・NaN 等）でもそのまま
+      // 送り、断られたらサーバの文言をそのまま `ErrorNote` で見せる。
+      await setPolicy({ rotateOn, cooldownMs: Number(cooldownMsText) });
+      setRotateOnDraft(undefined);
+      setCooldownMsDraft(undefined);
+    } catch (caught) {
+      setFailure(caught);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <Card>
       <CardHeader
         title="回転の設定"
-        subtitle="alteroid token policy / PUT /tokens/policy と同じもの。ここは読み取りだけ"
+        subtitle="alteroid token policy / PUT /tokens/policy と同じもの"
       />
       <dl className="grid grid-cols-1 gap-y-1 px-4 py-3 text-sm sm:grid-cols-[9rem_1fr]">
         <dt className="text-muted">回す契機</dt>
@@ -546,6 +613,46 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
           </>
         )}
       </dl>
+
+      <div className="flex flex-col gap-3 border-t border-border px-4 py-3 text-sm">
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-muted">回す契機を変える</span>
+          <Select
+            value={rotateOn}
+            onChange={(event) =>
+              setRotateOnDraft(event.target.value as TokenRotationSettings['rotateOn'])
+            }
+          >
+            {ROTATE_ON_OPTIONS.map((option) => (
+              <option key={option} value={option}>
+                {describeRotateOn(option)}
+              </option>
+            ))}
+          </Select>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-muted">冷却の既定を変える（ミリ秒）</span>
+          <Input
+            type="number"
+            value={cooldownMsText}
+            onChange={(event) => setCooldownMsDraft(event.target.value)}
+          />
+        </label>
+
+        <ErrorNote error={failure} />
+
+        <div>
+          <Button
+            variant="primary"
+            size="sm"
+            loading={busy}
+            disabled={!dirty}
+            onClick={() => void save()}
+          >
+            {dirty ? '保存' : '変更なし'}
+          </Button>
+        </div>
+      </div>
     </Card>
   );
 }
