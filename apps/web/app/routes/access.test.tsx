@@ -5,11 +5,16 @@
  * - `GET /access` が返すアカウントが、許可済み・未許可の両方とも一覧に出る
  * - 0件のとき「まだ誰もログインしていません。」の文言が出る（CLI と同じ文言）
  * - 取得に失敗したとき（403 = 許可されていない等）エラーが出る
- * - **読み取り専用であること** — grant / revoke を起こすボタン・フォームが
- *   画面のどこにも無く、`/grant` `/revoke` を含む URL へ一度も fetch しない
- *   （Issue #213。`apps/web/app/routes/access.tsx` の doc）
+ * - **`grant` / `revoke`（許可の付与・取り消し）を起こすボタン・フォームが
+ *   画面のどこにも無く、`/access/:id/grant` `/access/:id/revoke` へ一度も
+ *   fetch しない**（Issue #213。`apps/web/app/routes/access.tsx` の doc）
+ * - **宣言済みかどうかの印が出る**（issue #1198）
+ * - **実行環境の持ち主としての宣言・取り消しのボタンは在り、押すと
+ *   `POST /access/:id/owner` `.../owner/revoke` を叩く。** Web UI からは
+ *   `requireOperator` を構造的に満たせないので必ず 403 になり、そのとき
+ *   アカウント id 入りの端末コマンドを案内する
  */
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
@@ -39,6 +44,7 @@ function account(overrides: Record<string, unknown> = {}) {
     grantedAt: '2026-08-02T00:00:00.000Z',
     grantedBy: 'operator',
     granted: true,
+    ownerDeclaredAt: null,
     identities: [
       {
         provider: 'google',
@@ -155,7 +161,11 @@ describe('/access 画面 — 一覧', () => {
 
     await renderAccess();
 
-    expect(screen.getByText(/実行環境の持ち主/)).toBeTruthy();
+    // **括弧付きの完全な形で見る。** 素の `/実行環境の持ち主/` は issue #1198 で
+    // 足した「実行環境の持ち主として宣言」という別の dt 見出しにも当たって
+    // しまい、複数要素ヒットで壊れる——ここは `grantedAt` の `dd` が持つ
+    // 「（実行環境の持ち主）」という括弧付きの形だけを狙う。
+    expect(screen.getByText(/（実行環境の持ち主）/)).toBeTruthy();
     // 伝播した許可（誰かのアカウントが grant した）は、id をそのまま出す
     // （`describeGrantedBy` の doc — 名前へ解決しない）。
     expect(screen.getAllByText(/acct-a/).length).toBeGreaterThan(0);
@@ -163,18 +173,39 @@ describe('/access 画面 — 一覧', () => {
 });
 
 /**
- * **読み取り専用であることを歯で固定する。**
- *
- * grant / revoke（書き込み）はこの画面から出さないという判断（Issue #213）を、
- * 「そのうちボタンが足されて気づかれない」形で壊れないようにする——DOM に
- * ボタン・フォームが1つも無いこと、そして `/grant` `/revoke` を含む URL へ
- * 一度も fetch しないことの両方を測る（片方だけだと、見えないボタンが
- * 裏で叩くような作りを見逃す・逆にボタンが無くても別経路で叩く作りを
- * 見逃す、のどちらかが起こりうる）。
+ * **宣言済みかどうかの印（issue #1198）。**
  */
-describe('/access 画面 — 読み取り専用であること', () => {
-  it('grant / revoke を起こすボタン・フォームがどこにも無い', async () => {
-    const stub = stubAccess({
+describe('/access 画面 — owner 宣言の印', () => {
+  it('未宣言なら「owner 未宣言」と出す', async () => {
+    stubAccess({ body: { accounts: [account({ ownerDeclaredAt: null })] } });
+
+    await renderAccess();
+
+    expect(screen.getByText('owner 未宣言')).toBeTruthy();
+    expect(screen.getByText('（未宣言）')).toBeTruthy();
+  });
+
+  it('宣言済みなら「owner 宣言済み」と日時を出す', async () => {
+    stubAccess({
+      body: { accounts: [account({ ownerDeclaredAt: '2026-09-18T00:00:00.000Z' })] },
+    });
+
+    await renderAccess();
+
+    expect(screen.getByText('owner 宣言済み')).toBeTruthy();
+  });
+});
+
+/**
+ * **`grant` / `revoke`（許可の付与・取り消し）だけは、この画面から出さない**
+ * という判断（Issue #213）を、「そのうちボタンが足されて気づかれない」形で
+ * 壊れないようにする。**owner 宣言のボタンは在ってよい**（issue #1198）ので、
+ * ここで測るのは「grant / revoke に固有のボタン・URL が無いこと」であって
+ * 「ボタンが1個も無いこと」ではない——それは下の別の describe が持つ。
+ */
+describe('/access 画面 — grant / revoke は出さない', () => {
+  it('「許可する」「許可を取り消す」に相当するボタン・フォームがどこにも無い', async () => {
+    stubAccess({
       body: {
         accounts: [
           account({ id: 'acct-a', email: 'granted@example.com', granted: true }),
@@ -191,16 +222,16 @@ describe('/access 画面 — 読み取り専用であること', () => {
 
     await renderAccess();
 
-    // ボタンが1個も無い（button 要素そのものが無い）。
-    expect(screen.queryAllByRole('button').length).toBe(0);
-    // 入力欄も無い（フォームが無いことの傍証）。
-    expect(document.querySelectorAll('input, form, button').length).toBe(0);
-    // 取得の1回しか fetch していない（grant / revoke を書き手が足し忘れて
-    // 自動実行してしまう形も、この件数で捕まる）。
-    expect(stub.calls.length).toBe(1);
+    // フォーム入力欄は無い（grant / revoke は id を打ち込む UI を持たない）。
+    expect(document.querySelectorAll('input, form').length).toBe(0);
+    // 出ているボタンは owner 宣言のものだけ（grant / revoke の文言を含まない）。
+    const labels = screen.getAllByRole('button').map((button) => button.textContent);
+    for (const label of labels) {
+      expect(label).not.toMatch(/許可する|許可を取り消す/);
+    }
   });
 
-  it('grant / revoke の URL へ一度も fetch しない', async () => {
+  it('grant / revoke の URL へ一度も fetch しない（初期表示だけでは）', async () => {
     const stub = stubAccess({
       body: {
         accounts: [account({ id: 'acct-a', granted: true })],
@@ -209,7 +240,102 @@ describe('/access 画面 — 読み取り専用であること', () => {
 
     await renderAccess();
 
-    expect(stub.calls.some((url) => url.includes('/grant'))).toBe(false);
-    expect(stub.calls.some((url) => url.includes('/revoke'))).toBe(false);
+    // **`/access/:id/owner/revoke` は `/revoke` を部分文字列に含む**ので、
+    // 素朴な `includes('/revoke')` では誤検知する。ここは owner 系の URL を
+    // 除いたうえで、grant / revoke の厳密な形だけを見る。
+    const nonOwnerUrls = stub.calls.filter((url) => !url.includes('/owner'));
+    expect(nonOwnerUrls.some((url) => /\/access\/[^/]+\/grant$/.test(url))).toBe(false);
+    expect(nonOwnerUrls.some((url) => /\/access\/[^/]+\/revoke$/.test(url))).toBe(false);
+  });
+});
+
+/**
+ * **実行環境の持ち主としての宣言・取り消し（issue #1198）。**
+ *
+ * Web UI から叩くと `requireOperator` を構造的に満たせないので必ず 403 になる
+ * ——ここでは「叩く URL が正しいこと」と「403 のときアカウント id 入りの
+ * 端末コマンドを案内すること」を固定する（`OwnerDeclarationControl` の doc）。
+ */
+describe('/access 画面 — 実行環境の持ち主としての宣言', () => {
+  function stubAccessAndOwner(options: {
+    accounts: unknown[];
+    ownerStatus?: number;
+    ownerBody?: unknown;
+  }) {
+    const { accounts, ownerStatus = 403, ownerBody } = options;
+    const body = ownerBody ?? { error: '実行環境の持ち主だけが操作できる' };
+    return stubFetch((url) => {
+      if (url.includes('/owner')) return json(body, ownerStatus);
+      if (url.includes('/access')) return json({ accounts }, 200);
+      return undefined;
+    });
+  }
+
+  it('未宣言のアカウントには「実行環境の持ち主として宣言する」ボタンが出る', async () => {
+    stubAccessAndOwner({ accounts: [account({ id: 'acct-a', ownerDeclaredAt: null })] });
+
+    await renderAccess();
+
+    expect(screen.getByText('実行環境の持ち主として宣言する')).toBeTruthy();
+  });
+
+  it('宣言済みのアカウントには「実行環境の持ち主としての宣言を取り消す」ボタンが出る', async () => {
+    stubAccessAndOwner({
+      accounts: [account({ id: 'acct-a', ownerDeclaredAt: '2026-09-18T00:00:00.000Z' })],
+    });
+
+    await renderAccess();
+
+    expect(screen.getByText('実行環境の持ち主としての宣言を取り消す')).toBeTruthy();
+  });
+
+  it('宣言するボタンを押すと POST /access/:id/owner を叩き、403 でアカウント id 入りの案内を出す', async () => {
+    const stub = stubAccessAndOwner({
+      accounts: [account({ id: 'acct-a', ownerDeclaredAt: null })],
+    });
+
+    await renderAccess();
+    fireEvent.click(screen.getByText('実行環境の持ち主として宣言する'));
+
+    await screen.findByRole('alert');
+    const entry = stub.entries.find((e) => e.url === 'http://daemon.test/access/acct-a/owner');
+    expect(entry?.request?.method).toBe('POST');
+    expect(screen.getByText('alteroid access owner acct-a')).toBeTruthy();
+  });
+
+  it('取り消すボタンを押すと POST /access/:id/owner/revoke を叩き、403 で --revoke 付きの案内を出す', async () => {
+    const stub = stubAccessAndOwner({
+      accounts: [account({ id: 'acct-a', ownerDeclaredAt: '2026-09-18T00:00:00.000Z' })],
+    });
+
+    await renderAccess();
+    fireEvent.click(screen.getByText('実行環境の持ち主としての宣言を取り消す'));
+
+    await screen.findByRole('alert');
+    const entry = stub.entries.find(
+      (e) => e.url === 'http://daemon.test/access/acct-a/owner/revoke',
+    );
+    expect(entry?.request?.method).toBe('POST');
+    expect(screen.getByText('alteroid access owner acct-a --revoke')).toBeTruthy();
+  });
+
+  /**
+   * **404（該当するアカウントが無い）では、この案内を出さない。** `isNotOperator`
+   * は 403 だけを見る——判別できない/別の理由の失敗にまで当てずっぽうで
+   * 端末コマンドを出すと嘘の案内になる（`apps/cli/src/target.ts` の
+   * `ForbiddenKind` と同じ考え方）。
+   */
+  it('403 以外（404）では、端末コマンドの案内を出さない', async () => {
+    stubAccessAndOwner({
+      accounts: [account({ id: 'acct-a', ownerDeclaredAt: null })],
+      ownerStatus: 404,
+      ownerBody: { error: 'not found' },
+    });
+
+    await renderAccess();
+    fireEvent.click(screen.getByText('実行環境の持ち主として宣言する'));
+
+    await screen.findByRole('alert');
+    expect(screen.queryByText('alteroid access owner acct-a')).toBeNull();
   });
 });
