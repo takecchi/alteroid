@@ -684,16 +684,39 @@ function deliveredIdentity(reopened: ReopenedToken): string {
 export function createCloneWakeGate(): CloneWakeGate {
   const folded = new Map<string, number>();
   /**
-   * **最後に実際に配った合図の身元**（Issue #1223。{@link deliveredIdentity}）。
-   * まだ何も配っていない／再武装した後は `null`。
+   * **トークン id ごとの「最後に実際に配った合図の身元」**（Issue #1223。
+   * {@link deliveredIdentity}）。あるトークンの欄が無ければ、そのトークンに
+   * ついてはまだ何も配っていない／再武装した後である。
+   *
+   * ## ⚠️ 単一の変数ではなく、トークン id ごとに持つ理由
+   *
+   * 最初の実装は単一の変数（`let told: string | null`）だった。**プールに
+   * 複数のトークンが在ると、それは崩れる** —— トークン A を配る（`told = A`）
+   * → トークン B が別の身元で配られる（`told = B` で A の記録を上書き）
+   * → その直後にトークン A の**同じ**身元がもう一度（本物の新しい観測が
+   * 無いまま）来ると、`told === A の身元` は偽（いまは B）になり、**畳む
+   * べきものが配られる。** 単一の変数は「直前に配ったのが誰か」しか覚えられず、
+   * 「このトークンに何を配ったか」を覚えない。
+   *
+   * **トークンごとの `Map` にすれば、他のトークンの配達に巻き込まれない**
+   * （`folded` が既にトークンごとの `Map` であることと同じ理由——`folded` も
+   * 単一のカウンタなら同じ形で崩れていたはずである）。
+   *
+   * **全消去（`clear()`）は残す。** `!cloneBlocked`（クローンが動けている）と
+   * `observeUnusable()`（鍵が通らなくなったと観測した）はどちらも**クローン
+   * 全体の状態**についての事実であって、特定のトークンの事実ではない——
+   * 「クローンはいま動けている」も「鍵が通らなくなった」も、どのトークンに
+   * ついて話しているかを1つに絞れないので、全部を「もう一度言われたら
+   * 新しい知らせ」に戻すほうが安全側である（過剰に配る側へ倒れる。過小に
+   * 配らない側は #1223 の輪をそのまま戻す）。
    */
-  let told: string | null = null;
+  const told = new Map<string, string>();
   return {
     decide(reopened, cloneBlocked, releasePending) {
       const tokenId = reopened.tokenId;
       if (!worthDeliveringNow(cloneBlocked, releasePending)) {
         /**
-         * **クローンが止まっていないなら、配達済みの印を捨てる**（Issue #1223）。
+         * **クローンが止まっていないなら、配達済みの印を全部捨てる**（Issue #1223）。
          * 次に止まったときの合図は、同じ身元でも**本物の新しい知らせ**である
          * （止まっていないあいだにクローンは実際に動けている）。
          *
@@ -701,21 +724,21 @@ export function createCloneWakeGate(): CloneWakeGate {
          * ある」だけで、状態は何も動いていない。印を捨てると #1223 の輪がそのまま
          * 戻る（`#pump` が印を消費するたびに再武装してしまう）。
          */
-        if (!cloneBlocked) told = null;
+        if (!cloneBlocked) told.clear();
         folded.set(tokenId, (folded.get(tokenId) ?? 0) + 1);
         return { kind: 'fold' };
       }
       /**
-       * **前に配ったものと同じなら畳む**（Issue #1223。3つ目の歯）。ここへ来る
-       * のは `blocked && !releasePending`、つまり「止まっていて、まだ起こして
-       * いない」回である —— #1051 の門はこれを通すので、**ターンを跨いだ反復を
-       * 止めるのはここだけである。**
+       * **前にこのトークンへ配ったものと同じなら畳む**（Issue #1223。3つ目の歯）。
+       * ここへ来るのは `blocked && !releasePending`、つまり「止まっていて、
+       * まだ起こしていない」回である —— #1051 の門はこれを通すので、**ターンを
+       * 跨いだ反復を止めるのはここだけである。**
        *
        * **畳み込みカウンタは既存と同じように1増やす。** 母数は消さない
        * （{@link describeReopenedTokenNotice} が次に配る本文へ載せる）。
        */
       const identity = deliveredIdentity(reopened);
-      if (told === identity) {
+      if (told.get(tokenId) === identity) {
         folded.set(tokenId, (folded.get(tokenId) ?? 0) + 1);
         return { kind: 'fold' };
       }
@@ -723,11 +746,11 @@ export function createCloneWakeGate(): CloneWakeGate {
       // 前回の回のぶんを引き継いでしまう。
       const count = folded.get(tokenId) ?? 0;
       folded.delete(tokenId);
-      told = identity;
+      told.set(tokenId, identity);
       return { kind: 'wake', folded: count };
     },
     observeUnusable() {
-      told = null;
+      told.clear();
     },
   };
 }

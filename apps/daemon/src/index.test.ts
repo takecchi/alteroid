@@ -356,7 +356,25 @@ describe('再開の合図は、セッションが畳まれた後に入れる', (
 });
 
 /**
- * **クローンへ配るか畳むかの判定**（Issue #783。`CloneWakeGate` の doc）。
+ * `CloneWakeGate.decide` の第1引数を作る（Issue #1223 で `tokenId` の生文字列
+ * から `{ tokenId, label, how }` へ変わった）。
+ *
+ * **`ReopenedHow` を import しない。** `index.ts` 側でこの型を export していない
+ * ため（`ReopenedToken` / `ReopenedHow` はファイル内部だけの型）、ここでは
+ * 同じ3値を持つローカルの型を宣言する——リテラル文字列の集合が一致していれば、
+ * 構造的部分型で `decide` の引数として渡せる（名前ではなく値の集合で見る）。
+ */
+type ReopenedHowFixture = 'また通るようになった' | '回した' | '冷却が明けた';
+
+function reopened(
+  tokenId: string,
+  how: ReopenedHowFixture = 'また通るようになった',
+): { tokenId: string; label: string; how: ReopenedHowFixture } {
+  return { tokenId, label: tokenId, how };
+}
+
+/**
+ * **クローンへ配るか畳むかの判定**（Issue #783 / #1223。`CloneWakeGate` の doc）。
  *
  * ## なぜここを測るのか
  *
@@ -364,54 +382,64 @@ describe('再開の合図は、セッションが畳まれた後に入れる', (
  * `clone.ts` の `post()` の `if (this.#usageBlocked !== null) this.#releaseRequested
  * = true;` を1文字も動かさない——ターンを1本焼くだけで何もしない。だから止まって
  * いないときは配らず畳む。**⛔ 譲れない不変条件はこの逆**: クローンが止まって
- * いるときは、畳んだ回数によらず必ず配る（`kind: 'wake'`）。
+ * いて、かつ**前と違う知らせ**（別トークン／別の `how`／`observeUnusable` の
+ * あとの同じ知らせ）なら、畳んだ回数によらず必ず配る（`kind: 'wake'`）。
  */
 describe('createCloneWakeGate', () => {
   it('クローンが枠で止まっているなら配る（畳んでいなければ folded は0）', () => {
     const gate = createCloneWakeGate();
 
-    expect(gate.decide('tok-a', true, false)).toEqual({ kind: 'wake', folded: 0 });
+    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 0 });
   });
 
   it('クローンが枠で止まっていないなら畳む（配らない）', () => {
     const gate = createCloneWakeGate();
 
-    expect(gate.decide('tok-a', false, false)).toEqual({ kind: 'fold' });
+    expect(gate.decide(reopened('tok-a'), false, false)).toEqual({ kind: 'fold' });
   });
 
   it('畳んだ回数を数え、配る回にその数を渡す', () => {
     const gate = createCloneWakeGate();
 
-    expect(gate.decide('tok-a', false, false)).toEqual({ kind: 'fold' });
-    expect(gate.decide('tok-a', false, false)).toEqual({ kind: 'fold' });
-    expect(gate.decide('tok-a', false, false)).toEqual({ kind: 'fold' });
+    expect(gate.decide(reopened('tok-a'), false, false)).toEqual({ kind: 'fold' });
+    expect(gate.decide(reopened('tok-a'), false, false)).toEqual({ kind: 'fold' });
+    expect(gate.decide(reopened('tok-a'), false, false)).toEqual({ kind: 'fold' });
     // 3回畳んだ後に配ると、畳んだ数（3）を持って `wake` が返る。
-    expect(gate.decide('tok-a', true, false)).toEqual({ kind: 'wake', folded: 3 });
+    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 3 });
   });
 
   it('配ったら0へ戻る（次に畳み始めたら1から数え直す）', () => {
     const gate = createCloneWakeGate();
 
-    gate.decide('tok-a', false, false);
-    gate.decide('tok-a', false, false);
-    expect(gate.decide('tok-a', true, false)).toEqual({ kind: 'wake', folded: 2 });
+    gate.decide(reopened('tok-a'), false, false);
+    gate.decide(reopened('tok-a'), false, false);
+    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 2 });
 
-    // リセット後、畳んでいない状態で配れば folded は0に戻っている。
-    expect(gate.decide('tok-a', true, false)).toEqual({ kind: 'wake', folded: 0 });
-    // 改めて1回畳めば1から数え直す。
-    gate.decide('tok-a', false, false);
-    expect(gate.decide('tok-a', true, false)).toEqual({ kind: 'wake', folded: 1 });
+    // **Issue #1223 の歯**: 配った直後、何も変わっていなければ同じ身元
+    // （同じトークン・同じ `how`）を続けて呼んでも配らない——ここが実運用の
+    // 「2分半に60回」を止めている本体である。
+    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'fold' });
+
+    // 鍵が通らなくなったことを観測すれば（`parked` / `exhausted`）、同じ身元でも
+    // 次は「新しい知らせ」として配り直せる。
+    gate.observeUnusable();
+    // 折り返して配れば、直前の1回ぶんの畳み込み（folded: 1）を持って配られる。
+    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 1 });
+    // 改めて blocked=false で1回畳めば（`!cloneBlocked` も身元を一緒に忘れる）、
+    // 次は1から数え直して配れる。
+    gate.decide(reopened('tok-a'), false, false);
+    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 1 });
   });
 
   it('トークンごとに独立して数える', () => {
     const gate = createCloneWakeGate();
 
-    gate.decide('tok-a', false, false);
-    gate.decide('tok-a', false, false);
+    gate.decide(reopened('tok-a'), false, false);
+    gate.decide(reopened('tok-a'), false, false);
     // tok-b は tok-a の畳み込みに影響されない。
-    expect(gate.decide('tok-b', true, false)).toEqual({ kind: 'wake', folded: 0 });
+    expect(gate.decide(reopened('tok-b'), true, false)).toEqual({ kind: 'wake', folded: 0 });
     // tok-a のカウントはそのまま残っている。
-    expect(gate.decide('tok-a', true, false)).toEqual({ kind: 'wake', folded: 2 });
+    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 2 });
   });
 
   /**
@@ -423,25 +451,79 @@ describe('createCloneWakeGate', () => {
    * ときも、`cloneBlocked` がそのつど `true` である限り `decide` は必ず
    * `kind: 'wake'` を返す——`folded` の値（内部状態）に依存して `wake` が
    * `fold` に化けることは無い。
+   *
+   * **この不変条件は #1223 の歯と両立する** —— ここでは毎回
+   * `cloneBlocked=false` の回を挟んでいる（本物の `#pump` が保持分を戻して
+   * 再試行する回に対応する）。`false` の回が `told` を捨てるので、次の
+   * `true` の回は必ず「新しい知らせ」として届く。**間を挟まずに `true` を
+   * 2回連続で呼ぶ形は、この不変条件が指す状況ではない**——それは「まだ
+   * 何も変わっていないのに同じ知らせが2回来た」という #1223 の症状そのもの
+   * で、直上のテストが指すとおり2回目は畳む。
    */
   it('🔴 不変条件3: 落ちる→戻る→また落ちる→また戻る で2本目の「戻った」も必ず届く', () => {
     const gate = createCloneWakeGate();
 
     // 1回目: クローンは枠で止まっている（落ちている）→ 戻ったら配る。
-    expect(gate.decide('tok-a', true, false)).toEqual({ kind: 'wake', folded: 0 });
+    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 0 });
 
     // 配った直後、クローンはまだ枠で止まっていない状態が続く（この間に届いた
     // 「戻った」はすべて畳む——まだ本物の再起動が要る状態ではない）。
-    expect(gate.decide('tok-a', false, false)).toEqual({ kind: 'fold' });
+    expect(gate.decide(reopened('tok-a'), false, false)).toEqual({ kind: 'fold' });
 
     // また枠に当たって落ちた。その後もう一度「戻った」が観測された
     // ——ここが2本目の「戻った」である。畳み込みの結果として消えてはいけない。
-    expect(gate.decide('tok-a', true, false)).toEqual({ kind: 'wake', folded: 1 });
+    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 1 });
 
     // 3本目も同様に届く（何回繰り返しても、止まっているときは必ず配る）。
-    expect(gate.decide('tok-a', false, false)).toEqual({ kind: 'fold' });
-    expect(gate.decide('tok-a', false, false)).toEqual({ kind: 'fold' });
-    expect(gate.decide('tok-a', true, false)).toEqual({ kind: 'wake', folded: 2 });
+    expect(gate.decide(reopened('tok-a'), false, false)).toEqual({ kind: 'fold' });
+    expect(gate.decide(reopened('tok-a'), false, false)).toEqual({ kind: 'fold' });
+    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 2 });
+  });
+
+  /**
+   * **🔴 Issue #1223 の本体**: 何も変わっていない（`cloneBlocked` も
+   * `releasePending` も動かず、`observeUnusable` も呼ばれない）まま同じ身元が
+   * 何十回来ても、配るのは最初の1回だけ。
+   *
+   * 実運用（2026-09-18〜19）の実測は「2分半に60回以上」——ここでは同じ形を
+   * 60回で固定する。**この歯は、この branch のコミット
+   * （`f6665a0664060435c7d38e19c8af48c883265f2f`）より前の `main`
+   * （引数が `tokenId: string` だけで `told` を持たない版）に当てると
+   * 全件 `wake` を返して赤くなる**（このコミットで初めて `told` の判定が入った）。
+   */
+  it('🔴 #1223: 同じ身元が60回続けて来ても、配るのは最初の1回だけ', () => {
+    const gate = createCloneWakeGate();
+
+    const kinds = Array.from(
+      { length: 60 },
+      () => gate.decide(reopened('tok-a'), true, false).kind,
+    );
+
+    expect(kinds[0]).toBe('wake');
+    expect(kinds.slice(1)).toEqual(Array.from({ length: 59 }, () => 'fold'));
+  });
+
+  /**
+   * **複数トークンが混在しても、他のトークンの配達に巻き込まれて畳み損ねない**
+   * （Issue #1223 の3つ目の歯の実装 — `told` を単一の値ではなくトークンごとの
+   * `Map` にした理由そのもの）。
+   *
+   * 単一の変数（最初の実装）だと、A を配って `told=A`、次に B を配って
+   * `told=B`（A の記録を上書き）、その直後に A の**同じ**身元が
+   * （新しい観測なしに）もう一度来ると `told !== A の身元` になり、
+   * 畳むべきものが配られてしまう。ここではその順で並べ、A の2回目が
+   * `fold` のままであることを固定する。
+   */
+  it('別のトークンの配達に挟まれても、先のトークンの重複は畳まれ続ける', () => {
+    const gate = createCloneWakeGate();
+
+    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 0 });
+    // tok-b は別の身元なので、`releasePending` を経由せずここへ来ても配られる
+    // （枠がトークンごとではなくクローン全体のものだとしても、`told` の識別は
+    // トークンごとに独立している）。
+    expect(gate.decide(reopened('tok-b'), true, false)).toEqual({ kind: 'wake', folded: 0 });
+    // tok-a の同じ身元がもう一度来ても、tok-b の配達には巻き込まれず畳む。
+    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'fold' });
   });
 });
 
@@ -537,7 +619,7 @@ describe('歯1: CloneWakeGate.decide と redeliveryGate は同じ答えを返す
     (blocked, releasePending) => {
       const gate = createCloneWakeGate();
 
-      const wakeSaysWake = gate.decide('tok-a', blocked, releasePending).kind === 'wake';
+      const wakeSaysWake = gate.decide(reopened('tok-a'), blocked, releasePending).kind === 'wake';
       const gateSaysDeliver = redeliveryGate(tokenPoolEvent(), {
         usageBlocked: blocked,
         releasePending,
@@ -764,8 +846,24 @@ describe('🔴 #1051: 1回の再開の機会につき、配る合図は1件', ()
    *
    * **勝手な遷移を足さないこと。** ここに無い動き方をさせると、測っているのは
    * 本物ではなくこの模型になる。
+   *
+   * ## `gate` を受け取り、`hitUsageLimit()` で `observeUnusable()` も呼ぶ理由（Issue #1223）
+   *
+   * **本物の `clone.ts` では、この2つは対になっている。** `#reportUsageNotice`
+   * は `await this.#observeForTokenRotation({ notice })`
+   * （→ `apps/daemon/src/index.ts` の `onUsageObservation` → `tokenRotator.observe`
+   * → `settleTokenOutcome`。`outcome.kind` が `parked` / `exhausted` なら
+   * `cloneWakeGate.observeUnusable()` を呼ぶ）を**待ってから**
+   * `this.#usageBlocked = notice;` を代入する（`grep -Fn -- 'this.#usageBlocked = notice;' packages/core/src/clone.ts`
+   * の直前の行）。⟹ **クローンが「まだ止まっていない」状態から「また止まった」
+   * 状態へ移るときは、必ずその直前に `observeUnusable()` が走っている。**
+   *
+   * ここでこの対を省くと、この模型だけが本物より「told を持ち越しやすい」形に
+   * なり、#1223 の歯（同じ身元は畳む）が #1051 の不変条件3（起こし損ねを
+   * 作らない）を壊しているように**見えてしまう**——実際には壊れていない。
+   * 本物はこの2つを必ず対にして呼ぶので、輪はここで閉じる。
    */
-  function fakeClone() {
+  function fakeClone(gate: CloneWakeGate) {
     let blocked = false;
     let pending = false;
     return {
@@ -775,8 +873,14 @@ describe('🔴 #1051: 1回の再開の機会につき、配る合図は1件', ()
       get usageReleasePending() {
         return pending;
       },
-      /** 枠で落ちた（`#usageBlocked` が立つ）。 */
+      /**
+       * 枠で落ちた（`#usageBlocked` が立つ）。**止まっていない状態から止まる
+       * ときだけ `observeUnusable()` を呼ぶ**（`fakeClone` の doc、上）。
+       * 既に止まっている状態でもう一度呼んでも（このテストでは使わない形だが）、
+       * 二重に「鍵が通らなくなった」を観測したことにはしない。
+       */
       hitUsageLimit() {
+        if (!blocked) gate.observeUnusable();
         blocked = true;
       },
       /** 合図が届いた（`post()` の中の1文。止まっているときだけ印が立つ）。 */
@@ -793,14 +897,14 @@ describe('🔴 #1051: 1回の再開の機会につき、配る合図は1件', ()
 
   /** 門を通して、配ったなら合図をクローンへ渡す（`wake()` と同じ並び）。 */
   function emit(gate: CloneWakeGate, clone: ReturnType<typeof fakeClone>, tokenId: string) {
-    const decision = gate.decide(tokenId, clone.usageBlocked, clone.usageReleasePending);
+    const decision = gate.decide(reopened(tokenId), clone.usageBlocked, clone.usageReleasePending);
     if (decision.kind === 'wake') clone.receiveNotice();
     return decision.kind;
   }
 
   it('回復が2回続けて検出されても、配るのは1件だけ（往復のぶんを畳む）', () => {
     const gate = createCloneWakeGate();
-    const clone = fakeClone();
+    const clone = fakeClone(gate);
     clone.hitUsageLimit();
 
     // 429 → 成功 → 429 → 成功 …の往復で、回し手は「戻った」を何度でも立てる
@@ -812,7 +916,7 @@ describe('🔴 #1051: 1回の再開の機会につき、配る合図は1件', ()
 
   it('何十件届いても、再試行が始まるまでは1件しか配らない', () => {
     const gate = createCloneWakeGate();
-    const clone = fakeClone();
+    const clone = fakeClone(gate);
     clone.hitUsageLimit();
 
     const kinds = Array.from({ length: 30 }, () => emit(gate, clone, 'tok-a'));
@@ -823,13 +927,14 @@ describe('🔴 #1051: 1回の再開の機会につき、配る合図は1件', ()
 
   it('🔴 回復 → 枠に入る → また回復 なら2件とも配る（起こし損ねを作らない）', () => {
     const gate = createCloneWakeGate();
-    const clone = fakeClone();
+    const clone = fakeClone(gate);
 
     // 1回目: 枠で止まって、戻った。
     clone.hitUsageLimit();
     const first = emit(gate, clone, 'tok-a');
 
-    // クローンが印を使って再試行に入り、また枠で落ちた。
+    // クローンが印を使って再試行に入り、また枠で落ちた
+    // （本物では、ここで `observeUnusable()` が対になって走る——`fakeClone` の doc）。
     clone.consumeRelease();
     clone.hitUsageLimit();
 
@@ -841,12 +946,14 @@ describe('🔴 #1051: 1回の再開の機会につき、配る合図は1件', ()
 
   it('別のトークンが戻った回は、前のトークンの印に巻き込まれない', () => {
     const gate = createCloneWakeGate();
-    const clone = fakeClone();
+    const clone = fakeClone(gate);
     clone.hitUsageLimit();
 
     expect(emit(gate, clone, 'tok-a')).toBe('wake');
-    // **同じクローンの印が立っているので、これは畳む。** トークンが違っても
-    // 立てる印は同じ1つで、既に立っている ⟹ 2件目が動かすものは無い。
+    // **同じクローンの印（`releasePending`）が立っているので、これは畳む。**
+    // トークンが違っても `releasePending` はクローン1体につき1つで、既に
+    // 立っている ⟹ 2件目が動かすものは無い（#1223 の `told` の話ではなく、
+    // #1051 の `releasePending` がここでは効いている）。
     expect(emit(gate, clone, 'tok-b')).toBe('fold');
 
     // 再試行が入って、また枠で落ちたなら配る。
