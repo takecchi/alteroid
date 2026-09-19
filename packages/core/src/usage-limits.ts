@@ -680,11 +680,21 @@ export function toRateLimitFacts(value: unknown): RateLimitFacts | undefined {
  * （空文字）になり、**従来どおり `kind` だけで引く形**に落ちる。⟹ 既存の挙動と
  * 歯を1つも変えない。
  *
- * **区切りに NUL を使う。** `tokenId` も `kind` も NUL を含まないので、
- * 「`a` と `b:c`」と「`a:b` と `c`」が同じ鍵に化ける事故が起きない。
+ * **区切り文字ではなく長さで分ける。** 「`a` と `b:c`」と「`a:b` と `c`」が同じ
+ * 鍵へ化けないことを、値の中身への仮定（「この文字は入らない」）ではなく
+ * **長さの前置き**で保証する ——「トークンの身元の長さ」「`:`」「トークンの
+ * 身元」「枠の種類」の順に並べれば、読み戻しは一意に決まる。
+ *
+ * ⚠️ **区切りに制御文字を持ち出さないこと。** 最初は NUL で書いて、CI の
+ * `scripts/check-tracked-nul-bytes.test.ts` が実際に落ちた（#260 —— 追跡対象の
+ * ファイルに生の NUL が1バイトでも在ると赤くなる。除外リストは無い）。
+ * **エスケープのつもりで書いた `\u0000` が、実バイトとして保存されうる** ——
+ * 書き手の道具に依存するので「気をつける」では止まらない。⟹ 制御文字を
+ * 使わない形にして、踏みようが無くした。
  */
 export function rateLimitMemoryKey(tokenId: string | undefined, kind: string | undefined): string {
-  return `${tokenId ?? ''} ${kind ?? ''}`;
+  const token = tokenId ?? '';
+  return `${String(token.length)}:${token}${kind ?? ''}`;
 }
 
 /**

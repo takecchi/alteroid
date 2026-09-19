@@ -1647,8 +1647,8 @@ export interface ManagerPool {
 }
 
 /**
- * `archive_remove` / `DELETE /archive/:id` が実際に消してよいかの、唯一の
- * 判定所（#698）。
+ * `archive_remove` / `archive_remove_many` / `DELETE /archive/:id` が実際に
+ * 消してよいかの、唯一の判定所（#698）。
  *
  * **既定は拒否だが、override で開けられる。** これは追加の安全機構ではなく
  * north_star の禁止2（追加制限禁止）の実装そのものである——逐語
@@ -1674,9 +1674,28 @@ export interface ManagerPool {
  *
  * **理由を記録に残すのはこの関数の外側（呼び出し側）の仕事である。** ここは
  * 「通してよいか」だけを判定し、`allowed-with-override` を返すときに
- * `managerId` と `reason` を運ぶ——呼び出し側（`tools.ts` の `archive_remove` /
- * `app.ts` の `DELETE /archive/:id`）はこれを journal のエントリへそのまま
- * 書く（「override で消した」という事実と理由を、追える形で残す）。
+ * `managerId` と `reason` を運ぶ——呼び出し側はこれを journal のエントリへ
+ * そのまま書く（「override で消した」という事実と理由を、追える形で残す）。
+ *
+ * ## 呼び出し側は4つ。**単発の口だけが override を持つ**
+ *
+ * | 呼び出し側 | `overrideReason` |
+ * | --- | --- |
+ * | `tools.ts` の `archive_remove`（単発） | 受け取る |
+ * | `app.ts` の `DELETE /archive/:id`（単発） | 受け取る |
+ * | `tools.ts` の `archive_remove_many`（一括。#698 の残タスク） | **`undefined` を渡す** |
+ * | `app.ts` の `POST /archive/remove`（一括） | **`undefined` を渡す** |
+ *
+ * 逐語:
+ * `grep -Fn -- 'guardArchiveRemoval(context.managers, target.id, undefined)' packages/core/src/tools.ts`
+ *
+ * **一括の口で理由を1本だけ書いて全件を開けると、「どの1件をなぜ開けたか」が
+ * 記録から消える。** ⟹ 開けたい回は単発の口を使う。
+ *
+ * **⚠️ 列が増えても判定所は増えていない。** 一括の口が足されたときも、判定は
+ * ここ1箇所を通したままである（`tools.ts` の逐語「`guardArchiveRemoval` 1箇所」）。
+ * **「一括だから速い経路を別に引く」をやらないこと** —— 引いた瞬間に、走行中の
+ * 委譲の退避を守る方針が片方の口からだけ消える。
  */
 export type ArchiveRemovalGuard =
   | { readonly kind: 'allowed' }
