@@ -71,6 +71,32 @@ describe('describeManagerState', () => {
     expect(describeManagerState('done', false, undefined)).toBe('done/セッション切断');
     expect(describeManagerState('done', undefined, undefined)).toBe('done/セッション不明');
   });
+
+  /**
+   * **Issue #1104。`since` が在れば「（<時刻> から）」を添える。**
+   *
+   * **この関数に時計を渡して経過を計算させない**（doc）——だから足すのは
+   * `since` の値そのものであって、経過時間（「N分前」等）ではない。経過を
+   * 作るのは読む側（クローン）である。
+   */
+  it('since が在れば「（<時刻> から）」を tasks の直後に添える', () => {
+    expect(
+      describeManagerState('done', true, { tasks: 3, since: '2026-09-16T11:00:00.000Z' }),
+    ).toBe('done/背景処理待ち×3（2026-09-16T11:00:00.000Z から）');
+  });
+
+  /**
+   * **`since` 無しでは1バイトも変わらない（既存の呼び出し・テストの回帰）。**
+   * `tools.ts` の `manager_list` / `runner_list` は「時刻で答えが変わるものを
+   * 一覧に焼かない」ため、`since` を落として（`briefAwaitingBackground`）
+   * この関数へ渡す——その経路の字面が変わっていないことをここで固定する。
+   */
+  it('since が undefined のときは、明示的に渡しても渡さなくても同じ字面のまま', () => {
+    expect(describeManagerState('done', true, { tasks: 3 })).toBe('done/背景処理待ち×3');
+    expect(describeManagerState('done', true, { tasks: 3, since: undefined })).toBe(
+      'done/背景処理待ち×3',
+    );
+  });
 });
 
 /**

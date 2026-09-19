@@ -1,7 +1,12 @@
 import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createManagerPool, withheldReportOverdue, type ManagerPool } from './manager.js';
+import {
+  createManagerPool,
+  describeBackgroundWaitElapsed,
+  withheldReportOverdue,
+  type ManagerPool,
+} from './manager.js';
 import { createLocalRunner } from './runner-local.js';
 import {
   createRunnerRegistry,
@@ -819,6 +824,238 @@ describe('ManagerPoolOptions.withheldReportFlushMs（口が実際に効くこと
     expect(delivered.text).toContain('30分待っても届かなかった。');
 
     await pool.stop();
+  });
+});
+
+/**
+ * **Issue #1104。「同じエピソードの中で何度でも合図が立ち直る」を直す。**
+ *
+ * 直す前は `#deliver` が `'flush'` の配達でも在庫を無条件に `delete` して
+ * いたため、`flushWithheldReports()` を再度呼ぶと（同じ委譲がまだ本物の
+ * 報告を1本も返していなくても）`withheldReportOverdue` が再び真になり、
+ * 同じ知らせが何度でも立て直された（実測: 4時間半で8回、中身は同一）。
+ *
+ * **合図を消すことが目的ではない**——初回は必ず配る。直したのは回数で、
+ * 「30分待っても届かない」という事実そのものは初回どおり配られる。
+ */
+describe('flushWithheldReports はエピソードにつき1本だけ配る（Issue #1104）', () => {
+  it('1回目は立つが、2回目以降は同じ在庫に対して合図を立て直さない', async () => {
+    const { pool, inbox, fake, advance } = await runningManualSetup();
+    const before = inbox.length;
+
+    fake.report('mgr-withhold', '握り潰される回', 'done', { awaitingBackground: AWAITING });
+    await waitForWithheld(pool, 'mgr-withhold', 1);
+
+    // 30分経過 — 1回目は必ず立つ。
+    advance(30 * 60_000 + 1);
+    await pool.flushWithheldReports();
+    const delivered = await vi.waitFor(() => {
+      const found = inbox.slice(before).find((event) => event.type === 'manager_message');
+      if (!found) throw new Error('まだ届いていない');
+      return found as { text: string };
+    });
+    expect(delivered.text).toContain('30分待っても届かなかった');
+    const afterFirstFlush = inbox.length;
+
+    // **同じ在庫に対して、時間が経ってもポーラーが何度回っても増えない。**
+    // 実測の再現（4時間半・8回）に対応して、大きく時間を進めたうえで
+    // 複数回 `flushWithheldReports()` を呼ぶ。
+    advance(4 * 60 * 60_000);
+    await pool.flushWithheldReports();
+    await pool.flushWithheldReports();
+    await pool.flushWithheldReports();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(inbox.length).toBe(afterFirstFlush);
+
+    await pool.stop();
+  });
+
+  /**
+   * **`since`（`ManagerAwaitingBackground.since`）はフラッシュを跨いでも
+   * 動かない。** `#deliver` の `'flush'` 分岐は `delete` ではなく
+   * `count: 0` + `flushedAt` で `set` し直すので、`firstAt`（`since` の
+   * 写し元）はエピソードを跨いで生き残る。
+   */
+  it('フラッシュを跨いでも since は最初に積んだ時刻のまま動かない', async () => {
+    const { pool, fake, advance } = await runningManualSetup();
+
+    fake.report('mgr-withhold', '握り潰される回', 'done', { awaitingBackground: AWAITING });
+    const before = await waitForWithheld(pool, 'mgr-withhold', 1);
+    expect(before?.awaitingBackground?.since).toBe('2026-09-01T00:00:00.000Z');
+
+    advance(30 * 60_000 + 1);
+    await pool.flushWithheldReports();
+    // フラッシュ後は count が 0 へ戻るが、在庫（と since）はまだ残っている。
+    const after = await waitForWithheld(pool, 'mgr-withhold', 0);
+    expect(after?.awaitingBackground?.since).toBe('2026-09-01T00:00:00.000Z');
+    expect(after?.status).toBe('done');
+
+    await pool.stop();
+  });
+
+  /**
+   * **本物の報告が配られたらエピソードが終わる。** 在庫が丸ごと消え、次に
+   * 積んだ回は新しいエピソード（新しい `since`）として扱われる——だから
+   * 合図もまた立てられる（`memory.flushedAt` は新しいエピソードでは
+   * `undefined` に戻る）。
+   */
+  it('本物の報告が配られたらエピソードが終わる（在庫が消え、次に積むと since が新しくなり、合図がまた立つ）', async () => {
+    const { pool, inbox, fake, advance } = await runningManualSetup();
+
+    fake.report('mgr-withhold', '1エピソード目（握り潰し）', 'done', {
+      awaitingBackground: AWAITING,
+    });
+    const summary1 = await waitForWithheld(pool, 'mgr-withhold', 1);
+    const firstEpisodeSince = summary1?.awaitingBackground?.since;
+    expect(firstEpisodeSince).toBe('2026-09-01T00:00:00.000Z');
+
+    advance(30 * 60_000 + 1);
+    await pool.flushWithheldReports();
+    await waitForWithheld(pool, 'mgr-withhold', 0);
+
+    // 本物の報告が来て、エピソードが終わる——在庫が丸ごと消える。
+    fake.report('mgr-withhold', '本物の報告', 'done');
+    await waitForNoWithheld(pool, 'mgr-withhold');
+
+    // 次に積むと、新しいエピソード（since が更新される）。
+    advance(60_000);
+    fake.report('mgr-withhold', '2エピソード目（握り潰し）', 'done', {
+      awaitingBackground: AWAITING,
+    });
+    const summary2 = await waitForWithheld(pool, 'mgr-withhold', 1);
+    expect(summary2?.awaitingBackground?.since).toBe('2026-09-01T00:31:00.001Z');
+    expect(summary2?.awaitingBackground?.since).not.toBe(firstEpisodeSince);
+
+    // そして新しいエピソードでも、30分待てば合図がもう一度立てられる
+    // （`flushedAt` が新しいエピソードでは undefined に戻っているため）。
+    const beforeSecondFlush = inbox.length;
+    advance(30 * 60_000 + 1);
+    await pool.flushWithheldReports();
+    const delivered2 = await vi.waitFor(() => {
+      const found = inbox
+        .slice(beforeSecondFlush)
+        .find((event) => event.type === 'manager_message');
+      if (!found) throw new Error('まだ届いていない');
+      return found as { text: string };
+    });
+    expect(delivered2.text).toContain('30分待っても届かなかった');
+
+    await pool.stop();
+  });
+
+  /**
+   * **畳まれた報告は失われない。** フラッシュ後（`count: 0`）に新しく積んだ
+   * 報告は、次の本物の報告が来たときに件数として乗る——「後で必ず配る」の
+   * 約束は、エピソード内の2回目以降の握り潰しにも及ぶ。
+   */
+  it('フラッシュ後に積んだ報告が失われない（次の本物の報告に件数として乗る）', async () => {
+    const { pool, inbox, fake, advance } = await runningManualSetup();
+
+    fake.report('mgr-withhold', '1本目（握り潰し）', 'done', { awaitingBackground: AWAITING });
+    await waitForWithheld(pool, 'mgr-withhold', 1);
+
+    advance(30 * 60_000 + 1);
+    await pool.flushWithheldReports();
+    await waitForWithheld(pool, 'mgr-withhold', 0);
+
+    // フラッシュ後、本物の報告はまだ来ず、もう1本畳まれる。
+    fake.report('mgr-withhold', '2本目（握り潰し、フラッシュ後）', 'done', {
+      awaitingBackground: AWAITING,
+    });
+    await waitForWithheld(pool, 'mgr-withhold', 1);
+
+    const before = inbox.length;
+    fake.report('mgr-withhold', '本物の報告', 'done');
+    const delivered = await vi.waitFor(() => {
+      const found = inbox
+        .slice(before)
+        .find((event) => event.type === 'manager_message' && event.kind === 'report');
+      if (!found) throw new Error('まだ届いていない');
+      return found as { text: string };
+    });
+    // **フラッシュを跨いだが、失われた報告は1本もない**——数えるのは
+    // このエピソードで積まれた「本物」でない report の本数（1本目は
+    // 配達済みの `#emit` 呼び出しの数ではなく在庫の `count`）。
+    expect(delivered.text).toContain('背景処理の完了待ちで畳んだターンの報告を 1 本配っていない');
+
+    await pool.stop();
+  });
+
+  /**
+   * **陰性対照: `count === 0` のときに「0 本配っていない」という嘘の1行が
+   * 出ない。** フラッシュ直後（在庫は残るが `count: 0`）に本物の報告が来る
+   * 場合がこれに当たる——`#deliver` は `withheld.count > 0` のときだけ
+   * `countNote` を足す。
+   */
+  it('陰性対照: フラッシュ直後（count === 0）に本物の報告が来ても「配っていない」は出ない', async () => {
+    const { pool, inbox, fake, advance } = await runningManualSetup();
+
+    fake.report('mgr-withhold', '握り潰される回', 'done', { awaitingBackground: AWAITING });
+    await waitForWithheld(pool, 'mgr-withhold', 1);
+
+    advance(30 * 60_000 + 1);
+    await pool.flushWithheldReports();
+    await waitForWithheld(pool, 'mgr-withhold', 0);
+
+    const before = inbox.length;
+    fake.report('mgr-withhold', '本物の報告', 'done');
+    const delivered = await vi.waitFor(() => {
+      const found = inbox
+        .slice(before)
+        .find((event) => event.type === 'manager_message' && event.kind === 'report');
+      if (!found) throw new Error('まだ届いていない');
+      return found as { text: string };
+    });
+    expect(delivered.text).toBe('本物の報告');
+    expect(delivered.text).not.toContain('配っていない');
+
+    // **`'full'` の delete は count に関わらず行う。** 在庫はここで丸ごと
+    // 消える（count が 0 だったからといって在庫が残り続けない）。
+    await waitForNoWithheld(pool, 'mgr-withhold');
+
+    await pool.stop();
+  });
+});
+
+/**
+ * **`describeBackgroundWaitElapsed`（Issue #1104）の純関数テスト。**
+ * `withheldReportOverdue` と同じ理由で純関数として切り出してあるので、
+ * `Pool` を介さずに直接呼んで境界条件を確かめる。
+ */
+describe('describeBackgroundWaitElapsed（firstAt からの経過を文にする純関数）', () => {
+  it('1時間以上は「N時間M分」で経過を言う', () => {
+    const now = Date.parse('2026-09-01T02:15:30.000Z');
+    expect(describeBackgroundWaitElapsed('2026-09-01T00:00:00.000Z', now)).toBe(
+      'この委譲は2時間15分、背景処理待ちのまま（最初 2026-09-01T00:00:00.000Z）。',
+    );
+  });
+
+  it('1時間未満は「N分」だけ（冗長な「0時間」を出さない）', () => {
+    const now = Date.parse('2026-09-01T00:15:00.000Z');
+    expect(describeBackgroundWaitElapsed('2026-09-01T00:00:00.000Z', now)).toBe(
+      'この委譲は15分、背景処理待ちのまま（最初 2026-09-01T00:00:00.000Z）。',
+    );
+  });
+
+  /**
+   * **`firstAt` が読めない（`Date.parse` が `NaN`）ときは、経過を捏造しない。**
+   * AGENTS.md「取れない軸に0の行を作る」と同じ向き——0分のような、それらしい
+   * 値を作らず、読めないことそのものを出力に書く。
+   */
+  it('firstAt が読めないときは、経過を捏造せず読めないと書く', () => {
+    const result = describeBackgroundWaitElapsed('これは日時ではない', Date.now());
+    expect(result).toContain('経過時間は不明');
+    expect(result).toContain('これは日時ではない');
+    // 捏造した経過（「N時間」「N分」）を出さない。
+    expect(result).not.toMatch(/\d+時間|\d+分/);
+  });
+
+  /** `firstAt` が未来を指す（経過が負）ときも同じ扱いにする。 */
+  it('firstAt が未来（経過が負）のときも、経過を捏造せず読めないと書く', () => {
+    const now = Date.parse('2026-09-01T00:00:00.000Z');
+    const result = describeBackgroundWaitElapsed('2026-09-01T00:00:01.000Z', now);
+    expect(result).toContain('経過時間は不明');
+    expect(result).not.toMatch(/\d+時間|\d+分/);
   });
 });
 

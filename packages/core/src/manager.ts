@@ -2731,6 +2731,23 @@ interface WithheldReportMemory {
    * `flushWithheldReports()` の文言が数えているのは前者のほうである。
    */
   taskCount: number;
+  /**
+   * このエピソードで既にフラッシュの合図を立てた時刻（ISO 8601）。**未定義＝
+   * まだ立てていない。**
+   *
+   * **経過時間の出所を増やすものではない。** 「いつから待っているか」は
+   * これまでどおり `firstAt` の1つだけが持つ——ここに書くのは「もう合図を
+   * 立てたか」という印であって、経過を測る材料ではない。`flushWithheldReports()`
+   * はこの欄が定義済みなら（＝このエピソードで既に配った）2回目以降の合図を
+   * 立て直さない（`continue`）。
+   *
+   * **`#deliver` が `'flush'` で配るときに立て、在庫を `delete` せず `set`
+   * し直す**（`count: 0` にして）。これにより `firstAt` がエピソードを跨いで
+   * 生き残り、`ManagerAwaitingBackground.since` が動かない。次の本物の報告・
+   * `case 'closed'`（＝`'full'`）が来たときにだけ在庫ごと消え、エピソードが
+   * 終わる。
+   */
+  flushedAt?: string;
 }
 
 /**
@@ -2865,6 +2882,54 @@ const WITHHELD_REPORT_EXCERPT = 240;
 export function withheldReportOverdue(lastAt: string, now: number, flushMs: number): boolean {
   const parsed = Date.parse(lastAt);
   return Number.isNaN(parsed) || now - parsed >= flushMs;
+}
+
+/**
+ * `flushWithheldReports()` が配る文面へ足す、「この委譲がいつから背景処理を
+ * 待っているか」の1文（Issue #1104）。**`withheldReportOverdue` と同じ作法で
+ * 純関数として切り出してある**——テストがこの判定・整形を直接持てるように
+ * するためで、理由も同じ（`Pool` の private field の中身をテストへ持ち出さない）。
+ *
+ * **見るのは `firstAt` の1つだけである。** `WithheldReportMemory.flushedAt`
+ * （「もう合図を立てたか」の印）は経過を測る材料にしない——経過時間の出所を
+ * 2つに増やすと、どちらを信じるかという新しい問いが生まれる。「いつから
+ * 待っているか」は最初に積んだ時刻（`firstAt`）以外に無い。
+ *
+ * **`firstAt` が読めない・未来を指している（経過が負）ときは、経過を
+ * 捏造しない。** AGENTS.md 地雷表「取れない軸に0の行を作る」と同じ向き——
+ * 0分や空文字のような「それらしい値」を作る代わりに、読めないことそのものを
+ * 出力へ書く。判定できないという3つ目の状態を持つ（`Number.isNaN` と
+ * 負の経過を同じ枝で扱う）。
+ *
+ * **1時間未満は「N分」だけにする。** `describeManagerActivityForFlush` と
+ * 違って、この1文は健全な状態でも常に出る（`flushWithheldReports` が呼ばれる
+ * のは既に異常——30分、本報告が無い——と分かっている委譲についてだけなので、
+ * 「0時間15分」のような冗長な0を出す理由が無い）。1時間以上は「N時間M分」
+ * （`manager-activity.ts` の `formatMinutesAgo` と同じ丸め方だが、あちらは
+ * private でこのファイルからは呼べないうえ、日をまたぐ丸め方までは要らない
+ * ——ここでは時間・分の2段で足りる）。
+ *
+ * **Issue #1104 の逐語「この委譲は N 時間、背景処理待ちのまま」に語順・
+ * 語彙を合わせてある**（「この委譲は」で始め「、背景処理待ちのまま」で結ぶ）。
+ */
+export function describeBackgroundWaitElapsed(firstAt: string, now: number): string {
+  const parsed = Date.parse(firstAt);
+  if (Number.isNaN(parsed)) {
+    return `この委譲は、背景処理待ちのまま（最初の時刻 ${firstAt} が読めないため、経過時間は不明）。`;
+  }
+  const elapsedMs = now - parsed;
+  if (elapsedMs < 0) {
+    return (
+      `この委譲は、背景処理待ちのまま（最初 ${firstAt} が現在より未来のため、` +
+      '経過時間は不明）。'
+    );
+  }
+  const totalMinutes = Math.floor(elapsedMs / 60_000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  const durationText =
+    hours < 1 ? `${String(minutes)}分` : `${String(hours)}時間${String(minutes)}分`;
+  return `この委譲は${durationText}、背景処理待ちのまま（最初 ${firstAt}）。`;
 }
 
 // ---------------------------------------------------------------------------
@@ -4734,11 +4799,38 @@ class Pool implements ManagerPool {
    * として添える——**新しい往復は増やさない**（`manager-poller.ts` が
    * `probeTurnEnds()` の直後にこの関数を相乗りさせているので、判定材料は
    * その周期ぶん既に更新済みである）。
+   *
+   * **Issue #1104 の直し：エピソードにつき1本だけ配る。** 直すまでは、
+   * この合図が `#deliver` によって在庫ごと `delete` されていたため、
+   * `flushWithheldReports()` の周期（`manager-poller.ts`）が回るたびに
+   * 同じ委譲へ何度でも合図が立ち直っていた（実測: 4時間半で8回、中身は
+   * 同一）。**合図を消すことが目的ではない**——「30分待っても完了が届かない」
+   * は初回は必ず配る。欲しいのは回数ではなく経過時間である。
+   *
+   * - `memory.flushedAt` が定義済み（＝このエピソードで既に合図を立てた）
+   *   なら `continue` する。**配らない・畳まない**——在庫はそのまま積み
+   *   続け、次の本物の報告か `case 'closed'` のときに件数ごと配られる
+   *   （「後で必ず配る」の約束は破らない）。
+   * - `memory.count === 0`（＝フラッシュ直後で、まだ何も積み直していない）
+   *   も `continue` する。0本の合図を出す意味が無い。
+   * - この2つの判定は `withheldReportOverdue` の判定より**前**に置く——
+   *   期限切れかどうかを問う前に「もう配ったか」を先に聞く。
+   *
+   * **意図して入れなかったこと（doc に書き残す）。** `classifyManagerActivity`
+   * の判定（`activity`）が前回の合図から変わったときに合図を立て直す、は
+   * 入れていない。`manager.ts` への変更を最小にすることを優先した——
+   * 判定が変わったことは `manager_list` 側でいつでも読める（`describeManagerState`
+   * の `since` と合わせて pull で見る）。同じ理由で、`withheldReportOverdue`
+   * の判定基準を `lastAt` から `firstAt` へ変えることもしていない——それは
+   * 「忙しい委譲ほど初回の合図が遅れる」という別の面の話で、この Issue の
+   * 範囲外である。
    */
   async flushWithheldReports(): Promise<void> {
     const now = this.#now();
     for (const [managerId, memory] of [...this.#withheldReports.entries()]) {
       try {
+        if (memory.flushedAt !== undefined) continue;
+        if (memory.count === 0) continue;
         if (!withheldReportOverdue(memory.lastAt, now, this.#withheldReportFlushMs)) continue;
         const activity = classifyManagerActivity(
           this.#activityInputOfRecord(this.#records.get(managerId)),
@@ -4749,6 +4841,7 @@ class Pool implements ManagerPool {
           `[${managerId}] 背景処理の完了待ちで畳んだ報告が、次のターンの完了を` +
             `${String(Math.round(this.#withheldReportFlushMs / 60_000))}分待っても届かなかった。` +
             'まとめて配る。' +
+            describeBackgroundWaitElapsed(memory.firstAt, now) +
             describeManagerActivityForFlush(activity),
           undefined,
           undefined,
@@ -5817,7 +5910,11 @@ class Pool implements ManagerPool {
       record.job.status = 'stopped';
       await this.#persist(record);
       const withheld = this.#withheldReports.get(managerId);
-      if (withheld !== undefined) {
+      // **`count > 0` を条件に足す（Issue #1104）。** フラッシュ済み
+      // （`#deliver` が `'flush'` で `count: 0` + `flushedAt` を残す）在庫が
+      // そのまま残っている状態で止めると、`withheld !== undefined` だけでは
+      // 「報告を 0 本抱えたまま止まった」という嘘の1行が出る。
+      if (withheld !== undefined && withheld.count > 0) {
         withheldNote =
           ` このマネージャーは、背景処理の完了待ちで畳んだ報告を ${String(withheld.count)} ` +
           `本抱えたまま止まった（最初 ${withheld.firstAt} / 最後 ${withheld.lastAt}）。` +
@@ -9353,21 +9450,48 @@ class Pool implements ManagerPool {
     const withheld = this.#withheldReports.get(managerId);
     let outgoing = text;
     if (withheld !== undefined) {
-      this.#withheldReports.delete(managerId);
-      // **件数・`firstAt` / `lastAt` / `journal_read` の案内は共通の前置き
-      // （`countNote`）に持つ。** 変わるのは末尾の「最後の1本の240文字抜粋」
-      // だけ——`'flush'` のときはそれを付けず、そのまま閉じ括弧を打つ
-      // （台帳028ee442の指摘: 配られる中身は既に日誌に在るので、抜粋を
-      // 再送する意味が無い）。**`'full'`（`case 'closed'` / 次の本物の報告の
-      // 2経路）は元の1本の式のままで、1バイトも変えていない。**
-      const countNote =
-        `${text}\n\n（この間に、背景処理の完了待ちで畳んだターンの報告を ` +
-        `${String(withheld.count)} 本配っていない（最初 ${withheld.firstAt} / ` +
-        `最後 ${withheld.lastAt}）。全文は日誌に在る（\`journal_read\`）。`;
-      outgoing =
-        withheldSuffixDetail === 'flush'
-          ? `${countNote}）`
-          : `${countNote}最後の1本の冒頭: ${excerptLine(withheld.lastText, WITHHELD_REPORT_EXCERPT)}）`;
+      // **`'flush'` は在庫を消さない（Issue #1104）。** `delete` すると
+      // `firstAt` が失われ、次に積んだ回が「新しいエピソード」として
+      // `now` から数え直してしまう——`flushWithheldReports()` が何度でも
+      // 合図を立て直せた元の欠陥がここにある。代わりに `count: 0` +
+      // `flushedAt`（このエピソードで既に合図を立てた印）で `set` し直す。
+      // `firstAt` はそのまま生き残るので、`ManagerAwaitingBackground.since`
+      // （`#awaitingBackgroundOf` が `firstAt` をそのまま写す）はフラッシュを
+      // 跨いでも動かない。
+      //
+      // **`'full'`（本物の報告 / `case 'closed'`）は、`count` に関わらず
+      // 在庫を丸ごと `delete` する。** ここがエピソードの終わりである——
+      // 次に積まれる回は新しいエピソード（新しい `firstAt`）として扱われる。
+      if (withheldSuffixDetail === 'flush') {
+        this.#withheldReports.set(managerId, {
+          ...withheld,
+          count: 0,
+          flushedAt: new Date(this.#now()).toISOString(),
+        });
+      } else {
+        this.#withheldReports.delete(managerId);
+      }
+      // **`count === 0` のときは `countNote` を足さない（Issue #1104）。**
+      // フラッシュ直後（在庫が `count: 0` のまま残っている状態）に本物の
+      // 報告が来ると、`withheld` は `undefined` ではなく存在するが配った本数は
+      // 0 である——ここで無条件に足すと「0 本配っていない」という嘘の1行が
+      // 出る。`outgoing` は `text` のままにする。
+      if (withheld.count > 0) {
+        // **件数・`firstAt` / `lastAt` / `journal_read` の案内は共通の前置き
+        // （`countNote`）に持つ。** 変わるのは末尾の「最後の1本の240文字抜粋」
+        // だけ——`'flush'` のときはそれを付けず、そのまま閉じ括弧を打つ
+        // （台帳028ee442の指摘: 配られる中身は既に日誌に在るので、抜粋を
+        // 再送する意味が無い）。**`'full'`（`case 'closed'` / 次の本物の報告の
+        // 2経路）は元の1本の式のままで、1バイトも変えていない。**
+        const countNote =
+          `${text}\n\n（この間に、背景処理の完了待ちで畳んだターンの報告を ` +
+          `${String(withheld.count)} 本配っていない（最初 ${withheld.firstAt} / ` +
+          `最後 ${withheld.lastAt}）。全文は日誌に在る（\`journal_read\`）。`;
+        outgoing =
+          withheldSuffixDetail === 'flush'
+            ? `${countNote}）`
+            : `${countNote}最後の1本の冒頭: ${excerptLine(withheld.lastText, WITHHELD_REPORT_EXCERPT)}）`;
+      }
     }
     // **窓をまたいで畳んだ件数を、次に配る1件の末尾へ載せる**
     // （{@link SynthesizedNoticeStreak}。直上の `#withheldReports` と同じ形で、
