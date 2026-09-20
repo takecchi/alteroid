@@ -619,6 +619,51 @@ async function waitForTerminal(events: ChatStreamEvent[]): Promise<void> {
 }
 
 /**
+ * いま JS の microtask キューに積んである継続を、有界回数ぶん先まで進める。
+ * **時計は1ミリ秒も使わない**（`setTimeout` を1つも積まない）ので、ここでの
+ * 「待つ」は壁時計のポーリングではない——キューが尽きれば早く戻り、尽きて
+ * いなくても回数で必ず止まる。
+ *
+ * ## なぜ要るか（#1220 で `waitForTerminal` を同期の出来事通知へ載せ替えたことで
+ * 露出した窓）
+ *
+ * `#reportFailure`（`clone.ts`）は**まず** `#emit(conversationId, {type:'error',...})`
+ * を呼び、人間向けの断り文（`humanText`）を組み立てて `#journal` へ書くのは
+ * **そのあと**である（`#usageBlocked` を読んでから書く1行）。`waitForTerminal` が
+ * 見ているのは前者（`error` イベント）だけなので、**後者の journal 書き込みが
+ * 終わる前に `waitForTerminal` が解決する窓**が実在する。
+ *
+ * さらに、セッションを終わらせる台本（`endSessionAfterTurn`）を使うテストでは、
+ * `#read()` の `for await` が SDK の async generator から `{done:true}` を
+ * 受け取って `finally` へ入り、`this.#query = null` を打つまでに何本かの
+ * `await` を挟む（`#flushSessionUsage()` など）。**`error` イベントが飛ぶ
+ * 時点では、この `finally` はまだ実行されていないことがある**——`stop()` の
+ * `if (this.#query)` 分岐（走行中の蒸留を待つかどうか）は、この窓に居るか
+ * どうかで結果が変わる。
+ *
+ * **壁時計でポーリングしていた頃は、この窓を実時間が黙って埋めていた。**
+ * `waitForTerminal` / `waitFor` が出来事を同期でつかむ形（#1220）になり、
+ * テストの続きがほぼ同じ tick で走るようになったことで、**この窓に入ったまま
+ * 次のコードが動く**ことが実測で確認できた（`packages/core/src/clone.test.ts`
+ * の「受信箱が閉じた後に解除の印が残っていても、受信箱のループを殺さない」が
+ * これを踏んで `Test timed out` になっていた——原因は `stop()` が `#query` を
+ * まだ非 null と見て蒸留を待ち、その間に届いていた次の合図の解除が先に走って
+ * しまい、終端の出来事の数が想定より多くなって最終の `waitForEvents` の述語が
+ * 二度と真にならない、という形）。
+ *
+ * **直し方は「待つ対象そのものを観測する」から外れない。** 壁時計の締め切りを
+ * 足し戻すのではなく、**その窓を作っている非同期の継続そのものを先に進めて
+ * しまう**——`createMemoryStores()` はメモリ上の実装で実 I/O もタイマーも
+ * 使わないので、待っているのは常に microtask の連鎖である。回数は経験的な
+ * 上振れ（実測では数回で足りる）に十分な余裕を持たせてあるだけで、**壁時計の
+ * 締め切りとは種類が違う**——尽きれば `for` を最後まで回すだけで、それ以上
+ * 「諦める」判断も例外も無い（何回目で十分だったかを数えて検査していない）。
+ */
+async function flushPendingMicrotasks(): Promise<void> {
+  for (let i = 0; i < 200; i += 1) await Promise.resolve();
+}
+
+/**
  * premise の**節の目次の行**（`[節id] 見出し — N 文字`）を、いまストアに在る
  * 本文から組み立てる。**焼き込み・載せ直しに実際に載る形そのものである。**
  *
@@ -8934,6 +8979,16 @@ describe('クローン — 枠（利用上限）が閉じたら保持して次�
       const pending = await s.stores.inbox.claimPending();
       return pending.some((p) => p.event.id === first.id);
     }, '一件目が未読として保持される');
+    // **この本が要る場所（#1220 の観測点ずれ）。** 上の2つの待ちは「終端の
+    // 出来事が来たか」「器が未読を覚えたか」しか見ておらず、**`#read()` の
+    // `finally` が `this.#query = null` を打ち終えたか**は見ていない。壁時計の
+    // ポーリングだった頃は、そこへ実時間が経つことで黙って追いついていた
+    // （`flushPendingMicrotasks` の doc に実測を書いた）。追いつく前に
+    // `post(second); stop();` へ進むと、`stop()` が `#query` をまだ非 null と
+    // 見て蒸留を待ち、その間に「二件目」の解除が先に走ってしまう——この本が
+    // 検出したい「受信箱を閉じた後に解除の印が残っている」状況そのものが
+    // 作れなくなる。
+    await flushPendingMicrotasks();
     const terminalsBefore = s.events.filter(isTerminal).length;
 
     // 印を立てて（`post`）、`#pump` が先頭へ戻る前に閉じる（`stop`）。
@@ -10398,7 +10453,6 @@ describe('クローン — 枠が回復した後の返信は、人間の側か�
     await waitForTerminal(firstConnection);
 
     const before = await matchingOutbound();
-    const beforeCount = before.length;
 
     clone.post({
       type: 'timer',
@@ -10411,13 +10465,38 @@ describe('クローン — 枠が回復した後の返信は、人間の側か�
     // （`#emit` の購読者の有無とは無関係に、`#journal`（`packages/core/src/clone.ts`）
     // の journal 書き込みは常に走る）。**これは実際にありうる真の観測**であって、(a) と対になる
     // 別の事実である。
+    //
+    // **⚠️ 「件数が増えた」では足りない（#1220 の観測点ずれ）。** `#reportFailure`
+    // は `#emit(error)` を最初に行い（`waitForTerminal` はここで解決する）、
+    // 人間向けの本文（`humanText`）を組み立てて `#journal` へ書くのは**その後**
+    // ——`#usageBlocked` を読んでから書くこの1行が、まだ完了していない窓が
+    // 実在する。壁時計のポーリングだった頃は、この窓を待つあいだに実時間が
+    // 経ち、黙って埋まっていた。**出来事の到着を同期でつかむ形（`waitForEvents`
+    // 系）に直したことで、この窓が露出した**——`timer` を投げた直後、まだ
+    // 「一件目」自身の held 通知（`いま利用上限に当たっているので……`。文言は
+    // `#reportFailure` の `humanText` 分岐、`#usageBlocked !== null` 側）が
+    // 書き終わっていない状態で `matchingOutbound()` を引くと、**件数の増分**は
+    // その held 通知1件だけで満たされてしまい、再試行そのものの成功
+    // （`わかった`）はまだ1件も書かれていない。実測（2026-09-19）:
+    // `before` が1件・`timer` 投稿直後に「件数が増えた」を満たした時点の新顔が
+    // `いま利用上限に当たっているので、この発言にはまだ返せない。……` だった
+    // （this のブランチが検出する前の一時状態）。
+    //
+    // **直し方は「待つ対象そのものを観測する」のままにする**（#1220 の路線）——
+    // 「件数が増えた」という**間接**の代理指標ではなく、**この歯が本当に
+    // 見たいもの**（再試行の返信そのもの、`text === 'わかった'`）を直接 待つ。
     await waitFor(
-      async () => (await matchingOutbound()).length > beforeCount,
-      '保持していた1本目の再試行の返信が日誌に残る',
+      async () =>
+        (await matchingOutbound()).some(
+          (entry) => entry.text === 'わかった' && !before.some((existing) => existing.id === entry.id),
+        ),
+      '保持していた1本目の再試行の返信（わかった）が日誌に残る',
     );
 
     const after = await matchingOutbound();
-    const newest = after.find((entry) => !before.some((existing) => existing.id === entry.id));
+    const newest = after.find(
+      (entry) => entry.text === 'わかった' && !before.some((existing) => existing.id === entry.id),
+    );
     expect(newest).toBeDefined();
     // **増えた1件が再試行の返信そのものであること**まで見る（否定形だと、枠で
     // 保持していることを人間へ返す1行でも通ってしまう）。偽の SDK の返信は
