@@ -5280,6 +5280,20 @@ class Clone implements CloneHost {
         // 「無い」の種類（届かなかった／畳まれた／そもそも起きなかった）が
         // 区別できなくなる。
         await this.#dropStaleRedelivery(record, { alone });
+        // ⚠️ **`staleBuffer` へ積むのは、この journal 書き込みの直後・他の
+        // どんな早期 return よりも前でなければならない**（issue #903 の
+        // 実装中に見つけた自分のバグ）。すぐ下（数行後）に `#stopped` /
+        // `#inbox.closed` を見る早期 return があり、それは本来
+        // `this.#inbox.push`（live 専用）を守るためのものだが、この積む
+        // 操作をその**後ろ**に置くと、「消した」と日誌へ書いた直後に
+        // `#stopped` が立った回だけ、この record が `staleBuffer` に
+        // 一度も積まれないまま関数が return してしまう——**日誌は「消した」
+        // と言っているのに、どのバッファにも実体が無く、次の起動でも
+        // 拾い直されない**（ストアにはまだ残っているので拾われるはずだが、
+        // 二重に journal だけが増える）という食い違いを作る。**ここに置けば、
+        // 積んだ直後にどこで return しても `flushStaleRemovalBuffer` が
+        // 必ずこの record を含めて片付ける。**
+        staleBuffer.push(record);
       } else {
         // 人間が後から「なぜ二度来たのか」を追えるようにする。**積む前に書く** —
         // 後だと、配り直した合図の本文（人間の発言なら下の `#record`、他の起点
@@ -5369,11 +5383,10 @@ class Clone implements CloneHost {
       //
       // **消し込みはここでは行わない。** `#dropStaleRedelivery`（上で呼び
       // 済み）は跡を書くだけで、実際の `inbox.remove` はもう呼ばない——
-      // `staleBuffer` へ積んで、`#restoreUnreadPass` の末尾（または早期
-      // return の手前）でまとめて `#removeStaleRedeliveryChunk` へ渡す
-      // （issue #903。`RESTORE_STALE_REMOVE_CHUNK_MAX_IDS` の doc）。
+      // 積むのは既に上（journal 書き込みの直後）で済ませてある
+      // （`staleBuffer.push` の doc）。ここは残っている門（`redeliveryGate`）
+      // ・`#inbox.push` を skip するだけの分岐である。
       if (verdict === 'stale') {
-        staleBuffer.push(record);
         continue;
       }
 
