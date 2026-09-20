@@ -2237,6 +2237,105 @@ describe('デーモン再起動後（M4）', () => {
   });
 });
 
+describe('unpushedWork の観測を台帳へ残す（Issue #1228 候補(1)）', () => {
+  /**
+   * **受け入れ基準(a)**（Issue #1228 の叩き台）——`manager_stop`（running・
+   * 非 force）で `unpushedWork` が `branch` を non-null で返した回について、
+   * 器を落とした後に台帳から同じ枝名が引ける。
+   *
+   * `manager_stop` の running 断り自体（`tools.ts`）は `pool.unpushedWork()`
+   * を呼ぶだけなので、ここでは `pool.unpushedWork()` を直接呼ぶ——`tools.ts`
+   * 側は `describeUnpushedWork` で文字列へ描くだけで台帳には触らない
+   * （変わらない）。「器を落とした後」は `pool.stop()`（`#records.clear()`）で
+   * 再現する——job store（`s.stores`）はプロセス内の像とは別に残る、という
+   * 本番の性質（デーモン再起動）をそのまま使う。
+   */
+  it('manager_stop が呼ぶ unpushedWork の枝名は、器を落とした後も台帳から引ける', async () => {
+    const run = promisify(execFile);
+    const dir = await mkdtemp(join(tmpdir(), 'alteroid-manager-unpushed-ledger-'));
+    try {
+      const git = (args: string[]) =>
+        run('git', args, { cwd: dir, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+      await git(['init', '-q', '-b', 'fix/1228-worktree-branch-into-ledger']);
+      await git(['config', 'user.email', 'test@example.com']);
+      await git(['config', 'user.name', 'Test']);
+      await writeFile(join(dir, 'a.txt'), 'first\n');
+      await git(['add', 'a.txt']);
+      await git(['commit', '-q', '-m', 'first']);
+
+      const stores = createMemoryStores();
+      const s = setup(undefined, { stores });
+      const { managerId } = await s.pool.start({ request: '確認', cwd: dir });
+
+      const probe = await s.pool.unpushedWork(managerId);
+      expect(probe.kind).toBe('ok');
+
+      // **器を落とす**（`#records.clear()`。プロセス内の像が消える）。
+      await s.pool.stop();
+
+      // 落とした後も、job store には触っていない——台帳から同じ枝名が引ける。
+      const stored = (await stores.jobs.listJobs()).find((job) => job.id === managerId);
+      expect(stored?.lastUnpushedWorkObservation).toMatchObject({
+        kind: 'observed',
+        cwd: dir,
+        worktrees: [{ relativePath: '.', branch: 'fix/1228-worktree-branch-into-ledger' }],
+      });
+      if (stored?.lastUnpushedWorkObservation?.kind !== 'observed') {
+        throw new Error('unreachable');
+      }
+      expect(typeof stored.lastUnpushedWorkObservation.at).toBe('string');
+
+      // **既存の欄は削れていない・意味も変わっていない**（Issue #1228 の
+      // 「足すだけ」条件）——`cwd` はこの変更より前から在る欄で、そちらも
+      // そのまま読める。
+      expect(stored?.cwd).toBe(dir);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * **受け入れ基準(b)**（Issue #1228 の叩き台）——引けなかった回は「取れ
+   * なかった」と「取りに行っていない」が区別できる。`workspaceLocatorSchema`
+   * の `unknown` + `reason` と同じ形（`kind: 'unavailable'` は「確かめようと
+   * したが取れなかった」ことそのものを名乗り、丸ごと `undefined`（一度も
+   * この分岐を通っていない）とは別の値になる）。
+   *
+   * `swappableRunner()` の fake は `unpushedWork` を実装しない
+   * （`RunnerClient` の任意メソッドなので `undefined`）——`pool.unpushedWork()`
+   * の「この runner はこの口を持たない」枝を踏む、本物に近い「取れなかった」
+   * である（`runner.unpushedWork === undefined` の判定そのものは本番の
+   * `RunnerClient` 実装が任意メソッドを省略したときと同じ形）。
+   */
+  it('取れなかった回は unavailable + reason を残し、一度も呼んでいない回（欄が丸ごと無い）と区別できる', async () => {
+    const fake = swappableRunner('runner-primary');
+    const stores = createMemoryStores();
+    const s = setup(undefined, { stores, runner: fake.runner });
+    const { managerId } = await s.pool.start({ request: '確認' });
+
+    // **まだ unpushedWork を呼んでいない時点**——欄そのものが無い
+    // （＝「取りに行っていない」。Issue #1228 が「残る族」と呼ぶ force:true /
+    // manager_list / 器の入れ替えの写し）。
+    const before = (await stores.jobs.listJobs()).find((job) => job.id === managerId);
+    expect(before?.lastUnpushedWorkObservation).toBeUndefined();
+
+    const probe = await s.pool.unpushedWork(managerId);
+    expect(probe).toMatchObject({ kind: 'unavailable' });
+
+    const after = (await stores.jobs.listJobs()).find((job) => job.id === managerId);
+    expect(after?.lastUnpushedWorkObservation).toMatchObject({
+      kind: 'unavailable',
+      reason: 'この runner はこの口を持たない（古い版、またはテストの偽物）。',
+    });
+    if (after?.lastUnpushedWorkObservation?.kind !== 'unavailable') {
+      throw new Error('unreachable');
+    }
+    expect(typeof after.lastUnpushedWorkObservation.at).toBe('string');
+
+    await s.pool.stop();
+  });
+});
+
 /**
  * 器の入れ替えを再現できる runner。
  *

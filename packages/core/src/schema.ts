@@ -2855,6 +2855,92 @@ export const jobLeaseSchema = z.object({
 
 export type JobLease = z.infer<typeof jobLeaseSchema>;
 
+/**
+ * `manager_stop`（running・非 force）が `pool.unpushedWork()` から取った、
+ * 作業ツリー1本ぶんの枝名の写し（Issue #1228 候補(1)）。
+ *
+ * **`relativePath` / `branch` の意味は `runner-protocol.ts` の
+ * `unpushedWorkTreeSchema` と同一だが、同じ zod スキーマの参照ではない。**
+ * `runner-protocol.ts` は `schema.ts` から `jobStatusSchema` 等を import して
+ * いる（`grep -Fn -- "from './schema.js'" packages/core/src/runner-protocol.ts`
+ * で当たる）ので、逆向きの import（ここから `unpushedWorkTreeSchema` を
+ * 引く）は循環参照になる。**だから形だけを独立して複製する。** 複製が
+ * 二重管理の実害を生むとしても、この2欄（`relativePath` / `branch`）が
+ * 単体で変わることはまず無いと判断した——変えるなら両方を見比べながら
+ * 直すこと。
+ *
+ * 出してよい範囲（有無・件数・枝名まで。ファイル名・差分の中身・
+ * コミットメッセージ・author は含まない）は `unpushedWorkTreeSchema` の doc
+ * が引いた線をそのまま継ぐ——ここは既に線の内側に在る値を運ぶだけで、
+ * 新しい調べものはしない。
+ */
+export const observedWorktreeBranchSchema = z.object({
+  /** 探索の起点（`unpushedWorkResultSchema.cwd`）からの相対パス。 */
+  relativePath: z.string(),
+  /** いまの枝名。detached HEAD、または確かめられなかったときは `null`。 */
+  branch: z.string().nullable(),
+});
+
+export type ObservedWorktreeBranch = z.infer<typeof observedWorktreeBranchSchema>;
+
+/**
+ * `manager_stop`（running・非 force）が取った未 push の作業ツリーの観測の
+ * 最後の1回（Issue #1228 候補(1)）。
+ *
+ * ## なぜ足すか
+ *
+ * `unpushedWorkTreeSchema.branch`（`runner-protocol.ts`）は `manager_stop` の
+ * 断り文（`tools.ts` の `describeUnpushedWork`）へ文字列として描かれるだけで、
+ * 台帳には一度も残らない——器が消えると、どの枝を見ればよいかの鍵が器の側に
+ * 0になる、という Issue #1228 の指摘そのものを埋める。**新しい能力は足さない
+ * ——既に取れている値を捨てずに残すだけである。**
+ *
+ * ## `unavailable` の意味（`workspaceLocatorSchema` の `unknown` + `reason` と
+ * 同じ形）
+ *
+ * `kind: 'unavailable'` は「確かめようとしたが取れなかった」ことそのものを
+ * 名乗る。**この欄が丸ごと `undefined`（一度もこの分岐を通っていない）と、
+ * `kind: 'unavailable'`（通ったが取れなかった）を混ぜないこと**
+ * （AGENTS.md「取れない軸に0の行を作る」の処方。`ManagerPool.unpushedWork()`
+ * の戻り値である `ManagerUnpushedWork` の `kind: 'unavailable'` をそのまま写す）。
+ *
+ * ## 残る族（⛔ この欄が更新されない回）
+ *
+ * 更新するのは `manager_stop`（`before.status === 'running' &&
+ * force !== true`）の分岐が `pool.unpushedWork()` を呼んだ回だけである。
+ * **`force: true` で止めたとき・`manager_list`・器の入れ替え（redeploy・
+ * 枠落ちでセッションを失う経路）では、この欄は一度も更新されない**——
+ * `unpushedWork()` の唯一の呼び出し元がその分岐にしか無いため（Issue #1228
+ * §2。`grep -rn 'unpushedWork' --include=*.ts packages/ apps/` で当たる）。
+ * **この欄が在ることを「常に最新の枝が分かる」とは読まないこと。**
+ *
+ * ## 答えないこと
+ *
+ * この欄が答えるのは「どこ（どの枝）を見ればよいか」までである。**「成果が
+ * 届いたか」（push 済みか・PR が在るか）は含まない**——それは `git ls-remote`
+ * / `gh pr list` の側の答えであって、この欄の役割ではない。
+ */
+export const lastUnpushedWorkObservationSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('observed'),
+    /** 観測した時刻。 */
+    at: isoDateTime,
+    /** 探索の起点（`unpushedWorkResultSchema.cwd` の写し）。 */
+    cwd: z.string(),
+    /** 見つかった作業ツリーぶんの枝名。0本のこともある。 */
+    worktrees: z.array(observedWorktreeBranchSchema),
+  }),
+  z.object({
+    kind: z.literal('unavailable'),
+    /** 確かめようとした時刻。 */
+    at: isoDateTime,
+    /** 取れなかった理由（`ManagerUnpushedWork` の `reason` の写し）。 */
+    reason: z.string(),
+  }),
+]);
+
+export type LastUnpushedWorkObservation = z.infer<typeof lastUnpushedWorkObservationSchema>;
+
 export const jobSchema = z.object({
   id: z.string(),
   createdAt: isoDateTime,
@@ -3230,6 +3316,12 @@ export const jobSchema = z.object({
    * ない」という同じ結論になるためである。
    */
   usageStoppedAt: isoDateTime.optional(),
+  /**
+   * `manager_stop`（running・非 force）が最後に取った、未 push の作業ツリーの
+   * 枝名の観測（Issue #1228 候補(1)）。詳しい意味・残る族・答えないことは
+   * {@link lastUnpushedWorkObservationSchema} の doc を見よ。
+   */
+  lastUnpushedWorkObservation: lastUnpushedWorkObservationSchema.optional(),
 });
 
 export type Job = z.infer<typeof jobSchema>;

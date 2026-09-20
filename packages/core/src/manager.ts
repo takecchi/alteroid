@@ -59,6 +59,7 @@ import type {
   Job,
   JobStatus,
   JournalEntryInput,
+  LastUnpushedWorkObservation,
   TextMarkup,
   WorkspaceLocator,
 } from './schema.js';
@@ -4675,10 +4676,30 @@ class Pool implements ManagerPool {
     // ときは常に走行中なので像が在るはずだが、念のため無ければ「確かめられ
     // なかった」を返す（台帳まで降りて再構築するほどの用途ではない——
     // `transcript()` と違ってここは可観測性の最下段ではない）。
+    //
+    // **この早期 return では台帳へ書かない**（Issue #1228 候補(1)）。書き込む
+    // 相手（`record.job`）が手元に無いためで、`ManagerRecord` を介さずに
+    // job store から作り直してまで書く費用は釣り合わないと判断した——
+    // このケースは `manager_stop` が `before.status === 'running'` を確かめた
+    // 直後に起きる、`#records` が既に消えている稀な競合であって、Issue が
+    // 挙げた「force / manager_list / 器の入れ替えでは呼ばれない」という
+    // 既知の残る族とは別の、未測定の隙間である（PR 本文の「測っていないこと」
+    // を見よ）。
     const record = this.#records.get(managerId);
     if (record === undefined) {
       return { kind: 'unavailable', reason: 'この委譲はいま像を持っていない（走行中ではない）。' };
     }
+    const outcome = await this.#probeUnpushedWork(managerId, record, options);
+    await this.#recordUnpushedWorkObservation(record, outcome);
+    return outcome;
+  }
+
+  /** `unpushedWork()` の実際の調べもの（台帳への書き込みは呼び出し元が持つ）。 */
+  async #probeUnpushedWork(
+    managerId: string,
+    record: ManagerRecord,
+    options?: { signal?: AbortSignal },
+  ): Promise<ManagerUnpushedWork> {
     const runner = await this.#runnerOf(record);
     if (runner === null) {
       return { kind: 'unavailable', reason: '宛先の runner がいま開いていない。' };
@@ -4701,6 +4722,45 @@ class Pool implements ManagerPool {
     } catch (error) {
       return { kind: 'unavailable', reason: `runner への問い合わせが失敗した: ${String(error)}` };
     }
+  }
+
+  /**
+   * `unpushedWork()` が取った値を台帳（`job.lastUnpushedWorkObservation`）へ
+   * 残す（Issue #1228 候補(1)）。
+   *
+   * **既存の欄へは1文字も触れない。** `record.job.xxx = …; await this.#persist(record);`
+   * という既存の書き方（`case 'archive'` 等）をそのままなぞる——新しい書き込み
+   * 経路を作らない。
+   *
+   * ⛔ **ここが呼ばれるのは `unpushedWork()` の唯一の呼び出し元
+   * （`manager_stop` の running・非 force 断り。`tools.ts`）が `pool.unpushedWork()`
+   * を呼んだ回だけである。** `force: true` で止めたとき・`manager_list`・
+   * 器の入れ替え（redeploy・枠落ち）は `unpushedWork()` 自体を呼ばないので、
+   * この関数にも来ない——その族はこの変更では1本も拾わない
+   * （`lastUnpushedWorkObservationSchema` の doc「残る族」と同じ注意）。
+   */
+  async #recordUnpushedWorkObservation(
+    record: ManagerRecord,
+    outcome: ManagerUnpushedWork,
+  ): Promise<void> {
+    const at = new Date(this.#now()).toISOString();
+    const observation: LastUnpushedWorkObservation =
+      outcome.kind === 'ok'
+        ? {
+            kind: 'observed',
+            at,
+            cwd: outcome.result.cwd,
+            // **出してよい範囲を継ぐ**（`observedWorktreeBranchSchema` の doc）。
+            // `unpushedCommitCount` 等は書き写さない——この欄が答えるのは
+            // 「どの枝を見ればよいか」までである。
+            worktrees: outcome.result.worktrees.map((worktree) => ({
+              relativePath: worktree.relativePath,
+              branch: worktree.branch,
+            })),
+          }
+        : { kind: 'unavailable', at, reason: outcome.reason };
+    record.job.lastUnpushedWorkObservation = observation;
+    await this.#persist(record);
   }
 
   runningManagerOwning(archiveId: string): string | undefined {
