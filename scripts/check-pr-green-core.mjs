@@ -93,6 +93,77 @@ export function pickLatestRunPerWorkflow(runs) {
 }
 
 /**
+ * `actions/runs?head_sha=` の応答から、判定に含める run を `event` で絞る
+ * （Issue #1207 の (3) の自己参照バグの修正）。
+ *
+ * ## なぜこれが要るか
+ *
+ * `head_sha` だけで `actions/runs` を引くと、**その sha を名乗るあらゆる
+ * event の run が一緒に返る。** `main` の直近コミットに対しては、`push`
+ * （`ci.yml`）だけでなく `schedule` / `workflow_dispatch`
+ * （`release-prod.yml` 自身・`update-claude-sdk.yml`）や `workflow_run`
+ * （`main-ci-alarm.yml`）の run も同じ head_sha を名乗る——`schedule` /
+ * `workflow_dispatch` の run は「そのとき指しているデフォルトブランチの
+ * 先端」を `head_sha` として持つためである。
+ *
+ * `record-release-prod-ci.mjs` はこの `judgeSha` を**反映を行っている
+ * `release-prod.yml` 自身のジョブの中から**呼ぶ。⟹ 絞らずに呼ぶと、
+ * `pickLatestRunPerWorkflow` が拾う「release/prod へ反映」という名前の
+ * run の中に**呼び出し元自身の run**が含まれ、その run はまだ
+ * `in_progress`（記録 step が動いている真っ最中なので当然完了していない）
+ * ——`evaluatePrGreen` の「未完了の run が1本でもあれば `pending`」に
+ * 引っかかり、**実行するたびに自分自身を理由に `pending` を返す。**
+ * 実測（2026-09-19T21:28:57Z 観測、run `35470533724`、sha
+ * `fa9ec3e380fbe9dad8a3d1ad3e6c43c0639d5cb6`）:
+ *
+ * ```
+ * release-prod-ci-record: verdict=pending prod_sha=fa9ec3e3... main_sha=fa9ec3e3... reflect=success
+ * check-pr-green(fa9ec3e3...): 保留 —— まだ完了していない run が在る
+ *   release/prod へ反映 (run 35470533724) は status=in_progress でまだ終わっていない
+ * ```
+ *
+ * ⟹ 「まだ終わっていない run」は、このログを出している run 自身であり、
+ * この形は**毎晩100%再現する**（`release-prod.yml` が走るたびに、自分の
+ * run が必ず自分の head_sha に載るため）。
+ *
+ * ## なぜ「自分の run id だけを除く」では足りないか
+ *
+ * `GITHUB_RUN_ID` で自分の run 1本だけを弾く案は、**前夜の
+ * `workflow_dispatch`（本番をいま確かめたい等で手動起動した反映）が同じ
+ * sha に残っている**場合に、自分ではない別の「release/prod へ反映」の run
+ * （これも `schedule`/`workflow_dispatch` なので判定に無関係）が判定へ
+ * 混ざる穴を残す。**「どの run を除くか」ではなく「そもそもどの event の
+ * run を見るか」を絞る**のがこの穴を構造的に塞ぐ唯一の形である。
+ *
+ * ## なぜ `event=push` に絞るか
+ *
+ * 判定したいのは「その sha の `main` の CI」であって「その sha に紐づく
+ * 全部の run」ではない。`main` への push で実際に起動する workflow は
+ * `ci.yml`（`on: push: branches: [main]`）だけであり（他はすべて
+ * `pull_request` / `schedule` / `workflow_dispatch` / `workflow_run`）、
+ * `event=push` に絞ればこれ以外は構造的に外れる——`release-prod.yml`
+ * （schedule/workflow_dispatch）も `main-ci-alarm.yml`（workflow_run）も
+ * `update-claude-sdk.yml`（schedule/workflow_dispatch）も、event が
+ * 一致しないので最初から候補に入らない。
+ *
+ * ## 既定は絞らない
+ *
+ * `events` を渡さない（`undefined` / `null`）呼び出しは**この関数を通っても
+ * 1件も落とさない**——`scripts/check-pr-green.mjs` の CLI や他の既存の
+ * 呼び出し元の挙動を1ミリも変えないため。絞り込みを使うのは、絞る理由を
+ * 持つ呼び出し元（`record-release-prod-ci.mjs`）だけである。
+ *
+ * @param {{event?: string}[]} runs
+ * @param {string[] | undefined | null} events 許可する event の一覧（例: `['push']`）。
+ *   省略時は絞らない。
+ */
+export function filterRunsByEvent(runs, events) {
+  if (events === undefined || events === null) return runs;
+  const allowed = new Set(events);
+  return runs.filter((run) => allowed.has(run.event));
+}
+
+/**
  * 選んだ最新 run 群と、それぞれの jobs から、この sha の CI が緑と言えるかを
  * 判定する。**8値で答える**（`green` / `red` / `cancelled` / `out-of-scope` /
  * `skipped` / `pending` / `unmeasurable` / `no-runs`）。2値にすると「まだ

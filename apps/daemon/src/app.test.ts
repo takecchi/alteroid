@@ -6557,6 +6557,7 @@ describe('認証が無効な既定構成では /access も /tokens も今日ど�
       lastLoginAt: null,
       grantedAt: null,
       grantedBy: null,
+      ownerDeclaredAt: null,
     });
 
     expect((await passthrough.request('/tokens')).status).toBe(200);

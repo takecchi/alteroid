@@ -32,6 +32,14 @@ interface AccountView {
   lastLoginAt: string | null;
   grantedAt: string | null;
   granted: boolean;
+  /**
+   * 実行環境の持ち主として宣言された日時（issue #1198）。`null` なら未宣言。
+   * 立てる／解くのは `alteroid access owner <id>` / `--revoke`
+   * （`POST /access/:accountId/owner` / `.../owner/revoke`。`requireOperator`
+   * で非伝播——許可されたアカウントからは叩けない）。宣言済みなら
+   * `alteroid credential set` / `alteroid reset` が通る（`requireOwner`）。
+   */
+  ownerDeclaredAt: string | null;
   identities: { provider: string; email: string | null; lastLoginAt: string }[];
 }
 
@@ -46,7 +54,12 @@ export async function accessListCommand(): Promise<void> {
 
   for (const account of accounts) {
     const name = account.email ?? account.displayName ?? '(名前なし)';
-    stdout.write(`${account.granted ? '[許可]' : '[未許可]'} ${name}\n`);
+    // **宣言済みかどうかの印を足す**（issue #1198）。`[owner]` は
+    // `ownerDeclaredAt !== null` のときだけ——`granted` とは独立の印である
+    // （宣言は許可の上位互換ではなく別の資格なので、`[許可]` の隣に並べる）。
+    stdout.write(
+      `${account.granted ? '[許可]' : '[未許可]'}${account.ownerDeclaredAt !== null ? '[owner]' : ''} ${name}\n`,
+    );
     stdout.write(`  id: ${account.id}\n`);
     // **作成（`createdAt`）を足す。** `AccountView` は元から持っていて（型に
     // 在る）、ここが出していなかっただけである（#214）。`createdAt` は必須
@@ -61,6 +74,11 @@ export async function accessListCommand(): Promise<void> {
     if (via.length > 0) stdout.write(`  ログイン手段: ${via}\n`);
     if (account.lastLoginAt !== null) stdout.write(`  最終ログイン: ${account.lastLoginAt}\n`);
     if (account.grantedAt !== null) stdout.write(`  許可した日時: ${account.grantedAt}\n`);
+    stdout.write(
+      `  実行環境の持ち主として宣言: ${
+        account.ownerDeclaredAt === null ? '（未宣言）' : account.ownerDeclaredAt
+      }\n`,
+    );
     stdout.write('\n');
   }
 
@@ -91,6 +109,41 @@ export async function accessRevokeCommand(accountId: string): Promise<void> {
   // 発行済みトークンは消していないが、許可はリクエストごとに見ているので即座に
   // 通らなくなる。消し忘れたトークンが生き残らないのが要点。
   stdout.write('（発行済みのトークンは、この時点から通らなくなります）\n');
+}
+
+/**
+ * 実行環境の持ち主として宣言する／取り消す（issue #1198。本来の形）。
+ *
+ * **`POST /access/:accountId/owner`（宣言）/ `.../owner/revoke`（取り消し）
+ * は `requireOperator`。** `grant` / `revoke` とは違い、許可されたアカウントの
+ * トークンでは叩けない——旗を立てられる者を常にホストへ到達できる者へ限る
+ * ことが「伝播しない」という性質そのものである（`apps/daemon/src/app.ts` の
+ * `requireOwner` の doc）。だからここを実行するのは、デーモンが動いている
+ * のと同じ環境（`docker compose exec app …`）だけである。
+ *
+ * 宣言できるのは対象のアカウントが**既に許可済み**のときだけ——未許可なら
+ * サーバが 409 を返す（`AuthStore.setAccountOwner` の doc）。
+ */
+export async function accessOwnerCommand(
+  accountId: string,
+  options: { revoke?: boolean } = {},
+): Promise<void> {
+  const target = await resolveTarget();
+  const path =
+    options.revoke === true
+      ? `/access/${encodeURIComponent(accountId)}/owner/revoke`
+      : `/access/${encodeURIComponent(accountId)}/owner`;
+  const { account } = (await request(target, path, { method: 'POST' })) as {
+    account: AccountView;
+  };
+  const name = account.email ?? account.displayName ?? account.id;
+  if (options.revoke === true) {
+    stdout.write(`実行環境の持ち主としての宣言を取り消しました: ${name}\n`);
+    stdout.write('（これで alteroid credential set / alteroid reset は通らなくなります）\n');
+    return;
+  }
+  stdout.write(`実行環境の持ち主として宣言しました: ${name}\n`);
+  stdout.write('（これで alteroid credential set / alteroid reset が通ります）\n');
 }
 
 async function request(target: Target, path: string, init: RequestInit = {}): Promise<unknown> {

@@ -280,3 +280,82 @@ function tag(value: string): string {
 function size(text: string, name: string): string {
   return `${name}.chars=${text.length}`;
 }
+
+/**
+ * 1ターンぶんの入力（断り書き8本＋本文）を、モデルへ渡す1つの文字列へ畳む。
+ *
+ * **この関数が持っているのは並び順だけである。** 8本それぞれを「作るか / 何と
+ * 書くか / 空にするか」は呼び出し側（`clone.ts` の `#runTurn`）に在り、ここは
+ * 受け取った文字列を決まった順に連ねるだけの純粋関数である。
+ *
+ * ## なぜ並び順をここへ持たせるか
+ *
+ * **8本は寿命が3種類に分かれていて、同じ式の中で交差している**（Issue #1190）。
+ *
+ * | 種類 | 本数 | 何が起きるか |
+ * | --- | ---: | --- |
+ * | **消費する読み** | 2 | `distillGap` / `contextWindowFold` は、**読むこと自体が遷移**（`Clone` 側で pending を倒す） |
+ * | **1反復ぶんの控え** | 6 | `#pump` が束を決めた直後に代入し、同じ反復の `finally` で空へ戻す |
+ * | 本文 | 1 | `body` |
+ *
+ * ⟹ 並び順だけを切り出しても**この3種類は混ざったままである。**ここへ移したのは
+ * 「どれを先に置くか」の規則であって、寿命の設計ではない。**寿命を分けるのは別の
+ * 変更になる**（Issue #1190 の案A）。
+ *
+ * ## 並びの規則（`redelivery` 以降の5本が2組に分かれる）
+ *
+ * - **鮮度・切り方の組**: `redelivery` → `superseded` → `validity` →
+ *   `mergedBatchTruncation`。**いま配られているこの束**が、どれだけ配り直された
+ *   ものか・後から上書きされていないか・名乗った前提がまだ生きているか・上限で
+ *   切られたか。
+ * - **全体の状態の組**: `commitment` → `situation`。**束とは無関係に**、未了が
+ *   何件あるか・全体がいまどうなっているか。
+ *
+ * **規則が違うものを同じ場所に置かない。**この2組を混ぜると、読み手は「この束の
+ * 話」と「全体の話」を区別できなくなる。
+ *
+ * ⚠️ **空文字は「無い」であって「取れなかった」ではない。** 取れなかった側は
+ * 呼び出し側が文言を入れて渡す（`situation.ts` の `describeSituationUnavailable`、
+ * `superseded.ts` の `uncountable`）。**ここで 0 件と欠測を混ぜない。**
+ */
+export function composeTurnInputText(input: TurnInputText): string {
+  return (
+    input.distillGap +
+    input.contextWindowFold +
+    input.redelivery +
+    input.superseded +
+    input.validity +
+    input.mergedBatchTruncation +
+    input.commitment +
+    input.situation +
+    input.body
+  );
+}
+
+/**
+ * `composeTurnInputText` の材料。
+ *
+ * **全部 `string` で、省略できるものは1つも無い。** 任意にすると「渡し忘れ」と
+ * 「今回は空」が呼び出し側から区別できなくなり、断り書きが1本だけ静かに消える
+ * 形が作れてしまう（`Clone` 側は反復ごとに6本を空へ戻すので、空は正常な値である）。
+ */
+export interface TurnInputText {
+  /** 蒸留が間に合わなかった区間の断り書き。**消費する読み**（呼ぶと pending が倒れる）。 */
+  readonly distillGap: string;
+  /** 直前のターンが文脈窓に当たって開き直したことの断り書き。**消費する読み**。 */
+  readonly contextWindowFold: string;
+  /** いま配られている束が配り直しであることの断り書き。 */
+  readonly redelivery: string;
+  /** その束の報告が後続に上書きされていることの断り書き。 */
+  readonly superseded: string;
+  /** その束の合図が名乗った前提がまだ生きているかの断り書き。 */
+  readonly validity: string;
+  /** まとめ読みが上限で切られたことの断り書き。 */
+  readonly mergedBatchTruncation: string;
+  /** 未了の台帳の断り書き（束とは無関係な全体の状態）。 */
+  readonly commitment: string;
+  /** いまの全体の状況の断り書き（同上）。 */
+  readonly situation: string;
+  /** ターンの本文。**必ず最後に置く。** */
+  readonly body: string;
+}

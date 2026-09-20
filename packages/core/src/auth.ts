@@ -62,6 +62,19 @@ export const authAccountSchema = z.object({
    * **固定値を書かないこと。** ここが常に同じ値なら、この欄は情報を運ばない。
    */
   grantedBy: z.string().nullable(),
+  /**
+   * **実行環境の持ち主として宣言されたのはいつか。**（issue #1198）
+   *
+   * `null` なら誰も owner ではない。**立てられるのは operator トークンだけ**
+   * （`AuthStore.setAccountOwner`）。`grantedBy === 'operator'`（旧
+   * `isAccountGrantedByOperator` の近似）とは独立に持つ — 許可した事実と、
+   * 持ち主本人であると宣言された事実は別のことである。
+   *
+   * **`.default(null)` は必須である。** 既存の fs の JSON にはこの鍵が無い。
+   * 無ければ `authAccountSchema.parse` が失敗し、起動できなくなる —— 新しい
+   * 欄を足すたびに、既存データがその欄を持たないことを既定値で吸収する。
+   */
+  ownerDeclaredAt: isoDateTime.nullable().default(null),
 });
 
 /**
@@ -218,10 +231,33 @@ export interface AuthStore {
    * 勝たせ、後から来た側にはその結果を返す。
    */
   grantAccess(accountId: string, at: string, by: string): Promise<GrantOutcome>;
+
+  /**
+   * この account を「実行環境の持ち主として宣言された」状態にする、または解く（1操作）。
+   *
+   * **不変条件「宣言 ⟹ 許可済み」はここで強制する。** `declaredAt !== null` で
+   * 呼ぶのに行が未許可（`grantedAt === null`）なら `not_granted` を返し、何も
+   * 書かない。**「読む → 検査 → 書く」に割ってはいけない** — 割ると、検査と
+   * 書き込みの間に許可が取り消された行へ宣言が乗る窓ができる（`.claude/skills/
+   * auth-and-access/SKILL.md`「不変条件はストアの1操作に閉じること。ここは
+   * 同じ失敗を3度踏んでいる場所である」）。
+   *
+   * **取り消し（`declaredAt === null`）は行が在れば常に通る。** 許可を取り消した
+   * 後に宣言だけを取り消す（`AuthService.revoke` が両方を落とす）ケースがあるので、
+   * 取り消し側に「許可済みであること」は要求しない。
+   *
+   * ドライバはそれぞれの器で強制する — fs は既存のロック区間の内側、pg は
+   * `where granted_at is not null` を伴う条件付き UPDATE。
+   */
+  setAccountOwner(accountId: string, declaredAt: string | null): Promise<OwnerOutcome>;
 }
 
 /** 許可の付与の結果。 */
 export type GrantOutcome = { status: 'granted'; account: AuthAccount } | { status: 'not_found' };
+
+/** `setAccountOwner` の結果。 */
+export type OwnerOutcome =
+  { status: 'ok'; account: AuthAccount } | { status: 'not_found' } | { status: 'not_granted' };
 
 // ---------------------------------------------------------------------------
 // 乱数・ハッシュ
@@ -278,6 +314,27 @@ export function decodeState(state: string): { requestId: string; nonce: string }
 
 export function isAccountGranted(account: AuthAccount): boolean {
   return account.grantedAt !== null;
+}
+
+/**
+ * **実行環境の持ち主として宣言されたアカウントか。**（issue #1198。本来の形）
+ *
+ * `ownerDeclaredAt` は operator トークンだけが立てられる（`AuthStore.
+ * setAccountOwner`）ので、真になるのは「ホストのファイルを読める者が明示的に
+ * 宣言した」ときだけである。**旧 `isAccountGrantedByOperator`（`grantedBy ===
+ * 'operator'` による近似。#1195 の PR #1199 が採った形）はここで置き換える** —
+ * あちらは「端末から直に許可した」という別の事実からの推測で、宣言していない
+ * 相手をここが見ることはない。
+ *
+ * **許可が外れていないことも見る。** `AuthStore.setAccountOwner` は未許可の行に
+ * 宣言を立てさせないが、`AuthService.revoke` は許可の取り消しと同時に
+ * `ownerDeclaredAt` も `null` に落とすため、実際には「宣言はあるが未許可」の
+ * 行は生まれない。**それでもここで両方見るのは、その不変条件が崩れた日に
+ * 資格の側が緩まないようにするためである** —— 守りは、守られている前提が
+ * 壊れたときにこそ要る。
+ */
+export function isDeclaredOwner(account: AuthAccount): boolean {
+  return isAccountGranted(account) && account.ownerDeclaredAt !== null;
 }
 
 export function isAccessTokenUsable(token: AccessTokenRecord, now: Date): boolean {

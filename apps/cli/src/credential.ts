@@ -247,32 +247,46 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
   if (!response.ok) {
     if (response.status === 403) {
       /**
-       * **`PUT /credentials` は実行環境の持ち主だけである**（`PUT /profile` と
-       * 同じ強さ。任意の名前で任意の値を、これから起こすマネージャーの環境へ
-       * 永続的に置ける口だから）。
+       * **`PUT /credentials` は宣言済み owner だけである**（`requireOwner`。任意の
+       * 名前で任意の値を、これから起こすマネージャーの環境へ永続的に置ける口
+       * だから）。
        *
-       * **403 は「持ち主でない」以外の理由でも返る**（ログイン済みだが未 grant）。
-       * 本文を見ずに固定の文言を出すと、`access grant` で直る人へ「器の中で
-       * 実行しろ」と案内してしまう（`apps/cli/src/token.ts` の同じ分岐と同じ
-       * 理由）。
+       * **⚠️ 2026-09-18、`requireOwner`（issue #1198。本来の形）へ置き換えた。**
+       * 2026-09-17〜18 の間は「持ち主が端末から直に許可したアカウント」
+       * （`grantedBy === 'operator'`）の近似（issue #1195）で通していたが、いまは
+       * `ownerDeclaredAt` の宣言を見る——立てるのは `alteroid access owner <id>`
+       * （`POST /access/:accountId/owner`。`requireOperator` で非伝播）。
+       *
+       * **この経路の門は `requireOwner` であって `requireOperator` ではない**
+       * （`apps/daemon/src/app.ts` の配線）ので、この 403 が `not_operator` の
+       * 本文で返ることは無い——`authenticate` を通った時点で principal は
+       * operator か許可済みアカウントのどちらかであり、operator なら
+       * `requireOwner` は常に通す。それでも `forbiddenKindOf` の判定はデーモンの
+       * 応答だけを見て機械的に行い、ここで「来ないはず」を前提に分岐を省略しない
+       * ——来た場合は `unknown` と同じ扱いにして、当てずっぽうの案内を出さない。
+       *
+       * **403 は「未宣言」以外の理由でも返る**（ログイン済みだが未 grant。
+       * `authenticate` の側）。本文を見ずに固定の文言を出すと、`access grant`
+       * で直る人へ「`access owner` を打て」と案内してしまう
+       * （`apps/cli/src/token.ts` の同じ分岐と同じ理由）。
        */
       const body = await response.json().catch(() => ({}));
       const kind = forbiddenKindOf(body);
-      if (kind === 'not_operator') {
+      if (kind === 'not_declared_owner') {
         throw new Error(
-          'マネージャーへ降ろす環境変数を置けるのは、その実行環境の持ち主だけです。\n' +
-            'デーモンが動いているのと同じ環境で実行してください:\n' +
-            '  docker compose exec app alteroid credential list\n',
+          describeAuthFailure(403, target, kind) ??
+            '実行環境の持ち主として宣言されたアカウントだけが操作できます。',
         );
       }
       if (kind === 'not_granted') {
         throw new Error(
-          describeAuthFailure(403, target) ??
+          describeAuthFailure(403, target, kind) ??
             'このアカウントには alteroid を使う許可がありません。',
         );
       }
-      // **どちらの理由か判別できない。** 「器の中で実行しろ」と「access grant
-      // しろ」は解決策が正反対なので、当てずっぽうを出さずに止める。
+      // `not_operator`（この経路では実際には来ない）と `unknown` は、どちらの
+      // 手順で直るか判別できない場合として同じに扱う。当てずっぽうを出さずに
+      // 止める（`target.ts` の `ForbiddenKind` の doc）。
       throw new Error(
         'マネージャーへ降ろす環境変数へのアクセスが拒否されました（403）。' +
           '理由を判別できなかったため、次にすべきことは案内しません。',

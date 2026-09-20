@@ -151,6 +151,11 @@ const accountViewSchema = z.object({
    * 許可を与えたアカウントの id**（2026-09-06 の同格化以降）。
    */
   grantedBy: z.string().nullable(),
+  /**
+   * 実行環境の持ち主として宣言された日時（issue #1198）。`null` なら誰も owner
+   * ではない。立てられるのは operator トークンだけ（`POST /access/:accountId/owner`）。
+   */
+  ownerDeclaredAt: isoDateTimeSchema.nullable(),
 });
 
 export const authProvidersResponseSchema = z.object({

@@ -11,8 +11,9 @@ import type {
   AuthStore,
   GrantOutcome,
   LoginRequest,
+  OwnerOutcome,
 } from '@alteroid/core';
-import { and, asc, eq, isNull, lt, sql } from 'drizzle-orm';
+import { and, asc, eq, isNotNull, isNull, lt, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { stripNulls, toIso } from './db.js';
@@ -80,6 +81,7 @@ export class PgAuthStore implements AuthStore {
       lastLoginAt: optionalDate(value.lastLoginAt),
       grantedAt: optionalDate(value.grantedAt),
       grantedBy: value.grantedBy,
+      ownerDeclaredAt: optionalDate(value.ownerDeclaredAt),
     };
     await this.#db
       .insert(authAccounts)
@@ -297,6 +299,42 @@ export class PgAuthStore implements AuthStore {
     return { status: 'granted', account: this.#toAccount(row) };
   }
 
+  /**
+   * この account を「実行環境の持ち主として宣言された」状態にする、または解く
+   * （issue #1198）。
+   *
+   * **不変条件「宣言 ⟹ 許可済み」は条件付き UPDATE（`granted_at is not null`）
+   * そのもので強制する** —— 「読む→検査→書く」に割ると、検査と書き込みの間に
+   * 許可が取り消される窓ができる。**取り消し（`declaredAt === null`）はこの
+   * 条件を付けない** —— 許可が取り消された後に宣言だけを取り消す
+   * （`AuthService.revoke` が両方を落とす）経路があるため。
+   */
+  async setAccountOwner(accountId: string, declaredAt: string | null): Promise<OwnerOutcome> {
+    if (declaredAt === null) {
+      const rows = await this.#db
+        .update(authAccounts)
+        .set({ ownerDeclaredAt: null })
+        .where(eq(authAccounts.id, accountId))
+        .returning();
+      const row = rows[0];
+      return row === undefined
+        ? { status: 'not_found' }
+        : { status: 'ok', account: this.#toAccount(row) };
+    }
+
+    const rows = await this.#db
+      .update(authAccounts)
+      .set({ ownerDeclaredAt: new Date(declaredAt) })
+      .where(and(eq(authAccounts.id, accountId), isNotNull(authAccounts.grantedAt)))
+      .returning();
+    const row = rows[0];
+    if (row !== undefined) return { status: 'ok', account: this.#toAccount(row) };
+
+    // 更新できなかった。行そのものが無いのか、未許可なのかを分けて返す。
+    const account = await this.getAccount(accountId);
+    return account === null ? { status: 'not_found' } : { status: 'not_granted' };
+  }
+
   #toAccount(row: typeof authAccounts.$inferSelect): AuthAccount {
     return {
       id: row.id,
@@ -306,6 +344,7 @@ export class PgAuthStore implements AuthStore {
       lastLoginAt: optionalIso(row.lastLoginAt),
       grantedAt: optionalIso(row.grantedAt),
       grantedBy: row.grantedBy,
+      ownerDeclaredAt: optionalIso(row.ownerDeclaredAt),
     };
   }
 

@@ -21,6 +21,7 @@ import type {
   EnvVarScope,
   InboxEventType,
   InboxRemoveManyResult,
+  TokenRotationSettings,
 } from '~/lib/types';
 
 import { isKeyOfType, KEY } from './queries';
@@ -490,15 +491,61 @@ export function useResetWorkspace() {
 }
 
 /**
+ * 実行環境の持ち主として宣言する／取り消す（`POST /access/:id/owner`
+ * `.../owner/revoke`。issue #1198）。
+ *
+ * **`requireOperator`。** ブラウザは構造的に operator になれない
+ * （`apps/daemon/src/app.ts` の `requireOwner` の doc の「なぜ `requireOperator`
+ * と分けるのか」）ので、**Web UI から呼ぶと常に 403 になる。** それでもボタンを
+ * 出す理由は `routes/access.tsx` の doc にある（`env-vars.tsx` `settings.tsx` と
+ * 同じ「ボタンは隠さない」方針——押せない理由を消さず、端末で打つコマンドを
+ * 案内する）。
+ *
+ * `body: {}` の理由は `useRunSchedule` と同じ（spec が本文を必須にしている。
+ * デーモンの門番 `deliberateClient` が `content-type: application/json` を要求する）。
+ */
+export function useDeclareOwner() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (accountId: string) => {
+      const result = await api.api
+        .POST('/access/{accountId}/owner', { params: { path: { accountId } }, body: {} })
+        .then(unwrap);
+      await mutate(KEY.access);
+      return result;
+    },
+    [api, mutate],
+  );
+}
+
+/** 実行環境の持ち主としての宣言を取り消す（`useDeclareOwner` と対）。 */
+export function useRevokeOwnerDeclaration() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (accountId: string) => {
+      const result = await api.api
+        .POST('/access/{accountId}/owner/revoke', { params: { path: { accountId } }, body: {} })
+        .then(unwrap);
+      await mutate(KEY.access);
+      return result;
+    },
+    [api, mutate],
+  );
+}
+
+/**
  * 環境変数を1つ置く（`PUT /credentials`）。
  *
  * **`scope`・`secret` は新規行にのみ渡す意味を持つ**（既存行を更新するときに
  * 省略すると前回の値を引き継ぐ。`secret` を既存行と違う値で渡すとサーバが
  * 400 で拒否する——`apps/cli/src/credential.ts` と同じ資格・同じ制約）。
  *
- * **`requireOperator`。** 実行環境の持ち主でなければ 403 が返る——呼び出し側
- * （`env-vars.tsx`）はボタンを隠さず、失敗を `ErrorNote` で見せること
- * （`settings.tsx` の `ResetWorkspace` と同じ「隠さない」方針）。
+ * **`requireOwner`。** 宣言済み owner（実行環境の持ち主そのもの、または
+ * `ownerDeclaredAt` が入った許可済みアカウント。issue #1198）でなければ 403 が
+ * 返る——呼び出し側（`env-vars.tsx`）はボタンを隠さず、失敗を `ErrorNote` で
+ * 見せること（`settings.tsx` の `ResetWorkspace` と同じ「隠さない」方針）。
  */
 export function useSetEnvVar() {
   const api = useApi();
@@ -592,6 +639,36 @@ export function useSetTokenDisabled() {
 /** 外向けの顔（値を持たない）を、次の `PUT /tokens` の入力へ変換する。 */
 function toTokenInput(token: AgentTokenView): { id: string; label: string; order: number } {
   return { id: token.id, label: token.label, order: token.order };
+}
+
+/**
+ * 回す契機・冷却の既定を変える（`PUT /tokens/policy`。Issue #1123）。
+ *
+ * **`alteroid token policy` / `PUT /tokens/policy` と同じ口・同じ資格**
+ * （`authenticate` だけ。`apps/daemon/src/app.ts` の `.put('/tokens/policy', …)`
+ * の doc）——CLI にできて画面にできないことを作らない、という PRD
+ * 「ある入口でできることが別の入口でできない状態を作らない」のための hook。
+ *
+ * **部分更新をそのまま通す。** 省略した項目はサーバ側で現状維持になる
+ * （`tokensPolicyUpdateRequestSchema` の doc）——ここで欠けた項目を補って
+ * 埋めない。
+ *
+ * **⚠️ サーバの規則（値の妥当性）をここへ写さないこと。** `useEditCommitment` /
+ * `useAppraiseManager` と同じ理由——「正の整数か」のような判定を画面側で
+ * 先回りして弾くと、サーバ側の規則が変わった日に画面だけが黙ってずれる。
+ * 呼び出し側はそのまま送り、断られたらサーバの文言をそのまま見せること。
+ */
+export function useSetTokenPolicy() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (patch: Partial<Pick<TokenRotationSettings, 'rotateOn' | 'cooldownMs'>>) => {
+      const result = await api.api.PUT('/tokens/policy', { body: patch }).then(unwrap);
+      await mutate(KEY.tokens);
+      return result;
+    },
+    [api, mutate],
+  );
 }
 
 /** 会話を終える。クローンがここで学びを蒸留する。 */

@@ -152,6 +152,57 @@ const LOST_NOTICE =
   '**確かめる前に `manager_start` で起こし直さないこと** — 同じ仕事が2本になる。';
 
 /**
+ * **直近の1ターンが報告ではなく失敗で終わっている**という軸の見出し（#1212）。
+ *
+ * **`status` の区分ではない。** 軸の実体は `ManagerSummary.lastFailure` で、
+ * これは `status` と独立に立つ——枠(429)で畳まれた回もセッションは生きている
+ * ので `status` は `done` のままである（`manager.ts` の `lastFailure` の doc
+ * 「**`status` と混ぜない。**」）。**だから `status` では切り出せない。**
+ */
+const LAST_FAILURE_LABEL = '直近のターンが失敗で終わっている';
+
+/**
+ * `lastFailure` が立っている委譲が1本以上あるときだけ出す1行（#1212）。
+ * **`LOST_NOTICE` と同じ作法**——本数の直後に置き、指図は書かない。
+ *
+ * ## この行が塞ぐ穴は「届いていない」ではなく「同じ本文の中で食い違う」である
+ *
+ * 委譲ごとの ⚠ 行は既に2面が出している（`tools.ts` の `describeManagerFailure`
+ * ＝ `manager_list` の各行、`digest.ts` の `describeLastFailureLine` ＝ tick と
+ * 日報に載る digest の行）。**どちらも `status` を読まない**ので、枠(429)で
+ * 畳まれた委譲にも ⚠ が付く。
+ *
+ * ⟹ 🔑 **欠けていたのは集計の側だけだった。** この節の数え上げ
+ * （{@link countManagerSituation}）は `lastFailure` を1度も見ないので、同じ
+ * 委譲が**同じターンの本文の中で**「`⚠ 直近のターンは失敗で終わっている`」と
+ * 「`手が空いている` の1本」として並ぶ。**読み手はそこで数のほうを採る**
+ * ——数は全体を名乗り、⚠ は1本ぶんにしか見えないからである（#1212 の実測:
+ * `手が空いている 61` の大半が、枠で落ちて空の報告しか持っていない委譲だった）。
+ *
+ * ## ⚠️ `idle` から外さない
+ *
+ * 外すと「置けない」と読まれ、このファイル冒頭の「空き枠を作らない」を壊す
+ * （`idle` は「そのマネージャーが手を動かしていない」という観測値で、それ自体は
+ * 正しいままである）。**直すのは分類ではなく、その数が何を含むかの名乗りである。**
+ *
+ * ## なぜ到達口を書くのか
+ *
+ * `LOST_NOTICE` と同じ理由で、本数だけでは名指しできない。**ただし `lost` と
+ * 違い、この軸には絞りの綴りが無い**——`status` の値ではないので
+ * `manager_list status: [...]` では切り出せない。⟹ 引けるのは各行の ⚠ であり、
+ * **そう書くこと自体が「status で切り出せる」という誤読を塞ぐ。**
+ */
+const LAST_FAILURE_NOTICE =
+  `**${LAST_FAILURE_LABEL}委譲は、区分の中では見分けが付かない。** ` +
+  'とくに `done`（手が空いている）が数えているのは「ターンが1回終わった」ことだけで、' +
+  'そのターンが枠(429)などの失敗で畳まれた回も同じ `done` に座る' +
+  '——セッションは生きているので `status` は動かさない（それは仕様である）。' +
+  '⟹ **この本数のぶん、「手が空いている」は「仕事を終えて空いた」を意味しない。** ' +
+  '名指しで引くなら `manager_list` の各行に付く ⚠（`直近のターンは報告ではなく失敗で終わっている`）を見る' +
+  '——**この軸で絞る綴りは無い**（`status` の値ではないので絞りでは切り出せない）。' +
+  '中身は `manager_report <managerId>` で読める。';
+
+/**
  * 委譲の数え上げ。**6つの区分は同じ1回の数え上げの「分割」である**——どの
  * マネージャーもちょうど1つに入り、合計は `total` に一致する。
  *
@@ -159,8 +210,10 @@ const LOST_NOTICE =
  * ときは、この doc の「6つ」と歯（`situation.test.ts` の合計の歯）も一緒に直す
  * こと——**合計が `total` に一致するという性質そのものが、この型の契約である。**
  *
- * `reachable`（話しかけられる）だけは**分割ではなく横断する軸**である。
- * 走行中でも返事待ちでも `live` は立ちうるので、他の6つと足し合わせないこと。
+ * **横断する軸は分割ではない**——`reachable`（話しかけられる）と、#1212 で
+ * 足した `lastTurnFailed` / `lastTurnFailedIdle`（直近のターンが失敗で終わって
+ * いる）の3つがそれで、走行中でも返事待ちでも立ちうる。**6つの区分と
+ * 足し合わせないこと。**
  */
 export interface ManagerSituationCounts {
   readonly total: number;
@@ -209,6 +262,34 @@ export interface ManagerSituationCounts {
   readonly other: number;
   /** `live` が立っているもの（**上の6つと足し合わせない**。横断する軸である）。 */
   readonly reachable: number;
+  /**
+   * **直近の1ターンが報告ではなく失敗で終わっているもの**（`ManagerSummary.lastFailure`
+   * が立っている本数。#1212）。**`reachable` と同じく、6つの区分と足し合わせない
+   * 横断する軸である**——`lastFailure` は `status` と独立に立つので、走行中にも
+   * 手が空いているものにも重なりうる。
+   *
+   * **区分にしない理由は分類の正しさではなく、読ませたい向きである。** `done` の
+   * まま座っているのは仕様どおりで（`manager.ts` の `lastFailure` の doc）、
+   * `idle` から外すと「置けない」と読まれる（このファイル冒頭「空き枠を作らない」）。
+   * ⟹ 数え直すのではなく、**同じ本数に別の軸を1本添える。**
+   *
+   * **`lastUnreported` / `lastSystemError` は数えない。** `manager.ts` が
+   * 「**軸が違う**」と逐語で分けている別の欄で、委譲ごとの ⚠ 行
+   * （`tools.ts` / `digest.ts`）もそれぞれ別の字面で出す。ここで畳むと、
+   * 本数と ⚠ 行が**また**食い違う（この欄が塞いだ穴そのものを作り直す）。
+   */
+  readonly lastTurnFailed: number;
+  /**
+   * `lastTurnFailed` のうち、**この数え上げで `idle`（手が空いている）に入った
+   * もの**（#1212）。**`lastTurnFailed` の部分集合である**（`0 <=
+   * lastTurnFailedIdle <= lastTurnFailed`）。
+   *
+   * **2つに割ってあるのは、食い違いが起きる場所が `idle` だからである。**
+   * 走行中の委譲に前のターンの `lastFailure` が残っているのは「いま動いている」
+   * と矛盾しない（次の `report` で消える）。**矛盾するのは「手が空いている」と
+   * 並んだときだけ**なので、そこを名指しで数える。
+   */
+  readonly lastTurnFailedIdle: number;
 }
 
 /**
@@ -239,13 +320,24 @@ export function countManagerSituation(managers: readonly ManagerSummary[]): Mana
   let lost = 0;
   let other = 0;
   let reachable = 0;
+  let lastTurnFailed = 0;
+  let lastTurnFailedIdle = 0;
   for (const manager of managers) {
     if (manager.live) reachable += 1;
+    // **区分の分岐より前に数える（#1212）。** 横断する軸なので `else if` の鎖に
+    // 混ぜない——混ぜると、どの区分に入ったかでこの軸が落ちる。
+    if (manager.lastFailure !== undefined) lastTurnFailed += 1;
     if (manager.awaitingBackground !== undefined) awaitingBackground += 1;
     else if (manager.status === 'running') running += 1;
     else if (manager.status === 'waiting_human') waitingHuman += 1;
-    else if (manager.status === 'done' && manager.live) idle += 1;
-    else if (isManagerAwaitingJudgement(manager.status)) lost += 1;
+    else if (manager.status === 'done' && manager.live) {
+      idle += 1;
+      // **`idle` の枝の中で数える（#1212）。** 外側で `status === 'done' &&
+      // live` を書き直すと、上の鎖の順序（背景処理待ちを先に見る）と割れる
+      // ——握り潰された回は `status` が `'done'` へ潰れているので、条件だけを
+      // 写すと `awaitingBackground` の分までここへ数えることになる。
+      if (manager.lastFailure !== undefined) lastTurnFailedIdle += 1;
+    } else if (isManagerAwaitingJudgement(manager.status)) lost += 1;
     else other += 1;
   }
   return {
@@ -257,6 +349,8 @@ export function countManagerSituation(managers: readonly ManagerSummary[]): Mana
     lost,
     other,
     reachable,
+    lastTurnFailed,
+    lastTurnFailedIdle,
   };
 }
 
@@ -716,7 +810,16 @@ export function describeSituation(input: {
     `委譲 全 ${counts.total} 本: 走行中 ${counts.running} / 返事待ち ${counts.waitingHuman} / ` +
       `背景処理待ち ${counts.awaitingBackground} / 手が空いている ${counts.idle} / ` +
       (counts.lost === 0 ? '' : `${LOST_LABEL} ${counts.lost} / `) +
-      `その他 ${counts.other}。話しかけられるのは ${counts.reachable} 本。`,
+      `その他 ${counts.other}。話しかけられるのは ${counts.reachable} 本。` +
+      // **横断する軸は分割の後ろに置く（#1212）。** `reachable` と同じ場所で、
+      // 同じ「本。」の形にする——区分の並びの中へ差し込むと、足せば `total` に
+      // なる数の列に別の軸が混ざる。**0 のときは1文字も出さない**（`lost` と
+      // 同じ作法。`AGENTS.md` の地雷「取れない軸に 0 の行を作る」）。
+      (counts.lastTurnFailed === 0
+        ? ''
+        : `${LAST_FAILURE_LABEL}のは ${counts.lastTurnFailed} 本` +
+          `（うち「手が空いている」に数えたものが ${counts.lastTurnFailedIdle} 本。` +
+          '上の区分とは足し合わせない）。'),
     // **本数の直後に置く（#688）。** この節は `distill` 以外の全ターンの入口に
     // 載る（`clone.ts` の `#situationNoticeFor`）ので、**いちばん確実に読まれる
     // 場所**である。数と、そこから何を確かめるかを離すと、数だけが読まれる。
@@ -725,9 +828,21 @@ export function describeSituation(input: {
     // **指図は書かない**（このファイル冒頭「指図を書かない」）——書いてあるのは
     // 「この数が何を意味しないか」と、名指しで引く口の名前までである。
     ...(counts.lost === 0 ? [] : [LOST_NOTICE]),
+    // **`LOST_NOTICE` の直後に置く（#1212）。** どちらも「この本数を『終わった』と
+    // 読むな」という同じ向きの断りで、離すと片方だけが読まれる。**0 のときは
+    // 1文字も出さない**（`lost` と同じ作法）。
+    ...(counts.lastTurnFailed === 0 ? [] : [LAST_FAILURE_NOTICE]),
     `器 ${input.runners.length} 台${runnerBreakdown === '' ? '' : `: ${runnerBreakdown}`}。`,
     '**「手が空いている」は「空き枠」ではない** — この器に定員は無いので、' +
       '置けるかどうかはここでは答えていない。' +
+      // **この一文は本数が 0 でも出す（#1212）。** 上の「直近のターンが失敗で
+      // 終わっている」の本数は 0 のとき1文字も出ないので、**出ていないことが
+      // 「数えていない」と読める余地**が残る（`lost` は5区分の和が `total` に
+      // 一致することで算術的に 0 だと確定するが、横断する軸にその手は無い）。
+      // ⟹ **軸が在ることだけを常に名乗り、本数は在るときだけ出す。**
+      '**「手が空いている」は「終わった」でもない** — 直近のターンが報告ではなく' +
+      '失敗で終わった委譲も `done` のまま座る（セッションが生きているためで、仕様である）。' +
+      'その本数は1本以上あるときだけ上の行に出る。' +
       '**「背景処理待ち」は器が名乗った分だけである** — この印を送らない古い器では、' +
       '待っていても「手が空いている」側に数える。' +
       '**「走行中」は「進んでいる」ではないし、「背景処理待ち」を含まない** — ' +

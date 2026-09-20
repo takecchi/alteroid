@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { decodeState, isAccountGranted, type AuthStore } from './auth.js';
+import {
+  decodeState,
+  isAccountGranted,
+  isDeclaredOwner,
+  type AuthAccount,
+  type AuthStore,
+} from './auth.js';
 import {
   createAuthProviderRegistry,
   type OAuthProfile,
@@ -186,7 +192,7 @@ describe('createAuthService', () => {
       service.grant(bob.account.id, 'operator'),
     ]);
     expect(separate.filter((result) => result.status === 'granted')).toHaveLength(2);
-    expect((await service.owners()).map((account) => account.id).sort()).toEqual(
+    expect((await service.grantedAccounts()).map((account) => account.id).sort()).toEqual(
       [alice.account.id, bob.account.id].sort(),
     );
 
@@ -242,25 +248,34 @@ describe('createAuthService', () => {
    * ⚠️ **2026-09-09 に `owner(): AuthAccount | null` から
    * `owners(): AuthAccount[]` へ変えた。** 上限を外した以上、単数の名前だと
    * 2人目以降が呼び出し側から静かに消える（1件しか返さない実装でも型が通る）。
+   *
+   * ⚠️ **2026-09-18 に `owners()` から `grantedAccounts()` へ改めた**（issue
+   * #1198）。「owner」が `ownerDeclaredAt`（実行環境の持ち主として宣言された
+   * こと）と衝突するため、この関数が見ている意味（許可されているか）に
+   * 合わせて改名した。
    */
-  it('owners() は許可されているアカウントを全部返す', async () => {
-    expect(await service.owners()).toEqual([]);
+  it('grantedAccounts() は許可されているアカウントを全部返す', async () => {
+    expect(await service.grantedAccounts()).toEqual([]);
     const alice = await service.claim(await login('code-alice'));
     const bob = await service.claim(await login('code-bob'));
     if (alice.status !== 'ready' || bob.status !== 'ready') throw new Error('ログインできていない');
 
     await service.grant(alice.account.id, 'operator');
-    expect((await service.owners()).map((account) => account.id)).toEqual([alice.account.id]);
+    expect((await service.grantedAccounts()).map((account) => account.id)).toEqual([
+      alice.account.id,
+    ]);
 
     // **2人目を落とさない。** ここが1件で止まる実装だと、画面にも CLI にも
     // 「自分しか居ない」と見えたまま、実際には2人が入れる状態になる。
     await service.grant(bob.account.id, 'operator');
-    expect((await service.owners()).map((account) => account.id).sort()).toEqual(
+    expect((await service.grantedAccounts()).map((account) => account.id).sort()).toEqual(
       [alice.account.id, bob.account.id].sort(),
     );
 
     await service.revoke(alice.account.id);
-    expect((await service.owners()).map((account) => account.id)).toEqual([bob.account.id]);
+    expect((await service.grantedAccounts()).map((account) => account.id)).toEqual([
+      bob.account.id,
+    ]);
   });
 
   it('検証済みメールが一致しても既存アカウントへ相乗りさせない', async () => {
@@ -455,5 +470,62 @@ describe('createAuthService', () => {
   it('でたらめなトークンでは認証されない', async () => {
     expect(await service.authenticate('alt_でたらめ')).toBeNull();
     expect(await service.authenticate('接頭辞すら違う')).toBeNull();
+  });
+});
+
+/**
+ * **`isDeclaredOwner`（本来の owner 判定。issue #1198）。**
+ *
+ * ここで固定するのは3つ。**①宣言済みなら真**、**②宣言していなければ
+ * （許可済みでも）偽**、**③許可が落ちていれば偽**。
+ *
+ * **旧 `isAccountGrantedByOperator`（`grantedBy === 'operator'` からの近似。
+ * PR #1199 が採った形）はここで置き換えた。** `grantedBy` は1箇所も読まない
+ * —— 宣言は `ownerDeclaredAt` という独立の欄に、operator トークンだけが
+ * 立てる（`AuthStore.setAccountOwner`）。
+ *
+ * **③は現物では起こらない組み合わせである** —— `revoke` は `grantedAt` と
+ * `ownerDeclaredAt` を同時に落とす。**それでも撃つのは、判定がその不変条件に
+ * 寄りかかっていないことを示すためである。** 寄りかかった実装（`ownerDeclaredAt`
+ * だけを見る）は、不変条件が崩れた日に**資格を配る側**へ倒れる。
+ */
+describe('isDeclaredOwner（宣言済み owner の判定）', () => {
+  const base: AuthAccount = {
+    id: 'acc-1',
+    displayName: null,
+    email: null,
+    createdAt: '2026-09-17T00:00:00.000Z',
+    lastLoginAt: null,
+    grantedAt: null,
+    grantedBy: null,
+    ownerDeclaredAt: null,
+  };
+
+  it('① 宣言済み（かつ許可済み）なら真', () => {
+    const account = {
+      ...base,
+      grantedAt: '2026-09-17T01:00:00.000Z',
+      grantedBy: 'operator',
+      ownerDeclaredAt: '2026-09-18T00:00:00.000Z',
+    };
+    expect(isDeclaredOwner(account)).toBe(true);
+    // 前提: そもそも許可されている（宣言は「許可」の上に乗る一段強い資格である）。
+    expect(isAccountGranted(account)).toBe(true);
+  });
+
+  it('② 許可済みでも宣言していなければ偽（広げすぎていないことの対照）', () => {
+    const account = { ...base, grantedAt: '2026-09-17T01:00:00.000Z', grantedBy: 'operator' };
+    expect(isAccountGranted(account)).toBe(true);
+    expect(isDeclaredOwner(account)).toBe(false);
+  });
+
+  it('② ログインしただけ（未許可・未宣言）は偽', () => {
+    expect(isDeclaredOwner(base)).toBe(false);
+  });
+
+  it('③ 許可が落ちていれば、ownerDeclaredAt が入ったままでも偽（不変条件へ寄りかからない）', () => {
+    // `revoke` は両方を落とすので現物では生まれない行だが、**判定の側はそれを当てにしない**。
+    const account = { ...base, grantedAt: null, ownerDeclaredAt: '2026-09-18T00:00:00.000Z' };
+    expect(isDeclaredOwner(account)).toBe(false);
   });
 });

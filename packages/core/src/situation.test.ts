@@ -50,6 +50,22 @@ const BG = {
   since: '2026-09-05T00:00:00.000Z',
 };
 
+/**
+ * 枠(429)で畳まれたターンが台帳へ残す形（#1212）。`runner.ts` が
+ * `report` に `failure` を載せ、`manager.ts` の `case 'report'` が
+ * `record.job.lastFailure` へ書く欄そのもの。
+ */
+const FAILURE = {
+  code: 'api_error_status/429',
+  via: 'result',
+  at: '2026-09-18T08:20:00.000Z',
+};
+
+/** 直近のターンが失敗で終わった委譲にする（`status` は動かさない。#1212）。 */
+function withLastFailure(manager: ManagerSummary): ManagerSummary {
+  return { ...manager, lastFailure: FAILURE };
+}
+
 describe('countManagerSituation', () => {
   /**
    * **この歯がこのファイルで最初に来る理由。** 「手が空いている」と「背景処理を
@@ -175,7 +191,73 @@ describe('countManagerSituation', () => {
       lost: 0,
       other: 0,
       reachable: 0,
+      lastTurnFailed: 0,
+      lastTurnFailedIdle: 0,
     });
+  });
+
+  /**
+   * ⭐ **`lastTurnFailed` は区分ではなく横断する軸である**（#1212）。枠(429)で
+   * 畳まれた回もセッションは生きているので `status` は `done` のままで
+   * （`manager.ts` の `lastFailure` の doc「**`status` と混ぜない。**」）、
+   * **同じ委譲が `idle` にも数えられる。**
+   *
+   * **6つの区分の和が `total` のままであること**も一緒に測る——この軸を足した
+   * ことで分割の性質が壊れていないことが、この軸が「区分ではない」の意味である。
+   */
+  it('⭐ 直近のターンが失敗で終わった done は idle からも数えられる（区分ではなく横断する軸）', () => {
+    const counts = countManagerSituation([
+      withLastFailure(summary('a', 'done', true)),
+      summary('b', 'done', true),
+    ]);
+    expect(counts.idle).toBe(2);
+    expect(counts.lastTurnFailed).toBe(1);
+    expect(counts.lastTurnFailedIdle).toBe(1);
+    // 分割は崩れていない（横断する軸を足しても和は `total` のまま）。
+    expect(
+      counts.running +
+        counts.waitingHuman +
+        counts.awaitingBackground +
+        counts.idle +
+        counts.lost +
+        counts.other,
+    ).toBe(counts.total);
+  });
+
+  /**
+   * ⭐ **`lastTurnFailedIdle` は `lastTurnFailed` の部分集合である**（#1212）。
+   *
+   * `lastFailure` は次の `report` が届くまで消えない（`manager.ts` の
+   * `case 'report'` の `delete record.job.lastFailure;`）ので、**起こし直されて
+   * 走行中になった委譲にも残る。** それは「いま動いている」と矛盾しないので、
+   * `idle` の内訳へは数えない——数えると、この軸が名指ししたい食い違い
+   * （`手が空いている` と ⚠ が同じ本文に並ぶ）が薄まる。
+   */
+  it('⭐ 走行中・返事待ち・lost に残った lastFailure は、idle の内訳には数えない', () => {
+    const counts = countManagerSituation([
+      withLastFailure(summary('a', 'running', true)),
+      withLastFailure(summary('b', 'waiting_human', true)),
+      withLastFailure(summary('c', 'lost', false)),
+      withLastFailure(summary('d', 'done', true)),
+    ]);
+    expect(counts.lastTurnFailed).toBe(4);
+    expect(counts.lastTurnFailedIdle).toBe(1);
+  });
+
+  /**
+   * **横断する軸は区分の分岐より前に数える**（`countManagerSituation` の逐語）。
+   * 背景処理待ちの印が立って `awaitingBackground` へ落ちた回でも、`lastFailure`
+   * は数え落とさない——`else if` の鎖へ混ぜると、どの区分に入ったかでこの軸が
+   * 消える。
+   *
+   * **そして `idle` の内訳には入らない**（背景処理待ちは `idle` ではない）。
+   */
+  it('背景処理待ちへ落ちた委譲でも lastTurnFailed には数え、idle の内訳には数えない', () => {
+    const counts = countManagerSituation([withLastFailure(summary('a', 'done', true, BG))]);
+    expect(counts.awaitingBackground).toBe(1);
+    expect(counts.idle).toBe(0);
+    expect(counts.lastTurnFailed).toBe(1);
+    expect(counts.lastTurnFailedIdle).toBe(0);
   });
 });
 
@@ -327,6 +409,103 @@ describe('describeSituation', () => {
     expect(text).toContain('背景処理待ち 0');
     expect(text).toContain('手が空いている 0');
     expect(text).toContain('その他 1');
+  });
+
+  /**
+   * ⭐ **本 Issue（#1212）の芯。** 枠(429)で畳まれた委譲は `status: done` のまま
+   * 座るので、この節は**それを「手が空いている」に数える**。一方、同じターンの
+   * 本文に載る digest（`digest.ts` の `describeLastFailureLine`）と `manager_list`
+   * （`tools.ts` の `describeManagerFailure`）は、**`status` を読まずに**
+   * `⚠ 直近のターンは…失敗で終わっている` を付ける。
+   *
+   * ⟹ 🔑 **同じ本文の中で、片方が「手が空いている」と数え、もう片方が ⚠ を
+   * 付けていた。** 直したのは分類ではなく**名乗り**である——本数はそのままで、
+   * その中に何が混じっているかを同じ行で言う。
+   *
+   * **本数と断り書きの両方を測る**（`走行中` の歯と同じ形）。字面だけだと、
+   * 断り書きが嘘（本数が 0 のまま）でも緑になる。
+   */
+  it('⭐ 手が空いているの中に「直近のターンが失敗で終わっている」本数が並び、断り書きが出る', () => {
+    const text = describeSituation({
+      managers: [
+        withLastFailure(summary('a', 'done', true)),
+        withLastFailure(summary('b', 'done', true)),
+        summary('c', 'done', true),
+        // **走行中にも1本置く（#1212）。** これが無いと `lastTurnFailed` と
+        // `lastTurnFailedIdle` が同じ数になり、**2つを取り違える変異が緑のまま
+        // 通る**（このファイルの「どの2つも同じ数にしない」と同じ理由。実際に
+        // 変異試験で確かめた——この1本を外すと、内訳の側を `lastTurnFailed` に
+        // 差し替える変異が生き残る）。
+        withLastFailure(summary('d', 'running', true)),
+      ],
+      runners: [],
+    });
+    const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
+    expect(countsLine, '「委譲 全 」の行が見つからない').toBeDefined();
+    // `done` かつ `live` の3本は、区分としてはこれまでどおり全部 `idle` である
+    // （**`idle` から外さない**。外すと「置けない」と読まれる）。
+    expect(countsLine).toContain('手が空いている 3');
+    // 失敗で終わっているのは3本（走行中の1本を含む）、うち `idle` は2本
+    // ——**同じ行で、2つの数を別々に名乗る。**
+    expect(countsLine).toContain('直近のターンが失敗で終わっているのは 3 本');
+    expect(countsLine).toContain('「手が空いている」に数えたものが 2 本');
+    // 横断する軸であることを、行の中で断る（区分と足すと二重に数える）。
+    expect(countsLine).toContain('上の区分とは足し合わせない');
+    // 断り書き（`LOST_NOTICE` と同じ作法で本数の直後に出る）。
+    expect(text).toContain('「手が空いている」は「仕事を終えて空いた」を意味しない');
+    // **`status` では切り出せない**ことを名乗る（`lost` と違い絞りの綴りが無い）。
+    expect(text).toContain('この軸で絞る綴りは無い');
+    expect(text).toContain('`manager_report <managerId>`');
+  });
+
+  /**
+   * ⭐ **陰性対照。** 同じ委譲から `lastFailure` だけを外すと、本数の行も
+   * 断り書きも消える——**差の実在**で測る（`背景処理待ち` の陰性対照と同じ形）。
+   *
+   * **`lastTurnFailed` が 0 のときに 1文字も出さない**のは `lost` と同じ作法
+   * （AGENTS.md「取れない軸に 0 の行を作る」）。
+   */
+  it('⭐ （陰性対照）lastFailure が無ければ本数も断り書きも1文字も出ない', () => {
+    const withFailure = describeSituation({
+      managers: [withLastFailure(summary('a', 'done', true))],
+      runners: [],
+    });
+    const withoutFailure = describeSituation({
+      managers: [summary('a', 'done', true)],
+      runners: [],
+    });
+    const lineWith = withFailure.split('\n').find((l) => l.startsWith('委譲 全 '));
+    const lineWithout = withoutFailure.split('\n').find((l) => l.startsWith('委譲 全 '));
+    expect(lineWithout, '「委譲 全 」の行が見つからない').toBeDefined();
+    // 区分の本数は変わらない（`lastFailure` は `status` を動かさない）。
+    expect(lineWith).toContain('手が空いている 1');
+    expect(lineWithout).toContain('手が空いている 1');
+    // それでも行そのものは変わる（＝この軸が実在する）。
+    expect(lineWith).not.toBe(lineWithout);
+    expect(lineWithout).not.toContain('直近のターンが失敗で終わっている');
+    expect(withoutFailure).not.toContain('「手が空いている」は「仕事を終えて空いた」を意味しない');
+    expect(withoutFailure).not.toContain('この軸で絞る綴りは無い');
+  });
+
+  /**
+   * ⭐ **軸が在ることだけは本数が 0 でも名乗る**（#1212）。
+   *
+   * 本数の行は 0 のとき消えるが、`lost` と違って**算術で 0 だと確定する手が無い**
+   * （横断する軸なので、6区分の和が `total` に一致しても何も言えない）。⟹
+   * 出ていないことが「数えていない」と読める余地が残る。**だから軸の存在だけを
+   * 常設の断り書きへ置き、本数は在るときだけ出す。**
+   */
+  it('⭐ 本数が 0 でも「手が空いている」は「終わった」ではないことを常に名乗る', () => {
+    const text = describeSituation({
+      managers: [summary('a', 'done', true)],
+      runners: [],
+    });
+    // 本数の行は出ていない（0 の行を作らない）。
+    const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
+    expect(countsLine).not.toContain('直近のターンが失敗で終わっている');
+    // それでも軸そのものは名乗る——`done` が「終わった」ではないこと。
+    expect(text).toContain('「手が空いている」は「終わった」でもない');
+    expect(text).toContain('その本数は1本以上あるときだけ上の行に出る');
   });
 
   /**

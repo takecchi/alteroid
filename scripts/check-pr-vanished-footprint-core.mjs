@@ -111,7 +111,45 @@
  *
  * `ok` / `found` / `unreadable`。`found` と `unreadable` はどちらも終了コード1
  * （`unreadable` は fail-closed。「消えた足跡は無い」ではなく赤くする）。
+ *
+ * ## 直した誤検出（フェンス）と見逃し（末尾スラッシュ）
+ *
+ * 着地時点の実装には2件の欠陥があった（別の担当者が実測で再現）。
+ *
+ * - **誤検出**: `extractInlineCodeSpans` が行ごとの素朴なバッククォート抽出
+ *   だけで、フェンス（```` ``` ````）の中を除外していなかった。⟹ 参考コード例の
+ *   フェンスの中に `` `AGENTS.md` `` が在るだけで赤くなっていた。**直し方は
+ *   `check-pr-closing-keywords-core.mjs` の `computeLineStarts` /
+ *   `computeFenceIntervals` を import して使い回すこと**（新しいフェンス検出を
+ *   書かない）——この2つは既に `issue-intent-hint-core.mjs`（2本目）・
+ *   `check-pr-line-number-citations-core.mjs`（3本目）が呼び出し元になっており、
+ *   この門が4本目になる。「フェンスの中を見ない」という判断はどの門でも
+ *   同じでなければならない、というこの repo の前例に揃えた。
+ * - **⚠️ 引用（`>`）・HTML コメント（`<!-- -->`）は除外していない（意図的）。**
+ *   兄弟の2本は判断が割れている——`check-pr-closing-keywords-core.mjs` は
+ *   引用・HTML コメントの中も「安全」とは扱わず全部 NG として拾う側へ倒す
+ *   （doc:「引用とHTMLコメントについては実測が無いが、doc に除外の記述が
+ *   無い以上、除外する根拠も無いので同じ側（拾う）へ倒す」）一方、
+ *   `issue-intent-hint-core.mjs` は逆に4つとも（フェンス・インラインコード・
+ *   HTML コメント・引用行）を除外区間としてマスクする。⟹ **揃えられる唯一の
+ *   答えは無い。** 直近マージ済み160本の実測（このコミットの検算を見よ）で、
+ *   引用・HTML コメントの中にある候補が `V` の要素と一致して verdict を左右した
+ *   例は無かった（該当候補自体が実測corpusに無い）ため、この修正では除外を
+ *   足していない——足す根拠（判定が変わる実例）が無いまま持ち込むと、
+ *   `check-pr-closing-keywords-core.mjs` 側の「拾う」判断と矛盾する余地を
+ *   増やすだけになる。**この判断はマネージャーへ報告済みで、指示があれば
+ *   変える。**
+ * - **見逃し**: `matchNamedCandidate` が候補 `p` の末尾スラッシュを正規化して
+ *   いなかったため、`p="packages/core/"` のような（この repo の PR 本文で
+ *   多用される）末尾スラッシュ付きの名指しが `v.startsWith('packages/core//')`
+ *   になり二重スラッシュで絶対に一致しなかった。**直し方は `p` の末尾スラッシュを
+ *   1つ以上まとめて剥がしてから照合すること**——`packages/core` が
+ *   `packages/core-extra/foo.ts` に当たってはいけないという既存の不変条件
+ *   （`/` の境界を要求する）は変えていない（`normalizedP` は末尾スラッシュを
+ *   持たないので `normalizedP + '/'` は常に単一のスラッシュ境界になる）。
  */
+
+import { computeFenceIntervals, computeLineStarts } from './check-pr-closing-keywords-core.mjs';
 
 /**
  * 各コミットが触ったファイルの和集合 `U` を計算する。**`parentCount` が2件以上の
@@ -162,19 +200,36 @@ export function computeVanishedFootprint(union, finalFiles) {
  * @returns {'exact'|'suffix'|'subpath'|null}
  */
 export function matchNamedCandidate(v, p) {
-  if (p === v) return 'exact';
-  if (v.endsWith('/' + p)) return 'suffix';
-  // `/` の境界を要求する。`v.startsWith(p)`（境界無し）を混ぜると、
+  // 候補 `p` 自身が末尾スラッシュ付き（例: `packages/core/`）だと、正規化せずに
+  // `p + '/'` を作ると `packages/core//` になり二重スラッシュで絶対に一致しない
+  // （見逃し。実測: この repo の PR 本文は `.github/` `docs/` `apps/daemon/`
+  // `dist/` 等、末尾スラッシュ付きのディレクトリ名指しを多用する）。⟹ 末尾の
+  // スラッシュを1つ以上まとめて剥がしてから照合する。
+  const normalizedP = p.replace(/\/+$/, '');
+  // 剥がした結果が空文字（`p` が `/` だけだった等）なら、どの `v` にも当てない
+  // ——空文字を候補にすると `v.startsWith('' + '/')` のような退化した判定が
+  // 生まれてしまう。
+  if (normalizedP.length === 0) return null;
+  if (normalizedP === v) return 'exact';
+  if (v.endsWith('/' + normalizedP)) return 'suffix';
+  // `/` の境界を要求する。`v.startsWith(normalizedP)`（境界無し）を混ぜると、
   // `p="packages/core"` が `v="packages/core-extra/foo.ts"` にも当たってしまう
-  // （マネージャーの差し戻し。2026-09-17）。`p === v` は既に `exact` が
-  // 取っているので、ここは `p + '/'` の一形だけで足りる——本物の取りこぼしは
-  // 増えない（ディレクトリ参照は必ず `/` の境界を持つ）。
-  if (v.startsWith(p + '/')) return 'subpath';
+  // （マネージャーの差し戻し。2026-09-17。末尾スラッシュ正規化を足した後も、
+  // この不変条件は変えていない——`normalizedP` は末尾スラッシュを持たないので、
+  // `normalizedP + '/'` は常に単一のスラッシュ境界になる）。`p === v` は既に
+  // `exact` が取っているので、ここは `normalizedP + '/'` の一形だけで足りる
+  // ——本物の取りこぼしは増えない（ディレクトリ参照は必ず `/` の境界を持つ）。
+  if (v.startsWith(normalizedP + '/')) return 'subpath';
   return null;
 }
 
 /** インラインコードスパンの正規表現（バッククォート対、行を跨がない）。 */
 const INLINE_CODE_PATTERN = /`([^`\n]*)`/g;
+
+/** `[start, end)` が intervals のどれかと重なるか。 */
+function overlapsAny(intervals, start, end) {
+  return intervals.some(([a, b]) => start < b && end > a);
+}
 
 /**
  * 本文からインラインコードスパンの出現をすべて取り出す。**行を跨ぐスパンは
@@ -182,19 +237,39 @@ const INLINE_CODE_PATTERN = /`([^`\n]*)`/g;
  * `check-pr-closing-keywords-core.mjs` の `computeInlineCodeIntervals` と同じ
  * 単純化）。空のスパン（`` `` ``）は候補にしない。
  *
+ * **フェンス（```` ``` ````）の中のスパンは候補にしない。** フェンスの区間検出は
+ * `check-pr-closing-keywords-core.mjs` の `computeLineStarts` / `computeFenceIntervals`
+ * を import して使い回す（新しいフェンス検出を書かない）——この2つは既に
+ * `issue-intent-hint-core.mjs`（2本目）・`check-pr-line-number-citations-core.mjs`
+ * （3本目）が呼び出し元になっており、この門が4本目になる。「フェンスの中を
+ * 見ない」という判断はどの門でも同じでなければならない、というこの repo の
+ * 前例に揃える。実測で確認済みの誤検出（フェンスで囲んだ参考コード例の中に
+ * `` `AGENTS.md` `` が在るだけで赤くなる）を、この除外が塞ぐ。
+ *
+ * ⚠️ 引用（`>`）・HTML コメント（`<!-- -->`）は、ここでは除外しない
+ * （`matchNamedCandidate` 呼び出し側の doc、および PR 本文の検算を見よ）。
+ *
  * @param {string} body
  * @returns {{ content: string, line: string }[]}
  */
 export function extractInlineCodeSpans(body) {
   if (typeof body !== 'string' || body.length === 0) return [];
   const lines = body.split('\n');
+  const lineStarts = computeLineStarts(lines);
+  const fenceIntervals = computeFenceIntervals(lines, lineStarts);
   const spans = [];
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lineStart = lineStarts[i];
     INLINE_CODE_PATTERN.lastIndex = 0;
     let match;
     while ((match = INLINE_CODE_PATTERN.exec(line)) !== null) {
       if (match[1].length > 0) {
-        spans.push({ content: match[1], line });
+        const absStart = lineStart + match.index;
+        const absEnd = absStart + match[0].length;
+        if (!overlapsAny(fenceIntervals, absStart, absEnd)) {
+          spans.push({ content: match[1], line });
+        }
       }
       if (match[0].length === 0) INLINE_CODE_PATTERN.lastIndex++;
     }

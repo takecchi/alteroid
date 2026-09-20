@@ -413,9 +413,10 @@ export function useRunners() {
  * 外れた。それ以前は実行環境の持ち主だけだった）。**2026-09-14 以降、この hook を
  * 呼ぶ画面（`routes/tokens.tsx`）は `PUT /tokens` も呼ぶ**（追加・削除・
  * 無効化/有効化——`mutations.ts` の `useAddToken` / `useRemoveToken` /
- * `useSetTokenDisabled`）。**もう読み取り専用ではない。** 回す契機・冷却の設定
- * （`policy`）は引き続き CLI（`alteroid token policy`）/ `PUT /tokens/policy`
- * だけの仕事である。
+ * `useSetTokenDisabled`）。**もう読み取り専用ではない。** **2026-09-20 以降、
+ * 回す契機・冷却の設定（`policy`）も同じ画面から変えられる**（`mutations.ts` の
+ * `useSetTokenPolicy`、`PUT /tokens/policy`。Issue #1123）——CLI
+ * （`alteroid token policy`）だけの仕事ではなくなった。
  */
 export function useTokens() {
   const api = useApi();

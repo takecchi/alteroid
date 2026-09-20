@@ -3464,6 +3464,7 @@ describe('AuthStore', () => {
     lastLoginAt: '2026-01-01T00:00:00.000Z',
     grantedAt: null,
     grantedBy: null,
+    ownerDeclaredAt: null,
   };
 
   it('アカウントを保存して読み戻せる', async () => {
@@ -3731,6 +3732,62 @@ describe('AuthStore', () => {
     // 一度 processing になったら、あとから何度呼んでも取れない。
     expect(await stores.auth.beginLoginExchange('login-5')).toBeNull();
     expect(await stores.auth.beginLoginExchange('居ない')).toBeNull();
+  });
+
+  /**
+   * **`setAccountOwner` の不変条件（issue #1198）: 宣言（`declaredAt !== null`）は
+   * 「許可済みの行にしか立たない」。** fs / pg / in-memory の3実装すべてで測る
+   * （このファイルは fs、`packages/storage-pg/src/index.test.ts` が pg、
+   * `packages/core/src/auth-service.test.ts` は in-memory を経由する）。
+   */
+  describe('setAccountOwner（実行環境の持ち主としての宣言）', () => {
+    it('許可済みの行には宣言を立てられる', async () => {
+      await stores.auth.putAccount({
+        ...account,
+        grantedAt: '2026-01-02T00:00:00.000Z',
+        grantedBy: 'operator',
+      });
+
+      const result = await stores.auth.setAccountOwner('account-1', '2026-01-03T00:00:00.000Z');
+      expect(result).toEqual({
+        status: 'ok',
+        account: {
+          ...account,
+          grantedAt: '2026-01-02T00:00:00.000Z',
+          grantedBy: 'operator',
+          ownerDeclaredAt: '2026-01-03T00:00:00.000Z',
+        },
+      });
+      expect((await stores.auth.getAccount('account-1'))?.ownerDeclaredAt).toBe(
+        '2026-01-03T00:00:00.000Z',
+      );
+    });
+
+    it('未許可の行へ宣言しようとすると not_granted（不変条件「宣言 ⟹ 許可済み」）', async () => {
+      await stores.auth.putAccount(account);
+
+      const result = await stores.auth.setAccountOwner('account-1', '2026-01-03T00:00:00.000Z');
+      expect(result).toEqual({ status: 'not_granted' });
+      // 書かれていないこと。
+      expect((await stores.auth.getAccount('account-1'))?.ownerDeclaredAt).toBeNull();
+    });
+
+    it('存在しないアカウントへの宣言は not_found', async () => {
+      expect(await stores.auth.setAccountOwner('居ない', '2026-01-03T00:00:00.000Z')).toEqual({
+        status: 'not_found',
+      });
+    });
+
+    it('取り消し（null）は許可の有無を問わず常に通る', async () => {
+      await stores.auth.putAccount(account);
+
+      const result = await stores.auth.setAccountOwner('account-1', null);
+      expect(result).toEqual({ status: 'ok', account });
+    });
+
+    it('存在しないアカウントの取り消しは not_found', async () => {
+      expect(await stores.auth.setAccountOwner('居ない', null)).toEqual({ status: 'not_found' });
+    });
   });
 });
 

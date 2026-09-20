@@ -7,7 +7,12 @@ import { REMOVE_MANY_LIMIT_DEFAULT, REMOVE_MANY_LIMIT_MAX } from '@alteroid/core
 import { initWorkspace } from '@alteroid/storage-fs';
 import { Command } from 'commander';
 
-import { accessGrantCommand, accessListCommand, accessRevokeCommand } from './access.js';
+import {
+  accessGrantCommand,
+  accessListCommand,
+  accessOwnerCommand,
+  accessRevokeCommand,
+} from './access.js';
 import { chatCommand } from './chat.js';
 import { conversationsListCommand, conversationsShowCommand } from './conversations.js';
 import * as daemon from './daemon.js';
@@ -327,6 +332,22 @@ accessCommand
   .description('alteroid を使う許可を取り消す')
   .action(async (accountId: string) => {
     await accessRevokeCommand(accountId);
+  });
+
+/**
+ * 実行環境の持ち主としての宣言（issue #1198）。**`access grant` とは別の資格**
+ * ——`alteroid credential set` / `alteroid reset` を通すのに要る。デーモンが
+ * 動いているのと同じ環境（実行環境の持ち主）でしか実行できない
+ * （`accessOwnerCommand` の doc）。
+ */
+accessCommand
+  .command('owner <accountId>')
+  .description(
+    '実行環境の持ち主として宣言する／取り消す（alteroid credential set・alteroid reset を通すのに要る）',
+  )
+  .option('--revoke', '宣言を取り消す')
+  .action(async (accountId: string, options: { revoke?: boolean }) => {
+    await accessOwnerCommand(accountId, options);
   });
 
 /**
