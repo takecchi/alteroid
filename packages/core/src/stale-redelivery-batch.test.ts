@@ -413,20 +413,37 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
     }, 'inbox_flow が settled=2件以上の external を報告する');
 
     // **pendingCollapse**: 代表（先に拾われた行）が消えた後、同じ内容の
-    // 「新しい」token-pool 合図を post しても、消えた行の幻へ畳まれない
-    // ——畳まれていれば新しい external_event は増えない代わりに `folded`
-    // の跡が残り、畳まれていなければ新しい external_event が増える。
-    const before = (await stores.journal.list({ types: ['external_event'] })).filter(
-      (entry) => entry.type === 'external_event' && entry.summary.includes(sharedPayload),
+    // 「新しい」token-pool 合図を post しても、消えた行の幻へ畳まれない。
+    //
+    // ⚠️ **「新しい external_event が増えるか」では判定できない**（実測で
+    // 見つけた自分の設計ミス）。`#foldIntoPendingCollapse` の `row-folded`
+    // 判定（畳まれた場合）は `post()` を early return させず、その場では
+    // 「畳んだ」の1行を書くだけでそのまま待ち行列へ積む——結局そのターンが
+    // 処理されるときに束ね読み（`#mergedExternalBatch`）が本文を書くので、
+    // 畳まれていても畳まれていなくても、いずれ `external_event` は増える。
+    // **畳まれたかどうかを直接分けるのは「畳んだ」の1行が post() の時点で
+    // 即座に出るかどうかである**（`#foldIntoPendingCollapse` の
+    // `row-folded` 分岐、逐語は
+    // `grep -Fn -- 'alteroid 自身が合成した同一本文の未読が既に受信箱にあるので' packages/core/src/clone.ts`）
+    // ——`#pendingCollapse` の鍵が消えた行を指したまま残っていれば、post()
+    // が同期的にこの行を書く。消えていれば、post() はこの行を一切書かず、
+    // 新しい代表として索引に登録するだけで通過する。
+    const before = await stores.journal.list({ types: ['exchange'] });
+    const beforeFoldedCount = before.filter(
+      (entry) => entry.type === 'exchange' && entry.text.includes('受信箱の行は増やさずに畳んだ'),
     ).length;
 
     clone.post(staleTokenPoolEvent('evt-collapse-fresh', new Date().toISOString(), sharedPayload));
-    await waitFor(async () => {
-      const after = (await stores.journal.list({ types: ['external_event'] })).filter(
-        (entry) => entry.type === 'external_event' && entry.summary.includes(sharedPayload),
-      ).length;
-      return after > before;
-    }, '新しい token-pool 合図が「幻」へ畳まれず、独立した本文として日誌へ載る');
+    // **`post()` は同期関数** なので、畳まれるなら `journal` への `void` 呼び出し
+    // 自体はこの行の直後に発行済みである（書き込みの完了までは待たない—
+    // `#journal` は best-effort）。ここでは十分な猶予（`waitFor` の既定
+    // タイムアウト）だけ置いて、増えていないことを確認する。
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const afterFolded = await stores.journal.list({ types: ['exchange'] });
+    const afterFoldedCount = afterFolded.filter(
+      (entry) => entry.type === 'exchange' && entry.text.includes('受信箱の行は増やさずに畳んだ'),
+    ).length;
+    expect(afterFoldedCount).toBe(beforeFoldedCount);
 
     await clone.stop();
   });
