@@ -4,6 +4,7 @@ import {
   evaluatePrGreen,
   filterRunsByEvent,
   formatVerdict,
+  isFullCommitSha,
   pickLatestRunPerWorkflow,
   // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 } from './check-pr-green-core.mjs';
@@ -536,5 +537,22 @@ describe('自己参照バグの再現と修正（Issue #1207 の (3)。実測固
     // push の run のみ ⟹ pull_request の run が無いので out-of-scope
     // （base-overlap は pull_request 専用で設計どおり skip。ci/image は success）。
     expect(result.verdict).toBe('out-of-scope');
+  });
+});
+
+describe('isFullCommitSha（略記を no-runs に化けさせないための述語。Issue #1192 の N5）', () => {
+  it('40文字の16進だけを真とする（大文字も可）', () => {
+    expect(isFullCommitSha('3ca63973b7dae66b48b033a962a92e19c7e73e63')).toBe(true);
+    expect(isFullCommitSha('3CA63973B7DAE66B48B033A962A92E19C7E73E63')).toBe(true);
+  });
+
+  it('略記・長すぎ・非16進・sha でない型は偽', () => {
+    expect(isFullCommitSha('3ca63973b7da')).toBe(false);
+    expect(isFullCommitSha('f'.repeat(39))).toBe(false);
+    expect(isFullCommitSha('f'.repeat(41))).toBe(false);
+    expect(isFullCommitSha('g'.repeat(40))).toBe(false);
+    expect(isFullCommitSha('')).toBe(false);
+    expect(isFullCommitSha(undefined)).toBe(false);
+    expect(isFullCommitSha(12345)).toBe(false);
   });
 });

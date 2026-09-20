@@ -87,6 +87,7 @@ import {
   evaluatePrGreen,
   filterRunsByEvent,
   formatVerdict,
+  isFullCommitSha,
   pickLatestRunPerWorkflow,
 } from './check-pr-green-core.mjs';
 
@@ -157,6 +158,23 @@ function ghApiJson(path) {
  * }}
  */
 export function judgeSha({ sha, repo, events }) {
+  // ⭐ 略記の sha を弾く（Issue #1192 の N5 の具体形）。
+  // `actions/runs?head_sha=` は略記を渡すと**エラーではなく空の一覧**を返すため、
+  // ここで拒まないと「run が1つも無い」（= no-runs）に化け、**赤いコミットが
+  // 「CI が走っていない」として読まれる。** 理由と実測は
+  // `check-pr-green-core.mjs` の `isFullCommitSha` の doc を見よ。
+  if (!isFullCommitSha(sha)) {
+    return {
+      result: null,
+      latestRuns: [],
+      jobsByRunId: {},
+      error:
+        `完全な40文字のコミット sha を渡すこと（受け取った値: ${String(sha)}）。` +
+        '略記を渡すと actions/runs は空の一覧を返し、run が1つも無いのか、' +
+        '引けない sha だったのかを区別できない。',
+    };
+  }
+
   const runsPath = `repos/${repo}/actions/runs?head_sha=${sha}&per_page=100`;
   const { data: runsData, error: runsError } = ghApiJson(runsPath);
   if (runsData === null) {

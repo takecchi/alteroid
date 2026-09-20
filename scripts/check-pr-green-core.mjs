@@ -78,6 +78,41 @@ function newerRun(a, b) {
  * 持つことを前提にする（`gh api actions/runs` の実フィールドのサブセット。
  * `event` を持たない古い呼び出し元・テストとの互換のため `undefined` も許す）。
  */
+/**
+ * 渡された sha が「完全な40文字のコミット sha」かを見る純関数。
+ *
+ * ## なぜこの述語が要るか（Issue #1192 の N5 の具体形）
+ *
+ * `actions/runs?head_sha=<sha>` は **略記の sha を渡すと、エラーではなく
+ * 空の一覧を返す。** ⟹ 呼び出し側からは「この sha に run が1つも無い」と
+ * 区別が付かない。実測（2026-09-20、同じコミット `3ca63973b7da…`）:
+ *
+ * ```
+ * 略記   → 判定できなかった —— この sha に workflow run が1つも無い
+ * 完全形 → NG —— success ではない job が在る（ci = failure）
+ * ```
+ *
+ * ⟹ ⭐ **赤いコミットが「CI が走っていない」に化ける。** どちらも終了コードは
+ * 1（fail-closed）なので緑には化けないが、**読み手は別の結論を引く** ——
+ * 実際にこの誤読が起きている（2026-09-20、マネージャー層が「6件とも
+ * no-runs」と報告し、完全形で引き直して6件とも `red` だと訂正した）。
+ *
+ * ⟹ `no-runs` は2つの意味を背負っている ——「本当に run が無い」と
+ * 「引けない入力を渡された」である。**後者を別の状態として分ける**のが
+ * この述語の役目である（`AGENTS.md`「取れない軸に 0 の行を作らない」/
+ * 「『判定できない』という3つ目の状態を持つ」の具体形）。
+ *
+ * ⚠️ **短縮形を自分で展開しない。** 展開には repo か API への問い合わせが
+ * 要り、この関数の外側（ネットワーク層）の仕事になる。ここは**拒む**だけで、
+ * 呼び出し側に完全形を要求する。
+ *
+ * @param {unknown} sha
+ * @returns {boolean}
+ */
+export function isFullCommitSha(sha) {
+  return typeof sha === 'string' && /^[0-9a-f]{40}$/i.test(sha);
+}
+
 export function pickLatestRunPerWorkflow(runs) {
   const byKey = new Map();
   for (const run of runs) {

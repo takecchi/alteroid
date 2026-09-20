@@ -86,3 +86,46 @@ describe('judgeSha の配線（events を渡す／渡さない）', () => {
     expect(result?.verdict).toBe('out-of-scope');
   });
 });
+
+/**
+ * 略記 sha の拒否（Issue #1192 の N5 の具体形）。
+ *
+ * `actions/runs?head_sha=` は略記を渡すと**エラーではなく空の一覧**を返す。
+ * ⟹ 拒まないと `no-runs` に化け、**赤いコミットが「CI が走っていない」として
+ * 読まれる。** 実測（2026-09-20、同じコミット）: 略記は `no-runs`、完全形は
+ * `red`。理由は `check-pr-green-core.mjs` の `isFullCommitSha` の doc。
+ */
+describe('略記 sha の拒否（no-runs に化けさせない）', () => {
+  afterEach(() => {
+    mockedExec.mockReset();
+  });
+
+  it('略記 sha は判定に進まず、gh api を1度も呼ばない', () => {
+    mockedExec.mockImplementation(fakeGhApi as never);
+    const { result, error } = judgeSha({ sha: '3ca63973b7da', repo: 'takecchi/alteroid' });
+    expect(result).toBeNull();
+    expect(String(error)).toContain('完全な40文字');
+    // ⭐ ネットワークへ出る前に弾いていること（出てしまうと空の一覧が返り、
+    //    no-runs と区別が付かなくなる）。
+    expect(mockedExec).not.toHaveBeenCalled();
+  });
+
+  it('⚠ 受け取った値をそのまま理由に載せる（どれを渡したのか読み手が分かる）', () => {
+    const { error } = judgeSha({ sha: 'deadbeef', repo: 'takecchi/alteroid' });
+    expect(String(error)).toContain('deadbeef');
+  });
+
+  it('sha でない値（undefined / 数値 / 41文字 / 非16進）も拒む', () => {
+    for (const bad of [undefined, 12345, 'f'.repeat(41), 'g'.repeat(40)]) {
+      const { result } = judgeSha({ sha: bad as never, repo: 'takecchi/alteroid' });
+      expect(result).toBeNull();
+    }
+  });
+
+  it('完全形の sha は今までどおり判定へ進む（回帰させていない）', () => {
+    mockedExec.mockImplementation(fakeGhApi as never);
+    const { result, error } = judgeSha({ sha: SHA, repo: 'takecchi/alteroid', events: ['push'] });
+    expect(error).toBeNull();
+    expect(result?.verdict).toBe('out-of-scope');
+  });
+});
