@@ -926,6 +926,50 @@ describe('pnpm verify — 統合の歯（Issue #1191, C5）', () => {
     ).toBeGreaterThan(callsAfterFirst);
   });
 
+  /**
+   * E（A の直後に通常実行）: 絞った成功は再利用されない — 2回目が省略されずに走る。
+   *
+   * **A が測っているのは記録ファイルが作られないという実装の中間生成物であって、
+   * 使う側が見る挙動（次の通常実行が省略されない）ではない。** 記録の形を将来
+   * 変えれば A は書き換えられて守りが消えうるが、この歯は挙動そのものを測るので
+   * 残る。
+   */
+  it('E（A の直後に通常実行）: 絞った成功は再利用されない — 2回目が省略されずに走る', async () => {
+    const repoDir = await makeE2eRepo();
+    const { binDir, logPath } = await makeFakePnpm();
+    writeFileSync(logPath, '');
+
+    const first = runVerify(repoDir, binDir, logPath, ['some.test.ts']);
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    const callsAfterFirst = logLines(logPath).length;
+
+    const second = runVerify(repoDir, binDir, logPath, []);
+    expect(second.status, second.stdout + second.stderr).toBe(0);
+    expect(
+      second.stdout,
+      '絞った実行の成功が再利用され、通常実行が省略された（"skipped" が出ている）',
+    ).not.toContain('skipped');
+
+    const callsAfterSecond = logLines(logPath).length;
+    expect(
+      callsAfterSecond,
+      '2回目の通常実行で、偽 pnpm の呼び出しログが伸びていない（実際には走っていない）',
+    ).toBeGreaterThan(callsAfterFirst);
+
+    const secondCalls = logLines(logPath)
+      .slice(callsAfterFirst)
+      .map((line) => JSON.parse(line) as string[]);
+    const secondTestCall = secondCalls.find((args) => args[0] === 'test');
+    expect(
+      secondTestCall,
+      '2回目の呼び出しに test の手順が無い（本当に走ったか判定できない）',
+    ).toBeDefined();
+    expect(
+      secondTestCall ?? [],
+      '1回目の絞り込み（some.test.ts）が2回目の test 呼び出しへ引き継がれている',
+    ).not.toContain('some.test.ts');
+  });
+
   it('openapi の手順（git diff）は、一時 repo に対象パスが無くても 0 で通る', async () => {
     // 上の4本すべてがここを暗黙に通っているが、**明示で確かめる**
     // （依頼の「念のため生出力で確かめること」に対応）。
