@@ -115,7 +115,11 @@ describe('renderManagerList', () => {
       }),
     ]);
 
-    expect(text).toContain('[done/背景処理待ち×3]');
+    // **Issue #1104。** `describeManagerState` は `since`（既にここで渡している
+    // `awaitingBackground.since`）が在れば「（<時刻> から）」を添えるように
+    // なった——CLI はこれまでも第3引数をそのまま渡しているので、字面もここで
+    // 追随する（字面そのものの固定は core の `digest.test.ts` が持つ）。
+    expect(text).toContain('[done/背景処理待ち×3（2026-09-05T00:00:00.000Z から）]');
     // 陰性対照: 握り潰しが無ければ1文字も足さない。
     expect(renderManagerList([manager({ status: 'done', live: true })])).toContain('[done]');
     expect(renderManagerList([manager({ status: 'done', live: true })])).not.toContain(
