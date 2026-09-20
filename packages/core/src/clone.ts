@@ -635,23 +635,32 @@ const CONTEXT_WINDOW_FOLD_HELD_NOTICE =
   '⟹ プロンプトそのものが収まっていない可能性がある。';
 
 /**
- * `#usageBlockedStreak` がここへ達したら、文脈窓の実測を待たずにセッションを
- * 畳んで作り直す（`#noteUnproductiveUsageBlockFold` の doc。Issue #1240）。
+ * `#usageBlockedAccumulatedChars` がここへ達したら、文脈窓の実測を待たずに
+ * セッションを畳んで作り直す（`#noteUnproductiveUsageBlockFold` の doc。
+ * Issue #1240）。
  *
- * **1 にしない理由。** 枠は数時間おきに自然に開く（`five_hour` 等）ので、
- * 大半の枠当たりは**1回も再試行しないうちに**次の成功で終わる。1で畳むと、
- * ごくふつうの短い枠当たりのたびに会話の連続性を切ることになり、いちばん
- * 多い「すぐ開く」場合を毎回犠牲にする。
+ * ## 単位は文字数であって回数ではない
  *
- * **3 にする理由。** 「保持 → 新しい合図で1回再試行 → また保持」を2周
- * （＝ `reached` を3回連続で観測）してもまだ1度も成功していないなら、その
- * 枠当たりは短時間では終わらない種類だと判断してよい——実運用の観測
- * （2026-09-18/19、5〜6時間の枠当たりが2回）でも、これくらいの周回では
- * まだ短時間で解けていない。**この数はヒューリスティックであり、実測で
- * 増減させてよい**（AGENTS.md 地雷2に当たらない理由は
- * `#usageBlockedStreak` の doc）。
+ * **最初は「連続で当たった回数」で閾値を決めていたが、それは誤りだった**
+ * （`#usageBlockedAccumulatedChars` の doc に実測を書いた）。回数だと、
+ * 「小さい本文を何十回も再試行することを前提にした既存の回帰テスト」と
+ * 「本物の事故（1回あたりの持ち越しが大きい）」を同じ数字で区別できない。
+ * 文字数にすれば、前者は閾値へ何桁も届かないまま緑になり、後者だけを
+ * 捕まえられる。
+ *
+ * ## この値にした理由
+ *
+ * **200,000 文字**。文脈窓の上限（実測 1.24M/1M。1トークンおおよそ3〜4
+ * バイトとして見積もると 1M トークン相当は概算で数MB）に対して十分小さく
+ * ——**先回りして畳むための余白**であって「まだ間に合う量」を測っているの
+ * ではない。同時に、既存のテストが積む本文（合図1件あたり数十〜数百文字）
+ * を数十〜数百回重ねてもまったく届かない大きさでもある——実測
+ * （`describe('クローン — 枠に当たり続けたセッションは畳んで作り直す
+ * （Issue #1240）')`）。**この数はヒューリスティックであり、実測で増減
+ * させてよい**（AGENTS.md 地雷2に当たらない理由は
+ * `#usageBlockedAccumulatedChars` の doc）。
  */
-const UNPRODUCTIVE_USAGE_BLOCK_FOLD_THRESHOLD = 3;
+const UNPRODUCTIVE_USAGE_BLOCK_FOLD_CHAR_THRESHOLD = 200_000;
 
 /**
  * 文脈窓ではなく**枠（利用上限）に当たり続けたので**セッションを畳んで作り
@@ -1302,11 +1311,33 @@ class Clone implements CloneHost {
    * まま**この持ち越しが積み重なる——`#withFreshMemory` は差分なので安いが、
    * 台帳・状況の断り書きは差分ではなく毎回「いまの全体」を積む側である。
    *
+   * ## なぜ「連続で当たった回数」ではなく「積んだ文字数」で測るか
+   *
+   * **最初は回数（`reached` に連続で当たった回数）で測っていたが、それは
+   * 誤りだった。** 実測（このリポジトリの回帰テストで確かめた）: 「枠に当たり
+   * 続けても、同じ会話へ何十件届いても畳まない・順序が保たれる」ことを測る
+   * 既存の歯が複数あり、**3〜5回の再試行を同じセッションで受け切ることを
+   * 前提にしている**（例: `クローン — 枠で保持している間、中身を持たない
+   * 合図で在庫を作らない` の歯3。届いた合図1件ずつが数十バイトの本文しか
+   * 運ばない）。回数で畳むと、**その小さいテストの再試行数と、本物の事故が
+   * 起こす再試行数が同じ桁**なので、閾値をテストが壊れない大きさまで上げる
+   * と、今度は本物の事故（4.5 時間で5〜7回）を1回も捕まえられなくなる。
+   * **回数は「積んだ量」の代理指標として粒度が粗すぎる**——同じ1回でも、
+   * 本文が数十バイトの tick と、台帳・状況の断り書きが数十KBに育った実運用の
+   * ターンとでは、積む量が桁で違う。
+   *
+   * **⟹ 直接測る対象（積んだ文字数）を数える側へ倒した。** `#pushInput` に
+   * 渡す直前の文字列の長さを、このフィールドへ足し込む（`#pushInput` の
+   * doc）。小さい本文を何百回積んでもここは小さいままなので、上の回帰テスト
+   * は0文字たりとも直さずに緑のままである——実測（このファイルの
+   * `describe('クローン — 枠に当たり続けたセッションは畳んで作り直す
+   * （Issue #1240）')`）。
+   *
    * ## 何をするか
    *
-   * 一定回数（{@link UNPRODUCTIVE_USAGE_BLOCK_FOLD_THRESHOLD}）に達したら、
-   * 文脈窓で落ちたときと同じ手当て（`#noteContextWindowFold` の「畳んで作り
-   * 直す」）を、**文脈窓の実測を待たずに**先回りして行う
+   * 一定の文字数（{@link UNPRODUCTIVE_USAGE_BLOCK_FOLD_CHAR_THRESHOLD}）に
+   * 達したら、文脈窓で落ちたときと同じ手当て（`#noteContextWindowFold` の
+   * 「畳んで作り直す」）を、**文脈窓の実測を待たずに**先回りして行う
    * （`#noteUnproductiveUsageBlockFold`）。**枠が閉じている間、そもそも
    * これ以上モデルへ渡す入力を積み増さない**という判断であって、再試行の
    * 回数・頻度・「1合図につき1試行」は1文字も変えない——ターンは今までどおり
@@ -1318,19 +1349,22 @@ class Clone implements CloneHost {
    * `#noteContextWindowFold` の「暴走の止め」の doc と同じ理由づけである——
    * ここで数えているのは**セッションの持ち越しを畳み直すかどうか**であって、
    * **仕事そのもの**（ターンを回すかどうか・再試行するかどうか）ではない。
-   * 抑止しても枠の解除の試行回数は1回も減らない（`releaseAttemptCount` は
-   * この値と無関係）。**そして抑止しなくても、この持ち越しはどのみち保存する
-   * 価値が無い**（1度も答えを返していない＝クローンはまだこの記憶を1文字も
-   * 参照していない）ので、抑止して悪くなるものが無い。
+   * しかも数えているのは回数ではなく量なので、地雷2が指す「実行回数上限」
+   * そのものにすら当たらない——**何回再試行したかは、この値を1文字も動かさ
+   * ない**（動くのは積んだ本文の長さだけ）。抑止しても枠の解除の試行回数は
+   * 1回も減らない（`releaseAttemptCount` はこの値と無関係）。**そして
+   * 抑止しなくても、この持ち越しはどのみち保存する価値が無い**（1度も答えを
+   * 返していない＝クローンはまだこの記憶を1文字も参照していない）ので、
+   * 抑止して悪くなるものが無い。
    *
    * ## セッションごとに戻る
    *
    * `#sessionAnswered` と同じ3か所で戻す——`#ensureQuery`（新しいセッションを
    * 起こす）と、成功した `result`（`#sessionAnswered = true` と同じ場所）。
-   * 持ち越すと、前のセッションで積んだ回数が新しいセッションの1回目から数え
+   * 持ち越すと、前のセッションで積んだ量が新しいセッションの1回目から数え
    * 始めることになる。
    */
-  #usageBlockedStreak = 0;
+  #usageBlockedAccumulatedChars = 0;
 
   /**
    * 文脈窓（プロンプトの長さ）で落ちたので、**次のターンの境界でセッションを
@@ -5444,7 +5478,9 @@ class Clone implements CloneHost {
     // 畳んでいれば `foldingForContextWindow` を優先し、そうでなければ
     // `#recycleForContextWindow` の現在値を読む）。Issue #1240。
     const foldingForUnproductiveUsage: 'no' | 'folding' =
-      foldingForContextWindow === 'no' && this.#usageBlocked !== null && this.#recycleForContextWindow
+      foldingForContextWindow === 'no' &&
+      this.#usageBlocked !== null &&
+      this.#recycleForContextWindow
         ? 'folding'
         : 'no';
     const failureText =
@@ -5645,7 +5681,7 @@ class Clone implements CloneHost {
   /**
    * 枠（利用上限）に当たり続けて1度も成功しないまま、セッションの持ち越しが
    * 積み重なっているかを判定し、達していれば文脈窓のときと同じ手当てで畳む
-   * （`#usageBlockedStreak` の doc。Issue #1240）。
+   * （`#usageBlockedAccumulatedChars` の doc。Issue #1240）。
    *
    * ## `#noteContextWindowFold` と何が違うか
    *
@@ -5654,8 +5690,8 @@ class Clone implements CloneHost {
    * ある**——compaction 自体が API 呼び出しなので、枠が閉じている間は
    * 「長すぎる」と教えてくれる合成メッセージを生成する処理自体が429で落ちる。
    * ⟹ 実測を待つと、実測が来ないまま積み上がり続ける。ここは実測の代わりに
-   * **`#usageBlockedStreak`（1度も成功しないまま `reached` に連続で当たった
-   * 回数）**を見て、実測より先に畳む。
+   * **`#usageBlockedAccumulatedChars`（1度も成功しないまま `#pushInput` へ
+   * 積んだ文字数の合計）**を見て、実測より先に畳む。
    *
    * ## 呼び出しは `#noteUsageNotice` の `reached` 枝からだけ
    *
@@ -5676,8 +5712,9 @@ class Clone implements CloneHost {
   async #noteUnproductiveUsageBlockFold(): Promise<'no' | 'folding'> {
     // **セッションが無ければ畳むものが無い**（`#noteContextWindowFold` と同じ門）。
     if (this.#query === null) return 'no';
-    this.#usageBlockedStreak += 1;
-    if (this.#usageBlockedStreak < UNPRODUCTIVE_USAGE_BLOCK_FOLD_THRESHOLD) return 'no';
+    if (this.#usageBlockedAccumulatedChars < UNPRODUCTIVE_USAGE_BLOCK_FOLD_CHAR_THRESHOLD) {
+      return 'no';
+    }
 
     this.#recycleForContextWindow = true;
     this.#contextWindowFoldNoticePending = true;
@@ -5694,9 +5731,11 @@ class Clone implements CloneHost {
       with: 'self',
       role: 'outbound',
       text:
-        `枠に当たったまま ${String(this.#usageBlockedStreak)} 回連続で失敗し、` +
-        '1度も答えを返せていない。同じセッションへ積み続けると枠が開いた頃には' +
-        '文脈が伸びきっているので、ここでセッションを畳んで作り直す（Issue #1240）。',
+        '枠に当たったまま1度も答えを返せないうちに、積んだ入力が ' +
+        `${String(this.#usageBlockedAccumulatedChars)} 文字（閾値 ` +
+        `${String(UNPRODUCTIVE_USAGE_BLOCK_FOLD_CHAR_THRESHOLD)}）に達した。同じ` +
+        'セッションへ積み続けると枠が開いた頃には文脈が伸びきっているので、' +
+        'ここでセッションを畳んで作り直す（Issue #1240）。',
     });
     return 'folding';
   }
@@ -7154,6 +7193,13 @@ class Clone implements CloneHost {
   }
 
   #pushInput(text: string): void {
+    // **`#usageBlockedAccumulatedChars` を積む場所はここ1か所だけ**
+    // （`#usageBlockedAccumulatedChars` の doc。Issue #1240）。モデルへ実際に
+    // 渡す文字列の長さそのものを数える——`#runTurn` 側で数え直すと、並び順
+    // （`composeTurnInputText`）が変わったときに二重管理になる。**成功すれば
+    // 別の場所（`turn_ended` の成功枝）で 0 へ戻すので、健全なセッションでは
+    // ここは大きくならない。**
+    this.#usageBlockedAccumulatedChars += text.length;
     this.#input.push({
       type: 'user',
       message: { role: 'user', content: text },
@@ -7246,9 +7292,9 @@ class Clone implements CloneHost {
     this.#transcriptPath = null;
     this.#sessionAnswered = false;
     // **`#sessionAnswered` と同じ理由・同じ場所で戻す**（Issue #1240）。持ち越すと
-    // 前のセッションで積んだ枠の連続失敗回数が新しいセッションへ引き継がれ、
+    // 前のセッションで積んだ文字数が新しいセッションの1回目から引き継がれ、
     // まだ1度も試していないのに畳みの敷居へ近い状態から始まることになる。
-    this.#usageBlockedStreak = 0;
+    this.#usageBlockedAccumulatedChars = 0;
     // **前のセッションで観測した値を持ち越さない。** ここを残すと、新しい
     // セッションの init が届く前（あるいは届かないまま）に `self_status` が
     // 前のセッションのモデル id や effort を「いまの値」として返す ＝
@@ -8803,10 +8849,11 @@ class Clone implements CloneHost {
         // `#usageBlocked` では代用できない —— あれは初期値も `null` なので
         // 「まだ成功していない」と区別できない（`#sessionAnswered` の doc）。
         this.#sessionAnswered = true;
-        // **成功は「枠に当たり続けた連続」の反証そのもの**（Issue #1240。
-        // `#usageBlockedStreak` の doc）。降ろさないと、次に `reached` に当たった
-        // ときに前回までの連続回数から数え直してしまい、実際より早く畳む。
-        this.#usageBlockedStreak = 0;
+        // **成功は「積んだ入力が無駄になっている」ことの反証そのもの**
+        // （Issue #1240。`#usageBlockedAccumulatedChars` の doc）。降ろさないと、
+        // 次に `reached` に当たったときに前回までの積算から数え直してしまい、
+        // 実際より早く畳む。
+        this.#usageBlockedAccumulatedChars = 0;
         this.#emit(turn?.conversationId ?? null, { type: 'done' });
         this.#finishTurn();
         return;
