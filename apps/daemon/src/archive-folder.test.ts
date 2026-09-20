@@ -12,7 +12,12 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createMemoryStores, type ArchiveEntry, type ManagerPool, type Stores } from '@alteroid/core';
+import {
+  createMemoryStores,
+  type ArchiveEntry,
+  type ManagerPool,
+  type Stores,
+} from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -41,7 +46,9 @@ const noRunningManagers: Pick<ManagerPool, 'runningManagerOwning'> = {
   runningManagerOwning: () => undefined,
 };
 
-function fakeManagers(runningOwners: Map<string, string>): Pick<ManagerPool, 'runningManagerOwning'> {
+function fakeManagers(
+  runningOwners: Map<string, string>,
+): Pick<ManagerPool, 'runningManagerOwning'> {
   return {
     runningManagerOwning: (archiveId) => runningOwners.get(archiveId),
   };
