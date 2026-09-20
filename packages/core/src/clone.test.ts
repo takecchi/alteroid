@@ -6326,6 +6326,75 @@ describe('クローン — 枠に当たり続けたセッションは畳んで�
     expect(s.calls.length).toBeGreaterThan(1);
   });
 
+  /**
+   * **成功したら積算は0へ戻る**（`#usageBlockedAccumulatedChars` の doc）。
+   *
+   * ## この歯が居ないと何が起きるか（変異試験で確かめた。段4 に生出力を残す）
+   *
+   * `turn_ended` の成功枝で積算を戻す1行を消す変異を手で当てたところ、
+   * **他の365本は1本も落ちなかった**（この歯を足す前は366本中0本がここを
+   * 守っていた）。理由は単純で、既存の回帰テストはどれも「枠に当たり続ける
+   * だけ」か「最初から成功し続ける」かのどちらかで、**「一度成功してから
+   * また枠に当たる」を跨ぐテストが1本も無かった**——このリポジトリの流儀
+   * （AGENTS.md「Issue の『確かめていないこと』は…仕事の指定である」）に
+   * ならい、見つかった穴をここで埋める。
+   */
+  it('成功すると積算は0へ戻る——前の枠当たりの分を次の枠当たりへ持ち越さない', async () => {
+    const stores = createMemoryStores();
+    // **回数ではなく可変フラグで駆動する**（歯2「中身を持つ合図…」と同じ形）。
+    // `resultFor` は本セッションのターンだけでなく `sideQuery`（蒸留）からも
+    // 呼ばれうる（`fakeSdk` は文字列プロンプトでは常に `turnIndex=0` で呼ぶ）
+    // ので、通し番号で「何本目か」を数えると側道の呼び出しに数字がずれる。
+    // フラグなら、成功させたい1回の直前だけ立てて直後に降ろせるので、side
+    // query が紛れ込んでも影響しない。
+    let succeedNow = false;
+    const s = setup(undefined, stores, {
+      resultFor: () =>
+        succeedNow
+          ? { subtype: 'success', text: 'わかった' }
+          : { subtype: 'error_during_execution', text: spendLimitMessage },
+    });
+
+    // 1本目の枠当たり: 180,000文字ぶん積む（まだ閾値未満）。
+    await driveToTwoAccumulations(stores, s);
+    const inputsSoFar = (s.calls[0] as FakeCall).inputs.length;
+
+    // 解除させる（保持していた1本目の発言＝`BIG_BODY` が再試行され、
+    // `succeedNow` が真なのでそれは成功する。**再試行の中身がどう転んでも
+    // 構わない**——`succeedNow` が真のあいだは何が来ても成功するので、
+    // 「1度でも成功が挟まったら積算が0へ戻るか」だけを測れる作りである。
+    succeedNow = true;
+    s.clone.post(tick('evt-si-2'));
+    await waitFor(() => !s.clone.usageBlocked, '解除された発言が成功し、枠が解ける');
+    // 成功の帰結（`#usageBlocked === null`）が届いた直後は、まだ同じ受信箱の
+    // 反復のうちに残った合図（tick 自身の内部ターンなど）が処理され続けて
+    // いることがある。**次の枠当たりを起こす前に、静まるまで少し待つ**
+    // ——でないと、いま数えたいのとは別の要因で `s.calls[0].inputs` が
+    // 動き続け、次の測定の基準がぶれる。
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    succeedNow = false;
+    expect(await stores.sessions.getCloneSessionId()).not.toBeNull();
+
+    // 2本目の枠当たり: 新しい `BIG_BODY`（90,000文字）だけを持つ発言を送る。
+    // **リセットされていれば、これ単独（約90,000文字）はまだ閾値
+    // 200,000未満のはず。** 直す前の変異（成功でリセットしない）なら、
+    // 1本目の 180,000文字余り（＋解除の途中で積まれた分）にこれが上乗せ
+    // され、**この1本の失敗の時点で**閾値を超えて畳まれてしまう
+    // （畳みの判定は `#noteUsageNotice` の中、そのターンの失敗の瞬間に
+    // 行われる——`#noteUnproductiveUsageBlockFold` の doc）。
+    s.clone.post(humanMessage(BIG_BODY));
+    await waitFor(() => s.clone.usageBlocked, '2本目の枠当たり: 新しい発言だけで枠に当たる');
+
+    // **⭐ ここが本体。** リセットされていれば、この1本（約90,000文字）だけ
+    // では畳まれていない（resume 素材が残っている）。
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(await stores.sessions.getCloneSessionId()).not.toBeNull();
+    // 参考: 実際に新しい入力が積まれたことも確かめる（測定が空振りでない証拠）。
+    expect((s.calls[0] as FakeCall).inputs.length).toBeGreaterThan(inputsSoFar);
+
+    await s.clone.stop();
+  });
+
   it('畳んだ理由を「枠」だと人間へ言う（文脈窓だとは言わない。記録は消えたと言わない）', async () => {
     const stores = createMemoryStores();
     const s = setup(undefined, stores, {
