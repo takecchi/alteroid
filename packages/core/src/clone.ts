@@ -555,6 +555,24 @@ const FORGET_RETRY_MS = 200;
  * `#unread` / `#redelivered` / `#redeliveredClosed` / `#pendingCollapse` の
  * 後始末は1件ずつの軽い操作なので、まとめる理由が無く、束ねていない
  * （`#removeStaleRedeliveryChunk` の doc）。
+ *
+ * ## ⚠️ この値には余裕がゼロである。触る前に読むこと
+ *
+ * 65,535 は「壊れない最大」であって「安全な値」ではない。上限が縛るのは
+ * **1つの文が持つバインドパラメータの総数**であって、`IN (...)` の要素数
+ * ではない —— いま `PgInboxStore.removeMany` が組む `DELETE` は
+ * `inArray(inboxEvents.id, ids)` のぶんしかパラメータを持たないので
+ * N=65,535 はちょうど収まるが、**この文へ条件を1つでも足すと
+ * N+1 個になり、境界のちょうど1件だけで壊れる。**
+ *
+ * ⟹ `packages/storage-pg/src/inbox.ts` の `removeMany` に `where` を足す／
+ * `returning` を増やす／別の条件を `and()` で足す、のいずれかをするなら、
+ * **ここも一緒に下げること。**（逐語:
+ * `grep -Fn -- 'async removeMany(ids: readonly string[]): Promise<string[]>' packages/storage-pg/src/inbox.ts`）
+ *
+ * ⚠️ 現実の滞留は 4,253 件（issue #903 本文の実測）で上限の 6.5% である
+ * ——**いま壊れているという話ではない。**次に触る人が境界を踏まないための
+ * 注意である。
  */
 const RESTORE_STALE_REMOVE_CHUNK_MAX_IDS = 65_535;
 
