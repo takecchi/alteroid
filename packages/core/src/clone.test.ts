@@ -10488,7 +10488,8 @@ describe('クローン — 枠が回復した後の返信は、人間の側か�
     await waitFor(
       async () =>
         (await matchingOutbound()).some(
-          (entry) => entry.text === 'わかった' && !before.some((existing) => existing.id === entry.id),
+          (entry) =>
+            entry.text === 'わかった' && !before.some((existing) => existing.id === entry.id),
         ),
       '保持していた1本目の再試行の返信（わかった）が日誌に残る',
     );
