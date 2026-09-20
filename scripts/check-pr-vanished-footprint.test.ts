@@ -393,3 +393,70 @@ describe('formatVerdict', () => {
     expect(text).toContain('`x.ts`');
   });
 });
+
+/**
+ * 着地後に見つかった2件の欠陥を突く歯（どちらも実測で再現済み）。
+ *
+ * - 誤検出: フェンス（```）の中のバッククォートを名指しとして拾っていた
+ * - 見逃し: 候補の末尾スラッシュ（`packages/core/`）が二重スラッシュになり外れていた
+ */
+describe('フェンスの中を名指しとして拾わない（誤検出の修正）', () => {
+  it('フェンスの中だけに在るバッククォートは名指しに数えない', () => {
+    const body = ['参考:', '```js', 'const p = `AGENTS.md`;', '```'].join('\n');
+    expect(extractInlineCodeSpans(body)).toEqual([]);
+  });
+
+  it('フェンスの外（地の文）のバッククォートは今までどおり拾う', () => {
+    const body = '本文が `AGENTS.md` を名指ししている。';
+    expect(extractInlineCodeSpans(body).map((s: { content: string }) => s.content)).toEqual([
+      'AGENTS.md',
+    ]);
+  });
+
+  it('フェンスの中だけで触れたファイルは found にしない（本文は変えていないと明記している回）', () => {
+    const body = [
+      '参考:',
+      '```js',
+      'const p = `AGENTS.md`;',
+      '```',
+      'この PR では AGENTS.md を1文字も変更していない。',
+    ].join('\n');
+    const result = evaluatePrVanishedFootprint({
+      commits: [{ parentCount: 1, files: ['AGENTS.md', 'a.ts'] }],
+      finalFiles: ['a.ts'],
+      body,
+    });
+    expect(result.vanished).toEqual(['AGENTS.md']);
+    expect(result.mentions).toEqual([]);
+    expect(result.verdict).toBe('ok');
+  });
+
+  it('同じ消えた足跡でも、地の文で名指しされていれば found のまま（見逃しを増やしていない）', () => {
+    const result = evaluatePrVanishedFootprint({
+      commits: [{ parentCount: 1, files: ['AGENTS.md', 'a.ts'] }],
+      finalFiles: ['a.ts'],
+      body: '本文が `AGENTS.md` を名指ししている。',
+    });
+    expect(result.verdict).toBe('found');
+  });
+});
+
+describe('末尾スラッシュ付きのディレクトリ名指し（見逃しの修正）', () => {
+  it('末尾スラッシュ付きでも subpath に当たる', () => {
+    expect(matchNamedCandidate('packages/core/src/tools.ts', 'packages/core/')).toBe('subpath');
+  });
+
+  it('末尾スラッシュ無しの従来の形も subpath のまま', () => {
+    expect(matchNamedCandidate('packages/core/src/tools.ts', 'packages/core')).toBe('subpath');
+  });
+
+  it('⚠ 境界の不変条件は戻していない —— packages/core は packages/core-extra/... に当たらない', () => {
+    expect(matchNamedCandidate('packages/core-extra/foo.ts', 'packages/core')).toBeNull();
+    expect(matchNamedCandidate('packages/core-extra/foo.ts', 'packages/core/')).toBeNull();
+  });
+
+  it('スラッシュだけの候補は、剥がすと空になるのでどこにも当てない', () => {
+    expect(matchNamedCandidate('a.ts', '/')).toBeNull();
+    expect(matchNamedCandidate('a.ts', '///')).toBeNull();
+  });
+});
