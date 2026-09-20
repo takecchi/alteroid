@@ -483,7 +483,9 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
     //
     // ⟹ **日誌への書き込みそのものに割り込んで、ちょうど良いタイミングで
     // 同期的に `stop()` を起こす。** ポーリングの粒度に頼らない。
-    let clone: CloneHost | undefined;
+    // `clone` は `stores` を組み立てた後にしか作れないので、割り込み側からは
+    // 箱越しに触る（`let` で受けると代入が1回きりで `prefer-const` に当たる）。
+    const cloneRef: { current: CloneHost | undefined } = { current: undefined };
     let stopPromise: Promise<void> | undefined;
     let droppedSoFar = 0;
     const STOP_AFTER = 500;
@@ -499,8 +501,8 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
             entry.text.includes('ターンを起こさずに消した')
           ) {
             droppedSoFar += 1;
-            if (droppedSoFar >= STOP_AFTER && clone !== undefined) {
-              stopPromise = clone.stop();
+            if (droppedSoFar >= STOP_AFTER && cloneRef.current !== undefined) {
+              stopPromise = cloneRef.current.stop();
             }
           }
           return result;
@@ -509,7 +511,7 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
     };
 
     const booted = bootClone(stores);
-    clone = booted.clone;
+    cloneRef.current = booted.clone;
 
     await waitFor(() => stopPromise !== undefined, 'stop() が割り込みで起こされる');
     await stopPromise;
