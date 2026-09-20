@@ -52,6 +52,7 @@ import {
   INBOX_BACKLOG_LOUD_THRESHOLD,
   INBOX_EVENT_TYPE_ORDER,
   isHumanOriginated,
+  removeInboxEventsAndStopDelivery,
   summarizeInboxBacklog,
 } from './inbox-backlog.js';
 import type { InboxBacklogBreakdown } from './inbox-backlog.js';
@@ -521,6 +522,41 @@ const SCHEDULE_STORE_RETRY_MS = 200;
  */
 const FORGET_RETRY_ATTEMPTS = 3;
 const FORGET_RETRY_MS = 200;
+
+/**
+ * `#restoreUnreadPass` が stale な配り直しを一括で消すとき、1回の
+ * `removeMany` 呼びに渡す id の件数の上限（issue #903）。
+ *
+ * ## なぜ要るか
+ *
+ * stale（`restoredInboxEventVerdict` が `stale` を返す、`token-pool` の
+ * 配り直し）は `#forget` を1件ずつ呼ぶと、1件あたり直列にストアへの
+ * 書き込みが1回走る——多い起動では数千件が直列に並ぶ（issue #903 本文、
+ * `inbox-staleness.ts` の doc「実測（2026-09-12）…4,255 件」）。
+ * `removeInboxEventsAndStopDelivery`（`inbox-backlog.ts`）へ一度に渡せば
+ * 1回のストア書き込みに畳めるが、`storage-pg`（`PgInboxStore.removeMany`）
+ * は `IN (...)` へ id をそのまま展開する1本の `DELETE` なので、無制限には
+ * 広げられない。
+ *
+ * ## 65,535 という値の出所
+ *
+ * **⚠️ これは別の調査での実測であって、この PR で測り直したものではない。**
+ * 本番相当の postgres 17 で確かめた値として引き継いでいる——`IN (...)` の
+ * バインドパラメータ上限は 65,535 で、65,536 件を渡すと
+ * `bind message supplies 0 parameters, but prepared statement ""
+ * requires 65536` で壊れる。ここではその上限をそのまま置く（安全マージンを
+ * 取って切り下げていない）——切り下げる根拠もこの PR では測っていないため、
+ * 実測された値をそのまま採用するほうが「測っていない安全率」を追加で
+ * 忍び込ませずに済む。
+ *
+ * ## メモリ上の後始末とは別軸
+ *
+ * この上限が縛るのは**ストアへの書き込み**（`removeMany` の1呼び）だけである。
+ * `#unread` / `#redelivered` / `#redeliveredClosed` / `#pendingCollapse` の
+ * 後始末は1件ずつの軽い操作なので、まとめる理由が無く、束ねていない
+ * （`#removeStaleRedeliveryChunk` の doc）。
+ */
+const RESTORE_STALE_REMOVE_CHUNK_MAX_IDS = 65_535;
 
 /**
  * `#remember` が `stores.inbox.put` を拾い直す回数と間隔（issue #1085）。
@@ -3627,36 +3663,152 @@ class Clone implements CloneHost {
 
   /**
    * 拾い直した合図のうち、**もう要らない**もの（`restoredInboxEventVerdict`
-   * が `stale`）を、ターンを起こさずに消す（Issue #783 段1）。
+   * が `stale`）を、ターンを起こさずに畳んで跡を残す（Issue #783 段1）。
    *
    * **`#foldGatedRedelivery` との違いは、残すか消すかである。** あちらは
    * 「いまは配る意味が無い」という**一時的な**判定なので行を残す。こちらは
    * 「この合図はもう効く先が無い」という**合図の性質**の判定なので消す
    * ——残しても次の起動で同じ答えが返るだけで、消す経路を一度も通らない。
    *
-   * **`#foldClosedRedelivery` / `#foldGatedRedelivery` と同じ2本を書く**
-   * （あちらの doc「畳む仕組みを入れるなら、畳んだ跡が残らなければならない」
-   * 「無ければ永久に見えない」）。**消す側では、この2本がより要る。**
+   * ## 見出しの日誌は1行（issue #903 で3行から2行へ畳んだ）
+   *
+   * **以前はここが「消した」の1行を単独で書き、`#restoreUnreadPass` が
+   * 別に「配り直した」の1行を全件（live/stale 問わず）で書いていた。**
+   * ⟹ stale 1件につき見出しだけで2行、本文（`#journalIncomingBody`）と
+   * 合わせて3行あった。issue #903 が問題にしたのはこの3行目——`#record` /
+   * `#commit` は token-pool では常に no-op（`#record` は
+   * `human_message` 以外を弾く。`#commit` は `commitmentFor` が
+   * `isDaemonSelfNotice` で `null` を返す）なので、実際に減らせる余地は
+   * この見出しの重複だけだった。
+   *
+   * **いまはこの関数が「配り直した」と「消した」を1行に畳んで書く**
+   * ——`#restoreUnreadPass` は stale と判定した record についてはもう
+   * 単独の「配り直した」を書かない（呼び出し側の分岐。live のときは
+   * 従来どおり単独で書く——1文字も変えていない）。**`deliveries` と
+   * `#restoredCohort` は畳んでも失っていない**——`inboxEventShape` にも
+   * 「消した」の文面にも載らない唯一の情報なので、1行に畳んだ文中にも
+   * そのまま残す。
+   *
+   * 書くのは以下の2本（本文と合わせて record 1件につき2回の `#journal`
+   * 呼び。以前の3回から1回減った）:
    *
    * 1. **型ごとの本文追記**（`#journalIncomingBody`）。⛔ 飛ばすと、消した
    *    合図の中身が日誌のどこにも残らない
-   * 2. **消したこと自体の1行。** 「配り直した」（`#restoreUnread` が既に
-   *    書いた行）と対で残るので、**何件消えたかを後から数えられる**
+   * 2. **「配り直した」と「消した」を畳んだ1行。** 「何件消えたか」は
+   *    引き続きこの行を数えれば分かる——対で残す2行を1行にしただけで、
+   *    数えられる性質は変えていない
    *
-   * ⚠️ **消し込み（`#forget`）そのものは呼び手が行う。** ここは跡を書くだけ
-   * にしてある——跡が書けなかったときに、消し込みまで道連れにしないため。
+   * ⚠️ **消し込み（実際の `inbox.removeMany`）そのものは呼び手が行う。**
+   * ここは跡を書くだけにしてある——跡が書けなかったときに、消し込みまで
+   * 道連れにしないため。**issue #903 で呼び手側が変わった**——以前は
+   * `#restoreUnreadPass` がこの関数の直後に `#forget` を1件ずつ呼んで
+   * いたが、いまは stale と判定した record を束ねて `#restoreUnreadPass`
+   * の末尾（と早期 return の手前）で `#removeStaleRedeliveryChunk` へ
+   * まとめて渡す（同関数の doc）。**この関数自身は1件ずつ呼ばれたまま
+   * 変わっていない**——変わったのは、この関数を呼んだ後で呼び手が何を
+   * するかだけである。
    */
-  async #dropStaleRedelivery(event: InboxEvent): Promise<void> {
-    await this.#journalIncomingBody(event);
+  async #dropStaleRedelivery(
+    record: PendingInboxEvent,
+    context: { readonly alone: boolean },
+  ): Promise<void> {
+    await this.#journalIncomingBody(record.event);
     await this.#journal({
       type: 'exchange',
       with: 'self',
       role: 'outbound',
       text:
-        `拾い直した合図がもう効く先の無い種類だったので、ターンを起こさずに消した` +
-        `（モデルへは1文字も渡していない。本文は直前の行に残してある。` +
-        `まだ要る状況なら、この種類の合図は作り直される）: ${inboxEventShape(event)}`,
+        `未読のまま残っていた合図を配り直したが（${record.deliveries}回目の配達` +
+        (context.alone
+          ? ''
+          : `＝器が入れ替わった回数。同じ起動で一緒に拾い直した未読が ${this.#restoredCohort} 件あり、` +
+            `配達回数は残っている未読の全行で一緒に進む — この合図の処理が落ちた回数ではない`) +
+        `、${record.at} に受け取ったもの）、もう効く先の無い種類だったので` +
+        `ターンを起こさずに消した（モデルへは1文字も渡していない。本文は` +
+        `直前の行に残してある。まだ要る状況なら、この種類の合図は作り直される）: ` +
+        `${inboxEventShape(record.event)}`,
     });
+  }
+
+  /**
+   * `#restoreUnreadPass` が stale と判定して畳んだ record を、まとめて器から
+   * 消す（issue #903）。**呼ぶのは `#restoreUnreadPass` だけである。**
+   *
+   * ## `#forget` の代わりにここを通る理由
+   *
+   * `#forget` は `stores.inbox.remove` を1件ずつ呼ぶ——stale が多い起動
+   * では、この直列な呼び出しが1件あたり1回のストア往復を作る（issue #903
+   * 本文）。ここは `removeInboxEventsAndStopDelivery`（`inbox-backlog.ts`）
+   * へ複数件をまとめて渡し、1回（または `RESTORE_STALE_REMOVE_CHUNK_MAX_IDS`
+   * を超える塊なら複数回）のストア書き込みへ畳む。
+   *
+   * **`removeInboxEventsAndStopDelivery` を直に呼ぶこと。**
+   * `this.#stores.inbox.removeMany` を直に呼ばない——同関数の doc
+   * 「`inbox.removeMany` を直に呼ばないこと」（issue #1049 の事故と同じ形の
+   * 穴を空けないため）。**ここで渡す id は `#restoreUnreadPass` が
+   * `#inbox.push` する前に弾いた分なので、配達の待ち行列にも `#deferred`
+   * にも載っていない**——`dropQueuedInboxEvents` はこの塊に対しては常に
+   * 0件しか落とさない（`droppedFromDelivery` は無視してよい）。それでも
+   * 直に `removeMany` を呼ばずにこの関数を通すのは、将来この経路の手前へ
+   * 配達される変更が入っても同じ穴が空かないようにするためである
+   * （`inbox-backlog.test.ts` の歯「`removeMany` を直に呼ぶ本番コードは、
+   * この共有ヘルパの中だけである」に `clone.ts` を足した理由と同じ）。
+   *
+   * ## `FORGET_RETRY_ATTEMPTS` は塊単位で数え直す
+   *
+   * 1件ずつ試行していた `#forget` と違い、ここでは塊全体を1つの操作として
+   * 再試行する——一時的な失敗（器の瞬断）は塊ごと当たるので、部分再試行は
+   * 複雑さのわりに得るものが無い。**失敗した塊は丸ごと次の起動へ回す**
+   * （`#unread` 等の印を残したまま return する。`#forget` の doc「消せな
+   * かったものは次の起動で配り直される」と同じ向き——「消えるより配り
+   * 直す」を崩さない）。
+   *
+   * ## メモリ上の後始末は1件ずつ行う
+   *
+   * **まとめるのはストアへの書き込みだけである。** `#unread` /
+   * `#redelivered` / `#redeliveredClosed` / `#pendingCollapse` の後始末は
+   * `#forget` と同じ形で1件ずつ行う——これらはメモリ上の `Map` 操作
+   * （`O(1)`）で、束ねても得るものが無いうえ、束ねると「どの id の後始末が
+   * 済んだか」を個別に追えなくなる。**`settled`（`inbox_flow`）も
+   * `#forget` と同じ場所（消せたことが確定した直後）で1件ずつ数える**
+   * （`schema.ts` の「`settled` を数える場所は1箇所」を保つ——数える場所を
+   * 増やさず、呼ばれる回数だけを減らす）。
+   */
+  async #removeStaleRedeliveryChunk(chunk: readonly PendingInboxEvent[]): Promise<void> {
+    if (chunk.length === 0) return;
+    const ids = chunk.map((record) => record.event.id);
+
+    let last: unknown;
+    for (let attempt = 0; attempt < FORGET_RETRY_ATTEMPTS; attempt += 1) {
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, FORGET_RETRY_MS * attempt));
+      }
+      try {
+        await removeInboxEventsAndStopDelivery(
+          this.#stores.inbox,
+          { dropQueuedInboxEvents: (removedIds) => this.dropQueuedInboxEvents(removedIds) },
+          ids,
+        );
+        for (const record of chunk) {
+          this.#unread.delete(record.event.id);
+          this.#redelivered.delete(record.event.id);
+          this.#redeliveredClosed.delete(record.event.id);
+          this.#dropPendingCollapse(record.event);
+          this.#bumpInboxFlow(this.#inboxFlowSettled, record.event.type);
+        }
+        return;
+      } catch (error) {
+        last = error;
+      }
+    }
+    // 消せなかったものは次の起動で配り直される（`#forget` の doc と同じ
+    // 向き）。印も残したまま跡だけ残して進む——印を消すと「もう消せている」
+    // と嘘をつくことになる。
+    noteDroppedRecord(
+      '未読の消し込み（一括）',
+      `${chunk.length} 件: ${ids.join(', ')}`,
+      last,
+    );
   }
 
   /**
@@ -5078,30 +5230,86 @@ class Clone implements CloneHost {
     // 動かないので、ループの外で1度だけ判定する。
     const alone = this.#restoredCohort <= 1;
 
-    for (const record of pending) {
-      if (this.#stopped || this.#inbox.closed) return;
+    // **stale と判定した record を溜めておき、まとめて消す入れ物**（issue
+    // #903）。**溜めるのはストアへの書き込みだけ**——journal・`#record` /
+    // `#commit`・メモリ上の索引はどれもこのループの中で record ごとに
+    // 即座に済ませる（下）。ここに積むのは「あとで `removeMany` へ渡す
+    // id」のためだけである。
+    //
+    // ⚠️ **`#stopped` / `#inbox.closed` による早期 return の手前では、必ず
+    // 先にここを空にする**（下の `flushStaleRemovalBuffer` 呼び出し）。
+    // そうしないと、既に「消した」と日誌へ書いた record が、実際には
+    // 器から消えないまま関数を抜けてしまう——**日誌の言明とストアの実体が
+    // 食い違う窓を、バッファリングによって新しく作らない**ための順序である。
+    const staleBuffer: PendingInboxEvent[] = [];
 
-      // 人間が後から「なぜ二度来たのか」を追えるようにする。**積む前に書く** —
-      // 後だと、配り直した合図の本文（人間の発言なら下の `#record`、他の起点なら
-      // `#handle` が起点ごとの型で残すもの）より後ろに回りうる。**この行に本文は
-      // 載せない**（載せると、本文を持つ側と二重になる）。
-      await this.#journal({
-        type: 'exchange',
-        with: 'self',
-        role: 'outbound',
-        text:
-          `未読のまま残っていた合図を配り直した（${record.deliveries}回目の配達` +
-          (alone
-            ? ''
-            : `＝器が入れ替わった回数。同じ起動で一緒に拾い直した未読が ${this.#restoredCohort} 件あり、` +
-              `配達回数は残っている未読の全行で一緒に進む — この合図の処理が落ちた回数ではない`) +
-          `、${record.at} に受け取ったもの）: ${inboxEventShape(record.event)}`,
-      });
+    const flushStaleRemovalBuffer = async (): Promise<void> => {
+      if (staleBuffer.length === 0) return;
+      const batch = staleBuffer.splice(0, staleBuffer.length);
+      // **`RESTORE_STALE_REMOVE_CHUNK_MAX_IDS` を超えないよう件数で塊に割る**
+      // （同定数の doc「65,535 という値の出所」）。溜めた総数がこの上限を
+      // 超えることは実運用ではまず無いが（同 doc）、超えたときに1本の
+      // `removeMany` へ全件を渡すと `storage-pg` の `IN (...)` がバインド
+      // パラメータ上限で壊れるので、必ず割る。
+      for (let i = 0; i < batch.length; i += RESTORE_STALE_REMOVE_CHUNK_MAX_IDS) {
+        await this.#removeStaleRedeliveryChunk(
+          batch.slice(i, i + RESTORE_STALE_REMOVE_CHUNK_MAX_IDS),
+        );
+      }
+    };
+
+    for (const record of pending) {
+      if (this.#stopped || this.#inbox.closed) {
+        await flushStaleRemovalBuffer();
+        return;
+      }
+
+      // **live か stale かをここで1回だけ判定する**（issue #903）。以前は
+      // 「配り直した」を全件で無条件に書き、stale だけ後段でもう1行
+      // 「消した」を足していた——ここで先に判定することで、stale の場合は
+      // 単独の「配り直した」を書かずに済む（`#dropStaleRedelivery` が
+      // 「配り直した」と「消した」を1行に畳んで書く。同関数の doc）。
+      // **判定そのもの（`restoredInboxEventVerdict`）は動かしていない**——
+      // 分岐させているのは日誌の書き方だけで、`#unread.set` 等の状態遷移の
+      // 順序は下でこれまでどおり行う。
+      const verdict = restoredInboxEventVerdict(record.event);
+
+      if (verdict === 'stale') {
+        // **跡は残す。** `#dropStaleRedelivery` が本文の追記と、畳んだ
+        // 見出しの1行を日誌へ書く——落ちた分が何件で何だったかが読めなければ、
+        // 「無い」の種類（届かなかった／畳まれた／そもそも起きなかった）が
+        // 区別できなくなる。
+        await this.#dropStaleRedelivery(record, { alone });
+      } else {
+        // 人間が後から「なぜ二度来たのか」を追えるようにする。**積む前に書く** —
+        // 後だと、配り直した合図の本文（人間の発言なら下の `#record`、他の起点
+        // なら `#handle` が起点ごとの型で残すもの）より後ろに回りうる。**この行
+        // に本文は載せない**（載せると、本文を持つ側と二重になる）。
+        //
+        // **live の経路はここで1文字も変えていない**（issue #903）——stale の
+        // 分だけ上の分岐へ抜けるようにしただけで、この文言・この呼び出しの
+        // 位置は直しの前と同じである。
+        await this.#journal({
+          type: 'exchange',
+          with: 'self',
+          role: 'outbound',
+          text:
+            `未読のまま残っていた合図を配り直した（${record.deliveries}回目の配達` +
+            (alone
+              ? ''
+              : `＝器が入れ替わった回数。同じ起動で一緒に拾い直した未読が ${this.#restoredCohort} 件あり、` +
+                `配達回数は残っている未読の全行で一緒に進む — この合図の処理が落ちた回数ではない`) +
+            `、${record.at} に受け取ったもの）: ${inboxEventShape(record.event)}`,
+        });
+      }
 
       // 日誌を書いているあいだに片付けが始まっていることがある。**積む直前に
       // もう一度見ること**（`Inbox#push` は閉じた後だと投げる）。消してはいない
       // ので、積めなかったものは次の起動で拾い直せる。
-      if (this.#stopped || this.#inbox.closed) return;
+      if (this.#stopped || this.#inbox.closed) {
+        await flushStaleRemovalBuffer();
+        return;
+      }
 
       // **台帳が既に片付いていると言っているかを見る（閉じた主体は問わない
       // ——クローンでも人間でもよい）。** 台帳の id は合図の id その
@@ -5154,12 +5362,18 @@ class Clone implements CloneHost {
       // だから `restoredInboxEventVerdict` は `usageBlocked` を受け取らない
       // （その doc）。**消し込みを揺れる値に預けない**ための分け方である。
       //
-      // **跡は残す。** `#dropStaleRedelivery` が本文の追記と「消した」の1行を
-      // 日誌へ書く——落ちた分が何件で何だったかが読めなければ、「無い」の種類
-      // （届かなかった／畳まれた／そもそも起きなかった）が区別できなくなる。
-      if (restoredInboxEventVerdict(record.event) === 'stale') {
-        await this.#dropStaleRedelivery(record.event);
-        await this.#forget(record.event);
+      // **判定はループの先頭で計算済みの `verdict` を使う**（issue #903）。
+      // `restoredInboxEventVerdict` をもう一度呼び直さない——同じ `event` に
+      // 対して二度目を呼んでも答えは変わらないが（純関数）、二重に呼ぶ理由が
+      // 無いことをコードの形でも示す。
+      //
+      // **消し込みはここでは行わない。** `#dropStaleRedelivery`（上で呼び
+      // 済み）は跡を書くだけで、実際の `inbox.remove` はもう呼ばない——
+      // `staleBuffer` へ積んで、`#restoreUnreadPass` の末尾（または早期
+      // return の手前）でまとめて `#removeStaleRedeliveryChunk` へ渡す
+      // （issue #903。`RESTORE_STALE_REMOVE_CHUNK_MAX_IDS` の doc）。
+      if (verdict === 'stale') {
+        staleBuffer.push(record);
         continue;
       }
 
@@ -5248,6 +5462,11 @@ class Clone implements CloneHost {
         this.#humanPriority && isHumanOriginated(record.event) ? isHumanOriginated : undefined,
       );
     }
+
+    // **ループが最後まで走り切った回の後始末**（issue #903）。早期 return
+    // した回はそれぞれの手前で既に空にしているので、ここへ来る時点で
+    // 残っているのは「最後まで到達した」場合だけである。
+    await flushStaleRemovalBuffer();
   }
 
   /**

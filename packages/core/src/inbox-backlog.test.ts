@@ -1557,7 +1557,17 @@ describe('removeInboxEventsAndStopDelivery（消して、配達も止める。is
    * いても引数を間違えていれば、この歯は何も言わない（それは上の3本が測る）。
    */
   it('removeMany を直に呼ぶ本番コードは、この共有ヘルパの中だけである', () => {
-    const targets = ['../../../packages/core/src/tools.ts', '../../../apps/daemon/src/app.ts'];
+    // **`clone.ts` は issue #903 で足した。** `#restoreUnreadPass`
+    // （stale な配り直しの一括消し込み）がここに触るようになったので、
+    // 素通りしていたこのファイルも対象に含める——足す前は `tools.ts` /
+    // `app.ts` の2ファイルしか見ておらず、`clone.ts` が
+    // `removeInboxEventsAndStopDelivery` を経由せずに `inbox.removeMany` を
+    // 直に呼んでいても、この歯は何も言わなかった。
+    const targets = [
+      '../../../packages/core/src/tools.ts',
+      '../../../packages/core/src/clone.ts',
+      '../../../apps/daemon/src/app.ts',
+    ];
 
     const offenders = targets.filter((rel) => {
       const source = readFileSync(new URL(rel, import.meta.url), 'utf8');
