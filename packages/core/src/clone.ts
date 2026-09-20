@@ -3763,6 +3763,19 @@ class Clone implements CloneHost {
    * かったものは次の起動で配り直される」と同じ向き——「消えるより配り
    * 直す」を崩さない）。
    *
+   * ## `#forget` の `await written` がここに無い理由
+   *
+   * `#forget` は消す前に `const written = this.#unread.get(event.id)` を
+   * `await` する——`#unread` の値は `inbox.put` の書き込みそのものなので、
+   * 書き終える前に消すと「消してから積む」順になりかねないためである。
+   * **ここでは待たない。** この経路が扱う record は `#restoreUnreadPass`
+   * が `Promise.resolve()` を積んだものだけで（逐語:
+   * `grep -Fn -- 'this.#unread.set(record.event.id, Promise.resolve())' packages/core/src/clone.ts`）、
+   * **待つべき書き込みが最初から存在しない**——器には前の起動が既に積んで
+   * あり、この周は `claimPending` で拾い直しただけである。
+   * ⚠️ **`#restoreUnreadPass` がここへ本物の書き込みの Promise を積むよう
+   * 変わったら、この関数にも `await` が要る。**
+   *
    * ## メモリ上の後始末は1件ずつ行う
    *
    * **まとめるのはストアへの書き込みだけである。** `#unread` /
@@ -3804,11 +3817,7 @@ class Clone implements CloneHost {
     // 消せなかったものは次の起動で配り直される（`#forget` の doc と同じ
     // 向き）。印も残したまま跡だけ残して進む——印を消すと「もう消せている」
     // と嘘をつくことになる。
-    noteDroppedRecord(
-      '未読の消し込み（一括）',
-      `${chunk.length} 件: ${ids.join(', ')}`,
-      last,
-    );
+    noteDroppedRecord('未読の消し込み（一括）', `${chunk.length} 件: ${ids.join(', ')}`, last);
   }
 
   /**

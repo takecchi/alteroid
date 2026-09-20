@@ -186,7 +186,10 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
     }
 
     const { clone } = bootClone(stores);
-    await waitFor(async () => (await stores.inbox.peekPending()).length === 0, '全件が受信箱から消える');
+    await waitFor(
+      async () => (await stores.inbox.peekPending()).length === 0,
+      '全件が受信箱から消える',
+    );
 
     // **実測**: N=5 件に対して呼び出しは1回。
     expect(removeManyCalls.length).toBeLessThan(N);
@@ -197,40 +200,36 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
     await clone.stop();
   });
 
-  it(
-    '塊の上限（RESTORE_STALE_REMOVE_CHUNK_MAX_IDS = 65,535）+1 件を仕込むと removeMany が2回以上に割れる',
-    async () => {
-      const base = createMemoryStores();
-      const { stores, removeManyCalls } = instrument(base);
-      const CHUNK_MAX = 65_535;
-      const N = CHUNK_MAX + 1;
-      for (let i = 0; i < N; i += 1) {
-        const id = `evt-chunk-${i}`;
-        const at = new Date(2026, 0, 1, 0, 0, 0, i % 1000).toISOString();
-        await stores.inbox.put(staleTokenPoolEvent(id, at, i), at);
-      }
+  it('塊の上限（RESTORE_STALE_REMOVE_CHUNK_MAX_IDS = 65,535）+1 件を仕込むと removeMany が2回以上に割れる', async () => {
+    const base = createMemoryStores();
+    const { stores, removeManyCalls } = instrument(base);
+    const CHUNK_MAX = 65_535;
+    const N = CHUNK_MAX + 1;
+    for (let i = 0; i < N; i += 1) {
+      const id = `evt-chunk-${i}`;
+      const at = new Date(2026, 0, 1, 0, 0, 0, i % 1000).toISOString();
+      await stores.inbox.put(staleTokenPoolEvent(id, at, i), at);
+    }
 
-      const { clone } = bootClone(stores);
-      await waitFor(
-        async () => (await stores.inbox.peekPending()).length === 0,
-        '全件（65,536件）が受信箱から消える',
-        60_000,
-      );
+    const { clone } = bootClone(stores);
+    await waitFor(
+      async () => (await stores.inbox.peekPending()).length === 0,
+      '全件（65,536件）が受信箱から消える',
+      60_000,
+    );
 
-      // **実測**: 上限を1件超えただけで、呼び出しが2回に割れる。
-      expect(removeManyCalls.length).toBeGreaterThanOrEqual(2);
-      // **失っていない**: 塊を全部つなげると渡した件数に戻る。
-      const totalRemoved = removeManyCalls.reduce((sum, chunk) => sum + chunk.length, 0);
-      expect(totalRemoved).toBe(N);
-      // **上限を守っている**: どの塊も上限を超えない。
-      for (const chunk of removeManyCalls) {
-        expect(chunk.length).toBeLessThanOrEqual(CHUNK_MAX);
-      }
+    // **実測**: 上限を1件超えただけで、呼び出しが2回に割れる。
+    expect(removeManyCalls.length).toBeGreaterThanOrEqual(2);
+    // **失っていない**: 塊を全部つなげると渡した件数に戻る。
+    const totalRemoved = removeManyCalls.reduce((sum, chunk) => sum + chunk.length, 0);
+    expect(totalRemoved).toBe(N);
+    // **上限を守っている**: どの塊も上限を超えない。
+    for (const chunk of removeManyCalls) {
+      expect(chunk.length).toBeLessThanOrEqual(CHUNK_MAX);
+    }
 
-      await clone.stop();
-    },
-    90_000,
-  );
+    await clone.stop();
+  }, 90_000);
 
   it('stale 1件あたりの journal.append 回数が3回から2回に減った（同じく数える）', async () => {
     // **基準（0件）を先に測る**——起動そのものが書く journal（もしあれば）を
@@ -255,7 +254,10 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
     }
 
     const { clone } = bootClone(stores);
-    await waitFor(async () => (await stores.inbox.peekPending()).length === 0, '全件が受信箱から消える');
+    await waitFor(
+      async () => (await stores.inbox.peekPending()).length === 0,
+      '全件が受信箱から消える',
+    );
 
     // stale 1件につき (本文 + 畳んだ見出し1行) = 2回。3回目（旧「配り直した」の
     // 単独行）は書かれない。
@@ -359,7 +361,11 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
 
   it('live の経路は1文字も変わっていない — manager_message の配り直しで「配り直した」の行がいまも単独で出る', async () => {
     const stores = createMemoryStores();
-    const event = managerReport('未読のまま残っていた報告', 'evt-live-unchanged', new Date(0).toISOString());
+    const event = managerReport(
+      '未読のまま残っていた報告',
+      'evt-live-unchanged',
+      new Date(0).toISOString(),
+    );
     await stores.inbox.put(event, event.at);
 
     const { clone, inputs } = bootClone(stores);
@@ -371,7 +377,8 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
 
     const exchanges = await stores.journal.list({ types: ['exchange'] });
     const redelivered = exchanges.find(
-      (entry) => entry.type === 'exchange' && entry.text.includes('未読のまま残っていた合図を配り直した'),
+      (entry) =>
+        entry.type === 'exchange' && entry.text.includes('未読のまま残っていた合図を配り直した'),
     );
     const text = redelivered && redelivered.type === 'exchange' ? redelivered.text : '';
     // **live は「消した」を伴わない単独の行のまま。**
@@ -517,7 +524,9 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
 
     const exchanges = await stores.journal.list({ types: ['exchange'] });
     const droppedTexts = exchanges
-      .filter((entry) => entry.type === 'exchange' && entry.text.includes('ターンを起こさずに消した'))
+      .filter(
+        (entry) => entry.type === 'exchange' && entry.text.includes('ターンを起こさずに消した'),
+      )
       .map((entry) => (entry.type === 'exchange' ? entry.text : ''));
 
     const atOf = (id: string): string => atForIndex(ids.indexOf(id));
