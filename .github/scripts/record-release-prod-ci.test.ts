@@ -4,6 +4,7 @@ import {
   buildRecordComment,
   buildRecordLine,
   describeVerdict,
+  healthOf,
   RECORD_LINE_PREFIX,
   recordCommentMarker,
   redWorkflowNames,
@@ -36,7 +37,7 @@ const REAL_RED_RUN_ID = 34709221407;
 const HEALTHY_MAIN_SHA = 'ecd1674e09c72b245db21b225f56ac590fd336af';
 
 describe('buildRecordLine', () => {
-  it('verdict ごとに固定の形（release-prod-ci-record: で始まり、5つの key=value を持つ）を組み立てる', () => {
+  it('verdict ごとに固定の形（release-prod-ci-record: で始まり、6つの key=value を持つ）を組み立てる', () => {
     const line = buildRecordLine({
       verdict: 'red',
       prodSha: REAL_RED_SHA,
@@ -45,7 +46,7 @@ describe('buildRecordLine', () => {
       observedAt: '2026-09-19T01:02:03.000Z',
     });
     expect(line).toBe(
-      `release-prod-ci-record: verdict=red prod_sha=${REAL_RED_SHA} main_sha=${REAL_RED_SHA} reflect=success observed_at=2026-09-19T01:02:03.000Z`,
+      `release-prod-ci-record: verdict=red health=bad prod_sha=${REAL_RED_SHA} main_sha=${REAL_RED_SHA} reflect=success observed_at=2026-09-19T01:02:03.000Z`,
     );
     expect(line.startsWith(RECORD_LINE_PREFIX)).toBe(true);
   });
@@ -69,7 +70,7 @@ describe('buildRecordLine', () => {
       observedAt: '2026-09-19T00:00:00.000Z',
     });
     expect(line).toMatch(
-      /^release-prod-ci-record: verdict=\S+ prod_sha=\S+ main_sha=\S+ reflect=\S+ observed_at=\S+$/,
+      /^release-prod-ci-record: verdict=\S+ health=(?:ok|bad|unknown) prod_sha=\S+ main_sha=\S+ reflect=\S+ observed_at=\S+$/,
     );
     expect(line).toContain(`verdict=${verdict}`);
   });
@@ -158,5 +159,63 @@ describe('buildRecordComment × runAlreadyMentioned（赤で同じ run が既出
     expect(comment).toContain(RECORD_LINE_PREFIX);
     expect(comment).toContain(recordCommentMarker({ sha: REAL_RED_SHA, runId: REAL_RED_RUN_ID }));
     expect(comment).toContain('門ではない');
+  });
+});
+
+/**
+ * `health=` 欄（実測された誤読2段への対処）。
+ *
+ * ⭐ **いちばん重要なのは「健全な夜が健全と読めること」である。**
+ * `out-of-scope` は異常なしだが、記録行には `verdict=out-of-scope` としか
+ * 出ていなかったため、実際に「判定できなかった」と読まれた（2026-09-20）。
+ */
+describe('healthOf（verdict を健全さの3値へ畳む）', () => {
+  it('⭐ 健全な夜の2つ（green / out-of-scope）はどちらも ok', () => {
+    expect(healthOf('green')).toBe('ok');
+    expect(healthOf('out-of-scope')).toBe('ok');
+  });
+
+  it('赤い main が本番へ出た夜だけ bad', () => {
+    expect(healthOf('red')).toBe('bad');
+  });
+
+  it('判定に至れなかったものは、ok にも bad にも畳まず unknown（取れない軸に値を作らない）', () => {
+    for (const v of ['cancelled', 'skipped', 'unmeasurable', 'no-runs', 'pending', 'unknown']) {
+      expect(healthOf(v)).toBe('unknown');
+    }
+  });
+
+  it('知らない verdict も unknown へ落ちる（緑にも赤にも化けない）', () => {
+    expect(healthOf('なにか新しい値')).toBe('unknown');
+  });
+});
+
+describe('記録行の health= 欄', () => {
+  const base = {
+    prodSha: 'a'.repeat(40),
+    mainSha: 'b'.repeat(40),
+    reflectOutcome: 'success',
+    observedAt: '2026-09-20T21:30:00.000Z',
+  };
+
+  it('⭐ 健全な夜（out-of-scope）の行が、行だけで健全と読める', () => {
+    const line = buildRecordLine({ ...base, verdict: 'out-of-scope' });
+    expect(line).toContain('verdict=out-of-scope');
+    expect(line).toContain('health=ok');
+  });
+
+  it('⛔ verdict= の値そのものは1文字も変えていない（過去の記録の grep を壊さない）', () => {
+    for (const v of ['green', 'red', 'out-of-scope', 'pending', 'no-runs']) {
+      expect(buildRecordLine({ ...base, verdict: v })).toContain(`verdict=${v}`);
+    }
+    expect(buildRecordLine({ ...base, verdict: 'red' }).startsWith(RECORD_LINE_PREFIX)).toBe(true);
+  });
+
+  it('health= は verdict= の直後に置く（key=value の順が verdict ごとに揺れない）', () => {
+    for (const v of ['green', 'red', 'out-of-scope', 'pending']) {
+      expect(buildRecordLine({ ...base, verdict: v })).toContain(
+        `verdict=${v} health=${healthOf(v)} prod_sha=`,
+      );
+    }
   });
 });

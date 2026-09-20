@@ -90,14 +90,65 @@
 export const RECORD_LINE_PREFIX = 'release-prod-ci-record:';
 
 /**
+ * verdict を「健全さ」の3値へ畳む。
+ *
+ * ## なぜ verdict と別にこの欄が要るか（実測された誤読が2段ある）
+ *
+ * `out-of-scope` は**異常なし**である（上の doc 節「`out-of-scope` は
+ * 「異常なし」である」）。ところが記録行に出るのは `verdict=out-of-scope`
+ * という文字列だけで、**その意味は別の行（`describeVerdict`）にしか無い。**
+ *
+ * ⟹ 実測（2026-09-20）: マネージャー層が `verdict=out-of-scope` を
+ * 「判定できなかった」と読み、**「健全な夜の記録が1件も積まれていない」と
+ * 報告した。** クローン層はそれを前提に「候補 B は半分しか着地していない」と
+ * 判断を1つ下した。⛔ **注意書き（上の doc 節）は既に在ったのに、2段とも
+ * 防げていない。**
+ *
+ * ⟹ ⭐ **技術的に正しい文字列が読み手を偽へ導く**形であり、
+ * `check-pr-green` が略記 sha を `no-runs` と言っていた欠陥（PR #1260）と
+ * 同じ型である。⟹ **記録行そのものに健全さを載せる。**
+ *
+ * ## 3値にする理由
+ *
+ * `ok` / `bad` の2値にすると、「判定に至れなかった」を `bad` か `ok` の
+ * どちらかへ畳むことになり、**取れない軸に値を作る**ことになる
+ * （`AGENTS.md`「取れない軸に 0 の行を作らない」/「『判定できない』という
+ * 3つ目の状態を持つ」）。⟹ `unknown` を独立した値として持つ。
+ *
+ * | health | verdict | 意味 |
+ * | --- | --- | --- |
+ * | `ok` | `green` / `out-of-scope` | 異常なし。⭐ **健全な夜はこちら** |
+ * | `bad` | `red` | 赤い main が本番へ出た |
+ * | `unknown` | それ以外（`cancelled` / `skipped` / `unmeasurable` / `no-runs` / `pending` / `unknown`） | 判定に至れなかった |
+ *
+ * ⛔ **警報の分岐は `verdict === 'red'` のままで、この関数を使っていない。**
+ * 健全さの表示を足しただけで、**本番へ出る振る舞いは1つも変えていない。**
+ *
+ * @param {string} verdict
+ * @returns {'ok' | 'bad' | 'unknown'}
+ */
+export function healthOf(verdict) {
+  if (verdict === 'green' || verdict === 'out-of-scope') return 'ok';
+  if (verdict === 'red') return 'bad';
+  return 'unknown';
+}
+
+/**
  * 機械可読な記録行を1つ組み立てる。
  *
- * 形: `release-prod-ci-record: verdict=<verdict> prod_sha=<40桁> main_sha=<40桁> reflect=<outcome> observed_at=<ISO8601 UTC>`
+ * 形: `release-prod-ci-record: verdict=<verdict> health=<ok|bad|unknown> prod_sha=<40桁> main_sha=<40桁> reflect=<outcome> observed_at=<ISO8601 UTC>`
+ *
+ * ⚠ `health=` は後から足した欄である（実測された誤読2段への対処。`healthOf` の
+ * doc を見よ）。⟹ **この欄を持たない行は、足す前の古い形式である。**
+ * `verdict=` の値そのものは1文字も変えていないので、過去の記録の grep は壊れない。
  *
  * @param {{ verdict: string, prodSha: string, mainSha: string, reflectOutcome: string, observedAt: string }} input
  */
 export function buildRecordLine({ verdict, prodSha, mainSha, reflectOutcome, observedAt }) {
-  return `${RECORD_LINE_PREFIX} verdict=${verdict} prod_sha=${prodSha} main_sha=${mainSha} reflect=${reflectOutcome} observed_at=${observedAt}`;
+  return (
+    `${RECORD_LINE_PREFIX} verdict=${verdict} health=${healthOf(verdict)} ` +
+    `prod_sha=${prodSha} main_sha=${mainSha} reflect=${reflectOutcome} observed_at=${observedAt}`
+  );
 }
 
 /**
