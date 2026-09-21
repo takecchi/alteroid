@@ -11998,9 +11998,7 @@ describe('journal_read — inbox_flow.retained（Issue #1264）', () => {
     } as never);
 
     const reply = await h.call('journal_read', { id: entry.id });
-    expect(reply).toContain(
-      '残存: unread=1 redelivered=2 redeliveredClosed=3 pendingCollapse=4',
-    );
+    expect(reply).toContain('残存: unread=1 redelivered=2 redeliveredClosed=3 pendingCollapse=4');
 
     const listReply = await h.call('journal_read', { types: ['inbox_flow'] });
     // **見出し（`[inbox_flow ...]` の中）には出ない**——既存の4つの総数の

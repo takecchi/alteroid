@@ -9087,7 +9087,12 @@ describe('inbox_flow.retained（メモリ上の索引の残数。Issue #1264）'
     await stores.inbox.put(closed, '2026-09-01T00:00:01.000Z');
     await stores.commitments.open(commitmentFor(closed) as Commitment);
     expect(
-      await stores.commitments.close(closed.id, '2026-09-01T00:05:00.000Z', 'もう対応済み', 'clone'),
+      await stores.commitments.close(
+        closed.id,
+        '2026-09-01T00:05:00.000Z',
+        'もう対応済み',
+        'clone',
+      ),
     ).toBe(true);
 
     const { fn, calls, release } = fakeGatedSdk();
@@ -9141,8 +9146,7 @@ describe('inbox_flow.retained（メモリ上の索引の残数。Issue #1264）'
     clone.post(humanMessage('3件目（窓3をトリガー）', 'conv-third'));
 
     await waitFor(
-      async () =>
-        (await stores.journal.list({ types: ['inbox_flow'], order: 'asc' })).length >= 2,
+      async () => (await stores.journal.list({ types: ['inbox_flow'], order: 'asc' })).length >= 2,
       '2本目の inbox_flow 行',
     );
     const secondRows = await stores.journal.list({ types: ['inbox_flow'], order: 'asc' });
