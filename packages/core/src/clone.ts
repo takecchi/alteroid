@@ -9178,6 +9178,15 @@ class Clone implements CloneHost {
       delivered: buildInboxFlowCount(this.#inboxFlowDelivered, INBOX_EVENT_TYPE_ORDER),
       settled: buildInboxFlowCount(this.#inboxFlowSettled, INBOX_EVENT_TYPE_ORDER),
       pending,
+      // **窓の終わりの1点（Issue #1264、案1a）。** `arrived` / `delivered` /
+      // `settled`（直上）と違って `.clear()` しない——時点の値であって
+      // 増分ではない（`schema.ts` の `inbox_flow.retained` の doc）。
+      retained: {
+        unread: this.#unread.size,
+        redelivered: this.#redelivered.size,
+        redeliveredClosed: this.#redeliveredClosed.size,
+        pendingCollapse: this.#pendingCollapse.size,
+      },
     });
 
     this.#inboxFlowArrived.clear();

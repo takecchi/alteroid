@@ -1830,6 +1830,62 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
       count: z.number().int().nonnegative(),
       oldestAt: isoDateTime.optional(),
     }),
+    /**
+     * 窓の終わりの1点——メモリ上の4つの索引（`Clone` の private field）の
+     * 残数（`Map.size`）。Issue #1264（案1a）。
+     *
+     * - `unread`: `#unread`（まだ `#forget` していない合図の集合）の残数
+     * - `redelivered`: `#redelivered`（起動時に拾い直した合図）の残数
+     * - `redeliveredClosed`: `#redeliveredClosed`（拾い直した合図のうち、
+     *   台帳が既に片付いていると言っているもの）の残数
+     * - `pendingCollapse`: `#pendingCollapse`（`manager_message` /
+     *   デーモン自身の `external` を畳むための代表の索引）の残数
+     *
+     * ## `pending` との違い —— あちらはストア側、こちらはメモリ側
+     *
+     * `pending`（直上）は `InboxStore.pending()` を経由して**ストア**（fs /
+     * pg）へ問い合わせた値で、器が入れ替わっても消えない。この欄はどれも
+     * `Clone` インスタンスが持つメモリ上の `Map` の残数で、**器が入れ替わると
+     * 0から始まる**（`#pendingCollapse` の doc「器の入れ替えを跨ぐと空に
+     * なる」と同じ性質）。2つは別の層を見ているので、片方だけで他方を
+     * 代替できない。
+     *
+     * ## `arrived` / `delivered` / `settled` と違って窓ごとに0へ戻さない
+     *
+     * 上の3つは**増分**（この窓で何回起きたか）で、`#writeInboxFlow` が
+     * 書いた直後に `.clear()` して次の窓へ持ち越さない。この欄は逆に
+     * **時点の値**（いまその `Map` に何件残っているか）であって、増分では
+     * ない——書いた直後にクリアすると「残っている件数」という意味そのもの
+     * が壊れる。`pending` と同じ「窓の終わりの1点」側に属する。
+     *
+     * ## なぜ在るか（Issue #1264）
+     *
+     * `#forget`（と、それを一括化した `#removeStaleRedeliveryChunk`）が行う
+     * 5つの後始末のうち、この4つの `Map` からの削除は**外から観測する出口が
+     * 無かった**——3つ（`#unread` / `#redelivered` / `#redeliveredClosed`）は
+     * 読み手が「配り直しの断り文を組む3箇所だけ」で、削除を止めても出力が
+     * 1文字も変わらないので歯が書けなかった（Issue #1264 の「なぜ測れない
+     * のか」）。この欄が、その出口になる。
+     *
+     * ## ⚠️ `.optional()` にする理由 —— 既存の行を壊さないため
+     *
+     * この欄が増える**前**に書かれた `inbox_flow` の行には無い。必須にすると、
+     * **読み出し時にも** `journalEntrySchema.safeParse` を通る既存の行が
+     * 丸ごと `unknown-shape` として扱われ、`list()` の結果から消える
+     * （`packages/storage-fs/src/journal.ts` の `parseLine` /
+     * `packages/storage-pg/src/journal.ts` の `list`。`journal_read`・日報・
+     * 蒸留の全経路がここを経由する）。**`default` で埋めない** ——
+     * `turn_usage.contextUsage.categories[].kind` の doc（#804）と同じ規律で、
+     * 無いことは「観測していない」であって「0件だった」ではない。
+     */
+    retained: z
+      .object({
+        unread: z.number().int().nonnegative(),
+        redelivered: z.number().int().nonnegative(),
+        redeliveredClosed: z.number().int().nonnegative(),
+        pendingCollapse: z.number().int().nonnegative(),
+      })
+      .optional(),
   }),
 ]);
 

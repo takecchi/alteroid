@@ -18,6 +18,7 @@ import {
   DAEMON_TOKEN_POOL_REOPENED_SOURCE,
   CLONE_MODEL_ENV_KEY,
   CLONE_PERMISSION_MODE_ENV_KEY,
+  commitmentFor,
   createClone,
   humanTurnText,
   placedClonePermissionMode,
@@ -44,7 +45,13 @@ import { measureMemoryFloor, renderMemoryDocuments } from './memory.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createScheduler } from './schedule.js';
-import type { ChatStreamEvent, InboxEvent, InboxEventType, JournalEntryInput } from './schema.js';
+import type {
+  ChatStreamEvent,
+  Commitment,
+  InboxEvent,
+  InboxEventType,
+  JournalEntryInput,
+} from './schema.js';
 import type { Stores } from './store.js';
 import { CLONE_ACTOR_ID, isCloneActor } from './usage.js';
 import { createCloneMcpServer, createCloneTools, qualifiedToolName } from './tools.js';
@@ -8852,6 +8859,308 @@ describe('inbox_flow（受信箱の到着・配達・消し込み・滞留を日
       await s.clone.stop();
     });
     expect(lines.some((line) => line.includes('受信箱の流量（inbox_flow）'))).toBe(true);
+  });
+});
+
+/**
+ * `inbox_flow.retained`（メモリ上の4つの索引の残数。Issue #1264、案1a）。
+ *
+ * `#forget` が行う後始末のうち、`#unread` / `#redelivered` /
+ * `#redeliveredClosed` の3つの `Map` からの削除は、直したことの証拠が無い
+ * まま `main` に在った（Issue #1264 の「なぜ測れないのか」）——読み手が
+ * 「配り直しの断り文を組む3箇所だけ」で、削除を止めても出力が1文字も
+ * 変わらないので歯が書けなかった。この `describe` はその出口
+ * （`inbox_flow.retained`）を歯にする。
+ *
+ * **`#redelivered` / `#redeliveredClosed` は放っておけば最初から空である。**
+ * 空の `Map` に対して「消し込み後に0であること」だけを書いても、`#forget`
+ * の削除を殺して緑のままになる（歯が1本も増えない）——必ず「消し込みの
+ * 前には入っている」ことを同じテストの中で固定する。
+ */
+describe('inbox_flow.retained（メモリ上の索引の残数。Issue #1264）', () => {
+  it('1つ目の窓には、処理中の合図自身が retained.unread=1 として載る（#forget はターンの後（`#pump` の finally）でしか呼ばれないため）', async () => {
+    const s = setup(() => 'わかった');
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const rows = await s.stores.journal.list({ types: ['inbox_flow'] });
+    expect(rows).toHaveLength(1);
+    const row = rows[0];
+    if (row?.type !== 'inbox_flow') throw new Error('inbox_flow が日誌に無い');
+    // 他の3つの索引はこのシナリオでは一度も使われない
+    // （`#redelivered` / `#redeliveredClosed` は起動時の拾い直しの経路でしか
+    // 増えず、`#pendingCollapse` は `manager_message` / デーモン自身の
+    // `external` でしか増えない——`inboxCollapseKey` の doc）。
+    expect(row.retained).toEqual({
+      unread: 1,
+      redelivered: 0,
+      redeliveredClosed: 0,
+      pendingCollapse: 0,
+    });
+
+    await s.clone.stop();
+  });
+
+  it('2つ目の窓では、1件目の消し込みが効いて retained.unread が1のまま増えない（`this.#unread.delete(event.id);` が `#forget` の中で効いていることの固定）', async () => {
+    const s = setup(() => 'わかった');
+    s.clone.post(humanMessage('1件目'));
+    await waitForDone(s.events);
+    s.clone.post(humanMessage('2件目'));
+    await waitFor(
+      async () => (await s.stores.journal.list({ types: ['inbox_flow'] })).length >= 2,
+      '2本目の inbox_flow 行',
+    );
+
+    const rows = await s.stores.journal.list({ types: ['inbox_flow'], order: 'asc' });
+    expect(rows).toHaveLength(2);
+    const [first, second] = rows;
+    if (first?.type !== 'inbox_flow' || second?.type !== 'inbox_flow') {
+      throw new Error('inbox_flow が日誌に無い');
+    }
+
+    expect(first.retained).toEqual({
+      unread: 1,
+      redelivered: 0,
+      redeliveredClosed: 0,
+      pendingCollapse: 0,
+    });
+    // 🔴 ここが1つ目の窓の固定と同じ「1」でなければ、1件目の `#unread` の
+    // 項目が `#forget` で消えていない——`this.#unread.delete(event.id);` を
+    // 殺すとここが「2」になる。
+    expect(second.retained).toEqual({
+      unread: 1,
+      redelivered: 0,
+      redeliveredClosed: 0,
+      pendingCollapse: 0,
+    });
+
+    await s.clone.stop();
+  });
+
+  it('2つ目の窓では、1件目の消し込みが効いて retained.pendingCollapse が1のまま増えない（`#dropPendingCollapse` が `#forget` の中で効いていることの固定。畳み込みの索引は manager_message でしか増えない）', async () => {
+    // **`waitForDone` は使えない。** `manager_message` の会話 id は常に
+    // `null`（`#conversationOf` の doc）＝内部ターン扱いで、`setup()` が
+    // 購読している `'conv-1'` には何も流れない。窓の書き込みは日誌を
+    // 直接ポーリングして待つ。
+    const s = setup(() => 'わかった');
+    s.clone.post({
+      type: 'manager_message',
+      id: 'evt-mgr-1',
+      at: new Date().toISOString(),
+      managerId: 'mgr-1',
+      kind: 'report',
+      text: '1件目の本文（畳まれない別本文にする）',
+    });
+    await waitFor(
+      async () => (await s.stores.journal.list({ types: ['inbox_flow'] })).length >= 1,
+      '1本目の inbox_flow 行',
+    );
+    s.clone.post({
+      type: 'manager_message',
+      id: 'evt-mgr-2',
+      at: new Date().toISOString(),
+      managerId: 'mgr-2',
+      kind: 'report',
+      text: '2件目の本文（1件目と違う managerId・本文なので畳まれない）',
+    });
+    await waitFor(
+      async () => (await s.stores.journal.list({ types: ['inbox_flow'] })).length >= 2,
+      '2本目の inbox_flow 行',
+    );
+
+    const rows = await s.stores.journal.list({ types: ['inbox_flow'], order: 'asc' });
+    expect(rows).toHaveLength(2);
+    const [first, second] = rows;
+    if (first?.type !== 'inbox_flow' || second?.type !== 'inbox_flow') {
+      throw new Error('inbox_flow が日誌に無い');
+    }
+
+    // 1件目自身が `#foldIntoPendingCollapse` の代表として索引に載る
+    // （`existing === undefined` の分岐。畳まれるのは2件目以降の同文だけ）。
+    expect(first.retained).toEqual({
+      unread: 1,
+      redelivered: 0,
+      redeliveredClosed: 0,
+      pendingCollapse: 1,
+    });
+    // 🔴 1件目の代表が `#forget` で片付いていれば、2件目自身の代表1件だけが
+    // 載って「1」のまま——`#dropPendingCollapse` を殺すと「2」になる
+    // （片付いた代表の「影」が残り続ける。`#pendingCollapse` の doc
+    // 「鍵が落ちるとき」）。
+    expect(second.retained).toEqual({
+      unread: 1,
+      redelivered: 0,
+      redeliveredClosed: 0,
+      pendingCollapse: 1,
+    });
+
+    await s.clone.stop();
+  });
+
+  /**
+   * 起動時に拾い直した合図を、明示的に解くまで握ったままにする偽 SDK。
+   *
+   * **時間で近似しない**（`describe('クローン — 発言を受理した瞬間の記録と
+   * 合図')` の `fakeGatedSdk` と同じ理由・同じ形——「1件目のターンが走って
+   * いるあいだに、もう1件が待ち行列に残っている」という順番待ちの窓を
+   * `delayMs` の綱引きに賭けない）。
+   */
+  function fakeGatedSdk() {
+    const calls: FakeCall[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const fn = ((params: { prompt: unknown; options?: Options }) => {
+      const call: FakeCall = {
+        options: params.options ?? {},
+        inputs: [],
+        kind: typeof params.prompt === 'string' ? 'sideQuery' : 'session',
+      };
+      calls.push(call);
+
+      async function* generate(): AsyncGenerator<SDKMessage, void> {
+        yield {
+          type: 'system',
+          subtype: 'init',
+          session_id: 'sess-fake',
+          uuid: 'uuid-init',
+        } as unknown as SDKMessage;
+
+        for await (const message of params.prompt as AsyncIterable<{
+          message: { content: unknown };
+        }>) {
+          // **本文を控えてから止める。** 止めてから控えると「ターンが始まった」を
+          // テストから観測できず、順番待ちを作れたことが確かめられない。
+          call.inputs.push(String(message.message.content));
+          await gate;
+          yield {
+            type: 'assistant',
+            message: { content: [{ type: 'text', text: 'ok' }] },
+            parent_tool_use_id: null,
+            session_id: 'sess-fake',
+            uuid: 'uuid-assistant',
+          } as unknown as SDKMessage;
+          yield {
+            type: 'result',
+            subtype: 'success',
+            result: 'ok',
+            session_id: 'sess-fake',
+            uuid: 'uuid-result',
+          } as unknown as SDKMessage;
+        }
+      }
+
+      const generator = generate();
+      return Object.assign(generator, {
+        close: () => undefined,
+        interrupt: async () => undefined,
+      }) as unknown as Query;
+    }) as unknown as typeof sdkQuery;
+
+    return {
+      fn,
+      calls,
+      /** 握っていたターンを解く。以降のターンはこの1回だけ解けば済み、あとは
+       * この `describe` の中では止めない（この `fn` を使うテストは各1回しか
+       * ターンを起こさない、か、2本目以降は解いたあとに届くので `gate` は
+       * 既に解決済みのまま素通りする）。 */
+      release: () => release(),
+    };
+  }
+
+  it('拾い直した合図は retained.redelivered / retained.redeliveredClosed に一時的に載り、消し込みが効いた後の窓では0に戻る（`this.#redelivered.delete(event.id);` / `this.#redeliveredClosed.delete(event.id);` が `#forget` の中で効いていることの固定）', async () => {
+    const stores = createMemoryStores();
+
+    // **`live`**: 前の器が残した未読で、台帳は開いていない（＝閉じてもいない）
+    // ——`#restoreUnreadPass` は `#redelivered` にだけ載せ、通常どおりターンを
+    // 走らせる。**`closed`**: 前の器が残した未読で、台帳は既に閉じている
+    // ——`#restoreUnreadPass` は `#redelivered` と `#redeliveredClosed` の
+    // 両方に載せ、ターンを起こさずに畳む（`#foldClosedRedelivery` +
+    // `#settleInboxEvent(event, false)` が `#forget` を呼ぶ）。
+    const live = humanMessage('生きている拾い直し', 'conv-live');
+    const closed = humanMessage('片付いた拾い直し', 'conv-closed');
+    // `claimPending()`（testing.ts のインメモリ実装）は `at` の昇順で返す
+    // ——`live` を先に配らせるため、`closed` より早い時刻にしておく。
+    await stores.inbox.put(live, '2026-09-01T00:00:00.000Z');
+    await stores.inbox.put(closed, '2026-09-01T00:00:01.000Z');
+    await stores.commitments.open(commitmentFor(closed) as Commitment);
+    expect(
+      await stores.commitments.close(closed.id, '2026-09-01T00:05:00.000Z', 'もう対応済み', 'clone'),
+    ).toBe(true);
+
+    const { fn, calls, release } = fakeGatedSdk();
+    const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
+      stores,
+      queryFn: fn,
+      env: {},
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+
+    // `live` のターンが実際に始まる（入力が SDK まで届く）まで待つ。この
+    // 時点で `#restoreUnreadPass` は最後まで走っている——`live` のターンが
+    // 止まっているあいだ、`closed` は待ち行列に残ったまま dequeue されない
+    // （受信箱のループは直列。`#pump` の同時実行モデル）。
+    await waitFor(
+      () => calls.some((call) => call.inputs.some((text) => text.includes('生きている拾い直し'))),
+      'live のターンが始まる',
+    );
+
+    release();
+
+    // `live` の `turn_ended` が窓を書く。この時点では `closed` はまだ
+    // dequeue されていない（`live` の後始末 `#forget` は `#pump` の
+    // `finally`——窓を書いた後）ので、`closed` の索引はまだ載ったままである。
+    await waitFor(
+      async () => (await stores.journal.list({ types: ['inbox_flow'] })).length >= 1,
+      '1本目の inbox_flow 行',
+    );
+    const firstRows = await stores.journal.list({ types: ['inbox_flow'] });
+    expect(firstRows).toHaveLength(1);
+    const first = firstRows[0];
+    if (first?.type !== 'inbox_flow') throw new Error('inbox_flow が日誌に無い');
+    expect(first.retained).toEqual({
+      // live 自身（処理中）＋ closed（まだ #forget していない）。
+      unread: 2,
+      // live・closed のどちらも `#restoreUnreadPass` が拾い直した。
+      redelivered: 2,
+      // closed だけが台帳の閉じた行を持つ。
+      redeliveredClosed: 1,
+      pendingCollapse: 0,
+    });
+
+    // **`closed` は `live` の直後に FIFO で dequeue され、ターンを起こさずに
+    // 畳まれて `#forget` される**（`#pump` の直列処理。`closed` はゲート付き
+    // SDK を一度も呼ばないので、この後始末はゲートと無関係に進む）。3件目の
+    // 合図は `closed` より後に積まれるので、`closed` の後始末が終わるまで
+    // dequeue されない——FIFO がそのまま同期点になる。
+    clone.post(humanMessage('3件目（窓3をトリガー）', 'conv-third'));
+
+    await waitFor(
+      async () =>
+        (await stores.journal.list({ types: ['inbox_flow'], order: 'asc' })).length >= 2,
+      '2本目の inbox_flow 行',
+    );
+    const secondRows = await stores.journal.list({ types: ['inbox_flow'], order: 'asc' });
+    expect(secondRows).toHaveLength(2);
+    const second = secondRows[1];
+    if (second?.type !== 'inbox_flow') throw new Error('inbox_flow が日誌に無い');
+    // 🔴 live・closed のどちらも `#forget` で片付いていれば、3件目自身の
+    // `unread` だけが残り「1」——`this.#redelivered.delete(event.id);` /
+    // `this.#redeliveredClosed.delete(event.id);` のどちらかを殺すと、
+    // 対応する欄が「0」に戻らない。
+    expect(second.retained).toEqual({
+      unread: 1,
+      redelivered: 0,
+      redeliveredClosed: 0,
+      pendingCollapse: 0,
+    });
+
+    await clone.stop();
   });
 });
 
