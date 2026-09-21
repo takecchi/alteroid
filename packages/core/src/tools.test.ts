@@ -11978,6 +11978,56 @@ describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
   });
 });
 
+/**
+ * `inbox_flow.retained`（Issue #1264、案1a）。一覧の1行（`head`）は太らせない
+ * ——`apps/web/app/hooks/queries.ts` の `case 'inbox_flow'` と同じ判断
+ * （見出しは既存の4つの総数のまま）。クローンは `journal_read id=<id>`
+ * の全文モードで読む——そちらの本文（`body`）に載ることを固定する。
+ */
+describe('journal_read — inbox_flow.retained（Issue #1264）', () => {
+  it('全文モードの本文に「残存」として4つとも出る。一覧の見出しは太らせない', async () => {
+    const h = harness();
+    const entry = await h.stores.journal.append({
+      type: 'inbox_flow',
+      windowStartedAt: '2026-09-20T00:00:00.000Z',
+      arrived: { total: 1, byType: [{ type: 'human_message', count: 1 }] },
+      delivered: { total: 1, byType: [{ type: 'human_message', count: 1 }] },
+      settled: { total: 0, byType: [] },
+      pending: { count: 1 },
+      retained: { unread: 1, redelivered: 2, redeliveredClosed: 3, pendingCollapse: 4 },
+    } as never);
+
+    const reply = await h.call('journal_read', { id: entry.id });
+    expect(reply).toContain(
+      '残存: unread=1 redelivered=2 redeliveredClosed=3 pendingCollapse=4',
+    );
+
+    const listReply = await h.call('journal_read', { types: ['inbox_flow'] });
+    // **見出し（`[inbox_flow ...]` の中）には出ない**——既存の4つの総数の
+    // まま。一覧モードの本文は抜粋（`excerptLine`）として出るので、そちら
+    // には（`到着:` 等と同じく）断片が漏れうる——見るのは見出しだけである。
+    const head = listReply.match(/\[inbox_flow [^\]]*\]/)?.[0];
+    if (head === undefined) throw new Error('見出しが見つからない');
+    expect(head).not.toContain('unread=');
+  });
+
+  it('`retained` を持たない古い行（この欄が増える前に書かれた行）では「残存」を出さない（0として埋めない）', async () => {
+    const h = harness();
+    const legacy = await h.stores.journal.append({
+      type: 'inbox_flow',
+      windowStartedAt: '2026-09-20T00:00:00.000Z',
+      arrived: { total: 0, byType: [] },
+      delivered: { total: 0, byType: [] },
+      settled: { total: 0, byType: [] },
+      pending: { count: 0 },
+    } as never);
+
+    const reply = await h.call('journal_read', { id: legacy.id });
+    expect(reply).not.toContain('残存');
+    expect(reply).not.toContain('unread=0');
+  });
+});
+
 describe('journal_read — memory_update の action / バイト数（#339）', () => {
   it('action と前後バイト数を出す（新形式のエントリ）', async () => {
     const h = harness();

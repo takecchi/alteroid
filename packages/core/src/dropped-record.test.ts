@@ -1466,6 +1466,14 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       delivered: { emit: 'raw', token: 'delivered' },
       settled: { emit: 'raw', token: 'settled' },
       pending: { emit: 'raw', token: 'pending' },
+      // Issue #1264（案1a）。4つとも `.optional()`（既存の行を壊さない
+      // ため）の非負整数で、自由文は無い——上の4欄と同じ判断。実装
+      // （`dropped-record.ts` の `case 'inbox_flow'`）は4つとも別々の
+      // token で出すが、名簿は代表として1つ（`retainedUnread`）を持つ
+      // （`pending` が `.count` だけを代表にし、`.oldestAt` を別欄
+      // 扱いにしないのと同じ形——こちらは4つとも同じ `retained` という
+      // 1つの schema 欄の中身なので、代表1つで足りる）。
+      retained: { emit: 'raw', token: 'retainedUnread' },
     },
   } satisfies { [T in JournalEntryType]: Record<ShapedFieldsOf<T>, FieldPlan> };
 
@@ -1771,6 +1779,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       delivered: { total: 1, byType: [{ type: 'human_message', count: 1 }] },
       settled: { total: 0, byType: [] },
       pending: { count: 2, oldestAt: '2026-09-15T00:00:00.000Z' },
+      retained: { unread: 1, redelivered: 1, redeliveredClosed: 1, pendingCollapse: 1 },
     },
   };
 

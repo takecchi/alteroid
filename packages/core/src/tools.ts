@@ -10257,6 +10257,17 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
         count.byType.length === 0
           ? '（無し）'
           : count.byType.map((e) => `${e.type} ${e.count}`).join(' / ');
+      // **`retained` は見出しに出さない。** 見出しは「4つの総数」のまま
+      // 据え置く（直上のコメント）——一覧の1行を太らせない判断は
+      // `apps/web/app/hooks/queries.ts` の `case 'inbox_flow'` と同じ
+      // （Issue #1264）。詳細は本文（`journal_read id=<id>` の全文モード）
+      // に回す——クローンはそちらで読める。
+      const retainedLine =
+        entry.retained === undefined
+          ? ''
+          : `\n残存: unread=${entry.retained.unread} redelivered=${entry.retained.redelivered} ` +
+            `redeliveredClosed=${entry.retained.redeliveredClosed} ` +
+            `pendingCollapse=${entry.retained.pendingCollapse}`;
       return {
         head:
           `[inbox_flow arrived=${entry.arrived.total} delivered=${entry.delivered.total} ` +
@@ -10266,7 +10277,8 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
           `到着: ${byTypeText(entry.arrived)}\n` +
           `配達: ${byTypeText(entry.delivered)}\n` +
           `消し込み: ${byTypeText(entry.settled)}` +
-          (entry.pending.oldestAt === undefined ? '' : `\n最古の滞留: ${entry.pending.oldestAt}`),
+          (entry.pending.oldestAt === undefined ? '' : `\n最古の滞留: ${entry.pending.oldestAt}`) +
+          retainedLine,
       };
     }
   }

@@ -1119,7 +1119,17 @@ export function journalEntryShape(entry: JournalEntryInput): string {
         `settled=${entry.settled.total} pending=${entry.pending.count}` +
         (entry.pending.oldestAt === undefined
           ? ''
-          : ` pendingOldestAt=${tag(entry.pending.oldestAt)}`)
+          : ` pendingOldestAt=${tag(entry.pending.oldestAt)}`) +
+        // `retained`（Issue #1264）も同じ理由で自由文を持たない——4つとも
+        // メモリ上の索引の残数（非負整数）なので、他の欄と同じくそのまま出す。
+        // `.optional()` なので無ければ何も足さない（既存の行を壊さない
+        // ための欄なので、無い状態も正当——`schema.ts` の doc）。
+        (entry.retained === undefined
+          ? ''
+          : ` retainedUnread=${entry.retained.unread} ` +
+            `retainedRedelivered=${entry.retained.redelivered} ` +
+            `retainedRedeliveredClosed=${entry.retained.redeliveredClosed} ` +
+            `retainedPendingCollapse=${entry.retained.pendingCollapse}`)
       );
   }
 }
