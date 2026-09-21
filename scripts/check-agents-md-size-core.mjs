@@ -110,7 +110,7 @@ export const BUDGET_HISTORY = [
     lines: 609,
     why:
       'PR #1271: `AGENTS.md`「自分が走っている器」節の ready の手順（逐語は' +
-      '`grep -Fn -- \'タイミングは「CI が green であることを確認し、報告を出す直前」\' AGENTS.md`）は、' +
+      "`grep -Fn -- 'タイミングは「CI が green であることを確認し、報告を出す直前」' AGENTS.md`）は、" +
       '`ci.yml` が draft の `pull_request` では `ci` / `image` / `base-overlap` を回さないことと' +
       '食い違っており、文字どおりには実行できなかった。実行できる順序（ready の前に自分で通すのは' +
       '手元の検証一式であって CI の緑ではない。CI の緑を確かめるのは `gh pr ready` の後、本物の run に' +
