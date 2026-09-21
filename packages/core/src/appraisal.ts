@@ -208,14 +208,8 @@ export function describeAppraisalTargets(input: {
     commitmentRecords.filter((record) => record.appraisal !== undefined).length +
     jobRecords.filter((record) => record.appraisal !== undefined).length;
 
-  if (totalAppraised === 0) {
-    return (
-      '評定の的: 評定が付いた件が台帳・委譲のどちらにも1件も無い。' +
-      '**これは「良い仕事が無い」ではない** —— 評定は付けたときにしか残らないので、' +
-      '付けていなければここは常に空になる（`commitment_appraise` / `manager_appraise` で付ける）。'
-    );
-  }
-
+  // **消えた分母の申告は、0件の枝より前で組み立てる。** 後ろで組むと、
+  // 「評定が1件も無い」で早期に返る枝からこの申告が丸ごと落ちる（下の枝の doc）。
   const measuredNotices: string[] = [];
   if (input.commitments.trimmedClosed > 0) {
     measuredNotices.push(
@@ -227,6 +221,28 @@ export function describeAppraisalTargets(input: {
     measuredNotices.push(
       `⚠️ 読めなかった行が ${input.commitments.unreadable.length} 件在るので、そのぶんは上の` +
         'どの数にも入っていない。',
+    );
+  }
+
+  // **⛔ この枝は Issue #1055 の冒頭の門がそのまま読む値である**（「0件なら段2 の
+  // 入力は永久に空なので段2 を書くな」と分岐する）。⟹ **0 の原因をここで断言して
+  // 外すと、この Issue でいちばん高くつく誤読になる。**
+  //
+  // `trimmedClosed` / `unreadable` が在るときは「付けていないから空」とは限らない
+  // ——付けた評定が古い片付き行ごと消えている経路が `storage-fs` に実在する。
+  // だから申告が在るときだけ断言を弱める（無いときの文面は1文字も変えない）。
+  if (totalAppraised === 0) {
+    const doubt =
+      measuredNotices.length === 0
+        ? ''
+        : `\n${measuredNotices.join('\n')}\n` +
+          '**⟹ この0を「まだ付けていない」と読まないこと。** 付けた評定が上の欠落に' +
+          '巻き込まれて消えている可能性がある。';
+    return (
+      '評定の的: 評定が付いた件が台帳・委譲のどちらにも1件も無い。' +
+      '**これは「良い仕事が無い」ではない** —— 評定は付けたときにしか残らないので、' +
+      '付けていなければここは常に空になる（`commitment_appraise` / `manager_appraise` で付ける）。' +
+      doubt
     );
   }
 

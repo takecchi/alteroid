@@ -153,6 +153,36 @@ describe('describeAppraisalTargets — 評定を台帳・委譲の2節に束ね�
     // 断りだけで終わる（節は出ない）。
     expect(reply).not.toContain('## 引き受けた仕事（台帳）');
     expect(reply).not.toContain('## 委譲');
+    // 欠落が無いときは疑いの行を出さない——毎回出すと、本当に欠落が在るときの
+    // 目印が効かなくなる。
+    expect(reply).not.toContain('この0を「まだ付けていない」と読まないこと');
+  });
+
+  /**
+   * ⛔ この枝は Issue #1055 の冒頭の門がそのまま読む値である（「0件なら段2 の
+   * 入力は永久に空なので段2 を書くな」と分岐する）。**0 の原因を断言して外すと、
+   * この Issue でいちばん高くつく誤読になる。**
+   *
+   * `storage-fs` は保持上限を超えた古い片付き行を物理削除するので、**付けた評定が
+   * 行ごと消えていても「1件も無い」に見える。** 消えた分母の申告が0件の枝から
+   * 落ちていると、その区別が読み手から永久に失われる。
+   */
+  it('⭐ 評定が0件でも、消えた分母の申告が在れば出て、0 の原因の断言が弱まる', () => {
+    const trimmed = describeAppraisalTargets({
+      commitments: commitmentList([commitment('c-1')], { trimmedClosed: 7 }),
+      jobs: [],
+    });
+    expect(trimmed).toContain('古い片付き行が 7 件消えている');
+    expect(trimmed).toContain('この0を「まだ付けていない」と読まないこと');
+    // 0件の枝であることは変わらない（節は出ない）。
+    expect(trimmed).not.toContain('## 引き受けた仕事（台帳）');
+
+    const unreadable = describeAppraisalTargets({
+      commitments: commitmentList([commitment('c-1')], { unreadable: [{ reason: '壊れていた' }] }),
+      jobs: [],
+    });
+    expect(unreadable).toContain('読めなかった行が 1 件在る');
+    expect(unreadable).toContain('この0を「まだ付けていない」と読まないこと');
   });
 
   it('⭐ bad が0件のとき⚠の1行が出る／1件以上あるとき出ない／評定済みが0件の節では出ない', () => {
