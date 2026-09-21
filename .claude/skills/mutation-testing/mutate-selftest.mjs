@@ -63,11 +63,50 @@ function ensureFixtureClean() {
   }
 }
 
+// ── 印が残っていたときの案内（#1262） ─────────────────────────────────
+//
+// **中断で残った印を「消して片付ける」と、変異が残ったまま復元できなくなる。**
+// selftest を変異の区間で signal で殺すと `try/finally` が走らないので実ソースが
+// 変異したまま残るが、人が見る `git status` には `modified: …` としか出ない
+// （印と控えはどちらも `.gitignore` 済みなので現れない）。**そして元のソースの
+// 全文は印の中（`originalContent`）にしかない** ⟹ 印を先に消すと、変異が残って
+// いることに気づく手がかりまで一緒に消える。
+//
+// ⚠️ **Issue #1262 の本文は片付け方を `rm -f MUTATION-IN-PROGRESS.json` /
+// `rm -rf .mutation-testing` と書いているが、変異の区間で殺された回にそれを
+// 当てると上の形になる。** 正規の復元経路はこのハーネスが既に持っている
+// （`status` が段階を読んで次の手を出し、`restore` が印から原文を書き戻す。
+// 逐語は `grep -Fn -- '段階実行: 印を読んで復元する' .claude/skills/mutation-testing/SKILL.md`）。
+// **案内はそちらへ向ける。**
+//
+// **コマンドを定数で持つのは、文面と歯を同じ1つの出所から作るためである**
+// （#1119 が `weak-tooth` で使った型）。⟹ 片方だけがずれることが構造的に起きない。
+export const SELFTEST_RECOVERY_COMMANDS = Object.freeze({
+  status: 'node .claude/skills/mutation-testing/mutate.mjs status',
+  restore: 'node .claude/skills/mutation-testing/mutate.mjs restore',
+});
+
+/**
+ * 「印が既にある」で止めるときの本文を組む**純粋な関数**（副作用なし）。
+ * 歯はここを直接撃てるので、印を実際に置かなくても文面を検査できる。
+ */
+export function selftestMarkerPresentMessage(scenarioName) {
+  return (
+    `${scenarioName}: 印が既にある。selftest は印が無い状態からしか始められない。\n` +
+    '⛔ 印（MUTATION-IN-PROGRESS.json）を消すだけで片付けないこと —— ' +
+    '変異を当てている区間で中断した回は、元のソースの全文が印の中（`originalContent`）にしかない。' +
+    '消すと、変異が残ったまま復元の手がかりが失われる（`git status` には「自分が編集した」としか出ない）。\n' +
+    '片付け方:\n' +
+    `  1. ${SELFTEST_RECOVERY_COMMANDS.status}   # 何が残っているかを印から読む（段階ごとに次の手が違う）\n` +
+    `  2. ${SELFTEST_RECOVERY_COMMANDS.restore}   # 印を読んで原文を書き戻す\n` +
+    '⚠ `status` が「足場対照の印」と答えた回だけは復元する対象が無い。' +
+    'そのときは印が自分で名乗る片付け方（`howToClear`）に従うこと。'
+  );
+}
+
 function requireNoMarker(scenarioName) {
   if (markerExists()) {
-    throw new HarnessError(
-      `${scenarioName}: 印が既にある。selftest は印が無い状態からしか始められない。先に片付けること。`,
-    );
+    throw new HarnessError(selftestMarkerPresentMessage(scenarioName));
   }
 }
 
