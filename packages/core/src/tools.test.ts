@@ -18418,3 +18418,141 @@ describe('引数が欠けたときの断り文（#1141）', () => {
     expect(z.object(shape!).safeParse({}).success).toBe(true);
   });
 });
+
+/**
+ * **予算で落ちた分へ到達できること**（#662）。
+ *
+ * ## なぜ「案内が在る」だけでは足りないか
+ *
+ * `memory_list` は落ちた分に案内を付けていた——逐語
+ * `grep -Fn -- '狙った文書が出ていなければ memory_read slug=<slug> で直接開けること。' packages/core/src/memory.ts`。
+ * 🔴 **だがこの案内は空振りする。** `memory_read` は `slug` の一致を要求し、
+ * **落ちた文書の `slug` はこの一覧からしか得られない。** ⟹ 予算で切れた
+ * 瞬間に、その文書はクローンにとって到達不能になる。
+ *
+ * `token_list` はもっと直接的で、**到達手段が無いことを自分で申告**していた
+ * ——逐語 `grep -Fn -- '**残りを見る手はこの道具に無い**' packages/core/src/tools.ts`。
+ * ⚠️ 案内先（`alteroid token list` / `GET /tokens`）は**人間の口であって、
+ * クローンからは叩けない。**
+ *
+ * ⟹ ⭐ **`schedule_list` が既に持っている形（不透明な `cursor`）へ揃える。**
+ * 逐語: `grep -Fn -- '続きは schedule_list cursor=' packages/core/src/tools.ts`。
+ *
+ * ## この歯が固定するもの
+ *
+ * **「落ちた分がある」と言ったなら、同じ断り書きが到達手段を必ず添える**、
+ * という関係そのもの。⛔ 文言の美しさではない。⟹ 案内を外したり、人間
+ * 専用の口へ差し替えたりすれば、ここが赤くなる。
+ */
+describe('予算で落ちた分へ到達できる（#662）', () => {
+  it('memory_list: 落ちた分があるなら、断り書きが cursor を案内する', async () => {
+    const h = harness();
+    // 予算（MEMORY_LISTING_BUDGET = 8_000）を超える件数を入れる。
+    for (let i = 0; i < 200; i += 1) {
+      await h.stores.persona.write(
+        `doc-${String(i).padStart(3, '0')}`,
+        `# 文書 ${i}\n\n本文がここにある。\n`,
+      );
+    }
+
+    const reply = await h.call('memory_list', {});
+
+    // 前提: 実際に落ちている（落ちていなければこの歯は何も測っていない）。
+    expect(reply).toContain('件は省略');
+    // 本題: 落ちた分への到達手段が同じ断り書きに在る。
+    expect(reply).toMatch(/memory_list cursor=\S+/);
+  });
+
+  it('memory_list: 案内された cursor を渡すと、続きが読める（同じ行を繰り返さない）', async () => {
+    const h = harness();
+    for (let i = 0; i < 200; i += 1) {
+      await h.stores.persona.write(
+        `doc-${String(i).padStart(3, '0')}`,
+        `# 文書 ${i}\n\n本文がここにある。\n`,
+      );
+    }
+
+    const first = await h.call('memory_list', {});
+    const cursor = /memory_list cursor=(\S+?)[)\s]/.exec(first)?.[1];
+    expect(cursor).toBeDefined();
+
+    const second = await h.call('memory_list', { cursor });
+
+    // 1頁目の先頭は2頁目に出てこない（＝続きから読めている）。
+    expect(first).toContain('doc-000');
+    expect(second).not.toContain('doc-000');
+  });
+
+  it('token_list: 落ちた分があるなら、断り書きが cursor を案内する', async () => {
+    const h = harness();
+    await h.stores.tokens.replace(
+      Array.from({ length: 120 }, (_, i) => ({
+        id: `tok-${String(i).padStart(3, '0')}`,
+        label: `予備 ${i}`,
+        value: 'sk-ant-oat01-FAKE-NOT-A-REAL-TOKEN',
+        order: i,
+      })),
+    );
+
+    const reply = await h.call('token_list', {});
+
+    // 前提: 実際に落ちている。
+    expect(reply).toContain('省略');
+    // 本題: **クローンが叩ける口**で続きが取れる。
+    // ⛔ 人間専用の口（alteroid token list / GET /tokens）では、この歯は満たされない。
+    expect(reply).toMatch(/token_list cursor=\S+/);
+  });
+
+  it('token_list: 案内された cursor を渡すと、続きが読める', async () => {
+    const h = harness();
+    await h.stores.tokens.replace(
+      Array.from({ length: 120 }, (_, i) => ({
+        id: `tok-${String(i).padStart(3, '0')}`,
+        label: `予備 ${i}`,
+        value: 'sk-ant-oat01-FAKE-NOT-A-REAL-TOKEN',
+        order: i,
+      })),
+    );
+
+    const first = await h.call('token_list', {});
+    const cursor = /token_list cursor=(\S+?)[)\s]/.exec(first)?.[1];
+    expect(cursor).toBeDefined();
+
+    const second = await h.call('token_list', { cursor });
+
+    expect(first).toContain('tok-000');
+    expect(second).not.toContain('tok-000');
+  });
+
+  it('token_list: 値（value）は cursor を足しても出ない', async () => {
+    const h = harness();
+    await h.stores.tokens.replace(
+      Array.from({ length: 120 }, (_, i) => ({
+        id: `tok-${String(i).padStart(3, '0')}`,
+        label: `予備 ${i}`,
+        value: 'sk-ant-oat01-FAKE-NOT-A-REAL-TOKEN',
+        order: i,
+      })),
+    );
+
+    const first = await h.call('token_list', {});
+    const cursor = /token_list cursor=(\S+?)[)\s]/.exec(first)?.[1];
+    const second = await h.call('token_list', { cursor });
+
+    // **触ったのはページングだけである**（値を返さない性質を変えていない）。
+    expect(first).not.toContain('sk-ant-oat01');
+    expect(second).not.toContain('sk-ant-oat01');
+  });
+
+  it('memory_list: 壊れた cursor は黙って先頭へ倒さず、そうと言う', async () => {
+    const h = harness();
+    await h.stores.persona.write('doc-000', '# 文書\n\n本文\n');
+
+    const reply = await h.call('memory_list', { cursor: 'not-a-real-cursor' });
+
+    // **黙って先頭からへ倒さない**（AGENTS.md「判定できないという3つ目の
+    // 状態を持つ」。倒すと、呼び手は「続きを読んだつもり」で同じ行を読む）。
+    expect(reply).not.toContain('doc-000');
+    expect(reply).toContain('cursor');
+  });
+});

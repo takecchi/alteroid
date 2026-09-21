@@ -27,6 +27,7 @@ import {
   renderListing,
   renderListingFromEnd,
 } from './excerpt.js';
+import { encodeMemoryCursor } from './memory-cursor.js';
 import { heuristicChars, type HeuristicChars } from './quantity.js';
 import type {
   MemoryCreatedAt,
@@ -3271,7 +3272,16 @@ export interface MemoryListingEntry {
  * `manager_list` / `approvals_list` / `schedule_list` / `runner_list`）と
  * 同じ `renderListing` を通し、**文字数の予算**で締める。
  */
-export function renderMemoryListing(entries: readonly MemoryListingEntry[]): string {
+/**
+ * @param paging - **道具（`memory_list`）から呼ぶときだけ渡す。**渡すと、予算で
+ * 落ちた分の断り書きが `cursor` を案内する形になる（#662）。⛔ **省略時の文言は
+ * 1文字も変わらない**——プロンプトへの焼き込みなど、続きを取る口が無い呼び手が
+ * 他に在るので、そちらの出力を動かさない。
+ */
+export function renderMemoryListing(
+  entries: readonly MemoryListingEntry[],
+  paging?: { total: number },
+): string {
   if (entries.length === 0) return '（記憶はまだ空）';
 
   const bySlug = new Map(entries.map((entry) => [entry.slug, entry]));
@@ -3305,9 +3315,30 @@ export function renderMemoryListing(entries: readonly MemoryListingEntry[]): str
 
   return renderListing(items, {
     budget: MEMORY_LISTING_BUDGET,
-    omitted: ({ rest, shown, total }) =>
-      `…ほか ${rest} 件は省略（記憶は全 ${total} 件あり、${shown} 件だけ出した）。` +
-      '狙った文書が出ていなければ memory_read slug=<slug> で直接開けること。',
+    omitted: ({ rest, shown, total }) => {
+      // **母数は cursor を当てる前の全件**（頁が進んでもこの数は変わらない）。
+      // `renderListing` が渡す `total` は今回の view の件数なので、道具から
+      // 呼ばれたときは `paging.total` を優先する（`schedule_list` が同じ理由で
+      // 同じことをしている）。
+      const whole = paging?.total ?? total;
+      const head = `…ほか ${rest} 件は省略（記憶は全 ${whole} 件あり、${shown} 件だけ出した）。`;
+      if (paging === undefined) {
+        // 続きを取る口が無い呼び手（プロンプトへの焼き込み等）。**文言は従来どおり。**
+        return head + '狙った文書が出ていなければ memory_read slug=<slug> で直接開けること。';
+      }
+      // **落ちた中でいちばん小さい slug から（含む）**続ける。描く順（木の DFS）と
+      // 錨の順（slug 昇順）が一致しないので、「最後に出した行の後ろから」では
+      // 行が飛ぶ——理由の全文は `memory-cursor.ts` の
+      // 「`schedule-cursor.ts` とあえて違えた点」に在る。
+      const omittedSlugs = flat.slice(shown).map((node) => node.entry.slug);
+      const from = omittedSlugs.reduce((min, slug) => (slug < min ? slug : min), omittedSlugs[0]!);
+      return (
+        head +
+        `続きは memory_list cursor=${encodeMemoryCursor({ from })} で取れる` +
+        '（⚠ 木の順で描くので、続きの頁に一度出た文書がもう一度出ることがある。' +
+        '**落とさない側へ倒してある。**）。'
+      );
+    },
   });
 }
 

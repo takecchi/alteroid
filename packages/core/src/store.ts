@@ -55,6 +55,20 @@ export function ensureTrailingNewline(text: string): string {
 
 /** 記憶 = 人間がいつでも読んで直せる Markdown 文書群（提供価値1）。 */
 export interface PersonaStore {
+  /**
+   * **slug の昇順。**（#662 の継続点が依拠する契約）
+   *
+   * **宣言する前から3実装とも満たしていた**（pg: `.orderBy(asc(memory.slug))`、
+   * fs: `names.sort()`、in-memory: `.sort((a, b) => a.slug.localeCompare(b.slug))`）。
+   * ⟹ ここで書き足したのは**振る舞いではなく契約**である——`memory_list` の
+   * 継続点（`memory-cursor.ts`）が「一覧が並んでいる」ことに全面的に依拠する
+   * ので、偶然揃っている状態のままでは置けない。
+   *
+   * ⚠️ **照合順序の厳密な一致までは保証しない**（JS の `localeCompare` /
+   * コードポイント順 / pg の `asc` は記号混じりで食い違う余地がある）。
+   * ⟹ 継続点は**位置の探索を第一の手段**にし、比較は錨が消えていたときの
+   * 保険に留めること（`schedule-cursor.ts` の「第二の手段の限界」と同じ）。
+   */
   list(): Promise<MemoryDocumentMeta[]>;
   read(slug: string): Promise<MemoryDocument | null>;
   /**

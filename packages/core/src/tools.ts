@@ -57,6 +57,7 @@ import {
   recentDroppedTraces,
 } from './dropped-record.js';
 import { collapseErrorCause } from './error-cause.js';
+import { encodeTokenCursor, resolveTokenCursor } from './token-cursor.js';
 import { toAgentTokenView, tokenAvailabilityAt, type CooldownSource } from './token-pool.js';
 import {
   describePage,
@@ -87,6 +88,7 @@ import type {
   RunnerPushOutcome,
   TokenGenerationUnknownReason,
 } from './manager.js';
+import { resolveMemoryCursor } from './memory-cursor.js';
 import {
   applyMemoryFrontmatterPatch,
   assertNeverMemoryDocKind,
@@ -3274,13 +3276,44 @@ export function createCloneTools(context: ToolContext) {
         '見える）ので、その間に本文が実際どれだけ変わったか（バイト数・割合）を変化量として併記する',
         '（変化量が記録されていない古い記憶は「記録されていない」とだけ言い、0とは扱わない）。',
         '階層は frontmatter の parent から組み立てた木で、インデントで表す。',
+        // **#662。** 予算で切れた分への到達手段。他の一覧（`schedule_list` /
+        // `commitment_list`）と同じ言い方に寄せる——道具の説明文はクローンが
+        // 毎回読む面なので、ここだけ違う語を発明しない。
+        '一覧が予算で切れたら、断り書きが次に打つ cursor を案内する。それを cursor へ渡すと続きから読める。',
       ].join(' '),
-      {},
-      async () => {
+      {
+        cursor: z
+          .string()
+          .optional()
+          .describe(
+            '続きを読む位置。前回の応答の断り書きに出た cursor をそのまま渡す' +
+              '（自分で組み立てない）。省略すると先頭から。',
+          ),
+      },
+      async ({ cursor }) => {
         const documents = await stores.persona.list();
+        // **`PersonaStore.list()` の「slug の昇順。」に依拠する**（#662 で
+        // interface へ宣言した契約。逐語:
+        // `grep -Fn -- '**slug の昇順。**（#662 の継続点が依拠する契約）' packages/core/src/store.ts`）。
+        const resolved = resolveMemoryCursor(documents, cursor);
+        if (resolved.kind === 'malformed') {
+          // **黙って先頭からへ倒さない**（AGENTS.md「判定できないという3つ目の
+          // 状態を持つ」）。倒すと、呼び手は「続きを読んだつもり」で同じ行を読む。
+          return text(
+            'この cursor は読めない（壊れているか、この道具のものではない）。' +
+              'cursor は前回の応答の断り書きに出たものをそのまま渡すこと（自分で組み立てない）。' +
+              '先頭から読み直すなら cursor を省いて呼ぶこと。',
+          );
+        }
+        // ⚠️ **cursor を渡されたときだけ「最後の頁」と言う。** cursor 無しで
+        // 0件なのは「記憶がまだ空」であって終端ではない——ここで早期に返すと、
+        // 空のときの言い方（`renderMemoryListing` の '（記憶はまだ空）'）を奪う。
+        if (cursor !== undefined && resolved.view.length === 0) {
+          return text('（cursor より後ろの記憶は無い。これが最後の頁）');
+        }
         return text(
           renderMemoryListing(
-            documents.map((doc) => ({
+            resolved.view.map((doc) => ({
               slug: doc.slug,
               title: doc.title,
               kind: doc.kind,
@@ -3290,6 +3323,7 @@ export function createCloneTools(context: ToolContext) {
               updatedAt: doc.updatedAt,
               createdAt: doc.createdAt,
             })),
+            { total: documents.length },
           ),
         );
       },
@@ -6786,13 +6820,41 @@ export function createCloneTools(context: ToolContext) {
         '枠で止まったときここを見れば、候補が残っているのか全部冷却中なのかが分かる。',
         '回った履歴のほうは journal_read types=token_rotation で引ける。',
       ].join(' '),
-      {},
-      async () => {
-        const [tokens, settings, active] = await Promise.all([
+      {
+        // **#662。** 予算で切れた分への到達手段。他の一覧と同じ契約
+        // （不透明な文字列。自分で組み立てない）。
+        cursor: z
+          .string()
+          .optional()
+          .describe(
+            '続きを読む位置。前回の応答の断り書きに出た cursor をそのまま渡す' +
+              '（自分で組み立てない）。省略すると先頭から。',
+          ),
+      },
+      async ({ cursor }) => {
+        const [allTokens, settings, active] = await Promise.all([
           stores.tokens.list(),
           stores.tokens.readSettings(),
           stores.tokens.readActive(),
         ]);
+        // **`TokenPoolStore.list()` の「`order` 昇順。」に依拠する**（逐語:
+        // `grep -Fn -- '`order` 昇順。' packages/core/src/store.ts`）。
+        const resolved = resolveTokenCursor(allTokens, cursor);
+        if (resolved.kind === 'malformed') {
+          // **黙って先頭からへ倒さない**（AGENTS.md「判定できないという3つ目の
+          // 状態を持つ」）。
+          return text(
+            'この cursor は読めない（壊れているか、この道具のものではない）。' +
+              'cursor は前回の応答の断り書きに出たものをそのまま渡すこと（自分で組み立てない）。' +
+              '先頭から読み直すなら cursor を省いて呼ぶこと。',
+          );
+        }
+        // ⚠️ **cursor を渡されたときだけ「最後の頁」と言う**（上の `memory_list`
+        // と同じ理由——プールが空のときの言い方を奪わない）。
+        if (cursor !== undefined && resolved.view.length === 0) {
+          return text('（cursor より後ろのトークンは無い。これが最後の頁）');
+        }
+        const tokens = resolved.view;
         // **`toAgentTokenView` を通す。** ここで自分で組むと、値を含む
         // `AgentToken` から拾う形になり、いつか `value` が混ざる（禁止の在り処は
         // `token-pool.ts` の `AgentTokenView` の doc 1つだけにしておく）。
@@ -6864,9 +6926,18 @@ export function createCloneTools(context: ToolContext) {
             '',
             renderListing(items, {
               budget: TOKEN_LIST_BUDGET,
-              omitted: ({ rest, shown, total }) =>
-                `…ほか ${rest} 件は省略（プールは ${total} 件あり、order の昇順に ${shown} 件だけ出した）。` +
-                '**残りを見る手はこの道具に無い** — 全件は `alteroid token list` か `GET /tokens` で読む。',
+              omitted: ({ rest, shown }) => {
+                // **母数は cursor を当てる前の全件**（頁が進んでも動かない）。
+                const lastShown = tokens[shown - 1]!;
+                return (
+                  `…ほか ${rest} 件は省略（プールは ${allTokens.length} 件あり、order の昇順に ${shown} 件だけ出した）。` +
+                  // **#662。** ここは以前「**残りを見る手はこの道具に無い** —
+                  // 全件は `alteroid token list` か `GET /tokens` で読む。」と
+                  // 名乗っていた。⚠ **黙ってはいなかったが、案内先はどちらも
+                  // 人間の口で、クローンからは叩けなかった。**
+                  `続きは token_list cursor=${encodeTokenCursor({ id: lastShown.id, order: lastShown.order })} で取れる。`
+                );
+              },
             }),
             // **欄の意味を出力に書く**（`excerpt.ts` の `ListingEntryFields.updatedAt`
             // の doc が要求している）。**「作成と更新が同じ」は値を作ったのではなく
