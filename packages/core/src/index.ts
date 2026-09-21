@@ -216,6 +216,16 @@ export {
 export type { CloneHost } from './host.js';
 export { Inbox } from './inbox.js';
 /**
+ * 段2: 横断の蒸留 — 評定を束ねて名指しする（#1055。`memory.ts` の
+ * `describeMemoryTidyTargets` と同じ形）。
+ */
+export {
+  describeAppraisalTargets,
+  APPRAISAL_TARGETS_BUDGET,
+  APPRAISAL_TARGETS_LINE_LIMIT,
+  APPRAISAL_TARGETS_REASON_LIMIT,
+} from './appraisal.js';
+/**
  * 記憶をクローンの文脈へ載せる形。**器（storage-fs / storage-pg）もここを使う** —
  * 器ごとに書いた結果、実際に食い違ったことがある（`memory.ts` の冒頭）。
  */

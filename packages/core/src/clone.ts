@@ -76,6 +76,7 @@ import type { CloneHost } from './host.js';
 import { createRunnerRegistry, type RunnerClient } from './runner-protocol.js';
 import { Inbox } from './inbox.js';
 import { createManagerPool, type ManagerPool, type ManagerSummary } from './manager.js';
+import { describeAppraisalTargets } from './appraisal.js';
 import {
   describeMemorySessionDelta,
   describeMemoryTidyTargets,
@@ -6423,9 +6424,29 @@ class Clone implements CloneHost {
             tidyTargets = `棚卸しの的: 測れなかった（理由: ${String(error)}）。memory_list から自分で探すこと。`;
           }
         }
+        // **段2: 横断の蒸留（#1055）。同じ定期の棚卸しに相乗りする**
+        // （`prompt.ts` の `DistillPromptOptions.appraisalTargets`）。上の
+        // `tidyTargets` と同じ倒し方（測れなかったら添えない・ターンは止めない）
+        // を守るため、**try/catch は別々に掛ける** —— まとめて1つの try に
+        // 入れると、片方が投げたときにもう片方まで巻き込んで落ちる。
+        let appraisalTargets: string | undefined;
+        if (event.reason === 'scheduled') {
+          try {
+            const commitments = await this.#stores.commitments.list({ includeClosed: true });
+            appraisalTargets = describeAppraisalTargets({
+              commitments,
+              jobs: await this.#stores.jobs.listJobs(),
+            });
+          } catch (error) {
+            appraisalTargets = `評定の的: 測れなかった（理由: ${String(error)}）。commitment_list / manager_list から自分で探すこと。`;
+          }
+        }
         const distillPrompt = buildDistillPrompt(
           event.reason === 'shutdown' ? 'conversation_end' : event.reason,
-          tidyTargets === undefined ? {} : { tidyTargets },
+          {
+            ...(tidyTargets === undefined ? {} : { tidyTargets }),
+            ...(appraisalTargets === undefined ? {} : { appraisalTargets }),
+          },
         );
         // **このターンへ何が入ったかを残す**（#243）。本文は定型文なので長さだけ
         // を書く（何を載せるかの判断は `turnInputEntry` に1本化してある）。

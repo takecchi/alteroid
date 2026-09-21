@@ -194,6 +194,18 @@ export interface DistillPromptOptions {
    * （`RenderedMemory` の branded type と同じ線）。
    */
   tidyTargets?: string;
+  /**
+   * **段2: 横断の蒸留** —— いま評定が付いている台帳・委譲を束ねて名指しする
+   * （`appraisal.ts` の `describeAppraisalTargets` の出力そのまま）。
+   *
+   * **`tidyTargets` に倣う。** 定期の棚卸し（`reason: 'scheduled'`）だけが渡す
+   * ——会話終了・PreCompact は「その会話を記憶へ移す」ことが本題なので、
+   * ここへ評定の束を足すと本題が薄まる。
+   *
+   * **文字列で受け取る。** 束ね方の持ち主は `appraisal.ts` の1つに閉じている
+   * （`tidyTargets` と同じ理由）。
+   */
+  appraisalTargets?: string;
 }
 
 export function buildDistillPrompt(
@@ -219,6 +231,19 @@ ${options.tidyTargets}
 
 **上に名前が出ている文書から手を付けよ。** 出ていなければ、下の「統合」を通常どおり行えばよい。
 `;
+  // **段2: 横断の蒸留。`tidySection` と完全に同じパターン。** 渡されたときだけ
+  // 足し、渡さない呼び手（会話終了・PreCompact）の出力は1文字も変わらない
+  // （`DistillPromptOptions.appraisalTargets` の doc）。
+  const appraisalSection =
+    options.appraisalTargets === undefined
+      ? ''
+      : `
+## 評定の束（個別の反省を、共通の形に畳めるか確かめる）
+
+${options.appraisalTargets}
+
+**1件ずつの反省で終えないこと。** 2件以上に共通する形が見えたときだけ、それを一般の学びとして記憶へ畳め。共通する形が見えなければ、無理に畳まずそのまま置いてよい。
+`;
 
   return `[system] ${why}
 
@@ -235,7 +260,7 @@ ${options.tidyTargets}
 
 **⭐ ただし \`memory_section_move\`（節を別の文書へ移す）は、人間が書いた文書に対しても通る**（2026-09-08 に緩めた。移動は先に足して後で切るので、どの瞬間にも本文がどこかに在る＝失われない）。⟹ **このターンでできる整理の本体はこれである。** 断られるのを待たずに、いま移せる。
 
-${tidySection}
+${tidySection}${appraisalSection}
 ## 統合（このターンでできることがあれば、あわせてやること）
 
 - **新しく書く前に、既存の記憶を \`memory_list\` / \`memory_read\` で探せ。** 重複する文書を作らない。近い内容の文書があれば、新規作成ではなく \`memory_write\` / \`memory_append\` で更新する。

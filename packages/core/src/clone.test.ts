@@ -15710,6 +15710,68 @@ describe('クローン — 定期の棚卸し（scheduled な蒸留）', () => {
 
     await s.clone.stop();
   });
+
+  /**
+   * ⭐ 段2: 横断の蒸留（#1055）。同じ定期の棚卸しに相乗りする
+   * （`appraisal.ts` の `describeAppraisalTargets`、`prompt.ts` の
+   * `DistillPromptOptions.appraisalTargets`）。**測るのは `tidyTargets` と
+   * 対になる2つだけ** —— 棚卸しの刻みには載ること、会話終了の蒸留には
+   * 載らないこと（本題を薄めない、という同じ理由）。
+   */
+  it('⭐ 棚卸しの刻みでは、評定の束（段2）もターンの入力に載る', async () => {
+    const stores = createMemoryStores();
+    await stores.commitments.open({
+      id: 'commit-appraised',
+      at: '2026-08-01T00:00:00.000Z',
+      origin: 'human',
+      body: '評定つきの依頼',
+    });
+    await stores.commitments.appraise(
+      'commit-appraised',
+      '2026-08-01T00:00:00.000Z',
+      'bad',
+      'human',
+      '間に合わなかった',
+    );
+    const s = setup(undefined, stores);
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    s.clone.post(tidyEvent());
+    await waitFor(() => ((s.calls[0] as FakeCall).inputs.length ?? 0) >= 2, '棚卸しのターン');
+
+    const input = (s.calls[0] as FakeCall).inputs[1] ?? '';
+    expect(input).toContain('commit-appraised');
+    expect(input).toContain('うまくいかなかった');
+
+    await s.clone.stop();
+  });
+
+  it('会話終了の蒸留には評定の束を載せない（本題を薄めない）', async () => {
+    const stores = createMemoryStores();
+    await stores.commitments.open({
+      id: 'commit-appraised-2',
+      at: '2026-08-01T00:00:00.000Z',
+      origin: 'human',
+      body: '評定つきの依頼2',
+    });
+    await stores.commitments.appraise(
+      'commit-appraised-2',
+      '2026-08-01T00:00:00.000Z',
+      'bad',
+      'human',
+    );
+    const s = setup(undefined, stores);
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    await s.clone.endConversation('conv-1');
+
+    const distill = (s.calls[0] as FakeCall).inputs[1] ?? '';
+    expect(distill).not.toContain('commit-appraised-2');
+
+    await s.clone.stop();
+  });
 });
 
 /**
