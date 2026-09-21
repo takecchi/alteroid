@@ -57,6 +57,7 @@ import {
   recentDroppedTraces,
 } from './dropped-record.js';
 import { collapseErrorCause } from './error-cause.js';
+import { encodeRunnerCursor, resolveRunnerCursor } from './runner-cursor.js';
 import { encodeTokenCursor, resolveTokenCursor } from './token-cursor.js';
 import { toAgentTokenView, tokenAvailabilityAt, type CooldownSource } from './token-pool.js';
 import {
@@ -9430,13 +9431,35 @@ export function createCloneTools(context: ToolContext) {
               '出すか。既定は出さない——このためにネットワーク往復を足さない側に' +
               '倒してある。頼んだときだけ各 runner の /health を叩く（#315 の可視化）。',
           ),
+        // **#662。** 予算で切れた分への到達手段。他の一覧（`token_list` /
+        // `memory_list` / `schedule_list`）と同じ契約（不透明な文字列。
+        // 自分で組み立てない）。
+        cursor: z
+          .string()
+          .optional()
+          .describe(
+            '続きを読む位置。前回の応答の断り書きに出た cursor をそのまま渡す' +
+              '（自分で組み立てない）。省略すると先頭から。',
+          ),
       },
-      async ({ fingerprints, resources }) => {
+      async ({ fingerprints, resources, cursor }) => {
         if (!context.managers) return NO_POOL;
         const overview = await context.managers.runners({
           ...(fingerprints === undefined ? {} : { fingerprints }),
           ...(resources === undefined ? {} : { resources }),
         });
+        // **#662。** `tools.ts` はこの配列を並べ替えずそのまま積むので、描く順と
+        // 錨の順は同一である（`runner-cursor.ts` の doc）。
+        const resolved = resolveRunnerCursor(overview.runners, cursor);
+        if (resolved.kind === 'malformed') {
+          // **黙って先頭からへ倒さない**（AGENTS.md「判定できないという3つ目の
+          // 状態を持つ」）。
+          return text(
+            'この cursor は読めない（壊れているか、この道具のものではない）。' +
+              'cursor は前回の応答の断り書きに出たものをそのまま渡すこと（自分で組み立てない）。' +
+              '先頭から読み直すなら cursor を省いて呼ぶこと。',
+          );
+        }
 
         // **デーモン自身の版は、runner が0台でも出す。** 「自分は何で走っているか」は
         // 名簿の中身に依存しない事実であり、0台のときに落とすと、配線がまだ無い状態
@@ -9452,6 +9475,13 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
+        // ⚠️ **cursor を渡されたときだけ「最後の頁」と言う**（`token_list` /
+        // `memory_list` と同じ理由——名簿が0台のときの言い方を奪わない。その枝は
+        // すぐ上に在り、ここより先に返っている）。
+        if (cursor !== undefined && resolved.view.length === 0) {
+          return text(`（cursor より後ろの器は無い。これが最後の頁）\n${daemonLine}`);
+        }
+
         const head: string[] = [
           // **1台のときにそう言う。** 言わないと「分散していない」ことが読み取れず、
           // 複数台に散っていると誤読されうる（依頼者からの明示要求）。
@@ -9463,11 +9493,21 @@ export function createCloneTools(context: ToolContext) {
           // 2つの Service は別々にデプロイされるので、ずれている窓が実際に在る。
           daemonLine,
         ];
+        // **#662。** 錨の器が名簿から消えていたので先頭から出し直した。
+        // ⛔ **黙って重複させない**（`runner-cursor.ts` の `restarted` の doc）——
+        // 言わないと「進んでいない」のか「出し直した」のかが区別できない。
+        if (resolved.restarted) {
+          head.push(
+            '⚠ 渡された cursor が指していた器は、いま名簿に居ない（登録から外れた）。' +
+              'この並びは登録順で、そこから位置を割り出す手が無いので、**先頭から出し直した**' +
+              '——既に見た器がもう一度出る。**1台も落としていない**（欠落より重複の側へ倒してある）。',
+          );
+        }
 
         // **器1台ぶんを1つのブロックにしてから予算で積む。** 行ごとに積むと、
         // 予算に当たった器が途中の1行で切れて「版が無い器」に見える。
         const blocks: string[] = [];
-        for (const runner of overview.runners) {
+        for (const runner of resolved.view) {
           const lines: string[] = [];
           lines.push(
             `- ${runner.label} [${runner.state}]` +
@@ -9708,8 +9748,21 @@ export function createCloneTools(context: ToolContext) {
             ...head,
             renderListing(blocks, {
               budget: RUNNER_LIST_BUDGET,
-              omitted: ({ rest, shown, total }) =>
-                `…ほか ${rest} 台は省略（登録は ${total} 台あり、${shown} 台だけ出した）。`,
+              omitted: ({ rest, shown }) => {
+                // **母数は cursor を当てる前の全件**（頁が進んでも動かない。
+                // `token_list` の同じ行と同じ扱い）。**引数なしの呼びでは
+                // `resolved.view === overview.runners` なので、この数は
+                // `renderListing` が渡す `total` と同じ値である**——文言は
+                // 1文字も変わらない。
+                const lastShown = resolved.view[shown - 1]!;
+                return (
+                  `…ほか ${rest} 台は省略（登録は ${overview.runners.length} 台あり、${shown} 台だけ出した）。` +
+                  // **#662。** ここは以前、台数を名乗るだけで続きの取り方を
+                  // 書いていなかった——⟹ 落ちた器の `runnerId` はこの一覧
+                  // 以外から得られないので、置き先の候補から恒久的に消えていた。
+                  `続きは runner_list cursor=${encodeRunnerCursor({ label: lastShown.label })} で取れる。`
+                );
+              },
             }),
             ...tail,
           ].join('\n'),
