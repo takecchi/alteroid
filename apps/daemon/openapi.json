@@ -1638,6 +1638,37 @@
                             }
                           },
                           "required": ["count"]
+                        },
+                        "retained": {
+                          "type": "object",
+                          "properties": {
+                            "unread": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "redelivered": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "redeliveredClosed": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "pendingCollapse": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "unread",
+                            "redelivered",
+                            "redeliveredClosed",
+                            "pendingCollapse"
+                          ]
                         }
                       },
                       "required": [
@@ -3674,6 +3705,37 @@
                                   }
                                 },
                                 "required": ["count"]
+                              },
+                              "retained": {
+                                "type": "object",
+                                "properties": {
+                                  "unread": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "redelivered": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "redeliveredClosed": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "pendingCollapse": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "unread",
+                                  "redelivered",
+                                  "redeliveredClosed",
+                                  "pendingCollapse"
+                                ]
                               }
                             },
                             "required": [
