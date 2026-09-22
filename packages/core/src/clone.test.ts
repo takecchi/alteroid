@@ -10048,65 +10048,48 @@ describe('クローン — 枠で保持している間、中身を持たない�
    * 「人間優先が有効なままでも、保持中の tick は畳まれて在庫が増えない」
    * （後述）も同じ待ちを使う。**
    *
+   * ⛔ **壁時計の打ち切りを持たない**（#1220）。ここにはかつて
+   * `RELEASE_WAIT_BUDGET_MS = 15_000` が在り、「共有の `waitFor` は 3 秒で
+   * 諦めるので、この歯だけ負荷に耐える側へ倒す」という理由で独自の予算を
+   * 持っていた。⟹ **その理由のほうが消えた** —— `waitFor` から打ち切り
+   * そのものが無くなったので、別の予算を持つ意味が無い（`waitFor` の doc）。
+   *
    * ## この待ちが言えないこと（計器の側に貼る）
    *
    * **「起きなかった（実装の退行）」と「器が遅すぎた（飽和）」を区別できない。**
-   * どちらも同じタイムアウトで出る。**赤を見たら、実装の退行を探しに行く前に
+   * どちらも同じ落ち方で出る。**赤を見たら、実装の退行を探しに行く前に
    * 器の負荷を疑うこと** — 他の歯（歯1・歯2）はアサーションの不一致で数十 ms
    * のうちに落ちるので、**そちらが緑のままここだけが数秒かけて落ちているなら、
    * 退行の可能性が高い。逆に全体が遅いなら飽和を先に疑う。**
    *
-   * この器は混むと vitest の fork pool ごと落ちることがある（`AGENTS.md`
-   * 「自分が走っている器」）ので、**待ちは負荷に耐える側へ倒してある**
-   * （共有の `waitFor` の 3 秒ではなく下の予算）。それでも足りない可能性は
-   * 消せないので、消せないことを上に書いてある。
-   *
-   * `it()` 側にも明示のタイムアウトを付けてあること。**vitest の既定は 5 秒**で、
-   * 付けないとこの待ちより先にそちらが当たり、**理由の書かれていない汎用の
-   * タイムアウト**に化ける（＝ここに書いた断り書きが読まれない）。
+   * ⚠️ **落ち方は変わった。** 打ち切りを持っていた頃はこの関数自身が理由付きの
+   * 例外を投げたが、いまは `it()` の明示のタイムアウトで落ちる。**理由は
+   * `afterEach` が stderr へ出す待ちの `label` に載せてある**（`waitFor` の doc）
+   * ので、下の `label` を無内容にしないこと。
    */
-  const RELEASE_WAIT_BUDGET_MS = 15_000;
   async function waitForReleaseAttempts(s: Setup, expected: number, what: string): Promise<void> {
-    const started = Date.now();
-    for (;;) {
-      const seen = await releaseAttemptCount(s);
-      if (seen === expected) return;
-      if (Date.now() - started > RELEASE_WAIT_BUDGET_MS) {
-        throw new Error(
-          `${what}: 解除の試行が ${expected} 回になるのを ${RELEASE_WAIT_BUDGET_MS}ms 待ったが ${seen} 回のままだった。` +
-            'この歯は「起きなかった（退行）」と「器が遅すぎた（飽和）」を区別できない。' +
-            '他の歯（歯1・歯2）が緑でここだけ落ちているなら退行を、全体が遅いなら器の飽和を先に疑うこと。',
-        );
-      }
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
+    await waitFor(
+      async () => (await releaseAttemptCount(s)) === expected,
+      `${what}: 解除の試行が ${expected} 回になるのを待っている`,
+    );
   }
 
   /**
    * 解除の試行が `baseline` より増えるまで待つ。**目標を固定値にできない歯用**
    * （「人間優先が有効なままでも、保持中の tick は畳まれて在庫が増えない」）。
    * 人間の発言も枠の解除を誘発しうる（`post()` の `#releaseRequested` は起点の
-   * 種類を問わない）ので、そのぶんの回数を歯の側で先読みできない。**予算・
-   * 断り書きの理由は `waitForReleaseAttempts` と同じなのでそちらを見よ。**
+   * 種類を問わない）ので、そのぶんの回数を歯の側で先読みできない。**打ち切りを
+   * 持たない理由と断り書きは `waitForReleaseAttempts` と同じなのでそちらを見よ。**
    */
   async function waitForReleaseAttemptsAbove(
     s: Setup,
     baseline: number,
     what: string,
   ): Promise<void> {
-    const started = Date.now();
-    for (;;) {
-      const seen = await releaseAttemptCount(s);
-      if (seen > baseline) return;
-      if (Date.now() - started > RELEASE_WAIT_BUDGET_MS) {
-        throw new Error(
-          `${what}: 解除の試行が ${baseline} 回より増えるのを ${RELEASE_WAIT_BUDGET_MS}ms 待ったが ${seen} 回のままだった。` +
-            'この歯は「起きなかった（退行）」と「器が遅すぎた（飽和）」を区別できない。' +
-            '他の歯が緑でここだけ落ちているなら退行を、全体が遅いなら器の飽和を先に疑うこと。',
-        );
-      }
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
+    await waitFor(
+      async () => (await releaseAttemptCount(s)) > baseline,
+      `${what}: 解除の試行が ${baseline} 回より増えるのを待っている`,
+    );
   }
 
   /** 「枠の解除を試す」旨の日誌の行数（＝解除を試した回数そのもの）。 */
