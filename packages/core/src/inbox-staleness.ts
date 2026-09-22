@@ -33,9 +33,9 @@ import type { InboxEvent } from './schema.js';
  * `CloneHost.usageBlocked`（`host.ts`）の doc が逐語で書いている:
  *
  * > 「認証トークンが通る状態に戻った」という合図は、クローンが枠で止まって
- * > いない限りターンを1本焼くだけで何もしない（`clone.ts` の `post()` の中の
- * > `if (this.#usageBlocked !== null) this.#releaseRequested = true;` が唯一の
- * > 効果であり、止まっていなければそこは1文字も動かない）。
+ * > いない限りターンを1本焼くだけで何もしない（`clone.ts` の `post()` の中で
+ * > `this.#releaseRequested = true;` を立てることが唯一の効果であり、
+ * > 止まっていなければそこは1文字も動かない）。
  *
  * そして `RedeliveryGate` の doc が、拾い直しはその `post()` を通らないと書く:
  *

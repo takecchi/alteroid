@@ -1666,8 +1666,8 @@ export async function main(): Promise<void> {
       const wake = () => {
         // **クローンの門（Issue #783。{@link CloneWakeGate}）。** クローンが
         // いま枠で止まっていなければ、この合図は `clone.ts` の `post()` の中の
-        // `if (this.#usageBlocked !== null) this.#releaseRequested = true;` を
-        // 1文字も動かさない——ターンを1本焼くだけで何もしない。だから配らず畳む。
+        // `this.#releaseRequested = true;` を1文字も動かさない——ターンを
+        // 1本焼くだけで何もしない。だから配らず畳む。
         //
         // **日誌は無関係に必ず出る。** `entry`（`tokenRotationEntry` の結果）は
         // この判定より前に計算済みで、この後の日誌への追記はここで畳んでも

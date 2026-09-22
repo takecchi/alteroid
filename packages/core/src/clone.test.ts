@@ -10922,9 +10922,14 @@ describe('クローン — 枠が回復した後の返信は、人間の側か�
 
     // 枠が回復した後の「試す契機」は、人間が chat を開いていなくても来る
     // （自律 tick・マネージャーからの報告・外部イベントなど、`post()` を呼ぶ
-    // ものなら何でもよい — `post()` の解除チェック（逐語は
-    // `grep -Fn -- 'if (this.#usageBlocked !== null) this.#releaseRequested = true;' packages/core/src/clone.ts`）
-    // は合図の種類を見ない）。
+    // ものなら何でもよい）。
+    // **⚠️ Issue #1240 続き以降は、`post()` の解除チェックが合図の種類を見る
+    // ことがある**（`usageBlockAlwaysRearms` の doc）——ただしそれは
+    // `#usageBlocked.resetsAt` が分かっているときだけで、ここで使う
+    // `spendLimitMessage` は文言だけの通知（`classifyUsageNotice` 経由）なので
+    // `resetsAt` を持たない。`resetsAt` が無ければ合図の種類に関わらず今までどおり
+    // 再武装する（`usageBlockAlwaysRearms` の doc「それ以外は post() が
+    // resetsAt を見る」）ので、この歯が使う `timer` 合図でも解除は起きる。
     // ここでは conv-1 に紐付かない `timer` 合図を使い、「1本目の接続がまだ
     // 生きている」という都合の良い前提を置かないことを明示する。
     clone.post({
