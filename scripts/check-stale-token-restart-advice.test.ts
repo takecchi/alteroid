@@ -1,12 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
+// ⚠ **1行に畳んである。** `@ts-expect-error` は次の1行にしか効かないので、
+// 多行 import にすると `from` の行（実際に TS7016 が出る場所）へ届かない。
+// prettier-ignore
 // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
-import {
-  BANNED_PHRASES,
-  GENERATOR_PATH,
-  findStaleTokenAdviceHits,
-  isExempt,
-} from './check-stale-token-restart-advice-core.mjs';
+import { BANNED_PHRASES, GENERATOR_PATH, findStaleTokenAdviceHits, isExempt } from './check-stale-token-restart-advice-core.mjs';
 
 type Hit = { path: string; id: string; text: string; why: string; line: number };
 type Phrase = { id: string; text: string; why: string };
