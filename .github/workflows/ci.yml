@@ -239,6 +239,21 @@ jobs:
       # script は在り、`scripts/verify-core.mjs` の STEPS にも ci.yml にも無かった）。
       # 在るのに効いていない道具は、静かに失敗する（`AGENTS.md`「静かに失敗する道具」）。
       - run: pnpm check:sdk-quotes
+
+      # **世代ずれの起こし直しの助言の生成元を1つに保つ歯（Issue #1175）。**
+      # `scripts/verify-core.mjs` の STEPS にも在るが、**STEPS だけでは PR の CI で
+      # 一度も走らない** —— この job は `pnpm verify` を呼ばず、門を1本ずつ並べる形
+      # だからである。`scripts/check-scripts-wired.test.ts` は「STEPS か workflow の
+      # どちらかに在る」ことしか見ないので、STEPS にだけ足すと**配線済みとして緑を
+      # 返しながら、main へ7箇所目が入るのを止められない**。直上の `check:sdk-quotes`
+      # がまさに同じ穴で（#646。実装から配線まで期間が空いた）、そのときの断りが
+      # このすぐ上に逐語で残っている。
+      #
+      # ⚠ `scripts/check-stale-token-restart-advice.test.ts` は純関数を合成入力で
+      # 測るだけで、`check-sdk-quotes.test.ts` のような「実物の検査」describe を
+      # 持たない。⟹ `pnpm test` 経由でも実物の repo には当たらない。**実物へ当たる
+      # 経路はこの1行だけである。**
+      - run: pnpm check:stale-token-restart-advice
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm format:check

@@ -166,6 +166,7 @@ import type { CloneRuntimeFacts } from './self.js';
 import { EXCHANGE_WITH_VALUES, UnreadableCommitmentError } from './store.js';
 import type { ArchiveEntry, JournalStore, PendingInboxEvent, Stores } from './store.js';
 import {
+  STALE_TOKEN_RESTART_ADVICE,
   limitRecoveryOf,
   limitRecoveryOfAssistantError,
   withRecoveryNote,
@@ -2613,8 +2614,7 @@ function describeTokenGenerationUnknownReason(reason: TokenGenerationUnknownReas
         '触れていないので、抱えている世代を確かめる材料が無い——一致でも不一致でもない、' +
         '正直な「分からない」である）。この委譲へ daemon が次に明示的に触れば' +
         '（送信・回転のどちらでも）自動で埋まるが、429 が続くなど気になるようなら' +
-        'manager_stop → manager_start で起こし直すこと（新しいプロセスなので新しい鍵で' +
-        '走る。ただし会話は失われる）。'
+        `起こし直すこと。${STALE_TOKEN_RESTART_ADVICE}`
       );
     default:
       return assertNeverTokenGenerationUnknownReason(reason);
@@ -2677,8 +2677,7 @@ function describeTokenGeneration(manager: ManagerSummary): string | null {
     'ターンの境界（確認待ち・背景処理が無い状態）に一度も達しないまま古い鍵で走り続けている' +
     '可能性がある（認証トークンを回した直後は、次のターンの境界に達するまでの短い遅れとして' +
     '普通に起こる——それ自体は症状ではない）。この行が消えないまま 429 が続くようなら、' +
-    'manager_stop → manager_start で起こし直すこと（新しいプロセスなので新しい鍵で走る。' +
-    'ただし会話は失われる）。'
+    `起こし直すこと。${STALE_TOKEN_RESTART_ADVICE}`
   );
 }
 
@@ -2721,18 +2720,13 @@ function describeResetTimeSkew(manager: ManagerSummary): string | null {
       '現役ではない鍵の冷却期限と一致した）。このセッションは古い鍵を掴んだまま' +
       '走っている可能性がある——鍵が通る状態へ戻っても、このセッション自身は' +
       'ターンの境界に達するまで戻らない。' +
-      // **前提を1行足す（既存の文は1文字も変えていない）。** #914 の
-      // 2026-09-15T21:01:54Z のコメントが、すぐ下の助言を「失われるものを過小に
-      // 言っている」と名指ししている——実際にこの助言どおり走行中の委譲3本が
-      // 止められ、うち1本は未 push の実装を抱えていた。⟹ **助言そのものは
-      // 書き換えない**（同じ文言が `describeTokenGeneration`（提案1）と
-      // `manager_stop` の断りにも在り、揃える判断は3箇所まとめてすべきである。
-      // Issue #1175 に3箇所を並べた）。**ここで決めてよいのは「先に確かめろ」だけである。**
-      '⚠ 止める前に、その委譲がターンの途中かどうかを manager_stop の断り' +
-      '（#1063 で未 push・未コミットの実物が出る）で確かめること。' +
+      // **#1175 で助言そのものを1箇所へ畳んだ。** PR #1172 がここへ足した前提
+      // （「止める前に確かめろ」）は、当時「助言は書き換えない／揃える判断は
+      // まとめてすべき」という理由でこの1箇所だけに置かれていた。⟹ その判断が
+      // #1175 で着いたので、前提も助言も {@link STALE_TOKEN_RESTART_ADVICE} が
+      // 生成元になった（**ここで前提を二重に書かない**——同じ文が2つになる）。
       'この行が消えないまま 429 が続くようなら、' +
-      'manager_stop → manager_start で起こし直すこと（新しいプロセスなので新しい鍵で' +
-      '走る。ただし会話は失われる）。'
+      `起こし直すこと。${STALE_TOKEN_RESTART_ADVICE}`
     );
   }
   if (manager.resetTimeSkewMatch === 'active') {
@@ -7791,8 +7785,8 @@ export function createCloneTools(context: ToolContext) {
         '認証トークンの世代の行（`describeTokenGeneration` の doc）が出ているマネージャーでは、' +
           'この委譲が最後に起こした／自動で開き直した時点の世代と、いまの現役の世代を比べられる。' +
           '⚠ が付いていれば世代が食い違っている——回した直後の短い遅れなら自然に消える。' +
-          '429 が続いたまま消えないなら、manager_stop → manager_start で起こし直すこと' +
-          '（会話は失われる）。世代が測れていないときも行は出る——' +
+          `429 が続いたまま消えないなら、起こし直すこと。${STALE_TOKEN_RESTART_ADVICE}` +
+          '世代が測れていないときも行は出る——' +
           '「分からない」の理由（プール未配線／未観測／デーモンの再起動をまたいだ引き取り）を' +
           '名乗る（Issue #988）。再起動をまたいだ場合だけ manager_stop → manager_start が効く。',
         // **Issue #914 オーナー提案(2)。** 世代番号の直接比較（提案1）は
@@ -9428,8 +9422,8 @@ export function createCloneTools(context: ToolContext) {
         // （`runnerManagerTokenTag` の doc）。
         'マネージャーの字面の直後に ⚠世代N≠現役M が付くことがある——この委譲が抱えている' +
           '認証トークンの世代（N）と、いまの現役の世代（M）が食い違っている（Issue #914）。' +
-          '回した直後の短い遅れなら自然に消える。429 が続いたまま消えないなら manager_stop → ' +
-          'manager_start で起こし直すこと（会話は失われる）。詳しい文面は manager_list に出る。' +
+          '回した直後の短い遅れなら自然に消える。429 が続いたまま消えないなら起こし直すこと。' +
+          `${STALE_TOKEN_RESTART_ADVICE}詳しい文面は manager_list に出る。` +
           '一致している・材料が無い（プールを使っていない構成）ときはこの印自体が出ない。',
         'デーモン自身の版と、各 runner が名乗った版（コミット sha）も出る。' +
           'デーモンと runner は別々にデプロイされるので、同じ main から起こしていても' +
