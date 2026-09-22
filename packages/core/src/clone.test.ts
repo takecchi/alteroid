@@ -2219,7 +2219,11 @@ describe('クローン — マネージャーの確認がいまも待たれて�
     // 生きている確認（`waiting` に積まれたまま）を作る。
     void session.ask('Bash', 'req-live');
 
-    const inputs = () => (calls[0] as FakeCall).inputs;
+    // ⚠️ 待ちの最初の1回は、1件目の呼び出しが積まれる前にも評価される。
+    // **例外を投げる形にしないこと** —— `waitFor` は `check` の例外を再試行
+    // しないので、`expect.poll` の頃は再試行で吸われていた `undefined` の
+    // 読み取りが、そのままテストの失敗になる（#1220 の置き換えで実際に踏んだ）。
+    const inputs = (): string[] => calls[0]?.inputs ?? [];
     await waitForExpect(
       () => expect(inputs().find((input) => input.includes('req-live'))).toBeTruthy(),
       '『req-live』を含む入力が届く',
@@ -2243,7 +2247,11 @@ describe('クローン — マネージャーの確認がいまも待たれて�
 
     // 一度は生きている確認として届く。
     const pending = session.ask('Bash', 'req-settled');
-    const inputs = () => (calls[0] as FakeCall).inputs;
+    // ⚠️ 待ちの最初の1回は、1件目の呼び出しが積まれる前にも評価される。
+    // **例外を投げる形にしないこと** —— `waitFor` は `check` の例外を再試行
+    // しないので、`expect.poll` の頃は再試行で吸われていた `undefined` の
+    // 読み取りが、そのままテストの失敗になる（#1220 の置き換えで実際に踏んだ）。
+    const inputs = (): string[] => calls[0]?.inputs ?? [];
     await waitFor(
       () => inputs().some((input) => input.includes('req-settled')),
       '『req-settled』を含む入力が届く',
@@ -2321,7 +2329,11 @@ describe('クローン — マネージャーの確認がいまも待たれて�
     const sessionA = manager.sessions[0];
     if (!sessionA) throw new Error('mgr-A のセッションが無い');
     const pendingA = sessionA.ask('Bash', 'req-shared');
-    const inputs = () => (calls[0] as FakeCall).inputs;
+    // ⚠️ 待ちの最初の1回は、1件目の呼び出しが積まれる前にも評価される。
+    // **例外を投げる形にしないこと** —— `waitFor` は `check` の例外を再試行
+    // しないので、`expect.poll` の頃は再試行で吸われていた `undefined` の
+    // 読み取りが、そのままテストの失敗になる（#1220 の置き換えで実際に踏んだ）。
+    const inputs = (): string[] => calls[0]?.inputs ?? [];
     await waitFor(
       () => inputs().some((input) => input.includes('req-shared')),
       '『req-shared』を含む入力が届く',
@@ -2452,7 +2464,11 @@ describe('クローン — マネージャーの確認がいまも待たれて�
       requestId: 'req-unknown',
     });
 
-    const inputs = () => (calls[0] as FakeCall).inputs;
+    // ⚠️ 待ちの最初の1回は、1件目の呼び出しが積まれる前にも評価される。
+    // **例外を投げる形にしないこと** —— `waitFor` は `check` の例外を再試行
+    // しないので、`expect.poll` の頃は再試行で吸われていた `undefined` の
+    // 読み取りが、そのままテストの失敗になる（#1220 の置き換えで実際に踏んだ）。
+    const inputs = (): string[] => calls[0]?.inputs ?? [];
     // **ターンが落ちずに進むこと自体が主張である。** list() が投げたまま
     // ターンが止まれば、この poll はタイムアウトで落ちる。
     await waitForExpect(
@@ -2481,7 +2497,11 @@ describe('クローン — マネージャーの確認がいまも待たれて�
       text: '直しました（報告のみ）',
     });
 
-    const inputs = () => (calls[0] as FakeCall).inputs;
+    // ⚠️ 待ちの最初の1回は、1件目の呼び出しが積まれる前にも評価される。
+    // **例外を投げる形にしないこと** —— `waitFor` は `check` の例外を再試行
+    // しないので、`expect.poll` の頃は再試行で吸われていた `undefined` の
+    // 読み取りが、そのままテストの失敗になる（#1220 の置き換えで実際に踏んだ）。
+    const inputs = (): string[] => calls[0]?.inputs ?? [];
     await waitForExpect(
       () => expect(inputs().find((input) => input.includes('直しました（報告のみ）'))).toBeTruthy(),
       '『直しました（報告のみ）』を含む入力が届く',
