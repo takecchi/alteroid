@@ -237,7 +237,6 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
     }
   }
 
-
   async listSessions(projectKey: string): Promise<{ sessionId: string; mtime: number }[]> {
     const rows = await this.#db
       .select({ sessionId: sessions.sessionId, updatedAt: sessions.updatedAt })

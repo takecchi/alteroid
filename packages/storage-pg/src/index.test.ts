@@ -3924,7 +3924,9 @@ describe('PgSessionStore（SDK のセッション永続化）', () => {
       const sizeKey = { projectKey: 'proj', sessionId: 'sess-measure-compressible' };
       // alteroid が実際に貯めている本文の形（同じ文面の繰り返し）に寄せる。
       const body =
-        '約束の台帳の手順・禁止領域について、この記録は同じ文面を繰り返す傾向がある。'.repeat(4_000);
+        '約束の台帳の手順・禁止領域について、この記録は同じ文面を繰り返す傾向がある。'.repeat(
+          4_000,
+        );
       await stores.sessionStore.append(sizeKey, [{ type: 'user', uuid: 'c1', body }]);
 
       const measured = await stores.sessionStore.measureSize(sizeKey);
@@ -4004,7 +4006,6 @@ describe('PgSessionStore（SDK のセッション永続化）', () => {
       expect(timeoutQueries[0]).toContain('true');
     });
   });
-
 });
 
 /**
