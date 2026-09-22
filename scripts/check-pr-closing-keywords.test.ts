@@ -13,7 +13,7 @@ import {
  *
  * 本物の `gh pr view` は叩かない —— 合成したタイトル・本文・コミットメッセージで
  * 判定だけを確かめる（`check-no-attribution-trailers.test.ts` /
- * `check-pr-title-type.test.ts` と同じ理由）。
+ * `check-pr-vanished-footprint.test.ts` と同じ理由）。
  *
  * **この歯は fixture として閉じるキーワードの逐語を持つ。** それ自体が対象に
  * なってはいけない——この門は repo のファイルも git の履歴も一切走査しない

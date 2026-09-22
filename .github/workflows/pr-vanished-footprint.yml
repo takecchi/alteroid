@@ -19,8 +19,8 @@ name: PR vanished footprint
 
 # ## なぜ `ci.yml` の中に置かず、別の workflow にしたか
 #
-# **`edited` が要るからである**（`pr-title.yml` / `no-attribution-trailers.yml` と
-# 同じ理由）。PR 本文は後から編集できるので、`opened` だけの門は素通りする。ところが
+# **`edited` が要るからである**（`no-attribution-trailers.yml` / `pr-closing-keywords.yml`
+# と同じ理由）。PR 本文は後から編集できるので、`opened` だけの門は素通りする。ところが
 # `ci.yml` の `pull_request.types` は `edited` を含まない
 # （`grep -Fn -- 'types: [opened, synchronize, reopened, ready_for_review]' .github/workflows/ci.yml`）。
 #
@@ -43,7 +43,7 @@ on:
     # `reopened` / `ready_for_review` も同じ理由で足してある。
     types: [opened, edited, synchronize, reopened, ready_for_review]
 
-# `pr-title.yml` / `no-attribution-trailers.yml` と同じ形（理由の逐語は
+# `no-attribution-trailers.yml` / `pr-closing-keywords.yml` と同じ形（理由の逐語は
 # `grep -Fn -- '同じ PR に続けて push したとき、古い実行を残さない' .github/workflows/ci.yml`）。
 # ここでは `pull_request` しか起きないので `head_ref` は必ず入るが、**`||` の側は
 # 落とさない** —— 空文字のキーで全 PR が1つの群に入る形を作らないため。
@@ -66,7 +66,7 @@ jobs:
   #   この PR の権限の外である。** `.github/required-status-checks.json`
   #   （protection の宣言。正本はあちら）は1文字も触らない。
   pr-vanished-footprint:
-    # **`no-attribution-trailers` / `pr-title-type` / `pr-closing-keywords` と
+    # **`no-attribution-trailers` / `pr-closing-keywords` と
     # 同じく draft でも skip しない。** `if:` で節約すると、draft 由来の
     # `skipped` が「満たした」として扱われる罠（`AGENTS.md`「静かに失敗する
     # 道具」）を持ち込む。この検査は `gh api` を数回叩くだけで軽く、節約する
@@ -74,7 +74,7 @@ jobs:
     # 作らない。**
     #
     # ⚠️ **`if:` を1文字も付けない。** trigger が `pull_request` の1本だけなので
-    # 要らない（`pr-title.yml` と同じ）。
+    # 要らない（`no-attribution-trailers.yml` と同じ）。
     runs-on: ubuntu-latest
     permissions:
       contents: read

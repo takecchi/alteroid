@@ -19,10 +19,10 @@ name: Issue done trailer
 # `pnpm issue-done-trailer` を誤って叩いても何も閉じない——実際に閉じる
 # 経路はこの workflow がその環境変数を渡す1本だけである。
 #
-# ## なぜ `pull_request: types: [closed]` か（`ci.yml` / `pr-title.yml` /
+# ## なぜ `pull_request: types: [closed]` か（`ci.yml` /
 #     `pr-closing-keywords.yml` とは trigger の性質が違う）
 #
-# 他の門（`pr-title-type` / `pr-closing-keywords` / `no-attribution-trailers`）は
+# 他の門（`pr-closing-keywords` / `no-attribution-trailers`）は
 # 「PR が開いているあいだ、内容が変わるたびに」判定し直す必要があるので
 # `edited` / `synchronize` を持つ。**この workflow は逆——マージという1回きりの
 # 事実にしか反応しない。** `closed` イベントで、実際にマージされたか

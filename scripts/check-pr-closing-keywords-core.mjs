@@ -59,9 +59,10 @@
  *   2026-09-17 に取得して確認）の逐語:
  *   `You can also use closing keywords in a commit message. The issue will be
  *   closed when you merge the commit into the default branch`。**squash マージは
- *   PR のタイトルをコミットの件名として焼く**（`AGENTS.md`「リポジトリの約束」・
- *   `check-pr-title-type-core.mjs` の doc が実測付きで持つ事実）。⟹ タイトルに
- *   閉じるキーワードが在れば、件名経由で閉じる経路が開く。
+ *   PR のタイトルをコミットの件名として焼く**（`AGENTS.md`「リポジトリの約束」が
+ *   実測付きで持つ事実。かつては `check-pr-title-type-core.mjs` の doc も同じ
+ *   実測を持っていたが、あの門は 2026-09-22 に takecchi の判断で廃止された）。
+ *   ⟹ タイトルに閉じるキーワードが在れば、件名経由で閉じる経路が開く。
  *   - **⚠️ この repo のタイトル規約自身が、この罠の形をしている。** 規約は
  *     `<type>: <description>` で、type には `fix` が在る。公式 doc は
  *     キーワードの後ろにコロンを許すので（下の「コロン・大文字」）、
@@ -90,8 +91,8 @@
  * この歯（`check-pr-closing-keywords.test.ts`）は fixture として閉じるキーワード
  * の逐語を持つ。repo を走査する形にすると、その fixture 自身を「見つかった」と
  * 誤検出する自己参照になる（`check-no-attribution-trailers-core.mjs` /
- * `check-pr-title-type-core.mjs` と同じ理由）。だからこの門が読むのは**この PR の
- * タイトル・本文・コミットメッセージだけ**である。
+ * `check-pr-vanished-footprint-core.mjs` と同じ理由）。だからこの門が読むのは
+ * **この PR のタイトル・本文・コミットメッセージだけ**である。
  *
  * ## キーワードと参照の形
  *
@@ -147,9 +148,9 @@
  *
  * **加えて、対の並び全体を同じ強調記号（`**` / `*` / `__` / `_`）1組で囲んでも
  * よい。** 根拠は「規約に書いてあるか」ではなく「`main` に実在するか」で引いた
- * ——`check-pr-title-type-core.mjs` の `LEADING_MARKERS` が `[CI未起動]` を許す
- * のと同じ向き（あの doc の逐語: 「根拠は「規約に書いてあるか」ではなく「`main`
- * に実在するか」で引いた」）。実測: PR #915 の本文に `**Closes #913**` が実在し、
+ * ——かつて存在した `check-pr-title-type-core.mjs`（2026-09-22 に takecchi の
+ * 判断で廃止）の `LEADING_MARKERS` が `[CI未起動]` を許したのと同じ向きの判断
+ * である。実測: PR #915 の本文に `**Closes #913**` が実在し、
  * マージ（`2026-09-12T20:41:02Z`）の1秒後に Issue #913 が閉じている——**意図と
  * GitHub の読みが一致している形**。囲みの中に対以外の文字が在れば落ちる
  * （`**Closes #993 の段1。**` は `trailing-text` のまま落ちる——開いた強調記号の
@@ -489,7 +490,7 @@ export function evaluatePrClosingKeywords({ title, body, commits }) {
 
 /**
  * 判定を、人が読んで次の一手が決まる文へ畳む（`check-no-attribution-trailers-core.mjs`
- * / `check-pr-title-type-core.mjs` の `formatVerdict` と同じ方針）。
+ * / `check-pr-vanished-footprint-core.mjs` の `formatVerdict` と同じ方針）。
  */
 export function formatVerdict(prNumber, result) {
   const header = `check-pr-closing-keywords(#${prNumber}):`;
