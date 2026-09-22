@@ -126,9 +126,10 @@ export function ManagerDenialNote({ denials }: { denials: ManagerDenial[] }) {
         .map((entry) => `${entry.tool} ${entry.count}件${denialActorTag(entry.actor)}`)
         .join(' / ')}
       {rest > 0 && `（ほか ${rest} 種、全 ${total} 件）`}
-      。まず担い手自身に返っている拒否文を読ませること。出所はこの数からは取れない——
-      (a) 器の分類器か deny 規則なら、この確認はクローンには回ってきていないので手が止まる。
-      (b) alteroid 自身の PreToolUse フック（bash-wait-guard.ts 等）なら、理由と代替案は担い手へ直接返っており、自力で抜けられることがある。
+      。まず担い手自身に返っている拒否文を読ませること。出所はこの数からは取れない—— (a)
+      器の分類器か deny 規則なら、この確認はクローンには回ってきていないので手が止まる。 (b)
+      alteroid 自身の PreToolUse フック（bash-wait-guard.ts
+      等）なら、理由と代替案は担い手へ直接返っており、自力で抜けられることがある。
     </p>
   );
 }

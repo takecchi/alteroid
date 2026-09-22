@@ -174,9 +174,7 @@ describe('拒否は、状態を置き換えずに状態へ添える', () => {
    * 直す。
    */
   it('拒否の出所を断定せず、2つの場合分けと「まず担い手の拒否文を読ませる」案内が載る（#1289）', async () => {
-    renderManagers([
-      { ...BASE, status: 'running', denials: [{ tool: 'Bash', count: 1 }] },
-    ]);
+    renderManagers([{ ...BASE, status: 'running', denials: [{ tool: 'Bash', count: 1 }] }]);
 
     await screen.findByText('実行中');
     const note = screen.getByText(/確認へ上がらず止められた道具/).closest('p');
