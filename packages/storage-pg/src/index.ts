@@ -36,6 +36,7 @@ export { PgSessionRegistry } from './sessions.js';
 export { PgSessionStore } from './session-store.js';
 export { PgTokenPoolStore } from './token-pool.js';
 export { PgUsageStore } from './usage.js';
+export * from './footprint.js';
 export { migrate } from './migrate.js';
 export type { Db } from './db.js';
 export * as tables from './schema.js';
