@@ -3,8 +3,14 @@ import { randomUUID } from 'node:crypto';
 import { parseCron } from './cron.js';
 import { noteBackgroundFailure } from './dropped-record.js';
 import { isWrittenDailyReport } from './schema.js';
-import type { InboxEvent, SchedulePhase, ScheduleSpec, ScheduledRequest } from './schema.js';
-import type { JournalStore, ScheduleStore } from './store.js';
+import type {
+  InboxEvent,
+  JournalEntry,
+  SchedulePhase,
+  ScheduleSpec,
+  ScheduledRequest,
+} from './schema.js';
+import type { JournalQuery, JournalStore, ScheduleStore } from './store.js';
 
 /**
  * スケジューラ — 時間起点のジョブ（PRD「自律」の起点②）。
@@ -1046,7 +1052,34 @@ export interface MissingDailyReportsInput {
   now: Date;
   /** 何日前まで遡って探すか。 */
   lookbackDays: number;
+  /**
+   * 日誌を読み継ぐときの1頁の件数（Issue #1283）。歯（境界テスト）のために
+   * 差し替えられるようにしてあるだけで、呼び出し側は省略してよい（既定値は
+   * `MISSING_DAILY_REPORT_SCAN_PAGE_SIZE`）。
+   */
+  scanPageSize?: number;
 }
+
+/**
+ * `missingDailyReportDates` の既定ページサイズ（Issue #1283）。
+ *
+ * **`types` では絞れない。** この関数は「日誌に何か動きがあった日」を
+ * `active` 集合として求めており、`daily_report` 以外の**あらゆる種別**が
+ * その証拠になりうる（`decision` / `exchange` / `tool_use` … を問わない）。
+ * 種別を絞ると「動きが在ったのに拾えない日」が生まれ、導出する値そのものが
+ * 変わってしまう——それは読み方の変更ではなく壊す側になる。
+ *
+ * **`since`（直近 `lookbackDays` 日、既定3日）で時間の窓は既に切ってある**
+ * ので無制限ではないが、その窓の中の活動量には上限が無い。以前は
+ * `journal.list({ since: oldest.toISOString() })` を `limit` 無しで1回だけ
+ * 呼んでいたので、窓の中の行数に比例した配列を丸ごとヒープへ載せていた。
+ * ここも他の2口（`deriveHumanTouchedAtFromJournal` /
+ * `deriveMemoryCreatedAtFromJournal`。`memory.ts` の
+ * `MEMORY_JOURNAL_SCAN_PAGE_SIZE` の doc）と同じ形でページへ区切る——
+ * `reported` / `active` は高々「日数」ぶんの大きさしか持たない集合なので、
+ * ページを畳んでも最終的な値は変わらない。
+ */
+export const MISSING_DAILY_REPORT_SCAN_PAGE_SIZE = 1000;
 
 /**
  * 日報が無いまま過ぎた日を探す（古い順）。
@@ -1067,24 +1100,41 @@ export async function missingDailyReportDates({
   at,
   now,
   lookbackDays,
+  scanPageSize = MISSING_DAILY_REPORT_SCAN_PAGE_SIZE,
 }: MissingDailyReportsInput): Promise<string[]> {
   const days = Math.max(0, Math.floor(lookbackDays));
   if (days === 0) return [];
 
   const oldest = startOfLocalDay(new Date(now.getFullYear(), now.getMonth(), now.getDate() - days));
-  const entries = await journal.list({ since: oldest.toISOString() });
 
   const reported = new Set<string>();
   const active = new Set<string>();
-  for (const entry of entries) {
-    if (entry.type === 'daily_report') {
-      // 印の行は「まだ書けていない」ので数えない。**`continue` は残す** —
-      // 日報の行そのものは「その日に活動があった」証拠には使わない（活動は
-      // 失敗を記録した日誌の行が持っている）。
-      if (isWrittenDailyReport(entry)) reported.add(entry.date);
-      continue;
+  // **ページへ区切って読み継ぐ（Issue #1283）。** `types` を絞れない理由と
+  // `scanPageSize` の doc は `MISSING_DAILY_REPORT_SCAN_PAGE_SIZE` に書いた。
+  // `reported` / `active` への畳み込みは `order` に依存しない（順不同の
+  // 集合演算）ので、`asc` / `desc` のどちらで読んでも結果は変わらない。
+  let after: JournalQuery['after'];
+  for (;;) {
+    const page: JournalEntry[] = await journal.list({
+      since: oldest.toISOString(),
+      order: 'asc',
+      limit: scanPageSize,
+      ...(after === undefined ? {} : { after }),
+    });
+    for (const entry of page) {
+      if (entry.type === 'daily_report') {
+        // 印の行は「まだ書けていない」ので数えない。**`continue` は残す** —
+        // 日報の行そのものは「その日に活動があった」証拠には使わない（活動は
+        // 失敗を記録した日誌の行が持っている）。
+        if (isWrittenDailyReport(entry)) reported.add(entry.date);
+        continue;
+      }
+      active.add(localDate(new Date(entry.at)));
     }
-    active.add(localDate(new Date(entry.at)));
+    if (page.length < scanPageSize) break;
+    const last = page[page.length - 1];
+    if (last === undefined) break;
+    after = { id: last.id, at: last.at };
   }
 
   const missing: string[] = [];

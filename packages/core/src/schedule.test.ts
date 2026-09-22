@@ -13,6 +13,7 @@ import {
   localDate,
   localDayRange,
   missingDailyReportDates,
+  MISSING_DAILY_REPORT_SCAN_PAGE_SIZE,
   parseTimeOfDay,
   scheduledRequestEntry,
   selfInitiativeEntry,
@@ -23,6 +24,7 @@ import {
 
 const run = promisify(execFile);
 import type { InboxEvent, JournalEntry, ScheduledRequest } from './schema.js';
+import { JournalAnchorNotFoundError } from './store.js';
 import type { JournalQuery, JournalStore, ScheduleStore } from './store.js';
 import { createMemoryStores } from './testing.js';
 
@@ -33,6 +35,14 @@ import { createMemoryStores } from './testing.js';
  * **回数の上限を持ち込んでいない**ことである（AGENTS.md 地雷2）。
  */
 
+/**
+ * **`order` / `after` も解釈する（Issue #1283）。** `missingDailyReportDates`
+ * がページへ区切って（`order:'asc'` + `after` カーソルで）日誌を読み継ぐ
+ * ようになったため、`order` / `after` を無視するフェイクではページ境界の
+ * 歯が書けない——2頁目以降を要求しても1頁目と同じ内容が返ってしまう。
+ * 既存の呼び出し（`since` / `types` / `limit` だけを使うもの）は今までどおり
+ * 動く（`order` 省略時は desc のまま、`after` 省略時は先頭から）。
+ */
 function fakeJournal(entries: JournalEntry[]): JournalStore {
   return {
     async append() {
@@ -42,13 +52,33 @@ function fakeJournal(entries: JournalEntry[]): JournalStore {
       return entries.find((entry) => entry.id === id) ?? null;
     },
     async list(query: JournalQuery = {}) {
-      let found = [...entries].sort((a, b) => b.at.localeCompare(a.at));
-      if (query.types) found = found.filter((entry) => query.types?.includes(entry.type));
+      let pool = entries;
+      if (query.types) {
+        const types = query.types;
+        pool = pool.filter((entry) => types.includes(entry.type));
+      }
       if (query.since !== undefined) {
         const since = query.since;
-        found = found.filter((entry) => entry.at >= since);
+        pool = pool.filter((entry) => entry.at >= since);
       }
-      return query.limit === undefined ? found : found.slice(0, query.limit);
+      if (query.until !== undefined) {
+        const until = query.until;
+        pool = pool.filter((entry) => entry.at <= until);
+      }
+      const desc = [...pool].sort((a, b) => b.at.localeCompare(a.at));
+      const ordered = query.order === 'asc' ? [...desc].reverse() : desc;
+      let windowed = ordered;
+      if (query.after !== undefined) {
+        const anchor = query.after;
+        const idx = ordered.findIndex((entry) => entry.id === anchor.id && entry.at === anchor.at);
+        if (idx === -1) {
+          throw new JournalAnchorNotFoundError(
+            `fakeJournal: after で指定された行（id=${anchor.id}, at=${anchor.at}）が見つからない`,
+          );
+        }
+        windowed = ordered.slice(idx + 1);
+      }
+      return query.limit === undefined ? windowed : windowed.slice(0, query.limit);
     },
     async clear() {
       throw new Error('このテストでは消さない');
@@ -1496,6 +1526,67 @@ describe('取りこぼした日報', () => {
     await expect(
       missingDailyReportDates({ journal, at: cutoff, now: at(2026, 8, 12, 9, 0), lookbackDays: 3 }),
     ).resolves.toEqual(['2026-08-10']);
+  });
+
+  /**
+   * ページング境界（Issue #1283）。
+   *
+   * 以前は `journal.list({ since: oldest.toISOString() })` を `limit` 無しで
+   * 1回だけ呼んでいた（`types` も絞れない——`active` 集合の証拠はどの種別からも
+   * 来うる。`MISSING_DAILY_REPORT_SCAN_PAGE_SIZE` の doc）。ページへ区切っても
+   * `reported` / `active` への畳み込みは変わらないはずなので、`scanPageSize` を
+   * 変えても導出結果が同じであることを0件・1件・ページちょうど・ページ+1件の
+   * 4点で測る。
+   */
+  describe('ページング（Issue #1283）— scanPageSize を変えても同じ結果になる', () => {
+    const PAGE_SIZE = 3;
+
+    function manyDecisionEntries(count: number): JournalEntry[] {
+      const entries: JournalEntry[] = [];
+      for (let i = 0; i < count; i += 1) {
+        entries.push(entry('decision', new Date(at(2026, 8, 11, 10, 0).getTime() + i * 60_000)));
+      }
+      return entries;
+    }
+
+    it.each([0, 1, PAGE_SIZE, PAGE_SIZE + 1])(
+      '日誌のエントリ数=%i: scanPageSize=3 と大きい scanPageSize で同じ結果になる',
+      async (count) => {
+        const journal = fakeJournal(manyDecisionEntries(count));
+
+        const paged = await missingDailyReportDates({
+          journal,
+          at: cutoff,
+          now: at(2026, 8, 12, 9, 0),
+          lookbackDays: 3,
+          scanPageSize: PAGE_SIZE,
+        });
+        const unpaged = await missingDailyReportDates({
+          journal,
+          at: cutoff,
+          now: at(2026, 8, 12, 9, 0),
+          lookbackDays: 3,
+          scanPageSize: Math.max(count, 1) + 1000,
+        });
+
+        expect(paged).toEqual(unpaged);
+        expect(paged).toEqual(count === 0 ? [] : ['2026-08-11']);
+      },
+    );
+
+    it('scanPageSize を省略しても既定値（MISSING_DAILY_REPORT_SCAN_PAGE_SIZE）で動く', async () => {
+      expect(MISSING_DAILY_REPORT_SCAN_PAGE_SIZE).toBeGreaterThan(0);
+      const journal = fakeJournal([entry('decision', at(2026, 8, 11, 15, 0))]);
+
+      await expect(
+        missingDailyReportDates({
+          journal,
+          at: cutoff,
+          now: at(2026, 8, 12, 9, 0),
+          lookbackDays: 3,
+        }),
+      ).resolves.toEqual(['2026-08-11']);
+    });
   });
 });
 

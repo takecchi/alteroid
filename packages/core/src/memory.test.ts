@@ -24,8 +24,10 @@ import {
   assertNeverMemoryProtectionStatus,
   containsMemoryFrontmatterLineBreak,
   cutMemorySections,
+  deriveHumanTouchedAtFromJournal,
   deriveMemoryCreatedAtFromJournal,
   deriveMemoryFrontmatter,
+  MEMORY_JOURNAL_SCAN_PAGE_SIZE,
   describeMemoryFloor,
   describeMemoryPremiseRanking,
   describeMemoryProtectionStatus,
@@ -55,6 +57,8 @@ import {
   type MemoryTocIssue,
 } from './memory.js';
 import type { JournalEntry, MemoryDescriptionFreshness, MemoryProtectionStatus } from './schema.js';
+import { JournalAnchorNotFoundError } from './store.js';
+import type { JournalQuery, JournalStore } from './store.js';
 
 /**
  * 記憶をクローンの文脈へ載せる形。
@@ -169,9 +173,43 @@ describe('MemoryProtectionStatus の網羅性', () => {
   });
 });
 
-/** `deriveMemoryCreatedAtFromJournal` に渡す最小限のフェイク journal。 */
-function fakeJournal(entries: JournalEntry[]): { list: () => Promise<JournalEntry[]> } {
-  return { list: async () => entries };
+/**
+ * `deriveMemoryCreatedAtFromJournal` / `deriveHumanTouchedAtFromJournal` に
+ * 渡すフェイク journal。
+ *
+ * **`order` / `limit` / `after` / `types` を実際に解釈する。** Issue #1283 で
+ * この2関数がページへ区切って（`order:'asc'` + `after` カーソルで）読み継ぐ
+ * ようになったため、素朴に配列をそのまま返すだけのフェイクでは正しさを
+ * 測れない——`order:'asc'` を要求しても desc のまま返ると、折り畳みの前提
+ * （「asc で読めば同じ値になる」）が検算できない。3実装（`testing.ts` /
+ * `storage-fs` / `storage-pg`）が従う契約と同じ意味論の縮小版をここに持つ。
+ *
+ * `entries` は**新しい順（desc）**で渡す——既存のテストの慣習（下のコメント
+ * 「journal.list() は新しい順に返るので、新しい順に並べて渡す」）を保つ。
+ */
+function fakeJournal(entries: JournalEntry[]): Pick<JournalStore, 'list'> {
+  return {
+    async list(query: JournalQuery = {}): Promise<JournalEntry[]> {
+      let pool = entries;
+      if (query.types !== undefined) {
+        const types = query.types;
+        pool = pool.filter((entry) => types.includes(entry.type));
+      }
+      const ordered = query.order === 'asc' ? [...pool].reverse() : [...pool];
+      let windowed = ordered;
+      if (query.after !== undefined) {
+        const anchor = query.after;
+        const idx = ordered.findIndex((entry) => entry.id === anchor.id && entry.at === anchor.at);
+        if (idx === -1) {
+          throw new JournalAnchorNotFoundError(
+            `fakeJournal: after で指定された行（id=${anchor.id}, at=${anchor.at}）が見つからない`,
+          );
+        }
+        windowed = ordered.slice(idx + 1);
+      }
+      return query.limit === undefined ? windowed : windowed.slice(0, query.limit);
+    },
+  };
 }
 
 /** `memory_update` の日誌エントリを1件作る（テストの意図を読みやすくする）。 */
@@ -179,13 +217,14 @@ function memoryUpdateEntry(
   slug: string,
   at: string,
   action: 'write' | 'append' | 'remove' | undefined,
+  options: { cause?: 'human' | 'clone'; id?: string } = {},
 ): JournalEntry {
   return {
     type: 'memory_update',
-    id: `id-${slug}-${at}`,
+    id: options.id ?? `id-${slug}-${at}`,
     at,
     slug,
-    cause: 'clone',
+    cause: options.cause ?? 'clone',
     action,
     summary: 'テスト用',
   } as JournalEntry;
@@ -257,6 +296,130 @@ describe('deriveMemoryCreatedAtFromJournal — 日誌から createdAt の根拠�
 
     expect(result.get('a')).toBe('2026-01-15T00:00:00.000Z');
     expect(result.get('b')).toBe('2026-01-01T00:00:00.000Z');
+  });
+});
+
+/**
+ * `deriveHumanTouchedAtFromJournal` — 記憶の human guard（保護状態）の根拠。
+ *
+ * **専用の単体テストがこれまで無かった。** fs / pg の persona テストと
+ * `apps/daemon/src/storage.test.ts` が間接的に通していたが、この関数だけを
+ * 狙った境界（cause / action の絞り、新しいほうが残ること）を確かめる歯は
+ * このファイルに無かった（Issue #1283 のページング対応のついでに足す）。
+ */
+describe('deriveHumanTouchedAtFromJournal — 日誌から human guard の根拠を導出する', () => {
+  it('その slug の最後（最新）の human 書き込みの at が採られる', async () => {
+    const journal = fakeJournal([
+      memoryUpdateEntry('notes', '2026-03-01T00:00:00.000Z', 'write', { cause: 'human' }),
+      memoryUpdateEntry('notes', '2026-02-01T00:00:00.000Z', 'write', { cause: 'human' }),
+      memoryUpdateEntry('notes', '2026-01-01T00:00:00.000Z', 'write', { cause: 'human' }),
+    ]);
+
+    const result = await deriveHumanTouchedAtFromJournal(journal);
+
+    expect(result.get('notes')).toBe('2026-03-01T00:00:00.000Z');
+  });
+
+  it('cause:clone は対象外', async () => {
+    const journal = fakeJournal([
+      memoryUpdateEntry('notes', '2026-01-01T00:00:00.000Z', 'write', { cause: 'clone' }),
+    ]);
+
+    const result = await deriveHumanTouchedAtFromJournal(journal);
+
+    expect(result.has('notes')).toBe(false);
+  });
+
+  it('action:remove は human でも対象外（削除は将来の保護理由にならない）', async () => {
+    const journal = fakeJournal([
+      memoryUpdateEntry('notes', '2026-01-01T00:00:00.000Z', 'remove', { cause: 'human' }),
+    ]);
+
+    const result = await deriveHumanTouchedAtFromJournal(journal);
+
+    expect(result.has('notes')).toBe(false);
+  });
+
+  it('日誌が空なら空の Map', async () => {
+    const result = await deriveHumanTouchedAtFromJournal(fakeJournal([]));
+
+    expect(result.size).toBe(0);
+  });
+});
+
+/**
+ * ページング境界（Issue #1283）。
+ *
+ * **`deriveHumanTouchedAtFromJournal` / `deriveMemoryCreatedAtFromJournal`
+ * は、`pageSize` をいくつに設定しても同じ値を返さなければならない。** 導出
+ * する `Map` はページの切れ目とは無関係な集計なので、ページを跨いでも
+ * 跨がなくても結果は1バイトも変わらないはずである——ここではその不変性を、
+ * 0件・1件・ページちょうど・ページ+1件の4点で測る（`pageSize` を小さく
+ * 差し替えて、実際にページを複数回読ませる）。
+ */
+describe('ページング（Issue #1283）— pageSize を変えても導出結果が変わらない', () => {
+  const PAGE_SIZE = 3;
+
+  /** slug ごとに1件、`count` 件ぶんの write エントリを新しい順で作る。 */
+  function manyWriteEntries(count: number): JournalEntry[] {
+    const entries: JournalEntry[] = [];
+    for (let i = 0; i < count; i += 1) {
+      // 新しい順（desc）で渡す規約に合わせ、番号が大きいほど新しい時刻にする。
+      const at = new Date(Date.UTC(2026, 0, 1) + i * 60_000).toISOString();
+      entries.push(memoryUpdateEntry(`slug-${i}`, at, 'write', { id: `id-${i}` }));
+    }
+    // 呼び出し側は新しい順で渡す規約——番号が大きい（＝新しい）ものを先頭にする。
+    return entries.reverse();
+  }
+
+  it.each([0, 1, PAGE_SIZE, PAGE_SIZE + 1])(
+    '件数=%i: deriveMemoryCreatedAtFromJournal が既定ページサイズと同じ値を返す',
+    async (count) => {
+      const entries = manyWriteEntries(count);
+      const journal = fakeJournal(entries);
+
+      const paged = await deriveMemoryCreatedAtFromJournal(journal, { pageSize: PAGE_SIZE });
+      const unpaged = await deriveMemoryCreatedAtFromJournal(journal, {
+        pageSize: Math.max(count, 1) + 1000,
+      });
+
+      expect(paged.size).toBe(count);
+      expect([...paged.entries()]).toEqual([...unpaged.entries()]);
+    },
+  );
+
+  it.each([0, 1, PAGE_SIZE, PAGE_SIZE + 1])(
+    '件数=%i: deriveHumanTouchedAtFromJournal が既定ページサイズと同じ値を返す',
+    async (count) => {
+      const entries: JournalEntry[] = [];
+      for (let i = 0; i < count; i += 1) {
+        const at = new Date(Date.UTC(2026, 0, 1) + i * 60_000).toISOString();
+        entries.push(
+          memoryUpdateEntry(`slug-${i}`, at, 'write', { cause: 'human', id: `id-${i}` }),
+        );
+      }
+      entries.reverse();
+      const journal = fakeJournal(entries);
+
+      const paged = await deriveHumanTouchedAtFromJournal(journal, { pageSize: PAGE_SIZE });
+      const unpaged = await deriveHumanTouchedAtFromJournal(journal, {
+        pageSize: Math.max(count, 1) + 1000,
+      });
+
+      expect(paged.size).toBe(count);
+      expect([...paged.entries()]).toEqual([...unpaged.entries()]);
+    },
+  );
+
+  it('既定の pageSize（MEMORY_JOURNAL_SCAN_PAGE_SIZE）を省略しても動く（境界の桁だけ確認）', async () => {
+    // 既定値そのものを1001件生成して確かめるのは重いので、ここでは既定値が
+    // 有効な正の整数であることと、省略時に動作すること（例外にならない）だけ
+    // を確認する——桁の実測は上の `PAGE_SIZE=3` の歯が担う。
+    expect(MEMORY_JOURNAL_SCAN_PAGE_SIZE).toBeGreaterThan(0);
+    const result = await deriveMemoryCreatedAtFromJournal(
+      fakeJournal([memoryUpdateEntry('notes', '2026-01-01T00:00:00.000Z', 'write')]),
+    );
+    expect(result.get('notes')).toBe('2026-01-01T00:00:00.000Z');
   });
 });
 

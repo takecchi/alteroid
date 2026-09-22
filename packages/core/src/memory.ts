@@ -30,6 +30,7 @@ import {
 import { encodeMemoryCursor } from './memory-cursor.js';
 import { heuristicChars, type HeuristicChars } from './quantity.js';
 import type {
+  JournalEntry,
   MemoryCreatedAt,
   MemoryDescriptionDrift,
   MemoryDescriptionFreshness,
@@ -37,7 +38,7 @@ import type {
   MemoryFrontmatterState,
   MemoryProtectionStatus,
 } from './schema.js';
-import type { JournalStore } from './store.js';
+import type { JournalQuery, JournalStore } from './store.js';
 
 /**
  * 記憶を載せるときの1文書ぶんの単位。`MemoryDocument` はこれを満たす。
@@ -222,6 +223,63 @@ export function describeMemoryProtectionStatus(status: MemoryProtectionStatus): 
 // ---------------------------------------------------------------------------
 
 /**
+ * `deriveHumanTouchedAtFromJournal` / `deriveMemoryCreatedAtFromJournal` の
+ * 既定ページサイズ（Issue #1283）。
+ *
+ * **なぜページに区切るか。** どちらの関数も日誌全体から `memory_update` を
+ * 舐める設計で、以前は `journal.list({ types: ['memory_update'] })` を
+ * 引数無しの `limit` で1回だけ呼んでいた——`PgJournalStore#list` は
+ * `limit` を渡さないと `.limit(query.limit ?? Number.MAX_SAFE_INTEGER)`
+ * （`packages/storage-pg/src/journal.ts`）になるので、事実上無制限に読む。
+ * 日誌が育つほど1回の呼び出しでヒープへ載る `JournalEntry[]` が育ち、実測
+ * （本 Issue の調査）で日誌 337MB の全件読みが起動時の `JSON.parse` 付近の
+ * OOM の疑いの1つに挙がった。
+ *
+ * **ページへ分けても、導出する値は1バイトも変わらない。** 下の2関数は
+ * どちらも「日誌全体を見て `Map<slug, ISO時刻>` へ畳む」という集計で、
+ * 畳む操作自体はページをまたいでも結合則を保つ（後述のとおり `asc` 順で
+ * 読み替えている）。ヒープに一度に乗るのは高々1ページぶんの
+ * `JournalEntry[]` だけになり、`Map` 自体のサイズ（記憶の slug 数に比例。
+ * 日誌の行数には比例しない）は変わらない。
+ *
+ * **既定値はここで持つが、歯（境界テスト）のために差し替えられる。** 呼び
+ * 出し側（`apps/daemon/src/storage.ts` / `FsPersonaStore` / `PgPersonaStore`）
+ * は第2引数を省略してよい——`pageSize` を渡さない限り、この既定値で動く。
+ */
+export const MEMORY_JOURNAL_SCAN_PAGE_SIZE = 1000;
+
+/**
+ * `journal.list({ types: ['memory_update'], order: 'asc', … })` をページへ
+ * 区切って古い順に読み継ぎ、各ページを `onPage` へ渡す。
+ *
+ * **`after` カーソルが安全な理由。** 日誌（`JournalStore`）は追記専用で
+ * 更新・削除の口を持たない（`store.ts` の doc）ので、既存の行どうしの
+ * 前後関係は永久に変わらない——頁の間に新しい行が追記されても、既に返した
+ * ページの中身や位置はずれない（`journal-order-with-contract.ts` が3実装
+ * すべてに対して測る契約と同じ前提）。
+ */
+async function walkMemoryUpdateJournalAscending(
+  journal: Pick<JournalStore, 'list'>,
+  pageSize: number,
+  onPage: (page: JournalEntry[]) => void,
+): Promise<void> {
+  let after: JournalQuery['after'];
+  for (;;) {
+    const page = await journal.list({
+      types: ['memory_update'],
+      order: 'asc',
+      limit: pageSize,
+      ...(after === undefined ? {} : { after }),
+    });
+    onPage(page);
+    if (page.length < pageSize) return;
+    const last = page[page.length - 1];
+    if (last === undefined) return;
+    after = { id: last.id, at: last.at };
+  }
+}
+
+/**
  * 日誌全体から、slug ごとの「最後に `cause:'human'`（`action !== 'remove'`）で
  * 書かれた時刻」を導出する。
  *
@@ -236,20 +294,30 @@ export function describeMemoryProtectionStatus(status: MemoryProtectionStatus): 
  * `markHumanTouched` を呼ぶのが `PUT` だけで `DELETE` では呼ばないのもこれに揃えた
  * ためである）。
  *
- * `journal.list({ types: ['memory_update'] })` は新しい順に返るので、先に
- * 見つかった（＝新しい）ほうを残す。
+ * **ページに区切って `asc`（古い順）で読み継ぐ（Issue #1283。
+ * `MEMORY_JOURNAL_SCAN_PAGE_SIZE` の doc）。** 以前は `journal.list()` が
+ * 新しい順に返す前提で「先に見つかった（＝新しい）ほうを残す」実装
+ * だったが、**古い順に読み替えても同じ値になる** —— 古い順に舐めて
+ * `result.set(...)` を毎回無条件で上書きすれば、ループが終わった時点で
+ * 各 slug に残るのは最後に当たった行（＝最も新しい行）になる。新しい順の
+ * 「先着を残す」と、古い順の「毎回上書きする」は同じ集計の裏表である。
  */
 export async function deriveHumanTouchedAtFromJournal(
   journal: Pick<JournalStore, 'list'>,
+  options: { pageSize?: number } = {},
 ): Promise<Map<string, string>> {
-  const entries = await journal.list({ types: ['memory_update'] });
+  const pageSize = options.pageSize ?? MEMORY_JOURNAL_SCAN_PAGE_SIZE;
   const result = new Map<string, string>();
-  for (const entry of entries) {
-    if (entry.type !== 'memory_update') continue;
-    if (entry.cause !== 'human') continue;
-    if (entry.action === 'remove') continue;
-    if (!result.has(entry.slug)) result.set(entry.slug, entry.at);
-  }
+  await walkMemoryUpdateJournalAscending(journal, pageSize, (page) => {
+    for (const entry of page) {
+      if (entry.type !== 'memory_update') continue;
+      if (entry.cause !== 'human') continue;
+      if (entry.action === 'remove') continue;
+      // asc（古い→新しい）で毎回上書きするので、全ページを読み終えた時点で
+      // 各 slug に残るのは最後に当たった（＝最も新しい）行になる。
+      result.set(entry.slug, entry.at);
+    }
+  });
   return result;
 }
 
@@ -257,13 +325,17 @@ export async function deriveHumanTouchedAtFromJournal(
  * 日誌全体から、slug ごとの「最初に `action:'write'` で書かれた時刻」を導出する
  * （記憶の `createdAt` の唯一の根拠）。
  *
- * **`deriveHumanTouchedAtFromJournal` と対になるが、見るものも残し方も逆**
+ * **`deriveHumanTouchedAtFromJournal` と対になるが、見るものが逆**
  * である。あちらは `cause:'human'` に絞って**新しいほう**（最後に人間が
  * 書いた時刻）を残す。こちらは `cause` を問わず `action:'write'` だけに絞って
- * **古いほう**（最初に書かれた時刻）を残す——`journal.list()` は新しい順に
- * 返るので、`if (!result.has(...))` で先着（＝新しいほう）を残すのではなく
- * **毎回上書きする**ことで、ループが終わった時点で最も古いエントリが残る
- * ようにしてある。
+ * **古いほう**（最初に書かれた時刻）を残す。
+ *
+ * **ページに区切って `asc`（古い順）で読み継ぐ（Issue #1283。
+ * `MEMORY_JOURNAL_SCAN_PAGE_SIZE` の doc）。** 以前は `journal.list()` が
+ * 新しい順に返す前提で「毎回上書きし、ループが終わった時点で最も古い
+ * エントリが残る」実装だったが、**古い順に読み替えても同じ値になる** ——
+ * 古い順に舐めて `if (!result.has(...))` で先着（＝最初に当たった、つまり
+ * 最も古い）行だけを残せば、新しい順の「毎回上書きする」と同じ結果になる。
  *
  * **`action:'append'` と、区別が導入される前の古いエントリ（`action` が
  * `undefined`）は対象にしない。** `append` は「存在しなければ作る」ので
@@ -279,14 +351,19 @@ export async function deriveHumanTouchedAtFromJournal(
  */
 export async function deriveMemoryCreatedAtFromJournal(
   journal: Pick<JournalStore, 'list'>,
+  options: { pageSize?: number } = {},
 ): Promise<Map<string, string>> {
-  const entries = await journal.list({ types: ['memory_update'] });
+  const pageSize = options.pageSize ?? MEMORY_JOURNAL_SCAN_PAGE_SIZE;
   const result = new Map<string, string>();
-  for (const entry of entries) {
-    if (entry.type !== 'memory_update') continue;
-    if (entry.action !== 'write') continue;
-    result.set(entry.slug, entry.at);
-  }
+  await walkMemoryUpdateJournalAscending(journal, pageSize, (page) => {
+    for (const entry of page) {
+      if (entry.type !== 'memory_update') continue;
+      if (entry.action !== 'write') continue;
+      // asc（古い→新しい）で先着だけを残すので、各 slug に残るのは
+      // 最初に当たった（＝最も古い）行になる。
+      if (!result.has(entry.slug)) result.set(entry.slug, entry.at);
+    }
+  });
   return result;
 }
 
