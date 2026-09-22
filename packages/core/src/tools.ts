@@ -481,6 +481,10 @@ export const CLONE_TOOL_NAMES = [
   'inbox_remove_many',
   'profile_read',
   'profile_write',
+  'practice_list',
+  'practice_read',
+  'practice_write',
+  'practice_remove',
   'token_list',
   'self_read',
   'self_status',
@@ -538,6 +542,8 @@ export const SELF_JOURNALING_CLONE_TOOLS = [
   'commitment_appraise',
   'inbox_remove_many',
   'profile_write',
+  'practice_write',
+  'practice_remove',
   'manager_start',
   'manager_send',
   'manager_appraise',
@@ -567,6 +573,8 @@ export const TRACELESS_CLONE_TOOLS = [
   'schedule_list',
   'commitment_list',
   'profile_read',
+  'practice_list',
+  'practice_read',
   'token_list',
   'self_read',
   'self_status',
@@ -1639,6 +1647,21 @@ function scheduleNextAtOf(context: ToolContext, kind: string): string {
  */
 const RUNNER_LIST_BUDGET = 8_000;
 const RUNNER_MANAGER_LIST_LIMIT = 20;
+/**
+ * `practice_list` の一覧の予算（#1055 段3②）。
+ *
+ * **`LIST_BUDGET` / `RUNNER_LIST_BUDGET` を使い回さない**（同じ理由——値が
+ * いま同じ桁でも、片方だけを直したくなったときに一緒に動かないように分ける）。
+ *
+ * ⚠️ **この一覧には、まだ続きを取る口（cursor）が無い。** `PracticeStore.list`
+ * の doc が「続きを取る口（#662 の形）を後から足すとき」と書いているとおり、
+ * 昇順の並びは将来のための契約であって、いまの `practice_list` はそれを
+ * 使っていない。**やり方の器は人間・クローンが少数を意図して置く場所であり、
+ * 台帳や記憶のように無数に積み上がる性質のものではない**——だから、この段では
+ * 継続点を実装せず、予算を超えたときは正直にその旨だけを言う
+ * （`practice_write` の omitted の doc）。
+ */
+const PRACTICE_LIST_BUDGET = 8_000;
 /**
  * 鍵の指紋行を抜粋する厚み（#409）。
  *
@@ -7023,6 +7046,163 @@ export function createCloneTools(context: ToolContext) {
             .filter((line) => line !== null)
             .join('\n'),
         );
+      },
+    ),
+
+    // --- 仕事のやり方（PracticeStore、#1055 段3②） -------------------------
+    //
+    // **ここに `practice_apply` / `practice_enforce` を足さないこと。** 読み書き
+    // 一覧の4本しか無く、「このやり方に従え」に当たる操作は1つも無い——それは
+    // 書き忘れではなく設計である（`PracticeStore` の doc、`practiceSchema` の doc、
+    // `docs/north_star.md`）。従わせた時点でクローンは「制限された自動化ジョブ」に
+    // 戻る。やり方は読む素材であって、実行される定義ではない。
+    tool(
+      'practice_list',
+      [
+        '仕事のやり方の一覧を返す（本文は返さない。slug・種類・題・文字数・作成/更新時刻だけ）。',
+        'やり方はあなたが読んで従うかどうかを毎回自分で決める素材であって、実行される定義ではない',
+        '（従わせる道具はここには無い）。',
+        '**やり方が1件も無いのは正常な状態である。** やり方が書かれていない仕事も普通に進む——',
+        '空を「まだ設定されていない」という異常として読まないこと。',
+        '中身が要るなら practice_read slug=<slug> で開くこと。',
+      ].join(' '),
+      {},
+      async () => {
+        const entries = await stores.practices.list();
+        // ⭐ **空は正常。** `practice-contract.ts` の受け入れ基準そのもの——
+        // ここで異常や未設定であるかのような文言を出さない。
+        if (entries.length === 0) {
+          return text(
+            'やり方はまだ1件も無い。**これは正常な状態である**——やり方が書かれていない' +
+              '仕事も普通に進む。書くなら practice_write slug=<slug> kind=<種類> title=<題> content=<本文>。',
+          );
+        }
+        const items = entries.map((entry) =>
+          renderListingEntry({
+            id: entry.slug,
+            // **最初に知りたいことは「どの種類の仕事のやり方か」である**
+            // （`excerpt.ts` の `ListingEntryFields.title` の doc）。
+            title: `[${entry.kind}] ${entry.title}`,
+            summary: `${String(entry.bytes)} 文字`,
+            createdAt: entry.createdAt,
+            updatedAt: entry.updatedAt,
+          }),
+        );
+        return text(
+          renderListing(items, {
+            budget: PRACTICE_LIST_BUDGET,
+            omitted: ({ rest, shown, total }) =>
+              // **続きを取る口が無いので、無いと正直に言う**（`ListingBudget.omitted`
+              // の doc——口が無いまま断り書きだけ出すと、落ちた分へ呼び手が
+              // 到達できない）。やり方は少数を意図して置く場所なので、いまは
+              // 予算いっぱいの標本を見せたうえで正直に伝える側へ倒す。
+              `…ほか ${String(rest)} 件は省略（全 ${String(total)} 件のうち slug の昇順に ${String(shown)} 件だけ出した）。` +
+              'この一覧に続きを取る口はまだ無い——個別に読むには practice_read slug=<slug> を使うこと。',
+          }),
+        );
+      },
+    ),
+
+    tool(
+      'practice_read',
+      ['仕事のやり方を1件、本文まで読む。無ければ、その旨を返す（例外で落とさない）。'].join(' '),
+      {
+        slug: z.string().describe('やり方のスラッグ（practice_list に出ている slug）'),
+      },
+      async ({ slug }) => {
+        const found = await stores.practices.read(slug);
+        // **無いは throw ではなく null。呼び手には文で返す**
+        // （`PracticeStore.read` の doc「無ければ null（読めないは throw）」と
+        // 同じ線。存在しない slug を打ち間違いとして即座に判別できるように、
+        // 「無い」とだけ言い切って次の一手を添える）。
+        if (found === null) {
+          return text(
+            `やり方 ${slug} は無い。practice_list で在るものを確かめるか、` +
+              'practice_write で新しく書けること。',
+          );
+        }
+        return text(
+          [
+            `${found.slug}（${found.kind}） ${found.title}`,
+            `作成: ${found.createdAt} / 更新: ${found.updatedAt} / ${String(found.bytes)} 文字`,
+            '',
+            found.content,
+          ].join('\n'),
+        );
+      },
+    ),
+
+    tool(
+      'practice_write',
+      [
+        '仕事のやり方を書く（全文置換。無ければ作る）。',
+        'kind は仕事の種類（実装・調査・相談・レビュー・日報・外部サービスの確認…）を自由文字列で書く',
+        // ⛔ north_star「仕事の型を実装専用に狭めていないか」への回答そのもの。
+        // `practiceKindSchema` を enum にしていない理由をここでも繰り返す——
+        // クローンは道具の説明文しか読まないので、ここに書かなければ伝わらない。
+        '（**列挙ではない**。知らない種類のやり方を弾かない。表記ゆれは束ねる側の負担として引き受ける）。',
+        'これは実行される定義ではない——読んで従うかどうかは、そのときのあなたが決める' +
+          '（従わせる道具はここには無い）。人間もこの3入口のどこからでも同じものを読み書きできる。',
+        '本文の末尾改行は正規化される（無ければ足す。既に在れば増やさない）。',
+      ].join(' '),
+      {
+        slug: z.string().describe('やり方のスラッグ（英小文字・数字・. _ - のみ）'),
+        kind: z.string().describe('仕事の種類（自由文字列。例: 実装・調査・相談・レビュー・日報）'),
+        title: z.string().describe('一覧で見る短い題'),
+        content: z.string().describe('本文（人間もこのまま読む。Markdown を想定）'),
+      },
+      async ({ slug, kind, title, content }) => {
+        const before = await stores.practices.read(slug);
+        const written = await stores.practices.write({ slug, kind, title, content });
+        await appendJournalOrThrow(
+          'practice_write',
+          stores.journal,
+          {
+            type: 'decision',
+            decision: `やり方 ${slug}（${kind}）を${before === null ? '作った' : '書き直した'}: ${title}`,
+            grounds:
+              before === null
+                ? '新しいやり方を器に置いた'
+                : 'やり方を書き直した（全文置換。前の本文は残らない）',
+          },
+          'act-completed',
+        );
+        return text(
+          `やり方 ${slug} を${before === null ? '新しく作った' : '書き直した'}` +
+            `（${String(written.bytes)} 文字）。practice_list で一覧に出る。`,
+        );
+      },
+    ),
+
+    tool(
+      'practice_remove',
+      [
+        '仕事のやり方を1件消す。',
+        '**無い slug を指定しても失敗しない（冪等）**——その場合は何もしていないとだけ返す。',
+      ].join(' '),
+      {
+        slug: z.string().describe('やり方のスラッグ（practice_list に出ている slug）'),
+      },
+      async ({ slug }) => {
+        const before = await stores.practices.read(slug);
+        await stores.practices.remove(slug);
+        // **無かったときは日誌を書かない。** 何も起きていないのに「消した」という
+        // 判断の跡を残すと、日誌が実際の変化と食い違う（`PracticeStore.remove`
+        // の doc「冪等」——冪等であることと、無かった呼び出しを記録することは別）。
+        if (before === null) {
+          return text(`やり方 ${slug} はもともと無かった（何もしていない）。`);
+        }
+        await appendJournalOrThrow(
+          'practice_remove',
+          stores.journal,
+          {
+            type: 'decision',
+            decision: `やり方 ${slug}（${before.kind}）を消した: ${before.title}`,
+            grounds: '不要になったと判断した',
+          },
+          'act-completed',
+        );
+        return text(`やり方 ${slug} を消した。`);
       },
     ),
 

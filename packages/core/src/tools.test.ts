@@ -12342,6 +12342,10 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     token_list: /…ほか \d+ 件は省略（プールは \d+ 件あり、order の昇順に \d+ 件だけ出した）。/,
     manager_list: /…ほか \d+ 件は省略（全 \d+ 件）。/,
     runner_list: /…ほか \d+ 台は省略（登録は \d+ 台あり、\d+ 台だけ出した）。/,
+    // #1055 段3②。続きを取る口（cursor）がまだ無いので、その旨を正直に言う
+    // 文言まで含めて写す（`tools.ts` の `practice_list` の omitted）。
+    practice_list:
+      /…ほか \d+ 件は省略（全 \d+ 件のうち slug の昇順に \d+ 件だけ出した）。この一覧に続きを取る口はまだ無い/,
   };
 
   /**
@@ -12931,6 +12935,15 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
             },
           },
         },
+      });
+      // やり方（practice_list）。**list はメタしか出さないので、本文ではなく
+      // title を長くして嵩上げする**（practice_list の omitted の doc、
+      // `practice-tools.test.ts` の予算の歯と同じ判断）。
+      await h.call('practice_write', {
+        slug: `practice-${pad}`,
+        kind: `種類${pad}`,
+        title: `やり方${pad}: ${long}`,
+        content: `本文${pad}`,
       });
     }
     // **節の多い記憶の文書**（`memory_outline` の目次と、`memory_write` が
@@ -13718,6 +13731,16 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       name: 'token_list',
       check: (firstLine) =>
         expect(firstLine, `id の隣に状態（cooling）が無い: ${firstLine}`).toMatch(/^- \S+ cooling/),
+    },
+    {
+      // #1055 段3②。`flooded()` は `kind: 種類<pad>` で積むので、id の隣に
+      // その種類の札（`[種類0000]`）が出るはずである——タイトルが id の
+      // 繰り返しへ落ちていないことの同じ確かめ方。
+      name: 'practice_list',
+      check: (firstLine) =>
+        expect(firstLine, `id の隣に種類の札（[種類0000]）が無い: ${firstLine}`).toMatch(
+          /^- \S+ \[種類\d{4}\]/,
+        ),
     },
   ];
 
@@ -18053,6 +18076,50 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
           summary: '不要になったので消す',
           dryRun: false,
         });
+      },
+    },
+    {
+      // #1055 段3②。
+      tool: 'practice_write',
+      firstLine: ACT_COMPLETED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-19');
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
+        return callExpectingError(tools, 'practice_write', {
+          slug: 'daily',
+          kind: '日報',
+          title: '日報のやり方',
+          content: '毎日夕方に書く',
+        });
+      },
+    },
+    {
+      // #1055 段3②。**在る slug でなければ appendJournalOrThrow の手前で
+      // 早期 return するので、先に書いておく必要がある**（`practice_remove`
+      // の doc「無かったときは日誌を書かない」）。
+      tool: 'practice_remove',
+      firstLine: ACT_COMPLETED,
+      async run() {
+        const stores = createMemoryStores();
+        await stores.practices.write({
+          slug: 'daily',
+          kind: '日報',
+          title: '日報のやり方',
+          content: '毎日夕方に書く',
+        });
+        const failing = failingJournalAppend(stores, 'boom-case-20');
+        const tools = createCloneTools({
+          stores: failing,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
+        return callExpectingError(tools, 'practice_remove', { slug: 'daily' });
       },
     },
   ];
