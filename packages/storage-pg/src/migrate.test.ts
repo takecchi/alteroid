@@ -120,6 +120,93 @@ describe('migrate（archive の指紋・連続性列。#698）', () => {
 });
 
 /**
+ * `archive` の autovacuum の reloptions（#698）。
+ *
+ * **`toast.` の付いた2行が、TOAST 側の `reloptions` に載っているかがこの歯の
+ * 要点である。** 親の `alter table ... set (...)` は親の `pg_class.reloptions`
+ * にしか効かず、TOAST 側は既定で継承しない（`migrate.ts` の #698 の doc）。
+ * 親だけ見るテストは「`toast.` を書き忘れて親だけ効いている」を緑のまま通す
+ * ので、TOAST 側を別に引く。
+ */
+describe('migrate（archive の autovacuum reloptions。#698）', () => {
+  let client: PGlite;
+  let db: Db;
+
+  /** `archive` の親と TOAST、両方の `reloptions` を引く。 */
+  const archiveReloptions = async (): Promise<{
+    parent: string[] | null;
+    toast: string[] | null;
+  }> => {
+    const result = await db.execute(sql`
+      select c.reloptions as parent_reloptions, t.reloptions as toast_reloptions
+      from pg_class c
+      left join pg_class t on t.oid = c.reltoastrelid
+      where c.oid = 'archive'::regclass
+    `);
+    const rows = Array.isArray(result) ? result : ((result as { rows?: unknown[] }).rows ?? []);
+    const row = rows[0] as
+      { parent_reloptions: string[] | null; toast_reloptions: string[] | null } | undefined;
+    return { parent: row?.parent_reloptions ?? null, toast: row?.toast_reloptions ?? null };
+  };
+
+  beforeEach(async () => {
+    client = new PGlite();
+    db = drizzle(client);
+    await migrate(db);
+  });
+
+  afterEach(async () => {
+    await client.close();
+  });
+
+  it('親と TOAST の reloptions に、狙った値が実際に載っている', async () => {
+    const { parent, toast } = await archiveReloptions();
+    expect(parent).toEqual(
+      expect.arrayContaining([
+        'autovacuum_vacuum_threshold=50',
+        'autovacuum_vacuum_scale_factor=0.0',
+        'autovacuum_analyze_threshold=50',
+        'autovacuum_analyze_scale_factor=0.0',
+      ]),
+    );
+    // ⭐ ここが要点 —— TOAST 側にも載っている（親に書いただけでは載らない）。
+    expect(toast).toEqual(
+      expect.arrayContaining([
+        'autovacuum_vacuum_threshold=10000',
+        'autovacuum_vacuum_scale_factor=0.0',
+      ]),
+    );
+  });
+
+  /**
+   * **2周目でだけ壊れる状態を挟む**（`migrate.ts` 冒頭の doc と同じ作法）。
+   * `alter table ... set (...)` は create/drop index の罠には当たらないが、
+   * 「1周目の後に実データが積まれた状態」で2周目を当てても落ちないこと、
+   * かつ reloptions が変わらず載ったままであることを、実行で固定する。
+   */
+  it('データが積まれた状態で2周目を通しても落ちず、reloptions は載ったまま', async () => {
+    await db.insert(archive).values({
+      id: 'session-migrate-reloptions-1.jsonl',
+      sessionId: 'session-migrate-reloptions',
+      at: new Date('2026-09-22T00:00:00.000Z'),
+      body: 'BODY\n',
+    });
+
+    await migrate(db);
+
+    const { parent, toast } = await archiveReloptions();
+    expect(parent).toEqual(expect.arrayContaining(['autovacuum_vacuum_scale_factor=0.0']));
+    expect(toast).toEqual(expect.arrayContaining(['autovacuum_vacuum_scale_factor=0.0']));
+
+    const rows = await db
+      .select({ id: archive.id })
+      .from(archive)
+      .where(eq(archive.id, 'session-migrate-reloptions-1.jsonl'));
+    expect(rows).toHaveLength(1);
+  });
+});
+
+/**
  * **`commitments_open_manager_body_idx`（#1041）だけは無条件に当てられない。**
  *
  * `STATEMENTS` は起動のたびに頭から通る。既存の重複行が1組でも在ると

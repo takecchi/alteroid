@@ -552,6 +552,56 @@ export const STATEMENTS = [
      created_at timestamptz not null,
      updated_at timestamptz not null
    )`,
+
+  // --- archive の死んだ行バージョンを autovacuum に回収させる（#698）-------
+  // **これは列でも索引でもなく、テーブルの格納パラメータ（reloptions）である。**
+  // `archive` の `remove()` は行を消さず `body` を空へ UPDATE する（tombstone。
+  // `packages/storage-pg/src/archive.ts`）ので、畳むたびに旧タプルと、それが
+  // 指していた TOAST のチャンクが死骸として残る。**その回収を既定値に任せると
+  // 追いつかない。**
+  //
+  // ⭐ **効く側は `toast.` の付いたほうである。** 使い捨ての PostgreSQL 17.11 で
+  // 測った（2026-09-22T19:2xZ 観測。本番の DB には接続していない）:
+  //
+  // - 親に `alter table t set (autovacuum_vacuum_scale_factor = 0.0)` を打っても
+  //   **TOAST 側の `reloptions` は NULL のままである**（親の設定は継承されない）
+  // - `toast.` を付けたときだけ TOAST 側の `reloptions` に載る
+  // - TOAST は `pg_stat_all_tables` に**自分の行**を持ち、`n_live_tup` /
+  //   `n_dead_tup` / `autovacuum_count` を親とは別に数える（親 200 行に対し
+  //   TOAST は 128,400 行、という桁で食い違う）
+  // - **親の autovacuum を発火しない閾値に縛ったうえで TOAST 側だけ緩めたところ、
+  //   親の `autovacuum_count` が 0 のまま TOAST だけが autovacuum された** ⟹
+  //   TOAST の回収に親 heap の autovacuum は要らない。独立に回る
+  //
+  // ⟹ **`autovacuum_vacuum_scale_factor` を 0 にする意味は TOAST 側でこそ効く。**
+  // 既定の `0.2` は「死骸が生きている量の 20% に達するまで回収しない」なので
+  // **大きい表ほど回収が遅れる**（この表は1行が数十 MB になりうる）。0 にすれば
+  // 閾値が大きさに依らなくなる。
+  //
+  // ⚠️ **数（50 / 10000）そのものに強い根拠は無い** —— `archive-folder.ts` の
+  // `DEFAULT_ARCHIVE_FOLD_EVERY_MINUTES` と同じ立場の暫定値である。TOAST 側だけ
+  // 10000 にしてあるのは、チャンクが約 2 kB 刻みで積まれるので 50 では「数百 kB の
+  // 死骸のたびに GB 級の TOAST を舐め直す」形になるからで、10000 チャンク ≒ 20 MB
+  // を下限に置いた。**足りなければここを動かす。**
+  //
+  // ⚠️ **これは「一度太ったものを縮める」設定ではない。** 通常の VACUUM は空き
+  // 領域を再利用可能にするだけで、OS へファイルを返すのは末尾がまるごと空いた
+  // ときだけである（同じ実験で両方観測した）。OS へ返すには `VACUUM FULL` が要り、
+  // **それは排他ロックを取るのでデーモンの起動時には打たない。**
+  //
+  // ⚠️ `alter table ... set (...)` は2周目以降も本当の no-op にはならない（毎回
+  // カタログを書き直す）。**このファイル冒頭の「`drop index` と対の `create index`」
+  // の罠には当たらない** —— 落ちる形が無いためである。取るロックは SHARE UPDATE
+  // EXCLUSIVE で読み書きを止めないが、⚠️ **この強さは PostgreSQL の文書に拠って
+  // おり、自分では測っていない。**
+  `alter table archive set (
+     autovacuum_vacuum_threshold = 50,
+     autovacuum_vacuum_scale_factor = 0.0,
+     autovacuum_analyze_threshold = 50,
+     autovacuum_analyze_scale_factor = 0.0,
+     toast.autovacuum_vacuum_threshold = 10000,
+     toast.autovacuum_vacuum_scale_factor = 0.0
+   )`,
 ] as const;
 
 /** `ensureOpenManagerBodyIndex` が作る部分 unique 索引の名前（issue #1041）。 */
