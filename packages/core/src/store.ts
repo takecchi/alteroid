@@ -1704,10 +1704,19 @@ export interface SessionTranscriptTail {
    *
    * ## 契約
    *
-   * - **実装は本文（`entry` そのもの）を読み込まないこと。** 読めば、避けたい
-   *   はずの OOM をこの関数自身が起こしかねない。pg 実装は `pg_column_size` の
-   *   合計で測り、TOAST を展開しない（`TranscriptArchive.list` の `storedBytes`
-   *   と同じ考え方 — `packages/storage-pg/src/archive.ts`）。
+   * - **返すのは実テキストのバイト数**（`JSON.parse` が展開する量）であって、
+   *   ディスク上の格納バイト数ではない。**圧縮後の格納バイトを返してはいけない**
+   *   —— 予算は初めから実テキストの量として導かれており（`clone.ts` の
+   *   `RESUME_SIZE_BUDGET_BYTES`）、圧縮後の値と比べると**いちばん圧縮の効く
+   *   ＝いちばん大きいセッションをいちばん小さく見積もる**（実測で約85倍の
+   *   過小申告。`packages/storage-pg/src/session-store.ts` の
+   *   `measureSize` の doc「訂正の記録」）。
+   * - **実装は本文（`entry` そのもの）を呼び出し側のメモリへ載せないこと。**
+   *   載せれば、避けたいはずの OOM をこの関数自身が起こしかねない。pg 実装は
+   *   `sum(octet_length(entry::text))` で測る —— DB 側では伸長するが、戻るのは
+   *   長さを表す1つの数値だけである（`packages/storage-pg/src/footprint.ts` の
+   *   「契約」節と同じ）。**伸長するぶんコストの上限が要る**ので、pg 実装は
+   *   `statement_timeout` を掛けて撃ち、打ち切られたら下の `null` に倒す。
    * - **測れないときは `null`。実装が対応していない、またはエラーが出たとき。**
    *   **`0` を返さないこと** —— `0` は「測って0バイトだった（その鍵に行が
    *   無い等）」という実測であって、「測れなかった」の代用にしない

@@ -192,8 +192,12 @@ function zeroIfNull(value: number | string | null): number | null {
  * （`SET` コマンドはプレースホルダを受け付けない）。トランザクションが
  * 終わればこの設定は自動的に戻るので、測定用の接続がプール経由で他の処理へ
  * 使い回されても影響を残さない。
+ *
+ * **この形は `session-store.ts` の `measureSize` も使う**（あちらも
+ * `octet_length(entry::text)` で本文を展開するので、同じ上限が要る）。⟹
+ * 上限の値（`STATEMENT_TIMEOUT_MS`）はオーナーが1か所で決められる。
  */
-async function withStatementTimeout<T>(
+export async function withStatementTimeout<T>(
   db: Db,
   statementTimeoutMs: number,
   body: (tx: Db) => Promise<T>,

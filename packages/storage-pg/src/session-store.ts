@@ -4,6 +4,7 @@ import { and, asc, desc, eq, ne, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { stripNulls, toNumber } from './db.js';
+import { STATEMENT_TIMEOUT_MS, withStatementTimeout } from './footprint.js';
 import { sessionEntries, sessions } from './schema.js';
 
 /**
@@ -146,32 +147,96 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
   /**
    * その鍵の大きさ（バイト）を測る（#1283 の OOM、段1。`SessionTranscriptTail`）。
    *
-   * **`entry` そのものは SELECT しない。** `pg_column_size(entry)` は行内に
-   * 収まった TOAST ポインタのサイズだけを見て、外部チャンクを取りに行かない
-   * ——`archive.ts` の `list()` / `sessions()` が `body` に対して使っているのと
-   * 同じ関数・同じ理由である。本文を1バイトも Node のメモリへ載せない。
+   * ## ⚠️ 訂正の記録 — 圧縮後の格納バイトを予算と比べていた
    *
-   * 行が無い鍵は `sum(...)` が SQL の `NULL` を返す（集約対象が0行のため）。
-   * それは「測れなかった」ではなく「測って0バイトだった」なので `0` を返す
-   * （`measureSize` の doc「`0` を返さないこと」は測れなかった場合の話であって、
-   * この分岐には当たらない）。
+   * この doc は当初「`pg_column_size(entry)` は行内に収まった TOAST ポインタの
+   * サイズだけを見て、外部チャンクを取りに行かない」と書き、**その合計を
+   * `clone.ts` の 512 MiB の予算（`RESUME_SIZE_BUDGET_BYTES`）と比べていた。
+   * これは誤りである。** `pg_column_size` が返すのは**圧縮後の格納バイト数**
+   * であって、`JSON.parse` がメモリへ展開する実テキストの量ではない（TOAST の
+   * 生チャンクを読みに行かないのは正しいが、「ポインタのサイズだけ」は
+   * 正しくない——圧縮された状態のサイズをそのまま返す）。
+   *
+   * #1292 のレビューで本物の PostgreSQL 17 を立てて実測した値
+   * （`footprint.ts` の doc「訂正の記録」に同じものが在る）:
+   *
+   * ```
+   * -- 日本語の定型文の繰り返し、4000回
+   * pg_column_size(jsonb)        =     5,369 バイト（圧縮後・格納バイト）
+   * octet_length(jsonb::text)    =   456,012 バイト（実テキスト）
+   * ⟹ 約85倍の過小申告
+   *
+   * -- 圧縮の効かないランダム文字列（対照）
+   * pg_column_size               =    40,016 バイト
+   * octet_length(...::text)      =    40,012 バイト   ⟹ ほぼ一致
+   * ```
+   *
+   * **そして予算の側は初めから実テキストの量として導かれている**
+   * （`clone.ts` の `RESUME_SIZE_BUDGET_BYTES` の doc 逐語「安全に読める生
+   * テキストの上限 ≈ 2 GiB ÷ 4 ＝ **512 MiB**」）。⟹ 圧縮後のバイトをその予算と
+   * 比べると、**いちばん圧縮の効くセッションをいちばん小さく見積もる。** 生ログは
+   * 同じ形の JSON 行の繰り返しで、alteroid が貯めている中でもいちばん圧縮が効く
+   * 種類の本文である ⟹ **この門は、いちばん止めたいセッションで開く側に倒れる**
+   * ——門の存在理由がそのまま無効になる。
+   *
+   * ⟹ **比較に使う数は `sum(octet_length(entry::text))`（実テキストバイト）に
+   * する。** `footprint.ts` の `textBytes` と同じ式・同じ理由である。
+   *
+   * ## 本文は Node のメモリへ載せない（契約は変わっていない）
+   *
+   * `octet_length(entry::text)` は PostgreSQL 側では本文を伸長・テキスト化する
+   * が、**Node 側が受け取るのはその長さを表す1つの数値だけ**である
+   * （`footprint.ts` の「契約」節と同じ）。`entry` 列は `octet_length(...)` の
+   * 中にしか現れない——撃った SQL そのものを歯にしてある。
+   *
+   * ## だからコストの上限が要る
+   *
+   * `pg_column_size` と違い、こちらは本文を実際に展開する——**OOM を避ける
+   * ための計測が、避けたいはずの重い読みを起こしかねない。** そこで
+   * `footprint.ts` と同じ形で `statement_timeout` をこのトランザクションだけに
+   * 掛ける（`set_config(..., true)` ＝ `SET LOCAL` 相当。トランザクションが
+   * 終われば戻るので、接続プール経由で他の処理へ影響を残さない）。
+   *
+   * ## 測れなかったら `null`（＝「安全」ではない）
+   *
+   * 打ち切られた・クエリが投げた、はどちらも `null`——**`0` にしない。** `0` は
+   * 「実測して0バイトだった」であって、「測れなかった」の代用にしない
+   * （`SessionTranscriptTail.measureSize` の doc、AGENTS.md 地雷表「取れない軸に
+   * 0 の行を作る」）。行が無い鍵は `sum(...)` が SQL の `NULL` を返すが、それは
+   * 集約対象が0行だからであって測れなかったのではない ⟹ `0` を返す。
+   *
+   * ⚠️ **`null` を受けた呼び出し側は resume する側へ倒れる**（`clone.ts` の
+   * `#resumeCandidateWithinBudget`「判定できないときは能力を削らない側へ倒す」
+   * ——#1284 が明記した方針であり、ここでは覆さない）。⟹ **打ち切りは大きい
+   * セッションほど起こりやすい**ので、この門は打ち切りのぶんだけ開く側に倒れうる。
+   * ⛔ **その境目は測っていない**——本物の規模で `statement_timeout` が実際に
+   * 何バイトあたりで発火するかは確かめていない。
    */
   async measureSize(key: LostSessionGrave): Promise<number | null> {
-    const [row] = await this.#db
-      .select({
-        bytes: sql<number | string | null>`sum(pg_column_size(${sessionEntries.entry}))`,
-      })
-      .from(sessionEntries)
-      .where(
-        and(
-          eq(sessionEntries.projectKey, key.projectKey),
-          eq(sessionEntries.sessionId, key.sessionId),
-          eq(sessionEntries.subpath, ''),
-        ),
-      );
-    if (row === undefined || row.bytes === null) return 0;
-    return toNumber(row.bytes);
+    try {
+      return await withStatementTimeout(this.#db, STATEMENT_TIMEOUT_MS, async (tx) => {
+        const [row] = await tx
+          .select({
+            textBytes: sql<
+              number | string | null
+            >`sum(octet_length(${sessionEntries.entry}::text))`,
+          })
+          .from(sessionEntries)
+          .where(
+            and(
+              eq(sessionEntries.projectKey, key.projectKey),
+              eq(sessionEntries.sessionId, key.sessionId),
+              eq(sessionEntries.subpath, ''),
+            ),
+          );
+        if (row === undefined || row.textBytes === null) return 0;
+        return toNumber(row.textBytes);
+      });
+    } catch {
+      return null;
+    }
   }
+
 
   async listSessions(projectKey: string): Promise<{ sessionId: string; mtime: number }[]> {
     const rows = await this.#db

@@ -3854,7 +3854,7 @@ describe('PgSessionStore（SDK のセッション永続化）', () => {
       // `{ rows }`、他は配列そのもの」）ので、ここでも同じ読み方をする
       // （`migrate.test.ts` の `indexExists` と同じ形）。
       const raw: unknown = await db.execute(
-        sql`select sum(pg_column_size(${sessionEntries.entry})) as bytes
+        sql`select sum(octet_length(${sessionEntries.entry}::text)) as bytes
             from session_entries
             where project_key = ${sizeKey.projectKey}
               and session_id = ${sizeKey.sessionId}
@@ -3878,11 +3878,12 @@ describe('PgSessionStore（SDK のセッション永続化）', () => {
 
     /**
      * **本文（`entry`）を SELECT していないことを、撃った SQL そのもので見る。**
-     * `pg_column_size(entry)` の中でしか `entry` 列に触れていなければ、
-     * 本文が Node のメモリへ載ることはない（TOAST も展開しない——同じ関数を
-     * `archive.ts` の `list()` が `body` に対して使っている理由と同じ）。
+     * `octet_length(entry::text)` の中でしか `entry` 列に触れていなければ、
+     * 本文が Node のメモリへ載ることはない——PostgreSQL 側では伸長するが、
+     * **Node 側が受け取るのは長さを表す1つの数値だけ**である
+     * （`footprint.ts` の「契約」節と同じ理由）。
      */
-    it('撃った SQL は entry 列を pg_column_size(...) の中でしか参照しない', async () => {
+    it('撃った SQL は entry 列を octet_length(...) の中でしか参照しない', async () => {
       const sqlKey = { projectKey: 'proj', sessionId: 'sess-measure-sql' };
       await stores.sessionStore.append(sqlKey, [{ type: 'user', uuid: 'q1', body: 'hi' }]);
 
@@ -3894,15 +3895,116 @@ describe('PgSessionStore（SDK のセッション永続化）', () => {
 
       await loggedStore.measureSize(sqlKey);
 
-      expect(queries).toHaveLength(1);
-      const measureQuery = queries[0]!;
-      expect(measureQuery).toContain('pg_column_size');
-      // pg_column_size(...) の呼び出しを取り除いた残りに "entry" が無ければ、
+      const measureQuery = queries.find((query) => query.includes('octet_length'));
+      expect(measureQuery, queries.join(' | ')).toBeDefined();
+      // octet_length(...) の呼び出しを取り除いた残りに "entry" が無ければ、
       // 素の列参照（本文の SELECT）は存在しない。
-      const withoutSizeCalls = measureQuery.replace(/pg_column_size\([^)]*\)/gi, '');
-      expect(withoutSizeCalls).not.toContain('entry');
+      const withoutLengthCalls = measureQuery!.replace(/octet_length\([^)]*\)/gi, '');
+      expect(withoutLengthCalls).not.toContain('entry');
+      // **格納バイトはもう見ていない**（圧縮後の値を予算と比べていたのが穴だった）。
+      expect(queries.join(' | ')).not.toContain('pg_column_size');
+    });
+
+    /**
+     * 🔴 **この describe の中心の歯**（#1283 の続き。`pg_column_size` の穴）。
+     *
+     * `pg_column_size` は**圧縮後の格納バイト**を返す。予算
+     * （`clone.ts` の `RESUME_SIZE_BUDGET_BYTES`）の側は初めから**実テキスト**
+     * の量として導かれている（doc 逐語「安全に読める生テキストの上限 ≈
+     * 2 GiB ÷ 4 ＝ 512 MiB」）⟹ 圧縮後のバイトをその予算と比べると、
+     * **いちばん圧縮の効く（＝いちばん大きい）セッションをいちばん小さく
+     * 見積もる。**
+     *
+     * ⚠️ **本文が 2 KB 程度を超えていないと圧縮そのものが起きない**（TOAST は
+     * 行が閾値を超えて初めて働く）。だから上の「積んだぶんだけ増える」の
+     * 1,000 バイトでは差が出ない——**圧縮が実際に効く大きさ**で固定する必要が
+     * ある。`footprint.test.ts` の `compressiblePhrase` と同じ本文・同じ理由。
+     */
+    it('圧縮後の格納バイトではなく実テキストバイトを返す（pg_column_size の穴）', async () => {
+      const sizeKey = { projectKey: 'proj', sessionId: 'sess-measure-compressible' };
+      // alteroid が実際に貯めている本文の形（同じ文面の繰り返し）に寄せる。
+      const body =
+        '約束の台帳の手順・禁止領域について、この記録は同じ文面を繰り返す傾向がある。'.repeat(4_000);
+      await stores.sessionStore.append(sizeKey, [{ type: 'user', uuid: 'c1', body }]);
+
+      const measured = await stores.sessionStore.measureSize(sizeKey);
+      expect(measured).not.toBeNull();
+
+      // **同じ行を両方の式で測り、実装がどちらを返しているかを決める。**
+      const raw: unknown = await db.execute(
+        sql`select sum(pg_column_size(${sessionEntries.entry})) as stored,
+                   sum(octet_length(${sessionEntries.entry}::text)) as text
+            from session_entries
+            where project_key = ${sizeKey.projectKey}
+              and session_id = ${sizeKey.sessionId}
+              and subpath = ''`,
+      );
+      const rows = Array.isArray(raw) ? raw : ((raw as { rows?: unknown[] }).rows ?? []);
+      const rawRow = rows[0] as { stored: string | number; text: string | number } | undefined;
+      expect(rawRow).toBeDefined();
+      const storedBytes = Number(rawRow?.stored);
+      const textBytes = Number(rawRow?.text);
+
+      // まずこの本文で圧縮が**実際に効いている**ことを確かめる——効いていなければ
+      // 下の判定は何も区別しない（実測は約85倍。余裕を持たせて10倍で固定する
+      // ——`footprint.test.ts` の同じ歯と同じ数字）。
+      expect(textBytes).toBeGreaterThan(storedBytes * 10);
+
+      // ⟹ 返っているのは**実テキストバイトの側**である。
+      expect(measured).toBe(textBytes);
+      expect(measured).not.toBe(storedBytes);
+    });
+
+    /**
+     * **測れなかったら `null`。`0` ではない**（`measureSize` の doc、AGENTS.md
+     * 地雷表「取れない軸に 0 の行を作る」）。`0` は「実測して0バイトだった」
+     * という別の事実である。
+     *
+     * `statement_timeout` による打ち切りも、この関数にとっては「クエリが投げた」
+     * という同じ事実でしかない——catch の経路は共通なので、このテストが
+     * 「原因を問わず `null` に倒れる」ことを代表して固定する
+     * （`footprint.test.ts` が `drop table` で同じ代表をしているのと同じ形。
+     * ⚠️ PGlite は `statement_timeout` で実際には打ち切らないことが実測されて
+     * いる（`footprint.test.ts` の doc）ので、打ち切りそのものはここでは
+     * 起こせない）。
+     */
+    it('クエリが投げたら null を返す（0 ではない・関数自体は投げない）', async () => {
+      const sqlKey = { projectKey: 'proj', sessionId: 'sess-measure-broken' };
+      await stores.sessionStore.append(sqlKey, [{ type: 'user', uuid: 'b1', body: 'hi' }]);
+      expect(await stores.sessionStore.measureSize(sqlKey)).not.toBeNull();
+
+      await db.execute(sql`drop table session_entries`);
+
+      expect(await stores.sessionStore.measureSize(sqlKey)).toBeNull();
+    });
+
+    /**
+     * **`statement_timeout` をこのトランザクションだけに掛けている**
+     * （`set_config(..., true)` ＝ `SET LOCAL` 相当。接続プールへ漏れない）。
+     *
+     * `octet_length(entry::text)` は `pg_column_size` と違って本文を実際に
+     * 展開する ⟹ **OOM を避けるための計測が、避けたいはずの重い読みを
+     * 起こしかねない。** `footprint.ts` と同じ形で上限を掛ける。
+     */
+    it("set_config('statement_timeout', …, true) を同じトランザクションで撃っている", async () => {
+      const sqlKey = { projectKey: 'proj', sessionId: 'sess-measure-timeout' };
+      await stores.sessionStore.append(sqlKey, [{ type: 'user', uuid: 't1', body: 'hi' }]);
+
+      const queries: string[] = [];
+      const loggingDb = drizzle(client, {
+        logger: { logQuery: (query: string) => queries.push(query) },
+      });
+      await new PgSessionStore(loggingDb).measureSize(sqlKey);
+
+      const timeoutQueries = queries.filter((query) =>
+        query.includes("set_config('statement_timeout'"),
+      );
+      expect(timeoutQueries, queries.join(' | ')).toHaveLength(1);
+      // 第3引数 `is_local` が `true` ＝ トランザクションを抜ければ既定へ戻る。
+      expect(timeoutQueries[0]).toContain('true');
     });
   });
+
 });
 
 /**
