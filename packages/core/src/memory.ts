@@ -3587,6 +3587,20 @@ function missingMemoryHeadings(before: string, after: string): string[] {
   return missing;
 }
 
+/**
+ * **⚠️ #662。省略された分へ到達する手は無い——ここは「口が無い」ではなく
+ * 「継続点の指す先が存在しない」側である。** 他の一覧（`schedule_list` /
+ * `manager_list` / `memory_list` / `token_list` / `runner_list` /
+ * `approvals_list`）が予算で切ったときに `cursor` / `offset` を案内できる
+ * のは、切った側の中身が呼び手の到達できる場所（ストアや帳面）に残って
+ * いるからである。**ここは違う。** `before` はこの関数の呼び出しが返る
+ * 時点で既に上書きされていて（`PersonaStore` に控えも履歴も無い——
+ * `describeMemoryWriteDiff` の doc の「記憶には控えも履歴も無いので突き
+ * 合わせる相手が存在しない」）、消えた見出しの文字列はこの1行の外の
+ * どこにも残っていない。**だから「言えないと書く」のが正しい**（#662 の
+ * 逐語）。`token_list` が到達手段を持たなかった頃に使っていた自己申告
+ * （`残りを見る手はこの道具に無い`）に字面を寄せてある。
+ */
 function describeMemoryHeadingDiff(before: string, after: string): string {
   const missing = missingMemoryHeadings(before, after);
   if (missing.length === 0) return '消えた見出し: なし。';
@@ -3597,7 +3611,8 @@ function describeMemoryHeadingDiff(before: string, after: string): string {
       {
         budget: MEMORY_MISSING_HEADINGS_BUDGET,
         omitted: ({ rest, shown, total }) =>
-          `…ほか ${rest} 件は省略（消えた見出しは全 ${total} 件のうち ${shown} 件だけ出した）。`,
+          `…ほか ${rest} 件は省略（消えた見出しは全 ${total} 件のうち ${shown} 件だけ出した）。` +
+          '**残りを見る手はここに無い**——before の本文はこの応答の外のどこにも残っていない。',
       },
     ),
   ].join('\n');
