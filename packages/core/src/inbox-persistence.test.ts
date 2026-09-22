@@ -485,7 +485,7 @@ describe('未読の永続化', () => {
    * 別件（PR #1280）で既に使われている。
    */
   describe('N件の live な未読を一括で拾い直すときの「配り直した」の畳み方', () => {
-    it('with: \'self\' の「配り直した」行は1本だけである（N本でもN+1本でもない）', async () => {
+    it("with: 'self' の「配り直した」行は1本だけである（N本でもN+1本でもない）", async () => {
       const stores = createMemoryStores();
       const ids = ['evt-fold-a', 'evt-fold-b', 'evt-fold-c'];
       for (const [i, id] of ids.entries()) {
