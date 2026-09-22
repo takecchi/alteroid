@@ -11338,6 +11338,11 @@
                           "minimum": -9007199254740991,
                           "maximum": 9007199254740991
                         },
+                        "practices": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
                         "archive": {
                           "type": "integer",
                           "minimum": -9007199254740991,
@@ -11388,6 +11393,7 @@
                         "schedulePhases",
                         "inbox",
                         "commitments",
+                        "practices",
                         "archive",
                         "sessions",
                         "profile",

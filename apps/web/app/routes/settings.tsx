@@ -309,6 +309,7 @@ const RESET_SUMMARY_LABELS: [keyof WorkspaceResetSummary, string][] = [
   ['schedulePhases', '既定の仕込みの位相'],
   ['inbox', '受信箱'],
   ['commitments', '引き受けたまま終わっていない仕事'],
+  ['practices', '仕事のやり方'],
   ['archive', 'アーカイブ'],
   ['sessions', 'セッション登録簿'],
   ['profile', '実行環境プロファイル'],

@@ -5456,6 +5456,45 @@ class Clone implements CloneHost {
     // 動かないので、ループの外で1度だけ判定する。
     const alone = this.#restoredCohort <= 1;
 
+    // **live/stale の判定をループの外で全件ぶん先に済ませる**（未読の
+    // 一括拾い直しで「配り直した」の行数を1本へ畳む直し。⚠️ この直しは
+    // GitHub の issue #1240 とは無関係である——同番号は別件（PR #1280
+    // 「枠が閉じている間の再武装と日誌の書き込みを抑える」）で既に
+    // 使われている。ここでの番号引用は行わない）。
+    // `restoredInboxEventVerdict` は純関数（`event` だけで答えが決まり、
+    // 呼ぶ順序にも依存しない）なので、ループの外へ出しても判定そのものは
+    // 1文字も変わらない。**ループの中でもう一度呼び直さない**——issue #903
+    // が「二重に呼ぶ理由が無いことをコードの形でも示す」とした判断を、
+    // ここでも踏襲する（1回だけ計算し、`decided` から読むだけにする）。
+    const decided = pending.map((record) => ({
+      record,
+      verdict: restoredInboxEventVerdict(record.event),
+    }));
+
+    // **live と判定した record を先にまとめ、1回だけ「配り直した」を書く**
+    // （オーナーが直接名指しした表示のうちの1行。issue #903 はストアの
+    // 消し込み（`removeMany`）だけを一括にしたが、日誌の見出しは stale
+    // 側だけ1件に畳み、live 側は1件ずつのままだった——同じ起動で N 件の
+    // 未読を拾い直すと、この見出しだけで N 行が1秒未満に並ぶ。**書く
+    // 位置と、何を失っていないかは `#redeliveredLiveHeadline` の doc に
+    // 書いてある。**
+    const liveRecordsThisPass = decided
+      .filter((entry) => entry.verdict !== 'stale')
+      .map((entry) => entry.record);
+    if (liveRecordsThisPass.length > 0) {
+      // 人間が後から「なぜ二度来たのか」を追えるようにする。**この record の
+      // 本文（人間の発言なら下の `#record`、他の起点なら `#handle` が起点
+      // ごとの型で残すもの）より必ず前に書く**——下のループが record ごとに
+      // `#record` / `#commit` を呼ぶより前に、ここで書き終えている。**この
+      // 行に本文は載せない**（載せると、本文を持つ側と二重になる）。
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text: this.#redeliveredLiveHeadline(liveRecordsThisPass, alone),
+      });
+    }
+
     // **stale と判定した record を溜めておき、まとめて消す入れ物**（issue
     // #903）。**溜めるのはストアへの書き込みだけ**——journal・`#record` /
     // `#commit`・メモリ上の索引はどれもこのループの中で record ごとに
@@ -5484,21 +5523,21 @@ class Clone implements CloneHost {
       }
     };
 
-    for (const record of pending) {
+    for (const { record, verdict } of decided) {
       if (this.#stopped || this.#inbox.closed) {
         await flushStaleRemovalBuffer();
         return;
       }
 
-      // **live か stale かをここで1回だけ判定する**（issue #903）。以前は
-      // 「配り直した」を全件で無条件に書き、stale だけ後段でもう1行
-      // 「消した」を足していた——ここで先に判定することで、stale の場合は
-      // 単独の「配り直した」を書かずに済む（`#dropStaleRedelivery` が
-      // 「配り直した」と「消した」を1行に畳んで書く。同関数の doc）。
-      // **判定そのもの（`restoredInboxEventVerdict`）は動かしていない**——
-      // 分岐させているのは日誌の書き方だけで、`#unread.set` 等の状態遷移の
-      // 順序は下でこれまでどおり行う。
-      const verdict = restoredInboxEventVerdict(record.event);
+      // **live/stale の判定は `decided` に計算済みのものを使う**（上の
+      // ループの外での一括判定）。以前は「配り直した」を全件で無条件に
+      // 書き、stale だけ後段でもう1行「消した」を足していた——issue #903
+      // でここを先に判定する形へ直し、stale の場合は単独の「配り直した」
+      // を書かずに済むようにした（`#dropStaleRedelivery` が「配り直した」
+      // と「消した」を1行に畳んで書く。同関数の doc）。**判定そのもの
+      // （`restoredInboxEventVerdict`）は動かしていない**——分岐させて
+      // いるのは日誌の書き方だけで、`#unread.set` 等の状態遷移の順序は
+      // 下でこれまでどおり行う。
 
       if (verdict === 'stale') {
         // **跡は残す。** `#dropStaleRedelivery` が本文の追記と、畳んだ
@@ -5520,28 +5559,13 @@ class Clone implements CloneHost {
         // 積んだ直後にどこで return しても `flushStaleRemovalBuffer` が
         // 必ずこの record を含めて片付ける。**
         staleBuffer.push(record);
-      } else {
-        // 人間が後から「なぜ二度来たのか」を追えるようにする。**積む前に書く** —
-        // 後だと、配り直した合図の本文（人間の発言なら下の `#record`、他の起点
-        // なら `#handle` が起点ごとの型で残すもの）より後ろに回りうる。**この行
-        // に本文は載せない**（載せると、本文を持つ側と二重になる）。
-        //
-        // **live の経路はここで1文字も変えていない**（issue #903）——stale の
-        // 分だけ上の分岐へ抜けるようにしただけで、この文言・この呼び出しの
-        // 位置は直しの前と同じである。
-        await this.#journal({
-          type: 'exchange',
-          with: 'self',
-          role: 'outbound',
-          text:
-            `未読のまま残っていた合図を配り直した（${record.deliveries}回目の配達` +
-            (alone
-              ? ''
-              : `＝器が入れ替わった回数。同じ起動で一緒に拾い直した未読が ${this.#restoredCohort} 件あり、` +
-                `配達回数は残っている未読の全行で一緒に進む — この合図の処理が落ちた回数ではない`) +
-            `、${record.at} に受け取ったもの）: ${inboxEventShape(record.event)}`,
-        });
       }
+      // **live のときはここで何もしない**（この直し）。「配り直した」
+      // はこのループへ入る前に、N 件ぶんまとめて既に書き終えている（上の
+      // `liveRecordsThisPass` の journal 呼び出し）——**live の経路が起こす
+      // こと自体は1文字も変えていない**（`#record` / `#commit` / 門の判定 /
+      // `#inbox.push` は下でこれまでどおり行う。変えたのは見出しを書く
+      // 「回数」と「位置」だけである）。
 
       // 日誌を書いているあいだに片付けが始まっていることがある。**積む直前に
       // もう一度見ること**（`Inbox#push` は閉じた後だと投げる）。消してはいない
@@ -5602,10 +5626,12 @@ class Clone implements CloneHost {
       // だから `restoredInboxEventVerdict` は `usageBlocked` を受け取らない
       // （その doc）。**消し込みを揺れる値に預けない**ための分け方である。
       //
-      // **判定はループの先頭で計算済みの `verdict` を使う**（issue #903）。
-      // `restoredInboxEventVerdict` をもう一度呼び直さない——同じ `event` に
-      // 対して二度目を呼んでも答えは変わらないが（純関数）、二重に呼ぶ理由が
-      // 無いことをコードの形でも示す。
+      // **判定はループの外（`decided`）で計算済みのものを使う**（issue #903。
+      // 「配り直した」を1本へ畳んだこの直しでループの外へ出したが、
+      // 「二重に呼ばない」という判断自体は変えていない）。
+      // `restoredInboxEventVerdict` をもう一度呼び
+      // 直さない——同じ `event` に対して二度目を呼んでも答えは変わらないが
+      // （純関数）、二重に呼ぶ理由が無いことをコードの形でも示す。
       //
       // **消し込みはここでは行わない。** `#dropStaleRedelivery`（上で呼び
       // 済み）は跡を書くだけで、実際の `inbox.remove` はもう呼ばない——
@@ -5706,6 +5732,108 @@ class Clone implements CloneHost {
     // した回はそれぞれの手前で既に空にしているので、ここへ来る時点で
     // 残っているのは「最後まで到達した」場合だけである。
     await flushStaleRemovalBuffer();
+  }
+
+  /**
+   * `#restoreUnreadPass` が live と判定した record 全件ぶんの「配り直した」
+   * を、1本の journal entry の文面へ組み立てる。呼ぶのは
+   * `#restoreUnreadPass` だけである。
+   *
+   * ⚠️ **この直しに GitHub の issue 番号は付いていない。** オーナーが
+   * 逐語で名指しした表示（`self → 未読のまま残っていた合図を配り直した
+   * (330回目の配達)`）を直接直したもので、「issue #1240」と紐づけない
+   * こと——その番号は別件（PR #1280「枠が閉じている間の再武装と日誌の
+   * 書き込みを抑える」）で既に使われている。
+   *
+   * ## なぜ要るか
+   *
+   * 以前は record 1件につき「配り直した」を1行書いていた——器の入れ替えを
+   * 跨いで未読が N 件溜まった起動では、この見出しだけで N 行が1秒未満に
+   * 並ぶ（`with: 'self'` の交換）。issue #903 は stale の
+   * 消し込み（ストアへの `removeMany`）を一括にしたが、**live 側の見出しは
+   * 触っていない**——stale 側は`#dropStaleRedelivery` が record ごとに
+   * 「配り直した」と「消した」を1行へ畳んだだけで、複数 record を1本へ
+   * まとめる形はどちらの側にも無かった。ここが初めてそれをする。
+   *
+   * ## なぜループの外（record を1件も処理する前）で書くか
+   *
+   * **この行は、この record の本文より前でなければならない**——本文は
+   * `#restoreUnreadPass` のループが record ごとに `this.#record(record.event)`
+   * （人間の発言なら）で書く。1件ずつ書いていた旧実装は、record の番に
+   * なったときにその場で書くことで自然にこれを満たしていた。**N 件を
+   * 1本へまとめる以上、N 件ぶんの中身を先に知っていなければ書けない**
+   * ——知るのに record を1件も処理する必要は無い（`restoredInboxEventVerdict`
+   * は純関数で、`pending` は `#restoreUnreadPass` の先頭で既に読み終えて
+   * いる）。だから `#restoreUnreadPass` は、record を1件も処理する前に
+   * この1本を書き切ってから、record ごとのループへ入る。
+   *
+   * ⚠️ **この選択には代償が1つある。** 書いた後で `#stopped` /
+   * `#inbox.closed` によりループが途中で打ち切られると、まだ「到達して
+   * いない」live な record もこの1行には載っている——旧実装なら、その
+   * record の見出しはこの回は一度も書かれず、次の起動で（新しい
+   * `deliveries` の値で）改めて書かれていた。**それでもここで書く**——
+   * `deliveries` は `claimPending()`（`#restoreUnreadPass` の先頭）が
+   * **ループより前に**ストアへ確定させた値であり、record がループの中で
+   * 実際に処理されたかどうかとは無関係に、この起動で「配り直された
+   * （＝再度読み出しの対象になった）」ことは既に真である。**「二度届く
+   * （雑音）より消える（判断材料の喪失）方が高い」**（`store.ts` の
+   * `InboxStore` の doc）という、この受信箱の設計そのものの向きに合わせて
+   * いる——旧実装の「見出しごと書かれない」ほうが、確定済みの事実を無言で
+   * 捨てる側だった。
+   *
+   * ## 1件のときは、以前の文言を1文字も変えない
+   *
+   * `records.length === 1` のときは、この直しの前とまったく同じ組み立てを
+   * 通す——変える理由が無いところは変えない（`AGENTS.md`「テストを弱めず
+   * に直す」の見分け方）。`inbox-persistence.test.ts` の「未読が1件だけ
+   * なら、日誌の1行は回数をそのまま名乗る」はこの文言を逐語で見ている。
+   *
+   * ## 2件以上のときは `alone` を参照しない
+   *
+   * `alone`（`this.#restoredCohort <= 1`）が真なら `pending` は高々1件しか
+   * 無い ⟹ live な record が2件以上あることは無い。**だから2件以上の枝は
+   * `alone` の分岐を持たない**——`#redeliveryNoticeFor` の `batch.length >= 2`
+   * 枝が同じ理由で `alone` を参照していないのと同じ形である。
+   *
+   * ## 何を失っていないか
+   *
+   * `deliveries` / `at` / `inboxEventShape(event)` を record ごとに列挙する
+   * ——件数だけに潰さない。**`#redeliveryNoticeFor` の束の行（2件以上）とは
+   * 違う**——あちらは最大配達回数と最も古い時刻だけへ要約する。あちらは
+   * モデルへ渡す判断材料で、要約で足りる（`#redeliveryNoticeFor` の doc）。
+   * こちらは人間が後から読み返す日誌なので、1件も欠かさず残す。
+   *
+   * ⚠️ **時間の窓（何秒以内は捨てる）も件数の上限（先頭 N 件だけ書く）も
+   * 持ち込まない。** `records` は `pending` のうち live と判定された分を
+   * 1件残らず列挙する。
+   */
+  #redeliveredLiveHeadline(records: readonly PendingInboxEvent[], alone: boolean): string {
+    if (records.length === 1) {
+      const record = records[0];
+      if (record === undefined) return '';
+      return (
+        `未読のまま残っていた合図を配り直した（${record.deliveries}回目の配達` +
+        (alone
+          ? ''
+          : `＝器が入れ替わった回数。同じ起動で一緒に拾い直した未読が ${this.#restoredCohort} 件あり、` +
+            `配達回数は残っている未読の全行で一緒に進む — この合図の処理が落ちた回数ではない`) +
+        `、${record.at} に受け取ったもの）: ${inboxEventShape(record.event)}`
+      );
+    }
+
+    const details = records
+      .map(
+        (record, index) =>
+          `[${index + 1}] ${record.deliveries}回目の配達、${record.at} に受け取ったもの: ` +
+          inboxEventShape(record.event),
+      )
+      .join('\n');
+    return (
+      `未読のまま残っていた合図を配り直した（まとめて${records.length}件。回数はいずれも` +
+      `器が入れ替わった回数——同じ起動で一緒に拾い直した未読が ${this.#restoredCohort} 件あり、` +
+      `配達回数は残っている未読の全行で一緒に進む — それぞれの合図の処理が落ちた回数ではない）:\n` +
+      details
+    );
   }
 
   /**

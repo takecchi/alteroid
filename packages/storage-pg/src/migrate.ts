@@ -535,6 +535,23 @@ export const STATEMENTS = [
   // なので、このファイル冒頭の「危ないのは drop index と対の create index
   // だけ」に当たらない——2周目以降も本当の no-op である。
   `alter table auth_accounts add column if not exists owner_declared_at timestamptz`,
+
+  // --- 仕事のやり方（#1055 段3）--------------------------------------------
+  // 新しい表を足すだけなので、既存行の意味は1ビットも変わらない（このファイル
+  // 冒頭の「既存行の意味を変える変更を黙って混ぜない」に当たらない）。索引は
+  // 足さない —— 引き方は slug の一致と全件の昇順だけで、主キーがそのまま効く。
+  //
+  // ⛔ **既にあるどの表にも列を足していない。** やり方は独立した器であって、
+  // 記憶（`memory`）にも委譲（`jobs`）にも生えない（#1055 段3 の決定）。
+  `create table if not exists practices (
+     slug text primary key,
+     kind text not null,
+     title text not null,
+     content text not null,
+     bytes integer not null,
+     created_at timestamptz not null,
+     updated_at timestamptz not null
+   )`,
 ] as const;
 
 /** `ensureOpenManagerBodyIndex` が作る部分 unique 索引の名前（issue #1041）。 */

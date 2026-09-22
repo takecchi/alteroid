@@ -64,6 +64,7 @@ import {
   describePage,
   excerpt,
   excerptLine,
+  fillListingBudget,
   page,
   renderListing,
   renderListingEntry,
@@ -1689,6 +1690,15 @@ const PROFILE_PAGE = 8_000;
  * `recentDroppedTraces()` の帳面自体に上限（`RECENT_TRACE_LIMIT`、
  * `dropped-record.ts`）があるので、ここは「一度に読み戻すときの続きの
  * 取り方」を守る側の予算である。
+ *
+ * **⚠️ #662。以前は `limit`（`all.slice(-limit)`。外側の切り方）と、この
+ * 予算（`renderListingFromEnd` が末尾から詰める。内側の切り方）が別々に
+ * 効いていた。`limit` を上げても、予算が常に同じ末尾から詰め直すので
+ * 実際に載る内容（境界）は1ミリも動かなかった——「口が無い」ではなく
+ * 「在る口が別の切り口にしか効かない」形（issue #662 の逐語）。**
+ * **いまは `offset`（直近から何件スキップしてから見るか）が唯一の継続点で、
+ * `limit` と予算のどちらが原因で切れても、次に渡す `offset` は同じ計算式
+ * （`skip + shown`）で組む——切った理由を呼び手に区別させない。**
  */
 const SELF_DROPPED_BUDGET = 8_000;
 /** `self_dropped` が `limit` を省略したときに返す件数（直近から）。 */
@@ -7145,6 +7155,14 @@ export function createCloneTools(context: ToolContext) {
      * `describeDroppedTraceRetention`）を通す。** `GET /dropped` と生成元を
      * 1つに揃えるためで、`describeSessionMissingKind` と同じ判断
      * （生成元を1箇所に閉じる）。
+     *
+     * **`offset`（#662）。** 帳面（`recentDroppedTraces()`）はプロセス内の
+     * 配列で、器の store ではない——他の5本の一覧（`approvals_list` /
+     * `schedule_list` / `manager_list` / `memory_list` / `token_list` /
+     * `runner_list`）のような不透明な `cursor` 文字列と専用モジュールは
+     * 要らない。**直近から何件スキップしてから見るか**という素直な整数で
+     * 足りる（`excerpt.ts` の `page()` と同じ「整数の続き」の発想を、文字列の
+     * 文字位置ではなく配列の件数に当てはめたもの）。
      */
     tool(
       'self_dropped',
@@ -7157,6 +7175,7 @@ export function createCloneTools(context: ToolContext) {
         'このプロセスが生きているあいだの直近の分だけを持つ（帳面の保持件数は',
         `${RECENT_TRACE_LIMIT} 件。それより古い分はこのプロセスの中には無く、器の外の`,
         'stderr を見るしかない）。再起動・デプロイの入れ替えでも消える。',
+        '予算で切れた古い側は offset で読み進められる（limit を上げても境界は動かない）。',
       ].join(' '),
       {
         limit: z
@@ -7166,31 +7185,64 @@ export function createCloneTools(context: ToolContext) {
           .max(RECENT_TRACE_LIMIT)
           .optional()
           .describe(
-            `直近から何件返すか（既定 ${SELF_DROPPED_DEFAULT_LIMIT}、最大 ${RECENT_TRACE_LIMIT}` +
-              '＝帳面が保持している件数そのもの）。',
+            `一度に対象にする件数（既定 ${SELF_DROPPED_DEFAULT_LIMIT}、最大 ${RECENT_TRACE_LIMIT}` +
+              '＝帳面が保持している件数そのもの）。⚠️ 予算（文字数）が先に尽きることが' +
+              'あり、そのときはこれを上げても実際に載る内容は動かない——古い側へ進むには' +
+              '`offset` を使うこと。',
+          ),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .max(RECENT_TRACE_LIMIT)
+          .optional()
+          .describe(
+            '直近から数えて何件をスキップしてから見るか（既定 0＝最新から）。' +
+              '#662。前回の応答の断り書きに出た offset をそのまま渡せば、' +
+              '予算や limit で切れて省略された古い側へ実際に進める。',
           ),
       },
-      async ({ limit = SELF_DROPPED_DEFAULT_LIMIT }) => {
+      async ({ limit = SELF_DROPPED_DEFAULT_LIMIT, offset = 0 }) => {
         const origin = describeDroppedTraceOrigin('daemon');
         const since = `この帳面が数え始めたのは ${droppedTraceLedgerSince()}。`;
         const all = recentDroppedTraces();
         if (all.length === 0) {
           return text([describeDroppedTraceEmpty(), origin, since].join(' '));
         }
-        const traces = all.slice(-limit);
+        // **offset は「直近から何件を除いてから見るか」。** 除いた残り
+        // （`windowed`）が、この呼びが到達できる全域である——`limit` と予算の
+        // どちらで切れても、次に渡す offset は同じ式（`skip + shown`）で
+        // 組めるようにするため、この1本の窓に両方の切り口を通す。
+        const skip = Math.min(offset, all.length);
+        const windowed = skip === 0 ? all : all.slice(0, all.length - skip);
+        if (windowed.length === 0) {
+          return text(
+            `offset（${String(offset)}）が帳面の件数（${String(all.length)}）以上なので、` +
+              `これより古い分は無い。offset を ${String(all.length - 1)} 以下にして呼び直すこと。 ` +
+              `${origin} ${since}`,
+          );
+        }
+        const traces = windowed.slice(-limit);
+        const fill = fillListingBudget(traces, SELF_DROPPED_BUDGET, true);
+        // **まだ古い側に残っている件数。** `limit` で除外された分（`windowed`
+        // のうち `traces` に入らなかった分）と、予算で除外された分
+        // （`fill.rest`）の両方を1つに数える——呼び手に「どちらが原因か」を
+        // 区別させない（#662 が指摘した非対称の直し）。
+        const remaining = windowed.length - fill.shown;
+        const nextOffset = skip + fill.shown;
+        const lines = [...fill.lines];
+        if (remaining > 0) {
+          lines.unshift(
+            `…ほか古い ${String(remaining)} 件は省略（帳面には全 ${String(all.length)} 件あり、` +
+              `直近から ${String(fill.shown)} 件だけ出した）。続きは ` +
+              `self_dropped offset=${String(nextOffset)} で取れる（limit を上げても動かない）。`,
+          );
+        }
         return text(
           [
-            renderListingFromEnd(traces, {
-              budget: SELF_DROPPED_BUDGET,
-              omitted: ({ rest, shown, total }) =>
-                `…ほか古い ${rest} 件は省略（この呼び出しで渡した ${total} 件のうち直近 ${shown} 件だけ出した）。`,
-            }),
+            lines.join('\n'),
             origin,
-            all.length > traces.length
-              ? `（帳面には全 ${all.length} 件のうち直近 ${traces.length} 件だけをここへ渡した。` +
-                `もっと古い分は limit を上げて呼ぶこと。${describeDroppedTraceRetention(RECENT_TRACE_LIMIT)} ` +
-                `${since}）`
-              : `（${describeDroppedTraceRetention(RECENT_TRACE_LIMIT)} ${since}）`,
+            `（${describeDroppedTraceRetention(RECENT_TRACE_LIMIT)} ${since}）`,
           ].join('\n'),
         );
       },

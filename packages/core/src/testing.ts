@@ -22,10 +22,11 @@ import type {
   MemoryDocumentMeta,
   MemoryProtectionStatus,
   PendingApproval,
+  Practice,
   SchedulePhase,
   ScheduledRequest,
 } from './schema.js';
-import { schedulePhaseSchema } from './schema.js';
+import { practiceSchema, schedulePhaseSchema } from './schema.js';
 import {
   sha256Hex,
   type AccessTokenRecord,
@@ -45,6 +46,7 @@ import type {
   PersonaStore,
   ProfileStore,
   CommitmentStore,
+  PracticeStore,
   ScheduleStore,
   LostSessionGrave,
   SessionRegistry,
@@ -229,6 +231,7 @@ export function createMemoryStores(): Stores {
   const schedules = new Map<string, ScheduledRequest>();
   const schedulePhases = new Map<string, SchedulePhase>();
   const commitments = new Map<string, Commitment>();
+  const practices = new Map<string, Practice>();
   const archives = new Map<string, string>();
   /** tombstone（#698）。行（`archives` のキー）は消さず、ここへ印だけを持つ。 */
   const archiveRemovals = new Map<string, { removedAt: string; bytes: number }>();
@@ -1262,12 +1265,64 @@ export function createMemoryStores(): Stores {
     },
   };
 
+  /**
+   * やり方の器（#1055 段3）。**本物と同じく `ensureTrailingNewline` を通す。**
+   * ここで独自に正規化を書くと、記憶が踏んだ穴（3実装のうち1つだけ振る舞いが
+   * 違い、単体テストが当たるのは乖離している側だけ。#370）をそのまま再現する。
+   */
+  const practiceStore: PracticeStore = {
+    async list() {
+      return [...practices.values()]
+        .sort((a, b) => a.slug.localeCompare(b.slug))
+        .map((entry) =>
+          isolate({
+            slug: entry.slug,
+            kind: entry.kind,
+            title: entry.title,
+            createdAt: entry.createdAt,
+            updatedAt: entry.updatedAt,
+            bytes: entry.bytes,
+          }),
+        );
+    },
+    async read(slug) {
+      const found = practices.get(slug);
+      return found === undefined ? null : isolate(found);
+    },
+    async write(input) {
+      const content = ensureTrailingNewline(input.content);
+      const now = new Date().toISOString();
+      const existing = practices.get(input.slug);
+      const next = practiceSchema.parse({
+        slug: input.slug,
+        kind: input.kind,
+        title: input.title,
+        content,
+        // **上書きで作成時刻を捏造しない**（`PracticeStore.write` の doc）。
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+        bytes: content.length,
+      });
+      practices.set(input.slug, isolate(next));
+      return isolate(next);
+    },
+    async remove(slug) {
+      practices.delete(slug);
+    },
+    async clear() {
+      const removed = practices.size;
+      practices.clear();
+      return removed;
+    },
+  };
+
   return {
     persona,
     journal,
     jobs: jobStore,
     schedules: scheduleStore,
     commitments: commitmentStore,
+    practices: practiceStore,
     inbox: inboxStore,
     archive,
     sessions,

@@ -3545,3 +3545,92 @@ export const chatStreamEventSchema = z.discriminatedUnion('type', [
 ]);
 
 export type ChatStreamEvent = z.infer<typeof chatStreamEventSchema>;
+
+// ---------------------------------------------------------------------------
+// やり方（PracticeStore） — #1055 段3
+// ---------------------------------------------------------------------------
+
+/**
+ * やり方のスラッグ。`memorySlugSchema` と同じ制約にしてある（ファイル名にも
+ * URL の経路にもそのまま出るので、経路要素を含めない）。
+ *
+ * **別の定数にしてあるのは意図である。** 記憶とやり方は別の器で、片方の制約を
+ * 緩めたときにもう片方が黙って道連れになる形を作らない。
+ */
+export const practiceSlugSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[a-z0-9][a-z0-9._-]*$/, 'slug は英小文字・数字・. _ - のみ');
+
+/**
+ * 仕事の**種類**（実装 / 調査 / 相談 / レビュー / 日報 …）。**自由文字列である。**
+ *
+ * ## ⛔ ここを `z.enum` にしないこと（決定。#1055 段3）
+ *
+ * 列挙を書いた瞬間に「仕事の種類の一覧」を実装側が決めることになる。それは
+ * `docs/north_star.md` の問いに正面から当たる（逐語）:
+ *
+ * > 仕事の型を「実装専用」に狭めていないか？
+ *
+ * （続けて「人間が Claude Code に頼むのは実装だけではない」として、調査・設計の
+ * 相談・外部サービスの確認・レビューを名指ししている。⚠️ 原文はこの2文が1行に
+ * 並んでおり、区切りは全角空白である —— lint（`no-irregular-whitespace`）に
+ * 当たるので、ここでは逐語のまま貼らずに分けてある。）
+ *
+ * `grep -Fn -- '仕事の型を「実装専用」に狭めていないか' docs/north_star.md`
+ *
+ * **いま私たちが知っている種類が全部だとは限らない。** 知らない種類のやり方を
+ * 書こうとした人間が、器に拒まれる形を作らない。表記ゆれは**そのぶんの代償**として
+ * 引き受ける（束ねる側が寄せればよく、器が弾く理由にはならない）。
+ */
+export const practiceKindSchema = z.string().min(1).max(128);
+
+/**
+ * 一覧に出す分（本文を含まない）。
+ *
+ * 本文を含まない形を別に持つのは `MemoryDocumentMeta` と同じ理由 —— 一覧の1行の
+ * ために全文を運ばない。
+ */
+export const practiceMetaSchema = z.object({
+  slug: practiceSlugSchema,
+  kind: practiceKindSchema,
+  /** 人間が一覧で見る短い名前。 */
+  title: z.string(),
+  createdAt: isoDateTime,
+  updatedAt: isoDateTime,
+  /** 本文の文字数。一覧から「空のやり方」を見分けるために出す。 */
+  bytes: z.number().int().nonnegative(),
+});
+
+/**
+ * 仕事のやり方（#1055 段3）。**器が持つのは「こう書いてある」までである。**
+ *
+ * ## ⛔ ここに「実行される」欄を足さないこと（北極星に触る）
+ *
+ * PRD「自律」の器には逐語でこう書いてある:
+ *
+ * > **器が持つのは「何を頼まれたか」と「まだ片付いていないか」だけである。**
+ * > 順序も優先度も締切も持たない — それは「やることの一覧」の側であり、
+ * > **何を先にやるかは記憶にある目的と価値観からクローンが毎回決め直す**
+ *
+ * `grep -Fn -- '器が持つのは「何を頼まれたか」と「まだ片付いていないか」だけである' docs/PRD.md`
+ *
+ * ⟹ **やり方の器も同じ線である。** 持つのは本文（`content`）1つだけで、
+ * `steps: []` / `required: boolean` / `enforce` / `commands` のような、
+ * **器の側が実行や強制を意味づける欄を置かない。**
+ *
+ * - やり方は**クローンが読む素材**であって、実行される定義ではない
+ * - **読んで従わない自由が要る。** 従わせた時点で、クローンは「制限された
+ *   自動化ジョブ」に戻る（`docs/north_star.md`）
+ * - **やり方が1件も無いことは正常な状態である。** 空の器がどこかの前提を
+ *   崩してはいけない（段3 の受け入れ基準「やり方が書かれていない仕事も普通に進む」）
+ */
+export const practiceSchema = practiceMetaSchema.extend({
+  /** 本文。人間とクローンが読む散文そのもの。 */
+  content: z.string(),
+});
+
+export type PracticeSlug = z.infer<typeof practiceSlugSchema>;
+export type PracticeMeta = z.infer<typeof practiceMetaSchema>;
+export type Practice = z.infer<typeof practiceSchema>;

@@ -19,6 +19,8 @@ import type {
   MemoryDocumentMeta,
   MemoryProtectionStatus,
   PendingApproval,
+  Practice,
+  PracticeMeta,
   SchedulePhase,
   ScheduledRequest,
   UnreadableCommitment,
@@ -1714,6 +1716,61 @@ export interface SessionTranscriptTail {
   measureSize(key: LostSessionGrave): Promise<number | null>;
 }
 
+/**
+ * 仕事の**やり方** = クローンが読む素材（#1055 段3）。
+ *
+ * ## ⛔ 器が実行を強制しない（ここが壊れると北極星が壊れる）
+ *
+ * 持っているのは読み書きの4つだけで、**「このやり方を適用せよ」に当たる操作が
+ * 1つも無い。** これは書き忘れではなく設計である —— 従わせた時点でクローンは
+ * 「制限された自動化ジョブ」に戻る（`practiceSchema` の doc、`docs/north_star.md`）。
+ *
+ * ⟹ **この interface に `apply` / `enforce` / `requiredFor` を足さないこと。**
+ * 足したくなったら、それは器ではなく指示文の側でやること（読む素材として渡す）。
+ *
+ * ## やり方が1件も無いのは正常な状態である
+ *
+ * `list()` が空を返すことは、どこかの前提を崩してはいけない（段3 の受け入れ基準
+ * 「やり方が書かれていない仕事も普通に進む」）。**空を「未設定」の異常として
+ * 扱わないこと。**
+ */
+export interface PracticeStore {
+  /**
+   * **slug の昇順。**（`PersonaStore.list` と同じ理由で契約にしてある —— 続きを
+   * 取る口（#662 の形）を後から足すとき、一覧が並んでいることに全面的に依拠する。
+   * 偶然揃っている状態のままでは置けない。）
+   *
+   * ⚠️ 照合順序の厳密な一致までは保証しない（`PersonaStore.list` の doc と同じ）。
+   */
+  list(): Promise<PracticeMeta[]>;
+  /** 無ければ `null`（「読めない」は throw。`CommitmentStore.get` と同じ線）。 */
+  read(slug: string): Promise<Practice | null>;
+  /**
+   * 全文置換。存在しなければ作る。
+   *
+   * **契約: 書いた本文は、末尾の改行が正規化されて読み戻る。**
+   * `write({ ..., content: '# X' })` の直後の `read()` が返す `content` は
+   * `'# X\n'` であって `'# X'` ではない。既に `\n` で終わっているなら足さない。
+   * `bytes` もこの正規化を通した後の本文に対して数える。
+   *
+   * **実装する側はこの正規化を自分で書かず、上の `ensureTrailingNewline` を
+   * 通すこと。** 出所が1つに無かったせいで3実装のうち1つだけ振る舞いが違い、
+   * しかも `packages/core` の単体テストが当たるのは乖離している側だけだった、
+   * という前科がある（`PersonaStore.write` の doc と #370）。
+   *
+   * `createdAt` は**最初に作られたときのものを引き継ぐ**（上書きで作成時刻を
+   * 捏造しない）。`updatedAt` は毎回進む。
+   */
+  write(input: { slug: string; kind: string; title: string; content: string }): Promise<Practice>;
+  remove(slug: string): Promise<void>;
+  /**
+   * 全部消す（ワークスペースのリセット専用。`PersonaStore.clear` と同じ形）。
+   * 消した件数を返す —— `WorkspaceResetSummary` が申告に使う。**消したのに申告に
+   * 出ない形を作らないこと**（静かに消える）。
+   */
+  clear(): Promise<number>;
+}
+
 /** デーモンが必要とするストア一式。 */
 export interface Stores {
   persona: PersonaStore;
@@ -1741,6 +1798,14 @@ export interface Stores {
    * 「その場で着手しなかった依頼が黙って消える」という能力差が生まれる。
    */
   commitments: CommitmentStore;
+  /**
+   * 仕事のやり方（#1055 段3）。
+   *
+   * **省略可能にしないこと**（`commitments` / `schedules` と同じ理由）。ここが
+   * 任意だと、片方の器でだけ「人間が書いたやり方が読めない」という能力差が
+   * 生まれる（north_star 禁止1）。
+   */
+  practices: PracticeStore;
   archive: TranscriptArchive;
   sessions: SessionRegistry;
   /**

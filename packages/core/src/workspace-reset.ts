@@ -21,11 +21,12 @@ import type { Stores } from './store.js';
  * ずれる余地が生まれる。1箇所（ここ）だけが「何を消すか」を知っていて、
  * 呼び出し側は「消せ」と言うだけである。
  *
- * ## 何を消すか（残り10ストア）
+ * ## 何を消すか（残り11ストア）
  *
  * `persona`（記憶） / `journal`（日誌） / `jobs`（ジョブ・承認待ち） /
  * `schedules`（継続中の依頼・既定の仕込みの位相） / `inbox`（受信箱） /
- * `commitments`（引き受けたまま終わっていない仕事） / `archive`（セッション
+ * `commitments`（引き受けたまま終わっていない仕事） / `practices`（仕事の
+ * やり方。#1055 段3） / `archive`（セッション
  * 生ログの退避先） / `sessions`（`SessionRegistry`。クローンのセッション id・
  * 墓標） / `profile`（実行環境プロファイル） / `usage`（利用状況の台帳）。
  *
@@ -42,6 +43,13 @@ export interface WorkspaceResetSummary {
   schedulePhases: number;
   inbox: number;
   commitments: number;
+  /**
+   * 消したやり方の件数（#1055 段3）。
+   *
+   * **消したのに申告へ出ない形を作らないこと。** リセットで静かに消える器が
+   * 1つでもあると、`WorkspaceResetSummary` は「何が消えたか」の正本でなくなる。
+   */
+  practices: number;
   archive: number;
   sessions: number;
   profile: number;
@@ -85,6 +93,7 @@ export async function resetWorkspaceState(
   const schedulesResult = await stores.schedules.clear();
   const inbox = await stores.inbox.clear();
   const commitments = await stores.commitments.clear();
+  const practices = await stores.practices.clear();
   const archive = await stores.archive.clear();
   const sessions = await stores.sessions.clear();
   const profile = await stores.profile.clear();
@@ -101,6 +110,7 @@ export async function resetWorkspaceState(
     schedulePhases: schedulesResult.phases,
     inbox,
     commitments,
+    practices,
     archive,
     sessions,
     profile,

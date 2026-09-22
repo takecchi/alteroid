@@ -425,10 +425,21 @@ describe('createCloneWakeGate', () => {
     gate.observeUnusable();
     // 折り返して配れば、直前の1回ぶんの畳み込み（folded: 1）を持って配られる。
     expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 1 });
-    // 改めて blocked=false で1回畳めば（`!cloneBlocked` も身元を一緒に忘れる）、
-    // 次は1から数え直して配れる。
+
+    // **Issue #1223 再発の歯**: `cloneBlocked=false` の回を1回挟んでも
+    // （`observeUnusable()` を呼ばない限り）配達済みの印は消えない——同じ身元
+    // はそのまま畳み続ける。以前はここで `!cloneBlocked` が印を全部消しており、
+    // それ自体が #1223 の輪を戻していた（`told` の doc「全消去は
+    // `observeUnusable()` のときだけ」）。
     gate.decide(reopened('tok-a'), false, false);
-    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 1 });
+    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'fold' });
+
+    // 改めて `observeUnusable()` を呼べば、次は「新しい知らせ」として配れる
+    // （直前の `false` の回・`fold` の回で積んだ畳み込み2件ぶんを持って配られる。
+    // `told` を消さない限りカウンタは積み上がり続けることも、この2件で
+    // 固定している）。
+    gate.observeUnusable();
+    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 2 });
   });
 
   it('トークンごとに独立して数える', () => {
@@ -452,10 +463,16 @@ describe('createCloneWakeGate', () => {
    * `kind: 'wake'` を返す——`folded` の値（内部状態）に依存して `wake` が
    * `fold` に化けることは無い。
    *
-   * **この不変条件は #1223 の歯と両立する** —— ここでは毎回
-   * `cloneBlocked=false` の回を挟んでいる（本物の `#pump` が保持分を戻して
-   * 再試行する回に対応する）。`false` の回が `told` を捨てるので、次の
-   * `true` の回は必ず「新しい知らせ」として届く。**間を挟まずに `true` を
+   * **「また落ちる」を表すのは `observeUnusable()` である**（Issue #1223
+   * 再発の手当て後）。`cloneBlocked=false` の回を挟むだけでは、このトークンに
+   * ついて何も観測していない——それは「クローンはいま動けている」という事実
+   * でしかなく、鍵が通らなくなったことを1文字も意味しない（`told` の doc
+   * 「全消去は `observeUnusable()` のときだけ」）。**本物の `clone.ts` は
+   * 「止まっていない → 止まった」の遷移のたびに必ず先に `observeUnusable()` を
+   * 呼ぶ**（`#noteUsageNotice` が `#observeForTokenRotation` を待ってから
+   * `#usageBlocked` を立てる。配線の逐語は下の `describe('🔴 #1051...')` の
+   * `fakeClone` の doc）——ここではその対を模して「また枠に当たって落ちた」を
+   * `observeUnusable()` で表す。**`observeUnusable()` を呼ばずに `true` を
    * 2回連続で呼ぶ形は、この不変条件が指す状況ではない**——それは「まだ
    * 何も変わっていないのに同じ知らせが2回来た」という #1223 の症状そのもの
    * で、直上のテストが指すとおり2回目は畳む。
@@ -470,13 +487,16 @@ describe('createCloneWakeGate', () => {
     // 「戻った」はすべて畳む——まだ本物の再起動が要る状態ではない）。
     expect(gate.decide(reopened('tok-a'), false, false)).toEqual({ kind: 'fold' });
 
-    // また枠に当たって落ちた。その後もう一度「戻った」が観測された
+    // また枠に当たって落ちた——本物ではここで必ず `observeUnusable()` が先に
+    // 走る（`fakeClone` の doc）。その後もう一度「戻った」が観測された
     // ——ここが2本目の「戻った」である。畳み込みの結果として消えてはいけない。
+    gate.observeUnusable();
     expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 1 });
 
-    // 3本目も同様に届く（何回繰り返しても、止まっているときは必ず配る）。
+    // 3本目も同様に届く（何回繰り返しても、`observeUnusable()` を挟めば必ず配る）。
     expect(gate.decide(reopened('tok-a'), false, false)).toEqual({ kind: 'fold' });
     expect(gate.decide(reopened('tok-a'), false, false)).toEqual({ kind: 'fold' });
+    gate.observeUnusable();
     expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 2 });
   });
 
@@ -501,6 +521,33 @@ describe('createCloneWakeGate', () => {
 
     expect(kinds[0]).toBe('wake');
     expect(kinds.slice(1)).toEqual(Array.from({ length: 59 }, () => 'fold'));
+  });
+
+  /**
+   * **🔴 Issue #1223 再発（本丸）**: 「止まっている ⇄ 止まっていない」を何度
+   * 行き来しても（`observeUnusable()` を一度も呼ばずに）、同じ身元は最初の
+   * 1回しか配らない。
+   *
+   * 実運用の再発（2026-09-18〜19）は 04:05 / 04:07 / 04:09 / 04:11 に同じ鍵・
+   * 同じ根拠の起床が繰り返され、その間鍵は `usable` のまま一度も遷移していな
+   * かった——上位層が本番 DB を直接観測した値である。ここではその形を
+   * `cloneBlocked` を `true`/`false` で往復させて再現する。**この歯は、
+   * `if (!cloneBlocked) told.clear();` を持つ版（この修正より前）に当てると
+   * 2本目以降も `wake` を返して赤くなる**——`false` の回が毎回 `told` を
+   * 全消去し、次の `true` の回を「新しい知らせ」に見せかけるためである。
+   */
+  it('🔴 #1223 再発: cloneBlocked が true/false を往復しても、observeUnusable() 無しでは同じ身元を配り直さない', () => {
+    const gate = createCloneWakeGate();
+
+    expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'wake', folded: 0 });
+
+    // 04:07 / 04:09 / 04:11 に相当する3往復。`cloneBlocked` は動くが、鍵は
+    // 一度も `observeUnusable()` されていない——実運用の「usable のまま一度も
+    // 遷移していない」状態そのものである。
+    for (let i = 0; i < 3; i++) {
+      expect(gate.decide(reopened('tok-a'), false, false)).toEqual({ kind: 'fold' });
+      expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'fold' });
+    }
   });
 
   /**

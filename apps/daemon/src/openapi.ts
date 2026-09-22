@@ -1659,6 +1659,13 @@ export const resetResponseSchema = z.object({
     schedulePhases: z.number().int(),
     inbox: z.number().int(),
     commitments: z.number().int(),
+    /**
+     * やり方（#1055 段3）。**ここへ足し忘れると静かに落ちる** —— この schema は
+     * `resetResponseSchema.parse({ cleared })` として応答に当てており、zod は
+     * 未知のキーを既定で**黙って捨てる**。器は消したのに申告には出ない、という
+     * 形になる（`WorkspaceResetSummary.practices` の doc）。
+     */
+    practices: z.number().int(),
     archive: z.number().int(),
     sessions: z.number().int(),
     profile: z.number().int(),

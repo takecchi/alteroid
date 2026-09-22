@@ -460,11 +460,140 @@ describe('未読の永続化', () => {
     const head = matches[0];
     const line = head && head.type === 'exchange' ? head.text : '';
 
-    expect(line).toContain('回目の配達＝器が入れ替わった回数');
+    // **この1行は、N 件ぶんを1回の journal 呼び出しへ畳んだ**
+    // （それ以前は record ごとに1行、この3件なら3行あった。GitHub の
+    // issue #1240 とは無関係——同番号は別件「枠が閉じている間の再武装と
+    // 日誌の書き込みを抑える」（PR #1280）で既に使われている）。畳んだ
+    // あとも「回数は器が入れ替わった回数であって、この合図の処理が落ちた
+    // 回数ではない」という言明そのものは残っている。
+    expect(line).toContain('器が入れ替わった回数');
     expect(line).toContain('3 件');
-    expect(line).toContain('この合図の処理が落ちた回数ではない');
+    expect(line).toContain('処理が落ちた回数ではない');
 
     await reborn.clone.stop();
+  });
+
+  /**
+   * オーナーが逐語で名指しした行（`self → 未読のまま残っていた合図を
+   * 配り直した (330回目の配達)`）の直接の歯。`#restoreUnreadPass`
+   * （`clone.ts`）が live と判定した record を1本の journal entry へ
+   * 畳んだことを、record を1件ずつ処理する過程からは見えない形
+   * （journal の行数そのもの）で測る。
+   *
+   * ⚠️ この直しに GitHub の issue 番号は付いていない——「配り直しの
+   * 畳み方」というテーマで #1240 という番号を連想しやすいが、その番号は
+   * 別件（PR #1280）で既に使われている。
+   */
+  describe('N件の live な未読を一括で拾い直すときの「配り直した」の畳み方', () => {
+    it("with: 'self' の「配り直した」行は1本だけである（N本でもN+1本でもない）", async () => {
+      const stores = createMemoryStores();
+      const ids = ['evt-fold-a', 'evt-fold-b', 'evt-fold-c'];
+      for (const [i, id] of ids.entries()) {
+        const at = `2026-08-09T00:00:0${i}.000Z`;
+        await stores.inbox.put(report(`畳みテスト ${i}`, id), at);
+      }
+
+      // **`hang` の clone は `.stop()` を呼ばない**（他の歯と同じ約束。
+      // `bootClone(stores, 'hang')` の直後に `.stop()` すると、止まった
+      // ままの1件目のターンを待ち続けて `clone.stop()` 自体が返らない）。
+      const { inputs } = bootClone(stores, 'hang');
+      await waitFor(() => inputs.length > 0, '先頭が処理に入る');
+
+      const exchanges = await stores.journal.list({ types: ['exchange'] });
+      const matches = exchanges.filter(
+        (entry) =>
+          entry.type === 'exchange' &&
+          entry.with === 'self' &&
+          entry.text.includes('未読のまま残っていた合図を配り直した'),
+      );
+      // **N=3 だが行は1本。** 直しの前なら3本、境界を1つ間違えれば4本
+      // （3本＋総括の1本）になりうる——ここは正確に1本であることを見る。
+      expect(matches.length).toBe(1);
+    });
+
+    it('その1本から、N件それぞれの配達回数・受け取り時刻・合図の形が読める', async () => {
+      const stores = createMemoryStores();
+      const records = [
+        { id: 'evt-detail-a', at: '2026-08-09T01:00:00.000Z' },
+        { id: 'evt-detail-b', at: '2026-08-09T01:00:01.000Z' },
+        { id: 'evt-detail-c', at: '2026-08-09T01:00:02.000Z' },
+      ];
+      for (const r of records) {
+        await stores.inbox.put(report(`詳細テスト ${r.id}`, r.id), r.at);
+      }
+
+      const { inputs } = bootClone(stores, 'hang');
+      await waitFor(() => inputs.length > 0, '先頭が処理に入る');
+
+      const exchanges = await stores.journal.list({ types: ['exchange'] });
+      const folded = exchanges.find(
+        (entry) =>
+          entry.type === 'exchange' &&
+          entry.with === 'self' &&
+          entry.text.includes('未読のまま残っていた合図を配り直した'),
+      );
+      const text = folded && folded.type === 'exchange' ? folded.text : '';
+
+      // **件数だけに潰していない。** 3件それぞれの受け取り時刻がそのまま
+      // 読める——`record.at` を1つでも欠かしたら、この assertion のどれかが
+      // 落ちる。
+      for (const r of records) {
+        expect(text).toContain(r.at);
+      }
+      // **配達回数（`inboxEventShape` とは別枠で record ごとに持つ値）も
+      // 残っている。** 3件とも初回の拾い直しなので、いずれも1回目。
+      expect(text.match(/1回目の配達/g)?.length).toBe(3);
+      // **合図の形（`inboxEventShape`）も record ごとに列挙されている。**
+      // `manager_message managerId=... kind=...` の形が3回出る＝1件へ集約
+      // されていない。
+      expect(text.match(/manager_message managerId=/g)?.length).toBe(3);
+    });
+
+    it('この1本は、record 自身の本文（#record が書く exchange with:human）より前に書かれる', async () => {
+      const stores = createMemoryStores();
+
+      // **`clone.post()` を経由しない。** `post()` は受理した瞬間に
+      // `#record` を呼ぶので、生きているクローンへ post すると、この直しが
+      // 測りたい「`#restoreUnreadPass` が呼ぶ `#record`」より前に、別の
+      // （生きていたときの）本文がもう1本 journal に載ってしまう——これだと
+      // どちらの `#record` 呼び出しの前後関係を見ているのか区別できない。
+      // ここは stale 側の歯（`stale-redelivery-batch.test.ts`）と同じく、
+      // ストアへ直接 `put` して「器の入れ替えを跨いで拾い直された」状態を
+      // 直接作る。
+      await stores.inbox.put(humanMessage('order-probe-1'), '2026-08-09T02:00:00.000Z');
+      await stores.inbox.put(humanMessage('order-probe-2'), '2026-08-09T02:00:01.000Z');
+
+      // **`hang` の clone は `.stop()` を呼ばない**（直上の歯と同じ理由）。
+      const { inputs } = bootClone(stores, 'hang');
+      // **2件目の本文が日誌に現れるまで待つ。** `#record` は `#recordChain`
+      // を介して非同期に書くので、`inputs.length > 0`（1件目がターンへ渡った）
+      // だけでは2件目の本文がまだ書かれていないことがある——両方の本文が
+      // 出揃うまで待ってから、全順序を見る。
+      await waitFor(() => inputs.length > 0, '先頭が処理に入る');
+      await waitForJournal(stores, 'order-probe-2');
+
+      const exchanges = await stores.journal.list({ types: ['exchange'], order: 'asc' });
+      const headlineIndex = exchanges.findIndex(
+        (entry) =>
+          entry.type === 'exchange' &&
+          entry.with === 'self' &&
+          entry.text.includes('未読のまま残っていた合図を配り直した'),
+      );
+      const bodyIndexes = exchanges
+        .map((entry, index) => ({ entry, index }))
+        .filter(
+          ({ entry }) =>
+            entry.type === 'exchange' && entry.with === 'human' && entry.role === 'inbound',
+        )
+        .map(({ index }) => index);
+
+      expect(headlineIndex).toBeGreaterThanOrEqual(0);
+      // 拾い直した2件（order-probe-1 / order-probe-2）ぶんの本文。
+      expect(bodyIndexes.length).toBeGreaterThanOrEqual(2);
+      for (const bodyIndex of bodyIndexes) {
+        expect(headlineIndex).toBeLessThan(bodyIndex);
+      }
+    });
   });
 
   it('例外で終わった合図も消える（記録は残っているので、永久に配り直さない）', async () => {
@@ -1267,19 +1396,28 @@ describe('redeliveryGate（Issue #783 続き）: 配り直すその瞬間の usa
     await base.inbox.put(first, first.at);
     await base.inbox.put(second, second.at);
 
-    // **2件目の「配り直した」日誌の書き込みだけを遅らせる。** その間に1件目の
+    // **2件目の台帳確認（`commitments.get`）だけを遅らせる。** その間に1件目の
     // ターンが枠に落ちて `usageBlocked` を真にする時間を作る。`#restoreUnread`
-    // は1件ごとに「日誌書き込み→台帳確認→gate 評価」の順に進むので、ここを
-    // 遅らせれば2件目の gate 評価がそのぶん後ろへずれる。
+    // は1件ごとに「台帳確認→gate 評価」の順に進むので、ここを遅らせれば2件目の
+    // gate 評価がそのぶん後ろへずれる。
+    //
+    // ⚠️ この直しより前は「配り直した」の日誌書き込み（record ごとに
+    // 1回）を遅延の足場にしていたが、この直しで live な record 全件ぶんの
+    // 「配り直した」を `#restoreUnreadPass` のループへ入る**前**に1回で書く
+    // 形へ直したため、その足場は使えなくなった（1件目・2件目の区別が付く
+    // 個別の journal 書き込みが、この2件のあいだにもう無い）。**測りたい
+    // 性質（gate はその瞬間の `usageBlocked` を見る。ループの外で1回だけ
+    // 評価しない）は変わっていない**ので、遅延の足場だけを、いまも record
+    // ごとに1回ずつ通る別の非同期処理（`commitments.get`）へ差し替えた。
     const stores: Stores = {
       ...base,
-      journal: {
-        ...base.journal,
-        async append(entry) {
-          if (entry.type === 'exchange' && entry.text.includes(second.at)) {
+      commitments: {
+        ...base.commitments,
+        async get(id) {
+          if (id === second.id) {
             await new Promise((resolve) => setTimeout(resolve, 300));
           }
-          return base.journal.append(entry);
+          return base.commitments.get(id);
         },
       },
     };
