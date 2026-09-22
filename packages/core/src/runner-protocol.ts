@@ -2326,7 +2326,29 @@ export interface RunnerRegistry {
    * 呼べる形にしてあり、往復（RPC）は起きない。
    */
   noteManagerFailed(runnerId: string): void;
-  /** 登録されている全部。繋がっていないものも並ぶ（`GET /runners` の材料）。 */
+  /**
+   * 登録されている全部。繋がっていないものも並ぶ（`GET /runners` の材料）。
+   *
+   * ## 並びは登録順。`label` は一意（#662 の継続点が依拠する契約）
+   *
+   * 名簿の実体は **`label` を鍵にした `Map`** である（当たる:
+   * `grep -Fn -- 'readonly #entries = new Map<string, RegistryEntry>();' packages/core/src/runner-protocol.ts`）。
+   * ⟹ (1) `label` は名簿の中で一意、(2) この配列は `Map` の反復順＝**登録順**
+   * で、同じ名簿に対する呼びをまたいで安定する（`set` で既存の鍵を上書きしても
+   * 位置は動かない）。
+   *
+   * ⚠️ **この2つを契約として書いたのは #662 である**——実装は宣言の前から
+   * 満たしていたが、interface には1行も無く、**偶然揃っているだけの状態
+   * だった**（`PersonaStore.list()` の `slug` 昇順を #662 が書き足したのと
+   * 同じ形。逐語で当たる:
+   * `grep -Fn -- '**slug の昇順。**（#662 の継続点が依拠する契約）' packages/core/src/store.ts`）。
+   * `runner_list` の継続点（`runner-cursor.ts`）はこの2つに乗っているので、
+   * **並びを `label` 順などへ変えるなら、あちらの錨も一緒に見直すこと。**
+   *
+   * ⛔ **「錨が消えない」ことまでは約束しない。** `unregister` は
+   * `#entries.delete(label)` するので、器は名簿から消えうる——継続点はその
+   * 場合を `restarted`（先頭から出し直す）として自分で扱う。
+   */
   entries(): RunnerEntry[];
   /**
    * runner が開けたときに呼ばれる。**後から現れた runner に繋ぐための口**である。

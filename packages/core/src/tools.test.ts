@@ -19,6 +19,7 @@ import type {
   RunnerFleetOverview,
 } from './manager.js';
 import { commitmentFor } from './clone.js';
+import { encodeRunnerCursor } from './runner-cursor.js';
 import { runnerLivenessSchema } from './runner-protocol.js';
 import { CLONE_ACTOR_ID } from './usage.js';
 import { STALE_TOKEN_RECOVERY_CAVEAT } from './usage-limits.js';
@@ -18602,5 +18603,146 @@ describe('予算で落ちた分へ到達できる（#662）', () => {
     // 状態を持つ」。倒すと、呼び手は「続きを読んだつもり」で同じ行を読む）。
     expect(reply).not.toContain('doc-000');
     expect(reply).toContain('cursor');
+  });
+
+  /**
+   * `runner_list` の足場。**予算（`RUNNER_LIST_BUDGET` = 8,000 字）を実際に
+   * 超えさせる。**
+   *
+   * ⚠️ **件数は「溢れる」ことを確かめてから決めること。** 溢れていない足場で
+   * 測ると、「cursor が無い」ではなく「そもそも切れていない」で赤くなる——
+   * それは狙った赤ではない。1台ぶんのブロックは最小構成でも 150 字前後なので、
+   * 120 台で十分に超える。
+   */
+  function floodRunners(count: number): RunnerFleetOverview {
+    return {
+      runners: Array.from({ length: count }, (_, i) => ({
+        label: `runner-${String(i).padStart(3, '0')}`,
+        revision: { status: 'unheard' as const },
+        state: 'connected' as const,
+        since: '2026-01-01T00:00:00.000Z',
+        runnerId: `runner-${String(i).padStart(3, '0')}`,
+        managers: [],
+      })),
+      unassigned: [],
+      daemonRevision: { status: 'unknown' as const },
+    };
+  }
+
+  it('runner_list: 落ちた分があるなら、断り書きが cursor を案内する', async () => {
+    const h = harness();
+    h.setRunnersOverview(floodRunners(120));
+
+    const reply = await h.call('runner_list', {});
+
+    // 前提: 実際に落ちている（落ちていなければこの歯は何も測っていない）。
+    expect(reply).toContain('台は省略');
+    // 本題: 落ちた分への到達手段が同じ断り書きに在る。
+    expect(reply).toMatch(/runner_list cursor=\S+/);
+  });
+
+  it('runner_list: 案内された cursor を渡すと、続きが読める（同じ行を繰り返さない）', async () => {
+    const h = harness();
+    h.setRunnersOverview(floodRunners(120));
+
+    const first = await h.call('runner_list', {});
+    const cursor = /runner_list cursor=(\S+?)[)\s]/.exec(first)?.[1];
+    expect(cursor).toBeDefined();
+
+    const second = await h.call('runner_list', { cursor });
+
+    expect(first).toContain('runner-000');
+    expect(second).not.toContain('runner-000');
+  });
+
+  it('runner_list: 壊れた cursor は黙って先頭へ倒さず、そうと言う', async () => {
+    const h = harness();
+    h.setRunnersOverview(floodRunners(3));
+
+    const reply = await h.call('runner_list', { cursor: 'not-a-real-cursor' });
+
+    // **黙って先頭からへ倒さない**（倒すと、呼び手は「続きを読んだつもり」で
+    // 同じ器を読む）。
+    expect(reply).not.toContain('runner-000');
+    expect(reply).toContain('cursor');
+  });
+
+  it('runner_list: 辿り切ったら「最後の頁」と言う（0台の言い方を奪わない）', async () => {
+    const h = harness();
+    h.setRunnersOverview(floodRunners(3));
+
+    // 最後の器を錨にすれば、その後ろは空である。
+    const cursor = encodeRunnerCursor({ label: 'runner-002' });
+    const reply = await h.call('runner_list', { cursor });
+
+    expect(reply).toContain('最後の頁');
+    // ⛔ 登録が0台のときの文言（「0台である」）へ倒れていないこと——
+    // 名簿には3台居る。
+    expect(reply).not.toContain('0台');
+  });
+
+  /**
+   * 🔴 **錨の器が名簿から消えたときに、黙って重複させない・黙って欠落させない。**
+   *
+   * `runner_list` の並びは `Map` の挿入順（登録順）で、`token_list` の `order`
+   * に当たる**比較可能な鍵が無い**（`runner-cursor.ts` の doc）。⟹ 錨が消えたら
+   * 位置を割り出せないので、**1台も落とさないと言い切れる出し方は「先頭から
+   * 出し直す」しか無い。** その代わり、出し直したことを応答に書く。
+   *
+   * 器が名簿から外れることは実際に起きる（当たる:
+   * `grep -Fn -- 'this.#entries.delete(label);' packages/core/src/runner-protocol.ts`）。
+   */
+  it('runner_list: 錨の器が名簿から消えていたら、出し直したとそう言う（黙って重複させない）', async () => {
+    const h = harness();
+    h.setRunnersOverview(floodRunners(3));
+
+    const cursor = encodeRunnerCursor({ label: 'runner-999-いなくなった' });
+    const reply = await h.call('runner_list', { cursor });
+
+    // 出し直したと明示している（⛔ 黙って先頭から出さない）。
+    expect(reply).toContain('先頭から出し直した');
+    // そして**1台も落としていない**（⛔ 黙って欠落させない）。
+    expect(reply).toContain('runner-000');
+    expect(reply).toContain('runner-001');
+    expect(reply).toContain('runner-002');
+  });
+
+  /**
+   * **錨が消えて出し直しても輪にならない。** 出し直した頁の末尾は実在する器
+   * なので、次の cursor は必ず当たる（`runner-cursor.ts` の「輪にはならない」）。
+   */
+  it('runner_list: 出し直した頁から取った cursor は、次はちゃんと進む', async () => {
+    const h = harness();
+    h.setRunnersOverview(floodRunners(120));
+
+    const restarted = await h.call('runner_list', {
+      cursor: encodeRunnerCursor({ label: 'いなくなった器' }),
+    });
+    expect(restarted).toContain('先頭から出し直した');
+
+    const cursor = /runner_list cursor=(\S+?)[)\s]/.exec(restarted)?.[1];
+    expect(cursor).toBeDefined();
+    const second = await h.call('runner_list', { cursor });
+
+    // 進んでいる（先頭が繰り返されない。＝輪になっていない）。
+    expect(second).not.toContain('先頭から出し直した');
+    expect(second).not.toContain('runner-000');
+  });
+
+  /**
+   * **母数（「登録は N 台あり」）は頁が進んでも動かない**（`token_list` の
+   * 「母数は cursor を当てる前の全件」と同じ扱い）。動くと、クローンは頁ごとに
+   * 違う規模の名簿を見ていることになる。
+   */
+  it('runner_list: 「登録は N 台あり」は頁が進んでも動かない', async () => {
+    const h = harness();
+    h.setRunnersOverview(floodRunners(200));
+
+    const first = await h.call('runner_list', {});
+    const cursor = /runner_list cursor=(\S+?)[)\s]/.exec(first)?.[1];
+    const second = await h.call('runner_list', { cursor });
+
+    expect(first).toContain('登録は 200 台あり');
+    expect(second).toContain('登録は 200 台あり');
   });
 });

@@ -651,6 +651,85 @@ describe('buildDistillPrompt — 定期の棚卸しと、引き直した2つの�
 });
 
 /**
+ * ⭐ 段2: 横断の蒸留（`DistillPromptOptions.appraisalTargets`）。
+ *
+ * **`tidyTargets` の歯（上のブロック）と完全に同じ手法で測る。** 節の見出し・
+ * 案内文を語として1文字もテストに書かない——上の歯の doc が言うとおり、名前は
+ * 片方向にしか効かない罠だからである。ここでも共通の接頭辞・接尾辞から
+ * 挿入ブロックを機械的に取り出す。
+ */
+describe('buildDistillPrompt — 段2: 横断の蒸留（appraisalTargets）', () => {
+  it('⭐ 評定の束は payload ごと連続した1ブロックとして挿入され、渡さない呼び手の出力は1文字も変わらない', () => {
+    const MARKER = 'APPRAISAL-TARGET-PAYLOAD-MARKER';
+
+    // 渡さない呼び手（会話終了・PreCompact・scheduled 無指定）の出力は1文字も変わらない。
+    expect(buildDistillPrompt('conversation_end', {})).toBe(buildDistillPrompt('conversation_end'));
+    expect(buildDistillPrompt('pre_compact', {})).toBe(buildDistillPrompt('pre_compact'));
+
+    const withoutTargets = buildDistillPrompt('scheduled');
+    expect(buildDistillPrompt('scheduled', {})).toBe(withoutTargets);
+
+    const withTargets = buildDistillPrompt('scheduled', { appraisalTargets: MARKER });
+    let prefix = 0;
+    while (prefix < withoutTargets.length && withoutTargets[prefix] === withTargets[prefix]) {
+      prefix++;
+    }
+    let suffix = 0;
+    while (
+      suffix < withoutTargets.length - prefix &&
+      withoutTargets[withoutTargets.length - 1 - suffix] ===
+        withTargets[withTargets.length - 1 - suffix]
+    ) {
+      suffix++;
+    }
+    const chunk = withTargets.slice(prefix, withTargets.length - suffix);
+
+    // 挿入は連続した1ブロックである＝それ以外は1文字も変わらない。
+    expect(withTargets.replace(chunk, '')).toBe(withoutTargets);
+    // payload がそのまま載る。
+    expect(chunk).toContain(MARKER);
+    // 枠（見出し・案内文）ごと入っている——payload だけの挿入なら、節の描画を
+    // 丸ごと消す変異でもこの歯は赤くならない。
+    expect(chunk.length).toBeGreaterThan(MARKER.length);
+  });
+
+  it('tidyTargets と appraisalTargets を両方渡すと、両方の payload が連結して出て、片方だけの挿入と矛盾しない', () => {
+    const TIDY_MARKER = 'TIDY-BOTH-MARKER';
+    const APPRAISAL_MARKER = 'APPRAISAL-BOTH-MARKER';
+    const baseline = buildDistillPrompt('scheduled');
+
+    // 片方だけを渡したときに挿入される連続ブロックを、共通の接頭辞・接尾辞
+    // から機械的に取り出す（上の歯と同じ手法。節の名前はここにも書かない）。
+    function extractChunk(withTarget: string): string {
+      let prefix = 0;
+      while (prefix < baseline.length && baseline[prefix] === withTarget[prefix]) prefix++;
+      let suffix = 0;
+      while (
+        suffix < baseline.length - prefix &&
+        baseline[baseline.length - 1 - suffix] === withTarget[withTarget.length - 1 - suffix]
+      ) {
+        suffix++;
+      }
+      return withTarget.slice(prefix, withTarget.length - suffix);
+    }
+
+    const tidyChunk = extractChunk(buildDistillPrompt('scheduled', { tidyTargets: TIDY_MARKER }));
+    const appraisalChunk = extractChunk(
+      buildDistillPrompt('scheduled', { appraisalTargets: APPRAISAL_MARKER }),
+    );
+    const both = buildDistillPrompt('scheduled', {
+      tidyTargets: TIDY_MARKER,
+      appraisalTargets: APPRAISAL_MARKER,
+    });
+
+    // 両方渡したときの挿入は、片方だけのときの2つのブロックをそのまま連結した
+    // 形になる——一方が他方を上書き・混入させていない。それ以外は baseline と
+    // 1文字も変わらない。
+    expect(both.replace(tidyChunk + appraisalChunk, '')).toBe(baseline);
+  });
+});
+
+/**
  * auto-memory は既定で塞いである（`claude-provider.ts` の
  * `buildManagerSessionOptions` が `settings.autoMemoryEnabled: false` を渡す、
  * `runner.ts` の `resolveManagerAutoMemoryEnabled`）。**それでも本文の告知は削らない**

@@ -104,6 +104,22 @@ export const BUDGET_HISTORY = [
       'この文書自身の大きさにラチェットを置く1本目の歯として導入した。',
     ref: 'https://github.com/takecchi/alteroid/issues/1192',
   },
+  {
+    date: '2026-09-22',
+    bytes: 151055,
+    lines: 609,
+    why:
+      'PR #1271: `AGENTS.md`「自分が走っている器」節の ready の手順（逐語は' +
+      "`grep -Fn -- 'タイミングは「CI が green であることを確認し、報告を出す直前」' AGENTS.md`）は、" +
+      '`ci.yml` が draft の `pull_request` では `ci` / `image` / `base-overlap` を回さないことと' +
+      '食い違っており、文字どおりには実行できなかった。実行できる順序（ready の前に自分で通すのは' +
+      '手元の検証一式であって CI の緑ではない。CI の緑を確かめるのは `gh pr ready` の後、本物の run に' +
+      '対してである）を1本足した。機構の説明（`skipped` のまま `completed` を返す形・' +
+      '`mergeStateStatus: CLEAN` まで出る形・required の `skipped` が満たしたものとして扱われる形）は' +
+      '既に `.claude/skills/pr-green/SKILL.md` が持っていたので、そちらは足さず参照1つに寄せて' +
+      '増分を最小にした。',
+    ref: 'https://github.com/takecchi/alteroid/pull/1271',
+  },
 ];
 
 /** 現在の予算（バイト）。`BUDGET_HISTORY` の最新の件から導出する。 */
