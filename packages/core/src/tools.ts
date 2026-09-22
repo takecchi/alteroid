@@ -64,6 +64,7 @@ import {
   describePage,
   excerpt,
   excerptLine,
+  fillListingBudget,
   page,
   renderListing,
   renderListingEntry,
@@ -165,6 +166,7 @@ import type { CloneRuntimeFacts } from './self.js';
 import { EXCHANGE_WITH_VALUES, UnreadableCommitmentError } from './store.js';
 import type { ArchiveEntry, JournalStore, PendingInboxEvent, Stores } from './store.js';
 import {
+  STALE_TOKEN_RESTART_ADVICE,
   limitRecoveryOf,
   limitRecoveryOfAssistantError,
   withRecoveryNote,
@@ -1712,6 +1714,15 @@ const PROFILE_PAGE = 8_000;
  * `recentDroppedTraces()` の帳面自体に上限（`RECENT_TRACE_LIMIT`、
  * `dropped-record.ts`）があるので、ここは「一度に読み戻すときの続きの
  * 取り方」を守る側の予算である。
+ *
+ * **⚠️ #662。以前は `limit`（`all.slice(-limit)`。外側の切り方）と、この
+ * 予算（`renderListingFromEnd` が末尾から詰める。内側の切り方）が別々に
+ * 効いていた。`limit` を上げても、予算が常に同じ末尾から詰め直すので
+ * 実際に載る内容（境界）は1ミリも動かなかった——「口が無い」ではなく
+ * 「在る口が別の切り口にしか効かない」形（issue #662 の逐語）。**
+ * **いまは `offset`（直近から何件スキップしてから見るか）が唯一の継続点で、
+ * `limit` と予算のどちらが原因で切れても、次に渡す `offset` は同じ計算式
+ * （`skip + shown`）で組む——切った理由を呼び手に区別させない。**
  */
 const SELF_DROPPED_BUDGET = 8_000;
 /** `self_dropped` が `limit` を省略したときに返す件数（直近から）。 */
@@ -2626,8 +2637,7 @@ function describeTokenGenerationUnknownReason(reason: TokenGenerationUnknownReas
         '触れていないので、抱えている世代を確かめる材料が無い——一致でも不一致でもない、' +
         '正直な「分からない」である）。この委譲へ daemon が次に明示的に触れば' +
         '（送信・回転のどちらでも）自動で埋まるが、429 が続くなど気になるようなら' +
-        'manager_stop → manager_start で起こし直すこと（新しいプロセスなので新しい鍵で' +
-        '走る。ただし会話は失われる）。'
+        `起こし直すこと。${STALE_TOKEN_RESTART_ADVICE}`
       );
     default:
       return assertNeverTokenGenerationUnknownReason(reason);
@@ -2690,8 +2700,7 @@ function describeTokenGeneration(manager: ManagerSummary): string | null {
     'ターンの境界（確認待ち・背景処理が無い状態）に一度も達しないまま古い鍵で走り続けている' +
     '可能性がある（認証トークンを回した直後は、次のターンの境界に達するまでの短い遅れとして' +
     '普通に起こる——それ自体は症状ではない）。この行が消えないまま 429 が続くようなら、' +
-    'manager_stop → manager_start で起こし直すこと（新しいプロセスなので新しい鍵で走る。' +
-    'ただし会話は失われる）。'
+    `起こし直すこと。${STALE_TOKEN_RESTART_ADVICE}`
   );
 }
 
@@ -2734,18 +2743,13 @@ function describeResetTimeSkew(manager: ManagerSummary): string | null {
       '現役ではない鍵の冷却期限と一致した）。このセッションは古い鍵を掴んだまま' +
       '走っている可能性がある——鍵が通る状態へ戻っても、このセッション自身は' +
       'ターンの境界に達するまで戻らない。' +
-      // **前提を1行足す（既存の文は1文字も変えていない）。** #914 の
-      // 2026-09-15T21:01:54Z のコメントが、すぐ下の助言を「失われるものを過小に
-      // 言っている」と名指ししている——実際にこの助言どおり走行中の委譲3本が
-      // 止められ、うち1本は未 push の実装を抱えていた。⟹ **助言そのものは
-      // 書き換えない**（同じ文言が `describeTokenGeneration`（提案1）と
-      // `manager_stop` の断りにも在り、揃える判断は3箇所まとめてすべきである。
-      // Issue #1175 に3箇所を並べた）。**ここで決めてよいのは「先に確かめろ」だけである。**
-      '⚠ 止める前に、その委譲がターンの途中かどうかを manager_stop の断り' +
-      '（#1063 で未 push・未コミットの実物が出る）で確かめること。' +
+      // **#1175 で助言そのものを1箇所へ畳んだ。** PR #1172 がここへ足した前提
+      // （「止める前に確かめろ」）は、当時「助言は書き換えない／揃える判断は
+      // まとめてすべき」という理由でこの1箇所だけに置かれていた。⟹ その判断が
+      // #1175 で着いたので、前提も助言も {@link STALE_TOKEN_RESTART_ADVICE} が
+      // 生成元になった（**ここで前提を二重に書かない**——同じ文が2つになる）。
       'この行が消えないまま 429 が続くようなら、' +
-      'manager_stop → manager_start で起こし直すこと（新しいプロセスなので新しい鍵で' +
-      '走る。ただし会話は失われる）。'
+      `起こし直すこと。${STALE_TOKEN_RESTART_ADVICE}`
     );
   }
   if (manager.resetTimeSkewMatch === 'active') {
@@ -7325,6 +7329,14 @@ export function createCloneTools(context: ToolContext) {
      * `describeDroppedTraceRetention`）を通す。** `GET /dropped` と生成元を
      * 1つに揃えるためで、`describeSessionMissingKind` と同じ判断
      * （生成元を1箇所に閉じる）。
+     *
+     * **`offset`（#662）。** 帳面（`recentDroppedTraces()`）はプロセス内の
+     * 配列で、器の store ではない——他の5本の一覧（`approvals_list` /
+     * `schedule_list` / `manager_list` / `memory_list` / `token_list` /
+     * `runner_list`）のような不透明な `cursor` 文字列と専用モジュールは
+     * 要らない。**直近から何件スキップしてから見るか**という素直な整数で
+     * 足りる（`excerpt.ts` の `page()` と同じ「整数の続き」の発想を、文字列の
+     * 文字位置ではなく配列の件数に当てはめたもの）。
      */
     tool(
       'self_dropped',
@@ -7337,6 +7349,7 @@ export function createCloneTools(context: ToolContext) {
         'このプロセスが生きているあいだの直近の分だけを持つ（帳面の保持件数は',
         `${RECENT_TRACE_LIMIT} 件。それより古い分はこのプロセスの中には無く、器の外の`,
         'stderr を見るしかない）。再起動・デプロイの入れ替えでも消える。',
+        '予算で切れた古い側は offset で読み進められる（limit を上げても境界は動かない）。',
       ].join(' '),
       {
         limit: z
@@ -7346,31 +7359,64 @@ export function createCloneTools(context: ToolContext) {
           .max(RECENT_TRACE_LIMIT)
           .optional()
           .describe(
-            `直近から何件返すか（既定 ${SELF_DROPPED_DEFAULT_LIMIT}、最大 ${RECENT_TRACE_LIMIT}` +
-              '＝帳面が保持している件数そのもの）。',
+            `一度に対象にする件数（既定 ${SELF_DROPPED_DEFAULT_LIMIT}、最大 ${RECENT_TRACE_LIMIT}` +
+              '＝帳面が保持している件数そのもの）。⚠️ 予算（文字数）が先に尽きることが' +
+              'あり、そのときはこれを上げても実際に載る内容は動かない——古い側へ進むには' +
+              '`offset` を使うこと。',
+          ),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .max(RECENT_TRACE_LIMIT)
+          .optional()
+          .describe(
+            '直近から数えて何件をスキップしてから見るか（既定 0＝最新から）。' +
+              '#662。前回の応答の断り書きに出た offset をそのまま渡せば、' +
+              '予算や limit で切れて省略された古い側へ実際に進める。',
           ),
       },
-      async ({ limit = SELF_DROPPED_DEFAULT_LIMIT }) => {
+      async ({ limit = SELF_DROPPED_DEFAULT_LIMIT, offset = 0 }) => {
         const origin = describeDroppedTraceOrigin('daemon');
         const since = `この帳面が数え始めたのは ${droppedTraceLedgerSince()}。`;
         const all = recentDroppedTraces();
         if (all.length === 0) {
           return text([describeDroppedTraceEmpty(), origin, since].join(' '));
         }
-        const traces = all.slice(-limit);
+        // **offset は「直近から何件を除いてから見るか」。** 除いた残り
+        // （`windowed`）が、この呼びが到達できる全域である——`limit` と予算の
+        // どちらで切れても、次に渡す offset は同じ式（`skip + shown`）で
+        // 組めるようにするため、この1本の窓に両方の切り口を通す。
+        const skip = Math.min(offset, all.length);
+        const windowed = skip === 0 ? all : all.slice(0, all.length - skip);
+        if (windowed.length === 0) {
+          return text(
+            `offset（${String(offset)}）が帳面の件数（${String(all.length)}）以上なので、` +
+              `これより古い分は無い。offset を ${String(all.length - 1)} 以下にして呼び直すこと。 ` +
+              `${origin} ${since}`,
+          );
+        }
+        const traces = windowed.slice(-limit);
+        const fill = fillListingBudget(traces, SELF_DROPPED_BUDGET, true);
+        // **まだ古い側に残っている件数。** `limit` で除外された分（`windowed`
+        // のうち `traces` に入らなかった分）と、予算で除外された分
+        // （`fill.rest`）の両方を1つに数える——呼び手に「どちらが原因か」を
+        // 区別させない（#662 が指摘した非対称の直し）。
+        const remaining = windowed.length - fill.shown;
+        const nextOffset = skip + fill.shown;
+        const lines = [...fill.lines];
+        if (remaining > 0) {
+          lines.unshift(
+            `…ほか古い ${String(remaining)} 件は省略（帳面には全 ${String(all.length)} 件あり、` +
+              `直近から ${String(fill.shown)} 件だけ出した）。続きは ` +
+              `self_dropped offset=${String(nextOffset)} で取れる（limit を上げても動かない）。`,
+          );
+        }
         return text(
           [
-            renderListingFromEnd(traces, {
-              budget: SELF_DROPPED_BUDGET,
-              omitted: ({ rest, shown, total }) =>
-                `…ほか古い ${rest} 件は省略（この呼び出しで渡した ${total} 件のうち直近 ${shown} 件だけ出した）。`,
-            }),
+            lines.join('\n'),
             origin,
-            all.length > traces.length
-              ? `（帳面には全 ${all.length} 件のうち直近 ${traces.length} 件だけをここへ渡した。` +
-                `もっと古い分は limit を上げて呼ぶこと。${describeDroppedTraceRetention(RECENT_TRACE_LIMIT)} ` +
-                `${since}）`
-              : `（${describeDroppedTraceRetention(RECENT_TRACE_LIMIT)} ${since}）`,
+            `（${describeDroppedTraceRetention(RECENT_TRACE_LIMIT)} ${since}）`,
           ].join('\n'),
         );
       },
@@ -7919,8 +7965,8 @@ export function createCloneTools(context: ToolContext) {
         '認証トークンの世代の行（`describeTokenGeneration` の doc）が出ているマネージャーでは、' +
           'この委譲が最後に起こした／自動で開き直した時点の世代と、いまの現役の世代を比べられる。' +
           '⚠ が付いていれば世代が食い違っている——回した直後の短い遅れなら自然に消える。' +
-          '429 が続いたまま消えないなら、manager_stop → manager_start で起こし直すこと' +
-          '（会話は失われる）。世代が測れていないときも行は出る——' +
+          `429 が続いたまま消えないなら、起こし直すこと。${STALE_TOKEN_RESTART_ADVICE}` +
+          '世代が測れていないときも行は出る——' +
           '「分からない」の理由（プール未配線／未観測／デーモンの再起動をまたいだ引き取り）を' +
           '名乗る（Issue #988）。再起動をまたいだ場合だけ manager_stop → manager_start が効く。',
         // **Issue #914 オーナー提案(2)。** 世代番号の直接比較（提案1）は
@@ -9556,8 +9602,8 @@ export function createCloneTools(context: ToolContext) {
         // （`runnerManagerTokenTag` の doc）。
         'マネージャーの字面の直後に ⚠世代N≠現役M が付くことがある——この委譲が抱えている' +
           '認証トークンの世代（N）と、いまの現役の世代（M）が食い違っている（Issue #914）。' +
-          '回した直後の短い遅れなら自然に消える。429 が続いたまま消えないなら manager_stop → ' +
-          'manager_start で起こし直すこと（会話は失われる）。詳しい文面は manager_list に出る。' +
+          '回した直後の短い遅れなら自然に消える。429 が続いたまま消えないなら起こし直すこと。' +
+          `${STALE_TOKEN_RESTART_ADVICE}詳しい文面は manager_list に出る。` +
           '一致している・材料が無い（プールを使っていない構成）ときはこの印自体が出ない。',
         'デーモン自身の版と、各 runner が名乗った版（コミット sha）も出る。' +
           'デーモンと runner は別々にデプロイされるので、同じ main から起こしていても' +

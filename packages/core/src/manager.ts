@@ -200,8 +200,10 @@ export interface ManagerAwaitingBackground {
  *   runner に既に生きているセッションを見つけて引き取っただけで、この
  *   プロセスの `#tokenIdentities` にはまだこの委譲の記録が無い（2026-09-15
  *   Issue #978／#987。`tokenGeneration` の doc）。**唯一、対処のある理由**——
- *   `manager_stop` → `manager_start` で起こし直せば、次はこのプロセス自身が
- *   `start` を呼ぶので新しい鍵で記録し直される（会話は失われる）。
+ *   起こし直せば、次はこのプロセス自身が `start` を呼ぶので新しい鍵で記録し
+ *   直される。⚠ **何を失うか・何を先に確かめるかは、ここに書き写さない**——
+ *   字面の生成元は `usage-limits.ts` の `STALE_TOKEN_RESTART_ADVICE` 1箇所で
+ *   ある（Issue #1175。ここに書き写すと、7箇所目の割れがこの doc から始まる）。
  *
  * **`tokenGeneration` が定義されているときは欄ごと消える**（AGENTS.md「取れ
  * ない軸に0の行を作らない」と同じ理由——測れているのに理由を出す形は作らない）。

@@ -59,6 +59,7 @@ GATE_NAMES=(
   web-css-comment-classnames
   openapi
   sdk-quotes
+  stale-token-restart-advice
   typecheck
   lint
   'format:check'
@@ -71,6 +72,7 @@ GATE_COMMANDS=(
   'pnpm check:web-css-comment-classnames'
   'git diff --exit-code HEAD -- apps/daemon/openapi.json'
   'pnpm check:sdk-quotes'
+  'pnpm check:stale-token-restart-advice'
   'pnpm typecheck'
   'pnpm lint'
   'pnpm format:check'

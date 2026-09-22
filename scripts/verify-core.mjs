@@ -339,6 +339,15 @@ export const STEPS = [
       'いまの版に当たらなくなった。引用を書き換える前に、その引用を根拠にしている判断が' +
       'まだ成り立つかを確かめること（scripts/check-sdk-quotes-core.mjs の doc）',
   },
+  {
+    name: 'stale-token-restart-advice',
+    cmd: 'pnpm',
+    args: ['check:stale-token-restart-advice'],
+    hint:
+      '「世代ずれなら起こし直せ」の助言が、生成元の外に書かれている。字面の生成元は' +
+      'packages/core/src/usage-limits.ts の STALE_TOKEN_RESTART_ADVICE 1箇所である' +
+      '（scripts/check-stale-token-restart-advice-core.mjs の doc、#1175）',
+  },
   { name: 'typecheck', cmd: 'pnpm', args: ['typecheck'] },
   { name: 'lint', cmd: 'pnpm', args: ['lint'] },
   { name: 'format:check', cmd: 'pnpm', args: ['format:check'], hint: '`pnpm format` で直る' },
