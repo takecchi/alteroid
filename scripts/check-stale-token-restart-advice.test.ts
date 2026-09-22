@@ -1,10 +1,12 @@
+import { readFileSync } from 'node:fs';
+
 import { describe, expect, it } from 'vitest';
 
 // ⚠ **1行に畳んである。** `@ts-expect-error` は次の1行にしか効かないので、
 // 多行 import にすると `from` の行（実際に TS7016 が出る場所）へ届かない。
 // prettier-ignore
 // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
-import { BANNED_PHRASES, GENERATOR_PATH, findStaleTokenAdviceHits, isExempt } from './check-stale-token-restart-advice-core.mjs';
+import { BANNED_PHRASES, CHECKER_CORE_PATH, GENERATOR_PATH, findStaleTokenAdviceHits, isExempt } from './check-stale-token-restart-advice-core.mjs';
 
 type Hit = { path: string; id: string; text: string; why: string; line: number };
 type Phrase = { id: string; text: string; why: string };
@@ -85,6 +87,39 @@ describe('check-stale-token-restart-advice', () => {
    *
    * 判定の字面に `manager_stop → ` を含めてあるのは、まさにこれを外すためである。
    */
+  /**
+   * ⭐ **門が自分自身を指して落ちないこと。** このファイル（検査の core）は
+   * **探す字面の定義そのもの**を持つので、必ず両方の字面を含む。免除が無いと、
+   * 門は生えた瞬間から赤くなり続ける——**実際にそうなっていた**（PR #1286 の
+   * `ci` が、6件すべてこの core を挙げて落ちた）。
+   */
+  it('⭐ この検査自身の core は免除される（探す字面の定義を持つので、必ず両方を含む）', () => {
+    expect(isExempt(CHECKER_CORE_PATH)).toBe(true);
+
+    const hits = findStaleTokenAdviceHits([
+      {
+        path: CHECKER_CORE_PATH,
+        content: `text: '${advice?.text}', why: '${understatement?.text}'`,
+      },
+    ]) as Hit[];
+
+    expect(hits).toEqual([]);
+  });
+
+  /**
+   * ⚠ **免除が空振りしていないことを、実物で当て直す。** 上の歯は「その
+   * パスなら免除される」しか言わない——**core のファイル名が変われば
+   * `CHECKER_CORE_PATH` は実在しないパスを指したまま緑を返し、門はまた
+   * 自分自身で赤くなる。** ⟹ 定数が指す先が実在し、実際に両方の字面を
+   * 含むことまで見る。
+   */
+  it('⭐ CHECKER_CORE_PATH は実在し、実際に両方の字面を含む（免除が空振りしていない）', () => {
+    const content = readFileSync(new URL(`../${CHECKER_CORE_PATH}`, import.meta.url), 'utf8');
+
+    expect(content).toContain(advice?.text);
+    expect(content).toContain(understatement?.text);
+  });
+
   it('lost 向けの別の助言は捕まえない（偽陽性で門を腐らせない）', () => {
     const hits = findStaleTokenAdviceHits([
       {

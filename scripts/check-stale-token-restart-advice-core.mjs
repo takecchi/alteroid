@@ -32,6 +32,12 @@
  * - **`*.test.ts`**。順序の歯（`tools.test.ts`）は助言の字面を引いて「前提が
  *   助言より前に在る」ことを測っている。⟹ **テストは生成元の出力を当てる側**で
  *   あって、クローンへ配られる文章を作る側ではない
+ * - **この検査自身の core**（{@link CHECKER_CORE_PATH}）。**探す字面を定義して
+ *   いるファイルなので、必ず両方の字面を含む。**免除しないと、門は生えた瞬間から
+ *   自分自身を指して赤くなり続ける（実際にそうなっていた——`ci` の
+ *   `check:stale-token-restart-advice` が6件すべてこのファイルを挙げて落ちた）。
+ *   ⚠ **`why` の文も判定に掛かる**ことに注意——判定は `text` の部分文字列一致
+ *   だけだが、`why` は説明のために同じ字面を引くので、同じファイルに二重に現れる
  *
  * ## この検査が言えないこと（範囲を広げて読まないこと）
  *
@@ -68,9 +74,15 @@ export const BANNED_PHRASES = [
   },
 ];
 
-/** そのパスが免除されるか（生成元自身か、テストか）。 */
+/**
+ * この検査自身の core。**探す字面の定義そのものを持つので、必ず両方を含む。**
+ * ⟹ {@link GENERATOR_PATH} と同じ理由で免除する（字面が在るのが正しい場所である）。
+ */
+export const CHECKER_CORE_PATH = 'scripts/check-stale-token-restart-advice-core.mjs';
+
+/** そのパスが免除されるか（生成元自身か、この検査自身の core か、テストか）。 */
 export function isExempt(path) {
-  return path === GENERATOR_PATH || path.endsWith('.test.ts');
+  return path === GENERATOR_PATH || path === CHECKER_CORE_PATH || path.endsWith('.test.ts');
 }
 
 /**
