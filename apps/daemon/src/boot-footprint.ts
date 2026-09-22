@@ -25,6 +25,16 @@ import type { StorageFootprint, TableSizeStats } from '@alteroid/storage-pg';
  * いくつだったか」を、標準出力（落ちる瞬間のログに残る）と日誌（落ちた後でも
  * クローンが読み返せる、起動1回につき1行）の両方に残す。
  *
+ * ## `storedBytes` ではなく `textBytes` で判定する（レビューで直した点）
+ *
+ * `storage-pg` の `footprint.ts` が持つ実測のとおり、`pg_column_size`
+ * （`storedBytes`）は**圧縮後**のバイト数を返す——alteroid が貯めている
+ * 日本語の定型文が多い本文では、実テキストの1/10〜1/80程度まで小さく出る
+ * ことがある。**閾値の比較（`tablesExceedingHeapShare`）は `textBytes`
+ * （`octet_length` 由来。`JSON.parse` が実際に読む量）の側で行う。**
+ * `storedBytes` を天井と比べても、いちばん危ない表をいちばん安全に見せる
+ * だけで意味が無い。
+ *
  * ## この検知が答えられないこと（⚠️ 読み違えないこと）
  *
  * - **どの表が実際に OOM を起こした JSON.parse を呼んだかは、この検知からは
@@ -36,6 +46,9 @@ import type { StorageFootprint, TableSizeStats } from '@alteroid/storage-pg';
  * - **これは何も直していない。** #1283 が挙げた口も、ここで新しく見つかった
  *   2つの口も、1つも塞いでいない——閾値の警告も含めて、すべて既存の挙動を
  *   変えずに「見えるようにする」だけである。
+ * - **`textBytes` の測定自体が `statement_timeout` で打ち切られることがある
+ *   （`footprint.ts` の doc）。** 打ち切られた表は「測れなかった」として
+ *   出る——「危険ではない」ではなく「分からない」である。取り違えないこと。
  */
 
 /** ヒープの実測（`node:v8` / `process.memoryUsage()`）。**実行時に取る。固定値は書かない。** */
@@ -60,10 +73,17 @@ export function measureHeapSnapshot(): HeapSnapshot {
 }
 
 /**
- * 表の合計バイトが `heap_size_limit` のこの割合を超えたら警告する。
+ * 表の合計**実テキストバイト**（`textBytes`）が `heap_size_limit` のこの
+ * 割合を超えたら警告する。
  *
  * 🔴 **暫定値。オーナーが決めること。** ここは門ではない——超えても起動は
  * 止めない。1本の警告行が増えるだけである（下の `describeBootFootprint`）。
+ *
+ * ⚠️ **`storedBytes`（`pg_column_size` 由来。圧縮後）ではなく `textBytes`
+ * （`octet_length` 由来。実テキスト）で比べる。** `storedBytes` は alteroid
+ * が貯めている圧縮の効きやすい本文では実サイズを大きく下回るため、天井との
+ * 比較材料にすると「いちばん危ない表をいちばん小さく報告する」ことになる
+ * （`storage-pg` の `footprint.ts` の doc、実測付き）。
  *
  * 算術（#1284 が 512 MiB を決めた形をそのまま踏襲——固定バイト数ではなく
  * `heap_size_limit` に対する割合にしてあるのは、天井が環境変数
@@ -72,7 +92,7 @@ export function measureHeapSnapshot(): HeapSnapshot {
  * （`jobs.listJobs()` の段2 / `commitments.list({ includeClosed: true })`）
  * → 読めば本文がそのまま JS のメモリへ載る → `JSON.parse` の展開倍率
  * （#1284 と同じ経験則で 2〜4倍。**プロファイラでは測っていない**）を掛けると、
- * 表の合計バイトの**10%**が heap_size_limit を超えている状態は、フルに
+ * 表の実テキストバイトの**10%**が heap_size_limit を超えている状態は、フルに
  * 読まれた瞬間に heap_size_limit の 20〜40% を1表だけで持っていくおそれが
  * ある、という大まかな安全域として選んだ。**⭐ 発火しないのが正常**
  * （#1284 の同じ思想）——発火したら、それは「危険域に入った」であって
@@ -80,32 +100,32 @@ export function measureHeapSnapshot(): HeapSnapshot {
  */
 export const HEAP_SHARE_WARNING_RATIO = 0.1;
 
-interface NamedTableBytes {
+interface NamedTextBytes {
   name: string;
-  bytes: number | null;
+  textBytes: number | null;
 }
 
-function namedBytesOf(footprint: StorageFootprint): NamedTableBytes[] {
+function namedTextBytesOf(footprint: StorageFootprint): NamedTextBytes[] {
   return [
-    { name: 'jobs', bytes: footprint.jobs.bytes },
-    { name: 'commitments.open', bytes: footprint.commitments.open.bytes },
-    { name: 'commitments.closed', bytes: footprint.commitments.closed.bytes },
-    { name: 'inbox_events', bytes: footprint.inboxEvents.bytes },
-    { name: 'journal.all', bytes: footprint.journal.all.bytes },
-    { name: 'archive', bytes: footprint.archive.bytes },
+    { name: 'jobs', textBytes: footprint.jobs.textBytes },
+    { name: 'commitments.open', textBytes: footprint.commitments.open.textBytes },
+    { name: 'commitments.closed', textBytes: footprint.commitments.closed.textBytes },
+    { name: 'inbox_events', textBytes: footprint.inboxEvents.textBytes },
+    { name: 'journal.all', textBytes: footprint.journal.all.textBytes },
+    { name: 'archive', textBytes: footprint.archive.textBytes },
   ];
 }
 
-/** `heap_size_limit` に対する割合で超過している表の名前とバイト数。 */
+/** `heap_size_limit` に対する割合で超過している表の名前と実テキストバイト。 */
 export function tablesExceedingHeapShare(
   footprint: StorageFootprint,
   heap: HeapSnapshot,
   ratio: number = HEAP_SHARE_WARNING_RATIO,
-): { name: string; bytes: number }[] {
+): { name: string; textBytes: number }[] {
   const threshold = heap.heapSizeLimitBytes * ratio;
-  const result: { name: string; bytes: number }[] = [];
-  for (const { name, bytes } of namedBytesOf(footprint)) {
-    if (bytes !== null && bytes > threshold) result.push({ name, bytes });
+  const result: { name: string; textBytes: number }[] = [];
+  for (const { name, textBytes } of namedTextBytesOf(footprint)) {
+    if (textBytes !== null && textBytes > threshold) result.push({ name, textBytes });
   }
   return result;
 }
@@ -123,8 +143,23 @@ function rowsOrNull(value: number | null): string {
   return value === null ? 'null' : String(value);
 }
 
+/** `stored=`（圧縮後）と `text=`（実テキスト）を並べて出す——どちらか片方に畳まない。 */
 function describeStat(label: string, stat: TableSizeStats): string {
-  return `${label}(rows=${rowsOrNull(stat.rows)} bytes=${statOrNull(stat.bytes)} maxBytes=${statOrNull(stat.maxBytes)})`;
+  return (
+    `${label}(rows=${rowsOrNull(stat.rows)} ` +
+    `stored=${statOrNull(stat.storedBytes)} text=${statOrNull(stat.textBytes)} ` +
+    `maxStored=${statOrNull(stat.maxStoredBytes)} maxText=${statOrNull(stat.maxTextBytes)})`
+  );
+}
+
+function describeJournalWindow(
+  label: string,
+  window: { rows: number | null; storedBytes: number | null; textBytes: number | null },
+): string {
+  return (
+    `${label}(rows=${rowsOrNull(window.rows)} ` +
+    `stored=${statOrNull(window.storedBytes)} text=${statOrNull(window.textBytes)})`
+  );
 }
 
 function describeHeap(heap: HeapSnapshot): string {
@@ -144,7 +179,8 @@ export interface BootFootprintReport {
  *
  * `footprint` が `null` なのは fs 構成（pg 専用の SQL なので測れない）。
  * `StorageFootprint` の中の個々の欄が `null` なのは、その表（区分）の測定
- * そのものが投げた場合——`storage-pg` の `measureStorageFootprint` の doc。
+ * そのものが投げた場合——`storage-pg` の `measureStorageFootprint` の doc
+ * （`statement_timeout` による打ち切りも同じ `null` に倒れる）。
  */
 export function describeBootFootprint(
   footprint: StorageFootprint | null,
@@ -164,19 +200,18 @@ export function describeBootFootprint(
     };
   }
 
+  const measurementPart = `measurement(${footprint.measurementMs}ms)`;
+
   const tableParts = [
     describeStat('jobs', footprint.jobs),
     describeStat('commitments.open', footprint.commitments.open),
     describeStat('commitments.closed', footprint.commitments.closed),
-    `inbox_events(rows=${rowsOrNull(footprint.inboxEvents.rows)} bytes=${statOrNull(
-      footprint.inboxEvents.bytes,
-    )} maxBytes=${statOrNull(footprint.inboxEvents.maxBytes)} maxDeliveries=${rowsOrNull(
-      footprint.inboxEvents.maxDeliveries,
-    )})`,
-    `journal.all(rows=${rowsOrNull(footprint.journal.all.rows)} bytes=${statOrNull(footprint.journal.all.bytes)})`,
-    `journal.recent3d(rows=${rowsOrNull(footprint.journal.recent3d.rows)} bytes=${statOrNull(
-      footprint.journal.recent3d.bytes,
-    )})`,
+    `inbox_events(rows=${rowsOrNull(footprint.inboxEvents.rows)} ` +
+      `stored=${statOrNull(footprint.inboxEvents.storedBytes)} text=${statOrNull(footprint.inboxEvents.textBytes)} ` +
+      `maxStored=${statOrNull(footprint.inboxEvents.maxStoredBytes)} maxText=${statOrNull(footprint.inboxEvents.maxTextBytes)} ` +
+      `maxDeliveries=${rowsOrNull(footprint.inboxEvents.maxDeliveries)})`,
+    describeJournalWindow('journal.all', footprint.journal.all),
+    describeJournalWindow('journal.recent3d', footprint.journal.recent3d),
     describeStat('archive', footprint.archive),
   ];
 
@@ -184,25 +219,26 @@ export function describeBootFootprint(
   const warningLine =
     exceeding.length === 0
       ? undefined
-      : `⚠ heap_size_limit の ${(ratio * 100).toFixed(0)}%（暫定値。オーナーが決めること）を超えた表: ` +
-        exceeding.map((t) => `${t.name}=${mb(t.bytes)}`).join(', ');
+      : `⚠ heap_size_limit の ${(ratio * 100).toFixed(0)}%（実テキストバイト基準。暫定値。オーナーが決めること）を超えた表: ` +
+        exceeding.map((t) => `${t.name}=${mb(t.textBytes)}`).join(', ');
 
-  const unmeasurable = namedBytesOf(footprint)
-    .filter((t) => t.bytes === null)
+  const unmeasurable = namedTextBytesOf(footprint)
+    .filter((t) => t.textBytes === null)
     .map((t) => t.name);
   const unmeasurableLine =
     unmeasurable.length === 0
       ? undefined
-      : `測れなかった表（クエリが投げた）: ${unmeasurable.join(', ')}`;
+      : `測れなかった表（クエリが投げた・statement_timeout による打ち切りを含む）: ${unmeasurable.join(', ')}`;
 
   return {
     line:
-      `起動時の器の実寸: ${heapPart}; ${tableParts.join('; ')}` +
+      `起動時の器の実寸: ${heapPart} ${measurementPart}; ${tableParts.join('; ')}` +
       (warningLine === undefined ? '' : `; ${warningLine}`) +
       (unmeasurableLine === undefined ? '' : `; ${unmeasurableLine}`),
     summary: [
       '起動時の器の実寸とヒープ（#1283 の続き。段2。検知のみ・何も直していない）',
       heapPart,
+      measurementPart,
       ...tableParts,
       ...(warningLine === undefined ? [] : [warningLine]),
       ...(unmeasurableLine === undefined ? [] : [unmeasurableLine]),

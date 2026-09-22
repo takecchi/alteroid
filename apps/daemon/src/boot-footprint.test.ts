@@ -1,5 +1,5 @@
 import { createMemoryStores, failingJournalAppend } from '@alteroid/core';
-import type { StorageFootprint } from '@alteroid/storage-pg';
+import type { StorageFootprint, TableSizeStats } from '@alteroid/storage-pg';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -11,17 +11,23 @@ import {
   type HeapSnapshot,
 } from './boot-footprint.js';
 
+/** 1表（区分）ぶんの「実測して0」。 */
+function emptyStats(): TableSizeStats {
+  return { rows: 0, storedBytes: 0, textBytes: 0, maxStoredBytes: 0, maxTextBytes: 0 };
+}
+
 /** 5表すべてが「実測して0」の、いちばん静かな状態。 */
 function emptyFootprint(): StorageFootprint {
   return {
-    jobs: { rows: 0, bytes: 0, maxBytes: 0 },
-    commitments: {
-      open: { rows: 0, bytes: 0, maxBytes: 0 },
-      closed: { rows: 0, bytes: 0, maxBytes: 0 },
+    jobs: emptyStats(),
+    commitments: { open: emptyStats(), closed: emptyStats() },
+    inboxEvents: { ...emptyStats(), maxDeliveries: 0 },
+    journal: {
+      all: { rows: 0, storedBytes: 0, textBytes: 0 },
+      recent3d: { rows: 0, storedBytes: 0, textBytes: 0 },
     },
-    inboxEvents: { rows: 0, bytes: 0, maxBytes: 0, maxDeliveries: 0 },
-    journal: { all: { rows: 0, bytes: 0 }, recent3d: { rows: 0, bytes: 0 } },
-    archive: { rows: 0, bytes: 0, maxBytes: 0 },
+    archive: emptyStats(),
+    measurementMs: 5,
   };
 }
 
@@ -43,25 +49,42 @@ describe('measureHeapSnapshot（本物の V8 から実測する）', () => {
   });
 });
 
-describe('tablesExceedingHeapShare（閾値は heap_size_limit に対する割合。固定バイト数ではない）', () => {
+describe('tablesExceedingHeapShare（textBytes で判定する。storedBytes では判定しない）', () => {
   it('⭐ 何も超えていないのが正常な状態——発火しない', () => {
     expect(tablesExceedingHeapShare(emptyFootprint(), heap)).toEqual([]);
   });
 
-  it('heap_size_limit の割合を超えた表だけを返す', () => {
+  it('heap_size_limit の割合を超えた表だけを返す（textBytes 基準）', () => {
     const footprint = emptyFootprint();
     // ratio 既定 0.1 → 閾値 100,000,000。archive だけ超える。
-    footprint.archive.bytes = 200_000_000;
-    footprint.jobs.bytes = 50_000_000;
+    footprint.archive.textBytes = 200_000_000;
+    footprint.jobs.textBytes = 50_000_000;
 
     const exceeding = tablesExceedingHeapShare(footprint, heap);
 
-    expect(exceeding).toEqual([{ name: 'archive', bytes: 200_000_000 }]);
+    expect(exceeding).toEqual([{ name: 'archive', textBytes: 200_000_000 }]);
+  });
+
+  /**
+   * ⭐ **これが今回の欠陥そのものの回帰試験である。** `storedBytes`
+   * （圧縮後。alteroid の実際の本文では実テキストの1/10〜1/80）だけを見て
+   * いたら、この表は「小さい」と判定されて警告が出ない。**判定は
+   * `textBytes` で行うので、`storedBytes` が小さくても `textBytes` が
+   * 大きければ正しく発火する。**
+   */
+  it('storedBytes が小さくても textBytes が大きければ発火する（圧縮で危険度を見逃さない）', () => {
+    const footprint = emptyFootprint();
+    footprint.archive.storedBytes = 5_000; // 圧縮後は小さい（実際の観測どおり）
+    footprint.archive.textBytes = 900_000_000; // 実テキストは heap の 90%
+
+    const exceeding = tablesExceedingHeapShare(footprint, heap);
+
+    expect(exceeding).toEqual([{ name: 'archive', textBytes: 900_000_000 }]);
   });
 
   it('同じ絶対バイト数でも、heap_size_limit が変われば超えるかどうかが変わる（固定バイト数の閾値ではない証拠）', () => {
     const footprint = emptyFootprint();
-    footprint.archive.bytes = 150_000_000;
+    footprint.archive.textBytes = 150_000_000;
 
     const smallHeap: HeapSnapshot = { ...heap, heapSizeLimitBytes: 1_000_000_000 }; // 閾値 100,000,000 → 超える
     const bigHeap: HeapSnapshot = { ...heap, heapSizeLimitBytes: 10_000_000_000 }; // 閾値 1,000,000,000 → 超えない
@@ -72,16 +95,18 @@ describe('tablesExceedingHeapShare（閾値は heap_size_limit に対する割�
 
   it('測れなかった（null）表は、どれだけ他が大きくても超過扱いにしない', () => {
     const footprint = emptyFootprint();
-    footprint.archive.bytes = null;
+    footprint.archive.textBytes = null;
+    footprint.archive.storedBytes = null;
     footprint.archive.rows = null;
-    footprint.archive.maxBytes = null;
+    footprint.archive.maxStoredBytes = null;
+    footprint.archive.maxTextBytes = null;
 
     expect(tablesExceedingHeapShare(footprint, heap)).toEqual([]);
   });
 
   it('割合は呼び出し側から指定できる（既定は HEAP_SHARE_WARNING_RATIO）', () => {
     const footprint = emptyFootprint();
-    footprint.jobs.bytes = 300_000_000; // heap の 30%
+    footprint.jobs.textBytes = 300_000_000; // heap の 30%
 
     expect(tablesExceedingHeapShare(footprint, heap, HEAP_SHARE_WARNING_RATIO)).toHaveLength(1);
     expect(tablesExceedingHeapShare(footprint, heap, 0.5)).toHaveLength(0);
@@ -100,19 +125,48 @@ describe('describeBootFootprint（fs 構成 — null は「測れなかった」
 });
 
 describe('describeBootFootprint（pg 構成）', () => {
-  it('null（実測して0）と null（測れなかった）を混同しない表示になる', () => {
+  it('null（実測して0）と null（測れなかった）を混同しない表示になる（stored/text 両方）', () => {
     const footprint = emptyFootprint();
-    footprint.archive.bytes = null;
+    footprint.archive.storedBytes = null;
+    footprint.archive.textBytes = null;
     footprint.archive.rows = null;
-    footprint.archive.maxBytes = null;
+    footprint.archive.maxStoredBytes = null;
+    footprint.archive.maxTextBytes = null;
 
     const report = describeBootFootprint(footprint, heap);
 
-    // 実測して0の表は数値として出る。
-    expect(report.summary).toMatch(/jobs\(rows=0 bytes=0\.0MB maxBytes=0\.0MB\)/);
+    // 実測して0の表は数値として出る（stored/text 両方）。
+    expect(report.summary).toMatch(
+      /jobs\(rows=0 stored=0\.0MB text=0\.0MB maxStored=0\.0MB maxText=0\.0MB\)/,
+    );
     // 測れなかった表は null と明記され、0MB のような数値にならない。
-    expect(report.summary).toMatch(/archive\(rows=null bytes=null maxBytes=null\)/);
-    expect(report.summary).toContain('測れなかった表（クエリが投げた）: archive');
+    expect(report.summary).toMatch(
+      /archive\(rows=null stored=null text=null maxStored=null maxText=null\)/,
+    );
+    expect(report.summary).toContain(
+      '測れなかった表（クエリが投げた・statement_timeout による打ち切りを含む）: archive',
+    );
+  });
+
+  it('storedBytes と textBytes の両方が別欄として出る（片方に畳まない）', () => {
+    const footprint = emptyFootprint();
+    footprint.jobs.storedBytes = 5_000;
+    footprint.jobs.textBytes = 456_000;
+
+    const report = describeBootFootprint(footprint, heap);
+
+    expect(report.summary).toContain(`stored=${(5_000 / 1024 / 1024).toFixed(1)}MB`);
+    expect(report.summary).toContain(`text=${(456_000 / 1024 / 1024).toFixed(1)}MB`);
+  });
+
+  it('測定に掛かった時間（measurementMs）を標準出力と日誌の両方に出す', () => {
+    const footprint = emptyFootprint();
+    footprint.measurementMs = 1234;
+
+    const report = describeBootFootprint(footprint, heap);
+
+    expect(report.line).toContain('1234ms');
+    expect(report.summary).toContain('1234ms');
   });
 
   it('⭐ 閾値を誰も超えていないのが正常——警告行は出ない', () => {
@@ -124,21 +178,24 @@ describe('describeBootFootprint（pg 構成）', () => {
 
   it('閾値を超えた表があるときだけ、警告の1行が足される（門ではない——起動は止めない）', () => {
     const footprint = emptyFootprint();
-    footprint.journal.all.bytes = 900_000_000; // heap の 90%
+    footprint.journal.all.textBytes = 900_000_000; // heap の 90%
 
     const report = describeBootFootprint(footprint, heap);
 
     expect(report.line).toContain('⚠');
     expect(report.line).toContain('journal.all');
     expect(report.summary).toContain('暫定値。オーナーが決めること');
+    expect(report.summary).toContain('実テキストバイト基準');
   });
 
   it('標準出力用の1行は改行を含まない', () => {
     const footprint = emptyFootprint();
-    footprint.journal.all.bytes = 900_000_000;
+    footprint.journal.all.textBytes = 900_000_000;
     footprint.archive.rows = null;
-    footprint.archive.bytes = null;
-    footprint.archive.maxBytes = null;
+    footprint.archive.storedBytes = null;
+    footprint.archive.textBytes = null;
+    footprint.archive.maxStoredBytes = null;
+    footprint.archive.maxTextBytes = null;
 
     const report = describeBootFootprint(footprint, heap);
 
