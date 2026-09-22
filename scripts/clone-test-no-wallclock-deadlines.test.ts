@@ -27,9 +27,12 @@ import { describe, expect, it } from 'vitest';
  *
  * ## 何を禁止するか（3つ）
  *
- * 1. `timeout:` の option（`expect.poll(..., { timeout: 3000 })` の形）
- * 2. 経過時間の比較（`Date.now() - started > BUDGET` の形）
- * 3. `..._BUDGET_MS` の定数（かつての `RELEASE_WAIT_BUDGET_MS`）
+ * 1. `expect.poll` そのもの —— **option を書かなくても既定の 1000ms で諦める。**
+ *    ⟹ `timeout:` だけを禁止すると、`await expect.poll(G).toBe(true)` が
+ *    素通りする（同じ賭けを、より短い予算で、より静かに続ける形）
+ * 2. `timeout:` の option（`expect.poll(..., { timeout: 3000 })` の形）
+ * 3. 経過時間の比較（`Date.now() - started > BUDGET` の形）
+ * 4. `..._BUDGET_MS` の定数（かつての `RELEASE_WAIT_BUDGET_MS`）
  *
  * ⭕ **`it(name, fn, 15_000)` の明示のタイムアウトは禁止していない。** あれは
  * vitest の testTimeout であって「ポーリングの打ち切り」ではない。#1220 が
@@ -67,6 +70,13 @@ interface Ban {
 }
 
 const BANS: readonly Ban[] = [
+  {
+    what: 'ポーリングそのもの（`expect.poll`）',
+    pattern: /\.poll\(/g,
+    instead:
+      '`waitForExpect(() => expect(...).toBe(...), "<ラベル>")` へ寄せること（' +
+      '`timeout:` を書かなくても既定の 1000ms で諦めるので、option の有無では逃げられない）',
+  },
   {
     what: 'ポーリングの打ち切り（`timeout:` の option）',
     pattern: /timeout:\s*\d/g,
