@@ -13,6 +13,7 @@ import {
   mergeRateLimitFacts,
   STALE_TOKEN_RECOVERY_CAVEAT,
   toRateLimitFacts,
+  usageLimitNoticeSchema,
   usageTransitionOf,
   withRecoveryNote,
 } from './usage-limits.js';
@@ -65,6 +66,55 @@ describe('上限の文言を分類する', () => {
     for (const prefix of USAGE_LIMIT_ERROR_PREFIXES) {
       expect(classifyUsageNotice(`${prefix} something`)?.kind).toBe('reached');
     }
+  });
+
+  it('文言だけの経路（classifyUsageNotice）は resetsAt を持たない（Issue #1240 続き）', () => {
+    // **取れない軸に0の行を作らない**（AGENTS.md 地雷表）。SDK が出す文言には
+    // 回復予定時刻が構造化された形では乗っていないので、ここで推測して埋めない。
+    // 権威ある resetsAt を運ぶのは rate_limit_event 経由（rejectedRateLimitNotice。
+    // clone.ts）だけである。
+    const real = "You've hit your individual spend limit";
+    const notice = classifyUsageNotice(real);
+    expect(notice).toBeDefined();
+    expect(notice?.resetsAt).toBeUndefined();
+    expect(Object.hasOwn(notice ?? {}, 'resetsAt')).toBe(false);
+  });
+});
+
+describe('usageLimitNoticeSchema — resetsAt（Issue #1240 続き）', () => {
+  it('resetsAt を省略しても通る（後方互換）', () => {
+    const result = usageLimitNoticeSchema.safeParse({ kind: 'reached', text: 'x' });
+    expect(result.success).toBe(true);
+    expect(result.success && result.data.resetsAt).toBeUndefined();
+  });
+
+  it('epoch ミリ秒の正の整数なら通る', () => {
+    const result = usageLimitNoticeSchema.safeParse({
+      kind: 'reached',
+      text: 'x',
+      resetsAt: 1_785_414_600_000,
+    });
+    expect(result.success).toBe(true);
+    expect(result.success && result.data.resetsAt).toBe(1_785_414_600_000);
+  });
+
+  it('0・負・非整数の resetsAt は拒む', () => {
+    for (const bad of [0, -1, 1.5]) {
+      const result = usageLimitNoticeSchema.safeParse({
+        kind: 'reached',
+        text: 'x',
+        resetsAt: bad,
+      });
+      expect(result.success, `resetsAt=${String(bad)}`).toBe(false);
+    }
+  });
+
+  it('resetsAt が在っても describeUsageNotice の出力は変わらない（既存の歯を壊さない）', () => {
+    // describeUsageNotice は kind と text だけを見る。resetsAt を足しても
+    // 文言が変わらないことを、値の有無2通りで確かめる。
+    const withoutResetsAt = { kind: 'reached', text: 'x' } as const;
+    const withResetsAt = { kind: 'reached', text: 'x', resetsAt: 1_785_414_600_000 } as const;
+    expect(describeUsageNotice(withResetsAt)).toBe(describeUsageNotice(withoutResetsAt));
   });
 });
 

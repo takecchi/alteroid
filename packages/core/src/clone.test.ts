@@ -590,6 +590,33 @@ async function waitFor(check: () => Promise<boolean> | boolean, label: string): 
 }
 
 /**
+ * `expect(...).M(V)` の形のアサーションを、解けるまで待ってから実行する
+ * （#1220）。**壁時計の打ち切りを持たない** —— 土台は `waitFor` で、諦める
+ * 条件は「テストが終わったか」であって時間ではない。
+ *
+ * かつて `expect.poll(G, { timeout: 3000 }).M(V)` と書いていた 65 箇所を、
+ * ここへ機械的に置き換えてある。**判定の意味は1文字も変えていない** ——
+ * 引いたのは打ち切りだけである。
+ *
+ * `waitFor` の `check` は真偽値を返す必要があるので、ここでは assertion を
+ * try/catch して真偽へ変換して渡す。**解けた後にもう一度 assertion を
+ * 本当に実行する** —— (1) 失敗したときに通常の diff が出る形を保つため
+ * (2) その assertion が vitest に1個の expect として数えられる形を保つため、
+ * の両方の理由による（`waitFor` 側の boolean は診断に使わない）。
+ */
+async function waitForExpect(assertion: () => void | Promise<void>, label: string): Promise<void> {
+  await waitFor(async () => {
+    try {
+      await assertion();
+      return true;
+    } catch {
+      return false;
+    }
+  }, label);
+  await assertion();
+}
+
+/**
  * chat の1往復が終わる（done が届く）まで待つ。
  *
  * **壁時計を1つも使わない** —— `clone.subscribe` の callback から同期で解決する
@@ -1810,11 +1837,10 @@ describe('クローン', () => {
     expect(await s.stores.jobs.listApprovals({ pendingOnly: true })).toEqual([]);
 
     // クローンに回答が届く（内部ターンなので chat には出さない）
-    await expect
-      .poll(() => (s.calls[0] as FakeCall).inputs.some((input) => input.includes('よい')), {
-        timeout: 3000,
-      })
-      .toBe(true);
+    await waitFor(
+      () => (s.calls[0] as FakeCall).inputs.some((input) => input.includes('よい')),
+      '承認への回答「よい」がクローンの入力に届く',
+    );
 
     // **#768 の下読み: この歯はもともと「chat に出さない」を測っていなかった**
     // （コメントだけで、`inputs` に回答が届くことしか見ていない）。この承認は
@@ -1823,20 +1849,13 @@ describe('クローン', () => {
     // **だから反転はせず、ここに「会話 id を持たない承認は self のまま・
     // SSE も流れない」を測るアサーションを足して歯を強くする**
     // （AGENTS.md「対象をスコープして特定する＝保証が強くなる」）。
-    await expect
-      .poll(
-        async () => {
-          const entries = await s.stores.journal.list({ types: ['exchange'], limit: 100 });
-          return entries.some(
-            (entry) =>
-              entry.type === 'exchange' &&
-              entry.role === 'outbound' &&
-              entry.text === '承認への返答',
-          );
-        },
-        { timeout: 3000 },
-      )
-      .toBe(true);
+    await waitFor(async () => {
+      const entries = await s.stores.journal.list({ types: ['exchange'], limit: 100 });
+      return entries.some(
+        (entry) =>
+          entry.type === 'exchange' && entry.role === 'outbound' && entry.text === '承認への返答',
+      );
+    }, '承認への返答が日誌（exchange）に積まれる');
     const entries = await s.stores.journal.list({ types: ['exchange'], limit: 100 });
     const reply = entries.find(
       (entry) =>
@@ -1877,20 +1896,15 @@ describe('クローン', () => {
       await s.clone.answerApproval('ap-1', '(a) でよい');
 
       // 4. 返答が日誌へ積まれるまで待つ。
-      await expect
-        .poll(
-          async () => {
-            const found = await s.stores.journal.list({ types: ['exchange'], limit: 100 });
-            return found.some(
-              (entry) =>
-                entry.type === 'exchange' &&
-                entry.role === 'outbound' &&
-                entry.text.includes('(a) で進めます'),
-            );
-          },
-          { timeout: 3000 },
-        )
-        .toBe(true);
+      await waitFor(async () => {
+        const found = await s.stores.journal.list({ types: ['exchange'], limit: 100 });
+        return found.some(
+          (entry) =>
+            entry.type === 'exchange' &&
+            entry.role === 'outbound' &&
+            entry.text.includes('(a) で進めます'),
+        );
+      }, '会話 id を持つ承認への返答が日誌に積まれる');
 
       const found = await s.stores.journal.list({ types: ['exchange'], limit: 100 });
       const reply = found.find(
@@ -1992,11 +2006,10 @@ describe('クローン', () => {
 
       // 1. 人間の発言のターンが走っている間に呼ぶ。
       clone.post(humanMessage('本番 DB へ打ってよいか判断してくれ'));
-      await expect
-        .poll(() => calls[0]?.inputs.some((input) => input.includes('本番 DB')) ?? false, {
-          timeout: 3000,
-        })
-        .toBe(true);
+      await waitFor(
+        () => calls[0]?.inputs.some((input) => input.includes('本番 DB')) ?? false,
+        '『本番 DB』を含む入力がクローンに届く',
+      );
       await askHuman('人間のターン中の質問');
       await waitForDone(events);
 
@@ -2012,17 +2025,15 @@ describe('クローン', () => {
         question: '内部ターンの引き金',
       });
       await clone.answerApproval('ap-internal', 'よい');
-      await expect
-        .poll(
-          () =>
-            calls[0]?.inputs.some(
-              (input) =>
-                input.includes('承認待ちにしていた質問に人間が答えた') &&
-                input.includes('内部ターンの引き金'),
-            ) ?? false,
-          { timeout: 3000 },
-        )
-        .toBe(true);
+      await waitFor(
+        () =>
+          calls[0]?.inputs.some(
+            (input) =>
+              input.includes('承認待ちにしていた質問に人間が答えた') &&
+              input.includes('内部ターンの引き金'),
+          ) ?? false,
+        '承認待ちの質問への回答が内部ターンの引き金として入力に届く',
+      );
       await askHuman('内部ターン中の質問');
 
       const duringInternal = (await stores.jobs.listApprovals({ pendingOnly: true })).find(
@@ -2036,18 +2047,13 @@ describe('クローン', () => {
       // 代わりに日誌側で両方のターンの返答（outbound 2件）が積まれたことを
       // 見てから `stop()` する——in-flight のまま呼んでも `stop()` 自体は
       // 安全だが、検証を確実にするための待ちである。
-      await expect
-        .poll(
-          async () => {
-            const entries = await stores.journal.list({ types: ['exchange'], limit: 100 });
-            return (
-              entries.filter((entry) => entry.type === 'exchange' && entry.role === 'outbound')
-                .length >= 2
-            );
-          },
-          { timeout: 3000 },
-        )
-        .toBe(true);
+      await waitFor(async () => {
+        const entries = await stores.journal.list({ types: ['exchange'], limit: 100 });
+        return (
+          entries.filter((entry) => entry.type === 'exchange' && entry.role === 'outbound')
+            .length >= 2
+        );
+      }, 'outbound の exchange が2件以上、日誌に積まれる');
 
       await clone.stop();
     },
@@ -2078,14 +2084,16 @@ describe('クローン', () => {
     });
 
     const inputs = () => (s.calls[0] as FakeCall).inputs;
-    await expect
-      .poll(() => inputs().some((input) => input.includes('直しました')), { timeout: 3000 })
-      .toBe(true);
+    await waitFor(
+      () => inputs().some((input) => input.includes('直しました')),
+      '『直しました』を含む入力が届く',
+    );
 
-    const permission = await expect
-      .poll(() => inputs().find((input) => input.includes('git push')), { timeout: 3000 })
-      .toBeTruthy()
-      .then(() => inputs().find((input) => input.includes('git push')) ?? '');
+    await waitForExpect(
+      () => expect(inputs().find((input) => input.includes('git push'))).toBeTruthy(),
+      '『git push』を含む入力が届く',
+    );
+    const permission = inputs().find((input) => input.includes('git push')) ?? '';
 
     // 止まっているのはその仕事だけだと伝わり、答え方の経路も示される
     expect(permission).toContain('mgr-2');
@@ -2211,11 +2219,16 @@ describe('クローン — マネージャーの確認がいまも待たれて�
     // 生きている確認（`waiting` に積まれたまま）を作る。
     void session.ask('Bash', 'req-live');
 
-    const inputs = () => (calls[0] as FakeCall).inputs;
-    const text = await expect
-      .poll(() => inputs().find((input) => input.includes('req-live')), { timeout: 3000 })
-      .toBeTruthy()
-      .then(() => inputs().find((input) => input.includes('req-live')) ?? '');
+    // ⚠️ 待ちの最初の1回は、1件目の呼び出しが積まれる前にも評価される。
+    // **例外を投げる形にしないこと** —— `waitFor` は `check` の例外を再試行
+    // しないので、`expect.poll` の頃は再試行で吸われていた `undefined` の
+    // 読み取りが、そのままテストの失敗になる（#1220 の置き換えで実際に踏んだ）。
+    const inputs = (): string[] => calls[0]?.inputs ?? [];
+    await waitForExpect(
+      () => expect(inputs().find((input) => input.includes('req-live'))).toBeTruthy(),
+      '『req-live』を含む入力が届く',
+    );
+    const text = inputs().find((input) => input.includes('req-live')) ?? '';
 
     expect(text).toContain(`返事をするまで ${managerId} のこの1件だけが止まっている`);
     expect(text).toContain('manager_send');
@@ -2234,10 +2247,15 @@ describe('クローン — マネージャーの確認がいまも待たれて�
 
     // 一度は生きている確認として届く。
     const pending = session.ask('Bash', 'req-settled');
-    const inputs = () => (calls[0] as FakeCall).inputs;
-    await expect
-      .poll(() => inputs().some((input) => input.includes('req-settled')), { timeout: 3000 })
-      .toBe(true);
+    // ⚠️ 待ちの最初の1回は、1件目の呼び出しが積まれる前にも評価される。
+    // **例外を投げる形にしないこと** —— `waitFor` は `check` の例外を再試行
+    // しないので、`expect.poll` の頃は再試行で吸われていた `undefined` の
+    // 読み取りが、そのままテストの失敗になる（#1220 の置き換えで実際に踏んだ）。
+    const inputs = (): string[] => calls[0]?.inputs ?? [];
+    await waitFor(
+      () => inputs().some((input) => input.includes('req-settled')),
+      '『req-settled』を含む入力が届く',
+    );
 
     // 本物の応答経路（`manager.ts` の `send()`）で解く。runner 側の
     // `canUseTool` が解決し、`'settled'` RunnerEvent を経て `waiting` から
@@ -2250,15 +2268,15 @@ describe('クローン — マネージャーの確認がいまも待たれて�
     expect(await pending).toEqual({ behavior: 'allow' });
 
     // `waiting` から実際に消えたことを確認する（この直しが効く前提）。
-    await expect
-      .poll(
-        async () =>
+    await waitForExpect(
+      async () =>
+        expect(
           (await clone.managers.list())
             .find((m) => m.managerId === managerId)
             ?.waiting.map((w) => w.requestId),
-        { timeout: 3000 },
-      )
-      .toEqual([]);
+        ).toEqual([]),
+      'managerId のマネージャーの waiting からリクエストが消える',
+    );
 
     // ここからが本題 — **解決済みの確認が、再送のように同じ requestId で
     // もう一度届く**（実測されたバグの形。`ManagerPool#emit` が毎回新しい
@@ -2273,10 +2291,11 @@ describe('クローン — マネージャーの確認がいまも待たれて�
       requestId: 'req-settled',
     });
 
-    const redelivered = await expect
-      .poll(() => inputs().find((input) => input.includes('再送')), { timeout: 3000 })
-      .toBeTruthy()
-      .then(() => inputs().find((input) => input.includes('再送')) ?? '');
+    await waitForExpect(
+      () => expect(inputs().find((input) => input.includes('再送'))).toBeTruthy(),
+      '『再送』を含む入力が届く',
+    );
+    const redelivered = inputs().find((input) => input.includes('再送')) ?? '';
 
     // 「答え直せ」という指示が1文字も無いこと。
     expect(redelivered).not.toContain('返事をするまで');
@@ -2310,25 +2329,30 @@ describe('クローン — マネージャーの確認がいまも待たれて�
     const sessionA = manager.sessions[0];
     if (!sessionA) throw new Error('mgr-A のセッションが無い');
     const pendingA = sessionA.ask('Bash', 'req-shared');
-    const inputs = () => (calls[0] as FakeCall).inputs;
-    await expect
-      .poll(() => inputs().some((input) => input.includes('req-shared')), { timeout: 3000 })
-      .toBe(true);
+    // ⚠️ 待ちの最初の1回は、1件目の呼び出しが積まれる前にも評価される。
+    // **例外を投げる形にしないこと** —— `waitFor` は `check` の例外を再試行
+    // しないので、`expect.poll` の頃は再試行で吸われていた `undefined` の
+    // 読み取りが、そのままテストの失敗になる（#1220 の置き換えで実際に踏んだ）。
+    const inputs = (): string[] => calls[0]?.inputs ?? [];
+    await waitFor(
+      () => inputs().some((input) => input.includes('req-shared')),
+      '『req-shared』を含む入力が届く',
+    );
     const sendResult = await clone.managers.send(managerA, 'それでよい', {
       requestId: 'req-shared',
       decision: 'allow',
     });
     expect(sendResult.outcome).toBe('answered');
     expect(await pendingA).toEqual({ behavior: 'allow' });
-    await expect
-      .poll(
-        async () =>
+    await waitForExpect(
+      async () =>
+        expect(
           (await clone.managers.list())
             .find((m) => m.managerId === managerA)
             ?.waiting.map((w) => w.requestId),
-        { timeout: 3000 },
-      )
-      .toEqual([]);
+        ).toEqual([]),
+      'managerA の waiting からリクエストが消える',
+    );
 
     // mgr-B — 後から始め、**同じ requestId 文字列**で確認を出したまま
     // （waiting に残る＝生きている）。
@@ -2336,15 +2360,15 @@ describe('クローン — マネージャーの確認がいまも待たれて�
     const sessionB = manager.sessions[1];
     if (!sessionB) throw new Error('mgr-B のセッションが無い');
     void sessionB.ask('Bash', 'req-shared');
-    await expect
-      .poll(
-        async () =>
+    await waitForExpect(
+      async () =>
+        expect(
           (await clone.managers.list())
             .find((m) => m.managerId === managerB)
             ?.waiting.map((w) => w.requestId),
-        { timeout: 3000 },
-      )
-      .toEqual(['req-shared']);
+        ).toEqual(['req-shared']),
+      'managerB の waiting に req-shared が残る',
+    );
     // 並び順の前提（後から始めた mgr-B が先頭）を自分で確かめる。
     const order = (await clone.managers.list()).map((m) => m.managerId);
     expect(order[0]).toBe(managerB);
@@ -2361,10 +2385,11 @@ describe('クローン — マネージャーの確認がいまも待たれて�
       requestId: 'req-shared',
     });
 
-    const redelivered = await expect
-      .poll(() => inputs().find((input) => input.includes('mgr-A への再送')), { timeout: 3000 })
-      .toBeTruthy()
-      .then(() => inputs().find((input) => input.includes('mgr-A への再送')) ?? '');
+    await waitForExpect(
+      () => expect(inputs().find((input) => input.includes('mgr-A への再送'))).toBeTruthy(),
+      '『mgr-A への再送』を含む入力が届く',
+    );
+    const redelivered = inputs().find((input) => input.includes('mgr-A への再送')) ?? '';
 
     // mgr-B の生存に引きずられず、mgr-A の確認として「もう待たれていない」。
     expect(redelivered).toContain('もう待たれていない');
@@ -2439,13 +2464,18 @@ describe('クローン — マネージャーの確認がいまも待たれて�
       requestId: 'req-unknown',
     });
 
-    const inputs = () => (calls[0] as FakeCall).inputs;
+    // ⚠️ 待ちの最初の1回は、1件目の呼び出しが積まれる前にも評価される。
+    // **例外を投げる形にしないこと** —— `waitFor` は `check` の例外を再試行
+    // しないので、`expect.poll` の頃は再試行で吸われていた `undefined` の
+    // 読み取りが、そのままテストの失敗になる（#1220 の置き換えで実際に踏んだ）。
+    const inputs = (): string[] => calls[0]?.inputs ?? [];
     // **ターンが落ちずに進むこと自体が主張である。** list() が投げたまま
     // ターンが止まれば、この poll はタイムアウトで落ちる。
-    const text = await expect
-      .poll(() => inputs().find((input) => input.includes('確かめられない')), { timeout: 3000 })
-      .toBeTruthy()
-      .then(() => inputs().find((input) => input.includes('確かめられない')) ?? '');
+    await waitForExpect(
+      () => expect(inputs().find((input) => input.includes('確かめられない'))).toBeTruthy(),
+      '『確かめられない』を含む入力が届く',
+    );
+    const text = inputs().find((input) => input.includes('確かめられない')) ?? '';
 
     // 確かめられなかった側は安全側（いまの文言のまま）へ倒す。
     expect(text).toContain('返事をするまで mgr-unknown のこの1件だけが止まっている');
@@ -2467,13 +2497,16 @@ describe('クローン — マネージャーの確認がいまも待たれて�
       text: '直しました（報告のみ）',
     });
 
-    const inputs = () => (calls[0] as FakeCall).inputs;
-    const text = await expect
-      .poll(() => inputs().find((input) => input.includes('直しました（報告のみ）')), {
-        timeout: 3000,
-      })
-      .toBeTruthy()
-      .then(() => inputs().find((input) => input.includes('直しました（報告のみ）')) ?? '');
+    // ⚠️ 待ちの最初の1回は、1件目の呼び出しが積まれる前にも評価される。
+    // **例外を投げる形にしないこと** —— `waitFor` は `check` の例外を再試行
+    // しないので、`expect.poll` の頃は再試行で吸われていた `undefined` の
+    // 読み取りが、そのままテストの失敗になる（#1220 の置き換えで実際に踏んだ）。
+    const inputs = (): string[] => calls[0]?.inputs ?? [];
+    await waitForExpect(
+      () => expect(inputs().find((input) => input.includes('直しました（報告のみ）'))).toBeTruthy(),
+      '『直しました（報告のみ）』を含む入力が届く',
+    );
+    const text = inputs().find((input) => input.includes('直しました（報告のみ）')) ?? '';
 
     expect(text).toContain('（報告）');
     expect(text).toContain('続きが要るなら `manager_send` で指示を出し');
@@ -3476,9 +3509,10 @@ describe('クローン — 自律（人間以外の起点）', () => {
       reason: '定期 tick',
     });
 
-    await expect
-      .poll(() => inputsOf(s)().includes('次にやることがあるか'), { timeout: 3000 })
-      .toBe(true);
+    await waitFor(
+      () => inputsOf(s)().includes('次にやることがあるか'),
+      '『次にやることがあるか』という問いかけが入力に届く',
+    );
     // 人間には見せない内部ターンなので chat には出ない
     expect(s.events).toEqual([]);
     // 陰性対照: cause を省略した発火（＝定刻どおり）は日誌に cause=schedule と残る
@@ -3509,9 +3543,10 @@ describe('クローン — 自律（人間以外の起点）', () => {
       cause: 'schedule_catchup',
     });
 
-    await expect
-      .poll(() => inputsOf(s)().includes('次にやることがあるか'), { timeout: 3000 })
-      .toBe(true);
+    await waitFor(
+      () => inputsOf(s)().includes('次にやることがあるか'),
+      '『次にやることがあるか』という問いかけが入力に届く',
+    );
     expect(await selfInitiativeCauseLines(s)).toEqual(['cause=schedule_catchup']);
 
     await s.clone.stop();
@@ -3528,9 +3563,10 @@ describe('クローン — 自律（人間以外の起点）', () => {
       cause: 'manual',
     });
 
-    await expect
-      .poll(() => inputsOf(s)().includes('次にやることがあるか'), { timeout: 3000 })
-      .toBe(true);
+    await waitFor(
+      () => inputsOf(s)().includes('次にやることがあるか'),
+      '『次にやることがあるか』という問いかけが入力に届く',
+    );
     expect(await selfInitiativeCauseLines(s)).toEqual(['cause=manual']);
 
     await s.clone.stop();
@@ -3646,11 +3682,10 @@ describe('クローン — 自律（人間以外の起点）', () => {
     });
 
     const inputs = () => (calls[0]?.inputs ?? []).join('\n');
-    await expect
-      .poll(() => inputs().includes('mgr-alive') && inputs().includes('mgr-dead'), {
-        timeout: 3000,
-      })
-      .toBe(true);
+    await waitFor(
+      () => inputs().includes('mgr-alive') && inputs().includes('mgr-dead'),
+      '『mgr-alive』と『mgr-dead』の両方が入力に届く',
+    );
 
     const text = inputs();
     // `describeManagerState` と同じ字面（`digest.test.ts` で直接測っている）。
@@ -3704,9 +3739,10 @@ describe('クローン — 自律（人間以外の起点）', () => {
         reason: '定期 tick',
       });
 
-      await expect
-        .poll(() => inputsOf(s)().includes('以下は直近の状況である。'), { timeout: 3000 })
-        .toBe(true);
+      await waitFor(
+        () => inputsOf(s)().includes('以下は直近の状況である。'),
+        '日報の『以下は直近の状況である。』が入力に届く',
+      );
 
       const text = inputsOf(s)();
       // digest の**先頭**が床の行である（見出しの直後に直接続く）。
@@ -3742,11 +3778,10 @@ describe('クローン — 自律（人間以外の起点）', () => {
         at: '2026-08-12T00:00:00.000Z',
         kind: 'issue-round',
       });
-      await expect
-        .poll(() => call()?.inputs.some((input) => input.includes('何かする')), {
-          timeout: 3000,
-        })
-        .toBe(true);
+      await waitFor(
+        () => call()?.inputs.some((input) => input.includes('何かする')) ?? false,
+        '『何かする』を含む入力が届く',
+      );
       expect(call()?.inputs.at(-1)).toContain('以下は直近の状況である。\n\n記憶の床:');
 
       s.clone.post({
@@ -3756,9 +3791,11 @@ describe('クローン — 自律（人間以外の起点）', () => {
         kind: 'daily_report',
         target: '2026-08-11',
       });
-      await expect
-        .poll(() => s.stores.journal.list({ types: ['daily_report'] }), { timeout: 3000 })
-        .toHaveLength(1);
+      await waitForExpect(
+        async () =>
+          expect(await s.stores.journal.list({ types: ['daily_report'] })).toHaveLength(1),
+        'daily_report が日誌に1件積まれる',
+      );
 
       const dailyPrompt = call()?.inputs.at(-1) ?? '';
       expect(dailyPrompt).toContain('以下はこの日の記録の要約である。');
@@ -4064,10 +4101,11 @@ describe('クローン — 自律（人間以外の起点）', () => {
       target: '2026-08-11',
     });
 
-    const reports = await expect
-      .poll(() => s.stores.journal.list({ types: ['daily_report'] }), { timeout: 3000 })
-      .toHaveLength(1)
-      .then(() => s.stores.journal.list({ types: ['daily_report'] }));
+    await waitForExpect(
+      async () => expect(await s.stores.journal.list({ types: ['daily_report'] })).toHaveLength(1),
+      'daily_report が日誌に1件積まれる',
+    );
+    const reports = await s.stores.journal.list({ types: ['daily_report'] });
 
     expect(reports[0]).toMatchObject({
       date: '2026-08-11',
@@ -4100,9 +4138,10 @@ describe('クローン — 自律（人間以外の起点）', () => {
       cause: 'schedule_catchup',
     });
 
-    await expect
-      .poll(() => s.stores.journal.list({ types: ['daily_report'] }), { timeout: 3000 })
-      .toHaveLength(1);
+    await waitForExpect(
+      async () => expect(await s.stores.journal.list({ types: ['daily_report'] })).toHaveLength(1),
+      'daily_report が日誌に1件積まれる',
+    );
     expect(await dailyReportCauseLines(s)).toEqual(['cause=schedule_catchup']);
 
     await s.clone.stop();
@@ -4120,9 +4159,10 @@ describe('クローン — 自律（人間以外の起点）', () => {
       cause: 'manual',
     });
 
-    await expect
-      .poll(() => s.stores.journal.list({ types: ['daily_report'] }), { timeout: 3000 })
-      .toHaveLength(1);
+    await waitForExpect(
+      async () => expect(await s.stores.journal.list({ types: ['daily_report'] })).toHaveLength(1),
+      'daily_report が日誌に1件積まれる',
+    );
     expect(await dailyReportCauseLines(s)).toEqual(['cause=manual']);
 
     await s.clone.stop();
@@ -4146,15 +4186,13 @@ describe('クローン — 自律（人間以外の起点）', () => {
     });
 
     // ターンが終わったことを内部ターンの日誌で確かめる
-    await expect
-      .poll(
-        async () =>
-          ((await stores.journal.list({ types: ['exchange'] })) as { with: string }[]).some(
-            (entry) => entry.with === 'self',
-          ),
-        { timeout: 3000 },
-      )
-      .toBe(true);
+    await waitFor(
+      async () =>
+        ((await stores.journal.list({ types: ['exchange'] })) as { with: string }[]).some(
+          (entry) => entry.with === 'self',
+        ),
+      "with: 'self' の exchange が日誌に積まれる",
+    );
 
     const reports = await stores.journal.list({ types: ['daily_report'] });
     expect(reports).toHaveLength(1);
@@ -4182,17 +4220,22 @@ describe('クローン — 自律（人間以外の起点）', () => {
       kind: 'issue-round',
     });
 
-    await expect
-      .poll(() => inputsOf(s)().includes('open issue を見て'), { timeout: 3000 })
-      .toBe(true);
+    await waitFor(
+      () => inputsOf(s)().includes('open issue を見て'),
+      '『open issue を見て』という定期実行の入力が届く',
+    );
     // 前回いつ動いたかも渡す（同じ仕事をまっさらから起こさないため）
     expect(inputsOf(s)()).toContain('2026-08-11T00:00:00.000Z');
     expect(inputsOf(s)()).toContain('二重に起こさない');
 
     // 起きたこと自体が記録され、次の発火では「前回」が更新されている
-    await expect
-      .poll(async () => (await stores.schedules.get('issue-round'))?.lastRunAt, { timeout: 3000 })
-      .toBe('2026-08-12T00:00:00.000Z');
+    await waitForExpect(
+      async () =>
+        expect((await stores.schedules.get('issue-round'))?.lastRunAt).toBe(
+          '2026-08-12T00:00:00.000Z',
+        ),
+      'issue-round の lastRunAt が更新される',
+    );
 
     await s.clone.stop();
   });
@@ -4228,9 +4271,10 @@ describe('クローン — 自律（人間以外の起点）', () => {
     });
 
     // 復旧したら本来の依頼が届く（1周期ぶん落とさない）
-    await expect
-      .poll(() => inputsOf(s)().includes('open issue を見て'), { timeout: 3000 })
-      .toBe(true);
+    await waitFor(
+      () => inputsOf(s)().includes('open issue を見て'),
+      '『open issue を見て』という定期実行の入力が届く',
+    );
     // 本文なしの曖昧なターンは走っていない
     expect(inputsOf(s)()).not.toContain('この定期ジョブが何のために仕込まれている');
 
@@ -4257,15 +4301,13 @@ describe('クローン — 自律（人間以外の起点）', () => {
     });
 
     // 読めなかったことは日誌に残る（黙って落とさない）
-    await expect
-      .poll(
-        async () =>
-          ((await stores.journal.list({ types: ['exchange'] })) as { text: string }[]).some(
-            (entry) => entry.text.includes('読めなかった'),
-          ),
-        { timeout: 3000 },
-      )
-      .toBe(true);
+    await waitFor(
+      async () =>
+        ((await stores.journal.list({ types: ['exchange'] })) as { text: string }[]).some((entry) =>
+          entry.text.includes('読めなかった'),
+        ),
+      '『読めなかった』を含む exchange が日誌に積まれる',
+    );
 
     // ターンは1本も走っていない（Fable を曖昧な仕事で消費しない）
     expect(s.calls).toEqual([]);
@@ -4305,15 +4347,13 @@ describe('クローン — 自律（人間以外の起点）', () => {
     s.clone.post(fire());
 
     // ① 記録できないあいだは本体ターンを起こさない（PR や外部操作までやらせない）
-    await expect
-      .poll(
-        async () =>
-          ((await stores.journal.list({ types: ['exchange'] })) as { text: string }[]).some(
-            (entry) => entry.text.includes('記録できなかった'),
-          ),
-        { timeout: 3000 },
-      )
-      .toBe(true);
+    await waitFor(
+      async () =>
+        ((await stores.journal.list({ types: ['exchange'] })) as { text: string }[]).some((entry) =>
+          entry.text.includes('記録できなかった'),
+        ),
+      '『記録できなかった』を含む exchange が日誌に積まれる',
+    );
     expect(s.calls).toEqual([]);
     expect((await stores.schedules.list())[0]?.lastRunAt).toBeUndefined();
 
@@ -4321,9 +4361,10 @@ describe('クローン — 自律（人間以外の起点）', () => {
     failing = false;
     s.clone.post(fire());
 
-    await expect
-      .poll(() => inputsOf(s)().includes('open issue を見て'), { timeout: 3000 })
-      .toBe(true);
+    await waitFor(
+      () => inputsOf(s)().includes('open issue を見て'),
+      '『open issue を見て』という定期実行の入力が届く',
+    );
     expect((await stores.schedules.list())[0]?.lastRunAt).toBe('2026-08-12T00:00:00.000Z');
 
     // ③ 走ったのは1回だけ（再起動相当の拾い直しでも二重に実行しない）
@@ -4369,15 +4410,13 @@ describe('クローン — 自律（人間以外の起点）', () => {
     scheduler.start();
     await waitFor(() => posted.length >= 1, '1件目の投稿');
     scheduler.stop();
-    await expect
-      .poll(
-        async () =>
-          ((await stores.journal.list({ types: ['exchange'] })) as { text: string }[]).some(
-            (entry) => entry.text.includes('記録できなかった'),
-          ),
-        { timeout: 3000 },
-      )
-      .toBe(true);
+    await waitFor(
+      async () =>
+        ((await stores.journal.list({ types: ['exchange'] })) as { text: string }[]).some((entry) =>
+          entry.text.includes('記録できなかった'),
+        ),
+      '『記録できなかった』を含む exchange が日誌に積まれる',
+    );
     expect(s.calls).toEqual([]);
 
     // 2回目の起動（器が直っている）: 同じ予定を拾い直して、今度は動く
@@ -4429,9 +4468,11 @@ describe('クローン — 自律（人間以外の起点）', () => {
       kind: 'issue-round',
     });
 
-    await expect
-      .poll(async () => (await stores.schedules.list())[0]?.pendingRun?.at, { timeout: 3000 })
-      .toBe('2026-08-12T00:00:00.000Z');
+    await waitForExpect(
+      async () =>
+        expect((await stores.schedules.list())[0]?.pendingRun?.at).toBe('2026-08-12T00:00:00.000Z'),
+      'pendingRun.at が更新される',
+    );
     // モデルには何も届いていない
     expect(crashing.calls).toEqual([]);
     // 定期の基準は進んでいない（「もう動いた」ことにしない）
@@ -4450,18 +4491,20 @@ describe('クローン — 自律（人間以外の起点）', () => {
     scheduler.start();
 
     // 引き受けたまま終わっていない回が、依頼の本文つきで届く
-    await expect
-      .poll(() => inputsOf(restarted)().includes('open issue を見て'), { timeout: 3000 })
-      .toBe(true);
+    await waitFor(
+      () => inputsOf(restarted)().includes('open issue を見て'),
+      '『open issue を見て』という定期実行の入力が届く（再起動後）',
+    );
     // 走りかけていた可能性は隠さない（二重に手を出す前に確かめさせる）
     expect(inputsOf(restarted)()).toContain('引き受けたまま終わっていない');
     // 添えるのは**元の発火時刻**（復旧時刻に置き換えない）
     expect(inputsOf(restarted)()).toContain('2026-08-12T00:00:00.000Z');
 
     // 終わったので印は消え、定期の基準が進む
-    await expect
-      .poll(async () => (await stores.schedules.list())[0]?.pendingRun, { timeout: 3000 })
-      .toBeUndefined();
+    await waitForExpect(
+      async () => expect((await stores.schedules.list())[0]?.pendingRun).toBeUndefined(),
+      'pendingRun が消える（undefined になる）',
+    );
     expect((await stores.schedules.list())[0]?.lastScheduledRunAt).toBeDefined();
 
     scheduler.stop();
@@ -4491,9 +4534,10 @@ describe('クローン — 自律（人間以外の起点）', () => {
       cause: 'manual',
     });
 
-    await expect
-      .poll(async () => (await stores.schedules.list())[0]?.pendingRun, { timeout: 3000 })
-      .toBeUndefined();
+    await waitForExpect(
+      async () => expect((await stores.schedules.list())[0]?.pendingRun).toBeUndefined(),
+      'pendingRun が消える（undefined になる）',
+    );
 
     const after = (await stores.schedules.list())[0];
     // 手で起こした1回だったので、配り直しても定期の基準は動かない
@@ -4524,9 +4568,10 @@ describe('クローン — 自律（人間以外の起点）', () => {
       cause: 'manual',
     });
 
-    await expect
-      .poll(() => inputsOf(s)().includes('open issue を見て'), { timeout: 3000 })
-      .toBe(true);
+    await waitFor(
+      () => inputsOf(s)().includes('open issue を見て'),
+      '『open issue を見て』という定期実行の入力が届く',
+    );
 
     const after = (await stores.schedules.list())[0];
     expect(after?.lastRunAt).toBe('2026-08-12T09:10:00.000Z');
@@ -4555,9 +4600,10 @@ describe('クローン — 自律（人間以外の起点）', () => {
       kind: 'issue-round',
     });
 
-    await expect
-      .poll(() => inputsOf(s)().includes('open issue を見て'), { timeout: 3000 })
-      .toBe(true);
+    await waitFor(
+      () => inputsOf(s)().includes('open issue を見て'),
+      '『open issue を見て』という定期実行の入力が届く',
+    );
 
     const after = (await stores.schedules.list())[0];
     expect(after?.lastRunAt).toBe('2026-08-12T09:00:00.000Z');
@@ -4595,9 +4641,10 @@ describe('クローン — 自律（人間以外の起点）', () => {
       cause: 'schedule_catchup',
     });
 
-    await expect
-      .poll(() => inputsOf(s)().includes('open issue を見て'), { timeout: 3000 })
-      .toBe(true);
+    await waitFor(
+      () => inputsOf(s)().includes('open issue を見て'),
+      '『open issue を見て』という定期実行の入力が届く',
+    );
 
     // ストアの呼び出し（claimRun/completeRun）は引き続き2値のまま —
     // 「取りこぼし」でも定期の基準（lastScheduledRunAt）は普通に進む
@@ -4650,15 +4697,13 @@ describe('クローン — 自律（人間以外の起点）', () => {
       kind: 'issue-round',
     });
 
-    await expect
-      .poll(
-        async () =>
-          ((await stores.journal.list({ types: ['exchange'] })) as { text: string }[]).some(
-            (entry) => entry.text.includes('人間がこの依頼を消した'),
-          ),
-        { timeout: 3000 },
-      )
-      .toBe(true);
+    await waitFor(
+      async () =>
+        ((await stores.journal.list({ types: ['exchange'] })) as { text: string }[]).some((entry) =>
+          entry.text.includes('人間がこの依頼を消した'),
+        ),
+      '『人間がこの依頼を消した』を含む exchange が日誌に積まれる',
+    );
 
     // 古い本文でも、本文なしの曖昧なターンでも走らせない
     expect(s.calls).toEqual([]);
@@ -4701,9 +4746,10 @@ describe('クローン — 自律（人間以外の起点）', () => {
       kind: 'issue-round',
     });
 
-    await expect
-      .poll(() => inputsOf(s)().includes('bug ラベルの issue だけ'), { timeout: 3000 })
-      .toBe(true);
+    await waitFor(
+      () => inputsOf(s)().includes('bug ラベルの issue だけ'),
+      '『bug ラベルの issue だけ』という入力が届く',
+    );
     // 取り消された本文は渡っていない
     expect(inputsOf(s)()).not.toContain('すべての issue を実装する');
     // 発火の跡は新しい版に付く
@@ -4771,9 +4817,10 @@ describe('クローン — 自律（人間以外の起点）', () => {
     }
 
     // 処理中の1件 + 待ち行列の1件 だけが走る
-    await expect
-      .poll(() => (s.calls[0]?.inputs ?? []).length, { timeout: 3000 })
-      .toBeGreaterThanOrEqual(2);
+    await waitForExpect(
+      () => expect((s.calls[0]?.inputs ?? []).length).toBeGreaterThanOrEqual(2),
+      'クローンへの入力が2件以上に増える',
+    );
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(s.calls[0]?.inputs).toHaveLength(2);
 
@@ -4794,9 +4841,10 @@ describe('クローン — 自律（人間以外の起点）', () => {
       });
     }
 
-    await expect
-      .poll(() => stores.journal.list({ types: ['daily_report'] }), { timeout: 5000 })
-      .toHaveLength(2);
+    await waitForExpect(
+      async () => expect(await stores.journal.list({ types: ['daily_report'] })).toHaveLength(2),
+      'daily_report が日誌に2件積まれる',
+    );
 
     const dates = ((await stores.journal.list({ types: ['daily_report'] })) as { date: string }[])
       .map((entry) => entry.date)
@@ -4816,11 +4864,10 @@ describe('クローン — 自律（人間以外の起点）', () => {
       source: 'cron',
     });
 
-    await expect
-      .poll(() => (s.calls[0]?.inputs ?? []).join('\n').includes('中身のない通知'), {
-        timeout: 3000,
-      })
-      .toBe(true);
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).join('\n').includes('中身のない通知'),
+      '『中身のない通知』を含む入力が届く',
+    );
     expect((s.calls[0]?.inputs ?? []).join('\n')).not.toContain('undefined');
 
     await s.clone.stop();
@@ -4836,9 +4883,10 @@ describe('クローン — 自律（人間以外の起点）', () => {
       kind: 'weekly_review',
     });
 
-    await expect
-      .poll(() => inputsOf(s)().includes('定期ジョブ weekly_review'), { timeout: 3000 })
-      .toBe(true);
+    await waitFor(
+      () => inputsOf(s)().includes('定期ジョブ weekly_review'),
+      '『定期ジョブ weekly_review』という入力が届く',
+    );
 
     await s.clone.stop();
   });
@@ -4872,9 +4920,7 @@ describe('クローン — 壊れ方の回帰', () => {
     const s = setup(undefined, stores, { failWith: 'No conversation found with session ID' });
     s.clone.post(humanMessage('やあ'));
 
-    await expect
-      .poll(() => s.events.some((event) => event.type === 'error'), { timeout: 3000 })
-      .toBe(true);
+    await waitFor(() => s.events.some((event) => event.type === 'error'), 'error イベントが届く');
     await waitFor(
       async () => (await stores.sessions.getCloneSessionId()) === null,
       'session id が消える',
@@ -5473,15 +5519,13 @@ describe('クローン — ターンの失敗の跡', () => {
 
     s.clone.post(humanMessage('やあ', 'conv-9'));
 
-    await expect
-      .poll(
-        async () =>
-          (await exchanges(stores)).some(
-            (entry) => entry.role === 'outbound' && entry.text.includes('失敗した'),
-          ),
-        { timeout: 3000 },
-      )
-      .toBe(true);
+    await waitFor(
+      async () =>
+        (await exchanges(stores)).some(
+          (entry) => entry.role === 'outbound' && entry.text.includes('失敗した'),
+        ),
+      'outbound の『失敗した』という exchange が日誌に積まれる',
+    );
 
     /*
      * **`with` の期待値を `human` から `self` へ反転させた（#92）。**
@@ -5529,15 +5573,13 @@ describe('クローン — ターンの失敗の跡', () => {
 
     s.clone.post(humanMessage('やあ', 'conv-9'));
 
-    await expect
-      .poll(
-        async () =>
-          (await exchanges(stores)).some(
-            (entry) => entry.role === 'outbound' && entry.text.includes('失敗した'),
-          ),
-        { timeout: 3000 },
-      )
-      .toBe(true);
+    await waitFor(
+      async () =>
+        (await exchanges(stores)).some(
+          (entry) => entry.role === 'outbound' && entry.text.includes('失敗した'),
+        ),
+      'outbound の『失敗した』という exchange が日誌に積まれる',
+    );
 
     await s.clone.stop();
   });
@@ -5555,16 +5597,14 @@ describe('クローン — ターンの失敗の跡', () => {
 
       s.clone.post(humanMessage('やあ', 'conv-9'));
 
-      await expect
-        .poll(
-          async () =>
-            (await exchanges(stores)).some(
-              (entry) =>
-                entry.with === 'self' && entry.text.startsWith('人間との対話ターンが失敗した'),
-            ),
-          { timeout: 3000 },
-        )
-        .toBe(true);
+      await waitFor(
+        async () =>
+          (await exchanges(stores)).some(
+            (entry) =>
+              entry.with === 'self' && entry.text.startsWith('人間との対話ターンが失敗した'),
+          ),
+        "with: 'self' の『人間との対話ターンが失敗した』という exchange が日誌に積まれる",
+      );
 
       const failure = (await exchanges(stores)).find(
         (entry) => entry.with === 'self' && entry.text.startsWith('人間との対話ターンが失敗した'),
@@ -5604,16 +5644,14 @@ describe('クローン — ターンの失敗の跡', () => {
 
       s.clone.post(humanMessage('やあ', 'conv-9'));
 
-      await expect
-        .poll(
-          async () =>
-            (await exchanges(stores)).some(
-              (entry) =>
-                entry.with === 'self' && entry.text.startsWith('人間との対話ターンが失敗した'),
-            ),
-          { timeout: 3000 },
-        )
-        .toBe(true);
+      await waitFor(
+        async () =>
+          (await exchanges(stores)).some(
+            (entry) =>
+              entry.with === 'self' && entry.text.startsWith('人間との対話ターンが失敗した'),
+          ),
+        "with: 'self' の『人間との対話ターンが失敗した』という exchange が日誌に積まれる",
+      );
 
       const failure = (await exchanges(stores)).find(
         (entry) => entry.with === 'self' && entry.text.startsWith('人間との対話ターンが失敗した'),
@@ -6176,9 +6214,7 @@ describe('クローン — ターンの失敗の跡', () => {
       // （日誌は落ちるので、そちらでは待てない）。
       const { events: seen } = wireEvents(s.clone, 'conv-9');
       s.clone.post(humanMessage('やあ', 'conv-9'));
-      await expect
-        .poll(() => seen.some((event) => event.type === 'error'), { timeout: 3000 })
-        .toBe(true);
+      await waitFor(() => seen.some((event) => event.type === 'error'), 'error イベントが届く');
       await s.clone.stop();
     });
 
@@ -6440,6 +6476,372 @@ describe('クローン — 枠に当たり続けたセッションは畳んで�
     // と同じ約束）。
     expect(last?.text).toContain('消えていない');
     expect(last?.text).not.toContain('失われ');
+  });
+});
+
+/**
+ * 変更B: 回復予定時刻（`#usageBlocked.resetsAt`）より前は再武装しない。
+ * ただし常に再武装する3種類（`human_message` / `human_answer` /
+ * `manager_message` / `external` かつ `source: 'token-pool'`）は据え置く
+ * （`usageBlockAlwaysRearms` の doc。Issue #1240 続き）。
+ *
+ * **`resetsAt` を持たせる経路は `rate_limit_event` だけである**
+ * （`rejectedRateLimitNotice` の doc）。`resultText` を上限の文言に一致させない
+ * ことで、`result` 側の `classifyUsageNotice` が二重に `#usageBlocked` を
+ * 上書きしない形にしてある（既存の「rate_limit_event の status: rejected でも
+ * 枠が閉じたと判定する」と同じ作法）。
+ */
+describe('クローン — 枠の回復予定時刻（resetsAt）より前は再武装しない（Issue #1240 続き）', () => {
+  /** 過去の時刻。届いた瞬間から見て「もう過ぎている」resetsAt。 */
+  const PAST_RESETS_AT_MS = 1_700_000_000_000;
+  /** 十分先の時刻。テストの実行時間ぶんでは絶対に追いつかない resetsAt。 */
+  const FUTURE_RESETS_AT_MS = () => Date.now() + 60 * 60 * 1000;
+
+  function setupRateLimited(resetsAt: number): Setup {
+    return setup(undefined, createMemoryStores(), {
+      // **`result` 側の文言を上限のプレフィックスに当てない。** rate_limit_event
+      // 経路だけが resetsAt を運ぶことを確かめたいので、result 側の
+      // classifyUsageNotice が resetsAt を持たない notice で #usageBlocked を
+      // 上書きしないようにする。
+      resultSubtype: 'error_during_execution',
+      resultText: '（結果なし。rate_limit_event だけが上限の理由を運ぶ）',
+      rateLimitEventAt: () => ({ status: 'rejected', rateLimitType: 'five_hour', resetsAt }),
+    });
+  }
+
+  async function releaseAttemptCount(s: Setup): Promise<number> {
+    const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[];
+    return exchanges.filter((entry) => entry.text.includes('枠の解除を試す')).length;
+  }
+
+  function tick(id: string): InboxEvent {
+    return { type: 'self_initiative', id, at: new Date().toISOString(), reason: 'テスト用tick' };
+  }
+
+  /**
+   * 中身の無い内部の合図を、複数回・連続して届けるための口。**`self_initiative`
+   * ではなく `external`（トークンプール以外の任意の source）を使う** ——
+   * `self_initiative` はどれも「同じ tick」として `isSameTick` に畳まれる
+   * （type しか見ない）ので、前の1本がまだ待ち行列に残っているうちに次を
+   * post すると、次が畳み込みで消えてしまう（`post()` の isTick 畳み込み）。
+   * `external` は source が違えば `inboxCollapseKey` が `undefined` を返し
+   * （`isDaemonSelfNotice` に当たらない限り畳まない）、`isTick` の対象にも
+   * ならないので、この畳み込みを心配せずに複数本を連続で送れる。
+   */
+  function internalSignal(id: string): InboxEvent {
+    return { type: 'external', id, at: new Date().toISOString(), source: `test-internal-${id}` };
+  }
+
+  it('resetsAt より前に届いた self_initiative は再武装しない', async () => {
+    const s = setupRateLimited(FUTURE_RESETS_AT_MS());
+    s.clone.post(humanMessage('一件目'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+    const inputsBefore = (s.calls[0] as FakeCall).inputs.length;
+    s.clone.post(tick('evt-si-1'));
+
+    // **起きないことを確かめる歯なので、起きるまで待てない。** 少し待って
+    // 「増えていない」ことを見る——`usageReleasePending` が真になっていない
+    // ことと、実際にモデルへ渡った入力が増えていないことの両方を見る。
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(s.clone.usageReleasePending).toBe(false);
+    expect(await releaseAttemptCount(s)).toBe(0);
+    expect((s.calls[0] as FakeCall).inputs.length).toBe(inputsBefore);
+
+    await s.clone.stop();
+  });
+
+  it('resetsAt より後（もう過ぎている）なら self_initiative でも再武装する', async () => {
+    const s = setupRateLimited(PAST_RESETS_AT_MS);
+    s.clone.post(humanMessage('一件目'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+    s.clone.post(tick('evt-si-1'));
+    await waitFor(async () => (await releaseAttemptCount(s)) === 1, '解除の試行が1回になる');
+
+    await s.clone.stop();
+  });
+
+  it('resetsAt が分からない（文言だけの通知）なら、従来どおり self_initiative でも再武装する', async () => {
+    // 後方互換: rate_limit_event を使わず、文言だけで検知させる
+    // （`classifyUsageNotice` 経路。resetsAt を持たない）。
+    const spendLimitMessage = "You've hit your individual spend limit for this account.";
+    const s = setup(undefined, createMemoryStores(), {
+      resultSubtype: 'error_during_execution',
+      resultText: spendLimitMessage,
+    });
+    s.clone.post(humanMessage('一件目'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+    s.clone.post(tick('evt-si-1'));
+    await waitFor(async () => (await releaseAttemptCount(s)) === 1, '解除の試行が1回になる');
+
+    await s.clone.stop();
+  });
+
+  it('token-pool の復帰通知（external）は resetsAt より前でも常に再武装する', async () => {
+    const s = setupRateLimited(FUTURE_RESETS_AT_MS());
+    s.clone.post(humanMessage('一件目'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+    s.clone.post({
+      type: 'external',
+      id: 'evt-tokenpool-1',
+      at: new Date().toISOString(),
+      source: DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+    });
+    await waitFor(async () => (await releaseAttemptCount(s)) === 1, '解除の試行が1回になる');
+
+    await s.clone.stop();
+  });
+
+  it('人間の発言は resetsAt より前でも常に再武装する', async () => {
+    const s = setupRateLimited(FUTURE_RESETS_AT_MS());
+    s.clone.post(humanMessage('一件目'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+    s.clone.post(humanMessage('二件目'));
+    await waitFor(async () => (await releaseAttemptCount(s)) === 1, '解除の試行が1回になる');
+
+    await s.clone.stop();
+  });
+
+  it('抑止した回数は捨てず、実際に解除を試した1行へ畳んで出て0へ戻る', async () => {
+    const s = setupRateLimited(FUTURE_RESETS_AT_MS());
+    s.clone.post(humanMessage('一件目'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+    // 抑止される内部の合図を2回届ける。**器へ未読として残ったことを見て
+    // 次へ進む**（壁時計の sleep ではなく、実際に保持へ回ったことを待つ）。
+    s.clone.post(internalSignal('evt-si-1'));
+    await waitFor(async () => {
+      const pending = await s.stores.inbox.claimPending();
+      return pending.some((p) => p.event.id === 'evt-si-1');
+    }, 'evt-si-1 が未読のまま保持される');
+    s.clone.post(internalSignal('evt-si-2'));
+    await waitFor(async () => {
+      const pending = await s.stores.inbox.claimPending();
+      return pending.some((p) => p.event.id === 'evt-si-2');
+    }, 'evt-si-2 が未読のまま保持される');
+    expect(s.clone.usageReleasePending).toBe(false);
+    expect(await releaseAttemptCount(s)).toBe(0);
+
+    // 常に再武装する人間の発言で、実際に解除を試す。
+    s.clone.post(humanMessage('二件目'));
+    await waitFor(async () => (await releaseAttemptCount(s)) === 1, '解除の試行が1回になる');
+
+    const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[];
+    const releaseLine = exchanges.find((entry) => entry.text.includes('枠の解除を試す'));
+    expect(releaseLine?.text).toContain('再武装を抑止: 2 回');
+
+    // **0へ戻る**——同じ資格でもう一度抑止される self_initiative を送っても、
+    // 次に出る「解除を試す」行の抑止件数は前回の2を引きずらない（1のまま）。
+    await waitFor(() => s.clone.usageBlocked, '二件目の再試行がまた枠に当たる');
+    s.clone.post(internalSignal('evt-si-3'));
+    await waitFor(async () => {
+      const pending = await s.stores.inbox.claimPending();
+      return pending.some((p) => p.event.id === 'evt-si-3');
+    }, 'evt-si-3 が未読のまま保持される');
+    s.clone.post(humanMessage('三件目'));
+    await waitFor(async () => (await releaseAttemptCount(s)) === 2, '解除の試行が2回になる');
+
+    const exchangesAfter = (await s.stores.journal.list({ types: ['exchange'] })) as {
+      text: string;
+    }[];
+    const releaseLines = exchangesAfter.filter((entry) => entry.text.includes('枠の解除を試す'));
+    expect(releaseLines).toHaveLength(2);
+    // `journal.list()` は降順（新しい順）を返す（ファイル冒頭近くの同じ注記）
+    // ⟹ `[0]` が2回目（三件目で起きた解除。抑止は evt-si-3 の1件だけ）、
+    // `[1]` が1回目（二件目で起きた解除。抑止は evt-si-1 / evt-si-2 の2件）。
+    expect(releaseLines[0]?.text).toContain('再武装を抑止: 1 回');
+    expect(releaseLines[0]?.text).not.toContain('再武装を抑止: 2 回');
+    expect(releaseLines[1]?.text).toContain('再武装を抑止: 2 回');
+
+    await s.clone.stop();
+  });
+});
+
+/**
+ * 変更C: 保持中の「内部ターンが失敗した」を、人間が待っていない合図
+ * （`#conversationOf(event) === null`）については1件ごとに日誌へ書かず、
+ * 畳んだ件数だけを数える（`#pump` の枠ブロックの doc。Issue #1240 続き）。
+ *
+ * **会話に紐づく失敗（`人間との対話ターンが失敗した`）は1文字も変えていない**
+ * ——別の describe（「枠で保持している間、人間へ返す1行を積み上げない」）が
+ * その保証を持つ。ここで見るのは内部側だけである。
+ */
+describe('クローン — 保持中の内部の合図は、失敗記録を1件ごとに日誌へ書かない（Issue #1240 続き）', () => {
+  const spendLimitMessage = "You've hit your individual spend limit for this account.";
+  const internalFailureMark = '内部ターンが失敗した';
+
+  async function internalFailureCount(s: Setup): Promise<number> {
+    const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as {
+      with: string;
+      text: string;
+    }[];
+    return exchanges.filter(
+      (entry) => entry.with === 'self' && entry.text.startsWith(internalFailureMark),
+    ).length;
+  }
+
+  /**
+   * 中身の無い内部の合図を、複数回・連続して届けるための口。**`self_initiative`
+   * ではなく `external`（任意の source）を使う** —— `self_initiative` は
+   * どれも「同じ tick」として `isSameTick` に畳まれる（type しか見ない）ので、
+   * 前の1本がまだ待ち行列に残っているうちに次を post すると、次が畳み込みで
+   * 消えてしまう（`post()` の isTick 畳み込み）。`external` は source が
+   * 違えば `inboxCollapseKey` が `undefined` を返し（`isDaemonSelfNotice` に
+   * 当たらない限り畳まない）、`isTick` の対象にもならないので、この畳み込みを
+   * 心配せずに複数本を連続で送れる。
+   */
+  function internalSignal(id: string): InboxEvent {
+    return { type: 'external', id, at: new Date().toISOString(), source: `test-internal-${id}` };
+  }
+
+  it('保持件数が増えても、内部の失敗記録は再武装の回数ぶんしか増えない（N×M にならない）', async () => {
+    // **狙い**: 直す前は「保持 N 件 × 再武装 M 回」ぶん増えていた
+    // （`#pump` の枠ブロックの doc）。ここでは3回の再武装（2本目・3本目・
+    // 4本目の到着）で保持件数が 1→2→3 と増えていく間、内部の失敗記録が
+    // `1 + 再武装回数`（＝1,2,3,4）という**線形**にしか増えないことを見る。
+    // 保持の先頭1本だけが実際に再試行されて本物の失敗を書き（この経路は
+    // 変わっていない）、残りは畳まれて書かれない。
+    const s = setup(undefined, createMemoryStores(), {
+      resultSubtype: 'error_during_execution',
+      resultText: spendLimitMessage,
+    });
+
+    // 1本目: 実際に失敗して枠に当たる（内部ターンの失敗が1件、実際のターンの
+    // 失敗として記録される——これは変更Cの対象外の経路である）。
+    s.clone.post(internalSignal('evt-1'));
+    await waitFor(async () => (await internalFailureCount(s)) === 1, '1本目の失敗が記録される');
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+    // 2本目: 到着が1本目の再試行を誘発する（保持の先頭が実際に再試行され、
+    // 同じ理由でまた失敗するので本物の失敗記録がもう1件増える＝合計2）。
+    // 2本目自身は #pump の短絡（枠が閉じている）へ回り、conversationId が
+    // null なので `#reportFailure` を呼ばずに畳む。
+    s.clone.post(internalSignal('evt-2'));
+    await waitFor(
+      async () => (await internalFailureCount(s)) === 2,
+      '1本目の再試行の失敗が記録される',
+    );
+
+    // 3本目: 保持は [1本目, 2本目] の2件。先頭（1本目）だけが再試行されて
+    // 本物の失敗が増える（合計3）。2本目・3本目自身は畳まれる。
+    s.clone.post(internalSignal('evt-3'));
+    await waitFor(
+      async () => (await internalFailureCount(s)) === 3,
+      '2周目の再試行の失敗が記録される',
+    );
+
+    // 4本目: 保持は [1本目, 2本目, 3本目] の3件。先頭だけが再試行されて
+    // 本物の失敗が増える（合計4）。**保持件数が3件に増えても、増えるのは
+    // 依然として1件だけである**——これが N×M ではなく M であることの核心。
+    s.clone.post(internalSignal('evt-4'));
+    await waitFor(
+      async () => (await internalFailureCount(s)) === 4,
+      '3周目の再試行の失敗が記録される',
+    );
+
+    // ここでさらに増えないことも確かめる（余計な書き込みが遅れて来ていない）。
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(await internalFailureCount(s)).toBe(4);
+
+    await s.clone.stop();
+  });
+
+  it('畳んだ件数は失われず、実際に解除を試した1行へ「畳んだ」件数として残り、そのつど0へ戻る', async () => {
+    const s = setup(undefined, createMemoryStores(), {
+      resultSubtype: 'error_during_execution',
+      resultText: spendLimitMessage,
+    });
+
+    s.clone.post(internalSignal('evt-1'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+    // 1回目の解除（2本目が誘発）: この時点ではまだ何も畳んでいないので、
+    // 出る行に「畳んだ」の一文は無い。
+    s.clone.post(internalSignal('evt-2'));
+    await waitFor(
+      async () => (await internalFailureCount(s)) === 2,
+      '1本目の再試行の失敗が記録される',
+    );
+    await waitFor(() => s.clone.usageBlocked, '1本目の再試行もまた枠に当たる');
+
+    // 2回目の解除（3本目が誘発）: 1回目の周で畳んだ2本目の1件ぶんがこの
+    // 行へ出る。
+    s.clone.post(internalSignal('evt-3'));
+    await waitFor(
+      async () => (await internalFailureCount(s)) === 3,
+      '2周目の再試行の失敗が記録される',
+    );
+    await waitFor(() => s.clone.usageBlocked, '2周目の再試行もまた枠に当たる');
+
+    // 3回目の解除（4本目が誘発）: 2回目の周で畳んだのは2本目・3本目の
+    // 2件——**1回目の周で畳んだ1件を引きずっていない**（0へ戻っているので、
+    // この行は2件だけを持つ）。
+    s.clone.post(internalSignal('evt-4'));
+    await waitFor(
+      async () => (await internalFailureCount(s)) === 4,
+      '3周目の再試行の失敗が記録される',
+    );
+
+    const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[];
+    const releaseLines = exchanges
+      .filter((entry) => entry.text.includes('枠の解除を試す'))
+      .map((entry) => entry.text);
+    // `journal.list()` は降順（新しい順）。
+    expect(releaseLines).toHaveLength(3);
+    expect(releaseLines[2]).not.toContain('内部の失敗記録を畳んだ');
+    expect(releaseLines[1]).toContain('内部の失敗記録を畳んだ: 1 件');
+    expect(releaseLines[0]).toContain('内部の失敗記録を畳んだ: 2 件');
+    expect(releaseLines[0]).not.toContain('内部の失敗記録を畳んだ: 3 件');
+
+    await s.clone.stop();
+  });
+
+  it('会話に紐づく失敗（人間との対話ターンが失敗した）は、内部の合図と混ざっても1文字も変わらない', async () => {
+    const s = setup(undefined, createMemoryStores(), {
+      resultSubtype: 'error_during_execution',
+      resultText: spendLimitMessage,
+    });
+
+    s.clone.post(humanMessage('一件目'));
+    await waitForTerminal(s.events);
+
+    // **`#reportFailure` は `with: 'self'` で書く**（conversationId の有無で
+    // 変わるのは先頭の文言だけ——`内部ターンが失敗した` / `人間との対話
+    // ターンが失敗した`。`internalFailureCount` と同じ絞り方で、こちらは
+    // 会話側の接頭辞で絞る）。
+    const humanFailureMark = '人間との対話ターンが失敗した';
+    const rows = (await s.stores.journal.list({ types: ['exchange'] })) as {
+      with: string;
+      text: string;
+    }[];
+    const humanFailures = rows.filter(
+      (entry) => entry.with === 'self' && entry.text.startsWith(humanFailureMark),
+    );
+    // 1件目の初回失敗ぶん、会話側の失敗記録が1件出ている。中身
+    // （`#reportFailure` の組み立て）はこれまでと同じ形のままである。
+    expect(humanFailures).toHaveLength(1);
+    expect(humanFailures[0]?.text).toContain(spendLimitMessage);
+
+    // 内部の合図を1本挟んでも、会話側の失敗記録の作法は変わらない
+    // （短絡された内部の合図は畳まれ、`人間との対話ターンが失敗した` の件数には
+    // 影響しない）。
+    s.clone.post(internalSignal('evt-1'));
+    await waitFor(async () => {
+      const after = (await s.stores.journal.list({ types: ['exchange'] })) as {
+        with: string;
+        text: string;
+      }[];
+      return (
+        after.filter((entry) => entry.with === 'self' && entry.text.startsWith(humanFailureMark))
+          .length === 2
+      );
+    }, '一件目の再試行の失敗がもう1件記録される');
+
+    await s.clone.stop();
   });
 });
 
@@ -7017,9 +7419,10 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
     s.clone.post(humanMessage('MSG-SECOND', 'conv-1'));
 
     // `list` は新しい順なので、受け取った順に入っていれば後の発言が先に出る。
-    await expect
-      .poll(() => inboundTexts(s.stores), { timeout: 3000 })
-      .toEqual(['MSG-SECOND', 'MSG-FIRST']);
+    await waitForExpect(
+      async () => expect(await inboundTexts(s.stores)).toEqual(['MSG-SECOND', 'MSG-FIRST']),
+      '受信テキストが並び替わって2件揃う',
+    );
 
     await s.clone.stop();
   }, 10_000);
@@ -7066,15 +7469,15 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
       text: 'MSG-REPORT',
     });
 
-    await expect
-      .poll(
-        async () =>
+    await waitForExpect(
+      async () =>
+        expect(
           (await stores.journal.list({ types: ['exchange'] })).filter(
             (entry) => entry.type === 'exchange' && entry.with === 'manager',
           ).length,
-        { timeout: 3000 },
-      )
-      .toBe(1);
+        ).toBe(1),
+      'manager 向け exchange が1件、日誌に積まれる',
+    );
 
     await s.clone.stop();
   });
@@ -8037,11 +8440,10 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
     await waitForDone(s.events);
 
     s.clone.post(humanMessage('2回目'));
-    await expect
-      .poll(() => s.events.filter((event) => event.type === 'done').length === 2, {
-        timeout: 3000,
-      })
-      .toBe(true);
+    await waitFor(
+      () => s.events.filter((event) => event.type === 'done').length === 2,
+      'done イベントが2件届く',
+    );
 
     const entries = await s.stores.journal.list({ types: ['turn_usage'] });
     // **「行が無い」＝増分ゼロであって、そのターンが無料だったわけではない**
@@ -8067,11 +8469,10 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
 
     // resume / /clear で SDK 側の累積が 0 から始まり、次に読めた値が 3 だった形。
     s.clone.post(humanMessage('2回目'));
-    await expect
-      .poll(() => s.events.filter((event) => event.type === 'done').length === 2, {
-        timeout: 3000,
-      })
-      .toBe(true);
+    await waitFor(
+      () => s.events.filter((event) => event.type === 'done').length === 2,
+      'done イベントが2件届く',
+    );
 
     const all = await s.stores.journal.list({ limit: 50 });
     // **既存の1行（`exchange with=self`）は従来どおり出る**（あちらを壊していない）。
@@ -8143,11 +8544,10 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
     expect(afterFirst).toHaveLength(0);
 
     s.clone.post(humanMessage('2回目'));
-    await expect
-      .poll(() => s.events.filter((event) => event.type === 'done').length === 1, {
-        timeout: 3000,
-      })
-      .toBe(true);
+    await waitFor(
+      () => s.events.filter((event) => event.type === 'done').length === 1,
+      'done イベントが1件届く',
+    );
 
     const afterSecond = await s.stores.journal.list({ types: ['turn_usage'] });
     expect(afterSecond).toHaveLength(1);
@@ -10034,65 +10434,48 @@ describe('クローン — 枠で保持している間、中身を持たない�
    * 「人間優先が有効なままでも、保持中の tick は畳まれて在庫が増えない」
    * （後述）も同じ待ちを使う。**
    *
+   * ⛔ **壁時計の打ち切りを持たない**（#1220）。ここにはかつて
+   * `RELEASE_WAIT_BUDGET_MS = 15_000` が在り、「共有の `waitFor` は 3 秒で
+   * 諦めるので、この歯だけ負荷に耐える側へ倒す」という理由で独自の予算を
+   * 持っていた。⟹ **その理由のほうが消えた** —— `waitFor` から打ち切り
+   * そのものが無くなったので、別の予算を持つ意味が無い（`waitFor` の doc）。
+   *
    * ## この待ちが言えないこと（計器の側に貼る）
    *
    * **「起きなかった（実装の退行）」と「器が遅すぎた（飽和）」を区別できない。**
-   * どちらも同じタイムアウトで出る。**赤を見たら、実装の退行を探しに行く前に
+   * どちらも同じ落ち方で出る。**赤を見たら、実装の退行を探しに行く前に
    * 器の負荷を疑うこと** — 他の歯（歯1・歯2）はアサーションの不一致で数十 ms
    * のうちに落ちるので、**そちらが緑のままここだけが数秒かけて落ちているなら、
    * 退行の可能性が高い。逆に全体が遅いなら飽和を先に疑う。**
    *
-   * この器は混むと vitest の fork pool ごと落ちることがある（`AGENTS.md`
-   * 「自分が走っている器」）ので、**待ちは負荷に耐える側へ倒してある**
-   * （共有の `waitFor` の 3 秒ではなく下の予算）。それでも足りない可能性は
-   * 消せないので、消せないことを上に書いてある。
-   *
-   * `it()` 側にも明示のタイムアウトを付けてあること。**vitest の既定は 5 秒**で、
-   * 付けないとこの待ちより先にそちらが当たり、**理由の書かれていない汎用の
-   * タイムアウト**に化ける（＝ここに書いた断り書きが読まれない）。
+   * ⚠️ **落ち方は変わった。** 打ち切りを持っていた頃はこの関数自身が理由付きの
+   * 例外を投げたが、いまは `it()` の明示のタイムアウトで落ちる。**理由は
+   * `afterEach` が stderr へ出す待ちの `label` に載せてある**（`waitFor` の doc）
+   * ので、下の `label` を無内容にしないこと。
    */
-  const RELEASE_WAIT_BUDGET_MS = 15_000;
   async function waitForReleaseAttempts(s: Setup, expected: number, what: string): Promise<void> {
-    const started = Date.now();
-    for (;;) {
-      const seen = await releaseAttemptCount(s);
-      if (seen === expected) return;
-      if (Date.now() - started > RELEASE_WAIT_BUDGET_MS) {
-        throw new Error(
-          `${what}: 解除の試行が ${expected} 回になるのを ${RELEASE_WAIT_BUDGET_MS}ms 待ったが ${seen} 回のままだった。` +
-            'この歯は「起きなかった（退行）」と「器が遅すぎた（飽和）」を区別できない。' +
-            '他の歯（歯1・歯2）が緑でここだけ落ちているなら退行を、全体が遅いなら器の飽和を先に疑うこと。',
-        );
-      }
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
+    await waitFor(
+      async () => (await releaseAttemptCount(s)) === expected,
+      `${what}: 解除の試行が ${expected} 回になるのを待っている`,
+    );
   }
 
   /**
    * 解除の試行が `baseline` より増えるまで待つ。**目標を固定値にできない歯用**
    * （「人間優先が有効なままでも、保持中の tick は畳まれて在庫が増えない」）。
    * 人間の発言も枠の解除を誘発しうる（`post()` の `#releaseRequested` は起点の
-   * 種類を問わない）ので、そのぶんの回数を歯の側で先読みできない。**予算・
-   * 断り書きの理由は `waitForReleaseAttempts` と同じなのでそちらを見よ。**
+   * 種類を問わない）ので、そのぶんの回数を歯の側で先読みできない。**打ち切りを
+   * 持たない理由と断り書きは `waitForReleaseAttempts` と同じなのでそちらを見よ。**
    */
   async function waitForReleaseAttemptsAbove(
     s: Setup,
     baseline: number,
     what: string,
   ): Promise<void> {
-    const started = Date.now();
-    for (;;) {
-      const seen = await releaseAttemptCount(s);
-      if (seen > baseline) return;
-      if (Date.now() - started > RELEASE_WAIT_BUDGET_MS) {
-        throw new Error(
-          `${what}: 解除の試行が ${baseline} 回より増えるのを ${RELEASE_WAIT_BUDGET_MS}ms 待ったが ${seen} 回のままだった。` +
-            'この歯は「起きなかった（退行）」と「器が遅すぎた（飽和）」を区別できない。' +
-            '他の歯が緑でここだけ落ちているなら退行を、全体が遅いなら器の飽和を先に疑うこと。',
-        );
-      }
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
+    await waitFor(
+      async () => (await releaseAttemptCount(s)) > baseline,
+      `${what}: 解除の試行が ${baseline} 回より増えるのを待っている`,
+    );
   }
 
   /** 「枠の解除を試す」旨の日誌の行数（＝解除を試した回数そのもの）。 */
@@ -10905,9 +11288,14 @@ describe('クローン — 枠が回復した後の返信は、人間の側か�
 
     // 枠が回復した後の「試す契機」は、人間が chat を開いていなくても来る
     // （自律 tick・マネージャーからの報告・外部イベントなど、`post()` を呼ぶ
-    // ものなら何でもよい — `post()` の解除チェック（逐語は
-    // `grep -Fn -- 'if (this.#usageBlocked !== null) this.#releaseRequested = true;' packages/core/src/clone.ts`）
-    // は合図の種類を見ない）。
+    // ものなら何でもよい）。
+    // **⚠️ Issue #1240 続き以降は、`post()` の解除チェックが合図の種類を見る
+    // ことがある**（`usageBlockAlwaysRearms` の doc）——ただしそれは
+    // `#usageBlocked.resetsAt` が分かっているときだけで、ここで使う
+    // `spendLimitMessage` は文言だけの通知（`classifyUsageNotice` 経由）なので
+    // `resetsAt` を持たない。`resetsAt` が無ければ合図の種類に関わらず今までどおり
+    // 再武装する（`usageBlockAlwaysRearms` の doc「それ以外は post() が
+    // resetsAt を見る」）ので、この歯が使う `timer` 合図でも解除は起きる。
     // ここでは conv-1 に紐付かない `timer` 合図を使い、「1本目の接続がまだ
     // 生きている」という都合の良い前提を置かないことを明示する。
     clone.post({
@@ -13797,10 +14185,11 @@ describe('台帳で片付け済みの報告には印が付く（#391）', () => 
       text: '本文の前半。……そして後半に依頼が入っている。',
     });
     const inputs = (): string[] => (s.calls[0] as FakeCall).inputs;
-    const delivered = await expect
-      .poll(() => inputs().find((input) => input.includes('本文の前半')), { timeout: 3000 })
-      .toBeTruthy()
-      .then(() => inputs().find((input) => input.includes('本文の前半')) ?? '');
+    await waitForExpect(
+      () => expect(inputs().find((input) => input.includes('本文の前半'))).toBeTruthy(),
+      '『本文の前半』を含む入力が届く',
+    );
+    const delivered = inputs().find((input) => input.includes('本文の前半')) ?? '';
     await s.clone.stop();
     return delivered;
   }
@@ -13959,10 +14348,11 @@ describe('質問・許可確認にも、台帳で片付け済みなら印が付�
       requestId,
     });
     const inputs = (): string[] => (s.calls[0] as FakeCall).inputs;
-    const delivered = await expect
-      .poll(() => inputs().find((input) => input.includes('本文の前半')), { timeout: 3000 })
-      .toBeTruthy()
-      .then(() => inputs().find((input) => input.includes('本文の前半')) ?? '');
+    await waitForExpect(
+      () => expect(inputs().find((input) => input.includes('本文の前半'))).toBeTruthy(),
+      '『本文の前半』を含む入力が届く',
+    );
+    const delivered = inputs().find((input) => input.includes('本文の前半')) ?? '';
     await s.clone.stop();
     return delivered;
   }
@@ -14068,10 +14458,11 @@ describe('質問・許可確認にも、台帳で片付け済みなら印が付�
       text: '本文の前半（report）。……そして後半に依頼が入っている。',
     });
     const inputs = (): string[] => (s.calls[0] as FakeCall).inputs;
-    const delivered = await expect
-      .poll(() => inputs().find((input) => input.includes('本文の前半')), { timeout: 3000 })
-      .toBeTruthy()
-      .then(() => inputs().find((input) => input.includes('本文の前半')) ?? '');
+    await waitForExpect(
+      () => expect(inputs().find((input) => input.includes('本文の前半'))).toBeTruthy(),
+      '『本文の前半』を含む入力が届く',
+    );
+    const delivered = inputs().find((input) => input.includes('本文の前半')) ?? '';
     await s.clone.stop();
 
     expect(delivered).toContain('この報告は台帳で既に片付けている');
@@ -14103,10 +14494,11 @@ describe('マネージャーの報告に受け取ってからの経過を添え�
       text,
     });
     const inputs = (): string[] => (s.calls[0] as FakeCall).inputs;
-    const delivered = await expect
-      .poll(() => inputs().find((input) => input.includes(text)), { timeout: 3000 })
-      .toBeTruthy()
-      .then(() => inputs().find((input) => input.includes(text)) ?? '');
+    await waitForExpect(
+      () => expect(inputs().find((input) => input.includes(text))).toBeTruthy(),
+      'text の内容を含む入力が届く',
+    );
+    const delivered = inputs().find((input) => input.includes(text)) ?? '';
     await s.clone.stop();
     return delivered;
   }
@@ -14203,12 +14595,12 @@ describe('マネージャーの報告に受け取ってからの経過を添え�
     });
 
     const inputs = (): string[] => (s.calls[0] as FakeCall).inputs;
-    const delivered = await expect
-      .poll(() => inputs().find((input) => input.includes('経過を混ぜてはいけない質問')), {
-        timeout: 3000,
-      })
-      .toBeTruthy()
-      .then(() => inputs().find((input) => input.includes('経過を混ぜてはいけない質問')) ?? '');
+    await waitForExpect(
+      () =>
+        expect(inputs().find((input) => input.includes('経過を混ぜてはいけない質問'))).toBeTruthy(),
+      '『経過を混ぜてはいけない質問』を含む入力が届く',
+    );
+    const delivered = inputs().find((input) => input.includes('経過を混ぜてはいけない質問')) ?? '';
     await s.clone.stop();
 
     expect(delivered).not.toContain('受け取ってから');

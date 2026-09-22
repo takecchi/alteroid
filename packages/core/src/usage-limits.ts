@@ -52,6 +52,28 @@ export const usageLimitNoticeSchema = z.object({
   kind: usageLimitKindSchema,
   /** SDK が出した文言そのまま。**言い換えないこと**（人間が検索できる形で残す）。 */
   text: z.string(),
+  /**
+   * 回復予定時刻（epoch ミリ秒。Issue #1240 続き）。**分かるときだけ載せる。**
+   *
+   * ## なぜ要るのか
+   *
+   * 枠が閉じている間、`post()` は届いた合図ごとに保持の解除（再武装）を試して
+   * いた——回復予定時刻を知らないので、待つ理由が無かった。ところが権威ある
+   * 回復予定時刻は {@link RateLimitFacts.resetsAt} として既にセッション中に
+   * 届いている（`rate_limit_event`）。**それをこの通知が運んでいなかったので、
+   * 再武装の判定はいつも「分からない」側に倒れ、閉じている間に届いた合図の
+   * 数だけ無条件に再武装していた**（`clone.ts` の `post()` の doc。保持 N 件
+   * ×再武装 M 回＝日誌 N×M 行の一因）。
+   *
+   * ## `undefined` は「まだ開かない」ではない
+   *
+   * **取れない軸に 0 の行を作らない**（AGENTS.md 地雷表）。`classifyUsageNotice`
+   * （文言だけの経路）はこの値を持たないので付けない——推測で埋めると「回復
+   * 予定が無い」と「回復予定を知らない」が区別できなくなる。値が無ければ
+   * 「分からない」として扱い、**再武装の判定は今までどおり（無条件）**へ倒す
+   * （判定できないときは能力を削らない側へ倒す。AGENTS.md 地雷2）。
+   */
+  resetsAt: z.number().int().positive().optional(),
 });
 
 export type UsageLimitNotice = z.infer<typeof usageLimitNoticeSchema>;
