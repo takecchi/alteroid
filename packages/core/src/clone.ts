@@ -741,9 +741,12 @@ const UNPRODUCTIVE_USAGE_BLOCK_FOLD_NOTICE =
  * `apps/daemon/src/index.ts` の `wake()` は `CloneWakeGate.decide` で
  * 「認証トークンが通る状態に戻った」の合図（`external` / `source: 'token-pool'`）を
  * 配るか畳むかを決めている——理由は {@link CloneHost.usageBlocked} の doc
- * （host.ts）: この合図がクローンに対して持つ機能上の効果は `post()` の中の
- * `if (this.#usageBlocked !== null) this.#releaseRequested = true;` の1文だけで、
- * 枠で止まっていなければ配ってもターンを1本焼くだけである。
+ * （host.ts）: この合図がクローンに対して持つ機能上の効果は `post()` の中で
+ * `this.#releaseRequested = true;` を立てることだけで（`source:
+ * 'token-pool'` は {@link usageBlockAlwaysRearms} が常に真を返す枝を通る
+ * ので、Issue #1240 続きで足した回復予定時刻ぶんの抑止は当たらない——
+ * この段落の主張はいまも成り立つ）、枠で止まっていなければ配ってもターンを
+ * 1本焼くだけである。
  *
  * **`#restoreUnread` はその門を素通りする。** 器の入れ替え（プロセスの再起動）で
  * 未読のまま残った合図を配り直すこの経路は `#inbox.push` を直接呼び、`post()` の
@@ -801,6 +804,55 @@ export type RedeliveryGate = (
  * 実体である。**
  */
 export const ALWAYS_REDELIVER: RedeliveryGate = () => true;
+
+/**
+ * 枠（利用上限）が閉じている間に届いた合図が、`#usageBlocked.resetsAt`
+ * （回復予定時刻）より前でも常に再武装（`#releaseRequested = true`）してよいか
+ * （Issue #1240 続き）。
+ *
+ * ## なぜ「常に」の例外が要るのか
+ *
+ * `post()` はかつて、枠が閉じている間に届いた**どんな**合図でも無条件に
+ * 再武装していた。回復予定時刻を知らなかったので「試すしかない」が唯一の
+ * 選択肢だったが、いまは {@link UsageLimitNotice.resetsAt} が分かる回がある
+ * （`rejectedRateLimitNotice` の doc）。**まだそれより前だと分かっているなら、
+ * 新しい情報を運ばない合図で試す理由が無い** —— 枠は Anthropic 側の時計で
+ * 開くのであって、alteroid 側に合図が届くことでは開かない。保持している
+ * 合図が N 件、その間に新しい合図が M 件届けば、無条件の再武装は
+ * `#pump` 側で N×M 件ぶんの「内部ターンが失敗した」を日誌へ書く一因になって
+ * いた（`#pump` の枠ブロックの doc）。
+ *
+ * ## それでも無条件に再武装してよい3種類
+ *
+ * どれも「試す価値がある新しい事実」を運ぶので、`resetsAt` を見ずに従来どおり
+ * 再武装する。
+ *
+ * 1. **`human_message` / `human_answer`**（{@link isHumanOriginated}）——
+ *    人間起点。**最も価値の高い試行**であり、待たせる代償がいちばん大きい
+ * 2. **`manager_message`** —— マネージャーからの一件。外の世界の新しい事実
+ *    （マネージャー自身が見ている枠の状態、人間が委譲へ返した答え等）を運ぶ
+ * 3. **`external` かつ `source === {@link DAEMON_TOKEN_POOL_REOPENED_SOURCE}`**
+ *    —— トークンの構成・冷却の変化を運ぶデーモン自身の通知
+ *    （`daemon-self-notice.ts`）。**`resetsAt` はいま撒かれている1本の
+ *    トークンについての予定でしかない** —— プールへ新しいトークンを足す・
+ *    削る・有効化すると、その予定は無意味になる。だからここだけは
+ *    `resetsAt` を無視して常に試す（オーナーが挙げた「追加・削除など変更が
+ *    あった際には再チェック」を満たすのはここである）
+ *
+ * ## それ以外は `resetsAt` を見る（呼び出し側 `post()`）
+ *
+ * `self_initiative` / `timer` / `distill` / 上記以外の `external` は、この
+ * 関数が偽を返す。**呼び出し側（`post()`）がそこで初めて `resetsAt` を見る** ——
+ * 分かっていてまだ先なら抑止し、**分からなければ今までどおり再武装する**
+ * （判定できないときは能力を削らない側へ倒す。AGENTS.md 地雷2）。
+ */
+function usageBlockAlwaysRearms(event: InboxEvent): boolean {
+  return (
+    isHumanOriginated(event) ||
+    event.type === 'manager_message' ||
+    (event.type === 'external' && event.source === DAEMON_TOKEN_POOL_REOPENED_SOURCE)
+  );
+}
 
 export interface CloneOptions {
   stores: Stores;
@@ -1614,6 +1666,30 @@ class Clone implements CloneHost {
    */
   #releaseRequested = false;
   /**
+   * `resetsAt` より前だったので再武装を**抑止した**回数（Issue #1240 続き。
+   * `usageBlockAlwaysRearms` の doc）。
+   *
+   * **1回ごとには日誌へ書かない。** 書けば「保持 N 件×再武装 M 回」を
+   * 「抑止 M 回」に置き換えるだけで、直す意味が無い。**畳んで、実際に解除を
+   * 試した瞬間の1行**（`#pump` の「枠の解除を試す」）**へまとめて出し、
+   * 出した直後に0へ戻す。** 枠が実際に降りたとき（`#usageBlocked = null`）にも
+   * 0へ戻す——区間を跨いで持ち越さない。
+   */
+  #usageBlockSuppressedRearms = 0;
+  /**
+   * 枠で保持している**内部の合図**（`#conversationOf(event) === null`。
+   * 人間が待っていない）について、`#pump` が「内部ターンが失敗した」の
+   * 日誌書き込みを**畳んだ**回数（Issue #1240 続き。`#pump` の枠ブロックの
+   * doc）。
+   *
+   * **上の `#usageBlockSuppressedRearms` とは別の軸である。** あちらは
+   * 「再武装したか」（`post()` 側）、こちらは「畳んだ回、その回で日誌を
+   * 書いたか」（`#pump` 側）——同じ枠が閉じている区間で両方が増えうるが、
+   * 増える契機（合図の型・タイミング）は違う。**出す場所と reset のタイミングは
+   * 同じ**（上と同じ理由）。
+   */
+  #usageBlockFoldedInternalFailures = 0;
+  /**
    * 種類（`kind`）ごとに最後に日誌へ書いた上限の文言。
    *
    * **同じ知らせで日誌を埋めないためにある。** `reached` は一度立てば `#pump`
@@ -2346,7 +2422,30 @@ class Clone implements CloneHost {
     // そこの doc にある — 要は、この `post()` は `#pump` が合図1件の後始末を
     // 走らせている最中にも割り込むので、**ここで状態を動かすと、その隙間に
     // 居た合図が必ず1件取り残される**（実測の壊れ方2つはあちらに書いた）。
-    if (this.#usageBlocked !== null) this.#releaseRequested = true;
+    //
+    // **⚠️ 2026-09-22 追記（Issue #1240 続き）: 「1合図につき1試行」だけでは
+    // 二乗の日誌書き込みを止められない。** 上の段落が言う「1合図につき高々1回」は
+    // 費用（モデルを呼ぶ回数）の話であって、**日誌へ書く回数の話ではない。**
+    // 保持している合図が N 件のとき、無条件の再武装を M 回繰り返すと、
+    // `#pump` の枠ブロック（`#reportFailure`）が N×M 件の「内部ターンが失敗
+    // した」を書く（`#pump` の枠ブロックの doc）。**回復予定時刻
+    // （`#usageBlocked.resetsAt`）が分かっていて、まだそれより前なら、新しい
+    // 情報を運ばない合図では再武装しない** —— 枠は Anthropic 側の時計で開く
+    // のであって、合図の到着では開かない。`usageBlockAlwaysRearms` が真を
+    // 返す3種類（人間の発言・マネージャーの一件・token-pool の復帰通知）は
+    // 従来どおり無条件に再武装する（`usageBlockAlwaysRearms` の doc）。
+    // **抑止した回数は捨てない**——`#usageBlockSuppressedRearms` へ畳み、
+    // 実際に解除を試した瞬間の1行（`#pump` の「枠の解除を試す」）へまとめて
+    // 出す（`#usageBlockSuppressedRearms` の doc）。
+    if (this.#usageBlocked !== null) {
+      const resetsAt = this.#usageBlocked.resetsAt;
+      const stillCoolingDown = resetsAt !== undefined && Date.now() < resetsAt;
+      if (!usageBlockAlwaysRearms(event) && stillCoolingDown) {
+        this.#usageBlockSuppressedRearms += 1;
+      } else {
+        this.#releaseRequested = true;
+      }
+    }
 
     // **人間から新しい発言が来たら、失敗の1行の畳み込みを仕切り直す**
     // （`#humanFailureNotices`）。畳んでよいのは「同じ発言を試し直して同じ理由で
@@ -2879,11 +2978,29 @@ class Clone implements CloneHost {
           // 構造上ほぼ起きないのでテストの当たらない道になる。空なら次の反復で
           // 同じ `event` が枠の閉じていない状態で取り出されるだけである。
           this.#inbox.unshift([...held, event]);
+          // **抑止した再武装（`#usageBlockSuppressedRearms`）と、畳んだ内部の
+          // 失敗記録（`#usageBlockFoldedInternalFailures`）を、この1行へ畳んで
+          // 出す**（Issue #1240 続き。両方の doc）。**1回ごとには書かない** ——
+          // 書けば直そうとしていた二乗の書き込みをこちらへ移すだけになる。
+          // 0件のときは文言を足さない（AGENTS.md 地雷表「取れない軸に 0 の
+          // 行を作る」の裏返し——取れている値が 0 なら、それは書いてよい。
+          // 増えるのは「毎回書く」側であって、「0 を書く」側ではない）。
+          const suppressedRearms = this.#usageBlockSuppressedRearms;
+          const foldedInternalFailures = this.#usageBlockFoldedInternalFailures;
+          this.#usageBlockSuppressedRearms = 0;
+          this.#usageBlockFoldedInternalFailures = 0;
+          const suffix =
+            (suppressedRearms > 0
+              ? ` 回復予定時刻より前だったので再武装を抑止: ${String(suppressedRearms)} 回。`
+              : '') +
+            (foldedInternalFailures > 0
+              ? ` 人間が待っていない内部の失敗記録を畳んだ: ${String(foldedInternalFailures)} 件。`
+              : '');
           await this.#journal({
             type: 'exchange',
             with: 'self',
             role: 'outbound',
-            text: `枠の解除を試す。新しい合図が届いたので、保持していた ${held.length} 件を配り直す。`,
+            text: `枠の解除を試す。新しい合図が届いたので、保持していた ${held.length} 件を配り直す。${suffix}`,
           });
           continue;
         }
@@ -2902,13 +3019,55 @@ class Clone implements CloneHost {
           type: 'usage_limited',
           message: describeUsageNotice(notice),
         });
-        // 送り主を待たせない。「失敗した」だけにはしない — 何が起きていて、
-        // 合図がどうなるかまで分かる文言にする（PR #89 の経路をそのまま使う）。
-        await this.#reportFailure(
-          this.#conversationOf(event),
-          '枠が閉じているので、いまは投げていない。合図は保持してある。次に別の合図が' +
-            `届いたとき、保持した分から順に試し直す（${describeUsageNotice(notice)}）`,
-        );
+        // **⚠️ 2026-09-22 追記（Issue #1240 続き）: 内部の合図（人間が待って
+        // いない）では `#reportFailure` を呼ばない。**
+        //
+        // `#reportFailure` は呼ばれるたびに無条件で日誌へ1行書く
+        // （`内部ターンが失敗した: ${message}` — `#reportFailure` の
+        // `failureText` の組み立て）。枠が閉じている間、保持している合図
+        // 1件ごとにこの分岐を通るので、**保持 N 件×再武装 M 回＝日誌 N×M 行**
+        // になっていた（`post()` の `usageBlockAlwaysRearms` の doc）。
+        //
+        // **人間が待っている合図（`this.#conversationOf(event) !== null`）は
+        // 1文字も変えない。** `#reportFailure` は人間へ即時に `error` を
+        // `#emit` し、同じ会話への繰り返しは `#humanFailureNotices` が既に
+        // 畳んでいる（あちらの doc）——人間側の抑止は既にある。壊れていたのは
+        // **`#conversationOf` が `null` を返す内部の合図**（`human_message` /
+        // `human_answer` 以外）の側で、そちらには畳む機構が無かった。
+        //
+        // **`#reportFailure` の他の副作用は、この呼び出しに限っては全部
+        // no-op である**（確かめた3点）:
+        //
+        // 1. `running.failure = message`（`this.#turn` へ印を付ける）——
+        //    ここへ来る時点で `this.#turn` は必ず `null` である。`#pump` は
+        //    `for await` で1件ずつ `await` しながら処理するので、前の反復の
+        //    ターンは `#finishTurn()` で既に畳まれている（このブランチ自体、
+        //    `#handle` を1度も呼ばずに `continue` するので、今回の反復でも
+        //    ターンは立たない）
+        // 2. `this.#emit(conversationId, { type: 'error', … })` ——
+        //    `#emit` は `conversationId === null` なら即 `return`
+        //    （`#emit` の実装）なので、直上で `null` を渡す限り何もしない
+        // 3. `classifyContextWindowFailure(message)` 経由の
+        //    `#noteContextWindowFold` —— ここで渡る `message`（下の固定文）は
+        //    文脈窓の文言パターンに1つも当たらないので、`#noteContextWindowFold`
+        //    は常に `'no'` を返して何もしない（`classifyContextWindowFailure`
+        //    の判定は英語の接頭辞のみを見る）
+        //
+        // **⟹ 残る実質的な効果は日誌の1行だけだった。それを畳む。**
+        // 件数は捨てない——`#usageBlockFoldedInternalFailures` へ積み、
+        // `#usageBlockSuppressedRearms` と同じ「枠の解除を試す」の1行へ
+        // まとめて出す（`#usageBlockFoldedInternalFailures` の doc）。
+        if (this.#conversationOf(event) === null) {
+          this.#usageBlockFoldedInternalFailures += 1;
+        } else {
+          // 送り主を待たせない。「失敗した」だけにはしない — 何が起きていて、
+          // 合図がどうなるかまで分かる文言にする（PR #89 の経路をそのまま使う）。
+          await this.#reportFailure(
+            this.#conversationOf(event),
+            '枠が閉じているので、いまは投げていない。合図は保持してある。次に別の合図が' +
+              `届いたとき、保持した分から順に試し直す（${describeUsageNotice(notice)}）`,
+          );
+        }
         await this.#settleInboxEvent(event, true);
         continue;
       }
@@ -9116,6 +9275,14 @@ class Clone implements CloneHost {
         // 文言を二度書かない」ためのもので、枠が開いたかどうかとは別の関心
         // である。
         this.#usageBlocked = null;
+        // **抑止した再武装・畳んだ内部の失敗記録も、区間を跨いで持ち越さない**
+        // （Issue #1240 続き。`#usageBlockSuppressedRearms` /
+        // `#usageBlockFoldedInternalFailures` の doc）。ここは「枠の解除を
+        // 試す」の1行を経由しない `#usageBlocked = null` なので（`#pump` 先頭の
+        // 解除ブロックとは別の、ターン途中の成功による解除）、フラッシュする
+        // 行が無い——それでも次の枠当たりへ古い件数を持ち越さないために0へ戻す。
+        this.#usageBlockSuppressedRearms = 0;
+        this.#usageBlockFoldedInternalFailures = 0;
         // **`usable` の2本目の生産者へ1本渡す**（#681 (1)）。ここは
         // `markTokenUsable` の doc が「`clone.ts` が成功した result で
         // `#usageBlocked` を降ろしているのと同じ根拠」と名指ししている場所
@@ -10286,11 +10453,19 @@ function failureReason(failure: SdkFailure, event: AgentTurnEnded): string {
  * 添えるだけにする。`classifyUsageNotice` を通していないので `text` は
  * 「SDK が出した文言そのまま」ではないが、`status: 'rejected'` 自体が
  * SDK 側の権威ある値であり、これも自前の正規表現ではない。
+ *
+ * **`resetsAt` も同じ理由でそのまま運ぶ**（`usageLimitNoticeSchema.resetsAt`
+ * の doc。Issue #1240 続き）。`facts.resetsAt` は `rate_limit_event` が持つ
+ * 権威ある回復予定時刻で、`toRateLimitFacts` が既に epoch ミリ秒へ正規化して
+ * ある——ここで単位を作り直さない。**分からなければ載せない**（`facts.resetsAt`
+ * が `undefined` ならそのまま `undefined` を通す。AGENTS.md 地雷表「取れない軸に
+ * 0 の行を作る」）。
  */
 function rejectedRateLimitNotice(facts: RateLimitFacts): UsageLimitNotice {
   return {
     kind: 'reached',
     text: `rate_limit_event: status=rejected${facts.kind === undefined ? '' : `（kind: ${facts.kind}）`}`,
+    ...(facts.resetsAt === undefined ? {} : { resetsAt: facts.resetsAt }),
   };
 }
 
