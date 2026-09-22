@@ -1692,7 +1692,6 @@ export interface SessionTranscriptTail {
   readTail(key: LostSessionGrave, maxChars: number): Promise<string | null>;
 }
 
-
 /**
  * 仕事の**やり方** = クローンが読む素材（#1055 段3）。
  *
@@ -1738,12 +1737,7 @@ export interface PracticeStore {
    * `createdAt` は**最初に作られたときのものを引き継ぐ**（上書きで作成時刻を
    * 捏造しない）。`updatedAt` は毎回進む。
    */
-  write(input: {
-    slug: string;
-    kind: string;
-    title: string;
-    content: string;
-  }): Promise<Practice>;
+  write(input: { slug: string; kind: string; title: string; content: string }): Promise<Practice>;
   remove(slug: string): Promise<void>;
   /**
    * 全部消す（ワークスペースのリセット専用。`PersonaStore.clear` と同じ形）。

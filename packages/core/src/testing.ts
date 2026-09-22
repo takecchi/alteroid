@@ -1274,7 +1274,16 @@ export function createMemoryStores(): Stores {
     async list() {
       return [...practices.values()]
         .sort((a, b) => a.slug.localeCompare(b.slug))
-        .map(({ content: _content, ...meta }) => isolate(meta));
+        .map((entry) =>
+          isolate({
+            slug: entry.slug,
+            kind: entry.kind,
+            title: entry.title,
+            createdAt: entry.createdAt,
+            updatedAt: entry.updatedAt,
+            bytes: entry.bytes,
+          }),
+        );
     },
     async read(slug) {
       const found = practices.get(slug);

@@ -24,7 +24,15 @@ describe('PracticeStore — 仕事のやり方を器に持つ（#1055 段3）', 
     const stores = createMemoryStores();
     // ⛔ 列挙にした瞬間に「仕事の種類の一覧」を実装側が決めることになる
     // （`practiceKindSchema` の doc / north_star「実装専用に狭めるな」）。
-    for (const kind of ['実装', '調査', '相談', 'レビュー', '日報', '外部サービスの確認', 'まだ名前の無い何か']) {
+    for (const kind of [
+      '実装',
+      '調査',
+      '相談',
+      'レビュー',
+      '日報',
+      '外部サービスの確認',
+      'まだ名前の無い何か',
+    ]) {
       const written = await stores.practices.write({
         slug: `k-${encodeURIComponent(kind).toLowerCase().replaceAll('%', '')}`,
         kind,

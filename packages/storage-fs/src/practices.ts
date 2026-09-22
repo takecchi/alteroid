@@ -51,7 +51,16 @@ export class FsPracticeStore implements PracticeStore {
   async list(): Promise<PracticeMeta[]> {
     return [...(await this.#read()).practices]
       .sort((a, b) => a.slug.localeCompare(b.slug))
-      .map(({ content: _content, ...meta }) => meta);
+      .map((entry) => ({
+        // **本文を落とすのに分割代入を使わない。** 使わない変数を作る形は lint に
+        // 当たるうえ、`PracticeMeta` に何が載るかがここから読めなくなる。
+        slug: entry.slug,
+        kind: entry.kind,
+        title: entry.title,
+        createdAt: entry.createdAt,
+        updatedAt: entry.updatedAt,
+        bytes: entry.bytes,
+      }));
   }
 
   async read(slug: string): Promise<Practice | null> {
@@ -83,10 +92,7 @@ export class FsPracticeStore implements PracticeStore {
       return {
         next: {
           ...file,
-          practices: [
-            ...file.practices.filter((entry) => entry.slug !== input.slug),
-            next,
-          ],
+          practices: [...file.practices.filter((entry) => entry.slug !== input.slug), next],
         },
         result: next,
       };
