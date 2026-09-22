@@ -32,10 +32,12 @@ import type { InboxEvent } from './schema.js';
  * この合図の効果は**1つしかなく、拾い直しの経路はその1つに到達できない。**
  * `CloneHost.usageBlocked`（`host.ts`）の doc が逐語で書いている:
  *
- * > 「認証トークンが通る状態に戻った」という合図は、クローンが枠で止まって
- * > いない限りターンを1本焼くだけで何もしない（`clone.ts` の `post()` の中の
- * > `if (this.#usageBlocked !== null) this.#releaseRequested = true;` が唯一の
- * > 効果であり、止まっていなければそこは1文字も動かない）。
+ * > 「認証トークンが通る状態に戻った」という合図（`external`。クローン内部の
+ * > 発意 tick ではないので Issue #1240 の除外には当たらない）は、クローンが
+ * > 枠で止まっていない限りターンを1本焼くだけで何もしない（`clone.ts` の
+ * > `post()` の中の `this.#releaseRequested = true;`（`event.type !==
+ * > 'self_initiative'` の枝でだけ実行される）が唯一の効果であり、止まって
+ * > いなければそこは1文字も動かない）。
  *
  * そして `RedeliveryGate` の doc が、拾い直しはその `post()` を通らないと書く:
  *

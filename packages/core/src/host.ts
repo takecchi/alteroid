@@ -53,12 +53,13 @@ export interface CloneHost {
    * クローンがいま枠（利用上限）で止まっているか（Issue #783）。
    *
    * **デーモンの回し手が「合図を配るか畳むか」を決めるための読み取り専用の窓。**
-   * 「認証トークンが通る状態に戻った」という合図は、クローンが枠で止まっていない
-   * 限りターンを1本焼くだけで何もしない（`clone.ts` の `post()` の中の
-   * `if (this.#usageBlocked !== null) this.#releaseRequested = true;` が
-   * 唯一の効果であり、止まっていなければそこは1文字も動かない）。⟹
-   * `apps/daemon/src/index.ts` の `wake()` はここを見て、止まっていないときは
-   * 配らずに畳む。
+   * 「認証トークンが通る状態に戻った」という合図（`external`。クローン内部の
+   * 発意 tick ではないので Issue #1240 の除外には当たらない）は、クローンが
+   * 枠で止まっていない限りターンを1本焼くだけで何もしない（`clone.ts` の
+   * `post()` の中の `this.#releaseRequested = true;`（`event.type !==
+   * 'self_initiative'` の枝でだけ実行される）が唯一の効果であり、止まって
+   * いなければそこは1文字も動かない）。⟹ `apps/daemon/src/index.ts` の
+   * `wake()` はここを見て、止まっていないときは配らずに畳む。
    *
    * **真偽だけを返す。** 保持している通知の中身（文言など）はデーモンの判断に
    * 要らない——渡すと、渡した先が文言を読んで判定を重ねる経路を作りかねない。
@@ -75,8 +76,7 @@ export interface CloneHost {
    * ## なぜ要るか —— 「止まっている」だけでは、同じ合図を何度でも配ってしまう
    *
    * 直上の doc のとおり、「認証トークンが通る状態に戻った」の合図の効果は
-   * `clone.ts` の `post()` の中の
-   * `if (this.#usageBlocked !== null) this.#releaseRequested = true;` の1文
+   * `clone.ts` の `post()` の中の `this.#releaseRequested = true;` の1文
    * **だけ**である。⟹ **その印が既に立っているなら、2件目の合図はもう立って
    * いる印をもう一度立てるだけで、状態を1文字も動かさない。**
    *

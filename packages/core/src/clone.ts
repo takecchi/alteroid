@@ -740,9 +740,11 @@ const UNPRODUCTIVE_USAGE_BLOCK_FOLD_NOTICE =
  * `apps/daemon/src/index.ts` の `wake()` は `CloneWakeGate.decide` で
  * 「認証トークンが通る状態に戻った」の合図（`external` / `source: 'token-pool'`）を
  * 配るか畳むかを決めている——理由は {@link CloneHost.usageBlocked} の doc
- * （host.ts）: この合図がクローンに対して持つ機能上の効果は `post()` の中の
- * `if (this.#usageBlocked !== null) this.#releaseRequested = true;` の1文だけで、
- * 枠で止まっていなければ配ってもターンを1本焼くだけである。
+ * （host.ts）: `external` はクローン内部の発意 tick（`self_initiative`）では
+ * ないので、この合図がクローンに対して持つ機能上の効果は `post()` の中の
+ * `this.#releaseRequested = true;`（Issue #1240 以降、`event.type !==
+ * 'self_initiative'` の枝でだけ実行される）の1文だけで、枠で止まっていなければ
+ * 配ってもターンを1本焼くだけである。
  *
  * **`#restoreUnread` はその門を素通りする。** 器の入れ替え（プロセスの再起動）で
  * 未読のまま残った合図を配り直すこの経路は `#inbox.push` を直接呼び、`post()` の
@@ -1531,9 +1533,14 @@ class Clone implements CloneHost {
    * `toAccountUsage` は `status` を書かない）。だから「試すしか無い」を選び、
    * 試行の契機は**新しい合図が届いたとき**に限る（受け取るのは `post`、実際に
    * 降ろすのは `#pump` の先頭。分けてある理由は `#releaseRequested` の doc）。人間の発言が
-   * 最も価値の高い試行で、誰も話しかけなければ `self_initiative`（既定間隔ごと。
-   * 値は `apps/daemon/src/schedule.ts` の `DEFAULT_INITIATIVE_EVERY_MINUTES`）が
-   * 自然に試す。
+   * 最も価値の高い試行で、人間もマネージャーも黙っている間は利用者が仕掛けた
+   * `timer`（`schedule_create` の定期ジョブや日報）と、デーモン常駐の
+   * token-pool 監視（`apps/daemon/src/usage-poller.ts`。5分ごと）が代わりに試す。
+   *
+   * **⚠️ `self_initiative`（クローン内部の発意 tick）はここに含まれない
+   * （Issue #1240）。** 発意 tick は枠の外側について何も新しい情報を運ばない
+   * ので、単独では解除の契機にしない——詳細は `post()` 内の分岐（`event.type
+   * !== 'self_initiative'` の枝）の doc。
    */
   #usageBlocked: UsageLimitNotice | null = null;
   /**
@@ -1612,6 +1619,22 @@ class Clone implements CloneHost {
    * 残される（`claimRun` / `completeRun` を1つに戻すな、と同じ形である）。
    */
   #releaseRequested = false;
+  /**
+   * 枠が閉じている間、クローン内部の発意 tick（`self_initiative`）を
+   * 再武装の契機にしなかった回数（Issue #1240）。
+   *
+   * **1回ごとには日誌へ書かない。** #903 が「配り直しの消し込みを一括にして
+   * 日誌の行数を減らす」で減らした行数を、そのまま増やし直すことになるため
+   * （逐語は Issue #1240 の決定コメント）。代わりに、実際に解除を試した瞬間
+   * （`#pump` の解除ブロック、`枠の解除を試す。…` の1行）へこの数を畳んで
+   * 出し、出した直後に0へ戻す——`CloneWakeGate` の `folded`（畳んだ回数を
+   * 母数として持ち回り、まとめて1行で出す）と同じ作法である。
+   *
+   * **枠が降りたとき（解除に成功したとき）にも0へ戻す。** どちらの経路でも
+   * 「次の枠当たりの区間」を跨いで持ち越さない——持ち越すと、まったく別の
+   * 区間で抑止した回数が、次の区間の解除の1行に紛れ込む。
+   */
+  #suppressedSelfInitiativeTicks = 0;
   /**
    * 種類（`kind`）ごとに最後に日誌へ書いた上限の文言。
    *
@@ -2334,7 +2357,7 @@ class Clone implements CloneHost {
     // **`isTick` の畳み込み（次の行）より前に置く。** 畳み込みで捨てられる tick
     // （＝既に同じ tick が受信箱に居る）でも、ここまでは通した後で return する。
     // その tick 自体が積まれなくても、**「新しい合図が届いた」という事実そのもの**は
-    // 本物であり（既定間隔ごとの `self_initiative` が実際にもう一度発火した、など）、
+    // 本物であり（利用者が仕掛けた `timer` が実際にもう一度発火した、など）、
     // 時間が経ったことの合図として試す価値がある。しかも解除そのものはモデルを
     // 一度も呼ばない（保持分を受信箱へ戻すだけ）ので、畳まれる tick で解除しても
     // 実行回数の制限（AGENTS.md 地雷2）にはならない — 実際に金を払うかどうかは
@@ -2345,7 +2368,41 @@ class Clone implements CloneHost {
     // そこの doc にある — 要は、この `post()` は `#pump` が合図1件の後始末を
     // 走らせている最中にも割り込むので、**ここで状態を動かすと、その隙間に
     // 居た合図が必ず1件取り残される**（実測の壊れ方2つはあちらに書いた）。
-    if (this.#usageBlocked !== null) this.#releaseRequested = true;
+    //
+    // **⭐ ただしクローン内部の発意 tick（`self_initiative`）だけは、この印を
+    // 立てる契機から外す（Issue #1240）。** 発意 tick は「時間が経った」以上の
+    // 情報を運ばない——枠（利用上限）の外側で何が起きているかについて、1文字も
+    // 新しいことを言っていない内部タイマーである（`selfInitiativeEntry`、
+    // `packages/core/src/schedule.ts`）。枠が閉じている間にこれだけを契機に
+    // 解除を試みても、鍵はまだ通っていないので実ターンが1本、合成応答
+    // （`model: <synthetic>` / 入出力トークン全0）で潰れるだけになる——実測は
+    // Issue #1240（2026-09-18/19、既定 55 分間隔でこれが繰り返し起きていた）。
+    //
+    // **能力の削除ではない。** 発意 tick を再武装の契機から外しても、枠明けの
+    // 再開経路は4系統残る——(1) 人間の発言・回答（`human_message` /
+    // `human_answer`）、(2) マネージャーからの報告（`manager_message`）、
+    // (3) 利用者が仕掛けた本物の `timer`（既定の日報や `schedule_create` で
+    // 仕込んだ定期ジョブ。これは「仕事の予定」を運ぶので発意 tick とは違い、
+    // 従来どおり再武装させる）、そして (4) ⭐ 本命——token-pool の枠明け通知
+    // （`external` / `source: TOKEN_POOL_REOPENED_SOURCE`。
+    // `apps/daemon/src/index.ts` の `wake()` 内
+    // `clone.post({ type: 'external', ... })`）。この4つ目は
+    // `apps/daemon/src/usage-poller.ts` が5分ごとに現役の枠を独立に見に
+    // 行くことに支えられており、人間が一切話しかけない放置クローンでも、
+    // 鍵が実際に回復すればデーモン側から独立に起きる——「止めたまま誰も
+    // 起こさない」にはならない。
+    //
+    // 抑止した回数は捨てない。`#suppressedSelfInitiativeTicks`（このクラスの
+    // フィールド）へ積み、実際に解除を試した瞬間の1行（下の解除ブロック、
+    // `枠の解除を試す。…`）へ畳んで出す——1回ごとに日誌へは書かない（#903 が
+    // 減らした行数を増やし直さないため）。
+    if (this.#usageBlocked !== null) {
+      if (event.type === 'self_initiative') {
+        this.#suppressedSelfInitiativeTicks++;
+      } else {
+        this.#releaseRequested = true;
+      }
+    }
 
     // **人間から新しい発言が来たら、失敗の1行の畳み込みを仕切り直す**
     // （`#humanFailureNotices`）。畳んでよいのは「同じ発言を試し直して同じ理由で
@@ -2878,11 +2935,22 @@ class Clone implements CloneHost {
           // 構造上ほぼ起きないのでテストの当たらない道になる。空なら次の反復で
           // 同じ `event` が枠の閉じていない状態で取り出されるだけである。
           this.#inbox.unshift([...held, event]);
+          // **抑止した発意 tick の回数をここへ畳んで出す（Issue #1240）。**
+          // 1回ごとには日誌へ書かない（`#suppressedSelfInitiativeTicks` の
+          // doc）。0件なら文言を足さない——「その間、発意 tick は1本も
+          // 来なかった」と「来たが1本も抑止していない」は区別できないので、
+          // 0を数として書いても情報が増えない。
+          const suppressedTicks = this.#suppressedSelfInitiativeTicks;
+          this.#suppressedSelfInitiativeTicks = 0;
+          const suppressedNote =
+            suppressedTicks > 0 ? `（その間に発意 tick を ${suppressedTicks} 回抑止した）` : '';
           await this.#journal({
             type: 'exchange',
             with: 'self',
             role: 'outbound',
-            text: `枠の解除を試す。新しい合図が届いたので、保持していた ${held.length} 件を配り直す。`,
+            text:
+              `枠の解除を試す。新しい合図が届いたので、保持していた ${held.length} 件を` +
+              `配り直す。${suppressedNote}`,
           });
           continue;
         }
@@ -9095,6 +9163,16 @@ class Clone implements CloneHost {
         // 文言を二度書かない」ためのもので、枠が開いたかどうかとは別の関心
         // である。
         this.#usageBlocked = null;
+        // **`#suppressedSelfInitiativeTicks` もここで捨てる（Issue #1240）。**
+        // 通常はここへ来る前に「枠の解除を試す」の1行で既に0へ戻っている
+        // （そちらを通らずに `#handle` へ来ることは無い——枠が閉じている間は
+        // 上の短絡ブロックが `#handle` そのものを避ける）。それでも、解除を
+        // 試してから答えが返るまでの短い窓に発意 tick が届けば、ここに来る
+        // 前にもう一度積み増されている可能性がある。**枠が実際に開いた以上、
+        // その積み増しは次の区間へ持ち越す理由が無い**——持ち越すと、まったく
+        // 別の（まだ起きてもいない）次の枠当たりの1行に、この区間の数字が
+        // 紛れ込む。
+        this.#suppressedSelfInitiativeTicks = 0;
         // **`usable` の2本目の生産者へ1本渡す**（#681 (1)）。ここは
         // `markTokenUsable` の doc が「`clone.ts` が成功した result で
         // `#usageBlocked` を降ろしているのと同じ根拠」と名指ししている場所
