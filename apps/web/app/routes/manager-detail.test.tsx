@@ -256,6 +256,52 @@ describe('詳細でも、拒否は状態を置き換えずに状態へ添える'
     expect(screen.getByText(/器を作り直すと数え直しになる/)).toBeTruthy();
   });
 
+  /**
+   * **Issue #1289 — `DenialsCard` の subtitle が、いちばん強く断定していた面。**
+   *
+   * かつては「分類器か deny 規則がその場で拒否した。この確認は人間にもクローンにも
+   * 回ってきていない」と事実として言い切っていた。**下部の段落（「それでこの仕事が
+   * 止まったかどうかは見ていない」）とは矛盾していた** — こちらは正しいので消さず、
+   * subtitle 側だけを直す。
+   */
+  it('subtitle が拒否の出所を断定せず、2つの場合分けと「まず担い手の拒否文を読ませる」案内が載る（#1289）', async () => {
+    renderDetail({
+      ...BASE,
+      status: 'running',
+      denials: [{ tool: 'Bash', count: 1 }],
+    });
+
+    await screen.findByText('実行中');
+    const subtitle = screen.getByText(/出所はこの数からは取れない/);
+    const text = subtitle.textContent ?? '';
+
+    // **断定した旧文言が戻っていないこと。**
+    expect(text).not.toBe(
+      '分類器か deny 規則がその場で拒否した。この確認は人間にもクローンにも回ってきていない',
+    );
+    expect(text).not.toContain(
+      '分類器か deny 規則がその場で拒否した。この確認は人間にもクローンにも回ってきていない',
+    );
+
+    // 2つの場合分け——器側（分類器・deny 規則）と alteroid 自身の
+    // `PreToolUse` フックの両方が、条件付きの文として載る。
+    expect(text).toContain(
+      '器の分類器か deny 規則なら、この確認は人間にもクローンにも回ってきていない',
+    );
+    expect(text).toContain('PreToolUse');
+    expect(text).toContain('bash-wait-guard.ts');
+    expect(text).toContain('自力で抜けられることがある');
+
+    // 「まず担い手自身の拒否文を読ませる」案内が、場合分けより前に来る。
+    const guidanceAt = text.indexOf('まず担い手自身の拒否文を読ませること');
+    const branchAAt = text.indexOf('器の分類器か deny 規則なら');
+    expect(guidanceAt).toBeGreaterThan(-1);
+    expect(guidanceAt).toBeLessThan(branchAAt);
+
+    // **下部の段落（既に正しい）は消していないこと。**
+    expect(screen.getByText(/この仕事が止まったかどうかは見ていない/)).toBeTruthy();
+  });
+
   it('拒否が無いマネージャーには何も足さない（雑音にしない）', async () => {
     renderDetail({ ...BASE, status: 'running' });
 

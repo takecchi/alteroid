@@ -165,6 +165,45 @@ describe('拒否は、状態を置き換えずに状態へ添える', () => {
     expect(screen.queryByText(/手が止まっている。/)).toBeNull();
   });
 
+  /**
+   * **Issue #1289 — `ManagerDenialNote` も拒否の出所を断定しない。**
+   *
+   * `packages/core/src/tools.ts` の `describeDenials` と逐語で同一だった断定
+   * （「この確認はクローンには回ってきていないので、手が止まっている可能性が
+   * ある」）を、`manager.ts` の `case 'permission_denied'`（#1267）と同じ向きに
+   * 直す。
+   */
+  it('拒否の出所を断定せず、2つの場合分けと「まず担い手の拒否文を読ませる」案内が載る（#1289）', async () => {
+    renderManagers([
+      { ...BASE, status: 'running', denials: [{ tool: 'Bash', count: 1 }] },
+    ]);
+
+    await screen.findByText('実行中');
+    const note = screen.getByText(/確認へ上がらず止められた道具/).closest('p');
+    if (note === null) throw new Error('ManagerDenialNote の段落が見つからない');
+    const text = note.textContent ?? '';
+
+    // **断定した旧文言が戻っていないこと。**
+    expect(text).not.toContain(
+      'この確認はクローンには回ってきていないので、手が止まっている可能性がある。',
+    );
+
+    // 2つの場合分け——器側（分類器・deny 規則）と alteroid 自身の
+    // `PreToolUse` フックの両方が、条件付きの文として載る。
+    expect(text).toContain(
+      '器の分類器か deny 規則なら、この確認はクローンには回ってきていないので手が止まる。',
+    );
+    expect(text).toContain('PreToolUse');
+    expect(text).toContain('bash-wait-guard.ts');
+    expect(text).toContain('自力で抜けられることがある');
+
+    // 「まず担い手自身の拒否文を読ませる」案内が、場合分けより前に来る。
+    const guidanceAt = text.indexOf('まず担い手自身に返っている拒否文を読ませること');
+    const branchAAt = text.indexOf('器の分類器か deny 規則なら');
+    expect(guidanceAt).toBeGreaterThan(-1);
+    expect(guidanceAt).toBeLessThan(branchAAt);
+  });
+
   it('拒否の種類が多くても畳んで、切ったことを言う', async () => {
     renderManagers([
       {

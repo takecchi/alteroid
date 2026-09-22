@@ -714,7 +714,7 @@ function DenialsCard({ denials }: { denials: ManagerDenial[] | undefined }) {
     <Card>
       <CardHeader
         title="確認へ上がらず止められた道具"
-        subtitle="分類器か deny 規則がその場で拒否した。この確認は人間にもクローンにも回ってきていない"
+        subtitle="まず担い手自身の拒否文を読ませること。出所はこの数からは取れない。(a) 器の分類器か deny 規則なら、この確認は人間にもクローンにも回ってきていない。(b) alteroid 自身の PreToolUse フック（bash-wait-guard.ts 等）なら、理由と代替案は担い手へ直接返っており、自力で抜けられることがある"
       />
       <ul className="px-4 py-3 text-sm">
         {recent.map((entry) => (

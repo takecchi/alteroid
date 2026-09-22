@@ -10550,6 +10550,47 @@ describe('一覧の文言は、観測した分しか言わない', () => {
   });
 
   /**
+   * **Issue #1289 — `describeDenials` も拒否の出所を断定しない。**
+   *
+   * `manager.ts` の `case 'permission_denied'` は #1267 で断定を外したが、
+   * `manager_list` / `manager_report` が読む一覧の一文（`describeDenials`）には
+   * 同じ向きの断定「この確認はクローンには回ってきていないので、手が止まっている
+   * 可能性がある」がそのまま残っていた。`permission-denied.test.ts` の
+   * 「拒否の出所を断定せず…（#1267）」と同じ形で、ここでも固定する。
+   */
+  it('describeDenials も拒否の出所を断定せず、2つの場合分けと「まず担い手の拒否文を読ませる」案内が載る（#1289）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.denied.set('mgr-1', [{ tool: 'Bash', count: 1 }]);
+
+    const reply = await h.call('manager_list', {});
+
+    // **断定した旧文言が戻っていないこと。**
+    expect(reply).not.toContain(
+      'この確認はクローンには回ってきていないので、手が止まっている可能性がある',
+    );
+
+    // 2つの場合分け——器側（分類器・deny 規則）と alteroid 自身の
+    // `PreToolUse` フックの両方が、条件付きの文として載る。
+    expect(reply).toContain(
+      '(a) 器の分類器か deny 規則なら、この確認はクローンには回ってきていないので手が止まる。',
+    );
+    expect(reply).toContain('PreToolUse');
+    expect(reply).toContain('bash-wait-guard.ts');
+    expect(reply).toContain('自力で抜けられることがある');
+
+    // 「まず担い手自身の拒否文を読ませる」案内が、場合分けより前に来る。
+    const guidanceAt = reply.indexOf('まず担い手自身に返っている拒否文を読ませること');
+    const branchAAt = reply.indexOf('(a) 器の分類器か deny 規則なら');
+    expect(guidanceAt).toBeGreaterThan(-1);
+    expect(guidanceAt).toBeLessThan(branchAAt);
+
+    // **既存の断り書きが落ちていないこと。**
+    expect(reply).toContain('journal_read');
+    expect(reply).toContain('件数はデーモンを作り直すと数え直しになる');
+  });
+
+  /**
    * Issue #373 — マネージャー自身と作業者の拒否を同じ数へ畳まず、一覧の字面でも
    * 3値（マネージャー／作業者／層不明）のまま出す。`層不明` を黙って消したり
    * マネージャー側へ混ぜたりすると、クローンが誤った相手へ指示を出しうる

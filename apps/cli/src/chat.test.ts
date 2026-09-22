@@ -74,6 +74,35 @@ describe('renderManagerList', () => {
   });
 
   /**
+   * **Issue #1289 — `denialLine` も拒否の出所を断定しない。**
+   *
+   * かつては「。手が止まっている可能性があります」とだけ書いていて、alteroid
+   * 自身の `PreToolUse` フック（`bash-wait-guard.ts` 等）が拒否した回にも
+   * 「止まっている」と読ませていた。「止まっている**可能性がある**」という
+   * 可能性の語は削らず、(b) を足して断定を外す（`manager.ts` の
+   * `case 'permission_denied'`、#1267 と同じ向き）。
+   */
+  it('拒否の出所を断定せず、「まず担い手の拒否文を読ませる」案内と(b)の可能性が載る（#1289）', () => {
+    const text = renderManagerList([manager({ denials: [{ tool: 'Bash', count: 1 }] })]);
+
+    // **断定した旧文言（因果で断定する形）が戻っていないこと。** かつては
+    // 件数のすぐ後に「。手が止まっている可能性があります」とだけ続いていた。
+    expect(text).not.toContain('。手が止まっている可能性があります');
+
+    // 「止まっている可能性がある」という語そのものは削らない。
+    expect(text).toContain('手が止まっている可能性があります');
+    // (b) alteroid 自身のフックの回は、自力で抜けられることがある。
+    expect(text).toContain('PreToolUse');
+    expect(text).toContain('自力で抜けられることがあります');
+
+    // 「まず担い手自身の拒否文を読ませる」案内が、(a)/(b) の場合分けより前に来る。
+    const guidanceAt = text.indexOf('まず担い手自身の拒否文を読ませること');
+    const branchAAt = text.indexOf('(a) 器の分類器か deny 規則なら');
+    expect(guidanceAt).toBeGreaterThan(-1);
+    expect(guidanceAt).toBeLessThan(branchAAt);
+  });
+
+  /**
    * **字面の生成元を1つに保つ。** ここは同じ意味の字面（`/セッション切断`）を
    * 自前で組んでいて、`live` を真偽値としてしか扱えなかった —— 「取れていない」
    * （`undefined`）を表せず、取れていない回まで「話しかけられる」側へ倒れていた。

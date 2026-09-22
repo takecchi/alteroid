@@ -1816,8 +1816,16 @@ function denialActorTag(actor: ManagerDenial['actor']): string {
 /**
  * 状態に添える「確認へ上がらず止められた」件数の一行。
  *
- * **状態を置き換えない。** 分類器か deny 規則がその場で拒否すると、その仕事は
- * `running` のまま手が止まる。札は `[running]` のまま残し、その下に並べる。
+ * **状態を置き換えない。** 確認へ上がらず止められると、その仕事は `running`
+ * のまま手が止まって見える。札は `[running]` のまま残し、その下に並べる。
+ *
+ * **⚠ ただし拒否の出所は、この数からは取れない（Issue #1267 / #1289）。** 器の
+ * モデル分類器・deny 規則の拒否と、alteroid 自身の `PreToolUse` フック
+ * （`bash-wait-guard.ts` 等）の拒否は同じイベントとして通るが、帰結が違う
+ * ——前者は確認がクローンへ回らないので担い手は本当に詰むが、後者は理由と
+ * 代替案が担い手自身へ直接返っているので自力で抜けられることがある
+ * （`manager.ts` の `case 'permission_denied'`）。だから断定はせず、(b) の
+ * 可能性を残す。
  *
  * **人間が読む面は3つある。** クローンは `manager_list` で、Web UI は一覧で
  * 同じものを見ているのに、端末だけが「実行中」としか言わなかった。同じ仕事を
@@ -1847,7 +1855,9 @@ function denialLine(denials: ManagerDenial[] | undefined): string | null {
   return (
     `⚠ 確認へ上がらず止められた道具: ${shown.map((e) => `${e.tool} ${e.count}件${denialActorTag(e.actor)}`).join(' / ')}` +
     (rest > 0 ? `（ほか ${rest} 種、全 ${total} 件）` : '') +
-    '。手が止まっている可能性があります'
+    '。まず担い手自身の拒否文を読ませること。' +
+    '(a) 器の分類器か deny 規則なら、手が止まっている可能性があります。' +
+    '(b) alteroid 自身の PreToolUse フックなら、理由と代替案は担い手へ直接返っており自力で抜けられることがあります'
   );
 }
 
