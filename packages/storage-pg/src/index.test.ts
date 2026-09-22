@@ -26,7 +26,15 @@ import {
   seedPgWorkspace,
   type PgStores,
 } from './index.js';
-import { agentTokens, archive, commitments, jobs as jobsTable, memory } from './schema.js';
+import {
+  agentTokens,
+  archive,
+  commitments,
+  jobs as jobsTable,
+  memory,
+  sessionEntries,
+} from './schema.js';
+import { PgSessionStore } from './session-store.js';
 
 /**
  * pg ドライバの受け入れ確認。
@@ -3797,6 +3805,98 @@ describe('PgSessionStore（SDK のセッション永続化）', () => {
 
     expect(await stores.sessionStore.load(key)).toBeNull();
     expect(await stores.sessionStore.listSessions('proj')).toEqual([]);
+  });
+
+  /**
+   * **大きさを測る口**（#1283 の OOM、段1。`SessionTranscriptTail.measureSize`）。
+   *
+   * `load()` を呼ぶ前にこれで大きさを確かめ、大きすぎたら resume しない
+   * （`clone.ts` の `#resumeCandidateWithinBudget`）。**測れないときは `null`
+   * ——`0` は「測って0バイトだった（行が無い）」という実測である**
+   * （`measureSize` の doc）。
+   */
+  describe('measureSize', () => {
+    it('一度も書かれていない key は0バイト（測れなかったのではなく、実測して0）', async () => {
+      const neverWritten = { projectKey: 'proj', sessionId: 'sess-measure-empty' };
+      expect(await stores.sessionStore.measureSize(neverWritten)).toBe(0);
+    });
+
+    it('積んだぶんだけ増える', async () => {
+      const sizeKey = { projectKey: 'proj', sessionId: 'sess-measure' };
+      expect(await stores.sessionStore.measureSize(sizeKey)).toBe(0);
+
+      await stores.sessionStore.append(sizeKey, [
+        { type: 'user', uuid: 'm1', body: 'x'.repeat(1_000) },
+      ]);
+      const afterOne = await stores.sessionStore.measureSize(sizeKey);
+      // **測れなかった（`null`）ことと取り違えない**——ここから先は数値として扱う。
+      expect(afterOne).not.toBeNull();
+      // pg_column_size は行のオーバーヘッドも含むので、本文の 1,000 バイト
+      // ちょうどにはならない——**900 バイトを大きく超えていること**で
+      // 「本当に測っている」ことだけを見る（正確な一致は実装詳細）。
+      expect(afterOne as number).toBeGreaterThan(900);
+
+      await stores.sessionStore.append(sizeKey, [
+        { type: 'assistant', uuid: 'm2', body: 'y'.repeat(2_000) },
+      ]);
+      const afterTwo = await stores.sessionStore.measureSize(sizeKey);
+      expect(afterTwo).not.toBeNull();
+      expect(afterTwo as number).toBeGreaterThan(afterOne as number);
+
+      // **独立した経路で検算する**（実装と同じ関数を呼び直すのではなく、
+      // 生の SQL をここでもう一度書いて突き合わせる）。`db.execute` の戻りは
+      // ドライバで形が違う（`commitments.ts` の doc「node-postgres は
+      // `{ rows }`、他は配列そのもの」）ので、ここでも同じ読み方をする
+      // （`migrate.test.ts` の `indexExists` と同じ形）。
+      const raw: unknown = await db.execute(
+        sql`select sum(pg_column_size(${sessionEntries.entry})) as bytes
+            from session_entries
+            where project_key = ${sizeKey.projectKey}
+              and session_id = ${sizeKey.sessionId}
+              and subpath = ''`,
+      );
+      const rows = Array.isArray(raw) ? raw : ((raw as { rows?: unknown[] }).rows ?? []);
+      const rawRow = rows[0] as { bytes: string | number } | undefined;
+      expect(rawRow).toBeDefined();
+      expect(afterTwo).toBe(Number(rawRow?.bytes));
+    });
+
+    it('subpath が違う行（作業者の生ログ）は数えない', async () => {
+      const sizeKey = { projectKey: 'proj', sessionId: 'sess-measure-subpath' };
+      await stores.sessionStore.append({ ...sizeKey, subpath: 'worker-1' }, [
+        { type: 'user', uuid: 'w1', body: 'z'.repeat(5_000) },
+      ]);
+
+      // 主トランスクリプト（subpath 省略＝空文字）には1行も無い。
+      expect(await stores.sessionStore.measureSize(sizeKey)).toBe(0);
+    });
+
+    /**
+     * **本文（`entry`）を SELECT していないことを、撃った SQL そのもので見る。**
+     * `pg_column_size(entry)` の中でしか `entry` 列に触れていなければ、
+     * 本文が Node のメモリへ載ることはない（TOAST も展開しない——同じ関数を
+     * `archive.ts` の `list()` が `body` に対して使っている理由と同じ）。
+     */
+    it('撃った SQL は entry 列を pg_column_size(...) の中でしか参照しない', async () => {
+      const sqlKey = { projectKey: 'proj', sessionId: 'sess-measure-sql' };
+      await stores.sessionStore.append(sqlKey, [{ type: 'user', uuid: 'q1', body: 'hi' }]);
+
+      const queries: string[] = [];
+      const loggingDb = drizzle(client, {
+        logger: { logQuery: (query: string) => queries.push(query) },
+      });
+      const loggedStore = new PgSessionStore(loggingDb);
+
+      await loggedStore.measureSize(sqlKey);
+
+      expect(queries).toHaveLength(1);
+      const measureQuery = queries[0]!;
+      expect(measureQuery).toContain('pg_column_size');
+      // pg_column_size(...) の呼び出しを取り除いた残りに "entry" が無ければ、
+      // 素の列参照（本文の SELECT）は存在しない。
+      const withoutSizeCalls = measureQuery.replace(/pg_column_size\([^)]*\)/gi, '');
+      expect(withoutSizeCalls).not.toContain('entry');
+    });
   });
 });
 

@@ -1688,6 +1688,30 @@ export interface SessionTranscriptTail {
    * 器で変わる。
    */
   readTail(key: LostSessionGrave, maxChars: number): Promise<string | null>;
+
+  /**
+   * その鍵のセッションが占める、おおよその大きさ（バイト）を**本文を1バイトも
+   * 読まずに**測る（#1283 の OOM、段1）。
+   *
+   * ## なぜ要るのか
+   *
+   * SDK の `SessionStore.load()` は全件を返す契約で、削れない（`readTail` の
+   * doc「あちらは全件を戻す」）。⟹ 大きすぎる鍵は `load()` を**呼ぶ前に**避ける
+   * しかない。避けるかどうかを決めるために、本文へ触れずに大きさだけを知る口が
+   * ここである（呼び出し側は `clone.ts` の `#ensureQuery` 周辺）。
+   *
+   * ## 契約
+   *
+   * - **実装は本文（`entry` そのもの）を読み込まないこと。** 読めば、避けたい
+   *   はずの OOM をこの関数自身が起こしかねない。pg 実装は `pg_column_size` の
+   *   合計で測り、TOAST を展開しない（`TranscriptArchive.list` の `storedBytes`
+   *   と同じ考え方 — `packages/storage-pg/src/archive.ts`）。
+   * - **測れないときは `null`。実装が対応していない、またはエラーが出たとき。**
+   *   **`0` を返さないこと** —— `0` は「測って0バイトだった（その鍵に行が
+   *   無い等）」という実測であって、「測れなかった」の代用にしない
+   *   （AGENTS.md 地雷表「取れない軸に 0 の行を作る」）。
+   */
+  measureSize(key: LostSessionGrave): Promise<number | null>;
 }
 
 /** デーモンが必要とするストア一式。 */

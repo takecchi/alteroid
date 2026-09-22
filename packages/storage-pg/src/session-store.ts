@@ -3,7 +3,7 @@ import type { SessionKey, SessionStore, SessionStoreEntry } from '@anthropic-ai/
 import { and, asc, desc, eq, ne, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
-import { stripNulls } from './db.js';
+import { stripNulls, toNumber } from './db.js';
 import { sessionEntries, sessions } from './schema.js';
 
 /**
@@ -141,6 +141,36 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
       if (chars >= maxChars) break;
     }
     return lines.reverse().join('\n');
+  }
+
+  /**
+   * その鍵の大きさ（バイト）を測る（#1283 の OOM、段1。`SessionTranscriptTail`）。
+   *
+   * **`entry` そのものは SELECT しない。** `pg_column_size(entry)` は行内に
+   * 収まった TOAST ポインタのサイズだけを見て、外部チャンクを取りに行かない
+   * ——`archive.ts` の `list()` / `sessions()` が `body` に対して使っているのと
+   * 同じ関数・同じ理由である。本文を1バイトも Node のメモリへ載せない。
+   *
+   * 行が無い鍵は `sum(...)` が SQL の `NULL` を返す（集約対象が0行のため）。
+   * それは「測れなかった」ではなく「測って0バイトだった」なので `0` を返す
+   * （`measureSize` の doc「`0` を返さないこと」は測れなかった場合の話であって、
+   * この分岐には当たらない）。
+   */
+  async measureSize(key: LostSessionGrave): Promise<number | null> {
+    const [row] = await this.#db
+      .select({
+        bytes: sql<number | string | null>`sum(pg_column_size(${sessionEntries.entry}))`,
+      })
+      .from(sessionEntries)
+      .where(
+        and(
+          eq(sessionEntries.projectKey, key.projectKey),
+          eq(sessionEntries.sessionId, key.sessionId),
+          eq(sessionEntries.subpath, ''),
+        ),
+      );
+    if (row === undefined || row.bytes === null) return 0;
+    return toNumber(row.bytes);
   }
 
   async listSessions(projectKey: string): Promise<{ sessionId: string; mtime: number }[]> {

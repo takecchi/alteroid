@@ -9,6 +9,7 @@ import type {
   PermissionResult,
   Query,
   SDKMessage,
+  SessionStore,
 } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -1790,6 +1791,277 @@ describe('クローン', () => {
     expect((second.calls[0] as FakeCall).options.resume).toBe('sess-fake');
 
     await second.clone.stop();
+  });
+
+  describe('resume する前にセッションの大きさを測る（#1283 の OOM）', () => {
+    /**
+     * `setup()` は `sessionStore`（SDK の型。`Stores` とは別枠の `CloneOptions`
+     * フィールド）を配線しないので、ここでは `createClone` を直接呼ぶ
+     * （`clone-grave-pickup-race.test.ts` の `bootClone` と同じ理由・同じ形）。
+     *
+     * 偽の `queryFn` は SDK の契約を模す（SDK の型定義 `sdk.d.ts` の
+     * `SessionStore.load` の doc「Load a full session for resume」）——
+     * `options.resume` が付いているときだけ `options.sessionStore.load()` を
+     * 呼ぶ。**これが「`load()` が呼ばれたか」を直接観測できる唯一の場所である**
+     * （本物の SDK 内部はテストから見えない。`load()` を呼ぶのは alteroid では
+     * なく SDK 自身なので、ここで模すしかない）。
+     */
+    function bootCloneForResumeBudget(
+      stores: Stores,
+      sessionStore: SessionStore,
+    ): { clone: CloneHost; events: ChatStreamEvent[]; calls: { resume: string | undefined }[] } {
+      const calls: { resume: string | undefined }[] = [];
+      const fn = ((params: { prompt: unknown; options?: Options }) => {
+        calls.push({ resume: params.options?.resume });
+        async function* generate(): AsyncGenerator<SDKMessage, void> {
+          if (params.options?.resume !== undefined && params.options.sessionStore !== undefined) {
+            await params.options.sessionStore.load({
+              projectKey: 'proj',
+              sessionId: params.options.resume,
+            });
+          }
+          yield {
+            type: 'system',
+            subtype: 'init',
+            session_id: 'sess-fake',
+            uuid: 'uuid-init',
+          } as unknown as SDKMessage;
+          for await (const message of params.prompt as AsyncIterable<{
+            message: { content: unknown };
+          }>) {
+            void message;
+            yield {
+              type: 'assistant',
+              message: { content: [{ type: 'text', text: 'ok' }] },
+              parent_tool_use_id: null,
+              session_id: 'sess-fake',
+              uuid: 'uuid-assistant',
+            } as unknown as SDKMessage;
+            yield {
+              type: 'result',
+              subtype: 'success',
+              result: 'ok',
+              session_id: 'sess-fake',
+              uuid: 'uuid-result',
+            } as unknown as SDKMessage;
+          }
+        }
+        const generator = generate();
+        return Object.assign(generator, {
+          close: () => undefined,
+          interrupt: async () => undefined,
+        }) as unknown as Query;
+      }) as unknown as typeof sdkQuery;
+
+      const clone = createClone({
+        stores,
+        queryFn: fn,
+        sessionStore,
+        env: {},
+        runners: createRunnerRegistry([
+          createLocalRunner({ workspacePath: '/work', queryFn: fn, env: {} }),
+        ]),
+        redeliveryGate: ALWAYS_REDELIVER,
+      });
+      const { events } = wireEvents(clone, 'conv-1');
+      return { clone, events, calls };
+    }
+
+    /** `sessionStore` 側の `load` だけをスパイにした最小実装。 */
+    function fakeSdkSessionStore(): SessionStore & { load: ReturnType<typeof vi.fn> } {
+      return {
+        append: async () => undefined,
+        load: vi.fn(async () => null),
+      };
+    }
+
+    /** 日誌の self/outbound を text で読む（`selfTexts` と同じ形。この describe 専用）。 */
+    async function selfOutboundTexts(stores: Stores): Promise<string[]> {
+      const rows = await stores.journal.list({ types: ['exchange'] });
+      return rows
+        .filter(
+          (entry) =>
+            entry.type === 'exchange' && entry.with === 'self' && entry.role === 'outbound',
+        )
+        .map((entry) => (entry.type === 'exchange' ? entry.text : ''));
+    }
+
+    // 実装（`RESUME_SIZE_BUDGET_BYTES`、`clone.ts`）は 536,870,912（512 MiB）。
+    // ここへ書き写すと腐るので、超過側は「実装の1バイト上」ではなく明確に
+    // 超えた値を使う。
+    const OVER_BUDGET_BYTES = 600 * 1024 * 1024;
+    const UNDER_BUDGET_BYTES = 100;
+
+    it('⭐ 予算を超えたセッションは resume せず、SDK の load() も呼ばれない（本丸）', async () => {
+      const stores = createMemoryStores();
+      await stores.sessions.setCloneSessionId('sess-huge');
+      await stores.sessions.setProjectKey('proj');
+
+      const measureSize = vi.fn(async () => OVER_BUDGET_BYTES);
+      const tail: NonNullable<Stores['sessionTranscriptTail']> = {
+        readTail: async () => null,
+        measureSize,
+      };
+      const sessionStore = fakeSdkSessionStore();
+      const { clone, events, calls } = bootCloneForResumeBudget(
+        { ...stores, sessionTranscriptTail: tail },
+        sessionStore,
+      );
+
+      clone.post(humanMessage('起動する'));
+      await waitForDone(events);
+      await clone.stop();
+
+      expect(measureSize).toHaveBeenCalledWith({ projectKey: 'proj', sessionId: 'sess-huge' });
+      // **本丸: `resume` が渡っていない ⟹ SDK は `load()` を呼ぶ材料を持たない。**
+      expect(calls[0]?.resume).toBeUndefined();
+      // **そしてここが直接の観測** —— 偽の SDK は `resume` が無ければ
+      // `load()` を呼ばない（doc「Load a full session for resume」を模した形。
+      // 上の helper 参照）。呼ばれていなければ、この経路は契約（`load()` は
+      // 全件を戻す）を破っていない。
+      expect(sessionStore.load).not.toHaveBeenCalled();
+    });
+
+    it('予算内なら従来どおり resume する（SDK の load() も呼ばれる）', async () => {
+      const stores = createMemoryStores();
+      await stores.sessions.setCloneSessionId('sess-small');
+      await stores.sessions.setProjectKey('proj');
+
+      const measureSize = vi.fn(async () => UNDER_BUDGET_BYTES);
+      const tail: NonNullable<Stores['sessionTranscriptTail']> = {
+        readTail: async () => null,
+        measureSize,
+      };
+      const sessionStore = fakeSdkSessionStore();
+      const { clone, events, calls } = bootCloneForResumeBudget(
+        { ...stores, sessionTranscriptTail: tail },
+        sessionStore,
+      );
+
+      clone.post(humanMessage('起動する'));
+      await waitForDone(events);
+      await clone.stop();
+
+      expect(calls[0]?.resume).toBe('sess-small');
+      expect(sessionStore.load).toHaveBeenCalledWith({
+        projectKey: 'proj',
+        sessionId: 'sess-small',
+      });
+    });
+
+    it('生ログの預け先が無い（fs 構成相当）ときは測れないので従来どおり resume する', async () => {
+      const stores = createMemoryStores();
+      await stores.sessions.setCloneSessionId('sess-fs');
+      await stores.sessions.setProjectKey('proj');
+      // **`sessionTranscriptTail` を足さない** —— `createMemoryStores()` は
+      // storage-fs の代わりであり、fs 構成と同じく既定で undefined
+      // （`Stores.sessionTranscriptTail` の doc「pg 構成でだけ付く」）。
+
+      const sessionStore = fakeSdkSessionStore();
+      const { clone, events, calls } = bootCloneForResumeBudget(stores, sessionStore);
+
+      clone.post(humanMessage('起動する'));
+      await waitForDone(events);
+      await clone.stop();
+
+      expect(calls[0]?.resume).toBe('sess-fs');
+      expect(sessionStore.load).toHaveBeenCalledWith({
+        projectKey: 'proj',
+        sessionId: 'sess-fs',
+      });
+      // 空振り（capability が無い）は黙って通す——日誌には残らない
+      // （`#resumeCandidateWithinBudget` の doc）。
+      expect(await selfOutboundTexts(stores)).not.toEqual(
+        expect.arrayContaining([expect.stringContaining('大きすぎる')]),
+      );
+    });
+
+    it('実装が「測れない」と申告した（null）ときも従来どおり resume する', async () => {
+      const stores = createMemoryStores();
+      await stores.sessions.setCloneSessionId('sess-unmeasurable');
+      await stores.sessions.setProjectKey('proj');
+
+      const measureSize = vi.fn(async () => null);
+      const tail: NonNullable<Stores['sessionTranscriptTail']> = {
+        readTail: async () => null,
+        measureSize,
+      };
+      const sessionStore = fakeSdkSessionStore();
+      const { clone, events, calls } = bootCloneForResumeBudget(
+        { ...stores, sessionTranscriptTail: tail },
+        sessionStore,
+      );
+
+      clone.post(humanMessage('起動する'));
+      await waitForDone(events);
+      await clone.stop();
+
+      expect(calls[0]?.resume).toBe('sess-unmeasurable');
+      expect(sessionStore.load).toHaveBeenCalledWith({
+        projectKey: 'proj',
+        sessionId: 'sess-unmeasurable',
+      });
+    });
+
+    it('測る呼び出し自体が失敗したときも従来どおり resume する（判定できないときは能力を削らない側へ倒す）', async () => {
+      const stores = createMemoryStores();
+      await stores.sessions.setCloneSessionId('sess-error');
+      await stores.sessions.setProjectKey('proj');
+
+      const measureSize = vi.fn(async () => {
+        throw new Error('DB が一時的に不調');
+      });
+      const tail: NonNullable<Stores['sessionTranscriptTail']> = {
+        readTail: async () => null,
+        measureSize,
+      };
+      const sessionStore = fakeSdkSessionStore();
+      const { clone, events, calls } = bootCloneForResumeBudget(
+        { ...stores, sessionTranscriptTail: tail },
+        sessionStore,
+      );
+
+      const lines = await captureStderr(async () => {
+        clone.post(humanMessage('起動する'));
+        await waitForDone(events);
+        await clone.stop();
+      });
+
+      expect(calls[0]?.resume).toBe('sess-error');
+      expect(sessionStore.load).toHaveBeenCalledWith({
+        projectKey: 'proj',
+        sessionId: 'sess-error',
+      });
+      // **エラーは握り潰さず跡を残す**（`noteDroppedRecord`。本文は出さない）。
+      expect(lines.join('')).toContain('resume 前のセッションの大きさの計測を記録できませんでした');
+    });
+
+    it('予算を超えて resume しなかったとき、日誌に実測バイト数と予算が残る（数を捨てない）', async () => {
+      const stores = createMemoryStores();
+      await stores.sessions.setCloneSessionId('sess-huge-2');
+      await stores.sessions.setProjectKey('proj');
+
+      const measureSize = vi.fn(async () => OVER_BUDGET_BYTES);
+      const tail: NonNullable<Stores['sessionTranscriptTail']> = {
+        readTail: async () => null,
+        measureSize,
+      };
+      const sessionStore = fakeSdkSessionStore();
+      const { clone, events } = bootCloneForResumeBudget(
+        { ...stores, sessionTranscriptTail: tail },
+        sessionStore,
+      );
+
+      clone.post(humanMessage('起動する'));
+      await waitForDone(events);
+      await clone.stop();
+
+      const texts = await selfOutboundTexts(stores);
+      const line = texts.find((text) => text.includes('sess-huge-2'));
+      expect(line).toBeDefined();
+      expect(line).toContain(String(OVER_BUDGET_BYTES));
+      expect(line).toContain('resume');
+    });
   });
 
   it('会話終了で蒸留を促す（蒸留は生存条件であって付加機能ではない）', async () => {
@@ -8246,6 +8518,10 @@ describe('クローン — 捨てた resume 素材の区間を拾い直す（#56
           asked.push({ key, maxChars });
           return tail;
         },
+        // **この describe は拾い上げ（#564 E1b）を測るもので、resume 予算
+        // （#1283）の判定は対象外。** `null`（測れなかった＝従来どおり resume
+        // する）にして、既存のシナリオへ影響させない。
+        measureSize: async () => null,
       },
     };
     return { stores, asked };

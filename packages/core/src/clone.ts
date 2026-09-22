@@ -346,6 +346,45 @@ export function placedClonePermissionMode(env: NodeJS.ProcessEnv = process.env):
  */
 const DISTILL_TRANSCRIPT_TAIL_CHARS = 60_000;
 
+/**
+ * resume の前に測ったセッションの大きさ（バイト）が、これを超えたら resume
+ * しない（新しいセッションで始める。#1283 の OOM）。
+ *
+ * ## 何が起きていたか
+ *
+ * `SessionStore.load()` は削れない契約で全件を返す（`SessionTranscriptTail`
+ * の doc）。580 MB 級のセッションを resume すると、pg から引いた行それぞれの
+ * `jsonb` 列を `JSON.parse` した結果が Node のヒープに載り続け、起動から
+ * 約35秒でヒープ 4 GiB を使い切って落ちる（クローンの実際の落ち方。一次資料で
+ * 確認済み）。⟹ `load()` を呼ぶ前に大きさを測り、超えていたら呼ばずに新しい
+ * セッションで始める（`#resumeCandidateWithinBudget`）。
+ *
+ * ## 算術（⚠️ 暫定値。この値はオーナーが決めること。ここに置いてあるのは
+ * 暫定値であって、実測でプロファイルした結果ではない）
+ *
+ * - **ヒープの天井**: 4 GiB＝4,294,967,296 バイト（実際に使い切って落ちた
+ *   観測値）
+ * - **起動時に走る他の読み**（記憶文書・persona 一覧・システムプロンプトの
+ *   構築等）と Node / V8 / SDK 自身の常駐分の余白として、天井の半分だけを
+ *   このセッション読み込みへ使ってよい予算とする: 4 GiB ÷ 2 ＝ 2 GiB
+ *   （2,147,483,648 バイト）
+ * - **V8 がテキストを JS オブジェクトへ展開する倍率**: `JSON.parse` した
+ *   結果は、V8 のオブジェクトヘッダ・隠れクラス・文字列のボックス化により、
+ *   生テキストの 2〜3 倍の常駐量になるのが目安（一般的な経験則。この
+ *   セッションでプロファイラでは確認していない）。加えて SDK 自身が resume
+ *   用の一時 JSONL ファイルへ読み込んだ内容を書き戻す（SDK の型定義
+ *   `SessionStore.load` の doc「materialized to a temporary JSONL file」）
+ *   ので、そのぶん（生テキストと同程度）を追加で見込む。合計で概算 ×4 倍と
+ *   見積もる
+ * - ⟹ 安全に読める生テキストの上限 ≈ 2 GiB ÷ 4 ＝ **512 MiB**
+ *   （536,870,912 バイト）
+ *
+ * **参考（サニティチェック）**: `readTail` の doc は実測で「580 MB 級の
+ * セッション」に触れている——この値（512 MiB）はその実例より小さく、同じ
+ * 実例なら resume を拒む側になる。
+ */
+const RESUME_SIZE_BUDGET_BYTES = 512 * 1024 * 1024; // 536,870,912
+
 /** 発意 tick と定期ジョブに渡す「直近」の幅。 */
 const RECENT_DIGEST_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -7718,10 +7757,83 @@ class Clone implements CloneHost {
   // SDK セッション
   // -------------------------------------------------------------------------
 
+  /**
+   * resume する前に、その鍵の大きさを確かめる（#1283 の OOM、段2）。
+   *
+   * **`load()` には一切触れない。** 大きすぎる鍵はそもそも `load()` を呼ばない
+   * ことで SDK の契約（返す内容は削れない）を守る——`readTail` の doc「末尾だけ
+   * を読む口」と同じ考え方を、resume するかどうかの判断そのものへ広げている。
+   *
+   * ## 既存の「畳んで作り直す」機構との違い
+   *
+   * `#noteContextWindowFold` / `#noteUnproductiveUsageBlockFold` も同じ
+   * 「新しい鍵で始める」を行うが、**どちらもターンが少なくとも1本走った後にしか
+   * 発火しない**（`#query !== null` が門）。今回の OOM は起動直後——ターンが
+   * 1本も走っていない `#ensureQuery` の中で `load()` が呼ばれた瞬間に起きるので、
+   * 既存の2つの引き金は間に合わない。ここが3つ目の、より早い引き金である。
+   *
+   * ## 判定できないときは resume する側へ倒す
+   *
+   * 測れない理由は3つあり、**どれも黙って通す**（AGENTS.md 地雷表「判定できない
+   * ときは能力を削らない側へ倒す」）。`#noteLostSession` が同じ形（空振りする
+   * 条件を黙って通す）を既に採っている:
+   *
+   * | 理由 | なぜ黙るか |
+   * | --- | --- |
+   * | 生ログの預け先が無い（fs 構成） | 測る材料そのものが無い。日誌へ書くと、fs で
+   *   起動するたびに同じ1行が積もる |
+   * | `projectKey` を誰も知らない | 配備してから1度も `append` が来ていない窓
+   *   （`SessionRegistry.getProjectKey` の doc） |
+   * | 測る呼び出し自体が失敗した | DB が一時的に不調でも、resume できた可能性を
+   *   先に潰さない |
+   *
+   * **予算を超えたときだけ日誌へ1行残す**（実測バイト数・予算・だから resume
+   * しなかった、が分かる文言。数を捨てない）。上の3つの空振りは黙って通す——
+   * 通常の起動のたびに同じ1行が積もることを避ける（`#noteLostSession` と同じ
+   * 理由）。
+   *
+   * **古い resume 素材を明示的に捨てはしない。** 次のセッションが `init` すれば
+   * `session_started` が新しい id で上書きする（既存の配線）。捨てなくても、
+   * 次回の起動はこの関数をもう一度通るだけで同じ判定に落ち着く——安全側に
+   * 倒すたびに書き込みを増やす必要はない。
+   */
+  async #resumeCandidateWithinBudget(sessionId: string): Promise<string | null> {
+    const tail = this.#stores.sessionTranscriptTail;
+    if (tail === undefined) return sessionId;
+
+    const projectKey = this.#projectKey ?? (await this.#stores.sessions.getProjectKey());
+    if (projectKey === null) return sessionId;
+
+    let bytes: number | null;
+    try {
+      bytes = await tail.measureSize({ projectKey, sessionId });
+    } catch (error) {
+      noteDroppedRecord('resume 前のセッションの大きさの計測', sessionId, error);
+      return sessionId;
+    }
+    if (bytes === null) return sessionId;
+    if (bytes <= RESUME_SIZE_BUDGET_BYTES) return sessionId;
+
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text:
+        `resume 素材が大きすぎるので resume せず新しいセッションで始める: ${sessionId}` +
+        `（${bytes} バイト ＞ 予算 ${RESUME_SIZE_BUDGET_BYTES} バイト）`,
+    });
+    return null;
+  }
+
   async #ensureQuery(): Promise<void> {
     if (this.#query) return;
 
-    const resume = await this.#stores.sessions.getCloneSessionId();
+    const storedResume = await this.#stores.sessions.getCloneSessionId();
+    // **`load()` を呼ぶ前に大きさを測る**（#1283 の OOM、段2）。超えていたら
+    // `resume` を `null` にして渡さない＝新しいセッションで始める
+    // （`#resumeCandidateWithinBudget` の doc）。
+    const resume =
+      storedResume === null ? null : await this.#resumeCandidateWithinBudget(storedResume);
     this.#resumedFrom = resume;
     this.#sawInit = false;
     // **セッションごとに戻す。** 生ログの在り処を持ち越すと、別のセッションの
