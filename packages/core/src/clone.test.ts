@@ -6721,18 +6721,27 @@ describe('クローン — 保持中の内部の合図は、失敗記録を1件�
     // 2本目自身は #pump の短絡（枠が閉じている）へ回り、conversationId が
     // null なので `#reportFailure` を呼ばずに畳む。
     s.clone.post(internalSignal('evt-2'));
-    await waitFor(async () => (await internalFailureCount(s)) === 2, '1本目の再試行の失敗が記録される');
+    await waitFor(
+      async () => (await internalFailureCount(s)) === 2,
+      '1本目の再試行の失敗が記録される',
+    );
 
     // 3本目: 保持は [1本目, 2本目] の2件。先頭（1本目）だけが再試行されて
     // 本物の失敗が増える（合計3）。2本目・3本目自身は畳まれる。
     s.clone.post(internalSignal('evt-3'));
-    await waitFor(async () => (await internalFailureCount(s)) === 3, '2周目の再試行の失敗が記録される');
+    await waitFor(
+      async () => (await internalFailureCount(s)) === 3,
+      '2周目の再試行の失敗が記録される',
+    );
 
     // 4本目: 保持は [1本目, 2本目, 3本目] の3件。先頭だけが再試行されて
     // 本物の失敗が増える（合計4）。**保持件数が3件に増えても、増えるのは
     // 依然として1件だけである**——これが N×M ではなく M であることの核心。
     s.clone.post(internalSignal('evt-4'));
-    await waitFor(async () => (await internalFailureCount(s)) === 4, '3周目の再試行の失敗が記録される');
+    await waitFor(
+      async () => (await internalFailureCount(s)) === 4,
+      '3周目の再試行の失敗が記録される',
+    );
 
     // ここでさらに増えないことも確かめる（余計な書き込みが遅れて来ていない）。
     await new Promise((resolve) => setTimeout(resolve, 60));
@@ -6753,20 +6762,29 @@ describe('クローン — 保持中の内部の合図は、失敗記録を1件�
     // 1回目の解除（2本目が誘発）: この時点ではまだ何も畳んでいないので、
     // 出る行に「畳んだ」の一文は無い。
     s.clone.post(internalSignal('evt-2'));
-    await waitFor(async () => (await internalFailureCount(s)) === 2, '1本目の再試行の失敗が記録される');
+    await waitFor(
+      async () => (await internalFailureCount(s)) === 2,
+      '1本目の再試行の失敗が記録される',
+    );
     await waitFor(() => s.clone.usageBlocked, '1本目の再試行もまた枠に当たる');
 
     // 2回目の解除（3本目が誘発）: 1回目の周で畳んだ2本目の1件ぶんがこの
     // 行へ出る。
     s.clone.post(internalSignal('evt-3'));
-    await waitFor(async () => (await internalFailureCount(s)) === 3, '2周目の再試行の失敗が記録される');
+    await waitFor(
+      async () => (await internalFailureCount(s)) === 3,
+      '2周目の再試行の失敗が記録される',
+    );
     await waitFor(() => s.clone.usageBlocked, '2周目の再試行もまた枠に当たる');
 
     // 3回目の解除（4本目が誘発）: 2回目の周で畳んだのは2本目・3本目の
     // 2件——**1回目の周で畳んだ1件を引きずっていない**（0へ戻っているので、
     // この行は2件だけを持つ）。
     s.clone.post(internalSignal('evt-4'));
-    await waitFor(async () => (await internalFailureCount(s)) === 4, '3周目の再試行の失敗が記録される');
+    await waitFor(
+      async () => (await internalFailureCount(s)) === 4,
+      '3周目の再試行の失敗が記録される',
+    );
 
     const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[];
     const releaseLines = exchanges

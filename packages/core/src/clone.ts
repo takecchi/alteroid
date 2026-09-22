@@ -2990,7 +2990,9 @@ class Clone implements CloneHost {
           this.#usageBlockSuppressedRearms = 0;
           this.#usageBlockFoldedInternalFailures = 0;
           const suffix =
-            (suppressedRearms > 0 ? ` 回復予定時刻より前だったので再武装を抑止: ${String(suppressedRearms)} 回。` : '') +
+            (suppressedRearms > 0
+              ? ` 回復予定時刻より前だったので再武装を抑止: ${String(suppressedRearms)} 回。`
+              : '') +
             (foldedInternalFailures > 0
               ? ` 人間が待っていない内部の失敗記録を畳んだ: ${String(foldedInternalFailures)} 件。`
               : '');

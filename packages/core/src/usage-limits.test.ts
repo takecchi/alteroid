@@ -100,7 +100,11 @@ describe('usageLimitNoticeSchema — resetsAt（Issue #1240 続き）', () => {
 
   it('0・負・非整数の resetsAt は拒む', () => {
     for (const bad of [0, -1, 1.5]) {
-      const result = usageLimitNoticeSchema.safeParse({ kind: 'reached', text: 'x', resetsAt: bad });
+      const result = usageLimitNoticeSchema.safeParse({
+        kind: 'reached',
+        text: 'x',
+        resetsAt: bad,
+      });
       expect(result.success, `resetsAt=${String(bad)}`).toBe(false);
     }
   });
