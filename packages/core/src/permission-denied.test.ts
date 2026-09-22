@@ -747,6 +747,104 @@ describe('確認へ上がらずに止められた実行（permissionMode: auto�
 
     await s.pool.stop();
   }, 15_000);
+
+  /**
+   * **Issue #1267 — 拒否の出所を断定しない。**
+   *
+   * かつての文面は「モデル分類器か deny 規則がその場で拒否しているので、
+   * この確認はクローンには回ってきていない」と言い切っていたが、
+   * `case 'permission_denied'` はこの経路（器の分類器・deny 規則）だけでなく
+   * alteroid 自身の `PreToolUse` フック（`bash-wait-guard.ts` の待ちループ検出
+   * 等）が拒否した回も同じイベントとして通る。**後者は理由と代替案が担い手
+   * 自身へ直接返っており、承認キューを経由しなくても担い手は自力で抜けられる**
+   * （Issue #1267 の訂正コメント、2026-09-21T23:54:48Z）。断定を外し、
+   * 2つの場合分けと「まず担い手自身の拒否文を読ませる」案内が載ることを
+   * 固定する。
+   */
+  it('拒否の出所を断定せず、2つの場合分けと「まず担い手の拒否文を読ませる」案内が載る（#1267）', async () => {
+    const s = open();
+    const { managerId } = await s.pool.start({ request: 'ビルドを直して' });
+    const session = s.manager.sessions[0];
+    if (!session) throw new Error('マネージャーのセッションが無い');
+
+    session.push(liveDenial('Bash', 'toolu_1267', { command: 'echo hi' }));
+    await tick();
+
+    const message = s.inbox.filter((event) => event.type === 'manager_message')[0];
+    expect(message).toMatchObject({ managerId, kind: 'report' });
+    const text = message?.type === 'manager_message' ? message.text : '';
+
+    // **断定した旧文言が戻っていないこと。** 「モデル分類器か deny 規則が
+    // その場で拒否しているので」という言い切りが復活したら、ここで落ちる。
+    expect(text).not.toContain('モデル分類器か deny 規則がその場で拒否しているので');
+
+    // 2つの場合分け——器側（分類器・deny 規則）と alteroid 自身の
+    // `PreToolUse` フックの両方が、条件付きの文として載る。
+    expect(text).toContain(
+      '器のモデル分類器か deny 規則がその場で拒否したのであれば、この確認はクローンには回ってきていない',
+    );
+    expect(text).toContain('`PreToolUse`');
+    expect(text).toContain('`bash-wait-guard.ts`');
+    expect(text).toContain('自力で抜けられることがある');
+
+    // 「まず担い手自身の拒否文を読ませる」案内が、場合分けより前に来る。
+    const guidanceAt = text.indexOf('担い手自身に返っている拒否の理由文を読ませること');
+    const branchAAt = text.indexOf('器のモデル分類器か deny 規則が');
+    expect(guidanceAt).toBeGreaterThan(-1);
+    expect(guidanceAt).toBeLessThan(branchAAt);
+
+    await s.pool.stop();
+  }, 15_000);
+
+  /**
+   * **Issue #1267 — 「先頭の語」は原因を名乗らない。**
+   *
+   * `denialInputShape` が返す `先頭の語=…` は `command` 欄の最初の単語を機械的に
+   * 取っているだけで、拒否の理由ではない（`denial-shape.ts` の `headWordOf`）。
+   * それが `直近の入力の形: …` として埋め込まれると、あたかも原因の欄のように
+   * 読める——実際に `cd` が先頭に来ただけの回で「`cd` が原因」と誤読された実例が
+   * Issue #1267 に記録されている。埋め込む形だけを見て原因欄だと誤読されない
+   * よう、「先頭の語」が載る回にだけ断り書きが添えられることを固定する。
+   * **値の出し方（秘匿の規則）は触っていない**——ここで見るのは断り書きの
+   * 有無だけである。
+   */
+  it('「先頭の語」が載る回にだけ、それが原因ではないという断り書きが添えられる（#1267）', async () => {
+    const s = open();
+    const { managerId } = await s.pool.start({ request: 'ビルドを直して' });
+    const session = s.manager.sessions[0];
+    if (!session) throw new Error('マネージャーのセッションが無い');
+
+    // command 欄あり → 先頭の語が載る回。断り書きも載る。
+    session.push(liveDenial('Bash', 'toolu_head_1', { command: 'cd /tmp && echo hi' }));
+    await tick();
+    const withHeadWord = s.inbox.filter((event) => event.type === 'manager_message')[0];
+    expect(withHeadWord).toMatchObject({ managerId, kind: 'report' });
+    const textWithHeadWord = withHeadWord?.type === 'manager_message' ? withHeadWord.text : '';
+    expect(textWithHeadWord).toContain('先頭の語=cd');
+    expect(textWithHeadWord).toContain(
+      '「先頭の語」は入力コマンドの先頭の単語であって、拒否の原因ではない',
+    );
+
+    await s.pool.stop();
+  }, 15_000);
+
+  it('「先頭の語」が載らない回には、断り書きも載らない（雑音にしない・#1267）', async () => {
+    const s = open();
+    const { managerId } = await s.pool.start({ request: 'ビルドを直して' });
+    const session = s.manager.sessions[0];
+    if (!session) throw new Error('マネージャーのセッションが無い');
+
+    // file_path 欄は COMMAND_KEYS に無いので「先頭の語」自体が載らない回。
+    session.push(liveDenial('Edit', 'toolu_no_head', { file_path: 'a.tsx' }));
+    await tick();
+    const noHeadWord = s.inbox.filter((event) => event.type === 'manager_message')[0];
+    expect(noHeadWord).toMatchObject({ managerId, kind: 'report' });
+    const textNoHeadWord = noHeadWord?.type === 'manager_message' ? noHeadWord.text : '';
+    expect(textNoHeadWord).not.toContain('先頭の語');
+    expect(textNoHeadWord).not.toContain('拒否の原因ではない');
+
+    await s.pool.stop();
+  }, 15_000);
 });
 
 /**
