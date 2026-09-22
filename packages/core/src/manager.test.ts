@@ -9664,7 +9664,7 @@ describe('runningManagerPinning / guardArchiveRemoval の requireContainment（#
 
   it('末尾（新しい写し）は runningManagerOwning でも runningManagerPinning でも保護される', async () => {
     const s = setup();
-    const { managerId, oldId, newId, dir } = await seedTwoArchivedCopies(s);
+    const { managerId, newId, dir } = await seedTwoArchivedCopies(s);
     try {
       expect(s.pool.runningManagerOwning(newId)).toBe(managerId);
       expect(pinningOf(s.pool)(newId)).toBe(managerId);
