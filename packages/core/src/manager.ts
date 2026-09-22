@@ -1423,6 +1423,52 @@ export interface ManagerPool {
    */
   runningManagerOwning(archiveId: string): string | undefined;
   /**
+   * `runningManagerOwning` と同じ走査だが、保護する範囲を
+   * **`job.archiveIds` の末尾1本だけ**に狭めた版（#698）。
+   *
+   * ## なぜ要るか——`runningManagerOwning` は古い写しまで全部を保護してしまう
+   *
+   * `archiveIds` は古い順に push される（`grep -Fn -- 'record.job.archiveIds = [...(record.job.archiveIds ?? []), write.id];' packages/core/src/manager.ts`）。
+   * 一方 `transcript()` が生ログを読むときは**新しい順**に辿って最初に見つかった
+   * 本文を返す（`grep -Fn -- 'for (const id of [...(job.archiveIds ?? [])].reverse())' packages/core/src/manager.ts`）。
+   * ⟹ **走行中の委譲にとって意味を持つのは `archiveIds` の最後の1本だけである。**
+   * それより古い写しは、`continuity === 'continues'` の鎖で新しい写しに丸ごと
+   * 含まれている（前方一致は推移するので、末尾を残せばそれより古い自分の写しは
+   * 全部その1本に含まれる）。`runningManagerOwning` は末尾以外の古い写しも
+   * 無条件に保護してしまうため、自動の畳み（`archive-folder.ts`）が1件も
+   * 前へ進めない、という形で症状に出ていた。
+   *
+   * ## このメソッドが答えるもの
+   *
+   * `(record.job.archiveIds ?? []).at(-1) === archiveId` の record が居れば、
+   * その `record.job.id` を返す。**末尾でない一致は無視する**——これが
+   * `runningManagerOwning`（`.includes(archiveId)`）との唯一の違い。
+   *
+   * ## 呼び出し側の制約——含有が証明済みの経路だけがこれを使ってよい
+   *
+   * この判定を使ってよいのは、`guardArchiveRemoval` の `requireContainment`
+   * 引数が `true` のときだけである（`guardArchiveRemoval` の doc）。
+   * `requireContainment` が確かめられていない・`false` の経路でこの狭い判定を
+   * 使うと、含有が証明できていない行を走行中の委譲から奪うことになる——
+   * その安全性は `selectArchiveRemovalTargets`（`archive-prune.ts`）の
+   * `requireContainment: true` が保証する「含有の証明」の上にしか成り立たない。
+   *
+   * ## 省略可能（`?`）にした理由——他のメソッドとは事情が違う
+   *
+   * このインターフェースの他のメソッドは基本的に省略可能にしない（欠落と
+   * 観測不能が同じ形に潰れるため）。**このメソッドは事情が違う**——狭い保護は
+   * `guardArchiveRemoval` が `requireContainment: true` を渡したときにしか使われず、
+   * 実物の `Pool`（このファイルの `class Pool`）は常にこれを実装する。省略可能に
+   * したのは、この機能を使わない既存の `ManagerPool` スタブ（テストの二重）を
+   * 1本も書き換えずに済ませるためであり、判定結果の意味を曖昧にするためではない
+   * ——`guardArchiveRemoval` は「このメソッドを持たない管理者像」に当たったとき、
+   * 安全側（狭めない＝ `runningManagerOwning` と同じ広い保護）へ倒す。
+   *
+   * **ネットワークは叩かない。** `runningManagerOwning` と同じくプロセス内の
+   * 像（`#records`）だけを読む。
+   */
+  runningManagerPinning?(archiveId: string): string | undefined;
+  /**
    * デーモン起動時に、走行中だったマネージャーを台帳と runner から拾い直す。
    * 戻り値は「中断されていて実際に resume した」分。
    */
@@ -1697,6 +1743,47 @@ export interface ManagerPool {
  * ここ1箇所を通したままである（`tools.ts` の逐語「`guardArchiveRemoval` 1箇所」）。
  * **「一括だから速い経路を別に引く」をやらないこと** —— 引いた瞬間に、走行中の
  * 委譲の退避を守る方針が片方の口からだけ消える。
+ *
+ * ## 第4引数 `requireContainment`——保護範囲を末尾1本へ狭める口（#698）
+ *
+ * **省略時（`undefined`）は1ビットも振る舞いを変えない。** 上の4呼び出し側の
+ * うち、単発の2つ（`archive_remove` / `DELETE /archive/:id`）はこの引数を
+ * 一切渡さない——3引数のままの既存呼びである。渡すのは含有が証明済みの
+ * 一括・自動の経路だけである:
+ *
+ * | 呼び出し側 | `requireContainment` |
+ * | --- | --- |
+ * | `archive-folder.ts` の `foldArchiveOnce`（自動） | 常に `true` |
+ * | `tools.ts` の `archive_remove_many`（一括） | 常に `true`（この道具は元から `requireContainment: true` 固定——上の doc） |
+ * | `app.ts` の `POST /archive/remove`（一括） | `selectArchiveRemovalTargets` へ渡すのと同じ実効値（`requireContainment ?? true`） |
+ *
+ * `true` のときだけ、保護判定を `runningManagerOwning`（`archiveIds` 全件）から
+ * `runningManagerPinning`（`archiveIds` の**末尾1本だけ**）へ狭める。`false` or
+ * `undefined` のとき、狭めた判定は一切使わない——`runningManagerOwning` の
+ * 判定のまま、含有が証明されていない行も含めて全部保護する。
+ *
+ * ### なぜ安全か
+ *
+ * - `selectArchiveRemovalTargets`（`archive-prune.ts`）は `requireContainment:
+ *   true` のとき、「その行より新しい行が全部 `continues` で、その先に生きて
+ *   いる行が在る」と証明できた行しか対象にしない（`archive-prune.ts` の
+ *   `coveredById` の節。逐語は
+ *   `grep -Fn -- '## 含有の証明（`requireContainment` が `true` のときだけ効く）' packages/core/src/archive-prune.ts`）
+ * - 前方一致は推移するので、走行中の委譲の `archiveIds` の末尾さえ残せば、
+ *   それより古い自分の写しは全部その1本に含まれている
+ * - ⟹ **`Manager#transcript()` が読める中身は1バイトも減らない**——`transcript()`
+ *   は新しい順に辿って最初に見つかった本文を返すので、読むのは常に末尾
+ *   （かそれより新しい写し）である
+ * - セッションの最新行（`skipped.newest`）と墓標（`skipped.protected`）の保護は
+ *   `selectArchiveRemovalTargets` の側の話で、この引数とは無関係にそのまま
+ *   （`requireContainment` の真偽に関わらず常に効く）
+ * - `requireContainment` を確かめていない・`false` の経路でこの狭い判定を
+ *   使うと、含有が証明できていない行を走行中の委譲から奪うことになる——
+ *   だから `false` / `undefined` では絶対に狭めない
+ *
+ * `managers` に `runningManagerPinning` を持たない像（interface の doc「省略可能
+ * にした理由」）が来たときは、`requireContainment: true` を渡されても狭めず
+ * `runningManagerOwning` へ倒す——安全側（広い保護のまま）に倒れる。
  */
 export type ArchiveRemovalGuard =
   | { readonly kind: 'allowed' }
@@ -1706,12 +1793,23 @@ export type ArchiveRemovalGuard =
   | { readonly kind: 'unknown' };
 
 export function guardArchiveRemoval(
-  managers: Pick<ManagerPool, 'runningManagerOwning'> | undefined,
+  managers: Pick<ManagerPool, 'runningManagerOwning' | 'runningManagerPinning'> | undefined,
   archiveId: string,
   overrideReason: string | undefined,
+  requireContainment?: boolean,
 ): ArchiveRemovalGuard {
   if (managers === undefined) return { kind: 'unknown' };
-  const managerId = managers.runningManagerOwning(archiveId);
+  // **`requireContainment: true` かつ `runningManagerPinning` を持つときだけ
+  // 狭める。** `runningManagerPinning` が `undefined`（＝末尾に無い＝安全に
+  // 畳める）を返したときに `runningManagerOwning`（全件）へ fallback すると、
+  // 古い写しがそのまま広い判定に引っかかって「狭めた意味が消える」——だから
+  // ここは `??` で繋がない。`runningManagerPinning` 自体を持たない像
+  // （interface の doc「省略可能にした理由」）のときだけ、安全側で
+  // `runningManagerOwning` へ倒す。
+  const managerId =
+    requireContainment === true && managers.runningManagerPinning !== undefined
+      ? managers.runningManagerPinning(archiveId)
+      : managers.runningManagerOwning(archiveId);
   if (managerId === undefined) return { kind: 'allowed' };
   const reason = overrideReason?.trim();
   if (reason !== undefined && reason.length > 0) {
@@ -4770,6 +4868,15 @@ class Pool implements ManagerPool {
     // 保護は要らない（interface の doc）。
     for (const record of this.#records.values()) {
       if ((record.job.archiveIds ?? []).includes(archiveId)) return record.job.id;
+    }
+    return undefined;
+  }
+
+  runningManagerPinning(archiveId: string): string | undefined {
+    // **保護するのは末尾（＝いま `transcript()` が読む本文）だけ。** interface
+    // の doc の通り、それより古い写しは末尾に含有されているので保護が要らない。
+    for (const record of this.#records.values()) {
+      if ((record.job.archiveIds ?? []).at(-1) === archiveId) return record.job.id;
     }
     return undefined;
   }

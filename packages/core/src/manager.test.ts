@@ -24,6 +24,7 @@ import {
   WORKER_MODEL,
   WITHHELD_ENV_KEYS,
   createManagerPool,
+  guardArchiveRemoval,
   type ManagerPool,
   type RunnerFleetOverview,
 } from './manager.js';
@@ -9590,6 +9591,174 @@ describe('マネージャー — case archive は diverged/unknown だけを日�
       await s.pool.stop();
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * `runningManagerPinning` / `guardArchiveRemoval` の `requireContainment`（#698）。
+ *
+ * **本番の症状**（issue #698）: 走行中のマネージャーは `archiveIds` に古い写しを
+ * 積み続けるが、`runningManagerOwning` は**全件**を保護するため、含有が証明
+ * 済み（＝畳んでも読める本文が1バイトも減らない）行まで自動の畳みが1件も
+ * 前へ進めなかった。ここでは実物の `Pool`（`case 'archive'` を実際に鳴らして
+ * `job.archiveIds` を積む——直上の describe と同じ手口）で、
+ * `runningManagerPinning` が末尾だけを保護し、`guardArchiveRemoval` の
+ * `requireContainment` がその狭め判定を正しく出し分けることを固定する。
+ */
+describe('runningManagerPinning / guardArchiveRemoval の requireContainment（#698）', () => {
+  /** 直上の describe と同じ手口——PreCompact フックを鳴らし `archive` イベントを発行させる。 */
+  async function firePreCompact(session: FakeSession, dir: string, body: string): Promise<void> {
+    const transcriptPath = join(
+      dir,
+      `t-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonl`,
+    );
+    await writeFile(transcriptPath, body, 'utf8');
+    const matchers = session.options.hooks?.PreCompact as HookCallbackMatcher[] | undefined;
+    for (const matcher of matchers ?? []) {
+      for (const hook of matcher.hooks) {
+        await hook({ transcript_path: transcriptPath } as never, undefined, {
+          signal: new AbortController().signal,
+        });
+      }
+    }
+  }
+
+  /**
+   * 走行中の1マネージャーに、前方一致で連なる2本の写しを積ませて返す
+   * （`old`＝1本目＝`continuity: 'first'`、`new`＝2本目＝`continuity: 'continues'`）。
+   * `new` が `archiveIds` の末尾——`old` は含有が証明済みの古い写しである。
+   */
+  async function seedTwoArchivedCopies(
+    s: Setup,
+  ): Promise<{ managerId: string; oldId: string; newId: string; dir: string }> {
+    const { managerId } = await s.pool.start({ request: 'デプロイして' });
+    const session = s.sessions[0] as FakeSession;
+    const dir = await mkdtemp(join(tmpdir(), 'alteroid-mgr-archive-pinning-'));
+    await firePreCompact(session, dir, 'PIN-A'.repeat(20)); // 1本目（first）
+    await firePreCompact(session, dir, 'PIN-A'.repeat(20) + 'PIN-B'.repeat(20)); // 2本目（continues）
+    await vi.waitFor(async () => {
+      expect((await s.stores.archive.list()).length).toBe(2);
+    });
+    const rows = await s.stores.archive.list();
+    const oldRow = rows.find((r) => r.continuity === 'first');
+    const newRow = rows.find((r) => r.continuity === 'continues');
+    expect(oldRow, '1本目（first）が見つからない').toBeDefined();
+    expect(newRow, '2本目（continues）が見つからない').toBeDefined();
+    return { managerId, oldId: oldRow!.id, newId: newRow!.id, dir };
+  }
+
+  /**
+   * `runningManagerPinning` は interface 上は省略可能（`ManagerPool` の doc
+   * 「省略可能にした理由」——既存のテスト二重を壊さないため）だが、**実物の
+   * `Pool`（`createManagerPool` が返す）は常にこれを実装する。** ここではその
+   * 前提自体を歯にしたうえで、以降は素直に呼べる形（`string | undefined` を
+   * 返す関数）を返す。
+   */
+  function pinningOf(pool: ManagerPool): (archiveId: string) => string | undefined {
+    expect(
+      pool.runningManagerPinning,
+      '実物の Pool は runningManagerPinning を実装するはず',
+    ).toBeDefined();
+    return pool.runningManagerPinning!.bind(pool);
+  }
+
+  it('末尾（新しい写し）は runningManagerOwning でも runningManagerPinning でも保護される', async () => {
+    const s = setup();
+    const { managerId, oldId, newId, dir } = await seedTwoArchivedCopies(s);
+    try {
+      expect(s.pool.runningManagerOwning(newId)).toBe(managerId);
+      expect(pinningOf(s.pool)(newId)).toBe(managerId);
+    } finally {
+      await s.pool.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('末尾より古い写しは、runningManagerOwning では保護されるが runningManagerPinning では保護されない（狭まる）', async () => {
+    const s = setup();
+    const { managerId, oldId, dir } = await seedTwoArchivedCopies(s);
+    try {
+      // **広い判定（既存）は古い写しも保護し続ける**——単発の口 `archive_remove` /
+      // `DELETE /archive/:id` はこちらのままで、1ビットも変えない。
+      expect(s.pool.runningManagerOwning(oldId)).toBe(managerId);
+      // **狭い判定は古い写しを保護しない**——これが #698 の直し方の核。
+      expect(pinningOf(s.pool)(oldId)).toBeUndefined();
+    } finally {
+      await s.pool.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('存在しない archiveId はどちらの判定でも undefined', async () => {
+    const s = setup();
+    const { dir } = await seedTwoArchivedCopies(s);
+    try {
+      expect(s.pool.runningManagerOwning('archive-not-exist')).toBeUndefined();
+      expect(pinningOf(s.pool)('archive-not-exist')).toBeUndefined();
+    } finally {
+      await s.pool.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  describe('guardArchiveRemoval の第4引数 requireContainment', () => {
+    it('requireContainment: true なら、末尾は denied・古い写しは allowed（狭まる）', async () => {
+      const s = setup();
+      const { managerId, oldId, newId, dir } = await seedTwoArchivedCopies(s);
+      try {
+        const guardOld = guardArchiveRemoval(s.pool, oldId, undefined, true);
+        const guardNew = guardArchiveRemoval(s.pool, newId, undefined, true);
+        expect(guardOld).toEqual({ kind: 'allowed' });
+        expect(guardNew).toEqual({ kind: 'denied', managerId });
+      } finally {
+        await s.pool.stop();
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('requireContainment を省略（既存呼び）すると、古い写しも末尾も denied のまま——1ビットも変わらない', async () => {
+      const s = setup();
+      const { managerId, oldId, newId, dir } = await seedTwoArchivedCopies(s);
+      try {
+        // 3引数のまま——`archive_remove`（単発）・`DELETE /archive/:id` と同じ呼び方。
+        const guardOld = guardArchiveRemoval(s.pool, oldId, undefined);
+        const guardNew = guardArchiveRemoval(s.pool, newId, undefined);
+        expect(guardOld).toEqual({ kind: 'denied', managerId });
+        expect(guardNew).toEqual({ kind: 'denied', managerId });
+      } finally {
+        await s.pool.stop();
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('requireContainment: false なら、含有の証明が無いので狭めない——古い写しも denied のまま', async () => {
+      const s = setup();
+      const { managerId, oldId, dir } = await seedTwoArchivedCopies(s);
+      try {
+        const guardOld = guardArchiveRemoval(s.pool, oldId, undefined, false);
+        expect(guardOld).toEqual({ kind: 'denied', managerId });
+      } finally {
+        await s.pool.stop();
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    /**
+     * `runningManagerPinning` を持たない像（interface の doc「省略可能にした
+     * 理由」）に requireContainment: true を渡しても、安全側（狭めない）へ
+     * 倒れることを固定する——`Pick<ManagerPool, 'runningManagerOwning'>` だけの
+     * スタブは、この repo の他のテスト（`archive-remove-many.test.ts` /
+     * `archive-folder.test.ts`）が実際に使っている形そのものである。
+     */
+    it('runningManagerPinning を持たない像では、requireContainment: true でも狭めない（安全側）', () => {
+      const stub = {
+        runningManagerOwning: (archiveId: string) =>
+          archiveId === 'old-copy' ? 'mgr-x' : undefined,
+      } as unknown as ManagerPool;
+
+      const guard = guardArchiveRemoval(stub, 'old-copy', undefined, true);
+      expect(guard).toEqual({ kind: 'denied', managerId: 'mgr-x' });
+    });
   });
 });
 

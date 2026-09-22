@@ -9199,13 +9199,22 @@ export function createCloneTools(context: ToolContext) {
         // を渡す——`guard.kind` は `'allowed'` か `'denied'` か `'unknown'`
         // のどれかにしかならない。
         //
+        // **第4引数 `requireContainment` には常に `true` を渡す（#698）。**
+        // この道具は `limit` / `requireContainment` を引数に持たず
+        // （上の doc）、`selectArchiveRemovalTargets` の既定
+        // （`requireContainment: true`）をそのまま使っている——つまり対象は
+        // すべて「含有が証明済み」の行なので、走行中の委譲の保護を
+        // `archiveIds` の末尾1本へ狭めてよい（`guardArchiveRemoval` の doc
+        // 「なぜ安全か」）。狭めなければ、走行中の委譲が過去に積んだ写しが
+        // 1本残らず保護され、この一括処理が1件も消せない（#698 の症状）。
+        //
         // **この guard は `dryRun` の分岐より前で回す**（`POST /archive/remove`
         // と同じ理由——下見でも走行中の判定を評価しないと、下見が返す
         // `targeted` / `skipped.inUse` が実行時と食い違う）。
         const removableTargets: ArchiveEntry[] = [];
         let skippedInUse = 0;
         for (const target of selection.targets) {
-          const guard = guardArchiveRemoval(context.managers, target.id, undefined);
+          const guard = guardArchiveRemoval(context.managers, target.id, undefined, true);
           if (guard.kind === 'denied' || guard.kind === 'unknown') {
             skippedInUse += 1;
             continue;

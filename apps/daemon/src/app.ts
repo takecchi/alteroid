@@ -4786,6 +4786,15 @@ export function createApp(deps: AppDeps) {
      * ——下見でも回さないと、下見が返す `targeted` / `skipped.inUse` が
      * 実行時と食い違う（下見が実行の予告にならない）。
      *
+     * **guard の第4引数には `requireContainment ?? true`（`selectArchiveRemovalTargets`
+     * へ渡すのと同じ実効値）を渡す（#698）。** 実効値が `true`（既定、または
+     * 明示）のときだけ、走行中の委譲の保護を `archiveIds` の末尾1本へ狭める
+     * ——対象はすでに「含有が証明済み」の行に絞られているので、古い写しまで
+     * 保護し続ける必要が無い（`guardArchiveRemoval` の doc「なぜ安全か」）。
+     * `requireContainment: false`（`sessionIds` を名指ししたときだけ開ける道）
+     * のときは証明が無いので、狭めない——`runningManagerOwning` のまま全件
+     * 保護する。
+     *
      * **実行は `stores.archive.remove(id)` を1件ずつ。** 一括 UPDATE には
      * しない——`packages/storage-pg` / `packages/storage-fs` を1文字も
      * 変えていない理由と同じ（設計文書が「1行1トランザクション、
@@ -4928,10 +4937,24 @@ export function createApp(deps: AppDeps) {
         // 下見→実行と打っても `targeted` / `skipped.inUse` が食い違う
         // ——下見が「実行の予告」にならなくなる。この口は「下見を既定にして、
         // 見てから押す」ことが設計の中心なので、これは致命的である。
+        //
+        // **第4引数には `selectArchiveRemovalTargets` へ渡したのと同じ実効値
+        // （`requireContainment ?? true`）を渡す（#698）。** `selection.targets`
+        // が「含有が証明済み」の行だけになっているのは、まさにこの実効値が
+        // `true` のときだけである——`false`（`sessionIds` を名指ししたときだけ
+        // 開ける道。上の入力検証）なら証明が無いので、ここでも狭めてはいけない
+        // （`guardArchiveRemoval` の doc「なぜ安全か」）。値をそのまま転送する
+        // ことで、選定側の実効値と guard 側の狭め判定が常に同じ条件で揃う。
+        const effectiveRequireContainment = requireContainment ?? true;
         const removableTargets: ArchiveEntry[] = [];
         let skippedInUse = 0;
         for (const target of selection.targets) {
-          const guard = guardArchiveRemoval(clone.managers, target.id, undefined);
+          const guard = guardArchiveRemoval(
+            clone.managers,
+            target.id,
+            undefined,
+            effectiveRequireContainment,
+          );
           if (guard.kind === 'denied' || guard.kind === 'unknown') {
             skippedInUse += 1;
             continue;

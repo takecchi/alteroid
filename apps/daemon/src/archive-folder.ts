@@ -39,6 +39,12 @@ import {
  * `false` は `sessionIds` を名指ししたときだけである。⟹ 畳むのは「新しい行が
  * 古い行を先頭から丸ごと含むと証明できた行」だけであり、**読めるものは
  * 1バイトも減らない。**
+ *
+ * **だから `guardArchiveRemoval` の第4引数にも常に `true` を渡す（#698）。**
+ * 含有が証明済みの行だけを対象にしているので、走行中の委譲の保護を
+ * `archiveIds` の末尾1本へ狭めてよい——狭めなければ、走行中の委譲が過去に
+ * 積んだ写しが1本残らず保護され、この自動処理が1件も畳めない（#698 の症状）。
+ * 安全性の詳細は `guardArchiveRemoval` の doc「なぜ安全か」。
  */
 
 /** `ALTEROID_ARCHIVE_FOLD_EVERY` を読む。値は分。 */
@@ -166,7 +172,8 @@ export interface FoldArchiveOnceOptions {
    * `undefined` なら安全側に倒して全件を保護扱いにする（`guardArchiveRemoval`
    * の `kind: 'unknown'` 分岐）。
    */
-  readonly managers: Pick<ManagerPool, 'runningManagerOwning'> | undefined;
+  readonly managers:
+    Pick<ManagerPool, 'runningManagerOwning' | 'runningManagerPinning'> | undefined;
   /** テスト用。既定は `() => new Date()`。 */
   readonly now?: () => Date;
   /** テスト用。既定は {@link ARCHIVE_FOLD_GRACE_MS}。 */
@@ -238,10 +245,18 @@ export async function foldArchiveOnce(
   // override を開ける道は作らない（`guardArchiveRemoval` の doc「一括の口で
   // 理由を1本だけ書いて全件を開けると、『どの1件をなぜ開けたか』が記録から
   // 消える」がここにも当てはまる。自動実行にはそもそも「理由」の主体が無い）。
+  //
+  // **第4引数 `requireContainment` は常に `true` を渡す**（#698）。この関数は
+  // 数行上で `selectArchiveRemovalTargets` へ `requireContainment: true` を
+  // 固定で渡している——対象はすべて「含有が証明済み」の行なので、保護の範囲を
+  // `archiveIds` の末尾1本へ狭めてよい（`guardArchiveRemoval` の doc「なぜ
+  // 安全か」）。狭めなければ、走行中の委譲が過去に積んだ写しが1本残らず
+  // 保護され、この自動畳みが1件も前へ進まない——これが #698 の症状そのもの
+  // だった。
   const foldableTargets: ArchiveEntry[] = [];
   let skippedInUse = 0;
   for (const target of selection.targets) {
-    const guard = guardArchiveRemoval(options.managers, target.id, undefined);
+    const guard = guardArchiveRemoval(options.managers, target.id, undefined, true);
     if (guard.kind === 'denied' || guard.kind === 'unknown') {
       skippedInUse += 1;
       continue;
@@ -307,7 +322,8 @@ export async function foldArchiveOnce(
 
 export interface ArchiveFolderOptions {
   readonly stores: Pick<Stores, 'archive' | 'sessions' | 'journal'>;
-  readonly managers: Pick<ManagerPool, 'runningManagerOwning'> | undefined;
+  readonly managers:
+    Pick<ManagerPool, 'runningManagerOwning' | 'runningManagerPinning'> | undefined;
   /** `readArchiveFoldConfig().everyMinutes`。`null` なら周期を仕込まない。 */
   readonly everyMinutes: number | null;
   /** テスト用。指定すると `everyMinutes` から求めた間隔を上書きする。 */

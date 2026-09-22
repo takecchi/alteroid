@@ -54,6 +54,28 @@ function fakeManagers(
   };
 }
 
+/**
+ * `runningManagerPinning` まで実装した像——走行中の1マネージャーが
+ * `archiveIds` として `ownedIds`（古い順）を抱えている状態を模す。
+ * `runningManagerOwning` は全件を保護し（狭める前の広い判定）、
+ * `runningManagerPinning` は末尾（`ownedIds.at(-1)`）だけを保護する
+ * ——本物の `Pool#runningManagerOwning` / `Pool#runningManagerPinning`
+ * （`packages/core/src/manager.ts`）と同じ形の関係を、この道具のテストでは
+ * 手で組み立てる（本物の `Pool` を1周走らせるのは `manager.test.ts` の
+ * 「runningManagerPinning / guardArchiveRemoval の requireContainment」が
+ * 別に持っている）。
+ */
+function fakeManagersWithPinning(
+  ownedIds: readonly string[],
+  managerId: string,
+): Pick<ManagerPool, 'runningManagerOwning' | 'runningManagerPinning'> {
+  const tail = ownedIds.at(-1);
+  return {
+    runningManagerOwning: (archiveId) => (ownedIds.includes(archiveId) ? managerId : undefined),
+    runningManagerPinning: (archiveId) => (archiveId === tail ? managerId : undefined),
+  };
+}
+
 /** 不変条件: `matched === folded + remaining + skipped5欄の総和 + raced`。 */
 function assertInvariant(result: FoldArchiveOnceResult): void {
   const skippedTotal =
@@ -214,14 +236,82 @@ describe('foldArchiveOnce（issue #698）', () => {
     expect((await stores.archive.read(row1.id)).kind).toBe('body');
   });
 
-  it('overrideReason を渡す経路がこのファイルに存在しない（自動の口は開けない）', () => {
+  /**
+   * ⭐ **#698 の直し方の本体を、実際の `foldArchiveOnce` 経由で固定する。**
+   *
+   * 走行中の1マネージャーが `archiveIds` として `[row1.id, row2.id]`（row2 が
+   * 末尾）を抱えている——`row3` はこのセッションの最新行として、狭め判定とは
+   * 無関係に `skipped.newest` で守られる。狭め（`runningManagerPinning`）が
+   * 効けば、`row1`（末尾より古い・含有が証明済み）は畳め、`row2`（末尾）は
+   * 引き続き保護される。
+   */
+  it('狭めた保護（runningManagerPinning）により、走行中の委譲が抱える古い写しも自動で畳める。末尾は畳まれない（#698）', async () => {
+    const stores = createMemoryStores();
+    const row1 = await stores.archive.archive('sess-pin', 'F'.repeat(40));
+    const row2 = await stores.archive.archive('sess-pin', 'F'.repeat(40) + 'G'.repeat(40));
+    const row3 = await stores.archive.archive(
+      'sess-pin',
+      'F'.repeat(40) + 'G'.repeat(40) + 'H'.repeat(40),
+    );
+    expect(row2.continuity).toBe('continues');
+    expect(row3.continuity).toBe('continues');
+
+    const managers = fakeManagersWithPinning([row1.id, row2.id], 'mgr-pinned');
+    const result = await foldArchiveOnce({ stores, managers, now: FAR_FUTURE });
+    assertInvariant(result);
+
+    // row1（末尾より古い写し）は畳める——狭めなければ #698 のとおり0件のままだった。
+    expect((await stores.archive.read(row1.id)).kind).toBe('removed');
+    expect(result.folded).toBe(1);
+    // row2（末尾＝いま transcript() が読む本文）は引き続き保護される。
+    expect((await stores.archive.read(row2.id)).kind).toBe('body');
+    expect(result.skipped.inUse).toBe(1);
+    // row3（このセッションの最新行）は狭め判定と無関係に安全弁で守られる。
+    expect((await stores.archive.read(row3.id)).kind).toBe('body');
+    expect(result.skipped.newest).toBe(1);
+  });
+
+  /**
+   * 直上のテストと対——`runningManagerPinning` を持たない像（この repo の
+   * 既存スタブの多く、`fakeManagers` を含む）では、狭めが効かず row1 も
+   * row2 も保護されたままである（安全側フォールバック。#698 が直る前の形）。
+   */
+  it('runningManagerPinning を持たない像では、古い写しも末尾も保護されたまま（安全側フォールバック）', async () => {
+    const stores = createMemoryStores();
+    const row1 = await stores.archive.archive('sess-nopin', 'F'.repeat(40));
+    const row2 = await stores.archive.archive('sess-nopin', 'F'.repeat(40) + 'G'.repeat(40));
+
+    const runningOwners = new Map<string, string>([
+      [row1.id, 'mgr-nopin'],
+      [row2.id, 'mgr-nopin'],
+    ]);
+    const result = await foldArchiveOnce({
+      stores,
+      managers: fakeManagers(runningOwners),
+      now: FAR_FUTURE,
+    });
+    assertInvariant(result);
+
+    expect(result.folded).toBe(0);
+    expect(result.skipped.inUse).toBe(1); // row1 のみが matched（row2 は最新行で skipped.newest）
+    expect((await stores.archive.read(row1.id)).kind).toBe('body');
+  });
+
+  it('overrideReason を渡す経路がこのファイルに存在せず、第4引数（requireContainment）は常に true（自動の口は開けない・#698）', () => {
     const source = readFileSync(join(__dirname, 'archive-folder.ts'), 'utf8');
     const guardCalls = [...source.matchAll(/guardArchiveRemoval\(([^)]*)\)/g)];
     // 判定所（guardArchiveRemoval）を呼ぶ箇所は1つだけ。
     expect(guardCalls.length).toBe(1);
+    const args = (guardCalls[0]?.[1] ?? '').split(',').map((a) => a.trim());
     // 第3引数（overrideReason）は必ずリテラルの `undefined` であること——
     // 変数を経由して非 undefined を渡せる経路が無いことを、字面で固定する。
-    expect(guardCalls[0]?.[1]?.trim().endsWith(', undefined')).toBe(true);
+    expect(args[2]).toBe('undefined');
+    // 第4引数（requireContainment）は必ずリテラルの `true` であること——
+    // 対象は `selectArchiveRemovalTargets` へ `requireContainment: true` 固定で
+    // 渡した行だけ（含有が証明済み）なので、保護の狭めを常に有効にしてよい。
+    // `false` を渡せる経路が無いことを字面で固定する（証明の無い行を狭めて
+    // 保護から外すと、走行中の委譲の生ログを消す方向に壊れるため）。
+    expect(args[3]).toBe('true');
     // `overrideReason` という名の関数引数・フィールド・変数を1つも宣言していない
     // こと（コメントでこの語に触れることまでは禁じない——禁じたいのは
     // 「値を持ち回れる経路」であって、語そのものではない）。
