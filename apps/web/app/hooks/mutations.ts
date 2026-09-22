@@ -456,6 +456,7 @@ export interface WorkspaceResetSummary {
   schedulePhases: number;
   inbox: number;
   commitments: number;
+  practices: number;
   archive: number;
   sessions: number;
   profile: number;

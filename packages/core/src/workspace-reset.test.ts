@@ -55,6 +55,12 @@ describe('resetWorkspaceState', () => {
       body: 'b',
       origin: 'self',
     });
+    await stores.practices.write({
+      slug: 'implementation',
+      kind: '実装',
+      title: '実装のやり方',
+      content: 'まず現物を読む',
+    });
     await stores.archive.archive('session-1', '{"line":1}\n');
     await stores.sessions.setCloneSessionId('session-xyz');
     await stores.profile.write('export FOO=bar');
@@ -94,6 +100,7 @@ describe('resetWorkspaceState', () => {
       schedulePhases: 1,
       inbox: 1,
       commitments: 1,
+      practices: 1,
       archive: 1,
       sessions: 1,
       profile: 1,
@@ -113,6 +120,8 @@ describe('resetWorkspaceState', () => {
     expect(await stores.schedules.getPhase('daily_report')).toBeNull();
     expect((await stores.inbox.peekPending()).length).toBe(0);
     expect((await stores.commitments.list({ includeClosed: true })).entries).toEqual([]);
+    // ⭐ **消したのに申告へ出ない形を作らない**（`WorkspaceResetSummary.practices`）。
+    expect(await stores.practices.list()).toEqual([]);
     expect(await stores.archive.list()).toEqual([]);
     expect(await stores.sessions.getCloneSessionId()).toBeNull();
     expect(await stores.profile.read()).toBeNull();
@@ -150,6 +159,7 @@ describe('resetWorkspaceState', () => {
       schedulePhases: 0,
       inbox: 0,
       commitments: 0,
+      practices: 0,
       archive: 0,
       sessions: 0,
       profile: 0,

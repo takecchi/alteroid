@@ -763,3 +763,25 @@ export const authLoginRequests = pgTable(
   },
   (table) => [index('auth_login_requests_expires_idx').on(table.expiresAt)],
 );
+
+/**
+ * 仕事のやり方（#1055 段3）。1行1やり方。
+ *
+ * **本文以外を列に切ってあるのは `list()` のためである** —— 一覧が返すのは
+ * `PracticeMeta`（本文を含まない）なので、jsonb 1列にすると一覧の1行のために
+ * 全文を運ぶことになる。理由の全文は `PgPracticeStore` の doc。
+ *
+ * ⛔ **「実行される」欄をここへ足さないこと**（`practiceSchema` の doc）。器が
+ * 持つのは「こう書いてある」までで、「こう実行せよ」ではない。
+ */
+export const practices = pgTable('practices', {
+  slug: text('slug').primaryKey(),
+  /** 仕事の種類。**自由文字列である**（列挙にしない理由は `practiceKindSchema`）。 */
+  kind: text('kind').notNull(),
+  title: text('title').notNull(),
+  content: text('content').notNull(),
+  /** 正規化後の本文の文字数（`PracticeStore.write` の契約）。 */
+  bytes: integer('bytes').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+});
