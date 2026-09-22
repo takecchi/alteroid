@@ -14,6 +14,60 @@ set -eu
 
 entry=/app/apps/daemon/dist/index.js
 
+# **V8 のヒープ上限の既定を上げる（応急処置。#1283 系列の暫定値 — オーナーが
+# 決めること）。**
+#
+# ## なぜ要るか
+#
+# `NODE_OPTIONS` に `--max-old-space-size` を誰も指定していないと、V8 は
+# コンテナの実メモリを見ずに既定値だけでヒープの天井を決める。この器では実測で
+# 4,144 MB（`node -e 'console.log(require("v8").getHeapStatistics().heap_size_limit/1024/1024)'`）
+# だった一方、コンテナには 32 GB（`cat /sys/fs/cgroup/memory.max` が
+# `32000000000`）ある。⟹ **32 GB のうち 4.1 GB しか使えていない。**
+# クローンの起動時 resume が大きすぎるセッションを読もうとして OOM で落ちたのは
+# この天井に当たったためである（この PR の本題は「大きすぎるセッションを
+# resume しない」——ここは根治までの時間を買う応急処置）。
+#
+# ## 値（12,288 MB＝12 GiB。⚠️ 暫定値。この値はオーナーが決めること）
+#
+# コンテナ 32 GB に対して 20 GB の余裕を残す。**目的は cgroup の OOM killer
+# （無言の SIGKILL）側へ倒れないことである** —— ヒープが天井を越えたら V8 自身が
+# スタックトレース付きで落ちる（診断できる落ち方）。天井をコンテナの実メモリへ
+# 近づけすぎると、V8 のヒープ以外の常駐（他プロセス・ページキャッシュ等）と
+# 合わせて cgroup の上限へ先に当たり、**診断できない落ち方**へ倒れる。
+#
+# ## なぜコマンドライン引数（`node --max-old-space-size=...`）ではなく
+# `NODE_OPTIONS` へ足すのか
+#
+# **コマンドライン引数は `NODE_OPTIONS` に必ず勝つ**（実測、値の大小とは無関係）:
+#
+# ```
+# $ node -e "$P"                                                          # → 4144（既定）
+# $ NODE_OPTIONS=--max-old-space-size=2048 node -e "$P"                    # → 2096
+# $ node --max-old-space-size=3072 -e "$P"                                 # → 3120
+# $ NODE_OPTIONS=--max-old-space-size=2048 node --max-old-space-size=3072 -e "$P" # → 3120（引数側）
+# $ NODE_OPTIONS=--max-old-space-size=6144 node --max-old-space-size=3072 -e "$P" # → 3120（引数側。大きいほうが勝つのではない）
+# ```
+#
+# （`$P` は `console.log(require("v8").getHeapStatistics().heap_size_limit/1024/1024)`）。
+#
+# ⟹ **もしここでコマンドライン引数として焼くと、オーナーが Railway の環境変数
+# （`NODE_OPTIONS=--max-old-space-size=...`）へ置く値が黙って無効化される。**
+# `NODE_OPTIONS` へ足せば、外から来た値と1つの変数の中で共存でき、下の分岐で
+# 「既に指定が在れば触らない」が成立する。
+#
+# ## 既に指定が在れば触らない
+#
+# 外から `NODE_OPTIONS` に `--max-old-space-size` が来ていたら、それを尊重して
+# 1文字も変えない——ここが足すのはあくまで**既定**である。
+case "${NODE_OPTIONS-}" in
+  *--max-old-space-size=*) ;; # 外から指定が在る。尊重して触らない
+  *)
+    NODE_OPTIONS="${NODE_OPTIONS-} --max-old-space-size=12288"
+    export NODE_OPTIONS
+    ;;
+esac
+
 if [ "$(id -u)" = '0' ]; then
   # **`HOME` も一緒に差し替える。** `setpriv` が変えるのは UID/GID だけで、環境は
   # root のまま残る。`HOME=/root` を持ったまま降りると、クローンの SDK セッションが
