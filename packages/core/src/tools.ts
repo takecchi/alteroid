@@ -1659,7 +1659,7 @@ const RUNNER_MANAGER_LIST_LIMIT = 20;
  * 使っていない。**やり方の器は人間・クローンが少数を意図して置く場所であり、
  * 台帳や記憶のように無数に積み上がる性質のものではない**——だから、この段では
  * 継続点を実装せず、予算を超えたときは正直にその旨だけを言う
- * （`practice_write` の omitted の doc）。
+ * （`practice_list` の omitted の doc）。
  */
 const PRACTICE_LIST_BUDGET = 8_000;
 /**
