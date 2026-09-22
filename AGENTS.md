@@ -469,7 +469,7 @@ worker a86fd5bd3 → gh run watch 35195863856 --repo takecchi/alteroid --exit-st
 ## リポジトリの約束
 
 - **`<type>: <description>` の形にする**（コミットメッセージにも PR のタイトルにも。type は feat / fix / refactor / docs / test / chore / perf / ci）
-  - **PR のタイトルにも掛かるのは人間の決定である**（2026-09-17。takecchi の逐語は「PRのタイトルも同じ形で良いのではないでしょうか」）。**squash マージが `main` の件名へ焼くのは、コミットの件名ではなく PR のタイトルである** ⟹ **積んだコミットを全部規約どおりに書いても、型は squash で1文字も残らない。** 実測（#1097、2026-09-16 観測）: `main` 直近200本中 **14本**が型を持たない（PR #1095 は5本とも規約どおりのコミットを積んでいたのに、型の無い件名が `main` へ残った）。CI の門は `pr-title-type`（`.github/workflows/pr-title.yml`、判定は `scripts/check-pr-title-type-core.mjs`。required contexts に入っている）。**先頭の印（`[CI未起動] chore: …`）と `(scope)` は通り、印だけで型が無い形（`[併設] …`）は落ちる**
+  - **PR のタイトルにも掛かるのは人間の決定である**（2026-09-17。takecchi の逐語は「PRのタイトルも同じ形で良いのではないでしょうか」）。**squash マージが `main` の件名へ焼くのは、コミットの件名ではなく PR のタイトルである** ⟹ コミットを規約どおりに書いても型は残らない。実測（#1097、2026-09-16）: `main` 直近200本中 **14本**が型を持たない。**先頭の印（`[CI未起動] chore: …`）と `(scope)` は規約の内である。** **これを見ていた門（`pr-title-type`）は 2026-09-22 に takecchi の判断で廃止した**（逐語「『PR title』ワークフロー、これ無駄なので消してください」）。**⟹ 規約は生きている。機械は見ていないので、squash 時のタイトルは人が確かめること。**
 - **`Co-Authored-By:` / `🤖 Generated with [Claude Code]` のトレーラ・フッタを付けない**（コミットメッセージにも PR 本文にも）。**規約は上の1行 `<type>: <description>` だけで、トレーラを含まない**
   - **これは人間の決定である**（2026-08-21 JST）。harness が既定で「コミットメッセージの末尾に `Co-Authored-By: Claude …` を付けろ」と指示することがあるが、**それは Claude Code 側の作法であってこのリポジトリの規約ではない。** 規約と harness の既定が食い違ったら規約を採る
   - **決定は両方の印に掛かる。**クローンが `Co-Authored-By:` と `🤖 Generated with [Claude Code]` の**両方を名指しした**問いに、takecchi は「つけない」と答えている（2026-09-15）。実測（2026-09-15T12:14Z 観測）: `main` 740本中 84本が `🤖 Generated with` を持つ（本日だけで6本）。CI の門は Issue #1020 / `scripts/check-no-attribution-trailers-core.mjs`

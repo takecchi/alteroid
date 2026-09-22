@@ -70,7 +70,13 @@ const WORKFLOWS_DIR = path.join(ROOT, '.github/workflows');
  * —— Issue #1097 の `pr-title-type` は、PR タイトルの後からの書き換えを捕まえる
  * ために `pull_request.types` へ `edited` が要り、それを `ci.yml` へ足すと
  * required な `ci` / `image` が本文の編集ごとに焼き直される。だから別 workflow
- * （`.github/workflows/pr-title.yml`）へ置いた。
+ * （`.github/workflows/pr-title.yml`）へ置いた。**`pr-title-type` 自身は
+ * 2026-09-22 に takecchi の判断で廃止され、`pr-title.yml` ごと消えた**
+ * （逐語「『PR title』ワークフロー、これ無駄なので消してください」）。**ただし
+ * 走査を `.github/workflows/` 全体へ広げた理由——required な門が `ci.yml` の外に
+ * 実在しうること——はそのまま残る。** 現に `no-attribution-trailers`
+ * （`.github/workflows/no-attribution-trailers.yml`）は required のまま別
+ * workflow に在り続けている。
  *
  * ⟹ **`ci.yml` だけを見る形のままだと、この歯は「配線されているのに配線されて
  * いない」と言う。** そして残る直し方は `EXEMPT` へ載せることだけで、それは
@@ -210,7 +216,7 @@ describe('check:* がどの門からも呼ばれていない穴を作らない�
    */
   it('走査対象の workflow が ci.yml 1本ではない（別 workflow の門を見落とさない）', () => {
     expect(WORKFLOW_FILES).toContain('ci.yml');
-    expect(WORKFLOW_FILES).toContain('pr-title.yml');
+    expect(WORKFLOW_FILES).toContain('no-attribution-trailers.yml');
     expect(WORKFLOW_FILES.length).toBeGreaterThan(1);
   });
 

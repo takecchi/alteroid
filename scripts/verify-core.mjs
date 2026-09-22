@@ -339,6 +339,15 @@ export const STEPS = [
       'いまの版に当たらなくなった。引用を書き換える前に、その引用を根拠にしている判断が' +
       'まだ成り立つかを確かめること（scripts/check-sdk-quotes-core.mjs の doc）',
   },
+  {
+    name: 'stale-token-restart-advice',
+    cmd: 'pnpm',
+    args: ['check:stale-token-restart-advice'],
+    hint:
+      '「世代ずれなら起こし直せ」の助言が、生成元の外に書かれている。字面の生成元は' +
+      'packages/core/src/usage-limits.ts の STALE_TOKEN_RESTART_ADVICE 1箇所である' +
+      '（scripts/check-stale-token-restart-advice-core.mjs の doc、#1175）',
+  },
   { name: 'typecheck', cmd: 'pnpm', args: ['typecheck'] },
   { name: 'lint', cmd: 'pnpm', args: ['lint'] },
   { name: 'format:check', cmd: 'pnpm', args: ['format:check'], hint: '`pnpm format` で直る' },
@@ -468,13 +477,37 @@ export const TEST_ARGS_THAT_DO_NOT_NARROW = [
 ];
 
 /**
+ * その要素が「フラグらしい」か。**値必須フラグの値として飲んでよいかの判定に
+ * だけ使う**（Issue #1273）。
+ *
+ * `-` で始まるものはフラグとみなし、値として飲まない。**倒す向きは
+ * `TEST_ARGS_THAT_DO_NOT_NARROW` の doc と同じ安全側である** —— 飲まなければ
+ * その要素は許可リストと突き合わされ、載っていなければ `narrowing` へ入る。
+ * 帰結は「余分に一式を走らせる」だけで、緑の側へは倒れない。
+ *
+ * ⚠️ **負の数を値に取るフラグが将来足されたら、この判定は安全側へ外す**
+ * （`--maxWorkers -1` の `-1` をフラグとみなし、`narrowing` に入れて
+ * `full: false` にする）。記録を余分に見送るだけなので害は無いが、**その形を
+ * 実際に測ってはいない**——いま許可リストに在る6つに負の数を取るものは無い。
+ *
+ * 末尾（`undefined`）も「飲まない」側へ倒す。`--reporter` で引数列が終わる形で
+ * あり、飲む値がそもそも存在しない。
+ */
+function isFlagLike(arg) {
+  return arg === undefined || arg.startsWith('-');
+}
+
+/**
  * `pnpm test` へ渡る引数（`splitVerifyArgs` の `passthrough`）が、実行範囲を
  * **絞り込む形か**を判定する。
  *
  * **`--flag=値` は `=` の前で引く。** 値ありのフラグが `--flag 値` の形で単体で
  * 来たら、**次の要素も一緒に飛ばす**（`--maxWorkers 4` の `4` を、絞り込みの
- * パス指定と読み違えないため）。それ以外の引数はすべて `narrowing` へ入る
- * （テストファイルのパス・`-t`（名前フィルタ）・`--changed`・`--bail` など）。
+ * パス指定と読み違えないため）。**ただし飛ばすのは `-` で始まらない要素だけで
+ * ある**（`isFlagLike`。Issue #1273）——`--reporter --changed` の `--changed` は
+ * 値ではなくフラグなので飲まず、`narrowing` へ残す。それ以外の引数はすべて
+ * `narrowing` へ入る（テストファイルのパス・`-t`（名前フィルタ）・`--changed`・
+ * `--bail` など）。
  *
  * `full = narrowing.length === 0`。**「絞り込みが実際に効いたか（vitest が
  * 実際に何本選んだか）は見ていない。** 見ているのは引数の**形**だけである**
@@ -494,7 +527,11 @@ export function classifyTestScope(passthrough) {
     // `--flag=値` の形は、この1要素で完結している（値を飛ばす必要が無い）。
     if (eqIdx !== -1) continue;
     // `--flag 値` の形（値ありで `=` を使っていない）。次の要素（値）も飛ばす。
-    if (known.takesValue) i += 1;
+    // **ただし飲むのは「値らしい」ものだけである**（Issue #1273）。次の要素が
+    // `-` で始まるならそれはフラグであって値ではない、とみなして飲まない——
+    // 飲むと `--reporter --changed` の `--changed` が消え、絞り込みが
+    // `full: true` に化ける（`decideRecord` が「全体成功」を記録する）。
+    if (known.takesValue && !isFlagLike(passthrough[i + 1])) i += 1;
   }
   return { full: narrowing.length === 0, narrowing };
 }

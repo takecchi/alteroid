@@ -732,6 +732,100 @@ describe('classifyTestScope（Issue #1191）: 絞り込みかどうかの判定'
       narrowing: ['does/not/exist.test.ts'],
     });
   });
+
+  /**
+   * Issue #1273: **値必須フラグの直後を無条件に「値」として飲まない。**
+   *
+   * `--reporter` / `--maxWorkers` のような `takesValue: true` のフラグの次の要素を
+   * 中身を見ずに読み飛ばしていたため、そこに置かれた**絞り込みフラグが飲み込まれて**
+   * `full: true` になっていた。`decideRecord` はこれを見て `record: true` を返す
+   * ——**絞り込んだ実行が「全体成功」として記録される**、つまり
+   * `TEST_ARGS_THAT_DO_NOT_NARROW` の doc が「絶対に倒れない」と書いている
+   * **緑の側**へ倒れる形である。
+   *
+   * 直し方は「次の要素が `-` で始まらないときだけ値として飲む」。`-` で始まる
+   * ものは値ではなくフラグとみなし、許可リストに無ければ `narrowing` へ残す
+   * （＝安全側）。
+   */
+  it('--reporter --changed（値必須フラグの直後の絞り込みフラグを飲まない）→ not full（#1273）', () => {
+    expect(classifyTestScope(['--reporter', '--changed'])).toEqual({
+      full: false,
+      narrowing: ['--changed'],
+    });
+  });
+
+  it('--maxWorkers --changed（同上、別の値必須フラグ）→ not full（#1273）', () => {
+    expect(classifyTestScope(['--maxWorkers', '--changed'])).toEqual({
+      full: false,
+      narrowing: ['--changed'],
+    });
+  });
+
+  it('--reporter --bail=1（飲み込まれる側が = 付きでも残す）→ not full（#1273）', () => {
+    expect(classifyTestScope(['--reporter', '--bail=1'])).toEqual({
+      full: false,
+      narrowing: ['--bail=1'],
+    });
+  });
+
+  /**
+   * **理由まで正す回（#1273）。** 直す前もこの入力は `full: false` を返していたが、
+   * それは `-t` が `--reporter` の値として飲まれ、残った `foo` が `narrowing` に
+   * 入っただけで、**理由が誤っていた**（Issue 本文の「正しい答えに偶然当たって
+   * いる」）。直した後は `-t` 自身が `narrowing` に残る。
+   */
+  it('--reporter -t foo は -t 自身が narrowing に残る（偶然ではなく理由が正しい）（#1273）', () => {
+    expect(classifyTestScope(['--reporter', '-t', 'foo'])).toEqual({
+      full: false,
+      narrowing: ['-t', 'foo'],
+    });
+  });
+
+  /**
+   * **回帰の歯（#1273）。** 上の直しで「値を飲む」経路そのものを壊していないこと。
+   * `-` で始まらない値は従来どおり飲む。
+   */
+  it('--maxWorkers 4 --reporter verbose（-で始まらない値は従来どおり飲む）→ full（#1273）', () => {
+    expect(classifyTestScope(['--maxWorkers', '4', '--reporter', 'verbose'])).toEqual({
+      full: true,
+      narrowing: [],
+    });
+  });
+
+  /**
+   * **境界の歯（#1273）。** 値必須フラグが引数列の**末尾**に来る形。飲む値が
+   * そもそも存在しないので、`isFlagLike` は `undefined` を受ける。
+   *
+   * **変異試験で見つけた穴である。** `isFlagLike` から `undefined` の番人を
+   * 丸ごと外す変異（`return arg.startsWith('-')`）を当てたところ、**73本すべてが
+   * 緑のまま、この入力では `TypeError` を投げた**——末尾に値必須フラグが来る形を
+   * 測る歯が1本も無かった。番人は効いているが、**効いていることを誰も測って
+   * いなかった。**
+   *
+   * ⚠️ **番人を「逆向きに倒す」変異（`arg !== undefined && …`）は、この歯でも
+   * 殺せない。** 配列の外を指す `i += 1` はループの終了に影響しないので、
+   * **どちらに倒しても出力が1文字も変わらない**（6通りの入力で突き合わせて確認
+   * した）。⟹ **等価変異であって、歯の穴ではない。**この歯が測るのは
+   * 「番人が在ること」までである。
+   */
+  it('--reporter が末尾（飲む値が無い）→ full。例外を投げない（#1273）', () => {
+    expect(classifyTestScope(['--reporter'])).toEqual({ full: true, narrowing: [] });
+    expect(classifyTestScope(['--maxWorkers'])).toEqual({ full: true, narrowing: [] });
+  });
+
+  /**
+   * **`decideRecord` まで貫通することを見る歯（#1273）。** この Issue が問題に
+   * しているのは `classifyTestScope` の戻り値そのものではなく、**それを見た
+   * `decideRecord` が「全体成功」を記録してしまう**ことである。
+   */
+  it('--reporter --changed は decideRecord が narrowed で記録を拒む（#1273）', () => {
+    const scope = classifyTestScope(['--reporter', '--changed']);
+    expect(decideRecord({ scope, moved: false, recordPath: '/tmp/record.json' })).toEqual({
+      record: false,
+      reason: 'narrowed',
+      narrowing: ['--changed'],
+    });
+  });
 });
 
 /**

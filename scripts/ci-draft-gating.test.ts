@@ -471,6 +471,12 @@ const JOB_IF_EXPRESSIONS = new Map<string, string | null>(
  * 崩れた** —— Issue #1097 の `pr-title-type` は `pull_request.types` に `edited`
  * が要り、それを `ci.yml` へ足すと required な `ci` / `image` が PR 本文の編集
  * ごとに焼き直される。だから別 workflow（`.github/workflows/pr-title.yml`）へ置いた。
+ * **`pr-title-type` 自身は 2026-09-22 に takecchi の判断で廃止され、
+ * `pr-title.yml` ごと消えた**（逐語「『PR title』ワークフロー、これ無駄なので
+ * 消してください」）。**ただし required な門が `ci.yml` の外に実在しうるという
+ * 前提の崩れそのものは戻っていない** —— `no-attribution-trailers`
+ * （`.github/workflows/no-attribution-trailers.yml`）がいまも required のまま
+ * 別 workflow に在る。
  *
  * ⟹ **`ci.yml` だけを見る形のままだと、この歯は required context を「実在しない
  * ジョブ」と呼ぶ。** そして黙らせる方法は「宣言から外す」しか無く、それは
@@ -727,14 +733,18 @@ describe('固定その4: required contexts の実在対応 と「skip は draft 
 
   /**
    * **走査が `ci.yml` 1本へ戻ったことを検出する。** 戻ると、別 workflow に置いた
-   * required な門（`pr-title-type`）だけが「実在しない」と言われ、**宣言から
-   * 外して黙らせる**圧力が生まれる（＝ required なのに誰も検査していない門）。
+   * required な門（`no-attribution-trailers`。かつては `pr-title-type` がここに
+   * 立っていたが、2026-09-22 に廃止された——history は上の `ALL_WORKFLOW_JOBS`
+   * の doc を見よ）だけが「実在しない」と言われ、**宣言から外して黙らせる**
+   * 圧力が生まれる（＝ required なのに誰も検査していない門）。
    * ⟹ 複数本を見ていることそのものを歯にする。
    */
   it('走査対象の workflow が ci.yml 1本ではない（別 workflow の required な門を見落とさない）', () => {
     expect(WORKFLOW_FILE_NAMES).toContain('ci.yml');
-    expect(WORKFLOW_FILE_NAMES).toContain('pr-title.yml');
-    expect(ALL_WORKFLOW_JOBS.get('pr-title-type')?.workflow).toBe('pr-title.yml');
+    expect(WORKFLOW_FILE_NAMES).toContain('no-attribution-trailers.yml');
+    expect(ALL_WORKFLOW_JOBS.get('no-attribution-trailers')?.workflow).toBe(
+      'no-attribution-trailers.yml',
+    );
   });
 
   /**

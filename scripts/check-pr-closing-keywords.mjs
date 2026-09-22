@@ -9,7 +9,7 @@
  * 5分類・優先順位の根拠・公式 doc で確認できたこと/できなかったことは、あちらの
  * doc に書いてある。ここはネットワーク（`gh pr view`）を持ち、結果を出力し、
  * 終了コードを決めるだけの薄い層（`check-no-attribution-trailers.mjs` /
- * `check-pr-title-type.mjs` と同じ分け方）。
+ * `check-pr-vanished-footprint.mjs` と同じ分け方）。
  *
  * ## この道具が言えること・言えないこと
  *
@@ -20,7 +20,7 @@
  *   という保証。** タイトル・本文の編集だけでは新しい workflow run が起きない
  *   ので（`ci.yml` の `pull_request.types` に `edited` を含めていない）、この門を
  *   起こす workflow（`.github/workflows/pr-closing-keywords.yml`）は `edited` を
- *   含む（`pr-title.yml` と同じ理由）。
+ *   含む（`no-attribution-trailers.yml` と同じ理由）。
  * - **書き換えない。** 読むだけである。
  *
  * ## 入力（環境変数。手元で叩くための `--pr` / `--repo` 引数でも上書きできる）
@@ -197,7 +197,8 @@ function main() {
     fetchErrors.push(`gh pr view が失敗した: ${error}`);
   } else {
     // GitHub は空のタイトルを許さないので、`title` が文字列でなければ取得の失敗
-    // として扱う（`check-pr-title-type.mjs` と同じ判断）。
+    // として扱う（かつて存在した `check-pr-title-type.mjs`。2026-09-22 廃止、と
+    // 同じ判断）。
     if (typeof data.title === 'string') {
       title = data.title;
     } else {

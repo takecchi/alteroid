@@ -188,6 +188,18 @@ const EXEMPT: readonly Exemption[] = [
   },
   { tool: 'profile_read', why: '実装側に、説明文が数え直すような一覧が無い' },
   { tool: 'profile_write', why: '実装側に、説明文が数え直すような一覧が無い' },
+  { tool: 'practice_list', why: '実装側に、説明文が数え直すような一覧が無い' },
+  { tool: 'practice_read', why: '実装側に、説明文が数え直すような一覧が無い' },
+  {
+    // **`kind` は意図して enum にしていない**（`practiceKindSchema` の doc、
+    // north_star「仕事の型を実装専用に狭めていないか」）。説明文が例に挙げる
+    // 種類（実装・調査・相談・レビュー・日報…）は網羅の主張ではなく、
+    // 「自由文字列である」という設計そのものを説明する例示なので、実装側の
+    // 配列を数え直してはいない——増減しても説明文は嘘にならない。
+    tool: 'practice_write',
+    why: 'kind は自由文字列（enum ではない）。説明文の例示（実装・調査・相談…）は網羅の主張ではなく、実装側に数え直すべき配列・enum が存在しない',
+  },
+  { tool: 'practice_remove', why: '実装側に、説明文が数え直すような一覧が無い' },
   {
     tool: 'token_list',
     why: '状態の語は実装が出す文言そのもので、説明文はそれを列挙していない',

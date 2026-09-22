@@ -54,7 +54,7 @@ jobs:
   #   この PR の権限の外である。**`.github/required-status-checks.json`（正本は
   #   あちら）は1文字も触らない。
   pr-line-number-citations:
-    # **draft でも skip しない**（`no-attribution-trailers` / `pr-title-type` /
+    # **draft でも skip しない**（`no-attribution-trailers` / `pr-vanished-footprint` /
     # `pr-closing-keywords` と同じ。`if:` で節約すると draft 由来の `skipped` が
     # 「満たした」として扱われる罠を持ち込む。`gh pr view` を1回叩くだけで軽く、
     # 節約する理由が無い）。

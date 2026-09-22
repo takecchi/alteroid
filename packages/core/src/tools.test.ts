@@ -797,6 +797,11 @@ describe('クローンの道具', () => {
       // 全件は出ていない（予算で締められている）。
       expect(reply).toContain('省略');
       expect(reply).not.toContain('## 見出し番号79');
+      // **#662。** 省略された分へ到達する手段は無い——`before` の本文は
+      // この応答の外のどこにも残っていない（`describeMemoryWriteDiff` の
+      // doc「記憶には控えも履歴も無い」）。継続点を案内する他の一覧と違い、
+      // ここは`token_list`と同型に「無い」と自分で申告する（挙動は変えない）。
+      expect(reply).toContain('残りを見る手はここに無い');
     });
 
     it('memory_append の応答にも同じ要約が付く（新規作成の形）', async () => {
@@ -6595,15 +6600,21 @@ describe('クローンの道具', () => {
   /**
    * **助言の手前に前提が立っていること**（#1063 / #914 の 2026-09-15T21:01:54Z）。
    *
-   * すぐ下の助言（`manager_stop → manager_start で起こし直すこと（…ただし会話は
-   * 失われる）`）は、#914 のコメントが「**失われるものを過小に言っている**」と
+   * すぐ下の助言は、#914 のコメントが「**失われるものを過小に言っている**」と
    * 名指ししたものである——実際にこの助言どおり走行中の委譲3本が止められ、うち
    * 1本は未 push の実装を抱えていた。
    *
-   * ⛔ **助言そのものは書き換えない**（同じ文言が提案1・`manager_stop` の断りにも
-   * 在り、揃える判断は3箇所まとめてすべきである）。⟹ **測るのは「先に確かめろ」が
-   * 助言より前に在ること**だけである。**在るかどうかだけでなく順序も測る**——
-   * 後ろに付いていたら前提として読まれない。
+   * ⚠ **かつてここには「⛔ 助言そのものは書き換えない（揃える判断は3箇所まとめて
+   * すべきである）」と書いてあった。その判断は #1175 で着いた**——実測すると助言は
+   * 3箇所ではなく**6箇所**に散っており、#914 の名指しに答えていたのはそのうち
+   * 1箇所だけだった。⟹ 助言は `usage-limits.ts` の `STALE_TOKEN_RESTART_ADVICE`
+   * 1箇所へ畳み、旧文言「ただし会話は失われる」は
+   * 「失われるのは会話だけではない」へ置き換えた。
+   *
+   * ⟹ **ここで測るのは、いまも「先に確かめろ」が助言より前に在ることだけである。**
+   * **在るかどうかだけでなく順序も測る**——後ろに付いていたら前提として読まれない。
+   * **字面が1箇所であることは、この歯ではなく
+   * `pnpm check:stale-token-restart-advice` が見ている**（役割を混ぜない）。
    */
   it('manager_list の世代ずれの行は、起こし直しの助言より前に「止める前に確かめろ」を置く（#1063）', async () => {
     const h = harness();
@@ -12148,8 +12159,81 @@ describe('self_dropped（自分の跡を器の中から読み戻す。#242）', 
     expect(reply).not.toContain('managerId=mgr-0 ');
     expect(reply).not.toContain('managerId=mgr-1 ');
     expect(reply).not.toContain('managerId=mgr-2 ');
-    // 「もっと古い分は limit を上げて」の案内が出る（全5件のうち2件だけを渡した）。
-    expect(reply).toContain('limit を上げて');
+    // **#662。** 続きは offset で取れると案内する（全5件のうち2件だけを渡した）。
+    // ⚠️ 「limit を上げて」ではない —— それは境界を動かさない（別の歯が固定済み）。
+    expect(reply).toContain('続きは self_dropped offset=2 で取れる');
+    expect(reply).toContain('limit を上げても動かない');
+  });
+
+  /**
+   * **#662。`limit` は外側（`all.slice(-limit)`）にしか効かず、予算で切れた
+   * 内側の境界には効かない。** ここを歯で固定する——「変えたら直った」を
+   * 原因の確定として扱わないため、直す前にまずこの赤を取る。
+   *
+   * 1件あたり約90文字（`alteroid: <ISO時刻> managerIdの発行が衝突した…`）の
+   * 跡を200件（帳面の上限 `RECENT_TRACE_LIMIT` ちょうど）積むと、
+   * `SELF_DROPPED_BUDGET`（8,000字）は末尾からおよそ88件でいっぱいになる。
+   * `limit` をそれより大きい2値（100 と 200）で呼んでも、`renderListingFromEnd`
+   * は常に**末尾（最新）から**同じだけ予算を使い切るので、実際に載る内容
+   * （境界）は変わらない——`total`（省略件数の分母）だけが動く。
+   */
+  it('limit を上げても、予算で切れる境界（何が載るか）は動かない（#662）', async () => {
+    const h = harness();
+    clearRecentTracesForTesting();
+    setStderrSinkForTesting(() => {});
+    try {
+      for (let index = 0; index < 200; index += 1) {
+        noteManagerIdCollision(`mgr-${String(index).padStart(3, '0')}`, 1);
+      }
+    } finally {
+      setStderrSinkForTesting(null);
+    }
+
+    const withLimit100 = await h.call('self_dropped', { limit: 100 });
+    const withLimit200 = await h.call('self_dropped', { limit: 200 });
+
+    // 前提: 実際に予算で切れている（切れていなければこの歯は何も測っていない）。
+    expect(withLimit100).toContain('件は省略');
+    expect(withLimit200).toContain('件は省略');
+
+    // 本題: 一覧の本体（実際に載っている跡の行そのもの）が、limit を
+    // 100 → 200 へ上げても1件も増えない・1文字も変わらない。
+    const tracesOf = (reply: string) =>
+      reply.split('\n').filter((line) => line.startsWith('alteroid: '));
+    expect(tracesOf(withLimit200)).toEqual(tracesOf(withLimit100));
+
+    // そして古い側（mgr-050 のような）へは、limit をどれだけ上げても
+    // 一度も到達できない——これが #662 の言う「口が無い」の実体である。
+    expect(withLimit100).not.toContain('managerId=mgr-050 ');
+    expect(withLimit200).not.toContain('managerId=mgr-050 ');
+  });
+
+  /**
+   * **#662 の直し。** 予算で切れた内側の境界（直上の歯が固定したもの）へ、
+   * `offset` で実際に到達できることを測る。**この歯は実装前は赤くなる**
+   * （`offset` を渡しても無視されるか、スキーマに無い引数として弾かれる）。
+   */
+  it('offset で、予算に阻まれていた古い側へ実際に到達できる（#662）', async () => {
+    const h = harness();
+    clearRecentTracesForTesting();
+    setStderrSinkForTesting(() => {});
+    try {
+      for (let index = 0; index < 200; index += 1) {
+        noteManagerIdCollision(`mgr-${String(index).padStart(3, '0')}`, 1);
+      }
+    } finally {
+      setStderrSinkForTesting(null);
+    }
+
+    // 直近から100件をスキップしてから見る＝mgr-000〜mgr-099 の範囲を見る。
+    // そこから既定の limit（50）で直近側（mgr-050〜mgr-099）が返るはず。
+    const reply = await h.call('self_dropped', { offset: 100 });
+
+    expect(reply).toContain('managerId=mgr-099 ');
+    expect(reply).toContain('managerId=mgr-050 ');
+    // offset で除外した側（直近100件）は出ない。
+    expect(reply).not.toContain('managerId=mgr-199 ');
+    expect(reply).not.toContain('managerId=mgr-100 ');
   });
 
   it('この道具そのものは HTTP に出していない（`self_read` / `self_status` と同じ扱い）', () => {
@@ -12342,6 +12426,10 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     token_list: /…ほか \d+ 件は省略（プールは \d+ 件あり、order の昇順に \d+ 件だけ出した）。/,
     manager_list: /…ほか \d+ 件は省略（全 \d+ 件）。/,
     runner_list: /…ほか \d+ 台は省略（登録は \d+ 台あり、\d+ 台だけ出した）。/,
+    // #1055 段3②。続きを取る口（cursor）がまだ無いので、その旨を正直に言う
+    // 文言まで含めて写す（`tools.ts` の `practice_list` の omitted）。
+    practice_list:
+      /…ほか \d+ 件は省略（全 \d+ 件のうち slug の昇順に \d+ 件だけ出した）。この一覧に続きを取る口はまだ無い/,
   };
 
   /**
@@ -12667,7 +12755,10 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       label: 'self_dropped',
       name: 'self_dropped',
       args: {},
-      mark: /…ほか古い \d+ 件は省略（この呼び出しで渡した \d+ 件のうち直近 \d+ 件だけ出した）。/,
+      // **#662 で offset を足した際に文言も変わった。** 「この呼び出しで
+      // 渡した」（limit だけが境界を決めるという、もう正しくない前提）を
+      // やめ、`offset` へ実際に進める続きの取り方を明示する形にした。
+      mark: /…ほか古い \d+ 件は省略（帳面には全 \d+ 件あり、直近から \d+ 件だけ出した）。続きは self_dropped offset=\d+ で取れる（limit を上げても動かない）。/,
     },
     /*
      * **`memory_section_move` も名前が `_list` で終わらないが、応答の中に
@@ -12931,6 +13022,15 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
             },
           },
         },
+      });
+      // やり方（practice_list）。**list はメタしか出さないので、本文ではなく
+      // title を長くして嵩上げする**（practice_list の omitted の doc、
+      // `practice-tools.test.ts` の予算の歯と同じ判断）。
+      await h.call('practice_write', {
+        slug: `practice-${pad}`,
+        kind: `種類${pad}`,
+        title: `やり方${pad}: ${long}`,
+        content: `本文${pad}`,
       });
     }
     // **節の多い記憶の文書**（`memory_outline` の目次と、`memory_write` が
@@ -13718,6 +13818,16 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       name: 'token_list',
       check: (firstLine) =>
         expect(firstLine, `id の隣に状態（cooling）が無い: ${firstLine}`).toMatch(/^- \S+ cooling/),
+    },
+    {
+      // #1055 段3②。`flooded()` は `kind: 種類<pad>` で積むので、id の隣に
+      // その種類の札（`[種類0000]`）が出るはずである——タイトルが id の
+      // 繰り返しへ落ちていないことの同じ確かめ方。
+      name: 'practice_list',
+      check: (firstLine) =>
+        expect(firstLine, `id の隣に種類の札（[種類0000]）が無い: ${firstLine}`).toMatch(
+          /^- \S+ \[種類\d{4}\]/,
+        ),
     },
   ];
 
@@ -18053,6 +18163,50 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
           summary: '不要になったので消す',
           dryRun: false,
         });
+      },
+    },
+    {
+      // #1055 段3②。
+      tool: 'practice_write',
+      firstLine: ACT_COMPLETED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-19');
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
+        return callExpectingError(tools, 'practice_write', {
+          slug: 'daily',
+          kind: '日報',
+          title: '日報のやり方',
+          content: '毎日夕方に書く',
+        });
+      },
+    },
+    {
+      // #1055 段3②。**在る slug でなければ appendJournalOrThrow の手前で
+      // 早期 return するので、先に書いておく必要がある**（`practice_remove`
+      // の doc「無かったときは日誌を書かない」）。
+      tool: 'practice_remove',
+      firstLine: ACT_COMPLETED,
+      async run() {
+        const stores = createMemoryStores();
+        await stores.practices.write({
+          slug: 'daily',
+          kind: '日報',
+          title: '日報のやり方',
+          content: '毎日夕方に書く',
+        });
+        const failing = failingJournalAppend(stores, 'boom-case-20');
+        const tools = createCloneTools({
+          stores: failing,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
+        return callExpectingError(tools, 'practice_remove', { slug: 'daily' });
       },
     },
   ];

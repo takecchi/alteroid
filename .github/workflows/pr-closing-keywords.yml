@@ -15,7 +15,7 @@ name: PR closing keywords
 
 # ## なぜ `ci.yml` の中に置かず、別の workflow にしたか
 #
-# **`edited` が要るからである**（`pr-title.yml` と同じ理由）。PR のタイトルも
+# **`edited` が要るからである**（`no-attribution-trailers.yml` と同じ理由）。PR のタイトルも
 # 本文も後から変えられるので、`opened` だけの門は素通りする。ところが `ci.yml`
 # の `pull_request.types` は `edited` を含まない
 # （`grep -Fn -- 'types: [opened, synchronize, reopened, ready_for_review]' .github/workflows/ci.yml`）。
@@ -40,7 +40,7 @@ on:
     # される」事故とは別の理由だが、`types` を揃える判断は同じである）。
     types: [opened, edited, synchronize, reopened, ready_for_review]
 
-# `pr-title.yml` と同じ形（理由の逐語は
+# `no-attribution-trailers.yml` と同じ形（理由の逐語は
 # `grep -Fn -- '同じ PR に続けて push したとき、古い実行を残さない' .github/workflows/ci.yml`）。
 # ここでは `pull_request` しか起きないので `head_ref` は必ず入るが、**`||` の側は
 # 落とさない** —— 空文字のキーで全 PR が1つの群に入る形を作らないため。
@@ -67,7 +67,7 @@ jobs:
   #   ことになる（`base-overlap` を required にしない判断と同じ理由。逐語は
   #   `grep -Fn -- '入れていない' .github/workflows/ci.yml` の周辺）。
   pr-closing-keywords:
-    # **`no-attribution-trailers` / `pr-title-type` と同じく draft でも skip
+    # **`no-attribution-trailers` / `pr-vanished-footprint` と同じく draft でも skip
     # しない。** `if:` で節約すると、draft 由来の `skipped` が「満たした」として
     # 扱われる罠を持ち込む。この検査は `gh api` を1回叩くだけで軽く、節約する
     # 理由が無い。

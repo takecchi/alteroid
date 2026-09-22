@@ -7,6 +7,7 @@ import {
   type Stores,
 } from '@alteroid/core';
 import { AUTH_WITHHELD_ENV_KEYS } from './auth.js';
+import { reportBootFootprint } from './boot-footprint.js';
 import {
   createFsStores,
   initWorkspace,
@@ -217,6 +218,11 @@ export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise
   if (plan.kind === 'fs' || plan.databaseUrl === undefined) {
     const { paths } = await initWorkspace(plan.root);
     const stores = createFsStores(plan.root);
+    // 起動時の器の実寸とヒープの検知（#1283、段2）。重い読み（backfill の
+    // journal 走査を含む）より前に置く。fs 構成では pg 専用の SQL を持つ
+    // 表の実寸は測れない——`null` を渡し、「測れなかった」として続ける
+    // （`boot-footprint.ts` の `describeBootFootprint` の doc）。
+    await reportBootFootprint(stores, null);
     await backfillMemoryHumanTouch(stores);
     await backfillMemoryCreatedAt(stores);
     return {
@@ -235,9 +241,16 @@ export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise
   await mkdir(paths.state, { recursive: true });
 
   // fs 構成のときに pg ドライバを読み込まない（ローカルは pg 無しで完結する）
-  const { createPgStores, seedPgWorkspace } = await import('@alteroid/storage-pg');
+  const { createPgStores, seedPgWorkspace, measureStorageFootprint } =
+    await import('@alteroid/storage-pg');
   const pg = await createPgStores(plan.databaseUrl);
   await seedPgWorkspace(pg);
+  // 起動時の器の実寸とヒープの検知（#1283、段2）。backfill（journal を走査
+  // する）より前に置く——重い読みの全部より前、が要件である
+  // （`boot-footprint.ts` の doc）。本文（jsonb / text 列）は1バイトも
+  // SELECT しない（`footprint.ts` の doc）ので、ここ自体は軽い。
+  const footprint = await measureStorageFootprint(pg.db);
+  await reportBootFootprint(pg, footprint);
   await backfillMemoryHumanTouch(pg);
   await backfillMemoryCreatedAt(pg);
 
