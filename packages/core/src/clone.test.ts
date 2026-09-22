@@ -6479,6 +6479,354 @@ describe('クローン — 枠に当たり続けたセッションは畳んで�
   });
 });
 
+/**
+ * 変更B: 回復予定時刻（`#usageBlocked.resetsAt`）より前は再武装しない。
+ * ただし常に再武装する3種類（`human_message` / `human_answer` /
+ * `manager_message` / `external` かつ `source: 'token-pool'`）は据え置く
+ * （`usageBlockAlwaysRearms` の doc。Issue #1240 続き）。
+ *
+ * **`resetsAt` を持たせる経路は `rate_limit_event` だけである**
+ * （`rejectedRateLimitNotice` の doc）。`resultText` を上限の文言に一致させない
+ * ことで、`result` 側の `classifyUsageNotice` が二重に `#usageBlocked` を
+ * 上書きしない形にしてある（既存の「rate_limit_event の status: rejected でも
+ * 枠が閉じたと判定する」と同じ作法）。
+ */
+describe('クローン — 枠の回復予定時刻（resetsAt）より前は再武装しない（Issue #1240 続き）', () => {
+  /** 過去の時刻。届いた瞬間から見て「もう過ぎている」resetsAt。 */
+  const PAST_RESETS_AT_MS = 1_700_000_000_000;
+  /** 十分先の時刻。テストの実行時間ぶんでは絶対に追いつかない resetsAt。 */
+  const FUTURE_RESETS_AT_MS = () => Date.now() + 60 * 60 * 1000;
+
+  function setupRateLimited(resetsAt: number): Setup {
+    return setup(undefined, createMemoryStores(), {
+      // **`result` 側の文言を上限のプレフィックスに当てない。** rate_limit_event
+      // 経路だけが resetsAt を運ぶことを確かめたいので、result 側の
+      // classifyUsageNotice が resetsAt を持たない notice で #usageBlocked を
+      // 上書きしないようにする。
+      resultSubtype: 'error_during_execution',
+      resultText: '（結果なし。rate_limit_event だけが上限の理由を運ぶ）',
+      rateLimitEventAt: () => ({ status: 'rejected', rateLimitType: 'five_hour', resetsAt }),
+    });
+  }
+
+  async function releaseAttemptCount(s: Setup): Promise<number> {
+    const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[];
+    return exchanges.filter((entry) => entry.text.includes('枠の解除を試す')).length;
+  }
+
+  function tick(id: string): InboxEvent {
+    return { type: 'self_initiative', id, at: new Date().toISOString(), reason: 'テスト用tick' };
+  }
+
+  /**
+   * 中身の無い内部の合図を、複数回・連続して届けるための口。**`self_initiative`
+   * ではなく `external`（トークンプール以外の任意の source）を使う** ——
+   * `self_initiative` はどれも「同じ tick」として `isSameTick` に畳まれる
+   * （type しか見ない）ので、前の1本がまだ待ち行列に残っているうちに次を
+   * post すると、次が畳み込みで消えてしまう（`post()` の isTick 畳み込み）。
+   * `external` は source が違えば `inboxCollapseKey` が `undefined` を返し
+   * （`isDaemonSelfNotice` に当たらない限り畳まない）、`isTick` の対象にも
+   * ならないので、この畳み込みを心配せずに複数本を連続で送れる。
+   */
+  function internalSignal(id: string): InboxEvent {
+    return { type: 'external', id, at: new Date().toISOString(), source: `test-internal-${id}` };
+  }
+
+  it('resetsAt より前に届いた self_initiative は再武装しない', async () => {
+    const s = setupRateLimited(FUTURE_RESETS_AT_MS());
+    s.clone.post(humanMessage('一件目'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+    const inputsBefore = (s.calls[0] as FakeCall).inputs.length;
+    s.clone.post(tick('evt-si-1'));
+
+    // **起きないことを確かめる歯なので、起きるまで待てない。** 少し待って
+    // 「増えていない」ことを見る——`usageReleasePending` が真になっていない
+    // ことと、実際にモデルへ渡った入力が増えていないことの両方を見る。
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(s.clone.usageReleasePending).toBe(false);
+    expect(await releaseAttemptCount(s)).toBe(0);
+    expect((s.calls[0] as FakeCall).inputs.length).toBe(inputsBefore);
+
+    await s.clone.stop();
+  });
+
+  it('resetsAt より後（もう過ぎている）なら self_initiative でも再武装する', async () => {
+    const s = setupRateLimited(PAST_RESETS_AT_MS);
+    s.clone.post(humanMessage('一件目'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+    s.clone.post(tick('evt-si-1'));
+    await waitFor(async () => (await releaseAttemptCount(s)) === 1, '解除の試行が1回になる');
+
+    await s.clone.stop();
+  });
+
+  it('resetsAt が分からない（文言だけの通知）なら、従来どおり self_initiative でも再武装する', async () => {
+    // 後方互換: rate_limit_event を使わず、文言だけで検知させる
+    // （`classifyUsageNotice` 経路。resetsAt を持たない）。
+    const spendLimitMessage = "You've hit your individual spend limit for this account.";
+    const s = setup(undefined, createMemoryStores(), {
+      resultSubtype: 'error_during_execution',
+      resultText: spendLimitMessage,
+    });
+    s.clone.post(humanMessage('一件目'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+    s.clone.post(tick('evt-si-1'));
+    await waitFor(async () => (await releaseAttemptCount(s)) === 1, '解除の試行が1回になる');
+
+    await s.clone.stop();
+  });
+
+  it('token-pool の復帰通知（external）は resetsAt より前でも常に再武装する', async () => {
+    const s = setupRateLimited(FUTURE_RESETS_AT_MS());
+    s.clone.post(humanMessage('一件目'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+    s.clone.post({
+      type: 'external',
+      id: 'evt-tokenpool-1',
+      at: new Date().toISOString(),
+      source: DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+    });
+    await waitFor(async () => (await releaseAttemptCount(s)) === 1, '解除の試行が1回になる');
+
+    await s.clone.stop();
+  });
+
+  it('人間の発言は resetsAt より前でも常に再武装する', async () => {
+    const s = setupRateLimited(FUTURE_RESETS_AT_MS());
+    s.clone.post(humanMessage('一件目'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+    s.clone.post(humanMessage('二件目'));
+    await waitFor(async () => (await releaseAttemptCount(s)) === 1, '解除の試行が1回になる');
+
+    await s.clone.stop();
+  });
+
+  it('抑止した回数は捨てず、実際に解除を試した1行へ畳んで出て0へ戻る', async () => {
+    const s = setupRateLimited(FUTURE_RESETS_AT_MS());
+    s.clone.post(humanMessage('一件目'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+    // 抑止される内部の合図を2回届ける。**器へ未読として残ったことを見て
+    // 次へ進む**（壁時計の sleep ではなく、実際に保持へ回ったことを待つ）。
+    s.clone.post(internalSignal('evt-si-1'));
+    await waitFor(async () => {
+      const pending = await s.stores.inbox.claimPending();
+      return pending.some((p) => p.event.id === 'evt-si-1');
+    }, 'evt-si-1 が未読のまま保持される');
+    s.clone.post(internalSignal('evt-si-2'));
+    await waitFor(async () => {
+      const pending = await s.stores.inbox.claimPending();
+      return pending.some((p) => p.event.id === 'evt-si-2');
+    }, 'evt-si-2 が未読のまま保持される');
+    expect(s.clone.usageReleasePending).toBe(false);
+    expect(await releaseAttemptCount(s)).toBe(0);
+
+    // 常に再武装する人間の発言で、実際に解除を試す。
+    s.clone.post(humanMessage('二件目'));
+    await waitFor(async () => (await releaseAttemptCount(s)) === 1, '解除の試行が1回になる');
+
+    const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[];
+    const releaseLine = exchanges.find((entry) => entry.text.includes('枠の解除を試す'));
+    expect(releaseLine?.text).toContain('再武装を抑止: 2 回');
+
+    // **0へ戻る**——同じ資格でもう一度抑止される self_initiative を送っても、
+    // 次に出る「解除を試す」行の抑止件数は前回の2を引きずらない（1のまま）。
+    await waitFor(() => s.clone.usageBlocked, '二件目の再試行がまた枠に当たる');
+    s.clone.post(internalSignal('evt-si-3'));
+    await waitFor(async () => {
+      const pending = await s.stores.inbox.claimPending();
+      return pending.some((p) => p.event.id === 'evt-si-3');
+    }, 'evt-si-3 が未読のまま保持される');
+    s.clone.post(humanMessage('三件目'));
+    await waitFor(async () => (await releaseAttemptCount(s)) === 2, '解除の試行が2回になる');
+
+    const exchangesAfter = (await s.stores.journal.list({ types: ['exchange'] })) as {
+      text: string;
+    }[];
+    const releaseLines = exchangesAfter.filter((entry) => entry.text.includes('枠の解除を試す'));
+    expect(releaseLines).toHaveLength(2);
+    // `journal.list()` は降順（新しい順）を返す（ファイル冒頭近くの同じ注記）
+    // ⟹ `[0]` が2回目（三件目で起きた解除。抑止は evt-si-3 の1件だけ）、
+    // `[1]` が1回目（二件目で起きた解除。抑止は evt-si-1 / evt-si-2 の2件）。
+    expect(releaseLines[0]?.text).toContain('再武装を抑止: 1 回');
+    expect(releaseLines[0]?.text).not.toContain('再武装を抑止: 2 回');
+    expect(releaseLines[1]?.text).toContain('再武装を抑止: 2 回');
+
+    await s.clone.stop();
+  });
+});
+
+/**
+ * 変更C: 保持中の「内部ターンが失敗した」を、人間が待っていない合図
+ * （`#conversationOf(event) === null`）については1件ごとに日誌へ書かず、
+ * 畳んだ件数だけを数える（`#pump` の枠ブロックの doc。Issue #1240 続き）。
+ *
+ * **会話に紐づく失敗（`人間との対話ターンが失敗した`）は1文字も変えていない**
+ * ——別の describe（「枠で保持している間、人間へ返す1行を積み上げない」）が
+ * その保証を持つ。ここで見るのは内部側だけである。
+ */
+describe('クローン — 保持中の内部の合図は、失敗記録を1件ごとに日誌へ書かない（Issue #1240 続き）', () => {
+  const spendLimitMessage = "You've hit your individual spend limit for this account.";
+  const internalFailureMark = '内部ターンが失敗した';
+
+  async function internalFailureCount(s: Setup): Promise<number> {
+    const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as {
+      with: string;
+      text: string;
+    }[];
+    return exchanges.filter(
+      (entry) => entry.with === 'self' && entry.text.startsWith(internalFailureMark),
+    ).length;
+  }
+
+  /**
+   * 中身の無い内部の合図を、複数回・連続して届けるための口。**`self_initiative`
+   * ではなく `external`（任意の source）を使う** —— `self_initiative` は
+   * どれも「同じ tick」として `isSameTick` に畳まれる（type しか見ない）ので、
+   * 前の1本がまだ待ち行列に残っているうちに次を post すると、次が畳み込みで
+   * 消えてしまう（`post()` の isTick 畳み込み）。`external` は source が
+   * 違えば `inboxCollapseKey` が `undefined` を返し（`isDaemonSelfNotice` に
+   * 当たらない限り畳まない）、`isTick` の対象にもならないので、この畳み込みを
+   * 心配せずに複数本を連続で送れる。
+   */
+  function internalSignal(id: string): InboxEvent {
+    return { type: 'external', id, at: new Date().toISOString(), source: `test-internal-${id}` };
+  }
+
+  it('保持件数が増えても、内部の失敗記録は再武装の回数ぶんしか増えない（N×M にならない）', async () => {
+    // **狙い**: 直す前は「保持 N 件 × 再武装 M 回」ぶん増えていた
+    // （`#pump` の枠ブロックの doc）。ここでは3回の再武装（2本目・3本目・
+    // 4本目の到着）で保持件数が 1→2→3 と増えていく間、内部の失敗記録が
+    // `1 + 再武装回数`（＝1,2,3,4）という**線形**にしか増えないことを見る。
+    // 保持の先頭1本だけが実際に再試行されて本物の失敗を書き（この経路は
+    // 変わっていない）、残りは畳まれて書かれない。
+    const s = setup(undefined, createMemoryStores(), {
+      resultSubtype: 'error_during_execution',
+      resultText: spendLimitMessage,
+    });
+
+    // 1本目: 実際に失敗して枠に当たる（内部ターンの失敗が1件、実際のターンの
+    // 失敗として記録される——これは変更Cの対象外の経路である）。
+    s.clone.post(internalSignal('evt-1'));
+    await waitFor(async () => (await internalFailureCount(s)) === 1, '1本目の失敗が記録される');
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+    // 2本目: 到着が1本目の再試行を誘発する（保持の先頭が実際に再試行され、
+    // 同じ理由でまた失敗するので本物の失敗記録がもう1件増える＝合計2）。
+    // 2本目自身は #pump の短絡（枠が閉じている）へ回り、conversationId が
+    // null なので `#reportFailure` を呼ばずに畳む。
+    s.clone.post(internalSignal('evt-2'));
+    await waitFor(async () => (await internalFailureCount(s)) === 2, '1本目の再試行の失敗が記録される');
+
+    // 3本目: 保持は [1本目, 2本目] の2件。先頭（1本目）だけが再試行されて
+    // 本物の失敗が増える（合計3）。2本目・3本目自身は畳まれる。
+    s.clone.post(internalSignal('evt-3'));
+    await waitFor(async () => (await internalFailureCount(s)) === 3, '2周目の再試行の失敗が記録される');
+
+    // 4本目: 保持は [1本目, 2本目, 3本目] の3件。先頭だけが再試行されて
+    // 本物の失敗が増える（合計4）。**保持件数が3件に増えても、増えるのは
+    // 依然として1件だけである**——これが N×M ではなく M であることの核心。
+    s.clone.post(internalSignal('evt-4'));
+    await waitFor(async () => (await internalFailureCount(s)) === 4, '3周目の再試行の失敗が記録される');
+
+    // ここでさらに増えないことも確かめる（余計な書き込みが遅れて来ていない）。
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(await internalFailureCount(s)).toBe(4);
+
+    await s.clone.stop();
+  });
+
+  it('畳んだ件数は失われず、実際に解除を試した1行へ「畳んだ」件数として残り、そのつど0へ戻る', async () => {
+    const s = setup(undefined, createMemoryStores(), {
+      resultSubtype: 'error_during_execution',
+      resultText: spendLimitMessage,
+    });
+
+    s.clone.post(internalSignal('evt-1'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+    // 1回目の解除（2本目が誘発）: この時点ではまだ何も畳んでいないので、
+    // 出る行に「畳んだ」の一文は無い。
+    s.clone.post(internalSignal('evt-2'));
+    await waitFor(async () => (await internalFailureCount(s)) === 2, '1本目の再試行の失敗が記録される');
+    await waitFor(() => s.clone.usageBlocked, '1本目の再試行もまた枠に当たる');
+
+    // 2回目の解除（3本目が誘発）: 1回目の周で畳んだ2本目の1件ぶんがこの
+    // 行へ出る。
+    s.clone.post(internalSignal('evt-3'));
+    await waitFor(async () => (await internalFailureCount(s)) === 3, '2周目の再試行の失敗が記録される');
+    await waitFor(() => s.clone.usageBlocked, '2周目の再試行もまた枠に当たる');
+
+    // 3回目の解除（4本目が誘発）: 2回目の周で畳んだのは2本目・3本目の
+    // 2件——**1回目の周で畳んだ1件を引きずっていない**（0へ戻っているので、
+    // この行は2件だけを持つ）。
+    s.clone.post(internalSignal('evt-4'));
+    await waitFor(async () => (await internalFailureCount(s)) === 4, '3周目の再試行の失敗が記録される');
+
+    const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[];
+    const releaseLines = exchanges
+      .filter((entry) => entry.text.includes('枠の解除を試す'))
+      .map((entry) => entry.text);
+    // `journal.list()` は降順（新しい順）。
+    expect(releaseLines).toHaveLength(3);
+    expect(releaseLines[2]).not.toContain('内部の失敗記録を畳んだ');
+    expect(releaseLines[1]).toContain('内部の失敗記録を畳んだ: 1 件');
+    expect(releaseLines[0]).toContain('内部の失敗記録を畳んだ: 2 件');
+    expect(releaseLines[0]).not.toContain('内部の失敗記録を畳んだ: 3 件');
+
+    await s.clone.stop();
+  });
+
+  it('会話に紐づく失敗（人間との対話ターンが失敗した）は、内部の合図と混ざっても1文字も変わらない', async () => {
+    const s = setup(undefined, createMemoryStores(), {
+      resultSubtype: 'error_during_execution',
+      resultText: spendLimitMessage,
+    });
+
+    s.clone.post(humanMessage('一件目'));
+    await waitForTerminal(s.events);
+
+    // **`#reportFailure` は `with: 'self'` で書く**（conversationId の有無で
+    // 変わるのは先頭の文言だけ——`内部ターンが失敗した` / `人間との対話
+    // ターンが失敗した`。`internalFailureCount` と同じ絞り方で、こちらは
+    // 会話側の接頭辞で絞る）。
+    const humanFailureMark = '人間との対話ターンが失敗した';
+    const rows = (await s.stores.journal.list({ types: ['exchange'] })) as {
+      with: string;
+      text: string;
+    }[];
+    const humanFailures = rows.filter(
+      (entry) => entry.with === 'self' && entry.text.startsWith(humanFailureMark),
+    );
+    // 1件目の初回失敗ぶん、会話側の失敗記録が1件出ている。中身
+    // （`#reportFailure` の組み立て）はこれまでと同じ形のままである。
+    expect(humanFailures).toHaveLength(1);
+    expect(humanFailures[0]?.text).toContain(spendLimitMessage);
+
+    // 内部の合図を1本挟んでも、会話側の失敗記録の作法は変わらない
+    // （短絡された内部の合図は畳まれ、`人間との対話ターンが失敗した` の件数には
+    // 影響しない）。
+    s.clone.post(internalSignal('evt-1'));
+    await waitFor(async () => {
+      const after = (await s.stores.journal.list({ types: ['exchange'] })) as {
+        with: string;
+        text: string;
+      }[];
+      return (
+        after.filter((entry) => entry.with === 'self' && entry.text.startsWith(humanFailureMark))
+          .length === 2
+      );
+    }, '一件目の再試行の失敗がもう1件記録される');
+
+    await s.clone.stop();
+  });
+});
+
 describe('クローン — 考えている合図（thinking）', () => {
   /**
    * `fakeSdk` は assistant(text) → result の1本道しか流せず、tool_use /
