@@ -1,3 +1,4 @@
+// Issue #1155 の required 門再計測用の無害な1行（measure/1155-cancelled-required-v2）。
 import { describe, expect, it } from 'vitest';
 
 import {
