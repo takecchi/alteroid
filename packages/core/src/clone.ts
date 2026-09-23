@@ -6581,11 +6581,20 @@ class Clone implements CloneHost {
    * ⟹ **同じプロセスの中で試し直しても、枠はまだ閉じている。** 次の起動は
    * 早くても器の入れ替えの後なので、そこが最初の「開いているかもしれない」地点である。
    *
-   * ## なぜ `load()` ではなく `archive.read` から拾うのか
+   * ## なぜ `load()` ではなく `archive.readTail` から拾うのか
    *
    * 退避は既に済んでいる（印が立つ条件がそれである）。⟹ pg の生ログを全件
    * 戻す口（`SessionStore.load`）を使う理由が無い。**あちらは 60 秒の予算に
    * 掛かっている**ので、掛からない側で足りるならそちらを採る。
+   *
+   * **`read()`（全文）ではなく `readTail()`（末尾）を使う（#1283）。** 蒸留が
+   * 使うのは `tailOf()` が切った末尾だけなのに、以前は `read()` で本文の
+   * 全体を先にヒープへ載せていた——実測で `archive` の1行は最大 78.3 MB に
+   * 育つので、起動のたびに自動で走るこの経路が自分自身で OOM を起こしうる
+   * 形だった。`readTail(id, DISTILL_TRANSCRIPT_TAIL_CHARS)` は末尾だけを
+   * 返すので、以降の `tailOf(transcript)` は前と同じ結果を、全文を載せずに
+   * 得る（`TranscriptArchive.readTail` の契約——渡るものは全文を読んでいた
+   * ときと同一である）。
    *
    * ## ⛔ 限界（この経路が拾えないもの）
    *
@@ -6596,7 +6605,14 @@ class Clone implements CloneHost {
     const grave = await this.#stores.sessions.getTranscriptGrave();
     if (grave === null) return;
 
-    const result = await this.#stores.archive.read(grave.archiveId);
+    // **`read()`（全文）ではなく `readTail()`（末尾）**（#1283）——本文の
+    // 全体をヒープへ載せてから `tailOf()` で切っていたのが欠陥そのもの。
+    // 詳しい理由はこの関数の doc「なぜ `load()` ではなく `archive.readTail`
+    // から拾うのか」を見よ。
+    const result = await this.#stores.archive.readTail(
+      grave.archiveId,
+      DISTILL_TRANSCRIPT_TAIL_CHARS,
+    );
     if (result.kind !== 'body') {
       // 退避が無い。**理由は2つに分かれ、同じ文面へ畳まない**（#698 — tombstone
       // を足した目的そのもの）——`missing`（器を作り直した／そもそも一度も
@@ -10859,8 +10875,13 @@ function rejectedRateLimitNotice(facts: RateLimitFacts): UsageLimitNotice {
  *
  * BMP の文字は 1〜3 バイトで 1 code unit、それ以外は 4 バイトで 2 code unit
  * （サロゲートペア）＝ 1 code unit あたり 2 バイトである。**⟹ 上限は 3 である。**
+ *
+ * **export してある**——`packages/storage-fs/src/archive.ts` の
+ * `FsTranscriptArchive.readTail`（#1283）が同じ「3倍読んでから文字数で切る」
+ * 形を使う。根拠をもう1か所へ複製すると、直したときに片方だけ直る事故が
+ * 起きるため、ここを唯一の出所にする。
  */
-const MAX_UTF8_BYTES_PER_UTF16_UNIT = 3;
+export const MAX_UTF8_BYTES_PER_UTF16_UNIT = 3;
 
 /**
  * 生ログの**末尾だけ**を読む（全文を 1 本の文字列にしない）。

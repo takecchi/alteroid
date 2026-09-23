@@ -88,6 +88,24 @@ import type { TranscriptArchive } from './store.js';
  *     呼び出し）は `unknown` に、別々に積まれることを見る。**`absent` と
  *     `unknown` が同じカウンタに混ざったら、この歯が落ちる**
  *
+ * **26〜29 は `readTail()`（#1283 の OOM、読み出し側）の検査である:**
+ *
+ * 26. 🔴 **本文が `maxChars` より長いとき、返るものは本文の末尾に一致し、
+ *     長さは `maxChars` を厳密に上回る**（頭ではなく尾を返しており、かつ
+ *     「ちょうど `maxChars`」ではない）。「ちょうど」を許さない理由は
+ *     `readTail` interface doc に逐語で在る——呼び出し側（`tailOf`）が
+ *     「切り詰め済みの窓」と「本文がもとから短かった」を区別できなくなる。
+ *     **ASCII のみを使う**——UTF-8 の窓は文字の途中から始まりうる
+ *     （`readTail` interface doc）ため、非 ASCII だと窓の先頭が実装ごとに
+ *     壊れ方が違い、この契約を実装に依らず測れなくなる。ASCII なら 1 文字
+ *     1 バイトなので、どの実装でも窓の境界が文字境界と一致する
+ * 27. **本文が `maxChars` 以下のとき、全文が返る**
+ * 28. **`removed` / `missing` の3状態が `read()` と一致する**（`readTail` も
+ *     `read()` と同じ3状態を返す契約——ここが割れると
+ *     `#pickUpTranscriptGrave` の分岐が実装によって変わる）
+ * 29. 🔴 **`maxChars` が正の整数でなければ fail-closed で拒む**（`0` /
+ *     負数 / 非整数 / `NaN` のどれでも投げる。黙って全文へ倒さない）
+ *
  * 呼び出し側は使い捨ての archive を渡すこと（後始末はしない）。
  *
  * @param deps.seedFingerprintlessRow 指紋（`bodyChars`/`bodyMd5`）を持たない
@@ -682,5 +700,84 @@ export async function verifyTranscriptArchiveContract(
     fail('absentとunknownは別カウンタに割れる（seedした行はabsent、その直後はunknown）', {
       summary: fingerprintlessSummary,
     });
+  }
+
+  // --- ここから #1283（readTail。読み出し側の OOM）-------------------------
+
+  // 26. 🔴 本文が maxChars より長いとき、返るものは本文の末尾に一致する
+  // （頭ではなく尾を返している）。**ASCII のみ**——非 ASCII だと fs 実装の
+  // 窓（バイト境界）が文字境界とずれうるので、実装差を測る契約にならない
+  // （`readTail` interface doc「行の途中・文字の途中から始まりうる」）。
+  const tailSessionId = 'archive-contract-read-tail';
+  const tailFullBody = `PREFIX-${'A'.repeat(4000)}-TAIL-MARKER-END`;
+  const tailId = (await archive.archive(tailSessionId, tailFullBody)).id;
+  const tailMaxChars = 100;
+  const tailResult = await archive.readTail(tailId, tailMaxChars);
+  if (tailResult.kind !== 'body') fail('readTail(本文が長い)はbody', tailResult);
+  // 🔴 **`<=` ではなく `<=` を落とす側（＝厳密に上回ること）を測る。** 本文が
+  // maxChars より長いのに、返す量がちょうど maxChars だと、呼び出し側の
+  // `tailOf`（`clone.ts`）が「切り詰め済みの窓」を「本文がもとから短かった」
+  // と取り違える（`readTail` interface doc の逐語で同じ注意。clone.test.ts
+  // 「歯2」で実測）。⟹ ここは `< tailMaxChars` ではなく
+  // `<= tailMaxChars` を落とす——「ちょうど」を許さない。
+  if (tailResult.body.length <= tailMaxChars) {
+    fail('readTailは本文がmaxCharsより長いとき、maxCharsを厳密に上回る量を返す', {
+      returnedChars: tailResult.body.length,
+      tailMaxChars,
+    });
+  }
+  if (!tailFullBody.endsWith(tailResult.body)) {
+    fail('readTailが返すのは本文の末尾である（頭ではない）', { tailResult, tailFullBody });
+  }
+  if (tailResult.body.slice(-tailMaxChars) !== tailFullBody.slice(-tailMaxChars)) {
+    fail('readTailの末尾maxChars文字ぶんは本文の末尾maxChars文字ぶんと一致する', {
+      tail: tailResult.body.slice(-tailMaxChars),
+      expected: tailFullBody.slice(-tailMaxChars),
+    });
+  }
+
+  // 27. 本文が maxChars 以下のとき、全文が返る。
+  const shortBody = 'SHORT-BODY-1234567890\n';
+  const shortId = (await archive.archive('archive-contract-read-tail-short', shortBody)).id;
+  const shortResult = await archive.readTail(shortId, shortBody.length + 1000);
+  if (shortResult.kind !== 'body' || shortResult.body !== shortBody) {
+    fail('readTailは本文がmaxChars以下なら全文を返す', shortResult);
+  }
+
+  // 28. removed / missing の3状態が read() と一致する。
+  const tailMissing = await archive.readTail(missingId, 10);
+  if (tailMissing.kind !== 'missing')
+    fail('readTail(存在しないid)はmissing（read()と一致）', tailMissing);
+
+  const tailRemovedId = (
+    await archive.archive('archive-contract-read-tail-removed', 'REMOVE-ME-BEFORE-TAIL\n')
+  ).id;
+  await archive.remove(tailRemovedId);
+  const tailRemoved = await archive.readTail(tailRemovedId, 5);
+  const plainRemoved = await archive.read(tailRemovedId);
+  if (tailRemoved.kind !== 'removed' || plainRemoved.kind !== 'removed') {
+    fail('readTail(消したid)はread()と同じくremoved', { tailRemoved, plainRemoved });
+  }
+  if (
+    tailRemoved.removedAt !== plainRemoved.removedAt ||
+    tailRemoved.bytes !== plainRemoved.bytes
+  ) {
+    fail('readTailのremoved詳細（removedAt/bytes）はread()と一致する', {
+      tailRemoved,
+      plainRemoved,
+    });
+  }
+
+  // 29. 🔴 maxChars が正の整数でなければ fail-closed で拒む（黙って全文へ
+  // 倒さない）。`0` は「境界値」として特に効く——`maxChars <= 0` を
+  // `maxChars < 0` と書き間違える変異（歯3系の族）はここで拾う。
+  for (const bad of [0, -1, 1.5, Number.NaN]) {
+    let threw = false;
+    try {
+      await archive.readTail(tailId, bad);
+    } catch {
+      threw = true;
+    }
+    if (!threw) fail('readTail(不正なmaxChars)はfail-closedで拒む（例外を投げる）', { bad });
   }
 }

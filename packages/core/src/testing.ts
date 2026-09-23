@@ -814,6 +814,30 @@ export function createMemoryStores(): Stores {
       if (body === undefined) return { kind: 'missing' };
       return { kind: 'body', body };
     },
+    // 末尾だけを読む（#1283 の OOM、読み出し側。`TranscriptArchive.readTail`）。
+    // インメモリなので既に文字列としてヒープに在り、削れる読み込みは無い
+    // ——ここでの契約の本体は「末尾を返す」「maxChars 以下なら全文」の2つで、
+    // 判定の順序（印を先に見る）は read() と揃える。
+    //
+    // **切り詰めるときは `maxChars + 1` 文字を返す**（`maxChars` ちょうどに
+    // しない）——`readTail` interface doc の「本文が `maxChars` より長いとき、
+    // 返す量は `maxChars` を厳密に上回ること」に従う。ここを `maxChars`
+    // ちょうどにすると、呼び出し側の `tailOf`（`clone.ts`）が
+    // `transcript.length <= DISTILL_TRANSCRIPT_TAIL_CHARS` で「切り詰め済みの
+    // 窓」を「本文がもとから短かった」と誤読し、行の途中の窓がそのまま蒸留へ
+    // 渡る（clone.test.ts「歯2」で実測）。
+    async readTail(id, maxChars) {
+      if (!Number.isInteger(maxChars) || maxChars <= 0) {
+        throw new Error(
+          `archive.readTail(): maxChars は正の整数でなければならない（渡された値: ${String(maxChars)}）`,
+        );
+      }
+      const removal = archiveRemovals.get(id);
+      if (removal !== undefined) return { kind: 'removed', ...removal };
+      const body = archives.get(id);
+      if (body === undefined) return { kind: 'missing' };
+      return { kind: 'body', body: body.length <= maxChars ? body : body.slice(-(maxChars + 1)) };
+    },
     async remove(id) {
       const removal = archiveRemovals.get(id);
       if (removal !== undefined) return { kind: 'already', ...removal };

@@ -120,16 +120,21 @@ describe('拾い上げが新しい印を消す（#1157 段2）', () => {
     // 前の器が残した印。退避そのものは器の作り直しで失われている（＝ `missing`）。
     await base.sessions.setTranscriptGrave({ archiveId: 'arc-old' });
 
-    // **拾い上げが `archive.read` を待っているあいだに、文脈窓で畳んだ回が
+    // **拾い上げが `archive.readTail` を待っているあいだに、文脈窓で畳んだ回が
     // 新しい印を立てる。** 実際に書くのは `#salvageTranscript` だが、それが
     // いつ書くかは拾い上げの側から見て任意なので、ここでは「読んでいる最中」に
     // 固定する。**窓を作っているのではなく、在る窓の中の1点を選んでいる。**
+    //
+    // ⚠️ **#1283 で `read` から `readTail` へ差し替えた。** `#pickUpTranscriptGrave`
+    // が本文を取る口そのものが変わったので、割り込みを仕込む場所もそれに
+    // 追随させる——`read` のままだと、この窓はもう「拾い上げの途中」を通らない
+    // （呼ばれない口を差し替えても割り込めない）。
     const stores: Stores = {
       ...base,
       archive: {
         ...base.archive,
-        read: async (id: string) => {
-          const result = await base.archive.read(id);
+        readTail: async (id: string, maxChars: number) => {
+          const result = await base.archive.readTail(id, maxChars);
           if (id === 'arc-old') {
             await base.sessions.setTranscriptGrave({ archiveId: 'arc-new' });
           }

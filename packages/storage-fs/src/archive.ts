@@ -1,7 +1,8 @@
-import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
+  MAX_UTF8_BYTES_PER_UTF16_UNIT,
   classifyArchiveContinuity,
   fingerprintArchiveBody,
   tallyArchiveContinuity,
@@ -231,6 +232,65 @@ export class FsTranscriptArchive implements TranscriptArchive {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' };
       throw error;
+    }
+  }
+
+  /**
+   * 末尾だけを読む（#1283 の OOM、読み出し側。`TranscriptArchive.readTail`）。
+   *
+   * **`clone.ts` の `readTranscriptTail` と同じ形**——file handle でファイルの
+   * 末尾から `(maxChars + 1) * {@link MAX_UTF8_BYTES_PER_UTF16_UNIT}` バイト
+   * だけを読む。`readFile()`（`read()` が使うもの）のように全文を1本の文字列
+   * へ起こしてから切ると、切る前に本文の全体がプロセスのメモリへ載ってしまい、
+   * この関数自身が避けたい OOM を起こす。
+   *
+   * **`maxChars` ではなく `maxChars + 1` を掛ける。** `MAX_UTF8_BYTES_PER_UTF16_UNIT`
+   * 倍だけでは「窓が実際にファイルを切り詰めたとき、デコード後の文字数が
+   * ちょうど `maxChars` になる」場合を防げない（全部が3バイト/コードユニット
+   * の内容だと、最悪ケースでちょうど `maxChars` に達する）。ちょうどだと、
+   * 呼び出し側の `tailOf`（`clone.ts`）が
+   * `transcript.length <= DISTILL_TRANSCRIPT_TAIL_CHARS` で「切り詰め済みの
+   * 窓」を「本文がもとから短かった」と誤読し、行の途中の窓がそのまま蒸留へ
+   * 渡る（`readTail` interface doc、clone.test.ts「歯2」で実測——ただし
+   * 実測したのは in-memory 実装で、こちらは理論上の最悪ケースであり実測は
+   * していない）。`+ 1` を先に掛けておけば、切り詰めが起きるときのデコード後
+   * 文字数は常に `maxChars` を厳密に上回る。
+   *
+   * **`bytesRead` で切る。** `handle.read()` は要求より短く返しうるので、
+   * `buffer` をそのまま文字列にすると末尾に NUL が並ぶ（`readTranscriptTail`
+   * の doc と同じ注意）。
+   *
+   * tombstone の判定は `read()` と1文字も変えない——印ファイルの有無だけで
+   * 見る。`removed` のときは本体を読みに行かない（`body` は既に `''` へ
+   * 切り詰められている行なので、読んでも意味が無い）。
+   */
+  async readTail(id: string, maxChars: number): Promise<ArchiveRead> {
+    if (!Number.isInteger(maxChars) || maxChars <= 0) {
+      throw new Error(
+        `archive.readTail(): maxChars は正の整数でなければならない（渡された値: ${String(maxChars)}）`,
+      );
+    }
+    if (sanitize(id) !== id) return { kind: 'missing' };
+    const marker = await this.#readMarker(id);
+    if (marker !== null)
+      return { kind: 'removed', removedAt: marker.removedAt, bytes: marker.bytes };
+
+    let handle;
+    try {
+      handle = await open(join(this.#dir, id), 'r');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' };
+      throw error;
+    }
+    try {
+      const { size } = await handle.stat();
+      const window = (maxChars + 1) * MAX_UTF8_BYTES_PER_UTF16_UNIT;
+      const length = Math.min(size, window);
+      const buffer = Buffer.alloc(length);
+      const { bytesRead } = await handle.read(buffer, 0, length, size - length);
+      return { kind: 'body', body: buffer.subarray(0, bytesRead).toString('utf8') };
+    } finally {
+      await handle.close();
     }
   }
 

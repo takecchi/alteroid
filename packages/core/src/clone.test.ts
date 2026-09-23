@@ -8507,6 +8507,7 @@ describe('クローン — 蒸留の末尾は全文を読まずに取る（渡�
         list: () => stores.archive.list(),
         sessions: () => stores.archive.sessions(),
         read: (id: string) => stores.archive.read(id),
+        readTail: (id: string, maxChars: number) => stores.archive.readTail(id, maxChars),
         remove: (id: string) => stores.archive.remove(id),
         clear: () => stores.archive.clear(),
       },
@@ -8659,6 +8660,142 @@ describe('クローン — 起動時に墓標を拾い直す（#564 E1b）', () 
     expect(texts.some((text) => text.includes('退避が見つからないので、印を下ろした'))).toBe(false);
 
     await s.clone.stop();
+  });
+});
+
+/**
+ * #1283 —— `#pickUpTranscriptGrave` が退避の本文を丸ごとヒープへ載せていた
+ * （`archive.read()` で全文を取ってから `tailOf()` で末尾だけを使う＝絞り込みが
+ * 「読んだ後」に在った）のを、`archive.readTail()`（末尾だけを返す口）へ直した。
+ *
+ * **この直しの成立条件は2つで、どちらか片方だけでは「痩せている」:**
+ *
+ * 1. **足りない側の裏返し** —— 呼び出し側が実際に受け取る文字数は、退避の
+ *    本文がどれだけ巨大でも頭打ちになる（歯1）
+ * 2. **やりすぎ側の裏返し** —— それでいて、蒸留へ渡るものは全文を読んで
+ *    `tailOf()` で切っていたときと1文字も変わらない（削り過ぎていない。歯2）
+ *
+ * どちらも `tail.chars=` / `tail.fp=`（`turnInputEntry` が `pre_compact_distill`
+ * の行へ書く、本文の長さと指紋）で測る——本文そのものを日誌へ写さない設計
+ * （`turnInputEntry` の doc）なので、これが「渡った量と中身」を検算できる
+ * 唯一の窓である。
+ */
+describe('クローン — 拾い直しは退避の全文をヒープへ載せない（#1283）', () => {
+  /**
+   * `tailOf`（`clone.ts`、非公開）のアルゴリズムそのままの再実装。
+   *
+   * ⚠️ `tailOf` は export されていない（蒸留の外へ漏らさない設計）ので、
+   * ここでは doc に書かれた契約（末尾 maxChars 文字を切り、最初の改行より
+   * 前を捨てる）をそのまま複製している。**この歯が測りたいのは `tailOf`
+   * 自体の正しさではなく、`#pickUpTranscriptGrave` が `readTail()` 経由で
+   * 渡すものが「全文に `tailOf` を適用した結果」と一致するか**である——
+   * `readTail()` の契約（末尾から少なくとも maxChars 文字ぶんを返す。
+   * それより多く返してもよい）が保たれている限り、超過ぶんの有無に関わらず
+   * この結果は変わらないはずである。
+   */
+  function expectedTailOf(fullBody: string, maxChars: number): string {
+    if (fullBody.length <= maxChars) return fullBody;
+    const cut = fullBody.slice(-maxChars);
+    const newline = cut.indexOf('\n');
+    return newline === -1 ? cut : cut.slice(newline + 1);
+  }
+
+  /**
+   * `DISTILL_TRANSCRIPT_TAIL_CHARS`（`clone.ts`、非公開。60,000）と同じ値を
+   * 固定のリテラルとして持つ。**掛け算で合成しない**——変異試験で定数側が
+   * 壊れても（例えば `Number.MAX_SAFE_INTEGER` へ変異）、ここから作る合成
+   * データの長さが吹き飛ばないようにするため
+   * （`.claude/skills/mutation-testing/SKILL.md` の注意）。
+   */
+  const DISTILL_TAIL_CHARS_MIRROR = 60_000;
+
+  it('歯1: 退避の本文が巨大でも、呼び出し側が受け取る文字数は頭打ちになる', async () => {
+    const stores = createMemoryStores();
+    const hugeBody = `${'H'.repeat(3_000_000)}\nHUGE-TAIL-MARKER-9f2c1a\n`;
+    const archiveId = (await stores.archive.archive('sess-huge', hugeBody)).id;
+    await stores.sessions.setTranscriptGrave({ archiveId });
+
+    // **`TranscriptArchive` を計測用の殻で包む。** `readTail` の戻り値の
+    // 文字数を記録するだけで、それ以外は素通しする——「`readTail` を呼んで
+    // いるか」だけを見る歯にしない（見るのは実際に呼び出し側へ渡った量その
+    // もの）。もし実装が `read()`（全文）へ後退したら、その呼び出しも同じ
+    // 殻を経由するので `via` が `'read'` になり、受け取る量も本文全体まで
+    // 跳ね上がる——この歯自身が「足りない側」の変異（`readTail`→`read` への
+    // 差し戻し）を検出する構造になっている。
+    const received: { chars: number | null; via: 'read' | 'readTail' | null } = {
+      chars: null,
+      via: null,
+    };
+    const wrapped: Stores = {
+      ...stores,
+      archive: {
+        ...stores.archive,
+        async read(id) {
+          const result = await stores.archive.read(id);
+          if (result.kind === 'body') {
+            received.chars = result.body.length;
+            received.via = 'read';
+          }
+          return result;
+        },
+        async readTail(id, maxChars) {
+          const result = await stores.archive.readTail(id, maxChars);
+          if (result.kind === 'body') {
+            received.chars = result.body.length;
+            received.via = 'readTail';
+          }
+          return result;
+        },
+      },
+    };
+
+    const s = setup(undefined, wrapped);
+    await waitFor(() => received.chars !== null, '拾い直しが本文を読むこと');
+    await s.clone.stop();
+
+    expect(received.via).toBe('readTail');
+    // **頭打ちになっている**：受け取った量は本文全体よりオーダーで小さい。
+    expect(received.chars as number).toBeLessThan(hugeBody.length / 10);
+    // **削り過ぎてもいない**（0 や極端な短さへ倒れていない）——「足りない」
+    // と「やりすぎ」の両方から離れた帯であることを見る。
+    expect(received.chars as number).toBeGreaterThan(10_000);
+  });
+
+  it('歯2: 蒸留へ渡るものは、全文を読んで tailOf で切っていたときと同一である', async () => {
+    const stores = createMemoryStores();
+    const lines = Array.from(
+      { length: 3000 },
+      (_, i) => `LINE-${String(i).padStart(6, '0')}-${'x'.repeat(40)}`,
+    );
+    const fullBody = lines.join('\n');
+    // 前提を先に測る。ここが偽なら、下の歯は「切っていない」ことを検出できない。
+    expect(fullBody.length).toBeGreaterThan(DISTILL_TAIL_CHARS_MIRROR * 2);
+
+    const expected = expectedTailOf(fullBody, DISTILL_TAIL_CHARS_MIRROR);
+
+    const archiveId = (await stores.archive.archive('sess-identical', fullBody)).id;
+    await stores.sessions.setTranscriptGrave({ archiveId });
+
+    const s = setup(undefined, stores);
+    await waitFor(async () => {
+      const rows = (await stores.journal.list({ types: ['exchange'] })).filter(
+        (entry) => entry.type === 'exchange',
+      );
+      return rows.some((entry) => entry.text.includes('ターンの入力: pre_compact_distill'));
+    }, '蒸留の入力が日誌へ残ること');
+    await s.clone.stop();
+
+    const rows = (await stores.journal.list({ types: ['exchange'] })).filter(
+      (entry) => entry.type === 'exchange',
+    );
+    const inputRow = rows.find((entry) => entry.text.includes('ターンの入力: pre_compact_distill'));
+    expect(inputRow, '日誌に pre_compact_distill の行が無い').toBeDefined();
+    const chars = Number(/tail\.chars=(\d+)/u.exec(inputRow?.text ?? '')?.[1] ?? '-1');
+    const fp = /tail\.fp=([0-9a-f]+)/u.exec(inputRow?.text ?? '')?.[1];
+
+    // **長さだけでは、別の同じ長さの何かを渡しても通る**——指紋まで見る。
+    expect(chars).toBe(expected.length);
+    expect(fp).toBe(fingerprintOf(expected));
   });
 });
 

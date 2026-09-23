@@ -122,6 +122,9 @@ function fakeArchiveEntries(initial: readonly ArchiveEntry[]): Stores['archive']
       }
       return { kind: 'body', body: '' };
     },
+    readTail() {
+      throw new Error('fakeArchiveEntries: readTail() は使わない');
+    },
     async remove(id) {
       const row = rows.get(id);
       if (row === undefined) return { kind: 'missing' };

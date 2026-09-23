@@ -234,6 +234,54 @@ export class PgTranscriptArchive implements TranscriptArchive {
   }
 
   /**
+   * 末尾だけを読む（#1283 の OOM、読み出し側。`TranscriptArchive.readTail`）。
+   *
+   * **`right(body, maxChars + 1)` で PostgreSQL 側に切らせる。** `read()` の
+   * ように `body` 列をそのまま `select` すると、100MB 級の行では切る前に
+   * 本文の全体がドライバ経由で Node のプロセスへ渡ってしまい、この関数自身が
+   * 避けたい OOM を起こす——**返ってくる列は `right(...)` が計算した後の値
+   * だけ**である（`list()` が `pg_column_size(body)` で本文に触れずに大きさを
+   * 測るのと同じ理由・同じ形）。
+   *
+   * **`+ 1` は「ちょうど `maxChars`」を避けるためである**（`readTail`
+   * interface doc「本文が `maxChars` より長いとき、返す量は `maxChars` を
+   * 厳密に上回ること」）。`right()` は `n` が本文の長さ以上なら本文全体を
+   * そのまま返すので、本文が `maxChars` 以下のときの契約（全文を返す）は
+   * この `+ 1` があっても崩れない。
+   *
+   * **tombstone の判定は `read()` と1文字も変えない**——`removedAt` だけで
+   * 見て、本文の中身（空かどうか）は見ない。`removed` のときは `right(...)` の
+   * 結果を無視する（`body` は既に `''` へ切り詰められている行なので、読んでも
+   * 意味が無い）。
+   */
+  async readTail(id: string, maxChars: number): Promise<ArchiveRead> {
+    if (!Number.isInteger(maxChars) || maxChars <= 0) {
+      throw new Error(
+        `archive.readTail(): maxChars は正の整数でなければならない（渡された値: ${String(maxChars)}）`,
+      );
+    }
+    const rows = await this.#db
+      .select({
+        tail: sql<string>`right(${archive.body}, ${maxChars + 1})`,
+        removedAt: archive.removedAt,
+        removedBytes: archive.removedBytes,
+      })
+      .from(archive)
+      .where(eq(archive.id, id))
+      .limit(1);
+    const row = rows[0];
+    if (row === undefined) return { kind: 'missing' };
+    if (row.removedAt !== null) {
+      return {
+        kind: 'removed',
+        removedAt: row.removedAt.toISOString(),
+        bytes: row.removedBytes ?? 0,
+      };
+    }
+    return { kind: 'body', body: row.tail };
+  }
+
+  /**
    * 本文だけを落とす（tombstone）。**`DELETE` を打たない。** 行は残る——
    * `body = ''` へ切り詰め、`removed_at` / `removed_bytes` を立てるだけの
    * `UPDATE` である。

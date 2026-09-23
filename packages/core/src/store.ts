@@ -1232,6 +1232,52 @@ export interface TranscriptArchive {
   sessions(): Promise<ArchiveSessionSummary[]>;
   read(id: string): Promise<ArchiveRead>;
   /**
+   * 末尾だけを読む（#1283 の OOM、読み出し側）。
+   *
+   * ## なぜ `read()` を使わないのか
+   *
+   * あちらは本文の**全体**を返す。実測で `archive` の1行は最大 78.3 MB に
+   * 育つ（`boot-storage-footprint` の `external_event`、
+   * 2026-09-22T22:06:56.256Z 観測）。**起動のたびに自動で走る拾い直し**
+   * （`clone.ts` の `#pickUpTranscriptGrave`。`#pump` が待たずに起こす——
+   * 人間の操作は要らない）が、以前は `read()` で全文をヒープへ載せたうえで
+   * `tailOf` に末尾だけを使わせていた——絞り込みが「読んだ後」に在ったのが
+   * #1283 の欠陥そのものである。⟹ 末尾を返す口を分ける
+   * （`SessionTranscriptTail.readTail` と同じ形。あちらは pg の生ログ、
+   * こちらは退避（`archive`）本体。`readTail` という名前もそちらに揃えた）。
+   *
+   * ## 契約
+   *
+   * - **戻りの形は `read()` と同じ3状態**（`body` / `removed` / `missing`）。
+   *   `#pickUpTranscriptGrave` はこの3状態で日誌の文面を分けているので、
+   *   区別を潰さないこと。
+   * - `kind: 'body'` のとき返すのは、**本文の末尾から少なくとも `maxChars`
+   *   文字ぶん**。実装が窓をバイトで切る都合で、**それより多く返してよい**
+   *   （`clone.ts` の `readTranscriptTail` と同じ）。本文が `maxChars` 以下
+   *   なら全文を返す。
+   * - 🔴 **本文が `maxChars` より長いとき、返す量は `maxChars` を
+   *   **厳密に**上回ること（同じ数で切り詰めない）。** 呼び出し側
+   *   （`tailOf`）は `transcript.length <= DISTILL_TRANSCRIPT_TAIL_CHARS`
+   *   で「切り詰めが要るか」を判定する——ここで「ちょうど `maxChars`」を
+   *   返すと、それが「切り詰め済みの窓」なのか「本文がもとから短かった」
+   *   なのかを呼び出し側は区別できず、前者を後者と誤読して行の途中の
+   *   窓をそのまま蒸留へ渡してしまう（clone.test.ts「歯2」で実測。窓の
+   *   境界をちょうど `maxChars` に合わせる実装で実際に踏んだ）。⟹
+   *   **実装は、切り詰めが起きるときは必ず `maxChars + 1` 文字ぶん以上を
+   *   返すこと**（pg は `right(body, maxChars + 1)`、fs は窓のバイト数を
+   *   `(maxChars + 1) * MAX_UTF8_BYTES_PER_UTF16_UNIT` にする、インメモリ
+   *   は `maxChars + 1` 文字でスライスする）。
+   * - **行の途中・文字の途中から始まりうる。整えるのは呼び出し側
+   *   （`tailOf`）である**——器ごとに整え方が分かれると、蒸留へ渡るものが
+   *   器で変わる（`SessionTranscriptTail.readTail` の doc、逐語で同じ注意）。
+   * - **実装は本文の全体を呼び出し側のメモリへ載せないこと。** 載せれば、
+   *   避けたいはずの OOM をこの関数自身が起こす
+   *   （`SessionTranscriptTail.measureSize` の doc と同じ規律）。
+   * - `maxChars` は正の整数。**不正な値は fail-closed で拒む**（黙って
+   *   全文へ倒さない）。
+   */
+  readTail(id: string, maxChars: number): Promise<ArchiveRead>;
+  /**
    * 本文だけを落とす（tombstone。`DELETE` ではない）。
    *
    * **`body` の「空である」ことを判定に使わない。** 空の生ログは正当にありえる
