@@ -1942,6 +1942,8 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     // 中身に意味は無い。
     usageBlocked: false,
     usageReleasePending: false,
+    usageBlockedResetsAt: undefined,
+    usageBlockedTokenId: undefined,
     recycleSessionForToken() {
       throw new Error('spec 生成専用のスタブ: セッションは作らない');
     },

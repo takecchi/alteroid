@@ -7298,6 +7298,115 @@ describe('クローン — 枠の回復予定時刻（resetsAt）より前は再
     await s.clone.stop();
   });
 
+  /**
+   * **⚠️ Issue #1223 再発: token-pool の3つ目の例外にも例外が在る。**
+   *
+   * `usageBlockAlwaysRearms` は token-pool の通知を無条件に再武装させるが、
+   * その根拠は「プールの構成が変わると resetsAt の予定は無意味になる」
+   * （`usageBlockAlwaysRearms` の doc）。**同じ鍵の観測ベースの回復
+   * （`observedRecovery: true`）が、いま止まっている同じ鍵を指しているだけ
+   * なら、プールは1文字も変わっていない**——`post()` の中の
+   * `staleObservedRecoveryNoticeEvent` がこの1点だけを見て外す
+   * （`tokenPoolReopenedPayload` の構造化した payload を読む。文言は見ない）。
+   */
+  describe('⚠️ Issue #1223 再発: 同じ鍵の観測ベース回復は resetsAt 前なら再武装しない', () => {
+    /**
+     * `setupRateLimited` に `tokenIdentity` を足したもの。**「止まったときの
+     * 鍵」を確かめるにはセッションの身元が要る**——`setup` はこれを受けない
+     * ので（`cloneWithIdentity` の doc と同じ理由）直に組む。
+     */
+    function setupRateLimitedWithIdentity(
+      resetsAt: number,
+      identity: () => { tokenId: string; generation: number } | undefined,
+    ): Setup {
+      const stores = createMemoryStores();
+      const { fn, calls } = fakeSdk(undefined, {
+        resultSubtype: 'error_during_execution',
+        resultText: '（結果なし。rate_limit_event だけが上限の理由を運ぶ）',
+        rateLimitEventAt: () => ({ status: 'rejected', rateLimitType: 'five_hour', resetsAt }),
+      });
+      const clone = createClone({
+        redeliveryGate: ALWAYS_REDELIVER,
+        stores,
+        queryFn: fn,
+        env: {},
+        tokenIdentity: identity,
+        runners: createRunnerRegistry([
+          createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+        ]),
+      });
+      const { events, waitForEvents } = wireEvents(clone, 'conv-1');
+      return { clone, stores, calls, events, waitForEvents };
+    }
+
+    /** token-pool の構造化した復帰通知（`wake()` が組む形。Issue #1223 再発）。 */
+    function reopenedNotice(tokenId: string, observedRecovery: boolean): InboxEvent {
+      return {
+        type: 'external',
+        id: `evt-tokenpool-${tokenId}-${String(observedRecovery)}`,
+        at: new Date().toISOString(),
+        source: DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+        payload: { text: 'ダミー本文', tokenId, observedRecovery },
+      };
+    }
+
+    it('同じ鍵・観測ベースの回復は再武装しない（抑止へ回る）', async () => {
+      const s = setupRateLimitedWithIdentity(FUTURE_RESETS_AT_MS(), () => ({
+        tokenId: 'tok-a',
+        generation: 1,
+      }));
+      s.clone.post(humanMessage('一件目'));
+      await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+      s.clone.post(reopenedNotice('tok-a', true));
+      // **起きないことを確かめる歯なので、起きるまで待てない。**
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(s.clone.usageReleasePending).toBe(false);
+      expect(await releaseAttemptCount(s)).toBe(0);
+
+      await s.clone.stop();
+    });
+
+    it('違う鍵を指していれば、観測ベースでも常に再武装する', async () => {
+      const s = setupRateLimitedWithIdentity(FUTURE_RESETS_AT_MS(), () => ({
+        tokenId: 'tok-a',
+        generation: 1,
+      }));
+      s.clone.post(humanMessage('一件目'));
+      await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+      s.clone.post(reopenedNotice('tok-b', true));
+      await waitFor(async () => (await releaseAttemptCount(s)) === 1, '解除の試行が1回になる');
+
+      await s.clone.stop();
+    });
+
+    it('観測ベースでない（「回した」「冷却が明けた」相当）なら、同じ鍵でも常に再武装する', async () => {
+      const s = setupRateLimitedWithIdentity(FUTURE_RESETS_AT_MS(), () => ({
+        tokenId: 'tok-a',
+        generation: 1,
+      }));
+      s.clone.post(humanMessage('一件目'));
+      await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+      s.clone.post(reopenedNotice('tok-a', false));
+      await waitFor(async () => (await releaseAttemptCount(s)) === 1, '解除の試行が1回になる');
+
+      await s.clone.stop();
+    });
+
+    it('いまの鍵の身元が分からない（tokenIdentity 未設定）なら、判定できないので常に再武装する', async () => {
+      const s = setupRateLimitedWithIdentity(FUTURE_RESETS_AT_MS(), () => undefined);
+      s.clone.post(humanMessage('一件目'));
+      await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+      s.clone.post(reopenedNotice('tok-a', true));
+      await waitFor(async () => (await releaseAttemptCount(s)) === 1, '解除の試行が1回になる');
+
+      await s.clone.stop();
+    });
+  });
+
   it('人間の発言は resetsAt より前でも常に再武装する', async () => {
     const s = setupRateLimited(FUTURE_RESETS_AT_MS());
     s.clone.post(humanMessage('一件目'));
@@ -12612,6 +12721,100 @@ describe('usageBlocked（クローンがいま枠で止まっているかを読�
     expect(clone.usageBlocked).toBe(false);
 
     await clone.stop();
+  });
+});
+
+/**
+ * **`usageBlockedResetsAt` / `usageBlockedTokenId`（Issue #1223 再発）**:
+ * 止まりの回復予定時刻と、いまのセッションの鍵の id を読む窓
+ * （`CloneHost.usageBlockedResetsAt` / `usageBlockedTokenId`）。
+ *
+ * これらは `wake()` / `redeliveryGate` が `staleObservedRecoveryForBlockedKey`
+ * へ渡す材料そのもの——`post()` の抑止（上の「Issue #1223 再発」describe）が
+ * 間接的に確かめているが、ここでは窓そのものを直に固定する。
+ */
+describe('usageBlockedResetsAt / usageBlockedTokenId（止まりの resetsAt といまの鍵。Issue #1223 再発）', () => {
+  it('枠に当たっていなければ両方 undefined', () => {
+    const s = setup();
+    expect(s.clone.usageBlockedResetsAt).toBeUndefined();
+    expect(s.clone.usageBlockedTokenId).toBeUndefined();
+  });
+
+  it('resetsAt 付きの枠に当たると usageBlockedResetsAt にその値が出る', async () => {
+    const resetsAt = Date.now() + 60 * 60 * 1000;
+    const { fn } = fakeSdk(undefined, {
+      resultSubtype: 'error_during_execution',
+      resultText: '（結果なし。rate_limit_event だけが上限の理由を運ぶ）',
+      rateLimitEventAt: () => ({ status: 'rejected', rateLimitType: 'five_hour', resetsAt }),
+    });
+    const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
+      stores: createMemoryStores(),
+      queryFn: fn,
+      env: {},
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    wireEvents(clone, 'conv-1');
+
+    clone.post(humanMessage('やあ'));
+    await waitFor(() => clone.usageBlocked, '枠に当たって保持される');
+    expect(clone.usageBlockedResetsAt).toBe(resetsAt);
+
+    await clone.stop();
+  });
+
+  it('resetsAt を持たない枠の通知なら usageBlockedResetsAt は undefined（取れないことを0で埋めない）', async () => {
+    const spendLimitMessage = "You've hit your individual spend limit for this account.";
+    const { fn } = fakeSdk(undefined, {
+      resultSubtype: 'error_during_execution',
+      resultText: spendLimitMessage,
+    });
+    const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
+      stores: createMemoryStores(),
+      queryFn: fn,
+      env: {},
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    wireEvents(clone, 'conv-1');
+
+    clone.post(humanMessage('やあ'));
+    await waitFor(() => clone.usageBlocked, '枠に当たって保持される');
+    expect(clone.usageBlockedResetsAt).toBeUndefined();
+
+    await clone.stop();
+  });
+
+  it('tokenIdentity を渡した器では、枠に当たっていなくても usageBlockedTokenId が読める（セッションが起きた瞬間の身元）', async () => {
+    const { fn } = fakeSdk();
+    const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
+      stores: createMemoryStores(),
+      queryFn: fn,
+      env: {},
+      tokenIdentity: () => ({ tokenId: 'tok-a', generation: 1 }),
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    const { events } = wireEvents(clone, 'conv-1');
+
+    clone.post(humanMessage('やあ'));
+    await waitForDone(events);
+    expect(clone.usageBlockedTokenId).toBe('tok-a');
+    // 枠には1度も当たっていない。
+    expect(clone.usageBlocked).toBe(false);
+
+    await clone.stop();
+  });
+
+  it('tokenIdentity を渡していない器（プールを使わない既定の構成）では usageBlockedTokenId は undefined', () => {
+    const s = setup();
+    expect(s.clone.usageBlockedTokenId).toBeUndefined();
   });
 });
 

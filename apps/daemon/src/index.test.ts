@@ -647,6 +647,74 @@ describe('createCloneWakeGate', () => {
     // tok-a の同じ身元がもう一度来ても、tok-b の配達には巻き込まれず畳む。
     expect(gate.decide(reopened('tok-a'), true, false)).toEqual({ kind: 'fold' });
   });
+
+  /**
+   * **🔴 Issue #1223 再発2（本丸）: `observeUnusable()` を挟んでも、4つ目の
+   * 条件（`staleSameKeyRecovery`）が真なら配らない。**
+   *
+   * 3つ目の条件だけを見た `describe('🔴 不変条件3...')` は「`observeUnusable()`
+   * を挟めば必ず配る」ことを固定しているが、**あれは `staleSameKeyRecovery`
+   * を渡さない（既定で偽）場合の話である。** ここでは4つ目の条件が真の
+   * ケース——「観測に基づく回復だが、いま止まっている同じ鍵の同じ resetsAt
+   * を指しているだけ」——を、`observeUnusable()` の直後に置いて確かめる。
+   *
+   * **本番の再現**（2026-09-23 観測。journal_read、06:11:17〜06:11:56Z）:
+   * `recovered`（同じ鍵・`turn_success`）→ `exhausted`（別セッションが同じ
+   * 現役へ当たる）が4〜6秒周期で繰り返され、クローンは resetsAt が未来のまま
+   * 止まり続けていた。ここでは `observeUnusable()`（`exhausted` 相当）→
+   * `decide(reopened('tok-a'), true, false, true)`（`recovered` 相当。
+   * `staleSameKeyRecovery=true` は「同じ鍵・resetsAt 未来」を表す）を20周
+   * させ、**配達が0回・畳みが20回**であることを見る。
+   */
+  it('🔴 #1223 再発2: 観測ベースの回復が同じ鍵・resetsAt 未来のままなら、observeUnusable() を挟んでも配らない（20周・配達0・畳み20）', () => {
+    const gate = createCloneWakeGate();
+
+    const kinds = Array.from({ length: 20 }, () => {
+      // 本番の `exhausted` に相当——`settleTokenOutcome` は `reopenedTokenOf`
+      // が `undefined` を返すこの回で必ず `observeUnusable()` を先に呼ぶ
+      // （`index.ts` の `settleTokenOutcome` の該当コメント）。
+      gate.observeUnusable();
+      // 本番の `recovered`（`turn_success`）に相当。`staleSameKeyRecovery=true`
+      // は「同じ鍵・resetsAt 未来」を `wake()` が計算した結果である。
+      return gate.decide(reopened('tok-a'), true, false, true).kind;
+    });
+
+    expect(kinds.filter((kind) => kind === 'wake')).toHaveLength(0);
+    expect(kinds.filter((kind) => kind === 'fold')).toHaveLength(20);
+  });
+
+  it('4つ目の条件が偽なら、observeUnusable() を挟んだ回はいつもどおり配る（3つ目の条件・不変条件3を壊さない）', () => {
+    const gate = createCloneWakeGate();
+
+    gate.decide(reopened('tok-a'), true, false, false);
+    gate.observeUnusable();
+    // `staleSameKeyRecovery=false`（省略時と同じ）なら、3つ目の条件どおり
+    // 「observeUnusable() を挟んだ後は必ず配る」。
+    expect(gate.decide(reopened('tok-a'), true, false, false)).toEqual({
+      kind: 'wake',
+      folded: 0,
+    });
+  });
+
+  it('4つ目の条件は3つ目の条件より前に見る（told に一致しない新しい身元でも、stale なら畳む）', () => {
+    const gate = createCloneWakeGate();
+
+    // `told` は空——3つ目の条件だけなら `wake` になるはずの回。
+    expect(gate.decide(reopened('tok-a'), true, false, true)).toEqual({ kind: 'fold' });
+  });
+
+  it('4つ目の条件で畳んでも folded は積み上がり、次に配る回の本文へ渡る', () => {
+    const gate = createCloneWakeGate();
+
+    gate.decide(reopened('tok-a'), true, false, true);
+    gate.decide(reopened('tok-a'), true, false, true);
+    // 3回目は stale が解けた（resetsAt を過ぎた等）ので配る——畳んだ2件を
+    // 持って配られる。
+    expect(gate.decide(reopened('tok-a'), true, false, false)).toEqual({
+      kind: 'wake',
+      folded: 2,
+    });
+  });
 });
 
 /**
@@ -772,7 +840,7 @@ describe('本番の配線: redeliveryGate は wake() と同じ部品を呼ぶ', 
   const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
 
   it('redeliveryGate が isTokenPoolReopenedNotice と worthDeliveringNow を呼ぶ', () => {
-    const at = source.indexOf('redeliveryGate: (event, { usageBlocked, releasePending })');
+    const at = source.indexOf('redeliveryGate: (');
     expect(at).toBeGreaterThan(-1);
     const block = source.slice(at, source.indexOf('\n  });', at));
 
@@ -780,6 +848,30 @@ describe('本番の配線: redeliveryGate は wake() と同じ部品を呼ぶ', 
     // **引数2つとも原文で見る（Issue #1051）。** `releasePending` を渡し忘れた
     // 配線は型では落ちない——落ちないまま、配り直しの側だけが往復を通し続ける。
     expect(block).toContain('worthDeliveringNow(usageBlocked, releasePending)');
+  });
+
+  /**
+   * **redeliveryGate が `staleObservedRecoveryNoticeEvent` も呼ぶこと**
+   * （Issue #1223 再発）。`#restoreUnread` は `post()` を一度も通らないので
+   * （`RedeliveryGate` の doc）、`usageBlockAlwaysRearms` の4つ目の例外
+   * （同じ鍵・同じ resetsAt の使い回しは再武装しない）もここで自分で当てないと
+   * 掛からない。**`wake()`（`CloneWakeGate.decide` 越し）と同じ関数を呼んで
+   * いることを原文で固定する**——コピーすると片方だけ直したときに黙ってずれる。
+   */
+  it('redeliveryGate が staleObservedRecoveryNoticeEvent を呼び、必要な4つの材料を渡す', () => {
+    const at = source.indexOf('redeliveryGate: (');
+    expect(at).toBeGreaterThan(-1);
+    const block = source.slice(at, source.indexOf('\n  });', at));
+
+    expect(block).toContain('staleObservedRecoveryNoticeEvent(');
+    expect(block).toContain('usageBlockedResetsAt');
+    expect(block).toContain('usageBlockedTokenId');
+    // **`worthDeliveringNow` が真でも `staleObservedRecoveryNoticeEvent` が
+    // 真なら畳む方向であること**——`&&` で結び、`!` を掛けている形を原文で見る。
+    expect(block).toContain(
+      'worthDeliveringNow(usageBlocked, releasePending) &&\n' +
+        '          !staleObservedRecoveryNoticeEvent(event, usageBlockedResetsAt, usageBlockedTokenId)',
+    );
   });
 });
 

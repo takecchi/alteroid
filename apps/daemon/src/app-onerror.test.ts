@@ -50,6 +50,10 @@ function fakeCloneHost(stores: Stores): CloneHost {
     // クローンへ配るか畳むか（Issue #783）。このテストは一度も読まない。
     usageBlocked: false,
     usageReleasePending: false,
+    // 止まりの resetsAt / いまの鍵の id（Issue #1223 再発）。このテストは
+    // 一度も読まない。
+    usageBlockedResetsAt: undefined,
+    usageBlockedTokenId: undefined,
     async stop() {},
   };
 }

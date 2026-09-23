@@ -39,6 +39,8 @@ import {
   resolveCloneModel,
   resolveManagerModel,
   resolveWorkerModel,
+  staleObservedRecoveryForBlockedKey,
+  staleObservedRecoveryNoticeEvent,
   WITHHELD_ENV_KEYS,
   writeStderrSync,
   type InboxEvent,
@@ -643,6 +645,48 @@ export function isTokenPoolReopenedNotice(event: InboxEvent): boolean {
  * 止める」）でもない。** どちらも恣意的な定数で本物の合図を黙って失う＝能力の削除
  * （`docs/north_star.md` の禁止2）である。ここが持つのは**状態**（最後に配った
  * 合図の身元）だけで、**再武装は観測にだけ紐づく。**
+ *
+ * ## 4つ目の条件 —— `observeUnusable()` 自体が輪を戻すことがある（Issue #1223 再発）
+ *
+ * 3つ目の条件は「`observeUnusable()` を挟めば必ず新しい知らせとして配る」
+ * ことを不変条件3として固定している（`index.test.ts` の同名の歯）。**これは
+ * いまも正しい**——`exhausted` / `parked` は本物の「鍵が通らない」の観測で
+ * あり、`told` を全消去してよい。**壊れていたのはその先である。**
+ *
+ * 本番（2026-09-23 観測）で次の輪が4〜6秒周期で回り続けた:
+ *
+ * 1. `turn_success` により、いまの現役が「また通るようになった」（`recovered`）
+ * 2. **別のセッション**が同じ現役へ当たり、組織の月間支出上限などで
+ *    `exhausted`（通る鍵が無い）を観測 → `observeUnusable()` が `told` を
+ *    全消去する（3つ目の条件のとおり、正しい）
+ * 3. 次の `turn_success` の「また通るようになった」が、印を失った `told` に
+ *    対して**新しい知らせ**として配られる（3つ目の条件のとおり、正しい）
+ * 4. `clone.post()` の中の `usageBlockAlwaysRearms` が token-pool の通知を
+ *    resetsAt に関係なく常に再武装する（`usageBlockAlwaysRearms` の doc の
+ *    3つ目の例外）ので、本物のターンが走り、また同じ理由で弾かれる → 1 に戻る
+ *
+ * ⟹ **3・4は、いま止まっている鍵についても resetsAt についても、何も新しい
+ * ことを言っていない。** `usageBlockAlwaysRearms` が token-pool を無条件に
+ * 再武装させてよい根拠は「プールへトークンを足す・削る・有効化すると
+ * resetsAt の予定は無意味になる」（同 doc）ことだが、**同じ鍵の `turn_success`
+ * による「また通るようになった」はプールを1文字も変えていない**——この根拠が
+ * 当たらない。
+ *
+ * ⟹ **規則（4つ目）**: 3つ目の条件（`told` に無ければ配る）を満たしていても、
+ * **`(a)` 根拠が観測（`また通るようになった`）で `(b)` いま止まっている
+ * resetsAt が分かっていてまだ先で `(c)` 同じ鍵を指しているなら、畳む。**
+ * `staleObservedRecoveryForBlockedKey`（`@alteroid/core`。
+ * `packages/core/src/daemon-self-notice.ts`）が判定する——同じ判定を
+ * `usageBlockAlwaysRearms` の呼び出し側（`post()`）と `redeliveryGate` も
+ * 使う（同じ関数を複数の呼び手が使う。コピーは片方だけ直したときに黙って
+ * ずれる）。
+ *
+ * **⚠️ `回した`（鍵の構成そのものが変わった）と `冷却が明けた`（resetsAt を
+ * 過ぎた）はこの4つ目の対象外である**（`staleObservedRecoveryForBlockedKey`
+ * の doc の表）。どちらも「試す価値がある新しい事実」——潰さない。
+ *
+ * **⛔ ここでも時間の窓・回数の上限は持ち込まない。** 見るのは状態
+ * （resetsAt・鍵の同一性）だけである。
  */
 export interface CloneWakeGate {
   /**
@@ -654,6 +698,14 @@ export interface CloneWakeGate {
    * @param releasePending **もう起こしてあるか**（`CloneHost.usageReleasePending`。
    *   Issue #1051）。真なら畳む——印が立っている間、2件目の合図が立てるものは
    *   1つも無い。
+   * @param staleSameKeyRecovery **同じ鍵・同じ resetsAt に対する使い回しか**
+   *   （Issue #1223 再発。上の「4つ目の条件」）。真なら、3つ目の条件
+   *   （`told` の一致）を満たしていなくても畳む。**呼び手が
+   *   `staleObservedRecoveryForBlockedKey` を1回計算して渡す**——ここでは
+   *   計算しない（`worthDeliveringNow` を埋め込まない設計と同じ理由。上の
+   *   doc「`worthDeliveringNow` が持つ...ここが持つのは...カウントの管理
+   *   だけ」）。**省略時は偽**（既存の呼び出し元を壊さない。判定できない
+   *   ときは能力を削らない側へ倒す。AGENTS.md 地雷2）。
    * @returns
    *   - `{ kind: 'wake' }` —— 配る。`folded` はここまで畳んだ回数
    *     （まだ0回なら0。この呼び出しでカウンタは0へ戻る）
@@ -663,6 +715,7 @@ export interface CloneWakeGate {
     reopened: ReopenedToken,
     cloneBlocked: boolean,
     releasePending: boolean,
+    staleSameKeyRecovery?: boolean,
   ): { kind: 'wake'; folded: number } | { kind: 'fold' };
   /**
    * **鍵が通らなくなったことを観測した**（Issue #1223）。配達済みの印を捨てて、
@@ -762,7 +815,7 @@ export function createCloneWakeGate(): CloneWakeGate {
    */
   const told = new Map<string, string>();
   return {
-    decide(reopened, cloneBlocked, releasePending) {
+    decide(reopened, cloneBlocked, releasePending, staleSameKeyRecovery = false) {
       const tokenId = reopened.tokenId;
       if (!worthDeliveringNow(cloneBlocked, releasePending)) {
         // **配達済みの印はここでは触らない**（Issue #1223 再発の手当て。
@@ -771,6 +824,22 @@ export function createCloneWakeGate(): CloneWakeGate {
         // ／もう起こしてある）は、どちらもこの特定のトークンの鍵が通らなく
         // なったことも通るようになったことも意味しない。`told` を消すのは
         // {@link CloneWakeGate.observeUnusable}（本物の観測）だけにする。
+        folded.set(tokenId, (folded.get(tokenId) ?? 0) + 1);
+        return { kind: 'fold' };
+      }
+      /**
+       * **4つ目の条件**（Issue #1223 再発。{@link CloneWakeGate} の doc「4つ目
+       * の条件」）。**3つ目の条件（`told` の一致）より前に見る**——
+       * `observeUnusable()` が `told` を全消去した直後（＝3つ目の条件だけなら
+       * 必ず `wake` になる回）こそ、この輪が実際に踏まれた形だからである。
+       *
+       * **`told` は更新しない。** 畳んだのは「新しい知らせに見えたが、実際は
+       * 同じ鍵の同じ resetsAt への使い回しだった」であって、`told` に記録する
+       * ような「本物の配達」が起きたわけではない——次にこの関数を呼ぶときも
+       * 呼び手（`wake()`）が生きた `usageBlockedResetsAt` /
+       * `usageBlockedTokenId` から同じ判定をやり直す。
+       */
+      if (staleSameKeyRecovery) {
         folded.set(tokenId, (folded.get(tokenId) ?? 0) + 1);
         return { kind: 'fold' };
       }
@@ -1568,9 +1637,24 @@ export async function main(): Promise<void> {
      * （{@link CloneWakeGate.decide}）と**同じ実体**（`worthDeliveringNow`）で
      * 判定し直す——それ以外の型（人間の発言・マネージャーの報告など）は常に配る
      * （`true`）。
+     *
+     * **⚠️ Issue #1223 再発で4つ目の門が増えた。** `#restoreUnread` は
+     * `post()` を一度も通らないので（`RedeliveryGate` の doc）、
+     * `usageBlockAlwaysRearms`（`clone.ts` の `post()`）が持つ4つ目の条件の
+     * 例外（同じ鍵・同じ resetsAt に対する使い回しは再武装しない）も自動では
+     * 掛からない。**`wake()`（`CloneWakeGate.decide`）と同じ関数**
+     * （`staleObservedRecoveryNoticeEvent`）をここでも呼び、`worthDeliveringNow`
+     * が真でも同じ理由で畳む。コピーではなく同じ実体を呼ぶことは
+     * `index.test.ts` の「歯1」が固定している。
      */
-    redeliveryGate: (event, { usageBlocked, releasePending }) =>
-      isTokenPoolReopenedNotice(event) ? worthDeliveringNow(usageBlocked, releasePending) : true,
+    redeliveryGate: (
+      event,
+      { usageBlocked, releasePending, usageBlockedResetsAt, usageBlockedTokenId },
+    ) =>
+      isTokenPoolReopenedNotice(event)
+        ? worthDeliveringNow(usageBlocked, releasePending) &&
+          !staleObservedRecoveryNoticeEvent(event, usageBlockedResetsAt, usageBlockedTokenId)
+        : true,
   });
 
   /**
@@ -1736,30 +1820,55 @@ export async function main(): Promise<void> {
         // この判定より前に計算済みで、この後の日誌への追記はここで畳んでも
         // 変わらず通る——母数は日誌の `recovered` 行に残る（隣の describe
         // 「recovered の日誌行は、受信箱へ配ったかどうかと無関係に必ず出る」）。
+        //
+        // **4つ目の条件（Issue #1223 再発）を1回だけ計算し、`decide` と `why`
+        // の両方で使い回す。** `CloneWakeGate` の doc「4つ目の条件」——
+        // `usageBlockAlwaysRearms`（`clone.ts` の `post()`）・`redeliveryGate`
+        // （下、`createClone(...)` の配線）と**同じ関数**（`@alteroid/core` の
+        // `staleObservedRecoveryForBlockedKey`）を呼ぶ。コピーすると片方だけ
+        // 直したときに黙ってずれる（`worthDeliveringNow` の doc「呼び手は
+        // 2つある」と同じ理由）。
+        const observedRecovery = reopened.how === 'また通るようになった';
+        const staleSameKeyRecovery = staleObservedRecoveryForBlockedKey({
+          observedRecovery,
+          reopenedTokenId: reopened.tokenId,
+          blockedResetsAt: clone.usageBlockedResetsAt,
+          blockedTokenId: clone.usageBlockedTokenId,
+        });
         const decision = cloneWakeGate.decide(
           reopened,
           clone.usageBlocked,
           clone.usageReleasePending,
+          staleSameKeyRecovery,
         );
         if (decision.kind === 'fold') {
           // **安く跡を残す**（Issue #783）。永続化はしない——`schema.ts` の
           // enum を触る判断は人間が持つ。既存の口（標準出力）へ1行だけ足す。
-          // **畳んだ理由を言い分ける（Issue #1051、#1223 で3つ目が増えた）。**
-          // 3つは読む側が次に確かめるものが違う——1つ目は「クローンは動いている」、
-          // 2つ目は「クローンは止まっているが、もう起こしてある（まだ試していない）」、
-          // 3つ目は「クローンは止まっていて、起こしてもいないが、同じ合図を既に
-          // 配ってある（クローンは受け取ったうえでまだ止まっている）」。
-          // 潰すと、往復（#1051）が起きているのか、ターンを跨いだ反復（#1223）が
-          // 起きているのか、本当に静かなのかが跡から読めなくなる。
+          // **畳んだ理由を言い分ける（Issue #1051、#1223 で3つ目・#1223 再発で
+          // 4つ目が増えた）。** 4つは読む側が次に確かめるものが違う——1つ目は
+          // 「クローンは動いている」、2つ目は「クローンは止まっているが、もう
+          // 起こしてある（まだ試していない）」、3つ目は「クローンは止まって
+          // いて、起こしてもいないが、同じ合図を既に配ってある（クローンは
+          // 受け取ったうえでまだ止まっている）」、4つ目は「クローンは止まって
+          // いて、まだ配ってもいないが、同じ鍵の同じ resetsAt を指しているだけ
+          // で、根拠は観測なのにプールの構成は何も変わっていない」。潰すと、
+          // 往復（#1051）が起きているのか、ターンを跨いだ反復（#1223）が
+          // 起きているのか、同じ鍵の使い回し（#1223 再発）が起きているのか、
+          // 本当に静かなのかが跡から読めなくなる。
           //
-          // **3つ目の判定を `decision` から読まない。** `decide` が返すのは
-          // 配るか畳むかだけで、理由の内訳は持たない——ここで復元できるのは、
-          // 2つの窓が偽の場合を除いた残りが #1223 の側だからである。
+          // **3つ目・4つ目の判定を `decision` から読まない。** `decide` が
+          // 返すのは配るか畳むかだけで、理由の内訳は持たない——3つ目は「2つの
+          // 窓が偽の場合を除いた残り」として復元できたが、4つ目は `decide` の
+          // 外で計算した `staleSameKeyRecovery` をそのまま使う（`decide` の
+          // 内部で4つ目を3つ目より先に見ている——`CloneWakeGate` の doc「4つ目
+          // の条件」——ので、この局所変数と `decide` の判定は必ず一致する）。
           const why = !clone.usageBlocked
             ? 'クローンは枠で止まっていないので起こさない'
             : clone.usageReleasePending
               ? 'クローンは枠で止まっているが、再開の印が既に立っている（もう起こしてあるので重ねない）'
-              : '前に同じ合図（同じ鍵・同じ根拠）を配ってあり、そのあいだ鍵が通らなくなったことを観測していない';
+              : staleSameKeyRecovery
+                ? '同じ鍵・同じ回復予定時刻（resetsAt）に対する観測ベースの使い回しで、プールの構成は変わっていない'
+                : '前に同じ合図（同じ鍵・同じ根拠）を配ってあり、そのあいだ鍵が通らなくなったことを観測していない';
           process.stdout.write(
             `alteroidd: 認証トークンが通る状態に戻った合図を畳んだ（${why}）: ` +
               `「${reopened.label}」（id ${reopened.tokenId}）\n`,
@@ -1770,7 +1879,16 @@ export async function main(): Promise<void> {
             id: randomUUID(),
             at: new Date().toISOString(),
             source: TOKEN_POOL_REOPENED_SOURCE,
-            payload: { text: describeReopenedTokenNotice(reopened, decision.folded) },
+            payload: {
+              text: describeReopenedTokenNotice(reopened, decision.folded),
+              // **構造化した2欄（Issue #1223 再発）。** `text` は人間向けの
+              // 本文で、こちらは `usageBlockAlwaysRearms`（`clone.ts` の
+              // `post()`）と `redeliveryGate`（下）が「文言を読まずに」
+              // 4つ目の条件を判定するための欄（`tokenPoolReopenedPayload` の
+              // doc）。
+              tokenId: reopened.tokenId,
+              observedRecovery,
+            },
             // **畳み込みの鍵を `payload` から独立させる（#1298）。**
             // `payload.text` は畳んだ件数（`decision.folded`）を含むので、
             // それを鍵に使うと同じ出来事でも件数が違うだけで別の鍵になり、

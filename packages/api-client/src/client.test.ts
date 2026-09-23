@@ -101,6 +101,9 @@ function fakeClone(stores: Stores) {
     usageBlocked: false,
     // 再開の印がまだ使われずに立っているか（Issue #1051）。この歯では触らない。
     usageReleasePending: false,
+    // 止まりの resetsAt / いまの鍵の id（Issue #1223 再発）。この歯では触らない。
+    usageBlockedResetsAt: undefined,
+    usageBlockedTokenId: undefined,
     // 消した合図の配達停止（issue #1049）。この歯では触らない。
     async dropQueuedInboxEvents() {
       return 0;

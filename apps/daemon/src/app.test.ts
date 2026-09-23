@@ -229,6 +229,9 @@ function fakeClone() {
     // （門の判定はデーモンの配線側 `wake()` にある）。
     usageBlocked: false,
     usageReleasePending: false,
+    // 止まりの resetsAt / いまの鍵の id（Issue #1223 再発）。同じ理由で触らない。
+    usageBlockedResetsAt: undefined,
+    usageBlockedTokenId: undefined,
     post(event) {
       posted.push(event);
       if (event.type !== 'human_message') return;
