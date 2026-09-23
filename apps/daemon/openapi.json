@@ -676,6 +676,9 @@
                         },
                         "supersedes": {
                           "type": "string"
+                        },
+                        "approvalId": {
+                          "type": "string"
                         }
                       },
                       "required": ["type", "id", "at", "with", "role", "text"]
@@ -2735,6 +2738,9 @@
                                 "type": "string"
                               },
                               "supersedes": {
+                                "type": "string"
+                              },
+                              "approvalId": {
                                 "type": "string"
                               }
                             },
@@ -9538,6 +9544,164 @@
                     }
                   },
                   "required": ["origin", "since", "limit", "total", "traces"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/appraisal-stats": {
+      "get": {
+        "operationId": "getAppraisalStats",
+        "tags": ["appraisal"],
+        "summary": "評定の内訳を数える",
+        "description": "クローンの `appraisal_stats` と同じものを人間の手から。`journal.commitments`（台帳の行）と `journal.jobs`（委譲）は日誌の decision 行を先頭一致で数えた全期間の総数——2つは別の軸なので混ぜて 読まないこと。`jobCoverage` は終端した委譲（done/failed/lost/stopped）を 状態ごとに割った評定の有無の内訳で、running/waiting_human は対象外 （`nonTerminalTotal` に件数だけ出す）。",
+        "responses": {
+          "200": {
+            "description": "評定の内訳。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "journal": {
+                      "type": "object",
+                      "properties": {
+                        "commitments": {
+                          "type": "object",
+                          "properties": {
+                            "good": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "bad": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "unclear": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "other": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "total": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["good", "bad", "unclear", "other", "total"]
+                        },
+                        "jobs": {
+                          "type": "object",
+                          "properties": {
+                            "good": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "bad": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "unclear": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "other": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "total": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["good", "bad", "unclear", "other", "total"]
+                        }
+                      },
+                      "required": ["commitments", "jobs"]
+                    },
+                    "jobCoverage": {
+                      "type": "object",
+                      "properties": {
+                        "byStatus": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "status": {
+                                "type": "string",
+                                "enum": [
+                                  "running",
+                                  "waiting_human",
+                                  "done",
+                                  "failed",
+                                  "lost",
+                                  "stopped"
+                                ]
+                              },
+                              "total": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "appraised": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "unappraised": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": ["status", "total", "appraised", "unappraised"]
+                          }
+                        },
+                        "terminalTotal": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "terminalAppraised": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "terminalUnappraised": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "nonTerminalTotal": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "byStatus",
+                        "terminalTotal",
+                        "terminalAppraised",
+                        "terminalUnappraised",
+                        "nonTerminalTotal"
+                      ]
+                    }
+                  },
+                  "required": ["journal", "jobCoverage"]
                 }
               }
             }

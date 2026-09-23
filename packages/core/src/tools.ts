@@ -73,6 +73,12 @@ import {
 import { classifyManagerActivity, describeReportDrift } from './manager-activity.js';
 import type { ManagerActivityInput } from './manager-activity.js';
 import {
+  computeAppraisalJournalStats,
+  computeJobAppraisalCoverage,
+  describeAppraisalStats,
+  isTerminalJobStatus,
+} from './appraisal-stats.js';
+import {
   ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS,
   ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT,
   selectArchiveRemovalTargets,
@@ -129,12 +135,14 @@ import {
 import type { ScheduleStatus } from './schedule.js';
 import {
   COMMITMENT_APPRAISAL_DECISION_PREFIX,
+  JOB_APPRAISAL_DECISION_PREFIX,
   JOURNAL_ENTRY_TYPES,
   approvalUpdatedAt,
   appraisalSchema,
   commitmentOriginSchema,
   commitmentUpdatedAt,
   describeAppraisal,
+  formatAppraisalDecision,
   jobStatusSchema,
   scheduleKindSchema,
   scheduleSpecSchema,
@@ -480,6 +488,7 @@ export const CLONE_TOOL_NAMES = [
   'commitment_close_many',
   'commitment_edit',
   'commitment_appraise',
+  'appraisal_stats',
   'inbox_remove_many',
   'profile_read',
   'profile_write',
@@ -574,6 +583,7 @@ export const TRACELESS_CLONE_TOOLS = [
   'usage_read',
   'schedule_list',
   'commitment_list',
+  'appraisal_stats',
   'profile_read',
   'practice_list',
   'practice_read',
@@ -2040,10 +2050,13 @@ async function writeAppraisal(
     stores.journal,
     {
       type: 'decision',
-      decision:
-        `${COMMITMENT_APPRAISAL_DECISION_PREFIX}（${id}）: ${value}` +
-        `${reason === undefined ? '' : ` — ${reason}`}` +
-        `${previous === null ? '' : `（前: ${previous}）`}`,
+      decision: formatAppraisalDecision({
+        prefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
+        id,
+        value,
+        reason,
+        previous,
+      }),
       grounds: 'クローン自身が付けた評定（人間はこれを読んで後から覆す）',
     },
     'act-completed',
@@ -6125,6 +6138,53 @@ export function createCloneTools(context: ToolContext) {
         if (existing === null) return text(`引き受けた仕事 ${id} は台帳に無い。`);
         // 書き込みと日誌は `writeAppraisal` が持つ（`commitment_close` と同じ経路）。
         return text(`${id} の${await writeAppraisal(stores, id, appraisal, reason)}`);
+      },
+    ),
+
+    /**
+     * 評定の内訳を要るときに数える口（#1278）。
+     *
+     * **`appraisal.ts`（#1055 段2）の `describeAppraisalTargets` とは別物である。**
+     * あちらは定期の棚卸しの蒸留に相乗りする形で「いま台帳・委譲に載っている行」
+     * だけを名指しし、`storage-fs` の保持上限を超えた古い片付き行は分母から
+     * 消えている。この道具は日誌（追記専用・削除経路が無い）の `decision` 行を
+     * 先頭一致で数えるので、全期間の総数が取れる（#1278 本文の実測: `journal_read`
+     * は `limit` の上限 200 に当たって総数 263 の側が切れたため、本番 DB へ
+     * 直接 SQL を投げるしかなかった）。
+     *
+     * **2つの印を混ぜない。** 「引き受けた仕事」（台帳の行の始末）と「委譲」
+     * （マネージャーに出した仕事の出来）は別の軸——出力も節を分けてある。
+     *
+     * **未評定を4つ目の状態として保つ。** 委譲側は `good`/`bad`/`unclear` の
+     * 内訳とは別に「評定なし」の件数を出す——0でも良い評定でもない。
+     */
+    tool(
+      'appraisal_stats',
+      [
+        `評定（${appraisalSchema.options.join('/')}/未評定）の内訳を数える。`,
+        '**日誌の decision 行を先頭一致で数えた全期間の総数**（journal_read の limit=200 には当たらない——',
+        'ストアを直接 limit 無指定で読むので、下限ではなく総数である）。',
+        '「引き受けた仕事」（台帳）と「委譲」（マネージャーに出した仕事）は別の軸で、混ぜずに別々の節で返す。',
+        `さらに、終端した委譲（${jobStatusSchema.options.filter(isTerminalJobStatus).join('/')}）を状態ごとに割って、` +
+          '評定が1度も付いていない件数を出す' +
+          `（${jobStatusSchema.options.filter((s) => !isTerminalJobStatus(s)).join('/')} はまだ続きうるので対象外` +
+          '——件数だけ参考として添える）。',
+      ].join(' '),
+      {},
+      async () => {
+        const [journalStats, jobs] = await Promise.all([
+          computeAppraisalJournalStats(stores.journal, {
+            commitmentPrefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
+            jobPrefix: JOB_APPRAISAL_DECISION_PREFIX,
+          }),
+          stores.jobs.listJobs(),
+        ]);
+        return text(
+          describeAppraisalStats({
+            journal: journalStats,
+            jobCoverage: computeJobAppraisalCoverage(jobs),
+          }),
+        );
       },
     ),
 

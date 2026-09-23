@@ -869,6 +869,32 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * 畳み込みの解釈は持たない。
      */
     supersedes: z.string().optional(),
+    /**
+     * このターンが、承認待ち（`ask_human`）への回答（`human_answer`）から
+     * 起きたものであれば、その承認の id（issue #782 の1）。
+     *
+     * **`conversationId` では結べない理由。** 同じ会話の中で複数の承認へ
+     * 近接した時刻に回答すると、`conversationId` と `at` だけでは
+     * どの outbound がどの承認への返答かを見分けられない
+     * （`apps/web/app/routes/approvals.tsx` の `ConversationPanel` の doc
+     * 「時刻の近さで『この返答はこの確認への返答だ』と決めつけない」と同じ
+     * 穴の裏側）。この欄はその区別を、推測ではなく記録として持たせる。
+     *
+     * **`with: 'human'` かつ `role: 'outbound'` のときだけ意味を持ちうる。**
+     * 承認に由来しないターン（人間の発言・蒸留・自律の起点・マネージャー
+     * 発の確認）には付かない——`Clone#runTurn` がこの欄を立てるのは
+     * `case 'human_answer'` から呼ばれたときだけである。**承認が
+     * `conversationId` を持たず内部ターン（`self`）に倒れた場合は、
+     * outbound 側にもこの欄を立てない**（`with: 'self'` の行に
+     * `approvalId` が付くと、`conversationId` を持たない承認への回答が
+     * 人間の会話の一部であるかのように読めてしまうため）。
+     *
+     * **回答した人間の発言（`role: 'inbound'`）には付かない。** その本文は
+     * `turnInputEntry`（`type: 'human_answer'`）が別途、質問・回答・宛先を
+     * 1本にした形で残しており、こちらは構造化していない（#243 の設計判断。
+     * 構造化するかどうかはこの Issue の項目1の範囲外）。
+     */
+    approvalId: z.string().optional(),
   }),
   z.object({
     type: z.literal('decision'),
@@ -2543,6 +2569,72 @@ export const APPRAISAL_LABELS: Record<AppraisalValue, string> = {
  * の doc）。
  */
 export const JOB_APPRAISAL_DECISION_PREFIX = '委譲に評定を付けた';
+
+/**
+ * 評定を書いた日誌行（`type: 'decision'`）の本文を組み立てる（#1054）。
+ *
+ * **書式の生成元はここ1箇所である。** これを寄せる前は、同じ組み立て
+ * （`` `${prefix}（${id}）: ${value}` `` + 任意の理由 + 任意の「前の値」）が
+ * `tools.ts` の `writeAppraisal`・`apps/daemon/src/app.ts` の
+ * `POST /commitments/:id/appraise`・`manager.ts` の `ManagerPool.appraise`
+ * の3箇所にインラインの文字列連結として重複していた（#1278 の実装で気づいた
+ * 穴——「導出が各実装の側にあって、書き忘れても何も落ちない」という
+ * `commitmentUpdatedAt` の doc と同じ形）。
+ *
+ * **この関数が返す文字列を読み解くのは {@link parseAppraisalDecisionValue}
+ * である。書式を変えるなら両方を同時に直すこと。**
+ */
+export function formatAppraisalDecision(params: {
+  prefix: string;
+  id: string;
+  value: AppraisalValue;
+  reason: string | undefined;
+  /** 覆す前の値（`describeAppraisal` の戻り）。無ければ `null`。 */
+  previous: string | null;
+}): string {
+  const { prefix, id, value, reason, previous } = params;
+  return (
+    `${prefix}（${id}）: ${value}` +
+    (reason === undefined ? '' : ` — ${reason}`) +
+    (previous === null ? '' : `（前: ${previous}）`)
+  );
+}
+
+/**
+ * {@link formatAppraisalDecision} が組んだ日誌の本文から、評定の値を
+ * 読み解く（#1278「評定の内訳を要るときに数える口が無い」の芯）。
+ *
+ * **`decision` が `prefix` で始まっていなければ `undefined` を返す**——
+ * この行はそもそもその印の評定行ではない。「印が違う」と「値が読めない」を
+ * 混ぜない（呼び出し側はこの2つを区別する必要がある場面のために分けてある）。
+ *
+ * **`prefix` で始まっているのに値が既知の3値（`good`/`bad`/`unclear`）の
+ * どれでもなければ `'other'` を返す。** 保存層（`Commitment.appraisal` /
+ * `Job.appraisal`）は `z.string()` で緩く持っているので（`appraisalSchema`
+ * の doc）、将来の書き手が増やした値がここへ来うる。**落とすのではなく
+ * `'other'` として数える**——3値以外の存在そのものを消すと、数え上げの
+ * 「上の3値以外」が常に0になり、増えたことに誰も気づけなくなる。
+ *
+ * **`）: ` という区切りをそのまま探して、その直後の語を見る。** `id`
+ * の中身（全角の丸括弧やコロンを含むか）は検査しない——現行の全ての
+ * 書き手（`clone.ts` の `randomUUID()`）は英数と `-` しか使わないので
+ * 実害は無いが、**理論上は id がこの区切り文字列を含めば誤読しうる**
+ * （その場合も既知の3値と偶然一致しない限り安全側の `'other'` に倒れる）。
+ */
+export function parseAppraisalDecisionValue(
+  decision: string,
+  prefix: string,
+): AppraisalValue | 'other' | undefined {
+  if (!decision.startsWith(prefix)) return undefined;
+  const marker = '）: ';
+  const markerIndex = decision.indexOf(marker, prefix.length);
+  if (markerIndex === -1) return 'other';
+  const remaining = decision.slice(markerIndex + marker.length);
+  for (const value of appraisalSchema.options) {
+    if (remaining.startsWith(value)) return value;
+  }
+  return 'other';
+}
 
 /**
  * 評定を1行の字面にする（#1054）。**評定が無ければ `null` —— 1文字も増やさない。**

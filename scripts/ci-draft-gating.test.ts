@@ -1,8 +1,15 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
+
+import {
+  extractJobNames,
+  extractJobsSection,
+  listWorkflowFiles,
+  // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
+} from './workflow-scan-core.mjs';
 
 /**
  * **`.github/workflows/ci.yml` が「draft の pull_request では重い CI（`ci` / `image`）を
@@ -358,20 +365,9 @@ function extractPullRequestTypes(ciYml: string): string[] | null {
   return null;
 }
 
-/** `jobs:` セクションの生テキスト（`jobs:` 自身の行は含まない）を返す。 */
-function extractJobsSection(ciYml: string): string {
-  const marker = '\njobs:\n';
-  const idx = ciYml.indexOf(marker);
-  if (idx === -1) throw new Error('ci.yml に "jobs:" セクションが見つからない');
-  return ciYml.slice(idx + marker.length);
-}
-
-/** `jobs:` 直下のジョブ名（2-space インデントの見出し）を全部返す。 */
-function extractJobNames(jobsSection: string): string[] {
-  return [...jobsSection.matchAll(/^ {2}([A-Za-z0-9_-]+):/gm)]
-    .map((m) => m[1])
-    .filter((s): s is string => s !== undefined);
-}
+// `extractJobsSection` / `extractJobNames` は `scripts/workflow-scan-core.mjs` から
+// import する（上の import ブロック）。ここに再定義しない —— 二重に持つと、
+// 片方だけ直して他方を直し忘れる回が生まれる（`workflow-scan-core.mjs` の doc）。
 
 /** 指定したジョブの本文（次のジョブの手前まで）を返す。無ければ `null`。 */
 function extractJobBlock(jobsSection: string, jobName: string): string | null {
@@ -451,8 +447,8 @@ describe('評価器の自己テスト', () => {
 // ============================================================================
 
 const ciYmlText = readFileSync(CI_YML_PATH, 'utf8');
-const jobsSection = extractJobsSection(ciYmlText);
-const jobNames = extractJobNames(jobsSection);
+const jobsSection: string = extractJobsSection(ciYmlText);
+const jobNames: string[] = extractJobNames(jobsSection);
 
 const JOB_IF_EXPRESSIONS = new Map<string, string | null>(
   jobNames.map((name) => {
@@ -500,9 +496,9 @@ interface JobSite {
 
 const WORKFLOWS_DIR = path.join(ROOT, '.github/workflows');
 
-const WORKFLOW_FILE_NAMES: string[] = readdirSync(WORKFLOWS_DIR)
-  .filter((name) => name.endsWith('.yml') || name.endsWith('.yaml'))
-  .sort();
+// `listWorkflowFiles` は `scripts/workflow-scan-core.mjs` から import している
+// （上の import ブロック。二重に持たない理由も同じ doc に在る）。
+const WORKFLOW_FILE_NAMES: string[] = listWorkflowFiles(WORKFLOWS_DIR);
 
 const ALL_WORKFLOW_JOBS: Map<string, JobSite> = (() => {
   const map = new Map<string, JobSite>();

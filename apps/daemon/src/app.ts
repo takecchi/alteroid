@@ -35,9 +35,13 @@ import {
   commitmentPosition,
   commitmentRespondedAt,
   COMMITMENT_APPRAISAL_DECISION_PREFIX,
+  JOB_APPRAISAL_DECISION_PREFIX,
   appraisalSchema,
   commitmentUpdatedAt,
+  computeAppraisalJournalStats,
+  computeJobAppraisalCoverage,
   describeAppraisal,
+  formatAppraisalDecision,
   compareApprovalPagingKey,
   compareCommitmentPosition,
   computeSupersededIds,
@@ -101,6 +105,7 @@ import { z } from 'zod';
 import {
   accessAccountResponseSchema,
   accessListResponseSchema,
+  appraisalStatsResponseSchema,
   approvalsAnswerResponseSchema,
   approvalsResponseSchema,
   archiveListResponseSchema,
@@ -3324,10 +3329,13 @@ export function createApp(deps: AppDeps) {
         }
         await stores.journal.append({
           type: 'decision',
-          decision:
-            `${COMMITMENT_APPRAISAL_DECISION_PREFIX}（${id}）: ${appraisal}` +
-            `${reason === undefined ? '' : ` — ${reason}`}` +
-            `${previous === null ? '' : `（前: ${previous}）`}`,
+          decision: formatAppraisalDecision({
+            prefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
+            id,
+            value: appraisal,
+            reason,
+            previous,
+          }),
           grounds: '人間が直接 API から付けた（クローンの評定を覆したならその前の値も上に在る）',
         });
         return c.json(okResponseSchema.parse({ ok: true }));
@@ -5312,6 +5320,63 @@ export function createApp(deps: AppDeps) {
             limit: RECENT_TRACE_LIMIT,
             total: traces.length,
             traces,
+          }),
+        );
+      },
+    )
+
+    // --- 評定の内訳（/appraisal-stats） --------------------------------------
+    // #1278 の HTTP 面。PRD「入口の等価性」——クローンの `appraisal_stats`
+    // （`tools.ts`）と同じものを人間の手からも。
+
+    /**
+     * 評定（`good`/`bad`/`unclear`/未評定）の内訳を要るときに数える
+     * （#1278「評定の内訳を要るときに数える口が無い」）。
+     *
+     * **資格は `authenticate` だけ（`requireOperator` は付けない）。** `/journal`
+     * `/commitments` `/managers` と同じ強さ——ここが返すのは集計値だけで、
+     * 鍵やクレデンシャルの類は1つも含まない。
+     *
+     * **`journal.commitments` / `journal.jobs` は全期間の総数である。**
+     * `journal_read`（MCP）の `limit` 上限（200）はここには効かない——
+     * `@alteroid/core` の `computeAppraisalJournalStats` がストアを
+     * `limit` 無指定で読むためである（`appraisal-stats.ts` の doc）。
+     *
+     * **クエリ引数は無い。** 出力は母集団の件数に関わらず固定個数の集計値
+     * なので、`/dropped` と違って「上限を持たない」を明示する必要も無い
+     * （そもそも上限という概念が無い）。
+     */
+    .get(
+      '/appraisal-stats',
+      describeRoute({
+        tags: ['appraisal'],
+        summary: '評定の内訳を数える',
+        description:
+          'クローンの `appraisal_stats` と同じものを人間の手から。' +
+          '`journal.commitments`（台帳の行）と `journal.jobs`（委譲）は日誌の ' +
+          'decision 行を先頭一致で数えた全期間の総数——2つは別の軸なので混ぜて ' +
+          '読まないこと。`jobCoverage` は終端した委譲（done/failed/lost/stopped）を ' +
+          '状態ごとに割った評定の有無の内訳で、running/waiting_human は対象外 ' +
+          '（`nonTerminalTotal` に件数だけ出す）。',
+        responses: {
+          200: {
+            description: '評定の内訳。',
+            content: { 'application/json': { schema: resolver(appraisalStatsResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        const [journalStats, jobs] = await Promise.all([
+          computeAppraisalJournalStats(stores.journal, {
+            commitmentPrefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
+            jobPrefix: JOB_APPRAISAL_DECISION_PREFIX,
+          }),
+          stores.jobs.listJobs(),
+        ]);
+        return c.json(
+          appraisalStatsResponseSchema.parse({
+            journal: journalStats,
+            jobCoverage: computeJobAppraisalCoverage(jobs),
           }),
         );
       },

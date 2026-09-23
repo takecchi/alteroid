@@ -182,6 +182,163 @@ function removeJudgementFixtureFiles() {
   for (const rel of JUDGEMENT_FIXTURE_TEMP_FILES) fs.rmSync(absPath(rel), { force: true });
 }
 
+// ── delivery / rebuild-failure が共有する使い捨てフィクスチャ（#1166 面1） ──
+//
+// この2本は実ソース（packages/core/src/excerpt.ts の「文字省略。全」）へ
+// 依存していた。文言が変われば腐る——weak-tooth・judgement系2本と同じ入口
+// である。#1119 の型（変異が探す文言を、フィクスチャ本体の組み立てにも
+// 同じ定数として使う）をここへも当てる。
+//
+// judgement系2本と条件が違う点: この2本は dist 境界を跨ぐ
+// （target: '@alteroid/core'）ので、「新規ファイルを書いて読んで消すだけ」
+// では閉じない——tsup の entry（packages/core/src/index.ts）から辿れる場所に
+// 無いと dist に出ない。Issue #1166 のコメントが実測したとおり（barrel か
+// tsup.config.ts の entry 一覧を一時的に書き換える必要がある）、barrel
+// （index.ts）へ再エクスポート1行を一時的に足す足場が要る。
+//
+// ⚠️ #1262（signal で殺すと実ソースが変異したまま・印が git status に現れ
+// ない）の穴を広げないための設計:
+//  - フィクスチャ本体は**新規の未追跡ファイル**である。killed 時に
+//    git status に出るのは `?? packages/core/src/mutation-selftest-delivery-fixture.ts`
+//    という形で、weak-tooth / judgement-fixture の置き去りと同じ見え方に
+//    なる——「modified: excerpt.ts」（#1262 の事故そのもの）より正体が
+//    分かりやすい。
+//  - barrel（index.ts）への参照は**フィクスチャ本体を書いた後にだけ**足す。
+//    外すときは**参照を先に消し、その後でフィクスチャ本体を消す**。
+//    ⟹ 「index.ts が実在しないファイルを参照している」状態は、この順序を
+//    守る限り構造的に発生しない——途中で殺されても、index.ts が参照する
+//    対象は「実在するファイル」か「参照そのものが無い」かのどちらかにしか
+//    ならない。他人の `pnpm build` を壊す形の置き去りにはならない。
+//  - **印（MUTATION-IN-PROGRESS.json）が残っている間は、足場もフィクスチャ
+//    本体も一切触らずに残す**（`removeDeliveryBarrelScaffoldIfSafe`）。
+//    target が実在するこの2本は、weak-tooth（target: null）と違い
+//    `restoreMutation` の後始末（`pnpm --filter @alteroid/core build`）が
+//    本当に失敗しうる——`rebuild-failure` はまさにそれを意図的に起こす。
+//    その状態で足場を先に片付けると、marker.file（フィクスチャ本体）が
+//    指す実体が消え、`mutate.mjs status` / `restore` という正規の復元経路
+//    そのものが壊れる。だから片付けは「印が消えたこと」を確認してから
+//    行う——片付けられなかった回は、次の selftest 起動時に
+//    `requireNoLeftoverDeliveryFixtureFiles` が検出して止める。
+const DELIVERY_FIXTURE_ANCHOR = 'フィクスチャは barrel を経由して無事に届いた。';
+const DELIVERY_FIXTURE_MODULE_REL = 'packages/core/src/mutation-selftest-delivery-fixture.ts';
+const DELIVERY_BARREL_REL = 'packages/core/src/index.ts';
+const DELIVERY_BARREL_SCAFFOLD_BEGIN =
+  '// ── mutation-testing selftest 用の一時的な足場（#1166 面1）ここから ──';
+const DELIVERY_BARREL_SCAFFOLD_END =
+  '// ── mutation-testing selftest 用の一時的な足場（#1166 面1）ここまで ──';
+const DELIVERY_BARREL_SCAFFOLD_BLOCK =
+  '\n' +
+  `${DELIVERY_BARREL_SCAFFOLD_BEGIN}\n` +
+  '// selftest 実行中だけ存在する。selftest が正常終了すれば自動で消える。\n' +
+  '// 置き去りを見つけたら、この行から直下の「ここまで」の行まで（このコメントを\n' +
+  '// 含めて3行）を削除してよい。フィクスチャ本体\n' +
+  `// （${DELIVERY_FIXTURE_MODULE_REL}）も合わせて削除すること。\n` +
+  "export { selftestDeliveryFixtureValue } from './mutation-selftest-delivery-fixture.js';\n" +
+  `${DELIVERY_BARREL_SCAFFOLD_END}\n`;
+
+const DELIVERY_FIXTURE_MODULE_BODY = [
+  '// selftest 用の使い捨てフィクスチャ（mutation-testing ハーネスの自己検証）。',
+  '// 実行後に削除する。リポジトリの実ソースを1バイトも指していない（#1166 面1）。',
+  '',
+  'export function selftestDeliveryFixtureValue(): string {',
+  `  return '${DELIVERY_FIXTURE_ANCHOR}';`,
+  '}',
+  '',
+].join('\n');
+
+/**
+ * 前回の走行が置き去りにした足場が在ったら、上書きせずに拒む
+ * （`requireNoLeftoverWeakToothFiles` / `requireNoLeftoverJudgementFixtureFiles`
+ * と同じ考え方）。フィクスチャ本体の存在と、barrel 側の一時参照の両方を見る
+ * ——印が残っている間は片付けないので（上のコメント）、どちらか片方だけが
+ * 残ることもありうる。
+ */
+function requireNoLeftoverDeliveryFixtureFiles(scenarioName) {
+  const fixtureExists = fs.existsSync(absPath(DELIVERY_FIXTURE_MODULE_REL));
+  const barrelHasScaffold = readRepoFile(DELIVERY_BARREL_REL).includes(
+    DELIVERY_BARREL_SCAFFOLD_BEGIN,
+  );
+  if (fixtureExists || barrelHasScaffold) {
+    throw new HarnessError(
+      `${scenarioName}: 前回の selftest が置き去りにした足場が在る。上書きしない。\n` +
+        (fixtureExists ? `  - ${DELIVERY_FIXTURE_MODULE_REL}（フィクスチャ本体）\n` : '') +
+        (barrelHasScaffold
+          ? `  - ${DELIVERY_BARREL_REL}（一時的な re-export 行が残っている）\n`
+          : '') +
+        '中身を確認してから手で消して、再実行すること。印（MUTATION-IN-PROGRESS.json）が' +
+        '残っているなら、先にそちらを `mutate.mjs status` / `restore` で片付けること——' +
+        `フィクスチャ本体を先に消すと復元先が無くなる。${DELIVERY_BARREL_REL} は` +
+        `「${DELIVERY_BARREL_SCAFFOLD_BEGIN}」から「${DELIVERY_BARREL_SCAFFOLD_END}」までの` +
+        `行を削除すれば元に戻る（フィクスチャ本体 ${DELIVERY_FIXTURE_MODULE_REL} も合わせて削除）。`,
+    );
+  }
+}
+
+/**
+ * 足場を組む: フィクスチャ本体を先に書き、その後で barrel（index.ts）から
+ * 参照する。**この順序が要点である**（上のコメント参照）——逆順にすると、
+ * 書き込みの途中で殺されたときに barrel が実在しないファイルを参照する
+ * 瞬間が生まれ、同じツリーで他人が打つ `pnpm build` を壊しうる。
+ *
+ * 返り値は barrel の元の中身（復元に使う。書き戻すだけなので文字列の
+ * 挿入位置をパースし直さない——単純な read → write の対にする）。
+ */
+function addDeliveryBarrelScaffold() {
+  writeRepoFile(DELIVERY_FIXTURE_MODULE_REL, DELIVERY_FIXTURE_MODULE_BODY);
+  const originalBarrel = readRepoFile(DELIVERY_BARREL_REL);
+  writeRepoFile(DELIVERY_BARREL_REL, originalBarrel + DELIVERY_BARREL_SCAFFOLD_BLOCK);
+  return originalBarrel;
+}
+
+function removeDeliveryBarrelScaffold(originalBarrelContent) {
+  // 外すときは組むときと逆順——barrel の参照を先に消し、その後で
+  // フィクスチャ本体を消す。
+  writeRepoFile(DELIVERY_BARREL_REL, originalBarrelContent);
+  fs.rmSync(absPath(DELIVERY_FIXTURE_MODULE_REL), { force: true });
+}
+
+/**
+ * 足場を外す——ただし印が残っている間は外さない（上のコメント参照）。
+ *
+ * 印が残っているのは、この足場配下の変異がまだ復元し切れていないという
+ * ことである（`restoreMutation` が失敗した、または `rebuild-failure` が
+ * 意図的に途中で止めた状態）。その状態で barrel の参照やフィクスチャ本体を
+ * 消すと、`marker.file`（フィクスチャ本体）が指す実体が消え、
+ * `mutate.mjs status` / `restore` による正規の復元経路そのものが壊れる。
+ * **印が残っている間は、足場もフィクスチャ本体も一切触らずに残す。**
+ */
+function removeDeliveryBarrelScaffoldIfSafe(originalBarrelContent, spec) {
+  if (markerExists()) {
+    log(
+      '足場を外さない: 印が残っている（復元が完了していない）。フィクスチャ本体と' +
+        'barrel の参照はそのまま残す——ここで消すと `mutate.mjs status` / `restore` の' +
+        '復元先が無くなる。先に `mutate.mjs status` / `restore` で印を片付けてから、' +
+        '手で足場を外すこと（見つけ方・外し方は requireNoLeftoverDeliveryFixtureFiles と同じ）。',
+    );
+    return { attempted: false, ok: false, reason: '印が残っているため見送った', distClean: null };
+  }
+  removeDeliveryBarrelScaffold(originalBarrelContent);
+  const finalBuild = spawnSync('pnpm', ['--filter', spec.target, 'build'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    maxBuffer: 200 * 1024 * 1024,
+  });
+  if (finalBuild.status !== 0) {
+    log('--- 足場を外した後の build 生ログ ここから ---');
+    log((finalBuild.stdout ?? '') + (finalBuild.stderr ?? ''));
+    log('--- 足場を外した後の build 生ログ ここまで ---');
+    return {
+      attempted: true,
+      ok: false,
+      reason: `build 失敗（exit=${finalBuild.status}）`,
+      distClean: null,
+    };
+  }
+  const distFinal = fs.readFileSync(absPath(spec.artifact.file), 'utf8');
+  const distClean = !distFinal.includes(DELIVERY_FIXTURE_ANCHOR) && !distFinal.includes(spec.to);
+  return { attempted: true, ok: true, reason: 'build 成功', distClean };
+}
+
 // ── 1. 控えの汚染 ───────────────────────────────────────────────────
 //
 // 受け入れ条件: 照合2が復元を止めること。止めたあと印が残っていること、
@@ -750,6 +907,14 @@ function scenarioInterruptedWrongOrder() {
 // 途中で壊れても exit code は 0 でありうる（`buildAndCheckArtifact` は
 // build の終了コードでは判定しない設計 — [9] のログ参照）ので、戻り値の
 // 中身を実際に突き合わせないと、この対比が崩れても緑のまま残る。
+//
+// #1166 面1: 対象を実ソース（packages/core/src/excerpt.ts）から使い捨て
+// フィクスチャ + barrel 足場（上の「delivery / rebuild-failure が共有する
+// 使い捨てフィクスチャ」節）へ差し替えた。**この対比の主張そのもの（build
+// 前=届いていない／build後=届く／復元後=消えている）は1文字も変えていない**
+// ——検査する項目を3つ足しただけである（足場そのものが正しく機能したか:
+// 復元後にアンカーの原文が dist に戻っているか・足場を外せたか・外した後の
+// dist が完全に綺麗か）。
 function assertDeliveryOutcomes(result) {
   const expected = {
     deliveredBeforeBuild: false,
@@ -757,6 +922,10 @@ function assertDeliveryOutcomes(result) {
     buildExitCodeAfterBuild: 0,
     postRestoreRebuildOk: true,
     distCleanAfterRestore: true,
+    // #1166 面1で足した3項目。
+    deliveredAnchorAfterRestore: true,
+    scaffoldRemovedOk: true,
+    distCleanAfterScaffoldRemoved: true,
   };
   const violations = [];
   for (const [key, want] of Object.entries(expected)) {
@@ -768,7 +937,8 @@ function assertDeliveryOutcomes(result) {
   if (violations.length > 0) {
     throw new HarnessError(
       'delivery: このシナリオが実演するはずの対比（build 前には届いていない・' +
-        'build 後には届く・復元後は消えている）が出ていない。\n' +
+        'build 後には届く・復元後は消えている・barrel 足場を外した後は完全に綺麗）が' +
+        '出ていない。\n' +
         `${violations.join('\n')}\n` +
         'なぜ落とすか: 戻り値を検査しなければ、判定が化けても緑のまま残る（#1138）。',
     );
@@ -776,14 +946,15 @@ function assertDeliveryOutcomes(result) {
 }
 
 function scenarioDelivery() {
-  section('selftest: 4. 変異が成果物へ届いたか（packages/core/src/excerpt.ts）');
+  section('selftest: 4. 変異が成果物へ届いたか（使い捨てフィクスチャ + barrel 足場。#1166 面1）');
   requireNoMarker('delivery');
+  requireNoLeftoverDeliveryFixtureFiles('delivery');
 
   const spec = {
     id: 'selftest-delivery',
-    file: 'packages/core/src/excerpt.ts',
-    from: '文字省略。全',
-    to: 'SELFTEST_MUTATED。全',
+    file: DELIVERY_FIXTURE_MODULE_REL,
+    from: DELIVERY_FIXTURE_ANCHOR,
+    to: 'SELFTEST_MUTATED',
     expect: 1,
     target: '@alteroid/core',
     artifact: { file: 'packages/core/dist/index.js', contains: 'SELFTEST_MUTATED' },
@@ -793,57 +964,82 @@ function scenarioDelivery() {
     mustFail: ['selftest-delivery はこの歯で judge を呼ばない'],
   };
 
-  log('-- 4a. 変異前: いま dist に SELFTEST_MUTATED が無いことを確認する（当然） --');
+  log('-- 4a. 足場を組む: フィクスチャ本体を先に書き、その後で barrel (index.ts) から参照する --');
+  const originalBarrel = addDeliveryBarrelScaffold();
   const distAbs = absPath(spec.artifact.file);
-  const before = fs.existsSync(distAbs) ? fs.readFileSync(distAbs, 'utf8') : '';
-  log(`build 前の dist に含まれるか: ${before.includes('SELFTEST_MUTATED')}`);
 
-  log('');
-  log('-- 4b. 変異を当てる（build はまだ呼ばない） --');
-  applyMutation(spec);
-
-  // **#1146: ここから 4e（restoreMutation）までを try/finally で包む。**
-  // `scenarioJudgementIdIntegrity` と同じ形——`applyMutation` の後で
-  // 例外が起きても（例えば 4d の build 自体が例外を投げても）、
-  // `restoreMutation()` を finally で必ず1回だけ呼ぶ。包んでいなかった
-  // ときは、ここで例外が起きると `packages/core/src/excerpt.ts`
-  // （実ソース）が変異したまま・印も残ったまま selftest プロセスが
-  // 落ちていた（再現し、報告に生ログを添えた）。
   let artifactResult;
   let rebuildCheck;
   let deliveredBeforeBuild;
+  let deliveredAnchorAfterRestore;
+  let distCleanAfterRestore;
+  let scaffoldRemoval;
+
   try {
     log('');
-    log('-- 4c. build をまだ呼ばずに、いまの dist をもう一度読む --');
-    const distAfterMutationNoBuild = fs.existsSync(distAbs) ? fs.readFileSync(distAbs, 'utf8') : '';
-    deliveredBeforeBuild = distAfterMutationNoBuild.includes('SELFTEST_MUTATED');
-    log(`build 前（ソースは変異済み）の dist に含まれるか: ${deliveredBeforeBuild}`);
     log(
-      'この時点で参照できる「直近の build の exit code」は、前回 (baseline 相当) の 0 のままである。',
+      '-- 4b. 変異前・build前: いま dist に ANCHOR も SELFTEST_MUTATED も無いことを' +
+        '確認する（barrel を組んだだけでまだ build していないので当然） --',
     );
+    const before = fs.existsSync(distAbs) ? fs.readFileSync(distAbs, 'utf8') : '';
+    log(`build 前の dist に ANCHOR が含まれるか: ${before.includes(DELIVERY_FIXTURE_ANCHOR)}`);
+    log(`build 前の dist に SELFTEST_MUTATED が含まれるか: ${before.includes('SELFTEST_MUTATED')}`);
 
     log('');
-    log('-- 4d. build する --');
-    artifactResult = buildAndCheckArtifact(spec);
+    log('-- 4c. 変異を当てる（build はまだ呼ばない） --');
+    applyMutation(spec);
 
-    log('');
+    // **#1146: ここから 4e（restoreMutation）までを try/finally で包む。**
+    // `scenarioJudgementIdIntegrity` / 旧 `scenarioDelivery` と同じ形——
+    // `applyMutation` の後で例外が起きても、`restoreMutation()` を finally
+    // で必ず1回だけ呼ぶ。
+    try {
+      log('');
+      log('-- 4d. build をまだ呼ばずに、いまの dist をもう一度読む --');
+      const distAfterMutationNoBuild = fs.existsSync(distAbs)
+        ? fs.readFileSync(distAbs, 'utf8')
+        : '';
+      deliveredBeforeBuild = distAfterMutationNoBuild.includes('SELFTEST_MUTATED');
+      log(`build 前（ソースは変異済み）の dist に含まれるか: ${deliveredBeforeBuild}`);
+
+      log('');
+      log('-- 4e. build する --');
+      artifactResult = buildAndCheckArtifact(spec);
+      log(
+        `対比: 変異前 届いた=${deliveredBeforeBuild} — build 後 exit=` +
+          `${artifactResult.buildExitCode} / 届いた=${artifactResult.artifactState === 'delivered'}。` +
+          'exit code は0でありうるが、届いたかどうかは dist を実際に読まないと分からない。',
+      );
+    } finally {
+      log('');
+      log(
+        '-- 4f. フィクスチャを復元する（finally。dist の再 build と検証は' +
+          'restoreMutation 自身が後始末として行う） --',
+      );
+      ({ rebuildCheck } = restoreMutation());
+      log(`restoreMutation が自動で行った後始末: ${rebuildCheck.reason}`);
+    }
+
+    const distAfterRestore = fs.readFileSync(distAbs, 'utf8');
+    deliveredAnchorAfterRestore = distAfterRestore.includes(DELIVERY_FIXTURE_ANCHOR);
+    distCleanAfterRestore = !distAfterRestore.includes('SELFTEST_MUTATED');
     log(
-      `対比: build 前 exit=0(前回分) / 届いた=${deliveredBeforeBuild} — ` +
-        `build 後 exit=${artifactResult.buildExitCode} / 届いた=${artifactResult.artifactState === 'delivered'}。` +
-        'exit code はどちらも 0 でありうるが、届いたかどうかは dist を実際に読まないと分からない。',
+      `復元後、dist にアンカー（変異前の原文）が戻っているか（足場そのものが機能して` +
+        `いる証拠）: ${deliveredAnchorAfterRestore}`,
     );
+    log(`復元後、dist に変異が残っていないか（残っていないはず）: ${distCleanAfterRestore}`);
   } finally {
     log('');
     log(
-      '-- 4e. 復元する（finally。ここまでの間に例外が起きていても必ず1回だけ呼ぶ）。' +
-        'dist の再 build と検証は restoreMutation 自身が後始末として行う（手動では呼ばない） --',
+      '-- 4g. 足場を外す（finally。印が残っていなければ barrel と fixture を片付けて' +
+        '再 build する） --',
     );
-    ({ rebuildCheck } = restoreMutation());
-    log(`restoreMutation が自動で行った後始末: ${rebuildCheck.reason}`);
+    scaffoldRemoval = removeDeliveryBarrelScaffoldIfSafe(originalBarrel, spec);
+    log(
+      `足場の後始末: attempted=${scaffoldRemoval.attempted} ok=${scaffoldRemoval.ok} ` +
+        `reason=${scaffoldRemoval.reason}`,
+    );
   }
-  const distAfterRestore = fs.readFileSync(distAbs, 'utf8');
-  const distMatchesRestoredSource = !distAfterRestore.includes('SELFTEST_MUTATED');
-  log(`後始末後、dist に変異が残っていないか（残っていないはず）: ${distMatchesRestoredSource}`);
 
   const result = {
     scenario: 'delivery',
@@ -853,7 +1049,10 @@ function scenarioDelivery() {
     buildExitCodeAfterBuild: artifactResult.buildExitCode,
     postRestoreRebuildOk: rebuildCheck.ok,
     postRestoreRebuildReason: rebuildCheck.reason,
-    distCleanAfterRestore: distMatchesRestoredSource,
+    distCleanAfterRestore,
+    deliveredAnchorAfterRestore,
+    scaffoldRemovedOk: scaffoldRemoval.ok,
+    distCleanAfterScaffoldRemoved: scaffoldRemoval.distClean,
   };
   assertDeliveryOutcomes(result);
   return result;
@@ -1019,15 +1218,34 @@ function scenarioJudgementIdIntegrity() {
 // **実プロセスとして** `mutate.mjs restore` を起こして確かめる
 // （マネージャーが使ったのと同じ手 — PATH に exit 1 する擬似 `pnpm` を置く。
 // `mutate-core.mjs` 本体には一切手を入れない。抜け道は本体ではなく外側に置く）。
+//
+// #1166 面1: `delivery` と全く同じ結合（実ソース excerpt.ts への依存）が
+// あったので、同じフィクスチャ + barrel 足場へ差し替えた。**このシナリオの
+// 主張（後始末の build が落ちても印が残り status が知らせる）は1文字も
+// 変えていない**——対象を実ソースから使い捨てフィクスチャへ差し替え、
+// 足場の組み立て・後始末を外側に足しただけである。
+//
+// ⚠️ 1点だけ意味が変わった場所がある: 旧版は `spec.file`（excerpt.ts）が
+// **git 管理下の既存ファイル**だったので、復元後に `git status --porcelain`
+// が空になることが「元に戻った」の証拠として使えた。フィクスチャは
+// **新規の未追跡ファイル**なので、内容が正しく復元されていても
+// `git status` は常に `??`（追跡されていない）を返し続ける——空になることは
+// 無い。だから「元に戻ったか」は git status ではなく**内容の一致**で見る
+// （`fixtureContentRestoredAfterRealRestore`）。raw な git status も
+// 参考として残す（診断用。値そのものへの期待は置かない）。
 function scenarioRebuildFailure() {
-  section('selftest: 6. 後始末の build が落ちても、印が残り status が知らせることの確認');
+  section(
+    'selftest: 6. 後始末の build が落ちても、印が残り status が知らせることの確認' +
+      '（使い捨てフィクスチャ + barrel 足場。#1166 面1）',
+  );
   requireNoMarker('rebuild-failure');
+  requireNoLeftoverDeliveryFixtureFiles('rebuild-failure');
 
   const spec = {
     id: 'selftest-rebuild-failure',
-    file: 'packages/core/src/excerpt.ts',
-    from: '文字省略。全',
-    to: 'REBUILDCHECK_MUTATED。全',
+    file: DELIVERY_FIXTURE_MODULE_REL,
+    from: DELIVERY_FIXTURE_ANCHOR,
+    to: 'REBUILDCHECK_MUTATED',
     expect: 1,
     target: '@alteroid/core',
     artifact: { file: 'packages/core/dist/index.js', contains: 'REBUILDCHECK_MUTATED' },
@@ -1037,10 +1255,8 @@ function scenarioRebuildFailure() {
     mustFail: ['selftest-rebuild-failure はこの歯で judge を呼ばない'],
   };
 
-  log('-- 6a. 変異を当てる --');
-  applyMutation(spec);
-
-  const fakeBinDir = path.join(ROOT, '.mutation-testing', 'selftest-fake-bin');
+  log('-- 6a0. 足場を組む: フィクスチャ本体を先に書き、その後で barrel (index.ts) から参照する --');
+  const originalBarrel = addDeliveryBarrelScaffold();
   const artifactAbs = absPath(spec.artifact.file);
 
   // **#1146: 6a（apply）の後を、6d（本物の pnpm での後始末）までまるごと
@@ -1050,8 +1266,8 @@ function scenarioRebuildFailure() {
   // 呼び出しをそのまま finally へ移しただけなので、呼び出し箇所は依然として
   // 1つだけであり、二重に呼ぶ経路は無い。**包んでいなかったときは、6b/6c の
   // 間で（意図した擬似 pnpm の失敗とは別の理由で）例外が起きると、
-  // `packages/core/src/excerpt.ts`（実ソース）が変異したまま・印も残ったまま
-  // 落ちていた（#1146。`scenarioDelivery` と同型の欠陥）。
+  // フィクスチャ本体が変異したまま・印も残ったまま落ちる（#1146。
+  // `scenarioDelivery` と同型の欠陥）。
   let restoreResult;
   let markerLeft;
   let distStillHasMutation;
@@ -1062,79 +1278,112 @@ function scenarioRebuildFailure() {
   let statusShowsCpAsPrimary;
   let finalRestore;
   let distCleanAfterRealRestore;
-  let gitStatusAfter;
+  let gitStatusAfterRealRestore;
+  let fixtureContentRestoredAfterRealRestore;
+  let scaffoldRemoval;
+
+  const fakeBinDirPath = path.join(ROOT, '.mutation-testing', 'selftest-fake-bin');
+
   try {
-    fs.mkdirSync(fakeBinDir, { recursive: true });
-    const fakePnpmPath = path.join(fakeBinDir, 'pnpm');
-    fs.writeFileSync(fakePnpmPath, '#!/bin/sh\nexit 1\n');
-    fs.chmodSync(fakePnpmPath, 0o755);
-    log(`擬似 pnpm を用意した（常に exit 1）: ${fakePnpmPath}`);
+    log('-- 6a. 変異を当てる --');
+    applyMutation(spec);
 
-    log('');
-    log('-- 6b. この PATH で、実プロセスとして `mutate.mjs restore` を起こす --');
-    const poisonedEnv = {
-      ...process.env,
-      PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH}`,
-    };
-    restoreResult = spawnSync(
-      'node',
-      [path.join(ROOT, '.claude/skills/mutation-testing/mutate.mjs'), 'restore'],
-      { cwd: ROOT, env: poisonedEnv, encoding: 'utf8' },
-    );
-    log(`restore の exit code: ${restoreResult.status}`);
-    log(restoreResult.stdout ?? '');
-    log(restoreResult.stderr ?? '');
-
-    markerLeft = markerExists();
-    distStillHasMutation = fs.readFileSync(artifactAbs, 'utf8').includes('REBUILDCHECK_MUTATED');
-    log(`restore が非0 で終わったか: ${restoreResult.status !== 0}`);
-    log(`印が残っているか: ${markerLeft}`);
-    log(`dist に変異がまだ残っているか: ${distStillHasMutation}`);
-
-    log('');
-    log('-- 6c. 実プロセスとして `mutate.mjs status`（通常の PATH）を起こす --');
     try {
-      statusOut = execFileSync(
-        'node',
-        [path.join(ROOT, '.claude/skills/mutation-testing/mutate.mjs'), 'status'],
-        { cwd: ROOT, encoding: 'utf8' },
-      ).toString();
-      statusExit = 0;
-    } catch (err) {
-      statusOut = err.stdout?.toString() ?? '';
-      statusExit = err.status;
-    }
-    log(`status の exit code: ${statusExit}`);
-    log(statusOut);
-    statusReportedProblem = /変異が当たったまま/.test(statusOut);
+      fs.mkdirSync(fakeBinDirPath, { recursive: true });
+      const fakePnpmPath = path.join(fakeBinDirPath, 'pnpm');
+      fs.writeFileSync(fakePnpmPath, '#!/bin/sh\nexit 1\n');
+      fs.chmodSync(fakePnpmPath, 0o755);
+      log(`擬似 pnpm を用意した（常に exit 1）: ${fakePnpmPath}`);
 
-    // **段階の区別が出ているかを確かめる。** マネージャーの2回目の実測: 後始末が
-    // 落ちた時点でソース（git 管理下）は既に復元済みなのに、直さないと
-    // `status` は「ソースが変異したまま」という説明（cp/md5sum を主経路とする
-    // 手順）を出していた。次に来た人がその手順どおり cp して md5 が一致する
-    // のを見ると「直った」と誤解し、dist の変異が残ったまま印を消しかねない。
-    // ここでは、実際に dist だけが問題である段階では「ソースは既に復元済み」
-    // と明示され、cp を主経路として出していないことを確認する。
-    statusMentionsDistStage = /ソース（git 管理下）は既に復元済みである/.test(statusOut);
-    statusShowsCpAsPrimary =
-      /ハーネスを使わない復元手順:/.test(statusOut) && /\$ cp '/.test(statusOut);
-    log(
-      `status が「ソースは復元済み・dist 未確認」の段階だと明示しているか: ${statusMentionsDistStage}`,
-    );
-    log(`status が cp 手順を主経路として出しているか（出ていないはず）: ${statusShowsCpAsPrimary}`);
+      log('');
+      log('-- 6b. この PATH で、実プロセスとして `mutate.mjs restore` を起こす --');
+      const poisonedEnv = {
+        ...process.env,
+        PATH: `${fakeBinDirPath}${path.delimiter}${process.env.PATH}`,
+      };
+      restoreResult = spawnSync(
+        'node',
+        [path.join(ROOT, '.claude/skills/mutation-testing/mutate.mjs'), 'restore'],
+        { cwd: ROOT, env: poisonedEnv, encoding: 'utf8' },
+      );
+      log(`restore の exit code: ${restoreResult.status}`);
+      log(restoreResult.stdout ?? '');
+      log(restoreResult.stderr ?? '');
+
+      markerLeft = markerExists();
+      distStillHasMutation = fs.readFileSync(artifactAbs, 'utf8').includes('REBUILDCHECK_MUTATED');
+      log(`restore が非0 で終わったか: ${restoreResult.status !== 0}`);
+      log(`印が残っているか: ${markerLeft}`);
+      log(`dist に変異がまだ残っているか: ${distStillHasMutation}`);
+
+      log('');
+      log('-- 6c. 実プロセスとして `mutate.mjs status`（通常の PATH）を起こす --');
+      try {
+        statusOut = execFileSync(
+          'node',
+          [path.join(ROOT, '.claude/skills/mutation-testing/mutate.mjs'), 'status'],
+          { cwd: ROOT, encoding: 'utf8' },
+        ).toString();
+        statusExit = 0;
+      } catch (err) {
+        statusOut = err.stdout?.toString() ?? '';
+        statusExit = err.status;
+      }
+      log(`status の exit code: ${statusExit}`);
+      log(statusOut);
+      statusReportedProblem = /変異が当たったまま/.test(statusOut);
+
+      // **段階の区別が出ているかを確かめる。** マネージャーの2回目の実測: 後始末が
+      // 落ちた時点でソース（git 管理下）は既に復元済みなのに、直さないと
+      // `status` は「ソースが変異したまま」という説明（cp/md5sum を主経路とする
+      // 手順）を出していた。次に来た人がその手順どおり cp して md5 が一致する
+      // のを見ると「直った」と誤解し、dist の変異が残ったまま印を消しかねない。
+      // ここでは、実際に dist だけが問題である段階では「ソースは既に復元済み」
+      // と明示され、cp を主経路として出していないことを確認する。
+      statusMentionsDistStage = /ソース（git 管理下）は既に復元済みである/.test(statusOut);
+      statusShowsCpAsPrimary =
+        /ハーネスを使わない復元手順:/.test(statusOut) && /\$ cp '/.test(statusOut);
+      log(
+        `status が「ソースは復元済み・dist 未確認」の段階だと明示しているか: ${statusMentionsDistStage}`,
+      );
+      log(
+        `status が cp 手順を主経路として出しているか（出ていないはず）: ${statusShowsCpAsPrimary}`,
+      );
+    } finally {
+      log('');
+      log(
+        '-- 6d. 擬似 pnpm を片付け、本物の pnpm で復元する（finally。ここまでの間に例外が' +
+          '起きていても必ず1回だけ呼ぶ） --',
+      );
+      fs.rmSync(fakeBinDirPath, { recursive: true, force: true });
+      finalRestore = restoreMutation();
+      log(`後始末（本物の pnpm）: ${finalRestore.rebuildCheck.reason}`);
+      distCleanAfterRealRestore = !fs
+        .readFileSync(artifactAbs, 'utf8')
+        .includes('REBUILDCHECK_MUTATED');
+      gitStatusAfterRealRestore = gitStatusPorcelainFor(spec.file);
+      fixtureContentRestoredAfterRealRestore =
+        readRepoFile(spec.file) === DELIVERY_FIXTURE_MODULE_BODY;
+      log(
+        `復元後の git status --porcelain（未追跡ファイルなので常に非空。参考のみ）: ` +
+          `${JSON.stringify(gitStatusAfterRealRestore)}`,
+      );
+      log(
+        `復元後、フィクスチャ本体の中身が元どおりか（実質的な「綺麗になった」の判定はこちら）: ` +
+          `${fixtureContentRestoredAfterRealRestore}`,
+      );
+    }
   } finally {
     log('');
     log(
-      '-- 6d. 擬似 pnpm を片付け、本物の pnpm で復元する（finally。ここまでの間に例外が' +
-        '起きていても必ず1回だけ呼ぶ） --',
+      '-- 6e. 足場を外す（finally。印が残っていなければ barrel と fixture を片付けて' +
+        '再 build する） --',
     );
-    fs.rmSync(fakeBinDir, { recursive: true, force: true });
-    finalRestore = restoreMutation();
-    log(`後始末（本物の pnpm）: ${finalRestore.rebuildCheck.reason}`);
-    distCleanAfterRealRestore = !fs
-      .readFileSync(artifactAbs, 'utf8')
-      .includes('REBUILDCHECK_MUTATED');
-    gitStatusAfter = gitStatusPorcelainFor(spec.file);
+    scaffoldRemoval = removeDeliveryBarrelScaffoldIfSafe(originalBarrel, spec);
+    log(
+      `足場の後始末: attempted=${scaffoldRemoval.attempted} ok=${scaffoldRemoval.ok} ` +
+        `reason=${scaffoldRemoval.reason}`,
+    );
   }
 
   // ツリーは既にクリーンな状態まで戻したので、ここで投げても安全である。
@@ -1156,7 +1405,10 @@ function scenarioRebuildFailure() {
     statusShowsCpAsPrimary,
     finalCleanupOk: finalRestore.rebuildCheck.ok,
     distCleanAfterRealRestore,
-    gitCleanAfterRealRestore: gitStatusAfter.trim() === '',
+    gitStatusAfterRealRestore,
+    fixtureContentRestoredAfterRealRestore,
+    scaffoldRemovedOk: scaffoldRemoval.ok,
+    distCleanAfterScaffoldRemoved: scaffoldRemoval.distClean,
   };
 }
 

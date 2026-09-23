@@ -1241,6 +1241,108 @@ describe('redeliveryGate（Issue #783 続き）: `#restoreUnread` の門', () =>
     await clone.stop();
   });
 
+  /**
+   * **N件の gated な未読を一括で拾い直すときの「畳んだ」の畳み方**（未読の
+   * 一括拾い直しで日誌が肥大化する形をもう1つ塞ぐ直し。先例:
+   * `#redeliveredLiveHeadline` — issue #903 続き、上の「N件の live な未読を
+   * 一括で拾い直すときの「配り直した」の畳み方」describe と対になる）。
+   *
+   * **歯は両側から撃つ**（`AGENTS.md`「テストを弱めずに直す」）:
+   * - **足りない側**: 畳めていない（N 件で N 行書いてしまう）と落ちる
+   * - **やりすぎた側**: 畳みすぎて件数・合図の形・理由のどれかが失われると
+   *   落ちる。**「1行になった」だけを見ない** —— それだけでは本文を空に
+   *   しても緑になる
+   */
+  describe('N件の gated な未読を一括で拾い直すときの「畳んだ」の畳み方', () => {
+    it('「畳んだ」行は1本だけである（N本でもN+1本でもない）', async () => {
+      const stores = createMemoryStores();
+      const ids = ['evt-gatefold-a', 'evt-gatefold-b', 'evt-gatefold-c'];
+      for (const [i, id] of ids.entries()) {
+        const at = `2026-08-10T00:00:0${i}.000Z`;
+        await stores.inbox.put(report(`門畳みテスト ${i}`, id), at);
+      }
+
+      const alwaysFold: RedeliveryGate = () => false;
+      const { clone } = bootClone(stores, 'reply', alwaysFold);
+      // 3件目ぶんの本文追記が現れるまで待つ —— それが現れた時点で、
+      // このパスは3件とも `#foldGatedRedelivery` を通り終えている
+      // （`#journalIncomingBody` が本文を record ごとに即座に書くのに対し、
+      // 「畳んだ」の1行はループの後始末でまとめて1回だけ書かれる。書く
+      // 順序は入れ替わらない —— 本文は record の番が来た時点、見出しは
+      // ループの最後）。
+      await waitForJournal(stores, '門畳みテスト 2');
+
+      const exchanges = await stores.journal.list({ types: ['exchange'] });
+      const matches = exchanges.filter(
+        (entry) =>
+          entry.type === 'exchange' &&
+          entry.with === 'self' &&
+          entry.text.includes('ターンを起こさずに畳んだ'),
+      );
+      // **N=3 だが行は1本。** 直しの前なら3本、境界を1つ間違えれば4本
+      // （3本＋総括の1本）になりうる——ここは正確に1本であることを見る。
+      expect(matches.length).toBe(1);
+
+      await clone.stop();
+    });
+
+    it('その1本から、N件それぞれの合図の形・畳んだ理由・件数のどれも失われていない', async () => {
+      const stores = createMemoryStores();
+      // **`chars=` の値で record ごとに見分ける。** `inboxEventShape` は
+      // `manager_message` に対して managerId / kind / requestId / 本文長
+      // （`chars=`）しか出さない——本文そのものは載らない。だから3件を
+      // 区別できる唯一の手掛かりは本文の**長さ**であり、わざと異なる長さの
+      // 本文にしてある（5 / 9 / 13 文字）。件数だけへ要約する変異は、この
+      // 3つの `chars=` のどれかを消す。
+      const items = [
+        { id: 'evt-gatefold-detail-a', text: 'A'.repeat(5), at: '2026-08-10T01:00:00.000Z' },
+        { id: 'evt-gatefold-detail-b', text: 'B'.repeat(9), at: '2026-08-10T01:00:01.000Z' },
+        { id: 'evt-gatefold-detail-c', text: 'C'.repeat(13), at: '2026-08-10T01:00:02.000Z' },
+      ];
+      for (const item of items) {
+        await stores.inbox.put(report(item.text, item.id), item.at);
+      }
+
+      const alwaysFold: RedeliveryGate = () => false;
+      const { clone } = bootClone(stores, 'reply', alwaysFold);
+      await waitForJournal(stores, `chars=${items[2]?.text.length}`);
+
+      const exchanges = await stores.journal.list({ types: ['exchange'] });
+      const folded = exchanges.find(
+        (entry) => entry.type === 'exchange' && entry.text.includes('ターンを起こさずに畳んだ'),
+      );
+      const text = folded && folded.type === 'exchange' ? folded.text : '';
+
+      // (1) **畳んだ件数** —— 3件だと名乗る。
+      expect(text).toContain('まとめて3件');
+      // (2) **各件の合図の形**（`inboxEventShape`）。3件それぞれの本文長
+      //     （5 / 9 / 13）がすべて読める＝1件へ要約されていない。
+      for (const item of items) {
+        expect(text).toContain(`chars=${item.text.length}`);
+      }
+      // 内訳が record ごとに列挙されている（`[1]` `[2]` `[3]`）。
+      expect(text).toContain('[1]');
+      expect(text).toContain('[2]');
+      expect(text).toContain('[3]');
+      // (3) **なぜ畳んだか**。
+      expect(text).toContain('配り直しの門がいま配る意味は無いと答えた');
+      expect(text).toContain('モデルへは1文字も渡していない');
+      expect(text).toContain('合図も台帳の行も消していない');
+      expect(text).toContain('次の起動でまた拾い直され');
+
+      // **本文追記（`#journalIncomingBody`）も record ごとに3本残っている。**
+      // 畳むのは見出しだけで、本文は1文字も減らしていないことをここでも
+      // 確かめる（`with: 'manager'` / `role: 'inbound'` の3本）。
+      const bodies = exchanges.filter(
+        (entry) =>
+          entry.type === 'exchange' && entry.with === 'manager' && entry.role === 'inbound',
+      );
+      expect(bodies.length).toBe(3);
+
+      await clone.stop();
+    });
+  });
+
   it('述語を渡さなければ、フォールドされそうな形の合図も含めて全件配られる（既定の挙動を1文字も変えない）', async () => {
     const stores = createMemoryStores();
     const a = externalNotice(
@@ -1480,20 +1582,6 @@ async function waitForAbsentFromPending(stores: Stores, id: string): Promise<voi
   }
 }
 
-/** 型ごとの本文追記（`ターンを起こさずに畳んだ`）が指定の件数そろうまで待つ。 */
-async function waitForFoldedCount(stores: Stores, count: number): Promise<void> {
-  const started = Date.now();
-  for (;;) {
-    const exchanges = await stores.journal.list({ types: ['exchange'] });
-    const folded = exchanges.filter(
-      (entry) => entry.type === 'exchange' && entry.text.includes('ターンを起こさずに畳んだ'),
-    ).length;
-    if (folded >= count) return;
-    if (Date.now() - started > 3000) throw new Error('畳んだ件数が揃わない');
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-}
-
 describe('拾い直した token-pool の合図の消し込み（Issue #783 段1）', () => {
   it('token-pool の合図は起動時に受信箱から消え、日誌には本文追記と「消した」の1行が両方残り、モデルへは1文字も渡らない', async () => {
     const stores = createMemoryStores();
@@ -1571,7 +1659,29 @@ describe('拾い直した token-pool の合図の消し込み（Issue #783 段1�
 
     await waitForAbsentFromPending(stores, tokenPool.id);
     // runner-registry と自由文字列の2件は `live` なので門まで進み、門が畳む。
-    await waitForFoldedCount(stores, 2);
+    //
+    // ⚠️ **この直しの前は、畳んだ record 1件につき別々の journal entry が
+    // 書かれていたので、ここは「畳んだエントリの本数」が2に揃うまで待って
+    // いた（`waitForFoldedCount`）。** いまは1パスぶんの「畳んだ」が1本へ
+    // まとめられる（`#gatedRedeliveryFoldHeadline` の doc「1パス1本へ畳む
+    // 直し」）ので、本数ではなく**その1本の中身**（`まとめて2件`）が現れる
+    // まで待つ形に直した——測っている性質（2件とも門を通って畳まれ、消えて
+    // いないこと）は変えていない。
+    await waitForJournal(stores, 'まとめて2件');
+
+    // **本数は1本のまま**（この直しの主張そのもの）——それでも中身は2件ぶん
+    // 失わずに残っている、というのがこの歯の新しい半分である。
+    const exchanges = await stores.journal.list({ types: ['exchange'] });
+    const folded = exchanges.filter(
+      (entry) => entry.type === 'exchange' && entry.text.includes('ターンを起こさずに畳んだ'),
+    );
+    expect(folded).toHaveLength(1);
+    const foldedText = folded[0] && folded[0].type === 'exchange' ? folded[0].text : '';
+    // **2件それぞれの合図の形**（`inboxEventShape`）が読める——`source` の
+    // 文字数が record ごとに違う（15 と 30）ので、1件へ潰していないことが
+    // 分かる。
+    expect(foldedText).toContain(`source.chars=${DAEMON_RUNNER_REGISTRY_SOURCE.length}`);
+    expect(foldedText).toContain(`source.chars=${'webhook-from-somewhere-outside'.length}`);
 
     const remaining = await stores.inbox.peekPending();
     const remainingIds = remaining.map((r) => r.event.id);

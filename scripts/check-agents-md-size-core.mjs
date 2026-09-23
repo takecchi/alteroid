@@ -120,6 +120,13 @@ export const BUDGET_HISTORY = [
       '増分を最小にした。',
     ref: 'https://github.com/takecchi/alteroid/pull/1271',
   },
+  {
+    date: '2026-09-23',
+    bytes: 151963,
+    lines: 611,
+    why: 'Issue #1318 の (2)（消えた枝が抱えていた「なぜ main に在る sha を指すのか」の根拠）を「出典の引き方」の隣へ1本、`git clone --depth N` が母集合を静かに切る形を「静かに失敗する道具」へ1本、それぞれ足した。**どちらも (a) 常時必要な判断基準である** —— 前者は sha を出典として引くたび、後者は数えるたびに掛かり、場面で開く skill には置けない。**⛔ 枝の逐語はそのまま移していない** —— 同じ行が持つ事実の主張（「fa98bb2 以降1バイトも変わっていない」）は実測で偽だったので、使ったのは根拠の一文だけである。**実測記録の側は入れていない** —— (c) に当たるので、40桁 sha からの回収手順は既に持っている .claude/skills/branch-cleanup/SKILL.md への参照1つに寄せ、この文書には規則と復旧の1コマンドだけを置いた。',
+    ref: 'https://github.com/takecchi/alteroid/issues/1318',
+  },
 ];
 
 /** 現在の予算（バイト）。`BUDGET_HISTORY` の最新の件から導出する。 */

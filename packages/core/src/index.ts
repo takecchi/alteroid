@@ -226,6 +226,24 @@ export {
   APPRAISAL_TARGETS_REASON_LIMIT,
 } from './appraisal.js';
 /**
+ * 評定の内訳を要るときに数える口（#1278）。`appraisal.ts`（段2）とは別の軸——
+ * あちらは「いま台帳・委譲に載っている行」、こちらは「日誌に残る全期間の総数」
+ * と「終端した委譲の評定の有無」を数える。
+ */
+export {
+  computeAppraisalJournalStats,
+  computeJobAppraisalCoverage,
+  describeAppraisalStats,
+  isTerminalJobStatus,
+  tallyAppraisalDecisions,
+} from './appraisal-stats.js';
+export type {
+  AppraisalDecisionTally,
+  AppraisalJournalStats,
+  JobAppraisalCoverage,
+  JobAppraisalCoverageRow,
+} from './appraisal-stats.js';
+/**
  * 記憶をクローンの文脈へ載せる形。**器（storage-fs / storage-pg）もここを使う** —
  * 器ごとに書いた結果、実際に食い違ったことがある（`memory.ts` の冒頭）。
  */
@@ -343,6 +361,22 @@ export {
   matchesJournalSearch,
   type JournalSearchTarget,
 } from './journal-search.js';
+/**
+ * 日誌をページ単位で読み継ぐ足場（issue #1283）。`JournalStore.list()` を
+ * `limit` なしで呼ぶと pg 実装が `Number.MAX_SAFE_INTEGER` を渡す
+ * （`journal.ts` の `limit ?? Number.MAX_SAFE_INTEGER`）ので、窓の中身が
+ * 多い日に1クエリで全件をヒープへ載せて落ちる（実測: ある1日で約247万行・
+ * 約1.4GB）。**この足場自身も1ページぶんより多くを同時に持たない**——
+ * 呼び出し側（`digest.ts` / `distill-gap.ts`）が畳んだ結果だけを残す形に
+ * すれば、ヒープは有界のまま保てる（`journal-scan.ts` の doc）。
+ */
+export {
+  JOURNAL_SCAN_PAGE_SIZE,
+  scanJournalPages,
+  type JournalScanOptions,
+  type JournalScanPageHandler,
+  type JournalScanResult,
+} from './journal-scan.js';
 /**
  * 蒸留が間に合わなかった区間（＝記憶へ移らなかった区間）の検出（issue #564 の (b)）。
  * **「蒸留を始めた」ではなく「蒸留が成功で終わった」記録で数える** — 開始で数えると、
