@@ -1133,6 +1133,58 @@ describe('staleRun の連なりの終わり（#1384）', () => {
     expect(afterRotateEntry?.text).not.toContain('終わった');
   });
 
+  it('parked にした瞬間も staleRun をリセットするので、次の stale で同じ連なりの終わりを二重に出さない', async () => {
+    // **`rotated` の歯（直上）と同じ筋書きを `parked` の経路で通す。** 経路2は
+    // `finishSweep` の `rotated` と `parked` の2分岐にそれぞれ `staleRun = null` を
+    // 持つので、片方の歯だけでは、もう片方のリセットが外れても赤くならない。
+    // 足場は「先頭へ戻らない」の歯（`tok-a` は冷却なし・`tok-b` は冷却中 →
+    // `parked` で `tok-b` を指名する）をそのまま使い、現役の世代だけを 2 にして、
+    // 古い世代 1 の観測を stale として送れるようにした。
+    const h = harness();
+    await h.stores.tokens.replace([
+      { id: 'tok-a', label: 'first', value: 'value-a', order: 0 },
+      {
+        id: 'tok-b',
+        label: 'second',
+        value: 'value-b',
+        order: 1,
+        cooldownUntil: Date.parse(AT) + 5_000,
+      },
+    ]);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 2, rotatedAt: AT });
+
+    // 現役（tok-a/2）に対して、古い世代（tok-a/1）を名乗る stale を5件。
+    for (let i = 0; i < 5; i++) {
+      const outcome = await h.rotator.observe({
+        notice: reached,
+        observedBy: { tokenId: 'tok-a', generation: 1 },
+      });
+      expect(outcome).toMatchObject({ kind: 'ignored', freshness: 'stale', staleRun: i + 1 });
+    }
+
+    // 現役（tok-a/2）を名乗る観測が届き、`parked` になる（tok-b を指名）。ここで
+    // 「計5件」の終わりの一文が出て、`staleRun` はリセットされる。
+    const parked = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 2 },
+    });
+    expect(parked.kind).toBe('parked');
+    if (parked.kind !== 'parked') return;
+    expect(tokenRotationEntry(parked)?.text).toContain('計5件');
+
+    // 新しい現役に対する1件目の stale（直前の現役 tok-a/2 を名乗る）。**リセットが
+    // 効いていれば、ここには「計5件」の終わりの一文はもう一度出ない。**
+    const afterPark = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 2 },
+    });
+    expect(afterPark).toMatchObject({ kind: 'ignored', freshness: 'stale', staleRun: 1 });
+    const afterParkEntry = tokenRotationEntry(afterPark);
+    expect(afterParkEntry?.text).toContain('1件目');
+    expect(afterParkEntry?.text).not.toContain('計5件');
+    expect(afterParkEntry?.text).not.toContain('終わった');
+  });
+
   it('陽性対照: 連なりが1件だけで終わっても、1件目の行と「計1件」の終わりの一文の両方が出る', async () => {
     const h = harness();
     await seedTwo(h);
