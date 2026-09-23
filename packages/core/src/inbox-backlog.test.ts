@@ -376,7 +376,23 @@ describe('inboxCollapseKey（Issue #954 続き。`Clone#post()` が受信箱で�
     expect(inboxCollapseKey(a)).toBeDefined();
   });
 
-  it('external + source: token-pool: payload が違えば別の鍵（陰性対照）', () => {
+  /**
+   * ⚠️ **この2つの payload は、Issue #1298 が名指しした実際の壊れ方と
+   * 同じ形である**（`describeReopenedTokenNotice` が畳んだ件数を本文へ
+   * 焼き込む結果、同じ出来事でも文言だけが変わる）。**それでもこの
+   * テストの期待値（別の鍵）は反転させていない**——`identity` を渡して
+   * いない（この2つのイベントは `identity` フィールドを持たない）ので、
+   * これは #1298 が新設した opt-in の欄（`event.identity`）を使わない
+   * ときの**後方互換の挙動**であり、直した後もここは変わらない。
+   *
+   * **#1298 の実際の直しは、この関数の既定の挙動を変えることではなく、
+   * `apps/daemon/src/index.ts` の `wake()` が `identity` を渡すようにした
+   * ことである。** 同じシナリオ（同じトークン・同じ `how`、folded だけが
+   * 違う）に `identity` を足すと畳まれることは、直後の
+   * 「#1298 が直った後: identity が同じなら folded だけが違っても同じ鍵」
+   * が示す。
+   */
+  it('external + source: token-pool: payload が違えば別の鍵（陰性対照。identity 省略時の後方互換）', () => {
     const a: InboxEvent = {
       type: 'external',
       id: 'id-a',
@@ -388,6 +404,65 @@ describe('inboxCollapseKey（Issue #954 続き。`Clone#post()` が受信箱で�
       ...a,
       id: 'id-b',
       payload: { text: '（この間に同じ合図が5件届き、1件にまとめた）' },
+    };
+    expect(inboxCollapseKey(a)).not.toBe(inboxCollapseKey(b));
+  });
+
+  it('#1298 が直った後: identity が同じなら、folded だけが違う payload でも同じ鍵（畳まれる）', () => {
+    const a: InboxEvent = {
+      type: 'external',
+      id: 'id-a',
+      at: '2026-09-11T00:00:00.000Z',
+      source: DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+      payload: { text: '（この間に同じ合図が3件届き、1件にまとめた）' },
+      identity: 'tok-a:また通るようになった',
+    };
+    const b: InboxEvent = {
+      ...a,
+      id: 'id-b',
+      payload: { text: '（この間に同じ合図が5件届き、1件にまとめた）' },
+      identity: 'tok-a:また通るようになった',
+    };
+    expect(inboxCollapseKey(a)).toBe(inboxCollapseKey(b));
+    expect(inboxCollapseKey(a)).toBeDefined();
+    // 計器側（`inboxBacklogDedupeKey`）も同じでなければならない——制御の鍵と
+    // 計器の鍵が違う入力に対して食い違うと、#783 が名指しした「増える側と
+    // 減る側が食い違う」形をこの関数自身が再現することになる。
+    expect(inboxBacklogDedupeKey(a)).toBe(inboxBacklogDedupeKey(b));
+  });
+
+  it('#1298 陰性対照: identity が違えば（tokenId が違う）別の鍵のまま', () => {
+    const a: InboxEvent = {
+      type: 'external',
+      id: 'id-a',
+      at: '2026-09-11T00:00:00.000Z',
+      source: DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+      payload: { text: '認証トークンが通る状態に戻った（また通るようになった）: 「A」' },
+      identity: 'tok-a:また通るようになった',
+    };
+    const b: InboxEvent = {
+      ...a,
+      id: 'id-b',
+      payload: { text: '認証トークンが通る状態に戻った（また通るようになった）: 「B」' },
+      identity: 'tok-b:また通るようになった',
+    };
+    expect(inboxCollapseKey(a)).not.toBe(inboxCollapseKey(b));
+  });
+
+  it('#1298 陰性対照: identity が違えば（how が違う）別の鍵のまま', () => {
+    const a: InboxEvent = {
+      type: 'external',
+      id: 'id-a',
+      at: '2026-09-11T00:00:00.000Z',
+      source: DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+      payload: { text: '認証トークンが通る状態に戻った（回した）' },
+      identity: 'tok-a:回した',
+    };
+    const b: InboxEvent = {
+      ...a,
+      id: 'id-b',
+      payload: { text: '認証トークンが通る状態に戻った（また通るようになった）' },
+      identity: 'tok-a:また通るようになった',
     };
     expect(inboxCollapseKey(a)).not.toBe(inboxCollapseKey(b));
   });

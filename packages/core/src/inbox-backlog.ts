@@ -433,23 +433,35 @@ const DEDUPE_SEPARATOR = '\u0000';
  *   キー順に依存する。** 同じコード経路（同じ webhook ハンドラなど）が作った
  *   同形のオブジェクトなら安定するが、一般には保証されない——キー順が違う
  *   同じ中身の2件を、ここでは「別の本文」として数えることがある
- * - **⚠️ 逆向き（`distinct` が実際より大きく出る）経路も実在する。** 上の
- *   偏り（衝突による「小さく出る」向き）は片側の話であって、`external` では
- *   もう一方向も起きる——`token-pool` が発行する「認証トークンが通る状態に
- *   戻った」合図は、`payload.text` の**本文そのもの**に畳んだ件数を焼き込む
+ * - **⚠️（歴史的経緯。#1298 で token-pool は直った）逆向き（`distinct` が
+ *   実際より大きく出る）経路も実在した。** 上の偏り（衝突による「小さく
+ *   出る」向き）は片側の話であって、`external` ではもう一方向も起きて
+ *   いた——`token-pool` が発行する「認証トークンが通る状態に戻った」合図は、
+ *   `payload.text` の**本文そのもの**に畳んだ件数を焼き込む
  *   （`apps/daemon/src/index.ts` の `payload: { text:
  *   describeReopenedTokenNotice(reopened, decision.folded) }` と、
  *   `describeReopenedTokenNotice` が `folded > 0` のとき本文へ
  *   `（この間に同じ合図が N 件届き、1件にまとめた）` を足す形——両方とも
  *   同ファイル）。**同じ「戻った」という出来事でも、畳んだ件数 N が違えば
- *   `payload.text` が文字どおり異なる文字列になり、鍵も別になる**——これは
- *   区切り文字の衝突ではなく、`external.payload` の中身自体が畳み込みの
- *   件数に依存して変わるために起きる。滞留の多くを占める
- *   `external:token-pool`（Issue #783 の約78%）ではこの経路が現実に効く。
- *   **⚠️ ただし「必ず大きく出る」ではない**——畳んだ件数が同じ2件は同じ鍵に
- *   なるので、向きは標本（そのとき何件畳まれていたか）に依存する。**言える
- *   のは「`distinct` は小さく出る方向にも大きく出る方向にも偏りうる」まで
- *   であって、どちらか一方だけを警告するのは片手落ちである**
+ *   `payload.text` が文字どおり異なる文字列になり、鍵も別になっていた**
+ *   ——これは区切り文字の衝突ではなく、`external.payload` の中身自体が
+ *   畳み込みの件数に依存して変わるために起きていた。滞留の多くを占める
+ *   `external:token-pool`（Issue #783 の約78%）ではこの経路が現実に効いて
+ *   いた（#1298 の実測: `folded` を 4〜9 まで振った6件で `inboxCollapseKey`
+ *   の異なり数が6——1件も畳めなかった。本番 DB の実測ではなく、コードから
+ *   実際の関数を呼んだ実測である）。
+ *   **⟹ #1298 で `event.identity`（{@link InboxEvent} の `external` 分岐。
+ *   下の {@link inboxBacklogDedupeKey} の `external` 分岐を見よ）という
+ *   opt-in の欄を足し、`describeReopenedTokenNotice` を呼ぶ側
+ *   （`apps/daemon/src/index.ts` の `wake()`）がこれを立てるようにした
+ *   ——立てている送信元では、畳んだ件数がいくつでも `payload` の中身に
+ *   関係なく同じ鍵になる。** **`identity` を立てていない送信元（webhook・
+ *   `runner-registry` など）は、いまもこの偏りをそのまま持つ**——直したのは
+ *   token-pool の1経路だけで、`external.payload` を鍵に使うという設計自体は
+ *   変えていない。
+ * - **`distinct` の偏りの向き（小さく出る／大きく出る）を判断する前に、
+ *   対象の送信元が `identity` を立てているかを確認すること。** 立てて
+ *   いれば上の「大きく出る」経路はもう効かない。
  */
 export function inboxBacklogDedupeKey(event: InboxEvent): string {
   switch (event.type) {
@@ -460,9 +472,15 @@ export function inboxBacklogDedupeKey(event: InboxEvent): string {
     case 'manager_message':
       return [event.type, event.managerId, event.kind, event.text].join(DEDUPE_SEPARATOR);
     case 'external':
-      return [event.type, event.source, JSON.stringify(event.payload ?? null)].join(
-        DEDUPE_SEPARATOR,
-      );
+      // **`identity` が在れば最優先（#1298）。** 発行元が渡す安定した身元が
+      // あるなら、`payload` の中身（畳んだ件数などで揺れうる）を鍵に含める
+      // 理由が無い。無ければこれまでどおり `payload` の `JSON.stringify`
+      // （上の doc の限界がそのまま効く）。
+      return [
+        event.type,
+        event.source,
+        event.identity ?? JSON.stringify(event.payload ?? null),
+      ].join(DEDUPE_SEPARATOR);
     case 'timer':
       return [event.type, event.kind, event.target ?? '', event.cause ?? 'schedule'].join(
         DEDUPE_SEPARATOR,
@@ -531,13 +549,31 @@ export function inboxBacklogDedupeKey(event: InboxEvent): string {
  *   `inboxBacklogDedupeKey` の doc「なぜ1箇所に閉じるか」が名指しした #783
  *   の症状の形そのものを、この関数自身が再現することになる。
  * - **`external`（`isDaemonSelfNotice` が真のときだけ）**: 軸は `source` +
- *   `payload`。{@link inboxBacklogDedupeKey} の `external` 分岐と同じ2項
- *   だが、**ここでは委譲しない**——あちらは `JSON.stringify` の失敗（循環
- *   参照など）をそのまま投げる作りで、計器（`summarizeInboxBacklog`）の
- *   純関数としてはそれでよい（呼び出し側が全部 try 済みの行しか渡さない）が、
- *   こちらは `Clone#post()` から同期で直接呼ばれる制御の鍵なので、投げると
- *   `post()` 自体が落ちる——だから直列化できない場合は「畳まない」側へ
- *   フェイルオープンする（下の実装）。
+ *   `identity`（在れば）または `source` + `payload`。{@link
+ *   inboxBacklogDedupeKey} の `external` 分岐と同じ優先順位だが、**ここでは
+ *   委譲しない**——あちらは `JSON.stringify` の失敗（循環参照など）をそのまま
+ *   投げる作りで、計器（`summarizeInboxBacklog`）の純関数としてはそれでよい
+ *   （呼び出し側が全部 try 済みの行しか渡さない）が、こちらは `Clone#post()`
+ *   から同期で直接呼ばれる制御の鍵なので、投げると `post()` 自体が落ちる
+ *   ——だから直列化できない場合は「畳まない」側へフェイルオープンする
+ *   （下の実装）。**`identity` が在れば、そもそも `JSON.stringify` を呼ばない
+ *   ので、この直列化の失敗も起きない**（`identity` は既に文字列である）。
+ *
+ * ## `identity`（Issue #1298）
+ *
+ * **`payload` 丸ごとを鍵にすると、`token-pool` の「認証トークンが通る状態に
+ * 戻った」合図は畳めなかった。** `describeReopenedTokenNotice`
+ * （`apps/daemon/src/index.ts`）は畳んだ件数を表示用の本文
+ * （`payload.text`）へ焼き込むので、同じ出来事（同じトークン・同じ `how`）
+ * でも件数が違えば `payload` が別物になり、この関数が返す鍵も別になって
+ * いた——**畳み込みのために足した前置きが、下流の畳み込みを壊していた**
+ * （#1298 の実測: `folded` を振った6件で鍵の異なり数が6、つまり1件も畳めて
+ * いなかった）。**`event.identity`（`InboxEvent` の `external` 分岐。
+ * {@link InboxEvent} の doc）は、この揺れを鍵から追い出すための欄**——
+ * 発行元（`wake()`）が `deliveredIdentity(reopened)`（トークン id × `how`。
+ * 畳んだ件数を含まない）を渡すことで、`folded` がいくつでも同じ鍵になる。
+ * **本文は1文字も変えていない**——`payload.text` はこれまでどおり畳んだ件数
+ * を含んだままで、鍵の計算だけが `payload` を見なくなる。
  *
  * ## この鍵の用途は「畳む・畳まない」の制御であって、計器ではない
  *
@@ -561,6 +597,13 @@ export function inboxCollapseKey(event: InboxEvent): string | undefined {
   if (event.type === 'manager_message') return inboxBacklogDedupeKey(event);
 
   if (event.type === 'external' && isDaemonSelfNotice(event)) {
+    // **`identity` が在れば最優先（#1298）。** 発行元が渡す安定した身元が
+    // あるなら、畳んだ件数などで揺れうる `payload` を鍵に含める理由が無い
+    // ——`JSON.stringify` そのものを呼ばない（doc の「`identity` が在れば
+    // …直列化の失敗も起きない」）。
+    if (event.identity !== undefined) {
+      return [event.type, event.source, event.identity].join(DEDUPE_SEPARATOR);
+    }
     let serializedPayload: string;
     try {
       serializedPayload = JSON.stringify(event.payload ?? null);

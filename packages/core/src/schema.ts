@@ -490,6 +490,37 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
     source: z.string(),
     /** 中身のない通知（source だけが届く）もあるので省略できる。 */
     payload: z.unknown().optional(),
+    /**
+     * **畳み込みの鍵に使う、発行元が渡す安定した身元（Issue #1298）。**
+     *
+     * ## 何のためにあるか
+     *
+     * `inboxBacklogDedupeKey` / `inboxCollapseKey`（`inbox-backlog.ts`）の
+     * `external` 分岐は、この欄が無ければ `payload` を丸ごと
+     * `JSON.stringify` して鍵にする。alteroid 自身が合成する通知
+     * （`isDaemonSelfNotice` が真を返すもの）の中には、表示用の本文に
+     * 畳んだ件数を焼き込むものがある
+     * （`apps/daemon/src/index.ts` の `describeReopenedTokenNotice`）。
+     * `payload` 丸ごとを鍵にすると、**同じ出来事でも畳んだ件数が違うだけで
+     * 別の鍵になり、下流の畳み込みが1件も効かなくなる**（#1298 の本体）。
+     * **この欄を立てれば、`payload` の中身に関係なくこの文字列だけが鍵に
+     * なる**——表示用の本文（`payload.text`）は一文字も変えずに済む。
+     *
+     * ## 省略時
+     *
+     * 省略すれば、これまでどおり `payload` の `JSON.stringify` で鍵を作る
+     * （後方互換。既存の `external` 送信元はすべてこちらのまま）。
+     *
+     * ## 外部からは立てられない
+     *
+     * `POST /events` / `POST /events/:source`（`apps/daemon/src/app.ts`）の
+     * `eventBody` が受け取るのは `source` / `payload` だけで、この欄は
+     * リクエストボディに含めても読まれない。**⟹ この欄を立てられるのは
+     * デーモン自身が `clone.post()` を直接呼ぶ経路だけ**であり、
+     * `isDaemonSelfNotice` の doc が既に払っている「`source` は自由文字列
+     * なので外部が名乗れる」という代償を広げるものではない。
+     */
+    identity: z.string().optional(),
   }),
   z.object({
     type: z.literal('self_initiative'),

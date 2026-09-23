@@ -7365,26 +7365,40 @@ describe('クローン — 枠の回復予定時刻（resetsAt）より前は再
 });
 
 /**
- * **`Clone#post()` を実際に通した陽性対照（Issue #1298。直す前）。**
+ * **`Clone#post()` を実際に通した検証（Issue #1298）。**
  *
  * `inboxCollapseKey`（`inbox-backlog.ts`）の `external` 分岐は、
  * `isDaemonSelfNotice` が真の合図（token-pool の復帰通知など）を `source` +
- * `payload` の丸ごと `JSON.stringify` で鍵にする。`describeReopenedTokenNotice`
+ * `payload` の丸ごと `JSON.stringify` で鍵にしていた。`describeReopenedTokenNotice`
  * （`apps/daemon/src/index.ts`）は畳んだ件数を本文（`payload.text`）へ焼き
  * 込むので、**同じトークン・同じ `how`（同じ出来事）でも畳んだ件数が違うだけで
- * `payload` が別物になり、鍵も別になる**——`Clone#post()` は2件とも新しい行と
- * して受信箱へ積む（1件も畳まない）。
+ * `payload` が別物になり、鍵も別になっていた**——`Clone#post()` は2件とも新しい
+ * 行として受信箱へ積んでいた（1件も畳まれない）。
  *
- * この歯はまだ直っていない状態（`payload` だけで鍵を作る）を実際に
- * `Clone#post()` へ通して確かめる——`inbox-backlog.test.ts` の「external +
- * source: token-pool: payload が違えば別の鍵（陰性対照）」が鍵関数だけを
- * 単体で確かめているのに対し、こちらは受信箱に実際に何行残るかまで見る。
+ * **⚠️ 最初の1本目（「陽性対照（直す前）」）はこの状態を実際に `Clone#post()` へ
+ * 通して固定していた**（コミット `4dffdb0`。`event.identity` を足す前）。
+ * `inbox-backlog.test.ts` の「external + source: token-pool: payload が違えば
+ * 別の鍵（陰性対照）」が鍵関数だけを単体で確かめているのに対し、こちらは
+ * 受信箱に実際に何行残るかまで見ていた。
  *
- * **直した後にどうするか。** #1298 の直し（`event.identity` という opt-in の
- * 欄を鍵の優先入力にする）が入ったら、この歯は「`identity` を渡さなければ
- * いまも別行として積まれる（後方互換）」と「`identity` を渡せば畳まれる」の
- * 両方を見る形に更新する——テストを消さず、期待値をここに追記する形で反転
- * させる（AGENTS.md「テストを弱めずに直す」の反転の条件）。
+ * **⟹ 直した（このコミット）。** `event.identity`（{@link InboxEvent} の
+ * `external` 分岐）という opt-in の欄を鍵の優先入力にし、`wake()`
+ * （`apps/daemon/src/index.ts`）が `deliveredIdentity(reopened)` をそこへ渡す
+ * ようにした。**この歯はテストを消さず、期待値を反転させる形で更新した**
+ * （AGENTS.md「テストを弱めずに直す」の反転の条件）——
+ *
+ * 1. **変更した事実**: 「陽性対照（直す前）」は「`identity` を渡さない場合
+ *    （後方互換）」として残し、期待値（2行のまま積まれる）はそのまま維持した
+ *    ——`identity` を渡さない送信元（webhook・`runner-registry`）の挙動は
+ *    1文字も変えていないので、ここは反転していない。
+ * 2. **なぜ必要になったか**: 上の doc のとおり、`payload` 丸ごとを鍵にすると
+ *    畳んだ件数の違いだけで同じ出来事が別々に積まれ、受信箱の滞留の主因に
+ *    なっていた（#1298 本文・#783 の実測）。
+ * 3. **なぜ保証が弱くなっていないか**: 新しく足した「`identity` を渡せば
+ *    畳まれる」は既存のアサーションを1つも緩めておらず、**むしろ増やしている**
+ *    ——畳んだ後も受信箱に合図が1件残ること・畳んだこと自体の跡（見分けを
+ *    含む）が消えずに日誌へ残ること・別のトークン／別の `how` は依然として
+ *    畳まれないこと（下の「陰性対照」）を新たに固定した。
  */
 describe('クローン — token-pool の復帰通知: 畳んだ件数だけが違う2通の扱い（Issue #1298）', () => {
   const FUTURE_RESETS_AT_MS = () => Date.now() + 60 * 60 * 1000;
@@ -7397,29 +7411,46 @@ describe('クローン — token-pool の復帰通知: 畳んだ件数だけが�
     });
   }
 
+  /** 隣の describe（Issue #1240 続き）と同じ形（このファイルでの慣習）。 */
+  async function releaseAttemptCount(s: Setup): Promise<number> {
+    const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[];
+    return exchanges.filter((entry) => entry.text.includes('枠の解除を試す')).length;
+  }
+
   /**
    * `describeReopenedTokenNotice`（`apps/daemon/src/index.ts`）が実際に返す
    * 本文の形をそのまま真似る——base に、`folded > 0` のときだけ件数の前置きが
    * 付く。**同じトークン・同じ `how` なら `tokenId` / `how` は固定**にして
    * ある——ここで動かすのは `folded` だけであり、それが「同じ出来事」の
-   * 条件である。
+   * 条件である。**`identity` は省略可能**（渡さなければ #1298 の直る前と
+   * 同じ形——`apps/daemon/src/index.ts` の `deliveredIdentity` が実際に返す
+   * 形を模した固定文字列を渡せば、直った後の形になる）。
    */
-  function tokenPoolReopenedNotice(id: string, folded: number): InboxEvent {
+  function tokenPoolReopenedNotice(
+    id: string,
+    folded: number,
+    options?: { readonly tokenId?: string; readonly how?: string; readonly identity?: string },
+  ): InboxEvent {
+    const tokenId = options?.tokenId ?? 'tok-a';
+    const how = options?.how ?? 'また通るようになった';
     const base =
-      '認証トークンが通る状態に戻った（また通るようになった）: ' +
-      '「本命」（id tok-a）。枠で止まっていた仕事は、ここから再開できる。';
+      `認証トークンが通る状態に戻った（${how}）: ` +
+      `「本命」（id ${tokenId}）。枠で止まっていた仕事は、ここから再開できる。`;
     const text =
-      folded <= 0 ? base : `${base}（この間に同じ合図が ${String(folded + 1)} 件届き、1件にまとめた）`;
+      folded <= 0
+        ? base
+        : `${base}（この間に同じ合図が ${String(folded + 1)} 件届き、1件にまとめた）`;
     return {
       type: 'external',
       id,
       at: new Date().toISOString(),
       source: DAEMON_TOKEN_POOL_REOPENED_SOURCE,
       payload: { text },
+      ...(options?.identity !== undefined ? { identity: options.identity } : {}),
     };
   }
 
-  it('陽性対照（直す前）: folded だけが違う2通は別の行として積まれる（畳まれない）', async () => {
+  it('陽性対照（直す前）: identity を渡さなければ、folded だけが違う2通は別の行のまま（後方互換）', async () => {
     const s = setupRateLimited(FUTURE_RESETS_AT_MS());
     s.clone.post(humanMessage('一件目'));
     await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
@@ -7436,12 +7467,140 @@ describe('クローン — token-pool の復帰通知: 畳んだ件数だけが�
       '2件目（folded=7）が受信箱に積まれる',
     );
 
-    // ⚠️ #1298 の本体: 同じトークン・同じ `how`（同じ出来事）なのに、
-    // `folded` が 4 と 7 で違うだけで `payload.text` が別物になり、
-    // `inboxCollapseKey` が別の鍵を返す ⟹ 2件とも受信箱に残る。
+    // `identity` を渡していない送信元（webhook・`runner-registry` など）は
+    // #1298 の直しの影響を受けない——同じトークン・同じ `how` でも `folded`
+    // が違えば `payload.text` が別物になり、`inboxCollapseKey` が別の鍵を
+    // 返す ⟹ 2件とも受信箱に残る。
     const pending = await s.stores.inbox.peekPending();
     const reopenRows = pending.filter(
       (p) => p.event.id === 'evt-reopen-1' || p.event.id === 'evt-reopen-2',
+    );
+    expect(reopenRows).toHaveLength(2);
+
+    await s.clone.stop();
+  });
+
+  it('直った後: identity が同じなら、folded だけが違う2通は1行に畳まれる。合図は消えず、クローンは再開できる', async () => {
+    const s = setupRateLimited(FUTURE_RESETS_AT_MS());
+    s.clone.post(humanMessage('一件目'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+    const identity = '5:tok-aまた通るようになった';
+    s.clone.post(tokenPoolReopenedNotice('evt-reopen-1', 4, { identity }));
+    await waitFor(
+      async () => (await s.stores.inbox.peekPending()).some((p) => p.event.id === 'evt-reopen-1'),
+      '1件目（folded=4）が受信箱に積まれる（代表）',
+    );
+
+    s.clone.post(tokenPoolReopenedNotice('evt-reopen-2', 7, { identity }));
+    // 2件目は行としては積まれない（畳まれる）。「積まれない」ことは待てない
+    // ので、日誌に畳んだ跡が付くのを待つ（`#foldIntoPendingCollapse` の
+    // `row-folded` 分岐）。
+    await waitFor(async () => {
+      const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as {
+        text: string;
+      }[];
+      return exchanges.some((entry) => entry.text.includes('受信箱の行は増やさずに'));
+    }, '2件目が行を増やさずに畳まれた跡が日誌に付く');
+
+    // **受信箱には1行しか残らない**（#1298 が直る前は2行残っていた——上の
+    // 「陽性対照（直す前）」と対になる）。
+    const pending = await s.stores.inbox.peekPending();
+    const reopenRows = pending.filter(
+      (p) => p.event.id === 'evt-reopen-1' || p.event.id === 'evt-reopen-2',
+    );
+    expect(reopenRows).toHaveLength(1);
+    expect(reopenRows[0]?.event.id).toBe('evt-reopen-1');
+
+    // **畳んだこと自体は跡に残る（合図は消えていない）。** `#foldIntoPendingCollapse`
+    // の `row-folded` 分岐の doc が言うとおり、2件目の生の本文そのものは
+    // ここでは日誌へ書かれない——それは「束ね読み」（#841）が実際のターンの
+    // 中で書く役目であり、ここで書くと同じ本文が二重に載る（doc の逐語）。
+    // ここで確かめるのは、**畳んだという事実と、畳んだ合図の見分け
+    // （`inboxEventShape`）が跡として残ること**——「静かに消えた」との違いが
+    // ここで見える。
+    const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[];
+    const foldLines = exchanges.filter((entry) => entry.text.includes('受信箱の行は増やさずに'));
+    expect(foldLines).toHaveLength(1);
+    expect(foldLines[0]?.text).toContain('external source.chars=10 payload=yes');
+    expect(foldLines[0]?.text).toContain('本文と届いた時刻はこのあと束ね読み');
+
+    // **クローンは再開できる**——token-pool の通知は常に再武装する
+    // （`usageBlockAlwaysRearms`）ので、畳まれた2件目のぶんも含めて実際に
+    // 解除の試行（ターン）が走る。`resetsAt` はまだ先なので、この試行はまた
+    // 枠に当たって終わる——それでも「試みたこと」自体がここで見たい不変条件
+    // である（隣の describe「token-pool の復帰通知（external）は resetsAt
+    // より前でも常に再武装する」と同じ形）。
+    await waitFor(async () => (await releaseAttemptCount(s)) >= 1, '解除の試行が走る');
+
+    await s.clone.stop();
+  });
+
+  it('陰性対照: identity が同じでも tokenId が違えば別の行のまま（合図は消えない）', async () => {
+    const s = setupRateLimited(FUTURE_RESETS_AT_MS());
+    s.clone.post(humanMessage('一件目'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+    s.clone.post(
+      tokenPoolReopenedNotice('evt-reopen-a', 0, { tokenId: 'tok-a', identity: 'id-a' }),
+    );
+    await waitFor(
+      async () => (await s.stores.inbox.peekPending()).some((p) => p.event.id === 'evt-reopen-a'),
+      'トークン A の復帰通知が受信箱に積まれる',
+    );
+
+    s.clone.post(
+      tokenPoolReopenedNotice('evt-reopen-b', 0, { tokenId: 'tok-b', identity: 'id-b' }),
+    );
+    await waitFor(
+      async () => (await s.stores.inbox.peekPending()).some((p) => p.event.id === 'evt-reopen-b'),
+      'トークン B の復帰通知が受信箱に積まれる',
+    );
+
+    // **違うトークンの「戻った」は別の出来事——畳んではいけない。**
+    const pending = await s.stores.inbox.peekPending();
+    const reopenRows = pending.filter(
+      (p) => p.event.id === 'evt-reopen-a' || p.event.id === 'evt-reopen-b',
+    );
+    expect(reopenRows).toHaveLength(2);
+
+    await s.clone.stop();
+  });
+
+  it('陰性対照: 同じトークンでも how が違えば別の行のまま（根拠の強さが違うので潰さない）', async () => {
+    const s = setupRateLimited(FUTURE_RESETS_AT_MS());
+    s.clone.post(humanMessage('一件目'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+    s.clone.post(
+      tokenPoolReopenedNotice('evt-reopen-rotated', 0, {
+        how: '回した',
+        identity: 'id-回した',
+      }),
+    );
+    await waitFor(
+      async () =>
+        (await s.stores.inbox.peekPending()).some((p) => p.event.id === 'evt-reopen-rotated'),
+      '「回した」の通知が受信箱に積まれる',
+    );
+
+    s.clone.post(
+      tokenPoolReopenedNotice('evt-reopen-recovered', 0, {
+        how: 'また通るようになった',
+        identity: 'id-また通るようになった',
+      }),
+    );
+    await waitFor(
+      async () =>
+        (await s.stores.inbox.peekPending()).some((p) => p.event.id === 'evt-reopen-recovered'),
+      '「また通るようになった」の通知が受信箱に積まれる',
+    );
+
+    // **`how` は根拠の強さが違う（`ReopenedHow` の doc）——同じトークンでも
+    // 潰してはいけない。**
+    const pending = await s.stores.inbox.peekPending();
+    const reopenRows = pending.filter(
+      (p) => p.event.id === 'evt-reopen-rotated' || p.event.id === 'evt-reopen-recovered',
     );
     expect(reopenRows).toHaveLength(2);
 

@@ -689,6 +689,15 @@ export interface CloneWakeGate {
  * `scripts/check-tracked-nul-bytes.test.ts` が実際に落ちた（#260）。**⟹ 踏みようの
  * 無い形にする。** 長さを前に置けば「`a` と `b:c`」と「`a:b` と `c`」が同じ鍵へ
  * 化けないことが、値の中身への仮定なしに決まる。
+ *
+ * **呼び手は2つある（#1298 で増えた）。** 元は {@link createCloneWakeGate} の
+ * `told`（このプロセス内の再武装の判定）だけだったが、`wake()` が
+ * `clone.post(...)` へ渡す `payload.identity`（{@link InboxEvent} の
+ * `external` 分岐）にもそのまま使う——受信箱側の畳み込み（`inbox-backlog.ts`
+ * の `inboxCollapseKey`）が「畳んだ件数に関係なく同じ出来事か」を判定する
+ * 鍵として。**どちらも「`(tokenId, how)` が同じか」を問うている**ので、
+ * 実装を複製せず1つの関数を両方の呼び手が呼ぶ（`inboxBacklogDedupeKey` の
+ * doc「なぜ1箇所に閉じるか」と同じ理由）。
  */
 function deliveredIdentity(reopened: ReopenedToken): string {
   return `${String(reopened.tokenId.length)}:${reopened.tokenId}${reopened.how}`;
@@ -1731,6 +1740,14 @@ export async function main(): Promise<void> {
             at: new Date().toISOString(),
             source: TOKEN_POOL_REOPENED_SOURCE,
             payload: { text: describeReopenedTokenNotice(reopened, decision.folded) },
+            // **畳み込みの鍵を `payload` から独立させる（#1298）。**
+            // `payload.text` は畳んだ件数（`decision.folded`）を含むので、
+            // それを鍵に使うと同じ出来事でも件数が違うだけで別の鍵になり、
+            // 受信箱側の畳み込み（`inboxCollapseKey`）が1件も効かなかった。
+            // `deliveredIdentity` は `(tokenId, how)` だけの安定した身元
+            // ——`CloneWakeGate` が「配達済みの合図と同じか」を見るのに
+            // 既に使っている同じ関数を、鍵の側にもそのまま渡す。
+            identity: deliveredIdentity(reopened),
           });
         }
         // **ここから下はクローンの門と無関係——常に呼ぶ。** マネージャーは

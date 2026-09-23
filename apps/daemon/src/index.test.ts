@@ -802,6 +802,30 @@ describe('クローンの門は clone.post だけを絞る（restore / resumeSto
     expect(postAt).toBeLessThan(restoreAt);
     expect(restoreAt).toBeLessThan(resumeAt);
   });
+
+  /**
+   * **`clone.post(...)` が `identity` を渡すこと**（Issue #1298）。
+   *
+   * `payload.text` は畳んだ件数（`decision.folded`）を含むので、それを
+   * 受信箱側の畳み込み（`inboxCollapseKey`）の鍵に使うと同じ出来事でも
+   * 件数が違うだけで別の鍵になる（#1298 本体）。`event.identity` という
+   * opt-in の欄（`schema.ts` の `external` 分岐）を鍵の優先入力にしたので、
+   * `wake()` 側がこれを実際に渡していることを原文で固定する——渡し忘れは
+   * 型では落ちない（`identity` は optional なので、無くても `InboxEvent`
+   * として妥当）。
+   */
+  it('clone.post は identity に deliveredIdentity(reopened) を渡す', () => {
+    const postAt = wakeBody.indexOf('clone.post({');
+    const postEnd = wakeBody.indexOf('\n          });', postAt);
+    const postBlock = wakeBody.slice(postAt, postEnd);
+
+    expect(
+      missingAnchors(postBlock, [
+        'payload: { text: describeReopenedTokenNotice(reopened, decision.folded) },',
+        'identity: deliveredIdentity(reopened),',
+      ]),
+    ).toEqual([]);
+  });
 });
 
 /**
