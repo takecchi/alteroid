@@ -325,8 +325,7 @@ describe('クローンの道具に渡した引数は、長さと位置によら�
     const response = await rpc.call('tools/list', {});
     const tools = (response['result'] as { tools: { name: string; inputSchema: unknown }[] }).tools;
     const schema = tools.find((t) => t.name === 'journal_write')?.inputSchema as
-      | { required?: string[]; properties?: Record<string, unknown> }
-      | undefined;
+      { required?: string[]; properties?: Record<string, unknown> } | undefined;
 
     expect(schema?.required).toEqual(['decision']);
     // **欄そのものは消していない（能力の削除にしない）。** 任意になっただけで、
