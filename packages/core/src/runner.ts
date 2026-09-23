@@ -2481,6 +2481,11 @@ class RunnerSession {
     // 崩れる。先に読ませてから、読み終わった後で捨てる。
     this.#closeWorkerWaitWindow();
     this.#openTasks.clear();
+    // **このターンで開いた作業者の数（#1373）も、同じ理由で持ち越さない。**
+    // この経路は `turn_ended` を通らないので、あちらの読み出しと空への
+    // 戻しが走らない。ここで捨てないと、前のセッションで開いた作業者が
+    // 次のセッションの最初のターンの数に入る。
+    this.#openedWorkersThisTurn = new Set();
 
     const record = renderSessionLog(this.#seed);
     if (record === null) {
