@@ -235,8 +235,10 @@ const EXPECTED_SITE_COUNT: Record<string, number> = {
   // main へ合流した後に振り分けて kind 接頭辞を付けた——除外リストには
   // 入れない、というマネージャーの方針転換に合わせた）
   // + 1（issue #1425 が `case 'rate_limit'` に足した、跨いで畳んだ本数の
-  // flush。`EXCHANGE_KIND_GAUGE_PREFIX` を使うので接頭辞は既に付いている）。
-  'clone.ts': 44,
+  // flush。`EXCHANGE_KIND_GAUGE_PREFIX` を使うので接頭辞は既に付いている）
+  // + 2（issue #903 続きが足した `#journalRestoreUnreadPassStart` /
+  // `#journalRestoreUnreadPassEnd`。どちらも `[計器]` = `EXCHANGE_KIND_GAUGE_PREFIX` を書く）。
+  'clone.ts': 46,
   // 40（issue #1332 起票時点） + 1（issue #1425 が `case 'rate_limit'` に
   // 足した、跨いで畳んだ本数の flush。同じく `EXCHANGE_KIND_GAUGE_PREFIX`）。
   'manager.ts': 41,

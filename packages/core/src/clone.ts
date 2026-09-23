@@ -6389,13 +6389,25 @@ class Clone implements CloneHost {
       .slice(0, processed)
       .filter((entry) => entry.verdict === 'stale').length;
     const liveCount = processed - staleCount;
-    const text = context.interrupted
-      ? `${EXCHANGE_KIND_GAUGE_PREFIX}未読の拾い直しを中断した（#stopped または #inbox.closed。` +
-        `総数 ${total} 件のうち ${processed} 件を処理した＝内訳 stale ${staleCount} 件・` +
-        `live ${liveCount} 件。残り ${total - processed} 件は次の起動で拾い直す）`
-      : `${EXCHANGE_KIND_GAUGE_PREFIX}未読の拾い直しが終わった（総数 ${total} 件のうち ${processed} 件を` +
-        `処理した＝内訳 stale ${staleCount} 件・live ${liveCount} 件）`;
-    await this.#journal({ type: 'exchange', with: 'self', role: 'outbound', text });
+    // **接頭辞の参照はここ（`#journal` 呼び出しの `text:` フィールド）に
+    // 直接書く。** `exchange-kind-coverage.test.ts` の静的な網羅性の歯は
+    // ソースを走査して `text:` フィールドの値が `EXCHANGE_KIND_*_PREFIX`
+    // 定数名を**文字として**含むかを見る——実行時にどの分岐を通っても
+    // 値が同じ接頭辞で始まることは、この歯にとっては見えない（変数に
+    // 一度だけ計算してから `text` の短縮記法で渡すと、定数名がこの
+    // 呼び出しの引数の中に一度も現れず、この歯を静かに素通りする。
+    // 実測——最初の版はこの形で書いていて、この歯を赤くした）。
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text: context.interrupted
+        ? `${EXCHANGE_KIND_GAUGE_PREFIX}未読の拾い直しを中断した（#stopped または #inbox.closed。` +
+          `総数 ${total} 件のうち ${processed} 件を処理した＝内訳 stale ${staleCount} 件・` +
+          `live ${liveCount} 件。残り ${total - processed} 件は次の起動で拾い直す）`
+        : `${EXCHANGE_KIND_GAUGE_PREFIX}未読の拾い直しが終わった（総数 ${total} 件のうち ${processed} 件を` +
+          `処理した＝内訳 stale ${staleCount} 件・live ${liveCount} 件）`,
+    });
   }
 
   /**
