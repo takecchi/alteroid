@@ -55,6 +55,16 @@ export interface TokenSpreadResult {
   ok: boolean;
   /** 失敗した理由。**トークンの値を含めないこと。** */
   error?: string;
+  /**
+   * **配布そのものの失敗ではなく、まだ相手が居ないだけ**（true のとき）。
+   *
+   * 例: 繋がっている runner が1台も無いので撒けなかった場合——後から runner が
+   * 繋がれば `createRunnerTokenSync` が追いつかせるので無害である。**配布を試みて
+   * 実際に落ちた**（例: runner が応答しない）場合と区別が付かないと、日誌の
+   * 読み手が両方を同じ重さの失敗として誤読する（#1383）。`describeSpread` は
+   * これを見て、配布の失敗と同じ文言（「置けなかった」）を使わない。
+   */
+  selfHealing?: boolean;
 }
 
 /**
@@ -1916,6 +1926,11 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
  *
  * 「2台のうち1台だけ落ちた」を消さないために、**成功だけを数えて `2/3` のように
  * 書かない** —— どれが落ちたのかが読めなくなる。落ちた先は名前と理由をそのまま出す。
+ *
+ * **配布そのものの失敗（`selfHealing` が無い）と、相手が居ないだけの失敗
+ * （`selfHealing: true`）は、別の文言で出す**（#1383）。同じ「置けなかった」で
+ * 出すと、日誌の読み手が「配布を試みて落ちた」と「まだ相手が居ない（自己修復
+ * する）」を同じ重さの失敗として誤読する。
  */
 function describeSpread(results: readonly TokenSpreadResult[]): string {
   if (results.length === 0) return '撒いた先: 無し';
@@ -1924,6 +1939,12 @@ function describeSpread(results: readonly TokenSpreadResult[]): string {
   const parts: string[] = [];
   if (ok.length > 0) parts.push(`置けた: ${ok.join(', ')}`);
   for (const result of failed) {
+    if (result.selfHealing === true) {
+      parts.push(
+        `**相手が居ないだけ: ${result.target}**（${result.error ?? '理由不明'}。自己修復する）`,
+      );
+      continue;
+    }
     parts.push(`**置けなかった: ${result.target}**（${result.error ?? '理由不明'}）`);
   }
   return parts.join(' / ');

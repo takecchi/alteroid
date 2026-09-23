@@ -152,10 +152,16 @@ export function createTokenSpread(options: TokenSpreadOptions): TokenSpreadPort 
       if (clients.length === 0) {
         // **「撒く先が無い」を成功に畳まない。** 畳むと、runner が1台も繋がって
         // いない状態で「回した」だけが日誌に残る。
+        //
+        // **`selfHealing: true` を添える**（#1383）——後から runner が繋がれば
+        // `createRunnerTokenSync` が追いつかせるので、この失敗は無害である。
+        // 添えないと、配布を試みて実際に落ちた失敗（上の catch）と日誌上で
+        // 同じ「置けなかった」を名乗ってしまう。
         results.push({
           target: 'runner',
           ok: false,
           error: '繋がっている runner が1台も無い（これから起こすマネージャーには届かない）',
+          selfHealing: true,
         });
       }
 

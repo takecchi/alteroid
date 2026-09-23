@@ -92,6 +92,8 @@ describe('撒く先が両方とも出力に残る', () => {
     expect(results.find((r) => r.target === 'runner-2')?.ok).toBe(false);
     // **理由の1行目だけ採る**（2行目以降に値が混ざる形を減らす）。
     expect(results.find((r) => r.target === 'runner-2')?.error).toBe('runner が応答しない');
+    // #1383: 配布を試みて実際に落ちた失敗は、自己修復する（無害な）失敗ではない。
+    expect(results.find((r) => r.target === 'runner-2')?.selfHealing).not.toBe(true);
   });
 
   it('繋がっている runner が0台なら、それを成功に畳まない', async () => {
@@ -112,6 +114,10 @@ describe('撒く先が両方とも出力に残る', () => {
     const runner = results.find((r) => r.target === 'runner');
     expect(runner?.ok).toBe(false);
     expect(runner?.error).toContain('1台も無い');
+    // #1383: これは配布そのものの失敗ではなく、まだ相手（runner）が居ないだけ
+    // ——後から runner が繋がれば createRunnerTokenSync が追いつかせる（自己修復）。
+    // `describeSpread` はこの印を見て、配布失敗と同じ「置けなかった」で出さない。
+    expect(runner?.selfHealing).toBe(true);
     // クローンへは撒けている（同じプロセス内なので落ちない）。
     expect(results.find((r) => r.target === 'clone')?.ok).toBe(true);
   });

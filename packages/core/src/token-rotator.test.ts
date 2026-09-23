@@ -1661,6 +1661,44 @@ describe('describeTokenRestore', () => {
       describeTokenRestore({ kind: 'withheld', tokenId: 'x', label: 'y', why: '人間が外している' }),
     ).toContain('人間が外している');
   });
+
+  it('#1383: 配布そのものの失敗と、相手が居ないだけ（自己修復する）失敗を同じ文言にしない', () => {
+    // どちらも target='runner' 系の失敗だが、意味は違う——片方は本物の配布失敗
+    // （runner-2 が応答しない）、もう片方は「繋がっている runner が1台も無い」
+    // という、これから起こす runner が繋がれば自己修復する無害な失敗である。
+    // 同じ「置けなかった」で出ると、日誌の読み手が両方を同じ重さの失敗として
+    // 誤読する（#1383 の観測そのもの）。
+    const line = describeTokenRestore({
+      kind: 'restored',
+      tokenId: 'tok-b',
+      label: 'spare1',
+      generation: 5,
+      cooling: false,
+      spread: [
+        { target: 'runner-2', ok: false, error: 'runner が応答しない' },
+        {
+          target: 'runner',
+          ok: false,
+          error: '繋がっている runner が1台も無い（これから起こすマネージャーには届かない）',
+          selfHealing: true,
+        },
+      ],
+      why: 'x',
+    });
+    expect(line).not.toBeNull();
+    // 撒いた先の行だけを取り出す（1行目は世代・ラベルなどの前置き）。
+    const spreadLine = (line ?? '').split('\n')[1] ?? '';
+    // 本物の配布失敗は、従来どおり「置けなかった」を名乗る。
+    expect(spreadLine).toContain('置けなかった: runner-2');
+    // 相手が居ないだけ（自己修復する）は、別の文言を名乗る。
+    expect(spreadLine).toContain('相手が居ないだけ: runner');
+    expect(spreadLine).toContain('自己修復する');
+    // 「置けなかった: runner**（」という、本物の配布失敗と同じ形では出さない
+    // （両方の文言が重複して出る取りこぼしも、ここで拾う）。
+    expect(spreadLine).not.toContain('置けなかった: runner**（');
+    // 撒いた先2件ぶんの記述がちょうど2つ（重複して出ていない）。
+    expect(spreadLine.split(' / ')).toHaveLength(2);
+  });
 });
 
 /**
