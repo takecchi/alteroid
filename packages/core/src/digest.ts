@@ -735,6 +735,70 @@ function journalWhere(type: JournalEntry['type']): string {
   );
 }
 
+/** {@link summarizeExternalSources} が1発行元ぶんに作る行の材料。 */
+interface ExternalSourceBreakdown {
+  source: string;
+  /** その発行元の `external_event` の総件数（日誌の行数）。 */
+  count: number;
+  /** `summary` の完全一致で数えた「本文の種類」の数。 */
+  distinctSummaries: number;
+  /** いちばん多い1種の件数。 */
+  topSummaryCount: number;
+}
+
+/**
+ * 外部イベントを **発行元（`source`）別**に集計する（Issue #783）。
+ *
+ * ## なぜ足すのか
+ *
+ * 上の件数行が「日誌の行数であって届いた合図の実数ではない」と名乗れても、
+ * **どの発行元が何件か**が無ければ、そこから原因へ降りる経路が無い（15,047件の
+ * 内訳を1件も測れない）。この関数は、その内訳を発行元別・件数の多い順で返す。
+ *
+ * ## 「本文の種類」は `summary` の**完全一致**で数える——それ以上は寄せない
+ *
+ * `entry.summary` はそのまま突き合わせる。`id` も `at` も `summary` には
+ * 入らないので、同じ出来事なら普通は同じ文字列になる。**ただし
+ * `renderPayload`（`apps/daemon/src/index.ts`）が作る `summary` は、末尾に
+ * 可変の値（畳んだ件数など。`describeReopenedTokenNotice` の
+ * 「この間に同じ合図が…件届き、1件にまとめた」がその一例）を持つことがある**
+ * ⟹ 完全一致で数えると、実際には同じ出来事なのに違う「種類」として数えて
+ * しまいうる（過大に分ける方向にしか倒れない——足りない方向には倒れない）。
+ * **⛔ 正規化して寄せる実装はしない**——揺れを吸収しようとする判定を足すほど、
+ * 「何をもって同じ本文としたか」がまた曖昧になる（この doc とその場の1行が、
+ * その曖昧さを消す代わりに限界として言語化する）。
+ */
+function summarizeExternalSources(
+  externals: readonly Extract<JournalEntry, { type: 'external_event' }>[],
+): ExternalSourceBreakdown[] {
+  const summariesBySource = new Map<string, string[]>();
+  for (const entry of externals) {
+    const list = summariesBySource.get(entry.source);
+    if (list === undefined) summariesBySource.set(entry.source, [entry.summary]);
+    else list.push(entry.summary);
+  }
+
+  const rows: ExternalSourceBreakdown[] = [];
+  for (const [source, summaries] of summariesBySource) {
+    const countBySummary = new Map<string, number>();
+    for (const summary of summaries) {
+      countBySummary.set(summary, (countBySummary.get(summary) ?? 0) + 1);
+    }
+    rows.push({
+      source,
+      count: summaries.length,
+      distinctSummaries: countBySummary.size,
+      topSummaryCount: Math.max(...countBySummary.values()),
+    });
+  }
+
+  // **件数の多い順。** 原因へ降りる入口はいちばん件数の多い発行元であることが
+  // 多いので、上位から出す（`MAX_ITEMS` で切ったときに落ちるのが少数派の
+  // 発行元になるように）。
+  rows.sort((a, b) => b.count - a.count);
+  return rows;
+}
+
 /**
  * `usageSection` の4軸（モデル・層・場所・委譲）を `top()` で切ったときの合図。
  *
@@ -893,7 +957,18 @@ export async function buildActivityDigest(
     // （`escalationGroups` の doc）。
     `- エスカレーション: ${escalationGroups.length} 件`,
     `- 記憶の更新: ${memoryUpdates.length} 件`,
-    `- 外部イベント: ${externals.length} 件`,
+    // **日誌 external_event の行数であって、届いた合図の実数ではない**
+    // （Issue #783）。受信箱を通った合図は配達のたびに1行書かれる —— 配り直しの
+    // 回でも、畳んでターンを起こさない回でも同じ1行を書く（`clone.ts` の
+    // `#journalIncomingBody` の doc。逐語は
+    // `grep -Fn -- '配達のたびに書く' packages/core/src/clone.ts`）。加えて、
+    // デーモンが受信箱を通さず直接書く行（source `runner` /
+    // `boot-storage-footprint`。`apps/daemon/src/index.ts` と
+    // `boot-footprint.ts`）も同じ型に混ざるので、「配達のたびに1行」は型全体には
+    // 当てはまらない。発行元別の内訳は下の「届いた外部イベント」節にある
+    // （`エスカレーション: 束ねた問いの数であって、日誌の行数ではない` と同じ形で、
+    // ここは逆に「日誌の行数であって合図の実数ではない」と名乗る）。
+    `- 外部イベント（日誌 external_event の行数）: ${externals.length} 件`,
     `- マネージャー・作業者のツール実行: ${delegatedToolUses.length} 件`,
     `- あなた自身が手を動かした回数（委譲せずに使った道具）: ${cloneToolUses.length} 件`,
     `- いま人間の回答を待っているもの: ${pending.length} 件`,
@@ -1130,12 +1205,46 @@ export async function buildActivityDigest(
 
   if (externals.length > 0) {
     sections.push('', '## 届いた外部イベント');
+    // **なぜ実数ではないか、をここでも1行で言う。** 上の件数行は単位（日誌の
+    // 行数）だけを名乗り、理由はここに置く——1行を長くしすぎないための分け方
+    // （行と節、両方の doc を参照）。
+    sections.push(
+      'この件数は届いた合図の実数ではない —— 受信箱を通った合図は配達のたびに1行' +
+        '書かれ（配り直し・畳んでターンを起こさない回も含む）、デーモンが受信箱を' +
+        '通さず直接書く行（source `runner` / `boot-storage-footprint`）も混ざる。',
+    );
     const shownExternals = externals.slice(0, MAX_ITEMS);
     for (const entry of shownExternals) {
       sections.push(`- ${entry.source}: ${brief(entry.summary, 120)}`);
     }
     sections.push(
       ...omitted(externals.length, shownExternals.length, journalWhere('external_event')),
+    );
+
+    // **発行元別の内訳（Issue #783）。** 15,047 件がどの発行元のものかが分から
+    // なければ、そこから原因へ降りる経路が無い。既存の個別行・`omitted()` の
+    // 行は消さず、ここに足すだけ（`summarizeExternalSources` の doc）。
+    sections.push(
+      '',
+      '**発行元（source）別の件数** —— 「本文の種類」は `summary` の完全一致で数える' +
+        '（末尾に畳んだ件数などの可変値が付くことがあるため、完全一致は同じ出来事を' +
+        '過大に分けうる。正規化はしていない）。',
+    );
+    const bySource = summarizeExternalSources(externals);
+    const shownBySource = bySource.slice(0, MAX_ITEMS);
+    for (const row of shownBySource) {
+      sections.push(
+        `- ${row.source}: ${row.count} 件（同じ本文は ${row.distinctSummaries} 種。` +
+          `最も多い1種が ${row.topSummaryCount} 件）`,
+      );
+    }
+    sections.push(
+      ...omitted(
+        bySource.length,
+        shownBySource.length,
+        `${journalWhere('external_event')}（source では絞れない。読み出した行を自分で ` +
+          'source ごとに数える）',
+      ),
     );
   }
 

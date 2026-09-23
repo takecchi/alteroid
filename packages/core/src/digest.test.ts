@@ -1217,6 +1217,77 @@ describe('上限で切ったことを黙らない', () => {
 });
 
 /**
+ * Issue #783: 「外部イベント: 15,047 件」は日誌の行数までしか言えず、どの発行元
+ * （source）が何件かが分からないので原因へ降りる経路が無かった。ここで測るのは
+ * `buildActivityDigest` が発行元別に件数・本文の種類（`summary` の完全一致）・
+ * 最頻本文の件数を正しく出し、既存の個別行・`omitted()` 行を消していないこと。
+ */
+describe('届いた外部イベント — 発行元（source）別の内訳（#783）', () => {
+  const since = () => new Date(Date.now() - 60_000);
+
+  it('同じ source の同じ summary が複数件あるとき、件数・本文の種類・最頻件数が正しい', async () => {
+    const stores = createMemoryStores();
+    // source=ci: 「落ちた」が3件、「直った」が1件 ⟹ 4件・本文2種・最頻3件。
+    await stores.journal.append({ type: 'external_event', source: 'ci', summary: '落ちた' });
+    await stores.journal.append({ type: 'external_event', source: 'ci', summary: '落ちた' });
+    await stores.journal.append({ type: 'external_event', source: 'ci', summary: '落ちた' });
+    await stores.journal.append({ type: 'external_event', source: 'ci', summary: '直った' });
+    // source=webhook: 1件・本文1種・最頻1件。
+    await stores.journal.append({ type: 'external_event', source: 'webhook', summary: 'ping' });
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    expect(digest).toContain('- ci: 4 件（同じ本文は 2 種。最も多い1種が 3 件）');
+    expect(digest).toContain('- webhook: 1 件（同じ本文は 1 種。最も多い1種が 1 件）');
+    // **既存の個別行が消えていないこと。**
+    expect(digest).toContain('- ci: 落ちた');
+    expect(digest).toContain('- webhook: ping');
+  });
+
+  it('発行元が MAX_ITEMS を超えたとき、内訳側にも omitted() の行が出る', async () => {
+    const stores = createMemoryStores();
+    const total = MAX_ITEMS + 3; // 18種の発行元、各1件。
+    for (let i = 0; i < total; i += 1) {
+      await stores.journal.append({
+        type: 'external_event',
+        source: `source-${i}`,
+        summary: `届いた ${i}`,
+      });
+    }
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    // **既存の個別行の省略と、内訳側の省略が両方出る。** どちらも
+    // total=18・shown=15 なので同じ「…ほか 3 件」という部分文字列が2回出る
+    // （行の続きの文言は違う——`omitted()` の `where` 引数が違うので全文としては
+    // 別の行である）。2回出ることそのものを測る。
+    const occurrences = digest.split('…ほか 3 件').length - 1;
+    expect(occurrences).toBe(2);
+  });
+
+  it('既存の個別行と「…ほか N 件」が消えていない', async () => {
+    const stores = createMemoryStores();
+    const total = MAX_ITEMS + 2;
+    for (let i = 0; i < total; i += 1) {
+      await stores.journal.append({
+        type: 'external_event',
+        source: 'ci',
+        summary: `届いた ${i}`,
+      });
+    }
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    expect(digest).toContain('## 届いた外部イベント');
+    // journal.list() は新しい順（desc）で返すので、確実に残る（切られない）のは
+    // 最後に append した最新の1件である。
+    expect(digest).toContain(`- ci: 届いた ${total - 1}`);
+    expect(digest).toContain('…ほか 2 件');
+    expect(digest).toContain('発行元（source）別の件数');
+  });
+});
+
+/**
  * **未了の節が「古い順で先頭 `MAX_ITEMS` 件」だと、今夜作った行が digest に
  * 1件も出ない。** 未了は `CommitmentStore.list()` の契約で `at` 昇順（古い順）
  * に来るので、先頭から切ると新しい行は常に切られた側に落ちる。⟹ 古い側と
