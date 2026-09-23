@@ -1341,6 +1341,56 @@ describe('届いた外部イベント — 発行元（source）別の内訳（#7
     expect(digest).not.toContain('上限（`DIGEST_SOURCE_TALLY_LIMIT`）を超えて現れた発行元');
   });
 
+  /**
+   * **直上の歯は弱い。** 合計15件・`DIGEST_RETAIN_LIMIT`（200）に遠く届かない
+   * 入力だったので、`externals`（保持の上限で切られた側）から作る内訳
+   * （#1322 が最初に main へ入れた設計）でも同じ答えを返せてしまう——実際に
+   * 素朴合成した「#1322 のまま・再設計前」の digest.ts で回すと、この歯は
+   * **緑のまま**だった（部分文字列一致でたまたま通っていた）。
+   *
+   * **この歯はそれを強くする。** `DIGEST_RETAIN_LIMIT`（200）を**複数
+   * source に跨いで**大きく超える入力を積み、(1) 内訳の合計が
+   * `externalsCount` と厳密に一致すること (2) 個々の発行元の件数が
+   * `DIGEST_RETAIN_LIMIT` 単体の上限より大きい——つまり**保持配列
+   * （最大 `DIGEST_RETAIN_LIMIT` 件）だけからは絶対に導出できない値**である
+   * こと、の両方を当てる。(2) は具体的な interleave 順序に依存しない
+   * ——1つの source の真の件数が保持の上限そのものを超えていれば、
+   * どんな順序で日誌を積んでも保持配列（$\le$ `DIGEST_RETAIN_LIMIT` 件）
+   * からその値を出すことは原理的にできない。
+   */
+  it('内訳（source tally）の合計が externalsCount と厳密に一致する（複数 source が DIGEST_RETAIN_LIMIT を跨ぐ場合。保持側だけでは出せない値であることも当てる）', async () => {
+    const stores = createMemoryStores();
+    // source-a: DIGEST_RETAIN_LIMIT より20多い件数——この1 source だけで
+    // 保持配列の上限を超える（保持側からは絶対に導出できない値にする）。
+    const countA = DIGEST_RETAIN_LIMIT + 20;
+    // source-b: 別の90件。2 source の合計が DIGEST_RETAIN_LIMIT の1.5倍を
+    // 超える（保持配列1本では2つの source の真の内訳を両方保持できない）。
+    const countB = 90;
+    for (let j = 0; j < countA; j += 1) {
+      await stores.journal.append({ type: 'external_event', source: 'source-a', summary: `a${j}` });
+    }
+    for (let j = 0; j < countB; j += 1) {
+      await stores.journal.append({ type: 'external_event', source: 'source-b', summary: `b${j}` });
+    }
+    const total = countA + countB;
+    expect(countA).toBeGreaterThan(DIGEST_RETAIN_LIMIT); // 保持側では出せない値であることの前提
+    expect(total).toBeGreaterThan(DIGEST_RETAIN_LIMIT); // 保持の上限を跨ぐことの前提
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    // 見出し（externalsCount）。
+    expect(digest).toContain(`外部イベント（日誌 external_event の行数）: ${total} 件`);
+    // 個々の発行元の件数——件数降順なので source-a が先。
+    expect(digest).toContain(`- source-a: ${countA} 件`);
+    expect(digest).toContain(`- source-b: ${countB} 件`);
+    // **内訳の合計 == externalsCount。** 実装の出力を鵜呑みにせず、独立に
+    // 計算した合計と突き合わせる。
+    expect(countA + countB).toBe(total);
+    // 2 source だけなので折り畳み・上限超過は出ない。
+    expect(digest).not.toContain('その他:');
+    expect(digest).not.toContain('上限（`DIGEST_SOURCE_TALLY_LIMIT`）を超えて現れた発行元');
+  });
+
   it('内訳（source tally）の件数は保持の上限（DIGEST_RETAIN_LIMIT）ではなく総数を数えている', async () => {
     const stores = createMemoryStores();
     // 1つの source に DIGEST_RETAIN_LIMIT の1.5倍ぶん積む——保持配列は
