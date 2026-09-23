@@ -610,6 +610,105 @@ describe('HTTP API', () => {
     expect((await app.request('/memory/nope')).status).toBe(404);
   });
 
+  /**
+   * 仕事のやり方（PracticeStore、#1055 段3③）。`記憶` の HTTP 口
+   * （`GET`/`PUT`/`DELETE /memory(/:slug)`）と対をなす、人間の3つ目の入口。
+   *
+   * **⛔ `apply` / `enforce` に当たる経路は無い。** 読み書き一覧の3操作
+   * （list/read/write/remove）しか無いことを、この一群のテストで踏む。
+   */
+  it('やり方を API から読んで書き換えられる（人間の3入口の1つ）', async () => {
+    await stores.practices.write({
+      slug: 'daily-report',
+      kind: '日報',
+      title: 'もとの題',
+      content: 'もとの内容',
+    });
+
+    const list = await app.request('/practices');
+    expect(await list.json()).toMatchObject({
+      practices: [{ slug: 'daily-report', kind: '日報', title: 'もとの題' }],
+    });
+
+    const put = await app.request('/practices/daily-report', {
+      ...json({ kind: '日報', title: '書き直した題', content: '人間が API から書き換えた' }),
+      method: 'PUT',
+    });
+    expect(put.status).toBe(200);
+
+    const read = await app.request('/practices/daily-report');
+    const body = (await read.json()) as { practice: { content: string; title: string } };
+    expect(body.practice.content).toContain('人間が API から書き換えた');
+    expect(body.practice.title).toBe('書き直した題');
+
+    // 人間による書き換えも日誌に残る（`practice_write` クローンの道具と
+    // 同じ type: 'decision' に揃えてある——PracticeStore は memory の
+    // `markHumanTouched` に当たる保護状態を持たないため）。
+    const entries = await stores.journal.list({ types: ['decision'] });
+    expect(entries[0]).toMatchObject({
+      decision: expect.stringContaining('daily-report') as unknown as string,
+      grounds: expect.stringContaining('人間が直接 API から') as unknown as string,
+    });
+  });
+
+  it('PUT /practices/:slug は無ければ作る（全文置換）', async () => {
+    const put = await app.request('/practices/new-one', {
+      ...json({ kind: '調査', title: '新しいやり方', content: '本文' }),
+      method: 'PUT',
+    });
+    expect(put.status).toBe(200);
+
+    const read = await app.request('/practices/new-one');
+    expect(await read.json()).toMatchObject({
+      practice: { slug: 'new-one', kind: '調査', title: '新しいやり方', content: '本文\n' },
+    });
+  });
+
+  it('kind が空だと 400（practiceKindSchema の min(1)）', async () => {
+    const put = await app.request('/practices/bad-kind', {
+      ...json({ kind: '', title: '題', content: '本文' }),
+      method: 'PUT',
+    });
+    expect(put.status).toBe(400);
+  });
+
+  it('不正な slug は 400', async () => {
+    const put = await app.request('/practices/Not_Valid_SLUG!', {
+      ...json({ kind: '実装', title: '題', content: '本文' }),
+      method: 'PUT',
+    });
+    expect(put.status).toBe(400);
+  });
+
+  it('存在しないやり方は 404', async () => {
+    expect((await app.request('/practices/nope')).status).toBe(404);
+  });
+
+  it('DELETE /practices/:slug で消せて、日誌に残る', async () => {
+    await stores.practices.write({
+      slug: 'to-remove',
+      kind: '実装',
+      title: '消される予定',
+      content: '本文',
+    });
+
+    const del = await app.request('/practices/to-remove', { method: 'DELETE' });
+    expect(del.status).toBe(200);
+    expect(await del.json()).toEqual({ ok: true, slug: 'to-remove' });
+
+    expect((await app.request('/practices/to-remove')).status).toBe(404);
+
+    const entries = await stores.journal.list({ types: ['decision'] });
+    expect(entries[0]).toMatchObject({
+      decision: expect.stringContaining('to-remove') as unknown as string,
+      grounds: '人間が直接 API からやり方を消した',
+    });
+  });
+
+  it('やり方が無い状態での DELETE は 404（クローンの道具の冪等とは違う——HTTP は memory と同じ形）', async () => {
+    expect((await app.request('/practices/never-existed', { method: 'DELETE' })).status).toBe(404);
+  });
+
   it('日誌を読める（可観測性の中段）', async () => {
     await stores.journal.append({ type: 'decision', decision: '自分で決めた', grounds: '記憶' });
 

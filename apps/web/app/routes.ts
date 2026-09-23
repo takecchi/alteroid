@@ -19,6 +19,8 @@ export default [
     route('managers/:id', 'routes/manager-detail.tsx'),
     route('memory', 'routes/memory.tsx'),
     route('memory/:slug', 'routes/memory-detail.tsx'),
+    route('practices', 'routes/practices.tsx'),
+    route('practices/:slug', 'routes/practice-detail.tsx'),
     route('approvals', 'routes/approvals.tsx'),
     route('commitments', 'routes/commitments.tsx'),
     // 同じ日に複数あるので、日付だけでは1件に定まらない（`reports.tsx` の選択の doc）。

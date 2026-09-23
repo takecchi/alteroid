@@ -132,6 +132,39 @@ export function useDeleteMemory() {
   );
 }
 
+/**
+ * 仕事のやり方を書く（全文置換。無ければ作る、#1055 段3③）。
+ *
+ * `useSaveMemory` と違い `kind` / `title` も一緒に送る——`PracticeStore.write`
+ * は `content` だけの部分更新を持たない（`practiceSchema` の doc）。
+ */
+export function useSavePractice() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (slug: string, kind: string, title: string, content: string) => {
+      const result = await api.api
+        .PUT('/practices/{slug}', { params: { path: { slug } }, body: { kind, title, content } })
+        .then(unwrap);
+      await Promise.all([mutate(KEY.practices), mutate(KEY.practice(slug))]);
+      return result.practice;
+    },
+    [api, mutate],
+  );
+}
+
+export function useDeletePractice() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (slug: string) => {
+      await api.api.DELETE('/practices/{slug}', { params: { path: { slug } } }).then(unwrap);
+      await mutate(KEY.practices);
+    },
+    [api, mutate],
+  );
+}
+
 /** 承認待ちに答える。 */
 export function useAnswerApproval() {
   const api = useApi();

@@ -109,6 +109,8 @@ export const KEY = {
   usage: (query: UsageQuery) => ({ type: 'usage', ...query }) as const,
   memory: { type: 'memory' } as const,
   memoryDoc: (slug: string) => ({ type: 'memoryDoc', slug }) as const,
+  practices: { type: 'practices' } as const,
+  practice: (slug: string) => ({ type: 'practice', slug }) as const,
   conversations: (limit: number) => ({ type: 'conversations', limit }) as const,
   /**
    * **`includeSuperseded` をキーに含める（チャットのメッセージ編集、#1010）。**
@@ -366,6 +368,22 @@ export function useMemoryDocument(slug: string) {
   const api = useApi();
   return useSWR(KEY.memoryDoc(slug), ({ slug }) =>
     api.api.GET('/memory/{slug}', { params: { path: { slug } } }).then(unwrap),
+  );
+}
+
+/**
+ * 仕事のやり方（#1055 段3③）。`useMemoryDocuments` / `useMemoryDocument` と
+ * 同じ形——一覧はメタ情報だけ、詳細は本文まで。
+ */
+export function usePractices() {
+  const api = useApi();
+  return useSWR(KEY.practices, () => api.api.GET('/practices').then(unwrap));
+}
+
+export function usePractice(slug: string) {
+  const api = useApi();
+  return useSWR(KEY.practice(slug), ({ slug }) =>
+    api.api.GET('/practices/{slug}', { params: { path: { slug } } }).then(unwrap),
   );
 }
 

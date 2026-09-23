@@ -13,6 +13,7 @@ import {
   ListChecks,
   Menu,
   MessageSquare,
+  Route as RouteIcon,
   Settings,
   ShieldCheck,
   SlidersHorizontal,
@@ -53,6 +54,9 @@ const NAV = [
   // （issue #972 / #1042）。CLI の `alteroid inbox remove` と同じ口。
   { to: '/inbox', label: '受信箱', icon: InboxIcon, end: false },
   { to: '/memory', label: '記憶', icon: Brain, end: false },
+  // 記憶の隣。どちらも「クローンの判断の材料」で、こちらは仕事の型ごとの
+  // やり方（#1055 段3③）——器はこれを実行しない（読む素材でしかない）。
+  { to: '/practices', label: 'やり方', icon: RouteIcon, end: false },
   { to: '/schedule', label: 'スケジュール', icon: CalendarClock, end: false },
   { to: '/settings', label: '設定', icon: Settings, end: false },
 ] as const;

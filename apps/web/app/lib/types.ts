@@ -65,6 +65,15 @@ export type ScheduleSpec = NonNullable<ScheduleEntry['spec']>;
 export type MemorySummary = Ok<paths['/memory']['get']>['documents'][number];
 export type MemoryDocument = Ok<paths['/memory/{slug}']['get']>['document'];
 
+/**
+ * 仕事のやり方（#1055 段3③）。`PracticeStore` の3入口（クローンの道具・
+ * HTTP・Web UI）のうち、これは Web UI 側が使う型——サーバの
+ * `practiceMetaSchema` / `practiceSchema`（`packages/core/src/schema.ts`）から
+ * 生成 spec 経由で導く。手で複製しない（この冒頭の doc と同じ理由）。
+ */
+export type PracticeSummary = Ok<paths['/practices']['get']>['practices'][number];
+export type Practice = Ok<paths['/practices/{slug}']['get']>['practice'];
+
 export type ConversationSummary = Ok<paths['/conversations']['get']>['conversations'][number];
 export type ConversationDetail = Ok<paths['/conversations/{id}']['get']>;
 export type ConversationMessage = ConversationDetail['messages'][number];
