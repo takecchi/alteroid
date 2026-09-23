@@ -233,9 +233,13 @@ const EXPECTED_SITE_COUNT: Record<string, number> = {
   // 41（issue #1332 起票時点） + 2（issue #1374 / PR #1422 が足した
   // #noteRedeliveryPredicateHitA / #noteRedeliveryPredicateHitB。
   // main へ合流した後に振り分けて kind 接頭辞を付けた——除外リストには
-  // 入れない、というマネージャーの方針転換に合わせた）。
-  'clone.ts': 43,
-  'manager.ts': 40,
+  // 入れない、というマネージャーの方針転換に合わせた）
+  // + 1（issue #1425 が `case 'rate_limit'` に足した、跨いで畳んだ本数の
+  // flush。`EXCHANGE_KIND_GAUGE_PREFIX` を使うので接頭辞は既に付いている）。
+  'clone.ts': 44,
+  // 40（issue #1332 起票時点） + 1（issue #1425 が `case 'rate_limit'` に
+  // 足した、跨いで畳んだ本数の flush。同じく `EXCHANGE_KIND_GAUGE_PREFIX`）。
+  'manager.ts': 41,
 };
 
 describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（issue #1332）', () => {
