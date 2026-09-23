@@ -289,6 +289,182 @@ describe('findKeywordClosedCandidates — 複数の merged PR から正しく最
   });
 });
 
+describe('findKeywordClosedCandidates — Alteroid-Issue-Done trailer で閉じた分は候補から外す（#1195 の実測、#1128 コメント2026-09-23）', () => {
+  // 実測（2026-09-23、gh pr view <N> --json body / gh api .../issues/<N>/timeline）。
+  // PR #1247 は本文の trailer が #1123 だけを名乗る（#1195/#1198 は名乗っていない）のに、
+  // 「最寄りのマージ」としては #1195 のクローズに最も近い（10秒前）——旧アルゴリズムは
+  // ここを誤って結びつけていた。実際に#1195/#1198を閉じたのはPR #1199（trailerが
+  // 「1195, 1198」を名乗る。マージは#1247より14秒早い）で、actorはどちらも
+  // github-actions[bot]（issue-done-trailer workflow が閉じた証拠）。
+  const mergedPRs = [
+    {
+      number: 1247,
+      mergedAt: '2026-09-19T22:02:23Z',
+      mergeCommitOid: '3e3f9e0d8975f901f6e517f24f662d9f99dfcc6a',
+      body: 'ある改修の本文。\n\nAlteroid-Issue-Done: 1123\n',
+    },
+    {
+      number: 1199,
+      mergedAt: '2026-09-19T22:02:09Z',
+      mergeCommitOid: '666af95c1709fa05ef4363dc271af4560bbc19fd',
+      body: '別の改修の本文。\n\nAlteroid-Issue-Done: 1195, 1198\n',
+    },
+  ];
+
+  it('#1195・#1198 とも候補から消える（trailer で閉じたと判定する）', () => {
+    const closeEvents = [
+      { issueNumber: 1195, closedAt: '2026-09-19T22:02:33Z', commitId: null, actor: 'github-actions[bot]' },
+      { issueNumber: 1198, closedAt: '2026-09-19T22:02:35Z', commitId: null, actor: 'github-actions[bot]' },
+    ];
+    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents }) as Candidate[];
+    expect(result).toEqual([]);
+  });
+
+  it('同じタイミング・同じ trailer でも actor が人間なら trailer close とは判定せず、候補に残る（フォールバックで最寄りの#1247に結びつく）', () => {
+    // trailer の名乗りだけでは閉じたと判定しない——issue-done-trailer.yml が
+    // 常に github-actions[bot] として閉じることを実測で確認した（本文のコメント参照）。
+    // actor が human ならこの経路ではないので、通常の候補判定へ倒す。
+    const closeEvents = [
+      { issueNumber: 1195, closedAt: '2026-09-19T22:02:33Z', commitId: null, actor: 'takecchi' },
+    ];
+    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents }) as Candidate[];
+    expect(result).toHaveLength(1);
+    // #1247 は #1195 を名乗っていない（trailer は #1123 だけ）ので keyword-naming 経路にも
+    // 乗らず、フォールバックの「最寄りのマージ」に落ちる。
+    expect(result[0]).toMatchObject({ prNumber: 1247, matchedVia: 'timing' });
+  });
+});
+
+describe('findKeywordClosedCandidates — 名乗った PR があれば、そちらへ結びつける（最寄りのマージではない）', () => {
+  it('nearest merge (#100) は Issue を名乗っていない。keyword で名乗った #99 のほうへ結びつく', () => {
+    const mergedPRs = [
+      {
+        number: 100,
+        mergedAt: '2026-09-01T00:00:05Z',
+        mergeCommitOid: 'nope-a',
+        body: '無関係な変更。Issue の言及なし。',
+      },
+      {
+        number: 99,
+        mergedAt: '2026-09-01T00:00:00Z',
+        mergeCommitOid: 'nope-b',
+        body: 'Closes #42',
+      },
+    ];
+    const closeEvents = [
+      { issueNumber: 42, closedAt: '2026-09-01T00:00:06Z', commitId: null, actor: 'takecchi' },
+    ];
+    // 「最寄りのマージ」だけを見れば #100（1秒前）が選ばれてしまう。
+    // 名乗った PR（#99、6秒前。閾値10秒以内）を優先しなければならない。
+    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents }) as Candidate[];
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ prNumber: 99, secondsAfterMerge: 6, matchedVia: 'timing' });
+  });
+});
+
+describe('findKeywordClosedCandidates — 陽性対照: 名乗る PR が無ければ、従来どおり最寄りのマージへ結びつく（#1003/#1050 の実測、#1128 コメント2026-09-23）', () => {
+  // 実測（2026-09-23）: PR #1126 / #1143 の本文・タイトルには #1003 / #1050 への
+  // 言及が1文字も無い（`/1003/.test(body)` / `/1050/.test(body)` がともに false）。
+  // ⟹ 手で閉じたのがマージと偶然重なった偽陽性——道具はこれを直さず、そのまま拾い続ける。
+  it('#1003 ← PR #1126（本文に言及なし）は候補に残り、#1126 へ結びつく', () => {
+    const mergedPRs = [
+      {
+        number: 1126,
+        mergedAt: '2026-09-16T21:37:09Z',
+        mergeCommitOid: 'da85c8923c4a6052e6f94df67f02e3048f68406f',
+        body: '## 変異試験（Issue #1022 の測定を再実施）\n\nRefs #1022\n',
+      },
+    ];
+    const closeEvents = [
+      { issueNumber: 1003, closedAt: '2026-09-16T21:37:13Z', commitId: null, actor: 'takecchi' },
+    ];
+    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents }) as Candidate[];
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ prNumber: 1126, secondsAfterMerge: 4, matchedVia: 'timing' });
+  });
+
+  it('#1050 ← PR #1143（本文に言及なし）は候補に残り、#1143 へ結びつく', () => {
+    const mergedPRs = [
+      {
+        number: 1143,
+        mergedAt: '2026-09-17T02:22:35Z',
+        mergeCommitOid: '9348bd09c9d3d84759446b415fa8ddf8d3bb8b35',
+        body: '受信箱の合図から器が自動で台帳を開いた経路の話。',
+      },
+    ];
+    const closeEvents = [
+      { issueNumber: 1050, closedAt: '2026-09-17T02:22:36Z', commitId: null, actor: 'takecchi' },
+    ];
+    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents }) as Candidate[];
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ prNumber: 1143, secondsAfterMerge: 1, matchedVia: 'timing' });
+  });
+});
+
+describe('findKeywordClosedCandidates — やりすぎを落とす歯: 過去に trailer で名乗られたことがあるだけでは外さない（合成、reopen 後に別 PR のキーワードで閉じた形）', () => {
+  it('1回目（trailer close、bot、excluded）と2回目（reopen 後、keyword close、human、候補に残る）が両方正しく扱われる', () => {
+    const mergedPRs = [
+      {
+        number: 500,
+        mergedAt: '2026-01-01T00:00:00Z',
+        mergeCommitOid: 'x1',
+        body: 'Alteroid-Issue-Done: 700',
+      },
+      {
+        number: 510,
+        mergedAt: '2026-02-01T00:00:00Z',
+        mergeCommitOid: 'x2',
+        body: 'Closes #700',
+      },
+    ];
+    const closeEvents = [
+      // 1回目: trailer で閉じた（issue-done-trailer workflow、actor=bot）。除外される。
+      // ⚠️ 5秒後という値は合成——実測の trailer 遅延（19〜47秒、後述の定数の doc）より
+      // 短いが、意図的にこの値を選んでいる: 5秒は「名乗る PR を見ずに actor も見ない」
+      // 旧実装でも「最寄りのマージ」として拾ってしまう距離（閾値10秒以内）なので、
+      // ここを訂正できていることが red→green の変化として見える。
+      { issueNumber: 700, closedAt: '2026-01-01T00:00:05Z', commitId: null, actor: 'github-actions[bot]' },
+      // reopen された後、2回目: 別の PR がキーワードで閉じた（人間のトークン）。候補に残るべき。
+      { issueNumber: 700, closedAt: '2026-02-01T00:00:02Z', commitId: null, actor: 'takecchi' },
+    ];
+    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents }) as Candidate[];
+    // ⚠️ 「#700 はかつて trailer で名乗られたことがある」を理由に無条件で外すと、
+    // 2回目まで消えて0件になる。正しい実装は時刻の相関（と actor）で1件ずつ判定するので、
+    // 1回目だけが消えて2回目だけが残る。
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      issueNumber: 700,
+      prNumber: 510,
+      secondsAfterMerge: 2,
+      matchedVia: 'timing',
+      actor: 'takecchi',
+    });
+  });
+});
+
+describe('findKeywordClosedCandidates — Alteroid-Issue-Done: none とフェンス内の trailer は名乗りとして数えない', () => {
+  it('フェンスの中の trailer 行と、実体の none 行を持つ PR は、その Issue 番号を名乗ったことにならない（fallback で通常どおり候補に出る）', () => {
+    const mergedPRs = [
+      {
+        number: 600,
+        mergedAt: '2026-03-01T00:00:00Z',
+        mergeCommitOid: 'y1',
+        body: '```\nAlteroid-Issue-Done: 800\n```\n\nAlteroid-Issue-Done: none\n',
+      },
+    ];
+    const closeEvents = [
+      { issueNumber: 800, closedAt: '2026-03-01T00:00:05Z', commitId: null, actor: 'takecchi' },
+    ];
+    // #800 は「名乗られて」いない（フェンスの中は見ない。実体の行は none）ので、
+    // trailer 除外にも keyword 優先にも乗らない。それでも5秒後・閾値内なので
+    // フォールバックの「最寄りのマージ」で候補に出る——名乗りが無いことと
+    // 候補から消えることは別である。
+    const result = findKeywordClosedCandidates({ mergedPRs, closeEvents }) as Candidate[];
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ prNumber: 600, secondsAfterMerge: 5, matchedVia: 'timing' });
+  });
+});
+
 describe('formatReport', () => {
   it('0件なら「候補は0件」と名乗る', () => {
     const text = formatReport([]);
