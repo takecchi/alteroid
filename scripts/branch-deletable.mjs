@@ -99,7 +99,8 @@ function runCapture(cmd, args) {
     // それとエラー（コマンドが無い・rev が無い等）を区別する
     // （`AGENTS.md`「静かに失敗する道具」— 件数と終了コードは別のこと）。
     const status = error && typeof error === 'object' && 'status' in error ? error.status : null;
-    const stdout = error && typeof error === 'object' && 'stdout' in error ? String(error.stdout ?? '') : '';
+    const stdout =
+      error && typeof error === 'object' && 'stdout' in error ? String(error.stdout ?? '') : '';
     if (cmd === 'git' && status === 1) {
       return { stdout, error: null };
     }
@@ -159,13 +160,25 @@ function collectPrSources(prNumber, repo) {
   const errors = [];
   const sources = [];
 
-  const bodyResult = runCapture('gh', ['pr', 'view', String(prNumber), '--repo', repo, '--json', 'body']);
+  const bodyResult = runCapture('gh', [
+    'pr',
+    'view',
+    String(prNumber),
+    '--repo',
+    repo,
+    '--json',
+    'body',
+  ]);
   if (bodyResult.error !== null) {
     errors.push(`PR #${prNumber}: gh pr view が失敗した: ${bodyResult.error}`);
   } else {
     try {
       const parsed = JSON.parse(bodyResult.stdout ?? '{}');
-      sources.push({ prNumber, source: '本文', text: typeof parsed.body === 'string' ? parsed.body : '' });
+      sources.push({
+        prNumber,
+        source: '本文',
+        text: typeof parsed.body === 'string' ? parsed.body : '',
+      });
     } catch {
       errors.push(`PR #${prNumber}: gh pr view の応答が JSON として読めなかった`);
     }

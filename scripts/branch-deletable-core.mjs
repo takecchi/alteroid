@@ -224,12 +224,6 @@ export function buildReport(branchResults) {
     }
     sections.push(section.join('\n'));
   }
-  const text = [
-    `⚠ ${DISCLAIMER}`,
-    '',
-    ...sections,
-    '',
-    `⚠ ${DISCLAIMER}`,
-  ].join('\n');
+  const text = [`⚠ ${DISCLAIMER}`, '', ...sections, '', `⚠ ${DISCLAIMER}`].join('\n');
   return { text, exitCode: anyHit ? 1 : 0 };
 }

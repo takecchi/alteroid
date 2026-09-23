@@ -160,8 +160,7 @@ describe('parseGitGrepMatches', () => {
       {
         path: 'packages/core/src/archive-prune.ts',
         line: '159',
-        content:
-          ' * ある。**この実測を載せていた枝 `investigate/698-archive-stage1` は',
+        content: ' * ある。**この実測を載せていた枝 `investigate/698-archive-stage1` は',
       },
     ]);
   });
