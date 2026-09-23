@@ -944,6 +944,36 @@ export async function main(): Promise<void> {
       });
   };
 
+  /**
+   * 器を1つ失った（`onLost`）ことを、日誌へ構造化して残す。
+   *
+   * **以前は `announce()` で知らせるだけで、日誌には残らなかった**——後から
+   * 頻度を数える手段が無かった（#916 c2-4 から切り出した #1381）。`onLost`
+   * はここでは無条件に `relocateOnLost` を呼ぶ（奪ってよいかは貸し出し期限が
+   * 判定する）ので、`onSwap` 側の `noteRunnerSwap` のような「起こすかどうか」
+   * の分岐は要らない——起きたことをそのまま記録するだけでよい。
+   *
+   * `external_event` にするのは `reportRunnerDropped` / `reportRunnerUnknown`
+   * と同じ理由——これは**デーモンから見た外側の観測**であって、クローンを
+   * 起こすかどうかの `decision`（`onSwap` 側）とは違う。
+   *
+   * **記録の失敗でデーモンを止めない。** 落ちたときだけ stderr に出す
+   * （`reportRunnerDropped` と同じ作法）。
+   */
+  const reportRunnerLost = (report: { label: string; runnerId?: string; error: string }): void => {
+    const summary =
+      `runner (${report.label}${report.runnerId === undefined ? '' : ` / ${report.runnerId}`}) を` +
+      `失いました（onLost）: ${report.error}`;
+    void stores.journal
+      .append({ type: 'external_event', source: 'runner', summary })
+      .catch((error: unknown) => {
+        process.stderr.write(
+          `alteroidd: runner を失ったことを日誌へ残せませんでした: ${reasonOf(error)}\n` +
+            `  ${summary}\n`,
+        );
+      });
+  };
+
   const seeds = runnerSeeds({
     workspace,
     withheldEnvKeys: storage.withheldEnvKeys,
@@ -1017,6 +1047,7 @@ export async function main(): Promise<void> {
           `そこで走っていた委譲の移送を試みます` +
           `（貸し出し期限が切れていない委譲は、切れてから自動で移します）: ${error}`,
       );
+      reportRunnerLost({ label, runnerId, error });
       relocateOnLost(runnerId);
     },
     /**

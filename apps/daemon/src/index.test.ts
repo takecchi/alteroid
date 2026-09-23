@@ -144,6 +144,81 @@ describe('index.ts の原文で測る配線（onSwap の引き取り / 枠の観
 });
 
 /**
+ * 器を1つ失った（onLost）ことが、日誌へ構造化して残ることを固定する
+ * （#916 c2-4 から切り出した #1381）。
+ *
+ * ## なぜ原文を読むのか
+ *
+ * `onLost` も隣の `onSwap` と同じ理由で原文でしか測れない——`main()` の中の
+ * `createRunnerRegistry` へ渡すオプションの1つで、`main()` を呼ばずに触れる
+ * 口が無い（隣の describe の doc と同じ事情）。
+ *
+ * ## 何を固定するか
+ *
+ * 以前は `announce()` で知らせるだけで、日誌には残らなかった——頻度を後から
+ * 数える手段が無かった（Issue 本文の「今日の当て直し」）。ここでは
+ * (1) `onLost` のブロックが記録用の関数を呼んでいること
+ * (2) その関数が実際に `stores.journal.append` を `type: 'external_event'` /
+ * `source: 'runner'` で呼んでいること
+ * (3) 記録用の呼び出しが `onLost` の1箇所だけであること（onLost 以外の出来事
+ * まで記録してしまう変異を捕まえるため）
+ * の3つを固定する。文言までは固定しない（隣の describe と同じ方針——無関係な
+ * 言い回しの手直しで赤くならないように）。
+ */
+describe('index.ts の原文で測る配線（onLost が日誌へ残るか。#1381）', () => {
+  const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+
+  /** 隣の describe の `blockOf` と同じ実装（自己完結のためここでも定義する）。 */
+  const blockOf = (opener: RegExp): string[] => {
+    const lines = source.split('\n');
+    const heads = lines.filter((line) => opener.test(line));
+    // **1つに定まらないなら、以下の判定は別の場所を見ている。**
+    expect(heads).toHaveLength(1);
+    const start = lines.findIndex((line) => opener.test(line));
+    const indent = (/^\s*/.exec(lines[start] ?? '')?.[0] ?? '').length;
+    for (let i = start + 1; i < lines.length; i += 1) {
+      const line = lines[i] ?? '';
+      if (line.trim() === '') continue;
+      if ((/^\s*/.exec(line)?.[0] ?? '').length <= indent) return lines.slice(start, i + 1);
+    }
+    throw new Error('ブロックの終わりが見つからない（字下げの前提が崩れている）');
+  };
+
+  /** 注釈の行は経路ではない。 */
+  const code = (lines: string[]): string[] =>
+    lines.filter((line) => !/^\s*(\*|\/\/|\/\*)/.test(line));
+
+  it('器を失ったら、記録用の関数を宛先・原因つきで呼ぶ', () => {
+    const calls = code(blockOf(/^\s*onLost:\s*\(/)).filter((line) =>
+      line.includes('reportRunnerLost('),
+    );
+
+    // 知らせるだけに戻すと、頻度を数える手段が無くなる（#1381 の症状そのもの）。
+    expect(calls).not.toEqual([]);
+    // 宛先・原因を落とさない。引数無しで呼ぶと、要約が「何を失ったか」を言えない。
+    expect(calls.filter((line) => /reportRunnerLost\(\s*\)/.test(line))).toEqual([]);
+  });
+
+  it('記録用の関数は、日誌へ external_event として書く', () => {
+    // Prettier がメソッドチェーンを `stores.journal` / `.append(...)` の2行に
+    // 割るので、1行の部分一致では見えない——ブロックを1つの文字列にしてから見る。
+    const bodyText = code(blockOf(/^\s*const reportRunnerLost\s*=\s*\(/)).join('\n');
+
+    expect(/stores\.journal[\s\S]*?\.append\(/.test(bodyText)).toBe(true);
+    expect(bodyText.includes("type: 'external_event'")).toBe(true);
+    expect(bodyText.includes("source: 'runner'")).toBe(true);
+  });
+
+  it('記録用の関数を呼ぶのは onLost の1箇所だけ（onLost 以外まで記録しない）', () => {
+    const calls = code(source.split('\n')).filter((line) => line.includes('reportRunnerLost('));
+
+    // 定義行（`const reportRunnerLost = (report: {`）は `reportRunnerLost(`
+    // という並びを含まないので、ここに現れるのは実際の呼び出しだけ。
+    expect(calls).toHaveLength(1);
+  });
+});
+
+/**
  * **「認証トークンが通る状態に戻った」の判定**（人間の決定 2026-09-07）。
  *
  * 人間の逐語: 「limitが来て止まってトークン回して復活したら復活させたことを
