@@ -373,8 +373,8 @@ function findFieldLine(content, label) {
  *    `measure/fb1c80e3-388-signal-scaffold` の
  *    `chat.issue388-scratch.test.tsx`。⚠️ **どちらの枝も既に削除されている**
  *    ——前者は 2026-09-22、後者は 2026-09-20。⟹ 枝名で読みに行かないこと。
- *    前者の全文は issue #783 に、後者の在り処は issue #388 のクローズ
- *    コメントに在る。経緯は #1303）
+ *    **どちらも全文が issue のコメントへ写してある**——前者は #783、後者は
+ *    #388。経緯は #1303）
  * 2. 冒頭コメント領域に `@観測` という語が在る（領域より後ろは見ない）
  */
 export function isObservationFile(path, content) {
