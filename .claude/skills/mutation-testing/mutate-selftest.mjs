@@ -2349,8 +2349,8 @@ function scenarioJudgementUndeliveredGate() {
 // `SKILL.md` へ「基準を書いておくこと（#1137）」を足していたが、**穴はそのまま
 // 残った**（takecchi の #1192 の指摘そのもの）。⟹ ここで測る。
 //
-// **走行の中身は3ケースで完全に同一**にしてある。違うのは `mustFail` に何を書いたか
-// だけで、**それが結末を変えないこと**が受け入れ条件である。
+// **走行の中身は最初の3ケースで完全に同一**にしてある（4ケース目は下の対照）。
+// 違うのは `mustFail` に何を書いたかだけで、**それが結末を変えないこと**が受け入れ条件である。
 const BREADTH_AIMED_TOOTH =
   'packages/core/src/breadth.test.ts > breadth > 狙った歯（この走行では落ちていない）';
 const BREADTH_UNRELATED_TOOTH =
@@ -2376,6 +2376,34 @@ const BREADTH_TESTS = {
     byName: new Map([
       [BREADTH_AIMED_TOOTH, 'passed'],
       [BREADTH_UNRELATED_TOOTH, 'failed'],
+    ]),
+  },
+};
+
+// **門8 が狭すぎないことの対照（部分集合であって一致ではない）。** 1つの変異が
+// 正当に2本の歯を落とした走行で、狙いの1本だけを宣言する。空振りは0本なので
+// `検出` でなければならない。⚠️ 上の3ケースは「落ちた歯が1本」の走行しか持たない
+// ので、門8 を「宣言と落ちた歯の完全一致」へ締めすぎる変異（#1137 の案2「本数に
+// 上限」と同じ向きの狭すぎ）を1本も捕まえられなかった（実測 2026-09-23:
+// `missed.length === 0` の後に件数の一致を要求する変異で `--scenario all` が緑）。
+const BREADTH_SECOND_RED_TOOTH =
+  'packages/core/src/breadth.test.ts > breadth > 同じ変異で正当に落ちたもう1本';
+
+const BREADTH_TESTS_TWO_RED = {
+  exitCode: 1,
+  raw:
+    '⎯⎯⎯ Failed Tests 2 ⎯⎯⎯\n\n' +
+    ` FAIL  ${BREADTH_UNRELATED_TOOTH}\n\n` +
+    ` FAIL  ${BREADTH_SECOND_RED_TOOTH}\n\n` +
+    'Test Files  1 failed | 152 passed (153)\nTests  2 failed | 3093 passed (3095)\n',
+  filesLine: 'Test Files  1 failed | 152 passed (153)',
+  testsLine: 'Tests  2 failed | 3093 passed (3095)',
+  census: {
+    available: true,
+    byName: new Map([
+      [BREADTH_AIMED_TOOTH, 'passed'],
+      [BREADTH_UNRELATED_TOOTH, 'failed'],
+      [BREADTH_SECOND_RED_TOOTH, 'failed'],
     ]),
   },
 };
@@ -2408,6 +2436,14 @@ function scenarioJudgementDeclarationBreadth() {
       expectCategory: '検出',
       expectThrow: false,
     },
+    {
+      id: 'selftest-breadth-partial-of-two',
+      label: '2本落ちた走行で1本だけを宣言（狭すぎないことの対照）',
+      mustFail: [BREADTH_UNRELATED_TOOTH],
+      tests: BREADTH_TESTS_TWO_RED,
+      expectCategory: '検出',
+      expectThrow: false,
+    },
   ];
 
   const results = [];
@@ -2418,7 +2454,7 @@ function scenarioJudgementDeclarationBreadth() {
       category = judge(
         { id: c.id, mustFail: c.mustFail },
         BREADTH_ARTIFACT_RESULT,
-        BREADTH_TESTS,
+        c.tests ?? BREADTH_TESTS,
         GATE_SCAFFOLD_CONTROL,
       ).category;
     } catch (err) {
@@ -2451,18 +2487,19 @@ function scenarioJudgementDeclarationBreadth() {
   if (bad.length > 0) {
     throw new HarnessError(
       `宣言の広さで判定が変わる形が戻っている（#1137）: ${bad.length}/${results.length} 件が期待と違う。` +
-        '⟹ 「宣言を広く書くほど 検出 になりやすい」向きが開いている。' +
+        '⟹ 「宣言を広く書くほど 検出 になりやすい」向きが開いたか、門8 が締めすぎて' +
+        '部分集合の宣言まで拒むようになった（どちらかは詳細の id で分かる）。' +
         `詳細: ${JSON.stringify(bad)}`,
     );
   }
 
   // **この表が「何も測っていない」形に退化していないことを、別に測る。**
-  // 3ケースとも同じ結末になったら、宣言の違いを測れていない（門7 が全部拒む／
+  // ケースが揃って同じ結末になったら、宣言の違いを測れていない（門7 が全部拒む／
   // 全部通す、のどちらでも表は「揃って」しまう）。
   const distinctOutcomes = new Set(results.map((r) => r.category ?? '(投げた)'));
   if (distinctOutcomes.size !== 3) {
     throw new HarnessError(
-      `3ケースの結末が ${distinctOutcomes.size} 種類しかない（期待は3種類: 身代わり / 投げた / 検出）。` +
+      `ケースの結末が ${distinctOutcomes.size} 種類しかない（期待は3種類: 身代わり / 投げた / 検出）。` +
         '⟹ 宣言の違いを測れていない。',
     );
   }
