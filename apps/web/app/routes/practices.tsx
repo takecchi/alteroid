@@ -4,7 +4,7 @@ import { Link, useNavigate } from 'react-router';
 import { Page } from '~/components/page';
 import { Button, Card, Empty, ErrorNote, Input, Spinner } from '~/components/ui';
 import { usePractices } from '~/hooks/queries';
-import { formatBytes, formatRelative } from '~/lib/format';
+import { formatRelative } from '~/lib/format';
 
 /** サーバ側と同じ規則（`practiceSlugSchema`）。ここで弾いて 400 を待たない。 */
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
@@ -82,7 +82,10 @@ export default function Practices() {
                     <p className="truncate font-mono text-[11px] text-muted">{practice.slug}</p>
                   </div>
                   <span className="shrink-0 text-[11px] text-muted">
-                    {formatBytes(practice.bytes)} · 作成 {formatRelative(practice.createdAt)} · 更新{' '}
+                    {/* `bytes` の実体は本文の文字数（`practiceMetaSchema` の doc）。
+                        `formatBytes` を当てると「B / KB」と名乗ってしまう（#1340）。
+                        CLI とクローンの道具と同じく「文字」と刷る。 */}
+                    {practice.bytes} 文字 · 作成 {formatRelative(practice.createdAt)} · 更新{' '}
                     {formatRelative(practice.updatedAt)}
                   </span>
                 </Link>

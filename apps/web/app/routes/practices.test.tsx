@@ -3,7 +3,7 @@
  * やり方一覧（`/practices` 画面、#1055 段3③）。
  *
  * `memory.test.tsx` と同じ骨組み——一覧の1行に種類（kind）・題・slug・
- * バイト数・作成/更新の相対時刻が出ること、0件のときは正常な状態として
+ * 文字数・作成/更新の相対時刻が出ること、0件のときは正常な状態として
  * 案内すること（「まだ設定されていない」という異常には読ませない——
  * `practice_list` のクローンの道具と同じ語彙）。
  */
@@ -83,6 +83,36 @@ describe('一覧の行', () => {
 
     await screen.findByText('[調査]');
     expect(document.querySelector('select')).toBeNull();
+  });
+});
+
+describe('本文の大きさ（#1340）', () => {
+  /**
+   * `bytes` の実体は本文の**文字数**である（`practiceMetaSchema` の doc。
+   * fs / pg とも `content.length`）。CLI とクローンの道具は「N 文字」と刷って
+   * いるのに、この画面だけが `formatBytes` で「B / KB」と名乗っていた ⟹
+   * 日本語の本文では実サイズの半分以下を「B」と言っていた。欄の改名
+   * （`bytes` → `chars`）は #1340 に残っていて、この歯は画面の名乗りだけを見る。
+   */
+  it('日本語の本文でも「N 文字」と名乗り、B / KB を名乗らない', async () => {
+    // `# レビュー\n\n差分より先に Issue を読む。\n` は 26 文字（UTF-8 では 54 バイト）。
+    renderPractices([practice({ title: 'レビューの手順', bytes: 26 })]);
+
+    const row = await screen.findByText(/26 文字/);
+    expect(row.textContent).not.toMatch(/\d\s*(B|KB|MB)\b/);
+  });
+
+  it('1024 を超えても KB へ繰り上げない（文字数は 1024 で割る単位ではない）', async () => {
+    renderPractices([practice({ bytes: 2048 })]);
+
+    const row = await screen.findByText(/2048 文字/);
+    expect(row.textContent).not.toMatch(/KB/);
+  });
+
+  it('陽性対照: ASCII の本文でも同じく「N 文字」と名乗る', async () => {
+    renderPractices([practice({ bytes: 42 })]);
+
+    expect(await screen.findByText(/42 文字/)).toBeTruthy();
   });
 });
 
