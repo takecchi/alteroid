@@ -53,6 +53,11 @@
  * `check-no-attribution-trailers-core.mjs` が持っている。ここは**それを読むだけ**で、
  * 自分の表を持たない（`AGENTS.md` の反重複規律。印が増えたとき片方だけ古くなる
  * 形を作らない）。
+ *
+ * **行頭（`^\s*`）に絞る規則（#1349）も、この import 経由でそのまま共有される。**
+ * `no-attribution-trailers`（PR 側の門）で「文中で触れているだけ」として緑を通った
+ * 本文が squash で `main` に載っても、ここが別の基準で赤くすることはない——両者は
+ * `findAttributionMarkers` という同じ関数・同じ正規表現を見ているので、ずれない。
  */
 
 import { findAttributionMarkers } from './check-no-attribution-trailers-core.mjs';

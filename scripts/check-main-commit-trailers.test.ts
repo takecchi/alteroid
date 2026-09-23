@@ -84,6 +84,72 @@ describe('evaluateMainCommitTrailers', () => {
     expect(result.verdict).toBe('found');
     expect(result.findings[0].source).toContain('sha不明');
   });
+
+  it('文中で言及しているだけなら clean（#1349。行頭だけを見る）', () => {
+    const result = evaluateMainCommitTrailers({
+      commits: [
+        {
+          oid: 'a'.repeat(40),
+          headline: 'docs: 何か',
+          message: 'docs: 何か\n\n本文で `Co-Authored-By:` トレーラは付けていない、と書く。',
+        },
+        {
+          oid: 'b'.repeat(40),
+          headline: 'docs: 別の何か',
+          message:
+            'docs: 別の何か\n\nこの本文には 🤖 Generated with という文字列を書いていない、と説明する。',
+        },
+      ],
+    });
+    expect(result.verdict).toBe('clean');
+    expect(result.findings).toEqual([]);
+  });
+
+  it('行頭の逐語は found（2行目以降でも。m フラグが要る）', () => {
+    const result = evaluateMainCommitTrailers({
+      commits: [
+        {
+          oid: 'a'.repeat(40),
+          headline: 'fix: 何か',
+          message: 'fix: 何か\n\nCo-Authored-By: Claude <noreply@example.com>',
+        },
+      ],
+    });
+    expect(result.verdict).toBe('found');
+  });
+
+  it('コードブロック内でも行頭なら found（囲みは除外にならない）', () => {
+    const result = evaluateMainCommitTrailers({
+      commits: [
+        {
+          oid: 'a'.repeat(40),
+          headline: 'fix: 何か',
+          message: [
+            'fix: 何か',
+            '',
+            '```',
+            'Co-authored-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>',
+            '```',
+          ].join('\n'),
+        },
+      ],
+    });
+    expect(result.verdict).toBe('found');
+  });
+
+  it('大小文字違いでも found（co-AUTHORED-by: のような表記ゆれ）', () => {
+    const result = evaluateMainCommitTrailers({
+      commits: [{ oid: 'a'.repeat(40), headline: 'x', message: 'x\n\nco-AUTHORED-by: y <y@z>' }],
+    });
+    expect(result.verdict).toBe('found');
+  });
+
+  it('行頭に空白があっても found（^\\s* の分）', () => {
+    const result = evaluateMainCommitTrailers({
+      commits: [{ oid: 'a'.repeat(40), headline: 'x', message: 'x\n\n   Co-Authored-By: y <y@z>' }],
+    });
+    expect(result.verdict).toBe('found');
+  });
 });
 
 describe('evaluatePushRange', () => {

@@ -73,6 +73,52 @@ describe('findAttributionMarkers', () => {
       'generated-with',
     ]);
   });
+
+  it('文中で言及しているだけなら当たらない（#1349。行頭だけを見る）', () => {
+    expect(
+      findAttributionMarkers('本文で `Co-Authored-By:` トレーラは付けていない、と書く。'),
+    ).toEqual([]);
+    expect(
+      findAttributionMarkers(
+        'この PR の本文には 🤖 Generated with という文字列を書いていない、と説明する。',
+      ),
+    ).toEqual([]);
+  });
+
+  it('行頭の逐語は当たる（2行目以降でも。m フラグが要る）', () => {
+    expect(
+      findAttributionMarkers('本文の1行目。\nCo-Authored-By: Claude <noreply@example.com>'),
+    ).toEqual(['Co-Authored-By:']);
+    expect(
+      findAttributionMarkers(
+        '本文の1行目。\n🤖 Generated with [Claude Code](https://claude.com/claude-code)',
+      ),
+    ).toEqual(['🤖 Generated with']);
+  });
+
+  it('コードブロック内でも行頭なら当たる（囲みは除外にならない）', () => {
+    const text = [
+      '```',
+      'Co-authored-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>',
+      '```',
+    ].join('\n');
+    expect(findAttributionMarkers(text)).toEqual(['Co-Authored-By:']);
+  });
+
+  it('大小文字違いでも当たる（co-AUTHORED-by: のような表記ゆれ）', () => {
+    expect(findAttributionMarkers('co-AUTHORED-by: Claude <noreply@example.com>')).toEqual([
+      'Co-Authored-By:',
+    ]);
+  });
+
+  it('行頭に空白があっても当たる（^\\s* の分）', () => {
+    expect(findAttributionMarkers('   Co-Authored-By: Claude <noreply@example.com>')).toEqual([
+      'Co-Authored-By:',
+    ]);
+    expect(
+      findAttributionMarkers('\t🤖 Generated with [Claude Code](https://claude.com/claude-code)'),
+    ).toEqual(['🤖 Generated with']);
+  });
 });
 
 describe('commitFullMessage', () => {
