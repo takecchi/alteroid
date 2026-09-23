@@ -342,12 +342,22 @@ export function requireNoLeftoverDeliveryFixtureFiles(scenarioName) {
  * 見つかった場合の文面は、`requireNoLeftoverDeliveryFixtureFiles` と同じ
  * 「名指し + 外し方」だが、文脈が違う——ここに来る時点で `restore` は
  * 既に成功している（印は解除済み）ので、「先に印を片付けること」は言わない。
+ *
+ * **`context` は括弧の中の一文だけを変える（#1262 継続）。** `'restored'`（既定）は
+ * `restore` が成功した後の文脈である。`'no-marker'` は `restore` が「印が無い。」で
+ * 終わった後の文脈で、その回は何も復元していない ⟹ 「印の解除はここまでで完了
+ * している」と言うと嘘になる。名指しと外し方は同じものを出す。
  */
-export function formatLeftoverDeliveryScaffoldNotice(found) {
+export function formatLeftoverDeliveryScaffoldNotice(found, context = 'restored') {
   if (found.length === 0) return null;
+  const aside =
+    context === 'no-marker'
+      ? '（この restore が壊したのではない。印は最初から無く、この restore は何も書き戻していない）'
+      : '（この restore が壊したのではない。ソースの復元と印の解除はここまでで完了している）';
   return (
     '⚠ delivery: 前回の selftest が置き去りにした足場が残っている' +
-    '（この restore が壊したのではない。ソースの復元と印の解除はここまでで完了している）。\n' +
+    aside +
+    '。\n' +
     found.map((item) => `${describeLeftoverDeliveryScaffoldEntry(item)}\n`).join('') +
     deliveryScaffoldRemovalInstruction()
   );

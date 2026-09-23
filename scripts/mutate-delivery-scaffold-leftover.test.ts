@@ -412,3 +412,140 @@ describe('mutate.mjs CLI: restore は成功した後、delivery の足場が残�
     }
   });
 });
+
+// ── 配線の層: 印が無い区間で restore が失敗する回（#1358 の限界を塞ぐ） ──
+//
+// #1358 が足した名指しは `restoreMutation` が成功した後にしか出ない。印が
+// 作られる前の区間（barrel に足場が入った直後・フィクスチャの変異前）で
+// selftest が中断すると、印は無いのに足場だけが残る——この区間で `restore`
+// を打つと `restoreMutation` は `readMarkerVerified` の入口で
+// HarnessError('印が無い。') を投げ、#1358 の名指しへ一度も到達しない。
+// この歯が確かめるのは、`cmdRestore` がその例外を捕まえ、印が無い場合に
+// 限って足場の名指しを例外メッセージへ足して投げ直すことだけである。
+// `restoreMutation` 自体・「印が無い。」の文面・exit code（1）は一切
+// 変えていない。
+
+/** 印を作らず、apply も呼ばずに足場だけを置いた使い捨てツリーを返す。 */
+function makeTmpGitRepoWithScaffoldNoMarker(write: (dir: string) => void): string {
+  const tmp = makeTmpGitRepo();
+  write(tmp);
+  return tmp;
+}
+
+/**
+ * apply で印を作った後、控え（`marker.backupPath`）を壊す——
+ * `restoreMutation` は控えの md5 が `md5Pre` と一致しないと判断し、
+ * 「印は残す」側の HarnessError を投げる（`mutate-core.mjs` 2257行付近）。
+ * これは「印が在るのに `restoreMutation` が失敗する」を安定して再現できる
+ * 数少ない形——ここでは印は最後まで残る。
+ */
+function applyThenCorruptBackup(tmp: string): void {
+  const specPath = writeSpec(tmp);
+  const applyResult = runCli(['apply', '--spec', specPath, '--root', tmp]);
+  expect(applyResult.status).toBe(0);
+  const marker = JSON.parse(fs.readFileSync(path.join(tmp, 'MUTATION-IN-PROGRESS.json'), 'utf8'));
+  fs.writeFileSync(path.join(tmp, marker.backupPath), 'CORRUPTED\n');
+}
+
+describe('mutate.mjs CLI: restore が「印が無い」で失敗する場合も、足場が残っていれば名指しする（#1358 の限界を塞ぐ）', () => {
+  it('陽性対照（印も足場も無い）: 出力は現行の main と逐語で同じ（足した文が1文字も出ない）', () => {
+    const tmp = makeTmpGitRepo();
+    try {
+      // apply を呼ばない — 印そのものが無い状態を作る。足場も置かない。
+      const restoreResult = runCli(['restore', '--root', tmp]);
+      expect(restoreResult.status).toBe(1);
+      const stdout = restoreResult.stdout ?? '';
+      // 実装前に実測した逐語（このテストを実装前に赤/緑いずれでも走らせて
+      // 固定した値）。`ROOT: …` の行だけ tmp のパスに依存するので、
+      // 固定の末尾（restore セクション以降）だけを厳密に照合する。
+      const idx = stdout.indexOf('── restore ──');
+      expect(idx).toBeGreaterThan(-1);
+      expect(stdout.slice(idx)).toBe('── restore ──\nエラー: 印が無い。\n');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('印が無く、足場が両方在るとき: 「印が無い。」は残ったまま、名指しと外し方も出る', () => {
+    const tmp = makeTmpGitRepoWithScaffoldNoMarker(writeBothScaffold);
+    try {
+      const restoreResult = runCli(['restore', '--root', tmp]);
+      expect(restoreResult.status).toBe(1);
+      const stdout = restoreResult.stdout ?? '';
+
+      expect(stdout).toContain('エラー: 印が無い。');
+      expect(stdout).toContain('delivery: 前回の selftest が置き去りにした足場が残っている');
+      expect(stdout).toContain(`  - ${DELIVERY_FIXTURE_MODULE_REL}（フィクスチャ本体）`);
+      expect(stdout).toContain(`  - ${DELIVERY_BARREL_REL}（一時的な re-export 行が残っている）`);
+      expect(stdout).toContain(DELIVERY_BARREL_SCAFFOLD_BEGIN);
+      expect(stdout).toContain(DELIVERY_BARREL_SCAFFOLD_END);
+      // **この回は何も復元していない。** 成功後の文脈の「印の解除はここまでで
+      // 完了している」を言うと嘘になる（#1262 継続）。
+      expect(stdout).toContain('印は最初から無く、この restore は何も書き戻していない');
+      expect(stdout).not.toContain('印の解除はここまでで完了している');
+
+      // 足場は消えていない——`restoreMutation` に一切触っていないので、
+      // 「印が無い」で失敗した回が足場を消す/作るということも無い。
+      expect(fs.existsSync(path.join(tmp, DELIVERY_FIXTURE_MODULE_REL))).toBe(true);
+      expect(fs.readFileSync(path.join(tmp, DELIVERY_BARREL_REL), 'utf8')).toContain(
+        DELIVERY_BARREL_SCAFFOLD_BEGIN,
+      );
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('印が無く、フィクスチャ本体だけ在るとき: その1件だけを名指しする', () => {
+    const tmp = makeTmpGitRepoWithScaffoldNoMarker(writeFixtureOnly);
+    try {
+      const restoreResult = runCli(['restore', '--root', tmp]);
+      expect(restoreResult.status).toBe(1);
+      const stdout = restoreResult.stdout ?? '';
+
+      expect(stdout).toContain('エラー: 印が無い。');
+      expect(stdout).toContain(`  - ${DELIVERY_FIXTURE_MODULE_REL}（フィクスチャ本体）`);
+      expect(stdout).not.toContain('一時的な re-export 行が残っている');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('印が無く、barrel の re-export 行だけ在るとき: その1件だけを名指しする', () => {
+    const tmp = makeTmpGitRepoWithScaffoldNoMarker(writeBarrelOnly);
+    try {
+      const restoreResult = runCli(['restore', '--root', tmp]);
+      expect(restoreResult.status).toBe(1);
+      const stdout = restoreResult.stdout ?? '';
+
+      expect(stdout).toContain('エラー: 印が無い。');
+      expect(stdout).toContain(`  - ${DELIVERY_BARREL_REL}（一時的な re-export 行が残っている）`);
+      expect(stdout).not.toContain('フィクスチャ本体）');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('印は在るが restoreMutation が失敗する回（控えが汚染されている）は、足場が在っても名指しを出さない', () => {
+    const tmp = makeTmpGitRepo();
+    try {
+      writeBothScaffold(tmp);
+      applyThenCorruptBackup(tmp);
+
+      const restoreResult = runCli(['restore', '--root', tmp]);
+      expect(restoreResult.status).toBe(1);
+      const stdout = restoreResult.stdout ?? '';
+
+      // 印を残す側の既存の文面はそのまま出る。
+      expect(stdout).toContain('控えの md5 が md5Pre と一致しない');
+      expect(stdout).toContain('印は残す。');
+      // 足場は在るのに、名指しは出ない——印が在る回にはこの PR の変更は
+      // 一切触らない(今までどおり)。
+      expect(stdout).not.toContain('delivery: 前回の selftest が置き去りにした足場が残っている');
+
+      // 印は本当に残っている（"印は残す。" が字義どおりであることの裏取り）。
+      expect(fs.existsSync(path.join(tmp, 'MUTATION-IN-PROGRESS.json'))).toBe(true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});

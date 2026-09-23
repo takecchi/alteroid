@@ -278,7 +278,43 @@ function cmdRestore(args) {
   checkJudgementVocabulary();
   section('restore');
   const fromMarker = args.includes('--restore-from-marker');
-  const result = restoreMutation({ fromMarker });
+  let result;
+  try {
+    result = restoreMutation({ fromMarker });
+  } catch (err) {
+    // **#1358 の限界を塞ぐ。** #1358 が足した「`restore` 成功後の名指し」は、
+    // 印が作られる前の区間（barrel に足場が入った直後・フィクスチャの変異前）
+    // で中断した回には届かない——その回は `restoreMutation` が
+    // `readMarkerVerified` の入口で HarnessError('印が無い。') を投げ、この
+    // catch より下の成功経路（名指しを足す側）へ一度も到達しないためである。
+    // ここではその区間に限って、例外メッセージの後ろへ足場の名指しを足す。
+    //
+    // **`err instanceof HarnessError` を条件にしているのは型を保つため。**
+    // `main()` の catch は `instanceof HarnessError` のときだけ
+    // `エラー: ${message}` を出して exit 1 にし、それ以外は素通しして
+    // スタックトレースごと投げ直す。ここで組み立て直す例外も
+    // `new HarnessError(...)` にすることで、その分岐を変えない——
+    // 元が HarnessError でない例外（想定外のバグ）まで HarnessError に
+    // 化けさせて exit 1 の顔で隠さないよう、条件を懸けてある。
+    //
+    // **見るのは印の有無だけで、印が在るのに `restoreMutation` が失敗した
+    // 回（印を残す回。例: 控えが汚染されている）には触らない。** `status` が
+    // 印の段階から理由を説明できるので、汎用の `restore` へさらに selftest
+    // 固有の知識を足す理由が無い——#1358 が案B（`status` に足場を教える案）を
+    // 見送った理由と同じである。足場の検出そのものは #1358 で既に
+    // 切り出してある（`findLeftoverDeliveryScaffold` /
+    // `formatLeftoverDeliveryScaffoldNotice`）ので、ここでは呼ぶだけで、
+    // 新しい結合は増やさない。
+    if (err instanceof HarnessError && !markerExists()) {
+      const leftoverDeliveryScaffold = findLeftoverDeliveryScaffold();
+      const notice = formatLeftoverDeliveryScaffoldNotice(leftoverDeliveryScaffold, 'no-marker');
+      // 足場が無ければ、例外をそのまま投げ直す（出力は1文字も変えない）。
+      if (notice !== null) {
+        throw new HarnessError(`${err.message}\n\n${notice}`);
+      }
+    }
+    throw err;
+  }
   // **戻り値を読む。** `rebuildCheck` を捨てると、後始末の build が落ちて
   // いても `restore` が exit 0 で終わったように見えかねない（マネージャーの
   // 実測で見つかった欠陥）。`restoreMutation` は後始末の検証が失敗すれば
