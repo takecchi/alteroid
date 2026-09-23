@@ -1282,6 +1282,15 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
           'この関数はその検証の外に立つ。足すなら `inboxEventShape` の' +
           '`human_message.supersedes` と2か所同時、`tag()` は禁止。',
       },
+      // issue #782 の1。`escalation.approvalId`（直下）・`inboxEventShape` の
+      // `human_answer.approvalId` と同じ判断——承認待ちキューの項目 id で、
+      // 自由文ではない（呼び出し側が組み立てる文章の一部にはならない）ので
+      // 毒（`chars=` を含む値）を運べない。`conversationId`/`supersedes`
+      // （直上の2つ）とは事情が違う——あちらは「値を決めるのが呼び出し側で、
+      // 対になる `inboxEventShape` の欄と2か所同時にしか変えられない」ことが
+      // `never` の理由だが、`approvalId` は `journalEntrySchema` の `exchange`
+      // だけが持つ欄で、対になる欄が別に無い。
+      approvalId: { emit: 'tag', token: 'approvalId' },
     },
     decision: {
       decision: { emit: 'size', token: 'decision' },
@@ -1655,6 +1664,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       text: SECRET,
       conversationId: SECRET,
       supersedes: SECRET,
+      approvalId: 'ap-1',
     },
     decision: {
       type: 'decision',

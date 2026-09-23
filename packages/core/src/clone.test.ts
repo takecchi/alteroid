@@ -2331,6 +2331,182 @@ describe('クローン', () => {
     },
   );
 
+  it(
+    '会話 id を持つ承認に答えると、outbound の exchange に approvalId が積まれる' +
+      '（issue #782 の1）',
+    async () => {
+      const s = setup((input) =>
+        input.includes('承認待ちにしていた質問に人間が答えた')
+          ? '承認への返答（#782）'
+          : 'やあの返事',
+      );
+
+      s.clone.post(humanMessage('本番 DB へ打ってよいか判断してくれ'));
+      await waitForDone(s.events);
+
+      await s.stores.jobs.putApproval({
+        id: 'ap-1',
+        createdAt: new Date().toISOString(),
+        question: '本番 DB へ2文だけ打ってよいか',
+        conversationId: 'conv-1',
+      });
+      await s.clone.answerApproval('ap-1', '(a) でよい');
+
+      await waitFor(async () => {
+        const found = await s.stores.journal.list({ types: ['exchange'], limit: 100 });
+        return found.some(
+          (entry) =>
+            entry.type === 'exchange' &&
+            entry.role === 'outbound' &&
+            entry.text.includes('承認への返答（#782）'),
+        );
+      }, '承認への返答（approvalId 付き）が日誌に積まれる');
+
+      const found = await s.stores.journal.list({ types: ['exchange'], limit: 100 });
+      const reply = found.find(
+        (entry) =>
+          entry.type === 'exchange' &&
+          entry.role === 'outbound' &&
+          entry.text.includes('承認への返答（#782）'),
+      );
+      if (reply === undefined || reply.type !== 'exchange') {
+        throw new Error('回答ターンの返答が日誌に見つからない');
+      }
+      // **芯（issue #782 の1）**: 会話 id や時刻ではなく、id そのもので結ぶ。
+      expect(reply.approvalId).toBe('ap-1');
+      expect(reply.with).toBe('human');
+      expect(reply.conversationId).toBe('conv-1');
+
+      await s.clone.stop();
+    },
+  );
+
+  it(
+    '同じ会話で2件の承認へ立て続けに答えても、それぞれの outbound の exchange は' +
+      '別の approvalId を持つ（issue #782 の1。「同じ時刻に2件答えたら区別できない」' +
+      'の裏返し——会話 id と時刻の近さだけでは区別できない場面の芯）',
+    async () => {
+      const s = setup((input) => {
+        if (input.includes('質問A')) return '返答A';
+        if (input.includes('質問B')) return '返答B';
+        return 'やあの返事';
+      });
+
+      s.clone.post(humanMessage('本番 DB へ打ってよいか判断してくれ'));
+      await waitForDone(s.events);
+
+      // 2件の承認を同じ会話へ積む。**立て続けに**（`await` を挟むだけで）答える
+      // ——実時刻では厳密な同時刻を再現できないが、ここで測りたいのは
+      // 「時刻が近いと区別できない」ことそのものではなく、**区別する手段が
+      // 会話 id と時刻の他に無かった**という穴が、id を運ぶことで塞がることである。
+      await s.stores.jobs.putApproval({
+        id: 'ap-A',
+        createdAt: new Date().toISOString(),
+        question: '質問A: 本番 DB へ2文だけ打ってよいか',
+        conversationId: 'conv-1',
+      });
+      await s.stores.jobs.putApproval({
+        id: 'ap-B',
+        createdAt: new Date().toISOString(),
+        question: '質問B: ステージングへも打ってよいか',
+        conversationId: 'conv-1',
+      });
+      await s.clone.answerApproval('ap-A', 'よい');
+      await waitFor(async () => {
+        const found = await s.stores.journal.list({ types: ['exchange'], limit: 100 });
+        return found.some(
+          (entry) =>
+            entry.type === 'exchange' && entry.role === 'outbound' && entry.text === '返答A',
+        );
+      }, '質問Aへの返答が日誌に積まれる');
+      await s.clone.answerApproval('ap-B', 'よい');
+      await waitFor(async () => {
+        const found = await s.stores.journal.list({ types: ['exchange'], limit: 100 });
+        return found.some(
+          (entry) =>
+            entry.type === 'exchange' && entry.role === 'outbound' && entry.text === '返答B',
+        );
+      }, '質問Bへの返答が日誌に積まれる');
+
+      const found = await s.stores.journal.list({ types: ['exchange'], limit: 100 });
+      const replyA = found.find(
+        (entry) => entry.type === 'exchange' && entry.role === 'outbound' && entry.text === '返答A',
+      );
+      const replyB = found.find(
+        (entry) => entry.type === 'exchange' && entry.role === 'outbound' && entry.text === '返答B',
+      );
+      if (
+        replyA === undefined ||
+        replyA.type !== 'exchange' ||
+        replyB === undefined ||
+        replyB.type !== 'exchange'
+      ) {
+        throw new Error('2件の回答ターンの返答が日誌に見つからない');
+      }
+      // 同じ会話 id を持ちながら、approvalId で正しく結び分けられている。
+      expect(replyA.conversationId).toBe('conv-1');
+      expect(replyB.conversationId).toBe('conv-1');
+      expect(replyA.approvalId).toBe('ap-A');
+      expect(replyB.approvalId).toBe('ap-B');
+      expect(replyA.approvalId).not.toBe(replyB.approvalId);
+
+      await s.clone.stop();
+    },
+  );
+
+  it(
+    '承認に由来しないターン（人間の発言・会話 id を持たない承認への回答）の' +
+      'outbound の exchange には approvalId が付かない（issue #782 の1。契約の反対側 ——' +
+      '片側だけの歯だと「全部に付ける」実装も緑になってしまう）',
+    async () => {
+      const s = setup((input) =>
+        input.includes('承認待ちにしていた質問に人間が答えた') ? '内部ターンの返答' : '通常の返事',
+      );
+
+      // 1. ただの人間の発言（承認とは無関係のターン）。
+      s.clone.post(humanMessage('やあ'));
+      await waitForDone(s.events);
+
+      // 2. 会話 id を持たない承認への回答（= 内部ターン。`with: 'self'` に倒れる）。
+      await s.stores.jobs.putApproval({
+        id: 'ap-internal',
+        createdAt: new Date().toISOString(),
+        question: '内部ターンの引き金',
+      });
+      await s.clone.answerApproval('ap-internal', 'よい');
+      await waitFor(async () => {
+        const found = await s.stores.journal.list({ types: ['exchange'], limit: 100 });
+        return found.some(
+          (entry) =>
+            entry.type === 'exchange' &&
+            entry.role === 'outbound' &&
+            entry.text === '内部ターンの返答',
+        );
+      }, '内部ターンの返答が日誌に積まれる');
+
+      const found = await s.stores.journal.list({ types: ['exchange'], limit: 100 });
+      const outbound = found.filter(
+        (entry) => entry.type === 'exchange' && entry.role === 'outbound',
+      );
+      expect(outbound.length).toBeGreaterThanOrEqual(2);
+      for (const entry of outbound) {
+        if (entry.type !== 'exchange') continue;
+        // 通常の人間の発言への返答にも、会話 id を持たない承認（`self`）への
+        // 返答にも、approvalId は付かない。
+        expect(entry.approvalId).toBeUndefined();
+      }
+      const internalReply = outbound.find(
+        (entry) => entry.type === 'exchange' && entry.text === '内部ターンの返答',
+      );
+      if (internalReply === undefined || internalReply.type !== 'exchange') {
+        throw new Error('内部ターンの返答が見つからない');
+      }
+      expect(internalReply.with).toBe('self');
+
+      await s.clone.stop();
+    },
+  );
+
   it('マネージャーの報告と確認は受信箱を通ってクローンに届く（配線）', async () => {
     const s = setup();
 
