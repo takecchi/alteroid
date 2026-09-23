@@ -35,15 +35,13 @@ describe('staleObservedRecoveryForBlockedKey', () => {
   });
 
   it('観測に基づく回復でなければ偽（「回した」「冷却が明けた」は対象外）', () => {
-    expect(staleObservedRecoveryForBlockedKey({ ...base(), observedRecovery: false })).toBe(
-      false,
-    );
+    expect(staleObservedRecoveryForBlockedKey({ ...base(), observedRecovery: false })).toBe(false);
   });
 
   it('resetsAt が分からなければ偽（判定できないので配る）', () => {
-    expect(
-      staleObservedRecoveryForBlockedKey({ ...base(), blockedResetsAt: undefined }),
-    ).toBe(false);
+    expect(staleObservedRecoveryForBlockedKey({ ...base(), blockedResetsAt: undefined })).toBe(
+      false,
+    );
   });
 
   it('いまの鍵の id が分からなければ偽（判定できないので配る）', () => {
@@ -61,9 +59,7 @@ describe('staleObservedRecoveryForBlockedKey', () => {
   });
 
   it('違う鍵を指していれば偽（いま止まっている鍵については何も言っていない）', () => {
-    expect(staleObservedRecoveryForBlockedKey({ ...base(), reopenedTokenId: 'tok-b' })).toBe(
-      false,
-    );
+    expect(staleObservedRecoveryForBlockedKey({ ...base(), reopenedTokenId: 'tok-b' })).toBe(false);
   });
 
   it('now を省略すると Date.now() を使う', () => {
@@ -180,7 +176,9 @@ describe('staleObservedRecoveryNoticeEvent', () => {
       id: 'evt-2',
       at: '2026-09-23T00:00:00.000Z',
       source: DAEMON_TOKEN_POOL_REOPENED_SOURCE,
-      payload: { text: '認証トークンが通る状態に戻った（また通るようになった）: 「本命」（id tok-a）' },
+      payload: {
+        text: '認証トークンが通る状態に戻った（また通るようになった）: 「本命」（id tok-a）',
+      },
     };
     expect(staleObservedRecoveryNoticeEvent(event, FUTURE, 'tok-a')).toBe(false);
   });
