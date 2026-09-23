@@ -109,6 +109,37 @@ export interface ReclaimObservation {
   /** 候補の num_threads の合計。**`pids.current` と同じ軸**なので、返せる量の見積りになる。 */
   candidateThreads: number;
   /**
+   * 孤児ルート（`ppid == 1` かつ `/proc/<pid>` の所有 UID が降ろす UID と一致する）
+   * の本数（#1334）。**素性を読まずに「1本の巨大な木か、バラバラな木が大量にあるか」
+   * を見分けるための3欄**（{@link ReclaimObservation.largestTreeCandidates}・
+   * {@link ReclaimObservation.singletonTrees} と組で読む）——409本が1本の孤児ルート
+   * から伸びた部分木なのか、409本の孤児ルートがそれぞれ単独で立っているのかは、
+   * `candidates` の合計だけでは区別できない。
+   *
+   * **候補が0本の木もここには数える。** ルート自身が {@link RECLAIM_EXCLUDED_STATES}
+   * （`D` / `Z`）で子も居なければ、その木の候補数は0だが、**木そのものは実在する**
+   * ので `roots` の本数からは落とさない（`largestTreeCandidates` /
+   * `singletonTrees` の側には効かない——後述）。
+   */
+  roots: number;
+  /**
+   * 1本の木が抱える候補数の最大値（#1334）。**木ごとに候補を数え直し、その最大を
+   * 取る**——全体の合計（`candidates`）を1つの木に見立てる退化をしていないことを、
+   * `roots` / `singletonTrees` と組で確かめられるようにするための欄である。
+   *
+   * `roots` が0本（＝孤児が1本も無い）なら0のまま出す（「取れない軸」ではなく
+   * 「対象が無いので最大値も無い」——`candidates` が0本のときと同じ扱い）。
+   */
+  largestTreeCandidates: number;
+  /**
+   * 候補がちょうど1本だけの木の本数（#1334）。**「候補を1本だけ抱える木」を数える
+   * のであって「プロセスが1つだけの木」ではない**——ルートに除外 state（`D` / `Z`）
+   * の子孫が何本ぶら下がっていても、候補としてカウントされるのが1本だけならここに
+   * 数える。逆に候補が0本の木（`roots` の doc を参照）は「単独」ではない
+   * （単独＝候補1本、0本でも2本以上でもない）。
+   */
+  singletonTrees: number;
+  /**
    * いちばん古い候補の年齢（秒）。**候補が0本なら欄ごと省く**
    * （`oldestZombieSeconds` と同じ理由 —— 0本のときの0秒は「取れた0」ではない）。
    * `/proc/uptime` が読めないときも省く。
@@ -125,6 +156,32 @@ export interface ReclaimObservation {
    * ⟹ 年齢を材料にする欄（この下に足す分布も含む）は、すべて同じ軸であり、同じ但し書きが掛かる。
    */
   oldestAgeSec?: number;
+  /**
+   * 候補の齢（秒）の中央値（#1334）。**⚠️ これも `oldestAgeSec` と同じ軸**——
+   * 「プロセスが起動してからの齢」であって「孤児になってからの齢」ではない
+   * （直上の但し書きがそのまま掛かる）。
+   *
+   * **偶数本なら中間2つの平均を `Math.floor` する。** 省く条件は `oldestAgeSec`
+   * と完全に同じ——候補が0本、または `/proc/uptime` が読めないときは欄ごと省く
+   * （0秒は「取れた0」ではないので書かない）。
+   */
+  medianAgeSec?: number;
+  /**
+   * 候補の齢（秒）の段階別の本数（#1334）。**⚠️ これも「起動からの齢」であって
+   * 「孤児になってからの齢」ではない**（`oldestAgeSec` の但し書きがそのまま掛かる）。
+   *
+   * 境界は 60 / 600 / 3600 / 21600 秒。**最後の1つは `upToSec` を持たず、それが
+   * 「それ以上」を意味する**——境界を超えた分を黙って切り捨てず、必ずどれか1つの
+   * バケツへ入れる（`topZombieCommands` が上位8件を超えた分を「その他」へまとめる
+   * のと同じ作法。AGENTS.md「一覧の上限を件数だけで決める」）。
+   *
+   * **各バケツの `count` の合計は必ず `candidates` と一致する**——脱落は無い。
+   *
+   * 省く条件は `oldestAgeSec` / `medianAgeSec` と完全に同じ（候補0本、または
+   * `/proc/uptime` が読めないときは欄ごと省く。`[]` を出さない——
+   * AGENTS.md「取れない軸に0の行を作る」の禁止は空配列にも同じく効く）。
+   */
+  ageBuckets?: Array<{ upToSec?: number; count: number }>;
   /**
    * SIGTERM を送った本数。**段0 では常に 0 である**（送出の経路が1つも無い。
    * `apps/runner/src/tasks.test.ts` の「段0 は撃たない」がそれを振る舞いで固定する）。
@@ -242,6 +299,12 @@ const INIT_PID = 1;
  *   据えている理由そのもの）。ここで二重に数えない
  */
 const RECLAIM_EXCLUDED_STATES = new Set(['D', 'Z']);
+
+/**
+ * 齢の分布（#1334）の境界（秒）。**最後の境界（21600秒＝6時間）を超えた分は
+ * 「それ以上」として `upToSec` を持たない末尾のバケツへ入る**——`bucketAges` の doc。
+ */
+const RECLAIM_AGE_BUCKET_BOUNDARIES_SEC = [60, 600, 3600, 21600] as const;
 
 /**
  * `/proc` を走査してタスクの内訳を測るリーダー。**短い TTL のメモを1つ持つ**
@@ -477,32 +540,51 @@ async function observeReclaim(
   let candidates = 0;
   let candidateThreads = 0;
   let oldestStarttime: number | undefined;
+  let largestTreeCandidates = 0;
+  let singletonTrees = 0;
+  // 候補（撃てる=数える対象）の starttime だけを集める。**素性は一切入らない**
+  // ——ここに積むのは `starttime`（数値）だけで、`comm` はどのエントリにも持たせて
+  // いない（{@link ScannedProcess} 自体が `comm` を持たない）。
+  const candidateStarttimes: number[] = [];
 
-  // 部分木を辿る。**除外 state のプロセスも「通り抜ける」** —— 撃てない親の下に
-  // 撃てる子が居ることがあるので、数えないだけで辿るのはやめない。
+  // **木ごとに辿る。** `visited` は全体で共有し、二重計上だけを防ぐ
+  // （通常の `/proc` ツリーではルートをまたいだ重複は起きないが、壊れた `/proc`
+  // が輪を作った場合の保険として残す）。除外 state のプロセスも「通り抜ける」——
+  // 撃てない親の下に撃てる子が居ることがあるので、数えないだけで辿るのはやめない。
   const visited = new Set<number>();
-  const queue = [...roots];
-  for (let entry = queue.pop(); entry !== undefined; entry = queue.pop()) {
-    if (visited.has(entry.pid)) continue; // 壊れた `/proc` が輪を作っても回り続けない
-    visited.add(entry.pid);
+  for (const root of roots) {
+    let treeCandidates = 0;
+    const queue = [root];
+    for (let entry = queue.pop(); entry !== undefined; entry = queue.pop()) {
+      if (visited.has(entry.pid)) continue; // 壊れた `/proc` が輪を作っても回り続けない
+      visited.add(entry.pid);
 
-    if (entry.ownerUid === reclaim.childUid && !RECLAIM_EXCLUDED_STATES.has(entry.state)) {
-      candidates += 1;
-      candidateThreads += entry.numThreads;
-      if (oldestStarttime === undefined || entry.starttime < oldestStarttime) {
-        oldestStarttime = entry.starttime;
+      if (entry.ownerUid === reclaim.childUid && !RECLAIM_EXCLUDED_STATES.has(entry.state)) {
+        candidates += 1;
+        candidateThreads += entry.numThreads;
+        treeCandidates += 1;
+        candidateStarttimes.push(entry.starttime);
+        if (oldestStarttime === undefined || entry.starttime < oldestStarttime) {
+          oldestStarttime = entry.starttime;
+        }
+      }
+
+      for (const child of children.get(entry.pid) ?? []) {
+        if (child.pid !== entry.pid) queue.push(child);
       }
     }
 
-    for (const child of children.get(entry.pid) ?? []) {
-      if (child.pid !== entry.pid) queue.push(child);
-    }
+    if (treeCandidates > largestTreeCandidates) largestTreeCandidates = treeCandidates;
+    if (treeCandidates === 1) singletonTrees += 1;
   }
 
   const observation: ReclaimObservation = {
     mode: RECLAIM_MODE,
     candidates,
     candidateThreads,
+    roots: roots.length,
+    largestTreeCandidates,
+    singletonTrees,
     // 段0 には撃つ経路が無い。**0 を書くのは「取れない軸に0を作る」ではない** ——
     // 「撃てる段に居て、0本撃った」ではなく「この段は撃たないと名乗っている」ことを、
     // `mode` と組で読む欄である。
@@ -517,10 +599,47 @@ async function observeReclaim(
     if (Number.isFinite(ageSeconds)) observation.oldestAgeSec = Math.max(0, ageSeconds);
   }
 
+  if (candidateStarttimes.length > 0 && uptimeSeconds !== undefined) {
+    const ages = candidateStarttimes.map((starttime) =>
+      Math.max(0, Math.floor(uptimeSeconds - starttime / clockTicksPerSecond)),
+    );
+    observation.medianAgeSec = medianAgeOf(ages);
+    observation.ageBuckets = bucketAges(ages);
+  }
+
   const pids = await readPidsAtScan(cgroup.cgroupRoot, cgroup.procCgroupPath);
   if (pids !== undefined) observation.pidsAtScan = pids;
 
   return observation;
+}
+
+/**
+ * 齢（秒）の配列から中央値を出す。**偶数本なら中間2つの平均を `Math.floor`。**
+ * 空配列は呼び出し側（{@link observeReclaim}）が既に弾いている前提——ここでは扱わない。
+ */
+function medianAgeOf(ages: readonly number[]): number {
+  const sorted = [...ages].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 1) return sorted[mid];
+  return Math.floor((sorted[mid - 1] + sorted[mid]) / 2);
+}
+
+/**
+ * 齢（秒）の配列を段階別に数える。境界は {@link RECLAIM_AGE_BUCKET_BOUNDARIES_SEC}
+ * （60 / 600 / 3600 / 21600 秒）。**最後の1つは `upToSec` を持たず、境界を超えた分を
+ * 黙って切り捨てずにそこへ集める**——`topZombieCommands` が上位8件を超えた分を
+ * 「その他」へまとめるのと同じ作法。**各バケツの `count` の合計は、渡した配列の
+ * 長さ（＝ `candidates`）と必ず一致する。**
+ */
+function bucketAges(ages: readonly number[]): Array<{ upToSec?: number; count: number }> {
+  const buckets = RECLAIM_AGE_BUCKET_BOUNDARIES_SEC.map((upToSec) => ({ upToSec, count: 0 }));
+  const tail: { upToSec?: number; count: number } = { count: 0 };
+  for (const age of ages) {
+    const bucket = buckets.find((candidate) => age < candidate.upToSec);
+    if (bucket !== undefined) bucket.count += 1;
+    else tail.count += 1;
+  }
+  return [...buckets, tail];
 }
 
 /**

@@ -421,6 +421,204 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
   });
 
   /**
+   * 木の構造（#1334）。**「409本が1本の巨大な木か409本のバラバラか」を、
+   * 素性を1バイトも読まずに数だけで答える3欄**（`roots` / `largestTreeCandidates` /
+   * `singletonTrees`）。ここでは木ごとの内訳が正しく分かれることを固定する。
+   */
+  describe('木の構造（#1334。roots / largestTreeCandidates / singletonTrees）', () => {
+    it('ルート1本＋子N本の木は roots=1 / largestTreeCandidates=N+1 / singletonTrees=0', async () => {
+      placeProcess(root, 10, 'pnpm', 'S', 3, 0, 1); // 孤児ルート
+      placeProcess(root, 11, 'node', 'S', 5, 0, 10); // 子
+      placeProcess(root, 12, 'esbuild', 'S', 2, 0, 10); // 子
+      placeProcess(root, 13, 'sh', 'S', 1, 0, 11); // 孫
+      placeUptime(root, 1000);
+
+      const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
+      const result = await reader.read();
+
+      expect(result?.reclaim?.candidates).toBe(4);
+      expect(result?.reclaim?.roots).toBe(1);
+      expect(result?.reclaim?.largestTreeCandidates).toBe(4);
+      expect(result?.reclaim?.singletonTrees).toBe(0);
+    });
+
+    it('単独のルート3本は roots=3 / largestTreeCandidates=1 / singletonTrees=3', async () => {
+      placeProcess(root, 20, 'a', 'S', 1, 0, 1);
+      placeProcess(root, 21, 'b', 'S', 1, 0, 1);
+      placeProcess(root, 22, 'c', 'S', 1, 0, 1);
+      placeUptime(root, 1000);
+
+      const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
+      const result = await reader.read();
+
+      expect(result?.reclaim?.candidates).toBe(3);
+      expect(result?.reclaim?.roots).toBe(3);
+      expect(result?.reclaim?.largestTreeCandidates).toBe(1);
+      expect(result?.reclaim?.singletonTrees).toBe(3);
+    });
+
+    it('混在（大きい木1本＋単独2本）は roots=3 / largestTreeCandidates=木の本数 / singletonTrees=2', async () => {
+      placeProcess(root, 30, 'pnpm', 'S', 1, 0, 1); // 大きい木のルート
+      placeProcess(root, 31, 'node', 'S', 1, 0, 30);
+      placeProcess(root, 32, 'node', 'S', 1, 0, 30);
+      placeProcess(root, 33, 'node', 'S', 1, 0, 30);
+      placeProcess(root, 34, 'node', 'S', 1, 0, 30);
+      placeProcess(root, 35, 'node', 'S', 1, 0, 30);
+      placeProcess(root, 40, 'a', 'S', 1, 0, 1); // 単独
+      placeProcess(root, 41, 'b', 'S', 1, 0, 1); // 単独
+      placeUptime(root, 1000);
+
+      const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
+      const result = await reader.read();
+
+      expect(result?.reclaim?.candidates).toBe(8); // 6(大きい木) + 1 + 1
+      expect(result?.reclaim?.roots).toBe(3);
+      expect(result?.reclaim?.largestTreeCandidates).toBe(6);
+      expect(result?.reclaim?.singletonTrees).toBe(2);
+    });
+
+    /**
+     * 候補が0本の木がありうる（ルート自身が D で子が居ない等）。**それでも
+     * ルートは在るので `roots` には数える** —— 数えないと「候補0本の木」と
+     * 「その木自体が存在しない」が区別できなくなる。
+     */
+    it('ルート自身が D で子も居ない木は、roots には数えるが候補・largestTreeCandidates・singletonTrees には効かない', async () => {
+      placeProcess(root, 60, 'dd', 'D', 1, 0, 1); // 孤児ルートだが D。子は居ない。
+      placeUptime(root, 1000);
+
+      const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
+      const result = await reader.read();
+
+      expect(result?.reclaim?.candidates).toBe(0);
+      expect(result?.reclaim?.roots).toBe(1);
+      expect(result?.reclaim?.largestTreeCandidates).toBe(0);
+      expect(result?.reclaim?.singletonTrees).toBe(0); // 候補0本の木は「単独」ではない
+    });
+  });
+
+  /**
+   * 齢の分布（#1334）。**候補の齢の中央値と、段階別の本数。** 境界は
+   * 60 / 600 / 3600 / 21600 秒で、最後の1つ（`upToSec` 無し）が裾を全部受ける
+   * ——黙って切り捨てない（`topZombieCommands` の「その他」と同じ作法）。
+   */
+  describe('齢の分布（#1334。medianAgeSec / ageBuckets）', () => {
+    /**
+     * 6候補、age=[10, 50, 100, 700, 5000, 30000]（秒）。
+     * 期待バケツ: <60→2件(10,50) / <600→1件(100) / <3600→1件(700) /
+     * <21600→1件(5000) / それ以上→1件(30000)。中央値は偶数本なので
+     * ソート後の中間2つ(100,700)の平均を Math.floor → 400。
+     */
+    it('偶数本の中央値は中間2つの平均を Math.floor し、ageBuckets の合計は candidates と一致する（裾も最後のバケツへ入る）', async () => {
+      const uptime = 40_000;
+      const ticks = 100;
+      const ages = [10, 50, 100, 700, 5000, 30_000];
+      ages.forEach((age, index) => {
+        const starttime = (uptime - age) * ticks;
+        placeProcess(root, 500 + index, 'pnpm', 'S', 1, starttime, 1);
+      });
+      placeUptime(root, uptime);
+
+      const reader = new TaskBreakdownReader({
+        procRoot: root,
+        clockTicksPerSecond: ticks,
+        reclaim: { childUid: OWN_UID },
+      });
+      const result = await reader.read();
+
+      expect(result?.reclaim?.candidates).toBe(6);
+      expect(result?.reclaim?.medianAgeSec).toBe(400);
+      expect(result?.reclaim?.ageBuckets).toEqual([
+        { upToSec: 60, count: 2 },
+        { upToSec: 600, count: 1 },
+        { upToSec: 3600, count: 1 },
+        { upToSec: 21600, count: 1 },
+        { count: 1 }, // それ以上。upToSec を持たない。
+      ]);
+      // ⭐ 合計が candidates と一致することを固定する（黙って切り捨てていない）。
+      const total = result?.reclaim?.ageBuckets?.reduce((sum, bucket) => sum + bucket.count, 0);
+      expect(total).toBe(result?.reclaim?.candidates);
+    });
+
+    it('奇数本の中央値はソート後の中間の値そのもの', async () => {
+      const uptime = 1000;
+      const ticks = 100;
+      const ages = [10, 50, 100]; // ソート後の中間は 50
+      ages.forEach((age, index) => {
+        const starttime = (uptime - age) * ticks;
+        placeProcess(root, 600 + index, 'pnpm', 'S', 1, starttime, 1);
+      });
+      placeUptime(root, uptime);
+
+      const reader = new TaskBreakdownReader({
+        procRoot: root,
+        clockTicksPerSecond: ticks,
+        reclaim: { childUid: OWN_UID },
+      });
+      const result = await reader.read();
+
+      expect(result?.reclaim?.candidates).toBe(3);
+      expect(result?.reclaim?.medianAgeSec).toBe(50);
+    });
+
+    /** 候補0本なら medianAgeSec / ageBuckets は欄ごと省く（0 や [] を出さない）。 */
+    it('候補0本のとき medianAgeSec / ageBuckets が欄ごと出ない（0 や [] を出さない）', async () => {
+      placeProcess(root, 700, 'node', 'S', 3, 0, 999); // 親が居る＝孤児ではない
+      placeUptime(root, 1000);
+
+      const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
+      const result = await reader.read();
+
+      expect(result?.reclaim?.candidates).toBe(0);
+      expect(result?.reclaim?.medianAgeSec).toBeUndefined();
+      expect(result?.reclaim?.ageBuckets).toBeUndefined();
+      expect(Object.prototype.hasOwnProperty.call(result?.reclaim, 'medianAgeSec')).toBe(false);
+      expect(Object.prototype.hasOwnProperty.call(result?.reclaim, 'ageBuckets')).toBe(false);
+    });
+
+    /** 省く条件は oldestAgeSec と完全に同じ：uptime が読めないときも省く。 */
+    it('uptime が読めなければ medianAgeSec / ageBuckets / oldestAgeSec が全部欄ごと出ない', async () => {
+      placeProcess(root, 710, 'pnpm', 'S', 1, 0, 1); // 候補は実在する
+      // placeUptime を呼ばない = /proc/uptime が無い。
+
+      const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
+      const result = await reader.read();
+
+      expect(result?.reclaim?.candidates).toBe(1);
+      expect(result?.reclaim?.oldestAgeSec).toBeUndefined();
+      expect(result?.reclaim?.medianAgeSec).toBeUndefined();
+      expect(result?.reclaim?.ageBuckets).toBeUndefined();
+    });
+  });
+
+  /**
+   * 🔴 **約束の歯（いちばん重要）。** 孤児候補の `comm` は出力に一切含まれない。
+   * ゾンビの `comm` は出る経路が生きていることを陽性対照で示す —— comm を出す
+   * 経路そのものが死んでいるのではなく、孤児にだけ塞がっていることを固定する。
+   *
+   * ⟹ **これは「やりすぎた実装」（孤児にも comm を出す）が入った瞬間に赤くなる歯**
+   * である。
+   */
+  it('🔴 孤児候補の comm は出力に一切含まれない（ゾンビの comm が出る経路は生きている）', async () => {
+    placeProcess(root, 800, 'zombie-visible-cmd', 'Z', 1, 0, 1); // ゾンビ: comm が出て良い
+    placeProcess(root, 801, 'orphan-secret-cmd', 'S', 3, 0, 1); // 孤児ルート
+    placeProcess(root, 802, 'orphan-secret-cmd', 'S', 2, 0, 801); // 孤児の子。同じ comm。
+    placeUptime(root, 1000);
+
+    const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
+    const result = await reader.read();
+
+    // ⭐ 陽性対照: 候補とゾンビが実在し、ゾンビの comm は出力に含まれる
+    // （＝ comm を出す経路そのものは生きている）。
+    expect(result?.reclaim?.candidates).toBeGreaterThanOrEqual(1);
+    expect(result?.zombies).toBeGreaterThanOrEqual(1);
+    const serialized = JSON.stringify(result);
+    expect(serialized).toContain('zombie-visible-cmd');
+
+    // 🔴 孤児候補の comm は一切含まれない。
+    expect(serialized).not.toContain('orphan-secret-cmd');
+  });
+
+  /**
    * ⭐ **段0 は撃たない。** `grep` で「`process.kill` と書いていない」ことを見るのでは
    * 足りない（間接に呼ぶ経路を見落とす）。**候補が実在する器を実際に走査させて、
    * `process.kill` が1度も呼ばれないことを見る。**
