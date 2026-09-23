@@ -35,9 +35,13 @@ import {
   commitmentPosition,
   commitmentRespondedAt,
   COMMITMENT_APPRAISAL_DECISION_PREFIX,
+  JOB_APPRAISAL_DECISION_PREFIX,
   appraisalSchema,
   commitmentUpdatedAt,
+  computeAppraisalJournalStats,
+  computeJobAppraisalCoverage,
   describeAppraisal,
+  formatAppraisalDecision,
   compareApprovalPagingKey,
   compareCommitmentPosition,
   computeSupersededIds,
@@ -58,6 +62,8 @@ import {
   matchesInboxRemoveManyFilter,
   removeInboxEventsAndStopDelivery,
   memorySlugSchema,
+  practiceKindSchema,
+  practiceSlugSchema,
   fingerprintOf,
   noteDroppedRecord,
   reasonOf,
@@ -101,6 +107,7 @@ import { z } from 'zod';
 import {
   accessAccountResponseSchema,
   accessListResponseSchema,
+  appraisalStatsResponseSchema,
   approvalsAnswerResponseSchema,
   approvalsResponseSchema,
   archiveListResponseSchema,
@@ -136,6 +143,9 @@ import {
   okResponseSchema,
   openApiDocumentation,
   openApiExcludePaths,
+  practiceDeleteResponseSchema,
+  practiceListResponseSchema,
+  practiceReadResponseSchema,
   profileErrorResponseSchema,
   profileResponseSchema,
   profileUpdateRequestSchema,
@@ -349,6 +359,19 @@ const chatBody = z.object({
 });
 
 const memoryBody = z.object({ content: z.string() });
+/**
+ * `PracticeStore.write` の入力そのまま（`slug` だけは経路から取る）。
+ *
+ * **`kind` に列挙を課さない。** `practiceKindSchema` は `z.string().min(1).max(128)`
+ * であって enum ではない——ここで別の制約を足すと、道具（`tools.ts` の
+ * `practice_write`）と HTTP とで書ける種類が食い違う（`practiceKindSchema` の doc
+ * 「⛔ ここを z.enum にしないこと」）。`title` も core 側に制約が無いので足さない。
+ */
+const practiceBody = z.object({
+  kind: practiceKindSchema,
+  title: z.string(),
+  content: z.string(),
+});
 const answerBody = z.object({ answer: z.string().min(1) });
 /** まとめて答える（溜まった保留を人間が一度に片付けるための口）。 */
 const answersBody = z.object({
@@ -2141,6 +2164,149 @@ export function createApp(deps: AppDeps) {
       },
     )
 
+    // --- 仕事のやり方（PracticeStore、#1055 段3③） -------------------------
+    //
+    // クローンの道具（`practice_list` / `practice_read` / `practice_write` /
+    // `practice_remove`、#1055 段3②）と対をなす、人間の口。
+    //
+    // **ここに `apply` / `enforce` に当たる経路を足さないこと。** 読み書き一覧の
+    // 4本しか無い——「このやり方に従え」という操作はどの入口にも存在しない
+    // （`PracticeStore` / `practiceSchema` の doc、`docs/north_star.md`）。やり方は
+    // 読む素材であって実行される定義ではなく、従うかどうかはそのときのクローンが
+    // 決める。人間の入口だからといって、ここだけ特別に強制の口を持たせない。
+    //
+    // journal は memory の `memory_update`（専用 type・`markHumanTouched` に
+    // よる保護状態）とは違い、`practice_write` / `practice_remove`（クローンの
+    // 道具、`tools.ts`）と同じ `type: 'decision'` に揃える——`PracticeStore` は
+    // 保護状態を持たないので、揃えないと同じ操作が人間経由かクローン経由かで
+    // 日誌の型が変わる（読み手が2つの型を覚える理由が無い）。
+    .get(
+      '/practices',
+      describeRoute({
+        tags: ['practices'],
+        summary: '仕事のやり方の一覧',
+        description:
+          '仕事のやり方（PracticeStore）の一覧。本文は含まない（メタ情報だけ）。' +
+          '**やり方が1件も無いのは正常な状態である**——やり方が書かれていない仕事も普通に進む。',
+        responses: {
+          200: {
+            description: 'やり方のメタ情報一覧（slug の昇順）。',
+            content: { 'application/json': { schema: resolver(practiceListResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => c.json({ practices: await stores.practices.list() }),
+    )
+
+    .get(
+      '/practices/:slug',
+      describeRoute({
+        tags: ['practices'],
+        summary: 'やり方を1つ読む',
+        responses: {
+          200: {
+            description: 'やり方（本文まで）。',
+            content: { 'application/json': { schema: resolver(practiceReadResponseSchema) } },
+          },
+          404: {
+            description: '該当するやり方が無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        const practice = await stores.practices.read(c.req.param('slug'));
+        if (!practice) return c.json({ error: 'not found' as const }, 404);
+        return c.json({ practice });
+      },
+    )
+
+    .put(
+      '/practices/:slug',
+      describeRoute({
+        tags: ['practices'],
+        summary: 'やり方を全文置換で書く（無ければ作る）',
+        description:
+          '人間が API からやり方を書き換える口。`kind` は仕事の種類の自由文字列（列挙ではない——' +
+          '`practiceKindSchema` の doc）。書き換えは日誌に残る（`type: decision`）。',
+        responses: {
+          200: {
+            description: '書き換え後のやり方。',
+            content: { 'application/json': { schema: resolver(practiceReadResponseSchema) } },
+          },
+          400: {
+            description: 'やり方のスラッグが不正、または本文が JSON として不正。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      jsonBody(practiceBody, (where) => ({
+        error: 'やり方の本文の形が不正' + (where === '' ? '' : `: ${where}`),
+      })),
+      async (c) => {
+        const slug = c.req.param('slug');
+        if (!practiceSlugSchema.safeParse(slug).success) {
+          return c.json({ error: 'やり方のスラッグが不正' as const }, 400);
+        }
+        const { kind, title, content } = c.req.valid('json');
+        const before = await stores.practices.read(slug);
+        const practice = await stores.practices.write({ slug, kind, title, content });
+        await stores.journal.append({
+          type: 'decision',
+          decision: `やり方 ${slug}（${kind}）を${before === null ? '作った' : '書き直した'}: ${title}`,
+          grounds:
+            before === null
+              ? '人間が直接 API から新しいやり方を器に置いた'
+              : '人間が直接 API からやり方を書き直した（全文置換。前の本文は残らない）',
+        });
+        return c.json({ practice });
+      },
+    )
+
+    /**
+     * やり方を1つ消す。
+     *
+     * 書けるのに消せないと、間違って作ったやり方が永久に候補として残る。消した
+     * 事実は日誌に残るので、器から消えても記録からは消えない（`memory` の
+     * DELETE と同じ理由）。
+     */
+    .delete(
+      '/practices/:slug',
+      describeRoute({
+        tags: ['practices'],
+        summary: 'やり方を1つ消す',
+        responses: {
+          200: {
+            description: '消した。',
+            content: { 'application/json': { schema: resolver(practiceDeleteResponseSchema) } },
+          },
+          400: {
+            description: 'やり方のスラッグが名前として成立しない（「無い」とは区別する）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description: '該当するやり方が無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        const slug = c.req.param('slug');
+        if (!practiceSlugSchema.safeParse(slug).success) {
+          return c.json({ error: 'やり方のスラッグが不正' as const }, 400);
+        }
+        const existing = await stores.practices.read(slug);
+        if (existing === null) return c.json({ error: 'not found' as const }, 404);
+        await stores.practices.remove(slug);
+        await stores.journal.append({
+          type: 'decision',
+          decision: `やり方 ${slug}（${existing.kind}）を消した: ${existing.title}`,
+          grounds: '人間が直接 API からやり方を消した',
+        });
+        return c.json({ ok: true, slug });
+      },
+    )
+
     // --- 日誌 --------------------------------------------------------------
     .get(
       '/journal',
@@ -3324,10 +3490,13 @@ export function createApp(deps: AppDeps) {
         }
         await stores.journal.append({
           type: 'decision',
-          decision:
-            `${COMMITMENT_APPRAISAL_DECISION_PREFIX}（${id}）: ${appraisal}` +
-            `${reason === undefined ? '' : ` — ${reason}`}` +
-            `${previous === null ? '' : `（前: ${previous}）`}`,
+          decision: formatAppraisalDecision({
+            prefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
+            id,
+            value: appraisal,
+            reason,
+            previous,
+          }),
           grounds: '人間が直接 API から付けた（クローンの評定を覆したならその前の値も上に在る）',
         });
         return c.json(okResponseSchema.parse({ ok: true }));
@@ -5312,6 +5481,63 @@ export function createApp(deps: AppDeps) {
             limit: RECENT_TRACE_LIMIT,
             total: traces.length,
             traces,
+          }),
+        );
+      },
+    )
+
+    // --- 評定の内訳（/appraisal-stats） --------------------------------------
+    // #1278 の HTTP 面。PRD「入口の等価性」——クローンの `appraisal_stats`
+    // （`tools.ts`）と同じものを人間の手からも。
+
+    /**
+     * 評定（`good`/`bad`/`unclear`/未評定）の内訳を要るときに数える
+     * （#1278「評定の内訳を要るときに数える口が無い」）。
+     *
+     * **資格は `authenticate` だけ（`requireOperator` は付けない）。** `/journal`
+     * `/commitments` `/managers` と同じ強さ——ここが返すのは集計値だけで、
+     * 鍵やクレデンシャルの類は1つも含まない。
+     *
+     * **`journal.commitments` / `journal.jobs` は全期間の総数である。**
+     * `journal_read`（MCP）の `limit` 上限（200）はここには効かない——
+     * `@alteroid/core` の `computeAppraisalJournalStats` がストアを
+     * `limit` 無指定で読むためである（`appraisal-stats.ts` の doc）。
+     *
+     * **クエリ引数は無い。** 出力は母集団の件数に関わらず固定個数の集計値
+     * なので、`/dropped` と違って「上限を持たない」を明示する必要も無い
+     * （そもそも上限という概念が無い）。
+     */
+    .get(
+      '/appraisal-stats',
+      describeRoute({
+        tags: ['appraisal'],
+        summary: '評定の内訳を数える',
+        description:
+          'クローンの `appraisal_stats` と同じものを人間の手から。' +
+          '`journal.commitments`（台帳の行）と `journal.jobs`（委譲）は日誌の ' +
+          'decision 行を先頭一致で数えた全期間の総数——2つは別の軸なので混ぜて ' +
+          '読まないこと。`jobCoverage` は終端した委譲（done/failed/lost/stopped）を ' +
+          '状態ごとに割った評定の有無の内訳で、running/waiting_human は対象外 ' +
+          '（`nonTerminalTotal` に件数だけ出す）。',
+        responses: {
+          200: {
+            description: '評定の内訳。',
+            content: { 'application/json': { schema: resolver(appraisalStatsResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        const [journalStats, jobs] = await Promise.all([
+          computeAppraisalJournalStats(stores.journal, {
+            commitmentPrefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
+            jobPrefix: JOB_APPRAISAL_DECISION_PREFIX,
+          }),
+          stores.jobs.listJobs(),
+        ]);
+        return c.json(
+          appraisalStatsResponseSchema.parse({
+            journal: journalStats,
+            jobCoverage: computeJobAppraisalCoverage(jobs),
           }),
         );
       },

@@ -1330,8 +1330,16 @@ export async function buildActivityDigest(
     // `boot-storage-footprint`。`apps/daemon/src/index.ts` と
     // `boot-footprint.ts`）も同じ型に混ざるので、「配達のたびに1行」は型全体には
     // 当てはまらない。発行元別の内訳は下の「届いた外部イベント」節にある
-    // （`エスカレーション: 束ねた問いの数であって、日誌の行数ではない` と同じ形で、
-    // ここは逆に「日誌の行数であって合図の実数ではない」と名乗る）。
+    // （`escalationCountLine` が「束ねた問いの数であって、日誌の行数ではない」と
+    // 名乗るのと同じ形で、ここは逆に「日誌の行数であって合図の実数ではない」と
+    // 名乗る）。
+    //
+    // **数えるのは `externalsCount`（走査で当たった全行）であって
+    // `externals`（保持の上限で切られた側）ではない**（#1278 が分けた2つ）。
+    // 上限に当たっている回に `externals.length` を出すと、この行が黙って
+    // 少なく出る。発行元別の**正確な**内訳（保持の上限を受けない）は
+    // `externalSourceTally`（`createSourceTally` の doc）が別に持つ——
+    // こちらも同じ理由で `externals` からは作らない（issue #783 段2）。
     `- 外部イベント（日誌 external_event の行数）: ${externalsCount} 件`,
     `- マネージャー・作業者のツール実行: ${delegatedToolUsesCount} 件`,
     `- あなた自身が手を動かした回数（委譲せずに使った道具）: ${cloneToolUsesCount} 件`,
@@ -1619,6 +1627,15 @@ export async function buildActivityDigest(
           'キー数に上限を置いている以上、数えるには上限を外すしかない）',
       );
     }
+    // ⚠️ **ここに「内訳が合計に届かない」注記は不要である。** `externalSourceTally`
+    // は `DIGEST_RETAIN_LIMIT` の外（走査した全件）で数えているので、上の行の
+    // 合計は常に `externalsCount` に一致する（`DIGEST_SOURCE_TALLY_LIMIT` に
+    // 当たった分は「その他」「上限を超えて」の2行が黙らず引き受ける）。
+    // 以前 main に着地した先行実装（issue #783、PR #1322）は `summarizeExternalSources`
+    // （`externals`＝保持の上限で切られた側）から内訳を作っていたため、
+    // 「合計が件数行に届かない」注記が要った——**この実装ではその前提が
+    // 成り立たないので、その注記は復活させない**（同じ注記を残すと (b) の下では
+    // 嘘になる）。
 
     // **本文の形（Issue #783。⚠️ ここは依頼の外で足した追加判断——`summarizeExternalSources`
     // が返す「本文の種類・最頻件数」を消さずに残すが、母数を上と分離する）。**

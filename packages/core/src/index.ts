@@ -226,6 +226,24 @@ export {
   APPRAISAL_TARGETS_REASON_LIMIT,
 } from './appraisal.js';
 /**
+ * 評定の内訳を要るときに数える口（#1278）。`appraisal.ts`（段2）とは別の軸——
+ * あちらは「いま台帳・委譲に載っている行」、こちらは「日誌に残る全期間の総数」
+ * と「終端した委譲の評定の有無」を数える。
+ */
+export {
+  computeAppraisalJournalStats,
+  computeJobAppraisalCoverage,
+  describeAppraisalStats,
+  isTerminalJobStatus,
+  tallyAppraisalDecisions,
+} from './appraisal-stats.js';
+export type {
+  AppraisalDecisionTally,
+  AppraisalJournalStats,
+  JobAppraisalCoverage,
+  JobAppraisalCoverageRow,
+} from './appraisal-stats.js';
+/**
  * 記憶をクローンの文脈へ載せる形。**器（storage-fs / storage-pg）もここを使う** —
  * 器ごとに書いた結果、実際に食い違ったことがある（`memory.ts` の冒頭）。
  */

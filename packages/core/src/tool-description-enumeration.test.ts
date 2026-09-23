@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
+import { isTerminalJobStatus } from './appraisal-stats.js';
 import { CLONE_REMOVABLE_INBOX_EVENT_TYPES } from './inbox-backlog.js';
 import { runnerLivenessSchema } from './runner-protocol.js';
-import { appraisalSchema, commitmentOriginSchema } from './schema.js';
+import { appraisalSchema, commitmentOriginSchema, jobStatusSchema } from './schema.js';
 import { RESERVED_SCHEDULE_KINDS, RESERVED_SCHEDULE_KIND_ENV_KEYS } from './schedule.js';
 import { CLONE_RUNTIME_ITEM_LABELS } from './self.js';
 import { createMemoryStores } from './testing.js';
@@ -111,6 +112,29 @@ const SUBJECTS: readonly EnumerationSubject[] = [
     tool: 'manager_appraise',
     label: 'appraisalSchema の値（packages/core/src/schema.ts）',
     source: () => appraisalSchema.options,
+  },
+  {
+    // **この道具の説明文は3値＋終端の仕方（done/failed/lost/stopped）と
+    // 非終端（running/waiting_human）を字面で並べる。** どちらも
+    // `jobStatusSchema` から `isTerminalJobStatus`（`appraisal-stats.ts`）で
+    // 導いた値を `.join('/')` しているだけで、ベタ書きしていない
+    // （`tools.ts` の `appraisal_stats` の実装を参照）——それでも `jobStatusSchema`
+    // に値が増えれば、この歯がここで捕まえる。
+    tool: 'appraisal_stats',
+    label: 'appraisalSchema の値（packages/core/src/schema.ts）',
+    source: () => appraisalSchema.options,
+  },
+  {
+    tool: 'appraisal_stats',
+    label:
+      '終端した JobStatus（jobStatusSchema.options を isTerminalJobStatus で絞ったもの。packages/core/src/appraisal-stats.ts）',
+    source: () => jobStatusSchema.options.filter(isTerminalJobStatus),
+  },
+  {
+    tool: 'appraisal_stats',
+    label:
+      '非終端の JobStatus（jobStatusSchema.options を isTerminalJobStatus で除いたもの。packages/core/src/appraisal-stats.ts）',
+    source: () => jobStatusSchema.options.filter((status) => !isTerminalJobStatus(status)),
   },
   {
     tool: 'self_status',

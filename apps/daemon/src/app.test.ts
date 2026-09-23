@@ -46,7 +46,11 @@ import { createApp, parseAllowedOrigins } from './app.js';
 import { encodeCursor } from './cursor.js';
 import type { AuthPlan } from './auth.js';
 import { createJournalBus, type JournalBus } from './journal-bus.js';
-import { scheduleStatusSchema } from './openapi.js';
+import {
+  practiceListResponseSchema,
+  practiceReadResponseSchema,
+  scheduleStatusSchema,
+} from './openapi.js';
 import { startUsagePolling } from './usage-poller.js';
 
 /** クローンの代わり。HTTP 層だけを検証する。 */
@@ -608,6 +612,142 @@ describe('HTTP API', () => {
 
   it('存在しない記憶は 404', async () => {
     expect((await app.request('/memory/nope')).status).toBe(404);
+  });
+
+  /**
+   * 仕事のやり方（PracticeStore、#1055 段3③）。`記憶` の HTTP 口
+   * （`GET`/`PUT`/`DELETE /memory(/:slug)`）と対をなす、人間の3つ目の入口。
+   *
+   * **⛔ `apply` / `enforce` に当たる経路は無い。** 読み書き一覧の3操作
+   * （list/read/write/remove）しか無いことを、この一群のテストで踏む。
+   */
+  it('やり方を API から読んで書き換えられる（人間の3入口の1つ）', async () => {
+    await stores.practices.write({
+      slug: 'daily-report',
+      kind: '日報',
+      title: 'もとの題',
+      content: 'もとの内容',
+    });
+
+    const list = await app.request('/practices');
+    expect(await list.json()).toMatchObject({
+      practices: [{ slug: 'daily-report', kind: '日報', title: 'もとの題' }],
+    });
+
+    const put = await app.request('/practices/daily-report', {
+      ...json({ kind: '日報', title: '書き直した題', content: '人間が API から書き換えた' }),
+      method: 'PUT',
+    });
+    expect(put.status).toBe(200);
+
+    const read = await app.request('/practices/daily-report');
+    const body = (await read.json()) as { practice: { content: string; title: string } };
+    expect(body.practice.content).toContain('人間が API から書き換えた');
+    expect(body.practice.title).toBe('書き直した題');
+
+    // 人間による書き換えも日誌に残る（`practice_write` クローンの道具と
+    // 同じ type: 'decision' に揃えてある——PracticeStore は memory の
+    // `markHumanTouched` に当たる保護状態を持たないため）。
+    const entries = await stores.journal.list({ types: ['decision'] });
+    expect(entries[0]).toMatchObject({
+      decision: expect.stringContaining('daily-report') as unknown as string,
+      grounds: expect.stringContaining('人間が直接 API から') as unknown as string,
+    });
+  });
+
+  it('PUT /practices/:slug は無ければ作る（全文置換）', async () => {
+    const put = await app.request('/practices/new-one', {
+      ...json({ kind: '調査', title: '新しいやり方', content: '本文' }),
+      method: 'PUT',
+    });
+    expect(put.status).toBe(200);
+
+    const read = await app.request('/practices/new-one');
+    expect(await read.json()).toMatchObject({
+      practice: { slug: 'new-one', kind: '調査', title: '新しいやり方', content: '本文\n' },
+    });
+  });
+
+  it('kind が空だと 400（practiceKindSchema の min(1)）', async () => {
+    const put = await app.request('/practices/bad-kind', {
+      ...json({ kind: '', title: '題', content: '本文' }),
+      method: 'PUT',
+    });
+    expect(put.status).toBe(400);
+  });
+
+  /**
+   * **`GET /practices` / `GET /practices/:slug` の応答が、`describeRoute` へ
+   * 渡した OpenAPI 応答スキーマの形と実際に一致することを検算する。**
+   *
+   * ⚠️ この2つのハンドラは（`memory` の GET と同じく）応答を作る前に
+   * `practiceListResponseSchema.parse()` / `practiceReadResponseSchema.parse()`
+   * を通していない——`hono-openapi` の `resolver()` は spec 生成にしか使われず、
+   * 実行時の応答を検証しない。⟹ `openapi.ts` 側の宣言スキーマからフィールドを
+   * 落としても（例: `practiceReadResponseSchema` を `practiceSchema` から
+   * `practiceMetaSchema` へ差し替えて `content` を落とす）、ハンドラの実際の
+   * 応答は1文字も変わらないので、他のどのテストも落ちない
+   * （変異試験で確認済み——`.parse()` を通さない GET の宣言スキーマは
+   * ノーガードだった）。**このテストが無い状態では、その差し替えは緑のまま
+   * 通っていた。**
+   */
+  it('GET /practices(/:slug) の実際の応答は、宣言した OpenAPI 応答スキーマの形と一致する', async () => {
+    await stores.practices.write({
+      slug: 'shape-check',
+      kind: '実装',
+      title: '形の検算用',
+      content: '本文',
+    });
+
+    const list = await app.request('/practices');
+    const parsedList = practiceListResponseSchema.parse(await list.json());
+    expect(parsedList.practices[0]).toMatchObject({ slug: 'shape-check' });
+
+    const read = await app.request('/practices/shape-check');
+    const parsedRead = practiceReadResponseSchema.parse(await read.json());
+    // **ここが本題。** `.parse()` は宣言していない余剰フィールドを黙って
+    // 落とすので（zod の既定挙動）、`practiceReadResponseSchema` が
+    // `practiceMetaSchema`（`content` を持たない）に差し替わっていても
+    // `.parse()` 自体は例外を投げない——投げないことではなく、パース後の
+    // 値に `content` が生き残っているかで検算する。
+    expect(parsedRead.practice.content).toBe('本文\n');
+  });
+
+  it('不正な slug は 400', async () => {
+    const put = await app.request('/practices/Not_Valid_SLUG!', {
+      ...json({ kind: '実装', title: '題', content: '本文' }),
+      method: 'PUT',
+    });
+    expect(put.status).toBe(400);
+  });
+
+  it('存在しないやり方は 404', async () => {
+    expect((await app.request('/practices/nope')).status).toBe(404);
+  });
+
+  it('DELETE /practices/:slug で消せて、日誌に残る', async () => {
+    await stores.practices.write({
+      slug: 'to-remove',
+      kind: '実装',
+      title: '消される予定',
+      content: '本文',
+    });
+
+    const del = await app.request('/practices/to-remove', { method: 'DELETE' });
+    expect(del.status).toBe(200);
+    expect(await del.json()).toEqual({ ok: true, slug: 'to-remove' });
+
+    expect((await app.request('/practices/to-remove')).status).toBe(404);
+
+    const entries = await stores.journal.list({ types: ['decision'] });
+    expect(entries[0]).toMatchObject({
+      decision: expect.stringContaining('to-remove') as unknown as string,
+      grounds: '人間が直接 API からやり方を消した',
+    });
+  });
+
+  it('やり方が無い状態での DELETE は 404（クローンの道具の冪等とは違う——HTTP は memory と同じ形）', async () => {
+    expect((await app.request('/practices/never-existed', { method: 'DELETE' })).status).toBe(404);
   });
 
   it('日誌を読める（可観測性の中段）', async () => {
@@ -4713,6 +4853,141 @@ describe('GET /dropped（#242 の HTTP 面）', () => {
     const body = (await response.json()) as { traces: string[] };
 
     expect(JSON.stringify(body)).not.toContain(secret);
+  });
+});
+
+/**
+ * `GET /appraisal-stats`（#1278 の HTTP 面。PRD「入口の等価性」——クローンの
+ * `appraisal_stats`（MCP。`tools.test.ts`）と同じものを人間の手からも）。
+ */
+describe('GET /appraisal-stats（#1278 の HTTP 面）', () => {
+  it('日誌の2つの印を混ぜずに数え、200件超でも総数が出る（limit に縛られない）', async () => {
+    for (let i = 0; i < 210; i += 1) {
+      await stores.journal.append({
+        type: 'decision',
+        decision: `引き受けた仕事に評定を付けた（c${i}）: good`,
+        grounds: '',
+      });
+    }
+    await stores.journal.append({
+      type: 'decision',
+      decision: '委譲に評定を付けた（m1）: bad — 差し戻し',
+      grounds: '',
+    });
+
+    const response = await app.request('/appraisal-stats');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      journal: {
+        commitments: { good: number; bad: number; unclear: number; other: number; total: number };
+        jobs: { good: number; bad: number; unclear: number; other: number; total: number };
+      };
+    };
+
+    // journal_read（MCP）の limit=200 に当たれば下限へ化ける件数——ここでは
+    // ストアを直接読むので、210件全部が数えられている。
+    expect(body.journal.commitments.total).toBe(210);
+    expect(body.journal.commitments.good).toBe(210);
+    // 委譲側は別の印なので、台帳側の210件に引きずられず1件だけ。
+    expect(body.journal.jobs.total).toBe(1);
+    expect(body.journal.jobs.bad).toBe(1);
+  });
+
+  /**
+   * **変異試験で見つけた穴（#1278）。** `appraisalDecisionTallySchema`
+   * （`openapi.ts`）から `unclear` を1つ落としても、直上の it は red にならな
+   * かった——`good`/`bad`/`total` しか見ていなかったため、zod が未知でない
+   * だけの「宣言し忘れた」欄を黙って応答から落とす形（`z.object()` は既定で
+   * 未宣言のキーを出力から剥がす）を見逃していた。**この歯は5つのキー
+   * （good/bad/unclear/other/total）を `toEqual` で丸ごと突き合わせる**ので、
+   * どれか1つでもスキーマから抜け落ちれば必ず落ちる。
+   */
+  it('good/bad/unclear/other/total の5キーが全部、台帳・委譲の両方に出る（スキーマの欄落ちを検出する）', async () => {
+    await stores.journal.append({
+      type: 'decision',
+      decision: '引き受けた仕事に評定を付けた（c1）: good',
+      grounds: '',
+    });
+    await stores.journal.append({
+      type: 'decision',
+      decision: '引き受けた仕事に評定を付けた（c2）: bad — 差し戻し',
+      grounds: '',
+    });
+    await stores.journal.append({
+      type: 'decision',
+      decision: '引き受けた仕事に評定を付けた（c3）: unclear',
+      grounds: '',
+    });
+    await stores.journal.append({
+      type: 'decision',
+      decision: '引き受けた仕事に評定を付けた（c4）: weird',
+      grounds: '',
+    });
+    await stores.journal.append({
+      type: 'decision',
+      decision: '委譲に評定を付けた（m1）: good',
+      grounds: '',
+    });
+    await stores.journal.append({
+      type: 'decision',
+      decision: '委譲に評定を付けた（m2）: unclear',
+      grounds: '',
+    });
+
+    const response = await app.request('/appraisal-stats');
+    const body = (await response.json()) as {
+      journal: {
+        commitments: { good: number; bad: number; unclear: number; other: number; total: number };
+        jobs: { good: number; bad: number; unclear: number; other: number; total: number };
+      };
+    };
+
+    expect(body.journal.commitments).toEqual({ good: 1, bad: 1, unclear: 1, other: 1, total: 4 });
+    expect(body.journal.jobs).toEqual({ good: 1, bad: 0, unclear: 1, other: 0, total: 2 });
+  });
+
+  it('終端した委譲を状態ごとに割り、評定なしを4つ目の状態として出す', async () => {
+    await stores.jobs.putJob({
+      id: 'm-done',
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      status: 'done',
+      summary: '完了',
+      appraisal: 'good',
+    });
+    await stores.jobs.putJob({
+      id: 'm-stopped',
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      status: 'stopped',
+      summary: 'manager_stop で畳んだ（評定なし）',
+    });
+    await stores.jobs.putJob({
+      id: 'm-running',
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      status: 'running',
+      summary: 'まだ走行中——対象外',
+    });
+
+    const response = await app.request('/appraisal-stats');
+    const body = (await response.json()) as {
+      jobCoverage: {
+        byStatus: Array<{ status: string; total: number; appraised: number; unappraised: number }>;
+        terminalTotal: number;
+        terminalUnappraised: number;
+        nonTerminalTotal: number;
+      };
+    };
+
+    const byStatus = Object.fromEntries(body.jobCoverage.byStatus.map((row) => [row.status, row]));
+    expect(byStatus.done).toEqual({ status: 'done', total: 1, appraised: 1, unappraised: 0 });
+    expect(byStatus.stopped).toEqual({ status: 'stopped', total: 1, appraised: 0, unappraised: 1 });
+    // running は byStatus に現れない（対象外）が、非終端の件数として残る。
+    expect(byStatus.running).toBeUndefined();
+    expect(body.jobCoverage.nonTerminalTotal).toBe(1);
+    expect(body.jobCoverage.terminalTotal).toBe(2);
+    expect(body.jobCoverage.terminalUnappraised).toBe(1);
   });
 });
 

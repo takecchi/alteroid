@@ -52,7 +52,11 @@ import type {
   UnpushedWorkResult,
 } from './runner-protocol.js';
 import { brief } from './runner.js';
-import { describeAppraisal, JOB_APPRAISAL_DECISION_PREFIX } from './schema.js';
+import {
+  describeAppraisal,
+  formatAppraisalDecision,
+  JOB_APPRAISAL_DECISION_PREFIX,
+} from './schema.js';
 import type {
   AppraisalValue,
   AppraisedBy,
@@ -6028,10 +6032,13 @@ class Pool implements ManagerPool {
     const who = by === 'clone' ? 'クローン' : '人間';
     await this.#journal({
       type: 'decision',
-      decision:
-        `${JOB_APPRAISAL_DECISION_PREFIX}（${managerId}）: ${appraisal}` +
-        `${reason === undefined ? '' : ` — ${reason}`}` +
-        `${previous === null ? '' : `（前: ${previous}）`}`,
+      decision: formatAppraisalDecision({
+        prefix: JOB_APPRAISAL_DECISION_PREFIX,
+        id: managerId,
+        value: appraisal,
+        reason,
+        previous,
+      }),
       grounds: `${who}が付けた（人間はこれを読んで後から覆す）`,
     });
 
