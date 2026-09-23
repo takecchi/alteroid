@@ -553,8 +553,6 @@ export function describeAppraisalStats(input: {
   lines.push('### 委譲（JOB_APPRAISAL_DECISION_PREFIX）');
   lines.push(...renderReconciliation(reconciliation.jobs));
   lines.push('');
-  lines.push(
-    '⚠️ 上の2つもここまでの節と同じく別の軸である。混ぜて比べないこと。',
-  );
+  lines.push('⚠️ 上の2つもここまでの節と同じく別の軸である。混ぜて比べないこと。');
   return lines.join('\n');
 }

@@ -318,7 +318,9 @@ describe('parseAppraisalDecisionId / inferAppraisedByFromGrounds — 過去の�
   });
 
   it('prefix で始まらない行は undefined', () => {
-    expect(parseAppraisalDecisionId('無関係な行', COMMITMENT_APPRAISAL_DECISION_PREFIX)).toBeUndefined();
+    expect(
+      parseAppraisalDecisionId('無関係な行', COMMITMENT_APPRAISAL_DECISION_PREFIX),
+    ).toBeUndefined();
   });
 
   it('prefix の直後が「（」でない壊れた行は undefined（id が復元できない）', () => {
@@ -482,7 +484,11 @@ describe('computeAppraisalReconciliation — (b) 人間 と (c) クローンの�
 
   it('クローン→クローン、人間→人間の付け直しは対に数えない（クローン→人間だけを数える）', async () => {
     const stores = createMemoryStores();
-    const base = { prefix: COMMITMENT_APPRAISAL_DECISION_PREFIX, target: 'commitment' as const, id: 'c1' };
+    const base = {
+      prefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
+      target: 'commitment' as const,
+      id: 'c1',
+    };
     await stores.journal.append(structuredEntry({ ...base, value: 'good', by: 'clone' }));
     await stores.journal.append(structuredEntry({ ...base, value: 'bad', by: 'clone' })); // clone→clone: 対に数えない
     await stores.journal.append(structuredEntry({ ...base, value: 'unclear', by: 'human' })); // clone(bad)→human(unclear): 数える
@@ -604,7 +610,11 @@ describe('computeAppraisalReconciliation — (b) 人間 と (c) クローンの�
 
   it('同じ組の遷移は件数へ集約し、件数の多い順に並ぶ', async () => {
     const stores = createMemoryStores();
-    const pair = async (id: string, cloneValue: 'good' | 'bad' | 'unclear', humanValue: 'good' | 'bad' | 'unclear') => {
+    const pair = async (
+      id: string,
+      cloneValue: 'good' | 'bad' | 'unclear',
+      humanValue: 'good' | 'bad' | 'unclear',
+    ) => {
       await stores.journal.append(
         structuredEntry({
           prefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,

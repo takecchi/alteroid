@@ -1619,7 +1619,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
         why:
           '構造欄（#1310）。中身は id・enum 値のみで自由文を運ばないが、この' +
           '関数は入れ子の中へ踏み込まない第1階層までの一般原則（冒頭 doc）を' +
-          '適用し、出す設計は別途 `case \'decision\'` 側で決める。',
+          "適用し、出す設計は別途 `case 'decision'` 側で決める。",
       },
     },
     escalation: {
