@@ -23,6 +23,8 @@ import {
   createClone,
   humanTurnText,
   placedClonePermissionMode,
+  REDELIVERY_COUNT_PREFIX_A,
+  REDELIVERY_COUNT_PREFIX_B,
   resolveCloneModel,
   isHumanOriginated,
   resolveCloneHumanPriority,
@@ -16023,6 +16025,218 @@ describe('台帳で片付け済みの報告には印が付く（#391）', () => 
       delivered.indexOf('この報告は台帳で既に片付けている'),
     );
   });
+});
+
+/**
+ * 述語が当たった配り直しの件数を数える跡（issue #1374。#879 から切り出し）。
+ *
+ * #1374 はまだ「注記して配る（いま）」と「抑える」のどちらにするかを決めて
+ * いない——決める前に要るのが件数である。ここで測るのは、その件数を数える
+ * 跡（`REDELIVERY_COUNT_PREFIX_A` / `REDELIVERY_COUNT_PREFIX_B` で始まる
+ * `exchange`、`with: 'self'` / `role: 'outbound'`）が、述語が当たって
+ * **配った**回にだけ、高々1行増えることである。
+ *
+ * **配り方が変わっていないこと自体は、直上の「台帳で片付け済みの報告には
+ * 印が付く（#391）」の歯がそのまま緑であることで示す。** 本文・断り書きの
+ * 文言はここでは1文字も変えていない——変わったのは日誌への追記だけである。
+ */
+describe('述語が当たった配り直しの件数を数える（issue #1374）', () => {
+  /** `commitments.get` だけを差し替えた `Stores`。#391 の describe と同じ形。 */
+  function storesWithGet(get: (id: string) => Promise<unknown>): Stores {
+    const base = createMemoryStores();
+    return {
+      ...base,
+      commitments: { ...base.commitments, get: get as Stores['commitments']['get'] },
+    };
+  }
+
+  /** 台帳の1件を組み立てる。`closedAt` を渡さなければ未了。 */
+  function commitment(id: string, fields: { closedAt?: string; closedReason?: string }) {
+    return {
+      id,
+      at: '2026-09-24T00:00:00.000Z',
+      origin: 'manager' as const,
+      body: '[report] 本文',
+      ...fields,
+    };
+  }
+
+  /** 日誌の `exchange` のうち、指定した接頭辞で始まる行だけを抜く。 */
+  async function countLines(
+    stores: Stores,
+    prefix: string,
+  ): Promise<{ with: string; role: string; text: string }[]> {
+    const exchanges = (await stores.journal.list({ types: ['exchange'] })) as {
+      with: string;
+      role: string;
+      text: string;
+    }[];
+    return exchanges.filter((entry) => entry.text.startsWith(prefix));
+  }
+
+  it('(A) 台帳で片付け済みの報告が配られた回に、【数える:A】で始まる行が1つだけ増える', async () => {
+    const REPORT_ID = 'evt-count-a-closed';
+    const stores = storesWithGet(async (id) =>
+      id === REPORT_ID ? commitment(REPORT_ID, { closedAt: '2026-09-24T00:05:00.000Z' }) : null,
+    );
+    const s = setup(undefined, stores);
+    s.clone.post({
+      type: 'manager_message',
+      id: REPORT_ID,
+      at: new Date().toISOString(),
+      managerId: 'mgr-count-a',
+      kind: 'report',
+      text: '本文A',
+    });
+    const inputs = (): string[] => (s.calls[0] as FakeCall).inputs;
+    await waitForExpect(
+      () => expect(inputs().find((input) => input.includes('本文A'))).toBeTruthy(),
+      '『本文A』を含む入力が届く',
+    );
+
+    const hits = await countLines(stores, REDELIVERY_COUNT_PREFIX_A);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.with).toBe('self');
+    expect(hits[0]?.role).toBe('outbound');
+    expect(hits[0]?.text).toContain('mgr-count-a');
+
+    await s.clone.stop();
+  });
+
+  it('(A) 陽性対照: 閉じていない報告が配られても、「【数える:」で始まる行は増えない', async () => {
+    const REPORT_ID = 'evt-count-a-open';
+    const stores = storesWithGet(async (id) => (id === REPORT_ID ? commitment(REPORT_ID, {}) : null));
+    const s = setup(undefined, stores);
+    s.clone.post({
+      type: 'manager_message',
+      id: REPORT_ID,
+      at: new Date().toISOString(),
+      managerId: 'mgr-count-a-open',
+      kind: 'report',
+      text: '本文A-open',
+    });
+    const inputs = (): string[] => (s.calls[0] as FakeCall).inputs;
+    await waitForExpect(
+      () => expect(inputs().find((input) => input.includes('本文A-open'))).toBeTruthy(),
+      '『本文A-open』を含む入力が届く',
+    );
+
+    const exchanges = (await stores.journal.list({ types: ['exchange'] })) as { text: string }[];
+    expect(exchanges.filter((entry) => entry.text.startsWith('【数える:'))).toHaveLength(0);
+
+    await s.clone.stop();
+  });
+
+  it('(B) 有効性の断り書きが付いてターンが起きた回に、【数える:B】で始まる行が1つだけ増える', async () => {
+    const s = setup();
+    s.clone.post({
+      type: 'manager_message',
+      id: 'evt-count-b-changed',
+      at: new Date().toISOString(),
+      // 一度も `managers.start` していない managerId ⟹ `managers.list()` に
+      // 居ない ⟹ `inboxEventValidity` は `unknowable`（`describeValidity` は
+      // 空文字でない）。
+      managerId: 'mgr-count-b-ghost',
+      kind: 'report',
+      text: '本文B',
+      statusAtDelivery: 'running',
+    });
+    const inputs = (): string[] => (s.calls[0] as FakeCall).inputs;
+    await waitForExpect(
+      () => expect(inputs().find((input) => input.includes('本文B'))).toBeTruthy(),
+      '『本文B』を含む入力が届く',
+    );
+
+    const hits = await countLines(s.stores, REDELIVERY_COUNT_PREFIX_B);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.with).toBe('self');
+    expect(hits[0]?.role).toBe('outbound');
+    expect(hits[0]?.text).toContain('mgr-count-b-ghost');
+
+    await s.clone.stop();
+  });
+
+  it('(B) 陽性対照: statusAtDelivery を名乗っていない報告では、「【数える:」で始まる行は増えない', async () => {
+    const s = setup();
+    s.clone.post({
+      type: 'manager_message',
+      id: 'evt-count-b-unclaimed',
+      at: new Date().toISOString(),
+      managerId: 'mgr-count-b-unclaimed',
+      kind: 'report',
+      text: '本文B-unclaimed',
+      // statusAtDelivery を渡さない ⟹ inboxEventValidity は unclaimed ⟹
+      // describeValidity は空文字。
+    });
+    const inputs = (): string[] => (s.calls[0] as FakeCall).inputs;
+    await waitForExpect(
+      () => expect(inputs().find((input) => input.includes('本文B-unclaimed'))).toBeTruthy(),
+      '『本文B-unclaimed』を含む入力が届く',
+    );
+
+    const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[];
+    expect(exchanges.filter((entry) => entry.text.startsWith('【数える:'))).toHaveLength(0);
+
+    await s.clone.stop();
+  });
+
+  /**
+   * まとめ読み（`#runManagerReportBatch`）でも (A) は件数ぶん個別に立つ。
+   *
+   * `mgr-count-batch` から連続して3件の report が届き、うち2件（`r1` / `r3`）
+   * だけが台帳で片付け済み。**「1ターンにつき高々1行」ではなく「配った報告
+   * 1件につき高々1行」であることが、この歯の要点である** —— 束の中身に応じて
+   * 0〜N 行のあいだで変わる。
+   */
+  it('(A) まとめ読みでは、束の中で閉じている件数ぶんだけ行が増える', async () => {
+    const REPORT_ID_1 = 'evt-count-a-batch-1';
+    const REPORT_ID_2 = 'evt-count-a-batch-2';
+    const REPORT_ID_3 = 'evt-count-a-batch-3';
+    const stores = storesWithGet(async (id) => {
+      if (id === REPORT_ID_1) return commitment(REPORT_ID_1, { closedAt: '2026-09-24T00:05:00.000Z' });
+      if (id === REPORT_ID_3) return commitment(REPORT_ID_3, { closedAt: '2026-09-24T00:06:00.000Z' });
+      return null;
+    });
+    const s = setup(undefined, stores);
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post({
+      type: 'manager_message',
+      id: REPORT_ID_1,
+      at: new Date().toISOString(),
+      managerId: 'mgr-count-batch',
+      kind: 'report',
+      text: '束1本目',
+    });
+    s.clone.post({
+      type: 'manager_message',
+      id: REPORT_ID_2,
+      at: new Date().toISOString(),
+      managerId: 'mgr-count-batch',
+      kind: 'report',
+      text: '束2本目',
+    });
+    s.clone.post({
+      type: 'manager_message',
+      id: REPORT_ID_3,
+      at: new Date().toISOString(),
+      managerId: 'mgr-count-batch',
+      kind: 'report',
+      text: '束3本目',
+    });
+
+    await waitFor(
+      () => s.calls[0]?.inputs[1]?.includes('束3本目') ?? false,
+      'まとめたターンが投げられる',
+    );
+
+    const hits = await countLines(stores, REDELIVERY_COUNT_PREFIX_A);
+    expect(hits).toHaveLength(2);
+
+    await s.clone.stop();
+  }, 15_000);
 });
 
 /**

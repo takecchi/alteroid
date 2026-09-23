@@ -3335,7 +3335,17 @@ class Clone implements CloneHost {
       // 死ぬ）。倒れ先は空文字ではなく `describeSuperseded` の `uncountable` の文
       // （`#situationNoticeFor` と同じ向き）——「数えられなかった」を 0 件と
       // 混同しない、という `superseded.ts` の要である。
-      this.#notices.set('validity', await this.#validityNoticeFor(batch));
+      const validityNotice = await this.#validityNoticeFor(batch);
+      this.#notices.set('validity', validityNotice);
+      // **(B) の件数を数える跡（issue #1374）。** `validityNotice` が空文字で
+      // ないのは `event.type === 'manager_message' && event.kind === 'report'`
+      // のときだけ（`#validityNoticeFor` の doc）。この時点から先、この反復は
+      // 必ずいずれかのターンを起こす——畳む判定（`#foldClosedRedelivery` 等）は
+      // これより前で終わっている。`#noteRedeliveryPredicateHitA` の doc の
+      // 「上限は1回につき高々1行」も参照。
+      if (validityNotice !== '' && event.type === 'manager_message') {
+        await this.#noteRedeliveryPredicateHitB(event.managerId);
+      }
       this.#notices.set(
         'superseded',
         await this.#supersededNoticeFor(batch).catch((error: unknown) => {
@@ -3814,7 +3824,14 @@ class Clone implements CloneHost {
       // **台帳の判定（#391）も件数ぶん引く。** まとめても「どの報告が片付け済み
       // か」は1件ごとに違いうるので、1つの判定へ潰さない（落とすと #391 が入れた
       // 能力の削除になる —— AGENTS.md の指示）。
-      settlements.push(await reportSettlement(this.#stores.commitments, event.id));
+      const settlement = await reportSettlement(this.#stores.commitments, event.id);
+      settlements.push(settlement);
+      // **(A) の件数を数える跡（issue #1374）。** ここへ来る事象は構造上すべて
+      // 配られる（直上の doc「片付け済みの配り直しはここへ来ない」）ので、
+      // `closedReportNotice` が非 null な行は必ず配った回である。
+      if (closedReportNotice(settlement) !== null) {
+        await this.#noteRedeliveryPredicateHitA(event.managerId);
+      }
     }
 
     // **`now` はここで1度だけ取る**（`#handle` の単発経路が `managerPrompt` へ
@@ -3992,6 +4009,56 @@ class Clone implements CloneHost {
       text:
         `片付け済みの配り直しなので、ターンを起こさずに畳んだ（モデルへは1文字も渡して` +
         `いない）: ${inboxEventShape(event)}\n\n${notice}`,
+    });
+  }
+
+  /**
+   * (A) の述語（`closedReportNotice`）が当たって配ったことを、日誌へ1行だけ
+   * 数える跡として残す（issue #1374。`REDELIVERY_COUNT_PREFIX_A` の doc）。
+   *
+   * **配り方は変えない。** ここは `#journal`（日誌ストアへの書き込み）だけを
+   * 呼び、`#pushInput`（モデルへ渡す文字列を組む経路）には一度も触れない——
+   * この行はモデルには一度も見えない。
+   *
+   * **呼び出し元が「配った回」だけを選ぶ。** ここでは述語をもう一度確かめない
+   * ——呼び出し元（`#handle` の `manager_message`/`report` 分岐、
+   * `#runManagerReportBatch`）が `closedReportNotice(settlement) !== null` を
+   * 確かめた上で、実際にその報告を配る経路（`#runInternal` を呼ぶ手前）でだけ
+   * 呼ぶ。片付け済みの配り直し（`#foldClosedRedelivery` が畳む回）はそもそも
+   * この関数へ来ない——畳む経路は `closedReportNotice` を一度も呼ばない。
+   */
+  async #noteRedeliveryPredicateHitA(managerId: string): Promise<void> {
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text:
+        `${REDELIVERY_COUNT_PREFIX_A}台帳で既に片付けている報告に断り書きを付けて配った` +
+        `（managerId=${managerId}）。`,
+    });
+  }
+
+  /**
+   * (B) の述語（`describeValidity`）が当たってターンを起こしたことを、日誌へ
+   * 1行だけ数える跡として残す（issue #1374。`REDELIVERY_COUNT_PREFIX_B` の
+   * doc）。
+   *
+   * **配り方は変えない。** 直上の `#noteRedeliveryPredicateHitA` と同じ理由
+   * ——`#journal` だけを呼び、モデルへ渡す文字列には触れない。
+   *
+   * **呼び出し元は `#pump` の1か所だけ。** `this.#notices.set('validity', …)`
+   * の直後、値が空文字でないときにだけ呼ぶ——その時点から先、その反復は
+   * 必ずいずれかのターンを起こす（畳む判定はこれより前で終わっている）ので、
+   * 「そのターンが起きた回」を別途確かめ直す必要が無い。
+   */
+  async #noteRedeliveryPredicateHitB(managerId: string): Promise<void> {
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text:
+        `${REDELIVERY_COUNT_PREFIX_B}名乗った前提が動いている報告のままターンを起こした` +
+        `（managerId=${managerId}）。`,
     });
   }
 
@@ -7300,6 +7367,14 @@ class Clone implements CloneHost {
           this.#stores.commitments,
           event.id,
         );
+        // **(A) の件数を数える跡（issue #1374）。** `closedReportNotice` は
+        // `report` だけの断り書き（`question`/`permission` は姉妹版の
+        // `closedConfirmationNotice`——ここでは数えない）なので、`kind` を
+        // 絞ってから確かめる。片付け済みの配り直しはここへ来ない（`#pump` が
+        // 畳む）ので、非 null は必ず配った回である。
+        if (event.kind === 'report' && closedReportNotice(settlement) !== null) {
+          await this.#noteRedeliveryPredicateHitA(event.managerId);
+        }
         // **`now` はここで1度だけ取り、`managerPrompt` の中では取らない**（#562）。
         // `managerPrompt` を純関数のまま保つ ——歯に `now` を固定して渡せる形で
         // なければ、経過を測るテストが時刻に依存して揺れる。
@@ -10390,6 +10465,51 @@ type ConfirmationLiveness = 'live' | 'settled' | 'unknown';
  */
 type ReportSettlement =
   { kind: 'closed'; closedReason?: string } | { kind: 'open' } | { kind: 'unknown' };
+
+/**
+ * 述語が当たった配り直しの件数を、日誌の跡として数えられるようにする
+ * （issue #1374。#879 から切り出し）。
+ *
+ * ## 何を数えるか
+ *
+ * 述語は2つある。**(A)** `reportSettlement` / `closedReportNotice`
+ * （「私が対処したか」）と **(B)** `inbox-validity.ts` の `inboxEventValidity` /
+ * `describeValidity`（「その合図がまだ有効か」）。#1374 はまだ「注記して配る
+ * （いま）」と「抑える」のどちらにするかを決めていない——決める前に要るのが
+ * 件数である。ここで足すのは**数える跡だけ**で、配り方（モデルへ渡す本文・
+ * 断り書きの文言・配る/配らないの判定）は1文字も変えない：この2つの定数は
+ * 日誌へ書く行の**先頭にだけ**現れ、`composeTurnInputText` を経由してモデルへ
+ * 渡る文字列には一度も混ざらない（呼び出し箇所は `Clone#journal` だけを叩く
+ * `#noteRedeliveryPredicateHitA` / `#noteRedeliveryPredicateHitB` の2つに
+ * 閉じている）。
+ *
+ * ## いつ書くか（`#foldClosedRedelivery` と二重に数えない）
+ *
+ * - **(A)** は、`closedReportNotice(settlement)` が非 null で、かつその報告が
+ *   実際に配られた回（`#handle` の `manager_message`/`report` 分岐、または
+ *   `#runManagerReportBatch` の束の中の1件）にだけ書く。**片付け済みの
+ *   配り直し**（`#foldClosedRedelivery` が畳む回）はここへ来ない——`#pump` が
+ *   まとめ読みの判定より前で畳んでおり、`closedReportNotice` を一度も
+ *   呼ばない経路だからである。畳んだ回の跡は既に在る（`#foldClosedRedelivery`
+ *   が書く「片付け済みの配り直しなので、ターンを起こさずに畳んだ」の1行）ので、
+ *   ここでは足さない（二重に数えない）。
+ * - **(B)** は、`describeValidity(...)` が空文字でなく、かつそのターンが
+ *   実際に起きた回（`#pump` が `#notices` へ `validity` を積んだ直後——
+ *   この時点から先、その反復は必ずいずれかのターンを起こす。畳む判定は
+ *   これより前で終わっている）にだけ書く。
+ *
+ * ## 上限は1回につき高々1行（#1311 の日誌の行数の関心への配慮）
+ *
+ * - (A) は `closedReportNotice` が1件の報告につき高々1回しか呼ばれない
+ *   （`managerPrompt` の単発経路・`managerReportBatchPrompt` の束の中の
+ *   1件ぶん）ので、**配った報告1件につき高々1行**——述語が当たらない報告には
+ *   1行も増えない。
+ * - (B) は `#validityNoticeFor` がその反復の束の先頭1件だけを見て1回だけ
+ *   呼ばれる（`#validityNoticeFor` の doc「`events[0]` だけを見る」）ので、
+ *   **ターン1回につき高々1行**——述語が当たらない反復には1行も増えない。
+ */
+export const REDELIVERY_COUNT_PREFIX_A = '【数える:A】';
+export const REDELIVERY_COUNT_PREFIX_B = '【数える:B】';
 
 /**
  * 片付け済みの報告に添える「閉じた理由」の長さ（#391）。
