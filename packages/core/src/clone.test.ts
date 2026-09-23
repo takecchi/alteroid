@@ -10184,6 +10184,79 @@ describe('inbox_flow（受信箱の到着・配達・消し込み・滞留を日
 });
 
 /**
+ * 起動時に拾い直した合図を、明示的に解くまで握ったままにする偽 SDK。
+ *
+ * **時間で近似しない**（`describe('クローン — 発言を受理した瞬間の記録と
+ * 合図')` の `fakeGatedSdk` と同じ理由・同じ形——「1件目のターンが走って
+ * いるあいだに、もう1件が待ち行列に残っている」という順番待ちの窓を
+ * `delayMs` の綱引きに賭けない）。
+ */
+function fakeGatedSdk() {
+  const calls: FakeCall[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  const fn = ((params: { prompt: unknown; options?: Options }) => {
+    const call: FakeCall = {
+      options: params.options ?? {},
+      inputs: [],
+      kind: typeof params.prompt === 'string' ? 'sideQuery' : 'session',
+    };
+    calls.push(call);
+
+    async function* generate(): AsyncGenerator<SDKMessage, void> {
+      yield {
+        type: 'system',
+        subtype: 'init',
+        session_id: 'sess-fake',
+        uuid: 'uuid-init',
+      } as unknown as SDKMessage;
+
+      for await (const message of params.prompt as AsyncIterable<{
+        message: { content: unknown };
+      }>) {
+        // **本文を控えてから止める。** 止めてから控えると「ターンが始まった」を
+        // テストから観測できず、順番待ちを作れたことが確かめられない。
+        call.inputs.push(String(message.message.content));
+        await gate;
+        yield {
+          type: 'assistant',
+          message: { content: [{ type: 'text', text: 'ok' }] },
+          parent_tool_use_id: null,
+          session_id: 'sess-fake',
+          uuid: 'uuid-assistant',
+        } as unknown as SDKMessage;
+        yield {
+          type: 'result',
+          subtype: 'success',
+          result: 'ok',
+          session_id: 'sess-fake',
+          uuid: 'uuid-result',
+        } as unknown as SDKMessage;
+      }
+    }
+
+    const generator = generate();
+    return Object.assign(generator, {
+      close: () => undefined,
+      interrupt: async () => undefined,
+    }) as unknown as Query;
+  }) as unknown as typeof sdkQuery;
+
+  return {
+    fn,
+    calls,
+    /** 握っていたターンを解く。以降のターンはこの1回だけ解けば済み、あとは
+     * この `describe` の中では止めない（この `fn` を使うテストは各1回しか
+     * ターンを起こさない、か、2本目以降は解いたあとに届くので `gate` は
+     * 既に解決済みのまま素通りする）。 */
+    release: () => release(),
+  };
+}
+
+/**
  * `inbox_flow.retained`（メモリ上の4つの索引の残数。Issue #1264、案1a）。
  *
  * `#forget` が行う後始末のうち、`#unread` / `#redelivered` /
@@ -10317,79 +10390,6 @@ describe('inbox_flow.retained（メモリ上の索引の残数。Issue #1264）'
 
     await s.clone.stop();
   });
-
-  /**
-   * 起動時に拾い直した合図を、明示的に解くまで握ったままにする偽 SDK。
-   *
-   * **時間で近似しない**（`describe('クローン — 発言を受理した瞬間の記録と
-   * 合図')` の `fakeGatedSdk` と同じ理由・同じ形——「1件目のターンが走って
-   * いるあいだに、もう1件が待ち行列に残っている」という順番待ちの窓を
-   * `delayMs` の綱引きに賭けない）。
-   */
-  function fakeGatedSdk() {
-    const calls: FakeCall[] = [];
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-
-    const fn = ((params: { prompt: unknown; options?: Options }) => {
-      const call: FakeCall = {
-        options: params.options ?? {},
-        inputs: [],
-        kind: typeof params.prompt === 'string' ? 'sideQuery' : 'session',
-      };
-      calls.push(call);
-
-      async function* generate(): AsyncGenerator<SDKMessage, void> {
-        yield {
-          type: 'system',
-          subtype: 'init',
-          session_id: 'sess-fake',
-          uuid: 'uuid-init',
-        } as unknown as SDKMessage;
-
-        for await (const message of params.prompt as AsyncIterable<{
-          message: { content: unknown };
-        }>) {
-          // **本文を控えてから止める。** 止めてから控えると「ターンが始まった」を
-          // テストから観測できず、順番待ちを作れたことが確かめられない。
-          call.inputs.push(String(message.message.content));
-          await gate;
-          yield {
-            type: 'assistant',
-            message: { content: [{ type: 'text', text: 'ok' }] },
-            parent_tool_use_id: null,
-            session_id: 'sess-fake',
-            uuid: 'uuid-assistant',
-          } as unknown as SDKMessage;
-          yield {
-            type: 'result',
-            subtype: 'success',
-            result: 'ok',
-            session_id: 'sess-fake',
-            uuid: 'uuid-result',
-          } as unknown as SDKMessage;
-        }
-      }
-
-      const generator = generate();
-      return Object.assign(generator, {
-        close: () => undefined,
-        interrupt: async () => undefined,
-      }) as unknown as Query;
-    }) as unknown as typeof sdkQuery;
-
-    return {
-      fn,
-      calls,
-      /** 握っていたターンを解く。以降のターンはこの1回だけ解けば済み、あとは
-       * この `describe` の中では止めない（この `fn` を使うテストは各1回しか
-       * ターンを起こさない、か、2本目以降は解いたあとに届くので `gate` は
-       * 既に解決済みのまま素通りする）。 */
-      release: () => release(),
-    };
-  }
 
   it('拾い直した合図は retained.redelivered / retained.redeliveredClosed に一時的に載り、消し込みが効いた後の窓では0に戻る（`this.#redelivered.delete(event.id);` / `this.#redeliveredClosed.delete(event.id);` が `#forget` の中で効いていることの固定）', async () => {
     const stores = createMemoryStores();
@@ -17542,5 +17542,235 @@ describe('待ちの経路に壁時計が無い（#1220）', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+/**
+ * `inbox_flow.retained` で、`#forget` 以外の3つの経路の後始末を固定する
+ * （Issue #1264 の続き）。
+ *
+ * `#unread` / `#redelivered` / `#redeliveredClosed` から項目を外す3行は、
+ * `#forget` のほかに3箇所ある——`dropQueuedInboxEvents`（待ち行列から消す。
+ * #1049）・`#removeStaleRedeliveryChunk`（stale の一括消し込み。#1264 が
+ * 名指しした一括経路）・`#restoreUnreadPass` の「拾い直しの最中に消された
+ * 合図」の分岐。上の `describe` が歯にしたのは `#forget` だけで、この3箇所は
+ * 1行ずつ殺しても全スイートが緑のままだった。
+ *
+ * **消し込みの前に項目が入っていることは、ここでは窓で直接は測れない**
+ * （窓はターンの終わりにしか書かれず、どの経路も消すのはそれより前）。
+ * 代わりに、各シナリオで「その経路を通ったこと」を別の出口で固定し
+ * （`dropQueuedInboxEvents` の戻り値・器の残数・日誌の1行）、項目が入る
+ * ことは `#restoreUnreadPass` の同じ組み立て（上の `describe` の最後の歯が
+ * 窓で `{ unread: 2, redelivered: 2, redeliveredClosed: 1 }` を固定している
+ * 形）に頼る。
+ *
+ * ⚠️ **`#removeStaleRedeliveryChunk` の `#redeliveredClosed.delete` には歯を
+ * 書いていない。書けない。** stale と判定されるのは token-pool の自己通知だけ
+ * （`inbox-staleness.ts` の `restoredInboxEventVerdict`）で、自己通知の
+ * `commitmentFor` は `null` を返す（`isDaemonSelfNotice`）——stale の合図は
+ * `#redeliveredClosed` に一度も載らないので、その行が外す項目がいまの判定の
+ * 下では存在しない。stale の判定が広がったらこの行にも歯が要る。
+ */
+describe('inbox_flow.retained —— #forget 以外の経路の後始末（Issue #1264 の続き）', () => {
+  it('拾い直した合図を待ち行列から消すと、その合図の3つの索引が外れる（`dropQueuedInboxEvents` の中の3行の固定）', async () => {
+    const stores = createMemoryStores();
+
+    // `live` のターンを握っているあいだ、`queued` は待ち行列に残る
+    // （上の `describe` の最後の歯と同じ組み立て）。`queued` は台帳が閉じて
+    // いるので `#redeliveredClosed` にも載る。
+    const live = humanMessage('生きている拾い直し', 'conv-live');
+    const queued = humanMessage('待ち行列で消される拾い直し', 'conv-queued');
+    await stores.inbox.put(live, '2026-09-01T00:00:00.000Z');
+    await stores.inbox.put(queued, '2026-09-01T00:00:01.000Z');
+    await stores.commitments.open(commitmentFor(queued) as Commitment);
+    expect(
+      await stores.commitments.close(
+        queued.id,
+        '2026-09-01T00:05:00.000Z',
+        'もう対応済み',
+        'clone',
+      ),
+    ).toBe(true);
+
+    const { fn, calls, release } = fakeGatedSdk();
+    const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
+      stores,
+      queryFn: fn,
+      env: {},
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+
+    await waitFor(
+      () => calls.some((call) => call.inputs.some((text) => text.includes('生きている拾い直し'))),
+      'live のターンが始まる',
+    );
+
+    // `queued` が待ち行列に居たことの固定（0 なら、この歯は何も測っていない）。
+    expect(await clone.dropQueuedInboxEvents([queued.id])).toBe(1);
+
+    release();
+
+    await waitFor(
+      async () => (await stores.journal.list({ types: ['inbox_flow'] })).length >= 1,
+      '1本目の inbox_flow 行',
+    );
+    const rows = await stores.journal.list({ types: ['inbox_flow'] });
+    const row = rows[0];
+    if (row?.type !== 'inbox_flow') throw new Error('inbox_flow が日誌に無い');
+    // 🔴 残るのは処理中の `live` 自身だけ。3行のどれかを殺すと、`queued` の
+    // 分が対応する欄に残る（`unread: 2` / `redelivered: 2` / `redeliveredClosed: 1`）。
+    expect(row.retained).toEqual({
+      unread: 1,
+      redelivered: 1,
+      redeliveredClosed: 0,
+      pendingCollapse: 0,
+    });
+
+    await clone.stop();
+  });
+
+  it('stale の拾い直しを一括で消すと、その合図の索引が外れる（`#removeStaleRedeliveryChunk` の `#unread` / `#redelivered` の固定）', async () => {
+    const stores = createMemoryStores();
+
+    // stale（token-pool の復帰通知）を先に、live を後に積む（`claimPending` は
+    // `at` の昇順）。stale は `#redelivered` / `#unread` に載ってから一括の
+    // 消し込みへ回る（`#restoreUnreadPass` の `staleBuffer`）。
+    const stale: InboxEvent = {
+      type: 'external',
+      id: 'evt-stale-tokenpool',
+      at: '2026-09-01T00:00:00.000Z',
+      source: DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+    };
+    const live = humanMessage('stale の後ろの生きている拾い直し', 'conv-live');
+    await stores.inbox.put(stale, '2026-09-01T00:00:00.000Z');
+    await stores.inbox.put(live, '2026-09-01T00:00:01.000Z');
+
+    const { fn, calls, release } = fakeGatedSdk();
+    const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
+      stores,
+      queryFn: fn,
+      env: {},
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+
+    await waitFor(
+      () =>
+        calls.some((call) =>
+          call.inputs.some((text) => text.includes('stale の後ろの生きている拾い直し')),
+        ),
+      'live のターンが始まる',
+    );
+    // 一括の消し込みが器まで届いたことの固定（stale が消え、live だけが残る）。
+    // 0 件のまま（＝消し込みが走っていない）ならこの歯は何も測っていない。
+    await waitFor(async () => (await stores.inbox.pending()).count === 1, 'stale が器から消える');
+
+    release();
+
+    await waitFor(
+      async () => (await stores.journal.list({ types: ['inbox_flow'] })).length >= 1,
+      '1本目の inbox_flow 行',
+    );
+    const rows = await stores.journal.list({ types: ['inbox_flow'] });
+    const row = rows[0];
+    if (row?.type !== 'inbox_flow') throw new Error('inbox_flow が日誌に無い');
+    // 🔴 残るのは処理中の `live` 自身だけ。`#unread.delete` / `#redelivered.delete`
+    // を殺すと、stale の分が対応する欄に残る。
+    expect(row.retained).toEqual({
+      unread: 1,
+      redelivered: 1,
+      redeliveredClosed: 0,
+      pendingCollapse: 0,
+    });
+
+    await clone.stop();
+  });
+
+  it('拾い直している最中に消された合図は、配らずに畳んだうえで3つの索引も外す（`#restoreUnreadPass` の `#droppedWhileRestoring` 分岐の3行の固定）', async () => {
+    const stores = createMemoryStores();
+
+    // 台帳を閉じておくので、拾い直しの中で `#redeliveredClosed` にも載る。
+    const target = humanMessage('拾い直しの最中に消される', 'conv-dropped');
+    await stores.inbox.put(target, '2026-09-01T00:00:00.000Z');
+    await stores.commitments.open(commitmentFor(target) as Commitment);
+    expect(
+      await stores.commitments.close(
+        target.id,
+        '2026-09-01T00:05:00.000Z',
+        'もう対応済み',
+        'clone',
+      ),
+    ).toBe(true);
+
+    // **消し込みを拾い直しの最中へ差し込む。** `#restoreUnreadPass` は record
+    // ごとに台帳を照会する（`commitments.get`）——その `await` の中で
+    // `dropQueuedInboxEvents` を呼べば、`#restoringUnread` が立っている窓で
+    // 必ず墓標が残る（時間で近似しない）。
+    // `createClone` より前にフックを差すので、器は入れ物越しに後から渡す。
+    const holder: { clone?: ReturnType<typeof createClone> } = {};
+    let droppedDuringRestore: number | undefined;
+    const originalGet = stores.commitments.get.bind(stores.commitments);
+    stores.commitments.get = async (id) => {
+      if (id === target.id && droppedDuringRestore === undefined) {
+        if (holder.clone === undefined) throw new Error('clone がまだ無い');
+        droppedDuringRestore = await holder.clone.dropQueuedInboxEvents([target.id]);
+      }
+      return originalGet(id);
+    };
+
+    const sdk = fakeSdk();
+    const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
+      stores,
+      queryFn: sdk.fn,
+      env: {},
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    holder.clone = clone;
+
+    // この分岐を通ったことの固定（日誌の1行）。通らなければこの歯は何も測っていない。
+    await waitFor(
+      async () =>
+        (await stores.journal.list({ types: ['exchange'] })).some(
+          (entry) =>
+            entry.type === 'exchange' &&
+            entry.text.startsWith('拾い直している最中に器から消された合図なので'),
+        ),
+      '拾い直しの最中に消された合図を畳んだ跡',
+    );
+    // まだ待ち行列に積まれる前なので、その場で落とせたのは0件（墓標だけが残る）。
+    expect(droppedDuringRestore).toBe(0);
+
+    clone.post(humanMessage('後から届く合図（窓をトリガー）', 'conv-after'));
+    await waitFor(
+      async () => (await stores.journal.list({ types: ['inbox_flow'] })).length >= 1,
+      '1本目の inbox_flow 行',
+    );
+    const rows = await stores.journal.list({ types: ['inbox_flow'] });
+    const row = rows[0];
+    if (row?.type !== 'inbox_flow') throw new Error('inbox_flow が日誌に無い');
+    // 🔴 残るのは処理中の後発の合図だけ。3行のどれかを殺すと、消された
+    // 合図の分が対応する欄に残る。
+    expect(row.retained).toEqual({
+      unread: 1,
+      redelivered: 0,
+      redeliveredClosed: 0,
+      pendingCollapse: 0,
+    });
+    // 消された合図は配られていない。
+    expect(
+      sdk.calls.some((call) =>
+        call.inputs.some((text) => text.includes('拾い直しの最中に消される')),
+      ),
+    ).toBe(false);
+
+    await clone.stop();
   });
 });
