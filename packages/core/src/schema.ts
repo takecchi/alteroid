@@ -3722,8 +3722,14 @@ export const practiceMetaSchema = z.object({
   title: z.string(),
   createdAt: isoDateTime,
   updatedAt: isoDateTime,
-  /** 本文の文字数。一覧から「空のやり方」を見分けるために出す。 */
-  bytes: z.number().int().nonnegative(),
+  /**
+   * 本文の文字数（コードポイント数。サロゲートペアの絵文字は1、結合文字は
+   * 分かれたまま数える——UTF-16 のコード単位数でも、UTF-8 のバイト数でもない）。
+   * 一覧から「空のやり方」を見分けるために出す。**保存された値ではなく、読む
+   * たびに本文から導出する**（#1340。fs は `[...content].length`、pg は
+   * `char_length(content)`——どちらもコードポイント数を返すので一致する）。
+   */
+  chars: z.number().int().nonnegative(),
 });
 
 /**

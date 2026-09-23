@@ -60,8 +60,8 @@ export async function verifyPracticeStoreContract(
   if (reread === null || reread.content !== '# 調べもの\n') {
     fail(`read() の本文が正規化されていない: ${JSON.stringify(reread?.content)}`);
   }
-  if (reread.bytes !== '# 調べもの\n'.length) {
-    fail(`bytes は正規化後の本文で数えること: ${reread.bytes}`);
+  if (reread.chars !== [...'# 調べもの\n'].length) {
+    fail(`chars は正規化後の本文で数えること: ${reread.chars}`);
   }
   // 既に改行で終わっているなら足さない
   const already = await practices.write({
@@ -136,7 +136,35 @@ export async function verifyPracticeStoreContract(
     fail('list() が返した参照を書き換えたら、器の中身まで動いた');
   }
 
-  // --- 7. remove ---
+  // --- 7. chars はコードポイント数であって、UTF-16 のコード単位数でも UTF-8 の
+  // バイト数でもない（#1340）。サロゲートペアで書かれる絵文字（1コードポイント）と
+  // 結合文字（基底文字と分かれた別コードポイント）を両方含む本文で、
+  // 実装（fs は `[...content].length`、pg は `char_length(content)`）が同じ数を
+  // 返すこと。**期待値は本文そのものから独立に導く**（ストアの実装を信用しない）。
+  const unicodeSource = '😀 é'; // 絵文字（サロゲートペア）+ 結合文字（e + 結合アキュート）
+  const unicodeWritten = await practices.write({
+    slug: 'contract-unicode',
+    kind: '調査',
+    title: 'コードポイントの数え方',
+    content: unicodeSource,
+  });
+  const expectedChars = [...unicodeWritten.content].length;
+  if (unicodeWritten.chars !== expectedChars) {
+    fail(
+      `write() の chars がコードポイント数になっていない: ${unicodeWritten.chars}（期待 ${expectedChars}）`,
+    );
+  }
+  const unicodeReread = await practices.read('contract-unicode');
+  if (unicodeReread === null || unicodeReread.chars !== expectedChars) {
+    fail(`read() の chars がコードポイント数になっていない: ${unicodeReread?.chars}`);
+  }
+  const unicodeListed = (await practices.list()).find((entry) => entry.slug === 'contract-unicode');
+  if (unicodeListed === undefined || unicodeListed.chars !== expectedChars) {
+    fail(`list() の chars がコードポイント数になっていない: ${unicodeListed?.chars}`);
+  }
+  await practices.remove('contract-unicode');
+
+  // --- 8. remove ---
   await practices.remove('contract-d');
   if ((await practices.read('contract-d')) !== null) fail('remove() の後も read() が返る');
   await practices.remove('contract-d'); // 二度目が落ちないこと（冪等）
@@ -148,7 +176,7 @@ export async function verifyPracticeStoreContract(
     return;
   }
 
-  // --- 8. clear（件数を返し、あとで空になる） ---
+  // --- 9. clear（件数を返し、あとで空になる） ---
   const removed = await practices.clear();
   if (removed < 3) fail(`clear() が消した件数を返していない: ${removed}`);
   if ((await practices.list()).length !== 0) fail('clear() の後も list() が空にならない');
