@@ -1,4 +1,11 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { describe, expect, it } from 'vitest';
+
+// @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
+import { listWorkflowFiles } from './workflow-scan-core.mjs';
 
 import {
   ALARM_MARKER_PREFIX,
@@ -234,5 +241,86 @@ describe('Issue の中身', () => {
     const comment = buildCommentBody(REAL);
     expect(comment).toContain('3ca63973b7da');
     expect(comment).toContain(REAL.runUrl);
+  });
+});
+
+// ============================================================================
+// 監視対象の名前が実在する（Issue #1314）
+// ============================================================================
+
+/**
+ * **この警報は監視対象を「workflow の `name:`」という文字列で持っている。**
+ * `main-ci-alarm.yml` 自身の doc が逐語でその危うさを言う——
+ * `grep -Fn -- '片方だけ直すと静かに鳴らなくなる' .github/workflows/main-ci-alarm.yml`。
+ *
+ * 🔴 **鳴らなくなっても赤くならない。** 名前がずれた警報は `workflow_run` が一致
+ * しなくなるだけで、**エラーも出さずに静かに何もしなくなる**（AGENTS.md「静かに
+ * 失敗する道具」）。⟹ **ずれたことを観測する口が要る。**
+ *
+ * ⚠️ **片側だけを固定しない。** 期待値をこの歯に直書きすると、監視対象を1本
+ * 増やすたびにここも直す二重管理になる。**両側とも現物から読む** ——
+ * `main-ci-alarm.yml` の `workflows:` と、`.github/workflows/` 配下の実在の
+ * `name:` を突き合わせる。
+ */
+const WORKFLOWS_DIR = path.join(fileURLToPath(new URL('..', import.meta.url)), '.github/workflows');
+
+/** workflow ファイルの先頭の `name:` を返す（無ければ `null`）。 */
+function topLevelWorkflowName(text: string): string | null {
+  for (const line of text.split('\n')) {
+    const m = /^name:\s*(.+?)\s*$/.exec(line);
+    if (m !== null) return m[1].replace(/^["']|["']$/g, '');
+  }
+  return null;
+}
+
+/** `on.workflow_run.workflows:` の並びを読む。コメント行は落とす。 */
+function watchedWorkflowNames(text: string): string[] {
+  const marker = '    workflows:\n';
+  const start = text.indexOf(marker);
+  if (start === -1) return [];
+  const names: string[] = [];
+  for (const line of text.slice(start + marker.length).split('\n')) {
+    if (/^\s*#/.test(line)) continue;
+    const m = /^ {6}- (.+?)\s*$/.exec(line);
+    if (m === null) break;
+    names.push(m[1]);
+  }
+  return names;
+}
+
+describe('main-ci-alarm の監視対象は実在する workflow の名前である', () => {
+  const alarmText = readFileSync(path.join(WORKFLOWS_DIR, 'main-ci-alarm.yml'), 'utf8');
+  const watched = watchedWorkflowNames(alarmText);
+  const actualNames = new Set(
+    (listWorkflowFiles(WORKFLOWS_DIR) as string[])
+      .map((f) => topLevelWorkflowName(readFileSync(path.join(WORKFLOWS_DIR, f), 'utf8')))
+      .filter((n): n is string => n !== null),
+  );
+
+  it('前提: 監視対象を1本以上読めている（走査が空を「全部一致」へ倒さない）', () => {
+    expect(watched.length).toBeGreaterThan(0);
+    expect(actualNames.size).toBeGreaterThan(watched.length);
+  });
+
+  it('監視対象の名前は、すべて .github/workflows/ の実在する name: である', () => {
+    for (const name of watched) {
+      expect(
+        [...actualNames],
+        `main-ci-alarm.yml が監視する "${name}" に一致する workflow の name: が無い` +
+          ` —— 名前を変えたなら両側を直すこと。片方だけだと静かに鳴らなくなる`,
+      ).toContain(name);
+    }
+  });
+
+  it('main のトレーラの門が監視対象に入っている（Issue #1314）', () => {
+    const trailerGate = topLevelWorkflowName(
+      readFileSync(path.join(WORKFLOWS_DIR, 'main-commit-trailers.yml'), 'utf8'),
+    );
+    expect(trailerGate).not.toBeNull();
+    expect(
+      watched,
+      `あの門は push: main でしか走らず required にもなれないので、赤くなっても PR の画面に出ない` +
+        ` ⟹ 知らせる経路はこの警報しか無い`,
+    ).toContain(trailerGate);
   });
 });
