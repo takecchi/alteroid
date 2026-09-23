@@ -21,7 +21,9 @@ on:
     # ものなので書かない）。**書式は真似しない** — この repo は
     # `pnpm format:check`（prettier）が YAML にも掛かるので、角括弧の内側の空白の
     # 有無を含めて prettier が決める形に従う。**`if:` の書き方も意図的に違えて
-    # ある**（理由は下の `ci` の `if:` の doc）。
+    # ある**（理由は下の `ci` の `if:` の doc）。**workflow の YAML の構文を守って
+    # いるのもこの prettier だけである**（他の歯は文字列で必要な行を拾うだけ）。その
+    # 配線は `scripts/workflow-yaml-format-check.test.ts` が固定している。
     types: [opened, synchronize, reopened, ready_for_review]
   # **上流ドリフトを見に行く回。ここだけキャッシュを使わずに焼く**（下の `image` の
   # `no-cache`）。**定時にしてあるのは、PR の門を人質に取らないためである** — `ci` と
