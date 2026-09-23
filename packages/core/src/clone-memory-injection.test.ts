@@ -434,12 +434,13 @@ describe('通しの歯 — memory_write の見込み文字数と、次のター�
 
     // (5) boundary の直後は元のターンの本文の始まり——具体的には**必ず末尾に
     // 人間の発話そのものが来る**（`#runTurn` が `#withFreshMemory` へ渡す
-    // 引数は `distillGapNotice + contextWindowFoldNotice + redeliveryNotice +
-    // commitmentNotice + text` で、人間の発話（`text`）は常に最後に足される
-    // ——他の断り書きが何個立っていても、末尾は変わらない）。
+    // 引数は `distillGap + contextWindowFold + redelivery + ... + commitment +
+    // situation + text`（`composeTurnInputText`。`redelivery` / `commitment` 等
+    // 6本は `#notices` の `forTurn()` が返す）で、人間の発話（`text`）は常に
+    // 最後に足される——他の断り書きが何個立っていても、末尾は変わらない）。
     //
     // ⚠️ 実測で分かったこと（依頼者の見立てにも `AGENTS.md`「通しの歯…」の
-    // どちらにも無かった限界）: この2ターン目では `#commitmentNotice`
+    // どちらにも無かった限界）: この2ターン目では `#notices` の `commitment`
     // （引き受けたまま終わっていない仕事の断り。1ターン目の人間の発話が
     // `commitment_close` されずに残っているため立つ）が実際に非空になり、
     // **その断り自身が `\n\n---\n\n` という区切りをもう1つ内部に持つ**
@@ -451,7 +452,7 @@ describe('通しの歯 — memory_write の見込み文字数と、次のター�
     // `secondTurnInput.indexOf(boundary, markerIndex)` が拾う最初の1回は、
     // 塊とその後ろの通知群を隔てる本物の区切りである**——`#withFreshMemory`
     // 自身の区切り（`'', '---', ''`）は `renderMemoryDocuments` の直後、
-    // `text`（＝ここに埋め込まれた commitmentNotice の区切りより必ず前）に
+    // `text`（＝ここに埋め込まれた `#notices` の `commitment` の区切りより必ず前）に
     // 置かれるため。**だから「厳密に1回」ではなく「末尾が人間の発話で
     // 終わる」という、通知の本数に依存しない形で確認する。**
     const afterBoundary = secondTurnInput.slice(boundaryIndex + boundary.length);

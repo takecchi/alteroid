@@ -27,8 +27,9 @@ import type { CooldownSource } from './token-pool.js';
  *
  * ## 置き場所は「ターンの入口」である
  *
- * `clone.ts` の `#redeliveryNotice` / `#commitmentNotice` が逐語で持っている
- * 理由と同じ——**プロンプトの組み立ては起点の数だけ散っていて、どれか1か所へ
+ * `clone.ts` の `#notices`（`clone-notices.ts` の `CloneNotices`。`TurnNoticeKey`
+ * の `redelivery` / `commitment`）が逐語で持っている理由と同じ——**プロンプトの
+ * 組み立ては起点の数だけ散っていて、どれか1か所へ
  * 入れ忘れると、その起点にだけ全体の見えないターンが生まれる。ターンの入口は
  * 1か所しかない。**
  *

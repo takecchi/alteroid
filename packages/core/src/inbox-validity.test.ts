@@ -186,9 +186,10 @@ describe('describeValidity', () => {
 
   // ⭐ 設計の芯: 「いまは」ではなく「この断り書きを組んだ時点では」と言っている
   // ことを固定する。`#validityNoticeFor`（`clone.ts`）の doc が書いているとおり、
-  // 同じターンで別に読む `#situationNotice` と食い違いうる —— どちらも「読んだ
-  // 瞬間の値」としてしか名乗らなければ、食い違っても嘘にはならない。「いまは」
-  // だと、後から読んだ別の断り書きと矛盾したときに文字どおり嘘になる。
+  // 同じターンで別に読む `#notices` の `situation`（`clone-notices.ts` の
+  // `CloneNotices`）と食い違いうる —— どちらも「読んだ瞬間の値」としてしか
+  // 名乗らなければ、食い違っても嘘にはならない。「いまは」だと、後から読んだ
+  // 別の断り書きと矛盾したときに文字どおり嘘になる。
   it('⭐ changed の文言は「いまは」ではなく「この断り書きを組んだ時点では」と言う', () => {
     const text = describeValidity({ kind: 'changed', claimed: 'running', now: 'done' }, MANAGER);
     expect(text).toContain('この断り書きを組んだ時点では');

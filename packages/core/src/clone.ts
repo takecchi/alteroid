@@ -132,6 +132,7 @@ import {
   qualifiedToolName,
   type ToolContext,
 } from './tools.js';
+import { CloneNotices } from './clone-notices.js';
 import { composeTurnInputText, turnInputEntry } from './turn-input.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 import {
@@ -1764,67 +1765,6 @@ class Clone implements CloneHost {
    * （Issue #1344。消える2つの経路と、1行が射程を名乗ることは上の doc）。
    */
   #usageBlockFoldedInternalFailures = 0;
-  /**
-   * 種類（`kind`）ごとに最後に日誌へ書いた上限の文言。
-   *
-   * **同じ知らせで日誌を埋めないためにある。** `reached` は一度立てば `#pump`
-   * がターンを回さなくなるので `rate_limit_event` はもう来ないが、`transition`
-   * / `warning` はまだ動く分類なのでターンが回り続け、`system` 通知が毎ターン
-   * 届く（`usage-limits.ts` の `usageTransitionOf` の doc「毎ターン届く同じ
-   * 事実で受信箱を埋めないこと」と同じ理由）。畳まなければ日誌が同じ文言で
-   * 埋まり、本当に変わった1回が埋もれる。
-   *
-   * **`manager.ts` の `#usageNotices` を写して作った**（マネージャー側にあって
-   * クローン側に無いのは非対称だった）。**ただし、あちらはもう同じ形ではない。**
-   * あちらは「最後に見た文言」1つではなく「配った文言の集合」を覚える形へ変えて
-   * ある — 同じ種類で文言が2通り交互に届くと `!==` が毎回「違う」と答え、配達の
-   * たびに**クローンのターンが1本焼かれる**からである（`manager.ts` の
-   * `#usageNotices` の doc）。**ここを揃えていないのは、畳んでいる先が違うため
-   * である** — こちらが畳むのは日誌への書き込みだけで、交互の文言で起きるのは
-   * 日誌の行が増えることだけ（ターンは焼かれない）。**揃えたくなったら、まず
-   * 「こちらでも配達が焼かれているか」を確かめること。**
-   *
-   * 畳むのは**日誌への書き込みだけ**にする — `reached` の `#usageBlocked`
-   * を立てる処理と `usage_limited` の emit はここでは畳まない
-   * （`#noteUsageNotice` 参照）。2件目以降の合図は別の会話から来ているかも
-   * しれず、`usage_limited` まで畳むとその送り主に何も見えなくなる。
-   */
-  readonly #usageNotices = new Map<string, string>();
-  /**
-   * 会話ごとに、**最後に人間へ返した1行**（`#reportFailure` の `with: 'human'`）と、
-   * そのあと同じ1行を何件畳んだか。
-   *
-   * ## 何が壊れていたか（人間の報告: 「定期的に積み上がり続ける」）
-   *
-   * 枠（利用上限）が閉じている間、**保持した発言は新しい合図が届くたびに試し直される**
-   * （`#usageBlocked` の doc。誰も話しかけなければ `self_initiative` が既定間隔ごとに
-   * 試す）。試し直しは毎回同じ理由で落ちるので、`#reportFailure` は同じ会話へ
-   * **一字一句同じ1行**を書き足す。⟹ 人間が何もしなくても、会話の画面が
-   * 「いま利用上限に当たっているので…」だけで埋まっていく。
-   *
-   * 実測の形（`clone.test.ts` の「枠が閉じている間に届いた2本目は…」）: 発言2本を
-   * 保持しているだけで、tick 1回につき2行増える。**枠が開くまで止まらない。**
-   *
-   * ## 畳む単位は「人間からの新しい発言」である
-   *
-   * 消してよいのは**繰り返し**だけで、**新しい発言への返事**は消してはいけない
-   * （#92 が塞いだ「自分の発言だけがあって返信が無い」へ戻る）。だから
-   * `post()` が人間の発言を受理した時点でこの記憶を落とす（その会話のぶんだけ）。
-   * ⟹ **人間の発言1件につき、必ず1行返る。試し直しでは増えない。**
-   *
-   * **判定は「最後に返した1行と文字列が同じか」だけである。** 文言が変わる
-   * （長さにも当たった・次の境界で畳む、などの断りが付く／消える）なら、それは
-   * 人間が知らない新しい事実なので畳まない。
-   *
-   * ## 畳んだことは日誌に残す（`with: 'self'`）
-   *
-   * 畳みすぎ＝黙って失う、はこのリポジトリが何度も踏んでいる型なので、
-   * **畳んだ回は1件ずつ日誌に残し、何件目かも書く**（`manager.ts` の
-   * `#usageNotices` と同じ形）。失敗そのものの記録（`with: 'self'` の
-   * `#reportFailure` 前半）は**畳まない** — あちらは全件そのまま残る。
-   * ⟹ 何回試して落ちたかは日誌から数えられる。
-   */
-  readonly #humanFailureNotices = new Map<string, { text: string; folded: number }>();
 
   /**
    * 未読として器に置いた合図。id → その書き込みの約束。
@@ -2046,15 +1986,6 @@ class Clone implements CloneHost {
    */
   readonly #redeliveredClosed = new Map<string, Commitment>();
   /**
-   * いま処理している合図が配り直しなら、その断り書き。ターンの本文の先頭に載る。
-   *
-   * **断り書きを起点ごとに配らない。** プロンプトの組み立ては起点の数だけ
-   * （7か所）散っていて、そのうち1か所へ入れ忘れると「二度目だと分からない
-   * 配達」がその起点にだけ生まれる。ターンの入口（`#runTurn`）は1か所しかない
-   * ので、そこに置けば起点を問わず必ず載る。
-   */
-  #redeliveryNotice = '';
-  /**
    * 自動で開いた未了。合図の id → その書き込みの約束。
    *
    * **`#unread` と同じ理由で持つ。** `open` は非同期なので、待たずにターンを走らせると
@@ -2074,73 +2005,33 @@ class Clone implements CloneHost {
    */
   readonly #committed = new Map<string, Promise<CommitOutcome>>();
   /**
-   * いま処理している合図の未了 id と、台帳の全体像。ターンの本文の先頭に載る。
+   * 通知8フィールド（1反復ぶんの断り書き6本＋畳み込みの記憶2本）を持つ単位
+   * （`clone-notices.ts` の {@link CloneNotices}。Issue #1190）。
    *
-   * **`#redeliveryNotice` と同じ場所に置く理由も同じである。** プロンプトの組み立ては
-   * 起点の数だけ散っていて、どれか1か所へ入れ忘れると「閉じ方の分からない未了」が
-   * その起点にだけ生まれる。ターンの入口は1か所しかない。
+   * **旧来はここに `#redeliveryNotice` / `#commitmentNotice` / `#situationNotice`
+   * / `#supersededNotice` / `#validityNotice` / `#mergedBatchTruncationNotice`
+   * （1反復ぶんの断り書き。`#pump` が代入し `#runTurn` が読み、反復の `finally`
+   * で空へ戻す）と `#humanFailureNotices` / `#usageNotices`（畳み込みの記憶）の
+   * 8フィールドが個別に並んでいた。挙動は1ビットも変えていない**——代入の時点・
+   * 順序・エラーの倒れ先は全部そのまま、変わったのは「どこに書いてあるか」だけ
+   * である。
+   *
+   * **⚠️ このクラスを「無駄な間接層だ」と思って `Clone` へ戻す前に、
+   * {@link CloneNotices} 冒頭の「なぜ切り出したか」を読むこと。** 要点だけ
+   * ここにも置く（詳細と出典はあちら）:
+   *
+   * 1. **効果の根拠は過去 PR の測定であり、「レビューが楽になった」は測れて
+   *    いない。** 測ったのは「この8フィールドを独立の単位として切れば、直近の
+   *    マージ済み PR 70本のうち55本が通知の状態を一切読まずに済む」（confinement
+   *    rate 80.0%、p=0.0002）という静的参照からの代理指標だけである。
+   * 2. **通知8本のうち6本が5〜6群を跨ぎ、通知だけを触るメンバーは0本 ⟹
+   *    「通知は構造的に孤立しているから切れる」とは言えない。** 切る根拠は
+   *    1の価値の軸だけであり、この切り出しの実体は「暗黙の参照を明示の
+   *    メソッド呼び出しに変える」案であって「疎結合な部分を剥がす」案ではない。
+   * 3. **テストの分離は買えない。** `clone.test.ts`（16,233行・428ブロック）は
+   *    切り出しの前後で一体のまま動き続ける。
    */
-  #commitmentNotice = '';
-  /**
-   * いまの全体（委譲の状態別の本数と、器の台数・state の内訳）。ターンの本文の
-   * 先頭に載る。**doc は `situation.ts` が持つ。**
-   *
-   * **`#commitmentNotice` と同じ場所に置く理由も同じである**（プロンプトの
-   * 組み立ては起点の数だけ散っていて、どれか1か所へ入れ忘れると、その起点にだけ
-   * 全体の見えないターンが生まれる。ターンの入口は1か所しかない）。
-   *
-   * **それでも `#commitmentNoticeFor` には混ぜない。** 材料の器も、読めなかった
-   * ときの倒れ先も違う（`situation.ts` 冒頭。`turn-input.ts` の「規則が違うものを
-   * 同じ場所に置かない」）。
-   */
-  #situationNotice = '';
-  /**
-   * 「この委譲（マネージャー）から、いま配っているこの合図より後に報告が届いて
-   * いる」の断り書き。ターンの本文の先頭に載る（doc の本体は `superseded.ts`）。
-   *
-   * **`#situationNotice` の隣に置く理由も同じである。** プロンプトの組み立ては
-   * 起点の数だけ（7か所）散っていて、どれか1か所へ入れ忘れると、その起点に
-   * だけ「もう古いかもしれない」と気づけないターンが生まれる。ターンの入口
-   * （`#runTurn`）は1か所しかないので、そこに置けば起点を問わず必ず載る。
-   *
-   * **`#redeliveryNotice` とは別に持つ。** あちらは「この合図そのものが配り
-   * 直しか」、こちらは「同じ委譲から後続の報告が来ているか」で、判定の材料も
-   * 倒れ先も別物である（`superseded.ts` 冒頭）。
-   */
-  #supersededNotice = '';
-
-  /**
-   * **「この合図が名乗った前提が、まだ生きているか」の断り書き**（Issue #879。
-   * doc の本体は `inbox-validity.ts`）。
-   *
-   * **`#supersededNotice` とは別に持つ。** あちらは「**同じ委譲から、より
-   * 新しい報告が来ているか**」を数え、こちらは「**この報告が積まれた当時の
-   * 状態が、いまも同じか**」を見る——鍵も倒れ先も別物である。
-   */
-  #validityNotice = '';
-  /**
-   * `#drainMergeableWithinLimit` が上限（`#mergedBatchLimit`）で束を打ち切った
-   * ときだけの断り書き。ターンの本文の先頭に載る（issue #783 の続き — PR #836
-   * が上限そのものは足したが、切った事実がクローンから1文字も見えなかった
-   * 欠陥の直し）。
-   *
-   * **`#redeliveryNotice` / `#supersededNotice` と同じ場所に置く理由も同じ
-   * である。** まとめ読みの起点は2つ（`#mergedHumanBatch` /
-   * `#mergedManagerReportBatch`）だが、どちらも共通の
-   * `#drainMergeableWithinLimit` を経由するので、断り書きもここへ1本だけ
-   * 持てば両方に効く。
-   *
-   * **切っていないときは必ず空文字のまま。** いちばん多い経路（切っていない）
-   * の出力を1文字も変えないための既定値 ——
-   * `describeReopenedTokenNotice` の「`folded` が0のときは何も足さない」と
-   * 同じ理由（余計な行をいちばん多い経路に足さない）。
-   *
-   * **`#pump` の各反復の先頭で必ずリセットする。** まとめ読みの対象にならない
-   * 起点（タイマー・外部イベント・`question`/`permission` 等）では
-   * `#drainMergeableWithinLimit` 自体が呼ばれないため、リセットしないと
-   * 前の反復の断り書きが誤って持ち越される。
-   */
-  #mergedBatchTruncationNotice = '';
+  readonly #notices = new CloneNotices();
 
   /** SDK へ流す入力の待ち行列。 */
   readonly #input: SDKUserMessage[] = [];
@@ -2184,7 +2075,7 @@ class Clone implements CloneHost {
    * - **立てる（`true`）のは `#runTurn` 自身。** ターンが1本走ったこと（受信箱の
    *   起点を問わない）が「新しいことがあった」の唯一の根拠であり、個々の起点
    *   ごとに立てる形にすると起点を1つ足すたびに立て忘れが起きる
-   *   （`#redeliveryNotice` と同じ理由でここへ寄せた）。
+   *   （`#notices` の `redelivery` と同じ理由でここへ寄せた）。
    * - **蒸留そのもののターンでは立て直さない。** 立て直すと蒸留のたびに印が
    *   即座に戻り、`stop()` の判定は永久に「新しいことがある」のままになって
    *   この直しは何もしないのと同じになる（`#runTurn` の `kind` 引数で見分ける）。
@@ -2599,8 +2490,9 @@ class Clone implements CloneHost {
     }
 
     // **人間から新しい発言が来たら、失敗の1行の畳み込みを仕切り直す**
-    // （`#humanFailureNotices`）。畳んでよいのは「同じ発言を試し直して同じ理由で
-    // 落ちた」の繰り返しだけで、**新しい発言への返事は畳んではいけない**
+    // （`#notices` の `forgetConversation`。doc は `clone-notices.ts` の
+    // `CloneNotices` の `#humanFailure`）。畳んでよいのは「同じ発言を試し直して
+    // 同じ理由で落ちた」の繰り返しだけで、**新しい発言への返事は畳んではいけない**
     // （#92 が塞いだ「自分の発言だけがあって返信が無い」へ戻る）。
     //
     // **ここ（受理の時点）に置くのが要点である。** ターンの中に置くと、枠が
@@ -2609,7 +2501,7 @@ class Clone implements CloneHost {
     //
     // **落とすのはその会話のぶんだけである。** 会話をまたいで消すと、別の会話で
     // 既に返してある1行の記憶が消え、そちらの試し直しでまた1行増える。
-    if (event.type === 'human_message') this.#humanFailureNotices.delete(event.conversationId);
+    if (event.type === 'human_message') this.#notices.forgetConversation(event.conversationId);
 
     // 同じ合図がまだ読まれないまま積み重なっても、読んだときに見る材料は同じなので
     // 畳む。**これは実行回数の制限ではない**（AGENTS.md 地雷2）— 発火を減らすのでも
@@ -2824,12 +2716,13 @@ class Clone implements CloneHost {
     );
     const set = this.#listeners.get(conversationId);
     if (set && set.size === 0) this.#listeners.delete(conversationId);
-    // **畳み込みの記憶も一緒に落とす**（`#humanFailureNotices`）。**振る舞いのため
-    // ではなく、上限を持たせるためである** —— 会話は無限に増えうるので、失敗した
-    // 会話のぶんが増え続ける形にはしない。落としても人間へ返る1行は減らない
-    // （終わった会話へこの1行が出る経路は、人間が新しく話しかけたときだけであり、
-    // そのときは `post()` が同じ記憶を落としている）。
-    this.#humanFailureNotices.delete(conversationId);
+    // **畳み込みの記憶も一緒に落とす**（`#notices` の `forgetConversation`）。
+    // **振る舞いのためではなく、上限を持たせるためである** —— 会話は無限に
+    // 増えうるので、失敗した会話のぶんが増え続ける形にはしない。落としても
+    // 人間へ返る1行は減らない（終わった会話へこの1行が出る経路は、人間が
+    // 新しく話しかけたときだけであり、そのときは `post()` が同じ記憶を落として
+    // いる）。
+    this.#notices.forgetConversation(conversationId);
   }
 
   async answerApproval(approvalId: string, answer: string): Promise<void> {
@@ -3200,8 +3093,9 @@ class Clone implements CloneHost {
         //
         // **人間が待っている合図（`this.#conversationOf(event) !== null`）は
         // 1文字も変えない。** `#reportFailure` は人間へ即時に `error` を
-        // `#emit` し、同じ会話への繰り返しは `#humanFailureNotices` が既に
-        // 畳んでいる（あちらの doc）——人間側の抑止は既にある。壊れていたのは
+        // `#emit` し、同じ会話への繰り返しは `#notices`（`CloneNotices` の
+        // `#humanFailure`）が既に畳んでいる（あちらの doc）——人間側の抑止は
+        // 既にある。壊れていたのは
         // **`#conversationOf` が `null` を返す内部の合図**（`human_message` /
         // `human_answer` 以外）の側で、そちらには畳む機構が無かった。
         //
@@ -3314,50 +3208,60 @@ class Clone implements CloneHost {
       // ので、`#mergedManagerReportBatch` / `#mergedExternalBatch` 側の並びは
       // 常に到着順のままである。
       //
-      // **まとめ読みの判定を呼ぶ前に必ずリセットする**（`#mergedBatchTruncationNotice`
-      // の doc）。`#drainMergeableWithinLimit` は対象外の起点では呼ばれないため、
+      // **まとめ読みの判定を呼ぶ前に必ずリセットする**（`#notices` の
+      // `mergedBatchTruncation`。doc は `clone-notices.ts` の `TurnNoticeKey`）。
+      // `#drainMergeableWithinLimit` は対象外の起点では呼ばれないため、
       // ここで戻さないと前の反復で切ったときの断り書きが誤って持ち越される。
       // **`#mergedExternalBatch` もこの関数を経由する（`#mergedManagerReportBatch`
       // と同じ）ので、`external` の束が上限で切れたときの断り書きも自動で乗る**
       // ——ここより下に置くこと。上に置くと、このリセットが `#mergedExternalBatch`
       // の呼び出しで立った印を即座に拭き取り、`external` の束でだけ断り書きが
       // 黙って消える。
-      this.#mergedBatchTruncationNotice = '';
+      this.#notices.set('mergedBatchTruncation', '');
       const mergedHuman = this.#mergedHumanBatch(event);
       const mergedReports = this.#mergedManagerReportBatch(event);
       const mergedExternal = this.#mergedExternalBatch(event);
       const batch: InboxEvent[] = mergedHuman ?? mergedReports ?? mergedExternal ?? [event];
 
-      this.#redeliveryNotice = this.#redeliveryNoticeFor(batch);
+      this.#notices.set('redelivery', this.#redeliveryNoticeFor(batch));
       // **ここは `try` の外である。** 投げれば `for await` ごと抜けて受信箱の
       // ループが死に、クローンは何も受け取れなくなる（`#handle` の失敗とは被害の
       // 桁が違う）。中では読み取りの失敗を自分で握っているが、握り漏らしが1つでも
       // 残ると全部が止まるので、外側にも受けを置く。**断り書きが付かないことより、
       // ループが止まることの方がずっと高い。**
-      this.#commitmentNotice = await this.#commitmentNoticeFor(batch).catch((error: unknown) => {
-        noteDroppedRecord('未了の断り書きの組み立て', inboxEventShape(event), error);
-        return '';
-      });
+      this.#notices.set(
+        'commitment',
+        await this.#commitmentNoticeFor(batch).catch((error: unknown) => {
+          noteDroppedRecord('未了の断り書きの組み立て', inboxEventShape(event), error);
+          return '';
+        }),
+      );
       // **ここも `try` の外である**（直上と同じ理由——投げれば受信箱のループごと
       // 死ぬ）。**ただし倒れ先が違う。** 台帳の断り書きは読めなければ空文字＝節が
       // 消えるが、こちらは消さずに「数えられなかった」と名乗る行を出す
       // （`describeSituationUnavailable`）。0 で埋めると「全部片付いている」と
       // 読めるので、いちばん見落としたい向きへ倒れる。
-      this.#situationNotice = await this.#situationNoticeFor(batch).catch((error: unknown) => {
-        noteDroppedRecord('いまの全体の組み立て', inboxEventShape(event), error);
-        return describeSituationUnavailable(error);
-      });
+      this.#notices.set(
+        'situation',
+        await this.#situationNoticeFor(batch).catch((error: unknown) => {
+          noteDroppedRecord('いまの全体の組み立て', inboxEventShape(event), error);
+          return describeSituationUnavailable(error);
+        }),
+      );
       // **ここも `try` の外である**（直上と同じ理由——投げれば受信箱のループごと
       // 死ぬ）。倒れ先は空文字ではなく `describeSuperseded` の `uncountable` の文
       // （`#situationNoticeFor` と同じ向き）——「数えられなかった」を 0 件と
       // 混同しない、という `superseded.ts` の要である。
-      this.#validityNotice = await this.#validityNoticeFor(batch);
-      this.#supersededNotice = await this.#supersededNoticeFor(batch).catch((error: unknown) => {
-        noteDroppedRecord('後続の報告の組み立て', inboxEventShape(event), error);
-        return event.type === 'manager_message'
-          ? describeSuperseded({ kind: 'uncountable', detail: String(error) }, event.managerId)
-          : '';
-      });
+      this.#notices.set('validity', await this.#validityNoticeFor(batch));
+      this.#notices.set(
+        'superseded',
+        await this.#supersededNoticeFor(batch).catch((error: unknown) => {
+          noteDroppedRecord('後続の報告の組み立て', inboxEventShape(event), error);
+          return event.type === 'manager_message'
+            ? describeSuperseded({ kind: 'uncountable', detail: String(error) }, event.managerId)
+            : '';
+        }),
+      );
       try {
         if (mergedHuman !== null) await this.#runHumanTurn(mergedHuman);
         else if (mergedReports !== null) await this.#runManagerReportBatch(mergedReports);
@@ -3367,12 +3271,7 @@ class Clone implements CloneHost {
         await this.#reportFailure(this.#conversationOf(event), String(error));
         this.#finishTurn();
       } finally {
-        this.#redeliveryNotice = '';
-        this.#commitmentNotice = '';
-        this.#situationNotice = '';
-        this.#supersededNotice = '';
-        this.#validityNotice = '';
-        this.#mergedBatchTruncationNotice = '';
+        this.#notices.clearTurn();
         // **枠のせいで処理できなかったかは、ここで初めて分かることがある。**
         // `#handle` の中（`#dispatch` の `result` / `rate_limit_event` /
         // `system` 通知）で今回の合図が枠に当たったと判明したなら、この時点で
@@ -3630,7 +3529,7 @@ class Clone implements CloneHost {
    * 「まとめる側へ戻さない」という共通の判断はここへ集める——`#mergeable` の
    * doc が言う「対象が違っても外す理由は共通」を、上限の数え方でも1本にする。
    *
-   * **切ったという事実を、ここで `#mergedBatchTruncationNotice` へ残す。**
+   * **切ったという事実を、ここで `#notices` の `mergedBatchTruncation` へ残す。**
    * かつては上限で切っても、その事実がクローンから1文字も見えなかった
    * （issue #783 の続き）。`drainWhile` が止まった直後、`Inbox#countWhile` で
    * **同じ述語に当たる件数を、取り出さずに**数え直す —— この件数が1件でも
@@ -3661,18 +3560,22 @@ class Clone implements CloneHost {
     // 切った事実は本物なので、ここで見落とさない。
     const remainingHead = this.#inbox.countWhile(matchesRule);
     if (remainingHead > 0) {
-      this.#mergedBatchTruncationNotice = this.#mergedBatchTruncationNoticeFor({
-        limit,
-        batchSize: taken,
-        remainingHead,
-      });
+      this.#notices.set(
+        'mergedBatchTruncation',
+        this.#mergedBatchTruncationNoticeFor({
+          limit,
+          batchSize: taken,
+          remainingHead,
+        }),
+      );
     }
     return rest;
   }
 
   /**
    * `#drainMergeableWithinLimit` が上限で切ったときの断り書きの文面
-   * （`#mergedBatchTruncationNotice` の doc）。
+   * （`#notices` の `mergedBatchTruncation`。doc は `clone-notices.ts` の
+   * `TurnNoticeKey`）。
    *
    * 3つを必ず言う —— **上限の値**・**この束の件数**・**同じ束に入るはずの
    * 分が待ち行列の先頭にあと何件残っているか**。そして**1件も失われておらず、
@@ -5575,14 +5478,15 @@ class Clone implements CloneHost {
    * 二重に握る理由が無い。
    */
   /**
-   * {@link Clone.#validityNotice} を組む（Issue #879）。
+   * `#notices` の `validity`（ターンの本文の先頭に載る断り書き）を組む
+   * （Issue #879）。
    *
    * **`#supersededNoticeFor` と同じ形で値を引く。** 報告でなければ即空文字を
    * 返し、`this.#managers.list()` を1本も引かない——**同じ境界に在る2つの
    * 断り書きが、違う形で値を引くほうが、次に読む人には高くつく**（この repo は
    * 既にその形である、というのが採った理由であって、他の PR の都合ではない）。
    *
-   * ## ⚠️ この断り書きは、`#situationNotice` と食い違いうる
+   * ## ⚠️ この断り書きは、`#notices` の `situation` と食い違いうる
    *
    * `#situationNoticeFor` も同じターンで `this.#managers.list()` を引くが、
    * **2つは別々の呼び出しである。** `list()` 自身が `await`（名簿の読みと
@@ -6444,7 +6348,8 @@ class Clone implements CloneHost {
    * 試し直され、毎回同じ理由で落ちる）。畳まないと会話がこの1行だけで埋まり、
    * **人間が何もしていないのに増え続ける**（人間の報告「定期的に積み上がり続ける」）。
    * ⟹ 会話ごとに最後に返した1行を覚えて、文字列が同じなら日誌の `self` 側へ畳む
-   * （`#humanFailureNotices`）。**人間から新しい発言が来れば `post()`
+   * （`#notices` の `foldHumanFailure`。doc は `clone-notices.ts` の
+   * `CloneNotices` の `#humanFailure`）。**人間から新しい発言が来れば `post()`
    * が記憶を落とす**ので、発言1件につき1行は必ず返る。
    */
   async #reportFailure(conversationId: string | null, message: string): Promise<void> {
@@ -6586,17 +6491,16 @@ class Clone implements CloneHost {
             ? UNPRODUCTIVE_USAGE_BLOCK_FOLD_NOTICE
             : '');
 
-    // **同じ会話へ、同じ1行を二度書かない**（`#humanFailureNotices` の doc。人間の
+    // **同じ会話へ、同じ1行を二度書かない**（`#notices` の `foldHumanFailure`。
+    // doc は `clone-notices.ts` の `CloneNotices` の `#humanFailure`。人間の
     // 報告「定期的に積み上がり続ける」）。枠が閉じている間、保持した発言は新しい
     // 合図が届くたびに試し直され、そのたびに同じ理由で落ちる ⟹ 畳まないと会話が
     // この1行で埋まる。**人間から新しい発言が来れば `post()` が記憶を落とす**ので、
     // 発言1件につき1行は必ず返る。
-    const said = this.#humanFailureNotices.get(conversationId);
-    if (said !== undefined && said.text === humanText) {
-      const folded = said.folded + 1;
-      this.#humanFailureNotices.set(conversationId, { text: humanText, folded });
+    const folded = this.#notices.foldHumanFailure(conversationId, humanText);
+    if (folded !== null) {
       // **畳んだ回は1件ずつ残す。** 「畳んだ」だけでは何件ぶんが人間へ返らなかった
-      // のかを後から数えられない（`manager.ts` の `#usageNotices` と同じ形）。
+      // のかを後から数えられない（`#notices` の `noteUsage` と同じ形）。
       // 本文も残す — 記録の側では1文字も失っていない。
       await this.#journal({
         type: 'exchange',
@@ -6610,7 +6514,6 @@ class Clone implements CloneHost {
       return;
     }
 
-    this.#humanFailureNotices.set(conversationId, { text: humanText, folded: 0 });
     await this.#journal({
       type: 'exchange',
       with: 'human',
@@ -7081,7 +6984,8 @@ class Clone implements CloneHost {
    *   — そろそろ止まることが、止まる前に分かるように。 |
    *
    * **同じ `kind` で同じ文言が続くなら、日誌への書き込みは畳む**
-   * （`#usageNotices` の doc）。`transition` / `warning` はターンが回り続ける
+   * （`#notices` の `noteUsage`。doc は `clone-notices.ts` の `CloneNotices` の
+   * `#usage`）。`transition` / `warning` はターンが回り続ける
    * ので `system` 通知が毎ターン届き、畳まないと同じ知らせで日誌が埋まる。
    * **畳むのは日誌だけ** — `reached` の `#usageBlocked` を立てる処理と
    * `usage_limited` の emit は、同じ `kind`・同じ文言が再び来ても毎回行う
@@ -7107,8 +7011,7 @@ class Clone implements CloneHost {
 
     // 枠が閉じた（あるいは近づいた）と分かった瞬間に日誌へ1件。**言い換えない**
     // — `describeUsageNotice` がそのまま人間の検索できる文言を返す。
-    if (this.#usageNotices.get(notice.kind) !== notice.text) {
-      this.#usageNotices.set(notice.kind, notice.text);
+    if (this.#notices.noteUsage(notice.kind, notice.text)) {
       await this.#journal({
         type: 'exchange',
         with: 'self',
@@ -7481,9 +7384,9 @@ class Clone implements CloneHost {
 
     try {
       await this.#ensureQuery();
-      // 配り直しと台帳の断り書きは**ここでだけ**載せる（`#redeliveryNotice` の理由）。
-      // 蒸留が間に合わなかった区間の断り書きも同じ場所へ置く（起点は7か所に
-      // 散っているが、ターンの入口はここ1か所しかない）。
+      // 配り直しと台帳の断り書きは**ここでだけ**載せる（`#notices` の
+      // `redelivery` の理由）。蒸留が間に合わなかった区間の断り書きも同じ場所へ
+      // 置く（起点は7か所に散っているが、ターンの入口はここ1か所しかない）。
       // **並び順そのものは `turn-input.ts` の `composeTurnInputText` が持つ。**
       // ここに在るのは「8本をどう作るか」だけで、「どれを先に置くか」の規則は
       // 向こうに在る（規則が違うものを同じ場所に置かない、の doc もそちら）。
@@ -7491,18 +7394,17 @@ class Clone implements CloneHost {
       // ⚠️ **`distillGap` と `contextWindowFold` はこの2行で消費される。**
       // どちらも呼ぶこと自体が遷移（自分の pending を倒す）なので、**呼び出しは
       // ここから動かさない。** オブジェクトのプロパティは書いた順に評価されるので、
-      // この並びが元の `+` の連結と同じ順序を保つ。
+      // この並びが元の `+` の連結と同じ順序を保つ。**`...this.#notices.forTurn()`
+      // はこの2行より後ろに置くこと。** `forTurn()` 自体は副作用の無い読み取り
+      // なので、前に置いても6本の値そのものは変わらない——ただし、消費する2本の
+      // `await` より前に評価する形は「まだ消費していない時点の6本」を読むように
+      // 見える書き方であり、次に読む者を誤らせる。
       this.#pushInput(
         await this.#withFreshMemory(
           composeTurnInputText({
             distillGap: await this.#distillGapNotice(kind),
             contextWindowFold: this.#contextWindowFoldNotice(kind),
-            redelivery: this.#redeliveryNotice,
-            superseded: this.#supersededNotice,
-            validity: this.#validityNotice,
-            mergedBatchTruncation: this.#mergedBatchTruncationNotice,
-            commitment: this.#commitmentNotice,
-            situation: this.#situationNotice,
+            ...this.#notices.forTurn(),
             body: text,
           }),
         ),
@@ -10100,9 +10002,9 @@ class Clone implements CloneHost {
         // とも一貫する — 枠が開いたかを知る唯一の方法は試すことで、成功は
         // まさにその答えだからである。
         //
-        // **`#usageNotices`（日誌の畳み込み）は降ろさない。** あれは「同じ
-        // 文言を二度書かない」ためのもので、枠が開いたかどうかとは別の関心
-        // である。
+        // **`#notices`（`CloneNotices` の `#usage`。日誌の畳み込み）は降ろさない。**
+        // あれは「同じ文言を二度書かない」ためのもので、枠が開いたかどうかとは
+        // 別の関心である。
         this.#usageBlocked = null;
         // **抑止した再武装・畳んだ内部の失敗記録も、区間を跨いで持ち越さない**
         // （Issue #1240 続き。`#usageBlockSuppressedRearms` /
@@ -10306,7 +10208,8 @@ function isExternalEvent(event: InboxEvent): event is ExternalEvent {
  * 「N件が届いた」ではなく「N件をまとめて渡す」の形にしてある** —— 前者は
  * 上限に当たった回に偽になるが、後者はこの束の件数を言っているだけなので、
  * 上限に当たったかどうかに関わらず常に真である。切ったという事実そのものは
- * `#mergedBatchTruncationNotice`（別の断り書き）が言う——ここで重ねて言わない。
+ * `#notices` の `mergedBatchTruncation`（別の断り書き）が言う——ここで重ねて
+ * 言わない。
  *
  * **`supersedes` を持つ発言（チャットの「メッセージを編集する」機能）には、
  * 編集であると分かる合図を前置きする。** 断り書きを足さないという上の方針は
@@ -10741,7 +10644,7 @@ function managerPrompt(
  * `humanTurnText` の同じ注記と理由は同一 —— `#drainMergeableWithinLimit` が
  * 上限で束を切ると `events.length` は実際に届いた総数より小さくなるので、
  * 文面は「N件が届いた」ではなく「N件をまとめて渡す」にしてある（切った事実
- * そのものは `#mergedBatchTruncationNotice` が別に言う）。
+ * そのものは `#notices` の `mergedBatchTruncation` が別に言う）。
  */
 function managerReportBatchPrompt(
   events: ManagerReportMessage[],
@@ -10821,7 +10724,8 @@ function managerReportBatchPrompt(
  * 「N件が届いた」ではなく「N件をまとめて渡す」の形にしてある**——前者は
  * 上限に当たった回に偽になるが、後者はこの束の件数を言っているだけなので、
  * 上限に当たったかどうかに関わらず常に真である。**切ったという事実そのものは
- * `#mergedBatchTruncationNotice`（別の断り書き）が言う——ここで重ねて言わない。**
+ * `#notices` の `mergedBatchTruncation`（別の断り書き）が言う——ここで重ねて
+ * 言わない。**
  */
 function externalBatchPrompt(events: ExternalEvent[]): string {
   const head = events[0];

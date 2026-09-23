@@ -11120,7 +11120,7 @@ describe('クローン — 枠（利用上限）が閉じたら保持して次�
    * 実際に SDK へ投げられた入力を「何件目か」の並びへ畳む。**FIFO を見るための
    * 目である。**
    *
-   * 完全一致では見ない — `redeliveryNotice` / `commitmentNotice` が本文の前に
+   * 完全一致では見ない — `#notices` の `redelivery` / `commitment` が本文の前に
    * 付くので、部分一致で畳む。どれにも当たらない入力は `'?'` にして**捨てない**
    * （落とすと、余計な入力が1件混ざったことが並びから消える）。
    */
@@ -11594,8 +11594,8 @@ describe('クローン — 枠（利用上限）が閉じたら保持して次�
     // `transition` は待たない（まだ動く）分類なので、ターンは毎回 done で
     // 終わり、`system` の通知は毎ターン繰り返し届く（`usage-limits.ts` の
     // `usageTransitionOf` の doc「毎ターン届く同じ事実で受信箱を埋めないこと」
-    // と同じ場面）。`#usageNotices` で畳んでいなければ、同じ文言の行が
-    // ターンの数だけ日誌に増える。
+    // と同じ場面）。`#notices`（`CloneNotices` の `#usage`）で畳んでいなければ、
+    // 同じ文言の行がターンの数だけ日誌に増える。
     const transitionMessage = "You're now using extra usage until your limit resets.";
     const s = setup(undefined, createMemoryStores(), {
       systemNoticeAt: () => ({ subtype: 'notification', text: transitionMessage }),
@@ -11700,7 +11700,8 @@ describe('クローン — 枠（利用上限）が閉じたら保持して次�
 
 /**
  * **枠（利用上限）で保持している間、人間へ返す1行を積み上げない**
- * （`clone.ts` の `#humanFailureNotices`）。
+ * （`clone.ts` の `#notices`。`clone-notices.ts` の `CloneNotices` の
+ * `#humanFailure`）。
  *
  * ## 人間の報告（2026-09-07）
  *
@@ -11947,8 +11948,8 @@ describe('クローン — 枠で保持している間、中身を持たない�
    * **tick を畳んだ**旨の日誌の行数（`#noteFoldedTick`）。
    *
    * **`'畳んだ'` では絞らない。** 枠が閉じている間に畳むものは tick だけではなく、
-   * 人間へ返す1行も畳む（`#humanFailureNotices`。「枠で保持している間、人間へ返す
-   * 1行を積み上げない」の describe）。その跡も「畳んだ」と書くので、`'畳んだ'` で
+   * 人間へ返す1行も畳む（`#notices` の `#humanFailure`。「枠で保持している間、
+   * 人間へ返す1行を積み上げない」の describe）。その跡も「畳んだ」と書くので、`'畳んだ'` で
    * 数えるとこの歯は**別の機構の行まで数える** —— 実際に 2 を期待する行が 8 を
    * 数えた。
    *
@@ -13973,7 +13974,7 @@ describe('クローン — 人間が待っている合図を待ち行列の先�
   //   ターンの digest にタイマーが載ることはそもそも無い** — `commitFor` の
   //   doc）。
   // - `human_message`（単発）: 本物のターンの本文は `humanTurnText([event])`
-  //   ＝ `text` そのもので、直前には `#commitmentNotice` の区切り `\n\n---\n`
+  //   ＝ `text` そのもので、直前には `#notices` の `commitment` の区切り `\n\n---\n`
   //   が必ず付く（合図を1件でも受理していれば起こる）。digest の引用は
   //   `\n  ${text}`（2スペース区切り）であって `---\n` ではないので、
   //   `---\n${text}` を目印にすれば衝突しない。
@@ -15466,15 +15467,16 @@ describe('クローン — 中身の同じ external をまとめて読む（#841
 
   /**
    * issue #849（issue #783 の続き）: 上限で束を切ったという事実は
-   * `#drainMergeableWithinLimit` が `#mergedBatchTruncationNotice` へ集約して
-   * 残し、`#runTurn` の入力組み立てが誰の呼び出しにも自動で乗せる。
+   * `#drainMergeableWithinLimit` が `#notices` の `mergedBatchTruncation`
+   * （`clone-notices.ts` の `CloneNotices`）へ集約して残し、`#runTurn` の入力
+   * 組み立てが誰の呼び出しにも自動で乗せる。
    * `#mergedExternalBatch` もこの共有関数を経由する（`#mergedManagerReportBatch`
    * / `#mergedHumanBatch` と同じ）ので、`external` の束が切れたときも
    * 断り書きが載るはずである——ここはその歯（`clone.test.ts` の「人間の発言
    * でも同じ断り書きが載る」と同型）。
    *
    * **この歯が無いと、`#pump` で `const mergedExternal = ...` を
-   * `this.#mergedBatchTruncationNotice = '';` より上に置く事故を誰も
+   * `this.#notices.set('mergedBatchTruncation', '')` より上に置く事故を誰も
    * 検出できない**（置くと `#mergedExternalBatch` が立てた印を、直後の
    * リセットが即座に拭き取り、`external` の束でだけ断り書きが黙って消える）。
    */
@@ -17553,8 +17555,8 @@ describe('クローン — 蒸留が間に合わなかった区間の検出', ()
  * 呼ばない**ので、`memoryCause` の値を実挙動から取り出せない。
  *
  * ⟹ **同じ `#turn.kind` が決めるもう1つの跡で測る。** 蒸留のターンには
- * 未了の台帳の断り（`#commitmentNotice`）と「いまの全体」（`#situationNotice`）が
- * 載らない。**両方とも `kind === 'distill'` かどうかだけで分岐する**ので、
+ * 未了の台帳の断り（`#notices` の `commitment`）と「いまの全体」（`#notices` の
+ * `situation`）が載らない。**両方とも `kind === 'distill'` かどうかだけで分岐する**ので、
  * これが載っていなければそのターンは `distill` である。
  *
  * **空振りしないことを同じ歯の中で確かめる** —— 直前の人間のターンには
