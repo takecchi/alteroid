@@ -289,26 +289,35 @@ jobs:
       # （直近の run 10本のうち、ジョブが実際に走った8本）なので、**増分はおよそ
       # 1割**である。⚠️ 実測は手元の器のものなので、runner での秒数は別に測ること。
       #
-      # **最後に置く理由。** シナリオは走行中に実ソース（`packages/core/src/excerpt.ts`）
-      # へ変異を当てて戻し、`restore-status-comparison` は git の index も一時的に
-      # 動かす。**戻し損ねたときに他の検査を巻き込まない**位置はここである
-      # （戻せているかはシナリオ自身が 12b/12c/12d で見る）。
+      # **最後に置く理由。** シナリオは走行中に自分専用の使い捨てフィクスチャ
+      # （`weak-tooth` / judgement系2本 / `delivery` / `rebuild-failure` がそれぞれ
+      # 書く一時ファイル）を変異させて戻し、`restore-status-comparison` は git の
+      # index も一時的に動かす。**戻し損ねたときに他の検査を巻き込まない**位置は
+      # ここである（戻せているかはシナリオ自身が 12b/12c/12d で見る）。
+      # **⚠️ 以前ここは「実ソース（`packages/core/src/excerpt.ts`）へ変異を当てる」
+      # と書いていたが、それは #1166 面1（下記）が入る前の状態である。** いまは
+      # `--scenario all` が対象にするファイルのどれも実ソースではない（逐語は
+      # `grep -Fn -- 'file: FIXTURE_REL' .claude/skills/mutation-testing/mutate-selftest.mjs`
+      # や `grep -Fn -- 'DELIVERY_FIXTURE_MODULE_REL =' .claude/skills/mutation-testing/mutate-selftest.mjs`
+      # で確認できる）。
       #
       # **⚠️ `pnpm verify` の STEPS には足していない。** あちらが回るのは編集中の
       # ツリーである。#1166 で `judgement-id-integrity` / `judgement-forbidden-word-boundary`
       # は実ソース（`apps/cli/src/conversations.ts`）から使い捨てフィクスチャへ
       # 切り離した（`weak-tooth` と同じ型 —— #1119）。**`delivery`（と、Issue が
-      # 名指ししていなかったが同じ形の `rebuild-failure`）は、測った結果あえて
-      # 切り離していない** —— `target: '@alteroid/core'` で dist 到達そのものを
-      # 測るシナリオなので、フィクスチャ化には dist を生む実 entry
+      # 名指ししていなかったが同じ形の `rebuild-failure`）は、当時は測った結果
+      # あえて切り離さずに残していた** —— `target: '@alteroid/core'` で dist 到達
+      # そのものを測るシナリオなので、フィクスチャ化には dist を生む実 entry
       # （`packages/core/src/index.ts` の barrel か `tsup.config.ts` の
       # entry 一覧）を一時的に書き換える足場が要り、weak-tooth のような
       # 「新規ファイルの読み書きだけで閉じる」孤立が効かない（#1166 で実測——
       # 使い捨てマーカーを `index.ts` へ一時的に足せば dist へ届くことは
       # 確認できたが、共有の barrel を足場にする分だけ weak-tooth より
-      # リスク・複雑さが増える）。**⟹ `packages/core/src/excerpt.ts` への
-      # 実ソース依存は、`delivery` / `rebuild-failure` の2本にまだ残っている**
-      # ので、その文言を触っている最中の人に無関係な赤が出る条件は消えていない。
+      # リスク・複雑さが増える）。**その後 #1166 面1（PR #1328, squash `c5246f0`）が
+      # この barrel 足場を実装し、`delivery` / `rebuild-failure` とも切り離した。**
+      # ⟹ `packages/core/src/excerpt.ts` への実ソース依存は消えた——2本とも
+      # いまは使い捨てフィクスチャ（`packages/core/src/mutation-selftest-delivery-fixture.ts`）
+      # を変異させる（逐語は `grep -Fn -- 'DELIVERY_FIXTURE_MODULE_REL =' .claude/skills/mutation-testing/mutate-selftest.mjs`）。
       # 加えて `scripts/verify.mjs` は「走行中にツリーが動いた」ことを検出して
       # 記録を捨てる作りで、このハーネスは**意図的にツリーを動かす**。**この組み合わせは
       # 2026-09-20 に測って解けた** —— `scripts/verify-core.mjs` の `fingerprint` を
@@ -318,22 +327,40 @@ jobs:
       # 捨てられない。** ⚠️ この秒数も手元の器の1回の実測であり、上の 52 秒
       # （2026-09-16）とは倍近く違う。**どちらも規範ではない。**
       #
-      # **⟹ それでも STEPS には足さない。** 理由が2つ残っており、**1つは測って
-      # 初めて見つかったものである**（測定の詳細と再現手順は #1166 のコメント）。
+      # **⟹ それでも STEPS には足さない。** 2026-09-20 の測定時点では理由が2つ
+      # 残っており、**1つは測って初めて見つかったものである**（測定の詳細と
+      # 再現手順は #1166 のコメント）。**そのうち理由1は #1166 面1（PR #1328）で
+      # 解けた。残っているのは理由2（#1262）の1つである。**
       #
-      # 1. **上の実ソース依存が健在である**（2026-09-20 に再現）。`excerpt.ts` の
+      # 1. 上の実ソース依存が健在である（2026-09-20 に再現）。`excerpt.ts` の
       #    言い回しを書き直しただけで `歯3/6 違反: 一致件数が期待と不一致（実際 0 /
-      #    期待 1）` が出て exit 1 になる ＝ その文言を触っている最中の人に無関係な赤
-      # 2. **⭐ signal で中断すると、変異が実ソースに残る**（2026-09-20 に実測）。
-      #    変異区間で `kill -INT` を当てると `packages/core/src/excerpt.ts` に
-      #    `SELFTEST_MUTATED` が残るが、**復元の手がかり
+      #    期待 1）` が出て exit 1 になる ＝ その文言を触っている最中の人に無関係な赤。
+      #    ⚠️ **訂正（2026-09-23）: この理由はもう健在ではない。** #1166 面1
+      #    （PR #1328, squash `c5246f0`）が `delivery` / `rebuild-failure` を
+      #    barrel 足場つきの使い捨てフィクスチャへ切り離し、実ソース依存を消した。
+      # 2. **⭐ signal で中断すると、変異が実ソースに残る**（2026-09-20 に実測。
+      #    Issue #1262 として起票済み・未解決）。当時の実測は `delivery` /
+      #    `rebuild-failure` が実ソースを対象にしていた版のもので、変異区間で
+      #    `kill -INT` を当てると `packages/core/src/excerpt.ts` に
+      #    `SELFTEST_MUTATED` が残った。**復元の手がかり
       #    （`MUTATION-IN-PROGRESS.json` / `.mutation-testing/backups/`）は
-      #    どちらも ignore 済みなので `git status` にも指紋にも現れない。**
-      #    印だけが残ると、次の1回が `backup-corruption: 印が既にある` で
-      #    無関係に即死する。**CI は Ctrl-C を打たないが、手元の人は打つ。**
+      #    どちらも ignore 済みなので `git status` にも指紋にも現れない**という
+      #    形の欠陥そのもの（`mutate-selftest.mjs` に signal ハンドラが無い）は
+      #    #1166 面1 でも直していない——PR #1328 は「build が丸ごと失敗する」形は
+      #    測ったが、signal（SIGINT/SIGTERM）による中断は測っていないと自ら
+      #    書いている。印だけが残ると、次の1回が `backup-corruption: 印が既にある`
+      #    で無関係に即死する。**CI は Ctrl-C を打たないが、手元の人は打つ。**
       #    `pnpm verify` の看板は「**通し直しを無料にする**」ことなので、
       #    中断が次の1回を赤くする手順は、この口と正面から衝突する
-      #    （逐語は `grep -Fn -- '警告を足すのではなく、通し直しを無料にする' scripts/verify.mjs`）
+      #    （逐語は `grep -Fn -- '警告を足すのではなく、通し直しを無料にする' scripts/verify.mjs`）。
+      #    **⟹ 理由が1つに減っただけで、STEPS へ足さないという結論そのものは
+      #    変わっていない。**
+      #
+      # **次の一手（#1166 本文の指定）:** Issue #1166 本文は「面1が片付けば
+      # （実ソース依存が消えれば）1つ目の理由は消えるので、面1の後に測り直すのが
+      # 順序として素直である」と書いている。面1は上記のとおり片付いた。⟹ 次に
+      # やるとすれば、この STEPS 追加の可否を測り直すことである——ここではまだ
+      # 測り直していない（決めるのはこのコメント更新の範囲外）。
       - run: node .claude/skills/mutation-testing/mutate.mjs selftest --scenario all
 
   # イメージもここで焼く。**マネージャーの道具は版を固定していない**（人間の手元より
