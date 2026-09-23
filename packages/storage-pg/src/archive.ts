@@ -80,17 +80,18 @@ export class PgTranscriptArchive implements TranscriptArchive {
    * 要らない。**先頭が `sanitize(sessionId)` である性質も保たれる**（`id` の
    * 前方一致 LIKE が主キーの btree に落ちる。#698 §6-5）。
    *
-   * **「直前」の選び方は `at` 降順のみを SQL に任せ、同着（同じ `at`）の
+   * **「直前」の選び方は「`at` が最大の行」の絞り込みだけを SQL に任せ、同着（同じ `at`）の
    * tie-break は JS 側で行う（#908）。** 元は `.orderBy(desc(archive.at),
    * desc(archive.id))` だったが、`desc(archive.id)` は **PostgreSQL の
    * 照合順（collation）依存**——本番と PGlite で同じ順になる保証が無い
    * うえ、`id` の字面順は `base-2.jsonl < base-3.jsonl < base.jsonl` と
    * 並ぶため、同じミリ秒に3本以上積むと1本目を「直前」だと誤認する
    * （#908 本体。fs 側 `#findPreviousArchiveForSession` の doc と同じ理由）。
-   * ⟹ `at` 降順で上位 `MAX_ARCHIVE_ID_ATTEMPTS` 行だけ取り（同じミリ秒への
-   * 衝突は最大でもこの本数までしか起きない——上の枝番のループと同じ上限）、
-   * 先頭行と同じ `at` を持つ行だけに絞って、`archiveIdBranch`（＝積んだ順。
-   * `archive-id.ts` の doc）が最大の行を JS 側で選ぶ。
+   * ⟹ SQL では「同じ `sessionId` のうち `at` が最大の行」だけを引き（`id` の
+   * 順序は一切見ない。同着は最大でも `MAX_ARCHIVE_ID_ATTEMPTS` 本——上の枝番の
+   * ループと同じ上限）、その中から `archiveIdBranch`（＝積んだ順。
+   * `archive-id.ts` の doc）が最大の行を JS 側で選ぶ。**引く行は同着の本数
+   * だけ**で、同着が無ければ従来どおり1行である。
    */
   async archive(sessionId: string, transcript: string): Promise<ArchiveWrite> {
     const body = stripNulls(transcript);
@@ -107,19 +108,16 @@ export class PgTranscriptArchive implements TranscriptArchive {
           bodyMd5: archive.bodyMd5,
         })
         .from(archive)
-        .where(eq(archive.sessionId, sessionId))
-        .orderBy(desc(archive.at))
-        .limit(MAX_ARCHIVE_ID_ATTEMPTS);
-      const latestAt = candidateRows[0]?.at;
-      const previous =
-        latestAt === undefined
-          ? null
-          : candidateRows
-              .filter((row) => row.at.getTime() === latestAt.getTime())
-              .reduce<(typeof candidateRows)[number] | null>((best, row) => {
-                if (best === null) return row;
-                return archiveIdBranch(row.id) > archiveIdBranch(best.id) ? row : best;
-              }, null);
+        .where(
+          and(
+            eq(archive.sessionId, sessionId),
+            sql`${archive.at} = (select max(${archive.at}) from ${archive} where ${archive.sessionId} = ${sessionId})`,
+          ),
+        );
+      const previous = candidateRows.reduce<(typeof candidateRows)[number] | null>((best, row) => {
+        if (best === null) return row;
+        return archiveIdBranch(row.id) > archiveIdBranch(best.id) ? row : best;
+      }, null);
       const { continuity, comparedTo } = classifyArchiveContinuity(previous, body);
       for (let attempt = 1; attempt <= MAX_ARCHIVE_ID_ATTEMPTS; attempt += 1) {
         const id = archiveIdCandidate(base, attempt);
