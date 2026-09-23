@@ -621,6 +621,20 @@ export const STATEMENTS = [
      toast.autovacuum_vacuum_threshold = 10000,
      toast.autovacuum_vacuum_scale_factor = 0.0
    )`,
+
+  // --- 仕事のやり方の bytes を chars へ改名し、保存をやめる（#1340）--------
+  // `bytes` という名前で `content.length`（文字数）を保存していたのが嘘
+  // だった——直し方は「実体を名前に合わせる」ではなく「名前を実体に合わせた
+  // うえで、保存自体をやめる」（Issue #1340 コメント、2026-09-23）。
+  // 正規化後の本文の文字数（コードポイント数）は `char_length(content)` で
+  // 都度導出する（`PgPracticeStore`）ので、この列はもう要らない。
+  //
+  // **導出値なので、既存行の意味は1ビットも変わらない**——このファイル冒頭の
+  // 「既存行の意味を変える変更を黙って混ぜない」には当たらない。`drop column
+  // if exists` は同じ列に対して2回目以降も本当の no-op である（`drop index`
+  // と対の `create index` が踏む罠——このファイル冒頭「⚠️ 古い鍵の `create` は
+  // 配列から消す」——とは違う形。ここでは同名の `create` をどこにも残していない）。
+  `alter table practices drop column if exists bytes`,
 ] as const;
 
 /** `ensureOpenManagerBodyIndex` が作る部分 unique 索引の名前（issue #1041）。 */

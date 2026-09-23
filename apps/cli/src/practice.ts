@@ -45,7 +45,8 @@ export interface PracticeSummary {
   title: string;
   createdAt: string;
   updatedAt: string;
-  bytes: number;
+  /** 本文の文字数（コードポイント数。保存された値ではなく本文から導出——#1340）。 */
+  chars: number;
 }
 
 export async function practiceListCommand(): Promise<void> {
@@ -69,7 +70,7 @@ export async function practiceListCommand(): Promise<void> {
   for (const p of practices) {
     stdout.write(
       `  [${p.kind}] ${p.slug}  — ${p.title}` +
-        ` (作成: ${p.createdAt} / 更新: ${p.updatedAt} / ${String(p.bytes)} 文字)\n`,
+        ` (作成: ${p.createdAt} / 更新: ${p.updatedAt} / ${String(p.chars)} 文字)\n`,
     );
   }
 }

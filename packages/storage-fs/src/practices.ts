@@ -8,11 +8,45 @@ import { z } from 'zod';
 import { writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 
+/**
+ * ディスクへ書く形。**`chars` を持たない**——#1340 で保存をやめ、本文から
+ * 都度導出する形にした（`PracticeStore.write` の doc）。`practiceSchema` から
+ * `chars` を落とすことで作る。
+ *
+ * ⚠️ **既存の JSON に残っている旧い `bytes` 欄を読めなくしないこと。** zod の
+ * `z.object` は既定で未知のキーを黙って落とす（`.strict()` を付けていない）ので、
+ * 改名前に書かれた `bytes: <数値>` を持つ行もそのまま読める——ここでその挙動を
+ * 壊さない（`.strict()` / `.passthrough()` を足さない）。
+ */
+const practiceRecordSchema = practiceSchema.omit({ chars: true });
+
+type PracticeRecord = z.infer<typeof practiceRecordSchema>;
+
 const fileSchema = z.object({
-  practices: z.array(practiceSchema).default([]),
+  practices: z.array(practiceRecordSchema).default([]),
 });
 
 type PracticeFile = z.infer<typeof fileSchema>;
+
+/** コードポイント数（UTF-16 のコード単位数ではない）。#1340。 */
+function countChars(content: string): number {
+  return [...content].length;
+}
+
+function toMeta(entry: PracticeRecord): PracticeMeta {
+  return {
+    slug: entry.slug,
+    kind: entry.kind,
+    title: entry.title,
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+    chars: countChars(entry.content),
+  };
+}
+
+function toPractice(entry: PracticeRecord): Practice {
+  return { ...entry, chars: countChars(entry.content) };
+}
 
 /**
  * 仕事のやり方 = 1枚の JSON（#1055 段3）。
@@ -51,20 +85,12 @@ export class FsPracticeStore implements PracticeStore {
   async list(): Promise<PracticeMeta[]> {
     return [...(await this.#read()).practices]
       .sort((a, b) => a.slug.localeCompare(b.slug))
-      .map((entry) => ({
-        // **本文を落とすのに分割代入を使わない。** 使わない変数を作る形は lint に
-        // 当たるうえ、`PracticeMeta` に何が載るかがここから読めなくなる。
-        slug: entry.slug,
-        kind: entry.kind,
-        title: entry.title,
-        createdAt: entry.createdAt,
-        updatedAt: entry.updatedAt,
-        bytes: entry.bytes,
-      }));
+      .map((entry) => toMeta(entry));
   }
 
   async read(slug: string): Promise<Practice | null> {
-    return (await this.#read()).practices.find((entry) => entry.slug === slug) ?? null;
+    const found = (await this.#read()).practices.find((entry) => entry.slug === slug);
+    return found === undefined ? null : toPractice(found);
   }
 
   async write(input: {
@@ -79,7 +105,7 @@ export class FsPracticeStore implements PracticeStore {
     const now = new Date().toISOString();
     return this.#update((file) => {
       const existing = file.practices.find((entry) => entry.slug === input.slug);
-      const next = practiceSchema.parse({
+      const next = practiceRecordSchema.parse({
         slug: input.slug,
         kind: input.kind,
         title: input.title,
@@ -87,14 +113,13 @@ export class FsPracticeStore implements PracticeStore {
         // 上書きで作成時刻を捏造しない（`PracticeStore.write` の doc）。
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
-        bytes: content.length,
       });
       return {
         next: {
           ...file,
           practices: [...file.practices.filter((entry) => entry.slug !== input.slug), next],
         },
-        result: next,
+        result: toPractice(next),
       };
     });
   }

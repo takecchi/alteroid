@@ -82,10 +82,10 @@ export default function Practices() {
                     <p className="truncate font-mono text-[11px] text-muted">{practice.slug}</p>
                   </div>
                   <span className="shrink-0 text-[11px] text-muted">
-                    {/* `bytes` の実体は本文の文字数（`practiceMetaSchema` の doc）。
-                        `formatBytes` を当てると「B / KB」と名乗ってしまう（#1340）。
-                        CLI とクローンの道具と同じく「文字」と刷る。 */}
-                    {practice.bytes} 文字 · 作成 {formatRelative(practice.createdAt)} · 更新{' '}
+                    {/* `chars` は本文の文字数（コードポイント数。`practiceMetaSchema` の
+                        doc）。`formatBytes` を当てると「B / KB」と名乗ってしまっていた
+                        （#1340）。CLI とクローンの道具と同じく「文字」と刷る。 */}
+                    {practice.chars} 文字 · 作成 {formatRelative(practice.createdAt)} · 更新{' '}
                     {formatRelative(practice.updatedAt)}
                   </span>
                 </Link>

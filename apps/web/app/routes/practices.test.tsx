@@ -30,7 +30,7 @@ function practice(over: Partial<PracticeSummary> = {}): PracticeSummary {
     title: '日報の書き方',
     updatedAt: new Date(Date.now() - 1 * DAY_MS).toISOString(),
     createdAt: new Date(Date.now() - 3 * DAY_MS).toISOString(),
-    bytes: 42,
+    chars: 42,
     ...over,
   };
 }
@@ -88,29 +88,31 @@ describe('一覧の行', () => {
 
 describe('本文の大きさ（#1340）', () => {
   /**
-   * `bytes` の実体は本文の**文字数**である（`practiceMetaSchema` の doc。
-   * fs / pg とも `content.length`）。CLI とクローンの道具は「N 文字」と刷って
-   * いるのに、この画面だけが `formatBytes` で「B / KB」と名乗っていた ⟹
-   * 日本語の本文では実サイズの半分以下を「B」と言っていた。欄の改名
-   * （`bytes` → `chars`）は #1340 に残っていて、この歯は画面の名乗りだけを見る。
+   * `chars` は本文の**文字数**（コードポイント数。`practiceMetaSchema` の
+   * doc。fs は `[...content].length`、pg は `char_length(content)`）。CLI と
+   * クローンの道具は「N 文字」と刷っているのに、この画面だけが `formatBytes`
+   * で「B / KB」と名乗っていた ⟹ 日本語の本文では実サイズの半分以下を
+   * 「B」と言っていた。画面の名乗りは #1354 で直り（`formatBytes` を外した）、
+   * 欄そのものの改名（`bytes` → `chars`）と保存をやめる変更は #1340 本体で
+   * 直した——この歯は画面の名乗りだけを見る。
    */
   it('日本語の本文でも「N 文字」と名乗り、B / KB を名乗らない', async () => {
     // `# レビュー\n\n差分より先に Issue を読む。\n` は 26 文字（UTF-8 では 54 バイト）。
-    renderPractices([practice({ title: 'レビューの手順', bytes: 26 })]);
+    renderPractices([practice({ title: 'レビューの手順', chars: 26 })]);
 
     const row = await screen.findByText(/26 文字/);
     expect(row.textContent).not.toMatch(/\d\s*(B|KB|MB)\b/);
   });
 
   it('1024 を超えても KB へ繰り上げない（文字数は 1024 で割る単位ではない）', async () => {
-    renderPractices([practice({ bytes: 2048 })]);
+    renderPractices([practice({ chars: 2048 })]);
 
     const row = await screen.findByText(/2048 文字/);
     expect(row.textContent).not.toMatch(/KB/);
   });
 
   it('陽性対照: ASCII の本文でも同じく「N 文字」と名乗る', async () => {
-    renderPractices([practice({ bytes: 42 })]);
+    renderPractices([practice({ chars: 42 })]);
 
     expect(await screen.findByText(/42 文字/)).toBeTruthy();
   });

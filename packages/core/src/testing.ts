@@ -1305,7 +1305,7 @@ export function createMemoryStores(): Stores {
             title: entry.title,
             createdAt: entry.createdAt,
             updatedAt: entry.updatedAt,
-            bytes: entry.bytes,
+            chars: entry.chars,
           }),
         );
     },
@@ -1325,7 +1325,9 @@ export function createMemoryStores(): Stores {
         // **上書きで作成時刻を捏造しない**（`PracticeStore.write` の doc）。
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
-        bytes: content.length,
+        // コードポイント数（UTF-16 のコード単位数ではない。fs/pg 実装と同じ
+        // 数え方——#1340）。
+        chars: [...content].length,
       });
       practices.set(input.slug, isolate(next));
       return isolate(next);

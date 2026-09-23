@@ -49,7 +49,7 @@ describe('PracticeStore — 仕事のやり方を器に持つ（#1055 段3）', 
     // 足した時点でクローンは「制限された自動化ジョブ」に戻る（north_star）。
     // 赤くなったら、直すのは歯ではなく足したほうである。
     const keys = Object.keys(practiceSchema.shape).sort();
-    expect(keys).toEqual(['bytes', 'content', 'createdAt', 'kind', 'slug', 'title', 'updatedAt']);
+    expect(keys).toEqual(['chars', 'content', 'createdAt', 'kind', 'slug', 'title', 'updatedAt']);
   });
 
   it('上書きでは createdAt を引き継ぎ、updatedAt だけが進む', async () => {
@@ -68,7 +68,7 @@ describe('PracticeStore — 仕事のやり方を器に持つ（#1055 段3）', 
     });
     expect(second.createdAt).toBe(first.createdAt);
     expect(second.title).toBe('レビューのやり方（改）');
-    expect(second.bytes).toBe('bbb\n'.length);
+    expect(second.chars).toBe([...'bbb\n'].length);
   });
 
   it('不正な slug は書けない（経路要素を含めない）', async () => {

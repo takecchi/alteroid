@@ -96,7 +96,7 @@ describe('practice_* — 仕事のやり方を器に持つ道具（#1055 段3②
     expect(body).not.toMatch(/エラー|異常です|失敗/);
   });
 
-  it('一覧は本文を含まず、meta（slug・kind・title・bytes・作成/更新）だけを出す', async () => {
+  it('一覧は本文を含まず、meta（slug・kind・title・chars・作成/更新）だけを出す', async () => {
     const h = harness();
     await h.call('practice_write', {
       slug: 'review',

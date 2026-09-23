@@ -7516,7 +7516,7 @@ export function createCloneTools(context: ToolContext) {
             // **最初に知りたいことは「どの種類の仕事のやり方か」である**
             // （`excerpt.ts` の `ListingEntryFields.title` の doc）。
             title: `[${entry.kind}] ${entry.title}`,
-            summary: `${String(entry.bytes)} 文字`,
+            summary: `${String(entry.chars)} 文字`,
             createdAt: entry.createdAt,
             updatedAt: entry.updatedAt,
           }),
@@ -7557,7 +7557,7 @@ export function createCloneTools(context: ToolContext) {
         return text(
           [
             `${found.slug}（${found.kind}） ${found.title}`,
-            `作成: ${found.createdAt} / 更新: ${found.updatedAt} / ${String(found.bytes)} 文字`,
+            `作成: ${found.createdAt} / 更新: ${found.updatedAt} / ${String(found.chars)} 文字`,
             '',
             found.content,
           ].join('\n'),
@@ -7602,7 +7602,7 @@ export function createCloneTools(context: ToolContext) {
         );
         return text(
           `やり方 ${slug} を${before === null ? '新しく作った' : '書き直した'}` +
-            `（${String(written.bytes)} 文字）。practice_list で一覧に出る。`,
+            `（${String(written.chars)} 文字）。practice_list で一覧に出る。`,
         );
       },
     ),

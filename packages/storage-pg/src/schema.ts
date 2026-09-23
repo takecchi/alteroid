@@ -780,8 +780,10 @@ export const practices = pgTable('practices', {
   kind: text('kind').notNull(),
   title: text('title').notNull(),
   content: text('content').notNull(),
-  /** 正規化後の本文の文字数（`PracticeStore.write` の契約）。 */
-  bytes: integer('bytes').notNull(),
+  // ⛔ **`chars`（旧 `bytes`）の列はここに無い。#1340 で保存をやめた**——
+  // 正規化後の本文の文字数（コードポイント数）は `char_length(content)` で
+  // 都度導出する（`PgPracticeStore` の doc）。保存しない理由は
+  // `practiceMetaSchema` の doc（`packages/core/src/schema.ts`）。
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
 });

@@ -1426,6 +1426,43 @@ describe('FsJournalStore', () => {
       await verifyPracticeStoreContract(stores.practices, { verifyClear: true });
     });
 
+    it('旧い bytes 欄が残る JSON も読める（#1340。改名前の値は読み時に無視する）', async () => {
+      // `bytes` → `chars` への改名（#1340）より前に書かれた行を模す。
+      // `chars` 欄そのものが無く、旧い `bytes` 欄が残っている——これが
+      // 読めなくならないこと（parse が落ちないこと）と、`chars` が保存値
+      // ではなく本文から正しく導出されることの両方を確かめる。
+      const dir = join(root, 'jobs');
+      await mkdir(dir, { recursive: true });
+      const now = new Date().toISOString();
+      const legacyContent = '古いやり方\n';
+      await writeFile(
+        join(dir, 'practices.json'),
+        JSON.stringify({
+          practices: [
+            {
+              slug: 'legacy',
+              kind: '調査',
+              title: '改名前のやり方',
+              content: legacyContent,
+              // 旧い欄。本物の bytes 相当の値を入れておく（明らかに chars とは
+              // 違う値にして、もし誤って読まれたら検出できるようにする）。
+              bytes: 999999,
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+        }),
+      );
+
+      const list = await stores.practices.list();
+      expect(list).toHaveLength(1);
+      expect(list[0]?.chars).toBe([...legacyContent].length);
+
+      const read = await stores.practices.read('legacy');
+      expect(read?.content).toBe(legacyContent);
+      expect(read?.chars).toBe([...legacyContent].length);
+    });
+
     /**
      * **`after` によるファイル単位の枝刈り（`journal.ts` の「ファイル単位の
      * 枝刈り」コメント）を、日付をまたいだ複数ファイルで直接確かめる。**

@@ -67,7 +67,7 @@ const PRACTICE: Practice = {
   title: '日報の書き方',
   createdAt: '2026-08-01T00:00:00.000Z',
   updatedAt: '2026-08-22T00:00:00.000Z',
-  bytes: 42,
+  chars: 42,
   content: '# 見出し\n\n本文だよ',
 };
 
