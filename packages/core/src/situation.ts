@@ -357,6 +357,85 @@ export function countManagerSituation(managers: readonly ManagerSummary[]): Mana
 }
 
 /**
+ * 「直近」の窓の長さ（ミリ秒。#1103 案1）。
+ *
+ * ## なぜ3時間か
+ *
+ * #1103 の実測は、走行中の委譲が実質1本のまま**4時間36分**誰も気づかなかった、
+ * というものだった。この窓を実測と同じか長く取ると、その停滞のあいだ一度も
+ * 「直近◯時間に0本」という値が出ないまま眠り続ける回が生まれる。⟹ **実測
+ * （4時間36分）より意図して短く**取ってある——低稼働が#1103の事故の水準へ
+ * 育つ前に、少なくとも1回は「0本」という値を見せるためである。
+ *
+ * ## 閾値ではなく本数だけを出す（案2・案3は入れていない）
+ *
+ * #1103 の「期待する挙動」には3つの案があった——
+ * (1) 直近N時間に新しく起こした委譲の本数、
+ * (2) 走行中が1本以下だった連続時間に閾値を引いて ⚠ を立てる、
+ * (3) 直近N時間に片付いた仕事（`commitment_close`）の件数。
+ * **ここで実装するのは案1だけである。** 案2・案3は意図して入れていない——この
+ * ファイル冒頭の「空き枠を作らない」「指図を書かない」と同じ理由で、閾値と ⚠ を
+ * 持たせた瞬間、この節は「低稼働を判定する」側へ回ってしまう。出すのは数え
+ * 上げの材料だけで、それが合図かどうかの判定はクローンに委ねる——0 本という
+ * 値そのものが、閾値なしで既に合図である（{@link countRecentManagerStarts}
+ * の doc）。
+ */
+export const RECENT_MANAGER_START_WINDOW_MS = 3 * 60 * 60 * 1000;
+
+/** {@link RECENT_MANAGER_START_WINDOW_MS} を文中に出すための時間数。 */
+const RECENT_MANAGER_START_WINDOW_HOURS = RECENT_MANAGER_START_WINDOW_MS / (60 * 60 * 1000);
+
+/**
+ * 直近 {@link RECENT_MANAGER_START_WINDOW_MS} に `manager_start` した委譲の
+ * 本数を数える（#1103 案1）。
+ *
+ * ## 何を見るか
+ *
+ * `ManagerSummary.startedAt`（＝ `Job.createdAt`。`manager.ts` の `summaryOf`
+ * が `startedAt: job.createdAt` として写す欄）が `[at - 窓, at]` に入るものを
+ * 数える。
+ *
+ * ## `at` は呼び出し側の観測時刻をそのまま使う
+ *
+ * この関数は `Date.now()` を自分では呼ばない。**`describeSituation` が既に
+ * 持っている `at`**（呼び出し側が渡した観測時刻、渡さなければ `Date.now()`。
+ * {@link readAtLabel} が名乗る時刻と同じもの）をそのまま受け取る——ここで
+ * 独自に時刻を引き直すと、この節が名乗る「いつ数えたか」と、この本数が実際に
+ * 数えた瞬間とがずれる（1つの節が2つの「いま」を持つことになる）。
+ *
+ * ## 境界（ちょうど窓の端）は含める
+ *
+ * `startedAtMs >= at - 窓` かつ `startedAtMs <= at` の**両端を含む閉区間**で
+ * 判定する。`at` はこの節が「いつ数えたか」として名乗る観測時刻そのものなので、
+ * ちょうどその瞬間に始まった委譲を除く理由が無い。下限も同じ理由で閉じている
+ * ——「直近3時間」は「3時間以内」の意味で読むのが自然で、ちょうど3時間前を
+ * 除くと自然な読みと食い違う。
+ *
+ * ## 壊れた `startedAt` は数えない
+ *
+ * `Date.parse` が `NaN` を返す委譲（欠けている・壊れている値）は数えに含め
+ * ない。**黙って除いているのではなく、ここにその理由を書く**——他のファイル
+ * で日付を読む数え方（`superseded.ts` の `countSupersedingReports`、
+ * `manager-fold-candidate.ts` の同種の判定）はどれも「読めない値は比較に
+ * 使わず除外する」という同じ倣いを採っており、ここもそれに揃える。**専用の
+ * 「読めなかった」状態は持たせていない**——`ManagerSummary.startedAt` は
+ * `manager.ts` 側で `job.createdAt` を直接写すだけの欄で、台帳を経由する限り
+ * 壊れる経路が無い（壊れうるとすれば呼び出し元のテスト・将来の変更である）。
+ * `describeSituationInboxBacklog` の `'unreadable'` のような3値を持たせる
+ * ほどの重さをここには与えず、「無い」より軽い「数えない」で足りると判断した。
+ */
+export function countRecentManagerStarts(managers: readonly ManagerSummary[], at: number): number {
+  const from = at - RECENT_MANAGER_START_WINDOW_MS;
+  let count = 0;
+  for (const manager of managers) {
+    const startedAtMs = Date.parse(manager.startedAt);
+    if (Number.isNaN(startedAtMs)) continue;
+    if (startedAtMs >= from && startedAtMs <= at) count += 1;
+  }
+  return count;
+}
+
+/**
  * 器の state ごとの本数。**`RunnerLiveness` の6値は畳まない**（`manager.ts` の
  * `RunnerOverview` の doc——`unreachable` / `unusable` / `lost` / `vacating` の
  * 違いはクローンの判断材料そのものである）。
@@ -801,6 +880,10 @@ export function describeSituation(input: {
   // 渡っておらず、**節の本体は自分がいつの値かを1文字も名乗らなかった。**
   // {@link readAtLabel} の doc（節は会話履歴に溜まる）。
   const at = input.at ?? Date.now();
+  // **#1103 案1。`at` をそのまま渡す**——{@link countRecentManagerStarts} の
+  // doc「`at` は呼び出し側の観測時刻をそのまま使う」。ここで独自に
+  // `Date.now()` を引き直すと、節が名乗る時刻とこの本数の観測時刻がずれる。
+  const recentStarts = countRecentManagerStarts(input.managers, at);
   return block([
     `${SITUATION_HEAD}（${readAtLabel(at)} に数えた材料だけ。ここから何をするかは決めない）。`,
     // **`lost` の区分だけ 0 のとき出さない**（上の doc の2つの理由）。残りの5つは
@@ -821,7 +904,12 @@ export function describeSituation(input: {
         ? ''
         : `${LAST_FAILURE_LABEL}のは ${counts.lastTurnFailed} 本` +
           `（うち「手が空いている」に数えたものが ${counts.lastTurnFailedIdle} 本。` +
-          '上の区分とは足し合わせない）。'),
+          '上の区分とは足し合わせない）。') +
+      // **#1103 案1。0 本でも出す（0 が合図だから）。** 閾値も ⚠ も持たない
+      // ——{@link RECENT_MANAGER_START_WINDOW_MS} の doc「閾値ではなく本数
+      // だけを出す」。だから他の横断する軸（`lastTurnFailed` 等）と違い、
+      // ここは三項演算子で 0 を隠さない。
+      `直近${RECENT_MANAGER_START_WINDOW_HOURS}時間に新しく起こした委譲: ${recentStarts} 本。`,
     // **本数の直後に置く（#688）。** この節は `distill` 以外の全ターンの入口に
     // 載る（`clone.ts` の `#situationNoticeFor`）ので、**いちばん確実に読まれる
     // 場所**である。数と、そこから何を確かめるかを離すと、数だけが読まれる。

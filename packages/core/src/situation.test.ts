@@ -10,10 +10,12 @@ import type { RunnerLiveness } from './runner-protocol.js';
 import type { InboxEvent, JobStatus } from './schema.js';
 import {
   countManagerSituation,
+  countRecentManagerStarts,
   countRunnerStates,
   describeSituation,
   describeSituationUnavailable,
   describeTokenSituation,
+  RECENT_MANAGER_START_WINDOW_MS,
 } from './situation.js';
 
 /**
@@ -261,6 +263,63 @@ describe('countManagerSituation', () => {
   });
 });
 
+/**
+ * #1103 案1。「直近の低稼働の継続」を、クローンが断面からは気づけなかった穴を
+ * 塞ぐ材料——直近3時間に `manager_start` した委譲の本数。
+ *
+ * **`at` は #1103 の実測時刻に寄せてある**（必然ではない。固定した具体の時刻を
+ * 使うことで「窓の端からどれだけ離れているか」が読みやすくなるだけである）。
+ */
+describe('countRecentManagerStarts（#1103 案1）', () => {
+  const AT = Date.parse('2026-09-16T14:51:00.000Z');
+
+  function startedMsAgo(msAgo: number): ManagerSummary {
+    return { ...summary('x', 'running', true), startedAt: new Date(AT - msAgo).toISOString() };
+  }
+
+  it('窓の中の開始だけを数える（窓の外の開始は数えない＝陽性対照）', () => {
+    const managers = [
+      startedMsAgo(60 * 60 * 1000), // 1時間前 → 窓の中
+      startedMsAgo(2 * 60 * 60 * 1000), // 2時間前 → 窓の中
+      startedMsAgo(4 * 60 * 60 * 1000), // 4時間前 → 窓の外（3時間より前）
+    ];
+    expect(countRecentManagerStarts(managers, AT)).toBe(2);
+  });
+
+  it('窓の中が0本なら0を返す', () => {
+    const managers = [startedMsAgo(4 * 60 * 60 * 1000)];
+    expect(countRecentManagerStarts(managers, AT)).toBe(0);
+  });
+
+  it('1本も居なければ0を返す', () => {
+    expect(countRecentManagerStarts([], AT)).toBe(0);
+  });
+
+  /**
+   * 境界（ちょうど3時間前）は数える——`countRecentManagerStarts` の doc
+   * 「境界（ちょうど窓の端）は含める」が固定する決定そのもの。
+   */
+  it('境界（ちょうど3時間前）は含む', () => {
+    const managers = [startedMsAgo(RECENT_MANAGER_START_WINDOW_MS)];
+    expect(countRecentManagerStarts(managers, AT)).toBe(1);
+  });
+
+  it('境界のすぐ外（3時間 + 1ms 前）は含まない', () => {
+    const managers = [startedMsAgo(RECENT_MANAGER_START_WINDOW_MS + 1)];
+    expect(countRecentManagerStarts(managers, AT)).toBe(0);
+  });
+
+  it('ちょうど観測時刻 at に開始したものも含む', () => {
+    const managers = [startedMsAgo(0)];
+    expect(countRecentManagerStarts(managers, AT)).toBe(1);
+  });
+
+  it('startedAt が壊れている・解釈できない委譲は数えない', () => {
+    const managers = [{ ...summary('a', 'running', true), startedAt: 'not-a-date' }];
+    expect(countRecentManagerStarts(managers, AT)).toBe(0);
+  });
+});
+
 describe('countRunnerStates', () => {
   /** **6値を畳まない**（`manager.ts` の `RunnerOverview.state` の doc）。 */
   it('RunnerLiveness の6値をそれぞれ別に数える', () => {
@@ -409,6 +468,60 @@ describe('describeSituation', () => {
     expect(text).toContain('背景処理待ち 0');
     expect(text).toContain('手が空いている 0');
     expect(text).toContain('その他 1');
+  });
+
+  /**
+   * ⭐ **#1103 の芯。** クローンが「器が空いたまま何時間も経った」ことに、
+   * 断面（本数だけの委譲行）からは気づけなかった穴を塞ぐ——直近3時間に
+   * `manager_start` した委譲の本数を、委譲の行に添える。
+   *
+   * **窓の外の開始は数えない（陽性対照）。** 3本のうち1本を意図して窓の外
+   * （4時間前）に置き、それが数に入らないことも同じ歯で確かめる。
+   */
+  it('⭐ 直近3時間に起こした委譲の本数が委譲の行に出る（窓の外は数えない）', () => {
+    const AT = Date.parse('2026-09-16T14:51:00.000Z');
+    const text = describeSituation({
+      managers: [
+        {
+          ...summary('a', 'running', true),
+          startedAt: new Date(AT - 60 * 60 * 1000).toISOString(),
+        },
+        {
+          ...summary('b', 'waiting_human', true),
+          startedAt: new Date(AT - 2.5 * 60 * 60 * 1000).toISOString(),
+        },
+        {
+          ...summary('c', 'done', true),
+          startedAt: new Date(AT - 4 * 60 * 60 * 1000).toISOString(),
+        },
+      ],
+      runners: [],
+      at: AT,
+    });
+    const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
+    expect(countsLine).toContain('直近3時間に新しく起こした委譲: 2 本');
+  });
+
+  /**
+   * ⭐ **0 本でも行は消えない**（0 が合図だから。#1103）。他の横断する軸
+   * （`lastTurnFailed` 等）と違い、この行だけは 0 のときも三項演算子で
+   * 隠さない——`countRecentManagerStarts` の doc「閾値ではなく本数だけを
+   * 出す」が固定する決定そのもの。
+   */
+  it('⭐ 直近3時間の開始が0本でも「0 本」と出る（行が消えない）', () => {
+    const AT = Date.parse('2026-09-16T14:51:00.000Z');
+    const text = describeSituation({
+      managers: [
+        {
+          ...summary('a', 'running', true),
+          startedAt: new Date(AT - 4 * 60 * 60 * 1000).toISOString(),
+        },
+      ],
+      runners: [],
+      at: AT,
+    });
+    const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
+    expect(countsLine).toContain('直近3時間に新しく起こした委譲: 0 本');
   });
 
   /**
