@@ -10734,6 +10734,107 @@ describe('inbox_flow.retained（メモリ上の索引の残数。Issue #1264）'
 });
 
 /**
+ * 🔴 実運用の食い違い調査（2026-09-23、マネージャーからの委譲。Issue #1051 続き）。
+ *
+ * ## 観測されていた症状
+ *
+ * 本番の日誌（`token_rotation`）では特定の時間帯、「recovered（turn_success）:
+ * alteroid03」と「exhausted: 候補の最速回復は alteroid09」が3.5秒周期で交互に
+ * 記録されていた。ところが**そのあいだにクローンが実際に受け取った「戻った」
+ * 通知の本文は「alteroid09」を名乗っていた**——journal 側の最新の recovered が
+ * 03 なのに、クローンへ渡った文面は 09 だった、という食い違い。
+ *
+ * ## この束が確かめる機序
+ *
+ * `apps/daemon/src/index.ts`（`reopenedTokenOf` → `settleTokenOutcome` →
+ * `wake()` → `CloneWakeGate.decide` → `clone.post(...)`）を読む限り、1回の
+ * `settleTokenOutcome` 呼び出しの中では tokenId が入れ替わる余地はない
+ * （daemon 側の対照は `apps/daemon/src/index.test.ts` が別途固定する——この
+ * ファイルからは `apps/daemon` を import できない。依存は core → daemon の
+ * 一方向であり、ここに daemon 側の配線の対照を置くこと自体が向きを逆にする）。
+ *
+ * **入れ替わりうるのはクローン側 —— `#pump` の FIFO 再武装である**
+ * （`clone.ts` の `#deferred` / `#pump` 先頭 / `usageBlockAlwaysRearms`）。
+ * クローンが枠で止まっている間に届いた「戻った」通知は、たとえ
+ * `usageBlockAlwaysRearms` が真でも**即座には処理されない**——`post()` は
+ * `#releaseRequested = true` を立てるだけで、実際に投げ直すのは `#pump` の
+ * 先頭であり、そこは**保持している合図を FIFO の先頭から**戻す
+ * （`#deferred.splice(0)` → `unshift([...held, event])`）。⟹ 新しく届いた
+ * 通知（journal 上「最新」）よりも**先に保持されていた古い通知の本文**が先に
+ * モデルへ渡り、しかもそのリトライがそのとき通れば「成功したターン」として
+ * 残る——古い本文がそのまま「いま起きたこと」として扱われる形である。
+ *
+ * **下のテストは、その機序をこの層で再現する陽性対照である。** この束は
+ * 直す前の commit（`#pendingTokenPoolNotice` を導入する前）でこの機序が
+ * 実在することを固定し、直した後は次の describe（`token-pool の「戻った」
+ * 通知は同時に未処理で1件まで`）の不変条件テストへ主役を譲る——直した後の
+ * この束の意味は「turn 1 の本文が変わった」という差分そのものになる。
+ */
+describe('🔴 実運用食い違い調査（2026-09-23）: token-pool の「戻った」通知の tokenId', () => {
+  const spendLimitMessage = "You've hit your individual spend limit for this account.";
+
+  function tokenPoolNotice(id: string, text: string): InboxEvent {
+    return {
+      type: 'external',
+      id,
+      at: new Date().toISOString(),
+      source: DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+      payload: { text },
+    };
+  }
+
+  it('陽性対照: 古いトークンの「戻った」通知が保持されている間に別トークンの通知が届くと、実際にモデルへ渡って成功するターンの本文は新しい方ではなく古い方である（直した後は逆になる）', async () => {
+    // turn 0（notice-A の初回）だけ枠で失敗させ、turn 1 以降は成功させる。
+    const s = setup(undefined, createMemoryStores(), {
+      resultFor: (turnIndex) =>
+        turnIndex < 1 ? { subtype: 'error_during_execution', text: spendLimitMessage } : undefined,
+    });
+
+    // alteroid-A が「戻った」——このターン（turn 0）は失敗し、`#deferred` へ
+    // 保持される。
+    s.clone.post(
+      tokenPoolNotice(
+        'notice-A',
+        '認証トークンが通る状態に戻った（また通るようになった）: 「alteroid-A」（id tok-A）。枠で止まっていた仕事は、ここから再開できる。',
+      ),
+    );
+    await waitFor(() => s.clone.usageBlocked, 'notice-A の初回処理が枠で失敗して保持される');
+    await waitFor(
+      () => (s.calls[0]?.inputs.some((text) => text.includes('alteroid-A')) ?? false),
+      'notice-A の本文が turn 0 でモデルへ渡る',
+    );
+
+    // alteroid-B が「戻った」——journal で見れば「いま戻ったのはこちら」に
+    // なる、より新しい事実。`usageBlockAlwaysRearms` により無条件で再武装する。
+    s.clone.post(
+      tokenPoolNotice(
+        'notice-B',
+        '認証トークンが通る状態に戻った（また通るようになった）: 「alteroid-B」（id tok-B）。枠で止まっていた仕事は、ここから再開できる。',
+      ),
+    );
+
+    await waitFor(
+      () => (s.calls[0]?.inputs.length ?? 0) >= 2,
+      'notice-A か notice-B、どちらかの再試行（turn 1）が投げられる',
+    );
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    // **turn 0 は必ず notice-A（それしか無いので自明。ここは足場の確認）。**
+    expect(inputs[0]).toContain('alteroid-A');
+
+    // 🔴 本題: turn 1（notice-B の到着で誘発された、最初の再試行）に実際に
+    // 渡る本文は、journal 上「新しい」はずの notice-B ではなく、先に保持
+    // されていた notice-A（古い方）である。**`findIndex` で「どこかに出て
+    // くるか」を見ると、turn 0 の A が常に先頭に居るせいで自明に真になって
+    // しまう——だから「どのターンに何が載ったか」を turn 番号で直接見る。**
+    expect(inputs[1]).toContain('alteroid-A');
+    expect(inputs[1]).not.toContain('alteroid-B');
+
+    await s.clone.stop();
+  });
+});
+
+/**
  * 枠（利用上限）に当たったら、合図を捨てずに保持し、次の合図が来たときに
  * 試し直す（`clone.ts` の `#usageBlocked` / `#deferred`）。
  *
