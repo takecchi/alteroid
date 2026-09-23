@@ -6135,6 +6135,72 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * **Issue #1266 の最小の一手。** PR #1265 が `Job.lastUnpushedWorkObservation`
+   * へ観測を残すようにしたが、読む口が本番コードに1つも無かった
+   * （`manager_list` にも `self_status` にも出ない）——`branch` が non-null で
+   * 返る割合を誰も測れない、という指摘そのものを埋める。
+   */
+  it('manager_list は observed な未push観測（branch を含む）を1行出す（Issue #1266）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.lastUnpushedWorkObservation = {
+      kind: 'observed',
+      at: '2026-09-20T00:00:00.000Z',
+      cwd: '/workspace/mgr-1/repo',
+      worktrees: [{ relativePath: '.', branch: 'feat/example' }],
+    };
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('未push観測');
+    expect(reply).toContain('feat/example');
+    // **由来（残る族）を行の中に書く**——これが無いと、読み手は時刻だけを見て
+    // 「いまの状態」だと誤読する（AGENTS.md と同じ理由でここに断りを置く）。
+    expect(reply).toContain('manager_stop');
+    expect(reply).toContain('非force');
+    // **Issue #1266 が名指しした「残る族」の1つ——枠落ちでセッションを失う
+    // 経路も更新しない。** `schema.ts` の `lastUnpushedWorkObservationSchema`
+    // の doc（「器の入れ替え（redeploy・枠落ちでセッションを失う経路）」）と
+    // 同じ語をこの行にも出す。
+    expect(reply).toContain('枠落ち');
+    // **探索の起点の絶対パスは出さない**（`unpushedWorkTreeSchema` の doc が
+    // 引いた線）。
+    expect(reply).not.toContain('/workspace/mgr-1/repo');
+  });
+
+  it('manager_list は unavailable な未push観測で reason を出す（Issue #1266。branch が取れなかったと分かる）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.lastUnpushedWorkObservation = {
+      kind: 'unavailable',
+      at: '2026-09-20T00:00:00.000Z',
+      reason: 'この runner はこの口を持たない（古い版、またはテストの偽物）。',
+    };
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('未push観測');
+    expect(reply).toContain('取れなかった');
+    expect(reply).toContain('この runner はこの口を持たない（古い版、またはテストの偽物）。');
+  });
+
+  it('manager_list は未push観測が無い委譲では1文字も足さない（Issue #1266。予算を食わない）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    // lastUnpushedWorkObservation はセットしない（一度も観測していない委譲を模す）。
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).not.toContain('未push観測');
+  });
+
+  /**
    * **Issue #1036 の本題。** `manager_report` は以前 `lastReportAt` も
    * `status` も1文字も出していなかった——読み手は直近に完了したターンの
    * 中身を、いまの状態として読むしかなかった（#1036 の事故）。

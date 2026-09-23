@@ -3050,6 +3050,63 @@ function describeResetTimeSkew(manager: ManagerSummary): string | null {
 }
 
 /**
+ * `manager_stop`（running・非 force）の断りが最後に取った、未 push の
+ * 作業ツリーの観測を1行にする（Issue #1266。材料は
+ * `ManagerSummary.lastUnpushedWorkObservation`）。
+ *
+ * ## なぜ足すか
+ *
+ * PR #1265 が `Job.lastUnpushedWorkObservation` へこの観測を残すように
+ * したが、**読む口が本番コードに1つも無かった**——`manager_list` にも
+ * `self_status` にも出ず、`branch` が non-null で返る割合を誰も測れない
+ * （Issue #1266）。ここはその読む口の最小の一手——**新しい観測は増やさない**。
+ * 既に台帳に在る値を読むだけである。
+ *
+ * ## 載せるもの・載せないもの
+ *
+ * `kind`・`at`（時刻）・`worktrees[].relativePath`・`worktrees[].branch`
+ * （`unavailable` なら `reason`）だけを載せる。**`cwd`（探索の起点の絶対
+ * パス）は載せない**——`unpushedWorkTreeSchema` の doc が「絶対パスそのもの
+ * は出さない」と名指しで線を引いている範囲を、この欄の写し（`cwd` は
+ * `unpushedWorkResultSchema.cwd` の写し）にもそのまま適用した。
+ * `observedWorktreeBranchSchema` の doc が引く「出してよい範囲（有無・件数・
+ * 枝名まで）」の中に収まる値だけである。
+ *
+ * ## 「残る族」を行の中に必ず書く
+ *
+ * この欄は `manager_stop`（running・非 force）の断りでしか更新されない
+ * （`ManagerSummary.lastUnpushedWorkObservation` の doc の「残る族」）。
+ * `force: true` で止めた回・`manager_list` 自身・器の入れ替え（redeploy・
+ * 枠落ち）では一度も更新されない。**時刻だけを出すと、読み手はそれを
+ * 「いまの状態」と誤読する**——だから毎回、断り自体の性質を行の中に書く
+ * （JSDoc に書いてもクローンには届かない。`resources: true` の説明文と
+ * 同じ理由）。
+ */
+function describeUnpushedWorkObservation(manager: ManagerSummary): string | null {
+  const observation = manager.lastUnpushedWorkObservation;
+  if (observation === undefined) return null;
+  const provenance =
+    'manager_stop（running・非force）の断りが最後に取った1回' +
+    '（force:true・manager_list 自身・器の入れ替え（redeploy・枠落ちでセッションを失う経路）' +
+    'では更新されない。いまの状態ではない）';
+  if (observation.kind === 'unavailable') {
+    return (
+      `  未push観測（${provenance}）: 取れなかった（${observation.at}）: ` + observation.reason
+    );
+  }
+  const worktrees =
+    observation.worktrees.length === 0
+      ? '見つかった作業ツリー0本'
+      : observation.worktrees
+          .map(
+            (wt) =>
+              `${wt.relativePath}: branch=${wt.branch === null ? 'null（取れなかった）' : wt.branch}`,
+          )
+          .join(' / ');
+  return `  未push観測（${provenance}、${observation.at}）: ${worktrees}`;
+}
+
+/**
  * `runner_list`（器ごとの内訳・`unassigned` の両方）が積む1行の末尾に足す、
  * 認証トークンの世代の食い違いだけの短い印（Issue #914 提案1）。
  *
@@ -8931,6 +8988,13 @@ export function createCloneTools(context: ToolContext) {
               // **Issue #1394 段⑤。** 健全な（候補ではない）委譲では `null` を
               // 返し、1文字も増えない——他の `describe*` と同じ約束。
               foldCandidateLine,
+              // **Issue #1266**: `manager_stop`（running・非 force）の断りが
+              // 最後に取った、未 push の作業ツリーの観測を添える
+              // （`describeUnpushedWorkObservation` の doc）。**観測が無い
+              // 委譲では `null` を返し、1文字も増えない**——予算に張り付いて
+              // いる一覧で行を1本増やすと出せる件数が減るため（他の条件付き
+              // 行と同じ理由）。
+              describeUnpushedWorkObservation(manager),
             ],
           });
         });

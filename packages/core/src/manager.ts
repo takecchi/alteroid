@@ -651,6 +651,15 @@ export interface ManagerSummary {
    * ——古い判定が次の当たりに貼り付かないようにするため。
    */
   resetTimeSkewMatch?: NoticeResetMatch;
+  /**
+   * `manager_stop`（running・非 force）が最後に取った、未 push の作業ツリーの
+   * 枝名の観測（Issue #1266）。**台帳（`Job.lastUnpushedWorkObservation`）を
+   * そのまま写すだけ**——書き込みは `ManagerPool#unpushedWork()` の呼び出し元
+   * （`manager_stop` の running・非 force 分岐）の1箇所に閉じている。詳しい
+   * 意味・残る族（この欄が更新されない回）・答えないことは
+   * {@link lastUnpushedWorkObservationSchema}（`schema.ts`）の doc を見よ。
+   */
+  lastUnpushedWorkObservation?: LastUnpushedWorkObservation;
 }
 
 /**
@@ -10861,6 +10870,13 @@ function summaryOf(
      * 読んだ瞬間から古びる）。**出すのは材料だけで、判定は読む側がその時刻でやる。**
      */
     ...(job.lease === undefined ? {} : { lease: job.lease }),
+    // **台帳をそのまま写すだけ**（Issue #1266）。書き込みは
+    // `ManagerPool#unpushedWork()` の呼び出し元（`manager_stop` の
+    // running・非 force 分岐）の1箇所に閉じている——`summaryOf` はここでも
+    // 新しい往復を払わない。
+    ...(job.lastUnpushedWorkObservation === undefined
+      ? {}
+      : { lastUnpushedWorkObservation: job.lastUnpushedWorkObservation }),
     /*
      * **`live` と同じ引数の作法で運ぶ（省略可能な引数にしない）。** 材料は台帳
      * ではなく `Pool` の在庫（`#withheldReports`）なので、`record` からは読め

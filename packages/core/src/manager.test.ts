@@ -2338,6 +2338,96 @@ describe('unpushedWork の観測を台帳へ残す（Issue #1228 候補(1)）', 
 });
 
 /**
+ * **`manager_list`（`tools.ts`）は `pool.list()` の結果だけを読む。** `tools.test.ts`
+ * 側の歯は `ManagerPool` を丸ごとスタブで差し替えているので（`summaryOf()` を
+ * 経由しない）、`summaryOf()` が台帳の `Job.lastUnpushedWorkObservation` を
+ * `ManagerSummary` へ実際に運ぶことは、そちらのどの歯も見ていない——読む口を
+ * 作るのがこの変更の目的なので、ここに歯を置く（Issue #1266）。
+ *
+ * **`#records` に載せず、台帳（store）だけに置く。** `list()` は `#records`
+ * に無い job を「台帳にしか無い分」として `summaryOf(fallback, …)` へ渡す
+ * 分岐（`list()` の doc の「台帳にしか無い分も見せる」）を持ち、まさにそこが
+ * 今回 `job.lastUnpushedWorkObservation` の spread を足した箇所を通る——
+ * `restore()` やセッションの起動は要らない、最も軽い経路である。
+ */
+describe('list() が lastUnpushedWorkObservation を運ぶ（Issue #1266）', () => {
+  const baseJob = {
+    id: 'mgr-unpushed-base',
+    createdAt: '2026-09-20T00:00:00.000Z',
+    updatedAt: '2026-09-20T00:00:00.000Z',
+    status: 'running' as const,
+    summary: '確認',
+  };
+
+  it('observed な観測を list() がそのまま運ぶ', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({
+      ...baseJob,
+      id: 'mgr-unpushed-observed',
+      lastUnpushedWorkObservation: {
+        kind: 'observed',
+        at: '2026-09-20T00:05:00.000Z',
+        cwd: '/work/project',
+        worktrees: [{ relativePath: '.', branch: 'feat/example' }],
+      },
+    });
+    const s = setup(undefined, { stores });
+
+    const listed = (await s.pool.list()).find((m) => m.managerId === 'mgr-unpushed-observed');
+
+    expect(listed?.lastUnpushedWorkObservation).toEqual({
+      kind: 'observed',
+      at: '2026-09-20T00:05:00.000Z',
+      cwd: '/work/project',
+      worktrees: [{ relativePath: '.', branch: 'feat/example' }],
+    });
+
+    await s.pool.stop();
+  });
+
+  it('unavailable な観測（reason を含む）も list() がそのまま運ぶ', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({
+      ...baseJob,
+      id: 'mgr-unpushed-unavailable',
+      lastUnpushedWorkObservation: {
+        kind: 'unavailable',
+        at: '2026-09-20T00:05:00.000Z',
+        reason: 'この runner はこの口を持たない（古い版、またはテストの偽物）。',
+      },
+    });
+    const s = setup(undefined, { stores });
+
+    const listed = (await s.pool.list()).find((m) => m.managerId === 'mgr-unpushed-unavailable');
+
+    expect(listed?.lastUnpushedWorkObservation).toEqual({
+      kind: 'unavailable',
+      at: '2026-09-20T00:05:00.000Z',
+      reason: 'この runner はこの口を持たない（古い版、またはテストの偽物）。',
+    });
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **観測が無い＝欄ごと消える。** `0` や空文字のような代役を作らない
+   * （AGENTS.md「取れない軸に0の行を作る」）——観測していない委譲を
+   * 「観測して、何も見つからなかった」と混同させない。
+   */
+  it('観測が無い委譲では list() の欄そのものが無い（undefined）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({ ...baseJob, id: 'mgr-unpushed-none' });
+    const s = setup(undefined, { stores });
+
+    const listed = (await s.pool.list()).find((m) => m.managerId === 'mgr-unpushed-none');
+
+    expect(listed?.lastUnpushedWorkObservation).toBeUndefined();
+
+    await s.pool.stop();
+  });
+});
+
+/**
  * 器の入れ替えを再現できる runner。
  *
  * デーモンから見える顔（`RunnerClient`）だけで作る。HTTP 実装でも同一プロセス
