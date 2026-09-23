@@ -34,6 +34,12 @@ interface FakeSession {
   finish(text: string): Promise<void>;
   /** PostToolUse フックを鳴らす（既定はマネージャー自身の道具）。 */
   usedTool(tool: string, extra?: Record<string, unknown>): Promise<void>;
+  /**
+   * PostToolUseFailure フックを鳴らす（既定はマネージャー自身の道具）。
+   * `#toolsSinceResult` への効果が `usedTool` と同じであることを確かめる歯
+   * （Issue #929）用に足した。
+   */
+  usedToolFailure(tool: string, extra?: Record<string, unknown>): Promise<void>;
   /** UserPromptSubmit フックを鳴らす（既定はマネージャー自身への発火）。 */
   submitPrompt(extra?: Record<string, unknown>): Promise<void>;
   /** `system/task_started` を流す。 */
@@ -59,7 +65,7 @@ function fakeSdk(): { fn: typeof sdkQuery; sessions: FakeSession[] } {
     };
 
     async function fireHook(
-      name: 'PostToolUse' | 'UserPromptSubmit',
+      name: 'PostToolUse' | 'PostToolUseFailure' | 'UserPromptSubmit',
       input: Record<string, unknown>,
     ): Promise<void> {
       const matchers = options.hooks?.[name] as HookCallbackMatcher[] | undefined;
@@ -99,6 +105,16 @@ function fakeSdk(): { fn: typeof sdkQuery; sessions: FakeSession[] } {
           hook_event_name: 'PostToolUse',
           tool_name: tool,
           tool_input: { a: 1 },
+          transcript_path: '/tmp/does-not-exist.jsonl',
+          ...extra,
+        });
+      },
+      async usedToolFailure(tool, extra = {}) {
+        await fireHook('PostToolUseFailure', {
+          hook_event_name: 'PostToolUseFailure',
+          tool_name: tool,
+          tool_input: { a: 1 },
+          error: '失敗した',
           transcript_path: '/tmp/does-not-exist.jsonl',
           ...extra,
         });
@@ -317,6 +333,35 @@ describe('worker_wait — 委譲1区間ぶんの契機の集計', () => {
     if (event === undefined) return;
     expect(event.turns).toBe(3);
     // 道具を使った1ターン目だけ数えない → toolless は残り2ターン分。
+    expect(event.toolless).toBe(2);
+  });
+
+  /**
+   * `#onPostToolUseFailure`（Issue #929）が `#toolsSinceResult` を成功側と
+   * 同じ規則で数えることを確かめる。**成功側の同名の歯（直上）と対になる**
+   * ——失敗した道具呼び出しも「マネージャー自身が手を動かした」に数える
+   * べきで、数えなければ `worker_wait.toolless` が誤って水増しされる。
+   */
+  it('マネージャー自身の失敗した道具呼び出し（PostToolUseFailure）も toolless に数えない', async () => {
+    const s = setup();
+    const session = await startPrimed(s.host, s.sessions);
+
+    await session.taskStarted('task-1');
+    await session.usedToolFailure('Bash'); // マネージャー自身の道具（agent_id 無し）が失敗
+    await session.finish('失敗した道具を使った回');
+    await session.finish('何もしなかった回');
+    await session.taskNotification('task-1');
+    await session.finish('完了通知の回（道具は動かしていない）');
+
+    const [event] = await vi.waitFor(() => {
+      const found = workerWaitEvents(s.events);
+      if (found.length === 0) throw new Error('worker_wait がまだ上がっていない');
+      return found;
+    });
+    expect(event).toBeDefined();
+    if (event === undefined) return;
+    expect(event.turns).toBe(3);
+    // 失敗した呼び出しを含む1ターン目だけ数えない → toolless は残り2ターン分。
     expect(event.toolless).toBe(2);
   });
 

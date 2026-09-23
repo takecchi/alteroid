@@ -6,6 +6,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import type {
   Options,
   PermissionResult,
+  PostToolUseFailureHookInput,
   Query,
   SDKUserMessage,
   SessionKey,
@@ -34,6 +35,7 @@ import {
 } from './dropped-record.js';
 import { ROTATABLE_CREDENTIAL_KEYS } from './credentials.js';
 import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
+import { excerptLine } from './excerpt.js';
 import { placedModelTier, resolveModelTier } from './model-tier.js';
 import {
   DEFAULT_PERMISSION_MODE,
@@ -146,6 +148,25 @@ export function placedManagerModels(
 
 /** 作業者層の本体はこの `agents` 定義1個だけ。独自のワーカープールを作らない。 */
 export const WORKER_AGENT_NAME = 'worker';
+
+/**
+ * 失敗・中断した道具呼び出し（`PostToolUseFailure`）を `note` として日誌へ
+ * 残すときの、`text` の固定の先頭（Issue #929）。**export するのは、後から
+ * 機械的に拾えるようにするため** — 日誌の `note.text` をこの接頭辞で絞れば、
+ * 成功の `tool_use` とは別の場所に埋もれている失敗の記録を数え上げられる。
+ * `#onPostToolUseFailure` の doc に、この形を選んだ理由を書いてある。
+ */
+export const TOOL_USE_FAILURE_NOTE_PREFIX = 'tool_use_failure:';
+
+/**
+ * `PostToolUseFailureHookInput.error` を `note` の `text` へ残すときの上限
+ * （Issue #929）。`clone.ts` の `TOOL_USE_ERROR_EXCERPT`（同じ値・同じ理由）
+ * と揃えてある — `error` は道具・MCP サーバ・SDK が書く上限の無い自由文なので、
+ * 切らずに残すと1件の巨大な失敗メッセージが日誌の1行を埋め尽くしうる。
+ * `excerptLine` を通すので、切り詰めたときは省いた文字数と全体の長さが末尾に
+ * 付き、「そこで切れている」と読む側から黙らずに分かる。
+ */
+const TOOL_USE_FAILURE_ERROR_EXCERPT = 500;
 
 /**
  * runner の子プロセスへ渡さない環境変数。
@@ -1949,6 +1970,9 @@ class RunnerSession {
       // 理由は `#onPreToolUse` の doc を見よ。
       onPreToolUse: (input) => this.#onPreToolUse(input),
       onPostToolUse: (input) => this.#onPostToolUse(input),
+      // **`PostToolUse` と排他**（Issue #924 の実測分岐。#929）。理由は
+      // `#onPostToolUseFailure` の doc を見よ。
+      onPostToolUseFailure: (input) => this.#onPostToolUseFailure(input),
       onPreCompact: (input) => this.#onPreCompact(input),
       // **観測専用**（`worker_wait`）。`{ continue: true }` を返すだけで何も
       // ブロックしない。理由は `#onUserPromptSubmit` の doc を見よ。
@@ -3574,6 +3598,98 @@ class RunnerSession {
     });
 
     this.#recordBackgroundTaskOwner(hook.tool_response, hook.agent_id);
+
+    return { continue: true };
+  }
+
+  /**
+   * 失敗・中断した道具呼び出しの合図（`PostToolUseFailure`）を拾う（Issue #929）。
+   *
+   * **`#onPostToolUse` と排他である**（`#buildOptions` の `onPostToolUseFailure`
+   * の doc — clone.ts 側と同じ、出荷済みの SDK 実行体を実測して確認した排他
+   * 分岐。Issue #924）。⟹ 1回の道具呼び出しにつき、このハンドラと
+   * `#onPostToolUse` のどちらか一方だけが呼ばれる。
+   *
+   * ## なぜ `tool_use`（`outcome` 付き）ではなく `note` か
+   *
+   * `clone.ts` の `#journalToolUseFailure` は `tool_use` に `outcome` /
+   * `error` を足して残す。**ここではその形を写していない。** 理由は
+   * `RunnerEvent`（`runner-protocol.ts`）の `tool_use` を経由する先——
+   * 旧 daemon の `runnerEventSchema`——が **strict ではなく、未知の欄を
+   * 黙って落とす**ことにある（#929 の実測）。runner と daemon は別々に
+   * デプロイされ、入れ替わる順序は保証されない。⟹ 新 runner がこの回に
+   * `outcome: 'failed'` を足した `tool_use` を送っても、旧 daemon がまだ
+   * 動いていれば `outcome` は黙って落ち、**この回は「成功した」`tool_use`
+   * と区別が付かない形で日誌に残る。** 失敗を成功の顔で記録するのは、
+   * 1件も記録しないより悪い——後から読む側が「この道具は成功した」と
+   * 誤って信じる。
+   *
+   * **⟹ だから型（`runner-protocol.ts` の `tool_use`）は変えず、別の種別
+   * （`note`）で出す。** `note` はもともと自由文の `text` 欄を持ち、
+   * 旧 daemon の `case 'note'`（`manager.ts`）もそのまま日誌へ落とす経路が
+   * 在る——新しい欄を足す必要が無い。`text` の先頭を固定の接頭辞
+   * `TOOL_USE_FAILURE_NOTE_PREFIX` にして、後から機械的に拾えるようにする。
+   *
+   * **代償**: この形では、失敗した道具呼び出しは日誌の `tool_use` としては
+   * 数えられない（`note` として残る）。`journal-search.ts` 等が `tool_use`
+   * の件数で「自分で手を動かした回数」を数える場所からは、この回が漏れる。
+   *
+   * **(a)（`tool_use` に `outcome`/`error` を足す）へ移ってよい条件**: 以下の
+   * どちらかが成り立ったとき。
+   *
+   * 1. runner と旧 daemon が混在する窓が無いと示せたとき（両方が常に同じ
+   *    版でデプロイされる、または `runnerEventSchema` 側が先に strict へ
+   *    直っている）
+   * 2. 旧 daemon（`runnerEventSchema` が strict でない版）が退役したとき
+   *
+   * ## `#recordBackgroundTaskOwner` を呼ばない理由
+   *
+   * 成功側（`#onPostToolUse`）は `hook.tool_response` から背景タスクの所有者
+   * を控えるが、**ここでは呼ばない。** `PostToolUseFailureHookInput` には
+   * `tool_response` も `backgroundTaskId` を運べる欄も無い（#929 の
+   * 2026-09-13 の測定コメント——`sdk.d.ts` を逐語で確認し、`BaseHookInput` /
+   * `PostToolUseFailureHookInput` のどちらにもその欄が無いことを実測した）。
+   * **材料が無いので、呼んでも何も控えられない。** 呼ばないのは手抜きでは
+   * なく、入力の形がそもそも許していない。
+   *
+   * ## 自作ツールの除外
+   *
+   * **足していない。** 成功側の `#onPostToolUse` にも同種の除外
+   * （`clone.ts` の `cloneToolJournalsItself` 相当）が無いため——除外規則は
+   * 成功側と揃えることにしており、無い規則を失敗側にだけ新設しない。
+   *
+   * **`transcript_path` と `#toolsSinceResult` / `#markProgressed` は成功側と
+   * 同じ理由で拾う** —— `BaseHookInput` の欄で両方のフック入力に載るので、
+   * 直近の道具呼び出しが失敗した回だけこれらを拾わずにいると、次に成功する
+   * 道具呼び出しが来るまでのあいだ生ログの在り処や「自分で手を動かした
+   * 回数」が古いまま取り残される（`#onPostToolUse` の同じ2行と同じ理由）。
+   */
+  async #onPostToolUseFailure(input: unknown): Promise<{ continue: true }> {
+    const hook = input as Partial<PostToolUseFailureHookInput> | null | undefined;
+
+    if (typeof hook?.transcript_path === 'string') this.#transcriptPath = hook.transcript_path;
+    // 道具が動いた＝このセッションは生きている（成功側と同じ）。
+    this.#markProgressed();
+
+    // **`worker_wait.toolless` の材料。** マネージャー自身の道具だけを数える
+    // （成功側の `#onPostToolUse` と同じ理由・同じ判定）。
+    if (hook?.agent_id === undefined) this.#toolsSinceResult += 1;
+
+    const actor =
+      hook?.agent_id === undefined
+        ? `manager:${this.#id}`
+        : `worker:${this.#id}:${hook.agent_type ?? WORKER_AGENT_NAME}`;
+    const tool = hook?.tool_name ?? '(不明)';
+    const error =
+      typeof hook?.error === 'string'
+        ? excerptLine(hook.error, TOOL_USE_FAILURE_ERROR_EXCERPT)
+        : '(不明)';
+
+    this.#emit({
+      type: 'note',
+      managerId: this.#id,
+      text: `${TOOL_USE_FAILURE_NOTE_PREFIX} 道具=${tool}・actor=${actor}・error=${error}`,
+    });
 
     return { continue: true };
   }

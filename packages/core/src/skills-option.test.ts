@@ -58,6 +58,7 @@ function managerOptions(): Options {
     sessionStore,
     canUseTool,
     onPostToolUse: noopHook,
+    onPostToolUseFailure: noopHook,
     onPreCompact: noopHook,
     onUserPromptSubmit: noopHook,
     onSubagentStop: noopHook,

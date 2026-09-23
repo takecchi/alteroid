@@ -51,7 +51,7 @@ export const CLAUDE_PROVIDER: AgentProvider = {
   displayName: 'Claude',
   capabilities: {
     permissions: true, // runner.ts の #onPermission（canUseTool）
-    toolAudit: true, // clone.ts の #onPostToolUse・#onDistillToolUse・#onPostToolUseFailure・#onDistillToolUseFailure / runner.ts の #onPostToolUse（PostToolUse フック。runner.ts は PostToolUseFailure 未対応 — Issue #924 はクローン側の2箇所のみ）
+    toolAudit: true, // clone.ts の #onPostToolUse・#onDistillToolUse・#onPostToolUseFailure・#onDistillToolUseFailure / runner.ts の #onPostToolUse・#onPostToolUseFailure（Issue #924 はクローン側の2箇所、#929 で runner.ts 側も揃えた。ただし runner.ts 側の失敗は tool_use ではなく note として残る — runner.ts の #onPostToolUseFailure の doc）
     compactionHook: true, // clone.ts の #onPreCompact / runner.ts の #onPreCompact（PreCompact フック）
     resume: true, // buildCloneSessionOptions / buildManagerSessionOptions の Options.resume
     sessionLog: true, // buildCloneSessionOptions / buildManagerSessionOptions の Options.sessionStore
@@ -271,6 +271,17 @@ export interface ManagerSessionOptionsRequest {
   spawnClaudeCodeProcess?: (options: SpawnOptions) => SpawnedProcess;
   canUseTool: CanUseTool;
   onPostToolUse: HookCallback;
+  /**
+   * 失敗・中断した道具呼び出し（`PostToolUse` と排他）。Issue #929
+   * （クローン側の同じ形は `onPostToolUse` の doc の `buildCloneSessionOptions`
+   * 側 — Issue #924）。
+   *
+   * **optional にしない。理由は直上の `onPostToolUse` と同じ** — 省略できる
+   * 形にすると、provider を足す側が「渡さない」ことで観測を静かに落とせる
+   * （可観測性は要件である。PRD「可観測性」）。中身は `runner.ts` の
+   * `#onPostToolUseFailure` の doc を見よ。
+   */
+  onPostToolUseFailure: HookCallback;
   onPreCompact: HookCallback;
   /**
    * ターンの開始を数える観測専用のフック（`worker_wait`）。
@@ -353,6 +364,7 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     spawnClaudeCodeProcess,
     canUseTool,
     onPostToolUse,
+    onPostToolUseFailure,
     onPreCompact,
     onUserPromptSubmit,
     onSubagentStop,
@@ -436,6 +448,12 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
       // `#onPreToolUse` の doc を見よ。
       PreToolUse: [{ hooks: [onPreToolUse] }],
       PostToolUse: [{ hooks: [onPostToolUse] }],
+      // **`PostToolUse` とは排他で発火する**（Issue #924 が出荷済みの SDK
+      // 実行体を実測して確認した排他分岐。`buildCloneSessionOptions` の
+      // `PostToolUseFailure` の doc と同じ）。⟹ 道具呼び出し1回につきどちらか
+      // 一方だけが呼ばれる。**片方だけ登録しない道は無い** — 失敗・中断した
+      // 道具呼び出しが日誌に1件も残らなくなる（Issue #929）。
+      PostToolUseFailure: [{ hooks: [onPostToolUseFailure] }],
       PreCompact: [{ hooks: [onPreCompact] }],
       // **観測専用**（`worker_wait`）。`{ continue: true }` を返すだけで何も
       // ブロックしない。理由は `runner.ts` の `#onUserPromptSubmit` の doc を見よ。
