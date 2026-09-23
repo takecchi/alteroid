@@ -2805,6 +2805,22 @@ interface UsageNoticeMemory {
    * 事実そのものが観測から消える。
    */
   folded: number;
+  /**
+   * 畳んだ回に関わった managerId の集合（#1397 c15-3。出所は #916
+   * issuecomment-5649544167 の置き換えコメント §3）。
+   *
+   * **畳み鍵（`(kind, text)`）はこれではない——ここは集計専用で、判定には
+   * 使わない。** 畳むこと自体は正しい設計である（`case 'usage_notice'`
+   * 冒頭の doc: 「同じアカウントの同じ事実なのだから、1回配れば十分」）。
+   * 欠陥は、畳んだ結果「何本の *異なる* マネージャーが同じ壁に当たっているか」
+   * が `folded`（素の件数）だけでは読めなくなることだった——同じ managerId が
+   * 100 回当たっても、100 本の別々の managerId が1回ずつ当たっても、
+   * `folded` はどちらも 100 になり見分けがつかない。
+   *
+   * **`folded` と同じタイミングで空集合へ戻す。** 別の文言（同じ `kind` の
+   * 新しい `text`）に切り替わった時点で、それはもう別の壁である。
+   */
+  foldedManagers: Set<string>;
 }
 
 /**
@@ -8556,6 +8572,12 @@ class Pool implements ManagerPool {
           // 「同じ事象だから捨てた」が跡形も無くなり、後から「なぜ1回しか
           // 届いていないのか」を誰も辿れない（AGENTS.md「静かに失敗する道具」）。
           memory.folded += 1;
+          // **畳んだ回に関わった managerId を集合へ足す（#1397 c15-3）。**
+          // `folded` は件数だけを持つので、同じ managerId が何度当たっても・
+          // 複数の managerId が当たっても同じ増え方をする——「何本の異なる
+          // マネージャーが当たっているか」を別に持たないと、配る側で
+          // 集合の大きさに戻せない（`UsageNoticeMemory.foldedManagers` の doc）。
+          memory.foldedManagers.add(event.managerId);
           await this.#journal({
             type: 'exchange',
             with: 'manager',
@@ -8572,6 +8594,10 @@ class Pool implements ManagerPool {
         memory.delivered.set(event.notice.text, true);
         const folded = memory.folded;
         memory.folded = 0;
+        // **`folded` と同じタイミングで、関わった managerId の集合も取り出して
+        // 空へ戻す**（`UsageNoticeMemory.foldedManagers` の doc）。
+        const foldedManagers = memory.foldedManagers;
+        memory.foldedManagers = new Set();
         await this.#journal({
           type: 'exchange',
           with: 'manager',
@@ -8590,7 +8616,8 @@ class Pool implements ManagerPool {
           folded === 0
             ? text
             : `${text}\n（前にこの種類を知らせてから、配達済みの同じ文言を ` +
-                `${folded} 件畳んでいる。全件は日誌に残っている。）`,
+                `${folded} 件畳んでいる。そのうち ${foldedManagers.size} 本の異なる` +
+                `マネージャーが当たっている。全件は日誌に残っている。）`,
         );
         // **計器（#914 提案(2)）はここで最後に回す。配達より後ろである。**
         // 理由はこの `case` の冒頭の doc と同じ——`usage_notice` と `report` は
@@ -9467,6 +9494,7 @@ class Pool implements ManagerPool {
         },
       }),
       folded: 0,
+      foldedManagers: new Set(),
     };
     this.#usageNotices.set(kind, memory);
     return memory;
