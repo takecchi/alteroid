@@ -1321,6 +1321,27 @@ class RunnerSession {
   /** このターンで `UserPromptSubmit` がマネージャー自身に発火した回数（`result` で畳む）。 */
   #submitsSinceResult = 0;
   /**
+   * このターンの中で1度でも `task_started`（`delegation_started`）を観測した
+   * 作業者の taskId（`result` で畳む。#1373）。
+   *
+   * **`#openTasks`（`worker_wait` の区間の在り高）とは別の数え方である。**
+   * `result` が来る時点では作業者はもう終わっていることが多く、「ターンの
+   * 終わりに開いている数」ではなく「ターンの中で1度でも開いたことがある数」を
+   * 数える —— 委譲の下で動く作業者が枠（429）に当たったとき、デーモンが
+   * それを委譲本体（マネージャー）のターンの失敗として名乗ってしまう問題
+   * （Issue #1373）に、状況証拠を1つ足すための数である。
+   *
+   * **同じ taskId を2度数えない**（`Set`。`#onTaskStarted` が provider の
+   * 名乗った id、無ければ `randomUUID()` の代用値をそのまま足す）。
+   *
+   * `failedReportText` はこの値（`.size`）が1以上のときだけ「このターンでは
+   * 作業者が N 体開いていた」という1行を本文に添える。**これは判定ではない**
+   * —— SDK の `result` は「誰の言葉が最後だったか」を運べる形をしていないので
+   * （Issue #1373 の調査）、どちらの層が枠に当たったかは決められない。断定を
+   * 増やさず、状況証拠だけを渡す。
+   */
+  #openedWorkersThisTurn = new Set<string>();
+  /**
    * 背景タスクの id → **それを起こした主体**（#570）。
    *
    * 値は作業者の `agent_id`。**マネージャー自身が起こしたものは空文字 `''`**
@@ -2724,11 +2745,15 @@ class RunnerSession {
         const toolsThisTurn = this.#toolsSinceResult;
         const submitsThisTurn = this.#submitsSinceResult;
         const sourcesThisTurn = this.#submitSources;
+        // **#1373: 同じ区切りで畳む。** `#openedWorkersThisTurn` の doc の
+        // とおり、持ち越すと前のターンで開いた作業者が次のターンの N に混ざる。
+        const openedWorkersThisTurn = this.#openedWorkersThisTurn.size;
         this.#inputsSinceResult = 0;
         this.#notificationsSinceResult = 0;
         this.#toolsSinceResult = 0;
         this.#submitsSinceResult = 0;
         this.#submitSources = new Map();
+        this.#openedWorkersThisTurn = new Set();
 
         // **`#window` が非 null なのは、区間が開いている（`#openTasks` が非空）か
         // 閉じ待ち（`#windowClosing`）のときだけ**である。委譲の外で起きたターン
@@ -2901,7 +2926,12 @@ class RunnerSession {
           failure === undefined
             ? reportText(said, resultTextOf(event))
             : {
-                text: failedReportText(said, failure, resultTextOf(event).text),
+                text: failedReportText(
+                  said,
+                  failure,
+                  resultTextOf(event).text,
+                  openedWorkersThisTurn,
+                ),
                 contentless: false,
               };
         this.#status = this.#pending.length > 0 ? 'waiting_human' : 'done';
@@ -2988,6 +3018,9 @@ class RunnerSession {
     // （他の道具の `brief`/`randomUUID` 系の判断と同じ）。**代用値をここで作るのは、
     // 何で埋めるかが層の判断だからである**（`agent-events.ts` の doc）。
     const taskId = event.taskId ?? randomUUID();
+    // **#1373: `#openTasks` の開閉とは無関係に、このターンで開いた作業者を
+    // 別勘定で数える。** `#openedWorkersThisTurn` の doc を参照。
+    this.#openedWorkersThisTurn.add(taskId);
     if (this.#openTasks.size === 0 && this.#window !== null) {
       // 閉じ待ちの間に次の委譲が始まった。**同じ区間として続ける** — ここで
       // 新しい区間を開き直すと、閉じていない集計を上書きして消してしまう。
@@ -4918,10 +4951,30 @@ function unreportedText(said: readonly string[], reason: string): string {
  * **SDK の文言は言い換えず、そのまま残す**（`usage-limits.ts` の約束と同じ。
  * 人間が検索できる形で残す）。**途中まで出ていた本文も捨てない** — 上限に
  * 当たるまでに何をやったかは、次に何を頼み直すかを決める材料である。
+ *
+ * **`openedWorkers` が1以上のときだけ、状況証拠の1行を足す（Issue #1373）。**
+ * 委譲の下で動く作業者が枠（429）に当たったとき、デーモンはそれを委譲本体
+ * （マネージャー）のターンの失敗として名乗る——本体が枠に当たった場合と
+ * 文言が同じなので、クローンからはどちらの層が塞がっているか区別できない。
+ * SDK の `result` は「誰の言葉が最後だったか」を運べる形をしていないので、
+ * ここで判定はしない（`describeManagerFailure` へ文言からの読み取りを足す
+ * のではなく、runner が持っている「このターンで何体開いたか」をそのまま
+ * 添えるだけである）。**0のときは1文字も足さない**（`AGENTS.md`「取れない
+ * 軸に0の行を作らない」と同じ理由——委譲と無関係なターンにまでこの行が
+ * 付くと、無関係な失敗まで作業者絡みに見える）。
  */
-function failedReportText(said: readonly string[], failure: SdkFailure, result: string): string {
+function failedReportText(
+  said: readonly string[],
+  failure: SdkFailure,
+  result: string,
+  openedWorkers: number,
+): string {
   const body = failure.text.length > 0 ? failure.text : result;
-  const head = `（このターンは応答を返さずに終わった: ${failure.code} / ${failure.via}）\n${body}`;
+  const workerNote =
+    openedWorkers > 0
+      ? `\n（このターンでは作業者が ${String(openedWorkers)} 体開いていた。どちらが当たったかは SDK からは分からない）`
+      : '';
+  const head = `（このターンは応答を返さずに終わった: ${failure.code} / ${failure.via}）\n${body}${workerNote}`;
   const partial = said.join('\n\n').trim();
   return partial.length === 0 ? head : `${head}\n\n（失敗する前に出ていた本文）\n${partial}`;
 }
