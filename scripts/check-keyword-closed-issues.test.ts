@@ -313,8 +313,18 @@ describe('findKeywordClosedCandidates — Alteroid-Issue-Done trailer で閉じ�
 
   it('#1195・#1198 とも候補から消える（trailer で閉じたと判定する）', () => {
     const closeEvents = [
-      { issueNumber: 1195, closedAt: '2026-09-19T22:02:33Z', commitId: null, actor: 'github-actions[bot]' },
-      { issueNumber: 1198, closedAt: '2026-09-19T22:02:35Z', commitId: null, actor: 'github-actions[bot]' },
+      {
+        issueNumber: 1195,
+        closedAt: '2026-09-19T22:02:33Z',
+        commitId: null,
+        actor: 'github-actions[bot]',
+      },
+      {
+        issueNumber: 1198,
+        closedAt: '2026-09-19T22:02:35Z',
+        commitId: null,
+        actor: 'github-actions[bot]',
+      },
     ];
     const result = findKeywordClosedCandidates({ mergedPRs, closeEvents }) as Candidate[];
     expect(result).toEqual([]);
@@ -423,7 +433,12 @@ describe('findKeywordClosedCandidates — やりすぎを落とす歯: 過去に
       // 短いが、意図的にこの値を選んでいる: 5秒は「名乗る PR を見ずに actor も見ない」
       // 旧実装でも「最寄りのマージ」として拾ってしまう距離（閾値10秒以内）なので、
       // ここを訂正できていることが red→green の変化として見える。
-      { issueNumber: 700, closedAt: '2026-01-01T00:00:05Z', commitId: null, actor: 'github-actions[bot]' },
+      {
+        issueNumber: 700,
+        closedAt: '2026-01-01T00:00:05Z',
+        commitId: null,
+        actor: 'github-actions[bot]',
+      },
       // reopen された後、2回目: 別の PR がキーワードで閉じた（人間のトークン）。候補に残るべき。
       { issueNumber: 700, closedAt: '2026-02-01T00:00:02Z', commitId: null, actor: 'takecchi' },
     ];

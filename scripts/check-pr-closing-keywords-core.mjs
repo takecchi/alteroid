@@ -413,6 +413,51 @@ function analyzeLine(lineText, lineIndex, ctx) {
 }
 
 /**
+ * テキストが「閉じるキーワード＋参照」で名乗っている Issue 番号だけを取り出す
+ * （場所による分類はしない）。**`check-keyword-closed-issues-core.mjs`（#1128）が
+ * 使い回すために export している。**
+ *
+ * `findClosingKeywordOccurrences` との違い: あちらが返すのは「安全でない形」
+ * だけである——`Closes #123` のような「通す形」（`PURE_LINE_PATTERN` に一致する
+ * 単独行）は、GitHub が実際に閉じるにもかかわらず findings から除外される
+ * （この门の目的が「危ない形を警告する」ことだからである）。#1128 の道具が
+ * 知りたいのは逆——「この PR がどの Issue 番号を閉じるキーワードで名乗ったか」
+ * であり、安全な形も危ない形も同じように GitHub を閉じさせるので、両方を
+ * 数える必要がある。**同じ `OCCURRENCE_PATTERN`（＝同じ `KEYWORD_SOURCE` /
+ * `GAP_SOURCE` / `REFERENCE_SOURCE`）を再利用する**——新しい正規表現は書かない。
+ *
+ * 行ごとに走査する（`OCCURRENCE_PATTERN` の `GAP_SOURCE` は `\s` を含むので、
+ * テキスト全体に対して1つの正規表現として回すと、行をまたいだ「キーワード
+ * （行末）+ 参照（次の行頭）」のような偶然の一致を作りかねない。行単位に
+ * 割ることで、この门の他の関数（`analyzeLine` 等）と同じ前提を保つ）。
+ *
+ * 参照の数値は、一致文字列の末尾の連続した数字で取る（`#123` / `GH-123` /
+ * `owner/repo#123` / issue の URL のどれでも、`REFERENCE_SOURCE` の定義上
+ * 末尾は必ず `\d+` で終わるため）。**`owner/repo#123` の形は他 repo の Issue
+ * を指しうるが、この関数は repo を区別しない**——呼び出し側
+ * （`check-keyword-closed-issues-core.mjs`）は単一 repo だけを扱うので、
+ * 他 repo 参照との衝突は理論上あり得るが実測はしていない。
+ *
+ * @param {string|null|undefined} text
+ * @returns {number[]} 昇順・重複無しの Issue 番号
+ */
+export function extractClosingKeywordReferences(text) {
+  if (typeof text !== 'string' || text.length === 0) return [];
+  const numbers = new Set();
+  const trailingDigits = /(\d+)$/;
+  for (const line of text.split('\n')) {
+    OCCURRENCE_PATTERN.lastIndex = 0;
+    let match;
+    while ((match = OCCURRENCE_PATTERN.exec(line)) !== null) {
+      const digitsMatch = trailingDigits.exec(match[0]);
+      if (digitsMatch) numbers.add(Number(digitsMatch[1]));
+      if (match[0].length === 0) OCCURRENCE_PATTERN.lastIndex++;
+    }
+  }
+  return [...numbers].sort((a, b) => a - b);
+}
+
+/**
  * テキスト中の「閉じるキーワード＋参照」出現を、通る行を除いて全部返す。
  * `text` が文字列でない・空文字なら空配列（例外にしない）。
  *

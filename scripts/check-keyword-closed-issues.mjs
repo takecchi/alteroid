@@ -19,11 +19,22 @@
  *
  * ## この道具が言えること・言えないこと
  *
- * - **言えること**: 呼ばれた時点で、`main` にマージ済みの PR のマージ時刻と
- *   Issue の `closed` イベントを突き合わせ、「閉じるキーワードで閉じた」と
- *   推測できる組を一覧する。
- * - **言えないこと**: **意図した閉じ方か事故かの区別。** timeline のデータ
- *   だけからはこの2つを区別できない（#1128）。出力にもその区別を書かない。
+ * - **言えること**: 呼ばれた時点で、`main` にマージ済みの PR のマージ時刻・
+ *   本文と、Issue の `closed` イベントを突き合わせ、「閉じるキーワードで閉じた」
+ *   と推測できる組を一覧する。**`Alteroid-Issue-Done` trailer で閉じたと判定
+ *   できる分は候補から除く**（#1128 コメント 2026-09-23。条件と実測根拠は
+ *   core の doc コメント）。
+ * - **言えないこと（変わらない）**: **意図した閉じ方か事故かの区別。** trailer
+ *   で閉じた分を除いても、残る候補（閉じるキーワードで閉じた疑いのある分）は
+ *   やはり「意図どおり」と「事故」の両方を含みうる——timeline と PR 本文の
+ *   データだけからはこの2つを区別できない（#1128）。出力にもその区別を書かない。
+ * - **言えないこと（新規）**: 手で閉じたのがマージと偶然重なっただけの形
+ *   （PR が Issue 番号を1文字も名乗っていない場合。実測: #1003 → PR #1126、
+ *   #1050 → PR #1143）は、trailer 判定にもキーワード判定にも掛からないので
+ *   引き続き「候補に残るが理由は分からない」。**コミットメッセージそのものは
+ *   読まない**（squash マージのみの repo なので PR 本文で近似する。近似の
+ *   限界は core の doc コメント）。**PR タイトルも読まない**（実測でタイトルに
+ *   キーワード＋参照の隣接を持つ例が無かったため、複雑さに見合わないと判断）。
  * - **書き換えない。** 読むだけである。Issue にも PR にもコメントしない。
  *
  * ## 使い方
@@ -101,6 +112,18 @@ function ghRun(args) {
  * マージ済み PR の一覧を取る。**`--state all` は要らない**（`merged` 専用の
  * state が既にある）が、`--limit` は「静かに取りこぼす」道具なので
  * `AGENTS.md`「静かに失敗する道具」どおり明示的に大きい値を渡す。
+ *
+ * **`body` も取る**（#1128 コメント 2026-09-23 の決定）——trailer
+ * （`Alteroid-Issue-Done`）や閉じるキーワードで、この PR がどの Issue 番号を
+ * 名乗っているかを判定するのに要る（判定そのものは core の
+ * `findKeywordClosedCandidates` が持つ。ここは取得するだけ）。**コミット
+ * メッセージそのものは取らない**——この repo は squash マージのみを許可して
+ * いる（`gh api repos/<repo> --jq '{allow_squash_merge,allow_merge_commit,
+ * allow_rebase_merge}'` で確認済み。実測は core の doc コメント）ので、
+ * マージコミットのメッセージは実質「PR タイトル＋本文」であり、全件のコミット
+ * メッセージを別途取りに行く費用（`gh api repos/<repo>/commits/<sha>` を
+ * PR の数だけ叩く）に見合わない。**この近似の限界（reflow で行の折返しが
+ * ずれる可能性）は core の doc コメントに書いてある。**
  */
 function fetchMergedPRs(repo) {
   const { stdout, error } = ghRun([
@@ -113,7 +136,7 @@ function fetchMergedPRs(repo) {
     '--limit',
     '1000',
     '--json',
-    'number,mergedAt,mergeCommit',
+    'number,mergedAt,mergeCommit,body',
   ]);
   if (stdout === null) return { data: null, error };
   const parsed = JSON.parse(stdout);
@@ -124,6 +147,7 @@ function fetchMergedPRs(repo) {
         number: p.number,
         mergedAt: p.mergedAt,
         mergeCommitOid: typeof p.mergeCommit?.oid === 'string' ? p.mergeCommit.oid : null,
+        body: typeof p.body === 'string' ? p.body : '',
       })),
     error: null,
   };
