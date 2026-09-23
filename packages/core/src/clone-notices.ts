@@ -318,12 +318,7 @@ export class CloneNotices {
  * 反復の断り書きが誤って持ち越される。
  */
 export type TurnNoticeKey =
-  | 'redelivery'
-  | 'superseded'
-  | 'validity'
-  | 'mergedBatchTruncation'
-  | 'commitment'
-  | 'situation';
+  'redelivery' | 'superseded' | 'validity' | 'mergedBatchTruncation' | 'commitment' | 'situation';
 
 const TURN_NOTICE_KEYS: readonly TurnNoticeKey[] = [
   'redelivery',

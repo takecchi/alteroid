@@ -79,7 +79,8 @@ describe('CloneNotices — 人間へ返す1行の畳み（foldHumanFailure / for
   it('違う文言が来たら畳まず null を返し、記録を新しい文言へ進める（folded は0から再スタート）', () => {
     const notices = new CloneNotices();
     const first = 'いま利用上限に当たっているので、この発言にはまだ返せない。';
-    const second = 'いま利用上限に当たっているので、この発言にはまだ返せない（文脈窓にも当たった）。';
+    const second =
+      'いま利用上限に当たっているので、この発言にはまだ返せない（文脈窓にも当たった）。';
 
     expect(notices.foldHumanFailure('conv-1', first)).toBeNull();
     expect(notices.foldHumanFailure('conv-1', first)).toBe(1);
