@@ -156,16 +156,13 @@ function compareOldestFirst(a: ArchiveEntry, b: ArchiveEntry): number {
  * **本番相当の EXPLAIN 実測**では、`body` に触れない走査は `shared hit=1 /
  * 0.25ms`、`length(body)` を足すと `shared hit=156 / 304ms`。⟹ 危ないのは
  * 索引の不在ではなく「消す対象の確認で `body` まで取得する」運用のほうで
- * ある。**この実測は `main` に無い。出典は issue #698 のコメントである**
- * （`STAGE1-698-FINDINGS.md` の全文が写してある。逐語 `消す対象の確認で`
- * で当たる: https://github.com/takecchi/alteroid/issues/698#issuecomment-5785357240）。
- *
- * ⚠️ **ここはかつて枝 `investigate/698-archive-stage1` を `git show` で
- * 指していたが、その枝は 2026-09-20 に削除されて出典が死んだ**（経緯は
- * issue #1303）。枝の先端 `0d37b476961b2c56948e672d59edaeb821b103b0` は
- * `git fetch --depth=1 origin <40桁sha>` でいまも取れるが（短縮 sha では
- * 落ちる）、**どの ref からも到達できないオブジェクトなので GitHub の
- * 後片付けで消えうる。⟹ 恒久の出典は issue の側にしか無い。**
+ * ある。**この実測を載せていた枝 `investigate/698-archive-stage1` は
+ * 2026-09-20 の枝の棚卸し（#1231）で削除済みである。**全文は #698 の
+ * コメントへ救出してあり、枝を経由しない次の2つで読める（どちらも確認済み）:
+ * - https://github.com/takecchi/alteroid/issues/698#issuecomment-5785357240
+ * - `git fetch origin 0d37b476961b2c56948e672d59edaeb821b103b0` の後に
+ *   `git show 0d37b476961b2c56948e672d59edaeb821b103b0:STAGE1-698-FINDINGS.md`
+ *   を `grep -F -- '消す対象の確認で'`（枝は消えているがコミットは残っている）
  *
  * ## 全体の流れ（この順で処理する。⛔ 順序を変えない）
  *
@@ -313,19 +310,18 @@ function compareOldestFirst(a: ArchiveEntry, b: ArchiveEntry): number {
  *
  * 候補（上の5に落ちた行）をセッションをまたいで古い順に並べ直し、`limit`
  * 件まで `targets` に採る。**「いちばん遡りたいものから失う」を避けるため
- * 新しい順ではなく古い順に採る**——`main` に無い設計文書
- * （`DESIGN-698-STAGE2.md`）が「齢（保持期間）で切る」を退けた理由の
- * 裏返しである。**出典は issue #698 のコメント**（全文が写してある。逐語
- * `いちばん遡りたいものから失う` で当たる:
- * https://github.com/takecchi/alteroid/issues/698#issuecomment-5785357240）。
+ * 新しい順ではなく古い順に採る**——設計文書が「齢（保持期間）で切る」を
+ * 退けた理由の裏返しである。**その設計文書を載せていた枝
+ * `investigate/698-stage0-mechanism` は 2026-09-20 の枝の棚卸し（#1231）で
+ * 削除済みである。**全文は #698 のコメントへ救出してあり、枝を経由しない
+ * 次の2つで読める（どちらも確認済み）:
+ * - https://github.com/takecchi/alteroid/issues/698#issuecomment-5785357240
+ * - `git fetch origin b5735bc54e88efac58b6faa705db4c5bcab22ec9` の後に
+ *   `git show b5735bc54e88efac58b6faa705db4c5bcab22ec9:DESIGN-698-STAGE2.md`
+ *   を `grep -F -- 'いちばん遡りたいものから失う'`（枝は消えているがコミットは残っている）
  *
- * ⚠️ **ここもかつて枝 `investigate/698-stage0-mechanism` を `git show` で
- * 指していたが、その枝は 2026-09-20 に削除されて出典が死んだ**（#1303）。
- * 先端 `b5735bc54e88efac58b6faa705db4c5bcab22ec9` はいまも 40 桁 sha なら
- * fetch できるが、到達不能オブジェクトなので残り続ける保証は無い。
- *
- * 一括で溢れさせるときも、
- * 古い行を優先して確実に対象へ入れる。溢れた件数は `remaining`。
+ * 一括で溢れさせるときも、古い行を優先して確実に対象へ入れる。溢れた件数は
+ * `remaining`。
  */
 export function selectArchiveRemovalTargets(
   entries: readonly ArchiveEntry[],
