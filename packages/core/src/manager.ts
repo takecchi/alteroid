@@ -26,6 +26,7 @@ import {
 import { classifyManagerActivity, describeManagerActivityForFlush } from './manager-activity.js';
 import type { ManagerActivityInput } from './manager-activity.js';
 import { codeSpan } from './markdown-span.js';
+import { JournalFoldWindow, foldedRunText } from './journal-fold.js';
 import type { CredentialService } from './credential-service.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap, type RecentMap } from './recent.js';
@@ -3675,6 +3676,23 @@ class Pool implements ManagerPool {
    * **タイマーは持たない**（窓のタイマーは `#synthesizedNotices` の側にある）。
    */
   readonly #synthesizedNoticeStreaks = new Map<string, SynthesizedNoticeStreak>();
+  /**
+   * **枠の遷移を日誌へ書くときの畳み込み**（{@link JournalFoldWindow}、issue #1311）。
+   *
+   * ⚠️ **これは受信箱（{@link SynthesizedNoticeStreak}）とは別物である。**あちらが
+   * 畳むのは「クローンへ配るかどうか」で、**日誌の行数には1行も効かない。**
+   * こちらは**日誌へ書く行そのもの**を畳む。⟹ **配る側の判定は1ビットも変えない**
+   * （下の `#queueSynthesizedNotice` は畳みの結果に関わらず必ず通る）。
+   *
+   * **managerId ごとに1本持つ。** 署名に managerId が入っているので混ざらないが、
+   * 窓を共有すると別の委譲の合図が交互に来たときに連なりが切れて**どちらも
+   * 畳まれなくなる**——枠(429)の氾濫は複数の委譲へ同時に来るので、そこが
+   * いちばん効いてほしい場面である。
+   *
+   * **寿命は `#synthesizedNoticeStreaks` と同じ**——委譲1本につき1件、終端すれば
+   * `#retire()` が**畳み残しを吐き出してから**外す（上限が要らないのはこのため）。
+   */
+  readonly #rateLimitJournalFolds = new Map<string, JournalFoldWindow>();
   /** 起動時の引き取りが走っている間だけ立つ。`#reattach` はこれを待つ。 */
   #restoring: Promise<void> | null = null;
   /**
@@ -6251,6 +6269,12 @@ class Pool implements ManagerPool {
     // （`#emit` を経由しない直接の `#deliver` 呼び出しなので、この後で
     // `#unsubscribe` / `runner.close()` が何を壊しても post 自体はもう済んでいる）。
     this.#flushSynthesizedNotices();
+    // **日誌の畳み込みも同じ理由で吐き出す**（{@link JournalFoldWindow}、issue #1311）。
+    // ⚠️ **こちらは直上より切実である** —— 受信箱の帳面が失うのは「次に配る1件へ
+    // 載せる予定だった件数」だが、**こちらが失うのは日誌のどこにも書かれていない
+    // 記録そのもの**である。`#retire()` を通らずに止まる（＝走行中の委譲を抱えた
+    // まま落ちる）と、畳んだ2件目以降が丸ごと消える。
+    this.#flushRateLimitJournalFolds();
     // 名簿の購読も畳む（載り続ける runner に、止めたプールが繋ぎに行かない）。
     this.#unsubscribe();
     // 予約してあった取り直しは畳む（止めたはずのプールが後から動かない）。
@@ -8677,12 +8701,39 @@ class Pool implements ManagerPool {
             ? `枠を使い切って課金枠から引き始めた（${kind}）。**まだ動くが、この先で止まる。**${reason}`
             : `枠から追い返された（${kind}）。この枠ではもう通らない。${reason}`;
         };
-        await this.#journal({
-          type: 'exchange',
-          with: 'manager',
-          role: 'inbound',
-          text: `[${event.managerId}] ${build((s) => s)}`,
-        });
+        // **同じ本文の連なりは日誌へ1行にまとめる**（{@link JournalFoldWindow}、
+        // issue #1311）。本番では**同じ本文が4時間で162行・間隔 4.6〜8.2 秒**
+        // 積まれており、`journal` が DB 最大（4,394 MB・約 1.9 GB/日）になった
+        // 一因である。⭐ **1件目は必ず書く**ので「起きた」が消える瞬間は無く、
+        // 2件目以降だけを畳んで、窓が閉じるときに件数と本文を1行で残す。
+        //
+        // ⛔ **配る側（下の `#queueSynthesizedNotice`）は1ビットも変えない。**
+        // あちらは `usageTransitionOf` の**状態**に基づく判定を既に通っており、
+        // そこへ文字列一致の畳み込みを重ねると状態ベースの判定を上書きして
+        // 壊す（{@link isCrossWindowStreakEligible} の doc が記録している
+        // 2026-09-14 の実測）。**ここで畳むのは日誌の行だけである。**
+        const journalText = `[${event.managerId}] ${build((s) => s)}`;
+        const folded = this.#rateLimitJournalFoldFor(event.managerId).observe(
+          journalText,
+          journalText,
+          this.#now(),
+        );
+        if (folded.flush !== undefined) {
+          await this.#journal({
+            type: 'exchange',
+            with: 'manager',
+            role: 'inbound',
+            text: foldedRunText(folded.flush),
+          });
+        }
+        if (folded.write) {
+          await this.#journal({
+            type: 'exchange',
+            with: 'manager',
+            role: 'inbound',
+            text: journalText,
+          });
+        }
         // **即配らず合流窓へ積む（「一枠落ち一合図」）。** この文言は
         // `manager.ts` 自身が組み立てた機構の合成であり、マネージャー本人の
         // 発話を含まない——`#queueSynthesizedNotice` の doc。
@@ -10030,6 +10081,59 @@ class Pool implements ManagerPool {
     // 記録ではない**——配らなかった束は1つずつ `#journal` に残っている
     // （`#flushSynthesizedNoticeFor`）ので、`journal_read` で全部引ける。
     this.#synthesizedNoticeStreaks.delete(managerId);
+    // **日誌の畳み込みは、外す前に畳み残しを吐き出す**（{@link JournalFoldWindow}、
+    // issue #1311）。⚠️ **上の受信箱の帳面と違って、ここで消えるのは「記録」で
+    // ある** —— 畳んだ2件目以降は**まだ日誌のどこにも書かれていない**ので、
+    // 黙って捨てると件数が失われる。⟹ **必ず吐いてから外す。**
+    const foldedAtRetire = this.#rateLimitJournalFolds.get(managerId)?.flush();
+    if (foldedAtRetire !== undefined) {
+      void this.#journal({
+        type: 'exchange',
+        with: 'manager',
+        role: 'inbound',
+        text: foldedRunText(foldedAtRetire),
+      });
+    }
+    this.#rateLimitJournalFolds.delete(managerId);
+  }
+
+  /**
+   * 枠の遷移を日誌へ書くときの畳み込みを、委譲ごとに1本用意する
+   * （{@link JournalFoldWindow}、issue #1311）。
+   *
+   * 上限を持たないのは、**外す契機が `#retire()` に在る**からである
+   * （委譲1本につき1件、終端すれば畳み残しを吐いてから消える）。
+   */
+  #rateLimitJournalFoldFor(managerId: string): JournalFoldWindow {
+    const existing = this.#rateLimitJournalFolds.get(managerId);
+    if (existing !== undefined) return existing;
+    const created = new JournalFoldWindow();
+    this.#rateLimitJournalFolds.set(managerId, created);
+    return created;
+  }
+
+  /**
+   * 開いている畳み込みを全部吐き出す（止まるとき。{@link JournalFoldWindow}）。
+   *
+   * **`#flushSynthesizedNotices` と対になる。** あちらが配達の取りこぼしを
+   * 防ぐのに対し、こちらは**日誌の記録の取りこぼし**を防ぐ。
+   *
+   * `void` で投げるのは `#retire()` の吐き出しと同じ理由である —— 止める手を
+   * 日誌の書き込みで待たせない（書けなければ `#journal` が `noteDroppedRecord`
+   * で跡を残す）。
+   */
+  #flushRateLimitJournalFolds(): void {
+    for (const fold of this.#rateLimitJournalFolds.values()) {
+      const flushed = fold.flush();
+      if (flushed === undefined) continue;
+      void this.#journal({
+        type: 'exchange',
+        with: 'manager',
+        role: 'inbound',
+        text: foldedRunText(flushed),
+      });
+    }
+    this.#rateLimitJournalFolds.clear();
   }
 
   async #journal(entry: JournalEntryInput): Promise<void> {

@@ -1,4 +1,5 @@
 import { excerptLine } from './excerpt.js';
+import { scanJournalPages } from './journal-scan.js';
 // **型だけを取る**（`import type` は実行時に消えるので、`manager.ts` との間に
 // 実行時の循環を作らない）。字面の生成元をここに置く理由は
 // `describeSessionMissingKind` の doc に在る。
@@ -39,6 +40,123 @@ export interface DigestWindow {
  * あるのはテストが期待件数を計算するためで、`index.ts` からは出していない。
  */
 export const MAX_ITEMS = 15;
+
+/**
+ * 日誌から材料を集めるときに**種別ごとに保持する**件数の上限（issue #1283）。
+ *
+ * ## 直している穴
+ *
+ * 直す前の `buildActivityDigest` は `stores.journal.list({ since })` を
+ * `limit` なしで呼び、窓の全行を本文ごと1配列へ載せていた。pg 実装は `limit`
+ * 省略時に `Number.MAX_SAFE_INTEGER` を渡す
+ * （`grep -Fn -- 'query.limit ?? Number.MAX_SAFE_INTEGER' packages/storage-pg/src/journal.ts`）
+ * ので、窓の中身が多い日（実測: ある1日で約247万行・約1.4GB）にそれを1クエリで
+ * ヒープへ載せようとして落ちる。
+ *
+ * ## `MAX_ITEMS` より十分大きくしてある理由
+ *
+ * 一覧に出す詳細は `MAX_ITEMS`（15）件で足りるが、`.slice(0, MAX_ITEMS)` を
+ * 直接この保持上限にすると、**新しい側から数えて16件目以降が同じ日の
+ * うちに何度も入れ替わる**（`desc` で走査する以上、保持したぶんの先頭
+ * `MAX_ITEMS` 件は必ず「本当に新しい `MAX_ITEMS` 件」と一致するが、それを
+ * 確かめる余地——`omitted()` へ渡す「実際に保持できた件数」との差——が
+ * 無くなる）。**200 にしてあるのは、`MAX_ITEMS` の約13倍という安全率**で、
+ * 通常の digest の窓（1日〜数日）でこの上限に当たる種別はまず無い——
+ * 当たらない限り、この digest の出力（件数・一覧のどちらも）は直す前と
+ * 1文字も変わらない（`buildActivityDigest` 本体の doc を参照）。
+ */
+export const DIGEST_RETAIN_LIMIT = 200;
+
+/**
+ * 日誌の走査そのものに掛ける、1回の `buildActivityDigest` あたりの総件数の
+ * 上限（issue #1283）。
+ *
+ * ## なぜ「保持の上限」とは別に要るか
+ *
+ * `DIGEST_RETAIN_LIMIT` はヒープに残す量を抑えるが、**走査そのもの
+ * （`journal.list()` の呼び出し回数）は抑えない**——ページを読み継ぐ形に
+ * しただけでは、247万行の窓を1ページ（`JOURNAL_SCAN_PAGE_SIZE`）ずつ
+ * 読み切るのに約5,000回のクエリが走る（起動時の日報の後追い生成が、この
+ * 回数を1度に払うことになる）。⟹ **走査そのものにも上限を置き、超えたら
+ * 「打ち切った」と名乗って止まる。**
+ *
+ * ## 値の選び方——**普通の日に当たってはいけない**
+ *
+ * この上限に当たると、下の件数と一覧は「読んだ範囲のもの」になり、digest は
+ * `JOURNAL_SCAN_TRUNCATED_NOTICE` でそう名乗る。**名乗るのだから静かには
+ * 痩せない**が、**毎日鳴る断り書きは意味を失う**（`distill-gap.ts` が
+ * 「毎回鳴る注釈」を避けている doc と同じ理由）。⟹ この上限は「普通の日の
+ * 日誌の行数」より**桁で上**に置く必要がある。
+ *
+ * **実測（依頼元が DB を読んで取った値、2026-09-22 観測）**: 事故の日
+ * （利用上限に当たり続けて同じ1文が積まれた日）が1日で約247万行だったのに
+ * 対し、**普通の日は1日で1万行〜3万行の桁**だった。⟹ 1万の桁に上限を置くと
+ * 普通の日に当たってしまう。**桁を1つ上げてある。**
+ *
+ * `JOURNAL_SCAN_PAGE_SIZE` で割ると、この上限に当たる最悪の場合で1走査あたり
+ * 200回の往復である（`buildActivityDigest` は走査を2本持つので、その倍が
+ * 最悪値）。**247万行を最後まで読み切る約5,000回に比べれば1桁以上小さく、
+ * 普通の日（数万行）なら往復は数十回で済む。**
+ *
+ * ⚠ **実データの分布から精密に決めたわけではない**——観測された2つの桁
+ * （普通の日と事故の日）の間に置いた経験則である。普通の日の行数が伸びて
+ * ここへ届くようになったら、**上限を上げるのではなく走査の絞り込みの側を
+ * 見直すこと**（種別を減らす・窓を割る）。上げ続ければ、いずれ元の穴へ戻る。
+ */
+export const DIGEST_JOURNAL_SCAN_LIMIT = 100_000;
+
+/**
+ * 「届いた外部イベント」の発行元（`source`）別カウンタが**追跡するユニーク
+ * source 数**の上限（issue #783）。
+ *
+ * ## なぜ要るか——`MAX_ITEMS` / `DIGEST_RETAIN_LIMIT` とは別の軸
+ *
+ * `source` はスキーマ上ただの `z.string()`（`schema.ts` の
+ * `external_event.source`）で、**webhook の呼び出し元が自由に名乗る文字列**
+ * である。発行元別に「件数」を数えるには `Map<source, count>` を持つしかない
+ * が、**キーの数（＝異なる source の種類数）に上限を置かなければ**、悪意・
+ * 誤設定のどちらでも source がリクエストのたびに違う値になりうる呼び出し元
+ * が1つあるだけで、この Map は無制限に育つ——issue #1283 が塞いだ OOM
+ * （日誌の**行数**が無制限だった）を、**キーの種類数**の側で再発させる。
+ *
+ * この上限は既存の2つの上限とは**別の軸**を切る:
+ * - `MAX_ITEMS` —— 一覧に**表示**する行数の上限（何を数えるかとは無関係）
+ * - `DIGEST_RETAIN_LIMIT` —— 日誌の1種別ぶんを**保持**する件数の上限
+ *   （行そのものをヒープに残す量）
+ * - `DIGEST_SOURCE_TALLY_LIMIT`（この定数）—— 発行元別カウンタが**追跡する
+ *   異なり数**の上限（値そのものではなくキーの種類数を抑える）
+ *
+ * 3つとも独立に効く——`DIGEST_RETAIN_LIMIT` に当たっていない日でも、
+ * 発行元の種類だけが `DIGEST_SOURCE_TALLY_LIMIT` を超えればこちらに当たりうる
+ * （逆も同様）。
+ *
+ * ## 値の妥当性（実測、2026-09-23。クローンが本番 DB を `SELECT` で測った）
+ *
+ * 全期間（2026-09-16 以降）の `external_event` 29,096 行に対し、**異なる
+ * `source` はわずか3つ**（`token-pool` が29,088行＝99.97%、`runner-registry`
+ * が7行、`boot-storage-footprint` が1行）。この定数の値はその3という観測値に
+ * 対して十分な余裕（10倍以上）を持たせてある。
+ *
+ * ⚠️ **「いま3つ」は「将来3つ」を意味しない**——`source` は
+ * webhook の呼び出し元が名乗る任意の文字列なので、この実測は上限を外して
+ * よい根拠にはならない（上の「なぜ要るか」がそのまま効く）。
+ *
+ * ⚠️ **逆に、この実測は「内訳が豊かに出る」ことも意味しない。** 実運用の
+ * 内訳はほぼ1本（`token-pool`）に潰れる——`DIGEST_SOURCE_TALLY_LIMIT` にも
+ * `MAX_ITEMS` の折り畳みにも、通常はまず当たらない。この値は「将来 source が
+ * 増えたときに備える」ためのものであって、「いま複数行の内訳が出る」ことを
+ * 期待させるものではない。
+ *
+ * ## 上限を超えた分は黙って捨てない
+ *
+ * `createSourceTally` は上限に当たった後に現れる**新しい** source を
+ * カウンタとしては持たないが、**その出現件数（`overflowCount`）は数え続ける**
+ * ——「上限を超えて現れた発行元の合計件数」として出力に出す（`overflowCount`
+ * が0より大きいときだけ）。**ただし「上限を超えた発行元の数」自体は出せない**
+ * ——名前を憶えていないので、種類数を数えるには結局上限を外すしかない
+ * （この限界そのものが、上限を置いたことの帰結である）。
+ */
+export const DIGEST_SOURCE_TALLY_LIMIT = 32;
 
 /**
  * マネージャーの id から「このデーモンから話しかけられるか」への写像。
@@ -735,11 +853,76 @@ function journalWhere(type: JournalEntry['type']): string {
   );
 }
 
+/**
+ * 発行元（`source`）別に**正確な総件数**を数える、キー数に上限を置いた
+ * カウンタ（issue #783）。
+ *
+ * ## なぜ上限が要るか
+ *
+ * `source` は `z.string()`（`schema.ts` の `external_event.source`）——
+ * webhook の呼び出し元が名乗る任意の文字列で、値そのものにも種類数にも
+ * 契約上の上限が無い。件数を「保持した配列から数える」（`createRetainBucket`
+ * と同じ形）のではなく発行元別の Map で数える以上、**キーの数（＝異なる
+ * source の種類数）に上限を置かなければ、種類が毎回違う source を送り込む
+ * 呼び出し元が1つあるだけでこの Map は無制限に育つ**——issue #1283 が
+ * 塞いだ OOM（日誌の**行数**が無制限だった）を、**キーの種類数**という
+ * 別の軸で再発させる。**却下した案**: 上限なしの source 別マップ
+ * （キー数の側で #1283 の OOM を再発）。詳しくは
+ * {@link DIGEST_SOURCE_TALLY_LIMIT} の doc。
+ *
+ * ## 上限を超えた分は黙って捨てない
+ *
+ * 上限に当たった後に現れる**新しい** source はキーとして持たないが、
+ * その出現件数は `overflowCount` として数え続ける——件数そのものは
+ * 出力に出せる。**ただし「上限を超えた発行元の数（種類数）」は出せない**——
+ * 名前を憶えていないので数えようがない（キー数に上限を置いている以上、
+ * 数えるには上限を外すしかない。これは妥協ではなく、有界であることの
+ * 帰結である）。
+ *
+ * ## 件数は保持の上限（`DIGEST_RETAIN_LIMIT`）を受けない
+ *
+ * 呼び出し側は `externalBucket.push(entry)` と**並べて**（`retained` の
+ * 上限の**外**で）このカウンタへ `push` する——走査で当たった行すべてを
+ * 数える点は `createRetainBucket` の `count` と同じ理由・同じ形である。
+ */
+function createSourceTally(maxKeys: number) {
+  const counts = new Map<string, number>();
+  let overflowCount = 0;
+  return {
+    /** 1件ぶん数える。 */
+    push(source: string): void {
+      const current = counts.get(source);
+      if (current !== undefined) {
+        counts.set(source, current + 1);
+        return;
+      }
+      if (counts.size >= maxKeys) {
+        overflowCount += 1;
+        return;
+      }
+      counts.set(source, 1);
+    },
+    /**
+     * 追跡している発行元を件数降順で返す。同数は source 名の昇順——
+     * 出力の並びを実行のたびに変えないため（`Map` の反復順は挿入順に
+     * 依存するので、それをそのまま出力へ持ち込まない）。
+     */
+    get rows(): { source: string; count: number }[] {
+      return Array.from(counts, ([source, count]) => ({ source, count })).sort((a, b) => {
+        if (a.count !== b.count) return b.count - a.count;
+        return a.source < b.source ? -1 : a.source > b.source ? 1 : 0;
+      });
+    },
+    /** 上限を超えて現れた発行元ぶんの件数（黙って捨てない）。 */
+    get overflowCount(): number {
+      return overflowCount;
+    },
+  };
+}
+
 /** {@link summarizeExternalSources} が1発行元ぶんに作る行の材料。 */
 interface ExternalSourceBreakdown {
   source: string;
-  /** その発行元の `external_event` の総件数（日誌の行数）。 */
-  count: number;
   /** `summary` の完全一致で数えた「本文の種類」の数。 */
   distinctSummaries: number;
   /** いちばん多い1種の件数。 */
@@ -747,13 +930,17 @@ interface ExternalSourceBreakdown {
 }
 
 /**
- * 外部イベントを **発行元（`source`）別**に集計する（Issue #783）。
+ * 保持した外部イベントの**標本**から、発行元別に「本文の形」を要約する
+ * （Issue #783）。
  *
- * ## なぜ足すのか
+ * ## ⚠️ この関数の母数は「保持した標本」であって「総数」ではない
  *
- * 上の件数行が「日誌の行数であって届いた合図の実数ではない」と名乗れても、
- * **どの発行元が何件か**が無ければ、そこから原因へ降りる経路が無い（15,047件の
- * 内訳を1件も測れない）。この関数は、その内訳を発行元別・件数の多い順で返す。
+ * 引数の `externals` は `externalBucket.retained`——`DIGEST_RETAIN_LIMIT`
+ * （200件）で頭打ちになる保持配列である。**正確な総数（`externalsCount`）を
+ * 母数にした集計は {@link createSourceTally} が別に持つ**——こちらは
+ * 「同じ本文が何種あるか」という、保持していない限り測りようがない値を
+ * 出すための関数なので、母数が変わるのは設計である（呼び出し側は必ず
+ * 「保持した ${externals.length} 件の標本」と母数を明示して出力すること）。
  *
  * ## 「本文の種類」は `summary` の**完全一致**で数える——それ以上は寄せない
  *
@@ -786,16 +973,18 @@ function summarizeExternalSources(
     }
     rows.push({
       source,
-      count: summaries.length,
       distinctSummaries: countBySummary.size,
       topSummaryCount: Math.max(...countBySummary.values()),
     });
   }
 
-  // **件数の多い順。** 原因へ降りる入口はいちばん件数の多い発行元であることが
-  // 多いので、上位から出す（`MAX_ITEMS` で切ったときに落ちるのが少数派の
-  // 発行元になるように）。
-  rows.sort((a, b) => b.count - a.count);
+  // **最頻件数の多い順、同数は source 名の昇順。** この標本の中で偏りが
+  // 強い発行元を先に見せる（`count` を落としたので、もう「件数の多い順」
+  // では並べられない——正確な件数は `createSourceTally` の側にある）。
+  rows.sort((a, b) => {
+    if (a.topSummaryCount !== b.topSummaryCount) return b.topSummaryCount - a.topSummaryCount;
+    return a.source < b.source ? -1 : a.source > b.source ? 1 : 0;
+  });
   return rows;
 }
 
@@ -834,6 +1023,76 @@ function usageOmitted(total: number, shown: number, axis: string, unit: string):
 }
 
 /**
+ * 日誌の1種別ぶんを「正確な件数」と「新しい側から `DIGEST_RETAIN_LIMIT` 件
+ * だけの保持」に分けて畳むための小さな器（issue #1283）。
+ *
+ * ## なぜ2つに分けるか
+ *
+ * 一覧に出す詳細は `MAX_ITEMS`（15）件で足りるが、`- 自分で決めたこと: N 件`
+ * のような**件数の行はそれとは別に正確でなければならない**。件数を
+ * 「保持した配列の `.length`」から取ると、保持の上限に当たった日だけ件数が
+ * 静かに減る——AGENTS.md の地雷「一覧の上限を件数だけで決める」と同じ形の
+ * 事故を、件数の表示側で起こすことになる。**カウンタ（`count`）は保持の
+ * 上限に関係なく、走査で当たった行すべてに対して回す。**
+ *
+ * ## `desc` で走査する限り、`retained` は「保持の上限に当たっていなければ
+ * 直す前と1文字も変わらない」
+ *
+ * `push` を呼ぶ順（＝走査の順）が新しい順である限り、`retained` の先頭
+ * `MAX_ITEMS` 件は常に「本当に新しい `MAX_ITEMS` 件」と一致する——保持の
+ * 上限（`retainLimit`）に当たっていなければ、`retained` は「直す前の
+ * `entries.filter(type)`」とちょうど同じ中身・同じ順序になる。
+ */
+function createRetainBucket<T>(retainLimit: number) {
+  const retained: T[] = [];
+  let count = 0;
+  return {
+    push(entry: T): void {
+      count += 1;
+      if (retained.length < retainLimit) retained.push(entry);
+    },
+    get count(): number {
+      return count;
+    },
+    get retained(): readonly T[] {
+      return retained;
+    },
+  };
+}
+
+/**
+ * 走査を `DIGEST_JOURNAL_SCAN_LIMIT` で打ち切ったときの断り書き（issue #1283）。
+ *
+ * **冒頭（`期間: …` の行のすぐ後）にだけ置く。** 各節の件数の行そのものは
+ * 書き換えない——「読んだ範囲では正確」という性質は保ったまま
+ * （`buildActivityDigest` 本体の doc）、この断りが「その範囲が窓の全部とは
+ * 限らない」を1箇所で言う。
+ *
+ * **具体的な件数の値をここへ焼き込まない。** 定数の名前（
+ * `DIGEST_JOURNAL_SCAN_LIMIT`）で指す——AGENTS.md「件数・版・sha などの数を
+ * 生成物へ焼き込まない」。
+ */
+const JOURNAL_SCAN_TRUNCATED_NOTICE =
+  '⚠ この期間の日誌が多く、走査を `DIGEST_JOURNAL_SCAN_LIMIT` 件で打ち切った。' +
+  'これより下の件数・一覧は、日誌の新しい側から読んだ範囲のものである' +
+  '（実際はもっと多い可能性がある）。新しい側から読んでいるので、新しいものは' +
+  '1件も落ちていない——足りないとすれば古い側である。';
+
+/**
+ * `escalationGroups` の件数の行に足す注記（issue #1283）。
+ *
+ * **`escalation` だけは件数の意味が違う。** `escalationGroups` は
+ * `approvalId` で束ねた**問いの数**で、束ねる前の行を全部見ないと正確に
+ * 数えられない——他の型のように「走査で当たった行すべてを数えるカウンタ」
+ * を持てない（束ねる前の生の行を、保持の上限を超えてまで持ち続けない限り）。
+ * ⟹ **保持の上限（`DIGEST_RETAIN_LIMIT`）に当たった（＝ `escalation` の行を
+ * 全部は保持していない）ときだけ、この注記を件数の行へ足す。** 当たって
+ * いないときは、この関数は呼ばれた側で使われず、文面は1文字も変わらない。
+ */
+const ESCALATION_RETAIN_CAPPED_NOTICE =
+  '（⚠ 束ねた元の行を全部は読んでいない。保持の上限に当たったので、この件数は少なく出ている可能性がある）';
+
+/**
  * @param liveness マネージャーの id から「話しかけられるか」への写像
  * （`ManagerLiveness` の doc）。**必須にしない。** 省略時は
  * `describeManagerState` が全件 `undefined` を受け取り、全件
@@ -855,9 +1114,8 @@ export async function buildActivityDigest(
   awaitingBackground?: ManagerAwaitingBackgroundMap,
 ): Promise<string> {
   const until = window.until ?? new Date(Date.now() + 1);
-  const entries = (await stores.journal.list({ since: window.since.toISOString() })).filter(
-    (entry) => entry.at < until.toISOString(),
-  );
+  const sinceIso = window.since.toISOString();
+  const untilIso = until.toISOString();
 
   const jobs = await stores.jobs.listJobs();
   // **直す前と同じ、有界な取得のまま。** 承認待ちキューの行を消す口が無い
@@ -898,26 +1156,53 @@ export async function buildActivityDigest(
       entry.closedAt < until.toISOString(),
   );
 
-  const of = <T extends JournalEntry['type']>(type: T) =>
-    entries.filter((entry): entry is Extract<JournalEntry, { type: T }> => entry.type === type);
+  // **境界を JS 側で切り直す理由。** `JournalQuery.until` は「以前＝含む」
+  // （`store.ts` の `JournalQuery.until` の doc）だが、`DigestWindow.until`
+  // は「含まない」（このファイル冒頭の doc）——意味が違う。クエリ側の
+  // `until` は走査を早く打ち切るための粗い上限として渡し、正確な境界は
+  // ここで `entry.at < untilIso` を掛けて決め直す。**二重に見えるが、
+  // 片方だけでは足りない**——クエリ側を外すと OOM の本体（#1283）そのものに
+  // 戻り、JS 側を外すと境界のミリ秒が1件ずれる。
+  const withinWindow = (entry: JournalEntry): boolean => entry.at < untilIso;
 
-  const exchanges = of('exchange');
-  const humanTurns = exchanges.filter(
-    (entry) => entry.with === 'human' && entry.role === 'inbound',
+  // **`exchange` は別の走査にする。** `JournalQuery.with` はストアの絞りと
+  // して `exchange` にしか効かない契約（`store.ts` の doc）——残り5種別と
+  // 1本のクエリに混ぜると、非 exchange 行に対する `with` の意味が契約に
+  // 無いまま動く形になる。**この digest はどこにも `exchange` の詳細一覧を
+  // 出していない**（下の集計で使うのは件数だけ）ので、保持する配列は要らず
+  // 数えるだけでよい。
+  let humanTurnsCount = 0;
+  const exchangeScan = await scanJournalPages(
+    stores.journal,
+    { types: ['exchange'], with: ['human'], since: sinceIso, until: untilIso, order: 'desc' },
+    (page) => {
+      for (const entry of page) {
+        if (entry.type !== 'exchange' || !withinWindow(entry)) continue;
+        if (entry.role === 'inbound') humanTurnsCount += 1;
+      }
+    },
+    { maxScanned: DIGEST_JOURNAL_SCAN_LIMIT },
   );
-  const decisions = of('decision');
-  // **`approvalId` で束ねる。** 日誌は追記専用なので、1つの問いに「聞いた」
-  // 行と「答えた」行が別々に積まれる（`EscalationGroup` の doc）。束ねずに
-  // 行ごとに描くと、同じ問いが「未回答」と「回答あり」の両方として並ぶ。
-  // **束ねた後、`at` の降順に並べ直す**（`EscalationGroup.at` の doc）。
-  // `journal.list()` の既定（`order: 'desc'`）が新しい順を契約として保証
-  // するので、この並べ替えは通常 no-op だが、その契約への依存をこの関数の
-  // 外（`journal-order-with-contract.ts`）へ置かず、ここで明示する
-  // （同 doc に詳しい理由がある）。
-  const escalations = of('escalation');
-  const escalationGroups = groupEscalations(escalations).sort((a, b) => b.at.localeCompare(a.at));
-  const memoryUpdates = of('memory_update');
-  const externals = of('external_event');
+
+  // **残り5種別は1本の走査にまとめる。** `with` を渡さないので、上の
+  // exchange 走査を分けた理由（`with` の契約）はここには当たらない——
+  // `types` だけの絞りは3実装とも「その種別だけを返す」契約
+  // （`JournalQuery.types` の doc）を持つ。
+  const decisionBucket =
+    createRetainBucket<Extract<JournalEntry, { type: 'decision' }>>(DIGEST_RETAIN_LIMIT);
+  const escalationBucket =
+    createRetainBucket<Extract<JournalEntry, { type: 'escalation' }>>(DIGEST_RETAIN_LIMIT);
+  const memoryUpdateBucket =
+    createRetainBucket<Extract<JournalEntry, { type: 'memory_update' }>>(DIGEST_RETAIN_LIMIT);
+  const externalBucket =
+    createRetainBucket<Extract<JournalEntry, { type: 'external_event' }>>(DIGEST_RETAIN_LIMIT);
+  /**
+   * 発行元（`source`）別の**正確な**件数（issue #783）。`externalBucket` とは
+   * 別の軸で有界にする——こちらはヒープに残す**行数**ではなく、追跡する
+   * **source の異なり数**を `DIGEST_SOURCE_TALLY_LIMIT` で頭打ちにする
+   * （`createSourceTally` の doc）。
+   */
+  const externalSourceTally = createSourceTally(DIGEST_SOURCE_TALLY_LIMIT);
   /**
    * ツール実行は**層で分ける**。
    *
@@ -926,10 +1211,78 @@ export async function buildActivityDigest(
    * 膨らむ（AGENTS.md「消費の層をモデル名で見分けるな ＝ 層は層の列で言う」と
    * 同じ話で、ここでの層の列は `actor` である）。**この数は digest を読む
    * クローン自身と日報の材料になるので、混ぜると委譲の判断がそのまま狂う。**
+   *
+   * **保持する配列は要らない。** `cloneToolUses` / `delegatedToolUses` は
+   * この digest のどこにも詳細一覧を出さない（件数だけ）——だから
+   * `createRetainBucket` ではなく素のカウンタでよい。
    */
-  const toolUses = of('tool_use');
-  const cloneToolUses = toolUses.filter((entry) => isCloneActor(entry.actor));
-  const delegatedToolUses = toolUses.filter((entry) => !isCloneActor(entry.actor));
+  let cloneToolUsesCount = 0;
+  let delegatedToolUsesCount = 0;
+
+  const activityScan = await scanJournalPages(
+    stores.journal,
+    {
+      types: ['decision', 'escalation', 'memory_update', 'external_event', 'tool_use'],
+      since: sinceIso,
+      until: untilIso,
+      order: 'desc',
+    },
+    (page) => {
+      for (const entry of page) {
+        if (!withinWindow(entry)) continue;
+        switch (entry.type) {
+          case 'decision':
+            decisionBucket.push(entry);
+            break;
+          case 'escalation':
+            escalationBucket.push(entry);
+            break;
+          case 'memory_update':
+            memoryUpdateBucket.push(entry);
+            break;
+          case 'external_event':
+            externalBucket.push(entry);
+            // **`retained` の上限の外で数える。** ここで数えなければ
+            // `externalSourceTally` は保持した行だけを数えることになり、
+            // `DIGEST_RETAIN_LIMIT` を超えた日に静かに retained を数える形へ
+            // 戻ってしまう（このカウンタを置いた理由そのものが消える）。
+            externalSourceTally.push(entry.source);
+            break;
+          case 'tool_use':
+            if (isCloneActor(entry.actor)) cloneToolUsesCount += 1;
+            else delegatedToolUsesCount += 1;
+            break;
+        }
+      }
+    },
+    { maxScanned: DIGEST_JOURNAL_SCAN_LIMIT },
+  );
+
+  // **打ち切ったのは、どちらの走査でもよい。** 2本は別のクエリなので独立に
+  // 打ち切りうる——どちらか一方でも打ち切っていれば、この digest の件数・
+  // 一覧は「読んだ範囲のもの」になる。
+  const journalScanTruncated = exchangeScan.truncated || activityScan.truncated;
+
+  const decisions = decisionBucket.retained;
+  const decisionsCount = decisionBucket.count;
+  // **`approvalId` で束ねる。** 日誌は追記専用なので、1つの問いに「聞いた」
+  // 行と「答えた」行が別々に積まれる（`EscalationGroup` の doc）。束ねずに
+  // 行ごとに描くと、同じ問いが「未回答」と「回答あり」の両方として並ぶ。
+  // **束ねた後、`at` の降順に並べ直す**（`EscalationGroup.at` の doc）。
+  // `journal.list()` の既定（`order: 'desc'`）が新しい順を契約として保証
+  // するので、この並べ替えは通常 no-op だが、その契約への依存をこの関数の
+  // 外（`journal-order-with-contract.ts`）へ置かず、ここで明示する
+  // （同 doc に詳しい理由がある）。**束ねる材料は `escalationBucket.retained`
+  // ——保持の上限に当たっていれば、束ねる前の行を全部は見ていない**
+  // （`ESCALATION_RETAIN_CAPPED_NOTICE` の doc）。
+  const escalationGroups = groupEscalations(escalationBucket.retained).sort((a, b) =>
+    b.at.localeCompare(a.at),
+  );
+  const escalationRetainCapped = escalationBucket.count > escalationBucket.retained.length;
+  const memoryUpdates = memoryUpdateBucket.retained;
+  const memoryUpdatesCount = memoryUpdateBucket.count;
+  const externals = externalBucket.retained;
+  const externalsCount = externalBucket.count;
 
   // 走行中・返事待ちは期間の外で始まったものも「いまの状態」として要る
   // （判定は `isManagerInFlight`（このファイルの上）。**`manager_list` と同じ
@@ -946,17 +1299,28 @@ export async function buildActivityDigest(
       return b.updatedAt.localeCompare(a.updatedAt);
     });
 
+  // **束ねた問いの数であって、日誌の行数ではない。** 1問に「聞いた」
+  // 「答えた」の2行が付くことがあるので、行数をそのまま出すと二重に数える
+  // （`escalationGroups` の doc）。**escalation だけは exact なカウンタを
+  // 持たない**（束ねる前の行を全部見ないと正確に数えられないため。上の
+  // `escalationRetainCapped` の doc）ので、保持の上限に当たっていたときだけ
+  // `ESCALATION_RETAIN_CAPPED_NOTICE` を添える——当たっていなければ、この
+  // 行は直す前と1文字も変わらない。
+  const escalationCountLine =
+    `- エスカレーション: ${escalationGroups.length} 件` +
+    (escalationRetainCapped ? ESCALATION_RETAIN_CAPPED_NOTICE : '');
+
   const sections: string[] = [
     `期間: ${window.since.toISOString()} 〜 ${until.toISOString()}`,
+    // **打ち切ったら、冒頭ですぐに名乗る。** `期間: …` の行のすぐ後——
+    // 空行より前に置く（`JOURNAL_SCAN_TRUNCATED_NOTICE` の doc）。
+    ...(journalScanTruncated ? [JOURNAL_SCAN_TRUNCATED_NOTICE] : []),
     '',
-    `- 人間からの発言: ${humanTurns.length} 件`,
+    `- 人間からの発言: ${humanTurnsCount} 件`,
     `- マネージャーへの委譲（この期間に動いたもの）: ${managers.length} 本`,
-    `- 自分で決めたこと（日誌の decision）: ${decisions.length} 件`,
-    // **束ねた問いの数であって、日誌の行数ではない。** 1問に「聞いた」
-    // 「答えた」の2行が付くことがあるので、行数をそのまま出すと二重に数える
-    // （`escalationGroups` の doc）。
-    `- エスカレーション: ${escalationGroups.length} 件`,
-    `- 記憶の更新: ${memoryUpdates.length} 件`,
+    `- 自分で決めたこと（日誌の decision）: ${decisionsCount} 件`,
+    escalationCountLine,
+    `- 記憶の更新: ${memoryUpdatesCount} 件`,
     // **日誌 external_event の行数であって、届いた合図の実数ではない**
     // （Issue #783）。受信箱を通った合図は配達のたびに1行書かれる —— 配り直しの
     // 回でも、畳んでターンを起こさない回でも同じ1行を書く（`clone.ts` の
@@ -968,9 +1332,9 @@ export async function buildActivityDigest(
     // 当てはまらない。発行元別の内訳は下の「届いた外部イベント」節にある
     // （`エスカレーション: 束ねた問いの数であって、日誌の行数ではない` と同じ形で、
     // ここは逆に「日誌の行数であって合図の実数ではない」と名乗る）。
-    `- 外部イベント（日誌 external_event の行数）: ${externals.length} 件`,
-    `- マネージャー・作業者のツール実行: ${delegatedToolUses.length} 件`,
-    `- あなた自身が手を動かした回数（委譲せずに使った道具）: ${cloneToolUses.length} 件`,
+    `- 外部イベント（日誌 external_event の行数）: ${externalsCount} 件`,
+    `- マネージャー・作業者のツール実行: ${delegatedToolUsesCount} 件`,
+    `- あなた自身が手を動かした回数（委譲せずに使った道具）: ${cloneToolUsesCount} 件`,
     `- いま人間の回答を待っているもの: ${pending.length} 件`,
     `- 継続中の依頼（定期の仕込み）: ${standing.length} 件`,
     `- 引き受けたまま終わっていない仕事: ${commitments.length} 件`,
@@ -1134,13 +1498,13 @@ export async function buildActivityDigest(
     );
   }
 
-  if (decisions.length > 0) {
+  if (decisionsCount > 0) {
     sections.push('', '## 聞かずに決めたこと');
     const shownDecisions = decisions.slice(0, MAX_ITEMS);
     for (const entry of shownDecisions) {
       sections.push(`- ${entry.at} ${brief(entry.decision)}（根拠: ${brief(entry.grounds, 80)}）`);
     }
-    sections.push(...omitted(decisions.length, shownDecisions.length, journalWhere('decision')));
+    sections.push(...omitted(decisionsCount, shownDecisions.length, journalWhere('decision')));
   }
 
   if (escalationGroups.length > 0) {
@@ -1178,7 +1542,7 @@ export async function buildActivityDigest(
     sections.push(...omitted(pending.length, shownPending.length, '`approvals_list` で全部見える'));
   }
 
-  if (memoryUpdates.length > 0) {
+  if (memoryUpdatesCount > 0) {
     sections.push('', '## 記憶の更新');
     const shownMemoryUpdates = memoryUpdates.slice(0, MAX_ITEMS);
     for (const entry of shownMemoryUpdates) {
@@ -1199,11 +1563,11 @@ export async function buildActivityDigest(
       );
     }
     sections.push(
-      ...omitted(memoryUpdates.length, shownMemoryUpdates.length, journalWhere('memory_update')),
+      ...omitted(memoryUpdatesCount, shownMemoryUpdates.length, journalWhere('memory_update')),
     );
   }
 
-  if (externals.length > 0) {
+  if (externalsCount > 0) {
     sections.push('', '## 届いた外部イベント');
     // **なぜ実数ではないか、をここでも1行で言う。** 上の件数行は単位（日誌の
     // 行数）だけを名乗り、理由はここに置く——1行を長くしすぎないための分け方
@@ -1218,32 +1582,70 @@ export async function buildActivityDigest(
       sections.push(`- ${entry.source}: ${brief(entry.summary, 120)}`);
     }
     sections.push(
-      ...omitted(externals.length, shownExternals.length, journalWhere('external_event')),
+      ...omitted(externalsCount, shownExternals.length, journalWhere('external_event')),
     );
 
-    // **発行元別の内訳（Issue #783）。** 15,047 件がどの発行元のものかが分から
-    // なければ、そこから原因へ降りる経路が無い。既存の個別行・`omitted()` の
-    // 行は消さず、ここに足すだけ（`summarizeExternalSources` の doc）。
+    // **発行元別の件数（正確な総数。Issue #783）。** 15,047 件がどの発行元の
+    // ものかが分からなければ、そこから原因へ降りる経路が無い。既存の個別行・
+    // `omitted()` の行は消さず、ここに足すだけ（`createSourceTally` の doc）。
+    // **`retained` ではなく走査した全件を数えている**（`externalSourceTally`
+    // は `DIGEST_RETAIN_LIMIT` の外で push している——上のコメント参照）。
     sections.push(
       '',
-      '**発行元（source）別の件数** —— 「本文の種類」は `summary` の完全一致で数える' +
-        '（末尾に畳んだ件数などの可変値が付くことがあるため、完全一致は同じ出来事を' +
-        '過大に分けうる。正規化はしていない）。',
+      '**発行元（source）別の件数（正確な総数。上限 `DIGEST_SOURCE_TALLY_LIMIT`=' +
+        `${DIGEST_SOURCE_TALLY_LIMIT} 発行元まで追跡する）**`,
     );
-    const bySource = summarizeExternalSources(externals);
-    const shownBySource = bySource.slice(0, MAX_ITEMS);
-    for (const row of shownBySource) {
+    const bySourceRows = externalSourceTally.rows;
+    const shownBySourceRows = bySourceRows.slice(0, MAX_ITEMS);
+    for (const row of shownBySourceRows) {
+      sections.push(`- ${row.source}: ${row.count} 件`);
+    }
+    // **表示上限（`MAX_ITEMS`）を超えた、追跡済みの発行元を畳む。** 件数と
+    // 発行元の数の両方を出す——片方だけだと「何件消えたか」「何種類消えたか」
+    // のどちらかが分からなくなる。
+    const foldedSourceRows = bySourceRows.slice(shownBySourceRows.length);
+    if (foldedSourceRows.length > 0) {
+      const foldedCount = foldedSourceRows.reduce((sum, row) => sum + row.count, 0);
+      sections.push(`- その他: ${foldedCount} 件（${foldedSourceRows.length} の発行元）`);
+    }
+    // **上限（`DIGEST_SOURCE_TALLY_LIMIT`）を超えて現れた発行元ぶんの件数。**
+    // 黙って捨てない——ただし発行元の「数」は原理的に出せない（キー数に上限を
+    // 置いている以上、数えるには上限を外すしかない。`createSourceTally` の
+    // doc）。この行は妥協の跡ではなく、有界であることそのものの帰結である。
+    if (externalSourceTally.overflowCount > 0) {
       sections.push(
-        `- ${row.source}: ${row.count} 件（同じ本文は ${row.distinctSummaries} 種。` +
-          `最も多い1種が ${row.topSummaryCount} 件）`,
+        '- 上限（`DIGEST_SOURCE_TALLY_LIMIT`）を超えて現れた発行元: ' +
+          `${externalSourceTally.overflowCount} 件（発行元の数は数えていない —— ` +
+          'キー数に上限を置いている以上、数えるには上限を外すしかない）',
+      );
+    }
+
+    // **本文の形（Issue #783。⚠️ ここは依頼の外で足した追加判断——`summarizeExternalSources`
+    // が返す「本文の種類・最頻件数」を消さずに残すが、母数を上と分離する）。**
+    // `summary` は `renderPayload` が末尾へ可変値を付けることがある実質無限の
+    // 異なり数を持つ軸なので、正確な総数側（上）へは載せない——**保持した標本**
+    // （`externals` = `externalBucket.retained`）を母数に明示し、別ブロックに
+    // 分ける（`summarizeExternalSources` の doc）。
+    sections.push(
+      '',
+      `**本文の形（保持した ${externals.length} 件の標本。上の件数とは母数が違う）** —— ` +
+        '「本文の種類」は `summary` の完全一致で数える（末尾に畳んだ件数などの可変値が' +
+        '付くことがあるため、完全一致は同じ出来事を過大に分けうる。正規化はしていない）。',
+    );
+    const bodyShapeRows = summarizeExternalSources(externals);
+    const shownBodyShapeRows = bodyShapeRows.slice(0, MAX_ITEMS);
+    for (const row of shownBodyShapeRows) {
+      sections.push(
+        `- ${row.source}: 同じ本文は ${row.distinctSummaries} 種。` +
+          `最も多い1種が ${row.topSummaryCount} 件`,
       );
     }
     sections.push(
       ...omitted(
-        bySource.length,
-        shownBySource.length,
+        bodyShapeRows.length,
+        shownBodyShapeRows.length,
         `${journalWhere('external_event')}（source では絞れない。読み出した行を自分で ` +
-          'source ごとに数える）',
+          'source ごとに数える。ここは保持した標本の中の発行元数であって、総数ではない）',
       ),
     );
   }

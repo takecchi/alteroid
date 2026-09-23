@@ -920,6 +920,21 @@ export const CAPTURED_OUTPUT_NON_CITATIONS: readonly CapturedOutputNonCitation[]
     token: 'scripts/check-tracked-nul-bytes.test.ts:43',
     why: '過去に test-guard が吐いた stdout の逐語コピー（`REAL_GUARD_B_SKIP`）の中の1行。指した先が動いてもこの文字列を直す必要は無い ⟹ 腐らない。',
   },
+  {
+    file: 'scripts/branch-deletable.test.ts',
+    token: 'packages/core/src/archive-prune.ts:159',
+    why: '`git grep -n -F` が実際に返した生出力（2026-09-22 観測）の逐語コピー。`parseGitGrepMatches` がこの形を崩さず分解できるかを固定するための fixture であって出典ではない ⟹ 指した先の行が動いても直す必要は無い。',
+  },
+  {
+    file: 'scripts/branch-deletable.test.ts',
+    token: 'scripts/test-guard-core.mjs:372',
+    why: '同上（`git grep` の生出力の逐語コピー、複数行を1つのfixtureで確かめる回の1行）。',
+  },
+  {
+    file: 'scripts/branch-deletable.test.ts',
+    token: '.claude/skills/branch-cleanup/SKILL.md:67',
+    why: '同上（`git grep` の生出力の逐語コピー、複数行を1つのfixtureで確かめる回のもう1行）。',
+  },
 ];
 
 export interface AgentsMdLineNumberCitationExemption {

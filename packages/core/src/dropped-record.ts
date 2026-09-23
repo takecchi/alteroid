@@ -921,7 +921,17 @@ export function setStderrSinkForTesting(sink: ((line: string) => void) | null): 
 export function journalEntryShape(entry: JournalEntryInput): string {
   switch (entry.type) {
     case 'exchange':
-      return `exchange with=${tag(entry.with)} role=${tag(entry.role)} ${size(entry.text)}`;
+      // **`approvalId`（issue #782 の1）は `escalation.approvalId`（下）と同じ
+      // 判定基準——承認待ちキューの項目 id で、自由文ではないので `tag()` に
+      // 載せてよい。`conversationId`/`supersedes` を載せていないのとは事情が
+      // 違う（この関数の doc「同じ値の扱いを2か所で」— あちらは対になる
+      // `inboxEventShape` の欄と2か所同時にしか変えられないことが理由で、
+      // `approvalId` には対になる欄が無い）。**任意欄なので、`managerId`
+      // （直下の `escalation`）と同じく在るときだけ足す。**
+      return (
+        `exchange with=${tag(entry.with)} role=${tag(entry.role)} ${size(entry.text)}` +
+        (entry.approvalId === undefined ? '' : ` approvalId=${tag(entry.approvalId)}`)
+      );
     case 'decision':
       return `decision ${size(entry.decision, 'decision')} ${size(entry.grounds, 'grounds')}`;
     case 'escalation':
