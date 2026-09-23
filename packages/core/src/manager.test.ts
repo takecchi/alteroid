@@ -8668,6 +8668,90 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
 });
 
 /**
+ * **段1（測るだけ、Issue #1425）: 跨いで畳んだ rate_limit の報告本数を
+ * 日誌へ残す。**
+ *
+ * `case 'rate_limit'` は `usageTransitionOf` が `undefined` を返した回
+ * （＝別の委譲が直前に同じ壁を報告済み）を、`#journal` を一度も呼ばずに
+ * 畳んで捨てていた。ここでは、次に遷移が定まった回に、その間に跨いで
+ * 畳まれた *異なる* managerId の本数が1行にまとめて残ることを固定する。
+ *
+ * **畳み込みの鍵も配り方も変えていない。** `#rateLimits` の中身・
+ * `usageTransitionOf` の判定・`#queueSynthesizedNotice` が配る本文は
+ * どの歯でも1文字も変わらない——測っているのは日誌の行だけである。
+ */
+describe('rate_limit を跨いで畳んだ本数を日誌へ残す（Issue #1425）', () => {
+  async function settle(ms = 20): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function crossFoldLines(entries: unknown[]): string[] {
+    return entries
+      .map((entry) => (entry as { text?: string }).text ?? '')
+      .filter((text) => text.includes('同じ壁を跨いで畳んだ報告'));
+  }
+
+  it('陽性: 別のマネージャーが跨いで畳まれると、次の遷移で本数が1行に残る', async () => {
+    const s = setup();
+    await s.pool.start({ request: 'A' });
+    await s.pool.start({ request: 'B' });
+    await s.pool.start({ request: 'C' });
+
+    const [a, b, c] = s.sessions as FakeSession[];
+
+    // a が最初に当たる（この壁の遷移を記録した本人になる）。
+    await a!.rateLimit({ status: 'rejected', rateLimitType: 'five_hour' });
+    // b・c は同じ壁を跨いで畳まれる（transition は undefined のまま消えていた）。
+    await b!.rateLimit({ status: 'rejected', rateLimitType: 'five_hour' });
+    await c!.rateLimit({ status: 'rejected', rateLimitType: 'five_hour' });
+    // a 自身が戻る側の遷移を踏んでも、跨いだ数には数えない（本人の連打のため）。
+    await a!.rateLimit({ status: 'allowed', rateLimitType: 'five_hour' });
+    // b が再び当てて、次の遷移が定まる——ここで b・c の2本がまとめて出る。
+    await b!.rateLimit({ status: 'rejected', rateLimitType: 'five_hour' });
+    await settle();
+
+    const entries = await s.stores.journal.list({});
+    const lines = crossFoldLines(entries);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('2 本の異なるマネージャーが当たっている');
+
+    await s.pool.stop();
+  });
+
+  it('やりすぎの対照: 同じマネージャーだけが繰り返しても、本数の行は出ない', async () => {
+    const s = setup();
+    await s.pool.start({ request: 'A' });
+
+    const [a] = s.sessions as FakeSession[];
+
+    await a!.rateLimit({ status: 'rejected', rateLimitType: 'five_hour' });
+    await a!.rateLimit({ status: 'allowed', rateLimitType: 'five_hour' });
+    await a!.rateLimit({ status: 'rejected', rateLimitType: 'five_hour' });
+    await settle();
+
+    const entries = await s.stores.journal.list({});
+    expect(crossFoldLines(entries)).toHaveLength(0);
+
+    await s.pool.stop();
+  });
+
+  it('やりすぎの対照: 初回の遷移だけでは本数の行は出ない', async () => {
+    const s = setup();
+    await s.pool.start({ request: 'A' });
+
+    const [a] = s.sessions as FakeSession[];
+
+    await a!.rateLimit({ status: 'rejected', rateLimitType: 'five_hour' });
+    await settle();
+
+    const entries = await s.stores.journal.list({});
+    expect(crossFoldLines(entries)).toHaveLength(0);
+
+    await s.pool.stop();
+  });
+});
+
+/**
  * `workspacePath` を一度も聞けていない runner に対して、`cwd` を省いて
  * マネージャーを起こす／取り直すと、既定値 `''` が `cwd` として組み立てられ、
  * runner 側の `cwd: z.string().min(1)`（`runner-protocol.ts`）に「cwd の形が

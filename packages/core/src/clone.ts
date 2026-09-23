@@ -2247,6 +2247,43 @@ class Clone implements CloneHost {
    * 踏み合う。両方向の壊れ方と実測は `rateLimitMemoryKey` の doc に在る。
    */
   readonly #rateLimits = new Map<string, RateLimitFacts>();
+  /**
+   * **いまの壁（枠の種類 × トークンの身元＝{@link rateLimitMemoryKey}）の
+   * 遷移を最後に記録した会話（`conversationId`）と、その後に跨いで畳まれた
+   * 会話の集合**（Issue #1425）。
+   *
+   * ## `manager.ts` 側との対応
+   *
+   * `ManagerPool` 側の同じ穴（{@link Pool.#rateLimitCrossFold}）は
+   * managerId で数える——複数のマネージャーが同じ枠を共有するからである。
+   * **クローンは1体しかいないので、managerId に当たる軸が無い。** ここで
+   * 代わりに使うのは `this.#turn?.conversationId` である——`#turn` は
+   * 1本しか無く（`this.#turn: Turn | null`）ターンは直列に進むが、
+   * `rate_limit_event` はターンの頭ごとに来るので、`transition` が
+   * `undefined` になる回は「別の会話のターンが、直前に同じ壁を報告済み
+   * だった」ことを表しうる。**この代替（managerId→conversationId）は
+   * この PR の判断であり、Issue の逐語が指定したものではない。**
+   *
+   * ## 「跨いだ」の定義 —— 同じ会話の連打は数えない
+   *
+   * `lastConversationId` は、この壁の遷移を最後に実際に `#journal` へ書いた
+   * 回の `conversationId`（無ければ `null`）である。`transition ===
+   * undefined` になった回の `conversationId` がこれと**同じ**なら、
+   * 「跨いだ」には数えない——`manager.ts` 側の `lastManagerId` と同じ判定
+   * である。
+   *
+   * ## 書き込む量
+   *
+   * `manager.ts` 側と同じ理由（#1311 と同じ形の肥大化を作り直さない）で、
+   * 畳むたびには書かない。`transition` が `undefined` になった回に
+   * `folded` へ `conversationId` を足すだけで、次に `transition` が定まった
+   * 回にまとめて `#journal` へ吐き出し、`lastConversationId` と `folded` を
+   * その回の状態へ更新する。
+   */
+  readonly #rateLimitCrossFold = new Map<
+    string,
+    { lastConversationId: string | null; folded: Set<string | null> }
+  >();
   readonly #profile: ProfileApplier | undefined;
   readonly #profileService: ProfileService | undefined;
   /**
@@ -9887,6 +9924,41 @@ class Clone implements CloneHost {
         const transition = usageTransitionOf(previous, facts);
         const merged = mergeRateLimitFacts(previous, facts);
         this.#rateLimits.set(memoryKey, merged);
+
+        // **跨いで畳んだ回を数える（Issue #1425）。** `transition` が
+        // `undefined` の回は、直前に別の会話のターンが同じ壁を報告済み
+        // だった回で、ここまでは日誌にも痕跡を残さずに消えていた。
+        // 書き込む量・「跨いだ」の定義は `#rateLimitCrossFold` の doc に
+        // ある理由（#1311 と同じ形の肥大化を作り直さない／同じ会話の連打は
+        // 数えない）で、畳むたびには書かず、次に `transition` が定まった
+        // 回にまとめて `#journal` へ吐き出す。
+        const conversationId = this.#turn?.conversationId ?? null;
+        if (transition === undefined) {
+          const crossFold = this.#rateLimitCrossFold.get(memoryKey);
+          if (crossFold !== undefined && crossFold.lastConversationId !== conversationId) {
+            crossFold.folded.add(conversationId);
+          }
+        } else {
+          const crossFold = this.#rateLimitCrossFold.get(memoryKey);
+          if (crossFold !== undefined && crossFold.folded.size > 0) {
+            await this.#journal({
+              type: 'exchange',
+              with: 'self',
+              role: 'outbound',
+              text:
+                `${EXCHANGE_KIND_GAUGE_PREFIX}同じ壁を跨いで畳んだ回に、` +
+                `${crossFold.folded.size} 本の異なる会話が当たっている` +
+                '（前回この壁の遷移を記録してから、いまの遷移までのあいだ）。',
+            });
+          }
+          // **この回の `conversationId` を、次に跨ぐかどうかの基準へ更新する。**
+          // `folded` は必ず空から始める——上で書き出した分をここで捨てる。
+          this.#rateLimitCrossFold.set(memoryKey, {
+            lastConversationId: conversationId,
+            folded: new Set(),
+          });
+        }
+
         // **⚠️ 遷移が取れなかった回も渡す（#668）。**
         //
         // ⚠️ **ここに書いてあった理由は、いまは成り立たない（消さずに残す）。**

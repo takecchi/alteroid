@@ -3549,6 +3549,47 @@ class Pool implements ManagerPool {
     ((observation: TokenRotatorObservation) => Promise<void>) | undefined;
   readonly #rateLimits = new Map<string, RateLimitFacts>();
   /**
+   * **いまの壁（枠の種類 × トークンの身元＝{@link rateLimitMemoryKey}）の
+   * 遷移を最後に記録した managerId と、その後に跨いで畳まれた managerId の
+   * 集合（Issue #1425）。**
+   *
+   * ## なぜ要るか
+   *
+   * `case 'rate_limit'` は `usageTransitionOf` が `undefined` を返した回
+   * （＝別の委譲が直前に同じ壁を報告済みで、`#journal` を呼ばずに `return`
+   * する回）を、いまも畳んで捨てる。**畳むこと自体は正しい設計である**
+   * （枠の事実はアカウント単位で、1回配れば十分）。欠陥は、`usage_notice`
+   * 側（{@link UsageNoticeMemory.foldedManagers}）と違い、**何本の
+   * *異なる* managerId が同じ壁を跨いで踏んだかを読む先が無い**ことだった
+   * ——畳まれた瞬間に、その情報そのものが消えていた。
+   *
+   * ## 「跨いだ」の定義 —— 同じ managerId の連打は数えない
+   *
+   * `lastManagerId` は、この壁の遷移を最後に実際に `#journal` へ書いた
+   * managerId である。`transition === undefined` になった回の managerId が
+   * これと**同じ**なら、それは「同じマネージャーが同じことを言い続けている」
+   * だけで、この Issue が指す「マネージャーを跨いで畳む」ではない
+   * （そちらの連打は {@link Pool.#rateLimitJournalFoldFor} が別に間引く）。
+   * **違う** managerId のときだけ `folded` へ足す——これが「跨いだ」の実体で
+   * ある。
+   *
+   * ## 書き込む量は「畳むたび」ではなく「次の遷移が定まったとき」
+   *
+   * `folded` へ足すだけで `#journal` は呼ばない。**畳むたびに1行書くと、
+   * #1311 が塞いだのと同じ形（同じ壁に短い間隔で何度も当たる状況）を、
+   * 「マネージャーの数」という軸で作り直してしまう。** 次に `transition`
+   * が定まった回（＝実際に `#journal` を書く回）で `folded` の大きさを
+   * 1行にまとめて吐き出し、`lastManagerId` をその回の managerId へ、
+   * `folded` を空へ、それぞれ更新する。
+   *
+   * ## 畳み込みの鍵にも配り方にも触れていない
+   *
+   * ここは集計専用で、`usageTransitionOf` の判定にも `#queueSynthesizedNotice`
+   * が配る本文にも使わない——`UsageNoticeMemory.foldedManagers` の doc の
+   * 「畳み鍵はこれではない」と同じ注意である。
+   */
+  readonly #rateLimitCrossFold = new Map<string, { lastManagerId: string; folded: Set<string> }>();
+  /**
    * **枠で止まった委譲**の managerId（`case 'usage_notice'` の `reached` で立ち、
    * {@link Pool.resumeStoppedByUsage} が下ろす）。
    *
@@ -8842,7 +8883,46 @@ class Pool implements ManagerPool {
           });
         }
 
-        if (transition === undefined) return;
+        if (transition === undefined) {
+          // **跨いで畳んだ回を数える（Issue #1425）。** 手前の誰かが既に
+          // 同じ壁を報告済みだったので、この回はここで `#journal` を一度も
+          // 呼ばずに消える。**この managerId が、いまの遷移を記録した本人と
+          // 同じなら「跨いだ」には数えない**（同じマネージャーの連打は
+          // `#rateLimitJournalFoldFor` が別に間引く対象であって、この Issue が
+          // 指す「マネージャーを跨いで畳む」ではない。`#rateLimitCrossFold`
+          // の doc）。違う managerId のときだけ集合へ足す——書くのはここまで
+          // で、`#journal` は次に遷移が定まった回にまとめて呼ぶ。
+          const crossFold = this.#rateLimitCrossFold.get(memoryKey);
+          if (crossFold !== undefined && crossFold.lastManagerId !== event.managerId) {
+            crossFold.folded.add(event.managerId);
+          }
+          return;
+        }
+
+        // **跨いで畳まれていた回が溜まっていれば、ここで1行にまとめて
+        // 日誌へ残す（Issue #1425）。** 畳むたびに書かず、実際に遷移が
+        // 定まったこの回にだけ束ねて書く理由は `#rateLimitCrossFold` の
+        // doc にある（#1311 と同じ形の肥大化を、マネージャーの数という
+        // 軸で作り直さないため）。**取れない軸に0の行を作らない**——
+        // 溜まっていない回（誰も跨いでいなかった回）は1行も増えない。
+        const crossFold = this.#rateLimitCrossFold.get(memoryKey);
+        if (crossFold !== undefined && crossFold.folded.size > 0) {
+          await this.#journal({
+            type: 'exchange',
+            with: 'manager',
+            role: 'inbound',
+            text:
+              `${EXCHANGE_KIND_GAUGE_PREFIX}[${event.managerId}] 同じ壁を跨いで畳んだ報告に、` +
+              `${crossFold.folded.size} 本の異なるマネージャーが当たっている` +
+              '（前回この壁の遷移を記録してから、いまの遷移までのあいだ）。',
+          });
+        }
+        // **この回の managerId を、次に跨ぐかどうかの基準へ更新する。**
+        // `folded` は必ず空から始める——上で書き出した分をここで捨てる。
+        this.#rateLimitCrossFold.set(memoryKey, {
+          lastManagerId: event.managerId,
+          folded: new Set(),
+        });
 
         // 「移った」「追い返された」の**瞬間だけ**を知らせる（状態を毎回流さない）。
         //
