@@ -35,11 +35,12 @@ import {
   DISTILL_GAP_NOTICE_HEAD,
   DISTILL_SUCCEEDED_DECISION_PREFIX,
   deriveDistillGapFromJournal,
+  countsAsUndistilledActivity,
   describeDistillGap,
   distillSucceededEntry,
 } from './distill-gap.js';
 import type { DistillGap } from './distill-gap.js';
-import { conversationMessages, readConversationWindow } from './conversation.js';
+import { conversationMessages, humanExchanges, readConversationWindow } from './conversation.js';
 import { clearRecentTracesForTesting, recentDroppedTraces } from './dropped-record.js';
 import type { CloneHost } from './host.js';
 import type { ManagerPool, ManagerSummary } from './manager.js';
@@ -52,6 +53,7 @@ import type {
   Commitment,
   InboxEvent,
   InboxEventType,
+  JournalEntry,
   JournalEntryInput,
 } from './schema.js';
 import type { Stores } from './store.js';
@@ -7499,6 +7501,83 @@ describe('クローン — 保持中の内部の合図は、失敗記録を1件�
     expect(releaseLines[0]).not.toContain('内部の失敗記録を畳んだ: 3 件');
 
     await s.clone.stop();
+  });
+
+  // **件数の射程を名乗る**（Issue #1344）。`#usageBlockFoldedInternalFailures` /
+  // `#usageBlockSuppressedRearms` はメモリ上にしか無く、器の入れ替えを跨ぐと消え、
+  // ターンの成功で枠が降りた回（`#pump` を経由しない `#usageBlocked = null`）は
+  // 日誌へ出さずに0へ戻る。⟹ この1行の件数は下限である。**それを行そのものに
+  // 名乗らせる**——読む人が「この枠でぜんぶで何件だったか」と読まないように。
+  const FOLD_COUNT_SCOPE_PHRASES = [
+    'この枠の区間でこのプロセスが数えた分だけ',
+    '器の入れ替えを跨いだ分',
+    'ターンの成功で枠が降りた回の分',
+    '下限',
+  ] as const;
+
+  it('解除の1行の件数は、この枠の区間・このプロセスの分だけで下限であることを名乗る（件数が0の行には付けない）', async () => {
+    const s = setup(undefined, createMemoryStores(), {
+      resultSubtype: 'error_during_execution',
+      resultText: spendLimitMessage,
+    });
+
+    s.clone.post(internalSignal('evt-1'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+    s.clone.post(internalSignal('evt-2'));
+    await waitFor(
+      async () => (await internalFailureCount(s)) === 2,
+      '1本目の再試行の失敗が記録される',
+    );
+    await waitFor(() => s.clone.usageBlocked, '1本目の再試行もまた枠に当たる');
+    s.clone.post(internalSignal('evt-3'));
+    await waitFor(
+      async () => (await internalFailureCount(s)) === 3,
+      '2周目の再試行の失敗が記録される',
+    );
+
+    const releaseEntries = (
+      (await s.stores.journal.list({ types: ['exchange'] })) as JournalEntry[]
+    ).filter(
+      (entry): entry is Extract<JournalEntry, { type: 'exchange' }> =>
+        entry.type === 'exchange' && entry.text.includes('枠の解除を試す'),
+    );
+    // `journal.list()` は降順（新しい順）。[0] は1件畳んだ回、[1] は0件の回。
+    expect(releaseEntries).toHaveLength(2);
+    const [folded, empty] = releaseEntries;
+    expect(folded?.text).toContain('内部の失敗記録を畳んだ: 1 件');
+    for (const phrase of FOLD_COUNT_SCOPE_PHRASES) {
+      expect(folded?.text).toContain(phrase);
+      expect(empty?.text).not.toContain(phrase);
+    }
+
+    // 文言を変えても、この行は「クローンが自分に向けて書いた記録」のまま
+    // 振り分けられる（`turn-input.ts` の `role` の doc。判定の実体は
+    // `countsAsUndistilledActivity` と `humanExchanges`）。
+    expect(folded && countsAsUndistilledActivity(folded)).toBe(false);
+    expect(humanExchanges(releaseEntries)).toEqual([]);
+
+    await s.clone.stop();
+  });
+
+  it('解除の1行は、旧い文言でも射程を名乗る新しい文言でも「自分に向けて書いた記録」と判定される（陽性対照）', () => {
+    // 判定は `with` を見ていて文言を見ない——それを、文言を変える前後の両方の
+    // 形で固定する。旧い文言は Issue #1344 の時点の `clone.ts` の出力の形。
+    const oldText =
+      '枠の解除を試す。新しい合図が届いたので、保持していた 2 件を配り直す。' +
+      ' 人間が待っていない内部の失敗記録を畳んだ: 2 件。';
+    const newText = `${oldText}${FOLD_COUNT_SCOPE_PHRASES.join('／')}`;
+    const entries: JournalEntry[] = [oldText, newText].map((text, i) => ({
+      type: 'exchange',
+      id: `release-${String(i)}`,
+      at: '2026-09-23T00:00:00.000Z',
+      with: 'self',
+      role: 'outbound',
+      text,
+    }));
+    for (const entry of entries) {
+      expect(countsAsUndistilledActivity(entry)).toBe(false);
+    }
+    expect(humanExchanges(entries)).toEqual([]);
   });
 
   it('会話に紐づく失敗（人間との対話ターンが失敗した）は、内部の合図と混ざっても1文字も変わらない', async () => {

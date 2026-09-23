@@ -1739,6 +1739,13 @@ class Clone implements CloneHost {
    * 試した瞬間の1行**（`#pump` の「枠の解除を試す」）**へまとめて出し、
    * 出した直後に0へ戻す。** 枠が実際に降りたとき（`#usageBlocked = null`）にも
    * 0へ戻す——区間を跨いで持ち越さない。
+   *
+   * **⚠ メモリ上にしか無い。⟹ 出る件数は下限である**（Issue #1344）。
+   * 器の入れ替え（プロセスの再起動）を跨ぐと消え、ターンの成功で枠が降りた
+   * 回（`#pump` を経由しない `#usageBlocked = null`）は日誌へ出さずに0へ
+   * 戻る。**「枠の解除を試す」の1行は、この射程を文言で名乗る**——読む人が
+   * 「この枠でぜんぶで何回だったか」と読まないように。永続させるかどうかは
+   * 別の判断で、ここでは決めていない。
    */
   #usageBlockSuppressedRearms = 0;
   /**
@@ -1752,6 +1759,9 @@ class Clone implements CloneHost {
    * 書いたか」（`#pump` 側）——同じ枠が閉じている区間で両方が増えうるが、
    * 増える契機（合図の型・タイミング）は違う。**出す場所と reset のタイミングは
    * 同じ**（上と同じ理由）。
+   *
+   * **⚠ 上と同じく、メモリ上にしか無い。⟹ 出る件数は下限である**
+   * （Issue #1344。消える2つの経路と、1行が射程を名乗ることは上の doc）。
    */
   #usageBlockFoldedInternalFailures = 0;
   /**
@@ -3054,13 +3064,23 @@ class Clone implements CloneHost {
           const foldedInternalFailures = this.#usageBlockFoldedInternalFailures;
           this.#usageBlockSuppressedRearms = 0;
           this.#usageBlockFoldedInternalFailures = 0;
-          const suffix =
+          const counts =
             (suppressedRearms > 0
               ? ` 回復予定時刻より前だったので再武装を抑止: ${String(suppressedRearms)} 回。`
               : '') +
             (foldedInternalFailures > 0
               ? ` 人間が待っていない内部の失敗記録を畳んだ: ${String(foldedInternalFailures)} 件。`
               : '');
+          // **件数の射程を、行そのものに名乗らせる**（Issue #1344）。2つの
+          // カウンタはメモリ上にしか無いので、器の入れ替えを跨いだ分は消え、
+          // ターンの成功で枠が降りた回は日誌へ出さずに0へ戻る（両方の doc）。
+          // ⟹ この1行の件数は「この枠でぜんぶで何件か」ではなく下限である。
+          // 件数が0の行には付けない（付けると、名乗る対象の無い断り書きが
+          // 毎回の解除に並ぶ）。
+          const suffix =
+            counts === ''
+              ? ''
+              : `${counts}（件数・回数は、この枠の区間でこのプロセスが数えた分だけ。器の入れ替えを跨いだ分と、ターンの成功で枠が降りた回の分は数えずに0へ戻るので、実際より少ない＝下限。）`;
           await this.#journal({
             type: 'exchange',
             with: 'self',
