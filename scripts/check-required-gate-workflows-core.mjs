@@ -48,6 +48,19 @@
  *   まとめると、まとめた側全体が administration 権限を要求することになり、
  *   結局どちらも CI に配線できなくなる。
  *
+ * ⚠️ **「配線できない」と「配線しないと決めた」は別である。** 上の「あちら
+ * （`check:required-status-checks`）は CI に配線できない」は権限の制約の話
+ * だが、administration を読めるトークンを secret として置けば技術的には
+ * 配線できてしまう。**それはしないと決めた（Issue #1320、判断A、
+ * 2026-09-23）**——`main` は `enforce_admins: true` であり（実測
+ * 2026-09-23。⚠ #1155 が 2026-09-17 に観測した `false` から変わっている）、
+ * その保護を外せる鍵を CI の実行文脈へ置くことは、この判断を実質的に
+ * 取り消すことに当たる。administration は読むためだけの用途と書くためだけ
+ * の用途を分けられないためである。**代わりに、権限を既に持っている
+ * クローンが `pnpm check:required-status-checks` を定期的に手で打つ。**
+ * 詳細と理由は `check-scripts-wired.test.ts` の `check:required-status-checks`
+ * の `why` を見よ。
+ *
  * ## 4値で答える。「読めなかった」を緑へ倒さない
  *
  * 全体の verdict は `ok` / `disabled` / `orphan` / `unreadable` の4つである。

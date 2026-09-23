@@ -178,7 +178,17 @@ const EXEMPT: Exemption[] = [
       '「ずれている」と「繋がらなかった」が同じ赤になる。' +
       '⚠️ **この免除は「配線しなくてよい」ではなく「いまの手持ちのトークンでは配線できない」である。**' +
       'administration を読めるトークンを secret として置けるなら、ci.yml の schedule の回' +
-      '（門ではなく警報の回）へ `run: pnpm check:required-status-checks` を足すのが本来の置き場所である。',
+      '（門ではなく警報の回）へ `run: pnpm check:required-status-checks` を足すのが本来の置き場所である。' +
+      '⟹ ⛔ **ただし、その置き方はしないと決めた（Issue #1320、判断A、2026-09-23）。** ' +
+      'この repo の `main` は `enforce_admins: true` である' +
+      '（実測 2026-09-23、`gh api repos/takecchi/alteroid/branches/main/protection --jq ".enforce_admins.enabled"` ⟹ ' +
+      '`true`。⚠ #1155 が 2026-09-17 に観測した `false` から変わっている）——管理者すら CI を迂回できない、という' +
+      '明示の判断が既に置かれている。administration を読めるトークンを secret として置けば、その保護を外せる鍵が' +
+      'workflow の実行文脈から到達できる場所に置かれることになり、**その判断を実質的に取り消すことに当たる。**' +
+      '⚠️ **administration スコープは「読む」と「書く」を分けられない**——読むためだけに置いたトークンが、' +
+      '書ける鍵でもある。**代わりに、クローン（機構の外に居て、既に PAT と恒久の許可を持っている側）が' +
+      '`pnpm check:required-status-checks` を定期的に手で打つ。** **「自動化できない」と「自動化してはいけない」は' +
+      '別である**——この免除はいまや後者であり、「配線を諦めた」ではなく「人（クローン）が定期的に見る」に倒した。',
   },
 ];
 
