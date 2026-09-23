@@ -331,3 +331,158 @@ describe('STEPS にだけ配線された check:* を作らない（PR の CI で
     ).toEqual([]);
   });
 });
+
+/**
+ * **各 `check:*` が「どの経路で当たるべきか」を宣言させ、実際の配線と突き合わせる**
+ * （Issue #1297 の本命）。
+ *
+ * 上の2つの歯はどちらも**向きを知らない**。「どれかに載っている」は OR なので片側だけで
+ * 満たせ、「STEPS にだけ在るものを作らない」は1つの向きしか見ない。⟹ **「この門は
+ * PR で当たるべきなのに、手元の一式にしか居ない」も「手元で当たるべきなのに、PR にしか
+ * 居ない」も、どちらが正しいかを歯が知らない**（Issue #1297「逆向きにも正しい形と、
+ * 放置された形の両方が在る」）。
+ *
+ * **⛔ 両側を要求する（AND）では直らない。**片側だけが正しい門が実在する（`pr-*` /
+ * `base-overlap` は PR 番号やネットワークが要るので `STEPS` に置けない）。⟹ 向きは
+ * 門ごとに違い、**門の側が宣言するしかない。**
+ *
+ * ## 宣言と実物の分け方（判定の入力を腐らせない）
+ *
+ * - **宣言（`DECLARED_ROUTES`）は意図だけを持つ。**どの経路に居るべきか、と、片側だけ
+ *   にする理由。
+ * - **実物は毎回取り直す。**`STEPS`（`scripts/verify-core.mjs`）と `.github/workflows/`
+ *   の本文から導出する（上の2つの歯と同じ関数）。宣言に「いま配線されている場所」を
+ *   写さない——写すと、宣言が実物の控えになり、ずれても誰も気づかない。
+ * - **宣言が要るのは配線される門だけである。**どこにも配線しない門は、上の `EXEMPT`
+ *   が理由付きで持っている（二重に持たない）。ここでは `EXEMPT` の門が**実際にどこにも
+ *   配線されていないこと**だけを足して見る——免除しておきながら配線されていれば、免除の
+ *   `why` が現物とずれている。
+ *
+ * 経路は3つ:
+ * - `steps` —— `STEPS` の `args` に在る（手元の `pnpm verify`）
+ * - `pr` —— PR の更新で起動する workflow の `run:` に在る（`runsOnPullRequestUpdates`）
+ * - `other` —— それ以外の workflow（`push` / `schedule` 等）の `run:` に在る
+ *
+ * **この歯が測っていないこと**: 上の2つと同じく、`run:` の行が在ることは見るが、job や
+ * ステップの `if:` で実際に実行されるかは見ない。そして **`why` が正しいかは測っていない**
+ * （非空であることしか見ない。`EXEMPT` の doc と同じ限界）。
+ */
+type Route = 'steps' | 'pr' | 'other';
+
+interface DeclaredRoutes {
+  readonly routes: readonly Route[];
+  /** `steps` と `pr` の両方でない（＝片側だけ・`other` を含む）ときは必須。 */
+  readonly why?: string;
+}
+
+const ONLY_ON_PR_BECAUSE_NEEDS_PR =
+  'PR の番号・本文・コミット列を GitHub から読む門で、`STEPS`（offline で走る手元の一式）には置けない。';
+
+const DECLARED_ROUTES: Record<string, DeclaredRoutes> = {
+  'check:sdk-quotes': { routes: ['steps', 'pr'] },
+  'check:stale-token-restart-advice': { routes: ['steps', 'pr'] },
+  'check:web-bundle-node-traces': { routes: ['steps', 'pr'] },
+  'check:web-bundle-size': { routes: ['steps', 'pr'] },
+  'check:web-css-comment-classnames': { routes: ['steps', 'pr'] },
+  'check:agents-md-size': {
+    routes: ['pr'],
+    why:
+      '`STEPS` への組み込みは #1191 の着地後の別便と決めてあり、いまは ci.yml の1行だけが門である' +
+      "（逐語は `grep -Fn -- 'あちらは #1191 で別の担当が改修中で' .github/workflows/ci.yml`）。",
+  },
+  'check:base-overlap': {
+    routes: ['pr'],
+    why:
+      'PR の base と head の重なりを見る門で、PR が無ければ問いが立たない。' +
+      ONLY_ON_PR_BECAUSE_NEEDS_PR,
+  },
+  'check:required-gate-workflows': {
+    routes: ['pr'],
+    why:
+      '`gh api repos/…/actions/workflows` でネットワークへ出る（`actions: read`）。`STEPS` は offline で' +
+      '走る一式なので、繋がらなかったことと門が死んでいることが同じ赤になる。',
+  },
+  'check:no-attribution-trailers': { routes: ['pr'], why: ONLY_ON_PR_BECAUSE_NEEDS_PR },
+  'check:pr-closing-keywords': { routes: ['pr'], why: ONLY_ON_PR_BECAUSE_NEEDS_PR },
+  'check:pr-line-number-citations': { routes: ['pr'], why: ONLY_ON_PR_BECAUSE_NEEDS_PR },
+  'check:pr-vanished-footprint': { routes: ['pr'], why: ONLY_ON_PR_BECAUSE_NEEDS_PR },
+  'check:main-commit-trailers': {
+    routes: ['other'],
+    why:
+      '`main` へ入った squash コミットを見る門で、squash コミットはマージした瞬間に初めて存在する' +
+      '（Issue #1314）。PR の run からは原理的に見えないので `push` の workflow にだけ居る。',
+  },
+};
+
+/** 実物の経路（毎回取り直す）。 */
+function actualRoutes(name: string, wiredSteps: ReadonlySet<string>): Route[] {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(String.raw`run:\s*pnpm ${escaped}(?:\s|$)`, 'm');
+  const routes: Route[] = [];
+  if (wiredSteps.has(name)) routes.push('steps');
+  if (WORKFLOW_TEXTS.some((text) => runsOnPullRequestUpdates(text) && pattern.test(text))) {
+    routes.push('pr');
+  }
+  if (WORKFLOW_TEXTS.some((text) => !runsOnPullRequestUpdates(text) && pattern.test(text))) {
+    routes.push('other');
+  }
+  return routes;
+}
+
+const sortedRoutes = (routes: readonly Route[]): Route[] => [...routes].sort();
+
+describe('各 check:* は、宣言した経路にだけ配線されている（Issue #1297）', () => {
+  const scripts = readPackageJsonCheckScripts();
+  const wiredSteps = wiredInVerifySteps();
+  const exempt = new Set(EXEMPT.map((e) => e.script));
+
+  it('どの check:* も、DECLARED_ROUTES か EXEMPT のちょうど一方に載っている（足した門は宣言を強制される）', () => {
+    const undeclared = scripts.filter((name) => !(name in DECLARED_ROUTES) && !exempt.has(name));
+    const both = scripts.filter((name) => name in DECLARED_ROUTES && exempt.has(name));
+    expect(
+      { undeclared, both },
+      '【赤の意味】undeclared の門は、どの経路で当たるべきかが宣言されていない。' +
+        'この歯（scripts/check-scripts-wired.test.ts）の DECLARED_ROUTES へ経路を宣言すること' +
+        '（どこにも配線しないなら EXEMPT へ理由付きで）。both の門は両方に載っている。',
+    ).toEqual({ undeclared: [], both: [] });
+  });
+
+  it('DECLARED_ROUTES に、package.json に無い門が残っていない（消した門の宣言を残さない）', () => {
+    const stale = Object.keys(DECLARED_ROUTES).filter((name) => !scripts.includes(name));
+    expect(stale).toEqual([]);
+  });
+
+  it('片側だけ（steps と pr の両方ではない）と宣言した門は、why が非空である', () => {
+    const missingWhy = Object.entries(DECLARED_ROUTES)
+      .filter(([, d]) => {
+        const both = d.routes.length === 2 && d.routes.includes('steps') && d.routes.includes('pr');
+        return !both && (d.why ?? '').trim().length === 0;
+      })
+      .map(([name]) => name);
+    expect(missingWhy).toEqual([]);
+  });
+
+  it('宣言した経路と、実物の経路が門ごとに一致する（どちらの向きのずれも赤）', () => {
+    const mismatches = Object.entries(DECLARED_ROUTES)
+      .map(([name, d]) => ({
+        name,
+        declared: sortedRoutes(d.routes),
+        actual: sortedRoutes(actualRoutes(name, wiredSteps)),
+      }))
+      .filter((m) => m.declared.join(',') !== m.actual.join(','));
+    expect(
+      mismatches,
+      '【赤の意味】次の門は、宣言した経路（declared）と実際に配線されている経路（actual）が違う。' +
+        'steps = scripts/verify-core.mjs の STEPS、pr = PR の更新で起動する workflow の run:、' +
+        'other = それ以外の workflow の run:。配線を宣言に合わせるか、意図が変わったなら宣言と why を直すこと。',
+    ).toEqual([]);
+  });
+
+  it('EXEMPT の門は、実際にどこにも配線されていない（免除の why が現物とずれていない）', () => {
+    const wiredAnyway = EXEMPT.map((e) => ({
+      name: e.script,
+      actual: actualRoutes(e.script, wiredSteps),
+    })).filter((m) => m.actual.length > 0);
+    expect(wiredAnyway).toEqual([]);
+  });
+});
