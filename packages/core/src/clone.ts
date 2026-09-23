@@ -27,7 +27,7 @@ import {
 } from './claude-provider.js';
 import { describeArchiveContinuityForJournal } from './archive-continuity.js';
 import { CONTEXT_USAGE_CATEGORY_LIMIT } from './context-usage.js';
-import { restoredInboxEventVerdict } from './inbox-staleness.js';
+import { restoredInboxEventVerdict, type RestoredInboxEventVerdict } from './inbox-staleness.js';
 import { denialInputAbsence, denialInputShape, type DeniedRecord } from './denial-shape.js';
 import {
   buildActivityDigest,
@@ -5887,6 +5887,13 @@ class Clone implements CloneHost {
     // `#redelivered` は1件ずつ積まれるので、後から見ても「同時だったか」は分からない。
     this.#restoredCohort = pending.length;
 
+    // **計器: このパスの始まりに1行だけ**（issue #903。件数が0のときは
+    // 書かない——`#journalRestoreUnreadPassStart` の doc）。以降どんな早期
+    // return を通っても、このパスの終わりには必ず対の1行
+    // （`#journalRestoreUnreadPassEnd`）を書く——始まりと終わりの対応を
+    // 崩さない。
+    await this.#journalRestoreUnreadPassStart(pending.length);
+
     // **索引を拾い直した未読から作り直す**（Issue #954 続き。`#pendingCollapse`
     // の doc「器の入れ替えを跨ぐと空になる」）。`#pendingCollapse` はメモリ上
     // にしか無いので、器の入れ替え（プロセスの再起動）を跨ぐと空になる——
@@ -6030,7 +6037,7 @@ class Clone implements CloneHost {
       });
     };
 
-    for (const { record, verdict } of decided) {
+    for (const [restoreUnreadPassIndex, { record, verdict }] of decided.entries()) {
       if (this.#stopped || this.#inbox.closed) {
         await flushStaleRemovalBuffer();
         // **`staleBuffer` と同じ理由で、ここでも先に空にする。** 既に
@@ -6038,6 +6045,12 @@ class Clone implements CloneHost {
         // ここで return する前に1本へまとめて書き切っておかないと、次の
         // 起動を待たずに黙って失われる（journal に一度も現れない）。
         await flushGatedFoldHeadline();
+        // **計器: 終わりの1行（中断）**（issue #903）。`restoreUnreadPassIndex`
+        // はまだ0件も処理していないこの周のぶんだけ手前で止まっているので、
+        // 「ここまでに処理した件数」としてそのまま渡せる。
+        await this.#journalRestoreUnreadPassEnd(decided, restoreUnreadPassIndex, {
+          interrupted: true,
+        });
         return;
       }
 
@@ -6086,6 +6099,19 @@ class Clone implements CloneHost {
         await flushStaleRemovalBuffer();
         // 直上と同じ理由（前の record ぶんで既に積んだ「畳んだ」を失わない）。
         await flushGatedFoldHeadline();
+        // **計器: 終わりの1行（中断）**（issue #903）。stale の record は
+        // ここに来る前に `#dropStaleRedelivery` と `staleBuffer.push` を
+        // 済ませている（`flushStaleRemovalBuffer` が上で拾う）ので、この
+        // 周の record は「消し込みまでは終わっている」——それでも
+        // `restoreUnreadPassIndex` はまだ進めていない（`for…of.entries()` の
+        // 仕様どおり、このループの本体を最後まで終えていないため）。**その
+        // 食い違いをここで数え直して隠さない**——今回止まった1件を
+        // 「処理済み」に含めるかどうかより、`processed` の定義を「ループが
+        // 最後まで到達した件数」に統一するほうが、次に読む人が両方の早期
+        // return を同じ規則で読める。
+        await this.#journalRestoreUnreadPassEnd(decided, restoreUnreadPassIndex, {
+          interrupted: true,
+        });
         return;
       }
 
@@ -6261,6 +6287,115 @@ class Clone implements CloneHost {
     // `gatedRecordsThisPass` が空のままなので、`flushGatedFoldHeadline` は
     // 何も書かずに戻る。
     await flushGatedFoldHeadline();
+    // **計器: 終わりの1行（完走）**（issue #903）。ここへ来る時点で
+    // `decided` の全件を処理し終えている——`processed` に `decided.length`
+    // を渡す。
+    await this.#journalRestoreUnreadPassEnd(decided, decided.length, { interrupted: false });
+  }
+
+  /**
+   * `#restoreUnreadPass` の1回の処理（1パス）の**始まりに1行だけ**書く、
+   * 総数の計器（issue #903）。呼ぶのは `#restoreUnreadPass` の先頭
+   * （`claimPending()` が返した直後）だけである。
+   *
+   * ## 何のための行か——性能の改修ではなく、見える化である
+   *
+   * issue #903 が指摘した性質（`claimPending()` が返す全件を、上限も刻みも
+   * 無く処理する）そのものはこの行では直していない——直すかどうかは
+   * 別の判断で、当時のオーナーの判定（本 Issue のコメント）は「急いで
+   * 刻みを入れるほうが危険」だった。**ここで足すのは、その性質が実際に
+   * どれくらいの件数を動かしているかを、日誌を読むだけで数えられるように
+   * する手当てだけである。**
+   *
+   * ## 件数が0のときは書かない
+   *
+   * `#restoreUnread` は器の入れ替え（プロセスの再起動）のたびに必ず1回
+   * 走る——未読が0件の（実運用ではこちらが大半の）起動でもここへ来る。
+   * 0件のたびにこの行を書くと、この行自体が「積み上がったときに見え
+   * なくする」雑音になる——起動回数ぶん積み重なるのに対し、対応する
+   * `#journalRestoreUnreadPassEnd` も含めて中身が無い。**この Issue が
+   * 問題にしている雑音を、対策のつもりで増やさないため、総数が1件以上の
+   * ときだけ書く。**
+   *
+   * ## 対になる終わりの行との関係
+   *
+   * この行を書いた回は、`#restoreUnreadPass` のその後の全ての経路
+   * （完走・2箇所ある `#stopped` / `#inbox.closed` の早期 return のどれか）
+   * で、必ず `#journalRestoreUnreadPassEnd` を1回呼ぶ——始まりだけ在って
+   * 終わりが無い回を作らない。**この対称性は呼び出し元（`#restoreUnreadPass`
+   * 自身）が保証する**——ここでは総数を書くだけで、終わりの側の責務は
+   * 一切持たない。
+   */
+  async #journalRestoreUnreadPassStart(total: number): Promise<void> {
+    if (total <= 0) return;
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text: `${EXCHANGE_KIND_GAUGE_PREFIX}未読の拾い直しを始める（claimPending が返した総数 ${total} 件）`,
+    });
+  }
+
+  /**
+   * `#restoreUnreadPass` の1回の処理（1パス）の**終わりに1行だけ**書く、
+   * 処理件数の計器（issue #903）。`#journalRestoreUnreadPassStart` と対——
+   * 呼ぶのは、始まりの行を書いた回（`decided.length > 0`）だけである
+   * （`#restoreUnreadPass` がその対称性を保証する。同関数の doc）。
+   *
+   * ## 引数
+   *
+   * - `decided`: `#restoreUnreadPass` がループの外で1回だけ計算した
+   *   live/stale の判定表（`{ verdict }` を持つ配列。`record` 自体は
+   *   ここでは読まない）。**その `length` が総数**——`claimPending()` が
+   *   返した件数と常に一致する（`decided` は `pending.map(...)` で作る
+   *   1対1の写像）。
+   * - `processed`: このパスでループが実際に最後まで処理し終えた件数。
+   *   **`decided` の先頭からこの件数ぶんを指す**——`#restoreUnreadPass` が
+   *   ループを回した `for…of decided.entries()` の index をそのまま渡す
+   *   （完走した回は `decided.length` を渡す）。
+   * - `context.interrupted`: `#stopped` / `#inbox.closed` による早期
+   *   return を経由したかどうか。
+   *
+   * ## 「処理した」の定義を1つに統一する
+   *
+   * ループの中には `#stopped` / `#inbox.closed` を見る早期 return が2箇所
+   * ある——1箇所目は record を1件も触る前、2箇所目は stale の record なら
+   * 既に `#dropStaleRedelivery`（消し込みの journal・`staleBuffer` への
+   * 積み込み）まで済ませた後。**どちらで止まっても、`processed` は
+   * 「ループの本体を最後まで終えた件数」で統一する**——2箇所目で止まった
+   * 周の record 自身は `processed` に含めない。stale の場合その record は
+   * 実際には消し込みの対象として既に確定している（`flushStaleRemovalBuffer`
+   * が拾う）ので、この数え方はその1件を「残り」の側に含めて過大に見せる
+   * 向きに倒れる——**過小に見せる（実際は途中で終わっていないのに
+   * 「終わった」と数える）よりは安全な向きである。**
+   *
+   * ## 内訳（stale / live）は専用のカウンタを持たず、都度数え直す
+   *
+   * `decided[i].verdict` はループより前に確定済みの純関数の結果なので、
+   * `processed` 件ぶんを事後にまとめて数え直しても答えは変わらない。
+   * ループの中で専用のカウンタを2本（stale 用・live 用）持つ設計も
+   * あり得たが、**採らなかった**——中断のタイミングと更新の順序が
+   * 噛み合わなかったときに2本のカウンタが食い違う、という単純な数え直し
+   * では起こらない種類のバグを新しく作る余地があるため。
+   */
+  async #journalRestoreUnreadPassEnd(
+    decided: ReadonlyArray<{ readonly verdict: RestoredInboxEventVerdict }>,
+    processed: number,
+    context: { readonly interrupted: boolean },
+  ): Promise<void> {
+    const total = decided.length;
+    if (total <= 0) return;
+    const staleCount = decided
+      .slice(0, processed)
+      .filter((entry) => entry.verdict === 'stale').length;
+    const liveCount = processed - staleCount;
+    const text = context.interrupted
+      ? `${EXCHANGE_KIND_GAUGE_PREFIX}未読の拾い直しを中断した（#stopped または #inbox.closed。` +
+        `総数 ${total} 件のうち ${processed} 件を処理した＝内訳 stale ${staleCount} 件・` +
+        `live ${liveCount} 件。残り ${total - processed} 件は次の起動で拾い直す）`
+      : `${EXCHANGE_KIND_GAUGE_PREFIX}未読の拾い直しが終わった（総数 ${total} 件のうち ${processed} 件を` +
+        `処理した＝内訳 stale ${staleCount} 件・live ${liveCount} 件）`;
+    await this.#journal({ type: 'exchange', with: 'self', role: 'outbound', text });
   }
 
   /**

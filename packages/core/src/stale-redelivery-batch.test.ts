@@ -2,6 +2,7 @@ import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-a
 import { describe, expect, it } from 'vitest';
 
 import { ALWAYS_REDELIVER, DAEMON_TOKEN_POOL_REOPENED_SOURCE, createClone } from './clone.js';
+import { EXCHANGE_KIND_GAUGE_PREFIX } from './exchange-kind.js';
 import type { CloneHost } from './host.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -260,8 +261,12 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
     );
 
     // stale 1件につき (本文 + 畳んだ見出し1行) = 2回。3回目（旧「配り直した」の
-    // 単独行）は書かれない。
-    expect(appendCalls.length - baselineCount).toBe(2 * N);
+    // 単独行）は書かれない。**+2 はこのパス全体で1回ずつ書く計器の始まり・
+    // 終わりの行**（issue #903 続き。`#journalRestoreUnreadPassStart` /
+    // `#journalRestoreUnreadPassEnd`。件数の内訳は
+    // 「計器: #restoreUnreadPass の始まりと終わりに1行だけ書く」の describe
+    // で個別に測る——ここでは合計の呼び出し回数だけを見る）。
+    expect(appendCalls.length - baselineCount).toBe(2 * N + 2);
 
     await clone.stop();
   });
@@ -547,5 +552,162 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
       const at = atOf(id);
       expect(droppedTexts.some((text) => text.includes(at))).toBe(false);
     }
+  }, 30_000);
+});
+
+/**
+ * `#restoreUnreadPass` の1回の処理（1パス）につき、始まりに1行・終わりに
+ * 1行だけ書く計器（issue #903 続き。`#journalRestoreUnreadPassStart` /
+ * `#journalRestoreUnreadPassEnd`）が守るべき性質を測る。
+ *
+ * **これは性能の改修ではなく、見える化の手当てである。** issue #903 が
+ * 指摘した「上限も刻みも無く全件処理する」という性質そのものは、この
+ * 便では直していない——測るのは「その処理が何件を動かしたかが、日誌を
+ * 読むだけで数えられるようになったか」だけである。
+ */
+describe('計器: #restoreUnreadPass の始まりと終わりに1行だけ書く（issue #903 続き）', () => {
+  it('総数と処理した数が正しい。始まり・終わりの行がちょうど1本ずつ出る', async () => {
+    const stores = createMemoryStores();
+    const N = 5;
+    const ids = Array.from({ length: N }, (_, i) => `evt-gauge-basic-${i}`);
+    for (const [i, id] of ids.entries()) {
+      const at = `2026-08-10T00:00:0${i}.000Z`;
+      await stores.inbox.put(staleTokenPoolEvent(id, at, `GAUGE-${i}`), at);
+    }
+
+    const { clone } = bootClone(stores);
+    await waitFor(async () => (await stores.inbox.peekPending()).length === 0, '全件が消える');
+
+    const exchanges = await stores.journal.list({ types: ['exchange'] });
+    const gaugeLines = exchanges.filter(
+      (entry) => entry.type === 'exchange' && entry.text.startsWith(EXCHANGE_KIND_GAUGE_PREFIX),
+    );
+    const starts = gaugeLines.filter(
+      (entry) => entry.type === 'exchange' && entry.text.includes('未読の拾い直しを始める'),
+    );
+    const ends = gaugeLines.filter(
+      (entry) => entry.type === 'exchange' && entry.text.includes('未読の拾い直しが終わった'),
+    );
+
+    // **ちょうど1本ずつ**（1件ごとに出していないことの対照は下の別テスト）。
+    expect(starts.length).toBe(1);
+    expect(ends.length).toBe(1);
+
+    const startText = starts[0]?.type === 'exchange' ? starts[0].text : '';
+    const endText = ends[0]?.type === 'exchange' ? ends[0].text : '';
+    expect(startText).toContain(`総数 ${N} 件`);
+    expect(endText).toContain(`総数 ${N} 件のうち ${N} 件を処理した`);
+    // 完走した回なので「中断」の語は出ない。
+    expect(endText).not.toContain('中断した');
+
+    await clone.stop();
+  });
+
+  it('やりすぎの対照: 件数が複数（7件）でも、1件ごとに [計器] 行を出していない（ちょうど2本）', async () => {
+    const stores = createMemoryStores();
+    const N = 7;
+    const ids = Array.from({ length: N }, (_, i) => `evt-gauge-many-${i}`);
+    for (const [i, id] of ids.entries()) {
+      const at = `2026-08-11T00:00:0${i}.000Z`;
+      await stores.inbox.put(staleTokenPoolEvent(id, at, `GAUGE-MANY-${i}`), at);
+    }
+
+    const { clone } = bootClone(stores);
+    await waitFor(async () => (await stores.inbox.peekPending()).length === 0, '全件が消える');
+
+    const exchanges = await stores.journal.list({ types: ['exchange'] });
+    const gaugeLines = exchanges.filter(
+      (entry) => entry.type === 'exchange' && entry.text.startsWith(EXCHANGE_KIND_GAUGE_PREFIX),
+    );
+    // **1件ごとに書いていれば7本を超える。書いているのは始まり・終わりの
+    // 2本だけである。**
+    expect(gaugeLines.length).toBe(2);
+
+    await clone.stop();
+  });
+
+  it('中断（#stopped / #inbox.closed）したとき、終わりの行が中断の事実と正しい残り件数を報告する', async () => {
+    const base = createMemoryStores();
+    const N = 200;
+    const baseEpochMs = Date.UTC(2026, 0, 2, 0, 0, 0, 0);
+    const atForIndex = (i: number): string => new Date(baseEpochMs + i).toISOString();
+    const ids = Array.from({ length: N }, (_, i) => `evt-gauge-crash-${i}`);
+    for (const [i, id] of ids.entries()) {
+      const at = atForIndex(i);
+      await base.inbox.put(staleTokenPoolEvent(id, at, i), at);
+    }
+
+    // **同じ割り込み方**（上の describe「拾い直しの途中で器が畳まれても…」の
+    // 歯と同じ形）。journal.append をフックして、「消した」の行が
+    // STOP_AFTER 件出た時点で同期的に stop() を起こす——ポーリングでは
+    // 狙えない「ループの途中」を取る。
+    const cloneRef: { current: CloneHost | undefined } = { current: undefined };
+    let stopPromise: Promise<void> | undefined;
+    let droppedSoFar = 0;
+    const STOP_AFTER = 50;
+    const stores: Stores = {
+      ...base,
+      journal: {
+        ...base.journal,
+        async append(entry) {
+          const result = await base.journal.append(entry);
+          if (
+            stopPromise === undefined &&
+            entry.type === 'exchange' &&
+            entry.text.includes('ターンを起こさずに消した')
+          ) {
+            droppedSoFar += 1;
+            if (droppedSoFar >= STOP_AFTER && cloneRef.current !== undefined) {
+              stopPromise = cloneRef.current.stop();
+            }
+          }
+          return result;
+        },
+      },
+    };
+
+    const booted = bootClone(stores);
+    cloneRef.current = booted.clone;
+
+    await waitFor(() => stopPromise !== undefined, 'stop() が割り込みで起こされる');
+    await stopPromise;
+
+    const exchanges = await stores.journal.list({ types: ['exchange'] });
+    const ends = exchanges.filter(
+      (entry) =>
+        entry.type === 'exchange' &&
+        entry.text.startsWith(EXCHANGE_KIND_GAUGE_PREFIX) &&
+        entry.text.includes('未読の拾い直しを中断した'),
+    );
+    // **中断したときも、終わりの行はちょうど1本。**
+    expect(ends.length).toBe(1);
+    const endText = ends[0]?.type === 'exchange' ? ends[0].text : '';
+
+    const totalProcessedMatch = endText.match(/総数 (\d+) 件のうち (\d+) 件を処理した/);
+    expect(totalProcessedMatch).not.toBeNull();
+    const total = Number(totalProcessedMatch?.[1]);
+    const processed = Number(totalProcessedMatch?.[2]);
+    expect(total).toBe(N);
+    // **本当に「途中」だったことの確認**（全部処理していても0件でもいけない）。
+    expect(processed).toBeGreaterThan(0);
+    expect(processed).toBeLessThan(N);
+
+    const remainingMatch = endText.match(/残り (\d+) 件は次の起動で拾い直す/);
+    expect(remainingMatch).not.toBeNull();
+    const reportedRemaining = Number(remainingMatch?.[1]);
+    // 行が名乗る算術（総数 − 処理した = 残り）がそのまま整合している。
+    expect(reportedRemaining).toBe(total - processed);
+
+    // **ストアの実際の残りと突き合わせる。** `processed` は「ループの本体を
+    // 最後まで終えた件数」で数えている（`#journalRestoreUnreadPassEnd` の
+    // doc「『処理した』の定義を1つに統一する」）——2箇所ある早期 return の
+    // うち後段（stale の消し込みまで済ませた直後）で止まった回は、その1件が
+    // 実際にはストアから消えているのに `processed` にはまだ数えていない。
+    // ⟹ **ストアの実際の残りは、報告した残りと一致するか、ちょうど1件
+    // 少ないかのどちらかになる**（多く見せることはあっても、少なく見せる
+    // ことは無い——安全側に倒れていることをここで実測する）。
+    const actualRemaining = (await base.inbox.peekPending()).length;
+    expect(actualRemaining).toBeLessThanOrEqual(reportedRemaining);
+    expect(actualRemaining).toBeGreaterThanOrEqual(reportedRemaining - 1);
   }, 30_000);
 });
