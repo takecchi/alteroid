@@ -860,7 +860,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: jdx/mise-action@v4
+      # **`GITHUB_REPOSITORY` は渡さない。** `check-required-gate-workflows.mjs`
+      # が読む API パスは `takecchi/alteroid` を直書きしてある
+      # （`check-required-status-checks.mjs` の `PROTECTION_PATH` と同じ流儀）。
+      # ここで見たいのは「**upstream の** required な門が生きているか」であって、
+      # fork 側の workflow 一覧ではない。⟹ 渡しても使われない変数を置くと、次に
+      # 読む人が「repo ごとに切り替わる」と誤読する。
       - run: pnpm check:required-gate-workflows
         env:
           GH_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
