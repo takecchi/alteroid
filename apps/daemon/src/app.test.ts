@@ -4717,6 +4717,141 @@ describe('GET /dropped（#242 の HTTP 面）', () => {
 });
 
 /**
+ * `GET /appraisal-stats`（#1278 の HTTP 面。PRD「入口の等価性」——クローンの
+ * `appraisal_stats`（MCP。`tools.test.ts`）と同じものを人間の手からも）。
+ */
+describe('GET /appraisal-stats（#1278 の HTTP 面）', () => {
+  it('日誌の2つの印を混ぜずに数え、200件超でも総数が出る（limit に縛られない）', async () => {
+    for (let i = 0; i < 210; i += 1) {
+      await stores.journal.append({
+        type: 'decision',
+        decision: `引き受けた仕事に評定を付けた（c${i}）: good`,
+        grounds: '',
+      });
+    }
+    await stores.journal.append({
+      type: 'decision',
+      decision: '委譲に評定を付けた（m1）: bad — 差し戻し',
+      grounds: '',
+    });
+
+    const response = await app.request('/appraisal-stats');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      journal: {
+        commitments: { good: number; bad: number; unclear: number; other: number; total: number };
+        jobs: { good: number; bad: number; unclear: number; other: number; total: number };
+      };
+    };
+
+    // journal_read（MCP）の limit=200 に当たれば下限へ化ける件数——ここでは
+    // ストアを直接読むので、210件全部が数えられている。
+    expect(body.journal.commitments.total).toBe(210);
+    expect(body.journal.commitments.good).toBe(210);
+    // 委譲側は別の印なので、台帳側の210件に引きずられず1件だけ。
+    expect(body.journal.jobs.total).toBe(1);
+    expect(body.journal.jobs.bad).toBe(1);
+  });
+
+  /**
+   * **変異試験で見つけた穴（#1278）。** `appraisalDecisionTallySchema`
+   * （`openapi.ts`）から `unclear` を1つ落としても、直上の it は red にならな
+   * かった——`good`/`bad`/`total` しか見ていなかったため、zod が未知でない
+   * だけの「宣言し忘れた」欄を黙って応答から落とす形（`z.object()` は既定で
+   * 未宣言のキーを出力から剥がす）を見逃していた。**この歯は5つのキー
+   * （good/bad/unclear/other/total）を `toEqual` で丸ごと突き合わせる**ので、
+   * どれか1つでもスキーマから抜け落ちれば必ず落ちる。
+   */
+  it('good/bad/unclear/other/total の5キーが全部、台帳・委譲の両方に出る（スキーマの欄落ちを検出する）', async () => {
+    await stores.journal.append({
+      type: 'decision',
+      decision: '引き受けた仕事に評定を付けた（c1）: good',
+      grounds: '',
+    });
+    await stores.journal.append({
+      type: 'decision',
+      decision: '引き受けた仕事に評定を付けた（c2）: bad — 差し戻し',
+      grounds: '',
+    });
+    await stores.journal.append({
+      type: 'decision',
+      decision: '引き受けた仕事に評定を付けた（c3）: unclear',
+      grounds: '',
+    });
+    await stores.journal.append({
+      type: 'decision',
+      decision: '引き受けた仕事に評定を付けた（c4）: weird',
+      grounds: '',
+    });
+    await stores.journal.append({
+      type: 'decision',
+      decision: '委譲に評定を付けた（m1）: good',
+      grounds: '',
+    });
+    await stores.journal.append({
+      type: 'decision',
+      decision: '委譲に評定を付けた（m2）: unclear',
+      grounds: '',
+    });
+
+    const response = await app.request('/appraisal-stats');
+    const body = (await response.json()) as {
+      journal: {
+        commitments: { good: number; bad: number; unclear: number; other: number; total: number };
+        jobs: { good: number; bad: number; unclear: number; other: number; total: number };
+      };
+    };
+
+    expect(body.journal.commitments).toEqual({ good: 1, bad: 1, unclear: 1, other: 1, total: 4 });
+    expect(body.journal.jobs).toEqual({ good: 1, bad: 0, unclear: 1, other: 0, total: 2 });
+  });
+
+  it('終端した委譲を状態ごとに割り、評定なしを4つ目の状態として出す', async () => {
+    await stores.jobs.putJob({
+      id: 'm-done',
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      status: 'done',
+      summary: '完了',
+      appraisal: 'good',
+    });
+    await stores.jobs.putJob({
+      id: 'm-stopped',
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      status: 'stopped',
+      summary: 'manager_stop で畳んだ（評定なし）',
+    });
+    await stores.jobs.putJob({
+      id: 'm-running',
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      status: 'running',
+      summary: 'まだ走行中——対象外',
+    });
+
+    const response = await app.request('/appraisal-stats');
+    const body = (await response.json()) as {
+      jobCoverage: {
+        byStatus: Array<{ status: string; total: number; appraised: number; unappraised: number }>;
+        terminalTotal: number;
+        terminalUnappraised: number;
+        nonTerminalTotal: number;
+      };
+    };
+
+    const byStatus = Object.fromEntries(body.jobCoverage.byStatus.map((row) => [row.status, row]));
+    expect(byStatus.done).toEqual({ status: 'done', total: 1, appraised: 1, unappraised: 0 });
+    expect(byStatus.stopped).toEqual({ status: 'stopped', total: 1, appraised: 0, unappraised: 1 });
+    // running は byStatus に現れない（対象外）が、非終端の件数として残る。
+    expect(byStatus.running).toBeUndefined();
+    expect(body.jobCoverage.nonTerminalTotal).toBe(1);
+    expect(body.jobCoverage.terminalTotal).toBe(2);
+    expect(body.jobCoverage.terminalUnappraised).toBe(1);
+  });
+});
+
+/**
  * OpenAPI の配信（Issue #20）。
  *
  * spec が経路の実装とずれたら「外から API を叩けます」という主張そのものが

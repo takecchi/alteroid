@@ -1387,6 +1387,61 @@ export const droppedResponseSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// 評定の内訳（/appraisal-stats）——#1278「評定の内訳を要るときに数える口が無い」の HTTP 面。
+// PRD「入口の等価性」（droppedResponseSchema の doc と同じ理由）。
+// ---------------------------------------------------------------------------
+
+/**
+ * 評定（`good`/`bad`/`unclear`）を先頭一致で数えた内訳。**`@alteroid/core` の
+ * `AppraisalDecisionTally` と同じ形**（core は zod で書いていないので、
+ * ここで zod の形に写す。`droppedResponseSchema` 冒頭 doc と同じ方針）。
+ *
+ * `other`: 3値のどれでもない値（保存層は緩い文字列なので理論上ありうる）。
+ * `total`: good + bad + unclear + other。
+ */
+export const appraisalDecisionTallySchema = z.object({
+  good: z.number().int(),
+  bad: z.number().int(),
+  unclear: z.number().int(),
+  other: z.number().int(),
+  total: z.number().int(),
+});
+
+/** 1つの `JobStatus`（終端した状態だけ）について、評定の有無を数えた行。 */
+export const jobAppraisalCoverageRowSchema = z.object({
+  status: jobStatusSchema,
+  total: z.number().int(),
+  appraised: z.number().int(),
+  unappraised: z.number().int(),
+});
+
+/**
+ * `GET /appraisal-stats` の応答。
+ *
+ * - `journal.commitments` / `journal.jobs`: 日誌の `decision` 行を
+ *   `COMMITMENT_APPRAISAL_DECISION_PREFIX` / `JOB_APPRAISAL_DECISION_PREFIX`
+ *   それぞれの先頭一致で数えた**全期間の総数**（`limit` は掛けていない——
+ *   `appraisal-stats.ts` の doc）。**この2つを混ぜて読まないこと** —— 台帳の
+ *   行の始末と、マネージャーに出した仕事の出来は別の軸である。
+ * - `jobCoverage`: `JobStore` を終端の仕方（`done`/`failed`/`lost`/`stopped`）
+ *   ごとに割った、評定の有無の内訳。`running`/`waiting_human`（まだ終端して
+ *   いない）は `byStatus` に含めず、件数だけ `nonTerminalTotal` に出す。
+ */
+export const appraisalStatsResponseSchema = z.object({
+  journal: z.object({
+    commitments: appraisalDecisionTallySchema,
+    jobs: appraisalDecisionTallySchema,
+  }),
+  jobCoverage: z.object({
+    byStatus: z.array(jobAppraisalCoverageRowSchema),
+    terminalTotal: z.number().int(),
+    terminalAppraised: z.number().int(),
+    terminalUnappraised: z.number().int(),
+    nonTerminalTotal: z.number().int(),
+  }),
+});
+
+// ---------------------------------------------------------------------------
 // アーカイブ（/archive）
 // ---------------------------------------------------------------------------
 

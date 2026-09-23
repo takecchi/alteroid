@@ -14702,6 +14702,103 @@ describe('commitment_close が「台帳に無い」と答えるとき、機械�
 });
 
 /**
+ * `appraisal_stats`（#1278「評定の内訳を要るときに数える口が無い」）。
+ *
+ * `appraisal-stats.test.ts` が純関数（`tallyAppraisalDecisions` /
+ * `computeJobAppraisalCoverage` / `computeAppraisalJournalStats`）を測っている
+ * ので、ここで固定するのは**道具として正しく配線されていること**——ストアから
+ * 読んだ値が文面に出ること、2つの印を混ぜないこと、`limit` に縛られず全期間の
+ * 総数が出ることの3点である。
+ */
+describe('appraisal_stats — 評定の内訳を数える道具（#1278）', () => {
+  it('日誌の decision 行（2つの印）と、終端した委譲の評定の有無を、混ぜずに返す', async () => {
+    const stores = createMemoryStores();
+    await stores.journal.append({
+      type: 'decision',
+      decision: '引き受けた仕事に評定を付けた（c1）: good',
+      grounds: '',
+    });
+    await stores.journal.append({
+      type: 'decision',
+      decision: '引き受けた仕事に評定を付けた（c2）: bad — うまくいかなかった',
+      grounds: '',
+    });
+    await stores.journal.append({
+      type: 'decision',
+      decision: '委譲に評定を付けた（m1）: unclear',
+      grounds: '',
+    });
+    await stores.jobs.putJob({
+      id: 'm1',
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      status: 'done',
+      summary: '委譲1',
+      appraisal: 'unclear',
+    });
+    await stores.jobs.putJob({
+      id: 'm2',
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      status: 'stopped',
+      summary: '委譲2（manager_stop で畳まれ、評定は付いていない）',
+    });
+
+    const tools = createCloneTools({
+      stores,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+    const stats = tools.find((entry) => entry.name === 'appraisal_stats');
+    expect(stats).toBeDefined();
+    const result = await stats?.handler({} as never, {});
+    const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+
+    // 台帳側の内訳（good 1 / bad 1）。
+    expect(reply).toContain('評定行 2 件');
+    expect(reply).toContain('うまくいった 1');
+    expect(reply).toContain('うまくいかなかった 1');
+    // 委譲側の内訳（unclear 1）は別の節に出る——2つが同じ数字の並びに
+    // 混ざっていないことを、節の見出しの間で確かめる。
+    const commitmentsSection = reply.slice(
+      reply.indexOf('引き受けた仕事'),
+      reply.indexOf('委譲（JOB_APPRAISAL_DECISION_PREFIX）'),
+    );
+    const jobsSection = reply.slice(reply.indexOf('委譲（JOB_APPRAISAL_DECISION_PREFIX）'));
+    expect(commitmentsSection).toContain('評定行 2 件');
+    expect(jobsSection).toContain('評定行 1 件');
+    expect(jobsSection).toContain('判定できない 1');
+
+    // 終端した委譲の評定の有無——stopped の m2 は評定なしとして数えられる。
+    expect(reply).toContain('done: 終端 1 件（評定あり 1 / 評定なし 0）');
+    expect(reply).toContain('stopped: 終端 1 件（評定あり 0 / 評定なし 1）');
+    expect(reply).toContain('評定なしが 1 件');
+  });
+
+  it('journal_read の limit=200 には縛られない——201件を超える decision 行でも総数が出る', async () => {
+    const stores = createMemoryStores();
+    for (let i = 0; i < 201; i += 1) {
+      await stores.journal.append({
+        type: 'decision',
+        decision: `引き受けた仕事に評定を付けた（c${i}）: good`,
+        grounds: '',
+      });
+    }
+    const tools = createCloneTools({
+      stores,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+    const stats = tools.find((entry) => entry.name === 'appraisal_stats');
+    const result = await stats?.handler({} as never, {});
+    const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+    expect(reply).toContain('評定行 201 件');
+  });
+});
+
+/**
  * issue #416（1点目：「合図が無い」）。`storage-fs` は保持上限を超えた古い
  * 片付き行を物理削除するのに、その事実を運ぶ場所が出力にも型にも無かった。
  * `CommitmentList.trimmedClosed` を足したので、`commitment_list` の一覧末尾に
