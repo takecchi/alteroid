@@ -106,6 +106,25 @@ import type { TranscriptArchive } from './store.js';
  * 29. 🔴 **`maxChars` が正の整数でなければ fail-closed で拒む**（`0` /
  *     負数 / 非整数 / `NaN` のどれでも投げる。黙って全文へ倒さない）
  *
+ * **30〜33 は #908（同じミリ秒に3本以上積んだときの「直前」が2本目ではなく
+ * 1本目になる）の検査である。** #905 が入れた枝番付き id（`archiveIdCandidate`）
+ * は `id` の字面順（`base-2.jsonl` < `base-3.jsonl` < `base.jsonl`）が積んだ順と
+ * 一致しないため、`id` の大小で tie-break すると3本目以降が1本目を「直前」だと
+ * 誤認する。塞ぎ方は「枝番（積んだ順）で tie-break する」——`archiveIdBranch`
+ * （`archive-id.ts`）で3実装が同じパーサを使う。
+ *
+ * 30. 🔴 **同じミリ秒に3本積むと、3本目の `comparedTo` は2本目の id になる
+ *     （1本目ではない）。** 4本目も同様に3本目を指す
+ * 31. **`list()` の同着（同じ `at`）の並びは積んだ逆順**（新しいものが先。
+ *     インメモリの `seq` 降順と揃える）
+ * 32. **陰性対照A**: 違うミリ秒に3本積むと、`comparedTo` は常に直前の1本
+ *     （`at` が最大の行）を指す鎖になる（同着が一切絡まない基本形）
+ * 33. **陰性対照B**: 同着の枝番グループ（高い枝番を含む）の後に、違う
+ *     ミリ秒で2本積むと、2本目の `comparedTo` は1本目（枝番1、`at` は
+ *     同着グループより新しい）を指す——**同着グループの枝番の大小に
+ *     引きずられない**（`at` を見ずに枝番の大小だけで選ぶ変異はここで
+ *     赤くなる）
+ *
  * 呼び出し側は使い捨ての archive を渡すこと（後始末はしない）。
  *
  * @param deps.seedFingerprintlessRow 指紋（`bodyChars`/`bodyMd5`）を持たない
@@ -779,5 +798,120 @@ export async function verifyTranscriptArchiveContract(
       threw = true;
     }
     if (!threw) fail('readTail(不正なmaxChars)はfail-closedで拒む（例外を投げる）', { bad });
+  }
+
+  // --- ここから #908（同じミリ秒に3本以上積んだときの「直前」）--------------
+  //
+  // #905 が入れた枝番付き id は `id` の字面順（`base-2.jsonl` < `base-3.jsonl`
+  // < `base.jsonl`）が積んだ順と一致しない。`id` の大小で tie-break すると、
+  // 3本目以降が「1本目」を直前だと誤認する。**時計を固定しないと実時計では
+  // 再現できない**——`withFrozenNow` は上の検査20/21と同じ理由でここでも使う。
+
+  // 30. 🔴 同じミリ秒に3本積むと、3本目の comparedTo は2本目の id
+  // （1本目ではない）。4本目も同様に3本目を指す。
+  const branchTieSessionId = 'archive-contract-same-ms-branch-tiebreak';
+  // 検査20/21が使った瞬間と衝突しないよう、少しずらす。
+  const branchTieMs = Date.now() + 1;
+  const [branchWrite1, branchWrite2, branchWrite3, branchWrite4] = await withFrozenNow(
+    branchTieMs,
+    async () => {
+      const w1 = await archive.archive(branchTieSessionId, 'BRANCH-TIE-1\n');
+      const w2 = await archive.archive(branchTieSessionId, 'BRANCH-TIE-2\n');
+      const w3 = await archive.archive(branchTieSessionId, 'BRANCH-TIE-3\n');
+      const w4 = await archive.archive(branchTieSessionId, 'BRANCH-TIE-4\n');
+      return [w1, w2, w3, w4] as const;
+    },
+  );
+  if (new Set([branchWrite1.id, branchWrite2.id, branchWrite3.id, branchWrite4.id]).size !== 4) {
+    fail('#908: 同じミリ秒に4回積んでも4本とも別々のidになる', {
+      branchWrite1,
+      branchWrite2,
+      branchWrite3,
+      branchWrite4,
+    });
+  }
+  if (branchWrite2.comparedTo !== branchWrite1.id) {
+    fail('#908: 2本目のcomparedToは1本目のid', { branchWrite1, branchWrite2 });
+  }
+  if (branchWrite3.comparedTo !== branchWrite2.id) {
+    fail('#908: 3本目のcomparedToは2本目のid（1本目ではない。idの字面順tie-breakの再発検出）', {
+      branchWrite1,
+      branchWrite2,
+      branchWrite3,
+    });
+  }
+  if (branchWrite4.comparedTo !== branchWrite3.id) {
+    fail('#908: 4本目のcomparedToは3本目のid', { branchWrite3, branchWrite4 });
+  }
+
+  // 31. list() の同着（同じ at）の並びは積んだ逆順（新しいものが先。
+  // インメモリの seq 降順と揃える）。
+  const branchTieEntries = (await archive.list()).filter(
+    (entry) => entry.sessionId === branchTieSessionId,
+  );
+  const branchTieOrder = branchTieEntries.map((entry) => entry.id);
+  const expectedBranchTieOrder = [
+    branchWrite4.id,
+    branchWrite3.id,
+    branchWrite2.id,
+    branchWrite1.id,
+  ];
+  if (
+    branchTieOrder.length !== 4 ||
+    branchTieOrder.some((id, index) => id !== expectedBranchTieOrder[index])
+  ) {
+    fail('#908: list()の同着(同じat)の並びは積んだ逆順（新しいものが先）', {
+      order: branchTieOrder,
+      expected: expectedBranchTieOrder,
+    });
+  }
+
+  // 32. 陰性対照A: 違うミリ秒に3本積むと、comparedToは常に直前の1本
+  // （atが最大の行）を指す鎖になる（同着が一切絡まない基本形）。
+  const chainedDiffMsSessionId = 'archive-contract-different-millisecond-chain';
+  const chainedBaseMs = branchTieMs + 1000;
+  const chained1 = await withFrozenNow(chainedBaseMs, () =>
+    archive.archive(chainedDiffMsSessionId, 'CHAIN-1\n'),
+  );
+  const chained2 = await withFrozenNow(chainedBaseMs + 5, () =>
+    archive.archive(chainedDiffMsSessionId, 'CHAIN-2\n'),
+  );
+  const chained3 = await withFrozenNow(chainedBaseMs + 11, () =>
+    archive.archive(chainedDiffMsSessionId, 'CHAIN-3\n'),
+  );
+  if (chained2.comparedTo !== chained1.id || chained3.comparedTo !== chained2.id) {
+    fail('#908の陰性対照A: 違うミリ秒に3本積むとcomparedToは常に直前の1本を指す', {
+      chained1,
+      chained2,
+      chained3,
+    });
+  }
+
+  // 33. 陰性対照B: 同着の枝番グループ（高い枝番=branchWrite4を含む）の後に、
+  // 違うミリ秒で2本積むと、2本目のcomparedToは1本目（枝番1、atは同着
+  // グループより新しい）を指す——**atを見ずに枝番の大小だけで選ぶ変異は
+  // ここで赤くなる**（枝番だけならbranchWrite4(枝番4)が誤って選ばれる）。
+  const afterTieMs = branchTieMs + 50;
+  const afterTie1 = await withFrozenNow(afterTieMs, () =>
+    archive.archive(branchTieSessionId, 'AFTER-TIE-1\n'),
+  );
+  const afterTie2 = await withFrozenNow(afterTieMs, () =>
+    archive.archive(branchTieSessionId, 'AFTER-TIE-2\n'),
+  );
+  if (afterTie1.comparedTo !== branchWrite4.id) {
+    fail(
+      '#908の陰性対照B: 同着グループの直後、違うミリ秒の1本目は同着グループの最新行を直前とする',
+      {
+        branchWrite4,
+        afterTie1,
+      },
+    );
+  }
+  if (afterTie2.comparedTo !== afterTie1.id) {
+    fail(
+      '#908の陰性対照B: 同着グループの直後の2本目は、枝番の大小(4 > 1)ではなくatの新しさで' +
+        '直前(afterTie1。枝番1)を選ぶ——atを見ない変異はここで赤くなる',
+      { branchWrite4, afterTie1, afterTie2 },
+    );
   }
 }
