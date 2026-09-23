@@ -1000,6 +1000,163 @@ describe('世代の照合（受け入れ基準: 同時に届いても回るの�
   });
 });
 
+/**
+ * **#1384**: `staleRun` は初出と10の冪だけしか日誌に出ないので、最後に出た行が
+ * 「本当に1件で止まったのか」「間引かれて2〜9件目が読めないだけなのか」を
+ * 後から見分けられない。**連なりの終わりに総数を1行出す**ことでこれを直す。
+ *
+ * 終わりは2つの経路で検出する——(1) 別の鍵（＝いまの現役の身元）の stale が
+ * 届いたとき、その場で前の鍵の総数が確定する（`observe` の `stale` 分岐の
+ * 遅延検出） (2) 回した／待たせた瞬間（`finishSweep` が `rotated` / `parked` を
+ * 作るとき）、その場で降りる側の総数が確定する。**同じ outcome の `why`
+ * （＝日誌の `text`）に終わりの一文を足す形にしてある**——別行にすると
+ * `TokenRotationOutcome` に新しい種別か欄が要り、`schema.ts` を変えることになる。
+ */
+describe('staleRun の連なりの終わり（#1384）', () => {
+  it('同じ鍵の stale を5件捨てたあと、別の鍵の stale が来たら「計5件」の終わりの一文が出る（2〜5件目は行を出さない）', async () => {
+    const h = harness();
+    await seedTwo(h);
+    // 現役を tok-b/世代2 にしておく（rotator を通さない、外部からの書き換え）。
+    await h.stores.tokens.writeActive({ tokenId: 'tok-b', generation: 2, rotatedAt: AT });
+
+    const staleObservation = {
+      notice: reached,
+      // 現役（tok-b/2）とは世代もトークンも合わない、遅れて届いた観測。
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    } as const;
+
+    // 1件目は出る。
+    const first = await h.rotator.observe(staleObservation);
+    expect(first).toMatchObject({ kind: 'ignored', freshness: 'stale', staleRun: 1 });
+    expect(tokenRotationEntry(first)?.event).toBe('not_rotated');
+
+    // 2〜5件目は間引かれて出ない（isThinnedMilestone は変えていない）。
+    for (let i = 2; i <= 5; i++) {
+      const outcome = await h.rotator.observe(staleObservation);
+      expect(outcome).toMatchObject({ kind: 'ignored', freshness: 'stale', staleRun: i });
+      expect(tokenRotationEntry(outcome)).toBeNull();
+    }
+
+    // 現役を tok-a/世代1 へ切り替える（これも rotator を通さない外部からの書き換え）。
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: AT });
+
+    // いまの現役（tok-a/1）に対する stale が届く——鍵が変わったので、前の鍵
+    // （tok-b/2）の連なりはここで終わったと分かる。
+    const afterKeyChange = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-b', generation: 2 },
+    });
+    expect(afterKeyChange).toMatchObject({ kind: 'ignored', freshness: 'stale', staleRun: 1 });
+    const entry = tokenRotationEntry(afterKeyChange);
+    expect(entry).not.toBeNull();
+    expect(entry?.text).toContain('計5件');
+    expect(entry?.text).toContain('終わった');
+    // ラベルも出す（id だけでなく、どのトークンだったか読めること）。
+    expect(entry?.text).toContain('second');
+    // プロセスが落ちたときはこの総数が出ないことを、行自身が名乗っている。
+    expect(entry?.text).toContain('プロセスが落ちた');
+  });
+
+  it('stale が5件続いたあと回すと、「計5件」の終わりの一文が出る', async () => {
+    const h = harness();
+    await seedFour(h);
+
+    // まず回して現役を確定させる（tok-a/1 → tok-b/2）。
+    const rotate1 = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+    expect(rotate1).toMatchObject({ kind: 'rotated', toTokenId: 'tok-b' });
+
+    // 同じ現役（tok-b/2）に対して、遅れて届いた stale を5件。
+    for (let i = 0; i < 5; i++) {
+      const outcome = await h.rotator.observe({
+        notice: reached,
+        observedBy: { tokenId: 'tok-a', generation: 1 },
+      });
+      expect(outcome).toMatchObject({ kind: 'ignored', freshness: 'stale', staleRun: i + 1 });
+    }
+
+    // いまの現役（tok-b/2）を名乗る新しい観測が届き、回る（tok-b → 次の候補）。
+    const rotate2 = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-b', generation: 2 },
+    });
+    expect(rotate2.kind).toBe('rotated');
+    const entry = tokenRotationEntry(rotate2);
+    expect(entry?.text).toContain('計5件');
+    expect(entry?.text).toContain('終わった');
+    expect(entry?.text).toContain('second'); // 降りた tok-b のラベル
+  });
+
+  it('回した瞬間に staleRun をリセットするので、次の stale で同じ連なりの終わりを二重に出さない', async () => {
+    const h = harness();
+    await seedFour(h);
+
+    // まず回して現役を確定させる（tok-a/1 → tok-b/2）。
+    const rotate1 = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+    expect(rotate1).toMatchObject({ kind: 'rotated', toTokenId: 'tok-b' });
+
+    // 同じ現役（tok-b/2）に対して、遅れて届いた stale を5件。
+    for (let i = 0; i < 5; i++) {
+      const outcome = await h.rotator.observe({
+        notice: reached,
+        observedBy: { tokenId: 'tok-a', generation: 1 },
+      });
+      expect(outcome).toMatchObject({ kind: 'ignored', freshness: 'stale', staleRun: i + 1 });
+    }
+
+    // いまの現役（tok-b/2）を名乗る新しい観測が届き、回る（tok-b → tok-c）。
+    // ここで「計5件」の終わりの一文が出て、`staleRun` はリセットされる
+    // （経路2。`finishSweep` の `rotated` 分岐にある `staleRun = null`）。
+    const rotate2 = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-b', generation: 2 },
+    });
+    if (rotate2.kind !== 'rotated') throw new Error('rotate2 は rotated のはず');
+    expect(tokenRotationEntry(rotate2)?.text).toContain('計5件');
+
+    // いまの現役（tok-c/世代3）に対する1件目の stale。**リセットが効いていれば、
+    // ここには「計5件」の終わりの一文はもう一度出ない**——出たら、前の連なり
+    // （tok-b、計5件）が二重に報告されたことになる。
+    const afterRotate = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: rotate2.toTokenId, generation: rotate2.generation - 1 },
+    });
+    expect(afterRotate).toMatchObject({ kind: 'ignored', freshness: 'stale', staleRun: 1 });
+    const afterRotateEntry = tokenRotationEntry(afterRotate);
+    expect(afterRotateEntry?.text).toContain('1件目');
+    expect(afterRotateEntry?.text).not.toContain('計5件');
+    expect(afterRotateEntry?.text).not.toContain('終わった');
+  });
+
+  it('陽性対照: 連なりが1件だけで終わっても、1件目の行と「計1件」の終わりの一文の両方が出る', async () => {
+    const h = harness();
+    await seedTwo(h);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-b', generation: 2, rotatedAt: AT });
+
+    const first = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+    expect(first).toMatchObject({ kind: 'ignored', freshness: 'stale', staleRun: 1 });
+    const firstEntry = tokenRotationEntry(first);
+    expect(firstEntry?.text).toContain('1件目');
+
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: AT });
+    const second = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-b', generation: 2 },
+    });
+    const secondEntry = tokenRotationEntry(second);
+    expect(secondEntry?.text).toContain('計1件');
+    expect(secondEntry?.text).toContain('終わった');
+  });
+});
+
 describe('受け入れ基準4: 全部冷却中なら先頭へ黙って戻らない', () => {
   it('いちばん早く戻るものとその時刻を出す（そしてそれを撒いて待つ）', async () => {
     // **⚠️ 2026-09-07 に期待値を反転した（`exhausted` → `parked`）。**

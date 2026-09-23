@@ -791,8 +791,12 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
    * **プロセスの寿命でしか持たない。** 記憶ストアへは書かない——これは「いま
    * 走っているデーモンが何回捨てたか」の計器であって、事実の記録ではない
    * （事実の側は日誌に出る）。
+   *
+   * **`identity` を添えてある**（#1384）。連なりが終わったとき、「前の現役が
+   * 誰だったか」を日誌の文言に書くための材料である——`key` は比較にしか使えない
+   * 文字列なので、終わりを報告する側は元の `tokenId` を持っていないと名乗れない。
    */
-  let staleRun: { key: string; count: number } | null = null;
+  let staleRun: { key: string; identity: ActiveAgentToken | null; count: number } | null = null;
 
   /**
    * **「その冷却が明けたことは、もう知らせた」**（#833。トークン id → 明けた `cooldownUntil`）。
@@ -872,6 +876,52 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
   /** 現役の身元を1本の鍵にする。**まだ指名していなければ `none`。** */
   function identityOf(active: ActiveAgentToken | null): string {
     return active === null ? 'none' : `${active.tokenId}#${String(active.generation)}`;
+  }
+
+  /**
+   * **`staleRun` の連なりが終わったことを、1文で言う**（#1384）。
+   *
+   * ## なぜ要るか —— 最後に出た行だけでは「止まったか」「間引かれただけか」が読めない
+   *
+   * {@link isThinnedMilestone} は初出と10の冪でしか日誌に出さない。⟹ 最後に出た
+   * 行が「3件目」だったのか「まだ続いていて次は10件目で出る」のかは、**その
+   * 連なりが終わるまで確定しない。** 連なりの終わりに総数を1行出すことで、
+   * 読み手は「そこで止まった」と「まだ間引かれている途中」を区別できる。
+   *
+   * ## 総数は間引いていない件も含む
+   *
+   * ここへ渡す `count` は `staleRun.count`（毎回1ずつ増える生の値）であって、
+   * `isThinnedMilestone` を通していない。**間引いて出さなかった2〜9件目・
+   * 11〜99件目…も、この総数には数えてある。**
+   *
+   * ## プロセスが落ちたら、この行は出ない
+   *
+   * `staleRun` は{@link staleRun}の doc のとおりプロセスの寿命でしか持たない
+   * （記憶ストアへ書かない）。⟹ **デーモンが入れ替わった瞬間、進行中の連なりは
+   * 総数を1行も残さずに消える。** これは欠陥ではなく、この計器の性質そのもの
+   * である——そのことを、この行自身の文面にも書く（読み手が「デーモンの
+   * 再起動をまたいでも必ず出る」と誤読しないため）。
+   */
+  function describeStaleRunEnd(ended: {
+    count: number;
+    identity: ActiveAgentToken | null;
+    tokens: readonly AgentToken[];
+  }): string {
+    const { count, identity, tokens } = ended;
+    const who =
+      identity === null
+        ? '(現役が未指名のあいだ)'
+        : (() => {
+            const label = tokens.find((token) => token.id === identity.tokenId)?.label;
+            const labelPart = label === undefined ? '' : `「${label}」`;
+            return `前の現役${labelPart}（id ${identity.tokenId}）`;
+          })();
+    return (
+      `\n${who}に対して、もう回した後の通知を計${String(count)}件捨てて、この連なりは終わった` +
+      '（**間引きで出していない件も含めた総数**。' +
+      '**プロセスが落ちた（デーモンが入れ替わった）ときは、この連なりの総数は出ない**——' +
+      'この計器はプロセスの寿命でしか持たないためである）'
+    );
   }
 
   /**
@@ -1213,6 +1263,25 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
       ...(reason === undefined ? {} : { reason }),
     };
 
+    /**
+     * **連なりの終わりの経路2（#1384）: 回した／待たせた瞬間、現役の身元が変わる。**
+     *
+     * ここへ来るのは `nominate()` を呼ぶ2つの分岐（`rotated` / `parked`）だけ——
+     * どちらも現役の `tokenId` と `generation` を書き換える。**`exhausted` は
+     * 何も撒かない（身元は変わらない）ので、ここでは終わりを確定させない。**
+     *
+     * **`active` はこの関数の呼び出し元（`observe` / `reconsider`）が周の先頭で
+     * 読んだ「降りる側」の身元そのもの**——`identityOf(active)` が `staleRun.key`
+     * と一致するなら、いま数えている連なりの持ち主はまさにこれから降りる現役
+     * である。一致を確かめてから下の2つの return で使う（一致しなければ
+     * `null` のまま——連なりが無い、または別の鍵についてのものなので、ここでは
+     * 終わらせない）。
+     */
+    const endedStaleRun =
+      staleRun !== null && staleRun.key === identityOf(active)
+        ? { count: staleRun.count, identity: active }
+        : null;
+
     // **冷却の印は、ここで1回だけ保存する。**
     //
     // **周ごとに保存すると、途中で落ちたときに「一部の候補にだけ冷却が付いて、
@@ -1259,6 +1328,9 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
     if (sweep.chosen !== undefined) {
       const { token, verdict } = sweep.chosen;
       const placed = await nominate(token);
+      // **連なりが終わったなら、ここでリセットする。** `nominate()` が現役の身元を
+      // 書き換えた直後——次の `stale` はこの新しい身元を鍵にして数え直す。
+      if (endedStaleRun !== null) staleRun = null;
       return {
         kind: 'rotated' as const,
         ...(outgoingId === undefined ? {} : { fromTokenId: outgoingId }),
@@ -1273,10 +1345,19 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         // `event` は `rotated` のままにしてある** —— `event` の軸は「何が起きたか」
         // で、**候補をどう選んだかは別の軸**である（そしてその軸は、この変更より前から
         // `why` が運んでいる）。
+        //
+        // **末尾に、連なりの終わりの一文を足す（#1384。無ければ何も足さない）。**
+        // 別の行にせず同じ `why`（＝日誌の `text`）へ足しているのは、`rotated` が
+        // 既に必ず1行出す種別だからである——別の欄・別の種別を新設すると
+        // `schema.ts` を変えることになる。
         why: (() => {
           const head = `${whyHead}。`;
+          const tail =
+            endedStaleRun === null
+              ? ''
+              : describeStaleRunEnd({ ...endedStaleRun, tokens: sweep.tokens });
           if (verdict.verdict === 'usable') {
-            return `${head}候補「${token.label}」は観測できた`;
+            return `${head}候補「${token.label}」は観測できた${tail}`;
           }
           const stopped = sweep.stoppedByBudget
             ? `（候補を試す持ち時間（${String(CANDIDATE_SWEEP_BUDGET_MS)}ms）を使い切ったところで倒した）`
@@ -1285,10 +1366,10 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
             return (
               `${head}**\`usable\` と確かめられた候補は見つからなかった**ので、` +
               `判定できなかった候補「${token.label}」へ倒した${stopped}` +
-              `——撒いて本番で確かめる（${verdict.reason}）`
+              `——撒いて本番で確かめる（${verdict.reason}）${tail}`
             );
           }
-          return `${head}候補「${token.label}」は判定できなかったので撒いて本番で確かめる（${verdict.reason}）`;
+          return `${head}候補「${token.label}」は判定できなかったので撒いて本番で確かめる（${verdict.reason}）${tail}`;
         })(),
       };
     }
@@ -1321,6 +1402,9 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
       const row = sweep.tokens.find((token) => token.id === earliest.tokenId);
       if (row !== undefined) {
         const placed = await nominate(row);
+        // **`rotated` と同じ理由でリセットする**（上の doc を参照）。`parked` も
+        // `nominate()` を呼ぶので、現役の身元はここで変わっている。
+        if (endedStaleRun !== null) staleRun = null;
         return {
           kind: 'parked' as const,
           ...(outgoingId === undefined ? {} : { fromTokenId: outgoingId }),
@@ -1334,10 +1418,14 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
             : { cooldownSource: earliest.cooldownSource }),
           ...common,
           spread: placed.spread,
+          // **末尾に、連なりの終わりの一文を足す（#1384。`rotated` と同じ理由）。**
           why:
             `${whyHead}。**いま通る候補は1本も無い**${skipped}。` +
             `いちばん早く戻る「${row.label}」を撒いて待つ` +
-            `（${new Date(earliest.cooldownUntil).toISOString()} まで通らない）`,
+            `（${new Date(earliest.cooldownUntil).toISOString()} まで通らない）` +
+            (endedStaleRun === null
+              ? ''
+              : describeStaleRunEnd({ ...endedStaleRun, tokens: sweep.tokens })),
         };
       }
     }
@@ -1509,13 +1597,32 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           // **捨てた回数を数える。捨てる判断そのものは変えない。** ここで足して
           // いるのは「その判断が何回効いたか」だけである（{@link staleRun}）。
           const key = identityOf(active);
-          staleRun = staleRun?.key === key ? { key, count: staleRun.count + 1 } : { key, count: 1 };
+          const previousRun = staleRun;
+          const isNewRun = previousRun === null || previousRun.key !== key;
+          staleRun = isNewRun
+            ? { key, identity: active, count: 1 }
+            : { key, identity: active, count: previousRun.count + 1 };
+          // **連なりの終わりの経路1（#1384）: 鍵（＝いまの現役の身元）が変わった。**
+          // ⟹ 前の鍵に対する連なりは、この観測が届いた時点で既に終わっている——
+          // **回した瞬間（経路2、下の `finishSweep`）を捉えそこねた場合の保険**
+          // でもある。現状の実装では現役の身元が変わる経路は `finishSweep` の
+          // `rotated` / `parked` しか無いはずだが（`restore()` は世代を増やさず
+          // `writeActive` も呼ばない）、それ以外の経路が将来増えても、ここが
+          // 遅れて必ず検出する。
+          const endedSuffix =
+            isNewRun && previousRun !== null
+              ? describeStaleRunEnd({
+                  count: previousRun.count,
+                  identity: previousRun.identity,
+                  tokens,
+                })
+              : '';
           return {
             kind: 'ignored' as const,
             signal: decision.signal,
             freshness,
             staleRun: staleRun.count,
-            why: 'もう回した後の通知（世代が合わない）',
+            why: `もう回した後の通知（世代が合わない）${endedSuffix}`,
           };
         }
 
