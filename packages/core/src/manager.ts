@@ -13,6 +13,14 @@ import {
 } from './dropped-record.js';
 import { excerptLine, renderListing } from './excerpt.js';
 import {
+  EXCHANGE_KIND_DECISION_PREFIX,
+  EXCHANGE_KIND_FAILURE_PREFIX,
+  EXCHANGE_KIND_GAUGE_PREFIX,
+  EXCHANGE_KIND_RECOVERY_PREFIX,
+  EXCHANGE_KIND_REPLY_PREFIX,
+  EXCHANGE_KIND_THINNING_PREFIX,
+} from './exchange-kind.js';
+import {
   LEASE_TTL_MS,
   describeAmbiguousSighting,
   describeVerdict,
@@ -4078,7 +4086,7 @@ class Pool implements ManagerPool {
       type: 'exchange',
       with: 'manager',
       role: 'outbound',
-      text: `[${managerId}] ${input.request}`,
+      text: `${EXCHANGE_KIND_REPLY_PREFIX}[${managerId}] ${input.request}`,
     });
     const silent = this.#silentRunners();
     return summaryOf(
@@ -4312,7 +4320,7 @@ class Pool implements ManagerPool {
       type: 'exchange',
       with: 'manager',
       role: 'outbound',
-      text: `[${managerId}] ${message}`,
+      text: `${EXCHANGE_KIND_REPLY_PREFIX}[${managerId}] ${message}`,
     });
     return {
       outcome: 'delivered',
@@ -5487,7 +5495,7 @@ class Pool implements ManagerPool {
         with: 'manager',
         role: 'outbound',
         text:
-          `[${managerId}] 認証トークンが通る状態へ戻ったので続きを促したが、届かなかった` +
+          `${EXCHANGE_KIND_FAILURE_PREFIX}[${managerId}] 認証トークンが通る状態へ戻ったので続きを促したが、届かなかった` +
           `（outcome=${result.outcome}）: ${result.detail}`,
       });
       return 'skipped';
@@ -5497,7 +5505,7 @@ class Pool implements ManagerPool {
         with: 'manager',
         role: 'outbound',
         text:
-          `[${managerId}] 認証トークンが通る状態へ戻ったので続きを促したが、落ちた: ` +
+          `${EXCHANGE_KIND_FAILURE_PREFIX}[${managerId}] 認証トークンが通る状態へ戻ったので続きを促したが、落ちた: ` +
           String(error),
       });
       return 'skipped';
@@ -5945,7 +5953,7 @@ class Pool implements ManagerPool {
           type: 'exchange',
           with: 'manager',
           role: 'outbound',
-          text: `[${job.id}] （再起動後の再開）${nudge}`,
+          text: `${EXCHANGE_KIND_RECOVERY_PREFIX}[${job.id}] （再起動後の再開）${nudge}`,
         });
         this.#notifyRestored(record, 'resumed');
         resumed.push(
@@ -6286,7 +6294,7 @@ class Pool implements ManagerPool {
       // **`（停止）` はそのまま残す**（既存テストがこの文字列を固定している）。
       // `[outcome=...]` は同じ行に足すだけ——`outcome` を文の解釈なしに grep で
       // 数えられるようにする（「止まらなかった試み」を辿る側のため）。
-      text: `[${managerId}] （停止）[outcome=${outcome}] ${detail}`,
+      text: `${EXCHANGE_KIND_REPLY_PREFIX}[${managerId}] （停止）[outcome=${outcome}] ${detail}`,
     });
     // **outcome ごとに言い分ける。** 止まっていない・不明のときまで「停止させ
     // ました」と言うと、クローンは止まったつもりで次の判断へ進む（R1 の再発）。
@@ -6476,7 +6484,7 @@ class Pool implements ManagerPool {
         with: 'self',
         role: 'outbound',
         text:
-          `${runnerId} に実行環境プロファイルを置けなかった（前のものが残っている）: ` +
+          `${EXCHANGE_KIND_FAILURE_PREFIX}${runnerId} に実行環境プロファイルを置けなかった（前のものが残っている）: ` +
           `${result.error ?? '理由不明'}${result.output === undefined || result.output.length === 0 ? '' : `\n${result.output}`}`,
       });
     } catch (error) {
@@ -6505,7 +6513,7 @@ class Pool implements ManagerPool {
         type: 'exchange',
         with: 'self',
         role: 'outbound',
-        text: `${runnerId} へ実行環境プロファイルを降ろせなかった: ${String(error)}`,
+        text: `${EXCHANGE_KIND_FAILURE_PREFIX}${runnerId} へ実行環境プロファイルを降ろせなかった: ${String(error)}`,
       });
     }
   }
@@ -6541,7 +6549,7 @@ class Pool implements ManagerPool {
         type: 'exchange',
         with: 'self',
         role: 'outbound',
-        text: `${runnerId} へマネージャーの環境変数を降ろせなかった（この runner で起こすマネージャーは、器の環境変数に在るものだけで走る）: ${String(error)}`,
+        text: `${EXCHANGE_KIND_FAILURE_PREFIX}${runnerId} へマネージャーの環境変数を降ろせなかった（この runner で起こすマネージャーは、器の環境変数に在るものだけで走る）: ${String(error)}`,
       });
     }
   }
@@ -6919,7 +6927,7 @@ class Pool implements ManagerPool {
             type: 'exchange',
             with: 'manager',
             role: 'outbound',
-            text: `[${job.id}] （${relocating ? '別の器への移送' : 'runner 入れ替え'}後の再開）${message}`,
+            text: `${EXCHANGE_KIND_RECOVERY_PREFIX}[${job.id}] （${relocating ? '別の器への移送' : 'runner 入れ替え'}後の再開）${message}`,
           });
           this.#notifyRestored(record, 'resumed', cause);
         } catch (error) {
@@ -7063,7 +7071,7 @@ class Pool implements ManagerPool {
       with: 'manager',
       role: 'outbound',
       text:
-        `[${job.id}] （戻せなかった）` +
+        `${EXCHANGE_KIND_FAILURE_PREFIX}[${job.id}] （戻せなかった）` +
         (cause === 'session'
           ? '前のセッションから戻せなかった（SDK に会話が残っていない）。'
           : 'runner の器が作り直されたが、前のセッションから戻せなかった。') +
@@ -7136,7 +7144,7 @@ class Pool implements ManagerPool {
       type: 'exchange',
       with: 'manager',
       role: 'outbound',
-      text: `[${job.id}] （生ログから作り直して続けた）${body}`,
+      text: `${EXCHANGE_KIND_RECOVERY_PREFIX}[${job.id}] （生ログから作り直して続けた）${body}`,
     });
     // **即配らず合流窓へ積む**（`#notifyUnresumable` と同じ理由・同じ族の
     // クラスタ。「委譲が器と一緒に失われた族」の①に当たる）。**上の
@@ -7405,7 +7413,7 @@ class Pool implements ManagerPool {
       type: 'exchange',
       with: 'manager',
       role: 'outbound',
-      text: `[${managerId}] ${describeAmbiguousSighting(runnerId, duplicates)}`,
+      text: `${EXCHANGE_KIND_FAILURE_PREFIX}[${managerId}] ${describeAmbiguousSighting(runnerId, duplicates)}`,
     });
     this.#post({
       type: 'manager_message',
@@ -7442,7 +7450,7 @@ class Pool implements ManagerPool {
       type: 'exchange',
       with: 'manager',
       role: 'outbound',
-      text: `[${managerId}] runnerId=${runnerId} の併存は解けました（宛先が一意に戻りました）。`,
+      text: `${EXCHANGE_KIND_RECOVERY_PREFIX}[${managerId}] runnerId=${runnerId} の併存は解けました（宛先が一意に戻りました）。`,
     });
     this.#post({
       type: 'manager_message',
@@ -7751,7 +7759,7 @@ class Pool implements ManagerPool {
             type: 'exchange',
             with: 'manager',
             role: 'inbound',
-            text: `[${event.managerId}] （停止済みのため受信箱へは回さない）${event.text}`,
+            text: `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （停止済みのため受信箱へは回さない）${event.text}`,
           });
           // **本文だけは台帳にも残す（Issue #1038）。** 日誌にしか残らないと、
           // 誤って止めたことに気づく契機が止めた直後に無い——`manager_stop` の
@@ -7868,7 +7876,7 @@ class Pool implements ManagerPool {
           type: 'exchange',
           with: 'manager',
           role: 'inbound',
-          text: `[${event.managerId}] ${event.text}`,
+          text: `${EXCHANGE_KIND_REPLY_PREFIX}[${event.managerId}] ${event.text}`,
         });
         // **ターンが `report` で終わったので、未 push の作業ツリーを1回だけ
         // 観測しておく**（Issue #1266 の (4)）。**待たない**——
@@ -8168,7 +8176,7 @@ class Pool implements ManagerPool {
             type: 'exchange',
             with: 'manager',
             role: 'inbound',
-            text: `[${event.managerId}] ${event.text}`,
+            text: `${EXCHANGE_KIND_REPLY_PREFIX}[${event.managerId}] ${event.text}`,
           });
         } else {
           await this.#journal({
@@ -8304,7 +8312,7 @@ class Pool implements ManagerPool {
           with: 'manager',
           role: 'inbound',
           text:
-            `[${event.managerId}] ${event.tool} の実行が確認へ上がらずに止められた` +
+            `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] ${event.tool} の実行が確認へ上がらずに止められた` +
             `（${actorLabel} / このマネージャーのこの組で ${count} 件目 / ` +
             `${event.via === 'live' ? '走行中の合図' : 'result の記録'}）: ` +
             `${inputText}${denialSuffix}`,
@@ -8478,7 +8486,7 @@ class Pool implements ManagerPool {
             type: 'exchange',
             with: 'manager',
             role: 'inbound',
-            text: `[${event.managerId}] 消費を台帳へ記録できなかった（この分は集計に出ない）`,
+            text: `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] 消費を台帳へ記録できなかった（この分は集計に出ない）`,
           });
           return;
         }
@@ -8532,7 +8540,7 @@ class Pool implements ManagerPool {
             with: 'manager',
             role: 'inbound',
             text:
-              `[${event.managerId}] 消費の累積が数え直された` +
+              `${EXCHANGE_KIND_GAUGE_PREFIX}[${event.managerId}] 消費の累積が数え直された` +
               `（$${fold.reset.fromCostUsd.toFixed(4)} → $${fold.reset.toCostUsd.toFixed(4)}）。` +
               'resume か /clear で SDK 側の累積が 0 から始まったため。記録済みの分は保持している。',
           });
@@ -8717,7 +8725,7 @@ class Pool implements ManagerPool {
             with: 'manager',
             role: 'inbound',
             text:
-              `[${event.managerId}] （配達済みの知らせなので受信箱へは回さない。` +
+              `${EXCHANGE_KIND_THINNING_PREFIX}[${event.managerId}] （配達済みの知らせなので受信箱へは回さない。` +
               `この種類で ${memory.folded} 件目）${text}`,
           });
           // **畳んだ回も計器は回す**（配達しないだけで、枠に当たった事実は同じ）。
@@ -8736,7 +8744,7 @@ class Pool implements ManagerPool {
           type: 'exchange',
           with: 'manager',
           role: 'inbound',
-          text: `[${event.managerId}] ${text}`,
+          text: `${EXCHANGE_KIND_GAUGE_PREFIX}[${event.managerId}] ${text}`,
         });
         // **畳んだ件数を配る1本に必ず載せる。** 受信箱しか見ていない読み手からは
         // 日誌の行が見えないので、ここに書かないと「畳んだ」が観測から消える。
@@ -8891,7 +8899,7 @@ class Pool implements ManagerPool {
             type: 'exchange',
             with: 'manager',
             role: 'inbound',
-            text: foldedRunText(folded.flush),
+            text: `${EXCHANGE_KIND_THINNING_PREFIX}${foldedRunText(folded.flush)}`,
           });
         }
         if (folded.write) {
@@ -8899,7 +8907,7 @@ class Pool implements ManagerPool {
             type: 'exchange',
             with: 'manager',
             role: 'inbound',
-            text: journalText,
+            text: `${EXCHANGE_KIND_GAUGE_PREFIX}${journalText}`,
           });
         }
         // **即配らず合流窓へ積む（「一枠落ち一合図」）。** この文言は
@@ -8950,7 +8958,7 @@ class Pool implements ManagerPool {
               type: 'exchange',
               with: 'manager',
               role: 'outbound',
-              text: continuityText,
+              text: `${EXCHANGE_KIND_RECOVERY_PREFIX}${continuityText}`,
             });
           }
         } catch (error) {
@@ -8991,7 +8999,7 @@ class Pool implements ManagerPool {
             with: 'manager',
             role: 'inbound',
             text:
-              `[${event.managerId}] （停止済みのため無視）前のセッション` +
+              `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] （停止済みのため無視）前のセッション` +
               `（${event.sessionId}）を開き直せなかった: ${event.reason}`,
           });
           return;
@@ -9004,7 +9012,7 @@ class Pool implements ManagerPool {
           with: 'manager',
           role: 'inbound',
           text:
-            `[${event.managerId}] 前のセッション（${event.sessionId}）を開き直せなかった: ` +
+            `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] 前のセッション（${event.sessionId}）を開き直せなかった: ` +
             event.reason,
         });
         if (event.recovered) {
@@ -9070,7 +9078,7 @@ class Pool implements ManagerPool {
             with: 'manager',
             role: 'inbound',
             text:
-              `[${event.managerId}] （停止済みのため無視）runner 側の終了イベント` +
+              `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （停止済みのため無視）runner 側の終了イベント` +
               `（status=${event.status}）を受け取った: ${event.reason}`,
           });
           return;
@@ -9103,7 +9111,7 @@ class Pool implements ManagerPool {
             with: 'manager',
             role: 'inbound',
             text:
-              `[${event.managerId}] 器が貸し出し期限で自分で畳んだ（自己失効）。` +
+              `${EXCHANGE_KIND_RECOVERY_PREFIX}[${event.managerId}] 器が貸し出し期限で自分で畳んだ（自己失効）。` +
               `台帳の状態（${record.job.status}）は動かさず、別の器で続きを起こし直す: ${event.reason}`,
           });
           // **クローンへも知らせる。** 黙って止まったように見えるのが一番まずい
@@ -9217,7 +9225,7 @@ class Pool implements ManagerPool {
             type: 'exchange',
             with: 'manager',
             role: 'inbound',
-            text: `[${event.managerId}] ${body}`,
+            text: `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] ${body}`,
           });
           this.#queueSynthesizedNotice(event.managerId, 'closed_failed', body);
           /**
@@ -9327,7 +9335,7 @@ class Pool implements ManagerPool {
           with: 'manager',
           role: 'inbound',
           text:
-            `[${managerId}] 配り終えた確認の記憶が上限（${ASKED_MEMORY_LIMIT}件）に達したので、` +
+            `${EXCHANGE_KIND_THINNING_PREFIX}[${managerId}] 配り終えた確認の記憶が上限（${ASKED_MEMORY_LIMIT}件）に達したので、` +
             `古い ${ids.length} 件を忘れた: ${excerptLine(ids.join(', '), ASKED_FORGOTTEN_EXCERPT)}。` +
             'この id の確認が再送されると、新しい確認としてもう一度回る。',
         });
@@ -9368,7 +9376,7 @@ class Pool implements ManagerPool {
           with: 'manager',
           role: 'inbound',
           text:
-            `[${managerId}] 処理済みの報告の記憶が上限（${REPORTED_MEMORY_LIMIT}件）に達したので、` +
+            `${EXCHANGE_KIND_THINNING_PREFIX}[${managerId}] 処理済みの報告の記憶が上限（${REPORTED_MEMORY_LIMIT}件）に達したので、` +
             `古い ${ids.length} 件を忘れた: ${listing}。` +
             'この id の報告が再送されると、新しい報告としてもう一度回る。',
         });
@@ -9404,7 +9412,7 @@ class Pool implements ManagerPool {
           with: 'manager',
           role: 'inbound',
           text:
-            `[${managerId}] 拒否の件数を覚えている道具×層の組が上限（${DENIED_TOOL_LIMIT}種）に` +
+            `${EXCHANGE_KIND_THINNING_PREFIX}[${managerId}] 拒否の件数を覚えている道具×層の組が上限（${DENIED_TOOL_LIMIT}種）に` +
             `達したので、古い ${keys.length} 件を忘れた: ${labels.join(', ')}。` +
             'この組が次に止められたら 1 件目から数え直す（日誌には全件残っている）。',
         });
@@ -9451,7 +9459,7 @@ class Pool implements ManagerPool {
         type: 'exchange',
         with: 'self',
         role: 'outbound',
-        text: `${runner.runnerId} に認証トークンを降ろせなかった（この runner で起こすマネージャーは、器の環境変数に認証トークンが入っていればそれで走り、入っていなければ資格を1つも持たずに走る——どちらになるかは器の env 次第で、ここからは分からない）: ${String(error)}`,
+        text: `${EXCHANGE_KIND_FAILURE_PREFIX}${runner.runnerId} に認証トークンを降ろせなかった（この runner で起こすマネージャーは、器の環境変数に認証トークンが入っていればそれで走り、入っていなければ資格を1つも持たずに走る——どちらになるかは器の env 次第で、ここからは分からない）: ${String(error)}`,
       });
     }
   }
@@ -9621,7 +9629,7 @@ class Pool implements ManagerPool {
             with: 'manager',
             role: 'inbound',
             text:
-              `配り終えた上限の文言の記憶（${kind}）が上限（${USAGE_NOTICE_MEMORY_LIMIT}通り）に` +
+              `${EXCHANGE_KIND_THINNING_PREFIX}配り終えた上限の文言の記憶（${kind}）が上限（${USAGE_NOTICE_MEMORY_LIMIT}通り）に` +
               `達したので、古い ${texts.length} 件を忘れた。この文言が次に届いたら` +
               'もう一度クローンへ配る。',
           });
@@ -9763,10 +9771,11 @@ class Pool implements ManagerPool {
       type: 'exchange',
       with: 'manager',
       role: 'outbound',
-      text:
+      text: `${EXCHANGE_KIND_RECOVERY_PREFIX}${
         how === 'attached'
           ? `[${job.id}] （走行中を確認）${head}。runner の中で走り続けている。`
-          : `[${job.id}] （再開を知らせた）${head}。前のセッションから再開させた。`,
+          : `[${job.id}] （再開を知らせた）${head}。前のセッションから再開させた。`
+      }`,
     });
     this.#post({
       type: 'manager_message',
@@ -10094,7 +10103,7 @@ class Pool implements ManagerPool {
         with: 'manager',
         role: 'inbound',
         text:
-          `[${managerId}] 直前に配ったものと同文の知らせ（内訳: ${breakdown}）が ` +
+          `${EXCHANGE_KIND_THINNING_PREFIX}[${managerId}] 直前に配ったものと同文の知らせ（内訳: ${breakdown}）が ` +
           `${String(arrived)} 件届いたので、受信箱へは回さず数だけ残した` +
           `（この連鎖で ${String(streak.suppressed)} 束目 / 通数 ${String(streak.suppressedArrived)} 件）。`,
       });
@@ -10127,7 +10136,7 @@ class Pool implements ManagerPool {
       with: 'manager',
       role: 'inbound',
       text:
-        `[${managerId}] 機構が合成した知らせを ${String(arrived)} 件、` +
+        `${EXCHANGE_KIND_THINNING_PREFIX}[${managerId}] 機構が合成した知らせを ${String(arrived)} 件、` +
         `1件にまとめて配った（内訳: ${breakdown}）。`,
     });
   }
@@ -10260,7 +10269,7 @@ class Pool implements ManagerPool {
         type: 'exchange',
         with: 'manager',
         role: 'inbound',
-        text: foldedRunText(foldedAtRetire),
+        text: `${EXCHANGE_KIND_THINNING_PREFIX}${foldedRunText(foldedAtRetire)}`,
       });
     }
     this.#rateLimitJournalFolds.delete(managerId);
@@ -10299,7 +10308,7 @@ class Pool implements ManagerPool {
         type: 'exchange',
         with: 'manager',
         role: 'inbound',
-        text: foldedRunText(flushed),
+        text: `${EXCHANGE_KIND_THINNING_PREFIX}${foldedRunText(flushed)}`,
       });
     }
     this.#rateLimitJournalFolds.clear();

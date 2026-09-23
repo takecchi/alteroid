@@ -919,6 +919,22 @@ export {
 } from './clone.js';
 export { placedModelTier, resolveModelTier } from './model-tier.js';
 /**
+ * `type: 'exchange'` の本文が持つ種類の接頭辞（issue #1332）。`inferAppraisedByFromGrounds`
+ * （PR #1362、`main` 未マージ）と同じ「本文の先頭に固定の印を置き、前方一致で
+ * 復元する」形を独立に採ったもの——依存はしない（`exchange-kind.ts` の doc）。
+ */
+export {
+  EXCHANGE_KIND_DECISION_PREFIX,
+  EXCHANGE_KIND_FAILURE_PREFIX,
+  EXCHANGE_KIND_GAUGE_PREFIX,
+  EXCHANGE_KIND_PREFIXES,
+  EXCHANGE_KIND_RECOVERY_PREFIX,
+  EXCHANGE_KIND_REPLY_PREFIX,
+  EXCHANGE_KIND_THINNING_PREFIX,
+  inferExchangeKindFromText,
+  type ExchangeKind,
+} from './exchange-kind.js';
+/**
  * 権限モードの判定（クローンとマネージャーで同じもの）。**能力の制限ではなく
  * 実行環境の設定である**（`permission-mode.ts` に理由がある）。
  */

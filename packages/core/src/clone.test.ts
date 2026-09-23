@@ -34,6 +34,12 @@ import type { HumanMessage } from './clone.js';
 import type { TokenRotatorObservation } from './token-rotator.js';
 import { fingerprintOf } from './credentials.js';
 import {
+  EXCHANGE_KIND_FAILURE_PREFIX,
+  EXCHANGE_KIND_GAUGE_PREFIX,
+  EXCHANGE_KIND_REPLY_PREFIX,
+  EXCHANGE_KIND_THINNING_PREFIX,
+} from './exchange-kind.js';
+import {
   DISTILL_GAP_NOTICE_HEAD,
   DISTILL_SUCCEEDED_DECISION_PREFIX,
   deriveDistillGapFromJournal,
@@ -2382,13 +2388,17 @@ describe('クローン', () => {
       const entries = await s.stores.journal.list({ types: ['exchange'], limit: 100 });
       return entries.some(
         (entry) =>
-          entry.type === 'exchange' && entry.role === 'outbound' && entry.text === '承認への返答',
+          entry.type === 'exchange' &&
+          entry.role === 'outbound' &&
+          entry.text === `${EXCHANGE_KIND_REPLY_PREFIX}承認への返答`,
       );
     }, '承認への返答が日誌（exchange）に積まれる');
     const entries = await s.stores.journal.list({ types: ['exchange'], limit: 100 });
     const reply = entries.find(
       (entry) =>
-        entry.type === 'exchange' && entry.role === 'outbound' && entry.text === '承認への返答',
+        entry.type === 'exchange' &&
+        entry.role === 'outbound' &&
+        entry.text === `${EXCHANGE_KIND_REPLY_PREFIX}承認への返答`,
     );
     if (reply === undefined || reply.type !== 'exchange') {
       throw new Error('回答ターンの返答が日誌に見つからない');
@@ -2737,7 +2747,7 @@ describe('クローン', () => {
           (entry) =>
             entry.type === 'exchange' &&
             entry.role === 'outbound' &&
-            entry.text === '内部ターンの返答',
+            entry.text === `${EXCHANGE_KIND_REPLY_PREFIX}内部ターンの返答`,
         );
       }, '内部ターンの返答が日誌に積まれる');
 
@@ -2753,7 +2763,9 @@ describe('クローン', () => {
         expect(entry.approvalId).toBeUndefined();
       }
       const internalReply = outbound.find(
-        (entry) => entry.type === 'exchange' && entry.text === '内部ターンの返答',
+        (entry) =>
+          entry.type === 'exchange' &&
+          entry.text === `${EXCHANGE_KIND_REPLY_PREFIX}内部ターンの返答`,
       );
       if (internalReply === undefined || internalReply.type !== 'exchange') {
         throw new Error('内部ターンの返答が見つからない');
@@ -5139,7 +5151,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
 
     // 実際に走ったのは1回だけ
     const runs = (await stores.journal.list({ types: ['exchange'] })).filter(
-      (entry) => (entry as { text: string }).text === '進めた',
+      (entry) => (entry as { text: string }).text === `${EXCHANGE_KIND_REPLY_PREFIX}進めた`,
     );
     expect(runs).toHaveLength(1);
 
@@ -6248,7 +6260,9 @@ describe('クローン — ターンの失敗の跡', () => {
      */
     const all = await exchanges(stores);
     const failure = all.find(
-      (entry) => entry.with === 'self' && entry.text.startsWith('人間との対話ターンが失敗した'),
+      (entry) =>
+        entry.with === 'self' &&
+        entry.text.startsWith(`${EXCHANGE_KIND_FAILURE_PREFIX}人間との対話ターンが失敗した`),
     );
     expect(failure).toBeDefined();
     // 呼び出し側が構造化フィールドとして持っている値は載せる（#56 の線）。
@@ -6306,13 +6320,16 @@ describe('クローン — ターンの失敗の跡', () => {
         async () =>
           (await exchanges(stores)).some(
             (entry) =>
-              entry.with === 'self' && entry.text.startsWith('人間との対話ターンが失敗した'),
+              entry.with === 'self' &&
+              entry.text.startsWith(`${EXCHANGE_KIND_FAILURE_PREFIX}人間との対話ターンが失敗した`),
           ),
         "with: 'self' の『人間との対話ターンが失敗した』という exchange が日誌に積まれる",
       );
 
       const failure = (await exchanges(stores)).find(
-        (entry) => entry.with === 'self' && entry.text.startsWith('人間との対話ターンが失敗した'),
+        (entry) =>
+          entry.with === 'self' &&
+          entry.text.startsWith(`${EXCHANGE_KIND_FAILURE_PREFIX}人間との対話ターンが失敗した`),
       );
       // ASCII の検索語（`journal_read q=` で引ける形。条件1）。
       expect(failure?.text).toContain('context_window_failure');
@@ -6353,13 +6370,16 @@ describe('クローン — ターンの失敗の跡', () => {
         async () =>
           (await exchanges(stores)).some(
             (entry) =>
-              entry.with === 'self' && entry.text.startsWith('人間との対話ターンが失敗した'),
+              entry.with === 'self' &&
+              entry.text.startsWith(`${EXCHANGE_KIND_FAILURE_PREFIX}人間との対話ターンが失敗した`),
           ),
         "with: 'self' の『人間との対話ターンが失敗した』という exchange が日誌に積まれる",
       );
 
       const failure = (await exchanges(stores)).find(
-        (entry) => entry.with === 'self' && entry.text.startsWith('人間との対話ターンが失敗した'),
+        (entry) =>
+          entry.with === 'self' &&
+          entry.text.startsWith(`${EXCHANGE_KIND_FAILURE_PREFIX}人間との対話ターンが失敗した`),
       );
       expect(failure?.text).toContain(real);
       expect(failure?.text).not.toContain('context_window_failure');
@@ -7730,7 +7750,7 @@ describe('クローン — token-pool の復帰通知: 畳んだ件数だけが�
  */
 describe('クローン — 保持中の内部の合図は、失敗記録を1件ごとに日誌へ書かない（Issue #1240 続き）', () => {
   const spendLimitMessage = "You've hit your individual spend limit for this account.";
-  const internalFailureMark = '内部ターンが失敗した';
+  const internalFailureMark = `${EXCHANGE_KIND_FAILURE_PREFIX}内部ターンが失敗した`;
 
   async function internalFailureCount(s: Setup): Promise<number> {
     const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as {
@@ -7948,7 +7968,7 @@ describe('クローン — 保持中の内部の合図は、失敗記録を1件�
     // 変わるのは先頭の文言だけ——`内部ターンが失敗した` / `人間との対話
     // ターンが失敗した`。`internalFailureCount` と同じ絞り方で、こちらは
     // 会話側の接頭辞で絞る）。
-    const humanFailureMark = '人間との対話ターンが失敗した';
+    const humanFailureMark = `${EXCHANGE_KIND_FAILURE_PREFIX}人間との対話ターンが失敗した`;
     const rows = (await s.stores.journal.list({ types: ['exchange'] })) as {
       with: string;
       text: string;
@@ -13318,7 +13338,9 @@ describe('クローン — SDK のエラーを応答として扱わない（日�
         text: string;
       }[];
       return exchanges.some(
-        (entry) => entry.with === 'self' && entry.text.startsWith('内部ターンが失敗した'),
+        (entry) =>
+          entry.with === 'self' &&
+          entry.text.startsWith(`${EXCHANGE_KIND_FAILURE_PREFIX}内部ターンが失敗した`),
       );
     }, '日報のターンが失敗として記録される');
 
@@ -13329,7 +13351,9 @@ describe('クローン — SDK のエラーを応答として扱わない（日�
     // 失敗の記録には SDK の文言がそのまま残る（人間が検索できる形）。
     const failures = (
       (await s.stores.journal.list({ types: ['exchange'] })) as { with: string; text: string }[]
-    ).filter((entry) => entry.text.startsWith('内部ターンが失敗した'));
+    ).filter((entry) =>
+      entry.text.startsWith(`${EXCHANGE_KIND_FAILURE_PREFIX}内部ターンが失敗した`),
+    );
     expect(failures[0]?.text).toContain(orgSpendLimit);
     expect(failures[0]?.text).toContain('billing_error');
     // どの印で分かったかも残す（次に掘り始める位置が違う）。
@@ -13338,7 +13362,7 @@ describe('クローン — SDK のエラーを応答として扱わない（日�
     // 上限として分類され、保持へ切り替わっている（枠の知らせが日誌にある）。
     const notices = (
       (await s.stores.journal.list({ types: ['exchange'] })) as { with: string; text: string }[]
-    ).filter((entry) => entry.text.startsWith('利用上限に当たった'));
+    ).filter((entry) => entry.text.startsWith(`${EXCHANGE_KIND_GAUGE_PREFIX}利用上限に当たった`));
     expect(notices).toHaveLength(1);
     expect(notices[0]?.text).toContain(orgSpendLimit);
 
@@ -13360,7 +13384,9 @@ describe('クローン — SDK のエラーを応答として扱わない（日�
         text: string;
       }[];
       return exchanges.some(
-        (entry) => entry.with === 'self' && entry.text.startsWith('内部ターンが失敗した'),
+        (entry) =>
+          entry.with === 'self' &&
+          entry.text.startsWith(`${EXCHANGE_KIND_FAILURE_PREFIX}内部ターンが失敗した`),
       );
     }, '日報のターンが失敗として記録される');
 
@@ -13369,7 +13395,9 @@ describe('クローン — SDK のエラーを応答として扱わない（日�
 
     const failures = (
       (await s.stores.journal.list({ types: ['exchange'] })) as { with: string; text: string }[]
-    ).filter((entry) => entry.text.startsWith('内部ターンが失敗した'));
+    ).filter((entry) =>
+      entry.text.startsWith(`${EXCHANGE_KIND_FAILURE_PREFIX}内部ターンが失敗した`),
+    );
     // `subtype` が `success` のまま失敗した回だと分かる形で残っていること。
     expect(failures[0]?.text).toContain('result_is_error');
 
@@ -13431,7 +13459,9 @@ describe('クローン — SDK のエラーを応答として扱わない（日�
         text: string;
       }[];
       return exchanges.some(
-        (entry) => entry.with === 'self' && entry.text.startsWith('内部ターンが失敗した'),
+        (entry) =>
+          entry.with === 'self' &&
+          entry.text.startsWith(`${EXCHANGE_KIND_FAILURE_PREFIX}内部ターンが失敗した`),
       );
     }, 'ターンが失敗として記録される');
 
@@ -13466,7 +13496,9 @@ describe('クローン — SDK のエラーを応答として扱わない（日�
       const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as {
         text: string;
       }[];
-      return exchanges.some((entry) => entry.text.startsWith('組織の方針で止められている'));
+      return exchanges.some((entry) =>
+        entry.text.startsWith(`${EXCHANGE_KIND_GAUGE_PREFIX}組織の方針で止められている`),
+      );
     }, '組織方針の知らせが日誌に残る');
 
     // **待たない**（保持しない）ことは変えていない。枠として保持していたら、
@@ -16071,7 +16103,13 @@ describe('述語が当たった配り直しの件数を数える（issue #1374�
       role: string;
       text: string;
     }[];
-    return exchanges.filter((entry) => entry.text.startsWith(prefix));
+    // **kind の接頭辞（issue #1332）がいちばん外側に付く。** 数える跡は
+    // `with: 'self'` の exchange なので `[計器]`（`EXCHANGE_KIND_GAUGE_PREFIX`）
+    // が「【数える:A/B】」より前に付く（`exchange-kind.ts` の doc「kind は
+    // managerId の外側」と同じ向き）。
+    return exchanges.filter((entry) =>
+      entry.text.startsWith(`${EXCHANGE_KIND_GAUGE_PREFIX}${prefix}`),
+    );
   }
 
   it('(A) 台帳で片付け済みの報告が配られた回に、【数える:A】で始まる行が1つだけ増える', async () => {
@@ -18777,7 +18815,9 @@ describe('inbox_flow.retained —— #forget 以外の経路の後始末（Issue
         (await stores.journal.list({ types: ['exchange'] })).some(
           (entry) =>
             entry.type === 'exchange' &&
-            entry.text.startsWith('拾い直している最中に器から消された合図なので'),
+            entry.text.startsWith(
+              `${EXCHANGE_KIND_THINNING_PREFIX}拾い直している最中に器から消された合図なので`,
+            ),
         ),
       '拾い直しの最中に消された合図を畳んだ跡',
     );

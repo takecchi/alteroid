@@ -42,6 +42,14 @@ import {
 } from './distill-gap.js';
 import { excerptLine } from './excerpt.js';
 import {
+  EXCHANGE_KIND_DECISION_PREFIX,
+  EXCHANGE_KIND_FAILURE_PREFIX,
+  EXCHANGE_KIND_GAUGE_PREFIX,
+  EXCHANGE_KIND_RECOVERY_PREFIX,
+  EXCHANGE_KIND_REPLY_PREFIX,
+  EXCHANGE_KIND_THINNING_PREFIX,
+} from './exchange-kind.js';
+import {
   DAEMON_RUNNER_REGISTRY_SOURCE,
   DAEMON_TOKEN_POOL_REOPENED_SOURCE,
   isDaemonSelfNotice,
@@ -1414,7 +1422,7 @@ class Clone implements CloneHost {
         with: 'self',
         role: 'inbound',
         text:
-          `二重書き込み防止のために覚えている拒否の記憶が上限` +
+          `${EXCHANGE_KIND_THINNING_PREFIX}二重書き込み防止のために覚えている拒否の記憶が上限` +
           `（${DENIED_TOOL_USE_MEMORY_LIMIT}件）に達したので、古い ${ids.length} 件を忘れた: ` +
           `${ids.join(', ')}。この tool_use_id の拒否が生の合図と result の両方から` +
           '再び届くと、同じ拒否がもう一度日誌に載る。',
@@ -2759,7 +2767,7 @@ class Clone implements CloneHost {
       with: 'self',
       role: 'outbound',
       text:
-        `器から消された合図 ${ids.length} 件のうち、${dropped} 件を配達の待ち行列からも外した` +
+        `${EXCHANGE_KIND_THINNING_PREFIX}器から消された合図 ${ids.length} 件のうち、${dropped} 件を配達の待ち行列からも外した` +
         `（待ち行列 ${fromQueue.length} 件、枠で保持していた分 ${fromHeld.length} 件）。` +
         '既に取り出して処理中のものは取り消していない。',
     });
@@ -3146,7 +3154,7 @@ class Clone implements CloneHost {
             type: 'exchange',
             with: 'self',
             role: 'outbound',
-            text: `枠の解除を試す。新しい合図が届いたので、保持していた ${held.length} 件を配り直す。${suffix}`,
+            text: `${EXCHANGE_KIND_THINNING_PREFIX}枠の解除を試す。新しい合図が届いたので、保持していた ${held.length} 件を配り直す。${suffix}`,
           });
           continue;
         }
@@ -3971,7 +3979,7 @@ class Clone implements CloneHost {
       with: 'self',
       role: 'outbound',
       text:
-        `枠で保持している同じ合図（${event.type}）が既にあるので、新しく届いた分を畳んだ。` +
+        `${EXCHANGE_KIND_THINNING_PREFIX}枠で保持している同じ合図（${event.type}）が既にあるので、新しく届いた分を畳んだ。` +
         `中身は処理の瞬間に組み立て直すので、読まれる前の重複には情報が無い（保持中の同種: ` +
         `${this.#deferred.filter((held) => isSameTick(held, event)).length} 件）。`,
     });
@@ -4007,7 +4015,7 @@ class Clone implements CloneHost {
       with: 'self',
       role: 'outbound',
       text:
-        `片付け済みの配り直しなので、ターンを起こさずに畳んだ（モデルへは1文字も渡して` +
+        `${EXCHANGE_KIND_THINNING_PREFIX}片付け済みの配り直しなので、ターンを起こさずに畳んだ（モデルへは1文字も渡して` +
         `いない）: ${inboxEventShape(event)}\n\n${notice}`,
     });
   }
@@ -4033,7 +4041,7 @@ class Clone implements CloneHost {
       with: 'self',
       role: 'outbound',
       text:
-        `${REDELIVERY_COUNT_PREFIX_A}台帳で既に片付けている報告に断り書きを付けて配った` +
+        `${EXCHANGE_KIND_GAUGE_PREFIX}${REDELIVERY_COUNT_PREFIX_A}台帳で既に片付けている報告に断り書きを付けて配った` +
         `（managerId=${managerId}）。`,
     });
   }
@@ -4057,7 +4065,7 @@ class Clone implements CloneHost {
       with: 'self',
       role: 'outbound',
       text:
-        `${REDELIVERY_COUNT_PREFIX_B}名乗った前提が動いている報告のままターンを起こした` +
+        `${EXCHANGE_KIND_GAUGE_PREFIX}${REDELIVERY_COUNT_PREFIX_B}名乗った前提が動いている報告のままターンを起こした` +
         `（managerId=${managerId}）。`,
     });
   }
@@ -4119,7 +4127,7 @@ class Clone implements CloneHost {
       with: 'self',
       role: 'outbound',
       text:
-        `未読のまま残っていた合図を配り直したが（${record.deliveries}回目の配達` +
+        `${EXCHANGE_KIND_THINNING_PREFIX}未読のまま残っていた合図を配り直したが（${record.deliveries}回目の配達` +
         (context.alone
           ? ''
           : `＝器が入れ替わった回数。同じ起動で一緒に拾い直した未読が ${this.#restoredCohort} 件あり、` +
@@ -4388,7 +4396,7 @@ class Clone implements CloneHost {
         type: 'exchange',
         with: 'manager',
         role: 'inbound',
-        text: `[${event.managerId}/${event.kind}] ${event.text}`,
+        text: `${EXCHANGE_KIND_REPLY_PREFIX}[${event.managerId}/${event.kind}] ${event.text}`,
       });
       return;
     }
@@ -4510,7 +4518,7 @@ class Clone implements CloneHost {
         with: 'self',
         role: 'outbound',
         text:
-          `alteroid 自身が合成した同一本文の未読が既に受信箱にあるので、受信箱の行は増やさずに` +
+          `${EXCHANGE_KIND_THINNING_PREFIX}alteroid 自身が合成した同一本文の未読が既に受信箱にあるので、受信箱の行は増やさずに` +
           `畳んだ（本文と届いた時刻はこのあと束ね読み（#841）が1ターンの中で渡す）: ` +
           `${inboxEventShape(event)}`,
       });
@@ -4525,7 +4533,7 @@ class Clone implements CloneHost {
       with: 'self',
       role: 'outbound',
       text:
-        `alteroid 自身が合成した同一本文の未読が既に受信箱にあるので、受信箱にも台帳にも` +
+        `${EXCHANGE_KIND_THINNING_PREFIX}alteroid 自身が合成した同一本文の未読が既に受信箱にあるので、受信箱にも台帳にも` +
         `積まずに畳んだ（モデルへは1文字も渡していない。本文は直前の行に残してある）: ` +
         `${inboxEventShape(event)}`,
     });
@@ -4578,7 +4586,7 @@ class Clone implements CloneHost {
         with: 'self',
         role: 'outbound',
         text:
-          `alteroid 自身が合成した同一本文の未読を ${existing.collapsed} 件、受信箱にも台帳にも` +
+          `${EXCHANGE_KIND_THINNING_PREFIX}alteroid 自身が合成した同一本文の未読を ${existing.collapsed} 件、受信箱にも台帳にも` +
           `積まずに畳んだ（本文はそれぞれ畳んだ時点で直前の行に残してある。この合図が` +
           `片付いたので数え終える）: ${inboxEventShape(event)}`,
       });
@@ -4709,7 +4717,7 @@ class Clone implements CloneHost {
       with: 'self',
       role: 'outbound',
       text:
-        `token-pool の「戻った」通知（本文は直前の行）がまだ未処理のまま残っていたところへ、` +
+        `${EXCHANGE_KIND_THINNING_PREFIX}token-pool の「戻った」通知（本文は直前の行）がまだ未処理のまま残っていたところへ、` +
         `内容の違う同種の通知が届いたので、古い方は配らずに畳み、新しい方（` +
         `${inboxEventShape(next)}）を代表にした（モデルへ渡るのは新しい方だけ。合流はここまでで` +
         `累計 ${folded} 件——時間の窓ではなく「未処理のまま残っているか」だけで判定している）。`,
@@ -5005,7 +5013,7 @@ class Clone implements CloneHost {
               with: 'self',
               role: 'outbound',
               text:
-                `受信箱の合図から、引き受けた仕事として台帳に開いた（id: ${event.id}）。` +
+                `${EXCHANGE_KIND_DECISION_PREFIX}受信箱の合図から、引き受けた仕事として台帳に開いた（id: ${event.id}）。` +
                 `合図: ${inboxEventShape(event)}`,
             });
           } catch (error) {
@@ -5035,7 +5043,7 @@ class Clone implements CloneHost {
             with: 'self',
             role: 'outbound',
             text:
-              `未了の記帳に失敗した（id: ${event.id}）。台帳に載っていない可能性が` +
+              `${EXCHANGE_KIND_FAILURE_PREFIX}未了の記帳に失敗した（id: ${event.id}）。台帳に載っていない可能性が` +
               'あるので、必要なら `commitment_open` で載せ直すこと' +
               `（理由: ${reasonOf(error)}）。`,
           }).then((): CommitOutcome => 'failed');
@@ -5932,7 +5940,7 @@ class Clone implements CloneHost {
         type: 'exchange',
         with: 'self',
         role: 'outbound',
-        text: this.#redeliveredLiveHeadline(liveRecordsThisPass, alone),
+        text: `${EXCHANGE_KIND_RECOVERY_PREFIX}${this.#redeliveredLiveHeadline(liveRecordsThisPass, alone)}`,
       });
     }
 
@@ -5981,7 +5989,7 @@ class Clone implements CloneHost {
         type: 'exchange',
         with: 'self',
         role: 'outbound',
-        text: this.#gatedRedeliveryFoldHeadline(batch),
+        text: `${EXCHANGE_KIND_THINNING_PREFIX}${this.#gatedRedeliveryFoldHeadline(batch)}`,
       });
     };
 
@@ -6194,7 +6202,7 @@ class Clone implements CloneHost {
           with: 'self',
           role: 'outbound',
           text:
-            '拾い直している最中に器から消された合図なので、配らずに畳んだ' +
+            `${EXCHANGE_KIND_THINNING_PREFIX}拾い直している最中に器から消された合図なので、配らずに畳んだ` +
             `（配り直しの対象だったが、消し込みが先に届いた）: ${inboxEventShape(record.event)}`,
         });
         continue;
@@ -6562,10 +6570,11 @@ class Clone implements CloneHost {
       type: 'exchange',
       with: 'self',
       role: 'outbound',
-      text:
+      text: `${EXCHANGE_KIND_FAILURE_PREFIX}${
         contextWindowFailure === undefined
           ? failureText
-          : `${failureText}${describeContextWindowFailure(contextWindowFailure)}`,
+          : `${failureText}${describeContextWindowFailure(contextWindowFailure)}`
+      }`,
       ...(conversationId === null ? {} : { conversationId }),
     });
 
@@ -6664,7 +6673,7 @@ class Clone implements CloneHost {
         with: 'self',
         role: 'outbound',
         text:
-          `人間へ返す1行は畳んだ（最後に返した1行から数えて ${folded} 件目）。同じ1行を` +
+          `${EXCHANGE_KIND_THINNING_PREFIX}人間へ返す1行は畳んだ（最後に返した1行から数えて ${folded} 件目）。同じ1行を` +
           `既に返してあり、そのあと人間からの新しい発言は届いていない: ${humanText}`,
         conversationId,
       });
@@ -6800,7 +6809,7 @@ class Clone implements CloneHost {
       with: 'self',
       role: 'outbound',
       text:
-        '枠に当たったまま1度も答えを返せないうちに、積んだ入力が ' +
+        `${EXCHANGE_KIND_DECISION_PREFIX}枠に当たったまま1度も答えを返せないうちに、積んだ入力が ` +
         `${String(this.#usageBlockedAccumulatedChars)} 文字（閾値 ` +
         `${String(UNPRODUCTIVE_USAGE_BLOCK_FOLD_CHAR_THRESHOLD)}）に達した。同じ` +
         'セッションへ積み続けると枠が開いた頃には文脈が伸びきっているので、' +
@@ -6870,7 +6879,7 @@ class Clone implements CloneHost {
           type: 'exchange',
           with: 'self',
           role: 'outbound',
-          text: continuityText,
+          text: `${EXCHANGE_KIND_RECOVERY_PREFIX}${continuityText}`,
         });
       }
     } catch (error) {
@@ -6880,7 +6889,7 @@ class Clone implements CloneHost {
         with: 'self',
         role: 'outbound',
         text:
-          `文脈窓で畳む前の生ログの退避に失敗した: ${String(error)}` +
+          `${EXCHANGE_KIND_FAILURE_PREFIX}文脈窓で畳む前の生ログの退避に失敗した: ${String(error)}` +
           '（⚠️ この区間の生ログは器の外に残っていない）',
       });
     }
@@ -6901,7 +6910,7 @@ class Clone implements CloneHost {
         with: 'self',
         role: 'outbound',
         text:
-          `文脈窓で畳む前の蒸留に失敗した: ${String(error)}` +
+          `${EXCHANGE_KIND_FAILURE_PREFIX}文脈窓で畳む前の蒸留に失敗した: ${String(error)}` +
           // **退避が落ちた回に「退避は済んでいる」と書かない**（守れない約束になる）。
           (archiveId !== null
             ? '（生ログの退避は済んでいる。記憶へは移せていない。次の起動で拾い直す）'
@@ -6998,9 +7007,11 @@ class Clone implements CloneHost {
         type: 'exchange',
         with: 'self',
         role: 'outbound',
-        text: lowered
-          ? text
-          : `記憶へ移せていない区間の退避を拾えなかったが、拾っている間に新しい印が立ったので、印は下ろさなかった: ${grave.archiveId}`,
+        text: `${EXCHANGE_KIND_FAILURE_PREFIX}${
+          lowered
+            ? text
+            : `記憶へ移せていない区間の退避を拾えなかったが、拾っている間に新しい印が立ったので、印は下ろさなかった: ${grave.archiveId}`
+        }`,
       });
       return;
     }
@@ -7013,7 +7024,7 @@ class Clone implements CloneHost {
       type: 'exchange',
       with: 'self',
       role: 'outbound',
-      text: `前の器が記憶へ移せなかった区間を拾い直す: ${grave.archiveId}`,
+      text: `${EXCHANGE_KIND_RECOVERY_PREFIX}前の器が記憶へ移せなかった区間を拾い直す: ${grave.archiveId}`,
     });
 
     await this.#distillFromTranscript(tailOf(transcript));
@@ -7093,10 +7104,12 @@ class Clone implements CloneHost {
         type: 'exchange',
         with: 'self',
         role: 'outbound',
-        text: lowered
-          ? `捨てたセッションの生ログが1件も無いので、印を下ろした: ${grave.sessionId}` +
-            '（⚠️ この区間は記憶へ移せていない）'
-          : `捨てたセッションの生ログが1件も無かったが、拾っている間に新しい印が立ったので、印は下ろさなかった: ${grave.sessionId}`,
+        text: `${EXCHANGE_KIND_FAILURE_PREFIX}${
+          lowered
+            ? `捨てたセッションの生ログが1件も無いので、印を下ろした: ${grave.sessionId}` +
+              '（⚠️ この区間は記憶へ移せていない）'
+            : `捨てたセッションの生ログが1件も無かったが、拾っている間に新しい印が立ったので、印は下ろさなかった: ${grave.sessionId}`
+        }`,
       });
       return;
     }
@@ -7107,7 +7120,7 @@ class Clone implements CloneHost {
       type: 'exchange',
       with: 'self',
       role: 'outbound',
-      text: `捨てたセッションの区間を、預けた生ログから拾い直す: ${grave.sessionId}`,
+      text: `${EXCHANGE_KIND_RECOVERY_PREFIX}捨てたセッションの区間を、預けた生ログから拾い直す: ${grave.sessionId}`,
     });
 
     await this.#distillFromTranscript(tailOf(transcript));
@@ -7173,7 +7186,7 @@ class Clone implements CloneHost {
         type: 'exchange',
         with: 'self',
         role: 'outbound',
-        text: describeUsageNotice(notice),
+        text: `${EXCHANGE_KIND_GAUGE_PREFIX}${describeUsageNotice(notice)}`,
       });
     }
 
@@ -7228,7 +7241,7 @@ class Clone implements CloneHost {
             with: 'self',
             role: 'outbound',
             text:
-              `蒸留（${event.reason}）は見送った。前回の蒸留以降にターンが1本も` +
+              `${EXCHANGE_KIND_THINNING_PREFIX}蒸留（${event.reason}）は見送った。前回の蒸留以降にターンが1本も` +
               '走っていない（＝内容が変わっていない）ので、同一内容を重ねて払わない。',
           });
           return;
@@ -7413,7 +7426,7 @@ class Clone implements CloneHost {
             type: 'exchange',
             with: 'self',
             role: 'outbound',
-            text: `定期の依頼 ${event.kind} は、この発火では動かない: ${claimed.reason}`,
+            text: `${EXCHANGE_KIND_DECISION_PREFIX}定期の依頼 ${event.kind} は、この発火では動かない: ${claimed.reason}`,
           });
           return;
         }
@@ -7717,7 +7730,7 @@ class Clone implements CloneHost {
       with: 'self',
       role: 'outbound',
       text:
-        `定期の依頼 ${kind} の「終わった」を記録できなかった` +
+        `${EXCHANGE_KIND_FAILURE_PREFIX}定期の依頼 ${kind} の「終わった」を記録できなかった` +
         `（引き受けた印が残るので、次の起動で配り直される）: ${last}`,
     });
   }
@@ -8464,7 +8477,7 @@ class Clone implements CloneHost {
       with: 'self',
       role: 'outbound',
       text:
-        `resume 素材が大きすぎるので resume せず新しいセッションで始める: ${sessionId}` +
+        `${EXCHANGE_KIND_DECISION_PREFIX}resume 素材が大きすぎるので resume せず新しいセッションで始める: ${sessionId}` +
         `（${bytes} バイト ＞ 予算 ${RESUME_SIZE_BUDGET_BYTES} バイト）`,
     });
     return null;
@@ -9082,7 +9095,7 @@ class Clone implements CloneHost {
           with: 'self',
           role: 'inbound',
           text:
-            `先に書いた ${tool} の拒否について、ターン終わりの記録（合図の出所: result）に` +
+            `${EXCHANGE_KIND_DECISION_PREFIX}先に書いた ${tool} の拒否について、ターン終わりの記録（合図の出所: result）に` +
             `入力が載っていた。値には鍵が入りうるので本文は残さず、形だけ残す: ${later}`,
         });
       }
@@ -9141,7 +9154,7 @@ class Clone implements CloneHost {
       with: 'self',
       role: 'inbound',
       text:
-        `${tool} の実行が、確認へ上がらずに止められた${why}。` +
+        `${EXCHANGE_KIND_DECISION_PREFIX}${tool} の実行が、確認へ上がらずに止められた${why}。` +
         `止められたのは ${actorLabel} の手（合図の出所: ${via}）。` +
         // **入力は形だけ残す。値は残さない**（`denial-shape.ts`）。ここは元から
         // 入力を1文字も書いていなかったので、読む側は「良性の道具呼び出しが
@@ -9305,7 +9318,7 @@ class Clone implements CloneHost {
           type: 'exchange',
           with: 'self',
           role: 'outbound',
-          text: continuityText,
+          text: `${EXCHANGE_KIND_RECOVERY_PREFIX}${continuityText}`,
         });
       }
     } catch (error) {
@@ -9314,7 +9327,7 @@ class Clone implements CloneHost {
         type: 'exchange',
         with: 'self',
         role: 'outbound',
-        text: `PreCompact の退避に失敗した: ${String(error)}`,
+        text: `${EXCHANGE_KIND_FAILURE_PREFIX}PreCompact の退避に失敗した: ${String(error)}`,
       });
     }
 
@@ -9328,7 +9341,7 @@ class Clone implements CloneHost {
         type: 'exchange',
         with: 'self',
         role: 'outbound',
-        text: `PreCompact の蒸留に失敗した: ${String(error)}`,
+        text: `${EXCHANGE_KIND_FAILURE_PREFIX}PreCompact の蒸留に失敗した: ${String(error)}`,
       });
     }
 
@@ -9671,7 +9684,7 @@ class Clone implements CloneHost {
           with: 'self',
           role: 'outbound',
           text:
-            `自分の消費の累積が数え直された（${fold.reset.fromCostUsd.toFixed(4)} → ` +
+            `${EXCHANGE_KIND_GAUGE_PREFIX}自分の消費の累積が数え直された（${fold.reset.fromCostUsd.toFixed(4)} → ` +
             `${fold.reset.toCostUsd.toFixed(4)}）。resume か /clear で SDK 側の累積が ` +
             '0 から始まったため。記録済みの分は保持している。',
         });
@@ -9720,7 +9733,7 @@ class Clone implements CloneHost {
         type: 'exchange',
         with: 'self',
         role: 'outbound',
-        text: `[site=${site}] 消費を台帳へ記録できなかった（この分は集計に出ない）`,
+        text: `${EXCHANGE_KIND_FAILURE_PREFIX}[site=${site}] 消費を台帳へ記録できなかった（この分は集計に出ない）`,
       });
     }
   }
@@ -10070,10 +10083,15 @@ class Clone implements CloneHost {
             type: 'exchange',
             with: turn.conversationId === null ? 'self' : 'human',
             role: 'outbound',
+            // **kind の接頭辞は self 側（内部ターン）にだけ付ける。** human 側
+            // （`with: 'human'`）は、その1欄で「人間との生の往復である」ことが
+            // 既に構造化されて分かる——本文は人間が画面で現に見ているものと1文字も
+            // 変えない（`exchange-kind.ts` の doc）。
             text:
-              failure === undefined
+              (turn.conversationId === null ? EXCHANGE_KIND_REPLY_PREFIX : '') +
+              (failure === undefined
                 ? turn.text
-                : `（このターンは失敗して終わった。以下は失敗する前に出ていた本文である）\n${turn.text}`,
+                : `（このターンは失敗して終わった。以下は失敗する前に出ていた本文である）\n${turn.text}`),
             ...(turn.conversationId === null ? {} : { conversationId: turn.conversationId }),
             // **issue #782 の1。`conversationId` が無い（＝ `with: 'self'`）行には
             // 立てない** —— 会話 id を持たない承認への回答は今までどおり内部
@@ -11154,7 +11172,7 @@ function retrievalHintFor(event: InboxEvent): string {
       return (
         `全文の取り方: \`journal_read\` に \`types: ["exchange"]\` と ` +
         `\`since: "${event.at}"\` を渡して絞り込む（マネージャー ${event.managerId} からの` +
-        `${event.kind} が処理されるたびに、"[${event.managerId}/${event.kind}] " で始まる全文が` +
+        `${event.kind} が処理されるたびに、"${EXCHANGE_KIND_REPLY_PREFIX}[${event.managerId}/${event.kind}] " で始まる全文が` +
         '日誌へ書かれる。この配り直しでも直前に書いている）。'
       );
     // 台帳に載らない型（`commitmentFor` が型だけで常に `null` を返す組）。
