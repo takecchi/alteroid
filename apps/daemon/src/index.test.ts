@@ -883,27 +883,51 @@ describe('本番の配線: redeliveryGate は wake() と同じ部品を呼ぶ', 
  */
 describe('describeReopenedTokenNotice', () => {
   const reopened = { tokenId: 'tok-a', label: '本命', how: 'また通るようになった' as const };
+  const observedAt = '2026-09-13T12:50:03.000Z';
 
-  it('畳んでいなければ断り書きを付けない', () => {
-    const text = describeReopenedTokenNotice(reopened, 0);
+  /**
+   * **陽性対照（Issue #1375）: 畳まない単発の合図の本文は、`observedAt` を
+   * 渡しても1文字も変わらない。** 全文一致で固定する——`toContain` だけだと
+   * 「余計な一文が増えていないか」を見落とす（`describeReopenedTokenNotice`
+   * の doc「畳んでいない回の本文は1文字も変えない」の直接の裏付け）。
+   */
+  it('畳んでいなければ断り書きを付けない（陽性対照: 本文は従来と1文字も変わらない）', () => {
+    const text = describeReopenedTokenNotice(reopened, 0, observedAt);
 
-    expect(text).toContain('認証トークンが通る状態に戻った（また通るようになった）');
-    expect(text).toContain('「本命」（id tok-a）');
+    expect(text).toBe(
+      '認証トークンが通る状態に戻った（また通るようになった）: ' +
+        '「本命」（id tok-a）。枠で止まっていた仕事は、ここから再開できる。',
+    );
     expect(text).not.toContain('まとめた');
+    // ⚠️ やりすぎの変異: 単発の本文にも observedAt を焼くと、ここが赤くなる。
+    expect(text).not.toContain(observedAt);
   });
 
   it('畳んだ件数が本文に出る（届いた総数 ＝ 畳んだ数 + 配った1件）', () => {
-    const text = describeReopenedTokenNotice(reopened, 3);
+    const text = describeReopenedTokenNotice(reopened, 3, observedAt);
 
     // 3件畳んで1件配った ＝ この間に届いたのは4件。
     expect(text).toContain('4 件届き、1件にまとめた');
   });
 
-  it('how が「回した」でも同じ形で本文に出る', () => {
-    const text = describeReopenedTokenNotice({ ...reopened, how: '回した' }, 1);
+  /**
+   * **畳んだ回は観測時刻を名乗る（Issue #1375）。** 現在形の文言
+   * （「通る状態に戻った」）はそのままに、`observedAt` をそのまま本文へ
+   * 焼くことを固定する——読み手が「この本文はいつの観測か」を自分で
+   * 判断できるようにするための変更であって、言い方を変える変更ではない。
+   */
+  it('畳んだ回は本文に観測時刻（observedAt）をそのまま名乗る', () => {
+    const text = describeReopenedTokenNotice(reopened, 3, observedAt);
+
+    expect(text).toContain(`本文は ${observedAt} の観測である`);
+  });
+
+  it('how が「回した」でも同じ形で本文に出る（観測時刻も添う）', () => {
+    const text = describeReopenedTokenNotice({ ...reopened, how: '回した' }, 1, observedAt);
 
     expect(text).toContain('認証トークンが通る状態に戻った（回した）');
     expect(text).toContain('2 件届き、1件にまとめた');
+    expect(text).toContain(observedAt);
   });
 });
 
@@ -988,11 +1012,32 @@ describe('クローンの門は clone.post だけを絞る（restore / resumeSto
 
     expect(
       missingAnchors(postBlock, [
-        'text: describeReopenedTokenNotice(reopened, decision.folded),',
+        'text: describeReopenedTokenNotice(reopened, decision.folded, observedAt),',
         // 4つ目の条件（#1223 再発）が文言を読まずに判定するための構造化した2欄。
         'tokenId: reopened.tokenId,',
         'observedRecovery,',
         'identity: deliveredIdentity(reopened),',
+      ]),
+    ).toEqual([]);
+  });
+
+  /**
+   * **本文へ焼く観測時刻と、合図自身の `at` は同じ変数から来ること**
+   * （Issue #1375）。別々に `new Date()` を呼ぶと、本文の内側（観測時刻）と
+   * 外側（合図の `at`）でズレた時刻を名乗りうる——`describeReopenedTokenNotice`
+   * の doc「同じ UTC ISO 8601 文字列」の裏付けを原文で固定する。
+   */
+  it('本文へ渡す observedAt と、合図の at は同じ変数（観測時刻のズレを防ぐ）', () => {
+    const elseAt = wakeBody.indexOf('} else {', wakeBody.indexOf("decision.kind === 'fold'"));
+    const postAt = wakeBody.indexOf('clone.post({', elseAt);
+    const postEnd = wakeBody.indexOf('\n          });', postAt);
+    const elseBlock = wakeBody.slice(elseAt, postEnd);
+
+    expect(
+      missingAnchors(elseBlock, [
+        'const observedAt = new Date().toISOString();',
+        'at: observedAt,',
+        'describeReopenedTokenNotice(reopened, decision.folded, observedAt)',
       ]),
     ).toEqual([]);
   });

@@ -883,15 +883,34 @@ export function createCloneWakeGate(): CloneWakeGate {
  * いちばん多い「畳んでいない」場合の本文に余計な一文が乗る
  * （`mergeSynthesizedNoticeFragments` の「1件のときは前置きを付けない」と
  * 同じ理由）。
+ *
+ * **畳んだ回（`folded > 0`）は観測時刻も名乗る（Issue #1375）。** この本文は
+ * 「通る状態に戻った」を常に現在形で言うが、畳んだ回は受信箱の滞留や
+ * `pendingTokenWake` の据え置きで**配るのが遅れうる**——読み手が実際に目に
+ * するのは、事実そのものより後である。**現在形の文言は変えない**（決めたのは
+ * 「時刻を名乗る」であって「言い方を変える」ではない）。代わりに `observedAt`
+ * （呼び出し側が `clone.post(...)` の `at` に使うのと**同じ** UTC ISO 8601
+ * 文字列。この関数を呼ぶ時点でこの本文の内容——`reopened` の中身——を確定
+ * させた瞬間の値である）を添え、読み手が「この本文はいつの観測か」を自分で
+ * 判断できるようにする。**畳んでいない回（`folded <= 0`）の本文は1文字も
+ * 変えない**——単発の合図は遅れが積み上がらないので、この断り書きの対象では
+ * ない。
  */
-export function describeReopenedTokenNotice(reopened: ReopenedToken, folded: number): string {
+export function describeReopenedTokenNotice(
+  reopened: ReopenedToken,
+  folded: number,
+  observedAt: string,
+): string {
   const base =
     `認証トークンが通る状態に戻った（${reopened.how}）: ` +
     `「${reopened.label}」（id ${reopened.tokenId}）。` +
     '枠で止まっていた仕事は、ここから再開できる。';
   if (folded <= 0) return base;
   // 配った1件に、畳んで届かなかった folded 件を足すと、この間に実際に届いた総数。
-  return `${base}（この間に同じ合図が ${String(folded + 1)} 件届き、1件にまとめた）`;
+  return (
+    `${base}（この間に同じ合図が ${String(folded + 1)} 件届き、1件にまとめた。` +
+    `本文は ${observedAt} の観測である）`
+  );
 }
 
 /**
@@ -1874,13 +1893,19 @@ export async function main(): Promise<void> {
               `「${reopened.label}」（id ${reopened.tokenId}）\n`,
           );
         } else {
+          // **本文へ焼く観測時刻と、合図自身の `at` は同じ値にする**（Issue
+          // #1375）。この本文（`reopened` の中身）を確定させるのはここであり、
+          // 別々に `new Date()` を2回呼ぶと本文の内側と外側でズレた時刻を
+          // 名乗ることになる——`describeReopenedTokenNotice` の doc「同じ
+          // UTC ISO 8601 文字列」はこの一致を指す。
+          const observedAt = new Date().toISOString();
           clone.post({
             type: 'external',
             id: randomUUID(),
-            at: new Date().toISOString(),
+            at: observedAt,
             source: TOKEN_POOL_REOPENED_SOURCE,
             payload: {
-              text: describeReopenedTokenNotice(reopened, decision.folded),
+              text: describeReopenedTokenNotice(reopened, decision.folded, observedAt),
               // **構造化した2欄（Issue #1223 再発）。** `text` は人間向けの
               // 本文で、こちらは `usageBlockAlwaysRearms`（`clone.ts` の
               // `post()`）と `redeliveryGate`（下）が「文言を読まずに」
