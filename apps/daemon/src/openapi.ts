@@ -11,6 +11,8 @@ import {
   memoryDocumentMetaSchema,
   memoryDocumentSchema,
   pendingApprovalSchema,
+  practiceMetaSchema,
+  practiceSchema,
   runnerCredentialFingerprintSchema,
   runnerCredentialSchema,
   runnerLivenessSchema,
@@ -315,6 +317,16 @@ export const conversationDetailResponseSchema = z.object({
 export const memoryListResponseSchema = z.object({ documents: z.array(memoryDocumentMetaSchema) });
 export const memoryReadResponseSchema = z.object({ document: memoryDocumentSchema });
 export const memoryDeleteResponseSchema = z.object({ ok: z.literal(true), slug: z.string() });
+
+// ---------------------------------------------------------------------------
+// 仕事のやり方（/practices）— core の practice(Meta)Schema をそのまま使う
+// （#1055 段3③。PracticeStore の doc「器が持つのは『こう書いてある』までで、
+// 『こう実行せよ』ではない」——ここに `apply` / `enforce` に当たる口を作らない）
+// ---------------------------------------------------------------------------
+
+export const practiceListResponseSchema = z.object({ practices: z.array(practiceMetaSchema) });
+export const practiceReadResponseSchema = z.object({ practice: practiceSchema });
+export const practiceDeleteResponseSchema = z.object({ ok: z.literal(true), slug: z.string() });
 
 // ---------------------------------------------------------------------------
 // 日誌（/journal, /journal/stream）— core の journalEntrySchema をそのまま使う
