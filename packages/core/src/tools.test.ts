@@ -9925,6 +9925,47 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
     expect(reply).not.toContain('戻れなかった(lost)');
     expect(reply).not.toContain('status: ["lost"]');
   });
+
+  /**
+   * **`lost` を全部確かめても、落ちた委譲を全部見たことにはならない**（#1212 の §7 の3つ目）。
+   *
+   * 器が黙って消えた委譲は `running` のまま残り、直近のターンが失敗で終わった委譲は
+   * `done` のまま残る——どちらも `status: ["lost"]` では引けない。⟹ 件数の行から、
+   * 残りの2つへ辿る綴りまで読めなければ直っていない。
+   */
+  it('件数の行が、lost の外に残る2つ（running のまま・done のまま）へ辿る綴りを出す', async () => {
+    const h = pool([entry('mgr-lost-00', 'lost', 10), entry('mgr-done-00', 'done', 11)]);
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('lost を全部確かめても、落ちた委譲を全部見たことにはならない');
+    expect(reply).toContain('status: ["running"]');
+    expect(reply).toContain('status: ["done"]');
+  });
+
+  /**
+   * ⭐ **陽性対照とやりすぎよけ**: `lost` が 0 本なら、辿る綴りも出さない。
+   *
+   * 器が黙った委譲（`runnerLostSince`）や、直近のターンが失敗で終わった委譲
+   * （`lastFailure`）が在っても出さない——それぞれの行には既に ⚠ が付くので、
+   * この1文が効くのは「`lost` を全部見た」と読みかける場面だけである。
+   * `lost` 以外の区分に綴りを出す形は、ここで赤くなる。
+   */
+  it('⭐ lost が 0 本なら、器が黙った委譲や失敗で終わった委譲が在っても辿る綴りは出ない', async () => {
+    const orphaned = entry('mgr-run-00', 'running', 10);
+    orphaned.runnerLostSince = minutesBefore(5);
+    const failed = entry('mgr-done-00', 'done', 11);
+    failed.lastFailure = { code: 'success/429', via: 'result_is_error', at: minutesBefore(6) };
+    const h = pool([orphaned, failed]);
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('件数: 全 2 本');
+    expect(reply).toContain('宛先の器が名乗らなくなった 1 本');
+    expect(reply).not.toContain('落ちた委譲を全部見たことにはならない');
+    expect(reply).not.toContain('status: ["running"]');
+    expect(reply).not.toContain('status: ["done"]');
+  });
 });
 
 /**
