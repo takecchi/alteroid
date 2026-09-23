@@ -15480,7 +15480,7 @@ describe('クローン — 中身の同じ external をまとめて読む（#841
    * 検出できない**（置くと `#mergedExternalBatch` が立てた印を、直後の
    * リセットが即座に拭き取り、`external` の束でだけ断り書きが黙って消える）。
    */
-  it('external の束が上限で切れたときも、まとめ読みの断り書き（`#mergedBatchTruncationNotice`）が載る', async () => {
+  it('external の束が上限で切れたときも、まとめ読みの断り書き（`CloneNotices` の `mergedBatchTruncation`）が載る', async () => {
     const s = setup(undefined, createMemoryStores(), {}, { ALTEROID_MERGED_BATCH_SIZE_LIMIT: '2' });
 
     s.clone.post(humanMessage('先客'));
