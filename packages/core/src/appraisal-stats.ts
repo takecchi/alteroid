@@ -53,6 +53,7 @@
  *    （腐る）。追随させるかどうかは、足す側の責任である。
  */
 
+import { scanJournalPages } from './journal-scan.js';
 import {
   appraisalSchema,
   jobStatusSchema,
@@ -77,6 +78,23 @@ export interface AppraisalDecisionTally {
 
 function emptyTally(): AppraisalDecisionTally {
   return { good: 0, bad: 0, unclear: 0, other: 0, total: 0 };
+}
+
+/**
+ * `into` に `part` を足し込む（破壊的。ページ送りの途中経過を1つに畳むため）。
+ *
+ * **全ての欄を明示して足す**——`Object.keys` を回す形にすると、
+ * {@link AppraisalDecisionTally} に欄が増えたとき**黙って0のまま**になる。
+ * ここを手で並べてあれば、欄が増えたときに `tsc` が足りない欄を指す
+ * （`AGENTS.md`「型で塞いだ分岐にも、実行時の倒れ先の歯を足す」と同じ向きの
+ * 判断で、ここは型のほうで塞いでいる）。
+ */
+function addTally(into: AppraisalDecisionTally, part: AppraisalDecisionTally): void {
+  into.good += part.good;
+  into.bad += part.bad;
+  into.unclear += part.unclear;
+  into.other += part.other;
+  into.total += part.total;
 }
 
 /**
@@ -117,20 +135,48 @@ export interface AppraisalJournalStats {
 /**
  * 日誌ストアから、2つの印それぞれの評定の内訳を数える（I/O あり）。
  *
- * **`stores.journal.list({ types: ['decision'] })` を `limit` 無指定で1回だけ
- * 呼び、両方の prefix をそこから数える。** 2回叩かないのは、`decision` 型の
- * 行という1つの母集団から2つの別の束を作っているだけで、母集団の取得自体は
- * 1回で足りるからである。
+ * **`scanJournalPages` でページ単位に読み継ぎ、1ページごとに両方の prefix を
+ * 数えて件数だけを足し込む。** 2回叩かないのは、`decision` 型の行という1つの
+ * 母集団から2つの別の束を作っているだけで、母集団の走査自体は1回で足りるから
+ * である。
+ *
+ * ## なぜページ送りなのか（#1342）
+ *
+ * ここは以前 `journal.list({ types: ['decision'] })` を **`limit` 無指定**で
+ * 呼んでいた。pg 実装は `limit` 省略時に `Number.MAX_SAFE_INTEGER` を渡す
+ * （`grep -Fn -- 'query.limit ?? Number.MAX_SAFE_INTEGER' packages/storage-pg/src/journal.ts`）
+ * ので、**該当行の全文が1クエリで JS のヒープへ載る**——#1283 の OOM の形その
+ * ものである。`journal-scan.ts` がその穴を塞ぐ足場として既に在ったが、この口は
+ * それより前に出た PR（#1321）で足されたため、規律が届いていなかった。
+ *
+ * **保つのは「全期間の総数」のほうである。** 件数はカウンタで足し込み、行の
+ * 配列は1ページぶんより長く持たない——`onPage` が受け取ったページを外へ貯め
+ * ないので、`journal-scan.ts` 冒頭の doc が言う約束を呼び出し側でも破っていない。
+ *
+ * ⚠️ **`maxScanned` を渡していない。意図である。** `journal-scan.ts` の
+ * `JournalScanOptions.maxScanned` の doc は「走査が別の理由で早めに終わる見込みが
+ * 強い場合以外は必ず上限を渡せ」と言っており、ここはその条件を満たさない
+ * （最後の1行まで数え切るのが仕事なので、早期終了しない）。**それでも渡さないのは、
+ * 上限を渡した瞬間に出力が「総数」から「下限」へ化けるからである**——#1278 が
+ * 求めたのは全期間の総数そのもので、黙って切れた下限を総数と名乗るのは、直そうと
+ * している退行（`journal_read` の limit=200）と同じ形になる。**あの doc が守って
+ * いるのはヒープではなく往復（クエリ）の回数**で、ヒープのほうはページの大きさが
+ * 守る。往復は `decision` 行 6,855 件（2026-09-23 の実測、#1342 本文）で
+ * `ceil(6855/500)` ＝ **14 回**——およそ 600 行/日 の伸びで、1日あたり +1 回強。
+ * **ここが重くなったと分かったら、上限を足すのではなく、集計を走査の外（ストア側の
+ * `COUNT`）へ出すこと**——上限を足す道は、出力の意味を変えずには通れない。
  */
 export async function computeAppraisalJournalStats(
   journal: Pick<JournalStore, 'list'>,
   prefixes: { commitmentPrefix: string; jobPrefix: string },
 ): Promise<AppraisalJournalStats> {
-  const entries = await journal.list({ types: ['decision'] });
-  return {
-    commitments: tallyAppraisalDecisions(entries, prefixes.commitmentPrefix),
-    jobs: tallyAppraisalDecisions(entries, prefixes.jobPrefix),
-  };
+  const commitments = emptyTally();
+  const jobs = emptyTally();
+  await scanJournalPages(journal, { types: ['decision'] }, (page) => {
+    addTally(commitments, tallyAppraisalDecisions(page, prefixes.commitmentPrefix));
+    addTally(jobs, tallyAppraisalDecisions(page, prefixes.jobPrefix));
+  });
+  return { commitments, jobs };
 }
 
 /**

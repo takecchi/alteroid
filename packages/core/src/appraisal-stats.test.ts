@@ -7,6 +7,8 @@ import {
   isTerminalJobStatus,
   tallyAppraisalDecisions,
 } from './appraisal-stats.js';
+import { JOURNAL_SCAN_PAGE_SIZE } from './journal-scan.js';
+import { createSyntheticJournalStore } from './journal-scan.test-support.js';
 import {
   COMMITMENT_APPRAISAL_DECISION_PREFIX,
   formatAppraisalDecision,
@@ -157,9 +159,14 @@ describe('tallyAppraisalDecisions — 日誌のエントリ群から先頭一致
 
   it('200件を超える decision 行でも全件数える（journal_read の limit=200 には縛られないことの確認）', () => {
     // #1278 本文の実測: journal_read は limit の上限 200 に当たって総数 263 の
-    // 側が切れた。この歯は「この関数が limit を渡していないこと」を、
-    // 200件超のデータで実際に確かめる——境界値のすぐ外側（201件）ではなく、
-    // 実測に近い263件で作る。
+    // 側が切れた。この歯が確かめるのは「**この純関数が、渡された配列の件数に
+    // 上限を持たない**」ことである——境界値のすぐ外側（201件）ではなく、実測に
+    // 近い263件で作る。
+    //
+    // ⚠️ **ここは「limit を渡していないこと」を測っていない。**
+    // `tallyAppraisalDecisions` は純関数で、ストアを1度も呼ばない——`limit` を
+    // 渡す／渡さないという主語がそもそも無い。以前ここにそう書いてあったが、
+    // それは書いた時点から誤りだった（#1342 で直した。有界化とは独立の訂正）。
     const entries: JournalEntry[] = Array.from({ length: 263 }, (_, i) =>
       decisionEntry(`c${i}`, `${COMMITMENT_APPRAISAL_DECISION_PREFIX}（id-${i}）: good`),
     );
@@ -169,8 +176,8 @@ describe('tallyAppraisalDecisions — 日誌のエントリ群から先頭一致
   });
 });
 
-describe('computeAppraisalJournalStats — ストアから2つの印を1回の読みで数える（I/O あり）', () => {
-  it('総数200件超でもストア経由で全件返る（limit を渡していないことの結合確認）', async () => {
+describe('computeAppraisalJournalStats — ストアをページ送りで読み、2つの印を数える（I/O あり）', () => {
+  it('総数200件超でもストア経由で全件返る（1ページに収まる母集団での結合確認）', async () => {
     const stores = createMemoryStores();
     for (let i = 0; i < 210; i += 1) {
       await stores.journal.append({
@@ -193,10 +200,76 @@ describe('computeAppraisalJournalStats — ストアから2つの印を1回の�
     });
     // journal_read（MCP の道具）を同じ条件で引けば limit=200 に当たって切れる
     // ——ここでは道具を経由していないので、210件全部が数えられていることを見る。
+    //
+    // **この歯が守っているのは「全件が数えられること」であって「`limit` を
+    // 渡していないこと」ではない**（#1342）。210件は1ページ
+    // （`JOURNAL_SCAN_PAGE_SIZE` ＝ 500）に収まるので、ページ送りが実際に回る
+    // 側は直下の歯が測る——**この歯だけでは、ページ送りが1度も回らない。**
     expect(stats.commitments.total).toBe(210);
     expect(stats.commitments.good).toBe(210);
     expect(stats.jobs.total).toBe(5);
     expect(stats.jobs.bad).toBe(5);
+  });
+
+  /**
+   * **#1342 —— 日誌走査の契約が repo の中で矛盾していた件の、当て直した歯。**
+   *
+   * 直前の歯（210件）は「全件が数えられること」を守っているが、210 は1ページ
+   * （`JOURNAL_SCAN_PAGE_SIZE` ＝ 500）に収まるので**ページ送りが1度も回らない**。
+   * ここは母集団を1ページより大きく取り、2つを同時に測る:
+   *
+   * 1. **全件が数えられる** —— #1278 が求めた「全期間の総数」。ページ送りが途中で
+   *    打ち切れば `total` が減るので落ちる
+   * 2. **ストアへ `limit` 無指定の読みを1本も出さない** —— #1283 系の OOM の形
+   *    そのもの。`createSyntheticJournalStore` は `limit` が有限の正の数でなければ
+   *    その場で例外を投げる（`journal-scan.test-support.ts` の doc）ので、
+   *    **ページ送りを外して無制限へ戻すと、この歯は落ちる**
+   *
+   * ⟹ **1 だけでも 2 だけでも足りない。** 1 だけなら「無制限に読んで全件返す」
+   * （＝直す前の形）が緑で通り、2 だけなら「有限の `limit` を1回渡して途中で
+   * やめる」が緑で通る。**両方を同じ歯に置いてあるのは、どちらの向きの退行も
+   * ここ1本で赤くするためである。**
+   */
+  it('1ページを超える母集団でも全件数え、ストアへは毎回 有限の limit が渡る（#1342）', async () => {
+    const total = 1234; // 500 の倍数から外してある——最後の半端なページも通る形で測る
+    const commitmentRows = 700;
+    const jobRows = 200;
+    const synthetic = createSyntheticJournalStore({
+      total,
+      entryAt: (index) => {
+        const decision =
+          index < commitmentRows
+            ? `${COMMITMENT_APPRAISAL_DECISION_PREFIX}（c${index}）: good`
+            : index < commitmentRows + jobRows
+              ? `${JOB_APPRAISAL_DECISION_PREFIX}（m${index}）: bad — 差し戻し`
+              : `どちらの印でもない decision 行（${index}）`;
+        return { type: 'decision', decision, grounds: '' } as Omit<JournalEntry, 'id' | 'at'>;
+      },
+    });
+
+    const stats = await computeAppraisalJournalStats(synthetic.store, {
+      commitmentPrefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
+      jobPrefix: JOB_APPRAISAL_DECISION_PREFIX,
+    });
+
+    // (1) 全件——1ページに収まらない母集団でも取りこぼさない。
+    expect(stats.commitments.total).toBe(commitmentRows);
+    expect(stats.commitments.good).toBe(commitmentRows);
+    expect(stats.jobs.total).toBe(jobRows);
+    expect(stats.jobs.bad).toBe(jobRows);
+    // どちらの印でもない decision 行は、どちらの束にも入らない（走査した母集団の
+    // 分母と、内訳の分母を混ぜない）。
+    expect(synthetic.totalReturned).toBe(total);
+
+    // (2) 有限の limit——`limit` 無指定・無限大・非正の読みが1本も無い。
+    // **ページ送りが実際に回ったことを先に見る**（1回で終わっていたら、この
+    // for ループは何も測っていないのと同じになる）。
+    expect(synthetic.calls.length).toBeGreaterThan(1);
+    for (const call of synthetic.calls) {
+      expect(Number.isInteger(call.limit)).toBe(true);
+      expect(call.limit ?? 0).toBeGreaterThan(0);
+      expect(call.limit ?? 0).toBeLessThanOrEqual(JOURNAL_SCAN_PAGE_SIZE);
+    }
   });
 
   it('2つの印を混ぜない（一方だけ書いたら、もう一方は0のまま）', async () => {
