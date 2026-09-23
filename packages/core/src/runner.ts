@@ -985,6 +985,38 @@ function pruneOldestEntries<V>(map: Map<string, V>, limit: number): void {
 }
 
 /**
+ * `shouldEscalateSubagentLimitReachedNote` の入口（何回目から間引き始めるか）。
+ * `manager.ts` の `DENIED_ESCALATE_AT` と同じ値・同じ理由（1回目を黙らせない）
+ * で `1` に固定する。この定数を上げると、上限到達の1回目自体が受信箱へ
+ * 届かなくなる——`#subagentWakeupTotals` の doc が言う「黙って壊れる側では
+ * ない」を壊す方向なので、上げないこと。
+ */
+const SUBAGENT_LIMIT_REACHED_NOTE_ESCALATE_AT = 1;
+
+/**
+ * `agentId` ごとの「`limit_reached` の note を出した通算回数」（`count`。
+ * `#subagentLimitReachedNotes` の値）を受け取り、その回にクローンの受信箱へ
+ * 上げるかどうかを返す（#1385）。
+ *
+ * **`manager.ts` の `shouldEscalateDenial` と同じ規則**
+ * （`grep -Fn -- 'function shouldEscalateDenial(count: number): boolean {' packages/core/src/manager.ts`）
+ * ——1・3・9・27…と3倍ごとにだけ `true` を返す。実装もほぼそのまま写した
+ * （唯一の違いは定数名）。⚠️ **同じ規則が2箇所に実体を持つ。** `manager.ts`
+ * は別セッションの open PR が触っているため、この PR ではそちらを直接
+ * 呼べない（import もできない——`manager.ts` 側で export されていない
+ * 関数である）。**次にこの規則そのもの（1・3・9…や3倍という刻み）を
+ * 変えるときは、この関数と `shouldEscalateDenial` の両方を揃えて直すこと**
+ * ——片方だけ直すと、`permission_denied` の間引きと `limit_reached` の
+ * 間引きが黙ってずれる。
+ */
+function shouldEscalateSubagentLimitReachedNote(count: number): boolean {
+  if (count < SUBAGENT_LIMIT_REACHED_NOTE_ESCALATE_AT) return false;
+  let step = SUBAGENT_LIMIT_REACHED_NOTE_ESCALATE_AT;
+  while (step < count) step *= 3;
+  return step === count;
+}
+
+/**
  * `BackgroundTaskSummary.status` のうち「**もう終わっている**」を表す語。
  *
  * **語彙の出所は SDK の型である。** `BackgroundTaskSummary.status` そのものは
@@ -1447,6 +1479,39 @@ class RunnerSession {
    * `agent_id` 単位の通算を運ぶ役目はこちらへ引き継いだ。
    */
   #subagentWakeupTotals = new Map<string, number>();
+  /**
+   * `agentId` → **この作業者について `stall.outcome === 'limit_reached'` の
+   * `note` を出した通算回数**（#1385）。
+   *
+   * **背景 —— 上限に達した作業者が畳もうとするたびに、同じ内容の report が
+   * クローンの受信箱に積まれ続けていた。** `#onSubagentStop` は `limit_reached`
+   * に落ちるたびに `escalate: true` を立てており、`manager.ts` の
+   * `case 'note'` は `escalate === true` のときだけクローンの受信箱へ
+   * report を積む（`stall` 付きの note 自体は `escalate` に関係なく毎回
+   * 日誌へ書く——そちらは変えていない）。⟹ 同じ agentId が起こし直しの
+   * 上限に達したまま何度も `SubagentStop` を送ってくると、その回数ぶんだけ
+   * 同じ内容の report が積まれ、他の判断材料を押し流す。
+   *
+   * **間引き方は `manager.ts` の `shouldEscalateDenial` と同じ規則**
+   * （`grep -Fn -- 'function shouldEscalateDenial(count: number): boolean {' packages/core/src/manager.ts`。
+   * 1・3・9・27…と3倍ごとにだけ上げ、上げ続けないし、黙りもしない）。
+   * この表がその回数を数え、`shouldEscalateSubagentLimitReachedNote`
+   * （このファイル）が間引く。**`note` 自体は今までどおり毎回 emit する**
+   * （日誌には全件残る）——間引くのは `escalate` の有無だけで、note の
+   * 発行そのものは間引かない（間引くと日誌の全件性が壊れる。AGENTS.md
+   * 「静かに失敗する道具」と同じ向き）。
+   *
+   * ⚠️ **`manager.ts` を変更できない事情でこの規則をここへ複製している。**
+   * `shouldEscalateDenial` 自身と間引きの規則（1・3・9…）は同じだが、
+   * **実体は2箇所に分かれている** —— 片方だけ規則を変えると、
+   * `permission_denied` の間引きと `limit_reached` の間引きが黙って
+   * ずれる。次にこの規則を変えるときは両方を揃えること。
+   *
+   * `#subagentWakeupTotals` と同じ理由・同じ形でターン境界ではリセットせず、
+   * `SUBAGENT_WAKEUP_TRACKING_LIMIT` の枝刈り（`pruneOldestEntries`）で
+   * 件数を抑える。
+   */
+  #subagentLimitReachedNotes = new Map<string, number>();
   /**
    * `UserPromptSubmit` の `source` ごとの件数（`result` で畳む）。
    *
@@ -3867,12 +3932,17 @@ class RunnerSession {
    *    通し上限は何回かを必ず入れる。
    * 2. **どちらかの上限に達していたら —— 起こし直さない。**
    *    `additionalContext` は返さず（＝ `{ continue: true }` のみ）、
-   *    `escalate: true` を立てた `note` を出す。理由（`limitReason`）は
-   *    「通し上限に達した（`'per-agent'`）」と「残っている背景処理はどれも
-   *    1本あたりの上限に達した（`'per-task'`）」の2つに割り、両方成り立つ
-   *    ときは通し上限のほうが重い歯なので `'per-agent'` を名乗る。
-   *    `manager.ts` の `case 'note'` はこれを見て、日誌に加えてクローンの
-   *    受信箱へも1本上げる。
+   *    `note` を出す。理由（`limitReason`）は「通し上限に達した
+   *    （`'per-agent'`）」と「残っている背景処理はどれも1本あたりの上限に
+   *    達した（`'per-task'`）」の2つに割り、両方成り立つときは通し上限の
+   *    ほうが重い歯なので `'per-agent'` を名乗る。`manager.ts` の
+   *    `case 'note'` はこれを見て、日誌には毎回書く。**クローンの受信箱へは
+   *    間引いて上げる**（#1385。`escalate: true` を立てるのは、この
+   *    agentId で `limit_reached` の `note` を出した通算回数が 1・3・9・27…
+   *    のときだけ——`#subagentLimitReachedNotes` /
+   *    `shouldEscalateSubagentLimitReachedNote` の doc。**上限に達したまま
+   *    畳もうとするたびに同じ report が積まれ続けるのを防ぐためで、
+   *    `note` 自体は間引かない**（日誌には全件残る）。
    *
    * **同じ背景処理を残したまま2回目の `SubagentStop` が来た**（＝ 起こし
    * 直しても作業者が進まなかった）ときは、`note` の「この背景処理では n
@@ -4092,9 +4162,20 @@ class RunnerSession {
       }
 
       // **起こし直さない —— 理由は2つに割れる（`limitReason`）。**
-      // `escalate: true` を立て、`manager.ts` の `case 'note'` が日誌と
-      // クローンの受信箱の両方へ上げる。**ここでは何も加算していないので、
-      // `#renderSubagentStopTaskLines` が読む値は現在値のままである。**
+      // `note` は今までどおり毎回 emit する（日誌には全件残る）。
+      // `escalate` は間引く（#1385）—— `manager.ts` の `case 'note'` は
+      // `escalate === true` のときだけクローンの受信箱へ report を積むので、
+      // 毎回立てたままだと同じ agentId が上限に達したまま何度も
+      // `SubagentStop` を送ってくるたびに同じ report が積まれ続ける。
+      // **間引きの規則は `shouldEscalateSubagentLimitReachedNote` の doc
+      // （`manager.ts` の `shouldEscalateDenial` と同じ、1・3・9・27…）。**
+      // **ここでは何も加算していないので、`#renderSubagentStopTaskLines` が
+      // 読む値は現在値のままである。**
+      const limitNoteCount = (this.#subagentLimitReachedNotes.get(agentId) ?? 0) + 1;
+      this.#subagentLimitReachedNotes.set(agentId, limitNoteCount);
+      pruneOldestEntries(this.#subagentLimitReachedNotes, SUBAGENT_WAKEUP_TRACKING_LIMIT);
+      const shouldEscalateLimitNote = shouldEscalateSubagentLimitReachedNote(limitNoteCount);
+
       const taskLines = this.#renderSubagentStopTaskLines(agentId, remaining);
       const limitReasonText =
         limitReason === 'per-agent'
@@ -4103,6 +4184,12 @@ class RunnerSession {
           : `**残っている背景処理はどれも1本あたりの上限（${SUBAGENT_WAKEUP_LIMIT_PER_TASK}回）に` +
             `達したため、起こし直さなかった**（この作業者の通算 ${total}回 / 通し上限 ` +
             `${SUBAGENT_WAKEUP_LIMIT_PER_AGENT}）。`;
+      // **クローンが読んだとき「これが何回目か」「なぜ次がすぐ来ないか」が
+      // 分かる1行**（#1385）。日誌には毎回このまま載るので、間引かれた回
+      // （`escalate` が立たない回）も、日誌を辿れば抜け無く追える。
+      const limitNoteCountText =
+        `上限に達してから ${limitNoteCount}回目（1・3・9…回目だけクローンへ上げる）。` +
+        (shouldEscalateLimitNote ? '' : ' この回はクローンの受信箱へは上げない — 日誌には残る。');
       const noteLines = [
         `SubagentStop（作業者: ${hook.agent_type ?? '(不明)'} / agent_id=${agentId}）: ` +
           `**この作業者が自分で起こした背景処理が ${remaining.length}件 残ったまま畳もうとした**` +
@@ -4110,6 +4197,7 @@ class RunnerSession {
           `（この瞬間のセッション全体の在庫=${tasks.length}件、session_crons=${crons.length}件）。` +
           limitReasonText +
           stopHookActiveText,
+        limitNoteCountText,
         ...taskLines,
         ...(unknownText === '' ? [] : [unknownText]),
         disclaimer,
@@ -4118,7 +4206,7 @@ class RunnerSession {
         type: 'note',
         managerId: this.#id,
         text: this.#truncateSubagentStopText(noteLines.join('\n')),
-        escalate: true,
+        ...(shouldEscalateLimitNote ? { escalate: true } : {}),
         stall: {
           agentId,
           // 同上（「取れたときだけ載せる」）。
@@ -4127,7 +4215,10 @@ class RunnerSession {
           sessionTaskCount: tasks.length,
           // 起こし直していないので、このイベント自身は積算に足されない
           // （既存のスキーマ・doc のまま —— `#onSubagentStop` の doc の
-          // 「上限に達していたら」節）。
+          // 「上限に達していたら」節）。**この欄は `wakeupCount`（起こし
+          // 直した回数）のままで、間引きの回数（`limitNoteCount`）を運ばない
+          // ——スキーマの doc「この `agent_id` を起こし直した回数」の意味を
+          // 変えないため。**
           wakeupCount: total,
           outcome: 'limit_reached',
         },

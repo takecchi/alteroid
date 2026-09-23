@@ -1700,6 +1700,186 @@ describe('status で「走っている／終わった／分からない」を分
 });
 
 /**
+ * **上限に達した後の `note` を間引く（#1385）。**
+ *
+ * 症状: `#onSubagentStop` が `limit_reached` に落ちるたびに `escalate: true`
+ * を立てていたので、同じ agentId が上限に達したまま何度も `SubagentStop` を
+ * 送ってくると、`manager.ts` の `case 'note'` が同じ内容の report をクローンの
+ * 受信箱へ積み続けていた（`escalate` の有無で受信箱行きを決める分岐は
+ * `manager.ts` 側にあり、この PR では触れない——`packages/core/src/manager.ts`
+ * は別セッションの open PR が触っている）。
+ *
+ * 決まった形: `manager.ts` の `shouldEscalateDenial`（1・3・9・27…と3倍ごとに
+ * だけ上げる）と同じ規則を `runner.ts` 側に複製し（`grep -Fn --
+ * 'function shouldEscalateSubagentLimitReachedNote' packages/core/src/runner.ts`）、
+ * `note` 自体は毎回 emit したまま `escalate` だけを間引く。
+ *
+ * 証拠 — このファイルの3本の歯:
+ * 1. 同じ agentId で `limit_reached` の `note` を10回出すと、10件とも
+ *    出るが `escalate: true` は1・3・9回目の3件だけ。
+ * 2. 別の agentId は独立に数えられる。
+ * 3. 上限前の `woken` の回はこの数に入らない——既存の歯
+ *    （`起こし直しが上限に達したら`）がそのまま緑であることで示す。
+ */
+describe('上限に達した後の note を間引く（#1385）', () => {
+  /**
+   * ⚠️ **実装前にこのファイルへ足して走らせ、赤であることを確認した
+   * （報告に生の出力を残す）。** 実装前は `#onSubagentStop` が
+   * `limit_reached` のたびに無条件で `escalate: true` を立てていたので、
+   * 10件とも `escalate === true` になり、下の
+   * `expect(escalateFlags).toEqual([...])` が失敗していた。
+   */
+  it('上限に達した同じ agentId で SubagentStop を10回鳴らすと、note は10件出て escalate は1・3・9回目だけ', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    // **まず通し上限（per-agent）ちょうどまで温める** —— 毎回別の背景処理を
+    // 使い、起こし直される（`woken`）側を経由させる。これで `total ===
+    // SUBAGENT_WAKEUP_LIMIT_PER_AGENT` になり、以降は `limit_reached` に
+    // 落ちる（既存の「通し上限（per-agent）に達したら」の歯と同じ手順）。
+    for (let n = 1; n <= SUBAGENT_WAKEUP_LIMIT_PER_AGENT; n += 1) {
+      await registerBackgroundTask(started.options, `bg-warm-${n}`, 'agent-1');
+      const warmResult = await fireSubagentStop(started.options, {
+        ...STOP_BASE,
+        agent_id: 'agent-1',
+        background_tasks: [
+          selfEntry('agent-1'),
+          { id: `bg-warm-${n}`, type: 'monitor', status: 'running' },
+        ],
+      });
+      expect(warmResult).toHaveProperty('hookSpecificOutput');
+    }
+
+    // **ここから10回、同じ背景処理を残したまま畳もうとする** —— 通し上限に
+    // 既に達しているので、10回とも `limit_reached` に落ちる
+    // （`additionalContext` を返さない）。
+    await registerBackgroundTask(started.options, 'bg-over', 'agent-1');
+    const before = noteEvents(s.events).length;
+    for (let n = 1; n <= 10; n += 1) {
+      const result = await fireSubagentStop(started.options, {
+        ...STOP_BASE,
+        agent_id: 'agent-1',
+        background_tasks: [
+          selfEntry('agent-1'),
+          { id: 'bg-over', type: 'monitor', status: 'running' },
+        ],
+      });
+      expect(result).toEqual({ continue: true });
+    }
+
+    const notes = noteEvents(s.events).slice(before);
+    // **歯1（日誌の全件性）— note は10件とも出る。間引くのは escalate だけ
+    // であって、note の発行そのものではない。**
+    expect(notes).toHaveLength(10);
+    for (const note of notes) expect(note.stall?.outcome).toBe('limit_reached');
+
+    // **escalate は1・3・9回目の3件だけ。**
+    const escalateFlags = notes.map((note) => note.escalate === true);
+    expect(escalateFlags).toEqual([
+      true, // 1回目
+      false, // 2回目
+      true, // 3回目
+      false, // 4回目
+      false, // 5回目
+      false, // 6回目
+      false, // 7回目
+      false, // 8回目
+      true, // 9回目
+      false, // 10回目
+    ]);
+
+    // **歯4 — text に「N回目」の行が載る。**
+    for (const [index, note] of notes.entries()) {
+      const n = index + 1;
+      expect(note.text).toContain(
+        `上限に達してから ${String(n)}回目（1・3・9…回目だけクローンへ上げる）`,
+      );
+    }
+  });
+
+  /**
+   * **歯2 — 別の agentId は独立に数えられる。**
+   *
+   * `agent-1` を `limit_reached` の9回目（escalate する回）まで進めた
+   * *直後*に、`agent-2` の1回目を送る。**もし数える単位が agentId ではなく
+   * 全体で1本だったら**（変異(iii)）、`agent-2` の1回目は通算では10回目に
+   * なり、10は1・3・9…の並びに無いので escalate しない——この歯はその
+   * 崩れを撃つ。
+   */
+  it('別の agentId は独立に数えられる（片方が上限後9回目でも、もう片方の1回目は escalate）', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    // agent-1: 通し上限まで温めたあと、limit_reached を9回連続で送る。
+    for (let n = 1; n <= SUBAGENT_WAKEUP_LIMIT_PER_AGENT; n += 1) {
+      await registerBackgroundTask(started.options, `a1-bg-${n}`, 'agent-1');
+      await fireSubagentStop(started.options, {
+        ...STOP_BASE,
+        agent_id: 'agent-1',
+        background_tasks: [
+          selfEntry('agent-1'),
+          { id: `a1-bg-${n}`, type: 'monitor', status: 'running' },
+        ],
+      });
+    }
+    await registerBackgroundTask(started.options, 'a1-bg-over', 'agent-1');
+    for (let n = 1; n <= 9; n += 1) {
+      await fireSubagentStop(started.options, {
+        ...STOP_BASE,
+        agent_id: 'agent-1',
+        background_tasks: [
+          selfEntry('agent-1'),
+          { id: 'a1-bg-over', type: 'monitor', status: 'running' },
+        ],
+      });
+    }
+    const agent1Notes = noteEvents(s.events).filter(
+      (note) => note.stall?.agentId === 'agent-1' && note.stall?.outcome === 'limit_reached',
+    );
+    expect(agent1Notes).toHaveLength(9);
+    // 前提の検算——9回目が escalate する回であること（そうでなければ下の
+    // agent-2 の検算自体が無意味になる）。
+    expect(agent1Notes.at(-1)?.escalate).toBe(true);
+
+    // agent-2: 別に通し上限まで温めて、limit_reached の1回目を送る。
+    for (let n = 1; n <= SUBAGENT_WAKEUP_LIMIT_PER_AGENT; n += 1) {
+      await registerBackgroundTask(started.options, `a2-bg-${n}`, 'agent-2');
+      await fireSubagentStop(started.options, {
+        ...STOP_BASE,
+        agent_id: 'agent-2',
+        background_tasks: [
+          selfEntry('agent-2'),
+          { id: `a2-bg-${n}`, type: 'monitor', status: 'running' },
+        ],
+      });
+    }
+    await registerBackgroundTask(started.options, 'a2-bg-over', 'agent-2');
+    await fireSubagentStop(started.options, {
+      ...STOP_BASE,
+      agent_id: 'agent-2',
+      background_tasks: [
+        selfEntry('agent-2'),
+        { id: 'a2-bg-over', type: 'monitor', status: 'running' },
+      ],
+    });
+    const agent2Notes = noteEvents(s.events).filter(
+      (note) => note.stall?.agentId === 'agent-2' && note.stall?.outcome === 'limit_reached',
+    );
+    expect(agent2Notes).toHaveLength(1);
+    // **本体の主張** —— agent-1 が直前に9回目（escalate する回）を消費して
+    // いても、agent-2 の1回目は独立して escalate する。
+    expect(agent2Notes[0]?.escalate).toBe(true);
+    expect(agent2Notes[0]?.text).toContain(
+      '上限に達してから 1回目（1・3・9…回目だけクローンへ上げる）',
+    );
+  });
+});
+
+/**
  * **SDK の status の語彙が動いたら `pnpm typecheck` が落ちる歯。**
  *
  * `BackgroundTaskSummary.status` は `status: string`（自由文字列）で語彙を
