@@ -46,7 +46,11 @@ import { createApp, parseAllowedOrigins } from './app.js';
 import { encodeCursor } from './cursor.js';
 import type { AuthPlan } from './auth.js';
 import { createJournalBus, type JournalBus } from './journal-bus.js';
-import { scheduleStatusSchema } from './openapi.js';
+import {
+  practiceListResponseSchema,
+  practiceReadResponseSchema,
+  scheduleStatusSchema,
+} from './openapi.js';
 import { startUsagePolling } from './usage-poller.js';
 
 /** クローンの代わり。HTTP 層だけを検証する。 */
@@ -670,6 +674,43 @@ describe('HTTP API', () => {
       method: 'PUT',
     });
     expect(put.status).toBe(400);
+  });
+
+  /**
+   * **`GET /practices` / `GET /practices/:slug` の応答が、`describeRoute` へ
+   * 渡した OpenAPI 応答スキーマの形と実際に一致することを検算する。**
+   *
+   * ⚠️ この2つのハンドラは（`memory` の GET と同じく）応答を作る前に
+   * `practiceListResponseSchema.parse()` / `practiceReadResponseSchema.parse()`
+   * を通していない——`hono-openapi` の `resolver()` は spec 生成にしか使われず、
+   * 実行時の応答を検証しない。⟹ `openapi.ts` 側の宣言スキーマからフィールドを
+   * 落としても（例: `practiceReadResponseSchema` を `practiceSchema` から
+   * `practiceMetaSchema` へ差し替えて `content` を落とす）、ハンドラの実際の
+   * 応答は1文字も変わらないので、他のどのテストも落ちない
+   * （変異試験で確認済み——`.parse()` を通さない GET の宣言スキーマは
+   * ノーガードだった）。**このテストが無い状態では、その差し替えは緑のまま
+   * 通っていた。**
+   */
+  it('GET /practices(/:slug) の実際の応答は、宣言した OpenAPI 応答スキーマの形と一致する', async () => {
+    await stores.practices.write({
+      slug: 'shape-check',
+      kind: '実装',
+      title: '形の検算用',
+      content: '本文',
+    });
+
+    const list = await app.request('/practices');
+    const parsedList = practiceListResponseSchema.parse(await list.json());
+    expect(parsedList.practices[0]).toMatchObject({ slug: 'shape-check' });
+
+    const read = await app.request('/practices/shape-check');
+    const parsedRead = practiceReadResponseSchema.parse(await read.json());
+    // **ここが本題。** `.parse()` は宣言していない余剰フィールドを黙って
+    // 落とすので（zod の既定挙動）、`practiceReadResponseSchema` が
+    // `practiceMetaSchema`（`content` を持たない）に差し替わっていても
+    // `.parse()` 自体は例外を投げない——投げないことではなく、パース後の
+    // 値に `content` が生き残っているかで検算する。
+    expect(parsedRead.practice.content).toBe('本文\n');
   });
 
   it('不正な slug は 400', async () => {
