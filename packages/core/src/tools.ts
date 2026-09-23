@@ -105,6 +105,7 @@ import {
   describeMemoryFloor,
   describeMemoryPremiseRanking,
   describeMemoryReinjectionEstimate,
+  describeMemorySectionMoveHierarchyJumpWarning,
   describeMemorySessionDelta,
   describeMemoryWriteDiff,
   findMemoryFrontmatterLineBreak,
@@ -4826,12 +4827,23 @@ export function createCloneTools(context: ToolContext) {
               ]
             : [];
 
+        // **階層飛びの警告（issue #1382）。** 移動そのものは既に完了している
+        // ので、ここは拒否ではなく応答に1件足すだけ——判定は
+        // `describeMemorySectionMoveHierarchyJumpWarning`（memory.ts）が
+        // 全部持つ。`scan` は切り取り前の全節、`targets` は今回渡された
+        // 節id が指す節（=今回の根）——どちらもこの関数の前半で計算済み。
+        const hierarchyJumpNote = ((): readonly string[] => {
+          const warning = describeMemorySectionMoveHierarchyJumpWarning(scan.sections, targets);
+          return warning === null ? [] : ['', warning];
+        })();
+
         return text(
           [
             `記憶 ${fromSlug} から ${ordered.length} 節（合計 ${cut.length.toLocaleString('en-US')} 文字）を ${toSlug} の末尾へ移した。`,
             '',
             listing,
             ...idempotentNote,
+            ...hierarchyJumpNote,
             '',
             `移した先 ${toSlug}:`,
             describeMemoryWriteDiff(toBefore === null ? null : toBefore.content, toWritten.content),

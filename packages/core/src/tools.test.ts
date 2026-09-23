@@ -2862,6 +2862,78 @@ describe('クローンの道具', () => {
       });
 
       /**
+       * issue #1382（#916 comment 7 の項目14-2 から切り出し）: 移した節の
+       * 子孫に、見出しの階層が直近の親より2段以上飛んでいるものが在れば、
+       * 応答に警告を1件足す（拒否ではない——移動そのものは通常どおり
+       * 完了し、出どころ・移し先の中身も通常どおり動く）。
+       */
+      it('⚠ 移した節の子孫に階層飛び（### を挟まず ## → ####）が在ると、応答に警告が付く。移動は拒否されない', async () => {
+        const h = harness();
+        const jumpy = [
+          '---',
+          'description: 階層が飛んでいる文書',
+          'type: premise',
+          '---',
+          '# 表紙',
+          '芯である。',
+          '',
+          '## 親の話題',
+          '親の本文である。',
+          '',
+          `#### ${SECRET} を含む無関係な規則（### を挟んでいない）`,
+          '無関係な本文である。',
+          '',
+          '## 次',
+          '残る節である。',
+          '',
+        ].join('\n');
+        await seed(h, 'jumpy', jumpy);
+        const id = await outlineId(h, 'jumpy', '## 親の話題');
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'jumpy',
+          sections: [id],
+          toSlug: 'jumpy-appendix',
+          summary: '親の話題を付録へ移した',
+        });
+
+        // 移動そのものは拒否されず、いつもどおり完了している。
+        expect(reply).toContain('移した');
+        const from = await h.stores.persona.read('jumpy');
+        const to = await h.stores.persona.read('jumpy-appendix');
+        expect(from?.content).not.toContain('## 親の話題');
+        expect(to?.content).toContain('## 親の話題');
+        // 無関係な規則も親と一緒に動く（これが#1382の実害そのもの）。
+        expect(to?.content).toContain(SECRET);
+
+        // 警告そのもの。拒否の語は名乗らない。
+        expect(reply).toContain('階層');
+        expect(reply).toContain('子孫 1 件のうち 1 件');
+        expect(reply).not.toContain('何も変わっていない');
+      });
+
+      /**
+       * 上の歯の対照。**通常の1段ずつの入れ子（`source` の `## 事例` →
+       * `### だから`）では、この警告が1文字も出ないこと**を見る——
+       * 「正しい入れ子の移動まで警告してしまう」当てすぎを歯で防ぐ。
+       */
+      it('通常の1段ずつの入れ子を移しても、階層飛びの警告は出ない（当てすぎない）', async () => {
+        const h = harness();
+        await seed(h);
+        const id = await outlineId(h, 'about-me', '## 事例');
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'about-me',
+          sections: [id],
+          toSlug: 'about-me-appendix',
+          summary: '事例を付録へ移した',
+        });
+
+        expect(reply).toContain('移した');
+        expect(reply).not.toContain('階層');
+      });
+
+      /**
        * **#662 段1: 省略の断り書きに `total`/`shown` を足した分の歯。**
        *
        * 前置き（`${ordered.length} 節を移した`）から件数を復元させるのでは

@@ -4734,6 +4734,145 @@ export function findOverlappingMemorySections(
 }
 
 /**
+ * 見出しの階層が**直近の実在する親より2段以上深い**節（issue #1382「階層飛び」）。
+ *
+ * `parent` はこの節を直接内包する最も深い節（無ければ `findMemorySectionHierarchyJumps`
+ * に渡した `root` そのもの）。`gap` は `section.depth - parent.depth`（必ず2以上）。
+ */
+export interface MemorySectionHierarchyJump {
+  readonly section: MemorySection;
+  readonly parent: MemorySection;
+  readonly gap: number;
+}
+
+/**
+ * `root` に内包される子孫のうち、見出しの階層が直近の親より2段以上飛んでいる
+ * ものを探す（issue #1382）。
+ *
+ * ## なぜ調べるか
+ *
+ * `cutMemorySections` は「同じ深さ以下の次の見出しの直前まで」を子として
+ * 一緒に運ぶ（`scanMemorySections` の doc）。これは正しい仕様であり、
+ * ここでは変えない——だが**実際に壊れた例が在る**（#916 comment 7、項目
+ * 14-2）: `##` の節の直下に `###` として書かれた、親とは無関係な独立した
+ * 規則が、親を移したときに一緒に運ばれた。「見出しの深さが1段ずつ連続して
+ * いない子孫」（間の深さの見出しを1つも挟まず、親よりいきなり2段以上深く
+ * なる見出し）は、書き手が意図せず別の話題を入れ子にしてしまった徴候で
+ * ありうる。**ただし妥当な構造でも起こりうる**（もともと `####` から
+ * 書き始めると決めている文書もある）ので、ここでは判定しない——
+ * `describeMemorySectionMoveHierarchyJumpWarning` の doc「拒否ではなく
+ * 警告にとどめる」を読むこと。
+ *
+ * ## 「直近の親」の求め方——スタックで内包関係を追う
+ *
+ * `scanMemorySections` が組み立てる節はきれいな入れ子である（重なりが
+ * あっても部分重なりにはならない。範囲が完全に一致するか、片方がもう
+ * 片方を完全に内包するかのどちらかしかない——`findOverlappingMemorySections`
+ * の doc の「親と子を同時に指した」「同じ節id を2回」の2形がこの性質の
+ * 上に立っている）。だから `root` に内包される節を `start` の昇順に並べ、
+ * スタックの先頭の `end` がこの節の `start` 以下になるまで pop すれば、
+ * 残った先頭が直近の親になる——兄弟どうしは `prev.end === next.start`
+ * （`findOverlappingMemorySections` の doc）なので、この不等号は `<=`
+ * でなければならない（`<` にすると直前の兄弟が親として誤って残る）。
+ * `root` 自身はスタックの底に置いたまま pop しない——`root` に内包
+ * される節である以上、直近の親が見つからないことは無いはずだが、
+ * 万一のときの倒れ先を `root` に固定する（`gap` は `root` 基準で
+ * 計算されるので、拒否ではなく警告という性質のまま安全側に倒れる）。
+ */
+export function findMemorySectionHierarchyJumps(
+  allSections: readonly MemorySection[],
+  root: MemorySection,
+): readonly MemorySectionHierarchyJump[] {
+  const descendants = allSections
+    .filter(
+      (section) => section.id !== root.id && section.start >= root.start && section.end <= root.end,
+    )
+    .sort((a, b) => a.start - b.start);
+
+  const jumps: MemorySectionHierarchyJump[] = [];
+  const stack: MemorySection[] = [root];
+  for (const section of descendants) {
+    while (stack.length > 1 && (stack[stack.length - 1] as MemorySection).end <= section.start) {
+      stack.pop();
+    }
+    const parent = stack[stack.length - 1] as MemorySection;
+    if (section.depth - parent.depth > 1) {
+      jumps.push({ section, parent, gap: section.depth - parent.depth });
+    }
+    stack.push(section);
+  }
+  return jumps;
+}
+
+/**
+ * 階層飛びの警告一覧の文字数予算（`MEMORY_SECTION_MOVE_LIST_BUDGET` と同じ
+ * 思想。件数ではなく文字数で切る——AGENTS.md の地雷表）。
+ */
+export const MEMORY_SECTION_MOVE_HIERARCHY_JUMP_LIST_BUDGET = 800;
+
+/**
+ * `memory_section_move` の応答へ足す、階層飛びの警告（無ければ `null`）。
+ *
+ * ## 拒否ではなく警告にとどめる
+ *
+ * 移動そのものは、この関数を呼ぶ時点で既に完了している——`findOverlappingMemorySections`
+ * のような「1文字も書く前に断る」検査とは違う。階層が飛んでいることは
+ * **妥当な構造の可能性を残す**（`findMemorySectionHierarchyJumps` の doc）ので、
+ * ここでは移動を止めない。既存の7種の断り（frontmatter が壊れている・
+ * stale・ambiguous・範囲の重なり等。`tools.ts` の `memory_section_move` の
+ * doc の列挙）はどれも**機械的に一意に決まる不正**だが、階層飛びは
+ * 「無関係な話題が紛れ込んでいるかもしれない」という**意味の妥当性**の
+ * 話で、道具には判定できない——だから応答に1件足すだけにする
+ * （issue #1382 の「最小の形（案）」がそのまま警告を提案している）。
+ *
+ * ## 複数根への拡張
+ *
+ * `memory_section_move` は複数の節id を1回で移せる（`cutMemorySections`
+ * の doc）。`roots`（今回移した節、複数可）ごとに `findMemorySectionHierarchyJumps`
+ * を呼び、**全根をまたいだ合計**で「子孫 M 件中 K 件」を言う——Issue の
+ * 最小案の文言（「この節id の子孫は M 個で、そのうち見出しの階層が飛んで
+ * いるものが K 個」）をそのまま複数根へ拡張した形である。
+ *
+ * `allSections` は移動前の文書全体の走査結果（`scanMemorySections(...).sections`）
+ * を渡すこと——`roots` はその中から選ばれた節でなければ、内包関係の判定が
+ * 成り立たない。
+ */
+export function describeMemorySectionMoveHierarchyJumpWarning(
+  allSections: readonly MemorySection[],
+  roots: readonly MemorySection[],
+): string | null {
+  const perRoot = roots.map((root) => ({
+    root,
+    descendantCount: allSections.filter(
+      (section) => section.id !== root.id && section.start >= root.start && section.end <= root.end,
+    ).length,
+    jumps: findMemorySectionHierarchyJumps(allSections, root),
+  }));
+
+  const descendantTotal = perRoot.reduce((sum, entry) => sum + entry.descendantCount, 0);
+  const allJumps = perRoot.flatMap((entry) => entry.jumps);
+  if (allJumps.length === 0) return null;
+
+  const lines = allJumps.map(
+    (jump) =>
+      `- 「${jump.section.heading}」は直近の親「${jump.parent.heading}」より ${jump.gap} 階層深い（1段飛ばし以上）`,
+  );
+  const listing = renderListing(lines, {
+    budget: MEMORY_SECTION_MOVE_HIERARCHY_JUMP_LIST_BUDGET,
+    omitted: ({ rest, total }) =>
+      `…ほか ${rest} 件は一覧から省略（階層が飛んでいる子孫は全 ${total} 件）。`,
+  });
+
+  return (
+    `⚠ 移した節の子孫 ${descendantTotal} 件のうち ${allJumps.length} 件は、見出しの階層が` +
+    '直近の親より2段以上飛んでいる（例: `##` の子に `####` が直接ぶら下がる、間の `###` が無い）。' +
+    '親と無関係な話題が、書式の都合で子として一緒に運ばれた可能性がある——妥当な構造のこともあるので' +
+    '断ってはいない。移した先を memory_outline で確かめ、無関係なら memory_section_move で切り離すこと。\n' +
+    listing
+  );
+}
+
+/**
  * `memory_section_move` が応答に並べる「移した節の一覧」の文字数予算。
  *
  * **件数ではなく文字数で切る**——`MEMORY_OUTLINE_BUDGET` と同じ思想

@@ -28,13 +28,16 @@ import {
   deriveMemoryCreatedAtFromJournal,
   deriveMemoryFrontmatter,
   MEMORY_JOURNAL_SCAN_PAGE_SIZE,
+  MEMORY_SECTION_MOVE_HIERARCHY_JUMP_LIST_BUDGET,
   describeMemoryFloor,
   describeMemoryPremiseRanking,
   describeMemoryProtectionStatus,
   describeMemoryReinjectionEstimate,
+  describeMemorySectionMoveHierarchyJumpWarning,
   describeMemorySessionDelta,
   describeMemoryWriteDiff,
   findMemoryFrontmatterLineBreak,
+  findMemorySectionHierarchyJumps,
   findOverlappingMemorySections,
   isKnownMemoryDocKind,
   lookupMemorySection,
@@ -4024,6 +4027,199 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
     it('空配列・1件だけなら null（重なりようがない）', () => {
       expect(findOverlappingMemorySections([])).toBeNull();
       expect(findOverlappingMemorySections([find('## 経歴')])).toBeNull();
+    });
+  });
+
+  /**
+   * issue #1382（#916 comment 7 の項目14-2 から切り出し）: `memory_section_move`
+   * で親の節を動かすと、子孫の階層飛び（`##` の子に `####` が直接ぶら下がる等、
+   * 間の深さの見出しを1つも挟まない子孫）を警告せずに巻き込む。ここでは
+   * 「拒否ではなく警告にとどめる」（Issue 本文の最小案どおり）ので、検出できる
+   * ことと、正しい入れ子（1段ずつの通常の親子）では鳴らないことの両方を見る。
+   */
+  describe('findMemorySectionHierarchyJumps（階層飛びの子孫を探す。issue #1382）', () => {
+    const sections = () => scanMemorySections(withFrontmatter).sections;
+    const find = (heading: string): MemorySection =>
+      sections().find((section) => section.heading === heading) as MemorySection;
+
+    it('1段ずつの通常の親子では何も鳴らない（正しい入れ子まで警告しない）', () => {
+      // withFrontmatter は # → ## → ### → #### と1段ずつ深くなる、壊れていない入れ子。
+      expect(findMemorySectionHierarchyJumps(sections(), find('# 私について'))).toEqual([]);
+      expect(findMemorySectionHierarchyJumps(sections(), find('## 経歴'))).toEqual([]);
+    });
+
+    it('親の直下に2段深い見出しが直接ぶら下がると検出する（### を挟まず ## → ####）', () => {
+      const doc = [
+        '## 親',
+        '親本文',
+        '',
+        '#### 無関係な規則（### を挟んでいない）',
+        '子本文',
+        '',
+        '## 兄弟',
+        '兄弟本文',
+        '',
+      ].join('\n');
+      const all = scanMemorySections(doc).sections;
+      const parent = all.find((section) => section.heading === '## 親') as MemorySection;
+      const jumper = all.find(
+        (section) => section.heading === '#### 無関係な規則（### を挟んでいない）',
+      ) as MemorySection;
+
+      const jumps = findMemorySectionHierarchyJumps(all, parent);
+
+      expect(jumps).toHaveLength(1);
+      expect(jumps[0]?.section.id).toBe(jumper.id);
+      expect(jumps[0]?.parent.id).toBe(parent.id);
+      expect(jumps[0]?.gap).toBe(2);
+    });
+
+    it('飛びは直近の親を基準に判定する（孫のさらに孫の飛びは、祖父ではなく直近の親との差で見る）', () => {
+      const doc = [
+        '## 親',
+        '親本文',
+        '',
+        '### 通常の子（1段。飛んでいない）',
+        '子本文',
+        '',
+        '###### さらに孫（子から3段。飛んでいる）',
+        '孫本文',
+        '',
+      ].join('\n');
+      const all = scanMemorySections(doc).sections;
+      const parent = all.find((section) => section.heading === '## 親') as MemorySection;
+      const child = all.find(
+        (section) => section.heading === '### 通常の子（1段。飛んでいない）',
+      ) as MemorySection;
+      const grandchild = all.find(
+        (section) => section.heading === '###### さらに孫（子から3段。飛んでいる）',
+      ) as MemorySection;
+
+      const jumps = findMemorySectionHierarchyJumps(all, parent);
+
+      expect(jumps).toHaveLength(1);
+      expect(jumps[0]?.section.id).toBe(grandchild.id);
+      // 飛びの基準は直近の親（child）であって、root（parent）ではない。
+      expect(jumps[0]?.parent.id).toBe(child.id);
+      expect(jumps[0]?.gap).toBe(3);
+    });
+
+    /**
+     * 兄弟どうしは `prev.end === next.start`（`findOverlappingMemorySections`
+     * の doc）。直近の親を求めるスタックの pop 条件が `<=` ではなく `<` に
+     * 誤っていると、閉じたはずの前の兄弟がスタックに残り続け、**後続の
+     * 兄弟の「直近の親」を1つ前の兄弟に誤認する**——ここでは2つの兄弟が
+     * どちらも root（親）から見て階層が飛んでいる形にして、誤認が起きると
+     * 2件目が「兄弟からは飛んでいない（gap 0）」に化けて検出漏れになる
+     * ことを見る。
+     */
+    it('隣り合う兄弟どうしは、互いを親と誤認せずそれぞれ独立に root からの飛びを判定する', () => {
+      const doc = [
+        '## 親',
+        '親本文',
+        '',
+        '##### 兄（親から3段飛んでいる。#/##/### を挟んでいない）',
+        '兄本文',
+        '',
+        '##### 弟（兄の兄弟。同じく親から3段飛んでいる）',
+        '弟本文',
+        '',
+      ].join('\n');
+      const all = scanMemorySections(doc).sections;
+      const parent = all.find((section) => section.heading === '## 親') as MemorySection;
+      const elder = all.find(
+        (section) => section.heading === '##### 兄（親から3段飛んでいる。#/##/### を挟んでいない）',
+      ) as MemorySection;
+      const younger = all.find(
+        (section) => section.heading === '##### 弟（兄の兄弟。同じく親から3段飛んでいる）',
+      ) as MemorySection;
+
+      const jumps = findMemorySectionHierarchyJumps(all, parent);
+
+      expect(jumps).toHaveLength(2);
+      const bySection = new Map(jumps.map((jump) => [jump.section.id, jump]));
+      expect(bySection.get(elder.id)?.parent.id).toBe(parent.id);
+      expect(bySection.get(elder.id)?.gap).toBe(3);
+      // 弟の直近の親は兄ではなく root（親）——兄はすでに閉じた兄弟である。
+      expect(bySection.get(younger.id)?.parent.id).toBe(parent.id);
+      expect(bySection.get(younger.id)?.gap).toBe(3);
+    });
+
+    it('root に子孫が無ければ空配列', () => {
+      const leaf = find('#### さらに');
+      expect(findMemorySectionHierarchyJumps(sections(), leaf)).toEqual([]);
+    });
+  });
+
+  describe('describeMemorySectionMoveHierarchyJumpWarning（応答へ足す警告文。issue #1382）', () => {
+    it('階層飛びが無ければ null（応答に1行も足さない）', () => {
+      const all = scanMemorySections(withFrontmatter).sections;
+      const parent = all.find((section) => section.heading === '## 経歴') as MemorySection;
+
+      expect(describeMemorySectionMoveHierarchyJumpWarning(all, [parent])).toBeNull();
+    });
+
+    it('階層飛びが在れば、子孫の総数と飛びの件数を数えた警告文を返す（拒否の語を使わない）', () => {
+      const doc = [
+        '## 親',
+        '親本文',
+        '',
+        '### 通常の子',
+        '子本文',
+        '',
+        '##### 飛んだ孫',
+        '孫本文',
+        '',
+      ].join('\n');
+      const all = scanMemorySections(doc).sections;
+      const parent = all.find((section) => section.heading === '## 親') as MemorySection;
+
+      const warning = describeMemorySectionMoveHierarchyJumpWarning(all, [parent]);
+
+      expect(warning).not.toBeNull();
+      expect(warning).toContain('子孫 2 件のうち 1 件');
+      expect(warning).toContain('飛んだ孫');
+      // 警告であって拒否ではない——「断る」「何も変わっていない」を名乗らない。
+      expect(warning).not.toContain('断る');
+      expect(warning).not.toContain('何も変わっていない');
+    });
+
+    it('複数 root をまとめて渡すと、件数は根をまたいだ合計になる', () => {
+      const docA = ['## A', '本文', '', '#### Aの飛び', '本文', ''].join('\n');
+      const docB = ['## B', '本文', '', '#### Bの飛び', '本文', ''].join('\n');
+      const combined = `${docA}\n${docB}`;
+      const all = scanMemorySections(combined).sections;
+      const a = all.find((section) => section.heading === '## A') as MemorySection;
+      const b = all.find((section) => section.heading === '## B') as MemorySection;
+
+      const warning = describeMemorySectionMoveHierarchyJumpWarning(all, [a, b]);
+
+      expect(warning).toContain('子孫 2 件のうち 2 件');
+      expect(warning).toContain('Aの飛び');
+      expect(warning).toContain('Bの飛び');
+    });
+
+    it('一覧は文字数の予算で切る（MEMORY_SECTION_MOVE_HIERARCHY_JUMP_LIST_BUDGET）', () => {
+      const jumperHeadings = Array.from(
+        { length: 40 },
+        (_, index) => `#### 飛び${index}あああああああ`,
+      );
+      const doc = [
+        '## 親',
+        '親本文',
+        '',
+        ...jumperHeadings.flatMap((heading) => [heading, '本文', '']),
+      ].join('\n');
+      const all = scanMemorySections(doc).sections;
+      const parent = all.find((section) => section.heading === '## 親') as MemorySection;
+
+      const warning = describeMemorySectionMoveHierarchyJumpWarning(all, [parent]);
+
+      expect(warning).not.toBeNull();
+      expect(warning).toContain('件は一覧から省略');
+      expect((warning as string).length).toBeLessThan(
+        MEMORY_SECTION_MOVE_HIERARCHY_JUMP_LIST_BUDGET + 600,
+      );
     });
   });
 
