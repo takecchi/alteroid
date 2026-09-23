@@ -365,10 +365,13 @@ function ApprovalCard({
  * 「クローンは黙ったままだ」と誤解される。
  *
  * ⚠️ **見出しは「この確認が上がった会話」であって「この確認への返答」では
- * ない**（不変条件D）。`approvalId` で人間の返答と承認を結ぶ機構はまだ
- * 無い（issue #782 の1。範囲外）——ここは会話全体を古い順に出すだけで、
- * どの発言がこの確認への回答かは特定しない。時刻の近さで「この返答は
- * この確認への返答だ」と決めつけない。
+ * ない**（不変条件D。ここは変えていない）。outbound の `exchange` には
+ * `approvalId` が積まれるようになった（issue #782 の1。PR #1319）が、
+ * `packages/core/src/conversation.ts` の `toMessage()` はそれを
+ * `ConversationMessage` へ写していない——だから `GET /conversations/:id`
+ * の応答にも無く、この画面までは届いていない。ここは会話全体を古い順に
+ * 出すだけで、どの発言がこの確認への回答かは特定しない。時刻の近さで
+ * 「この返答はこの確認への返答だ」と決めつけない。
  */
 function ConversationPanel({ conversationId }: { conversationId: string }) {
   const conversation = useConversation(conversationId);
