@@ -7365,6 +7365,91 @@ describe('クローン — 枠の回復予定時刻（resetsAt）より前は再
 });
 
 /**
+ * **`Clone#post()` を実際に通した陽性対照（Issue #1298。直す前）。**
+ *
+ * `inboxCollapseKey`（`inbox-backlog.ts`）の `external` 分岐は、
+ * `isDaemonSelfNotice` が真の合図（token-pool の復帰通知など）を `source` +
+ * `payload` の丸ごと `JSON.stringify` で鍵にする。`describeReopenedTokenNotice`
+ * （`apps/daemon/src/index.ts`）は畳んだ件数を本文（`payload.text`）へ焼き
+ * 込むので、**同じトークン・同じ `how`（同じ出来事）でも畳んだ件数が違うだけで
+ * `payload` が別物になり、鍵も別になる**——`Clone#post()` は2件とも新しい行と
+ * して受信箱へ積む（1件も畳まない）。
+ *
+ * この歯はまだ直っていない状態（`payload` だけで鍵を作る）を実際に
+ * `Clone#post()` へ通して確かめる——`inbox-backlog.test.ts` の「external +
+ * source: token-pool: payload が違えば別の鍵（陰性対照）」が鍵関数だけを
+ * 単体で確かめているのに対し、こちらは受信箱に実際に何行残るかまで見る。
+ *
+ * **直した後にどうするか。** #1298 の直し（`event.identity` という opt-in の
+ * 欄を鍵の優先入力にする）が入ったら、この歯は「`identity` を渡さなければ
+ * いまも別行として積まれる（後方互換）」と「`identity` を渡せば畳まれる」の
+ * 両方を見る形に更新する——テストを消さず、期待値をここに追記する形で反転
+ * させる（AGENTS.md「テストを弱めずに直す」の反転の条件）。
+ */
+describe('クローン — token-pool の復帰通知: 畳んだ件数だけが違う2通の扱い（Issue #1298）', () => {
+  const FUTURE_RESETS_AT_MS = () => Date.now() + 60 * 60 * 1000;
+
+  function setupRateLimited(resetsAt: number): Setup {
+    return setup(undefined, createMemoryStores(), {
+      resultSubtype: 'error_during_execution',
+      resultText: '（結果なし。rate_limit_event だけが上限の理由を運ぶ）',
+      rateLimitEventAt: () => ({ status: 'rejected', rateLimitType: 'five_hour', resetsAt }),
+    });
+  }
+
+  /**
+   * `describeReopenedTokenNotice`（`apps/daemon/src/index.ts`）が実際に返す
+   * 本文の形をそのまま真似る——base に、`folded > 0` のときだけ件数の前置きが
+   * 付く。**同じトークン・同じ `how` なら `tokenId` / `how` は固定**にして
+   * ある——ここで動かすのは `folded` だけであり、それが「同じ出来事」の
+   * 条件である。
+   */
+  function tokenPoolReopenedNotice(id: string, folded: number): InboxEvent {
+    const base =
+      '認証トークンが通る状態に戻った（また通るようになった）: ' +
+      '「本命」（id tok-a）。枠で止まっていた仕事は、ここから再開できる。';
+    const text =
+      folded <= 0 ? base : `${base}（この間に同じ合図が ${String(folded + 1)} 件届き、1件にまとめた）`;
+    return {
+      type: 'external',
+      id,
+      at: new Date().toISOString(),
+      source: DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+      payload: { text },
+    };
+  }
+
+  it('陽性対照（直す前）: folded だけが違う2通は別の行として積まれる（畳まれない）', async () => {
+    const s = setupRateLimited(FUTURE_RESETS_AT_MS());
+    s.clone.post(humanMessage('一件目'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+    s.clone.post(tokenPoolReopenedNotice('evt-reopen-1', 4));
+    await waitFor(
+      async () => (await s.stores.inbox.peekPending()).some((p) => p.event.id === 'evt-reopen-1'),
+      '1件目（folded=4）が受信箱に積まれる',
+    );
+
+    s.clone.post(tokenPoolReopenedNotice('evt-reopen-2', 7));
+    await waitFor(
+      async () => (await s.stores.inbox.peekPending()).some((p) => p.event.id === 'evt-reopen-2'),
+      '2件目（folded=7）が受信箱に積まれる',
+    );
+
+    // ⚠️ #1298 の本体: 同じトークン・同じ `how`（同じ出来事）なのに、
+    // `folded` が 4 と 7 で違うだけで `payload.text` が別物になり、
+    // `inboxCollapseKey` が別の鍵を返す ⟹ 2件とも受信箱に残る。
+    const pending = await s.stores.inbox.peekPending();
+    const reopenRows = pending.filter(
+      (p) => p.event.id === 'evt-reopen-1' || p.event.id === 'evt-reopen-2',
+    );
+    expect(reopenRows).toHaveLength(2);
+
+    await s.clone.stop();
+  });
+});
+
+/**
  * 変更C: 保持中の「内部ターンが失敗した」を、人間が待っていない合図
  * （`#conversationOf(event) === null`）については1件ごとに日誌へ書かず、
  * 畳んだ件数だけを数える（`#pump` の枠ブロックの doc。Issue #1240 続き）。
