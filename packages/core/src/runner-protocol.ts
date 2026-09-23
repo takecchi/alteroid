@@ -1961,7 +1961,10 @@ export interface RunnerClient {
   /**
    * この委譲の作業ツリーが抱えている、未 push の実装と未コミットの変更を数える
    * （Issue #1039）。`manager_stop` が「running を畳むと何が失われるか」を
-   * 一般論ではなく実物の数字で言うためだけの口——**`manager_list` からは
+   * 一般論ではなく実物の数字で言うための口である。**併せて、委譲のターンが報告で
+   * 終わったときにも1回呼ばれ、観測が台帳（`job.lastUnpushedWorkObservation`）に
+   * 残る**（Issue #1266 の (4)。`manager.ts` の `case 'report'`。待たずに投げ、
+   * 失敗しても報告の配達は止めない）。**`manager_list` からは
    * 呼ばない**（`manager_list` の doc「この一覧のために」を見よ。一覧の側から
    * 自動で往復を足さない）。**`force: true` の経路からも呼ばない**（もう決めた
    * 後なので、往復を払う意味が無い）。

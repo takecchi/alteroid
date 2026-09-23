@@ -1397,17 +1397,23 @@ export interface ManagerPool {
   /** manager_id からセッションの生ログへ降りる（可観測性の最下段）。 */
   transcript(managerId: string): Promise<ManagerTranscript>;
   /**
-   * `manager_stop` の running 断りが「畳むと何が失われるか」を実物の数字で
-   * 言うためだけに呼ぶ（Issue #1039）。**`manager_list` からは呼ばない**——
-   * この一覧のために自動で往復を足さない、という既存の作法（`runners()` の
-   * doc）と同じ理由。**`force: true` の経路からも呼ばない**（もう決めた後
-   * なので、往復を払う意味が無い）。
+   * 未 push の実装・未コミットの変更を runner に問い合わせる。**呼び出し元は
+   * 2つ**——(a) `manager_stop` の running・非 force 断りが「畳むと何が失われる
+   * か」を実物の数字で言うためだけに呼ぶ（Issue #1039）、(b) ターンが
+   * `report` で終わったとき、その委譲について1回だけ台帳へ観測を残すため
+   * `#observeUnpushedWorkOnReport`（`case 'report'`）が呼ぶ（Issue #1266
+   * の (4)）。**`manager_list` からは呼ばない**——この一覧のために自動で
+   * 往復を足さない、という既存の作法（`runners()` の doc）と同じ理由。
+   * **`force: true` の経路からも呼ばない**（もう決めた後なので、往復を払う
+   * 意味が無い）。
    *
-   * **この呼び出しが失敗しても、呼び出し元（`manager_stop`）が止まっては
-   * いけない。** だからこのメソッド自体は例外を投げない——runner が答えな
-   * かった・この口を持たない・像を持っていない、どの理由でも
-   * `{ kind: 'unavailable', reason }` を返す。呼び出し元はこれを「確かめ
-   * られなかった」として扱い、0 とは混ぜない。
+   * **この呼び出しが失敗しても、呼び出し元が止まってはいけない。** だから
+   * このメソッド自体は例外を投げない——runner が答えなかった・この口を
+   * 持たない・像を持っていない、どの理由でも `{ kind: 'unavailable', reason }`
+   * を返す。呼び出し元(a)はこれを「確かめられなかった」として扱い、0 とは
+   * 混ぜない。呼び出し元(b)は待たない（fire-and-forget）ので、この不投げの
+   * 性質はさらに保険——投げても投げなくても、呼び出し元のターン処理は
+   * ブロックしない。
    *
    * **省略可能（`?`）にしない。** `runnerBacklog()` の doc と同じ理由——
    * 省略可能にすると「この口を持たない」と「観測できなかった」が同じ形に
@@ -2058,6 +2064,27 @@ const REATTACH_RETRY_MAX_MS = 30_000;
  */
 const PUSH_RETRY_BASE_MS = 2_000;
 const PUSH_RETRY_MAX_MS = 60_000;
+
+/**
+ * `#observeUnpushedWorkOnReport`（`case 'report'`。Issue #1266 の (4)）が
+ * `unpushedWork()` へ渡す期限。
+ *
+ * `tools.ts` の `MANAGER_STOP_UNPUSHED_WORK_TIMEOUT_MS`（Issue #1039）と
+ * 同じ値・同じ理由——実測に基づく値ではなく、安全側に短く取った未検証の
+ * 既定値である（`tools.ts` 側の doc の「⚠️ 実測に基づく値ではない」を
+ * そのまま継ぐ）。**値を共有する定数にはしていない**——`manager.ts` から
+ * `tools.ts` への逆向き import を避けるという既存の向き（`tools.ts` が
+ * `manager.ts` を import する側）をここでも守る。
+ *
+ * **ここは待たない（fire-and-forget）ので、この期限が長すぎても呼び出し元
+ * （`case 'report'` の処理）は塞がれない。** それでも上限を置くのは、
+ * runner との往復が返らないまま `#unpushedWorkOnReportInFlight` の印が
+ * 残り続けると、その委譲についてだけ次の `report` 以降もずっと1本も
+ * 投げられなくなる（`unpushedWork()` 自体は runner が正常に「答えなかった」
+ * ときも `unavailable` で解決するが、それは応答自体が返る場合の話で、
+ * 応答が永久に返らない壊れ方には効かない）——そちらを防ぐための保険である。
+ */
+const UNPUSHED_WORK_ON_REPORT_TIMEOUT_MS = 5_000;
 
 /**
  * 預かってある生ログを引いた結果。
@@ -3706,6 +3733,22 @@ class Pool implements ManagerPool {
    */
   readonly #synthesizedNoticeStreaks = new Map<string, SynthesizedNoticeStreak>();
   /**
+   * ターンが `report` で終わるたびに `unpushedWork()` を起こす
+   * （Issue #1266 の (4)）ときの、多重投げ止め。managerId が入っている間は、
+   * 同じ委譲へ向けて2本目を投げない。
+   *
+   * **なぜ要るか。** `#observeUnpushedWorkOnReport` は待たない
+   * （fire-and-forget）——`unpushedWork()` は runner への HTTP 往復を含む
+   * ので（`#probeUnpushedWork` の doc）、短い間隔で `report` が続くと、前の
+   * 呼び出しがまだ途中ということがありうる。待たずに次を投げると、同じ
+   * 委譲へ向けて往復が積み上がる——ここで1本ずつに絞る。
+   *
+   * **揮発してよい。** デーモンを作り直せば空になり、次の `report` で普通に
+   * また呼ばれる——「1本ずつ」を守るためだけの一時的な印であって、
+   * `#usageStopped` のような台帳に写す恒久の状態ではない。
+   */
+  readonly #unpushedWorkOnReportInFlight = new Set<string>();
+  /**
    * **枠の遷移を日誌へ書くときの畳み込み**（{@link JournalFoldWindow}、issue #1311）。
    *
    * ⚠️ **これは受信箱（{@link SynthesizedNoticeStreak}）とは別物である。**あちらが
@@ -4879,12 +4922,16 @@ class Pool implements ManagerPool {
    * という既存の書き方（`case 'archive'` 等）をそのままなぞる——新しい書き込み
    * 経路を作らない。
    *
-   * ⛔ **ここが呼ばれるのは `unpushedWork()` の唯一の呼び出し元
-   * （`manager_stop` の running・非 force 断り。`tools.ts`）が `pool.unpushedWork()`
-   * を呼んだ回だけである。** `force: true` で止めたとき・`manager_list`・
-   * 器の入れ替え（redeploy・枠落ち）は `unpushedWork()` 自体を呼ばないので、
-   * この関数にも来ない——その族はこの変更では1本も拾わない
-   * （`lastUnpushedWorkObservationSchema` の doc「残る族」と同じ注意）。
+   * ⛔ **ここが呼ばれるのは `unpushedWork()` の呼び出し元が
+   * `pool.unpushedWork()` を呼んだ回だけである。呼び出し元は2つ**——
+   * `manager_stop`（running・非 force）の断り（`tools.ts`）と、ターンが
+   * `report` で終わったとき（`case 'report'` の
+   * `#observeUnpushedWorkOnReport`。Issue #1266 の (4)）。**`force: true`
+   * で止めたとき・`manager_list`・器の入れ替え（redeploy・枠落ちで
+   * セッションを失う経路。`report` が届く前に器を失うので拾えない）は、
+   * どちらの呼び出し元からも `unpushedWork()` 自体が呼ばれないので、この
+   * 関数にも来ない**（`lastUnpushedWorkObservationSchema` の doc「残る族」
+   * と同じ注意）。
    */
   async #recordUnpushedWorkObservation(
     record: ManagerRecord,
@@ -4908,6 +4955,52 @@ class Pool implements ManagerPool {
         : { kind: 'unavailable', at, reason: outcome.reason };
     record.job.lastUnpushedWorkObservation = observation;
     await this.#persist(record);
+  }
+
+  /**
+   * ターンが `report` で終わったとき（`case 'report'`）、この委譲について
+   * `unpushedWork()` を1回起こし、観測を台帳へ書く（Issue #1266 の (4)）。
+   *
+   * ## 待たない（fire-and-forget）
+   *
+   * **呼び出し元（`case 'report'` の event 処理）を待たせない。** 報告の
+   * 配達も台帳の更新も、この問い合わせの完了を待ってはいけない——
+   * `unpushedWork()` は runner への HTTP 往復を含む（`#probeUnpushedWork`
+   * の doc）ので、待つと「報告を受け取ってからクローンのターンが起きる
+   * までの時間」がそのまま乗る。`void` で切り離し、成否に関わらず呼び出し
+   * 元はすぐ次へ進む。
+   *
+   * ## 重ねて投げない
+   *
+   * `#unpushedWorkOnReportInFlight` に managerId が入っていれば、この回は
+   * 何もしない（doc を見よ）——同じ委譲の報告が短い間に続いても、runner
+   * への往復は1本ずつに絞る。
+   *
+   * ## 失敗しても呼び出し元を止めない
+   *
+   * `unpushedWork()` 自体は例外を投げない設計（interface の doc）——
+   * runner が答えなかった・この口を持たない・像を持っていない、どの理由
+   * でも `{ kind: 'unavailable', reason }` を返す。**それでもここで
+   * `.catch()` を添えてある**——設計が将来守られなくなっても、この
+   * fire-and-forget の失敗が `case 'report'` の処理を巻き添えにしないことを、
+   * この関数自身の形で保証するため（`unpushedWork()` の実装だけに頼らない）。
+   *
+   * ## runner がこの口を持たない・器が居ない・取れないとき
+   *
+   * `unpushedWork()` の中で `{ kind: 'unavailable', reason }` に畳まれ、
+   * `#recordUnpushedWorkObservation` がそのまま台帳へ書く——ここでは特別
+   * 扱いしない。
+   */
+  #observeUnpushedWorkOnReport(managerId: string): void {
+    if (this.#unpushedWorkOnReportInFlight.has(managerId)) return;
+    this.#unpushedWorkOnReportInFlight.add(managerId);
+    void this.unpushedWork(managerId, {
+      signal: AbortSignal.timeout(UNPUSHED_WORK_ON_REPORT_TIMEOUT_MS),
+    })
+      .catch(() => undefined)
+      .finally(() => {
+        this.#unpushedWorkOnReportInFlight.delete(managerId);
+      });
   }
 
   runningManagerOwning(archiveId: string): string | undefined {
@@ -7763,6 +7856,24 @@ class Pool implements ManagerPool {
           role: 'inbound',
           text: `[${event.managerId}] ${event.text}`,
         });
+        // **ターンが `report` で終わったので、未 push の作業ツリーを1回だけ
+        // 観測しておく**（Issue #1266 の (4)）。**待たない**——
+        // `#observeUnpushedWorkOnReport` は `void` で切り離した fire-and-forget
+        // で、この呼び出しの完了を待つと「報告を受け取ってからクローンの
+        // ターンが起きるまでの時間」に runner への往復が乗ってしまう
+        // （`#observeUnpushedWorkOnReport` の doc）。
+        //
+        // **`contentless` / `awaitingBackground` の早い `return` より手前に
+        // 置く。** あの2つは「クローンの受信箱へ回すか」の判断であって、
+        // ターンが終わったこと自体とは無関係——後ろに置くと、中身の無い
+        // 報告や背景待ちで畳んだ報告では観測が取られないまま残る。
+        //
+        // **`record.job.status === 'stopped'` の早期 return（この少し上の
+        // R4 の分岐）は通っていない。** あの分岐は「後から届いた報告」を
+        // 止めたマネージャーとして扱い、`record.job.status` も動かさず
+        // `#emit()` もしない——同じ理由でここも呼ばない（止めた委譲へ
+        // 向けて runner との往復を新たに起こす意味が無い）。
+        this.#observeUnpushedWorkOnReport(event.managerId);
         /*
          * **借りていた起こし直しを、ここで返す**（`#settleUsageWake`）。
          *

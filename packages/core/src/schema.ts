@@ -3085,12 +3085,15 @@ export type ObservedWorktreeBranch = z.infer<typeof observedWorktreeBranchSchema
  *
  * ## 残る族（⛔ この欄が更新されない回）
  *
- * 更新するのは `manager_stop`（`before.status === 'running' &&
- * force !== true`）の分岐が `pool.unpushedWork()` を呼んだ回だけである。
- * **`force: true` で止めたとき・`manager_list`・器の入れ替え（redeploy・
- * 枠落ちでセッションを失う経路）では、この欄は一度も更新されない**——
- * `unpushedWork()` の唯一の呼び出し元がその分岐にしか無いため（Issue #1228
- * §2。`grep -rn 'unpushedWork' --include=*.ts packages/ apps/` で当たる）。
+ * 更新するのは、`pool.unpushedWork()` が呼ばれた回だけである。呼び出し元は
+ * 2つ: `manager_stop`（`before.status === 'running' && force !== true`）の
+ * 分岐と、**委譲のターンが報告で終わったとき**（`manager.ts` の `case 'report'`。
+ * Issue #1266 の (4)。本番で前者が一度も発火していなかったため足した）。
+ * **`force: true` で止めたとき・`manager_list`・止めた委譲の報告・器の入れ替え
+ * （redeploy・枠落ちでセッションを失う経路）では、この欄は更新されない。**
+ * ⟹ **報告の前に落ちた委譲は拾えない**（最後の報告の時点の観測が残るだけで
+ * ある）。呼び出し元は `grep -rn 'unpushedWork' --include=*.ts packages/ apps/`
+ * で当たる。
  * **この欄が在ることを「常に最新の枝が分かる」とは読まないこと。**
  *
  * ## 答えないこと

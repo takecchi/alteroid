@@ -5669,6 +5669,368 @@ describe('止めたマネージャーの後続イベント（R4）', () => {
 });
 
 /**
+ * **ターンが `report` で終わったとき、その委譲について `unpushedWork()` を
+ * 1回起こし、観測を台帳へ残す（Issue #1266 の (4)）。**
+ *
+ * `unpushedWork の観測を台帳へ残す（Issue #1228 候補(1)）`（上）は
+ * `pool.unpushedWork()` を**直接**呼んでいる——ここはその「直接呼ぶ」部分は
+ * 変えず、**`case 'report'` からも自動で1回呼ばれるようになった**ことを
+ * 固定する。`swappableRunner()` を使うのは、`unpushedWork` を実装するか
+ * どうか・どう答えるかをテストごとに差し替えられるようにするため
+ * （`RunnerClient.unpushedWork` は任意メソッド）。
+ */
+describe('ターンが report で終わったとき unpushedWork を1回取る（Issue #1266 の (4)）', () => {
+  /** 台帳の1件を直接読む（`jobOf` と同じ形。他の describe と重複させない）。 */
+  async function jobOf(s: Setup, managerId: string) {
+    return (await s.stores.jobs.listJobs()).find((job) => job.id === managerId);
+  }
+
+  /**
+   * **歯1**: 委譲が `report` でターンを終えると、`unpushedWork` が1回呼ばれ、
+   * 観測（枝名を含む）が台帳に書かれる。
+   */
+  it('report でターンが終わると、unpushedWork が呼ばれ、枝名を含む観測が台帳に残る', async () => {
+    const fake = swappableRunner('runner-primary');
+    const calls: { managerId: string; hasSignal: boolean }[] = [];
+    const runner: RunnerClient = {
+      ...fake.runner,
+      async unpushedWork(managerId, options) {
+        calls.push({ managerId, hasSignal: options?.signal !== undefined });
+        return {
+          cwd: '/work/project',
+          worktrees: [{ relativePath: '.', branch: 'feat/1266-turn-end-unpushed-observation' }],
+        };
+      },
+    };
+    const stores = createMemoryStores();
+    const s = setup(undefined, { stores, runner });
+    const { managerId } = await s.pool.start({ request: '確認' });
+
+    fake.report(managerId, '完了しました');
+
+    // **待って確かめる**（fire-and-forget なので、report イベントの処理が
+    // 返った時点ではまだ完了していないことがある——`journalHas` と同じ理由）。
+    await expect.poll(() => calls.length, { timeout: 2000 }).toBe(1);
+    expect(calls[0]).toEqual({ managerId, hasSignal: true });
+
+    await expect
+      .poll(async () => (await jobOf(s, managerId))?.lastUnpushedWorkObservation, {
+        timeout: 2000,
+      })
+      .toMatchObject({ kind: 'observed' });
+    const job = await jobOf(s, managerId);
+    expect(job?.lastUnpushedWorkObservation).toMatchObject({
+      kind: 'observed',
+      cwd: '/work/project',
+      worktrees: [{ relativePath: '.', branch: 'feat/1266-turn-end-unpushed-observation' }],
+    });
+
+    // 報告そのものの処理も普通に進んでいる（往復を待たずに進めているはずなので、
+    // むしろこちらのほうが先に終わっていることが多い）。
+    expect(job?.status).toBe('done');
+    expect(job?.lastReport).toBe('完了しました');
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **配達の順序の歯**: `report` の配達（台帳の `lastReport` / inbox）は、
+   * `unpushedWork` の runner との往復が終わるのを待たない。`unpushedWork` を
+   * 手で握って（`gate`）戻らないようにしても、配達はその間に終わっている
+   * ことを見る——もし呼び出し箇所が `await this.unpushedWork(...)` に
+   * 変わっていたら（待たせる変異）、ここが `gate` を解放するまでタイムアウト
+   * して赤くなる。
+   */
+  it('report の配達は、unpushedWork の往復の完了を待たない', async () => {
+    const fake = swappableRunner('runner-primary');
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const runner: RunnerClient = {
+      ...fake.runner,
+      async unpushedWork() {
+        await gate; // 手で解放するまで戻らない——runner との往復が長引く形。
+        return { cwd: '/work/project', worktrees: [] };
+      },
+    };
+    const stores = createMemoryStores();
+    const s = setup(undefined, { stores, runner });
+    const { managerId } = await s.pool.start({ request: '確認' });
+
+    fake.report(managerId, '配達されるはず');
+
+    // `gate` はまだ握ったまま（unpushedWork は解決していない）——それでも
+    // 配達は進んでいる。
+    await expect
+      .poll(async () => (await jobOf(s, managerId))?.lastReport, { timeout: 2000 })
+      .toBe('配達されるはず');
+    await expect
+      .poll(
+        () =>
+          s.inbox.some(
+            (event) => event.type === 'manager_message' && event.text.includes('配達されるはず'),
+          ),
+        { timeout: 2000 },
+      )
+      .toBe(true);
+
+    release?.();
+    await s.pool.stop();
+  });
+
+  /**
+   * **歯2（陽性対照）**: runner がこの口を持たない（古い版・テストの偽物）
+   * ときは `kind: 'unavailable'` と `reason` が台帳に残り、**報告の処理その
+   * ものは進む**（`swappableRunner()` の既定は `unpushedWork` 未実装——
+   * 「取れなかった」を自然に再現する）。
+   */
+  it('runner がこの口を持たないときは unavailable + reason が残り、報告の処理は進む', async () => {
+    const fake = swappableRunner('runner-primary');
+    const stores = createMemoryStores();
+    const s = setup(undefined, { stores, runner: fake.runner });
+    const { managerId } = await s.pool.start({ request: '確認' });
+
+    fake.report(managerId, '完了しました');
+
+    await expect
+      .poll(async () => (await jobOf(s, managerId))?.lastUnpushedWorkObservation, {
+        timeout: 2000,
+      })
+      .toMatchObject({
+        kind: 'unavailable',
+        reason: 'この runner はこの口を持たない（古い版、またはテストの偽物）。',
+      });
+
+    // 観測が取れなかったことが、報告の処理そのものを止めていない。
+    const job = await jobOf(s, managerId);
+    expect(job?.status).toBe('done');
+    expect(job?.lastReport).toBe('完了しました');
+    await expect
+      .poll(
+        () =>
+          s.inbox.some(
+            (event) => event.type === 'manager_message' && event.text.includes('完了しました'),
+          ),
+        {
+          timeout: 2000,
+        },
+      )
+      .toBe(true);
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **歯3**: `unpushedWork()` 自体（interface としては例外を投げない設計—
+   * `ManagerPool.unpushedWork` の doc）が何らかの理由で失敗しても、
+   * `#observeUnpushedWorkOnReport` が待っていない・`.catch()` で受けている
+   * ことで、報告の配達は道連れにならない。
+   *
+   * **`pool.unpushedWork` を直接モックする。** `runner.unpushedWork` 側を
+   * 失敗させる形（歯2）はデーモン内部の `#probeUnpushedWork` の try/catch に
+   * 既に飲まれて `unavailable` に畳まれてしまい、「呼び出し元が本当に待たず
+   * `.catch()` で守っているか」を確かめられない——ここは `unpushedWork()`
+   * 自身が（設計に反して）reject した場合でも報告処理が止まらないことを
+   * 見たいので、そこを直接モックで再現する。
+   */
+  it('unpushedWork が失敗しても（例外）、報告の配達は止まらない', async () => {
+    const fake = swappableRunner('runner-primary');
+    const stores = createMemoryStores();
+    const s = setup(undefined, { stores, runner: fake.runner });
+    const { managerId } = await s.pool.start({ request: '確認' });
+
+    const spy = vi.spyOn(s.pool, 'unpushedWork').mockRejectedValue(new Error('boom'));
+
+    fake.report(managerId, '完了しました');
+
+    await expect
+      .poll(async () => (await jobOf(s, managerId))?.lastReport, { timeout: 2000 })
+      .toBe('完了しました');
+    const job = await jobOf(s, managerId);
+    expect(job?.status).toBe('done');
+    await expect
+      .poll(
+        () =>
+          s.inbox.some(
+            (event) => event.type === 'manager_message' && event.text.includes('完了しました'),
+          ),
+        {
+          timeout: 2000,
+        },
+      )
+      .toBe(true);
+
+    // 呼ばれてはいる（そして失敗した）ことも確かめる——「そもそも呼んでいない
+    // から止まらなかった」ではないことの区別。
+    await expect.poll(() => spy.mock.calls.length, { timeout: 2000 }).toBe(1);
+
+    spy.mockRestore();
+    await s.pool.stop();
+  });
+
+  /**
+   * **同じ委譲の報告が短い間に続いても、重ねて投げない（1本ずつ）。**
+   * `#unpushedWorkOnReportInFlight` の doc（`manager.ts`）が理由——待たない
+   * ぶん、短い間隔で `report` が続くと前の呼び出しがまだ runner との往復の
+   * 途中ということがあるため。ここでは `unpushedWork` の解決を手で握って
+   * 止め、その間に2本目の `report` を送っても呼び出しが増えないことを見る。
+   */
+  it('同じ委譲の report が短い間に続いても、unpushedWork は重ねて投げない', async () => {
+    const fake = swappableRunner('runner-primary');
+    const calls: string[] = [];
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const runner: RunnerClient = {
+      ...fake.runner,
+      async unpushedWork(managerId) {
+        calls.push(managerId);
+        await gate;
+        return { cwd: '/work/project', worktrees: [] };
+      },
+    };
+    const stores = createMemoryStores();
+    const s = setup(undefined, { stores, runner });
+    const { managerId } = await s.pool.start({ request: '確認' });
+
+    fake.report(managerId, '1回目の報告', 'done', { reportId: 'r1' });
+    await expect.poll(() => calls.length, { timeout: 2000 }).toBe(1);
+
+    // 1本目がまだ `gate` で止まっている間に2本目の report を送る。
+    fake.report(managerId, '2回目の報告', 'done', { reportId: 'r2' });
+    // `report` イベント自体の処理（台帳・日誌）は待たずに進むはずなので、
+    // ここで一拍おいて確かめる。
+    await expect
+      .poll(async () => (await jobOf(s, managerId))?.lastReport, { timeout: 2000 })
+      .toBe('2回目の報告');
+    // それでも unpushedWork の呼び出しは1本のまま（重ねて投げていない）。
+    expect(calls).toEqual([managerId]);
+
+    // 1本目を解放すると、次の report でまた呼べるようになる（印が揮発する）。
+    release?.();
+    await expect
+      .poll(async () => (await jobOf(s, managerId))?.lastUnpushedWorkObservation, {
+        timeout: 2000,
+      })
+      .toMatchObject({ kind: 'observed' });
+    fake.report(managerId, '3回目の報告', 'done', { reportId: 'r3' });
+    await expect.poll(() => calls.length, { timeout: 2000 }).toBe(2);
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **周期（タイマー）で取る形を禁じる歯。** Issue #1266 の (4) で決まった
+   * 形は「ターンが `report` で終わったときに1回」であって、定期的な巡回では
+   * ない（AGENTS.md「踏みやすい地雷」の「ターン数上限・実行回数上限で暴走を
+   * 止める」とは別の軸だが、同じ精神——**入れていない能力を、後から都合で
+   * 足さない**）。ここでは `report` を一度も送らないまま擬似時計を大きく
+   * 進め、`unpushedWork` が1度も呼ばれないことを固定する——もし誰かが
+   * 「ついでに定期実行も足す」形の変更を入れたら、ここが最初に落ちる。
+   */
+  it('report が一度も届いていない間は、時計をどれだけ進めても unpushedWork は呼ばれない', async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = swappableRunner('runner-primary');
+      const calls: string[] = [];
+      const runner: RunnerClient = {
+        ...fake.runner,
+        async unpushedWork(managerId) {
+          calls.push(managerId);
+          return { cwd: '/work/project', worktrees: [] };
+        },
+      };
+      const stores = createMemoryStores();
+      const s = setup(undefined, { stores, runner });
+      await s.pool.start({ request: '確認' });
+
+      // 1時間ぶん時計を進める——`report` は一度も送っていない。
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+
+      expect(calls).toEqual([]);
+
+      await s.pool.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * **R4 との整合**: 止めた後に届いた `report`（`record.job.status ===
+   * 'stopped'` の早期 return）では `unpushedWork` を呼ばない——止めた委譲へ
+   * 向けて runner との往復を新たに起こす意味が無いという設計判断
+   * （`#observeUnpushedWorkOnReport` の呼び出し箇所のコメントを見よ）。
+   */
+  it('止めた後に届いた report では unpushedWork を呼ばない（R4）', async () => {
+    // **`止めたマネージャーの後続イベント（R4）` describe の `stopped()` と
+    // 同じ手順で「止まった」を作る。** 最初から `status: 'stopped'` で台帳へ
+    // 書いても再現できない——`#restoreJobs`（起動時の引き取り）は `running`
+    // でない job へは runner と繋ぎに行かない（`#connectTo` の契機の doc
+    // 「契機は3つ」）ので、繋がる前に `fake.report()` を呼んでも `emit` が
+    // まだ `null` のまま（イベントが黙って捨てられ、`#onEvent` 自体に届か
+    // ない）。**本物と同じ経路（`running` → `abort()`）で止めることで、
+    // 繋がった後の「止めた」を再現する。**
+    const job = {
+      id: 'mgr-stopped-no-unpushed-probe',
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T01:00:00.000Z',
+      status: 'running' as const,
+      summary: '止める',
+      request: '止める',
+      cwd: '/work/project',
+      sessionId: 'sess-stopped-no-unpushed-probe',
+      runnerId: 'runner-primary',
+    };
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job);
+    const fake = swappableRunner('runner-primary');
+    fake.state.alive.push({
+      managerId: job.id,
+      status: 'running',
+      cwd: job.cwd,
+      request: job.request,
+      waiting: [],
+      sessionId: job.sessionId,
+    });
+    const calls: string[] = [];
+    const runner: RunnerClient = {
+      ...fake.runner,
+      async stop(managerId: string) {
+        fake.state.alive = fake.state.alive.filter((session) => session.managerId !== managerId);
+      },
+      async unpushedWork(managerId) {
+        calls.push(managerId);
+        return { cwd: '/work/project', worktrees: [] };
+      },
+    };
+    const s = setup(undefined, { stores, runner });
+    const aborted = await s.pool.abort(job.id, 'テストで止めた');
+    expect(aborted.outcome).toBe('stopped');
+
+    fake.report(job.id, '止めた後に届いた報告');
+
+    // 日誌には残る（R4 の既存の保証）——これが処理された合図として待つ。
+    await expect
+      .poll(
+        async () => {
+          const entries = await s.stores.journal.list({ types: ['exchange'] });
+          return entries.some((entry) => JSON.stringify(entry).includes('止めた後に届いた報告'));
+        },
+        { timeout: 2000 },
+      )
+      .toBe(true);
+
+    expect(calls).toEqual([]);
+    const stored = await stores.jobs.listJobs();
+    expect(stored.find((j) => j.id === job.id)?.lastUnpushedWorkObservation).toBeUndefined();
+
+    await s.pool.stop();
+  });
+});
+
+/**
  * **中身の無い報告は、記録は残すがクローンのターンを起こさない。**
  *
  * `runner.ts` の `resultText()` / `reportText()` が「SDK の `result` にも

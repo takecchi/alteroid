@@ -3052,9 +3052,9 @@ function describeResetTimeSkew(manager: ManagerSummary): string | null {
 }
 
 /**
- * `manager_stop`（running・非 force）の断りが最後に取った、未 push の
- * 作業ツリーの観測を1行にする（Issue #1266。材料は
- * `ManagerSummary.lastUnpushedWorkObservation`）。
+ * `manager_stop`（running・非 force）の断り、または委譲のターンが `report`
+ * で終わったとき（Issue #1266 の (4)）に最後に取った、未 push の作業ツリーの
+ * 観測を1行にする（材料は `ManagerSummary.lastUnpushedWorkObservation`）。
  *
  * ## なぜ足すか
  *
@@ -3076,19 +3076,24 @@ function describeResetTimeSkew(manager: ManagerSummary): string | null {
  *
  * ## 「残る族」を行の中に必ず書く
  *
- * この欄は `manager_stop`（running・非 force）の断りでしか更新されない
- * （`ManagerSummary.lastUnpushedWorkObservation` の doc の「残る族」）。
- * `force: true` で止めた回・`manager_list` 自身・器の入れ替え（redeploy・
- * 枠落ち）では一度も更新されない。**時刻だけを出すと、読み手はそれを
- * 「いまの状態」と誤読する**——だから毎回、断り自体の性質を行の中に書く
- * （JSDoc に書いてもクローンには届かない。`resources: true` の説明文と
- * 同じ理由）。
+ * この欄を更新するのは2つ——`manager_stop`（running・非 force）の断り
+ * （`tools.ts`、この関数とは別経路）と、委譲のターンが `report` で終わった
+ * とき（`manager.ts` の `case 'report'` から `#observeUnpushedWorkOnReport`。
+ * Issue #1266 の (4)）。**`force: true` で止めた回・`manager_list` 自身・
+ * 器の入れ替え（redeploy・枠落ちでセッションを失う経路）では、どちらの
+ * 経路からも一度も更新されない**——`report` が届く前に器を失う経路
+ * （redeploy・枠落ち）は、ターンの終わりに1回取る形でも拾えない
+ * （`manager.ts` の `#observeUnpushedWorkOnReport` の doc）。**時刻だけを
+ * 出すと、読み手はそれを「いまの状態」と誤読する**——だから毎回、
+ * どの経路が更新するかを行の中に書く（JSDoc に書いてもクローンには届かない。
+ * `resources: true` の説明文と同じ理由）。
  */
 function describeUnpushedWorkObservation(manager: ManagerSummary): string | null {
   const observation = manager.lastUnpushedWorkObservation;
   if (observation === undefined) return null;
   const provenance =
-    'manager_stop（running・非force）の断りが最後に取った1回' +
+    'manager_stop（running・非force）の断り、またはターンが report で終わったとき' +
+    'に取った最後の1回' +
     '（force:true・manager_list 自身・器の入れ替え（redeploy・枠落ちでセッションを失う経路）' +
     'では更新されない。いまの状態ではない）';
   if (observation.kind === 'unavailable') {
