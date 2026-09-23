@@ -28,16 +28,23 @@
  *
  * ## これは「総数」であって「下限」ではない
  *
- * `JournalStore.list()` は `limit` を渡さなければ**該当する全件**を返す
- * （3実装とも `limit ?? Number.POSITIVE_INFINITY` 相当——`testing.ts` /
- * `storage-fs/src/journal.ts` / `storage-pg/src/journal.ts` の `list()` の
- * 実装を参照）。**`journal_read`（MCP の道具）が持つ `limit` の上限（200）は
- * 道具の zod スキーマ側の制約であって、ストアの契約には無い。** この関数は
- * ストアを直接呼び、`limit` を一切渡さないので、`journal_read` を通した
- * ときのように 200 件で静かに下限へ化けることは無い——このことは
- * `appraisal-stats.test.ts` に「200 件を超える decision 行でも全件数える」
- * 歯として残してある（`journal_read` の `limit` 上限を退行させたら赤くなる
- * 歯ではないが、この関数が独自に `limit` を渡していないことを確かめる歯である）。
+ * **`journal_read`（MCP の道具）が持つ `limit` の上限（200）は道具の zod
+ * スキーマ側の制約であって、ストアの契約には無い。** この関数はストアを直接
+ * 呼ぶので、`journal_read` を通したときのように 200 件で静かに下限へ化けること
+ * は無い。
+ *
+ * ⚠️ **「総数」を支えているのは「`limit` を渡さないこと」ではない**（#1342 で
+ * 直した。以前ここにはそう書いてあった）。いまは
+ * {@link computeAppraisalJournalStats} が `scanJournalPages` でページ単位に
+ * 読み継ぎ、**1ページごとの `journal.list()` には必ず有限の `limit` が渡る**
+ * ——それでも総数であるのは、**最後のページまで読み切り、件数をカウンタで
+ * 足し込んでいるから**である。⟹ `limit` の有無と、総数か下限かは、別の軸である。
+ *
+ * このことは `appraisal-stats.test.ts` に2本の歯として残してある——
+ * 「200 件を超える decision 行でも全件数える」（1ページに収まる側）と
+ * 「1ページを超える母集団でも全件数え、ストアへは毎回 有限の limit が渡る」
+ * （ページ送りが実際に回る側）。**後者は、ページ送りを外して無制限へ戻しても、
+ * ページ送りを途中で打ち切っても、どちらでも赤くなる。**
  *
  * ⚠️ **ただし2つの前提の上に立っている——両方とも「無い」ことを確かめた
  * わけではなく、既存のコードを読んで確認した設計上の前提である:**
@@ -105,8 +112,15 @@ function addTally(into: AppraisalDecisionTally, part: AppraisalDecisionTally): v
  * それぞれについて、別々にこの関数を呼ぶこと。
  *
  * `entries` は `type !== 'decision'` の行を含んでいてよい（この関数が無視する）
- * ——呼び手が `stores.journal.list({ types: ['decision'] })` で先に絞っておく
- * 必要は無いが、絞っておいたほうが呼び出し1回で読む量は減る。
+ * ——呼び手が `types: ['decision']` で先に絞っておく必要は無いが、絞っておいた
+ * ほうがストアから読む量は減る（{@link computeAppraisalJournalStats} はそう
+ * している）。
+ *
+ * **呼び手は「全件の配列」を渡すとは限らない。** #1342 以降、
+ * {@link computeAppraisalJournalStats} はページ1枚ぶんずつここへ渡して結果を
+ * 足し込む——**この関数自身は渡された配列より広い母集団を知らない**ので、
+ * ここが返す `total` を「全期間の総数」と読まないこと（総数にするのは、
+ * 最後のページまで足し込む呼び手の側の仕事である）。
  */
 export function tallyAppraisalDecisions(
   entries: readonly JournalEntry[],
@@ -314,7 +328,7 @@ export function describeAppraisalStats(input: {
 
   const lines: string[] = [];
   lines.push(
-    '## 評定の内訳（日誌の decision 行を先頭一致で数えた全期間の総数。limit は掛けていない）',
+    '## 評定の内訳（日誌の decision 行を先頭一致で数えた全期間の総数。ページ送りで最後まで数えている）',
   );
   lines.push('');
   lines.push(`### 引き受けた仕事（COMMITMENT_APPRAISAL_DECISION_PREFIX）`);

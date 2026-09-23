@@ -4886,6 +4886,10 @@ describe('GET /appraisal-stats（#1278 の HTTP 面）', () => {
 
     // journal_read（MCP）の limit=200 に当たれば下限へ化ける件数——ここでは
     // ストアを直接読むので、210件全部が数えられている。
+    // ⚠️ **この歯が守っているのは「全件が数えられること」であって「`limit` を
+    // 渡していないこと」ではない**（#1342）。210件は日誌走査の1ページ
+    // （`JOURNAL_SCAN_PAGE_SIZE` ＝ 500）に収まるので、ページ送りが実際に回る側は
+    // `packages/core/src/appraisal-stats.test.ts` の歯が測る（HTTP 面では測らない）。
     expect(body.journal.commitments.total).toBe(210);
     expect(body.journal.commitments.good).toBe(210);
     // 委譲側は別の印なので、台帳側の210件に引きずられず1件だけ。

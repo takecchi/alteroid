@@ -6260,6 +6260,11 @@ export function createCloneTools(context: ToolContext) {
      * は `limit` の上限 200 に当たって総数 263 の側が切れたため、本番 DB へ
      * 直接 SQL を投げるしかなかった）。
      *
+     * **総数であることを支えているのは「`limit` を渡さないこと」ではない**
+     * （#1342）。`computeAppraisalJournalStats` はストアをページ送りで読み、
+     * **1ページごとには必ず有限の `limit` を渡す**——それでも総数なのは、最後の
+     * ページまで読み切って件数をカウンタで足し込んでいるからである。
+     *
      * **2つの印を混ぜない。** 「引き受けた仕事」（台帳の行の始末）と「委譲」
      * （マネージャーに出した仕事の出来）は別の軸——出力も節を分けてある。
      *
@@ -6271,7 +6276,7 @@ export function createCloneTools(context: ToolContext) {
       [
         `評定（${appraisalSchema.options.join('/')}/未評定）の内訳を数える。`,
         '**日誌の decision 行を先頭一致で数えた全期間の総数**（journal_read の limit=200 には当たらない——',
-        'ストアを直接 limit 無指定で読むので、下限ではなく総数である）。',
+        'ストアをページ送りで最後まで読み切って数えるので、下限ではなく総数である）。',
         '「引き受けた仕事」（台帳）と「委譲」（マネージャーに出した仕事）は別の軸で、混ぜずに別々の節で返す。',
         `さらに、終端した委譲（${jobStatusSchema.options.filter(isTerminalJobStatus).join('/')}）を状態ごとに割って、` +
           '評定が1度も付いていない件数を出す' +

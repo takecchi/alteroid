@@ -5501,7 +5501,9 @@ export function createApp(deps: AppDeps) {
      * **`journal.commitments` / `journal.jobs` は全期間の総数である。**
      * `journal_read`（MCP）の `limit` 上限（200）はここには効かない——
      * `@alteroid/core` の `computeAppraisalJournalStats` がストアを
-     * `limit` 無指定で読むためである（`appraisal-stats.ts` の doc）。
+     * **ページ送りで最後まで読み切る**ためである（`appraisal-stats.ts` の doc）。
+     * ⚠️ **以前ここは「`limit` 無指定で読むためである」と書いていた**が、#1342 で
+     * 有界化した時点でその理由は偽になった（総数であること自体は変わらない）。
      *
      * **クエリ引数は無い。** 出力は母集団の件数に関わらず固定個数の集計値
      * なので、`/dropped` と違って「上限を持たない」を明示する必要も無い

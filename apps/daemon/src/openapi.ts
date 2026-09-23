@@ -1432,8 +1432,9 @@ export const jobAppraisalCoverageRowSchema = z.object({
  *
  * - `journal.commitments` / `journal.jobs`: 日誌の `decision` 行を
  *   `COMMITMENT_APPRAISAL_DECISION_PREFIX` / `JOB_APPRAISAL_DECISION_PREFIX`
- *   それぞれの先頭一致で数えた**全期間の総数**（`limit` は掛けていない——
- *   `appraisal-stats.ts` の doc）。**この2つを混ぜて読まないこと** —— 台帳の
+ *   それぞれの先頭一致で数えた**全期間の総数**（ページ送りで最後まで読み切って
+ *   数えている。`limit` は1ページごとに掛かるが、総数か下限かとは別の軸である
+ *   ——`appraisal-stats.ts` の doc、#1342）。**この2つを混ぜて読まないこと** —— 台帳の
  *   行の始末と、マネージャーに出した仕事の出来は別の軸である。
  * - `jobCoverage`: `JobStore` を終端の仕方（`done`/`failed`/`lost`/`stopped`）
  *   ごとに割った、評定の有無の内訳。`running`/`waiting_human`（まだ終端して
