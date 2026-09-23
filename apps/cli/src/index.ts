@@ -27,6 +27,13 @@ import {
   memoryShowCommand,
 } from './memory.js';
 import {
+  practiceEditCommand,
+  practiceListCommand,
+  practiceRemoveCommand,
+  practiceSetCommand,
+  practiceShowCommand,
+} from './practice.js';
+import {
   profileClearCommand,
   profileEditCommand,
   profileSetCommand,
@@ -398,6 +405,63 @@ memoryCommand
   .description('記憶を1つ消す（消した事実は日誌に残る）')
   .action(async (slug: string) => {
     await memoryRemoveCommand(slug);
+  });
+
+/**
+ * 仕事のやり方（`PracticeStore`）。**#1055 段3③ の3つ目の入口である。**
+ *
+ * 段3 の受け入れ基準は「人間がやり方を読んで書き換えられる（3入口すべて）」で、
+ * `docs/PRD.md` の3入口は **CLI / HTTP API / Web UI** である（クローンの道具
+ * `practice_*` は入口の数には入らない — あれはクローンの能力であって、人間の
+ * 入口ではない）。#1316 で HTTP 口と画面が通ったので、残っていたのがここである。
+ *
+ * **`memory` と同じ構成にしてあるが、写していない概念が2つある。**
+ * `PracticeStore` は human guard を持たず、`kind` は列挙ではない自由文字列である
+ * （`practiceKindSchema` の doc「⛔ ここを `z.enum` にしないこと」）。だから
+ * `--kind` に選択肢を置かない。理由は `practice.ts` の冒頭に在る。
+ */
+const practiceCommand = program
+  .command('practice')
+  .description('仕事のやり方を読む・書き換える・消す');
+
+practiceCommand
+  .command('list')
+  .description('やり方の一覧（種類と slug と題）')
+  .action(async () => {
+    await practiceListCommand();
+  });
+
+practiceCommand
+  .command('show <slug>')
+  .description('やり方の本文を出す')
+  .action(async (slug: string) => {
+    await practiceShowCommand(slug);
+  });
+
+practiceCommand
+  .command('edit <slug>')
+  .description('$EDITOR で開いて書き換える（無い slug なら新しく作る）')
+  .option('--kind <kind>', '仕事の種類（省略すると現在の値。新しいやり方では必須）')
+  .option('--title <title>', '題（省略すると現在の値。新しいやり方では必須）')
+  .action(async (slug: string, options: { kind?: string; title?: string }) => {
+    await practiceEditCommand(slug, options);
+  });
+
+practiceCommand
+  .command('set <slug>')
+  .description('ファイル（または標準入力）の内容で丸ごと置き換える')
+  .option('-f, --file <path>', '読み込むファイル（省略か - で標準入力）')
+  .option('--kind <kind>', '仕事の種類（省略すると現在の値。新しいやり方では必須）')
+  .option('--title <title>', '題（省略すると現在の値。新しいやり方では必須）')
+  .action(async (slug: string, options: { file?: string; kind?: string; title?: string }) => {
+    await practiceSetCommand(slug, options);
+  });
+
+practiceCommand
+  .command('remove <slug>')
+  .description('やり方を1つ消す（消した事実は日誌に残る）')
+  .action(async (slug: string) => {
+    await practiceRemoveCommand(slug);
   });
 
 /**
