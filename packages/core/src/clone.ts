@@ -1896,6 +1896,82 @@ class Clone implements CloneHost {
     { readonly id: string; readonly at: string; collapsed: number }
   >();
   /**
+   * token-pool（{@link DAEMON_TOKEN_POOL_REOPENED_SOURCE}）の「戻った」通知の
+   * うち、いまこの器で**未処理のまま**残っている代表1件（Issue #1051 続き。
+   * 実運用の食い違い調査 2026-09-23）。
+   *
+   * ## `#pendingCollapse` の姉妹だが、軸が違う
+   *
+   * `#pendingCollapse`（Issue #954）が畳むのは「本文が一字一句同じ」ものだけ
+   * ——本文が違えば鍵が別になり、何件でも同時に未処理のまま積み上がる。
+   * token-pool の「戻った」は、429↔成功の往復のたびに**現役トークンの指名や
+   * 折り返し込みの本文が変わりうる**ので、本文が変わるたびに`#pendingCollapse`
+   * をすり抜けて別行として積まれていた。この索引が守るのは本文の一致では
+   * なく「token-pool 由来の通知は、内容が何であれ同時に未処理で1件まで」
+   * という別の不変条件である。
+   *
+   * ## なぜ要るか — `#pump` の FIFO が古い本文を先に配っていた
+   *
+   * 枠（利用上限）で保持された合図は `#deferred` に FIFO で積まれ、`#pump` の
+   * 解除ブロックは `[...held, event]` の順で受信箱の先頭へ戻す
+   * （`usageBlockAlwaysRearms` の doc、`#pump` の解除ブロックの doc）。
+   * ⟹ 保持していた**古い**token-pool 通知が、あとから届いた**新しい**
+   * 通知より先にモデルへ渡り、しかもそのリトライがそのとき通れば「古い本文
+   * のまま成功したターン」として記録される——本番で観測された「recovered は
+   * 03 なのにクローンへ渡った本文は 09」という食い違いの機序がこれである。
+   *
+   * ## 何を保証するか
+   *
+   * `post()` が token-pool 由来の `external` を受理するたびに
+   * {@link Clone.#foldPendingTokenPoolNotice} を通す。まだ処理を終えていない
+   * 代表が既に在れば、**内容が違う限り**古い方を受信箱・`#deferred` の
+   * どちらに居ても外して畳み（`#forget` を通すので器からも消える）、新しい
+   * 方をその場の代表にする——結果として、同時に未処理で残る token-pool の
+   * 「戻った」は高々1件になる。**中身が一字一句同じなら何もしない**
+   * （`#pendingCollapse` 側の既存の畳み込みに任せる——鍵の作り方そのものは
+   * Issue #1298 / PR #1355 の領分なので、ここでは触らない）。
+   *
+   * ## 消えない — 合図を捨てるのではなく代表を差し替えるだけ
+   *
+   * 外した古い方は `#journalSupersededTokenPoolNotice` が全文を日誌へ残して
+   * から `#forget` する（`#forget` は器の未読からも `#pendingCollapse` からも
+   * 正しく消す——`dropQueuedInboxEvents` と同じ後始末を1箇所に閉じたものを
+   * 再利用しているだけで、ここに新しい消し方は無い）。**1回目は必ず配る**
+   * ——代表が居ない状態（`null`）で届いた最初の1件はここでは何もせず、
+   * これまでどおり `#foldIntoPendingCollapse` → `#remember` → `#inbox.push`
+   * を通る。
+   *
+   * ## 代表が「未処理」でなくなる時点
+   *
+   * 代表が実際にターンへ渡って片付いた（`#forget` された）時点で、この索引
+   * からも落ちる（`#forget` の中、`#dropPendingCollapse` と対の場所）。
+   * **枠で保持されて `#deferred` にいる間は「未処理」のままである**——
+   * まだモデルへ渡っていない・まだ成功していないので、そのあいだに届いた
+   * 新しい通知はこの代表へ合流できる。片付いた後に届いた通知は、代表が
+   * 居ない状態として扱われ、これまでどおり自分自身のターンを持つ
+   * （負の対照「合流は『未処理の間』に限る」）。
+   *
+   * **⚠️ `#forget` を通らずに片付く経路がもう1つある。** 起動時に拾い直した
+   * 未読が `restoredInboxEventVerdict` で `stale` と判定された場合
+   * （token-pool は常にこれに当たる。`inbox-staleness.ts` の doc）、
+   * `#removeStaleRedeliveryChunk` が `#forget` の代わりに束ねて消す
+   * （同メソッドの doc「`#forget` の代わりにここを通る理由」）。**この経路
+   * にも同じ後始末を書いてある**——書き忘れると、器からは既に消えた stale
+   * な id を代表として指したまま残り、次に届く新しい token-pool 通知の
+   * 合流判定が「代表がまだ未処理で残っている」という偽の前提で走る
+   * （器の未読とメモリ上の索引がずれる、という Issue #1051 続きが避けたい
+   * 形そのもの）。
+   *
+   * ## 器の入れ替えを跨ぐと空になる
+   *
+   * `#pendingCollapse` と同じくメモリ上にしか無い。`#restoreUnread` が拾い
+   * 直した未読からこの索引も作り直す（`#restoreUnreadPass` の該当箇所）——
+   * 拾い直した集合の中でいちばん新しく積まれていたと分かる1件を代表にする
+   * だけで、拾い直した時点で既に複数残っていた分を遡って畳みはしない
+   * （`#pendingCollapse` の再構築が同じ理由で遡らないのと同じ判断）。
+   */
+  #pendingTokenPoolNotice: { id: string; at: string; key: string; folded: number } | null = null;
+  /**
    * 受理した瞬間に日誌へ書いた発言。id → その追記の約束。
    *
    * **応答がこの追記を追い越さないために持つ。** `post` は同期なので追記は
@@ -2561,6 +2637,15 @@ class Clone implements CloneHost {
     // （`row-folded`）。後者を待ち行列から抜くと、issue #841 の「中身の同じ
     // `external` を1ターンへ束ね、件数と全件の届いた時刻を本文に載せる」能力
     // が消える（`#mergedExternalBatch` の doc）。
+    //
+    // **token-pool の「戻った」だけは、その前にもう1段ある**（Issue #1051
+    // 続き。`#pendingTokenPoolNotice` の doc）。`#foldIntoPendingCollapse` が
+    // 畳めるのは本文が一字一句同じ場合だけなので、429↔成功の往復で本文が
+    // 変わるたびにすり抜けて別行として積まれていた——ここで先に「まだ未処理の
+    // token-pool 通知が在るなら、内容が違っても1件までにする」を通す。
+    if (event.type === 'external' && event.source === DAEMON_TOKEN_POOL_REOPENED_SOURCE) {
+      this.#foldPendingTokenPoolNotice(event);
+    }
     const collapse = this.#foldIntoPendingCollapse(event, { canQueue: true });
     if (collapse === 'folded') return;
 
@@ -4070,6 +4155,18 @@ class Clone implements CloneHost {
           this.#redelivered.delete(record.event.id);
           this.#redeliveredClosed.delete(record.event.id);
           this.#dropPendingCollapse(record.event);
+          // **token-pool の代表もここで落とす**（Issue #1051 続き）。この
+          // 経路は `#forget` を通らない（このメソッドの doc「`#forget` の
+          // 代わりにここを通る理由」）ので、`#forget` 側に足した後始末
+          // （`#pendingTokenPoolNotice` を id 一致で null に戻す）はここへは
+          // 効かない——同じ形をここにも書く。**落とし忘れると、器からは
+          // 既に消えた stale な id を代表として指したまま残り**（`#restoreUnreadPass`
+          // が拾い直しの直後に作り直した代表がこの経路で消える回はここが
+          // 唯一の後始末になる）、次に届く新しい token-pool 通知の合流判定が
+          // 「代表がまだ未処理で残っている」という偽の前提で走ることになる。
+          if (this.#pendingTokenPoolNotice?.id === record.event.id) {
+            this.#pendingTokenPoolNotice = null;
+          }
           this.#bumpInboxFlow(this.#inboxFlowSettled, record.event.type);
         }
         return;
@@ -4433,6 +4530,137 @@ class Clone implements CloneHost {
           `片付いたので数え終える）: ${inboxEventShape(event)}`,
       });
     }
+  }
+
+  /**
+   * token-pool の「戻った」通知を、まだ未処理の代表（`#pendingTokenPoolNotice`
+   * の doc）へ合流させる。呼ぶのは `post()` から、`event` が token-pool 由来の
+   * `external` だと分かった直後・`#foldIntoPendingCollapse` より前だけである。
+   *
+   * **中身の同一判定は {@link Clone.#externalMergeKey} を再利用する** —— 独自の
+   * 比較を書かない（`#mergedExternalBatch` の doc「同じ判定を2箇所に書かない」
+   * と同じ理由）。
+   *
+   * ## 鍵が作れない（`JSON.stringify` が投げる）ときは、この事件そのものを
+   * 素通しする —— フェイルオープンの向きを間違えないこと
+   *
+   * **⚠️ 一度、`event.id` を鍵の代わりに使う形で実装し、変異試験ではなく
+   * 既存の回帰テスト（#841「鍵が作れない payload（循環参照）でも束ねず」）で
+   * 誤りを検出した。** `event.id` は呼ぶたびに必ず違う値なので、それを鍵に
+   * すると「新しい event は必ず現在の代表と中身が違う」という判定になり、
+   * **鍵が作れない event が届くたびに、現在の代表を（中身が本当に違うか
+   * 分からないまま）外して畳んでしまう**——これは `inboxCollapseKey` の doc
+   * が言う「畳めなければ受信箱の行は増えるが、それは直しの前と同じ状態に
+   * 留まるだけで、黙って合図を落とすよりはるかに安全である」というフェイル
+   * オープンの向きとは**逆**で、**鍵が作れないことを理由に、鍵が作れた
+   * 既存の代表を巻き添えで消す**という、この関数が存在しない場合には
+   * 起こらなかった破壊的な副作用だった。
+   *
+   * **正しい倒れ先は「この event を合流の対象外にする」である。** 代表を
+   * 外しもしなければ、この event 自身を新しい代表として記録もしない
+   * （比較できない以上、後から来る event との比較にも使えない）。この
+   * event はそのままこの関数を素通りし、以降の `#foldIntoPendingCollapse`
+   * 等こそがこれまでどおりの経路（束ねない・畳まない・単独のターンを持つ）
+   * を担う——**能力は1つも削れず、既存の代表も無傷のまま残る。**
+   */
+  #foldPendingTokenPoolNotice(event: InboxEvent): void {
+    const key = this.#externalMergeKey(event);
+    if (key === null) return;
+
+    const current = this.#pendingTokenPoolNotice;
+
+    if (current === null) {
+      // **代表が居ない ⟹ この event が新しい代表になる。** ここでは何も畳まない
+      // ——1回目は必ず配る、という約束そのものである。
+      this.#pendingTokenPoolNotice = { id: event.id, at: event.at, key, folded: 0 };
+      return;
+    }
+
+    if (current.key === key) {
+      // **中身が一字一句同じ代表が既に未処理で残っている。** 差し替えは不要——
+      // 直後の `#foldIntoPendingCollapse`（Issue #954）がこの重複を数え・畳む。
+      return;
+    }
+
+    // **代表の中身が違う ⟹ 古い方を外して畳み、この event を新しい代表にする。**
+    const evicted = this.#evictPendingTokenPoolRepresentative(current.id);
+    const folded = current.folded + (evicted !== null ? 1 : 0);
+    if (evicted !== null) {
+      void this.#journalSupersededTokenPoolNotice(evicted, event, folded);
+    }
+    // **見つからなかった（＝既にターンへ渡って処理中、または既に片付いた）
+    // 場合も、代表はこの event へ差し替える。** 見つからないことは「合流でき
+    // なかった」ではない——負の対照（「合流は未処理の間に限る」）が期待する
+    // とおり、その場合はこの event が自分自身の新しい代表として振る舞う。
+    this.#pendingTokenPoolNotice = { id: event.id, at: event.at, key, folded };
+  }
+
+  /**
+   * `#pendingTokenPoolNotice` が指す代表を、居場所（受信箱 or 枠での保持）を
+   * 問わず外して器からも消す。見つからなければ `null`。
+   *
+   * ## 探す順序 — 受信箱 → `#deferred`
+   *
+   * `dropQueuedInboxEvents` と同じ2箇所を同じ順で見る（あちらの doc「枠
+   * （利用上限）で保持している分。忘れると静かに漏れる」）。**この2箇所以外に
+   * 「まだ配っていない合図」が居場所を持つことは無い** —— 処理中の1件は
+   * 既に取り出されているのでどちらにも居らず、その場合はここで見つからずに
+   * `null` を返す（負の対照が期待する形）。
+   *
+   * ## 消し方は `#forget` に委ねる — 新しい消し方を作らない
+   *
+   * 見つけた側から取り除いた（`Inbox#removeWhere` / `#deferred.splice`）あとは
+   * `#forget` を呼ぶだけにする。**器の未読・`#pendingCollapse`・`inbox_flow`
+   * のどれも `#forget` が正しく後始末する**（`#forget` の doc）ので、ここで
+   * 二重に書かない。`#heldForUsage` だけは `#deferred` 側固有の索引なので、
+   * ここで直接落とす（`#settleInboxEvent` の `defer` 分岐が積む側と対）。
+   *
+   * **待たない。** `post()` は同期なので、消し込みの完了までは待てない
+   * （`#remember` / `#commit` と同じ割り切り）。失敗は `#forget` 自身が
+   * 跡を残す。
+   */
+  #evictPendingTokenPoolRepresentative(id: string): InboxEvent | null {
+    const fromQueue = this.#inbox.removeWhere((queued) => queued.id === id);
+    const victim = fromQueue[0];
+    if (victim !== undefined) {
+      void this.#forget(victim);
+      return victim;
+    }
+
+    const index = this.#deferred.findIndex((held) => held.id === id);
+    if (index === -1) return null;
+    const [held] = this.#deferred.splice(index, 1);
+    if (held === undefined) return null;
+    this.#heldForUsage.delete(id);
+    void this.#forget(held);
+    return held;
+  }
+
+  /**
+   * 合流で外した古い token-pool 通知を、日誌へ残してから片付ける
+   * （`#pendingTokenPoolNotice` の doc「消えない」）。
+   *
+   * **本文は必ず先に書く。** `#forget` が消すのは器の未読だけで、本文その
+   * ものはどこにも保存されていない——ここで書かなければ「何が畳まれたか」が
+   * 永久に読めなくなる（`#foldIntoPendingCollapse` が同じ理由で `folded` の
+   * 直前に生の本文を書くのと同じ形）。
+   */
+  async #journalSupersededTokenPoolNotice(
+    old: InboxEvent,
+    next: InboxEvent,
+    folded: number,
+  ): Promise<void> {
+    await this.#journalIncomingBody(old);
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text:
+        `token-pool の「戻った」通知（本文は直前の行）がまだ未処理のまま残っていたところへ、` +
+        `内容の違う同種の通知が届いたので、古い方は配らずに畳み、新しい方（` +
+        `${inboxEventShape(next)}）を代表にした（モデルへ渡るのは新しい方だけ。合流はここまでで` +
+        `累計 ${folded} 件——時間の窓ではなく「未処理のまま残っているか」だけで判定している）。`,
+    });
   }
 
   /**
@@ -5483,6 +5711,16 @@ class Clone implements CloneHost {
         // その合図が次の起動で配り直される側なので、索引に残しておくほうが
         // 正しい（残しておけば、そのあいだに届く同文はこの行へ畳まれる）。
         this.#dropPendingCollapse(event);
+        // **token-pool の代表もここで落とす**（Issue #1051 続き。
+        // `#pendingTokenPoolNotice` の doc「代表が『未処理』でなくなる時点」）。
+        // `#dropPendingCollapse` と同じ理由で `remove` が確定した後でしか
+        // 落とさない——消せずに下へ抜ける回は次の起動で配り直される側なので、
+        // 代表として残しておくほうが正しい（そのあいだに届く新しい通知は、
+        // この代表へ合流できる）。**id が一致するときだけ**落とす —— 既に
+        // 合流で差し替えられた後（`#pendingTokenPoolNotice` が別の id を
+        // 指している）に、外した側の古い event がここへ来ても代表を巻き添え
+        // で消さない。
+        if (this.#pendingTokenPoolNotice?.id === event.id) this.#pendingTokenPoolNotice = null;
         // **`settled`（Issue #783 段0）。成功した回だけ1回数える** —— この
         // `for` は失敗を再試行するが、`return` するのはここだけなので、
         // 同じ event で2回数えることは無い（`schema.ts` の `inbox_flow` の
@@ -5574,6 +5812,28 @@ class Clone implements CloneHost {
         at: record.event.at,
         collapsed: 0,
       });
+    }
+
+    // **token-pool の代表も同じ形で作り直す**（Issue #1051 続き。
+    // `#pendingTokenPoolNotice` の doc「器の入れ替えを跨ぐと空になる」）。
+    // ここでも遡って畳みはしない——直前の起動で複数残っていたなら、それは
+    // それぞれこれまでどおり配り直される。**このループが決めるのは「これから
+    // 届く新しい token-pool 通知が、どの代表へ合流するか」だけである。**
+    // `pending` は `claimPending()` が返した順（ストアの並び。到着順である
+    // 保証まではここでは主張しない）をそのまま反復するので、**最後に見つかった
+    // ものを代表にする**——複数残っていた場合、いちばん後ろに並んでいたものを
+    // 「いま分かっている中でいちばん新しい」とみなす近似である。
+    for (const record of pending) {
+      if (record.event.type !== 'external') continue;
+      if (record.event.source !== DAEMON_TOKEN_POOL_REOPENED_SOURCE) continue;
+      // **鍵が作れない（`JSON.stringify` が投げる）record は代表にしない**
+      // （`#foldPendingTokenPoolNotice` の doc「フェイルオープンの向きを
+      // 間違えないこと」と同じ理由——`event.id` を鍵の代わりに使うと、次に
+      // 正しく鍵の作れる通知が届いたときに「中身が違う」と誤判定して、その
+      // record 自身を指す代表を無条件で外しに行ってしまう）。
+      const key = this.#externalMergeKey(record.event);
+      if (key === null) continue;
+      this.#pendingTokenPoolNotice = { id: record.event.id, at: record.event.at, key, folded: 0 };
     }
 
     // **日誌の側も同じ材料で名乗り分ける**（判定は `#redeliveryNoticeFor` と同一）。
