@@ -16105,7 +16105,9 @@ describe('述語が当たった配り直しの件数を数える（issue #1374�
 
   it('(A) 陽性対照: 閉じていない報告が配られても、「【数える:」で始まる行は増えない', async () => {
     const REPORT_ID = 'evt-count-a-open';
-    const stores = storesWithGet(async (id) => (id === REPORT_ID ? commitment(REPORT_ID, {}) : null));
+    const stores = storesWithGet(async (id) =>
+      id === REPORT_ID ? commitment(REPORT_ID, {}) : null,
+    );
     const s = setup(undefined, stores);
     s.clone.post({
       type: 'manager_message',
@@ -16193,8 +16195,10 @@ describe('述語が当たった配り直しの件数を数える（issue #1374�
     const REPORT_ID_2 = 'evt-count-a-batch-2';
     const REPORT_ID_3 = 'evt-count-a-batch-3';
     const stores = storesWithGet(async (id) => {
-      if (id === REPORT_ID_1) return commitment(REPORT_ID_1, { closedAt: '2026-09-24T00:05:00.000Z' });
-      if (id === REPORT_ID_3) return commitment(REPORT_ID_3, { closedAt: '2026-09-24T00:06:00.000Z' });
+      if (id === REPORT_ID_1)
+        return commitment(REPORT_ID_1, { closedAt: '2026-09-24T00:05:00.000Z' });
+      if (id === REPORT_ID_3)
+        return commitment(REPORT_ID_3, { closedAt: '2026-09-24T00:06:00.000Z' });
       return null;
     });
     const s = setup(undefined, stores);
