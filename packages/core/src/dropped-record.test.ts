@@ -1607,6 +1607,20 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
     decision: {
       decision: { emit: 'size', token: 'decision' },
       grounds: { emit: 'size', token: 'grounds' },
+      // #1310 で足した構造欄。中身は id・enum 値のみで自由文を含まないが、
+      // この関数は「入れ子オブジェクトの中へは踏み込まない」という第1階層
+      // までの一般原則（この関数冒頭の doc）をここでも適用し、`never` へ
+      // 倒す——`contextUsage`（`turn_usage`/`context_usage`）と同じ既定側の
+      // 判断である。出す設計にするなら `dropped-record.ts` の
+      // `case 'decision'` 側で個別に決めること（`contextUsage` が2階層専用の
+      // 名簿を別に持っているのと同じ形）。
+      appraisal: {
+        emit: 'never',
+        why:
+          '構造欄（#1310）。中身は id・enum 値のみで自由文を運ばないが、この' +
+          '関数は入れ子の中へ踏み込まない第1階層までの一般原則（冒頭 doc）を' +
+          '適用し、出す設計は別途 `case \'decision\'` 側で決める。',
+      },
     },
     escalation: {
       question: { emit: 'size', token: 'question' },
@@ -1982,6 +1996,14 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       type: 'decision',
       decision: SECRET,
       grounds: SECRET,
+      appraisal: {
+        target: 'commitment',
+        id: 'commit-1',
+        value: 'good',
+        by: 'clone',
+        previous: SECRET,
+        previousBy: SECRET,
+      },
     },
     escalation: {
       type: 'escalation',

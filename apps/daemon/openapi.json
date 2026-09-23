@@ -703,6 +703,33 @@
                         },
                         "grounds": {
                           "type": "string"
+                        },
+                        "appraisal": {
+                          "type": "object",
+                          "properties": {
+                            "target": {
+                              "type": "string",
+                              "enum": ["commitment", "job"]
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "value": {
+                              "type": "string",
+                              "enum": ["good", "bad", "unclear"]
+                            },
+                            "by": {
+                              "type": "string",
+                              "enum": ["clone", "human"]
+                            },
+                            "previous": {
+                              "type": "string"
+                            },
+                            "previousBy": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["target", "id", "value", "by"]
                         }
                       },
                       "required": ["type", "id", "at", "decision", "grounds"]
@@ -3107,6 +3134,33 @@
                               },
                               "grounds": {
                                 "type": "string"
+                              },
+                              "appraisal": {
+                                "type": "object",
+                                "properties": {
+                                  "target": {
+                                    "type": "string",
+                                    "enum": ["commitment", "job"]
+                                  },
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "value": {
+                                    "type": "string",
+                                    "enum": ["good", "bad", "unclear"]
+                                  },
+                                  "by": {
+                                    "type": "string",
+                                    "enum": ["clone", "human"]
+                                  },
+                                  "previous": {
+                                    "type": "string"
+                                  },
+                                  "previousBy": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["target", "id", "value", "by"]
                               }
                             },
                             "required": ["type", "id", "at", "decision", "grounds"]
@@ -9897,7 +9951,7 @@
         "operationId": "getAppraisalStats",
         "tags": ["appraisal"],
         "summary": "評定の内訳を数える",
-        "description": "クローンの `appraisal_stats` と同じものを人間の手から。`journal.commitments`（台帳の行）と `journal.jobs`（委譲）は日誌の decision 行を先頭一致で数えた全期間の総数——2つは別の軸なので混ぜて 読まないこと。`jobCoverage` は終端した委譲（done/failed/lost/stopped）を 状態ごとに割った評定の有無の内訳で、running/waiting_human は対象外 （`nonTerminalTotal` に件数だけ出す）。",
+        "description": "クローンの `appraisal_stats` と同じものを人間の手から。`journal.commitments`（台帳の行）と `journal.jobs`（委譲）は日誌の decision 行を先頭一致で数えた全期間の総数——2つは別の軸なので混ぜて 読まないこと。`jobCoverage` は終端した委譲（done/failed/lost/stopped）を 状態ごとに割った評定の有無の内訳で、running/waiting_human は対象外 （`nonTerminalTotal` に件数だけ出す）。`reconciliation` はクローンが付けた評定を人間が付け直した対を数えた較正の材料（#1055 段4）で、`commitments` / `jobs` の軸ごとに `transitions`（値の遷移の内訳）・`matched` / `mismatched`・復元できなかった件数（`undetermined`）を持つ。",
         "responses": {
           "200": {
             "description": "評定の内訳。",
@@ -10040,9 +10094,155 @@
                         "terminalUnappraised",
                         "nonTerminalTotal"
                       ]
+                    },
+                    "reconciliation": {
+                      "type": "object",
+                      "properties": {
+                        "commitments": {
+                          "type": "object",
+                          "properties": {
+                            "transitions": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "cloneValue": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": ["good", "bad", "unclear"]
+                                      },
+                                      {
+                                        "type": "string",
+                                        "const": "other"
+                                      }
+                                    ]
+                                  },
+                                  "humanValue": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": ["good", "bad", "unclear"]
+                                      },
+                                      {
+                                        "type": "string",
+                                        "const": "other"
+                                      }
+                                    ]
+                                  },
+                                  "count": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": ["cloneValue", "humanValue", "count"]
+                              }
+                            },
+                            "totalPairs": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "matched": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "mismatched": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "undetermined": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "transitions",
+                            "totalPairs",
+                            "matched",
+                            "mismatched",
+                            "undetermined"
+                          ]
+                        },
+                        "jobs": {
+                          "type": "object",
+                          "properties": {
+                            "transitions": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "cloneValue": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": ["good", "bad", "unclear"]
+                                      },
+                                      {
+                                        "type": "string",
+                                        "const": "other"
+                                      }
+                                    ]
+                                  },
+                                  "humanValue": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": ["good", "bad", "unclear"]
+                                      },
+                                      {
+                                        "type": "string",
+                                        "const": "other"
+                                      }
+                                    ]
+                                  },
+                                  "count": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": ["cloneValue", "humanValue", "count"]
+                              }
+                            },
+                            "totalPairs": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "matched": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "mismatched": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "undetermined": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "transitions",
+                            "totalPairs",
+                            "matched",
+                            "mismatched",
+                            "undetermined"
+                          ]
+                        }
+                      },
+                      "required": ["commitments", "jobs"]
                     }
                   },
-                  "required": ["journal", "jobCoverage"]
+                  "required": ["journal", "jobCoverage", "reconciliation"]
                 }
               }
             }

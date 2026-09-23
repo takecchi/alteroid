@@ -228,6 +228,7 @@ export {
  */
 export {
   computeAppraisalJournalStats,
+  computeAppraisalReconciliation,
   computeJobAppraisalCoverage,
   describeAppraisalStats,
   isTerminalJobStatus,
@@ -236,6 +237,9 @@ export {
 export type {
   AppraisalDecisionTally,
   AppraisalJournalStats,
+  AppraisalReconciliation,
+  AppraisalReconciliationStats,
+  AppraisalReconciliationTransition,
   JobAppraisalCoverage,
   JobAppraisalCoverageRow,
 } from './appraisal-stats.js';

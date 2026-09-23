@@ -55,7 +55,9 @@ import { brief } from './runner.js';
 import {
   describeAppraisal,
   formatAppraisalDecision,
+  JOB_APPRAISAL_CLONE_GROUNDS,
   JOB_APPRAISAL_DECISION_PREFIX,
+  JOB_APPRAISAL_HUMAN_GROUNDS,
 } from './schema.js';
 import type {
   AppraisalValue,
@@ -6135,6 +6137,11 @@ class Pool implements ManagerPool {
       };
     }
     const previous = describeAppraisal(job);
+    // **構造欄（#1310）の `previous` / `previousBy` は、上書きする前の raw な
+    // 値から取る。** `previous`（上）は人間向けの整形済み文で、構造欄は
+    // 数え上げ（`computeAppraisalReconciliation`）が読む側なので別に持つ。
+    const previousValue = job.appraisal;
+    const previousBy = job.appraisedBy;
 
     job.appraisal = appraisal;
     job.appraisedAt = at;
@@ -6147,7 +6154,6 @@ class Pool implements ManagerPool {
     job.updatedAt = at;
     await this.#stores.jobs.putJob(job);
 
-    const who = by === 'clone' ? 'クローン' : '人間';
     await this.#journal({
       type: 'decision',
       decision: formatAppraisalDecision({
@@ -6157,7 +6163,15 @@ class Pool implements ManagerPool {
         reason,
         previous,
       }),
-      grounds: `${who}が付けた（人間はこれを読んで後から覆す）`,
+      grounds: by === 'clone' ? JOB_APPRAISAL_CLONE_GROUNDS : JOB_APPRAISAL_HUMAN_GROUNDS,
+      appraisal: {
+        target: 'job',
+        id: managerId,
+        value: appraisal,
+        by,
+        previous: previousValue,
+        previousBy,
+      },
     });
 
     return {

@@ -869,6 +869,77 @@ export const contextUsageObservationSchema = z.object({
 export type ContextUsageObservation = z.infer<typeof contextUsageObservationSchema>;
 
 /**
+ * その仕事が**どうだったか**（#1054。自己改善の段1）。
+ *
+ * ## なぜ `closedReason` だけでは足りないのか
+ *
+ * `closedReason` は自由記述なので、**数え上げられない** — 「この種類の仕事は
+ * 直近20件でどうだったか」が引けない。PRD「自己改善」が要求する「仕事の結末は
+ * 測られ」は、測った値が**集計できる形**で残ることを含む。
+ *
+ * **`closedReason` を置き換えるものではない。** あちらは「どう片付いたか」
+ * （経緯）で、こちらは「うまくいったか」（良し悪し）である。両方残す。
+ *
+ * ## ⛔ これは「評価基準」ではない。ラベルの**形**である
+ *
+ * 何を `good` とするかは**記憶**にあり、ここには無い（`docs/north_star.md` の
+ * `grep -Fn -- '「何を良い結果とするか」を設定項目や評価項目の一覧で表そうとしていないか' docs/north_star.md`、
+ * および `docs/PRD.md` の「要件: 自己改善」）。**ここに評価項目を増やしていくと、
+ * それが「評価基準の一覧」になり、権限境界が禁じた「行為の一覧」と同じ形になる。**
+ * 軸を足したくなったら、まず `appraisalReason` に同じ軸が繰り返し現れているかを
+ * 見ること。
+ *
+ * ## 3値。`unclear` を落とさないこと
+ *
+ * - `good` — うまくいった
+ * - `bad` — うまくいかなかった
+ * - `unclear` — **見たが判定できない**（材料が無い・どちらとも言える）
+ *
+ * **`unclear` と「欄が無い（まだ評定していない）」は別物である。** 前者は見た
+ * 結果で、後者は見ていない。2値に畳むと、判定できない場合がどちらかへ黙って
+ * 倒れる（AGENTS.md「判定できないという3つ目の状態を持つ」）。そして**未評定を
+ * `good` 側にも `bad` 側にも混ぜない** — 混ぜた瞬間、測っていないことが出力から
+ * 消える（同「取れない軸に 0 の行を作る」）。
+ *
+ * ## 履歴は持たない。持つのは**いまの値**だけである
+ *
+ * 「クローンが `good` と言い、人間が `bad` に覆した」は**日誌**から読む（追記
+ * 専用なので上書きされない）。行の側に履歴を積むと、台帳の1行が伸び続ける。
+ * これは `MemoryProtectionStatus` と同じ非対称で、**実体は日誌にあり、ここに
+ * 在るのはその時点の値**である。
+ *
+ * ⚠️ **journalEntrySchema より前に置く必要がある**（#1310）。`decision` の
+ * 構造欄（下）がこの enum を直接使うため——`journalEntrySchema` は
+ * モジュール読み込み時に即時評価されるので、参照する側より後ろに
+ * `const` で定義すると TDZ（temporal dead zone）で落ちる。**この enum
+ * 自体の意味・doc は元の位置（`commitmentSchema.appraisal` の直前）に
+ * 置かれていたものをそのまま移設した。移設の時点で本文は1文字も変えて
+ * いない。**
+ */
+export const appraisalSchema = z.enum(['good', 'bad', 'unclear']);
+export type AppraisalValue = z.infer<typeof appraisalSchema>;
+
+/**
+ * 評定を**誰が付けたか**。
+ *
+ * **`commitmentClosedBySchema` / `commitmentEditedBySchema` と値は同じ
+ * （`'clone' | 'human'`）だが、別の enum として置く。** 書き手ごとの規則が違う
+ * ためである — `editedBy` は「書き換えられるのは常に自分自身の言葉だけ」という
+ * 線を持つが（`commitmentEditedBySchema` の doc）、**評定はどの行にも両者が
+ * 付けられる。人間がクローンの評定を覆せることが要件そのものである**（#1054）。
+ * 共用すると、片方の線を動かしたときにもう片方が黙って一緒に動く。
+ *
+ * **保存された行を読む側（`commitmentSchema.appraisedBy`）はこの enum を直接
+ * 使わない。** 理由は `commitmentClosedBySchema` の doc と全く同じである — 未知の
+ * enum 値1つで台帳の一覧が丸ごと読めなくなる側へ倒さない。
+ *
+ * ⚠️ **こちらも journalEntrySchema より前に置く必要がある（#1310）。** 上の
+ * `appraisalSchema` と同じ理由（TDZ）。移設の時点で本文は1文字も変えていない。
+ */
+export const appraisedBySchema = z.enum(['clone', 'human']);
+export type AppraisedBy = z.infer<typeof appraisedBySchema>;
+
+/**
  * 追記専用の記録（PRD「可観測性」の中段）。
  * 型は architecture.md の JournalStore 行に対応する。
  */
@@ -944,6 +1015,62 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * そのものを名乗る文になる。
      */
     grounds: z.string(),
+    /**
+     * 評定を書いた行だけが持つ構造欄（#1310。#1055 段4の前提）。
+     *
+     * ## なぜ在るか
+     *
+     * 「クローンが付けた評定を人間が後から覆した」という対は、これが増える
+     * 前は日誌の**自由文**（`decision` の先頭一致と `grounds` の文字列一致）
+     * からしか復元できなかった（`COMMITMENT_APPRAISAL_DECISION_PREFIX` の
+     * doc、`JOB_APPRAISAL_DECISION_PREFIX` の doc）。文言を1文字直すと
+     * 静かに0件へ化ける経路だったので、**評定行に限って**構造で持たせる。
+     *
+     * ## なぜ専用の日誌の枝にしないのか
+     *
+     * `COMMITMENT_APPRAISAL_DECISION_PREFIX` の doc が言うとおり——専用の枝は
+     * `tools.ts` / `dropped-record.ts` / `apps/web` の2つの**4箇所の分岐**を
+     * 同時に開けることになる。ここでは**既存の `decision` 型に任意の構造欄を
+     * 足すだけ**にとどめ、4箇所を開けずに済ませる。
+     *
+     * ## `.optional()` にする理由 —— 既存の行を壊さないため
+     *
+     * この欄が増える**前**に書かれた評定の `decision` 行には無い。必須にすると
+     * `journalEntrySchema.safeParse` がその行を丸ごと読めなくする
+     * （`contextUsageObservationSchema.categories.kind` の同じ理由の doc）。
+     * **過去の行は、この欄が無いまま先頭一致（`grounds` は
+     * `inferAppraisedByFromGrounds` / `decision` は
+     * `parseAppraisalDecisionValue` と `parseAppraisalDecisionId`）で読む。**
+     *
+     * ## 4つの書き口すべてがここを書く
+     *
+     * `tools.ts` の `writeAppraisal`（台帳・クローン）/
+     * `apps/daemon/src/app.ts` の `POST /commitments/:id/appraise`（台帳・
+     * 人間）/ `manager.ts` の `ManagerPool.appraise`（委譲・クローンと人間の
+     * 両方）の3箇所（呼び口は4つだが、委譲は1箇所に畳まれている）。
+     */
+    appraisal: z
+      .object({
+        /** どちらの評定か（台帳の行 or 委譲）。2つの印を混ぜないのと同じ理由で分けてある。 */
+        target: z.enum(['commitment', 'job']),
+        /** 評定を付けた対象の id（`Commitment.id` / `Job.id`）。 */
+        id: z.string(),
+        /** 付けた値。書き込み側は常に3値（`AppraisalValue`）に縛られる。 */
+        value: appraisalSchema,
+        /** 誰が付けたか。 */
+        by: appraisedBySchema,
+        /**
+         * 覆す前の値。無ければ初回（付け直しではない）。
+         *
+         * **型は `z.string()` で緩く持つ**——保存層（`Commitment.appraisal` /
+         * `Job.appraisal`）自体が `z.string()` で緩いので（`appraisalSchema`
+         * の doc）、前の値が3値の外に出ている可能性を読み出し側で棄てない。
+         */
+        previous: z.string().optional(),
+        /** 覆す前に誰が付けたか。`previous` が無ければ意味を持たない。同じ理由で緩く持つ。 */
+        previousBy: z.string().optional(),
+      })
+      .optional(),
   }),
   /**
    * 認証トークンのプールが回った / 回らなかった（Issue #393）。
@@ -2228,64 +2355,12 @@ export const commitmentClosedBySchema = z.enum(['clone', 'human']);
 export const commitmentEditedBySchema = z.enum(['clone', 'human']);
 
 /**
- * その仕事が**どうだったか**（#1054。自己改善の段1）。
- *
- * ## なぜ `closedReason` だけでは足りないのか
- *
- * `closedReason` は自由記述なので、**数え上げられない** — 「この種類の仕事は
- * 直近20件でどうだったか」が引けない。PRD「自己改善」が要求する「仕事の結末は
- * 測られ」は、測った値が**集計できる形**で残ることを含む。
- *
- * **`closedReason` を置き換えるものではない。** あちらは「どう片付いたか」
- * （経緯）で、こちらは「うまくいったか」（良し悪し）である。両方残す。
- *
- * ## ⛔ これは「評価基準」ではない。ラベルの**形**である
- *
- * 何を `good` とするかは**記憶**にあり、ここには無い（`docs/north_star.md` の
- * `grep -Fn -- '「何を良い結果とするか」を設定項目や評価項目の一覧で表そうとしていないか' docs/north_star.md`、
- * および `docs/PRD.md` の「要件: 自己改善」）。**ここに評価項目を増やしていくと、
- * それが「評価基準の一覧」になり、権限境界が禁じた「行為の一覧」と同じ形になる。**
- * 軸を足したくなったら、まず `appraisalReason` に同じ軸が繰り返し現れているかを
- * 見ること。
- *
- * ## 3値。`unclear` を落とさないこと
- *
- * - `good` — うまくいった
- * - `bad` — うまくいかなかった
- * - `unclear` — **見たが判定できない**（材料が無い・どちらとも言える）
- *
- * **`unclear` と「欄が無い（まだ評定していない）」は別物である。** 前者は見た
- * 結果で、後者は見ていない。2値に畳むと、判定できない場合がどちらかへ黙って
- * 倒れる（AGENTS.md「判定できないという3つ目の状態を持つ」）。そして**未評定を
- * `good` 側にも `bad` 側にも混ぜない** — 混ぜた瞬間、測っていないことが出力から
- * 消える（同「取れない軸に 0 の行を作る」）。
- *
- * ## 履歴は持たない。持つのは**いまの値**だけである
- *
- * 「クローンが `good` と言い、人間が `bad` に覆した」は**日誌**から読む（追記
- * 専用なので上書きされない）。行の側に履歴を積むと、台帳の1行が伸び続ける。
- * これは `MemoryProtectionStatus` と同じ非対称で、**実体は日誌にあり、ここに
- * 在るのはその時点の値**である。
+ * `appraisalSchema` / `AppraisalValue` / `appraisedBySchema` / `AppraisedBy`
+ * は、この直後に定義したかったが、`journalEntrySchema`（#1310 で足した
+ * `decision` の構造欄がこの enum を直接使う）より前に定義する必要があるため、
+ * ファイル冒頭寄り（`journalEntrySchema` の直前）へ移設してある。**移設の
+ * 時点で本文は1文字も変えていない**——ここに実体は無い。
  */
-export const appraisalSchema = z.enum(['good', 'bad', 'unclear']);
-export type AppraisalValue = z.infer<typeof appraisalSchema>;
-
-/**
- * 評定を**誰が付けたか**。
- *
- * **`commitmentClosedBySchema` / `commitmentEditedBySchema` と値は同じ
- * （`'clone' | 'human'`）だが、別の enum として置く。** 書き手ごとの規則が違う
- * ためである — `editedBy` は「書き換えられるのは常に自分自身の言葉だけ」という
- * 線を持つが（`commitmentEditedBySchema` の doc）、**評定はどの行にも両者が
- * 付けられる。人間がクローンの評定を覆せることが要件そのものである**（#1054）。
- * 共用すると、片方の線を動かしたときにもう片方が黙って一緒に動く。
- *
- * **保存された行を読む側（`commitmentSchema.appraisedBy`）はこの enum を直接
- * 使わない。** 理由は `commitmentClosedBySchema` の doc と全く同じである — 未知の
- * enum 値1つで台帳の一覧が丸ごと読めなくなる側へ倒さない。
- */
-export const appraisedBySchema = z.enum(['clone', 'human']);
-export type AppraisedBy = z.infer<typeof appraisedBySchema>;
 
 /**
  * 引き受けたまま終わっていない仕事1件（PRD「自律」の器を、単発の依頼へ広げたもの）。
@@ -2665,6 +2740,90 @@ export function parseAppraisalDecisionValue(
     if (remaining.startsWith(value)) return value;
   }
   return 'other';
+}
+
+/**
+ * {@link formatAppraisalDecision} が組んだ日誌の本文から、対象の id を
+ * 読み解く（#1310。構造欄（`journalEntrySchema` の `decision.appraisal`）が
+ * 無い過去の行から、(b)/(c) の食い違いを対で復元するための唯一の手掛かり）。
+ *
+ * **書式は `` `${prefix}（${id}）: …` `` である**（`formatAppraisalDecision`）。
+ * `prefix` の直後が `（` でなければ、そもそもこの書式で書かれた行ではないので
+ * `undefined`。**`parseAppraisalDecisionValue` と同じ規律** —— 「印が違う」
+ * 「id が読めない」を区別できるよう `undefined` を返し、呼び出し側に握り
+ * 潰させない（AGENTS.md「判定できないという3つ目の状態を持つ」）。
+ *
+ * id 自体の中身は検査しない——`parseAppraisalDecisionValue` の doc と同じ
+ * 注意がそのまま当てはまる（現行の書き手は英数と `-` の UUID しか使わない）。
+ */
+export function parseAppraisalDecisionId(decision: string, prefix: string): string | undefined {
+  if (!decision.startsWith(prefix)) return undefined;
+  if (decision[prefix.length] !== '（') return undefined;
+  const marker = '）: ';
+  const markerIndex = decision.indexOf(marker, prefix.length);
+  if (markerIndex === -1) return undefined;
+  const id = decision.slice(prefix.length + 1, markerIndex);
+  return id.length === 0 ? undefined : id;
+}
+
+/**
+ * 台帳・クローンの評定行が持つ `grounds`（#1310。共有定数へ寄せた——以前は
+ * `tools.ts` にインラインの文字列リテラルとして重複していた）。
+ *
+ * **文言は1文字も変えていない。** 変えると、この文言に頼って過去の行の
+ * 「誰が付けたか」を復元する {@link inferAppraisedByFromGrounds} が
+ * 過去の行を拾えなくなる（`COMMITMENT_APPRAISAL_DECISION_PREFIX` の doc と
+ * 同じ注意）。
+ */
+export const COMMITMENT_APPRAISAL_CLONE_GROUNDS =
+  'クローン自身が付けた評定（人間はこれを読んで後から覆す）';
+
+/** 台帳・人間の評定行が持つ `grounds`。文言・注意は {@link COMMITMENT_APPRAISAL_CLONE_GROUNDS} と同じ。 */
+export const COMMITMENT_APPRAISAL_HUMAN_GROUNDS =
+  '人間が直接 API から付けた（クローンの評定を覆したならその前の値も上に在る）';
+
+/**
+ * 委譲・クローンの評定行が持つ `grounds`。
+ *
+ * **以前は `manager.ts` の `const who = by === 'clone' ? 'クローン' : '人間';`
+ * によるテンプレートで、ファイルをまたいだリテラルの重複は無かった**
+ * （#1310 の Issue 本文が「委譲側は既にそうなっている」と書いているとおり）。
+ * ここへ定数として出したのは、`inferAppraisedByFromGrounds` が台帳側と同じ
+ * `===` 比較で読めるようにするためであって、重複を消すためではない
+ * ——**文言は1文字も変えていない**（`クローンが付けた（人間はこれを読んで
+ * 後から覆す）` の生成結果とバイト単位で同一）。
+ */
+export const JOB_APPRAISAL_CLONE_GROUNDS = 'クローンが付けた（人間はこれを読んで後から覆す）';
+
+/** 委譲・人間の評定行が持つ `grounds`。注意は {@link JOB_APPRAISAL_CLONE_GROUNDS} と同じ。 */
+export const JOB_APPRAISAL_HUMAN_GROUNDS = '人間が付けた（人間はこれを読んで後から覆す）';
+
+/**
+ * `grounds`（自由文）から「誰が付けたか」を復元する（#1310）。
+ *
+ * **構造欄（`journalEntrySchema` の `decision.appraisal.by`）が無い過去の
+ * 行専用。** 新しい行はこの関数を経由せず `appraisal.by` を直接持つ——ここが
+ * 要るのは #1055 段4 の較正が過去分まで遡って (b)/(c) を数えたいときだけ
+ * である。
+ *
+ * `kind` で軸を分けるのは、台帳（`commitment`）と委譲（`job`）で文面が
+ * まったく別物だからである（上の4定数）。**未知の文面は `undefined`**——
+ * 「クローンでも人間でもない3つ目の答え」ではなく「この行からは判定できない」
+ * という意味で、呼び出し側はこれを別に数えること（AGENTS.md「判定できない
+ * という3つ目の状態を持つ」）。
+ */
+export function inferAppraisedByFromGrounds(
+  grounds: string,
+  kind: 'commitment' | 'job',
+): AppraisedBy | undefined {
+  if (kind === 'commitment') {
+    if (grounds === COMMITMENT_APPRAISAL_CLONE_GROUNDS) return 'clone';
+    if (grounds === COMMITMENT_APPRAISAL_HUMAN_GROUNDS) return 'human';
+    return undefined;
+  }
+  if (grounds === JOB_APPRAISAL_CLONE_GROUNDS) return 'clone';
+  if (grounds === JOB_APPRAISAL_HUMAN_GROUNDS) return 'human';
+  return undefined;
 }
 
 /**

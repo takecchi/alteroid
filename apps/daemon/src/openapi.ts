@@ -2,6 +2,7 @@ import {
   accountUsageStateSchema,
   agentTokenInputSchema,
   agentTokenViewSchema,
+  appraisalSchema,
   commitmentSchema,
   createMemoryStores,
   INBOX_EVENT_TYPE_ORDER,
@@ -1428,6 +1429,35 @@ export const jobAppraisalCoverageRowSchema = z.object({
 });
 
 /**
+ * (クローンの値 → 人間の値) の組ごとの件数（#1310）。**`@alteroid/core` の
+ * `AppraisalReconciliationTransition` と同じ形。**
+ *
+ * `cloneValue` / `humanValue` は3値のどれでもなければ `'other'`
+ * （`appraisalDecisionTallySchema` の `other` と同じ理由）。
+ */
+export const appraisalReconciliationTransitionSchema = z.object({
+  cloneValue: z.union([appraisalSchema, z.literal('other')]),
+  humanValue: z.union([appraisalSchema, z.literal('other')]),
+  count: z.number().int(),
+});
+
+/**
+ * 1つの軸（台帳 or 委譲）ぶんの (b)/(c) 食い違い。**`@alteroid/core` の
+ * `AppraisalReconciliation` と同じ形。**
+ *
+ * `undetermined` は「id または誰が付けたかが復元できず、対の判定に使えな
+ * かった」評定行の件数——0件は「無かった」であって「測っていない」ではない
+ * （`appraisal-stats.ts` の doc）。
+ */
+export const appraisalReconciliationSchema = z.object({
+  transitions: z.array(appraisalReconciliationTransitionSchema),
+  totalPairs: z.number().int(),
+  matched: z.number().int(),
+  mismatched: z.number().int(),
+  undetermined: z.number().int(),
+});
+
+/**
  * `GET /appraisal-stats` の応答。
  *
  * - `journal.commitments` / `journal.jobs`: 日誌の `decision` 行を
@@ -1439,6 +1469,9 @@ export const jobAppraisalCoverageRowSchema = z.object({
  * - `jobCoverage`: `JobStore` を終端の仕方（`done`/`failed`/`lost`/`stopped`）
  *   ごとに割った、評定の有無の内訳。`running`/`waiting_human`（まだ終端して
  *   いない）は `byStatus` に含めず、件数だけ `nonTerminalTotal` に出す。
+ * - `reconciliation`（#1310）: (b) 人間 と (c) クローンの食い違い——クローンが
+ *   付けた評定を人間が後から付け直した対を `commitments` / `jobs` の軸ごとに
+ *   数えたもの。台帳と委譲は混ぜない（同じ理由）。
  */
 export const appraisalStatsResponseSchema = z.object({
   journal: z.object({
@@ -1451,6 +1484,10 @@ export const appraisalStatsResponseSchema = z.object({
     terminalAppraised: z.number().int(),
     terminalUnappraised: z.number().int(),
     nonTerminalTotal: z.number().int(),
+  }),
+  reconciliation: z.object({
+    commitments: appraisalReconciliationSchema,
+    jobs: appraisalReconciliationSchema,
   }),
 });
 

@@ -63,9 +63,12 @@
 import { scanJournalPages } from './journal-scan.js';
 import {
   appraisalSchema,
+  inferAppraisedByFromGrounds,
   jobStatusSchema,
+  parseAppraisalDecisionId,
   parseAppraisalDecisionValue,
   type AppraisalValue,
+  type AppraisedBy,
   type Job,
   type JobStatus,
   type JournalEntry,
@@ -194,6 +197,161 @@ export async function computeAppraisalJournalStats(
 }
 
 /**
+ * (b) 人間 と (c) クローンの食い違いの数え上げ（#1310。#1055 段4の受け入れ
+ * 基準「(b) と (c) の食い違いが数え上げられる」の実体）。
+ *
+ * 「クローンが評定を付け（(c)）、後から人間がその評定を覆した（(b)）」対を
+ * 1つの `id` の時系列に沿って数える。**クローン→人間の遷移だけを数える**
+ * ——人間→人間・クローン→クローンの付け直しは較正の材料にならない
+ * （#1055 段4 が言う「(b) が届いたときに、その件について (c) が何と
+ * 言っていたかを突き合わせる」に当たらない）。
+ */
+export interface AppraisalReconciliationTransition {
+  /** クローンが付けていた値（3値のどれでもなければ `'other'`）。 */
+  cloneValue: AppraisalValue | 'other';
+  /** 人間が付け直した値。 */
+  humanValue: AppraisalValue | 'other';
+  count: number;
+}
+
+/** {@link computeAppraisalReconciliation} の、1つの軸（台帳 or 委譲）ぶんの結果。 */
+export interface AppraisalReconciliation {
+  /** (クローンの値 → 人間の値) の組ごとの件数。件数の多い順。 */
+  transitions: readonly AppraisalReconciliationTransition[];
+  /** `transitions` の `count` の総和。 */
+  totalPairs: number;
+  /** 一致（人間が同じ値で付け直した）件数。 */
+  matched: number;
+  /** 食い違い件数。 */
+  mismatched: number;
+  /**
+   * この軸の評定行のうち、`id` または「誰が付けたか」が復元できず、対の
+   * 判定に使えなかった件数。
+   *
+   * **0 に数えないこと。** 復元できないことと、対が無いことは別の状態
+   * である（AGENTS.md「取れない軸に 0 の行を作る」「判定できないという
+   * 3つ目の状態を持つ」）。
+   */
+  undetermined: number;
+}
+
+interface ReconciliationAccumulator {
+  transitions: Map<string, AppraisalReconciliationTransition>;
+  totalPairs: number;
+  matched: number;
+  mismatched: number;
+  undetermined: number;
+  /** `id` ごとの「直近に見た（値・誰が付けたか）」。時系列（昇順）走査の途中経過。 */
+  last: Map<string, { value: AppraisalValue | 'other'; by: AppraisedBy }>;
+}
+
+function emptyReconciliationAccumulator(): ReconciliationAccumulator {
+  return {
+    transitions: new Map(),
+    totalPairs: 0,
+    matched: 0,
+    mismatched: 0,
+    undetermined: 0,
+    last: new Map(),
+  };
+}
+
+/**
+ * 1件の日誌行を、`kind` の軸の積み上げへ足し込む（破壊的）。
+ *
+ * **新しい行（構造欄あり）と過去の行（無し）を同じ経路で扱う。** 構造欄が
+ * 在れば直接読み、無ければ `parseAppraisalDecisionId` /
+ * `parseAppraisalDecisionValue` / `inferAppraisedByFromGrounds` で
+ * 復元する——どちらの経路でも `id` / `value` / `by` の3つが埋まって初めて
+ * `last` を更新し、クローン→人間の遷移を判定できる。**3つのどれか1つでも
+ * 欠ければ `undetermined` へ計上し、`last` は更新しない**（不確かな値で
+ * 以降の対の判定を汚さないため）。
+ */
+function recordAppraisalDecision(
+  acc: ReconciliationAccumulator,
+  entry: JournalEntry,
+  prefix: string,
+  kind: 'commitment' | 'job',
+): void {
+  if (entry.type !== 'decision') return;
+  if (!entry.decision.startsWith(prefix)) return; // この軸の評定行ではない
+
+  const structured =
+    entry.appraisal !== undefined && entry.appraisal.target === kind ? entry.appraisal : undefined;
+  const id = structured?.id ?? parseAppraisalDecisionId(entry.decision, prefix);
+  const value: AppraisalValue | 'other' | undefined =
+    structured?.value ?? parseAppraisalDecisionValue(entry.decision, prefix);
+  const by = structured?.by ?? inferAppraisedByFromGrounds(entry.grounds, kind);
+
+  if (id === undefined || value === undefined || by === undefined) {
+    acc.undetermined += 1;
+    return;
+  }
+
+  const prior = acc.last.get(id);
+  if (prior !== undefined && prior.by === 'clone' && by === 'human') {
+    const key = `${prior.value}->${value}`;
+    const existing = acc.transitions.get(key);
+    if (existing === undefined) {
+      acc.transitions.set(key, { cloneValue: prior.value, humanValue: value, count: 1 });
+    } else {
+      existing.count += 1;
+    }
+    acc.totalPairs += 1;
+    if (prior.value === value) acc.matched += 1;
+    else acc.mismatched += 1;
+  }
+
+  acc.last.set(id, { value, by });
+}
+
+function finalizeReconciliation(acc: ReconciliationAccumulator): AppraisalReconciliation {
+  return {
+    transitions: [...acc.transitions.values()].sort((a, b) => b.count - a.count),
+    totalPairs: acc.totalPairs,
+    matched: acc.matched,
+    mismatched: acc.mismatched,
+    undetermined: acc.undetermined,
+  };
+}
+
+/** {@link computeAppraisalReconciliation} の戻り値。 */
+export interface AppraisalReconciliationStats {
+  /** `COMMITMENT_APPRAISAL_DECISION_PREFIX`（引き受けた仕事）の軸。 */
+  commitments: AppraisalReconciliation;
+  /** `JOB_APPRAISAL_DECISION_PREFIX`（委譲）の軸。 */
+  jobs: AppraisalReconciliation;
+}
+
+/**
+ * 日誌ストアから、2つの軸それぞれで (b)/(c) の食い違いを数える（I/O あり）。
+ *
+ * **時系列に沿って読む必要があるので `order: 'asc'` で走査する**——
+ * {@link computeAppraisalJournalStats} の単純な合計と違い、ここは「直前に
+ * 誰が何を付けていたか」を1つの `id` ごとに追う必要がある（降順で読むと
+ * 「直前」が逆向きになる）。
+ *
+ * **走査は {@link computeAppraisalJournalStats} とは別の1回**（`asc` /
+ * `desc` を1回の走査で両立できないため）。往復（クエリ）の回数は
+ * 実質2倍になる——`appraisal-stats.ts` 冒頭の doc が言う「重くなったら
+ * ストア側の集計へ出す」判断は、この関数にも同様に当てはまる。
+ */
+export async function computeAppraisalReconciliation(
+  journal: Pick<JournalStore, 'list'>,
+  prefixes: { commitmentPrefix: string; jobPrefix: string },
+): Promise<AppraisalReconciliationStats> {
+  const commitments = emptyReconciliationAccumulator();
+  const jobs = emptyReconciliationAccumulator();
+  await scanJournalPages(journal, { types: ['decision'], order: 'asc' }, (page) => {
+    for (const entry of page) {
+      recordAppraisalDecision(commitments, entry, prefixes.commitmentPrefix, 'commitment');
+      recordAppraisalDecision(jobs, entry, prefixes.jobPrefix, 'job');
+    }
+  });
+  return { commitments: finalizeReconciliation(commitments), jobs: finalizeReconciliation(jobs) };
+}
+
+/**
  * 委譲（`Job`）のうち、いま「手が離れている」状態を「終端」と呼ぶ。
  *
  * **`running` / `waiting_human` は含めない**——どちらもまだ続く可能性がある
@@ -310,6 +468,32 @@ function renderTally(tally: AppraisalDecisionTally): string {
   return `評定行 ${tally.total} 件（${parts} / 上の3値以外 ${tally.other}）`;
 }
 
+/** `AppraisalValue | 'other'` を日本語のラベルへ（3値以外はそのまま返す）。 */
+function renderReconciliationValue(value: AppraisalValue | 'other'): string {
+  const known = appraisalSchema.safeParse(value);
+  return known.success ? appraisalTallyLabel(known.data) : value;
+}
+
+function renderReconciliation(rec: AppraisalReconciliation): string[] {
+  const lines: string[] = [];
+  if (rec.totalPairs === 0) {
+    lines.push('（クローンが付けた評定を人間が付け直した対は無い）');
+  } else {
+    for (const t of rec.transitions) {
+      const mark = t.cloneValue === t.humanValue ? '一致' : '食い違い';
+      lines.push(
+        `- クローン「${renderReconciliationValue(t.cloneValue)}」→人間「${renderReconciliationValue(t.humanValue)}」: ${t.count} 件（${mark}）`,
+      );
+    }
+    lines.push(`合計: ${rec.totalPairs} 対（一致 ${rec.matched} / 食い違い ${rec.mismatched}）。`);
+  }
+  lines.push(
+    `⚠️ 判定できない（id または「誰が付けたか」が復元できなかった）評定行: ${rec.undetermined} 件` +
+      '（0件は「無かった」であって「測っていない」ではない）。',
+  );
+  return lines;
+}
+
 /**
  * `appraisal_stats` 道具（MCP）が返す文面を組む。
  *
@@ -323,8 +507,9 @@ function renderTally(tally: AppraisalDecisionTally): string {
 export function describeAppraisalStats(input: {
   journal: AppraisalJournalStats;
   jobCoverage: JobAppraisalCoverage;
+  reconciliation: AppraisalReconciliationStats;
 }): string {
-  const { journal, jobCoverage } = input;
+  const { journal, jobCoverage, reconciliation } = input;
 
   const lines: string[] = [];
   lines.push(
@@ -356,6 +541,20 @@ export function describeAppraisalStats(input: {
   lines.push(
     `（参考・この集計の対象外: running/waiting_human で終端していない委譲が ${jobCoverage.nonTerminalTotal} 件。` +
       'まだ続きうるので「評定が無い」を欠落として数えていない）',
+  );
+  lines.push('');
+  lines.push(
+    '## (b) 人間 と (c) クローンの食い違い（#1055 段4。クローンが付けた評定を人間が後から付け直した対）',
+  );
+  lines.push('');
+  lines.push('### 引き受けた仕事（COMMITMENT_APPRAISAL_DECISION_PREFIX）');
+  lines.push(...renderReconciliation(reconciliation.commitments));
+  lines.push('');
+  lines.push('### 委譲（JOB_APPRAISAL_DECISION_PREFIX）');
+  lines.push(...renderReconciliation(reconciliation.jobs));
+  lines.push('');
+  lines.push(
+    '⚠️ 上の2つもここまでの節と同じく別の軸である。混ぜて比べないこと。',
   );
   return lines.join('\n');
 }

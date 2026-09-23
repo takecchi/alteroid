@@ -74,6 +74,7 @@ import { classifyManagerActivity, describeReportDrift } from './manager-activity
 import type { ManagerActivityInput } from './manager-activity.js';
 import {
   computeAppraisalJournalStats,
+  computeAppraisalReconciliation,
   computeJobAppraisalCoverage,
   describeAppraisalStats,
   isTerminalJobStatus,
@@ -135,6 +136,7 @@ import {
 } from './schedule.js';
 import type { ScheduleStatus } from './schedule.js';
 import {
+  COMMITMENT_APPRAISAL_CLONE_GROUNDS,
   COMMITMENT_APPRAISAL_DECISION_PREFIX,
   JOB_APPRAISAL_DECISION_PREFIX,
   JOURNAL_ENTRY_TYPES,
@@ -2319,7 +2321,15 @@ async function writeAppraisal(
         reason,
         previous,
       }),
-      grounds: 'クローン自身が付けた評定（人間はこれを読んで後から覆す）',
+      grounds: COMMITMENT_APPRAISAL_CLONE_GROUNDS,
+      appraisal: {
+        target: 'commitment',
+        id,
+        value,
+        by: 'clone',
+        previous: before?.appraisal,
+        previousBy: before?.appraisedBy,
+      },
     },
     'act-completed',
   );
@@ -6661,20 +6671,27 @@ export function createCloneTools(context: ToolContext) {
           '評定が1度も付いていない件数を出す' +
           `（${jobStatusSchema.options.filter((s) => !isTerminalJobStatus(s)).join('/')} はまだ続きうるので対象外` +
           '——件数だけ参考として添える）。',
+        '加えて、クローンが付けた評定を人間が後から付け直した対を数え（#1055 段4の較正の材料）、' +
+          '値の遷移ごとの件数・一致/食い違い・復元できなかった件数を出す。',
       ].join(' '),
       {},
       async () => {
-        const [journalStats, jobs] = await Promise.all([
+        const [journalStats, jobs, reconciliation] = await Promise.all([
           computeAppraisalJournalStats(stores.journal, {
             commitmentPrefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
             jobPrefix: JOB_APPRAISAL_DECISION_PREFIX,
           }),
           stores.jobs.listJobs(),
+          computeAppraisalReconciliation(stores.journal, {
+            commitmentPrefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
+            jobPrefix: JOB_APPRAISAL_DECISION_PREFIX,
+          }),
         ]);
         return text(
           describeAppraisalStats({
             journal: journalStats,
             jobCoverage: computeJobAppraisalCoverage(jobs),
+            reconciliation,
           }),
         );
       },

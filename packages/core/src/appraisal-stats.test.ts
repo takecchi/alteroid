@@ -2,23 +2,38 @@ import { describe, expect, it } from 'vitest';
 
 import {
   computeAppraisalJournalStats,
+  computeAppraisalReconciliation,
   computeJobAppraisalCoverage,
   describeAppraisalStats,
   isTerminalJobStatus,
   tallyAppraisalDecisions,
+  type AppraisalReconciliationStats,
 } from './appraisal-stats.js';
 import { JOURNAL_SCAN_PAGE_SIZE } from './journal-scan.js';
 import { createSyntheticJournalStore } from './journal-scan.test-support.js';
 import {
+  COMMITMENT_APPRAISAL_CLONE_GROUNDS,
   COMMITMENT_APPRAISAL_DECISION_PREFIX,
+  COMMITMENT_APPRAISAL_HUMAN_GROUNDS,
   formatAppraisalDecision,
+  inferAppraisedByFromGrounds,
+  JOB_APPRAISAL_CLONE_GROUNDS,
   JOB_APPRAISAL_DECISION_PREFIX,
+  JOB_APPRAISAL_HUMAN_GROUNDS,
+  parseAppraisalDecisionId,
   parseAppraisalDecisionValue,
   type Job,
   type JobStatus,
   type JournalEntry,
+  type JournalEntryInput,
 } from './schema.js';
 import { createMemoryStores } from './testing.js';
+
+/** {@link describeAppraisalStats} のテスト向け——対の食い違いが無い、空の reconciliation。 */
+function emptyReconciliation(): AppraisalReconciliationStats {
+  const empty = { transitions: [], totalPairs: 0, matched: 0, mismatched: 0, undetermined: 0 };
+  return { commitments: { ...empty }, jobs: { ...empty } };
+}
 
 const T1 = '2026-08-01T00:00:00.000Z';
 
@@ -288,6 +303,395 @@ describe('computeAppraisalJournalStats — ストアをページ送りで読み�
   });
 });
 
+describe('parseAppraisalDecisionId / inferAppraisedByFromGrounds — 過去の行の復元に使う2つの純関数（#1310）', () => {
+  it('formatAppraisalDecision が組んだ本文から id を読み解ける（reason・previous 併記でも崩れない）', () => {
+    const decision = formatAppraisalDecision({
+      prefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
+      id: 'c-abc-123',
+      value: 'bad',
+      reason: '差し戻し',
+      previous: '評定: うまくいった（good・clone）',
+    });
+    expect(parseAppraisalDecisionId(decision, COMMITMENT_APPRAISAL_DECISION_PREFIX)).toBe(
+      'c-abc-123',
+    );
+  });
+
+  it('prefix で始まらない行は undefined', () => {
+    expect(parseAppraisalDecisionId('無関係な行', COMMITMENT_APPRAISAL_DECISION_PREFIX)).toBeUndefined();
+  });
+
+  it('prefix の直後が「（」でない壊れた行は undefined（id が復元できない）', () => {
+    expect(
+      parseAppraisalDecisionId(
+        `${COMMITMENT_APPRAISAL_DECISION_PREFIX}壊れている`,
+        COMMITMENT_APPRAISAL_DECISION_PREFIX,
+      ),
+    ).toBeUndefined();
+  });
+
+  it('区切り「）: 」が無い行は undefined', () => {
+    expect(
+      parseAppraisalDecisionId(
+        `${COMMITMENT_APPRAISAL_DECISION_PREFIX}（c1）壊れている`,
+        COMMITMENT_APPRAISAL_DECISION_PREFIX,
+      ),
+    ).toBeUndefined();
+  });
+
+  it('台帳・クローン/人間の grounds を正しく判別する', () => {
+    expect(inferAppraisedByFromGrounds(COMMITMENT_APPRAISAL_CLONE_GROUNDS, 'commitment')).toBe(
+      'clone',
+    );
+    expect(inferAppraisedByFromGrounds(COMMITMENT_APPRAISAL_HUMAN_GROUNDS, 'commitment')).toBe(
+      'human',
+    );
+  });
+
+  it('委譲・クローン/人間の grounds を正しく判別する', () => {
+    expect(inferAppraisedByFromGrounds(JOB_APPRAISAL_CLONE_GROUNDS, 'job')).toBe('clone');
+    expect(inferAppraisedByFromGrounds(JOB_APPRAISAL_HUMAN_GROUNDS, 'job')).toBe('human');
+  });
+
+  it('軸を取り違えると判別できない（台帳の文面を委譲の軸で読まない）', () => {
+    expect(inferAppraisedByFromGrounds(COMMITMENT_APPRAISAL_CLONE_GROUNDS, 'job')).toBeUndefined();
+    expect(inferAppraisedByFromGrounds(JOB_APPRAISAL_CLONE_GROUNDS, 'commitment')).toBeUndefined();
+  });
+
+  it('未知の文面は undefined（判定できないという3つ目の状態）', () => {
+    expect(inferAppraisedByFromGrounds('見たことが無い文面', 'commitment')).toBeUndefined();
+  });
+});
+
+describe('computeAppraisalReconciliation — (b) 人間 と (c) クローンの食い違いを時系列で数える（#1310）', () => {
+  /** 構造欄ありの評定行を1件組み立てる（新形式）。 */
+  function structuredEntry(params: {
+    prefix: string;
+    target: 'commitment' | 'job';
+    id: string;
+    value: 'good' | 'bad' | 'unclear';
+    by: 'clone' | 'human';
+    previous?: string;
+    previousBy?: string;
+  }): JournalEntryInput {
+    const { prefix, target, id, value, by, previous, previousBy } = params;
+    return {
+      type: 'decision',
+      decision: formatAppraisalDecision({
+        prefix,
+        id,
+        value,
+        reason: undefined,
+        previous: previous ?? null,
+      }),
+      grounds:
+        target === 'commitment'
+          ? by === 'clone'
+            ? COMMITMENT_APPRAISAL_CLONE_GROUNDS
+            : COMMITMENT_APPRAISAL_HUMAN_GROUNDS
+          : by === 'clone'
+            ? JOB_APPRAISAL_CLONE_GROUNDS
+            : JOB_APPRAISAL_HUMAN_GROUNDS,
+      appraisal: { target, id, value, by, previous, previousBy },
+    };
+  }
+
+  const prefixes = {
+    commitmentPrefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
+    jobPrefix: JOB_APPRAISAL_DECISION_PREFIX,
+  };
+
+  it('クローン→人間で同じ値に付け直した対は「一致」', async () => {
+    const stores = createMemoryStores();
+    await stores.journal.append(
+      structuredEntry({
+        prefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
+        target: 'commitment',
+        id: 'c1',
+        value: 'good',
+        by: 'clone',
+      }),
+    );
+    await stores.journal.append(
+      structuredEntry({
+        prefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
+        target: 'commitment',
+        id: 'c1',
+        value: 'good',
+        by: 'human',
+        previous: 'good',
+        previousBy: 'clone',
+      }),
+    );
+    const rec = await computeAppraisalReconciliation(stores.journal, prefixes);
+    expect(rec.commitments.totalPairs).toBe(1);
+    expect(rec.commitments.matched).toBe(1);
+    expect(rec.commitments.mismatched).toBe(0);
+    expect(rec.commitments.transitions).toEqual([
+      { cloneValue: 'good', humanValue: 'good', count: 1 },
+    ]);
+    expect(rec.commitments.undetermined).toBe(0);
+    expect(rec.jobs.totalPairs).toBe(0);
+  });
+
+  it('クローン→人間で違う値に付け直した対は「食い違い」', async () => {
+    const stores = createMemoryStores();
+    await stores.journal.append(
+      structuredEntry({
+        prefix: JOB_APPRAISAL_DECISION_PREFIX,
+        target: 'job',
+        id: 'm1',
+        value: 'good',
+        by: 'clone',
+      }),
+    );
+    await stores.journal.append(
+      structuredEntry({
+        prefix: JOB_APPRAISAL_DECISION_PREFIX,
+        target: 'job',
+        id: 'm1',
+        value: 'bad',
+        by: 'human',
+        previous: 'good',
+        previousBy: 'clone',
+      }),
+    );
+    const rec = await computeAppraisalReconciliation(stores.journal, prefixes);
+    expect(rec.jobs.totalPairs).toBe(1);
+    expect(rec.jobs.matched).toBe(0);
+    expect(rec.jobs.mismatched).toBe(1);
+    expect(rec.jobs.transitions).toEqual([{ cloneValue: 'good', humanValue: 'bad', count: 1 }]);
+    expect(rec.commitments.totalPairs).toBe(0);
+  });
+
+  it('人間による最初の評定（直前が無い）は対に数えない', async () => {
+    const stores = createMemoryStores();
+    await stores.journal.append(
+      structuredEntry({
+        prefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
+        target: 'commitment',
+        id: 'c1',
+        value: 'good',
+        by: 'human',
+      }),
+    );
+    const rec = await computeAppraisalReconciliation(stores.journal, prefixes);
+    expect(rec.commitments.totalPairs).toBe(0);
+    expect(rec.commitments.undetermined).toBe(0);
+  });
+
+  it('クローン→クローン、人間→人間の付け直しは対に数えない（クローン→人間だけを数える）', async () => {
+    const stores = createMemoryStores();
+    const base = { prefix: COMMITMENT_APPRAISAL_DECISION_PREFIX, target: 'commitment' as const, id: 'c1' };
+    await stores.journal.append(structuredEntry({ ...base, value: 'good', by: 'clone' }));
+    await stores.journal.append(structuredEntry({ ...base, value: 'bad', by: 'clone' })); // clone→clone: 対に数えない
+    await stores.journal.append(structuredEntry({ ...base, value: 'unclear', by: 'human' })); // clone(bad)→human(unclear): 数える
+    await stores.journal.append(structuredEntry({ ...base, value: 'good', by: 'human' })); // human→human: 対に数えない
+    const rec = await computeAppraisalReconciliation(stores.journal, prefixes);
+    expect(rec.commitments.totalPairs).toBe(1);
+    expect(rec.commitments.transitions).toEqual([
+      { cloneValue: 'bad', humanValue: 'unclear', count: 1 },
+    ]);
+  });
+
+  it('過去の行（構造欄が無い）でも grounds ・ decision 文面から対を復元できる', async () => {
+    const stores = createMemoryStores();
+    // 構造欄を持たない、#1310 より前の形の行をそのまま再現する。
+    await stores.journal.append({
+      type: 'decision',
+      decision: formatAppraisalDecision({
+        prefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
+        id: 'c1',
+        value: 'good',
+        reason: undefined,
+        previous: null,
+      }),
+      grounds: COMMITMENT_APPRAISAL_CLONE_GROUNDS,
+    });
+    await stores.journal.append({
+      type: 'decision',
+      decision: formatAppraisalDecision({
+        prefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
+        id: 'c1',
+        value: 'bad',
+        reason: undefined,
+        previous: '評定: うまくいった（good・clone）',
+      }),
+      grounds: COMMITMENT_APPRAISAL_HUMAN_GROUNDS,
+    });
+    const rec = await computeAppraisalReconciliation(stores.journal, prefixes);
+    expect(rec.commitments.totalPairs).toBe(1);
+    expect(rec.commitments.mismatched).toBe(1);
+    expect(rec.commitments.transitions).toEqual([
+      { cloneValue: 'good', humanValue: 'bad', count: 1 },
+    ]);
+  });
+
+  it('id が復元できない壊れた行は undetermined へ計上し、対には数えない（0に倒さない）', async () => {
+    const stores = createMemoryStores();
+    await stores.journal.append({
+      type: 'decision',
+      decision: `${COMMITMENT_APPRAISAL_DECISION_PREFIX}壊れている`,
+      grounds: COMMITMENT_APPRAISAL_CLONE_GROUNDS,
+    });
+    const rec = await computeAppraisalReconciliation(stores.journal, prefixes);
+    expect(rec.commitments.undetermined).toBe(1);
+    expect(rec.commitments.totalPairs).toBe(0);
+  });
+
+  it('grounds が未知の文面だと「誰が付けたか」が復元できず undetermined へ計上する', async () => {
+    const stores = createMemoryStores();
+    await stores.journal.append({
+      type: 'decision',
+      decision: formatAppraisalDecision({
+        prefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
+        id: 'c1',
+        value: 'good',
+        reason: undefined,
+        previous: null,
+      }),
+      grounds: '見たことが無い文面',
+    });
+    const rec = await computeAppraisalReconciliation(stores.journal, prefixes);
+    expect(rec.commitments.undetermined).toBe(1);
+    expect(rec.commitments.totalPairs).toBe(0);
+  });
+
+  it('台帳と委譲は混ぜない（同じ id 文字列でも軸ごとに独立に数える）', async () => {
+    const stores = createMemoryStores();
+    await stores.journal.append(
+      structuredEntry({
+        prefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
+        target: 'commitment',
+        id: 'shared-id',
+        value: 'good',
+        by: 'clone',
+      }),
+    );
+    await stores.journal.append(
+      structuredEntry({
+        prefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
+        target: 'commitment',
+        id: 'shared-id',
+        value: 'bad',
+        by: 'human',
+      }),
+    );
+    await stores.journal.append(
+      structuredEntry({
+        prefix: JOB_APPRAISAL_DECISION_PREFIX,
+        target: 'job',
+        id: 'shared-id',
+        value: 'good',
+        by: 'clone',
+      }),
+    );
+    await stores.journal.append(
+      structuredEntry({
+        prefix: JOB_APPRAISAL_DECISION_PREFIX,
+        target: 'job',
+        id: 'shared-id',
+        value: 'good',
+        by: 'human',
+      }),
+    );
+    const rec = await computeAppraisalReconciliation(stores.journal, prefixes);
+    expect(rec.commitments.totalPairs).toBe(1);
+    expect(rec.commitments.mismatched).toBe(1);
+    expect(rec.jobs.totalPairs).toBe(1);
+    expect(rec.jobs.matched).toBe(1);
+  });
+
+  it('同じ組の遷移は件数へ集約し、件数の多い順に並ぶ', async () => {
+    const stores = createMemoryStores();
+    const pair = async (id: string, cloneValue: 'good' | 'bad' | 'unclear', humanValue: 'good' | 'bad' | 'unclear') => {
+      await stores.journal.append(
+        structuredEntry({
+          prefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
+          target: 'commitment',
+          id,
+          value: cloneValue,
+          by: 'clone',
+        }),
+      );
+      await stores.journal.append(
+        structuredEntry({
+          prefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
+          target: 'commitment',
+          id,
+          value: humanValue,
+          by: 'human',
+        }),
+      );
+    };
+    await pair('c1', 'good', 'bad');
+    await pair('c2', 'good', 'bad');
+    await pair('c3', 'good', 'unclear');
+    const rec = await computeAppraisalReconciliation(stores.journal, prefixes);
+    expect(rec.commitments.totalPairs).toBe(3);
+    expect(rec.commitments.transitions).toEqual([
+      { cloneValue: 'good', humanValue: 'bad', count: 2 },
+      { cloneValue: 'good', humanValue: 'unclear', count: 1 },
+    ]);
+  });
+
+  /**
+   * ページをまたいでも、同じ id の「直前の評定」を正しく参照できることを
+   * 測る（#1342 の走査を崩さないこと）。`computeAppraisalJournalStats` の
+   * 「1ページを超える母集団でも全件数える」歯と同じ手（1ページより大きい
+   * 母集団を `createSyntheticJournalStore` で作る）を、時系列（`asc`）側に
+   * 対して当てる。
+   */
+  it('ページ送りをまたいでも id の直前の評定を正しく引き継ぐ', async () => {
+    const total = 700; // JOURNAL_SCAN_PAGE_SIZE(500) を超える母集団
+    const synthetic = createSyntheticJournalStore({
+      total,
+      entryAt: (index) => {
+        // index は「0が最新・total-1が最古」。asc 走査は total-1 から読む。
+        if (index === total - 1) {
+          // 最も古い行——クローンが最初に good を付けた。
+          return structuredEntry({
+            prefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
+            target: 'commitment',
+            id: 'p1',
+            value: 'good',
+            by: 'clone',
+          });
+        }
+        if (index === 0) {
+          // 最も新しい行——人間が bad へ覆した。ページをまたいだ先の
+          // 「直前の評定」（上のクローンの行）を引き継げるかを測る。
+          return structuredEntry({
+            prefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
+            target: 'commitment',
+            id: 'p1',
+            value: 'bad',
+            by: 'human',
+            previous: 'good',
+            previousBy: 'clone',
+          });
+        }
+        // 埋め草——どちらの印にも当たらない decision 行。
+        return { type: 'decision', decision: `無関係な行 ${index}`, grounds: '' };
+      },
+    });
+
+    const rec = await computeAppraisalReconciliation(synthetic.store, prefixes);
+    expect(rec.commitments.totalPairs).toBe(1);
+    expect(rec.commitments.mismatched).toBe(1);
+    expect(rec.commitments.transitions).toEqual([
+      { cloneValue: 'good', humanValue: 'bad', count: 1 },
+    ]);
+
+    // ページ送りが実際に複数回起きたこと、かつ時系列（asc）で読んだことを確認する
+    // ——これが無いと、上の一致は「たまたま1ページに収まった」でも成立してしまう。
+    expect(synthetic.calls.length).toBeGreaterThan(1);
+    for (const call of synthetic.calls) {
+      expect(call.order).toBe('asc');
+    }
+  });
+});
+
 describe('isTerminalJobStatus — running/waiting_human だけが非終端', () => {
   const cases: Array<[JobStatus, boolean]> = [
     ['running', false],
@@ -360,6 +764,7 @@ describe('describeAppraisalStats — MCP/HTTP が読む文面（2つの印を混
         job('a', { status: 'done', appraisal: 'good' }),
         job('b', { status: 'stopped' }),
       ]),
+      reconciliation: emptyReconciliation(),
     });
     expect(text).toContain('引き受けた仕事');
     expect(text).toContain('委譲');
@@ -367,5 +772,47 @@ describe('describeAppraisalStats — MCP/HTTP が読む文面（2つの印を混
     expect(text).toContain('114');
     expect(text).toContain('混ぜて比べないこと');
     expect(text).toContain('評定なし');
+  });
+
+  it('(b)/(c) の食い違いの節を出す——対が無ければそう明記し、判定できない件数も出す', () => {
+    const text = describeAppraisalStats({
+      journal: {
+        commitments: { good: 1, bad: 0, unclear: 0, other: 0, total: 1 },
+        jobs: { good: 0, bad: 0, unclear: 0, other: 0, total: 0 },
+      },
+      jobCoverage: computeJobAppraisalCoverage([]),
+      reconciliation: {
+        commitments: { transitions: [], totalPairs: 0, matched: 0, mismatched: 0, undetermined: 3 },
+        jobs: { transitions: [], totalPairs: 0, matched: 0, mismatched: 0, undetermined: 0 },
+      },
+    });
+    expect(text).toContain('(b) 人間 と (c) クローンの食い違い');
+    expect(text).toContain('対は無い');
+    // undetermined は0に倒さず、件数がそのまま出る。
+    expect(text).toContain('判定できない');
+    expect(text).toContain('3 件');
+  });
+
+  it('対が在れば値の遷移・一致/食い違いの件数が出る', () => {
+    const text = describeAppraisalStats({
+      journal: {
+        commitments: { good: 0, bad: 0, unclear: 0, other: 0, total: 0 },
+        jobs: { good: 0, bad: 0, unclear: 0, other: 0, total: 0 },
+      },
+      jobCoverage: computeJobAppraisalCoverage([]),
+      reconciliation: {
+        commitments: {
+          transitions: [{ cloneValue: 'good', humanValue: 'bad', count: 4 }],
+          totalPairs: 4,
+          matched: 0,
+          mismatched: 4,
+          undetermined: 0,
+        },
+        jobs: { transitions: [], totalPairs: 0, matched: 0, mismatched: 0, undetermined: 0 },
+      },
+    });
+    expect(text).toContain('4 件');
+    expect(text).toContain('食い違い');
+    expect(text).toContain('一致 0');
   });
 });

@@ -35,10 +35,12 @@ import {
   commitmentPosition,
   commitmentRespondedAt,
   COMMITMENT_APPRAISAL_DECISION_PREFIX,
+  COMMITMENT_APPRAISAL_HUMAN_GROUNDS,
   JOB_APPRAISAL_DECISION_PREFIX,
   appraisalSchema,
   commitmentUpdatedAt,
   computeAppraisalJournalStats,
+  computeAppraisalReconciliation,
   computeJobAppraisalCoverage,
   describeAppraisal,
   formatAppraisalDecision,
@@ -3497,7 +3499,15 @@ export function createApp(deps: AppDeps) {
             reason,
             previous,
           }),
-          grounds: '人間が直接 API から付けた（クローンの評定を覆したならその前の値も上に在る）',
+          grounds: COMMITMENT_APPRAISAL_HUMAN_GROUNDS,
+          appraisal: {
+            target: 'commitment',
+            id,
+            value: appraisal,
+            by: 'human',
+            previous: before.appraisal,
+            previousBy: before.appraisedBy,
+          },
         });
         return c.json(okResponseSchema.parse({ ok: true }));
       },
@@ -5508,6 +5518,12 @@ export function createApp(deps: AppDeps) {
      * **クエリ引数は無い。** 出力は母集団の件数に関わらず固定個数の集計値
      * なので、`/dropped` と違って「上限を持たない」を明示する必要も無い
      * （そもそも上限という概念が無い）。
+     *
+     * **`reconciliation`（#1310）は (b) 人間 と (c) クローンの食い違いの
+     * 数え上げである** —— クローンが付けた評定を人間が後から付け直した対を
+     * `id` の時系列で復元し、(クローンの値 → 人間の値) の組ごとに数える。
+     * `computeAppraisalReconciliation` は日誌を `asc`（時系列）で読み直す
+     * ため、`journal` / `jobCoverage` とは独立したもう1回の走査になる。
      */
     .get(
       '/appraisal-stats',
@@ -5520,7 +5536,10 @@ export function createApp(deps: AppDeps) {
           'decision 行を先頭一致で数えた全期間の総数——2つは別の軸なので混ぜて ' +
           '読まないこと。`jobCoverage` は終端した委譲（done/failed/lost/stopped）を ' +
           '状態ごとに割った評定の有無の内訳で、running/waiting_human は対象外 ' +
-          '（`nonTerminalTotal` に件数だけ出す）。',
+          '（`nonTerminalTotal` に件数だけ出す）。`reconciliation` はクローンが' +
+          '付けた評定を人間が付け直した対を数えた較正の材料（#1055 段4）で、' +
+          '`commitments` / `jobs` の軸ごとに `transitions`（値の遷移の内訳）・' +
+          '`matched` / `mismatched`・復元できなかった件数（`undetermined`）を持つ。',
         responses: {
           200: {
             description: '評定の内訳。',
@@ -5529,17 +5548,22 @@ export function createApp(deps: AppDeps) {
         },
       }),
       async (c) => {
-        const [journalStats, jobs] = await Promise.all([
+        const [journalStats, jobs, reconciliation] = await Promise.all([
           computeAppraisalJournalStats(stores.journal, {
             commitmentPrefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
             jobPrefix: JOB_APPRAISAL_DECISION_PREFIX,
           }),
           stores.jobs.listJobs(),
+          computeAppraisalReconciliation(stores.journal, {
+            commitmentPrefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
+            jobPrefix: JOB_APPRAISAL_DECISION_PREFIX,
+          }),
         ]);
         return c.json(
           appraisalStatsResponseSchema.parse({
             journal: journalStats,
             jobCoverage: computeJobAppraisalCoverage(jobs),
+            reconciliation,
           }),
         );
       },
