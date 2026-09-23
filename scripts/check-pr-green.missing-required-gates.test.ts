@@ -177,6 +177,86 @@ describe('findMissingRequiredGates', () => {
     expect(result.missing).not.toContain('no-attribution-trailers');
     expect(result.missing).toHaveLength(1);
   });
+
+  it('INV7: --repo が既定（takecchi/alteroid）以外（crossRepo=true）は、真に欠けている門があっても不活性', () => {
+    // この repo の宣言ファイル（.github/required-status-checks.json）は
+    // takecchi/alteroid の required contexts であって、他の repo の
+    // required contexts ではない。他の repo の sha にそのまま当てると、
+    // 「その repo に在る門」を「無い」と誤判定する——不活性にする。
+    const jobsByRunId = {
+      1: [{ name: 'ci', status: 'completed', conclusion: 'success' }],
+    };
+    const result = findMissingRequiredGates({
+      requiredContexts: REQUIRED,
+      verdict: 'green',
+      scoped: false,
+      crossRepo: true,
+      latestRuns: oneRun,
+      jobsByRunId,
+    });
+    expect(result.status).toBe('inactive');
+    expect(result.missing).toBeUndefined();
+  });
+
+  it('INV7 の負の対照: crossRepo=false（既定 repo）なら同じ job 構成でも検出が働く（crossRepo だけが不活性化の理由であること）', () => {
+    const jobsByRunId = {
+      1: [{ name: 'ci', status: 'completed', conclusion: 'success' }],
+    };
+    const result = findMissingRequiredGates({
+      requiredContexts: REQUIRED,
+      verdict: 'green',
+      scoped: false,
+      crossRepo: false,
+      latestRuns: oneRun,
+      jobsByRunId,
+    });
+    expect(result.status).toBe('checked');
+    expect(result.missing.length).toBeGreaterThan(0);
+  });
+
+  /**
+   * 実測の回帰（Issue #1290 のコメント。マネージャーが本物の GitHub データで
+   * 検証した標本）: sha `b217ba51f781a4224a095257b5f1546261b24911`
+   * （PR #859 の head、2026-09-11）。`no-attribution-trailers` という門が
+   * まだ存在しなかった時代の sha なので、required 3本のうち1本の
+   * check-run が本当に0本——2026-09-22 の事故と同型の「静かな見逃し」を
+   * 実物のデータで再現する。
+   *
+   * 実測（`gh api repos/takecchi/alteroid/actions/runs?head_sha=b217ba51…`
+   * および `.../actions/runs/34655158167/jobs`）: 最新世代は `CI` の run
+   * `34655158167`（`event=pull_request`）1本だけで、jobs は
+   * `base-overlap` / `ci` / `image` / `pr-origin` の4本ともすべて
+   * `success`。
+   */
+  it('実測の回帰（PR #859、sha b217ba51…）: no-attribution-trailers が存在しない時代の sha でも missing に載る', () => {
+    const latestRuns = [
+      {
+        id: 34655158167,
+        name: 'CI',
+        event: 'pull_request',
+        created_at: '2026-09-11T22:42:25Z',
+        status: 'completed',
+        conclusion: 'success',
+      },
+    ];
+    const jobsByRunId = {
+      34655158167: [
+        { name: 'base-overlap', status: 'completed', conclusion: 'success' },
+        { name: 'ci', status: 'completed', conclusion: 'success' },
+        { name: 'image', status: 'completed', conclusion: 'success' },
+        { name: 'pr-origin', status: 'completed', conclusion: 'success' },
+      ],
+    };
+    const result = findMissingRequiredGates({
+      requiredContexts: REQUIRED,
+      verdict: 'green', // evaluatePrGreen はこの標本を green と言う（マネージャーの実測どおり）
+      scoped: false,
+      crossRepo: false,
+      latestRuns,
+      jobsByRunId,
+    });
+    expect(result).toEqual({ status: 'checked', missing: ['no-attribution-trailers'] });
+  });
 });
 
 describe('formatMissingRequiredGates', () => {
@@ -186,6 +266,63 @@ describe('formatMissingRequiredGates', () => {
     expect(lines[0]).toContain('no-attribution-trailers');
     expect(lines[0]).toContain('branch protection');
     expect(text).toContain('pnpm check:required-status-checks');
+  });
+
+  /**
+   * INV6（マネージャーの実測で見つかった穴）: PR #1313 を本物の sha
+   * （b217ba51…）で確かめたところ、`missingRequiredGates` が発火した直後に
+   * `check-pr-green(sha): OK —— 最新世代の job がすべて success` という、
+   * 道具名から始まり単独の判定として読める行が出ていた。`OK` で grep する
+   * 読み手はその行だけを見て緑だと誤読する（exit code は 1 でもテキストの
+   * 経路には乗らない）。⟹ `result` を渡したときは、その行が二度と現れない
+   * ことを固定する。
+   */
+  it('INV6: result（verdict=green）を渡しても、単独の判定として読める "OK" 行が現れない', () => {
+    const result = {
+      verdict: 'green',
+      detail: ['ci（workflow=CI, run=1）= success', 'image（workflow=CI, run=1）= success'],
+    };
+    const text = formatMissingRequiredGates('abc123', ['no-attribution-trailers'], result);
+    const lines = text.split('\n');
+    // `check-pr-green(...):` を先頭に持つ行は、欠落を名指しした1行目だけ
+    // であること（2行目以降に道具名で始まる新しい判定行が生まれない）。
+    const verdictLikeLines = lines.filter((line: string) =>
+      /^check-pr-green\(.*\):/.test(line.trim()),
+    );
+    expect(verdictLikeLines).toHaveLength(1);
+    // "OK" という文字列そのものが、単独の判定として読める形
+    // （行頭が "OK" または "): OK" のように verdict の位置に来る形）では
+    // 出ないこと。
+    expect(lines.some((line: string) => /:\s*OK\b/.test(line))).toBe(false);
+    // ただし detail（実際に走った job の内訳）は失われず残っている。
+    expect(text).toContain('ci（workflow=CI, run=1）= success');
+  });
+
+  it('INV6 の負の対照: result を渡さなければ従来どおり欠落の警告だけを返す（発火していないときの呼び出し元との互換）', () => {
+    const text = formatMissingRequiredGates('abc123', ['no-attribution-trailers']);
+    const lines = text.split('\n');
+    const verdictLikeLines = lines.filter((line: string) =>
+      /^check-pr-green\(.*\):/.test(line.trim()),
+    );
+    expect(verdictLikeLines).toHaveLength(1);
+  });
+
+  it('INV6: verdict=red と missing 非空が同時に起きても、上から読んで意味が通る（NG が2つ並ぶが、2つ目は従属節でありOKではない）', () => {
+    const result = {
+      verdict: 'red',
+      detail: ['ci（workflow=CI, run=1）= failure'],
+    };
+    const text = formatMissingRequiredGates('abc123', ['no-attribution-trailers'], result);
+    const lines = text.split('\n');
+    const verdictLikeLines = lines.filter((line: string) =>
+      /^check-pr-green\(.*\):/.test(line.trim()),
+    );
+    // 道具名で始まる行はやはり1行だけ——2つ目の NG は「加えて」から始まる
+    // 従属節であり、独立した2本目の check-pr-green(...) 行にはならない。
+    expect(verdictLikeLines).toHaveLength(1);
+    expect(lines.some((line: string) => /:\s*OK\b/.test(line))).toBe(false);
+    expect(text).toContain('加えて');
+    expect(text).toContain('ci（workflow=CI, run=1）= failure');
   });
 });
 
@@ -320,5 +457,63 @@ describe('judgeSha の配線: missingRequiredGates', () => {
     const { result, missingRequiredGates } = judgeSha({ sha: SHA, repo: 'takecchi/alteroid' });
     expect(result?.verdict).toBe('pending');
     expect(missingRequiredGates?.status).toBe('inactive');
+  });
+
+  it('INV7 実物同型: --repo が既定以外（fork/他repo）だと、真に欠けている門があっても missingRequiredGates は不活性', () => {
+    // この repo の宣言ファイルは takecchi/alteroid のものなので、他の repo
+    // （例: 誰かの fork）の sha にそのまま当てると「その repo に在る門」を
+    // 「無い」と誤判定する。判定そのものを構造的に不活性にする。
+    mockedExec.mockImplementation(((_cmd: unknown, args: unknown) => {
+      const path = String((args as string[])[1]);
+      if (path.startsWith(`repos/someone/fork/actions/runs?head_sha=${SHA}`)) {
+        return runsJson([
+          {
+            id: 4,
+            name: 'CI',
+            event: 'pull_request',
+            created_at: '2026-09-22T12:00:00Z',
+            status: 'completed',
+            conclusion: 'success',
+          },
+        ]);
+      }
+      if (path === 'repos/someone/fork/actions/runs/4/jobs?per_page=100') {
+        return JSON.stringify({
+          jobs: [{ name: 'ci', status: 'completed', conclusion: 'success' }],
+        });
+      }
+      throw new Error(`unexpected gh api call in test: ${path}`);
+    }) as never);
+
+    const { result, missingRequiredGates } = judgeSha({ sha: SHA, repo: 'someone/fork' });
+    expect(result?.verdict).toBe('green');
+    expect(missingRequiredGates?.status).toBe('inactive');
+  });
+
+  it('INV7 の負の対照: repo を省略しない既定呼び出し（takecchi/alteroid）は crossRepo にならず、同じ job 構成なら検出が働く', () => {
+    mockedExec.mockImplementation(((_cmd: unknown, args: unknown) => {
+      const path = String((args as string[])[1]);
+      if (path.startsWith(`repos/takecchi/alteroid/actions/runs?head_sha=${SHA}`)) {
+        return runsJson([
+          {
+            id: 5,
+            name: 'CI',
+            event: 'pull_request',
+            created_at: '2026-09-22T12:00:00Z',
+            status: 'completed',
+            conclusion: 'success',
+          },
+        ]);
+      }
+      if (path === 'repos/takecchi/alteroid/actions/runs/5/jobs?per_page=100') {
+        return JSON.stringify({
+          jobs: [{ name: 'ci', status: 'completed', conclusion: 'success' }],
+        });
+      }
+      throw new Error(`unexpected gh api call in test: ${path}`);
+    }) as never);
+
+    const { missingRequiredGates } = judgeSha({ sha: SHA, repo: 'takecchi/alteroid' });
+    expect(missingRequiredGates?.status).toBe('checked');
   });
 });

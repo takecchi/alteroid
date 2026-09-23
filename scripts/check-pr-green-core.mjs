@@ -341,6 +341,15 @@ export function evaluatePrGreen(latestRuns, jobsByRunId) {
  *   `pull_request` 専用の run を意図的に落とすので、そのまま当てると
  *   `no-attribution-trailers` のような `pull_request` 専用門を「走って
  *   いない」と誤判定する。**これは真の欠落ではない。**
+ * - **`crossRepo`**（`--repo` で既定の `takecchi/alteroid` 以外の repo を
+ *   指定した呼び出し。INV7）—— `requiredContexts` はこのチェックアウトの
+ *   `.github/required-status-checks.json` から読んでいる。**この宣言は
+ *   `takecchi/alteroid` の required contexts であって、他の repo の required
+ *   contexts ではない。** 他の repo の sha にそのまま当てると、「その repo に
+ *   在る門」を「無い」と誤判定する——不活性にするのはその repo に required な
+ *   門が何かをこちらが知らないからであって、判定を保留しているわけではない。
+ *   **黙って何も言わずに消えると「門が全部在る」（＝ this Issue そのものの
+ *   形）と読めるので、不活性である理由を出力で必ず名乗る**（呼び出し側の仕事）。
  * - **`verdict` が `pending`**—— `judgeSha` は `status !== 'completed'`
  *   の run の jobs を問い合わせない（無駄なので）。⟹ jobsByRunId には
  *   「まだ走っている門」と「生成されなかった門」が同じ「観測されて
@@ -358,10 +367,24 @@ export function evaluatePrGreen(latestRuns, jobsByRunId) {
  * 「run が無い」と混同すると、draft 明けの正常系や `base-overlap` のような
  * 条件付き job まで誤検知する。
  *
+ * ## 実測での回帰（Issue #1290 のコメント。sha `b217ba51f781a4224a095257b5f1546261b24911`、PR #859、2026-09-11）
+ *
+ * `no-attribution-trailers` という門がまだ存在しなかった時代の sha。実測
+ * （`gh api repos/takecchi/alteroid/actions/runs?head_sha=b217ba51…`）では
+ * `CI` の run（`34655158167`）1本だけが最新世代で、jobs は
+ * `base-overlap` / `ci` / `image` / `pr-origin` の4本ともすべて `success`
+ * ——つまり `evaluatePrGreen` は `green` を返す。だが `requiredContexts` に
+ * `no-attribution-trailers` を含めて渡すと、この sha にはその名前の job が
+ * 1本も存在しないので `missing: ['no-attribution-trailers']` になる。**この
+ * 標本がまさに「required なのに run が1本も無い門」を静かに見逃していた
+ * 実例**であり、`check-pr-green.missing-required-gates.test.ts` の
+ * 「実測の回帰（PR #859）」がこの標本をそのまま固定している。
+ *
  * @param {{
  *   requiredContexts: string[],
  *   verdict: string,
  *   scoped: boolean,
+ *   crossRepo: boolean,
  *   latestRuns: {id:number}[],
  *   jobsByRunId: Record<number, {name:string}[]>,
  * }} input
@@ -371,6 +394,7 @@ export function findMissingRequiredGates({
   requiredContexts,
   verdict,
   scoped,
+  crossRepo,
   latestRuns,
   jobsByRunId,
 }) {
@@ -379,6 +403,14 @@ export function findMissingRequiredGates({
       status: 'inactive',
       reason:
         'events で絞った呼び出し（例: record-release-prod-ci.mjs の events:["push"]）のため判定しない',
+    };
+  }
+
+  if (crossRepo) {
+    return {
+      status: 'inactive',
+      reason:
+        '--repo が既定（takecchi/alteroid）以外のため判定しない —— required contexts の宣言はこの repo のものであり、他の repo には当てられない',
     };
   }
 
@@ -395,6 +427,44 @@ export function findMissingRequiredGates({
 }
 
 /**
+ * `evaluatePrGreen` 自身の判定を、**単独の判定としては読めない従属節**へ
+ * 畳む（`findMissingRequiredGates` が発火したときだけ使う内部ヘルパー）。
+ *
+ * ## なぜこれが要るか（INV6）
+ *
+ * `formatVerdict` がそのまま出す `check-pr-green(sha): OK —— …` は、**道具名
+ * で始まり `OK`/`NG` で終わる、単独の判定として読める行**である。required
+ * な門が欠けている（`findMissingRequiredGates` が発火した）ときにこの行を
+ * そのまま並べて出すと、**1行目で NG と言った直後に2行目で `OK` と言う
+ * 出力になる。** `OK` で grep する読み手（人間にもエージェントにも実在する）
+ * は、この2行目だけを見て緑だと誤読する——exit code が 1 であることは、
+ * この誤読を防がない（テキストを読む経路には exit code が乗らない）。
+ * ⟹ **単独の判定として読めない形にする**——道具名のプレフィックスを外し、
+ * 「欠落があるため、この結果だけでは緑の根拠にならない」という前提を
+ * 文の中に埋め込む。
+ */
+function subordinateEvaluateClause(result) {
+  switch (result.verdict) {
+    case 'green':
+      return (
+        '（参考: この欠落とは別に、観測できた門はすべて success だった —— ' +
+        'ただし上の欠落がある以上、これは緑の根拠にならない）'
+      );
+    case 'red':
+      return '（加えて、観測できた門にも success ではない job が在り、それだけでも緑ではない）';
+    case 'cancelled':
+      return '（加えて、観測できた門に中断された job が在り、走り切っていない）';
+    case 'skipped':
+      return '（加えて、観測できた門に draft 由来の疑いが在る skip が残っている）';
+    default:
+      // findMissingRequiredGates は pending/out-of-scope/no-runs/unmeasurable
+      // では常に inactive を返すため、ここに来ることは無いはずだが、
+      // 未知の verdict を黙って握り潰さない（AGENTS.md「静かに失敗する道具」）。
+      return `（evaluatePrGreen 側の判定: ${result.verdict}）`;
+  }
+}
+
+/**
  * `findMissingRequiredGates` が `checked` かつ `missing` を1件以上返したときの
  * 警告文を作る。**1行目で欠けている門を名指しする**（`AGENTS.md`「静かに
  * 失敗する道具」）。
@@ -403,12 +473,22 @@ export function findMissingRequiredGates({
  * 宣言であって、branch protection そのものではない。** 宣言と実際の
  * protection がずれていないかは `pnpm check:required-status-checks` が見る
  * （別の道具。ここでは突き合わせない）。
+ *
+ * `result`（`evaluatePrGreen` の戻り値）を渡すと、その判定を**従属節として**
+ * 追記する——`formatVerdict(sha, result)` をそのまま並べない（INV6。上の
+ * `subordinateEvaluateClause` の doc を見よ）。`result` を渡さない呼び出しは
+ * 欠落の警告だけを返す。
  */
-export function formatMissingRequiredGates(sha, missingNames) {
-  return [
+export function formatMissingRequiredGates(sha, missingNames, result) {
+  const lines = [
     `check-pr-green(${sha}): NG —— required（.github/required-status-checks.json の宣言。branch protection そのものではない）なのに run が1本も無い門: ${missingNames.join(', ')}`,
     '宣言と実際の branch protection がずれていないかは pnpm check:required-status-checks が見る（ここでは突き合わせない）',
-  ].join('\n  ');
+  ];
+  if (result !== undefined && result !== null) {
+    lines.push(subordinateEvaluateClause(result));
+    lines.push(...result.detail);
+  }
+  return lines.join('\n  ');
 }
 
 /**

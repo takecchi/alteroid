@@ -97,6 +97,19 @@
  * `skipped` を「在る」側として扱う理由）は `check-pr-green-core.mjs` の
  * `findMissingRequiredGates` の doc を見よ。**追加のネットワーク呼び出しは
  * しない**——読むのはローカルの宣言ファイルだけである。
+ *
+ * ⚠️ **`--repo` で既定（`takecchi/alteroid`）以外を指定した呼び出しでは、
+ * この検査を不活性にする。** 読んでいる宣言ファイルはこのチェックアウトの
+ * `takecchi/alteroid` のものであり、他の repo の required contexts では
+ * ない——黙って当てると「他の repo に在る門」を「無い」と誤判定する。
+ *
+ * ⚠️ **`main()` は `formatMissingRequiredGates` に `evaluatePrGreen` の結果を
+ * 渡し、`formatVerdict` をそのまま並べて出さない。** 「required なのに run
+ * が無い」と名乗った直後に `check-pr-green(sha): OK —— …` という、道具名
+ * から始まり単独の判定として読める行が出ると、`OK` で grep する読み手が
+ * その行だけを見て緑だと誤読する（exit code は 1 だが、テキストを読む経路
+ * には乗らない）。詳しくは `check-pr-green-core.mjs` の
+ * `subordinateEvaluateClause` の doc を見よ。
  */
 
 import { execFileSync } from 'node:child_process';
@@ -122,6 +135,12 @@ import {
 // あるトークンが要るため、こちらとは別コマンドになっている）。ここでは
 // **追加のネットワーク呼び出しをせず**、ローカルのファイルを読むだけである。
 const DECLARATION_PATH = join(import.meta.dirname, '..', '.github', 'required-status-checks.json');
+
+// この宣言ファイルは `takecchi/alteroid` の required contexts であって、
+// 他の repo の required contexts ではない（INV7）。`--repo` で既定以外を
+// 指定した呼び出しでは `findMissingRequiredGates` を不活性にする根拠として
+// 使う（`judgeSha` を見よ）。
+const DEFAULT_REPO = 'takecchi/alteroid';
 
 /** 宣言ファイルを読む。読めなければ `{ contexts: null, error }` を返す。 */
 function loadRequiredContexts() {
@@ -149,7 +168,7 @@ function logError(text) {
 
 function parseArgs(argv) {
   let sha = null;
-  let repo = 'takecchi/alteroid';
+  let repo = DEFAULT_REPO;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--repo') {
@@ -269,6 +288,12 @@ export function judgeSha({ sha, repo, events }) {
   // その入力になる）——絞り込みは pull_request 専用の run を意図的に
   // 落とすので、そのまま当てると真の欠落でない門を誤検知する。
   const scoped = events !== undefined && events !== null;
+  // `--repo` で既定（`takecchi/alteroid`）以外を指定した呼び出しも同様に
+  // 不活性にする（INV7）——`loadRequiredContexts()` が読むのはこのチェック
+  // アウトの `.github/required-status-checks.json`（`takecchi/alteroid` の
+  // 宣言）であって、他の repo の required contexts ではない。黙って当てると
+  // 「他の repo に在る門」を「無い」と誤判定する。
+  const crossRepo = repo !== DEFAULT_REPO;
   const { contexts: requiredContexts, error: declarationError } = loadRequiredContexts();
   const missingRequiredGates =
     requiredContexts === null
@@ -277,6 +302,7 @@ export function judgeSha({ sha, repo, events }) {
           requiredContexts,
           verdict: result.verdict,
           scoped,
+          crossRepo,
           latestRuns,
           jobsByRunId,
         });
@@ -313,9 +339,15 @@ function main() {
   // Issue #1290: evaluatePrGreen が green でも、required なのに run が
   // 1本も無い門が在れば緑を名乗らない（INV1）。8値の switch には混ぜず、
   // 別の軸として先に名指しする。
+  //
+  // ⚠️ INV6: `formatVerdict(sha, result)` をこの下にそのまま並べない。
+  // それは「check-pr-green(sha): OK —— …」という、単独の判定として読める
+  // 行を作ってしまい、`OK` で grep する読み手が NG の直後の行だけを見て
+  // 緑だと誤読する（exit code は 1 だが、テキストを読む経路には乗らない）。
+  // `formatMissingRequiredGates` に `result` を渡すと、evaluatePrGreen 側の
+  // 判定を単独の判定としては読めない従属節へ畳んで一緒に返す。
   if (missingRequiredGates?.status === 'checked' && missingRequiredGates.missing.length > 0) {
-    logError(formatMissingRequiredGates(sha, missingRequiredGates.missing));
-    logError(formatVerdict(sha, result));
+    logError(formatMissingRequiredGates(sha, missingRequiredGates.missing, result));
     process.exitCode = 1;
     return;
   }
