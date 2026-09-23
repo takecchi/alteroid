@@ -1233,6 +1233,65 @@ function scenarioJudgementIdIntegrity() {
 // 無い。だから「元に戻ったか」は git status ではなく**内容の一致**で見る
 // （`fixtureContentRestoredAfterRealRestore`）。raw な git status も
 // 参考として残す（診断用。値そのものへの期待は置かない）。
+/**
+ * `rebuild-failure` が実演したはずの結末を、機械で主張する（#1166 / #1138）。
+ *
+ * **なぜ要るか**: このシナリオは 13 個の観測値を組み立てて返すが、直すまで機械が
+ * 見ていたのは `statusMentionsDistStage` / `statusShowsCpAsPrimary` の2つだけで、
+ * 残りは `log()` に流れるだけだった。⟹ **`restore` が 0 で終わる・印が残らない・
+ * dist の変異が消えない・後始末が失敗する、のどれが起きても緑のまま通る。**
+ * `assertDeliveryOutcomes` と同じ理由（「戻り値を検査しなければ、判定が化けても
+ * 緑のまま残る」）が、このシナリオにも当たっていた。
+ *
+ * ⚠️ **`gitStatusAfterRealRestore` は主張しない。** 使い捨てフィクスチャは未追跡
+ * ファイルなので、この値は正常な回でも常に非空である（シナリオ自身が逐語で
+ * 「参考のみ」と言っている）。**主張すると、測れないものを測ったことにする側になる。**
+ * 実質的な「綺麗になった」の判定は `fixtureContentRestoredAfterRealRestore` が持つ。
+ *
+ * ⚠️ **この関数だけが export されているのは、同じ族の他の3本と違って単体の歯
+ * （`scripts/mutate-selftest-rebuild-failure-outcomes.test.ts`）を持つためである。**
+ * 他の3本は selftest を CI から走らせることだけで守られている。
+ */
+export function assertRebuildFailureOutcomes(result) {
+  const expected = {
+    // 擬似 pnpm（常に exit 1）で後始末を落とした直後 —— このシナリオの見出しが
+    // 言う「後始末の build が落ちても、印が残り status が知らせる」の当のもの。
+    restoreExitCodeWasNonZero: true,
+    markerLeftAfterFailedRebuild: true,
+    distStillHadMutationRightAfterFailedRebuild: true,
+    // cmdStatus は、印が在って変異が当たったままのとき process.exit(2) で終わる。
+    statusExitCodeAfterFailedRebuild: 2,
+    statusReportedProblemAfterFailedRebuild: true,
+    // 段階の区別（ソースは復元済み・dist 未確認）が出ていること。cp を主経路として
+    // 出すと、次に来た人はソースの復元をやり直して「直った」と誤解する。
+    statusMentionsDistStage: true,
+    statusShowsCpAsPrimary: false,
+    // 本物の pnpm での後始末と、足場の取り外し。
+    finalCleanupOk: true,
+    distCleanAfterRealRestore: true,
+    fixtureContentRestoredAfterRealRestore: true,
+    scaffoldRemovedOk: true,
+    distCleanAfterScaffoldRemoved: true,
+  };
+  const violations = [];
+  for (const [key, want] of Object.entries(expected)) {
+    // undefined / null（＝測れていない）も違反として拾う。
+    const got = result[key] ?? null;
+    if (got !== want) {
+      violations.push(`  - ${key}: 期待 ${JSON.stringify(want)} / 実際 ${JSON.stringify(got)}`);
+    }
+  }
+  if (violations.length > 0) {
+    throw new HarnessError(
+      'rebuild-failure: このシナリオが実演するはずの結末（後始末の build が落ちたら' +
+        '印が残り status が段階を知らせる・本物の pnpm での復元で dist もフィクスチャも' +
+        '綺麗に戻る・足場が外れる）が出ていない。\n' +
+        `${violations.join('\n')}\n` +
+        'なぜ落とすか: 戻り値を検査しなければ、判定が化けても緑のまま残る（#1138）。',
+    );
+  }
+}
+
 function scenarioRebuildFailure() {
   section(
     'selftest: 6. 後始末の build が落ちても、印が残り status が知らせることの確認' +
@@ -1394,7 +1453,7 @@ function scenarioRebuildFailure() {
     );
   }
 
-  return {
+  const outcomes = {
     scenario: 'rebuild-failure',
     restoreExitCodeWasNonZero: restoreResult.status !== 0,
     markerLeftAfterFailedRebuild: markerLeft,
@@ -1410,6 +1469,12 @@ function scenarioRebuildFailure() {
     scaffoldRemovedOk: scaffoldRemoval.ok,
     distCleanAfterScaffoldRemoved: scaffoldRemoval.distClean,
   };
+
+  // **#1166: ここまでの観測値を機械で主張する。** 直上の if は段階の伝え方
+  // （2欄）だけを見ていて、残り 10 欄は log に流れるだけだった。
+  assertRebuildFailureOutcomes(outcomes);
+
+  return outcomes;
 }
 
 // ── 7. spec の形の検査（#301・#993） ─────────────────────────────────
