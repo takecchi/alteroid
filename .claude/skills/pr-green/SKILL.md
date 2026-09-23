@@ -50,7 +50,7 @@ description: PR が本当に緑かを判定するとき、CI の完了を待つ�
 
   - `head_sha` を明示して `check-runs` を引く（`gh pr view --json statusCheckRollup` は sha を返さない。上の項目）
   - `conclusion == "success"` の行だけを数える。**`skipped` は「走っていない」**
-  - 必要なチェックが**すべて** `success` であること（`ci` / `image` は required。`base-overlap` は required ではないが、見ないと同じ穴を踏む）
+  - 必要なチェックが**すべて** `success` であること（**どれが required かは `.github/required-status-checks.json` と `pnpm check:required-status-checks`（protection と突き合わせる）が持つ——ここで本数を数え上げると増減のたびに腐る。上の「⭐」項目と同じ理由**。`base-overlap` は required ではないが、見ないと同じ穴を踏む）
   - **同じ sha に複数の世代が在るときは、新しいほうを見る。⚠️ ただし「新しいほう」を `check-runs` の応答の中だけで決めないこと。** `check-runs` の各要素には世代の順序を決める信頼できるキーが無い（実測 2026-09-13〜15、#933。sha `1e619f43858160fb5d9a6b1895d236e35d4771cf`、PR #932）:
     - **`started_at` は run をまたぐと逆転する。** 古い run（draft、06:44:48作成）の `base-overlap` の `skipped` が `started_at=06:44:57` を持ち、新しい run（ready、06:44:54作成）の `success` の `started_at=06:44:56` より**1秒あとに始まっている**。⟹ `group_by(.name) | map(sort_by(.started_at) | last)` は `skipped` を選ぶ（今回は安全側の誤りだったが、鏡像は「古い世代の `success` が新しい世代の `failure` を追い越し、赤を見落とす」）
     - **check-run の `id` も同じ向きに逆転する。** `id` は「run が作られた順」ではなく「その check-run（＝ job）が作られた順」に振られるため、`if:` の評価が後段で遅れた job だけ id でも後ろへ回る。同じ標本で `base-overlap` は古い run の check-run の方が `id` も大きい。⟹ `group_by(.name) | map(max_by(.id))` も同じく `skipped` を選ぶ —— **`started_at` を `id` に替えても直らない**

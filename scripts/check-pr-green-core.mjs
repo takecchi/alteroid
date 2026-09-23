@@ -313,6 +313,105 @@ export function evaluatePrGreen(latestRuns, jobsByRunId) {
 }
 
 /**
+ * required contexts の宣言（`.github/required-status-checks.json` の
+ * `contexts`）に対し、**そもそも job として1本も観測されなかった**門を
+ * 列挙する（Issue #1290。2026-09-22 の事故 —— 必須チェックを出す workflow
+ * が GitHub 上で `disabled_manually` にされ、その門の check-run が永久に
+ * 生成されなくなった。`evaluatePrGreen` は「観測できた job」だけを見て
+ * `green` を返すため、生成されなかった門は行として存在せず、判定から
+ * 静かに抜け落ちる）。
+ *
+ * ## これは `evaluatePrGreen` の8値とは別の軸である
+ *
+ * `evaluatePrGreen` は「pending な run が無い」ことを前提に、非 success を
+ * `red`/`cancelled`/`out-of-scope`/`skipped` へ分ける構造を持つ
+ * （Issue #1197）。この関数が見ているのはその手前 ——
+ * **「required な門の job がそもそも1件も観測されなかった」** という、
+ * pending とも non-success とも違う独立した軸である。⟹ `evaluatePrGreen`
+ * の switch に9番目の分岐として混ぜ込まない —— 8値の意味論
+ * （とくに世代選びの鍵。#1225 / PR #1227）に触れずに済ませるためで
+ * あり、#1197 が一度「軸を混ぜて丸める」過ちを犯した経緯を繰り返さない
+ * ためでもある。呼び出し側（CLI）が、この関数の結果と
+ * `evaluatePrGreen` の結果を**並べて**報告する。
+ *
+ * ## 不活性にする条件（`status: 'inactive'` を返す）
+ *
+ * - **`scoped`**（`events` で絞った呼び出し。例:
+ *   `record-release-prod-ci.mjs` の `events: ['push']`）—— その絞り込みは
+ *   `pull_request` 専用の run を意図的に落とすので、そのまま当てると
+ *   `no-attribution-trailers` のような `pull_request` 専用門を「走って
+ *   いない」と誤判定する。**これは真の欠落ではない。**
+ * - **`verdict` が `pending`**—— `judgeSha` は `status !== 'completed'`
+ *   の run の jobs を問い合わせない（無駄なので）。⟹ jobsByRunId には
+ *   「まだ走っている門」と「生成されなかった門」が同じ「観測されて
+ *   いない」として現れ、機械的に区別できない。区別できないものを
+ *   「無い」と言わない。
+ * - **`verdict` が `out-of-scope` / `no-runs` / `unmeasurable`**——
+ *   同様に「required な job の集合が確定できた」と言えない状態
+ *   （push 専用 sha・run が0本・全 job が skip の合成標本 等）。
+ *
+ * ## `skipped` は「在る」側（INV4）
+ *
+ * ここでは `conclusion` を一切見ず、job の `name` の**有無**だけを見る。
+ * GitHub は `conclusion: skipped` を required の判定で「満たした」ものと
+ * して扱う（逐語は `.github/workflows/ci.yml` の該当行）。`skipped` を
+ * 「run が無い」と混同すると、draft 明けの正常系や `base-overlap` のような
+ * 条件付き job まで誤検知する。
+ *
+ * @param {{
+ *   requiredContexts: string[],
+ *   verdict: string,
+ *   scoped: boolean,
+ *   latestRuns: {id:number}[],
+ *   jobsByRunId: Record<number, {name:string}[]>,
+ * }} input
+ * @returns {{status:'inactive', reason:string} | {status:'checked', missing:string[]}}
+ */
+export function findMissingRequiredGates({
+  requiredContexts,
+  verdict,
+  scoped,
+  latestRuns,
+  jobsByRunId,
+}) {
+  if (scoped) {
+    return {
+      status: 'inactive',
+      reason:
+        'events で絞った呼び出し（例: record-release-prod-ci.mjs の events:["push"]）のため判定しない',
+    };
+  }
+
+  const INACTIVE_VERDICTS = new Set(['pending', 'out-of-scope', 'no-runs', 'unmeasurable']);
+  if (INACTIVE_VERDICTS.has(verdict)) {
+    return { status: 'inactive', reason: `verdict=${verdict} のため判定しない` };
+  }
+
+  const observedNames = new Set(
+    latestRuns.flatMap((run) => (jobsByRunId[run.id] ?? []).map((job) => job.name)),
+  );
+  const missing = requiredContexts.filter((name) => !observedNames.has(name));
+  return { status: 'checked', missing };
+}
+
+/**
+ * `findMissingRequiredGates` が `checked` かつ `missing` を1件以上返したときの
+ * 警告文を作る。**1行目で欠けている門を名指しする**（`AGENTS.md`「静かに
+ * 失敗する道具」）。
+ *
+ * ⚠️ **この検査が見ているのは `.github/required-status-checks.json` の
+ * 宣言であって、branch protection そのものではない。** 宣言と実際の
+ * protection がずれていないかは `pnpm check:required-status-checks` が見る
+ * （別の道具。ここでは突き合わせない）。
+ */
+export function formatMissingRequiredGates(sha, missingNames) {
+  return [
+    `check-pr-green(${sha}): NG —— required（.github/required-status-checks.json の宣言。branch protection そのものではない）なのに run が1本も無い門: ${missingNames.join(', ')}`,
+    '宣言と実際の branch protection がずれていないかは pnpm check:required-status-checks が見る（ここでは突き合わせない）',
+  ].join('\n  ');
+}
+
+/**
  * 判定を、人が読んで次の一手が決まる文へ畳む。
  */
 export function formatVerdict(sha, result) {
