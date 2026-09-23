@@ -1320,11 +1320,11 @@ function scenarioRebuildFailure() {
 
   // **#1146: 6a（apply）の後を、6d（本物の pnpm での後始末）までまるごと
   // try/finally で包む。** `scenarioJudgementIdIntegrity` と同じ形——ここで
-  // 例外が起きても（擬似 pnpm の用意・spawnSync・status の呼び出しのどこで
-  // 起きても）、`restoreMutation()` を finally で必ず1回だけ呼ぶ。**6d の
-  // 呼び出しをそのまま finally へ移しただけなので、呼び出し箇所は依然として
-  // 1つだけであり、二重に呼ぶ経路は無い。**包んでいなかったときは、6b/6c の
-  // 間で（意図した擬似 pnpm の失敗とは別の理由で）例外が起きると、
+  // 例外が起きても（6a1 の build・擬似 pnpm の用意・spawnSync・status の
+  // 呼び出しのどこで起きても）、`restoreMutation()` を finally で必ず1回だけ
+  // 呼ぶ。**6d の呼び出しをそのまま finally へ移しただけなので、呼び出し箇所は
+  // 依然として1つだけであり、二重に呼ぶ経路は無い。**包んでいなかったときは、
+  // 6a1/6b/6c の間で（意図した擬似 pnpm の失敗とは別の理由で）例外が起きると、
   // フィクスチャ本体が変異したまま・印も残ったまま落ちる（#1146。
   // `scenarioDelivery` と同型の欠陥）。
   let restoreResult;
@@ -1348,6 +1348,27 @@ function scenarioRebuildFailure() {
     applyMutation(spec);
 
     try {
+      log('');
+      log('-- 6a1. build する（本物の pnpm）: dist へ変異を届けてから後始末を落とす --');
+      // **ここが要点である。** 6a はソースを変異させるだけで、dist はまだ
+      // 変異前のままである（`scenarioDelivery` の 4b/4c と同じ理屈）。この
+      // build を挟まずに 6b（擬似 pnpm での後始末失敗）へ進むと、dist は
+      // 最初から変異を含んでいないので、後始末が落ちようが直ろうが
+      // `distStillHasMutation` は常に false になる——「後始末の build が
+      // 落ちたら dist が古いまま残る」ことを何も測っていないのに測ったこと
+      // になっていた（#1166、`assertRebuildFailureOutcomes` が実測で検出）。
+      const initialBuild = buildAndCheckArtifact(spec);
+      if (initialBuild.artifactState !== 'delivered') {
+        throw new HarnessError(
+          'rebuild-failure: 6a1 で dist へ変異を届けられなかった' +
+            `（artifactState=${initialBuild.artifactState} / buildExitCode=` +
+            `${initialBuild.buildExitCode}）。後始末の build が失敗する前提` +
+            '（dist が変異済みのまま残ること）を確かめられないので、この先の擬似 pnpm の' +
+            '手順へは進まない。',
+        );
+      }
+      log(`dist へ変異が届いた（artifactState=${initialBuild.artifactState}）ことを確認した`);
+
       fs.mkdirSync(fakeBinDirPath, { recursive: true });
       const fakePnpmPath = path.join(fakeBinDirPath, 'pnpm');
       fs.writeFileSync(fakePnpmPath, '#!/bin/sh\nexit 1\n');

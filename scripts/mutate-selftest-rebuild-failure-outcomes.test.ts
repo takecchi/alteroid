@@ -127,3 +127,32 @@ describe('mutate-selftest: scenarioRebuildFailure が主張を実際に呼ぶ', 
     expect(body).toContain('assertRebuildFailureOutcomes(');
   });
 });
+
+/**
+ * `distStillHadMutationRightAfterFailedRebuild` が実際に測っていたのは
+ * 「dist が最初から変異を含んでいない」ことであって、「後始末の build が
+ * 落ちたら dist が古いまま残る」ことではなかった（#1166 面2で実測）。
+ * `scenarioRebuildFailure` は 6a（applyMutation）の後、擬似 pnpm（常に
+ * exit 1）で PATH を汚す前に、本物の pnpm で一度 build して dist へ
+ * 変異を届けておく必要がある——それが無いと、後始末の成否と無関係に
+ * この欄は常に false になる。
+ *
+ * ⟹ この歯は「本物の build 呼び出しが在る」だけでなく、**それが擬似 pnpm を
+ * 用意するより前に位置していること**まで見る。順序を確かめないと、
+ * 「呼んではいるが手遅れ（擬似 pnpm を汚した後）」という取り違えを見逃す。
+ */
+describe('mutate-selftest: scenarioRebuildFailure が擬似 pnpm より前に本物の build を挟む', () => {
+  it('buildAndCheckArtifact(spec) の呼び出しが、擬似 pnpm を用意する行より前に在る', () => {
+    const src = fs.readFileSync(SELFTEST_SRC, 'utf8');
+    const start = src.indexOf('function scenarioRebuildFailure(');
+    expect(start).toBeGreaterThan(-1);
+    const next = src.indexOf('\nfunction ', start + 1);
+    const body = next === -1 ? src.slice(start) : src.slice(start, next);
+
+    const buildIndex = body.indexOf('buildAndCheckArtifact(spec)');
+    const poisonIndex = body.indexOf('擬似 pnpm を用意した');
+    expect(buildIndex).toBeGreaterThan(-1);
+    expect(poisonIndex).toBeGreaterThan(-1);
+    expect(buildIndex).toBeLessThan(poisonIndex);
+  });
+});
