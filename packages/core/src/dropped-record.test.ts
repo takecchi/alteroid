@@ -24,12 +24,14 @@ import {
 import type { RunnerEvent } from './runner-protocol.js';
 import {
   contextUsageObservationSchema,
+  inboxEventSchema,
   JOURNAL_ENTRY_TYPES,
   journalEntrySchema,
 } from './schema.js';
 import type {
   ContextUsageObservation,
   InboxEvent,
+  InboxEventType,
   JournalEntryInput,
   JournalEntryType,
 } from './schema.js';
@@ -704,13 +706,13 @@ describe('捨てた合図の見分け', () => {
   });
 
   /**
-   * Issue #823（B）: `inboxEventShape` には `journalEntryShape` の名簿
-   * （`JOURNAL_SHAPE_PLAN`）に相当するものが無い。**7型のうち `external` と
-   * `manager_message` の2型だけが、上の2つの `it` で位置・値ごと `toBe`/
-   * `toContain` で固定されている。残る5型（`human_message`/`human_answer`/
-   * `distill`/`timer`/`self_initiative`）には、欄が出ているかを直接測る
-   * アサーションが1本も無かった。** 共通ループ（このファイル上部の
-   * 「どの起点でも本文が跡に乗らない（7種類すべて）」）は
+   * Issue #823（B）: このコメントを書いた時点（PR #829）では、`inboxEventShape`
+   * に `journalEntryShape` の名簿（`JOURNAL_SHAPE_PLAN`）に相当するものが
+   * 無かった。**7型のうち `external` と `manager_message` の2型だけが、上の
+   * 2つの `it` で位置・値ごと `toBe`/`toContain` で固定されている。残る5型
+   * （`human_message`/`human_answer`/`distill`/`timer`/`self_initiative`）には、
+   * 欄が出ているかを直接測るアサーションが1本も無かった。** 共通ループ
+   * （このファイル上部の「どの起点でも本文が跡に乗らない（7種類すべて）」）は
    * `not.toContain(secret)` と `toContain(event.type)` の2本だけで、**どちらも
    * `size(event.text)` のような無名の呼び出しを実装から消しても真のままである**
    * ——`type` の文字列（`'human_message'` 等）は `inboxEventShape` の返り値の
@@ -720,6 +722,13 @@ describe('捨てた合図の見分け', () => {
    * ここでは `journalEntryShape` の型別 `toBe`（このファイル上部）と同じ
    * 作りで、5型それぞれの丸ごと一致を固定する——欄の位置・値の両方を
    * 固定するので、どの欄を実装から落としても必ず落ちる。
+   *
+   * **名簿そのものは Issue #1391 で足した（`INBOX_SHAPE_PLAN`、このファイル
+   * 下部「`inboxEventShape` の名簿」）。** ここに残す7本（この直下の6本 +
+   * 上の2本）は名簿より前に個別に固定したもので、名簿とは役目が違うので
+   * 残す——名簿が見るのは「欄が出ているか」までで「その位置・値まで丸ごと
+   * 一致するか」は見ない（`JOURNAL_SHAPE_PLAN` の docstring の限界1と同じ）。
+   * 丸ごと一致の保証はここの7本が単独で持ち続ける。
    */
   it('human_message は text の位置ごと toBe で固定する（Issue #823）', () => {
     const shape = inboxEventShape({
@@ -787,6 +796,276 @@ describe('捨てた合図の見分け', () => {
     });
 
     expect(shape).toBe(`self_initiative chars=${secret.length}`);
+  });
+});
+
+/**
+ * `inboxEventShape` の名簿——`JOURNAL_SHAPE_PLAN`（このファイル下部）と同じ
+ * 作り・同じ理由で、`InboxEvent` に型や欄を足したときの書き忘れを赤くする
+ * （Issue #1391。直上の「捨てた合図の見分け」docstring が申告していた
+ * 「`inboxEventShape` には `journalEntryShape` の名簿に相当するものが無い」
+ * という穴を、`journalEntryShape` 側と同じ機構でここに置く）。
+ *
+ * **この歯が測るもの（`JOURNAL_SHAPE_PLAN` の docstring と同じ2点）:**
+ *
+ * 1. 名簿（`INBOX_SHAPE_PLAN`）のキー集合が `inboxEventSchema`（zod から
+ *    機械的に引いた実装側の欄）と両方向に一致すること。**型でも測る**
+ *    ——`ShapedFieldsOf<T>` を使った `satisfies` で、schema に型や欄が増えると
+ *    `pnpm typecheck` が落ちる。**実行時にも測る**——discriminated union の
+ *    `.options` から実際の型・欄を毎回引き直すので、型を直さずに schema だけ
+ *    変えても赤くなる。
+ * 2. 名簿の各欄が言うとおりに `inboxEventShape` が振る舞うこと（`never` は
+ *    出ない・`size`/`size-unnamed` は長さだけ・`tag` は目印が出る・
+ *    `presence` は有無だけが出る）。全欄を埋めた `INBOX_FULL_FIXTURES`
+ *    （`Required<>` で optional も必須にしてある——ここでも schema に欄が
+ *    増えると型が落ちる）に対して `inboxEventShape` を呼び、名簿どおりかを
+ *    確かめる。
+ *
+ * **`id`/`at` は `ShapedFieldsOf` から除く。** `journalEntryShape` が受け取る
+ * `JournalEntryInput` には元々この2欄が無いので除く理由が要らないが、
+ * `inboxEventShape` が受け取る `InboxEvent` は永続化後の形（`id`/`at` を
+ * 持つ）そのままで、両方とも7型すべてに同じ形で在る。`inboxEventShape` の
+ * 本体（`switch` のどの `case` も）はこの2欄を一度も参照しない——`type`
+ * （判別子）を除くのと同じ理由で、`ShapedFieldsOf` の除外へ一緒に畳む。
+ *
+ * ⚠️ **`JOURNAL_SHAPE_PLAN` の docstring が明記する限界は、ここにも同じ形で
+ * 当てはまる。** 値の取り違えは捕まえない（欄が出ることまでしか見ない）。
+ * 数えるのは第1階層の欄だけ——`external.payload` は `z.unknown()` で任意の
+ * 構造を持ちうるが、`inboxEventShape` 自身が中へ踏み込まず有無しか見ないの
+ * で、この歯もそれ以上は見ない。
+ *
+ * **`poisonableTagField`（`JOURNAL_SHAPE_PLAN`・Issue #823 の族対策）は
+ * 持たない。** あの機構は、無名の `size-unnamed` 欄と同じ型に「素の string」
+ * `tag()` 欄が同居し、桁が偶然一致する毒を運ぶ族を塞ぐためのものだが、
+ * **この7型はすでに全型が位置・値ごと `toBe`/`toContain` で固定されている**
+ * （このファイル上の「捨てた合図の見分け」の7本の `it`——`journalEntryShape`
+ * 側は PR #829 の時点で2型しか固定されていなかった。`JOURNAL_SHAPE_PLAN` の
+ * docstring 項目5 を見よ）。**この歯より強い保証がすでに個別に在るので、
+ * 同じ機構をここへ複製しない。**
+ */
+describe('inboxEventShape の名簿（schema に足した型・欄の足し忘れを赤くする。Issue #1391）', () => {
+  /** 跡へ欄をどう出すか。**`never` には理由を必ず書く**（`JOURNAL_SHAPE_PLAN` と同じ）。 */
+  type FieldPlan =
+    | { readonly emit: 'tag'; readonly token: string }
+    | { readonly emit: 'size'; readonly token: string }
+    | { readonly emit: 'size-unnamed' }
+    | { readonly emit: 'presence'; readonly token: string }
+    | { readonly emit: 'never'; readonly why: string };
+
+  /** その型が schema で持つ欄（`type`/`id`/`at` は除く。理由はクラス docstring）。 */
+  type ShapedFieldsOf<T extends InboxEventType> = Exclude<
+    keyof Extract<InboxEvent, { type: T }>,
+    'type' | 'id' | 'at'
+  >;
+
+  const INBOX_SHAPE_PLAN = {
+    human_message: {
+      text: { emit: 'size-unnamed' },
+      conversationId: {
+        emit: 'never',
+        why:
+          '呼び出し側（アプリ層）が決める値で、この関数の外にある。' +
+          '`journalEntryShape` の `exchange.conversationId` と同じ判断' +
+          "（逐語は `command grep -Fn -- '同じ値の扱いを2か所で' packages/core/src/dropped-record.ts`）。" +
+          '足すなら `journalEntryShape` の対応欄と2か所同時、`tag()` は禁止。',
+      },
+      supersedes: {
+        emit: 'never',
+        why:
+          '「メッセージを編集する」機能（#edit-message）の欄。値を決めるのは' +
+          '呼び出し側（アプリ層の検証を経た `POST /chat`）で、この関数の外に' +
+          'ある。`journalEntryShape` の `exchange.supersedes` と同じ判断。' +
+          '足すなら対応欄と2か所同時、`tag()` は禁止。',
+      },
+    },
+    human_answer: {
+      approvalId: { emit: 'tag', token: 'approvalId' },
+      answer: { emit: 'size', token: 'answer' },
+      conversationId: {
+        emit: 'never',
+        why:
+          '元の承認（`PendingApproval.conversationId`）の写し（#768）。この関数は' +
+          '参照しない——`human_message.conversationId` と違い、対になる journal 欄も' +
+          '無い（単に本体が触れていない欄）。',
+      },
+    },
+    distill: {
+      reason: { emit: 'tag', token: 'reason' },
+    },
+    timer: {
+      kind: { emit: 'tag', token: 'kind' },
+      target: { emit: 'tag', token: 'target' },
+      cause: { emit: 'tag', token: 'cause' },
+    },
+    external: {
+      source: { emit: 'size', token: 'source' },
+      payload: { emit: 'presence', token: 'payload' },
+      identity: {
+        emit: 'never',
+        why:
+          '畳み込みの鍵（Issue #1298、`inbox-backlog.ts` の `inboxBacklogDedupeKey`）' +
+          'に使う値で、この関数は参照しない。デーモン自身が `clone.post()` を直接' +
+          '呼ぶ経路でしか立てられず外部からは立てられない欄だが、跡に載せるかは' +
+          '別の判断——いまは載せていない。',
+      },
+    },
+    self_initiative: {
+      reason: { emit: 'size-unnamed' },
+      cause: {
+        emit: 'never',
+        why: 'この関数は参照しない。`timer.cause` と同じ軸・同じ3値だが、跡には出していない。',
+      },
+    },
+    manager_message: {
+      managerId: { emit: 'tag', token: 'managerId' },
+      kind: { emit: 'tag', token: 'kind' },
+      text: { emit: 'size-unnamed' },
+      requestId: { emit: 'tag', token: 'requestId' },
+      markup: {
+        emit: 'never',
+        why: '`text` の記法の注記（表示側の判断材料。issue #287）で、この関数は参照しない。',
+      },
+      statusAtDelivery: {
+        emit: 'never',
+        why: '配る瞬間の `JobStatus` の写し（issue #870）で、この関数は参照しない。',
+      },
+    },
+  } satisfies { [T in InboxEventType]: Record<ShapedFieldsOf<T>, FieldPlan> };
+
+  const SECRET = 'ghp_444444444444444444444444444444444444';
+  const AT = new Date(0).toISOString();
+
+  /** `INBOX_SHAPE_PLAN` と同じキー集合を、schema 側からではなく名簿側から独立して持つための順序付き一覧。 */
+  const INBOX_EVENT_TYPES = inboxEventSchema.options.map(
+    (option) => option.shape.type.value,
+  ) as InboxEventType[];
+
+  /**
+   * 全欄を埋めた見本。**`Required<>` で optional も必須になる**ので、schema に
+   * 欄が増えると型が落ちる（`JOURNAL_SHAPE_PLAN` の `FULL_FIXTURES` と同じ
+   * 作り）。値が跡に出ない欄（`size`/`size-unnamed`/`never`）の自由文には
+   * `SECRET` を入れ、下の「値が出ない欄」テストで漏れないことを測る。
+   */
+  const INBOX_FULL_FIXTURES: {
+    [T in InboxEventType]: Required<Extract<InboxEvent, { type: T }>>;
+  } = {
+    human_message: {
+      type: 'human_message',
+      id: 'e1',
+      at: AT,
+      text: SECRET,
+      conversationId: SECRET,
+      supersedes: SECRET,
+    },
+    human_answer: {
+      type: 'human_answer',
+      id: 'e2',
+      at: AT,
+      approvalId: 'ap-1',
+      answer: SECRET,
+      conversationId: SECRET,
+    },
+    distill: {
+      type: 'distill',
+      id: 'e3',
+      at: AT,
+      reason: 'scheduled',
+    },
+    timer: {
+      type: 'timer',
+      id: 'e4',
+      at: AT,
+      kind: 'daily_report',
+      target: '2026-08-16',
+      cause: 'schedule_catchup',
+    },
+    external: {
+      type: 'external',
+      id: 'e5',
+      at: AT,
+      source: SECRET,
+      payload: { token: SECRET },
+      identity: SECRET,
+    },
+    self_initiative: {
+      type: 'self_initiative',
+      id: 'e6',
+      at: AT,
+      reason: SECRET,
+      cause: 'manual',
+    },
+    manager_message: {
+      type: 'manager_message',
+      id: 'e7',
+      at: AT,
+      managerId: 'mgr-1',
+      kind: 'question',
+      text: SECRET,
+      requestId: 'req-1',
+      markup: 'none',
+      statusAtDelivery: 'running',
+    },
+  };
+
+  it('名簿のキー集合は inboxEventSchema の実装側の型・欄と両方向に一致する（zod から機械的に引く）', () => {
+    // 走査した型の集合が名簿のキー集合と一致することも確かめる——走査が
+    // 空振りして0件のまま緑になる形を作らないため（`JOURNAL_ENTRY_TYPES` と
+    // 同じガード）。
+    expect(new Set(INBOX_EVENT_TYPES)).toEqual(new Set(Object.keys(INBOX_SHAPE_PLAN)));
+    expect(INBOX_EVENT_TYPES.length).toBeGreaterThan(0);
+
+    for (const option of inboxEventSchema.options) {
+      const type = option.shape.type.value as InboxEventType;
+      const implementedFields = new Set(Object.keys(option.shape));
+      implementedFields.delete('type');
+      implementedFields.delete('id');
+      implementedFields.delete('at');
+
+      const plannedFields = new Set(Object.keys(INBOX_SHAPE_PLAN[type]));
+
+      expect(plannedFields, type).toEqual(implementedFields);
+    }
+  });
+
+  it('名簿の各欄について inboxEventShape が plan どおりに振る舞う（never は出ない・size 系は長さだけ・tag は目印・presence は有無だけ）', () => {
+    for (const type of INBOX_EVENT_TYPES) {
+      const shape = inboxEventShape(INBOX_FULL_FIXTURES[type]);
+      const plan: Record<string, FieldPlan> = INBOX_SHAPE_PLAN[type];
+
+      for (const [field, fieldPlan] of Object.entries(plan)) {
+        switch (fieldPlan.emit) {
+          case 'never':
+            expect(shape, `${type}.${field}`).not.toContain(field);
+            break;
+          case 'size':
+            expect(shape, `${type}.${field}`).toContain(
+              `${fieldPlan.token}.chars=${SECRET.length}`,
+            );
+            break;
+          case 'size-unnamed':
+            // 境界＋値で見る（Issue #823 と同じ判定基準）——同じ型に他の
+            // `chars=` 表記が無いことは上の名簿で確認済みなので、ここでは
+            // 単純な境界付き正規表現で足りる。
+            expect(shape, `${type}.${field}`).toMatch(
+              new RegExp(`(?:^| )chars=${SECRET.length}(?:$| )`, 'u'),
+            );
+            break;
+          case 'tag':
+            expect(shape, `${type}.${field}`).toContain(`${fieldPlan.token}=`);
+            break;
+          case 'presence':
+            expect(shape, `${type}.${field}`).toContain(`${fieldPlan.token}=`);
+            break;
+        }
+      }
+    }
+  });
+
+  it('値が出ない欄（size/size-unnamed/never）に置いた自由文は、どの型の跡にも現れない', () => {
+    for (const type of INBOX_EVENT_TYPES) {
+      const shape = inboxEventShape(INBOX_FULL_FIXTURES[type]);
+      expect(shape, type).not.toContain(SECRET);
+    }
   });
 });
 
