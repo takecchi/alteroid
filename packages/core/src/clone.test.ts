@@ -40,6 +40,7 @@ import {
 } from './distill-gap.js';
 import type { DistillGap } from './distill-gap.js';
 import { conversationMessages, readConversationWindow } from './conversation.js';
+import { clearRecentTracesForTesting, recentDroppedTraces } from './dropped-record.js';
 import type { CloneHost } from './host.js';
 import type { ManagerPool, ManagerSummary } from './manager.js';
 import { measureMemoryFloor, renderMemoryDocuments } from './memory.js';
@@ -55,7 +56,12 @@ import type {
 } from './schema.js';
 import type { Stores } from './store.js';
 import { CLONE_ACTOR_ID, isCloneActor } from './usage.js';
-import { createCloneMcpServer, createCloneTools, qualifiedToolName } from './tools.js';
+import {
+  createCloneMcpServer,
+  createCloneTools,
+  MCP_INPUT_VALIDATION_ERROR_MARKER,
+  qualifiedToolName,
+} from './tools.js';
 import type { ToolContext } from './tools.js';
 import {
   captureStderr,
@@ -1294,6 +1300,253 @@ describe('クローン', () => {
     expect(error!.length).toBeLessThan(1000);
 
     await s.clone.stop();
+  });
+
+  /**
+   * **Issue #1338 残件1**: 自前で日誌へ書く自作ツール（`SELF_JOURNALING_CLONE_TOOLS`）
+   * の呼び出しが、ハンドラへ届く前の MCP 入力検証で落ちた回は、除外の前提
+   * （「そのハンドラが自分で記録する」）が崩れているのに `#journalToolUse` の
+   * 早期 return だけが効いて、日誌にも `self_dropped` にも何も残らなかった
+   * （`journal_write` の `decision` 欠落が実例——#1343 は `grounds` の欠落しか
+   * 直していない）。**この経路は `PostToolUseFailure` ではなく `PostToolUse`
+   * で発火する**——MCP SDK が検証エラーを自分で `try/catch` し、`isError: true`
+   * の普通の `CallToolResult` を返すため（`tool-arguments.test.ts` の実測）。
+   * ⟹ ここでは `PostToolUse` フックへ、検証落ちを示す `tool_response` を
+   * 乗せて呼ぶ。
+   */
+  describe('検証で落ちた自作ツールの呼び出しも tool_use として残る（Issue #1338 残件1）', () => {
+    it('journal_write の decision が欠けた回は tool_use(outcome: "failed") として残り、self_dropped にも跡が残る', async () => {
+      clearRecentTracesForTesting();
+      const s = setup();
+      s.clone.post(humanMessage('やあ'));
+      await waitForDone(s.events);
+
+      const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUse?.[0]?.hooks?.[0];
+      if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
+
+      await hook(
+        {
+          tool_name: qualifiedToolName('journal_write'),
+          // **`decision` が無い。** `grounds` だけが送られてハンドラへは届かず、
+          // zod の検証で落ちる（#1343 が直したのは grounds 側で、decision 側は
+          // 今も必須——`tools.ts` の journal_write の doc「これで直らない残り」）。
+          tool_input: { grounds: 'ある根拠のテキスト' },
+          tool_response: {
+            content: [
+              {
+                type: 'text',
+                text:
+                  `MCP error -32602: ${MCP_INPUT_VALIDATION_ERROR_MARKER}journal_write: ` +
+                  '[{"code":"invalid_type","expected":"string","path":["decision"],' +
+                  '"message":"引数が届いていない（received undefined）"}]',
+              },
+            ],
+            isError: true,
+          },
+        } as never,
+        undefined,
+        {} as never,
+      );
+
+      const entries = await s.stores.journal.list({ types: ['tool_use'] });
+      expect(entries.length).toBe(1);
+      const entry = entries[0] as {
+        actor: string;
+        tool: string;
+        outcome?: string;
+        error?: string;
+        input?: unknown;
+      };
+      expect(entry.tool).toBe(qualifiedToolName('journal_write'));
+      expect(entry.actor).toBe(CLONE_ACTOR_ID);
+      expect(entry.outcome).toBe('failed');
+      // journal_write は秘密を運ぶ道具ではないので、生の引数（grounds）は
+      // 他の道具と同じ扱いでそのまま残る。
+      expect(entry.input).toEqual({ grounds: 'ある根拠のテキスト' });
+      expect(entry.error).toContain(MCP_INPUT_VALIDATION_ERROR_MARKER);
+
+      // **判断の記録そのものが落ちたので、self_dropped にも跡を残す**
+      // （#1343 の grounds 欠落と同じ理由。journal_write だけの扱い）。
+      const traces = recentDroppedTraces();
+      expect(traces.some((line) => line.includes('判断そのもの（journal_write）'))).toBe(true);
+      expect(traces.some((line) => line.includes('fields=decision'))).toBe(true);
+
+      await s.clone.stop();
+    });
+
+    it('他の自作ツール（memory_write）の検証落ちも tool_use として残る（self_dropped は journal_write だけの扱い）', async () => {
+      clearRecentTracesForTesting();
+      const s = setup();
+      s.clone.post(humanMessage('やあ'));
+      await waitForDone(s.events);
+
+      const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUse?.[0]?.hooks?.[0];
+      if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
+
+      await hook(
+        {
+          tool_name: qualifiedToolName('memory_write'),
+          // `summary` が無い。
+          tool_input: { slug: 'values', content: '本文' },
+          tool_response: {
+            content: [
+              {
+                type: 'text',
+                text:
+                  `MCP error -32602: ${MCP_INPUT_VALIDATION_ERROR_MARKER}memory_write: ` +
+                  '[{"code":"invalid_type","expected":"string","path":["summary"],"message":"x"}]',
+              },
+            ],
+            isError: true,
+          },
+        } as never,
+        undefined,
+        {} as never,
+      );
+
+      const entries = await s.stores.journal.list({ types: ['tool_use'] });
+      expect(entries.length).toBe(1);
+      const entry = entries[0] as { tool: string; outcome?: string; input?: unknown };
+      expect(entry.tool).toBe(qualifiedToolName('memory_write'));
+      expect(entry.outcome).toBe('failed');
+      expect(entry.input).toEqual({ slug: 'values', content: '本文' });
+
+      // **`journal_write` 以外には self_dropped を広げていない**（doc の判断）。
+      const traces = recentDroppedTraces();
+      expect(traces.some((line) => line.includes('判断そのもの'))).toBe(false);
+
+      await s.clone.stop();
+    });
+
+    it('⭐ 陰性対照: 自前で日誌へ書く道具の正常な成功は、tool_response が在っても二重に残さない', async () => {
+      // **検知の印（`MCP_INPUT_VALIDATION_ERROR_MARKER`）が無ければ、成功応答は
+      // 従来どおり除外され続ける。** ここが緑にならないと、「常に tool_use を
+      // 書く」実装でも他の歯が緑になってしまう。
+      const s = setup();
+      s.clone.post(humanMessage('やあ'));
+      await waitForDone(s.events);
+
+      const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUse?.[0]?.hooks?.[0];
+      if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
+
+      await hook(
+        {
+          tool_name: qualifiedToolName('memory_write'),
+          tool_input: { slug: 'values', content: '本文', summary: '要約' },
+          tool_response: {
+            content: [{ type: 'text', text: '記憶に書いた（values）。' }],
+            isError: false,
+          },
+        } as never,
+        undefined,
+        {} as never,
+      );
+
+      expect(await s.stores.journal.list({ types: ['tool_use'] })).toEqual([]);
+
+      await s.clone.stop();
+    });
+
+    it('🔴 profile_write の検証落ちでは、値（script）が日誌のどこにも写らない（秘密を運ぶ道具）', async () => {
+      clearRecentTracesForTesting();
+      const s = setup();
+      s.clone.post(humanMessage('やあ'));
+      await waitForDone(s.events);
+
+      const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUse?.[0]?.hooks?.[0];
+      if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
+
+      const SECRET_MARK = 'かえって-秘密-印-ABCDEF123456';
+      await hook(
+        {
+          tool_name: qualifiedToolName('profile_write'),
+          // `summary` が無い。`script` は実行環境の鍵そのものを運ぶ契約
+          // （`tools.ts` の `cloneToolCarriesSecrets` の doc）。
+          tool_input: { script: `export TOKEN=${SECRET_MARK}` },
+          tool_response: {
+            content: [
+              {
+                type: 'text',
+                text:
+                  `MCP error -32602: ${MCP_INPUT_VALIDATION_ERROR_MARKER}profile_write: ` +
+                  '[{"code":"invalid_type","expected":"string","path":["summary"],"message":"x"}]',
+              },
+            ],
+            isError: true,
+          },
+        } as never,
+        undefined,
+        {} as never,
+      );
+
+      const entries = await s.stores.journal.list({ types: ['tool_use'] });
+      expect(entries.length).toBe(1);
+      const entry = entries[0] as {
+        tool: string;
+        outcome?: string;
+        input?: unknown;
+        error?: string;
+      };
+      expect(entry.tool).toBe(qualifiedToolName('profile_write'));
+      expect(entry.outcome).toBe('failed');
+      // **`input` を一切残さない。** 生の引数を写すと script の値（鍵）が
+      // そのまま日誌に焼かれる。
+      expect(entry.input).toBeUndefined();
+      // **`error` にも値そのものは出ない。** 道具名と欠けた欄の名前だけ。
+      expect(entry.error).not.toContain(SECRET_MARK);
+      expect(entry.error).toContain('summary');
+
+      // JSON へ直列化しても値がどこにも現れないことを、念のため丸ごと確認する。
+      expect(JSON.stringify(entries)).not.toContain(SECRET_MARK);
+
+      // **profile_write は journal_write ではないので self_dropped は増えない。**
+      const traces = recentDroppedTraces();
+      expect(traces.some((line) => line.includes(SECRET_MARK))).toBe(false);
+
+      await s.clone.stop();
+    });
+
+    it('陽性対照: 秘密を運ばない道具（memory_write）では、同じ目印の値がそのまま入力に残る', async () => {
+      // **redaction が profile_write 固有の判断であって、値を含む入力全般への
+      // 目つぶし（フィルタ）ではないことを示す。**
+      const s = setup();
+      s.clone.post(humanMessage('やあ'));
+      await waitForDone(s.events);
+
+      const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUse?.[0]?.hooks?.[0];
+      if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
+
+      const MARK = 'かえって-秘密-印-ABCDEF123456';
+      await hook(
+        {
+          tool_name: qualifiedToolName('memory_write'),
+          tool_input: { slug: 'values', content: MARK },
+          tool_response: {
+            content: [
+              {
+                type: 'text',
+                text:
+                  `MCP error -32602: ${MCP_INPUT_VALIDATION_ERROR_MARKER}memory_write: ` +
+                  '[{"code":"invalid_type","expected":"string","path":["summary"],"message":"x"}]',
+              },
+            ],
+            isError: true,
+          },
+        } as never,
+        undefined,
+        {} as never,
+      );
+
+      const entries = await s.stores.journal.list({ types: ['tool_use'] });
+      expect(entries.length).toBe(1);
+      expect((entries[0] as { input?: unknown }).input).toEqual({
+        slug: 'values',
+        content: MARK,
+      });
+      expect(JSON.stringify(entries)).toContain(MARK);
+
+      await s.clone.stop();
+    });
   });
 
   it('確認へ上がらず止められた道具は日誌に残る。生の合図と result で二重に書かない', async () => {

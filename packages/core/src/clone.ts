@@ -124,7 +124,14 @@ import { resolveBuildRevision, resolveBuildTime } from './revision.js';
 import type { CloneRuntimeFacts, SelfFacts } from './self.js';
 import { findOpenManagerDuplicate } from './store.js';
 import type { CommitmentList, PendingInboxEvent, Stores } from './store.js';
-import { cloneToolJournalsItself, createCloneMcpServer, type ToolContext } from './tools.js';
+import {
+  cloneToolCarriesSecrets,
+  cloneToolJournalsItself,
+  createCloneMcpServer,
+  detectMcpInputValidationFailure,
+  qualifiedToolName,
+  type ToolContext,
+} from './tools.js';
 import { composeTurnInputText, turnInputEntry } from './turn-input.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 import {
@@ -442,6 +449,15 @@ const CLONE_ID_LIST_EXCERPT = 400;
  */
 const UNKNOWN_TOOL_NAME = '(不明な道具)';
 const UNKNOWN_AGENT_TYPE = '(不明)';
+
+/**
+ * `journal_write` の修飾済み道具名（`mcp__alteroid__journal_write`）。
+ *
+ * `#journalSelfJournalingToolValidationFailure` が、検証で落ちた道具が
+ * `journal_write` かどうかを見るのに使う（Issue #1338 残件1。`journal_write`
+ * だけ `self_dropped` にも跡を残す——doc は同メソッドを参照）。
+ */
+const JOURNAL_WRITE_QUALIFIED_TOOL_NAME = qualifiedToolName('journal_write');
 
 /**
  * `PostToolUseFailureHookInput.error` を `tool_use` の `error` 欄へ残すときの
@@ -8402,6 +8418,39 @@ class Clone implements CloneHost {
    * ——`cloneToolJournalsItself` が未知の道具に対して `false`（＝残す）を返すのも
    * 同じ理由である（下の判定を参照）。
    *
+   * ## 除外の前提が崩れる回（Issue #1338 残件1）
+   *
+   * 上の除外の前提は「その道具のハンドラが自分で記録する」ことである。
+   * **この前提は、ハンドラが一度も呼ばれない回には効かない。** alteroid の
+   * 自作ツールは in-process の MCP サーバ（`tools.ts` の
+   * `createCloneMcpServer`）で、その `McpServer`（`@modelcontextprotocol/sdk`）
+   * は引数を zod で検証してからハンドラを呼ぶ。**検証が落ちると、SDK は
+   * `McpError` を自分で `try/catch` して `isError: true` の普通の
+   * `CallToolResult` へ変換する**（ハンドラは呼ばれない。実測は
+   * `tools.ts` の `MCP_INPUT_VALIDATION_ERROR_MARKER` の doc）。⟹ Claude
+   * Code から見るとこれは「道具の実行が成功して、たまたまエラーの本文を
+   * 返した」にしか見えない——発火するのはここ（`PostToolUse`）であって
+   * `PostToolUseFailure`（`#journalToolUseFailure`）ではない。
+   *
+   * **⟹ `journal_write` の `decision` が欠けて検証で落ちた回のような場合、
+   * ハンドラ（＝自前で記録するはずの当人）が一度も走らないのに、除外だけが
+   * 効いて日誌にも `self_dropped` にも何も残らない**（監査の穴。#1343 が
+   * `grounds` の欠落は直したが、`decision` の欠落・他の自作ツールの検証
+   * 落ちは残っていた——`tools.ts` の `journal_write` の doc「これで直らない
+   * 残り」の訂正を参照）。
+   *
+   * **だからここでは、除外する前に検証落ちかを見る。** `tools.ts` の
+   * `detectMcpInputValidationFailure` が `tool_response` を見て、SDK の
+   * 入力検証エラーの印（`MCP_INPUT_VALIDATION_ERROR_MARKER`）を探す。
+   * 見つかれば `#journalSelfJournalingToolValidationFailure` が
+   * `tool_use`（`outcome: 'failed'`）として残す——**ハンドラが走っていない
+   * ので `input` を残してよいかは道具ごとに違う**（`profile_write` の
+   * `script` は実行環境の鍵そのものを運ぶ契約——`tools.ts` の
+   * `cloneToolCarriesSecrets` の doc。値は写さず、道具名と検証で落ちた
+   * 欄の名前だけを残す）。`journal_write` はこれに加えて `self_dropped`
+   * にも跡を残す（判断の記録そのものが落ちたため。#1343 の `grounds` の
+   * 欠落と同じ理由）。
+   *
    * **例外を投げないこと。** 投げるとツール実行の後続に影響しうる。読めない形なら
    * 何もしないだけで、道具の実行そのものは常に続ける（日誌の失敗も `#journal` が
    * 飲み込む）。
@@ -8446,13 +8495,91 @@ class Clone implements CloneHost {
     // かった」である。黙って消すと、監査の穴がいちばん静かな形（何も起きな
     // かったように見える）で空く。
     const tool = typeof raw?.tool_name === 'string' ? raw.tool_name : UNKNOWN_TOOL_NAME;
-    if (cloneToolJournalsItself(tool)) return;
+    if (cloneToolJournalsItself(tool)) {
+      // **除外する前に、この回がハンドラの走らない検証落ちでないかを見る**
+      // （上の doc「除外の前提が崩れる回」。Issue #1338 残件1）。
+      await this.#journalSelfJournalingToolValidationFailure(tool, raw, mainThreadActor);
+      return;
+    }
     await this.#journal({
       type: 'tool_use',
       actor: cloneToolActor(raw, mainThreadActor),
       tool,
       input: raw?.tool_input,
     });
+  }
+
+  /**
+   * 自前で日誌へ書く道具（`SELF_JOURNALING_CLONE_TOOLS`）の呼び出しが、
+   * ハンドラへ届く前の MCP 入力検証で落ちた回だけを `tool_use`
+   * （`outcome: 'failed'`）として残す（Issue #1338 残件1。`#journalToolUse`
+   * の doc「除外の前提が崩れる回」）。
+   *
+   * **検証落ちでなければ何もしない**（`detectMcpInputValidationFailure` が
+   * `undefined` を返す——道具が成功した通常の回。ここで戻れば `#journalToolUse`
+   * の早期 return と同じ挙動になり、成功した自前記録の道具を二重に書かない）。
+   *
+   * ## `input` を残すかどうかは道具ごとに違う
+   *
+   * ハンドラが一度も走っていない以上、この回の唯一の材料は SDK が返した
+   * 生の `tool_input` である。**`cloneToolCarriesSecrets(tool)` が `true`
+   * の道具（いまは `profile_write` だけ）では、この `input` を一切残さない**
+   * ——`script` は実行環境の鍵・トークンの値そのものを運ぶ契約であり、日誌は
+   * 人間が読み要約にも載る場所なので、値が焼かれると回収できない
+   * （`tools.ts` の `cloneToolCarriesSecrets` の doc）。代わりに、検証で
+   * 落ちた欄の名前（zod の path。値ではなく鍵の**名前**）だけを `error` に
+   * 残す。**それ以外の道具は、`Bash` など preset の道具が既に日誌へ書いて
+   * いる生の引数と同じ扱いで `input` をそのまま残す**（値を運ぶ契約が無い
+   * ので、この回だけ特別扱いする理由が無い）。
+   *
+   * ## `journal_write` は `self_dropped` にも跡を残す
+   *
+   * `journal_write` は「クローンが人間に聞かずに実行した判断を残す唯一の
+   * 経路」（`tools.ts` の doc）——判断の記録そのものが落ちたことを、
+   * `journal_write` 自身が `grounds` の欠落で行っているのと同じ形
+   * （#1343）で `self_dropped` にも残す。他の自作ツールには広げない
+   * （`self_dropped` は「自分の記録が落ちた」ことを言う場であり、
+   * `journal_write` 以外はここで初めて記録の**代わり**（`tool_use`）が
+   * 生まれる側なので、二重に名乗る理由が無い）。
+   */
+  async #journalSelfJournalingToolValidationFailure(
+    tool: string,
+    raw: Partial<PostToolUseHookInput> | null | undefined,
+    mainThreadActor: string,
+  ): Promise<void> {
+    const validation = detectMcpInputValidationFailure(raw?.tool_response);
+    if (validation === undefined) return;
+
+    const fieldList =
+      validation.fields.length > 0 ? validation.fields.join(', ') : '（取れなかった）';
+    const secretBearing = cloneToolCarriesSecrets(tool);
+
+    await this.#journal({
+      type: 'tool_use',
+      actor: cloneToolActor(raw, mainThreadActor),
+      tool,
+      outcome: 'failed',
+      ...(secretBearing
+        ? {
+            error: excerptLine(
+              `入力検証で落ちた（この道具は実行環境の秘密を運びうるため、値は日誌へ写さない。` +
+                `欠けた/不正な引数: ${fieldList}）`,
+              TOOL_USE_ERROR_EXCERPT,
+            ),
+          }
+        : {
+            input: raw?.tool_input,
+            error: excerptLine(validation.message, TOOL_USE_ERROR_EXCERPT),
+          }),
+    });
+
+    if (tool === JOURNAL_WRITE_QUALIFIED_TOOL_NAME) {
+      noteDroppedRecord(
+        '判断そのもの（journal_write）',
+        `fields=${fieldList}`,
+        new Error('入力検証で落ちた——decision が届かなかった可能性がある（issue #1338 残件1）'),
+      );
+    }
   }
 
   /**
@@ -8524,6 +8651,27 @@ class Clone implements CloneHost {
    * 除外規則を読む側が「この道具の記録はどちらの規則に従うか」をその都度
    * 確かめる必要が生まれる。自作ツール自身が失敗を記録するかどうかは
    * その道具のハンドラの責務であって、ここでは踏み込まない。
+   *
+   * ## ⚠️ 訂正・補足（2026-09-23、issue #1338 残件1）——ここが担当しない回
+   *
+   * **alteroid の自作ツール（in-process MCP）の入力検証エラーは、ここへは
+   * 来ない。** MCP SDK（`McpServer` の `callTool`）は zod の検証失敗を自分で
+   * `try/catch` し、`isError: true` の**普通の** `CallToolResult` へ変換する
+   * （ハンドラは一度も呼ばれない。実測は `tools.ts` の
+   * `MCP_INPUT_VALIDATION_ERROR_MARKER` の doc）。⟹ Claude Code から見ると
+   * これは「道具の実行が成功した」にしか見えず、発火するのは `PostToolUse`
+   * （`#journalToolUse`）であって、ここ（`PostToolUseFailure`）ではない。
+   *
+   * **⟹ 「自作ツール自身が失敗を記録するかどうかはその道具のハンドラの
+   * 責務」という上の判断は、ハンドラが実際に走った後の失敗（本物の例外・
+   * `is_interrupt`）にしか適用できない。** ハンドラが一度も呼ばれない
+   * 検証落ち（例: `journal_write` の `decision` 欠落）にこの判断を当てはめる
+   * と、責務を「走らなかったコード」へ割り当てることになり、日誌にも
+   * `self_dropped` にも何も残らない（#1343 の PR 本文はこの取り違えをして
+   * おり、`journal_write` の doc にも同じ訂正を書いた）。**その回の救済は
+   * ここではなく `#journalToolUse` に足した**（`#onPostToolUse` の doc
+   * 「除外の前提が崩れる回」）。ここが実際に受け持つのは、ハンドラが走った
+   * 後に本物の例外を投げた回と、`is_interrupt: true` の中断だけである。
    */
   async #journalToolUseFailure(
     raw: Partial<PostToolUseFailureHookInput> | null | undefined,

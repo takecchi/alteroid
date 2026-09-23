@@ -45,7 +45,10 @@ import {
   CLONE_ALLOWED_TOOLS,
   CLONE_TOOL_NAMES,
   createCloneTools,
+  cloneToolCarriesSecrets,
   cloneToolJournalsItself,
+  detectMcpInputValidationFailure,
+  MCP_INPUT_VALIDATION_ERROR_MARKER,
   qualifiedToolName,
   SELF_JOURNALING_CLONE_TOOLS,
   TRACELESS_CLONE_TOOLS,
@@ -12430,6 +12433,91 @@ describe('自作ツールの日誌名簿（SELF_JOURNALING_CLONE_TOOLS / TRACELE
     for (const name of TRACELESS_CLONE_TOOLS) {
       expect(cloneToolJournalsItself(qualifiedToolName(name))).toBe(false);
     }
+  });
+});
+
+describe('cloneToolCarriesSecrets（Issue #1338 残件1——秘密を運ぶ自作ツールの名簿）', () => {
+  it('profile_write だけが秘密を運ぶ側として true を返す', () => {
+    // **profile_write の script は export FOO=bar のようなシェル行そのもの**
+    // （実行環境の鍵・トークンの値を渡す契約）。他の SELF_JOURNALING_CLONE_TOOLS
+    // は判断・記憶の内容・依頼文などの自由文で、値そのものが実行環境の鍵に
+    // なる契約は無い（`tools.ts` の `SELF_JOURNALING_TOOL_CARRIES_SECRETS` の
+    // doc「現状は profile_write だけである」）。
+    expect(cloneToolCarriesSecrets(qualifiedToolName('profile_write'))).toBe(true);
+    for (const name of SELF_JOURNALING_CLONE_TOOLS) {
+      if (name === 'profile_write') continue;
+      expect(cloneToolCarriesSecrets(qualifiedToolName(name))).toBe(false);
+    }
+  });
+
+  it('名簿に無い未知の修飾名には false を返す（TRACELESS 側・未知の自作ツール）', () => {
+    for (const name of TRACELESS_CLONE_TOOLS) {
+      expect(cloneToolCarriesSecrets(qualifiedToolName(name))).toBe(false);
+    }
+    expect(cloneToolCarriesSecrets(qualifiedToolName('future_tool'))).toBe(false);
+  });
+});
+
+describe('detectMcpInputValidationFailure（Issue #1338 残件1）', () => {
+  it('印が無い tool_response には undefined を返す（成功応答を誤検知しない）', () => {
+    expect(detectMcpInputValidationFailure(undefined)).toBeUndefined();
+    expect(detectMcpInputValidationFailure('日誌に記録した（j-1）。')).toBeUndefined();
+    expect(
+      detectMcpInputValidationFailure({
+        content: [{ type: 'text', text: '日誌に記録した（j-1）。' }],
+        isError: false,
+      }),
+    ).toBeUndefined();
+  });
+
+  it('印を含む文字列 tool_response は検証落ちとして検知する', () => {
+    const message = `MCP error -32602: ${MCP_INPUT_VALIDATION_ERROR_MARKER}journal_write: [{"path":["decision"]}]`;
+    const result = detectMcpInputValidationFailure(message);
+    expect(result).toBeDefined();
+    expect(result?.message).toBe(message);
+    expect(result?.fields).toEqual(['decision']);
+  });
+
+  it('オブジェクトの tool_response でも、文字列化した中に印が在れば検知する（形を仮定しない）', () => {
+    // **SDK の tool_response の実際の形は確認できていない**（`tools.ts` の
+    // `detectMcpInputValidationFailure` の doc「なぜ形を決め打ちしないのか」）。
+    // ここは CallToolResult らしき形（content/isError）で仮に包んで、それでも
+    // 検知できることを見る。
+    const result = detectMcpInputValidationFailure({
+      content: [
+        {
+          type: 'text',
+          text: `MCP error -32602: ${MCP_INPUT_VALIDATION_ERROR_MARKER}memory_delete: [{"path":["summary"]}]`,
+        },
+      ],
+      isError: true,
+    });
+    expect(result).toBeDefined();
+    expect(result?.fields).toEqual(['summary']);
+  });
+
+  it('欄名は「at <path>」形式と JSON の "path": [...] 形式の両方から拾う', () => {
+    // **実測（tool-arguments.test.ts）では JSON 形が本物**——ソースの読みだけで
+    // 決め打っていた「at <path>」形は、この repo の zod/SDK の組み合わせでは
+    // 出なかった。両方に対応させてあることをここで固定する。
+    const dotPathForm = `${MCP_INPUT_VALIDATION_ERROR_MARKER}journal_write: 引数が届いていない at decision`;
+    expect(detectMcpInputValidationFailure(dotPathForm)?.fields).toEqual(['decision']);
+
+    const jsonForm = `${MCP_INPUT_VALIDATION_ERROR_MARKER}journal_write: [{"code":"invalid_type","path":["decision"],"message":"x"}]`;
+    expect(detectMcpInputValidationFailure(jsonForm)?.fields).toEqual(['decision']);
+
+    const jsonFormMultiple = `${MCP_INPUT_VALIDATION_ERROR_MARKER}profile_write: [{"path":["script"]},{"path":["summary"]}]`;
+    expect(detectMcpInputValidationFailure(jsonFormMultiple)?.fields).toEqual([
+      'script',
+      'summary',
+    ]);
+  });
+
+  it('欄名が取れなくても、検証落ちという判定そのものは undefined へ倒れない（best-effort）', () => {
+    const message = `${MCP_INPUT_VALIDATION_ERROR_MARKER}journal_write: (path 情報なし)`;
+    const result = detectMcpInputValidationFailure(message);
+    expect(result).toBeDefined();
+    expect(result?.fields).toEqual([]);
   });
 });
 

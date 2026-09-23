@@ -272,6 +272,132 @@ function withMissingArgHint<Shape extends object>(shape: Shape): Shape {
 const tool: typeof sdkTool = (name, description, inputSchema, handler, extras) =>
   sdkTool(name, description, withMissingArgHint(inputSchema), handler, extras);
 
+/**
+ * MCP SDK（`@modelcontextprotocol/sdk` の `McpServer`）が入力検証で道具の
+ * 呼び出しを落としたとき、投げる `McpError` の `message` に必ず含む部分文字列
+ * （Issue #1338 残件1）。
+ *
+ * ## 何のためにここへ置くか
+ *
+ * `McpServer` の `callTool`（SDK 内部）は、zod の検証が落ちると
+ * `Input validation error: Invalid arguments for tool <name>: <issues>` という
+ * 文言で `McpError`（`ErrorCode.InvalidParams` = -32602）を投げ、**それを
+ * 自分で `try/catch` して** `{ content: [...], isError: true }` という
+ * **普通の `CallToolResult`** へ変換する（ハンドラは一度も呼ばれない）。
+ * 実測は `@modelcontextprotocol/sdk` 同梱の
+ * `dist/{cjs,esm}/server/mcp.js` の `validateToolInput` / `createToolError`
+ * （`callTool` の `catch (error) { … return this.createToolError(error…message) }`）。
+ * ⟹ Claude Code から見るとこれは「道具の実行が成功して、たまたまエラーの
+ * 本文を返した」にしか見えない——発火するのは `PostToolUse` であって
+ * `PostToolUseFailure` ではない。
+ *
+ * **`clone.ts` の `#journalToolUse` はこの印で「ハンドラが一度も走っていない」
+ * ことを検知する**（`SELF_JOURNALING_CLONE_TOOLS` の除外の前提「その道具の
+ * ハンドラが自分で記録する」が崩れている回を見分けるため。詳しくは
+ * `clone.ts` の `#onPostToolUse` の doc「除外の前提が崩れる回」）。
+ *
+ * **固定した理由（`tool-arguments.test.ts`）**: この文字列は alteroid の
+ * コードではなく SDK が持っている。SDK が文言を変えれば検知は壊れる——
+ * だから本物の JSON-RPC 往復にこの印を実測で当てる歯を置いた。SDK が文言を
+ * 変えれば、その歯が赤くなる（狙って壊す変異ではなく、上流の変化を拾うための
+ * 歯である）。
+ */
+export const MCP_INPUT_VALIDATION_ERROR_MARKER =
+  'Input validation error: Invalid arguments for tool ';
+
+/** {@link detectMcpInputValidationFailure} が返す判定結果。 */
+export interface McpInputValidationFailure {
+  /** `tool_response` を文字列化したもの（切り詰めは呼び出し元の責務）。 */
+  readonly message: string;
+  /**
+   * 検証で落ちた欄の名前（zod の path）。取れなければ空配列——
+   * best-effort であって、無いことは「取れなかった」であって
+   * 「全欄が揃っていた」ではない。
+   */
+  readonly fields: readonly string[];
+}
+
+/**
+ * `PostToolUse` の `tool_response` から、MCP の入力検証で落ちた呼び出しかを
+ * 判定する（Issue #1338 残件1）。
+ *
+ * ## なぜ形を決め打ちしないのか
+ *
+ * SDK の型定義は `tool_response: unknown` としか言っておらず
+ * （`@anthropic-ai/claude-agent-sdk` 同梱の `sdk.d.ts` の
+ * `PostToolUseHookInput.tool_response`）、実際の形（文字列そのものか、
+ * `{ content, isError }` のようなオブジェクトかなど）は確認できていない。
+ * **だからここは形を仮定せず、文字列化して印を探すだけにしてある**——
+ * オブジェクトでも `JSON.stringify` した文字列の中に
+ * {@link MCP_INPUT_VALIDATION_ERROR_MARKER} が部分文字列として残る
+ * （構造がどう包んでいても、値そのものは JSON の中にそのまま現れる）。
+ *
+ * ## `fields` は best-effort——実測で2つの形が在ることが分かっている
+ *
+ * SDK の `getParseErrorMessage`（ソース上の読み）は「`<issue.message> at
+ * <dotPath>`」の形で path を足す（zod の issue に `path` が在るときだけ）。
+ * **だが `tool-arguments.test.ts` の実物の JSON-RPC 往復で実測すると、この
+ * repo が使う zod / SDK の組み合わせでは通らない**——`safeParseAsync` が
+ * 返す `error` がオブジェクトではなく issue の配列そのものになり、
+ * `getParseErrorMessage` は `'issues' in error` の分岐に入れず
+ * `JSON.stringify(error)` の fallback 枝を通る。その結果、実際の文言は
+ * `"path": ["summary"]` のような JSON 断片になる（ソースの読みだけで
+ * 決め打っていたら、この歯（下の regex）は本番で1件も拾えなかった）。
+ * ⟹ **両方の形を拾う**——「` at <path>`」と「`"path": [...]`」の両方に
+ * 正規表現を当て、拾えなくても（空配列でも）呼び出し元は「検証で落ちた」
+ * という事実そのものは使える——`fields` が空でも判定を `undefined` へは
+ * 倒さない。
+ */
+export function detectMcpInputValidationFailure(
+  toolResponse: unknown,
+): McpInputValidationFailure | undefined {
+  const message = stringifyToolResponseForValidationCheck(toolResponse);
+  if (!message.includes(MCP_INPUT_VALIDATION_ERROR_MARKER)) return undefined;
+  const fields = [...new Set(extractValidationFields(message))];
+  return { message, fields };
+}
+
+/**
+ * 検証で落ちた欄の名前を、2つの実在フォーマットから拾う
+ * （{@link detectMcpInputValidationFailure} の doc「`fields` は best-effort」）。
+ */
+function extractValidationFields(message: string): string[] {
+  // **バックスラッシュを剥がしてから読む。** `stringifyToolResponseForValidationCheck`
+  // がオブジェクトを経由すると、道具の応答本文（それ自体が JSON.stringify 済みの
+  // 文字列）がもう一段 `JSON.stringify` される——結果、`"path":["summary"]` の
+  // 引用符が `\"path\":[\"summary\"]` のように1段エスケープされる。ここで拾う
+  // 欄名に引用符・バックスラッシュそのものが含まれることは無いので、剥がしても
+  // 取り違えは起きない（best-effort の抽出であって、逆に厳密なパーサにする
+  // 理由も無い）。
+  const normalized = message.replace(/\\(.)/g, '$1');
+  const fromDotPath = [...normalized.matchAll(/ at ([A-Za-z0-9_$.[\]]+)/g)].map(
+    (match) => match[1]!,
+  );
+  const fromJsonPath: string[] = [];
+  for (const pathMatch of normalized.matchAll(/"path"\s*:\s*\[([^\]]*)\]/g)) {
+    const inner = pathMatch[1] ?? '';
+    for (const stringMatch of inner.matchAll(/"([^"]*)"/g)) {
+      fromJsonPath.push(stringMatch[1]!);
+    }
+  }
+  return [...fromDotPath, ...fromJsonPath];
+}
+
+/**
+ * `tool_response`（形が確認できていない `unknown`）を、検証だけのために
+ * 文字列へ均す。**例外を投げないこと**——ここは `PostToolUse` フックの中で
+ * 毎回呼ばれるので、循環参照などで `JSON.stringify` が投げても道具の実行
+ * そのものを巻き込まない。
+ */
+function stringifyToolResponseForValidationCheck(toolResponse: unknown): string {
+  if (typeof toolResponse === 'string') return toolResponse;
+  try {
+    return JSON.stringify(toolResponse) ?? '';
+  } catch {
+    return '';
+  }
+}
+
 export const MCP_SERVER_NAME = 'alteroid';
 
 export interface ToolContext {
@@ -647,6 +773,98 @@ const SELF_JOURNALING_CLONE_TOOL_NAMES: ReadonlySet<string> = new Set(
  */
 export function cloneToolJournalsItself(tool: string): boolean {
   return SELF_JOURNALING_CLONE_TOOL_NAMES.has(tool);
+}
+
+/**
+ * `SELF_JOURNALING_CLONE_TOOLS` のうち、入力が実行環境の秘密（鍵・トークンの
+ * 値そのもの）を literally 運ぶよう設計されている道具（`true`）。
+ *
+ * ## なぜここが要るのか（Issue #1338 残件1）
+ *
+ * `clone.ts` の `#journalToolUse` は、検証で落ちた自作ツールの呼び出しを
+ * 拾って `tool_use` として残す（このファイルの
+ * {@link detectMcpInputValidationFailure} の doc）。**そのとき道具の生の
+ * 引数（`tool_input`）を一緒に残してよいかは道具ごとに違う。** ほとんどの
+ * 自作ツールの引数は人間・クローンが選んだ自由文（判断・記憶の内容・依頼文）
+ * で、Bash など preset の道具が既に日誌へ書いている自由文と同じ扱いで構わない
+ * が、`profile_write` の `script` は **`export FOO=bar` のようなシェル行
+ * そのもの**——実行環境の鍵・トークンの値を渡す契約になっている
+ * （`profile_read` の説明文「本文には鍵が入っている」と対になる）。これを
+ * そのまま日誌へ写すと、日誌は人間が読み要約にも載る場所なので、鍵が焼かれる
+ * と回収できない。
+ *
+ * ## 網羅性は型で強制する
+ *
+ * `Record<SelfJournalingCloneTool, boolean>` にしてあるので、
+ * `SELF_JOURNALING_CLONE_TOOLS` に道具を1本足すと、ここに1行足さない限り
+ * `typecheck` が落ちる（`_AssertCloneToolPartitionIsExhaustive` と同じ
+ * 「型で網羅性を守る」流儀）。**迷ったら `true`（秘密を運ぶ側）へ倒すこと**
+ * ——誤って `true` にした害は「本来書けたはずの値が日誌に書かれない」だけだが、
+ * 誤って `false` にした害は「鍵が日誌に写り、人間が読む要約にも載る」で
+ * 取り返しが付かない（`cloneToolJournalsItself` の doc「迷ったら残す側」と
+ * 向きは同じ——安全側に倒れるほうを選ぶ）。
+ *
+ * ## 現状は `profile_write` だけである
+ *
+ * 残り24本の `SELF_JOURNALING_CLONE_TOOLS`（`memory_write` /
+ * `memory_append` / `memory_delete` / `memory_frontmatter_set` /
+ * `memory_section_move` / `journal_write` / `ask_human` /
+ * `approval_withdraw` / `daily_report_write` / `schedule_create` /
+ * `schedule_remove` / `commitment_open` / `commitment_close` /
+ * `commitment_close_many` / `commitment_edit` / `commitment_appraise` /
+ * `inbox_remove_many` / `practice_write` / `practice_remove` /
+ * `manager_start` / `manager_send` / `manager_appraise` / `manager_stop` /
+ * `archive_remove` / `archive_remove_many`）の schema を確認したが、値
+ * そのものが実行環境の鍵になる契約の欄は無い（識別子・自由文・列挙値・真偽値
+ * ・数値のみ）。増えたら、上の型強制がその場で1行を要求する。
+ */
+const SELF_JOURNALING_TOOL_CARRIES_SECRETS: Record<SelfJournalingCloneTool, boolean> = {
+  memory_write: false,
+  memory_append: false,
+  memory_delete: false,
+  memory_frontmatter_set: false,
+  memory_section_move: false,
+  journal_write: false,
+  ask_human: false,
+  approval_withdraw: false,
+  daily_report_write: false,
+  schedule_create: false,
+  schedule_remove: false,
+  commitment_open: false,
+  commitment_close: false,
+  commitment_close_many: false,
+  commitment_edit: false,
+  commitment_appraise: false,
+  inbox_remove_many: false,
+  profile_write: true,
+  practice_write: false,
+  practice_remove: false,
+  manager_start: false,
+  manager_send: false,
+  manager_appraise: false,
+  manager_stop: false,
+  archive_remove: false,
+  archive_remove_many: false,
+};
+
+const SECRET_BEARING_CLONE_TOOL_NAMES: ReadonlySet<string> = new Set(
+  (Object.keys(SELF_JOURNALING_TOOL_CARRIES_SECRETS) as SelfJournalingCloneTool[])
+    .filter((name) => SELF_JOURNALING_TOOL_CARRIES_SECRETS[name])
+    .map((name) => qualifiedToolName(name)),
+);
+
+/**
+ * その道具（自前で日誌へ書く側）は、入力に実行環境の秘密を literally 運ぶか。
+ *
+ * `clone.ts` の `#journalToolUse` が、検証で落ちた自作ツールの呼び出しを
+ * `tool_use` として残すときに、`input`（生の引数）を一緒に写してよいかを
+ * この関数で決める——`true` なら写さない（{@link SELF_JOURNALING_TOOL_CARRIES_SECRETS}
+ * の doc）。
+ *
+ * 引数はフックから来る**修飾済みの名前**（`cloneToolJournalsItself` と同じ形）。
+ */
+export function cloneToolCarriesSecrets(tool: string): boolean {
+  return SECRET_BEARING_CLONE_TOOL_NAMES.has(tool);
 }
 
 /**
@@ -4672,6 +4890,20 @@ export function createCloneTools(context: ToolContext) {
      * 必須である以上いまも落ちる（観測された断り方には `path: ["decision"]` も
      * 在った）。**`decision` は記録の中身そのものなので任意にはできない。**
      * ⟹ 残りは「頻度の高い側だけを塞いだ」のであって、全部ではない。
+     *
+     * ⚠️ **訂正（2026-09-23、issue #1338 残件1）**: 「全部ではない」という
+     * 結論そのものは変わらない——`decision` はいまも必須で、欠ければ検証は
+     * いまも落ちる。**変わったのは、落ちたことがどこにも残らなかった点で
+     * ある。** かつてこの回は、`cloneToolJournalsItself('journal_write')` の
+     * 除外（「このハンドラが自分で記録する」という前提）に乗って
+     * `clone.ts` の `#journalToolUse` が早期 return し、日誌にも
+     * `self_dropped` にも何も残らなかった——ハンドラが一度も走っていない
+     * ので、その前提自体が崩れているのに除外だけが効いていた。**いまは
+     * `#journalToolUse` が MCP の入力検証エラーの印
+     * （{@link MCP_INPUT_VALIDATION_ERROR_MARKER}）を見て、この道具でも
+     * ハンドラが走っていない回を `tool_use`（`outcome: 'failed'`）として
+     * 残し、`journal_write` の場合は `self_dropped` にも跡を残す**
+     * （`clone.ts` の `#onPostToolUse` の doc「除外の前提が崩れる回」）。
      */
     tool(
       'journal_write',
@@ -4697,6 +4929,16 @@ export function createCloneTools(context: ToolContext) {
         // （`#journalToolUseFailure` はこの道具を除外しており、除外の理由は
         // 「自作ツール自身が失敗を記録するのがその道具のハンドラの責務」だから
         // である。⟹ その責務をここで果たす）。
+        // ⚠️ 訂正（2026-09-23、issue #1338 残件1）: この呼び出し（grounds
+        // だけが欠けた回）はハンドラが最後まで走っている＝ isError なしの
+        // 成功応答なので、発火するのは `PostToolUse` 側（`#journalToolUse`）
+        // であって `#journalToolUseFailure` ではない。除外しているのは
+        // 前者である——MCP SDK は入力検証の失敗を自分で try/catch し、
+        // `isError: true` の普通の `CallToolResult` へ変換するため、ハンドラ
+        // が一度も呼ばれない回（`decision` 自体が欠けた回）を含め、この道具の
+        // `PostToolUseFailure` はそもそも発火しない。その回の救済は
+        // `clone.ts` の `#journalToolUse` に足した（上の「これで直らない残り」
+        // の訂正を参照）。
         if (grounds === undefined) {
           noteDroppedRecord(
             '判断の根拠（journal_write の grounds）',

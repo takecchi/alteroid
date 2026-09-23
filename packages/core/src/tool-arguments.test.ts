@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import { createMemoryStores } from './testing.js';
-import { createCloneMcpServer, GROUNDS_NOT_DELIVERED } from './tools.js';
+import {
+  createCloneMcpServer,
+  GROUNDS_NOT_DELIVERED,
+  MCP_INPUT_VALIDATION_ERROR_MARKER,
+} from './tools.js';
 
 /**
  * 「長い引数の後ろに置いた引数が届かない」を、道具の側で観測しにいくテスト。
@@ -282,6 +286,43 @@ describe('クローンの道具に渡した引数は、長さと位置によら�
     expect(result.isError).toBe(true);
     expect(result.text).toContain('呼び出しの生の形');
     expect(result.text).toContain('タグの接頭辞の脱落');
+  });
+
+  /**
+   * **`clone.ts` の検証落ち救済（Issue #1338 残件1）が見る印は、alteroid の
+   * 文言ではなく MCP SDK（`@modelcontextprotocol/sdk` の `McpServer`）が
+   * 投げる `McpError` の message そのものである。** `clone.ts` の
+   * `#journalToolUse` は `tool_response` を文字列化して
+   * `MCP_INPUT_VALIDATION_ERROR_MARKER` を探し、見つかれば「ハンドラが
+   * 一度も走っていない」と判定する。
+   *
+   * **この歯は、その印が本物の JSON-RPC 往復に実際に現れることを固定する。**
+   * SDK が文言を変えれば（`Input validation error` を言い換える、コロンの
+   * 位置を変える等）、この歯が赤くなる——狙って壊す変異ではなく、上流の
+   * 変化を拾うための歯である（`tools.ts` の `MCP_INPUT_VALIDATION_ERROR_MARKER`
+   * の doc「固定した理由」）。
+   */
+  it('MCP SDK の入力検証エラーの文言は、alteroid が検知に使う印を含む（issue #1338 残件1）', async () => {
+    const rpc = await connect(createMemoryStores());
+    const result = await callTool(rpc, 'memory_delete', { slug: SHORT });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain(MCP_INPUT_VALIDATION_ERROR_MARKER);
+    // ⚠️ **道具名は修飾されていない生の名前で載る**（`memory_delete`。
+    // `mcp__alteroid__memory_delete` ではない）——実測（このテスト、
+    // 2026-09-23）。`qualifiedToolName` が足す接頭辞は Claude Code が複数の
+    // MCP サーバを束ねるときの側の付け方で、サーバ自身が組み立てるこの
+    // エラー文言には掛からない。**欠けた欄の名前は「at <path>」ではなく
+    // JSON の `"path": [...]` として載る**——事前に SDK のソースから読んで
+    // 想定していた形（`getParseErrorMessage` の `${message} at ${path}`）
+    // とは違い、`safeParseAsync` が返す `error` がオブジェクトではなく
+    // issue の配列そのものだったため、`getParseErrorMessage` は
+    // `JSON.stringify(error)` の fallback 枝を通っている。**この歯が
+    // その実測を固定する** ——`detectMcpInputValidationFailure` の欄名
+    // 抽出（`tools.ts`）は、この JSON 形にも対応させてある。
+    expect(result.text).toContain('memory_delete');
+    expect(result.text).toContain('"path"');
+    expect(result.text).toContain('summary');
   });
 
   /**
