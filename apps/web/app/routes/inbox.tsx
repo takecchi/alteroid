@@ -161,8 +161,8 @@ function InboxBacklogView({ backlog }: { backlog: InboxBacklog }) {
       {backlog.humanOriginated.total > 0 && (
         <div className="flex flex-col gap-1 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn">
           <p>
-            ⚠ 人間起点（human_message / human_answer）の滞留が {backlog.humanOriginated.total} 件ある
-            （
+            ⚠ 人間起点（human_message / human_answer）の滞留が {backlog.humanOriginated.total}{' '}
+            件ある （
             {backlog.humanOriginated.byType
               .map((entry) => `${INBOX_TYPE_LABELS[entry.type]} ${entry.count}`)
               .join(' / ')}

@@ -9846,6 +9846,225 @@
         }
       }
     },
+    "/inbox": {
+      "get": {
+        "operationId": "getInbox",
+        "tags": ["inbox"],
+        "summary": "受信箱の滞留の内訳を読む",
+        "description": "クローンの道具 `manager_list` の中にしか出ていなかった内訳（`summarizeInboxBacklog` の結果）を、人間の入口（HTTP）から読む（issue #783 段0）。`claimPending()` ではなく `peekPending()` を使うので、呼んでも `deliveries`（器の入れ替え回数）は1つも進まない。集計は`@alteroid/core` の同じ関数を通すので、クローンの道具と違う数を返すことは無い。",
+        "responses": {
+          "200": {
+            "description": "受信箱の内訳。0件のときは `oldestAt` 等、実際には取れていない欄を省く（値を作らない。`InboxStore.pending` と同じ作法）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "total": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "oldestAt": {
+                      "type": "string"
+                    },
+                    "byType": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "human_message",
+                              "human_answer",
+                              "distill",
+                              "timer",
+                              "external",
+                              "self_initiative",
+                              "manager_message"
+                            ]
+                          },
+                          "count": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": ["type", "count"]
+                      }
+                    },
+                    "bySource": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "source": {
+                            "type": "string"
+                          },
+                          "count": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": ["source", "count"]
+                      }
+                    },
+                    "bySourceOverflowKinds": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "bySourceOverflowCount": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "bySourceUnknownCount": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "distinct": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "distinctAcrossManagers": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "undelivered": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "deliveredOnce": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "redelivered": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "maxDeliveries": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "undeliveredByType": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "human_message",
+                              "human_answer",
+                              "distill",
+                              "timer",
+                              "external",
+                              "self_initiative",
+                              "manager_message"
+                            ]
+                          },
+                          "count": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": ["type", "count"]
+                      }
+                    },
+                    "ageBuckets": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "label": {
+                            "type": "string"
+                          },
+                          "count": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": ["label", "count"]
+                      }
+                    },
+                    "observedAt": {
+                      "type": "string"
+                    },
+                    "humanOriginated": {
+                      "type": "object",
+                      "properties": {
+                        "total": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "byType": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "enum": ["human_message", "human_answer"]
+                              },
+                              "count": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": ["type", "count"]
+                          }
+                        },
+                        "oldestAt": {
+                          "type": "string"
+                        },
+                        "undelivered": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": ["total", "byType", "undelivered"]
+                    }
+                  },
+                  "required": [
+                    "total",
+                    "byType",
+                    "bySource",
+                    "bySourceOverflowKinds",
+                    "bySourceOverflowCount",
+                    "bySourceUnknownCount",
+                    "distinct",
+                    "distinctAcrossManagers",
+                    "undelivered",
+                    "deliveredOnce",
+                    "redelivered",
+                    "maxDeliveries",
+                    "undeliveredByType",
+                    "ageBuckets",
+                    "observedAt",
+                    "humanOriginated"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/dropped": {
       "get": {
         "operationId": "getDropped",

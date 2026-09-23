@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import type {
   ChatStreamEvent,
   CloneHost,
+  InboxBacklogBreakdown,
   InboxEvent,
   Job,
   ManagerDenial,
@@ -1654,7 +1655,7 @@ describe('HTTP API', () => {
     it('0件なら total: 0 で、oldestAt 等の値を作らない', async () => {
       const response = await app.request('/inbox');
       expect(response.status).toBe(200);
-      const body = await response.json();
+      const body = (await response.json()) as InboxBacklogBreakdown;
       expect(body).toMatchObject({ total: 0, byType: [], bySource: [] });
       expect('oldestAt' in body).toBe(false);
       expect(body.humanOriginated).toMatchObject({ total: 0, byType: [], undelivered: 0 });
@@ -1677,7 +1678,7 @@ describe('HTTP API', () => {
 
       const response = await app.request('/inbox');
       expect(response.status).toBe(200);
-      const body = await response.json();
+      const body = (await response.json()) as InboxBacklogBreakdown;
       expect(body.total).toBe(3);
       expect(body.oldestAt).toBe('2026-08-10T00:00:00.000Z');
       expect(body.byType).toEqual(
@@ -1736,8 +1737,9 @@ describe('HTTP API', () => {
       // 除いて突き合わせる——他の全欄が `summarizeInboxBacklog` の直接呼びと
       // 一致することが、HTTP・CLI・`manager_list` が同じ関数を通っている証拠
       // になる（3つとも1つの純関数の呼び出しに帰着する）。
-      const { observedAt: _observedAt, ...expectedWithoutObservedAt } = expected;
+      const { observedAt, ...expectedWithoutObservedAt } = expected;
       expect(body).toMatchObject(expectedWithoutObservedAt);
+      expect(typeof observedAt).toBe('string');
     });
   });
 
