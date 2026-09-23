@@ -479,6 +479,120 @@ describe('落ちた runner の委譲を、別の runner へ移送する（#485 M
 
     await pool.stop();
   });
+
+  /**
+   * **やりすぎよけ（#1376）: `shared-volume` の移送では、作り直させる文言を出さない。**
+   *
+   * 上の `shared-volume` の2本は「中身は残っている」「コミット前の変更も残っている」を
+   * 含むことしか見ていないので、`shared-volume` の句にまで「clone し直して」が
+   * 混ざっても素通りする（変異で確かめた）。中身が残っている器で作り直させると、
+   * 残っている未コミットの変更を捨てさせることになる。
+   */
+  it('shared-volume の workspace なら、マネージャー向けの一言にもクローンへの報告にも、作り直させる文言は出ない（#1376）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(
+      jobWith('mgr-13', 'runner-a', {
+        workspace: { kind: 'shared-volume', path: '/mnt/shared/proj' },
+      }),
+    );
+    const fake = createFakeRegistry();
+    fake.entries.push(entryOf('runner-a', 'lost', 'runner-a'));
+    fake.entries.push(entryOf('runner-b', 'connected', 'runner-b'));
+    const runnerB = fakeRunner('runner-b');
+    fake.addClient(runnerB.client);
+    const { pool, inbox } = setup(stores, fake.registry);
+
+    await pool.reattachRunner('runner-b');
+
+    const message = runnerB.resumes[0]?.message ?? '';
+    expect(message).toContain('中身は残っている');
+    expect(message).not.toContain('clone し直して');
+    const reports = inbox.filter(
+      (event): event is Extract<InboxEvent, { type: 'manager_message' }> =>
+        event.type === 'manager_message' && event.kind === 'report',
+    );
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.text).not.toContain('作り直させること');
+
+    await pool.stop();
+  });
+
+  /**
+   * **git の workspace を持つ委譲の移送（#1376）。** 上の2本は `shared-volume`
+   * （中身が残る側）しか組んでいない。#485 の項目10 は workspace を「Git から
+   * 作り直す」と決めているので、移送先で作り直させる一言が本当に出るのは
+   * こちらの組み合わせである——ここを歯で固定する。
+   *
+   * ⚠ ここで確かめられるのは、マネージャーとクローンへ渡す**文言**までである。
+   * 移送先の器で、マネージャーが指示どおりに clone し直せるかは、実際の器で
+   * 観測しないと分からない。
+   */
+  it('git の workspace なら、マネージャー向けの一言が「clone し直してから、続きに入れ」と作り直す先を名指す（#1376）', async () => {
+    const stores = createMemoryStores();
+    const workspace: WorkspaceLocator = {
+      kind: 'git',
+      repository: 'https://github.com/example/proj.git',
+      ref: 'feature/relocate',
+    };
+    await stores.jobs.putJob(jobWith('mgr-11', 'runner-a', { workspace }));
+    const fake = createFakeRegistry();
+    fake.entries.push(entryOf('runner-a', 'lost', 'runner-a'));
+    fake.entries.push(entryOf('runner-b', 'connected', 'runner-b'));
+    const runnerB = fakeRunner('runner-b');
+    fake.addClient(runnerB.client);
+    const { pool } = setup(stores, fake.registry);
+
+    await pool.reattachRunner('runner-b');
+
+    const message = runnerB.resumes[0]?.message ?? '';
+    expect(
+      message.startsWith('[system] 走らせていた runner が黙ったので、別の器で続きを開いた。'),
+    ).toBe(true);
+    expect(message).toContain(
+      'https://github.com/example/proj.git の feature/relocate を' +
+        'clone し直してから、続きに入れ。',
+    );
+    expect(message).toContain('コミットしていなかった変更は残っていない');
+    // 作り直す側なので、「中身は残っている」とは言わない。
+    expect(message).not.toContain('中身は残っている');
+
+    await pool.stop();
+  });
+
+  it('git の workspace なら、クローンへの報告の workspace の1行が「作り直させること」と「コミットしていなかった変更は残っていない」を出す（#1376）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(
+      jobWith('mgr-12', 'runner-a', {
+        workspace: {
+          kind: 'git',
+          repository: 'https://github.com/example/proj.git',
+          ref: 'feature/relocate',
+        },
+      }),
+    );
+    const fake = createFakeRegistry();
+    fake.entries.push(entryOf('runner-a', 'lost', 'runner-a'));
+    fake.entries.push(entryOf('runner-b', 'connected', 'runner-b'));
+    const runnerB = fakeRunner('runner-b');
+    fake.addClient(runnerB.client);
+    const { pool, inbox } = setup(stores, fake.registry);
+
+    await pool.reattachRunner('runner-b');
+
+    const reports = inbox.filter(
+      (event): event is Extract<InboxEvent, { type: 'manager_message' }> =>
+        event.type === 'manager_message' && event.kind === 'report',
+    );
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.text).toContain('別の器で開き直した');
+    expect(reports[0]?.text).toContain(
+      'https://github.com/example/proj.git の feature/relocate から作り直させること。',
+    );
+    expect(reports[0]?.text).toContain('コミットしていなかった変更は残っていない');
+    expect(reports[0]?.text).not.toContain('コミット前の変更も残っている');
+
+    await pool.stop();
+  });
 });
 
 /**
