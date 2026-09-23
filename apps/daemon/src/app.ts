@@ -61,6 +61,7 @@ import {
   localDayRange,
   matchesInboxRemoveManyFilter,
   removeInboxEventsAndStopDelivery,
+  summarizeInboxBacklog,
   memorySlugSchema,
   practiceKindSchema,
   practiceSlugSchema,
@@ -128,6 +129,7 @@ import {
   errorResponseSchema,
   eventAcceptedResponseSchema,
   healthResponseSchema,
+  inboxBacklogResponseSchema,
   inboxRemoveManyRequestSchema,
   inboxRemoveManyResponseSchema,
   journalListResponseSchema,
@@ -5411,6 +5413,83 @@ export function createApp(deps: AppDeps) {
             remaining,
           }),
         );
+      },
+    )
+
+    /**
+     * 受信箱の滞留の**内訳**を、器の外（HTTP）から読む（issue #783 段0の
+     * 最後の欠落）。
+     *
+     * ## #783 が名指しした欠落そのもの
+     *
+     * `summarizeInboxBacklog` の内訳は、これまでクローンの道具
+     * `manager_list` の中にしか出ていなかった（`tools.ts` の
+     * `describeInboxBacklog`）。人間の入口はここまで `POST /inbox/remove`
+     * （絞り込んで**畳む**＝消す）しか持たず、内訳を*読む*口が1本も無かった
+     * ——人間が内訳を知りたければ、クローンのターンを1本使わせて
+     * `manager_list` を呼ばせるほかなかった（#783 本文 1-1 の表「HTTP 0本 /
+     * openapi 0本 / CLI 0本」）。
+     *
+     * ## `claimPending()` ではなく `peekPending()` を使う
+     *
+     * `claimPending()` は呼ぶだけで残っている未読の**全行**の `deliveries`
+     * （器の入れ替え回数）を1つ進める（`InboxStore.claimPending` の doc）。
+     * **ただ読むだけのこの口がその副作用を持ってはならない**——読むたびに
+     * 「器が入れ替わった」という嘘の回数が増える。`peekPending()` は同じ行を
+     * 配達回数を進めずに返す、そのためだけに在る読み取り専用の口
+     * （`InboxStore.peekPending` の doc）。
+     *
+     * ## 集計はここでは複製しない
+     *
+     * `summarizeInboxBacklog`（`@alteroid/core`）をそのまま呼ぶ。クローンの
+     * `manager_list` と人間のこの口が別々の集計を持つと、いつか2つの数が
+     * 食い違う——`inboxBacklogDedupeKey` の doc「なぜ1箇所に閉じるか」が
+     * 名指しした #783 の症状の形そのものを、この口自身が再現することになる。
+     *
+     * ## 上限（bySource の上位5件）は新しく足していない
+     *
+     * `bySource`（送信元別の内訳）は任意の文字列をキーに持つので、無制限に
+     * 育ちうる——`summarizeInboxBacklog` が既に上位5件で打ち切り、溢れた分は
+     * `bySourceOverflowKinds` / `bySourceOverflowCount` として0件でも必ず返す
+     * （`InboxBacklogBreakdown` の doc）。**ここで新しい上限は足していない**
+     * ——`manager_list` と同じ関数を通す以上、同じ上限を自動的に継承する。
+     *
+     * ## 資格は `authenticate` だけ（`requireOperator` は付けない）
+     *
+     * `POST /inbox/remove` と同じ強さ——返すのは集計値だけで、本文の全文は
+     * 1文字も載らない（`describeInboxBacklogBreakdown` は集計値しか描かない、
+     * その doc）。
+     *
+     * ## 0件のときに値を作らない
+     *
+     * `summarizeInboxBacklog` 自身が「0件のときに値を作らない」作法
+     * （`InboxStore.pending` と同じ）を既に守っている——`oldestAt` は1件も
+     * 無ければ持たない、`byType` / `bySource` / `ageBuckets` は件数0の行を
+     * 載せない。ここでは何も足していない。
+     */
+    .get(
+      '/inbox',
+      describeRoute({
+        tags: ['inbox'],
+        summary: '受信箱の滞留の内訳を読む',
+        description:
+          'クローンの道具 `manager_list` の中にしか出ていなかった内訳' +
+          '（`summarizeInboxBacklog` の結果）を、人間の入口（HTTP）から読む' +
+          '（issue #783 段0）。`claimPending()` ではなく `peekPending()` を使うので、' +
+          '呼んでも `deliveries`（器の入れ替え回数）は1つも進まない。集計は' +
+          '`@alteroid/core` の同じ関数を通すので、クローンの道具と違う数を返すことは無い。',
+        responses: {
+          200: {
+            description:
+              '受信箱の内訳。0件のときは `oldestAt` 等、実際には取れていない欄を省く' +
+              '（値を作らない。`InboxStore.pending` と同じ作法）。',
+            content: { 'application/json': { schema: resolver(inboxBacklogResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        const rows = await stores.inbox.peekPending();
+        return c.json(inboxBacklogResponseSchema.parse(summarizeInboxBacklog(rows, Date.now())));
       },
     )
 

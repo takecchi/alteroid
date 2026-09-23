@@ -218,3 +218,11 @@ export type InboxRemoveManyRequestBody = NonNullable<
 /** `types` に渡せる7種類（`InboxEvent['type']` と同じ）。 */
 export type InboxEventType = InboxRemoveManyRequestBody['types'][number];
 export type InboxRemoveManyResult = Ok<paths['/inbox/remove']['post']>;
+
+/**
+ * 受信箱の滞留の内訳（`GET /inbox`。issue #783 段0）。クローンの道具
+ * `manager_list` の中にしか出ていなかった内訳を、人間の入口（Web UI）から
+ * 読む——`@alteroid/core` の `InboxBacklogBreakdown` を JSON へ写したもの
+ * （`apps/daemon/src/openapi.ts` の `inboxBacklogResponseSchema`）。
+ */
+export type InboxBacklog = Ok<paths['/inbox']['get']>;

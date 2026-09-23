@@ -1,3 +1,4 @@
+import type { InboxBacklogBreakdown } from '@alteroid/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { captureStdout } from './test-support.js';
@@ -24,7 +25,7 @@ vi.mock('./target.js', async (importOriginal) => ({
     }),
 }));
 
-const { inboxRemoveCommand } = await import('./inbox.js');
+const { inboxRemoveCommand, inboxShowCommand, renderInboxBacklog } = await import('./inbox.js');
 
 interface Sent {
   url: string;
@@ -279,5 +280,138 @@ describe('alteroid inbox remove — サーバの断りをそのまま投げる',
     await expect(inboxRemoveCommand({ types: 'timer', reason: 'r' })).rejects.toThrow(
       'fetch failed',
     );
+  });
+});
+
+/**
+ * `alteroid inbox show` — issue #783 段0の最後の欠落。`GET /inbox` を叩くだけの
+ * 読み取り専用コマンド。ここで固定したいのは3つ——(1) `GET /inbox` を叩くこと
+ * （`POST /inbox/remove` のような書き込みではない）、(2) 文言はクローンの道具
+ * `manager_list` と共有した関数（`describeInboxBacklogBreakdown` /
+ * `describeHumanOriginatedInboxAlert`。`@alteroid/core`）で描くこと、(3) 失敗を
+ * 例外で上へ通すこと（`inboxRemoveCommand` と同じ約束）。
+ */
+const EMPTY_BACKLOG: InboxBacklogBreakdown = {
+  total: 0,
+  byType: [],
+  bySource: [],
+  bySourceOverflowKinds: 0,
+  bySourceOverflowCount: 0,
+  bySourceUnknownCount: 0,
+  distinct: 0,
+  distinctAcrossManagers: 0,
+  undelivered: 0,
+  deliveredOnce: 0,
+  redelivered: 0,
+  maxDeliveries: 0,
+  undeliveredByType: [],
+  ageBuckets: [],
+  observedAt: '2026-09-23T00:00:00.000Z',
+  humanOriginated: { total: 0, byType: [], undelivered: 0 },
+};
+
+const BACKLOG_WITH_ROWS: InboxBacklogBreakdown = {
+  total: 3,
+  oldestAt: '2026-08-10T00:00:00.000Z',
+  byType: [
+    { type: 'human_message', count: 1 },
+    { type: 'manager_message', count: 2 },
+  ],
+  bySource: [{ source: 'manager:mgr-1', count: 2 }],
+  bySourceOverflowKinds: 0,
+  bySourceOverflowCount: 0,
+  bySourceUnknownCount: 1,
+  distinct: 3,
+  distinctAcrossManagers: 3,
+  undelivered: 3,
+  deliveredOnce: 0,
+  redelivered: 0,
+  maxDeliveries: 0,
+  undeliveredByType: [
+    { type: 'human_message', count: 1 },
+    { type: 'manager_message', count: 2 },
+  ],
+  ageBuckets: [{ label: '1時間未満', count: 3 }],
+  observedAt: '2026-09-23T00:00:00.000Z',
+  humanOriginated: {
+    total: 1,
+    byType: [{ type: 'human_message', count: 1 }],
+    oldestAt: '2026-08-11T00:00:00.000Z',
+    undelivered: 1,
+  },
+};
+
+describe('renderInboxBacklog', () => {
+  it('0件は「クローンの受信箱に未処理の合図は無い。」', () => {
+    expect(renderInboxBacklog(EMPTY_BACKLOG)).toBe('クローンの受信箱に未処理の合図は無い。');
+  });
+
+  it('人間起点の滞留を、内訳より前・単独の行で出す（issue #917 と同じ並び）', () => {
+    const text = renderInboxBacklog(BACKLOG_WITH_ROWS);
+    const alertIndex = text.indexOf('人間起点');
+    const breakdownIndex = text.indexOf('内訳（計');
+    expect(alertIndex).toBeGreaterThanOrEqual(0);
+    expect(breakdownIndex).toBeGreaterThan(alertIndex);
+  });
+
+  it('種類別・送信元別の内訳を含む（manager_list と同じ描画関数を通した証拠）', () => {
+    const text = renderInboxBacklog(BACKLOG_WITH_ROWS);
+    expect(text).toContain('計 3 件');
+    expect(text).toContain('human_message 1');
+    expect(text).toContain('manager_message 2');
+    expect(text).toContain('manager:mgr-1 2');
+  });
+});
+
+describe('alteroid inbox show', () => {
+  it('GET /inbox を叩く（POST ではない）', async () => {
+    replies = [{ status: 200, body: EMPTY_BACKLOG }];
+    const read = captureStdout();
+    await inboxShowCommand();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.url).toBe('http://127.0.0.1:4517/inbox');
+    expect(sent[0]?.method).toBe('GET');
+    expect(read()).toContain('クローンの受信箱に未処理の合図は無い。');
+  });
+
+  it('内訳を出力する', async () => {
+    replies = [{ status: 200, body: BACKLOG_WITH_ROWS }];
+    const read = captureStdout();
+    await inboxShowCommand();
+
+    const text = read();
+    expect(text).toContain('計 3 件');
+    expect(text).toContain('human_message 1');
+  });
+
+  /**
+   * **読み取り専用コマンドの作法**（`dropped.ts` / `runners.ts` / `usage.ts`
+   * と同じ）——HTTP のエラーは stdout へ書いて正常終了する。読み取りに
+   * 失敗しても状態は何も変わっていないので、`inboxRemoveCommand`（書き込み
+   * 系。失敗を例外で通す）とは事情が違う。
+   */
+  it('403（許可が無い）は stdout へ書いて正常終了する（例外にしない）', async () => {
+    replies = [{ status: 403, body: { error: 'このアカウントには alteroid を使う許可が無い' } }];
+    const read = captureStdout();
+
+    await inboxShowCommand();
+
+    expect(read()).toContain('受信箱の内訳を読めませんでした（403）');
+  });
+
+  it('5xx も stdout へ書いて正常終了する', async () => {
+    replies = [{ status: 500, body: { error: 'internal' } }];
+    const read = captureStdout();
+
+    await inboxShowCommand();
+
+    expect(read()).toContain('受信箱の内訳を読めませんでした（500）');
+  });
+
+  it('繋がらない（fetch そのものが失敗する）も投げる', async () => {
+    globalThis.fetch = (() => Promise.reject(new Error('fetch failed'))) as unknown as typeof fetch;
+
+    await expect(inboxShowCommand()).rejects.toThrow('fetch failed');
   });
 });

@@ -805,16 +805,21 @@ export interface InboxRemoveManyInput {
  * コメントと同じ理由——判定を複製すると、サーバ側の文言や条件が変わったとき
  * ここだけ古いまま残る）。
  *
- * **キャッシュを引き直さない。** `GET /inbox` のような一覧は無く、この画面
- * 自身が表示するのは呼び出しの戻り値だけである。消した id は日誌にも残るが、
- * 日誌は SSE（`use-journal-live.ts`）が別途拾うので、ここから明示的に
- * `mutate(KEY.journal)` する必要はない。
+ * **`GET /inbox`（issue #783 段0）が入ったので、実行（`dryRun: false`）の
+ * 後だけ `KEY.inbox` を引き直す。** ⚠️ **かつてここには「`GET /inbox` のような
+ * 一覧は無く……引き直す必要はない」と書いてあったが、#783 段0でその前提が
+ * 消えた——いまは在る。** 試算（`dryRun: true`）は何も変更しないので引き直さ
+ * ない（`routes/inbox.tsx` の `InboxBacklogCard` が「絞り込みを変えたら前の
+ * 試算結果を無効にする」のと同じく、無駄な GET を送らない側へ倒す）。消した
+ * id は日誌にも残るが、日誌は SSE（`use-journal-live.ts`）が別途拾うので、
+ * ここから明示的に `mutate(KEY.journal)` する必要はない。
  */
 export function useInboxRemoveMany() {
   const api = useApi();
+  const { mutate } = useSWRConfig();
   return useCallback(
     async (input: InboxRemoveManyInput): Promise<InboxRemoveManyResult> => {
-      return api.api
+      const result = await api.api
         .POST('/inbox/remove', {
           body: {
             types: [...input.types],
@@ -826,7 +831,10 @@ export function useInboxRemoveMany() {
           },
         })
         .then(unwrap);
+      // **試算は何も変更しない——引き直すのは実行できたときだけ。**
+      if (!input.dryRun) await mutate(KEY.inbox);
+      return result;
     },
-    [api],
+    [api, mutate],
   );
 }

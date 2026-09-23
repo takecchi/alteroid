@@ -2,8 +2,9 @@ import { useMemo, useState } from 'react';
 
 import { Page } from '~/components/page';
 import { Badge, Button, Card, CardHeader, ErrorNote, Input } from '~/components/ui';
+import { useInboxBacklog } from '~/hooks/queries';
 import { useInboxRemoveMany } from '~/hooks/mutations';
-import type { InboxEventType, InboxRemoveManyResult } from '~/lib/types';
+import type { InboxBacklog, InboxEventType, InboxRemoveManyResult } from '~/lib/types';
 
 /**
  * `/inbox` — 受信箱（`inbox_events`。まだ処理し終えていない合図の器）の未読を、
@@ -58,6 +59,20 @@ import type { InboxEventType, InboxRemoveManyResult } from '~/lib/types';
  * 実行する」という2段構えが要件として入っており（上記）、これ自体が
  * settings.tsx の確認ダイアログより詳しい確認（対象の正確な件数と id の一覧）
  * を先に見せている。ダイアログを重ねると同じ確認を二重に求めることになる。
+ *
+ * ## 内訳（`InboxBacklogCard`。issue #783 段0の最後の欠落）
+ *
+ * `GET /inbox`——クローンの道具 `manager_list` の中にしか出ていなかった内訳
+ * （`summarizeInboxBacklog`）を、この画面からも読む。**読み取り専用**（`useSWR`
+ * のみ、`peekPending()` を使うので `deliveries` は進まない——`GET /inbox` の
+ * doc）。「畳む」（`InboxRemoveCard` の「実行する」）で実際に消した直後は
+ * `useInboxRemoveMany` が `KEY.inbox` を引き直すので、この画面を開いたままでも
+ * 数字が最新に更新される。
+ *
+ * **値は `@alteroid/core` から import しない。** `apps/web` は core の値
+ * import を禁じている（`INBOX_TYPE_LABELS` の doc と同じ理由）——生成 spec
+ * から導いた `InboxBacklog` 型に対して、ラベルだけこの画面側で文字列リテラル
+ * を合わせている。
  */
 export default function Inbox() {
   return (
@@ -65,7 +80,10 @@ export default function Inbox() {
       title="受信箱"
       description="まだ処理し終えていない合図（inbox_events）の未読を、絞り込んでまとめて消す。既定は試算——1件も消さない"
     >
-      <InboxRemoveCard />
+      <div className="flex flex-col gap-4">
+        <InboxBacklogCard />
+        <InboxRemoveCard />
+      </div>
     </Page>
   );
 }
@@ -102,6 +120,141 @@ function splitList(value: string): string[] {
     .split(',')
     .map((part) => part.trim())
     .filter((part) => part.length > 0);
+}
+
+/**
+ * 受信箱の滞留の内訳（`GET /inbox`）。issue #783 段0の最後の欠落——
+ * クローンの道具 `manager_list` の中にしか出ていなかった内訳を、この画面
+ * からも読む。**読み取り専用**（`useInboxBacklog` は `useSWR` のみで、
+ * 書き込みは一切しない）。
+ *
+ * **文言は `apps/cli/src/inbox.ts` の `renderInboxBacklog` /
+ * `apps/daemon/src/app.ts` の `GET /inbox` と同じ数え方を読む。** ここでは
+ * 集計をやり直さない——描くだけである（集計は `@alteroid/core` の
+ * `summarizeInboxBacklog` 1箇所。`GET /inbox` の doc）。
+ */
+function InboxBacklogCard() {
+  const { data, error, isLoading } = useInboxBacklog();
+
+  return (
+    <Card>
+      <CardHeader
+        title="内訳"
+        subtitle="alteroid inbox show / GET /inbox と同じもの（読み取り専用）"
+      />
+      <div className="flex flex-col gap-3 px-4 py-3 text-sm">
+        <ErrorNote error={error} />
+        {isLoading && data === undefined && <p className="text-xs text-muted">読み込み中…</p>}
+        {data !== undefined && <InboxBacklogView backlog={data} />}
+      </div>
+    </Card>
+  );
+}
+
+function InboxBacklogView({ backlog }: { backlog: InboxBacklog }) {
+  if (backlog.total === 0) {
+    return <p className="text-xs text-muted">クローンの受信箱に未処理の合図は無い。</p>;
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      {backlog.humanOriginated.total > 0 && (
+        <div className="flex flex-col gap-1 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn">
+          <p>
+            ⚠ 人間起点（human_message / human_answer）の滞留が {backlog.humanOriginated.total} 件ある
+            （
+            {backlog.humanOriginated.byType
+              .map((entry) => `${INBOX_TYPE_LABELS[entry.type]} ${entry.count}`)
+              .join(' / ')}
+            ）。
+          </p>
+          <p>
+            そのうち、いまの器になってから積まれ、まだ片付いていない分が{' '}
+            {backlog.humanOriginated.undelivered} 件（ストアに残っている行を見ているだけで、
+            配達されていないとは言えない）。
+          </p>
+        </div>
+      )}
+
+      <p className="text-xs">
+        計 {backlog.total} 件
+        {backlog.oldestAt !== undefined && ` （最も古いものは ${backlog.oldestAt} から）`}
+      </p>
+
+      <BreakdownSection
+        title="種類"
+        rows={backlog.byType.map((entry) => ({
+          label: INBOX_TYPE_LABELS[entry.type],
+          count: entry.count,
+        }))}
+      />
+
+      <BreakdownSection
+        title={`送信元（上位5件。source/managerId を持つ型のみ。溢れ ${backlog.bySourceOverflowKinds} 種 ${backlog.bySourceOverflowCount} 件 / source を言えない型 ${backlog.bySourceUnknownCount} 件）`}
+        rows={backlog.bySource.map((entry) => ({ label: entry.source, count: entry.count }))}
+        empty="（source/managerId を持つ型は無い）"
+      />
+
+      <p className="text-xs">
+        同一本文（id/at を除いた中身）を畳むと {backlog.distinct} 件
+        {backlog.distinctAcrossManagers !== backlog.distinct &&
+          ` ／ 同じ本文がマネージャーを跨いで ${backlog.distinctAcrossManagers} 件`}
+        <span className="block text-muted">
+          ⚠ 本文が同じでも別々に起きた出来事である。この数は上下どちらへもぶれる。
+        </span>
+      </p>
+
+      <p className="text-xs">
+        器の入れ替え回数: 0回＝いまの器になってから積まれた {backlog.undelivered} / 1回{' '}
+        {backlog.deliveredOnce} / 2回以上 {backlog.redelivered}（最大 {backlog.maxDeliveries}）
+        <span className="block text-muted">
+          ⚠ 配られた回数ではない — 門が畳んだ行はターンが1度も起きないまま数だけ増える
+        </span>
+      </p>
+
+      <BreakdownSection
+        title="いまの器になってから積まれた分（0回）の内訳（種類別）"
+        rows={backlog.undeliveredByType.map((entry) => ({
+          label: INBOX_TYPE_LABELS[entry.type],
+          count: entry.count,
+        }))}
+      />
+
+      <BreakdownSection
+        title={`齢（観測 ${backlog.observedAt} 時点。齢は相対値なので、この行を写すときは基準点も一緒に写すこと）`}
+        rows={backlog.ageBuckets.map((entry) => ({ label: entry.label, count: entry.count }))}
+      />
+    </div>
+  );
+}
+
+/** ラベル・件数の組を並べる、内訳共通の1ブロック。0件なら `empty` を出す。 */
+function BreakdownSection({
+  title,
+  rows,
+  empty = '（無し）',
+}: {
+  title: string;
+  rows: { label: string; count: number }[];
+  empty?: string;
+}) {
+  return (
+    <div>
+      <p className="text-xs text-muted">{title}</p>
+      {rows.length === 0 ? (
+        <p className="text-xs">{empty}</p>
+      ) : (
+        <ul className="mt-1 flex flex-col gap-0.5 text-xs">
+          {rows.map((row) => (
+            <li key={row.label} className="flex items-center justify-between gap-2">
+              <span className="font-mono break-all">{row.label}</span>
+              <span className="shrink-0">{row.count}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 function InboxRemoveCard() {

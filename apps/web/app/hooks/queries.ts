@@ -130,6 +130,7 @@ export const KEY = {
   dropped: { type: 'dropped' } as const,
   archive: { type: 'archive' } as const,
   archiveSessions: { type: 'archiveSessions' } as const,
+  inbox: { type: 'inbox' } as const,
 };
 
 /** デーモンが応答するか。接続先が合っているかの唯一の手がかりでもある。 */
@@ -476,6 +477,23 @@ export function useCredentials() {
 export function useDropped() {
   const api = useApi();
   return useSWR(KEY.dropped, () => api.api.GET('/dropped').then(unwrap));
+}
+
+/**
+ * 受信箱の滞留の内訳（`GET /inbox`。issue #783 段0の最後の欠落）。**資格は
+ * 認証のみ**（`POST /inbox/remove` と同じ強さ）。読み取り専用——
+ * `claimPending()` ではなく `peekPending()` を使うので、呼んでも
+ * `deliveries`（器の入れ替え回数）は1つも進まない（`apps/daemon/src/app.ts`
+ * の `GET /inbox` の doc）。
+ *
+ * クローンの道具 `manager_list` の中にしか出ていなかった内訳が、これで
+ * 3つの入口（HTTP・CLI の `alteroid inbox show`・この Web UI）すべてから
+ * 読める——集計は `@alteroid/core` の `summarizeInboxBacklog` 1箇所でしか
+ * 行われないので、3つが違う数を返すことは無い。
+ */
+export function useInboxBacklog() {
+  const api = useApi();
+  return useSWR(KEY.inbox, () => api.api.GET('/inbox').then(unwrap));
 }
 
 /**

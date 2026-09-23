@@ -1,9 +1,19 @@
 import { stdout } from 'node:process';
 
+import {
+  describeHumanOriginatedInboxAlert,
+  describeInboxBacklogBreakdown,
+  type InboxBacklogBreakdown,
+} from '@alteroid/core';
+
+import { createClient } from './client.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 
 /**
- * `alteroid inbox` — 受信箱（`inbox_events`。まだ処理し終えていない合図の器）。
+ * `alteroid inbox remove` — 受信箱（`inbox_events`。まだ処理し終えていない
+ * 合図の器）の未読を、絞り込んでまとめて畳む（消す）。**内訳を読むだけなら
+ * `alteroid inbox show`**（下の `inboxShowCommand`。issue #783 段0）——
+ * こちらは書き込み系（消す）で、事情が異なるので doc も分けてある。
  *
  * issue #972: 同じ失敗の写しが数千件積もると、クローン側は既存の単発 `remove()`
  * の1ターン1件のペースでしか排出できず、排出そのものが文脈窓を食い潰す。唯一の
@@ -174,4 +184,72 @@ function describeExecuteCommand(options: InboxRemoveOptions): string {
     '--execute',
   ];
   return parts.join(' ');
+}
+
+/**
+ * `alteroid inbox show` — 受信箱の滞留の**内訳**を読む（issue #783 段0の
+ * 最後の欠落）。
+ *
+ * `summarizeInboxBacklog` の集計は、これまでクローンの道具 `manager_list`
+ * の中にしか出ていなかった。人間の入口はここまで `alteroid inbox remove`
+ * （`POST /inbox/remove`。畳む＝消す）しか持たず、内訳を*読む*口が無かった
+ * ——人間が内訳を知りたければ、クローンのターンを1本使わせて `manager_list`
+ * を呼ばせるほかなかった（#783 本文 1-1 の表）。
+ *
+ * **読み取り専用。** `GET /inbox`（`apps/daemon/src/app.ts`）を叩くだけで、
+ * 何も変更しない——`claimPending()` ではなく `peekPending()` を使うので、
+ * 叩いても `deliveries`（器の入れ替え回数）は1つも進まない（`GET /inbox` の
+ * doc）。
+ *
+ * **文言はクローンの道具と共有する。** `describeInboxBacklogBreakdown` /
+ * `describeHumanOriginatedInboxAlert`（`@alteroid/core`）は `manager_list`
+ * が読むのと同じ関数——ここで書き直さない。口ごとに違う言葉で同じ状態が出ると、
+ * 読む側は別の状態だと読む（`apps/cli/src/dropped.ts` の doc「文言は core に
+ * 任せ、ここで作り直さない」と同じ判断）。**HTTP と CLI が違う数・違う文言を
+ * 返すことは無い**——集計は `apps/daemon/src/app.ts` の `GET /inbox` ハンドラで
+ * 1回しか行われず、CLI はその JSON をそのまま描くだけである。
+ *
+ * **HTTP のエラーは stdout へ書いて正常終了する。** `dropped.ts` /
+ * `runners.ts` / `usage.ts` と同じ、読み取り専用コマンドの作法——書き込み系
+ * （`inboxRemoveCommand`）が「消えたのか消えなかったのか」を終了コードで
+ * 区別するのとは事情が違い、読み取りに失敗しても状態は何も変わっていない。
+ * **繋がらない（ネットワークそのものの失敗）はここで握り潰さない**——それは
+ * 上と同じ理由で例外のまま上（`index.ts` の
+ * `program.parseAsync(...).catch(...)`）へ通す。
+ */
+export async function inboxShowCommand(): Promise<void> {
+  const target = await resolveTarget();
+  if (target.note !== null) {
+    stdout.write(`${target.note}\n`);
+    return;
+  }
+  const client = createClient(target.baseUrl, target.headers);
+  const response = await client.inbox.$get();
+  if (!response.ok) {
+    stdout.write(`受信箱の内訳を読めませんでした（${response.status}）\n`);
+    return;
+  }
+  const breakdown = (await response.json()) as InboxBacklogBreakdown;
+  stdout.write(`${renderInboxBacklog(breakdown)}\n`);
+}
+
+/**
+ * 内訳を、人間が読める形へ。
+ *
+ * **0件は「クローンの受信箱に未処理の合図は無い。」——`tools.ts` の
+ * `describeInboxBacklog` の0件文言とそろえてある**（同じ状態には同じ言葉を
+ * 使う。上の doc と同じ理由）。
+ *
+ * **人間起点（`human_message` / `human_answer`）の滞留は、内訳より前に
+ * 単独の行で出す。** `describeHumanOriginatedInboxAlert` が0件なら空文字列を
+ * 返すので、そのときは1文字も増えない（`tools.ts` の `describeInboxBacklog`
+ * と同じ並び——issue #917 が「大きい数字に埋もれて読み飛ばした」と名指しした
+ * 症状を、この CLI でも再現しないため）。
+ */
+export function renderInboxBacklog(breakdown: InboxBacklogBreakdown): string {
+  if (breakdown.total === 0) return 'クローンの受信箱に未処理の合図は無い。';
+  const alert = describeHumanOriginatedInboxAlert(breakdown);
+  const lines = alert === '' ? [] : [alert, ''];
+  lines.push(describeInboxBacklogBreakdown(breakdown));
+  return lines.join('\n');
 }

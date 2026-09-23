@@ -39,6 +39,7 @@ import {
   RECENT_TRACE_LIMIT,
   RESERVED_SCHEDULE_KINDS,
   recentDroppedTraces,
+  summarizeInboxBacklog,
 } from '@alteroid/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -1616,6 +1617,127 @@ describe('HTTP API', () => {
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ dryRun: true, droppedFromDelivery: 0 });
       expect(fake.droppedFromDelivery).toEqual([]);
+    });
+  });
+
+  /**
+   * `GET /inbox`（issue #783 段0の最後の欠落）。クローンの道具 `manager_list`
+   * の中にしか出ていなかった内訳（`summarizeInboxBacklog`）を、器の外
+   * （HTTP）から読む。ここで固定したいのは3つ——(1) 0件のときに値を作らない
+   * （`InboxBacklogBreakdown` の doc と同じ作法）、(2) 集計そのもの
+   * （複数の型・複数回配達された行を渡して、既存の `summarizeInboxBacklog`
+   * の契約どおりに描けているか）、(3) **呼んでも `deliveries` が1つも
+   * 進まない**——`claimPending()` を使っていたらここが壊れる、この口の
+   * いちばんの歯。
+   */
+  describe('GET /inbox', () => {
+    // 直上の `describe('POST /inbox/remove', ...)` が持つ `managerReport` /
+    // `humanMsg` と同じ形だが、姉妹の `describe` からは見えないので同じ形を
+    // ここでも持つ（複製ではなく、同じ動機——issue #972 のテストにある
+    // フィクスチャそのものの作り方に合わせてある）。
+    const managerReport = (id: string, at: string, managerId = 'mgr-1'): InboxEvent => ({
+      type: 'manager_message',
+      id,
+      at,
+      managerId,
+      kind: 'report',
+      text: '429（同じ失敗の写し）',
+    });
+    const humanMsg = (id: string, at: string): InboxEvent => ({
+      type: 'human_message',
+      id,
+      at,
+      text: '人間の発言',
+      conversationId: 'conv-1',
+    });
+
+    it('0件なら total: 0 で、oldestAt 等の値を作らない', async () => {
+      const response = await app.request('/inbox');
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body).toMatchObject({ total: 0, byType: [], bySource: [] });
+      expect('oldestAt' in body).toBe(false);
+      expect(body.humanOriginated).toMatchObject({ total: 0, byType: [], undelivered: 0 });
+      expect('oldestAt' in body.humanOriginated).toBe(false);
+    });
+
+    it('内訳を種類・送信元・齢で数える（manager_list と同じ集計関数）', async () => {
+      await stores.inbox.put(
+        managerReport('evt-1', '2026-08-10T00:00:00.000Z'),
+        '2026-08-10T00:00:00.000Z',
+      );
+      await stores.inbox.put(
+        managerReport('evt-2', '2026-08-10T00:00:01.000Z', 'mgr-2'),
+        '2026-08-10T00:00:01.000Z',
+      );
+      await stores.inbox.put(
+        humanMsg('evt-3', '2026-08-11T00:00:00.000Z'),
+        '2026-08-11T00:00:00.000Z',
+      );
+
+      const response = await app.request('/inbox');
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.total).toBe(3);
+      expect(body.oldestAt).toBe('2026-08-10T00:00:00.000Z');
+      expect(body.byType).toEqual(
+        expect.arrayContaining([
+          { type: 'manager_message', count: 2 },
+          { type: 'human_message', count: 1 },
+        ]),
+      );
+      expect(body.bySource).toEqual(
+        expect.arrayContaining([
+          { source: 'manager:mgr-1', count: 1 },
+          { source: 'manager:mgr-2', count: 1 },
+        ]),
+      );
+      // `human_message` は送信元を言えない型なので `bySourceUnknownCount` へ。
+      expect(body.bySourceUnknownCount).toBe(1);
+      expect(body.humanOriginated).toMatchObject({ total: 1, undelivered: 1 });
+    });
+
+    it('claimPending() ではなく peekPending() を使うので、呼んでも deliveries は1つも進まない', async () => {
+      await stores.inbox.put(
+        managerReport('evt-1', '2026-08-10T00:00:00.000Z'),
+        '2026-08-10T00:00:00.000Z',
+      );
+
+      // 3回叩く——`claimPending()` を使っていれば、この時点で deliveries が
+      // 3まで進んでしまう。
+      for (let i = 0; i < 3; i += 1) {
+        const response = await app.request('/inbox');
+        expect(response.status).toBe(200);
+      }
+
+      // `claimPending()` で実際に進め、初回の配達であることを確かめる
+      // （0回入れ替わった状態のまま、という直接の証拠）。
+      const claimed = await stores.inbox.claimPending();
+      expect(claimed).toHaveLength(1);
+      expect(claimed[0]?.deliveries).toBe(1);
+    });
+
+    it('CLI（alteroid inbox show）・HTTP・manager_list（クローンの道具）が同じ数を返す', async () => {
+      await stores.inbox.put(
+        managerReport('evt-1', '2026-08-10T00:00:00.000Z'),
+        '2026-08-10T00:00:00.000Z',
+      );
+      await stores.inbox.put(
+        humanMsg('evt-2', '2026-08-11T00:00:00.000Z'),
+        '2026-08-11T00:00:00.000Z',
+      );
+
+      const rows = await stores.inbox.peekPending();
+      const expected = summarizeInboxBacklog(rows, Date.now());
+
+      const response = await app.request('/inbox');
+      const body = await response.json();
+      // `observedAt` は呼び出しごとに変わりうる（`Date.now()`）ので、そこだけ
+      // 除いて突き合わせる——他の全欄が `summarizeInboxBacklog` の直接呼びと
+      // 一致することが、HTTP・CLI・`manager_list` が同じ関数を通っている証拠
+      // になる（3つとも1つの純関数の呼び出しに帰着する）。
+      const { observedAt: _observedAt, ...expectedWithoutObservedAt } = expected;
+      expect(body).toMatchObject(expectedWithoutObservedAt);
     });
   });
 

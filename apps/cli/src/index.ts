@@ -17,7 +17,7 @@ import { chatCommand } from './chat.js';
 import { conversationsListCommand, conversationsShowCommand } from './conversations.js';
 import * as daemon from './daemon.js';
 import { droppedCommand } from './dropped.js';
-import { inboxRemoveCommand } from './inbox.js';
+import { inboxRemoveCommand, inboxShowCommand } from './inbox.js';
 import { loginCommand, logoutCommand, whoamiCommand } from './login.js';
 import {
   memoryEditCommand,
@@ -248,15 +248,22 @@ program
   });
 
 /**
- * 受信箱（`inbox_events`。まだ処理し終えていない合図の器）。issue #972。
+ * 受信箱（`inbox_events`。まだ処理し終えていない合図の器）。issue #972 / #783。
  *
- * いまは `remove` の1本だけ——絞り込んでまとめて畳む（消す）人間の入口
- * （`POST /inbox/remove`、PR #1007）を CLI から叩く。既定は試算（dryRun）で
- * 1件も消さない。詳しい経緯・設計は `apps/cli/src/inbox.ts` の doc を見ること。
+ * `remove`（絞り込んでまとめて畳む＝消す。`POST /inbox/remove`、PR #1007）と
+ * `show`（内訳を読む。`GET /inbox`、#783 段0）の2本。詳しい経緯・設計は
+ * `apps/cli/src/inbox.ts` の doc を見ること。
  */
 const inboxCommand = program
   .command('inbox')
   .description('受信箱（inbox_events）— 未処理の合図の器');
+
+inboxCommand
+  .command('show')
+  .description('受信箱の滞留の内訳を読む（読み取り専用。何も変更しない）')
+  .action(async () => {
+    await inboxShowCommand();
+  });
 
 inboxCommand
   .command('remove')

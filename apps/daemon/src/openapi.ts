@@ -1630,8 +1630,62 @@ export const archiveRemoveManyResponseSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
-// 受信箱（/inbox）— issue #972
+// 受信箱（/inbox）— issue #972（畳む＝ POST /inbox/remove）/ #783 段0
+// （読む＝ GET /inbox。内訳を読む口がクローンの道具にしか無かった欠落）
 // ---------------------------------------------------------------------------
+
+/**
+ * `GET /inbox` の応答（issue #783 段0の最後の欠落——内訳を読む口が
+ * HTTP に無かった）。`@alteroid/core` の `summarizeInboxBacklog` の結果を
+ * そのまま JSON にしたもので、**ここでは集計を1文字も行わない**——集計を
+ * 2箇所に複製すると、クローンの道具（`manager_list`）とこの口が違う数を
+ * 見ることになる（`inboxBacklogDedupeKey` の doc「なぜ1箇所に閉じるか」と
+ * 同じ理由）。
+ *
+ * **core は zod で書いていないので、ここで zod の形に写す**
+ * （`appraisalStatsResponseSchema` 冒頭 doc と同じ方針）。詳しい意味は
+ * `@alteroid/core` の `InboxBacklogBreakdown` の doc を見ること。
+ *
+ * `byType` / `undeliveredByType` の `type` は `INBOX_EVENT_TYPE_ORDER`
+ * （7種）をそのまま使う——`inboxRemoveManyRequestSchema.types` と同じ配列を
+ * 参照するので、`InboxEvent` に型が増えたらここも自動で追随する。
+ * `humanOriginated.byType` だけは人間起点の2種に絞る
+ * （`isHumanOriginated` の doc）。
+ *
+ * **`bySource` は上位5件で打ち切ってある（`summarizeInboxBacklog` 側の
+ * 上限）。ここでは新しい上限を足していない**——`bySourceOverflowKinds` /
+ * `bySourceOverflowCount` / `bySourceUnknownCount` が、打ち切った分・
+ * 送信元を言えない型の分を0件でも必ず運ぶので、`bySource` の内訳の合計 +
+ * この3値 === `total` が常に成り立つ（`InboxBacklogBreakdown` の doc）。
+ */
+export const inboxBacklogResponseSchema = z.object({
+  total: z.number().int(),
+  oldestAt: z.string().optional(),
+  byType: z.array(z.object({ type: z.enum(INBOX_EVENT_TYPE_ORDER), count: z.number().int() })),
+  bySource: z.array(z.object({ source: z.string(), count: z.number().int() })),
+  bySourceOverflowKinds: z.number().int(),
+  bySourceOverflowCount: z.number().int(),
+  bySourceUnknownCount: z.number().int(),
+  distinct: z.number().int(),
+  distinctAcrossManagers: z.number().int(),
+  undelivered: z.number().int(),
+  deliveredOnce: z.number().int(),
+  redelivered: z.number().int(),
+  maxDeliveries: z.number().int(),
+  undeliveredByType: z.array(
+    z.object({ type: z.enum(INBOX_EVENT_TYPE_ORDER), count: z.number().int() }),
+  ),
+  ageBuckets: z.array(z.object({ label: z.string(), count: z.number().int() })),
+  observedAt: z.string(),
+  humanOriginated: z.object({
+    total: z.number().int(),
+    byType: z.array(
+      z.object({ type: z.enum(['human_message', 'human_answer']), count: z.number().int() }),
+    ),
+    oldestAt: z.string().optional(),
+    undelivered: z.number().int(),
+  }),
+});
 
 /**
  * `POST /inbox/remove` の入力（issue #972 提案4「人間の入口から叩けること」）。
