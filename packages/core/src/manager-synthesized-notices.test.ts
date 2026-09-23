@@ -1010,3 +1010,122 @@ describe('窓をまたいだ同文の知らせは、2件目以降だけを畳む
     ).toHaveLength(2);
   });
 });
+
+/**
+ * ============================================================================
+ * **枠の知らせ（`usage_notice`）の畳み込みに関わった managerId の本数**
+ * （#1397 の c15-3。出所は #916 issuecomment-5649544167 の置き換えコメント §3）
+ * ============================================================================
+ *
+ * **畳み鍵（`kind, text`）は変えない。** `case 'usage_notice'` 冒頭の doc が
+ * 逐語で言っているとおり、`usage_notice` / `rate_limit` が運ぶのはアカウント
+ * 単位の枠の事実であり、`event.managerId` はどのターンでそれに気づいたかの
+ * 印にすぎない——「同じアカウントの同じ事実なのだから、1回配れば十分」という
+ * 設計は正しい。**欠陥は、畳んだ結果「何本の異なるマネージャーが同じ壁に
+ * 当たっているか」が受信箱からもクローンからも読めなくなることだけである。**
+ *
+ * `UsageNoticeMemory.folded` は素の件数（`number`）で、同じ managerId が
+ * 何度当たっても・複数の managerId が当たっても同じ増え方をする——**「件数」と
+ * 「関わった managerId の集合の大きさ」は別の軸である。** この節はその区別を
+ * 固定する。
+ */
+describe('枠の知らせの畳み込みに関わったマネージャーの本数', () => {
+  const KIND = 'reached' as const;
+  const TEXT_A = 'テスト専用の壁の文言A（この節でしか使わない）';
+  const TEXT_B = 'テスト専用の壁の文言B（この節でしか使わない・A とは別文言）';
+
+  it('2本の異なるマネージャーが同じ (kind, text) の壁に当たると、次に配る本文に「2本」が出る', async () => {
+    const { pool, inbox, fake } = await runningManualSetup('mgr-quota', {
+      synthesizedNoticeWindowMs: 30,
+      alsoRunning: ['mgr-other'],
+    });
+    const before = reportsOf(inbox).length;
+
+    // 1件目: mgr-quota が TEXT_A を初めて踏む（畳まれず配達される）。
+    fake.usageNotice('mgr-quota', { kind: KIND, text: TEXT_A });
+    await afterWindow();
+    // 2件目: mgr-other が同じ TEXT_A を踏む（配達済みなので畳まれる）。
+    fake.usageNotice('mgr-other', { kind: KIND, text: TEXT_A });
+    await afterWindow();
+    // 3件目: mgr-quota がもう一度同じ TEXT_A を踏む（これも畳まれる）。
+    // ⟹ ここまでで畳んだ回に関わった managerId は {mgr-other, mgr-quota} の2本。
+    fake.usageNotice('mgr-quota', { kind: KIND, text: TEXT_A });
+    await afterWindow();
+    // 4件目: 別文言 TEXT_B が届き、畳んだ件数と関わった本数を乗せて配達される。
+    fake.usageNotice('mgr-quota', { kind: KIND, text: TEXT_B });
+    await afterWindow();
+
+    await pool.stop();
+
+    const reports = reportsOf(inbox).slice(before);
+    const delivered = reports.find((r) => r.text.includes(TEXT_B));
+    expect(
+      delivered,
+      '赤の意味: TEXT_B を運ぶ報告が受信箱に届いていない。',
+    ).toBeDefined();
+    expect(delivered?.text).toContain('2 件畳んでいる');
+    expect(
+      delivered?.text,
+      '赤の意味: 畳んだ回に mgr-other と mgr-quota の2本が関わっているのに、' +
+        '次に配る本文が「2本」だと読み取れない——複数マネージャーが同じ壁に' +
+        '当たっている「広がり」が受信箱から見えないままになっている。',
+    ).toContain('2本');
+  });
+
+  it('同じマネージャーが2回当たっても、関わった本数は「1本」のまま（件数ではなく集合）', async () => {
+    const { pool, inbox, fake } = await runningManualSetup('mgr-quota', {
+      synthesizedNoticeWindowMs: 30,
+    });
+    const before = reportsOf(inbox).length;
+
+    fake.usageNotice('mgr-quota', { kind: KIND, text: TEXT_A });
+    await afterWindow();
+    // mgr-quota が同じ TEXT_A を2回畳ませる——関わった managerId は
+    // {mgr-quota} の1本だけである（何度当たっても集合は増えない）。
+    fake.usageNotice('mgr-quota', { kind: KIND, text: TEXT_A });
+    await afterWindow();
+    fake.usageNotice('mgr-quota', { kind: KIND, text: TEXT_A });
+    await afterWindow();
+    fake.usageNotice('mgr-quota', { kind: KIND, text: TEXT_B });
+    await afterWindow();
+
+    await pool.stop();
+
+    const reports = reportsOf(inbox).slice(before);
+    const delivered = reports.find((r) => r.text.includes(TEXT_B));
+    expect(delivered).toBeDefined();
+    // **畳んだ件数そのものは変わらない**（この節が触っているのは本数の表示で
+    // あって、既存の件数保証ではない）。
+    expect(delivered?.text).toContain('2 件畳んでいる');
+    expect(
+      delivered?.text,
+      '赤の意味: 同じ mgr-quota が2回当たっただけなのに「2本」と出ている——' +
+        '集合ではなく件数で数える変異が入っている。',
+    ).not.toContain('2本');
+    expect(delivered?.text).toContain('1本');
+  });
+
+  it('陽性対照: 畳みが一度も起きていないとき、本文にマネージャー数の文言は付かず、従来どおり1件だけ配られる', async () => {
+    const { pool, inbox, fake } = await runningManualSetup('mgr-quota', {
+      synthesizedNoticeWindowMs: 30,
+    });
+    const before = reportsOf(inbox).length;
+
+    // 1回きりの到達——畳みは一度も起きない。
+    fake.usageNotice('mgr-quota', { kind: KIND, text: TEXT_A });
+    await afterWindow();
+
+    await pool.stop();
+
+    const reports = reportsOf(inbox).slice(before);
+    expect(
+      reports,
+      '赤の意味: 畳みが一度も起きていないのに配達本数が変わっている。',
+    ).toHaveLength(1);
+    expect(reports[0]?.text).toContain(TEXT_A);
+    // **本数の文言が新たに付いていないこと**——畳んだことが無いのに「◯本」が
+    // 出ると、従来この分岐を通っていた回の本文が変わってしまう。
+    expect(reports[0]?.text).not.toContain('件畳んでいる');
+    expect(reports[0]?.text).not.toContain('本の');
+  });
+});
