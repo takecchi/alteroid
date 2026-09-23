@@ -187,7 +187,7 @@ describe('verify-for-sdk-pr.sh', () => {
     expect(out.ok).toBe('true');
   });
 
-  it('openapi 以外の10本が pnpm を、この順序で呼ぶ（偽 pnpm の呼び出しログで測る）', () => {
+  it('openapi 以外の11本が pnpm を、この順序で呼ぶ（偽 pnpm の呼び出しログで測る）', () => {
     const s = setup();
 
     const result = run(s);

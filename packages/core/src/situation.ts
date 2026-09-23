@@ -11,6 +11,7 @@ import type { InboxBacklogBreakdown } from './inbox-backlog.js';
 import type { ManagerSummary } from './manager.js';
 import type { RunnerLiveness } from './runner-protocol.js';
 import type { CooldownSource } from './token-pool.js';
+import { RESTART_BEFORE_CHECK_ADVICE_CODE_SPAN } from './usage-limits.js';
 
 /**
  * クローンのターンの入口（`clone.ts` の `#runTurn`）に載せる「いまの全体」。
@@ -150,7 +151,7 @@ const LOST_NOTICE =
   '届いていた実例がある。⟹ 誰かがそこを確かめるまで終われない。' +
   '名指しで引くなら `manager_list` に status: ["lost"] を渡す（絞りは文字数の予算より前に効くので、' +
   '古いものも本文に出る）。中身は `manager_report <managerId>` で読める。' +
-  '**確かめる前に `manager_start` で起こし直さないこと** — 同じ仕事が2本になる。';
+  RESTART_BEFORE_CHECK_ADVICE_CODE_SPAN;
 
 /**
  * **直近の1ターンが報告ではなく失敗で終わっている**という軸の見出し（#1212）。

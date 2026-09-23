@@ -348,6 +348,16 @@ export const STEPS = [
       'packages/core/src/usage-limits.ts の STALE_TOKEN_RESTART_ADVICE 1箇所である' +
       '（scripts/check-stale-token-restart-advice-core.mjs の doc、#1175）',
   },
+  {
+    name: 'restart-before-check-advice',
+    cmd: 'pnpm',
+    args: ['check:restart-before-check-advice'],
+    hint:
+      '「manager_start で起こし直す前に確かめろ」の助言が、生成元の外に書かれている。' +
+      '字面の生成元は packages/core/src/usage-limits.ts の RESTART_BEFORE_CHECK_ADVICE / ' +
+      'RESTART_BEFORE_CHECK_ADVICE_CODE_SPAN 1箇所である' +
+      '（scripts/check-restart-before-check-advice-core.mjs の doc、#1287）',
+  },
   { name: 'typecheck', cmd: 'pnpm', args: ['typecheck'] },
   { name: 'lint', cmd: 'pnpm', args: ['lint'] },
   { name: 'format:check', cmd: 'pnpm', args: ['format:check'], hint: '`pnpm format` で直る' },

@@ -437,6 +437,72 @@ export const STALE_TOKEN_RESTART_ADVICE =
   '⚠ 失われるのは会話だけではない——そのターンで進行中だった作業も失われる。';
 
 /**
+ * **逆向きの助言——「確かめる前に `manager_start` で起こし直す**な**」——の唯一の
+ * 生成元**（Issue #1287）。
+ *
+ * ## {@link STALE_TOKEN_RESTART_ADVICE} との関係
+ *
+ * あちらは「認証トークンの世代ずれなら起こし直**せ**」、こちらは「`lost` / 失敗で
+ * 終わったターンでは、確かめる**前に**起こし直す**な**」——条件も向きも逆である。
+ * #1175 はこの逆向きを意図して射程から外した（1つの PR で14箇所は触れないため）。
+ * **同じ病（1箇所ずつ触ると割れる）が、逆向きの助言にも実際に出ていた**——だから
+ * ここでも同じ形（1箇所の生成元 + 生成元の外を赤くする歯）で畳む。
+ *
+ * ## 実測（2026-09-23、`main` = `a6f201c` 時点。`packages/core/src`）
+ *
+ * 逐語 `manager_start で起こし直さないこと` は **9箇所**に散っていて、字面が
+ * 2種類に割れていた:
+ *
+ * - `先に manager_start で起こし直さないこと` … `tools.ts` に7箇所
+ * - `確かめる前に manager_start で起こし直さないこと` … `tools.ts` に1箇所、
+ *   バッククォート付き（`` `manager_start` ``）で `situation.ts` の `LOST_NOTICE`
+ *   に1箇所（合わせて9箇所目。バッククォートがあるので上の逐語には当たらない）
+ *
+ * ⟹ **「確かめる前に」へ揃えた**（判断）。9箇所とも直前の文が具体的な確かめ方
+ * （`manager_report` / `manager_transcript` / `manager_list` / `manager_send` /
+ * リモートに届いた成果、等）を名指ししており、「確かめる前に」はどの場面でも
+ * 意味が通る。「先に」は「何より先に」なのか「確かめるより先に」なのかを
+ * 文だけでは決められない。
+ *
+ * ## 2つの形を持つ理由（バッククォートの有無）
+ *
+ * `situation.ts` の `LOST_NOTICE` は `manager_start` をバッククォートで囲む
+ * markdown（インラインコード）の慣習で書かれており、`tools.ts` の8箇所は
+ * 地の文の太字（`**…**`）だけで書かれている。**畳んだ後もこの慣習の違いは
+ * 残す**——{@link RESTART_BEFORE_CHECK_ADVICE}（バッククォート無し）と
+ * {@link RESTART_BEFORE_CHECK_ADVICE_CODE_SPAN}（バッククォート有り）の
+ * 2つを生成元に置き、どちらも文そのものは同じ1文である。
+ *
+ * ## 言い換えの族（`manager.ts`）は畳んでいない
+ *
+ * `manager.ts` に同じ向きの言い換え（「新しく起こし直さないこと」「ここで
+ * 起こし直さないこと」）が在るが、場面が違う（貸し出しの関門）。**この生成元の
+ * 射程には含めない**——`tools.ts` / `situation.ts` の9箇所とは文言も文脈も別で、
+ * 揃える判断は別に要る。
+ *
+ * ## 10箇所目を別の文言で足せないようにしてある
+ *
+ * `pnpm check:restart-before-check-advice` が、この定数の外で古い字面
+ * （「先に manager_start で起こし直さないこと」）や、統一後の字面を定数を
+ * 使わず直接書くことの両方で赤くなる。⚠ **門が空振りしないことは陰性対照で
+ * 確かめてある**（`scripts/check-restart-before-check-advice.test.ts`）。
+ *
+ * ## この定数が言っていないこと
+ *
+ * - **言い換えは捕まえられない。** 部分文字列一致にできるのは、畳んだ字面を
+ *   そのまま持つ形だけである
+ * - **`manager.ts` の言い換えの族は、この生成元の対象に含まれない**（上の節）
+ */
+export const RESTART_BEFORE_CHECK_ADVICE_CORE = '確かめる前に manager_start で起こし直さないこと';
+
+/** 地の文（太字 `**…**` だけの markdown。バッククォート無し）で差し込む形。`tools.ts` の8箇所で使う。 */
+export const RESTART_BEFORE_CHECK_ADVICE = `**${RESTART_BEFORE_CHECK_ADVICE_CORE}** — 同じ仕事が2本になる。`;
+
+/** `manager_start` をバッククォート（インラインコード）で囲む形。`situation.ts` の `LOST_NOTICE` で使う。 */
+export const RESTART_BEFORE_CHECK_ADVICE_CODE_SPAN =
+  '**確かめる前に `manager_start` で起こし直さないこと** — 同じ仕事が2本になる。';
+
+/**
  * {@link limitRecoveryOf} の判定を、人が読む文言へ**添える**（Issue #393 の
  * 判定を、初めてクローンの受信箱・`manager_list` / `manager_report` の ⚠ 行へ
  * 運ぶ経路。PR #718 の作法を踏襲する）。

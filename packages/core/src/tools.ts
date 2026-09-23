@@ -175,6 +175,7 @@ import type { CloneRuntimeFacts } from './self.js';
 import { EXCHANGE_WITH_VALUES, UnreadableCommitmentError } from './store.js';
 import type { ArchiveEntry, JournalStore, PendingInboxEvent, Stores } from './store.js';
 import {
+  RESTART_BEFORE_CHECK_ADVICE,
   STALE_TOKEN_RESTART_ADVICE,
   limitRecoveryOf,
   limitRecoveryOfAssistantError,
@@ -2559,7 +2560,7 @@ function describeManagerFailure(
     'あって報告ではない——**完遂して畳んだと読まないこと。** ' +
     'セッションは生きているので、原因が解ければ manager_send で続きから進む' +
     '（status が done のままなのはそのためで、この委譲が死んだという意味ではない）。' +
-    '**先に manager_start で起こし直さないこと** — 同じ仕事が2本になる。';
+    RESTART_BEFORE_CHECK_ADVICE;
   if (lastReport === undefined) return base;
   const fromText = limitRecoveryOf(lastReport);
   const recovery =
@@ -2747,7 +2748,7 @@ function describeTurnEnd(manager: ManagerSummary): string | null {
       '**分からないだけで、症状ではないとは言えない** — 報告が届いたかどうかを' +
       'ここでは判定できない。まず manager_report を見ること（本文が空でも生ログから' +
       '拾える）、manager_transcript で生ログの全文が読める。' +
-      '**先に manager_start で起こし直さないこと** — 同じ仕事が2本になる。' +
+      RESTART_BEFORE_CHECK_ADVICE +
       'この委譲は止まっていない・切っていない — この助言はデーモンが計算しただけで、' +
       '委譲は動き続けてよい。'
     );
@@ -2767,7 +2768,8 @@ function describeTurnEnd(manager: ManagerSummary): string | null {
     stopSequenceNote +
     tailNote +
     'まず manager_report を見ること（本文が空でも生ログから拾える）、manager_transcript で' +
-    '生ログの全文が読める。**先に manager_start で起こし直さないこと** — 同じ仕事が2本になる。' +
+    '生ログの全文が読める。' +
+    RESTART_BEFORE_CHECK_ADVICE +
     'この委譲は止まっていない・切っていない — この助言はデーモンが計算しただけで、' +
     '委譲は動き続けてよい。'
   );
@@ -2882,7 +2884,7 @@ function describeToolUseStall(manager: ManagerSummary): string | null {
     '（写さずに止めると、質問は誰にも読まれないまま消える）。' +
     'それ以外（Agent など）なら、作業者が走っている最中の正常な形でも同じ3条件が揃うので、' +
     'この行だけでは症状と区別できない — 止めずに、timestamp を見て次の一覧まで待つこと。' +
-    '**先に manager_start で起こし直さないこと** — 同じ仕事が2本になる。'
+    RESTART_BEFORE_CHECK_ADVICE
   );
 }
 
@@ -8054,8 +8056,8 @@ export function createCloneTools(context: ToolContext) {
               '**この委譲そのものは台帳に在る**（「そんな id は無い」ではない）。' +
               'runner に生きたセッションが無く、resume でも入り直せなかっただけである。' +
               'manager_list で状態を確かめ、時間で解ける理由（引き取り中・貸し出し期限）' +
-              'なら少し置いてから送り直すこと。**先に manager_start で起こし直さないこと**' +
-              ' — 同じ仕事が2本になる。',
+              'なら少し置いてから送り直すこと。' +
+              RESTART_BEFORE_CHECK_ADVICE,
           );
         }
         // **「届けた」が保証している範囲を、届けたその場で名乗る（#1170）。**
@@ -8737,7 +8739,7 @@ export function createCloneTools(context: ToolContext) {
               `  runner: ${manager.runnerId ?? '未記録'}${
                 manager.runnerLostSince === undefined
                   ? ''
-                  : `（この器は ${manager.runnerLostSince} 以降 名乗っていない。新しい委譲の宛先からは外れている（置き先として数えない）。**この委譲が失われたという意味ではない** — 黙っているのが器なのか経路なのかは、ここからは言えない（器の中でまだ走っていることもある）。話しかけることは塞いでいない — 戻る先（session_id）が在れば manager_send が resume を試みる（届くとは限らない）。**先に manager_start で起こし直さないこと** — 同じ仕事が2本になる。器そのものは runner_list で見る）`
+                  : `（この器は ${manager.runnerLostSince} 以降 名乗っていない。新しい委譲の宛先からは外れている（置き先として数えない）。**この委譲が失われたという意味ではない** — 黙っているのが器なのか経路なのかは、ここからは言えない（器の中でまだ走っていることもある）。話しかけることは塞いでいない — 戻る先（session_id）が在れば manager_send が resume を試みる（届くとは限らない）。${RESTART_BEFORE_CHECK_ADVICE}器そのものは runner_list で見る）`
               }`,
               // **`runnerLostSince` と同じ作法で、別の行として出す（#563）。**
               // `describeManagerState` は動かさない——`manager_list` と要約
@@ -8763,7 +8765,7 @@ export function createCloneTools(context: ToolContext) {
                   '（デーモンにこの2つを区別する材料は無い）。まず manager_report を見ること' +
                   '（報告が空でも、生ログから「生成されたが配られていない」報告を拾える）。' +
                   'session_id が残っていれば manager_send が resume から入り直す。' +
-                  '**先に manager_start で起こし直さないこと** — 同じ仕事が2本になる。',
+                  RESTART_BEFORE_CHECK_ADVICE,
               `  cwd: ${manager.cwd}`,
               // **`lost` を状態名だけで済ませない。** 「終わった」と読まれると、
               // 完了していない仕事がそのまま片付く。何が起きたかと、次に何をすれば
@@ -10738,8 +10740,8 @@ function describeManagerCounts(managers: readonly ManagerSummary[]): string {
       : ' **「戻れなかった(lost)」は「終わった」ではない** — 前のセッションへ戻れたかだけを' +
         '見ていて、成果がリモート（PR・ブランチ・コミット）まで届いていることがある。' +
         'この一覧の本文は文字数の予算で切れるので、名指しで引くなら status: ["lost"] を渡すこと' +
-        '（絞りは予算より前に効く）。**確かめる前に manager_start で起こし直さないこと** — ' +
-        '同じ仕事が2本になる。')
+        '（絞りは予算より前に効く）。' +
+        RESTART_BEFORE_CHECK_ADVICE)
   );
 }
 

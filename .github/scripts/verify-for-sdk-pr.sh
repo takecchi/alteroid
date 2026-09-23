@@ -60,6 +60,7 @@ GATE_NAMES=(
   openapi
   sdk-quotes
   stale-token-restart-advice
+  restart-before-check-advice
   typecheck
   lint
   'format:check'
@@ -73,6 +74,7 @@ GATE_COMMANDS=(
   'git diff --exit-code HEAD -- apps/daemon/openapi.json'
   'pnpm check:sdk-quotes'
   'pnpm check:stale-token-restart-advice'
+  'pnpm check:restart-before-check-advice'
   'pnpm typecheck'
   'pnpm lint'
   'pnpm format:check'

@@ -256,6 +256,15 @@ jobs:
       # 持たない。⟹ `pnpm test` 経由でも実物の repo には当たらない。**実物へ当たる
       # 経路はこの1行だけである。**
       - run: pnpm check:stale-token-restart-advice
+
+      # **逆向きの助言（「確かめる前に manager_start で起こし直すな」）の生成元を
+      # 1つに保つ歯（Issue #1287）。** 直上の `check:stale-token-restart-advice`
+      # （#1175）とまったく同じ理由・同じ配線の形——`scripts/verify-core.mjs` の
+      # STEPS だけでは PR の CI で一度も走らない（この job は `pnpm verify` を
+      # 呼ばず、門を1本ずつ並べる形だからである）。**実物へ当たる経路はこの1行
+      # だけである**（`scripts/check-restart-before-check-advice.test.ts` は純
+      # 関数を合成入力で測るだけで、実物の repo には当たらない）。
+      - run: pnpm check:restart-before-check-advice
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm format:check

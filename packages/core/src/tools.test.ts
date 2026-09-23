@@ -5638,7 +5638,7 @@ describe('クローンの道具', () => {
    * クローンの一番自然な次の一手が `manager_start` になり、**同じ仕事が2本になる**
    * （`sessionMissingSince` の行が既に同じ歯止めを持っている）。
    */
-  it('黙った器の行は、送信が塞がれていないことと、先に起こし直さないことを言う', async () => {
+  it('黙った器の行は、送信が塞がれていないことと、確かめる前に起こし直さないことを言う', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
     const orphan = h.running[0];
@@ -5657,7 +5657,7 @@ describe('クローンの道具', () => {
     expect(reply).toContain('届くとは限らない');
     // **この面に在る操作を名指しする**（CLI は `/msg`、Web UI は画面の語）。
     expect(reply).toContain('manager_send');
-    expect(reply).toContain('先に manager_start で起こし直さないこと');
+    expect(reply).toContain('確かめる前に manager_start で起こし直さないこと');
     expect(reply).toContain('runner_list');
   });
 
