@@ -1089,6 +1089,16 @@ type Listener = (event: ChatStreamEvent) => void;
 interface Turn {
   /** 出力を届ける会話。null なら人間に見せない内部ターン（蒸留など）。 */
   conversationId: string | null;
+  /**
+   * このターンが承認待ち（`ask_human`）への回答（`human_answer`）から
+   * 起きたものであれば、その承認の id（issue #782 の1）。それ以外の
+   * 起点（人間の発言・蒸留・自律・マネージャー発の確認）では null のまま。
+   *
+   * **`#runTurn` の `approvalId` 引数をそのまま載せる。** `case
+   * 'human_answer'` だけがこれを渡す——`#runInternal` / `#runHumanTurn`
+   * 経由のターンには渡す口が無いので、常に null になる。
+   */
+  approvalId: string | null;
   text: string;
   /** 逐次配信（stream_event）で本文を流したか。流していなければ完成品を流す。 */
   streamed: boolean;
@@ -6834,7 +6844,10 @@ class Clone implements CloneHost {
         // 返し、持っていなければ `null` を返す —— 会話 id が無ければこれまでと
         // 1文字も変わらない（`#runInternal` は `#runTurn(null, text, kind)` の
         // 薄いラッパーでしかない）。
-        await this.#runTurn(this.#conversationOf(event), answerPrompt);
+        // **`event.approvalId` も運ぶ（issue #782 の1）。** このターンの
+        // outbound な exchange が「どの承認への返答か」を、会話 id や時刻の
+        // 近さではなく id で持てるようにする。
+        await this.#runTurn(this.#conversationOf(event), answerPrompt, 'normal', event.approvalId);
         return;
       }
 
@@ -7009,6 +7022,13 @@ class Clone implements CloneHost {
     conversationId: string | null,
     text: string,
     kind: 'normal' | 'distill' = 'normal',
+    /**
+     * 承認待ちへの回答（`human_answer`）から呼ばれたときだけ、その承認の
+     * id（issue #782 の1）。他の呼び出し元（`#runInternal` / `#runHumanTurn`）
+     * は渡さないので既定 `null` のままになる——渡し忘れではなく、承認に
+     * 由来しないターンには紐づける承認が無いことをそのまま表す。
+     */
+    approvalId: string | null = null,
   ): Promise<TurnOutcome> {
     if (kind !== 'distill') this.#hasUndistilledActivity = true;
 
@@ -7018,6 +7038,7 @@ class Clone implements CloneHost {
     const done = new Promise<void>((resolve) => {
       turn = {
         conversationId,
+        approvalId,
         text: '',
         streamed: false,
         rejected: null,
@@ -9426,6 +9447,13 @@ class Clone implements CloneHost {
                 ? turn.text
                 : `（このターンは失敗して終わった。以下は失敗する前に出ていた本文である）\n${turn.text}`,
             ...(turn.conversationId === null ? {} : { conversationId: turn.conversationId }),
+            // **issue #782 の1。`conversationId` が無い（＝ `with: 'self'`）行には
+            // 立てない** —— 会話 id を持たない承認への回答は今までどおり内部
+            // ターンのままで、`approvalId` が付くと人間の会話の一部であるかの
+            // ように読めてしまう（`schema.ts` の `exchange.approvalId` の doc）。
+            ...(turn.conversationId === null || turn.approvalId === null
+              ? {}
+              : { approvalId: turn.approvalId }),
           });
         }
 

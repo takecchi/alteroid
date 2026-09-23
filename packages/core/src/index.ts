@@ -344,6 +344,22 @@ export {
   type JournalSearchTarget,
 } from './journal-search.js';
 /**
+ * 日誌をページ単位で読み継ぐ足場（issue #1283）。`JournalStore.list()` を
+ * `limit` なしで呼ぶと pg 実装が `Number.MAX_SAFE_INTEGER` を渡す
+ * （`journal.ts` の `limit ?? Number.MAX_SAFE_INTEGER`）ので、窓の中身が
+ * 多い日に1クエリで全件をヒープへ載せて落ちる（実測: ある1日で約247万行・
+ * 約1.4GB）。**この足場自身も1ページぶんより多くを同時に持たない**——
+ * 呼び出し側（`digest.ts` / `distill-gap.ts`）が畳んだ結果だけを残す形に
+ * すれば、ヒープは有界のまま保てる（`journal-scan.ts` の doc）。
+ */
+export {
+  JOURNAL_SCAN_PAGE_SIZE,
+  scanJournalPages,
+  type JournalScanOptions,
+  type JournalScanPageHandler,
+  type JournalScanResult,
+} from './journal-scan.js';
+/**
  * 蒸留が間に合わなかった区間（＝記憶へ移らなかった区間）の検出（issue #564 の (b)）。
  * **「蒸留を始めた」ではなく「蒸留が成功で終わった」記録で数える** — 開始で数えると、
  * 始めたが完了しなかった回（まさに検出したい形）が「蒸留した」として落ちる

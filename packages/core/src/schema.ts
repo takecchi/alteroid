@@ -869,6 +869,32 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * 畳み込みの解釈は持たない。
      */
     supersedes: z.string().optional(),
+    /**
+     * このターンが、承認待ち（`ask_human`）への回答（`human_answer`）から
+     * 起きたものであれば、その承認の id（issue #782 の1）。
+     *
+     * **`conversationId` では結べない理由。** 同じ会話の中で複数の承認へ
+     * 近接した時刻に回答すると、`conversationId` と `at` だけでは
+     * どの outbound がどの承認への返答かを見分けられない
+     * （`apps/web/app/routes/approvals.tsx` の `ConversationPanel` の doc
+     * 「時刻の近さで『この返答はこの確認への返答だ』と決めつけない」と同じ
+     * 穴の裏側）。この欄はその区別を、推測ではなく記録として持たせる。
+     *
+     * **`with: 'human'` かつ `role: 'outbound'` のときだけ意味を持ちうる。**
+     * 承認に由来しないターン（人間の発言・蒸留・自律の起点・マネージャー
+     * 発の確認）には付かない——`Clone#runTurn` がこの欄を立てるのは
+     * `case 'human_answer'` から呼ばれたときだけである。**承認が
+     * `conversationId` を持たず内部ターン（`self`）に倒れた場合は、
+     * outbound 側にもこの欄を立てない**（`with: 'self'` の行に
+     * `approvalId` が付くと、`conversationId` を持たない承認への回答が
+     * 人間の会話の一部であるかのように読めてしまうため）。
+     *
+     * **回答した人間の発言（`role: 'inbound'`）には付かない。** その本文は
+     * `turnInputEntry`（`type: 'human_answer'`）が別途、質問・回答・宛先を
+     * 1本にした形で残しており、こちらは構造化していない（#243 の設計判断。
+     * 構造化するかどうかはこの Issue の項目1の範囲外）。
+     */
+    approvalId: z.string().optional(),
   }),
   z.object({
     type: z.literal('decision'),

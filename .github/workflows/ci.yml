@@ -789,3 +789,83 @@ jobs:
   # 塞いだ上で入れる）。この3つは順番も含めて揃える必要がある——`(a)` だけ先に
   # やると `check-required-status-checks` が drift として赤くなり、`(b)` だけ
   # 先にやっても protection は変わらないので何も強制されない。
+
+  # **required contexts が出るジョブを載せている workflow が、GitHub 上で
+  # `active` かを見る（Issue #1290）。** 2026-09-22、
+  # `.github/workflows/pr-title.yml` が GitHub 上で `disabled_manually` に
+  # された。この workflow は required contexts の1本（`pr-title-type`。いまは
+  # 廃止済み）を出していたが、無効化されると**その門の check-run は二度と
+  # 生成されない**——required は「赤い」のではなく「一覧に永久に現れない」
+  # 状態になり、宣言（`.github/required-status-checks.json`）も `ci.yml` 側の
+  # ジョブ定義も1文字も変わらないまま、open な PR 5本が理由も見せずに
+  # `BLOCKED` になって静かに詰まった。判定ロジックは
+  # `scripts/check-required-gate-workflows-core.mjs` が正本。ここは呼び出し
+  # だけ。
+  #
+  # ⛔ **required contexts には入れない。** required にすると、この検査自身が
+  # 落ちたとき（`gh api` の一時的な失敗など）に**すべての PR のマージが
+  # 止まる**——それはまさにこの Issue が塞ごうとしている症状（required な門が
+  # 理由も見せずに PR を詰まらせる）を、この検査自身が起こす形になる。
+  # ブランチ保護は1バイトも変えない（この検査は読むだけであり、変える判断は
+  # 別の担当）。
+  #
+  # ⛔ **`ci` ジョブの中の step にもしない。** `ci` は required なので、そこへ
+  # step として足すと、この検査が読む `gh api repos/…/actions/workflows` が
+  # 一時的に失敗しただけで required な `ci` 全体が赤くなる。**独立したジョブに
+  # すれば、この検査の失敗は required ジョブへ伝播しない。** `base-overlap` と
+  # 同じ形。
+  #
+  # **`if:` は `image` と同じ形にしてある。** この検査が答える問い
+  # （「required な門を出す workflow は GitHub 上で `active` か」）は**どの
+  # イベントで走ったかに依存しない事実**である——PR でも main への push でも
+  # 定時実行でも、同じ問いに同じ答えが返る。draft の pull_request だけ
+  # 節約するのは `ci` / `image` と同じ理由（重い処理ではないので節約の実益は
+  # 薄いが、`base-overlap` 同様に「PR が無いなら測る意味が薄い」を意図的に
+  # 分けてはいない——`push` / `schedule` / `workflow_dispatch` はそのまま
+  # 全部走らせたいので、`ci` の doc が警告する罠1（`draft == false` 単独では
+  # 書かない）にそのまま倣う）。
+  #
+  # ⭐ **なぜ push / schedule でも走らせるのか。** `main` への push や定時の回で
+  # このジョブが落ちれば、`.github/workflows/main-ci-alarm.yml`（`workflow_run`
+  # で `workflows: [CI, …]` の `conclusion == 'failure'` を見て Issue を立てる
+  # 既存の警報）がそのまま拾う——この workflow の `name:`（`CI`、本ファイル
+  # 冒頭）のジョブが1本でも failure になれば run 全体が failure になるためで
+  # ある。**新しい通知の仕組みを1つも増やさずに、「無効化されても誰も
+  # 気づかない」を閉じる。** PR の回では PR 画面に赤い
+  # `required-gate-workflows` として出るので、**詰まっている PR の側が原因を
+  # 名乗る。** この2つが #1290 の答えである。
+  #
+  # ⚠️ **残る穴: `ci.yml` 自身が GitHub 上で無効化されたら、このジョブも
+  # 走らない。** この検査は「required な門が出ているか」を見る歯であって、
+  # 自分自身を含む `ci.yml` が丸ごと止められた場合までは見ていない。
+  # 「塞いだ」と言い過ぎないこと——その穴は残る。
+  #
+  # **この歯が見ているのは「宣言」であって protection ではない。** ここが
+  # 見るのは `.github/required-status-checks.json` の宣言だけである。宣言
+  # そのものがブランチ保護（required contexts）と一致しているかは
+  # `pnpm check:required-status-checks` の仕事——**あちらはブランチ保護の
+  # 読み出しに administration 相当の権限が要り、GitHub Actions の
+  # `permissions:` には指定できるスコープが無いので CI に配線できない**
+  # （`STEPS` にも入れていない。理由は `check-required-status-checks-core.mjs`
+  # の doc）。**こちらが読むのは `gh api repos/…/actions/workflows` で、要る
+  # 権限は `actions: read` だけ——CI に配線できる。だから分けている。** 2本
+  # 合わさって初めて「required の門は宣言どおり存在し、かつ生きている」まで
+  # 言える。
+  required-gate-workflows:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v4
+      # **`GITHUB_REPOSITORY` は渡さない。** `check-required-gate-workflows.mjs`
+      # が読む API パスは `takecchi/alteroid` を直書きしてある
+      # （`check-required-status-checks.mjs` の `PROTECTION_PATH` と同じ流儀）。
+      # ここで見たいのは「**upstream の** required な門が生きているか」であって、
+      # fork 側の workflow 一覧ではない。⟹ 渡しても使われない変数を置くと、次に
+      # 読む人が「repo ごとに切り替わる」と誤読する。
+      - run: pnpm check:required-gate-workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
