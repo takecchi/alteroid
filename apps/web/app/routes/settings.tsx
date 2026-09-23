@@ -12,7 +12,11 @@ import { Badge, Button, Card, CardHeader, Empty, ErrorNote, Input, Spinner } fro
 import { useRunners } from '~/hooks/queries';
 import { formatDateTime } from '~/lib/format';
 import { useAuth } from '~/hooks/use-auth';
-import { useResetWorkspace, type WorkspaceResetSummary } from '~/hooks/mutations';
+import {
+  useResetWorkspace,
+  useShutdownDaemon,
+  type WorkspaceResetSummary,
+} from '~/hooks/mutations';
 import type { RunnerPushOutcome, RunnerSummary } from '~/lib/types';
 
 export default function Settings() {
@@ -22,6 +26,7 @@ export default function Settings() {
         <ConnectionCard />
         <Account />
         <Runners />
+        <ShutdownDaemon />
         <ResetWorkspace />
       </div>
     </Page>
@@ -335,6 +340,144 @@ function ResetSummaryView({ cleared }: { cleared: WorkspaceResetSummary }) {
         );
       })}
     </dl>
+  );
+}
+
+/**
+ * デーモンを止める（`POST /shutdown`。CLI の `alteroid daemon stop` と同じ受け口。
+ * issue #1124 の (A) —「CLI にしか無い口を Web UI にも」）。
+ *
+ * **資格は `authenticate` だけ**（`requireOperator` は要求しない。issue #1124
+ * の (B) がその強さを「意図」として確定させている——`apps/daemon/src/app.ts`
+ * の `/shutdown` の doc）。ボタンを隠す理由は無い。
+ *
+ * **確認は `ResetWorkspace` と同じ「`<dialog>` に文字を打たせる」形にする。**
+ * ただし打つ語は別にする（`stop`）——`reset`（ワークスペース全消去の確認語）と
+ * 取り違えると、押し間違いの結果が逆方向に重くなる（`reset` は戻らないが、
+ * こちらは起動し直せば戻る）。
+ *
+ * **`POST /reset` とは軸が違う。** 止めても記憶・日誌・台帳は1行も消えない。
+ * 起動し直せば元の状態に戻る。**Railway では、止めるとその場の再起動方針
+ * （`railway/daemon.json` の `restartPolicyType: "ALWAYS"`）によって自動的に
+ * 再起動として働く**——止めたままにはならない。この画面はどの配置からでも
+ * 開けるので、再起動しない配置（ローカル常駐など）では止まったままになり
+ * うることも文言で断る。
+ *
+ * **押した後は最小限の表示にする**（`ResetWorkspace` の後の表示と同じ方針）。
+ * デーモンが止まるのでこの画面自身の接続も切れる——引き直しても意味のある
+ * 応答が返らないため、`ResetSummaryView` のような内訳は持たない。
+ */
+function ShutdownDaemon() {
+  const shutdownDaemon = useShutdownDaemon();
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [confirmText, setConfirmText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<unknown>(undefined);
+  const [done, setDone] = useState(false);
+
+  const canConfirm = confirmText.trim().toLowerCase() === 'stop';
+
+  function openDialog() {
+    setConfirmText('');
+    setFailure(undefined);
+    setDone(false);
+    dialogRef.current?.showModal();
+  }
+
+  async function runShutdown() {
+    if (!canConfirm) return;
+    setBusy(true);
+    setFailure(undefined);
+    try {
+      await shutdownDaemon();
+      setDone(true);
+    } catch (caught) {
+      setFailure(caught);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader
+        title="デーモンを止める"
+        subtitle="起動し直せば元に戻る。記憶・日誌・台帳は消さない"
+      />
+      <div className="px-4 py-3 text-sm">
+        <p className="text-xs leading-relaxed text-muted">
+          <code className="font-mono">alteroid daemon stop</code> と同じ操作。止めても、
+          <strong className="text-fg">記憶も台帳も消さない</strong>
+          （日誌も含めて1行も消えない）。起動し直せば元に戻る——
+          <code className="font-mono">POST /reset</code>（記憶そのものを消す操作）とは違う。 Railway
+          では、止めると再起動の方針により
+          <strong className="text-fg">再起動として働く</strong>
+          （止まったままにはならない）。止めた瞬間、この画面自身の接続も切れる。
+        </p>
+        <div className="mt-3">
+          <Button variant="danger" size="sm" onClick={openDialog}>
+            デーモンを止める
+          </Button>
+        </div>
+      </div>
+
+      <dialog
+        ref={dialogRef}
+        className="w-[min(28rem,calc(100vw-2rem))] rounded-md border border-border bg-surface p-0 text-fg backdrop:bg-black/50"
+      >
+        <div className="p-4">
+          <h2 className="text-sm font-semibold">本当に止めますか？</h2>
+          <p className="mt-2 text-xs leading-relaxed text-muted">
+            デーモンを止めます。<strong className="text-fg">記憶も台帳も消えません</strong>
+            （日誌も含めて1行も消えません）。起動し直せば元の状態に戻ります。Railway では
+            止めると再起動の方針により
+            <strong className="text-fg">再起動として働きます</strong>
+            （止まったままにはなりません）。止めた直後、この画面の接続も切れます。
+          </p>
+
+          {!done ? (
+            <>
+              <label className="mt-3 block text-xs text-muted">
+                続けるなら <code className="rounded bg-surface-2 px-1 font-mono">stop</code> と入力
+                <Input
+                  autoFocus
+                  className="mt-1"
+                  value={confirmText}
+                  onChange={(event) => setConfirmText(event.target.value)}
+                  placeholder="stop"
+                />
+              </label>
+              <ErrorNote error={failure} className="mt-3" />
+              <div className="mt-4 flex justify-end gap-2">
+                <Button size="sm" disabled={busy} onClick={() => dialogRef.current?.close()}>
+                  やめる
+                </Button>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  disabled={!canConfirm}
+                  loading={busy}
+                  onClick={() => void runShutdown()}
+                >
+                  止める
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="mt-3 text-xs font-medium text-ok">
+                止めました。この画面との接続は切れます。
+              </p>
+              <div className="mt-4 flex justify-end">
+                <Button variant="primary" size="sm" onClick={() => dialogRef.current?.close()}>
+                  閉じる
+                </Button>
+              </div>
+            </>
+          )}
+        </div>
+      </dialog>
+    </Card>
   );
 }
 

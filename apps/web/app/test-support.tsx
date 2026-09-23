@@ -70,6 +70,35 @@ if (typeof Element !== 'undefined' && Element.prototype.scrollIntoView === undef
 }
 
 /**
+ * `<dialog>` の `showModal` / `close` も jsdom（30.0.1、2026-09-24 実測）には
+ * 無い——呼ぶと `TypeError: ... .showModal is not a function` で例外になる
+ * （`d.showModal` が `undefined` のまま、`show` すら生えていない）。
+ * `settings.tsx` の `ResetWorkspace` / `ShutdownDaemon` はどちらも
+ * `dialogRef.current?.showModal()` で確認ダイアログを開く作りなので、無いまま
+ * だと確認ダイアログを開く操作そのものがテストで再現できない。
+ *
+ * **`open` 属性の反映（IDL 属性としての `open` の読み書き）は jsdom が既に
+ * 持っている**（HTML 標準の反映属性の一般実装）。ここで足すのは `showModal`
+ * `close` という2つのメソッドだけで、`::backdrop` やフォーカストラップ・
+ * `Escape` キーでの自動クローズ・`cancel`/`close` イベント順序までは真似ない
+ * ——この画面の試験が要るのは「開いた状態で中身が読めるか」「閉じたら
+ * 開いていないか」までなので、そこだけ埋める。
+ */
+if (
+  typeof HTMLDialogElement !== 'undefined' &&
+  HTMLDialogElement.prototype.showModal === undefined
+) {
+  HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement): void {
+    this.setAttribute('open', '');
+  };
+}
+if (typeof HTMLDialogElement !== 'undefined' && HTMLDialogElement.prototype.close === undefined) {
+  HTMLDialogElement.prototype.close = function (this: HTMLDialogElement): void {
+    this.removeAttribute('open');
+  };
+}
+
+/**
  * `ResizeObserver` も jsdom には無い。**`virtua`（日誌画面の仮想スクロール、
  * `routes/journal.tsx`）がマウント時に `new ResizeObserver(...)` を呼ぶため、
  * 無いままでは `ResizeObserver is not a constructor` で描画そのものが例外に

@@ -525,6 +525,31 @@ export function useResetWorkspace() {
 }
 
 /**
+ * デーモンを止める（`POST /shutdown`。CLI の `alteroid daemon stop` と同じ
+ * 受け口。issue #1124 の (A)）。
+ *
+ * **確認は呼び出し側（`settings.tsx` の `ShutdownDaemon`）の仕事。** `POST
+ * /reset` と違い、この口自体はサーバ側で確認の印（`confirm: true` 相当）を
+ * 必須にしていない（`apps/daemon/src/app.ts` の `/shutdown` の doc）——
+ * 確認を経ない直接呼び出しを止める二重の網は無く、呼ぶ前の確認だけが
+ * 唯一の網である。
+ *
+ * **資格は `authenticate` だけ**（`requireOperator` は要求しない。issue
+ * #1124 の (B) がその強さを「意図」として確定させている）ので、`useSetEnvVar`
+ * `useDeclareOwner` と違って「宣言済みでなければ 403」という前置きは無い。
+ *
+ * **呼んだ後にキャッシュは引き直さない。** デーモンが止まるので、この画面
+ * 自身の接続もすぐ切れる——`useResetWorkspace` の `mutate(() => true)` に
+ * 相当する引き直しをしても、応答する相手がいなくなる。
+ */
+export function useShutdownDaemon() {
+  const api = useApi();
+  return useCallback(async () => {
+    await api.api.POST('/shutdown', { body: {} }).then(unwrap);
+  }, [api]);
+}
+
+/**
  * 実行環境の持ち主として宣言する／取り消す（`POST /access/:id/owner`
  * `.../owner/revoke`。issue #1198）。
  *

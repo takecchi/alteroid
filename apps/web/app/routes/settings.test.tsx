@@ -29,7 +29,7 @@
  *
  * **3つとも「判定できないことを、判定した結果として出さない」という同じ形である。**
  */
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -447,5 +447,100 @@ describe('横並びの積み替え（本4-A）: アカウントの dl', () => {
     expect(tokens).toContain('mt-3');
     expect(tokens).toContain('first:mt-0');
     expect(tokens).toContain('sm:mt-0');
+  });
+});
+
+/**
+ * デーモンを止める（`ShutdownDaemon`。issue #1124 の (A)）。
+ *
+ * **CLI（`alteroid daemon stop`）にしか無かった口を Web UI からも押せるように
+ * したもの。** 確認は `ResetWorkspace` と同じ「文字を打って確認」形だが、
+ * 打つ語は別にする（`stop`）——`reset`（ワークスペース全消去の確認語）と
+ * 混ざると、押し間違いの結果が逆方向に重くなる。
+ *
+ * ここで固定したいのは4点:
+ * 1. 打つ文字が一致しないとボタンが押せない（`disabled`）。押そうとしても
+ *    `/shutdown` を呼ばない
+ * 2. 一致すると押せて、押すと `POST /shutdown` を1回呼ぶ
+ * 3.（陽性対照）`ResetWorkspace` の確認語（`reset`）を打っても、止めるボタンは
+ *    押せない——2つの確認が混ざらない
+ * 4. 文言に「記憶も台帳も消さない」と「Railway では再起動として働く」が載る
+ */
+describe('デーモンを止める（ShutdownDaemon）', () => {
+  function renderWithShutdownStub(options: { shutdownStatus?: number } = {}) {
+    const { shutdownStatus = 200 } = options;
+    const stub = stubFetch((url) => {
+      if (url.includes('/shutdown')) return json({ ok: true }, shutdownStatus);
+      if (url.includes('/runners')) {
+        return json({ runners: [], daemonRevision: DAEMON_UNKNOWN });
+      }
+      if (url.includes('/auth/providers')) return json({ providers: [] });
+      if (url.includes('/me')) return json({ status: 'open' });
+      if (url.includes('/health')) return json({ ok: true });
+      return json({});
+    });
+    const router = createMemoryRouter([{ path: '/', Component: Settings }], {
+      initialEntries: ['/'],
+    });
+    render(
+      <Providers>
+        <RouterProvider router={router} />
+      </Providers>,
+    );
+    return stub;
+  }
+
+  function shutdownCallCount(stub: ReturnType<typeof stubFetch>): number {
+    return stub.calls.filter((url) => url.includes('/shutdown')).length;
+  }
+
+  async function openShutdownDialog(): Promise<void> {
+    fireEvent.click(await screen.findByRole('button', { name: 'デーモンを止める' }));
+    await screen.findByPlaceholderText('stop');
+  }
+
+  it('【歯4】文言に「記憶も台帳も消さない」と Railway の再起動が載る', async () => {
+    renderWithShutdownStub();
+
+    expect(await screen.findByText(/記憶も台帳も消さない/)).toBeTruthy();
+    expect(await screen.findByText(/再起動として働く/)).toBeTruthy();
+  });
+
+  it('【歯1】打つ文字が一致しないとボタンは押せず、/shutdown を呼ばない', async () => {
+    const stub = renderWithShutdownStub();
+    await openShutdownDialog();
+
+    fireEvent.change(screen.getByPlaceholderText('stop'), { target: { value: 'sto' } });
+    const confirmButton = screen.getByRole('button', { name: '止める' }) as HTMLButtonElement;
+    expect(confirmButton.disabled).toBe(true);
+
+    fireEvent.click(confirmButton);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(shutdownCallCount(stub)).toBe(0);
+  });
+
+  it('【歯2】一致すると押せて、押すと POST /shutdown を1回呼ぶ', async () => {
+    const stub = renderWithShutdownStub();
+    await openShutdownDialog();
+
+    fireEvent.change(screen.getByPlaceholderText('stop'), { target: { value: 'stop' } });
+    const confirmButton = screen.getByRole('button', { name: '止める' }) as HTMLButtonElement;
+    expect(confirmButton.disabled).toBe(false);
+
+    fireEvent.click(confirmButton);
+
+    await screen.findByText(/止めました/);
+    expect(shutdownCallCount(stub)).toBe(1);
+    const entry = stub.entries.find((e) => e.url.includes('/shutdown'));
+    expect(entry?.request?.method).toBe('POST');
+  });
+
+  it('【歯3・陽性対照】ResetWorkspace の確認語「reset」を打っても止めるボタンは押せない', async () => {
+    renderWithShutdownStub();
+    await openShutdownDialog();
+
+    fireEvent.change(screen.getByPlaceholderText('stop'), { target: { value: 'reset' } });
+    const confirmButton = screen.getByRole('button', { name: '止める' }) as HTMLButtonElement;
+    expect(confirmButton.disabled).toBe(true);
   });
 });
