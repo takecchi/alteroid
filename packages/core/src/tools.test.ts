@@ -27,6 +27,7 @@ import { measureMemoryFloor, renderMemoryDocuments, scanMemorySections } from '.
 import { createProfileService } from './profile-service.js';
 import { heuristicChars, type HeuristicChars } from './quantity.js';
 import {
+  COMMITMENT_APPRAISAL_DECISION_PREFIX,
   describeAppraisal,
   journalEntrySchema,
   type AppraisalValue,
@@ -15063,6 +15064,61 @@ describe('commitment_close が「台帳に無い」と答えるとき、機械�
     // ⛔ 握り潰して「在った」「無かった」のどちらか一方へ倒れていない。
     expect(reply).not.toContain('機械が名乗った記録は日誌に在る');
     expect(reply).not.toContain('機械が名乗った記録も日誌に無い');
+  });
+
+  it('commitment_appraise（クローンの評定）は決定行に構造欄（#1310）を書く', async () => {
+    const stores = createMemoryStores();
+    await stores.commitments.open({
+      id: 'c-structured',
+      at: '2026-01-01T00:00:00.000Z',
+      origin: 'self',
+      body: '評定される件',
+    });
+    const tools = createCloneTools({
+      stores,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+    const appraise = tools.find((entry) => entry.name === 'commitment_appraise');
+    await appraise?.handler({ id: 'c-structured', appraisal: 'good' } as never, {});
+    // 人間が覆す（前の値・前に誰が付けたかが構造欄に残ることも同時に確かめる）。
+    await appraise?.handler(
+      { id: 'c-structured', appraisal: 'bad', reason: '差し戻し' } as never,
+      {},
+    );
+
+    const decisions = (await stores.journal.list({ types: ['decision'] })).filter((entry) =>
+      entry.type === 'decision'
+        ? entry.decision.startsWith(COMMITMENT_APPRAISAL_DECISION_PREFIX)
+        : false,
+    );
+    expect(decisions).toHaveLength(2);
+    // `.decision` の部分一致では「前: 評定: うまくいった（good・clone）」の
+    // 中に "good" が紛れ込むので、構造欄自身の `value` で狙いの行を選ぶ
+    // （日誌の list が新しい順か古い順かにも依存しない）。
+    const firstEntry = decisions.find(
+      (entry) => entry.type === 'decision' && entry.appraisal?.value === 'good',
+    );
+    const secondEntry = decisions.find(
+      (entry) => entry.type === 'decision' && entry.appraisal?.value === 'bad',
+    );
+    expect(firstEntry?.type === 'decision' ? firstEntry.appraisal : undefined).toEqual({
+      target: 'commitment',
+      id: 'c-structured',
+      value: 'good',
+      by: 'clone',
+      previous: undefined,
+      previousBy: undefined,
+    });
+    expect(secondEntry?.type === 'decision' ? secondEntry.appraisal : undefined).toEqual({
+      target: 'commitment',
+      id: 'c-structured',
+      value: 'bad',
+      by: 'clone',
+      previous: 'good',
+      previousBy: 'clone',
+    });
   });
 
   it('⚠️ 対象は commitment_close だけである（commitment_appraise / commitment_edit の同じ枝は変えない）', async () => {

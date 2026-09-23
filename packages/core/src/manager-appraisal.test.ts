@@ -218,6 +218,34 @@ describe('委譲の評定（ManagerPool.appraise）', () => {
     // いなければ「クローンは good と言っていた」がどこにも残らない。
     expect(overturn).toContain('うまくいった');
     expect(overturn).toContain('通った');
+
+    // **構造欄（#1310）——`ManagerPool.appraise` は clone/human 両方の呼び手が
+    // 通る唯一の書き口なので、ここが取り違えると (b)/(c) の食い違いが
+    // 委譲側だけ丸ごと壊れる。** `.decision` の部分一致では「前: 評定:
+    // うまくいった（good・clone）」の中に "good" が紛れ込むので、構造欄
+    // 自身の `value` で狙いの行を選ぶ（部分一致に頼らない）。
+    const first = decisions.find(
+      (entry) => entry.type === 'decision' && entry.appraisal?.value === 'good',
+    );
+    expect(first?.type === 'decision' ? first.appraisal : undefined).toEqual({
+      target: 'job',
+      id: 'mgr-appraise',
+      value: 'good',
+      by: 'clone',
+      previous: undefined,
+      previousBy: undefined,
+    });
+    const second = decisions.find(
+      (entry) => entry.type === 'decision' && entry.appraisal?.value === 'bad',
+    );
+    expect(second?.type === 'decision' ? second.appraisal : undefined).toEqual({
+      target: 'job',
+      id: 'mgr-appraise',
+      value: 'bad',
+      by: 'human',
+      previous: 'good',
+      previousBy: 'clone',
+    });
   });
 
   it('台帳に居ない id は absent（「書けた」と嘘をつかない）', async () => {

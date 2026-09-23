@@ -2937,12 +2937,25 @@ describe('HTTP API', () => {
         : false,
     );
     expect(appraisal).toHaveLength(1);
-    const decision = appraisal[0]?.type === 'decision' ? appraisal[0].decision : '';
+    const entry = appraisal[0];
+    const decision = entry?.type === 'decision' ? entry.decision : '';
     expect(decision).toContain('bad');
     // **前の値が入っていること。** 行は「いまの値」しか持たないので、ここに
     // 落ちていなければ「クローンは good と言っていた」がどこにも残らない。
     expect(decision).toContain('うまくいった');
     expect(decision).toContain('通った');
+
+    // **構造欄（#1310）も同時に書かれていること。** 自由文だけに頼ると、
+    // grounds の文言を1文字変えただけで (b)/(c) の食い違いが復元できなく
+    // なる（`inferAppraisedByFromGrounds` の doc）。
+    expect(entry?.type === 'decision' ? entry.appraisal : undefined).toEqual({
+      target: 'commitment',
+      id,
+      value: 'bad',
+      by: 'human',
+      previous: 'good',
+      previousBy: 'clone',
+    });
   });
 
   it('台帳に無い id は 404（評定は「書けた」と嘘をつかない）', async () => {
