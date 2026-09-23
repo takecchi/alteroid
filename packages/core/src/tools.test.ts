@@ -7191,6 +7191,61 @@ describe('クローンの道具', () => {
     });
   });
 
+  /**
+   * Issue #1394 段⑤ — 「手が空いた委譲を畳む候補」を ⚠ で表示するだけの機能
+   * （畳む操作そのものは作っていない）。判定の中身は
+   * `manager-fold-candidate.test.ts` が純関数の単体で測る——ここで測るのは
+   * `manager_list` への結線と、道具の説明文である。
+   *
+   * **条件3（その器が背景処理待ちの印を送る版であると確かめられる）の材料は
+   * いま存在しない**（`manager-fold-candidate.ts` の doc）ので、`tools.ts` の
+   * 呼び出し側はこの条件を常に `false` で渡す配線にしてある。**⟹ この統合
+   * レベルでは「候補として出る」歯は書けない**——他の条件（1・2・4・5）を
+   * すべて満たすように仕立てても、条件3だけは `ToolContext` から差し替える
+   * 経路が無いので、常に `false` のまま。その「出ない」こと自体が、いまの
+   * 正しい配線の姿である（陽性側の判定は純関数の単体で測ってある）。
+   */
+  describe('manager_list は「畳む候補」を ⚠ で表示する（#1394 段⑤。畳む操作はしない）', () => {
+    it('条件1・2・4・5をすべて満たすよう仕立てても、条件3の材料が無いので ⚠ は出ない', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      // 条件1: done
+      target.status = 'done';
+      // 条件2: 背景処理待ちの印を立てない（既定で undefined のままだが明示する）
+      delete target.awaitingBackground;
+      // 条件4: classifyManagerActivity が 'active' になるよう仕立てる
+      // （turnEndReason が在り、turnEndedAt <= lastReportAt、toolUseStallPending 無し）
+      target.turnEndReason = 'end_turn';
+      target.turnEndedAt = '2000-01-01T00:00:00.000Z';
+      target.lastReportAt = '2000-01-01T00:00:01.000Z';
+      // 条件5: 最後のターン終了（ここでは updatedAt）から十分に経っている
+      target.updatedAt = '2000-01-01T00:00:01.000Z';
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('[done]');
+      expect(reply).not.toContain('畳む候補');
+    });
+
+    it('道具の説明文が「畳む候補」の ⚠ の意味と、畳む操作はしないことを言う', () => {
+      const stores = createMemoryStores();
+      const tools = createCloneTools({
+        stores,
+        emit: () => undefined,
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
+      const description = tools.find((entry) => entry.name === 'manager_list')?.description;
+
+      expect(description).toContain('「畳む候補」の ⚠');
+      expect(description).toContain('畳む操作は、この道具や他のどの道具からも行われない');
+      // 条件3の材料が無いので、いまはどの委譲にも出ない——それを説明文が名乗る（黙ると「候補が無い」と読まれる）。
+      expect(description).toContain('いまはどの委譲にも出ない');
+    });
+  });
+
   describe('manager_list は「道具の応答待ちのまま、誰も待っていない」を出す（#572）', () => {
     it('toolUseStallPending が無ければ ⚠ を出さない', async () => {
       const h = harness();

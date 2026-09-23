@@ -205,6 +205,7 @@ import {
   type UsageBreakdown,
   type UsageTotals,
 } from './usage.js';
+import { describeManagerFoldCandidate } from './manager-fold-candidate.js';
 
 /**
  * クローンの道具（インプロセス MCP）。
@@ -8438,6 +8439,12 @@ export function createCloneTools(context: ToolContext) {
           'これは矛盾である）。この行に時刻の閾値は置いていない——何分経ったかは判定していないので、' +
           '行に出ている timestamp を読んで判断すること。返事待ちが在るものにはこの行を出さない' +
           '（確認は届いていて、クローンがまだ答えていないだけの正常な状態である）。',
+        // **Issue #1394 段⑤。** 畳む操作そのものはまだ無い——表示だけである。
+        // 説明文にも書く理由は上の各行と同じ（JSDoc はクローンに届かない）。
+        '「畳む候補」の ⚠ は、status が done で背景処理待ちの印が無く、状態の判定が' +
+          'active で、最後のターン終了から一定時間が経った委譲に出す印である。' +
+          'ただし、器が背景処理待ちの印を送る版かを確かめる材料がまだ無いので、いまはどの委譲にも出ない' +
+          '（出ていないことを「畳む候補が無い」と読まないこと）。畳む操作は、この道具や他のどの道具からも行われない。',
         // **並びを名乗る（#688 の3 を直した）。** ここに書いてある順序と実装が食い違うと、
         // クローンは「出ていない＝無い」と読む。実装が実際にやっていることだけを書く。
         '走行中・返事待ち（running / waiting_human）を先に出し、次に lost（前のセッションへ戻れなかったもの。' +
@@ -8679,6 +8686,31 @@ export function createCloneTools(context: ToolContext) {
             now,
           });
           const driftMark = drift === '' ? '' : '、⚠ status 食い違い（manager_report で詳細）';
+          // **Issue #1394 段⑤: 「手が空いた委譲を畳む候補」を表示だけする。**
+          // 畳む操作そのものは作らない——判定は `manager-fold-candidate.ts` の
+          // `describeManagerFoldCandidate` 1箇所（このファイルでは判定を
+          // 作り直さない）。
+          //
+          // **条件3（その器が背景処理待ちの印を送る版であると確かめられる）の
+          // 材料はいま存在しない**（`manager-fold-candidate.ts` の doc）——
+          // 確かめられないので `awaitingBackgroundSignalVersionConfirmed` は
+          // 常に `false` を渡す。**⟹ この行はいまのところ、他の条件が
+          // どうであっても出ない。** 器がプロトコル版・機能申告を送る
+          // ようになったら、ここを `false` から実際の確認結果へ差し替える。
+          //
+          // 条件5の材料は `turnEndedAt` ではなく `updatedAt` を渡す——
+          // `turnEndedAt` は `status: 'running'` の委譲でしか計算されない
+          // （`manager-fold-candidate.ts` の doc に理由がある）。
+          const foldCandidateLine = describeManagerFoldCandidate(
+            {
+              status: manager.status,
+              hasAwaitingBackgroundSignal: manager.awaitingBackground !== undefined,
+              awaitingBackgroundSignalVersionConfirmed: false,
+              activityKind: classifyManagerActivity(managerActivityInputOf(manager)),
+              lastTurnEndedAt: manager.updatedAt,
+            },
+            now,
+          );
           return renderListingEntry({
             id: manager.managerId,
             // **第3引数まで通す（#621 / #643）。** `status: 'done'` は
@@ -8896,6 +8928,9 @@ export function createCloneTools(context: ToolContext) {
               // 出しているときは二重に鳴らさない**——同じ関数がその判定も
               // 兼ねる。
               describeResetTimeSkew(manager),
+              // **Issue #1394 段⑤。** 健全な（候補ではない）委譲では `null` を
+              // 返し、1文字も増えない——他の `describe*` と同じ約束。
+              foldCandidateLine,
             ],
           });
         });
