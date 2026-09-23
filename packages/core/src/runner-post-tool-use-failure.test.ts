@@ -43,9 +43,15 @@ import { runnerEventSchema, type RunnerEvent } from './runner-protocol.js';
  *    `PostToolUseFailureHookInput` には控えの材料（`tool_response` /
  *    `backgroundTaskId`）が無いため（Issue #929 の 2026-09-13 の測定コメント）。
  *
- * `#toolsSinceResult` / `#markProgressed` への効果は、ここではなく
- * `runner-wakeup.test.ts`（`worker_wait.toolless` を観測できる既存の足場）
- * に足した——ここに同じ足場を複製するより、既存の観測口を使うほうが強い。
+ * `#toolsSinceResult` への効果は、ここではなく `runner-wakeup.test.ts`
+ * （`worker_wait.toolless` を観測できる既存の足場）に足した——ここに同じ
+ * 足場を複製するより、既存の観測口を使うほうが強い。
+ *
+ * **`#markProgressed()` のもう1つの効果（`#progressed` を立てて `#seed` を
+ * 解放すること）は、`worker_wait.toolless` からは観測できない。** それを
+ * 外から確かめる歯は `runner-post-tool-use-failure-resume.test.ts`
+ * （resume 失敗からの作り直しを通して観測する）に在る（Issue #929 の
+ * 最新コメントの項目6）。
  */
 
 interface Started {
