@@ -32,6 +32,11 @@ import type { Commitment } from './schema.js';
  * | B11 | `order: 'newest'` の有効な cursor | `B11: order が newest の cursor はそれより古い側だけを残す（entries は呼び出し側で反転済みの前提）` |
  * | B12 | `order` が食い違う | `B12: order が食い違う cursor は明示のエラー` |
  * | B13 | `order` の欄を持たない（足す前に発行された）cursor | `B13: order の欄を持たない古い cursor は malformed にならず oldest として読める` |
+ * | B14 | `origin` が食い違う | `B14: origin が食い違う cursor は明示のエラー` |
+ * | B15 | `q` が食い違う | `B15: q が食い違う cursor は明示のエラー` |
+ * | B16 | `origin` が順序・重複違いだが同じ集合 | `B16: origin は順序・重複違いでも同じ集合なら一致（正規化）` |
+ * | B17 | `q` が未指定/空文字、大文字小文字違い | `B17: q は未指定と空文字、大文字小文字の違いを同じ絞りとして扱う（正規化）` |
+ * | B18 | `origin`/`q` の欄を持たない（足す前に発行された）cursor | `B18: origin/q の欄を持たない古い cursor は malformed にならず、絞っていない呼びでは続きが読める` |
  *
  * `commitmentPosition` / `compareCommitmentPosition` / `encodeCommitmentCursor` /
  * `decodeCommitmentCursor` は、上の分岐を組み立てるための部品として個別にも
@@ -129,6 +134,21 @@ describe('encodeCommitmentCursor / decodeCommitmentCursor（部品）', () => {
     expect(decoded).toEqual({ ok: true, cursor });
   });
 
+  it('encode したものを decode すると同じ値が戻る（往復。origin / q を指定した場合）', () => {
+    const cursor: CommitmentCursor = {
+      segment: 'closed',
+      key: '2026-01-01T00:00:00.000Z',
+      id: 'c-1',
+      includeClosed: true,
+      order: 'newest',
+      origin: ['human', 'manager'],
+      q: 'foo',
+    };
+    const raw = encodeCommitmentCursor(cursor);
+    const decoded = decodeCommitmentCursor(raw);
+    expect(decoded).toEqual({ ok: true, cursor });
+  });
+
   it(
     '`order` の欄を持たない（`order` を足す前に発行された）cursor は malformed にならず、' +
       '`order: "oldest"` として読める',
@@ -147,6 +167,40 @@ describe('encodeCommitmentCursor / decodeCommitmentCursor（部品）', () => {
           id: 'c-1',
           includeClosed: false,
           // `order` を意図的に書かない。
+        }),
+        'utf8',
+      ).toString('base64url');
+      expect(decodeCommitmentCursor(raw)).toEqual({
+        ok: true,
+        cursor: {
+          segment: 'open',
+          key: '2026-01-01T00:00:00.000Z',
+          id: 'c-1',
+          includeClosed: false,
+          order: 'oldest',
+        },
+      });
+    },
+  );
+
+  it(
+    '`origin`/`q` の欄を持たない（この変更より前に発行された）cursor は malformed にならず、' +
+      '`origin: undefined` / `q: undefined`（どちらも「絞っていない」）として読める',
+    () => {
+      // **`origin`/`q` を足す前の世界を模す。** `order` を足したときと同じ
+      // 理由——欄を足す前に発行済みのカーソルは、JSON にその欄そのものを
+      // 持たない。`origin` / `q` はどちらも `.optional()`（`order` のような
+      // `.default()` は使わない——理由は schema 直前の doc）——欄が無ければ
+      // 「絞っていない」（`undefined`）として読める、これは `tools.ts` の
+      // `origin` / `q` 未指定（絞らない）と同じ意味である。
+      const raw = Buffer.from(
+        JSON.stringify({
+          segment: 'open',
+          key: '2026-01-01T00:00:00.000Z',
+          id: 'c-1',
+          includeClosed: false,
+          order: 'oldest',
+          // origin / q を意図的に書かない。
         }),
         'utf8',
       ).toString('base64url');
@@ -433,6 +487,104 @@ describe('resolveCommitmentCursor（B1〜B10。上の対応表）', () => {
         'utf8',
       ).toString('base64url');
       const result = resolveCommitmentCursor(entries, false, legacyCursorRaw);
+      expect(result).toEqual({ kind: 'ok', view: [c2] });
+    },
+  );
+
+  it('B14: origin が食い違う cursor は明示のエラー', () => {
+    const c1 = open({ id: 'c-1', at: '2026-01-01T00:00:00.000Z' });
+    const entries = [c1];
+    const cursor = encodeCommitmentCursor({
+      ...commitmentPosition(c1),
+      includeClosed: false,
+      order: 'oldest',
+      origin: ['human'],
+    });
+    const result = resolveCommitmentCursor(entries, false, cursor, 'oldest', ['manager']);
+    expect(result).toEqual({ kind: 'origin-mismatch', cursorOrigin: ['human'] });
+  });
+
+  it('B15: q が食い違う cursor は明示のエラー', () => {
+    const c1 = open({ id: 'c-1', at: '2026-01-01T00:00:00.000Z' });
+    const entries = [c1];
+    const cursor = encodeCommitmentCursor({
+      ...commitmentPosition(c1),
+      includeClosed: false,
+      order: 'oldest',
+      q: 'foo',
+    });
+    const result = resolveCommitmentCursor(entries, false, cursor, 'oldest', undefined, 'bar');
+    expect(result).toEqual({ kind: 'q-mismatch', cursorQ: 'foo' });
+  });
+
+  it('B16: origin は順序・重複違いでも同じ集合なら一致（正規化）', () => {
+    const c1 = open({ id: 'c-1', at: '2026-01-01T00:00:00.000Z' });
+    const c2 = open({ id: 'c-2', at: '2026-01-02T00:00:00.000Z' });
+    const entries = [c1, c2];
+    const cursor = encodeCommitmentCursor({
+      ...commitmentPosition(c1),
+      includeClosed: false,
+      order: 'oldest',
+      origin: ['human', 'manager', 'human'],
+    });
+    // いまの呼びは順序違い・重複無しの同じ集合——一致として続く。
+    const result = resolveCommitmentCursor(entries, false, cursor, 'oldest', ['manager', 'human']);
+    expect(result).toEqual({ kind: 'ok', view: [c2] });
+  });
+
+  it('B17: q は未指定と空文字、大文字小文字の違いを同じ絞りとして扱う（正規化）', () => {
+    const c1 = open({ id: 'c-1', at: '2026-01-01T00:00:00.000Z' });
+    const c2 = open({ id: 'c-2', at: '2026-01-02T00:00:00.000Z' });
+    const entries = [c1, c2];
+    // 「q 未指定」で発行した cursor と、いまの呼びの q="" は同じ絞り。
+    const cursorUndefinedQ = encodeCommitmentCursor({
+      ...commitmentPosition(c1),
+      includeClosed: false,
+      order: 'oldest',
+    });
+    expect(
+      resolveCommitmentCursor(entries, false, cursorUndefinedQ, 'oldest', undefined, ''),
+    ).toEqual({ kind: 'ok', view: [c2] });
+    // 大文字小文字だけが違う q も同じ絞り
+    // （`tools.ts` の絞り込みが `toLowerCase()` で比較するため、結果集合が
+    // 同一になる——同じ理由で「同じ絞り」として扱う）。
+    const cursorMixedCaseQ = encodeCommitmentCursor({
+      ...commitmentPosition(c1),
+      includeClosed: false,
+      order: 'oldest',
+      q: 'Foo',
+    });
+    expect(
+      resolveCommitmentCursor(entries, false, cursorMixedCaseQ, 'oldest', undefined, 'foo'),
+    ).toEqual({ kind: 'ok', view: [c2] });
+  });
+
+  it(
+    'B18: origin/q の欄を持たない古い cursor は malformed にならず、' +
+      '絞っていない呼びでは続きが読める',
+    () => {
+      // `origin`/`q` を足す前に発行された（＝ JSON にその欄が無い）cursor を
+      // 模す——B13（`order`）と同じ模し方。
+      const c1 = open({ id: 'c-1', at: '2026-01-01T00:00:00.000Z' });
+      const c2 = open({ id: 'c-2', at: '2026-01-02T00:00:00.000Z' });
+      const entries = [c1, c2];
+      const legacyCursorRaw = Buffer.from(
+        JSON.stringify({
+          ...commitmentPosition(c1),
+          includeClosed: false,
+          order: 'oldest',
+          // origin / q を意図的に書かない。
+        }),
+        'utf8',
+      ).toString('base64url');
+      const result = resolveCommitmentCursor(
+        entries,
+        false,
+        legacyCursorRaw,
+        'oldest',
+        undefined,
+        undefined,
+      );
       expect(result).toEqual({ kind: 'ok', view: [c2] });
     },
   );

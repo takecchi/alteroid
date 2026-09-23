@@ -5961,7 +5961,8 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             '一覧モードの続きを読む位置。前回の応答の断り書きに出た cursor をそのまま渡す' +
               '（自分で組み立てない）。省略すると先頭から（order が newest なら新しい方から）。' +
-              'includeClosed と order はカーソルを取った呼びと揃えること（食い違うと明示のエラーになる）',
+              'includeClosed・order・origin・q はカーソルを取った呼びと揃えること' +
+              '（食い違うと明示のエラーになる）',
           ),
       },
       async ({ id, offset = 0, includeClosed, origin, q, order, cursor }) => {
@@ -6096,16 +6097,21 @@ export function createCloneTools(context: ToolContext) {
         // 解決すると、次の頁の起点が「切った後に残った行」からずれる。ここで
         // `ordered`（origin → q → order 済み）に対して解決する。
         //
-        // **判定できないカーソル（壊れている／`includeClosed` か `order` が
-        // 食い違う）は黙って先頭からへ倒さない。** `resolveCommitmentCursor`
-        // の doc、AGENTS.md「判定できないという3つ目の状態を持つ」と同じ
-        // 理由——黙って先頭へ戻すと、呼び手は「続きを読んだつもり」で同じ行を
-        // 繰り返し読む（気づきようが無い）。
+        // **判定できないカーソル（壊れている／`includeClosed`・`order`・
+        // `origin`・`q` のいずれかが食い違う）は黙って先頭からへ倒さない。**
+        // `resolveCommitmentCursor` の doc、AGENTS.md「判定できないという
+        // 3つ目の状態を持つ」と同じ理由——黙って先頭へ戻すと、呼び手は
+        // 「続きを読んだつもり」で同じ行を繰り返し読む（気づきようが無い）。
+        // **`origin` / `q` も `includeClosed` / `order` と同じ理由で渡す
+        // （issue #1390）。** 別の絞り込みで取った cursor を黙って別の絞りの
+        // 続きとして使わせないため。
         const cursorOutcome = resolveCommitmentCursor(
           ordered,
           includeClosed === true,
           cursor,
           effectiveOrder,
+          origin,
+          q,
         );
         if (cursorOutcome.kind === 'malformed') {
           return text(
@@ -6129,6 +6135,47 @@ export function createCloneTools(context: ToolContext) {
               `commitment_list order=${cursorOutcome.cursorOrder} includeClosed=${includeClosed === true} ` +
               `cursor=${cursor} のように order を揃えて呼び直すか、` +
               'cursor を付けずに先頭から呼び直すこと。',
+          );
+        }
+        // **origin-mismatch / q-mismatch。`includeClosed-mismatch` /
+        // `order-mismatch` と同じ形の文言に揃える**（issue #1390 の指定
+        // どおり——別の絞り込みで取った cursor を黙って先頭からへは倒さず、
+        // 食い違いを名乗って断る）。
+        if (cursorOutcome.kind === 'origin-mismatch') {
+          // **`cursorOutcome.cursorOrigin` / いまの `origin` はどちらも
+          // `undefined`（絞っていない）でありうる。** その場合は文言の
+          // `origin=` 部分を省き「絞っていない」と言う——`includeClosed` /
+          // `order` は常に具体値を持つので、この分岐は origin だけに要る。
+          const cursorOriginText =
+            cursorOutcome.cursorOrigin === undefined
+              ? '絞っていない'
+              : cursorOutcome.cursorOrigin.join(',');
+          const currentOriginText = origin === undefined ? '絞っていない' : origin.join(',');
+          const cursorOriginArg =
+            cursorOutcome.cursorOrigin === undefined
+              ? ''
+              : `origin=${cursorOutcome.cursorOrigin.join(',')} `;
+          return text(
+            `cursor は origin=${cursorOriginText} の一覧から出た続きの位置で、` +
+              `いまの呼び（origin=${currentOriginText}）と食い違う。` +
+              `commitment_list ${cursorOriginArg}order=${effectiveOrder} ` +
+              `includeClosed=${includeClosed === true} cursor=${cursor} のように origin を揃えて` +
+              '呼び直すか、cursor を付けずに先頭から呼び直すこと。',
+          );
+        }
+        if (cursorOutcome.kind === 'q-mismatch') {
+          // **`cursorOutcome.cursorQ` / いまの `q` はどちらも `undefined`
+          // でありうる**（origin と同じ理由）。
+          const cursorQText = cursorOutcome.cursorQ ?? '（絞っていない）';
+          const currentQText = q ?? '（絞っていない）';
+          const cursorQArg =
+            cursorOutcome.cursorQ === undefined ? '' : `q=${cursorOutcome.cursorQ} `;
+          return text(
+            `cursor は q="${cursorQText}" の一覧から出た続きの位置で、` +
+              `いまの呼び（q="${currentQText}"）と食い違う。` +
+              `commitment_list ${cursorQArg}order=${effectiveOrder} ` +
+              `includeClosed=${includeClosed === true} cursor=${cursor} のように q を揃えて` +
+              '呼び直すか、cursor を付けずに先頭から呼び直すこと。',
           );
         }
         // **`view` が空になりうる。** cursor が一覧のいちばん後ろを指していた
@@ -6209,10 +6256,23 @@ export function createCloneTools(context: ToolContext) {
                     // 先頭に出す。** `view.length === 0` は上で早期に別文へ
                     // 分けてあるので、ここに来る時点で `shown >= 1` は保証
                     // される（`lastShown` は必ず定義される）。
+                    // **`origin` / `q` も刷る（issue #1390）。** `includeClosed`
+                    // / `order` と同じ理由——このカーソルは「いまの絞り込み
+                    // （`origin` / `q`）で作った一覧」の続きの位置なので、
+                    // 別の絞り込みで使われたら `resolveCommitmentCursor` が
+                    // `origin-mismatch` / `q-mismatch` として断れるよう、
+                    // ここで刷っておく必要がある。`origin` は未指定なら欄
+                    // 自体を書かない（`undefined` のまま——スキーマが
+                    // `.optional()` で、明示的な `origin: undefined` と欄を
+                    // 書かないことは同じに読めるが、`encodeCommitmentCursor`
+                    // は JSON.stringify するだけなので `undefined` の値を
+                    // 持つキーは出力されず、実質どちらでも同じになる）。
                     const nextCursor = encodeCommitmentCursor({
                       ...commitmentPosition(lastShown!),
                       includeClosed: includeClosed === true,
                       order: effectiveOrder,
+                      ...(origin === undefined ? {} : { origin }),
+                      ...(q === undefined ? {} : { q }),
                     });
                     const scopeNoteParts = [
                       ...(origin === undefined ? [] : [`origin: ${origin.join(', ')}`]),

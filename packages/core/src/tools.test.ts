@@ -16394,6 +16394,168 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
     expect(second).not.toContain('c-open-only');
     expect(second).toContain('c-closed-000');
   });
+
+  it('T10: origin が食い違う cursor は明示のエラー（origin-mismatch。issue #1390）', async () => {
+    const h = harness();
+    await h.stores.commitments.open({
+      id: 'c-1',
+      at: '2026-01-01T00:00:00.000Z',
+      origin: 'human',
+      body: '見えてはいけない本文',
+    });
+    const { encodeCommitmentCursor, commitmentPosition } = await import('./commitment-cursor.js');
+    // origin: ['manager'] の一覧から出た cursor を模す。
+    const cursor = encodeCommitmentCursor({
+      ...commitmentPosition({ id: 'c-1', at: '2026-01-01T00:00:00.000Z' }),
+      includeClosed: false,
+      order: 'oldest',
+      origin: ['manager'],
+    });
+
+    // origin: ['human'] の呼びへ渡す——食い違うので黙って続けない。
+    const reply = await h.call('commitment_list', { origin: ['human'], cursor });
+
+    expect(reply).toContain('cursor は origin=manager');
+    expect(reply).toContain('食い違う');
+    expect(reply).not.toContain('見えてはいけない本文');
+  });
+
+  it('T11: q が食い違う cursor は明示のエラー（q-mismatch。issue #1390）', async () => {
+    const h = harness();
+    await h.stores.commitments.open({
+      id: 'c-1',
+      at: '2026-01-01T00:00:00.000Z',
+      origin: 'self',
+      body: 'UNIQUEWORD を含む宿題',
+    });
+    const { encodeCommitmentCursor, commitmentPosition } = await import('./commitment-cursor.js');
+    const cursor = encodeCommitmentCursor({
+      ...commitmentPosition({ id: 'c-1', at: '2026-01-01T00:00:00.000Z' }),
+      includeClosed: false,
+      order: 'oldest',
+      q: 'foo',
+    });
+
+    const reply = await h.call('commitment_list', { q: 'bar', cursor });
+
+    expect(reply).toContain('cursor は q="foo"');
+    expect(reply).toContain('食い違う');
+    expect(reply).not.toContain('UNIQUEWORD');
+  });
+
+  it(
+    'T12: origin/q が正規化して同値なら cursor はそのまま続く' +
+      '（順序違い・大文字小文字違いは同じ絞りとして扱う）',
+    async () => {
+      const h = harness();
+      const long = 'あ'.repeat(500);
+      for (let index = 0; index < 25; index += 1) {
+        const originValue = index % 2 === 0 ? ('human' as const) : ('manager' as const);
+        await h.stores.commitments.open({
+          id: `c-${String(index).padStart(3, '0')}`,
+          at: `2026-01-01T00:00:${String(index).padStart(2, '0')}.000Z`,
+          origin: originValue,
+          ...(originValue === 'manager' ? { source: 'mgr-1' } : {}),
+          body: `NEEDLE${String(index).padStart(3, '0')}: ${long}`,
+        });
+      }
+
+      const first = await h.call('commitment_list', {
+        origin: ['human', 'manager'],
+        q: 'NEEDLE',
+      });
+      expect(first).toMatch(/…ほか \d+ 件は省略/);
+      const cursor = extractCursor(first);
+
+      // 同じ絞りを順序違い（manager/human の並びを逆に）・大文字小文字違い
+      // （needle）で渡しても、食い違いにならず続く。
+      const second = await h.call('commitment_list', {
+        origin: ['manager', 'human'],
+        q: 'needle',
+        cursor,
+      });
+
+      expect(second).not.toContain('cursor は');
+      expect(second).not.toContain('食い違う');
+    },
+  );
+
+  it(
+    'T13: origin/q の欄を持たない（この変更より前に発行された）cursor は malformed にならず、' +
+      '絞っていない呼びでは続きが読める',
+    async () => {
+      const h = harness();
+      await h.stores.commitments.open({
+        id: 'c-1',
+        at: '2026-01-01T00:00:00.000Z',
+        origin: 'self',
+        body: '古い方',
+      });
+      await h.stores.commitments.open({
+        id: 'c-2',
+        at: '2026-01-02T00:00:00.000Z',
+        origin: 'self',
+        body: '新しい方',
+      });
+      const { commitmentPosition } = await import('./commitment-cursor.js');
+      const legacyCursor = Buffer.from(
+        JSON.stringify({
+          ...commitmentPosition({ id: 'c-1', at: '2026-01-01T00:00:00.000Z' }),
+          includeClosed: false,
+          order: 'oldest',
+          // origin / q を意図的に書かない（この変更より前に発行されたカーソルを模す）。
+        }),
+        'utf8',
+      ).toString('base64url');
+
+      const reply = await h.call('commitment_list', { cursor: legacyCursor });
+
+      expect(reply).not.toContain('cursor が壊れている');
+      expect(reply).not.toContain('食い違う');
+      expect(reply).toContain('c-2');
+      expect(reply).not.toContain('c-1 ');
+    },
+  );
+
+  it(
+    'T14（安全側の確認。issue #1390）: origin/q の欄を持たない古い cursor を、' +
+      '絞った呼び（origin 指定）へ渡すと、黙って続けず origin-mismatch で断る',
+    async () => {
+      // **`origin`/`q` を持たない旧いカーソルは「絞っていない」として読める**
+      // （decode 側のデフォルト）。**絞っていない呼びでは前提が保たれ
+      // 続きが読めるが（T13）、絞った呼びでは「絞っていない」と「絞った」が
+      // 食い違うので、黙って先頭からへは倒さず明示のエラーになる——これが
+      // 安全側（黙って別の絞りの続きにしない）である。**
+      const h = harness();
+      await h.stores.commitments.open({
+        id: 'c-1',
+        at: '2026-01-01T00:00:00.000Z',
+        origin: 'human',
+        body: '古い方',
+      });
+      await h.stores.commitments.open({
+        id: 'c-2',
+        at: '2026-01-02T00:00:00.000Z',
+        origin: 'human',
+        body: '新しい方',
+      });
+      const { commitmentPosition } = await import('./commitment-cursor.js');
+      const legacyCursor = Buffer.from(
+        JSON.stringify({
+          ...commitmentPosition({ id: 'c-1', at: '2026-01-01T00:00:00.000Z' }),
+          includeClosed: false,
+          order: 'oldest',
+          // origin / q を意図的に書かない。
+        }),
+        'utf8',
+      ).toString('base64url');
+
+      const reply = await h.call('commitment_list', { origin: ['human'], cursor: legacyCursor });
+
+      expect(reply).toContain('cursor は origin=');
+      expect(reply).toContain('食い違う');
+    },
+  );
 });
 
 /**

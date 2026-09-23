@@ -104,6 +104,50 @@ export function compareCommitmentPosition(a: CommitmentPosition, b: CommitmentPo
  * カーソルが、この変更のせいで一斉に「壊れている」へ化ける。** `.default()`
  * にすれば、欄が無い（＝旧いカーソル）ときは `'oldest'` として読め、かつ
  * いまの振る舞い（既定は古い順）とも一致する。
+ *
+ * **`origin` / `q` も同じ理由で持つ（issue #1390）。** `includeClosed` /
+ * `order` は一致を検査するのに、`commitment_list` の `origin`（出所で絞る）
+ * と `q`（語で探す）は検査していなかった——**cursor の schema に欄その
+ * ものが無く、比較のしようが無かった。** 別の絞り込みで取った cursor を
+ * 渡すと、黙って別の絞りの続きとして使われる（同じ形の穴が4つ目まで
+ * 空いていた、という意味で `includeClosed` / `order` と同列）。
+ *
+ * **旧いカーソル（この変更より前に発行され、`origin`/`q` の欄そのものが
+ * 無い）の扱いは `order` を足したときの前例をそのまま踏まない。** `order`
+ * は欄を足す前から「実質つねに `oldest`」だった（`order` という呼び方の
+ * 選択肢自体が無かった）ので、`.default('oldest')` は当時の実際の挙動を
+ * そのまま欄に写しただけである。**`origin`/`q` にはその前例が無い** ——
+ * 欄が無かった時代のカーソルが実際にどの絞り込みから発行されたかは
+ * わからない（`origin`/`q` は呼び手が毎回自由に選べる値で、`order` の
+ * ような単一の既定挙動が無いため）。**だから安全側に倒す**：欄が無ければ
+ * 「絞っていない」（`origin: undefined` / `q: undefined`。正規化すると
+ * どちらも `q: ''` と同じに読む——下の正規化を参照）として読める――これは
+ * *「旧いカーソルは絞っていなかった」と決めてかかる*のではなく、**旧い
+ * カーソルは絞っていない呼びで使われたときだけ黙って続き、絞った呼びで
+ * 使われたときは（旧いカーソルの実際の絞り込みが何であれ）必ず
+ * `origin-mismatch` / `q-mismatch` として断られる**、という形にするための
+ * 選択である（`resolveCommitmentCursor` の比較がそう作られている——
+ * 詳細は同関数の doc）。**黙って別の絞りの続きにしてしまう事故は起きず、
+ * 起きうるのは「本当は同じ絞りだったのに、記録が無いという理由だけで
+ * 一度読み直しを求められる」という過剰な安全側の誤検知だけである。**
+ *
+ * **`origin` の正規化**: `commitment_list` の絞り込みは
+ * `origin === undefined ? 絞らない : entries.filter(e => origin.includes(e.origin))`
+ * （`tools.ts`）——**集合としての一致**であって並び順は見ない。同じ集合を
+ * 順序違い・重複違いで渡しても同じ結果集合になるので、比較でもその違いは
+ * 無視する（`normalizeCommitmentOrigin`）。`origin: []`（明示的に「どれにも
+ * 当たらない」）は `undefined`（絞らない）とは区別する——`tools.ts` の
+ * `origin: []` の契約（`journal_read` の `with` / `types` と同じ）と揃える。
+ *
+ * **`q` の正規化**: `commitment_list` の絞り込みは
+ * `q === undefined ? 絞らない : entries.filter(... .toLowerCase().includes(q.toLowerCase()))`
+ * （`tools.ts`）。**`q: ''` は任意の文字列に含まれる（`''.includes('')` も
+ * 含め、空文字はどの文字列にも部分一致する）ので、`q === undefined` と
+ * `q === ''` は常に同じ結果集合を作る**——だから両者を同一視する
+ * （`normalizeCommitmentQ` が `undefined` を `''` へ寄せる）。**大文字小文字
+ * の違いも同じ理由で同一視する**——`tools.ts` の絞り込みは両辺を
+ * `toLowerCase()` してから比較するので、大文字小文字だけが違う `q` は
+ * 常に同じ結果集合を作る。
  */
 const commitmentCursorSchema = z.object({
   segment: z.enum(['open', 'closed']),
@@ -111,7 +155,45 @@ const commitmentCursorSchema = z.object({
   id: z.string().min(1),
   includeClosed: z.boolean(),
   order: z.enum(['oldest', 'newest']).default('oldest'),
+  /** `commitment_list` の `origin`。`undefined` = 絞っていない。 */
+  origin: z.array(z.string()).optional(),
+  /**
+   * `commitment_list` の `q`。`undefined` = 絞っていない。**`order` とは
+   * 違い `.default('')` にしない**——`q === undefined` と `q === ''` は
+   * 比較の時点で `normalizeCommitmentQ` が同じ値へ正規化するので、schema
+   * 側で既定値を持たせる必要が無い。`.optional()` のままにすることで、
+   * 既存の `encodeCommitmentCursor` の呼び出し（`order` は毎回明示する
+   * 契約だが `q` は明示しない箇所が大半）に `q: ''` を書き足させずに済む
+   * ——`origin` と同じ扱い。
+   */
+  q: z.string().optional(),
 });
+
+/**
+ * `origin` の正規化——`undefined`（絞っていない）はそのまま、配列は重複を
+ * 除いて昇順に並べ替える（順序・重複違いを同じ集合として扱うため）。
+ */
+function normalizeCommitmentOrigin(origin: readonly string[] | undefined): string[] | undefined {
+  if (origin === undefined) return undefined;
+  return [...new Set(origin)].sort();
+}
+
+/** `origin` どうしが同じ絞り込みを表すか（正規化した集合の一致）。 */
+function originsMatch(a: readonly string[] | undefined, b: readonly string[] | undefined): boolean {
+  const na = normalizeCommitmentOrigin(a);
+  const nb = normalizeCommitmentOrigin(b);
+  if (na === undefined || nb === undefined) return na === undefined && nb === undefined;
+  if (na.length !== nb.length) return false;
+  return na.every((value, index) => value === nb[index]);
+}
+
+/**
+ * `q` の正規化——`undefined` を `''` へ寄せ、小文字化する（未指定と空文字、
+ * 大文字小文字の違いを同じ絞りとして扱うため。理由は上の doc）。
+ */
+function normalizeCommitmentQ(q: string | undefined): string {
+  return (q ?? '').toLowerCase();
+}
 
 export type CommitmentCursor = z.infer<typeof commitmentCursorSchema>;
 
@@ -168,20 +250,38 @@ export function decodeCommitmentCursor(raw: string): DecodeCommitmentCursorResul
  *   **`includeClosed` が食い違ったときとまったく同じ理由で、黙って
  *   どちらか一方へは倒さない。** 辿る方向が食い違ったまま続きを解決すると、
  *   同じ行を繰り返し返すか、間の行を黙って飛ばす
+ * - `origin` が食い違う（正規化した集合として一致しない）: `{ kind:
+ *   'origin-mismatch', cursorOrigin }`——**`includeClosed` / `order` と
+ *   まったく同じ理由（issue #1390）。** 別の出所の絞り込みで取った
+ *   cursor を黙って別の絞りの続きとして使うと、呼び手が意図していない
+ *   出所の行まで混ざる（またはその逆に、意図していた出所の行が黙って
+ *   落ちる）
+ * - `q` が食い違う（正規化した文字列として一致しない）: `{ kind:
+ *   'q-mismatch', cursorQ }`——同じ理由。別の語で絞った cursor を黙って
+ *   続けると、絞り込みの前提が呼び手の知らないところですり替わる
  * - それ以外: `{ kind: 'ok', view }`。`view` は0件のこともある（カーソルが
  *   一覧の末尾を指していた＝最後の頁）——これは呼び出し側が「もう続きは
  *   無い」として扱う、正常な終端であってエラーではない
+ *
+ * **チェックの順序は includeClosed → order → origin → q。** 早い段階の
+ * 食い違いのほうが先に見つかった時点で返してよい（複数同時に食い違って
+ * いても、呼び手はどのみち cursor を作り直すことになるので、どれを先に
+ * 報告するかは呼び出し側の文言の都合以上の意味を持たない）。
  */
 export function resolveCommitmentCursor(
   entries: readonly Commitment[],
   includeClosed: boolean,
   cursorRaw: string | undefined,
   order: 'oldest' | 'newest' = 'oldest',
+  origin?: readonly string[],
+  q?: string,
 ):
   | { kind: 'ok'; view: Commitment[] }
   | { kind: 'malformed' }
   | { kind: 'includeClosed-mismatch'; cursorIncludeClosed: boolean }
-  | { kind: 'order-mismatch'; cursorOrder: 'oldest' | 'newest' } {
+  | { kind: 'order-mismatch'; cursorOrder: 'oldest' | 'newest' }
+  | { kind: 'origin-mismatch'; cursorOrigin: string[] | undefined }
+  | { kind: 'q-mismatch'; cursorQ: string | undefined } {
   if (cursorRaw === undefined) return { kind: 'ok', view: [...entries] };
   const decoded = decodeCommitmentCursor(cursorRaw);
   if (!decoded.ok) return { kind: 'malformed' };
@@ -190,6 +290,12 @@ export function resolveCommitmentCursor(
   }
   if (decoded.cursor.order !== order) {
     return { kind: 'order-mismatch', cursorOrder: decoded.cursor.order };
+  }
+  if (!originsMatch(decoded.cursor.origin, origin)) {
+    return { kind: 'origin-mismatch', cursorOrigin: decoded.cursor.origin };
+  }
+  if (normalizeCommitmentQ(decoded.cursor.q) !== normalizeCommitmentQ(q)) {
+    return { kind: 'q-mismatch', cursorQ: decoded.cursor.q };
   }
   const pivot: CommitmentPosition = decoded.cursor;
   const view = entries.filter((entry) => {
