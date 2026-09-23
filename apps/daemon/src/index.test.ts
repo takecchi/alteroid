@@ -988,7 +988,10 @@ describe('クローンの門は clone.post だけを絞る（restore / resumeSto
 
     expect(
       missingAnchors(postBlock, [
-        'payload: { text: describeReopenedTokenNotice(reopened, decision.folded) },',
+        'text: describeReopenedTokenNotice(reopened, decision.folded),',
+        // 4つ目の条件（#1223 再発）が文言を読まずに判定するための構造化した2欄。
+        'tokenId: reopened.tokenId,',
+        'observedRecovery,',
         'identity: deliveredIdentity(reopened),',
       ]),
     ).toEqual([]);
