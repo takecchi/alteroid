@@ -31,6 +31,11 @@ interface FakeSession {
   say(text: string, options?: { error?: string }): Promise<void>;
   /** 1ターンを畳む。既定は成功。 */
   finish(text: string, options?: { subtype?: string; isError?: boolean }): Promise<void>;
+  /**
+   * `system/task_started` を流す（#1373）。`runner-wakeup.test.ts` の同名の
+   * ヘルパーと同じ形（`task_id` を持つ `system` メッセージ）を踏襲する。
+   */
+  taskStarted(taskId: string): Promise<void>;
 }
 
 function fakeSdk() {
@@ -72,6 +77,17 @@ function fakeSdk() {
           session_id: 'sess-mgr',
           uuid: `uuid-result-${(finishes += 1)}`,
           ...(finishOptions.isError === undefined ? {} : { is_error: finishOptions.isError }),
+        } as unknown as SDKMessage);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      },
+      async taskStarted(taskId) {
+        push({
+          type: 'system',
+          subtype: 'task_started',
+          task_id: taskId,
+          description: '作業者への委譲',
+          uuid: `uuid-task-started-${taskId}`,
+          session_id: 'sess-mgr',
         } as unknown as SDKMessage);
         await new Promise((resolve) => setTimeout(resolve, 0));
       },
@@ -446,6 +462,124 @@ describe('失敗で終わった回は畳まれない', () => {
     const texts = await reportTexts(s.inbox, 1);
     expect(texts[0]).toContain('応答を返さずに終わった');
     expect(texts[0]).toContain('result_is_error');
+
+    await s.pool.stop();
+  });
+});
+
+/**
+ * **#1373: 委譲の下で動く作業者が枠（429）に当たったとき、デーモンはそれを
+ * 委譲本体（マネージャー）のターンの失敗として名乗る。** 本体が枠に当たった
+ * 場合と文言が同じなので、クローン側からはどちらの層が塞がっているかが
+ * 区別できない。
+ *
+ * **ここで足すのは判定ではなく状況証拠である。** SDK の `result` は「誰の
+ * 言葉が最後だったか」を運べる形をしていないので、`describeManagerFailure`
+ * や文言からの読み取りは増やさない（Issue が明示的に禁じている）。代わりに
+ * runner が「このターンの中で1度でも開いた作業者の数」を数え、`failedReportText`
+ * が1以上のときだけ状況証拠の1行を足す。
+ *
+ * 4本の歯で固定する:
+ * 1. 作業者を開いたターンが失敗で終わると、その1行が付く（N の値も検算する）
+ * 2. 陽性対照A: 作業者を開いていないターンが失敗で終わっても、本文は
+ *    従来と1文字も変わらない
+ * 3. 陽性対照B: 作業者を開いたターンが成功で終わったら、その1行は付かない
+ * 4. ターンをまたいで数が持ち越されない（前のターンで開いた作業者は、次の
+ *    ターンの N に入らない）
+ */
+describe('失敗で終わったターンの本文に、そのターンで開いた作業者の数を添える（#1373）', () => {
+  /** 作業者を開いていない・失敗したターンの本文（変更されない側の基準値）。 */
+  const BASELINE_FAILURE_TEXT =
+    '（このターンは応答を返さずに終わった: success / result_is_error）\n（報告なし）';
+
+  it('作業者を2体開いたターンが失敗で終わると、本文に「作業者が2体開いていた」の1行が付く（同じ task_id の重複は1と数える）', async () => {
+    const s = setup();
+    await s.pool.start({ request: '調べて' });
+    const session = await vi.waitFor(() => {
+      const found = s.sessions[0];
+      if (!found) throw new Error('セッションがまだ開いていない');
+      return found;
+    });
+
+    await session.taskStarted('task-1');
+    await session.taskStarted('task-2');
+    // 同じ task_id をもう1度観測しても、2体目としては数えない。
+    await session.taskStarted('task-1');
+    await session.finish('', { isError: true });
+
+    const texts = await reportTexts(s.inbox, 1);
+    const text = texts[0] ?? '';
+    expect(text).toBe(
+      `${BASELINE_FAILURE_TEXT}\n（このターンでは作業者が 2 体開いていた。どちらが当たったかは SDK からは分からない）`,
+    );
+
+    await s.pool.stop();
+  });
+
+  it('陽性対照A: 作業者を開いていないターンが失敗で終わっても、本文は従来と1文字も変わらない', async () => {
+    const s = setup();
+    await s.pool.start({ request: '調べて' });
+    const session = await vi.waitFor(() => {
+      const found = s.sessions[0];
+      if (!found) throw new Error('セッションがまだ開いていない');
+      return found;
+    });
+
+    // `taskStarted` を1度も呼ばない。
+    await session.finish('', { isError: true });
+
+    const texts = await reportTexts(s.inbox, 1);
+    const text = texts[0] ?? '';
+    expect(text).toBe(BASELINE_FAILURE_TEXT);
+    expect(text).not.toContain('体開いていた');
+
+    await s.pool.stop();
+  });
+
+  it('陽性対照B: 作業者を開いたターンが成功で終わったら、報告の本文にその1行は付かない', async () => {
+    const s = setup();
+    await s.pool.start({ request: '調べて' });
+    const session = await vi.waitFor(() => {
+      const found = s.sessions[0];
+      if (!found) throw new Error('セッションがまだ開いていない');
+      return found;
+    });
+
+    await session.taskStarted('task-1');
+    await session.taskStarted('task-2');
+    // `isError` を立てない ＝ 成功で終わる。
+    await session.finish('作業者からの結果を踏まえて完了した');
+
+    const texts = await reportTexts(s.inbox, 1);
+    const text = texts[0] ?? '';
+    expect(text).toBe('作業者からの結果を踏まえて完了した');
+    expect(text).not.toContain('体開いていた');
+    expect(text).not.toContain('SDK からは分からない');
+
+    await s.pool.stop();
+  });
+
+  it('ターンをまたいで数が持ち越されない（前のターンで開いた作業者は、次のターンの N に入らない）', async () => {
+    const s = setup();
+    await s.pool.start({ request: '調べて' });
+    const session = await vi.waitFor(() => {
+      const found = s.sessions[0];
+      if (!found) throw new Error('セッションがまだ開いていない');
+      return found;
+    });
+
+    // 1ターン目: 作業者を1体開いて、成功で畳む。
+    await session.taskStarted('task-1');
+    await session.finish('1ターン目は成功した');
+    await reportTexts(s.inbox, 1);
+
+    // 2ターン目: 作業者を1体も開かずに失敗する。
+    await session.finish('', { isError: true });
+
+    const texts = await reportTexts(s.inbox, 2);
+    const text = texts[1] ?? '';
+    expect(text).toBe(BASELINE_FAILURE_TEXT);
+    expect(text).not.toContain('体開いていた');
 
     await s.pool.stop();
   });
