@@ -17139,6 +17139,111 @@ describe('onUsageObservation（回し手へ渡す観測）', () => {
 });
 
 /**
+ * **段1（測るだけ、Issue #1425）: 跨いで畳んだ rate_limit の報告本数を
+ * 日誌へ残す（クローン側）。**
+ *
+ * `case 'rate_limit'` は `usageTransitionOf` が `undefined` を返した回
+ * （＝別の会話のターンが直前に同じ壁を報告済み）を、日誌に一度も痕跡を
+ * 残さずに畳んで捨てていた。`manager.ts` 側は managerId で「跨いだ」を
+ * 数えるが、クローンは1体しかいないので、ここでは代わりに
+ * `conversationId` で数える（`#rateLimitCrossFold` の doc。この代替は
+ * この PR の判断であり、Issue の逐語が指定したものではない）。
+ *
+ * **畳み込みの鍵も配り方も変えていない。** 測っているのは日誌の行だけである。
+ */
+describe('rate_limit を跨いで畳んだ本数を日誌へ残す（Issue #1425、クローン側）', () => {
+  function crossFoldLines(entries: unknown[]): string[] {
+    return entries
+      .map((entry) => (entry as { text?: string }).text ?? '')
+      .filter((text) => text.includes('同じ壁を跨いで畳んだ回'));
+  }
+
+  function doneCountOf(events: readonly ChatStreamEvent[]): number {
+    return events.filter((event) => event.type === 'done').length;
+  }
+
+  it('陽性: 別の会話が跨いで畳まれると、次の遷移で本数が1行に残る', async () => {
+    // turn0: conv-1 が最初に当たる（この壁の遷移を記録した本人になる）。
+    // turn1: conv-b が同じ壁を跨いで畳まれる。
+    // turn2: conv-c も同じ壁を跨いで畳まれる（folded = {conv-b, conv-c}）。
+    // turn3: conv-1 自身が allowed へ戻る——本人の連打なので跨いだ数には
+    //        数えない（folded はそのまま）。
+    // turn4: conv-b が再び当てて、次の遷移が定まる——ここで2本がまとめて出る。
+    const facts: Array<Record<string, unknown>> = [
+      { status: 'rejected', rateLimitType: 'five_hour' },
+      { status: 'rejected', rateLimitType: 'five_hour' },
+      { status: 'rejected', rateLimitType: 'five_hour' },
+      { status: 'allowed', rateLimitType: 'five_hour' },
+      { status: 'rejected', rateLimitType: 'five_hour' },
+    ];
+    const s = setup(() => 'ok', createMemoryStores(), {
+      rateLimitEventAt: (turnIndex) => facts[turnIndex],
+    });
+    const convB = wireEvents(s.clone, 'conv-b');
+    const convC = wireEvents(s.clone, 'conv-c');
+
+    s.clone.post(humanMessage('t0', 'conv-1'));
+    await s.waitForEvents((events) => doneCountOf(events) === 1);
+
+    s.clone.post(humanMessage('t1', 'conv-b'));
+    await convB.waitForEvents((events) => doneCountOf(events) === 1);
+
+    s.clone.post(humanMessage('t2', 'conv-c'));
+    await convC.waitForEvents((events) => doneCountOf(events) === 1);
+
+    s.clone.post(humanMessage('t3', 'conv-1'));
+    await s.waitForEvents((events) => doneCountOf(events) === 2);
+
+    s.clone.post(humanMessage('t4', 'conv-b'));
+    await convB.waitForEvents((events) => doneCountOf(events) === 2);
+
+    const entries = await s.stores.journal.list({});
+    const lines = crossFoldLines(entries);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('2 本の異なる会話が当たっている');
+
+    await s.clone.stop();
+  });
+
+  it('やりすぎの対照: 同じ会話だけが繰り返しても、本数の行は出ない', async () => {
+    const facts: Array<Record<string, unknown>> = [
+      { status: 'rejected', rateLimitType: 'five_hour' },
+      { status: 'allowed', rateLimitType: 'five_hour' },
+      { status: 'rejected', rateLimitType: 'five_hour' },
+    ];
+    const s = setup(() => 'ok', createMemoryStores(), {
+      rateLimitEventAt: (turnIndex) => facts[turnIndex],
+    });
+
+    s.clone.post(humanMessage('t0', 'conv-1'));
+    await s.waitForEvents((events) => doneCountOf(events) === 1);
+    s.clone.post(humanMessage('t1', 'conv-1'));
+    await s.waitForEvents((events) => doneCountOf(events) === 2);
+    s.clone.post(humanMessage('t2', 'conv-1'));
+    await s.waitForEvents((events) => doneCountOf(events) === 3);
+
+    const entries = await s.stores.journal.list({});
+    expect(crossFoldLines(entries)).toHaveLength(0);
+
+    await s.clone.stop();
+  });
+
+  it('やりすぎの対照: 初回の遷移だけでは本数の行は出ない', async () => {
+    const s = setup(() => 'ok', createMemoryStores(), {
+      rateLimitEventAt: () => ({ status: 'rejected', rateLimitType: 'five_hour' }),
+    });
+
+    s.clone.post(humanMessage('t0', 'conv-1'));
+    await s.waitForEvents((events) => doneCountOf(events) === 1);
+
+    const entries = await s.stores.journal.list({});
+    expect(crossFoldLines(entries)).toHaveLength(0);
+
+    await s.clone.stop();
+  });
+});
+
+/**
  * 認証トークンを回した後のセッション作り直し（Issue #393 PR4）。
  *
  * **Issue が「実装者が決めると必ず壊れる」と名指しした箇所である。** 畳む位置を
