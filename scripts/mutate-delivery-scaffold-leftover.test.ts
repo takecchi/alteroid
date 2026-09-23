@@ -363,9 +363,7 @@ describe('mutate.mjs CLI: restore は成功した後、delivery の足場が残�
         '復元元: backup / 後始末: target が無いので後始末は不要（build exit=N/A）',
       );
       expect(stdout).toContain('delivery: 前回の selftest が置き去りにした足場が残っている');
-      expect(stdout).toContain(
-        `  - ${DELIVERY_FIXTURE_MODULE_REL}（フィクスチャ本体）`,
-      );
+      expect(stdout).toContain(`  - ${DELIVERY_FIXTURE_MODULE_REL}（フィクスチャ本体）`);
       expect(stdout).toContain(`  - ${DELIVERY_BARREL_REL}（一時的な re-export 行が残っている）`);
       expect(stdout).toContain(DELIVERY_BARREL_SCAFFOLD_BEGIN);
       expect(stdout).toContain(DELIVERY_BARREL_SCAFFOLD_END);
@@ -407,9 +405,7 @@ describe('mutate.mjs CLI: restore は成功した後、delivery の足場が残�
       expect(restoreResult.status).toBe(0);
       const stdout = restoreResult.stdout ?? '';
 
-      expect(stdout).toContain(
-        `  - ${DELIVERY_BARREL_REL}（一時的な re-export 行が残っている）`,
-      );
+      expect(stdout).toContain(`  - ${DELIVERY_BARREL_REL}（一時的な re-export 行が残っている）`);
       expect(stdout).not.toContain('フィクスチャ本体）');
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });

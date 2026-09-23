@@ -220,13 +220,18 @@ function removeJudgementFixtureFiles() {
 //    行う——片付けられなかった回は、次の selftest 起動時に
 //    `requireNoLeftoverDeliveryFixtureFiles` が検出して止める。
 const DELIVERY_FIXTURE_ANCHOR = 'フィクスチャは barrel を経由して無事に届いた。';
-const DELIVERY_FIXTURE_MODULE_REL = 'packages/core/src/mutation-selftest-delivery-fixture.ts';
-const DELIVERY_BARREL_REL = 'packages/core/src/index.ts';
-const DELIVERY_BARREL_SCAFFOLD_BEGIN =
+// **#1262 追加測定（`restore` が成功した後も足場を名指しする）向けに export する。**
+// パスと BEGIN/END の逐語をここで1度だけ持ち、`requireNoLeftoverDeliveryFixtureFiles`・
+// `findLeftoverDeliveryScaffold`・`mutate.mjs` の `cmdRestore`・このファイル向けの
+// 歯（`scripts/*.test.ts`）が全部同じ値を見る。二重に書かない。
+export const DELIVERY_FIXTURE_MODULE_REL =
+  'packages/core/src/mutation-selftest-delivery-fixture.ts';
+export const DELIVERY_BARREL_REL = 'packages/core/src/index.ts';
+export const DELIVERY_BARREL_SCAFFOLD_BEGIN =
   '// ── mutation-testing selftest 用の一時的な足場（#1166 面1）ここから ──';
-const DELIVERY_BARREL_SCAFFOLD_END =
+export const DELIVERY_BARREL_SCAFFOLD_END =
   '// ── mutation-testing selftest 用の一時的な足場（#1166 面1）ここまで ──';
-const DELIVERY_BARREL_SCAFFOLD_BLOCK =
+export const DELIVERY_BARREL_SCAFFOLD_BLOCK =
   '\n' +
   `${DELIVERY_BARREL_SCAFFOLD_BEGIN}\n` +
   '// selftest 実行中だけ存在する。selftest が正常終了すれば自動で消える。\n' +
@@ -236,7 +241,7 @@ const DELIVERY_BARREL_SCAFFOLD_BLOCK =
   "export { selftestDeliveryFixtureValue } from './mutation-selftest-delivery-fixture.js';\n" +
   `${DELIVERY_BARREL_SCAFFOLD_END}\n`;
 
-const DELIVERY_FIXTURE_MODULE_BODY = [
+export const DELIVERY_FIXTURE_MODULE_BODY = [
   '// selftest 用の使い捨てフィクスチャ（mutation-testing ハーネスの自己検証）。',
   '// 実行後に削除する。リポジトリの実ソースを1バイトも指していない（#1166 面1）。',
   '',
@@ -247,31 +252,105 @@ const DELIVERY_FIXTURE_MODULE_BODY = [
 ].join('\n');
 
 /**
+ * 足場の置き去りを検出する純粋関数（#1262 追加測定）。
+ *
+ * **見る条件は2つ、元の `requireNoLeftoverDeliveryFixtureFiles` が見ていたものと
+ * 1文字も変えていない** — (1) フィクスチャ本体（`DELIVERY_FIXTURE_MODULE_REL`）が
+ * 存在するか (2) barrel（`DELIVERY_BARREL_REL`）が `DELIVERY_BARREL_SCAFFOLD_BEGIN`
+ * を含むか。**副作用は無い**（投げない・書かない・消さない）。呼び出し側
+ * （`requireNoLeftoverDeliveryFixtureFiles` と、`mutate.mjs` の `cmdRestore`）が
+ * 見つけた結果をどう扱うかを決める。
+ *
+ * **barrel が読めない（= 存在しない）場合は「barrel に足場は無い」として扱う**
+ * （ENOENT だけを飲み込み、他のエラーはそのまま投げ直す）。元の実装は
+ * `DELIVERY_BARREL_REL`（`packages/core/src/index.ts`）が常に実在する前提
+ * （このリポジトリの既定 ROOT では常に真）でしか呼ばれていなかったので、
+ * この分岐は元の呼び出し経路の挙動を変えない——変わるのは、`packages/core`
+ * を持たない `--root`（歯が使う使い捨て git ツリー等）でも呼べるようになる点
+ * だけである。
+ */
+export function findLeftoverDeliveryScaffold() {
+  const found = [];
+  if (fs.existsSync(absPath(DELIVERY_FIXTURE_MODULE_REL))) {
+    found.push({ kind: 'fixture', path: DELIVERY_FIXTURE_MODULE_REL });
+  }
+  let barrelContent = '';
+  try {
+    barrelContent = readRepoFile(DELIVERY_BARREL_REL);
+  } catch (err) {
+    if (!err || err.code !== 'ENOENT') throw err;
+  }
+  if (barrelContent.includes(DELIVERY_BARREL_SCAFFOLD_BEGIN)) {
+    found.push({ kind: 'barrel', path: DELIVERY_BARREL_REL });
+  }
+  return found;
+}
+
+/** `findLeftoverDeliveryScaffold` の1件を「  - path（理由）」の1行に直す。 */
+function describeLeftoverDeliveryScaffoldEntry(item) {
+  return item.kind === 'fixture'
+    ? `  - ${DELIVERY_FIXTURE_MODULE_REL}（フィクスチャ本体）`
+    : `  - ${DELIVERY_BARREL_REL}（一時的な re-export 行が残っている）`;
+}
+
+/**
+ * 足場の外し方（barrel の BEGIN/END 行を消し、フィクスチャ本体も消す）を、
+ * 既存の定数から組む1文。`requireNoLeftoverDeliveryFixtureFiles` と
+ * `formatLeftoverDeliveryScaffoldNotice` の両方が同じ文をここから取る
+ * ——外し方を2箇所に書かない。
+ */
+function deliveryScaffoldRemovalInstruction() {
+  return (
+    `${DELIVERY_BARREL_REL} は` +
+    `「${DELIVERY_BARREL_SCAFFOLD_BEGIN}」から「${DELIVERY_BARREL_SCAFFOLD_END}」までの` +
+    `行を削除すれば元に戻る（フィクスチャ本体 ${DELIVERY_FIXTURE_MODULE_REL} も合わせて削除）。`
+  );
+}
+
+/**
  * 前回の走行が置き去りにした足場が在ったら、上書きせずに拒む
  * （`requireNoLeftoverWeakToothFiles` / `requireNoLeftoverJudgementFixtureFiles`
  * と同じ考え方）。フィクスチャ本体の存在と、barrel 側の一時参照の両方を見る
  * ——印が残っている間は片付けないので（上のコメント）、どちらか片方だけが
  * 残ることもありうる。
+ *
+ * **検出そのものは `findLeftoverDeliveryScaffold` に切り出した（#1262 追加測定）。
+ * ここでの文面・振る舞いは切り出しの前後で1文字も変えていない**
+ * （固定する歯: `scripts/mutate-delivery-scaffold-leftover.test.ts`）。
  */
-function requireNoLeftoverDeliveryFixtureFiles(scenarioName) {
-  const fixtureExists = fs.existsSync(absPath(DELIVERY_FIXTURE_MODULE_REL));
-  const barrelHasScaffold = readRepoFile(DELIVERY_BARREL_REL).includes(
-    DELIVERY_BARREL_SCAFFOLD_BEGIN,
-  );
-  if (fixtureExists || barrelHasScaffold) {
+export function requireNoLeftoverDeliveryFixtureFiles(scenarioName) {
+  const found = findLeftoverDeliveryScaffold();
+  if (found.length > 0) {
     throw new HarnessError(
       `${scenarioName}: 前回の selftest が置き去りにした足場が在る。上書きしない。\n` +
-        (fixtureExists ? `  - ${DELIVERY_FIXTURE_MODULE_REL}（フィクスチャ本体）\n` : '') +
-        (barrelHasScaffold
-          ? `  - ${DELIVERY_BARREL_REL}（一時的な re-export 行が残っている）\n`
-          : '') +
+        found.map((item) => `${describeLeftoverDeliveryScaffoldEntry(item)}\n`).join('') +
         '中身を確認してから手で消して、再実行すること。印（MUTATION-IN-PROGRESS.json）が' +
         '残っているなら、先にそちらを `mutate.mjs status` / `restore` で片付けること——' +
-        `フィクスチャ本体を先に消すと復元先が無くなる。${DELIVERY_BARREL_REL} は` +
-        `「${DELIVERY_BARREL_SCAFFOLD_BEGIN}」から「${DELIVERY_BARREL_SCAFFOLD_END}」までの` +
-        `行を削除すれば元に戻る（フィクスチャ本体 ${DELIVERY_FIXTURE_MODULE_REL} も合わせて削除）。`,
+        `フィクスチャ本体を先に消すと復元先が無くなる。${deliveryScaffoldRemovalInstruction()}`,
     );
   }
+}
+
+/**
+ * `restore` が成功した後に呼ぶための通知文（#1262 追加測定・案A）。
+ *
+ * **`restore` 自体は selftest 固有の足場を知らない汎用の復元経路のままにする
+ * ——ここで足しているのは検出結果を文面にするだけで、`restoreMutation`
+ * （書き戻し・印の解除）は一切変えない。** 見つからなければ `null` を返す
+ * （＝ `cmdRestore` は何も足さない。足場が無い回の出力は1文字も増えない）。
+ *
+ * 見つかった場合の文面は、`requireNoLeftoverDeliveryFixtureFiles` と同じ
+ * 「名指し + 外し方」だが、文脈が違う——ここに来る時点で `restore` は
+ * 既に成功している（印は解除済み）ので、「先に印を片付けること」は言わない。
+ */
+export function formatLeftoverDeliveryScaffoldNotice(found) {
+  if (found.length === 0) return null;
+  return (
+    '⚠ delivery: 前回の selftest が置き去りにした足場が残っている' +
+    '（この restore が壊したのではない。ソースの復元と印の解除はここまでで完了している）。\n' +
+    found.map((item) => `${describeLeftoverDeliveryScaffoldEntry(item)}\n`).join('') +
+    deliveryScaffoldRemovalInstruction()
+  );
 }
 
 /**

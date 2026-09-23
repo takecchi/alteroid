@@ -415,7 +415,16 @@ repo の `test` スクリプトが `vitest run && pnpm -r --if-present run test 
   - 3つの実験とも、実行後に `git status --porcelain` と `mutate.mjs status` が綺麗であることを確認してから次の実験へ進んだ（生ログは PR 本文にある）。
 - **確かめていないこと**: CI の実機（GitHub Actions runner）での所要時間は測っていない（手元の器のみ）。中断を意図的な signal（SIGINT/SIGTERM）で行った場合の barrel 足場の挙動は測っていない（測ったのは「build が丸ごと失敗する」形のみ——ただし barrel への書き込み自体は単純な `fs.writeFileSync` 1回なので、signal に対する扱いは既存の weak-tooth / judgement-fixture の書き込みと同じ前提に乗っている）。`rebuild-failure` に `assertRebuildFailureOutcomes` を足すかどうかは、この PR の範囲外として触っていない（上の (b) が示すとおり、無くても構造的に赤くなる場合はあるが、機械的な主張の突き合わせではない）。
 
-## 「判定が甘い」の向き —— 甘いのは「検出」側である（#1087）
+### #1262 追加測定のうち (i) だけを塞いだ —— `restore` が成功した後、delivery の足場を名指しする
+
+**直上の「確かめていないこと」（中断を signal で行った場合の barrel 足場の挙動）は、#1166 / #1262 それぞれの2026-09-23 コメントで実測された。** 印が在る区間（フィクスチャの変異直後・build 走行中・`rebuild-failure` の後始末失敗直後）で `SIGINT` / `SIGTERM` を当てると、`restoreMutation`（書き戻し・印の解除）は exit 0 で成功するが、barrel 足場（`packages/core/src/index.ts` の `DELIVERY_BARREL_SCAFFOLD_BEGIN`〜`END`）とフィクスチャ本体（`packages/core/src/mutation-selftest-delivery-fixture.ts`）は、上の「印が残っている間は一切消さない」設計（`removeDeliveryBarrelScaffoldIfSafe`）どおり残る。**足場を残すこと自体は設計どおりで、この節が塞ぐのはその先——「印を片付けたら手で足場を外すこと」を伝える一文が、selftest 本体の finally（正常終了時のみ）にしか無く、signal で中断された回には出ない**という穴である。
+
+- **足したもの**: `mutate.mjs` の `cmdRestore` で、`restoreMutation` が成功した後（「復元元: … / 後始末: …」の行の後）に `findLeftoverDeliveryScaffold()`（`mutate-selftest.mjs` から切り出した検出の純粋関数）を呼び、フィクスチャ本体・barrel 足場のどちらか／両方が残っていれば名指しして外し方（`DELIVERY_BARREL_SCAFFOLD_BEGIN`/`END` と両方のパス、既存の定数から組む）を出す。**見つからなければ出力は1文字も増えない**（歯: `scripts/mutate-delivery-scaffold-leftover.test.ts` の陽性対照）。`restoreMutation` の書き戻し・印の解除は1バイトも変えていない。
+- **切り出しただけで振る舞いを変えていないもの**: `requireNoLeftoverDeliveryFixtureFiles`（selftest 起動時に前回の置き去りを拒む、既存の入口検出）は、検出条件（フィクスチャ本体の存在／barrel が `DELIVERY_BARREL_SCAFFOLD_BEGIN` を含むか）を `findLeftoverDeliveryScaffold()` へ委譲するよう内部だけ変えた——投げるメッセージの文面は1文字も変えていない（固定する歯が同じテストファイルに在る）。
+- **⛔ 範囲を (i) だけに絞った——(ii)・(iii) は入れていない**（案A の内側でも、この PR が名指しするのは delivery の barrel 足場・フィクスチャ本体だけである）:
+  - **(ii) `weak-tooth` の使い捨てファイル**（`apps/cli/src/mutation-selftest-render.ts` / `mutation-selftest-weak.test.ts`）は、`restore` に足さなくても次の selftest の入口（`requireNoLeftoverWeakToothFiles`）が既に名指しする——`restore` は変異の内容そのものを知らない汎用の復元経路であり、`marker` が指す対象ファイル（この場合は変異が当たった実ファイルそのもの）を戻すだけで、`weak-tooth` の使い捨てファイルは `marker` が追跡していない別ファイルである。`restore` にこの知識を持たせると、汎用の復元経路へシナリオ別の知識をもう1つ足すことになる。
+  - **(iii) `rebuild-failure` が置く擬似 pnpm**（`.mutation-testing/selftest-fake-bin/`）は、#1262 コメントが「`restore` の後も残った」と報告しているが、**同じコメントが「測定ログには中身の逐語が無い」「次の selftest の入口がこれを見るかは確かめていない」と明記している**——再現が要る（signal で実際に `rebuild-failure` の後始末失敗直後を狙って止める必要があり、この PR の測定はいずれも `apply --spec` による段階実行で、signal は使っていない）。**未測定のものを対象にすると、直したつもりが何も直っていない可能性がある**ので、この PR には入れていない。
+- **⚠️ 限界（この案の代償として#1262コメントが挙げていたもの、実装後もそのまま残る）**: **印が作られる前の区間**（barrel に足場が入った直後・フィクスチャの変異前）で中断した回は、`restore` が「エラー: 印が無い。」で exit 1 になり、この節が足した出力（`restoreMutation` 成功後にしか出さない）まで到達しない。**その回の足場は、次に selftest を起動したときの入口（`requireNoLeftoverDeliveryFixtureFiles`）が名指しする**（このメッセージは今回変えていない・変えていないことを固定する歯がある）。⟹ **`restore` を打って「足場は無い」という出力（＝何も足されない）を見ても、それは「足場が無い」の証明にはならない**——`status` が「印が無い」で先に終わる回では、この節の検出はそもそも走らない。
 
 **このハーネスの記述の中で「判定が甘い」と書いてあったら、それは「`検出` へ倒れる側」を指す。逆ではない。** 逆向きに読める記述が5箇所に散っていたので（#1087）、向きをここで1度だけ決める。**正典は `decideJudgementCategory` の doc の「「判定が甘い」の向き」**（逐語は `grep -Fn -- '## 「判定が甘い」の向き' .claude/skills/mutation-testing/mutate-core.mjs`）。
 

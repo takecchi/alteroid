@@ -92,7 +92,12 @@ import {
   testsRanCleanly,
   log,
 } from './mutate-core.mjs';
-import { runSelftestScenario, SELFTEST_SCENARIOS } from './mutate-selftest.mjs';
+import {
+  findLeftoverDeliveryScaffold,
+  formatLeftoverDeliveryScaffoldNotice,
+  runSelftestScenario,
+  SELFTEST_SCENARIOS,
+} from './mutate-selftest.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -284,6 +289,18 @@ function cmdRestore(args) {
     `復元元: ${result.restoredFrom} / 後始末: ${result.rebuildCheck.reason}` +
       `（build exit=${result.rebuildCheck.buildExitCode ?? 'N/A'}）`,
   );
+  // **#1262 追加測定。** ここまでで `restoreMutation` は成功しており（例外を
+  // 投げた経路はこの行へ来ない）、印の解除も書き戻しも既に終わっている——
+  // ここで足すのは出力だけで、`restoreMutation` の書き戻し・印の解除には
+  // 一切触らない。delivery の barrel 足場・フィクスチャ本体が残っていれば
+  // 名指しする。無ければ何も出さない（出力は1文字も増えない）。
+  const leftoverDeliveryScaffold = findLeftoverDeliveryScaffold();
+  const leftoverDeliveryScaffoldNotice =
+    formatLeftoverDeliveryScaffoldNotice(leftoverDeliveryScaffold);
+  if (leftoverDeliveryScaffoldNotice !== null) {
+    log('');
+    log(leftoverDeliveryScaffoldNotice);
+  }
 }
 
 function runOneMutation(spec, maxWorkers, scaffoldControlFor) {
