@@ -8,6 +8,7 @@
     "node": ">=22"
   },
   "scripts": {
+    "branch:deletable": "node ./scripts/branch-deletable.mjs",
     "build": "pnpm -r build",
     "check:agents-md-size": "node ./scripts/check-agents-md-size.mjs",
     "check:base-overlap": "node ./scripts/check-base-overlap.mjs",

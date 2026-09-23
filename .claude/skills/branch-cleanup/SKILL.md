@@ -11,6 +11,8 @@ description: 枝を消してよいかを判定するときに読む。squash マ
 
 **下の4段は「着地したか」を測る手順で、「残すと約束したか」は測らない。** ⟹ **着地済みと判定できた枝でも、約束が生きていれば消してはならない。** 4段へ入る前にここで止める。
 
+**この段の材料（下の2つの検査）は `pnpm branch:deletable -- <枝名> [<枝名> ...]` で機械的に集められる**（正本は `scripts/branch-deletable-core.mjs`）。判定は下さない——「消してよい」とは出力しない、集めるだけなので、当たった箇所は自分で読むこと。
+
 ```sh
 # その枝を head とする PR（MERGED でなくてもよい。CLOSED も見る）
 gh pr list --repo OWNER/REPO --state all --head <枝名> --json number
