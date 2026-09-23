@@ -1059,10 +1059,7 @@ describe('枠の知らせの畳み込みに関わったマネージャーの本�
 
     const reports = reportsOf(inbox).slice(before);
     const delivered = reports.find((r) => r.text.includes(TEXT_B));
-    expect(
-      delivered,
-      '赤の意味: TEXT_B を運ぶ報告が受信箱に届いていない。',
-    ).toBeDefined();
+    expect(delivered, '赤の意味: TEXT_B を運ぶ報告が受信箱に届いていない。').toBeDefined();
     expect(delivered?.text).toContain('2 件畳んでいる');
     expect(
       delivered?.text,
@@ -1118,10 +1115,9 @@ describe('枠の知らせの畳み込みに関わったマネージャーの本�
     await pool.stop();
 
     const reports = reportsOf(inbox).slice(before);
-    expect(
-      reports,
-      '赤の意味: 畳みが一度も起きていないのに配達本数が変わっている。',
-    ).toHaveLength(1);
+    expect(reports, '赤の意味: 畳みが一度も起きていないのに配達本数が変わっている。').toHaveLength(
+      1,
+    );
     expect(reports[0]?.text).toContain(TEXT_A);
     // **本数の文言が新たに付いていないこと**——畳んだことが無いのに「◯本」が
     // 出ると、従来この分岐を通っていた回の本文が変わってしまう。
