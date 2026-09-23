@@ -2263,7 +2263,8 @@ export function createApp(deps: AppDeps) {
           grounds:
             before === null
               ? '人間が直接 API から新しいやり方を器に置いた'
-              : '人間が直接 API からやり方を書き直した（全文置換。前の本文は残らない）',
+              : '人間が直接 API からやり方を書き直した（全文置換。前の本文は' +
+                'GET /practices/:slug/versions の版の履歴に残る——#1309）',
         });
         return c.json({ practice });
       },

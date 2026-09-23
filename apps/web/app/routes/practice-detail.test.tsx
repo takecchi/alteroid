@@ -12,8 +12,9 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { Practice } from '~/lib/types';
+import type { Practice, PracticeVersionSummary } from '~/lib/types';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
+import type { Route as FetchRoute } from '~/test-support';
 
 import type { Route } from './+types/practice-detail';
 import PracticeDetail, { clientLoader } from './practice-detail';
@@ -206,6 +207,81 @@ describe('削除', () => {
     renderDetail('daily-report', docRoute(PRACTICE));
     await screen.findByRole('heading', { name: '見出し' });
     expect(screen.getByRole('button', { name: '削除' })).toBeTruthy();
+  });
+});
+
+/**
+ * 版の履歴（#1309）を含めた route stub。
+ *
+ * `docRoute` は `url.includes` が緩いので、`/versions` 付きの URL も
+ * 誤って本体の応答にマッチしてしまう——履歴タブの試験では順序（版の
+ * エンドポイントを先に見る）を自分で組む。
+ */
+function historyRoute(
+  doc: Practice,
+  versions: PracticeVersionSummary[],
+  contents: Record<number, string>,
+): FetchRoute {
+  return (url) => {
+    const versionMatch = /\/practices\/([^/]+)\/versions\/(\d+)/.exec(url);
+    if (versionMatch) {
+      const version = Number(versionMatch[2]);
+      const summary = versions.find((v) => v.version === version);
+      if (summary === undefined) return json({ error: 'not found' }, 404);
+      return json({ version: { ...summary, content: contents[version] ?? '' } });
+    }
+    if (url.includes(`/practices/${doc.slug}/versions`)) return json({ versions });
+    if (url.includes(`/practices/${doc.slug}`)) return json({ practice: doc });
+    return undefined;
+  };
+}
+
+describe('履歴タブ（#1309）', () => {
+  const versions: PracticeVersionSummary[] = [
+    {
+      slug: PRACTICE.slug,
+      version: 1,
+      kind: '日報',
+      title: '旧題',
+      at: '2026-08-01T00:00:00.000Z',
+      chars: 3,
+    },
+    {
+      slug: PRACTICE.slug,
+      version: 2,
+      kind: '日報',
+      title: '日報の書き方',
+      at: '2026-08-22T00:00:00.000Z',
+      chars: 42,
+    },
+  ];
+  const contents = { 1: '# 旧本文', 2: PRACTICE.content };
+
+  it('版の一覧を出す（メタだけ。本文は最初は出ない）', async () => {
+    renderDetail(PRACTICE.slug, historyRoute(PRACTICE, versions, contents));
+
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '履歴' }));
+    expect(await screen.findByText('版1')).toBeTruthy();
+    expect(await screen.findByText('版2')).toBeTruthy();
+    expect(screen.queryByText('旧本文')).toBeNull();
+  });
+
+  it('版を選ぶと本文まで読める（読み取り専用）', async () => {
+    renderDetail(PRACTICE.slug, historyRoute(PRACTICE, versions, contents));
+
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '履歴' }));
+    fireEvent.click(await screen.findByText('旧題'));
+
+    await screen.findByText(/旧本文/);
+    // 読み取り専用——textarea を持たない（編集タブの本文欄と区別する）。
+    expect(screen.queryByLabelText('本文（content）')).toBeNull();
+  });
+
+  it('版が1件も無い slug では「まだ版が無い」と言う', async () => {
+    renderDetail(PRACTICE.slug, historyRoute(PRACTICE, [], {}));
+
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '履歴' }));
+    expect(await screen.findByText(/まだ版が無い/)).toBeTruthy();
   });
 });
 

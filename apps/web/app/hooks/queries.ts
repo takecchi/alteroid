@@ -111,6 +111,9 @@ export const KEY = {
   memoryDoc: (slug: string) => ({ type: 'memoryDoc', slug }) as const,
   practices: { type: 'practices' } as const,
   practice: (slug: string) => ({ type: 'practice', slug }) as const,
+  practiceVersions: (slug: string) => ({ type: 'practiceVersions', slug }) as const,
+  practiceVersion: (slug: string, version: number) =>
+    ({ type: 'practiceVersion', slug, version }) as const,
   conversations: (limit: number) => ({ type: 'conversations', limit }) as const,
   /**
    * **`includeSuperseded` をキーに含める（チャットのメッセージ編集、#1010）。**
@@ -385,6 +388,31 @@ export function usePractice(slug: string) {
   const api = useApi();
   return useSWR(KEY.practice(slug), ({ slug }) =>
     api.api.GET('/practices/{slug}', { params: { path: { slug } } }).then(unwrap),
+  );
+}
+
+/**
+ * やり方の追記専用の版の履歴（メタだけ。#1309）。`usePractices` と同じ形——
+ * 本文は含まない。個別の本文は `usePracticeVersion` で読む。
+ */
+export function usePracticeVersions(slug: string) {
+  const api = useApi();
+  return useSWR(KEY.practiceVersions(slug), ({ slug }) =>
+    api.api.GET('/practices/{slug}/versions', { params: { path: { slug } } }).then(unwrap),
+  );
+}
+
+/** やり方の版を1つ、本文まで読む（#1309）。`version` が無ければ問い合わせない。 */
+export function usePracticeVersion(slug: string, version: number | undefined) {
+  const api = useApi();
+  return useSWR(
+    version === undefined ? null : KEY.practiceVersion(slug, version),
+    ({ slug, version }) =>
+      api.api
+        .GET('/practices/{slug}/versions/{version}', {
+          params: { path: { slug, version: String(version) } },
+        })
+        .then(unwrap),
   );
 }
 

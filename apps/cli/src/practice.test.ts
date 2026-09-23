@@ -28,6 +28,7 @@ vi.mock('./target.js', () => ({
 
 const {
   practiceEditCommand,
+  practiceHistoryCommand,
   practiceListCommand,
   practiceRemoveCommand,
   practiceSetCommand,
@@ -380,5 +381,92 @@ describe('alteroid practice list / show', () => {
     await practiceShowCommand('missing');
 
     expect(read()).toContain('そんなやり方はありません: missing');
+  });
+});
+
+/**
+ * `alteroid practice history` / `alteroid practice show --version`（#1309）。
+ *
+ * **CLI 専用の HTTP 経路は無い**——`GET /practices/:slug/versions(/:version)`
+ * にそのまま乗る（`practice.ts` 冒頭の doc）。ここでは実際に打たれる経路と
+ * 本文の形を確かめる。
+ */
+describe('alteroid practice history / show --version', () => {
+  it('版の一覧を出す（メタだけ）', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: {
+        versions: [
+          {
+            slug: 'review',
+            version: 1,
+            kind: 'レビュー',
+            title: '旧題',
+            at: '2026-09-20T00:00:00.000Z',
+            chars: 3,
+          },
+          {
+            slug: 'review',
+            version: 2,
+            kind: 'レビュー',
+            title: 'レビューの進め方',
+            at: '2026-09-21T00:00:00.000Z',
+            chars: 30,
+          },
+        ],
+      },
+    });
+
+    await practiceHistoryCommand('review');
+
+    expect(sent[0]?.method).toBe('GET');
+    expect(sent[0]?.url).toBe('http://127.0.0.1:4517/practices/review/versions');
+    const text = read();
+    expect(text).toContain('版1 [レビュー] 旧題');
+    expect(text).toContain('版2 [レビュー] レビューの進め方');
+    expect(text).toContain('practice show review --version');
+  });
+
+  it('版が1つも無ければ、そう言う', async () => {
+    const read = captureStdout();
+    replies.push({ status: 200, body: { versions: [] } });
+
+    await practiceHistoryCommand('nothing-here');
+
+    expect(read()).toContain('nothing-here の版はまだ無い');
+  });
+
+  it('show --version は過去の版の本文を出す', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: {
+        version: {
+          slug: 'review',
+          version: 1,
+          kind: 'レビュー',
+          title: '旧題',
+          at: '2026-09-20T00:00:00.000Z',
+          chars: 6,
+          content: '古い本文\n',
+        },
+      },
+    });
+
+    await practiceShowCommand('review', { version: 1 });
+
+    expect(sent[0]?.method).toBe('GET');
+    expect(sent[0]?.url).toBe('http://127.0.0.1:4517/practices/review/versions/1');
+    expect(read()).toContain('古い本文');
+  });
+
+  it('無い版番号を指定したら、そう言う', async () => {
+    const read = captureStdout();
+    replies.push({ status: 404, body: { error: 'not found' } });
+
+    await practiceShowCommand('review', { version: 999 });
+
+    expect(read()).toContain('そんな版はありません: review 版999');
   });
 });

@@ -51,6 +51,8 @@ import { createJournalBus, type JournalBus } from './journal-bus.js';
 import {
   practiceListResponseSchema,
   practiceReadResponseSchema,
+  practiceVersionListResponseSchema,
+  practiceVersionReadResponseSchema,
   scheduleStatusSchema,
 } from './openapi.js';
 import { startUsagePolling } from './usage-poller.js';
@@ -753,6 +755,105 @@ describe('HTTP API', () => {
 
   it('やり方が無い状態での DELETE は 404（クローンの道具の冪等とは違う——HTTP は memory と同じ形）', async () => {
     expect((await app.request('/practices/never-existed', { method: 'DELETE' })).status).toBe(404);
+  });
+
+  /**
+   * やり方の追記専用の版の履歴（#1309）。
+   * `GET /practices/:slug/versions` と `GET /practices/:slug/versions/:version`。
+   */
+  describe('やり方の版の履歴（#1309）', () => {
+    it('write のたびに版が増え、一覧は本文を含まない', async () => {
+      await stores.practices.write({
+        slug: 'history-check',
+        kind: '実装',
+        title: '旧',
+        content: '旧本文',
+      });
+      await stores.practices.write({
+        slug: 'history-check',
+        kind: '実装',
+        title: '新',
+        content: '新本文',
+      });
+
+      const list = await app.request('/practices/history-check/versions');
+      expect(list.status).toBe(200);
+      const parsed = practiceVersionListResponseSchema.parse(await list.json());
+      expect(parsed.versions.map((v) => v.version)).toEqual([1, 2]);
+      expect(parsed.versions.every((v) => !('content' in v))).toBe(true);
+    });
+
+    it('版を1つ、本文まで読める', async () => {
+      await stores.practices.write({
+        slug: 'history-read',
+        kind: '実装',
+        title: '題',
+        content: '本文',
+      });
+
+      const response = await app.request('/practices/history-read/versions/1');
+      expect(response.status).toBe(200);
+      const parsed = practiceVersionReadResponseSchema.parse(await response.json());
+      expect(parsed.version.content).toBe('本文\n');
+    });
+
+    it('remove の後も版は読める（版は消えない。#1309 の主題そのもの）', async () => {
+      await stores.practices.write({
+        slug: 'history-survives-remove',
+        kind: '実装',
+        title: '題',
+        content: '本文',
+      });
+      await app.request('/practices/history-survives-remove', { method: 'DELETE' });
+
+      const list = await app.request('/practices/history-survives-remove/versions');
+      const parsed = practiceVersionListResponseSchema.parse(await list.json());
+      expect(parsed.versions).toHaveLength(1);
+
+      const read = await app.request('/practices/history-survives-remove/versions/1');
+      expect(read.status).toBe(200);
+    });
+
+    it('作り直すと版番号は続きから振られる', async () => {
+      await stores.practices.write({
+        slug: 'history-recreate',
+        kind: '実装',
+        title: '題1',
+        content: '本文1',
+      });
+      await app.request('/practices/history-recreate', { method: 'DELETE' });
+      await stores.practices.write({
+        slug: 'history-recreate',
+        kind: '実装',
+        title: '題2',
+        content: '本文2',
+      });
+
+      const list = await app.request('/practices/history-recreate/versions');
+      const parsed = practiceVersionListResponseSchema.parse(await list.json());
+      expect(parsed.versions.map((v) => v.version)).toEqual([1, 2]);
+    });
+
+    it('無い版番号は 404', async () => {
+      await stores.practices.write({
+        slug: 'history-missing',
+        kind: '実装',
+        title: '題',
+        content: '本文',
+      });
+      expect((await app.request('/practices/history-missing/versions/999')).status).toBe(404);
+    });
+
+    it('版番号が正の整数として成立しないと 400', async () => {
+      expect((await app.request('/practices/anything/versions/0')).status).toBe(400);
+      expect((await app.request('/practices/anything/versions/not-a-number')).status).toBe(400);
+    });
+
+    it('版が無い slug の一覧は空配列（throw しない）', async () => {
+      const list = await app.request('/practices/never-written/versions');
+      expect(list.status).toBe(200);
+      expect(await list.json()).toEqual({ versions: [] });
+    });
   });
 
   it('日誌を読める（可観測性の中段）', async () => {

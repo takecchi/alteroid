@@ -1,5 +1,11 @@
 import { ensureTrailingNewline, practiceSchema, practiceSlugSchema } from '@alteroid/core';
-import type { Practice, PracticeMeta, PracticeStore, PracticeVersion, PracticeVersionMeta } from '@alteroid/core';
+import type {
+  Practice,
+  PracticeMeta,
+  PracticeStore,
+  PracticeVersion,
+  PracticeVersionMeta,
+} from '@alteroid/core';
 import { and, asc, eq, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
@@ -248,7 +254,9 @@ export class PgPracticeStore implements PracticeStore {
         chars: versionCharsExpr,
       })
       .from(practiceVersions)
-      .where(and(eq(practiceVersions.slug, this.#slug(slug)), eq(practiceVersions.version, version)))
+      .where(
+        and(eq(practiceVersions.slug, this.#slug(slug)), eq(practiceVersions.version, version)),
+      )
       .limit(1);
     const row = rows[0];
     if (row === undefined) return null;

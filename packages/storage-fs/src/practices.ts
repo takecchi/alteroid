@@ -2,7 +2,13 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { ensureTrailingNewline, practiceSchema, practiceVersionSchema } from '@alteroid/core';
-import type { Practice, PracticeMeta, PracticeStore, PracticeVersion, PracticeVersionMeta } from '@alteroid/core';
+import type {
+  Practice,
+  PracticeMeta,
+  PracticeStore,
+  PracticeVersion,
+  PracticeVersionMeta,
+} from '@alteroid/core';
 import { z } from 'zod';
 
 import { writeFileAtomic } from './atomic.js';

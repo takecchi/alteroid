@@ -74,6 +74,15 @@ export type MemoryDocument = Ok<paths['/memory/{slug}']['get']>['document'];
 export type PracticeSummary = Ok<paths['/practices']['get']>['practices'][number];
 export type Practice = Ok<paths['/practices/{slug}']['get']>['practice'];
 
+/**
+ * やり方の追記専用の版の履歴（#1309）。一覧はメタだけ（本文を含まない）——
+ * `PracticeSummary` と同じ理由。
+ */
+export type PracticeVersionSummary = Ok<
+  paths['/practices/{slug}/versions']['get']
+>['versions'][number];
+export type PracticeVersion = Ok<paths['/practices/{slug}/versions/{version}']['get']>['version'];
+
 export type ConversationSummary = Ok<paths['/conversations']['get']>['conversations'][number];
 export type ConversationDetail = Ok<paths['/conversations/{id}']['get']>;
 export type ConversationMessage = ConversationDetail['messages'][number];

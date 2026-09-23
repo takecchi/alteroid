@@ -14,7 +14,7 @@ import {
   Textarea,
 } from '~/components/ui';
 import { useDeletePractice, useSavePractice } from '~/hooks/mutations';
-import { usePractice } from '~/hooks/queries';
+import { usePractice, usePracticeVersion, usePracticeVersions } from '~/hooks/queries';
 import { cn } from '~/lib/cn';
 import { formatDateTime } from '~/lib/format';
 
@@ -34,6 +34,12 @@ export function clientLoader({ params }: Route.ClientLoaderArgs) {
  * `title` も編集タブに置く。**`kind` は自由入力にする**——プルダウンの固定
  * リストにすると、`practiceKindSchema` を enum にしないと決めた理由
  * （仕事の型を実装専用に狭めない）が画面側で骨抜きになる。
+ *
+ * **「履歴」タブが3つ目に増えた（#1309）。** `PracticeStore.write` は全文置換
+ * だが、書いた後の本文は追記専用の版として残る——このタブは版の一覧（メタだけ）
+ * と、選んだ版の本文（読み取り専用）を出す。**ここに「この版へ戻す」ボタンは
+ * 置かない**——版を戻す操作は結局 `write()`（全文置換）を1回呼ぶのと同じなので、
+ * 人間は中身を見て「編集」タブへ手でコピーすればよく、専用の口を増やす理由が無い。
  */
 export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
   const { slug } = loaderData;
@@ -41,6 +47,20 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
   const savePractice = useSavePractice();
   const deletePractice = useDeletePractice();
   const navigate = useNavigate();
+
+  const [historyVersion, setHistoryVersion] = useState<number | undefined>(undefined);
+  const { data: history } = usePracticeVersions(slug);
+  const { data: historyDetail, isLoading: historyDetailLoading } = usePracticeVersion(
+    slug,
+    historyVersion,
+  );
+  // **⚠️ すべてのタブが常にマウントされている（radix-ui の Tabs.Content は
+  // `hidden` 属性で隠すだけで、非活性でも DOM から外れない——Presence の
+  // 内部実装が children を関数として渡すことで自身の forceMount を立てる）。**
+  // ⟹ 履歴タブを開いていない試験でもこのコードは評価される。応答の形が想定と
+  // 違っても（例: 試験のスタブが `/versions` 宛の応答を素通りさせた場合）
+  // クラッシュしない形にする。
+  const historyVersions = history?.versions ?? [];
 
   // `undefined` は「まだ人間が触っていない」——`memory-detail.tsx` と同じ作法。
   // 取得した値を state へ写さないので、SSE が無効化を回して再取得が走っても
@@ -158,6 +178,12 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
             >
               編集
             </Tabs.Trigger>
+            <Tabs.Trigger
+              value="history"
+              className={cn(TAB_TRIGGER_CLASS, activeTab === 'history' && TAB_TRIGGER_ACTIVE_CLASS)}
+            >
+              履歴
+            </Tabs.Trigger>
           </Tabs.List>
 
           {/*
@@ -212,6 +238,58 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
                 }}
               />
             </label>
+          </Tabs.Content>
+
+          <Tabs.Content value="history" className="flex min-h-0 flex-1 gap-4 overflow-y-auto">
+            <div className="w-64 shrink-0 overflow-y-auto border-r border-border pr-3">
+              <p className="mb-2 text-xs text-muted">
+                write のたびに版が1つ増える。remove しても版は消えない（#1309）。
+              </p>
+              {history === undefined ? (
+                <Spinner />
+              ) : historyVersions.length === 0 ? (
+                <p className="text-xs text-muted">まだ版が無い（一度も書かれていない）。</p>
+              ) : (
+                <ul className="flex flex-col gap-1">
+                  {[...historyVersions].reverse().map((v) => (
+                    <li key={v.version}>
+                      <button
+                        type="button"
+                        className={cn(
+                          'w-full rounded px-2 py-1 text-left text-xs hover:bg-surface-2',
+                          historyVersion === v.version && 'bg-surface-2 font-medium',
+                        )}
+                        onClick={() => setHistoryVersion(v.version)}
+                      >
+                        <span className="mr-1.5 font-mono">版{v.version}</span>
+                        <span className="mr-1.5 text-[10px] text-muted">[{v.kind}]</span>
+                        <span>{v.title}</span>
+                        <span className="block text-[10px] text-muted">
+                          {formatDateTime(v.at)} · {v.chars} 文字
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="min-w-0 flex-1 overflow-y-auto">
+              {historyVersion === undefined ? (
+                <p className="text-xs text-muted">
+                  左の一覧から版を選ぶと、本文をここに読み取り専用で出す。
+                </p>
+              ) : historyDetailLoading || historyDetail === undefined ? (
+                <Spinner />
+              ) : (
+                <>
+                  <p className="mb-2 text-xs text-muted">
+                    版{historyDetail.version.version}（{historyDetail.version.kind}）
+                    {historyDetail.version.title} · {formatDateTime(historyDetail.version.at)}
+                  </p>
+                  <Markdown>{historyDetail.version.content}</Markdown>
+                </>
+              )}
+            </div>
           </Tabs.Content>
         </Tabs.Root>
       )}

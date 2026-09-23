@@ -224,6 +224,7 @@ const EXEMPT: readonly Exemption[] = [
     why: 'kind は自由文字列（enum ではない）。説明文の例示（実装・調査・相談…）は網羅の主張ではなく、実装側に数え直すべき配列・enum が存在しない',
   },
   { tool: 'practice_remove', why: '実装側に、説明文が数え直すような一覧が無い' },
+  { tool: 'practice_history', why: '実装側に、説明文が数え直すような一覧が無い（#1309）' },
   {
     tool: 'token_list',
     why: '状態の語は実装が出す文言そのもので、説明文はそれを列挙していない',

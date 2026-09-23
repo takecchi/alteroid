@@ -165,8 +165,15 @@ describe('サブコマンドの登録（入口が在ること）', () => {
     return command.commands.map((c) => c.name()).sort();
   }
 
-  it('alteroid practice は list / show / edit / set / remove を持つ（memory と同じ構成）', () => {
-    expect(subcommandNames('practice')).toEqual(['edit', 'list', 'remove', 'set', 'show']);
+  it('alteroid practice は list / show / edit / set / remove / history を持つ（memory + 版の履歴。#1309）', () => {
+    expect(subcommandNames('practice')).toEqual([
+      'edit',
+      'history',
+      'list',
+      'remove',
+      'set',
+      'show',
+    ]);
     expect(subcommandNames('memory')).toEqual(['edit', 'list', 'remove', 'set', 'show']);
   });
 
