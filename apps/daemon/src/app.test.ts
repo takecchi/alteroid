@@ -1718,7 +1718,7 @@ describe('HTTP API', () => {
       expect(claimed[0]?.deliveries).toBe(1);
     });
 
-    it('CLI（alteroid inbox show）・HTTP・manager_list（クローンの道具）が同じ数を返す', async () => {
+    it('HTTP の応答は observedAt を除いて summarizeInboxBacklog の直接呼びと一致する', async () => {
       await stores.inbox.put(
         managerReport('evt-1', '2026-08-10T00:00:00.000Z'),
         '2026-08-10T00:00:00.000Z',
@@ -1732,14 +1732,16 @@ describe('HTTP API', () => {
       const expected = summarizeInboxBacklog(rows, Date.now());
 
       const response = await app.request('/inbox');
-      const body = await response.json();
+      const body = (await response.json()) as InboxBacklogBreakdown;
       // `observedAt` は呼び出しごとに変わりうる（`Date.now()`）ので、そこだけ
-      // 除いて突き合わせる——他の全欄が `summarizeInboxBacklog` の直接呼びと
-      // 一致することが、HTTP・CLI・`manager_list` が同じ関数を通っている証拠
-      // になる（3つとも1つの純関数の呼び出しに帰着する）。
-      const { observedAt, ...expectedWithoutObservedAt } = expected;
-      expect(body).toMatchObject(expectedWithoutObservedAt);
-      expect(typeof observedAt).toBe('string');
+      // 除いて突き合わせる。`toEqual` にしてあるのは、応答スキーマ
+      // （`inboxBacklogResponseSchema`。`z.object` は知らない欄を黙って落とす）が
+      // core の欄を1つでも取りこぼしたら赤くするためである。
+      // ⚠ **測っているのは HTTP と core の集計の一致までである。** CLI と
+      // `manager_list` が同じ関数を通ることは、この歯ではなく import の形で
+      // 保たれている（CLI の描画は `apps/cli/src/inbox.test.ts`）。
+      expect(typeof body.observedAt).toBe('string');
+      expect({ ...body, observedAt: expected.observedAt }).toEqual(expected);
     });
   });
 
