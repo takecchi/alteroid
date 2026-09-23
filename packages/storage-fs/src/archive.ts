@@ -3,8 +3,11 @@ import { join } from 'node:path';
 
 import {
   MAX_UTF8_BYTES_PER_UTF16_UNIT,
+  archiveIdBranch,
   classifyArchiveContinuity,
+  compareArchiveEntriesNewestFirst,
   fingerprintArchiveBody,
+  matchArchiveIdStamp,
   tallyArchiveContinuity,
   type ArchiveContinuity,
   type ArchiveEntry,
@@ -14,20 +17,6 @@ import {
   type ArchiveWrite,
   type TranscriptArchive,
 } from '@alteroid/core';
-
-/**
- * `${sanitize(sessionId)}-${stamp}.jsonl` の `stamp` 部分（`at.toISOString()` の
- * `:` `.` を `-` に潰した形）と、**衝突したときだけ付く枝番**（#905）。
- *
- * **枝番は optional である。** 衝突していない id の形は1文字も変わっていない
- * ので、この正規表現も枝番の無い側を今までどおり拾う。`fallbackMeta()` は
- * マッチ全体（枝番を含む）の長さで `sessionId` を切り出すため、枝番が付いた
- * id でも `sessionId` / `at` が正しく戻る——**枝番を拾わない形へ戻すと、
- * `sessionId` にファイル名全体が入り `at` が epoch へ落ちる**（`index.test.ts`
- * の「枝番付きの id でもサイドカー無しから sessionId / at を復元できる」が
- * その歯）。
- */
-const STAMP_SUFFIX_RE = /-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)(?:-(\d+))?\.jsonl$/;
 
 /**
  * 同じミリ秒に同じセッションへ積まれたときに、枝番を試す上限（#905）。
@@ -151,6 +140,14 @@ export class FsTranscriptArchive implements TranscriptArchive {
    * または `bodyChars` / `bodyMd5` を持たない行は `bodyChars` / `bodyMd5`
    * が `undefined` のまま返り、`classifyArchiveContinuity` がそれを
    * `'unknown'` へ落とす。
+   *
+   * **同着（`at` が同値）のときの tie-break は `id` の字面順ではなく、
+   * `archiveIdBranch` が返す枝番（＝積んだ順）の大小で行う（#908）。**
+   * `id` は `-`(0x2D) と `.`(0x2E) の文字コードの関係で
+   * `base-2.jsonl < base-3.jsonl < base.jsonl` という順になり、枝番の無い
+   * 1本目が字面上は最大になる——3本以上を同じミリ秒に積んだとき、
+   * 「`id` が最大」で選ぶと3本目以降が1本目を「直前」だと誤認する
+   * （`archive-id.ts` の doc に、枝番が積んだ順と一致する根拠がある）。
    */
   async #findPreviousArchiveForSession(
     sessionId: string,
@@ -160,7 +157,11 @@ export class FsTranscriptArchive implements TranscriptArchive {
     for (const id of ids) {
       const meta = (await this.#readMeta(id)) ?? fallbackMeta(id);
       if (meta.sessionId !== sessionId) continue;
-      if (best === null || meta.at > best.at || (meta.at === best.at && id > best.id)) {
+      if (
+        best === null ||
+        meta.at > best.at ||
+        (meta.at === best.at && archiveIdBranch(id) > archiveIdBranch(best.id))
+      ) {
         best = { id, at: meta.at, bodyChars: meta.bodyChars, bodyMd5: meta.bodyMd5 };
       }
     }
@@ -168,7 +169,10 @@ export class FsTranscriptArchive implements TranscriptArchive {
   }
 
   /**
-   * 新しい順（#698）。
+   * 新しい順（#698）。**同着（同じ `at`）の並びは積んだ逆順（新しいものが
+   * 先）——`compareArchiveEntriesNewestFirst`（`archive-id.ts`）に委ねる
+   * （#908。`id` の字面順の tie-break は使わない。`#findPreviousArchiveForSession`
+   * と同じ理由）。**
    *
    * `storedBytes` は `stat().size`——**その置き場が実際に使っているバイト数**
    * であって、生ログの文字数ではない（`ArchiveEntry` interface の doc）。
@@ -179,7 +183,7 @@ export class FsTranscriptArchive implements TranscriptArchive {
   async list(): Promise<ArchiveEntry[]> {
     const ids = await this.#listIds();
     const entries = await Promise.all(ids.map((id) => this.#readEntry(id)));
-    return entries.sort((a, b) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id));
+    return entries.sort(compareArchiveEntriesNewestFirst);
   }
 
   /**
@@ -453,18 +457,19 @@ interface ArchiveMeta {
  * では戻らない）。パターンに一致しない(壊れた・想定外の名前の)場合は、
  * ファイル名全体を `sessionId`、`epoch` を `at` として返す——`list()` /
  * `sessions()` を例外で落とさないことを優先する。
+ *
+ * **解析そのものは `matchArchiveIdStamp`（`@alteroid/core`）に委ねる**（#908）
+ * ——枝番の tie-break（`archiveIdBranch`）と同じ正規表現を2箇所に書かない。
  */
 function fallbackMeta(id: string): ArchiveMeta {
-  const match = STAMP_SUFFIX_RE.exec(id);
-  // **`match[0]`（マッチ全体）で切る。** 枝番（#905）が付いた id では
-  // `match[0]` にその枝番も入るので、`sessionId` 側へ枝番が漏れない。
-  const suffix = match?.[0];
-  const stamp = match?.[1];
-  if (suffix === undefined || stamp === undefined) {
+  const match = matchArchiveIdStamp(id);
+  if (match === undefined) {
     return { sessionId: id, at: new Date(0).toISOString() };
   }
-  const sessionId = id.slice(0, id.length - suffix.length);
-  const at = stamp.replace(
+  // **`suffix`（マッチ全体）で切る。** 枝番（#905）が付いた id では
+  // `suffix` にその枝番も入るので、`sessionId` 側へ枝番が漏れない。
+  const sessionId = id.slice(0, id.length - match.suffix.length);
+  const at = match.stamp.replace(
     /^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/,
     '$1T$2:$3:$4.$5Z',
   );

@@ -428,6 +428,19 @@ export {
   type ArchiveContinuity,
 } from './archive-continuity.js';
 /**
+ * `archive()` の id（`${sanitize(sessionId)}-${stamp}.jsonl`。#905 の枝番付き
+ * id も含む）を解析する純関数（#908）。fs / pg の両方が「同じミリ秒に積んだ
+ * 行のうち、どれが直前か」の tie-break にこれを使う——`id` の字面順
+ * （PostgreSQL の collation にも依存する）で tie-break すると、3本以上
+ * 積んだときに1本目を直前だと誤認する（#908 本体）。
+ */
+export {
+  archiveIdBranch,
+  compareArchiveEntriesNewestFirst,
+  matchArchiveIdStamp,
+  type ArchiveIdStampMatch,
+} from './archive-id.js';
+/**
  * `archive` を絞り込んで一括で tombstone する対象を選ぶ純関数（#698）。
  *
  * **外へ出しているのは純関数だけである。** `TranscriptArchive.list()` で

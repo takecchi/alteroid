@@ -1,5 +1,7 @@
 import {
+  archiveIdBranch,
   classifyArchiveContinuity,
+  compareArchiveEntriesNewestFirst,
   fingerprintArchiveBody,
   type ArchiveContinuity,
   type ArchiveEntry,
@@ -77,6 +79,18 @@ export class PgTranscriptArchive implements TranscriptArchive {
    * **衝突していない id の形は1文字も変わらない**ので、既存の行に移行は
    * 要らない。**先頭が `sanitize(sessionId)` である性質も保たれる**（`id` の
    * 前方一致 LIKE が主キーの btree に落ちる。#698 §6-5）。
+   *
+   * **「直前」の選び方は `at` 降順のみを SQL に任せ、同着（同じ `at`）の
+   * tie-break は JS 側で行う（#908）。** 元は `.orderBy(desc(archive.at),
+   * desc(archive.id))` だったが、`desc(archive.id)` は **PostgreSQL の
+   * 照合順（collation）依存**——本番と PGlite で同じ順になる保証が無い
+   * うえ、`id` の字面順は `base-2.jsonl < base-3.jsonl < base.jsonl` と
+   * 並ぶため、同じミリ秒に3本以上積むと1本目を「直前」だと誤認する
+   * （#908 本体。fs 側 `#findPreviousArchiveForSession` の doc と同じ理由）。
+   * ⟹ `at` 降順で上位 `MAX_ARCHIVE_ID_ATTEMPTS` 行だけ取り（同じミリ秒への
+   * 衝突は最大でもこの本数までしか起きない——上の枝番のループと同じ上限）、
+   * 先頭行と同じ `at` を持つ行だけに絞って、`archiveIdBranch`（＝積んだ順。
+   * `archive-id.ts` の doc）が最大の行を JS 側で選ぶ。
    */
   async archive(sessionId: string, transcript: string): Promise<ArchiveWrite> {
     const body = stripNulls(transcript);
@@ -85,13 +99,27 @@ export class PgTranscriptArchive implements TranscriptArchive {
     const base = `${sanitize(sessionId)}-${stamp}`;
     const fingerprint = fingerprintArchiveBody(body);
     return this.#db.transaction(async (tx) => {
-      const previousRows = await tx
-        .select({ id: archive.id, bodyChars: archive.bodyChars, bodyMd5: archive.bodyMd5 })
+      const candidateRows = await tx
+        .select({
+          id: archive.id,
+          at: archive.at,
+          bodyChars: archive.bodyChars,
+          bodyMd5: archive.bodyMd5,
+        })
         .from(archive)
         .where(eq(archive.sessionId, sessionId))
-        .orderBy(desc(archive.at), desc(archive.id))
-        .limit(1);
-      const previous = previousRows[0] ?? null;
+        .orderBy(desc(archive.at))
+        .limit(MAX_ARCHIVE_ID_ATTEMPTS);
+      const latestAt = candidateRows[0]?.at;
+      const previous =
+        latestAt === undefined
+          ? null
+          : candidateRows
+              .filter((row) => row.at.getTime() === latestAt.getTime())
+              .reduce<(typeof candidateRows)[number] | null>((best, row) => {
+                if (best === null) return row;
+                return archiveIdBranch(row.id) > archiveIdBranch(best.id) ? row : best;
+              }, null);
       const { continuity, comparedTo } = classifyArchiveContinuity(previous, body);
       for (let attempt = 1; attempt <= MAX_ARCHIVE_ID_ATTEMPTS; attempt += 1) {
         const id = archiveIdCandidate(base, attempt);
@@ -129,6 +157,12 @@ export class PgTranscriptArchive implements TranscriptArchive {
    * この関数自身が壊す。`pg_column_size` は行内に収まった TOAST ポインタの
    * サイズだけを見て、外部チャンクを取りに行かない——`body` に触れない
    * ぶん、この一覧は軽い。
+   *
+   * **同着（同じ `at`）の tie-break は SQL の `desc(archive.id)` に任せず、
+   * JS 側の `compareArchiveEntriesNewestFirst`（#908）に委ねる。** SQL 側は
+   * `at` の降順だけを担う——`desc(archive.id)` は PostgreSQL の照合順
+   * （collation）に依存するうえ、`id` の字面順は積んだ順と一致しない
+   * （`archive()` の doc、`archive-id.ts` の doc と同じ理由）。
    */
   async list(): Promise<ArchiveEntry[]> {
     const rows = await this.#db
@@ -142,8 +176,8 @@ export class PgTranscriptArchive implements TranscriptArchive {
         continuity: archive.continuity,
       })
       .from(archive)
-      .orderBy(desc(archive.at), desc(archive.id));
-    return rows.map((row) => ({
+      .orderBy(desc(archive.at));
+    const entries: ArchiveEntry[] = rows.map((row) => ({
       id: row.id,
       sessionId: row.sessionId,
       at: toIso(row.at),
@@ -153,6 +187,7 @@ export class PgTranscriptArchive implements TranscriptArchive {
         ? {}
         : { removedAt: toIso(row.removedAt), removedBytes: row.removedBytes ?? 0 }),
     }));
+    return entries.sort(compareArchiveEntriesNewestFirst);
   }
 
   /**
