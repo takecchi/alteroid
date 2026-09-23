@@ -620,8 +620,10 @@ async function observeReclaim(
 function medianAgeOf(ages: readonly number[]): number {
   const sorted = [...ages].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
-  if (sorted.length % 2 === 1) return sorted[mid];
-  return Math.floor((sorted[mid - 1] + sorted[mid]) / 2);
+  const upper = sorted.at(mid) ?? 0; // 空配列は呼び出し側が弾いている前提（doc）なので、0 は理論上到達しない。
+  if (sorted.length % 2 === 1) return upper;
+  const lower = sorted.at(mid - 1) ?? 0;
+  return Math.floor((lower + upper) / 2);
 }
 
 /**
