@@ -49,9 +49,10 @@ function harness(): Harness {
 describe('practice_* — 仕事のやり方を器に持つ道具（#1055 段3②）', () => {
   // --- 設計の固定 -----------------------------------------------------------
 
-  it('4本だけが在り、"適用する/強制する" 道具は無い', () => {
+  it('5本だけが在り、"適用する/強制する" 道具は無い（#1309 で practice_history が増えた）', () => {
     const names = CLONE_TOOL_NAMES.filter((name) => name.startsWith('practice_'));
     expect(names.sort()).toEqual([
+      'practice_history',
       'practice_list',
       'practice_read',
       'practice_remove',
@@ -63,15 +64,17 @@ describe('practice_* — 仕事のやり方を器に持つ道具（#1055 段3②
     expect(CLONE_TOOL_NAMES).not.toContain('practice_enforce');
   });
 
-  it('読む2本は traceless、書く2本は自前で日誌へ残す側に分類されている', () => {
+  it('読む3本は traceless、書く2本は自前で日誌へ残す側に分類されている', () => {
     expect(TRACELESS_CLONE_TOOLS).toContain('practice_list');
     expect(TRACELESS_CLONE_TOOLS).toContain('practice_read');
+    expect(TRACELESS_CLONE_TOOLS).toContain('practice_history');
     expect(SELF_JOURNALING_CLONE_TOOLS).toContain('practice_write');
     expect(SELF_JOURNALING_CLONE_TOOLS).toContain('practice_remove');
     expect(cloneToolJournalsItself(qualifiedToolName('practice_write'))).toBe(true);
     expect(cloneToolJournalsItself(qualifiedToolName('practice_remove'))).toBe(true);
     expect(cloneToolJournalsItself(qualifiedToolName('practice_list'))).toBe(false);
     expect(cloneToolJournalsItself(qualifiedToolName('practice_read'))).toBe(false);
+    expect(cloneToolJournalsItself(qualifiedToolName('practice_history'))).toBe(false);
   });
 
   it('道具の説明文が「適用する」道具の不在を明言している（apply/enforce の代わり）', () => {
@@ -203,7 +206,7 @@ describe('practice_* — 仕事のやり方を器に持つ道具（#1055 段3②
     expect(entry.grounds).toContain('新しい');
   });
 
-  it('既存の slug に書くと「書き直した」と言う（全文置換。前の本文は残らない）', async () => {
+  it('既存の slug に書くと「書き直した」と言う（いまの本文は全文置換だが、前の本文は版に残る）', async () => {
     const h = harness();
     await h.call('practice_write', { slug: 'daily', kind: '日報', title: '旧', content: '旧本文' });
     const body = await h.call('practice_write', {
@@ -213,9 +216,12 @@ describe('practice_* — 仕事のやり方を器に持つ道具（#1055 段3②
       content: '新本文',
     });
     expect(body).toContain('書き直した');
+    expect(body).toContain('practice_history');
 
     const stored = await h.stores.practices.read('daily');
     expect(stored?.content).toBe('新本文\n');
+    // **いまの本文の読み口（read）からは前の本文は消える**——それでも
+    // 版の履歴（listVersions/readVersion）には残ることを下のブロックで測る。
     expect(stored?.content).not.toContain('旧本文');
   });
 
@@ -252,6 +258,92 @@ describe('practice_* — 仕事のやり方を器に持つ道具（#1055 段3②
     });
     expect(body).toContain('新しく作った');
     expect((await h.stores.practices.read('weird'))?.kind).toBe('まだ名前の無い何か');
+  });
+
+  // --- practice_history / practice_read version=（#1309）--------------------
+
+  it('write のたびに版が増える。版番号は1始まりの連番', async () => {
+    const h = harness();
+    await h.call('practice_write', { slug: 'daily', kind: '日報', title: '旧', content: '旧本文' });
+    const afterFirst = await h.call('practice_history', { slug: 'daily' });
+    expect(afterFirst).toContain('版1');
+
+    await h.call('practice_write', { slug: 'daily', kind: '日報', title: '新', content: '新本文' });
+    const afterSecond = await h.call('practice_history', { slug: 'daily' });
+    expect(afterSecond).toContain('版1');
+    expect(afterSecond).toContain('版2');
+  });
+
+  it('practice_history は本文を含まない（一覧に本文を全文で載せない、地雷表の禁止）', async () => {
+    const h = harness();
+    await h.call('practice_write', {
+      slug: 'daily',
+      kind: '日報',
+      title: '題',
+      content: '# 秘密の本文\n\nここには一覧から辿り着けないはずの文がある。',
+    });
+    const body = await h.call('practice_history', { slug: 'daily' });
+    expect(body).toContain('版1');
+    expect(body).not.toContain('秘密の本文');
+    expect(body).not.toContain('ここには一覧から辿り着けない');
+  });
+
+  it('practice_read に version を指定すると過去の版の本文まで読める', async () => {
+    const h = harness();
+    await h.call('practice_write', { slug: 'daily', kind: '日報', title: '旧', content: '旧本文' });
+    await h.call('practice_write', { slug: 'daily', kind: '日報', title: '新', content: '新本文' });
+
+    const v1 = await h.call('practice_read', { slug: 'daily', version: 1 });
+    expect(v1).toContain('旧本文');
+    expect(v1).not.toContain('新本文');
+
+    const v2 = await h.call('practice_read', { slug: 'daily', version: 2 });
+    expect(v2).toContain('新本文');
+
+    // version を省くと、いまの本文（＝最後に書いた版）が返る。
+    const current = await h.call('practice_read', { slug: 'daily' });
+    expect(current).toContain('新本文');
+  });
+
+  it('無い版を指定すると、例外を投げず「無い」と分かる文を返す', async () => {
+    const h = harness();
+    await h.call('practice_write', { slug: 'daily', kind: '日報', title: '題', content: '本文' });
+    const body = await h.call('practice_read', { slug: 'daily', version: 99 });
+    expect(body).toContain('無い');
+    expect(body).toContain('practice_history');
+  });
+
+  it('remove の後も版は読める（版は消えない。#1309 の主題そのもの）', async () => {
+    const h = harness();
+    await h.call('practice_write', { slug: 'daily', kind: '日報', title: '題', content: '本文' });
+    await h.call('practice_remove', { slug: 'daily' });
+
+    const history = await h.call('practice_history', { slug: 'daily' });
+    expect(history).toContain('版1');
+
+    const version = await h.call('practice_read', { slug: 'daily', version: 1 });
+    expect(version).toContain('本文');
+  });
+
+  it('remove した slug を同じ名前で作り直すと、版番号は1へ戻らず続きから振られる', async () => {
+    const h = harness();
+    await h.call('practice_write', { slug: 'daily', kind: '日報', title: '題1', content: '本文1' });
+    await h.call('practice_remove', { slug: 'daily' });
+    await h.call('practice_write', { slug: 'daily', kind: '日報', title: '題2', content: '本文2' });
+
+    const history = await h.call('practice_history', { slug: 'daily' });
+    expect(history).toContain('版1');
+    expect(history).toContain('版2');
+    expect(history).not.toContain('版3');
+
+    const v2 = await h.call('practice_read', { slug: 'daily', version: 2 });
+    expect(v2).toContain('本文2');
+  });
+
+  it('版が1つも無い slug は「無い」と分かる文を返す（例外を投げない）', async () => {
+    const h = harness();
+    const body = await h.call('practice_history', { slug: 'nothing-here' });
+    expect(body).toContain('無い');
   });
 
   // --- practice_remove -----------------------------------------------------

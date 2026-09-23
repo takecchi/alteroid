@@ -21,6 +21,8 @@ import type {
   PendingApproval,
   Practice,
   PracticeMeta,
+  PracticeVersion,
+  PracticeVersionMeta,
   SchedulePhase,
   ScheduledRequest,
   UnreadableCommitment,
@@ -1817,14 +1819,47 @@ export interface PracticeStore {
    * `createdAt` は**最初に作られたときのものを引き継ぐ**（上書きで作成時刻を
    * 捏造しない）。`updatedAt` は毎回進む。
    */
+  /**
+   * ⭐ **書いた後の本文を、1つの版として追記専用の履歴へ足す（#1309）。**
+   * 版番号は slug ごとに 1 始まりの連番——`remove()` しても版は消えないので、
+   * 同じ slug を作り直したら消える前の続きから振られる（`listVersions` の doc）。
+   * この追記は `write()` と同じ操作の中で行うこと——別操作に割ると、途中で
+   * 落ちたときに「本体は書き変わったが版は増えていない」という食い違いが生まれる。
+   */
   write(input: { slug: string; kind: string; title: string; content: string }): Promise<Practice>;
+  /**
+   * **版は消さない（#1309）。** `remove()` が消すのは「いまのやり方」の1件だけで、
+   * `listVersions` / `readVersion` で読める追記専用の履歴は、消した後もそのまま
+   * 残る——同じ slug を後で作り直したときに、前の系統の版を失わないためである。
+   */
   remove(slug: string): Promise<void>;
   /**
    * 全部消す（ワークスペースのリセット専用。`PersonaStore.clear` と同じ形）。
    * 消した件数を返す —— `WorkspaceResetSummary` が申告に使う。**消したのに申告に
    * 出ない形を作らないこと**（静かに消える）。
+   *
+   * ⚠️ **版の履歴（`listVersions` / `readVersion`）も一緒に消える（#1309）。**
+   * `remove()` は版を残すが、`clear()` は人間が明示的に「全部忘れる」と決めた
+   * ワークスペースリセット専用の操作なので、`PersonaStore.clear` が保護状態
+   * （`human_touched_at` 等）ごと消すのと同じ理由で、版もろとも消してよい。
    */
   clear(): Promise<number>;
+
+  /**
+   * ある slug の版の一覧（メタだけ。本文は含まない。#1309）。**版番号の昇順。**
+   *
+   * 無い slug には空配列を返す（throw しない——`list()` が空を正常として扱う
+   * のと同じ線）。`remove()` 後も、消える前に積んだ版はここに残り続ける。
+   */
+  listVersions(slug: string): Promise<PracticeVersionMeta[]>;
+
+  /**
+   * 版を1つ、本文まで読む（#1309）。無ければ `null`
+   * （`read()` と同じ線——「無い」は throw ではない）。
+   *
+   * `remove()` された slug の版も読める——版は「いまのやり方」の存在に依存しない。
+   */
+  readVersion(slug: string, version: number): Promise<PracticeVersion | null>;
 }
 
 /** デーモンが必要とするストア一式。 */

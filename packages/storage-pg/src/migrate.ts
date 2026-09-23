@@ -635,6 +635,24 @@ export const STATEMENTS = [
   // と対の `create index` が踏む罠——このファイル冒頭「⚠️ 古い鍵の `create` は
   // 配列から消す」——とは違う形。ここでは同名の `create` をどこにも残していない）。
   `alter table practices drop column if exists bytes`,
+
+  // --- やり方の追記専用の版の履歴（#1309）-----------------------------------
+  // 新しい表を足すだけなので、既存行の意味は1ビットも変わらない（このファイル
+  // 冒頭の「既存行の意味を変える変更を黙って混ぜない」に当たらない）。
+  //
+  // **主キーは `(slug, version)` の複合キーで、`serial` にしていない**——版番号は
+  // slug ごとに独立した1始まりの連番でなければならない（`PgPracticeStore.write`
+  // が `max(version) + 1` を自分で計算して入れる。`schema.ts` の `practiceVersions`
+  // の doc）。
+  `create table if not exists practice_versions (
+     slug text not null,
+     version integer not null,
+     kind text not null,
+     title text not null,
+     content text not null,
+     at timestamptz not null,
+     primary key (slug, version)
+   )`,
 ] as const;
 
 /** `ensureOpenManagerBodyIndex` が作る部分 unique 索引の名前（issue #1041）。 */

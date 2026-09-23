@@ -3925,3 +3925,55 @@ export const practiceSchema = practiceMetaSchema.extend({
 export type PracticeSlug = z.infer<typeof practiceSlugSchema>;
 export type PracticeMeta = z.infer<typeof practiceMetaSchema>;
 export type Practice = z.infer<typeof practiceSchema>;
+
+/**
+ * やり方の**版**（追記専用の履歴。#1309）。一覧に出す分（本文を含まない）。
+ *
+ * ## なぜ要るか
+ *
+ * `PracticeStore.write` は全文置換で、前の本文は `write()` の直接の戻り値からは
+ * 二度と読めない（`practiceSchema` の doc）。#1055 段4 の受け入れ基準
+ * 「過去の候補が消えていない」を満たすには、**書いた後の本文を版として積み上げる
+ * 履歴が要る**——それがこれである。
+ *
+ * ## `PracticeMeta` と分けてある理由
+ *
+ * `PracticeMeta` は「いまのやり方」の1件を指すが、こちらは「ある時点で書かれた
+ * 本文」を指す——同じ slug に何件も存在しうる。フィールドの意味も違う:
+ * `PracticeMeta.updatedAt` は最後に書いた時刻（1個）だが、`PracticeVersionMeta.at`
+ * は**その版が書かれた時刻**（版ごとに1個ずつ持つ）。
+ */
+export const practiceVersionMetaSchema = z.object({
+  slug: practiceSlugSchema,
+  /**
+   * 1始まりの連番。**slug ごとに独立**（別の slug の版番号とは無関係）。
+   *
+   * `remove()` は版を消さないので（`PracticeStore.remove` の doc）、消した後に
+   * 同じ slug を作り直しても、版番号は 1 へ戻らず**消える前の続きから**振られる
+   * ——同じ slug に対して以前積んだ版が、番号の衝突なく読み続けられる。
+   */
+  version: z.number().int().positive(),
+  kind: practiceKindSchema,
+  title: z.string(),
+  /**
+   * この版が書かれた時刻（＝その `write()` 呼び出しの `updatedAt` と同じ瞬間）。
+   *
+   * `createdAt` / `updatedAt` という名にしなかったのは、版そのものには
+   * 「作成」と「更新」の区別が無い（1つの版は書かれたら不変で、書き換わらない）
+   * ためである——`JournalEntry.at` と同じ理由で単一の `at` にしてある。
+   */
+  at: isoDateTime,
+  /**
+   * 本文の文字数（コードポイント数。`practiceMetaSchema.chars` と同じ数え方
+   * ——#1340 に倣い、版でも保存せず読むたびに本文から導出する）。
+   */
+  chars: z.number().int().nonnegative(),
+});
+
+export const practiceVersionSchema = practiceVersionMetaSchema.extend({
+  /** その版の本文。書かれた時点のまま、以後変わらない。 */
+  content: z.string(),
+});
+
+export type PracticeVersionMeta = z.infer<typeof practiceVersionMetaSchema>;
+export type PracticeVersion = z.infer<typeof practiceVersionSchema>;

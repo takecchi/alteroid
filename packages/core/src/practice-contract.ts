@@ -169,15 +169,92 @@ export async function verifyPracticeStoreContract(
   if ((await practices.read('contract-d')) !== null) fail('remove() の後も read() が返る');
   await practices.remove('contract-d'); // 二度目が落ちないこと（冪等）
 
+  // --- 9. 版の履歴（追記専用。#1309）---
+  //
+  // 芯は4つ: (a) write のたびに版が増える (b) remove の後も版が読める
+  // (c) 作り直すと番号が続きから振られる (d) 一覧に本文が載らない。
+  {
+    const noVersions = await practices.listVersions('contract-nothing-here');
+    if (noVersions.length !== 0) fail('版が無い slug で listVersions() が空を返さない');
+    if ((await practices.readVersion('contract-nothing-here', 1)) !== null) {
+      fail('版が無い slug で readVersion() が null を返さない');
+    }
+
+    // (a) write のたびに版が増える。
+    const v1 = await practices.write({
+      slug: 'contract-v',
+      kind: '実装',
+      title: '版1',
+      content: '本文1',
+    });
+    let versions = await practices.listVersions('contract-v');
+    if (versions.length !== 1) fail(`write() 1回目で版が1つ増えていない: ${versions.length}`);
+    if (versions[0]?.version !== 1) fail(`最初の版番号が1ではない: ${versions[0]?.version}`);
+    // (d) 一覧に本文が載らない。
+    if ('content' in versions[0]!) fail('listVersions() が本文（content）を含んでいる');
+    if (versions[0]!.chars !== [...v1.content].length) {
+      fail(`版の chars がコードポイント数になっていない: ${versions[0]!.chars}`);
+    }
+
+    const readV1 = await practices.readVersion('contract-v', 1);
+    if (readV1 === null || readV1.content !== '本文1\n') {
+      fail(`readVersion() が版の本文を返さない: ${JSON.stringify(readV1?.content)}`);
+    }
+
+    await practices.write({
+      slug: 'contract-v',
+      kind: '実装',
+      title: '版2',
+      content: '本文2',
+    });
+    versions = await practices.listVersions('contract-v');
+    if (versions.length !== 2) fail(`write() 2回目で版が増えていない: ${versions.length}`);
+    if (versions[1]?.version !== 2) fail(`2つ目の版番号が2ではない: ${versions[1]?.version}`);
+    // 1つ目の版は書き換わらず、そのまま読める（追記専用）。
+    if ((await practices.readVersion('contract-v', 1))?.content !== '本文1\n') {
+      fail('2回目の write() が1つ目の版を書き換えた（追記専用ではない）');
+    }
+
+    if ((await practices.readVersion('contract-v', 999)) !== null) {
+      fail('readVersion() が無い版番号に対して null を返さない');
+    }
+
+    // (b) remove の後も版は読める。
+    await practices.remove('contract-v');
+    versions = await practices.listVersions('contract-v');
+    if (versions.length !== 2) fail(`remove() が版を消した: ${versions.length}`);
+    if ((await practices.readVersion('contract-v', 1)) === null) {
+      fail('remove() の後、版1が readVersion() で読めなくなった');
+    }
+
+    // (c) 作り直すと番号は1へ戻らず、続きから振られる。
+    await practices.write({
+      slug: 'contract-v',
+      kind: '実装',
+      title: '版3（作り直し）',
+      content: '本文3',
+    });
+    versions = await practices.listVersions('contract-v');
+    if (versions.length !== 3) fail(`作り直しで版の履歴が引き継がれない: ${versions.length}`);
+    if (versions[2]?.version !== 3) {
+      fail(`作り直しの版番号が続きから振られていない: ${versions[2]?.version}`);
+    }
+  }
+
   if (options.verifyClear !== true) {
-    for (const slug of ['contract-a', 'contract-b', 'contract-c']) {
+    for (const slug of ['contract-a', 'contract-b', 'contract-c', 'contract-v']) {
       await practices.remove(slug);
     }
     return;
   }
 
-  // --- 9. clear（件数を返し、あとで空になる） ---
+  // --- 10. clear（件数を返し、あとで空になる） ---
   const removed = await practices.clear();
   if (removed < 3) fail(`clear() が消した件数を返していない: ${removed}`);
   if ((await practices.list()).length !== 0) fail('clear() の後も list() が空にならない');
+  // ⚠️ **`remove()` とは違い、`clear()` は版も一緒に消す**（`clear()` の doc、
+  // #1309）——`contract-v` は上で `remove()` 済みだが、版はここまで残っていた。
+  if ((await practices.listVersions('contract-v')).length !== 0) {
+    fail('clear() の後も listVersions() が空にならない（版が残っている）');
+  }
 }

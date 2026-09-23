@@ -36,6 +36,9 @@ import { resolveTarget } from './target.js';
  * /practices(/:slug)` にそのまま乗る（`docs/PRD.md`「Web UI は API の
  * 特権的な消費者ではない」と同じ理由が CLI にも効く——CLI もデーモンの
  * HTTP API の薄いクライアントに徹する）。
+ *
+ * **版の履歴（#1309）も同じ形。** `GET /practices/:slug/versions(/:version)`
+ * にそのまま乗る——`history` サブコマンドと、`show --version` オプションで出す。
  */
 
 /** 一覧に出す1件（`GET /practices` の要素）。 */
@@ -75,9 +78,31 @@ export async function practiceListCommand(): Promise<void> {
   }
 }
 
-export async function practiceShowCommand(slug: string): Promise<void> {
+export async function practiceShowCommand(
+  slug: string,
+  options: { version?: number } = {},
+): Promise<void> {
   const client = await connect();
   if (client === null) return;
+
+  if (options.version !== undefined) {
+    const response = await client.practices[':slug'].versions[':version'].$get({
+      param: { slug, version: String(options.version) },
+    });
+    if (!response.ok) {
+      stdout.write(
+        response.status === 400
+          ? `版番号として成立しません: ${String(options.version)}\n`
+          : `そんな版はありません: ${slug} 版${String(options.version)}\n`,
+      );
+      return;
+    }
+    const body = await response.json();
+    const content = 'version' in body ? body.version.content : '';
+    stdout.write(content.endsWith('\n') ? content : `${content}\n`);
+    return;
+  }
+
   const found = await read(client, slug);
   if (found === null) {
     stdout.write(`そんなやり方はありません: ${slug}\n`);
@@ -85,6 +110,33 @@ export async function practiceShowCommand(slug: string): Promise<void> {
   }
   const content = found.content;
   stdout.write(content.endsWith('\n') ? content : `${content}\n`);
+}
+
+/**
+ * やり方の版の履歴を出す（#1309）。**メタだけ**——本文は
+ * `alteroid practice show <slug> --version <n>` で読む。
+ */
+export async function practiceHistoryCommand(slug: string): Promise<void> {
+  const client = await connect();
+  if (client === null) return;
+  const response = await client.practices[':slug'].versions.$get({ param: { slug } });
+  if (!response.ok) {
+    stdout.write('版の履歴を読めませんでした\n');
+    return;
+  }
+  const { versions } = (await response.json()) as {
+    versions: Array<{ version: number; kind: string; title: string; at: string; chars: number }>;
+  };
+  if (versions.length === 0) {
+    stdout.write(`やり方 ${slug} の版はまだ無い（一度も書かれていないか、打ち間違い）。\n`);
+    return;
+  }
+  for (const v of versions) {
+    stdout.write(
+      `  版${String(v.version)} [${v.kind}] ${v.title} (${v.at} / ${String(v.chars)} 文字)\n`,
+    );
+  }
+  stdout.write(`本文は: alteroid practice show ${slug} --version <版番号>\n`);
 }
 
 /**

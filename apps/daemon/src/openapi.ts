@@ -14,6 +14,8 @@ import {
   pendingApprovalSchema,
   practiceMetaSchema,
   practiceSchema,
+  practiceVersionMetaSchema,
+  practiceVersionSchema,
   runnerCredentialFingerprintSchema,
   runnerCredentialSchema,
   runnerLivenessSchema,
@@ -328,6 +330,15 @@ export const memoryDeleteResponseSchema = z.object({ ok: z.literal(true), slug: 
 export const practiceListResponseSchema = z.object({ practices: z.array(practiceMetaSchema) });
 export const practiceReadResponseSchema = z.object({ practice: practiceSchema });
 export const practiceDeleteResponseSchema = z.object({ ok: z.literal(true), slug: z.string() });
+
+/**
+ * やり方の版の履歴（#1309）。**一覧はメタだけ**——`practiceListResponseSchema` と
+ * 同じ理由で、本文を含まない（`PracticeStore.listVersions` の doc）。
+ */
+export const practiceVersionListResponseSchema = z.object({
+  versions: z.array(practiceVersionMetaSchema),
+});
+export const practiceVersionReadResponseSchema = z.object({ version: practiceVersionSchema });
 
 // ---------------------------------------------------------------------------
 // 日誌（/journal, /journal/stream）— core の journalEntrySchema をそのまま使う

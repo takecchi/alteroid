@@ -1,8 +1,8 @@
 import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { ensureTrailingNewline, practiceSchema } from '@alteroid/core';
-import type { Practice, PracticeMeta, PracticeStore } from '@alteroid/core';
+import { ensureTrailingNewline, practiceSchema, practiceVersionSchema } from '@alteroid/core';
+import type { Practice, PracticeMeta, PracticeStore, PracticeVersion, PracticeVersionMeta } from '@alteroid/core';
 import { z } from 'zod';
 
 import { writeFileAtomic } from './atomic.js';
@@ -22,8 +22,24 @@ const practiceRecordSchema = practiceSchema.omit({ chars: true });
 
 type PracticeRecord = z.infer<typeof practiceRecordSchema>;
 
+/**
+ * ディスクへ書く、版の履歴の1件（#1309）。**`chars` を持たない**——本体の
+ * `PracticeRecord` と同じ理由で、読むたびに `content` から導出する。
+ */
+const practiceVersionRecordSchema = practiceVersionSchema.omit({ chars: true });
+
+type PracticeVersionRecord = z.infer<typeof practiceVersionRecordSchema>;
+
 const fileSchema = z.object({
   practices: z.array(practiceRecordSchema).default([]),
+  /**
+   * 追記専用の版の履歴（#1309）。**同じファイル・同じ排他区間に置く**——
+   * `practices` とは別ファイルにすると、`write()` が本体と版を2回の書き込みに
+   * 割ることになり、途中で落ちたときに「本体は書き変わったが版は増えていない」
+   * という食い違いが生まれる（`PracticeStore.write` の doc）。1ファイルなら
+   * `#update` の1回の `writeFileAtomic` で両方が同時に反映される。
+   */
+  practiceVersions: z.array(practiceVersionRecordSchema).default([]),
 });
 
 type PracticeFile = z.infer<typeof fileSchema>;
@@ -45,6 +61,21 @@ function toMeta(entry: PracticeRecord): PracticeMeta {
 }
 
 function toPractice(entry: PracticeRecord): Practice {
+  return { ...entry, chars: countChars(entry.content) };
+}
+
+function toVersionMeta(entry: PracticeVersionRecord): PracticeVersionMeta {
+  return {
+    slug: entry.slug,
+    version: entry.version,
+    kind: entry.kind,
+    title: entry.title,
+    at: entry.at,
+    chars: countChars(entry.content),
+  };
+}
+
+function toVersion(entry: PracticeVersionRecord): PracticeVersion {
   return { ...entry, chars: countChars(entry.content) };
 }
 
@@ -114,10 +145,23 @@ export class FsPracticeStore implements PracticeStore {
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
       });
+      // ⭐ **書いた後の本文を版として追記する（#1309）。** 番号は「この slug の
+      // 既存の版の数 + 1」——`remove()` は `practiceVersions` を切り詰めない
+      // ので（下の `remove()`）、消して作り直しても自然に続きから振られる。
+      const priorVersions = file.practiceVersions.filter((entry) => entry.slug === input.slug);
+      const nextVersion = practiceVersionRecordSchema.parse({
+        slug: input.slug,
+        version: priorVersions.length + 1,
+        kind: input.kind,
+        title: input.title,
+        content,
+        at: now,
+      });
       return {
         next: {
           ...file,
           practices: [...file.practices.filter((entry) => entry.slug !== input.slug), next],
+          practiceVersions: [...file.practiceVersions, nextVersion],
         },
         result: toPractice(next),
       };
@@ -125,6 +169,8 @@ export class FsPracticeStore implements PracticeStore {
   }
 
   async remove(slug: string): Promise<void> {
+    // **版は消さない**（`PracticeStore.remove` の doc、#1309）——`practices`
+    // からだけ間引き、`practiceVersions` には触れない。
     await this.#update((file) => ({
       next: { ...file, practices: file.practices.filter((entry) => entry.slug !== slug) },
       result: undefined,
@@ -132,10 +178,26 @@ export class FsPracticeStore implements PracticeStore {
   }
 
   async clear(): Promise<number> {
+    // **版もここでは消す**（`PracticeStore.clear` の doc、#1309）——ワークスペース
+    // リセット専用の操作で、人間が明示的に「全部忘れる」と決めたときにしか呼ばれない。
     return this.#update((file) => ({
-      next: { practices: [] },
+      next: { practices: [], practiceVersions: [] },
       result: file.practices.length,
     }));
+  }
+
+  async listVersions(slug: string): Promise<PracticeVersionMeta[]> {
+    return (await this.#read()).practiceVersions
+      .filter((entry) => entry.slug === slug)
+      .sort((a, b) => a.version - b.version)
+      .map((entry) => toVersionMeta(entry));
+  }
+
+  async readVersion(slug: string, version: number): Promise<PracticeVersion | null> {
+    const found = (await this.#read()).practiceVersions.find(
+      (entry) => entry.slug === slug && entry.version === version,
+    );
+    return found === undefined ? null : toVersion(found);
   }
 
   async #read(): Promise<PracticeFile> {
@@ -143,7 +205,9 @@ export class FsPracticeStore implements PracticeStore {
       const raw = await readFile(this.#path, 'utf8');
       return fileSchema.parse(JSON.parse(raw));
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { practices: [] };
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return { practices: [], practiceVersions: [] };
+      }
       throw error;
     }
   }

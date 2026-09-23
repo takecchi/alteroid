@@ -23,10 +23,11 @@ import type {
   MemoryProtectionStatus,
   PendingApproval,
   Practice,
+  PracticeVersion,
   SchedulePhase,
   ScheduledRequest,
 } from './schema.js';
-import { practiceSchema, schedulePhaseSchema } from './schema.js';
+import { practiceSchema, practiceVersionSchema, schedulePhaseSchema } from './schema.js';
 import {
   sha256Hex,
   type AccessTokenRecord,
@@ -232,6 +233,13 @@ export function createMemoryStores(): Stores {
   const schedulePhases = new Map<string, SchedulePhase>();
   const commitments = new Map<string, Commitment>();
   const practices = new Map<string, Practice>();
+  /**
+   * やり方の追記専用の版の履歴（#1309）。**`practices` の削除に連動しない**
+   * ——slug ごとに配列を持ち、`remove()` で `practices` から消えても、ここは
+   * そのまま残る。番号は `write()` のたびに配列末尾へ足すだけなので、自然に
+   * 1始まりの連番かつ「消える前の続きから」になる（消しても配列を切り詰めない）。
+   */
+  const practiceVersions = new Map<string, PracticeVersion[]>();
   const archives = new Map<string, string>();
   /** tombstone（#698）。行（`archives` のキー）は消さず、ここへ印だけを持つ。 */
   const archiveRemovals = new Map<string, { removedAt: string; bytes: number }>();
@@ -1330,15 +1338,51 @@ export function createMemoryStores(): Stores {
         chars: [...content].length,
       });
       practices.set(input.slug, isolate(next));
+      // ⭐ **書いた後の本文を版として追記する（#1309）。** `practices` とは別の
+      // Map なので、`remove()` がこの後の呼び出しで `practices` から消しても
+      // ここは影響を受けない。番号は既存の配列の長さ+1——`remove()` は配列を
+      // 切り詰めないので、作り直しでも自然に続きから振られる。
+      const history = practiceVersions.get(input.slug) ?? [];
+      const version = practiceVersionSchema.parse({
+        slug: input.slug,
+        version: history.length + 1,
+        kind: input.kind,
+        title: input.title,
+        content,
+        at: now,
+        chars: [...content].length,
+      });
+      practiceVersions.set(input.slug, [...history, isolate(version)]);
       return isolate(next);
     },
     async remove(slug) {
+      // **版は消さない**（`PracticeStore.remove` の doc、#1309）。`practices`
+      // からだけ消す——`practiceVersions` には触れない。
       practices.delete(slug);
     },
     async clear() {
       const removed = practices.size;
       practices.clear();
+      // **版もここでは消す**（`PracticeStore.clear` の doc、#1309）——`clear()`
+      // は人間が明示的に「全部忘れる」と決めたリセット専用の操作である。
+      practiceVersions.clear();
       return removed;
+    },
+    async listVersions(slug) {
+      return (practiceVersions.get(slug) ?? []).map((entry) =>
+        isolate({
+          slug: entry.slug,
+          version: entry.version,
+          kind: entry.kind,
+          title: entry.title,
+          at: entry.at,
+          chars: entry.chars,
+        }),
+      );
+    },
+    async readVersion(slug, version) {
+      const found = (practiceVersions.get(slug) ?? []).find((entry) => entry.version === version);
+      return found === undefined ? null : isolate(found);
     },
   };
 

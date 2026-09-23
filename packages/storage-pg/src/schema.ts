@@ -787,3 +787,30 @@ export const practices = pgTable('practices', {
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
 });
+
+/**
+ * やり方の追記専用の版の履歴（#1309）。1行1版。
+ *
+ * **`practices` の行が消えても、対応する版は消えない**——`PgPracticeStore.remove`
+ * は `practices` の `delete` しか呼ばない。人間が明示的に「全部忘れる」と決めた
+ * ときだけ（`PgPracticeStore.clear`）、`practices` と一緒にここも空にする。
+ *
+ * **主キーは `(slug, version)` の複合キーである。** `version` を `serial` に
+ * しなかったのは、番号が「slug ごとに独立した1始まりの連番」でなければならない
+ * ためである（`PracticeVersionMeta.version` の doc）——グローバルな連番
+ * （`serial`）では slug をまたいで番号が飛ぶ。`PgPracticeStore.write` が
+ * `slug` ごとに `max(version) + 1` を計算して入れる。
+ */
+export const practiceVersions = pgTable(
+  'practice_versions',
+  {
+    slug: text('slug').notNull(),
+    version: integer('version').notNull(),
+    kind: text('kind').notNull(),
+    title: text('title').notNull(),
+    content: text('content').notNull(),
+    /** この版が書かれた時刻（`PracticeVersionMeta.at` の doc）。 */
+    at: timestamp('at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.slug, table.version] })],
+);

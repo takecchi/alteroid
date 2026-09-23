@@ -625,6 +625,7 @@ export const CLONE_TOOL_NAMES = [
   'profile_write',
   'practice_list',
   'practice_read',
+  'practice_history',
   'practice_write',
   'practice_remove',
   'token_list',
@@ -718,6 +719,7 @@ export const TRACELESS_CLONE_TOOLS = [
   'profile_read',
   'practice_list',
   'practice_read',
+  'practice_history',
   'token_list',
   'self_read',
   'self_status',
@@ -7692,11 +7694,38 @@ export function createCloneTools(context: ToolContext) {
 
     tool(
       'practice_read',
-      ['仕事のやり方を1件、本文まで読む。無ければ、その旨を返す（例外で落とさない）。'].join(' '),
+      [
+        '仕事のやり方を1件、本文まで読む。無ければ、その旨を返す（例外で落とさない）。',
+        'version を指定すると、いまの本文ではなく過去の版（practice_history に出ている version）を',
+        '読む——version を省く既定は、いまのやり方（全文置換の最新の姿）を読む。',
+      ].join(' '),
       {
         slug: z.string().describe('やり方のスラッグ（practice_list に出ている slug）'),
+        version: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('省略時はいまの本文。指定すると practice_history にある過去の版を読む'),
       },
-      async ({ slug }) => {
+      async ({ slug, version }) => {
+        if (version !== undefined) {
+          const found = await stores.practices.readVersion(slug, version);
+          if (found === null) {
+            return text(
+              `やり方 ${slug} の版 ${String(version)} は無い。` +
+                'practice_history slug=<slug> で在る版を確かめること。',
+            );
+          }
+          return text(
+            [
+              `${found.slug} 版${String(found.version)}（${found.kind}） ${found.title}`,
+              `この版が書かれた時刻: ${found.at} / ${String(found.chars)} 文字`,
+              '',
+              found.content,
+            ].join('\n'),
+          );
+        }
         const found = await stores.practices.read(slug);
         // **無いは throw ではなく null。呼び手には文で返す**
         // （`PracticeStore.read` の doc「無ければ null（読めないは throw）」と
@@ -7715,6 +7744,47 @@ export function createCloneTools(context: ToolContext) {
             '',
             found.content,
           ].join('\n'),
+        );
+      },
+    ),
+
+    tool(
+      'practice_history',
+      [
+        'やり方1件の、追記専用の版の履歴を返す（本文は返さない。版番号・種類・題・',
+        '文字数・書かれた時刻だけ——#1309）。',
+        '**write のたびに版が1つ増える。remove しても版は消えない**——消した slug を',
+        '同じ名前で作り直しても、版番号は消える前の続きから振られる。',
+        '中身が要るなら practice_read slug=<slug> version=<版番号> で開くこと。',
+      ].join(' '),
+      {
+        slug: z.string().describe('やり方のスラッグ（practice_list に出ている slug）'),
+      },
+      async ({ slug }) => {
+        const versions = await stores.practices.listVersions(slug);
+        if (versions.length === 0) {
+          return text(
+            `やり方 ${slug} の版は無い。practice_write で一度も書かれていない` +
+              '（または slug を打ち間違えている）可能性がある。',
+          );
+        }
+        const items = versions.map((entry) =>
+          renderListingEntry({
+            id: `版${String(entry.version)}`,
+            title: `[${entry.kind}] ${entry.title}`,
+            summary: `${String(entry.chars)} 文字`,
+            createdAt: entry.at,
+            updatedAt: entry.at,
+          }),
+        );
+        return text(
+          renderListing(items, {
+            budget: PRACTICE_LIST_BUDGET,
+            omitted: ({ rest, shown, total }) =>
+              `…ほか ${String(rest)} 件は省略（全 ${String(total)} 件のうち版番号の昇順に ` +
+              `${String(shown)} 件だけ出した）。個別に読むには practice_read slug=${slug} ` +
+              'version=<版番号> を使うこと。',
+          }),
         );
       },
     ),
@@ -7750,13 +7820,15 @@ export function createCloneTools(context: ToolContext) {
             grounds:
               before === null
                 ? '新しいやり方を器に置いた'
-                : 'やり方を書き直した（全文置換。前の本文は残らない）',
+                : 'やり方を書き直した（全文置換。いまの本文の読み口は最新の1本だが、' +
+                  '前の本文は版の履歴（practice_history）に残る——#1309）',
           },
           'act-completed',
         );
         return text(
           `やり方 ${slug} を${before === null ? '新しく作った' : '書き直した'}` +
-            `（${String(written.chars)} 文字）。practice_list で一覧に出る。`,
+            `（${String(written.chars)} 文字。前の版は practice_history slug=${slug} で読める）。` +
+            'practice_list で一覧に出る。',
         );
       },
     ),

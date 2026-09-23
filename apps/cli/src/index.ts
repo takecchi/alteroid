@@ -28,6 +28,7 @@ import {
 } from './memory.js';
 import {
   practiceEditCommand,
+  practiceHistoryCommand,
   practiceListCommand,
   practiceRemoveCommand,
   practiceSetCommand,
@@ -452,9 +453,18 @@ practiceCommand
 
 practiceCommand
   .command('show <slug>')
-  .description('やり方の本文を出す')
+  .description('やり方の本文を出す（--version で過去の版を読む。#1309）')
+  .option('--version <version>', '省略時はいまの本文。指定すると過去の版を読む')
+  .action(async (slug: string, options: { version?: string }) => {
+    const version = options.version === undefined ? undefined : Number(options.version);
+    await practiceShowCommand(slug, { version });
+  });
+
+practiceCommand
+  .command('history <slug>')
+  .description('やり方の版の履歴を出す（メタだけ。本文は show --version で。#1309）')
   .action(async (slug: string) => {
-    await practiceShowCommand(slug);
+    await practiceHistoryCommand(slug);
   });
 
 practiceCommand

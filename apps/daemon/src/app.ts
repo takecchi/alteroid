@@ -150,6 +150,8 @@ import {
   practiceDeleteResponseSchema,
   practiceListResponseSchema,
   practiceReadResponseSchema,
+  practiceVersionListResponseSchema,
+  practiceVersionReadResponseSchema,
   profileErrorResponseSchema,
   profileResponseSchema,
   profileUpdateRequestSchema,
@@ -2308,6 +2310,68 @@ export function createApp(deps: AppDeps) {
           grounds: '人間が直接 API からやり方を消した',
         });
         return c.json({ ok: true, slug });
+      },
+    )
+
+    /**
+     * やり方の追記専用の版の履歴（#1309）。**メタだけ、本文は含まない**——
+     * `GET /practices` と同じ理由（一覧に本文を全文で載せない。地雷表の禁止）。
+     *
+     * `write()` のたびに版が増え、`remove()` しても版は消えない（`PracticeStore`
+     * の doc）。だから消した slug に対しても、このエンドポイントは版を返せる。
+     */
+    .get(
+      '/practices/:slug/versions',
+      describeRoute({
+        tags: ['practices'],
+        summary: 'やり方の版の履歴（メタだけ）',
+        description:
+          '追記専用の版の履歴——write のたびに増え、remove しても消えない（#1309）。' +
+          '版番号の昇順。本文は含まない（個別に読むには GET /practices/:slug/versions/:version）。',
+        responses: {
+          200: {
+            description: '版のメタ情報一覧（版番号の昇順）。無い slug には空配列を返す。',
+            content: {
+              'application/json': { schema: resolver(practiceVersionListResponseSchema) },
+            },
+          },
+        },
+      }),
+      async (c) => c.json({ versions: await stores.practices.listVersions(c.req.param('slug')) }),
+    )
+
+    /** やり方の版を1つ、本文まで読む（#1309）。 */
+    .get(
+      '/practices/:slug/versions/:version',
+      describeRoute({
+        tags: ['practices'],
+        summary: 'やり方の版を1つ読む（本文まで）',
+        responses: {
+          200: {
+            description: '版（本文まで）。',
+            content: {
+              'application/json': { schema: resolver(practiceVersionReadResponseSchema) },
+            },
+          },
+          400: {
+            description: '版番号が正の整数として成立しない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description: '該当する版が無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        const raw = c.req.param('version');
+        const version = Number(raw);
+        if (!Number.isInteger(version) || version <= 0) {
+          return c.json({ error: '版番号が不正' as const }, 400);
+        }
+        const found = await stores.practices.readVersion(c.req.param('slug'), version);
+        if (!found) return c.json({ error: 'not found' as const }, 404);
+        return c.json({ version: found });
       },
     )
 
