@@ -1,3 +1,4 @@
+import { scanJournalPages } from './journal-scan.js';
 import type { JournalEntry, JournalEntryInput } from './schema.js';
 import type { JournalStore } from './store.js';
 
@@ -295,8 +296,28 @@ export async function deriveDistillGapFromJournal(
   // **`until` は読み出しの上限としてだけ渡し、境界は `at < until` で切り直す**
   // （上の doc「境界は『以前』ではなく『より前』である」）。
   const beforeBoot = (entry: JournalEntry): boolean => entry.at < until;
-  const decisions = await journal.list({ types: ['decision'], until });
-  const marker = decisions.find((entry) => beforeBoot(entry) && isDistillSucceededEntry(entry));
+
+  // **ページで読み継ぎながら探し、最初に当たった時点で止める（issue #1283）。**
+  // 直す前は `journal.list({ types: ['decision'], until })` を `limit` なしで
+  // 1回呼び、窓の全 `decision` 行を配列へ載せてから `.find()` していた——
+  // `decision` は他の型より少ないとはいえ、無制限に伸びうる点は同じ穴
+  // （pg 実装が `limit` 省略時に `Number.MAX_SAFE_INTEGER` を渡す。
+  // `grep -Fn -- 'query.limit ?? Number.MAX_SAFE_INTEGER' packages/storage-pg/src/journal.ts`）
+  // に無防備だった。**ここには打ち切りの上限を置かない**（`scanJournalPages`
+  // の `maxScanned` を渡さない）——印は「最後に成功した蒸留」なので、通常は
+  // 新しい側のごく近くに在り、`onPage` が見つけ次第 `false` を返して止まる。
+  // 見つからなければ最後まで読み続けるが、それは直す前と同じ挙動である
+  // （直す前も `limit` を渡していなかった）。**結果は直す前と1文字も
+  // 変わらない**——変わるのはヒープに同時に載る量（1ページぶん）だけである。
+  let marker: JournalEntry | undefined;
+  await scanJournalPages(journal, { types: ['decision'], until }, (page) => {
+    for (const entry of page) {
+      if (beforeBoot(entry) && isDistillSucceededEntry(entry)) {
+        marker = entry;
+        return false;
+      }
+    }
+  });
   const lastDistilledAt = marker?.at ?? null;
 
   // 印が在れば、**その行より後ろ**だけを見る（窓は自然に小さい）。印が無ければ
@@ -308,32 +329,62 @@ export async function deriveDistillGapFromJournal(
   // 「ずれが在る」と言う（実測で歯4がここで落ちた）。`after` は `id` を錨に
   // する形で、**同じミリ秒に積んだ2行をまたいでも飛ばさず重複しない**ことが
   // 3実装すべてで測ってある（`journal-order-with-contract.ts` の契約9）。
-  // 錨はいま `list` から受け取った行そのものなので、`JournalAnchorNotFoundError`
-  // にはならない。
+  // 錨はいま `scanJournalPages` から受け取った行そのものなので、
+  // `JournalAnchorNotFoundError` にはならない（`journal-scan.ts` 冒頭の doc）。
   //
   // **`order` が枝で違う。** `after` の枝は `asc`（錨より後ろ＝新しい側を取る
   // ため）、窓の枝は既定の `desc`（新しい順に N 件）。取り出す端が逆になるので、
   // 下で明示的に分ける。
-  const ascending = marker !== undefined;
-  const entries =
-    marker === undefined
-      ? await journal.list({ until, limit: scanLimit })
-      : await journal.list({ order: 'asc', after: { id: marker.id, at: marker.at }, until });
+  let activityCount = 0;
+  let firstActivityAt: string | undefined;
+  let lastActivityAt: string | undefined;
 
-  const activity = entries.filter(
-    (entry) => beforeBoot(entry) && countsAsUndistilledActivity(entry),
-  );
-  // 1件も無ければずれは無い ＝ 直前の蒸留が最後の活動まで持っていったということ。
-  if (activity.length === 0) return null;
-  const first = ascending ? activity[0] : activity.at(-1);
-  const last = ascending ? activity.at(-1) : activity[0];
-  if (first === undefined || last === undefined) return null;
+  if (marker === undefined) {
+    // **窓の枝は触らない。** 元から `limit: scanLimit` で有界だった
+    // （`DISTILL_GAP_ACTIVITY_SCAN_LIMIT` の doc）——ページ化する理由が無い。
+    const entries = await journal.list({ until, limit: scanLimit });
+    const activity = entries.filter(
+      (entry) => beforeBoot(entry) && countsAsUndistilledActivity(entry),
+    );
+    if (activity.length === 0) return null;
+    activityCount = activity.length;
+    // `order` 既定 `desc`（新しい順）なので、配列の先頭が最新・末尾が最古。
+    lastActivityAt = activity[0]?.at;
+    firstActivityAt = activity.at(-1)?.at;
+  } else {
+    // **印より後ろだけをページで読み継ぎ、件数・最初・最後だけを畳む。**
+    // `entries` のような配列を貯めない——247万行の窓でも、同時にヒープへ
+    // 載るのは1ページぶんだけになる。**ここにも打ち切りの上限は置かない**
+    // （直す前も無制限だった。「印を探す枝」と同じ理由）。`activity` の
+    // 用途は `.length` / 最初 / 最後の3つだけなので（このファイルの外の
+    // 呼び出し側も同様——`DistillGap` の doc）、配列を組み立てる意味が無い。
+    const markerAnchor = marker;
+    await scanJournalPages(
+      journal,
+      { order: 'asc', after: { id: markerAnchor.id, at: markerAnchor.at }, until },
+      (page) => {
+        for (const entry of page) {
+          if (!beforeBoot(entry) || !countsAsUndistilledActivity(entry)) continue;
+          activityCount += 1;
+          // `asc`（古い順）で読んでいるので、最初に当たった行が最古
+          // （`firstActivityAt`）——一度決めたら書き換えない。以後は当たる
+          // たびに上書きして、最後に当たった行を最新（`lastActivityAt`）
+          // として残す。
+          if (firstActivityAt === undefined) firstActivityAt = entry.at;
+          lastActivityAt = entry.at;
+        }
+      },
+    );
+    if (activityCount === 0) return null;
+  }
+
+  if (firstActivityAt === undefined || lastActivityAt === undefined) return null;
 
   return {
     lastDistilledAt,
-    lastActivityAt: last.at,
-    firstActivityAt: first.at,
-    activityCount: activity.length,
+    lastActivityAt,
+    firstActivityAt,
+    activityCount,
     window: lastDistilledAt === null ? 'newest_entries' : 'since_last_distill',
   };
 }

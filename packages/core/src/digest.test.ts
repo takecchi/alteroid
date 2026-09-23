@@ -6,13 +6,18 @@ import {
   describeManagerState,
   describeSessionMissingKind,
   describeUnobservedOutcome,
+  DIGEST_JOURNAL_SCAN_LIMIT,
+  DIGEST_RETAIN_LIMIT,
   isManagerAwaitingJudgement,
   isManagerOutcomeUnobserved,
   MAX_ITEMS,
   type UnobservedOutcomeInput,
   type UnobservedReportState,
 } from './digest.js';
+import { JOURNAL_SCAN_PAGE_SIZE } from './journal-scan.js';
+import { createSyntheticJournalStore } from './journal-scan.test-support.js';
 import type { SessionMissingKind } from './manager.js';
+import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 import { usageDate } from './usage.js';
 
@@ -2055,5 +2060,234 @@ describe('#857: 終端していて誰も望んでいない終わり方（lost / 
         }
       }
     });
+  });
+});
+
+/**
+ * OOM の本体を直す（issue #1283）。`buildActivityDigest` の `stores.journal.list()`
+ * は、直す前は `limit` を渡さずに窓の全行を1クエリでヒープへ載せていた——pg 実装は
+ * `limit` 省略時に `Number.MAX_SAFE_INTEGER` を渡す
+ * （`grep -Fn -- 'query.limit ?? Number.MAX_SAFE_INTEGER' packages/storage-pg/src/journal.ts`）
+ * ので、窓の中身が多い日（実測: ある1日で約247万行・約1.4GB）にそれを1クエリで
+ * 読もうとして落ちる。
+ *
+ * **⛔「`limit` を渡している」を見るだけの歯にしない。** `createSyntheticJournalStore`
+ * （`journal-scan.test-support.ts`）は、有限の `limit` が渡らないと**その場で
+ * 例外を投げる**——本番の穴と同じ形を再現させない偽物である。それに加えて、
+ * この偽物が**実際に返した行の総数**（`totalReturned`）を数えることで、
+ * 「窓に大量の行が在るときにヒープへ載る量が抑えられているか」を直接測る。
+ */
+describe('OOM の本体を直す（issue #1283）— 日誌走査をページ単位に有界化する', () => {
+  /**
+   * `journal` 以外（`jobs` / `schedules` / `commitments` / `persona` /
+   * `usage` 等）は、この依頼で触っていない口——本物の in-memory 実装のまま
+   * （空の状態）でよい。
+   */
+  function storesWithSyntheticJournal(journal: Stores['journal']): Stores {
+    return { ...createMemoryStores(), journal };
+  }
+
+  it('⭐ 窓に大量の tool_use 行があっても、渡した limit は常に有限で、渡ってきた総件数が上限で頭打ちになる（ヒープが有界であることの代理指標）', async () => {
+    // **`total` は固定の数値リテラルにする（`DIGEST_JOURNAL_SCAN_LIMIT` から
+    // 掛け算で作らない）。** 変異試験でこの定数を `Number.MAX_SAFE_INTEGER`
+    // へ変えたとき、`定数 * 3` は `Infinity` になり、`createSyntheticJournalStore`
+    // の `total` が `Infinity` になって偽ストアの走査が終わらなくなる
+    // （実測 2026-09-23——変異試験の実走行でこの歯そのものが無限に近い時間
+    // 止まり、テストの生存/検出のどちらでもない「壊れた計測」を作った）。
+    // **本番の窓のサイズ（=実際の日誌の行数）は、この digest 側の定数を
+    // 見ているわけではない**ので、テストの規模を定数から独立させても
+    // 実態との乖離は無い——`DIGEST_JOURNAL_SCAN_LIMIT` を変えても
+    // `total` は動かないほうが、むしろ定数の値そのものを変異させたときの
+    // 挙動の違いを素直に測れる（下のアサーションを参照）。
+    const total = 150_000;
+    const fake = createSyntheticJournalStore({
+      total,
+      baseTimeMs: Date.now(),
+      entryAt: () => ({ type: 'tool_use', actor: 'manager:mgr-oom', tool: 'Bash', input: {} }),
+    });
+
+    const digest = await buildActivityDigest(storesWithSyntheticJournal(fake.store), {
+      since: new Date(0),
+    });
+
+    // **渡した総件数（＝ヒープへ載りうる量の代理指標）が、実装の上限＋
+    // 1ページぶんで頭打ちになる。** `total`（上限の3倍）までは伸びない——
+    // 直す前は `journal.list()` が窓の全行（この偽物では `total` 件）を
+    // 1回で読もうとし、まず「limit は有限でなければならない」という
+    // この偽物自身の検算にすら引っかかって落ちる。
+    expect(fake.totalReturned).toBeLessThanOrEqual(
+      DIGEST_JOURNAL_SCAN_LIMIT + JOURNAL_SCAN_PAGE_SIZE,
+    );
+    expect(fake.totalReturned).toBeLessThan(total);
+
+    // **全呼び出しが有限の limit を持つ。** `undefined` にも
+    // `Number.MAX_SAFE_INTEGER` にもならない——pg 実装の穴と同じ形を
+    // この呼び出し側が再現していないことの直接の検算。
+    expect(fake.calls.length).toBeGreaterThan(0);
+    for (const call of fake.calls) {
+      expect(Number.isFinite(call.limit)).toBe(true);
+      expect(call.limit).toBeGreaterThan(0);
+    }
+
+    // **往復の回数も有界。** 「起動時に数千クエリが走る」形になっていない
+    // ことを、往復の本数そのもので確かめる。
+    expect(fake.calls.length).toBeLessThan(250);
+
+    // **打ち切ったことを名乗る。** 定数の名前で指す（値をここへ焼き込まない
+    // ——AGENTS.md「件数・版・sha などの数を生成物へ焼き込まない」）。
+    expect(digest).toContain('DIGEST_JOURNAL_SCAN_LIMIT');
+
+    // **打ち切っても、走査した範囲の件数は正確——保持した配列の `.length` を
+    // 読んでいない。** 全部 `manager:` アクター（delegated）で作ってあるので、
+    // そのカウンタは走査した総件数とちょうど一致する。
+    expect(digest).toContain(`マネージャー・作業者のツール実行: ${DIGEST_JOURNAL_SCAN_LIMIT} 件`);
+  });
+
+  it('打ち切っていない普通の窓では、件数が正確で、打ち切りの名乗りが出力に無い', async () => {
+    const total = 12;
+    const fake = createSyntheticJournalStore({
+      total,
+      baseTimeMs: Date.now(),
+      entryAt: (index) => {
+        if (index % 4 === 0) {
+          return { type: 'decision', decision: `decision-${index}`, grounds: 'g' };
+        }
+        if (index % 4 === 1) {
+          return {
+            type: 'memory_update',
+            slug: 'values',
+            cause: 'clone',
+            summary: `memo-${index}`,
+          };
+        }
+        if (index % 4 === 2) {
+          return { type: 'external_event', source: 'ci', summary: `event-${index}` };
+        }
+        return { type: 'tool_use', actor: 'clone', tool: 'Bash', input: {} };
+      },
+    });
+
+    const digest = await buildActivityDigest(storesWithSyntheticJournal(fake.store), {
+      since: new Date(0),
+    });
+
+    expect(digest).not.toContain('DIGEST_JOURNAL_SCAN_LIMIT');
+    expect(digest).toContain('自分で決めたこと（日誌の decision）: 3 件');
+    expect(digest).toContain('記憶の更新: 3 件');
+    expect(digest).toContain('外部イベント: 3 件');
+    expect(digest).toContain('あなた自身が手を動かした回数（委譲せずに使った道具）: 3 件');
+  });
+
+  it('保持の上限（DIGEST_RETAIN_LIMIT）を超えた種別があっても、走査そのものは打ち切っておらず、件数はカウンタの値で正確なまま（保持した配列の .length から取っていない）', async () => {
+    // decision だけを DIGEST_RETAIN_LIMIT の1.5倍ぶん積む。走査全体の上限
+    // （DIGEST_JOURNAL_SCAN_LIMIT）よりずっと少ないので、走査は打ち切らない
+    // ——保持の上限（詳細一覧を残す配列の大きさ）にだけ当たる。件数を
+    // `decisions.length`（保持した配列の長さ＝ DIGEST_RETAIN_LIMIT で頭打ち）
+    // から取っていれば、この件数は少なく出る。
+    const total = Math.floor(DIGEST_RETAIN_LIMIT * 1.5);
+    const fake = createSyntheticJournalStore({
+      total,
+      baseTimeMs: Date.now(),
+      entryAt: (index) => ({ type: 'decision', decision: `decision-${index}`, grounds: 'g' }),
+    });
+
+    const digest = await buildActivityDigest(storesWithSyntheticJournal(fake.store), {
+      since: new Date(0),
+    });
+
+    expect(digest).not.toContain('DIGEST_JOURNAL_SCAN_LIMIT');
+    expect(digest).toContain(`自分で決めたこと（日誌の decision）: ${total} 件`);
+    // 一覧側は MAX_ITEMS 件のまま（保持の上限に当たっていても、新しい側
+    // MAX_ITEMS 件は変わらない）。
+    const shown = digest.split('\n').filter((row) => row.includes('decision-')).length;
+    expect(shown).toBe(MAX_ITEMS);
+    // 省いた件数の断りも、保持した配列の長さではなく正確な件数から引く
+    // （`omitted()` へ渡す `total` が `decisionsCount` であることの検算）。
+    expect(digest).toContain(`…ほか ${total - MAX_ITEMS} 件`);
+  });
+
+  it('exchange の走査は with: ["human"] をストア側へ渡す（人間以外の往復が limit の予算を食わない。issue #418 と同じ形の再発を防ぐ歯）', async () => {
+    // 最新（index 0）から大量の with:'manager' の exchange で埋め、
+    // いちばん古い1件だけ with:'human', role:'inbound' にする。`with` を
+    // クエリ側で渡さず `types: ['exchange']` だけで引いていたら、この
+    // 人間の発言に辿り着く前に走査の上限へ当たって0件のまま終わる——
+    // issue #418 が直した穴と同じ形を、この digest の走査で再発させない
+    // ための歯である。
+    // **`total` は固定の数値リテラル**（上の歯の doc と同じ理由——
+    // `DIGEST_JOURNAL_SCAN_LIMIT` から掛け算で作ると、変異試験でその定数を
+    // 変えたときに `total` が `Infinity` になり、偽ストアの走査が終わらなく
+    // なる）。
+    const total = 150_001;
+    const humanIndex = total - 1;
+    const fake = createSyntheticJournalStore({
+      total,
+      baseTimeMs: Date.now(),
+      entryAt: (index) =>
+        index === humanIndex
+          ? { type: 'exchange', with: 'human', role: 'inbound', text: 'やあ' }
+          : { type: 'exchange', with: 'manager', role: 'outbound', text: 'ノイズ' },
+    });
+
+    const digest = await buildActivityDigest(storesWithSyntheticJournal(fake.store), {
+      since: new Date(0),
+    });
+
+    // **クエリそのものを検算する。** カウントの一致だけでは「たまたま」を
+    // 否定できない——実際に `with: ['human']` が渡っていることを直接見る。
+    const exchangeCalls = fake.calls.filter((call) => call.types?.includes('exchange'));
+    expect(exchangeCalls.length).toBeGreaterThan(0);
+    for (const call of exchangeCalls) {
+      expect(call.with).toEqual(['human']);
+    }
+
+    // **その結果として、人間の発言が正しく1件と数えられる。** `with` が
+    // クエリ側に無ければ、`total` 件の大半（with:'manager'）が走査の
+    // 予算を食い、この発言が窓の外へ落ちて 0 件になる。
+    expect(digest).toContain('人間からの発言: 1 件');
+  });
+
+  it('escalation の保持上限に当たったときは、件数の行に「束ねた元の行を全部は読んでいない」という注記が付く', async () => {
+    const total = DIGEST_RETAIN_LIMIT + 50;
+    const fake = createSyntheticJournalStore({
+      total,
+      baseTimeMs: Date.now(),
+      entryAt: (index) => ({
+        type: 'escalation',
+        question: `question-${index}`,
+        approvalId: `ap-${index}`,
+      }),
+    });
+
+    const digest = await buildActivityDigest(storesWithSyntheticJournal(fake.store), {
+      since: new Date(0),
+    });
+
+    // この窓の走査そのものは打ち切っていない（`total` は
+    // `DIGEST_JOURNAL_SCAN_LIMIT` よりずっと小さい）——escalation 特有の
+    // 「保持の上限」と、走査全体の「打ち切り」は別の事情であることの確認。
+    expect(digest).not.toContain('DIGEST_JOURNAL_SCAN_LIMIT');
+
+    const line = digest.split('\n').find((row) => row.startsWith('- エスカレーション:'));
+    expect(line).toBeDefined();
+    expect(line).toContain('束ねた元の行を全部は読んでいない');
+  });
+
+  it('escalation の保持上限に当たっていないときは、件数の行に注記が付かない（既存の文面を1文字も変えない）', async () => {
+    const fake = createSyntheticJournalStore({
+      total: 3,
+      baseTimeMs: Date.now(),
+      entryAt: (index) => ({
+        type: 'escalation',
+        question: `question-${index}`,
+        approvalId: `ap-${index}`,
+      }),
+    });
+
+    const digest = await buildActivityDigest(storesWithSyntheticJournal(fake.store), {
+      since: new Date(0),
+    });
+
+    const line = digest.split('\n').find((row) => row.startsWith('- エスカレーション:'));
+    expect(line).toBe('- エスカレーション: 3 件');
   });
 });
