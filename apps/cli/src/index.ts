@@ -126,7 +126,19 @@ export async function daemonStatusCommand(): Promise<void> {
   stdout.write(`  記憶: ${storage ?? alteroidRoot()}\n`);
 }
 
-const program = new Command();
+/**
+ * **`export` してあるのは、サブコマンドが実際に登録されているかを歯で見るため
+ * である（#1055 段3③）。** 挙動は1文字も変えていない —— `parseAsync` を呼ぶのは
+ * 直下の `invokedDirectly()` の分岐だけなので、import しても登録しか走らない。
+ *
+ * **登録漏れは、関数側の歯では1本も赤くならない。** `practice.ts` の
+ * `practice*Command` が全部緑でも、ここへ繋いでいなければ人間は
+ * `alteroid practice` を打てない —— 段3 の受け入れ基準「人間がやり方を読んで
+ * 書き換えられる（3入口すべて）」が満たされないのは、まさにその形である
+ * （実際、この PR の前に `practice.ts` だけが書かれて登録されていない状態が
+ * 存在した）。⟹ 「入口が在る」を測れるのはここだけなので、`program` を出す。
+ */
+export const program = new Command();
 
 program.name('alteroid').description('クローンと会話し、クローンに仕事を任せる').version('0.1.0');
 

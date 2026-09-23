@@ -120,7 +120,12 @@ export async function practiceEditCommand(
     await openEditor(path);
     const edited = await readFile(path, 'utf8');
 
-    if (current !== null && edited === current.content && kind === current.kind && title === current.title) {
+    if (
+      current !== null &&
+      edited === current.content &&
+      kind === current.kind &&
+      title === current.title
+    ) {
       // **書き換えていないなら書き込まない**（`memory edit` と同じ理由——
       // 同じ内容でも `PUT` は日誌へ `decision` を積むので、押し戻すたびに
       // 「人間が書き換えた」という跡が実際には無かった変更ぶん増える）。
@@ -223,7 +228,9 @@ async function write(
     json: { kind, title, content },
   });
   if (!response.ok) {
-    stdout.write(`書き換えられませんでした: ${slug}（種類・題・スラッグのどれかが不正かもしれません）\n`);
+    stdout.write(
+      `書き換えられませんでした: ${slug}（種類・題・スラッグのどれかが不正かもしれません）\n`,
+    );
     return;
   }
   stdout.write(`書き換えました: ${slug}\n`);

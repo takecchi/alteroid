@@ -34,7 +34,7 @@ vi.mock('./paths.js', () => ({
 
 const { initWorkspace } = await import('@alteroid/storage-fs');
 const daemon = await import('./daemon.js');
-const { initCommand, daemonStartCommand, daemonStopCommand, daemonStatusCommand } =
+const { initCommand, daemonStartCommand, daemonStopCommand, daemonStatusCommand, program } =
   await import('./index.js');
 
 afterEach(() => {
@@ -143,5 +143,47 @@ describe('alteroid daemon status', () => {
     expect(text).toContain('停止中');
     expect(text).toContain('記憶: /home/test/.alteroid');
     expect(daemon.storageOf).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * `alteroid practice` が**入口として実在すること**（#1055 段3③）。
+ *
+ * 段3 の受け入れ基準は「人間がやり方を読んで書き換えられる（**3入口すべて**）」で、
+ * `docs/PRD.md` の3入口は CLI / HTTP API / Web UI である。#1316 で HTTP と画面は
+ * 通ったが、CLI は `practice.ts` が書かれただけで `program` へ繋がれていない状態が
+ * 実在した。**そのとき `practice.ts` 側の歯は全部緑である** —— 関数を直接呼ぶ歯は、
+ * 登録漏れを1本も検出しない。⟹ ここで見るのは「打てるか」そのものである。
+ *
+ * **`memory` を並べて測る。** `practice` だけを見ると、写像が定数（何を聞いても
+ * 同じ答えを返す形）でも通ってしまう。
+ */
+describe('サブコマンドの登録（入口が在ること）', () => {
+  function subcommandNames(parent: string): string[] {
+    const command = program.commands.find((c) => c.name() === parent);
+    if (command === undefined) throw new Error(`${parent} が登録されていない`);
+    return command.commands.map((c) => c.name()).sort();
+  }
+
+  it('alteroid practice は list / show / edit / set / remove を持つ（memory と同じ構成）', () => {
+    expect(subcommandNames('practice')).toEqual(['edit', 'list', 'remove', 'set', 'show']);
+    expect(subcommandNames('memory')).toEqual(['edit', 'list', 'remove', 'set', 'show']);
+  });
+
+  /**
+   * **`--kind` / `--title` が無いと、新しいやり方を CLI から1件も作れない。**
+   * `PracticeStore.write` は `slug`/`kind`/`title`/`content` の全文置換で、
+   * `kind` は `practiceKindSchema` が `min(1)` を課す必須フィールドである
+   * ——`memory` の `PUT` が `{content}` だけで足りるのとの違いがここに出る。
+   */
+  it('practice の edit / set は --kind と --title を受ける（set は --file も）', () => {
+    const practice = program.commands.find((c) => c.name() === 'practice');
+    const optionsOf = (name: string): string[] =>
+      (practice?.commands.find((c) => c.name() === name)?.options ?? [])
+        .map((o) => o.long ?? '')
+        .sort();
+
+    expect(optionsOf('edit')).toEqual(['--kind', '--title']);
+    expect(optionsOf('set')).toEqual(['--file', '--kind', '--title']);
   });
 });
