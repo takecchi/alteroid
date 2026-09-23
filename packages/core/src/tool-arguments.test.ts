@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { createMemoryStores } from './testing.js';
-import { createCloneMcpServer } from './tools.js';
+import { createCloneMcpServer, GROUNDS_NOT_DELIVERED } from './tools.js';
 
 /**
  * 「長い引数の後ろに置いた引数が届かない」を、道具の側で観測しにいくテスト。
@@ -245,12 +245,20 @@ describe('クローンの道具に渡した引数は、長さと位置によら�
    * のは、**その言い方から機械が読める目印を落とさせない**ためである（#1141 の
    * 断り文は、この目印を含んだうえで原因の当たりを足している）。
    */
+  /**
+   * ⚠ **測る道具を `journal_write` から `memory_delete` へ移した（issue #1338）。**
+   * `journal_write` の `grounds` は任意になったので、あれを省いても落ちない
+   * ——**落ちなくなったのは意図した変更だが、この歯が測っている信号
+   * （`received undefined` という機械が読める目印が断り文から消えていないこと）
+   * が要らなくなったわけではない。** ⟹ 必須の引数を2つ持つ別の道具へ当て直して、
+   * 信号そのものは守り続ける（`memory_delete` は `slug` / `summary` がどちらも必須）。
+   */
   it('引数が本当に欠けたときは、欠けた引数を名指しして received undefined と返る', async () => {
     const rpc = await connect(createMemoryStores());
-    const result = await callTool(rpc, 'journal_write', { decision: SHORT });
+    const result = await callTool(rpc, 'memory_delete', { slug: SHORT });
 
     expect(result.isError).toBe(true);
-    expect(result.text).toContain('grounds');
+    expect(result.text).toContain('summary');
     expect(result.text).toContain('received undefined');
   });
 
@@ -266,13 +274,64 @@ describe('クローンの道具に渡した引数は、長さと位置によら�
    * `tools.test.ts` 側の歯は schema を直に `safeParse` して見るだけなので、
    * 「MCP が独自文をそのまま通すか」までは測れていない。ここが測っている。
    */
+  // ⚠ 当てる道具を移した理由は、すぐ上の歯の doc と同じ（issue #1338）。
   it('欠落の断り文は、MCP の往復を通って呼ぶ側まで届く（#1141）', async () => {
     const rpc = await connect(createMemoryStores());
-    const result = await callTool(rpc, 'journal_write', { decision: SHORT });
+    const result = await callTool(rpc, 'memory_delete', { slug: SHORT });
 
     expect(result.isError).toBe(true);
     expect(result.text).toContain('呼び出しの生の形');
     expect(result.text).toContain('タグの接頭辞の脱落');
+  });
+
+  /**
+   * **`grounds` が届かなくても、判断そのものは日誌に残る（issue #1338）。**
+   *
+   * これがこの Issue の芯である —— `journal_write` は「クローンが人間に聞かずに
+   * 実行した判断を残す唯一の経路」なので、**引数が1つ欠けたくらいで記録ごと
+   * 落ちてはならない。** 20回呼んで2回しか通らなかったとき、実行は全部通って
+   * 記録だけが消えた。
+   */
+  it('grounds が届かなくても判断は残り、「根拠なし」とは別の文言で区別される（#1338）', async () => {
+    const stores = createMemoryStores();
+    const rpc = await connect(stores);
+    const result = await callTool(rpc, 'journal_write', { decision: SHORT });
+
+    expect(result.isError, `落ちてはならない: ${result.text}`).toBe(false);
+
+    const entries = await stores.journal.list({ limit: 10 });
+    const written = entries.find((entry) => entry.type === 'decision');
+    expect(written, '判断が日誌に残っていない').toBeDefined();
+    expect(written?.type === 'decision' ? written.decision : undefined).toBe(SHORT);
+
+    // **⛔ クローンが書いた「根拠なし」と同じ文字列にしない。** 同じにすると、
+    // 「根拠を持たずに実行した」と「根拠が記録経路から落ちた」が読み分けられない。
+    const grounds = written?.type === 'decision' ? written.grounds : '';
+    expect(grounds).toBe(GROUNDS_NOT_DELIVERED);
+    expect(grounds).not.toBe('根拠なし');
+    // 呼んだ側にも、握り潰していないことが返る。
+    expect(result.text).toContain('grounds が呼び出しに届かなかった');
+  });
+
+  /**
+   * **モデルへ配る宣言の側でも `grounds` が required から外れていること（#1338）。**
+   *
+   * 実装（zod）だけ任意にしても、モデルが見るのは JSON Schema である。片方だけ
+   * 直すと「宣言は必須のまま ⟹ モデルは必ず書こうとする ⟹ 同じ形で落ち続ける」
+   * になり、この Issue は1文字も直らない。
+   */
+  it('grounds は、モデルへ配る JSON Schema でも required ではない（#1338）', async () => {
+    const rpc = await connect(createMemoryStores());
+    const response = await rpc.call('tools/list', {});
+    const tools = (response['result'] as { tools: { name: string; inputSchema: unknown }[] }).tools;
+    const schema = tools.find((t) => t.name === 'journal_write')?.inputSchema as
+      | { required?: string[]; properties?: Record<string, unknown> }
+      | undefined;
+
+    expect(schema?.required).toEqual(['decision']);
+    // **欄そのものは消していない（能力の削除にしない）。** 任意になっただけで、
+    // 根拠を書きたいときは今までどおり書ける。
+    expect(Object.keys(schema?.properties ?? {})).toContain('grounds');
   });
 
   /**
@@ -288,7 +347,9 @@ describe('クローンの道具に渡した引数は、長さと位置によら�
     const tools = (response['result'] as { tools: { name: string; inputSchema: unknown }[] }).tools;
 
     const expected: Record<string, string[]> = {
-      journal_write: ['decision', 'grounds'],
+      // ⚠ grounds は #1338 で任意になった（必須は decision だけ）。上の専用の歯が
+      // 「required から外れていること」を別に測っている。
+      journal_write: ['decision'],
       memory_append: ['slug', 'content', 'summary'],
       memory_write: ['slug', 'content', 'summary'],
       memory_delete: ['slug', 'summary'],
