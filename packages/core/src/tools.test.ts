@@ -8926,6 +8926,75 @@ describe('runner_list（器の一覧）', () => {
       '孤児（観測のみ。撃たない）: 候補 84 本 / 961 threads（いちばん古い 6時間24分前）' +
         '、走査時 pids 999/1000、送出 0 / 畳み 0 / 返却 0 threads',
     );
+    // **木の形・齢の分布の欄が無い回（古い runner）では、その行そのものを出さない**
+    // ——0本や空配列に潰さない（`reclaim.roots` 等が `undefined` のこの回）。
+    expect(reply).not.toContain('孤児の木');
+    expect(reply).not.toContain('孤児の齢');
+  });
+
+  /**
+   * **孤児プロセス木の形と齢の分布（#1334）。** `roots` / `largestTreeCandidates` /
+   * `singletonTrees` で「1本の巨大な木か、バラバラな木が大量にあるか」を、
+   * `medianAgeSec` / `ageBuckets` で「候補がどれだけ滞留しているか」を、
+   * 既存の「孤児（観測のみ。撃たない）」の行の**下に**出す。
+   */
+  it('resources.tasks.reclaim.roots 等が在れば、孤児の木の形と齢の分布が候補の行の下に出る', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-a',
+          revision: { status: 'unheard' },
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-a',
+          managers: [],
+          resources: {
+            pids: { current: 999, max: 1000 },
+            tasks: {
+              threads: 999,
+              processes: 96,
+              zombies: 0,
+              reclaim: {
+                mode: 'observe',
+                candidates: 409,
+                candidateThreads: 900,
+                roots: 3,
+                largestTreeCandidates: 400,
+                singletonTrees: 1,
+                medianAgeSec: 23_040, // 6時間24分
+                ageBuckets: [
+                  { upToSec: 60, count: 0 },
+                  { upToSec: 600, count: 5 },
+                  { upToSec: 3600, count: 12 },
+                  { upToSec: 21600, count: 392 },
+                  { count: 0 }, // それ以上
+                ],
+                signalled: 0,
+                killed: 0,
+                freedThreads: 0,
+                lastRunAt: 1_767_225_600_000,
+              },
+            },
+          },
+        },
+      ],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', { resources: true });
+
+    expect(reply).toContain('孤児の木: ルート 3 本 / いちばん大きい木 400 本 / 単独 1 本');
+    expect(reply).toContain(
+      '孤児の齢（⚠ 起動から。孤児になってからではない）: 中央値 6時間24分前 / ' +
+        '1分未満 0 / 10分未満 5 / 1時間未満 12 / 6時間未満 392 / それ以上 0',
+    );
+    // **候補の行の下に出る**（既存の「孤児（観測のみ…）」より後ろの行にある）。
+    const candidateLineIndex = reply.indexOf('孤児（観測のみ。撃たない）');
+    const treeLineIndex = reply.indexOf('孤児の木');
+    expect(candidateLineIndex).toBeGreaterThanOrEqual(0);
+    expect(treeLineIndex).toBeGreaterThan(candidateLineIndex);
   });
 
   /**

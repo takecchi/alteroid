@@ -1722,6 +1722,29 @@ function describeZombieAge(seconds: number): string {
   return `${days}日${remainderHours}時間前`;
 }
 
+/**
+ * 孤児の齢バケツ（`ReclaimObservation.ageBuckets`、#1334）の `upToSec` を日本語の
+ * 見出しへ変える。境界（60 / 600 / 3600 / 21600 秒）は runner 側
+ * （`apps/runner/src/tasks.ts` の `RECLAIM_AGE_BUCKET_BOUNDARIES_SEC`）と揃えて
+ * ある。**`upToSec` を持たない最後の1つは「それ以上」**——裾を黙って切り捨てず、
+ * 必ずどれか1つのバケツへ入れる作法（`topZombieCommands` と同じ）の受け側である。
+ */
+function describeAgeBucketLabel(upToSec: number | undefined): string {
+  switch (upToSec) {
+    case 60:
+      return '1分未満';
+    case 600:
+      return '10分未満';
+    case 3600:
+      return '1時間未満';
+    case 21600:
+      return '6時間未満';
+    default:
+      // 境界が将来変わっても、ここで黙って壊れない（フォールバックであって想定形ではない）。
+      return upToSec === undefined ? 'それ以上' : `${upToSec}秒未満`;
+  }
+}
+
 /** 記憶1件の本文を取りに来たときの1回分。続きは `offset` で取れる。 */
 const MEMORY_PAGE = 8_000;
 /**
@@ -10096,6 +10119,39 @@ export function createCloneTools(context: ToolContext) {
                       `、送出 ${reclaim.signalled} / 畳み ${reclaim.killed} / ` +
                       `返却 ${reclaim.freedThreads} threads`,
                   );
+                  /*
+                   * **木の形（#1334）。** 候補の本数だけでは「409本が1本の巨大な木か
+                   * 409本のバラバラか」が分からない——`roots` / `largestTreeCandidates` /
+                   * `singletonTrees` の3つで即座に分かるようにする。**古い runner
+                   * （欄が無い）ではこの行を出さない**——0本に潰さない。
+                   */
+                  if (
+                    reclaim.roots !== undefined &&
+                    reclaim.largestTreeCandidates !== undefined &&
+                    reclaim.singletonTrees !== undefined
+                  ) {
+                    lines.push(
+                      `    孤児の木: ルート ${reclaim.roots} 本 / ` +
+                        `いちばん大きい木 ${reclaim.largestTreeCandidates} 本 / ` +
+                        `単独 ${reclaim.singletonTrees} 本`,
+                    );
+                  }
+                  /*
+                   * **齢の分布（#1334）。** ⚠️ ゾンビの `いちばん古いゾンビ` や上の
+                   * `候補` 行の年齢と同じく「起動からの齢」であって「孤児になって
+                   * からの齢」ではない——文言でも毎回そう断る（`oldestAgeSec` の
+                   * doc）。**候補0本・runner が対応していない・走査が読めなかった
+                   * のどれでも、この行は出ない**（0や空配列に潰さない）。
+                   */
+                  if (reclaim.medianAgeSec !== undefined && reclaim.ageBuckets !== undefined) {
+                    const buckets = reclaim.ageBuckets
+                      .map((bucket) => `${describeAgeBucketLabel(bucket.upToSec)} ${bucket.count}`)
+                      .join(' / ');
+                    lines.push(
+                      `    孤児の齢（⚠ 起動から。孤児になってからではない）: ` +
+                        `中央値 ${describeZombieAge(reclaim.medianAgeSec)} / ${buckets}`,
+                    );
+                  }
                 }
               }
             }

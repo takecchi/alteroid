@@ -400,7 +400,36 @@ export const runnerExecutionResourcesSchema = z.object({
           mode: z.enum(['observe', 'reclaim']),
           candidates: z.number().int().nonnegative(),
           candidateThreads: z.number().int().nonnegative(),
+          /**
+           * 孤児プロセス木の形（#1334）。**「1本の巨大な木か、バラバラな木が
+           * 大量にあるか」を素性を読まずに見分けるための3欄**
+           * （`apps/runner/src/tasks.ts` の `ReclaimObservation` の doc）。
+           *
+           * **`.optional()` なのは、この機能より前の runner が欄自体を持たない
+           * 窓のためである**——`reclaim` 自身と同じ先例に倣った。
+           */
+          roots: z.number().int().nonnegative().optional(),
+          largestTreeCandidates: z.number().int().nonnegative().optional(),
+          singletonTrees: z.number().int().nonnegative().optional(),
           oldestAgeSec: z.number().int().nonnegative().optional(),
+          /**
+           * 齢の分布（#1334）。**⚠️ これも `oldestAgeSec` と同じ軸**——「起動から
+           * の齢」であって「孤児になってからの齢」ではない（`oldestAgeSec` の
+           * doc・`apps/runner/src/tasks.ts` の `ReclaimObservation.medianAgeSec`
+           * / `ageBuckets` の doc）。
+           *
+           * **`.optional()` なのは、この機能より前の runner が欄自体を持たない
+           * 窓のためである**——`reclaim` 自身と同じ先例に倣った。
+           */
+          medianAgeSec: z.number().int().nonnegative().optional(),
+          ageBuckets: z
+            .array(
+              z.object({
+                upToSec: z.number().int().positive().optional(),
+                count: z.number().int().nonnegative(),
+              }),
+            )
+            .optional(),
           signalled: z.number().int().nonnegative(),
           killed: z.number().int().nonnegative(),
           freedThreads: z.number().int().nonnegative(),
