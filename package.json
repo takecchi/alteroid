@@ -13,6 +13,7 @@
     "check:base-overlap": "node ./scripts/check-base-overlap.mjs",
     "check:keyword-closed-issues": "node ./scripts/check-keyword-closed-issues.mjs",
     "check:no-attribution-trailers": "node ./scripts/check-no-attribution-trailers.mjs",
+    "check:main-commit-trailers": "node ./scripts/check-main-commit-trailers.mjs",
     "check:pr-closing-keywords": "node ./scripts/check-pr-closing-keywords.mjs",
     "check:pr-green": "node ./scripts/check-pr-green.mjs",
     "check:pr-line-number-citations": "node ./scripts/check-pr-line-number-citations.mjs",
