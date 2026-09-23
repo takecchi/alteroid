@@ -901,8 +901,12 @@ export {
   isHumanOriginated,
   resolveCloneHumanPriority,
   resolveClonePermissionMode,
+  staleObservedRecoveryForBlockedKey,
+  staleObservedRecoveryNoticeEvent,
+  tokenPoolReopenedPayload,
   type CloneOptions,
   type RedeliveryGate,
+  type TokenPoolReopenedPayload,
 } from './clone.js';
 export { placedModelTier, resolveModelTier } from './model-tier.js';
 /**

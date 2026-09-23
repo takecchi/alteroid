@@ -62,6 +62,13 @@ export interface CloneHost {
    * `apps/daemon/src/index.ts` の `wake()` はここを見て、止まっていないときは
    * 配らずに畳む。
    *
+   * **⚠️ 「常に真を返す枝を通る」には1つだけ例外が在る**（Issue #1223 再発）。
+   * 「また通るようになった」が**いま止まっている同じ鍵**の**同じ resetsAt**
+   * に対する使い回しでしかないときは、`staleObservedRecoveryForBlockedKey`
+   * （`daemon-self-notice.ts`）がその1点だけ外へ倒す——{@link
+   * CloneHost.usageBlockedResetsAt} / {@link CloneHost.usageBlockedTokenId}
+   * の doc を見よ。
+   *
    * **真偽だけを返す。** 保持している通知の中身（文言など）はデーモンの判断に
    * 要らない——渡すと、渡した先が文言を読んで判定を重ねる経路を作りかねない。
    */
@@ -98,6 +105,38 @@ export interface CloneHost {
    * **真偽だけを返す**（{@link CloneHost.usageBlocked} と同じ理由）。
    */
   readonly usageReleasePending: boolean;
+
+  /**
+   * いま保持している枠の通知（{@link CloneHost.usageBlocked}）の回復予定時刻
+   * （epoch ミリ秒。Issue #1223 再発）。**止まっていなければ、または分から
+   * なければ `undefined`。**
+   *
+   * **デーモンの回し手が「同じ鍵の観測ベースの回復を畳んでよいか」を決める
+   * ための読み取り専用の窓。** `usageLimitNoticeSchema.resetsAt` と同じ値
+   * （`分からなければ載せない`）——ここは新しい判定を作らず、その値をそのまま
+   * 外へ見せるだけの薄い窓である（{@link CloneHost.usageBlocked} と同じ形）。
+   *
+   * `apps/daemon/src/index.ts` の `wake()` はここを読んで
+   * `staleObservedRecoveryForBlockedKey`（`daemon-self-notice.ts`）へ渡す。
+   */
+  readonly usageBlockedResetsAt: number | undefined;
+
+  /**
+   * いまのセッションが使っている認証トークンの id（Issue #1223 再発）。
+   * **セッションが起きた瞬間の身元**であって、枠で止まっているかどうかとは
+   * 無関係に読める——回した直後にまだ枠が閉じていることもあるため、
+   * `usageBlocked` と組み合わせて初めて「止まったときの鍵」を意味する。
+   *
+   * `tokenIdentity` を渡していない器（プールを使わない既定の構成）では
+   * 常に `undefined`。**推測で埋めない**（`token-pool` スキルの
+   * 「`tokensSince` が null なのは2つの意味を持つ」と同じ理由——
+   * 「同じ鍵ではない」と「鍵が分からない」を混同しない）。
+   *
+   * `apps/daemon/src/index.ts` の `wake()` / `redeliveryGate` が読む——
+   * {@link CloneHost.usageBlockedResetsAt} と組で {@link
+   * staleObservedRecoveryForBlockedKey} へ渡す。
+   */
+  readonly usageBlockedTokenId: string | undefined;
 
   /**
    * 認証トークンを回したので、**次のターンの境界で** SDK セッションを畳んで

@@ -45,6 +45,7 @@ import {
   DAEMON_RUNNER_REGISTRY_SOURCE,
   DAEMON_TOKEN_POOL_REOPENED_SOURCE,
   isDaemonSelfNotice,
+  staleObservedRecoveryNoticeEvent,
 } from './daemon-self-notice.js';
 import {
   inboxBacklogDedupeKey,
@@ -167,7 +168,23 @@ import {
 // `packages/core/src/inbox-staleness.ts` / `packages/core/src/index.ts`）は
 // どれも `from './clone.js'` で import しているので、ここで re-export して
 // その import 元を変えずに済ませる。
-export { DAEMON_RUNNER_REGISTRY_SOURCE, DAEMON_TOKEN_POOL_REOPENED_SOURCE, isDaemonSelfNotice };
+export {
+  DAEMON_RUNNER_REGISTRY_SOURCE,
+  DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+  isDaemonSelfNotice,
+  staleObservedRecoveryNoticeEvent,
+};
+// **同じ理由で `staleObservedRecoveryForBlockedKey` / `tokenPoolReopenedPayload`
+// も re-export する**（Issue #1223 再発）。こちらは `clone.ts` 自身の中では
+// 直に使わない（使うのは `staleObservedRecoveryNoticeEvent` の側だけ）ので、
+// 上の3つとは別に、import せず直接 re-export する形にしてある——
+// `apps/daemon/src/index.ts`（`CloneWakeGate.decide` が `reopened` から直に
+// 呼ぶ）とテストの両方がここから引く。
+export {
+  staleObservedRecoveryForBlockedKey,
+  tokenPoolReopenedPayload,
+  type TokenPoolReopenedPayload,
+} from './daemon-self-notice.js';
 
 /**
  * `Clone#post()` が、受理した合図を畳み込みの索引（`#pendingCollapse`）に
@@ -801,8 +818,10 @@ const UNPRODUCTIVE_USAGE_BLOCK_FOLD_NOTICE =
  * `this.#releaseRequested = true;` を立てることだけで（`source:
  * 'token-pool'` は {@link usageBlockAlwaysRearms} が常に真を返す枝を通る
  * ので、Issue #1240 続きで足した回復予定時刻ぶんの抑止は当たらない——
- * この段落の主張はいまも成り立つ）、枠で止まっていなければ配ってもターンを
- * 1本焼くだけである。
+ * ⚠️ **ただし Issue #1223 再発の手当て後は1つだけ例外が在る**（同じ鍵の
+ * 同じ resetsAt に対する使い回し。`staleObservedRecoveryNoticeEvent` の
+ * doc）——それ以外ではこの段落の主張はいまも成り立つ）、枠で止まっていなければ
+ * 配ってもターンを1本焼くだけである。
  *
  * **`#restoreUnread` はその門を素通りする。** 器の入れ替え（プロセスの再起動）で
  * 未読のまま残った合図を配り直すこの経路は `#inbox.push` を直接呼び、`post()` の
@@ -838,6 +857,15 @@ const UNPRODUCTIVE_USAGE_BLOCK_FOLD_NOTICE =
  * @param context.releasePending **呼ばれた瞬間の**
  *   {@link CloneHost.usageReleasePending}（Issue #1051）。`usageBlocked` と
  *   同じ理由で、1件ごとに読み直すこと。
+ * @param context.usageBlockedResetsAt **呼ばれた瞬間の**
+ *   {@link CloneHost.usageBlockedResetsAt}（Issue #1223 再発）。
+ *   `#restoreUnread` は `post()` を通らないので、`usageBlockAlwaysRearms`
+ *   （の3つ目の例外）にも `staleObservedRecoveryNoticeEvent` にも自動では
+ *   乗らない——呼び手（`apps/daemon/src/index.ts` の `redeliveryGate`）が
+ *   同じ判定をここで自分でも当てられるように、必要な材料をそのまま渡す。
+ * @param context.usageBlockedTokenId **呼ばれた瞬間の**
+ *   {@link CloneHost.usageBlockedTokenId}（Issue #1223 再発）。
+ *   `usageBlockedResetsAt` と組で読む。
  * @returns 真なら配る（`#inbox.push` する）。偽なら畳む
  *   （`#foldGatedRedelivery` — ターンを起こさないが、受信箱の行も台帳の行も
  *   消さない。日誌には型ごとの本文と「畳んだ」の1行を残す）。
@@ -846,7 +874,12 @@ const UNPRODUCTIVE_USAGE_BLOCK_FOLD_NOTICE =
  */
 export type RedeliveryGate = (
   event: InboxEvent,
-  context: { usageBlocked: boolean; releasePending: boolean },
+  context: {
+    usageBlocked: boolean;
+    releasePending: boolean;
+    usageBlockedResetsAt: number | undefined;
+    usageBlockedTokenId: string | undefined;
+  },
 ) => boolean;
 
 /**
@@ -894,6 +927,15 @@ export const ALWAYS_REDELIVER: RedeliveryGate = () => true;
  *    削る・有効化すると、その予定は無意味になる。だからここだけは
  *    `resetsAt` を無視して常に試す（オーナーが挙げた「追加・削除など変更が
  *    あった際には再チェック」を満たすのはここである）
+ *
+ *    **⚠️ この関数自身はいまも3を無条件に真として返す（1文字も変えて
+ *    いない）。** 「プールが変わっていない」を見分ける判定は、この関数の
+ *    外——呼び出し側（`post()`）が {@link staleObservedRecoveryNoticeEvent}
+ *    （`daemon-self-notice.ts`。Issue #1223 再発）で別に持つ。理由は
+ *    `post()` の呼び出し箇所のコメントに書いた——同じ判定をこの関数の中へ
+ *    畳み込むと、`event` だけでなく `#usageBlocked.resetsAt` /
+ *    `#sessionTokenIdentity` という2つのインスタンス状態が要り、この関数の
+ *    「`event` だけを見る純関数」という形が壊れる。
  *
  * ## それ以外は `resetsAt` を見る（呼び出し側 `post()`）
  *
@@ -2390,6 +2432,29 @@ class Clone implements CloneHost {
     return this.#releaseRequested;
   }
 
+  /**
+   * `CloneHost.usageBlockedResetsAt` の実装（Issue #1223 再発）。doc は
+   * `host.ts` 側に在る——ここは `this.#usageBlocked?.resetsAt` を読むだけの
+   * 薄い窓で、判定を持たない（{@link Clone.usageBlocked} と同じ形）。
+   */
+  get usageBlockedResetsAt(): number | undefined {
+    return this.#usageBlocked?.resetsAt;
+  }
+
+  /**
+   * `CloneHost.usageBlockedTokenId` の実装（Issue #1223 再発）。doc は
+   * `host.ts` 側に在る——ここは `this.#sessionTokenIdentity?.tokenId` を
+   * 読むだけの薄い窓で、判定を持たない。
+   *
+   * **`#usageBlocked` を経由しない。** 「止まったときの鍵」は「いまの
+   * セッションの鍵」と同じである——枠に当たっても回すまでは同じセッション
+   * のまま走り続ける（env は起動時に凍る。`recycleSessionForToken` の doc）
+   * ので、セッションの身元をそのまま返せば足りる。
+   */
+  get usageBlockedTokenId(): string | undefined {
+    return this.#sessionTokenIdentity?.tokenId;
+  }
+
   // -------------------------------------------------------------------------
   // CloneHost
   // -------------------------------------------------------------------------
@@ -2479,10 +2544,28 @@ class Clone implements CloneHost {
     // **抑止した回数は捨てない**——`#usageBlockSuppressedRearms` へ畳み、
     // 実際に解除を試した瞬間の1行（`#pump` の「枠の解除を試す」）へまとめて
     // 出す（`#usageBlockSuppressedRearms` の doc）。
+    //
+    // **⚠️ 2026-09-23 追記（Issue #1223 再発）: token-pool の3つ目の例外にも
+    // 例外が在る。** `usageBlockAlwaysRearms` が token-pool の復帰通知を
+    // 無条件に再武装させる根拠は「プールの構成が変わると resetsAt の予定は
+    // 無意味になる」だった（`usageBlockAlwaysRearms` の doc）。**だが
+    // `また通るようになった`（観測ベースの回復）が、いま止まっている
+    // 同じ鍵・同じ resetsAt を指しているだけなら、プールは1文字も変わって
+    // いない**——`staleObservedRecoveryForBlockedKey`（`daemon-self-notice.ts`）
+    // がこの1点だけを見て、その回だけ「常に再武装」の側から外す。**構造化
+    // した payload（`tokenPoolReopenedPayload`）を持たない通知（この直しより
+    // 前に積まれた分・`payload` を省略した通知）は対象外**——判定できない
+    // ときは能力を削らない側へ倒す（AGENTS.md 地雷2）ので、従来どおり
+    // 無条件に再武装する。
     if (this.#usageBlocked !== null) {
       const resetsAt = this.#usageBlocked.resetsAt;
       const stillCoolingDown = resetsAt !== undefined && Date.now() < resetsAt;
-      if (!usageBlockAlwaysRearms(event) && stillCoolingDown) {
+      const staleSameKeyRecovery = staleObservedRecoveryNoticeEvent(
+        event,
+        resetsAt,
+        this.#sessionTokenIdentity?.tokenId,
+      );
+      if ((!usageBlockAlwaysRearms(event) || staleSameKeyRecovery) && stillCoolingDown) {
         this.#usageBlockSuppressedRearms += 1;
       } else {
         this.#releaseRequested = true;
@@ -5974,11 +6057,18 @@ class Clone implements CloneHost {
       //
       // **`redeliveryGate` は必須なので、ここは常に呼ぶ**
       // （`CloneOptions.redeliveryGate` の doc）。
+      //
+      // **`usageBlockedResetsAt` / `usageBlockedTokenId` も同じ瞬間に読む**
+      // （Issue #1223 再発）——`#restoreUnread` は `post()` を通らないので、
+      // `staleObservedRecoveryNoticeEvent` の判定は呼び手（`redeliveryGate`）
+      // が自分で当てるしかない（`RedeliveryGate` の doc の該当 `@param`）。
       let worthRedelivering: boolean;
       try {
         worthRedelivering = this.#redeliveryGate(record.event, {
           usageBlocked: this.usageBlocked,
           releasePending: this.usageReleasePending,
+          usageBlockedResetsAt: this.usageBlockedResetsAt,
+          usageBlockedTokenId: this.usageBlockedTokenId,
         });
       } catch (error) {
         // **判定できないときは配る側へ倒す**（直前の「台帳が読めなければ
