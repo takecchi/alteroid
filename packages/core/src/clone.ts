@@ -4081,19 +4081,100 @@ class Clone implements CloneHost {
    * 同じ形は `#restoreUnread` の `#inbox.push` の手前にも逐語で書いてある
    * （「落とした側は誰も消さないので、起動のたびに配られて回数だけが増える」）。
    * **Issue #783 の段1 の対象である。⛔ この便では振る舞いを1文字も変えて
-   * いない**——出口を足すかどうかは段1 の設計の合意を待つ。
+   * いない**——出口を足すかどうかは段1 の設計の合意を待つ。**畳んだのは
+   * 日誌の書き方（回数と位置）だけで、消すかどうかの判定は1文字も
+   * 触っていない。**
+   *
+   * ## 「畳んだ」の1行は、ここではもう書かない（1パス1本へ畳む直し）
+   *
+   * ⚠️ **これがこの便の直しの対象そのものである**（未読の一括拾い直しで
+   * 日誌が肥大化する形をもう1つ塞ぐ——先例は `#redeliveredLiveHeadline`
+   * 〈issue #903 続き。live 側の「配り直した」を1パス1本へ畳んだ直し〉で、
+   * 同じ形をここへも当てる）。**以前はこの関数が record 1件につき「畳んだ」
+   * の行を単独で書いていた**——器の入れ替えを跨いで未読を N 件拾い直し、
+   * そのうち門が M 件を「いま配る意味は無い」と答えると、この行だけで M 行
+   * が1秒未満に並んでいた。
+   *
+   * **いまはここでは書かない。** 呼び手（`#restoreUnreadPass`）が持つ
+   * `sink`（`gatedRecordsThisPass`）へ record を積むだけにして、1パスぶんの
+   * 「畳んだ」は `#gatedRedeliveryFoldHeadline` が1本の文面へ組み立て、
+   * `#restoreUnreadPass` がループの後始末（`flushGatedFoldHeadline`。早期
+   * return の手前・ループが最後まで走った後の両方）で1回だけ `#journal` へ
+   * 書く——`liveRecordsThisPass` / `#redeliveredLiveHeadline` とまったく
+   * 同じ構造である。
+   *
+   * **⛔ ここで変えたのは「畳んだ」の書き方（回数と、書くタイミング）だけ
+   * である。** 次の3つは1文字も変えていない:
+   *
+   * 1. **`#journalIncomingBody`（本文）の呼び方。** record ごとに、これまでと
+   *    同じタイミング（このメソッドが呼ばれた瞬間）で即座に書く——遅延も
+   *    バッチ化もしていない。
+   * 2. **合図を消すかどうか。** `#forget` / `stores.inbox.remove` はここでも
+   *    呼び手でも呼ばれない（直下の doc、Issue #783 段1 の設計合意待ちの
+   *    まま）。
+   * 3. **`#restoreUnreadPass` のループの中で他に起こること**（`#record` /
+   *    `#commit` の呼び出し順序、`redeliveryGate` の判定、`#inbox.push` の
+   *    有無）。この関数はそれらに一切触れない。
    */
-  async #foldGatedRedelivery(event: InboxEvent): Promise<void> {
-    await this.#journalIncomingBody(event);
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text:
+  async #foldGatedRedelivery(record: PendingInboxEvent, sink: PendingInboxEvent[]): Promise<void> {
+    await this.#journalIncomingBody(record.event);
+    sink.push(record);
+  }
+
+  /**
+   * `#restoreUnreadPass` が門で「いま配る意味は無い」と判定して畳んだ record
+   * 全件ぶんの「畳んだ」を、1本の journal entry の文面へ組み立てる。呼ぶのは
+   * `#restoreUnreadPass`（`flushGatedFoldHeadline` 経由）だけである。
+   *
+   * **`#redeliveredLiveHeadline`（live 側。issue #903 続き）と同じ形を
+   * 踏襲する** —— 1件のときは以前の文言を1文字も変えず、2件以上のときだけ
+   * `[1] … [2] …` と record ごとに列挙して1本へ畳む。
+   *
+   * ## 1件のときは、以前の文言を1文字も変えない
+   *
+   * `records.length === 1` のときは、この直しの前とまったく同じ組み立てを
+   * 通す——変える理由が無いところは変えない（`AGENTS.md`「テストを弱めずに
+   * 直す」の見分け方）。`inbox-persistence.test.ts` の「畳んだ跡が日誌に
+   * 残る（型ごとの本文追記と「畳んだ」の1行の両方）」はこの文言を逐語で
+   * 見ている。
+   *
+   * ## 何を失っていないか
+   *
+   * 2件以上のときも、この1本から次の3つが読める——件数だけに潰さない:
+   *
+   * 1. **畳んだ件数**（見出しの `まとめてN件`）
+   * 2. **各件の合図の形**（`inboxEventShape(record.event)` を record ごとに
+   *    列挙する。**`#redeliveryNoticeFor` の束の行（モデルへ渡す断り書き）
+   *    のように最大値・最古の時刻へ要約はしない**——あちらは判断材料として
+   *    要約で足りるが、こちらは人間が後から読み返す日誌なので1件も欠かさず
+   *    残す）
+   * 3. **なぜ畳んだか**（門が「いま配る意味は無い」と答えたこと、モデルへは
+   *    1文字も渡していないこと、合図も台帳の行も消していないこと、次の
+   *    起動でまた拾い直されてそのときの状態であらためて判定されること）
+   *
+   * ⚠️ **時間の窓（何秒以内は捨てる）も件数の上限（先頭 N 件だけ書く）も
+   * 持ち込まない。** `records` は、その1パスで門が「いま配る意味は無い」と
+   * 答えた record を1件残らず列挙する。
+   */
+  #gatedRedeliveryFoldHeadline(records: readonly PendingInboxEvent[]): string {
+    if (records.length === 1) {
+      const record = records[0];
+      if (record === undefined) return '';
+      return (
         `配り直しの門がいま配る意味は無いと答えたので、ターンを起こさずに畳んだ` +
         `（モデルへは1文字も渡していない。合図も台帳の行も消していない——次の起動で` +
-        `また拾い直され、そのときの状態であらためて判定される）: ${inboxEventShape(event)}`,
-    });
+        `また拾い直され、そのときの状態であらためて判定される）: ${inboxEventShape(record.event)}`
+      );
+    }
+
+    const details = records
+      .map((record, index) => `[${index + 1}] ${inboxEventShape(record.event)}`)
+      .join('\n');
+    return (
+      `配り直しの門がいま配る意味は無いと答えたので、まとめて${records.length}件、ターンを` +
+      `起こさずに畳んだ（モデルへは1文字も渡していない。合図も台帳の行も消していない——` +
+      `次の起動でまた拾い直され、そのときの状態であらためて判定される）:\n${details}`
+    );
   }
 
   /**
@@ -5533,9 +5614,35 @@ class Clone implements CloneHost {
       }
     };
 
+    // **門が「いま配る意味は無い」と答えて畳んだ record を溜めておき、1パス
+    // ぶんの「畳んだ」を1本へまとめる入れ物**（`#foldGatedRedelivery` の doc
+    // 「1パス1本へ畳む直し」）。`staleBuffer`（直上）と同じ形——溜めるのは
+    // journal の材料だけで、`#journalIncomingBody`（本文）は
+    // `#foldGatedRedelivery` の中で record ごとに、これまでと同じタイミング
+    // で即座に書く。**合図を消すかどうかはここでも扱わない**（この経路は
+    // そもそも `#forget` を呼ばない。Issue #783 段1 の設計合意待ちのまま
+    // 1文字も変えていない）。
+    const gatedRecordsThisPass: PendingInboxEvent[] = [];
+
+    const flushGatedFoldHeadline = async (): Promise<void> => {
+      if (gatedRecordsThisPass.length === 0) return;
+      const batch = gatedRecordsThisPass.splice(0, gatedRecordsThisPass.length);
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text: this.#gatedRedeliveryFoldHeadline(batch),
+      });
+    };
+
     for (const { record, verdict } of decided) {
       if (this.#stopped || this.#inbox.closed) {
         await flushStaleRemovalBuffer();
+        // **`staleBuffer` と同じ理由で、ここでも先に空にする。** 既に
+        // 「畳んだ」対象として `gatedRecordsThisPass` へ積んだ record は、
+        // ここで return する前に1本へまとめて書き切っておかないと、次の
+        // 起動を待たずに黙って失われる（journal に一度も現れない）。
+        await flushGatedFoldHeadline();
         return;
       }
 
@@ -5582,6 +5689,8 @@ class Clone implements CloneHost {
       // ので、積めなかったものは次の起動で拾い直せる。
       if (this.#stopped || this.#inbox.closed) {
         await flushStaleRemovalBuffer();
+        // 直上と同じ理由（前の record ぶんで既に積んだ「畳んだ」を失わない）。
+        await flushGatedFoldHeadline();
         return;
       }
 
@@ -5682,8 +5791,11 @@ class Clone implements CloneHost {
         // **`#inbox.push` をしない ＝ ターンを起こさない。** 受信箱の行も台帳の
         // 行も消さない（`#forget` / `stores.inbox.remove` を呼ばない）——次の
         // 起動でまた `#restoreUnread` が拾い、その時点の `usageBlocked` で
-        // 判定し直す。跡は `#foldGatedRedelivery` が日誌へ残す。
-        await this.#foldGatedRedelivery(record.event);
+        // 判定し直す。跡は `#foldGatedRedelivery` が残す——本文
+        // （`#journalIncomingBody`）は record ごとに即座に、「畳んだ」の1行は
+        // `gatedRecordsThisPass` へ積んで1パスぶんまとめて1本（未読の一括
+        // 拾い直しで日誌が肥大化する形をもう1つ塞ぐ直し。同メソッドの doc）。
+        await this.#foldGatedRedelivery(record, gatedRecordsThisPass);
         continue;
       }
 
@@ -5742,6 +5854,11 @@ class Clone implements CloneHost {
     // した回はそれぞれの手前で既に空にしているので、ここへ来る時点で
     // 残っているのは「最後まで到達した」場合だけである。
     await flushStaleRemovalBuffer();
+    // **こちらも同じ理由で最後に空にする**（`#foldGatedRedelivery` の doc
+    // 「1パス1本へ畳む直し」）。ループの中で1件も門に畳まれなかった回は
+    // `gatedRecordsThisPass` が空のままなので、`flushGatedFoldHeadline` は
+    // 何も書かずに戻る。
+    await flushGatedFoldHeadline();
   }
 
   /**
