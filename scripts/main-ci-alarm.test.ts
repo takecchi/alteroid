@@ -268,7 +268,8 @@ const WORKFLOWS_DIR = path.join(fileURLToPath(new URL('..', import.meta.url)), '
 function topLevelWorkflowName(text: string): string | null {
   for (const line of text.split('\n')) {
     const m = /^name:\s*(.+?)\s*$/.exec(line);
-    if (m !== null) return m[1].replace(/^["']|["']$/g, '');
+    const captured = m?.[1];
+    if (captured !== undefined) return captured.replace(/^["']|["']$/g, '');
   }
   return null;
 }
@@ -282,8 +283,9 @@ function watchedWorkflowNames(text: string): string[] {
   for (const line of text.slice(start + marker.length).split('\n')) {
     if (/^\s*#/.test(line)) continue;
     const m = /^ {6}- (.+?)\s*$/.exec(line);
-    if (m === null) break;
-    names.push(m[1]);
+    const captured = m?.[1];
+    if (captured === undefined) break;
+    names.push(captured);
   }
   return names;
 }
