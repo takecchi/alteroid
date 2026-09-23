@@ -243,3 +243,91 @@ describe('check:* がどの門からも呼ばれていない穴を作らない�
     ).toEqual([]);
   });
 });
+
+/**
+ * workflow の**トップレベルの `on:` に、PR の更新で起動する `pull_request:` が
+ * 在るか**（Issue #1297）。
+ *
+ * `pull_request:` が在っても、`types:` を絞って `synchronize` を外している
+ * workflow（例: `issue-done-trailer.yml` は `types: [closed]`）は、PR へ push
+ * しても走らない。⟹ `types:` が在るなら `synchronize` を含むことまで見る。
+ * `types:` が無ければ GitHub の既定（`opened` / `synchronize` / `reopened`）で
+ * 走るので、それでよい。
+ *
+ * **YAML パーサは使わない**（この repo の他の歯と同じく文字列で読む）。見るのは
+ * `on:` 直下の2字下げのキーと、`pull_request:` 直下の `types:` の行だけである。
+ */
+function runsOnPullRequestUpdates(workflowText: string): boolean {
+  const lines = workflowText.split('\n');
+  const onIndex = lines.findIndex((line) => /^on:\s*$/.test(line));
+  if (onIndex === -1) return false;
+  let inPullRequest = false;
+  let sawPullRequest = false;
+  for (const line of lines.slice(onIndex + 1)) {
+    if (/^\S/.test(line)) break; // `on:` の塊を抜けた
+    const key = /^ {2}([a-z_]+):/.exec(line);
+    if (key) {
+      inPullRequest = key[1] === 'pull_request';
+      if (inPullRequest) sawPullRequest = true;
+      continue;
+    }
+    const types = inPullRequest ? /^ {4}types:\s*\[([^\]]*)\]/.exec(line) : null;
+    if (types) {
+      return (types[1] ?? '').split(',').some((t) => t.trim() === 'synchronize');
+    }
+  }
+  return sawPullRequest;
+}
+
+/** PR の更新で起動する workflow のどれかに `run: pnpm check:<name>` が在るか。 */
+function wiredInPullRequestWorkflows(name: string): boolean {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(String.raw`run:\s*pnpm ${escaped}(?:\s|$)`, 'm');
+  return WORKFLOW_TEXTS.some((text) => runsOnPullRequestUpdates(text) && pattern.test(text));
+}
+
+/**
+ * **「`STEPS` だけ」に配線された門を赤にする**（Issue #1297）。
+ *
+ * 上の「どれかに載っている」は OR なので、`STEPS` にだけ載せても緑になる。
+ * だが `ci.yml` の `ci` job は `pnpm verify` を呼ばず、門を1本ずつ `run:` で
+ * 並べる形であり、オーナーは「ローカルで `pnpm verify` を通しで回す必要はない。
+ * CI に任せる」と指示している。⟹ **`STEPS` にしか無い門は、誰にも当たらない。**
+ * 実例: PR #1286 の `check:stale-token-restart-advice` は `STEPS` にだけ配線されて
+ * 緑で通り、`ci.yml` へ足して初めて実物に当たると、最初から赤だった。
+ *
+ * **逆向き（workflow にだけ在る）は赤にしない。**`pr-*` / `base-overlap` は PR
+ * 番号やネットワークが要るので `STEPS`（offline で走る手元の一式）に置けず、
+ * 片側だけが正しい門が実在する（Issue #1297 の実測）。⟹ 要求するのは
+ * 「`STEPS` に在るなら、PR の更新で起動する workflow にも在る」の片向きだけである。
+ *
+ * **この歯が測っていないこと**: `run:` の行が在ることは見るが、job やステップの
+ * `if:` で実際に実行されるかは見ない（上の doc の断りと同じ範囲）。
+ */
+describe('STEPS にだけ配線された check:* を作らない（PR の CI で一度も走らない穴、Issue #1297）', () => {
+  const wiredSteps = wiredInVerifySteps();
+
+  it('前提: STEPS に check:* が1つ以上在る（空集合で緑にならない）', () => {
+    expect(wiredSteps.size).toBeGreaterThan(0);
+  });
+
+  it('前提: PR の更新で起動する workflow の判定が、実物の ci.yml と issue-done-trailer.yml を正しく分ける', () => {
+    const textOf = (file: string) => WORKFLOW_TEXTS[WORKFLOW_FILES.indexOf(file)] ?? '';
+    expect(runsOnPullRequestUpdates(textOf('ci.yml'))).toBe(true);
+    // `pull_request:` は在るが `types: [closed]` なので、PR へ push しても走らない。
+    expect(runsOnPullRequestUpdates(textOf('issue-done-trailer.yml'))).toBe(false);
+    // `pull_request:` が無い（schedule / workflow_dispatch だけ）。
+    expect(runsOnPullRequestUpdates(textOf('release-prod.yml'))).toBe(false);
+  });
+
+  it('STEPS に在る check:* は、PR の更新で起動する workflow の run: にも在る', () => {
+    const stepsOnly = [...wiredSteps].filter((name) => !wiredInPullRequestWorkflows(name));
+    expect(
+      stepsOnly,
+      `【赤の意味】次の check:* は scripts/verify-core.mjs の STEPS にしか無く、PR の CI で一度も走らない: ` +
+        `${stepsOnly.join(' / ')}\n` +
+        'ci.yml の ci job（または pull_request の更新で起動する別の workflow）へ `- run: pnpm <name>` を足すこと。' +
+        'STEPS から外して黙らせないこと —— 手元の一式からも消えるだけで、PR で走らないことは変わらない。',
+    ).toEqual([]);
+  });
+});
