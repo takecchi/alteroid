@@ -9323,6 +9323,69 @@ describe('running のまま、宛先の runner が名簿から entry ごと消�
     await pool.stop();
     await registry.stop();
   });
+
+  /**
+   * **計器の失敗は `list()` の結果にも例外にも影響しない**（運用者からの指摘。
+   * 段0が読む側の挙動を変えてはいけない）。
+   *
+   * `#journal()` 自身は `append()` の失敗を内部の try/catch で飲み込んで
+   * 例外を返さない——だからこの歯だけでは「直したこと」の証拠にならない
+   * （変異試験の節を参照。この歯は変異では赤くならない）。それでも歯として
+   * 固定するのは、依頼の逐語（「`#journal` が reject しても list() が同じ
+   * 結果を返すこと」）に直接対応する回帰試験だからである。
+   */
+  it('journal.append が失敗しても、list() は例外を投げず同じ結果を返す', async () => {
+    clearRecentTracesForTesting();
+    const stores = failingJournalAppend(createMemoryStores(), 'journal down (#1212)');
+    await seedRunning(stores, 'mgr-vanished', 'runner-gone', '2026-09-24T00:00:00.000Z');
+    const registry = createRunnerRegistry([]);
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    const listed = await pool.list();
+
+    expect(listed.find((m) => m.managerId === 'mgr-vanished')?.status).toBe('running');
+    // **黙って消してはいない。** `#journal` 自身の catch が跡を残す
+    // （`noteDroppedRecord` の作法）。
+    expect(recentDroppedTraces().some((line) => line.includes('日誌を記録できませんでした'))).toBe(
+      true,
+    );
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  /**
+   * **`#journal` を呼ぶ前の計算（`vanishedRunnerBacklog` / `describeVanishedRunnerBacklogLine`
+   * / `this.#now()`）が例外を投げても、`list()` は例外を投げず同じ結果を返す。**
+   *
+   * `#journal` 自身の try/catch は `append()` の失敗しか守らない——この関数を
+   * 呼ぶ**前**に走る計算が例外を投げると、そこは守られていなかった（実測:
+   * この歯を書く前に `now` が例外を投げる構成で確かめたところ、`pool.list()`
+   * が実際に reject した）。`#noteVanishedRunnerGauge` 全体を包む try/catch が
+   * この経路を守っていることを固定する——**この歯こそが変異で赤くなる**
+   * （direct な `#journal` の reject では `#journal` 自身の catch が既に
+   * 守っているので、`try/catch` を外しても直上の歯は赤くならない）。
+   */
+  it('計器の集計・整形（#journal を呼ぶ前）が例外を投げても、list() は例外を投げず同じ結果を返す', async () => {
+    const stores = createMemoryStores();
+    await seedRunning(stores, 'mgr-vanished', 'runner-gone', '2026-09-24T00:00:00.000Z');
+    const registry = createRunnerRegistry([]);
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: registry,
+      now: () => {
+        throw new Error('clock down (#1212 test)');
+      },
+    });
+
+    const listed = await pool.list();
+
+    expect(listed.find((m) => m.managerId === 'mgr-vanished')?.status).toBe('running');
+
+    await pool.stop();
+    await registry.stop();
+  });
 });
 
 /**

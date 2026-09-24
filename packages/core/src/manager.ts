@@ -4740,21 +4740,43 @@ class Pool implements ManagerPool {
    *
    * **0本に戻った runnerId は、書かずに Map から外す**（地雷表「取れない軸に
    * 0の行を作る」）。
+   *
+   * ## この計器の失敗は `list()` の結果にも例外にも影響しない
+   *
+   * **`#journal()` 自身は `append()` の失敗を内部の try/catch で飲み込んでいる**
+   * （実測: `failingJournalAppend` を仕込んでも `list()` は投げない）。**ただし
+   * それだけでは足りない。** `vanishedRunnerBacklog` / `describeVanishedRunnerBacklogLine`
+   * / `this.#now()` の計算——`#journal` を呼ぶ**前**に走る部分——が例外を
+   * 投げると、そこは `#journal` の try/catch には守られておらず、`list()` まで
+   * 素通りして落ちる（実測: `now` が例外を投げる構成で `pool.list()` が実際に
+   * reject した）。**測るだけの段が読む側の挙動を変えてはいけない**ので、
+   * この関数全体を try/catch で包み、何が起きても外へ1文字も漏らさない。
+   * 握り潰すだけでなく `noteDroppedRecord` で跡は残す（AGENTS.md の同じ思想）。
+   *
+   * **`#journal` への書き込みは `void` にして待たない**（manager.ts にある
+   * 既存の `void this.#journal(` の前例と同じ形）。`append()` の失敗は
+   * `#journal` 自身が飲み込むので実害は無いが、待たない形にしておけば
+   * 将来 `#journal` の実装が変わっても、この計器の書き込みの遅さ・失敗で
+   * `list()` が止まる/落ちることはない。
    */
   async #noteVanishedRunnerGauge(summaries: readonly ManagerSummary[]): Promise<void> {
-    const backlog = vanishedRunnerBacklog(summaries, this.#registeredRunnerIds());
-    for (const runnerId of this.#vanishedRunnerGaugeLastCount.keys()) {
-      if (!backlog.has(runnerId)) this.#vanishedRunnerGaugeLastCount.delete(runnerId);
-    }
-    for (const [runnerId, entry] of backlog) {
-      if (this.#vanishedRunnerGaugeLastCount.get(runnerId) === entry.count) continue;
-      await this.#journal({
-        type: 'exchange',
-        with: 'manager',
-        role: 'inbound',
-        text: `${EXCHANGE_KIND_GAUGE_PREFIX}${describeVanishedRunnerBacklogLine(runnerId, entry, this.#now())}`,
-      });
-      this.#vanishedRunnerGaugeLastCount.set(runnerId, entry.count);
+    try {
+      const backlog = vanishedRunnerBacklog(summaries, this.#registeredRunnerIds());
+      for (const runnerId of this.#vanishedRunnerGaugeLastCount.keys()) {
+        if (!backlog.has(runnerId)) this.#vanishedRunnerGaugeLastCount.delete(runnerId);
+      }
+      for (const [runnerId, entry] of backlog) {
+        if (this.#vanishedRunnerGaugeLastCount.get(runnerId) === entry.count) continue;
+        void this.#journal({
+          type: 'exchange',
+          with: 'manager',
+          role: 'inbound',
+          text: `${EXCHANGE_KIND_GAUGE_PREFIX}${describeVanishedRunnerBacklogLine(runnerId, entry, this.#now())}`,
+        });
+        this.#vanishedRunnerGaugeLastCount.set(runnerId, entry.count);
+      }
+    } catch (error) {
+      noteDroppedRecord('running のまま entry ごと消えた runner の計器', '', error);
     }
   }
 
