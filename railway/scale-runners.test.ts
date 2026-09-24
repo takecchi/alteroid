@@ -240,6 +240,7 @@ type Scenarios = {
   noRunnerService: Run;
   vacateSuccess: Run;
   vacateTimeout: Run;
+  vacateMiddleRejected: Run;
 };
 
 let scenarios: Scenarios;
@@ -368,9 +369,10 @@ async function prepareScenarios(): Promise<Scenarios> {
     });
   });
 
-  // 2台（runner / runner-2）から1台へ減らす。**1台目（runner）を空ける**——
-  // service 名と runnerId が違う組（`runner` → `runner-primary`）を選ぶことで、
-  // 「service 名をそのまま runnerId として使っていないか」も同時に確かめる。
+  // 2台（runner / runner-2）から1台へ減らす。**`--vacate` はいちばん大きい
+  // 番号しか受け付けない**（レビューで見つかった穴。$EXISTING は途切れる
+  // ところまでしか数えないので、真ん中を消すと次に数え違える）ので、ここで
+  // 空けるのは `runner-2`（いちばん大きい番号）である。
   const twoRunners = [
     ...EXISTING,
     { id: 'id-runner-2', name: 'runner-2', source: { repo: 'takecchi/alteroid', image: null } },
@@ -381,7 +383,7 @@ async function prepareScenarios(): Promise<Scenarios> {
     // ——「即座に0件」ではなく、待ってから確認する経路を実際に通す
     const daemon = await startFakeDaemon({
       token: FAKE_OPERATOR_TOKEN,
-      runnerId: 'runner-primary',
+      runnerId: 'runner-2',
       staleManagerPolls: 2,
     });
     const home = makeAlteroidHome(FAKE_OPERATOR_TOKEN, daemon.port);
@@ -389,7 +391,7 @@ async function prepareScenarios(): Promise<Scenarios> {
     s.vacateSuccess = await run({
       total: 1,
       services: twoRunners,
-      args: ['--vacate', 'runner'],
+      args: ['--vacate', 'runner-2'],
       extraEnv: {
         ALTEROID_HOME: home,
         ALTEROID_VACATE_TIMEOUT_SECONDS: '5',
@@ -402,7 +404,7 @@ async function prepareScenarios(): Promise<Scenarios> {
     // GET /managers は永久にその runnerId の委譲を返し続ける——上限に必ず当たる
     const daemon = await startFakeDaemon({
       token: FAKE_OPERATOR_TOKEN,
-      runnerId: 'runner-primary',
+      runnerId: 'runner-2',
       staleManagerPolls: Number.POSITIVE_INFINITY,
     });
     const home = makeAlteroidHome(FAKE_OPERATOR_TOKEN, daemon.port);
@@ -410,12 +412,29 @@ async function prepareScenarios(): Promise<Scenarios> {
     s.vacateTimeout = await run({
       total: 1,
       services: twoRunners,
-      args: ['--vacate', 'runner'],
+      args: ['--vacate', 'runner-2'],
       extraEnv: {
         ALTEROID_HOME: home,
         ALTEROID_VACATE_TIMEOUT_SECONDS: '0.3',
         ALTEROID_VACATE_POLL_INTERVAL_SECONDS: '0.1',
       },
+      allowFailure: true,
+    });
+  });
+
+  // 3台（runner / runner-2 / runner-3）のうち、**真ん中（runner-2）**を
+  // 指名する——番号が途切れる穴そのものを再現する。vacate も railway ssh も
+  // 一度も呼ばれないはず（偽デーモンすら要らない——本当に呼ばれていないかは
+  // 呼び出し記録で確かめる）。
+  const threeRunners = [
+    ...twoRunners,
+    { id: 'id-runner-3', name: 'runner-3', source: { repo: 'takecchi/alteroid', image: null } },
+  ];
+  task('vacateMiddleRejected', async () => {
+    s.vacateMiddleRejected = await run({
+      total: 2,
+      services: threeRunners,
+      args: ['--vacate', 'runner-2'],
       allowFailure: true,
     });
   });
@@ -672,8 +691,9 @@ describe('減らそうとしたとき（--vacate 無し）', () => {
 });
 
 describe('--vacate で減らすとき（委譲が移り終わる）', () => {
-  // service 名（runner）と runnerId（runner-primary）が違う組を空ける
-  // シナリオ（`prepareScenarios` の `twoRunners` / `vacateSuccess` を見よ）。
+  // 2台（runner / runner-2）のうち、**いちばん大きい番号（runner-2）**を
+  // 空けるシナリオ（`prepareScenarios` の `twoRunners` / `vacateSuccess` を見よ。
+  // 真ん中しか受け付けない話は別の describe「真ん中を指したとき」で見る）。
   let r: Run;
   beforeAll(() => {
     r = scenarios.vacateSuccess;
@@ -683,28 +703,32 @@ describe('--vacate で減らすとき（委譲が移り終わる）', () => {
     expect(r.exitCode).toBe(0);
   });
 
-  it('railway ssh --service app の中で node を実行し、runnerId（service 名ではない）を渡す', () => {
+  it('railway ssh --service app の中で node を実行し、runnerId を渡す', () => {
     const sshCalls = r.calls.filter((c) => c.startsWith('ssh '));
     expect(sshCalls).toHaveLength(1);
     expect(sshCalls[0]).toContain('--service app');
-    expect(sshCalls[0]).toContain('-- node - runner-primary');
-    // 渡したのは service 名（runner）そのものではなく runnerId（runner-primary）
-    // である——素朴に「runner の後ろの引数」を見ると runner-primary は
-    // 前方一致で拾われてしまうので、直後がタイムアウト秒（5）であることまで見る
-    expect(sshCalls[0]).toContain('node - runner-primary 5 0.05');
-    expect(sshCalls[0]).not.toContain('node - runner 5 0.05');
+    expect(sshCalls[0]).toContain('node - runner-2 5 0.05');
   });
 
   it('POST /runners/vacate を実際に投げる（偽デーモンが受け取った記録）', () => {
-    expect(r.stderr).toContain('vacate を投げた: runnerId=runner-primary');
+    expect(r.stderr).toContain('vacate を投げた: runnerId=runner-2');
   });
 
-  it('委譲が移り終えたのを確かめてから、Service を消すコマンドを表示するだけにする', () => {
-    expect(r.stderr).toContain('railway service delete --service runner --yes');
+  it('委譲が移り終えたのを確かめてから、消す2手順を表示するだけにする（実際には呼ばない）', () => {
     expect(r.stderr).toContain('確かめられた');
-    // **表示するだけで、実際には呼ばない。** 偽 railway に `service delete` が
-    // 一度も届いていないことを、呼び出し記録の側から確かめる
+    // 1. 先に app の宛先を runner-2 を除いた形へ置き直すコマンド
+    //    （runner_url_for が作るのと同じ ${{…}} 参照の値、残るのは runner のぶんだけ）
+    expect(r.stderr).toContain(
+      "railway variable set 'ALTEROID_RUNNER_URLS=http://${{runner.RAILWAY_PRIVATE_DOMAIN}}:4518' --service app",
+    );
+    // 消す runner-2 自身の宛先は含まれない
+    expect(r.stderr).not.toContain('runner-2.RAILWAY_PRIVATE_DOMAIN');
+    // 2. それから Service を消すコマンド
+    expect(r.stderr).toContain('railway service delete --service runner-2 --yes');
+    // **どちらも表示するだけで、実際には呼ばない。** 偽 railway に
+    // `service delete` も `variable set` も一度も届いていないことを確かめる
     expect(r.calls.some((c) => c.includes('service delete'))).toBe(false);
+    expect(r.calls.some((c) => c.startsWith('variable set'))).toBe(false);
     expect(r.calls.some((c) => c.startsWith('add'))).toBe(false);
     expect(r.calls.some((c) => c.includes('VariableCollectionUpsert'))).toBe(false);
   });
@@ -713,6 +737,38 @@ describe('--vacate で減らすとき（委譲が移り終わる）', () => {
     // staleManagerPolls: 2 — 最初の2回は「割り当て済みの委譲=有」と出るはず
     expect(r.stderr).toContain('割り当て済みの委譲=有');
     expect(r.stderr).toContain('割り当て済みの委譲=無');
+  });
+
+  it('資格の値はこの表示を含む出力にも一度も現れない', () => {
+    // (1)(2) で足した表示（app の宛先の置き直し・Service を消すコマンド）を
+    // 含む出力全体を対象に確かめる——既存の「資格の値は一度も出ない」の
+    // describe と同じ観点だが、ここでは新しい表示そのものを名指しして見る
+    expect(r.stderr).not.toContain(FAKE_OPERATOR_TOKEN);
+  });
+});
+
+describe('--vacate で真ん中を指したとき（番号が途切れる）', () => {
+  // 3台（runner / runner-2 / runner-3）のうち runner-2（真ん中）を指名した
+  // シナリオ。$EXISTING は途切れるところまでしか数えないので、真ん中を消すと
+  // 次に台数を数え違える——だから受け付けない（レビューで見つかった穴）。
+  let r: Run;
+  beforeAll(() => {
+    r = scenarios.vacateMiddleRejected;
+  });
+
+  it('非0で終わる', () => {
+    expect(r.exitCode).not.toBe(0);
+  });
+
+  it('理由と、受け付ける名前（いちばん大きい番号）を言って断る', () => {
+    expect(r.stderr).toContain('真ん中の Service は受け付けない');
+    expect(r.stderr).toContain('番号が途切れる');
+    expect(r.stderr).toContain('runner-3');
+  });
+
+  it('vacate も railway ssh も呼ばない（呼び出し記録が空）', () => {
+    expect(r.calls.some((c) => c.startsWith('ssh '))).toBe(false);
+    expect(r.stderr).not.toContain('vacate を投げた');
   });
 });
 

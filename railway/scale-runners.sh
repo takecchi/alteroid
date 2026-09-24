@@ -42,10 +42,22 @@
 #      持ち出さない）
 #   2. `GET /runners`（state）と `GET /managers`（その runnerId に載った委譲が
 #      無いこと）で、委譲が移り終わったのを確かめる（上限時間つきで待つ）
-#   3. 確かめられたら、Service を**消すコマンドを表示するだけ**にする——実際には
-#      消さない。取り消せない操作は、明示の指定があっても一段手前で止める
+#   3. 確かめられたら、$APP_SERVICE の宛先を置き直すコマンドと Service を
+#      **消すコマンドを表示するだけ**にする——実際には消さない・置き直さない。
+#      取り消せない操作は、明示の指定があっても一段手前で止める
 #   4. 上限時間を超えて確かめられなかったら、「確かめられなかった」と言って
 #      非0で終わる（消してよいとは一言も言わない）
+#
+# ## `--vacate` はいちばん大きい番号しか受け付けない
+#
+# `$EXISTING`（いまの runner の数え方。下の「いまの runner を数える」）は
+# `runner`, `runner-2`, … と番号順に、**途切れるところまでしか数えない**
+# （`!names.has(name)` で数えるのを止める node が下に在る）。真ん中
+# （`runner-2`）を空けて消すと、以後 `runner-3` が居ても `runner-2` が無い
+# 時点で数えるのを止めてしまい、次に回したときに実際より少ない台数を数え
+# 違える。**だから `--vacate` は、いま実際に並んでいる中でいちばん大きい
+# 番号の Service だけを受け付ける。** 真ん中を指されたら、理由と（受け付ける）
+# いちばん大きい番号の名前を言って断る——vacate も railway ssh も呼ばない。
 set -euo pipefail
 
 # **置き方は setup.sh と同じものを使う**（railway/lib.sh）。変数の投入・Config as Code の
@@ -72,9 +84,12 @@ usage() {
 
   -n, --total <台数>      runner を最終的に何台にするか（既存を含む）
   -v, --vacate <Service名> 減らすときに空ける runner（例: runner-2）。
-                          このスクリプトは黙って選ばない——呼ぶ側が指名する。
-                          委譲が移り終わったことを確かめたら、消すコマンドを
-                          表示するだけで、Service を消すところまではやらない。
+                          このスクリプトは黙って選ばない——呼ぶ側が指名する
+                          （受け付けるのは、いま並んでいる中でいちばん大きい
+                          番号の Service だけ。真ん中は番号が途切れて次に
+                          数え違えるので断る）。委譲が移り終わったことを
+                          確かめたら、app の宛先を置き直すコマンドと Service を
+                          消すコマンドを表示するだけで、実際には行わない。
   -r, --repo <owner/repo> GitHub 連携する対象（既定: 既存 runner と同じ / origin）
   -b, --branch <ブランチ> 追いかけるブランチ（既定: release/prod）
   -d, --dry-run           何をするかだけ出して、何も作らない
@@ -86,8 +101,9 @@ usage() {
 最後に app の ALTEROID_RUNNER_URLS を置き直して app だけ上げ直す。
 
 減らす台数を指定したら --vacate <Service名> が要る（このスクリプトは黙って
-器を選ばない）。ALTEROID_VACATE_TIMEOUT_SECONDS / ALTEROID_VACATE_POLL_INTERVAL_SECONDS
-で委譲が移り終わるのを待つ上限・間隔を変えられる（既定 600秒 / 5秒間隔）。
+器を選ばない。真ん中も選べない——いちばん大きい番号だけ）。
+ALTEROID_VACATE_TIMEOUT_SECONDS / ALTEROID_VACATE_POLL_INTERVAL_SECONDS で
+委譲が移り終わるのを待つ上限・間隔を変えられる（既定 600秒 / 5秒間隔）。
 EOS
 }
 
@@ -234,6 +250,23 @@ if [ "$TOTAL" -lt "$CURRENT" ]; then
   [ -n "$VACATE_ID" ] || die "$VACATE はいまの runner ではない（--vacate は現在の Service 名を指す）。
     いまの runner: ${EXISTING//$'\n'/ }"
 
+  # **真ん中は受け付けない——いちばん大きい番号だけ。** `$EXISTING` の数え方
+  # （lib.sh の doc、上の「いまの runner を数える」の node）は「途切れるところ
+  # まで」しか見ない——`runner-2` を消すと、以後 `runner-3` があっても
+  # `runner-2` が無い時点で数えるのをやめる。だから真ん中を空ける・消すのを
+  # 許すと、次にこのスクリプトを回したときに実際より少ない台数を数え違える。
+  # 空けてよいのは、いま実際に並んでいる中でいちばん大きい番号の Service だけ
+  # ——それなら消しても数え方の前提（1, 2, 3, … と途切れずに並ぶ）が崩れない。
+  LAST_NAME="$(printf '%s\n' "$EXISTING" | tail -n1)"
+  if [ "$VACATE" != "$LAST_NAME" ]; then
+    die "$VACATE は空けられない（真ん中の Service は受け付けない）。
+    番号が途切れると、次にこのスクリプトを回したときに台数を数え違える
+    （\$EXISTING は runner, runner-2, … と番号順に、途切れるところまでしか
+    数えない）。
+    いま --vacate で受け付けられるのは、いちばん大きい番号だけ: $LAST_NAME
+    先に $LAST_NAME を空けて消してから、もう一度 $VACATE を指定すること。"
+  fi
+
   info "空ける runner   $VACATE（runnerId=$VACATE_ID）"
   warn "委譲が移り終わるまで待つ（最大 ${VACATE_TIMEOUT_SECONDS}秒）。" \
     "Service を消すコマンドは最後に表示するだけで、ここでは消さない"
@@ -358,10 +391,33 @@ NODE_EOF
 
   if printf '%s\n' "$VACATE_OUT" | command grep -Fq -- 'VACATED'; then
     ok "$VACATE の委譲は移り終えた（runnerId=$VACATE_ID）"
+
+    # 消す器を除いた宛先。**runner_url_for が作るのと同じ ${{…}} 参照の形**に
+    # する——put_variables が置く値と1文字も違わなければ、手で打っても
+    # 解決のされ方（Railway 側の変数参照の解決）が変わらない。$VACATE は
+    # 上で「いちばん大きい番号」と確かめてあるので、残るのは 1..CURRENT-1 の
+    # 並びのまま（途中の番号が抜けない）。
+    NEW_RUNNER_URLS=''
+    for i in $(seq 1 $((CURRENT - 1))); do
+      NEW_RUNNER_URLS="${NEW_RUNNER_URLS:+$NEW_RUNNER_URLS,}$(runner_url_for "$i")"
+    done
+
+    # **順番は「先に宛先を置き直し、後で消す」。** 逆にすると、$APP_SERVICE が
+    # まだ $VACATE を宛先に含んだまま再起動なしで走り続け、消えた相手へ
+    # 繋がるまで挑み続ける窓ができる（名簿は回数で諦めない）。宛先を先に
+    # 置き直せば、消す時点で $APP_SERVICE はもう $VACATE を知らない。
     cat >&2 <<EOS
 
-    確かめられた。消すなら次を実行する（**このスクリプトは実行しない**——
-    取り消せない操作は、明示の指定があっても一段手前で止める）:
+    確かめられた。消すなら次の2つを**この順で**実行する（**このスクリプトは
+    実行しない**——取り消せない操作は、明示の指定があっても一段手前で止める）。
+
+    1. 先に $APP_SERVICE の宛先を $VACATE を除いた形へ置き直す
+       （$APP_SERVICE が上げ直り、クローンのターン1本と chat の接続が
+       数十秒切れる。走行中のマネージャーは畳まれない——「作るとき」と同じ）:
+
+      railway variable set 'ALTEROID_RUNNER_URLS=${NEW_RUNNER_URLS}' --service $APP_SERVICE
+
+    2. それから Service を消す:
 
       railway service delete --service $VACATE --yes
 
