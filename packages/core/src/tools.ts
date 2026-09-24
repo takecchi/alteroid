@@ -146,6 +146,7 @@ import {
   COMMITMENT_APPRAISAL_DECISION_PREFIX,
   JOB_APPRAISAL_DECISION_PREFIX,
   JOURNAL_ENTRY_TYPES,
+  PERMISSION_GRANT_CONSENT_PHRASE,
   approvalUpdatedAt,
   appraisalSchema,
   workKindSchema,
@@ -5443,7 +5444,8 @@ export function createCloneTools(context: ToolContext) {
         const conversationId = getConversationId();
         const question =
           `以降 ${rule} を聞かずに通してよいか。理由: ${reason}\n` +
-          `通る例: ${allows.join(' / ')}\n通らない例: ${denies.join(' / ')}`;
+          `通る例: ${allows.join(' / ')}\n通らない例: ${denies.join(' / ')}\n` +
+          `許可するなら「${PERMISSION_GRANT_CONSENT_PHRASE}」とだけ答える（句点や言い換えがあると記録しない）。`;
         const approval: PendingApproval = {
           id: randomUUID(),
           createdAt: new Date().toISOString(),
@@ -5476,7 +5478,7 @@ export function createCloneTools(context: ToolContext) {
         // であり、専用の chat イベント型を新設する理由が無い。
         context.emit({ type: 'ask_human', approvalId: approval.id, question });
         return text(
-          `承認待ちキューに積んだ（${approval.id}）。人間が「許可します」とちょうど答え、` +
+          `承認待ちキューに積んだ（${approval.id}）。人間が「${PERMISSION_GRANT_CONSENT_PHRASE}」とちょうど答え、` +
             'かつ許可されたアカウント経由の回答だった場合だけ、以降この規則に一致する Bash が自動で通る。',
         );
       },

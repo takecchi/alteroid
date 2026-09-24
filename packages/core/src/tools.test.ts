@@ -30,6 +30,7 @@ import {
   COMMITMENT_APPRAISAL_DECISION_PREFIX,
   describeAppraisal,
   journalEntrySchema,
+  PERMISSION_GRANT_CONSENT_PHRASE,
   type AppraisalValue,
   type AppraisedBy,
   type ChatStreamEvent,
@@ -4922,6 +4923,8 @@ describe('クローンの道具', () => {
         allows: ['gh release edit --draft', 'gh release edit'],
         denies: ['gh release edit; rm -rf /'],
       });
+      // 人間が何と答えれば記録されるのかを、承認画面の本文で読めること。
+      expect(pending[0]?.question).toContain(`「${PERMISSION_GRANT_CONSENT_PHRASE}」とだけ答える`);
 
       const [escalation] = await h.stores.journal.list({ types: ['escalation'] });
       expect(escalation).toMatchObject({ type: 'escalation', approvalId: pending[0]?.id });

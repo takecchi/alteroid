@@ -207,6 +207,10 @@ const EXEMPT: readonly Exemption[] = [
     why: '説明文が名乗る状態の言い方（まだ答えが無い／記録を始める前／記録が動いていない疑い）は approval-trace.ts の ApprovalTraceState の値だが、説明文は字面ではなく日本語で言う。ふるまいの歯は approval-trace.test.ts に置いた（#847）',
   },
   { tool: 'approval_withdraw', why: '実装側に、説明文が数え直すような一覧が無い（#963）' },
+  {
+    tool: 'request_permission',
+    why: '説明文は区切り文字の一覧も定型文も数え直していない（検算は permission-rule.ts、ふるまいの歯は permission-rule.test.ts と tools.test.ts。#863）',
+  },
   { tool: 'daily_report_write', why: '実装側に、説明文が数え直すような一覧が無い' },
   { tool: 'schedule_remove', why: '実装側に、説明文が数え直すような一覧が無い' },
   {
