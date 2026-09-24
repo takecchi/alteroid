@@ -858,3 +858,44 @@ export function useInboxRemoveMany() {
     [api, mutate],
   );
 }
+
+/**
+ * 許可を与える／取り消す（`POST /access/:id/grant` `.../revoke`。Issue #213）。
+ *
+ * **資格は `authenticate` だけ**（2026-09-06 の同格化。`apps/daemon/src/app.ts` の
+ * 該当経路の doc）なので、許可を持つアカウントなら Web UI からも通る。サーバの規則
+ * （誰が許可できるか・持ち主の排他）はここへ写さない —— 返ってきた失敗をそのまま
+ * 見せる（`useDeclareOwner` と同じ方針）。
+ *
+ * `body: {}` の理由は `useDeclareOwner` と同じ。
+ */
+export function useGrantAccess() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (accountId: string) => {
+      const result = await api.api
+        .POST('/access/{accountId}/grant', { params: { path: { accountId } }, body: {} })
+        .then(unwrap);
+      await mutate(KEY.access);
+      return result;
+    },
+    [api, mutate],
+  );
+}
+
+/** 許可を取り消す（`useGrantAccess` と対）。**押す前の確認は画面の側が持つ**（`routes/access.tsx`）。 */
+export function useRevokeAccess() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (accountId: string) => {
+      const result = await api.api
+        .POST('/access/{accountId}/revoke', { params: { path: { accountId } }, body: {} })
+        .then(unwrap);
+      await mutate(KEY.access);
+      return result;
+    },
+    [api, mutate],
+  );
+}

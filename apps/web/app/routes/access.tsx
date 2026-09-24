@@ -2,7 +2,12 @@ import { useState } from 'react';
 
 import { Page } from '~/components/page';
 import { Badge, Button, Card, CardHeader, Empty, ErrorNote, Spinner } from '~/components/ui';
-import { useDeclareOwner, useRevokeOwnerDeclaration } from '~/hooks/mutations';
+import {
+  useDeclareOwner,
+  useGrantAccess,
+  useRevokeAccess,
+  useRevokeOwnerDeclaration,
+} from '~/hooks/mutations';
 import { useAccess } from '~/hooks/queries';
 import { ApiError } from '~/lib/api';
 import { formatDateTime } from '~/lib/format';
@@ -12,8 +17,8 @@ import type { AccessAccount } from '~/lib/types';
  * `/access` — ログインしたアカウントと許可の一覧（`GET /access` / CLI の
  * `alteroid access list` と同じもの）。
  *
- * **`grant` / `revoke`（許可の付与・取り消し）はこの画面からは呼ばない**
- * （Issue #213）。理由は下の「なぜ grant / revoke だけ読み取りのままなのか」。
+ * **`grant` / `revoke`（許可の付与・取り消し）もこの画面から起こせる**（Issue #213。
+ * 2026-09-24 に「欠落」と判定して足した。経緯は下の「grant / revoke を足した経緯」）。
  *
  * **実行環境の持ち主としての宣言（issue #1198）だけは、ここにボタンを置く。**
  * `POST /access/:id/owner` / `.../owner/revoke` は `requireOperator`——
@@ -27,7 +32,21 @@ import type { AccessAccount } from '~/lib/types';
  * ——先回りしてボタンを隠したり無効化したりせず、返ってきた失敗をそのまま
  * 見せるだけにする。
  *
- * ## なぜ grant / revoke だけ読み取りのままなのか
+ * ## grant / revoke を足した経緯（Issue #213）
+ *
+ * **⚠️ 2026-09-24 に判断を反転した。** 以下の2段落は、それまでこの画面が読み取りに
+ * とどまっていた理由として書かれていたもので、経緯として残す。反転した理由:
+ *
+ * - オーナーが「判断待ちの Issue は担い手の層で決めてよい」と委ねた（2026-09-24）
+ * - 資格の線は既に決着している —— 2026-09-06 のオーナー決定で、許可を持つ
+ *   アカウントは `grant` / `revoke` を叩ける（`authenticate` だけ）。**足りないのは
+ *   画面だけ**だった（#213 の 2026-09-16 のコメント）
+ * - 下の「列挙に無い」は、この repo の実績（台帳の本文編集・生ログの削除も列挙に
+ *   無いが3入口へ揃えた）と整合しない（同コメント）
+ * - 残る懸念「取り消しはその場で戻せない」は、**取り消しの前に確認の一手を挟む**
+ *   ことで扱う（`AccessGrantControl`）。付与は取り消せる側なので確認を挟まない
+ *
+ * （以下、反転前の記述）
  *
  * `docs/PRD.md`「要件: インターフェース」の入口の等価性は、見えるもの・起こせる
  * ことの列挙に「許可の付与」を含んでいない（`grep -Fn -- '入口の等価性' docs/PRD.md`）。
@@ -49,8 +68,7 @@ import type { AccessAccount } from '~/lib/types';
  *
  * ## この変更のあとも CLI / HTTP にしかできないこと
  *
- * - **許可の付与**（`alteroid access grant <id>` / `POST /access/:id/grant`）
- * - **許可の取り消し**（`alteroid access revoke <id>` / `POST /access/:id/revoke`）
+ * - ~~許可の付与・取り消し~~ —— 2026-09-24 に足した（Issue #213）
  * - **実行環境の持ち主としての宣言・取り消しの実行そのもの**（ボタンはここに
  *   在るが、Web UI から押しても成立しない——実際に叩けるのは端末だけである）
  *
@@ -64,7 +82,7 @@ export default function Access() {
   return (
     <Page
       title="アクセス許可"
-      description="alteroid を使う許可の一覧。許可の付与・取り消しは alteroid access grant/revoke、または POST /access/:id/grant|revoke で行う。実行環境の持ち主としての宣言はここから起こせる（実際に通るのは端末だけ）"
+      description="alteroid を使う許可の一覧。許可の付与・取り消しもここから行える（alteroid access grant/revoke と同じ）。実行環境の持ち主としての宣言はここから起こせる（実際に通るのは端末だけ）"
     >
       <Card>
         <CardHeader
@@ -153,8 +171,80 @@ function AccountRow({ account }: { account: AccessAccount }) {
         </dd>
       </dl>
 
+      <AccessGrantControl account={account} />
       <OwnerDeclarationControl account={account} />
     </li>
+  );
+}
+
+/**
+ * 許可の付与・取り消しボタン（Issue #213）。
+ *
+ * - 未許可のアカウント → 「許可する」。押せばすぐ `POST /access/:id/grant`
+ * - 許可済みのアカウント → 「許可を取り消す」。**押しても最初は叩かない。**
+ *   確認の一手（「本当に取り消す」）を挟んでから `POST /access/:id/revoke`。
+ *   取り消しはその場で戻せない（戻すには、許可を持つ別のアカウントか実行環境の
+ *   持ち主が、もう一度許可する必要がある）ので、誤クリック1回で起きないようにする
+ *
+ * 誰が押せるかの判定はサーバに任せる（先回りして隠さない）。
+ */
+function AccessGrantControl({ account }: { account: AccessAccount }) {
+  const grantAccess = useGrantAccess();
+  const revokeAccess = useRevokeAccess();
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [failure, setFailure] = useState<unknown>(undefined);
+
+  async function run(action: () => Promise<unknown>) {
+    setBusy(true);
+    setFailure(undefined);
+    try {
+      await action();
+      setConfirming(false);
+    } catch (caught) {
+      setFailure(caught);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-2 flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        {!account.granted ? (
+          <Button
+            variant="primary"
+            size="sm"
+            loading={busy}
+            onClick={() => void run(() => grantAccess(account.id))}
+          >
+            許可する
+          </Button>
+        ) : !confirming ? (
+          <Button variant="danger" size="sm" onClick={() => setConfirming(true)}>
+            許可を取り消す
+          </Button>
+        ) : (
+          <>
+            <span className="text-[11px] text-warn">
+              取り消すと、このアカウントはその場では戻せない（許可を持つ別のアカウントか実行環境の持ち主が、もう一度許可する必要がある）。
+            </span>
+            <Button
+              variant="danger"
+              size="sm"
+              loading={busy}
+              onClick={() => void run(() => revokeAccess(account.id))}
+            >
+              本当に取り消す
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>
+              やめる
+            </Button>
+          </>
+        )}
+      </div>
+      <ErrorNote error={failure} />
+    </div>
   );
 }
 
