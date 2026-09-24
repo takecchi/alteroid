@@ -29,6 +29,8 @@ export default [
     route('tokens', 'routes/tokens.tsx'),
     route('access', 'routes/access.tsx'),
     route('env-vars', 'routes/env-vars.tsx'),
+    // 実行環境プロファイル（issue #1122）。CLI の `alteroid profile` と同じ口。
+    route('profile', 'routes/profile.tsx'),
     route('dropped', 'routes/dropped.tsx'),
     route('archive', 'routes/archive.tsx'),
     // CLI の `alteroid inbox remove` と同じ口（issue #972 / #1042）。

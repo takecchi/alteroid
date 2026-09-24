@@ -190,6 +190,16 @@ export type EnvVarView = CredentialsState['credentials'][number];
 export type EnvVarScope = EnvVarView['scope'];
 
 /**
+ * 実行環境プロファイル（`GET /profile`。issue #1122）。
+ *
+ * **`script` は本文そのもの**で、鍵が丸ごと入りうる（`credentials` と違って指紋に
+ * 畳まれていない）。置かれていなければ `script: ''` で、他の欄は載らない。
+ */
+export type ProfileState = Ok<paths['/profile']['get']>;
+/** `PUT /profile` が 200 で返す、クローンと各 runner への反映結果。 */
+export type ProfileUpdateResult = Ok<paths['/profile']['put']>;
+
+/**
  * 握り潰しの跡（`GET /dropped`）。CLI（`alteroid dropped`）・クローンの MCP
  * 道具 `self_dropped` と同じ帳面を読む（`packages/core/src/dropped-record.ts`）。
  *

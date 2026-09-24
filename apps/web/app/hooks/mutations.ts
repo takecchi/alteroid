@@ -14,13 +14,14 @@
 import { useCallback } from 'react';
 import { useSWRConfig } from 'swr';
 
-import { expectOk, unwrap, useApi } from '~/lib/api';
+import { ApiError, expectOk, unwrap, useApi } from '~/lib/api';
 import type {
   AgentTokenView,
   ConversationSummary,
   EnvVarScope,
   InboxEventType,
   InboxRemoveManyResult,
+  ProfileUpdateResult,
   TokenRotationSettings,
 } from '~/lib/types';
 
@@ -636,6 +637,63 @@ export function useSetEnvVar() {
         .then(unwrap);
       await mutate(KEY.credentials);
       return result;
+    },
+    [api, mutate],
+  );
+}
+
+/**
+ * `PUT /profile` が 400 で返した「読めなかったので保存していない」。
+ *
+ * **`detail` を落とさないために別の型にしてある。** 共有の `unwrap` は本文の
+ * `error` だけを文言にする（`lib/api.tsx` の `describeError`）が、プロファイルの
+ * 400 で直すのに要るのは `detail` のほう——シェルの構文エラーは行番号込みで
+ * しか直せない（`apps/daemon/src/openapi.ts` の `profileErrorResponseSchema` の doc）。
+ * CLI も `error` と `detail` を2行で出している（`apps/cli/src/profile.ts` の `request`）。
+ *
+ * `ApiError` を継承するので、`status` で分岐している既存の読み手はそのまま動く。
+ */
+export class ProfileRejectedError extends ApiError {
+  readonly detail: string;
+
+  constructor(error: string, detail: string) {
+    super(400, error);
+    this.name = 'ProfileRejectedError';
+    this.detail = detail;
+  }
+}
+
+/**
+ * 実行環境プロファイルを丸ごと差し替える（`PUT /profile`。issue #1122）。
+ * **空文字は「外す」**（`alteroid profile clear` と同じ。`profileUpdateRequestSchema`
+ * の doc）。
+ *
+ * **確認は呼び出し側（`routes/profile.tsx`）の仕事。** 送った本文はデーモンの
+ * `process.env` を土台にその場で評価される＝記憶ストアの鍵を持つプロセスでの
+ * 任意コマンド実行である（`.claude/skills/env-profile/SKILL.md`）。サーバ側に
+ * 確認の印は無いので、呼ぶ前の確認だけが網になる（`useShutdownDaemon` と同じ事情）。
+ *
+ * **`requireOperator`。** ブラウザは構造的に operator になれない（`useDeclareOwner`
+ * の doc と同じ）ので、認証を有効にした構成では常に 403 になる。ボタンは隠さない。
+ */
+export function useSetProfile() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (script: string): Promise<ProfileUpdateResult> => {
+      const result = await api.api.PUT('/profile', { body: { script } });
+      if (result.response.status === 400) {
+        const body = result.error as { error?: unknown; detail?: unknown } | undefined;
+        if (typeof body?.error === 'string') {
+          throw new ProfileRejectedError(
+            body.error,
+            typeof body.detail === 'string' ? body.detail : '',
+          );
+        }
+      }
+      const updated = unwrap(result);
+      await mutate(KEY.profile);
+      return updated;
     },
     [api, mutate],
   );

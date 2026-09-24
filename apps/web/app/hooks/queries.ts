@@ -130,6 +130,7 @@ export const KEY = {
   tokens: { type: 'tokens' } as const,
   access: { type: 'access' } as const,
   credentials: { type: 'credentials' } as const,
+  profile: { type: 'profile' } as const,
   dropped: { type: 'dropped' } as const,
   archive: { type: 'archive' } as const,
   archiveSessions: { type: 'archiveSessions' } as const,
@@ -495,6 +496,25 @@ export function useAccess() {
 export function useCredentials() {
   const api = useApi();
   return useSWR(KEY.credentials, () => api.api.GET('/credentials').then(unwrap));
+}
+
+/**
+ * 実行環境プロファイル（`GET /profile`。issue #1122）。
+ *
+ * **資格は `requireOperator`**（`/credentials` の GET と違い、本文を丸ごと返す口
+ * だからである）。ブラウザは構造的に operator になれないので、認証を有効に
+ * した構成では常に 403 が返る——判定はサーバに任せ、呼び出し側（`routes/profile.tsx`）
+ * は返ってきた失敗をそのまま見せる。
+ *
+ * **フォーカス・再接続での再取得をしない。** 本文には鍵が入りうるので、画面が
+ * 開いているあいだに勝手に何度も運ばせない（取り直すのは保存した直後だけ）。
+ */
+export function useProfile() {
+  const api = useApi();
+  return useSWR(KEY.profile, () => api.api.GET('/profile').then(unwrap), {
+    revalidateOnFocus: false,
+    revalidateOnReconnect: false,
+  });
 }
 
 /**
