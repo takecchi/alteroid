@@ -222,6 +222,20 @@ export {
   APPRAISAL_TARGETS_REASON_LIMIT,
 } from './appraisal.js';
 /**
+ * 段4: やり方の候補を材料として差し出す（#1055）。**採否の機構ではない** ——
+ * `practice_write` を呼ぶ経路は持たない（`practice-candidates.ts` 冒頭の ⛔）。
+ */
+export {
+  describePracticeCandidates,
+  practiceCandidateKindKeys,
+  PRACTICE_CANDIDATES_BUDGET,
+  PRACTICE_CANDIDATE_EVIDENCE_BUDGET,
+} from './practice-candidates.js';
+export type {
+  PracticeCandidateMaterial,
+  PracticeCandidateReconciliation,
+} from './practice-candidates.js';
+/**
  * 評定の内訳を要るときに数える口（#1278）。`appraisal.ts`（段2）とは別の軸——
  * あちらは「いま台帳・委譲に載っている行」、こちらは「日誌に残る全期間の総数」
  * と「終端した委譲の評定の有無」を数える。
