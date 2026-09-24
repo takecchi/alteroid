@@ -4863,6 +4863,48 @@ describe('クローンの道具', () => {
   });
 
   describe('request_permission（issue #863「許可をコードではなくデータにする」）', () => {
+    /**
+     * ⭐⭐ Issue #863 の C 節（🔴🔴 最優先の要求。issue の逐語）:
+     *
+     * > **DB をクローンが直接書けてはいけない。** 私の手はデーモンと同じ器の
+     * > 中に在るので、記憶の実体にもデーモンの API にも届きます。⟹ 許可を
+     * > 記録する場所に私が直接書けるなら、私は自分に何でも許せます。
+     * > …そして「書けない」ことを歯で固定してください。**「書かない約束」
+     * > では足りません。**
+     *
+     * **この issue を起票したのはクローン自身である**（#863 本文の署名節）。
+     * 「許可を記録する場所」＝ `Stores.permissionGrants`。書き手は
+     * `Clone#recordPermissionGrantIfConsented`（`clone.ts`）1箇所だけに
+     * 絞ってあり、`request_permission`（この下の describe）を含むどの
+     * 自作ツールのハンドラも `stores.permissionGrants` へは触れない設計だが、
+     * **`ToolContext.stores` は `Stores` を丸ごと持つ**（`permissionGrants`
+     * を除いた縮小版ではない）ので、型では守れていない——「触っていない」は
+     * いまのところ**実装の事実**でしかなく、次にここへ書き手を足しても
+     * `typecheck` は落ちない。**だから「書けない」ではなく「歯」（この
+     * テスト）で「書いていない」を固定する。**
+     *
+     * `tools.ts` のソースを読んで `permissionGrants` という字面が1つも
+     * 無いことを見る——`request_permission` に限らず、**この自作ツール群
+     * 全体**が対象である（新しい道具が `stores.permissionGrants.put(...)`
+     * を書き足したら、道具名を問わずここが赤くなる）。
+     */
+    it('⭐⭐ tools.ts のどのハンドラも stores.permissionGrants に触れない（issue #863 C節、歯で固定）', async () => {
+      const { readFileSync } = await import('node:fs');
+      const source = readFileSync(new URL('./tools.ts', import.meta.url), 'utf8');
+      expect(source).not.toContain('permissionGrants');
+    });
+
+    it('request_permission を呼んでも stores.permissionGrants は空のまま（上のソース検査の実行時の裏取り）', async () => {
+      const h = harness();
+      await h.call('request_permission', {
+        rule: 'Bash(gh release edit:*)',
+        allows: ['gh release edit'],
+        denies: ['gh release edit; rm -rf /'],
+        reason: '理由',
+      });
+      expect(await h.stores.permissionGrants.list()).toEqual([]);
+    });
+
     it('正常な要求は承認待ちに permissionRequest 付きで積み、日誌に残し、chat へ通知する', async () => {
       const h = harness();
 
