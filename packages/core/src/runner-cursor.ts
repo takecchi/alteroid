@@ -37,7 +37,7 @@ import type { RunnerOverview } from './manager.js';
  * `memory-cursor.ts` は**描く順（木の DFS）と錨の順（`slug` 昇順）が一致
  * しない**ため、落ちた分を拾うのに「ここから（含む）」を採り、重複を契約に
  * した（逐語で当たる:
- * `grep -Fn -- '欠落と重複が両立しないなら、欠落しない側へ倒す。' packages/core/src/memory-cursor.ts`）。
+ * `grep -Fn -- '両立しないなら、欠落しない側へ倒す。**' packages/core/src/memory-cursor.ts`）。
  *
  * **`runner_list` はそうではない。** `tools.ts` は `overview.runners` を
  * **配列の順のまま1台1ブロックで積む**（並べ替えも絞り込みも挟まない）ので、

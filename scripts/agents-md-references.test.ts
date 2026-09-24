@@ -35,11 +35,13 @@ import { describe, expect, it } from 'vitest';
  *
  * **⚠️ 「2. N行目」は広げない。理由と実測は、その歯のすぐ上の doc に書いてある**
  * （コードの中の「N行目」は出典ではなく語彙だから——詳細はそちらを読むこと）。
- * **「3. `grep -Fn --` の現物一致」も広げていない**——依頼の主題は
- * `path:行番号` の腐りだけで（コード中の裸のファイル名を `isRepoFile` が
- * 解決できず素通りしていた穴）、3.（逐語出典の現物一致）はこの PR が確かめた
- * 対象ではないため、範囲を広げると同時に線を引く側（AGENTS.md「範囲を広げるなら、
- * 広げると同時に新しい線を引くこと」）に倣ってここで止めてある。
+ * **「3. `grep -Fn --` の現物一致」は、後から同じ範囲へ広げた（issue #1450）。**
+ * PR #760 の時点では依頼の主題が `path:行番号` の腐りだけだったので止めてあったが、
+ * 止めていた間に、コードの注釈の逐語出典が指した先から消えていた（2026-09-24、
+ * `main` `55b6e54` で実測。うち3件は同じ日の #1442 が `manager.ts` の1行を
+ * 書き換えただけで腐った）。**広げたのは 3. だけで、2.（N行目）は広げていない**
+ * ——線はそちらの doc のまま動かしていない。広げた歯は下の
+ * 「広げた対象範囲の grep -Fn -- 出典（issue #1450）」の describe である。
  *
  * **⚠️ なぜ `grep -n` ではなく `grep -Fn --` か（#408）。** 逐語に正規表現の
  * メタ文字（`$` `{` `}` `(` `)` `[` `]` `*` `+` `?` `.` `|` `^` `\` や、`-`
@@ -667,6 +669,20 @@ export type LegacyVerbatimCitation = {
  * 視界から外れる」と挙げていた懸念が、向きを変えて再現していた）。
  * **見ないのではなく、見つけたら形で判定して落とす**ことにした。
  */
+/**
+ * シェルの二重引用符の中で、バッククォート・二重引用符・ドル記号・バックスラッシュの
+ * 前に置かれたバックスラッシュを落とす（issue #1450）。
+ *
+ * **出典は人が打つコマンドなので、判定は打ったときのシェルと同じ文字列で行う。**
+ * コードの注釈は出典全体をバッククォートで囲むので、逐語にバッククォートを含めたい
+ * ときはバックスラッシュで逃がした二重引用符の形で書くしかない。そのまま比べると、
+ * 逃がしたバックスラッシュの分だけ必ず0件になる（打てば当たるのに、歯は赤くなる）。
+ * 一重引用符の中は何も落とさない——シェルと同じである。
+ */
+export function unescapeShellDoubleQuoted(text: string): string {
+  return text.replace(/\\([\\`"$])/g, '$1');
+}
+
 function findAllGrepStyleCitations(
   lines: readonly ProseLine[],
 ): Array<{ line: number; hasF: boolean; hasDashDash: boolean; pattern: string; target: string }> {
@@ -684,7 +700,7 @@ function findAllGrepStyleCitations(
         line,
         hasF: m[1] === 'F',
         hasDashDash: m[2] !== undefined,
-        pattern: m[4] ?? '',
+        pattern: m[3] === '"' ? unescapeShellDoubleQuoted(m[4] ?? '') : (m[4] ?? ''),
         target: m[5] ?? '',
       });
     }
@@ -1309,6 +1325,124 @@ describe('.claude/** と */src/** と apps/web/app/** と scripts/** の path:�
         '「フェンスの中」として無検査になっている——フェンス記号の対応' +
         '（開いた文字・長さと同じもので閉じる）を直すこと。',
     ).toEqual([]);
+  });
+});
+
+/**
+ * **`grep -Fn -- '<逐語>' <path>` の形をしていても、出典ではないもの**（issue #1450）。
+ *
+ * 広げた対象範囲はコードなので、門そのものの合成入力（テストの fixture）が出典と
+ * 同じ形で現れる。**載せるのは file と逐語の組で、理由を必ず書く。** 載っている組が
+ * いまも実際に検出されることは下の歯が測る（幽霊免除を残さない）。
+ */
+const WIDENED_VERBATIM_CITATION_EXEMPTIONS: ReadonlyArray<{
+  file: string;
+  pattern: string;
+  why: string;
+}> = [
+  {
+    file: 'scripts/check-pr-line-number-citations.test.ts',
+    pattern: 'foo',
+    why: 'PR 本文の検査へ渡す合成入力（「出典が無ければ ok」の fixture）。指す先を持たない',
+  },
+];
+
+function isVerbatimCitationExempted(file: string, pattern: string): boolean {
+  return WIDENED_VERBATIM_CITATION_EXEMPTIONS.some((e) => e.file === file && e.pattern === pattern);
+}
+
+describe('広げた対象範囲の grep -Fn -- 出典（issue #1450）', () => {
+  const widened = WIDENED_SCOPE_FILES.map((file) => ({
+    file,
+    lines: proseLines(readRepoFile(file)),
+  }));
+
+  it('`grep -Fn --` で書かれた出典が現物に当たる', () => {
+    const missing: string[] = [];
+    for (const { file, lines } of widened) {
+      const citations = findVerbatimCitations(lines).filter(
+        (c) => !isVerbatimCitationExempted(file, c.pattern),
+      );
+      for (const c of findMissingVerbatimCitations(citations, isRepoFile, readRepoFile)) {
+        missing.push(`${file}:${c.line} grep -Fn -- '${c.pattern}' ${c.target} が0件`);
+      }
+    }
+    expect(
+      missing,
+      [
+        'コードの注釈が引いている逐語が、指したファイルに無い。',
+        '⚠️ これは「行が動いた」では落ちない（この歯は行番号を一切見ていない）。',
+        '指された文言そのものが書き換えられたか消えたかである。',
+        '(a) 文言を直したのなら、出典の逐語もいまの文言へ直す（またはシンボル名へ変える）',
+        '(b) 指していたものが消えたのなら、出典ごと畳む',
+        '(c) 出典ではなく門の合成入力なら、WIDENED_VERBATIM_CITATION_EXEMPTIONS へ理由つきで足す',
+      ].join('\n'),
+    ).toEqual([]);
+  });
+
+  it('旧形式（`grep -n` など、`-F` か `--` が無い）で書かれた出典が無い', () => {
+    const legacy: string[] = [];
+    for (const { file, lines } of widened) {
+      for (const c of findLegacyVerbatimCitations(lines)) {
+        legacy.push(`${file}:${c.line} ${c.form} '${c.pattern}' ${c.target}`);
+      }
+    }
+    expect(legacy, "出典は `grep -Fn -- '<逐語>' <path>` の形で書くこと（#408）。").toEqual([]);
+  });
+
+  it('リポジトリの根から解決できない裸のファイル名で指さない', () => {
+    // `findMissingVerbatimCitations` は解決できない対象を黙って見ない（リポジトリの
+    // 外を指す出典のため）。だから `clone.ts` のような裸の名前で書くと、その出典は
+    // 永久に検査されない。拡張子を持つ語だけを数える（`<path>` や glob は対象外）。
+    const bare: string[] = [];
+    for (const { file, lines } of widened) {
+      for (const c of findVerbatimCitations(lines)) {
+        if (/^[\w.-]+\.(ts|tsx|mjs|js|md|json|ya?ml)$/.test(c.target) && !isRepoFile(c.target)) {
+          bare.push(`${file}:${c.line} ${c.target}`);
+        }
+      }
+    }
+    expect(bare, 'リポジトリの根からのパスで書くこと。').toEqual([]);
+  });
+
+  it('WIDENED_VERBATIM_CITATION_EXEMPTIONS の why が全部、非空である', () => {
+    expect(WIDENED_VERBATIM_CITATION_EXEMPTIONS.filter((e) => e.why.trim() === '')).toEqual([]);
+  });
+
+  it('WIDENED_VERBATIM_CITATION_EXEMPTIONS に載っている組が、いまも実際に検出される（幽霊免除が無い）', () => {
+    const detected = new Set(
+      widened.flatMap(({ file, lines }) =>
+        findVerbatimCitations(lines).map((c) => `${file}\0${c.pattern}`),
+      ),
+    );
+    expect(
+      WIDENED_VERBATIM_CITATION_EXEMPTIONS.filter(
+        (e) => !detected.has(`${e.file}\0${e.pattern}`),
+      ).map((e) => `${e.file} '${e.pattern}'`),
+    ).toEqual([]);
+  });
+
+  it('対象範囲の出典が実際に拾われている（抽出が壊れて0件のまま緑にならない）', () => {
+    // 抽出が1件も拾わなくなると、上の歯は「一致」のまま緑になる。
+    // 2026-09-24 の実測で200件を超えていたので、桁が落ちたら赤くする。
+    const total = widened.reduce((sum, { lines }) => sum + findVerbatimCitations(lines).length, 0);
+    expect(total).toBeGreaterThan(100);
+  });
+});
+
+describe('unescapeShellDoubleQuoted（issue #1450）', () => {
+  it('バッククォート・二重引用符・ドル記号・バックスラッシュの前のバックスラッシュだけを落とす', () => {
+    expect(unescapeShellDoubleQuoted('\\`a\\` \\"b\\" \\$c \\\\d \\n')).toBe('`a` "b" $c \\d \\n');
+  });
+
+  it('二重引用符で書かれた出典にだけ効き、一重引用符の出典には効かない', () => {
+    const lines = [
+      { line: 1, text: 'x `grep -Fn -- "a \\`b\\`" a.ts`' },
+      { line: 2, text: "x `grep -Fn -- 'a \\$b' a.ts`" },
+    ];
+    const got = findVerbatimCitations(lines);
+    expect(got.find((c) => c.line === 1)?.pattern).toBe('a `b`');
+    expect(got.find((c) => c.line === 2)?.pattern).toBe('a \\$b');
   });
 });
 

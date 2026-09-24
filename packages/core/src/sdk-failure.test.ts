@@ -406,7 +406,7 @@ describe('verification_required — 回復の見込みを名乗らない', () =>
    * `'unknown'` のまま変わらない——直前の歯は緑のままになる。
    *
    * **`usage-limits.ts` の `matchedUsageLimitPrefix` の doc 自身がこの区別を
-   * 持っている**（逐語、`grep -Fn -- '\`limitRecoveryOf\` の返り値だけを見ても現れない。' packages/core/src/usage-limits.ts`）:
+   * 持っている**（逐語、`grep -Fn -- 'の返り値だけを見ても現れない。' packages/core/src/usage-limits.ts`）:
    *
    * > `limitRecoveryOf` の返り値だけを見ても現れない。
    *

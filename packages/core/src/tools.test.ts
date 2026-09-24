@@ -1453,7 +1453,7 @@ describe('クローンの道具', () => {
      * ⚠️ `premise` の焼き込みを全文からカード（要旨＋節の目次）へ変えた
      * 2026-09-08 の反転の後も、この道具の説明文だけが「premise はプロンプトへ
      * 全文が焼き込まれている」という古い文言のまま取り残されていた
-     * （`grep -Fn -- 'premise はプロンプトへ全文が焼き込まれている' packages/core/src/tools.ts` で当たっていた）。
+     * （当時の `packages/core/src/tools.ts` にはこの文言がそのまま在った。いまは0件が正しい）。
      */
     it('説明文は「premise は全文が焼き込まれる」と言わず、要旨＋節の目次と開く口（memory_section_read）を言う', () => {
       const stores = createMemoryStores();
@@ -9518,7 +9518,7 @@ describe('manager_list は件数が増えても壊れない', () => {
  * **直した穴**: この一覧は「走っているものから順に出している」と名乗っていたのに、
  * 実装は稼働状態を1度も見ていなかった——並びは `ManagerPool.list()` の
  * `startedAt` 降順そのままである（逐語:
- * `grep -Fn -- 'return [...known.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt));' packages/core/src/manager.ts`）。
+ * `grep -Fn -- 'return summaries.sort((a, b) => b.startedAt.localeCompare(a.startedAt));' packages/core/src/manager.ts`）。
  * ⟹ 終端した委譲（`done` / `lost` / `failed` / `stopped`）が溜まると、走行中・
  * 返事待ちが文字数の予算（`LIST_BUDGET`）の窓の外へ押し出され、**id が本文に
  * 出ないので `manager_report` で名指しもできなくなる。**

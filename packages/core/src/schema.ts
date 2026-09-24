@@ -1280,7 +1280,7 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
    * 閉じる形が本番では普通である。** ⟹ **この種別が0件でも「空転が無かった」
    * を意味しない。** 同じ断りは `runner.ts` の `#onSubagentStop` が組み立てる
    * `note.text`（`disclaimer` という変数名で持っている。
-   * `grep -Fn -- 'この行が出ないことは「空転が無かった」を意味しない' runner.ts`）
+   * `grep -Fn -- 'この行が出ないことは「空転が無かった」を意味しない' packages/core/src/runner.ts`）
    * にも書いてあるが、**数える人が最初に読むのは schema であってログの1行
    * ではない**ので、同じ趣旨をここにも置く。
    *

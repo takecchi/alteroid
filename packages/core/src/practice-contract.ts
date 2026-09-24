@@ -10,7 +10,7 @@ import type { PracticeStore } from './store.js';
  * > **4つ目を足すときは、その歯も4つ目にする。** 1つで測って3つとも測ったことに
  * > しないのが、この Issue の主題そのものである。
  *
- * `grep -Fn -- '4つ目を足すときは、その歯も4つ目にする' packages/core/src/store.ts`
+ * `grep -Fn -- '**4つ目を足すときは、' packages/core/src/store.ts`
  *
  * 記憶では、末尾改行の正規化が `storage-fs` と `storage-pg` に逐語で複製されて
  * いて、3つ目（インメモリ）だけがそれを持たなかった。**そして `packages/core` の

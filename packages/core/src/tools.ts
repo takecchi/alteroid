@@ -8714,7 +8714,7 @@ export function createCloneTools(context: ToolContext) {
         // **走行中・返事待ち → lost → その他の3群で出す（#688）。**
         // `ManagerPool.list()` の並びは
         // `startedAt` の降順で、**稼働状態を1度も見ていない**（逐語:
-        // `grep -Fn -- 'return [...known.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt));' packages/core/src/manager.ts`）。
+        // `grep -Fn -- 'return summaries.sort((a, b) => b.startedAt.localeCompare(a.startedAt));' packages/core/src/manager.ts`）。
         // ⟹ 終端した委譲が溜まると、走行中・返事待ちが文字数の予算
         // （`LIST_BUDGET`）の窓の外へ押し出され、**id が本文に出ないので
         // `manager_report` で名指しもできなくなる**（実測 2026-09-07: 台帳
@@ -10815,7 +10815,7 @@ function managerPositionOf(entry: ManagerSummary): ManagerPosition {
  *
  * **なぜ一覧の側で並べ直すのか。** `ManagerPool.list()` は `startedAt` の降順で、
  * 稼働状態を1度も見ていない（逐語:
- * `grep -Fn -- 'return [...known.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt));' packages/core/src/manager.ts`）。
+ * `grep -Fn -- 'return summaries.sort((a, b) => b.startedAt.localeCompare(a.startedAt));' packages/core/src/manager.ts`）。
  * この一覧は文字数の予算（`LIST_BUDGET`）で末尾から切るので、**終端した委譲が
  * 溜まると走行中・返事待ちが窓の外へ落ちる。** 落ちると id が本文に出ないので、
  * `manager_report` で名指しして中を見ることもできない（＝到達できない委譲が

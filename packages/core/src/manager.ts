@@ -1766,7 +1766,7 @@ export interface ManagerPool {
  * | `app.ts` の `POST /archive/remove`（一括） | **`undefined` を渡す** |
  *
  * 逐語:
- * `grep -Fn -- 'guardArchiveRemoval(context.managers, target.id, undefined)' packages/core/src/tools.ts`
+ * `grep -Fn -- 'guardArchiveRemoval(context.managers, target.id, undefined' packages/core/src/tools.ts`
  *
  * **一括の口で理由を1本だけ書いて全件を開けると、「どの1件をなぜ開けたか」が
  * 記録から消える。** ⟹ 開けたい回は単発の口を使う。
