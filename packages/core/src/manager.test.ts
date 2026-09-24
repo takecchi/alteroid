@@ -2645,6 +2645,22 @@ function swappableRunner(runnerId = 'runner-primary') {
       });
     },
     /**
+     * 道具が1回実行された（`runner.ts` の `#onPostToolUse` が降ろす）。
+     * `actor` は `manager:<id>` / `worker:<id>:<agent>`（`runner-protocol.ts`
+     * の `tool_use` イベントの doc）。`input` を省くと `undefined` になる——
+     * 本物と同じく `JSON.stringify` で欄ごと落ちる形（`.optional()` の doc）
+     * を、テストの側でも `input` を渡さないことで再現する。
+     */
+    toolUse(managerId: string, actor: string, tool: string, input?: unknown) {
+      emit?.({
+        type: 'tool_use',
+        managerId,
+        actor,
+        tool,
+        ...(input === undefined ? {} : { input }),
+      });
+    },
+    /**
      * runner の内側の事実（`runner.ts` の `#onSubagentStop` 等が積む `note`）。
      *
      * `escalate` を省くと従来どおり日誌にだけ残る回、`true` を渡すと
@@ -6068,6 +6084,305 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
     const stored = await stores.jobs.listJobs();
     expect(stored.find((j) => j.id === job.id)?.lastUnpushedWorkObservation).toBeUndefined();
 
+    await s.pool.stop();
+  });
+});
+
+describe('Bash の git push を検出したら unpushedWork を1回取る（Issue #1376 の続き）', () => {
+  /** 台帳の1件を直接読む（他の describe と重複させない）。 */
+  async function jobOf(s: Setup, managerId: string) {
+    return (await s.stores.jobs.listJobs()).find((job) => job.id === managerId);
+  }
+
+  /** `case 'tool_use'` の日誌エントリが書かれたことを待つ。 */
+  async function toolUseJournalHas(s: Setup, needle: string) {
+    await expect
+      .poll(
+        async () => {
+          const entries = await s.stores.journal.list({ types: ['tool_use'] });
+          return entries.some((entry) => JSON.stringify(entry).includes(needle));
+        },
+        { timeout: 2000 },
+      )
+      .toBe(true);
+  }
+
+  /**
+   * **歯1（陽性）**: マネージャー自身の Bash で `git push` が走ると、
+   * `unpushedWork` が1回呼ばれ、観測（枝名を含む）が台帳に残る。`report` を
+   * 一度も送っていないことが要点——この観測は `case 'report'` 側の経路
+   * （Issue #1266 の (4)）とは別に、`tool_use` だけで起きる。
+   */
+  it('Bash の git push tool_use で unpushedWork が呼ばれ、枝名を含む観測が台帳に残る', async () => {
+    const fake = swappableRunner('runner-primary');
+    const calls: { managerId: string; hasSignal: boolean }[] = [];
+    const runner: RunnerClient = {
+      ...fake.runner,
+      async unpushedWork(managerId, options) {
+        calls.push({ managerId, hasSignal: options?.signal !== undefined });
+        return {
+          cwd: '/work/project',
+          worktrees: [{ relativePath: '.', branch: 'feat/1376-push-observation' }],
+        };
+      },
+    };
+    const stores = createMemoryStores();
+    const s = setup(undefined, { stores, runner });
+    const { managerId } = await s.pool.start({ request: '確認' });
+
+    fake.toolUse(managerId, `manager:${managerId}`, 'Bash', { command: 'git push origin HEAD' });
+
+    // **待って確かめる**（fire-and-forget なので、tool_use イベントの処理が
+    // 返った時点ではまだ完了していないことがある——#1419 の describe と
+    // 同じ理由）。
+    await expect.poll(() => calls.length, { timeout: 2000 }).toBe(1);
+    expect(calls[0]).toEqual({ managerId, hasSignal: true });
+
+    await expect
+      .poll(async () => (await jobOf(s, managerId))?.lastUnpushedWorkObservation, {
+        timeout: 2000,
+      })
+      .toMatchObject({ kind: 'observed' });
+    const job = await jobOf(s, managerId);
+    expect(job?.lastUnpushedWorkObservation).toMatchObject({
+      kind: 'observed',
+      cwd: '/work/project',
+      worktrees: [{ relativePath: '.', branch: 'feat/1376-push-observation' }],
+    });
+
+    // tool_use そのものの日誌書き込みも普通に進んでいる。
+    await toolUseJournalHas(s, 'git push origin HEAD');
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **歯1b**: 作業者（`worker:<id>:<agent>`）の Bash で `git push` が走っても
+   * 同じ委譲（`managerId`）として観測が呼ばれる——依頼の指定どおり actor は
+   * マネージャー・作業者のどちらでも同じ扱い。
+   */
+  it('作業者の Bash の git push でも、同じ委譲について unpushedWork が呼ばれる', async () => {
+    const fake = swappableRunner('runner-primary');
+    const calls: string[] = [];
+    const runner: RunnerClient = {
+      ...fake.runner,
+      async unpushedWork(managerId) {
+        calls.push(managerId);
+        return { cwd: '/work/project', worktrees: [] };
+      },
+    };
+    const stores = createMemoryStores();
+    const s = setup(undefined, { stores, runner });
+    const { managerId } = await s.pool.start({ request: '確認' });
+
+    fake.toolUse(managerId, `worker:${managerId}:general-purpose`, 'Bash', {
+      command: 'git add -A && git commit -m x && git push',
+    });
+
+    await expect.poll(() => calls.length, { timeout: 2000 }).toBe(1);
+    expect(calls).toEqual([managerId]);
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **歯2（対照・道具）**: `Bash` 以外の道具では、`command` に `git push` を
+   * 含む input を渡しても呼ばれない——`event.tool === 'Bash'` が先に絞る。
+   */
+  it('Bash 以外の道具では git push らしき input があっても呼ばれない', async () => {
+    const fake = swappableRunner('runner-primary');
+    const calls: string[] = [];
+    const runner: RunnerClient = {
+      ...fake.runner,
+      async unpushedWork(managerId) {
+        calls.push(managerId);
+        return { cwd: '/work/project', worktrees: [] };
+      },
+    };
+    const stores = createMemoryStores();
+    const s = setup(undefined, { stores, runner });
+    const { managerId } = await s.pool.start({ request: '確認' });
+
+    fake.toolUse(managerId, `manager:${managerId}`, 'Write', {
+      file_path: '/tmp/x',
+      content: 'git push',
+    });
+    await toolUseJournalHas(s, 'Write');
+
+    // 道具の実行は日誌に残っているのに、unpushedWork は呼ばれていない。
+    expect(calls).toEqual([]);
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **歯3（対照・コマンド）**: `Bash` でも、`command` に `git push` を含まない
+   * ものでは呼ばれない——`git status` や `git pull` のような近い語では拾わ
+   * ない（過剰検出ではないことの確認）。
+   */
+  it('Bash でも git push を含まないコマンドでは呼ばれない', async () => {
+    const fake = swappableRunner('runner-primary');
+    const calls: string[] = [];
+    const runner: RunnerClient = {
+      ...fake.runner,
+      async unpushedWork(managerId) {
+        calls.push(managerId);
+        return { cwd: '/work/project', worktrees: [] };
+      },
+    };
+    const stores = createMemoryStores();
+    const s = setup(undefined, { stores, runner });
+    const { managerId } = await s.pool.start({ request: '確認' });
+
+    fake.toolUse(managerId, `manager:${managerId}`, 'Bash', { command: 'git status' });
+    fake.toolUse(managerId, `manager:${managerId}`, 'Bash', { command: 'git pull --rebase' });
+    await toolUseJournalHas(s, 'git pull --rebase');
+
+    expect(calls).toEqual([]);
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **歯4（保守的な判定の向き）**: 文字列一致による誤検出（`echo` で
+   * `git push` という文字列を渡すだけの回）は、依頼の指定どおり「観測を
+   * 1回余分に取るだけ」で害が無いことを確かめる——誤検出そのものを禁じる
+   * 歯ではなく、**誤検出しても不都合が起きない**ことを固定する歯。
+   */
+  it('echo など誤検出でも、観測を1回余分に取るだけで報告の処理は乱れない', async () => {
+    const fake = swappableRunner('runner-primary');
+    const calls: string[] = [];
+    const runner: RunnerClient = {
+      ...fake.runner,
+      async unpushedWork(managerId) {
+        calls.push(managerId);
+        return { cwd: '/work/project', worktrees: [] };
+      },
+    };
+    const stores = createMemoryStores();
+    const s = setup(undefined, { stores, runner });
+    const { managerId } = await s.pool.start({ request: '確認' });
+
+    fake.toolUse(managerId, `manager:${managerId}`, 'Bash', {
+      command: "echo 'git push しました'",
+    });
+
+    await expect.poll(() => calls.length, { timeout: 2000 }).toBe(1);
+    const job = await jobOf(s, managerId);
+    expect(job?.lastUnpushedWorkObservation).toMatchObject({ kind: 'observed' });
+    expect(job?.status).not.toBe('failed');
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **歯5**: 同じ委譲で `git push` の tool_use が短い間に続いても、
+   * `unpushedWork` は重ねて投げない（`#unpushedWorkObservationInFlight` を
+   * 共有する、#1419 の描いた形をそのまま踏襲）。
+   */
+  it('同じ委譲で git push の tool_use が短い間に続いても、unpushedWork は重ねて投げない', async () => {
+    const fake = swappableRunner('runner-primary');
+    const calls: string[] = [];
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const runner: RunnerClient = {
+      ...fake.runner,
+      async unpushedWork(managerId) {
+        calls.push(managerId);
+        await gate;
+        return { cwd: '/work/project', worktrees: [] };
+      },
+    };
+    const stores = createMemoryStores();
+    const s = setup(undefined, { stores, runner });
+    const { managerId } = await s.pool.start({ request: '確認' });
+
+    fake.toolUse(managerId, `manager:${managerId}`, 'Bash', { command: 'git push' });
+    await expect.poll(() => calls.length, { timeout: 2000 }).toBe(1);
+
+    // 1本目がまだ `gate` で止まっている間にもう一度 push する。
+    fake.toolUse(managerId, `manager:${managerId}`, 'Bash', { command: 'git push' });
+    await toolUseJournalHas(s, 'Bash');
+    expect(calls).toEqual([managerId]);
+
+    release?.();
+    await expect
+      .poll(async () => (await jobOf(s, managerId))?.lastUnpushedWorkObservation, {
+        timeout: 2000,
+      })
+      .toMatchObject({ kind: 'observed' });
+
+    // 印が揮発したので、次の push でまた呼べる。
+    fake.toolUse(managerId, `manager:${managerId}`, 'Bash', { command: 'git push' });
+    await expect.poll(() => calls.length, { timeout: 2000 }).toBe(2);
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **歯6（#1419 との共有）**: `report` 終わりの観測がまだ runner との往復の
+   * 途中に、同じ委譲で `git push` の tool_use が届いても、重ねて投げない
+   * ——`#unpushedWorkObservationInFlight` は `case 'report'` と
+   * `case 'tool_use'` の両方が同じ Set を見る、という依頼の指定（「同じ委譲で
+   * 短い間に重ねて投げない」を共有する）そのものを固定する。
+   */
+  it('report 起点の観測が進行中なら、同じ委譲の git push は重ねて投げない', async () => {
+    const fake = swappableRunner('runner-primary');
+    const calls: string[] = [];
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const runner: RunnerClient = {
+      ...fake.runner,
+      async unpushedWork(managerId) {
+        calls.push(managerId);
+        await gate;
+        return { cwd: '/work/project', worktrees: [] };
+      },
+    };
+    const stores = createMemoryStores();
+    const s = setup(undefined, { stores, runner });
+    const { managerId } = await s.pool.start({ request: '確認' });
+
+    // report 起点の観測を起こし、gate で止めたままにする。
+    fake.report(managerId, '完了しました');
+    await expect.poll(() => calls.length, { timeout: 2000 }).toBe(1);
+
+    // その最中に git push の tool_use が届く。
+    fake.toolUse(managerId, `manager:${managerId}`, 'Bash', { command: 'git push' });
+    await toolUseJournalHas(s, 'Bash');
+    expect(calls).toEqual([managerId]);
+
+    release?.();
+    await s.pool.stop();
+  });
+
+  /**
+   * **歯7**: `unpushedWork()` が失敗しても（例外）、`tool_use` の処理
+   * （直前の `await this.#journal(...)` による日誌への書き込み）は止まらない
+   * ——`case 'tool_use'` の `try`/`catch` と `#observeUnpushedWorkOnce` 自身の
+   * `.catch()` の二重の保険を、依頼の指定どおり確かめる。
+   */
+  it('unpushedWork が失敗しても（例外）、tool_use の日誌書き込みは止まらない', async () => {
+    const fake = swappableRunner('runner-primary');
+    const stores = createMemoryStores();
+    const s = setup(undefined, { stores, runner: fake.runner });
+    const { managerId } = await s.pool.start({ request: '確認' });
+
+    const spy = vi.spyOn(s.pool, 'unpushedWork').mockRejectedValue(new Error('boom'));
+
+    fake.toolUse(managerId, `manager:${managerId}`, 'Bash', { command: 'git push' });
+
+    // 日誌への書き込みは進む。
+    await toolUseJournalHas(s, 'git push');
+
+    // 呼ばれてはいる（そして失敗した）ことも確かめる。
+    await expect.poll(() => spy.mock.calls.length, { timeout: 2000 }).toBe(1);
+
+    spy.mockRestore();
     await s.pool.stop();
   });
 });

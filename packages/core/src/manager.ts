@@ -882,6 +882,29 @@ function decodeDenialKey(key: string): { tool: string; actor: 'manager' | 'worke
 }
 
 /**
+ * Bash の `command` 文字列に `git push` が含まれるかを、保守的に判定する
+ * （Issue #1376 の続き。`case 'tool_use'` の呼び出し元の doc を見よ）。
+ *
+ * **分類器ではない。** `bash-wait-guard.ts` の `inspectBashCommand` のような
+ * シェル構文の解析はしない——単純な正規表現で十分という判断（依頼の指定）。
+ * `\bgit\s+push\b` は「`git`・空白1つ以上・`push` が単語境界で現れる」ことだけを
+ * 見るので、`git push`／`git  push`（複数空白）／`git push origin main --force`
+ * ／`git add -A && git push` のどれにも一致し、`git pushx`（別の語の一部）には
+ * 一致しない。**`&&` や `;` で連結された複数コマンドの中に埋もれていても拾う**
+ * ——1コマンドだけを見る形にすると、`git push` の前後に別の作業があるだけの
+ * 普通の使い方を取りこぼす。
+ *
+ * **誤検出（`echo 'git push しました'` のような文字列一致）を許容する。**
+ * 呼び出し元がこの結果で起こすのは `#observeUnpushedWorkOnce`（読み取りだけの
+ * 軽い往復、多重投げ止め付き）なので、余分に1回観測するだけで実害が無い。
+ * 一方で見逃すと、この Issue が埋めようとしている穴（報告より前に落ちた
+ * 委譲の枝名が台帳に残らない）がまた開く——だから判定は見逃さない側に倒す。
+ */
+function bashCommandLooksLikeGitPush(command: string): boolean {
+  return /\bgit\s+push\b/.test(command);
+}
+
+/**
  * `runner_list` の内訳に出るマネージャー1本ぶん（器ごとの内訳と `unassigned` で
  * 同じ形を使う）。
  *
@@ -1525,11 +1548,13 @@ export interface ManagerPool {
   transcript(managerId: string): Promise<ManagerTranscript>;
   /**
    * 未 push の実装・未コミットの変更を runner に問い合わせる。**呼び出し元は
-   * 2つ**——(a) `manager_stop` の running・非 force 断りが「畳むと何が失われる
+   * 3つ**——(a) `manager_stop` の running・非 force 断りが「畳むと何が失われる
    * か」を実物の数字で言うためだけに呼ぶ（Issue #1039）、(b) ターンが
    * `report` で終わったとき、その委譲について1回だけ台帳へ観測を残すため
-   * `#observeUnpushedWorkOnReport`（`case 'report'`）が呼ぶ（Issue #1266
-   * の (4)）。**`manager_list` からは呼ばない**——この一覧のために自動で
+   * `#observeUnpushedWorkOnce`（`case 'report'`）が呼ぶ（Issue #1266
+   * の (4)）、(c) Bash で `git push` を検出したとき、同じ
+   * `#observeUnpushedWorkOnce`（`case 'tool_use'`）が呼ぶ（Issue #1376 の
+   * 続き）。**`manager_list` からは呼ばない**——この一覧のために自動で
    * 往復を足さない、という既存の作法（`runners()` の doc）と同じ理由。
    * **`force: true` の経路からも呼ばない**（もう決めた後なので、往復を払う
    * 意味が無い）。
@@ -1538,9 +1563,9 @@ export interface ManagerPool {
    * このメソッド自体は例外を投げない——runner が答えなかった・この口を
    * 持たない・像を持っていない、どの理由でも `{ kind: 'unavailable', reason }`
    * を返す。呼び出し元(a)はこれを「確かめられなかった」として扱い、0 とは
-   * 混ぜない。呼び出し元(b)は待たない（fire-and-forget）ので、この不投げの
-   * 性質はさらに保険——投げても投げなくても、呼び出し元のターン処理は
-   * ブロックしない。
+   * 混ぜない。呼び出し元(b)・(c)は待たない（fire-and-forget）ので、この
+   * 不投げの性質はさらに保険——投げても投げなくても、呼び出し元のターン
+   * 処理はブロックしない。
    *
    * **省略可能（`?`）にしない。** `runnerBacklog()` の doc と同じ理由——
    * 省略可能にすると「この口を持たない」と「観測できなかった」が同じ形に
@@ -2201,7 +2226,8 @@ const PUSH_RETRY_BASE_MS = 2_000;
 const PUSH_RETRY_MAX_MS = 60_000;
 
 /**
- * `#observeUnpushedWorkOnReport`（`case 'report'`。Issue #1266 の (4)）が
+ * `#observeUnpushedWorkOnce`（`case 'report'` と `case 'tool_use'` の
+ * git push 検出。Issue #1266 の (4) と Issue #1376 の続き）が
  * `unpushedWork()` へ渡す期限。
  *
  * `tools.ts` の `MANAGER_STOP_UNPUSHED_WORK_TIMEOUT_MS`（Issue #1039）と
@@ -2212,14 +2238,15 @@ const PUSH_RETRY_MAX_MS = 60_000;
  * `manager.ts` を import する側）をここでも守る。
  *
  * **ここは待たない（fire-and-forget）ので、この期限が長すぎても呼び出し元
- * （`case 'report'` の処理）は塞がれない。** それでも上限を置くのは、
- * runner との往復が返らないまま `#unpushedWorkOnReportInFlight` の印が
- * 残り続けると、その委譲についてだけ次の `report` 以降もずっと1本も
- * 投げられなくなる（`unpushedWork()` 自体は runner が正常に「答えなかった」
- * ときも `unavailable` で解決するが、それは応答自体が返る場合の話で、
- * 応答が永久に返らない壊れ方には効かない）——そちらを防ぐための保険である。
+ * （`case 'report'` / `case 'tool_use'` の処理）は塞がれない。** それでも
+ * 上限を置くのは、runner との往復が返らないまま
+ * `#unpushedWorkObservationInFlight` の印が残り続けると、その委譲について
+ * だけ以降ずっと1本も投げられなくなる（`unpushedWork()` 自体は runner が
+ * 正常に「答えなかった」ときも `unavailable` で解決するが、それは応答自体が
+ * 返る場合の話で、応答が永久に返らない壊れ方には効かない）——そちらを防ぐ
+ * ための保険である。
  */
-const UNPUSHED_WORK_ON_REPORT_TIMEOUT_MS = 5_000;
+const UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS = 5_000;
 
 /**
  * 預かってある生ログを引いた結果。
@@ -4004,21 +4031,25 @@ class Pool implements ManagerPool {
    */
   readonly #synthesizedNoticeStreaks = new Map<string, SynthesizedNoticeStreak>();
   /**
-   * ターンが `report` で終わるたびに `unpushedWork()` を起こす
-   * （Issue #1266 の (4)）ときの、多重投げ止め。managerId が入っている間は、
-   * 同じ委譲へ向けて2本目を投げない。
+   * ターンが `report` で終わるたびに（Issue #1266 の (4)）、または Bash で
+   * `git push` を検出するたびに（Issue #1376 の続き）`unpushedWork()` を
+   * 起こす `#observeUnpushedWorkOnce` の、多重投げ止め。managerId が入って
+   * いる間は、同じ委譲へ向けて2本目を投げない——**トリガーの種類を問わない
+   * 1つの Set を両方の呼び出し元で共有する。** `report` 終わりの観測が
+   * まだ runner との往復の途中に、同じ委譲で `git push` が続いても、
+   * ここが理由でもう1本は投げない（逆向きも同様）。
    *
-   * **なぜ要るか。** `#observeUnpushedWorkOnReport` は待たない
+   * **なぜ要るか。** `#observeUnpushedWorkOnce` は待たない
    * （fire-and-forget）——`unpushedWork()` は runner への HTTP 往復を含む
-   * ので（`#probeUnpushedWork` の doc）、短い間隔で `report` が続くと、前の
-   * 呼び出しがまだ途中ということがありうる。待たずに次を投げると、同じ
-   * 委譲へ向けて往復が積み上がる——ここで1本ずつに絞る。
+   * ので（`#probeUnpushedWork` の doc）、短い間隔で `report` や `git push`
+   * が続くと、前の呼び出しがまだ途中ということがありうる。待たずに次を
+   * 投げると、同じ委譲へ向けて往復が積み上がる——ここで1本ずつに絞る。
    *
-   * **揮発してよい。** デーモンを作り直せば空になり、次の `report` で普通に
-   * また呼ばれる——「1本ずつ」を守るためだけの一時的な印であって、
-   * `#usageStopped` のような台帳に写す恒久の状態ではない。
+   * **揮発してよい。** デーモンを作り直せば空になり、次の `report` や
+   * `git push` で普通にまた呼ばれる——「1本ずつ」を守るためだけの一時的な
+   * 印であって、`#usageStopped` のような台帳に写す恒久の状態ではない。
    */
-  readonly #unpushedWorkOnReportInFlight = new Set<string>();
+  readonly #unpushedWorkObservationInFlight = new Set<string>();
   /**
    * **枠の遷移を日誌へ書くときの畳み込み**（{@link JournalFoldWindow}、issue #1311）。
    *
@@ -5300,15 +5331,16 @@ class Pool implements ManagerPool {
    * 経路を作らない。
    *
    * ⛔ **ここが呼ばれるのは `unpushedWork()` の呼び出し元が
-   * `pool.unpushedWork()` を呼んだ回だけである。呼び出し元は2つ**——
-   * `manager_stop`（running・非 force）の断り（`tools.ts`）と、ターンが
-   * `report` で終わったとき（`case 'report'` の
-   * `#observeUnpushedWorkOnReport`。Issue #1266 の (4)）。**`force: true`
-   * で止めたとき・`manager_list`・器の入れ替え（redeploy・枠落ちで
-   * セッションを失う経路。`report` が届く前に器を失うので拾えない）は、
-   * どちらの呼び出し元からも `unpushedWork()` 自体が呼ばれないので、この
-   * 関数にも来ない**（`lastUnpushedWorkObservationSchema` の doc「残る族」
-   * と同じ注意）。
+   * `pool.unpushedWork()` を呼んだ回だけである。呼び出し元は3つ**——
+   * `manager_stop`（running・非 force）の断り（`tools.ts`）、ターンが
+   * `report` で終わったとき、そして Bash で `git push` を検出したとき
+   * （後の2つはどちらも `#observeUnpushedWorkOnce`。前者は `case 'report'`
+   * から、Issue #1266 の (4)。後者は `case 'tool_use'` から、Issue #1376 の
+   * 続き）。**`force: true` で止めたとき・`manager_list`・器の入れ替え
+   * （redeploy・枠落ちでセッションを失う経路。`report` も `git push` の
+   * `tool_use` も届く前に器を失えば拾えない）は、どの呼び出し元からも
+   * `unpushedWork()` 自体が呼ばれないので、この関数にも来ない**
+   * （`lastUnpushedWorkObservationSchema` の doc「残る族」と同じ注意）。
    */
   async #recordUnpushedWorkObservation(
     record: ManagerRecord,
@@ -5340,23 +5372,30 @@ class Pool implements ManagerPool {
   }
 
   /**
-   * ターンが `report` で終わったとき（`case 'report'`）、この委譲について
-   * `unpushedWork()` を1回起こし、観測を台帳へ書く（Issue #1266 の (4)）。
+   * ターンが `report` で終わったとき（`case 'report'`。Issue #1266 の (4)）、
+   * または Bash で `git push` を検出したとき（`case 'tool_use'`。Issue
+   * #1376 の続き）、この委譲について `unpushedWork()` を1回起こし、観測を
+   * 台帳へ書く。**2つのトリガーで同じ実装を共有する**——どちらも「この
+   * 委譲について、いま追える枝名と origin を1回だけ取って残す」という
+   * 同じ仕事であり、多重投げ止め（下の「重ねて投げない」）も1つの Set を
+   * 共有する。
    *
    * ## 待たない（fire-and-forget）
    *
-   * **呼び出し元（`case 'report'` の event 処理）を待たせない。** 報告の
-   * 配達も台帳の更新も、この問い合わせの完了を待ってはいけない——
-   * `unpushedWork()` は runner への HTTP 往復を含む（`#probeUnpushedWork`
-   * の doc）ので、待つと「報告を受け取ってからクローンのターンが起きる
-   * までの時間」がそのまま乗る。`void` で切り離し、成否に関わらず呼び出し
-   * 元はすぐ次へ進む。
+   * **呼び出し元（`case 'report'` / `case 'tool_use'` の event 処理）を
+   * 待たせない。** 報告の配達・日誌の書き込み・台帳の更新は、この問い合わせ
+   * の完了を待ってはいけない——`unpushedWork()` は runner への HTTP 往復を
+   * 含む（`#probeUnpushedWork` の doc）ので、待つと `report` では「報告を
+   * 受け取ってからクローンのターンが起きるまでの時間」が、`tool_use` では
+   * 「道具の実行が日誌に残るまでの時間」がそのまま乗る。`void` で切り離し、
+   * 成否に関わらず呼び出し元はすぐ次へ進む。
    *
    * ## 重ねて投げない
    *
-   * `#unpushedWorkOnReportInFlight` に managerId が入っていれば、この回は
-   * 何もしない（doc を見よ）——同じ委譲の報告が短い間に続いても、runner
-   * への往復は1本ずつに絞る。
+   * `#unpushedWorkObservationInFlight` に managerId が入っていれば、この回は
+   * 何もしない（doc を見よ）——同じ委譲について `report` と `git push` が
+   * 短い間に続いても、runner への往復は1本ずつに絞る（トリガーの組み合わせを
+   * 問わない）。
    *
    * ## 失敗しても呼び出し元を止めない
    *
@@ -5364,8 +5403,9 @@ class Pool implements ManagerPool {
    * runner が答えなかった・この口を持たない・像を持っていない、どの理由
    * でも `{ kind: 'unavailable', reason }` を返す。**それでもここで
    * `.catch()` を添えてある**——設計が将来守られなくなっても、この
-   * fire-and-forget の失敗が `case 'report'` の処理を巻き添えにしないことを、
-   * この関数自身の形で保証するため（`unpushedWork()` の実装だけに頼らない）。
+   * fire-and-forget の失敗が呼び出し元（`report` の配達・`tool_use` の
+   * 日誌書き込み）を巻き添えにしないことを、この関数自身の形で保証するため
+   * （`unpushedWork()` の実装だけに頼らない）。
    *
    * ## runner がこの口を持たない・器が居ない・取れないとき
    *
@@ -5373,15 +5413,15 @@ class Pool implements ManagerPool {
    * `#recordUnpushedWorkObservation` がそのまま台帳へ書く——ここでは特別
    * 扱いしない。
    */
-  #observeUnpushedWorkOnReport(managerId: string): void {
-    if (this.#unpushedWorkOnReportInFlight.has(managerId)) return;
-    this.#unpushedWorkOnReportInFlight.add(managerId);
+  #observeUnpushedWorkOnce(managerId: string): void {
+    if (this.#unpushedWorkObservationInFlight.has(managerId)) return;
+    this.#unpushedWorkObservationInFlight.add(managerId);
     void this.unpushedWork(managerId, {
-      signal: AbortSignal.timeout(UNPUSHED_WORK_ON_REPORT_TIMEOUT_MS),
+      signal: AbortSignal.timeout(UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS),
     })
       .catch(() => undefined)
       .finally(() => {
-        this.#unpushedWorkOnReportInFlight.delete(managerId);
+        this.#unpushedWorkObservationInFlight.delete(managerId);
       });
   }
 
@@ -8328,10 +8368,10 @@ class Pool implements ManagerPool {
         });
         // **ターンが `report` で終わったので、未 push の作業ツリーを1回だけ
         // 観測しておく**（Issue #1266 の (4)）。**待たない**——
-        // `#observeUnpushedWorkOnReport` は `void` で切り離した fire-and-forget
+        // `#observeUnpushedWorkOnce` は `void` で切り離した fire-and-forget
         // で、この呼び出しの完了を待つと「報告を受け取ってからクローンの
         // ターンが起きるまでの時間」に runner への往復が乗ってしまう
-        // （`#observeUnpushedWorkOnReport` の doc）。
+        // （`#observeUnpushedWorkOnce` の doc）。
         //
         // **`contentless` / `awaitingBackground` の早い `return` より手前に
         // 置く。** あの2つは「クローンの受信箱へ回すか」の判断であって、
@@ -8343,7 +8383,7 @@ class Pool implements ManagerPool {
         // 止めたマネージャーとして扱い、`record.job.status` も動かさず
         // `#emit()` もしない——同じ理由でここも呼ばない（止めた委譲へ
         // 向けて runner との往復を新たに起こす意味が無い）。
-        this.#observeUnpushedWorkOnReport(event.managerId);
+        this.#observeUnpushedWorkOnce(event.managerId);
         /*
          * **借りていた起こし直しを、ここで返す**（`#settleUsageWake`）。
          *
@@ -8682,6 +8722,56 @@ class Pool implements ManagerPool {
           tool: event.tool,
           input: event.input,
         });
+        // **Bash で `git push` を検出したら、未 push の作業ツリーを1回だけ
+        // 観測しておく**（Issue #1376 の続き）。マネージャー・作業者どちらの
+        // `actor` でも同じ委譲（`event.managerId`）の話として扱う——
+        // `#observeUnpushedWorkOnce` は managerId 単位で多重投げを止めるので、
+        // 起点がマネージャー自身の Bash でも `Task` 経由の作業者の Bash でも
+        // 区別しない。
+        //
+        // ## なぜ push が終わる前の観測で足りるか（実際は「終わった後」だが）
+        //
+        // 依頼時点の想定は「`tool_use` は道具の実行が終わる前に届く」だった
+        // が、**現物はそうではない**——ここへ来るのは runner の `PostToolUse`
+        // フック（`runner.ts` の `#onPostToolUse`。`hook.tool_response` を
+        // 受け取っている＝道具の実行は既に完了している）経由で、`git push`
+        // は届いた時点でもう走り終えている。**それでも目的（枝名と origin を
+        // 台帳に残す）には支障が無い**——観測が読むのは worktree の「いまの
+        // 枝名」と「origin の host/path」であって、これらは `git push` を
+        // 打つ**前提として既に存在している**（存在しない枝を push することは
+        // できない）。push の成否がどちらでも、観測できる枝名は変わらない。
+        // **ただし `git push` の実行そのものの最中に器が落ちれば、
+        // `PostToolUse` は一度も発火せずこの経路には来ない**——その回は
+        // `#recordUnpushedWorkObservation` の doc が言う「残る族」の外に
+        // 出たまま、直前の観測（もしあれば）が残るだけである。
+        //
+        // **検出は保守的（誤検出を許容する）向きに倒す。** `bash-wait-guard.ts`
+        // のような分類器を作らず、単純な正規表現（`bashCommandLooksLikeGitPush`）
+        // で済ませる——`echo 'git push'` のような文字列一致の誤検出があっても、
+        // 実際に起きる害は「観測を1回余分に取る」だけで、`unpushedWork()` は
+        // 副作用の無い読み取りであり `#observeUnpushedWorkOnce` の多重投げ止め
+        // もあるので、頻発しても runner への往復が際限なく積み上がることは
+        // ない。**見逃す側に倒すと、この Issue が埋めようとしている穴（報告
+        // より前に落ちた委譲の枝名）がまた開く**——だから誤検出より見逃しを
+        // 避ける。
+        //
+        // **失敗・例外で `tool_use` の処理（直前の日誌の書き込み）を止めない。**
+        // 日誌への `await this.#journal(...)` は既にこの手前で終わっている。
+        // 検出そのものは例外を投げない形で書いてあるが、`try`/`catch` で
+        // さらに保険を掛ける——`#observeUnpushedWorkOnce` 自体も待たず
+        // `.catch()` で畳む（同メソッドの doc）ので、二重の保険である。
+        try {
+          if (event.tool === 'Bash') {
+            const toolInput = event.input as { command?: unknown } | null | undefined;
+            const command = toolInput?.command;
+            if (typeof command === 'string' && bashCommandLooksLikeGitPush(command)) {
+              this.#observeUnpushedWorkOnce(event.managerId);
+            }
+          }
+        } catch {
+          // 検出そのものは失敗しない設計だが、tool_use の処理を巻き添えに
+          // しないための保険（上のコメントを見よ）。
+        }
         return;
       }
 

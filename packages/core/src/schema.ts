@@ -3348,8 +3348,9 @@ export const observedWorktreeBranchSchema = z.object({
 export type ObservedWorktreeBranch = z.infer<typeof observedWorktreeBranchSchema>;
 
 /**
- * `manager_stop`（running・非 force）が取った未 push の作業ツリーの観測の
- * 最後の1回（Issue #1228 候補(1)）。
+ * 未 push の作業ツリーの観測の最後の1回（Issue #1228 候補(1)）。**「最後に
+ * 取れた回」であって「`manager_stop` のときだけ」ではない**——更新する
+ * 呼び出し元は下の「残る族」を見よ。
  *
  * ## なぜ足すか
  *
@@ -3371,14 +3372,22 @@ export type ObservedWorktreeBranch = z.infer<typeof observedWorktreeBranchSchema
  * ## 残る族（⛔ この欄が更新されない回）
  *
  * 更新するのは、`pool.unpushedWork()` が呼ばれた回だけである。呼び出し元は
- * 2つ: `manager_stop`（`before.status === 'running' && force !== true`）の
- * 分岐と、**委譲のターンが報告で終わったとき**（`manager.ts` の `case 'report'`。
- * Issue #1266 の (4)。本番で前者が一度も発火していなかったため足した）。
+ * 3つ: `manager_stop`（`before.status === 'running' && force !== true`）の
+ * 分岐、**委譲のターンが報告で終わったとき**（`manager.ts` の `case 'report'`。
+ * Issue #1266 の (4)。本番で1つ目が一度も発火していなかったため足した）、
+ * そして **Bash で `git push` を検出したとき**（`manager.ts` の
+ * `case 'tool_use'`。Issue #1376 の続き——器の入れ替え・枠落ちで、最初の
+ * 報告より前に落ちた委譲は枝名が引けない、という残っていた穴を、その委譲が
+ * 一度でも `git push` を打っていれば埋める）。
  * **`force: true` で止めたとき・`manager_list`・止めた委譲の報告・器の入れ替え
  * （redeploy・枠落ちでセッションを失う経路）では、この欄は更新されない。**
- * ⟹ **報告の前に落ちた委譲は拾えない**（最後の報告の時点の観測が残るだけで
- * ある）。呼び出し元は `grep -rn 'unpushedWork' --include=*.ts packages/ apps/`
- * で当たる。
+ * ⟹ **報告の前に落ちた委譲は、その委譲が一度も `git push` を打っていなければ
+ * 拾えない**（最後の報告か、最後に検出した `git push` のどちらか遅いほうの
+ * 時点の観測が残るだけである）。`git push` の実行そのものの最中に器が
+ * 落ちた回も拾えない——検出は runner の `PostToolUse` フック経由なので、
+ * コマンドの完了後にしか届かない（`manager.ts` の `case 'tool_use'` の
+ * コメントを見よ）。呼び出し元は
+ * `grep -rn 'unpushedWork' --include=*.ts packages/ apps/` で当たる。
  * **この欄が在ることを「常に最新の枝が分かる」とは読まないこと。**
  *
  * ## 答えないこと
@@ -3789,8 +3798,8 @@ export const jobSchema = z.object({
    */
   usageStoppedAt: isoDateTime.optional(),
   /**
-   * `manager_stop`（running・非 force）が最後に取った、未 push の作業ツリーの
-   * 枝名の観測（Issue #1228 候補(1)）。詳しい意味・残る族・答えないことは
+   * 未 push の作業ツリーの枝名の観測、最後に取れた1回（Issue #1228
+   * 候補(1)）。詳しい意味・残る族・答えないことは
    * {@link lastUnpushedWorkObservationSchema} の doc を見よ。
    */
   lastUnpushedWorkObservation: lastUnpushedWorkObservationSchema.optional(),
