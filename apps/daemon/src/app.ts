@@ -90,6 +90,7 @@ import {
   startSseHeartbeat,
   summarizeUsage,
   tokenRotationSettingsSchema,
+  traceApproval,
   usageDateSchema,
   usageLayerSchema,
   usageSiteSchema,
@@ -117,6 +118,7 @@ import {
   appraisalStatsResponseSchema,
   approvalsAnswerResponseSchema,
   approvalsResponseSchema,
+  approvalTraceResponseSchema,
   archiveListResponseSchema,
   archiveRemoveManyRequestSchema,
   archiveRemoveManyResponseSchema,
@@ -2822,6 +2824,44 @@ export function createApp(deps: AppDeps) {
           }
         }
         return c.json(approvalsResponseSchema.parse(responseBody));
+      },
+    )
+
+    /**
+     * 承認の答えと、その後にクローンが取った行動を対で読む（issue #847 の案B）。
+     *
+     * **資格は他の承認の読み口（`GET /approvals`）と同じく `authenticate` だけ。**
+     * 中身は `/approvals` と `/journal` で既に読めるものの串刺しで、新しく
+     * 外へ出すものは無い。クローンの `approval_trace` と CLI の
+     * `/approval-trace` が同じ `traceApproval` を通る（PRD「インターフェース」）。
+     */
+    .get(
+      '/approvals/:id/trace',
+      describeRoute({
+        tags: ['approvals'],
+        summary: '承認の答えとその後の行動を対で読む',
+        description:
+          '問い・答え（日誌の行と承認待ちの器）と、答えを受けたターンでクローンが書いた行' +
+          '（`answeredApprovalId` がこの承認を指すもの）を古い順に返す。対が無いときは `state` が' +
+          '理由を分ける（`unanswered` / `withdrawn` / `no_turn_start` / ' +
+          '`turn_before_recording`＝この記録を始める前の答えなので記録していない / ' +
+          '`unstamped_actions`＝記録が動いていない疑い / `no_actions`）。' +
+          '一般化した基準は返さない（issue #847）。',
+        responses: {
+          200: {
+            description: '対（無ければ理由つき）。',
+            content: { 'application/json': { schema: resolver(approvalTraceResponseSchema) } },
+          },
+          404: {
+            description: '該当する承認待ちが無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        const trace = await traceApproval(stores, c.req.param('id'));
+        if (trace === null) return c.json({ error: 'not found' as const }, 404);
+        return c.json(approvalTraceResponseSchema.parse(trace));
       },
     )
 

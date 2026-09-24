@@ -827,6 +827,9 @@ function stubClient(
     ) => { id: string; ok: boolean; error?: string }[];
     /** `GET /approvals` が返す一覧。既定は空。 */
     approvals?: ApprovalLike[];
+    /** `GET /approvals/:id/trace` の応答コードと本体（issue #847）。既定は 404。 */
+    approvalTraceStatus?: number;
+    approvalTraceBody?: unknown;
     /** `GET /schedule` が返す一覧。既定は空。 */
     scheduleEntries?: ScheduleEntryLike[];
     /** `GET /memory` が返す一覧。既定は空。 */
@@ -1004,6 +1007,19 @@ function stubClient(
             args.json.answers,
           );
           return Promise.resolve(reply(options.approvalsAnswerStatus ?? 200, { results }));
+        },
+      },
+      ':id': {
+        trace: {
+          $get: (args: unknown) => {
+            calls.push({ route: 'GET /approvals/:id/trace', args });
+            return Promise.resolve(
+              reply(
+                options.approvalTraceStatus ?? 404,
+                options.approvalTraceBody ?? { error: 'not found' },
+              ),
+            );
+          },
         },
       },
     },
@@ -1592,6 +1608,80 @@ describe('chat の /answers（まとめて答える）', () => {
     await runSlashCommand('/help', client, emptyListed());
 
     expect(read()).toContain('/answers');
+  });
+});
+
+/**
+ * `/approval-trace`（issue #847 の案B）。デーモンの応答を core の
+ * `renderApprovalTrace` で**切らずに**出すこと（人間へ返す口）と、対が無い理由を
+ * 黙って落とさないことを測る。状態の分け方そのものの歯は core の
+ * `approval-trace.test.ts`。
+ */
+describe('chat の /approval-trace', () => {
+  const base = {
+    approval: {
+      id: 'appr-1',
+      createdAt: '2026-09-24T00:00:00.000Z',
+      question: '本番へ出してよいか',
+      answeredAt: '2026-09-24T01:00:00.000Z',
+      answer: '(b) でお願いします',
+    },
+    questionEntry: null,
+    answerEntry: null,
+    turnStarts: [],
+    actionsOmitted: 0,
+    unstampedInTurn: 0,
+    scanned: 3,
+    truncated: false,
+  };
+
+  it('印を持つ行動を全文で出す（長くても切らない）', async () => {
+    const read = captureStdout();
+    const long = 'x'.repeat(1_000);
+    const { client, calls } = stubClient({
+      approvalTraceStatus: 200,
+      approvalTraceBody: {
+        ...base,
+        state: 'paired',
+        actions: [
+          {
+            type: 'decision',
+            id: 'j-1',
+            at: '2026-09-24T01:00:01.000Z',
+            decision: `b に沿って進めた ${long}`,
+            grounds: '人間の答え',
+            answeredApprovalId: 'appr-1',
+          },
+        ],
+      },
+    });
+
+    await runSlashCommand('/approval-trace appr-1', client, emptyListed());
+
+    const text = read();
+    expect(calls).toContainEqual({
+      route: 'GET /approvals/:id/trace',
+      args: { param: { id: 'appr-1' } },
+    });
+    expect(text).toContain('(b) でお願いします');
+    expect(text).toContain(`判断: b に沿って進めた ${long}`);
+  });
+
+  it('対が無ければ理由を出す（記録を始める前の答え）', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      approvalTraceStatus: 200,
+      approvalTraceBody: { ...base, state: 'turn_before_recording', actions: [] },
+    });
+    await runSlashCommand('/approval-trace appr-1', client, emptyListed());
+    expect(read()).toContain('行動が無いのではなく、記録していない');
+  });
+
+  it('知らない id は「ありません」', async () => {
+    const read = captureStdout();
+    const { client } = stubClient();
+    await runSlashCommand('/approval-trace nope', client, emptyListed());
+    expect(read()).toContain('承認 nope はありません');
   });
 });
 

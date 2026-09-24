@@ -2,6 +2,7 @@ import {
   accountUsageStateSchema,
   agentTokenInputSchema,
   agentTokenViewSchema,
+  APPROVAL_TRACE_STATES,
   appraisalSchema,
   commitmentSchema,
   createMemoryStores,
@@ -401,6 +402,28 @@ export const approvalsResponseSchema = z.object({
 
 export const approvalsAnswerResponseSchema = z.object({
   results: z.array(z.object({ id: z.string(), ok: z.boolean(), error: z.string().optional() })),
+});
+
+/**
+ * `GET /approvals/:id/trace` の応答（issue #847 の案B）。**形は core の
+ * `ApprovalTrace`（`packages/core/src/approval-trace.ts`）そのもの**で、承認と
+ * 日誌の行は core の schema をそのまま使う（このファイル冒頭の約束）。
+ *
+ * `actions` は抜粋ではなく日誌の行の全文である（人間へ返す口なので切らない）。
+ * 件数は core の `APPROVAL_TRACE_ACTION_LIMIT` で締め、超えた分は
+ * `actionsOmitted` に数だけ載る。
+ */
+export const approvalTraceResponseSchema = z.object({
+  approval: pendingApprovalSchema,
+  state: z.enum(APPROVAL_TRACE_STATES),
+  questionEntry: journalEntrySchema.nullable(),
+  answerEntry: journalEntrySchema.nullable(),
+  turnStarts: z.array(journalEntrySchema),
+  actions: z.array(journalEntrySchema),
+  actionsOmitted: z.number().int().nonnegative(),
+  unstampedInTurn: z.number().int().nonnegative(),
+  scanned: z.number().int().nonnegative(),
+  truncated: z.boolean(),
 });
 
 export const okResponseSchema = z.object({ ok: z.literal(true) });

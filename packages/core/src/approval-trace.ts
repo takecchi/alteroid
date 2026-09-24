@@ -117,15 +117,22 @@ export const APPROVAL_TRACE_SCAN_LIMIT = 5000;
  */
 export const APPROVAL_TRACE_ACTION_LIMIT = 500;
 
-/** 対の状態。意味はこのファイル冒頭の doc「『対が無い』を1つの顔にしない」。 */
-export type ApprovalTraceState =
-  | 'unanswered'
-  | 'withdrawn'
-  | 'paired'
-  | 'no_turn_start'
-  | 'turn_before_recording'
-  | 'unstamped_actions'
-  | 'no_actions';
+export const APPROVAL_TRACE_STATES = [
+  'unanswered',
+  'withdrawn',
+  'paired',
+  'no_turn_start',
+  'turn_before_recording',
+  'unstamped_actions',
+  'no_actions',
+] as const;
+
+/**
+ * 対の状態。意味はこのファイル冒頭の doc「『対が無い』を1つの顔にしない」。
+ * 配列を正本にしてあるのは、HTTP の応答の schema（`apps/daemon/src/openapi.ts`）が
+ * 同じ値の列を `z.enum` で引くため——手で写すと片方だけ増える。
+ */
+export type ApprovalTraceState = (typeof APPROVAL_TRACE_STATES)[number];
 
 export interface ApprovalTrace {
   approval: PendingApproval;

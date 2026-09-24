@@ -400,6 +400,7 @@ export {
 export {
   APPROVAL_TRACE_ACTION_LIMIT,
   APPROVAL_TRACE_SCAN_LIMIT,
+  APPROVAL_TRACE_STATES,
   describeTraceAction,
   renderApprovalTrace,
   stampAnsweredApproval,

@@ -1181,6 +1181,71 @@ describe('HTTP API', () => {
   });
 
   /**
+   * 答えとその後の行動の対（issue #847 の案B）。クローンの `approval_trace` と
+   * 同じ `traceApproval` を通ることは、同じ日誌から同じ行が返ることで測る
+   * （状態の分け方そのものの歯は `packages/core/src/approval-trace.test.ts`）。
+   */
+  it('GET /approvals/:id/trace は答えと、その承認の印を持つ行動を返し、知らない id は 404', async () => {
+    const answeredAt = new Date(Date.now() - 1_000).toISOString();
+    await stores.jobs.putApproval({
+      id: 'ap-trace',
+      createdAt: new Date(Date.now() - 2_000).toISOString(),
+      question: '本番へ出してよいか',
+      answeredAt,
+      answer: '(b) で',
+    });
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'self',
+      role: 'inbound',
+      text: 'ターンの入力: human_answer approvalId=ap-trace',
+      answeredApprovalId: 'ap-trace',
+    });
+    await stores.journal.append({
+      type: 'decision',
+      decision: '(b) に沿って進めた',
+      grounds: 'g',
+      answeredApprovalId: 'ap-trace',
+    });
+    await stores.journal.append({ type: 'decision', decision: '無関係', grounds: 'g' });
+
+    const response = await app.request('/approvals/ap-trace/trace');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      state: string;
+      approval: { answer: string };
+      actions: { decision?: string }[];
+    };
+    expect(body.state).toBe('paired');
+    expect(body.approval.answer).toBe('(b) で');
+    expect(body.actions.map((entry) => entry.decision)).toEqual(['(b) に沿って進めた']);
+
+    expect((await app.request('/approvals/nope/trace')).status).toBe(404);
+  });
+
+  it('GET /approvals/:id/trace は印を持つ入口の後に行動が無ければ no_actions を返す（「無い」を黙って落とさない）', async () => {
+    await stores.jobs.putApproval({
+      id: 'ap-none',
+      createdAt: new Date(Date.now() - 2_000).toISOString(),
+      question: 'q',
+      answeredAt: new Date(Date.now() - 1_000).toISOString(),
+      answer: 'よい',
+    });
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'self',
+      role: 'inbound',
+      text: 'ターンの入力: human_answer approvalId=ap-none',
+      answeredApprovalId: 'ap-none',
+    });
+    const body = (await (await app.request('/approvals/ap-none/trace')).json()) as {
+      state: string;
+      actions: unknown[];
+    };
+    expect(body).toMatchObject({ state: 'no_actions', actions: [] });
+  });
+
+  /**
    * `updatedAt` は新しい情報ではなく、応答に既に載っている `createdAt` /
    * `answeredAt` から `packages/core/src/schema.ts` の `approvalUpdatedAt` が
    * 導くだけの派生欄（#269 / このスキーマの `.extend()` を土台にした宣言は
