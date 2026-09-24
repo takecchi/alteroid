@@ -177,7 +177,7 @@ export function renderRunners(view: RunnersView): string {
 }
 
 /**
- * `pushHealth` の3欄（プロファイル・環境変数・認証トークン）を1行へまとめる。
+ * `pushHealth` の4欄（プロファイル・環境変数・認証トークン・MCP の登録）を1行へまとめる。
  * **独立の軸として扱う** — 1つが失敗していても他の成否を畳まない。1つも
  * 試みていなければ `undefined` を返し、呼び出し側で行そのものを出さない。
  */
@@ -192,6 +192,8 @@ function renderPushHealth(pushHealth: RunnerPushHealth): string | undefined {
     outcomeText('プロファイル', pushHealth.profile),
     outcomeText('環境変数', pushHealth.credentials),
     outcomeText('認証トークン', pushHealth.agentToken),
+    // #325 段4。ラベルはクローンの `runner_list`（`packages/core/src/tools.ts`）と揃える。
+    outcomeText('MCP の登録', pushHealth.mcpServers),
   ].filter((part): part is string => part !== undefined);
   return parts.length === 0 ? undefined : parts.join(' / ');
 }
