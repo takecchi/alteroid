@@ -1140,7 +1140,7 @@ describe('🔴 #1051: 1回の再開の機会につき、配る合図は1件', ()
    * （→ `apps/daemon/src/index.ts` の `onUsageObservation` → `tokenRotator.observe`
    * → `settleTokenOutcome`。`outcome.kind` が `parked` / `exhausted` なら
    * `cloneWakeGate.observeUnusable()` を呼ぶ）を**待ってから**
-   * `this.#usageBlocked = notice;` を代入する（`grep -Fn -- 'this.#usageBlocked = notice;' packages/core/src/clone.ts`
+   * `this.#usageBlocked = withNoticeTextResetsAt(notice, Date.now());` を代入する（`grep -Fn -- 'this.#usageBlocked = withNoticeTextResetsAt(notice' packages/core/src/clone.ts`
    * の直前の行）。⟹ **クローンが「まだ止まっていない」状態から「また止まった」
    * 状態へ移るときは、必ずその直前に `observeUnusable()` が走っている。**
    *
