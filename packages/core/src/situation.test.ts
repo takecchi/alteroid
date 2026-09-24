@@ -68,6 +68,17 @@ function withLastFailure(manager: ManagerSummary): ManagerSummary {
   return { ...manager, lastFailure: FAILURE };
 }
 
+/**
+ * 枠(利用上限)で止まった委譲にする形（`status` は動かさない。#1212 残件2）。
+ * `manager.ts` の `case 'usage_notice'`（`kind: 'reached'`）が立てる
+ * `ManagerSummary.usageStoppedAt` そのもの——`lastFailure` とは別の欄である
+ * （`withLastFailure` と混ぜて呼べば、2つの軸が同じ委譲に重なる形も作れる）。
+ */
+const USAGE_STOPPED_AT = '2026-09-19T09:00:00.000Z';
+function withUsageStopped(manager: ManagerSummary): ManagerSummary {
+  return { ...manager, usageStoppedAt: USAGE_STOPPED_AT };
+}
+
 describe('countManagerSituation', () => {
   /**
    * **この歯がこのファイルで最初に来る理由。** 「手が空いている」と「背景処理を
@@ -195,6 +206,8 @@ describe('countManagerSituation', () => {
       reachable: 0,
       lastTurnFailed: 0,
       lastTurnFailedIdle: 0,
+      usageStopped: 0,
+      usageStoppedIdle: 0,
     });
   });
 
@@ -260,6 +273,85 @@ describe('countManagerSituation', () => {
     expect(counts.idle).toBe(0);
     expect(counts.lastTurnFailed).toBe(1);
     expect(counts.lastTurnFailedIdle).toBe(0);
+  });
+
+  /**
+   * ⭐ **`usageStopped` は区分ではなく横断する軸である**（#1212 残件2。
+   * `lastTurnFailed` と同じ形）。枠で止まった委譲もセッションは生きているので
+   * `status` は `done` のままで、**同じ委譲が `idle` にも数えられる。**
+   *
+   * **6つの区分の和が `total` のままであること**も一緒に測る。
+   */
+  it('⭐ 枠で止まった done は idle からも数えられる（区分ではなく横断する軸）', () => {
+    const counts = countManagerSituation([
+      withUsageStopped(summary('a', 'done', true)),
+      summary('b', 'done', true),
+    ]);
+    expect(counts.idle).toBe(2);
+    expect(counts.usageStopped).toBe(1);
+    expect(counts.usageStoppedIdle).toBe(1);
+    expect(
+      counts.running +
+        counts.waitingHuman +
+        counts.awaitingBackground +
+        counts.idle +
+        counts.lost +
+        counts.other,
+    ).toBe(counts.total);
+  });
+
+  /**
+   * ⭐ **`usageStoppedIdle` は `usageStopped` の部分集合である**（#1212 残件2。
+   * `lastTurnFailedIdle` と同じ理由）。走行中・返事待ち・lost に残った印は、
+   * 「いま動いている」／「まだ判断待ち」と矛盾しないので、`idle` の内訳へは
+   * 数えない。
+   */
+  it('⭐ 走行中・返事待ち・lost に残った usageStoppedAt は、idle の内訳には数えない', () => {
+    const counts = countManagerSituation([
+      withUsageStopped(summary('a', 'running', true)),
+      withUsageStopped(summary('b', 'waiting_human', true)),
+      withUsageStopped(summary('c', 'lost', false)),
+      withUsageStopped(summary('d', 'done', true)),
+    ]);
+    expect(counts.usageStopped).toBe(4);
+    expect(counts.usageStoppedIdle).toBe(1);
+  });
+
+  it('背景処理待ちへ落ちた委譲でも usageStopped には数え、idle の内訳には数えない', () => {
+    const counts = countManagerSituation([withUsageStopped(summary('a', 'done', true, BG))]);
+    expect(counts.awaitingBackground).toBe(1);
+    expect(counts.idle).toBe(0);
+    expect(counts.usageStopped).toBe(1);
+    expect(counts.usageStoppedIdle).toBe(0);
+  });
+
+  /**
+   * ⭐ **決めたこと（#1212 残件2）: `usageStopped` と `lastTurnFailed` は排他に
+   * しない。** 同じ委譲が両方の軸に数えられることを許す——`USAGE_STOPPED_LABEL`
+   * の doc が書いた関係のとおり、利用上限で止まった委譲は通常どちらの軸にも
+   * 数えられる。この歯はその重なりを直接測る（片方だけを見ると、実装が
+   * 誤って排他にしていても緑になる）。
+   */
+  it('⭐ 同じ委譲が usageStopped と lastTurnFailed の両方に数えられる（排他にしない）', () => {
+    const counts = countManagerSituation([
+      withUsageStopped(withLastFailure(summary('a', 'done', true))),
+    ]);
+    expect(counts.usageStopped).toBe(1);
+    expect(counts.lastTurnFailed).toBe(1);
+    expect(counts.usageStoppedIdle).toBe(1);
+    expect(counts.lastTurnFailedIdle).toBe(1);
+  });
+
+  /**
+   * ⭐ **重ならないこともある**（`USAGE_STOPPED_LABEL` の doc「走行中は重ならない
+   * ことがある」）。`usage_notice` はターンの途中でも届くので、まだ `report` が
+   * 来ていない走行中の委譲では `usageStoppedAt` だけが先に立ち、`lastFailure`
+   * はまだ無い——**片方の集計からもう一方を推測できないことを固定する。**
+   */
+  it('⭐ 走行中の委譲では usageStopped だけが立ち、lastTurnFailed は立たないことがある', () => {
+    const counts = countManagerSituation([withUsageStopped(summary('a', 'running', true))]);
+    expect(counts.usageStopped).toBe(1);
+    expect(counts.lastTurnFailed).toBe(0);
   });
 });
 
@@ -619,6 +711,78 @@ describe('describeSituation', () => {
     // それでも軸そのものは名乗る——`done` が「終わった」ではないこと。
     expect(text).toContain('「手が空いている」は「終わった」でもない');
     expect(text).toContain('その本数は1本以上あるときだけ上の行に出る');
+  });
+
+  /**
+   * ⭐ **#1212 残件2の芯。** 「枠で止まっている」を直接名乗る軸が無かった
+   * （#1212 の 2026-09-19 コメントが名指しした残件）。`lastTurnFailed`（上の
+   * 歯）は理由を問わない広い軸で、`usage_notice`（利用上限そのもの）に当たった
+   * ことは読み手が選べない——ここに直接の軸を足す。
+   *
+   * **本数と断り書きの両方を測る**（`lastTurnFailed` の歯と同じ形）。
+   */
+  it('⭐ 手が空いているの中に「枠(利用上限)で止まっている」本数が並び、断り書きが出る', () => {
+    const text = describeSituation({
+      managers: [
+        withUsageStopped(summary('a', 'done', true)),
+        withUsageStopped(summary('b', 'done', true)),
+        summary('c', 'done', true),
+        // **走行中にも1本置く**（`lastTurnFailed` の歯と同じ理由——`usageStopped`
+        // と `usageStoppedIdle` を同じ数にしない。「どの2つも同じ数にしない」）。
+        withUsageStopped(summary('d', 'running', true)),
+      ],
+      runners: [],
+    });
+    const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
+    expect(countsLine, '「委譲 全 」の行が見つからない').toBeDefined();
+    // `done` かつ `live` の3本は、区分としてはこれまでどおり全部 `idle` である
+    // （**`idle` から外さない**）。
+    expect(countsLine).toContain('手が空いている 3');
+    expect(countsLine).toContain('枠(利用上限)で止まっているのは 3 本');
+    expect(countsLine).toContain('「手が空いている」に数えたものが 2 本');
+    expect(countsLine).toContain('上の区分とは足し合わせない');
+    expect(text).toContain('「手が空いている」は「仕事を終えて空いた」を意味しない');
+    expect(text).toContain('この軸で絞る綴りは無い');
+    expect(text).toContain('`manager_report <managerId>`');
+  });
+
+  /**
+   * ⭐ **陰性対照。** `usageStoppedAt` だけを外すと、本数の行も断り書きも消える
+   * ——**差の実在**で測る（`lastFailure` の陰性対照と同じ形）。
+   */
+  it('⭐ （陰性対照）usageStoppedAt が無ければ本数も断り書きも1文字も出ない', () => {
+    const withStopped = describeSituation({
+      managers: [withUsageStopped(summary('a', 'done', true))],
+      runners: [],
+    });
+    const withoutStopped = describeSituation({
+      managers: [summary('a', 'done', true)],
+      runners: [],
+    });
+    const lineWith = withStopped.split('\n').find((l) => l.startsWith('委譲 全 '));
+    const lineWithout = withoutStopped.split('\n').find((l) => l.startsWith('委譲 全 '));
+    expect(lineWithout, '「委譲 全 」の行が見つからない').toBeDefined();
+    // 区分の本数は変わらない（`usageStoppedAt` は `status` を動かさない）。
+    expect(lineWith).toContain('手が空いている 1');
+    expect(lineWithout).toContain('手が空いている 1');
+    expect(lineWith).not.toBe(lineWithout);
+    expect(lineWithout).not.toContain('枠(利用上限)で止まっている');
+    expect(withoutStopped).not.toContain('「手が空いている」は「仕事を終えて空いた」を意味しない');
+  });
+
+  /**
+   * ⭐ **軸が在ることだけは本数が 0 でも名乗る**（`lastTurnFailed` と同じ理由。
+   * #1212 残件2）。
+   */
+  it('⭐ 本数が 0 でも「手が空いている」は「枠が空いた」ではないことを常に名乗る', () => {
+    const text = describeSituation({
+      managers: [summary('a', 'done', true)],
+      runners: [],
+    });
+    const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
+    expect(countsLine).not.toContain('枠(利用上限)で止まっている');
+    expect(text).toContain('「手が空いている」は「枠が空いた」でもない');
+    expect(text).toContain('その本数も1本以上あるときだけ上の行に出る');
   });
 
   /**

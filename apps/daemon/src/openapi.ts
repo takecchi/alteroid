@@ -840,6 +840,30 @@ export const managerSummarySchema = z.object({
    * （`lastReport` / 受信箱）を見る。
    */
   lastSystemError: jobSchema.shape.lastSystemError,
+  /**
+   * この委譲が**枠（利用上限）で止まった**印が立った時刻（Issue #1212 残件2。
+   * `packages/core/src/manager.ts` の `ManagerSummary.usageStoppedAt`）。
+   *
+   * **`jobSchema` の枝をそのまま借りる（ここで書き直さない）。** `lastFailure`
+   * / `lastSystemError` と同じ理由——`packages/core/src/schema.ts` の
+   * `usageStoppedAt` が持つ ISO 時刻の形が片方だけ増えた日に spec が黙って
+   * 古びる。
+   *
+   * **`lastFailure` とは別の軸。重なりは許すが同一ではない。** あちらは
+   * 理由を問わずターンが失敗で終わったことを指す広い印、こちらは
+   * `usage_notice`（`kind: 'reached'`）——利用上限そのものに当たったこと
+   * だけを指す狭い印。**`status` は置き換えない**——支出上限に当たった回も
+   * セッションは生きているので `done`（終えて待機中）のままである
+   * （`lastFailure` の doc と同じ断り）。
+   *
+   * **止まっている回だけ載る（`optional`）。** 常に載せると「止まっていない」
+   * と「この器では見ていない」が同じ形になる。
+   *
+   * **ここに宣言しないと、値が在っても黙って落ちる**（真上の `lastSystemError`
+   * と同じ断り。落ちると CLI と Web の両方が同時に盲目になり、クローンの
+   * `manager_list` にだけ出る形になる）。
+   */
+  usageStoppedAt: jobSchema.shape.usageStoppedAt,
   runnerId: z.string().optional(),
   workspace: workspaceLocatorSchema.optional(),
   /**

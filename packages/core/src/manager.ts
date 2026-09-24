@@ -539,6 +539,47 @@ export interface ManagerSummary {
    * はもう走っていない。詳しくは `schema.ts` の `lastSystemError` の doc。
    */
   lastSystemError?: NonNullable<Job['lastSystemError']>;
+  /**
+   * この委譲が**枠（利用上限）で止まった**印が立った時刻
+   * （`jobSchema.usageStoppedAt` の写し。Issue #1212 残件2）。
+   *
+   * **台帳に載っているのに要約へ載っていなかった。** `lastFailure`（#714）と
+   * 同じ穴で、`Job.usageStoppedAt` は台帳にはあるのに `ManagerSummary` を
+   * 経由しないと外へ出ない——人間の面（CLI・Web）にも `manager_list` の
+   * 行にもこの印は出せなかった。
+   *
+   * ## 値は `#usageStopped`（`Set`）で門を通してから運ぶ
+   *
+   * **真の参照は `#usageStopped` である**（この欄のすぐ下、`#usageStopped`
+   * の doc「**`Set` が真の参照で、台帳側はデーモンの寿命を跨ぐための写し
+   * である**」）。`summaryOf` はプレーン関数で `this` を持たないので、
+   * `live` / `runnerLostSince` などと同じ作法——Pool 側のメソッドが
+   * `this.#usageStopped.has(managerId)` で門を通した後の値だけを引数で渡す。
+   * **`record.job.usageStoppedAt` をそのまま素通しにしない**——素通しにすると、
+   * `#clearUsageStoppedMark` が `Set` を先に下ろしてから台帳を非同期に
+   * 下ろす窓（同メソッドの doc）で、`Set` はもう「止まっていない」と
+   * 言っているのに要約だけがまだ古い時刻を運ぶ、という食い違いが起きうる。
+   *
+   * ## `lastFailure` とは別の軸——重なりは許す。排他にしない
+   *
+   * `usage_notice`（`kind: 'reached'`）だけが立てる狭い印で、`lastFailure`
+   * （理由を問わずターンが失敗で終わったこと）より狭い。**この委譲の最後の
+   * 報告が利用上限そのもので終わった回は、通常どちらも立つ**——`case
+   * 'report'` は `event.failure` が在るとき `lastFailure` だけを書き
+   * `usageStoppedAt` には触れず、`event.failure` が無い（成功した）ときだけ
+   * 両方を同じ分岐で一緒に下ろす（このファイルの `case 'report'` の該当箇所）。
+   * ⟹ `done` に落ち着いた時点でこの欄が残っているなら、直前の報告は必ず
+   * 失敗だった、という関係になる。**ただし走行中は重ならないことがある**
+   * ——`usage_notice` はターンの途中でも届くので、まだ `report` が来ていない
+   * 回では `usageStoppedAt` だけが先に立ちうる。**どちらか一方だけを見て
+   * もう一方を推測しない**（`situation.ts` の `countManagerSituation` は
+   * この2つを独立に数える）。
+   *
+   * **`undefined` の意味は2つある**（`schema.ts` の `usageStoppedAt` の doc と
+   * 同じ）——止まっていないことと、この欄より前に作られたジョブであること。
+   * 見分ける必要は無い。
+   */
+  usageStoppedAt?: string;
   /** どの runner で走っているか（`manager_id → runner_id` の対応）。 */
   runnerId?: string;
   workspace?: WorkspaceLocator;
@@ -4326,6 +4367,9 @@ class Pool implements ManagerPool {
       this.#tokenIdentity?.()?.generation,
       this.#tokenIdentity !== undefined,
       this.#resetTimeSkewMatches.get(record.job.id),
+      // **門を通す（Issue #1212 残件2）。** `record.job.usageStoppedAt` を
+      // 直接渡さない——`ManagerSummary.usageStoppedAt` の doc のとおり。
+      this.#usageStopped.has(record.job.id) ? record.job.usageStoppedAt : undefined,
     );
   }
 
@@ -4794,6 +4838,8 @@ class Pool implements ManagerPool {
           activeTokenGeneration,
           tokenGenerationPoolWired,
           this.#resetTimeSkewMatches.get(record.job.id),
+          // **門を通す（Issue #1212 残件2）。** `ManagerSummary.usageStoppedAt` の doc。
+          this.#usageStopped.has(record.job.id) ? record.job.usageStoppedAt : undefined,
         ),
       );
     }
@@ -4823,6 +4869,8 @@ class Pool implements ManagerPool {
           activeTokenGeneration,
           tokenGenerationPoolWired,
           this.#resetTimeSkewMatches.get(job.id),
+          // **門を通す（Issue #1212 残件2）。** `ManagerSummary.usageStoppedAt` の doc。
+          this.#usageStopped.has(job.id) ? job.usageStoppedAt : undefined,
         ),
       );
     }
@@ -6188,6 +6236,9 @@ class Pool implements ManagerPool {
             this.#tokenIdentity?.()?.generation,
             this.#tokenIdentity !== undefined,
             this.#resetTimeSkewMatches.get(record.job.id),
+            // **門を通す（Issue #1212 残件2）。** この直前で `#usageStopped` は
+            // 台帳の写しから組み直し済み（このループ冒頭の doc）。
+            this.#usageStopped.has(record.job.id) ? record.job.usageStoppedAt : undefined,
           ),
         );
         continue;
@@ -6301,6 +6352,9 @@ class Pool implements ManagerPool {
             this.#tokenIdentity?.()?.generation,
             this.#tokenIdentity !== undefined,
             this.#resetTimeSkewMatches.get(record.job.id),
+            // **門を通す（Issue #1212 残件2）。** 同上——このループ冒頭で
+            // `#usageStopped` は組み直し済み。
+            this.#usageStopped.has(record.job.id) ? record.job.usageStoppedAt : undefined,
           ),
         );
       } catch (error) {
@@ -11608,6 +11662,11 @@ function summaryOf(
   // `#resetTimeSkewMatches`——`record` からは読めないプロセス内の状態なので、
   // 呼ぶ側に必ず書かせる。
   resetTimeSkewMatch: NoticeResetMatch | undefined,
+  // **`live` と同じ作法で引数にする（Issue #1212 残件2）。** 真の参照は
+  // `#usageStopped`（`Set`）で、`record` からは（門を通さずには）読めない
+  // プロセス内の状態——呼ぶ側が `this.#usageStopped.has(id)` で門を通した
+  // 後の値（時刻）だけをここへ渡す。`ManagerSummary.usageStoppedAt` の doc。
+  usageStoppedAt: string | undefined,
 ): ManagerSummary {
   const { job } = record;
   const tokenGenerationUnknownReason = tokenGenerationUnknownReasonOf(
@@ -11686,6 +11745,11 @@ function summaryOf(
     // **台帳をそのまま写すだけ**（#713 段3）。書き込みは `#onEvent` の
     // `case 'closed'`（立てる）と `case 'report'`（下ろす）に閉じている。
     ...(job.lastSystemError === undefined ? {} : { lastSystemError: job.lastSystemError }),
+    // **門を通した後の値をそのまま運ぶ（Issue #1212 残件2）。** `job` からでは
+    // なく引数から取る——`ManagerSummary.usageStoppedAt` の doc「真の参照は
+    // `#usageStopped`」のとおり、呼ぶ側（Pool のメソッド）が `Set` で門を
+    // 通した値だけをここへ渡している。
+    ...(usageStoppedAt === undefined ? {} : { usageStoppedAt }),
     ...(job.runnerId === undefined ? {} : { runnerId: job.runnerId }),
     /*
      * **`unknown` を黙って落とさない。** 台帳が「永続性を確かめられなかった」と
