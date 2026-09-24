@@ -447,6 +447,17 @@ export interface ToolContext {
    */
   conversationId: () => string | undefined;
   /**
+   * **`conversation_post` が書いた1通を、その会話をいま開いている画面へ流す口**
+   * （issue #1393）。
+   *
+   * 日誌への記録は道具のハンドラが持つ（`with: 'human'` / `role: 'outbound'` の
+   * `exchange` なので、会話を開き直した人・`GET /journal/stream` の購読者には
+   * それだけで届く）。ここが足すのは「いまその会話を開いている画面」への逐次
+   * 配信だけである。**省略したら、日誌には残るが開いている画面へは流れない**
+   * ——書いたことは失われないので、省略を理由に道具を断らない。
+   */
+  postToConversation?: (conversationId: string, text: string) => void;
+  /**
    * 委譲先。省略できるのは蒸留用の短命セッションのためで、そこでは
    * マネージャーを起こさない（記憶へ移すだけの内部ターン）。
    */
@@ -610,6 +621,7 @@ export const CLONE_TOOL_NAMES = [
   'journal_write',
   'journal_read',
   'conversation_read',
+  'conversation_post',
   'ask_human',
   'approvals_list',
   'approval_withdraw',
@@ -678,6 +690,7 @@ export const SELF_JOURNALING_CLONE_TOOLS = [
   'memory_frontmatter_set',
   'memory_section_move',
   'journal_write',
+  'conversation_post',
   'ask_human',
   'approval_withdraw',
   'daily_report_write',
@@ -818,9 +831,9 @@ export function cloneToolJournalsItself(tool: string): boolean {
  *
  * ## 現状は `profile_write` だけである
  *
- * 残り24本の `SELF_JOURNALING_CLONE_TOOLS`（`memory_write` /
+ * 残りの `SELF_JOURNALING_CLONE_TOOLS`（`memory_write` /
  * `memory_append` / `memory_delete` / `memory_frontmatter_set` /
- * `memory_section_move` / `journal_write` / `ask_human` /
+ * `memory_section_move` / `journal_write` / `conversation_post` / `ask_human` /
  * `approval_withdraw` / `daily_report_write` / `schedule_create` /
  * `schedule_remove` / `commitment_open` / `commitment_close` /
  * `commitment_close_many` / `commitment_edit` / `commitment_appraise` /
@@ -837,6 +850,7 @@ const SELF_JOURNALING_TOOL_CARRIES_SECRETS: Record<SelfJournalingCloneTool, bool
   memory_frontmatter_set: false,
   memory_section_move: false,
   journal_write: false,
+  conversation_post: false,
   ask_human: false,
   approval_withdraw: false,
   daily_report_write: false,
@@ -9504,6 +9518,64 @@ export function createCloneTools(context: ToolContext) {
      * 必ず言い、遡った件数と先頭に届いたかを必ず出す（`app.ts` の `/conversations`
      * と同じ判断——遡り切れていない窓で「無い」と言い切らない）。
      */
+    /**
+     * **人間の会話へ、いまのターンの外から1通書く道具**（issue #1393）。
+     *
+     * 返答はターンの結果として書かれるので、**人間の発言で起きたターン以外
+     * （timer・外部イベント・マネージャーの報告・自発）からは、人間の会話へ
+     * 1文字も届けられなかった**（そのターンは宛先の会話を持たない）。ここは
+     * その宛先を呼び手が名指しする口である。
+     *
+     * - 書く先は日誌の `exchange`（`with: 'human'` / `role: 'outbound'`）で、
+     *   ターンの返答が書くものと同じ形である。⟹ 会話の画面・`conversation_read`
+     *   ・`GET /conversations/:id` のどれからも、クローンの発言として読める
+     * - `conversationId` を省けば**新しい会話を始める**（id はここで振り、応答で返す）
+     * - **いまのターンの会話そのものへは書かない。** そこへはターンの返答が
+     *   届くので、道具で書くと同じ画面に返答が2通並ぶ（逐次配信の途中に割り込む）
+     */
+    tool(
+      'conversation_post',
+      [
+        '人間の会話へ1通書く。いまのターンが人間の発言で起きたものでなくても届く（定期の仕事・外部イベント・委譲の報告を人間へ知らせる口）。',
+        'conversationId を指定するとその会話へ、省略すると新しい会話を始めて、その id を返す。',
+        'いまのターンの会話へは書けない（そこへは普通に返答すれば届く）。',
+        '日誌には人間との往復（あなたの発言）として残る。',
+      ].join(' '),
+      {
+        text: z.string().min(1).describe('人間へ届ける本文'),
+        conversationId: z
+          .string()
+          .min(1)
+          .optional()
+          .describe('書く先の会話 id（conversation_read の一覧で分かる）。省略すると新しい会話'),
+      },
+      async ({ text: body, conversationId }) => {
+        const current = getConversationId();
+        if (conversationId !== undefined && conversationId === current) {
+          return {
+            ...text(
+              `会話 ${conversationId} はいまのターンの会話なので、この道具では書かなかった。` +
+                'このターンの返答として書けば、その会話へ届く。',
+            ),
+            isError: true,
+          };
+        }
+        const target = conversationId ?? randomUUID();
+        const entry = await appendJournalOrThrow(
+          'conversation_post',
+          stores.journal,
+          { type: 'exchange', with: 'human', role: 'outbound', text: body, conversationId: target },
+          'act-not-performed',
+        );
+        context.postToConversation?.(target, body);
+        return text(
+          conversationId === undefined
+            ? `新しい会話 ${target} を始めて書いた（${entry.id}）。`
+            : `会話 ${target} へ書いた（${entry.id}）。`,
+        );
+      },
+    ),
+
     tool(
       'conversation_read',
       [

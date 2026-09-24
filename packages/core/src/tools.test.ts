@@ -63,6 +63,8 @@ interface Harness {
   /** 道具へ渡したプールそのもの。欄を後から差し替える歯（#1394 段(C)）が使う。 */
   managers: ManagerPool;
   emitted: ChatStreamEvent[];
+  /** `ToolContext.postToConversation` へ届いた1通（古い順。issue #1393）。 */
+  posted: { conversationId: string; text: string }[];
   sent: { managerId: string; message: string; decision?: string; requestId?: string }[];
   started: { request: string; cwd?: string; runnerId?: string; conversationId?: string }[];
   /** 人間と同じ口（ManagerPool.abort）へ届いた停止。 */
@@ -190,6 +192,7 @@ interface Harness {
 function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleStatus[]): Harness {
   const stores = createMemoryStores();
   const emitted: ChatStreamEvent[] = [];
+  const posted: { conversationId: string; text: string }[] = [];
   const sent: { managerId: string; message: string; decision?: string; requestId?: string }[] = [];
   const started: { request: string; cwd?: string; runnerId?: string; conversationId?: string }[] =
     [];
@@ -436,12 +439,14 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     // `setQueuedInMemory` で差し替え可能（issue #1133）。既定は `undefined`
     // （省略）。
     queuedInMemory: () => queuedInMemory,
+    postToConversation: (id, body) => posted.push({ conversationId: id, text: body }),
   });
 
   return {
     stores,
     managers,
     emitted,
+    posted,
     sent,
     started,
     aborted,
@@ -18804,6 +18809,23 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
+      tool: 'conversation_post',
+      firstLine: ACT_NOT_PERFORMED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-conversation-post');
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
+        return callExpectingError(tools, 'conversation_post', {
+          conversationId: 'conv-1',
+          text: '知らせ',
+        });
+      },
+    },
+    {
       tool: 'schedule_create',
       firstLine: ACT_COMPLETED,
       async run() {
@@ -19844,5 +19866,96 @@ describe('予算で落ちた分へ到達できる（#662）', () => {
 
     expect(first).toContain('登録は 200 台あり');
     expect(second).toContain('登録は 200 台あり');
+  });
+});
+
+/**
+ * **`conversation_post`（issue #1393）。** 人間の発言で起きたターン以外からも、
+ * 宛先を名指しして人間の会話へ1通書ける。
+ */
+describe('conversation_post', () => {
+  it('指定した会話へ、ターンの返答と同じ形（with: human / role: outbound）で日誌に書き、開いている画面へ流す', async () => {
+    const h = harness();
+
+    const reply = await h.call('conversation_post', {
+      conversationId: 'conv-1',
+      text: '定期の確認で、PR が1本赤くなっていた。',
+    });
+
+    expect(reply).toContain('会話 conv-1 へ書いた');
+    const [entry] = await h.stores.journal.list({ types: ['exchange'] });
+    expect(entry).toMatchObject({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: '定期の確認で、PR が1本赤くなっていた。',
+      conversationId: 'conv-1',
+    });
+    expect(h.posted).toEqual([
+      { conversationId: 'conv-1', text: '定期の確認で、PR が1本赤くなっていた。' },
+    ]);
+  });
+
+  it('conversationId を省くと新しい会話を始め、振った id を応答で返す（日誌と画面へ同じ id で届く）', async () => {
+    const h = harness();
+
+    const reply = await h.call('conversation_post', { text: '新しく知らせたいことがある。' });
+
+    const [entry] = await h.stores.journal.list({ types: ['exchange'] });
+    const id = entry?.type === 'exchange' ? entry.conversationId : undefined;
+    expect(id).toBeDefined();
+    expect(reply).toContain(`新しい会話 ${id ?? ''} を始めて書いた`);
+    expect(h.posted).toEqual([{ conversationId: id, text: '新しく知らせたいことがある。' }]);
+  });
+
+  it('いまのターンの会話へは書かない（返答と2通並ぶので）。日誌にも画面にも何も出さない', async () => {
+    const h = harness();
+    h.setConversationId('conv-now');
+
+    const reply = await h.call('conversation_post', {
+      conversationId: 'conv-now',
+      text: '重ねて書く',
+    });
+
+    expect(reply).toContain('いまのターンの会話なので、この道具では書かなかった');
+    expect(await h.stores.journal.list({ types: ['exchange'] })).toEqual([]);
+    expect(h.posted).toEqual([]);
+  });
+
+  it('日誌へ書けなかったら、開いている画面へも流さない（記録に無い発言を画面にだけ出さない）', async () => {
+    const posted: { conversationId: string; text: string }[] = [];
+    const tools = createCloneTools({
+      stores: failingJournalAppend(createMemoryStores(), 'boom-post'),
+      emit: () => {},
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+      postToConversation: (id, body) => posted.push({ conversationId: id, text: body }),
+    });
+    const found = tools.find((entry) => entry.name === 'conversation_post');
+
+    // 投げ直す形でも isError の応答でも、道具名が本文に出ることだけを見る。
+    let message: string;
+    try {
+      const result = await found?.handler(
+        { conversationId: 'conv-1', text: '知らせ' } as never,
+        {},
+      );
+      message = (result?.content ?? [])
+        .map((block) => (block.type === 'text' ? block.text : ''))
+        .join('');
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain('conversation_post');
+    expect(posted).toEqual([]);
+  });
+
+  it('いまのターンが別の会話なら、名指しした会話へは書ける', async () => {
+    const h = harness();
+    h.setConversationId('conv-now');
+
+    await h.call('conversation_post', { conversationId: 'conv-other', text: '別の会話への知らせ' });
+
+    expect(h.posted).toEqual([{ conversationId: 'conv-other', text: '別の会話への知らせ' }]);
   });
 });

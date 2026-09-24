@@ -8828,6 +8828,12 @@ class Clone implements CloneHost {
       // `emit` の1行上と同じ薄い closure —— `#turn?.conversationId` が無ければ
       // （マネージャー発の確認・蒸留・timer など内部ターン）undefined を返す。
       conversationId: () => this.#turn?.conversationId ?? undefined,
+      // **`conversation_post` の1通を、その会話を開いている画面へ流す口**
+      // （issue #1393）。1通で閉じる逐次配信なので、本文の直後に `done` を出す。
+      postToConversation: (conversationId, text) => {
+        this.#emit(conversationId, { type: 'text', text });
+        this.#emit(conversationId, { type: 'done' });
+      },
     };
   }
 
