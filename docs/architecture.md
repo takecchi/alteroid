@@ -42,7 +42,7 @@
 
 | 構成要素 | 実体 | モデル | ツール |
 |---|---|---|---|
-| クローン | デーモン内の長寿命 SDK セッション1本 | `fable` | **`tools` を渡さない**（preset 全部）＋インプロセス MCP の自作ツール＋人間の MCP 連携（`settingSources`） |
+| クローン | デーモン内の長寿命 SDK セッション1本 | `fable` | **`tools` を渡さない**（preset 全部）＋インプロセス MCP の自作ツール＋人間の MCP 連携（記憶ストアの登録を `Options.mcpServers` で。#325） |
 | マネージャー | **manager-runner の中で** SDK が spawn する子プロセス | `opus` | **`tools` を渡さない**（preset 全部。明示リスト禁止 — AGENTS.md の地雷1） |
 | 作業者 | マネージャー配下の `agents` 定義 | `sonnet` | **`tools` フィールドを省略**（親の全ツールを継承） |
 
@@ -218,10 +218,13 @@ runner 本体とは別の UID で走らせる**（`spawnClaudeCodeProcess` で�
 
 **下向き（クローン → マネージャー以下）: 同じものが見える**
 
-- マネージャーには人間が使っているのと同じ MCP 設定を渡す（`settingSources` で `.mcp.json` を共有。SDK 公式機能）
+- マネージャーには人間が使っているのと同じ MCP 連携を渡す。**正本は記憶ストアの MCP サーバの登録**（`.mcp.json` の `mcpServers` と同じ形。`McpServerStore`）で、デーモンが runner の名乗り（`hello`）のたびに降ろし、次に開くマネージャーのセッションの `Options.mcpServers` へ渡す。作業者は親のセッションから継承する（#325 段3）
+  - **ファイルに頼らない理由**: `settingSources` で `.mcp.json` を共有する形は、置き場（`/workspace`）が器と一緒に消える構成（Railway）では何も渡らない。プロファイルと同じく記憶ストアに置けば、器を作り直しても消えない。`.mcp.json` が在れば従来どおり `settingSources` でも読まれる
+  - **runner は登録を読みに行かない**（記憶ストアの鍵を持たない境界はそのまま）。降ろすのはデーモンで、runner はメモリにだけ持ち、`/health` へは指紋だけを出す
+  - 人間の口は `GET` / `PUT /mcp-servers`・`alteroid mcp`・Web UI の「MCP 連携」。資格は `/profile` と同じ `requireOwner`（stdio の登録は子プロセスが起こすコマンドであり、登録に鍵が入りうるため）
 - cwd は実プロジェクトの作業ディレクトリ。人間が Claude Code を開く場所と同じ
 - **クローンは2通りで見る。** 普段はマネージャー越しに見る（人間が Claude Code に任せるのと同じ）。加えて**自分の道具でも直接見られる** — 人間が Claude Code に頼まず自分でブラウザや端末を開くのと同じ写像である（north_star「適用範囲」）
-  - 人間が使っている MCP 連携はクローンからも使える（PRD「業務範囲」の要件）。クローン側も `settingSources` で人間の設定を読む
+  - 人間が使っている MCP 連携はクローンからも使える（PRD「業務範囲」の要件）。クローンは同じ登録を自分のインプロセス MCP と合成して `Options.mcpServers` へ渡す（alteroid 自身のサーバが常に勝つ）。変更は次のクローンのセッションから効く（#325 段2）
   - **どちらで見たかは日誌に残す。** 委譲が原則である理由（俯瞰と判断を守る）が守られているかは、禁止ではなく記録で見る
 
 **クローンが自分の手を持つことの帰結（記憶ストアへの直接到達）**
@@ -310,6 +313,7 @@ core にストアのインターフェースを切り、ドライバを差し替
 | CommitmentStore | 引き受けたまま終わっていない仕事（起点・受け取った時刻・依頼の本文・片付いたか） | JSON | PostgreSQL |
 | PracticeStore | 仕事のやり方（slug・種類・題・本文。#1055 段3） | `practices.json`（1枚） | PostgreSQL（列に切って保存） |
 | ProfileStore | 実行環境プロファイル（`.zprofile` 相当のシェルスクリプト1本） | `profile.sh`（0600） | PostgreSQL（1行） |
+| McpServerStore | 人間の MCP サーバの登録（`.mcp.json` の `mcpServers` と同じ形。#325） | `mcp-servers.json`（0600） | PostgreSQL（1行） |
 | CredentialVaultStore | マネージャーへ降ろす環境変数の正本（名前→値。鍵も身元も同じ形で持つ） | `credentials.json`（0600） | PostgreSQL（1名前1行） |
 
 - **記憶の文書は種別を持ち、毎ターンの焼き込みへの載り方が種別で決まる**（frontmatter の `type`。無指定・読めない・未知の値は `premise` へ倒れる — 取り返しがつく側である）。**本文はどの種別でも載らない。** 開く口は `memory_read` / `memory_outline` / `memory_section_read` である

@@ -50,7 +50,7 @@ M4 受け入れ基準3の「runner から Persona 用 DB へ接続できない�
 - マネージャーの作業ディレクトリ（コミットしていない変更は失われる）
 - `/workspace/.mcp.json`（＝MCP 連携）
 
-**MCP 連携はボリュームを付けずに渡せる**（#325）。登録（`.mcp.json` の `mcpServers` と同じ形）を `PUT /mcp-servers` で記憶ストアへ置けば、クローンへは次のセッションから、マネージャー・作業者へは runner の名乗り（`hello`）のたびにデーモンが降ろしたうえで次に開くセッションから届く（SDK の `Options.mcpServers`）。器を作り直しても正本は PostgreSQL に在るので消えない。`/workspace/.mcp.json` は従来どおり読まれるが、毎デプロイで消えるのは変わらない。CLI / Web UI の入口は #325 の段4。
+**MCP 連携はボリュームを付けずに渡せる**（#325）。登録（`.mcp.json` の `mcpServers` と同じ形）を `PUT /mcp-servers` で記憶ストアへ置けば、クローンへは次のセッションから、マネージャー・作業者へは runner の名乗り（`hello`）のたびにデーモンが降ろしたうえで次に開くセッションから届く（SDK の `Options.mcpServers`）。器を作り直しても正本は PostgreSQL に在るので消えない。`/workspace/.mcp.json` は従来どおり読まれるが、毎デプロイで消えるのは変わらない。人間の口は `alteroid mcp`（`railway ssh --service app -- alteroid mcp edit` など）と Web UI の「MCP 連携」。
 
 記憶・日誌・ジョブ・生ログは PostgreSQL にあるので、**ボリュームは1つも要らない**。`ALTEROID_HOME`（`/data/alteroid`）に残るのは `state/daemon.json` と `daemon.log` だけで、これは CLI がデーモンを見つける手段であって記憶ではない。
 
