@@ -60,6 +60,8 @@ import { usageDate } from './usage.js';
 
 interface Harness {
   stores: Stores;
+  /** 道具へ渡したプールそのもの。欄を後から差し替える歯（#1394 段(C)）が使う。 */
+  managers: ManagerPool;
   emitted: ChatStreamEvent[];
   sent: { managerId: string; message: string; decision?: string; requestId?: string }[];
   started: { request: string; cwd?: string; runnerId?: string; conversationId?: string }[];
@@ -438,6 +440,7 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
 
   return {
     stores,
+    managers,
     emitted,
     sent,
     started,
@@ -7296,6 +7299,33 @@ describe('クローンの道具', () => {
       expect(reply).not.toContain('畳む候補');
     });
 
+    /**
+     * **#1394 段(C): 器が能力を名乗れば、条件3が満たされて ⚠ が出る。** 上の歯と同じ
+     * 仕立てに、プールの `runnerHasCapability` だけを足す（名乗りの受け取りそのものは
+     * `manager.ts` 側の歯が測る）。
+     */
+    it('器が awaiting-background-signal を名乗っていれば、同じ仕立てで ⚠ が出る（#1394 段(C)）', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.status = 'done';
+      delete target.awaitingBackground;
+      target.turnEndReason = 'end_turn';
+      target.turnEndedAt = '2000-01-01T00:00:00.000Z';
+      target.lastReportAt = '2000-01-01T00:00:01.000Z';
+      target.updatedAt = '2000-01-01T00:00:01.000Z';
+      target.runnerId = 'runner-capable';
+      h.managers.runnerHasCapability = (runnerId, capability) =>
+        runnerId === 'runner-capable' && capability === 'awaiting-background-signal';
+
+      expect(await h.call('manager_list', {})).toContain('畳む候補');
+
+      // 別の器（名乗っていない）なら出ない。
+      target.runnerId = 'runner-old';
+      expect(await h.call('manager_list', {})).not.toContain('畳む候補');
+    });
+
     it('道具の説明文が「畳む候補」の ⚠ の意味と、畳む操作はしないことを言う', () => {
       const stores = createMemoryStores();
       const tools = createCloneTools({
@@ -7308,8 +7338,8 @@ describe('クローンの道具', () => {
 
       expect(description).toContain('「畳む候補」の ⚠');
       expect(description).toContain('畳む操作は、この道具や他のどの道具からも行われない');
-      // 条件3の材料が無いので、いまはどの委譲にも出ない——それを説明文が名乗る（黙ると「候補が無い」と読まれる）。
-      expect(description).toContain('いまはどの委譲にも出ない');
+      // 条件3は器の名乗り次第——名乗らない器の委譲には出ないことを説明文が名乗る（黙ると「候補が無い」と読まれる）。
+      expect(description).toContain('名乗らない古い器');
     });
   });
 

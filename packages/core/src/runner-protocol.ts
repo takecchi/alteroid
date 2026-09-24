@@ -541,9 +541,38 @@ export interface RunnerAnswerOutcome {
  * ここに流れるのは**事実だけ**である。「これは人間に聞くべきか」といった判断は
  * 混ぜない（判断はクローンが記憶を根拠に行う — PRD「権限境界」）。
  */
+/**
+ * runner が `hello` で名乗る**能力**（issue #1394 段(C)）。
+ *
+ * **版番号ではなく能力の名前で名乗る。** デーモンが知りたいのは「この器は X の印を
+ * 送るか」であって、版の大小ではない（版から能力を推すと、推し方がデーモン側に
+ * 散らばる）。**名乗らない器（この欄を送らない古い runner）は、どの能力も持たない
+ * ものとして扱う** —— 「送っているはず」と仮定しない（`manager-fold-candidate.ts`
+ * の条件3の doc）。
+ *
+ * - `awaiting-background-signal`: 報告に `awaitingBackground`（背景処理の完了を
+ *   待って畳んだ印）を載せる版である。これを名乗らない器では、印が無いことを
+ *   「背景処理を待っていない」と読めない
+ */
+export const RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL = 'awaiting-background-signal';
+
+/** この版の runner が名乗る能力の一覧（`hello.capabilities` にそのまま載せる）。 */
+export const RUNNER_CAPABILITIES: readonly string[] = [
+  RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
+];
+
 export const runnerEventSchema = z.discriminatedUnion('type', [
-  /** ストリームの先頭。どの runner に繋がったかを名乗る。 */
-  z.object({ type: z.literal('hello'), runnerId: z.string() }),
+  /**
+   * ストリームの先頭。どの runner に繋がったかを名乗る。
+   *
+   * `capabilities`（#1394 段(C)）は `.optional()` —— 旧い runner は送らない。
+   * 無いことは「どの能力も名乗っていない」であって、既定値で埋めない。
+   */
+  z.object({
+    type: z.literal('hello'),
+    runnerId: z.string(),
+    capabilities: z.array(z.string()).optional(),
+  }),
   z.object({ type: z.literal('session'), managerId: z.string(), sessionId: z.string() }),
   /** SDK が生ログを預けるときの scope。生ログを後から引き当てる鍵になる。 */
   z.object({ type: z.literal('project_key'), managerId: z.string(), projectKey: z.string() }),

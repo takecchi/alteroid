@@ -26,7 +26,10 @@ import {
   type ManagerPosition,
 } from './manager-cursor.js';
 import { encodeScheduleCursor, resolveScheduleCursor } from './schedule-cursor.js';
-import { assertNeverRunnerLegStatus } from './runner-protocol.js';
+import {
+  assertNeverRunnerLegStatus,
+  RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
+} from './runner-protocol.js';
 import { formatSystemErrorFacts, SYSTEM_ERROR_UNKNOWN_NOTE } from './system-error.js';
 // **`manager_list` と digest の「マネージャー」節で同じ字面を出すための唯一の
 // 生成元。** 片方だけ変えられると区別が潰れる——実際にクローンがそれで誤り、
@@ -8650,7 +8653,8 @@ export function createCloneTools(context: ToolContext) {
         // 説明文にも書く理由は上の各行と同じ（JSDoc はクローンに届かない）。
         '「畳む候補」の ⚠ は、status が done で背景処理待ちの印が無く、状態の判定が' +
           'active で、最後のターン終了から一定時間が経った委譲に出す印である。' +
-          'ただし、器が背景処理待ちの印を送る版かを確かめる材料がまだ無いので、いまはどの委譲にも出ない' +
+          'ただし、器が「背景処理待ちの印を送る版」だと名乗った（runner の hello の能力）委譲にしか出ない' +
+          '——名乗らない古い器や、名乗りをまだ受けていない器の委譲には出ない' +
           '（出ていないことを「畳む候補が無い」と読まないこと）。畳む操作は、この道具や他のどの道具からも行われない。',
         // **並びを名乗る（#688 の3 を直した）。** ここに書いてある順序と実装が食い違うと、
         // クローンは「出ていない＝無い」と読む。実装が実際にやっていることだけを書く。
@@ -8912,7 +8916,15 @@ export function createCloneTools(context: ToolContext) {
             {
               status: manager.status,
               hasAwaitingBackgroundSignal: manager.awaitingBackground !== undefined,
-              awaitingBackgroundSignalVersionConfirmed: false,
+              // 器が「背景処理待ちの印を送る版」だと名乗ったか（#1394 段(C)）。
+              // 名乗りを受けていない・旧い器・runnerId が無い委譲は `false`。
+              awaitingBackgroundSignalVersionConfirmed:
+                manager.runnerId !== undefined &&
+                (context.managers?.runnerHasCapability?.(
+                  manager.runnerId,
+                  RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
+                ) ??
+                  false),
               activityKind: classifyManagerActivity(managerActivityInputOf(manager)),
               lastTurnEndedAt: manager.updatedAt,
             },

@@ -809,6 +809,8 @@ export {
   runnerCredentialFingerprintSchema,
   runnerCredentialSchema,
   runnerEventSchema,
+  RUNNER_CAPABILITIES,
+  RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
   runnerExecutionResourcesSchema,
   runnerLeaseSchema,
   runnerLivenessSchema,
