@@ -556,6 +556,25 @@ describe('HTTP API', () => {
     expect(fake.ended).toEqual(['conv-x']);
   });
 
+  it('走っているターンを止める口（#1398 c23-1）: 口を持たないクローンは unsupported と申告する', async () => {
+    const response = await app.request('/clone/interrupt', post);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ outcome: 'unsupported' });
+  });
+
+  it('走っているターンを止める口（#1398 c23-1）: クローンの答え（interrupted / idle）をそのまま返す', async () => {
+    const outcomes: ('interrupted' | 'idle')[] = ['interrupted', 'idle'];
+    let calls = 0;
+    fake.clone.interruptTurn = async () => outcomes[calls++] ?? 'idle';
+
+    const first = await app.request('/clone/interrupt', post);
+    expect(await first.json()).toEqual({ outcome: 'interrupted' });
+    const second = await app.request('/clone/interrupt', post);
+    expect(await second.json()).toEqual({ outcome: 'idle' });
+    expect(calls).toBe(2);
+  });
+
   it('記憶を API から読んで書き換えられる（人間の制御手段1）', async () => {
     await stores.persona.write('values', '# 価値観\n\nもとの内容\n');
 
