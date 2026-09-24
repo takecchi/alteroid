@@ -47,6 +47,12 @@ import { createProfileApplier, type ProfileApplier, type ProfileVessel } from '.
 import { createRecentMap } from './recent.js';
 import { buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
 import { RunnerFenceError } from './runner-protocol.js';
+import {
+  BACKGROUND_TASK_OWNER_LIMIT,
+  RunnerSubagentStopState,
+  SUBAGENT_WAKEUP_LIMIT_PER_AGENT,
+  SUBAGENT_WAKEUP_LIMIT_PER_TASK,
+} from './runner-subagent-stop-state.js';
 import type {
   RunnerAnswerCommand,
   RunnerAnswerOutcome,
@@ -92,6 +98,14 @@ import { readSessionUsage } from './usage.js';
  *   途端に `Read` や `grep` で止まるのは仕様ではなくデグレード。確認そのものの
  *   経路（`canUseTool` でデーモンへ回す）は残してあり、`default` へ戻せば効く
  */
+
+/**
+ * `SUBAGENT_WAKEUP_LIMIT_PER_TASK` / `SUBAGENT_WAKEUP_LIMIT_PER_AGENT` の
+ * 定義は `runner-subagent-stop-state.ts` へ切り出した（Issue #1190 段1）。
+ * 既存のテスト（`runner-subagent-stop.test.ts`）が `from './runner.js'` で
+ * 直書きしているので、ここで再輸出して公開面を変えない。
+ */
+export { SUBAGENT_WAKEUP_LIMIT_PER_AGENT, SUBAGENT_WAKEUP_LIMIT_PER_TASK };
 
 /** マネージャーのモデル帯の既定。変更には人間の承認が要る（AGENTS.md 地雷5）。 */
 export const MANAGER_MODEL = 'opus';
@@ -764,20 +778,6 @@ const SUBAGENT_STOP_NOTE_TEXT_LIMIT = 1_500;
 const STOP_NOTE_TEXT_LIMIT = 1_500;
 
 /**
- * `#backgroundTaskOwners`（背景タスクの id → それを起こした主体）が持つ件数の
- * 上限（#570）。
- *
- * **超えたら「いちばん古いもの」から捨てる。** `Map` の挿入順をそのまま使う。
- * 落ちるのが古い側なのは、この表を引くのが `SubagentStop` の瞬間 —— つまり
- * **登録の直後**だからである（実測: 登録から 1.4 秒後に引いた）。新しい側を
- * 落とすと、いま畳もうとしている作業者の分がまず消える。
- *
- * ⚠️ **捨てたことは外から見えない。** 捨てた分は「所有者を引けない」に落ち、
- * `#onSubagentStop` の診断（1セッションに1回）でだけ表に出る。
- */
-const BACKGROUND_TASK_OWNER_LIMIT = 500;
-
-/**
  * **所有者を控えられる**背景処理の種類（`BackgroundTaskSummary.type`）の名簿
  * （#570 / #861）。
  *
@@ -850,170 +850,6 @@ export const OWNER_RECORDABLE_TASK_TYPES: ReadonlySet<string> = new Set(['shell'
  */
 function isOwnerRecordableTaskType(type: unknown): boolean {
   return typeof type === 'string' && OWNER_RECORDABLE_TASK_TYPES.has(type);
-}
-
-/**
- * 同じ作業者（`agent_id`）が起こした**同じ背景処理（`taskId`）**を、それが
- * 残ったまま畳もうとした回に対して起こし直す（`additionalContext` を
- * 返す）回数の上限（#570 の追跡の続き。単位を「作業者」から「作業者 ×
- * 背景処理」へ変えたのがこの PR の本体である）。
- *
- * **これが守るもの — 同じ背景処理を待って永久に空転するのを止める歯。**
- * 単位が背景処理になったので、**別々の背景処理には別々に配られる** ——
- * 背景処理 A をこの上限まで使い切っても、新しい背景処理 B が残っていれば
- * B は「1回目」から起こし直される。以前（`agent_id` 単体が単位だった版）は
- * ここが「作業者ぶん通算2回」で、A で使い切ると B・C・D は一度も待たれ
- * なかった（依頼者の日誌、2026-09-08）。
- *
- * **`export` してある。** テストがこの数字を直書きしないで済むようにする
- * ためで、値そのものの意味は変わらない。
- *
- * ⚠️ **単位を「背景処理」にしたことで開く穴が2つある。塞ぐのは
- * `SUBAGENT_WAKEUP_LIMIT_PER_AGENT`（直後）である。** 穴の中身はそちらの
- * doc に書いた。
- */
-export const SUBAGENT_WAKEUP_LIMIT_PER_TASK = 2;
-
-/**
- * 同じ作業者（`agent_id`）を、**背景処理の種類を問わず通算で**起こし直す
- * 回数の上限（#570 の追跡の続き）。
- *
- * **これが要る理由 —— `SUBAGENT_WAKEUP_LIMIT_PER_TASK` を「背景処理ごと」に
- * 配ったことで、新たに2つの穴が開く。**
- *
- * - **穴A（`id` の安定性とは無関係に効く。こちらが重い）:** 起こし直される
- *   たびに**新しい背景処理を起こして畳む**作業者は、毎回まっさらな
- *   per-task の予算を得る ⟹ **無限に空転できる。**「同じものを待って
- *   空転する」は `SUBAGENT_WAKEUP_LIMIT_PER_TASK` で塞がるが、「毎回違う
- *   ものを起こして空転する」はそれだけでは素通りになる。**
- *   `BackgroundTaskSummary.id` が完璧に安定していても起きる** —— id の
- *   値そのものの性質とは無関係の穴である。
- * - **穴B（`id` の安定性に依存する）:** `#subagentWakeups` /
- *   `#subagentWakeupTotals` は runner（このプロセス）の記憶なので SDK の
- *   セッション差し替え（`session_started`）を跨いで生き残るのに対し、
- *   **背景処理の `id` が resume / compaction / プロセス再起動を跨いで
- *   保たれるかは未測**（下の「測ったこと」）。振り直されれば per-task の
- *   カウントは毎回「1回目」に戻る。`SUBAGENT_WAKEUP_LIMIT_PER_AGENT` は
- *   その保険である。
- *
- * ⚠️ **この値（8）の根拠は「`SUBAGENT_WAKEUP_LIMIT_PER_TASK` より十分
- * 大きく、無限ではない」だけで、実測ではない。**
- *
- * **優先順位（両方の上限に同時に達したとき）:** 通し上限
- * （`total >= SUBAGENT_WAKEUP_LIMIT_PER_AGENT`）を先に見る。⟹ 通し上限の
- * ほうが重い歯なので、両方成り立つ回は `'per-agent'` を名乗る
- * （`#onSubagentStop` の `limitReason`）。
- *
- * ## 測ったこと（`BackgroundTaskSummary.id` の安定性について。2026-09-09）
- *
- * - `BackgroundTaskSummary.id` は SDK 0.3.263 の `sdk.d.ts` で
- *   `id: string;` と宣言されているだけで、**doc コメントが1行も付いて
- *   いない** ⟹ SDK は安定性にも一意性にも触れていない。**この事実には
- *   sdk-verbatim の印（`pnpm check:sdk-quotes` が当て直す逐語引用の目印）を
- *   付けない** —— 引用するのは doc コメントの無い `id: string;` だけなので
- *   印の意味が無く、しかも `check:sdk-quotes`（`scripts/check-sdk-quotes-core.mjs`
- *   の doc）は「不在の主張」を検査できない。
- * - 同梱の `claude` 実行バイナリを**静的に**読んだ範囲では、id は種別で
- *   2系統に分かれる —— `local_bash` 等は `'<種別1文字>' +
- *   crypto.randomBytes(8) を36進へ写した8文字`、`local_agent` は
- *   `id === agent_id`。`SubagentStop` のペイロードを組む側は既存
- *   レジストリの `id` を毎回そのまま写すだけなので、**同一プロセスが
- *   生き続ける限り同じ id で載る。**
- * - ⚠️ **resume / compaction / プロセス再起動を跨いだときに id が保たれる
- *   かは、該当コードに辿り着けず「分からない」で終わっている。「無い」
- *   ではなく「見つけられなかった」である。** そして**実機で走らせた観測は
- *   1件も無い**（全部が静的解析。この読み取りは委譲先が行ったものを
- *   写したもので、この doc を書いた側は再導出していない —— `#subagentWakeups`
- *   の `agent_id` の安定性の doc「2.」と同じ注記）。
- */
-export const SUBAGENT_WAKEUP_LIMIT_PER_AGENT = 8;
-
-/**
- * `#subagentWakeups`（`${agentId} ${taskId}` → その組で起こし直した回数）と
- * `#subagentWakeupTotals`（`agentId` → その作業者を起こし直した通算回数）が
- * それぞれ持つ件数の上限。**両方に同じ形で掛ける**（`BACKGROUND_TASK_OWNER_LIMIT`
- * と同じ形 —— 超えたら「いちばん古いもの」から捨てる。`Map` の挿入順を
- * そのまま使う。実装は `pruneOldestEntries`）。
- *
- * `agent_id` は使い回されないので、件数は増え続ける一方である（**この前提を
- * 何で測ったか・どこまで言えるかは `#subagentWakeups` の doc の「2.」に在る**）。
- * 放置すると長時間走るセッションでメモリが際限なく伸びるので、同じ理由・
- * 同じ形の蓋を掛ける。**捨てたことは外から見えない** — 捨てられた鍵は
- * カウント0から再スタートするので、上限に近い側から捨てるより古い側から
- * 捨てるほうが実害が小さい（`BACKGROUND_TASK_OWNER_LIMIT` の doc と同じ理由）。
- */
-const SUBAGENT_WAKEUP_TRACKING_LIMIT = 500;
-
-/**
- * `#subagentWakeups` の鍵を組み立てる（`agentId` と `taskId` の組）。
- *
- * **区切りに `\u0000`（NUL）を使う。** `agent_id` も背景処理の `id` も SDK 側の
- * 不透明な文字列で、**SDK は値の文字集合を約束していない**（`sdk.d.ts` の
- * `BackgroundTaskSummary.id` は `id: string` と宣言されているだけで doc
- * コメントが1行も付いていない）。`-` や `:` や半角スペースを区切りに使うと、
- * 値そのものに同じ文字が含まれたときに連結の曖昧さが理屈の上で残る
- * （`"a-b"` と `"a"` / `"b-c"` の組み合わせが同じ文字列になる、という形）。
- *
- * **⭐ この曖昧さは、この PR が塞ごうとしている穴と同じ形である** ——
- * 鍵が衝突すれば、別々の背景処理の予算が1つに混ざる。**実測した id の形
- * （`'a'`＋16進16文字 / `'<種別1文字>'`＋36進8文字）にはどの区切り候補も
- * 現れないので、いま踏む経路は無い。** それでも NUL を採るのは、**衝突を
- * 疑う理由が「実測では無い」で止まるより、「文字として現れない」まで
- * 言えるほうが強いから**である（実測は SDK が上がれば古くなる）。
- */
-function subagentWakeupKey(agentId: string, taskId: string): string {
-  return `${agentId}\u0000${taskId}`;
-}
-
-/**
- * `map` が `limit` 件を超えたら、いちばん古いもの（`Map` の挿入順の先頭）
- * から捨てる。**FIFO であって LRU ではない** —— `Map.set()` は既存の鍵の
- * 順を変えないので、何度書き込んでも古い鍵はそのまま先頭に留まり、
- * いちばん古い鍵から捨てられる（`#subagentWakeups` の doc「1.」に書いた
- * FIFO/LRU の違いと同じ形。詳細はそちらを見よ）。
- *
- * `#subagentWakeups` と `#subagentWakeupTotals` の枝刈りをここへ切り出した。
- * ⚠️ **`#backgroundTaskOwners` の枝刈り（別の `while` ループ）はこの PR では
- * 触っていない**（別の穴。この PR の範囲外）—— 同じ形だが、共有はしていない。
- */
-function pruneOldestEntries<V>(map: Map<string, V>, limit: number): void {
-  while (map.size > limit) {
-    const oldest = map.keys().next();
-    if (oldest.done === true) break;
-    map.delete(oldest.value);
-  }
-}
-
-/**
- * `shouldEscalateSubagentLimitReachedNote` の入口（何回目から間引き始めるか）。
- * `manager.ts` の `DENIED_ESCALATE_AT` と同じ値・同じ理由（1回目を黙らせない）
- * で `1` に固定する。この定数を上げると、上限到達の1回目自体が受信箱へ
- * 届かなくなる——`#subagentWakeupTotals` の doc が言う「黙って壊れる側では
- * ない」を壊す方向なので、上げないこと。
- */
-const SUBAGENT_LIMIT_REACHED_NOTE_ESCALATE_AT = 1;
-
-/**
- * `agentId` ごとの「`limit_reached` の note を出した通算回数」（`count`。
- * `#subagentLimitReachedNotes` の値）を受け取り、その回にクローンの受信箱へ
- * 上げるかどうかを返す（#1385）。
- *
- * **`manager.ts` の `shouldEscalateDenial` と同じ規則**
- * （`grep -Fn -- 'function shouldEscalateDenial(count: number): boolean {' packages/core/src/manager.ts`）
- * ——1・3・9・27…と3倍ごとにだけ `true` を返す。実装もほぼそのまま写した
- * （唯一の違いは定数名）。⚠️ **同じ規則が2箇所に実体を持つ。** `manager.ts`
- * は別セッションの open PR が触っているため、この PR ではそちらを直接
- * 呼べない（import もできない——`manager.ts` 側で export されていない
- * 関数である）。**次にこの規則そのもの（1・3・9…や3倍という刻み）を
- * 変えるときは、この関数と `shouldEscalateDenial` の両方を揃えて直すこと**
- * ——片方だけ直すと、`permission_denied` の間引きと `limit_reached` の
- * 間引きが黙ってずれる。
- */
-function shouldEscalateSubagentLimitReachedNote(count: number): boolean {
-  if (count < SUBAGENT_LIMIT_REACHED_NOTE_ESCALATE_AT) return false;
-  let step = SUBAGENT_LIMIT_REACHED_NOTE_ESCALATE_AT;
-  while (step < count) step *= 3;
-  return step === count;
 }
 
 /**
@@ -1342,197 +1178,14 @@ class RunnerSession {
    */
   #openedWorkersThisTurn = new Set<string>();
   /**
-   * 背景タスクの id → **それを起こした主体**（#570）。
-   *
-   * 値は作業者の `agent_id`。**マネージャー自身が起こしたものは空文字 `''`**
-   * にする —— 「マネージャーのものだった」と「表に無い（引けなかった）」を
-   * 混ぜないため。混ぜると、経路が壊れて表が空になった状態が「全部マネージャー
-   * のものだった」に化ける。
-   *
-   * **作るのは `#onPostToolUse`、引くのは `#onSubagentStop`。** その間だけ
-   * runner が状態を持つ。寿命はセッションと同じで、`BACKGROUND_TASK_OWNER_LIMIT`
-   * 件を超えたら古い側から捨てる。
+   * `SubagentStop` / `Stop` の観測が使う8フィールドの器（Issue #1190 段1で
+   * `runner-subagent-stop-state.ts` へ切り出した。前例は PR #1359
+   * `clone-notices.ts`）。**日誌へ出すかどうか・`escalate` を立てるかどうかの
+   * 判断はこれまでどおりここ（`RunnerSession`）が持ち、この器は状態だけを
+   * 持つ。** 何を持っているか・切り出しの理由と限界は
+   * `RunnerSubagentStopState` 自身の doc を見よ。
    */
-  #backgroundTaskOwners = new Map<string, string>();
-  /**
-   * 「所有者を引けなかった」診断を、このセッションで既に出したか（#570）。
-   *
-   * 診断は**1セッションに1回だけ**出す。毎回出すと、壊れていることの通知が
-   * そのまま雑音になって読まれなくなる。
-   */
-  #ownerLookupFailureNoted = false;
-  /**
-   * 「当人が起こした背景処理は在ったが、**全部もう終わっていた**」診断を、この
-   * セッションで既に出したか（#570 の追跡）。
-   *
-   * `#ownerLookupFailureNoted` と同じ形・同じ理由で**1セッションに1回だけ**
-   * 出す。毎回出すと、背景処理を使う作業者が畳むたびに1行増えて雑音になる。
-   */
-  #settledOnlyNoted = false;
-  /**
-   * `Stop`（マネージャー自身のターンが閉じる瞬間）がこのセッションで発火した
-   * **通算の回数**（#861）。**観測専用の計数であり、何の判定にも使わない。**
-   *
-   * この値そのものが答えの一部である —— #861 が問うているのは「`Stop` は
-   * いつ来て、いつ来ないか」であり、`note` が1行も出ないときに
-   * 「発火していない」と「発火したが在り高が 0 だった」を割るのはこの数である。
-   */
-  #stopFirings = 0;
-  /**
-   * 「`Stop` が発火したが、背景処理も `session_crons` も 0件 だった」診断を、
-   * このセッションで既に出したか（#861）。
-   *
-   * `#settledOnlyNoted` と同じ形・同じ理由で**1セッションに1回だけ**出す ——
-   * こちらは**マネージャーのターンが閉じるたび**に来るので、毎回出せば日誌が
-   * ターン数ぶんの同じ行で埋まる。
-   *
-   * ⚠️ **この間引きが落とすもの（#861 へ残す）。** 2回目以降の「0件で閉じた」
-   * 回は個別には残らない。通算の回数（`#stopFirings`）は在り高が非0の回の
-   * `note` に載るので、そこから復元できる範囲でしか復元できない ——
-   * **在り高が最後まで 0 のままだったセッションでは、発火が1回だったのか
-   * 200回だったのかをこの観測からは言えない。**
-   */
-  #stopIdleNoted = false;
-  /**
-   * `subagentWakeupKey(agentId, taskId)` → **その組（作業者 × 背景処理）を
-   * 起こし直した回数**（#570 の追跡の続き。`SUBAGENT_WAKEUP_LIMIT_PER_TASK`
-   * の doc）。
-   *
-   * **この PR で鍵が `agent_id` 単体から「作業者 × 背景処理」の組へ変わった。**
-   * 変わったのは鍵の作り方だけで、下の「ターン境界ではリセットしない」節の
-   * 主張（積算を持つ表であること、`agent_id` の安定性についての測定）は
-   * そのまま生きている——鍵に `taskId` が増えただけで、積算を持つ表である
-   * ことも `agent_id` を軸にした部分の性質も変わっていない。
-   *
-   * ⚠️ **単位を「作業者 × 背景処理」にしたことで開く2つの穴（穴A・穴B）と、
-   * それを塞ぐ `#subagentWakeupTotals`（直後のフィールド）については
-   * `SUBAGENT_WAKEUP_LIMIT_PER_AGENT` の doc を見よ。**
-   *
-   * **ターン境界ではリセットしない。理由は2つ、両方必須。**
-   *
-   * 1. **リセットすると上限が意味を失う。** `case 'session_started'` は
-   *    `event.sessionId` が変わった（＝ SDK 側のセッションが本当に差し替わった）
-   *    ときにだけ `#liveBackgroundTasks` を空へ戻すが、あれは「いま生きている
-   *    背景タスクの一覧」という**その時点の事実**を持つ表だからリセットが
-   *    正しい。こちらは逆に「これまで何回起こし直したか」という**積算**を
-   *    持つ表なので、同じ理由でリセットすると上限が毎ターン（あるいは毎
-   *    セッション再開）再装填され、同じ作業者を実質無限に起こし続けられて
-   *    しまう —— 上限を置いた目的（#570 の追跡冒頭）がそのまま消える。
-   * 2. **`agent_id` は使い回されない（測った。⚠️ ただし SDK の契約ではない）。**
-   *    だから「リセットしないと際限なく増える」という心配は無く、リセット
-   *    しない側に倒して安全に倒れる。増え続ける件数のほうは
-   *    `SUBAGENT_WAKEUP_TRACKING_LIMIT` の枝刈りで別に抑える。
-   *
-   *    ⚠️ **その枝刈りは LRU ではない。FIFO である。** ここには「LRU」と
-   *    書いてあったが、実装（`#onSubagentStop` の `while` ループ）は
-   *    `Map` の挿入順をそのまま使う。**`Map.set()` は既に在る鍵の順を
-   *    変えない** ⟹ 何回起こし直しても、その鍵は捨てられる順番の先頭から
-   *    離れない。**`SUBAGENT_WAKEUP_TRACKING_LIMIT` の doc 側は最初から
-   *    「`Map` の挿入順をそのまま使う」と書いており、食い違っていたのは
-   *    こちらである。**
-   *
-   *    **⭐ この違いは呼び名だけの話ではない。落ちる鍵が逆になる。** FIFO が
-   *    捨てるのは「いちばん古くから積まれている鍵」＝ **いちばん長く空転し
-   *    続けている作業者**である。LRU なら、起こし直すたびに順番が後ろへ
-   *    送られるので生き残る側だった。**⟹ 歯として最も残したいものから先に
-   *    落ちる。** 落ちた鍵はカウント0から再スタートする（`SUBAGENT_WAKEUP_TRACKING_LIMIT`
-   *    の doc）ので、**その作業者の予算だけが黙って再装填される。**
-   *
-   *    **何で測ったか**（2026-09-06。`@anthropic-ai/claude-agent-sdk@0.3.261`
-   *    同梱の `claude` 実行バイナリを追った。**⚠️ この読み取りは委譲先が行った
-   *    ものを写したもので、この doc を書いた側は再導出していない**）:
-   *
-   *    ```js
-   *    import{createHash as kn,randomBytes as xn}from"crypto";
-   *    var Cn=new RegExp(`^a(?:${Xe}-)?[0-9a-f]{16}$`);
-   *    function bh(e){ … let t=xn(8).toString("hex"); return e?`a${e}-${t}`:`a${t}` }
-   *    ```
-   *
-   *    ⟹ `agent_id` は **`'a'` + `crypto.randomBytes(8)` の16進**（64bit の乱数）
-   *    で、新規スポーンのたびに引き直される。使い回す経路として見つかったのは
-   *    **明示的な resume（同じ論理エージェントの続行）だけ**で、それは意味の上
-   *    でも「同じ作業者」なのでこの表の設計と矛盾しない。集めた実値10件は
-   *    すべて相異なり、全件がこの形だった。
-   *
-   *    ⚠️ **これは SDK の契約ではない。** `sdk.d.ts` の `BaseHookInput.agent_id`
-   *    は一意性にも再利用にも触れていない（逐語）: [sdk-verbatim BaseHookInput.agent_id]
-   *    > Subagent identifier. Present only when the hook fires from within a subagent (e.g., a tool called by an AgentTool worker). Absent for the main thread, even in --agent sessions. Use this field (not agent_type) to distinguish subagent calls from main-thread calls.
-   *
-   *    ⚠️ **そして、この前提が腐っても CI は赤くならない。**
-   *    `scripts/check-sdk-quotes-core.mjs` が読むのは `sdk.d.ts` / `sdk-tools.d.ts`
-   *    の2枚だけで、**同梱バイナリ内の文字列は明示的に検査対象の外に置いてある**
-   *    （PR #646 が「印を付けなかったもの（意図）」として名指ししている）。
-   *    ⟹ **上の `bh()` が次の版で変わっても、気づく口はここに無い。** 直上の
-   *    `sdk-verbatim` の印は d.ts 側の一文が変わったときにだけ赤くなる、**部分的な
-   *    仕掛けである**（`agent_id` の意味が変わるならまずこの一文が変わる見込みが
-   *    高い、という賭けに乗っているだけである）。
-   *
-   *    **⭐ 腐ったときに何が起きるか。** 使い回された `agent_id` は前の作業者の
-   *    カウントを引き継ぐので、**起こし直しを1回も受けないまま `escalate` へ
-   *    落ちうる**。⟹ その作業者は自動では起こされない。**ただし `escalate` の
-   *    `note` はクローンの受信箱まで届く**（`manager.ts` の `case 'note'`）ので、
-   *    **止まったこと自体は黙らない** —— 失われるのは自動の起こし直しだけで、
-   *    #644 以前の状態（＝ 検出はできるが継続はしない）へ戻る。**黙って壊れる
-   *    側ではない**ことが、この前提をこのまま置いておける理由である。
-   *
-   * ⚠️ **次にこのフィールドを読む人が、`#liveBackgroundTasks` や
-   * `#backgroundTaskOwners` に揃えて「ターンの頭でリセットする」形を足し
-   * たくなったら、それは誤り である** —— PR #643 は `#liveBackgroundTasks`
-   * を毎ターンリセットしていたのが誤りだったと直した回で、こちらは逆に
-   *「リセットしないことが正しい」側である。同じ形に見えても意味が違う。
-   */
-  #subagentWakeups = new Map<string, number>();
-  /**
-   * `agentId` → **その作業者を、背景処理の種類を問わず通算で起こし直した
-   * 回数**（#570 の追跡の続き。`SUBAGENT_WAKEUP_LIMIT_PER_AGENT` の doc —
-   * 穴A・穴Bの説明もそちらに在る）。
-   *
-   * `#subagentWakeups` と同じ理由・同じ形でターン境界ではリセットしない
-   * （直上のフィールドの「ターン境界ではリセットしない」節をそのまま
-   * 適用する——積算を持つ表であることに変わりはない）。増え続ける件数は
-   * `SUBAGENT_WAKEUP_TRACKING_LIMIT` の枝刈り（`pruneOldestEntries`）で
-   * `#subagentWakeups` と同じ FIFO で抑える。
-   *
-   * **`note.stall.wakeupCount`（`runner-protocol.ts` / `schema.ts`）へ載る
-   * 値はこの表の値である。** スキーマ側の doc「この `agent_id` を起こし
-   * 直した回数（今回を含む）」は変えていないので、この表がその doc を
-   * 真のまま保つ——鍵の単位を変えたのは `#subagentWakeups` のほうで、
-   * `agent_id` 単位の通算を運ぶ役目はこちらへ引き継いだ。
-   */
-  #subagentWakeupTotals = new Map<string, number>();
-  /**
-   * `agentId` → **この作業者について `stall.outcome === 'limit_reached'` の
-   * `note` を出した通算回数**（#1385）。
-   *
-   * **背景 —— 上限に達した作業者が畳もうとするたびに、同じ内容の report が
-   * クローンの受信箱に積まれ続けていた。** `#onSubagentStop` は `limit_reached`
-   * に落ちるたびに `escalate: true` を立てており、`manager.ts` の
-   * `case 'note'` は `escalate === true` のときだけクローンの受信箱へ
-   * report を積む（`stall` 付きの note 自体は `escalate` に関係なく毎回
-   * 日誌へ書く——そちらは変えていない）。⟹ 同じ agentId が起こし直しの
-   * 上限に達したまま何度も `SubagentStop` を送ってくると、その回数ぶんだけ
-   * 同じ内容の report が積まれ、他の判断材料を押し流す。
-   *
-   * **間引き方は `manager.ts` の `shouldEscalateDenial` と同じ規則**
-   * （`grep -Fn -- 'function shouldEscalateDenial(count: number): boolean {' packages/core/src/manager.ts`。
-   * 1・3・9・27…と3倍ごとにだけ上げ、上げ続けないし、黙りもしない）。
-   * この表がその回数を数え、`shouldEscalateSubagentLimitReachedNote`
-   * （このファイル）が間引く。**`note` 自体は今までどおり毎回 emit する**
-   * （日誌には全件残る）——間引くのは `escalate` の有無だけで、note の
-   * 発行そのものは間引かない（間引くと日誌の全件性が壊れる。AGENTS.md
-   * 「静かに失敗する道具」と同じ向き）。
-   *
-   * ⚠️ **`manager.ts` を変更できない事情でこの規則をここへ複製している。**
-   * `shouldEscalateDenial` 自身と間引きの規則（1・3・9…）は同じだが、
-   * **実体は2箇所に分かれている** —— 片方だけ規則を変えると、
-   * `permission_denied` の間引きと `limit_reached` の間引きが黙って
-   * ずれる。次にこの規則を変えるときは両方を揃えること。
-   *
-   * `#subagentWakeupTotals` と同じ理由・同じ形でターン境界ではリセットせず、
-   * `SUBAGENT_WAKEUP_TRACKING_LIMIT` の枝刈り（`pruneOldestEntries`）で
-   * 件数を抑える。
-   */
-  #subagentLimitReachedNotes = new Map<string, number>();
+  readonly #stopState = new RunnerSubagentStopState();
   /**
    * `UserPromptSubmit` の `source` ごとの件数（`result` で畳む）。
    *
@@ -3827,14 +3480,9 @@ class RunnerSession {
     if (typeof taskId !== 'string' || taskId.length === 0) return;
 
     // マネージャー自身の分は空文字で控える（「引けなかった」と混ぜないため）。
-    this.#backgroundTaskOwners.set(taskId, agentId ?? '');
-
-    // 上限を超えたら古い側から捨てる（理由は `BACKGROUND_TASK_OWNER_LIMIT`）。
-    while (this.#backgroundTaskOwners.size > BACKGROUND_TASK_OWNER_LIMIT) {
-      const oldest = this.#backgroundTaskOwners.keys().next();
-      if (oldest.done === true) break;
-      this.#backgroundTaskOwners.delete(oldest.value);
-    }
+    // 上限を超えたら古い側から捨てる（`RunnerSubagentStopState.setBackgroundTaskOwner`
+    // の中。理由は `BACKGROUND_TASK_OWNER_LIMIT`）。
+    this.#stopState.setBackgroundTaskOwner(taskId, agentId ?? '');
   }
 
   /**
@@ -4032,7 +3680,7 @@ class RunnerSession {
       const mine = tasks.filter((task) => {
         const id = (task as { id?: unknown }).id;
         if (typeof id !== 'string' || agentId === undefined) return false;
-        return this.#backgroundTaskOwners.get(id) === agentId;
+        return this.#stopState.backgroundTaskOwner(id) === agentId;
       });
 
       if (mine.length === 0) {
@@ -4108,9 +3756,8 @@ class RunnerSession {
       const remainingIds = remaining
         .map((task) => (task as { id?: unknown }).id)
         .filter((id): id is string => typeof id === 'string');
-      const perTaskCount = (id: string): number =>
-        this.#subagentWakeups.get(subagentWakeupKey(agentId, id)) ?? 0;
-      const total = this.#subagentWakeupTotals.get(agentId) ?? 0;
+      const perTaskCount = (id: string): number => this.#stopState.subagentWakeupCount(agentId, id);
+      const total = this.#stopState.subagentWakeupTotal(agentId);
       const underPerTask = remainingIds.filter(
         (id) => perTaskCount(id) < SUBAGENT_WAKEUP_LIMIT_PER_TASK,
       );
@@ -4127,15 +3774,7 @@ class RunnerSession {
         // 「待たされた」のは残っている背景処理の全部だからである —— 上限未満の
         // 1本だけを対象に選んでも、他の背景処理が同じ回に一緒に残っていた
         // という事実は変わらない。
-        const newTotal = total + 1;
-        this.#subagentWakeupTotals.set(agentId, newTotal);
-        pruneOldestEntries(this.#subagentWakeupTotals, SUBAGENT_WAKEUP_TRACKING_LIMIT);
-
-        for (const id of remainingIds) {
-          const key = subagentWakeupKey(agentId, id);
-          this.#subagentWakeups.set(key, (this.#subagentWakeups.get(key) ?? 0) + 1);
-        }
-        pruneOldestEntries(this.#subagentWakeups, SUBAGENT_WAKEUP_TRACKING_LIMIT);
+        const newTotal = this.#stopState.recordSubagentWakeup(agentId, remainingIds);
 
         // **加算の後で組み立てる。** 各行に載る「この背景処理では何回目か」
         // は、この加算を終えた後の値でなければ「今回を含む」にならない。
@@ -4205,14 +3844,12 @@ class RunnerSession {
       // `escalate === true` のときだけクローンの受信箱へ report を積むので、
       // 毎回立てたままだと同じ agentId が上限に達したまま何度も
       // `SubagentStop` を送ってくるたびに同じ report が積まれ続ける。
-      // **間引きの規則は `shouldEscalateSubagentLimitReachedNote` の doc
-      // （`manager.ts` の `shouldEscalateDenial` と同じ、1・3・9・27…）。**
+      // **間引きの規則は `RunnerSubagentStopState.recordSubagentLimitReachedNote`
+      // の doc（`manager.ts` の `shouldEscalateDenial` と同じ、1・3・9・27…）。**
       // **ここでは何も加算していないので、`#renderSubagentStopTaskLines` が
       // 読む値は現在値のままである。**
-      const limitNoteCount = (this.#subagentLimitReachedNotes.get(agentId) ?? 0) + 1;
-      this.#subagentLimitReachedNotes.set(agentId, limitNoteCount);
-      pruneOldestEntries(this.#subagentLimitReachedNotes, SUBAGENT_WAKEUP_TRACKING_LIMIT);
-      const shouldEscalateLimitNote = shouldEscalateSubagentLimitReachedNote(limitNoteCount);
+      const { count: limitNoteCount, shouldEscalate: shouldEscalateLimitNote } =
+        this.#stopState.recordSubagentLimitReachedNote(agentId);
 
       const taskLines = this.#renderSubagentStopTaskLines(agentId, remaining);
       const limitReasonText =
@@ -4320,7 +3957,7 @@ class RunnerSession {
       const command = typeof t.command === 'string' ? ` command=${t.command}` : '';
       const perTaskSuffix =
         typeof t.id === 'string'
-          ? `（この背景処理では ${this.#subagentWakeups.get(subagentWakeupKey(agentId, t.id)) ?? 0}` +
+          ? `（この背景処理では ${this.#stopState.subagentWakeupCount(agentId, t.id)}` +
             `回目 / 1本あたりの上限 ${SUBAGENT_WAKEUP_LIMIT_PER_TASK}）`
           : '';
       return `- type=${type} status=${status} description=${description}${command}${perTaskSuffix}`;
@@ -4363,8 +4000,8 @@ class RunnerSession {
    * `exchange` として通す）。
    */
   #noteSettledOnly(settled: readonly unknown[]): void {
-    if (this.#settledOnlyNoted) return;
-    this.#settledOnlyNoted = true;
+    if (this.#stopState.settledOnlyNoted) return;
+    this.#stopState.markSettledOnlyNoted();
 
     const listed = settled
       .map((task) => {
@@ -4410,17 +4047,17 @@ class RunnerSession {
    * この診断が出る形になっていた。名簿と実測は `OWNER_RECORDABLE_TASK_TYPES` の doc。
    */
   #noteOwnerLookupFailure(tasks: readonly unknown[]): void {
-    if (this.#ownerLookupFailureNoted) return;
+    if (this.#stopState.ownerLookupFailureNoted) return;
 
     const orphans = tasks.filter((task) => {
       const t = task as { id?: unknown; type?: unknown };
       // **控えられない種類は、表に無いのが正常である**（診断の対象にしない）。
       if (!isOwnerRecordableTaskType(t.type)) return false;
-      return typeof t.id !== 'string' || !this.#backgroundTaskOwners.has(t.id);
+      return typeof t.id !== 'string' || !this.#stopState.hasBackgroundTaskOwner(t.id);
     });
     if (orphans.length === 0) return;
 
-    this.#ownerLookupFailureNoted = true;
+    this.#stopState.markOwnerLookupFailureNoted();
     const listed = orphans
       .map((task) => {
         const t = task as { id?: unknown; type?: unknown };
@@ -4521,7 +4158,7 @@ class RunnerSession {
     try {
       // **数えるのは何より先。** 下のどの枝を通っても（間引かれても）通算は進む ——
       // この数そのものが #861 の問い「`Stop` はいつ来て、いつ来ないか」への材料である。
-      this.#stopFirings += 1;
+      const stopFirings = this.#stopState.incrementStopFirings();
 
       const hook = input as {
         background_tasks?: unknown;
@@ -4556,7 +4193,7 @@ class RunnerSession {
         stopHookActive === undefined ? '' : ` stop_hook_active=${String(stopHookActive)}。`;
 
       const noteLines = [
-        `Stop（マネージャーのターンが閉じる瞬間。このセッションで通算 ${this.#stopFirings}回目）: ` +
+        `Stop（マネージャーのターンが閉じる瞬間。このセッションで通算 ${stopFirings}回目）: ` +
           `**背景処理 ${tasks.length}件 / session_crons ${crons.length}件 を残したまま閉じようとしている。**` +
           stopHookActiveText,
         `所有者の内訳（表 #backgroundTaskOwners から引いた）: マネージャー自身 ${owners.manager}件 / ` +
@@ -4651,7 +4288,7 @@ class RunnerSession {
     task: unknown,
   ): 'manager' | 'worker' | 'delegation' | 'unrecordable' | 'unresolved' {
     const t = task as { id?: unknown; type?: unknown };
-    const owner = typeof t.id === 'string' ? this.#backgroundTaskOwners.get(t.id) : undefined;
+    const owner = typeof t.id === 'string' ? this.#stopState.backgroundTaskOwner(t.id) : undefined;
     if (owner !== undefined) return owner === '' ? 'manager' : 'worker';
     if (t.type === 'subagent') return 'delegation';
     return isOwnerRecordableTaskType(t.type) ? 'unresolved' : 'unrecordable';
@@ -4684,7 +4321,7 @@ class RunnerSession {
     const kind = this.#stopTaskOwnerKind(task);
     const owner =
       kind === 'worker' && typeof t.id === 'string'
-        ? `worker:${this.#backgroundTaskOwners.get(t.id) ?? ''}`
+        ? `worker:${this.#stopState.backgroundTaskOwner(t.id) ?? ''}`
         : kind;
     return `- id=${id} owner=${owner} type=${type} status=${status} description=${description}${command}`;
   }
@@ -4707,15 +4344,15 @@ class RunnerSession {
    * 見てから決まる。**
    */
   #noteStopIdle(): void {
-    if (this.#stopIdleNoted) return;
-    this.#stopIdleNoted = true;
+    if (this.#stopState.stopIdleNoted) return;
+    this.#stopState.markStopIdleNoted();
 
     this.#emit({
       type: 'note',
       managerId: this.#id,
       text: this.#truncateStopNoteText(
         'Stop: マネージャーのターンが閉じたが、**背景処理も session_crons も 0件 だった**' +
-          `（このセッションで通算 ${this.#stopFirings}回目の発火）。` +
+          `（このセッションで通算 ${this.#stopState.stopFirings}回目の発火）。` +
           '⟹ SDK の言う「session is done」の側である。' +
           '**この行が出たこと自体が「`Stop` はこの器で発火する」の実測である**（#861 の段1）。' +
           '（雑音にしないため、この「0件で閉じた」診断はセッションに1回だけ出す —— `Stop` は' +
