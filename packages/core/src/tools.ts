@@ -2658,6 +2658,51 @@ function failureLine(manager: ManagerSummary): string | null {
 }
 
 /**
+ * 一覧に添える、「枠（利用上限）そのもので止まっている」の一行
+ * （#1212 残件2の続き。先例は `failureLine` / `systemErrorLine`）。
+ *
+ * **`describeManagerFailure`（`lastFailure`）とは軸が違う。** あちらは理由を
+ * 問わず直近のターンが失敗で終わったことを名乗る広い軸、こちらは
+ * `ManagerSummary.usageStoppedAt`——利用上限そのものに当たったことだけを
+ * 指す狭い軸である（`situation.ts` の `USAGE_STOPPED_NOTICE` の doc。
+ * `manager.ts` の `#usageStopped` の doc）。**同じ委譲で両方が出ることを許す**
+ * ——排他にしない決定は `situation.ts` 側で確定している（`done` に落ち着いた
+ * 時点で `usageStoppedAt` が残っているなら、直前の報告は必ず失敗だったので
+ * `failureLine` 側にも出るのが通常だが、走行中は `usage_notice` がターンの
+ * 途中で先に届くことがあり、その回はまだ `lastFailure` が立っていない）。
+ * **この一覧では両方とも出す**（`failureLine` の直後に並べる）。
+ *
+ * **`status` を置き換えない。** 枠に当たってもセッションは生きているので、
+ * 台帳の `status` は `done` / `running` のまま動かさない
+ * （`describeManagerFailure` と同じ理由）。
+ *
+ * **健全なマネージャーでは `null` を返し、1文字も増えない**（他の `describe*`
+ * と同じ約束——一覧は文字数の予算 `LIST_BUDGET` に張り付いている）。
+ *
+ * **字面の生成元はここ1箇所である。** `describeManagerCounts` の件数行は、
+ * この行を見れば名指しで辿れることだけを案内する——字面そのものはここでしか
+ * 作らない（`describeManagerFailure` と同じ理由。同じ欄を2箇所が別の語で
+ * 呼ぶと、面をまたいで読む人間がそこで詰まる）。
+ */
+function describeUsageStopped(manager: ManagerSummary): string | null {
+  if (manager.usageStoppedAt === undefined) return null;
+  return (
+    `⚠ 枠(利用上限)で止まっている（${manager.usageStoppedAt} から）。` +
+    'セッションは生きているので、鍵が回ればこの委譲は続く' +
+    '——status はそれまで動かさない（仕様である）。'
+  );
+}
+
+/**
+ * {@link describeUsageStopped} を `manager_list` の `extra` へ入れる形にする
+ * （`failureLine` と同じ作法）。
+ */
+function usageStoppedLine(manager: ManagerSummary): string | null {
+  const note = describeUsageStopped(manager);
+  return note === null ? null : `  ${note}`;
+}
+
+/**
  * **`lastReport` を「直近の報告」と呼んでよいか（Issue #714 / #917）。**
  *
  * 呼んではいけない回が2つある——どちらも `lastReport` の本文は完遂した報告
@@ -9166,6 +9211,13 @@ export function createCloneTools(context: ToolContext) {
               // 分かる順になる。人間の CLI が同じ順で置いてある
               // （`apps/cli/src/chat.ts` の「**失敗は報告の**上**に置く。**」）。
               failureLine(manager),
+              // **枠(利用上限)で止まっている委譲も、同じ「失敗は報告の上」の
+              // 順で置く（#1212 残件2の続き）。** `lastFailure` の行（すぐ上）
+              // とは別の軸なので別行——**両方が同時に出ることがある**
+              // （`usageStoppedLine` の doc。排他にしない決定は `situation.ts`
+              // 側で確定している）。**健全なマネージャーでは `null` を返し、
+              // 1文字も増えない。**
+              usageStoppedLine(manager),
               // **セッションそのものが `failed` として畳まれた落ち方も、同じ
               // 「失敗は報告の上」の順で置く（Issue #713 段3）。** `lastFailure`
               // の行（すぐ上）とは別の軸なので別行——**両方が同時に出ることは
@@ -11103,6 +11155,23 @@ function compareManagerAttention(a: ManagerSummary, b: ManagerSummary): number {
  *
  * **これも 0 の行は作らない。** `lost` が 0 本なのか数えていないのかは、
  * 上の3区分と同じ規則で読ませる——**在るときだけ書く。**
+ *
+ * ## 枠(利用上限)で止まっている本数（#1212 残件2の続き）
+ *
+ * **ここまでの区分（走行中・宛先の器が名乗らなくなった・runner にセッションが
+ * 無い・返事待ち・`lost`）は `status`（等）の分割だが、`usageStoppedAt` は
+ * それとは種類が違う——`status` と独立に立つ横断する軸で、上のどの区分にも
+ * 重なりうる**（`situation.ts` の `ManagerSituationCounts.usageStopped` の doc
+ * と同じ整理）。⟹ **この本数を上の内訳へ足し合わせないこと**——足すと
+ * 全体の本数を超えうる（同じ委譲を2回数えることになる）。
+ *
+ * **名指しで絞る綴りは無い。** `usageStoppedAt` は `status` の値ではないので
+ * `status: [...]` では切り出せない（`situation.ts` の `USAGE_STOPPED_NOTICE`
+ * と同じ理由）。**代わりに、一覧の各行に付く注記（`usageStoppedLine` の
+ * `⚠ 枠(利用上限)で止まっている`）を見ること**——`lastFailure`/`lost` と違い、
+ * ここでは辿る先が絞りではなく行の注記である。
+ *
+ * **これも 0 の行は作らない。** 同じ規則——在るときだけ書く。
  */
 function describeManagerCounts(managers: readonly ManagerSummary[]): string {
   const live = managers.filter((m) => m.live).length;
@@ -11128,6 +11197,16 @@ function describeManagerCounts(managers: readonly ManagerSummary[]): string {
   // `situation.ts` と *分け方* が割れる。あちらの doc を参照）。
   const lost = managers.filter((m) => isManagerAwaitingJudgement(m.status)).length;
   if (lost > 0) parts.push(`戻れなかった(lost) ${lost} 本`);
+  // **横断する軸である（#1212 残件2の続き）。** `usageStoppedAt` は status と
+  // 独立に立つので、上の区分（走行中／返事待ち／lost 等）のどれとも重なり
+  // うる——`status` の分割ではないので、この本数を他の区分へ足し合わせない
+  // こと（この関数の doc「枠(利用上限)で止まっている本数」の節）。0 の行は
+  // 作らない（同じ理由）。
+  const usageStopped = managers.filter((m) => m.usageStoppedAt !== undefined).length;
+  if (usageStopped > 0)
+    parts.push(
+      `枠(利用上限)で止まっている ${usageStopped} 本（横断する軸。他の区分とは足し合わせない）`,
+    );
   return (
     `件数: ${parts.join(' / ')}。話しかけられる委譲は全体で ${live} 本である。` +
     '**「走行中」は「進んでいる」ではない** — 宛先の器が黙って消えても ' +
@@ -11154,7 +11233,17 @@ function describeManagerCounts(managers: readonly ManagerSummary[]): string {
         '宛先の器が黙って消えた委譲は running のまま残り、直近のターンが失敗で終わった委譲は ' +
         'done のまま残る。前者は status: ["running"]、後者は status: ["done"] で引き、' +
         '行に付く ⚠ を見ること。' +
-        RESTART_BEFORE_CHECK_ADVICE)
+        RESTART_BEFORE_CHECK_ADVICE) +
+    // **`usageStopped` が在るときだけ足す1文（#1212 残件2の続き）。** 横断する
+    // 軸なので、上の区分の合計と混同されないよう明示する。**絞る綴りは無い**
+    // ——`lost` と違い `status` で切り出せないので、代わりに一覧の各行に付く
+    // 注記（`usageStoppedLine`）を見るよう案内する。
+    (usageStopped === 0
+      ? ''
+      : ' **「枠(利用上限)で止まっている」は status の分割ではなく横断する軸である** — ' +
+        '走行中・返事待ち・戻れなかった(lost)・手が空いている（done）等のどれとも重なりうるので、' +
+        '上の内訳には足し合わせない。名指しで絞る綴りは無い（`status` の値ではないため）——' +
+        'この一覧の各行に付く注記（⚠ 枠(利用上限)で止まっている）を見て、どの委譲かを辿ること。')
   );
 }
 

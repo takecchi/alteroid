@@ -6168,6 +6168,73 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * `usageStoppedAt`（`ManagerSummary`。#1212 残件2の続き）を `manager_list` が
+   * 専用行で出す。**`lastFailure` の ⚠ 行（すぐ上の歯）と並べ方・書式を揃えた**
+   * ——`failureLine` の直後に置き、`  ⚠ …` の形で1行だけ増やす。
+   *
+   * 測るのは2つ:
+   * 1. `usageStoppedAt` が在る回には専用行が出る（時刻がそのまま読める）
+   * 2. **`usageStoppedAt` が無い回には1文字も足さない**（次の歯）。これが無いと
+   *    「常に出す」実装でも1つ目は緑になる
+   */
+  it('manager_list は usageStoppedAt を専用行で出す（#1212 残件2の続き）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.usageStoppedAt = '2026-09-25T01:23:45.000Z';
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('⚠ 枠(利用上限)で止まっている');
+    expect(reply).toContain('2026-09-25T01:23:45.000Z');
+    // status は動かさない——`status` の値そのものは行に出るが、専用行は
+    // それとは別に足される。
+    expect(reply).toContain('running');
+  });
+
+  /**
+   * ⭐ **陰性対照**。`usageStoppedAt` が無ければ専用行は1文字も足さない
+   * （予算を食わない。`lastFailure` の陰性対照と同じ形）。
+   */
+  it('manager_list は usageStoppedAt が無ければ1文字も足さない（#1212 残件2の続き）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    // 失敗もしていない・枠にも当たっていない。
+    target.lastReport = '終わった';
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).not.toContain('枠(利用上限)で止まっている');
+  });
+
+  /**
+   * **`lastFailure` と同じ委譲で両方出ることを許す**（`usageStoppedLine` の
+   * doc。排他にしない決定は `situation.ts` 側で確定している）。**片方が
+   * もう片方を隠さない**——`describeManagerSystemError` の D の行が
+   * `lastFailure` を消さない歯（すぐ上）と同じ形。
+   */
+  it('manager_list: usageStoppedAt と lastFailure が同じ委譲で両方出る', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.usageStoppedAt = '2026-09-25T01:23:45.000Z';
+    target.lastFailure = {
+      code: 'billing_error',
+      via: 'assistant_error',
+      at: '2026-09-25T01:23:50.000Z',
+    };
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('⚠ 枠(利用上限)で止まっている');
+    expect(reply).toContain('⚠ 直近のターンは報告ではなく失敗で終わっている');
+  });
+
+  /**
    * **Issue #1266 の最小の一手。** PR #1265 が `Job.lastUnpushedWorkObservation`
    * へ観測を残すようにしたが、読む口が本番コードに1つも無かった
    * （`manager_list` にも `self_status` にも出ない）——`branch` が non-null で
@@ -10069,6 +10136,49 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
     expect(reply).not.toContain('落ちた委譲を全部見たことにはならない');
     expect(reply).not.toContain('status: ["running"]');
     expect(reply).not.toContain('status: ["done"]');
+  });
+
+  /**
+   * **件数の行が「枠(利用上限)で止まっている」本数を出す（#1212 残件2の続き）。**
+   *
+   * `describeManagerCounts` の doc の新しい節（「枠(利用上限)で止まっている
+   * 本数」）どおり、これは `status` の分割ではなく横断する軸なので、
+   * 上の区分（走行中・返事待ち・lost 等）とは足し合わせないことを本文自身が
+   * 断る。**名指しで絞る綴りは無い**（`status` の値ではないため）ので、
+   * 代わりに「一覧の各行に付く注記を見ること」を案内する。
+   */
+  it('件数の行が「枠(利用上限)で止まっている」本数と、横断する軸である断りを出す', async () => {
+    const running = entry('mgr-run-00', 'running', 10);
+    running.usageStoppedAt = minutesBefore(3);
+    const done = entry('mgr-done-00', 'done', 11);
+    done.usageStoppedAt = minutesBefore(4);
+    const healthy = entry('mgr-done-01', 'done', 12);
+    const h = pool([running, done, healthy]);
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('件数: 全 3 本');
+    expect(reply).toContain('枠(利用上限)で止まっている 2 本');
+    // 横断する軸であることの断り——足し合わせない。
+    expect(reply).toContain('status の分割ではなく横断する軸である');
+    expect(reply).toContain('上の内訳には足し合わせない');
+    // 絞る綴りは無い代わりに、行の注記を見るよう案内する。
+    expect(reply).toContain('名指しで絞る綴りは無い');
+    expect(reply).toContain('この一覧の各行に付く注記');
+  });
+
+  /**
+   * ⭐ **`usageStopped` が 0 本のときは、件数の行に区分ごと出さない**
+   * （#1212 残件2の続き。`lost` と同じ「0 の行は作らない」作法）。
+   */
+  it('⭐ 枠(利用上限)で止まっている委譲が0本なら件数の行にも断り書きにも1文字も出ない', async () => {
+    const h = pool([entry('mgr-done-00', 'done', 10), entry('mgr-fail-00', 'failed', 11)]);
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('件数: 全 2 本');
+    expect(reply).not.toContain('枠(利用上限)で止まっている');
+    expect(reply).not.toContain('横断する軸である');
   });
 });
 

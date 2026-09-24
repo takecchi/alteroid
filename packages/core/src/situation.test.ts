@@ -742,7 +742,12 @@ describe('describeSituation', () => {
     expect(countsLine).toContain('「手が空いている」に数えたものが 2 本');
     expect(countsLine).toContain('上の区分とは足し合わせない');
     expect(text).toContain('「手が空いている」は「仕事を終えて空いた」を意味しない');
-    expect(text).toContain('この軸で絞る綴りは無い');
+    // **#1212 残件2の続き。** 「絞る綴りは無い」ではなく、`manager_list` の
+    // 行の注記で名指しされることを言うよう直した（`tools.ts` の
+    // `usageStoppedLine` が同じ注記を各行に付けるようになったため）。
+    expect(text).toContain('manager_list');
+    expect(text).toContain('の各行に付く注記');
+    expect(text).toContain('で名指しされる');
     expect(text).toContain('`manager_report <managerId>`');
   });
 
