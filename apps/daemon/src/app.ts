@@ -4669,8 +4669,7 @@ export function createApp(deps: AppDeps) {
        * `env` / `headers` の鍵が応答へ載る。返すのは不正な欄の位置だけである。
        */
       jsonBody(mcpServersUpdateRequestSchema, (where) => ({
-        error:
-          'MCP サーバの登録の形が不正（保存していない）' + (where === '' ? '' : `: ${where}`),
+        error: 'MCP サーバの登録の形が不正（保存していない）' + (where === '' ? '' : `: ${where}`),
       })),
       async (c) => {
         const previous = await deps.stores.mcpServers.read();

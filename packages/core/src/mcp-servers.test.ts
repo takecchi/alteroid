@@ -28,9 +28,7 @@ describe('MCP サーバの登録（#325 段1）', () => {
     expect(isReservedMcpServerName(MCP_SERVER_NAME)).toBe(true);
     expect(isReservedMcpServerName(MCP_SERVER_NAME.toUpperCase())).toBe(true);
     expect(isReservedMcpServerName(`${MCP_SERVER_NAME}-x`)).toBe(false);
-    expect(() => parseMcpServers({ [MCP_SERVER_NAME]: { command: 'x' } })).toThrow(
-      MCP_SERVER_NAME,
-    );
+    expect(() => parseMcpServers({ [MCP_SERVER_NAME]: { command: 'x' } })).toThrow(MCP_SERVER_NAME);
   });
 
   /**
