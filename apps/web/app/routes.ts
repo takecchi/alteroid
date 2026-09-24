@@ -29,6 +29,8 @@ export default [
     route('tokens', 'routes/tokens.tsx'),
     route('access', 'routes/access.tsx'),
     route('env-vars', 'routes/env-vars.tsx'),
+    // 環境変数の隣。どちらも「器を焼き直す代わりの口」（issue #1122）。
+    route('profile', 'routes/profile.tsx'),
     route('dropped', 'routes/dropped.tsx'),
     route('archive', 'routes/archive.tsx'),
     // CLI の `alteroid inbox remove` と同じ口（issue #972 / #1042）。

@@ -130,6 +130,7 @@ export const KEY = {
   tokens: { type: 'tokens' } as const,
   access: { type: 'access' } as const,
   credentials: { type: 'credentials' } as const,
+  profile: { type: 'profile' } as const,
   dropped: { type: 'dropped' } as const,
   archive: { type: 'archive' } as const,
   archiveSessions: { type: 'archiveSessions' } as const,
@@ -495,6 +496,26 @@ export function useAccess() {
 export function useCredentials() {
   const api = useApi();
   return useSWR(KEY.credentials, () => api.api.GET('/credentials').then(unwrap));
+}
+
+/**
+ * 実行環境プロファイル本文（`GET /profile`。`.zprofile` 相当）。CLI の
+ * `alteroid profile show` と同じ経路（issue #1122）。
+ *
+ * **資格は `requireOperator`。** `PUT /credentials` `POST /reset` と違い、
+ * 2026-09-06 の同格化にも 2026-09-17/18 の `requireOwner` への降格にも入って
+ * いない（`apps/daemon/src/app.ts` の `PUT /profile` の doc——本文がまるごと
+ * `GH_TOKEN` のような鍵を運ぶ口だからである）。**ブラウザ経由の通常のログイン
+ * （Google OAuth のアクセストークン）はこの資格を構造的に持てない**
+ * （`useDeclareOwner` の doc と同じ理由）——実際に開くのは認証を無効にした
+ * 構成（`ALTEROID_AUTH=off`。この場合すべての principal が `operator` になる。
+ * `apps/daemon/src/app.ts` の `authenticate` の分岐）だけである。**それでも
+ * ボタンは隠さない**（`env-vars.tsx` `access.tsx` と同じ「押せない理由を
+ * 消さない」方針）。
+ */
+export function useProfile() {
+  const api = useApi();
+  return useSWR(KEY.profile, () => api.api.GET('/profile').then(unwrap));
 }
 
 /**

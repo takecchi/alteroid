@@ -14,13 +14,14 @@
 import { useCallback } from 'react';
 import { useSWRConfig } from 'swr';
 
-import { expectOk, unwrap, useApi } from '~/lib/api';
+import { ApiError, expectOk, unwrap, useApi } from '~/lib/api';
 import type {
   AgentTokenView,
   ConversationSummary,
   EnvVarScope,
   InboxEventType,
   InboxRemoveManyResult,
+  ProfileUpdateResult,
   TokenRotationSettings,
 } from '~/lib/types';
 
@@ -651,6 +652,66 @@ export function useRemoveEnvVar() {
         .PUT('/credentials', { body: { credentials: [{ name, value: '' }] } })
         .then(unwrap);
       await mutate(KEY.credentials);
+      return result;
+    },
+    [api, mutate],
+  );
+}
+
+/**
+ * `PUT /profile` の 400（`profileErrorResponseSchema` = `{error, detail}`）は
+ * 「保存していない理由」を `detail` に持つ——シェルの構文エラーは行番号込み
+ * でしか直せないので、共通の `unwrap`（`error` 欄しか見ない）へ潰すと直せる
+ * 情報が消える。CLI（`apps/cli/src/profile.ts` の `request()`）と同じ形
+ * （`${error}\n${detail}`）で1本の文字列にする。
+ */
+function unwrapProfileUpdate(result: {
+  data?: ProfileUpdateResult;
+  error?: unknown;
+  response: Response;
+}): ProfileUpdateResult {
+  if (result.error === undefined && result.data !== undefined) return result.data;
+  const body = result.error as { error?: unknown; detail?: unknown } | undefined;
+  if (typeof body?.error === 'string') {
+    const detail = typeof body.detail === 'string' ? body.detail : '';
+    throw new ApiError(
+      result.response.status,
+      detail.length > 0 ? `${body.error}\n${detail}` : body.error,
+    );
+  }
+  return unwrap(result);
+}
+
+/**
+ * 実行環境プロファイルを差し替える（`PUT /profile`。issue #1122）。CLI の
+ * `alteroid profile edit|set|clear` と同じ経路——空文字は「外す」（サーバ側の
+ * `profileUpdateRequestSchema` の doc）。
+ *
+ * **確認は呼び出し側（`routes/profile.tsx`）の仕事。** この口自体はサーバ側で
+ * 確認の印（`POST /reset` の `confirm: true` 相当）を必須にしていない——二重の
+ * 網は無く、呼ぶ前の確認だけが唯一の網である。**重さは `POST /reset` 以上**
+ * ——ここは「記憶ストアの鍵を持つプロセスでの任意コマンド実行そのもの」
+ * （`docs/architecture.md`）なので、画面側の確認も `ResetWorkspace` /
+ * `ShutdownDaemon` と同じ「`<dialog>` に語を打たせる」強さにする
+ * （`useVacateRunner` の「2ボタンで確認」より一段強い——あちらは器を空ける
+ * だけで、鍵をまるごと運びはしない）。
+ *
+ * **`requireOperator`。** `useSetEnvVar`（`requireOwner`）より一段強い資格
+ * ——「宣言済み owner」では足りない（`useProfile` の doc）。
+ *
+ * **呼んだ後にキャッシュを引き直すのは `KEY.profile` と `KEY.runners` の
+ * 両方。** 応答の `clone` / `runners` は「この1回の適用でどうなったか」
+ * だけを返し、`GET /runners` の `pushHealth.profile`（`settings.tsx`）が
+ * 次に読み直されるまで古いままなので、両方落とす。
+ */
+export function useSetProfile() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (script: string) => {
+      const result = await api.api.PUT('/profile', { body: { script } }).then(unwrapProfileUpdate);
+      await mutate(KEY.profile);
+      await mutate(KEY.runners);
       return result;
     },
     [api, mutate],

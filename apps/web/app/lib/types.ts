@@ -190,6 +190,26 @@ export type EnvVarView = CredentialsState['credentials'][number];
 export type EnvVarScope = EnvVarView['scope'];
 
 /**
+ * 実行環境プロファイル本文（`.zprofile` 相当。`GET /profile`）。CLI の
+ * `alteroid profile show` / `status` と同じもの（issue #1122）。
+ *
+ * **`script` が空文字なら「置かれていない」**（サーバ側が本文の有無を空文字で
+ * 表す。`apps/daemon/src/openapi.ts` の `profileResponseSchema` の doc）。
+ */
+export type ProfileView = Ok<paths['/profile']['get']>;
+
+/**
+ * プロファイルを差し替えた直後の反映結果（`PUT /profile`）。クローン・各
+ * runner への適用の成否を持つ——CLI の `alteroid profile edit|set|clear` が
+ * `report()` で表示しているのと同じ内容を画面でも見せる（issue #1122）。
+ */
+export type ProfileUpdateResult = Ok<paths['/profile']['put']>;
+/** クローン（デーモン自身）へ効かせた結果。 */
+export type ProfileApplyOutcome = ProfileUpdateResult['clone'];
+/** 各 runner へ降ろした結果。 */
+export type ProfileRunnerApplyOutcome = ProfileUpdateResult['runners'][number];
+
+/**
  * 握り潰しの跡（`GET /dropped`）。CLI（`alteroid dropped`）・クローンの MCP
  * 道具 `self_dropped` と同じ帳面を読む（`packages/core/src/dropped-record.ts`）。
  *
