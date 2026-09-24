@@ -18,6 +18,7 @@ import type {
   RunnerStartCommand,
   UnpushedWorkResult,
 } from './runner-protocol.js';
+import { RUNNER_CAPABILITIES } from './runner-protocol.js';
 import { readExecutionResources } from './runner-resources.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 
@@ -108,7 +109,7 @@ class LocalRunner implements RunnerClient {
 
   async connect(onEvent: (event: RunnerEvent) => void): Promise<void> {
     this.#onEvent = onEvent;
-    onEvent({ type: 'hello', runnerId: this.runnerId });
+    onEvent({ type: 'hello', runnerId: this.runnerId, capabilities: [...RUNNER_CAPABILITIES] });
     while (this.#queue.length > 0) {
       const event = this.#queue.shift();
       if (event !== undefined) onEvent(event);

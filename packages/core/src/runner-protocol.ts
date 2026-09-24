@@ -541,9 +541,38 @@ export interface RunnerAnswerOutcome {
  * ここに流れるのは**事実だけ**である。「これは人間に聞くべきか」といった判断は
  * 混ぜない（判断はクローンが記憶を根拠に行う — PRD「権限境界」）。
  */
+/**
+ * runner が `hello` で名乗る**能力**（issue #1394 段(C)）。
+ *
+ * **版番号ではなく能力の名前で名乗る。** デーモンが知りたいのは「この器は X の印を
+ * 送るか」であって、版の大小ではない（版から能力を推すと、推し方がデーモン側に
+ * 散らばる）。**名乗らない器（この欄を送らない古い runner）は、どの能力も持たない
+ * ものとして扱う** —— 「送っているはず」と仮定しない（`manager-fold-candidate.ts`
+ * の条件3の doc）。
+ *
+ * - `awaiting-background-signal`: 報告に `awaitingBackground`（背景処理の完了を
+ *   待って畳んだ印）を載せる版である。これを名乗らない器では、印が無いことを
+ *   「背景処理を待っていない」と読めない
+ */
+export const RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL = 'awaiting-background-signal';
+
+/** この版の runner が名乗る能力の一覧（`hello.capabilities` にそのまま載せる）。 */
+export const RUNNER_CAPABILITIES: readonly string[] = [
+  RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
+];
+
 export const runnerEventSchema = z.discriminatedUnion('type', [
-  /** ストリームの先頭。どの runner に繋がったかを名乗る。 */
-  z.object({ type: z.literal('hello'), runnerId: z.string() }),
+  /**
+   * ストリームの先頭。どの runner に繋がったかを名乗る。
+   *
+   * `capabilities`（#1394 段(C)）は `.optional()` —— 旧い runner は送らない。
+   * 無いことは「どの能力も名乗っていない」であって、既定値で埋めない。
+   */
+  z.object({
+    type: z.literal('hello'),
+    runnerId: z.string(),
+    capabilities: z.array(z.string()).optional(),
+  }),
   z.object({ type: z.literal('session'), managerId: z.string(), sessionId: z.string() }),
   /** SDK が生ログを預けるときの scope。生ログを後から引き当てる鍵になる。 */
   z.object({ type: z.literal('project_key'), managerId: z.string(), projectKey: z.string() }),
@@ -3800,9 +3829,16 @@ function withDeadline<T>(
  * **2軸以上が同時に欠け**、艦隊の中でその軸どうしが逆向きに動く器が同居すると
  * （例: pids は潤沢だが managers が多い器と、その逆の器）、軸ごとの平均の積が
  * **実測した全器の点数の範囲を超えうる**——どの器の実測とも一致しない位置に
- * 立つ。**いまの艦隊では出ていない**（#794 の実測）。⛔ **直し方は #794 で
- * 決めていない**——点数そのものの平均で埋める形に変えると、#719 が守った
- * 「pids を名乗らない器は、名乗った器の平均として競う」を壊す。
+ * 立つ。**いまの艦隊では出ていない**（#794 の実測）。
+ *
+ * **memory と pids の2軸が同時に欠けた器だけ、埋め方を変えた（#794、2026-09-24）。**
+ * 軸ごとの平均の積（`meanRoom × meanPidsRoom`）ではなく、**両方を報告した器の
+ * `room × pidsRoom` の平均**で埋める ⟹ 埋めた値は、実測した器の積の最小と最大の
+ * 間に必ず収まる（名乗らない器が、実測したどの器よりも上に立たない）。**1軸だけ
+ * 欠けた器は従来どおり**その軸の平均で埋める —— #719 が守った「pids を名乗らない
+ * 器は、名乗った器の平均として競う」はそのまま効く。両方を報告した器が1台も
+ * 居なければ、従来の軸ごとの平均の積へ倒れる。`cpu` / `managers` の欠けは
+ * この変更の範囲外である（軸ごとの平均のまま）。
  *
  * 誰も何も報告しないときは全部の材料が平均に落ち、点数は `1 / (managers + 1)` —
  * つまり**抱えている本数の少ない方**になる。**pids を1台も名乗らない構成では、
@@ -3898,6 +3934,15 @@ function chooseByResources(
   const meanCores = mean(cores) ?? 1;
   const meanHeld = mean(held) ?? 0;
   const meanPidsRoom = mean(pidsRooms) ?? 1;
+  // **memory と pids を両方報告した器の積の平均（#794）。** 2軸とも欠けた器は、
+  // 軸ごとの平均の積ではなくこれで埋める（doc の「2軸以上が同時に欠け」）。
+  const meanRoomTimesPids = mean(
+    reports.flatMap((r) =>
+      r.resources?.memory && r.resources.pids
+        ? [memoryRoomOf(r.resources.memory) * pidsRoomOf(r.resources.pids)]
+        : [],
+    ),
+  );
 
   let best: RunnerClient | undefined;
   let bestScore = -Infinity;
@@ -3911,11 +3956,16 @@ function chooseByResources(
     const unreachable = report.unreachable ?? false;
     const room = report.resources?.memory ? memoryRoomOf(report.resources.memory) : meanRoom;
     const pidsRoom = report.resources?.pids ? pidsRoomOf(report.resources.pids) : meanPidsRoom;
+    // 2軸とも欠けていれば、積ごと「両方を報告した器の積の平均」で埋める（#794）。
+    const roomTimesPids =
+      !report.resources?.memory && !report.resources?.pids && meanRoomTimesPids !== undefined
+        ? meanRoomTimesPids
+        : room * pidsRoom;
     const failures = report.recentFailures ?? 0;
     const share =
       (report.resources?.cpu?.cores ?? meanCores) /
       ((report.resources?.managers ?? meanHeld) + failures + 1);
-    const score = room * pidsRoom * share;
+    const score = roomTimesPids * share;
 
     // **段が違うなら、点数を見ずに決める。** 聞けなかった器は、聞けた器が
     // どこかに居る限り点数でどれだけ勝っていても前へ出ない——同点で揃うことも

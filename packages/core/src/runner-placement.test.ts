@@ -392,6 +392,36 @@ describe('配置の材料としての pids（#712）', () => {
     await silentWins.stop();
   });
 
+  /**
+   * **#794 の表をそのまま再現する。** memory も pids も名乗らない器（A）は、軸ごとの
+   * 平均の積（0.55 × 0.55）で埋めると、逆相関した2台（B・C。どちらも積 0.1）を
+   * 追い越していた。いまは「両方を報告した器の積の平均」（0.1）で埋めるので、
+   * 同点に並び、登録順の先（B）が勝つ ——**A を最後に登録しても A が勝っていたのが
+   * 直す前の形である**。
+   */
+  it('memory も pids も名乗らない器は、実測した器の積を上回らない（#794）', async () => {
+    const cpu = { cores: 8, source: 'cgroup' } as const;
+    const registry = await registryOf(
+      new FakeRunner('runner-b', {
+        memory: { limitBytes: 1000, usedBytes: 0, source: 'cgroup' },
+        cpu,
+        pids: { current: 900, max: 1000 },
+        managers: 0,
+      }),
+      new FakeRunner('runner-c', {
+        memory: { limitBytes: 1000, usedBytes: 900, source: 'cgroup' },
+        cpu,
+        pids: { current: 0, max: 1000 },
+        managers: 0,
+      }),
+      new FakeRunner('runner-a-silent', { cpu, managers: 0 }),
+    );
+
+    expect((await registry.select({})).runnerId).toBe('runner-b');
+
+    await registry.stop();
+  });
+
   it('pids を1台も名乗らない艦隊では、点数が #712 以前と1ミリも変わらない', async () => {
     // **素通りの証明。** 全台が名乗らない艦隊と、全台が同じ値を名乗る艦隊で、
     // 既存の3材料だけで決まる答え（`runner-large`）が変わらないことを見る。

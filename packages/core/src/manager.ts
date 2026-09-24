@@ -1456,6 +1456,13 @@ export interface ManagerPool {
    * 素直に落ちる。
    */
   runnerIdOf(managerId: string): Promise<string | undefined>;
+  /**
+   * その runner が直近の `hello` で名乗った能力を持つか（#1394 段(C)）。名乗りを
+   * 受けていない・欄を送らない旧い runner は `false`（持つと仮定しない）。
+   * **省略可能**にしてあるのは、テストの偽のプールが持たなくても型が通るようにする
+   * ため —— 持たないプールは「確かめられない」＝ `false` として読む。
+   */
+  runnerHasCapability?(runnerId: string, capability: string): boolean;
   /** manager_id からセッションの生ログへ降りる（可観測性の最下段）。 */
   transcript(managerId: string): Promise<ManagerTranscript>;
   /**
@@ -3723,6 +3730,13 @@ class Pool implements ManagerPool {
    */
   readonly #vanishedRunnerGaugeLastCount = new Map<string, number>();
   /**
+   * runner ごとに、直近の `hello` で名乗られた能力（#1394 段(C)）。**鍵が無いことは
+   * 「まだ名乗りを受けていない」、空集合は「名乗ったが何も持たない（旧い runner）」**
+   * —— どちらも能力を持たないものとして扱う。プロセス内にしか無い（名乗りは再接続の
+   * たびに来るので、デーモンを作り直しても次の `hello` で埋まる）。
+   */
+  readonly #runnerCapabilities = new Map<string, ReadonlySet<string>>();
+  /**
    * **枠で止まった委譲**の managerId（`case 'usage_notice'` の `reached` で立ち、
    * {@link Pool.resumeStoppedByUsage} が下ろす）。
    *
@@ -5078,6 +5092,10 @@ class Pool implements ManagerPool {
         };
       })
       .sort((a, b) => a.runnerId.localeCompare(b.runnerId));
+  }
+
+  runnerHasCapability(runnerId: string, capability: string): boolean {
+    return this.#runnerCapabilities.get(runnerId)?.has(capability) ?? false;
   }
 
   async runnerIdOf(managerId: string): Promise<string | undefined> {
@@ -7989,6 +8007,9 @@ class Pool implements ManagerPool {
    */
   async #onEvent(event: RunnerEvent): Promise<void> {
     if (event.type === 'hello') {
+      // 能力の名乗り（#1394 段(C)）。欄を送らない旧い runner は空集合 ——
+      // 前の名乗りを持ち越さない（同じ runnerId の器が入れ替わって版が下がりうる）。
+      this.#runnerCapabilities.set(event.runnerId, new Set(event.capabilities ?? []));
       // **名乗りは全部 `#reattach` に通す。** 「初回だけ素通り」にすると、起動時に
       // 掴んだ器と、SSE が繋がった先の器が違う場合（畳まれつつある旧 runner が
       // まだ `/health` に答える猶予の間）に取り直しが起きない。`#reattach` は

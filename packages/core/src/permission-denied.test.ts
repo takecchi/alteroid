@@ -576,6 +576,34 @@ describe('確認へ上がらずに止められた実行（permissionMode: auto�
     await s.pool.stop();
   }, 15_000);
 
+  it('runner が hello で名乗った能力を覚える（#1394 段(C)）', async () => {
+    const s = open();
+    const { managerId } = await s.pool.start({ request: 'テストを直して' });
+    const runnerId = await s.pool.runnerIdOf(managerId);
+    if (runnerId === undefined) throw new Error('runnerId が無い');
+    // createLocalRunner は RUNNER_CAPABILITIES を名乗る。
+    expect(s.pool.runnerHasCapability?.(runnerId, 'awaiting-background-signal')).toBe(true);
+    // 名乗っていない能力・名乗りを受けていない器は false（持つと仮定しない）。
+    expect(s.pool.runnerHasCapability?.(runnerId, 'no-such-capability')).toBe(false);
+    expect(s.pool.runnerHasCapability?.('runner-never-seen', 'awaiting-background-signal')).toBe(
+      false,
+    );
+    await s.pool.stop();
+  }, 15_000);
+
+  it('hello の capabilities は省略できる（旧い runner の形）', () => {
+    expect(runnerEventSchema.safeParse({ type: 'hello', runnerId: 'r-old' }).success).toBe(true);
+    const parsed = runnerEventSchema.safeParse({
+      type: 'hello',
+      runnerId: 'r-new',
+      capabilities: ['awaiting-background-signal'],
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success && parsed.data.type === 'hello') {
+      expect(parsed.data.capabilities).toEqual(['awaiting-background-signal']);
+    }
+  });
+
   it('知らない manager_id には空を返す（無いものを数えたことにしない）', () => {
     const s = open();
     expect(s.pool.denials('mgr-居ない')).toEqual([]);

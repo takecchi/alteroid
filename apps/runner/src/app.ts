@@ -6,6 +6,7 @@ import {
   readExecutionResources,
   reasonOf,
   resolveBuildRevision,
+  RUNNER_CAPABILITIES,
   startSseHeartbeat,
   RunnerFenceError,
   runnerAnswerCommandSchema,
@@ -985,7 +986,12 @@ export function createRunnerApp(deps: RunnerAppDeps) {
             () =>
               stream.writeSSE({
                 event: 'hello',
-                data: JSON.stringify({ type: 'hello', runnerId: host.runnerId }),
+                // 能力を名乗る（#1394 段(C)）。デーモンは名乗られた分だけを信じる。
+                data: JSON.stringify({
+                  type: 'hello',
+                  runnerId: host.runnerId,
+                  capabilities: RUNNER_CAPABILITIES,
+                }),
               }),
             sseWriteDeadlineMs,
           );
