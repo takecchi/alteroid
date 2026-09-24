@@ -932,6 +932,10 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
         emit: 'never',
         why: '配る瞬間の `JobStatus` の写し（issue #870）で、この関数は参照しない。',
       },
+      synthesized: {
+        emit: 'never',
+        why: '機構が合成した失敗の知らせの印（クローンの枠の再武装の判定材料。2026-09-24）で、この関数は参照しない。',
+      },
     },
   } satisfies { [T in InboxEventType]: Record<ShapedFieldsOf<T>, FieldPlan> };
 
@@ -1007,6 +1011,7 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
       requestId: 'req-1',
       markup: 'none',
       statusAtDelivery: 'running',
+      synthesized: true,
     },
   };
 
