@@ -1,6 +1,5 @@
 import type { ChildProcess } from 'node:child_process';
 import { readdir } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import type { UnpushedWorkResult, UnpushedWorkTree } from './runner-protocol.js';
@@ -244,6 +243,13 @@ export async function findGitDirs(
 
 /** `/tmp` 直下のディレクトリ名を、委譲の id と結び付けるための当てはめ規則。 */
 const MANAGER_SCRATCH_DIR_NAME_PATTERN = /^mgr-([0-9a-f]{4,})/;
+
+/**
+ * 委譲の作業場を探す `/tmp` の位置。**`os.tmpdir()` は使わない**——担い手は
+ * 依頼文に従って文字どおりの `/tmp/mgr-<id の先頭>` に作業場を作るので、
+ * runner の `TMPDIR` が別の場所を指していても、探す先は `/tmp` でなければ当たらない。
+ */
+const MANAGER_SCRATCH_TMP_ROOT = '/tmp';
 
 /**
  * `/tmp` 直下のディレクトリ名 `name` が、委譲 `managerId` のスクラッチ
@@ -583,8 +589,8 @@ export interface ComputeUnpushedWorkOptions {
    */
   managerId?: string;
   /**
-   * `/tmp` の位置。省略時は実際の `os.tmpdir()`。テストでは一時ディレクトリへ
-   * 差し替える。`managerId` を渡さないときは参照されない。
+   * `/tmp` の位置。省略時は文字どおりの `/tmp`（{@link MANAGER_SCRATCH_TMP_ROOT}）。
+   * テストでは一時ディレクトリへ差し替える。`managerId` を渡さないときは参照されない。
    */
   tmpRootDir?: string;
 }
@@ -618,7 +624,10 @@ export async function computeUnpushedWork(
   const scratchRoots =
     options.managerId === undefined
       ? []
-      : await findManagerScratchRoots(options.tmpRootDir ?? tmpdir(), options.managerId);
+      : await findManagerScratchRoots(
+          options.tmpRootDir ?? MANAGER_SCRATCH_TMP_ROOT,
+          options.managerId,
+        );
   const found = await findGitDirsAcrossRoots([cwd, ...scratchRoots], {
     maxDepth: options.maxDepth,
     maxCount: options.maxWorktrees,
