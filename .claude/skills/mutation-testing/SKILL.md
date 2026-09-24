@@ -425,7 +425,30 @@ repo の `test` スクリプトが `vitest run && pnpm -r --if-present run test 
   - **(ii) `weak-tooth` / judgement 系の使い捨てファイル**（例: `apps/cli/src/mutation-selftest-render.ts` / `mutation-selftest-weak.test.ts`）は、`restore` に足さなくても次の selftest の入口（`requireNoLeftoverWeakToothFiles` / `requireNoLeftoverJudgementFixtureFiles`）が既に名指しして止める。そしてどれも未追跡の新規ファイルで、**追跡ファイルを書き換えない**（`git status` に `??` と正体を名乗る名前で出る）。**追跡ファイル（`packages/core/src/index.ts`）を書き換える残骸は delivery の barrel 足場だけ**なので、汎用の復元経路へシナリオ別の知識を足す代償を、そこにだけ払った。
   - **(iii) `rebuild-failure` が置く擬似 pnpm**（`.mutation-testing/selftest-fake-bin/`）は、#1262 コメントが「`restore` の後も残った」と報告しているが、**同じコメントが「測定ログには中身の逐語が無い」「次の selftest の入口がこれを見るかは確かめていない」と明記している**——再現が要る（signal で実際に `rebuild-failure` の後始末失敗直後を狙って止める必要があり、この変更の歯と実測はいずれも足場を手で置いた状態と `apply --spec` による段階実行で、signal は使っていない）。**未測定のものを対象にすると、直したつもりが何も直っていない可能性がある**ので、入れていない。
 - **⚠️ 限界（この案の代償として#1262コメントが挙げていたもの。実装当初はそのまま残っていた——下の「撤回」で塞いだ）**: **印が作られる前の区間**（barrel に足場が入った直後・フィクスチャの変異前）で中断した回は、`restore` が「エラー: 印が無い。」で exit 1 になり、この節が足した出力（`restoreMutation` 成功後にしか出さない）まで到達しない。**その回の足場は、次に selftest を起動したときの入口（`requireNoLeftoverDeliveryFixtureFiles`）が名指しする**（このメッセージは今回変えていない・変えていないことを固定する歯がある）。⟹ **`restore` が「印が無い」で終わった回は、足場の有無について何も言っていない**——この節の検出はそこでは走らないので、「足場は無い」と読まないこと。`status` もこの足場を見ない（汎用の `status` に selftest 固有の足場を知らせる結合は入れていない）。
-- **⚠️ 撤回（#1262 継続）: 上の限界は塞いだ。印の無い区間でも `restore` は足場を名指しするようになった。** `mutate.mjs` の `cmdRestore` で `restoreMutation` を try/catch で包み、**印が無い（`markerExists()` が偽）状態で例外になった場合に限り**、`findLeftoverDeliveryScaffold()` を見る——足場が在れば、例外メッセージの後ろへ `formatLeftoverDeliveryScaffoldNotice()` の文を足して投げ直す（型は `HarnessError` のまま・exit code は 1 のまま・「エラー: 印が無い。」の文面は1文字も変えない）。足場が無ければ例外をそのまま投げ直す（出力は1文字も変えない——歯: `scripts/mutate-delivery-scaffold-leftover.test.ts` の陽性対照が、印も足場も無い回の出力が実装前と逐語で同じであることを固定する）。**印が在るのに `restoreMutation` が失敗した回（印を残す回。例: 控えが汚染されている）には触っていない**——ここは今までどおり何も足さない。**`status` は今も足場を見ない**（汎用の `restore` へ selftest 固有の知識を持ち込む結合は、この節で既に払った分を再利用しているだけで、新しくは増やしていない。`status` に足場を教える案は #1358 の時点で案Bとして見送っており、その判断はここでも変えていない）。
+- **⚠️ 撤回（#1262 継続）: 上の限界は塞いだ。印の無い区間でも `restore` は足場を名指しするようになった。** `mutate.mjs` の `cmdRestore` で `restoreMutation` を try/catch で包み、**印が無い（`markerExists()` が偽）状態で例外になった場合に限り**、`findLeftoverDeliveryScaffold()` を見る——足場が在れば、例外メッセージの後ろへ `formatLeftoverDeliveryScaffoldNotice()` の文を足して投げ直す（型は `HarnessError` のまま・exit code は 1 のまま・「エラー: 印が無い。」の文面は1文字も変えない）。足場が無ければ例外をそのまま投げ直す（出力は1文字も変えない——歯: `scripts/mutate-delivery-scaffold-leftover.test.ts` の陽性対照が、印も足場も無い回の出力が実装前と逐語で同じであることを固定する）。**印が在るのに `restoreMutation` が失敗した回（印を残す回。例: 控えが汚染されている）には触っていない**——ここは今までどおり何も足さない。**（当時は）`status` は今も足場を見ない**（汎用の `restore` へ selftest 固有の知識を持ち込む結合は、この節で既に払った分を再利用しているだけで、新しくは増やしていない。`status` に足場を教える案は #1358 の時点で案Bとして見送っており、その判断はここでも変えていない）。**⟹ この判断は下の「#1262 案Bを実装した」節で変わった。**
+
+### #1262 案Bを実装した —— `status` も、印が無くても既知の足場を名指しする
+
+**上の2つの節（案A・その撤回）は、`status` に足場を教える案（案B）を明示して見送っていた。** 2026-09-23 の Issue #1262 の決定コメントが「現状維持（0）。次に手を入れるなら案B」と書いたのを受けて、この PR で案Bを実装した。**⟹ 上の「`status` は今も足場を見ない」はもう正しくない——この節が最新である。**
+
+- **契機になった実測（Issue #1262 の同日コメント、`main` の `3ccedc6a` の full clone）**: 変異区間4点へ実際に `SIGINT`/`SIGTERM` を当てた9回のうち、`delivery`/`rebuild-failure` の区間では ` M packages/core/src/index.ts` と `?? …-delivery-fixture.ts` が、`weak-tooth` の区間では `?? apps/cli/src/mutation-selftest-render.ts` と `?? …-weak.test.ts` が、**印を経由せずに**残った。案A（`restore` への追加）はこの2種のうち delivery だけを名指しし、weak-tooth 側は「次の selftest の入口（`requireNoLeftoverWeakToothFiles`）が名指しする」に委ねていた——それ自体は正しいが、**次の selftest を打つ前に、いま何が残っているかを尋ねる唯一の口（`status`）はここを一切見ていなかった。**
+
+- **足したもの**: `mutate-selftest.mjs` に、**既知の selftest 足場3種**それぞれの検出・名指し関数を並べた。
+  1. `findLeftoverDeliveryScaffold` / `formatLeftoverDeliveryScaffoldNotice`（既存。案Aで足したもの——今回は `context: 'status'` を追加しただけで、検出条件・`'restored'`/`'no-marker'` の文面は1文字も変えていない）
+  2. `findLeftoverWeakToothScaffold`（新規。`requireNoLeftoverWeakToothFiles` の検出条件を切り出しただけ——文面は1文字も変えていない）/ `formatLeftoverWeakToothScaffoldNotice`（新規）
+  3. `findLeftoverJudgementFixtureScaffold`（新規。`requireNoLeftoverJudgementFixtureFiles` の検出条件を切り出しただけ——文面は1文字も変えていない）/ `formatLeftoverJudgementFixtureScaffoldNotice`（新規）
+
+  この3種を1本にまとめる `collectKnownSelftestScaffoldNotices()` を足し、`mutate.mjs` の `cmdStatus` が **`markerExists()` が偽のときだけ** これを呼ぶ。見つかった通知が1本も無ければ、従来どおり「印は無い。」で `exit 0`。1本でもあれば、「印は無い。」はそのまま出したうえで各通知を追記し、`exit 2` で終える。
+
+- **⛔ 対象外にしたもの**: `rebuild-failure` が置く擬似 pnpm（`.mutation-testing/selftest-fake-bin/`）。理由は案Aのときと同じ——Issue #1262 のコメント自身が「測定ログには中身の逐語が無い」「次の selftest の入口がこれを見るかは確かめていない」と明記しており、未測定のものを検出条件に組み込むと「検出したつもり」が生まれる。`.mutation-testing/` は `.gitignore` 済みで内容の形も固まっていないため、`findLeftoverDeliveryScaffold` のような「固定パス + 固定文字列」の検出をそもそも組めない。
+
+- **代償 (a): 汎用の `status` が selftest 固有の知識を持つ結合が生まれる。** `cmdStatus` は `mutate-selftest.mjs` から `collectKnownSelftestScaffoldNotices` を import する——marker の読み書きしか知らなかった `status` が、`mutation-selftest-*` という具体のファイル名・barrel のブロックの逐語まで知ることになる。**この結合は案Aの時点で `restore` 側には既に生まれていた**（`cmdRestore` も同じ import を持つ）。今回新しく生まれたのは「`status` も同じ結合を持つ」ことであって、結合という種類そのものは新しくない。
+
+- **代償 (b): 「印は無い」の意味が変わる。** 従来は `exit 0 ⟺ markerExists() が偽`、これで全部だった。**これからは `exit 0 ⟺ markerExists() が偽 かつ 既知の足場（3種）も無い`。** 「印は無い。」という1行そのものは印について今も嘘をついていない（marker ファイルは実際に無い）——変わったのは、**その1行だけを読んで「このツリーは無事」と結論できなくなった**ことである。`exit 2` になる回でも1行目は「印は無い。」のままなので、**出力を先頭だけ読んで判断する使い方は、この変更のあとでは足場を見落とす。** exit code まで読む必要がある（歯: `scripts/mutate-status-known-scaffold.test.ts` の「marker が在るとき」の対照が、marker 側の分岐（exit 2 だが「印は無い。」ではなく「このツリーには変異が当たったままである。」で始まる）と区別できることを固定する）。
+
+- **やりすぎていないことの対照**: 似た名前だが対象ではないファイル（例: `mutation-selftest-render-NOT-A-SCAFFOLD.ts`）は名指ししない（`scripts/mutate-status-known-scaffold.test.ts` の対照）。`findLeftover*Scaffold` は固定のパス一覧との完全一致（`fs.existsSync`）で見ており、部分一致・前方一致はしない。
+
+- **確かめていないこと**: 本物の signal（`kill -INT`/`kill -TERM`）で実際に中断させ、その直後に `status --root <その場>` を打つ経路そのものは踏んでいない——踏んだのは「足場だけを手で置いた状態で `status` を起こす」形である（この点は #1166 コメントが「次に selftest を起動したときの入口」について踏んだ実測（模擬）と同じ限界を持つ）。`.mutation-testing/selftest-fake-bin/` を含めるかどうかの判断材料もまだ無い（直上のとおり、未測定のまま）。
 
 ## 「判定が甘い」の向き —— 甘いのは「検出」側である（#1087）
 

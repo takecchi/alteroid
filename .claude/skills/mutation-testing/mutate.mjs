@@ -93,6 +93,7 @@ import {
   log,
 } from './mutate-core.mjs';
 import {
+  collectKnownSelftestScaffoldNotices,
   findLeftoverDeliveryScaffold,
   formatLeftoverDeliveryScaffoldNotice,
   runSelftestScenario,
@@ -104,8 +105,38 @@ const __filename = fileURLToPath(import.meta.url);
 function cmdStatus() {
   checkJudgementVocabulary();
   if (!markerExists()) {
+    // **#1262 案B。** ここまでは「印が無ければ何も見ずに exit 0」だった。
+    // それでも selftest が signal 等で中断すると、印を1度も作らない区間・
+    // 印を解除した後の区間のどちらでも、既知の selftest 足場（barrel の
+    // 一時参照ブロック・`mutation-selftest-*` の使い捨てファイル）だけが
+    // 印を経由せずに取り残されうる（Issue #1262 の2026-09-23 の実測と、
+    // 同日の決定コメント「次に手を入れるなら案B」）。
+    //
+    // ⚠️ **代償は2点、詫びずに書く（PR 本文にも同じものを置く）。**
+    // (a) 汎用の `status` が、selftest 固有のパス（barrel のブロック・
+    //     `mutation-selftest-*` の固定ファイル）を知る結合を持つ
+    //     （`collectKnownSelftestScaffoldNotices` が exports として持ち込む）。
+    // (b) **「印は無い」の意味が変わる。** 従来は `exit 0 ⟺ 印が無い` だった。
+    //     これからは `exit 0 ⟺ 印が無い かつ 既知の足場も無い`。印が無くても
+    //     既知の足場が在れば `exit 2` で終わる——「印は無い」という1行自体は
+    //     印について嘘をついていない（字義どおり正しい）が、この1行だけを
+    //     読んで「このツリーは何もかも無事」と結論することはもうできない。
+    //     exit code まで含めて読む必要がある。
+    const scaffoldNotices = collectKnownSelftestScaffoldNotices();
     log('印は無い。このツリーに変異が当たったままの状態は無い。');
-    process.exit(0);
+    if (scaffoldNotices.length === 0) {
+      process.exit(0);
+    }
+    log('');
+    log(
+      '⚠ ただし、selftest が置き去りにした既知の足場が残っている' +
+        '（印とは無関係——足場は印を使わずに残ることがある）。',
+    );
+    for (const notice of scaffoldNotices) {
+      log('');
+      log(notice);
+    }
+    process.exit(2);
   }
   let marker;
   let selfConsistent;

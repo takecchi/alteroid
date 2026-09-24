@@ -159,18 +159,52 @@ const JUDGEMENT_FIXTURE_TEST_BODY = [
 ].join('\n');
 
 /**
+ * 足場の置き去りを検出する純粋関数（#1262 案B。`findLeftoverDeliveryScaffold` と
+ * 同じ型 —— 副作用は無い。投げない・書かない・消さない）。
+ */
+export function findLeftoverJudgementFixtureScaffold() {
+  return JUDGEMENT_FIXTURE_TEMP_FILES.filter((rel) => fs.existsSync(absPath(rel))).map((rel) => ({
+    kind: 'judgement-fixture',
+    path: rel,
+  }));
+}
+
+/**
  * 前回の走行が途中で死んで置き去りにしたフィクスチャが在ったら、上書きせずに拒む
  * （`requireNoLeftoverWeakToothFiles` と同じ考え方）。
+ *
+ * **検出そのものは `findLeftoverJudgementFixtureScaffold` に切り出した（#1262 案B、
+ * `findLeftoverDeliveryScaffold` の切り出しと同じ形）。ここでの文面・振る舞いは
+ * 切り出しの前後で1文字も変えていない**（固定する歯: `scripts/mutate-status-known-scaffold.test.ts`）。
  */
 function requireNoLeftoverJudgementFixtureFiles(scenarioName) {
-  const leftovers = JUDGEMENT_FIXTURE_TEMP_FILES.filter((rel) => fs.existsSync(absPath(rel)));
+  const leftovers = findLeftoverJudgementFixtureScaffold();
   if (leftovers.length > 0) {
     throw new HarnessError(
       `${scenarioName}: 前回の selftest が置き去りにした使い捨てファイルが在る。上書きしない。\n` +
-        `${leftovers.map((rel) => `  - ${rel}`).join('\n')}\n` +
+        `${leftovers.map((item) => `  - ${item.path}`).join('\n')}\n` +
         '中身を確認してから消して、再実行すること。',
     );
   }
+}
+
+/**
+ * `status`（marker が無い側、#1262 案B）向けの名指し文。見つからなければ `null`。
+ *
+ * `formatLeftoverDeliveryScaffoldNotice` と同じ型（見つからなければ null を返し、
+ * `status` はそれで「何も足さない」を判定する）だが、この2ファイルは selftest の
+ * 途中でしか書かれない新規の使い捨てファイルで、barrel のような「先に印を片付ける
+ * こと」を言う文脈（`restore` 固有の aside）を持たないので、そちらは付けない。
+ */
+export function formatLeftoverJudgementFixtureScaffoldNotice(found) {
+  if (found.length === 0) return null;
+  return (
+    '⚠ judgement-fixture: selftest が置き去りにした使い捨てファイルが残っている' +
+    '（印は無いままである —— selftest が signal 等で中断すると、印の有無とは無関係に' +
+    'この足場だけが残ることがある）。\n' +
+    found.map((item) => `  - ${item.path}\n`).join('') +
+    '中身を確認してから消してよい。'
+  );
 }
 
 function writeJudgementFixtureFiles() {
@@ -346,14 +380,20 @@ export function requireNoLeftoverDeliveryFixtureFiles(scenarioName) {
  * **`context` は括弧の中の一文だけを変える（#1262 継続）。** `'restored'`（既定）は
  * `restore` が成功した後の文脈である。`'no-marker'` は `restore` が「印が無い。」で
  * 終わった後の文脈で、その回は何も復元していない ⟹ 「印の解除はここまでで完了
- * している」と言うと嘘になる。名指しと外し方は同じものを出す。
+ * している」と言うと嘘になる。**`'status'`（#1262 案B）は `restore` を一度も呼んで
+ * いない文脈——`status` は復元も印の解除もしていないので、`restore` を主語にした
+ * 一文はどちらも言えない。** 名指しと外し方は、どの context でも同じものを出す。
  */
 export function formatLeftoverDeliveryScaffoldNotice(found, context = 'restored') {
   if (found.length === 0) return null;
   const aside =
     context === 'no-marker'
       ? '（この restore が壊したのではない。印は最初から無く、この restore は何も書き戻していない）'
-      : '（この restore が壊したのではない。ソースの復元と印の解除はここまでで完了している）';
+      : context === 'status'
+        ? '（印は無いままである —— selftest が signal 等で中断すると、印の有無とは無関係に' +
+          'この足場だけが残ることがある。`status` はこれを復元していない——復元する対象は' +
+          '足場ではなく変異したソースなので、印がある回の `restore` とは別の経路である）'
+        : '（この restore が壊したのではない。ソースの復元と印の解除はここまでで完了している）';
   return (
     '⚠ delivery: 前回の selftest が置き去りにした足場が残っている' +
     aside +
@@ -590,20 +630,87 @@ const WEAK_TOOTH_TEMP_FILES = [
 ];
 
 /**
+ * 足場の置き去りを検出する純粋関数（#1262 案B。`findLeftoverDeliveryScaffold` と
+ * 同じ型 —— 副作用は無い。投げない・書かない・消さない）。
+ */
+export function findLeftoverWeakToothScaffold() {
+  return WEAK_TOOTH_TEMP_FILES.filter((rel) => fs.existsSync(absPath(rel))).map((rel) => ({
+    kind: 'weak-tooth',
+    path: rel,
+  }));
+}
+
+/**
  * 前回の走行が途中で死んで置き去りにしたファイルが在ったら、**上書きせずに拒む。**
  * `ensureFixtureClean` と同じ考え方 —— 置き去りを黙って踏み潰すと、何が起きて
  * いたのかが消える。
+ *
+ * **検出そのものは `findLeftoverWeakToothScaffold` に切り出した（#1262 案B、
+ * `findLeftoverDeliveryScaffold` の切り出しと同じ形）。ここでの文面・振る舞いは
+ * 切り出しの前後で1文字も変えていない**（固定する歯: `scripts/mutate-status-known-scaffold.test.ts`）。
  */
 function requireNoLeftoverWeakToothFiles() {
-  const leftovers = WEAK_TOOTH_TEMP_FILES.filter((rel) => fs.existsSync(absPath(rel)));
+  const leftovers = findLeftoverWeakToothScaffold();
   if (leftovers.length > 0) {
     throw new HarnessError(
       'weak-tooth: 前回の selftest が置き去りにした使い捨てファイルが在る。上書きしない。\n' +
-        `${leftovers.map((rel) => `  - ${rel}`).join('\n')}\n` +
+        `${leftovers.map((item) => `  - ${item.path}`).join('\n')}\n` +
         '中身を確認してから消して、再実行すること（このシナリオが書くもの以外に同名の' +
         'ファイルを置いていないことも見ること）。',
     );
   }
+}
+
+/**
+ * `status`（marker が無い側、#1262 案B）向けの名指し文。見つからなければ `null`。
+ * `formatLeftoverJudgementFixtureScaffoldNotice` と同じ型・同じ理由（`restore`
+ * 固有の aside を持たない）。
+ */
+export function formatLeftoverWeakToothScaffoldNotice(found) {
+  if (found.length === 0) return null;
+  return (
+    '⚠ weak-tooth: selftest が置き去りにした使い捨てファイルが残っている' +
+    '（印は無いままである —— selftest が signal 等で中断すると、印の有無とは無関係に' +
+    'この足場だけが残ることがある）。\n' +
+    found.map((item) => `  - ${item.path}\n`).join('') +
+    '中身を確認してから消してよい（このシナリオが書くもの以外に同名のファイルを' +
+    '置いていないことも見ること）。'
+  );
+}
+
+/**
+ * `mutate.mjs` の `cmdStatus`（marker が無い側）向けに、**既知の selftest 足場を
+ * 全種類まとめて**調べ、名指し文を配列で返す（#1262 案B）。
+ *
+ * **ここに列挙した3種が「既知の足場」の全部である**（`SELFTEST_SCENARIOS` が
+ * 使い捨てファイル・barrel の一時参照を書くシナリオを数え上げた結果）:
+ *  1. delivery / rebuild-failure が共有する barrel 足場・フィクスチャ本体
+ *     （`findLeftoverDeliveryScaffold`）
+ *  2. weak-tooth の使い捨てファイル3本（`findLeftoverWeakToothScaffold`）
+ *  3. judgement 系2本が共有する使い捨てファイル2本
+ *     （`findLeftoverJudgementFixtureScaffold`）
+ *
+ * **`rebuild-failure` が置く擬似 pnpm（`.mutation-testing/selftest-fake-bin/`）は
+ * 対象外である。** Issue #1262 のコメントが「`restore` の後も残った」と報告して
+ * いるが、同じコメントが「測定ログには中身の逐語が無い」「次の selftest の入口が
+ * これを見るかは確かめていない」と明記している——未測定のものを対象にすると、
+ * 検出したつもりで何も検出できていない可能性がある（`.mutation-testing` は
+ * `.gitignore` 済みで内容の形が固まっていないため、`findLeftoverDeliveryScaffold`
+ * のような「固定パス + 固定文字列」の検出が組めない）。
+ *
+ * **見つからない種類は配列に含まない。1つも無ければ空配列**——
+ * `cmdStatus` はそれで「印も足場も無い（従来どおりの exit 0）」を判定する。
+ *
+ * **新しい selftest シナリオが使い捨てファイルを増やしたら、ここに1行足すこと。**
+ * 増やし忘れても壊れ方は静かである——新しい足場は名指しされないまま「印は無い」
+ * だけが出て exit 0 で終わる（黙って旧来の挙動に戻るだけで、エラーにはならない）。
+ */
+export function collectKnownSelftestScaffoldNotices() {
+  return [
+    formatLeftoverDeliveryScaffoldNotice(findLeftoverDeliveryScaffold(), 'status'),
+    formatLeftoverWeakToothScaffoldNotice(findLeftoverWeakToothScaffold()),
+    formatLeftoverJudgementFixtureScaffoldNotice(findLeftoverJudgementFixtureScaffold()),
+  ].filter((notice) => notice !== null);
 }
 
 /**
