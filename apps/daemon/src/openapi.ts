@@ -750,6 +750,11 @@ export const managerSummarySchema = z.object({
   appraisedAt: z.string().optional(),
   appraisedBy: z.string().optional(),
   appraisalReason: z.string().optional(),
+  /**
+   * 評定が述べた仕事の種類（#1308。`Job.workKind`）。無ければ未分類。**宣言しなければ
+   * `.parse()` がここで黙って落とす**（この schema は手書きの再宣言である）。
+   */
+  workKind: z.string().optional(),
   lastReport: z.string().optional(),
   /**
    * `lastReport` を**デーモンが受け取った時刻**（#358）。

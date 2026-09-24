@@ -259,7 +259,7 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
                      出た番号か id）。何も付けなければ全件（従来どおり）
 /manager <番号|id>    そのマネージャーのセッション生ログ（番号は /managers の並び）
 /stop <番号|id> [理由]  その仕事だけをやめさせる（止めた事実は日誌に残る）
-/rate-manager <番号|id> <good|bad|unclear> [理由]  委譲の評定（うまくいったか）を付ける・覆す
+/rate-manager <番号|id> <good|bad|unclear> [--kind=<種類>] [理由]  委譲の評定（うまくいったか）を付ける・覆す
                      （番号は /managers の並び。status とは別の軸である）
 /waiting             マネージャーの返事待ち一覧（番号付き）
 /msg <番号|id> <本文>  マネージャーへ追加指示を送る（質問への回答としては扱われない）
@@ -284,7 +284,7 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /commit-edit <番号|id> <新しい本文>  台帳の本文を後から直す（番号は /commitments の並び。
                      直せるのは自分が積んだ未了の行だけ——断りの理由はサーバが返す）
 /done <番号|id> [理由]  片付けたことを記録する（番号は /commitments の並び）
-/rate <番号|id> <good|bad|unclear> [理由]  うまくいったかの評定を付ける・覆す
+/rate <番号|id> <good|bad|unclear> [--kind=<種類>] [理由]  うまくいったかの評定を付ける・覆す
                      （片付いた行にも未了の行にも付く。何度でも上書きできる）
 /usage [from=YYYY-MM-DD] [to=YYYY-MM-DD] [manager=<id>]  利用状況（いくら使ったか）
 /schedule            時間起点のジョブ・継続中の依頼と次の発火
@@ -999,7 +999,7 @@ export async function runSlashCommand(
       const [reference, value, ...reasonParts] = rest;
       if (!reference || !value) {
         stdout.write(
-          '使い方: /rate-manager <番号|id> <good|bad|unclear> [理由]（番号は /managers の並び）\n',
+          '使い方: /rate-manager <番号|id> <good|bad|unclear> [--kind=<種類>] [理由]（番号は /managers の並び）\n',
         );
         return 'ok';
       }
@@ -1016,13 +1016,19 @@ export async function runSlashCommand(
         );
         return 'ok';
       }
-      const reason = reasonParts.join(' ');
+      const { workKind, rest: reasonTokens } = splitWorkKindFlag(reasonParts);
+      if (workKind === '') {
+        stdout.write('--kind= の後に仕事の種類を書いてください（例: --kind=実装）\n');
+        return 'ok';
+      }
+      const reason = reasonTokens.join(' ');
       const response = await client.managers[':id'].appraise.$post({
         param: { id },
-        json:
-          reason.length === 0
-            ? { appraisal: parsedValue.data }
-            : { appraisal: parsedValue.data, reason },
+        json: {
+          appraisal: parsedValue.data,
+          ...(reason.length === 0 ? {} : { reason }),
+          ...(workKind === undefined ? {} : { workKind }),
+        },
       });
       if (response.ok) {
         stdout.write(`評定を ${parsedValue.data} にしました\n`);
@@ -1617,7 +1623,7 @@ export async function runSlashCommand(
       const [reference, value, ...reasonParts] = rest;
       if (!reference || !value) {
         stdout.write(
-          '使い方: /rate <番号|id> <good|bad|unclear> [理由]（番号は /commitments の並び）\n',
+          '使い方: /rate <番号|id> <good|bad|unclear> [--kind=<種類>] [理由]（番号は /commitments の並び）\n',
         );
         return 'ok';
       }
@@ -1635,13 +1641,19 @@ export async function runSlashCommand(
         );
         return 'ok';
       }
-      const reason = reasonParts.join(' ');
+      const { workKind, rest: reasonTokens } = splitWorkKindFlag(reasonParts);
+      if (workKind === '') {
+        stdout.write('--kind= の後に仕事の種類を書いてください（例: --kind=実装）\n');
+        return 'ok';
+      }
+      const reason = reasonTokens.join(' ');
       const response = await client.commitments[':id'].appraise.$post({
         param: { id },
-        json:
-          reason.length === 0
-            ? { appraisal: parsedValue.data }
-            : { appraisal: parsedValue.data, reason },
+        json: {
+          appraisal: parsedValue.data,
+          ...(reason.length === 0 ? {} : { reason }),
+          ...(workKind === undefined ? {} : { workKind }),
+        },
       });
       if (response.ok) {
         stdout.write(`評定を ${parsedValue.data} にしました\n`);
@@ -2227,6 +2239,25 @@ function parseUsageFilters(tokens: string[]): ParsedUsageFilters {
 }
 
 /** 番号（直前の一覧の並び）でも id そのままでも指せるようにする。 */
+/**
+ * `/rate` / `/rate-manager` の理由の並びから、`--kind=<種類>`（仕事の種類。#1308）を
+ * 1つ抜き出す。**理由は自由文の末尾なので、種類は印の付いた1語として分ける。**
+ * 無ければ `undefined`（＝送らない。前の種類が残る）、`--kind=` だけなら `''`
+ * （呼び出し側が断る）。2つ以上あれば最後のものを採る。
+ */
+export function splitWorkKindFlag(parts: readonly string[]): {
+  workKind: string | undefined;
+  rest: string[];
+} {
+  let workKind: string | undefined;
+  const rest: string[] = [];
+  for (const part of parts) {
+    if (part.startsWith('--kind=')) workKind = part.slice('--kind='.length).trim();
+    else rest.push(part);
+  }
+  return { workKind, rest };
+}
+
 function resolveListedId(reference: string, listed: string[]): string | null {
   if (/^\d+$/.test(reference)) return listed[Number(reference) - 1] ?? null;
   return reference;

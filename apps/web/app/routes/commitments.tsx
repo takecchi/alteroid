@@ -1029,10 +1029,14 @@ function appraisalLabel(value: AppraisalValue): string {
  *
  * **理由は任意。** 器がそう作ってある（画面のボタン1つで付けられる経路を塞がない）。
  * 入っていれば送る。
+ *
+ * **仕事の種類（#1308）も任意の自由文である。** 列挙のプルダウンにしない（知らない
+ * 種類を画面が拒まない。`workKindSchema` の doc）。空なら送らず、前の種類が残る。
  */
 function AppraisalControl({ commitment }: { commitment: Commitment }) {
   const appraise = useAppraiseCommitment();
   const [reason, setReason] = useState('');
+  const [workKind, setWorkKind] = useState('');
   const [busy, setBusy] = useState<AppraisalValue | null>(null);
   const [failure, setFailure] = useState<unknown>(undefined);
 
@@ -1040,8 +1044,14 @@ function AppraisalControl({ commitment }: { commitment: Commitment }) {
     setBusy(value);
     setFailure(undefined);
     try {
-      await appraise(commitment.id, value, reason.trim() === '' ? undefined : reason.trim());
+      await appraise(
+        commitment.id,
+        value,
+        reason.trim() === '' ? undefined : reason.trim(),
+        workKind.trim() === '' ? undefined : workKind.trim(),
+      );
       setReason('');
+      setWorkKind('');
     } catch (caught) {
       setFailure(caught);
     } finally {
@@ -1075,6 +1085,7 @@ function AppraisalControl({ commitment }: { commitment: Commitment }) {
         ) : (
           <span className="text-muted">
             {commitment.appraisedBy === undefined ? '' : `${commitment.appraisedBy} が付けた`}
+            {commitment.workKind === undefined ? '' : `［種類: ${commitment.workKind}］`}
             {commitment.appraisalReason === undefined ? '' : `: ${commitment.appraisalReason}`}
           </span>
         )}
@@ -1084,6 +1095,13 @@ function AppraisalControl({ commitment }: { commitment: Commitment }) {
           value={reason}
           placeholder="なぜその評定か（任意。ここに同じ軸が繰り返し出るなら、軸を足す合図）"
           onChange={(event) => setReason(event.target.value)}
+        />
+      </div>
+      <div className="mt-1.5 flex items-center gap-2">
+        <Input
+          value={workKind}
+          placeholder="仕事の種類（任意。例: 実装 / 調査 / レビュー。空なら前の種類が残る）"
+          onChange={(event) => setWorkKind(event.target.value)}
         />
       </div>
       <ErrorNote error={failure} className="mt-2" />

@@ -940,6 +940,34 @@ export const appraisedBySchema = z.enum(['clone', 'human']);
 export type AppraisedBy = z.infer<typeof appraisedBySchema>;
 
 /**
+ * **仕事の種類**（issue #1308。#1055 段3 の成果物4「評定を仕事の種類ごとに束ねる鍵」）。
+ *
+ * やり方（`Practice.kind`）と評定（`Commitment.workKind` / `Job.workKind`）の
+ * 両方がこの形を使う —— `practiceKindSchema` はこれの別名である。**同じ形に
+ * しておくのは、段4 が「このやり方の種類」と「評定が述べた種類」を突き合わせる
+ * ためである。** 列挙にしない理由は `practiceKindSchema` の doc が持つ。
+ *
+ * ## なぜ評定の時点で述べるのか（#1308 の決定、案B）
+ *
+ * 種類は文脈のどこにも転がっていない意味の判断なので、`Job.conversationId` の
+ * ように呼び出し文脈から自動で写すことはできない。一方で、**評定を付ける時点で
+ * クローンは既に「この仕事は何だったか」を判断している。** 判断が起きている場所で
+ * 一度だけ述べる値なので、「クローンが手で維持する欄」（`Job.conversationId` の
+ * doc が禁じている形）には当たらない。
+ *
+ * - **クローンの道具（`commitment_appraise` / `manager_appraise` /
+ *   `commitment_close` の評定の相乗り）では必須**。任意にすると「述べ忘れた回」が
+ *   溜まり、未分類が最大の群になる
+ * - **人間の口（HTTP / Web / chat）では任意**。渡さずに付け直したときは前の種類を
+ *   残す（理由と違い、評定を覆しても仕事の種類は変わらないため）
+ * - **未評定の件は種類を持たない。** それは正しい状態である（未評定は独立した
+ *   第4の状態。`appraisalSchema` の doc）
+ *
+ * ⚠️ **journalEntrySchema より前に置く必要がある**（`appraisalSchema` と同じ TDZ の理由）。
+ */
+export const workKindSchema = z.string().min(1).max(128);
+
+/**
  * 追記専用の記録（PRD「可観測性」の中段）。
  * 型は architecture.md の JournalStore 行に対応する。
  */
@@ -1069,6 +1097,16 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
         previous: z.string().optional(),
         /** 覆す前に誰が付けたか。`previous` が無ければ意味を持たない。同じ理由で緩く持つ。 */
         previousBy: z.string().optional(),
+        /**
+         * この評定のあとで行が持っている仕事の種類（issue #1308。`workKindSchema` の doc）。
+         *
+         * **渡された値ではなく、書いた結果の値である** —— 人間が種類を渡さずに付け
+         * 直した回は前の種類が残るので、ここにもその残った値が入る。束ねる側は
+         * 日誌のこの欄だけで「その評定がどの種類の仕事についてのものか」を読める。
+         * 無ければ未分類（#1308 より前の行、または人間が一度も種類を述べていない行）。
+         * 読み側が落ちないよう `z.string()` で緩く持つ。
+         */
+        workKind: z.string().optional(),
       })
       .optional(),
   }),
@@ -2511,6 +2549,12 @@ export const commitmentSchema = z.object({
    * 読むこと**（`appraisalSchema` の doc）。
    */
   appraisalReason: z.string().optional(),
+  /**
+   * 評定が述べた**仕事の種類**（issue #1308。意味と、なぜ評定の時点で書くのかは
+   * `workKindSchema` の doc）。評定の口だけが書く。**無いことは「未分類」である。**
+   * 読み側が落ちないよう `z.string()` で緩く持つ（`appraisal` と同じ理由）。
+   */
+  workKind: z.string().optional(),
   bodyMarkup: z.string().optional(),
   /**
    * `body` を最後に直した時刻。編集していなければ無い。
@@ -2855,6 +2899,8 @@ export interface AppraisedEntry {
   appraisal?: string;
   appraisedBy?: string;
   appraisalReason?: string;
+  /** 評定が述べた仕事の種類（issue #1308）。無ければ出さない（#1308 より前の行と同じ見た目）。 */
+  workKind?: string;
 }
 
 export function describeAppraisal(entry: AppraisedEntry): string | null {
@@ -2863,8 +2909,9 @@ export function describeAppraisal(entry: AppraisedEntry): string | null {
   const known = appraisalSchema.safeParse(entry.appraisal);
   const label = known.success ? APPRAISAL_LABELS[known.data] : entry.appraisal;
   const by = entry.appraisedBy === undefined ? '' : `・${entry.appraisedBy}`;
+  const kind = entry.workKind === undefined ? '' : `［種類: ${entry.workKind}］`;
   const reason = entry.appraisalReason === undefined ? '' : `: ${entry.appraisalReason}`;
-  return `評定: ${label}（${entry.appraisal}${by}）${reason}`;
+  return `評定: ${label}（${entry.appraisal}${by}）${kind}${reason}`;
 }
 
 /**
@@ -3516,6 +3563,11 @@ export const jobSchema = z.object({
   /** 評定の理由（1行）。**`lastReport` とは別の欄である**（あちらは委譲側の報告）。 */
   appraisalReason: z.string().optional(),
   /**
+   * 評定が述べた**仕事の種類**（issue #1308。`workKindSchema` の doc）。書く経路は
+   * `appraisal` と同じく `ManagerPool.appraise` だけである。無いことは「未分類」。
+   */
+  workKind: z.string().optional(),
+  /**
    * 直近の報告が**報告ではなく失敗**だったこと（SDK が「これは応答ではない」と
    * 言った回）。応答として終わった回では消える。
    *
@@ -3869,7 +3921,7 @@ export const practiceSlugSchema = z
  * 書こうとした人間が、器に拒まれる形を作らない。表記ゆれは**そのぶんの代償**として
  * 引き受ける（束ねる側が寄せればよく、器が弾く理由にはならない）。
  */
-export const practiceKindSchema = z.string().min(1).max(128);
+export const practiceKindSchema = workKindSchema;
 
 /**
  * 一覧に出す分（本文を含まない）。

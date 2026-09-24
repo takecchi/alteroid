@@ -21,6 +21,9 @@ import type { CommitmentStore } from './store.js';
  *    無しで覆したときに**クローンが `good` と書いた理由が `bad` の理由として
  *    残る**。値だけ入れ替わって、説明が前の書き手のものになる
  * 5. **無い id は `false`** —— 「書けた」と嘘をつかない
+ * 6. **⭐ `workKind`（仕事の種類。#1308）は `reason` と逆に、渡さない上書きで
+ *    前の値を残す** —— 評定を覆しても、その仕事が何の種類だったかは変わらない。
+ *    渡せば置き換わる。4 と同じく、状態が残っているところへ2回目を当てる形で測る
  *
  * **⚠️ 4 は「2回書けば消える」ではなく「状態が残っているところへ2回目を当てる」
  * 形でしか出ない。** 1回目で理由を書き、2回目で理由を省く —— 空の台帳に1回
@@ -71,13 +74,21 @@ export async function verifyCommitmentAppraisalContract(store: CommitmentStore):
   // 3. 片付いた行にも付く
   await store.close(closedId, '2026-01-02T00:00:00.000Z', '終わった', 'clone');
   if (
-    !(await store.appraise(closedId, '2026-01-03T00:00:00.000Z', 'good', 'clone', 'うまくいった'))
+    !(await store.appraise(
+      closedId,
+      '2026-01-03T00:00:00.000Z',
+      'good',
+      'clone',
+      'うまくいった',
+      '実装',
+    ))
   ) {
     fail('片付いた行に評定を付けられなかった');
   }
   const appraisedClosed = await store.get(closedId);
   if (appraisedClosed?.appraisal !== 'good') fail('片付いた行の評定が書かれていない');
   if (appraisedClosed?.closedReason !== '終わった') fail('評定が closedReason を潰している');
+  if (appraisedClosed?.workKind !== '実装') fail('workKind が書かれていない');
 
   // 4. ⭐ reason を渡さない上書きは、前の理由を消す
   if (!(await store.appraise(closedId, '2026-01-04T00:00:00.000Z', 'bad', 'human'))) {
@@ -92,6 +103,16 @@ export async function verifyCommitmentAppraisalContract(store: CommitmentStore):
         '（値だけ入れ替わって、説明が前の書き手のものになる）',
     );
   }
+
+  // 6. ⭐ workKind は渡さない上書きで前の値を残し、渡せば置き換わる
+  if (overturned?.workKind !== '実装') {
+    fail(
+      `種類を渡さない覆しの後に、前の種類が残っていない: ${String(overturned?.workKind)} ` +
+        '（覆しても仕事の種類は変わらない。落とすと未分類へ化ける）',
+    );
+  }
+  await store.appraise(closedId, '2026-01-04T12:00:00.000Z', 'bad', 'human', undefined, '調査');
+  if ((await store.get(closedId))?.workKind !== '調査') fail('渡した種類で置き換わらない');
 
   // 5. 無い id は false
   if (

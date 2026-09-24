@@ -461,6 +461,8 @@ export interface ManagerSummary {
   appraisedAt?: string;
   appraisedBy?: string;
   appraisalReason?: string;
+  /** 評定が述べた仕事の種類（#1308。`jobSchema.workKind`）。無ければ未分類。 */
+  workKind?: string;
   lastReport?: string;
   /**
    * `lastReport` を**デーモンが受け取った時刻**（#358。`jobSchema.lastReportAt`
@@ -1274,12 +1276,16 @@ export interface ManagerPool {
    *
    * **覆した事実は日誌に残す。** 行が持つのは「いまの値」だけなので、前の値が
    * ここで落ちないと**評価する側を較正する材料が消える**（PRD「要件: 自己改善」）。
+   *
+   * **`workKind`（仕事の種類。#1308）は渡さなければ前の値を残す**（`reason` と逆。
+   * 理由は `CommitmentStore.appraise` の doc と同じ）。
    */
   appraise(
     managerId: string,
     appraisal: AppraisalValue,
     by: AppraisedBy,
     reason?: string,
+    workKind?: string,
   ): Promise<ManagerAppraiseResult>;
   list(): Promise<ManagerSummary[]>;
   /**
@@ -6328,6 +6334,7 @@ class Pool implements ManagerPool {
     appraisal: AppraisalValue,
     by: AppraisedBy,
     reason?: string,
+    workKind?: string,
   ): Promise<ManagerAppraiseResult> {
     const at = new Date(this.#now()).toISOString();
     // **像が在るなら像を書く（所有者が書く）。** `#load()` は使わない —— あれは
@@ -6357,6 +6364,8 @@ class Pool implements ManagerPool {
     // `CommitmentStore.appraise` の doc）。
     delete job.appraisalReason;
     if (reason !== undefined) job.appraisalReason = reason;
+    // 種類は理由と逆で、渡されなければ前の値を残す（interface の doc。#1308）。
+    if (workKind !== undefined) job.workKind = workKind;
     job.updatedAt = at;
     await this.#stores.jobs.putJob(job);
 
@@ -6377,12 +6386,17 @@ class Pool implements ManagerPool {
         by,
         previous: previousValue,
         previousBy,
+        // 書いた結果の値（渡されなかった回は残った前の値）。日誌の構造欄の doc。
+        ...(job.workKind === undefined ? {} : { workKind: job.workKind }),
       },
     });
 
     return {
       outcome: 'appraised',
-      detail: `${managerId} の評定を ${appraisal} にした。`,
+      detail:
+        job.workKind === undefined
+          ? `${managerId} の評定を ${appraisal} にした。`
+          : `${managerId} の評定を ${appraisal}（種類: ${job.workKind}）にした。`,
       previous,
     };
   }
@@ -11324,6 +11338,7 @@ function summaryOf(
     ...(job.appraisedAt === undefined ? {} : { appraisedAt: job.appraisedAt }),
     ...(job.appraisedBy === undefined ? {} : { appraisedBy: job.appraisedBy }),
     ...(job.appraisalReason === undefined ? {} : { appraisalReason: job.appraisalReason }),
+    ...(job.workKind === undefined ? {} : { workKind: job.workKind }),
     ...(job.lastReport === undefined ? {} : { lastReport: job.lastReport }),
     // **`lastReport` と対で運ぶ**（#358）。台帳をそのまま写すだけ——書き込みは
     // `#onEvent` の `case 'report'` の1箇所に閉じている。

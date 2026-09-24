@@ -2149,6 +2149,8 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
         by: 'clone',
         previous: SECRET,
         previousBy: SECRET,
+        // 仕事の種類（#1308）は自由文なので、落とした跡へ漏れないことをここで測る。
+        workKind: SECRET,
       },
     },
     escalation: {

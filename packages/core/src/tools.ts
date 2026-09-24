@@ -142,6 +142,7 @@ import {
   JOURNAL_ENTRY_TYPES,
   approvalUpdatedAt,
   appraisalSchema,
+  workKindSchema,
   commitmentOriginSchema,
   commitmentUpdatedAt,
   describeAppraisal,
@@ -2305,10 +2306,20 @@ async function writeAppraisal(
   id: string,
   value: AppraisalValue,
   reason: string | undefined,
+  workKind: string,
 ): Promise<string> {
   const before = await stores.commitments.get(id);
   const previous = before === null ? null : describeAppraisal(before);
-  if (!(await stores.commitments.appraise(id, new Date().toISOString(), value, 'clone', reason))) {
+  if (
+    !(await stores.commitments.appraise(
+      id,
+      new Date().toISOString(),
+      value,
+      'clone',
+      reason,
+      workKind,
+    ))
+  ) {
     return `（評定は付けられなかった —— ${id} が台帳に無い）`;
   }
   await appendJournalOrThrow(
@@ -2331,11 +2342,12 @@ async function writeAppraisal(
         by: 'clone',
         previous: before?.appraisal,
         previousBy: before?.appraisedBy,
+        workKind,
       },
     },
     'act-completed',
   );
-  return `評定を ${value} にした。`;
+  return `評定を ${value}（種類: ${workKind}）にした。`;
 }
 
 /**
@@ -6552,8 +6564,25 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe('なぜその評定なのか（1行）。appraisal を書いたなら、これも書くこと'),
+        workKind: workKindSchema
+          .optional()
+          .describe(
+            '**この仕事は何の種類だったか**（例: 実装 / 調査 / レビュー / 相談 / 確認）。' +
+              '評定を仕事の種類ごとに束ねる鍵になる（#1308）。自由文だが、' +
+              '**同じ種類には同じ言葉を使い続けること**（practice_list の kind と揃えるとよい）' +
+              '。**appraisal を書いたなら必須**（書かなければ閉じずに断る）',
+          ),
       },
-      async ({ id, reason, appraisal, appraisalReason }) => {
+      async ({ id, reason, appraisal, appraisalReason, workKind }) => {
+        // **評定を付けるなら種類も要る**（#1308。`workKindSchema` の doc）。閉じる前に
+        // 断る —— 閉じてから断ると「片付いたが評定は付かなかった」という、呼んだ側が
+        // 意図していない半端な状態が残る。
+        if (appraisal !== undefined && workKind === undefined) {
+          return text(
+            `${id} はまだ閉じていない。appraisal を付けるなら workKind（この仕事の種類）も渡すこと。` +
+              '評定を仕事の種類ごとに束ねる鍵になる（#1308）。',
+          );
+        }
         const existing = await stores.commitments.get(id);
         if (existing === null) return text(await describeCommitmentNotOnLedger(stores, id));
         if (existing.closedAt !== undefined) {
@@ -6594,7 +6623,7 @@ export function createCloneTools(context: ToolContext) {
           },
           'act-completed',
         );
-        if (appraisal === undefined) {
+        if (appraisal === undefined || workKind === undefined) {
           return text(
             `${id} を片付けた。**評定はまだ付いていない** —— どうだったかは commitment_appraise で付けられる。`,
           );
@@ -6603,7 +6632,8 @@ export function createCloneTools(context: ToolContext) {
         // 2箇所に書き下ろすと、片方だけ直したときに黙ってずれる（`digest.ts` の
         // `describeUnobservedOutcome` が字面の生成元を1つにしているのと同じ判断）。
         return text(
-          `${id} を片付けた。` + (await writeAppraisal(stores, id, appraisal, appraisalReason)),
+          `${id} を片付けた。` +
+            (await writeAppraisal(stores, id, appraisal, appraisalReason, workKind)),
         );
       },
     ),
@@ -6631,12 +6661,17 @@ export function createCloneTools(context: ToolContext) {
             'なぜその評定なのか（1行）。**書くこと。** ここに同じ軸が繰り返し' +
               '現れるかどうかが、評定に軸を足すかどうかの唯一の判断材料である',
           ),
+        workKind: workKindSchema.describe(
+          '**この仕事は何の種類だったか**（例: 実装 / 調査 / レビュー / 相談 / 確認）。' +
+            '評定を仕事の種類ごとに束ねる鍵になる（#1308）。自由文だが、' +
+            '**同じ種類には同じ言葉を使い続けること**（practice_list の kind と揃えるとよい）',
+        ),
       },
-      async ({ id, appraisal, reason }) => {
+      async ({ id, appraisal, reason, workKind }) => {
         const existing = await stores.commitments.get(id);
         if (existing === null) return text(`引き受けた仕事 ${id} は台帳に無い。`);
         // 書き込みと日誌は `writeAppraisal` が持つ（`commitment_close` と同じ経路）。
-        return text(`${id} の${await writeAppraisal(stores, id, appraisal, reason)}`);
+        return text(`${id} の${await writeAppraisal(stores, id, appraisal, reason, workKind)}`);
       },
     ),
 
@@ -8285,12 +8320,23 @@ export function createCloneTools(context: ToolContext) {
             'なぜその評定なのか（1行）。**書くこと。** ここに同じ軸が繰り返し' +
               '現れるかどうかが、評定に軸を足すかどうかの唯一の判断材料である',
           ),
+        workKind: workKindSchema.describe(
+          '**この委譲は何の種類の仕事だったか**（例: 実装 / 調査 / レビュー / 相談 / 確認）。' +
+            '評定を仕事の種類ごとに束ねる鍵になる（#1308）。自由文だが、' +
+            '**同じ種類には同じ言葉を使い続けること**（practice_list の kind と揃えるとよい）',
+        ),
       },
-      async ({ managerId, appraisal, reason }) => {
+      async ({ managerId, appraisal, reason, workKind }) => {
         if (!context.managers) return NO_POOL;
         // **日誌も「前の値」も `ManagerPool.appraise` が持つ。** ここで書き下ろすと、
         // 人間の口（HTTP）と2箇所になり、片方だけ直したときに黙ってずれる。
-        const result = await context.managers.appraise(managerId, appraisal, 'clone', reason);
+        const result = await context.managers.appraise(
+          managerId,
+          appraisal,
+          'clone',
+          reason,
+          workKind,
+        );
         return text(result.detail);
       },
     ),

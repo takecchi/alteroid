@@ -125,7 +125,7 @@ function fakeClone() {
      * 「前の値を返す」と「理由を渡さなければ前の理由を消す」の3つに、HTTP の
      * 応答と日誌の本文が依存している。
      */
-    async appraise(managerId, appraisal, by, reason) {
+    async appraise(managerId, appraisal, by, reason, workKind) {
       const found = managerList.find((entry) => entry.managerId === managerId);
       if (!found) {
         return { outcome: 'absent' as const, detail: `${managerId} は居ない`, previous: null };
@@ -135,6 +135,8 @@ function fakeClone() {
       found.appraisedBy = by;
       delete found.appraisalReason;
       if (reason !== undefined) found.appraisalReason = reason;
+      // 種類は渡されなければ前の値を残す（本物と同じ。#1308）。
+      if (workKind !== undefined) found.workKind = workKind;
       return {
         outcome: 'appraised' as const,
         detail: `${managerId} の評定を ${appraisal} にした。`,
@@ -3187,6 +3189,67 @@ describe('HTTP API', () => {
       previous: 'good',
       previousBy: 'clone',
     });
+  });
+
+  it('仕事の種類（#1308）は人間の口では任意で、渡さない付け直しでは前の種類が残り、日誌の構造欄にも載る', async () => {
+    const opened = await app.request('/commitments', json({ body: '種類つきで評定する件' }));
+    const { id } = (await opened.json()) as { id: string };
+
+    expect(
+      (
+        await app.request(
+          `/commitments/${id}/appraise`,
+          json({ appraisal: 'good', workKind: '実装' }),
+        )
+      ).status,
+    ).toBe(200);
+    expect(await stores.commitments.get(id)).toMatchObject({ appraisal: 'good', workKind: '実装' });
+
+    // 種類を渡さずに覆す —— 種類は残る（理由と逆の扱い）。
+    expect(
+      (await app.request(`/commitments/${id}/appraise`, json({ appraisal: 'bad' }))).status,
+    ).toBe(200);
+    expect(await stores.commitments.get(id)).toMatchObject({ appraisal: 'bad', workKind: '実装' });
+
+    const structured = (await stores.journal.list({ types: ['decision'] }))
+      .map((entry) => (entry.type === 'decision' ? entry.appraisal : undefined))
+      .filter((appraisal) => appraisal?.id === id);
+    expect(structured).toHaveLength(2);
+    // **日誌には書いた結果の種類が載る**（渡されなかった回も、残った前の種類）。
+    expect(structured.map((appraisal) => appraisal?.workKind)).toEqual(['実装', '実装']);
+
+    // 空の種類は 400（器は列挙では弾かないが、空は種類ではない）。
+    expect(
+      (await app.request(`/commitments/${id}/appraise`, json({ appraisal: 'good', workKind: '' })))
+        .status,
+    ).toBe(400);
+  });
+
+  it('委譲の評定の種類（#1308）は ManagerPool へ渡り、GET /managers の応答まで落ちずに届く', async () => {
+    fake.managerList.push({
+      managerId: 'mgr-kind',
+      status: 'done',
+      live: false,
+      cwd: '/work',
+      request: '調べて',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      waiting: [],
+    });
+    expect(
+      (
+        await app.request(
+          '/managers/mgr-kind/appraise',
+          json({ appraisal: 'good', workKind: '調査' }),
+        )
+      ).status,
+    ).toBe(200);
+    // **`managerSummarySchema`（openapi.ts）は手書きの再宣言なので、宣言し忘れると
+    // `.parse()` がここで黙って落とす。** 応答から読むことでそれを測る。
+    const listed = (await (await app.request('/managers')).json()) as {
+      managers: { managerId: string; workKind?: string }[];
+    };
+    expect(listed.managers.find((m) => m.managerId === 'mgr-kind')?.workKind).toBe('調査');
   });
 
   it('台帳に無い id は 404（評定は「書けた」と嘘をつかない）', async () => {

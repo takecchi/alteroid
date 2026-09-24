@@ -795,6 +795,11 @@ export interface CommitmentStore {
    * **`reason` は任意。** 書けない評定（画面のボタン1つ）を塞がないため。
    * ただし**書かせる側（道具・画面）は書くよう促すこと** — 軸を足すかどうかの
    * 判断材料はここにしか無い（`commitmentSchema.appraisalReason` の doc）。
+   *
+   * **`workKind`（仕事の種類。issue #1308）は `reason` と逆の扱いである。**
+   * `reason` は渡さなければ消える（覆した評定に前の理由が残ると嘘になる）が、
+   * `workKind` は渡さなければ**前の値を残す** —— 評定を覆しても、その仕事が何の
+   * 種類だったかは変わらないからである（`workKindSchema` の doc）。
    */
   appraise(
     id: string,
@@ -802,6 +807,7 @@ export interface CommitmentStore {
     value: AppraisalValue,
     by: AppraisedBy,
     reason?: string,
+    workKind?: string,
   ): Promise<boolean>;
 
   /**

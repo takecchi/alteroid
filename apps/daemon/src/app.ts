@@ -66,6 +66,7 @@ import {
   summarizeInboxBacklog,
   memorySlugSchema,
   practiceKindSchema,
+  workKindSchema,
   practiceSlugSchema,
   fingerprintOf,
   noteDroppedRecord,
@@ -700,6 +701,11 @@ const commitmentCloseBody = z.object({ reason: z.string().min(1) });
 const commitmentAppraiseBody = z.object({
   appraisal: appraisalSchema,
   reason: z.string().min(1).optional(),
+  /**
+   * 仕事の種類（#1308。`workKindSchema` の doc）。**人間の口では任意**で、渡さずに
+   * 付け直したときは前の種類が残る（クローンの道具では必須）。
+   */
+  workKind: workKindSchema.optional(),
 });
 
 /**
@@ -710,6 +716,8 @@ const commitmentAppraiseBody = z.object({
 const managerAppraiseBody = z.object({
   appraisal: appraisalSchema,
   reason: z.string().min(1).optional(),
+  /** 仕事の種類（#1308）。`commitmentAppraiseBody.workKind` と同じ扱い。 */
+  workKind: workKindSchema.optional(),
 });
 
 /**
@@ -3540,7 +3548,7 @@ export function createApp(deps: AppDeps) {
       })),
       async (c) => {
         const id = c.req.param('id');
-        const { appraisal, reason } = c.req.valid('json');
+        const { appraisal, reason, workKind } = c.req.valid('json');
         // **前の評定は書き換える前に読む。** 後から読むと自分が書いた値しか
         // 取れず、覆した事実が日誌から消える。
         const before = await stores.commitments.get(id);
@@ -3553,10 +3561,13 @@ export function createApp(deps: AppDeps) {
             appraisal,
             'human',
             reason,
+            workKind,
           ))
         ) {
           return c.json({ error: 'not found' as const }, 404);
         }
+        // 日誌には書いた結果の種類を載せる（渡されなければ前の種類が残る。#1308）。
+        const effectiveWorkKind = workKind ?? before.workKind;
         await stores.journal.append({
           type: 'decision',
           decision: formatAppraisalDecision({
@@ -3574,6 +3585,7 @@ export function createApp(deps: AppDeps) {
             by: 'human',
             previous: before.appraisal,
             previousBy: before.appraisedBy,
+            ...(effectiveWorkKind === undefined ? {} : { workKind: effectiveWorkKind }),
           },
         });
         return c.json(okResponseSchema.parse({ ok: true }));
@@ -4056,8 +4068,8 @@ export function createApp(deps: AppDeps) {
       })),
       async (c) => {
         const id = c.req.param('id');
-        const { appraisal, reason } = c.req.valid('json');
-        const result = await clone.managers.appraise(id, appraisal, 'human', reason);
+        const { appraisal, reason, workKind } = c.req.valid('json');
+        const result = await clone.managers.appraise(id, appraisal, 'human', reason, workKind);
         if (result.outcome === 'absent') return c.json({ error: 'not found' as const }, 404);
         return c.json(okResponseSchema.parse({ ok: true }));
       },

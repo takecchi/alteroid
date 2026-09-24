@@ -15081,10 +15081,13 @@ describe('commitment_close が「台帳に無い」と答えるとき、機械�
       conversationId: () => undefined,
     });
     const appraise = tools.find((entry) => entry.name === 'commitment_appraise');
-    await appraise?.handler({ id: 'c-structured', appraisal: 'good' } as never, {});
+    await appraise?.handler(
+      { id: 'c-structured', appraisal: 'good', workKind: '実装' } as never,
+      {},
+    );
     // 人間が覆す（前の値・前に誰が付けたかが構造欄に残ることも同時に確かめる）。
     await appraise?.handler(
-      { id: 'c-structured', appraisal: 'bad', reason: '差し戻し' } as never,
+      { id: 'c-structured', appraisal: 'bad', reason: '差し戻し', workKind: '調査' } as never,
       {},
     );
 
@@ -15110,6 +15113,7 @@ describe('commitment_close が「台帳に無い」と答えるとき、機械�
       by: 'clone',
       previous: undefined,
       previousBy: undefined,
+      workKind: '実装',
     });
     expect(secondEntry?.type === 'decision' ? secondEntry.appraisal : undefined).toEqual({
       target: 'commitment',
@@ -15118,6 +15122,107 @@ describe('commitment_close が「台帳に無い」と答えるとき、機械�
       by: 'clone',
       previous: 'good',
       previousBy: 'clone',
+      workKind: '調査',
+    });
+  });
+
+  describe('評定が述べる仕事の種類（#1308）', () => {
+    const toolsWith = (stores = createMemoryStores(), managers?: ManagerPool) =>
+      createCloneTools({
+        stores,
+        emit: () => undefined,
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+        ...(managers === undefined ? {} : { managers }),
+      });
+    const shapeOf = (name: string) =>
+      toolsWith().find((entry) => entry.name === name)?.inputSchema as
+        Record<string, z.ZodTypeAny> | undefined;
+    const textOf = (result: { content?: { type: string; text?: string }[] }) =>
+      (result.content ?? []).map((block) => block.text ?? '').join('');
+
+    it('クローンの評定の道具は workKind を必須にしている（任意にすると未分類が最大の群になる）', () => {
+      for (const [name, base] of [
+        ['commitment_appraise', { id: 'c-1', appraisal: 'good' }],
+        ['manager_appraise', { managerId: 'mgr-1', appraisal: 'good' }],
+      ] as const) {
+        const shape = shapeOf(name);
+        expect(shape, name).toBeDefined();
+        expect(z.object(shape!).safeParse(base).success, name).toBe(false);
+        expect(z.object(shape!).safeParse({ ...base, workKind: '実装' }).success, name).toBe(true);
+        // 列挙にしていない（知らない種類を器が拒まない。`practiceKindSchema` と同じ線）。
+        expect(
+          z.object(shape!).safeParse({ ...base, workKind: 'まだ誰も名付けていない種類' }).success,
+          name,
+        ).toBe(true);
+        expect(z.object(shape!).safeParse({ ...base, workKind: '' }).success, name).toBe(false);
+      }
+    });
+
+    it('commitment_close は評定を付けるのに種類が無ければ、閉じずに断る', async () => {
+      const stores = createMemoryStores();
+      await stores.commitments.open({
+        id: 'c-close-kind',
+        at: '2026-01-01T00:00:00.000Z',
+        origin: 'self',
+        body: '閉じる件',
+      });
+      const close = toolsWith(stores).find((entry) => entry.name === 'commitment_close');
+      const refused = textOf(
+        (await close?.handler(
+          { id: 'c-close-kind', reason: '終わった', appraisal: 'good' } as never,
+          {},
+        )) as never,
+      );
+      expect(refused).toContain('workKind');
+      // **閉じていない**（閉じてから断ると、評定の無い半端な片付きが残る）。
+      const after = await stores.commitments.get('c-close-kind');
+      expect(after?.closedAt).toBeUndefined();
+      expect(after?.appraisal).toBeUndefined();
+
+      const ok = textOf(
+        (await close?.handler(
+          { id: 'c-close-kind', reason: '終わった', appraisal: 'good', workKind: '実装' } as never,
+          {},
+        )) as never,
+      );
+      expect(ok).toContain('種類: 実装');
+      const closed = await stores.commitments.get('c-close-kind');
+      expect(closed?.closedAt).toBeDefined();
+      expect(closed).toMatchObject({ appraisal: 'good', workKind: '実装' });
+    });
+
+    it('commitment_close は評定を付けないなら、種類が無くても閉じる', async () => {
+      const stores = createMemoryStores();
+      await stores.commitments.open({
+        id: 'c-close-plain',
+        at: '2026-01-01T00:00:00.000Z',
+        origin: 'self',
+        body: '閉じる件',
+      });
+      const close = toolsWith(stores).find((entry) => entry.name === 'commitment_close');
+      await close?.handler({ id: 'c-close-plain', reason: '終わった' } as never, {});
+      const closed = await stores.commitments.get('c-close-plain');
+      expect(closed?.closedAt).toBeDefined();
+      expect(closed?.workKind).toBeUndefined();
+    });
+
+    it('manager_appraise は種類を ManagerPool.appraise へそのまま渡す', async () => {
+      const calls: unknown[][] = [];
+      const managers = {
+        async appraise(...args: unknown[]) {
+          calls.push(args);
+          return { outcome: 'appraised' as const, detail: 'ok', previous: null };
+        },
+      } as unknown as ManagerPool;
+      const appraise = toolsWith(createMemoryStores(), managers).find(
+        (entry) => entry.name === 'manager_appraise',
+      );
+      await appraise?.handler(
+        { managerId: 'mgr-1', appraisal: 'bad', reason: '手戻り', workKind: 'レビュー' } as never,
+        {},
+      );
+      expect(calls).toEqual([['mgr-1', 'bad', 'clone', '手戻り', 'レビュー']]);
     });
   });
 

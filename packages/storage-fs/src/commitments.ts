@@ -470,6 +470,7 @@ export class FsCommitmentStore implements CommitmentStore {
     value: AppraisalValue,
     by: AppraisedBy,
     reason?: string,
+    workKind?: string,
   ): Promise<boolean> {
     return this.#update((file) => {
       const found = file.entries.find((entry) => entry.id === id);
@@ -491,6 +492,8 @@ export class FsCommitmentStore implements CommitmentStore {
             };
             delete next.appraisalReason;
             if (reason !== undefined) next.appraisalReason = reason;
+            // 種類は理由と逆で、渡されなければ前の値を残す（`CommitmentStore.appraise` の doc。#1308）。
+            if (workKind !== undefined) next.workKind = workKind;
             return next;
           }),
           unreadable: file.unreadable,

@@ -275,11 +275,21 @@ export function useAppraiseCommitment() {
   const api = useApi();
   const refresh = useRefreshCommitments();
   return useCallback(
-    async (id: string, appraisal: 'good' | 'bad' | 'unclear', reason?: string) => {
+    async (
+      id: string,
+      appraisal: 'good' | 'bad' | 'unclear',
+      reason?: string,
+      // 仕事の種類（#1308）。人間の口では任意で、渡さなければ前の種類が残る。
+      workKind?: string,
+    ) => {
       expectOk(
         await api.api.POST('/commitments/{id}/appraise', {
           params: { path: { id } },
-          body: reason === undefined ? { appraisal } : { appraisal, reason },
+          body: {
+            appraisal,
+            ...(reason === undefined ? {} : { reason }),
+            ...(workKind === undefined ? {} : { workKind }),
+          },
         }),
       );
       await refresh();
@@ -354,11 +364,21 @@ export function useAppraiseManager() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
-    async (id: string, appraisal: 'good' | 'bad' | 'unclear', reason?: string) => {
+    async (
+      id: string,
+      appraisal: 'good' | 'bad' | 'unclear',
+      reason?: string,
+      // 仕事の種類（#1308）。`useAppraiseCommitment` と同じ扱い。
+      workKind?: string,
+    ) => {
       expectOk(
         await api.api.POST('/managers/{id}/appraise', {
           params: { path: { id } },
-          body: reason === undefined ? { appraisal } : { appraisal, reason },
+          body: {
+            appraisal,
+            ...(reason === undefined ? {} : { reason }),
+            ...(workKind === undefined ? {} : { workKind }),
+          },
         }),
       );
       // **一覧と詳細の両方を取り直す。** 評定は両方に出る（`ManagerSummary` が運ぶ）。

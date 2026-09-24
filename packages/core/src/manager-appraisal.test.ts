@@ -203,7 +203,7 @@ describe('委譲の評定（ManagerPool.appraise）', () => {
 
   it('覆した事実は日誌に残る（前の値が本文に入る）', async () => {
     const { pool, stores } = await setup();
-    await pool.appraise('mgr-appraise', 'good', 'clone', '通った');
+    await pool.appraise('mgr-appraise', 'good', 'clone', '通った', '実装');
     await pool.appraise('mgr-appraise', 'bad', 'human', '差し戻し');
 
     const decisions = (await stores.journal.list({ types: ['decision'] })).filter((entry) =>
@@ -234,6 +234,7 @@ describe('委譲の評定（ManagerPool.appraise）', () => {
       by: 'clone',
       previous: undefined,
       previousBy: undefined,
+      workKind: '実装',
     });
     const second = decisions.find(
       (entry) => entry.type === 'decision' && entry.appraisal?.value === 'bad',
@@ -245,7 +246,38 @@ describe('委譲の評定（ManagerPool.appraise）', () => {
       by: 'human',
       previous: 'good',
       previousBy: 'clone',
+      // **人間は種類を渡していないが、書いた結果の値（残った前の種類）が載る**（#1308）。
+      workKind: '実装',
     });
+  });
+
+  it('⭐ 仕事の種類（#1308）は、種類を渡さない覆しでも前の値が残り、渡せば置き換わる', async () => {
+    const { pool, stores } = await setup();
+    const first = await pool.appraise('mgr-appraise', 'good', 'clone', '通った', '実装');
+    expect(first.detail).toContain('実装');
+    expect(await jobOf(stores, 'mgr-appraise')).toMatchObject({ workKind: '実装' });
+
+    // **状態が残っているところへ2回目を当てる**（理由と逆の扱いを測る）。
+    await pool.appraise('mgr-appraise', 'bad', 'human');
+    const kept = await jobOf(stores, 'mgr-appraise');
+    expect(kept?.workKind).toBe('実装');
+    expect(kept?.appraisalReason).toBeUndefined();
+
+    await pool.appraise('mgr-appraise', 'bad', 'human', undefined, '調査');
+    expect((await jobOf(stores, 'mgr-appraise'))?.workKind).toBe('調査');
+  });
+
+  it('種類を1度も述べていない評定は workKind を持たない（未分類。どこかへ寄せない）', async () => {
+    const { pool, stores } = await setup();
+    const result = await pool.appraise('mgr-appraise', 'good', 'human');
+    expect(result.detail).not.toContain('種類');
+    expect((await jobOf(stores, 'mgr-appraise'))?.workKind).toBeUndefined();
+    const decision = (await stores.journal.list({ types: ['decision'] })).find(
+      (entry) => entry.type === 'decision' && entry.appraisal !== undefined,
+    );
+    expect(decision?.type === 'decision' ? decision.appraisal : undefined).not.toHaveProperty(
+      'workKind',
+    );
   });
 
   it('台帳に居ない id は absent（「書けた」と嘘をつかない）', async () => {
@@ -257,8 +289,8 @@ describe('委譲の評定（ManagerPool.appraise）', () => {
 
   it('ManagerSummary にも載る（載らないと評定が書き込み専用になる）', async () => {
     const { pool } = await setup();
-    await pool.appraise('mgr-appraise', 'bad', 'human', '手戻りが多い');
+    await pool.appraise('mgr-appraise', 'bad', 'human', '手戻りが多い', 'レビュー');
     const summary = (await pool.list()).find((m) => m.managerId === 'mgr-appraise');
-    expect(summary).toMatchObject({ appraisal: 'bad', appraisedBy: 'human' });
+    expect(summary).toMatchObject({ appraisal: 'bad', appraisedBy: 'human', workKind: 'レビュー' });
   });
 });

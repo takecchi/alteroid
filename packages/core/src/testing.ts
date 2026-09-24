@@ -687,13 +687,15 @@ export function createMemoryStores(): Stores {
     // **片付いた行にも未了の行にも付く**（`CommitmentStore.appraise` の doc）。
     // 断るのは無い id だけ。**`reason` を渡さなければ前の理由を消す**——残すと
     // 覆したあとに前の書き手の理由が新しい値の理由として残る（本物2つと同じ）。
-    async appraise(id, at, value: AppraisalValue, by: AppraisedBy, reason) {
+    async appraise(id, at, value: AppraisalValue, by: AppraisedBy, reason, workKind) {
       const existing = commitments.get(id);
       if (!existing) return false;
       // `delete` で落とす理由は fs 版と同じ（捨て変数を eslint が許さない）。
       const next: Commitment = { ...existing, appraisal: value, appraisedAt: at, appraisedBy: by };
       delete next.appraisalReason;
       if (reason !== undefined) next.appraisalReason = reason;
+      // 種類は渡されなければ前の値を残す（本物2つと同じ。#1308）。
+      if (workKind !== undefined) next.workKind = workKind;
       commitments.set(id, next);
       return true;
     },

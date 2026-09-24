@@ -3774,4 +3774,47 @@ describe('chat の /rate と /rate-manager（評定）', () => {
     expect(calls.some((c) => c.route === 'POST /managers/:id/appraise')).toBe(false);
     expect(read()).toContain('/managers の一覧にありません');
   });
+
+  /**
+   * **仕事の種類（#1308）は `--kind=` の1語で渡す。** 理由は自由文の末尾なので、
+   * 印の無い語はすべて理由へ残る。書かなければ送らない（前の種類が残る）。
+   */
+  it('/rate と /rate-manager は --kind= を仕事の種類として送り、残りを理由にする', async () => {
+    captureStdout();
+    const { calls, client } = stubClient({
+      commitments: [commitment({ id: 'cmt-1' })],
+      managers: [manager({ managerId: 'mgr-a' })],
+    });
+    const listed = emptyListed();
+
+    await runSlashCommand('/commitments', client, listed);
+    await runSlashCommand('/rate 1 good --kind=実装 一発で通った', client, listed);
+    await runSlashCommand('/managers', client, listed);
+    await runSlashCommand('/rate-manager 1 bad 手戻り --kind=レビュー', client, listed);
+
+    const commitmentCall = calls.find((c) => c.route === 'POST /commitments/:id/appraise');
+    expect((commitmentCall?.args as { json: Record<string, unknown> }).json).toEqual({
+      appraisal: 'good',
+      reason: '一発で通った',
+      workKind: '実装',
+    });
+    const managerCall = calls.find((c) => c.route === 'POST /managers/:id/appraise');
+    expect((managerCall?.args as { json: Record<string, unknown> }).json).toEqual({
+      appraisal: 'bad',
+      reason: '手戻り',
+      workKind: 'レビュー',
+    });
+  });
+
+  it('/rate は --kind= が空なら送らずに断る', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient({ commitments: [commitment({ id: 'cmt-1' })] });
+    const listed = emptyListed();
+
+    await runSlashCommand('/commitments', client, listed);
+    await runSlashCommand('/rate 1 good --kind=', client, listed);
+
+    expect(calls.some((c) => c.route === 'POST /commitments/:id/appraise')).toBe(false);
+    expect(read()).toContain('--kind=');
+  });
 });

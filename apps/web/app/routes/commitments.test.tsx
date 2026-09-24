@@ -170,6 +170,24 @@ describe('/commitments 画面', () => {
     expect(screen.getByText(/一発で通った/)).toBeTruthy();
   });
 
+  it('評定が述べた仕事の種類（#1308）を出し、種類の入力欄を置く', async () => {
+    stubCommitments([commitment({ appraisal: 'good', appraisedBy: 'clone', workKind: '実装' })]);
+    renderPage();
+
+    expect(await screen.findByText('ドキュメントの誤りを直す')).toBeTruthy();
+    expect(screen.getByText(/［種類: 実装］/)).toBeTruthy();
+    // 列挙のプルダウンではなく自由文の欄である（知らない種類を画面が拒まない）。
+    expect(screen.getByPlaceholderText(/仕事の種類（任意/)).toBeTruthy();
+  });
+
+  it('種類を述べていない評定には種類を出さない（未分類をどこかへ寄せない）', async () => {
+    stubCommitments([commitment({ appraisal: 'good', appraisedBy: 'clone' })]);
+    renderPage();
+
+    expect(await screen.findByText('ドキュメントの誤りを直す')).toBeTruthy();
+    expect(screen.queryByText(/［種類:/)).toBeNull();
+  });
+
   it('片付けたものは、押されたときだけ includeClosed=true で取りに行く', async () => {
     const stub = stubCommitments(
       [commitment({ id: 'open-1', body: 'まだ終わっていない' })],

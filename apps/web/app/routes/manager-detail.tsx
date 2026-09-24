@@ -366,6 +366,8 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
 function AppraisalCard({ manager }: { manager: ManagerSummary }) {
   const appraise = useAppraiseManager();
   const [reason, setReason] = useState('');
+  // 仕事の種類（#1308）。台帳の画面の `AppraisalControl` と同じ扱い（任意の自由文）。
+  const [workKind, setWorkKind] = useState('');
   const [busy, setBusy] = useState<AppraisalValue | null>(null);
   const [failure, setFailure] = useState<unknown>(undefined);
 
@@ -373,8 +375,14 @@ function AppraisalCard({ manager }: { manager: ManagerSummary }) {
     setBusy(value);
     setFailure(undefined);
     try {
-      await appraise(manager.managerId, value, reason.trim() === '' ? undefined : reason.trim());
+      await appraise(
+        manager.managerId,
+        value,
+        reason.trim() === '' ? undefined : reason.trim(),
+        workKind.trim() === '' ? undefined : workKind.trim(),
+      );
       setReason('');
+      setWorkKind('');
     } catch (caught) {
       setFailure(caught);
     } finally {
@@ -411,6 +419,7 @@ function AppraisalCard({ manager }: { manager: ManagerSummary }) {
           ) : (
             <span className="text-muted">
               {manager.appraisedBy === undefined ? '' : `${manager.appraisedBy} が付けた`}
+              {manager.workKind === undefined ? '' : `［種類: ${manager.workKind}］`}
               {manager.appraisalReason === undefined ? '' : `: ${manager.appraisalReason}`}
             </span>
           )}
@@ -420,6 +429,13 @@ function AppraisalCard({ manager }: { manager: ManagerSummary }) {
             value={reason}
             placeholder="なぜその評定か（任意。ここに同じ軸が繰り返し出るなら、軸を足す合図）"
             onChange={(event) => setReason(event.target.value)}
+          />
+        </div>
+        <div className="mt-2">
+          <Input
+            value={workKind}
+            placeholder="仕事の種類（任意。例: 実装 / 調査 / レビュー。空なら前の種類が残る）"
+            onChange={(event) => setWorkKind(event.target.value)}
           />
         </div>
         <ErrorNote error={failure} className="mt-2" />

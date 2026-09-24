@@ -727,6 +727,9 @@
                             },
                             "previousBy": {
                               "type": "string"
+                            },
+                            "workKind": {
+                              "type": "string"
                             }
                           },
                           "required": ["target", "id", "value", "by"]
@@ -3338,6 +3341,9 @@
                                     "type": "string"
                                   },
                                   "previousBy": {
+                                    "type": "string"
+                                  },
+                                  "workKind": {
                                     "type": "string"
                                   }
                                 },
@@ -6510,6 +6516,9 @@
                           "appraisalReason": {
                             "type": "string"
                           },
+                          "workKind": {
+                            "type": "string"
+                          },
                           "bodyMarkup": {
                             "type": "string"
                           },
@@ -6884,6 +6893,11 @@
                   "reason": {
                     "type": "string",
                     "minLength": 1
+                  },
+                  "workKind": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
                   }
                 },
                 "required": ["appraisal"]
@@ -7101,6 +7115,9 @@
                             "type": "string"
                           },
                           "appraisalReason": {
+                            "type": "string"
+                          },
+                          "workKind": {
                             "type": "string"
                           },
                           "lastReport": {
@@ -7497,6 +7514,9 @@
                           "type": "string"
                         },
                         "appraisalReason": {
+                          "type": "string"
+                        },
+                        "workKind": {
                           "type": "string"
                         },
                         "lastReport": {
@@ -8123,6 +8143,11 @@
                   "reason": {
                     "type": "string",
                     "minLength": 1
+                  },
+                  "workKind": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
                   }
                 },
                 "required": ["appraisal"]

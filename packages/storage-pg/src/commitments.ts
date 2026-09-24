@@ -392,8 +392,15 @@ export class PgCommitmentStore implements CommitmentStore {
     value: AppraisalValue,
     by: AppraisedBy,
     reason?: string,
+    workKind?: string,
   ): Promise<boolean> {
-    const base = sql`jsonb_set(jsonb_set(jsonb_set(${commitments.commitment}, '{appraisal}', ${JSON.stringify(value)}::jsonb, true), '{appraisedAt}', ${JSON.stringify(at)}::jsonb, true), '{appraisedBy}', ${JSON.stringify(by)}::jsonb, true)`;
+    const valued = sql`jsonb_set(jsonb_set(jsonb_set(${commitments.commitment}, '{appraisal}', ${JSON.stringify(value)}::jsonb, true), '{appraisedAt}', ${JSON.stringify(at)}::jsonb, true), '{appraisedBy}', ${JSON.stringify(by)}::jsonb, true)`;
+    // 種類は理由と逆で、渡されなければ触らない＝前の値を残す（`CommitmentStore.appraise`
+    // の doc。#1308）。`jsonb_set` の「渡さなければ触らない」がそのまま効く側である。
+    const base =
+      workKind === undefined
+        ? valued
+        : sql`jsonb_set(${valued}, '{workKind}', ${JSON.stringify(stripNulls(workKind))}::jsonb, true)`;
     const appraised =
       reason === undefined
         ? sql`(${base}) - 'appraisalReason'`
