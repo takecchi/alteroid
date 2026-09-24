@@ -899,3 +899,21 @@ export function useRevokeAccess() {
     [api, mutate],
   );
 }
+
+/**
+ * その runner を意図して空ける（drain。`POST /runners/vacate`）。**応答は「立てた」の
+ * 確認であって「空き終わった」ではない**ので、呼び出し側はそう言わないこと。
+ * 押す前の確認は画面の側が持つ（`routes/settings.tsx` の `VacateRunner`）。
+ */
+export function useVacateRunner() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (runnerId: string) => {
+      const result = await api.api.POST('/runners/vacate', { body: { runnerId } }).then(unwrap);
+      await mutate(KEY.runners);
+      return result;
+    },
+    [api, mutate],
+  );
+}

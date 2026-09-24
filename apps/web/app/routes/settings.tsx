@@ -15,6 +15,7 @@ import { useAuth } from '~/hooks/use-auth';
 import {
   useResetWorkspace,
   useShutdownDaemon,
+  useVacateRunner,
   type WorkspaceResetSummary,
 } from '~/hooks/mutations';
 import type { RunnerPushOutcome, RunnerSummary } from '~/lib/types';
@@ -296,11 +297,72 @@ function Runners() {
                 <Credentials runner={runner} />
               </div>
               <PushHealth runner={runner} />
+              {runner.runnerId === undefined || runner.state === 'vacating' ? null : (
+                <VacateRunner runnerId={runner.runnerId} />
+              )}
             </li>
           ))}
         </ul>
       )}
     </Card>
+  );
+}
+
+/**
+ * その器を意図して空ける（drain）。経路は `POST /runners/vacate` の1本だけで、
+ * CLI の `alteroid runners vacate` と同じ口である（片方でしかできないことを作らない）。
+ *
+ * **1回目の押下では叩かない。** 空けると、載っている委譲は確かめた停止を経て
+ * 他の器へ移る——走っているマネージャーを動かす操作なので、確認を1つ挟む。
+ * **叩いた後も「空き終わった」とは言わない**（応答は立てたことの確認だけである）。
+ * 進み具合は、この一覧の状態（空けている最中）で見える。
+ */
+function VacateRunner({ runnerId }: { runnerId: string }) {
+  const vacate = useVacateRunner();
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const [done, setDone] = useState(false);
+
+  if (done) {
+    return (
+      <p className="mt-2 text-[11px] break-words text-muted">
+        空けると立てた。まだ空き終わってはいない——載っている委譲は他の器へ移る。進み具合はこの一覧の状態で見える。
+      </p>
+    );
+  }
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+      {confirming ? (
+        <>
+          <p className="text-[11px] text-muted">
+            載っている委譲を止めて他の器へ移す。本当に空けるか。
+          </p>
+          <Button
+            size="sm"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              setError(null);
+              vacate(runnerId)
+                .then(() => setDone(true))
+                .catch((reason: unknown) => setError(reason))
+                .finally(() => setBusy(false));
+            }}
+          >
+            本当に空ける
+          </Button>
+          <Button size="sm" variant="ghost" disabled={busy} onClick={() => setConfirming(false)}>
+            やめる
+          </Button>
+        </>
+      ) : (
+        <Button size="sm" variant="ghost" onClick={() => setConfirming(true)}>
+          この器を空ける
+        </Button>
+      )}
+      <ErrorNote error={error} />
+    </div>
   );
 }
 

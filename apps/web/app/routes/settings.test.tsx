@@ -544,3 +544,59 @@ describe('デーモンを止める（ShutdownDaemon）', () => {
     expect(confirmButton.disabled).toBe(true);
   });
 });
+
+/**
+ * **器を空ける（drain）を画面から起こせる。** 経路は `POST /runners/vacate` の1本だけで、
+ * CLI の `alteroid runners vacate` と同じ口である（片方でしかできないことを作らない）。
+ * 走っているマネージャーを他の器へ動かす操作なので、確認の一手を挟むまで叩かない。
+ */
+describe('runner を空ける（vacate）', () => {
+  function renderWithVacate(runners: RunnerSummary[]) {
+    const stub = stubFetch((url) => {
+      if (url.includes('/runners/vacate')) return json({ ok: true });
+      if (url.includes('/runners')) return json({ runners, daemonRevision: DAEMON_UNKNOWN });
+      if (url.includes('/auth/providers')) return json({ providers: [] });
+      if (url.includes('/me')) return json({ status: 'open' });
+      if (url.includes('/health')) return json({ ok: true });
+      return json({});
+    });
+    const router = createMemoryRouter([{ path: '/', Component: Settings }], {
+      initialEntries: ['/'],
+    });
+    render(
+      <Providers>
+        <RouterProvider router={router} />
+      </Providers>,
+    );
+    return stub;
+  }
+
+  it('確認の一手を挟むまで叩かず、確認したら runnerId を渡して POST /runners/vacate を叩く', async () => {
+    const stub = renderWithVacate([BASE]);
+
+    fireEvent.click(await screen.findByText('この器を空ける'));
+    expect(stub.calls.some((url) => url.includes('/runners/vacate'))).toBe(false);
+
+    // やめれば戻り、叩かない。
+    fireEvent.click(screen.getByText('やめる'));
+    expect(stub.calls.some((url) => url.includes('/runners/vacate'))).toBe(false);
+
+    fireEvent.click(screen.getByText('この器を空ける'));
+    fireEvent.click(screen.getByText('本当に空ける'));
+    expect(await screen.findByText(/空けると立てた。まだ空き終わってはいない/)).toBeTruthy();
+
+    const entry = stub.entries.find((e) => e.url.includes('/runners/vacate'));
+    expect(entry).toBeDefined();
+    expect(await entry?.request?.clone().json()).toEqual({ runnerId: 'runner-primary' });
+  });
+
+  it('空けている最中の器と、名乗っていない器には出さない', async () => {
+    renderWithVacate([
+      { ...BASE, state: 'vacating' },
+      { ...BASE, label: 'http://runner-2:4518', runnerId: undefined, state: 'connecting' },
+    ]);
+
+    await screen.findByText('空けている最中');
+    expect(screen.queryByText('この器を空ける')).toBeNull();
+  });
+});
