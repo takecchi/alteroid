@@ -741,6 +741,7 @@ export {
   mcpServerConfigSchema,
   mcpServerNames,
   mcpServerNameSchema,
+  mcpServersFingerprintOf,
   mcpServersSchema,
   mcpSseServerConfigSchema,
   mcpStdioServerConfigSchema,
@@ -749,6 +750,16 @@ export {
   type McpServers,
   type StoredMcpServers,
 } from './mcp-servers.js';
+/**
+ * MCP の登録を置いて runner へ配る1本道（#325 段3。`profile-service.ts` の写し）。
+ */
+export {
+  createMcpServerService,
+  type ApplyMcpServersResult,
+  type McpServerService,
+  type McpServerServiceOptions,
+  type McpServersRunnerResult,
+} from './mcp-server-service.js';
 export {
   createProfileService,
   type ApplyProfileResult,
@@ -837,6 +848,7 @@ export {
   isRetryableRunnerError,
   RunnerFenceError,
   RunnerHttpError,
+  RunnerMcpServersUnsupportedError,
   runnerAnswerCommandSchema,
   runnerAnswerResultSchema,
   runnerCredentialFingerprintSchema,
@@ -848,12 +860,14 @@ export {
   runnerLeaseSchema,
   runnerLivenessSchema,
   runnerManagerStateSchema,
+  runnerMcpServersFingerprintSchema,
   runnerMessageCommandSchema,
   runnerPlacementResourcesSchema,
   runnerProfileFingerprintSchema,
   runnerProfileResultSchema,
   runnerResumeCommandSchema,
   runnerSetCredentialsCommandSchema,
+  runnerSetMcpServersCommandSchema,
   runnerSetProfileCommandSchema,
   runnerStartCommandSchema,
   runnerWaitingSchema,
@@ -872,6 +886,7 @@ export {
   type RunnerLegState,
   type RunnerLiveness,
   type RunnerManagerState,
+  type RunnerMcpServersFingerprint,
   type RunnerPlacementResources,
   type RunnerProfileFingerprint,
   type RunnerProfileResult,
@@ -881,6 +896,7 @@ export {
   type RunnerSource,
   type RunnerResumeCommand,
   type RunnerSetCredentialsCommand,
+  type RunnerSetMcpServersCommand,
   type RunnerSetProfileCommand,
   type RunnerStartCommand,
   type RunnerWaiting,

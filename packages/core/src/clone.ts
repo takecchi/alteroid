@@ -109,6 +109,7 @@ import {
 } from './permission-mode.js';
 import type { ProfileApplier } from './profile.js';
 import { resolveCredentialRows, type CredentialService } from './credential-service.js';
+import type { McpServerService } from './mcp-server-service.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap } from './recent.js';
 import { describeSituation, describeSituationUnavailable, readAtLabel } from './situation.js';
@@ -1152,6 +1153,15 @@ export interface CloneOptions {
    * 正本を素通りし、変更前の `#childEnv()` と同じ挙動になる。
    */
   credentialService?: CredentialService;
+  /**
+   * 人間の MCP 連携の登録を置いて runner へ配る1本道（#325 段3）。
+   *
+   * **デーモンが作った同じインスタンスを渡すこと**（`profileService` と同じ理由）。
+   * ここに渡すのは、runner が名乗るたびの降ろし直しがマネージャーのプールを通る
+   * ためである。**クローン自身はこれを読まない** —— クローンは記憶ストアの登録を
+   * セッションを組むたびに直に読む（段2。`#buildOptions`）。
+   */
+  mcpServerService?: McpServerService;
   /**
    * アカウント全体の利用状況（claude.ai 側の値）を読む口。
    *
@@ -2370,6 +2380,7 @@ class Clone implements CloneHost {
       profile,
       profileService,
       credentialService,
+      mcpServerService,
       accountUsage,
       scheduler,
       self,
@@ -2412,6 +2423,7 @@ class Clone implements CloneHost {
         stores,
         ...(profileService === undefined ? {} : { profile: profileService }),
         ...(credentialService === undefined ? {} : { credentials: credentialService }),
+        ...(mcpServerService === undefined ? {} : { mcpServers: mcpServerService }),
         // マネージャーからの報告・質問も、人間の発言と同じ受信箱を通る。
         post: (event) => this.post(event),
         runners: runners ?? createRunnerRegistry([]),

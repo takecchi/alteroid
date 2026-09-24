@@ -6,7 +6,9 @@ import type {
   RunnerEvent,
   RunnerExecutionResources,
   RunnerLegState,
+  McpServers,
   RunnerManagerState,
+  RunnerMcpServersFingerprint,
   RunnerPlacementResources,
   RunnerResumeCommand,
   RunnerProfileFingerprint,
@@ -24,10 +26,12 @@ import { RUNNER_CALL_DEADLINE_MS, RunnerUnknownError, settleWithinDeadline } fro
 import {
   DEFAULT_SSE_HEARTBEAT_MS,
   RunnerHttpError,
+  RunnerMcpServersUnsupportedError,
   buildRevisionSchema,
   reasonOf,
   reportRunnerRevision,
   runnerCredentialFingerprintSchema,
+  runnerMcpServersFingerprintSchema,
   runnerProfileFingerprintSchema,
   runnerProfileResultSchema,
   runnerAnswerResultSchema,
@@ -443,6 +447,8 @@ interface HealthBody {
   workspacePath?: unknown;
   credentials?: unknown;
   profile?: unknown;
+  /** MCP の登録の指紋（#325 段3）。古い runner は持たない。 */
+  mcpServers?: unknown;
   managers?: unknown;
   resources?: unknown;
   revision?: unknown;
@@ -1676,6 +1682,48 @@ class HttpRunner implements RunnerClient {
     const response = await this.#call('POST', '/profile', { script });
     const parsed = runnerProfileResultSchema.safeParse(await response.json());
     return parsed.success ? parsed.data : { ok: false, error: 'runner の応答を読めなかった' };
+  }
+
+  /**
+   * いま runner に置いてある MCP の登録の指紋（#325 段3）。**値は返らない。**
+   *
+   * `profile()` と同じく `/health` から拾う（新しい口を足さない）。古い runner は
+   * 欄を持たないので `undefined` になる —— 「置いていない」と区別できないが、
+   * 区別は押し込みの側（`setMcpServers` の 404）が持つ。
+   */
+  async mcpServers(): Promise<RunnerMcpServersFingerprint | undefined> {
+    const response = await this.#call('GET', '/health');
+    const body = (await response.json()) as HealthBody;
+    const parsed = runnerMcpServersFingerprintSchema.safeParse(body.mcpServers);
+    return parsed.success ? parsed.data : undefined;
+  }
+
+  /**
+   * MCP の登録を差し替える（#325 段3）。**器は作り直さない。** これから開く
+   * マネージャーのセッションから効く。
+   *
+   * **404 は「この runner は口を持たない（古い版）」に変える。** 一時障害と混ぜると、
+   * 呼び出し側（`manager.ts` の `#pushMcpServers`）が挑み直しを積み続ける。
+   * **応答の形が読めなかったときは投げる** —— 「置けた」と読んで指紋を作らない
+   * （`setProfile` は失敗を結果の形で返すが、こちらの戻り値は指紋だけなので、
+   * 読めないことを表す場所が例外しかない）。
+   */
+  async setMcpServers(servers: McpServers): Promise<RunnerMcpServersFingerprint | undefined> {
+    let response: Response;
+    try {
+      response = await this.#call('POST', '/mcp-servers', { mcpServers: servers });
+    } catch (error) {
+      if (error instanceof RunnerHttpError && error.status === 404) {
+        throw new RunnerMcpServersUnsupportedError(this.runnerId);
+      }
+      throw error;
+    }
+    const body = (await response.json()) as { ok?: unknown; mcpServers?: unknown };
+    if (body.ok !== true) throw new Error('runner の応答を読めなかった（MCP の登録）');
+    if (body.mcpServers === undefined) return undefined;
+    const parsed = runnerMcpServersFingerprintSchema.safeParse(body.mcpServers);
+    if (!parsed.success) throw new Error('runner の応答を読めなかった（MCP の登録の指紋）');
+    return parsed.data;
   }
 
   /**

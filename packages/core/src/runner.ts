@@ -36,6 +36,8 @@ import {
 import { ROTATABLE_CREDENTIAL_KEYS } from './credentials.js';
 import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
 import { excerptLine } from './excerpt.js';
+import { mcpServerNames, mcpServersFingerprintOf, parseMcpServers } from './mcp-servers.js';
+import type { McpServers } from './mcp-servers.js';
 import { placedModelTier, resolveModelTier } from './model-tier.js';
 import {
   DEFAULT_PERMISSION_MODE,
@@ -59,6 +61,7 @@ import type {
   RunnerEvent,
   RunnerLease,
   RunnerManagerState,
+  RunnerMcpServersFingerprint,
   RunnerProfileFingerprint,
   RunnerProfileResult,
   RunnerResumeCommand,
@@ -364,6 +367,25 @@ export interface RunnerHost {
   profile(): RunnerProfileFingerprint | undefined;
   /** 実行環境プロファイルを差し替える。**置く前に評価して、結果を返す。** */
   setProfile(script: string): Promise<RunnerProfileResult>;
+  /**
+   * いま置いてある MCP の登録の指紋（#325 段3）。**値は出さない。** 置いていなければ
+   * `undefined`（空の登録を置いた＝外した場合も同じ）。
+   */
+  mcpServers(): RunnerMcpServersFingerprint | undefined;
+  /**
+   * MCP の登録を差し替える（#325 段3）。**置く前に `parseMcpServers` を通す** ——
+   * 不正なら投げ、前の登録が残る。空の `{}` は「外す」。
+   *
+   * **メモリにだけ持つ。** プロファイルや鍵と違ってファイルへ落とさないのは、
+   * 走行中のプロセスが読み直す経路（`gh` シム・`BASH_ENV`）が無く、効くのは
+   * セッションを組む瞬間だけだからである。器を作り直せば消えるが、デーモンが
+   * 名乗りのたびに降ろし直す（`manager.ts` の `#pushMcpServers`）。
+   *
+   * **走っているセッションには届かない**（SDK の `mcpServers` は `query()` の
+   * 起動時に1度だけ渡る）。次に開くセッション —— 新しい委譲と、resume・開き直し ——
+   * から効く。
+   */
+  setMcpServers(input: unknown): RunnerMcpServersFingerprint | undefined;
   start(command: RunnerStartCommand): Promise<void>;
   /** `RunnerFenceError` を投げうる（世代が古い。呼び出し側は 409 へ変換すること）。 */
   resume(command: RunnerResumeCommand): Promise<void>;
@@ -458,6 +480,11 @@ class Host implements RunnerHost {
    */
   readonly #profile: ProfileApplier | undefined;
   readonly #sessions = new Map<string, RunnerSession>();
+  /**
+   * デーモンから降りてきた MCP の登録（#325 段3）と、その指紋。**置いていなければ
+   * `undefined`。** 値は `#buildOptions` へ渡す以外に外へ出さない。
+   */
+  #mcpServers: { servers: McpServers; fingerprint: RunnerMcpServersFingerprint } | undefined;
   readonly #enforceLease: boolean;
   /**
    * 制御面（認証済みの呼び）から最後に接触があった時刻。
@@ -600,6 +627,30 @@ class Host implements RunnerHost {
     return this.#profile.apply(script);
   }
 
+  mcpServers(): RunnerMcpServersFingerprint | undefined {
+    return this.#mcpServers?.fingerprint;
+  }
+
+  setMcpServers(input: unknown): RunnerMcpServersFingerprint | undefined {
+    // **検査の正本を1つにする。** デーモンの器（`McpServerStore.write`）も同じ関数を
+    // 通しているが、ここは制御面の入口なので、届いたものを信じずにもう一度通す
+    // （文言に値は載らない —— `parseMcpServers` の doc）。
+    const servers = parseMcpServers(input);
+    if (Object.keys(servers).length === 0) {
+      this.#mcpServers = undefined;
+      return undefined;
+    }
+    this.#mcpServers = {
+      servers,
+      fingerprint: {
+        sha256: mcpServersFingerprintOf(servers),
+        names: mcpServerNames(servers),
+        updatedAt: new Date().toISOString(),
+      },
+    };
+    return this.#mcpServers.fingerprint;
+  }
+
   /**
    * プロファイルを重ねる前の env。鍵まで載せた状態で評価する。
    *
@@ -640,6 +691,7 @@ class Host implements RunnerHost {
       ...(this.#credentials === undefined ? {} : { credentials: this.#credentials }),
       permissionMode: this.#permissionMode,
       profileEnv: () => this.#profile?.env() ?? {},
+      mcpServers: () => this.#mcpServers?.servers,
       onClosed: () => this.#sessions.delete(managerId),
     });
     this.#sessions.set(managerId, session);
@@ -950,6 +1002,13 @@ interface RunnerSessionOptions {
    * マネージャーだけが古い環境で走る。
    */
   profileEnv: () => Record<string, string>;
+  /**
+   * デーモンから降りてきた MCP の登録（#325 段3）。置いていなければ `undefined`。
+   *
+   * **関数で受ける**（`profileEnv` と同じ理由）。値で渡すと、セッションを作った後に
+   * 降りた登録が、そのセッションの resume・開き直しにも届かない。
+   */
+  mcpServers: () => McpServers | undefined;
   onClosed: () => void;
 }
 
@@ -965,6 +1024,7 @@ class RunnerSession {
   readonly #credentials: CredentialStore | undefined;
   readonly #permissionMode: ManagerPermissionMode;
   readonly #profileEnv: () => Record<string, string>;
+  readonly #mcpServers: () => McpServers | undefined;
   readonly #onClosed: () => void;
 
   readonly #input: SDKUserMessage[] = [];
@@ -1383,6 +1443,7 @@ class RunnerSession {
     this.#credentials = options.credentials;
     this.#permissionMode = options.permissionMode;
     this.#profileEnv = options.profileEnv;
+    this.#mcpServers = options.mcpServers;
     this.#onClosed = options.onClosed;
   }
 
@@ -1729,6 +1790,12 @@ class RunnerSession {
       // 既定は閉じる。人間が `ALTEROID_MANAGER_AUTO_MEMORY=true` を置いたときだけ
       // 開く（north_star 禁止2「方針は設定で開けられなければならない」）。
       managerAutoMemoryEnabled: resolveManagerAutoMemoryEnabled(this.#env),
+      // 人間の MCP 連携の登録（#325 段3）。**開くたびに読む** —— 走行中に降りた登録は
+      // このセッションには届かないが、次の resume・開き直しからは効く。
+      ...(() => {
+        const mcpServers = this.#mcpServers();
+        return mcpServers === undefined ? {} : { mcpServers };
+      })(),
       // 生ログはデーモンへ預ける。runner は永続化の器を持たない（記憶ストアの
       // 鍵を runner に置かないため）。
       sessionStore: this.#sessionStore(),

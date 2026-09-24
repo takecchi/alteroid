@@ -20,6 +20,7 @@ import {
   createLocalRunner,
   createProfileApplier,
   createCredentialService,
+  createMcpServerService,
   createProfileService,
   createProfileVessel,
   createRunnerRegistry,
@@ -1310,6 +1311,15 @@ export async function main(): Promise<void> {
   const profileService = createProfileService({ stores, applier: profile, runners });
 
   /**
+   * 人間の MCP 連携の登録を置いて runner へ配る1本道（#325 段3）。**インスタンスは1つだけ。**
+   *
+   * 人間の口（`PUT /mcp-servers`）と、runner が名乗り直したときの降ろし直し
+   * （`ManagerPool` の `#pushMcpServers`）は同じものを書き換えるので、別インスタンスを
+   * 持つと直列化の意味が消える（`profileService` と同じ理由）。
+   */
+  const mcpServerService = createMcpServerService({ stores, runners });
+
+  /**
    * マネージャーへ降ろす環境変数（名前→値）の1本道。**インスタンスは1つだけ。**
    *
    * 人間の口（`PUT /credentials`）と、runner が名乗り直したときの降ろし直し
@@ -1607,6 +1617,7 @@ export async function main(): Promise<void> {
     profile,
     profileService,
     credentialService,
+    mcpServerService,
     self,
     // 現役のトークン。**値ではなく関数**——構築時に凍らせない（`CloneOptions` の doc）。
     credentials: () => agentTokenHolder.values(),
@@ -2149,6 +2160,7 @@ export async function main(): Promise<void> {
     auth: { plan: authPlan },
     profile: profileService,
     credentials: credentialService,
+    mcpServers: mcpServerService,
     tokens: tokenPoolService,
     clearSessionLog: storage.clearSessionLog,
   });

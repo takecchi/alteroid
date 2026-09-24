@@ -56,7 +56,7 @@ export const CLAUDE_PROVIDER: AgentProvider = {
     resume: true, // buildCloneSessionOptions / buildManagerSessionOptions の Options.resume
     sessionLog: true, // buildCloneSessionOptions / buildManagerSessionOptions の Options.sessionStore
     subagents: true, // buildManagerSessionOptions の Options.agents（runner.ts の WORKER_AGENT_NAME）
-    mcpServers: true, // Options.settingSources + インプロセス MCP（tools.ts の createCloneMcpServer）+ 記憶ストアの登録（cloneMcpServers。#325 段2。マネージャー・作業者へは段3）
+    mcpServers: true, // Options.settingSources + インプロセス MCP（tools.ts の createCloneMcpServer）+ 記憶ストアの登録（クローンは cloneMcpServers。#325 段2 / マネージャー・作業者は buildManagerSessionOptions の mcpServers。段3）
     childUser: true, // buildManagerSessionOptions の Options.spawnClaudeCodeProcess（runner.ts の #spawnAsChildUser）
     usage: true, // clone.ts / runner.ts の #recordUsage（result.modelUsage）
     partialMessages: true, // buildCloneSessionOptions の Options.includePartialMessages
@@ -87,8 +87,10 @@ export const CLAUDE_PROVIDER: AgentProvider = {
  * `#childEnv()`）と同じである。走行中に差し替える口（SDK の
  * `Query.setMcpServers`）はあるが、段2 では使っていない。
  *
- * **マネージャー・作業者（`buildManagerSessionOptions`）にはまだ渡していない**
- * —— runner が名乗るたびにデーモンが降ろす配線が要り、#325 の段3 で足す。
+ * **マネージャー・作業者（`buildManagerSessionOptions`）へは別の経路で届く**（#325 段3）
+ * —— runner は記憶ストアを読めないので、デーモンが runner の名乗りのたびに降ろし、
+ * runner がそれを同関数の `mcpServers` へ渡す。あちらには自作のインプロセス MCP が
+ * 無いので、この関数（自作を必ず勝たせる合成）は通さない。
  */
 export function cloneMcpServers(
   own: McpServerConfig,
@@ -381,6 +383,18 @@ export interface ManagerSessionOptionsRequest {
    * （#1189 の判断）。
    */
   managerAutoMemoryEnabled: boolean;
+  /**
+   * 人間の MCP 連携の登録（記憶ストアの `McpServerStore` の中身。#325 段3）。
+   *
+   * **runner は記憶ストアを読めない**ので、デーモンが runner の名乗り（`hello`）の
+   * たびに降ろしたもの（`runner.ts` の `Host#setMcpServers`）がここへ来る。省略・
+   * 空なら `mcpServers` を `Options` に載せない（段3 以前と同じく `.mcp.json` だけで走る）。
+   *
+   * **いつ効くか: このセッションを組むときの1度だけ。** SDK の `mcpServers` は
+   * `query()` の起動時に渡るので、走行中のセッションに後から降りた登録は届かない
+   * （次に開くセッション —— 新しい委譲と、resume・開き直し —— から効く）。
+   */
+  mcpServers?: Readonly<Record<string, McpServerConfig>>;
 }
 
 /** マネージャーへ渡す `Options`。組み立ての知識は `runner.ts` の旧 `#buildOptions` から移した。 */
@@ -406,6 +420,7 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     onStop,
     onPreToolUse,
     managerAutoMemoryEnabled,
+    mcpServers,
   } = request;
 
   return {
@@ -425,6 +440,26 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
       append: systemPromptAppend,
     },
     // 作業者層の本体はこの1個だけ。`tools` を書かない = 親の全ツールを継承。
+    //
+    // **`mcpServers` も書かない = 親（マネージャー）の MCP 接続を継承する**（#325 段3）。
+    // 根拠は2つ（`@anthropic-ai/claude-agent-sdk@0.3.281`）:
+    //
+    // [sdk-verbatim AgentDefinition.tools]
+    // Array of allowed tool names. If omitted, inherits all tools from parent.
+    //
+    // ——MCP の道具は親の道具の一部として継承される（同じ型の `disallowedTools` の doc が
+    // 「MCP server-level specs (mcp__server, mcp__server__*, mcp__*) remove every tool
+    // from the named server」と書いており、MCP の道具が継承された集合に入っている前提で
+    // ある）。`AgentDefinition.mcpServers` 自体には doc が無いので、同梱の CLI バイナリ
+    // （`claude-agent-sdk-linux-x64@0.3.281`）の実装文字列も読んだ: 定義の
+    // `mcpServers` が空なら親の接続（`clients`）をそのまま返し、在っても
+    // `clients:[...親, ...agent 専用]` と**親に足す**形である。⟹ 省けば親と同じ接続を持つ。
+    //
+    // **名前で書き足さない。** 同じ実装で、文字列の指定は「disk config」から引き直す
+    // 形（`.mcp.json` 等）で、`Options.mcpServers` で渡した登録を指すとは限らない
+    // （見つからなければ「MCP server not found」で黙って落ちる）。書けば、継承で
+    // 既に届いているものを二重に起こすか、届かない指定を足すかのどちらかになる。
+    // **⚠️ 実機では確かめていない**（型の doc とバイナリの文字列を読んだだけ）。
     agents: {
       [workerAgentName]: {
         description:
@@ -439,11 +474,17 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     cwd,
     // 人間が使っているのと同じ設定・同じ .mcp.json を渡す（下向きは同じものが見える）
     //
-    // **⚠️ 記憶ストアに置いた MCP の登録（`McpServerStore`）はここへはまだ渡していない。**
-    // Railway では `.mcp.json` の置き場が消えるので、この層の連携はいまも0本である。
-    // runner が名乗るたびにデーモンが降ろし、ここの `mcpServers` へ渡す配線は
-    // #325 の段3（クローン側は段2 で `cloneMcpServers` が渡している）。
+    //
+    // **記憶ストアに置いた MCP の登録はこれとは別に `mcpServers` で渡す**（#325 段3。
+    // 下）。Railway では `.mcp.json` の置き場が再デプロイで消えるので、こちらだけでは
+    // この層の連携が0本になる。
     settingSources: ['user', 'project', 'local'],
+    // **空なら載せない。** 空の `{}` を渡しても SDK 上は同じはずだが、段3 以前の
+    // `Options` と1文字も変えない形にしておく（登録を置いていない構成の挙動を
+    // この変更で動かさない）。
+    ...(mcpServers === undefined || Object.keys(mcpServers).length === 0
+      ? {}
+      : { mcpServers: { ...mcpServers } }),
     // 参照系は `.claude/skills/` に置いてある（AGENTS.md「書く先を決める」）。
     // **`'all'` を明示する。** 省くと SDK 側は何も設定せず CLI の既定に委ねる
     // ことになり、器によって引けるものが変わる。名前の列挙で絞らないのは

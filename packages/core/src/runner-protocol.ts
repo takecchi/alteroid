@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { excerptLine } from './excerpt.js';
+import type { McpServers } from './mcp-servers.js';
 import { type RunnerRevisionReport } from './revision.js';
 import { contextUsageObservationSchema, jobStatusSchema } from './schema.js';
 import { systemErrorFactsSchema } from './system-error.js';
@@ -289,6 +290,53 @@ export const runnerProfileResultSchema = z.object({
 });
 
 export type RunnerProfileResult = z.infer<typeof runnerProfileResultSchema>;
+
+/**
+ * 人間の MCP 連携の登録（`.mcp.json` の `mcpServers` と同じ形）の差し替え（#325 段3）。
+ *
+ * **なぜ命令として降ろすのか。** プロファイルと同じ理由である。runner に記憶
+ * ストアを読ませない境界がある以上、runner は自分で取りに行けない（M4 受け入れ
+ * 基準3）。そして Railway には volume が無いので、`/workspace/.mcp.json` を器に
+ * 置いても再デプロイで消える（#325 本文）。⟹ デーモンが名乗り（`hello`）のたびに
+ * 降ろし直す。
+ *
+ * **この層では形を検めない（`z.unknown()` の袋のまま運ぶ）。** 検査の正本は
+ * `mcp-servers.ts` の `parseMcpServers` で、受け取った runner（`Host#setMcpServers`）
+ * がそれを通す。ここで同じ検査を書くと2つ目の正本になり、`runner-protocol.ts` から
+ * `mcp-servers.ts`（→ `tools.ts`）への読み込みが増えて、この小さな共有モジュールの
+ * 依存が膨らむ。**不正なら runner が 400 を返し、前の登録が残る**（黙って捨てない）。
+ *
+ * **古い runner（この口を持たない版）は 404 を返す。** デーモン側は
+ * `RunnerMcpServersUnsupportedError` に変えて「この runner には降ろせない（版が古い）」と
+ * 記録し、挑み直しはしない（`manager.ts` の `#pushMcpServers`）。**新しい命令が
+ * 古いデーモン・古い runner の組を壊すことは無い** —— 古いデーモンはこの口を叩かず、
+ * 新しい runner は叩かれなければ登録を持たない（＝段3 以前と同じく `.mcp.json`
+ * だけで走る）だけである。
+ */
+export const runnerSetMcpServersCommandSchema = z.object({
+  /** 名前 → 登録。空の `{}` は「登録を外す」。 */
+  mcpServers: z.record(z.string(), z.unknown()),
+});
+
+export type RunnerSetMcpServersCommand = z.infer<typeof runnerSetMcpServersCommandSchema>;
+
+/**
+ * runner に置いてある MCP の登録の同一性。**値（`env` / `headers` / `args`）は返さない。**
+ *
+ * **名前は返す。** 名前は道具名（`mcp__<名前>__…`）としてマネージャーの文脈にも
+ * 出るもので秘密ではなく、`PUT /mcp-servers` の応答・日誌も名前までは書いている。
+ * 「どの連携が届いているか」を指紋だけで言わせると、人間は指紋を突き合わせる
+ * 以外に確かめる手段を持たない。
+ */
+export const runnerMcpServersFingerprintSchema = z.object({
+  /** 正規化した登録の sha256（16進）先頭12桁（`mcpServersFingerprintOf`）。 */
+  sha256: z.string(),
+  names: z.array(z.string()),
+  /** runner が置いた時刻。 */
+  updatedAt: z.string(),
+});
+
+export type RunnerMcpServersFingerprint = z.infer<typeof runnerMcpServersFingerprintSchema>;
 
 /**
  * 実行環境の資源。**フィールド名を `capacity` にしないのは意図である。**
@@ -1522,6 +1570,25 @@ export class RunnerHttpError extends Error {
  * 古い世代の命令が新しい命令へ置き換わらずに延々と挑み直される。409 は
  * 「同じものを投げ直しても同じ答えが返る」側（4xx）として読める。
  */
+/**
+ * 相手の runner が MCP の登録を受け取る口（`POST /mcp-servers`）を持たない（#325 段3）。
+ *
+ * **古い版の runner である**（口が無いので 404 が返る）。一時障害ではないので、
+ * 挑み直しても同じ答えしか返らない —— デーモン側（`manager.ts` の
+ * `#pushMcpServers`）はこれを受けたら記録だけして挑み直しの予約に数えない。
+ * 数えると、runner を上げるまで最大 `PUSH_RETRY_MAX_MS` ごとに同じ失敗が日誌へ
+ * 積まれ続ける。runner を上げれば次の名乗りで降りる。
+ */
+export class RunnerMcpServersUnsupportedError extends Error {
+  constructor(runnerId: string) {
+    super(
+      `${runnerId} は MCP の登録を受け取る口を持たない（古い版の runner。` +
+        'この runner で起こすマネージャー・作業者は記憶ストアの登録を持たずに走る。runner を上げれば次の名乗りで降りる）',
+    );
+    this.name = 'RunnerMcpServersUnsupportedError';
+  }
+}
+
 export class RunnerFenceError extends Error {
   readonly managerId: string;
   /** runner がいま覚えている世代。 */
@@ -2084,6 +2151,30 @@ export interface RunnerClient {
    * 消えるので、降ろし直さないと「再デプロイしたら鍵が消えた」が起きる。
    */
   setProfile(script: string): Promise<RunnerProfileResult>;
+  /**
+   * いま runner に置いてある MCP の登録の指紋（#325 段3）。**値は返らない。**
+   * 置いていなければ `undefined`。
+   *
+   * **省略できる**（`resources` と同じ理由）。持たない実装（テストの偽物など）に
+   * 「置いていない」という嘘を書かせない —— 呼び出し側は、口が無いことを
+   * 「確かめられなかった」として扱う。
+   */
+  mcpServers?(): Promise<RunnerMcpServersFingerprint | undefined>;
+  /**
+   * MCP の登録を差し替える（#325 段3）。空の `{}` は「登録を外す」。戻り値は置いた
+   * 後の指紋（外したなら `undefined`）。
+   *
+   * **runner が繋ぎ直すたびに降ろし直すこと**（`setProfile` と同じ）。runner は
+   * 登録を**プロセスのメモリにしか持たない**ので、器を作り直せば消える。
+   *
+   * **効くのはこれから開くマネージャーのセッションから**（SDK の `mcpServers` は
+   * `query()` の起動時に1度だけ渡る）。走っているセッションには届かない。
+   *
+   * **口を持たない相手（古い runner）には `RunnerMcpServersUnsupportedError` を
+   * 投げる。** 省略できるのは `mcpServers` と同じ理由で、省略した実装へは
+   * 降ろさない（押し込みを試みたことにもしない）。
+   */
+  setMcpServers?(servers: McpServers): Promise<RunnerMcpServersFingerprint | undefined>;
   /**
    * 口を閉じる。
    *

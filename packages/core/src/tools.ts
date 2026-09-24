@@ -10671,6 +10671,14 @@ export function createCloneTools(context: ToolContext) {
           if (fingerprints === true && runner.profile !== undefined) {
             lines.push(`  プロファイルの指紋: ${runner.profile.sha256}`);
           }
+          // **MCP の登録（#325 段3）は名前も出す**（名前は秘密ではない。値は運んでいない —
+          // `runnerMcpServersFingerprintSchema` の doc）。無いことは「置いていない・口を持たない・
+          // 訊けなかった」のどれとも言えないので、行を作らない（区別は直近の押し込みの行が持つ）。
+          if (fingerprints === true && runner.mcpServers !== undefined) {
+            lines.push(
+              `  MCP の登録: ${excerptLine(runner.mcpServers.names.join(', '), RUNNER_CREDENTIAL_FINGERPRINT_EXCERPT)}（指紋 ${runner.mcpServers.sha256}）`,
+            );
+          }
           /*
            * **押し込みの結果（`pushHealth`）は `fingerprints` を見ない。**
            * `credentials`/`profile` と違い runner への新しい往復を払わない
@@ -10690,6 +10698,7 @@ export function createCloneTools(context: ToolContext) {
               outcomeText('プロファイル', runner.pushHealth.profile),
               outcomeText('環境変数', runner.pushHealth.credentials),
               outcomeText('認証トークン', runner.pushHealth.agentToken),
+              outcomeText('MCP の登録', runner.pushHealth.mcpServers),
             ].filter((line): line is string => line !== undefined);
             if (pushLines.length > 0) {
               lines.push(`  直近の押し込み: ${pushLines.join(' / ')}`);

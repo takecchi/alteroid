@@ -20,6 +20,7 @@ import {
   runnerCredentialFingerprintSchema,
   runnerCredentialSchema,
   runnerLivenessSchema,
+  runnerMcpServersFingerprintSchema,
   runnerProfileFingerprintSchema,
   scheduleSpecSchema,
   tokenRotationPolicySchema,
@@ -1107,6 +1108,8 @@ const runnerPushHealthSchema = z.object({
   profile: runnerPushOutcomeSchema.optional(),
   credentials: runnerPushOutcomeSchema.optional(),
   agentToken: runnerPushOutcomeSchema.optional(),
+  /** 人間の MCP 連携の登録（#325 段3）。口を持たない古い runner へは `failed` で残る。 */
+  mcpServers: runnerPushOutcomeSchema.optional(),
 });
 
 const runnerSummarySchema = z.object({
@@ -1316,11 +1319,36 @@ export const mcpServersUpdateResponseSchema = z.object({
   names: z.array(z.string()),
   updatedAt: z.string(),
   /**
-   * いつから効くか。**クローンの次のセッションから**であって、走行中の
-   * セッションには届かない（`claude-provider.ts` の `cloneMcpServers` の doc）。
-   * マネージャー・作業者へはまだ降ろしていない（#325 段3）。
+   * 保存した登録の指紋（#325 段3。`mcpServersFingerprintOf`）。各 runner の
+   * `mcpServers.sha256` と突き合わせれば、届いた版が同じかが値を見ずに言える。
+   * 空の登録（外した）なら欠ける。
+   */
+  sha256: z.string().optional(),
+  /**
+   * いつから効くか。**クローンの次のセッションから・マネージャーは次に開く
+   * セッションから**であって、走行中のセッションには届かない
+   * （`claude-provider.ts` の `cloneMcpServers` / `buildManagerSessionOptions` の doc）。
    */
   appliesFrom: z.string(),
+  /**
+   * 各 runner へ降ろした結果（#325 段3。`PUT /profile` の `runners` と同じ位置づけ）。
+   * **名前と指紋だけで、値は載せない。** 保存は済んでいるので、ここに失敗が
+   * 在っても 200 である —— 失敗した runner へは次の名乗り（`hello`）で降ろし直す。
+   */
+  runners: z.array(
+    z.object({
+      runnerId: z.string(),
+      ok: z.boolean(),
+      /** 置いた後の指紋と名前。外した（空の登録）なら欠ける。 */
+      mcpServers: runnerMcpServersFingerprintSchema.optional(),
+      /**
+       * 相手が MCP の登録を受け取る口を持たない古い runner だった。一時障害と
+       * 区別する（疑う先が「待てば直る」ではなく「runner の版」だから）。
+       */
+      unsupported: z.literal(true).optional(),
+      error: z.string().optional(),
+    }),
+  ),
 });
 
 // ---------------------------------------------------------------------------

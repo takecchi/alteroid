@@ -8487,6 +8487,22 @@
                                   }
                                 },
                                 "required": ["status", "at"]
+                              },
+                              "mcpServers": {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["ok", "failed"]
+                                  },
+                                  "at": {
+                                    "type": "string"
+                                  },
+                                  "error": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["status", "at"]
                               }
                             }
                           }
@@ -8911,7 +8927,7 @@
         "operationId": "getMcpServers",
         "tags": ["mcp-servers"],
         "summary": "MCP サーバの登録（.mcp.json 相当）を読む",
-        "description": "人間の MCP 連携の登録を記憶ストアから返す。クローンの本セッションと蒸留に（次のセッションから）効く。マネージャー・作業者へはまだ降ろしていない（#325 段3）。",
+        "description": "人間の MCP 連携の登録を記憶ストアから返す。クローンの本セッションと蒸留に（次のセッションから）、マネージャー・作業者に（runner へ降ろしたうえで、次に開くセッションから）効く。",
         "responses": {
           "200": {
             "description": "登録そのもの（値を含む）。置かれていなければ空の `mcpServers`。",
@@ -9064,10 +9080,10 @@
         "operationId": "putMcpServers",
         "tags": ["mcp-servers"],
         "summary": "MCP サーバの登録を差し替える",
-        "description": "`.mcp.json` をそのまま貼れる形（`{ \"mcpServers\": { … } }`）。置く前に形を検査し、通らなければ保存しない（前のものが残る）。「alteroid」は alteroid 自身の MCP サーバの名前なので使えない。",
+        "description": "`.mcp.json` をそのまま貼れる形（`{ \"mcpServers\": { … } }`）。置く前に形を検査し、通らなければ保存しない（前のものが残る）。保存したら繋がっている runner へ降ろし、runner ごとの結果（名前と指紋だけ）を返す。「alteroid」は alteroid 自身の MCP サーバの名前なので使えない。",
         "responses": {
           "200": {
-            "description": "差し替えた後の登録の名前（値は返さない）。",
+            "description": "差し替えた後の登録の名前と指紋、runner ごとの配布結果（値は返さない）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -9082,11 +9098,54 @@
                     "updatedAt": {
                       "type": "string"
                     },
+                    "sha256": {
+                      "type": "string"
+                    },
                     "appliesFrom": {
                       "type": "string"
+                    },
+                    "runners": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "runnerId": {
+                            "type": "string"
+                          },
+                          "ok": {
+                            "type": "boolean"
+                          },
+                          "mcpServers": {
+                            "type": "object",
+                            "properties": {
+                              "sha256": {
+                                "type": "string"
+                              },
+                              "names": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "updatedAt": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["sha256", "names", "updatedAt"]
+                          },
+                          "unsupported": {
+                            "type": "boolean",
+                            "const": true
+                          },
+                          "error": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["runnerId", "ok"]
+                      }
                     }
                   },
-                  "required": ["names", "updatedAt", "appliesFrom"]
+                  "required": ["names", "updatedAt", "appliesFrom", "runners"]
                 }
               }
             }

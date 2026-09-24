@@ -6,6 +6,7 @@ import type {
   ChatStreamEvent,
   CloneHost,
   CredentialService,
+  McpServerService,
   Exchange,
   JobStatus,
   JournalEntry,
@@ -22,6 +23,7 @@ import type {
 import {
   MCP_SERVER_NAME,
   mcpServerNames,
+  mcpServersFingerprintOf,
   RESERVED_SCHEDULE_KINDS,
   ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS,
   ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT,
@@ -291,6 +293,14 @@ export interface AppDeps {
    * 残る。
    */
   credentials?: CredentialService;
+  /**
+   * 人間の MCP 連携の登録を置いて runner へ配る1本道（#325 段3）。
+   *
+   * **マネージャーのプール（名乗りのたびの降ろし直し）と同じインスタンスを渡すこと**
+   * （`profile` と同じ理由）。渡さなければ `PUT /mcp-servers` は保存だけして
+   * runner へは配らない（`runners: []`）—— 配らなかったことは応答から分かる。
+   */
+  mcpServers?: McpServerService;
   /**
    * 認証トークンのプール（Issue #393「PR1 プールの器」）。**回さない**——ここが
    * 生やすのは器の読み書きの口だけで、検知・切替は無い。
@@ -4600,7 +4610,8 @@ export function createApp(deps: AppDeps) {
         summary: 'MCP サーバの登録（.mcp.json 相当）を読む',
         description:
           '人間の MCP 連携の登録を記憶ストアから返す。クローンの本セッションと蒸留に' +
-          '（次のセッションから）効く。マネージャー・作業者へはまだ降ろしていない（#325 段3）。',
+          '（次のセッションから）、マネージャー・作業者に（runner へ降ろしたうえで、次に開く' +
+          'セッションから）効く。',
         responses: {
           200: {
             description: '登録そのもの（値を含む）。置かれていなければ空の `mcpServers`。',
@@ -4623,6 +4634,17 @@ export function createApp(deps: AppDeps) {
     /**
      * 登録を差し替える（全文置換。空の `mcpServers` は「登録を外す」）。
      *
+     * **runner へも降ろす（#325 段3）。** 保存したあと、いま繋がっている runner の
+     * すべてへ配り、結果を runner ごとに返す（`PUT /profile` と同じ形。**名前と指紋
+     * だけで、値は返さない**）。繋がっていない runner・配り損ねた runner へは、次の
+     * 名乗り（`hello`）でマネージャーのプールが降ろし直す（`#pushMcpServers`）。
+     * **保存と配布は同じ列を通す**（`mcp-server-service.ts`）—— 名乗り直しの降ろし直しと
+     * 混ざって古い登録で上書きしないため。
+     *
+     * **マネージャーには、次に開くセッションから効く**（新しい委譲と、resume・開き直し）。
+     * 走っているマネージャーのセッションには届かない（`buildManagerSessionOptions` の
+     * `mcpServers` の doc）。
+     *
      * **いつ効くか: クローンの次のセッションから。** SDK の `mcpServers` は
      * セッションを組むとき（`clone.ts` の `#buildOptions`）に1度だけ渡るので、
      * 走行中のセッションには届かない —— 実行環境プロファイルがクローンへ効く
@@ -4641,11 +4663,12 @@ export function createApp(deps: AppDeps) {
         summary: 'MCP サーバの登録を差し替える',
         description:
           '`.mcp.json` をそのまま貼れる形（`{ "mcpServers": { … } }`）。置く前に形を' +
-          '検査し、通らなければ保存しない（前のものが残る）。' +
+          '検査し、通らなければ保存しない（前のものが残る）。保存したら繋がっている runner へ' +
+          '降ろし、runner ごとの結果（名前と指紋だけ）を返す。' +
           `「${MCP_SERVER_NAME}」は alteroid 自身の MCP サーバの名前なので使えない。`,
         responses: {
           200: {
-            description: '差し替えた後の登録の名前（値は返さない）。',
+            description: '差し替えた後の登録の名前と指紋、runner ごとの配布結果（値は返さない）。',
             content: {
               'application/json': { schema: resolver(mcpServersUpdateResponseSchema) },
             },
@@ -4673,9 +4696,33 @@ export function createApp(deps: AppDeps) {
       })),
       async (c) => {
         const previous = await deps.stores.mcpServers.read();
-        const stored = await deps.stores.mcpServers.write(c.req.valid('json').mcpServers);
-        const names = mcpServerNames(stored.mcpServers);
+        const servers = c.req.valid('json').mcpServers;
+        // **1本道を通す**（渡されていない構成＝テストや配布先を持たない器では、
+        // 保存だけして配らない。配らなかったことは `runners: []` で見える）。
+        const applied =
+          deps.mcpServers === undefined
+            ? await (async () => {
+                const stored = await deps.stores.mcpServers.write(servers);
+                const storedNames = mcpServerNames(stored.mcpServers);
+                return {
+                  updatedAt: stored.updatedAt,
+                  names: storedNames,
+                  ...(storedNames.length === 0
+                    ? {}
+                    : { sha256: mcpServersFingerprintOf(stored.mcpServers) }),
+                  runners: [],
+                };
+              })()
+            : await deps.mcpServers.apply(servers);
+        const names = applied.names;
         const before = previous === null ? [] : mcpServerNames(previous.mcpServers);
+        // 配布の結果も日誌へ（名前と成否だけ。値は書かない）。
+        const delivered = applied.runners
+          .map(
+            (r) =>
+              `${r.runnerId}=${r.ok ? 'ok' : r.unsupported === true ? '口なし（古い runner）' : '失敗'}`,
+          )
+          .join(', ');
         await deps.stores.journal.append({
           type: 'decision',
           decision:
@@ -4685,13 +4732,18 @@ export function createApp(deps: AppDeps) {
           grounds:
             `${describeActor(c.get('principal'))}（PUT /mcp-servers）。` +
             `前の登録: ${before.length === 0 ? 'なし' : before.join(', ')}。` +
-            '値は書かない（鍵が入りうる）。クローンの次のセッションから効く。',
+            '値は書かない（鍵が入りうる）。クローンの次のセッションから効く。' +
+            `runner への配布: ${delivered.length === 0 ? '配る先なし' : delivered}` +
+            '（マネージャーには次に開くセッションから効く）。',
         });
         return c.json(
           mcpServersUpdateResponseSchema.parse({
             names,
-            updatedAt: stored.updatedAt,
-            appliesFrom: 'クローンの次のセッションから（マネージャー・作業者へは未配布。#325 段3）',
+            updatedAt: applied.updatedAt,
+            ...(applied.sha256 === undefined ? {} : { sha256: applied.sha256 }),
+            appliesFrom:
+              'クローンの次のセッションから。マネージャー・作業者は、配布できた runner で次に開くセッションから',
+            runners: applied.runners,
           }),
         );
       },

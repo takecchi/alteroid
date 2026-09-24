@@ -36,6 +36,7 @@ import type { ManagerActivityInput } from './manager-activity.js';
 import { codeSpan } from './markdown-span.js';
 import { JournalFoldWindow, foldedRunText } from './journal-fold.js';
 import type { CredentialService } from './credential-service.js';
+import type { McpServerService } from './mcp-server-service.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap, type RecentMap } from './recent.js';
 import { reportRunnerRevision, resolveBuildRevision } from './revision.js';
@@ -45,6 +46,7 @@ import {
   isFencedRunnerError,
   isRetryableRunnerError,
   RunnerHttpError,
+  RunnerMcpServersUnsupportedError,
 } from './runner-protocol.js';
 import type {
   RunnerClient,
@@ -53,6 +55,7 @@ import type {
   RunnerExecutionResources,
   RunnerLegState,
   RunnerLiveness,
+  RunnerMcpServersFingerprint,
   RunnerProfileFingerprint,
   RunnerRegistry,
   RunnerRevisionStatus,
@@ -927,6 +930,14 @@ export interface RunnerPushHealth {
   profile?: RunnerPushOutcome;
   credentials?: RunnerPushOutcome;
   agentToken?: RunnerPushOutcome;
+  /**
+   * 人間の MCP 連携の登録（#325 段3。`#pushMcpServers`）。
+   *
+   * **口を持たない古い runner へは `status: 'failed'` で記録するが、挑み直しには
+   * 数えない**（`RunnerMcpServersUnsupportedError` の doc。`#settlePushRetry`）。
+   * 理由の文言（`error`）がその旨を名乗る。
+   */
+  mcpServers?: RunnerPushOutcome;
 }
 
 /**
@@ -973,6 +984,12 @@ export interface RunnerOverview {
   credentials?: RunnerCredentialFingerprint[];
   /** 置かれている実行環境プロファイルの指紋。`fingerprints: true` を渡したときだけ載る。 */
   profile?: RunnerProfileFingerprint;
+  /**
+   * 置かれている MCP の登録の指紋と名前（#325 段3）。`fingerprints: true` を渡した
+   * ときだけ載る。**値は運ばない。** 置いていない・口を持たない・訊けなかった場合は
+   * 無い（3つを区別する材料は `pushHealth.mcpServers` のほうにある）。
+   */
+  mcpServers?: RunnerMcpServersFingerprint;
   /**
    * 実行環境の資源。`resources: true` を渡したときだけ載る（#315。`fingerprints`
    * と同じ opt-in の形——`ManagerPool.runners()` の doc を参照）。
@@ -2064,6 +2081,14 @@ export interface ManagerPoolOptions {
    * **降ろし直しも更新（`apply`）と同じ列を通す。**
    */
   credentials?: CredentialService;
+  /**
+   * 人間の MCP 連携の登録の1本道（#325 段3）。
+   *
+   * **プロファイル・環境変数とまったく同じ理由でここに要る** — runner は記憶
+   * ストアを読めないので、器が作り直されたときに降ろすのはデーモンの責任である。
+   * **降ろし直しも更新（`apply`）と同じ列を通す。**
+   */
+  mcpServers?: McpServerService;
   /**
    * いまの時刻（既定は `Date.now`）。**貸し出し期限の判定のために口を開けてある。**
    *
@@ -3593,6 +3618,13 @@ class Pool implements ManagerPool {
   readonly #runners: RunnerRegistry;
   readonly #profile: ProfileService | undefined;
   readonly #credentials: CredentialService | undefined;
+  readonly #mcpServers: McpServerService | undefined;
+  /**
+   * MCP の登録を受け取る口を持たないと分かった runner（#325 段3）。**挑み直しの
+   * 予約から外すためだけに持つ**（`#settlePushRetry`）。名乗り直しのたびに
+   * `#pushMcpServers` がもう一度試すので、runner を上げれば自然に外れる。
+   */
+  readonly #mcpServersUnsupported = new Set<string>();
   readonly #records = new Map<string, ManagerRecord>();
   /**
    * いまの時刻。**器の時計を直に読まない**（テストが判定の時刻を持てるようにする）。
@@ -4072,6 +4104,7 @@ class Pool implements ManagerPool {
     runners,
     profile,
     credentials,
+    mcpServers,
     now,
     leaseTtlMs,
     withheldReportFlushMs,
@@ -4087,6 +4120,7 @@ class Pool implements ManagerPool {
     this.#runners = runners;
     this.#profile = profile;
     this.#credentials = credentials;
+    this.#mcpServers = mcpServers;
     this.#now = now ?? (() => Date.now());
     this.#leaseTtlMs = leaseTtlMs ?? LEASE_TTL_MS;
     this.#withheldReportFlushMs = withheldReportFlushMs ?? resolveWithheldReportFlushMs();
@@ -4941,12 +4975,14 @@ class Pool implements ManagerPool {
         const client = entry.runnerId === undefined ? undefined : open?.get(entry.runnerId);
         const pushHealth =
           entry.runnerId === undefined ? undefined : this.#pushHealth.get(entry.runnerId);
-        const [credentials, profile] =
+        const [credentials, profile, mcpServers] =
           client === undefined || !options.fingerprints
-            ? [undefined, undefined]
+            ? [undefined, undefined, undefined]
             : await Promise.all([
                 client.credentials().catch(() => undefined),
                 client.profile().catch(() => undefined),
+                // 口を持たない実装・古い runner では `undefined`（#325 段3）。
+                client.mcpServers?.().catch(() => undefined),
               ]);
         // **`resources` 自体が `undefined` = 訊けなかった。** `resources` が在って
         // `pids` が無い = 訊けたが読めなかった。この2つを区別するために、失敗も
@@ -4994,6 +5030,7 @@ class Pool implements ManagerPool {
           managers: entry.runnerId === undefined ? [] : (byRunner.get(entry.runnerId) ?? []),
           ...(credentials === undefined ? {} : { credentials }),
           ...(profile === undefined ? {} : { profile }),
+          ...(mcpServers === undefined ? {} : { mcpServers }),
           ...(resources === undefined ? {} : { resources }),
           revision: entry.revision,
           // **`credentials`/`profile` と違い、`fingerprints` の要否を見ない。**
@@ -6855,6 +6892,47 @@ class Pool implements ManagerPool {
   }
 
   /**
+   * 名乗ってきた runner へ、いま正本に在る MCP の登録を降ろす（#325 段3）。
+   *
+   * **`#pushProfile` / `#pushCredentials` と同じ位置・同じ理由・同じ倒れ方である。**
+   * runner は記憶ストアを読めないので降ろすのはデーモンの責任で、失敗しても委譲は
+   * 止めず、降りていないことは日誌に残す（黙って連携0本で走ると、「連携が
+   * 届いていない」のか「連携そのものが壊れている」のかを誰も切り分けられない）。
+   * **別の呼びにしてあるのも同じ理由**（片方が落ちても片方は降りるべき）。
+   *
+   * **日誌には値を書かない。** 失敗の理由は runner の文言をそのまま運ぶが、その
+   * 文言は `parseMcpServers` が値を載せない形で作っている（欄の位置だけ）。
+   *
+   * **古い runner（口を持たない）は挑み直しに数えない**（`#mcpServersUnsupported`）。
+   */
+  async #pushMcpServers(runner: RunnerClient): Promise<void> {
+    if (this.#stopped || this.#mcpServers === undefined) return;
+    const runnerId = runner.runnerId;
+    try {
+      // **更新と同じ列に入れる**（`#pushProfile` と同じ）。
+      await this.#mcpServers.syncRunner(runner);
+      this.#mcpServersUnsupported.delete(runnerId);
+      this.#notePushOutcome(runnerId, 'mcpServers', { status: 'ok', at: this.#nowIso() });
+    } catch (error) {
+      const unsupported = error instanceof RunnerMcpServersUnsupportedError;
+      if (unsupported) this.#mcpServersUnsupported.add(runnerId);
+      else this.#mcpServersUnsupported.delete(runnerId);
+      this.#notePushOutcome(runnerId, 'mcpServers', {
+        status: 'failed',
+        at: this.#nowIso(),
+        error: String(error),
+      });
+      // **`this.#journal` を経由する**（`#pushProfile` と同じ理由・同じ非対称）。
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text: `${EXCHANGE_KIND_FAILURE_PREFIX}${runnerId} へ MCP サーバの登録を降ろせなかった（この runner で起こすマネージャー・作業者は、記憶ストアの登録を持たずに走る）: ${String(error)}`,
+      });
+    }
+  }
+
+  /**
    * イベントの受け口を開く。**繋ぎに行くのはデーモン側**である。
    *
    * **一度きりにしない。** 名簿は動的で、runner は後から載る（roadmap M5）。
@@ -6918,6 +6996,10 @@ class Pool implements ManagerPool {
       // **名前→値の袋も同じ位置で降ろす。** 器が作り直されていれば置いた鍵は
       // 消えているので、ここで降ろさないと最初のマネージャーが鍵無しで走り出す。
       await this.#pushCredentials(runner);
+      // **MCP の登録も同じ位置で降ろす（#325 段3）。** 器が作り直されていれば
+      // runner のメモリに置いた登録は消えているので、ここで降ろさないと最初の
+      // マネージャーが連携0本で走り出す。
+      await this.#pushMcpServers(runner);
       // **認証トークンも同じ位置で降ろす。** プロファイルと同じ理由——名乗り
       // 任せにすると、最初のマネージャーが古いトークンで走り出しうる。
       await this.#pushAgentToken(runner);
@@ -7051,6 +7133,10 @@ class Pool implements ManagerPool {
         // きた runner は器ごと入れ替わっていることがあり、そのとき置いた鍵は
         // 消えている。
         await this.#pushCredentials(runner);
+        // **MCP の登録も同じ位置で降ろす（#325 段3。#connectTo と同じ）。** runner は
+        // 登録をメモリにしか持たないので、器ごと入れ替わった runner では消えている。
+        // 降ろし直さないと、再デプロイのたびにマネージャー・作業者の連携が0本へ戻る。
+        await this.#pushMcpServers(runner);
         // **認証トークンも同じ位置で降ろす（Issue #393）。** 直上の理由がそのまま
         // 効く —— **器が入れ替わっていれば置いた鍵も消えている。** この経路にだけ
         // 無かったので、繋ぎ直してきた runner は`#connectTo`と違って鍵が降りず、
@@ -9855,8 +9941,16 @@ class Pool implements ManagerPool {
    */
   #settlePushRetry(runnerId: string): void {
     const health = this.#pushHealth.get(runnerId);
+    // **口を持たない古い runner への MCP の登録（#325 段3）は数えない。** 挑み直しても
+    // 同じ 404 が返るだけで、`PUSH_RETRY_MAX_MS` ごとに同じ失敗が日誌へ積まれ続ける
+    // （`RunnerMcpServersUnsupportedError` の doc）。runner を上げれば次の名乗りで降りる。
     const stillFailing =
-      health !== undefined && Object.values(health).some((outcome) => outcome?.status === 'failed');
+      health !== undefined &&
+      Object.entries(health).some(
+        ([kind, outcome]) =>
+          outcome?.status === 'failed' &&
+          !(kind === 'mcpServers' && this.#mcpServersUnsupported.has(runnerId)),
+      );
     if (!stillFailing) {
       // 直った。次に失敗したときは最初の間隔からやり直す（`#reattach` が
       // `retry === false` のときに `#reattachDelays` を消すのと同じ形）。
@@ -9916,6 +10010,9 @@ class Pool implements ManagerPool {
     if (health.profile?.status === 'failed') await this.#pushProfile(runner);
     if (health.credentials?.status === 'failed') await this.#pushCredentials(runner);
     if (health.agentToken?.status === 'failed') await this.#pushAgentToken(runner);
+    if (health.mcpServers?.status === 'failed' && !this.#mcpServersUnsupported.has(runnerId)) {
+      await this.#pushMcpServers(runner);
+    }
     this.#settlePushRetry(runnerId);
   }
 
