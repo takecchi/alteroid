@@ -306,6 +306,27 @@ async function probeUnpushedCommitCount(
  *    — `://` を持たない。`@` より前（あれば）は読み捨て、`:` の前後だけを
  *    host / path として使う。
  *
+ *    ⚠️ **レビューで見つかった2つの漏れ（塞いだ）**:
+ *    - **host の文字クラスから `@` も除く。** 除く前は `tok@en@github.com:…`
+ *      のような（壊れた、または細工された）入力で、1個目の `@` までを
+ *      userinfo として読み捨てた後、`en@github.com` を丸ごと host として
+ *      拾ってしまっていた——`en@` は本来 userinfo の断片で、漏れていた。
+ *      `@` を host の文字クラスからも除くと、`@` が2個以上ある形は
+ *      正規表現そのものが一致しなくなり（userinfo 側で1個消費した残りに
+ *      また `@` が挟まると host が `:` まで届かない）、`undefined` に
+ *      自然に倒れる——「2個以上は undefined」を別条件で書き足す必要は
+ *      無かった。
+ *    - **scp 形式でもクエリ・フラグメントを落とす。** `scheme://` 形は
+ *      `URL#pathname` が自動でクエリ・フラグメントを除くが、scp 形式は
+ *      `:` の後ろを丸ごと path として読んでいたため、
+ *      `git@host:owner/repo.git?token=…` のような形で漏れていた。
+ *      **「undefined にする」ではなく「`?`/`#` 以降を切り落とす」を選んだ**
+ *      ——scp 形式に本来クエリ・フラグメントの構文は無い（git 自身も
+ *      構文として解釈しない）ので、後ろに付いた分は同じ文字列の続きとして
+ *      巻き込まれただけの可能性が高く、`scheme://` 形と同じ「host/path は
+ *      残し、クエリ・フラグメントだけ削る」という挙動に揃えるほうが
+ *      一貫する。
+ *
  * どちらにも当たらない（コロンが無い・`URL` が投げる等）ローカルパスや
  * 壊れた文字列は `undefined`。
  */
@@ -327,11 +348,16 @@ export function parseRemoteOriginUrl(raw: string): { host: string; path: string 
   }
 
   // scp 形式: `[user@]host:path`。host に `/` を含む場合はローカルパス
-  // （例 `/a/b:c`）との誤認を避けるため対象にしない。
-  const scpMatch = /^(?:[^@\s/]+@)?([^:\s/]+):(.+)$/.exec(trimmed);
+  // （例 `/a/b:c`）との誤認を避けるため対象にしない。**host の文字クラスから
+  // `@` も除く** — `@` が2個以上ある入力で userinfo の断片が host へ漏れるのを
+  // 防ぐ（上の doc の「レビューで見つかった2つの漏れ」を見よ）。
+  const scpMatch = /^(?:[^@\s/]+@)?([^@:\s/]+):(.+)$/.exec(trimmed);
   if (scpMatch !== null) {
     const host = scpMatch[1] ?? '';
-    const path = scpMatch[2]?.replace(/^\/+/, '') ?? '';
+    // クエリ・フラグメントを落とす（`scheme://` 形の `URL#pathname` と
+    // 挙動を揃える。上の doc を見よ）。
+    const rawPath = (scpMatch[2] ?? '').split(/[?#]/)[0] ?? '';
+    const path = rawPath.replace(/^\/+/, '');
     if (host.length > 0 && path.length > 0) {
       return { host, path };
     }

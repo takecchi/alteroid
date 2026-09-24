@@ -183,6 +183,25 @@ describe('runner-swap の一言は job.workspace を読む（#485 の141行目�
     expect(message).toContain('feature/migrate-db');
   });
 
+  it('git: マネージャー向けの文言は完全一致で固定する（repository と ref を入れ替える変異を捕まえる）', async () => {
+    // **`toContain` の2条件だけでは、repository と ref を入れ替える変異が
+    // 生き残る**（両方の値が文言のどこかに含まれてさえいれば通ってしまう）。
+    // ここは順序まで含めて固定する。
+    const job = jobWith('mgr-git-exact', {
+      kind: 'git',
+      repository: 'https://github.com/acme/widgets.git',
+      ref: 'feature/migrate-db',
+    });
+    const { message } = await runnerSwapNudge(job);
+
+    expect(message).toBe(
+      '[system] runner の器が作り直された。作業ディレクトリは器と一緒に失われている。' +
+        'https://github.com/acme/widgets.git の feature/migrate-db を' +
+        'clone し直してから、続きに入れ。コミットしていなかった変更は残っていないので、' +
+        '必要なら書き直すこと。中断していた作業の続きを進めよ。',
+    );
+  });
+
   it('unknown: マネージャー向けは path の値を含み、かつ「残っているとは限らない」を含む', async () => {
     const job = jobWith('mgr-unknown', {
       kind: 'unknown',

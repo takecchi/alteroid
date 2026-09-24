@@ -10941,14 +10941,6 @@ function sendFailureDetail(managerId: string, resumeDetail: string, missing: boo
 type RestartCause = 'daemon' | 'runner' | 'relocated';
 
 /**
- * 器が入れ替わった後、台帳の locator が作業ディレクトリについて何を言えるか。
- *
- * **言い方の持ち主を1つにする**（`resumeFailureDetail` と同じ理由）。マネージャー
- * 向けの `restartNudge` とクローン向けの `#notifyRestored` は、どちらも同じ
- * `job.workspace` から同じ判定を引く。ここを2箇所に書くと、直したつもりが片方
- * だけになる。
- */
-/**
  * `unverified` の locator（`unknown`）について、台帳の最後の未 push 観測
  * （`job.lastUnpushedWorkObservation`）から作業ツリーごとの clone 先を
  * 言えるときの1本（Issue #1376 B2）。
@@ -10969,6 +10961,14 @@ type WorkspaceCloneHint =
     }
   | { readonly kind: 'unresolved'; readonly relativePath: string; readonly reason: string };
 
+/**
+ * 器が入れ替わった後、台帳の locator が作業ディレクトリについて何を言えるか。
+ *
+ * **言い方の持ち主を1つにする**（`resumeFailureDetail` と同じ理由）。マネージャー
+ * 向けの `restartNudge` とクローン向けの `#notifyRestored` は、どちらも同じ
+ * `job.workspace` から同じ判定を引く。ここを2箇所に書くと、直したつもりが片方
+ * だけになる。
+ */
 type WorkspaceAfterSwap =
   | { kind: 'kept'; path: string }
   | { kind: 'rebuild'; repository: string; ref: string }

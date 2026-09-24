@@ -295,6 +295,24 @@ describe('parseRemoteOriginUrl — host/path だけを取り出す（userinfo・
     });
   });
 
+  it('scp 形式で userinfo に "@" が2個以上（壊れた／細工された入力）なら undefined（host に断片を漏らさない）', () => {
+    expect(parseRemoteOriginUrl('tok@en@github.com:acme/w.git')).toBeUndefined();
+  });
+
+  it('scp 形式でもクエリ文字列を落とす', () => {
+    expect(parseRemoteOriginUrl('git@github.com:acme/widgets.git?token=abc123XYZ')).toEqual({
+      host: 'github.com',
+      path: 'acme/widgets.git',
+    });
+  });
+
+  it('scp 形式でもフラグメントを落とす', () => {
+    expect(parseRemoteOriginUrl('git@github.com:acme/widgets.git#readme')).toEqual({
+      host: 'github.com',
+      path: 'acme/widgets.git',
+    });
+  });
+
   it('クエリ文字列（?token=…）を落とす', () => {
     expect(parseRemoteOriginUrl('https://github.com/acme/widgets.git?token=abc123XYZ')).toEqual({
       host: 'github.com',
