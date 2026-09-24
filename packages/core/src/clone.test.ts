@@ -18330,6 +18330,83 @@ describe('クローン — 定期の棚卸し（scheduled な蒸留）', () => {
 
     await s.clone.stop();
   });
+
+  /**
+   * ⭐ 段4: やり方の候補の材料（#1055）。段2 と同じ定期の棚卸しに相乗りする
+   * （`practice-candidates.ts` の `describePracticeCandidates`、`prompt.ts` の
+   * `DistillPromptOptions.practiceCandidates`）。測るのは段2 と対になる3つ ——
+   * 棚卸しの刻みには種類・いまのやり方が載ること、会話終了の蒸留には載らないこと、
+   * **そして材料を読むだけで `practice_write` 相当の書き込みが起きないこと**
+   * （やり方の版が増えていない）。
+   */
+  it('⭐ 棚卸しの刻みでは、やり方の候補の材料（段4）も載り、やり方は書き換わらない', async () => {
+    const stores = createMemoryStores();
+    await stores.commitments.open({
+      id: 'commit-kind-bad',
+      at: '2026-08-01T00:00:00.000Z',
+      origin: 'human',
+      body: '種類つきの依頼',
+    });
+    await stores.commitments.appraise(
+      'commit-kind-bad',
+      '2026-08-01T00:00:00.000Z',
+      'bad',
+      'clone',
+      '出典を確かめなかった',
+      '調査',
+    );
+    await stores.practices.write({
+      slug: 'research-howto',
+      kind: '調査',
+      title: '調査のやり方',
+      content: '一次資料を先に読む',
+    });
+    const s = setup(undefined, stores);
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    s.clone.post(tidyEvent());
+    await waitFor(() => ((s.calls[0] as FakeCall).inputs.length ?? 0) >= 2, '棚卸しのターン');
+
+    const input = (s.calls[0] as FakeCall).inputs[1] ?? '';
+    expect(input).toContain('### 種類「調査」');
+    expect(input).toContain('やり方 research-howto「調査のやり方」（版 1 件');
+    expect(input).toContain('一次資料を先に読む');
+    expect(input).toContain('## 評定する側の較正の材料');
+    // 材料を読んだだけで、やり方は1版も増えていない。
+    expect(await stores.practices.listVersions('research-howto')).toHaveLength(1);
+
+    await s.clone.stop();
+  });
+
+  it('会話終了の蒸留にはやり方の候補の材料を載せない（本題を薄めない）', async () => {
+    const stores = createMemoryStores();
+    await stores.commitments.open({
+      id: 'commit-kind-bad-2',
+      at: '2026-08-01T00:00:00.000Z',
+      origin: 'human',
+      body: '種類つきの依頼2',
+    });
+    await stores.commitments.appraise(
+      'commit-kind-bad-2',
+      '2026-08-01T00:00:00.000Z',
+      'bad',
+      'clone',
+      undefined,
+      '調査',
+    );
+    const s = setup(undefined, stores);
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    await s.clone.endConversation('conv-1');
+
+    const distill = (s.calls[0] as FakeCall).inputs[1] ?? '';
+    expect(distill).not.toContain('### 種類「調査」');
+    expect(distill).not.toContain('評定する側の較正の材料');
+
+    await s.clone.stop();
+  });
 });
 
 /**

@@ -104,8 +104,7 @@ export interface PracticeCandidateMaterial {
 
 /** 食い違いの数え上げ。測れなかった回を「対が無い」に化けさせないため、2つの形を持つ。 */
 export type PracticeCandidateReconciliation =
-  | { measured: true; stats: AppraisalReconciliationStats }
-  | { measured: false; reason: string };
+  { measured: true; stats: AppraisalReconciliationStats } | { measured: false; reason: string };
 
 /** 群を組むのに要る、評定つきレコードの最小限の形。 */
 interface CandidateRecord {
