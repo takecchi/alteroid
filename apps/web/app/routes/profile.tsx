@@ -17,15 +17,13 @@ import type { ProfileState, ProfileUpdateResult } from '~/lib/types';
  * 呼べるようにしただけである（AGENTS.md「画面の都合で API に経路を足さないこと」）。
  * `clear` も新しい口ではなく、CLI と同じく空文字の `PUT /profile` である。
  *
- * **資格は `requireOperator` のまま。** `env-vars.tsx`（`requireOwner`）と違い、
- * ここは Web UI にログインしたアカウントでは構造的に通れない——ブラウザは
- * 「サーバ上のファイルを読めること」という資格を提示できない（`apps/daemon/src/app.ts`
- * の `requireOwner` の doc の「なぜ `requireOperator` と分けるのか」）。⟹ **通るのは
- * 認証を設定していない構成**（デーモンが全員を operator として扱う）**だけで、
- * 認証を有効にした構成では読み書きとも 403 になる。** 門を緩めるのはこの画面の
- * 仕事ではない（`docs/architecture.md` が「実行環境そのものを差し替える資格までは
- * 含めない」と線を引いている）。それでも画面を置くのは `access.tsx` の宣言ボタンと
- * 同じ「押せない理由を消さない」方針で、403 のときは端末で打つコマンドを案内する。
+ * **資格は `requireOwner`**（`env-vars.tsx` の `PUT /credentials` と同じ）。宣言済み owner で
+ * なければ読み書きとも 403 になる。**⚠️ この画面を足したとき（#1122）、門は
+ * `requireOperator` だった**——ブラウザは「サーバ上のファイルを読めること」という資格を
+ * 提示できないので、認証を有効にした構成では誰も開けなかった。人間へ上げ、2026-09-24 に
+ * オーナーが `requireOwner` へ移すと決めた（`docs/architecture.md` も同じ PR で直した）。
+ * ボタンは隠さない（`access.tsx` の宣言ボタンと同じ「押せない理由を消さない」方針）で、
+ * 宣言していないアカウントの 403 には宣言の仕方を案内する。
  *
  * **本文は既定で隠す。** `GET /profile` は本文を丸ごと返し、そこには鍵が入りうる
  * （`credentials` と違って指紋に畳まれていない）。画面を開いただけ・肩越しに
@@ -54,7 +52,7 @@ export default function Profile() {
           />
           <div className="flex flex-col gap-3 px-4 py-3">
             <ErrorNote error={error} />
-            <NotOperatorHint failure={error} />
+            <NotOwnerHint failure={error} />
             {isLoading ? <Spinner /> : data !== undefined && <ProfileView profile={data} />}
           </div>
         </Card>
@@ -276,7 +274,7 @@ function ProfileEditor({ current }: { current: ProfileState }) {
         {failure instanceof ProfileRejectedError && (
           <p className="text-[11px] text-muted">前のプロファイルがそのまま残っている。</p>
         )}
-        <NotOperatorHint failure={failure} />
+        <NotOwnerHint failure={failure} />
 
         {result !== null && <UpdateReport cleared={result.cleared} update={result.update} />}
       </div>
@@ -332,29 +330,29 @@ function UpdateReport({ cleared, update }: { cleared: boolean; update: ProfileUp
 }
 
 /**
- * デーモンの `requireOperator` が返す本文（逐語は
- * `grep -Fn -- '実行環境の持ち主だけが操作できる' apps/daemon/src/app.ts`）。
- * CLI の `apps/cli/src/target.ts` の `NOT_OPERATOR_ERROR` と同じ値。
+ * デーモンの `requireOwner` が返す本文（逐語は
+ * `grep -Fn -- '実行環境の持ち主として宣言されたアカウントだけが操作できる' apps/daemon/src/app.ts`）。
+ * CLI の `apps/cli/src/target.ts` の `forbiddenKindOf` が見る値と同じ。
  */
-const NOT_OPERATOR_ERROR = '実行環境の持ち主だけが操作できる';
+const NOT_OWNER_ERROR = '実行環境の持ち主として宣言されたアカウントだけが操作できる';
 
 /**
- * 失敗が `requireOperator` の 403 のときだけ、端末で打つコマンドを案内する。
+ * 失敗が `requireOwner` の 403 のときだけ、持ち主として宣言する手を案内する。
  *
  * **403 の本文まで見る。** 403 は未許可（`authenticate`）でも返り、そちらの直し方
- * （`access grant`）は正反対である。判別できない失敗には案内を出さない
+ * （`access grant`）は別である。判別できない失敗には案内を出さない
  * ——当てずっぽうで片方を出すと、状況によっては必ず嘘になる（CLI の
  * `forbiddenKindOf` と同じ考え方）。
  */
-function NotOperatorHint({ failure }: { failure: unknown }) {
+function NotOwnerHint({ failure }: { failure: unknown }) {
   if (!(failure instanceof ApiError && failure.status === 403)) return null;
-  if (failure.message !== NOT_OPERATOR_ERROR) return null;
+  if (failure.message !== NOT_OWNER_ERROR) return null;
   return (
     <p className="text-[11px] break-words text-muted">
-      実行環境プロファイルに触れるのは、その実行環境の持ち主だけ（ブラウザからのログインでは
-      通れない）。デーモンが動いているのと同じ環境で、次を実行してください:
+      実行環境プロファイルに触れるのは、持ち主として宣言されたアカウントだけ。アクセスの画面から
+      自分のアカウントを持ち主として宣言してください（端末からなら次を実行）:
       <br />
-      <code className="font-mono">docker compose exec app alteroid profile edit</code>
+      <code className="font-mono">alteroid access owner &lt;アカウント id&gt;</code>
     </p>
   );
 }

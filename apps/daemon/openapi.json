@@ -8688,7 +8688,7 @@
             }
           },
           "403": {
-            "description": "実行環境の持ち主ではない。",
+            "description": "実行環境の持ち主でも、持ち主として宣言されたアカウントでもない。",
             "content": {
               "application/json": {
                 "schema": {
@@ -8816,7 +8816,7 @@
             }
           },
           "403": {
-            "description": "実行環境の持ち主ではない。",
+            "description": "実行環境の持ち主でも、持ち主として宣言されたアカウントでもない。",
             "content": {
               "application/json": {
                 "schema": {

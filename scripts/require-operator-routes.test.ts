@@ -213,8 +213,6 @@ export function countRequireOperatorReferences(
  * 意図して強さを変えてある。
  */
 const EXPECTED_OPERATOR_ROUTES = [
-  'GET /profile',
-  'PUT /profile',
   'POST /access/:accountId/owner',
   'POST /access/:accountId/owner/revoke',
 ];
@@ -234,8 +232,13 @@ const EXPECTED_OPERATOR_ROUTES = [
  * **人間へ上げること**（`docs/` は正典で、AI が単独で書き換えない）。
  *
  * **⚠️ この歯は doc を検査していない**（`EXPECTED_OPERATOR_ROUTES` と同じ）。
+ *
+ * **⚠️ 2026-09-24、`GET /profile` / `PUT /profile` を `EXPECTED_OPERATOR_ROUTES` から
+ * ここへ移した**（#1122。人間へ上げてオーナーが決めた —— ブラウザは `requireOperator`
+ * を構造的に通れず、Web UI にプロファイルの画面を置けなかったため）。
+ * `docs/architecture.md` の「実行環境プロファイル」の段落も同じ PR で直した。
  */
-const EXPECTED_OWNER_ROUTES = ['POST /reset', 'PUT /credentials'];
+const EXPECTED_OWNER_ROUTES = ['GET /profile', 'POST /reset', 'PUT /credentials', 'PUT /profile'];
 
 /** 比較を配線順（AST の訪問順）に依存させないための整列。 */
 function sorted(values: readonly string[]): string[] {

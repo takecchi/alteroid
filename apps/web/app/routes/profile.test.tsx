@@ -11,8 +11,10 @@
  * 3. **400 のときは `detail` まで見せる。** 直すのに要るのは行番号込みの `detail` で、
  *    共有の `unwrap` が拾う `error` だけでは直せない
  * 4. **外すのは空文字の `PUT /profile`**（`alteroid profile clear` と同じ）
- * 5. **403 は本文で出し分ける。** `requireOperator` の本文のときだけ端末のコマンドを
- *    案内し、それ以外の 403 には案内を出さない
+ * 5. **403 は本文で出し分ける。** `requireOwner` の本文のときだけ持ち主の宣言を
+ *    案内し、それ以外の 403 には案内を出さない（2026-09-24 に門を `requireOperator`
+ *    から `requireOwner` へ移したので、案内も「端末でプロファイルを編集する」から
+ *    「持ち主として宣言する」へ差し替えた）
  */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -127,14 +129,19 @@ describe('/profile 画面 — 読む', () => {
     expect(screen.getByRole('button', { name: '編集する' })).toBeTruthy();
   });
 
-  it('requireOperator の 403 なら、端末で打つコマンドを案内する', async () => {
+  it('requireOwner の 403 なら、持ち主として宣言する手を案内する', async () => {
     stubProfile({
-      get: { status: 403, body: { error: '実行環境の持ち主だけが操作できる' } },
+      get: {
+        status: 403,
+        body: { error: '実行環境の持ち主として宣言されたアカウントだけが操作できる' },
+      },
     });
     renderScreen();
 
-    expect(await screen.findByText('実行環境の持ち主だけが操作できる')).toBeTruthy();
-    expect(screen.getByText('docker compose exec app alteroid profile edit')).toBeTruthy();
+    expect(
+      await screen.findByText('実行環境の持ち主として宣言されたアカウントだけが操作できる'),
+    ).toBeTruthy();
+    expect(screen.getByText('alteroid access owner <アカウント id>')).toBeTruthy();
     // 読めていないので、編集の欄も出さない。
     expect(screen.queryByRole('button', { name: '編集する' })).toBeNull();
   });
@@ -146,7 +153,7 @@ describe('/profile 画面 — 読む', () => {
     renderScreen();
 
     expect(await screen.findByText('このアカウントには alteroid を使う許可が無い')).toBeTruthy();
-    expect(screen.queryByText('docker compose exec app alteroid profile edit')).toBeNull();
+    expect(screen.queryByText('alteroid access owner <アカウント id>')).toBeNull();
   });
 });
 
@@ -219,9 +226,12 @@ describe('/profile 画面 — 差し替える', () => {
     expect(screen.queryByRole('button', { name: '本当に保存する' })).toBeNull();
   });
 
-  it('PUT が requireOperator の 403 なら、端末で打つコマンドを案内する', async () => {
+  it('PUT が requireOwner の 403 なら、持ち主として宣言する手を案内する', async () => {
     stubProfile({
-      put: { status: 403, body: { error: '実行環境の持ち主だけが操作できる' } },
+      put: {
+        status: 403,
+        body: { error: '実行環境の持ち主として宣言されたアカウントだけが操作できる' },
+      },
     });
     renderScreen();
 
@@ -232,7 +242,7 @@ describe('/profile 画面 — 差し替える', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存する' }));
     fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
 
-    expect(await screen.findByText('docker compose exec app alteroid profile edit')).toBeTruthy();
+    expect(await screen.findByText('alteroid access owner <アカウント id>')).toBeTruthy();
   });
 
   it('「プロファイルを外す」は確認を挟んでから空文字の PUT を送る（alteroid profile clear と同じ）', async () => {

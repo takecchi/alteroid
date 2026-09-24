@@ -4345,6 +4345,15 @@ export function createApp(deps: AppDeps) {
     /**
      * 人間が置いた実行環境プロファイル（`.zprofile` 相当）。
      *
+     * **⚠️ 2026-09-24 のオーナー決定（#1122）で `requireOperator` から `requireOwner`
+     * （持ち主として宣言されたアカウント）へ移した。** ブラウザは `requireOperator` を
+     * 構造的に通れないので、Web UI にプロファイルの画面を置いても誰も開けなかった
+     * （入口の等価性の穴）。`PUT /credentials` / `POST /reset` が #1198 で同じ門へ
+     * 移ったのと同じ強さである —— 宣言は operator トークンだけが立てられる旗なので、
+     * 通れるのは常にホストへ到達できる者が名指ししたアカウントに限られる。
+     * 「alteroid を使ってよい」（許可されただけ）のアカウントは今も通らない。
+     * 以下の段落はその決定より前の理由として残す。
+     *
      * **実行環境の持ち主だけ**（`requireOperator`）。**⚠️ 2026-09-06 のオーナー決定
      * （alteroid を使う許可＝ `access grant` 済みのアカウントを実行環境の持ち主と
      * 同格にする）の対象外——`/tokens` `/access/*` はその決定で `authenticate` だけに
@@ -4380,12 +4389,12 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(profileResponseSchema) } },
           },
           403: {
-            description: '実行環境の持ち主ではない。',
+            description: '実行環境の持ち主でも、持ち主として宣言されたアカウントでもない。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
       }),
-      requireOperator,
+      requireOwner,
       async (c) => {
         const stored = await deps.stores.profile.read();
         if (stored === null) return c.json(profileResponseSchema.parse({ script: '' }));
@@ -4406,6 +4415,15 @@ export function createApp(deps: AppDeps) {
      * これが無いと、道具の鍵や `PATH` を1つ足すたびに `compose.yaml` を直して
      * 器を焼き直すことになる＝「環境を直す」と「走行中の仕事を失う」が同じ操作に
      * なる。鍵の差し替え（`POST /runners/credentials`）と同じ理由で口を開けてある。
+     *
+     * **⚠️ 2026-09-24 のオーナー決定（#1122）で `requireOperator` から `requireOwner`
+     * （持ち主として宣言されたアカウント）へ移した。** ブラウザは `requireOperator` を
+     * 構造的に通れないので、Web UI にプロファイルの画面を置いても誰も開けなかった
+     * （入口の等価性の穴）。`PUT /credentials` / `POST /reset` が #1198 で同じ門へ
+     * 移ったのと同じ強さである —— 宣言は operator トークンだけが立てられる旗なので、
+     * 通れるのは常にホストへ到達できる者が名指ししたアカウントに限られる。
+     * 「alteroid を使ってよい」（許可されただけ）のアカウントは今も通らない。
+     * 以下の段落はその決定より前の理由として残す。
      *
      * **実行環境の持ち主だけ**（`requireOperator`）。ここは「alteroid を使ってよい」
      * より一段強い口である — 受け取った本文はデーモンの `process.env` を土台に
@@ -4446,12 +4464,12 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(profileErrorResponseSchema) } },
           },
           403: {
-            description: '実行環境の持ち主ではない。',
+            description: '実行環境の持ち主でも、持ち主として宣言されたアカウントでもない。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
       }),
-      requireOperator,
+      requireOwner,
       /**
        * **既定の 400 を使わない。** `hook` を渡さないと `@hono/standard-validator`
        * は `c.json({ data: <リクエスト本文そのもの>, error, success: false }, 400)`
@@ -5590,7 +5608,7 @@ export function createApp(deps: AppDeps) {
      *
      * **資格は `authenticate` だけ（`requireOperator` は付けない）。** 理由は
      * `/journal` `/managers` `/conversations` `/tokens` `/access/*` と同じ強さに
-     * してあることで、**`/profile`（`requireOperator`。実行環境の持ち主だけ）**
+     * してあることで、**`/profile`（`requireOwner`。持ち主と、持ち主として宣言されたアカウントだけ）**
      * とは違う扱いにしている。（`/tokens` `/access/*` は 2026-09-06 のオーナー
      * 決定——alteroid を使う許可を実行環境の持ち主と同格にする——より前は
      * `requireOperator` 側にいたが、いまはここと同じ側である。）この跡は本文を

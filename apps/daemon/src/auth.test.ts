@@ -297,7 +297,8 @@ describe('認証が有効なとき', () => {
    * （下の「許可の付与と取り消しは日誌に残る」）。
    *
    * `/profile` はこの決定の対象外のままで、`403` を固定するテストは
-   * 「実行環境プロファイルは持ち主だけ」に残る。
+   * 「実行環境プロファイルは宣言済み owner まで」に残る（2026-09-24 に門は
+   * `requireOwner` へ移ったが、許可されただけのアカウントは今も 403）。
    */
   it('許可されたアカウントも実行環境の持ち主と同格——自分自身への再 grant も GET /access も通る', async () => {
     const claimed = await loginThrough(app);
@@ -319,7 +320,13 @@ describe('認証が有効なとき', () => {
     ).toBe(200);
   });
 
-  it('実行環境プロファイルは持ち主だけ（許可された利用者でも 403）', async () => {
+  /**
+   * ⚠️ **2026-09-24（#1122）に門を `requireOperator` から `requireOwner` へ移した。**
+   * 許可されただけ（宣言していない）のアカウントが 403 になることはこのまま固定し、
+   * 403 の本文だけを `requireOwner` の文言へ反転した（宣言済み owner が通ることは
+   * 上の ④ が撃つ）。下の長い注釈は移す前の理由として残す。
+   */
+  it('実行環境プロファイルは宣言済み owner まで（許可されただけの利用者は 403）', async () => {
     // **ここは「alteroid を使ってよい」より一段強い口である。**
     //
     // `PUT` の本文はデーモンの `process.env` を土台にその場で評価される ＝
@@ -362,7 +369,9 @@ describe('認証が有効なとき', () => {
     //
     // **値はここへ複製してある。**`app.ts` から import すると、文言がずれても歯まで
     // 一緒にずれて自己整合し、ずれを検出できなくなる。
-    expect(await forbidden.json()).toEqual({ error: '実行環境の持ち主だけが操作できる' });
+    expect(await forbidden.json()).toEqual({
+      error: '実行環境の持ち主として宣言されたアカウントだけが操作できる',
+    });
     expect(
       (
         await app.request('/profile', {
@@ -775,8 +784,9 @@ describe('宣言と実物の一致（/auth・/access）', () => {
  *
  * ①宣言済み owner は**通る** ②宣言していない許可済みアカウントは**通らない**
  * （広げすぎていないことの対照） ③**伝播した許可（別のアカウントが通した）は
- * 通らない** ④`/profile` は宣言済み owner でも**通らないまま**（意図した
- * 非対称） ⑤未ログインは401・未許可は403 ⑥`revoke` の後は宣言も落ち、
+ * 通らない** ④`/profile` も宣言済み owner なら**通る**（2026-09-24 に
+ * `requireOwner` へ移した。#1122。以前はここで「通らないまま（意図した非対称）」を
+ * 撃っていた） ⑤未ログインは401・未許可は403 ⑥`revoke` の後は宣言も落ち、
  * 再 grant しても owner ではない ⑦**宣言の口そのもの
  * （`POST /access/:accountId/owner`）を account トークンで叩くと403**——非伝播の
  * 証拠で、この PR がいちばん守りたい軸なので厚めに撃つ。
@@ -785,7 +795,7 @@ describe('宣言と実物の一致（/auth・/access）', () => {
  * 広がったことに誰も気づかない。③が緩むと、許可の伝播（A が B を、B が C を）が
  * そのまま owner 資格の伝播になる——旧近似が持っていた欠陥そのものである。
  *
- * **④は「意図した非対称」の証拠である。** `PUT /credentials` は**置けるが
+ * **（2026-09-24 まで）④は「意図した非対称」の証拠だった。** `PUT /credentials` は**置けるが
  * 読み出せない**（一覧が返すのは指紋）。`GET /profile` は本文に鍵が丸ごと載る口で、
  * 2026-09-06 の同格化でも名指しで外された。⟹ ここが一緒に緩んだら、それは
  * この変更が線を踏み越えたということである。
@@ -993,16 +1003,27 @@ describe('宣言済み owner（ownerDeclaredAt）は /credentials と /reset を
     expect((await putCredential(auth)).status).toBe(403);
   });
 
-  it('④ /profile は宣言済み owner でも 403 のまま（意図した非対称）', async () => {
+  /**
+   * ⚠️ **反転させた歯（2026-09-24、#1122）。** 以前は「④ /profile は宣言済み owner でも
+   * 403 のまま（意図した非対称）」として、宣言済み owner の GET/PUT が
+   * `requireOperator` の 403（`NOT_OPERATOR_ERROR`）で落ちることを固定していた。
+   *
+   * **なぜ反転したか。** ブラウザは `requireOperator` を構造的に通れないので、Web UI に
+   * プロファイルの画面を置いても誰も開けなかった（#1122「入口の等価性の穴」）。人間へ
+   * 上げ、オーナーが `requireOwner` へ移すと決めた（`docs/architecture.md` も同じ PR で
+   * 直した）。
+   *
+   * **なぜ保証が弱くなっていないか。** 緩めたのは「宣言済み owner」の1段だけで、
+   * 宣言していない許可済みアカウント・伝播した許可が通らないことは、下の
+   * 「実行環境プロファイルは宣言済み owner まで」と ②③ がそのまま固定している。
+   * この歯も消さず、「宣言済み owner は通る」側を撃つ形へ反転した。
+   */
+  it('④ /profile は宣言済み owner なら通る（2026-09-24 に requireOwner へ移した）', async () => {
     const owner = await ownerToken();
     const auth = { authorization: `Bearer ${owner.token}` };
 
-    const forbidden = await vaultApp.request('/profile', { headers: auth });
-    expect(forbidden.status).toBe(403);
-    // **本文まで固定する。** `requireOperator` の 403（`NOT_OPERATOR_ERROR`）と
-    // 1文字も違えない——`/profile` は `requireOwner` ではなく `requireOperator`
-    // のままである。
-    expect(await forbidden.json()).toEqual({ error: NOT_OPERATOR_ERROR });
+    const read = await vaultApp.request('/profile', { headers: auth });
+    expect(read.status).toBe(200);
 
     expect(
       (
@@ -1012,7 +1033,7 @@ describe('宣言済み owner（ownerDeclaredAt）は /credentials と /reset を
           body: JSON.stringify({ script: 'env' }),
         })
       ).status,
-    ).toBe(403);
+    ).not.toBe(403);
 
     // 実行環境の持ち主は今日どおり読める（締めたのではなく、緩めなかっただけである）。
     expect((await vaultApp.request('/profile', { headers: OPERATOR })).status).toBe(200);
