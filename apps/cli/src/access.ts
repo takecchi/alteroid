@@ -31,6 +31,11 @@ interface AccountView {
   createdAt: string;
   lastLoginAt: string | null;
   grantedAt: string | null;
+  /**
+   * 誰が許可したか（`'operator'` か、許可を与えたアカウントの id）。表示は
+   * `describeGrantedBy()` を通す。
+   */
+  grantedBy: string | null;
   granted: boolean;
   /**
    * 実行環境の持ち主として宣言された日時（issue #1198）。`null` なら未宣言。
@@ -41,6 +46,22 @@ interface AccountView {
    */
   ownerDeclaredAt: string | null;
   identities: { provider: string; email: string | null; lastLoginAt: string }[];
+}
+
+/**
+ * `grantedBy` を人間が読む形にする。
+ *
+ * **Web UI の `describeGrantedBy()`（`apps/web/app/routes/access.tsx`）と同じ3分岐・
+ * 同じ文言である。** 入口ごとに言い方が変わらないよう、片方を変えるならもう片方も
+ * 変える（置き場所を共有するパッケージがまだ無いので、共通化はしていない）。
+ * `'operator'` は実行環境の持ち主を表す固定の値で、それ以外は許可を与えた
+ * アカウントの id である。id は名前へ解決しない——そのアカウントが一覧から既に
+ * 消えていることがありうるため。
+ */
+function describeGrantedBy(grantedBy: string | null): string {
+  if (grantedBy === null) return '不明';
+  if (grantedBy === 'operator') return '実行環境の持ち主';
+  return grantedBy;
 }
 
 export async function accessListCommand(): Promise<void> {
@@ -73,7 +94,14 @@ export async function accessListCommand(): Promise<void> {
       .join(', ');
     if (via.length > 0) stdout.write(`  ログイン手段: ${via}\n`);
     if (account.lastLoginAt !== null) stdout.write(`  最終ログイン: ${account.lastLoginAt}\n`);
-    if (account.grantedAt !== null) stdout.write(`  許可した日時: ${account.grantedAt}\n`);
+    // **誰が許可したかを日時の後ろに括弧で添える**（#1398 c7-3）。応答は元から
+    // `grantedBy` を持っていて、Web UI（`apps/web/app/routes/access.tsx`）は
+    // PR #1025 から同じ形で出している。ここが出していなかっただけである。
+    if (account.grantedAt !== null) {
+      stdout.write(
+        `  許可した日時: ${account.grantedAt}（${describeGrantedBy(account.grantedBy)}）\n`,
+      );
+    }
     stdout.write(
       `  実行環境の持ち主として宣言: ${
         account.ownerDeclaredAt === null ? '（未宣言）' : account.ownerDeclaredAt

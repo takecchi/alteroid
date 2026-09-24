@@ -87,6 +87,7 @@ describe('alteroid access list', () => {
             createdAt: '2026-08-01T00:00:00.000Z',
             lastLoginAt: '2026-08-20T09:00:00.000Z',
             grantedAt: '2026-08-01T00:05:00.000Z',
+            grantedBy: 'operator',
             granted: true,
             ownerDeclaredAt: null,
             identities: [
@@ -107,6 +108,44 @@ describe('alteroid access list', () => {
     // 既存の欄（最終ログイン・許可した日時）は消えていない。
     expect(text).toContain('最終ログイン: 2026-08-20T09:00:00.000Z');
     expect(text).toContain('許可した日時: 2026-08-01T00:05:00.000Z');
+  });
+
+  /**
+   * **誰が許可したか（#1398 c7-3）。** 3分岐（`'operator'`・アカウントの id・
+   * `null`）を1回で確かめる。文言は Web UI の `describeGrantedBy()` と同じ。
+   */
+  it('誰が許可したかを、許可した日時の後ろに添える', async () => {
+    const read = captureStdout();
+    const account = (id: string, grantedBy: string | null) => ({
+      id,
+      displayName: null,
+      email: `${id}@example.com`,
+      createdAt: '2026-09-01T00:00:00.000Z',
+      lastLoginAt: null,
+      grantedAt: '2026-09-03T00:00:00.000Z',
+      grantedBy,
+      granted: true,
+      ownerDeclaredAt: null,
+      identities: [],
+    });
+    replies.push({
+      status: 200,
+      body: {
+        accounts: [
+          account('acc-by-operator', 'operator'),
+          account('acc-by-account', 'acc-by-operator'),
+          account('acc-by-unknown', null),
+        ],
+      },
+    });
+
+    await accessListCommand();
+
+    const text = read();
+    expect(text).toContain('許可した日時: 2026-09-03T00:00:00.000Z（実行環境の持ち主）');
+    // id は名前へ解決せず、そのまま出す。
+    expect(text).toContain('許可した日時: 2026-09-03T00:00:00.000Z（acc-by-operator）');
+    expect(text).toContain('許可した日時: 2026-09-03T00:00:00.000Z（不明）');
   });
 
   it('まだ誰もいなければ、そう言う', async () => {
@@ -136,6 +175,7 @@ describe('alteroid access list', () => {
             createdAt: '2026-09-01T00:00:00.000Z',
             lastLoginAt: null,
             grantedAt: '2026-09-01T00:00:00.000Z',
+            grantedBy: 'operator',
             granted: true,
             ownerDeclaredAt: '2026-09-18T00:00:00.000Z',
             identities: [],
@@ -147,6 +187,7 @@ describe('alteroid access list', () => {
             createdAt: '2026-09-02T00:00:00.000Z',
             lastLoginAt: null,
             grantedAt: '2026-09-02T00:00:00.000Z',
+            grantedBy: 'operator',
             granted: true,
             ownerDeclaredAt: null,
             identities: [],
@@ -181,6 +222,7 @@ describe('alteroid access owner', () => {
           createdAt: '2026-09-01T00:00:00.000Z',
           lastLoginAt: null,
           grantedAt: '2026-09-01T00:00:00.000Z',
+          grantedBy: 'operator',
           granted: true,
           ownerDeclaredAt: '2026-09-18T00:00:00.000Z',
           identities: [],
@@ -207,6 +249,7 @@ describe('alteroid access owner', () => {
           createdAt: '2026-09-01T00:00:00.000Z',
           lastLoginAt: null,
           grantedAt: '2026-09-01T00:00:00.000Z',
+          grantedBy: 'operator',
           granted: true,
           ownerDeclaredAt: null,
           identities: [],
@@ -235,6 +278,7 @@ describe('alteroid access owner', () => {
           createdAt: '2026-09-01T00:00:00.000Z',
           lastLoginAt: null,
           grantedAt: '2026-09-01T00:00:00.000Z',
+          grantedBy: 'operator',
           granted: true,
           ownerDeclaredAt: '2026-09-18T00:00:00.000Z',
           identities: [],
