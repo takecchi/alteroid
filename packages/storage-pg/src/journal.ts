@@ -22,6 +22,50 @@ import { journal } from './schema.js';
  * 必ず日誌に残る」ことが人間の事後否定＝最終承認の実体なので、後から消せる形に
  * しない（PRD「権限境界」）。
  */
+/**
+ * **`entry`（jsonb）には、列として持っている `id` / `at` / `type` を書かない**
+ * （issue #1311 §1-d）。
+ *
+ * 3つとも列（`journal.id` / `journal.at` / `journal.type`）から完全に復元できるので、
+ * `entry` にも持つのは同じ値の二重持ちである。器の中の PostgreSQL 17.11 で測った
+ * 値で、1行あたり heap を約 119 バイト食っていた（#1311 §1-d。日誌は1日に約200万行
+ * 積まれる）。**情報は1ビットも失われない** —— 読むときに列から組み立て直す
+ * （`restoreEntry`）。
+ *
+ * ⚠️ **既に在る行は書き換えない**（追記専用の契約）。古い行は `entry` に3つを
+ * 持ったままで、`restoreEntry` はそちらを優先する（書いた時点の値をそのまま返す）。
+ * ⟹ 新旧どちらの行も同じ形で読める。
+ *
+ * ⚠️ **本番 DB へ直に SQL を打つ人へ**: この変更より後の行は `entry->>'id'` /
+ * `entry->>'at'` / `entry->>'type'` が空である。列（`id` / `at` / `type`）を使うこと。
+ */
+function withoutRowColumns(entry: JournalEntry): Omit<JournalEntry, 'id' | 'at' | 'type'> {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { id, at, type, ...rest } = entry;
+  return rest;
+}
+
+/** 読むときの選択。`restoreEntry` が列から `id` / `at` / `type` を組み立て直す。 */
+const ROW_SELECTION = {
+  id: journal.id,
+  at: journal.at,
+  type: journal.type,
+  entry: journal.entry,
+};
+
+/**
+ * 列と `entry` から、書いたときの `JournalEntry` の形を組み立て直す。
+ * **`entry` が3つを持っていればそちらを優先する**（`withoutRowColumns` より前に
+ * 書かれた行。書いた時点の値を1文字も変えずに返すため）。
+ */
+function restoreEntry(row: { id: string; at: Date; type: string; entry: unknown }): unknown {
+  const stored =
+    typeof row.entry === 'object' && row.entry !== null && !Array.isArray(row.entry)
+      ? (row.entry as Record<string, unknown>)
+      : {};
+  return { id: row.id, at: row.at.toISOString(), type: row.type, ...stored };
+}
+
 export class PgJournalStore implements JournalStore {
   readonly #db: Db;
 
@@ -42,7 +86,7 @@ export class PgJournalStore implements JournalStore {
       id: entry.id,
       at: new Date(entry.at),
       type: entry.type,
-      entry: stripNulls(entry),
+      entry: stripNulls(withoutRowColumns(entry)),
     });
 
     return entry;
@@ -118,7 +162,7 @@ export class PgJournalStore implements JournalStore {
     ];
 
     const rows = await this.#db
-      .select({ entry: journal.entry })
+      .select(ROW_SELECTION)
       .from(journal)
       .where(filters.length === 0 ? undefined : and(...filters))
       .orderBy(order === 'desc' ? desc(journal.seq) : asc(journal.seq))
@@ -132,14 +176,15 @@ export class PgJournalStore implements JournalStore {
     for (const row of rows) {
       // 壊れた行があっても日誌全体を読めなくしない（fs 版と同じ扱い）。
       // ただし飛ばしたことは跡に残す——`get` と扱いを変えない。
-      const parsed = journalEntrySchema.safeParse(row.entry);
+      const restored = restoreEntry(row);
+      const parsed = journalEntrySchema.safeParse(restored);
       if (parsed.success) {
         found.push(parsed.data);
       } else {
         noteDroppedJournalRow(
           dropped,
           'unknown-shape',
-          journalRowType(row.entry),
+          journalRowType(restored),
           byteLength(row.entry),
         );
       }
@@ -151,13 +196,14 @@ export class PgJournalStore implements JournalStore {
   /** id で1件引く（`id` は一意索引なので1行で当たる）。 */
   async get(id: string): Promise<JournalEntry | null> {
     const rows = await this.#db
-      .select({ entry: journal.entry })
+      .select(ROW_SELECTION)
       .from(journal)
       .where(eq(journal.id, id))
       .limit(1);
     const row = rows[0];
     if (row === undefined) return null;
-    const parsed = journalEntrySchema.safeParse(row.entry);
+    const restored = restoreEntry(row);
+    const parsed = journalEntrySchema.safeParse(restored);
     if (parsed.success) return parsed.data;
     // `list()` と同じ道具・同じ扱い（Issue #224）——1件だけでも「飛ばすが
     // 跡は残す」を崩さない。
@@ -165,7 +211,7 @@ export class PgJournalStore implements JournalStore {
     noteDroppedJournalRow(
       dropped,
       'unknown-shape',
-      journalRowType(row.entry),
+      journalRowType(restored),
       byteLength(row.entry),
     );
     noteDroppedJournalRowsSummary(dropped);

@@ -32,6 +32,7 @@ import {
   archive,
   commitments,
   jobs as jobsTable,
+  journal as journalTable,
   memory,
   sessionEntries,
 } from './schema.js';
@@ -4435,5 +4436,47 @@ describe('describePgConnectionError', () => {
     const line = describePgConnectionError(new Error('ECONNRESET'));
 
     expect(line).toContain('ECONNRESET');
+  });
+});
+
+/**
+ * **`entry` に列と重複する `id` / `at` / `type` を書かない（issue #1311 §1-d）。**
+ * 読むときは列から組み立て直すので、返る形は1文字も変わらない。
+ */
+describe('journal の entry は列と重複する欄を持たない（#1311）', () => {
+  it('新しい行の entry は id / at / type を持たず、get / list は append が返したものと同じ形を返す', async () => {
+    const appended = await stores.journal.append({
+      type: 'decision',
+      decision: '決めた',
+      grounds: '根拠',
+    });
+
+    const [raw] = await db
+      .select({ entry: journalTable.entry })
+      .from(journalTable)
+      .where(eq(journalTable.id, appended.id));
+    expect(raw?.entry).toEqual({ decision: '決めた', grounds: '根拠' });
+
+    expect(await stores.journal.get(appended.id)).toEqual(appended);
+    expect(await stores.journal.list()).toEqual([appended]);
+  });
+
+  it('entry に3つを持ったままの古い行も、書いた時点の値のまま読める（追記専用なので古い行は書き換えない）', async () => {
+    const old: JournalEntry = {
+      id: 'old-row-1',
+      at: '2026-09-01T00:00:00.000Z',
+      type: 'decision',
+      decision: '前に決めた',
+      grounds: '前の根拠',
+    };
+    await db.insert(journalTable).values({
+      id: old.id,
+      at: new Date(old.at),
+      type: old.type,
+      entry: old,
+    });
+
+    expect(await stores.journal.get(old.id)).toEqual(old);
+    expect(await stores.journal.list({ types: ['decision'] })).toEqual([old]);
   });
 });
