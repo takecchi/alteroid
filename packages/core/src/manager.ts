@@ -3635,6 +3635,37 @@ class Pool implements ManagerPool {
    */
   readonly #rateLimitCrossFold = new Map<string, { lastManagerId: string; folded: Set<string> }>();
   /**
+   * **`running` のまま、宛先の runner が名簿から entry ごと消えている委譲**を
+   * runnerId ごとに数えるための、直近に日誌へ書いた本数（Issue #1212 running 側。
+   * 段0＝測るだけ）。
+   *
+   * ## なぜ要るか
+   *
+   * `isLive()` の「黙った」判定（`#silentRunners()`）は、名簿に entry が残って
+   * いて `state: 'lost'` になった器しか拾わない。**entry がまるごと消えている**
+   * （デーモン再起動で名簿がインメモリのまま作り直された、名簿から丸ごと消えた等）
+   * と `#silentRunners()` に当たらず、`isLive()` は `attached` / `sessionId` の
+   * 分岐へ落ちて `live: true` になりうる——2026-09-18T11:16Z のコメントが机上で
+   * 見つけ、その日のうちに実際に起きた形である（`manager_send` を撃つと
+   * 「前のセッションから戻せなかった」が返るのに、直前の一覧では `live: true` と
+   * 出ていた）。
+   *
+   * **この Map は `isLive()` の返り値にも `status` の遷移にも触れない。** 測る
+   * だけの段であり、ここに持つのは「前回この runnerId について書いた本数」
+   * （dedupe のための状態）だけである——private・メモリ上のみで、台帳へは
+   * 書かない。デーモンを作り直せば消える（消えても実害が無いことは
+   * 「書く頻度と量」の doc（{@link Pool.list} 呼び出し元）にある）。
+   *
+   * ## 書く頻度
+   *
+   * **本数が前回と同じなら書かない**（{@link Pool.list} が呼ばれるたびに書くと
+   * 膨らむ——`list()` は `manager_list` 道具・毎ターンの状況の節・日報のどれからも
+   * 呼ばれる）。本数が変わった回（0→N・N→M・N→0 のどれでも）だけ1行書き、
+   * 0本になった runnerId はこの Map から外す（0本の行は書かない——地雷表
+   * 「取れない軸に0の行を作る」）。
+   */
+  readonly #vanishedRunnerGaugeLastCount = new Map<string, number>();
+  /**
    * **枠で止まった委譲**の managerId（`case 'usage_notice'` の `reached` で立ち、
    * {@link Pool.resumeStoppedByUsage} が下ろす）。
    *
@@ -4499,6 +4530,29 @@ class Pool implements ManagerPool {
   }
 
   /**
+   * 名簿にいま entry として載っている runnerId の集合（Issue #1212 running 側。
+   * `state` を問わない）。
+   *
+   * **`#silentRunners()` とは見ている軸が違う。** あちらは `state === 'lost'`
+   * （黙ったと確定した器）だけを拾うホワイトリストで、`connecting` /
+   * `unreachable` / `unusable` / `vacating` は数えない。こちらは **entry の
+   * 有無だけ**を見る——`lost` も `vacating` も、entry として名簿に残ってさえ
+   * いれば含む。**entry がまるごと消えている runnerId**（`#silentRunners()`
+   * にも当たらない）を見分けるための材料はこちらである。
+   *
+   * **ここで新たに runner を叩かない。** `#silentRunners()` と同じく、名簿
+   * （`RunnerRegistry#entries()`）に既に立っている観測を同期に読むだけである。
+   */
+  #registeredRunnerIds(): ReadonlySet<string> {
+    const ids = new Set<string>();
+    for (const entry of this.#runners.entries()) {
+      if (entry.runnerId === undefined) continue;
+      ids.add(entry.runnerId);
+    }
+    return ids;
+  }
+
+  /**
    * **10秒ごとの生存確認が聞き取った「その器がいま抱えている委譲」**（#579。
    * `runnerId` → 委譲 id の集合と、その観測時刻）。
    *
@@ -4665,7 +4719,43 @@ class Pool implements ManagerPool {
         ),
       );
     }
-    return [...known.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+    const summaries = [...known.values()];
+    // **`isLive()` の返り値にも `status` にも触れない、独立した計器**
+    // （Issue #1212 running 側。段0＝測るだけ）。`list()` は `manager_list`
+    // 道具・毎ターンの状況の節・日報のどれからも呼ばれる既存の呼び出し先
+    // なので、新しい tick は足さずここへ載せる——書く頻度は
+    // `#noteVanishedRunnerGauge` 自身が「本数が変わった回だけ」に絞る。
+    await this.#noteVanishedRunnerGauge(summaries);
+    return summaries.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+  }
+
+  /**
+   * {@link vanishedRunnerBacklog} を計算し、runnerId ごとの本数が前回書いた
+   * ときから変わっていれば、その1行だけを日誌へ残す（Issue #1212 running 側。
+   * 段0＝測るだけ）。
+   *
+   * **本数が同じなら書かない。** `list()` は毎ターンの状況の節からも呼ばれる
+   * ので、呼ばれるたびに書くと日誌が膨らむ——`#vanishedRunnerGaugeLastCount`
+   * の doc にある「書く頻度」の判断をここで実施する。
+   *
+   * **0本に戻った runnerId は、書かずに Map から外す**（地雷表「取れない軸に
+   * 0の行を作る」）。
+   */
+  async #noteVanishedRunnerGauge(summaries: readonly ManagerSummary[]): Promise<void> {
+    const backlog = vanishedRunnerBacklog(summaries, this.#registeredRunnerIds());
+    for (const runnerId of this.#vanishedRunnerGaugeLastCount.keys()) {
+      if (!backlog.has(runnerId)) this.#vanishedRunnerGaugeLastCount.delete(runnerId);
+    }
+    for (const [runnerId, entry] of backlog) {
+      if (this.#vanishedRunnerGaugeLastCount.get(runnerId) === entry.count) continue;
+      await this.#journal({
+        type: 'exchange',
+        with: 'manager',
+        role: 'inbound',
+        text: `${EXCHANGE_KIND_GAUGE_PREFIX}${describeVanishedRunnerBacklogLine(runnerId, entry, this.#now())}`,
+      });
+      this.#vanishedRunnerGaugeLastCount.set(runnerId, entry.count);
+    }
   }
 
   denials(managerId: string): ManagerDenial[] {
@@ -11016,6 +11106,98 @@ function isLive(record: ManagerRecord, silentRunners: ReadonlyMap<string, string
   // 強さは `#runnerNotOpenDetail` が自分の口で名乗っている水準まで** ——
   // 「戻せないことの証明ではない」。
   return record.job.sessionId !== undefined;
+}
+
+/**
+ * `running` のまま、宛先の runner が名簿から entry ごと消えている委譲を、
+ * runnerId ごとに数える（Issue #1212 running 側。段0＝測るだけ）。
+ *
+ * **`isLive()` の返り値も `status` も読まない、独立した集計である。** `isLive()`
+ * が `true` を返すかどうかは `record.attached` / `record.job.sessionId` にも
+ * 依存するので、ここで数えているのは「`isLive()` が嘘をついている本数」では
+ * なく「`running` のまま、宛先が名簿からまるごと消えている本数」——後者は
+ * 前者を包む広い集合で、`isLive()` を1文字も動かさずに測れる（#1212 段0の
+ * 指定: 状態の遷移・`isLive()` の返り値には触れない）。
+ *
+ * @param summaries `Pool#list()` が組み立てた `ManagerSummary` の全件
+ *   （`status` / `runnerId` / `startedAt` を読む。`startedAt` は
+ *   `job.createdAt` の写しである——{@link summaryOf} 参照）。
+ * @param registeredRunnerIds いま名簿に entry として載っている runnerId の集合
+ *   （`state` を問わない。{@link Pool.#registeredRunnerIds}）。
+ */
+export function vanishedRunnerBacklog(
+  summaries: readonly ManagerSummary[],
+  registeredRunnerIds: ReadonlySet<string>,
+): ReadonlyMap<string, { count: number; oldestStartedAt: string }> {
+  const backlog = new Map<string, { count: number; oldestStartedAt: string }>();
+  for (const summary of summaries) {
+    if (summary.status !== 'running') continue;
+    if (summary.runnerId === undefined) continue;
+    if (registeredRunnerIds.has(summary.runnerId)) continue;
+    const existing = backlog.get(summary.runnerId);
+    if (existing === undefined) {
+      backlog.set(summary.runnerId, { count: 1, oldestStartedAt: summary.startedAt });
+    } else {
+      existing.count += 1;
+      // ISO8601（`isoDateTime`）どうしは文字列比較が時系列順と一致する
+      // （`schema.ts` の他の箇所——例えば `commitment-fold-contract.ts` の
+      // `createdAt` 比較——と同じ前提）。
+      if (summary.startedAt < existing.oldestStartedAt) {
+        existing.oldestStartedAt = summary.startedAt;
+      }
+    }
+  }
+  return backlog;
+}
+
+/**
+ * {@link vanishedRunnerBacklog} 専用の経過時間の整形。**1時間未満は「N分」
+ * だけ、1時間以上は「N時間M分」**（`describeBackgroundWaitElapsed` と同じ
+ * 丸め方。あちらは private でこのファイルの中でしか呼べないうえ、日をまたぐ
+ * 丸め方までは要らない）。
+ */
+function formatVanishedRunnerElapsed(elapsedMs: number): string {
+  const totalMinutes = Math.floor(elapsedMs / 60_000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return hours < 1 ? `${String(minutes)}分` : `${String(hours)}時間${String(minutes)}分`;
+}
+
+/**
+ * {@link vanishedRunnerBacklog} が1つの runnerId について返した値を、日誌の
+ * 1行へ整形する。
+ *
+ * **`[計器]`（`EXCHANGE_KIND_GAUGE_PREFIX`）は含まない。** 呼び出し元
+ * （`#noteVanishedRunnerGauge`）が付ける——`exchange-kind-coverage.test.ts`
+ * の網羅性の歯は `journal({ ... text: ... })` の `text:` フィールドの式が
+ * 接頭辞定数の識別子を直接含むことを静的に見るので、関数の中に隠すと
+ * その歯から見えなくなる（#1425・#1388 の既存の行も、呼び出し元の
+ * テンプレートリテラルの中で組み立てている——同じ形に揃える）。
+ *
+ * **固有の前半**（「名簿から entry ごと消えている」）を持たせてある——
+ * `[計器]` の後ろに続く文言が #1425「同じ壁を跨いで畳んだ」・#1388
+ * 「合流窓に続けて畳まれた合図」と取り違えないようにするためである。
+ *
+ * **最古の委譲の経過時間は「分かれば」添える。** `oldestStartedAt` が読めない
+ * か未来を指している（経過が負）ときは、経過を捏造せず添え物ごと省く
+ * （`describeBackgroundWaitElapsed` と同じ向き。地雷表「取れない軸に0の行を
+ * 作る」）。
+ */
+export function describeVanishedRunnerBacklogLine(
+  runnerId: string,
+  backlog: { count: number; oldestStartedAt: string },
+  now: number,
+): string {
+  const parsed = Date.parse(backlog.oldestStartedAt);
+  const elapsedMs = Number.isNaN(parsed) ? undefined : now - parsed;
+  const elapsedText =
+    elapsedMs === undefined || elapsedMs < 0
+      ? ''
+      : `（最古の委譲は${formatVanishedRunnerElapsed(elapsedMs)}経過）`;
+  return (
+    `[${runnerId}] 名簿から entry ごと消えている器の上に、` +
+    `running のまま残っている委譲が ${String(backlog.count)} 本ある${elapsedText}。`
+  );
 }
 
 /**

@@ -243,7 +243,7 @@ const EXPECTED_SITE_COUNT: Record<string, number> = {
   // 足した、跨いで畳んだ本数の flush。同じく `EXCHANGE_KIND_GAUGE_PREFIX`）
   // + 1（issue #1388 が `#flushSynthesizedNoticeFor` に足した、合流窓へ
   // 続けて畳まれた合図の到着間隔の計器。同じく `EXCHANGE_KIND_GAUGE_PREFIX`）。
-  'manager.ts': 42,
+  'manager.ts': 43,
 };
 
 describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（issue #1332）', () => {
