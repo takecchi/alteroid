@@ -3263,26 +3263,41 @@ export type JobLease = z.infer<typeof jobLeaseSchema>;
  * `manager_stop`（running・非 force）が `pool.unpushedWork()` から取った、
  * 作業ツリー1本ぶんの枝名の写し（Issue #1228 候補(1)）。
  *
- * **`relativePath` / `branch` の意味は `runner-protocol.ts` の
+ * **`relativePath` / `branch` / `remoteOrigin` の意味は `runner-protocol.ts` の
  * `unpushedWorkTreeSchema` と同一だが、同じ zod スキーマの参照ではない。**
  * `runner-protocol.ts` は `schema.ts` から `jobStatusSchema` 等を import して
  * いる（`grep -Fn -- "from './schema.js'" packages/core/src/runner-protocol.ts`
  * で当たる）ので、逆向きの import（ここから `unpushedWorkTreeSchema` を
  * 引く）は循環参照になる。**だから形だけを独立して複製する。** 複製が
- * 二重管理の実害を生むとしても、この2欄（`relativePath` / `branch`）が
- * 単体で変わることはまず無いと判断した——変えるなら両方を見比べながら
- * 直すこと。
+ * 二重管理の実害を生むとしても、この3欄（`relativePath` / `branch` /
+ * `remoteOrigin`）が単体で変わることはまず無いと判断した——変えるなら
+ * 両方を見比べながら直すこと。
  *
  * 出してよい範囲（有無・件数・枝名まで。ファイル名・差分の中身・
  * コミットメッセージ・author は含まない）は `unpushedWorkTreeSchema` の doc
  * が引いた線をそのまま継ぐ——ここは既に線の内側に在る値を運ぶだけで、
- * 新しい調べものはしない。
+ * 新しい調べものはしない。**Issue #1376 B2 でその線に開けた1点の穴
+ * （origin remote の host/path。userinfo・クエリ・フラグメント・資格・
+ * 生の URL 文字列は落とす）も、同じく `unpushedWorkTreeSchema.remoteOrigin`
+ * の doc をそのまま継ぐ。**
  */
 export const observedWorktreeBranchSchema = z.object({
   /** 探索の起点（`unpushedWorkResultSchema.cwd`）からの相対パス。 */
   relativePath: z.string(),
   /** いまの枝名。detached HEAD、または確かめられなかったときは `null`。 */
   branch: z.string().nullable(),
+  /**
+   * origin remote の host と path（Issue #1376 B2）。取れなかった・
+   * 解釈できなかったときは省く——`unpushedWorkTreeSchema.remoteOrigin` の
+   * doc（落とすもの: userinfo・クエリ・フラグメント・資格・生の URL）を
+   * そのまま継ぐ。
+   */
+  remoteOrigin: z
+    .object({
+      host: z.string(),
+      path: z.string(),
+    })
+    .optional(),
 });
 
 export type ObservedWorktreeBranch = z.infer<typeof observedWorktreeBranchSchema>;

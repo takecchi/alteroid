@@ -1675,6 +1675,34 @@ export const unpushedWorkTreeSchema = z.object({
   uncommittedChangeCount: z.number().int().nonnegative().optional(),
   /** `uncommittedChangeCount` を確かめられなかった理由（省略 = 確かめられた）。 */
   uncommittedChangeCountUnknown: z.string().optional(),
+  /**
+   * `git remote get-url origin` から取り出した host と path（Issue #1376
+   * B2）。移送先で clone し直すには、`workspace locator` が `unknown` の
+   * ときに残る唯一の手がかりが元の枝名だけでは足りなかった——移送先が
+   * 元のマネージャーとは別の repo で動いているかもしれないため。
+   *
+   * **広げたのはこの1点（host と path）だけである。** `unpushedWorkTreeSchema`
+   * の「⛔ 出してよいのは有無・件数・枝名までである」という線は変えていない
+   * ——この欄はその線の外側に例外を1つだけ開けたもので、次を必ず落とす:
+   *
+   * - userinfo（`https://<token>@host/…`・`https://user:pass@host/…`・
+   *   `ssh://git@host/…`・scp 形式 `git@host:owner/repo.git` のどれも、
+   *   `@` より前は一切含めない）
+   * - クエリ文字列（`?token=…` 等）・フラグメント
+   * - 資格情報そのもの、および生の URL 文字列
+   *
+   * 解釈できない・上記を確実に落とせない形（`unpushed-work.ts` の
+   * `parseRemoteOriginUrl` を見よ）は、この欄ごと省く——**生の文字列を
+   * 出すくらいなら、何も出さない。**
+   */
+  remoteOrigin: z
+    .object({
+      /** URL のホスト名のみ（ポート・スキームは含まない）。 */
+      host: z.string(),
+      /** userinfo・クエリ・フラグメントを落とした後のパス（先頭の `/` は落とす）。 */
+      path: z.string(),
+    })
+    .optional(),
 });
 export type UnpushedWorkTree = z.infer<typeof unpushedWorkTreeSchema>;
 

@@ -4469,7 +4469,9 @@ class Pool implements ManagerPool {
       const resumed = await this.#resumeOnce(
         record,
         runner,
-        swapped ? `${runnerSwapNudge(record.job.workspace)}\n\n${message}` : message,
+        swapped
+          ? `${runnerSwapNudge(record.job.workspace, record.job.lastUnpushedWorkObservation)}\n\n${message}`
+          : message,
       );
       if (resumed !== 'resumed') {
         /*
@@ -5236,10 +5238,15 @@ class Pool implements ManagerPool {
             cwd: outcome.result.cwd,
             // **出してよい範囲を継ぐ**（`observedWorktreeBranchSchema` の doc）。
             // `unpushedCommitCount` 等は書き写さない——この欄が答えるのは
-            // 「どの枝を見ればよいか」までである。
+            // 「どの枝を見ればよいか」までである。`remoteOrigin` は
+            // Issue #1376 B2 でその線に開けた1点の穴（host/path のみ）を
+            // そのまま写す。
             worktrees: outcome.result.worktrees.map((worktree) => ({
               relativePath: worktree.relativePath,
               branch: worktree.branch,
+              ...(worktree.remoteOrigin === undefined
+                ? {}
+                : { remoteOrigin: worktree.remoteOrigin }),
             })),
           }
         : { kind: 'unavailable', at, reason: outcome.reason };
@@ -6177,7 +6184,12 @@ class Pool implements ManagerPool {
       const runner = await this.#runnerOf(record);
       if (!runner) continue;
 
-      const nudge = restartNudge(job.status, 'daemon', job.workspace);
+      const nudge = restartNudge(
+        job.status,
+        'daemon',
+        job.workspace,
+        job.lastUnpushedWorkObservation,
+      );
       // **1本が戻せなくても、残りを道連れにしない。** ここで抜けると、後ろに
       // 並んでいた仕事が誰にも拾われないまま `running` として残る。
       //
@@ -7159,7 +7171,12 @@ class Pool implements ManagerPool {
         // 並んでいた仕事が誰にも拾われないまま `running` として残る。
         try {
           const cause: RestartCause = relocating ? 'relocated' : 'runner';
-          const message = restartNudge(status, cause, record.job.workspace);
+          const message = restartNudge(
+            status,
+            cause,
+            record.job.workspace,
+            record.job.lastUnpushedWorkObservation,
+          );
           // 断りが「新しく起きたこと」かを、挑む前の状態で覚えておく（下の日誌の条件）。
           const refusedBefore = record.leaseRefusal !== undefined;
           // 上の doc の順序。**戻れたら下で消す。**
@@ -10144,7 +10161,11 @@ class Pool implements ManagerPool {
         // **`'daemon'` 以外はどちらも器が入れ替わっている**（runner 入れ替え／
         // 移送）ので、workspace の1行は同じ判定で出す。`'daemon'` の挙動は
         // 変えない（1バイトも変えないこと）。
-        cause !== 'daemon' ? cloneWorkspaceAfterSwapLine(workspaceAfterSwap(job.workspace)) : '',
+        cause !== 'daemon'
+          ? cloneWorkspaceAfterSwapLine(
+              workspaceAfterSwap(job.workspace, job.lastUnpushedWorkObservation),
+            )
+          : '',
       ]
         .filter((line) => line !== '')
         .join('\n'),
@@ -10927,11 +10948,85 @@ type RestartCause = 'daemon' | 'runner' | 'relocated';
  * `job.workspace` から同じ判定を引く。ここを2箇所に書くと、直したつもりが片方
  * だけになる。
  */
+/**
+ * `unverified` の locator（`unknown`）について、台帳の最後の未 push 観測
+ * （`job.lastUnpushedWorkObservation`）から作業ツリーごとの clone 先を
+ * 言えるときの1本（Issue #1376 B2）。
+ *
+ * - `clone` — 枝名と origin の host/path の両方が取れた。移送先はここに
+ *   書かれた host/path の branch を clone し直せばよい。
+ * - `unresolved` — この作業ツリーだけは枝名か origin URL のどちらかが
+ *   取れなかった（理由付き）。**この1本だけを「確かめよ」に倒す**——
+ *   他のツリーが取れているなら、そちらまで道連れにしない。
+ */
+type WorkspaceCloneHint =
+  | {
+      readonly kind: 'clone';
+      readonly relativePath: string;
+      readonly host: string;
+      readonly path: string;
+      readonly branch: string;
+    }
+  | { readonly kind: 'unresolved'; readonly relativePath: string; readonly reason: string };
+
 type WorkspaceAfterSwap =
   | { kind: 'kept'; path: string }
   | { kind: 'rebuild'; repository: string; ref: string }
-  | { kind: 'unverified'; path: string }
+  | {
+      kind: 'unverified';
+      path: string;
+      /**
+       * locator が `unknown` で、かつ観測（`lastUnpushedWorkObservation`）が
+       * `kind: 'observed'` で1本以上の作業ツリーを持つときだけ載る
+       * （Issue #1376 B2）。`undefined` のときの文言は今日と1バイトも
+       * 違わない——情報が無いなら新しい主張をしない。
+       */
+      cloneHints?: readonly WorkspaceCloneHint[];
+      /** `cloneHints` が載るときだけ載る、観測した時刻（ISO8601）。 */
+      observedAt?: string;
+    }
   | { kind: 'unrecorded' };
+
+/**
+ * `job.lastUnpushedWorkObservation` から {@link WorkspaceCloneHint} の一覧を
+ * 作る。観測が無い・`unavailable`・作業ツリー0本のいずれかなら `undefined`
+ * を返し、呼び出し元は今日どおりの文言（`unverified` の cloneHints 無し）へ
+ * 倒す——**観測が無いことを新しい主張の材料にしない。**
+ */
+function workspaceCloneHintsFrom(
+  observation: LastUnpushedWorkObservation | undefined,
+): { readonly at: string; readonly hints: readonly WorkspaceCloneHint[] } | undefined {
+  if (observation === undefined || observation.kind !== 'observed') return undefined;
+  if (observation.worktrees.length === 0) return undefined;
+  const hints: WorkspaceCloneHint[] = observation.worktrees.map((worktree) => {
+    if (worktree.branch !== null && worktree.remoteOrigin !== undefined) {
+      return {
+        kind: 'clone',
+        relativePath: worktree.relativePath,
+        host: worktree.remoteOrigin.host,
+        path: worktree.remoteOrigin.path,
+        branch: worktree.branch,
+      };
+    }
+    const reason =
+      worktree.branch === null
+        ? '枝名を確かめられなかった（detached HEAD、または取得時に失敗した）'
+        : 'origin remote の URL を確認できなかった（未設定、または解釈できない形式）';
+    return { kind: 'unresolved', relativePath: worktree.relativePath, reason };
+  });
+  return { at: observation.at, hints };
+}
+
+/** {@link WorkspaceCloneHint} の一覧を、作業ツリーごとに1行へ描く。 */
+function formatWorkspaceCloneHintLines(hints: readonly WorkspaceCloneHint[]): string {
+  return hints
+    .map((hint) =>
+      hint.kind === 'clone'
+        ? `- ${hint.relativePath}: ${hint.host}/${hint.path} の ${hint.branch} を clone し直せ。`
+        : `- ${hint.relativePath}: 確かめよ（${hint.reason}）。`,
+    )
+    .join('\n');
+}
 
 /**
  * `locator` から `WorkspaceAfterSwap` を出す。
@@ -10942,16 +11037,28 @@ type WorkspaceAfterSwap =
  * 読む側に区別する手が無い——区別できないまま「volume に在るので残っている」と
  * 読むと、`unknown` 変種が消したはずの嘘（存在しない永続性の主張）を読む側から
  * 再開することになる。だから保守的な側（`unverified`）へ倒す。
+ *
+ * **`observation` を読むのは `locator.kind === 'unknown'` のときだけ**
+ * （Issue #1376 B2）。`runner-volume` / `shared-volume` / `git` の出力は
+ * `observation` の値に関わらず1バイトも変わらない——clone の指示を出すのは
+ * `unknown` に限る、という決定をここで強制する。
  */
-function workspaceAfterSwap(locator: WorkspaceLocator | undefined): WorkspaceAfterSwap {
+function workspaceAfterSwap(
+  locator: WorkspaceLocator | undefined,
+  observation?: LastUnpushedWorkObservation,
+): WorkspaceAfterSwap {
   if (locator === undefined) return { kind: 'unrecorded' };
   switch (locator.kind) {
     case 'shared-volume':
       return { kind: 'kept', path: locator.path };
     case 'git':
       return { kind: 'rebuild', repository: locator.repository, ref: locator.ref };
-    case 'unknown':
-      return { kind: 'unverified', path: locator.path };
+    case 'unknown': {
+      const found = workspaceCloneHintsFrom(observation);
+      return found === undefined
+        ? { kind: 'unverified', path: locator.path }
+        : { kind: 'unverified', path: locator.path, cloneHints: found.hints, observedAt: found.at };
+    }
     case 'runner-volume':
       return { kind: 'unverified', path: locator.path };
     default: {
@@ -10970,9 +11077,17 @@ function workspaceAfterSwapClause(after: WorkspaceAfterSwap): string {
     case 'unrecorded':
       return '作業ディレクトリが残っているとは限らないので、続きに入る前に手元の状態を確かめよ。';
     case 'unverified':
+      if (after.cloneHints === undefined || after.observedAt === undefined) {
+        return (
+          `作業ディレクトリ（${after.path}）が残っているとは限らないので、` +
+          '続きに入る前に手元の状態を確かめよ。'
+        );
+      }
       return (
-        `作業ディレクトリ（${after.path}）が残っているとは限らないので、` +
-        '続きに入る前に手元の状態を確かめよ。'
+        `作業ディレクトリ（${after.path}）が残っているとは限らない。` +
+        `${after.observedAt} 時点の観測に基づく——これより後に作った枝は含まれない。` +
+        '見つかった作業ツリーごとに次のとおり進めよ:\n' +
+        formatWorkspaceCloneHintLines(after.cloneHints)
       );
     case 'kept':
       return (
@@ -10998,10 +11113,22 @@ function workspaceAfterSwapClause(after: WorkspaceAfterSwap): string {
 function cloneWorkspaceAfterSwapLine(after: WorkspaceAfterSwap): string {
   switch (after.kind) {
     case 'unrecorded':
-    case 'unverified':
       return (
         '器に永続化が無ければ、コミット前の変更は失われている。' +
         '同じ結果を期待せず、手元の状態から組み立て直させること。'
+      );
+    case 'unverified':
+      if (after.cloneHints === undefined || after.observedAt === undefined) {
+        return (
+          '器に永続化が無ければ、コミット前の変更は失われている。' +
+          '同じ結果を期待せず、手元の状態から組み立て直させること。'
+        );
+      }
+      return (
+        `${after.observedAt} 時点の観測に基づく——これより後に作った枝は含まれない。` +
+        'コミット前の変更は失われている前提で、見つかった作業ツリーごとに' +
+        '次のとおり組み立て直させること:\n' +
+        formatWorkspaceCloneHintLines(after.cloneHints)
       );
     case 'kept':
       return (
@@ -11039,10 +11166,13 @@ function cloneWorkspaceAfterSwapLine(after: WorkspaceAfterSwap): string {
  * **判定は `workspaceAfterSwap` に委ねる**（`restartNudge` / `#notifyRestored` と
  * 同じ1つ）。ここに別の判定を書くと、直したつもりが片方だけになる。
  */
-function runnerSwapNudge(locator: WorkspaceLocator | undefined): string {
+function runnerSwapNudge(
+  locator: WorkspaceLocator | undefined,
+  observation?: LastUnpushedWorkObservation,
+): string {
   return (
     '[system] この委譲を最後に走らせていた器は、もう居ない（別の器がこの宛先に応えている）。' +
-    workspaceAfterSwapClause(workspaceAfterSwap(locator))
+    workspaceAfterSwapClause(workspaceAfterSwap(locator, observation))
   );
 }
 
@@ -11076,16 +11206,17 @@ function restartNudge(
   status: JobStatus,
   cause: RestartCause,
   locator: WorkspaceLocator | undefined,
+  observation?: LastUnpushedWorkObservation,
 ): string {
   // **runner が入れ替わったことを「デーモンが再起動した」と伝えない。** 手元が
   // 残っている前提で続きを書き始めると、消えた作業を書いたつもりで進む。
   const head =
     cause === 'runner'
       ? '[system] runner の器が作り直された。' +
-        workspaceAfterSwapClause(workspaceAfterSwap(locator))
+        workspaceAfterSwapClause(workspaceAfterSwap(locator, observation))
       : cause === 'relocated'
         ? '[system] 走らせていた runner が黙ったので、別の器で続きを開いた。' +
-          workspaceAfterSwapClause(workspaceAfterSwap(locator))
+          workspaceAfterSwapClause(workspaceAfterSwap(locator, observation))
         : '[system] デーモンが再起動した。';
   if (status === 'waiting_human') {
     return (

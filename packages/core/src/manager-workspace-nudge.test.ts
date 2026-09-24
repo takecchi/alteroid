@@ -9,7 +9,7 @@ import {
   type RunnerManagerState,
   type RunnerResumeCommand,
 } from './runner-protocol.js';
-import type { InboxEvent, Job, WorkspaceLocator } from './schema.js';
+import type { InboxEvent, Job, LastUnpushedWorkObservation, WorkspaceLocator } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
 /**
@@ -118,7 +118,11 @@ function setup(stores: ReturnType<typeof createMemoryStores>, runner: RunnerClie
   return { pool, inbox };
 }
 
-function jobWith(id: string, workspace: WorkspaceLocator | undefined): Job {
+function jobWith(
+  id: string,
+  workspace: WorkspaceLocator | undefined,
+  lastUnpushedWorkObservation?: LastUnpushedWorkObservation,
+): Job {
   return {
     id,
     managerId: id,
@@ -132,6 +136,7 @@ function jobWith(id: string, workspace: WorkspaceLocator | undefined): Job {
     runnerId: 'runner-primary',
     lastReport: 'スキーマまで書いた',
     ...(workspace === undefined ? {} : { workspace }),
+    ...(lastUnpushedWorkObservation === undefined ? {} : { lastUnpushedWorkObservation }),
   };
 }
 
@@ -207,6 +212,79 @@ describe('runner-swap の一言は job.workspace を読む（#485 の141行目�
     expect(message).toContain('残っているとは限らない');
   });
 
+  it('unknown + 未 push 観測あり: マネージャー向けは作業ツリーごとに host/path/branch を列挙し、観測時刻の一文を含む（Issue #1376 B2）', async () => {
+    const observation: LastUnpushedWorkObservation = {
+      kind: 'observed',
+      at: '2026-09-24T05:00:00.000Z',
+      cwd: '/work/project',
+      worktrees: [
+        {
+          relativePath: 'repo',
+          branch: 'feature/x',
+          remoteOrigin: { host: 'github.com', path: 'acme/widgets.git' },
+        },
+        // このツリーは枝名が取れなかった——理由付きの「確かめよ」に倒れるはず。
+        { relativePath: 'repo2', branch: null },
+      ],
+    };
+    const job = jobWith(
+      'mgr-unknown-observed',
+      { kind: 'unknown', runnerId: 'runner-primary', path: '/data/work', reason: '未確認' },
+      observation,
+    );
+    const { message } = await runnerSwapNudge(job);
+
+    expect(message).toContain('github.com/acme/widgets.git の feature/x を clone し直せ');
+    expect(message).toContain('repo2');
+    expect(message).toContain('確かめよ');
+    expect(message).toContain('2026-09-24T05:00:00.000Z');
+    expect(message).toContain('これより後に作った枝は含まれない');
+  });
+
+  it('runner-volume + 未 push 観測あり: それでも clone の指示は出ない（clone の指示は unknown 限定）', async () => {
+    const observation: LastUnpushedWorkObservation = {
+      kind: 'observed',
+      at: '2026-09-24T05:00:00.000Z',
+      cwd: '/work/project',
+      worktrees: [
+        {
+          relativePath: 'repo',
+          branch: 'feature/x',
+          remoteOrigin: { host: 'github.com', path: 'acme/widgets.git' },
+        },
+      ],
+    };
+    const job = jobWith(
+      'mgr-legacy-observed',
+      { kind: 'runner-volume', runnerId: 'runner-primary', path: '/data/work' },
+      observation,
+    );
+    const { message } = await runnerSwapNudge(job);
+
+    expect(message).toContain('/data/work');
+    expect(message).toContain('残っているとは限らない');
+    expect(message).not.toContain('clone し直せ');
+    expect(message).not.toContain('github.com');
+  });
+
+  it('unknown + 観測が unavailable: 今日の文言のまま（観測が無いなら新しい主張をしない）', async () => {
+    const observation: LastUnpushedWorkObservation = {
+      kind: 'unavailable',
+      at: '2026-09-24T05:00:00.000Z',
+      reason: 'runner が答えなかった',
+    };
+    const job = jobWith(
+      'mgr-unknown-unavailable',
+      { kind: 'unknown', runnerId: 'runner-primary', path: '/data/work', reason: '未確認' },
+      observation,
+    );
+    const { message } = await runnerSwapNudge(job);
+
+    expect(message).toContain('/data/work');
+    expect(message).toContain('残っているとは限らない');
+    expect(message).not.toContain('clone し直せ');
+  });
+
   it('workspace 欄が無い（undefined）: マネージャー向けは今日の文言と完全一致する——情報が無いなら新しい主張をしない', async () => {
     const job = jobWith('mgr-unrecorded', undefined);
     const { message } = await runnerSwapNudge(job);
@@ -237,6 +315,32 @@ describe('runner-swap の一言は job.workspace を読む（#485 の141行目�
 
     expect(cloneText).toContain('https://github.com/acme/widgets.git');
     expect(cloneText).toContain('feature/migrate-db');
+  });
+
+  it('unknown + 未 push 観測あり: クローン向けも host/path/branch を列挙し、path 単体（/data/work）は出さない', async () => {
+    const observation: LastUnpushedWorkObservation = {
+      kind: 'observed',
+      at: '2026-09-24T05:00:00.000Z',
+      cwd: '/work/project',
+      worktrees: [
+        {
+          relativePath: 'repo',
+          branch: 'feature/x',
+          remoteOrigin: { host: 'github.com', path: 'acme/widgets.git' },
+        },
+      ],
+    };
+    const job = jobWith(
+      'mgr-unknown-observed-clone',
+      { kind: 'unknown', runnerId: 'runner-primary', path: '/data/work', reason: '未確認' },
+      observation,
+    );
+    const { cloneText } = await runnerSwapNudge(job);
+
+    expect(cloneText).toContain('github.com/acme/widgets.git の feature/x を clone し直せ');
+    expect(cloneText).toContain('これより後に作った枝は含まれない');
+    // **path は出さない**（`cloneWorkspaceAfterSwapLine` の doc と同じ約束）。
+    expect(cloneText).not.toContain('/data/work');
   });
 
   it('cause === "daemon"（restore() だけで swap() しない経路）は locator に影響されない', async () => {
