@@ -1,10 +1,11 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
+
+import { makeTempDirSync } from '../vitest.tmpdir.js';
 
 import {
   BACKUP_DIR,
@@ -63,7 +64,7 @@ function runCli(args: string[]) {
 
 /** git 管理下の使い捨てツリーを作る（apply/restore が gitHead() 等を呼ぶため）。 */
 function makeTmpGitRepo(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mutate-root-override-'));
+  const dir = makeTempDirSync('mutate-root-override-');
   execFileSync('git', ['init', '-q'], { cwd: dir });
   execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
   execFileSync('git', ['config', 'user.name', 'test'], { cwd: dir });
@@ -130,29 +131,25 @@ describe('mutate-core: setRootOverride は不正な --root を fail-closed で�
 
 describe('mutate-core: setRootOverride は ROOT/MARKER_PATH/BACKUP_DIR の3つをまとめて差し替える', () => {
   it('成功すると3つとも新しい ROOT から作り直される', () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mutate-root-override-pure-'));
-    try {
-      const result = setRootOverride(tmp);
-      const resolvedTmp = path.resolve(tmp);
+    const tmp = makeTempDirSync('mutate-root-override-pure-');
+    const result = setRootOverride(tmp);
+    const resolvedTmp = path.resolve(tmp);
 
-      expect(ROOT).toBe(resolvedTmp);
-      expect(MARKER_PATH).toBe(path.join(resolvedTmp, 'MUTATION-IN-PROGRESS.json'));
-      expect(BACKUP_DIR).toBe(path.join(resolvedTmp, '.mutation-testing', 'backups'));
+    expect(ROOT).toBe(resolvedTmp);
+    expect(MARKER_PATH).toBe(path.join(resolvedTmp, 'MUTATION-IN-PROGRESS.json'));
+    expect(BACKUP_DIR).toBe(path.join(resolvedTmp, '.mutation-testing', 'backups'));
 
-      // 戻り値でも同じ3つを確認できる（呼び出し側が個別に import し直さなくてよい）。
-      expect(result).toEqual({
-        root: resolvedTmp,
-        markerPath: path.join(resolvedTmp, 'MUTATION-IN-PROGRESS.json'),
-        backupDir: path.join(resolvedTmp, '.mutation-testing', 'backups'),
-      });
+    // 戻り値でも同じ3つを確認できる（呼び出し側が個別に import し直さなくてよい）。
+    expect(result).toEqual({
+      root: resolvedTmp,
+      markerPath: path.join(resolvedTmp, 'MUTATION-IN-PROGRESS.json'),
+      backupDir: path.join(resolvedTmp, '.mutation-testing', 'backups'),
+    });
 
-      // 既定（DEFAULT_ROOT）は変えていないことも確認する——上書きは
-      // 「既定を書き換える」のではなく「別の値を指すようにする」である。
-      expect(DEFAULT_ROOT).toBe(REPO_ROOT);
-      expect(ROOT).not.toBe(DEFAULT_ROOT);
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+    // 既定（DEFAULT_ROOT）は変えていないことも確認する——上書きは
+    // 「既定を書き換える」のではなく「別の値を指すようにする」である。
+    expect(DEFAULT_ROOT).toBe(REPO_ROOT);
+    expect(ROOT).not.toBe(DEFAULT_ROOT);
   });
 });
 
@@ -178,16 +175,12 @@ describe('mutate.mjs CLI: --root（回帰・上書き・fail-closed・実効 ROO
   });
 
   it('歯4: --root を渡すと、実効 ROOT がその上書き先として出力に出る', () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mutate-root-override-cli-'));
-    try {
-      const result = runCli(['status', '--root', tmp]);
-      const resolvedTmp = path.resolve(tmp);
-      expect(result.stdout).toContain(`ROOT: ${resolvedTmp}`);
-      expect(result.stdout).toContain('--root で上書き');
-      expect(result.stdout).toContain(`既定は ${REPO_ROOT}`);
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+    const tmp = makeTempDirSync('mutate-root-override-cli-');
+    const result = runCli(['status', '--root', tmp]);
+    const resolvedTmp = path.resolve(tmp);
+    expect(result.stdout).toContain(`ROOT: ${resolvedTmp}`);
+    expect(result.stdout).toContain('--root で上書き');
+    expect(result.stdout).toContain(`既定は ${REPO_ROOT}`);
   });
 
   it('歯3: 存在しない --root は fail-closed になる（exit 非0）', () => {
@@ -204,47 +197,43 @@ describe('mutate.mjs CLI: --root（回帰・上書き・fail-closed・実効 ROO
 
   it('歯1: --root <path> を渡すと apply/restore が MARKER_PATH / BACKUP_DIR も含めてそのツリーを使う', () => {
     const tmp = makeTmpGitRepo();
-    try {
-      const specPath = path.join(tmp, 'spec.json');
-      fs.writeFileSync(
-        specPath,
-        JSON.stringify({
-          id: 'root-override-probe',
-          file: 'target.txt',
-          from: 'hello',
-          to: 'HELLO',
-          expect: 1,
-          target: null,
-          // #993: validateSpec は mustFail（狙いの歯の宣言）を必須にした。
-          // この歯は apply/restore が --root のツリーを正しく使うかだけを
-          // 測っていて、judge（検出/身代わりの判定）はここでは呼ばない
-          // ——この tmp リポジトリに実テストは無い。だから中身は判定に使われず、
-          // validateSpec を通すためのプレースホルダでよい。
-          mustFail: ['root-override-probe はこの歯で judge を呼ばない（apply/restore のみを測る）'],
-        }),
-      );
+    const specPath = path.join(tmp, 'spec.json');
+    fs.writeFileSync(
+      specPath,
+      JSON.stringify({
+        id: 'root-override-probe',
+        file: 'target.txt',
+        from: 'hello',
+        to: 'HELLO',
+        expect: 1,
+        target: null,
+        // #993: validateSpec は mustFail（狙いの歯の宣言）を必須にした。
+        // この歯は apply/restore が --root のツリーを正しく使うかだけを
+        // 測っていて、judge（検出/身代わりの判定）はここでは呼ばない
+        // ——この tmp リポジトリに実テストは無い。だから中身は判定に使われず、
+        // validateSpec を通すためのプレースホルダでよい。
+        mustFail: ['root-override-probe はこの歯で judge を呼ばない（apply/restore のみを測る）'],
+      }),
+    );
 
-      const applyResult = runCli(['apply', '--spec', specPath, '--root', tmp]);
-      expect(applyResult.status).toBe(0);
+    const applyResult = runCli(['apply', '--spec', specPath, '--root', tmp]);
+    expect(applyResult.status).toBe(0);
 
-      // ROOT: target.txt がこのツリーの中で実際に書き換わっている。
-      expect(fs.readFileSync(path.join(tmp, 'target.txt'), 'utf8')).toBe('HELLO world\n');
-      // MARKER_PATH: 印がこのツリーの直下に置かれている。
-      expect(fs.existsSync(path.join(tmp, 'MUTATION-IN-PROGRESS.json'))).toBe(true);
-      // BACKUP_DIR: 控えがこのツリーの .mutation-testing/backups の下に置かれている。
-      expect(
-        fs.existsSync(path.join(tmp, '.mutation-testing', 'backups', 'root-override-probe.bak')),
-      ).toBe(true);
+    // ROOT: target.txt がこのツリーの中で実際に書き換わっている。
+    expect(fs.readFileSync(path.join(tmp, 'target.txt'), 'utf8')).toBe('HELLO world\n');
+    // MARKER_PATH: 印がこのツリーの直下に置かれている。
+    expect(fs.existsSync(path.join(tmp, 'MUTATION-IN-PROGRESS.json'))).toBe(true);
+    // BACKUP_DIR: 控えがこのツリーの .mutation-testing/backups の下に置かれている。
+    expect(
+      fs.existsSync(path.join(tmp, '.mutation-testing', 'backups', 'root-override-probe.bak')),
+    ).toBe(true);
 
-      // 実リポジトリ側には何も漏れていないこと（対象の取り違えが起きていないこと）。
-      expect(fs.existsSync(path.join(REPO_ROOT, 'MUTATION-IN-PROGRESS.json'))).toBe(false);
+    // 実リポジトリ側には何も漏れていないこと（対象の取り違えが起きていないこと）。
+    expect(fs.existsSync(path.join(REPO_ROOT, 'MUTATION-IN-PROGRESS.json'))).toBe(false);
 
-      const restoreResult = runCli(['restore', '--root', tmp]);
-      expect(restoreResult.status).toBe(0);
-      expect(fs.readFileSync(path.join(tmp, 'target.txt'), 'utf8')).toBe('hello world\n');
-      expect(fs.existsSync(path.join(tmp, 'MUTATION-IN-PROGRESS.json'))).toBe(false);
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+    const restoreResult = runCli(['restore', '--root', tmp]);
+    expect(restoreResult.status).toBe(0);
+    expect(fs.readFileSync(path.join(tmp, 'target.txt'), 'utf8')).toBe('hello world\n');
+    expect(fs.existsSync(path.join(tmp, 'MUTATION-IN-PROGRESS.json'))).toBe(false);
   });
 });

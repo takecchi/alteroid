@@ -1,10 +1,11 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
+
+import { makeTempDirSync } from '../vitest.tmpdir.js';
 
 import {
   assertNoUnhandledErrorsLine,
@@ -179,18 +180,8 @@ describe('mutate.mjs CLI: baseline / run の Errors 行チェック（門2）', 
   const MUTATE_JS = fileURLToPath(
     new URL('../.claude/skills/mutation-testing/mutate.mjs', import.meta.url),
   );
-  const tempDirs: string[] = [];
-
-  afterEach(() => {
-    while (tempDirs.length > 0) {
-      const dir = tempDirs.pop();
-      if (dir) fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
   function makeFakePnpmDir(outputText: string): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-pnpm-'));
-    tempDirs.push(dir);
+    const dir = makeTempDirSync('fake-pnpm-');
     const scriptPath = path.join(dir, 'pnpm');
     const content = `#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(outputText)});\nprocess.exit(0);\n`;
     fs.writeFileSync(scriptPath, content, { mode: 0o755 });
@@ -228,8 +219,7 @@ describe('mutate.mjs CLI: baseline / run の Errors 行チェック（門2）', 
   });
 
   it('run: baseline 確認で Errors 行があるとき exit 1 で拒否する', () => {
-    const planPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'mutate-plan-')), 'plan.json');
-    tempDirs.push(path.dirname(planPath));
+    const planPath = path.join(makeTempDirSync('mutate-plan-'), 'plan.json');
     fs.writeFileSync(planPath, '[]');
     const result = runCli(['run', '--plan', planPath], REAL_SETTIMEOUT_REJECT);
     expect(result.status).toBe(1);

@@ -1,10 +1,11 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
+
+import { makeTempDirSync } from '../vitest.tmpdir.js';
 
 import {
   DEFAULT_ROOT,
@@ -66,7 +67,7 @@ function runCli(args: string[]) {
 
 /** git 管理下の使い捨てツリーを作る（`gitHead()` 等が呼ばれるため）。 */
 function makeTmpGitRepo(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mutate-status-known-scaffold-'));
+  const dir = makeTempDirSync('mutate-status-known-scaffold-');
   execFileSync('git', ['init', '-q'], { cwd: dir });
   execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
   execFileSync('git', ['config', 'user.name', 'test'], { cwd: dir });
@@ -92,18 +93,17 @@ const JUDGEMENT_FILES = [
 
 describe('mutate-selftest: findLeftoverWeakToothScaffold（純粋な検出）', () => {
   it('無ければ空配列', () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'weak-tooth-scaffold-pure-none-'));
+    const tmp = makeTempDirSync('weak-tooth-scaffold-pure-none-');
     try {
       setRootOverride(tmp);
       expect(findLeftoverWeakToothScaffold()).toEqual([]);
     } finally {
       setRootOverride(DEFAULT_ROOT);
-      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 
   it('1本だけ在れば1件（kind: weak-tooth）', () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'weak-tooth-scaffold-pure-one-'));
+    const tmp = makeTempDirSync('weak-tooth-scaffold-pure-one-');
     try {
       fs.mkdirSync(path.join(tmp, 'apps/cli/src'), { recursive: true });
       fs.writeFileSync(path.join(tmp, WEAK_TOOTH_FILE), 'x\n');
@@ -113,12 +113,11 @@ describe('mutate-selftest: findLeftoverWeakToothScaffold（純粋な検出）', 
       ]);
     } finally {
       setRootOverride(DEFAULT_ROOT);
-      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 
   it('似た名前だが別のファイル（過剰検出の対照）は含まない', () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'weak-tooth-scaffold-pure-unrelated-'));
+    const tmp = makeTempDirSync('weak-tooth-scaffold-pure-unrelated-');
     try {
       fs.mkdirSync(path.join(tmp, 'apps/cli/src'), { recursive: true });
       fs.writeFileSync(
@@ -129,25 +128,23 @@ describe('mutate-selftest: findLeftoverWeakToothScaffold（純粋な検出）', 
       expect(findLeftoverWeakToothScaffold()).toEqual([]);
     } finally {
       setRootOverride(DEFAULT_ROOT);
-      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 });
 
 describe('mutate-selftest: findLeftoverJudgementFixtureScaffold（純粋な検出）', () => {
   it('無ければ空配列', () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'judgement-scaffold-pure-none-'));
+    const tmp = makeTempDirSync('judgement-scaffold-pure-none-');
     try {
       setRootOverride(tmp);
       expect(findLeftoverJudgementFixtureScaffold()).toEqual([]);
     } finally {
       setRootOverride(DEFAULT_ROOT);
-      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 
   it('2本とも在れば2件、順序は定義順', () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'judgement-scaffold-pure-both-'));
+    const tmp = makeTempDirSync('judgement-scaffold-pure-both-');
     try {
       fs.mkdirSync(path.join(tmp, 'apps/cli/src'), { recursive: true });
       for (const rel of JUDGEMENT_FILES) fs.writeFileSync(path.join(tmp, rel), 'x\n');
@@ -157,7 +154,6 @@ describe('mutate-selftest: findLeftoverJudgementFixtureScaffold（純粋な検�
       );
     } finally {
       setRootOverride(DEFAULT_ROOT);
-      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 });
@@ -193,7 +189,7 @@ describe('mutate-selftest: formatLeftoverWeakToothScaffoldNotice / formatLeftove
 
 describe('mutate-selftest: collectKnownSelftestScaffoldNotices', () => {
   it('何も無ければ空配列', () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'collect-scaffold-none-'));
+    const tmp = makeTempDirSync('collect-scaffold-none-');
     try {
       fs.mkdirSync(path.join(tmp, 'packages/core/src'), { recursive: true });
       fs.writeFileSync(path.join(tmp, DELIVERY_BARREL_REL), 'export const already = 1;\n');
@@ -201,12 +197,11 @@ describe('mutate-selftest: collectKnownSelftestScaffoldNotices', () => {
       expect(collectKnownSelftestScaffoldNotices()).toEqual([]);
     } finally {
       setRootOverride(DEFAULT_ROOT);
-      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 
   it('3種すべて在れば3件返す', () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'collect-scaffold-all-'));
+    const tmp = makeTempDirSync('collect-scaffold-all-');
     try {
       fs.mkdirSync(path.join(tmp, 'packages/core/src'), { recursive: true });
       fs.mkdirSync(path.join(tmp, 'apps/cli/src'), { recursive: true });
@@ -223,7 +218,6 @@ describe('mutate-selftest: collectKnownSelftestScaffoldNotices', () => {
       expect(notices.some((n: string) => n.includes('judgement-fixture'))).toBe(true);
     } finally {
       setRootOverride(DEFAULT_ROOT);
-      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 });
@@ -233,113 +227,89 @@ describe('mutate-selftest: collectKnownSelftestScaffoldNotices', () => {
 describe('mutate.mjs CLI: status は marker が無くても既知の足場を名指しする（#1262 案B）', () => {
   it('陽性対照（印も足場も無い）: 従来どおり exit 0、足場の節は出ない', () => {
     const tmp = makeTmpGitRepo();
-    try {
-      const result = runCli(['status', '--root', tmp]);
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain('印は無い。このツリーに変異が当たったままの状態は無い。');
-      expect(result.stdout).not.toContain('既知の足場');
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+    const result = runCli(['status', '--root', tmp]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('印は無い。このツリーに変異が当たったままの状態は無い。');
+    expect(result.stdout).not.toContain('既知の足場');
   });
 
   it('weak-tooth の使い捨てファイルだけが残っているとき: 名指しして exit 2', () => {
     const tmp = makeTmpGitRepo();
-    try {
-      fs.writeFileSync(path.join(tmp, WEAK_TOOTH_FILE), 'x\n');
-      const result = runCli(['status', '--root', tmp]);
-      expect(result.status).toBe(2);
-      expect(result.stdout).toContain('印は無い。このツリーに変異が当たったままの状態は無い。');
-      expect(result.stdout).toContain('既知の足場が残っている');
-      expect(result.stdout).toContain(`  - ${WEAK_TOOTH_FILE}`);
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+    fs.writeFileSync(path.join(tmp, WEAK_TOOTH_FILE), 'x\n');
+    const result = runCli(['status', '--root', tmp]);
+    expect(result.status).toBe(2);
+    expect(result.stdout).toContain('印は無い。このツリーに変異が当たったままの状態は無い。');
+    expect(result.stdout).toContain('既知の足場が残っている');
+    expect(result.stdout).toContain(`  - ${WEAK_TOOTH_FILE}`);
   });
 
   it('delivery の barrel 足場・フィクスチャが残っているとき: 名指しして exit 2', () => {
     const tmp = makeTmpGitRepo();
-    try {
-      fs.appendFileSync(path.join(tmp, DELIVERY_BARREL_REL), DELIVERY_BARREL_SCAFFOLD_BLOCK);
-      fs.writeFileSync(path.join(tmp, DELIVERY_FIXTURE_MODULE_REL), DELIVERY_FIXTURE_MODULE_BODY);
-      const result = runCli(['status', '--root', tmp]);
-      expect(result.status).toBe(2);
-      expect(result.stdout).toContain('delivery:');
-      expect(result.stdout).toContain(`  - ${DELIVERY_FIXTURE_MODULE_REL}（フィクスチャ本体）`);
-      expect(result.stdout).toContain(
-        `  - ${DELIVERY_BARREL_REL}（一時的な re-export 行が残っている）`,
-      );
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+    fs.appendFileSync(path.join(tmp, DELIVERY_BARREL_REL), DELIVERY_BARREL_SCAFFOLD_BLOCK);
+    fs.writeFileSync(path.join(tmp, DELIVERY_FIXTURE_MODULE_REL), DELIVERY_FIXTURE_MODULE_BODY);
+    const result = runCli(['status', '--root', tmp]);
+    expect(result.status).toBe(2);
+    expect(result.stdout).toContain('delivery:');
+    expect(result.stdout).toContain(`  - ${DELIVERY_FIXTURE_MODULE_REL}（フィクスチャ本体）`);
+    expect(result.stdout).toContain(
+      `  - ${DELIVERY_BARREL_REL}（一時的な re-export 行が残っている）`,
+    );
   });
 
   it('judgement-fixture の使い捨てファイルだけが残っているとき: 名指しして exit 2', () => {
     const tmp = makeTmpGitRepo();
-    try {
-      for (const rel of JUDGEMENT_FILES) fs.writeFileSync(path.join(tmp, rel), 'x\n');
-      const result = runCli(['status', '--root', tmp]);
-      expect(result.status).toBe(2);
-      for (const rel of JUDGEMENT_FILES) expect(result.stdout).toContain(`  - ${rel}`);
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+    for (const rel of JUDGEMENT_FILES) fs.writeFileSync(path.join(tmp, rel), 'x\n');
+    const result = runCli(['status', '--root', tmp]);
+    expect(result.status).toBe(2);
+    for (const rel of JUDGEMENT_FILES) expect(result.stdout).toContain(`  - ${rel}`);
   });
 
   it('やりすぎの対照: 似た名前だが違うファイルは名指ししない（exit 0 のまま）', () => {
     const tmp = makeTmpGitRepo();
-    try {
-      // weak-tooth のフィクスチャに名前が似ているだけの無関係なファイル。
-      fs.writeFileSync(
-        path.join(tmp, 'apps/cli/src/mutation-selftest-render-NOT-A-SCAFFOLD.ts'),
-        'x\n',
-      );
-      // delivery のフィクスチャにも名前が似ているだけの無関係なファイル。
-      fs.writeFileSync(
-        path.join(tmp, 'packages/core/src/mutation-selftest-delivery-fixture-OTHER.ts'),
-        'x\n',
-      );
-      const result = runCli(['status', '--root', tmp]);
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain('印は無い。このツリーに変異が当たったままの状態は無い。');
-      expect(result.stdout).not.toContain('既知の足場');
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+    // weak-tooth のフィクスチャに名前が似ているだけの無関係なファイル。
+    fs.writeFileSync(
+      path.join(tmp, 'apps/cli/src/mutation-selftest-render-NOT-A-SCAFFOLD.ts'),
+      'x\n',
+    );
+    // delivery のフィクスチャにも名前が似ているだけの無関係なファイル。
+    fs.writeFileSync(
+      path.join(tmp, 'packages/core/src/mutation-selftest-delivery-fixture-OTHER.ts'),
+      'x\n',
+    );
+    const result = runCli(['status', '--root', tmp]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('印は無い。このツリーに変異が当たったままの状態は無い。');
+    expect(result.stdout).not.toContain('既知の足場');
   });
 
   it('marker が在るとき: 足場が同時に残っていても、従来どおり marker 側の説明だけを出す（案Bは無関係のまま）', () => {
     const tmp = makeTmpGitRepo();
-    try {
-      fs.writeFileSync(path.join(tmp, WEAK_TOOTH_FILE), 'x\n');
-      const originalContent = 'original\n';
-      fs.writeFileSync(
-        path.join(tmp, 'MUTATION-IN-PROGRESS.json'),
-        JSON.stringify({
-          file: 'target.txt',
-          mutationId: 'probe',
-          from: 'a',
-          to: 'b',
-          startedAt: new Date().toISOString(),
-          backupPath: '.mutation-testing/backups/does-not-matter.bak',
-          headBefore: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+    fs.writeFileSync(path.join(tmp, WEAK_TOOTH_FILE), 'x\n');
+    const originalContent = 'original\n';
+    fs.writeFileSync(
+      path.join(tmp, 'MUTATION-IN-PROGRESS.json'),
+      JSON.stringify({
+        file: 'target.txt',
+        mutationId: 'probe',
+        from: 'a',
+        to: 'b',
+        startedAt: new Date().toISOString(),
+        backupPath: '.mutation-testing/backups/does-not-matter.bak',
+        headBefore: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+        originalContent,
+        md5Pre: execFileSync('node', [
+          '-e',
+          "process.stdout.write(require('crypto').createHash('md5').update(process.argv[1],'utf8').digest('hex'))",
           originalContent,
-          md5Pre: execFileSync('node', [
-            '-e',
-            "process.stdout.write(require('crypto').createHash('md5').update(process.argv[1],'utf8').digest('hex'))",
-            originalContent,
-          ]).toString(),
-          manualRestore: { command: 'noop', verifyMd5Command: 'noop', expectedMd5: 'deadbeef' },
-          alternativeWithCaveat: 'noop',
-        }),
-      );
-      const result = runCli(['status', '--root', tmp]);
-      expect(result.status).toBe(2);
-      expect(result.stdout).toContain('このツリーには変異が当たったままである。');
-      // marker が在る側の分岐には触れていない —— 足場の名指しは出ない。
-      expect(result.stdout).not.toContain('既知の足場が残っている');
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+        ]).toString(),
+        manualRestore: { command: 'noop', verifyMd5Command: 'noop', expectedMd5: 'deadbeef' },
+        alternativeWithCaveat: 'noop',
+      }),
+    );
+    const result = runCli(['status', '--root', tmp]);
+    expect(result.status).toBe(2);
+    expect(result.stdout).toContain('このツリーには変異が当たったままである。');
+    // marker が在る側の分岐には触れていない —— 足場の名指しは出ない。
+    expect(result.stdout).not.toContain('既知の足場が残っている');
   });
 });

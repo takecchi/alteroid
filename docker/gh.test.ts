@@ -18,12 +18,13 @@
  * `reflect-release-prod.test.ts`（本物の CLI を fake CLI に差し替えて実測する型）。
  */
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
+
+import { makeTempDirSync } from '../vitest.tmpdir.js';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'gh');
 
@@ -58,7 +59,7 @@ type RunOptions = {
 
 /** `docker/gh` を、本物には一切触れない env で実行する。 */
 function runGh(args: string[], options: RunOptions = {}): Result & { fakeGhPath: string } {
-  const root = mkdtempSync(join(tmpdir(), 'docker-gh-test.'));
+  const root = makeTempDirSync('docker-gh-test.');
   const fakeGh = setupFakeRealGh(root);
   const credDir = join(root, 'credentials-unused'); // 存在しなくてよい（[-r] が false になるだけ）
 
@@ -87,10 +88,6 @@ function runGh(args: string[], options: RunOptions = {}): Result & { fakeGhPath:
     exitCode = err.status ?? 1;
     stdout = err.stdout?.toString() ?? '';
     stderr = err.stderr?.toString() ?? '';
-  } finally {
-    // 呼び出し側は fakeGhPath を受け取るが、実際には読み戻していない
-    // （root 配下のファイルへの参照はここで完結する）ので、消してよい。
-    rmSync(root, { recursive: true, force: true });
   }
   return { exitCode, stdout, stderr, fakeGhPath: fakeGh };
 }
@@ -169,32 +166,26 @@ describe('ALTEROID_RUNNER_CHILD_UID が読めないとき（fail-open）', () =>
 
 describe('鍵の読み込み（門を足す前からの挙動。壊していないことの回帰）', () => {
   it('ALTEROID_CREDENTIAL_DIR のファイルから GH_TOKEN を読み、本物の gh（この場合は偽物）へ渡す', () => {
-    const root = mkdtempSync(join(tmpdir(), 'docker-gh-cred-test.'));
-    try {
-      const fakeGh = join(root, 'fake-real-gh');
-      // GH_TOKEN が実際に export されて渡ったかを、偽物の中で確かめる。
-      writeFileSync(
-        fakeGh,
-        ['#!/bin/sh', 'printf "GH_TOKEN_SEEN:%s\\n" "${GH_TOKEN:-<unset>}"', 'exit 0', ''].join(
-          '\n',
-        ),
-      );
-      chmodSync(fakeGh, 0o755);
-      const credDir = join(root, 'creds');
-      mkdirSync(credDir, { recursive: true });
-      writeFileSync(join(credDir, 'GH_TOKEN'), 'dummy-not-a-real-token-abc123');
+    const root = makeTempDirSync('docker-gh-cred-test.');
+    const fakeGh = join(root, 'fake-real-gh');
+    // GH_TOKEN が実際に export されて渡ったかを、偽物の中で確かめる。
+    writeFileSync(
+      fakeGh,
+      ['#!/bin/sh', 'printf "GH_TOKEN_SEEN:%s\\n" "${GH_TOKEN:-<unset>}"', 'exit 0', ''].join('\n'),
+    );
+    chmodSync(fakeGh, 0o755);
+    const credDir = join(root, 'creds');
+    mkdirSync(credDir, { recursive: true });
+    writeFileSync(join(credDir, 'GH_TOKEN'), 'dummy-not-a-real-token-abc123');
 
-      const env: NodeJS.ProcessEnv = {
-        PATH: '/usr/bin:/bin',
-        ALTEROID_GH_REAL_BIN: fakeGh,
-        ALTEROID_CREDENTIAL_DIR: credDir,
-        ALTEROID_PROFILE_FILE: join(root, 'no-such-profile.sh'),
-      };
-      const stdout = execFileSync(SCRIPT, ['auth', 'status'], { env, encoding: 'utf8' });
+    const env: NodeJS.ProcessEnv = {
+      PATH: '/usr/bin:/bin',
+      ALTEROID_GH_REAL_BIN: fakeGh,
+      ALTEROID_CREDENTIAL_DIR: credDir,
+      ALTEROID_PROFILE_FILE: join(root, 'no-such-profile.sh'),
+    };
+    const stdout = execFileSync(SCRIPT, ['auth', 'status'], { env, encoding: 'utf8' });
 
-      expect(stdout).toContain('GH_TOKEN_SEEN:dummy-not-a-real-token-abc123');
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    expect(stdout).toContain('GH_TOKEN_SEEN:dummy-not-a-real-token-abc123');
   });
 });

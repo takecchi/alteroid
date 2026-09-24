@@ -1,10 +1,11 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
+
+import { makeTempDirSync } from '../vitest.tmpdir.js';
 
 import {
   DEFAULT_ROOT,
@@ -67,7 +68,7 @@ function runCli(args: string[]) {
 
 /** git 管理下の使い捨てツリーを作る（apply/restore が gitHead() 等を呼ぶため）。 */
 function makeTmpGitRepo(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mutate-delivery-scaffold-leftover-'));
+  const dir = makeTempDirSync('mutate-delivery-scaffold-leftover-');
   execFileSync('git', ['init', '-q'], { cwd: dir });
   execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
   execFileSync('git', ['config', 'user.name', 'test'], { cwd: dir });
@@ -121,7 +122,7 @@ function writeBarrelOnly(dir: string) {
 
 describe('mutate-selftest: findLeftoverDeliveryScaffold（純粋な検出）', () => {
   it('足場もフィクスチャも無ければ空配列', () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'delivery-scaffold-pure-'));
+    const tmp = makeTempDirSync('delivery-scaffold-pure-');
     try {
       fs.mkdirSync(path.join(tmp, 'packages/core/src'), { recursive: true });
       fs.writeFileSync(path.join(tmp, DELIVERY_BARREL_REL), 'export const already = 1;\n');
@@ -129,12 +130,11 @@ describe('mutate-selftest: findLeftoverDeliveryScaffold（純粋な検出）', (
       expect(findLeftoverDeliveryScaffold()).toEqual([]);
     } finally {
       setRootOverride(DEFAULT_ROOT);
-      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 
   it('barrel（packages/core/src/index.ts）そのものが無くても空配列（ENOENT を「足場無し」として飲み込む）', () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'delivery-scaffold-pure-noindex-'));
+    const tmp = makeTempDirSync('delivery-scaffold-pure-noindex-');
     try {
       // packages/core を丸ごと作らない — --root が alteroid 以外のツリーを
       // 指す使い捨てテスト（このファイルの配線の層）で常に起きる形。
@@ -142,12 +142,11 @@ describe('mutate-selftest: findLeftoverDeliveryScaffold（純粋な検出）', (
       expect(findLeftoverDeliveryScaffold()).toEqual([]);
     } finally {
       setRootOverride(DEFAULT_ROOT);
-      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 
   it('フィクスチャ本体だけ在れば1件（kind: fixture）', () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'delivery-scaffold-pure-fixture-'));
+    const tmp = makeTempDirSync('delivery-scaffold-pure-fixture-');
     try {
       fs.mkdirSync(path.join(tmp, 'packages/core/src'), { recursive: true });
       fs.writeFileSync(path.join(tmp, DELIVERY_BARREL_REL), 'export const already = 1;\n');
@@ -158,12 +157,11 @@ describe('mutate-selftest: findLeftoverDeliveryScaffold（純粋な検出）', (
       ]);
     } finally {
       setRootOverride(DEFAULT_ROOT);
-      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 
   it('barrel の re-export 行だけ在れば1件（kind: barrel）', () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'delivery-scaffold-pure-barrel-'));
+    const tmp = makeTempDirSync('delivery-scaffold-pure-barrel-');
     try {
       fs.mkdirSync(path.join(tmp, 'packages/core/src'), { recursive: true });
       fs.writeFileSync(path.join(tmp, DELIVERY_BARREL_REL), 'export const already = 1;\n');
@@ -174,12 +172,11 @@ describe('mutate-selftest: findLeftoverDeliveryScaffold（純粋な検出）', (
       ]);
     } finally {
       setRootOverride(DEFAULT_ROOT);
-      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 
   it('両方在れば2件、順序はフィクスチャ→barrel（元の requireNoLeftover…の判定順と同じ）', () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'delivery-scaffold-pure-both-'));
+    const tmp = makeTempDirSync('delivery-scaffold-pure-both-');
     try {
       fs.mkdirSync(path.join(tmp, 'packages/core/src'), { recursive: true });
       fs.writeFileSync(path.join(tmp, DELIVERY_BARREL_REL), 'export const already = 1;\n');
@@ -191,7 +188,6 @@ describe('mutate-selftest: findLeftoverDeliveryScaffold（純粋な検出）', (
       ]);
     } finally {
       setRootOverride(DEFAULT_ROOT);
-      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 });
@@ -205,7 +201,7 @@ describe('mutate-selftest: findLeftoverDeliveryScaffold（純粋な検出）', (
 
 describe('mutate-selftest: requireNoLeftoverDeliveryFixtureFiles の文面は不変', () => {
   it('足場が無ければ何もしない（投げない）', () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'delivery-scaffold-msg-none-'));
+    const tmp = makeTempDirSync('delivery-scaffold-msg-none-');
     try {
       fs.mkdirSync(path.join(tmp, 'packages/core/src'), { recursive: true });
       fs.writeFileSync(path.join(tmp, DELIVERY_BARREL_REL), 'export const already = 1;\n');
@@ -213,12 +209,11 @@ describe('mutate-selftest: requireNoLeftoverDeliveryFixtureFiles の文面は不
       expect(() => requireNoLeftoverDeliveryFixtureFiles('delivery')).not.toThrow();
     } finally {
       setRootOverride(DEFAULT_ROOT);
-      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 
   it('両方在るときの文面（逐語固定）', () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'delivery-scaffold-msg-both-'));
+    const tmp = makeTempDirSync('delivery-scaffold-msg-both-');
     try {
       fs.mkdirSync(path.join(tmp, 'packages/core/src'), { recursive: true });
       fs.writeFileSync(path.join(tmp, DELIVERY_BARREL_REL), 'export const already = 1;\n');
@@ -240,12 +235,11 @@ describe('mutate-selftest: requireNoLeftoverDeliveryFixtureFiles の文面は不
       );
     } finally {
       setRootOverride(DEFAULT_ROOT);
-      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 
   it('フィクスチャ本体だけのときは、その1行だけを名指しする（barrel の行は出ない）', () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'delivery-scaffold-msg-fixture-'));
+    const tmp = makeTempDirSync('delivery-scaffold-msg-fixture-');
     try {
       fs.mkdirSync(path.join(tmp, 'packages/core/src'), { recursive: true });
       fs.writeFileSync(path.join(tmp, DELIVERY_BARREL_REL), 'export const already = 1;\n');
@@ -265,12 +259,11 @@ describe('mutate-selftest: requireNoLeftoverDeliveryFixtureFiles の文面は不
       expect(message).not.toContain('一時的な re-export 行が残っている');
     } finally {
       setRootOverride(DEFAULT_ROOT);
-      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 
   it('barrel の re-export 行だけのときは、その1行だけを名指しする（フィクスチャの行は出ない）', () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'delivery-scaffold-msg-barrel-'));
+    const tmp = makeTempDirSync('delivery-scaffold-msg-barrel-');
     try {
       fs.mkdirSync(path.join(tmp, 'packages/core/src'), { recursive: true });
       fs.writeFileSync(path.join(tmp, DELIVERY_BARREL_REL), 'export const already = 1;\n');
@@ -290,7 +283,6 @@ describe('mutate-selftest: requireNoLeftoverDeliveryFixtureFiles の文面は不
       expect(message).not.toContain('フィクスチャ本体）');
     } finally {
       setRootOverride(DEFAULT_ROOT);
-      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 });
@@ -324,92 +316,76 @@ describe('mutate-selftest: formatLeftoverDeliveryScaffoldNotice', () => {
 describe('mutate.mjs CLI: restore は成功した後、delivery の足場が残っていれば名指しする', () => {
   it('陽性対照（足場なし）: 復元元/後始末の行の後は1文字も増えない（末尾の改行1個のみ）', () => {
     const tmp = makeTmpGitRepo();
-    try {
-      // この歯専用: packages/core/src/index.ts に足場を一切足さない
-      // （makeTmpGitRepo が書くのは素の barrel 本体だけ）。
-      const specPath = writeSpec(tmp);
-      const applyResult = runCli(['apply', '--spec', specPath, '--root', tmp]);
-      expect(applyResult.status).toBe(0);
+    // この歯専用: packages/core/src/index.ts に足場を一切足さない
+    // （makeTmpGitRepo が書くのは素の barrel 本体だけ）。
+    const specPath = writeSpec(tmp);
+    const applyResult = runCli(['apply', '--spec', specPath, '--root', tmp]);
+    expect(applyResult.status).toBe(0);
 
-      const restoreResult = runCli(['restore', '--root', tmp]);
-      expect(restoreResult.status).toBe(0);
+    const restoreResult = runCli(['restore', '--root', tmp]);
+    expect(restoreResult.status).toBe(0);
 
-      const stdout = restoreResult.stdout ?? '';
-      const marker = '復元元: backup / 後始末: target が無いので後始末は不要（build exit=N/A）';
-      const idx = stdout.indexOf(marker);
-      expect(idx).toBeGreaterThan(-1);
-      // **ここが歯の核心** —— 現行の出力（この PR 着手前に実測した逐語）は
-      // この行のあと改行1個で終わる。1文字でも増えたら、足場が無い回にも
-      // 何かを足したことになる。
-      expect(stdout.slice(idx)).toBe(`${marker}\n`);
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+    const stdout = restoreResult.stdout ?? '';
+    const marker = '復元元: backup / 後始末: target が無いので後始末は不要（build exit=N/A）';
+    const idx = stdout.indexOf(marker);
+    expect(idx).toBeGreaterThan(-1);
+    // **ここが歯の核心** —— 現行の出力（この PR 着手前に実測した逐語）は
+    // この行のあと改行1個で終わる。1文字でも増えたら、足場が無い回にも
+    // 何かを足したことになる。
+    expect(stdout.slice(idx)).toBe(`${marker}\n`);
   });
 
   it('足場が両方在るとき: 2ファイルを名指しし、外し方を出す', () => {
     const tmp = makeTmpGitRepo();
-    try {
-      writeBothScaffold(tmp);
-      const specPath = writeSpec(tmp);
-      const applyResult = runCli(['apply', '--spec', specPath, '--root', tmp]);
-      expect(applyResult.status).toBe(0);
+    writeBothScaffold(tmp);
+    const specPath = writeSpec(tmp);
+    const applyResult = runCli(['apply', '--spec', specPath, '--root', tmp]);
+    expect(applyResult.status).toBe(0);
 
-      const restoreResult = runCli(['restore', '--root', tmp]);
-      expect(restoreResult.status).toBe(0);
-      const stdout = restoreResult.stdout ?? '';
+    const restoreResult = runCli(['restore', '--root', tmp]);
+    expect(restoreResult.status).toBe(0);
+    const stdout = restoreResult.stdout ?? '';
 
-      expect(stdout).toContain(
-        '復元元: backup / 後始末: target が無いので後始末は不要（build exit=N/A）',
-      );
-      expect(stdout).toContain('delivery: 前回の selftest が置き去りにした足場が残っている');
-      expect(stdout).toContain(`  - ${DELIVERY_FIXTURE_MODULE_REL}（フィクスチャ本体）`);
-      expect(stdout).toContain(`  - ${DELIVERY_BARREL_REL}（一時的な re-export 行が残っている）`);
-      expect(stdout).toContain(DELIVERY_BARREL_SCAFFOLD_BEGIN);
-      expect(stdout).toContain(DELIVERY_BARREL_SCAFFOLD_END);
+    expect(stdout).toContain(
+      '復元元: backup / 後始末: target が無いので後始末は不要（build exit=N/A）',
+    );
+    expect(stdout).toContain('delivery: 前回の selftest が置き去りにした足場が残っている');
+    expect(stdout).toContain(`  - ${DELIVERY_FIXTURE_MODULE_REL}（フィクスチャ本体）`);
+    expect(stdout).toContain(`  - ${DELIVERY_BARREL_REL}（一時的な re-export 行が残っている）`);
+    expect(stdout).toContain(DELIVERY_BARREL_SCAFFOLD_BEGIN);
+    expect(stdout).toContain(DELIVERY_BARREL_SCAFFOLD_END);
 
-      // 足場は「残す」設計そのままである——restore はこれを消さない。
-      expect(fs.existsSync(path.join(tmp, DELIVERY_FIXTURE_MODULE_REL))).toBe(true);
-      expect(fs.readFileSync(path.join(tmp, DELIVERY_BARREL_REL), 'utf8')).toContain(
-        DELIVERY_BARREL_SCAFFOLD_BEGIN,
-      );
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+    // 足場は「残す」設計そのままである——restore はこれを消さない。
+    expect(fs.existsSync(path.join(tmp, DELIVERY_FIXTURE_MODULE_REL))).toBe(true);
+    expect(fs.readFileSync(path.join(tmp, DELIVERY_BARREL_REL), 'utf8')).toContain(
+      DELIVERY_BARREL_SCAFFOLD_BEGIN,
+    );
   });
 
   it('フィクスチャ本体だけ在るとき: その1件だけを名指しする', () => {
     const tmp = makeTmpGitRepo();
-    try {
-      writeFixtureOnly(tmp);
-      const specPath = writeSpec(tmp);
-      runCli(['apply', '--spec', specPath, '--root', tmp]);
-      const restoreResult = runCli(['restore', '--root', tmp]);
-      expect(restoreResult.status).toBe(0);
-      const stdout = restoreResult.stdout ?? '';
+    writeFixtureOnly(tmp);
+    const specPath = writeSpec(tmp);
+    runCli(['apply', '--spec', specPath, '--root', tmp]);
+    const restoreResult = runCli(['restore', '--root', tmp]);
+    expect(restoreResult.status).toBe(0);
+    const stdout = restoreResult.stdout ?? '';
 
-      expect(stdout).toContain(`  - ${DELIVERY_FIXTURE_MODULE_REL}（フィクスチャ本体）`);
-      expect(stdout).not.toContain('一時的な re-export 行が残っている');
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+    expect(stdout).toContain(`  - ${DELIVERY_FIXTURE_MODULE_REL}（フィクスチャ本体）`);
+    expect(stdout).not.toContain('一時的な re-export 行が残っている');
   });
 
   it('barrel の re-export 行だけ在るとき: その1件だけを名指しする', () => {
     const tmp = makeTmpGitRepo();
-    try {
-      writeBarrelOnly(tmp);
-      const specPath = writeSpec(tmp);
-      runCli(['apply', '--spec', specPath, '--root', tmp]);
-      const restoreResult = runCli(['restore', '--root', tmp]);
-      expect(restoreResult.status).toBe(0);
-      const stdout = restoreResult.stdout ?? '';
+    writeBarrelOnly(tmp);
+    const specPath = writeSpec(tmp);
+    runCli(['apply', '--spec', specPath, '--root', tmp]);
+    const restoreResult = runCli(['restore', '--root', tmp]);
+    expect(restoreResult.status).toBe(0);
+    const stdout = restoreResult.stdout ?? '';
 
-      expect(stdout).toContain(`  - ${DELIVERY_BARREL_REL}（一時的な re-export 行が残っている）`);
-      expect(stdout).not.toContain('フィクスチャ本体）');
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+    expect(stdout).toContain(`  - ${DELIVERY_BARREL_REL}（一時的な re-export 行が残っている）`);
+    expect(stdout).not.toContain('フィクスチャ本体）');
   });
 });
 
@@ -450,102 +426,82 @@ function applyThenCorruptBackup(tmp: string): void {
 describe('mutate.mjs CLI: restore が「印が無い」で失敗する場合も、足場が残っていれば名指しする（#1358 の限界を塞ぐ）', () => {
   it('陽性対照（印も足場も無い）: 出力は現行の main と逐語で同じ（足した文が1文字も出ない）', () => {
     const tmp = makeTmpGitRepo();
-    try {
-      // apply を呼ばない — 印そのものが無い状態を作る。足場も置かない。
-      const restoreResult = runCli(['restore', '--root', tmp]);
-      expect(restoreResult.status).toBe(1);
-      const stdout = restoreResult.stdout ?? '';
-      // 実装前に実測した逐語（このテストを実装前に赤/緑いずれでも走らせて
-      // 固定した値）。`ROOT: …` の行だけ tmp のパスに依存するので、
-      // 固定の末尾（restore セクション以降）だけを厳密に照合する。
-      const idx = stdout.indexOf('── restore ──');
-      expect(idx).toBeGreaterThan(-1);
-      expect(stdout.slice(idx)).toBe('── restore ──\nエラー: 印が無い。\n');
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+    // apply を呼ばない — 印そのものが無い状態を作る。足場も置かない。
+    const restoreResult = runCli(['restore', '--root', tmp]);
+    expect(restoreResult.status).toBe(1);
+    const stdout = restoreResult.stdout ?? '';
+    // 実装前に実測した逐語（このテストを実装前に赤/緑いずれでも走らせて
+    // 固定した値）。`ROOT: …` の行だけ tmp のパスに依存するので、
+    // 固定の末尾（restore セクション以降）だけを厳密に照合する。
+    const idx = stdout.indexOf('── restore ──');
+    expect(idx).toBeGreaterThan(-1);
+    expect(stdout.slice(idx)).toBe('── restore ──\nエラー: 印が無い。\n');
   });
 
   it('印が無く、足場が両方在るとき: 「印が無い。」は残ったまま、名指しと外し方も出る', () => {
     const tmp = makeTmpGitRepoWithScaffoldNoMarker(writeBothScaffold);
-    try {
-      const restoreResult = runCli(['restore', '--root', tmp]);
-      expect(restoreResult.status).toBe(1);
-      const stdout = restoreResult.stdout ?? '';
+    const restoreResult = runCli(['restore', '--root', tmp]);
+    expect(restoreResult.status).toBe(1);
+    const stdout = restoreResult.stdout ?? '';
 
-      expect(stdout).toContain('エラー: 印が無い。');
-      expect(stdout).toContain('delivery: 前回の selftest が置き去りにした足場が残っている');
-      expect(stdout).toContain(`  - ${DELIVERY_FIXTURE_MODULE_REL}（フィクスチャ本体）`);
-      expect(stdout).toContain(`  - ${DELIVERY_BARREL_REL}（一時的な re-export 行が残っている）`);
-      expect(stdout).toContain(DELIVERY_BARREL_SCAFFOLD_BEGIN);
-      expect(stdout).toContain(DELIVERY_BARREL_SCAFFOLD_END);
-      // **この回は何も復元していない。** 成功後の文脈の「印の解除はここまでで
-      // 完了している」を言うと嘘になる（#1262 継続）。
-      expect(stdout).toContain('印は最初から無く、この restore は何も書き戻していない');
-      expect(stdout).not.toContain('印の解除はここまでで完了している');
+    expect(stdout).toContain('エラー: 印が無い。');
+    expect(stdout).toContain('delivery: 前回の selftest が置き去りにした足場が残っている');
+    expect(stdout).toContain(`  - ${DELIVERY_FIXTURE_MODULE_REL}（フィクスチャ本体）`);
+    expect(stdout).toContain(`  - ${DELIVERY_BARREL_REL}（一時的な re-export 行が残っている）`);
+    expect(stdout).toContain(DELIVERY_BARREL_SCAFFOLD_BEGIN);
+    expect(stdout).toContain(DELIVERY_BARREL_SCAFFOLD_END);
+    // **この回は何も復元していない。** 成功後の文脈の「印の解除はここまでで
+    // 完了している」を言うと嘘になる（#1262 継続）。
+    expect(stdout).toContain('印は最初から無く、この restore は何も書き戻していない');
+    expect(stdout).not.toContain('印の解除はここまでで完了している');
 
-      // 足場は消えていない——`restoreMutation` に一切触っていないので、
-      // 「印が無い」で失敗した回が足場を消す/作るということも無い。
-      expect(fs.existsSync(path.join(tmp, DELIVERY_FIXTURE_MODULE_REL))).toBe(true);
-      expect(fs.readFileSync(path.join(tmp, DELIVERY_BARREL_REL), 'utf8')).toContain(
-        DELIVERY_BARREL_SCAFFOLD_BEGIN,
-      );
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+    // 足場は消えていない——`restoreMutation` に一切触っていないので、
+    // 「印が無い」で失敗した回が足場を消す/作るということも無い。
+    expect(fs.existsSync(path.join(tmp, DELIVERY_FIXTURE_MODULE_REL))).toBe(true);
+    expect(fs.readFileSync(path.join(tmp, DELIVERY_BARREL_REL), 'utf8')).toContain(
+      DELIVERY_BARREL_SCAFFOLD_BEGIN,
+    );
   });
 
   it('印が無く、フィクスチャ本体だけ在るとき: その1件だけを名指しする', () => {
     const tmp = makeTmpGitRepoWithScaffoldNoMarker(writeFixtureOnly);
-    try {
-      const restoreResult = runCli(['restore', '--root', tmp]);
-      expect(restoreResult.status).toBe(1);
-      const stdout = restoreResult.stdout ?? '';
+    const restoreResult = runCli(['restore', '--root', tmp]);
+    expect(restoreResult.status).toBe(1);
+    const stdout = restoreResult.stdout ?? '';
 
-      expect(stdout).toContain('エラー: 印が無い。');
-      expect(stdout).toContain(`  - ${DELIVERY_FIXTURE_MODULE_REL}（フィクスチャ本体）`);
-      expect(stdout).not.toContain('一時的な re-export 行が残っている');
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+    expect(stdout).toContain('エラー: 印が無い。');
+    expect(stdout).toContain(`  - ${DELIVERY_FIXTURE_MODULE_REL}（フィクスチャ本体）`);
+    expect(stdout).not.toContain('一時的な re-export 行が残っている');
   });
 
   it('印が無く、barrel の re-export 行だけ在るとき: その1件だけを名指しする', () => {
     const tmp = makeTmpGitRepoWithScaffoldNoMarker(writeBarrelOnly);
-    try {
-      const restoreResult = runCli(['restore', '--root', tmp]);
-      expect(restoreResult.status).toBe(1);
-      const stdout = restoreResult.stdout ?? '';
+    const restoreResult = runCli(['restore', '--root', tmp]);
+    expect(restoreResult.status).toBe(1);
+    const stdout = restoreResult.stdout ?? '';
 
-      expect(stdout).toContain('エラー: 印が無い。');
-      expect(stdout).toContain(`  - ${DELIVERY_BARREL_REL}（一時的な re-export 行が残っている）`);
-      expect(stdout).not.toContain('フィクスチャ本体）');
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+    expect(stdout).toContain('エラー: 印が無い。');
+    expect(stdout).toContain(`  - ${DELIVERY_BARREL_REL}（一時的な re-export 行が残っている）`);
+    expect(stdout).not.toContain('フィクスチャ本体）');
   });
 
   it('印は在るが restoreMutation が失敗する回（控えが汚染されている）は、足場が在っても名指しを出さない', () => {
     const tmp = makeTmpGitRepo();
-    try {
-      writeBothScaffold(tmp);
-      applyThenCorruptBackup(tmp);
+    writeBothScaffold(tmp);
+    applyThenCorruptBackup(tmp);
 
-      const restoreResult = runCli(['restore', '--root', tmp]);
-      expect(restoreResult.status).toBe(1);
-      const stdout = restoreResult.stdout ?? '';
+    const restoreResult = runCli(['restore', '--root', tmp]);
+    expect(restoreResult.status).toBe(1);
+    const stdout = restoreResult.stdout ?? '';
 
-      // 印を残す側の既存の文面はそのまま出る。
-      expect(stdout).toContain('控えの md5 が md5Pre と一致しない');
-      expect(stdout).toContain('印は残す。');
-      // 足場は在るのに、名指しは出ない——印が在る回にはこの PR の変更は
-      // 一切触らない(今までどおり)。
-      expect(stdout).not.toContain('delivery: 前回の selftest が置き去りにした足場が残っている');
+    // 印を残す側の既存の文面はそのまま出る。
+    expect(stdout).toContain('控えの md5 が md5Pre と一致しない');
+    expect(stdout).toContain('印は残す。');
+    // 足場は在るのに、名指しは出ない——印が在る回にはこの PR の変更は
+    // 一切触らない(今までどおり)。
+    expect(stdout).not.toContain('delivery: 前回の selftest が置き去りにした足場が残っている');
 
-      // 印は本当に残っている（"印は残す。" が字義どおりであることの裏取り）。
-      expect(fs.existsSync(path.join(tmp, 'MUTATION-IN-PROGRESS.json'))).toBe(true);
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+    // 印は本当に残っている（"印は残す。" が字義どおりであることの裏取り）。
+    expect(fs.existsSync(path.join(tmp, 'MUTATION-IN-PROGRESS.json'))).toBe(true);
   });
 });

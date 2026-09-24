@@ -1,8 +1,9 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
+
+import { makeTempDirSync } from '../vitest.tmpdir.js';
 
 import {
   EXIT_OBSERVATION_DUE,
@@ -514,7 +515,7 @@ describe('runStaticSkipGuard（I/O込みの合成。実リポジトリに対し�
 
   /** tmpdir に「最小の `vitest.config.ts` ＋ テスト1本」だけを持つ根を作る。 */
   function makeStaticSkipRoot(body: string) {
-    const dir = mkdtempSync(join(tmpdir(), 'test-guard-static-skip-'));
+    const dir = makeTempDirSync('test-guard-static-skip-');
     writeFileSync(
       join(dir, 'vitest.config.ts'),
       "export default { test: { include: ['**/*.test.ts'] } };\n",
@@ -532,30 +533,22 @@ describe('runStaticSkipGuard（I/O込みの合成。実リポジトリに対し�
    */
   it('合成ルート: 無条件 skip が1件在ると EXIT_STATIC_SKIP と歯Bの文言が返る', async () => {
     const root = makeStaticSkipRoot(`it${dotSkip()}('止めたまま', () => {});\n`);
-    try {
-      const result = await runStaticSkipGuard(root);
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.exitCode).toBe(EXIT_STATIC_SKIP);
-        expect(result.message).toContain('無条件の静的 skip が 1 件見つかった');
-        expect(result.message).toContain('fixture.test.ts:1');
-        expect(result.message).toContain('skipIf');
-      }
-    } finally {
-      rmSync(root, { recursive: true, force: true });
+    const result = await runStaticSkipGuard(root);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.exitCode).toBe(EXIT_STATIC_SKIP);
+      expect(result.message).toContain('無条件の静的 skip が 1 件見つかった');
+      expect(result.message).toContain('fixture.test.ts:1');
+      expect(result.message).toContain('skipIf');
     }
   });
 
   it('合成ルート: 無条件 skip が無ければ合格になる（走査は1ファイル）', async () => {
     const root = makeStaticSkipRoot("it('動く', () => {});\n");
-    try {
-      const result = await runStaticSkipGuard(root);
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.scanned).toBe(1);
-      }
-    } finally {
-      rmSync(root, { recursive: true, force: true });
+    const result = await runStaticSkipGuard(root);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.scanned).toBe(1);
     }
   });
 
@@ -839,7 +832,7 @@ describe('runObservationGuard（I/O込みの合成。実リポジトリに対し
 
   /** tmpdir に「最小の `vitest.config.ts` ＋ 観測用テスト1本」だけを持つ根を作る。 */
   function makeObservationRoot(deadline: string) {
-    const dir = mkdtempSync(join(tmpdir(), 'test-guard-observation-'));
+    const dir = makeTempDirSync('test-guard-observation-');
     writeFileSync(
       join(dir, 'vitest.config.ts'),
       "export default { test: { include: ['**/*.test.ts'] } };\n",
@@ -859,7 +852,7 @@ describe('runObservationGuard（I/O込みの合成。実リポジトリに対し
 
   /** 名乗ってはいるが2項目を書いていない観測用テスト1本だけを持つ根を作る（#1206）。 */
   function makeUndeclaredObservationRoot() {
-    const dir = mkdtempSync(join(tmpdir(), 'test-guard-observation-undeclared-'));
+    const dir = makeTempDirSync('test-guard-observation-undeclared-');
     writeFileSync(
       join(dir, 'vitest.config.ts'),
       "export default { test: { include: ['**/*.test.ts'] } };\n",
@@ -885,37 +878,28 @@ describe('runObservationGuard（I/O込みの合成。実リポジトリに対し
    */
   it('合成ルート: 申告不備は EXIT_OBSERVATION_UNDECLARED と歯Cの文言（2項目と SKILL.md への導線）になる', async () => {
     const root = makeUndeclaredObservationRoot();
-    try {
-      const result = await runObservationGuard(root, '2026-08-27');
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.exitCode).toBe(EXIT_OBSERVATION_UNDECLARED);
-        expect(result.message).toContain('申告不備');
-        expect(result.message).toContain('fixture.observed.test.ts:1');
-        expect(result.message).toContain('終了条件');
-        expect(result.message).toContain('見直し期限');
-        expect(result.message).toContain('.claude/skills/observation-tests/SKILL.md');
-      }
-    } finally {
-      rmSync(root, { recursive: true, force: true });
+    const result = await runObservationGuard(root, '2026-08-27');
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.exitCode).toBe(EXIT_OBSERVATION_UNDECLARED);
+      expect(result.message).toContain('申告不備');
+      expect(result.message).toContain('fixture.observed.test.ts:1');
+      expect(result.message).toContain('終了条件');
+      expect(result.message).toContain('見直し期限');
+      expect(result.message).toContain('.claude/skills/observation-tests/SKILL.md');
     }
   });
 
   it('today を渡さなければ既定値が「今日（UTC）」になる——期限が昨日の根では期限超過、今日の根では合格', async () => {
     const dueRoot = makeObservationRoot(utcDay(-1));
     const notYetRoot = makeObservationRoot(utcDay(0));
-    try {
-      const due = await runObservationGuard(dueRoot);
-      expect(due.ok).toBe(false);
-      if (!due.ok) {
-        expect(due.exitCode).toBe(EXIT_OBSERVATION_DUE);
-      }
-      const notYet = await runObservationGuard(notYetRoot);
-      expect(notYet.ok).toBe(true);
-    } finally {
-      rmSync(dueRoot, { recursive: true, force: true });
-      rmSync(notYetRoot, { recursive: true, force: true });
+    const due = await runObservationGuard(dueRoot);
+    expect(due.ok).toBe(false);
+    if (!due.ok) {
+      expect(due.exitCode).toBe(EXIT_OBSERVATION_DUE);
     }
+    const notYet = await runObservationGuard(notYetRoot);
+    expect(notYet.ok).toBe(true);
   });
 });
 

@@ -2,7 +2,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
+
+import { makeTempDirSync } from '../vitest.tmpdir.js';
 
 import {
   buildCensusOutputPath,
@@ -28,19 +30,8 @@ import {
  * boundary`（本物の vitest・本物の repo テストに対して実行）が見る。**
  */
 
-const tempFiles: string[] = [];
-
-afterEach(() => {
-  while (tempFiles.length > 0) {
-    const f = tempFiles.pop();
-    if (f) fs.rmSync(f, { force: true, recursive: true });
-  }
-});
-
 function writeCensusFile(content: string): string {
-  const p = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'census-test-')), 'census.json');
-  tempFiles.push(p);
-  tempFiles.push(path.dirname(p));
+  const p = path.join(makeTempDirSync('census-test-'), 'census.json');
   fs.writeFileSync(p, content);
   return p;
 }

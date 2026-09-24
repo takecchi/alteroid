@@ -21,32 +21,14 @@
  * グローバル設定が無いので、渡さないと commit がそこで落ちる。
  */
 import { execFileSync } from 'node:child_process';
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
+
+import { makeTempDirSync } from '../../vitest.tmpdir.js';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'reflect-release-prod.sh');
-
-// このファイルの describe はどれも独立したトップレベルで、1つの親には
-// 収まっていない。ファイル全体に効かせるため、module-level の afterEach で
-// mkdtempSync が作った一時ディレクトリをまとめて片付ける。
-const createdDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of createdDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
 
 /** この環境にグローバル設定が無いので、commit するたびに明示で渡す。 */
 const GIT_IDENTITY = ['-c', 'user.email=reflect-test@example.com', '-c', 'user.name=Reflect Test'];
@@ -171,8 +153,7 @@ type ScenarioSetup = {
  * - diverged : release/prod が main と共通の祖先すら持たない（main に無いコミット）
  */
 function buildScenario(kind: ScenarioKind): ScenarioSetup {
-  const root = mkdtempSync(join(tmpdir(), 'reflect-release-prod-test.'));
-  createdDirs.push(root);
+  const root = makeTempDirSync('reflect-release-prod-test.');
   const originPath = initOrigin(root);
   const { seedPath, shas } = initSeed(root, 3);
   git(seedPath, ['remote', 'add', 'origin', originPath]);
@@ -312,8 +293,7 @@ describe('壊れて判定に到達しなかったとき (#7)', () => {
   // ここでも1行出すことを確かめる。origin remote が無い状態を「壊れた」の
   // 代表として使う（git を PATH から外すより再現が安定する）。
   it('origin remote が無いと、非0で終わり、それでも「=== 反映結果:」の行が出る', () => {
-    const root = mkdtempSync(join(tmpdir(), 'reflect-release-prod-test.'));
-    createdDirs.push(root);
+    const root = makeTempDirSync('reflect-release-prod-test.');
     const originPath = initOrigin(root);
     const { seedPath } = initSeed(root, 1);
     git(seedPath, ['remote', 'add', 'origin', originPath]);

@@ -1,9 +1,10 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
+
+import { makeTempDirSync } from '../vitest.tmpdir.js';
 
 // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 import { findNulByteHits, NUL_CHAR } from './check-tracked-nul-bytes-core.mjs';
@@ -70,30 +71,22 @@ describe('check-tracked-nul-bytes: findNulByteHits', () => {
 
 describe('check-tracked-nul-bytes: 一時ファイル経由の検出', () => {
   it('NUL バイトを含む一時ファイルを実際に読み込んで検出する（リポジトリは汚さない）', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'check-tracked-nul-bytes-'));
+    const dir = makeTempDirSync('check-tracked-nul-bytes-');
     const path = join(dir, 'has-nul.txt');
-    try {
-      writeFileSync(path, Buffer.from(['a', 'b', NUL_CHAR, 'c'].join('')));
-      const content = readFileSync(path, 'utf8');
-      const hits = findNulByteHits([{ path, content }]);
-      expect(hits.length).toBe(1);
-      expect(hits[0].path).toBe(path);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    writeFileSync(path, Buffer.from(['a', 'b', NUL_CHAR, 'c'].join('')));
+    const content = readFileSync(path, 'utf8');
+    const hits = findNulByteHits([{ path, content }]);
+    expect(hits.length).toBe(1);
+    expect(hits[0].path).toBe(path);
   });
 
   it('（対照）NUL の無い一時ファイルは緑になる', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'check-tracked-nul-bytes-'));
+    const dir = makeTempDirSync('check-tracked-nul-bytes-');
     const path = join(dir, 'clean.txt');
-    try {
-      writeFileSync(path, 'abc');
-      const content = readFileSync(path, 'utf8');
-      const hits = findNulByteHits([{ path, content }]);
-      expect(hits).toEqual([]);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    writeFileSync(path, 'abc');
+    const content = readFileSync(path, 'utf8');
+    const hits = findNulByteHits([{ path, content }]);
+    expect(hits).toEqual([]);
   });
 });
 

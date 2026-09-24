@@ -1,10 +1,11 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
+
+import { makeTempDirSync } from '../vitest.tmpdir.js';
 
 import {
   SELFTEST_RECOVERY_COMMANDS,
@@ -86,28 +87,24 @@ describe('mutate-selftest: selftestMarkerPresentMessage は復元経路を名指
 
 describe('mutate-selftest: 印が残った状態で selftest を起こすと、その案内が実際に出る', () => {
   it('印を置いた ROOT では backup-corruption が復元経路を出して止まる', () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mutate-selftest-marker-guidance-'));
-    try {
-      // 中身は読まれない —— `requireNoMarker` は存在だけを見て、シナリオの
-      // いちばん最初（`ensureFixtureClean` より前）で止まる。
-      fs.writeFileSync(path.join(tmp, 'MUTATION-IN-PROGRESS.json'), '{}\n');
+    const tmp = makeTempDirSync('mutate-selftest-marker-guidance-');
+    // 中身は読まれない —— `requireNoMarker` は存在だけを見て、シナリオの
+    // いちばん最初（`ensureFixtureClean` より前）で止まる。
+    fs.writeFileSync(path.join(tmp, 'MUTATION-IN-PROGRESS.json'), '{}\n');
 
-      const result = spawnSync(
-        'node',
-        [MUTATE_CLI, 'selftest', '--scenario', 'backup-corruption', '--root', tmp],
-        { cwd: REPO_ROOT, encoding: 'utf8' },
-      );
-      const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+    const result = spawnSync(
+      'node',
+      [MUTATE_CLI, 'selftest', '--scenario', 'backup-corruption', '--root', tmp],
+      { cwd: REPO_ROOT, encoding: 'utf8' },
+    );
+    const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
 
-      expect(result.status).not.toBe(0);
-      expect(output).toContain('印が既にある');
-      expect(output).toContain(SELFTEST_RECOVERY_COMMANDS.status);
-      expect(output).toContain(SELFTEST_RECOVERY_COMMANDS.restore);
+    expect(result.status).not.toBe(0);
+    expect(output).toContain('印が既にある');
+    expect(output).toContain(SELFTEST_RECOVERY_COMMANDS.status);
+    expect(output).toContain(SELFTEST_RECOVERY_COMMANDS.restore);
 
-      // 実リポジトリ側へ漏れていないこと（対象の取り違えが起きていないこと）。
-      expect(fs.existsSync(path.join(REPO_ROOT, 'MUTATION-IN-PROGRESS.json'))).toBe(false);
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+    // 実リポジトリ側へ漏れていないこと（対象の取り違えが起きていないこと）。
+    expect(fs.existsSync(path.join(REPO_ROOT, 'MUTATION-IN-PROGRESS.json'))).toBe(false);
   });
 });

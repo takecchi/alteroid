@@ -10,12 +10,13 @@
  * 何を環境に残し、何を残さないか」だけである。
  */
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
+
+import { makeTempDirSync } from '../vitest.tmpdir.js';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'alteroid-db');
 
@@ -77,21 +78,9 @@ function run(args: string[], databaseUrl: string | undefined): Result {
   }
 }
 
-const createdDirs: string[] = [];
-
 function mktemp(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'alteroid-db-test-'));
-  createdDirs.push(dir);
-  return dir;
+  return makeTempDirSync('alteroid-db-test-');
 }
-
-afterEach(() => {
-  // `run()` が返した POSTGRES_PASSWORD_FILE は各 it の中で読み戻されるので、
-  // it の実行中は消せない——ここ（afterEach）でまとめて消す。
-  for (const dir of createdDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
 
 describe('docker/alteroid-db', () => {
   it('ALTEROID_DATABASE_URL が無ければ exit 1 で理由を言う', () => {

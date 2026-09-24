@@ -1,10 +1,11 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
+
+import { makeTempDirSync } from '../vitest.tmpdir.js';
 
 import {
   buildScaffoldControlMarker,
@@ -793,18 +794,8 @@ const OTHER_TOOTH =
   'fake/other.test.ts > 別の歯 > これは変異にもマーカーにも反応せず常に通る（正しく宣言できる狙いの歯）';
 
 describe('mutate.mjs run: 足場の赤を差し引いて判定する（端から端まで）', () => {
-  const tempDirs: string[] = [];
-
-  afterEach(() => {
-    while (tempDirs.length > 0) {
-      const dir = tempDirs.pop();
-      if (dir) fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
   function makeTmpGitRepo(): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mutate-scaffold-control-'));
-    tempDirs.push(dir);
+    const dir = makeTempDirSync('mutate-scaffold-control-');
     execFileSync('git', ['init', '-q'], { cwd: dir });
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
     execFileSync('git', ['config', 'user.name', 'test'], { cwd: dir });
@@ -815,8 +806,7 @@ describe('mutate.mjs run: 足場の赤を差し引いて判定する（端から
   }
 
   function makeFakePnpmDir(): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-pnpm-scaffold-'));
-    tempDirs.push(dir);
+    const dir = makeTempDirSync('fake-pnpm-scaffold-');
     fs.writeFileSync(path.join(dir, 'pnpm'), FAKE_PNPM_BODY, { mode: 0o755 });
     return dir;
   }

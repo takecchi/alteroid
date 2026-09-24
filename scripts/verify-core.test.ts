@@ -1,11 +1,12 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtemp, rm, writeFile, mkdir, chmod, symlink, unlink } from 'node:fs/promises';
+import { rm, writeFile, mkdir, chmod, symlink, unlink } from 'node:fs/promises';
 import { writeFileSync, readFileSync, statSync, copyFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
+
+import { makeTempDir } from '../vitest.tmpdir.js';
 
 import {
   classifyTest,
@@ -40,16 +41,9 @@ const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url));
  * **片方だけでは受け取れない、というのが依頼者の条件だった。**
  */
 describe('pnpm verify — 通し直しを無料にする判定', () => {
-  const made: string[] = [];
-
-  afterEach(async () => {
-    for (const dir of made.splice(0)) await rm(dir, { recursive: true, force: true });
-  });
-
   /** commit が1つある使い捨ての git リポジトリ。 */
   async function makeRepo(): Promise<string> {
-    const dir = await mkdtemp(join(tmpdir(), 'verify-core-'));
-    made.push(dir);
+    const dir = await makeTempDir('verify-core-');
     const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
     git('init', '-q');
     git('config', 'user.email', 'test@example.invalid');
@@ -229,8 +223,7 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
   });
 
   it('git リポジトリでなければ指紋を取れず、走る側へ倒す', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'verify-core-bare-'));
-    made.push(dir);
+    const dir = await makeTempDir('verify-core-bare-');
     expect(fingerprint(dir)).toBeNull();
     expect(decideSkip({ repo: dir, recordPath: join(dir, 'nope.json') })).toMatchObject({
       skip: false,
@@ -334,23 +327,26 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
       const dir = await makeRepo();
       const linked = join(dir, '..', `linked-${Date.now()}`);
       execFileSync('git', ['worktree', 'add', '-q', linked, '-b', 'wt'], { cwd: dir });
-      made.push(linked);
+      // `linked` は `mkdtemp` の産物ではない（`git worktree add` が作る）ので
+      // helper の管理外——ここだけ自前で片付ける。
+      try {
+        // 前提: `.git` はディレクトリではなくファイルである。
+        expect(statSync(join(linked, '.git')).isFile()).toBe(true);
 
-      // 前提: `.git` はディレクトリではなくファイルである。
-      expect(statSync(join(linked, '.git')).isFile()).toBe(true);
+        const resolved = recordPathFor(linked) as string;
+        expect(resolved).not.toBeNull();
+        // 実体の git ディレクトリ側を指していること（`<worktree>/.git/…` ではない）。
+        expect(statSync(dirname(resolved)).isDirectory()).toBe(true);
 
-      const resolved = recordPathFor(linked) as string;
-      expect(resolved).not.toBeNull();
-      // 実体の git ディレクトリ側を指していること（`<worktree>/.git/…` ではない）。
-      expect(statSync(dirname(resolved)).isDirectory()).toBe(true);
-
-      // **そこへ実際に書けること。** これが前の版で落ちていた1手である。
-      expect(() => writeFileSync(resolved, '{}\n')).not.toThrow();
+        // **そこへ実際に書けること。** これが前の版で落ちていた1手である。
+        expect(() => writeFileSync(resolved, '{}\n')).not.toThrow();
+      } finally {
+        await rm(linked, { recursive: true, force: true });
+      }
     });
 
     it('git リポジトリでなければ置き場を返さない', async () => {
-      const dir = await mkdtemp(join(tmpdir(), 'verify-core-nogit-'));
-      made.push(dir);
+      const dir = await makeTempDir('verify-core-nogit-');
       expect(recordPathFor(dir)).toBeNull();
     });
   });
@@ -883,16 +879,9 @@ describe('decideRecord（Issue #1191）: 全体の成功記録を書いてよい
  * `test` のときだけ vitest の集計行を出す。
  */
 describe('pnpm verify — 統合の歯（Issue #1191, C5）', () => {
-  const made: string[] = [];
-
-  afterEach(async () => {
-    for (const dir of made.splice(0)) await rm(dir, { recursive: true, force: true });
-  });
-
   /** 使い捨ての git リポジトリ（`verify.mjs` / `verify-core.mjs` のコピー込み）。 */
   async function makeE2eRepo(): Promise<string> {
-    const dir = await mkdtemp(join(tmpdir(), 'verify-e2e-repo-'));
-    made.push(dir);
+    const dir = await makeTempDir('verify-e2e-repo-');
     const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
     git('init', '-q');
     git('config', 'user.email', 'test@example.invalid');
@@ -912,8 +901,7 @@ describe('pnpm verify — 統合の歯（Issue #1191, C5）', () => {
   /** 偽の `pnpm`（別ディレクトリ。**repo の外**——さもないと呼び出しの記録
    * ファイル自身が repo の指紋に混ざり、毎回ツリーが「動いた」ことになる）。 */
   async function makeFakePnpm(): Promise<{ toolsDir: string; logPath: string; binDir: string }> {
-    const toolsDir = await mkdtemp(join(tmpdir(), 'verify-e2e-tools-'));
-    made.push(toolsDir);
+    const toolsDir = await makeTempDir('verify-e2e-tools-');
     const binDir = join(toolsDir, 'bin');
     await mkdir(binDir, { recursive: true });
     const logPath = join(toolsDir, 'pnpm-calls.log');

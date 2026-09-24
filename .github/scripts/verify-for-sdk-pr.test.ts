@@ -25,19 +25,12 @@
  * ない形に変わった場合は、この歯は何も言わない。** そこは測れていない。
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
+
+import { makeTempDirSync } from '../../vitest.tmpdir.js';
 
 // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 import { STEPS } from '../../scripts/verify-core.mjs';
@@ -137,17 +130,8 @@ function initRepo(root: string): string {
   return repoPath;
 }
 
-const createdDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of createdDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
 function setup() {
-  const root = mkdtempSync(join(tmpdir(), 'verify-for-sdk-pr-test.'));
-  createdDirs.push(root);
+  const root = makeTempDirSync('verify-for-sdk-pr-test.');
   const repoPath = initRepo(root);
   const fakePnpm = join(root, 'fake-pnpm.sh');
   writeFakePnpm(fakePnpm);

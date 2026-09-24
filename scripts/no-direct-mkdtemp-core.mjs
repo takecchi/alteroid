@@ -52,21 +52,22 @@
  *
  * ## 許可リスト
  *
- * `ALLOWLIST` は「helper 導入より前からある直接呼び出し」を機械的に洗った
- * もの（当初52ファイル、2026-09-24 時点、PR #1437 マージ後の `main` 上で洗い直した）。
- * 移行は3本の PR に分けて段階的にやると決めた（PR 本文に理由を書く）。理由は
- * 1ファイル1行、そのファイルがいま実際にどう後片付けしているかを現物で
- * 確かめて書いてある（`ALLOWLIST` の doc）。**1本目の PR（packages/core/ の18件）で
+ * `ALLOWLIST` は当初「helper 導入より前からある直接呼び出し」を機械的に
+ * 洗ったもの（当初52ファイル、2026-09-24 時点、PR #1437 マージ後の `main` 上で
+ * 洗い直した）。移行は3本の PR に分けて段階的にやると決めた（PR 本文に理由を
+ * 書く）。理由は1ファイル1行、そのファイルがいま実際にどう後片付けして
+ * いるかを現物で確かめて書いた。**1本目の PR（packages/core/ の18件）で
  * 34ファイルへ、2本目の PR（apps/cli・apps/daemon・apps/runner・
- * packages/storage-fs の16件）で18ファイルへ減った** — 残りは scripts/
- * （11）・.github/（3）・docker/（3）・railway/（1）の18ファイルで、
- * 後続の3本目の PR で移す。
- * 許可リストに無いファイルで新しく直接呼び出しが増えたら、この歯が赤くなる。
+ * packages/storage-fs の16件）で18ファイルへ、3本目の PR（scripts/・
+ * .github/scripts/・docker/・railway/ の18件）で0件へ減った。**
+ * ⟹ **2026-09-24 時点で `ALLOWLIST` は空である。** 許可リストに無いファイルで
+ * 新しく直接呼び出しが増えたら、この歯が即座に赤くなる。
  *
  * **許可リストは古びたら赤くする。** 許可リストに載っているのに実際には
  * もう直接呼んでいないファイル（＝移行が済んだ）が残っていると、
- * `judgeMkdtempScan` の「stale」判定でこの歯自身が赤くなる。段階的に
- * 減らしていく形にするには、消し忘れたら気づける仕組みが要る。
+ * `judgeMkdtempScan` の「stale」判定でこの歯自身が赤くなる。空になった今も、
+ * この判定そのものは生きている——将来また正当な理由で許可リストへ書き戻す
+ * ファイルが出たときに、消し忘れがあれば同じ仕組みで気づける。
  */
 
 /** 名前付き呼び出し（`mkdtemp(` / `mkdtempSync(`）と名前空間呼び出し
@@ -153,106 +154,23 @@ export function judgeMkdtempScan(matchedPaths, hits, allowlist) {
 }
 
 /**
- * 許可リスト（相対パス → 理由）。**段階的な移行の途中である**（3本の PR に
- * 分けると決めた。1本目で packages/core/ の18件、2本目で apps/cli・
- * apps/daemon・apps/runner・packages/storage-fs の16件を helper へ移した）。
+ * 許可リスト（相対パス → 理由）。3本の PR に分けて段階的に移した
+ * （1本目 #1441 で packages/core/ の18件、2本目 #1443 で apps/cli・
+ * apps/daemon・apps/runner・packages/storage-fs の16件、3本目で
+ * scripts/・.github/scripts/・docker/・railway/ の残り18件を helper へ移した）。
+ * **2026-09-24 時点で ALLOWLIST は空。** 新しく直接呼び出しを書いたテスト
+ * ファイルは、理由の有無を問わずこの歯へ即座に引っかかる——`vitest.tmpdir.ts`
+ * の `makeTempDir` / `makeTempDirSync` を使うこと。
  *
- * 各行の理由は、そのファイルが**いま実際にどう後片付けしているか**を現物で
- * 確かめて書いた（当初は 2026-09-24、PR #1437 マージ後の `main`（`500dab2`）の
- * 上で洗い直した。以後このリストが古びたら上の stale 判定が赤くする）。理由の
- * 末尾はどれも「helper への移行待ち。」で揃えてある——揃えたのはそこだけで、
- * その前はファイル固有の事実である。
+ * `packages/storage-fs/src/index.test.ts`（1本目 #1441）や
+ * `scripts/mutate-delivery-scaffold-leftover.test.ts`（3本目、このファイル
+ * 自身の逐語）のように、**一時ディレクトリの後片付けとは別の理由で**
+ * `mkdtemp` 系の呼び出しではない `rm()` / `setRootOverride()` 等を残した
+ * 箇所はある——それらはこの歯の対象外（`mkdtemp` / `mkdtempSync` の呼び出し
+ * そのものではないため）なので、ALLOWLIST に載せる理由にはならない。
  *
- * 出てくる分類（ファイルごとの逐語に埋め込んである。ここでは索引として並べる）:
- * - **beforeEach/afterEach**: `let` 変数を `beforeEach` で作り、対応する
- *   `afterEach` で `rm`/`rmSync` する。いちばん多い形。
- * - **it 直書き + try/finally**: `it`（または呼ばれた関数）の中だけで作って
- *   同じ場所の `finally` で消す。複数 `it` にまたがらない。
- * - **共有配列 + afterEach**（この repo の helper と同じ発想）: 作るたびに
- *   配列へ積み、`afterEach` が配列を空にしながらまとめて `rm` する。
- *   `docker/alteroid-db.test.ts`（#1437 で導入）/ `scripts/verify-core.test.ts` /
- *   `scripts/mutate-{aggregate-blocks,census,scaffold-control,unhandled-errors}.test.ts`
- *   がこの形——**helper 導入前から、同じ設計に独立して行き着いていた**。
- *
- * 内訳（2026-09-24 時点、18ファイル）: 10ファイルが named import 経由
- * （`mkdtemp(` / `mkdtempSync(`）、8ファイル（`scripts/mutate-*.test.ts`）が
- * namespace import 経由（`fs.mkdtempSync(`）。`railway/scale-runners.test.ts`
- * は `mkdtempSync` という語を doc コメントで触れているだけで実際の呼び出しが
- * 無いため、ここには含めていない（含めると stale 判定に引っかかる）。
+ * 本番コードの mkdtemp の挙動そのものを確かめるテストなど、helper に
+ * 移せない正当な理由が今後出てきたら、そのファイル固有の事実を添えて
+ * ここへ書き戻すこと（`formatMkdtempGuardMessage` の案内と同じ）。
  */
-const MIGRATION_SUFFIX = 'helper への移行待ち。';
-
-export const ALLOWLIST = new Map([
-  [
-    '.github/scripts/reflect-release-prod.test.ts',
-    `module-level の createdDirs 配列 + afterEach でまとめて rm する（2箇所、複数の describe にまたがるため file-level にしてある）。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    '.github/scripts/update-claude-sdk.test.ts',
-    `独立した2つの describe（update-claude-sdk.sh 用 / open-claude-sdk-pr.sh 用）がそれぞれ自前の createdDirs 配列 + afterEach を持つ。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    '.github/scripts/verify-for-sdk-pr.test.ts',
-    `module-level の setup() に対応する module-level の createdDirs 配列 + afterEach。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'docker/alteroid-db.test.ts',
-    `共有配列 + afterEach（#1437 で導入）。mktemp() ヘルパーが作るたびに createdDirs 配列へ積み、afterEach でまとめて rmSync する——run() が返す POSTGRES_PASSWORD_FILE を it が run() の後で読むため it の中では消せない。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'docker/alteroidd.test.ts',
-    `run() ヘルパー自身の try/finally で rmSync する（#1437 で導入）。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'docker/gh.test.ts',
-    `runGh() ヘルパー自身の try/finally で rmSync する。単発の it（docker-gh-cred-test.）も try/finally を持つ（#1437 で導入）。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'railway/setup.test.ts',
-    `configInputAsync() が子プロセスの close（と error）のどちらでも rmSync する（#1437 で導入）。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'scripts/check-tracked-nul-bytes.test.ts',
-    `it 直書き（2箇所）。it ごとに dir を作り、同じ it の try/finally で rmSync する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'scripts/mutate-aggregate-blocks.test.ts',
-    `共有配列 + afterEach（namespace import）。makeFakePnpmDir() 等が作るたびに tempDirs 配列へ積み、afterEach でまとめて rmSync する——mutation-testing のフェイク pnpm/plan を組み立てる素材で、mkdtemp 自体を確かめているのではない。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'scripts/mutate-census.test.ts',
-    `共有配列 + afterEach（namespace import）。writeCensusFile() が作るたびに tempFiles 配列へ積み、afterEach でまとめて rmSync する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'scripts/mutate-delivery-scaffold-leftover.test.ts',
-    `it 直書き（10箇所、namespace import）。it ごとに dir/tmp を作り、同じ it の try/finally で rmSync する——mutation-testing のフェイク repo を組み立てる素材で、mkdtemp 自体を確かめているのではない。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'scripts/mutate-root-override.test.ts',
-    `it 直書き（3箇所、namespace import）。makeTmpGitRepo() 等が作り、呼び出し側の try/finally で rmSync する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'scripts/mutate-scaffold-control.test.ts',
-    `共有配列 + afterEach（namespace import）。makeTmpGitRepo() / makeFakePnpmDir() が作るたびに tempDirs 配列へ積み、afterEach でまとめて rmSync する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'scripts/mutate-selftest-marker-guidance.test.ts',
-    `it 直書き（namespace import）。it の中で tmp を作り、try/finally で rmSync する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'scripts/mutate-status-known-scaffold.test.ts',
-    `it 直書き（8箇所、namespace import）。makeTmpGitRepo() ヘルパーの戻り値を含め、すべて呼び出し側の try/finally で rmSync する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'scripts/mutate-unhandled-errors.test.ts',
-    `共有配列 + afterEach（namespace import）。makeFakePnpmDir() 等が作るたびに tempDirs 配列へ積み、afterEach でまとめて rmSync する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'scripts/test-guard-core.test.ts',
-    `it 直書き。makeStaticSkipRoot() 等3つのヘルパーが、静的スキャン用のフィクスチャ root を作って返し、呼び出し側の try/finally で rmSync する——readIncludeGlobs 等を直接呼ぶだけで実際に vitest を子プロセスとして起こしてはいないので、repo 直下に置く必要は無い。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'scripts/verify-core.test.ts',
-    `共有配列 + afterEach（describe ごとに独立した made 配列が2組）。makeRepo() / makeE2eRepo() / makeFakePnpm() が作るたびに made 配列へ積み、afterEach でまとめて rm する。${MIGRATION_SUFFIX}`,
-  ],
-]);
+export const ALLOWLIST = new Map([]);
