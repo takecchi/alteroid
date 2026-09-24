@@ -582,10 +582,10 @@ describe('確認へ上がらずに止められた実行（permissionMode: auto�
     const runnerId = await s.pool.runnerIdOf(managerId);
     if (runnerId === undefined) throw new Error('runnerId が無い');
     // createLocalRunner は RUNNER_CAPABILITIES を名乗る。
-    expect(s.pool.runnerHasCapability(runnerId, 'awaiting-background-signal')).toBe(true);
+    expect(s.pool.runnerHasCapability?.(runnerId, 'awaiting-background-signal')).toBe(true);
     // 名乗っていない能力・名乗りを受けていない器は false（持つと仮定しない）。
-    expect(s.pool.runnerHasCapability(runnerId, 'no-such-capability')).toBe(false);
-    expect(s.pool.runnerHasCapability('runner-never-seen', 'awaiting-background-signal')).toBe(
+    expect(s.pool.runnerHasCapability?.(runnerId, 'no-such-capability')).toBe(false);
+    expect(s.pool.runnerHasCapability?.('runner-never-seen', 'awaiting-background-signal')).toBe(
       false,
     );
     await s.pool.stop();
