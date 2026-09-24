@@ -481,7 +481,28 @@ export function toTokenSourcePresence(raw: unknown): TokenSourcePresence {
   return raw.trim().length > 0 ? 'present' : 'empty';
 }
 
-/** SDK が実際に出す9値だけの集合（{@link AccountApiKeySource} の `'unrecognized'` は含めない）。 */
+/**
+ * SDK が実際に出す9値だけの集合（{@link AccountApiKeySource} の `'unrecognized'` は含めない）。
+ *
+ * **この行が `pnpm check:sdk-quotes` の同期の門になる**（issue #1447。{@link
+ * SDK_API_PROVIDERS} と同じ形）。`AccountInfo.apiKeySource` 自体は SDK 上 `string`
+ * だが、この集合が鏡像にしているのは SDK が別に export している union の
+ * `ApiKeySource` のほうで、直下の逐語はその宣言そのもの（`@anthropic-ai/claude-agent-sdk@0.3.281`
+ * 同梱の `sdk.d.ts`）である。SDK がこの union に10個目の値を足せば、当てている
+ * 部分文字列がずれて検査が赤くなる。
+ *
+ * [sdk-verbatim ApiKeySource]
+ * > export declare type ApiKeySource = 'ANTHROPIC_API_KEY' | 'apiKeyHelper' | '/login managed key' | 'none' | 'user' | 'project' | 'org' | 'temporary' | 'oauth';
+ *
+ * **型の歯も別に在る**（`usage-snapshot.test.ts` の `describe('SDK の ApiKeySource と
+ * 許可リストの同期（#1447）')`）——SDK の `ApiKeySource` と
+ * `Exclude<AccountApiKeySource, 'unrecognized'>` がずれると `pnpm typecheck` が落ちる。
+ *
+ * **⚠️ 残る限界。** `accountInfo()` が `ApiKeySource` の外の値を返し始めても
+ * （`AccountInfo.apiKeySource` が `string` である以上ありうる）、どちらの門も
+ * 赤くならない——その値は `'unrecognized'` へ畳まれる。守っているのは
+ * 「鏡像にしている union と揃っていること」までである。
+ */
 const SDK_API_KEY_SOURCES: ReadonlySet<string> = new Set([
   'ANTHROPIC_API_KEY',
   'apiKeyHelper',
@@ -521,12 +542,11 @@ export function toAccountApiKeySource(raw: unknown): AccountApiKeySource | undef
  * [sdk-verbatim AccountInfo.apiProvider]
  * > apiProvider?: 'firstParty' | 'bedrock' | 'vertex' | 'foundry' | 'anthropicAws' | 'anthropicGoogleCloud' | 'mantle' | 'gateway';
  *
- * **`SDK_API_KEY_SOURCES`（`apiKeySource` 側、直上）にはこの機構が無い。**
- * `AccountInfo.apiKeySource` は SDK 上 `string` としか宣言されておらず（逐語は
- * {@link AccountApiKeySource} の doc）、union ではないので同じ形の逐語では
- * 守れない——素通しにしないための許可リストではあるが、SDK が値を増やしたことを
- * 機械的に検出する手段は無いままである。**こちらは union なので、逐語がそのまま
- * 同期の門になる。**
+ * **`SDK_API_KEY_SOURCES`（`apiKeySource` 側、直上）も同じ門を持つ**（issue #1447）。
+ * ⚠️ ここには長く「あちらにはこの機構が無い」と書いてあった ——
+ * `AccountInfo.apiKeySource` が `string` としか宣言されていないことだけを見た
+ * 言い方で、SDK が同じ値の union を `ApiKeySource` として別に export している
+ * ことを見落としていた。あちらの門はその union に当てている。
  */
 const SDK_API_PROVIDERS: ReadonlySet<string> = new Set([
   'firstParty',

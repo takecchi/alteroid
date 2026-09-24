@@ -1,7 +1,9 @@
+import type { ApiKeySource } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
 import { judgeTokenCandidate } from './token-candidate.js';
 import {
+  accountApiKeySourceSchema,
   accountUsageSchema,
   accountUsageStateSchema,
   classifyLimitsUnavailable,
@@ -17,6 +19,7 @@ import {
   toTokenSourcePresence,
 } from './usage-snapshot.js';
 import type { UsageProbeHandle, UsageProbeQuery } from './usage-probe.js';
+import type { AccountApiKeySource } from './usage-snapshot.js';
 
 const AT = '2026-08-14T10:00:00.000Z';
 
@@ -537,6 +540,31 @@ describe('toAccountApiKeySource（#681 (2)・単体）', () => {
     expect(toAccountApiKeySource(undefined)).not.toBe(toAccountApiKeySource('sk-ant-xxxxxxxx'));
     expect(toAccountApiKeySource(undefined)).toBeUndefined();
     expect(toAccountApiKeySource('sk-ant-xxxxxxxx')).toBe('unrecognized');
+  });
+});
+
+/** `A` と `B` が互いに代入できるか（union の要素が一致するか）。 */
+type SameUnion<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+
+describe('SDK の ApiKeySource と許可リストの同期（#1447）', () => {
+  it('SDK の ApiKeySource と、unrecognized を除いた AccountApiKeySource は同じ値の集合である', () => {
+    // **型の歯。** SDK が union に値を足しても消しても、この型は `false` になって
+    // 代入が型エラーになる（`pnpm typecheck` が落ちる）。`check:sdk-quotes` の逐語
+    // （`SDK_API_KEY_SOURCES` の doc）と二重にしてあるのは、あちらが文言の一致しか
+    // 見ないのに対し、こちらは型の中身を見るからである。
+    const same: SameUnion<ApiKeySource, Exclude<AccountApiKeySource, 'unrecognized'>> = true;
+    expect(same).toBe(true);
+  });
+
+  it('zod enum の unrecognized 以外の値は、全部 toAccountApiKeySource を素通りする', () => {
+    // **実行時の歯。** `SDK_API_KEY_SOURCES`（関数の中の許可リスト）と
+    // `accountApiKeySourceSchema`（型の出所）は別々のリテラルなので、片方だけ
+    // 足すと割れる。割れたら、足された値が `'unrecognized'` へ落ちてここで赤くなる。
+    const options = accountApiKeySourceSchema.options.filter((value) => value !== 'unrecognized');
+    expect(options).toHaveLength(9);
+    for (const value of options) {
+      expect(toAccountApiKeySource(value)).toBe(value);
+    }
   });
 });
 
