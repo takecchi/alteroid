@@ -2437,6 +2437,30 @@ describe('HTTP API', () => {
    * 常に `denials: []` を載せると、作り直した直後がいちばん「止められていない」
    * ように見える。`manager_list` が拒否ゼロの行に何も足さないのと揃える。
    */
+  it('拒否の最後の時刻（lastAt。#1455）が GET /managers まで落ちずに届く', async () => {
+    fake.managerList.push({
+      managerId: 'mgr-denied-lastat',
+      status: 'running',
+      live: true,
+      cwd: '/work/project',
+      request: '止められている仕事',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+      waiting: [],
+    });
+    fake.managerDenials.set('mgr-denied-lastat', [
+      { tool: 'Bash', count: 1, actor: 'worker', lastAt: '2026-09-24T07:00:00.000Z' },
+    ]);
+    // **`managerDenialSchema`（openapi.ts）が宣言していなければ、`.parse()` がここで
+    // 黙って落とす** —— 人間の入口（CLI・Web）だけが止められた後の動きを読めなくなる。
+    const list = (await (await app.request('/managers')).json()) as {
+      managers: { managerId: string; denials?: { lastAt?: string }[] }[];
+    };
+    expect(
+      list.managers.find((m) => m.managerId === 'mgr-denied-lastat')?.denials?.[0]?.lastAt,
+    ).toBe('2026-09-24T07:00:00.000Z');
+  });
+
   it('拒否が無いマネージャーには denials を載せない（0 件を主張しない）', async () => {
     fake.managerList.push({
       managerId: 'mgr-quiet',

@@ -7350,6 +7350,9 @@
                                 "actor": {
                                   "type": "string",
                                   "enum": ["manager", "worker"]
+                                },
+                                "lastAt": {
+                                  "type": "string"
                                 }
                               },
                               "required": ["tool", "count"]
@@ -7749,6 +7752,9 @@
                               "actor": {
                                 "type": "string",
                                 "enum": ["manager", "worker"]
+                              },
+                              "lastAt": {
+                                "type": "string"
                               }
                             },
                             "required": ["tool", "count"]

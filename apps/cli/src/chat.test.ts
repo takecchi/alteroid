@@ -64,6 +64,16 @@ function legacyWaiting(over: Partial<ManagerWaitingItem> = {}): ManagerWaitingIt
 }
 
 describe('renderManagerList', () => {
+  it('拒否の行に「止められた後に報告が届いたか」を添える（#1455）', () => {
+    const text = renderManagerList([
+      manager({
+        lastReportAt: '2026-09-24T07:10:00.000Z',
+        denials: [{ tool: 'Bash', count: 1, lastAt: '2026-09-24T07:00:00.000Z' }],
+      }),
+    ]);
+    expect(text).toContain('後にも報告が届いている（2026-09-24T07:10:00.000Z）');
+  });
+
   it('確認へ上がらず止められた件数を、道具ごとに出す', () => {
     const text = renderManagerList([manager({ denials: [{ tool: 'Bash', count: 3 }] })]);
 

@@ -189,12 +189,13 @@ function resultWithDenials(
   } as unknown as SDKMessage;
 }
 
-function open() {
+function open(options: { now?: () => number } = {}) {
   const stores = createMemoryStores();
   const manager = fakeManagerSdk();
   const inbox: InboxEvent[] = [];
   const pool = createManagerPool({
     stores,
+    ...(options.now === undefined ? {} : { now: options.now }),
     post: (event) => inbox.push(event),
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: manager.fn, env: {} }),
@@ -536,8 +537,8 @@ describe('確認へ上がらずに止められた実行（permissionMode: auto�
     // `liveDenial` は `agent_id` を持たないので、層は `manager` に解決される
     // （`#onPostToolUse` と同じ式。Issue #373 対応）。
     expect(s.pool.denials(managerId)).toEqual([
-      { tool: 'Bash', count: 1, actor: 'manager' },
-      { tool: 'Edit', count: 2, actor: 'manager' },
+      { tool: 'Bash', count: 1, actor: 'manager', lastAt: expect.any(String) },
+      { tool: 'Edit', count: 2, actor: 'manager', lastAt: expect.any(String) },
     ]);
 
     // **状態の値は増やさない。** `stalled` を新設すると `openapi.json` の
@@ -546,6 +547,31 @@ describe('確認へ上がらずに止められた実行（permissionMode: auto�
     expect(listed?.status).toBe('running');
     // 一覧の応答そのものには載せない（spec に無いものを外へ出さない）。
     expect(listed).not.toHaveProperty('denials');
+
+    await s.pool.stop();
+  }, 15_000);
+
+  it('道具×層ごとに最後に止められた時刻（lastAt）を持ち、止められるたびに進む（#1455）', async () => {
+    let clock = Date.parse('2026-09-24T07:00:00.000Z');
+    const s = open({ now: () => clock });
+    const { managerId } = await s.pool.start({ request: 'テストを直して' });
+    const session = s.manager.sessions[0];
+    if (!session) throw new Error('マネージャーのセッションが無い');
+
+    session.push(liveDenial('Bash', 'toolu_1', { command: 'rm -rf /' }));
+    await tick();
+    expect(s.pool.denials(managerId)).toEqual([
+      { tool: 'Bash', count: 1, actor: 'manager', lastAt: '2026-09-24T07:00:00.000Z' },
+    ]);
+
+    clock = Date.parse('2026-09-24T07:05:00.000Z');
+    session.push(liveDenial('Bash', 'toolu_2', { command: 'git push' }));
+    await tick();
+    // 件数と一緒に、最後に止められた時刻も進む（最初の時刻のままだと、その後の
+    // 報告と突き合わせたときに「進んだ」と誤って読まれる）。
+    expect(s.pool.denials(managerId)).toEqual([
+      { tool: 'Bash', count: 2, actor: 'manager', lastAt: '2026-09-24T07:05:00.000Z' },
+    ]);
 
     await s.pool.stop();
   }, 15_000);
@@ -868,7 +894,9 @@ describe('層の判定（Issue #373）', () => {
     session.push(liveDenialFromWorker('Edit', 'toolu_w1'));
     await tick();
 
-    expect(s.pool.denials(managerId)).toEqual([{ tool: 'Edit', count: 1, actor: 'worker' }]);
+    expect(s.pool.denials(managerId)).toEqual([
+      { tool: 'Edit', count: 1, actor: 'worker', lastAt: expect.any(String) },
+    ]);
 
     await s.pool.stop();
   }, 15_000);
@@ -882,7 +910,9 @@ describe('層の判定（Issue #373）', () => {
     session.push(liveDenial('Edit', 'toolu_m1', { file_path: 'a.tsx' }));
     await tick();
 
-    expect(s.pool.denials(managerId)).toEqual([{ tool: 'Edit', count: 1, actor: 'manager' }]);
+    expect(s.pool.denials(managerId)).toEqual([
+      { tool: 'Edit', count: 1, actor: 'manager', lastAt: expect.any(String) },
+    ]);
 
     await s.pool.stop();
   }, 15_000);
@@ -904,7 +934,7 @@ describe('層の判定（Issue #373）', () => {
     // しない——`toEqual` は欠けている欄と `undefined` を区別しないので、
     // `not.toHaveProperty` で「キー自体が無い」ことも別に確かめる。
     const denials = s.pool.denials(managerId);
-    expect(denials).toEqual([{ tool: 'Write', count: 1 }]);
+    expect(denials).toEqual([{ tool: 'Write', count: 1, lastAt: expect.any(String) }]);
     expect(denials[0]).not.toHaveProperty('actor');
 
     await s.pool.stop();
@@ -927,8 +957,18 @@ describe('層の判定（Issue #373）', () => {
     // ——同じ「Edit」でも層が違えば別枠になる。これが崩れると、マネージャー
     // 自身が2回止められただけに見える（Issue #373 の実害の形）。
     const denials = s.pool.denials(managerId);
-    expect(denials).toContainEqual({ tool: 'Edit', count: 1, actor: 'manager' });
-    expect(denials).toContainEqual({ tool: 'Edit', count: 2, actor: 'worker' });
+    expect(denials).toContainEqual({
+      tool: 'Edit',
+      count: 1,
+      actor: 'manager',
+      lastAt: expect.any(String),
+    });
+    expect(denials).toContainEqual({
+      tool: 'Edit',
+      count: 2,
+      actor: 'worker',
+      lastAt: expect.any(String),
+    });
 
     await s.pool.stop();
   }, 15_000);
@@ -1012,7 +1052,9 @@ describe('live / result の到着順（denial-shape.ts 導入）', () => {
     expect(notes[0]).toContain(denialInputShape({ command: 'git diff' }) as string);
 
     // デーモンの件数は1のまま（`permission_denied` を2件と数えていない）。
-    expect(s.pool.denials(managerId)).toEqual([{ tool: 'Bash', count: 1, actor: 'manager' }]);
+    expect(s.pool.denials(managerId)).toEqual([
+      { tool: 'Bash', count: 1, actor: 'manager', lastAt: expect.any(String) },
+    ]);
 
     await s.pool.stop();
   }, 15_000);

@@ -6,6 +6,7 @@ import {
   appraisalSchema,
   commitmentUpdatedAt,
   describeAppraisal,
+  describeDenialFollowUp,
   describeManagerState,
   describeSessionMissingKind,
   jobStatusSchema,
@@ -1857,8 +1858,13 @@ function denialActorTag(actor: ManagerDenial['actor']): string {
  *
  * **各件に `denialActorTag` で層を添える**（Issue #373）。
  */
-function denialLine(denials: ManagerDenial[] | undefined): string | null {
+function denialLine(
+  denials: ManagerDenial[] | undefined,
+  lastReportAt: string | undefined,
+): string | null {
   if (denials === undefined || denials.length === 0) return null;
+  // 止められた後に報告が届いたか（#1455）。字面の生成元はクローンの面と同じ関数。
+  const followUp = describeDenialFollowUp(denials, lastReportAt);
   // 帳面は古い順に積まれている。**新しい側から**採る。
   const recent = [...denials].reverse();
   const shown = recent.slice(0, LIST_DENIED_TOOLS);
@@ -1869,7 +1875,8 @@ function denialLine(denials: ManagerDenial[] | undefined): string | null {
     (rest > 0 ? `（ほか ${rest} 種、全 ${total} 件）` : '') +
     '。まず担い手自身の拒否文を読ませること。' +
     '(a) 器の分類器か deny 規則なら、手が止まっている可能性があります。' +
-    '(b) alteroid 自身の PreToolUse フックなら、理由と代替案は担い手へ直接返っており自力で抜けられることがあります'
+    '(b) alteroid 自身の PreToolUse フックなら、理由と代替案は担い手へ直接返っており自力で抜けられることがあります' +
+    (followUp === null ? '' : `。${followUp}`)
   );
 }
 
@@ -2020,7 +2027,7 @@ export function renderManagerList(managers: ManagerListItem[]): string {
           '起こし直す前にそこを確かめること',
       );
     }
-    const denied = denialLine(manager.denials);
+    const denied = denialLine(manager.denials, manager.lastReportAt);
     if (denied !== null) lines.push(`      ${denied}`);
     // **`kind`（質問／実行許可）と `askedAt` も出す（#336）。** 種別が読めない
     // と、人間は `/reply` と `/allow` のどちらを打つべきか分からない。どちらも

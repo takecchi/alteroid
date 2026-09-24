@@ -85,7 +85,7 @@ import {
   selectArchiveRemovalTargets,
 } from './archive-prune.js';
 import type { ArchiveRemoveManyFilter } from './archive-prune.js';
-import { guardArchiveRemoval } from './manager.js';
+import { describeDenialFollowUp, guardArchiveRemoval } from './manager.js';
 import type {
   ManagerDenial,
   ManagerPool,
@@ -2474,8 +2474,13 @@ function denialActorTag(actor: ManagerDenial['actor']): string {
  * この道具自身の案内（「まず manager_report を見ること」）どおりに動いた
  * クローンが拒否を1文字も見なかった** —— 案内が嘘をついていた。
  */
-function describeDenials(denials: ManagerDenial[]): string | null {
+function describeDenials(
+  denials: ManagerDenial[],
+  lastReportAt: string | undefined,
+): string | null {
   if (denials.length === 0) return null;
+  // 止められた後に委譲が報告を返しているか（#1455）。3値のどれかで、畳まない。
+  const followUp = describeDenialFollowUp(denials, lastReportAt);
   // 帳面は古い順に積まれている。**新しい側から**採る。
   const recent = [...denials].reverse();
   const shown = recent.slice(0, LIST_DENIED_TOOLS);
@@ -2488,7 +2493,8 @@ function describeDenials(denials: ManagerDenial[]): string | null {
     '(a) 器の分類器か deny 規則なら、この確認はクローンには回ってきていないので手が止まる。' +
     '(b) alteroid 自身の `PreToolUse` フック（`bash-wait-guard.ts` 等）なら、理由と代替案は' +
     '担い手へ直接返っており、自力で抜けられることがある' +
-    '（全件は journal_read に残っている。件数はデーモンを作り直すと数え直しになる）。'
+    '（全件は journal_read に残っている。件数はデーモンを作り直すと数え直しになる）。' +
+    (followUp === null ? '' : `${followUp}。`)
   );
 }
 
@@ -2496,8 +2502,8 @@ function describeDenials(denials: ManagerDenial[]): string | null {
  * {@link describeDenials} を `manager_list` の `extra` へ入れる形にする
  * （`failureLine` / `systemErrorLine` と同じ作法）。
  */
-function denialLine(denials: ManagerDenial[]): string | null {
-  const note = describeDenials(denials);
+function denialLine(denials: ManagerDenial[], lastReportAt: string | undefined): string | null {
+  const note = describeDenials(denials, lastReportAt);
   return note === null ? null : `  ${note}`;
 }
 
@@ -9036,7 +9042,7 @@ export function createCloneTools(context: ToolContext) {
               // 仕事は `running` のまま手が動かない。日誌と（繰り返したときだけ）
               // 受信箱にしか出ないので、一覧を見ているクローンには「走っている」と
               // しか読めなかった。状態の値は増やさず、状態に添える。
-              denialLine(context.managers?.denials(manager.managerId) ?? []),
+              denialLine(context.managers?.denials(manager.managerId) ?? [], manager.lastReportAt),
               // **待ちの要約も抜粋を通す。** runner 側の `brief(input, 200)` が実質の
               // キャップになっていたが、`AskUserQuestion` の経路（`describeQuestions`）は
               // 質問文を `join(' / ')` で連ねてそのキャップを通らない。ここを通して
@@ -9319,7 +9325,7 @@ export function createCloneTools(context: ToolContext) {
           // **この枝に落ちる**。ここで黙ると、クローンは「まだ書いていない」と
           // 「番人に止められて書けない」を区別できない——直上の #713 段3 の
           // コメントと同じ理由で、片方が空だからもう片方も出さない、にはしない。
-          const denied = describeDenials(context.managers.denials(managerId));
+          const denied = describeDenials(context.managers.denials(managerId), found.lastReportAt);
           // **この枝こそが軸1の `none`（本文が1文字も届いていない）である**
           // （Issue #857）。`manager_list` で「何も届いていない」と読んだ
           // クローンが掘りに来る先がここなので、**ここで黙ると、順位を付けた
@@ -9370,7 +9376,9 @@ export function createCloneTools(context: ToolContext) {
         // **`part === 'request'` では出さない。** 依頼文はこのセッションで何が
         // 止められたかの話ではない（`failure` / `systemError` と同じ線）。
         const denied =
-          part === 'request' ? null : describeDenials(context.managers.denials(managerId));
+          part === 'request'
+            ? null
+            : describeDenials(context.managers.denials(managerId), found.lastReportAt);
         // **一覧と同じ分類を、掘った先でも同じ字面で出す（Issue #857）。**
         // `manager_list` で順位が付いた理由（本文が届いているか）が、
         // 掘った先で消えないようにする。

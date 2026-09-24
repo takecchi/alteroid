@@ -626,6 +626,12 @@ const managerDenialSchema = z.object({
    * （例: `'manager'`）を持たせない。
    */
   actor: z.enum(['manager', 'worker']).optional(),
+  /**
+   * この道具×層が最後に止められた時刻（ISO 8601。issue #1455）。止められた後に
+   * 委譲が報告を返したかを `lastReportAt` と突き合わせる材料。**無いことは
+   * 「取れていない」であって「古い」ではない。** 宣言しないと `.parse()` が黙って落とす。
+   */
+  lastAt: z.string().optional(),
 });
 
 /**

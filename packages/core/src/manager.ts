@@ -742,6 +742,52 @@ export interface ManagerDenial {
    * からの応答も、同じ「取れていない」に自然に落ちる。
    */
   actor?: 'manager' | 'worker';
+  /**
+   * この道具×層が**最後に止められた時刻**（ISO 8601。issue #1455）。
+   *
+   * **「止められた後に委譲が進んだか」を読むための材料である。** 件数だけでは、
+   * 拒否の後に報告が届いたのか（止められても進んでいる）、届いていないのかが
+   * 区別できない（{@link describeDenialFollowUp}）。**無いことは「取れていない」
+   * であって、「古い」ではない**（この欄を持たない版のデーモンから来た値など）。
+   */
+  lastAt?: string;
+}
+
+/**
+ * 拒否の**後に**委譲が報告を返しているかを、3つの状態のどれかとして言う（issue #1455）。
+ *
+ * - すべての拒否に時刻が在り、`lastReportAt` がそれより後 → 「止められた後にも
+ *   報告が届いている」
+ * - すべての拒否に時刻が在り、報告が無いかそれより前 → 「止められた後の報告は
+ *   まだ届いていない」
+ * - 時刻の取れていない拒否が1件でも在る → **判定できない**。どちらへも畳まない
+ *   （AGENTS.md「判定できないという3つ目の状態を持つ」）
+ *
+ * **報告が届いたことは、止められた道具を別の手で越えたことを意味しない。** 言える
+ * のは「止められた後もマネージャーは報告を返している」ところまでで、文面もそこで
+ * 止める。**`status` の値は増やさない**（`ManagerDenial` の doc と同じ線 —— 状態に
+ * 添える）。
+ *
+ * 時刻の比較は ISO 8601 の文字列比較で行う（どちらもデーモンが `toISOString()` で
+ * 書いた値である）。拒否が1件も無ければ `null`。
+ */
+export function describeDenialFollowUp(
+  denials: readonly Pick<ManagerDenial, 'lastAt'>[],
+  lastReportAt: string | undefined,
+): string | null {
+  if (denials.length === 0) return null;
+  const times = denials.map((denial) => denial.lastAt);
+  if (times.some((time) => time === undefined)) {
+    return '最後に止められた時刻が取れていない拒否が在るので、止められた後に報告が届いたかは判定できない';
+  }
+  const latest = (times as string[]).reduce((a, b) => (a > b ? a : b));
+  if (lastReportAt !== undefined && lastReportAt > latest) {
+    return (
+      `最後に止められた（${latest}）後にも報告が届いている（${lastReportAt}）。` +
+      '止められた道具を別の手で越えたかまでは見ていない'
+    );
+  }
+  return `最後に止められた（${latest}）後の報告はまだ届いていない`;
 }
 
 /**
@@ -2298,6 +2344,11 @@ interface ManagerRecord {
    *   （Issue #373 — マネージャー自身の拒否と作業者の拒否を同じ数へ畳まない）
    */
   denied?: RecentMap<number>;
+  /**
+   * `denied` と同じ鍵（`denialKey`）で、その組が**最後に止められた時刻**（issue #1455）。
+   * `denied` が上限で忘れた鍵は、ここからも同時に消す（`#deniedOf` の `onForget`）。
+   */
+  deniedLastAt?: Map<string, string>;
   /**
    * **貸し出し期限を理由に引き取りを断った直近の1件**（M5 PR4）。
    *
@@ -4790,14 +4841,21 @@ class Pool implements ManagerPool {
     // 台帳へは降りない。**プロセス内の像にしか無い**ので、知らないものは
     // 「無い」ではなく「数えていない」— どちらも空配列だが、そう読めるように
     // 一覧側で「デーモンを作り直すと数え直しになる」と添えてある。
-    const denied = this.#records.get(managerId)?.denied;
+    const record = this.#records.get(managerId);
+    const denied = record?.denied;
     if (denied === undefined) return [];
     // 鍵は `denialKey`（道具＋層）で作ってある。**`actor` が `undefined` の
     // ものだけ、そのキーを外向きの形からも省く**（`ManagerDenial.actor` の
     // doc と同じ——取れていないことを「その名前の層」として見せない）。
     return denied.entries().map(([key, count]) => {
       const { tool, actor } = decodeDenialKey(key);
-      return actor === undefined ? { tool, count } : { tool, count, actor };
+      const lastAt = record?.deniedLastAt?.get(key);
+      return {
+        tool,
+        count,
+        ...(actor === undefined ? {} : { actor }),
+        ...(lastAt === undefined ? {} : { lastAt }),
+      };
     });
   }
 
@@ -8468,6 +8526,8 @@ class Pool implements ManagerPool {
         const key = denialKey(event.tool, actorLayer);
         const count = (denied.get(key) ?? 0) + 1;
         denied.set(key, count);
+        // 最後に止められた時刻（#1455）。止められた後に委譲が進んだかを読む材料。
+        (record.deniedLastAt ??= new Map()).set(key, new Date(this.#now()).toISOString());
 
         // **escalation は道具ごとの合計で判定する（layer 別ではない）。**
         // 持ち主の指摘（PR #549 レビュー）: 「この層のこのループが繰り返して
@@ -9654,6 +9714,7 @@ class Pool implements ManagerPool {
     const denied = createRecentMap<number>({
       limit: DENIED_TOOL_LIMIT,
       onForget: (keys) => {
+        for (const key of keys) record.deniedLastAt?.delete(key);
         const labels = keys.map((key) => {
           const { tool, actor } = decodeDenialKey(key);
           return actor === undefined ? tool : `${tool}（${actor}）`;

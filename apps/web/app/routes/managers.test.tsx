@@ -8,7 +8,10 @@
  * （`packages/core/src/tools.test.ts` の「一覧の文言は、観測した分しか言わない」
  * と対になっている）。
  */
-import { describeSessionMissingKind } from '@alteroid/core';
+import {
+  describeDenialFollowUp as coreDescribeDenialFollowUp,
+  describeSessionMissingKind,
+} from '@alteroid/core';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -17,7 +20,7 @@ import { MANAGERS_PAGE } from '~/hooks/use-managers-window';
 import type { ManagerSummary } from '~/lib/types';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
-import Managers, { describeSessionMissingKindNote } from './managers';
+import Managers, { describeDenialFollowUp, describeSessionMissingKindNote } from './managers';
 
 /**
  * **一覧の中だけを見る。**
@@ -173,6 +176,40 @@ describe('拒否は、状態を置き換えずに状態へ添える', () => {
    * ある」）を、`manager.ts` の `case 'permission_denied'`（#1267）と同じ向きに
    * 直す。
    */
+  /**
+   * **止められた後に報告が届いたか（#1455）。** この画面は `@alteroid/core` を読まずに
+   * 写しを持つので、写しが core と字面で割れていないことを3値すべてで測る。
+   */
+  it('describeDenialFollowUp の写しは core と3値すべてで同じ字面を返す（#1455）', () => {
+    const cases: [{ lastAt?: string }[], string | undefined][] = [
+      [[], undefined],
+      [[{ lastAt: '2026-09-24T07:00:00.000Z' }], '2026-09-24T07:10:00.000Z'],
+      [[{ lastAt: '2026-09-24T07:20:00.000Z' }], '2026-09-24T07:10:00.000Z'],
+      [[{ lastAt: '2026-09-24T07:00:00.000Z' }, {}], '2026-09-24T07:10:00.000Z'],
+    ];
+    for (const [denials, lastReportAt] of cases) {
+      expect(describeDenialFollowUp(denials, lastReportAt)).toBe(
+        coreDescribeDenialFollowUp(denials, lastReportAt),
+      );
+    }
+  });
+
+  it('一覧の拒否の注記に「止められた後に報告が届いたか」が載る（#1455）', async () => {
+    renderManagers([
+      {
+        ...BASE,
+        status: 'running',
+        lastReportAt: '2026-09-24T07:10:00.000Z',
+        denials: [{ tool: 'Bash', count: 1, lastAt: '2026-09-24T07:20:00.000Z' }],
+      },
+    ]);
+    await screen.findByText('実行中');
+    const note = screen.getByText(/確認へ上がらず止められた道具/).closest('p');
+    expect(note?.textContent).toContain(
+      '最後に止められた（2026-09-24T07:20:00.000Z）後の報告はまだ届いていない',
+    );
+  });
+
   it('拒否の出所を断定せず、2つの場合分けと「まず担い手の拒否文を読ませる」案内が載る（#1289）', async () => {
     renderManagers([{ ...BASE, status: 'running', denials: [{ tool: 'Bash', count: 1 }] }]);
 

@@ -82,6 +82,33 @@ export function summarizeDenials(denials: ManagerDenial[]) {
  * 片方だけ直る形が起きる——`tools.ts`/`chat.ts` を分けているのはプロセスが
  * 別だからで、同一プロセス内の2ファイルにはその理由が無い。
  */
+/**
+ * 拒否の**後に**委譲が報告を返しているかの一文（issue #1455）。
+ *
+ * **`packages/core/src/manager.ts` の `describeDenialFollowUp` と逐語で揃えてある**
+ * （クローンの `manager_list` と CLI はあちらを直接呼ぶ。この画面は別のデプロイで
+ * `@alteroid/core` を読まないので写してある —— `denialActorTag` と同じ事情）。
+ * 3値（届いている／まだ届いていない／判定できない）を畳まない。
+ */
+export function describeDenialFollowUp(
+  denials: readonly Pick<ManagerDenial, 'lastAt'>[],
+  lastReportAt: string | undefined,
+): string | null {
+  if (denials.length === 0) return null;
+  const times = denials.map((denial) => denial.lastAt);
+  if (times.some((time) => time === undefined)) {
+    return '最後に止められた時刻が取れていない拒否が在るので、止められた後に報告が届いたかは判定できない';
+  }
+  const latest = (times as string[]).reduce((a, b) => (a > b ? a : b));
+  if (lastReportAt !== undefined && lastReportAt > latest) {
+    return (
+      `最後に止められた（${latest}）後にも報告が届いている（${lastReportAt}）。` +
+      '止められた道具を別の手で越えたかまでは見ていない'
+    );
+  }
+  return `最後に止められた（${latest}）後の報告はまだ届いていない`;
+}
+
 export function denialActorTag(actor: ManagerDenial['actor']): string {
   return actor === 'manager' ? ' [マネージャー]' : actor === 'worker' ? ' [作業者]' : ' [層不明]';
 }
@@ -116,9 +143,16 @@ export function denialActorTag(actor: ManagerDenial['actor']): string {
  * デーモンから API まで通したのに、この画面だけが `tool` / `count` の2値の
  * ままだった——値は届いていたのに描いていなかっただけである。
  */
-export function ManagerDenialNote({ denials }: { denials: ManagerDenial[] }) {
+export function ManagerDenialNote({
+  denials,
+  lastReportAt,
+}: {
+  denials: ManagerDenial[];
+  lastReportAt?: string;
+}) {
   if (denials.length === 0) return null;
   const { shown, rest, total } = summarizeDenials(denials);
+  const followUp = describeDenialFollowUp(denials, lastReportAt);
   return (
     <p className="mt-1 text-[11px] text-warn">
       ⚠ 確認へ上がらず止められた道具:{' '}
@@ -130,6 +164,7 @@ export function ManagerDenialNote({ denials }: { denials: ManagerDenial[] }) {
       器の分類器か deny 規則なら、この確認はクローンには回ってきていないので手が止まる。 (b)
       alteroid 自身の PreToolUse フック（bash-wait-guard.ts
       等）なら、理由と代替案は担い手へ直接返っており、自力で抜けられることがある。
+      {followUp !== null && `${followUp}。`}
     </p>
   );
 }
@@ -571,7 +606,10 @@ function ManagersBody({ selected }: { selected: readonly ManagerStatus[] }) {
                       拒否は `status` に映らない。札は「実行中」のまま、その隣に
                       添える（状態を置き換えるものではない）。
                     */}
-                    <ManagerDenialNote denials={manager.denials ?? []} />
+                    <ManagerDenialNote
+                      denials={manager.denials ?? []}
+                      lastReportAt={manager.lastReportAt}
+                    />
                     {/*
                       失敗も `status` に映らない（上限に当たった回も `done` の
                       まま）。札はそのまま残し、その隣に添える。

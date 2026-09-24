@@ -10989,6 +10989,44 @@ describe('一覧の文言は、観測した分しか言わない', () => {
     expect(reply).toContain('クローンには回ってきていない');
   });
 
+  /**
+   * **止められた後に委譲が報告を返したか（#1455）。** 拒否の件数だけでは、止められても
+   * 進んでいるのか止まっているのかが読めなかった。`lastAt` と `lastReportAt` を
+   * 突き合わせた3値が、manager_list と manager_report の同じ行に出る。
+   */
+  it('拒否の行に「止められた後に報告が届いたか」を3値で添える（#1455）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '依頼の本文' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+
+    // 報告が拒否より後 → 届いている
+    target.lastReport = '進めた';
+    target.lastReportAt = '2026-09-24T07:10:00.000Z';
+    h.denied.set('mgr-1', [
+      { tool: 'Bash', count: 1, actor: 'worker', lastAt: '2026-09-24T07:00:00.000Z' },
+    ]);
+    const after = await h.call('manager_list', {});
+    expect(after).toContain('後にも報告が届いている（2026-09-24T07:10:00.000Z）');
+    expect(await h.call('manager_report', { managerId: 'mgr-1' })).toContain(
+      '後にも報告が届いている',
+    );
+
+    // 報告が拒否より前 → まだ届いていない
+    h.denied.set('mgr-1', [
+      { tool: 'Bash', count: 2, actor: 'worker', lastAt: '2026-09-24T07:20:00.000Z' },
+    ]);
+    expect(await h.call('manager_list', {})).toContain(
+      '最後に止められた（2026-09-24T07:20:00.000Z）後の報告はまだ届いていない',
+    );
+
+    // 時刻の取れていない拒否 → 判定できない（どちらへも畳まない）
+    h.denied.set('mgr-1', [{ tool: 'Bash', count: 2, actor: 'worker' }]);
+    const unknown = await h.call('manager_list', {});
+    expect(unknown).toContain('判定できない');
+    expect(unknown).not.toContain('まだ届いていない');
+  });
+
   it('manager_report は拒否が無ければ1文字も足さない（#830）', async () => {
     const h = harness();
     await h.call('manager_start', { request: '依頼の本文' });

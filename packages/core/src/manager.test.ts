@@ -6277,7 +6277,7 @@ describe('#records の寿命（終端で外れる）', () => {
 
       // 走行中に拒否が積まれる（`denials()` が非空になる ＝ 像がまだ生きている証拠）。
       fake.denied(id, 'Bash');
-      expect(s.pool.denials(id)).toEqual([{ tool: 'Bash', count: 1 }]);
+      expect(s.pool.denials(id)).toEqual([{ tool: 'Bash', count: 1, lastAt: expect.any(String) }]);
 
       // 本当に閉じる（`RunnerSession#finish()` を通った印）。
       fake.closed(id, status, `終端: ${status}`);
@@ -6332,7 +6332,7 @@ describe('#records の寿命（終端で外れる）', () => {
     await s.pool.restore();
 
     fake.denied(id, 'Edit');
-    expect(s.pool.denials(id)).toEqual([{ tool: 'Edit', count: 1 }]);
+    expect(s.pool.denials(id)).toEqual([{ tool: 'Edit', count: 1, lastAt: expect.any(String) }]);
 
     await s.pool.abort(id, '暴走したので');
 
@@ -6380,7 +6380,7 @@ describe('#records の寿命（終端で外れる）', () => {
 
       // 終端させる（`#retire()` を通す）。
       fake.denied(id, 'Bash');
-      expect(s.pool.denials(id)).toEqual([{ tool: 'Bash', count: 1 }]);
+      expect(s.pool.denials(id)).toEqual([{ tool: 'Bash', count: 1, lastAt: expect.any(String) }]);
       fake.closed(id, status, `終端: ${status}`);
       // **`#records` から外れたことの外部から見える証拠**（上の受け入れ条件
       // テストと同じ確かめ方）。
@@ -6423,7 +6423,7 @@ describe('#records の寿命（終端で外れる）', () => {
     await s.pool.restore();
 
     fake.denied(id, 'Bash');
-    expect(s.pool.denials(id)).toEqual([{ tool: 'Bash', count: 1 }]);
+    expect(s.pool.denials(id)).toEqual([{ tool: 'Bash', count: 1, lastAt: expect.any(String) }]);
 
     fake.resumeFailed(id, `sess-${id}`, '開き直せなかった', false);
     await expect
@@ -6452,7 +6452,7 @@ describe('#records の寿命（終端で外れる）', () => {
     await s.pool.restore();
 
     fake.denied(id, 'Bash');
-    expect(s.pool.denials(id)).toEqual([{ tool: 'Bash', count: 1 }]);
+    expect(s.pool.denials(id)).toEqual([{ tool: 'Bash', count: 1, lastAt: expect.any(String) }]);
 
     fake.runner.resume = async () => {
       throw new RunnerHttpError('runner POST resume が失敗した (400)', 400);

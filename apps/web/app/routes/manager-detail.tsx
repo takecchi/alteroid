@@ -33,6 +33,7 @@ import type { Route } from './+types/manager-detail';
  */
 import {
   denialActorTag,
+  describeDenialFollowUp,
   ManagerAwaitingBackgroundNote,
   ManagerRunnerLostNote,
   ManagerSessionMissingNote,
@@ -273,7 +274,7 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
             <FailureNote failure={manager.lastFailure} />
           </Card>
 
-          <DenialsCard denials={manager.denials} />
+          <DenialsCard denials={manager.denials} lastReportAt={manager.lastReportAt} />
 
           {manager.waiting.length > 0 && (
             <Card>
@@ -722,8 +723,16 @@ function denialTotal(denials: ManagerDenial[] | undefined): number {
  * で層込みにする——`denials()` が返す時点で `道具::層` の組ごとに一意なので、
  * 同じ規則で作れば必ず一意になる。
  */
-function DenialsCard({ denials }: { denials: ManagerDenial[] | undefined }) {
+function DenialsCard({
+  denials,
+  lastReportAt,
+}: {
+  denials: ManagerDenial[] | undefined;
+  lastReportAt: string | undefined;
+}) {
   if (denials === undefined || denials.length === 0) return null;
+  // 止められた後に報告が届いたか（#1455）。3値のどれかで、畳まない。
+  const followUp = describeDenialFollowUp(denials, lastReportAt);
   // デーモンは古い順で返す。新しい側から読ませる。
   const recent = [...denials].reverse();
   return (
@@ -757,6 +766,9 @@ function DenialsCard({ denials }: { denials: ManagerDenial[] | undefined }) {
         <strong className="font-medium">器を作り直すと数え直しになる</strong>— 「0
         件」は「止められていない」ではない。
       </p>
+      {followUp !== null && (
+        <p className="border-t border-border px-4 py-3 text-xs">{followUp}。</p>
+      )}
     </Card>
   );
 }
