@@ -1905,3 +1905,111 @@ describe('SDK の status の語彙の前提（腐ったら typecheck が落ち�
     expect(noMissing).toBe(true);
   });
 });
+
+/**
+ * #901: 起こし直しの上限で打ち切った作業者の `Task` の結果に、マネージャー向けの注記を付ける。
+ *
+ * `Task` の結果（`AgentOutput`）は打ち切りも正常な完了も同じ `status: 'completed'` の顔で
+ * 返る。打ち切ったのは alteroid 自身なので、`SubagentStop` の `agent_id` を控え、
+ * マネージャー側の `PostToolUse` で `tool_response.agentId` と突き合わせる。
+ */
+describe('打ち切った作業者の Task の結果に注記する（#901）', () => {
+  async function cutOff(options: Options, agentId: string): Promise<void> {
+    await registerBackgroundTask(options, `bg-${agentId}`, agentId);
+    for (let n = 0; n <= SUBAGENT_WAKEUP_LIMIT_PER_TASK; n += 1) {
+      await fireSubagentStop(options, {
+        ...STOP_BASE,
+        agent_id: agentId,
+        background_tasks: [
+          selfEntry(agentId),
+          { id: `bg-${agentId}`, type: 'monitor', status: 'running' },
+        ],
+      });
+    }
+  }
+
+  function taskResult(agentId: string, extra: Record<string, unknown> = {}) {
+    return {
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Agent',
+      tool_input: { prompt: '作業' },
+      tool_response: { status: 'completed', agentId, content: [], ...extra },
+    };
+  }
+
+  it('上限で打ち切った作業者の Task の結果には additionalContext が付き、note も残る', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    await cutOff(started.options, 'agent-1');
+    const result = await firePostToolUse(started.options, taskResult('agent-1'));
+
+    expect(result).toMatchObject({
+      continue: true,
+      hookSpecificOutput: { hookEventName: 'PostToolUse' },
+    });
+    const context = (result as { hookSpecificOutput?: { additionalContext?: string } })
+      .hookSpecificOutput?.additionalContext;
+    expect(context).toContain('agent_id=agent-1');
+    expect(context).toContain('完結していない可能性がある');
+    expect(noteEvents(s.events).at(-1)?.text).toContain('Task の結果に注記した（#901）');
+  });
+
+  it('注記は1回だけ（同じ agentId の2回目の結果には付かない）', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    await cutOff(started.options, 'agent-1');
+    await firePostToolUse(started.options, taskResult('agent-1'));
+    expect(await firePostToolUse(started.options, taskResult('agent-1'))).toEqual({
+      continue: true,
+    });
+  });
+
+  it('打ち切っていない作業者の結果には付かない（上限未満で起こし直しただけの作業者も含む）', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    await registerBackgroundTask(started.options, 'bg-2', 'agent-2');
+    await fireSubagentStop(started.options, {
+      ...STOP_BASE,
+      agent_id: 'agent-2',
+      background_tasks: [selfEntry('agent-2'), { id: 'bg-2', type: 'monitor', status: 'running' }],
+    });
+    expect(await firePostToolUse(started.options, taskResult('agent-2'))).toEqual({
+      continue: true,
+    });
+    expect(await firePostToolUse(started.options, taskResult('agent-3'))).toEqual({
+      continue: true,
+    });
+  });
+
+  it('作業者の中で発火した PostToolUse（agent_id 付き）や、completed 以外の結果には付けない', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    await cutOff(started.options, 'agent-1');
+    expect(
+      await firePostToolUse(started.options, {
+        ...taskResult('agent-1'),
+        agent_id: 'agent-9',
+        agent_type: 'worker',
+      }),
+    ).toEqual({ continue: true });
+    expect(
+      await firePostToolUse(started.options, taskResult('agent-1', { status: 'async_launched' })),
+    ).toEqual({ continue: true });
+    // 控えは消えていない —— 正しい形の結果が来れば注記する。
+    expect(await firePostToolUse(started.options, taskResult('agent-1'))).toHaveProperty(
+      'hookSpecificOutput',
+    );
+  });
+});

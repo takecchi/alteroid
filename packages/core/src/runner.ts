@@ -756,6 +756,12 @@ const RESOLVED_MEMORY_LIMIT = 512;
 const DENIED_MEMORY_LIMIT = 512;
 
 /**
+ * `#cutOffWorkers`（起こし直しの上限で打ち切った作業者）を控える件数の上限（#901）。
+ * 長寿のセッションで表が際限なく育たないための蓋。
+ */
+const CUT_OFF_WORKERS_LIMIT = 500;
+
+/**
  * `#onSubagentStop` が `note` の `text` へ積む文字数の上限（#357）。
  *
  * **黙って落とさない**（AGENTS.md「静かに失敗する道具」）。超えたら切り、
@@ -1154,6 +1160,15 @@ class RunnerSession {
    * 消える。
    */
   #toolsSinceResult = 0;
+  /**
+   * 起こし直しの上限で打ち切った作業者の `agent_id`（#901）。
+   *
+   * `Task` の結果（`AgentOutput`）は打ち切りも正常な完了も同じ `status: 'completed'`
+   * の顔で返る（#901 の段0の実測）。打ち切ったのは alteroid 自身（`#onSubagentStop`）
+   * なので、その事実をここに控え、マネージャー側の `PostToolUse` で結果の `agentId`
+   * と突き合わせて注記する（`#annotateCutOffWorker`）。**注記したら消す**（1回だけ）。
+   */
+  readonly #cutOffWorkers = new Set<string>();
   /** このターンで `UserPromptSubmit` がマネージャー自身に発火した回数（`result` で畳む）。 */
   #submitsSinceResult = 0;
   /**
@@ -3357,7 +3372,10 @@ class RunnerSession {
    * 無く、作業者の生ログ側にも構造化された形では出ないためである（実測: 生ログ
    * に出るのは `Command running in background with ID: …` という**自由文**だけ）。
    */
-  async #onPostToolUse(input: unknown): Promise<{ continue: true }> {
+  async #onPostToolUse(input: unknown): Promise<{
+    continue: true;
+    hookSpecificOutput?: { hookEventName: 'PostToolUse'; additionalContext: string };
+  }> {
     const hook = input as {
       tool_name?: string;
       tool_input?: unknown;
@@ -3388,7 +3406,60 @@ class RunnerSession {
 
     this.#recordBackgroundTaskOwner(hook.tool_response, hook.agent_id);
 
-    return { continue: true };
+    // マネージャー自身の呼び出しだけを見る（`Task` を呼ぶのはマネージャーなので
+    // `agent_id` が付かない。#901）。
+    const additionalContext =
+      hook.agent_id === undefined ? this.#annotateCutOffWorker(hook.tool_response) : null;
+    if (additionalContext === null) return { continue: true };
+    return {
+      continue: true,
+      hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext },
+    };
+  }
+
+  /** 起こし直しの上限で打ち切った作業者を控える（#901。`#cutOffWorkers`）。 */
+  #recordCutOffWorker(agentId: string): void {
+    this.#cutOffWorkers.delete(agentId);
+    this.#cutOffWorkers.add(agentId);
+    while (this.#cutOffWorkers.size > CUT_OFF_WORKERS_LIMIT) {
+      const oldest = this.#cutOffWorkers.values().next().value;
+      if (oldest === undefined) break;
+      this.#cutOffWorkers.delete(oldest);
+    }
+  }
+
+  /**
+   * `Task` の結果が、起こし直しの上限で打ち切った作業者のものなら、マネージャーへ
+   * 渡す注記を返す（#901）。そうでなければ `null`。
+   *
+   * **結び目は `tool_response.agentId`（`AgentOutput` の欄）と `SubagentStop` の
+   * `agent_id` である。** フックの `agent_id` どうしでは結べない（`Task` の
+   * `PostToolUse` はマネージャー側で発火するので `agent_id` が付かない。#901 本文）。
+   *
+   * ⚠️ **2つの id が同じ値であることは、本物の `query()` では測っていない**（型定義が
+   * どちらも作業者の id と読める形をしているだけである）。違っていたら注記が
+   * 出ないだけで、挙動は今までと同じ側へ倒れる。
+   *
+   * ⚠️ **同期の `Task`（`status: 'completed'`）にしか効かない。** 背景で起こした委譲
+   * （`async_launched`）の完了は `PostToolUse` を通らない。その経路では
+   * `manager.ts` の `case 'note'`（`escalate`）がクローンへ上げるだけである。
+   */
+  #annotateCutOffWorker(toolResponse: unknown): string | null {
+    if (typeof toolResponse !== 'object' || toolResponse === null) return null;
+    const response = toolResponse as { status?: unknown; agentId?: unknown };
+    if (response.status !== 'completed' || typeof response.agentId !== 'string') return null;
+    if (!this.#cutOffWorkers.delete(response.agentId)) return null;
+    this.#emit({
+      type: 'note',
+      managerId: this.#id,
+      text: `Task の結果に注記した（#901）: agent_id=${response.agentId} は起こし直しの上限で打ち切られていた`,
+    });
+    return (
+      `⚠️ この作業者（agent_id=${response.agentId}）は、自分で起こした背景処理を残したまま` +
+      '畳もうとする回が起こし直しの上限に達したため、alteroid が打ち切った。' +
+      '**上の報告は完結していない可能性がある**（最後の発言が「待っています」の類でも、' +
+      'その待ちはもう誰も続けない）。成果（commit / push / 検証）が実際に在るかを確かめてから次を決めること。'
+    );
   }
 
   /**
@@ -3931,6 +4002,7 @@ class RunnerSession {
           outcome: 'limit_reached',
         },
       });
+      this.#recordCutOffWorker(agentId);
 
       return { continue: true };
     } catch (error: unknown) {
