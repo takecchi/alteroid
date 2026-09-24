@@ -11390,7 +11390,11 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
             ? ''
             : entry.earliestAt === undefined
               ? '\n⚠ 戻る見込みの立っている候補が1本も無い（プールが空か、全部外されている）'
-              : `\nいちばん早く戻るのは ${entry.earliestAt}`;
+              : // **全体の最速として書かない。** `exhausted` に `earliestAt` が
+                // 付くのは「候補が現役自身だった」か「現役のほうが早い」回
+                // だけで（`token-rotator.ts` の `exhausted` の doc）、どちらも
+                // 現役はこの時刻かそれより前に戻る見込みである。
+                `\n撒き直す候補のうちいちばん早く戻るのは ${entry.earliestAt}（現役はこれと同時かより早く戻る見込みなので撒き直していない）`;
       // **`recoveredSource` を潰さない**（#681 (1)）。`event: 'recovered'` の
       // 行にだけ付く——どちらの生産者（`account_probe` / `turn_success`）が
       // 「通る」と観測したかを、見出しから引ける形で出す。
