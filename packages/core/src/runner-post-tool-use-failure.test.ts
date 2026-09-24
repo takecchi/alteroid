@@ -1,7 +1,3 @@
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { mkdtempSync, rmSync } from 'node:fs';
-
 import type {
   HookJSONOutput,
   Options,
@@ -10,6 +6,8 @@ import type {
   query as sdkQuery,
 } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { createRunnerHost, TOOL_USE_FAILURE_NOTE_PREFIX, type RunnerHost } from './runner.js';
 
@@ -163,12 +161,11 @@ let dir: string;
 let host: RunnerHost | undefined;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'alteroid-runner-post-tool-use-failure-'));
+  dir = makeTempDirSync('alteroid-runner-post-tool-use-failure-');
 });
 
 afterEach(async () => {
   await host?.shutdown().catch(() => undefined);
-  rmSync(dir, { recursive: true, force: true });
 });
 
 function setup(): { host: RunnerHost; events: RunnerEvent[]; started: Started[] } {

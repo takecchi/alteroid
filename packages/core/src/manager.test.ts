@@ -1,6 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -16,6 +15,8 @@ import type {
   SessionStoreEntry,
 } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { clearRecentTracesForTesting, recentDroppedTraces } from './dropped-record.js';
 import {
@@ -2205,36 +2206,32 @@ describe('デーモン再起動後（M4）', () => {
    */
   it('unpushedWork は同一プロセスでも実際の git の答えを運ぶ（#1039）', async () => {
     const run = promisify(execFile);
-    const dir = await mkdtemp(join(tmpdir(), 'alteroid-manager-unpushed-'));
-    try {
-      const git = (args: string[]) =>
-        run('git', args, { cwd: dir, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
-      await git(['init', '-q', '-b', 'main']);
-      await git(['config', 'user.email', 'test@example.com']);
-      await git(['config', 'user.name', 'Test']);
-      await writeFile(join(dir, 'a.txt'), 'first\n');
-      await git(['add', 'a.txt']);
-      await git(['commit', '-q', '-m', 'first']); // upstream 無し。1本とも「未 push」。
+    const dir = await makeTempDir('alteroid-manager-unpushed-');
+    const git = (args: string[]) =>
+      run('git', args, { cwd: dir, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+    await git(['init', '-q', '-b', 'main']);
+    await git(['config', 'user.email', 'test@example.com']);
+    await git(['config', 'user.name', 'Test']);
+    await writeFile(join(dir, 'a.txt'), 'first\n');
+    await git(['add', 'a.txt']);
+    await git(['commit', '-q', '-m', 'first']); // upstream 無し。1本とも「未 push」。
 
-      const s = setup(undefined, { stores: createMemoryStores() });
-      const { managerId } = await s.pool.start({ request: '確認', cwd: dir });
+    const s = setup(undefined, { stores: createMemoryStores() });
+    const { managerId } = await s.pool.start({ request: '確認', cwd: dir });
 
-      const probe = await s.pool.unpushedWork(managerId);
+    const probe = await s.pool.unpushedWork(managerId);
 
-      expect(probe.kind).toBe('ok');
-      if (probe.kind !== 'ok') throw new Error('unreachable');
-      expect(probe.result.worktrees).toHaveLength(1);
-      expect(probe.result.worktrees[0]).toMatchObject({
-        relativePath: '.',
-        branch: 'main',
-        unpushedCommitCount: 1,
-        uncommittedChangeCount: 0,
-      });
+    expect(probe.kind).toBe('ok');
+    if (probe.kind !== 'ok') throw new Error('unreachable');
+    expect(probe.result.worktrees).toHaveLength(1);
+    expect(probe.result.worktrees[0]).toMatchObject({
+      relativePath: '.',
+      branch: 'main',
+      unpushedCommitCount: 1,
+      uncommittedChangeCount: 0,
+    });
 
-      await s.pool.stop();
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
+    await s.pool.stop();
   });
 });
 
@@ -2253,46 +2250,42 @@ describe('unpushedWork の観測を台帳へ残す（Issue #1228 候補(1)）', 
    */
   it('manager_stop が呼ぶ unpushedWork の枝名は、器を落とした後も台帳から引ける', async () => {
     const run = promisify(execFile);
-    const dir = await mkdtemp(join(tmpdir(), 'alteroid-manager-unpushed-ledger-'));
-    try {
-      const git = (args: string[]) =>
-        run('git', args, { cwd: dir, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
-      await git(['init', '-q', '-b', 'fix/1228-worktree-branch-into-ledger']);
-      await git(['config', 'user.email', 'test@example.com']);
-      await git(['config', 'user.name', 'Test']);
-      await writeFile(join(dir, 'a.txt'), 'first\n');
-      await git(['add', 'a.txt']);
-      await git(['commit', '-q', '-m', 'first']);
+    const dir = await makeTempDir('alteroid-manager-unpushed-ledger-');
+    const git = (args: string[]) =>
+      run('git', args, { cwd: dir, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+    await git(['init', '-q', '-b', 'fix/1228-worktree-branch-into-ledger']);
+    await git(['config', 'user.email', 'test@example.com']);
+    await git(['config', 'user.name', 'Test']);
+    await writeFile(join(dir, 'a.txt'), 'first\n');
+    await git(['add', 'a.txt']);
+    await git(['commit', '-q', '-m', 'first']);
 
-      const stores = createMemoryStores();
-      const s = setup(undefined, { stores });
-      const { managerId } = await s.pool.start({ request: '確認', cwd: dir });
+    const stores = createMemoryStores();
+    const s = setup(undefined, { stores });
+    const { managerId } = await s.pool.start({ request: '確認', cwd: dir });
 
-      const probe = await s.pool.unpushedWork(managerId);
-      expect(probe.kind).toBe('ok');
+    const probe = await s.pool.unpushedWork(managerId);
+    expect(probe.kind).toBe('ok');
 
-      // **器を落とす**（`#records.clear()`。プロセス内の像が消える）。
-      await s.pool.stop();
+    // **器を落とす**（`#records.clear()`。プロセス内の像が消える）。
+    await s.pool.stop();
 
-      // 落とした後も、job store には触っていない——台帳から同じ枝名が引ける。
-      const stored = (await stores.jobs.listJobs()).find((job) => job.id === managerId);
-      expect(stored?.lastUnpushedWorkObservation).toMatchObject({
-        kind: 'observed',
-        cwd: dir,
-        worktrees: [{ relativePath: '.', branch: 'fix/1228-worktree-branch-into-ledger' }],
-      });
-      if (stored?.lastUnpushedWorkObservation?.kind !== 'observed') {
-        throw new Error('unreachable');
-      }
-      expect(typeof stored.lastUnpushedWorkObservation.at).toBe('string');
-
-      // **既存の欄は削れていない・意味も変わっていない**（Issue #1228 の
-      // 「足すだけ」条件）——`cwd` はこの変更より前から在る欄で、そちらも
-      // そのまま読める。
-      expect(stored?.cwd).toBe(dir);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
+    // 落とした後も、job store には触っていない——台帳から同じ枝名が引ける。
+    const stored = (await stores.jobs.listJobs()).find((job) => job.id === managerId);
+    expect(stored?.lastUnpushedWorkObservation).toMatchObject({
+      kind: 'observed',
+      cwd: dir,
+      worktrees: [{ relativePath: '.', branch: 'fix/1228-worktree-branch-into-ledger' }],
+    });
+    if (stored?.lastUnpushedWorkObservation?.kind !== 'observed') {
+      throw new Error('unreachable');
     }
+    expect(typeof stored.lastUnpushedWorkObservation.at).toBe('string');
+
+    // **既存の欄は削れていない・意味も変わっていない**（Issue #1228 の
+    // 「足すだけ」条件）——`cwd` はこの変更より前から在る欄で、そちらも
+    // そのまま読める。
+    expect(stored?.cwd).toBe(dir);
   });
 
   /**
@@ -10067,7 +10060,7 @@ describe('マネージャー — case archive は diverged/unknown だけを日�
     const s = setup();
     await s.pool.start({ request: 'デプロイして' });
     const session = s.sessions[0] as FakeSession;
-    const dir = await mkdtemp(join(tmpdir(), 'alteroid-mgr-archive-continuity-'));
+    const dir = await makeTempDir('alteroid-mgr-archive-continuity-');
     try {
       await firePreCompact(session, dir, 'AAAA'); // first（記録しない）
       await firePreCompact(session, dir, 'AAAABBBB'); // continues（記録しない）
@@ -10089,11 +10082,7 @@ describe('マネージャー — case archive は diverged/unknown だけを日�
       // 変異でここが赤くなるのは当てすぎである（測りたいのは「呼び手を名乗ること」）。
       expect(rows.some((row) => row.text.includes('マネージャーの生ログの退避'))).toBe(true);
     } finally {
-      // **先に stop() する。** stop() 自身も `#shipArchive()` を経由しうるので、
-      // ディレクトリを先に消すと「読み出せない」の跡が stderr へ残る
-      // （実害は無いが、テスト自身がノイズを作らないようにする）。
       await s.pool.stop();
-      await rm(dir, { recursive: true, force: true });
     }
   });
 
@@ -10106,7 +10095,7 @@ describe('マネージャー — case archive は diverged/unknown だけを日�
     const s = setup(undefined, { stores });
     const { managerId } = await s.pool.start({ request: 'デプロイして' });
     const session = s.sessions[0] as FakeSession;
-    const dir = await mkdtemp(join(tmpdir(), 'alteroid-mgr-archive-unknown-'));
+    const dir = await makeTempDir('alteroid-mgr-archive-unknown-');
     try {
       // managerId をそのまま sessionId として使う裏口で、指紋の無い行を仕込む
       // （`manager.ts` の `case 'archive'` は `event.managerId` を sessionId に使う）。
@@ -10121,11 +10110,7 @@ describe('マネージャー — case archive は diverged/unknown だけを日�
       const rows = await continuityRows(stores);
       expect(rows.some((row) => row.text.includes('continuity=unknown'))).toBe(true);
     } finally {
-      // **先に stop() する。** stop() 自身も `#shipArchive()` を経由しうるので、
-      // ディレクトリを先に消すと「読み出せない」の跡が stderr へ残る
-      // （実害は無いが、テスト自身がノイズを作らないようにする）。
       await s.pool.stop();
-      await rm(dir, { recursive: true, force: true });
     }
   });
 });
@@ -10169,7 +10154,7 @@ describe('runningManagerPinning / guardArchiveRemoval の requireContainment（#
   ): Promise<{ managerId: string; oldId: string; newId: string; dir: string }> {
     const { managerId } = await s.pool.start({ request: 'デプロイして' });
     const session = s.sessions[0] as FakeSession;
-    const dir = await mkdtemp(join(tmpdir(), 'alteroid-mgr-archive-pinning-'));
+    const dir = await makeTempDir('alteroid-mgr-archive-pinning-');
     await firePreCompact(session, dir, 'PIN-A'.repeat(20)); // 1本目（first）
     await firePreCompact(session, dir, 'PIN-A'.repeat(20) + 'PIN-B'.repeat(20)); // 2本目（continues）
     await vi.waitFor(async () => {
@@ -10200,19 +10185,18 @@ describe('runningManagerPinning / guardArchiveRemoval の requireContainment（#
 
   it('末尾（新しい写し）は runningManagerOwning でも runningManagerPinning でも保護される', async () => {
     const s = setup();
-    const { managerId, newId, dir } = await seedTwoArchivedCopies(s);
+    const { managerId, newId } = await seedTwoArchivedCopies(s);
     try {
       expect(s.pool.runningManagerOwning(newId)).toBe(managerId);
       expect(pinningOf(s.pool)(newId)).toBe(managerId);
     } finally {
       await s.pool.stop();
-      await rm(dir, { recursive: true, force: true });
     }
   });
 
   it('末尾より古い写しは、runningManagerOwning では保護されるが runningManagerPinning では保護されない（狭まる）', async () => {
     const s = setup();
-    const { managerId, oldId, dir } = await seedTwoArchivedCopies(s);
+    const { managerId, oldId } = await seedTwoArchivedCopies(s);
     try {
       // **広い判定（既存）は古い写しも保護し続ける**——単発の口 `archive_remove` /
       // `DELETE /archive/:id` はこちらのままで、1ビットも変えない。
@@ -10221,26 +10205,24 @@ describe('runningManagerPinning / guardArchiveRemoval の requireContainment（#
       expect(pinningOf(s.pool)(oldId)).toBeUndefined();
     } finally {
       await s.pool.stop();
-      await rm(dir, { recursive: true, force: true });
     }
   });
 
   it('存在しない archiveId はどちらの判定でも undefined', async () => {
     const s = setup();
-    const { dir } = await seedTwoArchivedCopies(s);
+    await seedTwoArchivedCopies(s);
     try {
       expect(s.pool.runningManagerOwning('archive-not-exist')).toBeUndefined();
       expect(pinningOf(s.pool)('archive-not-exist')).toBeUndefined();
     } finally {
       await s.pool.stop();
-      await rm(dir, { recursive: true, force: true });
     }
   });
 
   describe('guardArchiveRemoval の第4引数 requireContainment', () => {
     it('requireContainment: true なら、末尾は denied・古い写しは allowed（狭まる）', async () => {
       const s = setup();
-      const { managerId, oldId, newId, dir } = await seedTwoArchivedCopies(s);
+      const { managerId, oldId, newId } = await seedTwoArchivedCopies(s);
       try {
         const guardOld = guardArchiveRemoval(s.pool, oldId, undefined, true);
         const guardNew = guardArchiveRemoval(s.pool, newId, undefined, true);
@@ -10248,13 +10230,12 @@ describe('runningManagerPinning / guardArchiveRemoval の requireContainment（#
         expect(guardNew).toEqual({ kind: 'denied', managerId });
       } finally {
         await s.pool.stop();
-        await rm(dir, { recursive: true, force: true });
       }
     });
 
     it('requireContainment を省略（既存呼び）すると、古い写しも末尾も denied のまま——1ビットも変わらない', async () => {
       const s = setup();
-      const { managerId, oldId, newId, dir } = await seedTwoArchivedCopies(s);
+      const { managerId, oldId, newId } = await seedTwoArchivedCopies(s);
       try {
         // 3引数のまま——`archive_remove`（単発）・`DELETE /archive/:id` と同じ呼び方。
         const guardOld = guardArchiveRemoval(s.pool, oldId, undefined);
@@ -10263,19 +10244,17 @@ describe('runningManagerPinning / guardArchiveRemoval の requireContainment（#
         expect(guardNew).toEqual({ kind: 'denied', managerId });
       } finally {
         await s.pool.stop();
-        await rm(dir, { recursive: true, force: true });
       }
     });
 
     it('requireContainment: false なら、含有の証明が無いので狭めない——古い写しも denied のまま', async () => {
       const s = setup();
-      const { managerId, oldId, dir } = await seedTwoArchivedCopies(s);
+      const { managerId, oldId } = await seedTwoArchivedCopies(s);
       try {
         const guardOld = guardArchiveRemoval(s.pool, oldId, undefined, false);
         expect(guardOld).toEqual({ kind: 'denied', managerId });
       } finally {
         await s.pool.stop();
-        await rm(dir, { recursive: true, force: true });
       }
     });
 

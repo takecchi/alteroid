@@ -1,9 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { createCredentialStore } from './credentials.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
@@ -52,12 +53,11 @@ let dir: string;
 let host: RunnerHost;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'alteroid-runner-cred-'));
+  dir = makeTempDirSync('alteroid-runner-cred-');
 });
 
 afterEach(async () => {
   await host?.shutdown().catch(() => undefined);
-  rmSync(dir, { recursive: true, force: true });
 });
 
 describe('runner が配る鍵', () => {

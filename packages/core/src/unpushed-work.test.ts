@@ -1,9 +1,10 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+
+import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { unpushedWorkTreeSchema } from './runner-protocol.js';
 import {
@@ -23,11 +24,7 @@ import {
 let root: string;
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'alteroid-unpushed-work-'));
-});
-
-afterEach(() => {
-  rmSync(root, { recursive: true, force: true });
+  root = makeTempDirSync('alteroid-unpushed-work-');
 });
 
 function git(dir: string, args: string[]): string {

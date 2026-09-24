@@ -1,8 +1,9 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+
+import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import {
   createCredentialStore,
@@ -36,11 +37,7 @@ function unusableDir(): string {
 }
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'alteroid-cred-'));
-});
-
-afterEach(() => {
-  rmSync(dir, { recursive: true, force: true });
+  dir = makeTempDirSync('alteroid-cred-');
 });
 
 describe('鍵の器', () => {

@@ -1,8 +1,9 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+
+import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { readExecutionResources } from './runner-resources.js';
 
@@ -22,11 +23,7 @@ const HOST = { cores: 48, totalBytes: 346_488_946_688, freeBytes: 165_950_504_96
 let root: string;
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'alteroid-cgroup-'));
-});
-
-afterEach(() => {
-  rmSync(root, { recursive: true, force: true });
+  root = makeTempDirSync('alteroid-cgroup-');
 });
 
 /** cgroup v2 の器を偽装する（実測した書式そのまま）。 */

@@ -1,10 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, cp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, readFile, cp } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
+
+import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 /**
  * `packages/core/scripts/write-canon.mjs` の版の出所判定
@@ -34,19 +35,12 @@ const realScriptPath = join(here, '..', 'scripts', 'write-canon.mjs');
 const realDocsDir = join(here, '..', '..', '..', 'docs');
 const CANON_FILES = ['north_star.md', 'PRD.md', 'architecture.md'];
 
-const tmpDirs: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(tmpDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
-});
-
 /** 隔離された1本の checkout を用意し、write-canon.mjs を走らせて生成物を読む。 */
 async function runIsolated(options: {
   env?: NodeJS.ProcessEnv;
   git?: boolean;
 }): Promise<{ revision: string; source: string; builtAt: string }> {
-  const root = await mkdtemp(join(tmpdir(), 'write-canon-'));
-  tmpDirs.push(root);
+  const root = await makeTempDir('write-canon-');
 
   const scriptDir = join(root, 'packages', 'core', 'scripts');
   const docsDir = join(root, 'docs');

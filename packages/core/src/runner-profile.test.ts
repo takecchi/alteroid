@@ -1,9 +1,9 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { createProfileVessel } from './profile.js';
 import { createRunnerHost, WITHHELD_ENV_KEYS, type RunnerHost } from './runner.js';
@@ -57,12 +57,11 @@ let dir: string;
 let host: RunnerHost;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'alteroid-runner-profile-'));
+  dir = makeTempDirSync('alteroid-runner-profile-');
 });
 
 afterEach(async () => {
   await host?.shutdown().catch(() => undefined);
-  rmSync(dir, { recursive: true, force: true });
 });
 
 function makeHost(env: NodeJS.ProcessEnv, fake = fakeSdk()): { fake: ReturnType<typeof fakeSdk> } {

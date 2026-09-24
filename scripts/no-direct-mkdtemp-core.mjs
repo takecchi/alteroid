@@ -53,10 +53,13 @@
  * ## 許可リスト
  *
  * `ALLOWLIST` は「helper 導入より前からある直接呼び出し」を機械的に洗った
- * もの（52ファイル、2026-09-24 時点、PR #1437 マージ後の `main` 上で洗い直した）。
- * **この PR ではその中身を1つも直さない**——移行は別の段階でやると決めた
- * （PR 本文に理由を書く）。理由は1ファイル1行、そのファイルがいま実際に
- * どう後片付けしているかを現物で確かめて書いてある（`ALLOWLIST` の doc）。
+ * もの（当初52ファイル、2026-09-24 時点、PR #1437 マージ後の `main` 上で洗い直した）。
+ * 移行は3本の PR に分けて段階的にやると決めた（PR 本文に理由を書く）。理由は
+ * 1ファイル1行、そのファイルがいま実際にどう後片付けしているかを現物で
+ * 確かめて書いてある（`ALLOWLIST` の doc）。**1本目の PR（packages/core/ の18件）で
+ * 34ファイルへ減った** — 残りは apps/（12）・scripts/（11）・docker/（3）・
+ * .github/（3）・packages/storage-fs/（4）・railway/（1）の34ファイルで、
+ * 後続の2本の PR で移す。
  * 許可リストに無いファイルで新しく直接呼び出しが増えたら、この歯が赤くなる。
  *
  * **許可リストは古びたら赤くする。** 許可リストに載っているのに実際には
@@ -149,11 +152,12 @@ export function judgeMkdtempScan(matchedPaths, hits, allowlist) {
 }
 
 /**
- * 許可リスト（相対パス → 理由）。**この PR では1件も移行しない**。
+ * 許可リスト（相対パス → 理由）。**段階的な移行の途中である**（3本の PR に
+ * 分けると決めた。1本目で packages/core/ の18件を helper へ移した）。
  *
  * 各行の理由は、そのファイルが**いま実際にどう後片付けしているか**を現物で
- * 確かめて書いた（2026-09-24、PR #1437 マージ後の `main`（`500dab2`）の上で
- * 洗い直した。以後このリストが古びたら上の stale 判定が赤くする）。理由の
+ * 確かめて書いた（当初は 2026-09-24、PR #1437 マージ後の `main`（`500dab2`）の
+ * 上で洗い直した。以後このリストが古びたら上の stale 判定が赤くする）。理由の
  * 末尾はどれも「helper への移行待ち。」で揃えてある——揃えたのはそこだけで、
  * その前はファイル固有の事実である。
  *
@@ -162,18 +166,18 @@ export function judgeMkdtempScan(matchedPaths, hits, allowlist) {
  *   `afterEach` で `rm`/`rmSync` する。いちばん多い形。
  * - **it 直書き + try/finally**: `it`（または呼ばれた関数）の中だけで作って
  *   同じ場所の `finally` で消す。複数 `it` にまたがらない。
- * - **共有配列 + afterEach**（この PR の helper と同じ発想）: 作るたびに
+ * - **共有配列 + afterEach**（この repo の helper と同じ発想）: 作るたびに
  *   配列へ積み、`afterEach` が配列を空にしながらまとめて `rm` する。
- *   `apps/cli/src/practice.test.ts` / `packages/core/src/write-canon.test.ts` /
- *   `docker/alteroid-db.test.ts`（#1437 で導入）/ `scripts/verify-core.test.ts` /
+ *   `apps/cli/src/practice.test.ts` / `docker/alteroid-db.test.ts`
+ *   （#1437 で導入）/ `scripts/verify-core.test.ts` /
  *   `scripts/mutate-{aggregate-blocks,census,scaffold-control,unhandled-errors}.test.ts`
  *   がこの形——**helper 導入前から、同じ設計に独立して行き着いていた**。
  *
- * 内訳: 43ファイルが named import 経由（`mkdtemp(` / `mkdtempSync(`）、
- * 8ファイル（`scripts/mutate-*.test.ts`）が namespace import 経由
- * （`fs.mkdtempSync(`）。`railway/scale-runners.test.ts` は `mkdtempSync`
- * という語を doc コメントで触れているだけで実際の呼び出しが無いため、
- * ここには含めていない（含めると stale 判定に引っかかる）。
+ * 内訳（2026-09-24 時点、34ファイル）: 26ファイルが named import 経由
+ * （`mkdtemp(` / `mkdtempSync(`）、8ファイル（`scripts/mutate-*.test.ts`）が
+ * namespace import 経由（`fs.mkdtempSync(`）。`railway/scale-runners.test.ts`
+ * は `mkdtempSync` という語を doc コメントで触れているだけで実際の呼び出しが
+ * 無いため、ここには含めていない（含めると stale 判定に引っかかる）。
  */
 const MIGRATION_SUFFIX = 'helper への移行待ち。';
 
@@ -249,78 +253,6 @@ export const ALLOWLIST = new Map([
   [
     'docker/gh.test.ts',
     `runGh() ヘルパー自身の try/finally で rmSync する。単発の it（docker-gh-cred-test.）も try/finally を持つ（#1437 で導入）。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'packages/core/src/agent-session-options.test.ts',
-    `2箇所。1つは beforeEach で dir を作り afterEach で rmSync、もう1つ（firePreCompact ヘルパー）は呼ぶたびに dir を作り同じ関数内の try/finally で rm する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'packages/core/src/clone.test.ts',
-    `15箇所すべてが、各自の firePreCompact 系ヘルパー（または it 直書き）の中で dir を作り、同じ場所の try/finally で rm する。#1437 は #696 用の1箇所を #698 用と同じ try/finally の形に揃えた（他14箇所は元から同じ形）。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'packages/core/src/credentials.test.ts',
-    `beforeEach で dir を作り、afterEach で rm する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'packages/core/src/manager.test.ts',
-    `5箇所すべてが it 直書き、または helper 関数（seedTwoArchivedCopies 等）が返した dir を呼び出し側（各 it）の try/finally で rm する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'packages/core/src/profile-service.test.ts',
-    `beforeEach で dir を作り、afterEach で rm する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'packages/core/src/profile.test.ts',
-    `beforeEach で dir を作り、afterEach で rm する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'packages/core/src/runner-archive-leg.test.ts',
-    `beforeEach で dir を作り、afterEach で rm する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'packages/core/src/runner-credentials.test.ts',
-    `beforeEach で dir を作り、afterEach で rm する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'packages/core/src/runner-post-tool-use-failure.test.ts',
-    `beforeEach で dir を作り、afterEach で rm する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'packages/core/src/runner-pre-tool-use.test.ts',
-    `beforeEach で dir を作り、afterEach で rm する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'packages/core/src/runner-profile.test.ts',
-    `beforeEach で dir を作り、afterEach で rm する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'packages/core/src/runner-resources.test.ts',
-    `beforeEach で root を作り、afterEach で rm する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'packages/core/src/runner-stop.test.ts',
-    `beforeEach で dir を作り、afterEach で rm する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'packages/core/src/runner-subagent-stop.test.ts',
-    `beforeEach で dir を作り、afterEach で rm する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'packages/core/src/runner-token-rotation.test.ts',
-    `beforeEach で dir を作り、afterEach で rm する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'packages/core/src/unpushed-work.test.ts',
-    `beforeEach で root を作り、afterEach で rm する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'packages/core/src/usage-flush.test.ts',
-    `beforeEach で dir を作り、afterEach で rm する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'packages/core/src/write-canon.test.ts',
-    `共有配列 + afterEach。runIsolated() ヘルパーが作るたびに tmpDirs 配列へ積み、afterEach でまとめて rm する（この PR の helper と同じ発想）。${MIGRATION_SUFFIX}`,
   ],
   [
     'packages/storage-fs/src/file-lock.test.ts',

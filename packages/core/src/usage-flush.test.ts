@@ -1,7 +1,3 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 import type {
   query as sdkQuery,
   ModelUsage,
@@ -9,7 +5,9 @@ import type {
   Query,
   SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { createManagerPool } from './manager.js';
 import { createLocalRunner } from './runner-local.js';
@@ -182,11 +180,7 @@ function fakeSdk(options: FakeSdkOptions = {}): {
 let dir: string;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'alteroid-usage-flush-'));
-});
-
-afterEach(() => {
-  rmSync(dir, { recursive: true, force: true });
+  dir = makeTempDirSync('alteroid-usage-flush-');
 });
 
 function hostWith(fake: { fn: typeof sdkQuery }): { host: RunnerHost; events: RunnerEvent[] } {

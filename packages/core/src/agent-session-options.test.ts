@@ -1,10 +1,10 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { makeTempDir, makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { ALWAYS_REDELIVER, CLONE_MODEL_ENV_KEY, createClone } from './clone.js';
 import { DEFAULT_PERMISSION_MODE } from './permission-mode.js';
@@ -226,12 +226,11 @@ describe('マネージャー（runner）へ渡す Options', () => {
   let host: RunnerHost | undefined;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'alteroid-agent-session-options-'));
+    dir = makeTempDirSync('alteroid-agent-session-options-');
   });
 
   afterEach(async () => {
     await host?.shutdown().catch(() => undefined);
-    rmSync(dir, { recursive: true, force: true });
   });
 
   it('既定のモデル帯・道具の配置・許可モードを固定する', async () => {
@@ -408,18 +407,14 @@ describe('クローンの蒸留サイドクエリへ渡す Options', () => {
    * `options` が積まれる。
    */
   async function firePreCompact(main: { options: Options }): Promise<void> {
-    const dir = await mkdtemp(join(tmpdir(), 'alteroid-agent-session-options-distill-'));
-    try {
-      const transcriptPath = join(dir, 'transcript.jsonl');
-      await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
-      const hook = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
-      if (hook === undefined) throw new Error('PreCompact フックが登録されていない');
-      await hook({ session_id: 'sess-fake', transcript_path: transcriptPath } as never, undefined, {
-        signal: new AbortController().signal,
-      } as never);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
+    const dir = await makeTempDir('alteroid-agent-session-options-distill-');
+    const transcriptPath = join(dir, 'transcript.jsonl');
+    await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
+    const hook = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PreCompact フックが登録されていない');
+    await hook({ session_id: 'sess-fake', transcript_path: transcriptPath } as never, undefined, {
+      signal: new AbortController().signal,
+    } as never);
   }
 
   it('persistSession: false、PostToolUse はあるが PreCompact は無い', async () => {

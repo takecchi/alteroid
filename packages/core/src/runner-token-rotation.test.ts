@@ -1,9 +1,9 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { createCredentialStore } from './credentials.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
@@ -396,13 +396,12 @@ let dir: string;
 let hosts: RunnerHost[] = [];
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'alteroid-runner-token-rotation-'));
+  dir = makeTempDirSync('alteroid-runner-token-rotation-');
 });
 
 afterEach(async () => {
   await Promise.all(hosts.map((host) => host.shutdown().catch(() => undefined)));
   hosts = [];
-  rmSync(dir, { recursive: true, force: true });
 });
 
 /** 本物のトークンに似せない、明らかな作り物の値（AGENTS.md「秘密の扱い」）。 */

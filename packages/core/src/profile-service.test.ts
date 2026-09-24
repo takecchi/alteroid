@@ -1,8 +1,9 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+
+import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import {
   createProfileApplier,
@@ -35,11 +36,7 @@ import { createMemoryStores } from './testing.js';
 let dir: string;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'alteroid-profile-service-'));
-});
-
-afterEach(() => {
-  rmSync(dir, { recursive: true, force: true });
+  dir = makeTempDirSync('alteroid-profile-service-');
 });
 
 /** 器に置かれた本文をそのまま覚える runner。 */

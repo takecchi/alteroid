@@ -1,5 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type {
@@ -12,6 +11,8 @@ import type {
   SessionStore,
 } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import {
   ALWAYS_REDELIVER,
@@ -1010,36 +1011,32 @@ describe('クローン', () => {
     await waitForDone(s.events);
 
     const main = s.calls[0] as FakeCall;
-    const dir = await mkdtemp(join(tmpdir(), 'alteroid-distill-audit-'));
-    try {
-      const transcriptPath = join(dir, 'transcript.jsonl');
-      await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
-      const preCompact = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
-      if (preCompact === undefined) throw new Error('PreCompact フックが登録されていない');
-      await preCompact(
-        { session_id: 'sess-fake', transcript_path: transcriptPath } as never,
-        undefined,
-        { signal: new AbortController().signal } as never,
-      );
+    const dir = await makeTempDir('alteroid-distill-audit-');
+    const transcriptPath = join(dir, 'transcript.jsonl');
+    await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
+    const preCompact = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
+    if (preCompact === undefined) throw new Error('PreCompact フックが登録されていない');
+    await preCompact(
+      { session_id: 'sess-fake', transcript_path: transcriptPath } as never,
+      undefined,
+      { signal: new AbortController().signal } as never,
+    );
 
-      const side = s.calls.at(-1) as FakeCall;
-      expect(side).not.toBe(main);
-      // **道具と許可モードを揃えたのだから、記録も揃っていること。**
-      const hook = side.options.hooks?.PostToolUse?.[0]?.hooks?.[0];
-      if (hook === undefined) throw new Error('蒸留側に PostToolUse フックが無い');
-      await hook(
-        { tool_name: 'Write', tool_input: { file_path: '/a' } } as never,
-        undefined,
-        {} as never,
-      );
+    const side = s.calls.at(-1) as FakeCall;
+    expect(side).not.toBe(main);
+    // **道具と許可モードを揃えたのだから、記録も揃っていること。**
+    const hook = side.options.hooks?.PostToolUse?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('蒸留側に PostToolUse フックが無い');
+    await hook(
+      { tool_name: 'Write', tool_input: { file_path: '/a' } } as never,
+      undefined,
+      {} as never,
+    );
 
-      const entries = await s.stores.journal.list({ types: ['tool_use'] });
-      const write = entries.find((entry) => (entry as { tool: string }).tool === 'Write');
-      expect((write as { actor: string } | undefined)?.actor).toBe('clone:distill');
-      expect(isCloneActor('clone:distill')).toBe(true);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
+    const entries = await s.stores.journal.list({ types: ['tool_use'] });
+    const write = entries.find((entry) => (entry as { tool: string }).tool === 'Write');
+    expect((write as { actor: string } | undefined)?.actor).toBe('clone:distill');
+    expect(isCloneActor('clone:distill')).toBe(true);
 
     await s.clone.stop();
   });
@@ -1163,54 +1160,50 @@ describe('クローン', () => {
     await waitForDone(s.events);
 
     const main = s.calls[0] as FakeCall;
-    const dir = await mkdtemp(join(tmpdir(), 'alteroid-distill-failure-audit-'));
-    try {
-      const transcriptPath = join(dir, 'transcript.jsonl');
-      await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
-      const preCompact = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
-      if (preCompact === undefined) throw new Error('PreCompact フックが登録されていない');
-      await preCompact(
-        { session_id: 'sess-fake', transcript_path: transcriptPath } as never,
-        undefined,
-        { signal: new AbortController().signal } as never,
-      );
+    const dir = await makeTempDir('alteroid-distill-failure-audit-');
+    const transcriptPath = join(dir, 'transcript.jsonl');
+    await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
+    const preCompact = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
+    if (preCompact === undefined) throw new Error('PreCompact フックが登録されていない');
+    await preCompact(
+      { session_id: 'sess-fake', transcript_path: transcriptPath } as never,
+      undefined,
+      { signal: new AbortController().signal } as never,
+    );
 
-      const side = s.calls.at(-1) as FakeCall;
-      expect(side).not.toBe(main);
-      const hook = side.options.hooks?.PostToolUseFailure?.[0]?.hooks?.[0];
-      if (hook === undefined) throw new Error('蒸留側に PostToolUseFailure フックが無い');
-      await hook(
-        {
-          tool_name: qualifiedToolName('memory_write'),
-          tool_input: { slug: 'values' },
-          error: 'ストアに書けなかった',
-        } as never,
-        undefined,
-        {} as never,
-      );
-      // **自作ツール（memory_write）の失敗は除外される**——`#journalToolUse` と
-      // 同じ除外規則を通すため（判断は `#journalToolUseFailure` の doc に
-      // 名指ししてある）。だから別の道具（`Write`）で「蒸留側の失敗が残る」
-      // ことを別途確かめる。
-      await hook(
-        { tool_name: 'Write', tool_input: { file_path: '/a' }, error: 'ENOSPC' } as never,
-        undefined,
-        {} as never,
-      );
+    const side = s.calls.at(-1) as FakeCall;
+    expect(side).not.toBe(main);
+    const hook = side.options.hooks?.PostToolUseFailure?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('蒸留側に PostToolUseFailure フックが無い');
+    await hook(
+      {
+        tool_name: qualifiedToolName('memory_write'),
+        tool_input: { slug: 'values' },
+        error: 'ストアに書けなかった',
+      } as never,
+      undefined,
+      {} as never,
+    );
+    // **自作ツール（memory_write）の失敗は除外される**——`#journalToolUse` と
+    // 同じ除外規則を通すため（判断は `#journalToolUseFailure` の doc に
+    // 名指ししてある）。だから別の道具（`Write`）で「蒸留側の失敗が残る」
+    // ことを別途確かめる。
+    await hook(
+      { tool_name: 'Write', tool_input: { file_path: '/a' }, error: 'ENOSPC' } as never,
+      undefined,
+      {} as never,
+    );
 
-      const entries = await s.stores.journal.list({ types: ['tool_use'] });
-      const memoryWrite = entries.find(
-        (entry) => (entry as { tool: string }).tool === qualifiedToolName('memory_write'),
-      );
-      expect(memoryWrite).toBeUndefined();
+    const entries = await s.stores.journal.list({ types: ['tool_use'] });
+    const memoryWrite = entries.find(
+      (entry) => (entry as { tool: string }).tool === qualifiedToolName('memory_write'),
+    );
+    expect(memoryWrite).toBeUndefined();
 
-      const write = entries.find((entry) => (entry as { tool: string }).tool === 'Write');
-      expect((write as { actor: string } | undefined)?.actor).toBe('clone:distill');
-      expect((write as { outcome?: string } | undefined)?.outcome).toBe('failed');
-      expect((write as { error?: string } | undefined)?.error).toBe('ENOSPC');
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
+    const write = entries.find((entry) => (entry as { tool: string }).tool === 'Write');
+    expect((write as { actor: string } | undefined)?.actor).toBe('clone:distill');
+    expect((write as { outcome?: string } | undefined)?.outcome).toBe('failed');
+    expect((write as { error?: string } | undefined)?.error).toBe('ENOSPC');
 
     await s.clone.stop();
   });
@@ -1959,32 +1952,28 @@ describe('クローン', () => {
 
     // PreCompact の蒸留は別の短命セッションで走る。ここだけ帯が違うと、
     // 人格を書く側だけが別の頭になる。
-    const dir = await mkdtemp(join(tmpdir(), 'alteroid-clone-model-'));
-    try {
-      const transcriptPath = join(dir, 'transcript.jsonl');
-      await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
+    const dir = await makeTempDir('alteroid-clone-model-');
+    const transcriptPath = join(dir, 'transcript.jsonl');
+    await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
 
-      const hook = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
-      if (hook === undefined) throw new Error('PreCompact フックが登録されていない');
-      await hook({ session_id: 'sess-fake', transcript_path: transcriptPath } as never, undefined, {
-        signal: new AbortController().signal,
-      } as never);
+    const hook = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PreCompact フックが登録されていない');
+    await hook({ session_id: 'sess-fake', transcript_path: transcriptPath } as never, undefined, {
+      signal: new AbortController().signal,
+    } as never);
 
-      const side = s.calls.at(-1) as FakeCall;
-      expect(side).not.toBe(main);
-      expect(side.options.model).toBe('opus');
-      // **道具の配置も揃っていること**（#32）。帯だけ揃えても、片方に道具が無ければ
-      // 人格を書く側だけが別の頭になる（会話の最後に「鍵を実行環境へ移す」を
-      // やろうとして失敗した実例と同じ形）。
-      expect(side.options.tools).toBeUndefined();
-      expect(side.options.settingSources).toEqual(['user', 'project', 'local']);
-      // **`toBe(main…)` だけにしないこと。** 両方 `undefined` でも等しくなるので、
-      // 「どちらにも渡していない」が「揃っている」として通ってしまう。
-      expect(side.options.permissionMode).toBe('auto');
-      expect(side.options.permissionMode).toBe(main.options.permissionMode);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
+    const side = s.calls.at(-1) as FakeCall;
+    expect(side).not.toBe(main);
+    expect(side.options.model).toBe('opus');
+    // **道具の配置も揃っていること**（#32）。帯だけ揃えても、片方に道具が無ければ
+    // 人格を書く側だけが別の頭になる（会話の最後に「鍵を実行環境へ移す」を
+    // やろうとして失敗した実例と同じ形）。
+    expect(side.options.tools).toBeUndefined();
+    expect(side.options.settingSources).toEqual(['user', 'project', 'local']);
+    // **`toBe(main…)` だけにしないこと。** 両方 `undefined` でも等しくなるので、
+    // 「どちらにも渡していない」が「揃っている」として通ってしまう。
+    expect(side.options.permissionMode).toBe('auto');
+    expect(side.options.permissionMode).toBe(main.options.permissionMode);
 
     await s.clone.stop();
   });
@@ -4121,20 +4110,16 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
     await waitForDone(events);
 
     const main = calls[0] as FakeCall;
-    const dir = await mkdtemp(join(tmpdir(), 'alteroid-distill-cause-'));
-    try {
-      const transcriptPath = join(dir, 'transcript.jsonl');
-      await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
-      const preCompact = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
-      if (preCompact === undefined) throw new Error('PreCompact フックが登録されていない');
-      await preCompact(
-        { session_id: 'sess-fake', transcript_path: transcriptPath } as never,
-        undefined,
-        { signal: new AbortController().signal } as never,
-      );
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
+    const dir = await makeTempDir('alteroid-distill-cause-');
+    const transcriptPath = join(dir, 'transcript.jsonl');
+    await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
+    const preCompact = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
+    if (preCompact === undefined) throw new Error('PreCompact フックが登録されていない');
+    await preCompact(
+      { session_id: 'sess-fake', transcript_path: transcriptPath } as never,
+      undefined,
+      { signal: new AbortController().signal } as never,
+    );
 
     // `mcpServerFactory` は本セッションの初期化で1回、サイドクエリでもう1回呼ばれる。
     // **サイドクエリで控えた側（2回目）を使う**（依頼書の指示どおり）。
@@ -6577,7 +6562,7 @@ describe('クローン — ターンの失敗の跡', () => {
 
       // 道具を1つ使った跡を作る ＝ 在り処が控えられる。**本物と同じ経路で叩く**
       // （既存の PreCompact / PostToolUse の歯と同じ形）。
-      const dir = await mkdtemp(join(tmpdir(), 'alteroid-ctxwin-'));
+      const dir = await makeTempDir('alteroid-ctxwin-');
       try {
         const transcriptPath = join(dir, 'transcript.jsonl');
         await writeFile(transcriptPath, '畳む直前の生ログ', 'utf8');
@@ -6600,7 +6585,6 @@ describe('クローン — ターンの失敗の跡', () => {
         });
       } finally {
         await s.clone.stop();
-        await rm(dir, { recursive: true, force: true });
       }
     });
 
@@ -6644,7 +6628,7 @@ describe('クローン — ターンの失敗の跡', () => {
       s.clone.post(humanMessage('やあ'));
       await waitFor(() => s.events.some((event) => event.type === 'done'), '1本目が通ること');
 
-      const dir = await mkdtemp(join(tmpdir(), 'alteroid-ctxwin-gone-'));
+      const dir = await makeTempDir('alteroid-ctxwin-gone-');
       const transcriptPath = join(dir, 'transcript.jsonl');
       await writeFile(transcriptPath, '畳む直前の生ログ', 'utf8');
       const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUse?.[0]?.hooks?.[0];
@@ -6696,7 +6680,7 @@ describe('クローン — ターンの失敗の跡', () => {
       s.clone.post(humanMessage('やあ'));
       await waitFor(() => s.events.some((event) => event.type === 'done'), '1本目が通ること');
 
-      const dir = await mkdtemp(join(tmpdir(), 'alteroid-ctxwin-grave-'));
+      const dir = await makeTempDir('alteroid-ctxwin-grave-');
       try {
         const transcriptPath = join(dir, 'transcript.jsonl');
         await writeFile(transcriptPath, '畳む直前の生ログ', 'utf8');
@@ -6718,7 +6702,6 @@ describe('クローン — ターンの失敗の跡', () => {
         expect((await s.stores.sessions.getTranscriptGrave())?.archiveId).toBe(entries[0]?.id);
       } finally {
         await s.clone.stop();
-        await rm(dir, { recursive: true, force: true });
       }
     });
 
@@ -6727,7 +6710,7 @@ describe('クローン — ターンの失敗の跡', () => {
       s.clone.post(humanMessage('やあ'));
       await waitFor(() => s.events.some((event) => event.type === 'done'), '1本目が通ること');
 
-      const dir = await mkdtemp(join(tmpdir(), 'alteroid-ctxwin-grave-none-'));
+      const dir = await makeTempDir('alteroid-ctxwin-grave-none-');
       try {
         const transcriptPath = join(dir, 'transcript.jsonl');
         await writeFile(transcriptPath, '畳む直前の生ログ', 'utf8');
@@ -6745,7 +6728,6 @@ describe('クローン — ターンの失敗の跡', () => {
         expect(await s.stores.sessions.getTranscriptGrave()).toBeNull();
       } finally {
         await s.clone.stop();
-        await rm(dir, { recursive: true, force: true });
       }
     });
 
@@ -8664,18 +8646,14 @@ describe('クローンの消費が台帳に載る（誰が・どこで）', () =
 
   /** `PreCompact` フックを実際に叩いて蒸留のサイドクエリを走らせる。 */
   async function firePreCompact(main: FakeCall): Promise<void> {
-    const dir = await mkdtemp(join(tmpdir(), 'alteroid-clone-usage-'));
-    try {
-      const transcriptPath = join(dir, 'transcript.jsonl');
-      await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
-      const hook = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
-      if (hook === undefined) throw new Error('PreCompact フックが登録されていない');
-      await hook({ session_id: 'sess-fake', transcript_path: transcriptPath } as never, undefined, {
-        signal: new AbortController().signal,
-      } as never);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
+    const dir = await makeTempDir('alteroid-clone-usage-');
+    const transcriptPath = join(dir, 'transcript.jsonl');
+    await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
+    const hook = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PreCompact フックが登録されていない');
+    await hook({ session_id: 'sess-fake', transcript_path: transcriptPath } as never, undefined, {
+      signal: new AbortController().signal,
+    } as never);
   }
 
   it('本セッションの分が layer=clone / site=session として載る', async () => {
@@ -9044,18 +9022,14 @@ describe('クローン — PreCompact サイドセッションの入力を日誌
 
   /** `PreCompact` フックを実際に叩いて蒸留のサイドクエリを走らせる。 */
   async function firePreCompact(main: FakeCall, transcript = TRANSCRIPT): Promise<void> {
-    const dir = await mkdtemp(join(tmpdir(), 'alteroid-clone-precompact-turn-input-'));
-    try {
-      const transcriptPath = join(dir, 'transcript.jsonl');
-      await writeFile(transcriptPath, transcript, 'utf8');
-      const hook = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
-      if (hook === undefined) throw new Error('PreCompact フックが登録されていない');
-      await hook({ session_id: 'sess-fake', transcript_path: transcriptPath } as never, undefined, {
-        signal: new AbortController().signal,
-      } as never);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
+    const dir = await makeTempDir('alteroid-clone-precompact-turn-input-');
+    const transcriptPath = join(dir, 'transcript.jsonl');
+    await writeFile(transcriptPath, transcript, 'utf8');
+    const hook = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PreCompact フックが登録されていない');
+    await hook({ session_id: 'sess-fake', transcript_path: transcriptPath } as never, undefined, {
+      signal: new AbortController().signal,
+    } as never);
   }
 
   /** 日誌から `pre_compact_distill` の1行を拾う（self/inbound で絞る）。 */
@@ -9151,18 +9125,14 @@ describe('クローン — 蒸留の末尾は全文を読まずに取る（渡�
 
   /** `PreCompact` フックを実際に叩いて蒸留のサイドクエリを走らせる。 */
   async function firePreCompactWith(main: FakeCall, transcript: string): Promise<void> {
-    const dir = await mkdtemp(join(tmpdir(), 'alteroid-clone-tail-'));
-    try {
-      const transcriptPath = join(dir, 'transcript.jsonl');
-      await writeFile(transcriptPath, transcript, 'utf8');
-      const hook = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
-      if (hook === undefined) throw new Error('PreCompact フックが登録されていない');
-      await hook({ session_id: 'sess-fake', transcript_path: transcriptPath } as never, undefined, {
-        signal: new AbortController().signal,
-      } as never);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
+    const dir = await makeTempDir('alteroid-clone-tail-');
+    const transcriptPath = join(dir, 'transcript.jsonl');
+    await writeFile(transcriptPath, transcript, 'utf8');
+    const hook = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PreCompact フックが登録されていない');
+    await hook({ session_id: 'sess-fake', transcript_path: transcriptPath } as never, undefined, {
+      signal: new AbortController().signal,
+    } as never);
   }
 
   it('60,000 文字級の日本語でも、渡る末尾は全文を読んだときと同じである', async () => {
@@ -17986,18 +17956,14 @@ describe('クローン — 蒸留が間に合わなかった区間の検出', ()
     await waitForDone(s.events);
 
     const main = s.calls[0] as FakeCall;
-    const dir = await mkdtemp(join(tmpdir(), 'alteroid-distill-gap-'));
-    try {
-      const transcriptPath = join(dir, 'transcript.jsonl');
-      await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
-      const hook = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
-      if (hook === undefined) throw new Error('PreCompact フックが登録されていない');
-      await hook({ session_id: 'sess-fake', transcript_path: transcriptPath } as never, undefined, {
-        signal: new AbortController().signal,
-      } as never);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
+    const dir = await makeTempDir('alteroid-distill-gap-');
+    const transcriptPath = join(dir, 'transcript.jsonl');
+    await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
+    const hook = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PreCompact フックが登録されていない');
+    await hook({ session_id: 'sess-fake', transcript_path: transcriptPath } as never, undefined, {
+      signal: new AbortController().signal,
+    } as never);
 
     const marks = await distillSucceededEntries(s.stores);
     expect(marks.map((mark) => mark.decision)).toEqual([
@@ -18300,20 +18266,16 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
 
   async function firePreCompact(s: Setup): Promise<void> {
     const main = s.calls[0] as FakeCall;
-    const dir = await mkdtemp(join(tmpdir(), 'alteroid-index-refresh-'));
-    try {
-      const transcriptPath = join(dir, 'transcript.jsonl');
-      await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
-      const preCompact = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
-      if (preCompact === undefined) throw new Error('PreCompact フックが登録されていない');
-      await preCompact(
-        { session_id: 'sess-fake', transcript_path: transcriptPath } as never,
-        undefined,
-        { signal: new AbortController().signal } as never,
-      );
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
+    const dir = await makeTempDir('alteroid-index-refresh-');
+    const transcriptPath = join(dir, 'transcript.jsonl');
+    await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
+    const preCompact = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
+    if (preCompact === undefined) throw new Error('PreCompact フックが登録されていない');
+    await preCompact(
+      { session_id: 'sess-fake', transcript_path: transcriptPath } as never,
+      undefined,
+      { signal: new AbortController().signal } as never,
+    );
   }
 
   it('⭐ 潰された次のターンでは、変わっていない文書も含めて索引の全体が載る', async () => {
@@ -18404,18 +18366,14 @@ describe('クローン — PreCompact の退避は diverged/unknown だけを日
     sessionId: string,
     transcript: string,
   ): Promise<void> {
-    const dir = await mkdtemp(join(tmpdir(), 'alteroid-clone-precompact-continuity-'));
-    try {
-      const transcriptPath = join(dir, 'transcript.jsonl');
-      await writeFile(transcriptPath, transcript, 'utf8');
-      const hook = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
-      if (hook === undefined) throw new Error('PreCompact フックが登録されていない');
-      await hook({ session_id: sessionId, transcript_path: transcriptPath } as never, undefined, {
-        signal: new AbortController().signal,
-      } as never);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
+    const dir = await makeTempDir('alteroid-clone-precompact-continuity-');
+    const transcriptPath = join(dir, 'transcript.jsonl');
+    await writeFile(transcriptPath, transcript, 'utf8');
+    const hook = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PreCompact フックが登録されていない');
+    await hook({ session_id: sessionId, transcript_path: transcriptPath } as never, undefined, {
+      signal: new AbortController().signal,
+    } as never);
   }
 
   async function continuityRows(stores: Stores): Promise<{ text: string }[]> {
@@ -18567,7 +18525,7 @@ describe('クローン — 文脈窓で畳む前の退避は diverged/unknown �
 
   it('continues は記録されない。diverged だけが記録される', async () => {
     const s = setupFold();
-    const dir = await mkdtemp(join(tmpdir(), 'alteroid-clone-salvage-continuity-'));
+    const dir = await makeTempDir('alteroid-clone-salvage-continuity-');
     try {
       await successThenFold(s, dir, 'AAAA'); // first
       await successThenFold(s, dir, 'AAAABBBB'); // continues
@@ -18586,7 +18544,6 @@ describe('クローン — 文脈窓で畳む前の退避は diverged/unknown �
       expect(rows.some((row) => row.text.includes('AAAA'))).toBe(false);
       expect(rows.some((row) => row.text.includes('ZZZZZZZZZZZZ'))).toBe(false);
     } finally {
-      await rm(dir, { recursive: true, force: true });
       await s.clone.stop();
     }
   });

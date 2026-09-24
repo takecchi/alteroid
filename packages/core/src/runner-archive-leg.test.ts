@@ -1,5 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type {
@@ -12,6 +11,8 @@ import type {
   SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { createRunnerHost, type RunnerHost } from './runner.js';
 import type { RunnerEvent } from './runner-protocol.js';
@@ -128,13 +129,12 @@ let hosts: RunnerHost[] = [];
 let dir: string;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'alteroid-archive-leg-'));
+  dir = makeTempDirSync('alteroid-archive-leg-');
 });
 
 afterEach(async () => {
   await Promise.all(hosts.map((host) => host.shutdown().catch(() => undefined)));
   hosts = [];
-  rmSync(dir, { recursive: true, force: true });
 });
 
 describe('#shipArchive() は report / ask と同じ1本の脚（emit）を通る（#634）', () => {
