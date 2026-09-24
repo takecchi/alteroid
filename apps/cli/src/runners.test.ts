@@ -26,12 +26,13 @@ vi.mock('./target.js', () => ({
   ),
 }));
 
-const { renderRunners, runnersCommand } = await import('./runners.js');
+const { renderRunners, runnersCommand, runnersVacateCommand } = await import('./runners.js');
 const target = await import('./target.js');
 
 interface Sent {
   url: string;
   method: string;
+  body?: string;
 }
 
 let sent: Sent[] = [];
@@ -42,7 +43,11 @@ function stubFetch(): void {
   globalThis.fetch = ((input: unknown, init?: RequestInit) => {
     const request = input as { url?: string; method?: string };
     const url = typeof input === 'string' ? input : (request.url ?? String(input));
-    sent.push({ url, method: init?.method ?? request.method ?? 'GET' });
+    sent.push({
+      url,
+      method: init?.method ?? request.method ?? 'GET',
+      ...(typeof init?.body === 'string' ? { body: init.body } : {}),
+    });
     const reply = replies.shift() ?? { status: 200, body: {} };
     return Promise.resolve(
       new Response(JSON.stringify(reply.body), {
@@ -297,5 +302,36 @@ describe('runnersCommand', () => {
     await runnersCommand();
 
     expect(read()).toBe('runner の一覧を読めませんでした\n');
+  });
+});
+
+/**
+ * `alteroid runners vacate <runnerId>`（#1377 の前提）。経路は `POST /runners/vacate`
+ * の1本だけで、応答は「立てた」ことの確認であって「空き終わった」ではない。
+ */
+describe('runnersVacateCommand', () => {
+  it('POST /runners/vacate へ runnerId を渡し、終わったとは言わずに進捗を追う口を名指しする', async () => {
+    replies.push({ status: 200, body: { ok: true } });
+    const read = captureStdout();
+    await runnersVacateCommand('runner-2');
+    const out = read();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.method).toBe('POST');
+    expect(sent[0]?.url).toContain('/runners/vacate');
+    expect(JSON.parse(sent[0]?.body ?? '{}')).toEqual({ runnerId: 'runner-2' });
+    expect(out).toContain('runner runner-2 を空けると立てた');
+    expect(out).toContain('まだ空き終わってはいない');
+    expect(out).toContain('alteroid runners');
+  });
+
+  it('デーモンが断ったら、立てたとは言わない', async () => {
+    replies.push({ status: 400, body: { error: 'runnerId の形が不正（空けていない）' } });
+    const read = captureStdout();
+    await runnersVacateCommand('');
+    const out = read();
+
+    expect(out).toContain('空けると立てられませんでした（HTTP 400）');
+    expect(out).not.toContain('空けると立てた。');
   });
 });

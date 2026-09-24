@@ -43,7 +43,7 @@ import {
 } from './profile.js';
 import { alteroidRoot } from './paths.js';
 import { resetCommand } from './reset.js';
-import { runnersCommand } from './runners.js';
+import { runnersCommand, runnersVacateCommand } from './runners.js';
 import {
   credentialListCommand,
   credentialRemoveCommand,
@@ -228,11 +228,23 @@ program
  * 同じものを見る。**版を読む口が Web とクローンにしか無い状態を残さない**
  * （PRD「インターフェース」— 片方でしかできないことを作らない）。
  */
-program
+const runnersProgram = program
   .command('runners')
   .description('委譲先の器と、デーモン / runner がいま走っている版を見る')
   .action(async () => {
     await runnersCommand();
+  });
+
+/**
+ * 器を意図して空ける（drain）。経路は `POST /runners/vacate` の1本だけ
+ * （`apps/cli/src/runners.ts` の `runnersVacateCommand`）。
+ */
+runnersProgram
+  .command('vacate')
+  .description('その runner を意図して空ける（載っている委譲を他の runner へ移す）')
+  .argument('<runnerId>', '空ける runner の id（alteroid runners で見える）')
+  .action(async (runnerId: string) => {
+    await runnersVacateCommand(runnerId);
   });
 
 /**

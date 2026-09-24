@@ -125,6 +125,7 @@ CLI の主なコマンド:
 | `alteroid token ...`                | 認証トークンのプール（枠に当たったときに回す候補）        |
 | `alteroid usage`                    | 使った分（トークンと費用）を見る                          |
 | `alteroid runners`                  | 委譲先の器と、いま走っている版を見る                      |
+| `alteroid runners vacate <id>`      | その器を空ける（載っている委譲を他の器へ移す）            |
 | `alteroid conversations ...`        | 会話の履歴を読む                                          |
 | `alteroid dropped`                  | 握り潰しの跡を見る                                        |
 | `alteroid login/logout/whoami`      | この端末用のアクセストークン                              |

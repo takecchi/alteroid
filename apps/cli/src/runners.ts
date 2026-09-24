@@ -41,6 +41,40 @@ export async function runnersCommand(): Promise<void> {
 }
 
 /**
+ * `alteroid runners vacate <runnerId>` — その runner を意図して空ける（drain）。
+ *
+ * 経路は `POST /runners/vacate` の1本だけである。**この口は HTTP にしか無かった**
+ * ——台数を減らす前に器を空けたい場面（`railway/scale-runners.sh`、#1377）は
+ * 端末に居るときで、`curl` と認証を手で組ませるのは CLI と HTTP の片方でしか
+ * できないことを作る形だった（PRD「インターフェース」）。
+ *
+ * **応答は「立てた」ことの確認であって「空き終わった」ことの確認ではない**
+ * （`app.ts` の `POST /runners/vacate` の doc）。だから終わったとは言わず、
+ * 進捗を追う口を名指しする。名簿に無い runnerId でもデーモンは同じ 200 を返すので、
+ * 「そんな器は無い」とはここでも言えない（言わない）。
+ */
+export async function runnersVacateCommand(runnerId: string): Promise<void> {
+  const target = await resolveTarget();
+  if (target.note !== null) {
+    stdout.write(`${target.note}\n`);
+    return;
+  }
+  const client = createClient(target.baseUrl, target.headers);
+  const response = await client.runners.vacate.$post({ json: { runnerId } });
+  if (!response.ok) {
+    stdout.write(
+      `runner ${runnerId} を空けると立てられませんでした（HTTP ${String(response.status)}）\n`,
+    );
+    return;
+  }
+  stdout.write(
+    `runner ${runnerId} を空けると立てた。まだ空き終わってはいない——` +
+      '載っている委譲は確かめた停止を経て他の runner へ移る。' +
+      '進捗は alteroid runners（state: vacating）と、委譲の runnerId が動いたかで追うこと。\n',
+  );
+}
+
+/**
  * `GET /runners` の応答のうち、この口が読む分。
  *
  * **`daemonRevision` は2値（`RunnerRevisionReport`）で、runner の版は3値
