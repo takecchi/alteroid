@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  approvalShape,
   clearRecentTracesForTesting,
   describeDroppedTraceEmpty,
   describeDroppedTraceOrigin,
@@ -27,6 +28,7 @@ import {
   inboxEventSchema,
   JOURNAL_ENTRY_TYPES,
   journalEntrySchema,
+  pendingApprovalSchema,
 } from './schema.js';
 import type {
   ContextUsageObservation,
@@ -34,6 +36,7 @@ import type {
   InboxEventType,
   JournalEntryInput,
   JournalEntryType,
+  PendingApproval,
 } from './schema.js';
 import { captureStderr } from './testing.js';
 
@@ -1070,12 +1073,155 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
 });
 
 /**
+ * `approvalShape` の名簿——`INBOX_SHAPE_PLAN` / `JOURNAL_SHAPE_PLAN` と同じ
+ * 作り・同じ理由で、`PendingApproval`（`schema.ts` の `pendingApprovalSchema`）に
+ * 欄を足したときの書き忘れを赤くする（Issue #1397 の c16-2 —— 「`tag()` と
+ * `size()` のどちらを通るかが欄ごとの実装選択になっている」ものを、少なくとも
+ * *この関数については*名簿で型ごと縛る）。
+ *
+ * **`inboxEventShape`/`journalEntryShape` と違い、`PendingApproval` は
+ * discriminated union ではなく単一の `z.object`。** だから名簿も型ごとの
+ * `Record<Type, Record<Field, FieldPlan>>` ではなく、フラットな
+ * `Record<keyof PendingApproval, FieldPlan>` になる。
+ *
+ * **この歯が測るもの:**
+ *
+ * 1. 名簿（`APPROVAL_SHAPE_PLAN`）のキー集合が `pendingApprovalSchema`
+ *    （zod の `.shape` から機械的に引いた実装側の欄）と両方向に一致すること。
+ *    **型でも測る**——`satisfies Record<keyof PendingApproval, FieldPlan>` で、
+ *    schema に欄が増えると `pnpm typecheck` が落ちる。**実行時にも測る**——
+ *    `Object.keys(pendingApprovalSchema.shape)` を毎回引き直すので、型を
+ *    直さずに schema だけ変えても赤くなる。
+ * 2. 名簿の各欄が言うとおりに `approvalShape` が振る舞うこと（`never` は
+ *    出ない・`size` は長さだけ出る・`tag` は目印が出る）。全欄を埋めた
+ *    `APPROVAL_FULL_FIXTURE`（`Required<PendingApproval>`——ここでも schema に
+ *    欄が増えると型が落ちる）に対して `approvalShape` を呼び、名簿どおりかを
+ *    確かめる。
+ *
+ * **分類は `approvalShape`（`dropped-record.ts`）の現在の実装から写した**
+ * （挙動は変えていない）。`id`/`jobId`/`requestId` は呼び出し元が決める識別子
+ * （`tag()`）、`question`/`context` は自由文（`size()`）、それ以外
+ * （`createdAt`/`answeredAt`/`answer`/`conversationId`/`withdrawnAt`/
+ * `withdrawnReason`）はこの関数が一度も参照しない（`never`）——理由は doc
+ * 本文にある（前段（`putApproval`）の見分けなので、この時点では `answer` 等の
+ * 事後欄は意味を持たない）。
+ *
+ * ⚠️ **`journalEntryShape` の名簿と同じ限界を持つ。** 欄が出ることまでしか
+ * 見ない——`tag(approval.jobId)` を `tag(approval.requestId)` と取り違えて
+ * 書いても、この歯は緑のままである（値の取り違えは見ない）。
+ */
+describe('approvalShape の名簿（schema に足した欄の足し忘れを赤くする。Issue #1397 c16-2）', () => {
+  /** 跡へ欄をどう出すか。**`never` には理由を必ず書く**（`JOURNAL_SHAPE_PLAN` と同じ）。 */
+  type FieldPlan =
+    | { readonly emit: 'tag'; readonly token: string }
+    | { readonly emit: 'size'; readonly token: string }
+    | { readonly emit: 'never'; readonly why: string };
+
+  const APPROVAL_SHAPE_PLAN = {
+    id: { emit: 'tag', token: 'approvalId' },
+    createdAt: {
+      emit: 'never',
+      why: 'この関数は参照しない。作成時刻は跡の目的（本文を含まない見分け）に要らない。',
+    },
+    question: { emit: 'size', token: 'question' },
+    context: { emit: 'size', token: 'context' },
+    jobId: { emit: 'tag', token: 'managerId' },
+    requestId: { emit: 'tag', token: 'requestId' },
+    answeredAt: {
+      emit: 'never',
+      why:
+        'この関数は `ask_human` が承認待ちを積む段（前段）の見分けを作る——' +
+        '回答が付くのはそれより後なので、この時点では意味を持たない欄。',
+    },
+    answer: {
+      emit: 'never',
+      why: '`answeredAt` と同じ理由（回答は後段の欄）。回答の本文は `journalEntryShape` の `escalation.answer` 側が扱う。',
+    },
+    conversationId: {
+      emit: 'never',
+      why: 'この関数は参照しない。`inboxEventShape`/`journalEntryShape` の対応欄と違い、対になる journal 欄も無い（単に本体が触れていない欄）。',
+    },
+    withdrawnAt: {
+      emit: 'never',
+      why: 'この関数は参照しない。取り下げは前段（`putApproval`）より後に起きる操作（issue #963）。',
+    },
+    withdrawnReason: {
+      emit: 'never',
+      why: '`withdrawnAt` と同じ理由（取り下げは後段の欄）。',
+    },
+  } satisfies Record<keyof PendingApproval, FieldPlan>;
+
+  const SECRET = 'ghp_555555555555555555555555555555555555';
+
+  /** 全欄を埋めた見本。**`Required<>` で optional も必須になる**ので、schema に欄が増えると型が落ちる。 */
+  const APPROVAL_FULL_FIXTURE: Required<PendingApproval> = {
+    id: 'ap-1',
+    createdAt: SECRET,
+    question: SECRET,
+    context: SECRET,
+    jobId: 'mgr-1',
+    requestId: 'req-1',
+    answeredAt: SECRET,
+    answer: SECRET,
+    conversationId: SECRET,
+    withdrawnAt: SECRET,
+    withdrawnReason: SECRET,
+  };
+
+  it('名簿のキー集合は pendingApprovalSchema の実装側の欄と両方向に一致する（zod から機械的に引く）', () => {
+    const implementedFields = new Set(Object.keys(pendingApprovalSchema.shape));
+    const plannedFields = new Set(Object.keys(APPROVAL_SHAPE_PLAN));
+
+    expect(plannedFields).toEqual(implementedFields);
+    expect(implementedFields.size).toBeGreaterThan(0);
+  });
+
+  it('名簿の各欄について approvalShape が plan どおりに振る舞う（never は出ない・size は長さだけ・tag は値そのものが目印として出る）', () => {
+    const shape = approvalShape(APPROVAL_FULL_FIXTURE);
+    const plan: Record<string, FieldPlan> = APPROVAL_SHAPE_PLAN;
+
+    for (const [field, fieldPlan] of Object.entries(plan)) {
+      switch (fieldPlan.emit) {
+        case 'never':
+          expect(shape, field).not.toContain(field);
+          break;
+        case 'size':
+          expect(shape, field).toContain(`${fieldPlan.token}.chars=${SECRET.length}`);
+          break;
+        case 'tag': {
+          // **`token=` だけでなく値そのものまで固定する**（Issue #1397 c16-2）。
+          // `tag()` の代わりに `size()` を通す変異（同じ `${token}=` という
+          // 周囲の定型文はそのまま残る）は、`token=` だけを見る判定では
+          // 拾えない——`size()` は名前を埋め込まないので `managerId=chars=5`
+          // のような形になり、`token=` という前置き自体は消えないため。
+          // 値まで見れば「値でなく chars=… が出ている」ことを直接検出できる。
+          const rawValue = String(APPROVAL_FULL_FIXTURE[field as keyof PendingApproval]);
+          expect(shape, field).toContain(`${fieldPlan.token}=${rawValue}`);
+          break;
+        }
+      }
+    }
+  });
+
+  it('値が出ない欄（size/never）に置いた自由文は跡に現れない', () => {
+    const shape = approvalShape(APPROVAL_FULL_FIXTURE);
+    expect(shape).not.toContain(SECRET);
+  });
+});
+
+/**
  * 背景で起こした処理が落ちたときの跡（#438 案D）。**ここで固定するのは2つ。**
  *
  * 1. 跡が「どこで」を名指しすること —— プロセス全体の網（`uncaught-net.ts`）は
  *    出所を言えないので、この跡がその穴を埋める
  * 2. **その見分けに本文が乗らないこと** —— `runnerEventShape` は許可制で、
  *    `report` の `text` のような外から来る自由文を通さない
+ *
+ * ⛔ **`runnerEventShape` に `inboxEventShape`/`journalEntryShape`/`approvalShape`
+ * と同じ形の名簿は置かない**（Issue #1397 c16-2 の対象外）。#438 案Dが
+ * `RunnerEvent` を網羅ではなく許可制（載せてよい欄だけを個別に選ぶ）で設計して
+ * いるため——名簿（欄の書き忘れを赤くする仕組み）を足すと、新しい欄が「載せて
+ * よいか」の判断を経ずに黙って載る側へ設計の意図を反転させてしまう。
  */
 describe('背景で落ちた処理の跡（#438）', () => {
   const secret = 'ghp_000000000000000000000000000000000000';
