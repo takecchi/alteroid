@@ -1339,13 +1339,7 @@ const WIDENED_VERBATIM_CITATION_EXEMPTIONS: ReadonlyArray<{
   file: string;
   pattern: string;
   why: string;
-}> = [
-  {
-    file: 'scripts/check-pr-line-number-citations.test.ts',
-    pattern: 'foo',
-    why: 'PR 本文の検査へ渡す合成入力（「出典が無ければ ok」の fixture）。指す先を持たない',
-  },
-];
+}> = [];
 
 function isVerbatimCitationExempted(file: string, pattern: string): boolean {
   return WIDENED_VERBATIM_CITATION_EXEMPTIONS.some((e) => e.file === file && e.pattern === pattern);

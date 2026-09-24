@@ -391,28 +391,7 @@ const DECLARED_ROUTES: Record<string, DeclaredRoutes> = {
       '`STEPS` への組み込みは #1191 の着地後の別便と決めてあり、いまは ci.yml の1行だけが門である' +
       "（逐語は `grep -Fn -- 'あちらは #1191 で別の担当が改修中で' .github/workflows/ci.yml`）。",
   },
-  'check:base-overlap': {
-    routes: ['pr'],
-    why:
-      'PR の base と head の重なりを見る門で、PR が無ければ問いが立たない。' +
-      ONLY_ON_PR_BECAUSE_NEEDS_PR,
-  },
-  'check:required-gate-workflows': {
-    routes: ['pr'],
-    why:
-      '`gh api repos/…/actions/workflows` でネットワークへ出る（`actions: read`）。`STEPS` は offline で' +
-      '走る一式なので、繋がらなかったことと門が死んでいることが同じ赤になる。',
-  },
   'check:no-attribution-trailers': { routes: ['pr'], why: ONLY_ON_PR_BECAUSE_NEEDS_PR },
-  'check:pr-closing-keywords': { routes: ['pr'], why: ONLY_ON_PR_BECAUSE_NEEDS_PR },
-  'check:pr-line-number-citations': { routes: ['pr'], why: ONLY_ON_PR_BECAUSE_NEEDS_PR },
-  'check:pr-vanished-footprint': { routes: ['pr'], why: ONLY_ON_PR_BECAUSE_NEEDS_PR },
-  'check:main-commit-trailers': {
-    routes: ['other'],
-    why:
-      '`main` へ入った squash コミットを見る門で、squash コミットはマージした瞬間に初めて存在する' +
-      '（Issue #1314）。PR の run からは原理的に見えないので `push` の workflow にだけ居る。',
-  },
 };
 
 /** 実物の経路（毎回取り直す）。 */

@@ -313,16 +313,4 @@ describe('main-ci-alarm の監視対象は実在する workflow の名前であ�
       ).toContain(name);
     }
   });
-
-  it('main のトレーラの門が監視対象に入っている（Issue #1314）', () => {
-    const trailerGate = topLevelWorkflowName(
-      readFileSync(path.join(WORKFLOWS_DIR, 'main-commit-trailers.yml'), 'utf8'),
-    );
-    expect(trailerGate).not.toBeNull();
-    expect(
-      watched,
-      `あの門は push: main でしか走らず required にもなれないので、赤くなっても PR の画面に出ない` +
-        ` ⟹ 知らせる経路はこの警報しか無い`,
-    ).toContain(trailerGate);
-  });
 });

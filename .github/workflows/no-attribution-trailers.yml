@@ -36,9 +36,9 @@ name: No attribution trailers
 #
 # **これは `pr-title.yml` が #1097 で既に採った線への合流だった**（`pr-title.yml`
 # は 2026-09-22 に takecchi の判断で廃止され、いまは無い。逐語「『PR title』
-# ワークフロー、これ無駄なので消してください」）。**同じ理由は、いまも生きている
-# 兄弟の冒頭 doc に先に逐語で在る**（
-# `grep -Fn -- 'なぜ `ci.yml` の中に置かず、別の workflow にしたか' .github/workflows/pr-closing-keywords.yml`）。
+# ワークフロー、これ無駄なので消してください」）。**同じ理由は兄弟の冒頭 doc に
+# 先に逐語で在った**（`pr-closing-keywords.yml`。2026-09-24 に廃止。読むなら
+# `git show b12852f:.github/workflows/pr-closing-keywords.yml`）。
 # ⟹ **この検査も、required な `ci` / `image` を編集のたびに焼き直さないために
 # `ci.yml` の外に出た形になる。**
 on:
@@ -72,7 +72,7 @@ jobs:
     # 無い。**だから draft のあいだも毎回走らせ、その種類の罠を最初から作らない。**
     #
     # ⚠️ **`if:` を1文字も付けない。** trigger が `pull_request` の1本だけなので
-    # 要らない（`pr-vanished-footprint.yml` と同じ）。
+    # 要らない。
     runs-on: ubuntu-latest
     permissions:
       contents: read
