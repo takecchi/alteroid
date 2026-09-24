@@ -879,12 +879,27 @@ export function mergeRateLimitFacts(
  * **毎ターン届く同じ事実で受信箱を埋めないこと。** `rate_limit_event` はターンの
  * 頭ごとに来るので、状態をそのまま流すとクローンは同じ通知を何十回も読むことに
  * なり、本当に変わった1回が埋もれる。
+ *
+ * **ただし `rejected` が続いているあいだに「課金枠が使えない理由」
+ * （`overageDisabledReason`）が変わった回は、新しい `rejected` として知らせる**
+ * （Issue #1222）。理由は本文に載るのに、以前は遷移の判定に入っていなかったので、
+ * `member_zero_credit_limit` → `org_level_disabled_until` のように変わっても
+ * クローンへ1文字も届かなかった（黙って捨てる側。north_star 禁止2）。理由を
+ * 運ばない観測（`undefined`）は「変わった」に数えない——`mergeRateLimitFacts` が
+ * 覚えている値を消さないのと同じ理由である。
  */
 export function usageTransitionOf(
   previous: RateLimitFacts | undefined,
   next: RateLimitFacts,
 ): 'entered_overage' | 'rejected' | undefined {
   if (next.status === 'rejected' && previous?.status !== 'rejected') return 'rejected';
+  if (
+    next.status === 'rejected' &&
+    next.overageDisabledReason !== undefined &&
+    next.overageDisabledReason !== previous?.overageDisabledReason
+  ) {
+    return 'rejected';
+  }
   if (next.usingOverage === true && previous?.usingOverage !== true) return 'entered_overage';
   return undefined;
 }
