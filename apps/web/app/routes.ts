@@ -31,6 +31,8 @@ export default [
     route('env-vars', 'routes/env-vars.tsx'),
     // 実行環境プロファイル（issue #1122）。CLI の `alteroid profile` と同じ口。
     route('profile', 'routes/profile.tsx'),
+    // 人間の MCP 連携の登録（#325 段4）。CLI の `alteroid mcp` と同じ口。
+    route('mcp-servers', 'routes/mcp-servers.tsx'),
     route('dropped', 'routes/dropped.tsx'),
     route('archive', 'routes/archive.tsx'),
     // CLI の `alteroid inbox remove` と同じ口（issue #972 / #1042）。

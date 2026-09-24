@@ -1,10 +1,10 @@
 import { useState } from 'react';
 
+import { NotOwnerHint } from '~/components/not-owner-hint';
 import { Page } from '~/components/page';
 import { Badge, Button, Card, CardHeader, ErrorNote, Spinner, Textarea } from '~/components/ui';
 import { ProfileRejectedError, useSetProfile } from '~/hooks/mutations';
 import { useProfile } from '~/hooks/queries';
-import { ApiError } from '~/lib/api';
 import { formatDateTime } from '~/lib/format';
 import type { ProfileState, ProfileUpdateResult } from '~/lib/types';
 
@@ -52,7 +52,7 @@ export default function Profile() {
           />
           <div className="flex flex-col gap-3 px-4 py-3">
             <ErrorNote error={error} />
-            <NotOwnerHint failure={error} />
+            <NotOwnerHint failure={error} subject="実行環境プロファイル" />
             {isLoading ? <Spinner /> : data !== undefined && <ProfileView profile={data} />}
           </div>
         </Card>
@@ -274,7 +274,7 @@ function ProfileEditor({ current }: { current: ProfileState }) {
         {failure instanceof ProfileRejectedError && (
           <p className="text-[11px] text-muted">前のプロファイルがそのまま残っている。</p>
         )}
-        <NotOwnerHint failure={failure} />
+        <NotOwnerHint failure={failure} subject="実行環境プロファイル" />
 
         {result !== null && <UpdateReport cleared={result.cleared} update={result.update} />}
       </div>
@@ -326,33 +326,5 @@ function UpdateReport({ cleared, update }: { cleared: boolean; update: ProfileUp
         </p>
       )}
     </div>
-  );
-}
-
-/**
- * デーモンの `requireOwner` が返す本文（逐語は
- * `grep -Fn -- '実行環境の持ち主として宣言されたアカウントだけが操作できる' apps/daemon/src/app.ts`）。
- * CLI の `apps/cli/src/target.ts` の `forbiddenKindOf` が見る値と同じ。
- */
-const NOT_OWNER_ERROR = '実行環境の持ち主として宣言されたアカウントだけが操作できる';
-
-/**
- * 失敗が `requireOwner` の 403 のときだけ、持ち主として宣言する手を案内する。
- *
- * **403 の本文まで見る。** 403 は未許可（`authenticate`）でも返り、そちらの直し方
- * （`access grant`）は別である。判別できない失敗には案内を出さない
- * ——当てずっぽうで片方を出すと、状況によっては必ず嘘になる（CLI の
- * `forbiddenKindOf` と同じ考え方）。
- */
-function NotOwnerHint({ failure }: { failure: unknown }) {
-  if (!(failure instanceof ApiError && failure.status === 403)) return null;
-  if (failure.message !== NOT_OWNER_ERROR) return null;
-  return (
-    <p className="text-[11px] break-words text-muted">
-      実行環境プロファイルに触れるのは、持ち主として宣言されたアカウントだけ。アクセスの画面から
-      自分のアカウントを持ち主として宣言してください（端末からなら次を実行）:
-      <br />
-      <code className="font-mono">alteroid access owner &lt;アカウント id&gt;</code>
-    </p>
   );
 }

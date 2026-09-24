@@ -200,6 +200,20 @@ export type ProfileState = Ok<paths['/profile']['get']>;
 export type ProfileUpdateResult = Ok<paths['/profile']['put']>;
 
 /**
+ * 人間の MCP 連携の登録（`GET /mcp-servers`。#325 段4）。
+ *
+ * **値を丸ごと含む**（`env` / `headers` / `args` に鍵が入りうる）。置かれていなければ
+ * `mcpServers: {}` で、`updatedAt` は載らない。
+ */
+export type McpServersState = Ok<paths['/mcp-servers']['get']>;
+/** 登録（名前 → 1件。`.mcp.json` の `mcpServers` の値と同じ形）。 */
+export type McpServers = McpServersState['mcpServers'];
+/** 登録の1件。 */
+export type McpServerEntry = McpServers[string];
+/** `PUT /mcp-servers` が 200 で返す、名前・指紋と runner ごとの配布結果（値は載らない）。 */
+export type McpServersUpdateResult = Ok<paths['/mcp-servers']['put']>;
+
+/**
  * 握り潰しの跡（`GET /dropped`）。CLI（`alteroid dropped`）・クローンの MCP
  * 道具 `self_dropped` と同じ帳面を読む（`packages/core/src/dropped-record.ts`）。
  *

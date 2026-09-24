@@ -21,6 +21,8 @@ import type {
   EnvVarScope,
   InboxEventType,
   InboxRemoveManyResult,
+  McpServers,
+  McpServersUpdateResult,
   ProfileUpdateResult,
   TokenRotationSettings,
 } from '~/lib/types';
@@ -971,6 +973,32 @@ export function useVacateRunner() {
       const result = await api.api.POST('/runners/vacate', { body: { runnerId } }).then(unwrap);
       await mutate(KEY.runners);
       return result;
+    },
+    [api, mutate],
+  );
+}
+
+/**
+ * 人間の MCP 連携の登録を丸ごと差し替える（`PUT /mcp-servers`。#325 段4）。
+ * **空の `{}` は「外す」**（`alteroid mcp clear` と同じ）。
+ *
+ * **形の検査はデーモンに任せる**（`parseMcpServers` が正本）。400 の本文は
+ * `{ error }` だけで、不正な欄の位置が `error` の中に入っている（送った値は
+ * 載らない）ので、共有の `unwrap` がそのまま文言にすればよい —— `/profile` の
+ * `ProfileRejectedError` のような別の型は要らない。
+ *
+ * **確認は呼び出し側（`routes/mcp-servers.tsx`）の仕事。** stdio の登録は、次の
+ * セッションでクローンの SDK が起こすコマンドである（`apps/daemon/src/app.ts` の
+ * `GET /mcp-servers` の doc）。サーバ側に確認の印は無いので、呼ぶ前の確認だけが網になる。
+ */
+export function useSetMcpServers() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (mcpServers: McpServers): Promise<McpServersUpdateResult> => {
+      const updated = await api.api.PUT('/mcp-servers', { body: { mcpServers } }).then(unwrap);
+      await mutate(KEY.mcpServers);
+      return updated;
     },
     [api, mutate],
   );

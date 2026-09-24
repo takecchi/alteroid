@@ -131,6 +131,7 @@ export const KEY = {
   access: { type: 'access' } as const,
   credentials: { type: 'credentials' } as const,
   profile: { type: 'profile' } as const,
+  mcpServers: { type: 'mcpServers' } as const,
   dropped: { type: 'dropped' } as const,
   archive: { type: 'archive' } as const,
   archiveSessions: { type: 'archiveSessions' } as const,
@@ -512,6 +513,23 @@ export function useCredentials() {
 export function useProfile() {
   const api = useApi();
   return useSWR(KEY.profile, () => api.api.GET('/profile').then(unwrap), {
+    revalidateOnFocus: false,
+    revalidateOnReconnect: false,
+  });
+}
+
+/**
+ * 人間の MCP 連携の登録（`GET /mcp-servers`。#325 段4）。
+ *
+ * **資格は `requireOwner`**（`/profile` と同じ）。宣言済み owner でなければ 403 が返り、
+ * 呼び出し側（`routes/mcp-servers.tsx`）がそのまま見せる。
+ *
+ * **フォーカス・再接続での再取得をしない**（`useProfile` と同じ理由 —— 値に鍵が
+ * 入りうるので、画面が開いているあいだに勝手に何度も運ばせない）。
+ */
+export function useMcpServers() {
+  const api = useApi();
+  return useSWR(KEY.mcpServers, () => api.api.GET('/mcp-servers').then(unwrap), {
     revalidateOnFocus: false,
     revalidateOnReconnect: false,
   });
