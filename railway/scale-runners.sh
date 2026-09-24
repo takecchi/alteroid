@@ -22,16 +22,30 @@
 # ので畳まれず、落ちるのはクローンのターン1本と chat の接続である（数十秒）。デーモンは
 # 起き直したときに runner へ名乗りを聞き、走っていた仕事を引き取る。
 #
-# ## 減らすほうはやらない
+# ## 減らすほうは vacate と連携する（#1377。#485 PR6-b の切り出し）
 #
-# `-n` に今より小さい数を渡したら**断る**（非0で終わる）。台数を減らすには、その器を
-# 空ける（drain する）ことが要る。移送そのものは入っている（roadmap M5 PR5）
-# ——runner が黙れば、走っていた委譲は別の器へ移る。いまは意図して空ける口も在る
-# （#485。`POST /runners/vacate`）——ただし**このスクリプトはまだそれを呼ばない**。
-# どの器を空けるかの判断はクローンの仕事であって、このスクリプトが黙って選ぶもの
-# ではない。**「落ちた」は観測の欠落であって停止の証明ではない**ので、drain も
-# せずに減らすと同じセッションが2か所で走りうる。
-# 手で消すなら、その器に仕事が無いことを `GET /runners` と `/managers` で確かめてから。
+# `-n` に今より小さい数を渡しても、このスクリプトは黙って器を選ばない——空ける
+# 対象を呼ぶ側が `--vacate <Service名>`（例: `runner-2`）で名指しすることを要求する。
+# 名指ししなければ断る（非0で終わる）。
+#
+# かつてここは無条件に断っていた。理由は「drain（意図して空ける口）が無い」
+# ことだったが、いまは解けている——`POST /runners/vacate` が在り（#485。PR
+# #614〜#616）、「確かめた停止」の握手を経て、貸し出し期限を待たずに委譲を
+# 別の runner へ移す。**残っているのは「どの器を空けるか」を呼ぶ側に決めさせる
+# ことだけである**——それはクローンの判断であって、このスクリプトが黙って
+# 選ぶものではない、という線はここでも変えていない。
+#
+# `--vacate` を渡すと、このスクリプトは:
+#   1. 指名された Service 名から runnerId を引き、`POST /runners/vacate` を投げる
+#      （`railway ssh --service $APP_SERVICE` の中で 127.0.0.1:$ALTEROID_PORT を
+#      叩く——既存の手順書と同じ経路。資格はコンテナの中の状態ファイルから読み、
+#      持ち出さない）
+#   2. `GET /runners`（state）と `GET /managers`（その runnerId に載った委譲が
+#      無いこと）で、委譲が移り終わったのを確かめる（上限時間つきで待つ）
+#   3. 確かめられたら、Service を**消すコマンドを表示するだけ**にする——実際には
+#      消さない。取り消せない操作は、明示の指定があっても一段手前で止める
+#   4. 上限時間を超えて確かめられなかったら、「確かめられなかった」と言って
+#      非0で終わる（消してよいとは一言も言わない）
 set -euo pipefail
 
 # **置き方は setup.sh と同じものを使う**（railway/lib.sh）。変数の投入・Config as Code の
@@ -45,14 +59,22 @@ TOTAL=''
 GIT_REPO=''
 GIT_BRANCH=''
 DRY_RUN=0
+VACATE=''
+# 待ちの上限（環境変数で上書きできる。既定はテストにも本番にも手で触らない）
+VACATE_TIMEOUT_SECONDS="${ALTEROID_VACATE_TIMEOUT_SECONDS:-600}"
+VACATE_POLL_INTERVAL_SECONDS="${ALTEROID_VACATE_POLL_INTERVAL_SECONDS:-5}"
 
 usage() {
   cat <<'EOS'
-既に動いている Railway のプロジェクトに runner を足す（減らさない）。
+既に動いている Railway のプロジェクトに runner を足す、または vacate を通じて減らす。
 
   ./railway/scale-runners.sh -n <台数> [オプション]
 
   -n, --total <台数>      runner を最終的に何台にするか（既存を含む）
+  -v, --vacate <Service名> 減らすときに空ける runner（例: runner-2）。
+                          このスクリプトは黙って選ばない——呼ぶ側が指名する。
+                          委譲が移り終わったことを確かめたら、消すコマンドを
+                          表示するだけで、Service を消すところまではやらない。
   -r, --repo <owner/repo> GitHub 連携する対象（既定: 既存 runner と同じ / origin）
   -b, --branch <ブランチ> 追いかけるブランチ（既定: release/prod）
   -d, --dry-run           何をするかだけ出して、何も作らない
@@ -62,6 +84,10 @@ usage() {
 既存の runner の変数には触らない（触ると走行中のマネージャーが畳まれる）。
 新しい runner の鍵は**いま走っている runner から写す** — .env は見ない。
 最後に app の ALTEROID_RUNNER_URLS を置き直して app だけ上げ直す。
+
+減らす台数を指定したら --vacate <Service名> が要る（このスクリプトは黙って
+器を選ばない）。ALTEROID_VACATE_TIMEOUT_SECONDS / ALTEROID_VACATE_POLL_INTERVAL_SECONDS
+で委譲が移り終わるのを待つ上限・間隔を変えられる（既定 600秒 / 5秒間隔）。
 EOS
 }
 
@@ -69,6 +95,10 @@ while [ $# -gt 0 ]; do
   case "$1" in
     -n | --total)
       TOTAL="${2:-}"
+      shift 2
+      ;;
+    -v | --vacate)
+      VACATE="${2:-}"
       shift 2
       ;;
     -r | --repo)
@@ -169,16 +199,185 @@ done
 ok "runner は今 ${CURRENT} 台"
 
 if [ "$TOTAL" -lt "$CURRENT" ]; then
-  # **黙って何もしないのでも、勝手に消すのでもない。** できないと言う
-  die "$CURRENT 台から ${TOTAL} 台へは減らせない（このスクリプトは増やすだけ）。
-    台数を減らすには、その器を空ける（drain する）ことが要る。
-    移送そのものは入っている（M5 PR5）——runner が黙れば、走っていた委譲は別の器へ移る。
-    いまは意図して空ける口も在る（#485）⟹ POST /runners/vacate に { runnerId } を渡す
-    （runner.stop() で確かめた停止を経て、貸し出し期限を待たずに委譲を移す）。
-    いま手で減らすなら、その器に仕事が無いことを先に確かめること:
+  # **黙って何もしないのでも、勝手に消すのでもない。どの器を空けるかを呼ぶ側に
+  # 決めさせる。** このスクリプトが選ぶと、走行中の仕事を畳む相手を人間ではなく
+  # スクリプトが決めることになる（#1377）。
+  if [ -z "$VACATE" ]; then
+    die "$CURRENT 台から ${TOTAL} 台へは減らせない。
+    このスクリプトは器を黙って選ばない——減らすには --vacate <Service名> で
+    空ける対象を明示すること（例: --vacate ${RUNNER_SERVICE}-2）。
+    いまの runner: ${EXISTING//$'\n'/ }
+    --vacate を付けて回すと、指定した runner へ POST /runners/vacate を投げ、
+    委譲が移り終わったのを確かめたうえで、Service を消すコマンドを表示する
+    （実際には消さない）。
+    先に手で仕事の有無を見るなら:
       railway ssh --service $APP_SERVICE
       curl -s http://127.0.0.1:\$ALTEROID_PORT/runners | jq
       curl -s http://127.0.0.1:\$ALTEROID_PORT/managers | jq"
+  fi
+
+  step "$VACATE を空ける（--vacate。#1377）"
+
+  # Service 名 → runnerId の逆引き（`runner_id_for` の逆写像）。
+  # **runner_id を写さない・推測しない**という既存の歯（scale-runners.test.ts）と
+  # 同じ理由で、ここも「いまの並び（$EXISTING）の何番目か」から機械的に引く。
+  # 対応が取れなければ止める——推測で埋めない。
+  VACATE_ID=''
+  idx=1
+  for name in $EXISTING; do
+    if [ "$name" = "$VACATE" ]; then
+      VACATE_ID="$(runner_id_for "$idx")"
+      break
+    fi
+    idx=$((idx + 1))
+  done
+  [ -n "$VACATE_ID" ] || die "$VACATE はいまの runner ではない（--vacate は現在の Service 名を指す）。
+    いまの runner: ${EXISTING//$'\n'/ }"
+
+  info "空ける runner   $VACATE（runnerId=$VACATE_ID）"
+  warn "委譲が移り終わるまで待つ（最大 ${VACATE_TIMEOUT_SECONDS}秒）。" \
+    "Service を消すコマンドは最後に表示するだけで、ここでは消さない"
+
+  # **vacate を叩く経路は既存の案内と同じ形に限る。** railway ssh --service
+  # $APP_SERVICE の中で 127.0.0.1:$ALTEROID_PORT を叩く——資格（本人確認用の
+  # token）は新しく作らず、運ばず、表示しない。app の器の中に既に在るもの
+  # （`~/.alteroid/state/daemon.json`。apps/daemon/src/runtime.ts が書く）を
+  # **器の中で** node で読み、Bearer として使う。この一時ファイル自体には
+  # 秘密を書かない（node スクリプトのソースだけ）。
+  VACATE_SCRIPT="$(tmp_file)"
+  cat >"$VACATE_SCRIPT" <<'NODE_EOF'
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const [runnerId, timeoutSecondsRaw, intervalSecondsRaw] = process.argv.slice(2);
+const timeoutMs = Number(timeoutSecondsRaw) * 1000;
+const intervalMs = Number(intervalSecondsRaw) * 1000;
+
+if (!runnerId) {
+  console.error('runnerId が渡されていない');
+  process.exit(2);
+}
+if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || !Number.isFinite(intervalMs) || intervalMs <= 0) {
+  console.error('待ちの時間指定が不正');
+  process.exit(2);
+}
+
+// 状態ファイルの正本は apps/daemon/src/runtime.ts の writeRuntimeInfo。
+// port も token もここから読む（token を env や argv には一度も載せない）。
+const home = process.env.ALTEROID_HOME || path.join(os.homedir(), '.alteroid');
+let port;
+let token;
+try {
+  const raw = fs.readFileSync(path.join(home, 'state', 'daemon.json'), 'utf8');
+  const info = JSON.parse(raw);
+  if (typeof info.port !== 'number') throw new Error('port が無い');
+  if (typeof info.token !== 'string' || info.token.length === 0) throw new Error('token が空');
+  port = info.port;
+  token = info.token;
+} catch (error) {
+  // 読めなかった理由だけを言う。token の値そのものは出さない
+  console.error(`state/daemon.json から本人確認用の情報を読めない: ${String(error)}`);
+  process.exit(2);
+}
+
+const base = `http://127.0.0.1:${port}`;
+const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function main() {
+  const vacateResponse = await fetch(`${base}/runners/vacate`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ runnerId }),
+  });
+  if (!vacateResponse.ok) {
+    console.error(`POST /runners/vacate が失敗した: HTTP ${vacateResponse.status}`);
+    process.exit(2);
+  }
+  console.error(`vacate を投げた: runnerId=${runnerId}`);
+
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    let runners;
+    let managers;
+    try {
+      const [runnersResponse, managersResponse] = await Promise.all([
+        fetch(`${base}/runners`, { headers }),
+        fetch(`${base}/managers?status=running,waiting_human`, { headers }),
+      ]);
+      if (!runnersResponse.ok || !managersResponse.ok) {
+        console.error(
+          `  … 確かめられなかった（GET /runners=${runnersResponse.status} / ` +
+            `GET /managers=${managersResponse.status}）`,
+        );
+      } else {
+        runners = (await runnersResponse.json()).runners ?? [];
+        managers = (await managersResponse.json()).managers ?? [];
+      }
+    } catch (error) {
+      console.error(`  … 確かめられなかった（${String(error)}）`);
+    }
+
+    if (runners !== undefined && managers !== undefined) {
+      const entry = runners.find((r) => r.runnerId === runnerId);
+      const state = entry === undefined ? '(名簿に無い)' : entry.state;
+      const stillAssigned = managers.some((m) => m.runnerId === runnerId);
+      console.error(`  … state=${state} 割り当て済みの委譲=${stillAssigned ? '有' : '無'}`);
+      // GET /runners の state（connected でなくなったか）と GET /managers
+      // （その runnerId に載った running/waiting_human の委譲が無いか）の
+      // 両方が揃って初めて「移り終えた」と扱う——片方だけでは判定しない。
+      if (entry !== undefined && entry.state !== 'connected' && !stillAssigned) {
+        console.log('VACATED');
+        process.exit(0);
+      }
+    }
+
+    if (Date.now() >= deadline) break;
+    await sleep(Math.min(intervalMs, Math.max(0, deadline - Date.now())));
+  }
+
+  console.log('TIMEOUT');
+  process.exit(1);
+}
+
+main().catch((error) => {
+  console.error(`確かめる途中で例外が起きた: ${String(error)}`);
+  process.exit(2);
+});
+NODE_EOF
+
+  if VACATE_OUT="$(railway ssh --service "$APP_SERVICE" -- node - \
+    "$VACATE_ID" "$VACATE_TIMEOUT_SECONDS" "$VACATE_POLL_INTERVAL_SECONDS" \
+    <"$VACATE_SCRIPT" 2>&1)"; then
+    VACATE_EXIT=0
+  else
+    VACATE_EXIT=$?
+  fi
+  printf '%s\n' "$VACATE_OUT" >&2
+
+  if printf '%s\n' "$VACATE_OUT" | command grep -Fq -- 'VACATED'; then
+    ok "$VACATE の委譲は移り終えた（runnerId=$VACATE_ID）"
+    cat >&2 <<EOS
+
+    確かめられた。消すなら次を実行する（**このスクリプトは実行しない**——
+    取り消せない操作は、明示の指定があっても一段手前で止める）:
+
+      railway service delete --service $VACATE --yes
+
+EOS
+    exit 0
+  fi
+
+  die "$VACATE の委譲が移り終えたことを確かめられなかった（最大 ${VACATE_TIMEOUT_SECONDS}秒待った。node の終了コード: ${VACATE_EXIT}）。
+    消してよいとは言えない。もう一度このスクリプトを回すか、
+      railway ssh --service $APP_SERVICE
+      curl -s http://127.0.0.1:\$ALTEROID_PORT/managers | jq
+    で手で確かめること。"
+fi
+
+if [ -n "$VACATE" ] && [ "$TOTAL" -ge "$CURRENT" ]; then
+  warn "--vacate は使わなかった（増やす・既に足りている操作では出番が無い）"
 fi
 
 # --- 2. 何をするか（作る前に出す）-------------------------------------------

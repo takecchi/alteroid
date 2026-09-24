@@ -129,9 +129,10 @@ switch (args[0]) {
     out({ domain: 'test-app.up.railway.app' });
     break;
   case 'ssh': {
-    // 「railway ssh --service X -- alteroid credential set NAME」の形だけを
-    // 解釈する。setup.sh がこの形でしか呼ばないため、他の形（対話シェル等）は
-    // 実装しない
+    // 「railway ssh --service X -- alteroid credential set NAME」と
+    // 「railway ssh --service X -- node - <引数…>」の2形だけを解釈する。
+    // setup.sh / scale-runners.sh がこの2形でしか呼ばないため、他の形
+    // （対話シェル等）は実装しない
     const svc = flag('--service');
     const dashdash = args.indexOf('--');
     const cmd = dashdash >= 0 ? args.slice(dashdash + 1) : [];
@@ -149,6 +150,33 @@ switch (args[0]) {
         at('credentials.jsonl'),
         JSON.stringify({ service: svc, name: cmd[3], value }) + '\\n',
       );
+    } else if (cmd[0] === 'node' && cmd[1] === '-') {
+      // scale-runners.sh の vacate 経路（#1377）。標準入力に流れてきた
+      // node スクリプトの本文をそのまま実行する——「railway ssh の中で
+      // 127.0.0.1:$ALTEROID_PORT を叩く」を、実際にこのスクリプトごと
+      // 走らせて検分するため（呼び出し引数だけを記録して中身を検分しない
+      // 形にすると、待ち方・資格の読み方・出力に何を出さないかという、
+      // この機能でいちばん問われている部分がテストから抜け落ちる）。
+      // ALTEROID_HOME はテストが用意した偽コンテナの状態ディレクトリを
+      // 指すよう、呼び出し側が env で渡す（この偽 CLI 自身の env をそのまま
+      // 継承させるだけで、ここでは何も足さない）。
+      const cp = require('child_process');
+      let script = '';
+      try {
+        script = fs.readFileSync(0, 'utf8');
+      } catch {
+        // 何もパイプされていなければ空のまま（下の node が読めずに落ちる）
+      }
+      const scriptPath = at('vacate-script.js');
+      fs.writeFileSync(scriptPath, script);
+      const result = cp.spawnSync(process.execPath, [scriptPath].concat(cmd.slice(2)), {
+        env: process.env,
+        encoding: 'utf8',
+        timeout: 30000,
+      });
+      if (result.stdout) process.stdout.write(result.stdout);
+      if (result.stderr) process.stderr.write(result.stderr);
+      process.exit(result.status === null || result.status === undefined ? 1 : result.status);
     }
     out({});
     break;

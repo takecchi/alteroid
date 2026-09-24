@@ -23,10 +23,26 @@
  * （`scenarios`）を引いて assert するだけで、自分では何もスポーンしない。
  * 詳しい経緯は `prepareScenarios` の直前のコメントと `beforeAll` 呼び出し側の
  * `PREP_TIMEOUT` のコメントを見よ。
+ *
+ * ## vacate 経路（#1377。#485 PR6-b の切り出し）
+ *
+ * 減らす操作（`--vacate`）は、上の3つとは別の軸で確かめる必要がある —
+ * **`railway ssh --service $APP_SERVICE` の中で 127.0.0.1:$ALTEROID_PORT を
+ * 叩く**という経路そのものである。他のシナリオのように「偽 `railway` が呼び
+ * 出し引数を記録するだけ」では、この機能でいちばん問われている部分
+ * （待ち方・資格の読み方・出力に資格を出さないこと）がテストから抜け落ちる
+ * ——だから `cli-stub.ts` の偽 `ssh` は、渡された node スクリプト（本番と
+ * 1バイトも違わない、`scale-runners.sh` が埋め込んでいるものそのもの）を
+ * 実際に子プロセスとして実行する。相手にするのは `node:http` で立てた偽の
+ * デーモン（`startFakeDaemon`）で、資格は `ALTEROID_HOME/state/daemon.json`
+ * に用意する（`apps/daemon/src/runtime.ts` の `writeRuntimeInfo` と同じ形）。
  */
-import { cpus } from 'node:os';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer, type Server } from 'node:http';
+import { cpus, tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { type Run, runScriptAsync, scenarioCollector } from './cli-stub.js';
 
@@ -71,6 +87,8 @@ type Options = {
   services?: typeof EXISTING;
   args?: string[];
   allowFailure?: boolean;
+  /** `railway ssh` の先（vacate の node スクリプト）へ渡す env。`ALTEROID_HOME` など。 */
+  extraEnv?: Record<string, string>;
 };
 
 /**
@@ -90,6 +108,123 @@ function run(options: Options): Promise<Run> {
       app: options.appVars ?? {},
     },
     allowFailure: options.allowFailure,
+    extraEnv: options.extraEnv,
+  });
+}
+
+/**
+ * 資格の値そのもの。**この文字列がテストの出力（`r.stderr` / `r.calls` /
+ * `r.apiLog`）に一度でも現れたら、その回のテストは落ちる**（下の「資格の値は
+ * 一度も出ない」を見よ）。実物と揃える必要は無い——ここで確かめているのは
+ * 「読んだ値をそのまま外へ出さない」という形であって、値そのものの正しさでは
+ * ない。
+ */
+const FAKE_OPERATOR_TOKEN = 'SECRET-DAEMON-TOKEN-DO-NOT-LEAK-4f2c';
+
+/**
+ * `~/.alteroid/state/daemon.json`（`apps/daemon/src/runtime.ts` の
+ * `writeRuntimeInfo` が書く形。`pid` / `port` / `startedAt` / `token`）を持つ
+ * 使い捨ての `ALTEROID_HOME` を作る。vacate の node スクリプトはこれを
+ * **器の中で**読んで Bearer にする——ここが「資格を新しく作らず、器の中に
+ * 既に在るものを読む」の実体である。
+ */
+function makeAlteroidHome(token: string, port: number): string {
+  const home = mkdtempSync(join(tmpdir(), 'alteroid-vacate-home.'));
+  mkdirSync(join(home, 'state'), { recursive: true });
+  writeFileSync(
+    join(home, 'state', 'daemon.json'),
+    JSON.stringify({ pid: 1, port, startedAt: '2020-01-01T00:00:00Z', token }),
+  );
+  return home;
+}
+
+type FakeDaemon = { server: Server; port: number };
+
+/**
+ * `POST /runners/vacate` / `GET /runners` / `GET /managers` だけに応える偽の
+ * デーモン。**apps/daemon/src/app.ts の現物の形**（`runners: [{state, runnerId}]`
+ * / `managers: [{status, runnerId}]`、`state` は `'connected'` → `'vacating'`、
+ * `authenticate` は `Bearer` 不一致を 401）に合わせてある。
+ *
+ * `staleManagerPolls` 回ぶんは vacate 後も `GET /managers` にその runnerId の
+ * 委譲が残っているふりをする——0 にすると即座に消える（委譲が無かった扱い）。
+ * `Infinity` を渡すと永久に残り続ける（timeout のシナリオ用）。
+ */
+function startFakeDaemon(options: {
+  token: string;
+  runnerId: string;
+  staleManagerPolls: number;
+}): Promise<FakeDaemon> {
+  let vacated = false;
+  let managerPollsSinceVacate = 0;
+  return new Promise((resolve, reject) => {
+    const server = createServer((req, res) => {
+      const authorized = req.headers.authorization === `Bearer ${options.token}`;
+      if (!authorized) {
+        res.writeHead(401, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'ログインが要る（alteroid login）' }));
+        return;
+      }
+      if (req.method === 'POST' && req.url === '/runners/vacate') {
+        let body = '';
+        req.on('data', (chunk: Buffer) => {
+          body += chunk.toString('utf8');
+        });
+        req.on('end', () => {
+          const parsed = JSON.parse(body || '{}') as { runnerId?: string };
+          if (parsed.runnerId !== options.runnerId) {
+            res.writeHead(400, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ error: 'runnerId の形が不正' }));
+            return;
+          }
+          vacated = true;
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ ok: true }));
+        });
+        return;
+      }
+      if (req.method === 'GET' && req.url === '/runners') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            runners: [
+              {
+                label: options.runnerId,
+                state: vacated ? 'vacating' : 'connected',
+                since: '2020-01-01T00:00:00Z',
+                runnerId: options.runnerId,
+              },
+            ],
+            daemonRevision: { status: 'unknown' },
+          }),
+        );
+        return;
+      }
+      if (req.method === 'GET' && (req.url ?? '').startsWith('/managers')) {
+        const stillAssigned = vacated && managerPollsSinceVacate < options.staleManagerPolls;
+        if (vacated) managerPollsSinceVacate += 1;
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            managers: stillAssigned
+              ? [{ managerId: 'm1', status: 'running', runnerId: options.runnerId }]
+              : [],
+          }),
+        );
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not found' }));
+    });
+    server.on('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      if (address === null || typeof address === 'string') {
+        reject(new Error('偽デーモンの port が取れない'));
+        return;
+      }
+      resolve({ server, port: address.port });
+    });
   });
 }
 
@@ -103,9 +238,14 @@ type Scenarios = {
   unresolvedVarRefs: Run;
   dryRun: Run;
   noRunnerService: Run;
+  vacateSuccess: Run;
+  vacateTimeout: Run;
 };
 
 let scenarios: Scenarios;
+
+/** vacate の2シナリオが立てた偽デーモンと `ALTEROID_HOME`。後片付けに使う。 */
+const vacateFixtures: { daemon: FakeDaemon; home: string }[] = [];
 
 /**
  * **`it` から起動コストを追い出す、唯一の準備段（#1100）。**
@@ -228,6 +368,58 @@ async function prepareScenarios(): Promise<Scenarios> {
     });
   });
 
+  // 2台（runner / runner-2）から1台へ減らす。**1台目（runner）を空ける**——
+  // service 名と runnerId が違う組（`runner` → `runner-primary`）を選ぶことで、
+  // 「service 名をそのまま runnerId として使っていないか」も同時に確かめる。
+  const twoRunners = [
+    ...EXISTING,
+    { id: 'id-runner-2', name: 'runner-2', source: { repo: 'takecchi/alteroid', image: null } },
+  ];
+
+  task('vacateSuccess', async () => {
+    // vacate 後、最初の2回の GET /managers はまだ委譲が残っているふりをする
+    // ——「即座に0件」ではなく、待ってから確認する経路を実際に通す
+    const daemon = await startFakeDaemon({
+      token: FAKE_OPERATOR_TOKEN,
+      runnerId: 'runner-primary',
+      staleManagerPolls: 2,
+    });
+    const home = makeAlteroidHome(FAKE_OPERATOR_TOKEN, daemon.port);
+    vacateFixtures.push({ daemon, home });
+    s.vacateSuccess = await run({
+      total: 1,
+      services: twoRunners,
+      args: ['--vacate', 'runner'],
+      extraEnv: {
+        ALTEROID_HOME: home,
+        ALTEROID_VACATE_TIMEOUT_SECONDS: '5',
+        ALTEROID_VACATE_POLL_INTERVAL_SECONDS: '0.05',
+      },
+    });
+  });
+
+  task('vacateTimeout', async () => {
+    // GET /managers は永久にその runnerId の委譲を返し続ける——上限に必ず当たる
+    const daemon = await startFakeDaemon({
+      token: FAKE_OPERATOR_TOKEN,
+      runnerId: 'runner-primary',
+      staleManagerPolls: Number.POSITIVE_INFINITY,
+    });
+    const home = makeAlteroidHome(FAKE_OPERATOR_TOKEN, daemon.port);
+    vacateFixtures.push({ daemon, home });
+    s.vacateTimeout = await run({
+      total: 1,
+      services: twoRunners,
+      args: ['--vacate', 'runner'],
+      extraEnv: {
+        ALTEROID_HOME: home,
+        ALTEROID_VACATE_TIMEOUT_SECONDS: '0.3',
+        ALTEROID_VACATE_POLL_INTERVAL_SECONDS: '0.1',
+      },
+      allowFailure: true,
+    });
+  });
+
   return settle(cpus().length);
 }
 
@@ -285,6 +477,15 @@ const PREP_TIMEOUT = 45_000;
 beforeAll(async () => {
   scenarios = await prepareScenarios();
 }, PREP_TIMEOUT);
+
+afterAll(async () => {
+  await Promise.all(
+    vacateFixtures.map(
+      ({ daemon }) => new Promise<void>((resolve) => daemon.server.close(() => resolve())),
+    ),
+  );
+  for (const { home } of vacateFixtures) rmSync(home, { recursive: true, force: true });
+});
 
 describe('1台から3台へ増やすとき', () => {
   let r: Run;
@@ -441,10 +642,11 @@ describe('記憶ストアの鍵が runner に在ったとき', () => {
   });
 });
 
-describe('減らそうとしたとき', () => {
+describe('減らそうとしたとき（--vacate 無し）', () => {
   // 台数を減らす操作は、その器で走っているマネージャーを移送できて初めて安全になる
   // （fencing → 移送。roadmap M5 PR4 → PR5）。**黙って何もしないのでも、勝手に
-  // 消すのでもなく、できないと言う**
+  // 消すのでもなく、できないと言う——そしてどの器を空けるかも黙って選ばない**
+  // （#1377。空ける先の指名は --vacate で呼ぶ側にさせる）。
   let r: Run;
   beforeAll(() => {
     r = scenarios.scaleDown;
@@ -456,8 +658,101 @@ describe('減らそうとしたとき', () => {
     expect(r.calls.some((c) => c.includes('redeploy'))).toBe(false);
   });
 
-  it('先に確かめる手順を出す（消すなら人間が仕事の無いことを見る）', () => {
+  it('--vacate が要ると言い、黙って器を選ばない（vacate も ssh も呼ばない）', () => {
+    expect(r.stderr).toContain('--vacate');
+    // 「消せない」で止めるだけで、POST /runners/vacate を呼ぶ railway ssh 経路
+    // そのものへ進んでいないことを、呼び出し記録の側からも確かめる
+    expect(r.calls.some((c) => c.startsWith('ssh '))).toBe(false);
+  });
+
+  it('先に手で確かめる手順も出す（/runners と /managers）', () => {
+    expect(r.stderr).toContain('/runners');
     expect(r.stderr).toContain('/managers');
+  });
+});
+
+describe('--vacate で減らすとき（委譲が移り終わる）', () => {
+  // service 名（runner）と runnerId（runner-primary）が違う組を空ける
+  // シナリオ（`prepareScenarios` の `twoRunners` / `vacateSuccess` を見よ）。
+  let r: Run;
+  beforeAll(() => {
+    r = scenarios.vacateSuccess;
+  });
+
+  it('成功したら 0 で終わる', () => {
+    expect(r.exitCode).toBe(0);
+  });
+
+  it('railway ssh --service app の中で node を実行し、runnerId（service 名ではない）を渡す', () => {
+    const sshCalls = r.calls.filter((c) => c.startsWith('ssh '));
+    expect(sshCalls).toHaveLength(1);
+    expect(sshCalls[0]).toContain('--service app');
+    expect(sshCalls[0]).toContain('-- node - runner-primary');
+    // 渡したのは service 名（runner）そのものではなく runnerId（runner-primary）
+    // である——素朴に「runner の後ろの引数」を見ると runner-primary は
+    // 前方一致で拾われてしまうので、直後がタイムアウト秒（5）であることまで見る
+    expect(sshCalls[0]).toContain('node - runner-primary 5 0.05');
+    expect(sshCalls[0]).not.toContain('node - runner 5 0.05');
+  });
+
+  it('POST /runners/vacate を実際に投げる（偽デーモンが受け取った記録）', () => {
+    expect(r.stderr).toContain('vacate を投げた: runnerId=runner-primary');
+  });
+
+  it('委譲が移り終えたのを確かめてから、Service を消すコマンドを表示するだけにする', () => {
+    expect(r.stderr).toContain('railway service delete --service runner --yes');
+    expect(r.stderr).toContain('確かめられた');
+    // **表示するだけで、実際には呼ばない。** 偽 railway に `service delete` が
+    // 一度も届いていないことを、呼び出し記録の側から確かめる
+    expect(r.calls.some((c) => c.includes('service delete'))).toBe(false);
+    expect(r.calls.some((c) => c.startsWith('add'))).toBe(false);
+    expect(r.calls.some((c) => c.includes('VariableCollectionUpsert'))).toBe(false);
+  });
+
+  it('待ってから確かめている（1回目の確認では委譲がまだ残っている）', () => {
+    // staleManagerPolls: 2 — 最初の2回は「割り当て済みの委譲=有」と出るはず
+    expect(r.stderr).toContain('割り当て済みの委譲=有');
+    expect(r.stderr).toContain('割り当て済みの委譲=無');
+  });
+});
+
+describe('--vacate で減らすとき（上限を超えて確かめられない）', () => {
+  let r: Run;
+  beforeAll(() => {
+    r = scenarios.vacateTimeout;
+  });
+
+  it('非0で終わる', () => {
+    expect(r.exitCode).not.toBe(0);
+  });
+
+  it('「確かめられなかった」と言い、消してよいとは一言も言わない', () => {
+    expect(r.stderr).toContain('確かめられなかった');
+    expect(r.stderr).not.toContain('railway service delete');
+    expect(r.stderr).not.toContain('確かめられた');
+  });
+
+  it('Service を消さない（呼び出し記録に service delete が無い）', () => {
+    expect(r.calls.some((c) => c.includes('service delete'))).toBe(false);
+  });
+});
+
+describe('資格の値は一度も出ない（vacate 経路）', () => {
+  // トークンは railway ssh の先（コンテナの中）でしか使わない設計——
+  // ここで拾っている出力はすべて「呼び出し側（このスクリプトを回した側）」の
+  // ものなので、1文字でも出ていれば持ち出したことになる
+  it('成功シナリオの出力に資格の値が無い', () => {
+    const r = scenarios.vacateSuccess;
+    expect(r.stderr).not.toContain(FAKE_OPERATOR_TOKEN);
+    expect(r.calls.join('\n')).not.toContain(FAKE_OPERATOR_TOKEN);
+    expect(r.apiLog).not.toContain(FAKE_OPERATOR_TOKEN);
+  });
+
+  it('timeout シナリオの出力にも資格の値が無い', () => {
+    const r = scenarios.vacateTimeout;
+    expect(r.stderr).not.toContain(FAKE_OPERATOR_TOKEN);
+    expect(r.calls.join('\n')).not.toContain(FAKE_OPERATOR_TOKEN);
+    expect(r.apiLog).not.toContain(FAKE_OPERATOR_TOKEN);
   });
 });
 
