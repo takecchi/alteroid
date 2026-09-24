@@ -28,7 +28,8 @@ const ORG_SPEND_LIMIT =
   "You've hit your org's monthly spend limit · ask your admin to raise it at claude.ai/settings/usage?from=cc_cli_limit_message";
 
 interface FakeSession {
-  say(text: string, options?: { error?: string }): Promise<void>;
+  /** `parentToolUseId` を渡すと作業者（Task の中）の発言になる（#1373）。 */
+  say(text: string, options?: { error?: string; parentToolUseId?: string }): Promise<void>;
   /** 1ターンを畳む。既定は成功。 */
   finish(text: string, options?: { subtype?: string; isError?: boolean }): Promise<void>;
   /**
@@ -62,9 +63,9 @@ function fakeSdk() {
         push({
           type: 'assistant',
           message: { role: 'assistant', content: [{ type: 'text', text }] },
-          parent_tool_use_id: null,
+          parent_tool_use_id: sayOptions.parentToolUseId ?? null,
           session_id: 'sess-mgr',
-          uuid: `uuid-say-${text.length}`,
+          uuid: `uuid-say-${text.length}-${sayOptions.parentToolUseId ?? 'main'}-${Math.random()}`,
           ...(sayOptions.error === undefined ? {} : { error: sayOptions.error }),
         } as unknown as SDKMessage);
         await new Promise((resolve) => setTimeout(resolve, 0));
@@ -580,6 +581,76 @@ describe('失敗で終わったターンの本文に、そのターンで開い�
     const text = texts[1] ?? '';
     expect(text).toBe(BASELINE_FAILURE_TEXT);
     expect(text).not.toContain('体開いていた');
+
+    await s.pool.stop();
+  });
+
+  it('作業者の発言に拒否の印が付いたターンが失敗で終わると、状況証拠の行の代わりに「作業者の発言に拒否の印が付いていた」の行が付く（種類ごとに件数で畳む）', async () => {
+    const s = setup();
+    await s.pool.start({ request: '調べて' });
+    const session = await vi.waitFor(() => {
+      const found = s.sessions[0];
+      if (!found) throw new Error('セッションがまだ開いていない');
+      return found;
+    });
+
+    await session.taskStarted('task-1');
+    await session.say('作業者の枠の文言', { error: 'rate_limit', parentToolUseId: 'toolu-1' });
+    await session.say('作業者の枠の文言', { error: 'rate_limit', parentToolUseId: 'toolu-2' });
+    await session.say('課金', { error: 'billing_error', parentToolUseId: 'toolu-2' });
+    await session.finish('', { isError: true });
+
+    const texts = await reportTexts(s.inbox, 1);
+    const text = texts[0] ?? '';
+    expect(text).toBe(
+      `${BASELINE_FAILURE_TEXT}\n（このターンでは作業者の発言に SDK の拒否の印が付いていた: rate_limit ×2 / billing_error ×1。作業者が当たったことは確かだが、本体も当たったかは SDK からは分からない）`,
+    );
+    // 作業者の拒否の文言は、マネージャーの報告本文へは混ざらない。
+    expect(text).not.toContain('作業者の枠の文言');
+
+    await s.pool.stop();
+  });
+
+  it('作業者の発言に拒否の印が付いても、ターンが成功で終わったら失敗にはならず、行も付かない（本体は作業者を立て直して進めることがある）', async () => {
+    const s = setup();
+    const started = await s.pool.start({ request: '調べて' });
+    const session = await vi.waitFor(() => {
+      const found = s.sessions[0];
+      if (!found) throw new Error('セッションがまだ開いていない');
+      return found;
+    });
+
+    await session.taskStarted('task-1');
+    await session.say('作業者の枠の文言', { error: 'rate_limit', parentToolUseId: 'toolu-1' });
+    await session.say('作業者を立て直して終えた');
+    await session.finish('作業者を立て直して終えた');
+
+    const texts = await reportTexts(s.inbox, 1);
+    const text = texts[0] ?? '';
+    expect(text).toBe('作業者を立て直して終えた');
+    const job = await jobOf(s.stores, started.managerId);
+    expect(job?.lastFailure).toBeUndefined();
+
+    await s.pool.stop();
+  });
+
+  it('作業者の拒否の印はターンをまたいで持ち越されない', async () => {
+    const s = setup();
+    await s.pool.start({ request: '調べて' });
+    const session = await vi.waitFor(() => {
+      const found = s.sessions[0];
+      if (!found) throw new Error('セッションがまだ開いていない');
+      return found;
+    });
+
+    await session.say('作業者の枠の文言', { error: 'rate_limit', parentToolUseId: 'toolu-1' });
+    await session.say('1回目');
+    await session.finish('1回目');
+    await reportTexts(s.inbox, 1);
+
+    await session.finish('', { isError: true });
+    const texts = await reportTexts(s.inbox, 2);
+    expect(texts[1]).toBe(BASELINE_FAILURE_TEXT);
 
     await s.pool.stop();
   });

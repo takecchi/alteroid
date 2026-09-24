@@ -1178,6 +1178,25 @@ class RunnerSession {
    */
   #openedWorkersThisTurn = new Set<string>();
   /**
+   * このターンの中で、**作業者の発言**（`parentToolUseId` が非 null の
+   * assistant メッセージ）に付いていた SDK の拒否の印（`errorCode`。
+   * `rate_limit` / `billing_error` 等）。`result` で畳む（#1373 案 (a) の
+   * 本文だけの形）。
+   *
+   * **`#openedWorkersThisTurn` との違いは、状況証拠か直接の証拠かである。**
+   * あちらは「作業者が開いていた」までしか言えず、当たったのが本体か作業者かは
+   * 決められない。こちらは**作業者自身の発言に拒否の印が付いていた**ので、
+   * 「作業者が当たった」ことは確かである。⚠ **ただし「本体は当たっていない」
+   * とは言えない** —— 同じ鍵・同じ枠なら本体も続けて当たりうる。
+   *
+   * **ターンの失敗にはしない。** 本体の `#rejected` へは入れない —— 作業者が
+   * 1体枠に当たっても、本体は作業者を立て直して進めることがある（#1373 の
+   * 実例 `mgr-4f6859d5`）。ここで持つのは、失敗で終わったターンの本文に添える
+   * 材料だけである。構造化した欄（`runner-protocol.ts` の `failure`）には
+   * 足していない —— 台帳と公開 API の形を変えることになる（#1373 のコメント）。
+   */
+  #workerRejectionsThisTurn: string[] = [];
+  /**
    * `SubagentStop` / `Stop` の観測が使う8フィールドの器（Issue #1190 段1で
    * `runner-subagent-stop-state.ts` へ切り出した。前例は PR #1359
    * `clone-notices.ts`）。**日誌へ出すかどうか・`escalate` を立てるかどうかの
@@ -2139,6 +2158,7 @@ class RunnerSession {
     // 戻しが走らない。ここで捨てないと、前のセッションで開いた作業者が
     // 次のセッションの最初のターンの数に入る。
     this.#openedWorkersThisTurn = new Set();
+    this.#workerRejectionsThisTurn = [];
 
     const record = renderSessionLog(this.#seed);
     if (record === null) {
@@ -2307,6 +2327,11 @@ class RunnerSession {
             // 通常の経路（`result` が来る回）はこの値を1度も読まない。
             this.#saidUuid = event.id;
           }
+        } else {
+          // **作業者の発言に付いた拒否の印は、ターンの失敗にはせず数えるだけ**
+          // （`#workerRejectionsThisTurn` の doc。#1373）。
+          const rejected = assistantFailureOf(event.errorCode, '');
+          if (rejected !== undefined) this.#workerRejectionsThisTurn.push(rejected.code);
         }
         return;
       }
@@ -2406,12 +2431,14 @@ class RunnerSession {
         // **#1373: 同じ区切りで畳む。** `#openedWorkersThisTurn` の doc の
         // とおり、持ち越すと前のターンで開いた作業者が次のターンの N に混ざる。
         const openedWorkersThisTurn = this.#openedWorkersThisTurn.size;
+        const workerRejectionsThisTurn = this.#workerRejectionsThisTurn;
         this.#inputsSinceResult = 0;
         this.#notificationsSinceResult = 0;
         this.#toolsSinceResult = 0;
         this.#submitsSinceResult = 0;
         this.#submitSources = new Map();
         this.#openedWorkersThisTurn = new Set();
+        this.#workerRejectionsThisTurn = [];
 
         // **`#window` が非 null なのは、区間が開いている（`#openTasks` が非空）か
         // 閉じ待ち（`#windowClosing`）のときだけ**である。委譲の外で起きたターン
@@ -2594,6 +2621,7 @@ class RunnerSession {
                   failure,
                   resultTextOf(event).text,
                   openedWorkersThisTurn,
+                  workerRejectionsThisTurn,
                 ),
                 contentless: false,
               };
@@ -4609,21 +4637,36 @@ function unreportedText(said: readonly string[], reason: string): string {
  * 添えるだけである）。**0のときは1文字も足さない**（`AGENTS.md`「取れない
  * 軸に0の行を作らない」と同じ理由——委譲と無関係なターンにまでこの行が
  * 付くと、無関係な失敗まで作業者絡みに見える）。
+ *
+ * **`workerRejections` が1件以上なら、状況証拠の行を直接の証拠の行へ差し替える**
+ * （`#workerRejectionsThisTurn` の doc）。作業者自身の発言に拒否の印が付いて
+ * いたので「作業者が当たった」とは言える。「本体は当たっていない」とは言わない。
+ * 印は種類ごとに件数で畳む（同じ `rate_limit` が何件も並ぶと本文が太る）。
  */
 function failedReportText(
   said: readonly string[],
   failure: SdkFailure,
   result: string,
   openedWorkers: number,
+  workerRejections: readonly string[] = [],
 ): string {
   const body = failure.text.length > 0 ? failure.text : result;
   const workerNote =
-    openedWorkers > 0
-      ? `\n（このターンでは作業者が ${String(openedWorkers)} 体開いていた。どちらが当たったかは SDK からは分からない）`
-      : '';
+    workerRejections.length > 0
+      ? `\n（このターンでは作業者の発言に SDK の拒否の印が付いていた: ${describeRejectionCodes(workerRejections)}。作業者が当たったことは確かだが、本体も当たったかは SDK からは分からない）`
+      : openedWorkers > 0
+        ? `\n（このターンでは作業者が ${String(openedWorkers)} 体開いていた。どちらが当たったかは SDK からは分からない）`
+        : '';
   const head = `（このターンは応答を返さずに終わった: ${failure.code} / ${failure.via}）\n${body}${workerNote}`;
   const partial = said.join('\n\n').trim();
   return partial.length === 0 ? head : `${head}\n\n（失敗する前に出ていた本文）\n${partial}`;
+}
+
+/** 拒否の印を種類ごとに件数で畳む（現れた順。`rate_limit ×2 / billing_error ×1`）。 */
+function describeRejectionCodes(codes: readonly string[]): string {
+  const counts = new Map<string, number>();
+  for (const code of codes) counts.set(code, (counts.get(code) ?? 0) + 1);
+  return [...counts].map(([code, n]) => `${code} ×${String(n)}`).join(' / ');
 }
 
 /**
