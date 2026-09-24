@@ -126,6 +126,7 @@ export const KEY = {
    */
   conversation: (id: string, includeSuperseded = false) =>
     ({ type: 'conversation', id, includeSuperseded }) as const,
+  approvalTrace: (id: string) => ({ type: 'approvalTrace', id }) as const,
   runners: { type: 'runners' } as const,
   tokens: { type: 'tokens' } as const,
   access: { type: 'access' } as const,
@@ -446,6 +447,18 @@ export function useConversation(id: string | null, options: { includeSuperseded?
         },
       })
       .then(unwrap),
+  );
+}
+
+/**
+ * 承認の答えと、その後にクローンが取った行動の対（`GET /approvals/:id/trace`。
+ * issue #847 の案B）。**`id` が null なら取りに行かない**——画面は人間が開いた
+ * ときだけ読む（答え済みのカードを並べただけで全件ぶん日誌を走査しないため）。
+ */
+export function useApprovalTrace(id: string | null) {
+  const api = useApi();
+  return useSWR(id === null ? null : KEY.approvalTrace(id), ({ id }) =>
+    api.api.GET('/approvals/{id}/trace', { params: { path: { id } } }).then(unwrap),
   );
 }
 

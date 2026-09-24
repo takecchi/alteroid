@@ -85,7 +85,12 @@ describe('stampAnsweredApproval（印を立てる規則の1か所）', () => {
   });
 
   it('inbound の exchange と、行動でない型（escalation など）には立てない', () => {
-    const inbound: JournalEntryInput = { type: 'exchange', with: 'human', role: 'inbound', text: 't' };
+    const inbound: JournalEntryInput = {
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: 't',
+    };
     const escalation: JournalEntryInput = { type: 'escalation', question: 'q', approvalId: 'x' };
     expect(stampAnsweredApproval(inbound, 'ap-1')).not.toHaveProperty('answeredApprovalId');
     expect(stampAnsweredApproval(escalation, 'ap-1')).not.toHaveProperty('answeredApprovalId');
@@ -95,7 +100,12 @@ describe('stampAnsweredApproval（印を立てる規則の1か所）', () => {
 describe('journalEntrySchema — answeredApprovalId は後方互換', () => {
   it('欄の無い古い行がそのまま読め、在る行は欄を落とさずに読める', () => {
     const base = { id: 'j-1', at: '2026-09-01T00:00:00.000Z' };
-    const old = journalEntrySchema.parse({ ...base, type: 'decision', decision: 'd', grounds: 'g' });
+    const old = journalEntrySchema.parse({
+      ...base,
+      type: 'decision',
+      decision: 'd',
+      grounds: 'g',
+    });
     expect(old).not.toHaveProperty('answeredApprovalId');
     for (const entry of [
       { type: 'decision', decision: 'd', grounds: 'g' },
@@ -105,10 +115,9 @@ describe('journalEntrySchema — answeredApprovalId は後方互換', () => {
     ]) {
       // **欄が schema に無ければ zod の既定（strip）で黙って落ちる**——書いた印が
       // 保存の口で消える形を、ここで捕まえる。
-      expect(journalEntrySchema.parse({ ...base, ...entry, answeredApprovalId: 'ap-1' })).toHaveProperty(
-        'answeredApprovalId',
-        'ap-1',
-      );
+      expect(
+        journalEntrySchema.parse({ ...base, ...entry, answeredApprovalId: 'ap-1' }),
+      ).toHaveProperty('answeredApprovalId', 'ap-1');
     }
   });
 });
@@ -215,8 +224,17 @@ describe('traceApproval — 対を読む（issue #847 の案B）', () => {
     const stores = createMemoryStores();
     await answered(stores, 'ap-1');
     await stores.journal.append(turnStart('ap-1', true));
-    await stores.journal.append({ type: 'tool_use', actor: `${CLONE_ACTOR_ID}:distill`, tool: 'Read' });
-    await stores.journal.append({ type: 'memory_update', slug: 'values', cause: 'distill', summary: 's' });
+    await stores.journal.append({
+      type: 'tool_use',
+      actor: `${CLONE_ACTOR_ID}:distill`,
+      tool: 'Read',
+    });
+    await stores.journal.append({
+      type: 'memory_update',
+      slug: 'values',
+      cause: 'distill',
+      summary: 's',
+    });
     expect((await trace(stores, 'ap-1')).state).toBe('no_actions');
   });
 

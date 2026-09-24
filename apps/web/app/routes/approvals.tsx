@@ -4,7 +4,7 @@ import { Markdown } from '~/components/markdown';
 import { Page } from '~/components/page';
 import { Badge, Button, Card, Empty, ErrorNote, Spinner, Textarea } from '~/components/ui';
 import { useAnswerApproval, useAnswerApprovals } from '~/hooks/mutations';
-import { useApprovals, useConversation } from '~/hooks/queries';
+import { useApprovalTrace, useApprovals, useConversation } from '~/hooks/queries';
 import { cn } from '~/lib/cn';
 import { formatDateTime, formatRelative } from '~/lib/format';
 import type { PendingApproval } from '~/lib/types';
@@ -332,6 +332,12 @@ function ApprovalCard({
         </div>
       )}
 
+      {/*
+        **答えの後にクローンが何をしたか（issue #847 の案B）。** 答え済みの件だけに
+        出し、開いたときだけ読む（`useApprovalTrace` の doc）。
+      */}
+      {answered && !withdrawn && <TracePanel approvalId={approval.id} />}
+
       <ErrorNote error={failure} className="mt-2" />
       {bulkError !== undefined && (
         <ErrorNote error={`まとめて送った回答は通らなかった: ${bulkError}`} className="mt-2" />
@@ -353,6 +359,103 @@ function ApprovalCard({
       </div>
     </Card>
   );
+}
+
+/**
+ * 承認の答えと、答えを受けたターンでクローンが取った行動を対で出す（issue #847 の案B）。
+ *
+ * **「対が無い」を1つの顔にしない。** 理由の文言はデーモンが返す `state` ごとに
+ * 出し分ける（core の `approval-trace.ts` の doc と同じ分け方。`TRACE_MISSING`）。
+ * 行動の本文は日誌の行の要旨で、解釈や一般化は足さない。
+ */
+function TracePanel({ approvalId }: { approvalId: string }) {
+  const [open, setOpen] = useState(false);
+  const trace = useApprovalTrace(open ? approvalId : null);
+
+  if (!open) {
+    return (
+      <div className="mt-2">
+        <Button size="sm" onClick={() => setOpen(true)}>
+          答えの後の行動を見る
+        </Button>
+      </div>
+    );
+  }
+  if (trace.isLoading) return <Spinner label="答えの後の行動を読み込み中" />;
+  if (trace.error !== undefined) return <ErrorNote error={trace.error} className="mt-2" />;
+  const data = trace.data;
+  if (data === undefined) return null;
+  if (data.state !== 'paired') {
+    return (
+      <p className="mt-2 text-[11px] text-muted italic">
+        {TRACE_MISSING[data.state] ?? `対が無い（${data.state}）`}
+        {data.truncated ? `（答えの後 ${data.scanned} 行までしか見ていない）` : ''}
+      </p>
+    );
+  }
+  return (
+    <div className="mt-2">
+      <p className="mb-1 text-[11px] font-semibold text-muted">
+        答えの後の行動（この承認の印を持つもの。古い順）
+      </p>
+      <ul className="flex flex-col gap-1">
+        {data.actions.map((entry) => (
+          <li
+            key={entry.id}
+            className="rounded border border-border bg-surface-2 p-2 text-xs break-words whitespace-pre-wrap"
+          >
+            <span className="mr-1 text-[10px] text-muted">
+              {formatDateTime(entry.at)} {entry.type}
+            </span>
+            {describeAction(entry)}
+          </li>
+        ))}
+      </ul>
+      {data.actionsOmitted > 0 && (
+        <p className="mt-1 text-[11px] text-muted">
+          ほか {data.actionsOmitted} 件は数えただけで持っていない
+        </p>
+      )}
+      {data.unstampedInTurn > 0 && (
+        <p className="mt-1 text-[11px] text-muted">
+          同じターンの区間に、印を持たないクローンの行動が {data.unstampedInTurn}{' '}
+          件在る（区間の終わりは推定）
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 対が無い理由の言い方。**キーは `state` の全値ではない**（`paired` は一覧を出す）。
+ * 知らない値が来たら（デーモンが先に新しい値を返す版ずれ）、上の `??` が値を
+ * そのまま出す——空欄にしない。
+ */
+const TRACE_MISSING: Record<string, string> = {
+  unanswered: 'まだ答えが無い',
+  withdrawn: '取り下げ済みなので答えは無い',
+  no_turn_start: '答えを受けたターンの入口の行が無い（まだ配られていないか、見た窓の外）',
+  turn_before_recording:
+    '答えを受けたターンは在るが、対で記録し始める前の答えである（行動が無いのではなく、記録していない）',
+  unstamped_actions: '⚠️ 答えのターンに印を持たない行動が在る。記録が動いていない疑いがある',
+  no_actions: '答えの後にこの承認に紐づいた行動は記録されていない',
+};
+
+/** 行動1件の要旨（core の `describeTraceAction` と同じ欄を読む。画面は core を import しない）。 */
+function describeAction(entry: { type: string } & Record<string, unknown>): string {
+  const str = (key: string) => (typeof entry[key] === 'string' ? (entry[key] as string) : '');
+  switch (entry.type) {
+    case 'decision':
+      return `判断: ${str('decision')}（根拠: ${str('grounds')}）`;
+    case 'memory_update':
+      return `記憶の更新 ${str('action') || 'write'} ${str('slug')}: ${str('summary')}`;
+    case 'tool_use':
+      return `道具 ${str('tool')}${entry.input === undefined ? '' : `: ${JSON.stringify(entry.input)}`}`;
+    case 'exchange':
+      return str('text');
+    default:
+      return entry.type;
+  }
 }
 
 /**

@@ -132,7 +132,8 @@ describe('クローン — 答えのターンの行へ承認の印を立てる�
 
     const outbound = async (text: string) =>
       (await stores.journal.list({ types: ['exchange'], limit: 200 })).some(
-        (entry) => entry.type === 'exchange' && entry.role === 'outbound' && entry.text.includes(text),
+        (entry) =>
+          entry.type === 'exchange' && entry.role === 'outbound' && entry.text.includes(text),
       );
 
     // 1. 承認に由来しないターン（契約の反対側）。
