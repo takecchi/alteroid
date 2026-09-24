@@ -1,5 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type {
@@ -11,6 +10,8 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { createRunnerHost, type RunnerHost } from '@alteroid/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { formatOutboxShutdownReport, Outbox, type OutboxShutdownSnapshot } from './app.js';
 import { drainAndReportOutbox, DRAIN_POLL_INTERVAL_MS, waitForOutboxDrain } from './index.js';
@@ -406,13 +407,12 @@ let dir: string;
 let hosts: RunnerHost[] = [];
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'alteroid-shutdown-report-'));
+  dir = makeTempDirSync('alteroid-shutdown-report-');
 });
 
 afterEach(async () => {
   await Promise.all(hosts.map((host) => host.shutdown().catch(() => undefined)));
   hosts = [];
-  rmSync(dir, { recursive: true, force: true });
 });
 
 describe('listener が付いていないまま畳む経路（Host#shutdown()）を通ると archive が箱に残る（#634）', () => {

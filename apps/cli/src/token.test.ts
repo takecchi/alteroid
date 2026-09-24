@@ -1,8 +1,9 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { captureStdout } from './test-support.js';
 
@@ -255,16 +256,12 @@ describe('alteroid token add', () => {
       },
     });
 
-    const dir = await mkdtemp(join(tmpdir(), 'alteroid-token-add-'));
+    const dir = await makeTempDir('alteroid-token-add-');
     const path = join(dir, 'token.txt');
     await writeFile(path, 'tok-aaa-secret\n', 'utf8');
     const read = captureStdout();
 
-    try {
-      await tokenAddCommand({ label: 'new-one', file: path });
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
+    await tokenAddCommand({ label: 'new-one', file: path });
 
     expect(read()).toContain('トークン「new-one」を追加しました。');
 
@@ -279,15 +276,11 @@ describe('alteroid token add', () => {
 
   it('値が空（ファイルが空・空白のみ）なら投げる。PUT を打たない', async () => {
     setReply('GET', '/tokens', { status: 200, body: { tokens: [], settings: EMPTY_SETTINGS } });
-    const dir = await mkdtemp(join(tmpdir(), 'alteroid-token-add-empty-'));
+    const dir = await makeTempDir('alteroid-token-add-empty-');
     const path = join(dir, 'empty.txt');
     await writeFile(path, '   \n', 'utf8');
 
-    try {
-      await expect(tokenAddCommand({ label: 'x', file: path })).rejects.toThrow('値が空である');
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
+    await expect(tokenAddCommand({ label: 'x', file: path })).rejects.toThrow('値が空である');
 
     expect(sent.some((call) => call.method === 'PUT')).toBe(false);
   });

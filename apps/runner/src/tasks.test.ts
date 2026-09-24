@@ -1,10 +1,11 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { stat } from 'node:fs/promises';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { TaskBreakdownReader } from './tasks.js';
 
@@ -32,11 +33,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 let root: string;
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'alteroid-proc-'));
-});
-
-afterEach(() => {
-  rmSync(root, { recursive: true, force: true });
+  root = makeTempDirSync('alteroid-proc-');
 });
 
 /**
@@ -282,11 +279,7 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
   let cgroupRoot: string;
 
   beforeEach(() => {
-    cgroupRoot = mkdtempSync(join(tmpdir(), 'alteroid-cgroup-'));
-  });
-
-  afterEach(() => {
-    rmSync(cgroupRoot, { recursive: true, force: true });
+    cgroupRoot = makeTempDirSync('alteroid-cgroup-');
   });
 
   /** cgroup の pids を偽装する。`procCgroupPath` は `0::/`（＝根がそのまま自分の階層）。 */

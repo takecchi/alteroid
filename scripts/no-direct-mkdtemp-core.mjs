@@ -57,9 +57,10 @@
  * 移行は3本の PR に分けて段階的にやると決めた（PR 本文に理由を書く）。理由は
  * 1ファイル1行、そのファイルがいま実際にどう後片付けしているかを現物で
  * 確かめて書いてある（`ALLOWLIST` の doc）。**1本目の PR（packages/core/ の18件）で
- * 34ファイルへ減った** — 残りは apps/（12）・scripts/（11）・docker/（3）・
- * .github/（3）・packages/storage-fs/（4）・railway/（1）の34ファイルで、
- * 後続の2本の PR で移す。
+ * 34ファイルへ、2本目の PR（apps/cli・apps/daemon・apps/runner・
+ * packages/storage-fs の16件）で18ファイルへ減った** — 残りは scripts/
+ * （11）・.github/（3）・docker/（3）・railway/（1）の18ファイルで、
+ * 後続の3本目の PR で移す。
  * 許可リストに無いファイルで新しく直接呼び出しが増えたら、この歯が赤くなる。
  *
  * **許可リストは古びたら赤くする。** 許可リストに載っているのに実際には
@@ -153,7 +154,8 @@ export function judgeMkdtempScan(matchedPaths, hits, allowlist) {
 
 /**
  * 許可リスト（相対パス → 理由）。**段階的な移行の途中である**（3本の PR に
- * 分けると決めた。1本目で packages/core/ の18件を helper へ移した）。
+ * 分けると決めた。1本目で packages/core/ の18件、2本目で apps/cli・
+ * apps/daemon・apps/runner・packages/storage-fs の16件を helper へ移した）。
  *
  * 各行の理由は、そのファイルが**いま実際にどう後片付けしているか**を現物で
  * 確かめて書いた（当初は 2026-09-24、PR #1437 マージ後の `main`（`500dab2`）の
@@ -168,12 +170,11 @@ export function judgeMkdtempScan(matchedPaths, hits, allowlist) {
  *   同じ場所の `finally` で消す。複数 `it` にまたがらない。
  * - **共有配列 + afterEach**（この repo の helper と同じ発想）: 作るたびに
  *   配列へ積み、`afterEach` が配列を空にしながらまとめて `rm` する。
- *   `apps/cli/src/practice.test.ts` / `docker/alteroid-db.test.ts`
- *   （#1437 で導入）/ `scripts/verify-core.test.ts` /
+ *   `docker/alteroid-db.test.ts`（#1437 で導入）/ `scripts/verify-core.test.ts` /
  *   `scripts/mutate-{aggregate-blocks,census,scaffold-control,unhandled-errors}.test.ts`
  *   がこの形——**helper 導入前から、同じ設計に独立して行き着いていた**。
  *
- * 内訳（2026-09-24 時点、34ファイル）: 26ファイルが named import 経由
+ * 内訳（2026-09-24 時点、18ファイル）: 10ファイルが named import 経由
  * （`mkdtemp(` / `mkdtempSync(`）、8ファイル（`scripts/mutate-*.test.ts`）が
  * namespace import 経由（`fs.mkdtempSync(`）。`railway/scale-runners.test.ts`
  * は `mkdtempSync` という語を doc コメントで触れているだけで実際の呼び出しが
@@ -195,54 +196,6 @@ export const ALLOWLIST = new Map([
     `module-level の setup() に対応する module-level の createdDirs 配列 + afterEach。${MIGRATION_SUFFIX}`,
   ],
   [
-    'apps/cli/src/credential.test.ts',
-    `beforeEach で dir を作り、afterEach で rm する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'apps/cli/src/memory.test.ts',
-    `it 直書き（2箇所）。it ごとに dir を作り、同じ it の try/finally で rm する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'apps/cli/src/practice.test.ts',
-    `共有配列 + afterEach。fileWith() ヘルパーが作るたびに tempDirs 配列へ積み、afterEach でまとめて rmSync する（この PR の helper と同じ発想）。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'apps/cli/src/profile.test.ts',
-    `it 直書き + try/finally。it の中で dir を作り rm する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'apps/cli/src/token.test.ts',
-    `it 直書き（2箇所）。it ごとに dir を作り、同じ it の try/finally で rm する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'apps/daemon/src/app.test.ts',
-    `withRealApplier() ヘルパーが { app, cleanup } を返し、呼び出し側（2箇所の it）が try/finally で cleanup()（rmSync）を呼ぶ。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'apps/daemon/src/runner-client.test.ts',
-    `it 直書き（2箇所。うち1箇所は動的 import 経由の分割代入で mkdtempSync を取得）。it ごとに dir を作り、同じ it の try/finally で rmSync する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'apps/daemon/src/storage.test.ts',
-    `describe('openStorage') 内の9箇所の it がそれぞれ共有の let root を作り、既存の afterEach（stdout spy を戻す側）が rm する（#1437 でこの afterEach へ rm を足した）。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'apps/runner/src/boundary.test.ts',
-    `beforeEach で dir を作り、afterEach（host.shutdown 等と合わせて）で rmSync する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'apps/runner/src/index.test.ts',
-    `beforeEach で dir を作り、afterEach で rmSync する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'apps/runner/src/shutdown-report.test.ts',
-    `beforeEach で dir を作り、afterEach（host の shutdown と合わせて）で rmSync する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'apps/runner/src/tasks.test.ts',
-    `beforeEach で root / cgroupRoot をそれぞれ作り、対応する afterEach で rmSync する（独立した2組）。${MIGRATION_SUFFIX}`,
-  ],
-  [
     'docker/alteroid-db.test.ts',
     `共有配列 + afterEach（#1437 で導入）。mktemp() ヘルパーが作るたびに createdDirs 配列へ積み、afterEach でまとめて rmSync する——run() が返す POSTGRES_PASSWORD_FILE を it が run() の後で読むため it の中では消せない。${MIGRATION_SUFFIX}`,
   ],
@@ -253,22 +206,6 @@ export const ALLOWLIST = new Map([
   [
     'docker/gh.test.ts',
     `runGh() ヘルパー自身の try/finally で rmSync する。単発の it（docker-gh-cred-test.）も try/finally を持つ（#1437 で導入）。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'packages/storage-fs/src/file-lock.test.ts',
-    `トップレベルの beforeEach で root を作り、対応する afterEach で rm する（#1437 で afterEach を新設）。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'packages/storage-fs/src/index.test.ts',
-    `トップレベルの beforeEach で root を作り、対応する afterEach で rm する（#1437 で afterEach を新設）。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'packages/storage-fs/src/sessions.test.ts',
-    `トップレベルの beforeEach で dir を作り、afterEach で rm する。${MIGRATION_SUFFIX}`,
-  ],
-  [
-    'packages/storage-fs/src/usage.test.ts',
-    `3箇所（#1437 で整えた）。トップレベルの beforeEach で storeDir を作り対応する afterEach で rm、describe('既にある usage.json…') の beforeEach で dir を作り対応する afterEach で rm、単発の it は try/finally。${MIGRATION_SUFFIX}`,
   ],
   [
     'railway/setup.test.ts',

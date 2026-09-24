@@ -1,8 +1,9 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { captureStdout } from './test-support.js';
 
@@ -82,11 +83,9 @@ function practiceBody(over: Partial<Record<string, unknown>> = {}): unknown {
   };
 }
 
-/** 一時ファイルを1つ作って絶対パスを返す（後始末は `afterEach`）。 */
-let tempDirs: string[] = [];
+/** 一時ファイルを1つ作って絶対パスを返す（後始末は helper の `afterAll`）。 */
 function fileWith(content: string): string {
-  const dir = mkdtempSync(join(tmpdir(), 'alteroid-practice-test-'));
-  tempDirs.push(dir);
+  const dir = makeTempDirSync('alteroid-practice-test-');
   const path = join(dir, 'body.md');
   writeFileSync(path, content, 'utf8');
   return path;
@@ -100,8 +99,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
-  tempDirs = [];
   globalThis.fetch = originalFetch;
   delete process.env.EDITOR;
   delete process.env.VISUAL;

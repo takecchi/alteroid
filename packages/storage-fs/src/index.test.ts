@@ -1,5 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -16,7 +15,9 @@ import {
   verifyTranscriptArchiveContract,
 } from '@alteroid/core';
 import type { Commitment, InboxEvent, JournalEntry } from '@alteroid/core';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { CLOSED_HISTORY_LIMIT, createFsStores, initWorkspace } from './index.js';
 
@@ -24,12 +25,8 @@ let root: string;
 let stores: ReturnType<typeof createFsStores>;
 
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), 'alteroid-test-'));
+  root = await makeTempDir('alteroid-test-');
   stores = createFsStores(root);
-});
-
-afterEach(async () => {
-  await rm(root, { recursive: true, force: true });
 });
 
 describe('initWorkspace', () => {

@@ -1,9 +1,10 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { captureStderr, clearRecentTracesForTesting, recentDroppedTraces } from '@alteroid/core';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+
+import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { FsSessionRegistry } from './sessions.js';
 
@@ -26,12 +27,8 @@ import { FsSessionRegistry } from './sessions.js';
 let dir: string;
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'alteroid-sessions-test-'));
+  dir = await makeTempDir('alteroid-sessions-test-');
   clearRecentTracesForTesting();
-});
-
-afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
 });
 
 describe('「無い」と「読めなかった」の区別（穴2）', () => {

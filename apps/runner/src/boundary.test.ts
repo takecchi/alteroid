@@ -1,7 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -17,6 +16,8 @@ import { createRunnerHost, type RunnerHost } from '@alteroid/core';
 import { createAdaptorServer } from '@hono/node-server';
 import type { ServerType } from '@hono/node-server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { createRunnerApp, Outbox } from './app.js';
 
@@ -138,7 +139,7 @@ let host: RunnerHost;
 let sessions: Fake[];
 
 beforeEach(async () => {
-  dir = mkdtempSync(join(tmpdir(), 'alteroid-runner-'));
+  dir = makeTempDirSync('alteroid-runner-');
   socketPath = join(dir, 'runner.sock');
 
   const fake = fakeSdk();
@@ -167,7 +168,6 @@ beforeEach(async () => {
 afterEach(async () => {
   await host.shutdown().catch(() => undefined);
   server.close();
-  rmSync(dir, { recursive: true, force: true });
 });
 
 describe('制御面の境界', () => {

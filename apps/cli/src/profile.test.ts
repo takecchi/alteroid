@@ -1,8 +1,9 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { captureStdout } from './test-support.js';
 
@@ -169,16 +170,12 @@ describe('alteroid profile set', () => {
         runners: [{ runnerId: 'runner-a', ok: false, error: 'timeout', output: 'line1\nline2' }],
       },
     });
-    const dir = await mkdtemp(join(tmpdir(), 'alteroid-profile-set-'));
+    const dir = await makeTempDir('alteroid-profile-set-');
     const path = join(dir, 'profile.sh');
     await writeFile(path, 'export FOO=bar\n', 'utf8');
     const read = captureStdout();
 
-    try {
-      await profileSetCommand({ file: path });
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
+    await profileSetCommand({ file: path });
 
     const text = read();
     expect(text).toContain('プロファイルを更新しました (sha256 def456)');

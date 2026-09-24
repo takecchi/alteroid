@@ -1,12 +1,13 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+
+import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { RECLAIM_ENV_KEY, reclaimScanOf, tokenSha256Of } from './index.js';
 
@@ -61,7 +62,7 @@ describe('器の起動スクリプト', () => {
   }
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'alteroid-launch-'));
+    dir = makeTempDirSync('alteroid-launch-');
     // 偽の `node`。**exec された先が何を持っているか**を見たいだけなので、環境を
     // そのまま吐く（本物を起こす必要は無い）。
     fake('node', 'printf "%s\\n" "$@"\nenv');
@@ -70,10 +71,6 @@ describe('器の起動スクリプト', () => {
     // ようにする。`tini` そのものの呼ばれ方（`-g` の有無など）を測る歯は、
     // 個別に `fake('tini', ...)` で上書きする（下の describe を参照）。
     fake('tini', '[ "$1" = "--" ] && shift\nexec "$@"');
-  });
-
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true });
   });
 
   async function launch(name: string, env: NodeJS.ProcessEnv) {

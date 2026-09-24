@@ -1,8 +1,9 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { captureStdout } from './test-support.js';
 
@@ -71,13 +72,12 @@ beforeEach(async () => {
   replies = new Map();
   sent = [];
   stubFetch();
-  dir = await mkdtemp(join(tmpdir(), 'alteroid-cli-credential-'));
+  dir = await makeTempDir('alteroid-cli-credential-');
 });
 
 afterEach(async () => {
   globalThis.fetch = originalFetch;
   vi.restoreAllMocks();
-  await rm(dir, { recursive: true, force: true });
 });
 
 const DUMMY = 'CRED-CLI-DUMMY';

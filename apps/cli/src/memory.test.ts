@@ -1,8 +1,9 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { captureStdout } from './test-support.js';
 
@@ -76,16 +77,12 @@ afterEach(() => {
 describe('alteroid memory set', () => {
   it('ファイルの内容を PUT /memory/<slug> へ全文置換で送る', async () => {
     const read = captureStdout();
-    const dir = await mkdtemp(join(tmpdir(), 'alteroid-memory-test-'));
+    const dir = await makeTempDir('alteroid-memory-test-');
     const path = join(dir, 'values.md');
     await writeFile(path, '# 価値観\n\n嘘をつかない。\n', 'utf8');
     replies.push({ status: 200, body: { document: { slug: 'values', content: 'x' } } });
 
-    try {
-      await memorySetCommand('values', { file: path });
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
+    await memorySetCommand('values', { file: path });
 
     expect(sent).toHaveLength(1);
     expect(sent[0]?.method).toBe('PUT');
@@ -100,16 +97,12 @@ describe('alteroid memory set', () => {
 
   it('書き換えられなければ、書き換えたとは言わない', async () => {
     const read = captureStdout();
-    const dir = await mkdtemp(join(tmpdir(), 'alteroid-memory-test-'));
+    const dir = await makeTempDir('alteroid-memory-test-');
     const path = join(dir, 'x.md');
     await writeFile(path, 'なにか', 'utf8');
     replies.push({ status: 400, body: { error: '記憶のスラッグが不正' } });
 
-    try {
-      await memorySetCommand('..', { file: path });
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
+    await memorySetCommand('..', { file: path });
 
     const text = read();
     expect(text).toContain('書き換えられませんでした');

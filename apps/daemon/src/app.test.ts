@@ -1,6 +1,5 @@
 import { COMMITMENT_APPRAISAL_DECISION_PREFIX, describeAppraisal } from '@alteroid/core';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type {
@@ -43,6 +42,8 @@ import {
   summarizeInboxBacklog,
 } from '@alteroid/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { createApp, parseAllowedOrigins } from './app.js';
 import { encodeCursor } from './cursor.js';
@@ -6451,7 +6452,7 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
  */
 describe('宣言と実物の一致（/profile）', () => {
   function withRealApplier() {
-    const dir = mkdtempSync(join(tmpdir(), 'alteroid-app-profile-'));
+    const dir = makeTempDirSync('alteroid-app-profile-');
     const vessel = createProfileVessel({ path: join(dir, 'profile.sh') });
     const applier = createProfileApplier({ vessel, baseEnv: () => ({}) });
     const profile = createProfileService({ stores, applier });
@@ -6462,56 +6463,48 @@ describe('宣言と実物の一致（/profile）', () => {
       shutdown: () => undefined,
       profile,
     });
-    return { app, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+    return { app };
   }
 
   it('宣言していないフィールドを外へ出さない（clone.profile は載らない）', async () => {
-    const { app, cleanup } = withRealApplier();
-    try {
-      const response = await app.request('/profile', {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ script: 'export SEE_IT_LEAK=1' }),
-      });
-      expect(response.status).toBe(200);
-      const body = (await response.json()) as { clone: Record<string, unknown> };
+    const { app } = withRealApplier();
+    const response = await app.request('/profile', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ script: 'export SEE_IT_LEAK=1' }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { clone: Record<string, unknown> };
 
-      // **applier がある経路を通っていること。** ここで `clone.ok` が `true` に
-      // なっているのは、本物の `ProfileApplier` がスクリプトを実際に評価して
-      // 通したからである（`profileService()` の空スタブでは `names` すら
-      // 生成されない）。この確認が無いと、下の `not.toHaveProperty` が
-      // 「そもそも clone.profile を生成できていないだけ」で通ってしまう。
-      expect(body.clone.ok).toBe(true);
-      expect(body.clone).not.toHaveProperty('profile');
-    } finally {
-      cleanup();
-    }
+    // **applier がある経路を通っていること。** ここで `clone.ok` が `true` に
+    // なっているのは、本物の `ProfileApplier` がスクリプトを実際に評価して
+    // 通したからである（`profileService()` の空スタブでは `names` すら
+    // 生成されない）。この確認が無いと、下の `not.toHaveProperty` が
+    // 「そもそも clone.profile を生成できていないだけ」で通ってしまう。
+    expect(body.clone.ok).toBe(true);
+    expect(body.clone).not.toHaveProperty('profile');
   });
 
   it('宣言したフィールドは載る（parse がぜんぶ落としているのではない）', async () => {
-    const { app, cleanup } = withRealApplier();
-    try {
-      const response = await app.request('/profile', {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ script: 'export SEE_IT_LEAK=1' }),
-      });
-      expect(response.status).toBe(200);
-      const body = (await response.json()) as {
-        sha256?: string;
-        bytes?: number;
-        clone: { ok: boolean; names?: string[] };
-        runners: unknown[];
-      };
+    const { app } = withRealApplier();
+    const response = await app.request('/profile', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ script: 'export SEE_IT_LEAK=1' }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      sha256?: string;
+      bytes?: number;
+      clone: { ok: boolean; names?: string[] };
+      runners: unknown[];
+    };
 
-      expect(body.sha256).toBeDefined();
-      expect(body.bytes).toBeDefined();
-      expect(body.clone.ok).toBe(true);
-      expect(body.clone.names).toEqual(['SEE_IT_LEAK']);
-      expect(body.runners).toEqual([]);
-    } finally {
-      cleanup();
-    }
+    expect(body.sha256).toBeDefined();
+    expect(body.bytes).toBeDefined();
+    expect(body.clone.ok).toBe(true);
+    expect(body.clone.names).toEqual(['SEE_IT_LEAK']);
+    expect(body.runners).toEqual([]);
   });
 });
 
