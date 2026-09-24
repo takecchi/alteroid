@@ -267,6 +267,14 @@ if [ "$TOTAL" -lt "$CURRENT" ]; then
     先に $LAST_NAME を空けて消してから、もう一度 $VACATE を指定すること。"
   fi
 
+  # **1回に空けるのは1台だけ。** `-n` が「いまの台数−1」より小さいのに1台だけ
+  # 空けて 0 で終わると、呼ぶ側は指定した台数まで減ったと読む（黙った食い違い）。
+  # 2台以上減らすなら、いちばん大きい番号から1台ずつ回す。
+  if [ "$TOTAL" -ne $((CURRENT - 1)) ]; then
+    die "$CURRENT 台から ${TOTAL} 台へは1回では減らせない（--vacate は1回に1台だけ空ける）。
+    -n $((CURRENT - 1)) --vacate $LAST_NAME から始めて、1台ずつ回すこと。"
+  fi
+
   info "空ける runner   $VACATE（runnerId=$VACATE_ID）"
   warn "委譲が移り終わるまで待つ（最大 ${VACATE_TIMEOUT_SECONDS}秒）。" \
     "Service を消すコマンドは最後に表示するだけで、ここでは消さない"

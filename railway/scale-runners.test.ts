@@ -241,6 +241,7 @@ type Scenarios = {
   vacateSuccess: Run;
   vacateTimeout: Run;
   vacateMiddleRejected: Run;
+  vacateTooMany: Run;
 };
 
 let scenarios: Scenarios;
@@ -435,6 +436,15 @@ async function prepareScenarios(): Promise<Scenarios> {
       total: 2,
       services: threeRunners,
       args: ['--vacate', 'runner-2'],
+      allowFailure: true,
+    });
+  });
+
+  task('vacateTooMany', async () => {
+    s.vacateTooMany = await run({
+      total: 1,
+      services: threeRunners,
+      args: ['--vacate', 'runner-3'],
       allowFailure: true,
     });
   });
@@ -764,6 +774,26 @@ describe('--vacate で真ん中を指したとき（番号が途切れる）', (
     expect(r.stderr).toContain('真ん中の Service は受け付けない');
     expect(r.stderr).toContain('番号が途切れる');
     expect(r.stderr).toContain('runner-3');
+  });
+
+  it('vacate も railway ssh も呼ばない（呼び出し記録が空）', () => {
+    expect(r.calls.some((c) => c.startsWith('ssh '))).toBe(false);
+    expect(r.stderr).not.toContain('vacate を投げた');
+  });
+});
+
+describe('--vacate で2台以上減らそうとしたとき', () => {
+  // 3台から -n 1。--vacate は1回に1台しか空けないので、1台だけ空けて 0 で
+  // 終わると「1台まで減った」と読まれる——だから vacate を投げる前に断る。
+  let r: Run;
+  beforeAll(() => {
+    r = scenarios.vacateTooMany;
+  });
+
+  it('非0で終わり、1台ずつ回せと言う', () => {
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toContain('1回に1台だけ');
+    expect(r.stderr).toContain('-n 2 --vacate runner-3');
   });
 
   it('vacate も railway ssh も呼ばない（呼び出し記録が空）', () => {
