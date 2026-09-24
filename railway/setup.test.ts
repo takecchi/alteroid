@@ -18,7 +18,7 @@
  * コメントと `beforeAll` 呼び出し側の `PREP_TIMEOUT` のコメントを見よ。
  */
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { cpus, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -88,7 +88,8 @@ type ConfigInputResult = { status: number; stdout: string; stderr: string };
  * ——器が混んでいれば軽い呼び出しでも所要時間は伸びうる。
  */
 function configInputAsync(config: unknown): Promise<ConfigInputResult> {
-  const file = join(mkdtempSync(join(tmpdir(), 'alteroid-config-')), 'config.json');
+  const dir = mkdtempSync(join(tmpdir(), 'alteroid-config-'));
+  const file = join(dir, 'config.json');
   writeFileSync(file, JSON.stringify(config));
   return new Promise((resolve, reject) => {
     const child = spawn(
@@ -106,8 +107,15 @@ function configInputAsync(config: unknown): Promise<ConfigInputResult> {
     child.stderr.on('data', (chunk: string) => {
       stderr += chunk;
     });
-    child.on('error', reject);
-    child.on('close', (code) => resolve({ status: code ?? -1, stdout, stderr }));
+    child.on('error', (err) => {
+      rmSync(dir, { recursive: true, force: true });
+      reject(err);
+    });
+    child.on('close', (code) => {
+      // 子プロセスは file を読み終えてから閉じるので、ここで消してよい。
+      rmSync(dir, { recursive: true, force: true });
+      resolve({ status: code ?? -1, stdout, stderr });
+    });
   });
 }
 

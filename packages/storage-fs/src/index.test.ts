@@ -16,7 +16,7 @@ import {
   verifyTranscriptArchiveContract,
 } from '@alteroid/core';
 import type { Commitment, InboxEvent, JournalEntry } from '@alteroid/core';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CLOSED_HISTORY_LIMIT, createFsStores, initWorkspace } from './index.js';
 
@@ -26,6 +26,10 @@ let stores: ReturnType<typeof createFsStores>;
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'alteroid-test-'));
   stores = createFsStores(root);
+});
+
+afterEach(async () => {
+  await rm(root, { recursive: true, force: true });
 });
 
 describe('initWorkspace', () => {

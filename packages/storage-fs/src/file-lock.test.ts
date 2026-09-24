@@ -1,11 +1,11 @@
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, readdir, readFile, stat, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { Commitment, Job } from '@alteroid/core';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { writeFileAtomic } from './atomic.js';
 import { FsCommitmentStore } from './commitments.js';
@@ -18,6 +18,10 @@ let root: string;
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'alteroid-lock-test-'));
+});
+
+afterEach(async () => {
+  await rm(root, { recursive: true, force: true });
 });
 
 describe('writeFileAtomic', () => {

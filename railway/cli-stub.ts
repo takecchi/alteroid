@@ -10,7 +10,7 @@
  * 応答の形に追いつく。追いつけていない側は**緑のまま嘘を確かめる**。
  */
 import { spawn } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -394,6 +394,13 @@ export function runScriptAsync(options: RunOptions): Promise<Run> {
         resolve(finish(options, prepared, code ?? 1, stderr));
       } catch (err) {
         reject(err instanceof Error ? err : new Error(String(err)));
+      } finally {
+        // `finish` はここまでで prepared.dir の中身を全部読み終えている
+        // （payloads / credentials / calls / apiLog は同期的に読んで
+        // プレーンな値へ組み立て済み。`onEnvFile` も finish の中で同期的に
+        // 呼ばれ、渡された側が読みたければこの時点で読んでいる）ので、
+        // Run を組み立てた直後に消してよい。
+        rmSync(prepared.dir, { recursive: true, force: true });
       }
     });
   });

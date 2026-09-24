@@ -27,7 +27,7 @@
  * （`setpriv` 自体の挙動であって `alteroidd` の分岐ではないため）。
  */
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -117,6 +117,11 @@ function run(
       stdout: e.stdout?.toString('utf8') ?? '',
       stderr: e.stderr?.toString('utf8') ?? '',
     };
+  } finally {
+    // 呼び出し側は out.args / out.NODE_OPTIONS しか見ず、root 配下のファイルを
+    // 読み戻すことはない（`readFileSync` で root 配下を読み直す呼び出しは無い）
+    // ので、execFileSync が終わった時点で消してよい。
+    rmSync(root, { recursive: true, force: true });
   }
 }
 

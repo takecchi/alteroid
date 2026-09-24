@@ -31,12 +31,13 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 import { STEPS } from '../../scripts/verify-core.mjs';
@@ -136,8 +137,17 @@ function initRepo(root: string): string {
   return repoPath;
 }
 
+const createdDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of createdDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 function setup() {
   const root = mkdtempSync(join(tmpdir(), 'verify-for-sdk-pr-test.'));
+  createdDirs.push(root);
   const repoPath = initRepo(root);
   const fakePnpm = join(root, 'fake-pnpm.sh');
   writeFakePnpm(fakePnpm);

@@ -18301,15 +18301,19 @@ describe('クローン — 要約に潰された後の索引の載せ直し（#6
   async function firePreCompact(s: Setup): Promise<void> {
     const main = s.calls[0] as FakeCall;
     const dir = await mkdtemp(join(tmpdir(), 'alteroid-index-refresh-'));
-    const transcriptPath = join(dir, 'transcript.jsonl');
-    await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
-    const preCompact = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
-    if (preCompact === undefined) throw new Error('PreCompact フックが登録されていない');
-    await preCompact(
-      { session_id: 'sess-fake', transcript_path: transcriptPath } as never,
-      undefined,
-      { signal: new AbortController().signal } as never,
-    );
+    try {
+      const transcriptPath = join(dir, 'transcript.jsonl');
+      await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
+      const preCompact = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
+      if (preCompact === undefined) throw new Error('PreCompact フックが登録されていない');
+      await preCompact(
+        { session_id: 'sess-fake', transcript_path: transcriptPath } as never,
+        undefined,
+        { signal: new AbortController().signal } as never,
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   }
 
   it('⭐ 潰された次のターンでは、変わっていない文書も含めて索引の全体が載る', async () => {

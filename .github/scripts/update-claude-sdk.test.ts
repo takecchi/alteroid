@@ -27,12 +27,13 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url));
 const UPDATE_SCRIPT = join(SCRIPTS_DIR, 'update-claude-sdk.sh');
@@ -145,6 +146,14 @@ describe('update-claude-sdk.sh', () => {
     "\nminimumReleaseAgeExclude:\n  - '@anthropic-ai/claude-agent-sdk*'\n";
   const LOCKFILE_INITIAL = "lockfileVersion: '9.0'\n";
 
+  const createdDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of createdDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   /**
    * 偽の pnpm。呼ばれた引数を `FAKE_PNPM_LOG` へ記録するだけ。ファイルの書き換えは
    * `FAKE_PNPM_ACTION`（`catalog` / `catalog-and-exclude` / `lockfile` /
@@ -211,6 +220,7 @@ esac
 
   function setup(workspaceYaml = WORKSPACE_YAML_WITH_SDK) {
     const root = mkdtempSync(join(tmpdir(), 'update-claude-sdk-test.'));
+    createdDirs.push(root);
     const repoPath = initRepo(root, workspaceYaml);
     const fakePnpm = join(root, 'fake-pnpm.sh');
     writeFakePnpm(fakePnpm);
@@ -416,6 +426,14 @@ describe('open-claude-sdk-pr.sh', () => {
   // 「SDK_CI_TRIGGERED による CI未起動の通知」の中だけにあった）。
   const WARNING_MARK = '> [!WARNING]';
 
+  const createdDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of createdDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   /** `reflect-release-prod.test.ts` と同じ手法：push が来たら1行記録するだけの
    * bare origin。ネットワークには一切触らない。 */
   function initOrigin(root: string): string {
@@ -562,6 +580,7 @@ fi
 
   function setup() {
     const root = mkdtempSync(join(tmpdir(), 'open-claude-sdk-pr-test.'));
+    createdDirs.push(root);
     const originPath = initOrigin(root);
     const seedPath = initSeed(root);
     git(seedPath, ['remote', 'add', 'origin', originPath]);

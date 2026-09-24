@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -69,15 +69,18 @@ describe('openStorage', () => {
   // 本物の stdout へ書く。ここで spy を張って握り潰す — 内容を確かめたい
   // テストではないので `captureStdout()`（`apps/cli/src/test-support.ts`）ほど
   // 厚い形は要らない。
+  let root: string;
+
   beforeEach(() => {
     vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
   });
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    await rm(root, { recursive: true, force: true });
   });
 
   it('fs 構成では人格データディレクトリを用意して返す', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
+    root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
 
     const storage = await openStorage({ ALTEROID_HOME: root });
 
@@ -99,7 +102,7 @@ describe('openStorage', () => {
    * （守る側なので保護自体は効くが、`human` と `unknown` を混同したままになる）。
    */
   it('起動時に日誌の cause:human を backfill し、既存の人間の書き込みが human になる', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
+    root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
 
     // --- 1回目の起動（過去のデーモンの寿命を模す） -------------------------
     const first = await openStorage({ ALTEROID_HOME: root });
@@ -129,7 +132,7 @@ describe('openStorage', () => {
   });
 
   it('cause:human の action:remove からは backfill しない（削除は保護を立てる理由にならない）', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
+    root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
 
     const first = await openStorage({ ALTEROID_HOME: root });
     // 人間が削除した記録だけが日誌にある（実体は既に無い）。
@@ -170,7 +173,7 @@ describe('openStorage', () => {
    */
   describe('createdAt の backfill', () => {
     it('起動後に作った記憶が、再起動を挟まずその場で known を持つ（この配線の本体）', async () => {
-      const root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
+      root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
 
       const storage = await openStorage({ ALTEROID_HOME: root });
 
@@ -183,7 +186,7 @@ describe('openStorage', () => {
     });
 
     it('起動時に日誌の最初の write を createdAt として backfill する（新しいほうが採られないこと）', async () => {
-      const root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
+      root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
 
       // **`journal.append` の `at` は呼び出し側から渡せず、その場の
       // `new Date().toISOString()` になる。** 同じ tick で2回呼ぶと同じ
@@ -246,7 +249,7 @@ describe('openStorage', () => {
       // だった時代）の裏返しである。**いまは write() 自身が作成そのものを
       // 観測して createdAt を立てるので、日誌の記録に一切頼らず、再起動を
       // またいでも known のままである。**
-      const root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
+      root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
 
       const first = await openStorage({ ALTEROID_HOME: root });
       // memory_update を1件も残さずに書く（`persona.write` 自体は journal を
@@ -264,7 +267,7 @@ describe('openStorage', () => {
     });
 
     it('書き込み経路で既に埋まった createdAt を、次の起動の backfill が上書きしない', async () => {
-      const root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
+      root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
 
       // journal.append の at を明示的に古くするため、時計を止める
       // （上の「新しいほうが採られない」テストと同じ手口）。
@@ -300,7 +303,7 @@ describe('openStorage', () => {
     });
 
     it('backfill は冪等——2回目の再起動でも既に埋まった createdAt を書き換えない（絶対条件2・4）', async () => {
-      const root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
+      root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
 
       const first = await openStorage({ ALTEROID_HOME: root });
       // 索引の無い生ファイルとして置く（backfill 単体の冪等性を確かめたい
@@ -345,7 +348,7 @@ describe('openStorage', () => {
      * テストに在るが、ここは「本当に backfill 経路からしか動かないこと」を見る。
      */
     it('backfill は本文・updatedAt・保護状態・要旨を書き換えない', async () => {
-      const root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
+      root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
 
       const first = await openStorage({ ALTEROID_HOME: root });
       // 索引の無い生ファイルとして置く（上と同じ理由——write() が

@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,7 +11,7 @@ import {
   type UsageSnapshot,
   type UsageTotals,
 } from '@alteroid/core';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { FsUsageStore } from './usage.js';
 
@@ -23,6 +23,7 @@ import { FsUsageStore } from './usage.js';
  * （`packages/core/src/usage.test.ts`）で確かめ済みなので、ここでは重複しない。
  */
 let store: FsUsageStore;
+let storeDir: string;
 
 function totals(over: Partial<UsageTotals>): UsageTotals {
   return { ...ZERO_USAGE, ...over };
@@ -58,8 +59,12 @@ function record(input: {
 }
 
 beforeEach(async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'alteroid-usage-test-'));
-  store = new FsUsageStore(dir);
+  storeDir = await mkdtemp(join(tmpdir(), 'alteroid-usage-test-'));
+  store = new FsUsageStore(storeDir);
+});
+
+afterEach(async () => {
+  await rm(storeDir, { recursive: true, force: true });
 });
 
 describe('FsUsageStore.record', () => {
@@ -532,6 +537,10 @@ describe('既にある usage.json の読み込み（層の列が無い状態か�
     dir = await mkdtemp(join(tmpdir(), 'alteroid-usage-legacy-'));
     store = new FsUsageStore(dir);
     await writeLegacy();
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
   });
 
   it('既にある行を読めて、manager / session になる', async () => {
@@ -1032,14 +1041,18 @@ describe('回数の軸（起きた回数。model を鍵に持たない別会計�
       tokensAt: null,
     };
     const dir = await mkdtemp(join(tmpdir(), 'alteroid-usage-noturns-'));
-    await writeFile(join(dir, 'usage.json'), `${JSON.stringify(legacy, null, 2)}\n`, 'utf8');
-    const legacyStore = new FsUsageStore(dir);
+    try {
+      await writeFile(join(dir, 'usage.json'), `${JSON.stringify(legacy, null, 2)}\n`, 'utf8');
+      const legacyStore = new FsUsageStore(dir);
 
-    const aggregate = await legacyStore.aggregate({});
-    expect(aggregate.rows).toHaveLength(1);
-    expect(aggregate.turnRows).toEqual([]);
-    expect(aggregate.turnsSince).toBeNull();
-    expect(aggregate.beforeTurns).toBe(true);
+      const aggregate = await legacyStore.aggregate({});
+      expect(aggregate.rows).toHaveLength(1);
+      expect(aggregate.turnRows).toEqual([]);
+      expect(aggregate.turnsSince).toBeNull();
+      expect(aggregate.beforeTurns).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 
