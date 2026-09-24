@@ -180,6 +180,7 @@ export function parseMcpJson(text: string): McpServers {
   } catch (error) {
     throw new Error(
       `JSON として読めませんでした（何も保存していません）: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
     );
   }
   const servers =

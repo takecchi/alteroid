@@ -25,7 +25,7 @@ import type {
  *
  * 形は `routes/profile.tsx`（#1122）の写しで、理由も同じ:
  *
- * - **値は既定で隠す。** `GET /mcp-servers` は `env` / `headers` / `args` を丸ごと返し、
+ * - **値は押すまで隠す。** `GET /mcp-servers` は `env` / `headers` / `args` を丸ごと返し、
  *   そこには鍵が入りうる。一覧に出すのは名前・種類・宛先（URL はクエリと認証情報を
  *   伏せる）・鍵の名前だけで、「値を表示する」を押したときだけ JSON を出す。編集欄も
  *   「編集する」を押すまで値を流し込まない
@@ -162,7 +162,7 @@ function EntrySummary({ name, entry }: { name: string; entry: McpServerEntry | u
 /**
  * 差し替え・外す。
  *
- * **編集欄は「編集する」を押すまで出さない**（値を既定で隠すのと同じ理由。押すと、
+ * **編集欄は「編集する」を押すまで出さない**（値を押すまで隠すのと同じ理由。押すと、
  * いま置かれている登録を `.mcp.json` の形で流し込む＝ `alteroid mcp edit` が
  * `$EDITOR` に現在の登録を開くのと同じ）。
  */
