@@ -2852,6 +2852,64 @@ describe('park し直すのは、より早く戻る鍵のときだけ', () => {
     expect(h.spreadCalls.map((call) => call.id)).toEqual(['tok-b']);
   });
 
+  /**
+   * **トークンの追加・削除（`pool_changed`）も同じ判定を通る**（人間の要望
+   * 2026-09-24「必ず最後にはリセットが一番早いトークンをセットして待機させる。
+   * 追加・削除された場合も同様の関数を叩いて確認する」）。`PUT /tokens` は
+   * `tokenWatch.poke('pool_changed')` →`reconsider` を呼ぶ（`apps/daemon/src/index.ts`）。
+   */
+  it('より早く戻る鍵が追加されたら（pool_changed）、そちらを撒いて待つ', async () => {
+    const h = harness();
+    await parked(h, Date.parse(AT) + 60 * 60_000, Date.parse(AT) + 10 * 60_000);
+
+    const outcome = await h.rotator.reconsider({ reason: 'pool_changed' });
+
+    expect(outcome.kind).toBe('parked');
+    if (outcome.kind !== 'parked') return;
+    expect(outcome.tokenId).toBe('tok-b');
+    expect(h.spreadCalls.map((call) => call.id)).toEqual(['tok-b']);
+  });
+
+  it('いちばん早く戻るのが現役自身なら、追加されても（pool_changed）現役のまま待つ', async () => {
+    const h = harness();
+    await parked(h, Date.parse(AT) + 10 * 60_000, Date.parse(AT) + 60 * 60_000);
+
+    const outcome = await h.rotator.reconsider({ reason: 'pool_changed' });
+
+    expect(outcome.kind).toBe('exhausted');
+    expect(h.spreadCalls).toEqual([]);
+    expect(await h.stores.tokens.readActive()).toMatchObject({ tokenId: 'tok-a' });
+  });
+
+  it('待っていた現役が削除されたら（pool_changed）、残りでいちばん早く戻る鍵を撒いて待つ', async () => {
+    const h = harness();
+    await h.stores.tokens.replace([
+      {
+        id: 'tok-b',
+        label: 'later-key',
+        value: 'value-b',
+        order: 1,
+        cooldownUntil: Date.parse(AT) + 60 * 60_000,
+      },
+      {
+        id: 'tok-c',
+        label: 'sooner-key',
+        value: 'value-c',
+        order: 2,
+        cooldownUntil: Date.parse(AT) + 20 * 60_000,
+      },
+    ]);
+    // 人間が `tok-a`（待っていた現役）を消した後の状態。
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 7, rotatedAt: AT });
+
+    const outcome = await h.rotator.reconsider({ reason: 'pool_changed' });
+
+    expect(outcome.kind).toBe('parked');
+    if (outcome.kind !== 'parked') return;
+    expect(outcome.tokenId).toBe('tok-c');
+    expect(h.spreadCalls.map((call) => call.id)).toEqual(['tok-c']);
+  });
+
   it('現役が冷却中ではない（人間が外した）なら、戻る見込みの立つ鍵へ移す', async () => {
     // **待っても戻らない側に居る**ので、冷却中の候補でも改善である。
     const h = harness();
@@ -3180,6 +3238,13 @@ describe('#1051: recovered は記録に対してエッジだが、429 が記録�
     }
 
     // **3周とも立つ。** これが「同一本文が数千件」の機構である。
+    //
+    // **⚠️ 2026-09-24 追記: 実運用で「成功」を運んでいたのは別の層ではなかった。**
+    // 枠で落ちたマネージャーのターン自身（`subtype: 'success'` / `is_error: true`）
+    // が `usage` を降ろし、`manager.ts` の `case 'usage'` がそれを成功として
+    // 渡していた ⟹ 起こした委譲が枠で落ちるたびに `recovered` が立ち、また
+    // 起こす、の無限の往復になった。**塞いだのは生産者の側**（`runner-protocol.ts`
+    // の `answered`）で、回し手のこの性質（記録に対してエッジ）は変えていない。
     expect(recovered).toEqual([
       { tokenId: 'tok-a', label: 'first', source: 'turn_success' },
       { tokenId: 'tok-a', label: 'first', source: 'turn_success' },

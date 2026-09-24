@@ -1287,6 +1287,29 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * （あちらの doc に理由の全文がある）。
      */
     contextUsage: contextUsageObservationSchema.optional(),
+    /**
+     * **このターンが応答として返ったか**（`sdk-failure.ts` の `isAnsweredResult`
+     * の側。`failure` が1つも立たなかった回だけ `true`）。
+     *
+     * ## なぜ `usage` が来たことを成功の証拠にしないか
+     *
+     * `usage` は台帳の問い（`usage.ts` の `isSuccessResult` ＝
+     * `subtype === 'success'`）で絞られている。**枠に当たったターンは
+     * `subtype: 'success'` / `is_error: true` で返る**ので、`usage` はそのまま
+     * 降りる。直す前の `manager.ts` はこの到着を「ターンが成功した」として
+     * 回し手へ渡していた ⟹ 枠で落ちたターンのたびに `recovered`（止まった記録を
+     * 消す）→ `resumeStoppedByUsage`（委譲を起こす）→ 起きた委譲がまた枠で落ちる
+     * → また `recovered`、の**無限の往復**になった（実運用で同じ枠の知らせが
+     * 684 件を超えた。2026-09-24）。
+     *
+     * **`#flushUsage`（畳む直前の読み取り）はこの欄を付けない。** あれは
+     * ターンの境界ではないので、何も答えていない。
+     *
+     * **欠けていたら「応答ではない」と読む**（安全側）。版のずれた runner が
+     * 送ってきても、成功を1本も捏造しない——成功の観測が落ちても、復帰は
+     * `account_probe` と冷却明けで拾える。逆向き（捏造）はいまの往復そのものである。
+     */
+    answered: z.boolean().optional(),
   }),
   /**
    * ターンの境界で聞いた文脈窓の占有を、**消費（`usage`）とは独立に**必ず

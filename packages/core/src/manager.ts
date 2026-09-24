@@ -8647,17 +8647,25 @@ class Pool implements ManagerPool {
       }
 
       case 'usage': {
-        // **この case へ来ること自体が、ターンが成功したことの証拠である**
-        // （`runner.ts` の `if (event.succeeded)` の枝だけがこのイベントを
-        // emit する。あちらの doc「成功した result だけを通す」）。
+        // **この case へ来ることは、ターンが成功したことの証拠ではない。**
+        // `runner.ts` の `if (event.succeeded)` は台帳の問い（`subtype ===
+        // 'success'`）であって、**枠に当たったターンも `subtype: 'success'` /
+        // `is_error: true` でここへ来る**。`#flushUsage`（畳む直前の読み取り）
+        // もこのイベントを出す。直す前はこの到着だけで成功を回し手へ渡しており、
+        // 枠で落ちるたびに `recovered` →委譲を起こす→また枠、を無限に往復した
+        // （`runner-protocol.ts` の `answered` の doc。2026-09-24 の実運用）。
         //
-        // ⟹ **`usable` の2本目の生産者へ1本渡す**（#681 (1)）。`account_probe`
-        // はアカウントの枠しか見ないので `You've hit your session limit` の
-        // ような枠には効かないが、成功はどんな枠でも「いまの現役が通った」
-        // 直接の証拠になる。**`observedBy` はここでは付けない** ——
-        // `#observeForTokenRotation` が `#tokenIdentities` から自動で付ける
-        // （そのセッションが起きた瞬間の身元。上の `tokenIdentity` と同じ源）。
-        await this.#observeForTokenRotation(event.managerId, { succeeded: true });
+        // ⟹ **`answered === true`（応答として返った）ときだけ** `usable` の
+        // 2本目の生産者へ1本渡す（#681 (1)）。`account_probe` はアカウントの枠
+        // しか見ないので `You've hit your session limit` のような枠には効かない
+        // が、応答が返ったことはどんな枠でも「いまの現役が通った」直接の証拠に
+        // なる。**欠けていたら渡さない**（安全側。あちらの doc）。**`observedBy`
+        // はここでは付けない** —— `#observeForTokenRotation` が
+        // `#tokenIdentities` から自動で付ける（そのセッションが起きた瞬間の
+        // 身元。上の `tokenIdentity` と同じ源）。
+        if (event.answered === true) {
+          await this.#observeForTokenRotation(event.managerId, { succeeded: true });
+        }
 
         // 降りてくるのは累積という事実で、差分にして積むのはここ（runner は
         // 記憶ストアの鍵を持たないので書けない）。読む→畳む→書くはストアの

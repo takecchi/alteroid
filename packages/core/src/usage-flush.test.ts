@@ -59,7 +59,7 @@ function getUsageResponse(models: Record<string, ModelUsage>): unknown {
 
 interface FakeSession {
   /** 1ターンを成功で終える（`result.modelUsage` に累積を載せる）。 */
-  report(text: string, models?: Record<string, ModelUsage>): void;
+  report(text: string, models?: Record<string, ModelUsage>, extra?: Record<string, unknown>): void;
   /** ストリームが終わる（`result` は出ないまま閉じる）。 */
   end(): void;
   /** ストリームが落ちる（`result` は出ない）。 */
@@ -138,7 +138,7 @@ function fakeSdk(options: FakeSdkOptions = {}): {
     }
 
     sessions.push({
-      report(text, models) {
+      report(text, models, extra) {
         push({
           type: 'result',
           subtype: 'success',
@@ -146,6 +146,7 @@ function fakeSdk(options: FakeSdkOptions = {}): {
           session_id: 'sess-1',
           uuid: 'uuid-result',
           ...(models === undefined ? {} : { modelUsage: models }),
+          ...extra,
         } as unknown as SDKMessage);
       },
       end() {
@@ -216,6 +217,9 @@ describe('畳む直前に累積を1回読む', () => {
     expect(usage).toHaveLength(1);
     expect(usage[0]?.managerId).toBe('mgr-1');
     expect(usage[0]?.models['claude-opus-4-8']?.costUsd).toBe(0.93);
+    // **ターンの境界ではないので、応答が返ったとは言わない**（欄を付けない。
+    // `runner-protocol.ts` の `answered` の doc）。
+    expect(usage[0] !== undefined && 'answered' in usage[0]).toBe(false);
     // **閉じるより先に読んでいること。** 閉じた後の control channel からは何も
     // 取れないので、順序が逆なら実機ではいつも空振りする（テストの偽物は答える）。
     expect(fake.order).toEqual(['usage', 'close']);
@@ -372,5 +376,49 @@ describe('台帳まで届く', () => {
     expect(aggregate.rows).toHaveLength(1);
     expect(summarizeUsage(aggregate.rows, aggregate.turnRows).total.costUsd).toBe(0.93);
     await pool.stop();
+  });
+});
+
+/**
+ * **`usage` の到着は「応答が返った」ではない（2026-09-24 の無限の往復）。**
+ *
+ * 枠に当たったターンは `subtype: 'success'` / `is_error: true` で返るので、
+ * 台帳の問い（`isSuccessResult`）は通り、`usage` は降りる。受け手（`manager.ts`
+ * の `case 'usage'`）がこれを成功と読むと、回し手が `recovered` →委譲を起こす→
+ * また枠、を無限に往復する。**応答として返ったかは `answered` で別に運ぶ。**
+ */
+describe('usage は応答として返ったかを別の欄で運ぶ', () => {
+  it('ふつうに答えたターンは answered: true', async () => {
+    const fake = fakeSdk();
+    const { host, events } = hostWith(fake);
+    await host.start({ managerId: 'mgr-ok', request: '1ターンだけ', cwd: dir });
+
+    fake.sessions[0]?.report('終わった', { 'claude-opus-4-8': modelUsage(0.5) });
+    await vi.waitFor(() => expect(usageEvents(events)).toHaveLength(1));
+
+    expect(usageEvents(events)[0]?.answered).toBe(true);
+    await host.shutdown();
+  });
+
+  it('🔴 枠で落ちた is_error のターンは、消費は降ろすが answered: false', async () => {
+    const fake = fakeSdk();
+    const { host, events } = hostWith(fake);
+    await host.start({ managerId: 'mgr-limit', request: '枠に当たる', cwd: dir });
+
+    fake.sessions[0]?.report(
+      "You've hit your org's monthly spend limit · ask your admin to raise it at claude.ai/admin-settings/usage · your session limit resets 6:40pm (Asia/Tokyo)",
+      { 'claude-opus-4-8': modelUsage(0.5) },
+      { is_error: true },
+    );
+    await vi.waitFor(() => expect(usageEvents(events)).toHaveLength(1));
+
+    const [event] = usageEvents(events);
+    // **消費は本物なので台帳へは降ろす**（従来どおり）。
+    expect(event?.models['claude-opus-4-8']?.costUsd).toBe(0.5);
+    // **ただし応答ではない。** これが真だと回し手が「通る鍵に戻った」と読む。
+    expect(event?.answered).toBe(false);
+    // 枠の知らせは従来どおり出ている（こちらが exhausted を作る側）。
+    expect(events.some((e) => e.type === 'usage_notice')).toBe(true);
+    await host.shutdown();
   });
 });

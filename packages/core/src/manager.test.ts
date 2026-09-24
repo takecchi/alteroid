@@ -2610,8 +2610,19 @@ function swappableRunner(runnerId = 'runner-primary') {
       emit?.({ type: 'report', managerId, text, status, ...fields });
     },
     /** SDK が報告した消費の**累積**を降ろす（差分にするのはデーモン側）。 */
-    usage(managerId: string, models: Record<string, UsageTotals>, sessionId?: string) {
-      emit?.({ type: 'usage', managerId, sessionId, models });
+    usage(
+      managerId: string,
+      models: Record<string, UsageTotals>,
+      sessionId?: string,
+      answered?: boolean,
+    ) {
+      emit?.({
+        type: 'usage',
+        managerId,
+        sessionId,
+        models,
+        ...(answered === undefined ? {} : { answered }),
+      });
     },
     /** 委譲1区間ぶんの集計を降ろす（runner 側の集計は `runner-wakeup.test.ts` が別に固定する）。 */
     workerWait(managerId: string, fields: Omit<WorkerWaitEvent, 'type' | 'managerId'>) {
@@ -2943,7 +2954,7 @@ describe('消費を台帳へ積む', () => {
    * `#observeForTokenRotation` を1本足した——`account_probe` が見ていない
    * セッション単位の上限に、成功という直接の証拠で効かせるためである。
    */
-  it('⚠️ usage が降りたら、成功の観測（succeeded: true）を回し手へも渡す', async () => {
+  it('⚠️ 応答として返った usage（answered: true）が降りたら、成功の観測（succeeded: true）を回し手へも渡す', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner();
@@ -2958,7 +2969,7 @@ describe('消費を台帳へ積む', () => {
     });
     await s.pool.restore();
 
-    fake.usage('mgr-spend', { opus: usage({ costUsd: 1 }) }, 'sess-1');
+    fake.usage('mgr-spend', { opus: usage({ costUsd: 1 }) }, 'sess-1', true);
     await expect.poll(() => seen.length, { timeout: 2000 }).toBeGreaterThan(0);
 
     // **成功だけを運ぶ。** 枠の観測（`notice` / `facts` / `transition`）は
@@ -2971,6 +2982,44 @@ describe('消費を台帳へ積む', () => {
 
     // **台帳への記録は1文字も変わっていない**（回帰。既存の歯が別に固定する）。
     await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBe(1);
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **🔴 枠で落ちたターンを成功と読まない（2026-09-24 の無限の往復）。**
+   *
+   * 枠に当たったターンは `subtype: 'success'` / `is_error: true` で返るので、
+   * `usage` は台帳のために降りてくる（`answered: false`）。直す前はこの到着
+   * だけで成功を回し手へ渡しており、`recovered` →委譲を起こす→また枠、を
+   * 無限に往復した。`answered` が欠けた `usage`（`#flushUsage` / 版のずれた
+   * runner）も成功ではない。
+   */
+  it.each([
+    ['応答ではなかった（answered: false。枠で落ちた is_error のターン）', false],
+    ['欄が無い（畳む直前の読み取り・版のずれた runner）', undefined],
+  ])('🔴 %s usage は、成功の観測を回し手へ渡さない', async (_title, answered) => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner();
+    const seen: TokenRotatorObservation[] = [];
+    const s = setup(undefined, {
+      stores,
+      runner: fake.runner,
+      tokenIdentity: () => ({ tokenId: 'tok-a', generation: 5 }),
+      onUsageObservation: async (o) => {
+        seen.push(o);
+      },
+    });
+    await s.pool.restore();
+
+    fake.usage('mgr-spend', { opus: usage({ costUsd: 1 }) }, 'sess-1', answered);
+
+    // **台帳へは積む**（消費は本物なので落とさない）。積み終わったことを待って
+    // から「成功が1本も渡っていない」を見る——待たずに見ると、処理前の空を
+    // 測ることになる。
+    await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBe(1);
+    expect(seen.filter((o) => o.succeeded === true)).toEqual([]);
 
     await s.pool.stop();
   });

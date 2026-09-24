@@ -2479,6 +2479,11 @@ class RunnerSession {
               managerId: this.#id,
               sessionId: this.#sessionId,
               models: event.usage.models,
+              // **応答として返ったかを別の欄で運ぶ**（`runner-protocol.ts` の
+              // `answered` の doc）。`succeeded` は台帳の問いなので、枠で
+              // 落ちた `is_error: true` のターンもここへ来る——受け手が
+              // これを成功と読むと、回し手が `recovered` と枠を往復し続ける。
+              answered: failure === undefined,
               // **この回だけ付く。** `#flushUsage`（セッションを畳む直前の
               // 別経路）は `turnBoundary` を持たないので付けない
               // （`#observeContextUsage` の doc）。無い（`undefined`）ことは
