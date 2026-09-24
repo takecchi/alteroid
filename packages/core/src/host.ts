@@ -37,6 +37,15 @@ export interface CloneHost {
    */
   subscribe(conversationId: string, listener: (event: ChatStreamEvent) => void): () => void;
 
+  /**
+   * **いま走っているクローンのターンを止める**（#1398 c23-1）。止めるものが
+   * 無ければ `'idle'`。セッションと受信箱には触らない（`Clone#interruptTurn` の doc）。
+   *
+   * **省略可能にしてある** —— この面を実装する偽物（テスト）が多く、足していない
+   * 実装では HTTP の口が「この器では止められない」と答える。
+   */
+  interruptTurn?(): Promise<'interrupted' | 'idle'>;
+
   /** 会話の終了。蒸留の契機（寿命モデル: 蒸留は生存条件）。 */
   endConversation(conversationId: string): Promise<void>;
 

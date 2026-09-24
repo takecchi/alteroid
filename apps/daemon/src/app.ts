@@ -109,6 +109,7 @@ import { describeRoute, openAPIRouteHandler, resolver, validator } from 'hono-op
 import { z } from 'zod';
 
 import {
+  cloneInterruptResponseSchema,
   accessAccountResponseSchema,
   accessListResponseSchema,
   appraisalStatsResponseSchema,
@@ -1709,6 +1710,45 @@ export function createApp(deps: AppDeps) {
       async (c) => {
         await clone.endConversation(c.req.param('conversationId'));
         return c.json({ ok: true });
+      },
+    )
+
+    /**
+     * **いま走っているクローンのターンを止める**（#1398 c23-1）。
+     *
+     * それまで人間が走行中のクローンのターンを止める口は、どの入口にも無かった。
+     * 止めるのはいまのターンだけで、セッション（会話の続き）と受信箱には触らない
+     * （`Clone#interruptTurn` の doc）。資格は `/chat/:conversationId/end` と同じ
+     * （会話を持てる人は、自分が起こしたターンを止められる）。
+     */
+    .post(
+      '/clone/interrupt',
+      describeRoute({
+        tags: ['chat'],
+        summary: 'いま走っているクローンのターンを止める',
+        description:
+          'セッションと受信箱はそのまま残る（次の合図で次のターンが始まる）。' +
+          '走っているターンが無ければ outcome: idle。止めたことは日誌に [判断] の1行で残る。' +
+          '運ぶ情報は無い（`{}` を送る）。',
+        requestBody: noBodyPostRequestBody(
+          '**中身は読まないので `{}` を送ればよい。** `content-type: application/json` が要る' +
+            '（ブラウザの単純リクエストでターンを止められないため）。',
+        ),
+        responses: {
+          200: {
+            description: '止めた・止めるものが無かった・この器では止められない、のどれか。',
+            content: { 'application/json': { schema: resolver(cloneInterruptResponseSchema) } },
+          },
+          ...noBodyPostResponses(),
+        },
+      }),
+      deliberateClient,
+      async (c) => {
+        if (clone.interruptTurn === undefined) {
+          return c.json(cloneInterruptResponseSchema.parse({ outcome: 'unsupported' }));
+        }
+        const outcome = await clone.interruptTurn();
+        return c.json(cloneInterruptResponseSchema.parse({ outcome }));
       },
     )
 

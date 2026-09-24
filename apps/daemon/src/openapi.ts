@@ -404,6 +404,14 @@ export const approvalsAnswerResponseSchema = z.object({
 
 export const okResponseSchema = z.object({ ok: z.literal(true) });
 
+/**
+ * `POST /clone/interrupt` の応答（#1398 c23-1）。`interrupted` は止めた、`idle` は
+ * 走っているターンが無かった、`unsupported` はこの器のクローンが止める口を持たない。
+ */
+export const cloneInterruptResponseSchema = z.object({
+  outcome: z.enum(['interrupted', 'idle', 'unsupported']),
+});
+
 // ---------------------------------------------------------------------------
 // 外部イベントの入口（/events）
 // ---------------------------------------------------------------------------

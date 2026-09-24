@@ -43,6 +43,7 @@ import {
 } from './profile.js';
 import { alteroidRoot } from './paths.js';
 import { resetCommand } from './reset.js';
+import { interruptCommand } from './interrupt.js';
 import { runnersCommand, runnersVacateCommand } from './runners.js';
 import {
   credentialListCommand,
@@ -245,6 +246,17 @@ runnersProgram
   .argument('<runnerId>', '空ける runner の id（alteroid runners で見える）')
   .action(async (runnerId: string) => {
     await runnersVacateCommand(runnerId);
+  });
+
+/**
+ * いま走っているクローンのターンを止める（#1398 c23-1）。経路は `POST /clone/interrupt`
+ * の1本だけ（`apps/cli/src/interrupt.ts`）。
+ */
+program
+  .command('interrupt')
+  .description('いま走っているクローンのターンを止める（会話の続きと受信箱は残る）')
+  .action(async () => {
+    await interruptCommand();
   });
 
 /**

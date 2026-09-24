@@ -2857,6 +2857,40 @@ class Clone implements CloneHost {
     };
   }
 
+  /**
+   * **人間の求めで、いま走っているクローンのターンを止める**（#1398 c23-1）。
+   *
+   * それまで人間が走行中のクローンのターンを止める口は、HTTP・CLI・Web UI の
+   * どこにも無く、SDK の `Query.interrupt()` も呼ばれていなかった。長い1ターン
+   * （道具を延々と回している・誤った方向へ進んでいる）を人間が見ていても、
+   * 待つかデーモンごと止めるしか無かった。
+   *
+   * - 走っているターンが無ければ何もせず `'idle'` を返す（止めるものが無い）
+   * - 止めるのは**いまのターンだけ**である。セッションは畳まない（会話の続きは
+   *   残る）。受信箱の待ち行列にも触らない —— 次の合図が来れば次のターンが始まる
+   * - 止めたことは `[判断]` の1行として日誌に残す（人間が後から「誰が止めたか」を
+   *   読めるように）。**先に書いてから止める** —— 止めた後に書くと、止めたことで
+   *   起きた失敗の記録より後ろに並んで、順序が逆に読める
+   * - 止めた後、SDK はそのターンを失敗として終える。それは既存の失敗の経路
+   *   （`#reportFailure`）がそのまま記録する
+   */
+  async interruptTurn(): Promise<'interrupted' | 'idle'> {
+    const turn = this.#turn;
+    const q = this.#query;
+    if (turn === null || q === null) return 'idle';
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text:
+        `${EXCHANGE_KIND_DECISION_PREFIX}人間の求めで、走っているターンを止めた（` +
+        `${turn.kind === 'distill' ? '蒸留' : '通常'}のターン）。セッションと受信箱はそのまま残る`,
+      ...(turn.conversationId === null ? {} : { conversationId: turn.conversationId }),
+    });
+    await q.interrupt();
+    return 'interrupted';
+  }
+
   async endConversation(conversationId: string): Promise<void> {
     // 会話終了は蒸留の契機。受信箱を通すので、走行中のターンを踏み潰さない。
     //

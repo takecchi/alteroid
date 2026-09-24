@@ -380,6 +380,58 @@
         ]
       }
     },
+    "/clone/interrupt": {
+      "post": {
+        "operationId": "postCloneInterrupt",
+        "tags": ["chat"],
+        "summary": "いま走っているクローンのターンを止める",
+        "description": "セッションと受信箱はそのまま残る（次の合図で次のターンが始まる）。走っているターンが無ければ outcome: idle。止めたことは日誌に [判断] の1行で残る。運ぶ情報は無い（`{}` を送る）。",
+        "requestBody": {
+          "required": true,
+          "description": "**中身は読まないので `{}` を送ればよい。** `content-type: application/json` が要る（ブラウザの単純リクエストでターンを止められないため）。",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "止めた・止めるものが無かった・この器では止められない、のどれか。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "outcome": {
+                      "type": "string",
+                      "enum": ["interrupted", "idle", "unsupported"]
+                    }
+                  },
+                  "required": ["outcome"]
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "content-type が application/json ではない（ブラウザの単純リクエスト対策 — 状態を変える POST は必ずここを通す）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/conversations": {
       "get": {
         "operationId": "getConversations",
