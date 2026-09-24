@@ -8729,14 +8729,13 @@ class Pool implements ManagerPool {
         // 起点がマネージャー自身の Bash でも `Task` 経由の作業者の Bash でも
         // 区別しない。
         //
-        // ## なぜ push が終わる前の観測で足りるか（実際は「終わった後」だが）
+        // ## いつ観測するか —— `git push` が走り終えた後
         //
-        // 依頼時点の想定は「`tool_use` は道具の実行が終わる前に届く」だった
-        // が、**現物はそうではない**——ここへ来るのは runner の `PostToolUse`
-        // フック（`runner.ts` の `#onPostToolUse`。`hook.tool_response` を
-        // 受け取っている＝道具の実行は既に完了している）経由で、`git push`
-        // は届いた時点でもう走り終えている。**それでも目的（枝名と origin を
-        // 台帳に残す）には支障が無い**——観測が読むのは worktree の「いまの
+        // ここへ来るのは runner の `PostToolUse` フック（`runner.ts` の
+        // `#onPostToolUse`。`hook.tool_response` を受け取っている＝道具の実行は
+        // 既に完了している）経由で、`git push` は届いた時点でもう走り終えて
+        // いる。**push の成否は目的（枝名と origin を台帳に残す）に効かない**
+        // ——観測が読むのは worktree の「いまの
         // 枝名」と「origin の host/path」であって、これらは `git push` を
         // 打つ**前提として既に存在している**（存在しない枝を push することは
         // できない）。push の成否がどちらでも、観測できる枝名は変わらない。
