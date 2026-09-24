@@ -10,6 +10,7 @@ import {
   jobStatusSchema,
   journalEntrySchema,
   memoryDocumentMetaSchema,
+  mcpServersSchema,
   memoryDocumentSchema,
   pendingApprovalSchema,
   practiceMetaSchema,
@@ -1283,6 +1284,46 @@ export const profileUpdateResponseSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// 人間の MCP 連携の登録（/mcp-servers。#325 段1）
+// ---------------------------------------------------------------------------
+
+/**
+ * 登録そのもの（`.mcp.json` と同じ形）。**値を返す。** 人間が自分で書いたものを
+ * 読み直せないと typo ひとつ直せない（`profileResponseSchema` と同じ理由）。
+ * `env` / `headers` に鍵が入りうるので、口は持ち主だけに絞ってある
+ * （`app.ts` の `/mcp-servers`）。
+ */
+export const mcpServersResponseSchema = z.object({
+  mcpServers: mcpServersSchema,
+  /** 置かれていなければ欠ける。 */
+  updatedAt: z.string().optional(),
+});
+
+/**
+ * 全文置換。`.mcp.json` をそのまま貼れる形にしてある。空の `mcpServers` は
+ * 「登録を外す」。**未知の欄は拒む**（`mcp-servers.ts` の doc —— 捨てると
+ * 綴りを間違えた欄が「保存できたのに効かない」になる）。
+ */
+export const mcpServersUpdateRequestSchema = z.strictObject({
+  mcpServers: mcpServersSchema,
+});
+
+/**
+ * 差し替えた結果。**名前だけを返す**（値は送った本人が持っている。応答に載せる
+ * 理由が無い口で鍵を往復させない）。
+ */
+export const mcpServersUpdateResponseSchema = z.object({
+  names: z.array(z.string()),
+  updatedAt: z.string(),
+  /**
+   * いつから効くか。**クローンの次のセッションから**であって、走行中の
+   * セッションには届かない（`claude-provider.ts` の `cloneMcpServers` の doc）。
+   * マネージャー・作業者へはまだ降ろしていない（#325 段3）。
+   */
+  appliesFrom: z.string(),
+});
+
+// ---------------------------------------------------------------------------
 // マネージャーへ降ろす環境変数（/credentials）
 // ---------------------------------------------------------------------------
 
@@ -1944,6 +1985,12 @@ export const openApiDocumentation: GenerateSpecOptions['documentation'] = {
     { name: 'managers', description: '委譲先マネージャーの一覧・状態・生ログ・直接の指示/停止' },
     { name: 'runners', description: '委譲先 runner の名簿と、そこへ配る鍵の指紋' },
     { name: 'archive', description: 'セッション生ログ（可観測性の最下段）' },
+    {
+      name: 'mcp-servers',
+      description:
+        '人間の MCP 連携の登録（.mcp.json 相当。#325）。記憶ストアに置き、クローンの' +
+        'セッションへ SDK の mcpServers として渡す。env / headers に鍵が入りうる',
+    },
     {
       name: 'auth',
       description:

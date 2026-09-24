@@ -56,7 +56,7 @@ export const CLAUDE_PROVIDER: AgentProvider = {
     resume: true, // buildCloneSessionOptions / buildManagerSessionOptions の Options.resume
     sessionLog: true, // buildCloneSessionOptions / buildManagerSessionOptions の Options.sessionStore
     subagents: true, // buildManagerSessionOptions の Options.agents（runner.ts の WORKER_AGENT_NAME）
-    mcpServers: true, // Options.settingSources + インプロセス MCP（tools.ts の createCloneMcpServer）
+    mcpServers: true, // Options.settingSources + インプロセス MCP（tools.ts の createCloneMcpServer）+ 記憶ストアの登録（cloneMcpServers。#325 段2。マネージャー・作業者へは段3）
     childUser: true, // buildManagerSessionOptions の Options.spawnClaudeCodeProcess（runner.ts の #spawnAsChildUser）
     usage: true, // clone.ts / runner.ts の #recordUsage（result.modelUsage）
     partialMessages: true, // buildCloneSessionOptions の Options.includePartialMessages
@@ -67,11 +67,46 @@ export const CLAUDE_PROVIDER: AgentProvider = {
 // A. クローン本セッション
 // ---------------------------------------------------------------------------
 
+/**
+ * クローンへ渡す `mcpServers` を組む（#325 段2）。**自作のインプロセス MCP が
+ * 必ず勝つ。**
+ *
+ * 人間の登録（`McpServerStore`）を先に並べ、自作（`MCP_SERVER_NAME`）を最後に
+ * 置く。入口（`mcp-servers.ts` の `mcpServerNameSchema`）でも同じ名前は拒んで
+ * いるが、**守りを1枚に寄せない** —— 手で書き換えた器や、将来の別の入口から
+ * 同じ名前が来ても、自分の道具（記憶・日誌・委譲）が人間の登録に差し替わる
+ * ことは無い（差し替われば、クローンは自分の記憶に触れなくなる）。
+ *
+ * **本セッションと蒸留で同じ関数を通す。** 片方だけ人間の連携が見えると、
+ * 人格の書き手（蒸留）だけが別の手を持つことになる（`buildCloneDistillOptions`
+ * の「本セッションと同じ配置にする」と同じ理由）。
+ *
+ * **いつ効くか: セッションを組むとき。** SDK はこれを `query()` の起動時に1度だけ
+ * 受け取るので、走行中のセッションに後から足した登録は届かない（次のセッション
+ * から効く）。実行環境プロファイルがクローンへ効く時機（`clone.ts` の
+ * `#childEnv()`）と同じである。走行中に差し替える口（SDK の
+ * `Query.setMcpServers`）はあるが、段2 では使っていない。
+ *
+ * **マネージャー・作業者（`buildManagerSessionOptions`）にはまだ渡していない**
+ * —— runner が名乗るたびにデーモンが降ろす配線が要り、#325 の段3 で足す。
+ */
+export function cloneMcpServers(
+  own: McpServerConfig,
+  external: Readonly<Record<string, McpServerConfig>> | undefined,
+): Record<string, McpServerConfig> {
+  return { ...(external ?? {}), [MCP_SERVER_NAME]: own };
+}
+
 export interface CloneSessionOptionsRequest {
   model: string;
   permissionMode: PermissionModeName;
   /** クローンの道具（インプロセス MCP）。呼び出し側が `mcpServerFactory` で組み立てて渡す。 */
   mcpServer: McpServerConfig;
+  /**
+   * 人間の MCP 連携の登録（`McpServerStore` から読んだもの。#325 段2）。省略・空なら
+   * 自作だけ。組み方は `cloneMcpServers`。
+   */
+  externalMcpServers?: Readonly<Record<string, McpServerConfig>>;
   systemPrompt: string;
   env: NodeJS.ProcessEnv;
   cwd?: string;
@@ -90,6 +125,7 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
     model,
     permissionMode,
     mcpServer,
+    externalMcpServers,
     systemPrompt,
     env,
     cwd,
@@ -127,9 +163,7 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
     // 要ると判断したなら `ask_human` に積んでから手を動かすのが、この層での
     // 権限境界の表し方である（PRD「権限境界」）。
     permissionMode,
-    mcpServers: {
-      [MCP_SERVER_NAME]: mcpServer,
-    },
+    mcpServers: cloneMcpServers(mcpServer, externalMcpServers),
     systemPrompt,
     // **人間が使っているのと同じ設定・同じ `.mcp.json` を読む。** ここを `[]` に
     // すると、人間が Claude Code で使っている MCP 連携がクローンからは1つも
@@ -199,6 +233,8 @@ export interface CloneDistillOptionsRequest {
   model: string;
   permissionMode: PermissionModeName;
   mcpServer: McpServerConfig;
+  /** 本セッションと同じもの（`CloneSessionOptionsRequest.externalMcpServers`）。 */
+  externalMcpServers?: Readonly<Record<string, McpServerConfig>>;
   systemPrompt: string;
   env: NodeJS.ProcessEnv;
   cwd?: string;
@@ -213,6 +249,7 @@ export function buildCloneDistillOptions(request: CloneDistillOptionsRequest): O
     model,
     permissionMode,
     mcpServer,
+    externalMcpServers,
     systemPrompt,
     env,
     cwd,
@@ -227,9 +264,7 @@ export function buildCloneDistillOptions(request: CloneDistillOptionsRequest): O
     // まったく同じ理由）。理由は `buildCloneSessionOptions` 側に書いてある。
     allowedTools: CLONE_ALLOWED_TOOLS,
     permissionMode,
-    mcpServers: {
-      [MCP_SERVER_NAME]: mcpServer,
-    },
+    mcpServers: cloneMcpServers(mcpServer, externalMcpServers),
     systemPrompt,
     settingSources: ['user', 'project', 'local'],
     // 蒸留のターンも同じものを引ける（本セッションと道具を揃えてある）。

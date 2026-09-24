@@ -3,6 +3,7 @@ import { open, readFile } from 'node:fs/promises';
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type {
+  McpServerConfig,
   Options,
   PostToolUseFailureHookInput,
   PostToolUseHookInput,
@@ -8769,6 +8770,35 @@ class Clone implements CloneHost {
     this.#reader = this.#read(q);
   }
 
+  /**
+   * 人間の MCP 連携の登録を読む（#325 段2）。**本セッションを組むときと、蒸留を
+   * 起こすたびに呼ぶ** ⟹ 登録の差し替えは「次のセッション／次の蒸留」から効く
+   * （`claude-provider.ts` の `cloneMcpServers` の doc）。
+   *
+   * **読めなくてもセッションは起こす。** 登録は人間が手で書き換えられる器に在る
+   * ので（`FsMcpServerStore` の doc）、壊れた1ファイルでクローンが丸ごと起きなく
+   * なる形にはしない —— 外部の連携なしで起き、**そのことを日誌に残す**（黙って
+   * 空で起きると「登録したのに0本」が原因の出ない形で起きる）。理由の文言には
+   * 値を載せない（`parseMcpServers` と `FsMcpServerStore#read` が名前と欄の
+   * 位置しか出さない）。
+   */
+  async #externalMcpServers(): Promise<Record<string, McpServerConfig>> {
+    try {
+      return (await this.#stores.mcpServers.read())?.mcpServers ?? {};
+    } catch (error) {
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text:
+          `${EXCHANGE_KIND_FAILURE_PREFIX}MCP サーバの登録が読めなかったので、人間の MCP 連携なしで` +
+          `このセッションを起こした（理由: ${reasonOf(error)}）。` +
+          '登録を直すには人間に PUT /mcp-servers で置き直してもらう。',
+      });
+      return {};
+    }
+  }
+
   async #buildOptions(resume: string | null): Promise<Options> {
     const documents = await this.#stores.persona.documents();
     const memory = renderMemoryDocuments(documents);
@@ -8797,6 +8827,7 @@ class Clone implements CloneHost {
       model: this.#model,
       permissionMode: this.#permissionMode,
       mcpServer: this.#mcpServerFactory(this.#toolContext()),
+      externalMcpServers: await this.#externalMcpServers(),
       systemPrompt,
       env: this.#childEnv(),
       ...(this.#cwd === undefined ? {} : { cwd: this.#cwd }),
@@ -9628,6 +9659,9 @@ class Clone implements CloneHost {
       transcriptTail,
     ].join('\n');
 
+    // **蒸留のたびに読み直す**（`#externalMcpServers` の doc）。本セッションと同じ
+    // 人間の連携を渡す——片方だけに見えると、人格の書き手だけが別の手を持つ。
+    const externalMcpServers = await this.#externalMcpServers();
     const side = this.#queryFn({
       prompt,
       options: buildCloneDistillOptions({
@@ -9667,6 +9701,7 @@ class Clone implements CloneHost {
           // 関数は渡すが常に `undefined` を返す。
           conversationId: () => undefined,
         }),
+        externalMcpServers,
         systemPrompt: buildCloneSystemPrompt({
           memory,
           ...(this.#self === undefined ? {} : { self: this.#self }),

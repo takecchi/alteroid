@@ -65,6 +65,10 @@
       "description": "セッション生ログ（可観測性の最下段）"
     },
     {
+      "name": "mcp-servers",
+      "description": "人間の MCP 連携の登録（.mcp.json 相当。#325）。記憶ストアに置き、クローンのセッションへ SDK の mcpServers として渡す。env / headers に鍵が入りうる"
+    },
+    {
       "name": "auth",
       "description": "ログイン（誰がこの API を叩いているか）。PRD「権限境界」（クローンが記憶を根拠に何を人間へ確認するか）とは別の層で、持つのは許可の2値だけである"
     },
@@ -8896,6 +8900,353 @@
                   }
                 },
                 "required": ["script"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp-servers": {
+      "get": {
+        "operationId": "getMcpServers",
+        "tags": ["mcp-servers"],
+        "summary": "MCP サーバの登録（.mcp.json 相当）を読む",
+        "description": "人間の MCP 連携の登録を記憶ストアから返す。クローンの本セッションと蒸留に（次のセッションから）効く。マネージャー・作業者へはまだ降ろしていない（#325 段3）。",
+        "responses": {
+          "200": {
+            "description": "登録そのもの（値を含む）。置かれていなければ空の `mcpServers`。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "mcpServers": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                      },
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "const": "stdio"
+                              },
+                              "command": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "args": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "env": {
+                                "type": "object",
+                                "propertyNames": {
+                                  "type": "string"
+                                },
+                                "additionalProperties": {
+                                  "type": "string"
+                                }
+                              },
+                              "timeout": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "alwaysLoad": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": ["command"],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "const": "http"
+                              },
+                              "url": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "headers": {
+                                "type": "object",
+                                "propertyNames": {
+                                  "type": "string"
+                                },
+                                "additionalProperties": {
+                                  "type": "string"
+                                }
+                              },
+                              "timeout": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "alwaysLoad": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": ["type", "url"],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "const": "sse"
+                              },
+                              "url": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "headers": {
+                                "type": "object",
+                                "propertyNames": {
+                                  "type": "string"
+                                },
+                                "additionalProperties": {
+                                  "type": "string"
+                                }
+                              },
+                              "timeout": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "alwaysLoad": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": ["type", "url"],
+                            "additionalProperties": false
+                          }
+                        ]
+                      }
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["mcpServers"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "実行環境の持ち主として宣言されたアカウントではない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "putMcpServers",
+        "tags": ["mcp-servers"],
+        "summary": "MCP サーバの登録を差し替える",
+        "description": "`.mcp.json` をそのまま貼れる形（`{ \"mcpServers\": { … } }`）。置く前に形を検査し、通らなければ保存しない（前のものが残る）。「alteroid」は alteroid 自身の MCP サーバの名前なので使えない。",
+        "responses": {
+          "200": {
+            "description": "差し替えた後の登録の名前（値は返さない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    },
+                    "appliesFrom": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["names", "updatedAt", "appliesFrom"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "形が不正（保存していない）。**送られてきた値は応答に載せない**（どの欄が不正かだけを返す）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "実行環境の持ち主として宣言されたアカウントではない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "mcpServers": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                    },
+                    "additionalProperties": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "stdio"
+                            },
+                            "command": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "args": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "env": {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {
+                                "type": "string"
+                              }
+                            },
+                            "timeout": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "alwaysLoad": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["command"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "http"
+                            },
+                            "url": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "headers": {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {
+                                "type": "string"
+                              }
+                            },
+                            "timeout": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "alwaysLoad": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["type", "url"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "sse"
+                            },
+                            "url": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "headers": {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {
+                                "type": "string"
+                              }
+                            },
+                            "timeout": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "alwaysLoad": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["type", "url"],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  }
+                },
+                "required": ["mcpServers"],
+                "additionalProperties": false
               }
             }
           }

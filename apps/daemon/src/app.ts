@@ -20,6 +20,8 @@ import type {
   TokenPoolService,
 } from '@alteroid/core';
 import {
+  MCP_SERVER_NAME,
+  mcpServerNames,
   RESERVED_SCHEDULE_KINDS,
   ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS,
   ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT,
@@ -154,6 +156,9 @@ import {
   practiceReadResponseSchema,
   practiceVersionListResponseSchema,
   practiceVersionReadResponseSchema,
+  mcpServersResponseSchema,
+  mcpServersUpdateRequestSchema,
+  mcpServersUpdateResponseSchema,
   profileErrorResponseSchema,
   profileResponseSchema,
   profileUpdateRequestSchema,
@@ -4557,6 +4562,137 @@ export function createApp(deps: AppDeps) {
               : { sha256: result.sha256, bytes: result.bytes as number }),
             clone: result.clone,
             runners: result.runners,
+          }),
+        );
+      },
+    )
+
+    // --- 人間の MCP 連携の登録（/mcp-servers。#325 段1） ----------------------
+
+    /**
+     * 人間の MCP 連携の登録（`.mcp.json` の `mcpServers` と同じ形）を読む。
+     *
+     * **なぜ口が要るか。** Railway には volume が無く、`.mcp.json` をファイルで
+     * 置いても器と一緒に消える（#325 本文）。⟹ 記憶ストアへ置き、SDK の
+     * `Options.mcpServers` で渡す（`packages/core/src/mcp-servers.ts` の doc）。
+     * 置き場が器の外にある以上、人間が置く口がここに要る。
+     *
+     * **宣言済み owner だけ**（`requireOwner`。`PUT /credentials` と同じ強さ）。
+     * 登録の `env` / `headers` には鍵が丸ごと入りうるので、`GET` も `PUT` と同じ
+     * 門にする（読み側が緩ければ書き側を締めても意味が無い —— `/profile` と同じ
+     * 理由）。
+     *
+     * **⚠️ `/profile`（`requireOperator`）より一段緩い門を選んでいる。** #325 の
+     * 2026-09-24 のコメント（段の計画）が `requireOwner` を指定しているのに従った。
+     * 違いは「Web UI にログインした、持ち主として宣言されたアカウント」を通すか
+     * どうかで、`/profile` はそこも通さない（`auth.test.ts` の ④）。**stdio の登録は
+     * クローンの SDK 子プロセスが起こすコマンドであり、クローンの env（記憶ストアの
+     * 鍵を含む）を継承する** —— つまりここは「次のセッションで任意のコマンドを
+     * 走らせる」口でもある。`PUT /credentials`（同じく owner）も `NODE_OPTIONS` の
+     * ような名前でクローンの env へ届くので、強さとしては同じ段に置いた。**門を
+     * `requireOperator` へ締めるかどうかは人間の判断である**（締めるなら
+     * `scripts/require-operator-routes.test.ts` の一覧を付け替える）。
+     */
+    .get(
+      '/mcp-servers',
+      describeRoute({
+        tags: ['mcp-servers'],
+        summary: 'MCP サーバの登録（.mcp.json 相当）を読む',
+        description:
+          '人間の MCP 連携の登録を記憶ストアから返す。クローンの本セッションと蒸留に' +
+          '（次のセッションから）効く。マネージャー・作業者へはまだ降ろしていない（#325 段3）。',
+        responses: {
+          200: {
+            description: '登録そのもの（値を含む）。置かれていなければ空の `mcpServers`。',
+            content: { 'application/json': { schema: resolver(mcpServersResponseSchema) } },
+          },
+          403: {
+            description: '実行環境の持ち主として宣言されたアカウントではない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      requireOwner,
+      async (c) => {
+        const stored = await deps.stores.mcpServers.read();
+        if (stored === null) return c.json(mcpServersResponseSchema.parse({ mcpServers: {} }));
+        return c.json(mcpServersResponseSchema.parse(stored));
+      },
+    )
+
+    /**
+     * 登録を差し替える（全文置換。空の `mcpServers` は「登録を外す」）。
+     *
+     * **いつ効くか: クローンの次のセッションから。** SDK の `mcpServers` は
+     * セッションを組むとき（`clone.ts` の `#buildOptions`）に1度だけ渡るので、
+     * 走行中のセッションには届かない —— 実行環境プロファイルがクローンへ効く
+     * 時機と同じである（`#childEnv()` もセッションを組むときに1度だけ読む）。
+     * 蒸留のサイドクエリは起こすたびに読み直すので、次の蒸留から効く。
+     *
+     * **日誌には名前だけを書く**（値には鍵が入りうる）。人間が明示的に置いた
+     * 操作でも、何がいつ変わったかを可観測性の外に置かない（`POST /reset` と同じ）。
+     *
+     * 門の選び方は `GET /mcp-servers` の doc。
+     */
+    .put(
+      '/mcp-servers',
+      describeRoute({
+        tags: ['mcp-servers'],
+        summary: 'MCP サーバの登録を差し替える',
+        description:
+          '`.mcp.json` をそのまま貼れる形（`{ "mcpServers": { … } }`）。置く前に形を' +
+          '検査し、通らなければ保存しない（前のものが残る）。' +
+          `「${MCP_SERVER_NAME}」は alteroid 自身の MCP サーバの名前なので使えない。`,
+        responses: {
+          200: {
+            description: '差し替えた後の登録の名前（値は返さない）。',
+            content: {
+              'application/json': { schema: resolver(mcpServersUpdateResponseSchema) },
+            },
+          },
+          400: {
+            description:
+              '形が不正（保存していない）。**送られてきた値は応答に載せない**' +
+              '（どの欄が不正かだけを返す）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          403: {
+            description: '実行環境の持ち主として宣言されたアカウントではない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      requireOwner,
+      /**
+       * **既定の 400 を使わない**（`PUT /profile` の同名の hook と同じ理由）。
+       * 既定は本文をそのまま `data` に載せて返すので、欄の綴りを1つ間違えただけで
+       * `env` / `headers` の鍵が応答へ載る。返すのは不正な欄の位置だけである。
+       */
+      jsonBody(mcpServersUpdateRequestSchema, (where) => ({
+        error:
+          'MCP サーバの登録の形が不正（保存していない）' + (where === '' ? '' : `: ${where}`),
+      })),
+      async (c) => {
+        const previous = await deps.stores.mcpServers.read();
+        const stored = await deps.stores.mcpServers.write(c.req.valid('json').mcpServers);
+        const names = mcpServerNames(stored.mcpServers);
+        const before = previous === null ? [] : mcpServerNames(previous.mcpServers);
+        await deps.stores.journal.append({
+          type: 'decision',
+          decision:
+            names.length === 0
+              ? 'MCP サーバの登録を外した'
+              : `MCP サーバの登録を差し替えた（${names.join(', ')}）`,
+          grounds:
+            `${describeActor(c.get('principal'))}（PUT /mcp-servers）。` +
+            `前の登録: ${before.length === 0 ? 'なし' : before.join(', ')}。` +
+            '値は書かない（鍵が入りうる）。クローンの次のセッションから効く。',
+        });
+        return c.json(
+          mcpServersUpdateResponseSchema.parse({
+            names,
+            updatedAt: stored.updatedAt,
+            appliesFrom: 'クローンの次のセッションから（マネージャー・作業者へは未配布。#325 段3）',
           }),
         );
       },
