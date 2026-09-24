@@ -1821,10 +1821,7 @@ describe('PgPermissionGrantStore（issue #863）', () => {
       grantedAt: '2026-01-01T00:00:00.000Z',
     });
 
-    expect((await stores.permissionGrants.list()).map((g) => g.id)).toEqual([
-      'grant-1',
-      'grant-2',
-    ]);
+    expect((await stores.permissionGrants.list()).map((g) => g.id)).toEqual(['grant-1', 'grant-2']);
   });
 
   it('同じ db ハンドルから作り直しても読み戻せる（永続化）', async () => {

@@ -76,9 +76,7 @@ describe('matchPermissionRule', () => {
   });
 
   it('コマンド側が区切り・展開文字を持てば、規則が何であれ一致しない', () => {
-    expect(
-      matchPermissionRule('Bash(gh release edit:*)', 'gh release edit; rm -rf /'),
-    ).toBe(false);
+    expect(matchPermissionRule('Bash(gh release edit:*)', 'gh release edit; rm -rf /')).toBe(false);
     expect(matchPermissionRule('Bash(gh release edit:*)', 'gh release edit && rm -rf /')).toBe(
       false,
     );

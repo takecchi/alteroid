@@ -5423,9 +5423,7 @@ export function createCloneTools(context: ToolContext) {
         '積むだけで人間の応答は待たない。人間が定型文でちょうど答えなければ許可は記録されない。',
       ].join(' '),
       {
-        rule: z
-          .string()
-          .describe('Bash(<完全な文字列>) または Bash(<前方一致>:*) の形の規則'),
+        rule: z.string().describe('Bash(<完全な文字列>) または Bash(<前方一致>:*) の形の規則'),
         allows: z
           .array(z.string())
           .describe('この規則が通すべき具体的なコマンド例（1件以上、全部が規則に一致すること）'),
@@ -5437,7 +5435,9 @@ export function createCloneTools(context: ToolContext) {
       async ({ rule, allows, denies, reason }) => {
         const validation = validatePermissionRequest({ rule, allows, denies });
         if (!validation.ok) {
-          return text(`request_permission を拒否した（キューに積んでいない）: ${validation.reason}`);
+          return text(
+            `request_permission を拒否した（キューに積んでいない）: ${validation.reason}`,
+          );
         }
 
         const conversationId = getConversationId();

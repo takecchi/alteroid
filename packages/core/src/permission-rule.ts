@@ -61,8 +61,7 @@ export interface ParsedPermissionRule {
 }
 
 export type PermissionRuleParseResult =
-  | ({ ok: true } & ParsedPermissionRule)
-  | { ok: false; reason: string };
+  ({ ok: true } & ParsedPermissionRule) | { ok: false; reason: string };
 
 const RULE_WRAPPER = /^Bash\((.+)\)$/s;
 const PREFIX_SUFFIX = ':*';

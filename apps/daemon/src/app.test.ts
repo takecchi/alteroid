@@ -7538,7 +7538,10 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
       authedApp: ReturnType<typeof createApp>,
     ): Promise<{ token: string; accountId: string }> {
       const started = (await (
-        await authedApp.request('/auth/login', { ...post, body: JSON.stringify({ provider: 'fake' }) })
+        await authedApp.request('/auth/login', {
+          ...post,
+          body: JSON.stringify({ provider: 'fake' }),
+        })
       ).json()) as { requestId: string; authorizationUrl: string; claimSecret: string };
       const state = new URL(started.authorizationUrl).searchParams.get('state') ?? '';
       await authedApp.request(`/auth/fake/callback?code=any&state=${encodeURIComponent(state)}`);
