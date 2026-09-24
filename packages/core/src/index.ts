@@ -858,6 +858,20 @@ export {
   type TokenSpreadResult,
   type TokenVerdictOrigin,
 } from './token-rotator.js';
+/**
+ * 日誌の「同じ合図の連なり」を書く時点で畳む窓（issue #1311）。**`apps/daemon`
+ * が `token_rotation` の畳みにそのまま使う**——`manager.ts` の rate_limit 用
+ * （`#rateLimitJournalFoldFor`）と同じ実体を、経路ごとに別インスタンスで使う。
+ */
+export {
+  JOURNAL_FOLD_IDLE_GAP_MS,
+  JOURNAL_FOLD_MAX_SPAN_MS,
+  JOURNAL_FOLD_MAX_SUPPRESSED,
+  JournalFoldWindow,
+  foldedRunText,
+  type JournalFoldRun,
+  type JournalFoldVerdict,
+} from './journal-fold.js';
 export {
   assertNeverRunnerLegStatus,
   createRunnerRegistry,

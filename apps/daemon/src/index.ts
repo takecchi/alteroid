@@ -55,6 +55,7 @@ import {
 
 import { createApp, parseAllowedOrigins } from './app.js';
 import { startTokenRotationWatch, type TokenRotationWatch } from './token-watch.js';
+import { TokenRotationJournalFold } from './token-rotation-journal-fold.js';
 import { startUsagePolling } from './usage-poller.js';
 import { startManagerPolling } from './manager-poller.js';
 import { readArchiveFoldConfig, startArchiveFolding } from './archive-folder.js';
@@ -1494,6 +1495,17 @@ export async function main(): Promise<void> {
   const cloneWakeGate = createCloneWakeGate();
 
   /**
+   * **`token_rotation` の日誌行を畳む窓**（issue #1311 段B。
+   * {@link TokenRotationJournalFold}）。
+   *
+   * デーモンの寿命ぶん1つだけ持つ——`token-rotation-journal-fold.ts` の doc の
+   * とおり、書く経路（`settleTokenOutcome`）はデーモンに1本しか無いので
+   * `cloneWakeGate` と同じく単一のインスタンスでよい。**止まるときに
+   * `flush()` を呼ぶ**（下の `shutdown()`）。
+   */
+  const tokenRotationJournalFold = new TokenRotationJournalFold();
+
+  /**
    * アカウント全体の利用状況（claude.ai 側の値）。
    *
    * **使い捨ての probe で読む。実セッションに相乗りしない** — 実測で、ターンを
@@ -1979,9 +1991,29 @@ export async function main(): Promise<void> {
     if (entry === null) return;
     // **`event` から行き先を決める**（Issue #420 の残件）——`tokenRotationStream` に
     // 分類を1箇所へ閉じてある。
+    //
+    // **畳み（issue #1311 段B）の外で、常に書く。** stdout の1行と、この上の
+    // 副作用（`recycleSessionForToken` / `cloneWakeGate.observeUnusable` /
+    // `reopened` の wake）は畳みの有無と無関係——畳むのは下の日誌への追記だけ
+    // である（`token-rotation-journal-fold.ts` の doc）。
     tokenRotationStream(entry.event).write(
       `alteroidd: ${entry.text.split('\n')[0] ?? entry.text}\n`,
     );
+
+    // **同じ本文の連なりは日誌へ1行にまとめる**（issue #1311 段B。
+    // {@link TokenRotationJournalFold}）。`summary` が在れば、畳んだ連なりの
+    // 要約を**先に**書く——日誌は時系列で読まれるので、要約より後に次の1件目が
+    // 来る必要がある。
+    const folded = tokenRotationJournalFold.observe(entry, Date.now());
+    if (folded.summary !== undefined) {
+      // **日誌への追記が落ちても回した事実は消えない**（正本は記憶ストアの
+      // `active` の側に在る）。要約が落ちても、畳んだ連なりの1件目は既に
+      // 書かれている——失うのは畳んだ件数の内訳だけである。
+      await stores.journal.append(folded.summary).catch((error: unknown) => {
+        noteDroppedRecord('認証トークンの切替（畳んだ要約）', 'journal', error);
+      });
+    }
+    if (!folded.write) return;
     // **日誌への追記が落ちても回した事実は消えない**（正本は記憶ストアの
     // `active` の側に在る）。ここで投げ直すと、回せたのに「回し手が落ちた」
     // として報告されることになる。
@@ -2222,6 +2254,16 @@ export async function main(): Promise<void> {
     // **見張りも畳む。** 止めたはずのデーモンが背景で probe を焼き続けない
     // （`usagePoller` と同じ理由。`token-watch.ts`）。
     tokenWatch?.stop();
+    // **`token_rotation` の畳み残しを吐き出す**（issue #1311 段B。
+    // `TokenRotationJournalFold.flush` の doc）。器が落ちた場合に失うのは
+    // 窓の中の件数だけで、連なりの1件目は既に書いてある——ここは「呼べるなら
+    // 呼ぶ」の実行であって、無くても壊れない。
+    const foldedAtShutdown = tokenRotationJournalFold.flush();
+    if (foldedAtShutdown !== undefined) {
+      await stores.journal.append(foldedAtShutdown).catch((error: unknown) => {
+        noteDroppedRecord('認証トークンの切替（畳んだ要約、停止時）', 'journal', error);
+      });
+    }
     server.close();
     // 名簿の挑み直しも畳む（止めたはずのデーモンが背景で runner を叩き続けない）。
     await runners.stop().catch(() => undefined);
