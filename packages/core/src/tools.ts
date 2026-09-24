@@ -86,6 +86,7 @@ import {
 } from './archive-prune.js';
 import type { ArchiveRemoveManyFilter } from './archive-prune.js';
 import { describeDenialFollowUp, guardArchiveRemoval } from './manager.js';
+import { describeTokenDiff } from './token-diff.js';
 import type {
   ManagerDenial,
   ManagerPool,
@@ -3827,8 +3828,15 @@ export function createCloneTools(context: ToolContext) {
           seenBefore(slug, before),
         );
         const growth = memorySessionGrowthNote(memoryAfter, context.runtime?.());
+        // 本文の数字・識別子の増減（#1306）。無ければ1文字も足さない。
+        const tokenDiff = describeTokenDiff(
+          before === null ? null : before.content,
+          written.content,
+        );
         return text(
-          `記憶 ${slug} を更新した。\n\n${diff}\n\n${floor}\n\n${reinjection}\n\n${growth}`,
+          `記憶 ${slug} を更新した。\n\n${diff}` +
+            (tokenDiff === null ? '' : `\n${tokenDiff}`) +
+            `\n\n${floor}\n\n${reinjection}\n\n${growth}`,
         );
       },
     ),
@@ -7871,7 +7879,10 @@ export function createCloneTools(context: ToolContext) {
         return text(
           `やり方 ${slug} を${before === null ? '新しく作った' : '書き直した'}` +
             `（${String(written.chars)} 文字。前の版は practice_history slug=${slug} で読める）。` +
-            'practice_list で一覧に出る。',
+            'practice_list で一覧に出る。' +
+            ((note) => (note === null ? '' : `\n${note}`))(
+              describeTokenDiff(before === null ? null : before.content, content),
+            ),
         );
       },
     ),

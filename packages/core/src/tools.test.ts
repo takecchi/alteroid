@@ -520,6 +520,30 @@ describe('クローンの道具', () => {
     expect(CLONE_ALLOWED_TOOLS).toContain('mcp__alteroid__memory_write');
   });
 
+  it('memory_write は本文の数字・識別子の増減を応答に添え、増減が無ければ何も足さない（#1306）', async () => {
+    const h = harness();
+    await h.call('memory_write', {
+      slug: 'ops',
+      content: '# 運用\n\n必須チェックは 4本: `ci` / `pr-title-type`\n',
+      summary: '初版',
+    });
+
+    const changed = await h.call('memory_write', {
+      slug: 'ops',
+      content: '# 運用\n\n必須チェックは 3本: `ci`\n',
+      summary: '門を1本外した',
+    });
+    expect(changed).toContain('本文の数字・識別子の増減（#1306）');
+    expect(changed).toContain('`pr-title-type`');
+
+    const same = await h.call('memory_write', {
+      slug: 'ops',
+      content: '# 運用\n\n必須チェックは 3本: `ci`（書き直した）\n',
+      summary: '言い回しだけ',
+    });
+    expect(same).not.toContain('本文の数字・識別子の増減');
+  });
+
   it('memory_write は記憶を更新し、日誌に memory_update を残す', async () => {
     const h = harness();
 
