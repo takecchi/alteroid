@@ -393,6 +393,22 @@ export {
   type JournalScanResult,
 } from './journal-scan.js';
 /**
+ * 承認の答えとその後の行動を対で読む口（issue #847 の案B）。デーモンの
+ * `GET /approvals/:id/trace` と CLI が、クローンの `approval_trace` と同じ
+ * 関数を通るために公開する（`approval-trace.ts` の doc）。
+ */
+export {
+  APPROVAL_TRACE_ACTION_LIMIT,
+  APPROVAL_TRACE_SCAN_LIMIT,
+  describeTraceAction,
+  renderApprovalTrace,
+  stampAnsweredApproval,
+  traceApproval,
+  type ApprovalTrace,
+  type ApprovalTraceRenderOptions,
+  type ApprovalTraceState,
+} from './approval-trace.js';
+/**
  * 蒸留が間に合わなかった区間（＝記憶へ移らなかった区間）の検出（issue #564 の (b)）。
  * **「蒸留を始めた」ではなく「蒸留が成功で終わった」記録で数える** — 開始で数えると、
  * 始めたが完了しなかった回（まさに検出したい形）が「蒸留した」として落ちる

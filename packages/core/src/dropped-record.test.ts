@@ -1754,6 +1754,9 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       // `never` の理由だが、`approvalId` は `journalEntrySchema` の `exchange`
       // だけが持つ欄で、対になる欄が別に無い。
       approvalId: { emit: 'tag', token: 'approvalId' },
+      // issue #847 の案B。`approvalId` と同じ判定基準（承認待ちキューの項目 id で、
+      // 自由文ではない）なので tag()。
+      answeredApprovalId: { emit: 'tag', token: 'answeredApprovalId' },
     },
     decision: {
       decision: { emit: 'size', token: 'decision' },
@@ -1772,6 +1775,9 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
           '関数は入れ子の中へ踏み込まない第1階層までの一般原則（冒頭 doc）を' +
           "適用し、出す設計は別途 `case 'decision'` 側で決める。",
       },
+      // issue #847 の案B。`approvalId` と同じ判定基準（承認待ちキューの項目 id で、
+      // 自由文ではない）なので tag()。
+      answeredApprovalId: { emit: 'tag', token: 'answeredApprovalId' },
     },
     escalation: {
       question: { emit: 'size', token: 'question' },
@@ -1809,6 +1815,9 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       outcome: { emit: 'tag', token: 'outcome' },
       // `error`（Issue #924）は SDK・道具・MCP サーバが書く自由文なので size()。
       error: { emit: 'size', token: 'error' },
+      // issue #847 の案B。`approvalId` と同じ判定基準（承認待ちキューの項目 id で、
+      // 自由文ではない）なので tag()。
+      answeredApprovalId: { emit: 'tag', token: 'answeredApprovalId' },
     },
     memory_update: {
       slug: { emit: 'tag', token: 'slug' },
@@ -1827,6 +1836,9 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       // journal.append が失敗した後の経路なので、検査を通らない値が来ても
       // 構造上おかしくない（Issue #823 の本丸）。
       summary: { emit: 'size-unnamed', poisonableTagField: 'slug' },
+      // issue #847 の案B。`approvalId` と同じ判定基準（承認待ちキューの項目 id で、
+      // 自由文ではない）なので tag()。
+      answeredApprovalId: { emit: 'tag', token: 'answeredApprovalId' },
     },
     daily_report: {
       // date も z.string()（実行時の書式検査は無い）で TypeScript の型は
@@ -2142,6 +2154,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       conversationId: SECRET,
       supersedes: SECRET,
       approvalId: 'ap-1',
+      answeredApprovalId: 'ap-2',
     },
     decision: {
       type: 'decision',
@@ -2157,6 +2170,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
         // 仕事の種類（#1308）は自由文なので、落とした跡へ漏れないことをここで測る。
         workKind: SECRET,
       },
+      answeredApprovalId: 'ap-2',
     },
     escalation: {
       type: 'escalation',
@@ -2175,6 +2189,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       input: { command: SECRET },
       outcome: 'failed',
       error: SECRET,
+      answeredApprovalId: 'ap-2',
     },
     memory_update: {
       type: 'memory_update',
@@ -2184,6 +2199,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       bytesBefore: 10,
       bytesAfter: 20,
       summary: SECRET,
+      answeredApprovalId: 'ap-2',
     },
     daily_report: {
       type: 'daily_report',

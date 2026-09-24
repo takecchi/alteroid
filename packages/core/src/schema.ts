@@ -1044,6 +1044,29 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * 構造化するかどうかはこの Issue の項目1の範囲外）。
      */
     approvalId: z.string().optional(),
+    /**
+     * このターンが承認待ち（`ask_human`）への回答（`human_answer`）から起きた
+     * ものであれば、その承認の id（issue #847 の案B）。**答えと、その後にクローンが
+     * 取った行動を対で読むための印である。**
+     *
+     * **上の `approvalId` とは別の欄である。** あちらは「人間の会話へ返した
+     * outbound がどの承認への返答か」だけを言い、`with: 'self'` には意図して
+     * 立てない（その doc）。こちらは会話の有無を問わず、**答えのターンの中で
+     * クローン自身が書いた行**（`decision` / `memory_update` / 自分の
+     * `tool_use` / outbound の `exchange`）と、そのターンの入口の行
+     * （`ターンの入力: human_answer …` の inbound）に立つ。同じ欄を
+     * `decision` / `memory_update` / `tool_use` にも置いてある（意味は同じ）。
+     *
+     * **一般化した「基準」はここに書かない**（issue #847 の受け入れ基準）。
+     * 残すのは「どの答えの後に、何をしたか」の対だけで、そこから何を学ぶかは
+     * 人間とクローンの会話の側が決める。
+     *
+     * **optional である（後方互換）。** この欄が入る前の行には無い。⟹ 古い答えで
+     * 対が0件なのは「行動が無い」ではなく「記録していない」である。読む側
+     * （`approval-trace.ts` の `traceApproval`）は、ターンの入口の行にこの欄が
+     * 在るかどうかで2つを分ける。
+     */
+    answeredApprovalId: z.string().optional(),
   }),
   z.object({
     type: z.literal('decision'),
@@ -1128,6 +1151,12 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
         workKind: z.string().optional(),
       })
       .optional(),
+    /**
+     * 承認への回答（`human_answer`）から起きたターンの中で書いた行なら、その
+     * 承認の id（issue #847 の案B）。意味と読み方は `exchange.answeredApprovalId`
+     * の doc に在る——ここに写さない。
+     */
+    answeredApprovalId: z.string().optional(),
   }),
   /**
    * 認証トークンのプールが回った / 回らなかった（Issue #393）。
@@ -1475,6 +1504,16 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * `TOOL_USE_ERROR_EXCERPT`）で切り詰める。
      */
     error: z.string().optional(),
+    /**
+     * 承認への回答（`human_answer`）から起きたターンの中で書いた行なら、その
+     * 承認の id（issue #847 の案B）。意味と読み方は `exchange.answeredApprovalId`
+     * の doc に在る——ここに写さない。
+     *
+     * **立つのは本セッションの actor の行だけである**（`clone.ts` の
+     * `#journalToolUse`）。蒸留のサイドクエリの道具（`clone-distill`）は
+     * 答えのターンと並行して走りうるので立てない。
+     */
+    answeredApprovalId: z.string().optional(),
   }),
   z.object({
     type: z.literal('memory_update'),
@@ -1596,6 +1635,12 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      */
     bytesAfter: z.number().int().nonnegative().optional(),
     summary: z.string(),
+    /**
+     * 承認への回答（`human_answer`）から起きたターンの中で書いた行なら、その
+     * 承認の id（issue #847 の案B）。意味と読み方は `exchange.answeredApprovalId`
+     * の doc に在る——ここに写さない。
+     */
+    answeredApprovalId: z.string().optional(),
   }),
   z.object({
     type: z.literal('daily_report'),

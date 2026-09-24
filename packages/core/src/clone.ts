@@ -41,6 +41,7 @@ import {
   describeDistillGap,
   distillSucceededEntry,
 } from './distill-gap.js';
+import { stampAnsweredApproval, stampingJournal } from './approval-trace.js';
 import { excerptLine } from './excerpt.js';
 import {
   EXCHANGE_KIND_DECISION_PREFIX,
@@ -7666,12 +7667,20 @@ class Clone implements CloneHost {
           'この回答に沿って続きを進めよ。今後同じ判断を自分でできるよう、必要なら記憶へ残すこと。';
         // **全文を残す**（#243）。回答そのものは承認待ちの器にも在るが、質問・回答・
         // 宛先を1本にしたこの形＝**このターンへ入ったもの**は、ここにしか無い。
+        // **入口の行にも印を立てる（issue #847 の案B）。** 答えと行動を対で読む
+        // 口（`approval-trace.ts` の `traceApproval`）の錨で、印の有無で
+        // 「この記録を始める前のターン」と「記録が動いていない」を分ける。本文の
+        // `approvalId=<id>` は64字で切られうる（`turn-input.ts` の `TAG_LIMIT`）ので、
+        // 錨は本文ではなく構造化した欄に持たせる。
+        const turnStart = turnInputEntry({
+          type: 'human_answer',
+          approvalId: event.approvalId,
+          text: answerPrompt,
+        });
         await this.#journal(
-          turnInputEntry({
-            type: 'human_answer',
-            approvalId: event.approvalId,
-            text: answerPrompt,
-          }),
+          turnStart.type === 'exchange'
+            ? { ...turnStart, answeredApprovalId: event.approvalId }
+            : turnStart,
         );
         // **`#runInternal`（常に `null`）ではなく `#runTurn` を直接呼ぶ（#768）。**
         // `#conversationOf(event)` は、元の承認が会話 id を持っていればそれを
@@ -8987,7 +8996,16 @@ class Clone implements CloneHost {
    */
   #toolContext(): ToolContext {
     return {
-      stores: this.#stores,
+      // **日誌だけを包む（issue #847 の案B）。** 答えのターンの中で道具が書く
+      // `decision` / `memory_update` / outbound の `exchange` へ、その承認の id を
+      // 立てる。道具を1本ずつ直さない理由は `approval-trace.ts` の
+      // `stampingJournal` の doc。**蒸留のサイドクエリの context
+      // （`#distillFromTranscript`）には包まない**——あちらは答えのターンと
+      // 並行して走りうる。
+      stores: {
+        ...this.#stores,
+        journal: stampingJournal(this.#stores.journal, () => this.#turn?.approvalId ?? null),
+      },
       emit: (event) => this.#emit(this.#turn?.conversationId ?? null, event),
       managers: this.#managers,
       ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
@@ -9229,12 +9247,29 @@ class Clone implements CloneHost {
       await this.#journalSelfJournalingToolValidationFailure(tool, raw, mainThreadActor);
       return;
     }
-    await this.#journal({
-      type: 'tool_use',
-      actor: cloneToolActor(raw, mainThreadActor),
-      tool,
-      input: raw?.tool_input,
-    });
+    await this.#journal(
+      stampAnsweredApproval(
+        {
+          type: 'tool_use',
+          actor: cloneToolActor(raw, mainThreadActor),
+          tool,
+          input: raw?.tool_input,
+        },
+        this.#answeredApprovalFor(mainThreadActor),
+      ),
+    );
+  }
+
+  /**
+   * いま走っているターンが承認への回答から起きたものなら、その承認の id
+   * （issue #847 の案B。`approval-trace.ts` の doc）。
+   *
+   * **本セッションの actor の行だけに返す。** 蒸留のサイドクエリ
+   * （`CLONE_DISTILL_ACTOR_ID`）は答えのターンと並行して走りうる別の
+   * セッションなので、`#turn` を読むと答えと無関係な行へ印が付く。
+   */
+  #answeredApprovalFor(mainThreadActor: string): string | null {
+    return mainThreadActor === CLONE_ACTOR_ID ? (this.#turn?.approvalId ?? null) : null;
   }
 
   /**
@@ -9282,24 +9317,29 @@ class Clone implements CloneHost {
       validation.fields.length > 0 ? validation.fields.join(', ') : '（取れなかった）';
     const secretBearing = cloneToolCarriesSecrets(tool);
 
-    await this.#journal({
-      type: 'tool_use',
-      actor: cloneToolActor(raw, mainThreadActor),
-      tool,
-      outcome: 'failed',
-      ...(secretBearing
-        ? {
-            error: excerptLine(
-              `入力検証で落ちた（この道具は実行環境の秘密を運びうるため、値は日誌へ写さない。` +
-                `欠けた/不正な引数: ${fieldList}）`,
-              TOOL_USE_ERROR_EXCERPT,
-            ),
-          }
-        : {
-            input: raw?.tool_input,
-            error: excerptLine(validation.message, TOOL_USE_ERROR_EXCERPT),
-          }),
-    });
+    await this.#journal(
+      stampAnsweredApproval(
+        {
+          type: 'tool_use',
+          actor: cloneToolActor(raw, mainThreadActor),
+          tool,
+          outcome: 'failed',
+          ...(secretBearing
+            ? {
+                error: excerptLine(
+                  `入力検証で落ちた（この道具は実行環境の秘密を運びうるため、値は日誌へ写さない。` +
+                    `欠けた/不正な引数: ${fieldList}）`,
+                  TOOL_USE_ERROR_EXCERPT,
+                ),
+              }
+            : {
+                input: raw?.tool_input,
+                error: excerptLine(validation.message, TOOL_USE_ERROR_EXCERPT),
+              }),
+        },
+        this.#answeredApprovalFor(mainThreadActor),
+      ),
+    );
 
     if (tool === JOURNAL_WRITE_QUALIFIED_TOOL_NAME) {
       noteDroppedRecord(
@@ -9408,25 +9448,30 @@ class Clone implements CloneHost {
     // 名前が読めない扱いも成功側と揃える（`#journalToolUse` と同じ理由）。
     const tool = typeof raw?.tool_name === 'string' ? raw.tool_name : UNKNOWN_TOOL_NAME;
     if (cloneToolJournalsItself(tool)) return;
-    await this.#journal({
-      type: 'tool_use',
-      actor: cloneToolActor(raw, mainThreadActor),
-      tool,
-      input: raw?.tool_input,
-      // **`is_interrupt` が `true` のときだけ `'interrupted'`。** それ以外
-      // （`false` または欠け）は `'failed'` とする——`is_interrupt` は
-      // optional なので SDK が付けてこないことがあるが、そのときは「中断だと
-      // 分かっていない」であって「中断ではないと確定している」ではない。
-      // 欠けを第3の値にはせず、安全側（failed）に倒す
-      // （`schema.ts` の `tool_use.outcome` の doc と同じ判断）。
-      outcome: raw?.is_interrupt === true ? 'interrupted' : 'failed',
-      // `error` は無制限長の自由文なので切り詰める（`TOOL_USE_ERROR_EXCERPT`
-      // の doc）。`raw?.error` が読めない形（文字列でない）のときは欄ごと
-      // 省く——作り物の文言で埋めない。
-      ...(typeof raw?.error === 'string'
-        ? { error: excerptLine(raw.error, TOOL_USE_ERROR_EXCERPT) }
-        : {}),
-    });
+    await this.#journal(
+      stampAnsweredApproval(
+        {
+          type: 'tool_use',
+          actor: cloneToolActor(raw, mainThreadActor),
+          tool,
+          input: raw?.tool_input,
+          // **`is_interrupt` が `true` のときだけ `'interrupted'`。** それ以外
+          // （`false` または欠け）は `'failed'` とする——`is_interrupt` は
+          // optional なので SDK が付けてこないことがあるが、そのときは「中断だと
+          // 分かっていない」であって「中断ではないと確定している」ではない。
+          // 欠けを第3の値にはせず、安全側（failed）に倒す
+          // （`schema.ts` の `tool_use.outcome` の doc と同じ判断）。
+          outcome: raw?.is_interrupt === true ? 'interrupted' : 'failed',
+          // `error` は無制限長の自由文なので切り詰める（`TOOL_USE_ERROR_EXCERPT`
+          // の doc）。`raw?.error` が読めない形（文字列でない）のときは欄ごと
+          // 省く——作り物の文言で埋めない。
+          ...(typeof raw?.error === 'string'
+            ? { error: excerptLine(raw.error, TOOL_USE_ERROR_EXCERPT) }
+            : {}),
+        },
+        this.#answeredApprovalFor(mainThreadActor),
+      ),
+    );
   }
 
   /**
@@ -10507,6 +10552,9 @@ class Clone implements CloneHost {
             ...(turn.conversationId === null || turn.approvalId === null
               ? {}
               : { approvalId: turn.approvalId }),
+            // **issue #847 の案B。** 上の `approvalId` と違い、会話の有無を問わず
+            // 立てる（`schema.ts` の `exchange.answeredApprovalId` の doc）。
+            ...(turn.approvalId === null ? {} : { answeredApprovalId: turn.approvalId }),
           });
         }
 

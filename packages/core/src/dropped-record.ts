@@ -930,10 +930,21 @@ export function journalEntryShape(entry: JournalEntryInput): string {
       // （直下の `escalation`）と同じく在るときだけ足す。**
       return (
         `exchange with=${tag(entry.with)} role=${tag(entry.role)} ${size(entry.text)}` +
-        (entry.approvalId === undefined ? '' : ` approvalId=${tag(entry.approvalId)}`)
+        (entry.approvalId === undefined ? '' : ` approvalId=${tag(entry.approvalId)}`) +
+        // **`answeredApprovalId`（issue #847 の案B）も `approvalId` と同じ判定基準**
+        // ——承認待ちキューの項目 id で、こちら側（`clone.ts`）が立てる値である。
+        // `decision` / `tool_use` / `memory_update` にも同じ形で足してある。
+        (entry.answeredApprovalId === undefined
+          ? ''
+          : ` answeredApprovalId=${tag(entry.answeredApprovalId)}`)
       );
     case 'decision':
-      return `decision ${size(entry.decision, 'decision')} ${size(entry.grounds, 'grounds')}`;
+      return (
+        `decision ${size(entry.decision, 'decision')} ${size(entry.grounds, 'grounds')}` +
+        (entry.answeredApprovalId === undefined
+          ? ''
+          : ` answeredApprovalId=${tag(entry.answeredApprovalId)}`)
+      );
     case 'escalation':
       return (
         `escalation approvalId=${tag(entry.approvalId)}` +
@@ -954,13 +965,19 @@ export function journalEntryShape(entry: JournalEntryInput): string {
       return (
         `tool_use actor=${tag(entry.actor)} tool=${tag(entry.tool)}` +
         (entry.outcome === undefined ? '' : ` outcome=${tag(entry.outcome)}`) +
-        (entry.error === undefined ? '' : ` ${size(entry.error, 'error')}`)
+        (entry.error === undefined ? '' : ` ${size(entry.error, 'error')}`) +
+        (entry.answeredApprovalId === undefined
+          ? ''
+          : ` answeredApprovalId=${tag(entry.answeredApprovalId)}`)
       );
     case 'memory_update':
       return (
         `memory_update slug=${tag(entry.slug)} cause=${tag(entry.cause)}` +
         (entry.action === undefined ? '' : ` action=${tag(entry.action)}`) +
-        ` ${size(entry.summary)}`
+        ` ${size(entry.summary)}` +
+        (entry.answeredApprovalId === undefined
+          ? ''
+          : ` answeredApprovalId=${tag(entry.answeredApprovalId)}`)
       );
     // `unavailable` は自由文（「なぜ書けなかったか」）。この欄の**有無**そのもの
     // に機構上の意味がある（`schema.ts` の `daily_report.unavailable` の doc —
