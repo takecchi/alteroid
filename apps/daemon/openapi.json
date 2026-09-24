@@ -5253,6 +5253,12 @@
                                 "oauth",
                                 "unrecognized"
                               ]
+                            },
+                            "accountKeys": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
                             }
                           },
                           "required": ["state", "at", "reason"]

@@ -417,6 +417,24 @@ export const accountUsageStateSchema = z.discriminatedUnion('state', [
      * いない」という嘘の事実に化ける。
      */
     apiKeySource: accountApiKeySourceSchema.optional(),
+    /**
+     * `accountInfo()` の生の応答が**持っていた欄の名前**（値は1文字も持たない。
+     * #1397 c15-5 の切り出し #1458）。
+     *
+     * **`apiKeySource` が「取れなかった」とき、その原因を言い分けるための観測である。**
+     * 2026-09-13 の実測では `undetermined` の回に `apiKeySource` が無かったが、それが
+     * 「SDK が欄ごと返さなかった」のか「返したが許可リストの外で落ちた」のかは、
+     * 生の応答を見る手段が実装に無かったので決められなかった。**値は外へ出さない**
+     * （`GET /usage` はアクセストークンで読める面である）ので、名前の並びだけを運ぶ ——
+     * `apiKeySource` という名前が並びに無ければ前者である。
+     *
+     * - 無い（`undefined`）: `accountInfo()` が物を返さなかった（拒否・時間切れ・未実装）
+     * - `[]`: 物は返ったが欄が1つも無かった
+     *
+     * 名前は識別子の形のもの（`/^[A-Za-z_][A-Za-z0-9_]{0,63}$/`）だけを昇順で、
+     * 最大 {@link ACCOUNT_INFO_KEYS_LIMIT} 個まで載せる（形の外の名前は運ばない）。
+     */
+    accountKeys: z.array(z.string()).optional(),
   }),
 ]);
 
@@ -787,6 +805,24 @@ export function isNotLoggedIn(tokenSourceRaw: string | undefined): boolean {
  *
  * `toAccountUsage` と同じ防御的な読み方（object でなければ空扱い）にしてある。
  */
+/** {@link accountInfoKeysOf} が運ぶ名前の上限。 */
+export const ACCOUNT_INFO_KEYS_LIMIT = 32;
+
+/**
+ * `accountInfo()` の生の応答が持っていた欄の**名前だけ**を返す（#1458。値は返さない）。
+ * 物でなければ `undefined`（「応答が無かった」）。識別子の形でない名前は落とす ——
+ * 名前の位置に自由文が来る形を、外へ出る面へ運ばないため。
+ */
+export function accountInfoKeysOf(accountJson: unknown): string[] | undefined {
+  if (typeof accountJson !== 'object' || accountJson === null || Array.isArray(accountJson)) {
+    return undefined;
+  }
+  return Object.keys(accountJson)
+    .filter((key) => /^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(key))
+    .sort()
+    .slice(0, ACCOUNT_INFO_KEYS_LIMIT);
+}
+
 function rawTokenSourceOf(accountJson: unknown): string | undefined {
   const account = (
     typeof accountJson === 'object' && accountJson !== null ? accountJson : {}
@@ -920,6 +956,7 @@ export async function fetchAccountUsage(
   // **生値はここだけで持つ。** `usage`（外へ出る型）には積まない
   // （`rawTokenSourceOf` の doc）。
   const tokenSourceRaw = rawTokenSourceOf(read.account);
+  const accountKeys = accountInfoKeysOf(read.account);
 
   // **理由を1つに潰さない**（#681）。未ログイン・3P バックエンド・言い分けられない
   // の3つは、**判定（`judgeTokenCandidate`）が同じ `undecidable` でも、人間が次に
@@ -936,6 +973,9 @@ export async function fetchAccountUsage(
       reason: describeLimitsUnavailable(usage, unavailable),
       cause: unavailable,
       apiKeySource: usage.apiKeySource,
+      // **名前だけを運ぶ**（#1458）。値は `toAccountUsage` が許可リストを通した
+      // `apiKeySource` 以外、1文字も外へ出さない。
+      ...(accountKeys === undefined ? {} : { accountKeys }),
     };
   }
   if (!hasAccountUsageDetail(usage)) {

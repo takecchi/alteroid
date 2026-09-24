@@ -421,6 +421,15 @@ export function describeAccountUsage(
       // **`unavailable` でもこの欄だけは運ばれる**（#681 の設計判断。`usage` は
       // 積まない）。`plain` は通さない——`'ok'` の枝と同じ文言をそのまま出す。
       describeApiKeySource(state.apiKeySource),
+      // 生の応答が持っていた欄の名前（#1458。値は出さない）。`apiKeySource` が
+      // 取れなかった原因——SDK が欄ごと返さなかったのか——をここで読む。
+      plain(
+        state.accountKeys === undefined
+          ? 'accountInfo の応答: 無かった（欄の名前も取れていない）'
+          : `accountInfo の応答が持っていた欄（名前だけ）: ${
+              state.accountKeys.length === 0 ? '（1つも無い）' : state.accountKeys.join(', ')
+            }`,
+      ),
     ];
   }
 

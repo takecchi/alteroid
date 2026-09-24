@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { judgeTokenCandidate } from './token-candidate.js';
 import {
   accountApiKeySourceSchema,
+  accountInfoKeysOf,
   accountUsageSchema,
   accountUsageStateSchema,
   classifyLimitsUnavailable,
@@ -326,7 +327,50 @@ describe('枠が効かない理由を言い分ける（#681）', () => {
     if (state.state === 'unavailable') {
       expect(state.cause).toBe('undetermined');
       expect(state.reason).toContain('言い分けられない');
+      // 生の応答が持っていた欄の**名前だけ**が載る（#1458）。apiKeySource が並びに
+      // 無い ⟹ SDK が欄ごと返さなかった、が読める。
+      expect(state.accountKeys).toEqual(['apiProvider', 'tokenSource']);
+      expect(state.accountKeys).not.toContain('apiKeySource');
     }
+  });
+
+  it('accountKeys は名前だけを運び、値は1文字も運ばない（#1458）', async () => {
+    const state = await fetchAccountUsage(
+      probe({
+        account: { apiProvider: 'firstParty', apiKeySource: 'sk-ant-secret-value' },
+        usage: FIRST_PARTY_NO_LIMITS.usage,
+      }),
+      { cwd: '/work' },
+    );
+    expect(state.state).toBe('unavailable');
+    if (state.state === 'unavailable') {
+      expect(state.accountKeys).toEqual(['apiKeySource', 'apiProvider']);
+      expect(JSON.stringify(state)).not.toContain('sk-ant-secret-value');
+    }
+  });
+});
+
+describe('accountInfoKeysOf（#1458）', () => {
+  it('物でなければ undefined（応答が無かった）、空の物なら []', () => {
+    expect(accountInfoKeysOf(undefined)).toBeUndefined();
+    expect(accountInfoKeysOf(null)).toBeUndefined();
+    expect(accountInfoKeysOf('x')).toBeUndefined();
+    expect(accountInfoKeysOf([])).toBeUndefined();
+    expect(accountInfoKeysOf({})).toEqual([]);
+  });
+
+  it('識別子の形の名前だけを昇順で返す（自由文の名前は運ばない）', () => {
+    expect(accountInfoKeysOf({ zeta: 1, alpha: 2, 'has space': 3, '': 4 })).toEqual([
+      'alpha',
+      'zeta',
+    ]);
+  });
+
+  it('上限を超えた名前は切る', () => {
+    const many = Object.fromEntries(
+      Array.from({ length: 40 }, (_, i) => [`k${String(i).padStart(2, '0')}`, i]),
+    );
+    expect(accountInfoKeysOf(many)).toHaveLength(32);
   });
 });
 
