@@ -240,7 +240,9 @@ const EXPECTED_SITE_COUNT: Record<string, number> = {
   // `#journalRestoreUnreadPassEnd`。どちらも `[計器]` = `EXCHANGE_KIND_GAUGE_PREFIX` を書く）。
   // + 1（#1398 c23-1 の `interruptTurn`。人間の求めで止めたことを `[判断]` =
   // `EXCHANGE_KIND_DECISION_PREFIX` で書く）。
-  'clone.ts': 47,
+  // + 1（#325 段2 が足した `#externalMcpServers`。MCP サーバの登録が読めなかったことを
+  // `EXCHANGE_KIND_FAILURE_PREFIX` で書く）。
+  'clone.ts': 48,
   // 40（issue #1332 起票時点） + 1（issue #1425 が `case 'rate_limit'` に
   // 足した、跨いで畳んだ本数の flush。同じく `EXCHANGE_KIND_GAUGE_PREFIX`）
   // + 1（issue #1388 が `#flushSynthesizedNoticeFor` に足した、合流窓へ
