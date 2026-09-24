@@ -74,6 +74,7 @@ import {
   type JournalEntry,
 } from './schema.js';
 import type { JournalStore } from './store.js';
+import { UNCLASSIFIED_WORK_KIND_LABEL, workKindGroupKey } from './work-kind.js';
 
 /** 先頭一致で拾った評定の内訳。件数は「その prefix で始まる decision 行の総数」。 */
 export interface AppraisalDecisionTally {
@@ -141,12 +142,75 @@ export function tallyAppraisalDecisions(
   return tally;
 }
 
+/**
+ * 仕事の種類ごとの評定行の内訳（#1308 段B）。
+ *
+ * 種類は評定行の構造欄（`decision.appraisal.workKind`。#1310 / #1308）から読む。
+ * **構造欄の無い過去の行・種類を述べていない行は `workKind: null`（未分類）に
+ * 入る** —— どれかの種類へ寄せない（#1308 の決定）。表記ゆれは
+ * `workKindGroupKey` で寄せ、`workKind` には最初に見た表記を出す。
+ */
+export interface AppraisalWorkKindTally extends AppraisalDecisionTally {
+  /** 群の表記（最初に見たもの）。未分類は `null`。 */
+  workKind: string | null;
+}
+
 /** {@link computeAppraisalJournalStats} の戻り値。 */
 export interface AppraisalJournalStats {
   /** `COMMITMENT_APPRAISAL_DECISION_PREFIX`（引き受けた仕事）の内訳。 */
   commitments: AppraisalDecisionTally;
   /** `JOB_APPRAISAL_DECISION_PREFIX`（委譲）の内訳。 */
   jobs: AppraisalDecisionTally;
+  /**
+   * 上の2つを仕事の種類ごとに割ったもの（#1308 段B）。件数の多い群から並び、
+   * 未分類は必ず最後。**各軸の群の `total` の和は、上の同じ軸の `total` と一致する**
+   * （割っただけで、足しても引いてもいない）。
+   */
+  byWorkKind: {
+    commitments: AppraisalWorkKindTally[];
+    jobs: AppraisalWorkKindTally[];
+  };
+}
+
+/** 種類ごとの積み上げ（ページ送りの途中経過）。鍵は `workKindGroupKey`。 */
+type WorkKindAccumulator = Map<string | null, AppraisalWorkKindTally>;
+
+/**
+ * 日誌のエントリ群から `prefix` の評定行を、構造欄の種類ごとに `into` へ足し込む
+ * （破壊的）。数える行の選び方は {@link tallyAppraisalDecisions} と同じ
+ * （`parseAppraisalDecisionValue` の先頭一致）なので、群の和は同じ印の総数と一致する。
+ */
+export function tallyAppraisalDecisionsByWorkKind(
+  entries: readonly JournalEntry[],
+  prefix: string,
+  into: WorkKindAccumulator,
+): void {
+  for (const entry of entries) {
+    if (entry.type !== 'decision') continue;
+    const value = parseAppraisalDecisionValue(entry.decision, prefix);
+    if (value === undefined) continue;
+    const raw = entry.appraisal?.workKind;
+    const key = workKindGroupKey(raw);
+    let tally = into.get(key);
+    if (tally === undefined) {
+      tally = { workKind: key === null ? null : (raw ?? '').trim(), ...emptyTally() };
+      into.set(key, tally);
+    }
+    tally.total += 1;
+    if (value === 'other') tally.other += 1;
+    else tally[value] += 1;
+  }
+}
+
+/** 積み上げを並べる。件数の多い順・同数は鍵の辞書順・未分類は最後。 */
+function sortWorkKindTallies(acc: WorkKindAccumulator): AppraisalWorkKindTally[] {
+  return [...acc.entries()]
+    .sort(([keyA, a], [keyB, b]) => {
+      if (keyA === null) return keyB === null ? 0 : 1;
+      if (keyB === null) return -1;
+      return b.total - a.total || (keyA < keyB ? -1 : keyA > keyB ? 1 : 0);
+    })
+    .map(([, tally]) => tally);
 }
 
 /**
@@ -189,11 +253,22 @@ export async function computeAppraisalJournalStats(
 ): Promise<AppraisalJournalStats> {
   const commitments = emptyTally();
   const jobs = emptyTally();
+  const commitmentKinds: WorkKindAccumulator = new Map();
+  const jobKinds: WorkKindAccumulator = new Map();
   await scanJournalPages(journal, { types: ['decision'] }, (page) => {
     addTally(commitments, tallyAppraisalDecisions(page, prefixes.commitmentPrefix));
     addTally(jobs, tallyAppraisalDecisions(page, prefixes.jobPrefix));
+    tallyAppraisalDecisionsByWorkKind(page, prefixes.commitmentPrefix, commitmentKinds);
+    tallyAppraisalDecisionsByWorkKind(page, prefixes.jobPrefix, jobKinds);
   });
-  return { commitments, jobs };
+  return {
+    commitments,
+    jobs,
+    byWorkKind: {
+      commitments: sortWorkKindTallies(commitmentKinds),
+      jobs: sortWorkKindTallies(jobKinds),
+    },
+  };
 }
 
 /**
@@ -461,6 +536,13 @@ function appraisalTallyLabel(value: AppraisalValue): string {
   return { good: 'うまくいった', bad: 'うまくいかなかった', unclear: '判定できない' }[value];
 }
 
+function renderWorkKindTallies(tallies: readonly AppraisalWorkKindTally[]): string[] {
+  if (tallies.length === 0) return ['（評定行が無い）'];
+  return tallies.map(
+    (tally) => `- ${tally.workKind ?? UNCLASSIFIED_WORK_KIND_LABEL}: ${renderTally(tally)}`,
+  );
+}
+
 function renderTally(tally: AppraisalDecisionTally): string {
   const parts = appraisalSchema.options
     .map((value) => `${appraisalTallyLabel(value)} ${tally[value]}`)
@@ -525,6 +607,21 @@ export function describeAppraisalStats(input: {
   lines.push(
     '⚠️ 上の2つは別の印である。混ぜて比べないこと（分母が別物——台帳の行の始末と、' +
       'マネージャーに出した仕事の出来は違う軸）。',
+  );
+  lines.push('');
+  lines.push(
+    '## 仕事の種類ごとの評定行（#1308。評定行の構造欄が述べた種類。表記ゆれは空白・大小文字・互換文字だけ寄せる）',
+  );
+  lines.push('');
+  lines.push('### 引き受けた仕事（COMMITMENT_APPRAISAL_DECISION_PREFIX）');
+  lines.push(...renderWorkKindTallies(journal.byWorkKind.commitments));
+  lines.push('');
+  lines.push('### 委譲（JOB_APPRAISAL_DECISION_PREFIX）');
+  lines.push(...renderWorkKindTallies(journal.byWorkKind.jobs));
+  lines.push('');
+  lines.push(
+    `⚠️ ${UNCLASSIFIED_WORK_KIND_LABEL}は種類の1つではない（#1308 より前の評定行・種類を述べていない評定行）。` +
+      'どれかの種類へ寄せて読まないこと。',
   );
   lines.push('');
   lines.push('## 委譲の評定の有無（JobStore を終端の仕方ごとに割った内訳）');

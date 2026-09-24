@@ -32,6 +32,7 @@
 
 import { excerptLine, renderListing } from './excerpt.js';
 import { APPRAISAL_LABELS, appraisalSchema, type Job } from './schema.js';
+import { groupByWorkKind, UNCLASSIFIED_WORK_KIND_LABEL, workKindGroupKey } from './work-kind.js';
 import type { CommitmentList } from './store.js';
 
 /**
@@ -53,7 +54,19 @@ interface AppraisalTargetRecord {
   appraisal?: string;
   appraisedAt?: string;
   appraisalReason?: string;
+  /** 評定が述べた仕事の種類（#1308）。無ければ未分類。 */
+  workKind?: string;
 }
+
+/**
+ * 節の頭に出す「種類ごとの内訳」で名前を出す群の上限（#1308 段B）。
+ *
+ * **種類は自由文なので群の数に上限が無い。** 1行に全部並べると、表記ゆれが
+ * 積もった器で予算（{@link APPRAISAL_TARGETS_BUDGET}）をこの1行が食い潰す。
+ * 件数の多い群から出し、残りは「ほか N 種類」と数だけ出す（消えたことを出力から
+ * 消さない）。
+ */
+export const APPRAISAL_WORK_KIND_GROUPS_SHOWN = 8;
 
 /** 未知の値はラベルが無いので、生の文字列をそのまま返す（落とさない）。 */
 function appraisalLabel(value: string): string {
@@ -96,7 +109,11 @@ function renderAppraisalLine(record: AppraisalTargetRecord & { appraisal: string
     record.appraisalReason === undefined
       ? '（理由: 無し）'
       : `（理由: ${excerptLine(record.appraisalReason, APPRAISAL_TARGETS_REASON_LIMIT)}）`;
-  return `- [${label}] ${record.id}: ${body}${reason}`;
+  const kind =
+    workKindGroupKey(record.workKind) === null
+      ? `［${UNCLASSIFIED_WORK_KIND_LABEL}］`
+      : `［${excerptLine(record.workKind ?? '', 40)}］`;
+  return `- [${label}]${kind} ${record.id}: ${body}${reason}`;
 }
 
 /** 評定済みの3値 + 3値以外の内訳。 */
@@ -114,6 +131,35 @@ function countAppraisals(records: readonly AppraisalTargetRecord[]): {
     else counts.other += 1;
   }
   return counts;
+}
+
+/**
+ * 評定済みの行を仕事の種類ごとに束ねた1行（#1308 段B）。評定済みが0件なら空文字。
+ *
+ * **群ごとに「うまくいかなかった／判定できない」の件数を添える** —— #1055 段2 が
+ * 見たいのは「同じ種類の仕事で悪い評定が続いているか」であって、群の大きさでは
+ * ない。**未分類は種類の1つとして並べず、最後に件数だけ出す**（#1308 の決定:
+ * どれかの種類に寄せない）。
+ */
+function describeWorkKindBreakdown(appraised: readonly AppraisalTargetRecord[]): string {
+  if (appraised.length === 0) return '';
+  const groups = groupByWorkKind(appraised, (record) => record.workKind);
+  const named = groups.filter((group) => group.key !== null);
+  const unclassified = groups.find((group) => group.key === null)?.items.length ?? 0;
+  const shown = named.slice(0, APPRAISAL_WORK_KIND_GROUPS_SHOWN).map((group) => {
+    const counts = countAppraisals(group.items);
+    return (
+      `${excerptLine(group.label, 40)} ${group.items.length} 件` +
+      `（うまくいかなかった ${counts.bad} / 判定できない ${counts.unclear}）`
+    );
+  });
+  const hidden = named.length - shown.length;
+  const parts = [
+    ...shown,
+    ...(hidden > 0 ? [`ほか ${hidden} 種類`] : []),
+    `${UNCLASSIFIED_WORK_KIND_LABEL} ${unclassified} 件`,
+  ];
+  return `\n種類ごと（評定が述べた仕事の種類。#1308）: ${parts.join('・')}`;
 }
 
 function describeAppraisalSection(params: {
@@ -160,6 +206,8 @@ function describeAppraisalSection(params: {
         '**これは測った値であって、良し悪しの基準ではない。**'
       : '';
 
+  const kindLine = describeWorkKindBreakdown(appraised);
+
   const notices = [...fixedNotices, ...measuredNotices];
   const noticeLines = notices.length > 0 ? `\n${notices.join('\n')}` : '';
 
@@ -167,7 +215,7 @@ function describeAppraisalSection(params: {
     `${heading}\n` +
     `評定済み ${appraised.length} 件（うまくいった ${counts.good} / うまくいかなかった ${counts.bad} / ` +
     `判定できない ${counts.unclear} / 上の3値以外 ${counts.other} 件）・未評定 ${unappraisedCount} 件` +
-    `${noticeLines}\n${listing}${badWarning}`
+    `${kindLine}${noticeLines}\n${listing}${badWarning}`
   );
 }
 
@@ -195,6 +243,7 @@ export function describeAppraisalTargets(input: {
     appraisal: entry.appraisal,
     appraisedAt: entry.appraisedAt,
     appraisalReason: entry.appraisalReason,
+    workKind: entry.workKind,
   }));
   const jobRecords: AppraisalTargetRecord[] = input.jobs.map((job) => ({
     id: job.id,
@@ -202,6 +251,7 @@ export function describeAppraisalTargets(input: {
     appraisal: job.appraisal,
     appraisedAt: job.appraisedAt,
     appraisalReason: job.appraisalReason,
+    workKind: job.workKind,
   }));
 
   const totalAppraised =

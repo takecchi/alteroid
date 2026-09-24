@@ -1436,6 +1436,15 @@ export const appraisalDecisionTallySchema = z.object({
   total: z.number().int(),
 });
 
+/**
+ * 仕事の種類ごとの評定行（#1308 段B。`@alteroid/core` の `AppraisalWorkKindTally`）。
+ * `workKind` が `null` の行は**未分類**（構造欄の無い過去の評定行・種類を述べて
+ * いない評定行）であって、種類の1つではない。
+ */
+export const appraisalWorkKindTallySchema = appraisalDecisionTallySchema.extend({
+  workKind: z.string().nullable(),
+});
+
 /** 1つの `JobStatus`（終端した状態だけ）について、評定の有無を数えた行。 */
 export const jobAppraisalCoverageRowSchema = z.object({
   status: jobStatusSchema,
@@ -1488,11 +1497,18 @@ export const appraisalReconciliationSchema = z.object({
  * - `reconciliation`（#1310）: (b) 人間 と (c) クローンの食い違い——クローンが
  *   付けた評定を人間が後から付け直した対を `commitments` / `jobs` の軸ごとに
  *   数えたもの。台帳と委譲は混ぜない（同じ理由）。
+ * - `journal.byWorkKind`（#1308 段B）: 上の2つを評定行の構造欄が述べた仕事の
+ *   種類ごとに割ったもの。件数の多い順で、未分類（`workKind: null`）は必ず最後。
+ *   各軸の群の `total` の和は `journal.commitments` / `journal.jobs` の `total` と一致する。
  */
 export const appraisalStatsResponseSchema = z.object({
   journal: z.object({
     commitments: appraisalDecisionTallySchema,
     jobs: appraisalDecisionTallySchema,
+    byWorkKind: z.object({
+      commitments: z.array(appraisalWorkKindTallySchema),
+      jobs: z.array(appraisalWorkKindTallySchema),
+    }),
   }),
   jobCoverage: z.object({
     byStatus: z.array(jobAppraisalCoverageRowSchema),

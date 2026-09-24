@@ -769,6 +769,7 @@ describe('describeAppraisalStats — MCP/HTTP が読む文面（2つの印を混
       journal: {
         commitments: { good: 186, bad: 12, unclear: 65, other: 0, total: 263 },
         jobs: { good: 105, bad: 0, unclear: 9, other: 0, total: 114 },
+        byWorkKind: { commitments: [], jobs: [] },
       },
       jobCoverage: computeJobAppraisalCoverage([
         job('a', { status: 'done', appraisal: 'good' }),
@@ -789,6 +790,7 @@ describe('describeAppraisalStats — MCP/HTTP が読む文面（2つの印を混
       journal: {
         commitments: { good: 1, bad: 0, unclear: 0, other: 0, total: 1 },
         jobs: { good: 0, bad: 0, unclear: 0, other: 0, total: 0 },
+        byWorkKind: { commitments: [], jobs: [] },
       },
       jobCoverage: computeJobAppraisalCoverage([]),
       reconciliation: {
@@ -808,6 +810,7 @@ describe('describeAppraisalStats — MCP/HTTP が読む文面（2つの印を混
       journal: {
         commitments: { good: 0, bad: 0, unclear: 0, other: 0, total: 0 },
         jobs: { good: 0, bad: 0, unclear: 0, other: 0, total: 0 },
+        byWorkKind: { commitments: [], jobs: [] },
       },
       jobCoverage: computeJobAppraisalCoverage([]),
       reconciliation: {
@@ -824,5 +827,108 @@ describe('describeAppraisalStats — MCP/HTTP が読む文面（2つの印を混
     expect(text).toContain('4 件');
     expect(text).toContain('食い違い');
     expect(text).toContain('一致 0');
+  });
+});
+
+describe('computeAppraisalJournalStats の byWorkKind — 仕事の種類ごとの評定行（#1308 段B）', () => {
+  it('構造欄の種類で割り、群の和はその印の総数と一致し、未分類は最後に置く', async () => {
+    const stores = createMemoryStores();
+    const append = async (value: 'good' | 'bad' | 'unclear', workKind?: string) =>
+      stores.journal.append({
+        type: 'decision',
+        decision: `${COMMITMENT_APPRAISAL_DECISION_PREFIX}（c）: ${value}`,
+        grounds: '',
+        appraisal: {
+          target: 'commitment',
+          id: 'c',
+          value,
+          by: 'clone',
+          ...(workKind === undefined ? {} : { workKind }),
+        },
+      });
+    await append('bad', '実装');
+    await append('good', '実装 ');
+    await append('good', 'ＲＥＶＩＥＷ');
+    await append('unclear');
+    // 構造欄を持たない過去の行（#1310 より前）も未分類へ入る。
+    await stores.journal.append({
+      type: 'decision',
+      decision: `${COMMITMENT_APPRAISAL_DECISION_PREFIX}（old）: good`,
+      grounds: '',
+    });
+    // 別の印の行は、この軸のどの群にも入らない。
+    await stores.journal.append({
+      type: 'decision',
+      decision: `${JOB_APPRAISAL_DECISION_PREFIX}（m）: bad`,
+      grounds: '',
+      appraisal: { target: 'job', id: 'm', value: 'bad', by: 'clone', workKind: '実装' },
+    });
+
+    const stats = await computeAppraisalJournalStats(stores.journal, {
+      commitmentPrefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
+      jobPrefix: JOB_APPRAISAL_DECISION_PREFIX,
+    });
+    expect(stats.byWorkKind.commitments).toEqual([
+      { workKind: '実装', good: 1, bad: 1, unclear: 0, other: 0, total: 2 },
+      { workKind: 'ＲＥＶＩＥＷ', good: 1, bad: 0, unclear: 0, other: 0, total: 1 },
+      { workKind: null, good: 1, bad: 0, unclear: 1, other: 0, total: 2 },
+    ]);
+    expect(stats.byWorkKind.jobs).toEqual([
+      { workKind: '実装', good: 0, bad: 1, unclear: 0, other: 0, total: 1 },
+    ]);
+    // **割っただけで、足しても引いてもいない。**
+    const sum = stats.byWorkKind.commitments.reduce((acc, tally) => acc + tally.total, 0);
+    expect(sum).toBe(stats.commitments.total);
+  });
+
+  it('ページを跨いでも群ごとに足し込まれる（1ページより大きい母集団）', async () => {
+    const stores = createMemoryStores();
+    const total = JOURNAL_SCAN_PAGE_SIZE + 37;
+    for (let i = 0; i < total; i += 1) {
+      await stores.journal.append({
+        type: 'decision',
+        decision: `${JOB_APPRAISAL_DECISION_PREFIX}（m${i}）: good`,
+        grounds: '',
+        appraisal: {
+          target: 'job',
+          id: `m${i}`,
+          value: 'good',
+          by: 'clone',
+          workKind: i % 2 === 0 ? '実装' : '調査',
+        },
+      });
+    }
+    const stats = await computeAppraisalJournalStats(stores.journal, {
+      commitmentPrefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
+      jobPrefix: JOB_APPRAISAL_DECISION_PREFIX,
+    });
+    expect(stats.jobs.total).toBe(total);
+    expect(stats.byWorkKind.jobs.map((tally) => [tally.workKind, tally.total])).toEqual([
+      ['実装', Math.ceil(total / 2)],
+      ['調査', Math.floor(total / 2)],
+    ]);
+  });
+
+  it('describeAppraisalStats は種類ごとの節を出し、未分類を種類として読むなと注記する', () => {
+    const text = describeAppraisalStats({
+      journal: {
+        commitments: { good: 1, bad: 1, unclear: 0, other: 0, total: 2 },
+        jobs: { good: 0, bad: 0, unclear: 0, other: 0, total: 0 },
+        byWorkKind: {
+          commitments: [
+            { workKind: '実装', good: 1, bad: 0, unclear: 0, other: 0, total: 1 },
+            { workKind: null, good: 0, bad: 1, unclear: 0, other: 0, total: 1 },
+          ],
+          jobs: [],
+        },
+      },
+      jobCoverage: computeJobAppraisalCoverage([]),
+      reconciliation: emptyReconciliation(),
+    });
+    expect(text).toContain('## 仕事の種類ごとの評定行');
+    expect(text).toContain('- 実装: 評定行 1 件');
+    expect(text).toContain('- 未分類: 評定行 1 件');
+    expect(text).toContain('（評定行が無い）');
+    expect(text).toContain('未分類は種類の1つではない');
   });
 });

@@ -240,3 +240,47 @@ describe('describeAppraisalTargets — 評定を台帳・委譲の2節に束ね�
     expect(jobSection).toContain('走行中の委譲の評定は');
   });
 });
+
+describe('describeAppraisalTargets — 仕事の種類ごとの内訳（#1308 段B）', () => {
+  it('節の頭に種類ごとの件数と「うまくいかなかった／判定できない」が出て、未分類は最後に件数だけ出る', () => {
+    const reply = describeAppraisalTargets({
+      commitments: commitmentList([
+        commitment('c-1', { appraisal: 'bad', appraisedAt: T1, workKind: '実装' }),
+        commitment('c-2', { appraisal: 'good', appraisedAt: T1, workKind: '実装 ' }),
+        commitment('c-3', { appraisal: 'unclear', appraisedAt: T1, workKind: '調査' }),
+        commitment('c-4', { appraisal: 'good', appraisedAt: T1 }),
+        commitment('c-5', { body: '未評定' }),
+      ]),
+      jobs: [],
+    });
+    const section = reply.slice(0, reply.indexOf('## 委譲'));
+    // 表記ゆれ（末尾の空白）は束ねる側で寄せる —— 実装は2件で1群。
+    expect(section).toContain(
+      '種類ごと（評定が述べた仕事の種類。#1308）: 実装 2 件（うまくいかなかった 1 / 判定できない 0）・' +
+        '調査 1 件（うまくいかなかった 0 / 判定できない 1）・未分類 1 件',
+    );
+    // 各行にも種類が付く（種類の無い評定は未分類と名乗る）。
+    expect(section).toContain('［実装］ c-1');
+    expect(section).toContain('［未分類］ c-4');
+    // 未評定は種類の数にも入らない（未分類 1 件は c-4 だけ）。
+    expect(section).not.toContain('c-5');
+  });
+
+  it('評定済みが0件の節には種類の行を出さない（測っていないものを 0 と並べない）', () => {
+    const reply = describeAppraisalTargets({
+      commitments: commitmentList([commitment('c-1', { appraisal: 'good', appraisedAt: T1 })]),
+      jobs: [job('j-1')],
+    });
+    const jobSection = reply.slice(reply.indexOf('## 委譲'));
+    expect(jobSection).not.toContain('種類ごと');
+  });
+
+  it('群が多いときは件数の多い順に上限まで名前を出し、残りは種類の数だけ出す', () => {
+    const entries = Array.from({ length: 12 }, (_, i) =>
+      commitment(`c-${i}`, { appraisal: 'good', appraisedAt: T1, workKind: `種類${i}` }),
+    );
+    const reply = describeAppraisalTargets({ commitments: commitmentList(entries), jobs: [] });
+    expect(reply).toContain('ほか 4 種類');
+    expect(reply).toContain('未分類 0 件');
+  });
+});

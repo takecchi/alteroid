@@ -237,6 +237,7 @@ export {
 export type {
   AppraisalDecisionTally,
   AppraisalJournalStats,
+  AppraisalWorkKindTally,
   AppraisalReconciliation,
   AppraisalReconciliationStats,
   AppraisalReconciliationTransition,

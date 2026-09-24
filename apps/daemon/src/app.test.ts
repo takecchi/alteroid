@@ -5168,6 +5168,25 @@ describe('GET /dropped（#242 の HTTP 面）', () => {
  * `appraisal_stats`（MCP。`tools.test.ts`）と同じものを人間の手からも）。
  */
 describe('GET /appraisal-stats（#1278 の HTTP 面）', () => {
+  it('仕事の種類ごとの内訳（#1308 段B）が応答まで落ちずに届く', async () => {
+    await stores.journal.append({
+      type: 'decision',
+      decision: '引き受けた仕事に評定を付けた（c1）: bad',
+      grounds: '',
+      appraisal: { target: 'commitment', id: 'c1', value: 'bad', by: 'clone', workKind: '実装' },
+    });
+    const response = await app.request('/appraisal-stats');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      journal: { byWorkKind: { commitments: { workKind: string | null; total: number }[] } };
+    };
+    // 応答の schema（openapi.ts の appraisalStatsResponseSchema）が宣言していなければ、
+    // .parse() がここで黙って落とす。
+    expect(body.journal.byWorkKind.commitments).toEqual([
+      { workKind: '実装', good: 0, bad: 1, unclear: 0, other: 0, total: 1 },
+    ]);
+  });
+
   it('日誌の2つの印を混ぜずに数え、200件超でも総数が出る（limit に縛られない）', async () => {
     for (let i = 0; i < 210; i += 1) {
       await stores.journal.append({
