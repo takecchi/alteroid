@@ -246,8 +246,10 @@ const EXPECTED_SITE_COUNT: Record<string, number> = {
   // 40（issue #1332 起票時点） + 1（issue #1425 が `case 'rate_limit'` に
   // 足した、跨いで畳んだ本数の flush。同じく `EXCHANGE_KIND_GAUGE_PREFIX`）
   // + 1（issue #1388 が `#flushSynthesizedNoticeFor` に足した、合流窓へ
-  // 続けて畳まれた合図の到着間隔の計器。同じく `EXCHANGE_KIND_GAUGE_PREFIX`）。
-  'manager.ts': 43,
+  // 続けて畳まれた合図の到着間隔の計器。同じく `EXCHANGE_KIND_GAUGE_PREFIX`）
+  // + 1（#325 段3 が足した `#pushMcpServers`。MCP サーバの登録を runner へ降ろせなかった
+  // ことを `EXCHANGE_KIND_FAILURE_PREFIX` で書く）。
+  'manager.ts': 44,
 };
 
 describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（issue #1332）', () => {

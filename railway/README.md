@@ -50,7 +50,7 @@ M4 受け入れ基準3の「runner から Persona 用 DB へ接続できない�
 - マネージャーの作業ディレクトリ（コミットしていない変更は失われる）
 - `/workspace/.mcp.json`（＝MCP 連携）
 
-MCP を渡したいなら、`/workspace` にボリュームを付けて所有者を uid 1001 に揃えるか、設定をイメージへ焼く。**「Railway だから MCP が使えない」は仕様ではなくバグ**なので、必要になった時点でどちらかを選ぶ（north_star 禁止1）。
+**MCP 連携はボリュームを付けずに渡せる**（#325）。登録（`.mcp.json` の `mcpServers` と同じ形）を `PUT /mcp-servers` で記憶ストアへ置けば、クローンへは次のセッションから、マネージャー・作業者へは runner の名乗り（`hello`）のたびにデーモンが降ろしたうえで次に開くセッションから届く（SDK の `Options.mcpServers`）。器を作り直しても正本は PostgreSQL に在るので消えない。`/workspace/.mcp.json` は従来どおり読まれるが、毎デプロイで消えるのは変わらない。CLI / Web UI の入口は #325 の段4。
 
 記憶・日誌・ジョブ・生ログは PostgreSQL にあるので、**ボリュームは1つも要らない**。`ALTEROID_HOME`（`/data/alteroid`）に残るのは `state/daemon.json` と `daemon.log` だけで、これは CLI がデーモンを見つける手段であって記憶ではない。
 

@@ -557,3 +557,124 @@ describe('人間の MCP 連携の登録をクローンへ渡す（#325 段2）',
     await clone.stop();
   });
 });
+
+// ---------------------------------------------------------------------------
+// 人間の MCP 連携の登録（#325 段3。マネージャー・作業者）
+// ---------------------------------------------------------------------------
+
+/**
+ * デーモンが runner へ降ろした登録（`Host#setMcpServers`）が、マネージャーの
+ * `Options.mcpServers` に載ること。作業者（`agents`）には書かないこと。
+ *
+ * **効く時機も固定する** —— 走っているセッションには届かず、次に開くセッション
+ * から効く（SDK の `mcpServers` は `query()` の起動時に1度だけ渡る）。
+ */
+describe('人間の MCP 連携の登録をマネージャーへ渡す（#325 段3）', () => {
+  let dir: string;
+  let host: RunnerHost | undefined;
+
+  beforeEach(() => {
+    dir = makeTempDirSync('alteroid-agent-session-options-mcp3-');
+  });
+
+  afterEach(async () => {
+    await host?.shutdown().catch(() => undefined);
+  });
+
+  const REGISTRATION = {
+    github: { command: 'gh-mcp', env: { GITHUB_TOKEN: 'dummy' } },
+    remote: { type: 'http' as const, url: 'https://example.invalid/mcp' },
+  };
+
+  function makeHost() {
+    const sdk = fakeRunnerSdk();
+    host = createRunnerHost({
+      runnerId: 'runner-primary',
+      workspacePath: dir,
+      emit: () => undefined,
+      queryFn: sdk.fn,
+      env: {},
+    });
+    return { host, started: sdk.started };
+  }
+
+  it('置いた登録がマネージャーの mcpServers に載り、作業者の定義には書かない', async () => {
+    const { host, started } = makeHost();
+    const placed = host.setMcpServers(REGISTRATION);
+    expect(placed?.names).toEqual(['github', 'remote']);
+
+    await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const { options } = started[0] as Started;
+
+    expect(options.mcpServers).toEqual(REGISTRATION);
+    const worker = (options.agents ?? {})[WORKER_AGENT_NAME] as Record<string, unknown>;
+    // **作業者は親の接続を継承する**（`claude-provider.ts` の `agents` の doc）。
+    expect(Object.hasOwn(worker, 'mcpServers')).toBe(false);
+    expect(Object.hasOwn(worker, 'tools')).toBe(false);
+    // `.mcp.json` を読む経路（settingSources）は消していない。
+    expect(options.settingSources).toEqual(['user', 'project', 'local']);
+  });
+
+  it('置いていなければ mcpServers の欄そのものが無い（段3 以前の Options と同じ）', async () => {
+    const { host, started } = makeHost();
+    await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    expect(Object.hasOwn((started[0] as Started).options, 'mcpServers')).toBe(false);
+
+    // 空の登録（外した）も同じ。
+    host.setMcpServers(REGISTRATION);
+    host.setMcpServers({});
+    expect(host.mcpServers()).toBeUndefined();
+    await host.start({ managerId: 'mgr-2', request: '走る', cwd: dir });
+    expect(Object.hasOwn((started[1] as Started).options, 'mcpServers')).toBe(false);
+  });
+
+  it('走っているセッションには届かず、次に開くセッションから効く', async () => {
+    const { host, started } = makeHost();
+    await host.start({ managerId: 'mgr-1', request: '先に走る', cwd: dir });
+
+    host.setMcpServers(REGISTRATION);
+    await host.start({ managerId: 'mgr-2', request: '後から走る', cwd: dir });
+
+    expect(Object.hasOwn((started[0] as Started).options, 'mcpServers')).toBe(false);
+    expect((started[1] as Started).options.mcpServers).toEqual(REGISTRATION);
+  });
+
+  it('形が不正なら投げ、前の登録が残る（文言に値を載せない）', () => {
+    const { host } = makeHost();
+    const before = host.setMcpServers(REGISTRATION);
+
+    let message = '';
+    try {
+      host.setMcpServers({ bad: { command: 'x', enviroment: { K: 'SECRET-TYPO' } } });
+    } catch (error) {
+      message = String(error);
+    }
+    expect(message).toContain('MCP サーバの登録の形が不正');
+    expect(message).not.toContain('SECRET');
+    expect(host.mcpServers()).toEqual(before);
+
+    // alteroid 自身の名前も runner の入口で拒む（デーモンの器と同じ検査を通す）。
+    expect(() => host.setMcpServers({ [MCP_SERVER_NAME]: { command: 'x' } })).toThrow();
+  });
+
+  it('指紋はキーの順序に依らない（pg の jsonb が並べ替えても「届いていない」に見えない）', () => {
+    const { host } = makeHost();
+    const a = host.setMcpServers({
+      github: { command: 'gh-mcp', env: { B: '2', A: '1' } },
+      remote: { type: 'http', url: 'https://example.invalid/mcp' },
+    });
+    const b = host.setMcpServers({
+      remote: { url: 'https://example.invalid/mcp', type: 'http' },
+      github: { env: { A: '1', B: '2' }, command: 'gh-mcp' },
+    });
+    expect(a?.sha256).toBe(b?.sha256);
+    // 値が変われば指紋も変わる（同じに潰していない）。
+    const c = host.setMcpServers({
+      github: { command: 'gh-mcp', env: { A: '1', B: '3' } },
+      remote: { type: 'http', url: 'https://example.invalid/mcp' },
+    });
+    expect(c?.sha256).not.toBe(a?.sha256);
+    // 指紋に値は載っていない。
+    expect(JSON.stringify(c)).not.toContain('gh-mcp');
+  });
+});

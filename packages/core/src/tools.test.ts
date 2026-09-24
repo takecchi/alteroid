@@ -8870,6 +8870,50 @@ describe('runner_list（器の一覧）', () => {
     expect(h.runnersCalls).toEqual([{}]);
   });
 
+  /**
+   * MCP の登録（#325 段3）。**指紋と名前は fingerprints: true のときだけ**、押し込みの
+   * 結果は常に出る（`credentials`/`profile` と同じ線引き）。
+   */
+  it('MCP の登録の名前と指紋（fingerprints: true）と、押し込みの結果が出る', async () => {
+    const h = harness();
+    const overview = {
+      runners: [
+        {
+          label: 'runner-a',
+          revision: { status: 'unheard' as const },
+          state: 'connected' as const,
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-a',
+          managers: [],
+          mcpServers: {
+            sha256: 'abc123abc123',
+            names: ['github', 'remote'],
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          },
+          pushHealth: {
+            mcpServers: {
+              status: 'failed' as const,
+              at: '2026-01-01T00:00:01.000Z',
+              error: 'runner-a は MCP の登録を受け取る口を持たない（古い版の runner）',
+            },
+          },
+        },
+      ],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' as const },
+    };
+    h.setRunnersOverview(overview);
+    const withFingerprints = await h.call('runner_list', { fingerprints: true });
+    expect(withFingerprints).toContain('MCP の登録: github, remote（指紋 abc123abc123）');
+    expect(withFingerprints).toContain('MCP の登録 失敗');
+    expect(withFingerprints).toContain('受け取る口を持たない');
+
+    h.setRunnersOverview(overview);
+    const plain = await h.call('runner_list', {});
+    expect(plain).not.toContain('abc123abc123');
+    expect(plain).toContain('MCP の登録 失敗');
+  });
+
   it('pushHealth 自体が無い（一度も繋がっていない）runner では、その行が出ない', async () => {
     const h = harness();
     h.setRunnersOverview({

@@ -26,7 +26,9 @@ import {
   createAuthProviderRegistry,
   createAuthService,
   createCredentialService,
+  createLocalRunner,
   createManagerPool,
+  createMcpServerService,
   createMemoryStores,
   createProfileApplier,
   createProfileService,
@@ -35,7 +37,9 @@ import {
   createTokenPoolService,
   droppedTraceLedgerSince,
   fingerprintOf,
+  mcpServersFingerprintOf,
   noteDroppedRecord,
+  RunnerMcpServersUnsupportedError,
   RECENT_TRACE_LIMIT,
   RESERVED_SCHEDULE_KINDS,
   recentDroppedTraces,
@@ -8673,5 +8677,105 @@ describe('MCP サーバの登録（/mcp-servers）', () => {
     expect((await stores.mcpServers.read())?.mcpServers).toEqual({
       github: { command: 'gh-mcp' },
     });
+  });
+});
+
+/**
+ * `PUT /mcp-servers` が runner へも降ろし、runner ごとの結果を返す（#325 段3）。
+ *
+ * 固定しているのは3つ —— ①保存した登録が繋がっている runner へ届く（指紋が正本と
+ * 一致する） ②**応答にも日誌にも値を載せない**（名前・指紋・成否だけ） ③古い
+ * runner（口が無い）は `unsupported` として一時障害と分けて返し、保存そのものは
+ * 成功する（次の名乗りで降ろし直す）。
+ */
+describe('MCP サーバの登録を runner へ降ろす（PUT /mcp-servers。#325 段3）', () => {
+  const REGISTRATION = {
+    github: { command: 'gh-mcp', env: { GITHUB_TOKEN: 'SECRET-IN-ENV' } },
+  };
+
+  function withRunners() {
+    const fresh = createLocalRunner({
+      runnerId: 'runner-new',
+      workspacePath: '/work',
+      queryFn: (() => {
+        throw new Error('この検証では SDK を起こさない');
+      }) as never,
+      env: {},
+    });
+    const old = createLocalRunner({
+      runnerId: 'runner-old',
+      workspacePath: '/work',
+      queryFn: (() => {
+        throw new Error('この検証では SDK を起こさない');
+      }) as never,
+      env: {},
+    });
+    old.setMcpServers = async () => {
+      throw new RunnerMcpServersUnsupportedError('runner-old');
+    };
+    const registry = createRunnerRegistry([fresh, old]);
+    const withService = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      mcpServers: createMcpServerService({ stores, runners: registry }),
+    });
+    return { withService, fresh };
+  }
+
+  it('保存して runner へ配り、runner ごとの結果（名前と指紋だけ）を返す', async () => {
+    const { withService, fresh } = withRunners();
+    const response = await withService.request('/mcp-servers', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mcpServers: REGISTRATION }),
+    });
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(text).not.toContain('SECRET');
+    expect(text).not.toContain('gh-mcp');
+
+    const body = JSON.parse(text) as {
+      names: string[];
+      sha256?: string;
+      runners: { runnerId: string; ok: boolean; unsupported?: true; mcpServers?: unknown }[];
+    };
+    const want = mcpServersFingerprintOf(REGISTRATION);
+    expect(body.names).toEqual(['github']);
+    expect(body.sha256).toBe(want);
+    const byId = new Map(body.runners.map((r) => [r.runnerId, r]));
+    expect(byId.get('runner-new')).toMatchObject({
+      ok: true,
+      mcpServers: { sha256: want, names: ['github'] },
+    });
+    // 古い runner は一時障害と分けて返す。保存そのものは成功している（200）。
+    expect(byId.get('runner-old')).toMatchObject({ ok: false, unsupported: true });
+
+    // 実際に届いている（指紋は正本と一致する）。
+    expect((await fresh.mcpServers?.())?.sha256).toBe(want);
+
+    // 日誌には配布の成否まで残り、値は書かない。
+    const journal = await stores.journal.list({ types: ['decision'] });
+    const entry = journal.find(
+      (e) => e.type === 'decision' && e.decision.includes('MCP サーバの登録'),
+    );
+    const serialized = JSON.stringify(entry);
+    expect(serialized).toContain('runner-new=ok');
+    expect(serialized).toContain('runner-old=口なし');
+    expect(serialized).not.toContain('SECRET');
+    expect(serialized).not.toContain('gh-mcp');
+  });
+
+  it('1本道を渡していない構成では保存だけして、配らなかったことを runners: [] で返す', async () => {
+    const response = await app.request('/mcp-servers', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mcpServers: REGISTRATION }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { runners: unknown[]; sha256?: string };
+    expect(body.runners).toEqual([]);
+    expect(body.sha256).toBe(mcpServersFingerprintOf(REGISTRATION));
   });
 });
