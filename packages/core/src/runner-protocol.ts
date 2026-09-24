@@ -1644,8 +1644,10 @@ export function assertNeverRunnerLegStatus(status: never): never {
 /**
  * `RunnerClient.unpushedWork()` が1本の作業ツリーについて返す値（Issue #1039）。
  *
- * ⛔ **出してよいのは有無・件数・枝名までである。ファイル名・差分の中身・
- * コミットメッセージ・author は一切含めない。** `apps/runner/src/tasks.ts` が
+ * ⛔ **出してよいのは有無・件数・枝名と、origin remote の host/path まで
+ * である（host/path は Issue #1376 B2 で足した `remoteOrigin`。userinfo・
+ * クエリ・フラグメント・資格・生の URL 文字列は出さない）。ファイル名・
+ * 差分の中身・コミットメッセージ・author は一切含めない。** `apps/runner/src/tasks.ts` が
  * 生きているプロセスの素性について引いている線（`cmdline` / `cwd` / `environ`
  * を絶対に読まない）と同じ強さで、ここにも線を引く——**本人の情報を、本人を
  * 止める文脈で、本人を止めようとしている側へ出す。それ以外の口からは引けない。**
@@ -1682,8 +1684,9 @@ export const unpushedWorkTreeSchema = z.object({
    * 元のマネージャーとは別の repo で動いているかもしれないため。
    *
    * **広げたのはこの1点（host と path）だけである。** `unpushedWorkTreeSchema`
-   * の「⛔ 出してよいのは有無・件数・枝名までである」という線は変えていない
-   * ——この欄はその線の外側に例外を1つだけ開けたもので、次を必ず落とす:
+   * の線（有無・件数・枝名まで）にこの1点だけを足した——ファイル名・差分の
+   * 中身・コミットメッセージ・author を出さないことは変わらない。この欄は
+   * 次を必ず落とす:
    *
    * - userinfo（`https://<token>@host/…`・`https://user:pass@host/…`・
    *   `ssh://git@host/…`・scp 形式 `git@host:owner/repo.git` のどれも、

@@ -226,7 +226,10 @@ async function runGit(
 }
 
 /**
- * ⛔ 出してよいのは有無・件数・枝名までである。ファイル名・差分の中身・
+ * ⛔ 出してよいのは有無・件数・枝名と、origin remote の host/path まで
+ * である（host/path は Issue #1376 B2 で足した。userinfo・クエリ・
+ * フラグメント・資格・生の URL 文字列は出さない——冒頭の doc「3.5.」と
+ * `parseRemoteOriginUrl`）。ファイル名・差分の中身・
  * コミットメッセージ・author は一切含めない（Issue #1039。
  * `apps/runner/src/tasks.ts` が生きているプロセスの素性について引いている線
  * ——`cmdline` / `cwd` / `environ` を読まない——と同じ強さの線をここに引く）。

@@ -380,8 +380,9 @@ export interface RunnerHost {
    * この managerId の作業ツリーが抱えている、未 push の実装と未コミットの
    * 変更を数える（Issue #1039）。セッションが無ければ `undefined`。
    *
-   * ⛔ ネットワークを一切使わない。出す粒度は有無・件数・枝名まで
-   * （`unpushedWorkResultSchema` の doc）。
+   * ⛔ ネットワークを一切使わない。出す粒度は有無・件数・枝名と、origin
+   * remote の host/path まで（host/path は Issue #1376 B2。userinfo・クエリ・
+   * 資格は出さない。`unpushedWorkResultSchema` の doc）。
    */
   unpushedWork(
     managerId: string,
