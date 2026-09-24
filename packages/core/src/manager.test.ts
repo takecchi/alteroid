@@ -6387,6 +6387,194 @@ describe('Bash の git push を検出したら unpushedWork を1回取る（Issu
   });
 });
 
+describe('Bash の枝作成を検出したら unpushedWork を1回取る（Issue #1376 の続き）', () => {
+  /** 台帳の1件を直接読む（他の describe と重複させない）。 */
+  async function jobOf(s: Setup, managerId: string) {
+    return (await s.stores.jobs.listJobs()).find((job) => job.id === managerId);
+  }
+
+  /** `case 'tool_use'` の日誌エントリが書かれたことを待つ。 */
+  async function toolUseJournalHas(s: Setup, needle: string) {
+    await expect
+      .poll(
+        async () => {
+          const entries = await s.stores.journal.list({ types: ['tool_use'] });
+          return entries.some((entry) => JSON.stringify(entry).includes(needle));
+        },
+        { timeout: 2000 },
+      )
+      .toBe(true);
+  }
+
+  /**
+   * **歯1（陽性・代表3本）**: `git checkout -b`／`git switch -c`／
+   * `git branch <名前>` のどれでも、`unpushedWork` が1回呼ばれ、観測が台帳に
+   * 残る。`report` も `git push` も一度も送っていないことが要点——枝作成だけで
+   * 観測が取れることを、push 起点（直前の describe）とは別に固定する。
+   */
+  it.each([
+    ['git checkout -b feat/x', 'git checkout -b'],
+    ['git switch -c feat/y', 'git switch -c'],
+    ['git branch feat/z', 'git branch <名前>'],
+  ])('%s で unpushedWork が呼ばれ、観測が台帳に残る（%s）', async (command) => {
+    const fake = swappableRunner('runner-primary');
+    const calls: string[] = [];
+    const runner: RunnerClient = {
+      ...fake.runner,
+      async unpushedWork(managerId) {
+        calls.push(managerId);
+        return { cwd: '/work/project', worktrees: [{ relativePath: '.', branch: 'feat/x' }] };
+      },
+    };
+    const stores = createMemoryStores();
+    const s = setup(undefined, { stores, runner });
+    const { managerId } = await s.pool.start({ request: '確認' });
+
+    fake.toolUse(managerId, `manager:${managerId}`, 'Bash', { command });
+
+    await expect.poll(() => calls.length, { timeout: 2000 }).toBe(1);
+    expect(calls).toEqual([managerId]);
+
+    await expect
+      .poll(async () => (await jobOf(s, managerId))?.lastUnpushedWorkObservation, {
+        timeout: 2000,
+      })
+      .toMatchObject({ kind: 'observed' });
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **歯1b**: `git worktree add` も同じ経路で観測を呼ぶ——`-b` の有無を
+   * 問わない（新しい作業ツリーができること自体が理由。関数の doc の
+   * 「`git worktree add` と探索の起点」の節を見よ。ここでは呼ばれることだけを
+   * 確かめ、新しい作業ツリーが観測の中身に載るかどうかは別の関心事として
+   * 扱わない——`unpushedWork` はテストの偽実装が返す固定値をそのまま返す）。
+   */
+  it('git worktree add で unpushedWork が呼ばれる', async () => {
+    const fake = swappableRunner('runner-primary');
+    const calls: string[] = [];
+    const runner: RunnerClient = {
+      ...fake.runner,
+      async unpushedWork(managerId) {
+        calls.push(managerId);
+        return { cwd: '/work/project', worktrees: [] };
+      },
+    };
+    const stores = createMemoryStores();
+    const s = setup(undefined, { stores, runner });
+    const { managerId } = await s.pool.start({ request: '確認' });
+
+    fake.toolUse(managerId, `manager:${managerId}`, 'Bash', {
+      command: 'git worktree add ../other-tree -b feat/w',
+    });
+
+    await expect.poll(() => calls.length, { timeout: 2000 }).toBe(1);
+    expect(calls).toEqual([managerId]);
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **歯2（対照）**: `git branch` 単独（一覧）・`git branch -d`（削除）は
+   * 呼ばれない——依頼の指定どおり、一覧・削除は「できる範囲で」外す。
+   */
+  it('git branch の一覧・削除では呼ばれない', async () => {
+    const fake = swappableRunner('runner-primary');
+    const calls: string[] = [];
+    const runner: RunnerClient = {
+      ...fake.runner,
+      async unpushedWork(managerId) {
+        calls.push(managerId);
+        return { cwd: '/work/project', worktrees: [] };
+      },
+    };
+    const stores = createMemoryStores();
+    const s = setup(undefined, { stores, runner });
+    const { managerId } = await s.pool.start({ request: '確認' });
+
+    fake.toolUse(managerId, `manager:${managerId}`, 'Bash', { command: 'git branch' });
+    fake.toolUse(managerId, `manager:${managerId}`, 'Bash', {
+      command: 'git branch -d feat/done',
+    });
+    fake.toolUse(managerId, `manager:${managerId}`, 'Bash', { command: 'git branch -a' });
+    await toolUseJournalHas(s, 'git branch -a');
+
+    expect(calls).toEqual([]);
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **歯3（対照）**: 無関係な Bash（枝作成でも push でもない）では呼ばれない。
+   */
+  it('無関係な Bash では呼ばれない', async () => {
+    const fake = swappableRunner('runner-primary');
+    const calls: string[] = [];
+    const runner: RunnerClient = {
+      ...fake.runner,
+      async unpushedWork(managerId) {
+        calls.push(managerId);
+        return { cwd: '/work/project', worktrees: [] };
+      },
+    };
+    const stores = createMemoryStores();
+    const s = setup(undefined, { stores, runner });
+    const { managerId } = await s.pool.start({ request: '確認' });
+
+    fake.toolUse(managerId, `manager:${managerId}`, 'Bash', { command: 'git status' });
+    fake.toolUse(managerId, `manager:${managerId}`, 'Bash', { command: 'ls -la' });
+    await toolUseJournalHas(s, 'ls -la');
+
+    expect(calls).toEqual([]);
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **歯4（印の共有・push 起点との対照）**: 枝作成の tool_use が進行中の間に
+   * 同じ委譲で `git push` が届いても、`#unpushedWorkObservationInFlight` を
+   * 共有しているので重ねて投げない——push 起点の describe の歯6と対になる、
+   * 枝作成起点からの確認。
+   */
+  it('枝作成の観測が進行中なら、同じ委譲の git push は重ねて投げない', async () => {
+    const fake = swappableRunner('runner-primary');
+    const calls: string[] = [];
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const runner: RunnerClient = {
+      ...fake.runner,
+      async unpushedWork(managerId) {
+        calls.push(managerId);
+        await gate;
+        return { cwd: '/work/project', worktrees: [] };
+      },
+    };
+    const stores = createMemoryStores();
+    const s = setup(undefined, { stores, runner });
+    const { managerId } = await s.pool.start({ request: '確認' });
+
+    fake.toolUse(managerId, `manager:${managerId}`, 'Bash', { command: 'git checkout -b feat/a' });
+    await expect.poll(() => calls.length, { timeout: 2000 }).toBe(1);
+
+    // 1本目がまだ `gate` で止まっている間に push する。
+    fake.toolUse(managerId, `manager:${managerId}`, 'Bash', { command: 'git push' });
+    await toolUseJournalHas(s, 'git push');
+    expect(calls).toEqual([managerId]);
+
+    release?.();
+    await expect
+      .poll(async () => (await jobOf(s, managerId))?.lastUnpushedWorkObservation, {
+        timeout: 2000,
+      })
+      .toMatchObject({ kind: 'observed' });
+
+    await s.pool.stop();
+  });
+});
+
 /**
  * **中身の無い報告は、記録は残すがクローンのターンを起こさない。**
  *

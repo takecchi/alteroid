@@ -905,6 +905,57 @@ function bashCommandLooksLikeGitPush(command: string): boolean {
 }
 
 /**
+ * Bash の `command` 文字列に、新しい枝を作る操作が含まれるかを、
+ * `bashCommandLooksLikeGitPush` と同じ考え方（分類器ではなく単純な正規表現、
+ * 誤検出は許容し見逃しを避ける）で保守的に判定する（Issue #1376 の
+ * 2026-09-24T14:40Z のコメントが「観測を取る時機」の候補として名指しした
+ * 「枝ができたとき」）。`case 'tool_use'` の呼び出し元の doc を見よ。
+ *
+ * ## 拾うもの
+ *
+ * - `git checkout -b <name>` / `git checkout -B <name>`（`-b`/`-B` の直後が
+ *   単語境界であることだけを見る——`-qb` のような結合短縮フラグは見逃す）
+ * - `git switch -c <name>` / `git switch -C <name>`
+ * - `git worktree add ...`（`-b` の有無を問わず、コマンドそのもので拾う——
+ *   新しい作業ツリーができること自体が観測の理由。下の「`git worktree add`
+ *   と探索の起点」を見よ）
+ * - `git branch <name>`（`branch` の直後の引数が `-` で始まらないときだけ）
+ *
+ * ## 外すもの（できる範囲で）
+ *
+ * `git branch` 単独（一覧）・`git branch -d`/`-D`（削除）・`git branch -a`/
+ * `-v`/`--list` 等（一覧系フラグ）は、直後の引数が `-` で始まるか無いかで
+ * 外す。**完全ではない**——`git branch -c <old> <new>`（copy）・`git branch
+ * -m <old> <new>`（rename）も枝を増やす／動かす操作だが、引数が `-` で
+ * 始まるのでここでは拾わない。上で挙げた4形（checkout -b/-B・switch -c/-C・
+ * worktree add・branch <name>）の外は狙わない、という線をそのまま置いている。
+ *
+ * ## `git worktree add` と探索の起点（現物で確認した）
+ *
+ * `unpushed-work.ts` の `findGitDirs` は `job.cwd` を起点に**下方向**へしか
+ * 潜らない（`readdir` の再帰だけで、`..` や兄弟ディレクトリへは進まない）。
+ * 使い捨てリポジトリで `git worktree add ./nested/x -b y`（cwd の下）と
+ * `git worktree add ../outside -b z`（cwd の外、兄弟ディレクトリ）を両方
+ * 実行し、`find . -maxdepth 4 -name .git` で確かめた——前者の `.git`
+ * （worktree の `.git` は中身がテキストのファイルだが、`findGitDirs` は
+ * `entry.name === '.git'` だけを見るのでファイルでも拾う）は見つかり、
+ * 後者は見つからない。⟹ **この検出で観測が呼ばれること自体は
+ * `git worktree add` の置き場所によらないが、その観測の中身
+ * （`worktrees` 配列）に新しい作業ツリーが載るかは置き場所しだいである**
+ * ——`job.cwd` の外（典型的には兄弟ディレクトリ）に置く運用では、新しい
+ * 作業ツリーは観測に含まれない。この探索の起点の広げ方を変える判断は
+ * ここではしない。
+ */
+function bashCommandLooksLikeGitBranchCreate(command: string): boolean {
+  return (
+    /\bgit\s+checkout\s+-[bB]\b/.test(command) ||
+    /\bgit\s+switch\s+-[cC]\b/.test(command) ||
+    /\bgit\s+worktree\s+add\b/.test(command) ||
+    /\bgit\s+branch\s+(?!-)\S/.test(command)
+  );
+}
+
+/**
  * `runner_list` の内訳に出るマネージャー1本ぶん（器ごとの内訳と `unassigned` で
  * 同じ形を使う）。
  *
@@ -1552,9 +1603,11 @@ export interface ManagerPool {
    * か」を実物の数字で言うためだけに呼ぶ（Issue #1039）、(b) ターンが
    * `report` で終わったとき、その委譲について1回だけ台帳へ観測を残すため
    * `#observeUnpushedWorkOnce`（`case 'report'`）が呼ぶ（Issue #1266
-   * の (4)）、(c) Bash で `git push` を検出したとき、同じ
-   * `#observeUnpushedWorkOnce`（`case 'tool_use'`）が呼ぶ（Issue #1376 の
-   * 続き）。**`manager_list` からは呼ばない**——この一覧のために自動で
+   * の (4)）、(c) Bash で `git push` か、新しい枝を作る操作（`git checkout
+   * -b` 等）を検出したとき、同じ `#observeUnpushedWorkOnce`（`case
+   * 'tool_use'`）が呼ぶ（Issue #1376 の続き。前者は push を検出したときの
+   * 続き、後者は枝ができたときを足した分）。**`manager_list` からは呼ばない**
+   * ——この一覧のために自動で
    * 往復を足さない、という既存の作法（`runners()` の doc）と同じ理由。
    * **`force: true` の経路からも呼ばない**（もう決めた後なので、往復を払う
    * 意味が無い）。
@@ -8722,37 +8775,41 @@ class Pool implements ManagerPool {
           tool: event.tool,
           input: event.input,
         });
-        // **Bash で `git push` を検出したら、未 push の作業ツリーを1回だけ
-        // 観測しておく**（Issue #1376 の続き）。マネージャー・作業者どちらの
-        // `actor` でも同じ委譲（`event.managerId`）の話として扱う——
-        // `#observeUnpushedWorkOnce` は managerId 単位で多重投げを止めるので、
-        // 起点がマネージャー自身の Bash でも `Task` 経由の作業者の Bash でも
-        // 区別しない。
+        // **Bash で `git push`、または新しい枝を作る操作を検出したら、
+        // 未 push の作業ツリーを1回だけ観測しておく**（Issue #1376 の続き。
+        // 前者は push を検出したときの続き、後者は 2026-09-24T14:40Z の
+        // コメントが名指しした「枝ができたとき」を足した分——
+        // `bashCommandLooksLikeGitBranchCreate` の doc を見よ）。マネージャー・
+        // 作業者どちらの `actor` でも同じ委譲（`event.managerId`）の話として
+        // 扱う——`#observeUnpushedWorkOnce` は managerId 単位で多重投げを
+        // 止めるので、起点がマネージャー自身の Bash でも `Task` 経由の
+        // 作業者の Bash でも区別しない。
         //
-        // ## いつ観測するか —— `git push` が走り終えた後
+        // ## いつ観測するか —— コマンドが走り終えた後
         //
         // ここへ来るのは runner の `PostToolUse` フック（`runner.ts` の
         // `#onPostToolUse`。`hook.tool_response` を受け取っている＝道具の実行は
-        // 既に完了している）経由で、`git push` は届いた時点でもう走り終えて
-        // いる。**push の成否は目的（枝名と origin を台帳に残す）に効かない**
-        // ——観測が読むのは worktree の「いまの
-        // 枝名」と「origin の host/path」であって、これらは `git push` を
-        // 打つ**前提として既に存在している**（存在しない枝を push することは
-        // できない）。push の成否がどちらでも、観測できる枝名は変わらない。
-        // **ただし `git push` の実行そのものの最中に器が落ちれば、
-        // `PostToolUse` は一度も発火せずこの経路には来ない**——その回は
-        // `#recordUnpushedWorkObservation` の doc が言う「残る族」の外に
-        // 出たまま、直前の観測（もしあれば）が残るだけである。
+        // 既に完了している）経由で、`git push` も枝を作る操作も届いた時点で
+        // もう走り終えている。**成否は目的（枝名と origin を台帳に残す）に
+        // 効かない**——観測が読むのは worktree の「いまの枝名」と「origin の
+        // host/path」であって、`git push` はこれらが**前提として既に
+        // 存在している**ことを要求する（存在しない枝を push することは
+        // できない）。枝を作る操作は逆に、走り終えた直後にその枝が
+        // 「いまの枝名」として初めて読めるようになる。**ただしコマンドの
+        // 実行そのものの最中に器が落ちれば、`PostToolUse` は一度も発火
+        // せずこの経路には来ない**——その回は `#recordUnpushedWorkObservation`
+        // の doc が言う「残る族」の外に出たまま、直前の観測（もしあれば）が
+        // 残るだけである。
         //
         // **検出は保守的（誤検出を許容する）向きに倒す。** `bash-wait-guard.ts`
-        // のような分類器を作らず、単純な正規表現（`bashCommandLooksLikeGitPush`）
-        // で済ませる——`echo 'git push'` のような文字列一致の誤検出があっても、
-        // 実際に起きる害は「観測を1回余分に取る」だけで、`unpushedWork()` は
-        // 副作用の無い読み取りであり `#observeUnpushedWorkOnce` の多重投げ止め
-        // もあるので、頻発しても runner への往復が際限なく積み上がることは
-        // ない。**見逃す側に倒すと、この Issue が埋めようとしている穴（報告
-        // より前に落ちた委譲の枝名）がまた開く**——だから誤検出より見逃しを
-        // 避ける。
+        // のような分類器を作らず、単純な正規表現（`bashCommandLooksLikeGitPush`
+        // / `bashCommandLooksLikeGitBranchCreate`）で済ませる——`echo 'git push'`
+        // のような文字列一致の誤検出があっても、実際に起きる害は「観測を1回
+        // 余分に取る」だけで、`unpushedWork()` は副作用の無い読み取りであり
+        // `#observeUnpushedWorkOnce` の多重投げ止めもあるので、頻発しても
+        // runner への往復が際限なく積み上がることはない。**見逃す側に倒すと、
+        // この Issue が埋めようとしている穴（報告より前に落ちた委譲の枝名）
+        // がまた開く**——だから誤検出より見逃しを避ける。
         //
         // **失敗・例外で `tool_use` の処理（直前の日誌の書き込み）を止めない。**
         // 日誌への `await this.#journal(...)` は既にこの手前で終わっている。
@@ -8763,7 +8820,10 @@ class Pool implements ManagerPool {
           if (event.tool === 'Bash') {
             const toolInput = event.input as { command?: unknown } | null | undefined;
             const command = toolInput?.command;
-            if (typeof command === 'string' && bashCommandLooksLikeGitPush(command)) {
+            if (
+              typeof command === 'string' &&
+              (bashCommandLooksLikeGitPush(command) || bashCommandLooksLikeGitBranchCreate(command))
+            ) {
               this.#observeUnpushedWorkOnce(event.managerId);
             }
           }

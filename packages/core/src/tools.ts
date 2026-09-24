@@ -3166,9 +3166,10 @@ function describeResetTimeSkew(manager: ManagerSummary): string | null {
 
 /**
  * `manager_stop`（running・非 force）の断り、委譲のターンが `report` で
- * 終わったとき（Issue #1266 の (4)）、または Bash で `git push` を検出した
- * とき（Issue #1376 の続き）に最後に取った、未 push の作業ツリーの観測を
- * 1行にする（材料は `ManagerSummary.lastUnpushedWorkObservation`）。
+ * 終わったとき（Issue #1266 の (4)）、または Bash で `git push` か新しい枝を
+ * 作る操作を検出したとき（Issue #1376 の続き）に最後に取った、未 push の
+ * 作業ツリーの観測を1行にする（材料は
+ * `ManagerSummary.lastUnpushedWorkObservation`）。
  *
  * ## なぜ足すか
  *
@@ -3192,12 +3193,13 @@ function describeResetTimeSkew(manager: ManagerSummary): string | null {
  *
  * この欄を更新するのは3つ——`manager_stop`（running・非 force）の断り
  * （`tools.ts`、この関数とは別経路）、委譲のターンが `report` で終わった
- * とき、そして Bash で `git push` を検出したとき（後の2つはどちらも
- * `manager.ts` の `#observeUnpushedWorkOnce`。前者は `case 'report'` から
- * Issue #1266 の (4)、後者は `case 'tool_use'` から Issue #1376 の続き）。
+ * とき、そして Bash で `git push` か新しい枝を作る操作を検出したとき
+ * （後の2つはどちらも `manager.ts` の `#observeUnpushedWorkOnce`。前者は
+ * `case 'report'` から Issue #1266 の (4)、後者は `case 'tool_use'` から
+ * Issue #1376 の続き）。
  * **`force: true` で止めた回・`manager_list` 自身・器の入れ替え（redeploy・
  * 枠落ちでセッションを失う経路）では、どの経路からも一度も更新されない**
- * ——`report` も `git push` の `tool_use` も届く前に器を失う経路
+ * ——`report` も `git push`／枝作成の `tool_use` も届く前に器を失う経路
  * （redeploy・枠落ち）は、どちらの形でも拾えない（`manager.ts` の
  * `#observeUnpushedWorkOnce` の doc）。**時刻だけを出すと、読み手はそれを
  * 「いまの状態」と誤読する**——だから毎回、どの経路が更新するかを行の中に
@@ -3209,7 +3211,7 @@ function describeUnpushedWorkObservation(manager: ManagerSummary): string | null
   if (observation === undefined) return null;
   const provenance =
     'manager_stop（running・非force）の断り、ターンが report で終わったとき、' +
-    'または Bash で git push を検出したときに取った最後の1回' +
+    'または Bash で git push か新しい枝を作る操作を検出したときに取った最後の1回' +
     '（force:true・manager_list 自身・器の入れ替え（redeploy・枠落ちでセッションを失う経路）' +
     'では更新されない。いまの状態ではない）';
   if (observation.kind === 'unavailable') {

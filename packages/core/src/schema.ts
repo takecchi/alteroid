@@ -3375,18 +3375,23 @@ export type ObservedWorktreeBranch = z.infer<typeof observedWorktreeBranchSchema
  * 3つ: `manager_stop`（`before.status === 'running' && force !== true`）の
  * 分岐、**委譲のターンが報告で終わったとき**（`manager.ts` の `case 'report'`。
  * Issue #1266 の (4)。本番で1つ目が一度も発火していなかったため足した）、
- * そして **Bash で `git push` を検出したとき**（`manager.ts` の
- * `case 'tool_use'`。Issue #1376 の続き——器の入れ替え・枠落ちで、最初の
- * 報告より前に落ちた委譲は枝名が引けない、という残っていた穴を、その委譲が
- * 一度でも `git push` を打っていれば埋める）。
+ * そして **Bash で `git push` か、新しい枝を作る操作（`git checkout -b`／
+ * `git switch -c`／`git worktree add`／`git branch <名前>` 等。
+ * `bashCommandLooksLikeGitBranchCreate` の doc を見よ）を検出したとき**
+ * （`manager.ts` の `case 'tool_use'`。前者は Issue #1376 の続き——器の
+ * 入れ替え・枠落ちで、最初の報告より前に落ちた委譲は枝名が引けない、という
+ * 残っていた穴を、その委譲が一度でも `git push` を打っていれば埋める。後者は
+ * 2026-09-24T14:40Z のコメントが名指しした「枝ができたとき」を足したもので、
+ * `git push` を一度も打たずに落ちた委譲でも、枝さえ作っていれば埋まる
+ * ようにする）。
  * **`force: true` で止めたとき・`manager_list`・止めた委譲の報告・器の入れ替え
  * （redeploy・枠落ちでセッションを失う経路）では、この欄は更新されない。**
- * ⟹ **報告の前に落ちた委譲は、その委譲が一度も `git push` を打っていなければ
- * 拾えない**（最後の報告か、最後に検出した `git push` のどちらか遅いほうの
- * 時点の観測が残るだけである）。`git push` の実行そのものの最中に器が
- * 落ちた回も拾えない——検出は runner の `PostToolUse` フック経由なので、
- * コマンドの完了後にしか届かない（`manager.ts` の `case 'tool_use'` の
- * コメントを見よ）。呼び出し元は
+ * ⟹ **報告の前に落ちた委譲は、その委譲が一度も `git push` を打たず、新しい
+ * 枝も作っていなければ拾えない**（最後の報告か、最後に検出した `git push`／
+ * 枝作成のうちいちばん遅い時点の観測が残るだけである）。`git push` や
+ * 枝作成の実行そのものの最中に器が落ちた回も拾えない——検出は runner の
+ * `PostToolUse` フック経由なので、コマンドの完了後にしか届かない
+ * （`manager.ts` の `case 'tool_use'` のコメントを見よ）。呼び出し元は
  * `grep -rn 'unpushedWork' --include=*.ts packages/ apps/` で当たる。
  * **この欄が在ることを「常に最新の枝が分かる」とは読まないこと。**
  *
