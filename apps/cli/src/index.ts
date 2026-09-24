@@ -41,6 +41,13 @@ import {
   profileShowCommand,
   profileStatusCommand,
 } from './profile.js';
+import {
+  mcpClearCommand,
+  mcpEditCommand,
+  mcpListCommand,
+  mcpSetCommand,
+  mcpShowCommand,
+} from './mcp.js';
 import { alteroidRoot } from './paths.js';
 import { resetCommand } from './reset.js';
 import { interruptCommand } from './interrupt.js';
@@ -562,6 +569,55 @@ profileCommand
   .description('プロファイルを外す')
   .action(async () => {
     await profileClearCommand();
+  });
+
+/**
+ * `alteroid mcp` — 人間の MCP 連携の登録（`.mcp.json` 相当。#325 段4）。
+ *
+ * **器に `.mcp.json` を置く代わりの口である。** Railway には volume が無く、ファイルは
+ * 器と一緒に消える（`packages/core/src/mcp-servers.ts` の doc）。正本は記憶ストアで、
+ * クローンには次のセッションから、マネージャー・作業者には runner へ降ろしたうえで
+ * 次に開くセッションから効く。Web UI の `/mcp-servers` と同じ2本の口を打つ。
+ */
+const mcpCommand = program
+  .command('mcp')
+  .description('MCP サーバの登録（.mcp.json に当たるもの）を見る・書き換える');
+
+mcpCommand
+  .command('list')
+  .description('登録の名前・種類・宛先を並べる（値は出さない）')
+  .action(async () => {
+    await mcpListCommand();
+  });
+
+mcpCommand
+  .command('show')
+  .description('登録を JSON で出す（値は --reveal を付けたときだけ）')
+  .option('--reveal', 'env / headers / args の値と URL をそのまま出す')
+  .action(async (options: { reveal?: boolean }) => {
+    await mcpShowCommand(options);
+  });
+
+mcpCommand
+  .command('edit')
+  .description('$EDITOR で開いて書き換える（閉じたら反映）')
+  .action(async () => {
+    await mcpEditCommand();
+  });
+
+mcpCommand
+  .command('set')
+  .description('.mcp.json（{ "mcpServers": { … } }）の内容で丸ごと置き換える')
+  .argument('<file>', '読み込むファイル（- で標準入力）')
+  .action(async (file: string) => {
+    await mcpSetCommand(file);
+  });
+
+mcpCommand
+  .command('clear')
+  .description('登録を全部外す')
+  .action(async () => {
+    await mcpClearCommand();
   });
 
 /**

@@ -232,6 +232,11 @@ describe('renderRunners', () => {
               at: '2026-09-01T00:00:05.000Z',
               error: 'ECONNRESET',
             },
+            mcpServers: {
+              status: 'failed',
+              at: '2026-09-01T00:00:06.000Z',
+              error: 'runner に MCP の登録を受け取る口が無い',
+            },
           },
         },
       ],
@@ -240,6 +245,10 @@ describe('renderRunners', () => {
 
     expect(text).toContain('プロファイル ok（2026-09-01T00:00:00.000Z）');
     expect(text).toContain('環境変数 失敗（2026-09-01T00:00:05.000Z）: ECONNRESET');
+    // #325 段4: MCP の登録も独立の軸として同じ1行に並ぶ。
+    expect(text).toContain(
+      'MCP の登録 失敗（2026-09-01T00:00:06.000Z）: runner に MCP の登録を受け取る口が無い',
+    );
     // **3つ目（認証トークン）は一度も試みていない——出ないことを確かめる。**
     expect(text).not.toContain('認証トークン');
   });

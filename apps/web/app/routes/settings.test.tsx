@@ -291,6 +291,7 @@ describe('runner の押し込み結果（pushHealth）', () => {
               at: '2026-09-01T00:00:05.000Z',
               error: 'ECONNRESET: 途中で切れた',
             },
+            mcpServers: { status: 'ok', at: '2026-09-01T00:00:06.000Z' },
           },
         },
       ],
@@ -300,6 +301,8 @@ describe('runner の押し込み結果（pushHealth）', () => {
     expect(await screen.findByText(/プロファイル: 押し込み済み/)).toBeTruthy();
     expect(await screen.findByText(/環境変数: 押し込み失敗/)).toBeTruthy();
     expect(await screen.findByText(/ECONNRESET: 途中で切れた/)).toBeTruthy();
+    // #325 段4: MCP の登録も独立の軸として出る。
+    expect(await screen.findByText(/MCP の登録: 押し込み済み/)).toBeTruthy();
     // **3つ目（認証トークン）は一度も試みていない——出ないことを確かめる。**
     // （`認証トークン` 単独は他の静的文言にも現れるので、押し込みバッジの
     // 文言そのもの——コロン区切り——で絞る）

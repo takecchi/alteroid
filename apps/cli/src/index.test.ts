@@ -178,6 +178,23 @@ describe('サブコマンドの登録（入口が在ること）', () => {
   });
 
   /**
+   * **`alteroid mcp` が入口として実在すること**（#325 段4。PRD の3入口の等価性）。
+   * `mcp.ts` 側の歯は関数を直接呼ぶので、`program` への登録漏れを検出しない。
+   * `show` の `--reveal` も同じ理由でここで見る —— 付け忘れると値を出す手段が
+   * CLI から消える（`.mcp.json` へ書き戻す往復ができなくなる）。
+   */
+  it('alteroid mcp は list / show / edit / set / clear を持ち、show は --reveal を受ける（#325 段4）', () => {
+    expect(subcommandNames('mcp')).toEqual(['clear', 'edit', 'list', 'set', 'show']);
+    const mcp = program.commands.find((c) => c.name() === 'mcp');
+    const show = mcp?.commands.find((c) => c.name() === 'show');
+    expect((show?.options ?? []).map((o) => o.long)).toEqual(['--reveal']);
+    const set = mcp?.commands.find((c) => c.name() === 'set');
+    expect(set?.registeredArguments.map((arg) => [arg.name(), arg.required])).toEqual([
+      ['file', true],
+    ]);
+  });
+
+  /**
    * **`--kind` / `--title` が無いと、新しいやり方を CLI から1件も作れない。**
    * `PracticeStore.write` は `slug`/`kind`/`title`/`content` の全文置換で、
    * `kind` は `practiceKindSchema` が `min(1)` を課す必須フィールドである
