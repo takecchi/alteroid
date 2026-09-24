@@ -1,6 +1,6 @@
 {
   "extends": "./tsconfig.base.json",
-  "include": ["vitest.config.ts", "vitest.setup.ts"],
+  "include": ["vitest.config.ts", "vitest.setup.ts", "vitest.tmpdir.ts", "vitest.tmpdir.test.ts"],
   "compilerOptions": {
     // vitest.setup.ts は `typeof window === 'undefined'` で jsdom 環境かどうかを
     // 判定する（apps/web の `.tsx` テストは jsdom、それ以外は node）。

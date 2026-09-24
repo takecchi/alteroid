@@ -1,4 +1,6 @@
-import { afterEach, expect } from 'vitest';
+import { afterAll, afterEach, expect } from 'vitest';
+
+import { drainCreatedTempDirsForCurrentFile } from './vitest.tmpdir.js';
 
 /**
  * **テストが本物の stdout へ書いたら、そのテストを落とす。**
@@ -156,4 +158,22 @@ afterEach(async () => {
   await new Promise<void>((resolve) => {
     realSetTimeout(resolve, 0);
   });
+});
+
+/**
+ * **`makeTempDir` / `makeTempDirSync`（`vitest.tmpdir.ts`、#1436 案B）が
+ * そのテストファイルのために作った一時ディレクトリを、ファイルの最後で
+ * まとめて消す。**
+ *
+ * `afterEach` ではなく `afterAll` にしてあるのは、`beforeAll` で1つ作って
+ * ファイル内の複数の `it` が読む形（この repo に既に多数ある）を壊さない
+ * ためである。`vitest.tmpdir.ts` の doc に、なぜこれで安全か（モジュール
+ * スコープがファイルをまたいで残らないこと・この `afterAll` がファイル
+ * 自身の `afterAll`／`afterEach` より後に走ること、の実測）を書いてある。
+ *
+ * 呼ぶ場所はここだけにする。各テストファイルからは呼ばない
+ * （`vitest.tmpdir.ts` の doc の「なぜここだけにするか」を参照）。
+ */
+afterAll(async () => {
+  await drainCreatedTempDirsForCurrentFile();
 });

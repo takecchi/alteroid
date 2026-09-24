@@ -21,6 +21,10 @@ export default defineConfig({
      */
     setupFiles: ['./vitest.setup.ts'],
     include: [
+      // root 直下に置く共通の足場（`vitest.tmpdir.ts` など、#1436 案B）自身の
+      // 単体テスト。`*` は `/` を跨がないので、他の階層向けの `*.test.ts` とは
+      // 衝突しない（`packages/*/src/**/*.test.ts` 等はここには当たらない）。
+      '*.test.ts',
       'packages/*/src/**/*.test.ts',
       'apps/*/src/**/*.test.ts',
       // apps/web は react-router の作法で `app/` に置く（`src/` ではない）。
