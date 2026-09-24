@@ -658,6 +658,25 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
      * `packages/core/src/inbox-persistence.test.ts` の歯（「`#restoreUnread` を通っても `statusAtDelivery` は積まれた当時の値のまま」）が見張っている。
      */
     statusAtDelivery: z.lazy(() => jobStatusSchema).optional(),
+    /**
+     * **マネージャー本人の言葉ではなく、機構が合成した失敗の知らせである**
+     * （`manager.ts` の `#flushSynthesizedNoticeFor` が配る束。「応答を返さずに
+     * 終わったターンの報告」「利用上限に当たった」「セッションが落ちた」など）。
+     *
+     * ## なぜ運ぶか —— 枠の中の往復（2026-09-24 の実運用）
+     *
+     * クローンは枠が閉じている間も、`manager_message` が届けば回復予定時刻を
+     * 見ずに解除を試していた（`clone.ts` の `usageBlockAlwaysRearms`）。根拠は
+     * 「マネージャーからの一件は外の世界の新しい事実を運ぶ」だったが、
+     * **合成された失敗の知らせは「枠が開いた」の証拠にならない** —— 同じ枠で
+     * マネージャーが落ちたことを告げているだけである。実運用では、枠で落ちた
+     * マネージャーの報告のたびにクローンも1ターン回して 429 を踏み、
+     * 「内部の失敗記録を畳んだ: 867 件」まで積もった。
+     *
+     * **立っていないときは従来どおり**（旧い行・本人の言葉の報告）。値は
+     * `true` だけで、立っていないことを `false` で作らない。
+     */
+    synthesized: z.literal(true).optional(),
   }),
 ]);
 

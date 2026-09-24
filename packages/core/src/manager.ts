@@ -10194,6 +10194,10 @@ class Pool implements ManagerPool {
     // `'full'`——`case 'closed'` も「次の本物の報告」も、これまでどおり
     // 何も渡さないので字面は1バイトも変わらない（下の分岐の doc）。
     withheldSuffixDetail: 'full' | 'flush' = 'full',
+    // **`#flushSynthesizedNoticeFor` だけが `true` を渡す口**（機構が合成した
+    // 失敗の知らせ）。受信箱の `manager_message.synthesized` へ写す——クローンは
+    // 枠の冷却中、これでは解除を試さない（`schema.ts` の同名の欄の doc）。
+    synthesized = false,
   ): void {
     // **その managerId に握り潰した「背景処理の完了待ちで畳んだ報告」
     // （`#withheldReports`）が積んであれば、いま配るこの `text` の末尾へ
@@ -10283,6 +10287,8 @@ class Pool implements ManagerPool {
       // **配る瞬間の `Job.status`**（issue #870。`#statusAtDelivery` の doc）。
       // 同じく取れない回は展開してもキーが付かない。
       ...this.#statusAtDelivery(managerId),
+      // **立っていない回はキーごと書かない**（上の `requestId` / `markup` と同じ形）。
+      ...(synthesized ? { synthesized: true as const } : {}),
     });
   }
 
@@ -10466,7 +10472,7 @@ class Pool implements ManagerPool {
     // **`#deliver` より先に `set` しないこと。** `#deliver` は直前の連鎖の
     // 件数を末尾の1行として運んでから帳面を消すので、先に上書きすると
     // 「配らなかった件数」がクローンへ届かないまま消える。
-    this.#deliver(managerId, 'report', text);
+    this.#deliver(managerId, 'report', text, undefined, undefined, 'full', true);
     // **対象外の束では新しい連鎖を立てない。** `eligible` でない配達
     // （`rate_limit` / `usage_notice` / 混在した束）は、この関数に関する
     // 限り「連鎖を継がない」——`#deliver` 自身が既存の連鎖を必ず断つので

@@ -107,7 +107,8 @@ import { describeSituation, describeSituationUnavailable, readAtLabel } from './
 import { countSupersedingReports, describeSuperseded } from './superseded.js';
 import { describeValidity, inboxEventValidity } from './inbox-validity.js';
 import type { JobStatus } from './schema.js';
-import { toAgentTokenView } from './token-pool.js';
+import { DEFAULT_TOKEN_COOLDOWN_MS, toAgentTokenView } from './token-pool.js';
+import { parseNoticeResetAt } from './usage-reset-text.js';
 import type { RunnerRegistry } from './runner-protocol.js';
 import {
   buildCloneSystemPrompt,
@@ -928,6 +929,15 @@ export const ALWAYS_REDELIVER: RedeliveryGate = () => true;
  *    人間起点。**最も価値の高い試行**であり、待たせる代償がいちばん大きい
  * 2. **`manager_message`** —— マネージャーからの一件。外の世界の新しい事実
  *    （マネージャー自身が見ている枠の状態、人間が委譲へ返した答え等）を運ぶ
+ *
+ *    **⚠️ ただし機構が合成した失敗の知らせ（`synthesized: true`）は除く**
+ *    （2026-09-24 の実運用）。「応答を返さずに終わった」「利用上限に当たった」
+ *    は、同じ枠でマネージャーが落ちたことを告げているだけで、**枠が開いた
+ *    証拠にならない。** 直す前はこれでも無条件に解除を試したので、枠で
+ *    落ちたマネージャーの報告のたびにクローンも1ターン回して 429 を踏み、
+ *    「内部の失敗記録を畳んだ: 867 件」まで積もった。除いた分は他の合図と
+ *    同じく `resetsAt` を見る側へ落ちる —— **回復予定時刻が分からなければ
+ *    従来どおり試す**（地雷2）。保持した合図は消えず、解除のときに配られる。
  * 3. **`external` かつ `source === {@link DAEMON_TOKEN_POOL_REOPENED_SOURCE}`**
  *    —— トークンの構成・冷却の変化を運ぶデーモン自身の通知
  *    （`daemon-self-notice.ts`）。**`resetsAt` はいま撒かれている1本の
@@ -952,10 +962,34 @@ export const ALWAYS_REDELIVER: RedeliveryGate = () => true;
  * 分かっていてまだ先なら抑止し、**分からなければ今までどおり再武装する**
  * （判定できないときは能力を削らない側へ倒す。AGENTS.md 地雷2）。
  */
+/**
+ * **文言に書かれた回復時刻を、枠の保持（`#usageBlocked`）へ写す**
+ * （2026-09-24 の実運用）。構造化された `resetsAt` が在れば何もしない。
+ *
+ * ## なぜ要るか —— 文言だけの枠では回復予定時刻が常に「不明」だった
+ *
+ * `#usageBlocked.resetsAt` を持たせる経路は `rate_limit_event` だけだった
+ * （`rejectedRateLimitNotice`）。**本番の枠は文言でしか届かない回がある**
+ * （`You've hit your org's monthly spend limit … your session limit resets
+ * 5:10pm (Asia/Tokyo)`）。そのとき `post()` の「回復予定時刻より前なら再武装
+ * しない」（Issue #1240 続き）は「不明なら試す」側へ倒れ、**どの合図でも
+ * 1ターン回して 429 を踏んだ**（「内部の失敗記録を畳んだ: 867 件」）。
+ *
+ * **回し手（`token-rotator.ts` の #682）と同じ関数で読む。** 窓はトークンの
+ * 冷却の既定（{@link DEFAULT_TOKEN_COOLDOWN_MS}）で、窓の外・読めない形は
+ * `undefined` のまま（＝従来どおり試す）——`usage-reset-text.ts` の
+ * 「誤りは必ず今日より短い側にしか出ない」がそのまま効く。
+ */
+function withNoticeTextResetsAt(notice: UsageLimitNotice, at: number): UsageLimitNotice {
+  if (notice.resetsAt !== undefined) return notice;
+  const resetsAt = parseNoticeResetAt(notice.text, { at, withinMs: DEFAULT_TOKEN_COOLDOWN_MS });
+  return resetsAt === undefined ? notice : { ...notice, resetsAt };
+}
+
 function usageBlockAlwaysRearms(event: InboxEvent): boolean {
   return (
     isHumanOriginated(event) ||
-    event.type === 'manager_message' ||
+    (event.type === 'manager_message' && event.synthesized !== true) ||
     (event.type === 'external' && event.source === DAEMON_TOKEN_POOL_REOPENED_SOURCE)
   );
 }
@@ -7387,7 +7421,7 @@ class Clone implements CloneHost {
 
     if (notice.kind !== 'reached') return;
 
-    this.#usageBlocked = notice;
+    this.#usageBlocked = withNoticeTextResetsAt(notice, Date.now());
     this.#emit(conversationId, { type: 'usage_limited', message: describeUsageNotice(notice) });
 
     // **`source === 'text'` に限る。** `rate_limit_event` 由来（`source ===

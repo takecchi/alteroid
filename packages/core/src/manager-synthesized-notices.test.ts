@@ -300,6 +300,47 @@ describe('機構合成の知らせが、合流窓の中で1件にまとまる', 
     // しかもそれは欠陥ではない。**
   });
 
+  /**
+   * **合成された束には `synthesized: true` の印が付き、本人の報告には付かない**
+   * （2026-09-24 の実運用）。クローンは枠の冷却中、この印の付いた一件では解除を
+   * 試さない（`clone.ts` の `usageBlockAlwaysRearms`）——印が落ちると、枠で
+   * 落ちたマネージャーの報告のたびにクローンも 429 を踏む形へ戻る。
+   */
+  it('🔴 合成された束には synthesized: true が付き、本人の報告には付かない', async () => {
+    const { pool, inbox, fake } = await runningManualSetup();
+    const before = inbox.length;
+
+    fake.report(
+      'mgr-quota',
+      '（このターンは応答を返さずに終わった: success/429 / result_is_error）',
+      'done',
+      {
+        failure: { code: 'success/429', via: 'result_is_error' },
+        synthesized: 'turn_failed',
+      },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await pool.stop();
+
+    const synthesized = inbox
+      .slice(before)
+      .filter((event) => event.type === 'manager_message' && event.kind === 'report');
+    expect(synthesized).toHaveLength(1);
+    expect(synthesized[0]).toMatchObject({ synthesized: true });
+
+    // 本人の報告（`synthesized` の無い report）は印を持たない。
+    const own = await runningManualSetup();
+    const ownBefore = own.inbox.length;
+    own.fake.report('mgr-quota', '調べ終わった。結果はこれ', 'done');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await own.pool.stop();
+    const ownReports = own.inbox
+      .slice(ownBefore)
+      .filter((event) => event.type === 'manager_message' && event.kind === 'report');
+    expect(ownReports).toHaveLength(1);
+    expect('synthesized' in (ownReports[0] ?? {})).toBe(false);
+  });
+
   it('日誌に、畳んだ件数と内訳が残る', async () => {
     const { pool, stores, fake } = await runningManualSetup();
 

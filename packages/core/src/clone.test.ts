@@ -7422,6 +7422,106 @@ describe('クローン — 枠の回復予定時刻（resetsAt）より前は再
     await s.clone.stop();
   });
 
+  /**
+   * **🔴 2026-09-24 の実運用: 枠で落ちたマネージャーの報告のたびに、クローンも
+   * 1ターン回して 429 を踏んでいた**（「内部の失敗記録を畳んだ: 867 件」）。
+   * 機構が合成した失敗の知らせ（`synthesized: true`）は枠が開いた証拠に
+   * ならないので、回復予定時刻より前なら再武装しない。
+   */
+  function managerNotice(id: string, synthesized: boolean): InboxEvent {
+    return {
+      type: 'manager_message',
+      id,
+      at: new Date().toISOString(),
+      managerId: 'mgr-limit',
+      kind: 'report',
+      text: '（このターンは応答を返さずに終わった: success/429 / result_is_error）',
+      ...(synthesized ? { synthesized: true as const } : {}),
+    };
+  }
+
+  it('🔴 機構が合成したマネージャーの失敗の知らせは、resetsAt より前なら再武装しない', async () => {
+    const s = setupRateLimited(FUTURE_RESETS_AT_MS());
+    s.clone.post(humanMessage('一件目'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+    const inputsBefore = (s.calls[0] as FakeCall).inputs.length;
+    s.clone.post(managerNotice('evt-mgr-synth-1', true));
+    // **消えていない**（保持へ回った）ことを待ってから「試していない」を見る。
+    await waitFor(async () => {
+      const pending = await s.stores.inbox.claimPending();
+      return pending.some((p) => p.event.id === 'evt-mgr-synth-1');
+    }, '合成された知らせが未読のまま保持される');
+
+    expect(s.clone.usageReleasePending).toBe(false);
+    expect(await releaseAttemptCount(s)).toBe(0);
+    expect((s.calls[0] as FakeCall).inputs.length).toBe(inputsBefore);
+
+    await s.clone.stop();
+  });
+
+  it('マネージャー本人の報告（synthesized なし）は、resetsAt より前でも従来どおり再武装する', async () => {
+    const s = setupRateLimited(FUTURE_RESETS_AT_MS());
+    s.clone.post(humanMessage('一件目'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+    s.clone.post(managerNotice('evt-mgr-own-1', false));
+    await waitFor(async () => (await releaseAttemptCount(s)) === 1, '解除の試行が1回になる');
+
+    await s.clone.stop();
+  });
+
+  it('機構が合成した知らせでも、resetsAt が過ぎていれば再武装する', async () => {
+    const s = setupRateLimited(PAST_RESETS_AT_MS);
+    s.clone.post(humanMessage('一件目'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+    s.clone.post(managerNotice('evt-mgr-synth-past', true));
+    await waitFor(async () => (await releaseAttemptCount(s)) === 1, '解除の試行が1回になる');
+
+    await s.clone.stop();
+  });
+
+  /**
+   * **🔴 文言だけの枠でも回復予定時刻を持つ**（`withNoticeTextResetsAt`）。
+   * 本番の枠は `rate_limit_event` を伴わず文言だけで届く回があり、直す前は
+   * `resetsAt` が常に「不明」＝どの合図でも試していた。
+   */
+  function resetsAtText(at: number): { text: string; expected: number } {
+    // 2時間先の「分の頭」を UTC の 12 時間表記で書く（窓＝既定の5時間の内側）。
+    const target = at - (at % 60_000) + 2 * 60 * 60 * 1000;
+    const date = new Date(target);
+    const hour24 = date.getUTCHours();
+    const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+    const minute = String(date.getUTCMinutes()).padStart(2, '0');
+    const meridiem = hour24 < 12 ? 'am' : 'pm';
+    return {
+      text:
+        "You've hit your org's monthly spend limit · ask your admin to raise it at " +
+        `claude.ai/admin-settings/usage · your session limit resets ${String(hour12)}:${minute}${meridiem} (UTC)`,
+      expected: target,
+    };
+  }
+
+  it('🔴 文言だけの枠でも、文言の時刻を回復予定時刻として持ち、それより前は内部の合図で再武装しない', async () => {
+    const { text, expected } = resetsAtText(Date.now());
+    const s = setup(undefined, createMemoryStores(), {
+      resultSubtype: 'error_during_execution',
+      resultText: text,
+    });
+    s.clone.post(humanMessage('一件目'));
+    await waitFor(() => s.clone.usageBlocked, '枠に当たって保持される');
+
+    expect(s.clone.usageBlockedResetsAt).toBe(expected);
+
+    s.clone.post(tick('evt-si-text-1'));
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(s.clone.usageReleasePending).toBe(false);
+    expect(await releaseAttemptCount(s)).toBe(0);
+
+    await s.clone.stop();
+  });
+
   it('抑止した回数は捨てず、実際に解除を試した1行へ畳んで出て0へ戻る', async () => {
     const s = setupRateLimited(FUTURE_RESETS_AT_MS());
     s.clone.post(humanMessage('一件目'));
