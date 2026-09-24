@@ -236,7 +236,7 @@ if [ "$TOTAL" -lt "$CURRENT" ]; then
 
   # Service 名 → runnerId の逆引き（`runner_id_for` の逆写像）。
   # **runner_id を写さない・推測しない**という既存の歯（scale-runners.test.ts）と
-  # 同じ理由で、ここも「いまの並び（$EXISTING）の何番目か」から機械的に引く。
+  # 同じ理由で、ここも「いまの並び（${EXISTING}）の何番目か」から機械的に引く。
   # 対応が取れなければ止める——推測で埋めない。
   VACATE_ID=''
   idx=1
@@ -275,7 +275,7 @@ if [ "$TOTAL" -lt "$CURRENT" ]; then
     -n $((CURRENT - 1)) --vacate $LAST_NAME から始めて、1台ずつ回すこと。"
   fi
 
-  info "空ける runner   $VACATE（runnerId=$VACATE_ID）"
+  info "空ける runner   ${VACATE}（runnerId=${VACATE_ID}）"
   warn "委譲が移り終わるまで待つ（最大 ${VACATE_TIMEOUT_SECONDS}秒）。" \
     "Service を消すコマンドは最後に表示するだけで、ここでは消さない"
 
@@ -398,7 +398,7 @@ NODE_EOF
   printf '%s\n' "$VACATE_OUT" >&2
 
   if printf '%s\n' "$VACATE_OUT" | command grep -Fq -- 'VACATED'; then
-    ok "$VACATE の委譲は移り終えた（runnerId=$VACATE_ID）"
+    ok "$VACATE の委譲は移り終えた（runnerId=${VACATE_ID}）"
 
     # 消す器を除いた宛先。**runner_url_for が作るのと同じ ${{…}} 参照の形**に
     # する——put_variables が置く値と1文字も違わなければ、手で打っても

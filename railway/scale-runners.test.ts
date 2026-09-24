@@ -37,13 +37,14 @@
  * デーモン（`startFakeDaemon`）で、資格は `ALTEROID_HOME/state/daemon.json`
  * に用意する（`apps/daemon/src/runtime.ts` の `writeRuntimeInfo` と同じ形）。
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
-import { cpus, tmpdir } from 'node:os';
+import { cpus } from 'node:os';
 import { join } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { makeTempDirSync } from '../vitest.tmpdir.js';
 import { type Run, runScriptAsync, scenarioCollector } from './cli-stub.js';
 
 /** いま本番に在るもの（app / Postgres / runner の3つ）。 */
@@ -129,7 +130,7 @@ const FAKE_OPERATOR_TOKEN = 'SECRET-DAEMON-TOKEN-DO-NOT-LEAK-4f2c';
  * 既に在るものを読む」の実体である。
  */
 function makeAlteroidHome(token: string, port: number): string {
-  const home = mkdtempSync(join(tmpdir(), 'alteroid-vacate-home.'));
+  const home = makeTempDirSync('alteroid-vacate-home.');
   mkdirSync(join(home, 'state'), { recursive: true });
   writeFileSync(
     join(home, 'state', 'daemon.json'),
