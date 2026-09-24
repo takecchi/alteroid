@@ -4,18 +4,19 @@
 # （CI は .github/workflows/ci.yml の jdx/mise-action がこのファイルを使う）。
 # 版を上げるときは以下も一緒に見ること — ずれたら「環境によってできない」が
 # 生まれ、それは仕様ではなくバグである:
-#   - package.json の `engines.node` / `packageManager`
+#   - package.json の `packageManager`
 #   - Dockerfile の `FROM node:`（build / runtime の2箇所）
 #   - pnpm-workspace.yaml の catalog `@types/node`
+#   - package.json と apps/web/package.json の `engines.node`（`22.x`）
 #
-# ⚠ Vercel（apps/web の本番）はこの一本化の外に在る。Node の版は管理画面
-# （Project Settings）側の設定で、repo からは変えられない（オーナーの手が
-# 要る）。実測 2026-09-11、オーナーが管理画面を読んだ値は 24.x（この
-# mise.toml は 22 系。major がずれている）。違反ではない — package.json の
-# `engines.node` は ">=22" で上限を持たないため、Vercel が 24 を選ぶことは
-# 許されている。ただし CI が本番の Web の実 major を一度も踏んでいないこと
-# は解消しない（この追記は記述であって解決ではない。Issue #791）。catalog
-# の `@types/node` は ^22.20.1（22系）で実機（24.x）より古い（安全側）。
+# Vercel（apps/web の本番）の Node の版も、この `engines.node` で揃える
+# （Issue #791）。Vercel は Root Directory の package.json の `engines.node` を
+# 管理画面（Project Settings）の値より優先する。以前は `">=22"` で上限が無く、
+# 管理画面の 24.x（2026-09-11 にオーナーが読んだ値）がそのまま使われていた
+# ——CI が本番の Web の実 major を一度も踏んでいない形だった。Root Directory が
+# repo の根か apps/web かを repo からは確かめられないので、両方に書いてある。
+# ⚠ Vercel が 22.x を切ったら、ここと mise.toml を一緒に上げること。
+# catalog の `@types/node` は ^22.20.1（22系）で、実機と揃う。
 [tools]
 node = "22.23.2"
 pnpm = "11.21.0"
