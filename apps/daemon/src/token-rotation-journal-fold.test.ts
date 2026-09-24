@@ -103,7 +103,9 @@ describe('TokenRotationJournalFold — 60秒 tick の同一本文を畳む（本
 
 describe('TokenRotationJournalFold — 件数・総経過の上限', () => {
   it('総経過の上限（60分）に達したら、そこで要約を吐いて数え直す', () => {
-    const fold = new TokenRotationJournalFold({ maxSpanMs: TOKEN_ROTATION_JOURNAL_FOLD_MAX_SPAN_MS });
+    const fold = new TokenRotationJournalFold({
+      maxSpanMs: TOKEN_ROTATION_JOURNAL_FOLD_MAX_SPAN_MS,
+    });
     const entry = exhaustedEntry('2026-09-23T05:00:00.000Z');
 
     fold.observe(entry, T0);

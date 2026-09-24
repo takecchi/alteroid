@@ -1154,7 +1154,10 @@ describe('settleTokenOutcome への畳みの配線（issue #1311 段B）', () =>
     const entryAppendAt = fnBody.indexOf('stores.journal.append(entry)');
 
     expect(
-      missingAnchors(fnBody, ['stores.journal.append(folded.summary)', 'stores.journal.append(entry)']),
+      missingAnchors(fnBody, [
+        'stores.journal.append(folded.summary)',
+        'stores.journal.append(entry)',
+      ]),
     ).toEqual([]);
     expect(summaryAppendAt).toBeGreaterThan(-1);
     expect(summaryAppendAt).toBeLessThan(entryAppendAt);

@@ -63,11 +63,7 @@
  * 約100分ぶん。60分の `maxSpanMs` のほうが先に効くので、実質的に効くのは
  * 時間の上限のほうである。
  */
-import {
-  JournalFoldWindow,
-  foldedRunText,
-  type TokenRotationEntry,
-} from '@alteroid/core';
+import { JournalFoldWindow, foldedRunText, type TokenRotationEntry } from '@alteroid/core';
 import { TOKEN_WATCH_TICK_MS } from './token-watch.js';
 
 /** {@link TokenRotationJournalFold} の既定の idleGap。上の doc の「2.5倍」。 */
