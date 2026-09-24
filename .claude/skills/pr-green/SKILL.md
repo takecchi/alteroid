@@ -50,7 +50,7 @@ description: PR が本当に緑かを判定するとき、CI の完了を待つ�
 
   - `head_sha` を明示して `check-runs` を引く（`gh pr view --json statusCheckRollup` は sha を返さない。上の項目）
   - `conclusion == "success"` の行だけを数える。**`skipped` は「走っていない」**
-  - 必要なチェックが**すべて** `success` であること（**どれが required かは `.github/required-status-checks.json` と `pnpm check:required-status-checks`（protection と突き合わせる）が持つ——ここで本数を数え上げると増減のたびに腐る。上の「⭐」項目と同じ理由**。`base-overlap` は required ではないが、見ないと同じ穴を踏む）
+  - 必要なチェックが**すべて** `success` であること（**どれが required かは `.github/required-status-checks.json` と `pnpm check:required-status-checks`（protection と突き合わせる）が持つ——ここで本数を数え上げると増減のたびに腐る。上の「⭐」項目と同じ理由**）
   - **同じ sha に複数の世代が在るときは、新しいほうを見る。⚠️ ただし「新しいほう」を `check-runs` の応答の中だけで決めないこと。** `check-runs` の各要素には世代の順序を決める信頼できるキーが無い（実測 2026-09-13〜15、#933。sha `1e619f43858160fb5d9a6b1895d236e35d4771cf`、PR #932）:
     - **`started_at` は run をまたぐと逆転する。** 古い run（draft、06:44:48作成）の `base-overlap` の `skipped` が `started_at=06:44:57` を持ち、新しい run（ready、06:44:54作成）の `success` の `started_at=06:44:56` より**1秒あとに始まっている**。⟹ `group_by(.name) | map(sort_by(.started_at) | last)` は `skipped` を選ぶ（今回は安全側の誤りだったが、鏡像は「古い世代の `success` が新しい世代の `failure` を追い越し、赤を見落とす」）
     - **check-run の `id` も同じ向きに逆転する。** `id` は「run が作られた順」ではなく「その check-run（＝ job）が作られた順」に振られるため、`if:` の評価が後段で遅れた job だけ id でも後ろへ回る。同じ標本で `base-overlap` は古い run の check-run の方が `id` も大きい。⟹ `group_by(.name) | map(max_by(.id))` も同じく `skipped` を選ぶ —— **`started_at` を `id` に替えても直らない**
@@ -72,7 +72,7 @@ description: PR が本当に緑かを判定するとき、CI の完了を待つ�
 
       **`created_at` だけでは決まらない。** 決めているのは `id` の大小である（逐語は `grep -Fn -- 'return a.id > b.id ? a : b;' scripts/check-pr-green-core.mjs`）。`check-runs` 側の `started_at` も同じ向きを指す（`cancelled` が `21:26:04Z`、`success` が `21:26:08Z`）。
 
-    - **⟹ `check-runs` の一覧に見える `conclusion=cancelled` の行は、最新世代とは限らない。** 上の2世代は `cancel-in-progress: true` が作ったもので（`.github/workflows/` のうち `CI` / `No attribution trailers` / `PR title` / `PR closing keywords` の4本が持つ。逐語は `grep -Fn -- 'cancel-in-progress: true' .github/workflows/ci.yml`）、**同じ枝へ短い間に2つのイベントが飛ぶと、push が無くても同じ sha の上に世代が2つ生まれて先の世代が切られる。**
+    - **⟹ `check-runs` の一覧に見える `conclusion=cancelled` の行は、最新世代とは限らない。** 上の2世代は `cancel-in-progress: true` が作ったもので（`.github/workflows/` のうち `cancel-in-progress: true` を持つもの。何本在るかはここに数え上げない。逐語は `grep -Fn -- 'cancel-in-progress: true' .github/workflows/ci.yml`）、**同じ枝へ短い間に2つのイベントが飛ぶと、push が無くても同じ sha の上に世代が2つ生まれて先の世代が切られる。**
       - **実際に1人が誤読した**（2026-09-16 観測）。`check-runs` の `cancelled` の行を見て「required の門が `cancelled` の世代を持っている」と読み、**最新世代は `success` だった。** ⚠️ **誤りの向きは赤の側なので、この回は実害が出ていない。鏡像（古い世代の `success` を最新と読んで赤を見落とす）は、上の `started_at` / `id` の逆転の項が扱っている。**
       - **⚠️ 「最新世代が `cancelled`」という状態自体は実在する**（実測 2026-09-17T02:20Z、直近1000 run の窓で **33件**。全部 `CI` の run で、`ci` と `image` は required である）。**ただしそのとき GitHub が required を満たしたと見なすかは測れていない** —— 経緯と、測るのに要る費用は #1155 に在る
   - **その run が実際にジョブを実行したか**を見る（`actions/runs/<id>/jobs` の `total_count` が0でないこと。実行時間も見る）
