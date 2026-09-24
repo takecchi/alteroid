@@ -3188,6 +3188,22 @@ interface SynthesizedNoticeWindow {
   fragments: SynthesizedNoticeFragment[];
   /** 窓を閉じるタイマー（flush で必ず `clearTimeout`）。 */
   timer: ReturnType<typeof setTimeout>;
+  /**
+   * **この窓に合図が届いた時刻（`this.#now()`、到着順）——issue #1388。**
+   *
+   * 3000ms の合流窓が実際にどれだけ使われているか（＝続けて届いた間隔が
+   * 窓の境目にどれだけ近づいたか）を、3標本しかない既定値の判定材料に
+   * するための計器である。**畳み込みの鍵・判定・配り方は1文字も変えない**
+   * ——ここに足すのは観測用の記録だけで、`#queueSynthesizedNotice` が
+   * 積むか配るかを決める分岐は元のままである。
+   *
+   * 1件だけの窓（新規オープン後、他の合図と合流せずに閉じた窓）では
+   * 長さ1のまま残り、{@link Pool.#flushSynthesizedNoticeFor} はそれを
+   * 「合流しなかった」として扱い、日誌へは書かない（地雷表「取れない軸に
+   * 0の行を作る」——1件だけの窓は取れない軸ではなく単に合流が無かった
+   * だけなので、0件という値そのものを作らずに行自体を出さない）。
+   */
+  arrivedAt: number[];
 }
 
 /**
@@ -3476,6 +3492,35 @@ export function mergeSynthesizedNoticeFragments(fragments: readonly SynthesizedN
     )
     .join('\n\n');
   return { text: `${header}\n\n${body}`, breakdown, arrived };
+}
+
+/**
+ * **合流窓（{@link SYNTHESIZED_NOTICE_WINDOW_MS}）へ続けて届いた合図の
+ * 到着間隔を測る——issue #1388（窓3000msの根拠が3標本しかない）。**
+ *
+ * `arrivedAt`（到着順の `this.#now()` の列）から、隣り合う到着どうしの
+ * 間隔（ms）をすべて取り、その最大・最小・件数を返す。**1件しか無い
+ * （＝この窓では他の合図と合流しなかった）ときは `undefined` を返す**——
+ * 呼び出し側はこれを「日誌へ行を書かない」の合図として使う（地雷表
+ * 「取れない軸に0の行を作る」——合流しなかったこと自体は0件という値では
+ * なく、行が無いことで表す）。
+ *
+ * **畳み込みの判定にも配り方にも使わない。** 返す値は日誌へ書く計器
+ * だけの入力であり、`#queueSynthesizedNotice` / `#flushSynthesizedNoticeFor`
+ * の分岐は1つもこの関数の戻り値を見ない。
+ */
+export function synthesizedNoticeArrivalIntervals(
+  arrivedAt: readonly number[],
+): { count: number; maxIntervalMs: number; minIntervalMs: number } | undefined {
+  if (arrivedAt.length <= 1) return undefined;
+  let maxIntervalMs = -Infinity;
+  let minIntervalMs = Infinity;
+  for (let i = 1; i < arrivedAt.length; i += 1) {
+    const interval = (arrivedAt[i] ?? 0) - (arrivedAt[i - 1] ?? 0);
+    if (interval > maxIntervalMs) maxIntervalMs = interval;
+    if (interval < minIntervalMs) minIntervalMs = interval;
+  }
+  return { count: arrivedAt.length, maxIntervalMs, minIntervalMs };
 }
 
 class Pool implements ManagerPool {
@@ -10102,6 +10147,13 @@ class Pool implements ManagerPool {
    * ための関門である。
    */
   #queueSynthesizedNotice(managerId: string, label: SynthesizedNoticeLabel, text: string): void {
+    // **この回の到着時刻（issue #1388 の計器）。** 窓に留まって合流する回
+    // （下の2箇所）でだけ `arrivedAt` へ足す——新しい窓を開く回（末尾）は
+    // 「まだ何とも合流していない1件目」なので、そこでも足すが、続く回が
+    // 無いままこの窓が閉じれば `arrivedAt.length === 1` のまま残り、
+    // `#flushSynthesizedNoticeFor` はそれを「合流しなかった」として日誌へは
+    // 書かない。
+    const arrivedAt = this.#now();
     const existing = this.#synthesizedNotices.get(managerId);
     if (existing !== undefined) {
       // **完全な重複（族も本文も同一）は数を増やすだけ。** 本文の比較は
@@ -10112,12 +10164,14 @@ class Pool implements ManagerPool {
       );
       if (duplicate !== undefined) {
         duplicate.count += 1;
+        existing.arrivedAt.push(arrivedAt);
         return;
       }
       if (existing.fragments.some((fragment) => fragment.label === label)) {
         this.#flushSynthesizedNoticeFor(managerId);
       } else {
         existing.fragments.push({ label, text, count: 1 });
+        existing.arrivedAt.push(arrivedAt);
         return;
       }
     }
@@ -10126,7 +10180,11 @@ class Pool implements ManagerPool {
     }, this.#synthesizedNoticeWindowMs);
     // デーモンの停止をこのタイマーで引き延ばさない（`#scheduleReattach`と同じ形）。
     timer.unref?.();
-    this.#synthesizedNotices.set(managerId, { fragments: [{ label, text, count: 1 }], timer });
+    this.#synthesizedNotices.set(managerId, {
+      fragments: [{ label, text, count: 1 }],
+      timer,
+      arrivedAt: [arrivedAt],
+    });
   }
 
   /**
@@ -10156,6 +10214,27 @@ class Pool implements ManagerPool {
     this.#synthesizedNotices.delete(managerId);
     clearTimeout(entry.timer);
     const { text, breakdown, arrived } = mergeSynthesizedNoticeFragments(entry.fragments);
+
+    // **この窓に続けて届いた合図の間隔を日誌へ残す（issue #1388、測るだけ）。**
+    // 3000msの合流窓の妥当性を、後で標本を溜めて判断するための計器であり、
+    // 3000msの値・合流の判定・鍵・配り方は1文字も変えていない。
+    // `synthesizedNoticeArrivalIntervals` が `undefined` を返す（＝この窓は
+    // 他の合図と合流しなかった）ときは行を書かない——地雷表「取れない軸に
+    // 0の行を作る」と同じ理由で、書くのは合流が実際に起きた回だけである。
+    const arrivalIntervals = synthesizedNoticeArrivalIntervals(entry.arrivedAt);
+    if (arrivalIntervals !== undefined) {
+      void this.#journal({
+        type: 'exchange',
+        with: 'manager',
+        role: 'inbound',
+        text:
+          `${EXCHANGE_KIND_GAUGE_PREFIX}[${managerId}] 合流窓に続けて畳まれた合図は ` +
+          `${String(arrivalIntervals.count)} 件、間隔は最大 ${String(arrivalIntervals.maxIntervalMs)}ms・` +
+          `最小 ${String(arrivalIntervals.minIntervalMs)}ms だった` +
+          `（窓の長さ ${String(this.#synthesizedNoticeWindowMs)}ms）。`,
+      });
+    }
+
     // **直前に配った束と署名が同じなら、配らずに数だけ残す**
     // （{@link SynthesizedNoticeStreak}）。**1件目はここへ来ない**——
     // 連鎖はこの下の `set` で「配った」あとに初めて立つので、

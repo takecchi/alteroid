@@ -146,7 +146,17 @@ interface ManualSetup {
 
 async function runningManualSetup(
   managerId = 'mgr-quota',
-  options: { synthesizedNoticeWindowMs?: number; alsoRunning?: readonly string[] } = {},
+  options: {
+    synthesizedNoticeWindowMs?: number;
+    alsoRunning?: readonly string[];
+    /**
+     * **足したのは「時刻を差し替える」口だけで、既存の呼び出し（省略時は
+     * `createManagerPool` の既定＝ `Date.now`）は1バイトも変えていない。**
+     * issue #1388（合流窓に続けて届いた合図の到着間隔を測る計器）の歯が、
+     * 実時間の揺れに頼らず間隔を作るために要る。
+     */
+    now?: () => number;
+  } = {},
 ): Promise<ManualSetup> {
   const stores = createMemoryStores();
   const fake = manualRunner();
@@ -185,6 +195,7 @@ async function runningManualSetup(
     post: (event) => inbox.push(event),
     runners: registry,
     synthesizedNoticeWindowMs: options.synthesizedNoticeWindowMs,
+    now: options.now,
   });
 
   await pool.restore();
@@ -1123,5 +1134,96 @@ describe('枠の知らせの畳み込みに関わったマネージャーの本�
     // 出ると、従来この分岐を通っていた回の本文が変わってしまう。
     expect(reports[0]?.text).not.toContain('件畳んでいる');
     expect(reports[0]?.text).not.toContain('本の');
+  });
+});
+
+/**
+ * ============================================================================
+ * **合流窓に続けて畳まれた合図の到着間隔を日誌へ残す（issue #1388）**
+ * ============================================================================
+ *
+ * 3000msの合流窓（`SYNTHESIZED_NOTICE_WINDOW_MS`）の既定値は、依頼者が実測した
+ * 3標本（最大1,682ms）だけを根拠にしている（issue #1388）。この節は、その根拠を
+ * 増やすための計器——**窓の当否そのものは決めない。測るだけである。**
+ *
+ * 測るのは「合流の対象になった合図が続けて届いた間隔」——同じ合流窓（＝同じ
+ * managerId の {@link SynthesizedNoticeWindow}）に2件目以降が積まれた回の
+ * 到着間隔（ms）を、`#flushSynthesizedNoticeFor` が窓を閉じるときに件数・最大・
+ * 最小として日誌へ1行だけ残す（{@link synthesizedNoticeArrivalIntervals}）。
+ *
+ * **畳み込みの鍵・判定・配り方は1文字も変えていない。** `now` を差し替えて
+ * 到着時刻を直接制御することで、実時間の揺れに頼らず間隔を固定する
+ * （`runningManualSetup` の `now` オプション）。
+ */
+describe('合流窓に続けて畳まれた合図の到着間隔を日誌へ残す（issue #1388、測るだけ）', () => {
+  /** `#flushSynthesizedNoticeFor` が書く、到着間隔の計器の行だけを拾う。 */
+  async function intervalGaugeLines(stores: Stores): Promise<string[]> {
+    // flush の日誌は `void this.#journal(...)`（fire-and-forget）なので、
+    // 書き込みの継続を1度走らせてから読む（`mergedJournalCount` と同じ理由）。
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const entries = await stores.journal.list({ types: ['exchange'] });
+    return entries
+      .map((entry) => JSON.stringify(entry))
+      .filter((text) => text.includes('合流窓に続けて畳まれた合図'));
+  }
+
+  it('陽性: 3つの族が合流すると、件数と最大・最小の到着間隔が1行に残る', async () => {
+    let clock = new Date('2026-09-24T00:00:00.000Z').getTime();
+    const { pool, stores, fake } = await runningManualSetup('mgr-quota', {
+      now: () => clock,
+    });
+
+    // 3族（rate_limit / usage_notice / closed_failed）が同じ窓へ、
+    // 400ms → 900ms の間隔で続けて届く。族が違うので、いずれも
+    // 「同じ本文の重複」ではなく新しい断片として同じ窓へ積まれる
+    // （`#queueSynthesizedNotice` の族判定）。
+    fake.rateLimit('mgr-quota', { status: 'rejected', kind: 'five_hour' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    clock += 400;
+    fake.usageNotice('mgr-quota', { kind: 'reached', text: '上限に当たった' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    clock += 900;
+    fake.closed('mgr-quota', 'failed', '落ちた');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    await pool.stop();
+
+    const lines = await intervalGaugeLines(stores);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('mgr-quota');
+    expect(lines[0]).toContain('3 件');
+    expect(lines[0]).toContain('最大 900ms');
+    expect(lines[0]).toContain('最小 400ms');
+    // **窓の長さも一緒に残す**（境目にどれだけ近づいたかを、後から読む人が
+    // 自分で比を取れるようにするため）。既定3000msのまま差し替えていない。
+    expect(lines[0]).toContain('窓の長さ 3000ms');
+  });
+
+  it('やりすぎの対照: 1件だけの窓では、合流しなかったので行が出ない', async () => {
+    const { pool, stores, fake } = await runningManualSetup('mgr-quota');
+
+    fake.rateLimit('mgr-quota', { status: 'rejected', kind: 'five_hour' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    await pool.stop();
+
+    expect(await intervalGaugeLines(stores)).toHaveLength(0);
+  });
+
+  it('やりすぎの対照: 窓を越えて別々に配られた2件では、どちらの窓でも行が出ない', async () => {
+    // **窓を30msに絞る**（`afterWindow` と同じ理由——既定3000msを実時間で
+    // 待つと歯が遅くなるだけで、測っているもの自体は変わらない）。
+    const { pool, stores, fake } = await runningManualSetup('mgr-quota', {
+      synthesizedNoticeWindowMs: 30,
+    });
+
+    fake.rateLimit('mgr-quota', { status: 'rejected', kind: 'five_hour' });
+    await afterWindow();
+    fake.rateLimit('mgr-quota', { status: 'rejected', kind: 'five_hour' });
+    await afterWindow();
+
+    await pool.stop();
+
+    expect(await intervalGaugeLines(stores)).toHaveLength(0);
   });
 });
