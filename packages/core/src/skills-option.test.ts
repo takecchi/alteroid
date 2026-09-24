@@ -42,6 +42,7 @@ function cloneOptions(): Options {
     onPreCompact: noopHook,
     onPostToolUse: noopHook,
     onPostToolUseFailure: noopHook,
+    onPreToolUse: noopHook,
   });
 }
 

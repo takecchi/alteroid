@@ -178,6 +178,29 @@ export const approvals = pgTable('approvals', {
  * `kind` が主キーなのは、同じ名前の依頼を二重に持たないためである（同じ名前で
  * 仕込み直したら置き換わるのが正しい）。本文は jsonb にそのまま入れる。
  */
+/**
+ * 人間が承認した Bash 許可の記録（Issue #863）。`approvals` と同じ形——本体は
+ * jsonb（`grant`）にそのまま入れ、絞り込みに使う欄（`granted_at` /
+ * `revoked_at`）だけ派生列として持つ。
+ */
+export const permissionGrants = pgTable('permission_grants', {
+  id: text('id').primaryKey(),
+  grantedAt: timestamp('granted_at', { withTimezone: true, mode: 'date' }).notNull(),
+  revokedAt: timestamp('revoked_at', { withTimezone: true, mode: 'date' }),
+  /**
+   * ⚠️ **設計メモは列名を `grant` としていたが、`GRANT` は PostgreSQL の予約語**
+   * ——`create table ... (grant jsonb not null)` は素の DDL では構文エラーになる
+   * （実測: PGlite で `syntax error at or near "grant"`）。drizzle 経由の
+   * 通常のクエリは列名を自動で二重引用符に包むので実害は出ないが、`migrate.ts`
+   * はここを生の SQL 文字列として書いており、二重引用符を足すだけの回避は
+   * 「以後この列だけ引用が必須」という別の罠を残す。**列名そのものを
+   * `record` へ変える**——`approvals` / `schedules` / `authLoginRequests`
+   * が blob 列をそれぞれ `approval` / `plan` / `request` と呼ぶのと同じ
+   * 「その表が持つ1件」を指す一般名の作法。
+   */
+  record: jsonb('record').notNull(),
+});
+
 export const schedules = pgTable('schedules', {
   kind: text('kind').primaryKey(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),

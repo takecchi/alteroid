@@ -19,6 +19,7 @@ import type {
   MemoryDocumentMeta,
   MemoryProtectionStatus,
   PendingApproval,
+  PermissionGrant,
   Practice,
   PracticeMeta,
   PracticeVersion,
@@ -466,6 +467,24 @@ export interface JobStore {
    * #workspace-reset）。**この2つは1枚のストアなので、一緒に1操作で消す。**
    */
   clear(): Promise<{ jobs: number; approvals: number }>;
+}
+
+/**
+ * 人間が承認した Bash 許可の記録（Issue #863）。
+ *
+ * **`clear()` を持たない——意図してである。** `POST /reset`（`workspace-reset.ts`）
+ * はこのストアに触れない。人間が承認した許可は、記憶や日誌をリセットしても
+ * 黙って失われるべきではない（消したいなら `revoke` を明示的に叩く）。
+ *
+ * **`list()` を「毎回ストアを引き直す」前提で使う呼び手が居る**
+ * （`clone.ts` の `#onPreToolUse`——Bash 呼び出しのたびに呼ぶ）。キャッシュを
+ * 実装側に足さないこと。足すと「取り消しは次の呼び出しから効く」が崩れる。
+ */
+export interface PermissionGrantStore {
+  list(): Promise<PermissionGrant[]>;
+  get(id: string): Promise<PermissionGrant | null>;
+  /** id で置き換える（`JobStore.putApproval` と同じ形——新規作成にも更新にも使う）。 */
+  put(grant: PermissionGrant): Promise<void>;
 }
 
 /**
@@ -1912,6 +1931,13 @@ export interface Stores {
    * 記憶を根拠に何を人間へ確認するか）とは別の層である。** 混ぜてはいけない。
    */
   auth: AuthStore;
+  /**
+   * 人間が承認した Bash 許可の記録（Issue #863）。**省略可能にしないこと**
+   * （`schedules` / `inbox` と同じ理由——器が違うだけで上の層が見るものは
+   * 同じである、が M4 の要件で、片方の器でだけ「以降許可」が効かないという
+   * 能力差を作らない）。
+   */
+  permissionGrants: PermissionGrantStore;
   /**
    * 実行環境プロファイル（`.zprofile` 相当）。**環境変数を器に増やす代わりの口**で
    * あり、用途が増えるたびに実装を直さずに済ませるためにここに置く。

@@ -81,7 +81,7 @@ import {
   noteUnreadableRecord,
   reasonOf,
 } from './dropped-record.js';
-import type { CloneHost } from './host.js';
+import type { AnswerApprovalVia, CloneHost } from './host.js';
 import { createRunnerRegistry, type RunnerClient } from './runner-protocol.js';
 import { Inbox } from './inbox.js';
 import { createManagerPool, type ManagerPool, type ManagerSummary } from './manager.js';
@@ -120,7 +120,12 @@ import {
 } from './prompt.js';
 import { DAILY_REPORT_KIND, localDate, localDayRange } from './schedule.js';
 import type { ScheduleStatus } from './schedule.js';
-import { commitmentClosedBySchema, isDailyReport, isWrittenDailyReport } from './schema.js';
+import {
+  commitmentClosedBySchema,
+  isDailyReport,
+  isWrittenDailyReport,
+  PERMISSION_GRANT_CONSENT_PHRASE,
+} from './schema.js';
 import type {
   ChatStreamEvent,
   Commitment,
@@ -128,8 +133,12 @@ import type {
   JournalEntry,
   JournalEntryInput,
   MemoryDocument,
+  PendingApproval,
+  PermissionGrant,
   ScheduledRequest,
 } from './schema.js';
+import { matchPermissionRule } from './permission-rule.js';
+import { collapseErrorCause } from './error-cause.js';
 import { resolveBuildRevision, resolveBuildTime } from './revision.js';
 import type { CloneRuntimeFacts, SelfFacts } from './self.js';
 import { findOpenManagerDuplicate } from './store.js';
@@ -2887,7 +2896,7 @@ class Clone implements CloneHost {
     this.#notices.forgetConversation(conversationId);
   }
 
-  async answerApproval(approvalId: string, answer: string): Promise<void> {
+  async answerApproval(approvalId: string, answer: string, via?: AnswerApprovalVia): Promise<void> {
     const approval = await this.#stores.jobs.getApproval(approvalId);
     if (!approval) throw new Error(`承認待ち ${approvalId} は存在しない`);
 
@@ -2903,6 +2912,11 @@ class Clone implements CloneHost {
       answer,
     });
 
+    // **`request_permission` が起こした要求だけ、許可の記録を試みる**（Issue
+    // #863）。`approval.permissionRequest` が無ければ何もしない——普通の
+    // `ask_human` の答えはここを通らない。
+    await this.#recordPermissionGrantIfConsented(approval, answer, answeredAt, via);
+
     // 回答は受信箱へ。止まっていたその仕事だけが再開する。
     // **承認が会話 id を持っていれば、その写しを運ぶ（#768）。** 持っていなければ
     // undefined のままで、今までどおり内部ターン（`self`）として扱われる。
@@ -2913,6 +2927,105 @@ class Clone implements CloneHost {
       approvalId,
       answer,
       ...(approval.conversationId === undefined ? {} : { conversationId: approval.conversationId }),
+    });
+  }
+
+  /**
+   * `request_permission` が起こした要求に、人間が答えたときだけ呼ばれる
+   * （`answerApproval` の内側。Issue #863）。許可を記録するかどうかを決め、
+   * どちらに転んでも理由を日誌へ残す——**記録しなかったことも、記録した
+   * ことと同じ重さで残す**（依頼者が「なぜ効かなかったか」を後から読める
+   * ように）。
+   *
+   * 記録する条件は3つ、**すべて満たしたときだけ**である:
+   *
+   * 1. `approval.permissionRequest` が在る（`ask_human` 経由の普通の確認では
+   *    ない）
+   * 2. `answer`（前後の空白だけ trim）が {@link PERMISSION_GRANT_CONSENT_PHRASE}
+   *    と**ちょうど**一致する——「許可します。」（句点付き）のような近い
+   *    言い回しでも記録しない。人間が実際に何を承認したのかを機械的に
+   *    確定できないときは、記録しない側へ倒す
+   * 3. `via`（回答の経路）が渡されていて、かつ `via.kind === 'account'`
+   *    である
+   *
+   * **⚠️ `via.kind === 'operator'` と `via === undefined` は同じ扱い
+   * （記録しない）だが、理由は違う。** `operator` の資格は「実行環境の
+   * 持ち主」を表すだけで、その token は `state/daemon.json` や `/health`
+   * からクローンの器（≒この同じプロセスが読めるファイル）を経由して
+   * クローン自身の Bash からも読める——つまり **operator 経由の回答は
+   * 「人間がそう答えた」ことの証拠にならない**（クローンが自分で `answer`
+   * を偽造できる）。`via === undefined` は、呼び出し側（CLI・内部呼び出し）
+   * が経路を渡さなかった場合——**既定は不許可**（`.claude/skills/
+   * auth-and-access/SKILL.md` の通る資格2種類のうち、①アクセストークン
+   * だけがここでの「人間の証拠」になる）。
+   *
+   * **記録に失敗しても、この関数は投げない。** `answerApproval` 本体
+   * （承認への回答そのもの）は、許可の記録が失敗してもいつもどおり進む
+   * ——許可の記録は `answerApproval` の副産物であって、その成否が
+   * 人間への回答という主作用を巻き込んではいけない。
+   */
+  async #recordPermissionGrantIfConsented(
+    approval: PendingApproval,
+    answer: string,
+    answeredAt: string,
+    via: AnswerApprovalVia | undefined,
+  ): Promise<void> {
+    const { permissionRequest } = approval;
+    if (permissionRequest === undefined) return;
+
+    const grounds = `approvalId=${approval.id}・rule=${permissionRequest.rule}`;
+
+    if (answer.trim() !== PERMISSION_GRANT_CONSENT_PHRASE) {
+      await this.#journal({
+        type: 'decision',
+        decision: `許可を記録しなかった: ${permissionRequest.rule}`,
+        grounds: `回答が定型文（${PERMISSION_GRANT_CONSENT_PHRASE}）と一致しない（${grounds}）`,
+      });
+      return;
+    }
+    if (via === undefined) {
+      await this.#journal({
+        type: 'decision',
+        decision: `許可を記録しなかった: ${permissionRequest.rule}`,
+        grounds: `回答の経路が指定されていない——既定は不許可（${grounds}）`,
+      });
+      return;
+    }
+    if (via.kind !== 'account') {
+      await this.#journal({
+        type: 'decision',
+        decision: `許可を記録しなかった: ${permissionRequest.rule}`,
+        grounds:
+          `回答の経路が実行環境の持ち主（operator）だった——operator の資格はクローンの器から` +
+          `読めるため、人間の証拠にならない（${grounds}）`,
+      });
+      return;
+    }
+
+    const grant: PermissionGrant = {
+      id: randomUUID(),
+      rule: permissionRequest.rule,
+      allows: permissionRequest.allows,
+      denies: permissionRequest.denies,
+      approvalId: approval.id,
+      answer,
+      grantedAt: answeredAt,
+      route: { principalKind: 'account', accountId: via.accountId },
+    };
+    try {
+      await this.#stores.permissionGrants.put(grant);
+    } catch (error) {
+      await this.#journal({
+        type: 'decision',
+        decision: `許可の記録に失敗した: ${permissionRequest.rule}`,
+        grounds: `${collapseErrorCause(error)}（${grounds}）`,
+      });
+      return;
+    }
+    await this.#journal({
+      type: 'decision',
+      decision: `許可を記録した: ${permissionRequest.rule}`,
+      grounds: `許可されたアカウント（${via.accountId}）の回答（${grounds}）`,
     });
   }
 
@@ -8768,6 +8881,10 @@ class Clone implements CloneHost {
       ...(this.#cwd === undefined ? {} : { cwd: this.#cwd }),
       resume,
       ...(this.#sessionStore === undefined ? {} : { sessionStore: this.#sessionStore }),
+      // 人間が承認した Bash 許可（Issue #863）を消費する唯一の口。中身は
+      // `#onPreToolUse` の doc、配線の理由は `claude-provider.ts` の
+      // `CloneSessionOptionsRequest.onPreToolUse` の doc。
+      onPreToolUse: (input) => this.#onPreToolUse(input),
       onPreCompact: (input, _toolUseId, extra) => this.#onPreCompact(input, extra?.signal),
       // `self_status` の effort と、**クローンが自分の手を使った跡**をここで拾う
       // （後者は `#onPostToolUse` のコメント）。
@@ -8953,6 +9070,72 @@ class Clone implements CloneHost {
     this.#apiKeySource = facts.apiKeySource;
     this.#observedPermissionMode = facts.permissionMode;
     this.#mcpServersInfo = facts.mcpServers;
+  }
+
+  /**
+   * 人間が承認した Bash 許可（Issue #863）に、いま流れてきたコマンドが一致
+   * するかを見る。一致すれば `permissionDecision: 'allow'` を返し、その許可
+   * の `lastUsedAt` を進める。**一致しなければ何も決めない**（`continue: true`
+   * だけを返す——`deny` はしない。一致しないコマンドは、既存の確認フロー
+   * （`permissionMode` / 人間の確認）へそのまま委ねる）。
+   *
+   * ## 射程はクローン本セッションの `Bash` だけ
+   *
+   * - **`Bash` 以外は素通り。** ここは「何でも通しうる門」ではなく、Bash の
+   *   許可だけを扱う（地雷表「確認が要る行為の一覧を作る」と同じ理由で
+   *   対象を1本に絞る——`runner.ts` の `#onPreToolUse`
+   *   （`bash-wait-guard.ts`、deny 側）と同じ絞り方）。
+   * - **このフックはクローン本セッション（`#buildOptions` →
+   *   `buildCloneSessionOptions`）にしか配線しない。** 蒸留
+   *   （`buildCloneDistillOptions`）・マネージャー／作業者
+   *   （`runner.ts` が別プロセスで組む `buildManagerSessionOptions`）は
+   *   この許可の対象ではない——蒸留は `Bash` を呼ばない設計だが、
+   *   マネージャー・作業者は独立した SDK セッションで、この許可のストア
+   *   すら見ていない。
+   *
+   * ## 毎回引き直す（キャッシュしない）
+   *
+   * `this.#stores.permissionGrants.list()` を呼び出しのたびに呼ぶ。
+   * キャッシュすると「取り消しは次の呼び出しから効く」という要件が崩れる
+   * ——1回引いて使い回せば、`revoke` した後の呼び出しも古い許可を見続ける。
+   *
+   * ## `lastUsedAt` の書き込みは失敗しても allow を止めない
+   *
+   * 観測用の副作用（最終使用時刻）が書けなかったからといって、既に下した
+   * 「一致した」という判断を覆さない——`allow` を返すかどうかは一致した
+   * 事実だけで決まる。
+   */
+  async #onPreToolUse(input: unknown): Promise<{
+    continue: true;
+    hookSpecificOutput?: {
+      hookEventName: 'PreToolUse';
+      permissionDecision: 'allow';
+      permissionDecisionReason: string;
+    };
+  }> {
+    const hook = input as { tool_name?: unknown; tool_input?: unknown };
+    if (hook.tool_name !== 'Bash') return { continue: true };
+
+    const toolInput = hook.tool_input as { command?: unknown } | null | undefined;
+    const command = toolInput?.command;
+    if (typeof command !== 'string') return { continue: true };
+
+    const grants = await this.#stores.permissionGrants.list();
+    const now = new Date().toISOString();
+    for (const grant of grants) {
+      if (grant.revokedAt !== undefined) continue;
+      if (!matchPermissionRule(grant.rule, command)) continue;
+      await this.#stores.permissionGrants.put({ ...grant, lastUsedAt: now }).catch(() => undefined);
+      return {
+        continue: true,
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'allow',
+          permissionDecisionReason: `人間が承認した許可に一致した（${grant.rule}）`,
+        },
+      };
+    }
+    return { continue: true };
   }
 
   /**

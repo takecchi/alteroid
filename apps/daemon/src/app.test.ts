@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type {
+  AnswerApprovalVia,
   ChatStreamEvent,
   CloneHost,
   InboxBacklogBreakdown,
@@ -62,7 +63,7 @@ import { startUsagePolling } from './usage-poller.js';
 function fakeClone() {
   const listeners = new Map<string, Set<(event: ChatStreamEvent) => void>>();
   const ended: string[] = [];
-  const answered: { id: string; answer: string }[] = [];
+  const answered: { id: string; answer: string; via?: AnswerApprovalVia }[] = [];
   const posted: InboxEvent[] = [];
   /**
    * `CloneHost.dropQueuedInboxEvents` が受け取った id の塊（issue #1049）。
@@ -255,8 +256,8 @@ function fakeClone() {
     async endConversation(conversationId) {
       ended.push(conversationId);
     },
-    async answerApproval(id, answer) {
-      answered.push({ id, answer });
+    async answerApproval(id, answer, via) {
+      answered.push({ id, answer, ...(via === undefined ? {} : { via }) });
     },
     // 消した合図の配達を止める（issue #1049）。**何を渡されたかを記録する** ——
     // `POST /inbox/remove` が器から消すだけで終わっていないことを、応答の文言
@@ -1154,7 +1155,9 @@ describe('HTTP API', () => {
 
     const answer = await app.request('/approvals/ap-1/answer', json({ answer: 'よい' }));
     expect(answer.status).toBe(200);
-    expect(fake.answered).toEqual([{ id: 'ap-1', answer: 'よい' }]);
+    // **既定（認証を要求しない構成）では、全リクエストが operator として通る**
+    // （Issue #863。`answerApprovalViaOf` が `c.get('principal')` から作る）。
+    expect(fake.answered).toEqual([{ id: 'ap-1', answer: 'よい', via: { kind: 'operator' } }]);
   });
 
   it('存在しない承認待ちへの回答は 404', async () => {
@@ -3672,9 +3675,10 @@ describe('HTTP API', () => {
         { id: 'ap-2', ok: true },
       ],
     });
+    // 既定（認証を要求しない構成）では operator 経由になる（Issue #863。直上のテストと同じ理由）。
     expect(fake.answered).toEqual([
-      { id: 'ap-1', answer: 'よい' },
-      { id: 'ap-2', answer: 'だめ' },
+      { id: 'ap-1', answer: 'よい', via: { kind: 'operator' } },
+      { id: 'ap-2', answer: 'だめ', via: { kind: 'operator' } },
     ]);
   });
 
@@ -7387,6 +7391,176 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
     const body = JSON.parse(text) as Record<string, unknown>;
     expect(body).not.toHaveProperty('data');
     expect(typeof body.error).toBe('string');
+  });
+
+  /**
+   * `GET /permission-grants` / `POST /permission-grants/:id/revoke`（Issue #863）。
+   *
+   * **`via` の伝播そのもの**（account 経路で `clone.answerApproval` へ
+   * `{ kind: 'account', accountId }` が渡ること）は、上の「既定（認証を要求
+   * しない構成）では operator として通る」の2件が operator 側を、この
+   * describe が account 側を測る——両方揃って初めて「経路で分岐している」
+   * ことが言える。
+   */
+  describe('/permission-grants（Issue #863）', () => {
+    const FAKE_PROVIDER = {
+      kind: 'oauth2' as const,
+      id: 'fake',
+      label: 'Fake',
+      authorizationUrl: (request: { state: string }) =>
+        `https://example.test/authorize?state=${request.state}`,
+      exchange: async () => ({
+        subject: 'sub-permgrant-test',
+        email: 'sub-permgrant-test@example.test',
+        emailVerified: true,
+        displayName: 'sub-permgrant-test',
+      }),
+    };
+    const OPERATOR = { authorization: 'Bearer operator-token' };
+
+    function buildAuthedApp() {
+      const authStores = createMemoryStores();
+      const resolved: AuthPlan = {
+        enabled: true,
+        providers: [FAKE_PROVIDER],
+        publicBaseUrl: 'http://127.0.0.1:4517',
+        tokenTtlDays: 30,
+        description: 'テスト',
+      };
+      const authFake = fakeClone();
+      const authedApp = createApp({
+        clone: authFake.clone,
+        stores: authStores,
+        token: 'operator-token',
+        shutdown: () => undefined,
+        tokens: createTokenPoolService({ stores: authStores }),
+        auth: {
+          plan: resolved,
+          service: createAuthService({
+            store: authStores.auth,
+            providers: createAuthProviderRegistry(resolved.providers),
+          }),
+        },
+      });
+      return { app: authedApp, stores: authStores, fake: authFake };
+    }
+
+    /** ログインさせて、実行環境の持ち主として許可（grant）まで通す。 */
+    async function grantedAccountToken(
+      authedApp: ReturnType<typeof createApp>,
+    ): Promise<{ token: string; accountId: string }> {
+      const started = (await (
+        await authedApp.request('/auth/login', { ...post, body: JSON.stringify({ provider: 'fake' }) })
+      ).json()) as { requestId: string; authorizationUrl: string; claimSecret: string };
+      const state = new URL(started.authorizationUrl).searchParams.get('state') ?? '';
+      await authedApp.request(`/auth/fake/callback?code=any&state=${encodeURIComponent(state)}`);
+      const claimed = (await (
+        await authedApp.request(`/auth/login/${started.requestId}/claim`, {
+          ...post,
+          body: JSON.stringify({ claimSecret: started.claimSecret }),
+        })
+      ).json()) as { token: string; account: { id: string } };
+      await authedApp.request(`/access/${claimed.account.id}/grant`, {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+      });
+      return { token: claimed.token, accountId: claimed.account.id };
+    }
+
+    it('一覧は grantedAt 昇順で返る', async () => {
+      await stores.permissionGrants.put({
+        id: 'grant-2',
+        rule: 'Bash(gh pr view)',
+        allows: ['gh pr view'],
+        denies: ['gh pr view; rm -rf /'],
+        approvalId: 'ap-2',
+        answer: '許可します',
+        grantedAt: '2026-02-01T00:00:00.000Z',
+        route: { principalKind: 'account', accountId: 'acc-x' },
+      });
+      await stores.permissionGrants.put({
+        id: 'grant-1',
+        rule: 'Bash(gh release edit:*)',
+        allows: ['gh release edit'],
+        denies: ['gh release edit; rm -rf /'],
+        approvalId: 'ap-1',
+        answer: '許可します',
+        grantedAt: '2026-01-01T00:00:00.000Z',
+        route: { principalKind: 'account', accountId: 'acc-x' },
+      });
+
+      const response = await app.request('/permission-grants');
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { grants: { id: string }[] };
+      expect(body.grants.map((g) => g.id)).toEqual(['grant-1', 'grant-2']);
+    });
+
+    it('取り消しは revokedAt を立て、日誌へ残す。既に取り消し済みでも 200', async () => {
+      await stores.permissionGrants.put({
+        id: 'grant-1',
+        rule: 'Bash(gh pr view)',
+        allows: ['gh pr view'],
+        denies: ['gh pr view; rm -rf /'],
+        approvalId: 'ap-1',
+        answer: '許可します',
+        grantedAt: '2026-01-01T00:00:00.000Z',
+        route: { principalKind: 'account', accountId: 'acc-x' },
+      });
+
+      const first = await app.request('/permission-grants/grant-1/revoke', post);
+      expect(first.status).toBe(200);
+      const revoked = await stores.permissionGrants.get('grant-1');
+      expect(revoked?.revokedAt).toBeDefined();
+
+      const decisions = await stores.journal.list({ types: ['decision'] });
+      expect(
+        decisions.some(
+          (entry) => entry.type === 'decision' && entry.decision.includes('許可を取り消した'),
+        ),
+      ).toBe(true);
+
+      // 既に取り消し済みでも 200 で、revokedAt を上書きしない。
+      const second = await app.request('/permission-grants/grant-1/revoke', post);
+      expect(second.status).toBe(200);
+      const stillRevoked = await stores.permissionGrants.get('grant-1');
+      expect(stillRevoked?.revokedAt).toBe(revoked?.revokedAt);
+    });
+
+    it('存在しない id は 404', async () => {
+      const response = await app.request('/permission-grants/no-such-id/revoke', post);
+      expect(response.status).toBe(404);
+    });
+
+    it('account 経路の回答は clone.answerApproval へ { kind: "account", accountId } を渡す', async () => {
+      const authed = buildAuthedApp();
+      const { token, accountId } = await grantedAccountToken(authed.app);
+
+      await authed.stores.jobs.putApproval({
+        id: 'ap-perm-http',
+        createdAt: new Date().toISOString(),
+        question: '以降 Bash(gh pr view) を聞かずに通してよいか',
+        permissionRequest: {
+          rule: 'Bash(gh pr view)',
+          allows: ['gh pr view'],
+          denies: ['gh pr view; rm -rf /'],
+        },
+      });
+
+      const response = await authed.app.request('/approvals/ap-perm-http/answer', {
+        ...post,
+        headers: { ...post.headers, authorization: `Bearer ${token}` },
+        body: JSON.stringify({ answer: '許可します' }),
+      });
+      expect(response.status).toBe(200);
+
+      expect(authed.fake.answered).toEqual([
+        {
+          id: 'ap-perm-http',
+          answer: '許可します',
+          via: { kind: 'account', accountId },
+        },
+      ]);
+    });
   });
 
   /**

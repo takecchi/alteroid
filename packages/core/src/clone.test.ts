@@ -2400,6 +2400,268 @@ describe('クローン', () => {
     await s.clone.stop();
   });
 
+  describe('answerApproval の許可の記録（issue #863「許可をコードではなくデータにする」）', () => {
+    const PERMISSION_REQUEST_APPROVAL = {
+      id: 'ap-perm-1',
+      createdAt: new Date().toISOString(),
+      question: '以降 Bash(gh release edit:*) を聞かずに通してよいか',
+      permissionRequest: {
+        rule: 'Bash(gh release edit:*)',
+        allows: ['gh release edit', 'gh release edit --draft'],
+        denies: ['gh release edit; rm -rf /'],
+      },
+    };
+
+    it('account 経路＋定型文ちょうどなら許可を記録する', async () => {
+      const s = setup();
+      await s.stores.jobs.putApproval(PERMISSION_REQUEST_APPROVAL);
+
+      await s.clone.answerApproval('ap-perm-1', '許可します', {
+        kind: 'account',
+        accountId: 'acc-1',
+      });
+
+      const grants = await s.stores.permissionGrants.list();
+      expect(grants).toHaveLength(1);
+      expect(grants[0]).toMatchObject({
+        rule: 'Bash(gh release edit:*)',
+        allows: ['gh release edit', 'gh release edit --draft'],
+        denies: ['gh release edit; rm -rf /'],
+        approvalId: 'ap-perm-1',
+        answer: '許可します',
+        route: { principalKind: 'account', accountId: 'acc-1' },
+      });
+      expect(grants[0]?.revokedAt).toBeUndefined();
+
+      await s.clone.stop();
+    });
+
+    it('operator 経路では記録しない', async () => {
+      const s = setup();
+      await s.stores.jobs.putApproval(PERMISSION_REQUEST_APPROVAL);
+
+      await s.clone.answerApproval('ap-perm-1', '許可します', { kind: 'operator' });
+
+      expect(await s.stores.permissionGrants.list()).toHaveLength(0);
+
+      await s.clone.stop();
+    });
+
+    it('経路を渡さなければ記録しない（既定は不許可）', async () => {
+      const s = setup();
+      await s.stores.jobs.putApproval(PERMISSION_REQUEST_APPROVAL);
+
+      await s.clone.answerApproval('ap-perm-1', '許可します');
+
+      expect(await s.stores.permissionGrants.list()).toHaveLength(0);
+
+      await s.clone.stop();
+    });
+
+    it.each([['許可します。'], ['いいよ'], ['許可する'], [' 許可します 前後以外に空白']])(
+      '定型文とちょうど一致しない回答「%s」では記録しない',
+      async (answer) => {
+        const s = setup();
+        await s.stores.jobs.putApproval(PERMISSION_REQUEST_APPROVAL);
+
+        await s.clone.answerApproval('ap-perm-1', answer, {
+          kind: 'account',
+          accountId: 'acc-1',
+        });
+
+        expect(await s.stores.permissionGrants.list()).toHaveLength(0);
+
+        await s.clone.stop();
+      },
+    );
+
+    it('前後の空白だけは trim して定型文と比べる', async () => {
+      const s = setup();
+      await s.stores.jobs.putApproval(PERMISSION_REQUEST_APPROVAL);
+
+      await s.clone.answerApproval('ap-perm-1', '  許可します  ', {
+        kind: 'account',
+        accountId: 'acc-1',
+      });
+
+      expect(await s.stores.permissionGrants.list()).toHaveLength(1);
+
+      await s.clone.stop();
+    });
+
+    it('permissionRequest を持たない普通の ask_human の回答では、何も記録しない', async () => {
+      const s = setup();
+      await s.stores.jobs.putApproval({
+        id: 'ap-plain-1',
+        createdAt: new Date().toISOString(),
+        question: '本番に出してよいか',
+      });
+
+      await s.clone.answerApproval('ap-plain-1', '許可します', {
+        kind: 'account',
+        accountId: 'acc-1',
+      });
+
+      expect(await s.stores.permissionGrants.list()).toHaveLength(0);
+
+      await s.clone.stop();
+    });
+
+    it('記録しなかった理由は日誌（decision）に残る', async () => {
+      const s = setup();
+      await s.stores.jobs.putApproval(PERMISSION_REQUEST_APPROVAL);
+
+      await s.clone.answerApproval('ap-perm-1', '許可します', { kind: 'operator' });
+
+      const decisions = await s.stores.journal.list({ types: ['decision'] });
+      expect(
+        decisions.some(
+          (entry) => entry.type === 'decision' && entry.decision.includes('許可を記録しなかった'),
+        ),
+      ).toBe(true);
+
+      await s.clone.stop();
+    });
+
+    it('記録した事実も日誌（decision）に残る', async () => {
+      const s = setup();
+      await s.stores.jobs.putApproval(PERMISSION_REQUEST_APPROVAL);
+
+      await s.clone.answerApproval('ap-perm-1', '許可します', {
+        kind: 'account',
+        accountId: 'acc-1',
+      });
+
+      const decisions = await s.stores.journal.list({ types: ['decision'] });
+      expect(
+        decisions.some(
+          (entry) => entry.type === 'decision' && entry.decision.includes('許可を記録した'),
+        ),
+      ).toBe(true);
+
+      await s.clone.stop();
+    });
+  });
+
+  describe('PreToolUse フックが人間の承認した Bash 許可を消費する（issue #863）', () => {
+    async function hookOf(s: Setup) {
+      s.clone.post(humanMessage('やあ'));
+      await waitForDone(s.events);
+      const hook = (s.calls[0] as FakeCall).options.hooks?.PreToolUse?.[0]?.hooks?.[0];
+      if (hook === undefined) throw new Error('PreToolUse フックが登録されていない');
+      return hook;
+    }
+
+    const GRANT = {
+      id: 'grant-1',
+      rule: 'Bash(gh release edit:*)',
+      allows: ['gh release edit'],
+      denies: ['gh release edit; rm -rf /'],
+      approvalId: 'ap-1',
+      answer: '許可します',
+      grantedAt: '2026-01-01T00:00:00.000Z',
+      route: { principalKind: 'account' as const, accountId: 'acc-1' },
+    };
+
+    it('有効な許可に一致すれば allow を返し、lastUsedAt を進める', async () => {
+      const s = setup();
+      await s.stores.permissionGrants.put(GRANT);
+      const hook = await hookOf(s);
+
+      const result = (await hook(
+        { tool_name: 'Bash', tool_input: { command: 'gh release edit --draft' } } as never,
+        undefined,
+        {} as never,
+      )) as {
+        continue: true;
+        hookSpecificOutput?: { permissionDecision?: string };
+      };
+
+      expect(result.hookSpecificOutput?.permissionDecision).toBe('allow');
+      const stored = await s.stores.permissionGrants.get('grant-1');
+      expect(stored?.lastUsedAt).toBeDefined();
+
+      await s.clone.stop();
+    });
+
+    it('一致しないコマンドには何も決めない（deny しない）', async () => {
+      const s = setup();
+      await s.stores.permissionGrants.put(GRANT);
+      const hook = await hookOf(s);
+
+      const result = (await hook(
+        { tool_name: 'Bash', tool_input: { command: 'gh issue edit' } } as never,
+        undefined,
+        {} as never,
+      )) as { continue: true; hookSpecificOutput?: unknown };
+
+      expect(result.hookSpecificOutput).toBeUndefined();
+
+      await s.clone.stop();
+    });
+
+    it('区切り文字入りのコマンドには何も決めない', async () => {
+      const s = setup();
+      await s.stores.permissionGrants.put(GRANT);
+      const hook = await hookOf(s);
+
+      const result = (await hook(
+        {
+          tool_name: 'Bash',
+          tool_input: { command: 'gh release edit --draft; rm -rf /' },
+        } as never,
+        undefined,
+        {} as never,
+      )) as { continue: true; hookSpecificOutput?: unknown };
+
+      expect(result.hookSpecificOutput).toBeUndefined();
+
+      await s.clone.stop();
+    });
+
+    it('取り消し後は、毎回引き直すので次の呼び出しから何も決めない', async () => {
+      const s = setup();
+      await s.stores.permissionGrants.put(GRANT);
+      const hook = await hookOf(s);
+
+      // 1回目: まだ有効なので allow。
+      const before = (await hook(
+        { tool_name: 'Bash', tool_input: { command: 'gh release edit' } } as never,
+        undefined,
+        {} as never,
+      )) as { hookSpecificOutput?: { permissionDecision?: string } };
+      expect(before.hookSpecificOutput?.permissionDecision).toBe('allow');
+
+      // 取り消す。
+      await s.stores.permissionGrants.put({ ...GRANT, revokedAt: '2026-01-02T00:00:00.000Z' });
+
+      // 2回目: 取り消し済みなので何も決めない。
+      const after = (await hook(
+        { tool_name: 'Bash', tool_input: { command: 'gh release edit' } } as never,
+        undefined,
+        {} as never,
+      )) as { hookSpecificOutput?: unknown };
+      expect(after.hookSpecificOutput).toBeUndefined();
+
+      await s.clone.stop();
+    });
+
+    it('Bash 以外の道具には何もしない', async () => {
+      const s = setup();
+      await s.stores.permissionGrants.put(GRANT);
+      const hook = await hookOf(s);
+
+      const result = (await hook(
+        { tool_name: 'mcp__alteroid__memory_write', tool_input: { slug: 'values' } } as never,
+        undefined,
+        {} as never,
+      )) as { hookSpecificOutput?: unknown };
+      expect(result.hookSpecificOutput).toBeUndefined();
+
+      await s.clone.stop();
+    });
+  });
+
   it(
     '会話 id を持つ承認に答えると、返答が with: "human" としてその会話 id と共に' +
       '日誌へ積まれ、会話の窓（readConversationWindow）からも読める（#768）',

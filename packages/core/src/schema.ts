@@ -3738,6 +3738,32 @@ export const jobSchema = z.object({
 
 export type Job = z.infer<typeof jobSchema>;
 
+/**
+ * `request_permission`（`tools.ts`）が起こした承認待ちが持つ、規則そのものの
+ * 記録（Issue #863「許可をコードではなくデータにする」）。
+ *
+ * **`request_permission` を通った要求だけがこの欄を持つ。** 道具自身が
+ * `packages/core/src/permission-rule.ts` の `validatePermissionRequest` で
+ * `allows` が全部通り `denies` が1件も通らないことを検査してから積むので、
+ * ここに入っている `allows` / `denies` は常にその検査を通った後の値である
+ * （＝この欄の存在そのものが「検算済み」を意味する）。
+ *
+ * `ask_human` が起こす普通の確認にはこの欄が無い——`pendingApprovalSchema`
+ * の他の欄（`question` / `context`）と共存し、人間はどちらの経路でも同じ
+ * `answer` で答える。`answerApproval`（`clone.ts`）はこの欄の有無で
+ * 「許可の記録を試みるかどうか」を分岐する。
+ */
+export const permissionRequestSchema = z.object({
+  /** `Bash(<完全な文字列>)` または `Bash(<前方一致>:*)`（`permission-rule.ts`）。 */
+  rule: z.string(),
+  /** この規則が通すべき具体例。人間が承認画面で確かめる材料。 */
+  allows: z.array(z.string()),
+  /** この規則が拒むべき具体例。1件以上（`validatePermissionRequest` が強制）。 */
+  denies: z.array(z.string()),
+});
+
+export type PermissionRequest = z.infer<typeof permissionRequestSchema>;
+
 /** ask_human の承認待ちキュー（PRD「権限境界」）。 */
 export const pendingApprovalSchema = z.object({
   id: z.string(),
@@ -3790,6 +3816,11 @@ export const pendingApprovalSchema = z.object({
    * 付いた行では常に埋まっている。
    */
   withdrawnReason: z.string().optional(),
+  /**
+   * `request_permission` が積んだ要求だけが持つ（issue #863）。`ask_human` 経由
+   * の普通の確認には無い。doc は {@link permissionRequestSchema} を見よ。
+   */
+  permissionRequest: permissionRequestSchema.optional(),
 });
 
 export type PendingApproval = z.infer<typeof pendingApprovalSchema>;
@@ -3848,6 +3879,74 @@ export function approvalUpdatedAt(
 ): string {
   return approval.withdrawnAt ?? approval.answeredAt ?? approval.createdAt;
 }
+
+// ---------------------------------------------------------------------------
+// 許可の記録（Issue #863「許可をコードではなくデータにする」）
+// ---------------------------------------------------------------------------
+
+/**
+ * この定型文と**ちょうど**一致した回答だけが許可を記録する（`clone.ts` の
+ * `answerApproval`）。**前後の空白だけを trim する** — 「許可します。」
+ * （句点付き）・「いいよ」・「許可する」のような近い言い回しは一致しない
+ * （設計上の意図——定型文から外れた回答は、人間が実際に何を承認したのか
+ * 機械的に確定できないため、記録しない側へ倒す）。
+ */
+export const PERMISSION_GRANT_CONSENT_PHRASE = '許可します';
+
+/**
+ * `permissionGrantSchema.route` — 誰の回答として記録されたか。
+ *
+ * **`principalKind` は `'account'` の1値しか取らない。** `operator` 経路の
+ * 回答は最初から `PermissionGrant` を作らない（`clone.ts` の
+ * `answerApproval` が記録前に弾く）ので、この型自体が「operator は記録され
+ * ない」という不変条件を運ぶ——`PermissionGrant` が実在する時点で、その経路は
+ * 必ずアカウントである。
+ */
+export const permissionGrantRouteSchema = z.object({
+  principalKind: z.literal('account'),
+  accountId: z.string(),
+});
+
+export type PermissionGrantRoute = z.infer<typeof permissionGrantRouteSchema>;
+
+/**
+ * 人間が承認した、以降 Bash 呼び出しを自動で通してよい許可の記録
+ * （Issue #863）。
+ *
+ * **書き手はただ1つ**——`clone.ts` の `answerApproval` が、`request_permission`
+ * の要求（`PendingApproval.permissionRequest`）へ人間が定型文
+ * （{@link PERMISSION_GRANT_CONSENT_PHRASE}）で、かつアカウント経由の回答
+ * （`route.principalKind === 'account'`）で答えたときだけ1件作る。
+ *
+ * **読み手はクローン本セッションの `PreToolUse` フックだけ**
+ * （`clone.ts` の `#onPreToolUse`）。Bash 呼び出しのたびに有効な（`revokedAt`
+ * が付いていない）行をストアから引き直し、`rule` が一致すれば
+ * `permissionDecision: 'allow'` を返して `lastUsedAt` を進める。
+ *
+ * **行は消さない。** 取り消しは `revokedAt` を立てるだけ（`commitment_close`
+ * / `approval_withdraw` と同じ「終端は別の状態であって削除ではない」思想）。
+ */
+export const permissionGrantSchema = z.object({
+  id: z.string(),
+  /** `Bash(<完全な文字列>)` または `Bash(<前方一致>:*)`（`permission-rule.ts`）。 */
+  rule: z.string(),
+  /** 承認された時点の `PermissionRequest.allows` の写し（人間の判断材料の記録）。 */
+  allows: z.array(z.string()),
+  /** 承認された時点の `PermissionRequest.denies` の写し。 */
+  denies: z.array(z.string()),
+  /** この許可を生んだ `PendingApproval.id`。 */
+  approvalId: z.string(),
+  /** 人間が実際に送った回答の原文（{@link PERMISSION_GRANT_CONSENT_PHRASE} と一致するはず）。 */
+  answer: z.string(),
+  grantedAt: isoDateTime,
+  route: permissionGrantRouteSchema,
+  /** 取り消した時刻。無ければ有効。 */
+  revokedAt: isoDateTime.optional(),
+  /** `#onPreToolUse` が最後にこの許可を使って `allow` を返した時刻。 */
+  lastUsedAt: isoDateTime.optional(),
+});
+
+export type PermissionGrant = z.infer<typeof permissionGrantSchema>;
 
 // ---------------------------------------------------------------------------
 // chat ストリーム（daemon → CLI）

@@ -22,6 +22,7 @@ import type {
   MemoryDocumentMeta,
   MemoryProtectionStatus,
   PendingApproval,
+  PermissionGrant,
   Practice,
   PracticeVersion,
   SchedulePhase,
@@ -45,6 +46,7 @@ import type {
   JournalQuery,
   JournalStore,
   PersonaStore,
+  PermissionGrantStore,
   ProfileStore,
   CommitmentStore,
   PracticeStore,
@@ -229,6 +231,7 @@ export function createMemoryStores(): Stores {
   const entries: JournalEntry[] = [];
   const jobs = new Map<string, Job>();
   const approvals = new Map<string, PendingApproval>();
+  const permissionGrantRows = new Map<string, PermissionGrant>();
   const schedules = new Map<string, ScheduledRequest>();
   const schedulePhases = new Map<string, SchedulePhase>();
   const commitments = new Map<string, Commitment>();
@@ -1007,6 +1010,21 @@ export function createMemoryStores(): Stores {
     },
   };
 
+  /** 人間が承認した Bash 許可の記録（インメモリ。Issue #863）。 */
+  const permissionGrants: PermissionGrantStore = {
+    async list() {
+      return [...permissionGrantRows.values()].sort((a, b) =>
+        a.grantedAt.localeCompare(b.grantedAt),
+      );
+    },
+    async get(id) {
+      return permissionGrantRows.get(id) ?? null;
+    },
+    async put(grant) {
+      permissionGrantRows.set(grant.id, grant);
+    },
+  };
+
   const profile: ProfileStore = {
     async read() {
       return envProfile;
@@ -1399,6 +1417,7 @@ export function createMemoryStores(): Stores {
     archive,
     sessions,
     auth,
+    permissionGrants,
     profile,
     credentials,
     tokens,

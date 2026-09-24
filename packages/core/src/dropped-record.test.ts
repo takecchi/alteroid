@@ -1154,6 +1154,14 @@ describe('approvalShape の名簿（schema に足した欄の足し忘れを赤�
       emit: 'never',
       why: '`withdrawnAt` と同じ理由（取り下げは後段の欄）。',
     },
+    permissionRequest: {
+      emit: 'never',
+      why:
+        'この関数は参照しない（Issue #863）。`rule` / `allows` / `denies` は ' +
+        '`request_permission` の入力そのものであって秘密ではないが、この関数の ' +
+        '契約は「本文は出さない」——`size()` へ逃がす対象を増やす拡張は、実際に ' +
+        '掘れなかった実例が出てから広げる（`context_usage` の doc と同じ判断）。',
+    },
   } satisfies Record<keyof PendingApproval, FieldPlan>;
 
   const SECRET = 'ghp_555555555555555555555555555555555555';
@@ -1171,6 +1179,7 @@ describe('approvalShape の名簿（schema に足した欄の足し忘れを赤�
     conversationId: SECRET,
     withdrawnAt: SECRET,
     withdrawnReason: SECRET,
+    permissionRequest: { rule: SECRET, allows: [SECRET], denies: [SECRET] },
   };
 
   it('名簿のキー集合は pendingApprovalSchema の実装側の欄と両方向に一致する（zod から機械的に引く）', () => {

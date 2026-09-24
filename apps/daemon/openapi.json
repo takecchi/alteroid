@@ -41,6 +41,10 @@
       "description": "承認待ちキュー（`ask_human` の応答口）"
     },
     {
+      "name": "permission-grants",
+      "description": "人間が承認した Bash 許可の記録（Issue #863）。`request_permission` の要求に許可されたアカウントが定型文で答えたときだけ記録され、以降 Bash 呼び出しを自動で通す（クローン本セッションだけ）。取り消しは即座に（次の呼び出しから）効く"
+    },
+    {
       "name": "events",
       "description": "外部イベントの入口（仕事の起点③）"
     },
@@ -5653,6 +5657,27 @@
                           "withdrawnReason": {
                             "type": "string"
                           },
+                          "permissionRequest": {
+                            "type": "object",
+                            "properties": {
+                              "rule": {
+                                "type": "string"
+                              },
+                              "allows": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "denies": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "required": ["rule", "allows", "denies"]
+                          },
                           "updatedAt": {
                             "type": "string",
                             "format": "date-time",
@@ -5932,6 +5957,177 @@
                   }
                 },
                 "required": ["answer"]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      }
+    },
+    "/permission-grants": {
+      "get": {
+        "operationId": "getPermissionGrants",
+        "tags": ["permission-grants"],
+        "summary": "人間が承認した Bash 許可の一覧",
+        "description": "`request_permission` の要求に人間が「許可します」と定型文でちょうど答え、かつ許可されたアカウント経由の回答だったときだけ記録される（`answerApproval` の`#recordPermissionGrantIfConsented`。operator 経由の回答は記録されない——operator の資格はクローンの器から読めるため、人間の証拠にならない）。`revokedAt` が付いていない行だけが、クローン本セッションの Bash 呼び出しで自動的に通る（`clone.ts` の `#onPreToolUse`）。並びは `grantedAt` 昇順。",
+        "responses": {
+          "200": {
+            "description": "許可の一覧。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "grants": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "rule": {
+                            "type": "string"
+                          },
+                          "allows": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "denies": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "approvalId": {
+                            "type": "string"
+                          },
+                          "answer": {
+                            "type": "string"
+                          },
+                          "grantedAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "route": {
+                            "type": "object",
+                            "properties": {
+                              "principalKind": {
+                                "type": "string",
+                                "const": "account"
+                              },
+                              "accountId": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["principalKind", "accountId"]
+                          },
+                          "revokedAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "lastUsedAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "rule",
+                          "allows",
+                          "denies",
+                          "approvalId",
+                          "answer",
+                          "grantedAt",
+                          "route"
+                        ]
+                      }
+                    }
+                  },
+                  "required": ["grants"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/permission-grants/{id}/revoke": {
+      "post": {
+        "operationId": "postPermissionGrantsByIdRevoke",
+        "tags": ["permission-grants"],
+        "summary": "許可を取り消す",
+        "description": "行は消さず `revokedAt` を立てる（`approval_withdraw` / `commitment_close` と同じ「終端は別の状態であって削除ではない」思想）。**取り消しは次の Bash 呼び出しから効く**——`#onPreToolUse` は呼び出しのたびにストアを引き直し、キャッシュしない。既に取り消し済みでも 200（`revokedAt` は上書きしない）。運ぶ情報は無い（`{}` を送る）。",
+        "requestBody": {
+          "required": true,
+          "description": "**中身は読まないので `{}` を送ればよい。** 本文そのものではなく `content-type: application/json` が要る（ブラウザの単純リクエストで許可を落とされないため）。",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "取り消した（既に取り消し済みでも 200）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": ["ok"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "該当する許可が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "content-type が application/json ではない（ブラウザの単純リクエスト対策 — 状態を変える POST は必ずここを通す）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
               }
             }
           }

@@ -91,6 +91,7 @@ import {
   usageDateSchema,
   usageLayerSchema,
   usageSiteSchema,
+  type AnswerApprovalVia,
   type ApprovalPagingKey,
   type ArchiveRemoveManyFilter,
   type AuthAccount,
@@ -148,6 +149,7 @@ import {
   okResponseSchema,
   openApiDocumentation,
   openApiExcludePaths,
+  permissionGrantsResponseSchema,
   practiceDeleteResponseSchema,
   practiceListResponseSchema,
   practiceReadResponseSchema,
@@ -1143,6 +1145,21 @@ function describeActor(principal: Principal): string {
   return principal.kind === 'operator'
     ? '実行環境の持ち主による操作'
     : `許可されたアカウント（${principal.account.id}）による操作`;
+}
+
+/**
+ * `Principal`（`auth.ts`）を `Clone#answerApproval` の `via`
+ * （`AnswerApprovalVia`、`@alteroid/core`）へ変換する（Issue #863）。
+ *
+ * **`packages/core` は `apps/daemon` の `Principal` を知らない**（層が逆）ので、
+ * この変換をここに置く——`/approvals/answer` と `/approvals/:id/answer` の
+ * 両方から呼ぶ。渡し忘れると `answerApproval` は `via: undefined` を受け取り、
+ * 既定（記録しない）へ倒れる。
+ */
+function answerApprovalViaOf(principal: Principal): AnswerApprovalVia {
+  return principal.kind === 'operator'
+    ? { kind: 'operator' }
+    : { kind: 'account', accountId: principal.account.id };
 }
 
 async function accountView(
@@ -2832,7 +2849,7 @@ export function createApp(deps: AppDeps) {
             continue;
           }
           try {
-            await clone.answerApproval(id, answer);
+            await clone.answerApproval(id, answer, answerApprovalViaOf(c.get('principal')));
             results.push({ id, ok: true });
           } catch (error) {
             results.push({ id, ok: false, error: String(error) });
@@ -2886,7 +2903,82 @@ export function createApp(deps: AppDeps) {
         if (approval.withdrawnAt !== undefined) {
           return c.json({ error: 'withdrawn' as const }, 409);
         }
-        await clone.answerApproval(id, c.req.valid('json').answer);
+        await clone.answerApproval(
+          id,
+          c.req.valid('json').answer,
+          answerApprovalViaOf(c.get('principal')),
+        );
+        return c.json({ ok: true });
+      },
+    )
+
+    // --- 許可の記録（Issue #863「許可をコードではなくデータにする」）--------
+    .get(
+      '/permission-grants',
+      describeRoute({
+        tags: ['permission-grants'],
+        summary: '人間が承認した Bash 許可の一覧',
+        description:
+          '`request_permission` の要求に人間が「許可します」と定型文でちょうど答え、かつ' +
+          '許可されたアカウント経由の回答だったときだけ記録される（`answerApproval` の' +
+          '`#recordPermissionGrantIfConsented`。operator 経由の回答は記録されない——' +
+          'operator の資格はクローンの器から読めるため、人間の証拠にならない）。' +
+          '`revokedAt` が付いていない行だけが、クローン本セッションの Bash 呼び出しで自動的に' +
+          '通る（`clone.ts` の `#onPreToolUse`）。並びは `grantedAt` 昇順。',
+        responses: {
+          200: {
+            description: '許可の一覧。',
+            content: { 'application/json': { schema: resolver(permissionGrantsResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        const grants = await stores.permissionGrants.list();
+        return c.json(permissionGrantsResponseSchema.parse({ grants }));
+      },
+    )
+
+    .post(
+      '/permission-grants/:id/revoke',
+      describeRoute({
+        tags: ['permission-grants'],
+        summary: '許可を取り消す',
+        description:
+          '行は消さず `revokedAt` を立てる（`approval_withdraw` / `commitment_close` と同じ' +
+          '「終端は別の状態であって削除ではない」思想）。**取り消しは次の Bash 呼び出しから' +
+          '効く**——`#onPreToolUse` は呼び出しのたびにストアを引き直し、キャッシュしない。' +
+          '既に取り消し済みでも 200（`revokedAt` は上書きしない）。運ぶ情報は無い（`{}` を送る）。',
+        requestBody: noBodyPostRequestBody(
+          '**中身は読まないので `{}` を送ればよい。** 本文そのものではなく ' +
+            '`content-type: application/json` が要る（ブラウザの単純リクエストで許可を' +
+            '落とされないため）。',
+        ),
+        responses: {
+          200: {
+            description: '取り消した（既に取り消し済みでも 200）。',
+            content: { 'application/json': { schema: resolver(okResponseSchema) } },
+          },
+          404: {
+            description: '該当する許可が無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          ...noBodyPostResponses(),
+        },
+      }),
+      deliberateClient,
+      async (c) => {
+        const id = c.req.param('id');
+        const grant = await stores.permissionGrants.get(id);
+        if (grant === null) return c.json({ error: 'not found' as const }, 404);
+        const revokedAt = grant.revokedAt ?? new Date().toISOString();
+        await stores.permissionGrants.put({ ...grant, revokedAt });
+        // 誰が取り消したかは必ず残す（`/access/*` の grant/revoke と同じ理由——
+        // 「事後に追えることが最終承認の実体」PRD「可観測性」）。
+        await stores.journal.append({
+          type: 'decision',
+          decision: `許可を取り消した: ${grant.rule}`,
+          grounds: `${describeActor(c.get('principal'))}（POST /permission-grants/${id}/revoke）`,
+        });
         return c.json({ ok: true });
       },
     )

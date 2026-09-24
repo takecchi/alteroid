@@ -82,6 +82,18 @@ export interface CloneSessionOptionsRequest {
   onPostToolUse: HookCallback;
   /** 失敗・中断した道具呼び出し（`PostToolUse` と排他）。Issue #924。 */
   onPostToolUseFailure: HookCallback;
+  /**
+   * 人間が承認した Bash 許可（Issue #863）に一致したら
+   * `permissionDecision: 'allow'` を返す。一致しなければ何も決めない
+   * （`continue: true` だけ返す——`runner.ts` の `#onPreToolUse`
+   * （`bash-wait-guard.ts`）が deny 側で使っているのと同じ口を、逆向き
+   * （allow）に使う）。**このセッション（クローン本セッション）にしか
+   * 配線しない** —— `buildCloneDistillOptions`（蒸留）・
+   * `buildManagerSessionOptions`（マネージャー・作業者。`runner.ts` 側で
+   * 別に組む）はこの引数を持たない。中身は `clone.ts` の `#onPreToolUse`
+   * の doc を見よ。
+   */
+  onPreToolUse: HookCallback;
 }
 
 /** クローン本セッションへ渡す `Options`。組み立ての知識は `clone.ts` の旧 `#buildOptions` から移した。 */
@@ -98,6 +110,7 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
     onPreCompact,
     onPostToolUse,
     onPostToolUseFailure,
+    onPreToolUse,
   } = request;
 
   return {
@@ -151,6 +164,15 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
     // 記憶と日誌が同じならクローンは同じクローンである。
     ...(sessionStore === undefined ? {} : { sessionStore }),
     hooks: {
+      // **クローン本セッションで唯一、実際に判断（`allow`）を返しうるフック**
+      // （Issue #863）。他の3本（`PreCompact` / `PostToolUse` /
+      // `PostToolUseFailure`）は観測専用で `continue: true` しか返さない
+      // ——`CloneSessionOptionsRequest.onPreToolUse` の doc を見よ。
+      PreToolUse: [
+        {
+          hooks: [onPreToolUse],
+        },
+      ],
       PreCompact: [
         {
           timeout: PRE_COMPACT_HOOK_TIMEOUT_SECONDS,

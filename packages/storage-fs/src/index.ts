@@ -11,6 +11,7 @@ import { FsInboxStore } from './inbox.js';
 import { FsJobStore } from './jobs.js';
 import { FsJournalStore } from './journal.js';
 import { FsPersonaStore } from './persona.js';
+import { FsPermissionGrantStore } from './permission-grants.js';
 import { FsPracticeStore } from './practices.js';
 import { FsProfileStore } from './profile.js';
 import { resolvePaths, type AlteroidPaths } from './paths.js';
@@ -27,6 +28,7 @@ export { FsInboxStore } from './inbox.js';
 export { FsJobStore } from './jobs.js';
 export { FsJournalStore } from './journal.js';
 export { FsPersonaStore } from './persona.js';
+export { FsPermissionGrantStore } from './permission-grants.js';
 export { FsPracticeStore } from './practices.js';
 export { FsProfileStore } from './profile.js';
 export { FsScheduleStore } from './schedules.js';
@@ -53,6 +55,7 @@ export function createFsStores(root?: string): Stores & { paths: AlteroidPaths }
     archive: new FsTranscriptArchive(paths.archive),
     sessions: new FsSessionRegistry(paths.state),
     auth: new FsAuthStore(paths.auth),
+    permissionGrants: new FsPermissionGrantStore(paths.jobs),
     profile: new FsProfileStore(paths.profile),
     credentials: new FsCredentialVaultStore(paths.credentials),
     tokens: new FsTokenPoolStore(paths.tokens),

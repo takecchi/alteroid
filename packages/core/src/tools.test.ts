@@ -4862,6 +4862,92 @@ describe('クローンの道具', () => {
     expect(pending?.jobId).toBe('mgr-1');
   });
 
+  describe('request_permission（issue #863「許可をコードではなくデータにする」）', () => {
+    it('正常な要求は承認待ちに permissionRequest 付きで積み、日誌に残し、chat へ通知する', async () => {
+      const h = harness();
+
+      const reply = await h.call('request_permission', {
+        rule: 'Bash(gh release edit:*)',
+        allows: ['gh release edit --draft', 'gh release edit'],
+        denies: ['gh release edit; rm -rf /'],
+        reason: 'リリースノートを直すたびに聞かれるのを減らしたい',
+      });
+
+      const pending = await h.stores.jobs.listApprovals({ pendingOnly: true });
+      expect(pending).toHaveLength(1);
+      expect(pending[0]?.permissionRequest).toEqual({
+        rule: 'Bash(gh release edit:*)',
+        allows: ['gh release edit --draft', 'gh release edit'],
+        denies: ['gh release edit; rm -rf /'],
+      });
+
+      const [escalation] = await h.stores.journal.list({ types: ['escalation'] });
+      expect(escalation).toMatchObject({ type: 'escalation', approvalId: pending[0]?.id });
+
+      expect(h.emitted).toEqual([
+        { type: 'ask_human', approvalId: pending[0]?.id, question: expect.any(String) },
+      ]);
+      expect(reply).toContain('承認待ちキューに積んだ');
+    });
+
+    it('denies が空なら、キューに積まずに拒否する', async () => {
+      const h = harness();
+
+      const reply = await h.call('request_permission', {
+        rule: 'Bash(gh release edit:*)',
+        allows: ['gh release edit'],
+        denies: [],
+        reason: '理由',
+      });
+
+      expect(reply).toContain('拒否した');
+      expect(await h.stores.jobs.listApprovals({ pendingOnly: true })).toHaveLength(0);
+    });
+
+    it('allows が規則に一致しない例を含むなら、キューに積まずに拒否する', async () => {
+      const h = harness();
+
+      const reply = await h.call('request_permission', {
+        rule: 'Bash(gh release edit:*)',
+        allows: ['gh issue edit'],
+        denies: ['gh release edit; rm -rf /'],
+        reason: '理由',
+      });
+
+      expect(reply).toContain('拒否した');
+      expect(reply).toContain('gh issue edit');
+      expect(await h.stores.jobs.listApprovals({ pendingOnly: true })).toHaveLength(0);
+    });
+
+    it('denies が規則に一致してしまう例を含むなら、キューに積まずに拒否する', async () => {
+      const h = harness();
+
+      const reply = await h.call('request_permission', {
+        rule: 'Bash(gh release edit:*)',
+        allows: ['gh release edit'],
+        denies: ['gh release edit --draft'],
+        reason: '理由',
+      });
+
+      expect(reply).toContain('拒否した');
+      expect(await h.stores.jobs.listApprovals({ pendingOnly: true })).toHaveLength(0);
+    });
+
+    it('規則の書式が不正なら、キューに積まずに拒否する', async () => {
+      const h = harness();
+
+      const reply = await h.call('request_permission', {
+        rule: 'gh release edit',
+        allows: ['gh release edit'],
+        denies: ['rm -rf /'],
+        reason: '理由',
+      });
+
+      expect(reply).toContain('拒否した');
+      expect(await h.stores.jobs.listApprovals({ pendingOnly: true })).toHaveLength(0);
+    });
+  });
+
   it('approvals_list で、人間の回答待ちを自分で見られる（溜まった保留の運用）', async () => {
     const h = harness();
     expect(await h.call('approvals_list', {})).toContain('回答待ちは無い');
@@ -18767,6 +18853,28 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
           conversationId: () => undefined,
         });
         return callExpectingError(tools, 'ask_human', { question: '質問' });
+      },
+    },
+    {
+      // `request_permission` は `ask_human` と同じ形——`putApproval` が先に
+      // 済み、日誌（`appendJournalOrThrow`）が落ちても副作用（承認待ちキュー
+      // への記録）は既に起きている（issue #863）。
+      tool: 'request_permission',
+      firstLine: ACT_COMPLETED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-08a');
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
+        return callExpectingError(tools, 'request_permission', {
+          rule: 'Bash(gh release edit:*)',
+          allows: ['gh release edit'],
+          denies: ['gh release edit; rm -rf /'],
+          reason: '理由',
+        });
       },
     },
     {

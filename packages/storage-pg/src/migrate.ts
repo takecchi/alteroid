@@ -653,6 +653,23 @@ export const STATEMENTS = [
      at timestamptz not null,
      primary key (slug, version)
    )`,
+
+  // --- 人間が承認した Bash 許可の記録（Issue #863）---------------------------
+  // 新しい表を足すだけなので、既存行の意味は1ビットも変わらない（このファイル
+  // 冒頭の「既存行の意味を変える変更を黙って混ぜない」に当たらない）。
+  //
+  // `approvals` と同じ形——本体は jsonb、絞り込みに使う欄（`granted_at` /
+  // `revoked_at`）だけ派生列として持つ（`schema.ts` の `permissionGrants` の
+  // doc）。**⚠️ 設計メモは blob 列を `grant` としていたが、`GRANT` は
+  // PostgreSQL の予約語で素の DDL では構文エラーになる**（実測:
+  // `syntax error at or near "grant"`）ので `record` に変えてある
+  // （`schema.ts` の同じ doc に実測込みで詳しい）。
+  `create table if not exists permission_grants (
+     id text primary key,
+     granted_at timestamptz not null,
+     revoked_at timestamptz,
+     record jsonb not null
+   )`,
 ] as const;
 
 /** `ensureOpenManagerBodyIndex` が作る部分 unique 索引の名前（issue #1041）。 */

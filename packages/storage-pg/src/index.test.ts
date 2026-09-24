@@ -1776,6 +1776,64 @@ describe('PgJobStore', () => {
   });
 });
 
+describe('PgPermissionGrantStore（issue #863）', () => {
+  const GRANT = {
+    id: 'grant-1',
+    rule: 'Bash(gh release edit:*)',
+    allows: ['gh release edit'],
+    denies: ['gh release edit; rm -rf /'],
+    approvalId: 'ap-1',
+    answer: '許可します',
+    grantedAt: '2026-01-01T00:00:00.000Z',
+    route: { principalKind: 'account' as const, accountId: 'acc-1' },
+  };
+
+  it('put した許可を list / get で読み戻せる', async () => {
+    await stores.permissionGrants.put(GRANT);
+
+    expect(await stores.permissionGrants.list()).toEqual([GRANT]);
+    expect(await stores.permissionGrants.get('grant-1')).toEqual(GRANT);
+  });
+
+  it('無い id の get は null', async () => {
+    expect(await stores.permissionGrants.get('no-such-id')).toBeNull();
+  });
+
+  it('同じ id への put は置き換える（revoke の実装がこれに乗る）', async () => {
+    await stores.permissionGrants.put(GRANT);
+    await stores.permissionGrants.put({ ...GRANT, revokedAt: '2026-01-02T00:00:00.000Z' });
+
+    const list = await stores.permissionGrants.list();
+    expect(list).toHaveLength(1);
+    expect(list[0]?.revokedAt).toBe('2026-01-02T00:00:00.000Z');
+  });
+
+  it('list は grantedAt 昇順で返る', async () => {
+    await stores.permissionGrants.put({
+      ...GRANT,
+      id: 'grant-2',
+      grantedAt: '2026-02-01T00:00:00.000Z',
+    });
+    await stores.permissionGrants.put({
+      ...GRANT,
+      id: 'grant-1',
+      grantedAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    expect((await stores.permissionGrants.list()).map((g) => g.id)).toEqual([
+      'grant-1',
+      'grant-2',
+    ]);
+  });
+
+  it('同じ db ハンドルから作り直しても読み戻せる（永続化）', async () => {
+    await stores.permissionGrants.put(GRANT);
+
+    const reopened = createPgStoresFromDb(db);
+    expect(await reopened.permissionGrants.list()).toEqual([GRANT]);
+  });
+});
+
 describe('PgScheduleStore', () => {
   const plan = {
     kind: 'issue-round',

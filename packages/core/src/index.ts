@@ -209,7 +209,7 @@ export {
   type StartLoginInput,
   type StartLoginResult,
 } from './auth-service.js';
-export type { CloneHost } from './host.js';
+export type { AnswerApprovalVia, CloneHost } from './host.js';
 export { Inbox } from './inbox.js';
 /**
  * 段2: 横断の蒸留 — 評定を束ねて名指しする（#1055。`memory.ts` の
@@ -879,6 +879,21 @@ export {
   readExecutionResources,
   type ExecutionResourcesOptions,
 } from './runner-resources.js';
+/**
+ * `request_permission` / 以降許可の PreToolUse フックが共有する純粋な照合器
+ * （Issue #863）。
+ */
+export {
+  containsShellMetacharacters,
+  matchPermissionRule,
+  parsePermissionRule,
+  validatePermissionRequest,
+  type ParsedPermissionRule,
+  type PermissionRequestCandidate,
+  type PermissionRequestValidation,
+  type PermissionRuleKind,
+  type PermissionRuleParseResult,
+} from './permission-rule.js';
 export {
   CLONE_ALLOWED_TOOLS,
   CLONE_TOOL_NAMES,

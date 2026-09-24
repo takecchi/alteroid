@@ -2,6 +2,23 @@ import type { ManagerPool } from './manager.js';
 import type { ChatStreamEvent, InboxEvent } from './schema.js';
 
 /**
+ * `answerApproval` を叩いた経路（Issue #863）。**プレーンな TS の型であって
+ * zod スキーマではない** —— `apps/daemon/src/auth.ts` の `Principal` と同じ
+ * 立場（内部でしか組み立てられない、信頼された呼び出し専用の値。外部入力を
+ * そのままここへ流し込む経路は無い）。`packages/core` は `apps/daemon` の
+ * 型（`Principal`）を知らない（層が逆）ので、ここに同じ形の型を別名で持つ
+ * ——`apps/daemon/src/app.ts` が `Principal` からこの型へ変換して渡す。
+ *
+ * **ここ（`host.ts`）に置くのは、`clone.ts` が `host.ts` を import しており
+ * （`Clone implements CloneHost`）、逆向きの import は循環になるため。**
+ *
+ * **`kind: 'account'` だけが許可の記録に繋がる。** `Clone#recordPermissionGrantIfConsented`
+ * の doc を見よ——`operator` を記録しない理由（operator の資格はクローンの
+ * 器から読めるため、人間の証拠にならない）はそちらにまとめてある。
+ */
+export type AnswerApprovalVia = { kind: 'operator' } | { kind: 'account'; accountId: string };
+
+/**
  * デーモンから見たクローン。
  *
  * HTTP 層はこのインターフェースしか知らない。クローンの生きたインスタンスは
@@ -40,8 +57,14 @@ export interface CloneHost {
   /** 会話の終了。蒸留の契機（寿命モデル: 蒸留は生存条件）。 */
   endConversation(conversationId: string): Promise<void>;
 
-  /** 承認待ちへの回答。止まっていたその仕事だけが再開する。 */
-  answerApproval(approvalId: string, answer: string): Promise<void>;
+  /**
+   * 承認待ちへの回答。止まっていたその仕事だけが再開する。
+   *
+   * `via` は回答の経路（Issue #863）。渡さなければ `request_permission` の
+   * 要求への回答でも許可は記録されない（既定は不許可——`Clone#answerApproval`
+   * の doc）。
+   */
+  answerApproval(approvalId: string, answer: string, via?: AnswerApprovalVia): Promise<void>;
 
   /**
    * 委譲先の一覧と生ログ。HTTP 層はここから可観測性の下2層へ降りる。

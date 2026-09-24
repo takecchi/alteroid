@@ -60,6 +60,7 @@ import {
   recentDroppedTraces,
 } from './dropped-record.js';
 import { collapseErrorCause } from './error-cause.js';
+import { validatePermissionRequest } from './permission-rule.js';
 import { encodeRunnerCursor, resolveRunnerCursor } from './runner-cursor.js';
 import { encodeTokenCursor, resolveTokenCursor } from './token-cursor.js';
 import { toAgentTokenView, tokenAvailabilityAt, type CooldownSource } from './token-pool.js';
@@ -623,6 +624,7 @@ export const CLONE_TOOL_NAMES = [
   'conversation_read',
   'conversation_post',
   'ask_human',
+  'request_permission',
   'approvals_list',
   'approval_withdraw',
   'daily_report_write',
@@ -692,6 +694,7 @@ export const SELF_JOURNALING_CLONE_TOOLS = [
   'journal_write',
   'conversation_post',
   'ask_human',
+  'request_permission',
   'approval_withdraw',
   'daily_report_write',
   'schedule_create',
@@ -834,6 +837,7 @@ export function cloneToolJournalsItself(tool: string): boolean {
  * 残りの `SELF_JOURNALING_CLONE_TOOLS`（`memory_write` /
  * `memory_append` / `memory_delete` / `memory_frontmatter_set` /
  * `memory_section_move` / `journal_write` / `conversation_post` / `ask_human` /
+ * `request_permission` /
  * `approval_withdraw` / `daily_report_write` / `schedule_create` /
  * `schedule_remove` / `commitment_open` / `commitment_close` /
  * `commitment_close_many` / `commitment_edit` / `commitment_appraise` /
@@ -852,6 +856,7 @@ const SELF_JOURNALING_TOOL_CARRIES_SECRETS: Record<SelfJournalingCloneTool, bool
   journal_write: false,
   conversation_post: false,
   ask_human: false,
+  request_permission: false,
   approval_withdraw: false,
   daily_report_write: false,
   schedule_create: false,
@@ -5371,6 +5376,95 @@ export function createCloneTools(context: ToolContext) {
         );
         context.emit({ type: 'ask_human', approvalId: approval.id, question });
         return text(`承認待ちキューに積んだ（${approval.id}）。回答は後から届く。`);
+      },
+    ),
+
+    /**
+     * **許可をコードではなくデータにする**（Issue #863）。人間に「この Bash
+     * の規則を、以降は聞かずに通してよいか」を確認する——`ask_human` の特殊形
+     * で、承認待ちキューに積むところまでは同じだが、`permissionRequest`
+     * （`rule` / `allows` / `denies`）を一緒に運ぶ。
+     *
+     * **要求そのものが自己矛盾していたら、キューに積む前に拒否する。**
+     * `validatePermissionRequest`（`permission-rule.ts`）が (1) `rule` の
+     * 書式 (2) `allows` が1件以上あり全部その規則に一致する (3) `denies` が
+     * 1件以上あり1件も一致しない、を検査する。ここを通らないものは
+     * `PendingApproval` を1行も作らない——人間の確認画面に「allows の例が
+     * 実は通らない規則」のような壊れた要求を出さないためである。
+     *
+     * **承認したかどうかの判定・許可の記録は、ここではなく人間の回答を受ける
+     * 側（`clone.ts` の `answerApproval` /
+     * `#recordPermissionGrantIfConsented`）が持つ。** ここは「通ってよい
+     * 要求の形を作る」ところまでで、「誰が」「どう答えたら」記録するかは
+     * 関知しない（層を分ける——道具から許可を書く経路は作らない）。
+     */
+    tool(
+      'request_permission',
+      [
+        '特定の Bash コマンドの規則を、以降は聞かずに通してよいか人間に確認する。',
+        'rule は Bash(<完全なコマンド>) の完全一致か、Bash(<前方一致>:*) の前方一致（語境界で切る）。',
+        'allows にはその規則が通すべき具体例、denies には通ってはならない具体例を挙げる——',
+        '両方とも検算する（allows が1つでも規則に一致しない・denies が1つでも一致してしまうなら、',
+        'この道具はキューに積む前に拒否する）。',
+        '積むだけで人間の応答は待たない。人間が定型文でちょうど答えなければ許可は記録されない。',
+      ].join(' '),
+      {
+        rule: z
+          .string()
+          .describe('Bash(<完全な文字列>) または Bash(<前方一致>:*) の形の規則'),
+        allows: z
+          .array(z.string())
+          .describe('この規則が通すべき具体的なコマンド例（1件以上、全部が規則に一致すること）'),
+        denies: z
+          .array(z.string())
+          .describe('この規則が拒むべき具体的なコマンド例（1件以上、1件も規則に一致しないこと）'),
+        reason: z.string().describe('なぜこの許可が要るか。人間が承認画面で読む理由文'),
+      },
+      async ({ rule, allows, denies, reason }) => {
+        const validation = validatePermissionRequest({ rule, allows, denies });
+        if (!validation.ok) {
+          return text(`request_permission を拒否した（キューに積んでいない）: ${validation.reason}`);
+        }
+
+        const conversationId = getConversationId();
+        const question =
+          `以降 ${rule} を聞かずに通してよいか。理由: ${reason}\n` +
+          `通る例: ${allows.join(' / ')}\n通らない例: ${denies.join(' / ')}`;
+        const approval: PendingApproval = {
+          id: randomUUID(),
+          createdAt: new Date().toISOString(),
+          question,
+          context: reason,
+          permissionRequest: { rule, allows: [...allows], denies: [...denies] },
+          ...(conversationId === undefined ? {} : { conversationId }),
+        };
+        try {
+          await stores.jobs.putApproval(approval);
+        } catch (error) {
+          // **`ask_human` と同じ形**（`ApprovalNotRecordedError` の doc）——
+          // ここが扱うのも `putApproval` 自体が落ちた場合だけで、副作用ゼロ
+          // なので「やり直してよい」の1本にまとまる。
+          noteDroppedRecord('承認待ち', approvalShape(approval), error);
+          throw new ApprovalNotRecordedError(approval, error);
+        }
+        await appendJournalOrThrow(
+          'request_permission',
+          stores.journal,
+          {
+            type: 'escalation',
+            question,
+            approvalId: approval.id,
+          },
+          'act-completed',
+        );
+        // **`ask_human` と同じ合図を使う**（chat ストリームの `type: 'ask_human'`）
+        // ——人間から見れば「承認待ちキューに何か積まれた」という点で同じ事実
+        // であり、専用の chat イベント型を新設する理由が無い。
+        context.emit({ type: 'ask_human', approvalId: approval.id, question });
+        return text(
+          `承認待ちキューに積んだ（${approval.id}）。人間が「許可します」とちょうど答え、` +
+            'かつ許可されたアカウント経由の回答だった場合だけ、以降この規則に一致する Bash が自動で通る。',
+        );
       },
     ),
 
