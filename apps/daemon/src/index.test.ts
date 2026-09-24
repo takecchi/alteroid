@@ -1106,6 +1106,93 @@ describe('recovered の日誌行は、受信箱へ配ったかどうかと無関
 });
 
 /**
+ * **`token_rotation` の日誌の畳み（issue #1311 段B）は、副作用を1文字も
+ * 動かさない。** `TokenRotationJournalFold` 自体の振る舞い（1件目は書く・
+ * 同一本文の反復を畳む・本文が変われば書く・idleGap で途切れる）は
+ * `token-rotation-journal-fold.test.ts` が実物のクラスで固定している——
+ * ここでは、その判定が `settleTokenOutcome` のどこに挿し込まれているかだけを
+ * 原文で固定する（`wake()` と同じ理由で `main()` の中の閉包は実行時に触れ
+ * ない）。
+ */
+describe('settleTokenOutcome への畳みの配線（issue #1311 段B）', () => {
+  const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+  const fnStart = source.indexOf('async function settleTokenOutcome(');
+  const fnEnd = source.indexOf('tokenWatch = startTokenRotationWatch({', fnStart);
+  const fnBody = source.slice(fnStart, fnEnd);
+
+  it('stdout への1行（tokenRotationStream(...).write）は畳みの判定より前——畳みの有無と無関係に必ず実行される', () => {
+    const streamAt = fnBody.indexOf('tokenRotationStream(entry.event).write(');
+    const observeAt = fnBody.indexOf('tokenRotationJournalFold.observe(entry, Date.now());');
+
+    expect(
+      missingAnchors(fnBody, [
+        'tokenRotationStream(entry.event).write(',
+        'const folded = tokenRotationJournalFold.observe(entry, Date.now());',
+      ]),
+    ).toEqual([]);
+    expect(streamAt).toBeGreaterThan(-1);
+    expect(streamAt).toBeLessThan(observeAt);
+  });
+
+  it('reopened の門（recycleSessionForToken / cloneWakeGate.observeUnusable / wake）は畳みの判定より前——畳みの有無と無関係に必ず実行される', () => {
+    const observeAt = fnBody.indexOf('tokenRotationJournalFold.observe(entry, Date.now());');
+    const unusableAt = fnBody.indexOf('cloneWakeGate.observeUnusable();');
+    const reopenedBlockAt = fnBody.indexOf('const reopened = reopenedTokenOf(outcome);');
+
+    expect(
+      missingAnchors(fnBody, [
+        'cloneWakeGate.observeUnusable();',
+        'const reopened = reopenedTokenOf(outcome);',
+      ]),
+    ).toEqual([]);
+    expect(unusableAt).toBeLessThan(observeAt);
+    expect(reopenedBlockAt).toBeLessThan(observeAt);
+  });
+
+  it('畳んだ要約（folded.summary）は、entry 自身より先に追記する（日誌は時系列で読まれる）', () => {
+    const summaryAppendAt = fnBody.indexOf('stores.journal.append(folded.summary)');
+    const entryAppendAt = fnBody.indexOf('stores.journal.append(entry)');
+
+    expect(
+      missingAnchors(fnBody, ['stores.journal.append(folded.summary)', 'stores.journal.append(entry)']),
+    ).toEqual([]);
+    expect(summaryAppendAt).toBeGreaterThan(-1);
+    expect(summaryAppendAt).toBeLessThan(entryAppendAt);
+  });
+
+  it('entry 自身の追記は folded.write が真のときだけ行う（畳んだ回は書かない）', () => {
+    expect(missingAnchors(fnBody, ['if (!folded.write) return;'])).toEqual([]);
+    const guardAt = fnBody.indexOf('if (!folded.write) return;');
+    const entryAppendAt = fnBody.indexOf('stores.journal.append(entry)');
+    expect(guardAt).toBeLessThan(entryAppendAt);
+  });
+});
+
+describe('デーモンが止まるとき、token_rotation の畳み残しを吐き出す（issue #1311 段B）', () => {
+  const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+  const shutdownStart = source.indexOf('async function shutdown(): Promise<void> {');
+  const shutdownEnd = source.indexOf('\n  await writeRuntimeInfo(paths.state, {', shutdownStart);
+  const shutdownBody = source.slice(shutdownStart, shutdownEnd);
+
+  it('shutdown() は tokenRotationJournalFold.flush() を呼び、在れば journal へ追記する', () => {
+    expect(
+      missingAnchors(shutdownBody, [
+        'const foldedAtShutdown = tokenRotationJournalFold.flush();',
+        'if (foldedAtShutdown !== undefined) {',
+        'await stores.journal.append(foldedAtShutdown)',
+      ]),
+    ).toEqual([]);
+  });
+
+  it('見張り（tokenWatch）を止めた後で吐き出す——tick が二度と新しい連なりを作らないことを確かめてから畳み残しを確定する', () => {
+    const tokenWatchStopAt = shutdownBody.indexOf('tokenWatch?.stop();');
+    const flushAt = shutdownBody.indexOf('tokenRotationJournalFold.flush();');
+    expect(tokenWatchStopAt).toBeGreaterThan(-1);
+    expect(tokenWatchStopAt).toBeLessThan(flushAt);
+  });
+});
+
+/**
  * **🔴 Issue #1051: 1回の再開の機会につき、配る合図は1件**
  *
  * ## なぜ真偽表では足りないか
