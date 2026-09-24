@@ -353,7 +353,7 @@ function VacateRunner({ runnerId }: { runnerId: string }) {
             本当に空ける
           </Button>
           <Button size="sm" variant="ghost" disabled={busy} onClick={() => setConfirming(false)}>
-            やめる
+            空けるのをやめる
           </Button>
         </>
       ) : (

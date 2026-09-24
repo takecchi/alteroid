@@ -578,7 +578,7 @@ describe('runner を空ける（vacate）', () => {
     expect(stub.calls.some((url) => url.includes('/runners/vacate'))).toBe(false);
 
     // やめれば戻り、叩かない。
-    fireEvent.click(screen.getByText('やめる'));
+    fireEvent.click(screen.getByText('空けるのをやめる'));
     expect(stub.calls.some((url) => url.includes('/runners/vacate'))).toBe(false);
 
     fireEvent.click(screen.getByText('この器を空ける'));
