@@ -1004,6 +1004,50 @@ describe('宣言済み owner（ownerDeclaredAt）は /credentials と /reset を
   });
 
   /**
+   * **MCP サーバの登録（#325 段1）は `PUT /credentials` と同じ段に置いた。**
+   * 3方向を撃つ —— 宣言済み owner は通る／宣言していない許可済みアカウントは
+   * 通らない（広げすぎていない）／持ち主そのものは通る。**読み側も同じ門である**
+   * —— 登録の `env` / `headers` に鍵が丸ごと入りうるので、`GET` が緩いと `PUT`
+   * を締めても意味が無い（`/profile` と同じ理由）。
+   */
+  const putMcpServers = (headers: Record<string, string>) =>
+    vaultApp.request('/mcp-servers', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', ...headers },
+      body: JSON.stringify({ mcpServers: { github: { command: 'gh-mcp' } } }),
+    });
+
+  it('① 宣言済み owner は GET / PUT /mcp-servers を通る（200）', async () => {
+    const owner = await ownerToken();
+    const auth = { authorization: `Bearer ${owner.token}` };
+    expect((await putMcpServers(auth)).status).toBe(200);
+    const read = await vaultApp.request('/mcp-servers', { headers: auth });
+    expect(read.status).toBe(200);
+    const body = (await read.json()) as { mcpServers: Record<string, unknown> };
+    expect(Object.keys(body.mcpServers)).toEqual(['github']);
+  });
+
+  it('② 宣言していない許可済みアカウントは GET / PUT /mcp-servers とも 403', async () => {
+    const account = await grantedAccount();
+    const auth = { authorization: `Bearer ${account.token}` };
+    expect((await vaultApp.request('/memory', { headers: auth })).status).toBe(200);
+
+    const forbidden = await vaultApp.request('/mcp-servers', { headers: auth });
+    expect(forbidden.status).toBe(403);
+    expect(await forbidden.json()).toEqual({ error: NOT_OWNER_ERROR });
+    expect((await putMcpServers(auth)).status).toBe(403);
+    // 弾いた側は何も置いていない。
+    expect(await stores.mcpServers.read()).toBeNull();
+  });
+
+  it('① 実行環境の持ち主そのものは /mcp-servers を通る。未ログインは 401', async () => {
+    expect((await putMcpServers({ ...OPERATOR })).status).toBe(200);
+    expect((await vaultApp.request('/mcp-servers', { headers: OPERATOR })).status).toBe(200);
+    expect((await vaultApp.request('/mcp-servers')).status).toBe(401);
+    expect((await putMcpServers({})).status).toBe(401);
+  });
+
+  /**
    * ⚠️ **反転させた歯（2026-09-24、#1122）。** 以前は「④ /profile は宣言済み owner でも
    * 403 のまま（意図した非対称）」として、宣言済み owner の GET/PUT が
    * `requireOperator` の 403（`NOT_OPERATOR_ERROR`）で落ちることを固定していた。

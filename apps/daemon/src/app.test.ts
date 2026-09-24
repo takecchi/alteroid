@@ -8588,3 +8588,90 @@ describe('GET /usage: 応答本文に tokenSource の生値が1文字も出な�
     poller.stop();
   });
 });
+
+/**
+ * 人間の MCP 連携の登録（`/mcp-servers`。#325 段1）。
+ *
+ * 固定しているのは3つ —— ①`.mcp.json` をそのまま貼れる形で往復する
+ * ②**値（鍵が入りうる）を、応答の 400・`PUT` の応答・日誌のどこにも載せない**
+ * ③alteroid 自身の名前と未知の欄は保存しない（前のものが残る）。門（`requireOwner`）
+ * は `auth.test.ts` が撃つ。
+ */
+describe('MCP サーバの登録（/mcp-servers）', () => {
+  const put = (body: unknown) =>
+    app.request('/mcp-servers', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  it('置いていなければ空の mcpServers を返す', async () => {
+    const response = await app.request('/mcp-servers');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ mcpServers: {} });
+  });
+
+  it('.mcp.json の形で置いて読み直せる。PUT の応答と日誌には名前だけが載る', async () => {
+    const mcpServers = {
+      github: { command: 'gh-mcp', env: { GITHUB_TOKEN: 'SECRET-IN-ENV' } },
+      remote: {
+        type: 'http',
+        url: 'https://example.invalid/mcp',
+        headers: { Authorization: 'Bearer SECRET-IN-HEADER' },
+      },
+    };
+    const response = await put({ mcpServers });
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(text).not.toContain('SECRET');
+    const body = JSON.parse(text) as { names: string[]; updatedAt: string; appliesFrom: string };
+    expect(body.names).toEqual(['github', 'remote']);
+    expect(Number.isNaN(Date.parse(body.updatedAt))).toBe(false);
+
+    const read = (await (await app.request('/mcp-servers')).json()) as {
+      mcpServers: unknown;
+      updatedAt?: string;
+    };
+    expect(read.mcpServers).toEqual(mcpServers);
+    expect(read.updatedAt).toBe(body.updatedAt);
+
+    const journal = await stores.journal.list({ types: ['decision'] });
+    const entry = journal.find(
+      (e) => e.type === 'decision' && e.decision.includes('MCP サーバの登録'),
+    );
+    expect(entry).toBeDefined();
+    expect(JSON.stringify(entry)).toContain('github, remote');
+    expect(JSON.stringify(entry)).not.toContain('SECRET');
+  });
+
+  it('空の mcpServers で外れる', async () => {
+    await put({ mcpServers: { github: { command: 'gh-mcp' } } });
+    const response = await put({ mcpServers: {} });
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as { names: string[] }).names).toEqual([]);
+    expect(await stores.mcpServers.read()).toBeNull();
+  });
+
+  /**
+   * **既定の 400 は本文をそのまま `data` に載せて返す**（`PUT /profile` の hook の
+   * doc）。ここで値が返ると、欄の綴りを1つ間違えただけで鍵が応答へ載る。
+   */
+  it('形が不正なら保存せず、400 の本文に送られた値を載せない', async () => {
+    await put({ mcpServers: { github: { command: 'gh-mcp' } } });
+
+    for (const bad of [
+      { mcpServers: { alteroid: { command: 'x', env: { K: 'SECRET-RESERVED' } } } },
+      { mcpServers: { ok: { command: 'x', enviroment: { K: 'SECRET-TYPO' } } } },
+      { mcpServers: { ok: { type: 'http', url: 'https://x', headers: { K: 1 } } }, x: 'SECRET' },
+      { servers: { ok: { command: 'SECRET-WRONG-KEY' } } },
+    ]) {
+      const response = await put(bad);
+      expect(response.status).toBe(400);
+      expect(await response.text()).not.toContain('SECRET');
+    }
+    // 前のものが残る。
+    expect((await stores.mcpServers.read())?.mcpServers).toEqual({
+      github: { command: 'gh-mcp' },
+    });
+  });
+});

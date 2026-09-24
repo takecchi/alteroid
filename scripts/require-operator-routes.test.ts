@@ -237,8 +237,20 @@ const EXPECTED_OPERATOR_ROUTES = [
  * ここへ移した**（#1122。人間へ上げてオーナーが決めた —— ブラウザは `requireOperator`
  * を構造的に通れず、Web UI にプロファイルの画面を置けなかったため）。
  * `docs/architecture.md` の「実行環境プロファイル」の段落も同じ PR で直した。
+ *
+ * **2026-09-24、`GET /mcp-servers` / `PUT /mcp-servers` を足した**（#325 段1）。
+ * stdio の登録はクローンの SDK 子プロセスが起こすコマンドで、`/profile` と同じく
+ * 「記憶ストアの鍵を持つプロセスでの任意コマンド実行」の性質を持つ ⟹ 門も `/profile`
+ * と同じ `requireOwner` に揃えた（#325 の段の計画のコメントが名指ししている）。
  */
-const EXPECTED_OWNER_ROUTES = ['GET /profile', 'POST /reset', 'PUT /credentials', 'PUT /profile'];
+const EXPECTED_OWNER_ROUTES = [
+  'GET /mcp-servers',
+  'GET /profile',
+  'POST /reset',
+  'PUT /credentials',
+  'PUT /mcp-servers',
+  'PUT /profile',
+];
 
 /** 比較を配線順（AST の訪問順）に依存させないための整列。 */
 function sorted(values: readonly string[]): string[] {

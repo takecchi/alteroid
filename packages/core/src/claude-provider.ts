@@ -438,6 +438,11 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     },
     cwd,
     // 人間が使っているのと同じ設定・同じ .mcp.json を渡す（下向きは同じものが見える）
+    //
+    // **⚠️ 記憶ストアに置いた MCP の登録（`McpServerStore`）はここへはまだ渡していない。**
+    // Railway では `.mcp.json` の置き場が消えるので、この層の連携はいまも0本である。
+    // runner が名乗るたびにデーモンが降ろし、ここの `mcpServers` へ渡す配線は
+    // #325 の段3（クローン側は段2 で `cloneMcpServers` が渡している）。
     settingSources: ['user', 'project', 'local'],
     // 参照系は `.claude/skills/` に置いてある（AGENTS.md「書く先を決める」）。
     // **`'all'` を明示する。** 省くと SDK 側は何も設定せず CLI の既定に委ねる

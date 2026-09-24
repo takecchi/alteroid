@@ -5,6 +5,7 @@ import {
   renderMemoryDocuments,
   verifyCommitmentAppraisalContract,
   verifyCommitmentFoldContract,
+  verifyMcpServerStoreContract,
   verifyPracticeStoreContract,
   verifyStoreIsolationContract,
   verifyJournalStoreOrderContract,
@@ -3209,6 +3210,31 @@ describe('PgTranscriptArchive', () => {
  * いない更新が最後の変更として表示される（デーモンを起こすたびに動いていたのと
  * 同じ意味の壊れ方）。**器が違っても同じ振る舞いになること**を fs / pg の両方で問う。
  */
+/**
+ * 人間の MCP 連携の登録（#325 段1）。**Railway ではここが唯一の置き場になる**
+ * （volume が無い）。契約は3実装で同じ関数を通す（`mcp-server-contract.ts`）。
+ */
+describe('PgMcpServerStore', () => {
+  it('器の契約（#325 段1。3実装で同じことを測る）', async () => {
+    await verifyMcpServerStoreContract(stores.mcpServers);
+  });
+
+  it('migrate を2回通しても置いた登録が残る（create table if not exists が no-op）', async () => {
+    await stores.mcpServers.write({ remote: { type: 'http', url: 'https://example.invalid/mcp' } });
+    await migrate(db);
+    expect((await stores.mcpServers.read())?.mcpServers).toEqual({
+      remote: { type: 'http', url: 'https://example.invalid/mcp' },
+    });
+  });
+
+  it('SQL で直接書き換えられた行も、読むときに検査する', async () => {
+    await db.execute(
+      sql`insert into mcp_servers (id, servers) values ('default', ${JSON.stringify({ alteroid: { command: 'x' } })}::jsonb)`,
+    );
+    await expect(stores.mcpServers.read()).rejects.toThrow(/alteroid/);
+  });
+});
+
 describe('PgProfileStore', () => {
   it('置いて読める。空文字で外れる', async () => {
     expect(await stores.profile.read()).toBeNull();

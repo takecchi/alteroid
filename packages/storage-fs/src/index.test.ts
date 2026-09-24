@@ -6,6 +6,7 @@ import {
   renderMemoryDocuments,
   verifyCommitmentAppraisalContract,
   verifyCommitmentFoldContract,
+  verifyMcpServerStoreContract,
   verifyPracticeStoreContract,
   verifyStoreIsolationContract,
   verifyJournalStoreOrderContract,
@@ -3155,6 +3156,43 @@ describe('FsProfileStore', () => {
     await stores.profile.write('export WHICH=new\n');
     await stores.profile.revert(null);
     expect(await stores.profile.read()).toBeNull();
+  });
+});
+
+/**
+ * 人間の MCP 連携の登録（#325 段1）。契約は3実装で同じ関数を通す
+ * （`mcp-server-contract.ts`）。ここで足すのは fs だけが持つ形 —— 0600 と、
+ * 手で書き換えられたファイルの読み方。
+ */
+describe('FsMcpServerStore', () => {
+  it('器の契約（#325 段1。3実装で同じことを測る）', async () => {
+    await verifyMcpServerStoreContract(stores.mcpServers);
+  });
+
+  it('.mcp.json と同じ形で 0600 のファイルに置く', async () => {
+    await stores.mcpServers.write({ github: { command: 'gh-mcp', env: { TOKEN: 'dummy' } } });
+    const path = join(root, 'mcp-servers.json');
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({
+      mcpServers: { github: { command: 'gh-mcp', env: { TOKEN: 'dummy' } } },
+    });
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+  });
+
+  /**
+   * **手で書き換えたファイルも、読むときに検査する。** 入口（HTTP）だけで見て
+   * いると、手で書いた `alteroid` がクローンの自作の道具と並ぶ。そして投げる
+   * 文言に値を載せない（`env` に鍵が入りうる。JSON.parse の SyntaxError は本文の
+   * 断片を含む）。
+   */
+  it('手で壊したファイルは読むときに投げ、文言に値を載せない', async () => {
+    const path = join(root, 'mcp-servers.json');
+    await writeFile(path, '{"mcpServers": {"alteroid": {"command": "SECRET-VALUE-1"}}}');
+    await expect(stores.mcpServers.read()).rejects.toThrow(/alteroid/);
+    await expect(stores.mcpServers.read()).rejects.not.toThrow(/SECRET-VALUE-1/);
+
+    await writeFile(path, '{"mcpServers": {"x": {"command": "SECRET-VALUE-2"');
+    await expect(stores.mcpServers.read()).rejects.toThrow(/JSON として読めない/);
+    await expect(stores.mcpServers.read()).rejects.not.toThrow(/SECRET-VALUE-2/);
   });
 });
 

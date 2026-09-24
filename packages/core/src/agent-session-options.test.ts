@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { makeTempDir, makeTempDirSync } from '../../../vitest.tmpdir.js';
 
+import { cloneMcpServers } from './claude-provider.js';
 import { ALWAYS_REDELIVER, CLONE_MODEL_ENV_KEY, createClone } from './clone.js';
 import { DEFAULT_PERMISSION_MODE } from './permission-mode.js';
 import { buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
@@ -447,6 +448,111 @@ describe('クローンの蒸留サイドクエリへ渡す Options', () => {
     // `buildCloneDistillOptions` も `managerAutoMemoryEnabled` を受け取らない
     // ので `settings` は載らない（#1189。上の本セッション側と同じ理由）。
     expect(options.settings).toBeUndefined();
+
+    await clone.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 人間の MCP 連携の登録（#325 段2）
+// ---------------------------------------------------------------------------
+
+/**
+ * 記憶ストアに置いた登録（`McpServerStore`）が、クローンの本セッションと蒸留の
+ * `mcpServers` に自作のインプロセス MCP と並んで渡ること。
+ *
+ * **自作が必ず勝つ**ことも固定する —— 入口（`parseMcpServers`）は同じ名前を
+ * 拒むが、合成の側でも守りを持つ（`cloneMcpServers` の doc）。
+ */
+describe('人間の MCP 連携の登録をクローンへ渡す（#325 段2）', () => {
+  async function firePreCompact(main: { options: Options }): Promise<void> {
+    const dir = await makeTempDir('alteroid-agent-session-options-mcp-');
+    const transcriptPath = join(dir, 'transcript.jsonl');
+    await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
+    const hook = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PreCompact フックが登録されていない');
+    await hook({ session_id: 'sess-fake', transcript_path: transcriptPath } as never, undefined, {
+      signal: new AbortController().signal,
+    } as never);
+  }
+
+  it('本セッションと蒸留の両方に、自作と並べて渡る（蒸留は起こすたびに読み直す）', async () => {
+    const { fn, calls } = fakeCloneSdk();
+    const stores = createMemoryStores();
+    await stores.mcpServers.write({
+      github: { command: 'gh-mcp', env: { TOKEN: 'dummy' } },
+    });
+    const clone = createClone({ stores, queryFn: fn, env: {}, redeliveryGate: ALWAYS_REDELIVER });
+
+    clone.post(humanMessage('やあ'));
+    await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
+
+    const main = calls[0] as { options: Options };
+    expect(Object.keys(main.options.mcpServers ?? {}).sort()).toEqual(
+      ['github', MCP_SERVER_NAME].sort(),
+    );
+    expect(main.options.mcpServers?.github).toEqual({ command: 'gh-mcp', env: { TOKEN: 'dummy' } });
+    // 自作はインプロセス（`sdk`）のまま。
+    expect(main.options.mcpServers?.[MCP_SERVER_NAME]?.type).toBe('sdk');
+
+    // 走行中に差し替えた登録は、次に起こす蒸留から効く（本セッションには届かない —
+    // SDK は `mcpServers` を `query()` の起動時に1度だけ受け取る）。
+    await stores.mcpServers.write({
+      github: { command: 'gh-mcp', env: { TOKEN: 'dummy' } },
+      remote: { type: 'http', url: 'https://example.invalid/mcp' },
+    });
+    await firePreCompact(main);
+    await expect.poll(() => calls.length > 1, { timeout: 3000 }).toBe(true);
+    const distill = calls[1] as { options: Options };
+    expect(Object.keys(distill.options.mcpServers ?? {}).sort()).toEqual(
+      ['github', MCP_SERVER_NAME, 'remote'].sort(),
+    );
+    expect(distill.options.mcpServers?.[MCP_SERVER_NAME]?.type).toBe('sdk');
+
+    await clone.stop();
+  });
+
+  it('自作と同じ名前の登録が器に紛れ込んでも、自作が勝つ', async () => {
+    const own = { type: 'sdk', name: MCP_SERVER_NAME, instance: {} } as never;
+    const merged = cloneMcpServers(own, {
+      [MCP_SERVER_NAME]: { command: 'impostor' },
+      other: { command: 'x' },
+    });
+    expect(merged[MCP_SERVER_NAME]).toBe(own);
+    expect(Object.keys(merged).sort()).toEqual([MCP_SERVER_NAME, 'other'].sort());
+    expect(cloneMcpServers(own, undefined)).toEqual({ [MCP_SERVER_NAME]: own });
+  });
+
+  /**
+   * 壊れた登録1つでクローンが丸ごと起きなくなる形にしない。**そして黙って空で
+   * 起きない** —— 日誌に「読めなかった」を残す（`#externalMcpServers` の doc）。
+   */
+  it('登録が読めなくてもセッションは起き、そのことを日誌に残す', async () => {
+    const { fn, calls } = fakeCloneSdk();
+    const base = createMemoryStores();
+    const stores = {
+      ...base,
+      mcpServers: {
+        read: async () => {
+          throw new Error('MCP サーバの登録の形が不正: alteroid: 使えない');
+        },
+        write: base.mcpServers.write.bind(base.mcpServers),
+      },
+    };
+    const clone = createClone({ stores, queryFn: fn, env: {}, redeliveryGate: ALWAYS_REDELIVER });
+
+    clone.post(humanMessage('やあ'));
+    await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
+
+    const { options } = calls[0] as { options: Options };
+    expect(Object.keys(options.mcpServers ?? {})).toEqual([MCP_SERVER_NAME]);
+    const entries = await base.journal.list({ types: ['exchange'] });
+    expect(
+      entries.some(
+        (entry) =>
+          entry.type === 'exchange' && entry.text.includes('MCP サーバの登録が読めなかった'),
+      ),
+    ).toBe(true);
 
     await clone.stop();
   });
