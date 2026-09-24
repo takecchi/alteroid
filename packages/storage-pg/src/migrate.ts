@@ -653,6 +653,17 @@ export const STATEMENTS = [
      at timestamptz not null,
      primary key (slug, version)
    )`,
+
+  // --- 人間の MCP 連携の登録（#325 段1）-------------------------------------
+  // **`env_profile` と同じ形（高々1行）。** 新しい表を足すだけなので既存行の
+  // 意味は1ビットも変わらず、`create table if not exists` は2周目以降も本当の
+  // no-op である（同名の `drop` をどこにも置いていない —— このファイル冒頭の
+  // 「⚠️ 古い鍵の `create` は配列から消す」の罠の形ではない）。
+  `create table if not exists mcp_servers (
+     id text primary key,
+     servers jsonb not null,
+     updated_at timestamptz not null default now()
+   )`,
 ] as const;
 
 /** `ensureOpenManagerBodyIndex` が作る部分 unique 索引の名前（issue #1041）。 */

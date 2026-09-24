@@ -324,6 +324,19 @@ export const envProfile = pgTable('env_profile', {
 });
 
 /**
+ * 人間の MCP 連携の登録（`.mcp.json` の `mcpServers` と同じ形。#325 段1）。**高々1行**。
+ *
+ * `envProfile` と同じ理由で行を増やす形にしない —— 登録は1つの文書として全文置換
+ * され、名前ごとの効かせ分けは持たない。**runner から読ませない**（M4 受け入れ
+ * 基準3。マネージャー・作業者へ降ろすのはデーモンの仕事で、#325 段3 で足す）。
+ */
+export const mcpServers = pgTable('mcp_servers', {
+  id: text('id').primaryKey(),
+  servers: jsonb('servers').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+});
+
+/**
  * マネージャーへ降ろす環境変数の正本（名前→値）。**1名前1行。**
  *
  * `env_profile` が高々1行なのに対してこちらが行を持つのは、**名前ごとに配る

@@ -414,6 +414,7 @@ export {
 export { verifyTranscriptArchiveContract } from './archive-contract.js';
 export { verifyCommitmentAppraisalContract } from './commitment-appraisal-contract.js';
 export { verifyCommitmentFoldContract } from './commitment-fold-contract.js';
+export { verifyMcpServerStoreContract } from './mcp-server-contract.js';
 export { verifyPracticeStoreContract } from './practice-contract.js';
 export { verifyStoreIsolationContract } from './store-isolation-contract.js';
 /**
@@ -716,6 +717,24 @@ export {
   type ProfileVesselOptions,
   type StagedProfile,
 } from './profile.js';
+/**
+ * 人間の MCP 連携の登録（`.mcp.json` の `mcpServers` と同じ形）。記憶ストアに置き、
+ * SDK の `Options.mcpServers` で渡す（#325。`mcp-servers.ts`）。
+ */
+export {
+  isReservedMcpServerName,
+  mcpHttpServerConfigSchema,
+  mcpServerConfigSchema,
+  mcpServerNames,
+  mcpServerNameSchema,
+  mcpServersSchema,
+  mcpSseServerConfigSchema,
+  mcpStdioServerConfigSchema,
+  parseMcpServers,
+  type McpServerEntryConfig,
+  type McpServers,
+  type StoredMcpServers,
+} from './mcp-servers.js';
 export {
   createProfileService,
   type ApplyProfileResult,

@@ -10,6 +10,7 @@ import { FsCredentialVaultStore } from './credentials.js';
 import { FsInboxStore } from './inbox.js';
 import { FsJobStore } from './jobs.js';
 import { FsJournalStore } from './journal.js';
+import { FsMcpServerStore } from './mcp-servers.js';
 import { FsPersonaStore } from './persona.js';
 import { FsPracticeStore } from './practices.js';
 import { FsProfileStore } from './profile.js';
@@ -26,6 +27,7 @@ export { FsCredentialVaultStore } from './credentials.js';
 export { FsInboxStore } from './inbox.js';
 export { FsJobStore } from './jobs.js';
 export { FsJournalStore } from './journal.js';
+export { FsMcpServerStore } from './mcp-servers.js';
 export { FsPersonaStore } from './persona.js';
 export { FsPracticeStore } from './practices.js';
 export { FsProfileStore } from './profile.js';
@@ -55,6 +57,7 @@ export function createFsStores(root?: string): Stores & { paths: AlteroidPaths }
     auth: new FsAuthStore(paths.auth),
     profile: new FsProfileStore(paths.profile),
     credentials: new FsCredentialVaultStore(paths.credentials),
+    mcpServers: new FsMcpServerStore(paths.mcpServers),
     tokens: new FsTokenPoolStore(paths.tokens),
     usage: new FsUsageStore(paths.usage),
   };
@@ -122,6 +125,7 @@ alteroid のクローンの人格データ。**すべて人間が直接読んで
 | \`profile.sh\` | 実行環境プロファイル（\`.zprofile\` 相当）。ここに \`export\` を書けば、クローンにもマネージャーにも作業者にも届く。器を作り直す必要は無い |
 | \`usage/\` | 利用状況の台帳（alteroid 自身が使った Claude のトークン・費用の推定）。**手で編集しない**（差分の基準がずれる） |
 | \`tokens.json\` | 認証トークンのプール（枠に当たったときに回す候補）。**手で編集しない**（\`alteroid token\` / \`PUT /tokens\` を経由する） |
+| \`mcp-servers.json\` | 人間の MCP 連携の登録（\`.mcp.json\` と同じ形）。クローンの次のセッションから効く。**手で編集してよいが、読めない形だとクローンは外部の連携なしで起きる**（\`PUT /mcp-servers\` を経由すれば置く前に検査される） |
 | \`credentials.json\` | マネージャーへ降ろす環境変数の正本（名前→値）。器を作り直しても \`hello\` のときに降り直す。**手で編集しない**（\`alteroid credential\` / \`PUT /credentials\` を経由する） |
 
 書き換えるのは \`memory/\` だけでよい。日誌を読んで「それは違う」と伝えれば、

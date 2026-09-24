@@ -27,6 +27,7 @@ import type {
   SchedulePhase,
   ScheduledRequest,
 } from './schema.js';
+import { parseMcpServers, type StoredMcpServers } from './mcp-servers.js';
 import { practiceSchema, practiceVersionSchema, schedulePhaseSchema } from './schema.js';
 import {
   sha256Hex,
@@ -41,6 +42,7 @@ import type {
   EnvProfile,
   InboxStore,
   JobStore,
+  McpServerStore,
   PendingInboxEvent,
   JournalQuery,
   JournalStore,
@@ -266,6 +268,7 @@ export function createMemoryStores(): Stores {
   let lostSessionGrave: LostSessionGrave | null = null;
   let projectKey: string | null = null;
   let envProfile: EnvProfile | null = null;
+  let storedMcpServers: StoredMcpServers | null = null;
   let counter = 0;
   const nextId = () => `id-${++counter}`;
 
@@ -1026,6 +1029,21 @@ export function createMemoryStores(): Stores {
     },
   };
 
+  /** 人間の MCP 連携の登録（インメモリ。契約は `mcp-server-contract.ts`）。 */
+  const mcpServers: McpServerStore = {
+    async read() {
+      return storedMcpServers === null ? null : structuredClone(storedMcpServers);
+    },
+    async write(input) {
+      // **書く前に検査する**（3実装が同じ関数を通す。`McpServerStore.write` の doc）。
+      const servers = parseMcpServers(input);
+      const updatedAt = new Date().toISOString();
+      storedMcpServers =
+        Object.keys(servers).length === 0 ? null : { mcpServers: servers, updatedAt };
+      return { mcpServers: structuredClone(servers), updatedAt };
+    },
+  };
+
   /**
    * マネージャーへ降ろす環境変数の正本（インメモリ）。
    *
@@ -1401,6 +1419,7 @@ export function createMemoryStores(): Stores {
     auth,
     profile,
     credentials,
+    mcpServers,
     tokens,
     usage,
   };

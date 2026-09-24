@@ -3,6 +3,7 @@ import type { SessionStore } from '@anthropic-ai/claude-agent-sdk';
 import type { ArchiveContinuity } from './archive-continuity.js';
 import type { AuthStore } from './auth.js';
 import type { CredentialEntry } from './credentials.js';
+import type { McpServers, StoredMcpServers } from './mcp-servers.js';
 import type { ActiveAgentToken, AgentToken, TokenRotationSettings } from './token-pool.js';
 import type {
   Commitment,
@@ -1351,6 +1352,31 @@ export interface ProfileStore {
 }
 
 /**
+ * 人間の MCP 連携の登録（`.mcp.json` の `mcpServers` と同じ形）の置き場（#325 段1）。
+ *
+ * **`ProfileStore` と同じ形である**（正本はデーモンが持ち、器違い（fs / pg）は
+ * 挙動を変えない。高々1つの文書を全文置換する）。`Stores` の一員として持つのは、
+ * 器を作り直しても残るという性質が同じだからである —— Railway には volume が
+ * 無いので、`.mcp.json` をファイルで置くと器と一緒に消える（#325 本文）。
+ *
+ * **記憶ではない。** `env` / `headers` に鍵が入りうるので `memory/` には置かない
+ * （置けばクローンのシステムプロンプトに鍵が載る）。形と検査の正本は
+ * `mcp-servers.ts`。
+ */
+export interface McpServerStore {
+  /** 置かれていなければ null（空の登録も null として読む）。 */
+  read(): Promise<StoredMcpServers | null>;
+  /**
+   * 全文置換。**空の登録（`{}`）は「登録を外す」**（`ProfileStore.write()` と
+   * 同じ約束）。
+   *
+   * **書く前に `parseMcpServers` を通すこと**（3実装とも）。器ごとに検査を
+   * 書き分けると、1つだけ緩い器が生まれる。不正なら投げ、前のものが残る。
+   */
+  write(servers: McpServers): Promise<StoredMcpServers>;
+}
+
+/**
  * マネージャーへ降ろす環境変数の正本1行（名前と値）。
  *
  * **鍵に限らない。** `GH_TOKEN` のような秘密も `GIT_AUTHOR_NAME` のような身元も
@@ -1925,6 +1951,14 @@ export interface Stores {
    * （north_star 禁止1）。
    */
   credentials: CredentialVaultStore;
+  /**
+   * 人間の MCP 連携の登録（#325 段1）。
+   *
+   * **省略可能にしないこと**（`credentials` と同じ理由）。ここを任意にすると、
+   * 片方の器でだけ「人間が使っている連携がクローンからも使える」が成り立たない
+   * という能力差が生まれる（north_star 禁止1）。
+   */
+  mcpServers: McpServerStore;
   /**
    * 認証トークンのプール（Issue #393）。
    *
