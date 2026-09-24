@@ -509,13 +509,24 @@ export function useCredentials() {
  * （Google OAuth のアクセストークン）はこの資格を構造的に持てない**
  * （`useDeclareOwner` の doc と同じ理由）——実際に開くのは認証を無効にした
  * 構成（`ALTEROID_AUTH=off`。この場合すべての principal が `operator` になる。
- * `apps/daemon/src/app.ts` の `authenticate` の分岐）だけである。**それでも
- * ボタンは隠さない**（`env-vars.tsx` `access.tsx` と同じ「押せない理由を
- * 消さない」方針）。
+ * `apps/daemon/src/app.ts` の `authenticate` の分岐）だけである。
+ *
+ * **`env-vars.tsx` `access.tsx` の「押せない理由を消さない」方針は、この経路
+ * には採らない。** あちらは「押せば 403 が返るが、押せること自体は見せる」
+ * 形だったが、`/profile` は認証が有効な構成では**常に**403 になる
+ * （account principal が構造的に `operator` になり得ないため）——ボタンを
+ * 出しても人間には常に無意味で、無意味な選択肢を消さない理由が無い。
+ * `routes/profile.tsx` は `enabled=false` を渡してこの経路そのものを叩かない
+ * ——`auth.operator` が確定するまで（`checking`）と、確定して false と分かった
+ * 後の両方で GET を飛ばさない。
+ *
+ * @param enabled `false` なら取りに行かない（SWR の条件付き取得。
+ *   `useManagerTranscript` と同じ形）。既定は `true`——呼ぶ側が明示的に
+ *   絞らない限り、これまでどおり無条件に取りに行く。
  */
-export function useProfile() {
+export function useProfile(enabled = true) {
   const api = useApi();
-  return useSWR(KEY.profile, () => api.api.GET('/profile').then(unwrap));
+  return useSWR(enabled ? KEY.profile : null, () => api.api.GET('/profile').then(unwrap));
 }
 
 /**

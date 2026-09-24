@@ -2,8 +2,10 @@ import { useRef, useState } from 'react';
 
 import { Page } from '~/components/page';
 import { Button, Card, CardHeader, ErrorNote, Input, Spinner, Textarea } from '~/components/ui';
+import { useAuth } from '~/hooks/use-auth';
 import { useSetProfile } from '~/hooks/mutations';
 import { useProfile } from '~/hooks/queries';
+import { ApiError } from '~/lib/api';
 import { formatBytes, formatDateTime } from '~/lib/format';
 import type {
   ProfileApplyOutcome,
@@ -29,11 +31,24 @@ import type {
  * **資格は `requireOperator`。** `env-vars.tsx`（`PUT /credentials`）や
  * `settings.tsx` の `ResetWorkspace`（`POST /reset`）と違い、`GET`/`PUT
  * /profile` は 2026-09-06 の同格化にも 2026-09-17/18 の `requireOwner` への
- * 降格にも入っていない（`useProfile` の doc）。**ブラウザ経由の通常のログイン
- * ではこの資格を構造的に持てない**——実際に開くのは認証を無効にした構成
- * （`ALTEROID_AUTH=off`）だけである。それでも**ボタンは隠さない**
- * （`env-vars.tsx` `access.tsx` と同じ「押せない理由を消さない」方針）——403
- * は `ErrorNote` でそのまま見せる。
+ * 降格にも入っていない（`useProfile` の doc）。**認証が有効な構成では、
+ * ブラウザのログインは必ず `kind:'account'` になり、この2本は常に 403 に
+ * なる**——`authenticate` が `kind:'operator'` を付けるのは、状態ファイルの
+ * token を提示したとき（実行環境の持ち主が直接叩く経路で、ブラウザからは
+ * 届かない）か `ALTEROID_AUTH=off` のときだけである
+ * （`apps/daemon/src/app.ts` の `authenticate` の分岐、`docs/architecture.md`）。
+ *
+ * **だから `env-vars.tsx` `access.tsx` の「押せない理由を消さない」方針を、
+ * この画面には採らない。** あちらは「押せば 403 が返ることもあるが、押せる
+ * こと自体は見せる」形だった——だが `/profile` は account principal では
+ * **構造的に**常に 403 になるので、編集 UI を出しても人間には常に無意味な
+ * 選択肢でしかない。`auth.operator`（`useAuth` が `GET /auth/me` の
+ * `kind` から出す。#1195 で足された、Web が既に自分の principal を知る
+ * 唯一の口——新しい経路は足していない）が false のときは、`GET /profile` を
+ * 叩かず、編集 UI も出さず、その旨の案内だけを出す。**それでも 403 が返って
+ * きたとき**（`auth.operator` の判定と `requireOperator` の判定が食い違う
+ * 場合。原理上は起きないはずだが、起きたときに生の 403 を `ErrorNote` で
+ * 見せても人間のやることは変わらないので、同じ案内へ倒す）も同様。
  *
  * **確認の導線は `env-vars.tsx` ではなく `settings.tsx` の `ResetWorkspace` /
  * `ShutdownDaemon` に倣った（`<dialog>` に語を打たせる）。** `env-vars.tsx` の
@@ -46,8 +61,50 @@ import type {
  * 空けるだけで、鍵をまるごとは運ばない。**重さは `POST /reset` 以上**なので、
  * 確認の強さも `ResetWorkspace` と同格にする。
  */
+
+/** `GET`/`PUT /profile` が返した 403 か（権限が無いだけで、他の失敗ではない）。 */
+function isForbidden(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 403;
+}
+
+/**
+ * operator ではない（＝認証が有効で、アカウントとしてログインしている）
+ * ときと、operator のはずなのに 403 が返ったときの、共通の案内。
+ *
+ * **編集 UI をまるごと隠す**（`env-vars.tsx` `access.tsx` の「押せない理由を
+ * 消さない」方針とは逆——`Profile` 本体の doc の「押せない」節を見よ）。
+ */
+function NotOperatorNotice() {
+  return (
+    <Card>
+      <CardHeader title="この画面では扱えません" subtitle="実行環境の持ち主のトークン専用" />
+      <div className="flex flex-col gap-2 px-4 py-3 text-sm leading-relaxed">
+        <p>
+          この口は実行環境の持ち主のトークン専用です。ブラウザのログインでは読むことも
+          書くこともできません。
+        </p>
+        <p>
+          サーバ上で{' '}
+          <code className="rounded bg-surface-2 px-1 font-mono">
+            docker compose exec app alteroid profile edit
+          </code>{' '}
+          を使ってください。
+        </p>
+      </div>
+    </Card>
+  );
+}
+
 export default function Profile() {
-  const { data, error, isLoading } = useProfile();
+  const auth = useAuth();
+  // `auth.status === 'checking'` の間は operator かどうかがまだ言えない
+  // （`useAuth` の doc）。**確定するまで `GET /profile` を叩かない**——
+  // 「言えない」を「false」へ倒すと、operator の画面が一瞬 `NotOperatorNotice`
+  // を出してから編集 UI へ切り替わる明滅が起きる。
+  const ready = auth.status !== 'checking';
+  const operator = ready && auth.operator;
+
+  const { data, error, isLoading } = useProfile(operator);
   const setProfile = useSetProfile();
 
   /**
@@ -65,6 +122,8 @@ export default function Profile() {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
   const [applied, setApplied] = useState<ProfileUpdateResult | null>(null);
+  /** `PUT /profile` が 403 で返ってきた（判定の食い違い）。以後は案内へ倒す。 */
+  const [putForbidden, setPutForbidden] = useState(false);
 
   const canConfirm = confirmText.trim().toLowerCase() === 'apply';
   const willClear = value.trim().length === 0;
@@ -86,10 +145,48 @@ export default function Profile() {
       setApplied(result);
       setDraft(undefined);
     } catch (caught) {
-      setFailure(caught);
+      if (isForbidden(caught)) {
+        // 生のエラーを見せない——案内へ倒す（同じ理由は `ErrorNote` を使わない
+        // 下の `blocked` 分岐のコメントを見よ）。ダイアログは畳む。
+        setPutForbidden(true);
+        dialogRef.current?.close();
+      } else {
+        setFailure(caught);
+      }
     } finally {
       setBusy(false);
     }
+  }
+
+  // 3つの理由をここで1つに畳む——(1) `auth.operator` が false、(2) `GET
+  // /profile` が 403、(3) `PUT /profile` が 403。**どれも人間がやることは
+  // 同じ**（サーバ上で `alteroid profile edit` を使う）ので、画面も1つの
+  // 案内に畳む。`ready` が false（`auth.status === 'checking'`）の間は、
+  // まだ判定できないので blocked にはしない（下の分岐が別に読み込み中を出す）。
+  const blocked = ready && (!operator || isForbidden(error) || putForbidden);
+
+  if (!ready) {
+    return (
+      <Page
+        title="実行環境プロファイル"
+        description="alteroid profile show/edit と同じもの（.zprofile 相当）。クローン・マネージャー・作業者すべてに効く"
+      >
+        <Card>
+          <Spinner label="確認中" />
+        </Card>
+      </Page>
+    );
+  }
+
+  if (blocked) {
+    return (
+      <Page
+        title="実行環境プロファイル"
+        description="alteroid profile show/edit と同じもの（.zprofile 相当）。クローン・マネージャー・作業者すべてに効く"
+      >
+        <NotOperatorNotice />
+      </Page>
+    );
   }
 
   return (
