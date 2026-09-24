@@ -1720,7 +1720,17 @@ export function assertNeverRunnerLegStatus(status: never): never {
  * 止める文脈で、本人を止めようとしている側へ出す。それ以外の口からは引けない。**
  */
 export const unpushedWorkTreeSchema = z.object({
-  /** 探索の起点（`job.cwd`）からの相対パス。絶対パスそのものは出さない。 */
+  /**
+   * 探索の起点（`job.cwd`）からの相対パス。
+   *
+   * **⚠️ 2026-09-24、クローンの決定で例外を1つ足した（オーナーの決定では
+   * ない）**——`job.cwd` に加えて、その委譲自身の id で名前が付いた `/tmp`
+   * 直下のディレクトリも探索の起点にするようになった
+   * （`packages/core/src/unpushed-work.ts` 冒頭の doc「3.6.」）ため、
+   * `job.cwd` の外で見つかった作業ツリーはここへ**絶対パス**が入る
+   * （`describeWorktreePath`）。`job.cwd` の下で見つかったツリーはこれまで
+   * どおり相対パスのままである。
+   */
   relativePath: z.string(),
   /** いまの枝名。detached HEAD、または確かめられなかったときは `null`。 */
   branch: z.string().nullable(),

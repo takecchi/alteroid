@@ -3327,7 +3327,12 @@ export type JobLease = z.infer<typeof jobLeaseSchema>;
  * の doc をそのまま継ぐ。**
  */
 export const observedWorktreeBranchSchema = z.object({
-  /** 探索の起点（`unpushedWorkResultSchema.cwd`）からの相対パス。 */
+  /**
+   * 探索の起点（`unpushedWorkResultSchema.cwd`）からの相対パス。**2026-09-24
+   * のクローンの決定（オーナーの決定ではない）で、`cwd` の外で見つかった
+   * ツリーはここへ絶対パスが入るようになった**——`unpushedWorkTreeSchema.
+   * relativePath`（`runner-protocol.ts`）の doc をそのまま継ぐ。
+   */
   relativePath: z.string(),
   /** いまの枝名。detached HEAD、または確かめられなかったときは `null`。 */
   branch: z.string().nullable(),

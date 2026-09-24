@@ -11,6 +11,8 @@ import {
   computeUnpushedWork,
   DEFAULT_MAX_DEPTH,
   findGitDirs,
+  findManagerScratchRoots,
+  matchesManagerScratchDirName,
   parseRemoteOriginUrl,
   type ProcessSpawnFn,
 } from './unpushed-work.js';
@@ -446,5 +448,190 @@ describe('computeUnpushedWork — 呼び出し元の期限（signal）', () => {
     for (const tree of result.worktrees) {
       expect(tree.unpushedCommitCountUnknown).toBeDefined();
     }
+  });
+});
+
+describe('matchesManagerScratchDirName — /tmp 直下の名前を委譲の id と結び付ける当てはめ規則（Issue #1376 の続き）', () => {
+  it.each([
+    ['mgr-c654', 'mgr-c654e049-abcdefgh'],
+    ['mgr-c654e049', 'mgr-c654e049-abcdefgh'],
+    ['mgr-c654-scratch', 'mgr-c654e049-abcdefgh'],
+    ['mgr-abcd1234', 'mgr-abcd1234-xxxxxxxx'],
+  ])('%s は委譲 %s に当たる', (dirName, managerId) => {
+    expect(matchesManagerScratchDirName(dirName, managerId)).toBe(true);
+  });
+
+  it.each([
+    ['mgr-e195ae40', 'mgr-c654e049-abcdefgh'], // 別の委譲
+    ['mgr-c65', 'mgr-c654e049-abcdefgh'], // 16進が4文字未満
+    ['mgr-abc', 'mgr-abcd1234-xxxxxxxx'], // 同じく4文字未満
+    ['other', 'mgr-c654e049-abcdefgh'], // mgr- で始まらない
+    ['mgra-c654', 'mgr-c654e049-abcdefgh'], // "mgr-" ではなく "mgra-"
+    ['mgr-XYZW', 'mgr-c654e049-abcdefgh'], // 16進ではない
+  ])('%s は委譲 %s に当たらない', (dirName, managerId) => {
+    expect(matchesManagerScratchDirName(dirName, managerId)).toBe(false);
+  });
+});
+
+describe('findManagerScratchRoots', () => {
+  let tmpRoot: string;
+
+  beforeEach(() => {
+    tmpRoot = makeTempDirSync('alteroid-unpushed-work-scratch-');
+  });
+
+  it('当たったディレクトリだけを絶対パスで返す（対照: 別の委譲・名前が当たらない場所・16進4文字未満は含まない）', async () => {
+    mkdirSync(join(tmpRoot, 'mgr-abcd'));
+    mkdirSync(join(tmpRoot, 'mgr-abcd1234'));
+    mkdirSync(join(tmpRoot, 'mgr-ffff')); // 別の委譲
+    mkdirSync(join(tmpRoot, 'other')); // 名前が当たらない
+    mkdirSync(join(tmpRoot, 'mgr-abc')); // 16進が4文字未満
+
+    const found = await findManagerScratchRoots(tmpRoot, 'mgr-abcd1234-xxxxxxxx');
+
+    expect(found.sort()).toEqual([join(tmpRoot, 'mgr-abcd'), join(tmpRoot, 'mgr-abcd1234')].sort());
+  });
+
+  it('当たらなかったディレクトリの中へは降りない（stat もしない）', async () => {
+    // "other" の中に .git を作っても、この関数はその中を一切見ない
+    // （呼び出し元の findGitDirs にも渡さないので、この関数自体が中身を
+    // 読みに行かないことを確かめる）。
+    initRepo(join(tmpRoot, 'other', 'repo'));
+
+    const found = await findManagerScratchRoots(tmpRoot, 'mgr-abcd1234-xxxxxxxx');
+
+    expect(found).toEqual([]);
+  });
+
+  it('当たらないディレクトリの奥に在る一致名も拾わない（/tmp 全体を再帰しない）', async () => {
+    mkdirSync(join(tmpRoot, 'other', 'mgr-abcd'), { recursive: true });
+
+    const found = await findManagerScratchRoots(tmpRoot, 'mgr-abcd1234-xxxxxxxx');
+
+    expect(found).toEqual([]);
+  });
+
+  it('tmpRootDir を読めなければ空配列を返す（黙って諦める）', async () => {
+    const found = await findManagerScratchRoots(
+      join(tmpRoot, 'does-not-exist'),
+      'mgr-abcd1234-xxxxxxxx',
+    );
+    expect(found).toEqual([]);
+  });
+});
+
+describe('computeUnpushedWork — 探索の起点に /tmp のスクラッチディレクトリを足す（managerId。Issue #1376 / #1266 の続き）', () => {
+  let tmpRoot: string;
+  let cwd: string;
+  const managerId = 'mgr-abcd1234-abcdefgh';
+
+  beforeEach(() => {
+    tmpRoot = makeTempDirSync('alteroid-unpushed-work-scratch-');
+    cwd = makeTempDirSync('alteroid-unpushed-work-cwd-'); // job.cwd 相当。空。
+  });
+
+  it('陽性: 委譲 id に当たる /tmp 直下のディレクトリの下の clone と worktree が両方観測に載る', async () => {
+    initRepo(join(tmpRoot, 'mgr-abcd', 'repo'));
+    commitFile(join(tmpRoot, 'mgr-abcd', 'repo'), 'a.txt', 'x\n', 'x');
+    initRepo(join(tmpRoot, 'mgr-abcd', 'wt-1'));
+    commitFile(join(tmpRoot, 'mgr-abcd', 'wt-1'), 'a.txt', 'x\n', 'x');
+
+    const result = await computeUnpushedWork(cwd, {
+      spawn: realSpawn,
+      env: process.env,
+      managerId,
+      tmpRootDir: tmpRoot,
+    });
+
+    const paths = result.worktrees.map((wt) => wt.relativePath).sort();
+    expect(paths).toEqual(
+      [join(tmpRoot, 'mgr-abcd', 'repo'), join(tmpRoot, 'mgr-abcd', 'wt-1')].sort(),
+    );
+  });
+
+  it('対照: 別の委譲の場所・名前が当たらない場所・16進4文字未満の場所は1本も載らない', async () => {
+    initRepo(join(tmpRoot, 'mgr-ffff', 'repo')); // 別の委譲
+    commitFile(join(tmpRoot, 'mgr-ffff', 'repo'), 'a.txt', 'x\n', 'x');
+    initRepo(join(tmpRoot, 'other', 'repo')); // 名前が当たらない
+    commitFile(join(tmpRoot, 'other', 'repo'), 'a.txt', 'x\n', 'x');
+    initRepo(join(tmpRoot, 'mgr-abc', 'repo')); // 16進が4文字未満
+    commitFile(join(tmpRoot, 'mgr-abc', 'repo'), 'a.txt', 'x\n', 'x');
+
+    const result = await computeUnpushedWork(cwd, {
+      spawn: realSpawn,
+      env: process.env,
+      managerId,
+      tmpRootDir: tmpRoot,
+    });
+
+    expect(result.worktrees).toHaveLength(0);
+  });
+
+  it('managerId を渡さなければ /tmp を一切見ない（この機能を足す前の挙動と変わらない）', async () => {
+    initRepo(join(tmpRoot, 'mgr-abcd', 'repo'));
+    commitFile(join(tmpRoot, 'mgr-abcd', 'repo'), 'a.txt', 'x\n', 'x');
+
+    const result = await computeUnpushedWork(cwd, {
+      spawn: realSpawn,
+      env: process.env,
+      tmpRootDir: tmpRoot,
+    });
+
+    expect(result.worktrees).toHaveLength(0);
+  });
+
+  it('重複: job.cwd 自体が /tmp のスクラッチディレクトリの中に在るとき、同じツリーを2回数えない', async () => {
+    const nestedCwd = join(tmpRoot, 'mgr-abcd', 'repo');
+    initRepo(nestedCwd);
+    commitFile(nestedCwd, 'a.txt', 'x\n', 'x');
+
+    const result = await computeUnpushedWork(nestedCwd, {
+      spawn: realSpawn,
+      env: process.env,
+      managerId,
+      tmpRootDir: tmpRoot,
+    });
+
+    expect(result.worktrees).toHaveLength(1);
+    expect(result.worktrees[0]?.relativePath).toBe('.');
+  });
+
+  it('出力パス: cwd の外で見つかったツリーは絶対パス、cwd の下は相対パスのまま', async () => {
+    initRepo(cwd);
+    commitFile(cwd, 'a.txt', 'x\n', 'x');
+    initRepo(join(tmpRoot, 'mgr-abcd', 'repo'));
+    commitFile(join(tmpRoot, 'mgr-abcd', 'repo'), 'a.txt', 'x\n', 'x');
+
+    const result = await computeUnpushedWork(cwd, {
+      spawn: realSpawn,
+      env: process.env,
+      managerId,
+      tmpRootDir: tmpRoot,
+    });
+
+    const paths = result.worktrees.map((wt) => wt.relativePath).sort();
+    expect(paths).toEqual(['.', join(tmpRoot, 'mgr-abcd', 'repo')].sort());
+  });
+
+  it('件数上限（truncatedAtCount）は起点をまたいで全体に効く', async () => {
+    initRepo(join(cwd, 'r1'));
+    commitFile(join(cwd, 'r1'), 'a.txt', 'x\n', 'x');
+    initRepo(join(cwd, 'r2'));
+    commitFile(join(cwd, 'r2'), 'a.txt', 'x\n', 'x');
+    initRepo(join(tmpRoot, 'mgr-abcd', 'r3'));
+    commitFile(join(tmpRoot, 'mgr-abcd', 'r3'), 'a.txt', 'x\n', 'x');
+    initRepo(join(tmpRoot, 'mgr-abcd', 'r4'));
+    commitFile(join(tmpRoot, 'mgr-abcd', 'r4'), 'a.txt', 'x\n', 'x');
+
+    const result = await computeUnpushedWork(cwd, {
+      spawn: realSpawn,
+      env: process.env,
+      managerId,
+      tmpRootDir: tmpRoot,
+      maxWorktrees: 3,
+    });
+
+    expect(result.worktrees).toHaveLength(3);
+    expect(result.truncatedAtCount).toBe(3);
   });
 });

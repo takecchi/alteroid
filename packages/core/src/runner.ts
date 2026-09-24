@@ -1594,6 +1594,13 @@ class RunnerSession {
    * （「runner 側が名乗り、デーモンは中身を解釈せず中継する」という #1039 の
    * 採用案(A)そのもの）。
    *
+   * **`this.#id` も `computeUnpushedWork` へ渡す**（2026-09-24、クローンの
+   * 決定。オーナーの決定ではない——`unpushed-work.ts` 冒頭の doc「3.6.」）。
+   * `this.#id` は `manager_start` が名乗った委譲自身の id で、これを渡すと
+   * `this.#cwd` に加えて `/tmp` 直下のその id 名のディレクトリも探索の起点に
+   * なる——担い手が `job.cwd` を避けて `/tmp/mgr-<id の先頭>` へ clone や
+   * worktree を作る運用（実測で観測済み）を拾うためである。
+   *
    * git の起動は SDK の子プロセスと同じ `#spawnAsChildUser` を通す
    * （`childUser` が無い構成——ローカル実行——では素の `spawn` を使う）。
    * **⚠️ これで UID の問題が解けるかは未検証。**
@@ -1628,6 +1635,7 @@ class RunnerSession {
     return computeUnpushedWork(this.#cwd, {
       spawn: spawnFn,
       env: this.#childEnv(),
+      managerId: this.#id,
       ...(options?.signal === undefined ? {} : { signal: options.signal }),
     });
   }
